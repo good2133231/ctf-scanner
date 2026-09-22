@@ -114,9 +114,27 @@
     <label>并发连接数 <input name="portscan_workers" value="{{ s.portscan.workers }}"></label>
     <label class="chk"><input type="checkbox" name="portscan_banner" value="1"
       {{ 'checked' if s.portscan.banner }}> 被动读取 banner（仅 SSH/SMTP/MySQL/Redis 等会主动问候的端口）</label>
+    <label>端口范围
+      <select name="portscan_mode">
+        <option value="top" {{ 'selected' if s.portscan.mode != 'full' }}>内置 TOP 端口（快）</option>
+        <option value="full" {{ 'selected' if s.portscan.mode == 'full' }}>全端口 1-65535（慢，分钟级）</option>
+      </select></label>
+    <label>全端口时的端口区间 <input name="portscan_full_ports" value="{{ s.portscan.full_ports }}"></label>
+    <label class="chk"><input type="checkbox" name="portscan_exclude_scanned" value="1"
+      {{ 'checked' if s.portscan.exclude_scanned }}> 跳过本任务已扫过的端口（全端口扫描时尤其省时间）</label>
+    <p class="muted small">只想对个别 IP 补一次全端口，不必改这里的全局开关：去「全端口扫描」页勾选主机
+      → 点「发起全端口扫描」，它新建的任务会用任务级选项触发，跑完不影响全局策略。</p>
     <label class="chk"><input type="checkbox" name="dirscan_enabled" value="1"
-      {{ 'checked' if s.dirscan.enabled }}> <b>目录/路径发现</b>（默认开；.git / 备份 / 后台入口主要靠它发现，
+      {{ 'checked' if s.dirscan.enabled }}> <b>目录/路径发现</b>（默认关 —— 请求量最大、噪声最多；
       取消勾选＝整阶段跳过）</label>
+    <label class="chk"><input type="checkbox" name="dirscan_big_dict" value="1"
+      {{ 'checked' if s.dirscan.big_dict }}> 用大字典（<code>config/dicts/dirs_big.txt</code>，
+      由 dirmap 字典整理而来）</label>
+    <label>单站点最多扫多少条字典（大字典 1.5 万条时必填此上限）
+      <input name="dirscan_max_paths" value="{{ s.dirscan.max_paths }}"></label>
+    <p class="muted small">目录扫描只对<b>不重复站点</b>跑（同任务内标题+长度相同的别名站跳过），
+      目录结果里<b>重复响应长度默认不显示</b>；dirmap 放在 <code>tools/dirmap/</code> 时会自动优先用它，
+      找不到就回退内置扫描。</p>
   </section>
 
   <section class="panel collapsible" data-panel="osint">
@@ -148,6 +166,16 @@
     <label>通用证书阈值（命中数超过该值 = 公共 CA / 大厂证书，放弃拓展）
       <input name="fofa_cert_threshold" value="{{ s.fofa.cert_threshold }}"></label>
     <label>每任务最多查几个注册域 <input name="fofa_max_cert_queries" value="{{ s.fofa.max_cert_queries }}"></label>
+    <label class="chk"><input type="checkbox" name="fofa_title_enabled" value="1"
+      {{ 'checked' if s.fofa.title_enabled }}> <b>标题反查</b>
+      （<code>title="站点标题"</code>：找标题相同的其它资产，需上面的 favicon 开关一并打开）</label>
+    <p class="muted small">黑名单是两层的：① 一眼是模板页的标题（<code>404</code> /
+      <code>Error</code> / <code>Welcome to nginx</code> …）<b>连查询都不发</b>；
+      ② 查完发现命中数超过下面的阈值，判为"公共标题"并放弃拓展 —— 和"黑 ico"是同一套逻辑，
+      只是判据换成标题。</p>
+    <label>公共标题阈值（命中数超过该值 = 一搜一大堆的通用标题，放弃拓展）
+      <input name="fofa_title_threshold" value="{{ s.fofa.title_threshold }}"></label>
+    <label>每任务最多反查几个标题 <input name="fofa_max_title_queries" value="{{ s.fofa.max_title_queries }}"></label>
   </section>
 
   <section class="panel collapsible" data-panel="blacklist">

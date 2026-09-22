@@ -29,6 +29,20 @@ DEFAULT_BLACK_ICO_THRESHOLD = 200
 # 同一张证书被多少资产共用就不值得再按它拓展（公共 CA / 大厂通用证书）。
 DEFAULT_CERT_THRESHOLD = 200
 
+# 同一个标题命中多少资产就不值得再按它拓展 —— 与"黑 ico"同构，只是判据换成标题：
+# `404 Not Found` / `Error` / `Apache2 Ubuntu Default Page` 这类**通用标题**一搜一大堆，
+# 按它拓展只会灌进成千上万条无关资产。阈值见 fofa.title_threshold（默认 200）。
+DEFAULT_TITLE_THRESHOLD = 200
+
+# 这些标题一眼就是"模板页"，连一次查询都不值得发（省配额、也省时间）
+GENERIC_TITLES = frozenset({
+    "404", "404 not found", "not found", "error", "403 forbidden", "forbidden",
+    "401 unauthorized", "unauthorized", "500 internal server error",
+    "internal server error", "index of /", "welcome to nginx", "apache2 ubuntu default page",
+    "apache2 debian default page", "iis windows server", "test page for apache",
+    "403", "401", "500", "nginx", "apache", "iis", "default", "",
+})
+
 
 def credentials(settings):
     """从 `settings["keys"]["fofa"]` 取 (email, key)；缺失时返回 ("", "")。"""
@@ -67,6 +81,40 @@ def build_query(icon_hash):
 def build_cert_query(domain):
     """构造证书查询语句：`cert="example.com"` —— 找与该域名共用同一张 TLS 证书的其它资产。"""
     return f'cert="{str(domain or "").strip().strip(".")}"'
+
+
+def build_title_query(title):
+    """构造标题查询语句：`title="xxx"` —— 找与该站点**标题相同**的其它资产。"""
+    return 'title="{}"'.format(str(title or "").strip().replace('"', ""))
+
+
+def title_threshold(settings):
+    cfg = (settings or {}).get("fofa", {}) or {}
+    try:
+        return int(cfg.get("title_threshold") or DEFAULT_TITLE_THRESHOLD)
+    except (TypeError, ValueError):
+        return DEFAULT_TITLE_THRESHOLD
+
+
+def is_common_title(total, settings):
+    """该标题是否"通用"（命中过多，如 404 / 默认页）—— 命中即放弃拓展（等同黑 ico）。"""
+    try:
+        return int(total) > title_threshold(settings)
+    except (TypeError, ValueError):
+        return False
+
+
+def is_generic_title(title):
+    """一眼就是模板页的标题（`404` / `Error` / `Welcome to nginx` …），连查询都不用发。"""
+    return str(title or "").strip().lower() in GENERIC_TITLES
+
+
+def search_title(title, settings, logger=None, size=None):
+    """按标题反查：`title="xxx"`，返回 `(assets, total, error)`（结构同 `search`）。"""
+    text = str(title or "").strip()
+    if not text:
+        return [], 0, "标题反查目标为空"
+    return search_query(build_title_query(text), settings, logger=logger, size=size)
 
 
 def search(icon_hash, settings, logger=None, size=None):

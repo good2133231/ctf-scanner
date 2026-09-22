@@ -69,6 +69,14 @@
 - 处理：nmap 优先（`-sT -Pn -n --open -p <ports> -oG -`，`-sT` 无需 root），
   未装则内置 TCP connect 兜底；`portscan.ports` 留空用内置 48 项 TOP 表，
   也可写 `"80,443,8080"` 或 `"1-1024"`；连接成功后对会主动问候的端口读 **banner**（纯被动读取）；
+- **全端口扫描（1-65535）**：`portscan.mode="full"`（配合 `portscan.full_ports`，默认 `1-65535`）
+  或**任务选项** `portscan_full=true`。后者是 GUI「全端口扫描」页对单个 IP 发起的用法：
+  它新建一个只跑 `portscan` 的阶段任务，**即使全局 `portscan.enabled=false` 也会执行**
+  （用户点名要扫），跑完不改动全局策略 —— 全局开 full 会让每个任务都变成分钟级。
+  `parse_ports()` 默认 `max_span=4096` 是**防手滑**：直接写 `1-65535` 只会回落到 TOP 表，
+  全端口必须显式放开（代码里由 full 分支传 `max_span=65535`）。
+- **排除已扫端口**：`portscan.exclude_scanned`（默认开）会跳过**本任务已入库**的端口
+  （`db.list_ports(task_id)`），全端口补扫时省掉刚扫过的那批连接，日志会写明"已扫过 N 个端口"。
 - 产物：SQLite `ports` 表、任务详情页「端口服务」页签、报告「开放端口与服务」小节
   （原侧边栏「端口服务」全局栏已移除 —— 该数据属任务维度，在详情页看更贴合上下文；数据未删）；
   同时 `ports` 会被下一阶段 `probe` 消费（见 ④）—— 这是"能扫出 `:9007` 这类非标端口站点"的原因；
@@ -115,6 +123,12 @@
   共用者成千上万，按它拓展只会灌噪声），放弃拓展并记日志。
   折到注册域而不是逐个主机名查，是为了省 FOFA 配额（同注册域下各子域证书内容常重叠）。
 
+- **标题反查**（`fofa.title_enabled`，默认跟随 favicon 开关）：取存活站点的**标题**
+  （跳过 <4 字与模板页标题）→ 去重 → `max_title_queries`（默认 10）截断 → 逐个 `title="xxx"` 查询。
+  **黑名单是两层的**（对应用户原话"只要结果找出一定熵值就判断为黑名单，比如 404 这种一找一大堆"）：
+  ① `fofa.GENERIC_TITLES`（`404` / `Error` / `Welcome to nginx` / `Apache2 Ubuntu Default Page` …）
+  **连查询都不发**；② 查完发现命中数 > `fofa.title_threshold`（默认 200）判为"公共标题"，放弃拓展。
+  来源 `osint:fofa-title`（页面显示「FOFA·标题反查」）。
 - 产物：SQLite `csegs` 表（任务详情「C 段」页签、报告「C 段视野」小节；
   `/csegs` 路由仍在但已不进侧边栏 —— 该数据属任务维度）、
   新域名以 `source="osint:cseg"` / `"osint:fofa"` / `"osint:fofa-cert"` 补入 `subdomains` ——
@@ -133,20 +147,36 @@
   JS 文件上限 `jsmine.max_js`（默认 40）；
 - 处理：抓页面与其中引用的 JS，正则提取**域名 / 接口 URL / 疑似凭据**；
   第三方公共域走 78 条黑名单过滤（统计/CDN 等），**目标自身域永不误杀**；
-  `jsmine.secrets=true` 时启用凭据提取，经两级降噪（厂商前缀/赋值语境 → 占位符/变量引用/成员访问过滤）；
+  `jsmine.secrets=true` 时启用凭据提取：**17 条规则**（`AKID[0-9A-Za-z]{16,32}` / `AKIA` / `LTAI` /
+  `AIza` / `gh[pousr]_` / `xox[baprs]-` / Slack webhook / Telegram bot / SendGrid / Stripe /
+  **JWT** / **私钥 PEM 头** / 数据库连接串 `mysql://user:pass@host` / 通用 `api_key=...` 等），
+  经两级降噪（厂商前缀/赋值语境 → 占位符/变量引用/成员访问过滤）；
 - 产物：新域名补入 `subdomains`（`source="js:mine"`，只补任务里还没有的；在「拓展域名」页展示）、
-  接口 URL 落 `js_urls.txt` 并进 `ctx.results["js_urls"]`、疑似凭据以 **high** 级进 `vulns`（`poc_id=js-secret-*`，值掩码脱敏）；
+  接口 URL 落 `js_urls.txt` 并进 `ctx.results["js_urls"]`、疑似凭据落 `js_secrets.txt`（`类型<TAB>掩码值<TAB>来源`）
+  并以 **high** 级进 `vulns`（`poc_id=js-secret-*`，值掩码脱敏，`target` 用**主机名**而不是完整 JS URL
+  —— 同一站点多个 JS 命中同一个值不再重复入库，且「拓展域名」页能按域名显示"敏感 N"）；
   入库前同样过用户黑名单（`config/blacklist.txt`）；
 - 局限：纯正则（不做 sourcemap 还原）；短 token 与含 `test/demo` 的真实值会被保守丢弃。
 
 ### ⑦ dirscan 目录发现
 
-- 开关：`dirscan.enabled`（**默认开**）—— 关闭后整阶段跳过；CTF 里 `.git` / 备份文件 / 后台入口
-  这类高价值路径主要靠它发现，所以默认开，纯资产测绘任务可整体关掉省时间；
-- 输入：存活站点（上限 `limits.dirscan_max_urls`，防止大目标拖爆）；
-- 处理：dirmap 适配器（cwd 固定在其项目目录运行，扫描 `output/` 最新产物解析 URL 与状态码）；
-- 产物：`dirs.txt`、SQLite `dirs` 表；
-- 降级：内置字典扫描（`config/dicts/dirs_small.txt`），每个站点先用随机路径建立"软 404 基线"，与基线长度几乎相同的 200 响应视为不存在。
+- 开关：`dirscan.enabled`（**默认关**）—— 它是全流水线里请求量最大、噪声最多的一段
+  （大字典 15333 条 × 站点数），需要时到「策略配置 → 资产面拓展」打开；
+- 输入：存活站点，先做**去重**（`_dedup_sites`：同一任务内「标题 + 响应长度」相同的别名站只留首个，
+  与 `/sites` 页折叠同一口径），再按 `limits.dirscan_max_urls` 截断；
+- 字典：`dirscan.big_dict=true`（默认）用 `config/dicts/dirs_big.txt`（**15333 条**，
+  由 `tools/import_dir_dict.py` 从 dirmap 的 `dict_mode_dict.txt` 清洗而来），
+  `false` 用 `config/dicts/dirs_small.txt`（55 条）；**单站点最多扫 `dirscan.max_paths`（默认 400）条**
+  —— 这是硬节流，1.5 万条全量打一个站点要打到天亮；
+- 处理（外部工具优先）：`tools/dirmap/dirmap.py` 存在时调用 dirmap
+  （`-iF <目标文件> -e all -t <线程>`，cwd 固定在其项目目录），解析其 `output/<域名>/*.txt`：
+  **只读 `res.txt` 与 `403.txt`**（`重复长度.txt` / `404.txt` / `othercode.txt` 不读 —— 重复长度按用户要求默认不展示），
+  **只解析本次运行写过的文件**（按启动时间过滤，`output/` 是持久目录）；
+- 降级：内置字典扫描 —— 每个站点先用**3 个随机路径**建立"软 404 基线"（md5 集合 + 长度集合，
+  借鉴 dirmap 的 `auto_check_404_page`），命中任一基线的 200 响应视为不存在；
+- 产物：`dirs.txt`（`状态 大小 路径`）、SQLite `dirs` 表（含 `length` 返回包大小）；
+  `/dirs` 与任务详情「目录」页签**默认折叠"重复长度"**（同一站点下状态码 + 大小都相同的只留首个），
+  `/dirs?all=1` 放开。
 
 ### ⑧ vulnscan 漏洞初筛
 
@@ -204,7 +234,12 @@ logs/task_1_mytask/
 | limits.verify_tls | false | 是否校验 HTTPS 证书；默认关闭以适配自签名靶场/CTF |
 | limits.dirscan_max_urls | 20 | 参与目录扫描的站点上限 |
 | limits.vulnscan_max_urls | 100 | 参与漏洞扫描的站点上限 |
-| dirscan.enabled | true | **阶段级**开关：目录/路径发现整阶段开关（关掉连请求都不发） |
+| dirscan.enabled | **false** | **阶段级**开关：目录/路径发现整阶段开关（关掉连请求都不发） |
+| dirscan.big_dict / max_paths | true / 400 | 用 15333 条大字典；单站点最多扫多少条（硬节流） |
+| portscan.mode / full_ports | top / 1-65535 | `full` 走全端口；也可由任务选项 `portscan_full` 单次触发 |
+| portscan.exclude_scanned | true | 跳过本任务已扫过的端口 |
+| fofa.title_enabled / title_threshold | true / 200 | 标题反查开关；命中数超过阈值判为"公共标题"放弃拓展 |
+| fofa.max_title_queries | 10 | 每任务最多反查多少个站点标题 |
 | vulnscan.enabled | true | **阶段级**开关：漏洞初筛整阶段开关（关掉即"只测绘不探测"） |
 | takeover.enabled / jsmine.enabled | true | 子域接管 / JS 挖掘的阶段级开关 |
 | portscan.enabled | false | 端口与服务扫描的阶段级开关（默认关） |

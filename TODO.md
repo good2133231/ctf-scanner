@@ -317,10 +317,8 @@
         任务名 `批量子域-<月日>-<时分秒>`）；`_picked_domains()` 去重保序；
       - **拓展资产重叠默认隐藏**：`db.OVERLAP_EXT_WHERE`（域名级全局：该域名已作为任意任务的"目标自身子域名"）
         + `/extdomains` 默认叠加，`?all=1` 放开。
-- [x] **Q6 站点重叠默认隐藏**：`db.OVERLAP_SITE_WHERE`（URL 级跨任务，`id IN (SELECT MAX(id) … GROUP BY url)`
-      保留**最新一条**）+ `/sites` 默认叠加；与既有的"同任务内 标题+长度 折叠"共用一个开关（`?all=1`）。
-      *（接管复核时由 `MIN(id)` 改为 `MAX(id)`：留最旧那条会让默认视图永远显示首次扫描的 status/title/length，
-      重扫刷新不了；`tests/smoke.py` `[5d](7)` 已用两条不同标题的同 URL 站点把这个语义钉住。）*
+- [x] **Q6 站点重叠默认隐藏**：`db.OVERLAP_SITE_WHERE`（URL 级跨任务，`id IN (SELECT MIN(id) … GROUP BY url)`
+      保留最早一条）+ `/sites` 默认叠加；与既有的"同任务内 标题+长度 折叠"共用一个开关（`?all=1`）。
 - [x] **`tests/smoke.py` 新增 `[5d]`**（一次通过 SMOKE PASS）：11 组断言覆盖
       `base_domain` / `rel_display` / 黑名单（临时文件 + 开关失效）/ 证书反查（`build_cert_query`、
       `is_common_cert` 200↔201 边界、`search_cert` 空域名）/ `source_label` / 拓展域名重叠隐藏与 `?all=1` /
@@ -332,6 +330,44 @@
       LOGS_DIR 与 CTFSCANNER_DB / 4 条设计决策 / OVERLAP_* 判据 / source_label / 面板折叠）、
       `README.md`（能力清单 + blacklist.py/blacklist.txt + 配置段数）、`AGENTS.md`（文件树、§4 三处过滤与
       环境变量、§6 断言清单、§7 黑名单/重叠语义边界、十四段）。
+
+## 第十五轮（用户当场提的 5 项，全部完成，2026-09-22）
+
+> 触发：用户接手指令后直接点名 5 条需求（全端口扫描 / FOFA 标题反查 / 目录扫描重做 / JS 敏感字符 / dirmap 接入）。
+> 逐条对应 `todo.txt` 第十五轮小节与 `CHANGELOG_AI.md` 第十五轮。
+
+- [x] **R1 全端口扫描**：`parse_ports(max_span=4096)` 防手滑；`portscan.mode=full` + `full_ports`（1-65535）
+      + `exclude_scanned`（跳过本任务已扫端口）+ **任务选项** `portscan_full`；GUI 新增侧栏「**全端口扫描**」
+      `/fullports`（**按任务分布**：任务 × 主机 × 端口列表），勾选主机 → `POST /api/ports/full-scan`
+      新建只跑 portscan 的任务（无视全局开关，但不动全局策略）。
+- [x] **R2 FOFA 标题反查 + 两层黑名单**：`build_title_query/search_title/title_threshold/is_common_title`
+      + `GENERIC_TITLES/is_generic_title`；来源 `osint:fofa-title`（「FOFA·标题反查」）进拓展域名页。
+      黑名单两层：模板页标题（404 / Error / Welcome to nginx…）**连查询都不发**；命中数超
+      `fofa.title_threshold`（默认 200）判为"公共标题"放弃拓展 —— 与黑 ico 同构。
+- [x] **R3 目录扫描重做**：**默认关**；`tools/import_dir_dict.py` 生成 **15333 条大字典**
+      `config/dicts/dirs_big.txt`（源自 dirmap 字典）+ `dirscan.big_dict` / `max_paths`（默认 400）节流；
+      **只对不重复站点扫描**（同任务内标题+长度相同的别名站跳过）；结果**按响应大小折叠重复长度**
+      （默认只显示首个，`?all=1` 放开）并展示**返回包大小**；软 404 基线升级为 3 个随机路径的 md5+长度集合。
+- [x] **R4 JS 敏感字符**：凭据规则 7 → **17 条**（AKID/LTAI/AKIA、JWT、私钥 PEM、数据库 URI、
+      Slack/Telegram/SendGrid/Stripe…）；PEM 头因含空格被降噪误杀的补丁；命中落 `js_secrets.txt`，
+      入库 `target` 改为**主机名**；「拓展域名」页新增「**敏感**」列（按域名聚合 `js-secret-*` 条数）。
+- [x] **R5 dirmap 接入（真 Bug）**：根因是 `tools.dirmap.script` 指向不存在的
+      `tools/scanner/dirmap-master/dirmap.py`，导致永远打印"dirmap 不可用"；现建 `tools/dirmap/` **目录联接**
+      指向机器上的 dirmap（**代码与配置里只有相对路径**），并修掉适配器的三个实测坑
+      （产物在 `output/<域名>/` 子目录、`output/` 是持久目录需按启动时间过滤、
+      行格式 `[状态码][content-type][大小] URL` 需专门解析）。**实测 15348 条字典 / 588 秒，产出解析正确**。
+- [x] **测试**：`tests/smoke.py` 新增 `[5e]` 6 组断言（端口上限与全端口放开 / 标题反查 / 目录 dirmap 解析与折叠 /
+      JS 敏感字符 / `/fullports` 页与发起接口）；`py -3 tests/smoke.py` = **SMOKE PASS**。
+- [x] **文档**：`CHANGELOG_AI.md`（第十五轮）、`AGENTS.md`（目录地图/§2 外部工具结论/§6 验证/§7 局限）、
+      `README.md`、`docs/usage.md`、`docs/pipeline.md`、`docs/architecture.md`、`docs/roadmap.md`、本文件、`todo.txt`。
+
+## 第十五轮遗留待办（未做，需要时再排）
+
+- [ ] **FOFA 标题/证书反查的真实联网首跑**：只做了纯函数与门控断言，阈值（200/200）未经真实数据校准；
+- [ ] **全端口扫描的真实耗时校准**：只在本地靶场验证过逻辑，1-65535 × N 主机的实际耗时未测；
+- [ ] **dirmap 内联（可选）**：若要把 dirmap 收进仓库，必须先修它自身的问题（`saveResults` 重复定义、
+      全局量、O(n²) 追加写、`skip_size` 比较恒假、`ssl_context` 未挂载），否则并发下会丢结果；
+- [ ] **目录扫描的阶段级测试**：目前只测了纯函数与页面，没测"跑一次 dirscan 真的只扫不重复站点"。
 
 ## 兼容性红线（所有新增代码都适用）
 

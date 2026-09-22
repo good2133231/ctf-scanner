@@ -19,7 +19,10 @@ class PortscanStage(Stage):
     def run(self):
         ctx = self.ctx
         cfg = ctx.settings.get("portscan", {}) or {}
-        if cfg.get("enabled") is not True:
+        # 任务选项 `portscan_full`（GUI「全端口扫描」页对某个 IP 发起的任务）视为显式授权：
+        # 即使全局 `portscan.enabled` 关着，这种"用户点名要扫"的任务也要跑。
+        forced = ctx.options.get("portscan_full") is True
+        if cfg.get("enabled") is not True and not forced:
             ctx.logger.info("[portscan] 未启用（策略配置 → 端口与服务 可打开），跳过")
             return
         if ctx.stopped():
@@ -47,29 +50,55 @@ class PortscanStage(Stage):
             ctx.logger.info("[portscan] 无主机目标，跳过")
             return
 
-        ports = portscan.parse_ports(cfg.get("ports"))
+        # 全端口扫描（1-65535）：可由策略 `portscan.mode="full"` 打开，也可以由任务选项
+        # `portscan_full` 单次触发（GUI「全端口扫描」页对某个 IP 发起的就是这种）。
+        full = forced or cfg.get("mode") == "full"
+        if full:
+            ports = portscan.parse_ports(cfg.get("full_ports") or "1-65535",
+                                         max_span=65535)
+            scope = "全端口"
+        else:
+            ports = portscan.parse_ports(cfg.get("ports"))
+            scope = "内置 TOP 端口"
+
+        # 排除已扫过的端口：全端口时这一步能省掉重复连接（TOP 表那批刚扫过，
+        # 再扫一遍纯属浪费；同一任务重跑时同样适用）。
+        exclude_scanned = cfg.get("exclude_scanned", True) is not False
+        scanned = {}
+        if exclude_scanned:
+            for r in db.list_ports(ctx.task_id):
+                scanned.setdefault(r["host"], set()).add(int(r["port"] or 0))
+
         workers = int(cfg.get("workers", 64))
         timeout = float(cfg.get("timeout", 1.0))
         banner = cfg.get("banner", True) is not False
         nmap_bin = which((ctx.settings.get("tools", {}) or {}).get("nmap", "nmap"))
-        if nmap_bin:
-            ctx.logger.info(f"[portscan] 使用 nmap 扫描 {len(hosts)} 个主机 x {len(ports)} 端口")
-        else:
-            ctx.logger.info(f"[portscan] nmap 不可用，内置 TCP connect 扫描 "
-                            f"{len(hosts)} 个主机 x {len(ports)} 端口 …")
+        engine = "nmap" if nmap_bin else "内置 TCP connect"
+        ctx.logger.info(f"[portscan] {scope}扫描：{engine}，"
+                        f"{len(hosts)} 个主机 x {len(ports)} 端口"
+                        + ("（自动排除本任务已扫过的端口）" if exclude_scanned else ""))
 
         def _one(host):
             if ctx.stopped():
                 return []
             ips = [host] if host.replace(".", "").isdigit() else resolve_host(host)
+            target_ports = ports
+            if exclude_scanned and scanned.get(host):
+                skipped = scanned[host]
+                target_ports = [p for p in ports if p not in skipped]
+                if target_ports != ports:
+                    ctx.logger.info(f"[portscan] {host} 已扫过 {len(skipped)} 个端口，"
+                                    f"本次只扫剩余 {len(target_ports)} 个")
+            if not target_ports:
+                return []
             out = []
             for ip in ips[:2]:  # 一个主机名最多取前 2 个解析结果，避免 CDN 放大请求量
                 found = None
                 if nmap_bin:
-                    found = portscan.nmap_scan(host, ip, ports, timeout=timeout,
+                    found = portscan.nmap_scan(host, ip, target_ports, timeout=timeout,
                                                binary=nmap_bin)
                 if found is None:
-                    found = portscan.scan_host(host, ip, ports, timeout=timeout,
+                    found = portscan.scan_host(host, ip, target_ports, timeout=timeout,
                                                workers=workers, banner=banner,
                                                stopped=ctx.stopped)
                 out.extend(found)

@@ -17,3 +17,9 @@ config/keys.yaml
 # 用户自建内容
 config/pocs-user/
 config/nuclei-templates/
+
+# 外部工具落点（dirmap 是第三方项目，本机用目录联接挂到这里，不随仓库分发）
+tools/dirmap/
+
+# 会话/记忆目录（AI 工作笔记，不进仓库）
+.workbuddy-ai/

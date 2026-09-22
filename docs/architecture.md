@@ -22,6 +22,7 @@
 │            scanner/fofa.py + mmh3.py（favicon/证书反查 + 阈值排除）│
 │            scanner/jsmine.py（JS 域名/接口/疑似凭据挖掘）       │
 │            scanner/blacklist.py（用户黑名单：入库前过滤）      │
+│            scanner/portscan.py::parse_ports(max_span)（防手滑全端口）│
 │  检测层    scanner/pocs/engine.py（POC 引擎，nuclei 兼容子集）│
 │            scanner/owasp/checks.py（启发式检查 + 三级门控）    │
 │  伪装层    scanner/evasion.py（HTTP 出口统一伪装 + payload 变形）│
@@ -65,8 +66,10 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 | 指纹用自研精简规则表（scanner/fingerprint.py） | 无外部依赖；httpx 缺失时也能填充 sites.tech | 规则少、只给组件标签不解析版本 |
 | 外部情报（osint）默认全关，且"两个子开关都关＝一次请求都不发" | 依赖第三方公共接口（api.webscan.cc / FOFA），可用性不由我们掌控；不配置就不该有网络行为 | 想用 C 段/favicon 拓展需先去「策略配置 → 外部情报拓展」显式打开 |
 | mmh3 自实现（`scanner/mmh3.py`）而非引入 mmh3 包 | 平台指纹的社区统一键就是 mmh3；C 扩展包在离线 CTF 环境装不上 | 只实现社区在用的 `x86_32`，未做 128 位变体 |
+| 目录扫描**默认关** + 只扫不重复站点 + 单站点 `max_paths` 节流 | 目录爆破是全流水线请求量最大的一段（大字典 15333 条），而多数 CTF 拿分不靠它；不重复站点（同任务内标题+长度相同）是同一主机的别名，扫了也是白扫 | 想用必须显式打开；大字典必须配 `max_paths`，否则一个站点就要打到天亮 |
+| 全端口扫描走**任务选项**（`portscan_full`）而不是全局开关 | 6.5 万端口逐连接是分钟级，改成全局 `portscan.mode=full` 会让每个任务都变慢 | GUI 只提供"对勾选 IP 发起"的入口；任务列表会多出只跑 portscan 的任务行 |
 | 用户黑名单**入库前过滤**（`scanner/blacklist.py`）而非入库打标 | 命中即不进资产库，后续阶段自然不扫；不必在每个阶段重复判"要不要跳过"，也不会被历史数据干扰 | 已入库的历史资产不受影响（需手动删任务）；`config/blacklist.txt` 为纯文本、需人工维护 |
-| 重叠资产**默认隐藏**（拓展域名域名级全局 / 站点 URL 级跨任务） | 反复扫同一目标时列表不被撑成 N 倍；默认视图是"当前状态"，全量用 `?all=1` 显式打开 | 站点判重保留 `MAX(id)`（最新一次扫描的行），因此历史行（含状态变化前的旧值）只在 `?all=1` 下可见 |
+| 重叠资产**默认隐藏**（拓展域名域名级全局 / 站点 URL 级跨任务） | 反复扫同一目标时列表不被撑成 N 倍；默认视图是"新发现"，全量用 `?all=1` 显式打开 | 判重是"保留最早一条"，后扫到的新信息（如状态码变化）不会覆盖旧行 |
 | 批量跑子域名**新建任务**而非挂子任务 | 现有任务模型（一任务一线程 / 独立状态 / 独立停止删除）可直接复用 | 任务列表会多出一行；无法在一个树里聚合查看（收益不抵改表结构 + 任务树渲染的成本） |
 
 ## 数据流
@@ -89,7 +92,7 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 | sites | url, host, port, status, title, length, server, tech, favicon, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定 |
 | ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认关闭） |
 | csegs | segment, ip, domains, count | `/24` C 段视野（osint 阶段产出，默认关闭）：每行一个 IP 与其反查到的域名（domains 截断存储、count 为截断前数量） |
-| dirs | site_url, path, status, length, note | 目录发现（dirscan 阶段产出） |
+| dirs | site_url, path, status, length, note | 目录发现（dirscan 阶段产出；`length` 即返回包大小，页面按它折叠重复长度） |
 | vulns | target, poc_id, name, severity, owasp, detail, evidence | 统一存放 POC 命中与 OWASP 检查结果 |
 | pocs | path(唯一), poc_id, name, severity, tags, enabled, status | POC 注册表：由扫描目录同步生成，GUI 控制启停 |
 
@@ -98,7 +101,7 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 
 ## GUI 路由与分栏
 
-侧边栏 8 栏：`/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
+侧边栏 **9 栏**：`/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
 `/extdomains`（JS 与情报带出的拓展域名，**默认隐藏重叠**，`?all=1` 看全部）/
 `/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/vulns`（级别筛选 + `?task_id=` 按任务筛选）/ `/pocs` / `/settings`。
 `/ports` / `/csegs` / `/dirs` 三条路由**仍在**（可直接访问 URL），但**已从侧边栏移除** ——

@@ -551,6 +551,81 @@ def main():
     finally:
         gui_app.save_settings = _orig_save2
     print("[5d] 十四轮新增 ok: 注册域折算/相对路径/黑名单/证书反查/来源标签/重叠隐藏/面板折叠")
+
+    # 5e) 第十五轮：全端口扫描 / FOFA 标题反查 / 目录扫描（大字典·重复长度·响应大小）/ JS 敏感字符
+    from scanner import jsmine as jm
+    from scanner import portscan as ps
+    from scanner.stages.dirscan import DirscanStage, _size_to_int
+
+    # (1) 端口：默认区间上限要挡住"手滑写成 1-65535"；全端口入口显式放开
+    assert len(ps.parse_ports("1-65535")) == len(ps.TOP_PORTS), "默认上限应挡住全端口"
+    full = ps.parse_ports("1-65535", max_span=65535)
+    assert len(full) == 65535 and full[0] == 1 and full[-1] == 65535, len(full)
+    assert ps.parse_ports("80,443,8080") == [80, 443, 8080]
+
+    # (2) FOFA 标题反查：语句构造 + 公共标题阈值 + 模板页标题（连查询都不发）
+    assert fofa.build_title_query("维保中心") == 'title="维保中心"'
+    assert fofa.is_common_title(200, settings) is False
+    assert fofa.is_common_title(201, settings) is True
+    assert fofa.is_generic_title("404 Not Found") and fofa.is_generic_title("Welcome to nginx")
+    assert not fofa.is_generic_title("维保中心后台管理系统")
+    assert fofa.search_title("", settings)[2], "空标题应显式报错而不是发请求"
+    assert source_label("osint:fofa-title") == "FOFA·标题反查"
+
+    # (3) 目录扫描：dirmap 产出解析（重复长度文件不读）+ 大小换算 + 目标站点去重
+    assert _size_to_int("1.23kb") == 1259 and _size_to_int("512.00b") == 512
+    d_out = Path(_TMPDIR) / "output" / "host_test"
+    d_out.mkdir(parents=True, exist_ok=True)
+    (d_out / "res.txt").write_text(
+        "[200][text/html][1.23kb] http://h/a\n[301][text/html][0b] http://h/b\n",
+        encoding="utf-8")
+    (d_out / "重复长度.txt").write_text("[200][text/html][1.23kb] http://h/c\n", encoding="utf-8")
+    parsed = DirscanStage._parse_output(d_out / "res.txt")
+    assert [p["status"] for p in parsed] == [200, 301] and parsed[0]["length"] == 1259, parsed
+    assert DirscanStage._parse_output(d_out / "重复长度.txt") == [], "重复长度默认不展示"
+    dup_sites = DirscanStage._dedup_sites([
+        {"url": "http://a.test/", "title": "T", "length": 10},
+        {"url": "http://b.test/", "title": "T", "length": 10},   # 同标题同长度 = 别名站，跳过
+        {"url": "http://c.test/", "title": "X", "length": 10},
+        {"url": "http://d.test/", "title": "", "length": 10},    # 无标题的不参与折叠
+    ])
+    assert [s["url"] for s in dup_sites] == ["http://a.test/", "http://c.test/",
+                                             "http://d.test/"], dup_sites
+
+    # (4) 目录结果：默认只显示第一条重复长度，页面带「大小」列，`?all=1` 放开
+    db.insert_dirs(tid, [{"site_url": "http://dupdir.smoke.test/",
+                          "path": f"http://dupdir.smoke.test/p{i}", "status": 200,
+                          "length": 777, "method": "GET", "note": "builtin"} for i in range(3)])
+    dirs_html = c.get("/dirs").get_data(as_text=True)
+    assert "大小" in dirs_html, "目录页应有返回包大小列"
+    assert dirs_html.count("777") == 1, dirs_html.count("777")
+    assert "显示全部" in dirs_html
+    assert c.get("/dirs?all=1").get_data(as_text=True).count("777") == 3
+
+    # (5) JS 敏感字符：AKID / JWT / 私钥 等新规则要命中；占位值仍要被降噪掉
+    hits = jm._find_secrets(
+        'var a="AKIDa1b2c3d4e5f6a7b8"; var b="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefgh";'
+        'var c="-----BEGIN PRIVATE KEY-----"; var d={"api_key":"your_api_key_here"};',
+        "http://x/a.js")
+    types = {h["type"] for h in hits}
+    assert {"tencent-access-key", "jwt", "private-key"} <= types, types
+    assert not any("your_api_key" in h["value"] for h in hits), "占位值应被降噪"
+
+    # (6) 全端口扫描：新侧栏页 + 发起接口（run_task 用桩，真跑会去连 6.5 万个端口）
+    fp_html = c.get("/fullports").get_data(as_text=True)
+    assert 'href="/fullports"' in fp_html and "发起全端口扫描" in fp_html
+    _orig_run3 = gui_app.run_task
+    try:
+        gui_app.run_task = lambda *a, **kw: None
+        r = c.post("/api/ports/full-scan", data={"host": ["1.2.3.4", "1.2.3.4"]})
+        assert r.status_code == 302, r.status_code
+        new_id = int(r.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+        t = db.get_task(new_id)
+        assert t["stages"] == "portscan" and t["targets"] == "1.2.3.4", t
+        assert '"portscan_full": true' in (t["options"] or ""), t["options"]
+    finally:
+        gui_app.run_task = _orig_run3
+    print("[5e] 十五轮新增 ok: 全端口/标题反查/目录(大字典·重复长度·大小)/JS敏感字符")
     print("SMOKE PASS")
 
 

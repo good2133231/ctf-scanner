@@ -3,6 +3,93 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十五轮：用户提的 5 项（全端口扫描 / FOFA 标题反查 / 目录扫描重做 / JS 敏感字符 / dirmap 接入）
+
+> 本轮由"新负责人接手"后实施。五项里 **R5（dirmap）是真 Bug 修复**、其余四项是能力补齐。
+
+### 1）全端口扫描：独立侧栏 + 按任务分布 + 排除已扫端口（R1）
+
+- `scanner/portscan.py::parse_ports()` 增加 `max_span`（默认 4096）：防止"手滑写成 `1-65535`"
+  就把一个轻量阶段变成 6.5 万次连接 —— 真要全端口必须显式传 `max_span=65535`。
+- `scanner/stages/portscan.py`：`portscan.mode`（`top` / `full`）+ `full_ports`（默认 `1-65535`）
+  + `exclude_scanned`（默认开，跳过**本任务已扫过**的端口）；新增**任务选项** `portscan_full`
+  —— GUI 对单个 IP 发起的全端口任务即使全局 `portscan.enabled=false` 也会跑（用户点名要扫）。
+- GUI 新增侧栏「**全端口扫描**」`/fullports`：**按任务分布**（主机 × 任务视角，`GROUP BY task_id, host, ip`
+  + `GROUP_CONCAT(port)`）、每行的开放端口数与端口列表；勾选主机 → `POST /api/ports/full-scan`
+  新建一个只跑 `portscan` 的任务（与「批量跑子域名」同一套做法，复用一任务一线程模型）。
+
+### 2）FOFA 标题反查 + 两层公共标题黑名单（R2）
+
+- `scanner/fofa.py`：`build_title_query()`（`title="xxx"`）、`search_title()`、`title_threshold()`、
+  `is_common_title()`，以及 `GENERIC_TITLES` + `is_generic_title()`。
+  **黑名单是两层的**（对应"只要结果找出一定熵值就判为黑名单，比如 404 这种一找一大堆"）：
+  ① `404` / `Error` / `Welcome to nginx` 这类模板页标题**连查询都不发**（省配额）；
+  ② 查完命中数超过 `fofa.title_threshold`（默认 200）判为"公共标题"，放弃拓展 —— 与黑 ico 同构。
+- `scanner/stages/osint.py::_fofa_title()`：站点标题去重、跳过 <4 字与模板标题、`max_title_queries`
+  （默认 10）限流；来源 `osint:fofa-title` 进「拓展域名」页，标签渲染为「FOFA·标题反查」。
+
+### 3）目录扫描重做：大字典 / 只对不重复站点 / 重复长度不显示 / 显示返回包大小 / 默认关（R3）
+
+- **默认关闭**：`dirscan.enabled` 由 `true` → `false`（请求量最大、噪声最多，多数 CTF 不靠它拿分）。
+- **大字典**：新增 `tools/import_dir_dict.py`，把 dirmap 的 `dict_mode_dict.txt` 清洗成
+  `config/dicts/dirs_big.txt`（15333 条，去注释/去重/去 `/` 前缀）；`dirscan.big_dict` 切换，
+  `dirscan.max_paths`（默认 400）是**硬节流** —— 1.5 万条全量打一个站点要打到天亮。
+- **只对不重复站点扫描**：`DirscanStage._dedup_sites()` 按「标题 + 响应长度」跳过别名站
+  （与 `/sites` 折叠同一口径）。
+- **重复长度默认不显示**：`/dirs` 与任务详情「目录」页签按「站点 + 状态码 + 响应大小」折叠，
+  `?all=1` 放开 —— 与 dirmap 把这类结果单独写进「重复长度.txt」是同一口径（我们干脆不读那个文件）。
+- **显示返回包大小**：目录列表新增「大小」列（`dirs.length` 本就已入库，之前只是没展示）。
+- 软 404 基线由"单个随机路径"升级为**3 个随机路径的 md5 + 长度集合**（借鉴 dirmap 的
+  `auto_check_404_page`），避免随机路径命中路由时误杀真实结果。
+
+### 4）JS 敏感字符：正则扩展 + 拓展页展示（R4）
+
+- `scanner/jsmine.py::SECRET_RULES` 由 7 条扩到 17 条：新增 `AKID[A-Za-z0-9]{16,32}`（用户点名）、
+  泛云厂商 `cloud-access-id`、Slack webhook、Telegram bot token、SendGrid、Stripe、JWT、
+  **私钥 PEM 头**、数据库 URI（`mysql://user:pass@host` 这类）。
+- 降噪补丁：PEM 头自带空格，会被"含空白即噪声"的规则误杀（那条规则本意是滤 `Bearer xxx`），
+  故对 `private-key` 单独把空白压成 `-` 再判（`_find_secrets`）。
+- `scanner/stages/jsmine.py`：凭据落盘 `js_secrets.txt`（值已掩码）；入库 `target` 由完整 JS URL
+  改为**主机名**（同一站点多个 JS 命中同一个值不再重复入库，也让拓展页能按域名挂上计数）。
+- GUI「拓展域名」页新增「敏感」列：按域名聚合 `js-secret-*` 的命中条数（不新建表）。
+
+### 5）dirmap 接入（R5）—— 之前是真 Bug，不只是"没装工具"
+
+**根因**：`tools.dirmap.script` 默认指向 `tools/scanner/dirmap-master/dirmap.py`，而项目里
+根本没有这个路径（只有 `tools/scanner/README.md`），所以永远走内置兜底、日志固定打印
+"dirmap 不可用"。依赖其实**都装好了**（gevent / lxml / progressbar 均 OK）。
+
+- 接入方式：`tools/dirmap/` 建**目录联接**指向机器上的 dirmap（代码与配置里只有相对路径
+  `tools/dirmap/dirmap.py`，绝对路径不进仓库）；`.gitignore` 加 `tools/dirmap/`。
+- 适配器修了三个实测坑：
+  1. dirmap 现在的产物在 `output/<域名>/` **子目录**里（`res.txt` / `403.txt` / `404.txt` /
+     `重复长度.txt`），不再是早年的 `output/<域名>.txt` —— 改成 `rglob("*.txt")`；
+  2. `output/` 是持久目录，"取最新 5 个文件"会读到上一次运行的残留 —— 改成记录启动时间，
+     只解析 `mtime >= started` 的文件；
+  3. 结果行格式是 `[状态码][content-type][大小] URL`（大小形如 `1.23kb`），新增 `DIRMAP_RE`
+     与 `_size_to_int()` 解析，读不懂的行跳过（宁可少报，不猜）。
+- **dirmap 自身的审查意见**（用户改过，确有可改进处，未改第三方代码、只记录）：
+  `saveResults()` 被定义了两遍（前一个已失效）、`response_storage`/`error_count` 全局量、
+  `saveResults` 每次都全文件 `r+` 读取再追加（1.5 万条结果时是 O(n²)，且 gevent 并发下写会丢）、
+  `conf.skip_size` 与 `intToSize` 的字符串比较永远不相等、`ssl_context` 建了却没挂到 session。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py     # SMOKE PASS（新增 [5e] 6 组断言）
+#  [5e] 端口区间上限/全端口放开、标题反查（语句·阈值·模板标题）、目录（dirmap 解析·重复长度不读·
+#       站点去重·大小列·折叠 1/3）、JS 敏感（AKID/JWT/PEM 命中 + 占位降噪）、/fullports 页与发起接口
+# 真实 dirmap 端到端（本地靶场，非 smoke）：15348 条字典 / 588 秒，产出 4 条且状态与大小解析正确
+#   → .env(66) / .git/config(151) / .git/(344) / #/pages/login/login(130)
+py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
+```
+
+### 未做 / 挂起
+
+- `osint` 的**真实联网往返**（FOFA 标题反查与证书反查都还没在真实目标上跑过一次）；
+- 全端口扫描的**真实耗时校准**（1-65535 × N 主机的实际耗时未测，建议先对单 IP 试）；
+- `P2-3` Linux 实机验证、`P3-2` 实时情报、`P3-3` 启发式 0day（维持挂起）。
+
 ## 2026-09-22 —— 第十四轮：用户提的 6 项（面板折叠 / 测试隔离 / 相对路径 / FOFA 来源标记+证书反查+黑名单+批量子域 / 重叠隐藏）
 
 用户原话给的 6 条，其中 5 条是代码需求、1 条是架构咨询。三个设计决策由用户当场选定：

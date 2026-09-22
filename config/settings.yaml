@@ -43,6 +43,9 @@ portscan:
   enabled: false
   max_hosts: 100
   ports: ''
+  mode: top
+  full_ports: 1-65535
+  exclude_scanned: true
   timeout: 1.0
   workers: 64
   banner: true
@@ -53,7 +56,10 @@ jsmine:
   secrets: true
   blacklist: []
 dirscan:
-  enabled: true
+  # 默认关闭：目录爆破请求量最大、噪声最多，需要时到「策略配置 → 资产面拓展」打开
+  enabled: false
+  big_dict: true
+  max_paths: 400
 vulnscan:
   enabled: true
 iprecon:
@@ -73,6 +79,9 @@ fofa:
   cert_enabled: true
   cert_threshold: 200
   max_cert_queries: 10
+  title_enabled: true
+  title_threshold: 200
+  max_title_queries: 10
 blacklist:
   enabled: true
   path: config/blacklist.txt
@@ -82,11 +91,13 @@ tools:
   httpx: httpx
   dirmap:
     python: python
-    script: tools/scanner/dirmap-master/dirmap.py
+    script: tools/dirmap/dirmap.py
+    threads: 30
 dicts:
   subdomains: config/dicts/subdomains.txt
   resolvers: config/dicts/resolvers.txt
   dirs: config/dicts/dirs_small.txt
+  dirs_big: config/dicts/dirs_big.txt
   sensitive: config/dicts/sensitive.txt
   cdn_cname: config/dicts/cdn_cname.txt
 http:

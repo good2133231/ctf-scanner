@@ -336,3 +336,52 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 文档同步：docs/usage.md、docs/pipeline.md、docs/architecture.md、README.md、AGENTS.md、TODO.md
 [待办] P2-3 Linux 实机验证（仍按你的指示挂起）
 [待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
+
+-----
+（第十五轮：你提的 5 项 —— 全端口扫描 / FOFA 标题反查 / 目录扫描 / JS 敏感字符 / dirmap 接入）
+[完成] 1、IP 显示列可选择全端口扫描，全端口扫描可以单独左侧栏创建，按任务分布，并排除掉我们已经扫描端口
+       落地：侧栏新增「全端口扫描」页 `/fullports`（按任务分布：任务 × 主机 × 端口列表，勾选主机即可发起）；
+       `portscan.mode=full` + `full_ports`（1-65535）+ `exclude_scanned`（跳过本任务已扫端口）；
+       单次发起走**任务选项** `portscan_full`（新建只跑 portscan 的任务，无视全局开关但不改全局策略）。
+       防手滑：`parse_ports()` 默认 `max_span=4096`，直接写 `1-65535` 会回落到 TOP 表，全端口必须显式放开。
+[完成] 2、再添加一个标题 fofa 匹配（title="xxx"），结果分布在拓展页、和 js/ico 规则一样，并带黑名单机制
+       落地：`fofa.build_title_query/search_title/title_threshold/is_common_title` + `GENERIC_TITLES`；
+       来源 `osint:fofa-title`（拓展域名页显示「FOFA·标题反查」）。**黑名单两层**：
+       ① 模板页标题（404 / Error / Welcome to nginx / Apache2 Default Page…）连查询都不发；
+       ② 查完命中数 > `fofa.title_threshold`（默认 200）判为"公共标题"放弃拓展（与黑 ico 同构）。
+       上游仍是既有黑名单：产出的域名入库前过 `config/blacklist.txt`。
+[完成] 3、目录扫描字典不够多（参考 dict_mode_dict.txt）；默认只显示第一个长度、重复长度默认不显示、
+       默认关闭；只对不重复项扫描；显示返回包大小
+       落地：新增 `tools/import_dir_dict.py` → `config/dicts/dirs_big.txt`（**15333 条**，源自 dirmap 字典）；
+       `dirscan.enabled` 默认 **false**；`dirscan.big_dict`（默认 true）+ `dirscan.max_paths`（默认 400）节流；
+       `_dedup_sites()` 只对**不重复站点**扫描（同任务内标题+长度相同的别名站跳过，与 /sites 折叠同口径）；
+       `/dirs` 与任务详情「目录」页签按「站点+状态码+响应大小」折叠重复长度（`?all=1` 放开）并新增「大小」列。
+[完成] 4、JS 查找域名时顺便匹配敏感字符（如 AKID[a-zA-Z0-9]{16,32}），并拓展显示敏感字符
+       落地：`SECRET_RULES` 7 → **17 条**（AKID（用户点名，`{16,32}`）/ AKIA / LTAI / 泛云厂商 /
+       AIza / gh[pousr]_ / xox[baprs]- / Slack webhook / Telegram bot / SendGrid / Stripe / JWT /
+       **私钥 PEM 头** / 数据库 URI `mysql://user:pass@host` / 通用 api_key=…）；
+       修掉一处真 Bug：PEM 头自带空格，被"含空白即噪声"的降噪规则误杀（已对 private-key 单独处理）；
+       命中落盘 `logs/task_*/js_secrets.txt`（值掩码）；入库 `target` 由完整 JS URL 改为**主机名**；
+       「拓展域名」页新增「**敏感**」列显示该域名的敏感命中条数。
+[完成] 5、dirmap 不可用 → 读 tools/dirmap-master、审查（可能有 bug）、优化后接入项目、不出现绝对路径
+       根因（真 Bug，不只是"没装工具"）：`tools.dirmap.script` 指向 `tools/scanner/dirmap-master/dirmap.py`，
+       而项目里根本没有这个路径（只有 tools/scanner/README.md）→ 永远走内置兜底 + 固定打印"dirmap 不可用"。
+       依赖其实都装了（gevent 24.11 / lxml / progressbar）。
+       接入：`tools/dirmap/` 建**目录联接**指向机器上的 dirmap，配置里只写相对路径 `tools/dirmap/dirmap.py`，
+       `.gitignore` 排除该目录；找不到时仍自动回退内置扫描。
+       适配器修掉三个实测坑：① 产物在 `output/<域名>/` **子目录**（res.txt / 403.txt / 404.txt / 重复长度.txt）；
+       ② `output/` 是持久目录，必须按启动时间过滤本次产物（原实现"取最新 5 个文件"会读到上次残留）；
+       ③ 行格式 `[状态码][content-type][大小] URL`，新增 `DIRMAP_RE` + `_size_to_int()`。
+       dirmap 自身的审查意见（未改第三方代码）：`saveResults()` 定义了两遍、`response_storage`/`error_count`
+       全局量、每次全文件 r+ 读取再追加（1.5 万条时 O(n²)、gevent 并发下会丢写）、
+       `conf.skip_size` 与 `intToSize()` 字符串比较恒假、`ssl_context` 建了没挂到 session。
+[完成] 验证：`py -3 tests/smoke.py` = SMOKE PASS（新增 `[5e]` 6 组断言）；
+       真实 dirmap 端到端（本地靶场）：15348 条字典 / 588 秒 → 4 条结果且状态与大小解析正确
+       （.env 66B / .git/config 151B / .git/ 344B / #/pages/login/login 130B）。
+
+[待办] FOFA 标题反查与证书反查的**真实联网首跑**（阈值 200/200 未经真实数据校准）
+[待办] 全端口扫描的**真实耗时校准**（只在本地靶机验证过逻辑）
+[待办] 目录扫描的**阶段级测试**（跑一次 dirscan，断言"只扫不重复站点"）
+[待办] dirmap 若将来要内联进仓库，先修它自身那几个问题（见上）
+[待办] P2-3 Linux 实机验证（仍按你的指示挂起）
+[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md）

@@ -10,6 +10,8 @@
 
 受 `jsmine.enabled` 开关控制（默认开），抓取量由 `max_pages` / `max_js` 限制。
 """
+from urllib.parse import urlparse
+
 from .base import Stage
 from .. import blacklist, db, jsmine
 from ..utils import write_lines
@@ -79,12 +81,19 @@ class JsmineStage(Stage):
         ctx.results["js_urls"] = url_list
         write_lines(ctx.workdir / "js_urls.txt", url_list)
 
-        # 3) 疑似凭据：以 high 级漏洞入库
+        # 3) 疑似凭据：以 high 级漏洞入库 + 落盘（值已掩码，方便离线复核与人工确认）
         secrets.sort(key=lambda s: (s.get("type", ""), s.get("value", "")))
         ctx.results["js_secrets"] = secrets
+        write_lines(ctx.workdir / "js_secrets.txt",
+                    [f"{s.get('type', '')}\t{s.get('value', '')}\t{s.get('source', '')}"
+                     for s in secrets])
         for s in secrets:
+            # target 用**主机名**而不是完整 JS URL：同一个站点下的多个 JS 会命中同一个值，
+            # 按主机名去重既少重复行，也让「拓展域名」页能直接按域名挂上敏感命中数。
+            src = s.get("source", "") or ""
+            host = urlparse(src).hostname or src
             db.insert_vuln(ctx.task_id, {
-                "target": s.get("source", ""),
+                "target": host,
                 "poc_id": f"js-secret-{str(s.get('type', '')).lower()}",
                 "name": f"JS 疑似凭据泄露（{s.get('type', '')}）",
                 "severity": "high",

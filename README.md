@@ -3,11 +3,13 @@
 面向 **CTF 与授权渗透测试** 的一体化资产测绘与漏洞初筛框架。参考灯塔（ARL）的任务化思路，把常用的「子域名收集 → 子域接管 → 端口服务 → 存活探测 → 外部情报拓展 → JS 资产挖掘 → 目录发现 → 漏洞初筛」8 阶段流水线产品化：
 
 - **CLI 客户端**：导入目标文件，全自动执行完整流水线；
-- **Web 控制台（GUI）**：仿 ARL 的任务/资产/漏洞/POC 管理界面（**8 栏侧边栏**：仪表盘 / 任务 / 子域名 / 拓展域名 / 站点 / 漏洞 / POC / 策略），可视化添加目标并发起扫描，支持任务批量停止/重启/删除与报告导出；子域名标出**解析 IP 与 CDN/非 CDN**（可标签过滤）、**来源可读标签**（能一眼看出哪些是 FOFA 找出来的），可勾选行**批量加入黑名单**或**批量跑子域名（新建任务）**；拓展域名与站点页**默认隐藏重叠资产**（页顶开关 `?all=1` 放开），站点页另折叠同任务内「标题+响应长度」相同的重复项；
+- **Web 控制台（GUI）**：仿 ARL 的任务/资产/漏洞/POC 管理界面（**9 栏侧边栏**：仪表盘 / 任务 / 子域名 / 拓展域名 / 站点 / **全端口扫描** / 漏洞 / POC / 策略），可视化添加目标并发起扫描，支持任务批量停止/重启/删除与报告导出；子域名标出**解析 IP 与 CDN/非 CDN**（可标签过滤）、**来源可读标签**（能一眼看出哪些是 FOFA 找出来的），可勾选行**批量加入黑名单**或**批量跑子域名（新建任务）**；拓展域名与站点页**默认隐藏重叠资产**（页顶开关 `?all=1` 放开），站点页另折叠同任务内「标题+响应长度」相同的重复项；
 - **POC 管理**：YAML 格式 POC 引擎（**nuclei 语法兼容子集**），可直接加载官方 nuclei 模板，支持上传、启停、目录扫描；
 - **检测分级门控（四层）**：阶段级总开关（`vulnscan.enabled`，关闭即"只测绘不探测"）+ 按级别整体跳过（`skip_severities`，默认 info/low **连请求都不发**）+ 按最低报告级别收敛结果（默认 medium）+ OWASP 分类 / 单项检查开关，默认屏蔽"太 low 的洞"；
 - **动态免杀**：UA 随机化、浏览器化请求头、WAF 指纹识别、注入 payload 变形（分级 0~3，变体与参数顺序每次随机）；
-- **信息收集增强**：免 key 多来源被动子域名收集（crt.sh / certspotter / alienvault 等）+ 泛解析过滤 + 子域接管指纹（41 条第三方服务）+ 子域名**解析 IP / CDN 标记**（`config/dicts/cdn_cname.txt` 292 条厂商 CNAME 后缀，纯 DNS 只读判定）+ JS 资产挖掘（域名/接口/疑似凭据，JS 与情报带出的域名归入**拓展域名**页）+ **外部情报拓展**（`/24` C 段反查域名；favicon 的 mmh3 去 FOFA 反查同源资产，命中过多的"黑 ico"主动放弃拓展；**TLS 证书反查** `cert="domain"`，命中过多的"通用证书"同样放弃）+ **用户黑名单**（`config/blacklist.txt`，入库前过滤，命中域名连子域都不入资产库）；
+- **信息收集增强**：免 key 多来源被动子域名收集（crt.sh / certspotter / alienvault 等）+ 泛解析过滤 + 子域接管指纹（41 条第三方服务）+ 子域名**解析 IP / CDN 标记**（`config/dicts/cdn_cname.txt` 292 条厂商 CNAME 后缀，纯 DNS 只读判定）+ JS 资产挖掘（域名/接口/疑似凭据，JS 与情报带出的域名归入**拓展域名**页）+ **外部情报拓展**（`/24` C 段反查域名；favicon 的 mmh3 去 FOFA 反查同源资产，命中过多的"黑 ico"主动放弃拓展；**TLS 证书反查** `cert="domain"` 与**标题反查** `title="xxx"`，命中过多的"通用证书 / 公共标题"（如 404 默认页）同样放弃 —— 模板页标题连查询都不发）+ **用户黑名单**（`config/blacklist.txt`，入库前过滤，命中域名连子域都不入资产库）；
+- **端口与目录**：内置 TOP 48 端口表 + nmap 适配 + 内置 TCP connect 兜底；**全端口扫描（1-65535）**可从侧栏「全端口扫描」页对单个 IP 发起（按任务分布展示，自动跳过已扫过的端口，不污染全局策略）；目录发现默认关闭，打开后用 **15333 条大字典**（由 dirmap 的字典整理）、**只扫不重复站点**、结果按**响应大小**折叠重复长度并展示包大小；dirmap 放在 `tools/dirmap/` 时会自动优先调用它；
+- **JS 敏感字符**：17 条凭据规则（AKID/LTAI/AKIA、JWT、私钥 PEM、数据库连接串、Slack/Telegram/SendGrid/Stripe 等）+ 两级降噪（占位符、变量引用、成员访问），命中值掩码脱敏后以 high 级入库，「拓展域名」页按域名显示敏感命中数；
 - **OWASP Top 10**：内置轻量启发式检查（全部非破坏性，结论为"潜在漏洞/初筛信号"，需人工确认）。
 
 > **法律与授权声明**：本工具仅可用于自己拥有或已获得书面授权的目标（CTF 平台、靶场、委托测试范围）。对未授权目标使用属于违法行为，后果自负。详见 [docs/security-notice.md](docs/security-notice.md)。
@@ -96,11 +98,13 @@ ctf-scanner/
 │   ├── fingerprint.py       #   内置指纹识别 + favicon MD5/mmh3（httpx 不可用时填充技术栈）
 │   ├── db.py  config.py  utils.py  targets.py  report.py
 ├── tools/import_ref_pocs.py #   参考项目 Python POC 静态导入器（产物默认关闭）
+├── tools/import_dir_dict.py #   目录扫描大字典生成器（读 dirmap 字典 → config/dicts/dirs_big.txt）
+├── tools/dirmap/            #   dirmap 落点（目录联接，第三方项目不随仓库分发）
 ├── config/
 │   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist）
 │   ├── keys.yaml            # 第三方 API key 专用文件（gitignore，GUI 不写回）
 │   ├── blacklist.txt        # 用户黑名单（一行一个域名，# 注释；命中即不入资产库）
-│   ├── dicts/               #   子域名字典、resolvers、目录字典、cdn_cname.txt（CDN 厂商后缀）
+│   ├── dicts/               #   子域名字典、resolvers、目录字典（dirs_small 55 / dirs_big 15333）、cdn_cname.txt（CDN 厂商后缀）
 │   ├── pocs-user/           # 用户上传的 POC（GUI 上传后落在这里）
 │   ├── pocs-imported/       # 批量导入的 POC（默认关闭，需在 POC 管理页挑选启用）
 │   └── nuclei-templates/    # 官方 nuclei 模板投放点（可被本引擎直接加载）

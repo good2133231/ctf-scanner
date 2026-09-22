@@ -30,7 +30,10 @@ Flask Web 控制台（仿 ARL）。
   功能上无影响：框架取解释器一律走 `utils.pick_python()` —— `which(configured)` 不中则回退
   `sys.executable`，实测返回 `…\Programs\Python\Python39\python.exe`。）*
 - 依赖已装：flask 3.1、requests 2.22、PyYAML 6.0（见 requirements.txt）。
-- 外部工具（subfinder / puredns / httpx / dirmap）**均未安装** → 全部走内置兜底，这是当前默认运行状态。
+- 外部工具：subfinder / puredns / httpx **均未安装** → 走内置兜底。**dirmap 例外**：
+  它的 Python 依赖（gevent 24.11 / lxml / progressbar）本机都有，且已在 `tools/dirmap/` 建了
+  **目录联接**指向机器上的 dirmap 源码 —— 因此 dirscan 阶段会**优先真的调用 dirmap**（第十五轮实测
+  15348 条字典跑完约 588 秒、解析正确）；找不到 `tools/dirmap/dirmap.py` 时自动回退内置扫描。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`
@@ -45,7 +48,7 @@ ctf-scanner/
 ├── gui/
 │   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
 │   ├── templates/ static/ # 页面与原生 JS（app.js：轮询状态/日志、建任务、POC 管理、页签、表格筛选、任务批量操作）
-│   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（8 栏：仪表盘/任务管理/子域名资产/拓展域名/站点资产/漏洞风险/POC 管理/策略配置）
+│   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（9 栏：仪表盘/任务管理/子域名资产/拓展域名/站点资产/全端口扫描/漏洞风险/POC 管理/策略配置）
 │   │                      #   （原「端口服务/C 段视野/目录发现」三栏已移除，路由 /ports /csegs /dirs 仍在，只是不进侧栏）
 │   │                      #   任务详情＝横向 8 个页签（潜在漏洞(默认)/站点/子域名/端口服务/C 段/目录/目标与配置/运行日志）+ 页签内筛选框
 ├── scanner/
@@ -60,11 +63,11 @@ ctf-scanner/
 │   ├── dnsq.py            # 纯标准库 DNS 客户端（A/CNAME/TXT/MX/NS…，UDP+TCP 回退，异常不外抛）
 │   ├── cdn.py             # CDN 判定：读 config/dicts/cdn_cname.txt 按 CNAME 后缀匹配厂商（只读、无请求）
 │   ├── takeover.py        # 子域接管指纹库（41 条第三方服务 suffix）+ detect()
-│   ├── portscan.py        # 端口/服务扫描（TOP 表 + nmap 适配 + 内置 TCP connect 兜底 + 被动 banner）
-│   ├── jsmine.py          # JS 资产挖掘（域名/接口 URL/疑似凭据，含第三方域黑名单与降噪）
+│   ├── portscan.py        # 端口/服务扫描（TOP 表 + nmap 适配 + 内置 TCP connect 兜底 + 被动 banner；parse_ports(max_span) 防手滑全端口）
+│   ├── jsmine.py          # JS 资产挖掘（域名/接口 URL/疑似凭据；17 条凭据规则 + 两级降噪）
 │   ├── blacklist.py       # 用户黑名单（config/blacklist.txt；load/matches/filter_pairs/filter_domains，每次重读不缓存）
 │   ├── iprecon.py         # IP 反查域名 + /24 C 段归纳（is_public_ip/segment_of/parse_domains，不 eval）
-│   ├── fofa.py            # FOFA 反查（qbase64）：icon_hash 的 favicon 反查 + cert="domain" 证书反查；黑 ico / 通用证书阈值判定
+│   ├── fofa.py            # FOFA 反查（qbase64）：favicon(icon_hash) / cert="domain" / title="xxx" 三种；黑 ico / 通用证书 / 公共标题阈值
 │   ├── mmh3.py            # 纯标准库 MurmurHash3 x86_32（平台 favicon 指纹用；含 SELF_TEST 向量）
 │   ├── fingerprint.py     # 内置指纹规则表 → identify(resp) -> [tag] + fetch_favicon/favicon_md5/favicon_hash
 │   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs + page_assets/delete_task/task_counts
@@ -74,10 +77,12 @@ ctf-scanner/
 │   ├── targets.py         # parse_lines → [(kind, raw)]，kind ∈ domain|url|ip|cidr|unknown（cidr 展开为多条 ip）
 │   └── report.py          # Markdown 报告
 ├── tools/import_ref_pocs.py # ast 静态解析参考项目 Python POC → config/pocs-imported/（导入项默认关闭）
-├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十四段）
+├── tools/import_dir_dict.py # 把 dirmap 的 dict_mode_dict.txt 清洗成 config/dicts/dirs_big.txt（15333 条）
+├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
+├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十五段（dirscan 段含 big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned））
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
-├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / sensitive(11，暂未使用) / cdn_cname(292，CDN 厂商后缀)
+├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / dirs_big(15333，dirmap 整理) / sensitive(11，暂未使用) / cdn_cname(292)
 ├── config/pocs-user/      # 用户上传 POC；config/pocs-imported/ 导入 POC（默认关闭）；config/nuclei-templates/ 官方模板投放点
 ├── tests/smoke.py         # 唯一测试：自包含靶场(127.0.0.1:8765) + 断言，见 §6
 ├── TODO.md                # 任务确认清单（待用户确认的排期，不是承诺，见 §9）
@@ -146,7 +151,11 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             # source_label + 拓展域名重叠隐藏与 ?all=1 + 站点重叠 1↔2 条 + 黑名单/批量子域
                             # 两个 POST 接口(桩函数去重保序/阶段与 targets) + 策略页 cert/blacklist 字段与
                             # `panel collapsible`、无绝对路径、logs/smoke- 相对路径 + POST 映射
-py -3 cli/client.py --check # 外部工具可用性
+                            # 第十五轮新增 `[5e]`：端口区间上限 vs 全端口放开 + 标题反查(语句/阈值/模板标题) +
+                            # 目录(dirmap 行解析/重复长度文件不读/别名站去重/大小列/折叠 1↔3) +
+                            # JS 敏感字符(AKID/JWT/PEM 命中 + 占位降噪) + /fullports 页与发起接口(桩 run_task)
+py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
+py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
 py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanner
 ```
@@ -162,12 +171,20 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - `owasp` 字段**格式是统一的**（`A01` 大写）：POC 引擎在 `engine.py` 里把 tag 的 `owasp-a01`
   规整为 `A01` 再入库，内置检查本身写 `A01`。*（本文件此前写的"POC 命中写 `owasp-a01`"与代码不符，
   已按代码更正 —— 见 `TODO.md` P1-3。）*
-- `dirscan` 的 dirmap 适配解析其 `output/` 目录**最新 5 个文件**，可能读到上一次运行的残留。
+- **dirmap 适配的三个实测坑**（第十五轮已修，改之前请先读 `stages/dirscan.py::_run_dirmap`）:
+  ① 产物在 `output/<域名>/` **子目录**里（`res.txt` / `403.txt` / `404.txt` / `重复长度.txt`），
+  不是早年的 `output/<域名>.txt`；② `output/` 是**持久目录**，必须按启动时间过滤本次产物，
+  否则会读到上次运行的残留；③ 结果行是 `[状态码][content-type][大小] URL`（大小形如 `1.23kb`），
+  我们只读 `res.txt` / `403.txt`（`重复长度.txt` 按用户要求默认不展示）。
+- **dirmap 自身代码的问题（已审查、未改第三方代码）**：`saveResults()` 定义了两遍（前一个失效）、
+  `response_storage`/`error_count` 是全局量、`saveResults` 每次全文件 `r+` 读取再追加
+  （1.5 万条结果时 O(n²)，gevent 并发下还会丢写）、`conf.skip_size` 与 `intToSize()` 的字符串
+  比较永远不相等、`ssl_context` 建了却没挂到 session。**若将来要内联 dirmap，这几处必须先修**。
 - `config/dicts/sensitive.txt` 已存在但**未被读取**：内置敏感文件检查用 checks.py 里的硬编码清单。
 - `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
 - GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
-  takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十四段（含按级别 / 按 OWASP 分类 /
+  takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十五段（dirscan 段含 big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned）（含按级别 / 按 OWASP 分类 /
   按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
   于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭）；
   外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
@@ -185,8 +202,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - **黑名单的语义边界**：过滤发生在**入库前**，所以它**不影响已入库的历史资产**（老任务里的域名照旧可见），
   也不会因为后来把某域名加入黑名单就把既有行删掉。文件是纯文本、每次调用重读（改完立即生效，无需重启）。
 - **重叠隐藏是"显示层"判据，不是删除**：`OVERLAP_EXT_WHERE`（拓展域名域名级全局）与
-  `OVERLAP_SITE_WHERE`（站点 URL 级跨任务，保留 `MAX(id)` **最新一条** —— 站点行带的是当次扫描的
-  status/title/length/tech，留最旧那条会让默认视图一直显示陈旧数据）只作用于 `/extdomains`、`/sites`
+  `OVERLAP_SITE_WHERE`（站点 URL 级跨任务，保留 `MIN(id)` 最早一条）只作用于 `/extdomains`、`/sites`
   两个列表页，`?all=1` 可放开；任务详情页签与报告仍显示全量。因此"站点页条数比任务详情少"是预期行为。
 - 任务已支持**停止（协作式取消）/删除/重启/导出 + 批量操作**；停止粒度是"当前批次跑完即停"，
   不会强杀正在飞行的 HTTP 请求，任务终态记为 `stopped`（区别于 `failed`）。
@@ -201,6 +217,17 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   本轮实测教训：一个被要求"只观察"的浏览器子代理点了「批量删除」并**把 `confirm()` 确认框也确认了**，
   硬删掉 63 条历史任务行；紧接着又提交了「新建扫描任务」表单，对一个**外部真实域名**跑了全 8 阶段扫描。
   派浏览器代理时必须在提示里明确写"只读浏览，禁止点击任何提交/删除类按钮"，并**限制其可操作页面**。
+- **`dirscan` 默认改为关闭**（第十五轮，用户要求）：它是全流水线里请求量最大的一段
+  （大字典 15333 条 × 站点数）。打开后仍有两层节流：只扫**不重复站点**（同任务内标题+长度相同的
+  别名站跳过）、单站点最多 `dirscan.max_paths`（默认 400）条。
+- **全端口扫描（1-65535）耗时以分钟计**，且只测过单机小目标；GUI「全端口扫描」页发起的是
+  **单次任务**（任务选项 `portscan_full`），不改全局策略 —— 全局 `portscan.mode=full` 会让每个任务
+  都变慢，谨慎使用。`parse_ports()` 默认 `max_span=4096` 就是防手滑的。
+- **FOFA 标题反查 / 证书反查都还没在真实目标上跑过**（只做了纯函数与门控断言）：
+  首次实跑请看 `logs/task_*/task.log` 的 `[osint]` 行，并用真实命中数校准
+  `title_threshold` / `cert_threshold`（默认都是 200，属保守估计值）。
+- 目录结果的「重复长度」折叠**只作用于当前页**（分页条的「共 N 条」是未折叠总数）；
+  任务详情页签则是一次性折叠（无分页）。
 - **删除不是不可逆的了**：`db.delete_task()` 默认先调用 `backup_task()`，把该任务行与全部资产
   （sites/vulns/subdomains/dirs/csegs/ports）导出到 `data/trash/task_<id>_<时间>.json`；
   备份失败只告警、不阻断删除（GUI 的单个删除与批量删除都走 `db.delete_task`，无需额外操作）。

@@ -78,6 +78,12 @@ DEFAULTS = {
         "enabled": False,
         "max_hosts": 100,          # 每任务最多扫描多少个主机
         "ports": "",               # 留空 = 内置 TOP 端口表；也可写 "80,443,8080" 或 "1-1024"
+        # 全端口扫描：`mode="full"` 时对 `full_ports`（默认 1-65535）逐端口 connect。
+        # 6.5 万次连接耗时可观，所以全局默认仍是 top；GUI「全端口扫描」页对单个 IP
+        # 发起的任务用**任务选项** `portscan_full` 单次触发，不改全局策略。
+        "mode": "top",             # top（内置 TOP 端口） / full（全端口）
+        "full_ports": "1-65535",
+        "exclude_scanned": True,   # 跳过本任务已经扫过的端口（全端口扫描时尤其有用）
         "timeout": 1.0,            # 单端口连接超时（秒）
         "workers": 64,             # 并发连接数
         "banner": True,            # 连接成功后尝试读取 banner（纯被动读取）
@@ -92,9 +98,13 @@ DEFAULTS = {
     },
     "dirscan": {
         # 目录/路径发现阶段总开关（与 takeover/portscan/jsmine 同一类"资产面拓展"）。
-        # 默认开：CTF 里 .git / 备份文件 / 后台入口这类高价值路径主要靠它发现；
-        # 纯资产测绘任务可整体关闭省时间。每站点上限仍在 limits.dirscan_max_urls。
-        "enabled": True,
+        # **默认关闭**：目录爆破是整条流水线里请求量最大、噪声最多的一段（大字典 1.5 万条），
+        # 而多数 CTF 拿分不靠它；需要时到「策略配置 → 资产面拓展」打开。
+        # 打开后还有两层节流：只对**不重复站点**扫描（标题+长度相同的别名站跳过），
+        # 且每个站点最多扫 `max_paths` 条字典。每任务站点上限另见 limits.dirscan_max_urls。
+        "enabled": False,
+        "big_dict": True,      # 用大字典（config/dicts/dirs_big.txt，由 dirmap 字典整理而来）
+        "max_paths": 400,      # 单站点最多扫多少条字典（大字典 1.5 万条时必填此上限）
     },
     "vulnscan": {
         # 漏洞初筛阶段总开关。默认开；关闭后整阶段跳过（连请求都不发），
@@ -127,6 +137,12 @@ DEFAULTS = {
         "cert_enabled": True,
         "cert_threshold": 200,
         "max_cert_queries": 10,    # 每任务最多对多少个注册域做证书反查（省配额）
+        # 标题反查（title="站点标题"）：找标题相同的其它资产。黑名单两层 ——
+        # ① 模板页标题（404 / Error / Welcome to nginx…）连查询都不发；
+        # ② 命中数超过 title_threshold 判为"公共标题"，放弃拓展（与黑 ico 同构）。
+        "title_enabled": True,
+        "title_threshold": 200,
+        "max_title_queries": 10,   # 每任务最多反查多少个站点标题（省配额）
     },
     "blacklist": {
         # 用户黑名单：命中的域名不入资产库，因此也不会被 dirscan/vulnscan 扫到。
@@ -141,13 +157,19 @@ DEFAULTS = {
         "httpx": "httpx",
         "dirmap": {
             "python": "python",
-            "script": "tools/scanner/dirmap-master/dirmap.py",
+            # dirmap 是**外部项目**（依赖 gevent/lxml/progressbar），不随本仓库分发。
+            # 这里只填**相对项目根**的路径：把 dirmap 放到 `tools/dirmap/`
+            # （本机是拿目录联接指向机器上的 dirmap 目录，代码里不出现任何绝对路径），
+            # 找不到就自动回退内置字典扫描。
+            "script": "tools/dirmap/dirmap.py",
+            "threads": 30,
         },
     },
     "dicts": {
         "subdomains": "config/dicts/subdomains.txt",
         "resolvers": "config/dicts/resolvers.txt",
-        "dirs": "config/dicts/dirs_small.txt",
+        "dirs": "config/dicts/dirs_small.txt",       # 小字典（快，几十条）
+        "dirs_big": "config/dicts/dirs_big.txt",     # 大字典：由 tools/import_dir_dict.py 整理
         "sensitive": "config/dicts/sensitive.txt",  # 预留：内置检查暂用硬编码清单
         "cdn_cname": "config/dicts/cdn_cname.txt",  # CDN 厂商 CNAME 后缀（子域名 CDN 标记用）
     },

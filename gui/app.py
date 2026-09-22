@@ -40,6 +40,7 @@ SOURCE_LABELS = {
     "osint:cseg": "C 段反查",
     "osint:fofa": "FOFA·ICO 反查",
     "osint:fofa-cert": "FOFA·证书反查",
+    "osint:fofa-title": "FOFA·标题反查",
 }
 
 
@@ -154,12 +155,14 @@ def create_app():
         # 子域名 Tab 只列目标自身的子域名；JS/情报拓展的域名单独计数并指到「拓展域名」页
         subs = [dict(r) for r in db.list_subdomains(task_id)]
         own = [r for r in subs if not (r["source"] or "").startswith(("js:", "osint:"))]
+        # 目录结果同样默认折叠"重复长度"（同一站点下几百条同样长度的 200 基本是同一个软 404 模板）
+        dirs, dirs_hidden = _fold_dirs(db.list_dirs(task_id), False)
         return render_template(
             "task_detail.html", task=task,
             subs=own, ext_count=len(subs) - len(own),
             sites=db.list_sites(task_id),
             ports=db.list_ports(task_id), csegs=db.list_csegs(task_id),
-            dirs=db.list_dirs(task_id),
+            dirs=dirs, dirs_hidden=dirs_hidden,
             vulns=db.list_vulns(task_id=task_id, limit=1000),
             running=set(runner.running_task_ids()))
 
@@ -387,6 +390,44 @@ def create_app():
         """「是否显示重叠资产」开关：默认隐藏，`?all=1` 显示全部（两个资产页口径一致）。"""
         return request.args.get("all") == "1"
 
+    def _secret_counts():
+        """每个域名命中的 JS 敏感凭据条数（供「拓展域名」页的「敏感」列）。
+
+        敏感项已随 jsmine 阶段以 `js-secret-*` 入 vulns 表，这里只按 target（主机名）聚合条数，
+        不再另建一张表 —— 数据模型不变，页面上多一列"该域名下挖到过多少敏感串"。
+        """
+        out = {}
+        try:
+            for r in db._query("SELECT target t, COUNT(*) c FROM vulns "
+                               "WHERE poc_id LIKE 'js-secret-%' GROUP BY target"):
+                out[r["t"]] = r["c"]
+        except Exception:
+            return {}
+        return out
+
+    def _fold_dirs(rows, show_all):
+        """目录结果按「站点 + 状态码 + 响应大小」折叠重复，返回 `(rows, hidden)`。
+
+        为什么按大小折叠：一个站点下动辄几百条同样长度的 `200`（软 404 模板、统一的
+        重定向页），它们不是真发现 —— 与 dirmap 把这类结果单独写进「重复长度.txt」
+        是同一口径。默认只留首个，`?all=1`（`/dirs`）放开。
+        """
+        rows = [dict(r) for r in rows]
+        seen, hidden = {}, 0
+        for r in rows:
+            r["dup"] = 0
+            key = (r.get("site_url") or "", r.get("status"), r.get("length") or -1)
+            first = seen.get(key)
+            if first is None:
+                seen[key] = r
+            else:
+                first["dup"] += 1
+                r["hidden_dup"] = True
+                hidden += 1
+        if not show_all:
+            rows = [r for r in rows if not r.get("hidden_dup")]
+        return rows, hidden
+
     @app.route("/subdomains")
     @login_required
     def subdomains():
@@ -420,7 +461,7 @@ def create_app():
         if show_all:
             pager["qs"] += "&all=1"
         return render_template("extdomains.html", subs=rows, pager=pager, q=q, tag=tag,
-                               show_all=show_all)
+                               show_all=show_all, secrets=_secret_counts())
 
     @app.route("/sites")
     @login_required
@@ -467,6 +508,55 @@ def create_app():
         rows, pager, q = _asset_page("ports", "/ports")
         return render_template("ports.html", ports=rows, pager=pager, q=q)
 
+    @app.route("/fullports")
+    @login_required
+    def fullports():
+        """全端口扫描：**按任务分布**看端口资产，并可对勾选的主机发起全端口扫描。
+
+        与 `/ports`（端口明细表）的区别：这里是"主机 × 任务"的视角 —— 一眼看出
+        哪个任务在哪些主机上开了哪些端口，再决定要不要对某个 IP 补一次 1-65535 全端口。
+        """
+        raw_rows = db._query(
+            "SELECT task_id, host, ip, COUNT(*) c, GROUP_CONCAT(port) ports "
+            "FROM ports GROUP BY task_id, host, ip ORDER BY task_id DESC, host")
+        names = {t["id"]: t["name"] for t in db.list_tasks(limit=1000)}
+        rows = []
+        for r in raw_rows:
+            item = dict(r)      # sqlite3.Row 不支持赋值，先转成 dict 再加工
+            item["ports"] = sorted(
+                {int(p) for p in str(item.get("ports") or "").split(",")
+                 if str(p).strip().isdigit()})
+            item["task_name"] = names.get(item["task_id"], f"#{item['task_id']}")
+            rows.append(item)
+        return render_template("fullports.html", hosts=rows)
+
+    @app.route("/api/ports/full-scan", methods=["POST"])
+    @login_required
+    def api_full_scan():
+        """对勾选的主机发起**全端口扫描**（1-65535）。
+
+        实现上走"新建一个只跑 portscan 的任务"（与「批量跑子域名」同一套做法）：
+        任务选项 `portscan_full` 让这个任务无视全局 `portscan.enabled` 也会执行，
+        并且会自动跳过本任务已经扫过的端口。
+        """
+        hosts, seen = [], set()
+        for raw in request.form.getlist("host"):
+            h = (raw or "").strip()
+            if h and h not in seen:
+                seen.add(h)
+                hosts.append(h)
+        if not hosts:
+            return redirect(url_for("fullports"))
+        name = (request.form.get("name") or "").strip() or \
+            time.strftime("全端口-%m%d-%H%M%S")
+        targets = "\n".join(hosts)
+        stages = ["portscan"]
+        options = {"portscan_full": True}
+        task_id = db.create_task(name, targets, stages, options)
+        _spawn(task_id, name, targets, stages, options)
+        logger.info(f"[gui] 全端口扫描任务 #{task_id} 已创建（{len(hosts)} 个主机）")
+        return redirect(url_for("task_detail", task_id=task_id))
+
     @app.route("/csegs")
     @login_required
     def csegs():
@@ -476,8 +566,14 @@ def create_app():
     @app.route("/dirs")
     @login_required
     def dirs():
+        show_all = _overlap_args()
         rows, pager, q = _asset_page("dirs", "/dirs")
-        return render_template("dirs.html", dirs=rows, pager=pager, q=q)
+        # 重复长度默认隐藏：同一站点下状态码与响应大小都相同的多条只留首个，`?all=1` 放开
+        rows, hidden = _fold_dirs(rows, show_all)
+        if show_all:
+            pager["qs"] += "&all=1"
+        return render_template("dirs.html", dirs=rows, pager=pager, q=q,
+                               show_all=show_all, hidden=hidden)
 
     # ---------- 黑名单 / 批量子域名 ----------
     #
@@ -569,11 +665,18 @@ def create_app():
                                  "max_hosts": int(f.get("takeover_max_hosts", 300) or 300),
                                  "http_check": f.get("takeover_http_check") == "1"},
                     # 阶段级总开关（与 takeover/portscan/jsmine 同一类）：默认开
-                    "dirscan": {"enabled": f.get("dirscan_enabled") == "1"},
+                    # 目录扫描：默认关；大字典 + 单站点条数上限（1.5 万条字典必须节流）
+                    "dirscan": {"enabled": f.get("dirscan_enabled") == "1",
+                                "big_dict": f.get("dirscan_big_dict") == "1",
+                                "max_paths": int(f.get("dirscan_max_paths", 400) or 400)},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
                     "portscan": {"enabled": f.get("portscan_enabled") == "1",
                                  "max_hosts": int(f.get("portscan_max_hosts", 100) or 100),
                                  "ports": f.get("portscan_ports", ""),
+                                 # 全端口：top（内置 TOP 表）/ full（1-65535）
+                                 "mode": "full" if f.get("portscan_mode") == "full" else "top",
+                                 "full_ports": (f.get("portscan_full_ports") or "1-65535").strip(),
+                                 "exclude_scanned": f.get("portscan_exclude_scanned") == "1",
                                  "timeout": float(f.get("portscan_timeout", 1) or 1),
                                  "workers": int(f.get("portscan_workers", 64) or 64),
                                  "banner": f.get("portscan_banner") == "1"},
@@ -601,7 +704,13 @@ def create_app():
                              "cert_enabled": f.get("fofa_cert_enabled") == "1",
                              "cert_threshold": int(f.get("fofa_cert_threshold", 200) or 200),
                              "max_cert_queries": int(
-                                 f.get("fofa_max_cert_queries", 10) or 10)},
+                                 f.get("fofa_max_cert_queries", 10) or 10),
+                             # 标题反查：独立子开关 + 公共标题阈值 + 查询上限
+                             "title_enabled": f.get("fofa_title_enabled") == "1",
+                             "title_threshold": int(
+                                 f.get("fofa_title_threshold", 200) or 200),
+                             "max_title_queries": int(
+                                 f.get("fofa_max_title_queries", 10) or 10)},
                     # 黑名单：开关可从页面改，文件路径保持原值（改路径请直接编辑 settings.yaml）
                     "blacklist": {"enabled": f.get("blacklist_enabled") == "1",
                                   "path": (settings.get("blacklist") or {}).get(

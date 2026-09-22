@@ -36,8 +36,13 @@ _BANNER_PORTS = {21, 22, 23, 25, 110, 143, 587, 873, 1433, 3306, 5432, 6379,
 _MAX_BANNER = 120
 
 
-def parse_ports(spec, default=None):
-    """解析端口配置：支持 "80,443,8080" 与 "1-1024" 混写；空值返回内置 TOP 表。"""
+def parse_ports(spec, default=None, max_span=4096):
+    """解析端口配置：支持 "80,443,8080" 与 "1-1024" 混写；空值返回内置 TOP 表。
+
+    `max_span` 是**单段区间允许的最大跨度**（默认 4096）—— 它存在的意义是防止
+    "手滑写成 1-65535" 就把一个轻量阶段变成 6.5 万次连接。真要全端口扫描请显式
+    传 `max_span=65535`（全端口入口会这么做，并同时打开排除已扫端口）。
+    """
     default = sorted(default or TOP_PORTS)
     s = str(spec or "").strip()
     if not s:
@@ -53,7 +58,7 @@ def parse_ports(spec, default=None):
                 lo, hi = int(a), int(b)
             except ValueError:
                 continue
-            if 0 < lo <= hi <= 65535 and hi - lo <= 4096:
+            if 0 < lo <= hi <= 65535 and hi - lo <= max_span:
                 out.update(range(lo, hi + 1))
         else:
             try:

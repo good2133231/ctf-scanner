@@ -97,12 +97,23 @@ _QUOTED_HOST_RE = re.compile(
 
 # (规则名, 正则, 取值分组)：规则名会拼进 poc_id（js-secret-<规则名小写>）
 SECRET_RULES = (
+    # 云厂商 AccessKey：AKIA(AWS) / LTAI(阿里云) / AKID(腾讯云，用户点名要的 AKID[0-9A-Z]{16,32})
     ("aws-access-key", re.compile(r"\b(AKIA[0-9A-Z]{16})\b"), 1),
     ("aliyun-access-key", re.compile(r"\b(LTAI[0-9A-Za-z]{12,20})\b"), 1),
-    ("tencent-access-key", re.compile(r"\b(AKID[0-9A-Za-z]{13,})\b"), 1),
+    ("tencent-access-key", re.compile(r"\b(AKID[A-Za-z0-9]{16,32})\b"), 1),
+    ("cloud-access-id", re.compile(r"\b((?:AKID|AKIA|LTAI|ASIA)[A-Za-z0-9]{16,32})\b"), 1),
     ("google-api-key", re.compile(r"\b(AIza[0-9A-Za-z_\-]{35})"), 1),
     ("github-token", re.compile(r"\b(gh[pousr]_[0-9A-Za-z]{36})"), 1),
     ("slack-token", re.compile(r"\b(xox[baprs]-[0-9A-Za-z\-]{10,})"), 1),
+    ("slack-webhook", re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9_/\-]{20,}"), 0),
+    ("telegram-bot-token", re.compile(r"\b(\d{8,10}:[A-Za-z0-9_\-]{35})\b"), 1),
+    ("sendgrid-key", re.compile(r"\b(SG\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,})\b"), 1),
+    ("stripe-key", re.compile(r"\b((?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,})\b"), 1),
+    ("jwt", re.compile(r"\b(eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,})\b"), 1),
+    # 私钥文件：PEM 头出现即命中（后面的正文同样敏感，但取头足够定位）
+    ("private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), 0),
+    # 带凭据的连接串：mysql://user:pass@host 这类一眼就是资产
+    ("db-uri", re.compile(r"\b((?:mongodb|postgres(?:ql)?|mysql|redis|amqp)://[^\s'\"<>]{8,120})"), 1),
     # 通用凭据：必须出现"键 : "值""的赋值语境，且值不是变量引用/函数调用
     ("generic-credential", re.compile(
         r"""(?i)(api[_-]?key|secret|token|access[_-]?key|password|passwd|pwd)"""
@@ -232,6 +243,11 @@ def _find_secrets(text, source):
     for name, rx, group in SECRET_RULES:
         for m in rx.finditer(text):
             raw = m.group(group).strip()
+            if name == "private-key":
+                # PEM 头自带空格（`-----BEGIN PRIVATE KEY-----`），而降噪会一律丢弃"含空白"的
+                # 取值（那条规则是为了滤掉 `Bearer xxx` 这类自然语言噪声）。私钥头是强信号，
+                # 这里把空白压成 `-` 让它能过降噪，值本身仍然一眼可辨。
+                raw = re.sub(r"\s+", "-", raw)
             if not raw or _looks_placeholder(raw):
                 continue
             if name == "generic-credential":

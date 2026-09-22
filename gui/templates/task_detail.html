@@ -147,14 +147,19 @@
 
 <div class="tabpane" id="pane-dirs">
   <section class="panel">
-    <label class="muted">筛选路径 <input data-filter="#tbl-dirs" placeholder="路径 / 状态码"></label>
+    <p class="muted small">「大小」是返回包字节数；同一站点下状态码与大小都相同的多条只留首个
+      （软 404 模板 / 统一跳转页），本页已隐藏 {{ dirs_hidden or 0 }} 条重复长度。</p>
+    <label class="muted">筛选路径 <input data-filter="#tbl-dirs" placeholder="路径 / 状态码 / 大小"></label>
     <table id="tbl-dirs">
-      <thead><tr><th>状态</th><th>路径</th></tr></thead>
+      <thead><tr><th>状态</th><th>路径</th><th>大小</th><th>来源</th></tr></thead>
       <tbody>
       {% for d in dirs %}
-        <tr><td>{{ d.status }}</td><td class="mono">{{ d.path }}</td></tr>
+        <tr><td>{{ d.status }}</td><td class="mono">{{ d.path }}</td>
+          <td class="muted small mono">{{ d.length if d.length is not none else '-' }}
+            {% if d.dup %}<span class="muted small">（另有 {{ d.dup }} 条相同）</span>{% endif %}</td>
+          <td class="muted">{{ d.note or '-' }}</td></tr>
       {% else %}
-        <tr><td colspan="2" class="muted">暂无数据。</td></tr>
+        <tr><td colspan="4" class="muted">暂无数据。</td></tr>
       {% endfor %}
       </tbody>
     </table>

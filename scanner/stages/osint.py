@@ -9,9 +9,14 @@
 - `fofa.enabled`：取站点 favicon 的 mmh3 去 FOFA 反查**同源资产**
   （命中数超过 `fofa.black_ico_threshold` 即判为"黑 ico"，放弃拓展）；
 - `fofa.cert_enabled`：按 `cert="<注册域>"` 反查**共用同一张 TLS 证书**的域名，
-  命中数超过 `fofa.cert_threshold` 判为"通用证书"（公共 CA / 大厂证书），放弃拓展。
+  命中数超过 `fofa.cert_threshold` 判为"通用证书"（公共 CA / 大厂证书），放弃拓展；
+- `fofa.title_enabled`：按 `title="<站点标题>"` 反查**标题相同**的资产。它的黑名单是两层的：
+  ① 一眼就是模板页的标题（`404` / `Error` / `Welcome to nginx` …）**连查询都不发**；
+  ② 查完发现命中数超过 `fofa.title_threshold`（默认 200）判为"公共标题"，放弃拓展
+  —— 与"黑 ico"同构，只是判据换成标题。
 
-产出的域名来源分别是 `osint:cseg` / `osint:fofa` / `osint:fofa-cert`，都归「拓展域名」页。
+产出的域名来源分别是 `osint:cseg` / `osint:fofa` / `osint:fofa-cert` / `osint:fofa-title`，
+都归「拓展域名」页。
 全部子能力都关时整个阶段直接跳过 —— 一次请求都不发（与低危检查的处理方式一致）。
 """
 import ipaddress
@@ -34,6 +39,7 @@ class OsintStage(Stage):
         fofa_cfg = ctx.settings.get("fofa", {}) or {}
         do_fofa = fofa_cfg.get("enabled") is True
         do_cert = do_fofa and fofa_cfg.get("cert_enabled") is not False
+        do_title = do_fofa and fofa_cfg.get("title_enabled") is not False
         if not (do_ip or do_fofa):
             ctx.logger.info("[osint] 未启用（策略配置 → 外部情报拓展 可打开），跳过")
             return
@@ -48,6 +54,8 @@ class OsintStage(Stage):
             found += self._fofa_assets()
         if do_cert and not ctx.stopped():
             found += self._fofa_cert()
+        if do_title and not ctx.stopped():
+            found += self._fofa_title()
 
         if ctx.stopped():
             ctx.logger.warning("[osint] 任务已请求停止，结果不再入账")
@@ -280,6 +288,62 @@ class OsintStage(Stage):
                 domain = a.get("domain") or urlparse(a.get("host") or "").hostname or ""
                 found.append((domain, "osint:fofa-cert"))
         ctx.logger.info(f"[osint] 证书拓展：查询 {queried} 个注册域，跳过通用证书 {common} 个")
+        return found
+
+    # ---------- FOFA 标题反查 ----------
+
+    def _site_titles(self):
+        """待反查的站点标题（去重、保序）：短标题与模板页标题直接丢掉。
+
+        `404` / `Error` / `Welcome to nginx` 这类通用标题一搜一大堆（"一找一大堆"的典型），
+        既浪费配额又灌进无关资产 —— 所以它们是**黑名单的第一层**（连查询都不发），
+        第二层才是"查完发现命中数超阈值判为公共标题"（与黑 ico 同构）。
+        """
+        ctx = self.ctx
+        titles = []
+        for r in db.list_sites(ctx.task_id):
+            t = (r.get("title") or "").strip()
+            if len(t) < 4 or fofa_mod.is_generic_title(t):
+                continue
+            titles.append(t)
+        return list(dict.fromkeys(titles))
+
+    def _fofa_title(self):
+        ctx = self.ctx
+        cfg = ctx.settings.get("fofa", {}) or {}
+        if not fofa_mod.available(ctx.settings):
+            ctx.logger.info("[osint] FOFA 未配置 email/key（config/keys.yaml），跳过标题反查")
+            return []
+        titles = self._site_titles()
+        if not titles:
+            ctx.logger.info("[osint] 没有可用于标题反查的站点标题")
+            return []
+        cap = max(1, int(cfg.get("max_title_queries") or 10))
+        if len(titles) > cap:
+            ctx.logger.info(f"[osint] 站点标题 {len(titles)} 个超过上限 {cap}，仅反查前 {cap} 个")
+            titles = titles[:cap]
+
+        found = []
+        queried = common = 0
+        for title in titles:
+            if ctx.stopped():
+                break
+            assets, total, err = fofa_mod.search_title(title, ctx.settings, logger=ctx.logger)
+            if err:
+                ctx.logger.info(f"[osint] 标题反查中止：{err}")
+                break
+            if fofa_mod.is_common_title(total, ctx.settings):
+                common += 1
+                ctx.logger.info(f'[osint] 标题 title="{title}" 命中 {total} 条，'
+                                f"超过公共标题阈值 {fofa_mod.title_threshold(ctx.settings)}，"
+                                f"判为公共标题，不拓展")
+                continue
+            queried += 1
+            ctx.logger.info(f'[osint] 标题反查 title="{title}" → {len(assets)} 条 / 共 {total} 条')
+            for a in assets:
+                domain = a.get("domain") or urlparse(a.get("host") or "").hostname or ""
+                found.append((domain, "osint:fofa-title"))
+        ctx.logger.info(f"[osint] 标题拓展：查询 {queried} 个标题，跳过公共标题 {common} 个")
         return found
 
 
