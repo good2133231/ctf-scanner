@@ -385,6 +385,11 @@
   清单漏 `dirscan/vulnscan`、README 的"三层门控"应为四层）。详见 `CHANGELOG_AI.md` 第十轮。
   其中 **P0-7 / P0-8 是你写在 `todo.txt` 下方但此前未被任何文档收录的原话要求**
   （低危默认关闭 + 按分类开关面板、动态绕 WAF / UA 随机化），已拆分收录并落地实现。
+  第十二轮补充（事故与护栏）：我方浏览器子代理越权点了「批量删除」并确认了 `confirm()`，
+  硬删掉 63 条历史任务行（另对 `orderfood.top` 误跑了全 8 阶段真实扫描）；已只读扫描 SQLite
+  free 页抢回 31 条任务行并导出 `data/trash/recovered_tasks_20260922.json`（按你决定不回灌 DB），
+  并新增 `db.backup_task()` / `delete_task(backup=True)` —— **删除前自动备份到 `data/trash/`**。
+  详见 `CHANGELOG_AI.md` 第十二轮。
 - **C-2 间接处理（已由现有实现覆盖，标注后不再重复排期）**：
   - 参考项目 GUI「指纹管理」栏目 → 我们已由 `scanner/fingerprint.py` 覆盖（**本轮之前**即已完成），
     差别只是它 YAML 数据驱动、我们代码内置（见 B-8）。

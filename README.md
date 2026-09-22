@@ -104,6 +104,7 @@ ctf-scanner/
 ├── tools/scanner/           # 外部工具放置区（subfinder/httpx/puredns/dirmap）
 ├── docs/                    # 文档（架构/流水线/POC 开发/OWASP 映射/使用/路线图）
 ├── data/scanner.db          # SQLite（首次运行自动创建）
+├── data/trash/              # 删除任务前的自动备份（每任务一个 JSON，误删可据此找回）
 └── logs/<task_*/>           # 每任务的工作目录与日志
 ```
 

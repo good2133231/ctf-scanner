@@ -164,8 +164,40 @@ def clear_task_assets(task_id):
         _exec(f"DELETE FROM {t} WHERE task_id=?", (task_id,))
 
 
-def delete_task(task_id):
-    """删除任务及其全部资产。"""
+TRASH_DIR = BASE_DIR / "data" / "trash"
+
+
+def backup_task(task_id):
+    """把某任务及其全部资产导出成一份 JSON 落到 data/trash/，返回备份路径（任务不存在则返回 None）。
+
+    为什么做成"删除前的固定动作"而不是可选项：`delete_task` 是**硬删除**，
+    SQLite 释放的页虽可能残留数据，但随时会被后续写入覆盖；而 `data/` 被 .gitignore 排除、
+    没有外部备份。实测发生过一次批量误删（GUI 批量删除），事后只能靠扫描 free 页勉强抢救，
+    约一半任务行已被后续写入覆盖、永久丢失。单任务备份只有几十 KB，成本远低于代价。
+    """
+    row = get_task(task_id)
+    if row is None:
+        return None
+    payload = {"task": dict(row), "assets": {}}
+    for t in ASSET_TABLES:
+        payload["assets"][t] = [
+            dict(r) for r in _query(f"SELECT * FROM {t} WHERE task_id=?", (task_id,))]
+    TRASH_DIR.mkdir(parents=True, exist_ok=True)
+    dst = TRASH_DIR / f"task_{task_id}_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    dst.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    return dst
+
+
+def delete_task(task_id, backup=True):
+    """删除任务及其全部资产；默认**先备份**到 `data/trash/`（`backup=False` 仅用于测试清理）。
+
+    备份失败（磁盘满/权限）不阻断删除，但会显式打印告警 —— 不允许"以为有备份"。
+    """
+    if backup:
+        try:
+            backup_task(task_id)
+        except OSError as e:
+            print(f"[db] 警告：任务 #{task_id} 删除前备份失败：{e}")
     clear_task_assets(task_id)
     _exec("DELETE FROM tasks WHERE id=?", (task_id,))
 
