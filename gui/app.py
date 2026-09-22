@@ -185,7 +185,7 @@ def create_app():
         dirs, dirs_hidden = _fold_dirs(db.list_dirs(task_id), False)
         return render_template(
             "task_detail.html", task=task,
-            subs=own, ext_count=len(ext_subs), ext_subs=ext_subs,
+            subs=own, ext_subs=ext_subs,
             sites=db.list_sites(task_id),
             ports=db.list_ports(task_id), csegs=db.list_csegs(task_id),
             dirs=dirs, dirs_hidden=dirs_hidden,
@@ -388,16 +388,17 @@ def create_app():
         return max(1, _int("page", 1)), (size if size in PAGE_SIZES else 100), \
             (request.args.get("q") or "").strip()
 
-    def _asset_page(table, base, extra_where=None, extra_params=()):
+    def _asset_page(table, base, extra_where=None, extra_params=(), order=None):
         page, size, q = _page_args()
         rows, total = db.page_assets(table, limit=size, offset=(page - 1) * size, q=q or None,
-                                     extra_where=extra_where, extra_params=extra_params)
+                                     extra_where=extra_where, extra_params=extra_params,
+                                     order=order)
         pages = max(1, (total + size - 1) // size)
         if page > pages:  # 页码越界（例如过滤后总页数变少）→ 回落到最后一页重查
             page = pages
             rows, total = db.page_assets(table, limit=size, offset=(page - 1) * size,
                                          q=q or None, extra_where=extra_where,
-                                         extra_params=extra_params)
+                                         extra_params=extra_params, order=order)
         qs = f"&q={q}&size={size}" if q else f"&size={size}"
         pager = {"page": page, "size": size, "total": total, "pages": pages,
                  "base": base, "qs": qs}
@@ -515,27 +516,52 @@ def create_app():
             pager["qs"] += f"&tag={tag}"
         return render_template("subdomains.html", subs=rows, pager=pager, q=q, tag=tag)
 
+    # 拓展域名页的"来源分类"标签：用户要求分类浏览 + 分类排序，不要把 JS / FOFA 标题 /
+    # 证书 / ICO / C 段混在一起。顺序即展示顺序（也是排序优先级）。
+    EXT_SRC_TAGS = (
+        ("js", "JS 挖掘", "js:mine", "js挖掘拓展"),
+        ("title", "FOFA·标题反查", "osint:fofa-title", "fofa标题拓展"),
+        ("cert", "FOFA·证书反查", "osint:fofa-cert", "fofa证书拓展"),
+        ("ico", "FOFA·ICO 反查", "osint:fofa", "fofa-ico拓展"),
+        ("cseg", "C 段反查", "osint:cseg", "c段反查拓展"),
+    )
+    # 分类排序表达式：按 EXT_SRC_TAGS 的顺序，未知来源排最后，同类内按 id 倒序（新的在前）。
+    EXT_SRC_ORDER = "CASE source " + " ".join(
+        f"WHEN '{s}' THEN {i}" for i, (_k, _l, s, _n) in enumerate(EXT_SRC_TAGS)
+    ) + " ELSE 99 END, id DESC"
+
     @app.route("/extdomains")
     @login_required
     def extdomains():
-        """拓展域名：从 JS 与外部情报（C 段 / ICO / 证书）带出来的关联域名。
+        """拓展域名：从 JS 与外部情报（C 段 / ICO / 标题 / 证书）带出来的关联域名。
 
+        **按来源分类展示与排序**（JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段），
+        用户要求"不要夹在一起"；`?src=` 只显示某一类。
         **默认隐藏重叠资产**：某域名若已经作为"目标自身子域名"存在过（任意任务），
         说明它早就在资产清单里，这里再列一遍纯属重复；`?all=1` 可显示全部。
         """
+        src = (request.args.get("src") or "").strip().lower()
+        picked = next((t for t in EXT_SRC_TAGS if t[0] == src), None)
+        if not picked:
+            src = ""
+        src_where = f"source = '{picked[2]}'" if picked else None
+        scan_name = picked[3] if picked else "拓展域名"
         tag, where, params = _cdn_tag()
         show_all = _overlap_args()
         rows, pager, q = _asset_page(
             "subdomains", "/extdomains",
-            extra_where=_and_where(db.EXT_SUBDOMAIN_WHERE, where,
+            extra_where=_and_where(db.EXT_SUBDOMAIN_WHERE, where, src_where,
                                    None if show_all else db.OVERLAP_EXT_WHERE),
-            extra_params=params)
+            extra_params=params, order=EXT_SRC_ORDER)
         if tag:
             pager["qs"] += f"&tag={tag}"
+        if src:
+            pager["qs"] += f"&src={src}"
         if show_all:
             pager["qs"] += "&all=1"
         return render_template("extdomains.html", subs=rows, pager=pager, q=q, tag=tag,
-                               show_all=show_all, secrets=_secret_counts())
+                               show_all=show_all, secrets=_secret_counts(),
+                               src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name)
 
     @app.route("/sites")
     @login_required
@@ -695,8 +721,13 @@ def create_app():
         if not domains:
             return redirect(request.form.get("next") or url_for("subdomains"))
         stages = ["subdomain"]
-        name = (request.form.get("name") or "").strip() or \
-            time.strftime("批量子域-%m%d-%H%M%S")
+        # 任务名：表单可显式指定前缀（拓展域名页按来源分类给出，如 `fofa标题拓展`），
+        # 统一再拼上时间戳，避免同名任务互相覆盖辨认；没给前缀时退回旧的 "批量子域-…"。
+        prefix = (request.form.get("name") or "").strip()
+        if prefix:
+            name = f"{prefix}-{time.strftime('%m%d-%H%M%S')}"
+        else:
+            name = time.strftime("批量子域-%m%d-%H%M%S")
         targets = "\n".join(domains)
         task_id = db.create_task(name, targets, stages, {})
         _spawn(task_id, name, targets, stages, {})

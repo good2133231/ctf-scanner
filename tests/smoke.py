@@ -463,6 +463,24 @@ def main():
     assert "overlap-smoke.example.com" in c.get("/extdomains?all=1").get_data(as_text=True)
     assert "overlap-smoke.example.com" in c.get("/subdomains").get_data(as_text=True)
 
+    # (6b) 拓展域名**按来源分类排序 + 分类标签**（用户要求不要把 JS / FOFA 标题 / 证书混在一起）
+    db.insert_subdomains(tid, [("src-title.example.com", "osint:fofa-title")])
+    ext_all = c.get("/extdomains?all=1").get_data(as_text=True)
+    for label in ("JS 挖掘", "FOFA·标题反查", "FOFA·证书反查", "FOFA·ICO 反查", "C 段反查"):
+        assert label in ext_all, f"拓展域名页缺来源分类标签 {label}"
+    # 表内顺序 = js:mine → osint:fofa-title → osint:fofa-cert → osint:cseg
+    pos_js = ext_all.index("js-smoke.example.com")
+    pos_title = ext_all.index("src-title.example.com")
+    pos_cert = ext_all.index("pure-ext-smoke.example.com")
+    pos_cseg = ext_all.index("osint-smoke.example.com")
+    assert pos_js < pos_title < pos_cert < pos_cseg, \
+        f"拓展域名应按来源分类排序，(js,title,cert,cseg)=({pos_js},{pos_title},{pos_cert},{pos_cseg})"
+    # `?src=` 只显示该来源一类，并把它翻译成批量扫描的默认任务名前缀
+    ext_title = c.get("/extdomains?all=1&src=title").get_data(as_text=True)
+    assert "src-title.example.com" in ext_title and "js-smoke.example.com" not in ext_title
+    assert 'value="fofa标题拓展"' in ext_title, "批量扫描应带上按来源生成的默认任务名前缀"
+    assert "src-title.example.com" not in c.get("/extdomains?all=1&src=js").get_data(as_text=True)
+
     # (7) 站点重叠：同一 URL 跨任务只留**最新**那条（`MAX(id)`），`?all=1` 一起放开。
     #     必须留最新的：站点行带的是当次扫描的 status/title/length/tech，留最旧那条等于
     #     默认视图一直展示陈旧数据（重扫的目的正是刷新这些字段）。

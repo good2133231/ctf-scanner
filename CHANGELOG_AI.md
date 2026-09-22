@@ -3,6 +3,54 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十七轮（续 5）：拓展域名按来源分类 + 批量扫描命名 + 去掉冗余提示
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户当场提的 4 点（承接"继续接管项目"）：
+
+### 1）删掉任务详情里那句冗余提示
+
+- `gui/templates/task_detail.html` 子域名页签顶部的「另有 {{ ext_count }} 个从 JS / 外部情报拓展出的域名，
+  见「拓展域名」页（未必属于目标自身）」整段删除 —— 拓展域名已有独立页签与独立页面，这句话只是噪声。
+- 连带清掉随之失去唯一用途的 `ext_count` 传参（`gui/app.py` 的 `render_template` 里去掉），
+  `ext_subs` 保留（页签内容仍在用）。
+
+### 2）拓展域名**按来源分类**展示与排序（不再夹在一起）
+
+- `gui/app.py` 新增 `EXT_SRC_TAGS`（键 / 中文标签 / `source` 值 / 批量任务名前缀）与 `EXT_SRC_ORDER`
+  （`CASE source WHEN 'js:mine' THEN 0 … ELSE 99 END, id DESC`），顺序即用户要求的
+  **JS 挖掘 → FOFA·标题反查 → FOFA·证书反查 → FOFA·ICO 反查 → C 段反查**，同类内新的在前；
+- `scanner/db.py::page_assets()` 与 `gui/app.py::_asset_page()` 新增 **`order` 可选参数**
+  （留空用表默认排序，`_ASSET_PAGES` 行为不变）——这样分类排序只在拓展域名页生效，不污染其它资产页；
+- `gui/templates/extdomains.html` 页顶新增「来源分类」按钮组（`?src=`），并让 CDN 标签 / 重叠开关 /
+  关键字筛选 / 分页链接之间**互相保留参数**（新增 `keep_src`，与 `keep_tag` 合并成 `keep`）。
+
+### 3）批量操作与默认任务名
+
+- 勾选行的「加入黑名单」「批量跑子域名（新建任务）」两个按钮此前已有，本次补上**命名规则**：
+  表单带 `name` 前缀（由当前分类生成，如 `fofa标题拓展`），`api_run_subdomain` 统一拼时间戳 →
+  任务名形如 `fofa标题拓展-0922-1530`；未选分类时退回旧的 `批量子域-月日-时分秒`。
+
+### 4）"文件扫描"（目录扫描）现状答疑
+
+- 结论：**框架侧的 dirscan 正常** —— 内置字典扫描会写状态码 / 路径 / **返回包大小**
+  （`dirs.length`；dirmap 的 `1.23kb` 由 `_size_to_int()` 换算），重复长度默认折叠、
+  且**只对不重复站点**扫（`_dedup_sites()`，与 `/sites` 折叠同一口径）；`smoke [5e]` 覆盖
+  dirmap 产出解析 / 重复长度文件不读 / 大小换算 / 站点去重。
+- 你日志里那句 `dirmap 不可用（或 --offline）` 是**旧代码/旧时点**的输出：现在 `tools/dirmap/dirmap.py`
+  存在（`resolve()` 相对项目根解析），且 `gevent/lxml/progressbar` 三个依赖在本机 **均已安装**，
+  所以当前代码会走 dirmap 分支。dirmap 自身那份改动仍按你的安排交给另一个 AI 审查，我这边不碰。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py   # SMOKE PASS
+# 新增 (6b) 断言：来源分类 5 个标签齐全 / 表内顺序 js < title < cert < cseg /
+#   ?src=title 只出标题类且不含 JS 类 / 批量扫描默认名前缀 value="fofa标题拓展"
+```
+
+文档：`docs/usage.md` 第 5 条（拓展域名）补"来源分类浏览与排序 + `?src=` + 批量任务命名"。
+
 ## 2026-09-22 —— 第十七轮（续 4）：全量代码体检（bug 检查）
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

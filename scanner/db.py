@@ -398,14 +398,17 @@ OVERLAP_EXT_WHERE = f"domain NOT IN (SELECT domain FROM subdomains WHERE {OWN_SU
 OVERLAP_SITE_WHERE = "id IN (SELECT MAX(id) FROM sites GROUP BY url)"
 
 
-def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_params=()):
+def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_params=(),
+                order=None):
     """跨任务资产分页查询，返回 (rows, total)。
 
     `q` 是"整行关键字"（对若干文本列做 LIKE），与前端 `initFilters()` 的体验一致，
     区别是过滤与分页都放在 SQL 侧 —— 数据量上去后不再被固定 `LIMIT 500` 截断。
     `extra_where` 是**服务端**附加条件（如子域名来源分流、CDN 标签），参数走 `extra_params`。
+    `order` 留空用 `_ASSET_PAGES` 里的表默认排序；拓展域名页用它做"按来源分类排序"
+    （`CASE source ... END` 显式指定分类先后），不改动表默认行为。
     """
-    order, cols = _ASSET_PAGES[table]
+    default_order, cols = _ASSET_PAGES[table]
     clauses, params = [], []
     if extra_where:
         clauses.append(f"({extra_where})")
@@ -415,7 +418,7 @@ def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_para
         params.extend([f"%{q}%"] * len(cols))
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     total = _query(f"SELECT COUNT(*) c FROM {table}{where}", tuple(params), one=True)
-    rows = _query(f"SELECT * FROM {table}{where} ORDER BY {order} LIMIT ? OFFSET ?",
+    rows = _query(f"SELECT * FROM {table}{where} ORDER BY {order or default_order} LIMIT ? OFFSET ?",
                   tuple(params) + (int(limit), int(offset)))
     return rows, (total["c"] if total else 0)
 

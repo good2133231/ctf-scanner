@@ -8,15 +8,25 @@
   这些域名<b>未必属于目标自身</b>——第三方接口、CDN、统计服务都会出现在 JS 里，
   因此与「子域名资产」分开放，避免误判资产归属。来源列已标出哪些是 FOFA 找出来的。</p>
 <section class="panel">
+  {% set keep_tag = '&tag=' + tag if tag else '' %}
+  <p class="muted small">来源分类（<b>默认按此顺序排列</b>：JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段）：
+    <a class="btn-mini {{ 'ghost' if src else '' }}"
+       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep_tag }}{{ '&all=1' if show_all }}">全部</a>
+    {% for k, label, _s, _n in src_tags %}
+      <a class="btn-mini {{ 'ghost' if src != k else '' }}"
+         href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&src={{ k }}{{ keep_tag }}{{ '&all=1' if show_all }}">{{ label }}</a>
+    {% endfor %}
+  </p>
+  {% set keep_src = '&src=' + src if src else '' %}
   <p class="muted small">标签过滤：CDN 标记来自 CNAME 链与
     <span class="mono">config/dicts/cdn_cname.txt</span> 名单比对（接管检测之外的独立判定）。
     <a class="btn-mini {{ 'ghost' if tag != 'cdn' else '' }}"
-       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=cdn{{ '&all=1' if show_all }}">只看 CDN</a>
+       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=cdn{{ keep_src }}{{ '&all=1' if show_all }}">只看 CDN</a>
     <a class="btn-mini {{ 'ghost' if tag != 'nocdn' else '' }}"
-       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=nocdn{{ '&all=1' if show_all }}">只看非 CDN</a>
-    {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ '&all=1' if show_all }}">全部</a>{% endif %}
+       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=nocdn{{ keep_src }}{{ '&all=1' if show_all }}">只看非 CDN</a>
+    {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep_src }}{{ '&all=1' if show_all }}">全部</a>{% endif %}
   </p>
-  {% set keep = '&tag=' + tag if tag else '' %}
+  {% set keep = keep_src + keep_tag %}
   <p class="muted small">重叠资产：<b>该域名已作为「目标自身子域名」出现在任意任务里</b>（域名级全局判重），
     说明它早就在资产清单里，这里再列一遍纯属重复，所以<b>默认隐藏</b>。
     {% if show_all %}
@@ -30,6 +40,7 @@
   <form class="filters" method="get" action="{{ pager.base }}">
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="域名 / 来源 / CNAME / IP"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
+    {% if src %}<input type="hidden" name="src" value="{{ src }}">{% endif %}
     {% if tag %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
     {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
     <button class="ghost" type="submit">查询</button>
@@ -38,12 +49,14 @@
   <form method="post" action="{{ url_for('api_blacklist_add') }}">
     <input type="hidden" name="next"
       value="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep }}{{ '&all=1' if show_all }}">
+    <input type="hidden" name="name" value="{{ scan_name }}">
     <div class="bulkbar">
       <button type="submit" class="ghost">加入黑名单（勾选行）</button>
       <button type="submit" class="ghost"
         formaction="{{ url_for('api_run_subdomain') }}">批量跑子域名（新建任务）</button>
       <span class="muted">黑名单：命中即不入资产库，后续阶段也不会扫它；
-        批量跑子域名会新建一个只跑 subdomain 阶段的任务。</span>
+        批量跑子域名会新建一个只跑 subdomain 阶段的任务，名称默认
+        <span class="mono">{{ scan_name }}-月日-时分秒</span>。</span>
     </div>
     <table id="tbl-all-ext-subs">
       <thead><tr>
