@@ -208,6 +208,20 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
 
 -----
+（第十一轮：定位 python 找不到的真根因 —— 不是"没装"，是 AI shell 的 PATH 条目编码损坏）
+[修复] 你说"我的 cmd 里 python 明明能用"，实测确认：你的 cmd 里 python = 3.9.0、where python
+       三条命中；用户级 PATH 里也确实有 …\Programs\Python\Python39\。而 AI 工具启动的 shell 里
+       同一项是乱码 C:\Users\锟斤拷锟斤拷\AppData\Local\Programs\Python\Python39\
+       （"材料"的 UTF-8 字节 E6 9D 90 E6 96 99 被按 GBK 解读 = "锟斤拷"），路径失效 →
+       where python 找不到、python -V 报 CommandNotFoundException。
+       `py -3` 不受影响（C:\WINDOWS\py.exe 是纯 ASCII 路径，且 py.exe 自己查注册表）
+[修复] AGENTS.md §2 改写为"分清是哪个 shell"，并写明**不要再对这条下绝对结论**
+       （第八轮写"均在 PATH"、第九轮写"不在 PATH"，两次都不准确，来回改正是因为说得不够精确）；
+       CHANGELOG_AI.md 第九轮的"原文才是事实"处加 ⚠️ 第十一轮修正块（不删历史）
+[说明] 对你自己的使用完全无影响：在你的 cmd 里 `python run_gui.py` / `python cli\client.py` 直接能用；
+       `py -3` 只是 AI shell 里的稳妥写法。框架取解释器走 utils.pick_python()，两条路径都实测可用
+
+-----
 本轮验证基线（可复现）：py -3 tests/smoke.py → SMOKE PASS
   engine.load_all_meta() → 312/312 ok；GUI 10 栏（含 /csegs）、任务详情 8 页签均 200
   第四轮补充：内置检查 5/12 项执行；POC 注册表全开时 级别门内 311 / 放开后 312

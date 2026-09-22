@@ -364,13 +364,18 @@
   （MinGit 便携版 `C:\Users\材料\MinGit\cmd\git.exe` + 首次提交 `2267e51`，392 文件）、
   `.gitignore` 补全（`venv/` / `config/nuclei-templates/`）、`logs/` 清理 64 个开发期任务目录
   （保留最新 `cli_smoke_report.md`）、`AGENTS.md` §2 环境描述更新。
-  **注：第八轮把该条写成"`python` 实际在 PATH，旧记载过时"是错的** —— 第九轮实测
-  `where python` 找不到、`python -V` 报 CommandNotFoundException，仅 `py -3`（3.9.0）可用；
-  原记载（`python` 不在 PATH）才是对的，已按实测改回。功能无影响：`utils.pick_python()`
-  找不到 `python` 时回退 `sys.executable`（实测生效）。详见 `CHANGELOG_AI.md` 第九轮。
+  **注：关于 `python` 是否可用，第八轮与第九轮下过两次相反结论，都不准确（第十一轮定案）** ——
+  真相是"**分 shell**"：用户在**自己的 cmd** 里 `python` 完全可用（实测 `Python 3.9.0`，
+  `where python` 三条命中），**AI 工具启动的 shell** 里才不可解析，根因是该 PATH 条目在进程环境里
+  **编码损坏**成 `C:\Users\锟斤拷锟斤拷\…`（用户名"材料"的 UTF-8 字节被按 GBK 解读），
+  并非"没装/没进 PATH"；`py -3` 因 `C:\WINDOWS\py.exe` 是纯 ASCII 路径而不受影响。
+  功能无影响：`utils.pick_python()` 在 `which("python")` 不中时回退 `sys.executable`（实测生效）。
+  详见 `CHANGELOG_AI.md` 第十一轮。
   零代码改动，接管基线与收尾各跑一次 `tests/smoke.py` 均 PASS。
-  第九轮实施（审计第八轮成果）：修掉 `AGENTS.md` §2 的环境描述事实错误（第八轮"纠偏"本身是错的，
-  实测只有 `py -3` 可用）、SQL 注入面与跨平台双审计通过、补提交。详见 `CHANGELOG_AI.md` 第九轮。
+  第九轮实施（审计第八轮成果）：修掉 `AGENTS.md` §2 的环境描述错误（第八轮"纠偏"本身不准确，
+  实测 AI shell 里只有 `py -3` 可用）、SQL 注入面与跨平台双审计通过、补提交。
+  第十一轮再修正：连第九轮的"python 不在 PATH"也不准确，真根因见上（PATH 条目编码损坏）。
+  详见 `CHANGELOG_AI.md` 第十一轮。
   第十轮实施（2026-09-22，接手同一条指令）：按你原话"很大功能实现了 都要有一个菜单栏去有一个
   大体的开启或者关闭，根据分类来"逐段核对，**发现 `dirscan` / `vulnscan` 此前没有任何总开关**
   （`config.DEFAULTS` 里根本没有这两段，GUI 无从关闭，"只做资产测绘、不探测"这件事做不到）——

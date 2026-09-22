@@ -3,6 +3,45 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十一轮：定位 `python` 找不到的真根因（PATH 条目编码损坏，非"没装"）
+
+### 背景
+
+用户贴出他自己 cmd 的实测：`python` → `Python 3.9.0`，`where python` →
+`…\Python39\python.exe` / `…\Python38\python.exe` / `…\WindowsApps\python.exe` 三条命中。
+**这直接推翻了第八轮与第九轮对同一条环境的两次相反结论**（第八轮"均在 PATH"、第九轮"不在 PATH"），
+也说明我上一轮的回答（"本机只能用 `py -3`"）对用户自己是错的。
+
+### 根因（首次实测定位，不是推测）
+
+在 AI 工具启动的 shell 里打印 `$env:PATH`，含 Python 的那个条目是**乱码**：
+
+```
+C:\Users\锟斤拷锟斤拷\AppData\Local\Programs\Python\Python39\
+```
+
+而用户级 PATH（`[Environment]::GetEnvironmentVariable('Path','User')`）里同一项是**正常的**
+`C:\Users\材料\AppData\Local\Programs\Python\Python39\`。
+
+即：**PATH 里有 python，但该条目在 AI shell 的进程环境里编码损坏**，路径解析不到 →
+`where python` / `Get-Command python` 为空、`python -V` 报 CommandNotFoundException。
+"锟斤拷"是典型症状：用户名"材料"的 UTF-8 字节 `E6 9D 90 E6 96 99` 被按 GBK 解读即为"锟斤拷"。
+`py -3` 不受影响，因为 `C:\WINDOWS\py.exe` 是纯 ASCII 路径且 py.exe 自行查注册表定位版本。
+
+### 变更
+
+1. **`AGENTS.md` §2 改写为"分清是哪个 shell"**：明确"用户 cmd 可用 / AI shell 因**编码损坏**
+   不可解析"两条事实 + 真根因 + 字节级证据，并写明**不要再对这条下绝对结论**
+   （两次来回改正是因为结论不够精确），AI shell 里统一用 `py -3`。
+2. **本文件第九轮条目下的"**原文才是事实**"结论同步加注**（下面的 ⚠️ 块），不删历史。
+
+### 影响评估
+
+**无功能影响**：`utils.pick_python()`（`scanner/utils.py:28-36`）逻辑是
+`if configured and which(configured): return configured; return sys.executable` ——
+AI shell 里 `which("python")` 不中 → 回退 `sys.executable`；用户 shell 里命中 → 用 `python`。
+两条路径都实测可用。真正被修掉的是"文档会把接手者引向错误排查方向"这件事。
+
 ## 2026-09-22 —— 第十轮：补齐「大功能阶段级总开关」缺口 + 清掉上一轮残留的文档错漏
 
 ### 背景
@@ -76,6 +115,10 @@ osint 由 iprecon/fofa 两个子开关代替）。
    - 第九轮实测反证：`Get-Command python` → 无结果；`where.exe python` → `Could not find files`；
      `python -V` → `CommandNotFoundException`；`Get-Command py` → `C:\WINDOWS\py.exe`，
      `py -3 -V` → `Python 3.9.0`。**原文才是事实**。
+     > ⚠️ **第十一轮修正**：这句"原文才是事实"**也下得太绝对**。用户在自己 cmd 里实测
+     > `python` → `Python 3.9.0`、`where python` 三条命中。真根因是"AI shell 的 PATH 里含 Python
+     > 的那个条目编码损坏成 `C:\Users\锟斤拷锟斤拷\…`"（用户名"材料"的 UTF-8 字节被按 GBK 解读），
+     > **不是"机器上没有 python"**。准确写法见 `AGENTS.md` §2 与第十一轮条目。
    - 已按实测改回，并加一行说明（`……\WindowsApps\python.exe` 的 App Execution Alias 存于磁盘，
      但 `WindowsApps` 不在 PATH，所以 `python` 不可解析）。
    - **影响评估**：纯文档错误，无功能影响 —— 框架取解释器一律走 `utils.pick_python()`

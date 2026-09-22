@@ -13,11 +13,21 @@ Flask Web 控制台（仿 ARL）。
 
 ## 2. 运行环境（本机实际情况）
 
-- Python 3.9（**`py -3` 可用**，实测 `Python 3.9.0`；**`python` 不在 PATH** —— 本机只有
-  `C:\WINDOWS\py.exe`，`where python` / `Get-Command python` 均找不到，`python -V` 直接报
-  CommandNotFoundException。写命令请用 `py -3`）。
-  *（说明：第八轮曾把本条改成"`python` / `py -3` 均在 PATH"，第九轮实测证明那次"纠偏"本身是错的，
-  已按实测改回。功能上无影响：框架取解释器一律走 `utils.pick_python()`，找不到 `python` 时回退
+- Python 3.9。**结论要先分清是哪个 shell**：
+  - 用户在**自己的 cmd** 里 `python` 完全可用（实测 `Python 3.9.0`，`where python` 三条命中：
+    Python39 / Python38 / WindowsApps）；用户 PATH 里**确实有** `…\Programs\Python\Python39\`。
+  - **AI 工具启动的 shell 里 `python` 不可解析**，根因不是"没装/没进 PATH"，而是**该 PATH 条目
+    编码损坏**：`$env:PATH` 里它是乱码 `C:\Users\锟斤拷锟斤拷\AppData\Local\Programs\Python\Python39\`
+    —— 用户名"材料"的 UTF-8 字节（`E6 9D 90 E6 96 99`）被按 GBK 解读成"锟斤拷"这种典型乱码，
+    于是路径整体失效，`where python` / `Get-Command python` 找不到、`python -V` 报
+    CommandNotFoundException。
+  - `py -3` 之所以照常可用：`C:\WINDOWS\py.exe` 是**纯 ASCII 路径**不受影响，且 py.exe 自己查
+    注册表定位版本（实测 `Python 3.9.0`）。**在 AI shell 里请一律写 `py -3`**，
+    但**不要下"这台机器没有 python"的结论**（会误导你去做无意义的排查）。
+  *（说明：第八轮写成"`python` / `py -3` 均在 PATH"、第九轮又反改成"`python` 不在 PATH"，
+  两次都不准确 —— 真相是"用户 shell 有、AI shell 因编码损坏找不到"。第十一轮按 `$env:PATH`
+  实测定位到真根因并改为此写法，请以此为准。
+  功能上无影响：框架取解释器一律走 `utils.pick_python()` —— `which(configured)` 不中则回退
   `sys.executable`，实测返回 `…\Programs\Python\Python39\python.exe`。）*
 - 依赖已装：flask 3.1、requests 2.22、PyYAML 6.0（见 requirements.txt）。
 - 外部工具（subfinder / puredns / httpx / dirmap）**均未安装** → 全部走内置兜底，这是当前默认运行状态。
