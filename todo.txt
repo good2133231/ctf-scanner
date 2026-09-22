@@ -469,3 +469,22 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [待办] 端口扫描接入 fscan（可选，见本轮分析；需你先放二进制到 tools/，我才能真跑验证）
 [待办] osint 阈值继续按真实数据校准（已有首个样本：标题十位数 / 证书百万级）
 
+-----
+（第十七轮续：目录字典按技术栈拆分 + 按栈选字典）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+[完成] 1、你给的外部字典已拆开部署进项目：tools/import_dir_dict.py --src <文件> 生成
+       config/dicts/dirs_big(11882) / dirs_common(10671) / dirs_php(933) / dirs_asp(162) / dirs_jsp(116)
+       （源路径只走 --src 参数，代码里不留绝对路径）
+[完成] 2、按技术栈选字典（dirscan.tech_aware 默认开）：先看 URL 后缀（/index.php、/login.do），
+       再看 sites.tech 指纹（tomcat/jetty/spring→jsp，php/wordpress→php，aspnet/iis→asp），
+       判不出就用全量字典（不猜）。语言字典排在通用字典前，max_paths 截断时先保语言专属路径；
+       dirmap 也按栈分组调用（-e jsp|php|asp|all），Java 站不会再被 PHP/ASP 后缀浪费请求。
+       GUI「策略配置 → 资产面拓展」有开关；docs/pipeline.md 已写明
+[完成] 3、双靶场实测（记录真实请求）：PHP 站 40 条请求 100% 是 .php、0 条 .jsp/.aspx；
+       Java 站 40 条请求 26 条 .jsp + 4 条 .do、0 条 .php/.aspx → 零跨语言污染；smoke 新增 [5g]
+[完成] 4、顺手修两处真 Bug：dirscan / vulnscan 单独跑（-p dirscan）时没有库回退 →
+       永远"无存活站点，跳过"；现补 db.list_sites() 回退（转 dict，sqlite3.Row 没有 .get()）
+
+[待办] 目录字典还能再细分（如按框架：wordpress/spring 专属路径），当前只按语言拆三层
+[待办] P2-3 Linux 实机验证（挂起中；本机 WSL 被安全策略禁用、无 Docker）
+[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘
+[待办] 端口扫描接入 fscan（可选，需你先放二进制）

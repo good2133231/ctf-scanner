@@ -768,6 +768,46 @@ def main():
         (sub_stage.which, sub_stage.verify_tool, sub_stage.run_cmd,
          sub_stage.passive.collect) = _orig
     print("[5f] 子域名并集 ok: subfinder 带 -all 且与内置被动源取并集（union_passive 可关）")
+
+    # 5g) 第十七轮(2)：目录字典按技术栈拆分 + 运行时按栈选字典
+    #     用户要求"确定是 java 就不要用 php asp" —— 一个站只可能是一种栈，
+    #     把三种语言后缀全打一遍纯属浪费 max_paths 额度。
+    from scanner.stages.dirscan import _dict_kind
+    assert _dict_kind("tomcat", "http://a/") == "jsp"
+    assert _dict_kind("jetty", "http://a/") == "jsp"
+    assert _dict_kind("php", "http://a/") == "php"
+    assert _dict_kind("wordpress,nginx", "http://a/") == "php"
+    assert _dict_kind("aspnet", "http://a/") == "asp"
+    assert _dict_kind("iis", "http://a/") == "asp"
+    assert _dict_kind("nginx", "http://a/") == "", "判不出就该返回空（走全量字典），不能瞎猜"
+    assert _dict_kind("", "http://a/index.php") == "php", "URL 后缀是最直接的判据"
+    assert _dict_kind("", "http://a/login.do") == "jsp"
+    assert _dict_kind("", "http://a/x.aspx?y=1") == "asp"
+
+    # 拆出来的字典文件必须存在且非空（由 tools/import_dir_dict.py 生成）
+    dict_dir = ROOT / "config" / "dicts"
+    counts = {}
+    for key in ("dirs_common", "dirs_jsp", "dirs_php", "dirs_asp", "dirs_big"):
+        items = [x for x in (dict_dir / f"{key}.txt").read_text(
+            encoding="utf-8").splitlines() if x and not x.startswith("#")]
+        counts[key] = len(items)
+        assert items, f"{key}.txt 为空（跑 tools/import_dir_dict.py 生成）"
+    assert counts["dirs_php"] and counts["dirs_jsp"] and counts["dirs_asp"], counts
+
+    # 语言字典必须排在通用字典**前面**：max_paths 截断时先保语言专属路径
+    dstage = DirscanStage(StageContext(tid, "smoke-dicts", parse_lines([targets]),
+                                       ["dirscan"], {}, settings,
+                                       Path(_TMPDIR) / "dicts", rec))
+    jsp_paths = dstage._load_paths("jsp", {"max_paths": 50})
+    php_paths = dstage._load_paths("php", {"max_paths": 50})
+    jsp_set = {x for x in (dict_dir / "dirs_jsp.txt").read_text(
+        encoding="utf-8").splitlines() if x and not x.startswith("#")}
+    assert len(jsp_paths) == 50 and jsp_paths[0] in jsp_set, jsp_paths[:3]
+    assert set(jsp_paths[:40]) != set(php_paths[:40]), "两种栈不该拿到同一批前缀"
+    assert len(dstage._load_paths("", {"max_paths": 50, "big_dict": True})) == 50
+    print(f"[5g] 字典按栈拆分 ok: common/jsp/php/asp = "
+          f"{counts['dirs_common']}/{counts['dirs_jsp']}/{counts['dirs_php']}/{counts['dirs_asp']}"
+          f"（全量 {counts['dirs_big']}）；Java 站只吃 jsp+common")
     print("SMOKE PASS")
 
 

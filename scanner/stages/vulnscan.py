@@ -33,6 +33,11 @@ class VulnscanStage(Stage):
         use_pocs = ccfg.get("poc_engine", True) is not False
         sites = list(ctx.results.get("sites") or [])
         if not sites:
+            # 回退库里的站点：单独跑本阶段（`-p vulnscan`）或进程重启后，内存结果已经没了
+            # 但资产还在库里 —— 不回退的话这些场景会静默"无可扫描站点"。
+            # `db.list_sites()` 是 sqlite3.Row，必须转 dict。
+            sites = [dict(r) for r in db.list_sites(ctx.task_id)]
+        if not sites:
             # 兼容仅导入 URL 且 probe 未产出站点的任务
             sites = [{"url": raw, "source": "input"} for kind, raw in ctx.targets if kind == "url"]
         sites = sites[: int(limits.get("vulnscan_max_urls", 100))]

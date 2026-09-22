@@ -3,6 +3,45 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十七轮（续）：目录字典按技术栈拆分 + 按栈选字典 + 两处阶段回退修复
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+### 1）用户给的外部字典 → 拆分并部署进项目
+
+- 用户提供 `dict_mode_dict.txt`（项目外，用户主动指定；按 `AGENTS.md` §0 允许读取）。
+  `tools/import_dir_dict.py` 扩展为**按扩展名拆桶**并一次性生成 5 份字典到 `config/dicts/`：
+  `dirs_big`（11882，全量）/ `dirs_common`（10671）/ `dirs_php`（933）/ `dirs_asp`（162）/ `dirs_jsp`（116）。
+  源路径只经 `--src` 传入，代码里不留绝对路径；项目外来源只记文件名。
+- 用法：`py -3 tools/import_dir_dict.py --src <字典文件>`
+
+### 2）运行时按技术栈选字典（用户要求"确定是 java 就不要用 php asp，反之亦然"）
+
+- `scanner/stages/dirscan.py`：新增 `TECH_LANG` / `_EXT_LANG` 映射与 `_dict_kind(tech, url)`：
+  先看 **URL 后缀**（`/index.php`、`/login.do`），再看 **`sites.tech` 指纹标签**
+  （tomcat/jetty/spring → jsp；php/wordpress → php；aspnet/iis → asp），**判不出就返回空、走全量字典（不猜）**。
+- `_dict_paths_for()`：语言字典**在前**、通用字典在后 —— `max_paths` 截断时先保语言专属路径。
+- 内置扫描改为**每站点用自己的字典**（`jobs` 按站点×字典展开），日志写明分组：
+  `[dirscan] 技术栈分组：php=1 站点 / jsp=1 站点`。
+- **dirmap 同样按栈分组调用**：`-e jsp|php|asp|all`（dirmap 自带按语言拆分的字典），
+  一个 Java 站不会再被 PHP/ASP 后缀浪费请求；未知栈的组用 `all`。
+- 新增 `dirscan.tech_aware`（默认 **true**，GUI「策略配置 → 资产面拓展」有开关）。
+
+### 3）顺手修掉两处"单独跑阶段会静默不干活"
+
+- `dirscan` 原本只读 `ctx.results["sites"]`，**没有库回退** → `-p dirscan` 单独跑必然
+  "无存活站点，跳过"；`vulnscan` 的回退只覆盖"目标是 URL"的情况。现两者都补上
+  `db.list_sites(task_id)` 回退（**转 dict 再用** —— `sqlite3.Row` 没有 `.get()`，
+  这个坑在 osint 阶段已经踩过一次）。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py     # SMOKE PASS（新增 [5g]：技术栈判定 11 例 + 字典文件非空 + 语言字典优先）
+# 双靶场实测（8765=PHP 站 / 8766=Java 站，记录型 HTTP 处理器抓真实请求）：
+#   PHP 站 40 条请求 → .php 40/40，.jsp 0/40，.aspx 0/40
+#   Java 站 40 条请求 → .jsp 26/40 + .do 4/40，.php 0/40，.aspx 0/40   ← 零跨语言污染
+```
+
 ## 2026-09-22 —— 第十七轮：硬规矩入档 + 子域名"主动且全"（并集）+ 绝对路径清理
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

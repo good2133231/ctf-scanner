@@ -1,17 +1,28 @@
-"""把外部字典整理成我们自己的目录扫描字典（`config/dicts/dirs_big.txt`）。
+"""把外部目录字典整理成我们自己的字典，并**按技术栈拆分**。
 
 用法：
-    py -3 tools/import_dir_dict.py                       # 默认读 tools/dirmap/data/dict_load/dict_mode_dict.txt
-    py -3 tools/import_dir_dict.py --src <相对或绝对路径>
+    py -3 tools/import_dir_dict.py --src <相对或绝对路径>      # 例：用户给的 dict_mode_dict.txt
+    py -3 tools/import_dir_dict.py                            # 默认读 tools/dirmap/data/dict_load/dict_mode_dict.txt
 
-来源默认是**项目内的相对路径** `tools/dirmap`（一个指向本机 dirmap 的目录联接，
-见 docs/usage.md「外部工具」）—— 代码与配置里都不出现绝对路径。
+产出（都落在 `config/dicts/`）：
+    dirs_big.txt     全部条目（未知技术栈时用，兼容既有行为）
+    dirs_common.txt  与语言无关的条目（目录名、无扩展名、静态文件、其它扩展名）
+    dirs_jsp.txt     Java 系：.jsp/.jspx/.do/.action/.jspa/.java/.war…
+    dirs_php.txt     PHP 系：.php/.php3/.php5/.phtml/.phps…
+    dirs_asp.txt     ASP/.NET 系：.asp/.aspx/.ashx/.asmx/.ascx/.config…
 
-做的清洗（都是为了"扫得快且不重复"）：
-- 去空行、去首尾空白；跳过 `#` 注释行（dirmap 用 `#` 注释掉暂不需要的条目）；
-- 统一去掉开头的 `/`（拼接时再补，避免 `//`）；
-- 保序去重（字典顺序通常按命中率排过，不排序、不洗牌）；
+**为什么要拆**：一个站点要么是 Java 要么是 PHP 要么是 ASP.NET，把三种语言的后缀路径
+全打一遍纯属浪费（`dirscan.max_paths` 的额度会被无关后缀吃光）。
+运行时由 `scanner/stages/dirscan.py::_dict_kind()` 按 `sites.tech` 判定技术栈，
+只取「语言字典 + 通用字典」，未知栈才回退 `dirs_big.txt`。
+
+清洗规则（与之前一致，都是为了让扫描"快且不重复"）：
+- 去空行/首尾空白；跳过 `#` 注释行；
+- 去掉开头的 `/`（拼接时再补，避免 `//`）；
+- **保序去重**（字典顺序通常按命中率排过，不排序、不洗牌）；
 - 丢掉明显不像路径的条目（含空白、含 `://`、超长）。
+
+来源路径只通过 `--src` 传入 —— 代码里不出现任何绝对路径（见 `AGENTS.md` §0）。
 """
 import argparse
 import sys
@@ -21,12 +32,27 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 DEFAULT_SRC = ROOT / "tools" / "dirmap" / "data" / "dict_load" / "dict_mode_dict.txt"
-DEFAULT_DST = ROOT / "config" / "dicts" / "dirs_big.txt"
+DICT_DIR = ROOT / "config" / "dicts"
 
 MAX_LEN = 120
 
+# 扩展名 -> 语言桶（小写、不含点）。未列出的扩展名一律进 common。
+LANG_EXT = {
+    "jsp": ("jsp", "jspx", "jspf", "jspa", "jsw", "jsv", "java", "war", "jar", "class",
+            "do", "action", "jspx"),
+    "php": ("php", "php3", "php4", "php5", "php7", "php8", "phtml", "phps", "pht", "phar"),
+    "asp": ("asp", "aspx", "ashx", "asmx", "ascx", "asax", "asa", "axd", "config"),
+}
+
+# 反查表：扩展名 -> 桶名
+_EXT2LANG = {ext: lang for lang, exts in LANG_EXT.items() for ext in exts}
+
+HEADER = ("# 由 tools/import_dir_dict.py 从外部字典整理而来（源：{src}）\n"
+          "# 共 {n} 条 · 实际每站点扫描条数由 dirscan.max_paths 上限控制 · 请勿手工排序\n")
+
 
 def clean(lines):
+    """清洗 + 保序去重，返回条目列表。"""
     out, seen = [], set()
     for raw in lines:
         item = raw.strip()
@@ -41,10 +67,35 @@ def clean(lines):
     return out
 
 
+def lang_of(entry):
+    """按最后一段扩展名判断条目属于哪个语言桶；判断不出返回 ""（进 common）。"""
+    tail = entry.rsplit("/", 1)[-1]
+    if "." not in tail:
+        return ""
+    ext = tail.rsplit(".", 1)[-1].lower()
+    return _EXT2LANG.get(ext, "")
+
+
+def split(entries):
+    """切成 {bucket: [entries]}，bucket ∈ {"", "jsp", "php", "asp"}（保序）。"""
+    buckets = {"": [], "jsp": [], "php": [], "asp": []}
+    for e in entries:
+        buckets[lang_of(e)].append(e)
+    return buckets
+
+
+def write_dict(path, entries, src_label):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(HEADER.format(src=src_label, n=len(entries))
+                    + "".join(i + "\n" for i in entries), encoding="utf-8")
+    return len(entries)
+
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--src", default=str(DEFAULT_SRC))
-    ap.add_argument("--dst", default=str(DEFAULT_DST))
+    ap = argparse.ArgumentParser(description="整理并拆分目录扫描字典")
+    ap.add_argument("--src", default=str(DEFAULT_SRC),
+                    help="源字典（默认 tools/dirmap/data/dict_load/dict_mode_dict.txt）")
+    ap.add_argument("--out-dir", default=str(DICT_DIR), help="输出目录（默认 config/dicts）")
     args = ap.parse_args()
 
     src = Path(args.src)
@@ -52,24 +103,34 @@ def main():
         src = ROOT / src
     if not src.exists():
         print(f"[!] 源字典不存在：{src}")
-        print("    把 dirmap 放到 tools/dirmap（目录联接或直接拷贝），或用 --src 指定路径。")
+        print("    用 --src 指定路径（用户主动给出即可，代码里不留绝对路径）。")
         sys.exit(1)
 
-    items = clean(src.read_text(encoding="utf-8", errors="replace").splitlines())
-    if not items:
+    entries = clean(src.read_text(encoding="utf-8", errors="replace").splitlines())
+    if not entries:
         print("[!] 清洗后为空，未写出")
         sys.exit(1)
 
-    dst = Path(args.dst)
-    if not dst.is_absolute():
-        dst = ROOT / dst
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(
-        "# 目录扫描大字典：由 tools/import_dir_dict.py 从 dirmap 的 dict_mode_dict.txt 整理而来\n"
-        f"# 来源 {src.relative_to(ROOT).as_posix() if str(src).startswith(str(ROOT)) else src.name}"
-        f" · 共 {len(items)} 条 · 实际扫描条数由 dirscan.max_paths 上限控制\n"
-        + "".join(i + "\n" for i in items), encoding="utf-8")
-    print(f"[*] 已写出 {dst.relative_to(ROOT).as_posix()}：{len(items)} 条（源 {len(items)} 行去重后）")
+    try:
+        label = src.relative_to(ROOT).as_posix()
+    except ValueError:
+        label = src.name          # 项目外的源：只记文件名，不写绝对路径
+
+    out_dir = Path(args.out_dir)
+    if not out_dir.is_absolute():
+        out_dir = ROOT / out_dir
+
+    buckets = split(entries)
+    written = {
+        "dirs_big.txt": write_dict(out_dir / "dirs_big.txt", entries, label),
+        "dirs_common.txt": write_dict(out_dir / "dirs_common.txt", buckets[""], label),
+        "dirs_jsp.txt": write_dict(out_dir / "dirs_jsp.txt", buckets["jsp"], label),
+        "dirs_php.txt": write_dict(out_dir / "dirs_php.txt", buckets["php"], label),
+        "dirs_asp.txt": write_dict(out_dir / "dirs_asp.txt", buckets["asp"], label),
+    }
+    print(f"[*] 源 {label}：清洗后 {len(entries)} 条")
+    for name, n in written.items():
+        print(f"    config/dicts/{name:<16} {n} 条")
 
 
 if __name__ == "__main__":

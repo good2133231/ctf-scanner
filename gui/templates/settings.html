@@ -141,9 +141,13 @@
     <label class="chk"><input type="checkbox" name="dirscan_enabled" value="1"
       {{ 'checked' if s.dirscan.enabled }}> <b>目录/路径发现</b>（默认关 —— 请求量最大、噪声最多；
       取消勾选＝整阶段跳过）</label>
+    <label class="chk"><input type="checkbox" name="dirscan_tech_aware" value="1"
+      {{ 'checked' if s.dirscan.tech_aware }}> <b>按技术栈选字典</b>：Java 站只吃
+      <code>dirs_jsp</code>、PHP 站只吃 <code>dirs_php</code>、ASP.NET 站只吃 <code>dirs_asp</code>
+      （各叠加 <code>dirs_common</code>），判不出技术栈才用全量字典</label>
     <label class="chk"><input type="checkbox" name="dirscan_big_dict" value="1"
-      {{ 'checked' if s.dirscan.big_dict }}> 用大字典（<code>config/dicts/dirs_big.txt</code>，
-      由 dirmap 字典整理而来）</label>
+      {{ 'checked' if s.dirscan.big_dict }}> 未知技术栈时用大字典
+      （<code>config/dicts/dirs_big.txt</code>，由外部字典整理而来）</label>
     <label>单站点最多扫多少条字典（大字典 1.5 万条时必填此上限）
       <input name="dirscan_max_paths" value="{{ s.dirscan.max_paths }}"></label>
     <p class="muted small">目录扫描只对<b>不重复站点</b>跑（同任务内标题+长度相同的别名站跳过），

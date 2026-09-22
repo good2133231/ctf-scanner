@@ -117,8 +117,9 @@ DEFAULTS = {
         # 打开后还有两层节流：只对**不重复站点**扫描（标题+长度相同的别名站跳过），
         # 且每个站点最多扫 `max_paths` 条字典。每任务站点上限另见 limits.dirscan_max_urls。
         "enabled": False,
-        "big_dict": True,      # 用大字典（config/dicts/dirs_big.txt，由 dirmap 字典整理而来）
-        "max_paths": 400,      # 单站点最多扫多少条字典（大字典 1.5 万条时必填此上限）
+        "big_dict": True,      # 未知技术栈时用全量字典（config/dicts/dirs_big.txt）
+        "tech_aware": True,    # 按 sites.tech 选字典：Java 站不吃 PHP/ASP 后缀（用户要求）
+        "max_paths": 400,      # 单站点最多扫多少条字典（语言字典优先占额度）
     },
     "vulnscan": {
         # 漏洞初筛阶段总开关。默认开；关闭后整阶段跳过（连请求都不发），
@@ -183,7 +184,13 @@ DEFAULTS = {
         "subdomains": "config/dicts/subdomains.txt",
         "resolvers": "config/dicts/resolvers.txt",
         "dirs": "config/dicts/dirs_small.txt",       # 小字典（快，几十条）
-        "dirs_big": "config/dicts/dirs_big.txt",     # 大字典：由 tools/import_dir_dict.py 整理
+        "dirs_big": "config/dicts/dirs_big.txt",     # 全量（未知技术栈时用）
+        # 按技术栈拆分的字典（tools/import_dir_dict.py --src <外部字典> 生成）：
+        # 运行时按 sites.tech 只取「语言字典 + 通用字典」，避免把三种语言的后缀全打一遍
+        "dirs_common": "config/dicts/dirs_common.txt",
+        "dirs_jsp": "config/dicts/dirs_jsp.txt",     # Java 系（.jsp/.do/.action/.java…）
+        "dirs_php": "config/dicts/dirs_php.txt",     # PHP 系（.php/.phtml…）
+        "dirs_asp": "config/dicts/dirs_asp.txt",     # ASP/.NET 系（.asp/.aspx/.config…）
         "sensitive": "config/dicts/sensitive.txt",  # 预留：内置检查暂用硬编码清单
         "cdn_cname": "config/dicts/cdn_cname.txt",  # CDN 厂商 CNAME 后缀（子域名 CDN 标记用）
     },

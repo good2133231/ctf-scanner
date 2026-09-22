@@ -680,6 +680,7 @@ def create_app():
                     # 目录扫描：默认关；大字典 + 单站点条数上限（1.5 万条字典必须节流）
                     "dirscan": {"enabled": f.get("dirscan_enabled") == "1",
                                 "big_dict": f.get("dirscan_big_dict") == "1",
+                                "tech_aware": f.get("dirscan_tech_aware") == "1",
                                 "max_paths": int(f.get("dirscan_max_paths", 400) or 400)},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
                     "portscan": {"enabled": f.get("portscan_enabled") == "1",

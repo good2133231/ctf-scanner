@@ -177,10 +177,16 @@
   （大字典 15333 条 × 站点数），需要时到「策略配置 → 资产面拓展」打开；
 - 输入：存活站点，先做**去重**（`_dedup_sites`：同一任务内「标题 + 响应长度」相同的别名站只留首个，
   与 `/sites` 页折叠同一口径），再按 `limits.dirscan_max_urls` 截断；
-- 字典：`dirscan.big_dict=true`（默认）用 `config/dicts/dirs_big.txt`（**15333 条**，
-  由 `tools/import_dir_dict.py` 从 dirmap 的 `dict_mode_dict.txt` 清洗而来），
-  `false` 用 `config/dicts/dirs_small.txt`（55 条）；**单站点最多扫 `dirscan.max_paths`（默认 400）条**
-  —— 这是硬节流，1.5 万条全量打一个站点要打到天亮；
+- **字典按技术栈拆分 + 运行时按栈选择**（`dirscan.tech_aware`，默认开）：
+  `tools/import_dir_dict.py --src <外部字典>` 把源字典切成
+  `dirs_common`（与语言无关）/ `dirs_jsp`（Java 系）/ `dirs_php`（PHP 系）/ `dirs_asp`（ASP.NET 系）
+  + `dirs_big`（全量）。运行时按 `sites.tech`（probe 阶段的指纹）与 URL 后缀判定技术栈，
+  只取「语言字典 + 通用字典」—— 用户要求"确定是 java 就不要用 php asp"，一个站只可能是
+  一种栈，把三种语言的后缀全打一遍纯属浪费 `max_paths` 额度。判不出技术栈才用全量字典。
+  **语言字典排在通用字典之前**：`max_paths` 截断时先保语言专属路径。
+  实测：PHP 站 40 条请求 100% 是 `.php`，Java 站无一条 `.php/.aspx`；
+- 字典文件（`config/dicts/`）：`dirs_big`（全量）/ `dirs_common` / `dirs_jsp` / `dirs_php` / `dirs_asp`，
+  另保留 `dirs_small`（55 条，快速档）；**单站点最多扫 `dirscan.max_paths`（默认 400）条**（硬节流）；
 - 处理（外部工具优先）：`tools/dirmap/dirmap.py` 存在时调用 dirmap
   （`-iF <目标文件> -e all -t <线程>`，cwd 固定在其项目目录），解析其 `output/<域名>/*.txt`：
   **只读 `res.txt` 与 `403.txt`**（`重复长度.txt` / `404.txt` / `othercode.txt` 不读 —— 重复长度按用户要求默认不展示），
@@ -248,7 +254,8 @@ logs/task_1_mytask/
 | limits.dirscan_max_urls | 20 | 参与目录扫描的站点上限 |
 | limits.vulnscan_max_urls | 100 | 参与漏洞扫描的站点上限 |
 | dirscan.enabled | **false** | **阶段级**开关：目录/路径发现整阶段开关（关掉连请求都不发） |
-| dirscan.big_dict / max_paths | true / 400 | 用 15333 条大字典；单站点最多扫多少条（硬节流） |
+| dirscan.tech_aware | true | 按 `sites.tech` 选字典：Java 站只吃 jsp+common，PHP 站只吃 php+common |
+| dirscan.big_dict / max_paths | true / 400 | 未知栈时用全量字典；单站点最多扫多少条（硬节流） |
 | portscan.mode / full_ports | top / 1-65535 | `full` 走全端口；也可由任务选项 `portscan_full` 单次触发 |
 | portscan.exclude_scanned | true | 跳过本任务已扫过的端口 |
 | fofa.title_enabled / title_threshold | true / 200 | 标题反查开关；命中数超过阈值判为"公共标题"放弃拓展 |

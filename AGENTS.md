@@ -94,12 +94,15 @@ ctf-scanner/
 │   ├── targets.py         # parse_lines → [(kind, raw)]，kind ∈ domain|url|ip|cidr|unknown（cidr 展开为多条 ip）
 │   └── report.py          # Markdown 报告
 ├── tools/import_ref_pocs.py # ast 静态解析参考项目 Python POC → config/pocs-imported/（导入项默认关闭）
-├── tools/import_dir_dict.py # 把 dirmap 的 dict_mode_dict.txt 清洗成 config/dicts/dirs_big.txt（15333 条）
+├── tools/import_dir_dict.py # 外部目录字典 → 清洗 + **按技术栈拆桶** → config/dicts/dirs_{big,common,jsp,php,asp}.txt
+│                          #   用法：py -3 tools/import_dir_dict.py --src <字典文件>（源路径只走参数，代码里不留绝对路径）
 ├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
 ├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十五段（dirscan 段含 big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned））
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
-├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / dirs_big(15333，dirmap 整理) / sensitive(11，暂未使用) / cdn_cname(292)
+├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / sensitive(11，暂未使用) / cdn_cname(292)
+│                          #   目录字典按技术栈拆分：dirs_big(11882 全量) / dirs_common(10671) /
+│                          #   dirs_php(933) / dirs_asp(162) / dirs_jsp(116)（tools/import_dir_dict.py 生成）
 ├── config/pocs-user/      # 用户上传 POC；config/pocs-imported/ 导入 POC（默认关闭）；config/nuclei-templates/ 官方模板投放点
 ├── tests/smoke.py         # 唯一测试：自包含靶场(127.0.0.1:8765) + 断言，见 §6
 ├── TODO.md                # 任务确认清单（待用户确认的排期，不是承诺，见 §9）

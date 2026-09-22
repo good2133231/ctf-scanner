@@ -65,6 +65,7 @@ dirscan:
   # 默认关闭：目录爆破请求量最大、噪声最多，需要时到「策略配置 → 资产面拓展」打开
   enabled: false
   big_dict: true
+  tech_aware: true
   max_paths: 400
 vulnscan:
   enabled: true
@@ -104,6 +105,10 @@ dicts:
   resolvers: config/dicts/resolvers.txt
   dirs: config/dicts/dirs_small.txt
   dirs_big: config/dicts/dirs_big.txt
+  dirs_common: config/dicts/dirs_common.txt
+  dirs_jsp: config/dicts/dirs_jsp.txt
+  dirs_php: config/dicts/dirs_php.txt
+  dirs_asp: config/dicts/dirs_asp.txt
   sensitive: config/dicts/sensitive.txt
   cdn_cname: config/dicts/cdn_cname.txt
 http:

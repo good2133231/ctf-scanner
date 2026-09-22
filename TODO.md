@@ -457,6 +457,18 @@
   我们已用 `-sT` + 内置 connect + 全端口专用并发/超时把耗时压到可接受）。
 - **subfinder `-all`**：`-all` = 使用**全部数据源**（不加只用默认源集合）；我们恒带 `-all`。
 
+### 第十七轮（续）字典按技术栈拆分（2026-09-22）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+- [x] 用户给的外部字典 → `tools/import_dir_dict.py --src <文件>` 拆成
+      `dirs_big(11882) / dirs_common(10671) / dirs_php(933) / dirs_asp(162) / dirs_jsp(116)` 部署进 `config/dicts/`；
+- [x] **按技术栈选字典**（`dirscan.tech_aware`，默认开）：URL 后缀 + `sites.tech` 判定 →
+      Java 站只吃 `dirs_jsp+dirs_common`，PHP 站只吃 `dirs_php+dirs_common`，判不出才用全量；
+      语言字典排在前面，`max_paths` 截断时先保语言专属路径；dirmap 同样按栈分组用 `-e jsp|php|asp|all`；
+- [x] 顺手修：`dirscan` / `vulnscan` 单独跑时**没有库回退**导致静默不干活 → 补 `db.list_sites()` 回退；
+- [x] 双靶场实测：PHP 站 40 条请求 100% `.php`、Java 站 0 条 `.php/.aspx`；smoke 新增 `[5g]`。
+
 ## 兼容性红线（所有新增代码都适用）
 
 1. 路径用 `pathlib`；命令用列表参数 + `shell=False`；工具名不假设平台。
