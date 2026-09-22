@@ -1,0 +1,17 @@
+id: exposure-git-config
+info:
+  name: ".git 目录配置泄露"
+  author: ctfscanner
+  severity: high
+  tags: [exposure, git, owasp-a01, owasp-a05]
+  description: "站点 /.git/config 可被匿名访问，攻击者可借 git-dumper 等工具还原整个源码仓库。"
+http:
+  - method: GET
+    path: "/.git/config"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: ["[core]", "repositoryformatversion"]
+        condition: and

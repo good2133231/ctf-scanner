@@ -1,0 +1,135 @@
+/* CTFScanner 深色主题（仿 ARL / 资产灯塔控制台布局：左侧栏 + 顶栏 + 任务详情页签） */
+:root { --bg:#0f1419; --panel:#161d26; --line:#233040; --text:#d7dee8;
+        --muted:#7d8b9d; --accent:#2dd4a7; --side:#111820; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--text);
+       font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+
+/* ---------- 外壳：左侧栏 + 主区 ---------- */
+.layout { display:flex; min-height:100vh; }
+.sidebar { width:196px; flex:0 0 196px; background:var(--side);
+           border-right:1px solid var(--line); display:flex; flex-direction:column;
+           position:sticky; top:0; height:100vh; }
+.sidebar .brand { font-weight:700; font-size:15px; padding:16px 18px;
+                  border-bottom:1px solid var(--line); color:var(--text); }
+.sidebar .brand span { color:var(--accent); }
+.side-nav { display:flex; flex-direction:column; padding:8px 0; overflow-y:auto; }
+.side-item { display:flex; align-items:center; gap:9px; padding:9px 18px; color:var(--muted);
+             text-decoration:none; font-size:13px; border-left:3px solid transparent; }
+.side-item svg { flex:0 0 15px; }
+.side-item:hover { color:var(--text); background:#18212c; }
+.side-item.active { color:var(--accent); background:#132b26; border-left-color:var(--accent); }
+.sidebar-foot { margin-top:auto; padding:12px 18px; border-top:1px solid var(--line); }
+
+.main { flex:1; min-width:0; display:flex; flex-direction:column; }
+.topbar { display:flex; align-items:center; gap:14px; height:52px; padding:0 20px;
+          background:#10161d; border-bottom:1px solid var(--line);
+          position:sticky; top:0; z-index:5; }
+.topbar .crumb { font-weight:600; font-size:15px; }
+.topbar .spacer { flex:1; }
+.topbar a { color:var(--muted); text-decoration:none; font-size:13px; }
+.topbar a:hover { color:var(--accent); }
+main { padding:18px 20px 60px; min-width:0; }
+
+/* ---------- 通用 ---------- */
+h1 { font-size:20px; }
+h2 { font-size:15px; margin:6px 0 10px; }
+a { color:var(--accent); }
+.muted { color:var(--muted); font-weight:400; font-size:12px; }
+.mono { font-family:Consolas,monospace; font-size:12px; word-break:break-all; }
+.small { font-size:11px; }
+.error { color:#fda4af; }
+.spacer { flex:1; }
+
+/* ---------- 页面级按钮条 / 筛选条（对齐参考图的"添加任务/筛选/批量"三行结构） ---------- */
+.toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+.filters { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr));
+           gap:10px; background:var(--panel); border:1px solid var(--line);
+           border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+.filters label { margin:0; display:flex; flex-direction:column; gap:4px;
+                 font-size:12px; color:var(--muted); }
+.filters input, .filters select { width:100%; }
+.bulkbar { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+button.ghost { background:#1a232e; border-color:var(--line); color:var(--muted); }
+button.ghost:hover { color:var(--text); background:#22303f; }
+button.danger { background:#3a1d1d; border-color:#7f1d1d; color:#fda4af; }
+/* 行内小按钮（任务列表 / 任务详情的操作列） */
+.btn-mini { padding:3px 9px; font-size:12px; border-radius:5px; }
+.ops { display:flex; gap:5px; flex-wrap:wrap; }
+.ops button, .ops a { padding:3px 9px; font-size:12px; border-radius:5px; }
+.ops a { align-self:center; }
+.pick { width:14px; height:14px; padding:0; vertical-align:middle; }
+/* 漏洞行内的 evidence 折叠区，避免长文本把表格撑爆 */
+.evidence { max-width:520px; }
+.evidence pre { max-height:220px; margin:0; font-size:12px; }
+/* 跨任务资产页的服务端分页条（P2-2）；a 需要 inline-block 才有 .btn-mini 的内边距效果 */
+.pager { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+         margin-top:10px; padding-top:10px; border-top:1px solid var(--line); font-size:12px; }
+.pager a { display:inline-block; text-decoration:none; }
+
+/* ---------- 任务详情页签 ---------- */
+.tabs { display:flex; gap:2px; flex-wrap:wrap; border-bottom:1px solid var(--line);
+        margin:12px 0 16px; }
+.tab { padding:8px 15px; color:var(--muted); cursor:pointer; font-size:13px;
+       border-bottom:2px solid transparent; user-select:none; }
+.tab:hover { color:var(--text); }
+.tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+.tab .cnt { color:var(--muted); font-size:11px; margin-left:5px; }
+.tabpane { display:none; }
+.tabpane.active { display:block; }
+
+/* ---------- 卡片 / 面板 / 表格 ---------- */
+.cards { display:flex; gap:14px; flex-wrap:wrap; margin:14px 0 24px; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:14px 22px; min-width:130px; }
+.card b { display:block; font-size:26px; color:var(--accent); }
+.card span { color:var(--muted); font-size:12px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.panel, main > section { background:var(--panel); border:1px solid var(--line);
+        border-radius:10px; padding:14px 16px; margin-bottom:16px;
+        overflow-x:auto; }  /* 宽表（站点/漏洞）在面板内滚动，避免把整页撑出横向滚动条 */
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th, td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--muted); font-weight:600; font-size:12px; white-space:nowrap; }
+tr:hover td { background:#1a2230; }
+.badge { padding:2px 9px; border-radius:20px; font-size:12px; background:#26313f; color:var(--text); }
+.st-running { background:#134e3a; color:#5eead4; }
+.st-done { background:#1d3a5f; color:#7cc4ff; }
+.st-failed { background:#4c1d1d; color:#fda4af; }
+.st-pending { background:#3a341d; color:#fde68a; }
+.st-stopped { background:#3f3f46; color:#d4d4d8; }
+.sev { padding:1px 8px; border-radius:4px; font-size:12px; display:inline-block; }
+.sev-critical { background:#7f1d1d; color:#fecaca; }
+.sev-high { background:#7c2d12; color:#fed7aa; }
+.sev-medium { background:#78350f; color:#fde68a; }
+.sev-low { background:#1e3a5f; color:#bfdbfe; }
+.sev-info { background:#26313f; color:#cbd5e1; }
+.bar { display:inline-block; width:110px; height:6px; background:#26313f;
+       border-radius:4px; margin-right:8px; vertical-align:middle; }
+.bar i { display:block; height:100%; background:var(--accent); border-radius:4px; }
+
+/* ---------- 表单 ---------- */
+input, textarea, select, button { background:#0d1218; border:1px solid var(--line);
+       color:var(--text); border-radius:6px; padding:7px 10px; font:inherit; }
+textarea { width:100%; }
+button { background:#17362e; border-color:#1f5145; color:#7ef0cf; cursor:pointer; }
+button:hover { background:#1d453a; }
+label { display:block; margin:8px 0; }
+label.chk { display:inline-flex; align-items:center; gap:5px; margin-right:14px; }
+.row { margin:10px 0; }
+pre { background:#0d1218; border:1px solid var(--line); border-radius:8px; padding:10px;
+      overflow:auto; max-height:420px; white-space:pre-wrap; word-break:break-all; }
+details pre { margin:8px 0; }
+
+/* ---------- 登录页 ---------- */
+.login-page { display:flex; align-items:center; justify-content:center; height:100vh; }
+.login-box { background:var(--panel); border:1px solid var(--line); padding:34px 40px;
+             border-radius:12px; width:340px; text-align:center; }
+.login-box h1 span { color:var(--accent); }
+.login-box input { width:100%; margin:12px 0; text-align:center; }
+.login-box button { width:100%; }
+
+@media (max-width:900px) {
+  .grid2 { grid-template-columns:1fr; }
+  .sidebar { width:150px; flex-basis:150px; }
+}

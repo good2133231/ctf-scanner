@@ -1,0 +1,21 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-telerik-web_telerik
+info:
+  name: "telerik web_telerik"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, telerik, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：telerik/web_telerik（类型 UPLOADFILE）。"
+http:
+  - method: GET
+    path:
+      - "/Telerik.Web.UI.WebResource.axd?type=rau"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "RadAsyncUpload handler is registered succesfully"

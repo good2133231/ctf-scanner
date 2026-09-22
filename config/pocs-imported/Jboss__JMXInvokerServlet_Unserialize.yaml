@@ -1,0 +1,24 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-jboss-jmxinvokerservlet_unserialize
+info:
+  name: "Jboss JMXInvokerServlet_Unserialize"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, jboss, ref-poc, deserialize]
+  description: "由参考项目脚本静态导入：Jboss/JMXInvokerServlet_Unserialize（类型 DESERIALIZE）。 原脚本另含 favicon 指纹 ['799f70b71314a7508326d1d2f68f7519', '1b24a7a916a0e0901e381a0d6131b28d']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/invoker/JMXInvokerServlet"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "www.jboss.org"
+          - "jboss.css"
+          - "JBoss"

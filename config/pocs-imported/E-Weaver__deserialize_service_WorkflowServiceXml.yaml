@@ -1,0 +1,30 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-e-weaver-deserialize_service_workflowservicexml
+info:
+  name: "E-Weaver deserialize_service_WorkflowServiceXml"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, e-weaver, ref-poc, deserialize]
+  description: "由参考项目脚本静态导入：E-Weaver/deserialize_service_WorkflowServiceXml（类型 DESERIALIZE）。 原脚本另含 favicon 指纹 ['41eca7a9245394106a09b2534d8030df']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/favicon.ico"
+      - "/services%20/WorkflowServiceXml"
+      - "/services/WorkflowServiceXml"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/theme/ecology8/jquery/js/zdialog_wev8.js"
+          - "ecology8/lang/weaver_lang_7_wev8.js"
+          - "/wui/common/css/w7ovfont.css"
+          - "client/jquery.client_wev8.js"
+          - "typeof poppedwindow"
+          - "ecology9/js/lib.js"
+          - "ecology_JSessionId"

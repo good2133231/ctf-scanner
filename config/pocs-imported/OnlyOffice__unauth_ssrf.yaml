@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-onlyoffice-unauth_ssrf
+info:
+  name: "OnlyOffice unauth_ssrf"
+  author: imported-from-myscan
+  severity: medium
+  tags: [imported, onlyoffice, ref-poc, unauth]
+  description: "由参考项目脚本静态导入：OnlyOffice/unauth_ssrf（类型 UNAUTH）。"
+http:
+  - method: GET
+    path:
+      - "/downloadfile/1"
+      - "/index.html"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "Server is functioning normally"

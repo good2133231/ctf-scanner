@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-itax-unauth_deserialize
+info:
+  name: "itax unauth_deserialize"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, itax, ref-poc, deserialize]
+  description: "由参考项目脚本静态导入：itax/unauth_deserialize（类型 DESERIALIZE）。 原脚本另含 favicon 指纹 ['03f8bd12c7b486571360efaf2954998e']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/itax/static/login/favicon.ico"
+      - "/itaxAdmin/jobRegister"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "com.xxl.rpc.util.XxlRpcException"

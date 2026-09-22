@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}策略配置{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post">
+  <section class="panel">
+    <h2>检测策略（分级门控 · 决定"哪些洞值得报"）</h2>
+    <p class="muted">CTF 实战建议保持 medium：明文 HTTP、安全响应头缺失、组件版本泄露这类
+      低危与 info 项不会帮你拿到 flag，只会淹没注入/RCE 类结果。</p>
+    <div class="row">
+      <label>最低报告级别
+        <select name="min_severity">
+          {% for sev in ['critical', 'high', 'medium', 'low', 'info'] %}
+          <option value="{{ sev }}" {{ 'selected' if sev == s.checks.min_severity }}>{{ sev }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="chk"><input type="checkbox" name="poc_engine" value="1"
+        {{ 'checked' if s.checks.poc_engine }}> 启用 POC 引擎（关闭后只跑内置 OWASP 启发式检查）</label>
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" name="poc_link_tags" value="1"
+        {{ 'checked' if s.checks.poc_link_tags }}> 指纹→POC 联动（站点技术栈命中的 POC 优先执行）</label>
+      <label>每站点 POC 上限 <input name="poc_max_per_site" value="{{ s.checks.poc_max_per_site }}"></label>
+      <label class="chk"><input type="checkbox" name="favicon_md5" value="1"
+        {{ 'checked' if s.limits.favicon_md5 }}> 采集 favicon MD5（POC 可用它做零请求前置判定）</label>
+    </div>
+    <h2>按级别分类批量开关（连请求都不发）</h2>
+    <p class="muted">勾上＝该级别的检测**根本不执行**。默认勾掉 info 与 low：CTF 实战里
+      明文 HTTP / 版本泄露 / 响应头缺失这类项拿不到 flag，即使跑了也会被"最低报告级别"丢掉，
+      不执行纯属省请求。想做广谱信息收集时取消勾选，并把上面门槛调成 low/info。</p>
+    <div class="row">
+      {% for sev in ['info', 'low', 'medium', 'high', 'critical'] %}
+      <label class="chk"><input type="checkbox" name="skip_severities" value="{{ sev }}"
+        {{ 'checked' if sev in (s.checks.skip_severities or []) }}> 不执行 {{ sev }} 级</label>
+      {% endfor %}
+    </div>
+    <h2>按 OWASP 分类开关</h2>
+    <div class="row">
+      {% for code, label in checks.CATEGORIES %}
+      <label class="chk"><input type="checkbox" name="disabled_categories" value="{{ code }}"
+        {{ 'checked' if code in (s.checks.disabled_categories or []) }}> 关闭 {{ label }}</label>
+      {% endfor %}
+    </div>
+    <h2>按检查项细粒度开关</h2>
+    <div class="row small">
+      {% for c in checks.CHECKS %}
+      <label class="chk"><input type="checkbox" name="disabled_checks" value="{{ c.id }}"
+        {{ 'checked' if c.id in (s.checks.disabled_checks or []) }}>
+        关闭 {{ c.id }}（{{ c.severity }}）{% if c.severity in (s.checks.skip_severities or []) %}<span class="muted">·已按级别跳过</span>{% endif %}</label>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>动态免杀（绕过 WAF / 流量识别）</h2>
+    <label class="chk"><input type="checkbox" name="random_ua" value="1"
+      {{ 'checked' if s.evasion.random_ua }}> 每个请求随机使用真实浏览器 User-Agent</label>
+    <label class="chk"><input type="checkbox" name="spoof_xff" value="1"
+      {{ 'checked' if s.evasion.spoof_xff }}> 附带 X-Forwarded-For / X-Real-IP（部分 WAF 误判为内网而放行）</label>
+    <label class="chk"><input type="checkbox" name="waf_bypass" value="1"
+      {{ 'checked' if s.evasion.waf_bypass }}> 注入类检查启用 payload 变形（注释替空格 / 大小写 / 编码 / 关键字分片）</label>
+    <label class="chk"><input type="checkbox" name="waf_detect" value="1"
+      {{ 'checked' if s.evasion.waf_detect }}> 扫描前探测目标 WAF 并在运行日志中提示厂商（Cloudflare / 安全狗 / 云锁 / 雷池 …）</label>
+    <label>绕过强度 bypass_level
+      <select name="bypass_level">
+        {% for lv, desc in [(0,'0 不变形（最保守）'),(1,'1 轻量：注释替空格 / 大小写'),
+                            (2,'2 进阶：换行编码 / URL 编码 / 内联注释'),
+                            (3,'3 激进：双重编码 / 关键字分片')] %}
+        <option value="{{ lv }}" {{ 'selected' if s.evasion.bypass_level|string == lv|string }}>{{ desc }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </section>
+
+  <section class="panel">
+    <h2>信息收集</h2>
+    <label class="chk"><input type="checkbox" name="wildcard_filter" value="1"
+      {{ 'checked' if s.limits.wildcard_filter }}> 泛解析过滤（目标开 *.domain 时丢弃通配命中的字典结果）</label>
+    <label class="chk"><input type="checkbox" name="passive_enabled" value="1"
+      {{ 'checked' if s.passive.enabled }}> 启用多来源被动子域名收集（crt.sh / certspotter / alienvault / hackertarget / rapiddns / sublist3r）</label>
+    <label>单源超时（秒） <input name="passive_timeout" value="{{ s.passive.timeout }}"></label>
+  </section>
+
+  <section class="panel">
+    <h2>资产面拓展（子域接管 / JS 挖掘 / 端口服务）</h2>
+    <p class="muted">这三项都属于"发散"用的资产面拓展，默认策略见下方勾选状态；
+      风险与耗时各不相同，可按需逐个开关。</p>
+    <label class="chk"><input type="checkbox" name="takeover_enabled" value="1"
+      {{ 'checked' if s.takeover.enabled }}> 子域接管检测（CNAME 指向已停用的第三方服务，如 S3 / Heroku / GitHub Pages）</label>
+    <label class="chk"><input type="checkbox" name="takeover_http_check" value="1"
+      {{ 'checked' if s.takeover.http_check }}> 接管判定时再做一次 HTTP 特征比对（降低误报）</label>
+    <label>接管检查主机上限 <input name="takeover_max_hosts" value="{{ s.takeover.max_hosts }}"></label>
+    <label class="chk"><input type="checkbox" name="jsmine_enabled" value="1"
+      {{ 'checked' if s.jsmine.enabled }}> JS 资产挖掘（从 JS 提取域名/接口 URL，并用黑名单过滤第三方公共域）</label>
+    <label class="chk"><input type="checkbox" name="jsmine_secrets" value="1"
+      {{ 'checked' if s.jsmine.secrets }}> JS 中提取 AK/SK 等疑似凭据（带前后文过滤降噪）</label>
+    <label>JS 挖掘页面上限 <input name="jsmine_max_pages" value="{{ s.jsmine.max_pages }}"></label>
+    <label>JS 文件上限 <input name="jsmine_max_js" value="{{ s.jsmine.max_js }}"></label>
+    <label class="chk"><input type="checkbox" name="portscan_enabled" value="1"
+      {{ 'checked' if s.portscan.enabled }}> <b>端口与服务扫描</b>（默认关闭；nmap 优先，内置 TCP connect 兜底）</label>
+    <label>端口列表（空=内置 TOP 表，也支持 "80,443" 或 "1-1024"）
+      <input name="portscan_ports" value="{{ s.portscan.ports }}" placeholder="留空使用内置 TOP 端口"></label>
+    <label>扫描主机上限 <input name="portscan_max_hosts" value="{{ s.portscan.max_hosts }}"></label>
+    <label>单端口超时（秒） <input name="portscan_timeout" value="{{ s.portscan.timeout }}"></label>
+    <label>并发连接数 <input name="portscan_workers" value="{{ s.portscan.workers }}"></label>
+    <label class="chk"><input type="checkbox" name="portscan_banner" value="1"
+      {{ 'checked' if s.portscan.banner }}> 被动读取 banner（仅 SSH/SMTP/MySQL/Redis 等会主动问候的端口）</label>
+  </section>
+
+  <section class="panel">
+    <h2>外部情报拓展（OSINT：C 段反查 / favicon 反查）</h2>
+    <p class="muted">两项都依赖<b>第三方公共接口</b>，默认关闭；接口不可用时只记一行日志，
+      不影响流水线其它阶段。产出的新域名会入「子域名资产」（来源 <code>osint:*</code>），
+      C 段归纳结果进「C 段视野」分栏。</p>
+    <label class="chk"><input type="checkbox" name="iprecon_enabled" value="1"
+      {{ 'checked' if s.iprecon.enabled }}> <b>C 段反查</b>（IP → 域名 + /24 C 段归纳，免 key）</label>
+    <label>反查接口（<code>{ip}</code> 为占位符，可替换为自建/镜像）
+      <input name="iprecon_api" value="{{ s.iprecon.api }}"></label>
+    <label>最多反查 IP 数 <input name="iprecon_max_ips" value="{{ s.iprecon.max_ips }}"></label>
+    <label>最多解析主机名数 <input name="iprecon_max_hosts" value="{{ s.iprecon.max_hosts }}"></label>
+    <label>单 IP 域名数上限（超过判为共享主机，不纳入域名资产）
+      <input name="iprecon_max_domains_per_ip" value="{{ s.iprecon.max_domains_per_ip }}"></label>
+    <label>并发数（公共接口，建议保持克制） <input name="iprecon_workers" value="{{ s.iprecon.workers }}"></label>
+    <label>单次超时（秒） <input name="iprecon_timeout" value="{{ s.iprecon.timeout }}"></label>
+    <label class="chk"><input type="checkbox" name="fofa_enabled" value="1"
+      {{ 'checked' if s.fofa.enabled }}> <b>favicon 反查同源资产</b>
+      （需在 <code>config/keys.yaml</code> 填 fofa.email / fofa.key）</label>
+    <label>每任务算 favicon 的站点上限 <input name="fofa_max_sites" value="{{ s.fofa.max_sites }}"></label>
+    <label>单 favicon 取回资产上限 <input name="fofa_max_assets" value="{{ s.fofa.max_assets }}"></label>
+    <label>favicon 并发数 <input name="fofa_workers" value="{{ s.fofa.workers }}"></label>
+    <label>黑 ico 阈值（命中数超过该值 = 公共图标，放弃拓展）
+      <input name="fofa_black_ico_threshold" value="{{ s.fofa.black_ico_threshold }}"></label>
+  </section>
+
+  <section class="panel">
+    <h2>扫描限制</h2>
+    <label>并发线程 max_workers <input name="max_workers" value="{{ s.limits.max_workers }}"></label>
+    <label>HTTP 超时（秒） <input name="http_timeout" value="{{ s.limits.http_timeout }}"></label>
+    <label class="chk"><input type="checkbox" name="verify_tls" value="1"
+      {{ 'checked' if s.limits.verify_tls }}> 校验 HTTPS 证书（CTF 自签名靶场请保持关闭）</label>
+    <label>目录扫描站点上限 <input name="dirscan_max_urls" value="{{ s.limits.dirscan_max_urls }}"></label>
+    <label>漏洞扫描站点上限 <input name="vulnscan_max_urls" value="{{ s.limits.vulnscan_max_urls }}"></label>
+  </section>
+
+  <section class="panel">
+    <h2>控制台</h2>
+    <label>监听地址 <input name="host" value="{{ s.gui.host }}"></label>
+    <label>端口 <input name="port" value="{{ s.gui.port }}"></label>
+    <label>访问口令 <input name="token" value="{{ s.gui.token }}"></label>
+    <p class="muted">外部工具路径、字典路径、被动收集来源清单（passive.sources）请直接编辑
+      config/settings.yaml；<b>第三方 API key 请写入 config/keys.yaml</b>
+      （独立文件，控制台只读不改写，便于单独管理凭据）。</p>
+  </section>
+
+  <button type="submit">保存策略</button>
+</form>
+{% endblock %}

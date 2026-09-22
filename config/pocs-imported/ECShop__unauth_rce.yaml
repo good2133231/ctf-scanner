@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-ecshop-unauth_rce
+info:
+  name: "ECShop unauth_rce"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, ecshop, ref-poc, rce]
+  description: "由参考项目脚本静态导入：ECShop/unauth_rce（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/js/auto_complete.js"
+      - "/user.php"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<tr><td class=\"e\">"
+          - "autoComplete"

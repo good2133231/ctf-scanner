@@ -1,0 +1,24 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-sonicwall-unauth_rce
+info:
+  name: "SonicWall unauth_rce"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, sonicwall, ref-poc, rce]
+  description: "由参考项目脚本静态导入：SonicWall/unauth_rce（类型 RCE）。 原脚本另含 favicon 指纹 ['60fa7ed2309d77de1f9dc5e7c741ac48']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/cgi-bin/jarrewrite.sh"
+      - "/favicon.ico"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/cgi-bin/welcome"
+          - "root:"

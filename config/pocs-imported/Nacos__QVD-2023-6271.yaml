@@ -1,0 +1,25 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-nacos-qvd-2023-6271
+info:
+  name: "Nacos QVD-2023-6271"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, nacos, ref-poc, anyuserlogin]
+  description: "由参考项目脚本静态导入：Nacos/QVD-2023-6271（类型 ANYUSERLOGIN）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/nacos"
+      - "/nacos/v1/auth/users"
+      - "/v1/auth/users"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<title>Nacos</title>"
+          - "create user ok"

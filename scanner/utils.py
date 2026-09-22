@@ -1,0 +1,208 @@
+"""通用工具：外部命令调用、HTTP 请求（requests 优先、urllib 兜底）、线程池、DNS、文件读写。"""
+import shutil
+import socket
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+
+# ---------- 外部命令 ----------
+
+def which(tool):
+    return shutil.which(str(tool))
+
+
+def verify_tool(bin_path, flag="-version", timeout=60):
+    """进一步校验工具可用性：能执行且响应 -version。
+
+    规避同名命令冲突：pip 安装的 Python httpx 包会在 PATH 留下 httpx.exe，
+    但它不是 projectdiscovery 的 httpx，直接调用会失败。
+    """
+    if not bin_path:
+        return False
+    rc, _, _ = run_cmd([bin_path, flag], timeout=timeout)
+    return rc == 0
+
+
+def pick_python(configured="python"):
+    """选择可用的 Python 解释器（dirmap 等 Python 编写的子工具适配器用）。
+
+    跨平台：Windows 一般叫 python，多数 Linux 发行版只提供 python3；
+    配置名不可用时退回当前解释器（正在运行本框架的那个，一定存在）。
+    """
+    if configured and which(configured):
+        return configured
+    return sys.executable
+
+
+def run_cmd(argv, cwd=None, timeout=900):
+    """执行外部命令，返回 (returncode, stdout, stderr)。
+
+    命令不存在返回 127；超时返回 124。统一 shell=False，避免注入。
+    """
+    try:
+        p = subprocess.run([str(a) for a in argv], cwd=str(cwd) if cwd else None,
+                           capture_output=True, text=True, errors="replace",
+                           timeout=timeout, shell=False)
+        return p.returncode, p.stdout or "", p.stderr or ""
+    except FileNotFoundError:
+        return 127, "", f"executable not found: {argv[0]}"
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout"
+    except OSError as e:
+        return 1, "", str(e)
+
+
+# ---------- HTTP ----------
+
+def _ua(settings=None):
+    """当前生效的 User-Agent。
+
+    `evasion.random_ua` 开启时每个请求随机取一个真实浏览器 UA（见 scanner/evasion.py），
+    否则用配置里的固定值。这样"项目本身就相对动态"，不会被风控一眼认出扫描器。
+    """
+    try:
+        from . import evasion
+        ua = evasion.pick_ua(settings)
+        if ua:
+            return ua
+    except Exception:
+        pass
+    if settings:
+        return settings.get("http", {}).get("user_agent", "Mozilla/5.0 CTFScanner/0.1")
+    return "Mozilla/5.0 CTFScanner/0.1"
+
+
+def _headers(settings=None, extra=None):
+    """统一请求头：优先走 evasion.browser_headers（浏览器化 + 可选 XFF 伪装）。"""
+    try:
+        from . import evasion
+        hdrs = evasion.browser_headers(settings, extra)
+        if hdrs:
+            return hdrs
+    except Exception:
+        pass
+    hdrs = {"User-Agent": _ua(settings)}
+    if extra:
+        hdrs.update(extra)
+    return hdrs
+
+
+def http_request(url, method="GET", headers=None, data=None, timeout=10,
+                 verify=None, allow_redirects=True, settings=None, want_bytes=False):
+    """统一 HTTP 入口。返回 dict(status, headers, text, length, url) 或 None。
+
+    `want_bytes=True` 时额外返回 `content`（原始字节）——favicon MD5 这类场景需要
+    真实字节而不是解码后的文本；默认不返回，避免每个响应都多留一份内存副本。
+
+    requests 缺失时自动退回 urllib（urllib 不校验重定向语义差异，见文档）。
+    verify 为 None 时取配置 limits.verify_tls（默认 False：CTF/靶场自签名证书常见，
+    默认不校验；需要严格校验时在 settings.yaml 打开该开关）。
+    """
+    if verify is None:
+        verify = bool((settings or {}).get("limits", {}).get("verify_tls", False))
+    hdrs = _headers(settings, headers)
+    try:
+        import requests
+        try:
+            r = requests.request(method, url, headers=hdrs, data=data, timeout=timeout,
+                                 verify=verify, allow_redirects=allow_redirects)
+            out = {"status": r.status_code, "headers": dict(r.headers),
+                   "text": r.text or "", "length": len(r.content or b""), "url": r.url}
+            if want_bytes:
+                out["content"] = r.content or b""
+            return out
+        except requests.RequestException:
+            return None
+    except ImportError:
+        return _urllib_request(url, method, hdrs, data, timeout, verify,
+                               allow_redirects, want_bytes)
+
+
+def _urllib_request(url, method, headers, data, timeout, verify, allow_redirects=True,
+                    want_bytes=False):
+    import http.cookiejar
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    ctx = ssl.create_default_context()
+    if not verify:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    handlers = [urllib.request.HTTPSHandler(context=ctx),
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())]
+    if not allow_redirects:
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, h, newurl):
+                return None
+        handlers.append(_NoRedirect())
+    opener = urllib.request.build_opener(*handlers)
+    req = urllib.request.Request(url, headers=headers, method=method,
+                                 data=data.encode("utf-8") if isinstance(data, str) else data)
+    try:
+        resp = opener.open(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        resp = e
+    except Exception:
+        return None
+    body = resp.read() or b""
+    hdrs_out = dict(resp.headers.items()) if resp.headers else {}
+    out = {"status": getattr(resp, "code", 0) or 0, "headers": hdrs_out,
+           "text": body.decode("utf-8", "replace"), "length": len(body), "url": url}
+    if want_bytes:
+        out["content"] = body
+    return out
+
+
+# ---------- 并发 / DNS ----------
+
+def pool_run(fn, items, workers=10):
+    """线程池执行；单个任务异常不影响整体，结果为 None 的丢弃。"""
+    results = []
+    items = list(items)
+    if not items:
+        return results
+    workers = max(1, min(int(workers), len(items)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(fn, it): it for it in items}
+        for fut in as_completed(futs):
+            try:
+                r = fut.result()
+            except Exception:
+                r = None
+            if r:
+                results.append(r)
+    return results
+
+
+def resolve_host(host, timeout=3):
+    """域名解析，返回 IP 列表（失败返回空表）。"""
+    try:
+        socket.setdefaulttimeout(timeout)
+        infos = socket.getaddrinfo(host, None)
+        return sorted({i[4][0] for i in infos})
+    except Exception:
+        return []
+
+
+# ---------- 文件 ----------
+
+def read_lines(path):
+    p = Path(path)
+    if not p.exists():
+        return []
+    return [ln.strip() for ln in p.read_text(encoding="utf-8", errors="replace").splitlines()
+            if ln.strip()]
+
+
+def write_text(path, text):
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def write_lines(path, lines):
+    return write_text(path, "\n".join(str(x) for x in lines) + ("\n" if lines else ""))

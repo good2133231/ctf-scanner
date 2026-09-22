@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-enter-unauth_uploadfile_0day
+info:
+  name: "Enter unauth_uploadfile_0day"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, enter, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：Enter/unauth_uploadfile_0day（类型 UPLOADFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/entsoft/CustomerAction.entphone;.js?method=loadFile"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<title>欢迎使用浙大恩特客户资源管理系统</title>"

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}漏洞风险{% endblock %}
+{% block content %}
+<p class="muted">级别筛选：
+  <a href="{{ url_for('vulns') }}">全部</a>
+  {% for s in ['critical', 'high', 'medium', 'low', 'info'] %}
+  <a href="{{ url_for('vulns', severity=s) }}">{{ s }}</a>
+  {% endfor %}
+</p>
+<section class="panel">
+  <label class="muted">筛选 <input data-filter="#tbl-vulns-all" placeholder="名称 / 检查项 / 目标"></label>
+  <table id="tbl-vulns-all">
+    <thead><tr><th>#</th><th>任务</th><th>级别</th><th>名称</th><th>检查/POC</th>
+      <th>目标</th><th>详情</th></tr></thead>
+    <tbody>
+    {% for v in vulns %}
+      <tr>
+        <td>{{ v.id }}</td>
+        <td>#{{ v.task_id }}</td>
+        <td><span class="sev sev-{{ v.severity }}">{{ v.severity }}</span></td>
+        <td>{{ v.name }}</td>
+        <td class="muted">{{ v.poc_id }}</td>
+        <td class="muted">{{ v.target }}</td>
+        <td class="evidence"><details><summary class="muted">展开</summary>
+          <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre></details></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">暂无数据。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -1,0 +1,25 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-kibana-unauth_rce
+info:
+  name: "Kibana unauth_rce"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, kibana, ref-poc, unauth]
+  description: "由参考项目脚本静态导入：Kibana/unauth_rce（类型 UNAUTH）。 原脚本另含 favicon 指纹 ['e4560c733404f8d0b1e517478e88c20b']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/app/kibana/"
+      - "/ui/favicons/apple-touch-icon.png"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "kibanaWelcomeTitle"
+          - "kibanaWelcomeLogo"
+          - "kibanaWelcomeView"

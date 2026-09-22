@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-trade-unauth_uploadfile
+info:
+  name: "trade unauth_uploadfile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, trade, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：trade/unauth_uploadfile（类型 UPLOADFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/TPFrame"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/TPFrame/JavaScript/"

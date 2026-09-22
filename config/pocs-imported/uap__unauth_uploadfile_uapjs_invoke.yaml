@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-uap-unauth_uploadfile_uapjs_invoke
+info:
+  name: "uap unauth_uploadfile_uapjs_invoke"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, uap, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：uap/unauth_uploadfile_uapjs_invoke（类型 UPLOADFILE）。"
+http:
+  - method: GET
+    path:
+      - "/index.jsp"
+      - "/uapjs/jsinvoke/?action=invoke"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "../Client/Uclient/UClient.dmg"

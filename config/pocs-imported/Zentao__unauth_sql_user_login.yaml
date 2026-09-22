@@ -1,0 +1,29 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-zentao-unauth_sql_user_login
+info:
+  name: "Zentao unauth_sql_user_login"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, zentao, ref-poc, sqlinjection]
+  description: "由参考项目脚本静态导入：Zentao/unauth_sql_user_login（类型 SQLINJECTION）。 原脚本另含 favicon 指纹 ['e89fbe166ded2a714ef73377ece0062b', 'b1d3deb4bd16c8c1637235515deea114']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/favicon.ico"
+      - "/user-login.html"
+      - "/zantao/favicon.ico"
+      - "/zentao/"
+      - "/zentao/user-login.html"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "$('#zentao').addClass('btn-success');"
+          - "/zentao/favicon.ico"
+          - "server: cpws"
+          - "zentao/theme"

@@ -1,0 +1,30 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-viewstate-web_viewstate
+info:
+  name: "viewstate web_viewstate"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, viewstate, ref-poc, deserialize]
+  description: "由参考项目脚本静态导入：viewstate/web_viewstate（类型 DESERIALIZE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/?__VIEWSTATE=AAAAA"
+      - "/admin.aspx?__VIEWSTATE=AAAAA"
+      - "/admin/?__VIEWSTATE=AAAAA"
+      - "/login.aspx?__VIEWSTATE=AAAAA"
+      - "/manage.aspx?__VIEWSTATE=AAAAA"
+      - "/register.aspx?__VIEWSTATE=AAAAA"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "FormatException: Base-64"
+          - "ViewStateException"
+          - "name=\"__VIEWSTATE"
+          - "value=\"/wEPD"

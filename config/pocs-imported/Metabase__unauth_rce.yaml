@@ -1,0 +1,25 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-metabase-unauth_rce
+info:
+  name: "Metabase unauth_rce"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, metabase, ref-poc, rce]
+  description: "由参考项目脚本静态导入：Metabase/unauth_rce（类型 RCE）。 原脚本另含 favicon 指纹 ['82ad0c6484395907b1de07f095d63b87']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/api/session/properties"
+      - "/app/assets/img/favicon.ico"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "MetabaseSiteLocalization"
+          - "MetabaseUserLocalization"
+          - "MetabaseBootstrap"

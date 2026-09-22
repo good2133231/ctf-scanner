@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+
+# 运行产物（数据库 / 任务工作目录 / 报告输出）
+data/
+logs/
+
+# 虚拟环境（Linux 部署文档建议 venv，见 docs/usage.md）
+.venv/
+venv/
+
+# 第三方凭据（FOFA/Shodan 等，绝不入库）
+config/settings.json
+config/keys.yaml
+
+# 用户自建内容
+config/pocs-user/
+config/nuclei-templates/

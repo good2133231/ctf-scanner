@@ -1,0 +1,24 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-struts-s2_046_bypass
+info:
+  name: "Struts S2_046_bypass"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, struts, ref-poc, rce]
+  description: "由参考项目脚本静态导入：Struts/S2_046_bypass（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/struts/domTT.css"
+      - "/?actionErrors=111111111111111111111"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "StrutsTTClass"
+          - "1234321"

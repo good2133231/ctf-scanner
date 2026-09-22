@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-epoint-sensitive
+info:
+  name: "ePoint sensitive"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, epoint, ref-poc, readfile]
+  description: "由参考项目脚本静态导入：ePoint/sensitive（类型 READFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/ExcelExport/人员列表.xls"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "EpointCommon"

@@ -1,0 +1,37 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-ufida_nc-bsh_servlet_bshservlet
+info:
+  name: "ufida_nc bsh_servlet_BshServlet"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, ufida_nc, ref-poc, rce]
+  description: "由参考项目脚本静态导入：ufida_nc/bsh_servlet_BshServlet（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/index.jsp"
+      - "/service/~aim/bsh.servlet.BshServlet"
+      - "/service/~alm/bsh.servlet.BshServlet"
+      - "/service/~ampub/bsh.servlet.BshServlet"
+      - "/service/~arap/bsh.servlet.BshServlet"
+      - "/service/~aum/bsh.servlet.BshServlet"
+      - "/service/~cc/bsh.servlet.BshServlet"
+      - "/service/~cdm/bsh.servlet.BshServlet"
+      - "/service/~cmp/bsh.servlet.BshServlet"
+      - "/service/~ct/bsh.servlet.BshServlet"
+      - "/service/~dm/bsh.servlet.BshServlet"
+      - "/service/~erm/bsh.servlet.BshServlet"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<div id=\"nc_img\" onmouseover=\"overimage('nc');"
+          - "logo/images/ufida_nc.png"
+          - "ufida_iufo_over.png"
+          - "<div id=\"nc_text\">"
+          - "logo/images/"
+          - "ufida_nc.png"

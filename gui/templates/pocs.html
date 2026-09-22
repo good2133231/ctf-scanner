@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}POC 管理{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>导入 POC（YAML）</h2>
+  <form id="poc-form">
+    <input type="file" name="file" accept=".yaml,.yml" required>
+    <button type="submit">上传</button>
+    <button type="button" id="poc-refresh">重新扫描 POC 目录</button>
+    <span id="poc-msg" class="muted"></span>
+  </form>
+  <p class="muted">格式规范见 docs/poc-guide.md；上传后保存在 config/pocs-user/。
+    官方 nuclei 模板可直接放进 config/nuclei-templates/（引擎兼容其常用子集，
+    不支持的 raw/dsl/flow 会标为 <span class="mono">unsupported</span> 而不是静默失效）。</p>
+</section>
+
+<section class="panel">
+  <h2>按分类批量开关（当前启用 {{ stats.enabled }} / {{ stats.total }}）</h2>
+  <p class="muted">共 {{ stats.total }} 个 POC，逐个点显然不现实，这里按<b>来源</b>与<b>级别</b>下发。
+    「导入」= 参考项目批量转换的第三方 POC，默认全部关闭（指纹式匹配误报率偏高），
+    建议先按级别启用 critical / high，跑通后再逐步放开。</p>
+  <div class="row">
+    <label>来源
+      <select id="poc-bulk-source">
+        <option value="">全部来源</option>
+        <option value="builtin">内置（scanner/pocs）</option>
+        <option value="imported">导入（参考项目转换）</option>
+        <option value="nuclei">nuclei 模板投放</option>
+        <option value="user">用户上传</option>
+        <option value="other">其他</option>
+      </select>
+    </label>
+    <label>级别
+      <select id="poc-bulk-severity">
+        <option value="">全部级别</option>
+        {% for sev in ['critical', 'high', 'medium', 'low', 'info'] %}
+        <option value="{{ sev }}">{{ sev }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="chk"><input type="checkbox" id="poc-bulk-diff" checked>
+      仅调整状态与目标不一致的</label>
+    <button type="button" id="poc-bulk-enable">批量启用</button>
+    <button type="button" class="danger" id="poc-bulk-disable">批量关闭</button>
+    <span id="poc-bulk-msg" class="muted"></span>
+  </div>
+  <p class="muted small">
+    分布：来源
+    {% for src in ['builtin', 'imported', 'nuclei', 'user', 'other'] %}
+      {% set on = stats.source.get(src ~ ':on', 0) %}{% set off = stats.source.get(src ~ ':off', 0) %}
+      {% if on or off %}［{{ src }} 开{{ on }}/关{{ off }}］{% endif %}
+    {% endfor %}
+    ｜级别
+    {% for sev, n in stats.severity.items() %}［{{ sev }} {{ n }}］{% endfor %}
+  </p>
+</section>
+
+<section class="panel">
+  <h2>POC 列表（{{ pocs|length }}）</h2>
+  <div class="filters">
+    <label class="muted">筛选 <input data-filter="#tbl-pocs"
+      placeholder="ID / 名称 / 标签 / 来源 / 路径"></label>
+    <label class="muted">只看已启用
+      <input type="checkbox" data-filter-enabled="#tbl-pocs"></label>
+  </div>
+  <table id="tbl-pocs">
+    <thead><tr><th>#</th><th>ID</th><th>名称</th><th>级别</th><th>标签</th>
+      <th>状态</th><th>启用</th><th>来源</th></tr></thead>
+    <tbody>
+    {% for p in pocs %}
+      <tr data-enabled="{{ 1 if p.enabled else 0 }}">
+        <td>{{ p.id }}</td>
+        <td class="mono">{{ p.poc_id }}</td>
+        <td>{{ p.name }}</td>
+        <td><span class="sev sev-{{ p.severity }}">{{ p.severity }}</span></td>
+        <td class="muted">{{ p.tags }}</td>
+        <td>{{ p.status }}</td>
+        <td><button class="toggle" data-id="{{ p.id }}">{{ '开' if p.enabled else '关' }}</button></td>
+        <td class="muted small">{{ p.source }}<br><span class="mono">{{ p.path }}</span></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">未发现 POC，点击上方「重新扫描 POC 目录」。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

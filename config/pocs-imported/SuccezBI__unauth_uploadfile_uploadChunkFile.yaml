@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-succezbi-unauth_uploadfile_uploadchunkfile
+info:
+  name: "SuccezBI unauth_uploadfile_uploadChunkFile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, succezbi, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：SuccezBI/unauth_uploadfile_uploadChunkFile（类型 UPLOADFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/bi/"
+      - "/succezbi"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "SuccBI"

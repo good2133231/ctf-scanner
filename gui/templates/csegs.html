@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}C 段视野{% endblock %}
+{% block content %}
+<p class="muted">按 <b>/24 C 段</b>归纳的 IP 视野：每行是一个 IP 及其反查到的域名。
+  同段主机常属同一套业务（同机房/同客户/同备案主体），是找旁路的常见起点。
+  该数据来自 <b>osint</b> 阶段的 C 段反查，默认关闭（走第三方公共接口），
+  在「策略配置 → 外部情报拓展」里打开后新任务才会产出。</p>
+<section class="panel">
+  <form class="filters" method="get" action="{{ pager.base }}">
+    <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="C 段 / IP / 域名"></label>
+    <input type="hidden" name="size" value="{{ pager.size }}">
+    <button class="ghost" type="submit">查询</button>
+    {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
+  </form>
+  <table id="tbl-all-csegs">
+    <thead><tr><th>#</th><th>任务</th><th>C 段</th><th>IP</th><th>域名数</th><th>反查到的域名</th></tr></thead>
+    <tbody>
+    {% for c in csegs %}
+      <tr>
+        <td>{{ c.id }}</td>
+        <td><a href="{{ url_for('task_detail', task_id=c.task_id) }}">#{{ c.task_id }}</a></td>
+        <td class="mono">{{ c.segment or '-' }}</td>
+        <td class="mono">{{ c.ip or '-' }}</td>
+        <td>{{ c.count }}</td>
+        <td class="muted small mono">{{ c.domains or '-' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">没有匹配的 C 段数据（osint 阶段的 C 段反查默认关闭）。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% include "_pager.html" %}
+</section>
+{% endblock %}

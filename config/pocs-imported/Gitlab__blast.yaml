@@ -1,0 +1,24 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-gitlab-blast
+info:
+  name: "Gitlab blast"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, gitlab, ref-poc, blast]
+  description: "由参考项目脚本静态导入：Gitlab/blast（类型 BLAST）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/gitlab"
+      - "/oauth/token"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<a href=\"https://about.gitlab.com"
+          - "\"access_token\":\""

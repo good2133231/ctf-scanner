@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-jenkins-unauth_rce
+info:
+  name: "Jenkins unauth_rce"
+  author: imported-from-myscan
+  severity: medium
+  tags: [imported, jenkins, ref-poc, unauth]
+  description: "由参考项目脚本静态导入：Jenkins/unauth_rce（类型 UNAUTH）。 原脚本另含 favicon 指纹 ['23e8c7bd78e8cd826c5a6073b15068b1']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/favicon.ico"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "Dashboard [Jenkins]"

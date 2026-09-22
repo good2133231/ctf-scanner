@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}任务 #{{ task.id }}{% endblock %}
+
+{% block actions %}
+<div class="toolbar">
+  <span class="badge st-{{ task.status }}" id="st-badge">{{ task.status }}</span>
+  <span class="muted">当前阶段 <b id="st-stage">{{ task.current_stage or '-' }}</b></span>
+  <span class="muted">进度 <b id="st-progress">{{ task.progress }}%</b></span>
+  <button class="btn-mini ghost" data-op="stop" data-id="{{ task.id }}"
+    id="btn-stop" {{ 'disabled' if task.status != 'running' }}>停止</button>
+  <button class="btn-mini ghost" data-op="restart" data-id="{{ task.id }}"
+    {{ 'disabled' if task.status == 'running' }}>重启</button>
+  <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">导出报告</a>
+  <button class="btn-mini danger" data-op="delete" data-id="{{ task.id }}">删除</button>
+  <span id="op-msg" class="muted"></span>
+  <span class="spacer"></span>
+  <span class="muted">阶段：{{ task.stages }} ｜ 创建：{{ task.created_at }}</span>
+  {% if task.error %}<span class="error">错误：{{ task.error }}</span>{% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>{{ task.name }}</h1>
+
+<div class="tabs">
+  <div class="tab active" data-tab="vulns">潜在漏洞<span class="cnt">{{ vulns|length }}</span></div>
+  <div class="tab" data-tab="sites">站点<span class="cnt">{{ sites|length }}</span></div>
+  <div class="tab" data-tab="subs">子域名<span class="cnt">{{ subs|length }}</span></div>
+  <div class="tab" data-tab="ports">端口服务<span class="cnt">{{ ports|length }}</span></div>
+  <div class="tab" data-tab="csegs">C 段<span class="cnt">{{ csegs|length }}</span></div>
+  <div class="tab" data-tab="dirs">目录<span class="cnt">{{ dirs|length }}</span></div>
+  <div class="tab" data-tab="target">目标与配置</div>
+  <div class="tab" data-tab="log">运行日志</div>
+</div>
+
+<div class="tabpane active" id="pane-vulns">
+  <section class="panel">
+    <p class="muted">级别筛选：
+      <a href="#" data-sev="">全部</a>
+      {% for s in ['critical', 'high', 'medium', 'low', 'info'] %}
+      <a href="#" data-sev="{{ s }}">{{ s }}</a>
+      {% endfor %}
+      ｜ <label class="muted">关键词 <input data-filter="#tbl-vulns" placeholder="名称 / 检查项 / 目标"></label>
+    </p>
+    <table id="tbl-vulns">
+      <thead><tr><th>级别</th><th>名称</th><th>检查/POC</th><th>目标</th><th>详情</th></tr></thead>
+      <tbody>
+      {% for v in vulns %}
+        <tr data-sev="{{ v.severity }}">
+          <td><span class="sev sev-{{ v.severity }}">{{ v.severity }}</span></td>
+          <td>{{ v.name }}</td>
+          <td class="muted">{{ v.poc_id }}</td>
+          <td class="muted mono">{{ v.target }}</td>
+          <td class="evidence"><details><summary class="muted">展开</summary>
+            <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre></details></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">暂无数据（低于「策略配置」中最低报告级别的结果不会收录）。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-sites">
+  <section class="panel">
+    <label class="muted">筛选站点 <input data-filter="#tbl-sites" placeholder="URL / 标题 / 技术栈 / Server"></label>
+    <table id="tbl-sites">
+      <thead><tr><th>URL</th><th>状态</th><th>标题</th><th>技术栈</th><th>Server</th></tr></thead>
+      <tbody>
+      {% for s in sites %}
+        <tr><td class="mono">{{ s.url }}</td><td>{{ s.status }}</td>
+          <td>{{ s.title or '-' }}</td>
+          <td class="muted">{{ s.tech or '-' }}</td>
+          <td class="muted">{{ s.server or '-' }}</td></tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">暂无数据。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-subs">
+  <section class="panel">
+    <label class="muted">筛选子域名 <input data-filter="#tbl-subs" placeholder="域名 / 来源 / CNAME"></label>
+    <table id="tbl-subs">
+      <thead><tr><th>子域名</th><th>CNAME</th><th>来源</th></tr></thead>
+      <tbody>
+      {% for s in subs %}
+        <tr><td class="mono">{{ s.domain }}</td>
+          <td class="muted small mono">{{ s.cname or '-' }}</td>
+          <td class="muted">{{ s.source or '-' }}</td></tr>
+      {% else %}
+        <tr><td colspan="3" class="muted">暂无数据。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-ports">
+  <section class="panel">
+    <label class="muted">筛选端口 <input data-filter="#tbl-ports" placeholder="主机 / IP / 端口 / 服务"></label>
+    <table id="tbl-ports">
+      <thead><tr><th>主机</th><th>IP</th><th>端口</th><th>服务</th><th>banner</th></tr></thead>
+      <tbody>
+      {% for p in ports %}
+        <tr><td class="mono">{{ p.host or '-' }}</td>
+          <td class="muted mono">{{ p.ip or '-' }}</td>
+          <td>{{ p.port }}</td>
+          <td>{{ p.service or '-' }}</td>
+          <td class="muted small mono">{{ p.banner or '-' }}</td></tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">暂无数据（portscan 阶段默认关闭，在「策略配置 → 端口与服务」打开）。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-csegs">
+  <section class="panel">
+    <label class="muted">筛选 <input data-filter="#tbl-csegs" placeholder="C 段 / IP / 域名"></label>
+    <table id="tbl-csegs">
+      <thead><tr><th>C 段</th><th>IP</th><th>域名数</th><th>反查到的域名</th></tr></thead>
+      <tbody>
+      {% for c in csegs %}
+        <tr><td class="mono">{{ c.segment or '-' }}</td>
+          <td class="mono">{{ c.ip or '-' }}</td>
+          <td>{{ c.count }}</td>
+          <td class="muted small mono">{{ c.domains or '-' }}</td></tr>
+      {% else %}
+        <tr><td colspan="4" class="muted">暂无数据（osint 阶段的 C 段反查默认关闭，在「策略配置 → 外部情报拓展」打开）。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-dirs">
+  <section class="panel">
+    <label class="muted">筛选路径 <input data-filter="#tbl-dirs" placeholder="路径 / 状态码"></label>
+    <table id="tbl-dirs">
+      <thead><tr><th>状态</th><th>路径</th></tr></thead>
+      <tbody>
+      {% for d in dirs %}
+        <tr><td>{{ d.status }}</td><td class="mono">{{ d.path }}</td></tr>
+      {% else %}
+        <tr><td colspan="2" class="muted">暂无数据。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-target">
+  <section class="panel">
+    <h2>目标（{{ task.targets.splitlines()|length }} 条）</h2>
+    <pre class="mono">{{ task.targets }}</pre>
+  </section>
+  <section class="panel">
+    <h2>运行配置</h2>
+    <table>
+      <tbody>
+        <tr><th>任务 ID</th><td>{{ task.id }}</td></tr>
+        <tr><th>阶段</th><td>{{ task.stages }}</td></tr>
+        <tr><th>选项</th><td class="mono">{{ task.options }}</td></tr>
+        <tr><th>状态</th><td><span class="badge st-{{ task.status }}">{{ task.status }}</span></td></tr>
+        <tr><th>日志文件</th><td class="mono small">{{ task.log_file or '-' }}</td></tr>
+        <tr><th>创建 / 更新</th><td>{{ task.created_at }} / {{ task.updated_at }}</td></tr>
+      </tbody>
+    </table>
+    <p class="muted">检测策略（最低报告级别 / 分类开关 / 免杀强度）在「策略配置」页统一调整，
+      对之后新建的任务生效。</p>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-log">
+  <section class="panel">
+    <h2>运行日志（尾部）</h2>
+    <pre id="log-box" class="mono">{% if task.log_file %}载入中…{% else %}（无日志文件）{% endif %}</pre>
+  </section>
+</div>
+{% endblock %}
+
+{% block script %}
+<script>
+initTabs();
+initSevFilter();
+bindTaskOps(".toolbar", document.getElementById("op-msg"));
+</script>
+{% if task.status in ('running', 'pending') %}
+<script>pollTask({{ task.id }});</script>
+{% else %}
+<script>loadLog({{ task.id }});</script>
+{% endif %}
+{% endblock %}

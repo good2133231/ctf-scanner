@@ -1,0 +1,23 @@
+id: exposure-backup-sql
+info:
+  name: "数据库备份文件泄露"
+  author: ctfscanner
+  severity: high
+  tags: [exposure, backup, owasp-a01, owasp-a05]
+  description: "常见命名的 SQL 备份文件可被匿名下载，直接泄露库表结构与数据。"
+http:
+  - method: GET
+    path: "{{payload}}"
+    payloads:
+      - /backup.sql
+      - /db.sql
+      - /database.sql
+      - /dump.sql
+      - /data.sql
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: ["INSERT INTO", "CREATE TABLE", "CREATE DATABASE"]
+        condition: or

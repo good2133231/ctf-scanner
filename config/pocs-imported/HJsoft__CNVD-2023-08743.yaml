@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-hjsoft-cnvd-2023-08743
+info:
+  name: "HJsoft CNVD-2023-08743"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, hjsoft, ref-poc, sqlinjection]
+  description: "由参考项目脚本静态导入：HJsoft/CNVD-2023-08743（类型 SQLINJECTION）。 原脚本另含 favicon 指纹 ['435b5d431ded7d0776dfa621c9c63385']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/favicon.ico"
+      - "/servlet/codesettree?flag=c&status=1&codesetid=1&parentid=-1&categories=~31"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "TreeNode id="

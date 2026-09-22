@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-logbase-unauth_rce
+info:
+  name: "Logbase unauth_rce"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, logbase, ref-poc, rce]
+  description: "由参考项目脚本静态导入：Logbase/unauth_rce（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/bhost/"
+      - "/bhost/get_qrcode_img_b"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<title>Logbase运维安全管理系统</title>"
+          - "url: \"/bhost/"

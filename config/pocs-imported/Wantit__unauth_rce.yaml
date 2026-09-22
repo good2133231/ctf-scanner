@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-wantit-unauth_rce
+info:
+  name: "Wantit unauth_rce"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, wantit, ref-poc, rce]
+  description: "由参考项目脚本静态导入：Wantit/unauth_rce（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/mainFunctions/comboxstore.action"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "www.wantit.com.cn"

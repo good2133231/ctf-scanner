@@ -1,0 +1,25 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-nginxwebui-unauth_readfile
+info:
+  name: "nginxWebUI unauth_readfile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, nginxwebui, ref-poc, readfile]
+  description: "由参考项目脚本静态导入：nginxWebUI/unauth_readfile（类型 READFILE）。 原脚本另含 favicon 指纹 ['72e228c3809db53da8a884b6676ed36a']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/AdminPage/remote/src"
+      - "/adminPage/login"
+      - "/img/favicon.ico"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/js/adminPage/login/index.js"
+          - "<title>nginxWebUI</title>"
+          - "root:x"

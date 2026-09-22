@@ -1,0 +1,440 @@
+"""SQLite 存储层：任务 / 子域名 / 站点 / 目录 / 漏洞 / POC 注册表。
+
+设计取舍（客观说明）：
+- 为降低部署成本选择 SQLite 单文件库，不做 ORM；
+- 每次调用独立连接、用完即关，天然线程安全，代价是高频写入略有开销，单机 CTF 场景足够；
+- 若后续需要多节点/高并发，替换本层为 PostgreSQL 或 MongoDB 即可，上层接口不变。
+"""
+import json
+import sqlite3
+import time
+
+from .config import BASE_DIR
+
+DB_PATH = BASE_DIR / "data" / "scanner.db"
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  targets TEXT NOT NULL,
+  stages TEXT NOT NULL,
+  options TEXT DEFAULT '{}',
+  status TEXT DEFAULT 'pending',
+  progress INTEGER DEFAULT 0,
+  current_stage TEXT DEFAULT '',
+  log_file TEXT DEFAULT '',
+  error TEXT DEFAULT '',
+  created_at TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS subdomains (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  domain TEXT NOT NULL,
+  source TEXT DEFAULT '',
+  cname TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS sites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  url TEXT NOT NULL, host TEXT, port TEXT,
+  status INTEGER, title TEXT, length INTEGER, server TEXT, tech TEXT, source TEXT,
+  favicon TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS ports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  host TEXT, ip TEXT, port INTEGER, service TEXT DEFAULT '', banner TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS csegs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  segment TEXT DEFAULT '',
+  ip TEXT DEFAULT '',
+  domains TEXT DEFAULT '',
+  count INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS dirs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  site_url TEXT, path TEXT NOT NULL, status INTEGER, length INTEGER,
+  method TEXT DEFAULT 'GET', note TEXT
+);
+CREATE TABLE IF NOT EXISTS vulns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  target TEXT, poc_id TEXT, name TEXT, severity TEXT DEFAULT 'medium',
+  owasp TEXT DEFAULT '', detail TEXT, evidence TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS pocs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  path TEXT UNIQUE NOT NULL,
+  poc_id TEXT, name TEXT, severity TEXT DEFAULT 'medium', tags TEXT DEFAULT '',
+  enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'ok',
+  updated_at TEXT
+);
+"""
+
+
+def _now():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_conn():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def init_db():
+    with get_conn() as conn:
+        conn.executescript(SCHEMA)
+        _ensure_columns(conn)
+
+
+# 老库轻量迁移：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列，
+# 这里按需 ADD COLUMN（SQLite 的 ADD COLUMN 是原地元数据操作，代价极低）。
+_COLUMN_PATCHES = {
+    "subdomains": {"cname": "TEXT DEFAULT ''"},
+    "sites": {"favicon": "TEXT DEFAULT ''"},
+}
+
+
+def _ensure_columns(conn):
+    for table, cols in _COLUMN_PATCHES.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if not have:
+            continue
+        for col, decl in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+
+def _exec(sql, params=(), many=False):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        (cur.executemany if many else cur.execute)(sql, params)
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _query(sql, params=(), one=False):
+    conn = get_conn()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+        return (rows[0] if rows else None) if one else rows
+    finally:
+        conn.close()
+
+
+# ---------- 任务 ----------
+
+def create_task(name, targets, stages, options=None):
+    return _exec(
+        "INSERT INTO tasks(name, targets, stages, options, created_at, updated_at) "
+        "VALUES(?,?,?,?,?,?)",
+        (name, targets, ",".join(stages), json.dumps(options or {}), _now(), _now()))
+
+
+def update_task(task_id, **fields):
+    fields["updated_at"] = _now()
+    sets = ", ".join(f"{k}=?" for k in fields)
+    _exec(f"UPDATE tasks SET {sets} WHERE id=?", (*fields.values(), task_id))
+
+
+def get_task(task_id):
+    return _query("SELECT * FROM tasks WHERE id=?", (task_id,), one=True)
+
+
+def list_tasks(limit=200):
+    return _query("SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (limit,))
+
+
+ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "dirs", "vulns")
+
+
+def clear_task_assets(task_id):
+    """清空某任务的全部资产（子域名/站点/端口/C段/目录/漏洞），用于"重启"前重置。"""
+    for t in ASSET_TABLES:
+        _exec(f"DELETE FROM {t} WHERE task_id=?", (task_id,))
+
+
+def delete_task(task_id):
+    """删除任务及其全部资产。"""
+    clear_task_assets(task_id)
+    _exec("DELETE FROM tasks WHERE id=?", (task_id,))
+
+
+def task_counts(task_id):
+    """任务资产计数（任务列表「统计」列用）。"""
+    def count(sql):
+        row = _query(sql, (task_id,), one=True)
+        return row["c"] if row else 0
+    return {
+        "sites": count("SELECT COUNT(*) c FROM sites WHERE task_id=?"),
+        "subdomains": count("SELECT COUNT(*) c FROM subdomains WHERE task_id=?"),
+        "ports": count("SELECT COUNT(*) c FROM ports WHERE task_id=?"),
+        "csegs": count("SELECT COUNT(*) c FROM csegs WHERE task_id=?"),
+        "dirs": count("SELECT COUNT(*) c FROM dirs WHERE task_id=?"),
+        "vulns": count("SELECT COUNT(*) c FROM vulns WHERE task_id=?"),
+    }
+
+
+# ---------- 资产 ----------
+
+def insert_subdomains(task_id, items):
+    """items: [(domain, source[, cname]), ...]"""
+    if not items:
+        return
+    rows = []
+    for it in items:
+        domain, source = it[0], it[1]
+        cname = it[2] if len(it) > 2 else ""
+        rows.append((task_id, domain, source, cname or ""))
+    _exec("INSERT INTO subdomains(task_id, domain, source, cname) VALUES(?,?,?,?)",
+          rows, many=True)
+
+
+def set_subdomain_cnames(task_id, mapping):
+    """回填子域名的 CNAME（客户端接管/泛解析分析用）。mapping: {domain: cname}"""
+    rows = [(c, task_id, d) for d, c in (mapping or {}).items() if c]
+    if not rows:
+        return
+    _exec("UPDATE subdomains SET cname=? WHERE task_id=? AND domain=?", rows, many=True)
+
+
+def insert_sites(task_id, sites):
+    if not sites:
+        return
+    _exec("INSERT INTO sites(task_id,url,host,port,status,title,length,server,tech,source,"
+          "favicon) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+          [(task_id, s.get("url", ""), s.get("host", ""), str(s.get("port", "") or ""),
+            s.get("status"), s.get("title", ""), s.get("length"), s.get("server", ""),
+            s.get("tech", ""), s.get("source", ""), s.get("favicon", "")) for s in sites],
+          many=True)
+
+
+def insert_ports(task_id, ports):
+    """items: [{host, ip, port, service, banner}, ...]"""
+    if not ports:
+        return
+    _exec("INSERT INTO ports(task_id,host,ip,port,service,banner) VALUES(?,?,?,?,?,?)",
+          [(task_id, p.get("host", ""), p.get("ip", ""), int(p.get("port") or 0),
+            p.get("service", ""), (p.get("banner") or "")[:300]) for p in ports], many=True)
+
+
+def insert_csegs(task_id, rows):
+    """C 段归纳结果（P1-4）。items: [{segment, ip, domains, count}, ...]
+
+    `domains` 存该 IP 反查到的域名（逗号连接，已按上限截断），`count` 是**截断前**的数量
+    —— 后者用于判断"这个 IP 是不是共享主机/CDN"（一个 IP 挂几百个域名时噪声极大）。
+    """
+    if not rows:
+        return
+    _exec("INSERT INTO csegs(task_id,segment,ip,domains,count) VALUES(?,?,?,?,?)",
+          [(task_id, str(r.get("segment", "")), str(r.get("ip", "")),
+            ",".join(r.get("domains") or [])[:4000], int(r.get("count") or 0))
+           for r in rows], many=True)
+
+
+def insert_dirs(task_id, dirs):
+    if not dirs:
+        return
+    _exec("INSERT INTO dirs(task_id,site_url,path,status,length,method,note) VALUES(?,?,?,?,?,?,?)",
+          [(task_id, d.get("site_url", ""), d.get("path", ""), d.get("status"),
+            d.get("length"), d.get("method", "GET"), d.get("note", "")) for d in dirs], many=True)
+
+
+def insert_vuln(task_id, v):
+    _exec("INSERT INTO vulns(task_id,target,poc_id,name,severity,owasp,detail,evidence,created_at) "
+          "VALUES(?,?,?,?,?,?,?,?,?)",
+          (task_id, v.get("target", ""), v.get("poc_id", ""), v.get("name", ""),
+           v.get("severity", "medium"), v.get("owasp", ""), v.get("detail", ""),
+           (v.get("evidence", "") or "")[:2000], _now()))
+
+
+def list_subdomains(task_id):
+    return _query("SELECT * FROM subdomains WHERE task_id=? ORDER BY domain", (task_id,))
+
+
+def list_sites(task_id):
+    return _query("SELECT * FROM sites WHERE task_id=? ORDER BY id", (task_id,))
+
+
+def list_dirs(task_id):
+    return _query("SELECT * FROM dirs WHERE task_id=? ORDER BY id", (task_id,))
+
+
+def list_ports(task_id):
+    return _query("SELECT * FROM ports WHERE task_id=? ORDER BY host, port", (task_id,))
+
+
+def list_csegs(task_id):
+    return _query("SELECT * FROM csegs WHERE task_id=? ORDER BY segment, ip", (task_id,))
+
+
+# ---------- 全局资产视图（GUI 资产分栏用） ----------
+
+# 表 -> (默认排序, 可被关键字过滤的文本列)
+_ASSET_PAGES = {
+    "subdomains": ("task_id DESC, domain", ("domain", "source", "cname")),
+    "sites": ("task_id DESC, id DESC", ("url", "host", "title", "server", "tech")),
+    "ports": ("task_id DESC, port", ("host", "ip", "service", "banner")),
+    "csegs": ("task_id DESC, segment, ip", ("segment", "ip", "domains")),
+    "dirs": ("task_id DESC, id DESC", ("site_url", "path", "note")),
+}
+
+
+def page_assets(table, limit=200, offset=0, q=None):
+    """跨任务资产分页查询，返回 (rows, total)。
+
+    `q` 是"整行关键字"（对若干文本列做 LIKE），与前端 `initFilters()` 的体验一致，
+    区别是过滤与分页都放在 SQL 侧 —— 数据量上去后不再被固定 `LIMIT 500` 截断。
+    """
+    order, cols = _ASSET_PAGES[table]
+    where, params = "", []
+    if q:
+        where = " WHERE " + " OR ".join(f"{c} LIKE ?" for c in cols)
+        params = [f"%{q}%"] * len(cols)
+    total = _query(f"SELECT COUNT(*) c FROM {table}{where}", tuple(params), one=True)
+    rows = _query(f"SELECT * FROM {table}{where} ORDER BY {order} LIMIT ? OFFSET ?",
+                  tuple(params) + (int(limit), int(offset)))
+    return rows, (total["c"] if total else 0)
+
+
+def list_all_subdomains(limit=500):
+    return page_assets("subdomains", limit=limit)[0]
+
+
+def list_all_sites(limit=500):
+    return page_assets("sites", limit=limit)[0]
+
+
+def list_all_dirs(limit=500):
+    return page_assets("dirs", limit=limit)[0]
+
+
+def list_all_ports(limit=500):
+    return page_assets("ports", limit=limit)[0]
+
+
+def list_vulns(task_id=None, severity=None, limit=200):
+    sql, params = "SELECT * FROM vulns WHERE 1=1", []
+    if task_id:
+        sql += " AND task_id=?"
+        params.append(task_id)
+    if severity:
+        sql += " AND severity=?"
+        params.append(severity)
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    return _query(sql, tuple(params))
+
+
+def dashboard_stats():
+    def count(sql):
+        row = _query(sql, one=True)
+        return row["c"] if row else 0
+    return {
+        "tasks": count("SELECT COUNT(*) c FROM tasks"),
+        "sites": count("SELECT COUNT(*) c FROM sites"),
+        "subdomains": count("SELECT COUNT(*) c FROM subdomains"),
+        "vulns": count("SELECT COUNT(*) c FROM vulns"),
+        "pocs": count("SELECT COUNT(*) c FROM pocs WHERE status='ok'"),
+    }
+
+
+# ---------- POC 注册表 ----------
+
+# 批量导入的第三方 POC（tools/import_ref_pocs.py 产物）默认**关闭**：
+# 它们多为指纹式匹配，误报率高，需要人工在 POC 管理页挑选后再启用。
+IMPORTED_HINT = "pocs-imported"
+
+
+def default_poc_enabled(path):
+    return 0 if IMPORTED_HINT in str(path).replace("\\", "/") else 1
+
+
+def upsert_poc(path, meta):
+    info = meta.get("info", {}) or {}
+    tags = ",".join([str(t) for t in (info.get("tags") or [])])
+    row = _query("SELECT id FROM pocs WHERE path=?", (str(path),), one=True)
+    if row:
+        _exec("UPDATE pocs SET poc_id=?, name=?, severity=?, tags=?, status=?, updated_at=? WHERE id=?",
+              (meta.get("id", ""), info.get("name", ""), info.get("severity", "medium"),
+               tags, meta.get("_status", "ok"), _now(), row["id"]))
+        return row["id"]
+    return _exec("INSERT INTO pocs(path,poc_id,name,severity,tags,enabled,status,updated_at) "
+                 "VALUES(?,?,?,?,?,?,?,?)",
+                 (str(path), meta.get("id", ""), info.get("name", ""),
+                  info.get("severity", "medium"), tags, default_poc_enabled(path),
+                  meta.get("_status", "ok"), _now()))
+
+
+def list_pocs():
+    return _query("SELECT * FROM pocs ORDER BY id")
+
+
+def get_poc(pid):
+    return _query("SELECT * FROM pocs WHERE id=?", (pid,), one=True)
+
+
+def toggle_poc(pid):
+    row = get_poc(pid)
+    if row:
+        _exec("UPDATE pocs SET enabled=? WHERE id=?", (0 if row["enabled"] else 1, pid))
+
+
+# POC 分类维度：级别 / 来源。来源按路径前缀判定，与默认开关策略（default_poc_enabled）同一口径。
+_POC_SOURCES = {
+    "builtin": "scanner/pocs/pocs",
+    "imported": "config/pocs-imported",
+    "nuclei": "config/nuclei-templates",
+    "user": "config/pocs-user",
+}
+
+
+def poc_source(path):
+    """把 POC 路径归类为 builtin / imported / nuclei / user（未知返回 other）。"""
+    norm = str(path).replace("\\", "/")
+    for name, prefix in _POC_SOURCES.items():
+        if prefix in norm:
+            return name
+    return "other"
+
+
+def bulk_set_poc_enabled(enabled, severity=None, source=None, kind=None, only_ok=True):
+    """按分类批量开关 POC（POC 管理页的"按分类开关"，避免 312 个逐个点）。
+
+    - severity：critical/high/medium/low/info
+    - source：builtin/imported/nuclei/user/other
+    - kind：全部 / 变更（当前状态与目标状态不同的，便于"只改需要改的"）
+    返回被更新的条数。
+    """
+    rows = _query("SELECT id, path, severity, enabled, status FROM pocs")
+    target = 1 if enabled else 0
+    ids = []
+    for r in rows:
+        if only_ok and r["status"] != "ok":
+            continue
+        if severity and (r["severity"] or "") != severity:
+            continue
+        if source and poc_source(r["path"]) != source:
+            continue
+        if kind == "diff" and int(r["enabled"] or 0) == target:
+            continue
+        ids.append(r["id"])
+    if not ids:
+        return 0
+    marks = ",".join("?" for _ in ids)
+    _exec(f"UPDATE pocs SET enabled=? WHERE id IN ({marks})", tuple([target] + ids))
+    return len(ids)
+
+
+def enabled_poc_paths():
+    return [r["path"] for r in _query("SELECT path FROM pocs WHERE enabled=1 AND status='ok'")]

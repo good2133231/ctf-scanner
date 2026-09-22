@@ -1,0 +1,26 @@
+id: exposure-spring-actuator
+info:
+  name: "Spring Boot Actuator 未授权访问"
+  author: ctfscanner
+  severity: high
+  tags: [exposure, java, actuator, owasp-a01, owasp-a05]
+  description: "Actuator 端点未鉴权时，/actuator/env 可泄露配置与口令，部分端点可配合利用导致 RCE。"
+http:
+  - method: GET
+    path: "/actuator/env"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: ["propertySources", "propertySource"]
+        condition: or
+  - method: GET
+    path: "/actuator"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: ["_links", "self"]
+        condition: and

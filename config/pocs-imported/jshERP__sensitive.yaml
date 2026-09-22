@@ -1,0 +1,24 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-jsherp-sensitive
+info:
+  name: "jshERP sensitive"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, jsherp, ref-poc, sensitive]
+  description: "由参考项目脚本静态导入：jshERP/sensitive（类型 SENSITIVE）。"
+http:
+  - method: GET
+    path:
+      - "/jshERP-boot/user/getAllList;.ico"
+      - "/user/login"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "jshERP-boot"
+          - "loginName"
+          - "ERP系统"

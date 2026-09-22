@@ -1,0 +1,24 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-tplus-unauth_uploadfile_fileuploadhandler
+info:
+  name: "TPlus unauth_uploadfile_FileUploadHandler"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, tplus, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：TPlus/unauth_uploadfile_FileUploadHandler（类型 UPLOADFILE）。 原脚本另含 favicon 指纹 ['023b019bc64381f2558873cd5b2427e8']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/tplus/SM/SetupAccount/FileUploadHandler.ashx"
+      - "/tplus/favicon.ico"
+      - "/tplus/view/login.html"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "portal/style/Ufida/Login.css"
+          - "software.chanjet.com"

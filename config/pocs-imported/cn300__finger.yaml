@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-cn300-finger
+info:
+  name: "cn300 finger"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, cn300, ref-poc, finger]
+  description: "由参考项目脚本静态导入：cn300/finger（类型 FINGER）。 原脚本另含 favicon 指纹 ['2e73db6da7a719c0d0541339b6749df9']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/favicon.ico"
+      - "/webmail"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "__web_login__"
+          - "中企动力科技股份有限公司"

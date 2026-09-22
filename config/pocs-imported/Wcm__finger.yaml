@@ -1,0 +1,21 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-wcm-finger
+info:
+  name: "Wcm finger"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, wcm, ref-poc, rce]
+  description: "由参考项目脚本静态导入：Wcm/finger（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/wcm/app/login.jsp"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "TRS WCM 登录页"

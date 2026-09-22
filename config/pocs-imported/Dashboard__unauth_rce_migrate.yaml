@@ -1,0 +1,27 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-dashboard-unauth_rce_migrate
+info:
+  name: "Dashboard unauth_rce_migrate"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, dashboard, ref-poc, rce]
+  description: "由参考项目脚本静态导入：Dashboard/unauth_rce_migrate（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/api/apisix"
+      - "/api/apisix/admin/migrate/import"
+      - "/apisix"
+      - "/apisix/admin/migrate/import"
+      - "/gateway/apisix"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "request Content-Type isn't multipart/form-data"
+          - "Apache APISIX Dashboard"

@@ -1,0 +1,26 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-mobile-unauth_uploadfile
+info:
+  name: "mobile unauth_uploadfile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, mobile, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：mobile/unauth_uploadfile（类型 UPLOADFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/html/login.jsp"
+      - "/maportal/appmanager/uploadApk.do?pk_obj="
+      - "/mobsm/html/login.jsp"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "../css/bootstrap.css"
+          - "../img/login.png"
+          - "\"status\":2"

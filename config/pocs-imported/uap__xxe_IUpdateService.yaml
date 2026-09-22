@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-uap-xxe_iupdateservice
+info:
+  name: "uap xxe_IUpdateService"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, uap, ref-poc, xxe]
+  description: "由参考项目脚本静态导入：uap/xxe_IUpdateService（类型 XXE）。"
+http:
+  - method: GET
+    path:
+      - "/index.jsp"
+      - "/uapws/service/nc.uap.oba.update.IUpdateService"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "../Client/Uclient/UClient.dmg"

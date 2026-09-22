@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}端口与服务{% endblock %}
+{% block content %}
+<p class="muted">全库端口/服务发现结果（跨任务，服务端分页 + 关键字过滤）。该数据来自
+  <b>portscan</b> 阶段，默认关闭，在「策略配置 → 端口与服务」里打开后新任务才会产出。</p>
+<section class="panel">
+  <form class="filters" method="get" action="{{ pager.base }}">
+    <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="主机 / IP / 服务 / banner"></label>
+    <input type="hidden" name="size" value="{{ pager.size }}">
+    <button class="ghost" type="submit">查询</button>
+    {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
+  </form>
+  <table id="tbl-all-ports">
+    <thead><tr><th>#</th><th>任务</th><th>主机</th><th>IP</th><th>端口</th><th>服务</th><th>banner</th></tr></thead>
+    <tbody>
+    {% for p in ports %}
+      <tr>
+        <td>{{ p.id }}</td>
+        <td><a href="{{ url_for('task_detail', task_id=p.task_id) }}">#{{ p.task_id }}</a></td>
+        <td class="mono">{{ p.host or '-' }}</td>
+        <td class="muted mono">{{ p.ip or '-' }}</td>
+        <td>{{ p.port }}</td>
+        <td>{{ p.service or '-' }}</td>
+        <td class="muted small mono">{{ p.banner or '-' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">没有匹配的端口数据（portscan 阶段默认关闭）。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% include "_pager.html" %}
+</section>
+{% endblock %}

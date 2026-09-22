@@ -1,0 +1,28 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-jeecgboot-unauth_ssti_rce
+info:
+  name: "JeecgBoot unauth_ssti_rce"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, jeecgboot, ref-poc, rce]
+  description: "由参考项目脚本静态导入：JeecgBoot/unauth_ssti_rce（类型 RCE）。 原脚本另含 favicon 指纹 ['dc7a0b69060a0262530b47b46ba7f9b6']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/favicon.ico"
+      - "/jeecg-boot/"
+      - "/jeecg-boot/jmreport/queryFieldBySql"
+      - "/jeecg-boot/v2/api-docs"
+      - "/jmreport/queryFieldBySql"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "onlinePreviewDomainURL"
+          - "后台API接口"
+          - "gid="

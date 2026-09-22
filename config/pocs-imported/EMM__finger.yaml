@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-emm-finger
+info:
+  name: "EMM finger"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, emm, ref-poc, finger]
+  description: "由参考项目脚本静态导入：EMM/finger（类型 FINGER）。"
+http:
+  - method: GET
+    path:
+      - "/emm-api/"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/app/phoneIndex.do"
+          - "/emm-api/view"

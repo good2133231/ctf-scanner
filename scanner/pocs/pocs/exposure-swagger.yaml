@@ -1,0 +1,35 @@
+id: exposure-swagger
+info:
+  name: "Swagger/OpenAPI 文档暴露"
+  author: ctfscanner
+  severity: medium
+  tags: [exposure, api, owasp-a05]
+  description: "API 文档未做访问控制，攻击者可直接枚举全部接口，便于定位未鉴权接口。"
+http:
+  - method: GET
+    path: "/swagger-ui.html"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: ["swagger"]
+        condition: or
+  - method: GET
+    path: "/swagger.json"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: ["swagger", "openapi"]
+        condition: or
+  - method: GET
+    path: "/v2/api-docs"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: ["swagger", "openapi", "paths"]
+        condition: or

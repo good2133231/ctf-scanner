@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-leadsec-unauth_sql_injection
+info:
+  name: "Leadsec unauth_sql_injection"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, leadsec, ref-poc, sqlinjection]
+  description: "由参考项目脚本静态导入：Leadsec/unauth_sql_injection（类型 SQLINJECTION）。 原脚本另含 favicon 指纹 ['a70ff0f90cbf953c7d6e7503e04f755c']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/ops/Login"
+      - "/ops/images/favicon.ico"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<title>网御运维安全网关"

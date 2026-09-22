@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-vesystem-unauth_uploadfile
+info:
+  name: "Vesystem unauth_uploadfile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, vesystem, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：Vesystem/unauth_uploadfile（类型 UPLOADFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/Upload/upload_file.php?l=1"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/Public/Assest/ico/favicon.gif"
+          - "/vesystem/index.php"

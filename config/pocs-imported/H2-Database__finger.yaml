@@ -1,0 +1,25 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-h2-database-finger
+info:
+  name: "H2-Database finger"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, h2-database, ref-poc, deserialize]
+  description: "由参考项目脚本静态导入：H2-Database/finger（类型 DESERIALIZE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/h2-console/"
+      - "/console/h2-console/"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<h2>H2 Database URLs</h2>"
+          - "<title>H2 Console</title>"
+          - "disabled on this server"

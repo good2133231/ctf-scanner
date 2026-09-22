@@ -1,0 +1,17 @@
+id: exposure-tomcat-manager
+info:
+  name: "Tomcat Manager 控制台暴露"
+  author: ctfscanner
+  severity: high
+  tags: [exposure, tomcat, owasp-a07, owasp-a05]
+  description: "Tomcat Manager 页面对外可访问，若口令为弱口令/默认口令可导致 WAR 部署 RCE。"
+http:
+  - method: GET
+    path: "/manager/html"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: ["Tomcat Web Application Manager"]
+        condition: or

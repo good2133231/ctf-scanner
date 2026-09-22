@@ -1,0 +1,17 @@
+id: exposure-env-file
+info:
+  name: ".env 环境配置文件泄露"
+  author: ctfscanner
+  severity: high
+  tags: [exposure, env, owasp-a01, owasp-a05]
+  description: "站点 /.env 可被匿名访问，通常包含数据库口令、应用密钥等敏感信息。"
+http:
+  - method: GET
+    path: "/.env"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: ["DB_PASSWORD", "APP_KEY", "SECRET", "DATABASE_URL", "API_KEY"]
+        condition: or

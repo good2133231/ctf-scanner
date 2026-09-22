@@ -1,0 +1,11 @@
+# 敏感路径字典（预留：当前内置 OWASP 检查使用硬编码清单，此文件供 POC 与后续扩展引用）
+# 格式：路径
+/.git/config
+/.git/HEAD
+/.env
+/.svn/entries
+/WEB-INF/web.xml
+/backup.sql
+/.DS_Store
+/composer.json
+/.htaccess

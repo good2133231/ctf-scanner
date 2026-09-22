@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}仪表盘{% endblock %} - CTFScanner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">CTF<span>Scanner</span></div>
+    <nav class="side-nav">
+      {% set nav_items = [
+        ('dashboard',   '/',           '仪表盘',   'M3 3h6v6H3zM11 3h4v4h-4zM3 11h6v4H3zM11 9h4v6h-4z'),
+        ('tasks',       '/tasks',      '任务管理', 'M4 5h12M4 9h12M4 13h8'),
+        ('subdomains',  '/subdomains', '子域名资产', 'M9 2a7 7 0 100 14 7 7 0 000-14zM2 9h14M9 2c2.5 3.5 2.5 10.5 0 14'),
+        ('sites',       '/sites',      '站点资产', 'M2 3h14v9H2zM6 15h6M9 12v3'),
+        ('ports',       '/ports',      '端口服务', 'M3 9h12M9 3v12M4.5 4.5l9 9M13.5 4.5l-9 9'),
+        ('csegs',       '/csegs',      'C 段视野', 'M3 3h4v4H3zM11 3h4v4h-4zM3 11h4v4H3zM11 11h4v4h-4z'),
+        ('dirs',        '/dirs',       '目录发现', 'M2 4h5l2 2h7v8H2z'),
+        ('vulns',       '/vulns',      '漏洞风险', 'M9 2l6 2.5v5c0 3.5-2.5 6-6 7-3.5-1-6-3.5-6-7v-5z'),
+        ('pocs',        '/pocs',       'POC 管理', 'M7 5L2 9l5 4M11 5l5 4-5 4'),
+        ('settings_page','/settings',  '策略配置', 'M9 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zM9 1v2M9 15v2M1 9h2M15 9h2M3.5 3.5l1.5 1.5M13 13l1.5 1.5M14.5 3.5L13 5M5 13l-1.5 1.5'),
+      ] %}
+      {% for endpoint, prefix, label, icon in nav_items %}
+      <a href="{{ url_for(endpoint) }}"
+         class="side-item {{ 'active' if request.path == prefix or (prefix != '/' and request.path.startswith(prefix)) }}">
+        <svg viewBox="0 0 18 18" width="15" height="15" fill="none" stroke="currentColor"
+             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="{{ icon }}"/>
+        </svg>
+        <span>{{ label }}</span>
+      </a>
+      {% endfor %}
+    </nav>
+    <div class="sidebar-foot muted">仅授权测试 / CTF 场景</div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <span class="crumb">{{ self.title() }}</span>
+      <span class="spacer"></span>
+      <span class="muted">admin</span>
+      <a href="{{ url_for('settings_page') }}">修改口令</a>
+      <a href="{{ url_for('logout') }}">退出</a>
+    </header>
+    <main>
+      {% block actions %}{% endblock %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% block script %}{% endblock %}
+</body>
+</html>

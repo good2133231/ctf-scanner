@@ -1,0 +1,15 @@
+{# 跨任务资产页的通用分页条（服务端分页，P2-2）。需要 pager = {page,size,total,pages,base,qs} #}
+{% if pager %}
+<div class="pager">
+  <span class="muted">共 {{ pager.total }} 条 · 每页 {{ pager.size }} · 第 {{ pager.page }} / {{ pager.pages }} 页</span>
+  <span class="spacer"></span>
+  {% if pager.page > 1 %}
+    <a class="btn-mini ghost" href="{{ pager.base }}?page=1{{ pager.qs }}">首页</a>
+    <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page - 1 }}{{ pager.qs }}">上一页</a>
+  {% endif %}
+  {% if pager.page < pager.pages %}
+    <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page + 1 }}{{ pager.qs }}">下一页</a>
+    <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.pages }}{{ pager.qs }}">末页</a>
+  {% endif %}
+</div>
+{% endif %}

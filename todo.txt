@@ -1,0 +1,190 @@
+
+# 状态约定（由 AI 维护）：[完成] 已做完 / [部分完成：说明] 做了一半 / [待办] 未开始
+1、我们能不能添加启发式0day挖掘功能？[待办]
+2、现在都有什么功能列出来[完成]
+3、我们能不能实时获取最新漏洞[待办]
+4、我们能不能做到成熟的指纹扫描，对应的ctf环境对应的poc验证
+[完成：内置指纹规则表接入 probe/GUI/报告；指纹→POC 联动已落地（checks.poc_link_tags）——
+ 站点技术栈命中的 POC 排在前面优先执行且不受每站点上限约束；favicon MD5 亦可作零请求前置判定。
+ 312 个 POC（内置 7 + 参考项目导入 305）见「POC 管理」页]
+5、要有js挖掘拓展域名资产功能，并且有黑名单，那种第三方的域名，以及匹配aksk还有敏感密钥动态过滤垃圾信号，根据前后文
+[完成：scanner/jsmine.py + scanner/stages/jsmine.py（阶段名 jsmine，默认开启）。
+ 78 条第三方域黑名单 + 目标自身域永不误杀；7 条凭据规则、两级降噪（厂商前缀/赋值语境 + 占位符/成员访问过滤），
+ 命中值掩码脱敏后入库为 high 级；接口 URL 落盘 logs/.../js_urls.txt；策略开关见「策略配置 → 资产面拓展」]
+6、ico索引目标功能，提取目标的ico，去fofa搜索，并且结果太多的ico判定为黑ico，就不去拓展了
+[完成：全链路已打通，落在新增的 osint 阶段（默认关闭，在「策略配置 → 外部情报拓展」打开）。
+ 采集：probe/osint 复用 fingerprint.fetch_favicon 抓 /favicon.ico（只读 GET、过滤非图标响应）。
+ 哈希：新增 scanner/mmh3.py —— 纯标准库 MurmurHash3 x86_32 自实现（FOFA icon_hash / Shodan
+   http.favicon.hash 的社区统一键就是 mmh3，不是 MD5；mmh3 C 扩展在离线 CTF 环境装不上）。
+ 反查：scanner/fofa.py 用 qbase64 查询 fofa.api/v1/search/all，键取自 config/keys.yaml（fofa.email/key），
+   未填 key 时显式返回「未配置」而不是静默无结果。
+ 黑 ico：单 favicon 命中数 > fofa.black_ico_threshold（默认 200）即判为公共图标，放弃拓展并记日志。
+ 产出：新域名以 source="osint:fofa" 入 subdomains 表，后续 dirscan/vulnscan 自动覆盖]
+[另：Favicon MD5 仍保留作我们自己的零请求前置判定（POC favicon_md5_list），与 mmh3 分工不冲突]
+
+
+你现在是这个项目的新负责人。[完成]
+
+请不要急着修改代码，先自主接管整个项目。
+
+第一步：
+
+1. 阅读项目根目录下所有项目说明文件，尤其是 `AGENTS.md`、`README.md`、`ARCHITECTURE.md`、`TODO.md`、`CHANGELOG_AI.md`（如果存在）。
+2. 自己检查当前项目目录结构，理解主要模块、入口、依赖以及模块之间的关系。
+3. 查看当前 Git 状态和最近的修改记录（如果这是 Git 项目）。
+4. 阅读与当前未完成任务相关的代码和测试。
+5. 根据实际代码，而不是仅根据文档，判断项目目前真正完成到了什么程度。
+6. 找出当前最重要的未完成工作、明显 Bug、设计问题或测试缺口。
+
+然后给我一份简短的项目接管报告，包括：
+
+* 项目目前是做什么的
+* 当前架构
+* 已完成的功能
+* 当前正在进行的工作
+* 已知问题
+* 你发现但之前文档没有记录的问题
+* 你认为下一步应该做什么，以及原因
+
+不要让我逐个告诉你应该看哪些文件，也不要一开始就向我提一堆问题。
+
+你应该自己探索项目，并根据现有代码和文档形成判断。
+
+在完成上述分析后，如果你认为可以直接开始工作，就自己选择当前最合适的任务开始实施。
+
+修改代码前先说明你的计划；实施后运行相关测试/检查，并更新必要的项目文档和 `CHANGELOG_AI.md`，让下一个 AI 可以无缝接手。
+
+重要：
+
+* 不要为了“看起来完成”而重写现有代码。
+* 不要随意改变已经确定的架构。
+* 如果文档与实际代码冲突，以实际代码为准，并指出冲突。
+* 如果发现之前的实现存在问题，可以提出并修复，但先说明原因。
+* 保持改动尽可能聚焦，避免无关重构。
+不要把自己当成只负责回答问题的聊天机器人，把自己当成这个代码库的开发者。只要你已经拥有完成任务所需的信息，就直接行动，不要等待我逐步指挥。
+先读项目实际代码，再决定下一步。代码现状优先于文档。不要为了完成 roadmap 而盲目实现功能。
+
+
+
+
+-----
+info	服务器组件版本信息泄露	a05-banner-disclosure	http://127.0.0.1:8765/	
+展开
+info	安全响应头缺失	a05-security-headers	http://127.0.0.1:8765/	
+展开
+low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/	
+展开
+像这种太low的洞我们暂时不要深入了，暂时也不要开启了，我们打ctf比赛根本不会有人需要这种，我们只关注高位严重，才能拿到flag，注入 rce等漏洞，并且你注入要有动态绕waf功能，并且项目本身就要相对动态绕waf，usr-agent头随机性等等，很大功能实现了 都要有一个菜单栏去有一个大体的开启或者关闭，根据分类来
+[完成：已实施，见 TODO.md P0-7/P0-8 —— checks.min_severity 默认 medium 把 info/low 默认关掉；
+ GUI「策略配置」页按 OWASP 分类 + 检查项 + 大功能总开关（POC 引擎/被动收集/免杀）；新增
+ scanner/evasion.py 做 UA 随机化 + 请求头伪装 + WAF 指纹 + 注入 payload 变形（bypass_level 0~3）]
+[第四轮加强：改为「执行级」硬门 —— 新增 checks.skip_severities（默认 ["info","low"]），
+ 这两个级别的检查与 POC **连请求都不发**（不再只是"跑完再丢弃结果"），内置检查默认只执行 5/12 项；
+ GUI「策略配置」新增「按级别分类批量开关」面板；注入变形变体与参数顺序每次随机（请求形态动态化）；
+ 报告/日志会明确写出「info/low 级检测已跳过（连请求都不发）」]
+
+-----
+（第二轮 B 组）任务管理要有批量停止/批量删除/查看；结果页不要写「疑似问题」就写「潜在漏洞」；
+我们的 POC 成熟吗、有必要用 nuclei 吗、参考项目 C:\Users\材料\Desktop\tools\scan\myscan_20250825
+的漏洞能否导出并与 nuclei 兼容不冲突
+[完成：批量停止/批量重启/批量删除 + 单任务停止/重启/删除/导出 Markdown 均已落地（/tasks 页批量条 +
+ gui/app.py `/api/tasks/bulk`）；全项目 UI 文案「疑似问题」→「潜在漏洞」；
+ POC 结论：自研引擎已向 nuclei 语法靠拢（requests:/payloads+attack/variables/size/negative/extractors），
+ 官方模板可直接放 config/nuclei-templates/ 被本引擎加载，不依赖 nuclei 二进制、不冲突；
+ 参考项目 341 个 Python 脚本经 tools/import_ref_pocs.py 静态提取出 305 个 YAML（导入即默认关闭，
+ 可在「POC 管理」逐个开启）]
+
+-----
+（第三轮：资产面拓展 + 配置分层 + 任务运维补全）全部完成，逐项如下：
+[完成] P0-2 子域接管检测：scanner/dnsq.py（纯标准库 DNS 客户端，A/CNAME/TXT/MX/NS…，UDP+TCP 回退）
+       + scanner/takeover.py（41 条第三方服务指纹）+ scanner/stages/takeover.py（阶段名 takeover，默认开启）。
+       CNAME 链回填 subdomains.cname，「疑似接管」以 high 级入库；开关见「策略配置 → 资产面拓展」
+[完成] P1-2 端口与服务扫描：scanner/portscan.py + scanner/stages/portscan.py（阶段名 portscan）。
+       nmap 优先（-sT -Pn -n --open -oG），未装则内置 TCP connect 兜底 + 被动 banner；
+       **默认关闭**（portscan.enabled=false），打开后结果进 ports 表并出现在新「端口服务」分栏
+[完成] P1-1 favicon 前置指纹：probe 阶段采集 favicon MD5 → sites.favicon；POC 支持 favicon_md5_list 零请求预筛
+[完成] P0-4 CIDR 目标支持：targets.expand_cidr（上限 /24，超限丢弃）+ parse_lines 展开为多条 IP
+[完成] P0-5 凭据分层：新建 config/keys.yaml（fofa/shodan/quake/hunter/virustotal/securitytrails 占位 +
+       中文注释），已加入 .gitignore；config.load_keys() 读取，save_settings() 存策略时剔除 keys 段
+[完成] P2-2 服务端分页：db.page_assets + gui/templates/_pager.html；subdomains/sites/dirs/ports 四页
+       改为「SQL 侧过滤 + 分页」，不再被固定 LIMIT 截断；新增「端口服务」全局分栏
+[完成] POC 分类批量开关：db.bulk_set_poc_enabled + db.poc_source；POST /api/pocs/bulk；
+       「POC 管理」页可按「来源 × 级别」批量启停（312 个 POC 逐个点不现实），含"仅改不一致的"选项
+[完成] 报告加端口维度：scanner/report.py 概览表新增「开放端口」列 + 「开放端口与服务」小节
+[完成] tests/smoke.py 扩充：CIDR 解析 / 阶段注册 / favicon 字段 / 三阶段门控 / 报告端口列 /
+       /ports 路由 / 分页条 / POC 批量接口 —— 全部通过（SMOKE PASS）
+[修复] scanner/targets.py 第 59 行 CIDR 展开写成生成器表达式（`(` 误写为 `[` 的逆误），
+       实际产出的是"装着生成器的单元素列表"而非 IP 列表 —— 下游 `for kind, raw in ctx.targets`
+       会抛 TypeError 并被阶段级 try/except 吞掉，导致 CIDR 目标静默丢失（P0-4 实际不可用）。
+       已改为列表推导式，回归用例见 smoke [1]
+[已完成 → 见下方「第五轮」] P1-4 IP 反查 C 段（依赖外部 api.webscan.cc，非本地可离线验证）
+[待办] P2-3 Linux 实机验证（本机为 Windows，仅保证 pathlib/shell=False/which 等跨平台不变量已就位）
+[已完成 → 见下方「第五轮」] P3-1 FOFA 反查 favicon（见上文第 6 条）
+[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（见上文第 1、3 条）
+
+-----
+（第四轮：低价值项「执行级」硬门 + 动态化 + 文档全量对齐）
+[完成] checks.skip_severities（默认 ["info","low"]）执行级门控：owasp.checks.enabled_checks 与
+       pocs.engine.load_enabled_pocs 同规则（判定入口 config.skip_severities()），
+       内置检查默认只执行 5/12 项；a02-no-https / a05-security-headers / a05-banner-disclosure
+       等 7 项**连请求都不发**；POC 引擎也过滤同级模板
+[完成] GUI「策略配置 → 按级别分类批量开关」：info/low/medium/high/critical 五档勾选，
+       勾上即"不执行该级别"；细粒度检查项列表会标注「·已按级别跳过」
+[完成] 注入动态化加强：evasion.mutate_sqli/mutate_xss 变体顺序每次随机（原始 payload 仍排第一），
+       a03-sqli-error / a03-xss-reflect 参数顺序随机 —— 请求形态不再固定，降低被 WAF 规则固化识别
+[完成] vulnscan 日志明示 `info/low 级检测已跳过（连请求都不发）`，便于判断扫描预算去向
+[完成] 文档全量对齐（本轮剩下的最后一环）：docs/usage.md（9 栏 + 10 项页面 + 7 页签 + CIDR 与
+       级别门控两条 FAQ）、docs/pipeline.md（三层门控 + 动态性说明 + 配置速查）、
+       docs/owasp-mapping.md（三级门控 + 默认只跑 5/12 项）、docs/poc-guide.md（低级别 POC 不加载）、
+       docs/architecture.md（阶段/资产层/DB 表补齐 ports/favicon/cname）、docs/roadmap.md（改为反映
+       实际完成度）、README.md（架构图与能力边界）
+[完成] tests/smoke.py 再扩充：POC 级别执行门（全开注册表后 311/312）、免杀变形（原始优先 + level=0
+       只回原始）、三层门控断言（只抬 min_severity 仍不出低危项）—— SMOKE PASS
+[已完成 → 见下方「第五轮」] P1-4 IP 反查 C 段（依赖外部 api.webscan.cc，非本地可离线验证）
+[待办] P2-3 Linux 实机验证（本机为 Windows，仅保证 pathlib/shell=False/which 等跨平台不变量已就位）
+[已完成 → 见下方「第五轮」] P3-1 FOFA 反查 favicon（见上文第 6 条）
+[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（见上文第 1、3 条）
+
+-----
+（第五轮：外部情报拓展 osint 阶段 = P1-4 C 段反查 + P3-1 favicon/FOFA 反查）
+[完成] 新增流水线阶段 osint（probe 之后、jsmine 之前，阶段数 7 → 8）：
+       scanner/stages/osint.py —— 两个子开关 iprecon.enabled / fofa.enabled，**都关时整阶段
+       一次请求都不发**；产物是新域名（source=osint:cseg / osint:fofa）与 C 段视野
+[完成] P1-4 IP 反查 C 段：scanner/iprecon.py —— is_public_ip（私有/环回/保留地址直接跳过）、
+       segment_of/group_segments（IPv4 归纳为 /24 C 段，IPv6 不臆测）、parse_domains
+       （json.loads + 逐项结构校验，**不 eval**，与参考项目 B-3 的危险写法明确切割）、
+       lookup_many（pool_run 并发 5、单 IP 只查一次、失败不重试）。新表 csegs 落库
+[完成] P3-1 favicon 反查：scanner/mmh3.py（纯标准库 MurmurHash3 x86_32，附 3 个公开向量自检）
+       + scanner/fofa.py（qbase64 查询、未配置 key 时显式报错、黑 ico 判定）
+       + fingerprint.fetch_favicon/favicon_hash（与原 favicon_md5 共用采集）
+[完成] GUI：新增第 10 栏「C 段视野」/csegs（关键字过滤 + 服务端分页），任务详情第 8 个页签
+       「C 段」（页签 7 → 8）；「策略配置」新增「外部情报拓展（OSINT）」面板；
+       report.py 概览加「C 段 IP」列 + 「C 段视野（前 200）」小节
+[完成] tests/smoke.py 再扩充：mmh3 三个公开向量、iprecon 纯函数（segment_of/is_public_ip/
+       parse_domains/group_segments）、fofa（build_query/无 key 显式报错/黑 ico 阈值）、
+       osint 阶段四项开关全关时无产出、/csegs 路由与详情页「C 段」页签 —— SMOKE PASS
+[待办] P2-3 Linux 实机验证（本机为 Windows，仅保证 pathlib/shell=False/which 等跨平台不变量已就位）
+[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
+
+-----
+（收尾：以代码为准复核未被列入清单的注释/文档，修掉 3 处不一致）
+[完成] config/keys.yaml 注释与代码冲突：原文写 fofa 等厂商"先占位"，但 fofa 已被
+       scanner/fofa.py::credentials() 真实读取（osint 阶段 favicon 反查用），
+       已按代码更正注释（其余 shodan/quake/hunter/virustotal/securitytrails 确为占位）
+[完成] docs/security-notice.md 补 osint 的第三方披露说明：C 段反查把目标 IP 交给 api.webscan.cc、
+       favicon 反查把 mmh3 哈希交给 FOFA —— 属"向第三方披露目标信息"，此前文档未提
+[完成] 重新生成 logs/cli_smoke_report.md（陈旧产物仍写「疑似问题」且仍列 info/low 三条，
+       与当前"执行级跳过 info/low"的默认策略矛盾）：重跑后只剩 3 条 high、文案与列数均对齐
+[完成] 澄清历史轮次里的过期 [待办] 标记：第三/四轮写的"P1-4 / P3-1 待办"已于第五轮完成，
+       已就地标注「已完成 → 见下方「第五轮」」，避免与现状冲突
+
+-----
+本轮验证基线（可复现）：py -3 tests/smoke.py → SMOKE PASS
+  engine.load_all_meta() → 312/312 ok；GUI 10 栏（含 /csegs）、任务详情 8 页签均 200
+  第四轮补充：内置检查 5/12 项执行；POC 注册表全开时 级别门内 311 / 放开后 312
+  第五轮补充：阶段 8 个（含 osint）；mmh3 公开向量 3/3 命中；黑 ico 阈值 200；fofa 未配置时显式报错
+  收尾补充（CLI 端到端实跑，运行时证据）：
+    起靶场后 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
+      → 日志「内置检查 5/12 项；info/low 级检测已跳过（连请求都不发）」
+      → 结果 3 项全为 high；a02-no-https / a05-security-headers / a05-banner-disclosure 一条都没有
+    （复现靶场：py -3 -m http.server 8765 --bind 127.0.0.1 --directory smoke_root）

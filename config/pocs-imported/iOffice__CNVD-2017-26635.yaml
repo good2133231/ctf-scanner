@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-ioffice-cnvd-2017-26635
+info:
+  name: "iOffice CNVD-2017-26635"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, ioffice, ref-poc, sqlinjection]
+  description: "由参考项目脚本静态导入：iOffice/CNVD-2017-26635（类型 SQLINJECTION）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/iOffice/prg/set/wss/ioCtlSet.asmx"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "iOffice.net"
+          - "错误的请求"

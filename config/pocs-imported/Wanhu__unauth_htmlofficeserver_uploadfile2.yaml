@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-wanhu-unauth_htmlofficeserver_uploadfile2
+info:
+  name: "Wanhu unauth_htmlofficeserver_uploadfile2"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, wanhu, ref-poc, uploadfile]
+  description: "由参考项目脚本静态导入：Wanhu/unauth_htmlofficeserver_uploadfile2（类型 UPLOADFILE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/defaultroot/"
+      - "/defaultroot/OfficeServer"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "var whirRootPath = "

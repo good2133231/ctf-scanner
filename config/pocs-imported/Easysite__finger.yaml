@@ -1,0 +1,25 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-easysite-finger
+info:
+  name: "Easysite finger"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, easysite, ref-poc, rce]
+  description: "由参考项目脚本静态导入：Easysite/finger（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/eportal"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "easysite=\"easysiteHiddenDiv\""
+          - "generator\" content=\"easysite"
+          - "_desktopmodules_picturenews"
+          - "copyright 2009 by huilan"

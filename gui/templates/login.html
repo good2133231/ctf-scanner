@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>登录 - CTFScanner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-page">
+<div class="login-box">
+  <h1>CTF<span>Scanner</span></h1>
+  <p class="muted">仅用于授权测试与 CTF 场景</p>
+  <form method="post">
+    <input type="password" name="token" placeholder="访问口令" autofocus>
+    <button type="submit">登录</button>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  </form>
+</div>
+</body>
+</html>

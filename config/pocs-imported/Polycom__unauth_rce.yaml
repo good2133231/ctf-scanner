@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-polycom-unauth_rce
+info:
+  name: "Polycom unauth_rce"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, polycom, ref-poc, rce]
+  description: "由参考项目脚本静态导入：Polycom/unauth_rce（类型 RCE）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/newpc/utils/getMiscInfo"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "libs/app/xma/imgs/30.gif"
+          - "/headimg/favicon.ico"

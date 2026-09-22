@@ -1,0 +1,23 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-ioffice-unauth_sql_injection_zyy_attfile
+info:
+  name: "iOffice unauth_sql_injection_zyy_AttFile"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, ioffice, ref-poc, sqlinjection]
+  description: "由参考项目脚本静态导入：iOffice/unauth_sql_injection_zyy_AttFile（类型 SQLINJECTION）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/iOffice/prg/interface/zyy_AttFile.asmx"
+      - "/ioffice"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "iOffice.net"

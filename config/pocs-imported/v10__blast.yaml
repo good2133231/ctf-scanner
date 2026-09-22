@@ -1,0 +1,28 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-v10-blast
+info:
+  name: "v10 blast"
+  author: imported-from-myscan
+  severity: medium
+  tags: [imported, v10, ref-poc, blast]
+  description: "由参考项目脚本静态导入：v10/blast（类型 BLAST）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/BI"
+      - "/WebReport//finereport/"
+      - "/bi"
+      - "/fine-report"
+      - "/fr"
+      - "/webroot"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "/decision/file?path"
+          - "\"data\""

@@ -1,0 +1,24 @@
+# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）
+id: ref-phpmyadmin-finger
+info:
+  name: "phpMyAdmin finger"
+  author: imported-from-myscan
+  severity: high
+  tags: [imported, phpmyadmin, ref-poc, finger]
+  description: "由参考项目脚本静态导入：phpMyAdmin/finger（类型 FINGER）。"
+http:
+  - method: GET
+    path:
+      - "/"
+      - "/phpMyAdmin/"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        condition: or
+        words:
+          - "<h1>Welcome to  phpMyAdmin</h1>"
+          - "<title>phpMyAdmin"
+          - "PMA_VERSION"
