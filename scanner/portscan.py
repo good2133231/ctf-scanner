@@ -128,10 +128,14 @@ def nmap_scan(host, ip, ports, timeout=1, binary=None):
     if not bin_path:
         return None
     port_arg = ",".join(str(p) for p in ports)
+    # 两个超时都要封顶：全端口（65535）时按线性公式算出来的 host-timeout 会是 4 小时级、
+    # 进程超时会是 36 小时级 —— 那等于"卡住也不会结束"。封顶后最坏情况 30 分钟结束并回退内置实现。
+    host_timeout = min(1800, max(30, timeout * len(ports) // 4))
+    proc_timeout = min(3600, max(120, int(len(ports) * timeout * 2)))
     rc, out, _ = run_cmd([bin_path, "-sT", "-Pn", "-n", "--open",
-                          "--host-timeout", f"{max(30, timeout * len(ports) // 4)}s",
+                          "--host-timeout", f"{host_timeout}s",
                           "-p", port_arg, "-oG", "-", ip],
-                         timeout=max(120, len(ports) * timeout * 2))
+                         timeout=proc_timeout)
     if rc != 0 or not out:
         return None
     results = []

@@ -77,6 +77,13 @@ class PortscanStage(Stage):
         ctx.logger.info(f"[portscan] {scope}扫描：{engine}，"
                         f"{len(hosts)} 个主机 x {len(ports)} 端口"
                         + ("（自动排除本任务已扫过的端口）" if exclude_scanned else ""))
+        if full:
+            # 给个量级预期：远端主机上"关闭的端口"要等满 timeout 才判定，所以最坏耗时
+            # ≈ 端口数 / 并发 × 单端口超时。实测本机回环 65535 端口 @workers=256/timeout=0.3 约 82 秒；
+            # 远端目标按默认 workers=64/timeout=1.0 会慢得多，想让全端口"能接受"就调大并发、调小超时。
+            est = len(ports) / max(1, workers) * max(0.05, timeout) * len(hosts)
+            ctx.logger.info(f"[portscan] 全端口耗时量级：最坏约 {est / 60:.0f} 分钟"
+                            f"（端口数/并发 × 单端口超时；调大 workers、调小 timeout 可显著缩短）")
 
         def _one(host):
             if ctx.stopped():

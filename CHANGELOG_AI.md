@@ -3,6 +3,55 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十五轮（补）：真实数据验证后的三个修复（FOFA 裸 IP / nmap 超时封顶 / 目录扫描阶段级测试）
+
+第十五轮提交后按"验证优先"补做了三件**真跑**，其中一件直接暴露了 Bug：
+
+### 1）FOFA 真实查询跑通，并暴露一个真 Bug：**裸 IP 被当成域名入库**
+
+- **标题反查**（真实 key，`size=3`）：`title="维保中心"` → `total=15`、3 条资产字段解析全对
+  （host/domain/ip/port/title 一一对应），`is_common_title(15)` → False（15 < 200）→ 正常拓展。
+- **证书反查**（真实 key，`size=3`）：`cert="example.com"` → **`total = 2 164 696`** →
+  `is_common_cert` → True → 放弃拓展。**这条实测数据正好证明了阈值设计的意义**：
+  没有它就会按一张公共 CA 证书往资产库灌两百万条无关域名。默认 200 的阈值由此得到首个真实校准样本。
+- **Bug（真跑才发现的）**：FOFA 返回的行里**大量 `domain` 字段为空**，只有 `host`，例如
+  `{"host": "https://116.63.154.0", "domain": "", ...}` / `{"host": "47.117.144.116:1000", "domain": ""}`。
+  原实现是 `a["domain"] or urlparse(host).hostname`，于是**把裸 IP 当成域名写进 `subdomains` 表** ——
+  「子域名资产」会混进一堆 IP，后续 dirscan / vulnscan 还会把它们当域名处理。
+  修复：新增 `stages/osint.py::_domain_of()` 统一收口（空值 / 含空格斜杠 / `ipaddress.ip_address()`
+  能解析的一律返回空串），favicon、证书、标题三条链路全部改用它。`tests/smoke.py` `[5e](4b)` 钉住该行为。
+
+### 2）全端口扫描真实耗时实测 + nmap 超时封顶
+
+- 实测（本机回环，`workers=256` / `timeout=0.3`）：**65535 端口 82 秒**，发现 33 个开放端口；
+  紧接着重跑一次（预置全部端口为"已扫"）**2 秒结束、0 条新增** —— 证明 `exclude_scanned` 真的生效；
+  跑完 `load_settings()` 里 `portscan.enabled=false` / `mode=top` 原样未变（**任务选项没有污染全局策略**）。
+- 由此修掉一处隐患：`nmap_scan()` 的两个超时原本按端口数线性放大，全端口时会算出
+  **host-timeout ≈ 4.5 小时、进程超时 ≈ 36 小时**（等于卡住也不会结束）。现封顶为
+  `host-timeout ≤ 1800s`、进程超时 `≤ 3600s`，超时后回退内置实现。
+- `stages/portscan.py` 在全端口模式下新增一行**耗时量级预估日志**（`端口数/并发 × 单端口超时`），
+  避免用户对着"没有进度"的全端口扫描干等；并注明调大 `workers`、调小 `timeout` 可显著缩短。
+
+### 3）目录扫描的**阶段级**测试（不再只测纯函数）
+
+`tests/smoke.py` `[5e](7)`：构造"2 条同标题同长度的别名站 + 1 条不同的站点"，
+用**记录型 logger** 真跑一次 `dirscan` 阶段，断言日志是 `内置扫描：2 站点 x N 字典`
+（即去重真的接进了阶段，而不是只让纯函数 `_dedup_sites` 正确）。
+
+### 4）GUI 真实 HTTP 复验（不是 test client）
+
+临时起一个实例（端口 5099，**不改配置**）登录后逐页拉取：`/fullports`（含"发起全端口扫描"与
+`portscan_full` 文案）、`/dirs`（含「大小」「重复长度」）、`/extdomains`、`/settings`
+（`fofa_title_enabled` / `dirscan_big_dict` / `dirscan_max_paths` / `portscan_mode` /
+`portscan_exclude_scanned` 均在）、`/subdomains`、`/tasks` —— **全部 200 且关键标记齐全**，
+侧栏含 `/fullports`。顺带补上 `extdomains.html` 说明文案里漏写的 `osint:fofa-title`。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py     # SMOKE PASS（[5e] 现为 8 组断言）
+```
+
 ## 2026-09-22 —— 第十五轮：用户提的 5 项（全端口扫描 / FOFA 标题反查 / 目录扫描重做 / JS 敏感字符 / dirmap 接入）
 
 > 本轮由"新负责人接手"后实施。五项里 **R5（dirmap）是真 Bug 修复**、其余四项是能力补齐。

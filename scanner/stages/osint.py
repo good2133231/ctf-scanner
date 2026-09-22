@@ -210,7 +210,7 @@ class OsintStage(Stage):
             queried += 1
             ctx.logger.info(f"[osint] FOFA 反查 mmh3 {icon_hash}（{url}）→ {len(assets)} 条 / 共 {total} 条")
             for a in assets:
-                domain = a.get("domain") or urlparse(a.get("host") or "").hostname or ""
+                domain = _domain_of(a)
                 found.append((domain, "osint:fofa"))
         ctx.logger.info(f"[osint] FOFA 拓展：查询 {queried} 个 favicon，跳过黑 ico {black} 个")
         return found
@@ -285,7 +285,7 @@ class OsintStage(Stage):
             queried += 1
             ctx.logger.info(f'[osint] 证书反查 cert="{root}" → {len(assets)} 条 / 共 {total} 条')
             for a in assets:
-                domain = a.get("domain") or urlparse(a.get("host") or "").hostname or ""
+                domain = _domain_of(a)
                 found.append((domain, "osint:fofa-cert"))
         ctx.logger.info(f"[osint] 证书拓展：查询 {queried} 个注册域，跳过通用证书 {common} 个")
         return found
@@ -341,10 +341,33 @@ class OsintStage(Stage):
             queried += 1
             ctx.logger.info(f'[osint] 标题反查 title="{title}" → {len(assets)} 条 / 共 {total} 条')
             for a in assets:
-                domain = a.get("domain") or urlparse(a.get("host") or "").hostname or ""
+                domain = _domain_of(a)
                 found.append((domain, "osint:fofa-title"))
         ctx.logger.info(f"[osint] 标题拓展：查询 {queried} 个标题，跳过公共标题 {common} 个")
         return found
+
+
+
+def _domain_of(asset):
+    """从 FOFA 资产行里取**域名**；取不到、或是裸 IP 就返回空串。
+
+    实测（2026-09-22 真实查询）FOFA 的结果里**大量行的 `domain` 是空的**，
+    只有 `host`（如 `https://116.63.154.0` / `47.117.144.116:1000`）。原实现直接
+    `a["domain"] or hostname`，于是把**裸 IP 当成域名**写进了 `subdomains` 表 ——
+    那会让「子域名资产」里混进一堆 IP，也会被后续 dirscan/vulnscan 当域名去处理。
+    这里统一收口：只有真的像域名（含点、非 IP）才返回。
+    """
+    raw = str(asset.get("domain") or "").strip().lower().strip(".")
+    if not raw:
+        raw = (urlparse(str(asset.get("host") or "")).hostname or "").strip(".")
+    if not raw or " " in raw or "/" in raw:
+        return ""
+    try:
+        ipaddress.ip_address(raw)
+        return ""          # 裸 IP：不是域名资产（IP 类资产由 portscan / probe 负责）
+    except ValueError:
+        pass
+    return raw if "." in raw else ""
 
 
 def _tally(items):

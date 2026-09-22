@@ -151,9 +151,10 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             # source_label + 拓展域名重叠隐藏与 ?all=1 + 站点重叠 1↔2 条 + 黑名单/批量子域
                             # 两个 POST 接口(桩函数去重保序/阶段与 targets) + 策略页 cert/blacklist 字段与
                             # `panel collapsible`、无绝对路径、logs/smoke- 相对路径 + POST 映射
-                            # 第十五轮新增 `[5e]`：端口区间上限 vs 全端口放开 + 标题反查(语句/阈值/模板标题) +
+                            # 第十五轮新增 `[5e]`（8 组）：端口区间上限 vs 全端口放开 + 标题反查(语句/阈值/模板标题) +
                             # 目录(dirmap 行解析/重复长度文件不读/别名站去重/大小列/折叠 1↔3) +
-                            # JS 敏感字符(AKID/JWT/PEM 命中 + 占位降噪) + /fullports 页与发起接口(桩 run_task)
+                            # JS 敏感字符(AKID/JWT/PEM 命中 + 占位降噪) + /fullports 页与发起接口(桩 run_task) +
+                            # FOFA 裸 IP 收口(_domain_of) + dirscan 阶段级"只扫不重复站点"(记录型 logger)
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
@@ -220,12 +221,21 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - **`dirscan` 默认改为关闭**（第十五轮，用户要求）：它是全流水线里请求量最大的一段
   （大字典 15333 条 × 站点数）。打开后仍有两层节流：只扫**不重复站点**（同任务内标题+长度相同的
   别名站跳过）、单站点最多 `dirscan.max_paths`（默认 400）条。
-- **全端口扫描（1-65535）耗时以分钟计**，且只测过单机小目标；GUI「全端口扫描」页发起的是
+- **全端口扫描（1-65535）实测**（2026-09-22，本机回环，`workers=256`/`timeout=0.3`）：**82 秒**；
+  远端目标按默认 `workers=64`/`timeout=1.0` 会慢一个量级（关闭端口要等满超时），
+  阶段日志会打印耗时量级预估，调大 `workers`、调小 `timeout` 可显著缩短。
+  `nmap_scan()` 的两个超时已封顶（host ≤1800s / 进程 ≤3600s），否则全端口会算出 4.5~36 小时。
+  GUI「全端口扫描」页发起的是
   **单次任务**（任务选项 `portscan_full`），不改全局策略 —— 全局 `portscan.mode=full` 会让每个任务
   都变慢，谨慎使用。`parse_ports()` 默认 `max_span=4096` 就是防手滑的。
-- **FOFA 标题反查 / 证书反查都还没在真实目标上跑过**（只做了纯函数与门控断言）：
-  首次实跑请看 `logs/task_*/task.log` 的 `[osint]` 行，并用真实命中数校准
-  `title_threshold` / `cert_threshold`（默认都是 200，属保守估计值）。
+- **FOFA 三种反查已于 2026-09-22 真实跑过**（key 已配）：
+  `title="维保中心"` → 15 条（正常拓展）；`cert="example.com"` → **2 164 696 条** →
+  被 `is_common_cert` 判为通用证书而放弃拓展（**这条真实数据就是阈值存在的意义**：
+  没有它就会往资产库灌两百万条）。`title_threshold` / `cert_threshold` 默认 200 由此得到首个校准样本，
+  仍建议按自己的目标继续观察。
+- **FOFA 结果里大量行 `domain` 为空、只有 `host`（且可能是裸 IP）** —— 一律经
+  `stages/osint.py::_domain_of()` 收口：空值 / 裸 IP / 含空格斜杠都返回空串，
+  **裸 IP 绝不写进 `subdomains`**（IP 类资产归 portscan / probe）。新增 FOFA 类能力时请复用它。
 - 目录结果的「重复长度」折叠**只作用于当前页**（分页条的「共 N 条」是未折叠总数）；
   任务详情页签则是一次性折叠（无分页）。
 - **删除不是不可逆的了**：`db.delete_task()` 默认先调用 `backup_task()`，把该任务行与全部资产

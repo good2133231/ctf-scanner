@@ -602,6 +602,15 @@ def main():
     assert "显示全部" in dirs_html
     assert c.get("/dirs?all=1").get_data(as_text=True).count("777") == 3
 
+    # (4b) FOFA 资产行的域名收口：真实查询里大量行 `domain` 为空、只有 IP 形式的 host，
+    #      裸 IP 绝不能当域名写进 subdomains 表（实测数据见 osint.py::_domain_of 注释）
+    from scanner.stages.osint import _domain_of
+    assert _domain_of({"domain": "www.BeimingCloud.com", "host": "https://x"}) == "www.beimingcloud.com"
+    assert _domain_of({"domain": "", "host": "https://116.63.154.0"}) == "", "裸 IP 不是域名资产"
+    assert _domain_of({"domain": "", "host": "47.117.144.116:1000"}) == ""
+    assert _domain_of({"domain": "", "host": "https://www.beimingcloud.com"}) == "www.beimingcloud.com"
+    assert _domain_of({"domain": "", "host": ""}) == "" and _domain_of({}) == ""
+
     # (5) JS 敏感字符：AKID / JWT / 私钥 等新规则要命中；占位值仍要被降噪掉
     hits = jm._find_secrets(
         'var a="AKIDa1b2c3d4e5f6a7b8"; var b="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefgh";'
@@ -610,6 +619,37 @@ def main():
     types = {h["type"] for h in hits}
     assert {"tencent-access-key", "jwt", "private-key"} <= types, types
     assert not any("your_api_key" in h["value"] for h in hits), "占位值应被降噪"
+
+    # (7) 目录扫描阶段级行为：**只对不重复站点扫描**（同任务内标题+长度相同的别名站跳过）。
+    #     用真实跑一次 dirscan 来断言，而不是只测 _dedup_sites 这个纯函数 —— 纯函数对了但没接进
+    #     阶段（例如忘了用返回值）是最容易漏的错。日志用一个记录型 logger 抓。
+    class _Rec:
+        def __init__(self):
+            self.lines = []
+
+        def _add(self, msg, *a):
+            self.lines.append(str(msg))
+
+        info = warning = debug = _add
+        error = exception = _add
+
+    rec = _Rec()
+    ds_settings = copy.deepcopy(settings)
+    ds_settings["dirscan"] = {"enabled": True, "big_dict": False, "max_paths": 3}
+    ds_settings["tools"]["dirmap"]["script"] = "tools/does-not-exist.py"   # 强制走内置（离线、不发外部请求）
+    site_a = {"url": targets, "host": "127.0.0.1", "title": "SAME", "length": 123}
+    ds_tid = db.create_task("smoke-dirscan", targets, ["dirscan"], {"offline": True})
+    ds_wd = Path(_TMPDIR) / f"dirscan_{ds_tid}"
+    ds_wd.mkdir(parents=True, exist_ok=True)
+    ds_ctx = StageContext(ds_tid, "smoke-dirscan", parse_lines([targets]), ["dirscan"],
+                          {"offline": True}, ds_settings, ds_wd, rec)
+    ds_ctx.results["sites"] = [dict(site_a), dict(site_a),                      # 两条重复（别名站）
+                               {"url": targets, "host": "127.0.0.1",
+                                "title": "OTHER", "length": 999}]               # 一条不同
+    PipelineRunner(ds_ctx).run()
+    scan_line = [l for l in rec.lines if "内置扫描：" in l]
+    assert scan_line and "2 站点" in scan_line[0], scan_line
+    assert "3 站点" not in (scan_line[0] if scan_line else ""), scan_line
 
     # (6) 全端口扫描：新侧栏页 + 发起接口（run_task 用桩，真跑会去连 6.5 万个端口）
     fp_html = c.get("/fullports").get_data(as_text=True)
