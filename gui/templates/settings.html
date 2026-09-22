@@ -138,6 +138,14 @@
       {{ 'checked' if s.portscan.exclude_scanned }}> 跳过本任务已扫过的端口（全端口扫描时尤其省时间）</label>
     <p class="muted small">只想对个别 IP 补一次全端口，不必改这里的全局开关：去「全端口扫描」页勾选主机
       → 点「发起全端口扫描」，它新建的任务会用任务级选项触发，跑完不影响全局策略。</p>
+    <label class="chk"><input type="checkbox" name="screenshot_enabled" value="1"
+      {{ 'checked' if s.screenshot.enabled }}> <b>站点截图</b>（默认关；调用本机 Edge/Chrome
+      无头模式，把站点首页截下来显示在站点页 URL 旁边）</label>
+    <label>截图站点上限 <input name="screenshot_max_sites" value="{{ s.screenshot.max_sites }}"></label>
+    <label>截图视口（宽x高） <input name="screenshot_window" value="{{ s.screenshot.window }}"></label>
+    <label>单站点截图超时（秒） <input name="screenshot_timeout" value="{{ s.screenshot.timeout }}"></label>
+    <label>浏览器路径（留空＝自动探测 Edge/Chrome） <input name="screenshot_browser"
+      value="{{ s.screenshot.browser }}" placeholder="留空自动探测（PATH → 注册表 → 标准安装位置）"></label>
     <label class="chk"><input type="checkbox" name="dirscan_enabled" value="1"
       {{ 'checked' if s.dirscan.enabled }}> <b>目录/路径发现</b>（默认关 —— 请求量最大、噪声最多；
       取消勾选＝整阶段跳过）</label>

@@ -56,8 +56,13 @@
       <tr class="{{ 'muted' if s.hidden_dup else '' }}">
         <td>{{ s.id }}</td>
         <td><a href="{{ url_for('task_detail', task_id=s.task_id) }}">#{{ s.task_id }}</a></td>
-        <td><a class="url-link" href="{{ s.url }}" target="_blank"
-               rel="noopener noreferrer">{{ s.url }}</a></td>
+        <td class="shot-cell"><a class="url-link" href="{{ s.url }}" target="_blank"
+               rel="noopener noreferrer">{{ s.url }}</a>
+          {% if s.shot %}<a href="{{ url_for('shot_file', task_id=s.task_id,
+               name=s.shot.rsplit('/', 1)[-1]) }}" target="_blank" rel="noopener noreferrer">
+            <img class="shot-thumb" loading="lazy" alt="站点截图"
+                 src="{{ url_for('shot_file', task_id=s.task_id, name=s.shot.rsplit('/', 1)[-1]) }}"></a>
+          {% endif %}</td>
         <td>{{ s.status }}</td>
         <td>{{ s.title or '-' }}</td>
         <td>{% for t in (s.tech or '').split(',') if t.strip() %}

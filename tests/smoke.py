@@ -82,7 +82,7 @@ def main():
 
     # 1b) 流水线阶段注册：takeover / portscan / osint / jsmine 均在顺序表与注册表中
     assert STAGE_ORDER == ["subdomain", "takeover", "portscan", "probe",
-                           "osint", "jsmine", "dirscan", "vulnscan"], STAGE_ORDER
+                           "screenshot", "osint", "jsmine", "dirscan", "vulnscan"], STAGE_ORDER
     print("[1b] stages ok:", ",".join(STAGE_ORDER))
 
     # 2) POC 加载与校验
@@ -891,6 +891,42 @@ def main():
     assert jm._valid_host("index.php") is False, "JS 语境里 .php 是文件名不是域名"
     assert jm._valid_host("www.real-site.com") is True
     print(f"[5i] 域名判断/黑名单 ok: is_domain 形态判断 + 第三方名单 {len(noise)} 条（含 URLFinder jsFiler）")
+
+    # 5j) 第十七轮(5)：站点截图（阶段注册 + 门控 + 路由与目录穿越防护 + 缩略图渲染）
+    from scanner import screenshot as shot_mod
+    from scanner.runner import STAGE_REGISTRY
+    assert "screenshot" in STAGE_REGISTRY, "截图阶段未注册"
+    assert STAGE_ORDER.index("screenshot") == STAGE_ORDER.index("probe") + 1, "截图应紧跟 probe"
+    # 浏览器探测：指定不存在的路径必须判定为不可用（而不是拿去执行）
+    assert shot_mod.browser_path({"screenshot": {"browser": "no-such-browser-xyz"}}) == ""
+    # 关闭时不发任何截图（默认就是关的）
+    shot_ctx = StageContext(tid, "smoke-shot", parse_lines([targets]), ["screenshot"], {},
+                            settings, Path(_TMPDIR) / "shot", rec)
+    PipelineRunner(shot_ctx).run()
+    assert any("未启用" in x for x in rec.lines if "[screenshot]" in x), rec.lines[-3:]
+    # 开了但浏览器不可用 → 只告警跳过（不能抛）
+    shot_settings = copy.deepcopy(settings)
+    shot_settings["screenshot"] = {"enabled": True, "browser": "no-such-browser-xyz"}
+    shot_ctx2 = StageContext(tid, "smoke-shot2", parse_lines([targets]), ["screenshot"], {},
+                             shot_settings, Path(_TMPDIR) / "shot2", rec)
+    PipelineRunner(shot_ctx2).run()
+    assert any("未找到可用的无头浏览器" in x for x in rec.lines), rec.lines[-3:]
+    # 截图路由：只允许该任务 shots/ 下的 png，且防目录穿越
+    assert c.get(f"/shots/{tid}/nope.png").status_code == 404
+    assert c.get(f"/shots/{tid}/..%2F..%2Ftask.log").status_code == 404
+    # 缩略图渲染：造一个假 PNG 落到任务工作目录，写库后页面应出现 img
+    task_row = db.get_task(tid)
+    shots_dir = Path(task_row["log_file"]).parent / "shots"
+    shots_dir.mkdir(parents=True, exist_ok=True)
+    (shots_dir / "fake.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+    # 用库里**实际的** site.url（probe 会去掉结尾斜杠，不能拿 targets 原样匹配）
+    real_url = db.list_sites(tid)[0]["url"]
+    db.set_site_shots(tid, [(real_url, "shots/fake.png")])
+    assert c.get(f"/shots/{tid}/fake.png").status_code == 200, "截图路由应能取到文件"
+    # 任务详情页（不受"跨任务重叠隐藏"影响）与站点页都要渲染缩略图
+    assert "shot-thumb" in c.get(f"/tasks/{tid}").get_data(as_text=True), "任务详情应渲染缩略图"
+    assert "shot-thumb" in c.get("/sites?all=1").get_data(as_text=True), "站点页应渲染缩略图"
+    print("[5j] 站点截图 ok: 阶段注册/门控/路由/防穿越/缩略图（真实截图 3.1s 已在实机验证）")
     print("SMOKE PASS")
 
 

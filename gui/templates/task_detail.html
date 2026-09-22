@@ -70,8 +70,13 @@
       <thead><tr><th>URL</th><th>状态</th><th>标题</th><th>技术栈</th><th>Server</th></tr></thead>
       <tbody>
       {% for s in sites %}
-        <tr><td class="mono"><a class="url-link" href="{{ s.url }}" target="_blank"
-              rel="noopener noreferrer">{{ s.url }}</a></td><td>{{ s.status }}</td>
+        <tr><td class="mono shot-cell"><a class="url-link" href="{{ s.url }}" target="_blank"
+              rel="noopener noreferrer">{{ s.url }}</a>
+          {% if s.shot %}<a href="{{ url_for('shot_file', task_id=task.id,
+               name=s.shot.rsplit('/', 1)[-1]) }}" target="_blank" rel="noopener noreferrer">
+            <img class="shot-thumb" loading="lazy" alt="站点截图"
+                 src="{{ url_for('shot_file', task_id=task.id, name=s.shot.rsplit('/', 1)[-1]) }}"></a>
+          {% endif %}</td><td>{{ s.status }}</td>
           <td>{{ s.title or '-' }}</td>
           <td>{% for x in (s.tech or '').split(',') if x.strip() %}
               <span class="tech-tag">{{ x.strip() }}</span>{% else %}<span class="muted">-</span>{% endfor %}</td>

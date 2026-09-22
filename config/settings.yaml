@@ -69,6 +69,13 @@ dirscan:
   max_paths: 400
 vulnscan:
   enabled: true
+screenshot:
+  # 站点截图（默认关；打开后会调用本机 Edge/Chrome 的无头模式）
+  enabled: false
+  max_sites: 20
+  window: 1280x900
+  timeout: 30
+  browser: ''
 iprecon:
   enabled: false
   api: https://api.webscan.cc/?action=query&ip={ip}

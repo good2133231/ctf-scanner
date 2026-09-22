@@ -127,6 +127,16 @@ DEFAULTS = {
         # （min_severity / skip_severities / poc_engine / disabled_*）。
         "enabled": True,
     },
+    "screenshot": {
+        # 站点截图（可选，**默认关闭**）：调用本机已装的 Edge/Chrome 无头模式截图，
+        # 产物 logs/task_*/shots/*.png，GUI 站点页显示缩略图。不引入任何新依赖。
+        # `browser` 留空＝自动探测（PATH → 标准安装位置）；探测不到可在这里填绝对路径。
+        "enabled": False,
+        "max_sites": 20,        # 每任务最多截多少个站点
+        "window": "1280x900",   # 视口尺寸（宽x高）
+        "timeout": 30,          # 单站点截图超时（秒）
+        "browser": "",
+    },
     "iprecon": {
         # C 段反查（P1-4）：IP → 域名反查 + /24 C 段归纳。
         # **默认关闭**：走第三方公共接口（可用性无保障），且反查结果属于"发散"资产，

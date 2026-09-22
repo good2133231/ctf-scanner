@@ -510,3 +510,15 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [待办] 9、站点截图功能（你问"可以加吗"）：可以，但要用无头浏览器（Edge/Chrome headless）。
        计划：新增可选 screenshot 阶段（默认关）→ 截图存 logs/task_*/shots/ → sites.shot 列 →
        站点页显示缩略图。**待确认浏览器可用后实现**（本机 Edge 一般自带）
+
+-----
+（第十七轮续3：站点截图功能）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+[完成] 9、站点截图：可以，已实现。新增 screenshot 阶段（默认关，阶段数 8→9），调用本机
+       Edge/Chrome 无头模式截图（--headless=new --screenshot），**零新依赖**；
+       浏览器探测：配置 → PATH → Windows 注册表 App Paths → 环境变量+相对子路径
+       （代码里不含任何绝对路径，实测注册表命中 msedge.exe）；临时 user-data-dir 隔离；
+       产物 logs/task_*/shots/<md5>.png → sites.shot；GUI 新增 /shots/<task_id>/<name>
+       （防目录穿越）+ 站点页/任务详情 URL 右侧缩略图（点击看大图）；
+       策略页「资产面拓展」有开关与参数（max_sites=20 / window=1280x900 / timeout=30 / browser）
+       实测：单站点 3.1 秒出 11 KB 合法 PNG；端到端 probe+screenshot 跑通；smoke 新增 [5j]
+       顺带修：/shots 路由里对 sqlite3.Row 误用 .get() 导致 500（同一个坑第二次踩）

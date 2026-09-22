@@ -3,6 +3,54 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十七轮（续 3）：站点截图功能（第 8 项落地）
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户问"可以再添加一个截图功能吗？附带截图在旁边" —— **可以，已实现并实测通过**。
+
+### 实现方式（零新依赖）
+
+- `scanner/screenshot.py`：调用**本机已装的 Edge / Chrome 的无头模式**截图
+  （`--headless=new --disable-gpu --screenshot=<out> --window-size=WxH <url>`），
+  **不引入 playwright / selenium**；
+- 浏览器位置怎么找（遵守 §0「代码里不写本机绝对路径」）：
+  ① 配置 `screenshot.browser`（用户可填绝对路径）→ ② `shutil.which()` 常见命令名 →
+  ③ **Windows 注册表 App Paths**（系统级登记位置，代码里只有注册表键名）→
+  ④ 环境变量 + 相对子路径（`%PROGRAMFILES%\Microsoft\Edge\…`）。
+  实测本机探测到 `msedge.exe`（注册表命中），**代码中不含任何盘符/用户名**；
+- **不碰用户浏览器配置**：每次截图用临时 `--user-data-dir`，跑完即删；
+- 失败只记一行日志（截图是锦上添花，不该拖垮流水线）。
+
+### 接入方式
+
+- 新阶段 `screenshot`（**默认关闭**）：位置在 `probe` 之后、`osint` 之前
+  （必须先有存活站点）；阶段数 **8 → 9**；
+- 产物 `logs/task_<id>_<ts>/shots/<md5>.png`，路径写入新列 `sites.shot`
+  （存**相对任务工作目录**的 `shots/xxx.png`，不含绝对路径）；
+- GUI：新增路由 `/shots/<task_id>/<name>`（**只允许该任务 shots/ 下的 png**，
+  文件名含分隔符或解析后越界一律 404 —— 防目录穿越）；站点页与任务详情「站点」页签
+  在 URL 右侧显示**缩略图**（`loading="lazy"`，点击看大图）；
+- 策略页「资产面拓展」新增开关与参数：`screenshot.enabled` / `max_sites`（默认 20）/
+  `window`（默认 1280x900）/ `timeout`（默认 30s）/ `browser`（留空自动探测）。
+
+### 实测
+
+- 单站点截图（本机回环靶场）：**3.1 秒**，产出 11 036 字节合法 PNG（魔数校验通过）；
+- 端到端（`probe` + `screenshot` 两个阶段）：`sites.shot = shots/ef7615a0e6ba.png`，
+  文件确实落在任务工作目录、大小 11 KB。
+
+### 顺带修掉的一个真 Bug
+
+`/shots` 路由最初写成 `task.get("log_file")`，而 `db.get_task()` 返回的是
+**`sqlite3.Row`（没有 `.get()`）** → 500。这个坑在 osint 阶段踩过一次、这次又踩了，
+已改为下标取值并加注释；`tests/smoke.py` `[5j]` 钉住路由行为。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py     # SMOKE PASS（阶段注册 9 个；新增 [5j] 截图门控/路由/防穿越/缩略图）
+```
+
 ## 2026-09-22 —— 第十七轮（续 2）：用户提的 8 项 GUI/资产改动（除截图外全部落地）
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

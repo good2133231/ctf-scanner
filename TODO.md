@@ -487,6 +487,19 @@
 - [ ] **站点截图功能**（用户问"可以加吗"）：需要无头浏览器（Edge/Chrome headless）——
   待确认浏览器可用后作为独立批次实现（计划：新增可选 `screenshot` 阶段 + `sites.shot` 列 + 站点页缩略图）。
 
+## 第十七轮（续 3）站点截图（2026-09-22）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+- [x] 新增 `screenshot` 阶段（默认关，阶段数 8 → 9）：调用本机 Edge/Chrome 无头模式截图，
+      **零新依赖**；浏览器探测走「配置 → PATH → Windows 注册表 App Paths → 环境变量+相对子路径」，
+      代码里不含绝对路径；临时 user-data-dir 隔离，不碰用户浏览器配置；
+- [x] 产物 `logs/task_*/shots/<md5>.png` → `sites.shot`（相对任务工作目录）；
+      GUI 新增 `/shots/<task_id>/<name>`（防目录穿越）+ 站点页/任务详情缩略图（点击看大图）；
+      策略页新增开关与参数（max_sites / window / timeout / browser）；
+- [x] 实测：单站点 3.1 秒出 11 KB 合法 PNG；端到端 `probe+screenshot` 跑通；
+- [x] 顺带修 `/shots` 路由里对 `sqlite3.Row` 误用 `.get()` 的 500（同一个坑第二次踩，已在注释里点名）。
+
 ## 兼容性红线（所有新增代码都适用）
 
 1. 路径用 `pathlib`；命令用列表参数 + `shell=False`；工具名不假设平台。

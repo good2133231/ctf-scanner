@@ -72,7 +72,7 @@ ctf-scanner/
 │   │                      #   任务详情＝横向 8 个页签（潜在漏洞(默认)/站点/子域名/端口服务/C 段/目录/目标与配置/运行日志）+ 页签内筛选框
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
-│   ├── stages/            # base + subdomain/takeover/portscan/probe/osint/jsmine/dirscan/vulnscan
+│   ├── stages/            # base + subdomain/takeover/portscan/probe/**screenshot**/osint/jsmine/dirscan/vulnscan（9 个）
 │   ├── pocs/engine.py     # YAML POC 引擎（nuclei 兼容子集）
 │   ├── pocs/pocs/*.yaml   # 内置 7 个示例 POC
 │   ├── owasp/checks.py    # 12 项启发式检查（装饰器 @check 注册进 CHECKS）+ 分级/分类门控
@@ -121,8 +121,9 @@ ctf-scanner/
 其中 `scanner/evasion.py` 是**所有 HTTP 出口的统一伪装层**（由 `utils.http_request` 调用），
 `scanner/wildcard.py` 与 `scanner/passive.py` 只在 subdomain 阶段生效。
 
-- 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **8 个**：
-  `subdomain → takeover → portscan → probe → osint → jsmine → dirscan → vulnscan`；
+- 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **9 个**：
+  `subdomain → takeover → portscan → probe → **screenshot** → osint → jsmine → dirscan → vulnscan`；
+  `screenshot` 默认关、需要本机 Edge/Chrome，浏览器路径探测见 `scanner/screenshot.py`；
   新增阶段在此登记即可被 CLI `-p` 与 GUI 识别）。
 - 阶段开关有两层：**任务级**（建任务时勾选 stages / CLI `-p`）与**策略级**
   （`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled`，阶段内部自查后跳过）。

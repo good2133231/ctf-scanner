@@ -166,3 +166,8 @@ details pre { margin:8px 0; }
             border:1px solid var(--line); border-radius:4px; color:var(--muted);
             background:var(--soft); }
 .url-link { word-break:break-all; }
+
+/* ---------- 站点截图缩略图 ---------- */
+.shot-thumb { max-width:132px; max-height:84px; border:1px solid var(--line);
+              border-radius:5px; vertical-align:middle; margin-left:6px; display:inline-block; }
+.shot-cell { white-space:nowrap; }

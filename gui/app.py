@@ -13,7 +13,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import (Flask, Response, abort, jsonify, redirect,
+from flask import (Flask, Response, abort, jsonify, redirect, send_file,
                    render_template, request, session, url_for)
 
 import sys
@@ -454,6 +454,26 @@ def create_app():
             rows = [r for r in rows if not r.get("hidden_dup")]
         return rows, hidden
 
+    @app.route("/shots/<int:task_id>/<path:name>")
+    @login_required
+    def shot_file(task_id, name):
+        """返回任务截图（PNG）。
+
+        安全要点：只允许读**该任务工作目录下 `shots/` 里**的文件 ——
+        文件名里出现路径分隔符、或解析后不在 shots 目录内，一律 404（防目录穿越）。
+        """
+        task = db.get_task(task_id)
+        if not task:
+            abort(404)
+        if "/" in name or "\\" in name or not name.lower().endswith(".png"):
+            abort(404)
+        # 注意：db.get_task 返回 sqlite3.Row，**没有 .get()**，必须下标取值
+        base = Path(task["log_file"] or "").parent.resolve()
+        target = (base / "shots" / name).resolve()
+        if base not in target.parents or not target.is_file():
+            abort(404)
+        return send_file(str(target), mimetype="image/png")
+
     @app.route("/ips")
     @login_required
     def ips():
@@ -740,6 +760,12 @@ def create_app():
                                 "tech_aware": f.get("dirscan_tech_aware") == "1",
                                 "max_paths": int(f.get("dirscan_max_paths", 400) or 400)},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
+                    # 站点截图（可选，默认关）：无头 Edge/Chrome
+                    "screenshot": {"enabled": f.get("screenshot_enabled") == "1",
+                                   "max_sites": int(f.get("screenshot_max_sites", 20) or 20),
+                                   "window": (f.get("screenshot_window") or "1280x900").strip(),
+                                   "timeout": int(f.get("screenshot_timeout", 30) or 30),
+                                   "browser": (f.get("screenshot_browser") or "").strip()},
                     "portscan": {"enabled": f.get("portscan_enabled") == "1",
                                  "max_hosts": int(f.get("portscan_max_hosts", 100) or 100),
                                  "ports": f.get("portscan_ports", ""),

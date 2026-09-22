@@ -108,7 +108,9 @@ _COLUMN_PATCHES = {
                    "cdn": "TEXT DEFAULT ''",
                    # 解析失败/未解析的原因码（nxdomain / no-a / timeout / over-limit…）
                    "ip_note": "TEXT DEFAULT ''"},
-    "sites": {"favicon": "TEXT DEFAULT ''"},
+    "sites": {"favicon": "TEXT DEFAULT ''",
+              # 站点截图的**相对项目根**路径（logs/task_x/shots/xxx.png）
+              "shot": "TEXT DEFAULT ''"},
 }
 
 
@@ -250,6 +252,14 @@ def set_subdomain_cnames(task_id, mapping):
     if not rows:
         return
     _exec("UPDATE subdomains SET cname=? WHERE task_id=? AND domain=?", rows, many=True)
+
+
+def set_site_shots(task_id, pairs):
+    """写入站点截图路径：`pairs` 是 `[(url, rel_path), ...]`。"""
+    rows = [(rel or "", task_id, url) for url, rel in (pairs or []) if url]
+    if not rows:
+        return
+    _exec("UPDATE sites SET shot=? WHERE task_id=? AND url=?", rows, many=True)
 
 
 def set_subdomain_net(task_id, mapping):

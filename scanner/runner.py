@@ -22,15 +22,18 @@ from .stages.subdomain import SubdomainStage
 from .stages.takeover import TakeoverStage
 from .stages.portscan import PortscanStage
 from .stages.probe import ProbeStage
+from .stages.screenshot import ScreenshotStage
 from .stages.osint import OsintStage
 from .stages.jsmine import JsmineStage
 from .stages.dirscan import DirscanStage
 from .stages.vulnscan import VulnscanStage
 
 STAGE_ORDER = ["subdomain", "takeover", "portscan", "probe",
-               "osint", "jsmine", "dirscan", "vulnscan"]
+               # screenshot 需要"已有存活站点"，所以紧跟 probe；
+               # 它默认关闭（`screenshot.enabled`），打开后才会拉起无头浏览器
+               "screenshot", "osint", "jsmine", "dirscan", "vulnscan"]
 STAGE_REGISTRY = {c.name: c for c in (SubdomainStage, TakeoverStage, PortscanStage,
-                                      ProbeStage, OsintStage, JsmineStage,
+                                      ProbeStage, ScreenshotStage, OsintStage, JsmineStage,
                                       DirscanStage, VulnscanStage)}
 
 # 运行中任务的取消信号表：task_id -> threading.Event
