@@ -927,6 +927,32 @@ def main():
     assert "shot-thumb" in c.get(f"/tasks/{tid}").get_data(as_text=True), "任务详情应渲染缩略图"
     assert "shot-thumb" in c.get("/sites?all=1").get_data(as_text=True), "站点页应渲染缩略图"
     print("[5j] 站点截图 ok: 阶段注册/门控/路由/防穿越/缩略图（真实截图 3.1s 已在实机验证）")
+
+    # 5k) 全面体检：并发注册同一个 POC 不能撞 UNIQUE(path)
+    #     旧实现"先 SELECT 再 INSERT"，GUI 启动 + 多个任务线程同时 sync_pocs() 时
+    #     会抛 IntegrityError（实测 6 个并发任务里 5 个失败），已改为原子 UPSERT。
+    import threading as _th
+    errs, ids = [], []
+
+    def _upsert():
+        try:
+            ids.append(db.upsert_poc("config/pocs-imported/conc-test.yaml",
+                                     {"id": "conc-test", "info": {"name": "并发测试",
+                                                                  "severity": "low", "tags": []},
+                                      "_status": "ok"}))
+        except Exception as e:                       # pragma: no cover - 失败时记录
+            errs.append(f"{type(e).__name__}: {e}")
+
+    ts = [_th.Thread(target=_upsert) for _ in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert not errs, f"并发 upsert_poc 抛异常：{errs[:2]}"
+    n_rows = db._query("SELECT COUNT(*) c FROM pocs WHERE path=?",
+                       ("config/pocs-imported/conc-test.yaml",), one=True)["c"]
+    assert n_rows == 1, f"同一个 path 应只有 1 行，实际 {n_rows}"
+    print("[5k] 并发 POC 注册 ok: 8 线程同 path 无异常且只 1 行（原子 UPSERT + busy_timeout）")
     print("SMOKE PASS")
 
 

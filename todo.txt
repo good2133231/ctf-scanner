@@ -522,3 +522,24 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        策略页「资产面拓展」有开关与参数（max_sites=20 / window=1280x900 / timeout=30 / browser）
        实测：单站点 3.1 秒出 11 KB 合法 PNG；端到端 probe+screenshot 跑通；smoke 新增 [5j]
        顺带修：/shots 路由里对 sqlite3.Row 误用 .get() 导致 500（同一个坑第二次踩）
+
+-----
+（第十七轮续4：全量代码体检）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+[完成] 做了 7 项可复现检查：全量编译 / pyflakes 静态分析 / 18 个 GET 路由扫描 /
+       DEFAULTS↔settings.yaml↔模板三方一致 / 全新库 schema 检查 / 全 9 阶段离线端到端 / 6 任务并发压测
+[完成] 修 ① upsert_poc 并发竞态（先 SELECT 再 INSERT，两个线程都 INSERT 撞 UNIQUE）
+       → 改原子 UPSERT（ON CONFLICT(path) DO UPDATE，不动 enabled）+ busy_timeout=10s；
+       实测 6 个并发任务从"5 个 failed"变成"6 个 done"
+[完成] 修 ② sync_pocs 失败会冒泡把整个任务打成 failed → 改为非致命，只告警继续扫描
+[完成] 修 ③ POC 引擎 URL 拼接：nuclei 风格 {{BaseURL}}/x 渲染后已是完整 URL，原实现又拼一次
+       base 变成 http://host/http://host/x，永远打不中（文档承诺官方模板可用，必须修）；
+       新增 _join_url()；header 也改为用带 payload 的变量渲染
+[完成] 修 ④ gui/app.py 的 BASE_DIR 在某轮重构里被删了导入但代码还在用 → 上传 POC 直接 500
+[完成] 清隐患：重复定义/重复键（db.list_subdomain_net、策略映射 subdomain 段、portscan.full_workers、
+       config.py 与 settings.yaml、文档重复小节）→ 各保留一份（这类残留会造成"改了不生效"）
+[完成] 小清理：未使用的 import json / urlparse、无占位符 f-string
+[完成] 也确认了这些地方**没问题**：SQL 参数化、连接 finally 关闭、schema 一致、门控正确、
+       sqlite3.Row 陷阱无残留、urllib 兜底路径（模拟无 requests 实测 200/404/字节都正常）、
+       代码里 0 处绝对路径
+[完成] 新增回归 [5k]：8 线程并发注册同一 POC 无异常且只 1 行；smoke 全绿
+

@@ -20,7 +20,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import blacklist, db
-from scanner.config import load_settings, save_settings
+from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
@@ -739,12 +739,6 @@ def create_app():
                                   "dns_timeout": float(
                                       (settings.get("subdomain") or {}).get("dns_timeout", 3) or 3),
                                   "union_passive": f.get("union_passive") == "1"},
-                    # 子域名收集：subfinder(-all) 与内置免 key 被动源是否取并集
-                    "subdomain": {"max_resolve": int(
-                                      (settings.get("subdomain") or {}).get("max_resolve", 500) or 500),
-                                  "dns_timeout": float(
-                                      (settings.get("subdomain") or {}).get("dns_timeout", 3) or 3),
-                                  "union_passive": f.get("union_passive") == "1"},
                     "evasion": {"random_ua": f.get("random_ua") == "1",
                                 "spoof_xff": f.get("spoof_xff") == "1",
                                 "waf_bypass": f.get("waf_bypass") == "1",
@@ -772,9 +766,6 @@ def create_app():
                                  # 全端口：top（内置 TOP 表）/ full（1-65535）
                                  "mode": "full" if f.get("portscan_mode") == "full" else "top",
                                  "full_ports": (f.get("portscan_full_ports") or "1-65535").strip(),
-                                 # 全端口专用并发/超时（只在 full 模式生效）
-                                 "full_workers": int(f.get("portscan_full_workers", 256) or 256),
-                                 "full_timeout": float(f.get("portscan_full_timeout", 0.5) or 0.5),
                                  # 全端口专用并发/超时（只在 full 模式生效）
                                  "full_workers": int(f.get("portscan_full_workers", 256) or 256),
                                  "full_timeout": float(f.get("portscan_full_timeout", 0.5) or 0.5),

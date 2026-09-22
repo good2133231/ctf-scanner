@@ -3,6 +3,50 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十七轮（续 4）：全量代码体检（bug 检查）
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+### 检查手段（不是"看一遍"，是可复现的 7 项）
+
+1. `py -m compileall` 全量编译（我们自己的代码全部通过；唯一报错是第三方 dirmap 里的 Python2 示例文件，不是我们的）；
+2. **pyflakes 静态分析**（装在独立 venv 里，不污染项目依赖）；
+3. **全 18 个 GET 路由扫描**（逐个请求看有没有 5xx）；
+4. **DEFAULTS ↔ config/settings.yaml ↔ 模板引用的 `s.<段>.<键>` 三方一致性**检查；
+5. **全新库的 schema 检查**（INSERT/UPDATE 里用到的列是否都存在）；
+6. **全 9 阶段离线端到端跑一遍**（每个阶段都打开，跑完无任何阶段异常）；
+7. **并发压测**：6 个任务线程同时跑（GUI 无队列，这是真实使用场景）；
+8. 另查：SQL 拼接是否参数化、连接是否关闭、`sqlite3.Row` 误用 `"".get()`、裸 except、
+   可变默认参数、`eval/exec`、代码重复块、文档重复小节。
+
+### 找到并修掉的 Bug（按严重度）
+
+| # | 问题 | 影响 | 修法 |
+|---|---|---|---|
+| 1 | **`upsert_poc()` 并发竞态**（先 SELECT 再 INSERT） | 两个线程同时判定"不存在"→ 同时 INSERT → `IntegrityError: UNIQUE constraint failed: pocs.path`。**实测 6 个并发任务里 5 个直接 failed**，库里只剩 1 个站点 | 改为**原子 UPSERT**（`ON CONFLICT(path) DO UPDATE`，且**不动 `enabled`** 以免覆盖用户开关）；老 SQLite 回退"INSERT 失败再 UPDATE"；`get_conn()` 加 `PRAGMA busy_timeout=10000` |
+| 2 | **`sync_pocs()` 失败会拖垮整个任务** | 上面那个异常会冒泡到 `run_task`，把任务打成 `failed` | POC 注册表同步改为**非致命**：失败只告警，流水线继续跑 |
+| 3 | **POC 引擎 URL 拼接** | nuclei 模板最常见的 `path: "{{BaseURL}}/x"` 渲染后已是完整 URL，原实现又拼一次 base → 请求变成 `http://host/http://host/x`，**永远打不中**（实测：同一 POC 用 `/.env` 命中、用 `{{BaseURL}}/.env` 不命中）。而文档明确承诺"官方 nuclei 模板可直接投放" | 新增 `_join_url()`：已是 `http(s)://` 开头就原样使用；另把 header 也用**带 payload 的变量**渲染（原来只渲染基础变量，`X-Fuzz: {{payload}}` 不生效） |
+| 4 | **`gui/app.py` 里 `BASE_DIR` 未定义** | 某轮重构把导入删了但代码还在用 → **通过 GUI 上传 POC 直接 NameError 500** | 补回导入，并实测上传接口返回正常 |
+| 5 | **重复定义 / 重复键**（本环境偶发把一次写入执行两次留下的残留） | "改了可能不生效"的隐患：`db.list_subdomain_net` 定义了两遍；`app.py` 策略映射里 `subdomain` 段、`portscan.full_workers/full_timeout` 重复；`config.py` 与 `settings.yaml` 同样重复；文档也有重复小节 | 全部去重（各保留 1 份），并加了"重复定义/重复块/重复键"检查脚本 |
+| 6 | 小问题 | 未使用的 `import json` / `urlparse`、无占位符的 f-string | 清理 |
+
+### 检查过但**没有**发现问题的地方（避免"只报坏消息"）
+
+- SQL 注入面：所有 f-string 拼的都是**内部固定**的表名/列名，值一律 `?` 参数化；
+- 连接管理：`_exec` / `_query` 都在 `finally` 里 `conn.close()`（每次调用独立连接的设计没被破坏）；
+- schema 一致性：全新库下 `subdomains.ip_note`、`sites.shot` 等新列都在；INSERT/UPDATE 用到的列全部存在；
+- 门控：`skip_severities` / `min_severity` / `disabled_*` 三层门控行为正确；
+- `sqlite3.Row` 陷阱：osint 的 `_site_titles()` 与 `/shots` 路由曾各踩一次，已全库排查无残留；
+- **urllib 兜底路径**（本机装了 requests，平时根本跑不到）：模拟 `import requests` 失败后实测 —— 200/404/`want_bytes` 都正常；
+- 绝对路径：代码/配置/模板 0 命中；展示路径走 `utils.rel_display()`。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py     # SMOKE PASS（新增 [5k] 并发注册 POC 的回归断言）
+# 并发压测复测：6 个任务线程 → 6 个 done（修复前 5 个 failed），0 锁冲突，站点 6 个
+# 全 9 阶段端到端：done，无任何阶段异常
+```
+
 ## 2026-09-22 —— 第十七轮（续 3）：站点截图功能（第 8 项落地）
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 
@@ -152,42 +196,6 @@ py -3 tests/smoke.py     # SMOKE PASS（新增 [5g]：技术栈判定 11 例 + �
 # 双靶场实测（8765=PHP 站 / 8766=Java 站，记录型 HTTP 处理器抓真实请求）：
 #   PHP 站 40 条请求 → .php 40/40，.jsp 0/40，.aspx 0/40
 #   Java 站 40 条请求 → .jsp 26/40 + .do 4/40，.php 0/40，.aspx 0/40   ← 零跨语言污染
-```
-
-## 2026-09-22 —— 第十七轮：硬规矩入档 + 子域名"主动且全"（并集）+ 绝对路径清理
-> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
-
-### 1）AGENTS.md 新增「§0 硬规矩」（用户下达，优先级高于本文件其它所有内容）
-
-1. **改动必须标注实施者**：提交信息末行 `WorkBuddy · <模型名>` + CHANGELOG 轮次标题下写实施者；
-2. **未经用户明确许可，禁止读取/扫描/遍历本项目目录以外的任何代码或文件**
-   （唯一例外：用户主动指定路径）；联网查公开文档不算，但也不得把外部仓库整份拉进来；
-3. **代码/配置/模板/日志一律只用相对路径**，禁止本机绝对路径；展示路径统一走 `utils.rel_display()`。
-
-### 2）清掉代码里仅存的两处本机绝对路径
-
-- `scanner/passive.py` 模块 docstring 里的参考项目绝对路径 → 改为指向 `TODO.md` 的借鉴清单；
-- `tools/import_ref_pocs.py` 的 `DEFAULT_SRC` 原本硬编码 `C:\Users\...\myscan_20250825\exploit\scripts`
-  → 改为**项目内相对路径** `tools/ref-project/exploit/scripts`（把参考项目拷/链接进去即可跑，
-  或用 `--src` 由使用者显式指定 —— 这正好与新规矩"不得擅自读项目外内容"一致）。
-- 复检：`grep -rn "Users" --include=*.py --include=*.yaml --include=*.html --include=*.js` **0 命中**。
-
-### 3）子域名收集改为"主动且全"：subfinder(-all) 与内置被动源**取并集**
-
-- **问题**：原实现是 `if subfinder: … elif not offline: 内置被动源` —— 装了 subfinder 后
-  `scanner/passive.py` 的 crt.sh / certspotter / alienvault / hackertarget / rapiddns / sublist3r
-  **一次都不会跑**，等于白丢一批证书与情报源（两边源集合并不相同）。
-- **改法**：新增 `subdomain.union_passive`（默认 **true**）→ subfinder 成功后仍叠加内置被动源，
-  结果按域名去重合并（同名只记首个来源）；关掉它则回到"只用 subfinder"。
-- 同时确认并写明：subfinder 调用**恒带 `-all`**（`-dL <文件> -all -t 200 -o <文件>`）——
-  `-all` 才是"使用全部数据源"，不加时只用默认源集合。
-- GUI「策略配置 → 信息收集」新增该开关；`config/settings.yaml` 同步。
-- `docs/pipeline.md` ① subdomain 段重写为**四条获取路径**（含每一步的模块/函数/命令行/来源标记）。
-
-### 验证
-
-```powershell
-py -3 tests/smoke.py     # SMOKE PASS（新增 [5f]：subfinder 带 -all + 并集开关两种取值的行为）
 ```
 
 ## 2026-09-22 —— 第十七轮：硬规矩入档 + 子域名"主动且全"（并集）+ 绝对路径清理

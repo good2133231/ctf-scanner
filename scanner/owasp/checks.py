@@ -9,7 +9,6 @@
 """
 import random
 import re
-from urllib.parse import urlparse
 
 from .. import config, evasion
 from ..utils import http_request

@@ -149,7 +149,12 @@ def run_task(task_id, name, targets_text, stages, options, settings):
                        workdir, logger, stop_event=stop_event)
     db.update_task(task_id, log_file=str(workdir / "task.log"), status="running", error="")
     try:
-        sync_pocs(ctx.settings)
+        try:
+            sync_pocs(ctx.settings)
+        except Exception as e:
+            # POC 注册表同步是"锦上添花"：它失败不该让整条流水线直接 failed
+            # （并发场景下 upsert_poc 曾撞 UNIQUE 约束，实测 6 个任务里 5 个因此失败）。
+            logger.warning(f"[pocs] 注册表同步失败，继续扫描：{e}")
         PipelineRunner(ctx).run()
     except Exception as e:
         logger.error(f"任务失败：{e}\n{traceback.format_exc()}")

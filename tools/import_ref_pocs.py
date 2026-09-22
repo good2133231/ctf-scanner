@@ -197,7 +197,7 @@ def build_yaml(vendor, stem, info):
     if info["favicon"]:
         desc += f" 原脚本另含 favicon 指纹 {info['favicon'][:3]}，本引擎暂不支持 favicon 匹配。"
     lines = [
-        f"# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）",
+        "# 自动生成：tools/import_ref_pocs.py，请勿手工编辑（重跑会覆盖）",
         f"id: ref-{vendor.lower()}-{stem.lower()}",
         "info:",
         f"  name: {q(vendor + ' ' + stem)}",

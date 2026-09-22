@@ -25,7 +25,6 @@
 含这些特性的模板会被标记 `unsupported` 并在 POC 管理页显示原因，而不是静默失效。
 """
 import itertools
-import json
 import pathlib
 import re
 from urllib.parse import urlparse
@@ -161,6 +160,23 @@ def _render(text, variables):
 
 
 # ---------- payload 组合 ----------
+
+def _join_url(base_url, path):
+    """把 POC 的 `path` 拼成完整 URL（三种写法都要支持）。
+
+    - 绝对路径 `/.env`      → `base + /.env`
+    - 相对路径 `.env`       → `base + /.env`
+    - **已经是完整 URL**    → 原样使用。nuclei 模板最常见的就是
+      `path: - "{{BaseURL}}/admin"`，渲染后已经是 `http://host/admin`；
+      原实现无条件再拼一次 base，结果请求变成 `http://host/http://host/admin`
+      —— **永远打不中**（实测：同一份 POC 用 `/.env` 命中、用 `{{BaseURL}}/.env` 不命中）。
+      而 README/文档明确承诺"官方 nuclei 模板可直接投放使用"，所以这里必须修。
+    """
+    text = str(path or "/").strip()
+    if text.lower().startswith(("http://", "https://")):
+        return text
+    return base_url.rstrip("/") + (text if text.startswith("/") else "/" + text)
+
 
 def _payload_sets(req, limit=MAX_REQUESTS_PER_POC):
     """把 `payloads` 展开成一组变量字典。支持 list 与 nuclei 的 dict + attack。"""
@@ -300,19 +316,21 @@ def run_poc_on_target(poc, base_url, settings, max_requests=MAX_REQUESTS_PER_POC
         method = str(req.get("method") or "GET").upper()
         raw_paths = req.get("path") or req.get("paths") or "/"
         paths = raw_paths if isinstance(raw_paths, list) else [raw_paths]
-        headers = {str(k): _render(v, variables)
-                   for k, v in (req.get("headers") or {}).items()}
+        raw_headers = dict(req.get("headers") or {})
         redirects = req.get("redirects", True) is not False
         for varset in _payload_sets(req, max_requests):
             if count >= max_requests:
                 break
             ctx_vars = dict(variables)
             ctx_vars.update({str(k): str(v) for k, v in varset.items()})
+            # header 也要用**带 payload 的变量**渲染：nuclei 模板里常见
+            # `X-Fuzz: {{payload}}` 这种写法，只渲染一次基础变量会漏掉替换。
+            headers = {str(k): _render(v, ctx_vars) for k, v in raw_headers.items()}
             for p in paths:
                 if count >= max_requests:
                     break
                 path = _render(p, ctx_vars) or "/"
-                url = base_url.rstrip("/") + (path if str(path).startswith("/") else "/" + str(path))
+                url = _join_url(base_url, path)
                 body = _render(req.get("body"), ctx_vars)
                 resp = http_request(url, method=method, headers=headers or None, data=body,
                                     timeout=timeout, settings=settings,

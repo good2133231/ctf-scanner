@@ -50,8 +50,6 @@ portscan:
   exclude_scanned: true
   full_workers: 256
   full_timeout: 0.5
-  full_workers: 256
-  full_timeout: 0.5
   timeout: 1.0
   workers: 64
   banner: true

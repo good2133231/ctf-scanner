@@ -92,6 +92,10 @@ def get_conn():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # 并发写保护：GUI 无任务队列，多个任务线程 + Flask 请求线程会同时写库。
+    # 默认超时只有 5 秒且读写冲突时会立刻抛 "database is locked"，
+    # 这里给个显式的 10 秒忙等，让写操作排队而不是失败。
+    conn.execute("PRAGMA busy_timeout=10000")
     return conn
 
 
@@ -347,15 +351,6 @@ def list_subdomain_net(limit=20000):
     return _query("SELECT domain, ip, cdn FROM subdomains WHERE ip <> '' LIMIT ?", (limit,))
 
 
-def list_subdomain_net(limit=20000):
-    """跨任务返回解析过的子域名（domain/ip/cdn）——「IP 资产」页用。
-
-    只取 `ip <> ''` 的行（没解析出来的行对"按 IP 聚合"没有意义），并给个上限防止
-    大库把页面拖死。
-    """
-    return _query("SELECT domain, ip, cdn FROM subdomains WHERE ip <> '' LIMIT ?", (limit,))
-
-
 def list_sites(task_id):
     return _query("SELECT * FROM sites WHERE task_id=? ORDER BY id", (task_id,))
 
@@ -479,19 +474,59 @@ def default_poc_enabled(path):
 
 
 def upsert_poc(path, meta):
+    """按 `path` 插入或更新一条 POC 记录（**并发安全**）。
+
+    旧实现是"先 SELECT 再 INSERT"：GUI 启动 + 多个任务线程会同时调 `sync_pocs()`，
+    两个线程都 SELECT 到"不存在"→ 都 INSERT → 后者撞 UNIQUE(path) 抛
+    `IntegrityError: UNIQUE constraint failed: pocs.path`（实测 6 个并发任务里 **5 个失败**）。
+    这里改成**原子 UPSERT**（`ON CONFLICT(path) DO UPDATE`），并用 `last_insert_rowid()`
+    拿回 id；同时 `DO UPDATE` **不动 `enabled`** —— 用户手动开关过的不该被同步覆盖。
+    极老的 SQLite（<3.24 不支持 UPSERT）则回退到"INSERT 失败再 UPDATE"。
+    """
     info = meta.get("info", {}) or {}
     tags = ",".join([str(t) for t in (info.get("tags") or [])])
-    row = _query("SELECT id FROM pocs WHERE path=?", (str(path),), one=True)
-    if row:
-        _exec("UPDATE pocs SET poc_id=?, name=?, severity=?, tags=?, status=?, updated_at=? WHERE id=?",
-              (meta.get("id", ""), info.get("name", ""), info.get("severity", "medium"),
-               tags, meta.get("_status", "ok"), _now(), row["id"]))
-        return row["id"]
-    return _exec("INSERT INTO pocs(path,poc_id,name,severity,tags,enabled,status,updated_at) "
-                 "VALUES(?,?,?,?,?,?,?,?)",
-                 (str(path), meta.get("id", ""), info.get("name", ""),
-                  info.get("severity", "medium"), tags, default_poc_enabled(path),
-                  meta.get("_status", "ok"), _now()))
+    path = str(path)
+    poc_id = meta.get("id", "")
+    name = info.get("name", "")
+    severity = info.get("severity", "medium")
+    status = meta.get("_status", "ok")
+    now = _now()
+    try:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO pocs(path,poc_id,name,severity,tags,enabled,status,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(path) DO UPDATE SET poc_id=excluded.poc_id, name=excluded.name, "
+                "severity=excluded.severity, tags=excluded.tags, status=excluded.status, "
+                "updated_at=excluded.updated_at",
+                (path, poc_id, name, severity, tags, default_poc_enabled(path), status, now))
+            rid = cur.lastrowid
+            if rid in (None, 0):     # UPSERT 走 DO UPDATE 分支时 lastrowid 仍返回原行 id
+                row = conn.execute("SELECT id FROM pocs WHERE path=?", (path,)).fetchone()
+                rid = row["id"] if row else rid
+            conn.commit()
+            return rid
+        finally:
+            conn.close()
+    except sqlite3.OperationalError:        # 老 SQLite 不支持 UPSERT 语法
+        row = _query("SELECT id FROM pocs WHERE path=?", (path,), one=True)
+        if row:
+            _exec("UPDATE pocs SET poc_id=?, name=?, severity=?, tags=?, status=?, updated_at=? "
+                  "WHERE id=?", (poc_id, name, severity, tags, status, now, row["id"]))
+            return row["id"]
+        try:
+            return _exec("INSERT INTO pocs(path,poc_id,name,severity,tags,enabled,status,updated_at) "
+                         "VALUES(?,?,?,?,?,?,?,?)",
+                         (path, poc_id, name, severity, tags, default_poc_enabled(path), status, now))
+        except sqlite3.IntegrityError:      # 仍然并发冲突 → 退化为更新
+            row = _query("SELECT id FROM pocs WHERE path=?", (path,), one=True)
+            if row:
+                _exec("UPDATE pocs SET poc_id=?, name=?, severity=?, tags=?, status=?, updated_at=? "
+                      "WHERE id=?", (poc_id, name, severity, tags, status, now, row["id"]))
+                return row["id"]
+            raise
 
 
 def list_pocs():
