@@ -40,6 +40,13 @@ DEFAULTS = {
         "poc_link_tags": True,     # 指纹→POC 联动：站点技术栈命中的 POC 优先执行（P1-1）
         "poc_max_per_site": 80,    # 每站点最多执行多少个 POC（联动命中项不受此上限约束）
     },
+    "subdomain": {
+        # 子域名资产回填：给每个子域名解析出 A 记录 IP 与 CNAME 链，并按
+        # `config/dicts/cdn_cname.txt` 标出 CDN 厂商（纯 DNS 只读查询，不发 HTTP）。
+        # 上限控制 DNS 查询量；超出的子域名仍入资产表，只是没有 IP/CDN 这两列。
+        "max_resolve": 500,
+        "dns_timeout": 3,
+    },
     "passive": {
         # 多来源被动子域名收集（免 API key 的公开接口，见 scanner/passive.py）
         "enabled": True,
@@ -124,6 +131,7 @@ DEFAULTS = {
         "resolvers": "config/dicts/resolvers.txt",
         "dirs": "config/dicts/dirs_small.txt",
         "sensitive": "config/dicts/sensitive.txt",  # 预留：内置检查暂用硬编码清单
+        "cdn_cname": "config/dicts/cdn_cname.txt",  # CDN 厂商 CNAME 后缀（子域名 CDN 标记用）
     },
     "http": {
         "user_agent": "Mozilla/5.0 (compatible; CTFScanner/0.1; +authorized-testing-only)",

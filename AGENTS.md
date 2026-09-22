@@ -43,9 +43,10 @@ ctf-scanner/
 ├── cli/client.py          # CLI 入口：导入目标 → run_task（阻塞）
 ├── run_gui.py             # Web 控制台入口
 ├── gui/
-│   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含 4 个跨任务资产页
+│   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
 │   ├── templates/ static/ # 页面与原生 JS（app.js：轮询状态/日志、建任务、POC 管理、页签、表格筛选、任务批量操作）
-│   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（10 栏：仪表盘/任务管理/子域名资产/站点资产/端口服务/C 段视野/目录发现/漏洞风险/POC 管理/策略配置）
+│   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（8 栏：仪表盘/任务管理/子域名资产/拓展域名/站点资产/漏洞风险/POC 管理/策略配置）
+│   │                      #   （原「端口服务/C 段视野/目录发现」三栏已移除，路由 /ports /csegs /dirs 仍在，只是不进侧栏）
 │   │                      #   任务详情＝横向 8 个页签（潜在漏洞(默认)/站点/子域名/端口服务/C 段/目录/目标与配置/运行日志）+ 页签内筛选框
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
@@ -57,6 +58,7 @@ ctf-scanner/
 │   ├── wildcard.py        # 泛解析识别与过滤（纯 DNS 查询）
 │   ├── passive.py         # 免 key 多来源被动子域名收集
 │   ├── dnsq.py            # 纯标准库 DNS 客户端（A/CNAME/TXT/MX/NS…，UDP+TCP 回退，异常不外抛）
+│   ├── cdn.py             # CDN 判定：读 config/dicts/cdn_cname.txt 按 CNAME 后缀匹配厂商（只读、无请求）
 │   ├── takeover.py        # 子域接管指纹库（41 条第三方服务 suffix）+ detect()
 │   ├── portscan.py        # 端口/服务扫描（TOP 表 + nmap 适配 + 内置 TCP connect 兜底 + 被动 banner）
 │   ├── jsmine.py          # JS 资产挖掘（域名/接口 URL/疑似凭据，含第三方域黑名单与降噪）
@@ -70,9 +72,9 @@ ctf-scanner/
 │   ├── targets.py         # parse_lines → [(kind, raw)]，kind ∈ domain|url|ip|cidr|unknown（cidr 展开为多条 ip）
 │   └── report.py          # Markdown 报告
 ├── tools/import_ref_pocs.py # ast 静态解析参考项目 Python POC → config/pocs-imported/（导入项默认关闭）
-├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/passive/evasion/takeover/dirscan/vulnscan/portscan/jsmine/iprecon/fofa 十二段）
+├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa 十三段）
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
-├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / sensitive(11，暂未使用)
+├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / sensitive(11，暂未使用) / cdn_cname(292，CDN 厂商后缀)
 ├── config/pocs-user/      # 用户上传 POC；config/pocs-imported/ 导入 POC（默认关闭）；config/nuclei-templates/ 官方模板投放点
 ├── tests/smoke.py         # 唯一测试：自包含靶场(127.0.0.1:8765) + 断言，见 §6
 ├── TODO.md                # 任务确认清单（待用户确认的排期，不是承诺，见 §9）
@@ -126,8 +128,9 @@ ctf-scanner/
 
 ```powershell
 py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(8 个)/POC 级别执行门/
-                            # 免杀变形/mmh3 公开向量+iprecon/fofa 纯函数/流水线+指纹/三层门控/阶段门控(含 osint)/
-                            # 报告(含 C 段 IP)/停止/导出/GUI 路由(含 /csegs)与批量接口
+                            # 免杀变形/mmh3 公开向量+iprecon/fofa 纯函数/响应体解码/流水线+指纹/三层门控/阶段门控(含 osint)/
+                            # 非标端口候选/报告(含 C 段 IP)/停止/导出/GUI 路由(8 栏 + /ports /csegs /dirs)与批量接口/
+                            # 子域名分流+CDN 标记+站点折叠+POC 相对路径
 py -3 cli/client.py --check # 外部工具可用性
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
 py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanner
@@ -148,10 +151,10 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - `config/dicts/sensitive.txt` 已存在但**未被读取**：内置敏感文件检查用 checks.py 里的硬编码清单。
 - `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
-- GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/passive/evasion/
-  takeover/dirscan/vulnscan/portscan/jsmine/iprecon/fofa 十二段（含按级别 / 按 OWASP 分类 /
+- GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
+  takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa 十三段（含按级别 / 按 OWASP 分类 /
   按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
-  于第九轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭）；
+  于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭）；
   外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
   fofa 的 email/key 要手改 `config/keys.yaml`（控制台只读、不写回凭据）。
 - `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。

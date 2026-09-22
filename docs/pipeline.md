@@ -40,7 +40,14 @@
   （`passive.enabled` 控制；单源失败只影响该源）→ puredns 对域名字典爆破（上限 `limits.brute_max_domains`）→ 合并去重；
 - 泛解析过滤：`limits.wildcard_filter` 开启时，先用 `scanner/wildcard.py` 探测 `*.domain` 通配 IP，
   丢弃"解析结果全部落在通配 IP 内"的字典/被动候选（纯 DNS 查询，零 HTTP）；
-- 产物：`subdomains.txt`、`passive_multi.txt`（被动来源命中）、`hosts.txt`（子域名 ∪ 主域名，交给下一阶段）、SQLite `subdomains` 表；
+- **IP/CDN 回填**：入账后对子域名做一次 `scanner/dnsq.py` 的 **CNAME 链 + A 记录**解析
+  （上限 `subdomain.max_resolve`，默认 500，超出的仍入表、只是没有这两列；DNS 超时 `subdomain.dns_timeout`），
+  回填 `subdomains.ip`（逗号连接的 A 记录）与 `subdomains.cdn`
+  （`scanner/cdn.py` 用 `config/dicts/cdn_cname.txt` 的 292 条厂商 CNAME 后缀匹配，未命中留空 = 非 CDN）。
+  纯 DNS 只读查询、零 HTTP；数据文件缺失时一律判"非 CDN"，不会抛错；
+- 产物：`subdomains.txt`、`passive_multi.txt`（被动来源命中）、`hosts.txt`（子域名 ∪ 主域名，交给下一阶段）、SQLite `subdomains` 表（含 `ip` / `cdn`）；
+- 属性归属：本阶段的产物都是**目标自身**的子域名（来源 `subfinder` / `passive:*` / `puredns` / `dns-brute`），
+  在「子域名资产」页展示；JS 与外部情报带出的关联域名（`js:mine` / `osint:*`）归「拓展域名」页，见 `db.OWN_SUBDOMAIN_WHERE` / `EXT_SUBDOMAIN_WHERE`；
 - 降级：无 puredns 时用内置 `socket.getaddrinfo` 爆破（系统解析器，忽略自定义 resolvers——这是已知差异）；
   `--offline` 时不调用外部工具、也不跑被动收集，仅内置 DNS 爆破。
 
@@ -60,16 +67,25 @@
 - 处理：nmap 优先（`-sT -Pn -n --open -p <ports> -oG -`，`-sT` 无需 root），
   未装则内置 TCP connect 兜底；`portscan.ports` 留空用内置 48 项 TOP 表，
   也可写 `"80,443,8080"` 或 `"1-1024"`；连接成功后对会主动问候的端口读 **banner**（纯被动读取）；
-- 产物：SQLite `ports` 表，GUI「端口服务」分栏与任务详情页签、报告「开放端口与服务」小节；
+- 产物：SQLite `ports` 表、任务详情页「端口服务」页签、报告「开放端口与服务」小节
+  （原侧边栏「端口服务」全局栏已移除 —— 该数据属任务维度，在详情页看更贴合上下文；数据未删）；
+  同时 `ports` 会被下一阶段 `probe` 消费（见 ④）—— 这是"能扫出 `:9007` 这类非标端口站点"的原因；
 - 为什么默认关：端口扫描耗时与噪声明显高于其他阶段，CTF 里常只给一个 Web 入口；
   **明确不调用 masscan**（需 root 且激进，违反非破坏性红线）。
 
 ### ④ probe 存活探测
 
 - 输入：URL 目标原样；IP 生成 `https/http` 两个候选；域名/子域名同样生成两种 scheme；
+  **额外候选**：`portscan` 已跑过时，消费其 `ports` 表（同任务）里**除 80/443 外**的开放端口，
+  为对应主机补出 `https://host:port` / `http://host:port` 两种候选（`probe` 日志会写
+  `额外纳入 N 个开放端口候选（来自 portscan）`）。因此想覆盖非标端口 Web 服务，需**同时打开
+  `portscan` 阶段**（默认关）—— 只跑默认阶段时仍只探 80/443；
 - 处理：httpx 适配器（JSONL 输出解析 status/title/server/tech）；状态白名单 `200,301,302,403,404`；
 - 产物：`sites.txt`、SQLite `sites` 表；`ctx.results["sites"]` 供后续阶段使用；
-- 降级：内置探测（requests/urllib），https 优先、失败回退 http，提取标题、Server 头与技术栈（技术栈由 `scanner/fingerprint.py` 从响应头/正文识别，属信号级标签、不含版本）；
+- 降级：内置探测（requests/urllib），https 优先、失败回退 http，提取标题、Server 头与技术栈（技术栈由
+  `scanner/fingerprint.py` 从响应头/正文识别，属信号级标签、不含版本）；
+  **响应体解码**统一走 `scanner/utils.py::_decode_body`（响应头 charset → UTF-8 → GB18030 → 带替换 UTF-8），
+  修掉"服务器不声明 charset 时 requests 回退 ISO-8859-1 导致中文标题乱码"的问题。
 
 ### ⑤ osint 外部情报拓展（`iprecon.enabled` / `fofa.enabled`，**默认全关**）
 
@@ -91,8 +107,10 @@
   **命中数 > `fofa.black_ico_threshold`（默认 200）判为"黑 ico"**（公共图标：默认页、通用框架图标），
   放弃拓展并记日志。未配置 `config/keys.yaml` 的 `fofa.email/key` 时**显式提示后跳过**，不静默失败。
 
-- 产物：SQLite `csegs` 表（GUI「C 段视野」分栏与任务详情「C 段」页签、报告「C 段视野」小节）、
-  新域名以 `source="osint:cseg"` / `"osint:fofa"` 补入 `subdomains`；
+- 产物：SQLite `csegs` 表（任务详情「C 段」页签、报告「C 段视野」小节；
+  `/csegs` 路由仍在但已不进侧边栏 —— 该数据属任务维度）、
+  新域名以 `source="osint:cseg"` / `"osint:fofa"` 补入 `subdomains` —— 它们是**关联域名**，
+  在「拓展域名」页展示（不进「子域名资产」页，判据 `db.EXT_SUBDOMAIN_WHERE`）；
 - 为什么默认全关：两项都依赖**第三方公共接口**（`api.webscan.cc` / FOFA），可用性不由我们掌控；
   且 FOFA 需要 key 与配额。接口地址做成配置项（`iprecon.api`，留空回落到默认）以便随时替换；
 - 局限：公共接口的返回结构随时可能变；黑 ico 阈值与"共享主机"阈值都是保守估计值，未经真实数据校准。
@@ -104,7 +122,7 @@
 - 处理：抓页面与其中引用的 JS，正则提取**域名 / 接口 URL / 疑似凭据**；
   第三方公共域走 78 条黑名单过滤（统计/CDN 等），**目标自身域永不误杀**；
   `jsmine.secrets=true` 时启用凭据提取，经两级降噪（厂商前缀/赋值语境 → 占位符/变量引用/成员访问过滤）；
-- 产物：新域名补入 `subdomains`（`source="js:mine"`，只补任务里还没有的）、
+- 产物：新域名补入 `subdomains`（`source="js:mine"`，只补任务里还没有的；在「拓展域名」页展示）、
   接口 URL 落 `js_urls.txt` 并进 `ctx.results["js_urls"]`、疑似凭据以 **high** 级进 `vulns`（`poc_id=js-secret-*`，值掩码脱敏）；
 - 局限：纯正则（不做 sourcemap 还原）；短 token 与含 `test/demo` 的真实值会被保守丢弃。
 
@@ -161,6 +179,7 @@ logs/task_1_mytask/
 ```
 
 > `portscan` / `osint` 阶段不落文本产物（结果直接进 SQLite `ports` / `csegs` 表，新域名进 `subdomains` 表）；
+> 子域名阶段的 **IP / CDN 回填**同样只进 `subdomains` 表（`ip` / `cdn` 两列），不额外落文件；
 > `vulnscan` 结果进 `vulns` 表，Markdown 报告用 `scanner/report.py` 或 GUI 导出按钮生成。
 
 ## 配置项速查（config/settings.yaml）
@@ -179,6 +198,7 @@ logs/task_1_mytask/
 | limits.brute_max_domains | 50 | 参与 DNS 爆破的域名上限 |
 | limits.wildcard_filter | true | 泛解析过滤：目标开 `*.domain` 时丢弃通配命中的字典结果 |
 | limits.favicon_md5 | true | probe 阶段计算 favicon MD5（POC 可据此做零请求前置判定） |
+| subdomain.max_resolve / dns_timeout | 500 / 3s | 子域名 IP/CDN 回填的解析上限与单次 DNS 超时（超上限的子域名仍入表，只是无 IP/CDN） |
 | checks.min_severity | medium | 最低报告级别（结果级门控）；info/low 项默认不产出 |
 | checks.skip_severities | ["info","low"] | **执行级**门控：这些级别连请求都不发（内置检查 + POC 引擎同规则） |
 | checks.poc_engine | true | POC 引擎总开关（关闭后只跑内置启发式检查） |
@@ -194,4 +214,4 @@ logs/task_1_mytask/
 | passive.enabled / sources / timeout | true / 默认 6 源 / 20s | 多来源被动子域名收集的开关、来源清单、单源超时 |
 | evasion.random_ua / spoof_xff / waf_bypass / bypass_level / waf_detect | true / false / true / 2 / true | 动态免杀：UA 随机化、XFF 伪装、payload 变形及强度、WAF 探测 |
 | tools.* | — | 外部工具路径/命令 |
-| dicts.* | — | 各字典路径 |
+| dicts.* | — | 各字典路径（含 `dicts.cdn_cname` = CDN 厂商 CNAME 后缀名单，供子域名 CDN 标记） |

@@ -18,9 +18,9 @@
   cat passive.txt brute.txt | sort -u    ->  Python 端以 sorted(set(...)) 等价实现
 """
 from .base import Stage
-from .. import db, passive, wildcard
+from .. import cdn, db, dnsq, passive, wildcard
 from ..config import resolve
-from ..utils import which, verify_tool, run_cmd, read_lines, write_lines
+from ..utils import which, verify_tool, run_cmd, read_lines, write_lines, pool_run
 
 # 需要做泛解析复核的来源（爆破类来源已自带通配过滤，不重复查询）
 _PASSIVE_SRC = ("subfinder", "passive:")
@@ -161,4 +161,41 @@ class SubdomainStage(Stage):
                     sorted(n for n in found if sources.get(n, "").startswith("passive:")))
         write_lines(ctx.workdir / "hosts.txt", all_hosts)
         db.insert_subdomains(ctx.task_id, [(s, sources.get(s, "")) for s in subs])
+        self._fill_net(subs, workers)
         ctx.logger.info(f"[subdomain] 新增子域名 {len(subs)} 个，参与探测主机 {len(all_hosts)} 个")
+
+    def _fill_net(self, subs, workers):
+        """回填每个子域名的解析 IP 与 CDN 标记（纯 DNS 只读查询）。
+
+        为什么放在本阶段而不是 takeover：这两个字段是**子域名资产自身的属性**，
+        越早落库，GUI/报告里的"这个域名解析到哪、是否走 CDN"就越完整。takeover
+        阶段虽然也查 CNAME，但它默认只覆盖命中接管的候选，且该阶段可以在策略里关掉
+        —— 关掉后子域名就完全拿不到解析信息。
+        """
+        ctx = self.ctx
+        if ctx.stopped() or not subs:
+            return
+        cfg = ctx.settings.get("subdomain", {}) or {}
+        cap = int(cfg.get("max_resolve", 500))
+        if len(subs) > cap:
+            ctx.logger.info(f"[subdomain] IP/CDN 回填：{len(subs)} 个超过上限 {cap}，"
+                            f"仅处理前 {cap} 个（其余仍入资产表，只是没有解析信息）")
+            subs = subs[:cap]
+        timeout = float(cfg.get("dns_timeout", 3) or 3)
+
+        def _one(host):
+            if ctx.stopped():
+                return None
+            chain, ips = dnsq.cname_chain(host, timeout=timeout)
+            if not ips and not chain:
+                return None
+            return host, ",".join(ips), cdn.match(chain, ctx.settings)
+
+        mapping = {}
+        for item in pool_run(_one, subs, workers=workers):
+            host, ips, cdn_label = item
+            mapping[host] = (ips, cdn_label)
+        db.set_subdomain_net(ctx.task_id, mapping)
+        n_cdn = sum(1 for _ip, label in mapping.values() if label)
+        ctx.logger.info(f"[subdomain] 回填解析结果 {len(mapping)} 个"
+                        f"（其中标记 CDN {n_cdn} 个，非 CDN {len(mapping) - n_cdn} 个）")

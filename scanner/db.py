@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS subdomains (
   task_id INTEGER NOT NULL,
   domain TEXT NOT NULL,
   source TEXT DEFAULT '',
-  cname TEXT DEFAULT ''
+  cname TEXT DEFAULT '',
+  ip TEXT DEFAULT '',
+  cdn TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS sites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +99,8 @@ def init_db():
 # 老库轻量迁移：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列，
 # 这里按需 ADD COLUMN（SQLite 的 ADD COLUMN 是原地元数据操作，代价极低）。
 _COLUMN_PATCHES = {
-    "subdomains": {"cname": "TEXT DEFAULT ''"},
+    "subdomains": {"cname": "TEXT DEFAULT ''", "ip": "TEXT DEFAULT ''",
+                   "cdn": "TEXT DEFAULT ''"},
     "sites": {"favicon": "TEXT DEFAULT ''"},
 }
 
@@ -240,6 +243,20 @@ def set_subdomain_cnames(task_id, mapping):
     _exec("UPDATE subdomains SET cname=? WHERE task_id=? AND domain=?", rows, many=True)
 
 
+def set_subdomain_net(task_id, mapping):
+    """回填子域名的解析 IP 与 CDN 标记。
+
+    mapping: {domain: (ip_text, cdn_label)}；`ip_text` 是逗号连接的 A 记录，
+    `cdn_label` 为空串表示判定为非 CDN（直连源站）。两个空值不写库，避免把
+    "没查到"覆盖成空字符串而抹掉已有数据。
+    """
+    rows = [(ip or "", cdn or "", task_id, d)
+            for d, (ip, cdn) in (mapping or {}).items() if ip or cdn]
+    if not rows:
+        return
+    _exec("UPDATE subdomains SET ip=?, cdn=? WHERE task_id=? AND domain=?", rows, many=True)
+
+
 def insert_sites(task_id, sites):
     if not sites:
         return
@@ -314,25 +331,37 @@ def list_csegs(task_id):
 
 # 表 -> (默认排序, 可被关键字过滤的文本列)
 _ASSET_PAGES = {
-    "subdomains": ("task_id DESC, domain", ("domain", "source", "cname")),
+    "subdomains": ("task_id DESC, domain", ("domain", "source", "cname", "ip", "cdn")),
     "sites": ("task_id DESC, id DESC", ("url", "host", "title", "server", "tech")),
     "ports": ("task_id DESC, port", ("host", "ip", "service", "banner")),
     "csegs": ("task_id DESC, segment, ip", ("segment", "ip", "domains")),
     "dirs": ("task_id DESC, id DESC", ("site_url", "path", "note")),
 }
 
+# 子域名来源分类（资产视图的"子域名 / 拓展域名"两个页面靠它分流）：
+# 「自身子域名」= 被动收集（subfinder / passive:*）与字典爆破（puredns / dns-brute）的产物；
+# 「拓展域名」= 从 JS（js:mine）与外部情报（osint:cseg / osint:fofa）里带出来的关联域名，
+# 它们未必属于目标，混在子域名页里会让人误判资产归属。
+OWN_SUBDOMAIN_WHERE = "source NOT LIKE 'js:%' AND source NOT LIKE 'osint:%'"
+EXT_SUBDOMAIN_WHERE = "(source LIKE 'js:%' OR source LIKE 'osint:%')"
 
-def page_assets(table, limit=200, offset=0, q=None):
+
+def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_params=()):
     """跨任务资产分页查询，返回 (rows, total)。
 
     `q` 是"整行关键字"（对若干文本列做 LIKE），与前端 `initFilters()` 的体验一致，
     区别是过滤与分页都放在 SQL 侧 —— 数据量上去后不再被固定 `LIMIT 500` 截断。
+    `extra_where` 是**服务端**附加条件（如子域名来源分流、CDN 标签），参数走 `extra_params`。
     """
     order, cols = _ASSET_PAGES[table]
-    where, params = "", []
+    clauses, params = [], []
+    if extra_where:
+        clauses.append(f"({extra_where})")
+        params.extend(extra_params)
     if q:
-        where = " WHERE " + " OR ".join(f"{c} LIKE ?" for c in cols)
-        params = [f"%{q}%"] * len(cols)
+        clauses.append("(" + " OR ".join(f"{c} LIKE ?" for c in cols) + ")")
+        params.extend([f"%{q}%"] * len(cols))
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     total = _query(f"SELECT COUNT(*) c FROM {table}{where}", tuple(params), one=True)
     rows = _query(f"SELECT * FROM {table}{where} ORDER BY {order} LIMIT ? OFFSET ?",
                   tuple(params) + (int(limit), int(offset)))

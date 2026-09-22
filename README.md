@@ -3,11 +3,11 @@
 面向 **CTF 与授权渗透测试** 的一体化资产测绘与漏洞初筛框架。参考灯塔（ARL）的任务化思路，把常用的「子域名收集 → 子域接管 → 端口服务 → 存活探测 → 外部情报拓展 → JS 资产挖掘 → 目录发现 → 漏洞初筛」8 阶段流水线产品化：
 
 - **CLI 客户端**：导入目标文件，全自动执行完整流水线；
-- **Web 控制台（GUI）**：仿 ARL 的任务/资产/漏洞/POC 管理界面，可视化添加目标并发起扫描，支持任务批量停止/重启/删除与报告导出；
+- **Web 控制台（GUI）**：仿 ARL 的任务/资产/漏洞/POC 管理界面（**8 栏侧边栏**：仪表盘 / 任务 / 子域名 / 拓展域名 / 站点 / 漏洞 / POC / 策略），可视化添加目标并发起扫描，支持任务批量停止/重启/删除与报告导出；子域名标出**解析 IP 与 CDN/非 CDN**（可标签过滤），站点页**默认折叠重复站点**（同任务内标题+响应长度相同，页顶开关可放开）；
 - **POC 管理**：YAML 格式 POC 引擎（**nuclei 语法兼容子集**），可直接加载官方 nuclei 模板，支持上传、启停、目录扫描；
 - **检测分级门控（四层）**：阶段级总开关（`vulnscan.enabled`，关闭即"只测绘不探测"）+ 按级别整体跳过（`skip_severities`，默认 info/low **连请求都不发**）+ 按最低报告级别收敛结果（默认 medium）+ OWASP 分类 / 单项检查开关，默认屏蔽"太 low 的洞"；
 - **动态免杀**：UA 随机化、浏览器化请求头、WAF 指纹识别、注入 payload 变形（分级 0~3，变体与参数顺序每次随机）；
-- **信息收集增强**：免 key 多来源被动子域名收集（crt.sh / certspotter / alienvault 等）+ 泛解析过滤 + 子域接管指纹（41 条第三方服务）+ JS 资产挖掘（域名/接口/疑似凭据）+ **外部情报拓展**（`/24` C 段反查域名；favicon 的 mmh3 去 FOFA 反查同源资产，命中过多的"黑 ico"主动放弃拓展）；
+- **信息收集增强**：免 key 多来源被动子域名收集（crt.sh / certspotter / alienvault 等）+ 泛解析过滤 + 子域接管指纹（41 条第三方服务）+ 子域名**解析 IP / CDN 标记**（`config/dicts/cdn_cname.txt` 292 条厂商 CNAME 后缀，纯 DNS 只读判定）+ JS 资产挖掘（域名/接口/疑似凭据，JS 与情报带出的域名归入**拓展域名**页）+ **外部情报拓展**（`/24` C 段反查域名；favicon 的 mmh3 去 FOFA 反查同源资产，命中过多的"黑 ico"主动放弃拓展）；
 - **OWASP Top 10**：内置轻量启发式检查（全部非破坏性，结论为"潜在漏洞/初筛信号"，需人工确认）。
 
 > **法律与授权声明**：本工具仅可用于自己拥有或已获得书面授权的目标（CTF 平台、靶场、委托测试范围）。对未授权目标使用属于违法行为，后果自负。详见 [docs/security-notice.md](docs/security-notice.md)。
@@ -86,6 +86,7 @@ ctf-scanner/
 │   ├── wildcard.py          #   泛解析识别与过滤
 │   ├── passive.py           #   免 key 多来源被动子域名收集
 │   ├── dnsq.py              #   纯标准库 DNS 客户端（含 CNAME 链解析）
+│   ├── cdn.py               #   CDN 判定（按 CNAME 后缀匹配厂商名单，只读加载）
 │   ├── takeover.py          #   子域接管指纹库（41 条第三方服务）
 │   ├── portscan.py          #   端口/服务扫描（nmap 优先，内置 TCP connect 兜底）
 │   ├── jsmine.py            #   JS 资产挖掘（域名/接口/疑似凭据 + 黑名单降噪）
@@ -95,9 +96,9 @@ ctf-scanner/
 │   ├── db.py  config.py  utils.py  targets.py  report.py
 ├── tools/import_ref_pocs.py #   参考项目 Python POC 静态导入器（产物默认关闭）
 ├── config/
-│   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/passive/evasion/takeover/dirscan/vulnscan/portscan/jsmine/iprecon/fofa）
+│   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa）
 │   ├── keys.yaml            # 第三方 API key 专用文件（gitignore，GUI 不写回）
-│   ├── dicts/               # 子域名字典、resolvers、目录字典
+│   ├── dicts/               #   子域名字典、resolvers、目录字典、cdn_cname.txt（CDN 厂商后缀）
 │   ├── pocs-user/           # 用户上传的 POC（GUI 上传后落在这里）
 │   ├── pocs-imported/       # 批量导入的 POC（默认关闭，需在 POC 管理页挑选启用）
 │   └── nuclei-templates/    # 官方 nuclei 模板投放点（可被本引擎直接加载）

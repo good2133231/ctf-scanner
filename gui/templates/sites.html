@@ -4,18 +4,30 @@
 <p class="muted">全库存活站点（跨任务，服务端分页 + 关键字过滤）。favicon MD5 是"零请求前置指纹"，
   POC 声明 favicon_md5_list 时会先与它比对（见 策略配置 → 检测策略）。</p>
 <section class="panel">
+  <p class="muted small">重复站点折叠：<b>同一任务内</b>「标题 + 响应长度」完全相同的站点视为重复
+    （同一虚拟主机的别名/泛解析产物），默认只留首个出现的。折叠只作用于当前页，
+    分页条的「共 N 条」仍是未折叠的总数。
+    {% if show_all %}
+      当前<b>显示全部</b>（含 {{ hidden }} 条重复）。
+      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}">只看去重</a>
+    {% else %}
+      已折叠隐藏 {{ hidden }} 条。
+      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&all=1">显示全部</a>
+    {% endif %}
+  </p>
   <form class="filters" method="get" action="{{ pager.base }}">
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="URL / 标题 / 技术栈 / Server"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
+    {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
     <button class="ghost" type="submit">查询</button>
     {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
   </form>
   <table id="tbl-all-sites">
     <thead><tr><th>#</th><th>任务</th><th>URL</th><th>状态</th><th>标题</th>
-      <th>技术栈</th><th>Server</th><th>favicon</th></tr></thead>
+      <th>技术栈</th><th>Server</th><th>favicon</th><th>重复</th></tr></thead>
     <tbody>
     {% for s in sites %}
-      <tr>
+      <tr class="{{ 'muted' if s.hidden_dup else '' }}">
         <td>{{ s.id }}</td>
         <td><a href="{{ url_for('task_detail', task_id=s.task_id) }}">#{{ s.task_id }}</a></td>
         <td>{{ s.url }}</td>
@@ -24,9 +36,14 @@
         <td class="muted">{{ s.tech or '-' }}</td>
         <td class="muted small">{{ s.server or '-' }}</td>
         <td class="muted small mono">{{ (s.favicon or '-')[:12] }}</td>
+        <td class="muted small">
+          {%- if s.hidden_dup -%}（被折叠）
+          {%- elif s.dup -%}另有 {{ s.dup }} 条相同
+          {%- else -%}-{%- endif -%}
+        </td>
       </tr>
     {% else %}
-      <tr><td colspan="8" class="muted">没有匹配的站点资产。</td></tr>
+      <tr><td colspan="9" class="muted">没有匹配的站点资产。</td></tr>
     {% endfor %}
     </tbody>
   </table>

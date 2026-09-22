@@ -30,6 +30,23 @@ from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 logger = get_logger("gui")
 
 
+def _rel_path(path):
+    """把绝对路径转成相对项目根的路径（页面上只展示相对路径，不暴露本机目录结构）。
+
+    解析失败（不在项目内、路径不存在）时原样返回，绝不因为展示需求而抛错。
+    """
+    try:
+        return str(Path(path).resolve().relative_to(BASE_DIR))
+    except (ValueError, OSError):
+        return str(path)
+
+
+def _and_where(*parts):
+    """把若干 SQL 条件用 AND 拼起来，忽略空值（避免条件为空时生成 `() AND ...`）。"""
+    items = [p for p in parts if p]
+    return " AND ".join(f"({p})" for p in items) if items else None
+
+
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
@@ -115,9 +132,13 @@ def create_app():
         task = db.get_task(task_id)
         if not task:
             abort(404)
+        # 子域名 Tab 只列目标自身的子域名；JS/情报拓展的域名单独计数并指到「拓展域名」页
+        subs = [dict(r) for r in db.list_subdomains(task_id)]
+        own = [r for r in subs if not (r["source"] or "").startswith(("js:", "osint:"))]
         return render_template(
             "task_detail.html", task=task,
-            subs=db.list_subdomains(task_id), sites=db.list_sites(task_id),
+            subs=own, ext_count=len(subs) - len(own),
+            sites=db.list_sites(task_id),
             ports=db.list_ports(task_id), csegs=db.list_csegs(task_id),
             dirs=db.list_dirs(task_id),
             vulns=db.list_vulns(task_id=task_id, limit=1000),
@@ -234,8 +255,9 @@ def create_app():
         # 分类统计（来源 / 级别），供页面上的"按分类批量开关"展示当前分布
         stats = {"source": {}, "severity": {}, "enabled": 0, "total": len(rows)}
         for r in rows:
-            src = db.poc_source(r["path"])
+            src = db.poc_source(r["path"])    # 来源判定依赖原始路径，必须在相对化之前算
             r["source"] = src                 # 列表展示 / 前端筛选用
+            r["path"] = _rel_path(r["path"])  # 页面只展示相对路径
             stats["source"][f"{src}:on" if r["enabled"] else f"{src}:off"] = \
                 stats["source"].get(f"{src}:on" if r["enabled"] else f"{src}:off", 0) + 1
             stats["severity"][r["severity"] or "-"] = stats["severity"].get(r["severity"] or "-", 0) + 1
@@ -289,8 +311,17 @@ def create_app():
     @login_required
     def vulns():
         sev = request.args.get("severity") or None
-        return render_template("vulns.html",
-                               vulns=db.list_vulns(severity=sev, limit=500), sev=sev or "")
+        tid = request.args.get("task_id") or ""
+        try:
+            tid = int(tid)
+        except (TypeError, ValueError):
+            tid = None
+        rows = db.list_vulns(task_id=tid, severity=sev, limit=500)
+        # 跨任务视图里只有 `任务 #12` 没法辨认，这里带上任务名，并支持按任务筛选。
+        tasks = db.list_tasks(limit=1000)
+        return render_template("vulns.html", vulns=rows, sev=sev or "",
+                               task_id=tid or "", tasks=tasks,
+                               task_names={t["id"]: t["name"] for t in tasks})
 
     # ---------- 资产分栏 ----------
     #
@@ -309,29 +340,88 @@ def create_app():
         return max(1, _int("page", 1)), (size if size in PAGE_SIZES else 100), \
             (request.args.get("q") or "").strip()
 
-    def _asset_page(table, base):
+    def _asset_page(table, base, extra_where=None, extra_params=()):
         page, size, q = _page_args()
-        rows, total = db.page_assets(table, limit=size, offset=(page - 1) * size, q=q or None)
+        rows, total = db.page_assets(table, limit=size, offset=(page - 1) * size, q=q or None,
+                                     extra_where=extra_where, extra_params=extra_params)
         pages = max(1, (total + size - 1) // size)
         if page > pages:  # 页码越界（例如过滤后总页数变少）→ 回落到最后一页重查
             page = pages
-            rows, total = db.page_assets(table, limit=size, offset=(page - 1) * size, q=q or None)
+            rows, total = db.page_assets(table, limit=size, offset=(page - 1) * size,
+                                         q=q or None, extra_where=extra_where,
+                                         extra_params=extra_params)
         qs = f"&q={q}&size={size}" if q else f"&size={size}"
         pager = {"page": page, "size": size, "total": total, "pages": pages,
                  "base": base, "qs": qs}
         return rows, pager, q
 
+    def _cdn_tag():
+        """子域名/拓展域名页的 CDN 标签过滤：全部 / cdn（走 CDN）/ nocdn（直连源站）。"""
+        tag = (request.args.get("tag") or "").strip().lower()
+        if tag == "cdn":
+            return tag, "cdn <> ''", ()
+        if tag == "nocdn":
+            return tag, "cdn = ''", ()
+        return "", None, ()
+
     @app.route("/subdomains")
     @login_required
     def subdomains():
-        rows, pager, q = _asset_page("subdomains", "/subdomains")
-        return render_template("subdomains.html", subs=rows, pager=pager, q=q)
+        # 只显示目标自身的子域名（被动收集 + 字典爆破）；JS/情报拓展出来的域名
+        # 归到「拓展域名」页 —— 混在一起会让人误判资产归属。
+        tag, where, params = _cdn_tag()
+        rows, pager, q = _asset_page("subdomains", "/subdomains",
+                                     extra_where=_and_where(db.OWN_SUBDOMAIN_WHERE, where),
+                                     extra_params=params)
+        if tag:
+            pager["qs"] += f"&tag={tag}"
+        return render_template("subdomains.html", subs=rows, pager=pager, q=q, tag=tag)
+
+    @app.route("/extdomains")
+    @login_required
+    def extdomains():
+        """拓展域名：从 JS（js:mine）与外部情报（osint:cseg / osint:fofa）带出来的域名。"""
+        tag, where, params = _cdn_tag()
+        rows, pager, q = _asset_page("subdomains", "/extdomains",
+                                     extra_where=_and_where(db.EXT_SUBDOMAIN_WHERE, where),
+                                     extra_params=params)
+        if tag:
+            pager["qs"] += f"&tag={tag}"
+        return render_template("extdomains.html", subs=rows, pager=pager, q=q, tag=tag)
 
     @app.route("/sites")
     @login_required
     def sites():
         rows, pager, q = _asset_page("sites", "/sites")
-        return render_template("sites.html", sites=rows, pager=pager, q=q)
+        # 重复站点折叠：**同一任务内**「标题 + 响应长度」完全相同的多个 URL，多为同一台
+        # 虚拟主机的别名/泛解析产物（灯塔类工具也会做这层去重）。默认只留首个出现的，其余
+        # 隐藏，页面上给开关显示全部。两个要点：
+        # - key 必须带 task_id：这是跨任务视图，若不带，A 任务的站点会因为 B 任务有同名同长度的
+        #   站点而被折叠掉（实测把同一个靶场的 15 条记录折成了 1 条，资产归属直接丢失）；
+        # - 标题为空的不参与折叠 —— 空标题站点的长度相同纯属巧合；
+        # - 折叠只作用于**当前页**（分页条上的"共 N 条"仍是 SQL 的总数）。
+        rows = [dict(r) for r in rows]
+        seen, hidden = {}, 0
+        for r in rows:
+            r["dup"] = 0
+            title = (r.get("title") or "").strip()
+            if not title:
+                continue
+            key = (r.get("task_id"), title, r.get("length"))
+            first = seen.get(key)
+            if first is None:
+                seen[key] = r
+            else:
+                first["dup"] += 1
+                r["hidden_dup"] = True
+                hidden += 1
+        show_all = request.args.get("all") == "1"
+        if not show_all:
+            rows = [r for r in rows if not r.get("hidden_dup")]
+        if show_all:
+            pager["qs"] += "&all=1"
+        return render_template("sites.html", sites=rows, pager=pager, q=q,
+                               show_all=show_all, hidden=hidden)
 
     @app.route("/ports")
     @login_required

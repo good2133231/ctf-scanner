@@ -252,3 +252,46 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
       [takeover]/[portscan]/[osint]/[jsmine]/[dirscan]/[vulnscan]「未启用……跳过」，
       且 dirs / vulns / csegs / ports / takeovers 全为空 —— 证明是"门控生效"而非"没输入"
     `[5b]` 策略页两个新开关勾选与取消勾选均正确落库（save_settings 用桩函数接管，settings.yaml 未被污染）
+  第十三轮补充（运行时证据）：`[2d]` 解码四条路径、`[3e]` 非标端口候选纳入、`[5c]` 分流/标记/去重/相对路径
+    三条断言全部通过；GUI 路由 200 集合已改为 8 栏（/ports /csegs /dirs 从侧栏移除，仅详情页签可达）
+
+-----
+（第十三轮：你提的 7 项需求 —— 乱码 / 拓展域名 / IP+CDN / 相对路径 / 侧栏精简 / 非标端口 / 重复站点）
+[完成] 1、标题中文乱码：根因是 requests 在响应头 `Content-Type` **不带 charset** 时回退 ISO-8859-1，
+       把 UTF-8 中文解错码后**原样入库**。新增 `utils._charset_of/_decode_body`，解码顺序 =
+       响应头 charset → UTF-8 → GB18030 → 带替换 UTF-8（requests 与 urllib 两条路径都走它）；
+       存量核查：库里 36 条站点标题 **0 条乱码**（原乱码行属已删除的任务 89），无需回填
+[完成] 2、JS 匹配到的域名归「拓展域名」：新增 `db.OWN_SUBDOMAIN_WHERE`（subfinder/passive:*/puredns/
+       dns-brute）与 `EXT_SUBDOMAIN_WHERE`（js:/osint:）两个判据 + 新页 `/extdomains`
+       （导航项 + `gui/templates/extdomains.html`）；子域名页与任务详情子域名 Tab 只列目标自身
+[完成] 3、目标 IP + CDN 标记 + 标签过滤：新增 `scanner/cdn.py`（数据驱动，读
+       `config/dicts/cdn_cname.txt` 的 292 条厂商 CNAME 后缀，纯只读匹配）+ `subdomains.ip/cdn`
+       两列（`_ensure_columns` 原地 ALTER TABLE 迁移）+ subdomain 阶段 `_fill_net()` 回填
+       （上限 `subdomain.max_resolve` 默认 500、`subdomain.dns_timeout` 默认 3s，纯 DNS 零 HTTP）；
+       子域名页/拓展域名页均加「全部 / CDN / 非 CDN」标签过滤（`?tag=`）
+[完成] 4、POC 导入路径不再出现绝对路径：`gui/app.py` 新增 `_rel_path()`（`relative_to(BASE_DIR)`，
+       失败原样返回），POC 管理页只展示相对项目根的路径；**来源判定先用原始路径算完再相对化**
+[完成] 5、侧栏删「目录发现 / 端口服务 / C 段视野」3 栏（10 栏 → 8 栏，含新增的「拓展域名」）——
+       这三类是任务维度数据，任务详情页签本来就能看，符合你"一般直接看任务管理"的习惯；
+       **数据未删**，仍在任务详情页签与报告中；漏洞风险页**保留并加强**：级别筛选（`?severity=`）
+       + 新增**任务名列**（点击直达任务详情）+ 按任务下拉过滤（`?task_id=`）—— 即你要的"按任务名分类"
+[完成] 6、能扫出 `http://host:9007` 这类非标端口站点：`probe` 阶段现在消费 `portscan` 的 `ports` 表，
+       对非 80/443 的开放端口补出 `https://host:port` / `http://host:port` 候选（日志写明
+       `额外纳入 N 个开放端口候选（来自 portscan）`）。**前提是同时打开 portscan 阶段**（默认关）
+[完成] 7、重复站点默认隐藏：`/sites` 折叠**同一任务内**「标题 + 响应长度」完全相同的多条，
+       只留首个、其余标「另有 N 条相同 / （被折叠）」，页顶开关「显示全部」（`?all=1`）放开。
+       **过程中自查出一个真 Bug**：第一版折叠键漏了 `task_id`，而站点页是跨任务视图 ——
+       实测把同一个靶场的 15 条记录折成 1 条、资产归属直接丢失；已改为 `(task_id, 标题, 长度)`
+[完成] 顺带修一处测试脆弱性：smoke `[2c]` 原本硬编码假设"keys.yaml 未填 fofa"，而你已填真实凭据，
+       原断言会失败、且下一句 `fofa.search()` 会带真实 key **发真实网络请求**；改为用显式清空 keys 的
+       副本断言"未配置"分支，测试与本地凭据解耦、不触网
+[完成] tests/smoke.py 扩充并跑通（SMOKE PASS，连跑两次稳定）：新增 `[2d] body-decode`（含 GB18030 兜底）、
+       `[3e] nonstd-port`（给 127.0.0.1:8765 造端口记录，断言 probe 产出该端口站点）、
+       `[5c] 分流/标记/去重/相对路径`（CDN 命中、侧栏已无 /ports /csegs /dirs、来源分流、
+       CDN 标签过滤、折叠 1/3、POC 无绝对路径、漏洞页带任务名）
+[完成] 文档同步（本轮收尾）：docs/usage.md（8 栏 + 侧栏精简说明 + 拓展域名/重复站点/乱码/非标端口 4 条 FAQ
+       + max_resolve）、docs/pipeline.md（subdomain IP/CDN 回填、probe 消费开放端口、配置速查 2 行）、
+       docs/architecture.md（scanner/cdn.py、subdomains 表 ip/cdn、老库迁移、GUI 路由与分栏）、
+       README.md（cdn.py / cdn_cname.txt / 8 栏侧边栏 / 能力清单）
+[待办] P2-3 Linux 实机验证（仍按你的指示挂起）
+[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）

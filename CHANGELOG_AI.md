@@ -3,6 +3,103 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十三轮：用户提的 7 项需求（乱码/拓展域名/IP+CDN/相对路径/侧栏精简/非标端口/重复站点）
+
+用户原话给的 7 条，逐条落地（另含一处环境变化的排查）：
+
+### 0）先回答"另一个 AI 有没有改坏代码"
+
+**没有。** `git status --short` 干净、HEAD 仍是第十二轮的 `345d5a2`、近 3 小时被改的源文件
+全部是我自己的编辑时间戳；`.kiro/` 与 KiroCrew 进程属于另一个工具、不在本仓库内。
+
+### 1）站点标题中文乱码 —— 根因在响应体解码，不在数据库
+
+- 根因：`scanner/utils.py` 的 requests 分支直接用 `r.text`。当响应头是 `Content-Type: text/html`
+  **不带 charset** 时，requests 按历史行为回退 **ISO-8859-1**，UTF-8 的"维保中心"被解成
+  `ç»´ä¿ä¸­å¿ƒ` 并**原样入库**，再一路带到 GUI 与报告。
+- 修复：新增 `_charset_of()` / `_decode_body()`，解码顺序 = 响应头 charset → UTF-8 → GB18030
+  → 带替换的 UTF-8；requests 与 urllib 两条路径都改用它。
+- 存量数据：扫过库里 36 条站点标题，**0 条乱码**（此前的乱码行属于已删除的任务 89），无需回填。
+
+### 2）JS 匹配到的域名归「拓展域名」，子域名页只留目标自身
+
+- `scanner/db.py` 新增两个来源判据常量：`OWN_SUBDOMAIN_WHERE`（subfinder / passive:* /
+  puredns / dns-brute）与 `EXT_SUBDOMAIN_WHERE`（`js:` / `osint:`）。
+- GUI 新增 `/extdomains`「拓展域名」页（导航项 + `extdomains.html`），子域名页改用 OWN 判据；
+  任务详情的子域名 Tab 同样只列自身子域名，并提示"另有 N 个拓展域名"。
+
+### 3）目标 IP + CDN/非 CDN 标记 + 标签过滤
+
+- **新增 `scanner/cdn.py`** + 数据文件 `config/dicts/cdn_cname.txt`（292 条厂商 CNAME 后缀，
+  取自参考项目 `dict/information/cdn_cname.txt`，TODO.md 早前已标"采纳"）。匹配三种写法：
+  含点的按后缀、以点结尾的（`.akamai.`）与裸词（`.cloudflare` / `.awsdns`）按子串。
+- `subdomains` 表新增 `ip` / `cdn` 两列（`_ensure_columns` 原地 ADD COLUMN，老库自动迁移）。
+- `subdomain` 阶段新增 `_fill_net()`：对每个子域名做一次 `dnsq.cname_chain()`（纯 DNS 只读），
+  回填 `ip` 与 `cdn`；上限 `subdomain.max_resolve`（默认 500）、超时 `subdomain.dns_timeout`。
+- GUI：子域名/拓展域名/任务详情三处都出 IP 与 CDN 列，并给 **CDN / 非 CDN** 标签过滤
+  （服务端 SQL，`page_assets` 新增 `extra_where` / `extra_params`）。
+
+### 4）POC 管理页不再显示绝对路径
+
+- `gui/app.py` 新增 `_rel_path()`（`Path.resolve().relative_to(BASE_DIR)`，失败原样返回），
+  `pocs()` 里在 `db.poc_source()` **之后**把 `path` 相对化（来源判定依赖原路径，顺序不能反）。
+
+### 5）侧栏精简 + 漏洞页按任务名分类
+
+- `base.html` 导航删掉 **端口服务 / C 段视野 / 目录发现** 三项（**路由保留**，任务详情页签仍在用）；
+  同时新增「拓展域名」。
+- 漏洞风险页：任务列由 `#12` 改为**任务名（链到任务详情）**，并新增按任务筛选下拉
+  （`/vulns?task_id=`，级别筛选链接会保留 task_id）；`db.list_vulns` 早已支持 task_id 过滤，直接复用。
+
+### 6）非标端口站点（灯塔能扫出 `http://host:9007` 的原因）
+
+- 根因：probe 之前只为 URL 目标与 `domains_for_probe` 生成候选，**scheme 固定 80/443**，
+  所以非标端口上的站点永远发现不了。灯塔是在**开放端口**上补做 HTTP 探测。
+- 修复：probe 候选生成处消费 `ctx.results["ports"]`（回退 `db.list_ports()`），
+  对非 80/443 的开放端口补 `https://host:port` / `http://host:port` 候选。
+
+### 7）站点重复折叠（默认隐藏，页面给开关）
+
+- `sites()` 按 **(task_id, 标题, 响应长度)** 折叠，只留首个出现的，其余隐藏并在"重复"列标注；
+  `?all=1` 显示全部（保留在分页链接与筛选表单里）。标题为空的不参与折叠。
+- **实现过程中自查出并修掉一个真 Bug**：第一版 key 漏了 `task_id`，而站点页是**跨任务视图**，
+  结果把不同任务的同名同长度站点折成一条（实测把同一个靶场的 15 条记录折成 1 条，资产归属丢失）。
+
+### 顺带修掉的一处"测试依赖本机凭据"（用户已填真实 FOFA key）
+
+`tests/smoke.py` 原本硬断言 `fofa.available(settings) is False`（"keys.yaml 未填"）。用户把真实
+FOFA email/key 填进 `config/keys.yaml` 后该断言失败，**且下一条断言会带着真 key 去发真实请求**。
+已改为用一份显式清空 keys 的副本来断言"未配置"分支 —— 测试必须与本机凭据无关。
+（`config/keys.yaml` 在 `.gitignore` 第 15 行，凭据不会进仓库。）
+
+### 文档同步（本轮收尾）
+
+- `docs/usage.md`：侧栏 10 栏 → 8 栏并说明为何收敛（被删路由仍在、可直达 URL）；新增「拓展域名」条目；
+  站点页折叠说明；漏洞页任务名列 + 按任务筛选；POC 页相对路径；策略页补 `subdomain.max_resolve`；
+  新增 4 条 FAQ（乱码根因 / 为何能扫出 `:9007` / 子域名页与拓展域名页之别 / 站点条数为何变少）；
+- `docs/pipeline.md`：subdomain 新增「IP/CDN 回填」段与归属说明；portscan 产物去掉"侧栏分栏"表述并说明被 probe 消费；
+  probe 新增"额外候选（消费开放端口）"与响应体解码说明；配置速查补 `subdomain.*` 与 `dicts.cdn_cname`；
+- `docs/architecture.md`：资产层加 `scanner/cdn.py`；`subdomains` 表补 `ip`/`cdn` 与两类来源判据；
+  新增「老库原地迁移」与「GUI 路由与分栏」两节；`osint`/`jsmine` 的产物改述为「拓展域名」页；
+- `README.md`：目录结构补 `cdn.py` / `cdn_cname.txt`；能力清单补 IP/CDN 标记、折叠、8 栏侧边栏
+  （并顺手修掉 settings.yaml 段名清单里把 `subdomain` 写漏、误写 `osint` 段的问题）；
+- `AGENTS.md`：GUI 外壳 10 栏 → 8 栏（含被删路由说明）、文件树补 `cdn.py`、dicts 补 `cdn_cname(292)`、
+  「十二段」→「十三段」、smoke 断言清单更新；顺带修正一处既有错误（`dirscan`/`vulnscan` 总开关是
+  **第十轮**补齐，AGENTS 原写"第九轮"，与 CHANGELOG/commit 不符）；
+- `TODO.md`：P2-1 改为"现为 8 栏"、B-6 的"10 栏"改 8 栏、新增「第十三轮」小节（7 项全 `[x]`）、
+  C-1 累计补第十三轮；`todo.txt`：新增第十三轮小节（逐条 `[完成]`）并保留第十轮运行时证据段。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py
+# SMOKE PASS，新增断言：
+#  [2d]  body-decode：无 charset → UTF-8 / 声明优先 / GB18030 兜底
+#  [3e]  nonstd-port：只给裸 IP + 一条 127.0.0.1:8765 端口记录 → probe 产出该端口上的站点
+#  [5c]  分流/标记/去重/相对路径：侧栏已无 /ports /csegs /dirs、js|osint 来源只出现在拓展域名页、
+#        CDN 标签过滤走服务端、重复站点默认 1 条且 ?all=1 为 3 条、POC 页无绝对路径、漏洞页带任务名
+```
+
 ## 2026-09-22 —— 第十二轮：一次由我方子代理造成的批量误删事故（含抢救与护栏）
 
 ### 事实（不粉饰）

@@ -117,12 +117,31 @@ def main():
     assert iprecon.group_segments(["1.2.3.5", "1.2.3.4", "9.9.9.9", "::1"]) == \
         {"1.2.3.0/24": ["1.2.3.4", "1.2.3.5"], "9.9.9.0/24": ["9.9.9.9"]}
     assert fofa.build_query(-12345) == 'icon_hash="-12345"'
-    assert fofa.available(settings) is False, "keys.yaml 未填 fofa 时应判为不可用"
-    assert fofa.search(-12345, settings)[2], "无 key 时应显式报错而不是静默返回空"
+    # FOFA 凭据来自 config/keys.yaml（本地环境文件、已 gitignore），测试**不能假设它是否已填**：
+    # 用一份显式清空 keys 的副本断言"未配置"分支。之前这里直接断言 `available(settings) is False`，
+    # 用户一旦填入真实 key，测试先是失败、然后会带着真 key 去发真实请求 —— 测试必须与本地凭据无关。
+    no_key = copy.deepcopy(settings)
+    no_key["keys"] = {"fofa": {"email": "", "key": ""}}
+    assert fofa.available(no_key) is False, "未配置 email/key 时 fofa 应判为不可用"
+    assert fofa.search(-12345, no_key)[2], "无 key 时应显式报错而不是静默返回空"
     assert fofa.is_black_ico(200, settings) is False and fofa.is_black_ico(201, settings) is True
     print(f"[2c] favicon/osint primitives ok: mmh3 向量 {len(mmh3.SELF_TEST)} 个全中；"
           f"favicon_hash(b'')={mmh3.favicon_hash(b'')} / ico={mmh3.favicon_hash(icon)}；"
           f"黑 ico 阈值 {fofa.black_ico_threshold(settings)}；fofa 可用={fofa.available(settings)}")
+
+    # 2d) 响应体解码（站点标题中文乱码的根因）：响应头没声明 charset 时，requests 的 r.text 会
+    #     按 ISO-8859-1 回退，UTF-8 的"维保中心"会变成"ç»´ä¿ä¸­å¿ƒ"并原样入库。
+    from scanner.utils import _charset_of, _decode_body
+    assert _charset_of("text/html; charset=GBK") == "GBK"
+    assert _charset_of("text/html") == ""
+    zh = "维保中心"
+    assert _decode_body(zh.encode("utf-8"), "text/html") == zh, "无 charset 时必须按 UTF-8 解"
+    assert _decode_body(zh.encode("utf-8"), "text/html; charset=utf-8") == zh
+    # GB18030 兜底：中文站的"中文"用 UTF-8 解是非法字节序列，应回退到 gb18030
+    assert _decode_body("中文".encode("gb18030"), "text/html") == "中文"
+    assert _decode_body("中文".encode("gb18030"), "text/html; charset=gbk") == "中文"
+    assert _decode_body(b"\xff\xfe\xfa", "text/html"), "严重损坏时也要返回替换字符而不是抛错"
+    print("[2d] body-decode ok: 无 charset → UTF-8 / 声明优先 / GB18030 兜底")
 
     # 3) 离线流水线（probe + vulnscan）打本地靶场
     targets = "http://127.0.0.1:8765/"
@@ -199,6 +218,19 @@ def main():
     assert not ctx_gate.results["csegs"] and not db.list_csegs(tid_gate), ctx_gate.results["csegs"]
     assert not ctx_gate.results["osint_domains"], ctx_gate.results["osint_domains"]
     print("[3d] gate ok: probe 有站点，但 takeover/portscan/osint/jsmine/dirscan/vulnscan 关闭后无产出")
+
+    # 3e) 非标端口站点：portscan 已发现的开放端口要参与 probe 候选生成。
+    #     灯塔能扫出 `http://host:9007` 这类站点，靠的就是"对开放端口补做 HTTP 探测"；
+    #     这里给 127.0.0.1:8765（本地靶场）造一条端口记录，目标只给裸 IP，
+    #     若 probe 不消费端口记录，就不可能产出 8765 上的站点。
+    tid_port = db.create_task("smoke-port", "127.0.0.1", ["probe"], {"offline": True})
+    db.insert_ports(tid_port, [{"host": "127.0.0.1", "ip": "127.0.0.1", "port": FIXTURE_PORT,
+                                "service": "http", "banner": ""}])
+    ctx_port = run_task(tid_port, "smoke-port", "127.0.0.1", ["probe"],
+                        {"offline": True}, settings)
+    port_urls = [s["url"] for s in ctx_port.results["sites"]]
+    assert any(f":{FIXTURE_PORT}" in u for u in port_urls), port_urls
+    print(f"[3e] nonstd-port ok: 候选纳入开放端口 -> {port_urls}")
 
     # 4) Markdown 报告
     md = generate(tid)
@@ -292,6 +324,54 @@ def main():
     assert r.get_json()["affected"] == 1 and r.get_json()["skipped"] == [999999], r.get_json()
     assert db.get_task(tid_stop) is None
     print("[5] gui routes ok（含导出 / 批量停止 / 批量删除）")
+
+    # 5c) 本轮新增行为：子域名/拓展域名分流 + IP/CDN 标记与标签过滤 + 站点去重折叠 + POC 相对路径
+    from scanner import cdn as cdn_mod
+    assert cdn_mod.match(["x.alicdn.com"]) == "alicdn.com"
+    assert cdn_mod.match(["a1.b.akamaiedge.net"]) == "akamaiedge.net"
+    assert cdn_mod.match(["site.cloudflare.net"]) == "cloudflare"   # 名单里的裸词按片段匹配
+    assert cdn_mod.match(["www.example.com"]) == ""
+    # 侧边栏精简：端口服务 / C 段视野 / 目录发现 三项已从导航移除（路由保留，任务详情仍在用）
+    nav_html = c.get("/subdomains").get_data(as_text=True)
+    assert 'href="/extdomains"' in nav_html, "侧边栏缺「拓展域名」"
+    for gone in ('href="/ports"', 'href="/csegs"', 'href="/dirs"'):
+        assert gone not in nav_html, f"侧边栏应已移除 {gone}"
+    # 分流：js/osint 来源进「拓展域名」，被动收集/爆破来源留在「子域名资产」
+    db.insert_subdomains(tid, [("own-smoke.example.com", "subfinder"),
+                               ("js-smoke.example.com", "js:mine"),
+                               ("osint-smoke.example.com", "osint:cseg")])
+    db.set_subdomain_net(tid, {"own-smoke.example.com": ("1.2.3.4", ""),
+                               "js-smoke.example.com": ("5.6.7.8", "cloudflare")})
+    own_html = c.get("/subdomains").get_data(as_text=True)
+    assert "own-smoke.example.com" in own_html and "js-smoke.example.com" not in own_html
+    assert "非 CDN" in own_html, "非 CDN 标记应渲染"
+    ext_html = c.get("/extdomains").get_data(as_text=True)
+    assert "js-smoke.example.com" in ext_html and "own-smoke.example.com" not in ext_html
+    assert "osint-smoke.example.com" in ext_html and "5.6.7.8" in ext_html
+    # CDN 标签过滤走服务端 SQL
+    assert "own-smoke.example.com" not in c.get("/subdomains?tag=cdn").get_data(as_text=True)
+    assert "own-smoke.example.com" in c.get("/subdomains?tag=nocdn").get_data(as_text=True)
+    assert "js-smoke.example.com" in c.get("/extdomains?tag=cdn").get_data(as_text=True)
+    assert "js-smoke.example.com" not in c.get("/extdomains?tag=nocdn").get_data(as_text=True)
+    # 站点去重折叠：标题 + 响应长度相同的默认只留首个，?all=1 显示全部。
+    # 标题带上本次任务的 id —— 折叠是按任务的，而 smoke 复用的是同一个库，
+    # 用固定标题会被上一次运行留下的同名站点干扰（计数就不是 1/3 了）。
+    dup_title = f"SMOKE-DUP-{tid}"
+    db.insert_sites(tid, [{"url": f"http://dup{i}.smoke.test/", "host": f"dup{i}.smoke.test",
+                           "port": "80", "status": 200, "title": dup_title, "length": 1234,
+                           "source": "builtin"} for i in range(3)])
+    folded = c.get("/sites").get_data(as_text=True)
+    assert folded.count(dup_title) == 1, folded.count(dup_title)
+    assert "已折叠隐藏" in folded and "另有 2 条相同" in folded
+    unfolded = c.get("/sites?all=1").get_data(as_text=True)
+    assert unfolded.count(dup_title) == 3, unfolded.count(dup_title)
+    assert "（被折叠）" in unfolded
+    # POC 页只展示相对路径（不出现本机绝对目录）
+    assert str(ROOT) not in poc_html, "POC 页不应出现绝对路径"
+    # 漏洞页带任务名（而不是只有一个 #id）
+    vulns_html = c.get("/vulns").get_data(as_text=True)
+    assert db.get_task(tid)["name"] in vulns_html, "漏洞页应显示任务名"
+    print("[5c] 分流/标记/去重/相对路径 ok")
     print("SMOKE PASS")
 
 

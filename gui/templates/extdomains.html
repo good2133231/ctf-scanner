@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block title %}子域名资产{% endblock %}
+{% block title %}拓展域名{% endblock %}
 {% block content %}
-<p class="muted">目标自身的子域名（跨任务，服务端分页 + 关键字过滤）。来源标记 subfinder /
-  passive:&lt;源&gt; / puredns / dns-brute(fallback)。
-  JS 与外部情报拓展出来的域名不在这里，见「拓展域名」页。
-  解析 IP 与 CNAME 由 subdomain 阶段回填（纯 DNS 只读查询）。</p>
+<p class="muted">从 JS 中匹配到的域名（<span class="mono">js:mine</span>）与外部情报反查结果
+  （<span class="mono">osint:cseg</span> / <span class="mono">osint:fofa</span>）。
+  这些域名<b>未必属于目标自身</b>——第三方接口、CDN、统计服务都会出现在 JS 里，
+  因此与「子域名资产」分开放，避免误判资产归属。</p>
 <section class="panel">
   <p class="muted small">标签过滤：CDN 标记来自 CNAME 链与
-    <span class="mono">config/dicts/cdn_cname.txt</span> 名单比对。
+    <span class="mono">config/dicts/cdn_cname.txt</span> 名单比对（接管检测之外的独立判定）。
     <a class="btn-mini {{ 'ghost' if tag != 'cdn' else '' }}"
        href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=cdn">只看 CDN</a>
     <a class="btn-mini {{ 'ghost' if tag != 'nocdn' else '' }}"
@@ -21,8 +21,8 @@
     <button class="ghost" type="submit">查询</button>
     {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
   </form>
-  <table id="tbl-all-subs">
-    <thead><tr><th>#</th><th>任务</th><th>子域名</th><th>解析 IP</th><th>CDN</th>
+  <table id="tbl-all-ext-subs">
+    <thead><tr><th>#</th><th>任务</th><th>域名</th><th>解析 IP</th><th>CDN</th>
       <th>CNAME</th><th>来源</th></tr></thead>
     <tbody>
     {% for s in subs %}
@@ -37,7 +37,7 @@
         <td class="muted">{{ s.source or '-' }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="7" class="muted">没有匹配的子域名资产。</td></tr>
+      <tr><td colspan="7" class="muted">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
     {% endfor %}
     </tbody>
   </table>

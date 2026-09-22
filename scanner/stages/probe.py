@@ -43,6 +43,23 @@ class ProbeStage(Stage):
         # 域名 / 子域名按 https、http 两种 scheme 生成候选
         for h in ctx.results.get("domains_for_probe") or []:
             candidates.extend([f"https://{h}", f"http://{h}"])
+        # 已发现的开放端口也要参与探测：灯塔能扫出 `http://host:9007` 这类站点，是因为它在
+        # **开放端口**上补做了 HTTP 探测；我们此前只生成 :443/:80，所以永远看不到非标端口站点。
+        # 输入来自 portscan（该阶段默认关，开了才有端口；其 max_hosts 已限制规模，无需另加上限）。
+        ports = ctx.results.get("ports") or db.list_ports(ctx.task_id) or []
+        extra = []
+        for p in ports:
+            try:
+                pno = int(p["port"])
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            host = (p["host"] or p["ip"] or "").strip()
+            if host and pno not in (80, 443):
+                extra.append(f"{host}:{pno}")
+        if extra:
+            ctx.logger.info(f"[probe] 额外纳入 {len(extra)} 个开放端口候选（来自 portscan）")
+        for h in extra:
+            candidates.extend([f"https://{h}", f"http://{h}"])
         candidates = list(dict.fromkeys(candidates))
         if not candidates:
             ctx.logger.info("[probe] 无可探测目标，跳过")

@@ -89,6 +89,37 @@ def _headers(settings=None, extra=None):
     return hdrs
 
 
+def _charset_of(content_type):
+    """从 Content-Type 里取出 charset（不引 re，保持纯字符串解析）。"""
+    for part in (content_type or "").split(";"):
+        part = part.strip()
+        if part.lower().startswith("charset="):
+            return part.split("=", 1)[1].strip().strip("\"'")
+    return ""
+
+
+def _decode_body(raw, content_type):
+    """响应体解码：响应头 charset → UTF-8 → GB18030 → 带替换的 UTF-8。
+
+    为什么不直接用 requests 的 `r.text`：当 `Content-Type: text/html` **没有声明 charset** 时，
+    requests 按历史行为回退 ISO-8859-1，UTF-8 的中文标题会被解成 `ç»´æ¤ä¸` 这类乱码并原样入库
+    （实测站点标题就是这样坏的，且会一路带到 GUI 与报告里）。GB18030 是中文站未声明编码时
+    最常见的实际情况，放在 UTF-8 之后作为兜底。
+    """
+    cs = _charset_of(content_type)
+    if cs:
+        try:
+            return raw.decode(cs, "replace")
+        except LookupError:
+            pass
+    for enc in ("utf-8", "gb18030"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace")
+
+
 def http_request(url, method="GET", headers=None, data=None, timeout=10,
                  verify=None, allow_redirects=True, settings=None, want_bytes=False):
     """统一 HTTP 入口。返回 dict(status, headers, text, length, url) 或 None。
@@ -109,7 +140,8 @@ def http_request(url, method="GET", headers=None, data=None, timeout=10,
             r = requests.request(method, url, headers=hdrs, data=data, timeout=timeout,
                                  verify=verify, allow_redirects=allow_redirects)
             out = {"status": r.status_code, "headers": dict(r.headers),
-                   "text": r.text or "", "length": len(r.content or b""), "url": r.url}
+                   "text": _decode_body(r.content or b"", r.headers.get("Content-Type", "")),
+                   "length": len(r.content or b""), "url": r.url}
             if want_bytes:
                 out["content"] = r.content or b""
             return out
@@ -150,7 +182,8 @@ def _urllib_request(url, method, headers, data, timeout, verify, allow_redirects
     body = resp.read() or b""
     hdrs_out = dict(resp.headers.items()) if resp.headers else {}
     out = {"status": getattr(resp, "code", 0) or 0, "headers": hdrs_out,
-           "text": body.decode("utf-8", "replace"), "length": len(body), "url": url}
+           "text": _decode_body(body, hdrs_out.get("Content-Type", "")),
+           "length": len(body), "url": url}
     if want_bytes:
         out["content"] = body
     return out

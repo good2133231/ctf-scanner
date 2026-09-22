@@ -1,120 +1,87 @@
-# CTFScanner 全局配置
-# GUI「策略配置」页可覆盖 gui / limits / checks / passive / evasion / takeover /
-# dirscan / vulnscan / portscan / jsmine / iprecon / fofa 十二段；
-# tools 与 dicts（外部工具路径、字典路径）请直接编辑本文件。
-# 第三方 API key 请写入 config/keys.yaml（独立文件，默认不入库）。
 gui:
   host: 127.0.0.1
   port: 5000
-  token: "ctfscanner"        # 登录口令；仅本地实验用途，请勿暴露公网
-
+  token: ctfscanner
 limits:
-  max_workers: 20            # HTTP 探测/目录扫描/DNS 爆破线程数
-  http_timeout: 10           # 单请求超时（秒）
+  max_workers: 20
+  http_timeout: 10
   verify_tls: false
-  dirscan_max_urls: 20       # 每任务最多参与目录扫描的站点数
-  vulnscan_max_urls: 100     # 每任务最多参与漏洞扫描的站点数
-  brute_max_domains: 50      # 每任务最多参与 DNS 爆破的域名数
-  wildcard_filter: true      # 泛解析过滤：目标开 *.domain 时丢弃"通配 IP 全命中"的字典结果
-  favicon_md5: true          # probe 阶段计算 favicon MD5（POC 可据此做零请求前置判定）
-
+  dirscan_max_urls: 20
+  vulnscan_max_urls: 100
+  brute_max_domains: 50
+  wildcard_filter: true
+  favicon_md5: true
 checks:
-  # 检测分级门控：只保留 severity >= min_severity 的结果。
-  # CTF 实战默认 medium —— 明文 HTTP / 版本泄露 / 响应头缺失这类低危与 info 项默认关闭，
-  # 避免"太 low 的洞"淹没结果；需要广谱信息收集时改成 low 或 info。
-  min_severity: "medium"
-  # 按级别分类批量关：列在这里的级别**连请求都不发**（内置检查与 POC 引擎同时生效）。
-  # 默认 info + low —— 它们的结论本来就会被 min_severity 丢掉，不执行只省请求。
-  skip_severities: ["info", "low"]
-  poc_engine: true           # POC 引擎总开关（关掉后只跑内置 OWASP 启发式检查）
-  disabled_categories: []    # 按 OWASP 分类关闭，如 ["A05", "A08"]
-  disabled_checks: []        # 按检查项 id 精确关闭，如 ["a01-open-redirect"]
-  poc_link_tags: true        # 指纹→POC 联动：站点技术栈命中的 POC 优先执行（不受下面上限约束）
-  poc_max_per_site: 80       # 每站点最多执行多少个 POC（联动命中项不计入）
-
+  min_severity: medium
+  skip_severities:
+  - info
+  - low
+  poc_engine: true
+  disabled_categories: []
+  disabled_checks: []
+  poc_link_tags: true
+  poc_max_per_site: 80
+subdomain:
+  # 子域名资产的 IP/CNAME 回填与 CDN 标记（纯 DNS 只读查询，不发 HTTP）
+  max_resolve: 500
+  dns_timeout: 3
 passive:
-  # 多来源被动子域名收集（全部为免 API key 的公开接口，实现见 scanner/passive.py）
   enabled: true
-  sources: []                # 留空 = 使用默认源；可选：crt.sh / certspotter / alienvault /
-                             #         hackertarget / rapiddns / sublist3r / sitedossier / bufferover
-  timeout: 20                # 单个源的请求超时（秒）
-
+  sources: []
+  timeout: 20
 evasion:
-  # 动态免杀：UA 随机化 / 请求头伪装 / 注入 payload 变形（实现见 scanner/evasion.py）
-  random_ua: true            # 每个请求从内置真实浏览器 UA 池随机取
-  spoof_xff: false           # 附带 X-Forwarded-For（部分 WAF 误判来源为内网而放行）
-  waf_bypass: true           # 注入类检查启用 payload 变形（注释/大小写/编码/分片）
-  bypass_level: 2            # 0=原始 1=轻量 2=进阶 3=激进
-  waf_detect: true           # 探测目标 WAF 并在日志中提示厂商
-
+  random_ua: true
+  spoof_xff: false
+  waf_bypass: true
+  bypass_level: 2
+  waf_detect: true
 takeover:
-  # 子域接管检测：CNAME 指向已停用的第三方服务（S3 / Heroku / GitHub Pages…）→ 可被他人注册接管
   enabled: true
-  max_hosts: 300             # 每任务最多检查多少个子域名（DNS 查询量上限）
-  http_check: true           # 命中可疑 CNAME 后再做一次 HTTP 特征比对（降低误报）
-
+  max_hosts: 300
+  http_check: true
 portscan:
-  # 端口与服务扫描：默认关闭 —— CTF 里噪声与耗时都偏大，需要时在「策略配置」打开
   enabled: false
-  max_hosts: 100             # 每任务最多扫描多少个主机
-  ports: ""                  # 留空 = 内置 TOP 端口表；也可写 "80,443,8080" 或 "1-1024"
-  timeout: 1.0               # 单端口连接超时（秒）
-  workers: 64                # 并发连接数
-  banner: true               # 连接成功后被动读取 banner（SSH/SMTP/MySQL/Redis 等）
-
+  max_hosts: 100
+  ports: ''
+  timeout: 1.0
+  workers: 64
+  banner: true
 jsmine:
-  # JS 资产挖掘：从站点 JS 中提取域名 / 接口 URL / 疑似密钥，扩展资产面
   enabled: true
-  max_pages: 20              # 每任务最多抓取多少个页面
-  max_js: 40                 # 每任务最多抓取多少个 JS 文件
-  secrets: true              # 提取 AK/SK 等疑似凭据（带前后文过滤降噪）
-  blacklist: []              # 额外排除的第三方域名后缀，如 ["cdn.example.com"]
-
+  max_pages: 20
+  max_js: 40
+  secrets: true
+  blacklist: []
 dirscan:
-  # 目录/路径发现阶段总开关（与 takeover / portscan / jsmine 同属"资产面拓展"）。
-  # 默认开：CTF 里 .git / 备份文件 / 后台入口这类高价值路径主要靠它发现；
-  # 纯资产测绘任务可整体关闭省时间。每站点上限见 limits.dirscan_max_urls。
   enabled: true
-
 vulnscan:
-  # 漏洞初筛阶段总开关。默认开；关闭后整阶段跳过（连请求都不发），
-  # 适合"只做资产测绘、暂不探测"的场景。细粒度门控仍在上面 checks 段
-  # （min_severity / skip_severities / poc_engine / disabled_*）。
   enabled: true
-
 iprecon:
-  # C 段反查（P1-4）：IP → 域名反查 + /24 C 段归纳，产出「C 段」分栏。
-  # 默认关闭：走第三方公共接口（可用性无保障），需要时在「策略配置 → 外部情报拓展」打开。
   enabled: false
-  api: "https://api.webscan.cc/?action=query&ip={ip}"   # 可替换为自建/镜像接口
-  max_ips: 500               # 单任务最多反查多少个 IP
-  max_hosts: 200             # 为收集 IP 最多解析多少个主机名
-  max_domains_per_ip: 30     # 单 IP 命中域名超过该值 → 判为共享主机，不纳入域名资产
-  workers: 5                 # 并发数（公共接口，刻意保持克制）
-  timeout: 10                # 单次反查超时（秒）
-
-fofa:
-  # favicon 反查同源资产（P3-1 / todo #6）：需在 config/keys.yaml 填 fofa.email + fofa.key
-  enabled: false
-  max_sites: 30              # 每任务最多对多少个站点算 favicon 并反查
-  max_assets: 100            # 单个 favicon 最多取回多少条资产
+  api: https://api.webscan.cc/?action=query&ip={ip}
+  max_ips: 500
+  max_hosts: 200
+  max_domains_per_ip: 30
   workers: 5
-  black_ico_threshold: 200   # 命中数超过该值 → 判为"黑 ico"（公共图标），放弃拓展
-
+  timeout: 10.0
+fofa:
+  enabled: true
+  max_sites: 30
+  max_assets: 100
+  workers: 5
+  black_ico_threshold: 200
 tools:
-  # 优先使用 PATH 中的可执行文件；也可写绝对路径，Windows 下如 tools/scanner/httpx.exe
-  subfinder: "subfinder"
-  puredns: "puredns"
-  httpx: "httpx"
+  subfinder: subfinder
+  puredns: puredns
+  httpx: httpx
   dirmap:
-    python: "python"     # Linux 若只有 python3 可改之；该名字不可用时框架自动退回当前解释器
-    script: "tools/scanner/dirmap-master/dirmap.py"
-
+    python: python
+    script: tools/scanner/dirmap-master/dirmap.py
 dicts:
-  subdomains: "config/dicts/subdomains.txt"
-  resolvers: "config/dicts/resolvers.txt"
-  dirs: "config/dicts/dirs_small.txt"
-  sensitive: "config/dicts/sensitive.txt"   # 预留：内置敏感路径检查暂用硬编码清单
-
+  subdomains: config/dicts/subdomains.txt
+  resolvers: config/dicts/resolvers.txt
+  dirs: config/dicts/dirs_small.txt
+  sensitive: config/dicts/sensitive.txt
+  cdn_cname: config/dicts/cdn_cname.txt
 http:
-  user_agent: "Mozilla/5.0 (compatible; CTFScanner/0.1; +authorized-testing-only)"
+  user_agent: Mozilla/5.0 (compatible; CTFScanner/0.1; +authorized-testing-only)

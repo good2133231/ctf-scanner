@@ -2,12 +2,26 @@
 {% block title %}漏洞风险{% endblock %}
 {% block content %}
 <p class="muted">级别筛选：
-  <a href="{{ url_for('vulns') }}">全部</a>
+  <a href="{{ url_for('vulns', task_id=task_id or None) }}">全部</a>
   {% for s in ['critical', 'high', 'medium', 'low', 'info'] %}
-  <a href="{{ url_for('vulns', severity=s) }}">{{ s }}</a>
+  <a href="{{ url_for('vulns', severity=s, task_id=task_id or None) }}">{{ s }}</a>
   {% endfor %}
 </p>
 <section class="panel">
+  <form class="filters" method="get" action="{{ url_for('vulns') }}">
+    {% if sev %}<input type="hidden" name="severity" value="{{ sev }}">{% endif %}
+    <label class="muted">按任务筛选
+      <select name="task_id">
+        <option value="">全部任务</option>
+        {% for t in tasks %}
+        <option value="{{ t.id }}" {{ 'selected' if task_id == t.id else '' }}>
+          #{{ t.id }} {{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="ghost" type="submit">查询</button>
+    {% if task_id or sev %}<a class="btn-mini ghost" href="{{ url_for('vulns') }}">清空</a>{% endif %}
+  </form>
   <label class="muted">筛选 <input data-filter="#tbl-vulns-all" placeholder="名称 / 检查项 / 目标"></label>
   <table id="tbl-vulns-all">
     <thead><tr><th>#</th><th>任务</th><th>级别</th><th>名称</th><th>检查/POC</th>
@@ -16,7 +30,8 @@
     {% for v in vulns %}
       <tr>
         <td>{{ v.id }}</td>
-        <td>#{{ v.task_id }}</td>
+        <td><a href="{{ url_for('task_detail', task_id=v.task_id) }}"
+               title="#{{ v.task_id }}">{{ task_names.get(v.task_id) or ('#' ~ v.task_id) }}</a></td>
         <td><span class="sev sev-{{ v.severity }}">{{ v.severity }}</span></td>
         <td>{{ v.name }}</td>
         <td class="muted">{{ v.poc_id }}</td>

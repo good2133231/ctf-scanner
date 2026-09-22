@@ -15,6 +15,7 @@
 │            portscan（默认关）→ probe → osint（默认关）→        │
 │            jsmine → dirscan → vulnscan（见 STAGE_ORDER）      │
 │  资产层    scanner/dnsq.py（DNS 客户端）                      │
+│            scanner/cdn.py（CDN 判定：CNAME 后缀匹配厂商名单）  │
 │            scanner/takeover.py（子域接管指纹 41 条）           │
 │            scanner/portscan.py（nmap 优先 + 内置 connect 兜底）│
 │            scanner/iprecon.py（IP 反查域名 + /24 C 段归纳）    │
@@ -33,6 +34,8 @@
 （UA 随机化、浏览器化请求头、可选 XFF 伪装）；注入类检查再叠加 `evasion.mutate_sqli/mutate_xss` 的 payload 变形。
 `scanner/wildcard.py`（泛解析识别/过滤）与 `scanner/passive.py`（免 key 多来源被动收集）只在 subdomain 阶段被调用。
 `scanner/dnsq.py` 是纯标准库 DNS 客户端（takeover 阶段用它拿 CNAME 链，不依赖外部命令）。
+`scanner/cdn.py` 同样是**只读加载 + 纯字符串匹配**：读 `config/dicts/cdn_cname.txt` 的 292 条厂商后缀，
+按 CNAME 链判定"CDN / 直连源站"（数据文件缺失时一律判非 CDN），供 `subdomain` 阶段回填 `subdomains.cdn`。
 `scanner/mmh3.py` 是**纯标准库**的 MurmurHash3 x86_32 实现 —— 第三方平台（FOFA `icon_hash`、
 Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**，而 `mmh3` 包是 C 扩展、
 离线环境装不上，故自实现并附公开已知向量自检。MD5（`sites.favicon`）仍用于我们自己的零请求前置判定，
@@ -68,13 +71,25 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 | 表 | 字段要点 | 说明 |
 |---|---|---|
 | tasks | targets, stages, options, status, progress, current_stage, log_file, error | 任务状态机：pending → running → done/stopped/failed |
-| subdomains | domain, source, cname | source 标记来源（subfinder/puredns/dns-brute(fallback)/passive:* /js:mine/osint:cseg/osint:fofa）；cname 由 takeover 阶段回填 |
+| subdomains | domain, source, cname, ip, cdn | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa）两类；cname 由 takeover 阶段回填，ip / cdn 由 subdomain 阶段回填（cdn 为空即"非 CDN"）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE` |
 | sites | url, host, port, status, title, length, server, tech, favicon, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定 |
 | ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认关闭） |
 | csegs | segment, ip, domains, count | `/24` C 段视野（osint 阶段产出，默认关闭）：每行一个 IP 与其反查到的域名（domains 截断存储、count 为截断前数量） |
 | dirs | site_url, path, status, length, note | 目录发现（dirscan 阶段产出） |
 | vulns | target, poc_id, name, severity, owasp, detail, evidence | 统一存放 POC 命中与 OWASP 检查结果 |
 | pocs | path(唯一), poc_id, name, severity, tags, enabled, status | POC 注册表：由扫描目录同步生成，GUI 控制启停 |
+
+**老库原地迁移**：`db._ensure_columns()` 用 `ALTER TABLE ADD COLUMN` 给已存在的库补齐新增列
+（如 `subdomains.ip` / `subdomains.cdn`），不需要删库重建；`data/` 不入 git，各人本地库版本可以不同。
+
+## GUI 路由与分栏
+
+侧边栏 8 栏：`/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**）/ `/extdomains`（JS 与情报带出的拓展域名）/
+`/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/vulns`（级别筛选 + `?task_id=` 按任务筛选）/ `/pocs` / `/settings`。
+`/ports` / `/csegs` / `/dirs` 三条路由**仍在**（可直接访问 URL），但**已从侧边栏移除** ——
+它们是任务维度数据，在任务详情页签里看更贴合上下文，这也是用户明确要求的收敛。
+筛选/分页统一走 `db.page_assets(table, limit, offset, q, extra_where, extra_params)`：
+`extra_where` 用于叠加业务条件（子域名分流、CDN 标签），`q` 是跨文本列的 LIKE。
 
 ## 扩展点
 
