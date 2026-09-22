@@ -8,9 +8,15 @@
 """
 import copy
 import json
+import os
 import pathlib
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
+
+# 运行期产物目录（每任务一个子目录）。与数据库一样支持环境变量覆盖：
+# 跑测试时指到临时目录，就不会在真实工作区里堆出几十个 `logs/task_*` 目录，
+# 也让"开发/生产共用一份代码、数据分开"变得可行（见 tests/smoke.py 顶部）。
+LOGS_DIR = pathlib.Path(os.environ.get("CTFSCANNER_LOGS") or (BASE_DIR / "logs"))
 
 DEFAULTS = {
     "gui": {
@@ -115,6 +121,18 @@ DEFAULTS = {
         "max_assets": 100,         # 单个 favicon 最多取回多少条资产
         "workers": 5,
         "black_ico_threshold": 200,  # 命中数超过该值 → 判为"黑 ico"（公共图标），放弃拓展
+        # 证书反查（cert="example.com"）：找"与该目标共用同一张 TLS 证书"的其它域名。
+        # 独立子开关（`fofa.enabled` 关掉时它也不会跑）；命中数超过 cert_threshold
+        # 说明这是一张被大量域名共用的通用证书（公共 CA / 大厂证书），放弃拓展。
+        "cert_enabled": True,
+        "cert_threshold": 200,
+        "max_cert_queries": 10,    # 每任务最多对多少个注册域做证书反查（省配额）
+    },
+    "blacklist": {
+        # 用户黑名单：命中的域名不入资产库，因此也不会被 dirscan/vulnscan 扫到。
+        # 文件是纯文本（一行一个域名，含其所有子域），可手工编辑；GUI 支持批量加入/移除。
+        "enabled": True,
+        "path": "config/blacklist.txt",
     },
     "tools": {
         # 优先从 PATH 解析，也可以填绝对路径（Windows 下如 tools/scanner/httpx.exe）

@@ -282,6 +282,55 @@
 - [x] **重复站点默认隐藏**：`/sites` 按 `(task_id, 标题, 长度)` 折叠 + `?all=1` 开关；
       **过程中修掉一个真 Bug**（首版折叠键漏 `task_id`，跨任务视图下会把不同任务的资产折成一条）。
 
+## 第十四轮（用户当场提的 6 项，全部完成，2026-09-22）
+
+> 本组是**用户直接点名**的需求，不属上方排期；逐条对应 `todo.txt` 第十四轮小节与 `CHANGELOG_AI.md` 第十四轮。
+> 三个设计决策由用户当场选定（批量跑子域名＝新建任务；重叠口径＝拓展域名域名级全局 / 站点 URL 级跨任务；
+> 证书反查＝并入 osint 阶段并列独立子开关）。
+
+- [x] **Q1 终端访问日志会不会崩（回答，未改代码）**：打印的是 Werkzeug 访问日志，`Debug mode: off`
+      （无 reloader/调试器），与稳定性无关；真实风险只有三条 —— 无进程守护、SQLite 单写者可能
+      `database is locked`、`app.run()` 是开发服务器（仅 127.0.0.1 可见）。可选换 `waitress`，非必需。
+- [x] **Q2 策略配置面板可折叠**：8 个面板（`section.panel.collapsible`）**默认全折叠**，面板标题栏可点开/收起，
+      页顶「全部展开 / 全部折叠」，展开状态存 `localStorage`（`ctfscanner.panels`）。
+      实现：`gui/static/app.js::initCollapsiblePanels()`（注入 `.panel-head` 与 `.panel-toggle`）+
+      `style.css` 的 `.panel.collapsible:not(.open) > *:not(.panel-head){display:none}`。
+- [x] **Q3 改代码时并行运行/测试的隔离**：不做完整 dev/prod 双环境，只做"共用代码、数据分开" ——
+      `DB_PATH` 支持 `CTFSCANNER_DB`、`LOGS_DIR` 支持 `CTFSCANNER_LOGS`（`scanner/db.py` / `scanner/config.py`）。
+      `tests/smoke.py` 顶部把两者指到 `logs/smoke-<随机>/` 并 `atexit` 删除，
+      跑测试**不再污染**真实 `data/scanner.db` 与 `logs/`。
+- [x] **Q4 消除绝对路径显示**：新增 `utils.rel_display(path)`（项目内 → 相对项目根 POSIX；项目外/空值原样返回），
+      CLI 四处输出、GUI 任务详情 `log_file`、POC 管理页、策略页黑名单路径统一改用它；
+      `gui/app.py` 私有 `_rel_path()` 删除、改调 `rel_display`。
+- [x] **Q5 FOFA 能力补齐**：
+      - **来源可读标签**：`gui/app.py::SOURCE_LABELS` + `source_label()` 注册为 Jinja 全局
+        （`被动(subfinder)` / `被动(crt.sh)` / `爆破(puredns)` / `爆破(内置)` / `JS 挖掘` /
+        `C 段反查` / **`FOFA·ICO 反查`** / **`FOFA·证书反查`**），三处来源列统一调用；
+      - **证书反查**：`fofa.build_cert_query(domain)` → `cert="domain"`（注册域先经 `utils.base_domain`
+        折算，含 `com.cn`/`co.uk` 多段后缀；裸 IP 跳过）+ `search_cert()` + `is_common_cert()`
+        （命中数 > `fofa.cert_threshold` 默认 200 判"通用证书"放弃拓展）+ `max_cert_queries` 上限（默认 10）；
+        来源 `osint:fofa-cert`；子开关 `fofa.cert_enabled`（默认跟随 favicon 开关）；
+      - **用户黑名单**：新 `scanner/blacklist.py` + `config/blacklist.txt`（纯文本，`#` 注释，
+        `*.x` 与 `x` 等价），**入库前过滤**（subdomain / jsmine / osint 三处 `filter_pairs`/`filter_domains`）
+        —— 命中域名连子域都不入资产库，后续阶段自然不扫；GUI 批量加入/移除（`/api/blacklist/add`、`/remove`）；
+      - **批量跑子域名**：勾选行 → `POST /api/domains/run-subdomain` → **新建任务**（仅 `subdomain` 阶段，
+        任务名 `批量子域-<月日>-<时分秒>`）；`_picked_domains()` 去重保序；
+      - **拓展资产重叠默认隐藏**：`db.OVERLAP_EXT_WHERE`（域名级全局：该域名已作为任意任务的"目标自身子域名"）
+        + `/extdomains` 默认叠加，`?all=1` 放开。
+- [x] **Q6 站点重叠默认隐藏**：`db.OVERLAP_SITE_WHERE`（URL 级跨任务，`id IN (SELECT MIN(id) … GROUP BY url)`
+      保留最早一条）+ `/sites` 默认叠加；与既有的"同任务内 标题+长度 折叠"共用一个开关（`?all=1`）。
+- [x] **`tests/smoke.py` 新增 `[5d]`**（一次通过 SMOKE PASS）：11 组断言覆盖
+      `base_domain` / `rel_display` / 黑名单（临时文件 + 开关失效）/ 证书反查（`build_cert_query`、
+      `is_common_cert` 200↔201 边界、`search_cert` 空域名）/ `source_label` / 拓展域名重叠隐藏与 `?all=1` /
+      站点重叠 1↔2 条 / 两个 POST 接口（桩函数去重保序、`stages=["subdomain"]` 与 targets）/
+      策略页 cert+blacklist 字段与 `panel collapsible`、无绝对路径、`logs/smoke-` 相对路径 / settings POST 映射。
+- [x] **文档同步**：`docs/usage.md`（勾选批量按钮、来源可读标签、拓展/站点两层重叠、8 面板折叠、
+      证书字段、黑名单面板、新增「黑名单与批量操作」小节 + 3 条 FAQ）、`docs/pipeline.md`（osint 三个子能力、
+      subdomain/jsmine 黑名单行、配置速查 2 行）、`docs/architecture.md`（blacklist.py / rel_display /
+      LOGS_DIR 与 CTFSCANNER_DB / 4 条设计决策 / OVERLAP_* 判据 / source_label / 面板折叠）、
+      `README.md`（能力清单 + blacklist.py/blacklist.txt + 配置段数）、`AGENTS.md`（文件树、§4 三处过滤与
+      环境变量、§6 断言清单、§7 黑名单/重叠语义边界、十四段）。
+
 ## 兼容性红线（所有新增代码都适用）
 
 1. 路径用 `pathlib`；命令用列表参数 + `shell=False`；工具名不假设平台。
@@ -415,6 +464,10 @@
   子域名 IP/CDN 标记与标签过滤 + POC 相对路径 + 侧栏 10→8 栏收敛 + probe 消费开放端口 + 站点重复折叠；
   另修复 smoke `[2c]` 的凭据耦合脆弱性（原断言会在用户填了真实 FOFA key 时失败，且下一句会**触网**）。
   全程 `py -3 tests/smoke.py` = SMOKE PASS（连跑两次稳定）。详见 `CHANGELOG_AI.md` 第十三轮。
+  第十四轮实施（用户当场提的 6 项，见上方「第十四轮」小节）：策略面板折叠 + 测试库/日志目录隔离
+  （`CTFSCANNER_DB`/`CTFSCANNER_LOGS`）+ 全站相对路径 + 来源可读标签 + FOFA 证书反查 +
+  用户黑名单（入库前过滤）+ 批量跑子域名（新建任务）+ 拓展/站点重叠默认隐藏。
+  全程 `py -3 tests/smoke.py` = SMOKE PASS。详见 `CHANGELOG_AI.md` 第十四轮。
 - **C-2 间接处理（已由现有实现覆盖，标注后不再重复排期）**：
   - 参考项目 GUI「指纹管理」栏目 → 我们已由 `scanner/fingerprint.py` 覆盖（**本轮之前**即已完成），
     差别只是它 YAML 数据驱动、我们代码内置（见 B-8）。

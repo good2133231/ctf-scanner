@@ -19,26 +19,40 @@ from flask import (Flask, Response, abort, jsonify, redirect,
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import db
-from scanner.config import BASE_DIR, load_settings, save_settings
+from scanner import blacklist, db
+from scanner.config import load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
+from scanner.utils import rel_display
 
 logger = get_logger("gui")
 
+# 资产来源 → 页面上的可读标签（「子域名 / 拓展域名」页的来源列用它渲染成中文标签）
+SOURCE_LABELS = {
+    "subfinder": "被动(subfinder)",
+    "puredns": "爆破(puredns)",
+    "dns-brute(fallback)": "爆破(内置)",
+    "js:mine": "JS 挖掘",
+    # 两个 FOFA 来源都显式带上「FOFA」字样：用户要求一眼看出哪些资产是 FOFA 找出来的
+    "osint:cseg": "C 段反查",
+    "osint:fofa": "FOFA·ICO 反查",
+    "osint:fofa-cert": "FOFA·证书反查",
+}
 
-def _rel_path(path):
-    """把绝对路径转成相对项目根的路径（页面上只展示相对路径，不暴露本机目录结构）。
 
-    解析失败（不在项目内、路径不存在）时原样返回，绝不因为展示需求而抛错。
-    """
-    try:
-        return str(Path(path).resolve().relative_to(BASE_DIR))
-    except (ValueError, OSError):
-        return str(path)
+def source_label(source):
+    """把 `source` 字段翻译成可读标签；未知来源原样返回（如 `passive:crt.sh` 归一为"被动"）。"""
+    text = str(source or "").strip()
+    if not text:
+        return "-"
+    if text in SOURCE_LABELS:
+        return SOURCE_LABELS[text]
+    if text.startswith("passive:"):
+        return f"被动({text.split(':', 1)[1]})"
+    return text
 
 
 def _and_where(*parts):
@@ -51,6 +65,8 @@ def create_app():
     settings = load_settings()
     app = Flask(__name__)
     app.secret_key = f"ctfscanner::{settings.get('gui', {}).get('token', '')}"
+    # 模板里可直接调用 `source_label('osint:fofa')` → 「ICO 反查」（来源列的可读标签）
+    app.jinja_env.globals["source_label"] = source_label
     db.init_db()
     sync_pocs(settings)
 
@@ -132,6 +148,9 @@ def create_app():
         task = db.get_task(task_id)
         if not task:
             abort(404)
+        # 页面只展示相对路径（日志文件路径在库里存的是绝对路径，因为要真的去读它）
+        task = dict(task)
+        task["log_file"] = rel_display(task.get("log_file") or "")
         # 子域名 Tab 只列目标自身的子域名；JS/情报拓展的域名单独计数并指到「拓展域名」页
         subs = [dict(r) for r in db.list_subdomains(task_id)]
         own = [r for r in subs if not (r["source"] or "").startswith(("js:", "osint:"))]
@@ -257,7 +276,7 @@ def create_app():
         for r in rows:
             src = db.poc_source(r["path"])    # 来源判定依赖原始路径，必须在相对化之前算
             r["source"] = src                 # 列表展示 / 前端筛选用
-            r["path"] = _rel_path(r["path"])  # 页面只展示相对路径
+            r["path"] = rel_display(r["path"])  # 页面只展示相对路径
             stats["source"][f"{src}:on" if r["enabled"] else f"{src}:off"] = \
                 stats["source"].get(f"{src}:on" if r["enabled"] else f"{src}:off", 0) + 1
             stats["severity"][r["severity"] or "-"] = stats["severity"].get(r["severity"] or "-", 0) + 1
@@ -364,6 +383,10 @@ def create_app():
             return tag, "cdn = ''", ()
         return "", None, ()
 
+    def _overlap_args():
+        """「是否显示重叠资产」开关：默认隐藏，`?all=1` 显示全部（两个资产页口径一致）。"""
+        return request.args.get("all") == "1"
+
     @app.route("/subdomains")
     @login_required
     def subdomains():
@@ -380,26 +403,40 @@ def create_app():
     @app.route("/extdomains")
     @login_required
     def extdomains():
-        """拓展域名：从 JS（js:mine）与外部情报（osint:cseg / osint:fofa）带出来的域名。"""
+        """拓展域名：从 JS 与外部情报（C 段 / ICO / 证书）带出来的关联域名。
+
+        **默认隐藏重叠资产**：某域名若已经作为"目标自身子域名"存在过（任意任务），
+        说明它早就在资产清单里，这里再列一遍纯属重复；`?all=1` 可显示全部。
+        """
         tag, where, params = _cdn_tag()
-        rows, pager, q = _asset_page("subdomains", "/extdomains",
-                                     extra_where=_and_where(db.EXT_SUBDOMAIN_WHERE, where),
-                                     extra_params=params)
+        show_all = _overlap_args()
+        rows, pager, q = _asset_page(
+            "subdomains", "/extdomains",
+            extra_where=_and_where(db.EXT_SUBDOMAIN_WHERE, where,
+                                   None if show_all else db.OVERLAP_EXT_WHERE),
+            extra_params=params)
         if tag:
             pager["qs"] += f"&tag={tag}"
-        return render_template("extdomains.html", subs=rows, pager=pager, q=q, tag=tag)
+        if show_all:
+            pager["qs"] += "&all=1"
+        return render_template("extdomains.html", subs=rows, pager=pager, q=q, tag=tag,
+                               show_all=show_all)
 
     @app.route("/sites")
     @login_required
     def sites():
-        rows, pager, q = _asset_page("sites", "/sites")
-        # 重复站点折叠：**同一任务内**「标题 + 响应长度」完全相同的多个 URL，多为同一台
-        # 虚拟主机的别名/泛解析产物（灯塔类工具也会做这层去重）。默认只留首个出现的，其余
-        # 隐藏，页面上给开关显示全部。两个要点：
-        # - key 必须带 task_id：这是跨任务视图，若不带，A 任务的站点会因为 B 任务有同名同长度的
-        #   站点而被折叠掉（实测把同一个靶场的 15 条记录折成了 1 条，资产归属直接丢失）；
-        # - 标题为空的不参与折叠 —— 空标题站点的长度相同纯属巧合；
-        # - 折叠只作用于**当前页**（分页条上的"共 N 条"仍是 SQL 的总数）。
+        show_all = _overlap_args()
+        # 两层"重复"处理，都由 `?all=1` 一起放开：
+        # 1) 重叠资产（跨任务）：同一 URL 若在更早的任务里已探到过，只保留最早那条
+        #    —— 反复扫同一个目标时，站点列表不会再被撑成 N 倍；
+        # 2) 同任务内重复（标题 + 响应长度完全相同），多为同一台虚拟主机的别名/泛解析产物
+        #    （灯塔类工具也做这层去重）。key 必须带 task_id：这是跨任务视图，若不带，
+        #    A 任务的站点会因为 B 任务有同名同长度的站点而被折叠掉（实测把同一个靶场的
+        #    15 条记录折成了 1 条，资产归属直接丢失）；标题为空的不参与折叠。
+        # 注意：折叠只作用于**当前页**（分页条上的"共 N 条"是 SQL 的总数）。
+        rows, pager, q = _asset_page(
+            "sites", "/sites",
+            extra_where=None if show_all else db.OVERLAP_SITE_WHERE)
         rows = [dict(r) for r in rows]
         seen, hidden = {}, 0
         for r in rows:
@@ -415,10 +452,9 @@ def create_app():
                 first["dup"] += 1
                 r["hidden_dup"] = True
                 hidden += 1
-        show_all = request.args.get("all") == "1"
         if not show_all:
             rows = [r for r in rows if not r.get("hidden_dup")]
-        if show_all:
+        else:
             pager["qs"] += "&all=1"
         return render_template("sites.html", sites=rows, pager=pager, q=q,
                                show_all=show_all, hidden=hidden)
@@ -440,6 +476,57 @@ def create_app():
     def dirs():
         rows, pager, q = _asset_page("dirs", "/dirs")
         return render_template("dirs.html", dirs=rows, pager=pager, q=q)
+
+    # ---------- 黑名单 / 批量子域名 ----------
+    #
+    # 黑名单落地在 `config/blacklist.txt`（纯文本，可手工编辑），命中即"不入资产库"，
+    # 因此也不会被后续阶段扫到。这里提供批量加入/移除 —— 逐个手敲域名不现实。
+
+    def _picked_domains():
+        """勾选的域名（去重保序）：跨任务资产页里同一个域名可能出现在多个任务下。"""
+        seen, out = set(), []
+        for raw in request.form.getlist("domain"):
+            d = raw.strip()
+            if d and d not in seen:
+                seen.add(d)
+                out.append(d)
+        return out
+
+    @app.route("/api/blacklist/add", methods=["POST"])
+    @login_required
+    def api_blacklist_add():
+        domains = _picked_domains()
+        n = blacklist.add(domains, settings)
+        logger.info(f"[gui] 黑名单新增 {n} 条（提交 {len(domains)} 个）")
+        return redirect(request.form.get("next") or url_for("subdomains"))
+
+    @app.route("/api/blacklist/remove", methods=["POST"])
+    @login_required
+    def api_blacklist_remove():
+        n = blacklist.remove(_picked_domains(), settings)
+        logger.info(f"[gui] 黑名单移除 {n} 条")
+        return redirect(url_for("settings_page"))
+
+    @app.route("/api/domains/run-subdomain", methods=["POST"])
+    @login_required
+    def api_run_subdomain():
+        """把勾选的域名打包成**一个新任务**，只跑 subdomain 阶段。
+
+        为什么新建任务而不是在当前任务下挂子任务：现有任务模型（一任务一线程、独立状态与
+        独立停止/删除）可以直接复用，子任务要改表结构、任务树渲染、状态聚合与递归停止，
+        收益只是 UI 好看一点 —— 按用户确认的口径选"新建任务"。
+        """
+        domains = _picked_domains()
+        if not domains:
+            return redirect(request.form.get("next") or url_for("subdomains"))
+        stages = ["subdomain"]
+        name = (request.form.get("name") or "").strip() or \
+            time.strftime("批量子域-%m%d-%H%M%S")
+        targets = "\n".join(domains)
+        task_id = db.create_task(name, targets, stages, {})
+        _spawn(task_id, name, targets, stages, {})
+        logger.info(f"[gui] 批量子域名任务 #{task_id} 已创建（{len(domains)} 个域名，仅 subdomain 阶段）")
+        return redirect(url_for("task_detail", task_id=task_id))
 
     # ---------- 设置 ----------
 
@@ -507,14 +594,27 @@ def create_app():
                              "max_assets": int(f.get("fofa_max_assets", 100) or 100),
                              "workers": int(f.get("fofa_workers", 5) or 5),
                              "black_ico_threshold": int(
-                                 f.get("fofa_black_ico_threshold", 200) or 200)},
+                                 f.get("fofa_black_ico_threshold", 200) or 200),
+                             # 证书反查：独立子开关 + 通用证书阈值 + 查询上限
+                             "cert_enabled": f.get("fofa_cert_enabled") == "1",
+                             "cert_threshold": int(f.get("fofa_cert_threshold", 200) or 200),
+                             "max_cert_queries": int(
+                                 f.get("fofa_max_cert_queries", 10) or 10)},
+                    # 黑名单：开关可从页面改，文件路径保持原值（改路径请直接编辑 settings.yaml）
+                    "blacklist": {"enabled": f.get("blacklist_enabled") == "1",
+                                  "path": (settings.get("blacklist") or {}).get(
+                                      "path", "config/blacklist.txt")},
                 }
             except ValueError:
                 return render_template("settings.html", s=load_settings(), checks=owasp_checks,
+                                       bl=blacklist.load(settings),
+                                       bl_path=rel_display(blacklist.path(settings)),
                                        error="参数必须是整数")
             settings = save_settings(data)
             return redirect(url_for("settings_page"))
-        return render_template("settings.html", s=settings, checks=owasp_checks)
+        return render_template("settings.html", s=settings, checks=owasp_checks,
+                               bl=blacklist.load(settings),
+                               bl_path=rel_display(blacklist.path(settings)))
 
     def _tail(path, n=150):
         try:

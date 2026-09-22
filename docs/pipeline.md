@@ -46,6 +46,8 @@
   （`scanner/cdn.py` 用 `config/dicts/cdn_cname.txt` 的 292 条厂商 CNAME 后缀匹配，未命中留空 = 非 CDN）。
   纯 DNS 只读查询、零 HTTP；数据文件缺失时一律判"非 CDN"，不会抛错；
 - 产物：`subdomains.txt`、`passive_multi.txt`（被动来源命中）、`hosts.txt`（子域名 ∪ 主域名，交给下一阶段）、SQLite `subdomains` 表（含 `ip` / `cdn`）；
+- **入库前过用户黑名单**（`scanner/blacklist.py`，文件 `config/blacklist.txt`）：命中的域名**不入资产库**，
+  因此后续 takeover / probe / dirscan / vulnscan 也不会扫它。语义详见 `docs/usage.md`「黑名单与批量操作」；
 - 属性归属：本阶段的产物都是**目标自身**的子域名（来源 `subfinder` / `passive:*` / `puredns` / `dns-brute`），
   在「子域名资产」页展示；JS 与外部情报带出的关联域名（`js:mine` / `osint:*`）归「拓展域名」页，见 `db.OWN_SUBDOMAIN_WHERE` / `EXT_SUBDOMAIN_WHERE`；
 - 降级：无 puredns 时用内置 `socket.getaddrinfo` 爆破（系统解析器，忽略自定义 resolvers——这是已知差异）；
@@ -89,11 +91,11 @@
 
 ### ⑤ osint 外部情报拓展（`iprecon.enabled` / `fofa.enabled`，**默认全关**）
 
-发散思维的那一条腿：主目标常常只有一个，但**同一个 C 段**、**同一个 favicon** 背后往往是
-同一套业务（同机房/同客户/同备案主体），这是找旁路的常见起点。产出是**新域名**，
+发散思维的那一条腿：主目标常常只有一个，但**同一个 C 段**、**同一个 favicon**、**同一张 TLS 证书**
+背后往往是同一套业务（同机房/同客户/同备案主体），这是找旁路的常见起点。产出是**新域名**，
 所以位置放在 `probe` 之后、`jsmine` 之前 —— 越早入账，后面的 `dirscan` / `vulnscan` 覆盖越广。
 
-两个子能力互相独立：
+三个子能力互相独立（`fofa.cert_enabled` 是 favicon 开关下的独立子开关）：
 
 - **C 段反查**（`scanner/iprecon.py`）：汇总 IP（目标里的 IP 直接用；`url`/`domain` 目标、
   已入账子域名、存活站点 host 各做一次解析，受 `iprecon.max_hosts` 限制）→ `is_public_ip()`
@@ -106,14 +108,24 @@
   并发算 favicon 的 **mmh3**（`fingerprint.favicon_hash`）→ 按哈希去重 → 逐个 `icon_hash="N"` 查询 FOFA →
   **命中数 > `fofa.black_ico_threshold`（默认 200）判为"黑 ico"**（公共图标：默认页、通用框架图标），
   放弃拓展并记日志。未配置 `config/keys.yaml` 的 `fofa.email/key` 时**显式提示后跳过**，不静默失败。
+- **证书反查**（`fofa.cert_enabled`，默认跟随 favicon 开关）：把目标、存活站点与已入账子域名
+  折算成**注册域**（`utils.base_domain`，含 `com.cn` / `co.uk` 等多段后缀）→ 跳过裸 IP（证书主体是域名）→
+  `max_cert_queries`（默认 10）截断 → 逐个 `cert="domain"` 查询 FOFA。
+  **命中数 > `fofa.cert_threshold`（默认 200）判为"通用证书"**（公共 CA / 大厂通用证书，
+  共用者成千上万，按它拓展只会灌噪声），放弃拓展并记日志。
+  折到注册域而不是逐个主机名查，是为了省 FOFA 配额（同注册域下各子域证书内容常重叠）。
 
 - 产物：SQLite `csegs` 表（任务详情「C 段」页签、报告「C 段视野」小节；
   `/csegs` 路由仍在但已不进侧边栏 —— 该数据属任务维度）、
-  新域名以 `source="osint:cseg"` / `"osint:fofa"` 补入 `subdomains` —— 它们是**关联域名**，
-  在「拓展域名」页展示（不进「子域名资产」页，判据 `db.EXT_SUBDOMAIN_WHERE`）；
-- 为什么默认全关：两项都依赖**第三方公共接口**（`api.webscan.cc` / FOFA），可用性不由我们掌控；
+  新域名以 `source="osint:cseg"` / `"osint:fofa"` / `"osint:fofa-cert"` 补入 `subdomains` ——
+  它们是**关联域名**，在「拓展域名」页展示（不进「子域名资产」页，判据 `db.EXT_SUBDOMAIN_WHERE`），
+  来源列显示为 `C 段反查` / `FOFA·ICO 反查` / `FOFA·证书反查`，便于一眼认出哪些是 FOFA 找出来的；
+- **入库前过用户黑名单**（`scanner/blacklist.py`）：命中的域名连子域一起丢弃，
+  因此它们同样不会被后续 dirscan / vulnscan 扫到；
+- 为什么默认全关：三项都依赖**第三方公共接口**（`api.webscan.cc` / FOFA），可用性不由我们掌控；
   且 FOFA 需要 key 与配额。接口地址做成配置项（`iprecon.api`，留空回落到默认）以便随时替换；
-- 局限：公共接口的返回结构随时可能变；黑 ico 阈值与"共享主机"阈值都是保守估计值，未经真实数据校准。
+- 局限：公共接口的返回结构随时可能变；黑 ico / 通用证书 / "共享主机"三个阈值都是保守估计值，
+  未经真实数据校准（证书反查的"通用证书"判定尤其粗：只按命中总数比阈值）。
 
 ### ⑥ jsmine JS 资产挖掘（`jsmine.enabled`，默认开）
 
@@ -124,6 +136,7 @@
   `jsmine.secrets=true` 时启用凭据提取，经两级降噪（厂商前缀/赋值语境 → 占位符/变量引用/成员访问过滤）；
 - 产物：新域名补入 `subdomains`（`source="js:mine"`，只补任务里还没有的；在「拓展域名」页展示）、
   接口 URL 落 `js_urls.txt` 并进 `ctx.results["js_urls"]`、疑似凭据以 **high** 级进 `vulns`（`poc_id=js-secret-*`，值掩码脱敏）；
+  入库前同样过用户黑名单（`config/blacklist.txt`）；
 - 局限：纯正则（不做 sourcemap 还原）；短 token 与含 `test/demo` 的真实值会被保守丢弃。
 
 ### ⑦ dirscan 目录发现
@@ -210,6 +223,8 @@ logs/task_1_mytask/
 | jsmine.enabled / max_pages / max_js / secrets / blacklist | true / 20 / 40 / true / [] | JS 资产挖掘：开关、页面/JS 上限、是否提取凭据、额外排除的第三方域后缀 |
 | iprecon.enabled / api / max_ips / max_hosts / max_domains_per_ip / workers / timeout | **false** / api.webscan.cc / 500 / 200 / 30 / 5 / 10s | C 段反查（默认关）：接口地址（留空回落默认）、待查 IP/主机上限、单 IP 域名上限（超过判共享主机，不纳入资产）、并发与超时 |
 | fofa.enabled / max_sites / max_assets / workers / black_ico_threshold | **false** / 30 / 100 / 5 / 200 | favicon（mmh3）反查同源资产（默认关）：算 favicon 的站点上限、单次查询资产上限、并发、黑 ico 阈值（命中数超过即放弃拓展） |
+| fofa.cert_enabled / cert_threshold / max_cert_queries | true / 200 / 10 | 证书反查（`cert="domain"`，跟随 favicon 开关）：通用证书阈值（命中数超过即放弃拓展）、每任务最多查几个注册域 |
+| blacklist.enabled / path | true / config/blacklist.txt | 用户黑名单：命中即不入资产库（含其所有子域）；纯文本、每次重读、可直接手工编辑 |
 | （`config/keys.yaml`） | 空占位 | 第三方 API key 专用文件，**不在本文件里**；`load_keys()` 只读、GUI 不写回 |
 | passive.enabled / sources / timeout | true / 默认 6 源 / 20s | 多来源被动子域名收集的开关、来源清单、单源超时 |
 | evasion.random_ua / spoof_xff / waf_bypass / bypass_level / waf_detect | true / false / true / 2 / true | 动态免杀：UA 随机化、XFF 伪装、payload 变形及强度、WAF 探测 |

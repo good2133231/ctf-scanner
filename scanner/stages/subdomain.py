@@ -18,7 +18,7 @@
   cat passive.txt brute.txt | sort -u    ->  Python 端以 sorted(set(...)) 等价实现
 """
 from .base import Stage
-from .. import cdn, db, dnsq, passive, wildcard
+from .. import blacklist, cdn, db, dnsq, passive, wildcard
 from ..config import resolve
 from ..utils import which, verify_tool, run_cmd, read_lines, write_lines, pool_run
 
@@ -153,6 +153,11 @@ class SubdomainStage(Stage):
                                 f"丢弃 {len(dropped)} 个通配产物")
 
         subs = sorted(found)
+        # 用户黑名单：命中的域名直接丢弃 —— 既不入资产表，也不进 probe 的输入，
+        # 这样后面的 dirscan / vulnscan 自然也不会覆盖它。
+        subs, blocked = blacklist.filter_domains(subs, ctx.settings)
+        if blocked:
+            ctx.logger.info(f"[subdomain] 黑名单拦截 {blocked} 个域名（config/blacklist.txt）")
         all_hosts = sorted(set(subs) | set(domains))
         ctx.results["subdomains"] = subs
         ctx.results["domains_for_probe"] = all_hosts

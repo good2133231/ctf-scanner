@@ -97,7 +97,7 @@
           <td>{% if s.cdn %}<span class="sev sev-medium">{{ s.cdn }}</span>
               {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
           <td class="muted small mono">{{ s.cname or '-' }}</td>
-          <td class="muted">{{ s.source or '-' }}</td></tr>
+          <td class="muted">{{ source_label(s.source) }}</td></tr>
       {% else %}
         <tr><td colspan="5" class="muted">暂无数据。</td></tr>
       {% endfor %}

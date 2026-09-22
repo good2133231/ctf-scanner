@@ -3,6 +3,92 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十四轮：用户提的 6 项（面板折叠 / 测试隔离 / 相对路径 / FOFA 来源标记+证书反查+黑名单+批量子域 / 重叠隐藏）
+
+用户原话给的 6 条，其中 5 条是代码需求、1 条是架构咨询。三个设计决策由用户当场选定：
+**批量跑子域名＝新建任务**、**重叠口径＝拓展域名域名级全局 / 站点 URL 级跨任务**、
+**证书反查＝并入 osint 阶段并给独立子开关**。
+
+### 1）"这种直接日志显示在终端会不会很容易崩？"（回答，未改代码）
+
+那串是 **Werkzeug 的访问日志**，`Debug mode: off` 表示既没开调试器也没开 reloader；
+它只负责记录 HTTP 访问，**与稳定性无关**。真实风险只有三条：无进程守护（进程挂 = 服务停）、
+SQLite 单写者并发可能 `database is locked`、`app.run()` 是开发服务器（默认只监听 127.0.0.1）。
+要更稳可在 `run_gui.py` 换成 waitress 之类 WSGI 服务器 —— 属**可选优化**，未实施（用户只是咨询）。
+
+### 2）策略配置面板可折叠（默认全折叠）
+
+- `gui/templates/settings.html`：8 个面板加 `class="panel collapsible"` 与 `data-panel` 标识，
+  页顶加 `全部展开 / 全部折叠` 工具栏（`button[data-panels]`）。
+- `gui/static/app.js::initCollapsiblePanels()`：JS 注入 `h2.panel-head` 类与 `.panel-toggle` 按钮，
+  状态存 `localStorage["ctfscanner.panels"]`，**默认折叠**；`initPickAll()` 顺带支持表头全选。
+- `gui/static/style.css`：`.panel.collapsible:not(.open) > *:not(.panel-head){ display:none }`。
+- 理由：8 个面板几百个勾选框一次性铺开，找一项要滚很久；折叠后一屏看到全部分类。
+
+### 3）改代码时并行运行/测试的隔离（不做完整 dev/prod，只做"共用代码、数据分开"）
+
+- `scanner/db.py`：`DB_PATH = Path(os.environ.get("CTFSCANNER_DB") or (BASE_DIR / "data" / "scanner.db"))`；
+  `TRASH_DIR` 跟随 DB 目录。
+- `scanner/config.py`：新增 `LOGS_DIR = pathlib.Path(os.environ.get("CTFSCANNER_LOGS") or (BASE_DIR / "logs"))`；
+  `runner.py` 改用它建任务工作目录（原来硬编码 `BASE_DIR / "logs"`）。
+- `tests/smoke.py` 顶部把两个变量指到 `logs/smoke-<随机>/`（刻意放项目内，否则 `rel_display` 无法相对化），
+  `atexit` 删除 —— 跑测试**不再在真实工作区堆 `logs/task_*` 目录、也不污染 `data/scanner.db`**。
+- 结论对用户：改代码时服务照跑没问题（无 reloader，需重启才生效）；跑测试则已完全隔离，不会互相踩。
+
+### 4）消除绝对路径显示（含日志文件）
+
+- `scanner/utils.py` 新增 `rel_display(path, base=None)`：项目内路径 → 相对项目根的 POSIX 形式
+  （`logs/task_1_x/task.log`），项目外/空值**原样返回**；延迟 import `config.BASE_DIR` 避免循环导入。
+- 同时新增 `base_domain(host)`（含 `com.cn` / `co.uk` 等多段后缀的注册域折算）与 `MULTI_TLD`；
+  `scanner/jsmine.py` 删除私有 `_base_domain`，改从 `utils` 导入（去重）。
+- `cli/client.py` 四处输出、`gui/app.py` 的 `task_detail.log_file` / POC 路径 / 策略页黑名单路径
+  统一改用它；删除 `gui/app.py` 私有 `_rel_path()`。
+
+### 5）FOFA 能力补齐（用户已配好 key）
+
+- **来源可读标签**：`gui/app.py::SOURCE_LABELS`（`osint:fofa → FOFA·ICO 反查`、
+  `osint:fofa-cert → FOFA·证书反查`、`passive:x → 被动(x)` …）+ `source_label()` 注册为
+  `app.jinja_env.globals["source_label"]`；子域名页 / 拓展域名页 / 任务详情三处来源列统一调用。
+- **证书反查**：`scanner/fofa.py` 拆出 `search_query()` 并新增 `build_cert_query(domain)`（`cert="domain"`）、
+  `search_cert()`、`cert_threshold()`、`is_common_cert(total, settings)`；
+  `scanner/stages/osint.py` 新增 `_root_domains()`（目标/站点/子域名 → 跳裸 IP → `base_domain()` 去重）
+  与 `_fofa_cert()`（`max_cert_queries` 上限、通用证书跳过、来源 `osint:fofa-cert`）。
+  子开关 `fofa.cert_enabled`（默认跟随 favicon）、`cert_threshold`（默认 200）、`max_cert_queries`（默认 10）。
+- **用户黑名单**：新增 `scanner/blacklist.py`（`path/enabled/load/matches/filter_pairs/filter_domains/add/remove`，
+  每次重读不缓存）+ `config/blacklist.txt`（纯文本、`#` 注释、`*.x` 与 `x` 等价）。
+  语义是**入库前过滤**：`stages/subdomain.py` / `stages/jsmine.py` / `stages/osint.py` 入库前调用，
+  命中域名连子域一起丢弃 → 后续 takeover/probe/dirscan/vulnscan 自然不扫。
+- **批量操作**：`gui/app.py` 新增 `POST /api/blacklist/add`、`/api/blacklist/remove`、
+  `/api/domains/run-subdomain`；`_picked_domains()` 去重保序；批量跑子域名走 **新建任务**
+  （`stages=["subdomain"]`，名 `批量子域-<月日>-<时分秒>`）；子域名页与拓展域名页加勾选列 + 两个按钮。
+- **拓展域名重叠默认隐藏**：`db.OVERLAP_EXT_WHERE`（域名已存在于任意任务的 OWN 子域名集合）叠加到 `/extdomains`，
+  `?all=1` 放开。
+
+### 6）站点页重叠默认隐藏
+
+- `db.OVERLAP_SITE_WHERE`（`id IN (SELECT MIN(id) FROM sites GROUP BY url)`，URL 级跨任务保留最早一条）
+  叠加到 `/sites`；与既有"同任务内 标题+长度 折叠"共用一个 `?all=1` 开关，页顶文案同步更新。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py     # SMOKE PASS（一次通过）
+# 新增 [5d]（11 组断言）：base_domain 折算 / rel_display 项目内外行为 /
+#   黑名单（临时文件写入 + 命中 + 开关失效）/ 证书反查（build_cert_query、is_common_cert 200↔201、
+#   search_cert 空域名）/ source_label 覆盖 8 种来源 / 拓展域名重叠隐藏与 ?all=1 /
+#   站点重叠默认 1 条、?all=1 两条 / 两个 POST 接口（桩 gui_app.run_task 与 blacklist.add，
+#   验阶段与 targets、去重保序）/ settings 页 cert+blacklist 字段与 `panel collapsible`、
+#   无绝对路径、logs/smoke- 相对路径 / settings POST 映射
+```
+
+smoke 的库与任务目录都落在 `logs/smoke-<随机>/` 并自动清理，`git status` 无 `data/` 变化。
+
+### 仍未做 / 挂起
+
+- `P2-3` Linux 实机验证（用户指示挂起）；`P3-2` 实时漏洞情报订阅；`P3-3` 启发式 0day 挖掘；
+  `osint` 的**真实网络往返**（FOFA 证书反查首次实跑需联网 + key，请开开关后看 `logs/task_*/task.log` 的 `[osint]` 行）。
+- waitress 等 WSGI 服务器切换（用户咨询项，未要求实施）。
+
 ## 2026-09-22 —— 第十三轮：用户提的 7 项需求（乱码/拓展域名/IP+CDN/相对路径/侧栏精简/非标端口/重复站点）
 
 用户原话给的 7 条，逐条落地（另含一处环境变化的排查）：

@@ -19,14 +19,16 @@
 │            scanner/takeover.py（子域接管指纹 41 条）           │
 │            scanner/portscan.py（nmap 优先 + 内置 connect 兜底）│
 │            scanner/iprecon.py（IP 反查域名 + /24 C 段归纳）    │
-│            scanner/fofa.py + mmh3.py（favicon 反查 + 黑 ico）  │
+│            scanner/fofa.py + mmh3.py（favicon/证书反查 + 阈值排除）│
 │            scanner/jsmine.py（JS 域名/接口/疑似凭据挖掘）       │
+│            scanner/blacklist.py（用户黑名单：入库前过滤）      │
 │  检测层    scanner/pocs/engine.py（POC 引擎，nuclei 兼容子集）│
 │            scanner/owasp/checks.py（启发式检查 + 三级门控）    │
 │  伪装层    scanner/evasion.py（HTTP 出口统一伪装 + payload 变形）│
 ├────────────────────────────────────────────────────────────┤
-│  基础层    utils（HTTP/命令/线程池/DNS/IO）  config  log      │
-│  存储层    scanner/db.py → SQLite（data/scanner.db）         │
+│  基础层    utils（HTTP/命令/线程池/DNS/IO/路径相对化） config log │
+│  存储层    scanner/db.py → SQLite（data/scanner.db，可用        │
+│            CTFSCANNER_DB 覆盖路径；任务工作目录用 CTFSCANNER_LOGS）│
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -40,6 +42,13 @@
 Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**，而 `mmh3` 包是 C 扩展、
 离线环境装不上，故自实现并附公开已知向量自检。MD5（`sites.favicon`）仍用于我们自己的零请求前置判定，
 两者分工不重叠。
+`scanner/blacklist.py` 是**用户黑名单**（纯文本 `config/blacklist.txt`，一行一个域名、`#` 注释）：
+在 subdomain / jsmine / osint 三个阶段**入库前过滤**（命中的域名连其子域一起丢弃），
+因此黑名单里的目标后续 takeover / probe / dirscan / vulnscan 都不会扫到 —— 语义是"不入资产库"而非"入库打标"。
+文件每次调用都重读、不缓存，改完立即生效。
+`utils.rel_display(path)` 是**展示层**的相对化工具：把项目内绝对路径转成相对项目根的 POSIX 形式
+（`logs/task_1_x/task.log`），项目外路径与空值原样返回；CLI / GUI / 报告对外显示路径都走它，
+不向外暴露本机绝对目录。
 
 ## 关键设计决策
 
@@ -56,13 +65,18 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 | 指纹用自研精简规则表（scanner/fingerprint.py） | 无外部依赖；httpx 缺失时也能填充 sites.tech | 规则少、只给组件标签不解析版本 |
 | 外部情报（osint）默认全关，且"两个子开关都关＝一次请求都不发" | 依赖第三方公共接口（api.webscan.cc / FOFA），可用性不由我们掌控；不配置就不该有网络行为 | 想用 C 段/favicon 拓展需先去「策略配置 → 外部情报拓展」显式打开 |
 | mmh3 自实现（`scanner/mmh3.py`）而非引入 mmh3 包 | 平台指纹的社区统一键就是 mmh3；C 扩展包在离线 CTF 环境装不上 | 只实现社区在用的 `x86_32`，未做 128 位变体 |
+| 用户黑名单**入库前过滤**（`scanner/blacklist.py`）而非入库打标 | 命中即不进资产库，后续阶段自然不扫；不必在每个阶段重复判"要不要跳过"，也不会被历史数据干扰 | 已入库的历史资产不受影响（需手动删任务）；`config/blacklist.txt` 为纯文本、需人工维护 |
+| 重叠资产**默认隐藏**（拓展域名域名级全局 / 站点 URL 级跨任务） | 反复扫同一目标时列表不被撑成 N 倍；默认视图是"新发现"，全量用 `?all=1` 显式打开 | 判重是"保留最早一条"，后扫到的新信息（如状态码变化）不会覆盖旧行 |
+| 批量跑子域名**新建任务**而非挂子任务 | 现有任务模型（一任务一线程 / 独立状态 / 独立停止删除）可直接复用 | 任务列表会多出一行；无法在一个树里聚合查看（收益不抵改表结构 + 任务树渲染的成本） |
 
 ## 数据流
 
 1. 用户通过 CLI（`-f` 文件）或 GUI（文本框/上传文件）提交目标；
 2. `targets.parse_lines` 把每行归一化为 `("domain"|"url"|"ip"|"unknown", raw)`；
    CIDR（上限 256 个地址）在这一步展开为多条 `("ip", …)`，超限整体丢弃；
-3. `runner.run_task` 创建任务工作目录 `logs/task_<id>_<ts>/`，绑定日志，按顺序执行启用的阶段；
+3. `runner.run_task` 创建任务工作目录 `LOGS_DIR/task_<id>_<ts>/`，绑定日志，按顺序执行启用的阶段；
+   `LOGS_DIR` 取自 `scanner/config.py`，默认 `BASE_DIR/logs`，可用环境变量 `CTFSCANNER_LOGS` 覆盖
+   （测试/并行开发时指向临时目录，真实工作区不被污染）；数据库同理支持 `CTFSCANNER_DB`；
 4. 每个阶段把结果同时写入三处：任务工作目录的文本产物、SQLite、`ctx.results`（供下一阶段直接使用）；
 5. GUI 通过 `tasks` 表轮询状态（status/progress/current_stage），详情页从 SQLite 读资产与漏洞。
 
@@ -71,7 +85,7 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 | 表 | 字段要点 | 说明 |
 |---|---|---|
 | tasks | targets, stages, options, status, progress, current_stage, log_file, error | 任务状态机：pending → running → done/stopped/failed |
-| subdomains | domain, source, cname, ip, cdn | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa）两类；cname 由 takeover 阶段回填，ip / cdn 由 subdomain 阶段回填（cdn 为空即"非 CDN"）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE` |
+| subdomains | domain, source, cname, ip, cdn | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa / osint:fofa-cert）两类；cname 由 takeover 阶段回填，ip / cdn 由 subdomain 阶段回填（cdn 为空即"非 CDN"）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`；拓展域名页默认隐藏重叠（`db.OVERLAP_EXT_WHERE`：域名已存在于任意任务的"目标自身子域名"里） |
 | sites | url, host, port, status, title, length, server, tech, favicon, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定 |
 | ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认关闭） |
 | csegs | segment, ip, domains, count | `/24` C 段视野（osint 阶段产出，默认关闭）：每行一个 IP 与其反查到的域名（domains 截断存储、count 为截断前数量） |
@@ -84,12 +98,18 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 
 ## GUI 路由与分栏
 
-侧边栏 8 栏：`/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**）/ `/extdomains`（JS 与情报带出的拓展域名）/
+侧边栏 8 栏：`/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
+`/extdomains`（JS 与情报带出的拓展域名，**默认隐藏重叠**，`?all=1` 看全部）/
 `/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/vulns`（级别筛选 + `?task_id=` 按任务筛选）/ `/pocs` / `/settings`。
 `/ports` / `/csegs` / `/dirs` 三条路由**仍在**（可直接访问 URL），但**已从侧边栏移除** ——
 它们是任务维度数据，在任务详情页签里看更贴合上下文，这也是用户明确要求的收敛。
 筛选/分页统一走 `db.page_assets(table, limit, offset, q, extra_where, extra_params)`：
-`extra_where` 用于叠加业务条件（子域名分流、CDN 标签），`q` 是跨文本列的 LIKE。
+`extra_where` 用于叠加业务条件（子域名分流、CDN 标签、重叠隐藏），`q` 是跨文本列的 LIKE。
+来源列统一走 `gui/app.py::source_label()`（`subfinder → 被动(subfinder)`、`passive:x → 被动(x)`、
+`osint:fofa → FOFA·ICO 反查`、`osint:fofa-cert → FOFA·证书反查` …），模板里以
+`app.jinja_env.globals["source_label"]` 注册；未知来源原样返回，不吞信息。
+「策略配置」页由 **8 个可折叠面板**组成（默认全折叠，展开状态存 `localStorage`，页顶有全部展开/折叠），
+面板切换与勾选交互在 `gui/static/app.js`（`initCollapsiblePanels` / `initPickAll`）。
 
 ## 扩展点
 

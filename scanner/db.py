@@ -6,12 +6,17 @@
 - 若后续需要多节点/高并发，替换本层为 PostgreSQL 或 MongoDB 即可，上层接口不变。
 """
 import json
+import os
 import sqlite3
 import time
+from pathlib import Path
 
 from .config import BASE_DIR
 
-DB_PATH = BASE_DIR / "data" / "scanner.db"
+# 库路径可用环境变量 CTFSCANNER_DB 覆盖 —— **测试必须走独立库**：
+# 回归测试（tests/smoke.py）会创建任务、写资产、改 POC 开关，若直接落在 data/scanner.db，
+# 真实任务库就会被测试数据污染（此前"站点计数不稳定"类问题正源于此）。
+DB_PATH = Path(os.environ.get("CTFSCANNER_DB") or (BASE_DIR / "data" / "scanner.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -167,7 +172,9 @@ def clear_task_assets(task_id):
         _exec(f"DELETE FROM {t} WHERE task_id=?", (task_id,))
 
 
-TRASH_DIR = BASE_DIR / "data" / "trash"
+# 备份目录跟随库位置（默认 data/trash —— 与库同处 data/ 下）：
+# 用独立测试库时，测试产生的备份不会混进真实库的回收站。
+TRASH_DIR = DB_PATH.parent / "trash"
 
 
 def backup_task(task_id):
@@ -344,6 +351,17 @@ _ASSET_PAGES = {
 # 它们未必属于目标，混在子域名页里会让人误判资产归属。
 OWN_SUBDOMAIN_WHERE = "source NOT LIKE 'js:%' AND source NOT LIKE 'osint:%'"
 EXT_SUBDOMAIN_WHERE = "(source LIKE 'js:%' OR source LIKE 'osint:%')"
+
+# 「重叠资产」判据（用户要求：默认不显示重叠，手动勾选才显示）：
+# - 拓展域名：该域名若已经作为**目标自身子域名**存在过（任意任务），说明它早就在资产清单里，
+#   拓展页再列一遍纯属重复 —— 域名级全局判重（用户确认口径）；
+# - 站点：同一 URL 在多个任务里都探到过时只留一条，避免"重复扫同一个目标"把列表撑成 N 倍。
+#   **保留 `MAX(id)`（最新一次扫描的那条）而不是 `MIN(id)`**：站点行带的是当次扫描的
+#   status / title / length / tech，留最旧那条意味着默认视图里看到的是陈旧数据
+#   （实测：新任务已扫出 404 + 新标题，页面仍显示旧任务的 200 + 旧标题），
+#   而重扫的目的恰恰是刷新这些字段。去重效果不变，展示的却是最新的资产状态。
+OVERLAP_EXT_WHERE = f"domain NOT IN (SELECT domain FROM subdomains WHERE {OWN_SUBDOMAIN_WHERE})"
+OVERLAP_SITE_WHERE = "id IN (SELECT MAX(id) FROM sites GROUP BY url)"
 
 
 def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_params=()):

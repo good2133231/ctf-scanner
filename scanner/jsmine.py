@@ -17,7 +17,7 @@
 import re
 from urllib.parse import urljoin, urlparse
 
-from .utils import http_request, pool_run
+from .utils import base_domain, http_request, pool_run
 
 # ---------- 第三方域名黑名单（噪声源）----------
 
@@ -66,11 +66,7 @@ _FILE_EXT = frozenset({
     "html", "htm", "woff", "woff2", "ttf", "otf", "eot",
 })
 
-# 多段公共后缀：取"注册域"用于保护目标自身域名时避免切错（如 a.b.com.cn）
-_MULTI_TLD = frozenset({
-    "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "co.uk", "org.uk", "ac.uk",
-    "com.hk", "com.tw", "com.au", "com.sg", "co.jp", "co.kr",
-})
+# 多段公共后缀（取注册域用）已移到 `utils.MULTI_TLD` / `utils.base_domain`
 
 # JS 全局对象/字面量：`process.env.token` / `window.location.href` 这类成员访问链
 # 形状与域名一致，靠首段标签剔除（代价：真实存在 process.xxx.com 类子域时会被漏掉）。
@@ -124,17 +120,6 @@ _MEMBER_RE = re.compile(r"""[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+""")
 
 
 # ---------- 主机名判定 ----------
-
-def _base_domain(host):
-    """取注册域（粗略版）：example.com / example.com.cn。仅用于保护目标自身域名。"""
-    host = (host or "").lower().strip(".")
-    parts = host.split(".")
-    if len(parts) <= 2:
-        return host
-    if ".".join(parts[-2:]) in _MULTI_TLD:
-        return ".".join(parts[-3:])
-    return ".".join(parts[-2:])
-
 
 def _valid_host(host):
     """是否为"像域名的"主机（排除 IP、文件名、非法标签）。"""
@@ -298,7 +283,7 @@ def mine(url, settings, logger=None):
     scheme = seed.scheme
 
     # 目标自身域名保护集：seed 主机 + 其注册域，避免被第三方黑名单误杀
-    protect = {seed.hostname.lower().strip("."), _base_domain(seed.hostname)}
+    protect = {seed.hostname.lower().strip("."), base_domain(seed.hostname)}
 
     resp = http_request(url, timeout=timeout, settings=settings)
     if not resp:

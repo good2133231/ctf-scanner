@@ -1,33 +1,39 @@
-"""阶段：外部情报拓展（P1-4 C 段反查 + P3-1 FOFA favicon 反查）。
+"""阶段：外部情报拓展（C 段反查 + FOFA favicon 反查 + FOFA 证书反查）。
 
 位置：probe 之后、jsmine 之前 —— 输入是"存活站点 + 已解析 IP"，产出是**新域名**，
 越早入账，后面的 dirscan / vulnscan 覆盖越广。
 
-两个子能力各自独立开关，**默认全部关闭**（都依赖第三方公共接口，可用性不由我们掌控）：
+三个子能力各自独立开关，**默认全部关闭**（都依赖第三方公共接口，可用性不由我们掌控）：
 - `iprecon.enabled`：把已知 IP（目标 IP + 站点解析 IP + 子域名 A 记录）反查成域名，
-  并把 IP 归纳成 `/24` C 段落 `csegs` 表（GUI「C 段」分栏）；
-- `fofa.enabled`：取站点 favicon 的 mmh3 去 FOFA 反查同源资产，
-  命中数超过 `fofa.black_ico_threshold` 即判为"黑 ico"（公共图标）并放弃拓展。
+  并把 IP 归纳成 `/24` 段落 `csegs` 表（任务详情「C 段」页签）；
+- `fofa.enabled`：取站点 favicon 的 mmh3 去 FOFA 反查**同源资产**
+  （命中数超过 `fofa.black_ico_threshold` 即判为"黑 ico"，放弃拓展）；
+- `fofa.cert_enabled`：按 `cert="<注册域>"` 反查**共用同一张 TLS 证书**的域名，
+  命中数超过 `fofa.cert_threshold` 判为"通用证书"（公共 CA / 大厂证书），放弃拓展。
 
-两者都关时整个阶段直接跳过 —— 一次请求都不发（与低危检查的处理方式一致）。
+产出的域名来源分别是 `osint:cseg` / `osint:fofa` / `osint:fofa-cert`，都归「拓展域名」页。
+全部子能力都关时整个阶段直接跳过 —— 一次请求都不发（与低危检查的处理方式一致）。
 """
+import ipaddress
 from urllib.parse import urlparse
 
 from .base import Stage
-from .. import db, iprecon
+from .. import blacklist, db, iprecon
 from .. import fofa as fofa_mod
 from ..fingerprint import favicon_hash
-from ..utils import pool_run, resolve_host
+from ..utils import base_domain, pool_run, resolve_host
 
 
 class OsintStage(Stage):
     name = "osint"
-    description = "外部情报拓展（C 段反查域名 / favicon 反查同源资产）"
+    description = "外部情报拓展（C 段反查域名 / favicon 反查同源资产 / 证书反查）"
 
     def run(self):
         ctx = self.ctx
         do_ip = (ctx.settings.get("iprecon", {}) or {}).get("enabled") is True
-        do_fofa = (ctx.settings.get("fofa", {}) or {}).get("enabled") is True
+        fofa_cfg = ctx.settings.get("fofa", {}) or {}
+        do_fofa = fofa_cfg.get("enabled") is True
+        do_cert = do_fofa and fofa_cfg.get("cert_enabled") is not False
         if not (do_ip or do_fofa):
             ctx.logger.info("[osint] 未启用（策略配置 → 外部情报拓展 可打开），跳过")
             return
@@ -40,6 +46,8 @@ class OsintStage(Stage):
             found += self._c_segments()
         if do_fofa and not ctx.stopped():
             found += self._fofa_assets()
+        if do_cert and not ctx.stopped():
+            found += self._fofa_cert()
 
         if ctx.stopped():
             ctx.logger.warning("[osint] 任务已请求停止，结果不再入账")
@@ -52,8 +60,13 @@ class OsintStage(Stage):
                 continue
             seen.add(domain)
             new.append((domain, source))
+        # 用户黑名单：命中的域名**不入库**，因此后面的 dirscan/vulnscan 也不会去扫它
+        new, blocked = blacklist.filter_pairs(new, ctx.settings)
         if new:
             db.insert_subdomains(ctx.task_id, new)
+        if blocked:
+            ctx.logger.info(f"[osint] 黑名单拦截 {len(blocked)} 个域名"
+                            + f"（如 {blocked[0][0]} ← {blocked[0][1]}）")
         ctx.results["osint_domains"] = [d for d, _ in new]
         ctx.logger.info(f"[osint] 新增域名资产 {len(new)} 个"
                         + (f"（{' / '.join(f'{s}:{n}' for s, n in _tally(new))}）" if new else ""))
@@ -192,6 +205,81 @@ class OsintStage(Stage):
                 domain = a.get("domain") or urlparse(a.get("host") or "").hostname or ""
                 found.append((domain, "osint:fofa"))
         ctx.logger.info(f"[osint] FOFA 拓展：查询 {queried} 个 favicon，跳过黑 ico {black} 个")
+        return found
+
+    # ---------- FOFA 证书反查 ----------
+
+    def _root_domains(self):
+        """汇总待做证书反查的**注册域**（去重、按出现顺序）：
+
+        目标是域名/URL 时取它的注册域；站点与子域名同样折算到注册域。
+        证书是按域名签的，同一个注册域下的 `a.example.com` / `b.example.com` 证书内容常重叠，
+        折到注册域能把查询次数压下来（省配额）。IP 目标直接跳过 —— 证书反查要的是域名。
+        """
+        ctx = self.ctx
+        hosts = []
+        for kind, raw in ctx.targets:
+            if kind == "ip":
+                continue
+            host = urlparse(raw).hostname if kind == "url" else raw
+            if host:
+                hosts.append(host)
+        for r in db.list_sites(ctx.task_id):
+            hosts.append(r["host"] or "")
+        for r in db.list_subdomains(ctx.task_id):
+            hosts.append(r["domain"])
+
+        roots = []
+        for h in hosts:
+            h = (h or "").strip().lower().strip(".")
+            if not h:
+                continue
+            try:
+                ipaddress.ip_address(h)      # 裸 IP 没有证书主体，跳过
+                continue
+            except ValueError:
+                pass
+            root = base_domain(h)
+            if root and "." in root:
+                roots.append(root)
+        return list(dict.fromkeys(roots))
+
+    def _fofa_cert(self):
+        ctx = self.ctx
+        cfg = ctx.settings.get("fofa", {}) or {}
+        if not fofa_mod.available(ctx.settings):
+            ctx.logger.info("[osint] FOFA 未配置 email/key（config/keys.yaml），跳过证书反查")
+            return []
+        roots = self._root_domains()
+        if not roots:
+            ctx.logger.info("[osint] 没有可用于证书反查的注册域")
+            return []
+        cap = max(1, int(cfg.get("max_cert_queries") or 10))
+        if len(roots) > cap:
+            ctx.logger.info(f"[osint] 注册域 {len(roots)} 个超过上限 {cap}，仅反查前 {cap} 个")
+            roots = roots[:cap]
+
+        found = []
+        queried = common = 0
+        for root in roots:
+            if ctx.stopped():
+                break
+            assets, total, err = fofa_mod.search_cert(root, ctx.settings, logger=ctx.logger)
+            if err:
+                ctx.logger.info(f"[osint] 证书反查中止：{err}")
+                break
+            if fofa_mod.is_common_cert(total, ctx.settings):
+                common += 1
+                ctx.logger.info(f'[osint] 证书 cert="{root}" 命中 {total} 条，'
+                                f"超过通用证书阈值 {fofa_mod.cert_threshold(ctx.settings)}，"
+                                f"判为通用证书，不拓展")
+                continue
+            queried += 1
+            ctx.logger.info(f'[osint] 证书反查 cert="{root}" → {len(assets)} 条 / 共 {total} 条')
+            for a in assets:
+                domain = a.get("domain") or urlparse(a.get("host") or "").hostname or ""
+                found.append((domain, "osint:fofa-cert"))
+        ctx.logger.info(f"[osint] 证书拓展：查询 {queried} 个注册域，跳过通用证书 {common} 个")
         return found
 
 

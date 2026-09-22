@@ -2,8 +2,14 @@
 {% block title %}策略配置{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
+<div class="toolbar">
+  <button type="button" class="ghost" data-panels="expand">全部展开</button>
+  <button type="button" class="ghost" data-panels="collapse">全部折叠</button>
+  <span class="muted">面板默认折叠（一屏几百个勾选框实在难找），点标题栏即可展开/收起，
+    展开状态记在本机浏览器里。</span>
+</div>
 <form method="post">
-  <section class="panel">
+  <section class="panel collapsible" data-panel="detect">
     <h2>检测策略（分级门控 · 决定"哪些洞值得报"）</h2>
     <p class="muted">CTF 实战建议保持 medium：明文 HTTP、安全响应头缺失、组件版本泄露这类
       低危与 info 项不会帮你拿到 flag，只会淹没注入/RCE 类结果。</p>
@@ -54,7 +60,7 @@
     </div>
   </section>
 
-  <section class="panel">
+  <section class="panel collapsible" data-panel="evasion">
     <h2>动态免杀（绕过 WAF / 流量识别）</h2>
     <label class="chk"><input type="checkbox" name="random_ua" value="1"
       {{ 'checked' if s.evasion.random_ua }}> 每个请求随机使用真实浏览器 User-Agent</label>
@@ -75,7 +81,7 @@
     </label>
   </section>
 
-  <section class="panel">
+  <section class="panel collapsible" data-panel="recon">
     <h2>信息收集</h2>
     <label class="chk"><input type="checkbox" name="wildcard_filter" value="1"
       {{ 'checked' if s.limits.wildcard_filter }}> 泛解析过滤（目标开 *.domain 时丢弃通配命中的字典结果）</label>
@@ -84,7 +90,7 @@
     <label>单源超时（秒） <input name="passive_timeout" value="{{ s.passive.timeout }}"></label>
   </section>
 
-  <section class="panel">
+  <section class="panel collapsible" data-panel="assets">
     <h2>资产面拓展（子域接管 / JS 挖掘 / 端口服务）</h2>
     <p class="muted">这三项都属于"发散"用的资产面拓展，默认策略见下方勾选状态；
       风险与耗时各不相同，可按需逐个开关。</p>
@@ -113,11 +119,11 @@
       取消勾选＝整阶段跳过）</label>
   </section>
 
-  <section class="panel">
-    <h2>外部情报拓展（OSINT：C 段反查 / favicon 反查）</h2>
-    <p class="muted">两项都依赖<b>第三方公共接口</b>，默认关闭；接口不可用时只记一行日志，
-      不影响流水线其它阶段。产出的新域名会入「子域名资产」（来源 <code>osint:*</code>），
-      C 段归纳结果进「C 段视野」分栏。</p>
+  <section class="panel collapsible" data-panel="osint">
+    <h2>外部情报拓展（OSINT：C 段反查 / ICO 反查 / 证书反查）</h2>
+    <p class="muted">三项都依赖<b>第三方公共接口</b>，默认关闭；接口不可用时只记一行日志，
+      不影响流水线其它阶段。产出的新域名都进 <b>「拓展域名」</b>页（来源 <code>osint:*</code>，
+      页面上标成「C 段反查 / FOFA·ICO 反查 / FOFA·证书反查」），C 段归纳结果进任务详情的「C 段」页签。</p>
     <label class="chk"><input type="checkbox" name="iprecon_enabled" value="1"
       {{ 'checked' if s.iprecon.enabled }}> <b>C 段反查</b>（IP → 域名 + /24 C 段归纳，免 key）</label>
     <label>反查接口（<code>{ip}</code> 为占位符，可替换为自建/镜像）
@@ -129,16 +135,42 @@
     <label>并发数（公共接口，建议保持克制） <input name="iprecon_workers" value="{{ s.iprecon.workers }}"></label>
     <label>单次超时（秒） <input name="iprecon_timeout" value="{{ s.iprecon.timeout }}"></label>
     <label class="chk"><input type="checkbox" name="fofa_enabled" value="1"
-      {{ 'checked' if s.fofa.enabled }}> <b>favicon 反查同源资产</b>
+      {{ 'checked' if s.fofa.enabled }}> <b>favicon（ICO）反查同源资产</b>
       （需在 <code>config/keys.yaml</code> 填 fofa.email / fofa.key）</label>
     <label>每任务算 favicon 的站点上限 <input name="fofa_max_sites" value="{{ s.fofa.max_sites }}"></label>
     <label>单 favicon 取回资产上限 <input name="fofa_max_assets" value="{{ s.fofa.max_assets }}"></label>
     <label>favicon 并发数 <input name="fofa_workers" value="{{ s.fofa.workers }}"></label>
     <label>黑 ico 阈值（命中数超过该值 = 公共图标，放弃拓展）
       <input name="fofa_black_ico_threshold" value="{{ s.fofa.black_ico_threshold }}"></label>
+    <label class="chk"><input type="checkbox" name="fofa_cert_enabled" value="1"
+      {{ 'checked' if s.fofa.cert_enabled }}> <b>证书反查</b>
+      （<code>cert="example.com"</code>：找共用同一张 TLS 证书的域名，需上面的 favicon 开关一并打开）</label>
+    <label>通用证书阈值（命中数超过该值 = 公共 CA / 大厂证书，放弃拓展）
+      <input name="fofa_cert_threshold" value="{{ s.fofa.cert_threshold }}"></label>
+    <label>每任务最多查几个注册域 <input name="fofa_max_cert_queries" value="{{ s.fofa.max_cert_queries }}"></label>
   </section>
 
-  <section class="panel">
+  <section class="panel collapsible" data-panel="blacklist">
+    <h2>用户黑名单（命中即不入资产库）</h2>
+    <p class="muted">文件：<code>{{ bl_path or 'config/blacklist.txt' }}</code>（纯文本，一行一个域名，
+      含其所有子域，可直接手工编辑）。命中的域名<b>不入资产库</b>，因此后续 dirscan / vulnscan
+      也不会去扫它。批量加入的入口在「子域名」「拓展域名」页：勾选行 → 点「加入黑名单」。</p>
+    <label class="chk"><input type="checkbox" name="blacklist_enabled" value="1"
+      {{ 'checked' if s.blacklist.enabled }}> 启用黑名单（取消勾选＝整份名单临时失效，文件内容不变）</label>
+    {% if bl %}
+      <p class="muted small">当前 {{ bl|length }} 条：</p>
+      <ul class="mono small" style="max-height:220px;overflow:auto">
+        {% for d in bl %}<li><label class="chk"><input type="checkbox" name="domain" value="{{ d }}">
+          {{ d }}</label></li>{% endfor %}
+      </ul>
+      <button type="submit" formaction="{{ url_for('api_blacklist_remove') }}" formmethod="post"
+              formnovalidate>移除勾选条目</button>
+    {% else %}
+      <p class="muted">（名单为空）</p>
+    {% endif %}
+  </section>
+
+  <section class="panel collapsible" data-panel="limits">
     <h2>扫描限制</h2>
     <label>并发线程 max_workers <input name="max_workers" value="{{ s.limits.max_workers }}"></label>
     <label>HTTP 超时（秒） <input name="http_timeout" value="{{ s.limits.http_timeout }}"></label>
@@ -148,7 +180,7 @@
     <label>漏洞扫描站点上限 <input name="vulnscan_max_urls" value="{{ s.limits.vulnscan_max_urls }}"></label>
   </section>
 
-  <section class="panel">
+  <section class="panel collapsible" data-panel="gui">
     <h2>控制台</h2>
     <label>监听地址 <input name="host" value="{{ s.gui.host }}"></label>
     <label>端口 <input name="port" value="{{ s.gui.port }}"></label>

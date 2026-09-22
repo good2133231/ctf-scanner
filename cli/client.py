@@ -18,7 +18,7 @@ from scanner import db
 from scanner.config import load_settings, resolve
 from scanner.report import generate
 from scanner.runner import STAGE_ORDER, STAGE_REGISTRY, run_task
-from scanner.utils import which, verify_tool
+from scanner.utils import rel_display, which, verify_tool
 
 
 def check_tools(settings):
@@ -68,7 +68,7 @@ def main():
     if args.file:
         p = resolve(args.file)
         if not p.exists():
-            print(f"[!] 目标文件不存在：{p}")
+            print(f"[!] 目标文件不存在：{rel_display(p)}")
             sys.exit(1)
         lines.extend(p.read_text(encoding="utf-8", errors="replace").splitlines())
     if not lines:
@@ -97,15 +97,15 @@ def main():
           f"站点 {len(ctx.results.get('sites', []))} | "
           f"目录 {len(ctx.results.get('dirs', []))} | "
           f"潜在漏洞 {len(ctx.results.get('vulns', []))}")
-    print(f"    日志：{ctx.workdir / 'task.log'}")
-    print(f"    数据库：{db.DB_PATH}")
+    print(f"    日志：{rel_display(ctx.workdir / 'task.log')}")
+    print(f"    数据库：{rel_display(db.DB_PATH)}")
     if args.report:
         md = generate(task_id)
         if md:
             out = resolve(args.report)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(md, encoding="utf-8")
-            print(f"[*] 报告已生成：{out}")
+            print(f"[*] 报告已生成：{rel_display(out)}")
 
 
 if __name__ == "__main__":

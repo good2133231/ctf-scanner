@@ -70,6 +70,12 @@ fofa:
   max_assets: 100
   workers: 5
   black_ico_threshold: 200
+  cert_enabled: true
+  cert_threshold: 200
+  max_cert_queries: 10
+blacklist:
+  enabled: true
+  path: config/blacklist.txt
 tools:
   subfinder: subfinder
   puredns: puredns

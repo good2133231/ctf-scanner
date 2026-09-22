@@ -4,15 +4,17 @@
 <p class="muted">全库存活站点（跨任务，服务端分页 + 关键字过滤）。favicon MD5 是"零请求前置指纹"，
   POC 声明 favicon_md5_list 时会先与它比对（见 策略配置 → 检测策略）。</p>
 <section class="panel">
-  <p class="muted small">重复站点折叠：<b>同一任务内</b>「标题 + 响应长度」完全相同的站点视为重复
-    （同一虚拟主机的别名/泛解析产物），默认只留首个出现的。折叠只作用于当前页，
-    分页条的「共 N 条」仍是未折叠的总数。
+  <p class="muted small">重复站点<b>默认隐藏</b>，两层口径都由同一个开关控制：
+    ① <b>重叠资产（跨任务）</b>：同一 URL 若在更早的任务里已经探到过，只保留最早那条
+    —— 反复扫同一个目标时，站点列表不会再被撑成 N 倍；
+    ② <b>同任务内重复</b>：「标题 + 响应长度」完全相同的站点视为同一虚拟主机的别名/泛解析产物。
+    折叠只作用于当前页，分页条的「共 N 条」仍是未折叠的总数。
     {% if show_all %}
       当前<b>显示全部</b>（含 {{ hidden }} 条重复）。
       <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}">只看去重</a>
     {% else %}
       已折叠隐藏 {{ hidden }} 条。
-      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&all=1">显示全部</a>
+      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&all=1">显示全部（含重叠）</a>
     {% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">

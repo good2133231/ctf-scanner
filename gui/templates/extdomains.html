@@ -2,45 +2,74 @@
 {% block title %}拓展域名{% endblock %}
 {% block content %}
 <p class="muted">从 JS 中匹配到的域名（<span class="mono">js:mine</span>）与外部情报反查结果
-  （<span class="mono">osint:cseg</span> / <span class="mono">osint:fofa</span>）。
+  （<span class="mono">osint:cseg</span> C 段反查 / <span class="mono">osint:fofa</span> FOFA·ICO 反查 /
+  <span class="mono">osint:fofa-cert</span> FOFA·证书反查）。
   这些域名<b>未必属于目标自身</b>——第三方接口、CDN、统计服务都会出现在 JS 里，
-  因此与「子域名资产」分开放，避免误判资产归属。</p>
+  因此与「子域名资产」分开放，避免误判资产归属。来源列已标出哪些是 FOFA 找出来的。</p>
 <section class="panel">
   <p class="muted small">标签过滤：CDN 标记来自 CNAME 链与
     <span class="mono">config/dicts/cdn_cname.txt</span> 名单比对（接管检测之外的独立判定）。
     <a class="btn-mini {{ 'ghost' if tag != 'cdn' else '' }}"
-       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=cdn">只看 CDN</a>
+       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=cdn{{ '&all=1' if show_all }}">只看 CDN</a>
     <a class="btn-mini {{ 'ghost' if tag != 'nocdn' else '' }}"
-       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=nocdn">只看非 CDN</a>
-    {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}">全部</a>{% endif %}
+       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=nocdn{{ '&all=1' if show_all }}">只看非 CDN</a>
+    {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ '&all=1' if show_all }}">全部</a>{% endif %}
+  </p>
+  {% set keep = '&tag=' + tag if tag else '' %}
+  <p class="muted small">重叠资产：<b>该域名已作为「目标自身子域名」出现在任意任务里</b>（域名级全局判重），
+    说明它早就在资产清单里，这里再列一遍纯属重复，所以<b>默认隐藏</b>。
+    {% if show_all %}
+      当前<b>显示全部</b>（含重叠）。
+      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep }}">只看不重叠</a>
+    {% else %}
+      当前<b>只看不重叠</b>。
+      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep }}&all=1">显示全部（含重叠）</a>
+    {% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="域名 / 来源 / CNAME / IP"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
     {% if tag %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
+    {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
     <button class="ghost" type="submit">查询</button>
     {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
   </form>
-  <table id="tbl-all-ext-subs">
-    <thead><tr><th>#</th><th>任务</th><th>域名</th><th>解析 IP</th><th>CDN</th>
-      <th>CNAME</th><th>来源</th></tr></thead>
-    <tbody>
-    {% for s in subs %}
-      <tr>
-        <td>{{ s.id }}</td>
-        <td><a href="{{ url_for('task_detail', task_id=s.task_id) }}">#{{ s.task_id }}</a></td>
-        <td class="mono">{{ s.domain }}</td>
-        <td class="muted small mono">{{ s.ip or '-' }}</td>
-        <td>{% if s.cdn %}<span class="sev sev-medium">{{ s.cdn }}</span>
-            {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
-        <td class="muted small mono">{{ s.cname or '-' }}</td>
-        <td class="muted">{{ s.source or '-' }}</td>
-      </tr>
-    {% else %}
-      <tr><td colspan="7" class="muted">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <form method="post" action="{{ url_for('api_blacklist_add') }}">
+    <input type="hidden" name="next"
+      value="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep }}{{ '&all=1' if show_all }}">
+    <div class="bulkbar">
+      <button type="submit" class="ghost">加入黑名单（勾选行）</button>
+      <button type="submit" class="ghost"
+        formaction="{{ url_for('api_run_subdomain') }}">批量跑子域名（新建任务）</button>
+      <span class="muted">黑名单：命中即不入资产库，后续阶段也不会扫它；
+        批量跑子域名会新建一个只跑 subdomain 阶段的任务。</span>
+    </div>
+    <table id="tbl-all-ext-subs">
+      <thead><tr>
+        <th class="pick"><input type="checkbox" class="pick-all-page"
+          data-pick-all="#tbl-all-ext-subs" title="全选本页"></th>
+        <th>#</th><th>任务</th><th>域名</th><th>解析 IP</th><th>CDN</th>
+        <th>CNAME</th><th>来源</th></tr></thead>
+      <tbody>
+      {% for s in subs %}
+        <tr>
+          <td class="pick"><input type="checkbox" class="pick pick-row" name="domain"
+            value="{{ s.domain }}"></td>
+          <td>{{ s.id }}</td>
+          <td><a href="{{ url_for('task_detail', task_id=s.task_id) }}">#{{ s.task_id }}</a></td>
+          <td class="mono">{{ s.domain }}</td>
+          <td class="muted small mono">{{ s.ip or '-' }}</td>
+          <td>{% if s.cdn %}<span class="sev sev-medium">{{ s.cdn }}</span>
+              {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
+          <td class="muted small mono">{{ s.cname or '-' }}</td>
+          <td class="muted">{{ source_label(s.source) }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="muted">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </form>
   {% include "_pager.html" %}
 </section>
 {% endblock %}

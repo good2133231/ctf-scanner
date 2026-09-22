@@ -67,6 +67,16 @@ button.danger { background:#3a1d1d; border-color:#7f1d1d; color:#fda4af; }
          margin-top:10px; padding-top:10px; border-top:1px solid var(--line); font-size:12px; }
 .pager a { display:inline-block; text-decoration:none; }
 
+/* ---------- 可折叠面板（策略配置页：默认折叠，避免一屏几百个勾选框） ---------- */
+/* 标题行由 JS 加上 .panel-head 并插入 .panel-toggle 按钮；未展开时只留标题行。 */
+.panel.collapsible > h2.panel-head { display:flex; align-items:center; gap:8px;
+        cursor:pointer; user-select:none; margin:2px 0 6px; }
+.panel.collapsible > h2.panel-head:hover { color:var(--accent); }
+.panel-toggle { margin-left:auto; padding:1px 10px; font-size:12px; border-radius:5px;
+        background:#1a232e; border-color:var(--line); color:var(--muted); }
+.panel-toggle:hover { color:var(--text); background:#22303f; }
+.panel.collapsible:not(.open) > *:not(.panel-head) { display:none; }
+
 /* ---------- 任务详情页签 ---------- */
 .tabs { display:flex; gap:2px; flex-wrap:wrap; border-bottom:1px solid var(--line);
         margin:12px 0 16px; }

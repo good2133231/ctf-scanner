@@ -202,9 +202,67 @@ function initTaskTable() {
   tick();
 }
 
+/* ---------- 策略配置页：面板折叠（默认折叠，展开状态存 localStorage） ---------- */
+
+function initCollapsiblePanels() {
+  const panels = [...document.querySelectorAll(".panel.collapsible")];
+  if (!panels.length) return;
+  const KEY = "ctfscanner.panels";
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { saved = {}; }
+  const persist = () => {
+    const state = {};
+    panels.forEach((p, i) => { state[p.dataset.panel || String(i)] = p.classList.contains("open"); });
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* 隐私模式：忽略 */ }
+  };
+  const setters = [];
+  panels.forEach((p, i) => {
+    const head = p.querySelector("h2");
+    if (!head) return;                       // 无标题的面板不参与折叠
+    const key = p.dataset.panel || String(i);
+    head.classList.add("panel-head");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "panel-toggle";
+    head.appendChild(btn);
+    const set = open => {
+      p.classList.toggle("open", open);
+      btn.textContent = open ? "折叠" : "展开";
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    };
+    set(saved[key] === true);                // 默认折叠：只有显式存过 true 才展开
+    const flip = () => { set(!p.classList.contains("open")); persist(); };
+    btn.addEventListener("click", ev => { ev.stopPropagation(); flip(); });
+    head.addEventListener("click", flip);
+    setters.push(set);
+  });
+  document.querySelectorAll("[data-panels]").forEach(b =>
+    b.addEventListener("click", () => {
+      const open = b.dataset.panels === "expand";
+      setters.forEach(s => s(open));
+      persist();
+    }));
+}
+
+/* ---------- 资产页：表头复选框全选本页行 ---------- */
+
+function initPickAll() {
+  document.querySelectorAll("input[data-pick-all]").forEach(master => {
+    if (master.dataset.bound) return;
+    master.dataset.bound = "1";
+    const tbl = document.querySelector(master.dataset.pickAll);
+    if (!tbl) return;
+    master.addEventListener("change", () => {
+      tbl.querySelectorAll(".pick-row").forEach(c => { c.checked = master.checked; });
+    });
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initFilters();
+  initCollapsiblePanels();
+  initPickAll();
   // 任务列表页的轮询/筛选/批量操作由 initTaskTable() 负责（模板内显式调用）
   // 任务详情页工具栏的操作按钮
   bindTaskOps(".toolbar");

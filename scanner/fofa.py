@@ -26,6 +26,9 @@ FIELDS = "host,domain,ip,port,title"
 # 继续按它拓展只会灌入大量无关资产。阈值见 fofa.black_ico_threshold（默认 200）。
 DEFAULT_BLACK_ICO_THRESHOLD = 200
 
+# 同一张证书被多少资产共用就不值得再按它拓展（公共 CA / 大厂通用证书）。
+DEFAULT_CERT_THRESHOLD = 200
+
 
 def credentials(settings):
     """从 `settings["keys"]["fofa"]` 取 (email, key)；缺失时返回 ("", "")。"""
@@ -57,22 +60,55 @@ def is_black_ico(total, settings):
 
 
 def build_query(icon_hash):
-    """构造 FOFA 查询语句（icon_hash 为有符号 32 位整数）。"""
+    """构造 favicon 查询语句（icon_hash 为有符号 32 位整数）。"""
     return f'icon_hash="{int(icon_hash)}"'
 
 
+def build_cert_query(domain):
+    """构造证书查询语句：`cert="example.com"` —— 找与该域名共用同一张 TLS 证书的其它资产。"""
+    return f'cert="{str(domain or "").strip().strip(".")}"'
+
+
 def search(icon_hash, settings, logger=None, size=None):
-    """按 favicon 哈希反查，返回 `(assets, total, error)`。
+    """按 favicon 哈希反查，返回 `(assets, total, error)`。"""
+    if not icon_hash:
+        return [], 0, "favicon 哈希为空"
+    return search_query(build_query(icon_hash), settings, logger=logger, size=size)
+
+
+def search_cert(domain, settings, logger=None, size=None):
+    """按证书反查：`cert="domain"`，返回 `(assets, total, error)`（结构同 `search`）。"""
+    if not str(domain or "").strip().strip("."):
+        return [], 0, "证书反查目标域名为空"
+    return search_query(build_cert_query(domain), settings, logger=logger, size=size)
+
+
+def cert_threshold(settings):
+    cfg = (settings or {}).get("fofa", {}) or {}
+    try:
+        return int(cfg.get("cert_threshold") or DEFAULT_CERT_THRESHOLD)
+    except (TypeError, ValueError):
+        return DEFAULT_CERT_THRESHOLD
+
+
+def is_common_cert(total, settings):
+    """该证书是否"通用"（被过多域名共用，如公共 CA / 大厂证书）——命中即放弃拓展。"""
+    try:
+        return int(total) > cert_threshold(settings)
+    except (TypeError, ValueError):
+        return False
+
+
+def search_query(query, settings, logger=None, size=None):
+    """按 FOFA 查询语句反查，返回 `(assets, total, error)`。
 
     - assets: `[{host, domain, ip, port, title}, ...]`（`error` 非空时为空表）
-    - total:  FOFA 报告的命中总数（用于黑 ico 判定）
+    - total:  FOFA 报告的命中总数（用于黑 ico / 通用证书判定）
     - error: 空串表示成功；否则是可直接展示给用户的原因
     """
     email, key = credentials(settings)
     if not (email and key):
         return [], 0, "未配置 fofa.email / fofa.key（见 config/keys.yaml）"
-    if not icon_hash:
-        return [], 0, "favicon 哈希为空"
     cfg = (settings or {}).get("fofa", {}) or {}
     try:
         size = int(size or cfg.get("max_assets") or 100)
@@ -85,7 +121,7 @@ def search(icon_hash, settings, logger=None, size=None):
         timeout = 10
 
     qbase64 = urllib.parse.quote_plus(
-        base64.b64encode(build_query(icon_hash).encode("utf-8")).decode("ascii"))
+        base64.b64encode(str(query).encode("utf-8")).decode("ascii"))
     url = (f"{API}?email={urllib.parse.quote_plus(email)}&key={urllib.parse.quote_plus(key)}"
            f"&qbase64={qbase64}&size={size}&fields={FIELDS}")
     resp = http_request(url, timeout=timeout, settings=settings)

@@ -16,7 +16,7 @@ import traceback
 from pathlib import Path
 
 from . import db
-from .config import BASE_DIR, load_settings
+from .config import LOGS_DIR, load_settings
 from .log import get_logger
 from .stages.subdomain import SubdomainStage
 from .stages.takeover import TakeoverStage
@@ -136,7 +136,7 @@ def sync_pocs(settings=None):
 
 def run_task(task_id, name, targets_text, stages, options, settings):
     """CLI 与 GUI 共用的任务执行入口（阻塞执行，调用方负责放线程）。"""
-    workdir = BASE_DIR / "logs" / f"task_{task_id}_{time.strftime('%Y%m%d_%H%M%S')}"
+    workdir = LOGS_DIR / f"task_{task_id}_{time.strftime('%Y%m%d_%H%M%S')}"
     workdir.mkdir(parents=True, exist_ok=True)
     logger = get_logger(f"task-{task_id}", workdir / "task.log")
     from .targets import parse_lines

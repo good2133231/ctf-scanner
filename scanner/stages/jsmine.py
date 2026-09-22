@@ -11,7 +11,7 @@
 受 `jsmine.enabled` 开关控制（默认开），抓取量由 `max_pages` / `max_js` 限制。
 """
 from .base import Stage
-from .. import db, jsmine
+from .. import blacklist, db, jsmine
 from ..utils import write_lines
 
 
@@ -66,6 +66,10 @@ class JsmineStage(Stage):
         # 1) 新域名：跳过任务中已有的（避免与 subdomain 阶段重复入库）
         existing = {r["domain"] for r in db.list_subdomains(ctx.task_id)}
         new_domains = sorted(d for d in domains if d not in existing)
+        # 用户黑名单：命中的域名不入库，后续阶段也就不会扫它
+        new_domains, blocked = blacklist.filter_domains(new_domains, ctx.settings)
+        if blocked:
+            ctx.logger.info(f"[jsmine] 黑名单拦截 {blocked} 个域名（config/blacklist.txt）")
         ctx.results["js_domains"] = new_domains
         if new_domains:
             db.insert_subdomains(ctx.task_id, [(d, "js:mine") for d in new_domains])

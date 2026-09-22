@@ -62,18 +62,21 @@ ctf-scanner/
 │   ├── takeover.py        # 子域接管指纹库（41 条第三方服务 suffix）+ detect()
 │   ├── portscan.py        # 端口/服务扫描（TOP 表 + nmap 适配 + 内置 TCP connect 兜底 + 被动 banner）
 │   ├── jsmine.py          # JS 资产挖掘（域名/接口 URL/疑似凭据，含第三方域黑名单与降噪）
+│   ├── blacklist.py       # 用户黑名单（config/blacklist.txt；load/matches/filter_pairs/filter_domains，每次重读不缓存）
 │   ├── iprecon.py         # IP 反查域名 + /24 C 段归纳（is_public_ip/segment_of/parse_domains，不 eval）
-│   ├── fofa.py            # FOFA favicon 反查（qbase64）+ 黑 ico 判定（阈值超限＝公共图标，放弃拓展）
+│   ├── fofa.py            # FOFA 反查（qbase64）：icon_hash 的 favicon 反查 + cert="domain" 证书反查；黑 ico / 通用证书阈值判定
 │   ├── mmh3.py            # 纯标准库 MurmurHash3 x86_32（平台 favicon 指纹用；含 SELF_TEST 向量）
 │   ├── fingerprint.py     # 内置指纹规则表 → identify(resp) -> [tag] + fetch_favicon/favicon_md5/favicon_hash
-│   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs + page_assets/delete_task/task_counts）
-│   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()
-│   ├── utils.py           # run_cmd / http_request / pool_run / resolve_host / IO
+│   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs + page_assets/delete_task/task_counts
+│   │                      #   + OWN_SUBDOMAIN_WHERE/EXT_SUBDOMAIN_WHERE/OVERLAP_EXT_WHERE/OVERLAP_SITE_WHERE；DB_PATH 受 CTFSCANNER_DB 覆盖）
+│   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖
+│   ├── utils.py           # run_cmd / http_request / pool_run / resolve_host / IO / base_domain() / rel_display()
 │   ├── targets.py         # parse_lines → [(kind, raw)]，kind ∈ domain|url|ip|cidr|unknown（cidr 展开为多条 ip）
 │   └── report.py          # Markdown 报告
 ├── tools/import_ref_pocs.py # ast 静态解析参考项目 Python POC → config/pocs-imported/（导入项默认关闭）
-├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa 十三段）
+├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十四段）
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
+├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
 ├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / sensitive(11，暂未使用) / cdn_cname(292，CDN 厂商后缀)
 ├── config/pocs-user/      # 用户上传 POC；config/pocs-imported/ 导入 POC（默认关闭）；config/nuclei-templates/ 官方模板投放点
 ├── tests/smoke.py         # 唯一测试：自包含靶场(127.0.0.1:8765) + 断言，见 §6
@@ -97,7 +100,14 @@ ctf-scanner/
   （`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled`，阶段内部自查后跳过）。
   `takeover` / `jsmine` 默认开，`portscan` 默认关。
   **例外是 `osint`**：它自身没有 `enabled`，而是由 `iprecon.enabled` / `fofa.enabled` 两个
-  子开关控制，**两者都关时整阶段直接跳过（一次请求都不发）**。
+  子开关控制，**两者都关时整阶段直接跳过（一次请求都不发）**；`fofa` 下另有两个**子能力**：
+  favicon（`icon_hash`，默认随 `fofa.enabled`）与**证书反查**（`cert_enabled`，默认跟随），
+  各自有阈值排除（黑 ico / 通用证书）。
+- **黑名单在三处入库前过滤**（`subdomain` / `jsmine` / `osint`，统一走 `scanner/blacklist.py`）：
+  命中即不写资产库，因此后续阶段自然不扫 —— 新增"产出域名"的阶段必须记得在入库前过一遍。
+- **测试隔离靠两个环境变量**：`CTFSCANNER_DB`（库路径）与 `CTFSCANNER_LOGS`（任务工作目录）。
+  `tests/smoke.py` 顶部把两者指到 `logs/smoke-<随机>/` 并在退出时删除 —— 跑测试**不会**污染
+  真实 `data/scanner.db` 与 `logs/`。跑任何"会写资产"的脚本时请沿用这一约定（见 `docs/usage.md` FAQ）。
 - 每个阶段结果**三写**：任务目录文本产物（如 sites.txt）、SQLite、`ctx.results`（供下一阶段直接用）。
 - 阶段级容错：单阶段异常不中断流水线，错误写入 `tasks.error`，任务最终仍置 `done`（docs 已声明此语义）。
 - GUI：Flask 请求线程 + 每任务一个 daemon 线程；无任务队列，进程重启则运行中任务中断。
@@ -130,7 +140,12 @@ ctf-scanner/
 py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(8 个)/POC 级别执行门/
                             # 免杀变形/mmh3 公开向量+iprecon/fofa 纯函数/响应体解码/流水线+指纹/三层门控/阶段门控(含 osint)/
                             # 非标端口候选/报告(含 C 段 IP)/停止/导出/GUI 路由(8 栏 + /ports /csegs /dirs)与批量接口/
-                            # 子域名分流+CDN 标记+站点折叠+POC 相对路径
+                            # 子域名分流+CDN 标记+站点折叠+POC 相对路径/
+                            # 第十四轮新增 `[5d]`：注册域折算(base_domain) + 相对路径(rel_display) + 黑名单
+                            # (含临时文件与开关失效) + 证书反查(build_cert_query/is_common_cert/search_cert 空域名) +
+                            # source_label + 拓展域名重叠隐藏与 ?all=1 + 站点重叠 1↔2 条 + 黑名单/批量子域
+                            # 两个 POST 接口(桩函数去重保序/阶段与 targets) + 策略页 cert/blacklist 字段与
+                            # `panel collapsible`、无绝对路径、logs/smoke- 相对路径 + POST 映射
 py -3 cli/client.py --check # 外部工具可用性
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
 py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanner
@@ -152,7 +167,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
 - GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
-  takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa 十三段（含按级别 / 按 OWASP 分类 /
+  takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十四段（含按级别 / 按 OWASP 分类 /
   按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
   于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭）；
   外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
@@ -164,8 +179,14 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - **`osint` 的联网往返无法离线自测**：`tests/smoke.py` 只断言了 `iprecon`/`fofa`/`mmh3` 的纯函数、
   黑 ico 阈值边界与"两个子开关都关则无产出"的门控；`api.webscan.cc` 与 FOFA 的真实响应结构
   需要联网（FOFA 还需 key）才能验证 —— 首次实跑请打开开关并观察 `logs/task_*/task.log` 的 `[osint]` 行。
-- `osint` 的两个阈值都是**保守估计值、未经真实数据校准**：黑 ico 阈值 200、单 IP 域名数 30（判共享主机）。
-  两者都可在「策略配置 → 外部情报拓展」调整，不需要改代码。
+- `osint` 的阈值都是**保守估计值、未经真实数据校准**：黑 ico 阈值 200、通用证书阈值 200
+  （`fofa.cert_threshold`）、单 IP 域名数 30（判共享主机）。都可在「策略配置 → 外部情报拓展」调整，
+  不需要改代码。证书反查的"通用证书"判定尤其粗：**只按命中总数比阈值**，不做证书主体/颁发者分析。
+- **黑名单的语义边界**：过滤发生在**入库前**，所以它**不影响已入库的历史资产**（老任务里的域名照旧可见），
+  也不会因为后来把某域名加入黑名单就把既有行删掉。文件是纯文本、每次调用重读（改完立即生效，无需重启）。
+- **重叠隐藏是"显示层"判据，不是删除**：`OVERLAP_EXT_WHERE`（拓展域名域名级全局）与
+  `OVERLAP_SITE_WHERE`（站点 URL 级跨任务，保留 `MIN(id)` 最早一条）只作用于 `/extdomains`、`/sites`
+  两个列表页，`?all=1` 可放开；任务详情页签与报告仍显示全量。因此"站点页条数比任务详情少"是预期行为。
 - 任务已支持**停止（协作式取消）/删除/重启/导出 + 批量操作**；停止粒度是"当前批次跑完即停"，
   不会强杀正在飞行的 HTTP 请求，任务终态记为 `stopped`（区别于 `failed`）。
 - **改完 GUI 必须重启服务**：若 5000 已被旧进程占用，新起的 `run_gui.py`（经 `gui/app.py serve()`）

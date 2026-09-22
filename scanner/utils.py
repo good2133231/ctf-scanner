@@ -54,6 +54,50 @@ def run_cmd(argv, cwd=None, timeout=900):
         return 1, "", str(e)
 
 
+# ---------- 域名 ----------
+
+# 多段公共后缀：取"注册域"时避免切错（如 a.b.com.cn 的注册域是 b.com.cn 而非 com.cn）
+MULTI_TLD = frozenset({
+    "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "co.uk", "org.uk", "ac.uk",
+    "com.hk", "com.tw", "com.au", "com.sg", "co.jp", "co.kr",
+})
+
+
+def base_domain(host):
+    """取注册域（粗略版，不查公共后缀列表）：example.com / example.com.cn。
+
+    粗略版会在 `foo.bar.co` 这类双段后缀上切错，但只用它做"同源判断/保护目标自身域"，
+    切错只会偏保守，不会误杀；需要精确判定时请引入真正的公共后缀库。
+    """
+    host = (host or "").lower().strip(".")
+    parts = host.split(".")
+    if len(parts) <= 2:
+        return host
+    if ".".join(parts[-2:]) in MULTI_TLD:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+# ---------- 路径 ----------
+
+def rel_display(path, base=None):
+    """把路径显示成"相对项目根"的形式（POSIX 分隔符）；项目外/空值原样返回。
+
+    所有面向用户的位置（CLI 输出、GUI 表格、日志）都应该走它 ——
+    绝对路径会暴露本机目录结构，且 Windows 反斜杠在跨平台日志里也会割裂。
+    """
+    text = str(path or "")
+    if not text:
+        return ""
+    if base is None:
+        from .config import BASE_DIR  # 延迟导入：避免 utils ↔ config 的导入顺序问题
+        base = BASE_DIR
+    try:
+        return Path(text).resolve().relative_to(Path(base).resolve()).as_posix()
+    except (ValueError, OSError):
+        return text
+
+
 # ---------- HTTP ----------
 
 def _ua(settings=None):

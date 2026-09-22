@@ -7,13 +7,30 @@ import atexit
 import base64
 import copy
 import functools
+import os
+import shutil
 import sys
+import tempfile
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+# ---- 测试库/日志目录隔离（用户要求：跑测试不能污染真实工作区）----
+# 默认库 `data/scanner.db` 是**真实任务库**，直接跑冒烟测试会往里写任务/站点/漏洞/端口
+# （之前那些"计数断言不稳定"多半就是这么来的）；每任务还会在 `logs/` 下堆一个目录。
+# 这里把库与任务工作目录都指到 `logs/` 下的一个临时目录（`db.DB_PATH` / `db.TRASH_DIR` /
+# `config.LOGS_DIR` 都跟着环境变量走），跑完统一删除 —— `logs/` 已在 .gitignore 内。
+# 这也就是"开发/生产共用一份代码、数据分开"的最小实现，不必搞两套目录。
+# 注意：临时目录刻意放在项目**内部** —— `rel_display()` 只能把项目内的路径显示成相对路径，
+# 放到系统临时目录反而会让页面显示出绝对路径（那就测不出"路径相对化"了）。
+(ROOT / "logs").mkdir(exist_ok=True)
+_TMPDIR = Path(tempfile.mkdtemp(prefix="smoke-", dir=str(ROOT / "logs")))
+os.environ["CTFSCANNER_DB"] = str(_TMPDIR / "scanner.db")
+os.environ["CTFSCANNER_LOGS"] = str(_TMPDIR)
+atexit.register(lambda: shutil.rmtree(_TMPDIR, ignore_errors=True))
 
 FIXTURE_PORT = 8765
 
@@ -37,7 +54,7 @@ def start_fixture(port=FIXTURE_PORT):
     return httpd
 
 from scanner import db
-from scanner.config import load_settings
+from scanner.config import LOGS_DIR, load_settings
 from scanner import evasion, fofa, iprecon, mmh3
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
@@ -241,7 +258,7 @@ def main():
 
     # 4b) 协作式停止：取消信号已置位时流水线在首个阶段前退出，任务状态落为 stopped
     tid_stop = db.create_task("smoke-stop", targets, stages, {"offline": True})
-    wd = ROOT / "logs" / f"task_{tid_stop}_smokestop"
+    wd = LOGS_DIR / f"task_{tid_stop}_smokestop"
     wd.mkdir(parents=True, exist_ok=True)
     ev = threading.Event()
     ev.set()
@@ -372,6 +389,168 @@ def main():
     vulns_html = c.get("/vulns").get_data(as_text=True)
     assert db.get_task(tid)["name"] in vulns_html, "漏洞页应显示任务名"
     print("[5c] 分流/标记/去重/相对路径 ok")
+
+    # 5d) 第十四轮：注册域折算 + 相对路径显示 + 用户黑名单 + FOFA 证书反查 + 重叠隐藏 + 面板折叠
+    from scanner import blacklist as blk
+    from scanner.utils import base_domain, rel_display
+    from gui.app import source_label
+
+    # (1) 注册域折算（证书反查按注册域查，能省 FOFA 配额；多段后缀必须整段保留）
+    assert base_domain("a.b.example.com") == "example.com"
+    assert base_domain("example.com") == "example.com"
+    assert base_domain("www.example.com.cn") == "example.com.cn", base_domain("www.example.com.cn")
+    assert base_domain("x.co.uk") == "x.co.uk"
+
+    # (2) 相对路径显示（用户要求：所有展示绝对路径的地方都改成相对路径）
+    assert rel_display(ROOT / "data" / "scanner.db") == "data/scanner.db"
+    assert rel_display("") == ""
+    outside = "/tmp/ctfscanner-outside/elsewhere.txt"     # 项目外路径原样返回，不做臆造
+    assert rel_display(outside) == outside
+
+    # (3) 用户黑名单：命中即**整条丢弃**（含所有子域）；写临时文件，绝不碰 config/blacklist.txt
+    bl_file = Path(_TMPDIR) / "blacklist.txt"
+    bl_settings = copy.deepcopy(settings)
+    bl_settings["blacklist"] = {"enabled": True, "path": str(bl_file)}
+    assert blk.load(bl_settings) == []
+    assert blk.add(["Evil.example.com", "*.Tracker.test", "evil.example.com"], bl_settings) == 2
+    entries = blk.load(bl_settings)
+    assert entries == ["evil.example.com", "tracker.test"], entries
+    assert blk.matches("a.evil.example.com", entries) == "evil.example.com"
+    assert blk.matches("sub.tracker.test", entries) == "tracker.test"
+    assert blk.matches("example.com", entries) == ""
+    kept, blocked = blk.filter_pairs([("ok.test", "subfinder"),
+                                      ("x.evil.example.com", "osint:cseg")], bl_settings)
+    assert kept == [("ok.test", "subfinder")], kept
+    assert blocked == [("x.evil.example.com", "evil.example.com")], blocked
+    assert blk.filter_domains(["ok.test", "y.tracker.test"], bl_settings) == (["ok.test"], 1)
+    assert blk.remove(["evil.example.com"], bl_settings) == 1
+    assert blk.load(bl_settings) == ["tracker.test"]
+    off_bl = copy.deepcopy(bl_settings)      # 关掉开关＝整份名单临时失效（文件内容不动）
+    off_bl["blacklist"]["enabled"] = False
+    assert blk.load(off_bl) == [] and blk.filter_domains(["y.tracker.test"], off_bl)[1] == 0
+    assert blk.load(bl_settings) == ["tracker.test"], "开关关闭不该改动文件"
+    # 回归：手工编辑过的名单**末尾常常没有换行**，直接 append 会把新条目粘到最后一条上
+    # （实测 `example.com` + `a.test` → `example.coma.test`，原条目丢失且黑名单静默失效）
+    bl_file.write_text("# 手写\nhand.test", encoding="utf-8")      # 故意不给末尾换行
+    assert blk.add(["appended.test"], bl_settings) == 1
+    assert blk.load(bl_settings) == ["hand.test", "appended.test"], blk.load(bl_settings)
+
+    # (4) 证书查询语句与"通用证书"阈值
+    assert fofa.build_cert_query("orderfood.top") == 'cert="orderfood.top"'
+    assert fofa.build_cert_query("orderfood.top.") == 'cert="orderfood.top"'
+    assert fofa.is_common_cert(200, settings) is False and fofa.is_common_cert(201, settings) is True
+    assert fofa.search_cert("", settings)[2], "空域名应显式报错"
+
+    # (5) 来源可读标签：FOFA 找出来的资产必须一眼能认出来
+    assert source_label("subfinder") == "被动(subfinder)"
+    assert source_label("passive:crt.sh") == "被动(crt.sh)"
+    assert source_label("osint:cseg") == "C 段反查"
+    assert source_label("osint:fofa") == "FOFA·ICO 反查"
+    assert source_label("osint:fofa-cert") == "FOFA·证书反查"
+    assert source_label("") == "-"
+
+    # (6) 重叠资产默认隐藏：拓展域名按**域名级全局**判重，`?all=1` 才显示
+    db.insert_subdomains(tid, [("overlap-smoke.example.com", "js:mine"),
+                               ("overlap-smoke.example.com", "subfinder"),
+                               ("pure-ext-smoke.example.com", "osint:fofa-cert")])
+    ext_default = c.get("/extdomains").get_data(as_text=True)
+    assert "pure-ext-smoke.example.com" in ext_default and "FOFA·证书反查" in ext_default
+    assert "overlap-smoke.example.com" not in ext_default, "与自身子域名重叠的拓展域名应默认隐藏"
+    assert "显示全部（含重叠）" in ext_default, "拓展域名页应有重叠开关"
+    assert "overlap-smoke.example.com" in c.get("/extdomains?all=1").get_data(as_text=True)
+    assert "overlap-smoke.example.com" in c.get("/subdomains").get_data(as_text=True)
+
+    # (7) 站点重叠：同一 URL 跨任务只留**最新**那条（`MAX(id)`），`?all=1` 一起放开。
+    #     必须留最新的：站点行带的是当次扫描的 status/title/length/tech，留最旧那条等于
+    #     默认视图一直展示陈旧数据（重扫的目的正是刷新这些字段）。
+    ov_title = f"OVERLAP-{tid}"
+    ov_new_title = f"OVERLAP-NEW-{tid}"
+    ov_url = "http://overlap-smoke.test/"
+    ov_row = {"url": ov_url, "host": "overlap-smoke.test", "port": "80", "status": 200,
+              "title": ov_title, "length": 999, "source": "builtin"}
+    db.insert_sites(tid, [dict(ov_row)])                            # 较早的任务
+    db.insert_sites(tid_gate, [dict(ov_row, title=ov_new_title, status=404)])   # 较晚的任务
+    sites_default = c.get("/sites").get_data(as_text=True)
+    assert sites_default.count(ov_title) == 0, "默认视图不应再显示旧任务的同名站点"
+    assert sites_default.count(ov_new_title) == 1, sites_default.count(ov_new_title)
+    assert "显示全部（含重叠）" in sites_default
+    sites_all = c.get("/sites?all=1").get_data(as_text=True)
+    assert sites_all.count(ov_title) == 1 and sites_all.count(ov_new_title) == 1, "放开后两条都在"
+
+    # (8) 黑名单批量加入接口：改成桩函数，避免往真实 config/blacklist.txt 里写测试域名
+    picked = []
+
+    def _fake_bl_add(domains, st=None):
+        picked.extend(domains)
+        return len(domains)
+
+    _orig_bl_add = gui_app.blacklist.add
+    try:
+        gui_app.blacklist.add = _fake_bl_add
+        r = c.post("/api/blacklist/add", data={"domain": ["a.smoke.test", "a.smoke.test",
+                                                          "b.smoke.test"],
+                                               "next": "/subdomains"})
+        assert r.status_code == 302, r.status_code
+        assert picked == ["a.smoke.test", "b.smoke.test"], picked   # 去重保序
+        assert r.headers["Location"].endswith("/subdomains"), r.headers["Location"]
+    finally:
+        gui_app.blacklist.add = _orig_bl_add
+
+    # (9) 批量跑子域名接口：新建任务 + 只含 subdomain 阶段。
+    #     run_task 换桩：真跑会去打 crt.sh 之类的公共接口（测试必须离线且不依赖外网）。
+    _orig_run_task = gui_app.run_task
+    try:
+        gui_app.run_task = lambda *a, **kw: None
+        r = c.post("/api/domains/run-subdomain",
+                   data={"domain": ["sub1.smoke.test", "sub1.smoke.test", "sub2.smoke.test"]})
+        assert r.status_code == 302, r.status_code
+        new_id = int(r.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+        t = db.get_task(new_id)
+        assert t and t["stages"] == "subdomain", t and t["stages"]
+        assert t["targets"] == "sub1.smoke.test\nsub2.smoke.test", t["targets"]
+        assert t["name"].startswith("批量子域-"), t["name"]
+    finally:
+        gui_app.run_task = _orig_run_task
+
+    # (10) 策略配置页：证书反查字段 / 黑名单开关 / 可折叠面板都要真的渲染出来，
+    #      且整个页面不出现本机绝对路径
+    st_html = c.get("/settings").get_data(as_text=True)
+    for name in ("fofa_cert_enabled", "fofa_cert_threshold", "fofa_max_cert_queries",
+                 "blacklist_enabled"):
+        assert f'name="{name}"' in st_html, f"策略配置缺 {name}"
+    assert "panel collapsible" in st_html and 'data-panels="expand"' in st_html
+    assert str(ROOT) not in st_html, "策略配置页不应出现绝对路径"
+    assert str(ROOT) not in detail_html, "任务详情页不应出现绝对路径"
+    assert str(LOGS_DIR) not in detail_html, "任务详情页的日志文件路径应已相对化"
+    assert "logs/smoke-" in detail_html, "任务详情页应显示相对日志路径（logs/...）"
+
+    # (11) 策略配置 POST → 配置字典的映射（桩函数，不改真实 settings.yaml）
+    captured2 = {}
+
+    def _fake_save2(d):
+        captured2.clear()
+        captured2.update(d)
+        return load_settings()
+
+    _orig_save2 = gui_app.save_settings
+    gui_app.save_settings = _fake_save2
+    try:
+        assert c.post("/settings", data={"min_severity": "medium", "fofa_cert_enabled": "1",
+                                         "fofa_cert_threshold": "123",
+                                         "fofa_max_cert_queries": "7",
+                                         "blacklist_enabled": "1"}).status_code == 302
+        assert captured2["fofa"]["cert_enabled"] is True, captured2.get("fofa")
+        assert captured2["fofa"]["cert_threshold"] == 123, captured2.get("fofa")
+        assert captured2["fofa"]["max_cert_queries"] == 7, captured2.get("fofa")
+        assert captured2["blacklist"]["enabled"] is True, captured2.get("blacklist")
+        # 未勾选 → 必须落为关闭（而不是保持旧值）
+        assert c.post("/settings", data={"min_severity": "medium"}).status_code == 302
+        assert captured2["fofa"]["cert_enabled"] is False, captured2.get("fofa")
+        assert captured2["blacklist"]["enabled"] is False, captured2.get("blacklist")
+        assert captured2["blacklist"]["path"] == (settings.get("blacklist") or {}).get("path")
+    finally:
+        gui_app.save_settings = _orig_save2
+    print("[5d] 十四轮新增 ok: 注册域折算/相对路径/黑名单/证书反查/来源标签/重叠隐藏/面板折叠")
     print("SMOKE PASS")
 
 
