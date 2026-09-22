@@ -3,6 +3,78 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十七轮：硬规矩入档 + 子域名"主动且全"（并集）+ 绝对路径清理
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+### 1）AGENTS.md 新增「§0 硬规矩」（用户下达，优先级高于本文件其它所有内容）
+
+1. **改动必须标注实施者**：提交信息末行 `WorkBuddy · <模型名>` + CHANGELOG 轮次标题下写实施者；
+2. **未经用户明确许可，禁止读取/扫描/遍历本项目目录以外的任何代码或文件**
+   （唯一例外：用户主动指定路径）；联网查公开文档不算，但也不得把外部仓库整份拉进来；
+3. **代码/配置/模板/日志一律只用相对路径**，禁止本机绝对路径；展示路径统一走 `utils.rel_display()`。
+
+### 2）清掉代码里仅存的两处本机绝对路径
+
+- `scanner/passive.py` 模块 docstring 里的参考项目绝对路径 → 改为指向 `TODO.md` 的借鉴清单；
+- `tools/import_ref_pocs.py` 的 `DEFAULT_SRC` 原本硬编码 `C:\Users\...\myscan_20250825\exploit\scripts`
+  → 改为**项目内相对路径** `tools/ref-project/exploit/scripts`（把参考项目拷/链接进去即可跑，
+  或用 `--src` 由使用者显式指定 —— 这正好与新规矩"不得擅自读项目外内容"一致）。
+- 复检：`grep -rn "Users" --include=*.py --include=*.yaml --include=*.html --include=*.js` **0 命中**。
+
+### 3）子域名收集改为"主动且全"：subfinder(-all) 与内置被动源**取并集**
+
+- **问题**：原实现是 `if subfinder: … elif not offline: 内置被动源` —— 装了 subfinder 后
+  `scanner/passive.py` 的 crt.sh / certspotter / alienvault / hackertarget / rapiddns / sublist3r
+  **一次都不会跑**，等于白丢一批证书与情报源（两边源集合并不相同）。
+- **改法**：新增 `subdomain.union_passive`（默认 **true**）→ subfinder 成功后仍叠加内置被动源，
+  结果按域名去重合并（同名只记首个来源）；关掉它则回到"只用 subfinder"。
+- 同时确认并写明：subfinder 调用**恒带 `-all`**（`-dL <文件> -all -t 200 -o <文件>`）——
+  `-all` 才是"使用全部数据源"，不加时只用默认源集合。
+- GUI「策略配置 → 信息收集」新增该开关；`config/settings.yaml` 同步。
+- `docs/pipeline.md` ① subdomain 段重写为**四条获取路径**（含每一步的模块/函数/命令行/来源标记）。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py     # SMOKE PASS（新增 [5f]：subfinder 带 -all + 并集开关两种取值的行为）
+```
+
+## 2026-09-22 —— 第十七轮：硬规矩入档 + 子域名"主动且全"（并集）+ 绝对路径清理
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+### 1）AGENTS.md 新增「§0 硬规矩」（用户下达，优先级高于本文件其它所有内容）
+
+1. **改动必须标注实施者**：提交信息末行 `WorkBuddy · <模型名>` + CHANGELOG 轮次标题下写实施者；
+2. **未经用户明确许可，禁止读取/扫描/遍历本项目目录以外的任何代码或文件**
+   （唯一例外：用户主动指定路径）；联网查公开文档不算，但也不得把外部仓库整份拉进来；
+3. **代码/配置/模板/日志一律只用相对路径**，禁止本机绝对路径；展示路径统一走 `utils.rel_display()`。
+
+### 2）清掉代码里仅存的两处本机绝对路径
+
+- `scanner/passive.py` 模块 docstring 里的参考项目绝对路径 → 改为指向 `TODO.md` 的借鉴清单；
+- `tools/import_ref_pocs.py` 的 `DEFAULT_SRC` 原本硬编码 `C:\Users\...\myscan_20250825\exploit\scripts`
+  → 改为**项目内相对路径** `tools/ref-project/exploit/scripts`（把参考项目拷/链接进去即可跑，
+  或用 `--src` 由使用者显式指定 —— 这正好与新规矩"不得擅自读项目外内容"一致）。
+- 复检：`grep -rn "Users" --include=*.py --include=*.yaml --include=*.html --include=*.js` **0 命中**。
+
+### 3）子域名收集改为"主动且全"：subfinder(-all) 与内置被动源**取并集**
+
+- **问题**：原实现是 `if subfinder: … elif not offline: 内置被动源` —— 装了 subfinder 后
+  `scanner/passive.py` 的 crt.sh / certspotter / alienvault / hackertarget / rapiddns / sublist3r
+  **一次都不会跑**，等于白丢一批证书与情报源（两边源集合并不相同）。
+- **改法**：新增 `subdomain.union_passive`（默认 **true**）→ subfinder 成功后仍叠加内置被动源，
+  结果按域名去重合并（同名只记首个来源）；关掉它则回到"只用 subfinder"。
+- 同时确认并写明：subfinder 调用**恒带 `-all`**（`-dL <文件> -all -t 200 -o <文件>`）——
+  `-all` 才是"使用全部数据源"，不加时只用默认源集合。
+- GUI「策略配置 → 信息收集」新增该开关；`config/settings.yaml` 同步。
+- `docs/pipeline.md` ① subdomain 段重写为**四条获取路径**（含每一步的模块/函数/命令行/来源标记）。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py     # SMOKE PASS（新增 [5f]：subfinder 带 -all + 并集开关两种取值的行为）
+```
+
 ## 2026-09-22 —— 第十六轮（收尾）：遗留项全清 + 两个决策落实 + dirmap 源码修复
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**（本轮起，改动一律在提交信息与本文档标注实施者，
 > 以便多会话并行时能分辨是谁改的 —— 见 `AGENTS.md` §9 的新约定）。

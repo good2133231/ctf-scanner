@@ -720,6 +720,54 @@ def main():
     finally:
         gui_app.run_task = _orig_run3
     print("[5e] 十五轮新增 ok: 全端口/标题反查/目录(大字典·重复长度·大小)/JS敏感字符")
+
+    # 5f) 第十七轮：子域名收集"主动且全" —— subfinder(-all) 与内置被动源**取并集**。
+    #     原实现是 elif：装了 subfinder 就完全不跑内置源（白丢 crt.sh/alienvault 这批证书情报源）。
+    #     这里把 subfinder 与被动源都换成桩，验证"两边都被调用"且 argv 里带 -all。
+    from scanner.stages import subdomain as sub_stage
+    calls = {"subfinder": [], "passive": []}
+
+    def _fake_which(name):
+        return "C:/fake/subfinder.exe" if name == "subfinder" else None
+
+    def _fake_run_cmd(argv, cwd=None, timeout=None):
+        calls["subfinder"].append(list(argv))
+        return 0, "", ""
+
+    def _fake_collect(domain, settings, logger=None, workers=6):
+        calls["passive"].append(domain)
+        return {f"passive-only.{domain}": "passive:stub"}
+
+    _orig = (sub_stage.which, sub_stage.verify_tool, sub_stage.run_cmd,
+             sub_stage.passive.collect)
+    sub_stage.which, sub_stage.verify_tool, sub_stage.run_cmd = _fake_which, lambda b: True, _fake_run_cmd
+    sub_stage.passive.collect = _fake_collect
+    tid_union = None
+    try:
+        for union, want_passive in ((True, True), (False, False)):
+            calls["subfinder"].clear(), calls["passive"].clear()
+            su_settings = copy.deepcopy(settings)
+            su_settings["subdomain"] = {"union_passive": union, "max_resolve": 0}
+            su_settings["limits"] = dict(su_settings.get("limits") or {}, wildcard_filter=False)
+            su_settings["dicts"]["subdomains"] = "config/dicts/does-not-exist.txt"  # 跳过爆破
+            su_tid = db.create_task(f"smoke-subs-{union}", "example.test", ["subdomain"], {})
+            su_wd = Path(_TMPDIR) / f"subs_{union}"
+            su_wd.mkdir(parents=True, exist_ok=True)
+            su_ctx = StageContext(su_tid, "smoke-subs", parse_lines(["example.test"]),
+                                  ["subdomain"], {}, su_settings, su_wd, rec)
+            PipelineRunner(su_ctx).run()
+            assert calls["subfinder"], "subfinder 未被调用"
+            assert "-all" in calls["subfinder"][0], calls["subfinder"][0]
+            assert bool(calls["passive"]) is want_passive, (union, calls["passive"])
+            if union:
+                tid_union = su_tid
+        # 并集那一轮：内置被动源的产出必须真的落库（source=passive:stub）
+        assert ("passive-only.example.test", "passive:stub") in {
+            (r["domain"], r["source"]) for r in db.list_subdomains(tid_union)}, "被动源结果应入库"
+    finally:
+        (sub_stage.which, sub_stage.verify_tool, sub_stage.run_cmd,
+         sub_stage.passive.collect) = _orig
+    print("[5f] 子域名并集 ok: subfinder 带 -all 且与内置被动源取并集（union_passive 可关）")
     print("SMOKE PASS")
 
 

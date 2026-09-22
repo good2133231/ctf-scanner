@@ -36,8 +36,21 @@
 ### ① subdomain 子域名收集
 
 - 输入：目标中的裸域名（URL/IP 目标不参与，直接进入 probe）；
-- 处理：subfinder 被动收集（装了才用）→ 不稳定时改用内置 `scanner/passive.py` 多来源免 key 被动收集
-  （`passive.enabled` 控制；单源失败只影响该源）→ puredns 对域名字典爆破（上限 `limits.brute_max_domains`）→ 合并去重；
+- **四条获取路径（按执行顺序，可对照 `scanner/stages/subdomain.py` 逐个核）**：
+  1. **subfinder**（外部工具，装了才用）：`scanner/stages/subdomain.py` → `which(tools.subfinder)` →
+     `subfinder -dL <workdir/subfinder_in.txt> -all -t 200 -o <workdir/passive.txt>`，
+     来源标记 `subfinder`。**恒带 `-all`**（使用全部数据源；不加时只用默认源集合，覆盖明显更小），
+     用户要求"要主动且全"故写死在 argv 里；工具路径见 `config/settings.yaml` → `tools.subfinder`；
+  2. **内置多来源被动收集**（免 key 公开接口）：`scanner/passive.py` 的 `SOURCES` 注册表 ——
+     `crt.sh` / `certspotter` / `alienvault` / `hackertarget` / `rapiddns` / `sublist3r`
+     （默认启用；`sitedossier` / `bufferover` 因历史不稳定默认不启用，可在 `passive.sources` 打开），
+     来源标记 `passive:<源名>`；**与第 1 步取并集**（`subdomain.union_passive`，默认开）——
+     原实现是 `elif`，装了 subfinder 就完全不跑这批证书/情报源，等于白丢覆盖；
+  3. **DNS 字典爆破**：`puredns` 优先（`puredns bruteforce <dicts.subdomains> -d <域> -r <dicts.resolvers> -w <out>`，
+     来源标记 `puredns`），未安装则内置 `scanner/wildcard.py::resolve_all` 兜底（`socket.getaddrinfo`，
+     来源标记 `dns-brute(fallback)`）；字典 `config/dicts/subdomains.txt`（85 条），
+     域名上限 `limits.brute_max_domains`；
+  4. **被动来源的泛解析复核**：被动源里混进的通配产物，用第 3 步同一套判据清掉（`_PASSIVE_SRC`）。
 - 泛解析过滤：`limits.wildcard_filter` 开启时，先用 `scanner/wildcard.py` 探测 `*.domain` 通配 IP，
   丢弃"解析结果全部落在通配 IP 内"的字典/被动候选（纯 DNS 查询，零 HTTP）；
 - **IP/CDN 回填**：入账后对子域名做一次 `scanner/dnsq.py` 的 **CNAME 链 + A 记录**解析
@@ -246,6 +259,7 @@ logs/task_1_mytask/
 | limits.brute_max_domains | 50 | 参与 DNS 爆破的域名上限 |
 | limits.wildcard_filter | true | 泛解析过滤：目标开 `*.domain` 时丢弃通配命中的字典结果 |
 | limits.favicon_md5 | true | probe 阶段计算 favicon MD5（POC 可据此做零请求前置判定） |
+| subdomain.union_passive | true | subfinder(-all) 与内置免 key 被动源**取并集**（关掉＝只用 subfinder，省时间） |
 | subdomain.max_resolve / dns_timeout | 500 / 3s | 子域名 IP/CDN 回填的解析上限与单次 DNS 超时（超上限的子域名仍入表，只是无 IP/CDN） |
 | checks.min_severity | medium | 最低报告级别（结果级门控）；info/low 项默认不产出 |
 | checks.skip_severities | ["info","low"] | **执行级**门控：这些级别连请求都不发（内置检查 + POC 引擎同规则） |

@@ -61,32 +61,45 @@ class SubdomainStage(Stage):
                 n += 1
             return n
 
-        # ---------- 1) subfinder（外部工具优先）----------
+        # ---------- 1) subfinder（外部工具优先，`-all` 走全来源）----------
         sf_bin = which(ctx.settings.get("tools", {}).get("subfinder", "subfinder"))
         if sf_bin and not verify_tool(sf_bin):
             sf_bin = None
             ctx.logger.info("[subdomain] PATH 中的 subfinder 未通过版本校验，跳过被动收集")
+        used_subfinder = False
         if sf_bin and not offline:
-            ctx.logger.info("[subdomain] subfinder 被动收集 …")
+            # `-all`：使用**全部数据源**（不加时只用默认源集合，覆盖明显更小）。
+            # 用户明确要求"要主动且全"，故这里恒开 `-all`；`-t 200` 是并发上限。
+            ctx.logger.info("[subdomain] subfinder 被动收集（-all 全来源）…")
             in_file = write_lines(ctx.workdir / "subfinder_in.txt", domains)
             out_file = ctx.workdir / "passive.txt"
             rc, _, err = run_cmd([sf_bin, "-dL", str(in_file), "-all", "-t", "200",
                                   "-o", str(out_file)], timeout=1800)
             if rc == 0:
+                used_subfinder = True
                 n = add_many((line, "subfinder") for line in read_lines(out_file))
                 ctx.logger.info(f"[subdomain] subfinder → 新增 {n} 个")
             else:
                 ctx.logger.warning(f"[subdomain] subfinder 退出码 {rc}：{err.strip()[:200]}")
 
         # ---------- 2) 内置多来源被动收集（免 key 公开接口）----------
-        elif not offline:
-            ctx.logger.info("[subdomain] subfinder 不可用，改用内置多来源被动收集 …")
+        # **与 subfinder 取并集**（`subdomain.union_passive`，默认开）：
+        # 两边的源集合并不相同（subfinder 覆盖广、我们内置的是 crt.sh / certspotter /
+        # alienvault / hackertarget / rapiddns / sublist3r 这些免 key 接口），
+        # 原实现是 `elif`——装了 subfinder 就完全不跑内置源，等于白丢一批证书/情报源。
+        # 用户要求"要主动且全"，故默认并集；想省时间可把 `union_passive` 关掉。
+        union = (ctx.settings.get("subdomain", {}) or {}).get("union_passive") is not False
+        if not offline and (not used_subfinder or union):
+            if not used_subfinder:
+                ctx.logger.info("[subdomain] subfinder 不可用/未成功，使用内置多来源被动收集 …")
+            else:
+                ctx.logger.info("[subdomain] 叠加内置多来源被动收集（与 subfinder 取并集）…")
             for d in domains:
                 if ctx.stopped():
                     break
                 n = add_many(passive.collect(d, ctx.settings, logger=ctx.logger).items())
                 ctx.logger.info(f"[subdomain] 被动来源 {d} → 新增 {n} 个")
-        else:
+        elif offline:
             ctx.logger.info("[subdomain] 被动收集已跳过（--offline）")
 
         # ---------- 3) 泛解析探测（每域名一次，纯 DNS 查询）----------

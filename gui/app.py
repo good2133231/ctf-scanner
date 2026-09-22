@@ -656,6 +656,18 @@ def create_app():
                                "poc_max_per_site": int(f.get("poc_max_per_site", 80) or 80)},
                     "passive": {"enabled": f.get("passive_enabled") == "1",
                                 "timeout": int(f.get("passive_timeout", 20) or 20)},
+                    # 子域名收集：subfinder(-all) 与内置免 key 被动源是否取并集
+                    "subdomain": {"max_resolve": int(
+                                      (settings.get("subdomain") or {}).get("max_resolve", 500) or 500),
+                                  "dns_timeout": float(
+                                      (settings.get("subdomain") or {}).get("dns_timeout", 3) or 3),
+                                  "union_passive": f.get("union_passive") == "1"},
+                    # 子域名收集：subfinder(-all) 与内置免 key 被动源是否取并集
+                    "subdomain": {"max_resolve": int(
+                                      (settings.get("subdomain") or {}).get("max_resolve", 500) or 500),
+                                  "dns_timeout": float(
+                                      (settings.get("subdomain") or {}).get("dns_timeout", 3) or 3),
+                                  "union_passive": f.get("union_passive") == "1"},
                     "evasion": {"random_ua": f.get("random_ua") == "1",
                                 "spoof_xff": f.get("spoof_xff") == "1",
                                 "waf_bypass": f.get("waf_bypass") == "1",

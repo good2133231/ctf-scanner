@@ -25,6 +25,8 @@ subdomain:
   # 子域名资产的 IP/CNAME 回填与 CDN 标记（纯 DNS 只读查询，不发 HTTP）
   max_resolve: 500
   dns_timeout: 3
+  # subfinder(-all) 与内置免 key 被动源取并集，做到"尽量全"
+  union_passive: true
 passive:
   enabled: true
   sources: []

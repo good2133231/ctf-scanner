@@ -52,6 +52,10 @@ DEFAULTS = {
         # 上限控制 DNS 查询量；超出的子域名仍入资产表，只是没有 IP/CDN 这两列。
         "max_resolve": 500,
         "dns_timeout": 3,
+        # 子域名收集"要主动且全"：subfinder（-all 全来源）与内置免 key 被动源
+        # **取并集**（默认开）。原实现是 elif —— 装了 subfinder 就不跑内置源，
+        # 会白丢 crt.sh / certspotter / alienvault 这批证书与情报源。关掉可省时间。
+        "union_passive": True,
     },
     "passive": {
         # 多来源被动子域名收集（免 API key 的公开接口，见 scanner/passive.py）

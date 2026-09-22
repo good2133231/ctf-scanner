@@ -23,7 +23,10 @@ import pathlib
 import re
 import sys
 
-DEFAULT_SRC = pathlib.Path(r"C:\Users\材料\Desktop\tools\scan\myscan_20250825\exploit\scripts")
+# 参考项目**不放在本仓库里**（第三方项目，且新规矩禁止擅自读取项目外内容）。
+# 默认值给一个**项目内相对路径**：把参考项目拷/链接到 tools/ref-project/ 后即可直接跑；
+# 也可以用 --src 指定别处（由使用者显式给出，属于"用户主动指定"的范畴）。
+DEFAULT_SRC = pathlib.Path(__file__).resolve().parent.parent / "tools" / "ref-project" / "exploit" / "scripts"
 DEFAULT_OUT = pathlib.Path(__file__).resolve().parent.parent / "config" / "pocs-imported"
 
 # 关键字黑名单：这些字符串是调用参数/常量而非检测特征
@@ -223,7 +226,8 @@ def build_yaml(vendor, stem, info):
 
 def main():
     ap = argparse.ArgumentParser(description="导入参考项目的 Python POC 为 YAML")
-    ap.add_argument("--src", default=str(DEFAULT_SRC), help="参考项目 exploit/scripts 目录")
+    ap.add_argument("--src", default=str(DEFAULT_SRC),
+                    help="参考项目 exploit/scripts 目录（默认 tools/ref-project/exploit/scripts）")
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="输出目录")
     ap.add_argument("--limit", type=int, default=0, help="最多转换多少个（0=全部）")
     args = ap.parse_args()

@@ -6,7 +6,7 @@
 - 全是只读查询，不产生任何写入型请求，符合非破坏性约束。
 
 来源选择依据：只接"免 key 且响应体里直接含子域名字符串"的接口。
-参考项目 `C:\\Users\\材料\\Desktop\\tools\\scan\\myscan_20250825\\spider\\thirdLib\\*`
+参考项目（对标物，路径见 `TODO.md` 末尾的「参考项目借鉴清单」）的 `spider/thirdLib/*`
 共 20+ 源，其中**需要 key 的一律不接**（fofa / shodan / quake / censys / virustotal /
 threatbook / securitytrails / riskiq / fullhunt / bevigil / chinaz），
 它们留给 `TODO.md` P0-5 的 `config/keys.yaml` 方案。
