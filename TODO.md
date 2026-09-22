@@ -469,6 +469,24 @@
 - [x] 顺手修：`dirscan` / `vulnscan` 单独跑时**没有库回退**导致静默不干活 → 补 `db.list_sites()` 回退；
 - [x] 双靶场实测：PHP 站 40 条请求 100% `.php`、Java 站 0 条 `.php/.aspx`；smoke 新增 `[5g]`。
 
+## 第十七轮（续 2）GUI / 资产视图 8 项（2026-09-22）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。用户当场提 8 项，**除截图外全部落地**。
+
+- [x] 站点 URL 可点开（新窗口）+ **纯净模式**（`?plain=1` 只显示 URL）+ 站点行距加大；
+- [x] 右上角**主题切换**（深色/浅色/深蓝/紫罗兰，CSS 变量 + localStorage）；
+- [x] **指纹规则表 16 → 103 个标签**并新增 cookies 维度（CDN/WAF、国产 OA/ERP、Java 中间件、
+  CMS、前端框架…）；GUI 技术栈列改为标签渲染。**结论：指纹早就落地，是规则太薄**；
+- [x] **没有 IP 时标出具体原因**（`subdomains.ip_note` + `dnsq.resolve_detail()`；
+  含 `over-limit` 这种"被上限挡掉"的情况）；
+- [x] 新增「**IP 资产**」页（按 IP 聚合域名，**默认只显示非 CDN 解析**，可勾选批量全端口扫描）；
+- [x] 端口服务改为对**真实 IP** 扫描（用库里已解析的非 CDN IP；CDN 主机跳过并记日志）；
+- [x] 拓展域名**移出侧栏**、改到任务详情页签；新增 `utils.is_domain()` 统一域名形态判断
+  （挡掉裸 IP / 端口 / 路径 / 通配符 / 文件名）；`jsmine._FILE_EXT` 补服务端脚本后缀；
+- [x] JS 第三方黑名单改数据驱动：`config/dicts/js_thirdparty.txt`（**267 条** = 内置 + URLFinder `jsFiler` 212 条）；
+- [ ] **站点截图功能**（用户问"可以加吗"）：需要无头浏览器（Edge/Chrome headless）——
+  待确认浏览器可用后作为独立批次实现（计划：新增可选 `screenshot` 阶段 + `sites.shot` 列 + 站点页缩略图）。
+
 ## 兼容性红线（所有新增代码都适用）
 
 1. 路径用 `pathlib`；命令用列表参数 + `shell=False`；工具名不假设平台。

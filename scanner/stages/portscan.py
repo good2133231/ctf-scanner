@@ -69,6 +69,15 @@ class PortscanStage(Stage):
             for r in db.list_ports(ctx.task_id):
                 scanned.setdefault(r["host"], set()).add(int(r["port"] or 0))
 
+        # **真实 IP 优先**（用户要求"端口服务就是要对真实 IP 进行扫描"）：
+        # 库里 subdomain 阶段已经解析过每个域名（含 CDN 判定），直接复用：
+        # - 非 CDN 且拿到 IP → 用这个 IP，不再现场解析（更快，也避免解析漂移）；
+        # - 判定走 CDN → **跳过**：扫 CDN 边缘节点没有意义（那 IP 不是目标的机器）。
+        net = {}
+        for r in db.list_subdomains(ctx.task_id):
+            if r["ip"] or r["cdn"]:
+                net[r["domain"]] = (r["ip"] or "", r["cdn"] or "")
+
         workers = int(cfg.get("workers", 64))
         timeout = float(cfg.get("timeout", 1.0))
         if full:
@@ -95,7 +104,19 @@ class PortscanStage(Stage):
         def _one(host):
             if ctx.stopped():
                 return []
-            ips = [host] if host.replace(".", "").isdigit() else resolve_host(host)
+            if host.replace(".", "").isdigit():
+                ips = [host]
+            else:
+                ip_text, cdn_label = net.get(host, ("", ""))
+                if ip_text and not cdn_label:
+                    ips = [x.strip() for x in ip_text.split(",") if x.strip()][:2]
+                    ctx.logger.info(f"[portscan] {host} 使用已解析的真实 IP {','.join(ips)}")
+                elif cdn_label:
+                    ctx.logger.info(f"[portscan] {host} 走 CDN（{cdn_label}），"
+                                    f"跳过端口扫描（扫到的不是源站）")
+                    return []
+                else:
+                    ips = resolve_host(host)
             target_ports = ports
             if exclude_scanned and scanned.get(host):
                 skipped = scanned[host]

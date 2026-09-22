@@ -26,7 +26,7 @@ from .base import Stage
 from .. import blacklist, db, iprecon
 from .. import fofa as fofa_mod
 from ..fingerprint import favicon_hash
-from ..utils import base_domain, pool_run, resolve_host
+from ..utils import base_domain, is_domain, pool_run, resolve_host
 
 
 class OsintStage(Stage):
@@ -364,14 +364,9 @@ def _domain_of(asset):
     raw = str(asset.get("domain") or "").strip().lower().strip(".")
     if not raw:
         raw = (urlparse(str(asset.get("host") or "")).hostname or "").strip(".")
-    if not raw or " " in raw or "/" in raw:
-        return ""
-    try:
-        ipaddress.ip_address(raw)
-        return ""          # 裸 IP：不是域名资产（IP 类资产由 portscan / probe 负责）
-    except ValueError:
-        pass
-    return raw if "." in raw else ""
+    # 统一走 `utils.is_domain()`：它已经把"裸 IP / 带端口 / 带路径 / 通配符"全部挡掉，
+    # 比这里各写一份判断更可靠（用户要求"简单判断是不是域名"）。
+    return raw if is_domain(raw) else ""
 
 
 def _tally(items):

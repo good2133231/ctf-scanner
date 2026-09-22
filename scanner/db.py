@@ -105,7 +105,9 @@ def init_db():
 # 这里按需 ADD COLUMN（SQLite 的 ADD COLUMN 是原地元数据操作，代价极低）。
 _COLUMN_PATCHES = {
     "subdomains": {"cname": "TEXT DEFAULT ''", "ip": "TEXT DEFAULT ''",
-                   "cdn": "TEXT DEFAULT ''"},
+                   "cdn": "TEXT DEFAULT ''",
+                   # 解析失败/未解析的原因码（nxdomain / no-a / timeout / over-limit…）
+                   "ip_note": "TEXT DEFAULT ''"},
     "sites": {"favicon": "TEXT DEFAULT ''"},
 }
 
@@ -251,17 +253,25 @@ def set_subdomain_cnames(task_id, mapping):
 
 
 def set_subdomain_net(task_id, mapping):
-    """回填子域名的解析 IP 与 CDN 标记。
+    """回填子域名的解析 IP、CDN 标记与**未解析原因**。
 
-    mapping: {domain: (ip_text, cdn_label)}；`ip_text` 是逗号连接的 A 记录，
-    `cdn_label` 为空串表示判定为非 CDN（直连源站）。两个空值不写库，避免把
-    "没查到"覆盖成空字符串而抹掉已有数据。
+    mapping: `{domain: (ip_text, cdn_label)}` 或 `{domain: (ip_text, cdn_label, note)}`；
+    `ip_text` 是逗号连接的 A 记录，`cdn_label` 为空串表示判定为非 CDN（直连源站），
+    `note` 是解析失败/未解析的原因码（`nxdomain` / `no-a` / `timeout` / `over-limit`…）。
+
+    三者全空才跳过（避免把"没查到"覆盖成空字符串而抹掉已有数据）；只要带 note 就写，
+    因为"为什么没有 IP"本身就是要展示给用户的信息。
     """
-    rows = [(ip or "", cdn or "", task_id, d)
-            for d, (ip, cdn) in (mapping or {}).items() if ip or cdn]
+    rows = []
+    for d, value in (mapping or {}).items():
+        ip, cdn, note = (list(value) + ["", ""])[:3]
+        if not (ip or cdn or note):
+            continue
+        rows.append((ip or "", cdn or "", note or "", task_id, d))
     if not rows:
         return
-    _exec("UPDATE subdomains SET ip=?, cdn=? WHERE task_id=? AND domain=?", rows, many=True)
+    _exec("UPDATE subdomains SET ip=?, cdn=?, ip_note=? WHERE task_id=? AND domain=?",
+          rows, many=True)
 
 
 def insert_sites(task_id, sites):
@@ -318,6 +328,24 @@ def list_subdomains(task_id):
     return _query("SELECT * FROM subdomains WHERE task_id=? ORDER BY domain", (task_id,))
 
 
+def list_subdomain_net(limit=20000):
+    """跨任务返回解析过的子域名（domain/ip/cdn）——「IP 资产」页用。
+
+    只取 `ip <> ''` 的行（没解析出来的行对"按 IP 聚合"没有意义），并给个上限防止
+    大库把页面拖死。
+    """
+    return _query("SELECT domain, ip, cdn FROM subdomains WHERE ip <> '' LIMIT ?", (limit,))
+
+
+def list_subdomain_net(limit=20000):
+    """跨任务返回解析过的子域名（domain/ip/cdn）——「IP 资产」页用。
+
+    只取 `ip <> ''` 的行（没解析出来的行对"按 IP 聚合"没有意义），并给个上限防止
+    大库把页面拖死。
+    """
+    return _query("SELECT domain, ip, cdn FROM subdomains WHERE ip <> '' LIMIT ?", (limit,))
+
+
 def list_sites(task_id):
     return _query("SELECT * FROM sites WHERE task_id=? ORDER BY id", (task_id,))
 
@@ -338,7 +366,8 @@ def list_csegs(task_id):
 
 # 表 -> (默认排序, 可被关键字过滤的文本列)
 _ASSET_PAGES = {
-    "subdomains": ("task_id DESC, domain", ("domain", "source", "cname", "ip", "cdn")),
+    "subdomains": ("task_id DESC, domain",
+                   ("domain", "source", "cname", "ip", "cdn", "ip_note")),
     "sites": ("task_id DESC, id DESC", ("url", "host", "title", "server", "tech")),
     "ports": ("task_id DESC, port", ("host", "ip", "service", "banner")),
     "csegs": ("task_id DESC, segment, ip", ("segment", "ip", "domains")),

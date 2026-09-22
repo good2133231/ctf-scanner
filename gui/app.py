@@ -31,6 +31,28 @@ from scanner.utils import rel_display
 logger = get_logger("gui")
 
 # 资产来源 → 页面上的可读标签（「子域名 / 拓展域名」页的来源列用它渲染成中文标签）
+# 解析失败/未解析原因 → 页面文案（子域名/拓展域名/IP 页共用）。
+# 用户 2026-09-22 要求：没有 IP 时必须标出**具体原因**，不能只显示一个 "-"。
+IP_NOTE_LABELS = {
+    "nxdomain": "域名不存在(NXDOMAIN)",
+    "no-a": "无 A 记录",
+    "servfail": "DNS 故障",
+    "refused": "DNS 拒绝",
+    "timeout": "解析超时",
+    "error": "解析异常",
+    "empty": "空域名",
+    "over-limit": "超出回填上限(subdomain.max_resolve)",
+}
+
+
+def ip_note_label(note):
+    """把原因码翻译成中文；空值返回空串（表示解析正常）。"""
+    text = str(note or "").strip()
+    if not text:
+        return ""
+    return IP_NOTE_LABELS.get(text, text)
+
+
 SOURCE_LABELS = {
     "subfinder": "被动(subfinder)",
     "puredns": "爆破(puredns)",
@@ -68,6 +90,7 @@ def create_app():
     app.secret_key = f"ctfscanner::{settings.get('gui', {}).get('token', '')}"
     # 模板里可直接调用 `source_label('osint:fofa')` → 「ICO 反查」（来源列的可读标签）
     app.jinja_env.globals["source_label"] = source_label
+    app.jinja_env.globals["ip_note_label"] = ip_note_label
     db.init_db()
     sync_pocs(settings)
 
@@ -155,11 +178,14 @@ def create_app():
         # 子域名 Tab 只列目标自身的子域名；JS/情报拓展的域名单独计数并指到「拓展域名」页
         subs = [dict(r) for r in db.list_subdomains(task_id)]
         own = [r for r in subs if not (r["source"] or "").startswith(("js:", "osint:"))]
+        # 拓展域名（JS 挖掘 / C 段 / FOFA）在任务详情里单列一个页签 ——
+        # 用户要求它不再单独占侧栏，但任务维度仍要能看到（这些域名未必属于目标）
+        ext_subs = [r for r in subs if (r["source"] or "").startswith(("js:", "osint:"))]
         # 目录结果同样默认折叠"重复长度"（同一站点下几百条同样长度的 200 基本是同一个软 404 模板）
         dirs, dirs_hidden = _fold_dirs(db.list_dirs(task_id), False)
         return render_template(
             "task_detail.html", task=task,
-            subs=own, ext_count=len(subs) - len(own),
+            subs=own, ext_count=len(ext_subs), ext_subs=ext_subs,
             sites=db.list_sites(task_id),
             ports=db.list_ports(task_id), csegs=db.list_csegs(task_id),
             dirs=dirs, dirs_hidden=dirs_hidden,
@@ -428,6 +454,34 @@ def create_app():
             rows = [r for r in rows if not r.get("hidden_dup")]
         return rows, hidden
 
+    @app.route("/ips")
+    @login_required
+    def ips():
+        """IP 资产页：按解析 IP 聚合域名。
+
+        **默认只显示"非 CDN 解析"**（用户要求）：走 CDN 的域名解析出来是一堆边缘节点 IP，
+        对"找到真实源站"没有帮助；`?cdn=1` 可把带 CDN 标记的也显示出来（仍单独标注厂商）。
+        每行可勾选 → 直接对**真实 IP** 发起全端口扫描（复用 `/api/ports/full-scan`）。
+        """
+        include_cdn = request.args.get("cdn") == "1"
+        agg = {}
+        for r in db.list_subdomain_net():
+            ip_text, cdn_label = (r["ip"] or ""), (r["cdn"] or "")
+            if not ip_text:
+                continue
+            if cdn_label and not include_cdn:
+                continue
+            for ip in (x.strip() for x in ip_text.split(",")):
+                if not ip:
+                    continue
+                item = agg.setdefault(ip, {"ip": ip, "domains": [], "cdn": cdn_label})
+                if r["domain"] not in item["domains"]:
+                    item["domains"].append(r["domain"])
+                if cdn_label and not item["cdn"]:
+                    item["cdn"] = cdn_label
+        rows = sorted(agg.values(), key=lambda x: (-len(x["domains"]), x["ip"]))
+        return render_template("ips.html", ips=rows, include_cdn=include_cdn)
+
     @app.route("/subdomains")
     @login_required
     def subdomains():
@@ -499,8 +553,11 @@ def create_app():
             rows = [r for r in rows if not r.get("hidden_dup")]
         else:
             pager["qs"] += "&all=1"
+        plain = request.args.get("plain") == "1"
+        if plain:                     # 分页/筛选链接要带上，否则翻页会掉回完整模式
+            pager["qs"] += "&plain=1"
         return render_template("sites.html", sites=rows, pager=pager, q=q,
-                               show_all=show_all, hidden=hidden)
+                               show_all=show_all, hidden=hidden, plain=plain)
 
     @app.route("/ports")
     @login_required

@@ -47,7 +47,9 @@ Flask Web 控制台（仿 ARL）。
   功能上无影响：框架取解释器一律走 `utils.pick_python()` —— `which(configured)` 不中则回退
   `sys.executable`，实测返回 `…\Programs\Python\Python39\python.exe`。）*
 - 依赖已装：flask 3.1、requests 2.22、PyYAML 6.0（见 requirements.txt）。
-- 外部工具：subfinder / puredns / httpx **均未安装** → 走内置兜底。**dirmap 例外**：
+- 外部工具：subfinder / puredns / httpx **均未安装** → 走内置兜底。**两个例外**：
+  **nmap 已安装**（`C:\Program Files (x86)\Nmap\nmap`，实测 `which` 命中）→ 端口扫描默认走 nmap 适配器；
+  **dirmap 可用**：
   它的 Python 依赖（gevent 24.11 / lxml / progressbar）本机都有，且已在 `tools/dirmap/` 建了
   **目录联接**指向机器上的 dirmap 源码 —— 因此 dirscan 阶段会**优先真的调用 dirmap**（第十五轮实测
   15348 条字典跑完约 588 秒、解析正确）；找不到 `tools/dirmap/dirmap.py` 时自动回退内置扫描。
@@ -101,6 +103,7 @@ ctf-scanner/
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
 ├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / sensitive(11，暂未使用) / cdn_cname(292)
+│                          #   js_thirdparty(267：JS 第三方域名单 = 内置 + URLFinder jsFiler)
 │                          #   目录字典按技术栈拆分：dirs_big(11882 全量) / dirs_common(10671) /
 │                          #   dirs_php(933) / dirs_asp(162) / dirs_jsp(116)（tools/import_dir_dict.py 生成）
 ├── config/pocs-user/      # 用户上传 POC；config/pocs-imported/ 导入 POC（默认关闭）；config/nuclei-templates/ 官方模板投放点

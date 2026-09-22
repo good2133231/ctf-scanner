@@ -17,7 +17,7 @@
 import re
 from urllib.parse import urljoin, urlparse
 
-from .utils import base_domain, http_request, pool_run
+from .utils import base_domain, http_request, is_domain, pool_run
 
 # ---------- 第三方域名黑名单（噪声源）----------
 
@@ -59,11 +59,43 @@ NAMESPACE_NOISE = frozenset({
 
 _ALL_NOISE = THIRD_PARTY | NAMESPACE_NOISE
 
+# 第三方域名单改为**数据驱动**：优先读 `config/dicts/js_thirdparty.txt`
+# （由内置清单 + URLFinder「含过滤规则版」的 jsFiler 合并而来，267 条，可手工增删），
+# 文件缺失时回退上面的内置集合。用户 2026-09-22 要求参考 URLFinder 的黑名单。
+_THIRD_PARTY_FILE = "config/dicts/js_thirdparty.txt"
+_noise_cache = None
+
+
+def _noise_set():
+    """返回第三方域名集合（首次调用读文件，之后缓存；文件缺失/损坏回退内置）。"""
+    global _noise_cache
+    if _noise_cache is not None:
+        return _noise_cache
+    items = set()
+    try:
+        from .config import resolve
+        from .utils import read_lines
+        for line in read_lines(resolve(_THIRD_PARTY_FILE)):
+            line = line.strip().lower().lstrip("*.").strip(".")
+            if line and not line.startswith("#"):
+                items.add(line)
+    except Exception:
+        items = set()
+    _noise_cache = items or set(_ALL_NOISE)
+    return _noise_cache
+
 # 静态资源文件名后缀（出现在引号里的 `jquery.min.js` 之类会被误当域名，需排除）
 _FILE_EXT = frozenset({
     "js", "css", "json", "map", "min", "vue", "txt",
     "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico", "cur",
     "html", "htm", "woff", "woff2", "ttf", "otf", "eot",
+    # 服务端脚本/文档后缀：`index.php`、`login.aspx` 在 JS 里是**文件名**而不是域名，
+    # 但形态上与"两段域名"一样（TLD 都是 3 个字母），必须在这里挡掉，
+    # 否则它们会被当成资产域名写进「拓展域名」页（用户 2026-09-22 要求"判断是不是域名"）。
+    "php", "php3", "php4", "php5", "phtml", "phps", "asp", "aspx", "ashx", "asmx",
+    "jsp", "jspx", "do", "action", "cgi", "pl", "py", "rb", "sh", "bat", "exe",
+    "xml", "yaml", "yml", "ini", "conf", "config", "log", "sql", "bak", "zip", "rar",
+    "gz", "tar", "7z", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv",
 })
 
 # 多段公共后缀（取注册域用）已移到 `utils.MULTI_TLD` / `utils.base_domain`
@@ -133,14 +165,10 @@ _MEMBER_RE = re.compile(r"""[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+""")
 # ---------- 主机名判定 ----------
 
 def _valid_host(host):
-    """是否为"像域名的"主机（排除 IP、文件名、非法标签）。"""
-    if not host or " " in host:
+    """是否为"像域名的"主机（先走统一的 `utils.is_domain()` 形态判断，再排 JS 特有的噪声）。"""
+    if not is_domain(host):
         return False
     host = host.lower().strip(".")
-    if len(host) > 253 or "." not in host:
-        return False
-    if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):  # IPv4
-        return False
     labels = host.split(".")
     if labels[0] in _CODE_LABELS:                       # process.env.token 类成员访问链
         return False

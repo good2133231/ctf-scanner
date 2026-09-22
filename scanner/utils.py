@@ -1,4 +1,6 @@
 """通用工具：外部命令调用、HTTP 请求（requests 优先、urllib 兜底）、线程池、DNS、文件读写。"""
+import ipaddress
+import re
 import shutil
 import socket
 import subprocess
@@ -76,6 +78,35 @@ def base_domain(host):
     if ".".join(parts[-2:]) in MULTI_TLD:
         return ".".join(parts[-3:])
     return ".".join(parts[-2:])
+
+
+# ---------- 域名形态 ----------
+
+# 至少两段、TLD 纯字母 2-24 位、标签 1-63 位且不以 - 开头/结尾（不查 DNS，只看形态）
+_DOMAIN_RE = re.compile(r"^(?=.{4,253}$)"
+                        r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$")
+
+
+def is_domain(text):
+    """粗略判断"这串是不是域名"（**只看形态，不查 DNS**）。
+
+    用于把 JS 里挖到的一堆字符串、外部情报返回的 host 字段收敛成真正的域名资产：
+    - 至少两段（`localhost` 不算）；TLD 必须纯字母 2-24 位（挡掉 `1.2.3.4`、`a.b` 这类）；
+    - 标签 1-63 位、不以 `-` 开头/结尾；总长 ≤253；
+    - **IPv4 / IPv6 / 带端口 / 带路径 / 带通配符 / 含空格 一律 False**。
+
+    注意：这是"形态判断"，`is_domain("foo.bar")` 会是 True —— 它不保证域名真实存在，
+    真实存在与否由 DNS 解析（`dnsq.resolve_detail`）负责。
+    """
+    text = str(text or "").strip().lower().strip(".")
+    if not text or " " in text or "/" in text or ":" in text or "*" in text:
+        return False
+    try:
+        ipaddress.ip_address(text)        # 裸 IP 不是域名（IP 资产归 portscan/probe）
+        return False
+    except ValueError:
+        pass
+    return bool(_DOMAIN_RE.match(text))
 
 
 # ---------- 路径 ----------

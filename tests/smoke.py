@@ -348,11 +348,14 @@ def main():
     assert cdn_mod.match(["a1.b.akamaiedge.net"]) == "akamaiedge.net"
     assert cdn_mod.match(["site.cloudflare.net"]) == "cloudflare"   # 名单里的裸词按片段匹配
     assert cdn_mod.match(["www.example.com"]) == ""
-    # 侧边栏精简：端口服务 / C 段视野 / 目录发现 三项已从导航移除（路由保留，任务详情仍在用）
+    # 侧边栏精简：端口服务 / C 段视野 / 目录发现 / **拓展域名** 都已从导航移除
+    # （路由全部保留、任务详情页签仍在用；拓展域名改到任务详情页签，用户 2026-09-22 要求）
     nav_html = c.get("/subdomains").get_data(as_text=True)
-    assert 'href="/extdomains"' in nav_html, "侧边栏缺「拓展域名」"
-    for gone in ('href="/ports"', 'href="/csegs"', 'href="/dirs"'):
+    for gone in ('href="/ports"', 'href="/csegs"', 'href="/dirs"', 'href="/extdomains"'):
         assert gone not in nav_html, f"侧边栏应已移除 {gone}"
+    # 拓展域名改到任务详情页签：页签 + 面板都要在
+    ext_detail = c.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert 'data-tab="ext"' in ext_detail and 'id="pane-ext"' in ext_detail, "任务详情缺「拓展域名」页签"
     # 分流：js/osint 来源进「拓展域名」，被动收集/爆破来源留在「子域名资产」
     db.insert_subdomains(tid, [("own-smoke.example.com", "subfinder"),
                                ("js-smoke.example.com", "js:mine"),
@@ -808,6 +811,86 @@ def main():
     print(f"[5g] 字典按栈拆分 ok: common/jsp/php/asp = "
           f"{counts['dirs_common']}/{counts['dirs_jsp']}/{counts['dirs_php']}/{counts['dirs_asp']}"
           f"（全量 {counts['dirs_big']}）；Java 站只吃 jsp+common")
+
+    # 5h) 第十七轮(3)：GUI 侧栏/新页面/解析原因 + portscan 用真实 IP
+    from gui.app import ip_note_label
+    nav = c.get("/subdomains").get_data(as_text=True)
+    assert 'href="/ips"' in nav, "侧栏缺「IP 资产」"
+    assert 'href="/extdomains"' not in nav, "拓展域名不应再占侧栏"
+    for path in ("/ips", "/ips?cdn=1", "/sites?plain=1"):
+        r = c.get(path)
+        assert r.status_code == 200, (path, r.status_code)
+    assert 'id="theme-select"' in nav, "顶栏缺主题切换"
+    assert "data-theme" in (ROOT / "gui" / "static" / "style.css").read_text(encoding="utf-8")
+    plain_html = c.get("/sites?plain=1").get_data(as_text=True)
+    assert "tbl-plain-sites" in plain_html and "纯净模式" in plain_html
+    sites_html = c.get("/sites").get_data(as_text=True)
+    assert 'target="_blank"' in sites_html and 'rel="noopener noreferrer"' in sites_html
+    # 没有 IP 时要标出**具体原因**（用户要求）
+    db.insert_subdomains(tid, [("noip-smoke.example.com", "subfinder")])
+    db.set_subdomain_net(tid, {"noip-smoke.example.com": ("", "", "timeout")})
+    assert "解析超时" in c.get("/subdomains").get_data(as_text=True), "无 IP 时应标出原因"
+    assert ip_note_label("over-limit") == "超出回填上限(subdomain.max_resolve)"
+    assert ip_note_label("") == ""
+    # IP 页默认只显示非 CDN 的解析
+    db.insert_subdomains(tid, [("ip-nocdn.example.com", "subfinder"),
+                               ("ip-cdn.example.com", "subfinder")])
+    db.set_subdomain_net(tid, {"ip-nocdn.example.com": ("9.9.9.9", "", ""),
+                               "ip-cdn.example.com": ("8.8.8.8", "cloudflare", "")})
+    only_nocdn = c.get("/ips").get_data(as_text=True)
+    assert "9.9.9.9" in only_nocdn and "8.8.8.8" not in only_nocdn, "默认应只显示非 CDN 解析"
+    with_cdn = c.get("/ips?cdn=1").get_data(as_text=True)
+    assert "8.8.8.8" in with_cdn and "cloudflare" in with_cdn
+    # portscan 对真实 IP 扫描：库里有解析结果就直接用；CDN 主机跳过
+    from scanner.stages import portscan as ps_stage
+    ps_calls = []
+
+    def _fake_scan_host(host, ip, ports, timeout=1.0, workers=64, banner=True, stopped=None):
+        ps_calls.append((host, ip, len(ports)))
+        return []
+
+    _orig_scan = ps_stage.portscan.scan_host
+    ps_stage.portscan.scan_host = _fake_scan_host
+    try:
+        ps_settings = copy.deepcopy(settings)
+        ps_settings["portscan"] = {"enabled": True, "max_hosts": 10, "ports": "80,443",
+                                   "workers": 4, "timeout": 0.2, "banner": False}
+        # 本机装了 nmap（实测 PATH 里有），会把内置 connect 顶掉 —— 这里显式指向不存在的
+        # 二进制，保证测的是内置路径；"用真实 IP / 跳过 CDN" 的判定在选引擎之前，两条路共用。
+        ps_settings["tools"] = dict(ps_settings.get("tools") or {}, nmap="nmap-does-not-exist")
+        # 本机装了 nmap（实测 PATH 里有），会把内置 connect 顶掉 —— 这里显式指向不存在的
+        # 二进制，保证测的是内置路径；"用真实 IP / 跳过 CDN" 的判定在选引擎之前，两条路共用。
+        ps_settings["tools"] = dict(ps_settings.get("tools") or {}, nmap="nmap-does-not-exist")
+        ps_tid = db.create_task("smoke-realip", "a.test", ["portscan"], {})
+        db.insert_subdomains(ps_tid, [("real.example.com", "subfinder"),
+                                      ("cdn.example.com", "subfinder")])
+        db.set_subdomain_net(ps_tid, {"real.example.com": ("1.2.3.4", "", ""),
+                                      "cdn.example.com": ("5.6.7.8", "cloudflare", "")})
+        ps_ctx = StageContext(ps_tid, "smoke-realip", parse_lines(["real.example.com"]),
+                              ["portscan"], {}, ps_settings, Path(_TMPDIR) / "ps", rec)
+        ps_ctx.results["domains_for_probe"] = ["real.example.com", "cdn.example.com"]
+        PipelineRunner(ps_ctx).run()
+        used = {(h, ip) for h, ip, _n in ps_calls}
+        assert ("real.example.com", "1.2.3.4") in used, used
+        assert all(h != "cdn.example.com" for h, _ip, _n in ps_calls), "CDN 主机应跳过"
+    finally:
+        ps_stage.portscan.scan_host = _orig_scan
+    print("[5h] GUI/IP 批次 ok: IP 资产页(默认非 CDN) + 解析原因 + 主题/纯净模式/超链接 + portscan 用真实 IP")
+
+    # 5i) 第十七轮(4)：统一的"是不是域名"判断 + JS 第三方黑名单改为数据驱动（并入 URLFinder 名单）
+    from scanner.utils import is_domain
+    assert is_domain("www.example.com") and is_domain("example.com.cn") and is_domain("a.b.co")
+    for not_domain in ("1.2.3.4", "2001:db8::1", "localhost", "foo", "*.example.com",
+                       "http://x.com/a", "a b.com", "-bad.com", "a.b", ""):
+        assert not is_domain(not_domain), not_domain
+    # 黑名单文件：内置清单 + URLFinder jsFiler 合并后 267 条，两边都要在
+    noise = jm._noise_set()
+    assert len(noise) > 200, len(noise)
+    assert "cnzz.com" in noise, "内置清单应保留"
+    assert "adform.net" in noise, "URLFinder jsFiler 的域名应并入"
+    assert jm._valid_host("index.php") is False, "JS 语境里 .php 是文件名不是域名"
+    assert jm._valid_host("www.real-site.com") is True
+    print(f"[5i] 域名判断/黑名单 ok: is_domain 形态判断 + 第三方名单 {len(noise)} 条（含 URLFinder jsFiler）")
     print("SMOKE PASS")
 
 

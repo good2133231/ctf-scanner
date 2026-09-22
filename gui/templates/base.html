@@ -15,8 +15,8 @@
         ('dashboard',   '/',           '仪表盘',   'M3 3h6v6H3zM11 3h4v4h-4zM3 11h6v4H3zM11 9h4v6h-4z'),
         ('tasks',       '/tasks',      '任务管理', 'M4 5h12M4 9h12M4 13h8'),
         ('subdomains',  '/subdomains', '子域名资产', 'M9 2a7 7 0 100 14 7 7 0 000-14zM2 9h14M9 2c2.5 3.5 2.5 10.5 0 14'),
-        ('extdomains',  '/extdomains', '拓展域名', 'M3 3h6v6H3zM12 3h3v3h-3zM3 12h6v3H3zM12 12h3v3h-3zM9 6h3M6 9v3'),
         ('sites',       '/sites',      '站点资产', 'M2 3h14v9H2zM6 15h6M9 12v3'),
+        ('ips',         '/ips',        'IP 资产',  'M9 2a7 7 0 100 14 7 7 0 000-14zM9 6v6M6 9h6'),
         ('fullports',   '/fullports',  '全端口扫描', 'M3 6h12M3 10h12M3 14h12M6 6v0M9 10v0'),
         ('vulns',       '/vulns',      '漏洞风险', 'M9 2l6 2.5v5c0 3.5-2.5 6-6 7-3.5-1-6-3.5-6-7v-5z'),
         ('pocs',        '/pocs',       'POC 管理', 'M7 5L2 9l5 4M11 5l5 4-5 4'),
@@ -40,6 +40,14 @@
     <header class="topbar">
       <span class="crumb">{{ self.title() }}</span>
       <span class="spacer"></span>
+      <span class="theme-switch" title="切换配色（本机记忆）">
+        <select id="theme-select" aria-label="主题">
+          <option value="dark">深色</option>
+          <option value="light">浅色</option>
+          <option value="ocean">深蓝</option>
+          <option value="violet">紫罗兰</option>
+        </select>
+      </span>
       <span class="muted">admin</span>
       <a href="{{ url_for('settings_page') }}">修改口令</a>
       <a href="{{ url_for('logout') }}">退出</a>

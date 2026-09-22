@@ -488,3 +488,25 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [待办] P2-3 Linux 实机验证（挂起中；本机 WSL 被安全策略禁用、无 Docker）
 [待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘
 [待办] 端口扫描接入 fscan（可选，需你先放二进制）
+
+-----
+（第十七轮续2：GUI / 资产视图 8 项）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+[完成] 1、站点 URL 默认可点开（新窗口）；另外站点行距已加大
+[完成] 2、站点"纯净模式"：/sites?plain=1 只显示 URL（页顶切换，分页/筛选都保留该模式）
+[完成] 3、右上角主题切换：深色 / 浅色 / 深蓝 / 紫罗兰（CSS 变量 + localStorage 记忆，不用重启）
+[完成] 4、指纹识别：**早就落地了**（probe 写 sites.tech、GUI 有列），问题是规则只有 16 条太薄 →
+       现扩到 103 个标签并新增 cookies 维度（Set-Cookie 判语言最准），覆盖 CDN/WAF、国产 OA/ERP
+       （泛微/致远/通达/蓝凌/帆软/金蝶/用友/若依…）、Java 中间件、CMS、前端框架；GUI 技术栈改标签渲染
+[完成] 5、没有 IP 时标出具体原因：新增 subdomains.ip_note + dnsq.resolve_detail()，
+       原因有 域名不存在(NXDOMAIN)/无 A 记录/DNS 故障/拒绝/解析超时/解析异常/超出回填上限；
+       超出 max_resolve 的也会标 over-limit（原来一片 '-' 看不出为什么）
+[完成] 6、新增「IP 资产」页（侧栏）：按解析 IP 聚合域名，**默认只显示非 CDN 的解析**，
+       可切"含 CDN"；勾选 IP 可直接批量发起全端口扫描
+[完成] 7、端口服务对**真实 IP** 扫描：优先用库里已解析的非 CDN IP（不再现场解析），
+       CDN 主机直接跳过并记日志。另纠正：本机**其实装了 nmap**，AGENTS.md 已改
+[完成] 8、拓展域名移出左侧、改到任务详情页签；新增 utils.is_domain() 统一判断是不是域名
+       （挡掉裸 IP/IPv6/带端口/带路径/通配符；jsmine 另补 index.php 这类文件名后缀）；
+       第三方黑名单改数据驱动 config/dicts/js_thirdparty.txt（267 条 = 内置 + URLFinder jsFiler 212 条）
+[待办] 9、站点截图功能（你问"可以加吗"）：可以，但要用无头浏览器（Edge/Chrome headless）。
+       计划：新增可选 screenshot 阶段（默认关）→ 截图存 logs/task_*/shots/ → sites.shot 列 →
+       站点页显示缩略图。**待确认浏览器可用后实现**（本机 Edge 一般自带）

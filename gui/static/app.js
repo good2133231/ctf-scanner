@@ -258,7 +258,24 @@ function initPickAll() {
   });
 }
 
+/* ---------- 主题切换：写 html[data-theme]，localStorage 记忆 ---------- */
+
+function initTheme() {
+  const sel = document.getElementById("theme-select");
+  const KEY = "ctfscanner.theme";
+  let saved = "dark";
+  try { saved = localStorage.getItem(KEY) || "dark"; } catch (e) { /* 隐私模式 */ }
+  const apply = t => {
+    document.documentElement.setAttribute("data-theme", t);
+    if (sel) sel.value = t;
+    try { localStorage.setItem(KEY, t); } catch (e) { /* 忽略 */ }
+  };
+  apply(saved);
+  if (sel) sel.addEventListener("change", () => apply(sel.value));
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  initTheme();
   initTabs();
   initFilters();
   initCollapsiblePanels();

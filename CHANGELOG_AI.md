@@ -3,6 +3,70 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十七轮（续 2）：用户提的 8 项 GUI/资产改动（除截图外全部落地）
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+### 1）站点 URL 可点开 + 纯净模式 + 行距
+- `/sites` 与任务详情「站点」页签的 URL 全部改成 `<a target="_blank" rel="noopener noreferrer">`；
+- **纯净模式**：`/sites?plain=1` 只显示 URL 一列（适合对着列表逐个点开），页顶可切换，
+  分页/筛选都会带上该参数；
+- 站点表行距加大（`#tbl-all-sites / #tbl-detail-sites` 的 padding 11px），"间距远一点"。
+
+### 2）右上角主题切换
+- 顶栏加「深色 / 浅色 / 深蓝 / 紫罗兰」下拉；实现方式是 `html[data-theme=...]` 覆盖 CSS 变量
+  （`:root` 里已有全套变量），选择记在 `localStorage`，刷新保持。**不用重启服务**。
+
+### 3）指纹识别：落地了，但规则太薄 —— 已大幅扩充
+- **结论（先回答"是不是没落地"）**：落地了（probe 阶段 `fingerprint.identify()` → `sites.tech`，
+  GUI 有列、smoke 也断言过），但原规则表只有 **16 条**且只看 `Server` / `X-Powered-By` /
+  少量正文关键字 —— 实测 `Server: cloudflare`、`Set-Cookie: PHPSESSID`、`X-AspNet-Version`
+  全判不出来，所以真实站点大多显示空。
+- **现在 103 个标签**，新增 **cookies 维度**（`Set-Cookie` 是判断语言最可靠的线索），覆盖：
+  服务器/反代、**CDN/WAF**（cloudflare / akamai / fastly / varnish / 安全狗 / 云锁 / 雷池 / 宇盾…）、
+  语言运行时（php / aspnet / java / python / nodejs / ruby / golang）、
+  Java 中间件（tomcat / jetty / weblogic / wildfly / spring / struts2 / shiro / jenkins / nacos / druid…）、
+  **国产 OA/ERP**（泛微 e-cology / e-office、致远、通达、蓝凌、帆软、金蝶、用友、若依、jeecg…）、
+  CMS（wordpress / drupal / joomla / dedecms / discuz / thinkphp / laravel / yii…）、
+  前端框架（vue / react / nextjs / nuxt / angular / jquery / layui / element-ui / antd…）。
+- GUI 的技术栈列改成**标签渲染**（一个 tag 一个小方块），一眼能看出多个组件。
+
+### 4）没有 IP 时标出**具体原因**
+- `dnsq.resolve_detail()`：在 `cname_chain()` 之外多返回一个原因码
+  （`nxdomain` / `no-a` / `servfail` / `refused` / `timeout` / `error` / `empty`）；
+- `subdomains` 新增 `ip_note` 列（原地迁移），子域名阶段回填；**超出 `max_resolve` 上限的也标
+  `over-limit`**（原来一片 `-` 看不出是被上限挡掉的）；
+- 子域名 / 拓展域名 / 任务详情三处 IP 列下方显示中文原因（`解析超时`、`域名不存在(NXDOMAIN)`…）。
+
+### 5）新增「IP 资产」页（默认只显示非 CDN 的解析）
+- `/ips`：按解析 IP 聚合域名（IP / 域名数 / 域名列表 / CDN 标记），
+  **默认只显示非 CDN 解析**（走 CDN 的解析是边缘节点 IP，对找源站没帮助），`?cdn=1` 放开；
+- 每行可勾选 → 直接对**真实 IP** 发起全端口扫描（复用 `/api/ports/full-scan`）；
+- 侧栏加入「IP 资产」（同时按用户要求把「拓展域名」移出侧栏）。
+
+### 6）端口服务对**真实 IP** 扫描
+- portscan 阶段现在优先用**库里已解析的 IP**（`subdomains.ip`，非 CDN）而不是现场解析：
+  更快、也避免解析漂移；**判定走 CDN 的主机直接跳过**并记日志（扫 CDN 边缘节点没有意义）。
+- 顺带纠正一处文档错误：**本机其实装了 nmap**（`C:\Program Files (x86)\Nmap\nmap`），
+  `AGENTS.md` §2 原写"外部工具均未安装"已更正 —— 端口扫描默认会走 nmap 适配器。
+
+### 7）拓展域名移入任务管理 + 域名形态判断 + 并入 URLFinder 黑名单
+- **侧栏移除「拓展域名」**（路由 `/extdomains` 保留），任务详情新增「**拓展域名**」页签
+  （第 9 个页签，含来源标签与筛选）；
+- **统一的"是不是域名"判断** `utils.is_domain()`：至少两段、TLD 纯字母 2-24 位、
+  标签不以 `-` 开头/结尾、总长 ≤253；**裸 IP / IPv6 / 带端口 / 带路径 / 通配符一律 False**。
+  `jsmine._valid_host()` 与 `osint._domain_of()` 都改为复用它（原来各写一份）；
+  `jsmine._FILE_EXT` 补上服务端脚本与文档后缀（`index.php` / `login.aspx` 这类**文件名**
+  不再被当成域名写进拓展域名页）；
+- **第三方域名黑名单改为数据驱动**：`config/dicts/js_thirdparty.txt`（**267 条**）
+  = 我们原有内置清单 + 用户指定的 URLFinder「含过滤规则版」`config.yaml` 里的 `jsFiler`（212 条）。
+  文件缺失时回退内置集合；改名单不用动代码。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py     # SMOKE PASS（新增 [5h] GUI/IP 批次、[5i] 域名判断/黑名单）
+```
+
 ## 2026-09-22 —— 第十七轮（续）：目录字典按技术栈拆分 + 按栈选字典 + 两处阶段回退修复
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

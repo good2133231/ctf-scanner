@@ -195,25 +195,32 @@ class SubdomainStage(Stage):
             return
         cfg = ctx.settings.get("subdomain", {}) or {}
         cap = int(cfg.get("max_resolve", 500))
+        cap_skipped = []
         if len(subs) > cap:
             ctx.logger.info(f"[subdomain] IP/CDN 回填：{len(subs)} 个超过上限 {cap}，"
-                            f"仅处理前 {cap} 个（其余仍入资产表，只是没有解析信息）")
-            subs = subs[:cap]
+                            f"仅处理前 {cap} 个（其余仍入资产表，并标记原因 over-limit）")
+            cap_skipped, subs = subs[cap:], subs[:cap]
         timeout = float(cfg.get("dns_timeout", 3) or 3)
 
         def _one(host):
             if ctx.stopped():
                 return None
-            chain, ips = dnsq.cname_chain(host, timeout=timeout)
-            if not ips and not chain:
-                return None
-            return host, ",".join(ips), cdn.match(chain, ctx.settings)
+            # `resolve_detail` 比 `cname_chain` 多返回一个**失败原因码**：
+            # 页面上只显示一个 '-' 时，用户无从知道是"域名不存在"还是"解析超时"
+            # 还是"被 max_resolve 上限挡掉了"（用户 2026-09-22 明确要求标出原因）。
+            chain, ips, reason = dnsq.resolve_detail(host, timeout=timeout)
+            return host, ",".join(ips), cdn.match(chain, ctx.settings), reason
 
         mapping = {}
         for item in pool_run(_one, subs, workers=workers):
-            host, ips, cdn_label = item
-            mapping[host] = (ips, cdn_label)
+            host, ips, cdn_label, reason = item
+            mapping[host] = (ips, cdn_label, reason)
+        for host in cap_skipped:
+            mapping[host] = ("", "", "over-limit")
         db.set_subdomain_net(ctx.task_id, mapping)
-        n_cdn = sum(1 for _ip, label in mapping.values() if label)
+        n_cdn = sum(1 for v in mapping.values() if v[1])
+        n_fail = sum(1 for v in mapping.values() if v[2])
         ctx.logger.info(f"[subdomain] 回填解析结果 {len(mapping)} 个"
-                        f"（其中标记 CDN {n_cdn} 个，非 CDN {len(mapping) - n_cdn} 个）")
+                        f"（CDN {n_cdn} 个 / 非 CDN {len(mapping) - n_cdn - n_fail} 个 / "
+                        f"未解析 {n_fail} 个"
+                        + (f"，其中 {len(cap_skipped)} 个超出上限" if cap_skipped else "") + "）")

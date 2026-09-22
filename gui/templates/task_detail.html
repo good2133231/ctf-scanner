@@ -26,6 +26,7 @@
   <div class="tab active" data-tab="vulns">潜在漏洞<span class="cnt">{{ vulns|length }}</span></div>
   <div class="tab" data-tab="sites">站点<span class="cnt">{{ sites|length }}</span></div>
   <div class="tab" data-tab="subs">子域名<span class="cnt">{{ subs|length }}</span></div>
+  <div class="tab" data-tab="ext">拓展域名<span class="cnt">{{ ext_subs|length }}</span></div>
   <div class="tab" data-tab="ports">端口服务<span class="cnt">{{ ports|length }}</span></div>
   <div class="tab" data-tab="csegs">C 段<span class="cnt">{{ csegs|length }}</span></div>
   <div class="tab" data-tab="dirs">目录<span class="cnt">{{ dirs|length }}</span></div>
@@ -65,13 +66,15 @@
 <div class="tabpane" id="pane-sites">
   <section class="panel">
     <label class="muted">筛选站点 <input data-filter="#tbl-sites" placeholder="URL / 标题 / 技术栈 / Server"></label>
-    <table id="tbl-sites">
+    <table id="tbl-detail-sites">
       <thead><tr><th>URL</th><th>状态</th><th>标题</th><th>技术栈</th><th>Server</th></tr></thead>
       <tbody>
       {% for s in sites %}
-        <tr><td class="mono">{{ s.url }}</td><td>{{ s.status }}</td>
+        <tr><td class="mono"><a class="url-link" href="{{ s.url }}" target="_blank"
+              rel="noopener noreferrer">{{ s.url }}</a></td><td>{{ s.status }}</td>
           <td>{{ s.title or '-' }}</td>
-          <td class="muted">{{ s.tech or '-' }}</td>
+          <td>{% for x in (s.tech or '').split(',') if x.strip() %}
+              <span class="tech-tag">{{ x.strip() }}</span>{% else %}<span class="muted">-</span>{% endfor %}</td>
           <td class="muted">{{ s.server or '-' }}</td></tr>
       {% else %}
         <tr><td colspan="5" class="muted">暂无数据。</td></tr>
@@ -93,13 +96,41 @@
       <tbody>
       {% for s in subs %}
         <tr><td class="mono">{{ s.domain }}</td>
-          <td class="muted small mono">{{ s.ip or '-' }}</td>
+          <td class="muted small mono">{{ s.ip or '-' }}
+            {%- if not s.ip and s.ip_note %}<br><span class="muted small"
+              title="为什么没有解析结果">{{ ip_note_label(s.ip_note) }}</span>{% endif %}</td>
           <td>{% if s.cdn %}<span class="sev sev-medium">{{ s.cdn }}</span>
               {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
           <td class="muted small mono">{{ s.cname or '-' }}</td>
           <td class="muted">{{ source_label(s.source) }}</td></tr>
       {% else %}
         <tr><td colspan="5" class="muted">暂无数据。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-ext">
+  <section class="panel">
+    <p class="muted small">JS 挖掘（<span class="mono">js:mine</span>）与外部情报
+      （<span class="mono">osint:cseg</span> / <span class="mono">osint:fofa</span> /
+      <span class="mono">osint:fofa-cert</span> / <span class="mono">osint:fofa-title</span>）
+      带出来的关联域名 —— 它们<b>未必属于目标自身</b>，所以不混进「子域名」页签。
+      侧栏不再单列该页，跨任务视图仍可在 /extdomains 直接访问。</p>
+    <label class="muted">筛选域名 <input data-filter="#tbl-ext-subs" placeholder="域名 / 来源 / CNAME / IP"></label>
+    <table id="tbl-ext-subs">
+      <thead><tr><th>域名</th><th>解析 IP</th><th>CDN</th><th>CNAME</th><th>来源</th></tr></thead>
+      <tbody>
+      {% for s in ext_subs %}
+        <tr><td class="mono">{{ s.domain }}</td>
+          <td class="muted small mono">{{ s.ip or '-' }}</td>
+          <td>{% if s.cdn %}<span class="tech-tag">{{ s.cdn }}</span>
+              {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
+          <td class="muted small mono">{{ s.cname or '-' }}</td>
+          <td class="muted">{{ source_label(s.source) }}</td></tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">暂无拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
       {% endfor %}
       </tbody>
     </table>

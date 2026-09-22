@@ -284,6 +284,59 @@ def query(name, qtype="A", timeout=3, resolver=None):
         return []
 
 
+def resolve_detail(name, timeout=3, resolver=None):
+    """解析 A/CNAME 并给出**失败原因** —— 供 GUI 解释"这个域名为什么没有 IP"。
+
+    返回 `(chain, ips, reason)`：`reason` 为空串表示解析成功。取值：
+    `nxdomain`（域名不存在）/ `servfail`（DNS 故障）/ `refused`（DNS 拒绝）/
+    `no-a`（有应答但没有 A 记录，例如只挂了个失效 CNAME）/ `timeout`（无应答）/
+    `error`（内部异常）/ `empty`（传进来的名字为空）。
+
+    与 `cname_chain()` 的关系：那个只返回 (chain, ips)、失败静默；这个多带一个原因码，
+    因为"资产页显示一个 '-'"对排查毫无帮助（用户 2026-09-22 明确要求标出原因）。
+    """
+    try:
+        current = str(name or "").strip().rstrip(".")
+        if not current:
+            return [], [], "empty"
+        chain, ips, seen, cmap = [], [], {current.lower()}, {}
+        rcode, got_records = 0, False
+        for _ in range(_MAX_DEPTH):
+            records, rcode, _tc = _exchange(current, _A, timeout=timeout or _TTL_WAIT,
+                                            resolver=resolver)
+            if records:
+                got_records = True
+            for owner, rtype, text in records:
+                if rtype == _CNAME and text:
+                    cmap.setdefault(owner, text.rstrip("."))
+                elif rtype == _A and text:
+                    ips.append(text)
+            moved = False
+            while True:
+                nxt = cmap.get(current.lower())
+                if not nxt or nxt.lower() in seen:
+                    break
+                chain.append(nxt)
+                seen.add(nxt.lower())
+                current = nxt
+                moved = True
+            if ips or not moved or not records:
+                break
+        if ips:
+            return chain, sorted(set(ips)), ""
+        if rcode == 3:
+            return chain, [], "nxdomain"
+        if rcode == 2:
+            return chain, [], "servfail"
+        if rcode == 5:
+            return chain, [], "refused"
+        if got_records:
+            return chain, [], "no-a"
+        return chain, [], "timeout"
+    except Exception:
+        return [], [], "error"
+
+
 def cname_chain(name, timeout=3, resolver=None):
     """返回 (cname_chain, ips)。
 

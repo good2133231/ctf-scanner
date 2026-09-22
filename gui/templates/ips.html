@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}IP 资产{% endblock %}
+{% block content %}
+<p class="muted">按**解析 IP** 聚合的资产视图：同一台机器上挂了哪些域名，一眼可见。
+  默认<b>只显示非 CDN 的解析</b>（走 CDN 的域名解析出来是边缘节点 IP，对找源站没帮助），
+  需要时切到「含 CDN」。勾选 IP → 直接对<b>真实 IP</b> 发起全端口扫描。</p>
+<section class="panel">
+  <p class="muted small">显示范围：
+    {% if include_cdn %}
+      <b>含 CDN 的解析</b>
+      <a class="btn-mini ghost" href="{{ url_for('ips') }}">只看非 CDN</a>
+    {% else %}
+      <b>只看非 CDN</b>（{{ ips|length }} 个 IP）
+      <a class="btn-mini ghost" href="{{ url_for('ips', cdn=1) }}">显示含 CDN 的解析</a>
+    {% endif %}
+  </p>
+  <form method="post" action="{{ url_for('api_full_scan') }}">
+    <div class="bulkbar">
+      <button type="submit" class="ghost">对勾选 IP 发起全端口扫描（1-65535）</button>
+      <label class="muted">任务名
+        <input name="name" placeholder="留空则用 全端口-&lt;月日&gt;-&lt;时分秒&gt;"></label>
+      <span class="muted">新建一个只跑 portscan 的任务；已扫过的端口会自动跳过。</span>
+    </div>
+    <label class="muted">筛选 <input data-filter="#tbl-ips" placeholder="IP / 域名 / CDN"></label>
+    <table id="tbl-ips">
+      <thead><tr>
+        <th class="pick"><input type="checkbox" class="pick-all-page"
+          data-pick-all="#tbl-ips" title="全选本页"></th>
+        <th>IP</th><th>域名数</th><th>域名</th><th>CDN</th></tr></thead>
+      <tbody>
+      {% for row in ips %}
+        <tr>
+          <td class="pick"><input type="checkbox" class="pick pick-row" name="host"
+            value="{{ row.ip }}"></td>
+          <td class="mono">{{ row.ip }}</td>
+          <td>{{ row.domains|length }}</td>
+          <td class="muted small mono">{{ row.domains[:8]|join(', ') }}{% if row.domains|length > 8 %} …{% endif %}</td>
+          <td>{% if row.cdn %}<span class="tech-tag">{{ row.cdn }}</span>
+              {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">还没有解析数据（子域名阶段会回填 IP；
+          若全是「域名不存在 / 解析超时」，请到「子域名资产」页看 IP 列下方的原因标注）。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </form>
+</section>
+{% endblock %}

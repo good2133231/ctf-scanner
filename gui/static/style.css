@@ -1,6 +1,15 @@
 /* CTFScanner 深色主题（仿 ARL / 资产灯塔控制台布局：左侧栏 + 顶栏 + 任务详情页签） */
+/* 主题：`html[data-theme=...]` 覆盖这几组变量，右上角切换、localStorage 记忆 */
 :root { --bg:#0f1419; --panel:#161d26; --line:#233040; --text:#d7dee8;
-        --muted:#7d8b9d; --accent:#2dd4a7; --side:#111820; }
+        --muted:#7d8b9d; --accent:#2dd4a7; --side:#111820; --hover:#18212c; --soft:#132b26; }
+html[data-theme="light"] { --bg:#f4f6f9; --panel:#ffffff; --line:#d8dee7; --text:#1f2733;
+        --muted:#6b7686; --accent:#0f8f6f; --side:#ffffff; --hover:#eef2f7; --soft:#e6f5f0; }
+html[data-theme="ocean"] { --bg:#0b1622; --panel:#122130; --line:#1d3348; --text:#d6e4f0;
+        --muted:#7d93aa; --accent:#38bdf8; --side:#0e1c2a; --hover:#17293b; --soft:#12303f; }
+html[data-theme="violet"] { --bg:#141020; --panel:#1d1830; --line:#2f2748; --text:#e2dcf3;
+        --muted:#8d84a8; --accent:#a78bfa; --side:#171227; --hover:#241d3a; --soft:#2a2145; }
+html[data-theme="light"] pre, html[data-theme="light"] .topbar { background:#eef1f6; }
+html[data-theme="light"] .side-item:hover, html[data-theme="light"] .side-item.active { background:var(--hover); }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--text);
        font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
@@ -143,3 +152,17 @@ details pre { margin:8px 0; }
   .grid2 { grid-template-columns:1fr; }
   .sidebar { width:150px; flex-basis:150px; }
 }
+
+/* ---------- 主题切换（右上角） ---------- */
+.theme-switch { display:inline-flex; align-items:center; gap:6px; }
+.theme-switch select { background:var(--panel); color:var(--text); border:1px solid var(--line);
+                       border-radius:6px; padding:3px 6px; font-size:12px; }
+/* ---------- 站点表：行距加大（用户要求"站点间距远一点"） ---------- */
+#tbl-all-sites td, #tbl-all-sites th, #tbl-detail-sites td, #tbl-detail-sites th,
+#tbl-plain-sites td { padding:11px 10px; }
+#tbl-all-sites tr, #tbl-detail-sites tr, #tbl-plain-sites tr { border-bottom:1px solid var(--line); }
+/* ---------- 技术栈标签 ---------- */
+.tech-tag { display:inline-block; padding:1px 6px; margin:1px 3px 1px 0; font-size:11px;
+            border:1px solid var(--line); border-radius:4px; color:var(--muted);
+            background:var(--soft); }
+.url-link { word-break:break-all; }
