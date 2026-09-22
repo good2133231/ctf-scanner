@@ -375,6 +375,68 @@
 - [x] **目录扫描的阶段级测试**（2026-09-22 完成）：`[5e](7)` 用记录型 logger 真跑一次 dirscan，
       断言"2 条别名站被去重、只扫 2 个站点"。
 
+## 第十六轮（收尾：遗留项全清 + 两个决策落实，2026-09-22）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。用户原话：把四条遗留全部解决，两个待决策项"按你推荐来"。
+
+- [x] **FOFA 真实联网首跑 + 阈值校准**：`title="维保中心"` → 15 条并**真的入库 6 个域名**；
+  `cert="example.com"` → 2 164 696 条被阈值拦下。校准样本：具体标题十位数、通用标题百万~千万级
+  （`后台管理系统` 192 188 / `登录` 39 722 277 / `Index of /` 5 974 788 / `Welcome to nginx` 8 344 737）
+  → **默认 200 维持不变**（偏保守、宁缺勿滥）。
+  **顺带修掉一个"必然抛异常"的 Bug**：`_site_titles()` 对 `sqlite3.Row` 用了 `.get()`，
+  osint 阶段每次都抛 AttributeError 被容错吞掉（标题反查永远 0 条）。
+- [x] **全端口耗时校准**：本机回环 65535 端口，`workers=256/timeout=0.3` → **82 秒**；
+  **默认参数**（64/1.0）→ **>17 分钟**。据此新增 `portscan.full_workers`（256）/
+  `portscan.full_timeout`（0.5），**只在 full 模式生效**，GUI 策略页同步。
+- [x] **目录扫描阶段级测试**：`[5e](7)` 记录型 logger 真跑 dirscan，断言"2 条别名站被去重"；
+  另加 `[5e](9)` 断言 dirmap 产物按目标目录定位。
+- [x] **dirmap 5 处源码修复**（改本机外部副本，已留 `.bak-workbuddy-20260922` 备份）：
+  重复定义 / 死变量 / O(n²) 读回+并发丢写 / `skip_size` 比较恒假 / `ssl_context` 未挂载。
+  **实测收益：15349 条字典 588 秒 → 43 秒（约 13×）**。
+  **并明确"不内联"**：dirmap 是 **GPL-3.0**，拷进仓库会让整个仓库受 GPL 约束 →
+  只保留外部适配器，修复记录放 `tools/dirmap_fixes/README.md`（不含源码）。
+- [x] **适配器新坑修复**：dirmap 的 `saveResults()` 会与旧文件去重 → 重扫同目标不写新内容、
+  mtime 不变 → 上一轮的"按 mtime 过滤"会漏结果（实测跑了 37 秒解析 0 条）。
+  改为**按目标目录定位** `output/<netloc 把 : 换成 _>/`，复验 `dirmap 输出 4 条`。
+- [x] **决策① 清理开发期数据**：43 条任务（全是 smoke/test/cli 产物）逐条走 `db.delete_task()`
+  → **56 个 JSON 快照**在 `data/trash/`（可回溯）；僵尸 `running` 任务收尾为 `stopped`；
+  `logs/` 清理 41 个孤儿任务目录 + 7 个 `smoke-*`，只留 `cli_smoke_report.md`。
+- [x] **决策② 重启 GUI**：确认 5000 上跑的是旧代码（`/fullports` 404）→ 终止旧进程并用当前代码重启，
+  登录后 6 个页面逐页复验通过（`/fullports` `/dirs` `/extdomains` `/settings` `/subdomains` `/tasks`）。
+- [x] **新增约定（用户要求）**：改动一律标注实施者 —— `AGENTS.md` §9 写明"提交信息末行 `WorkBuddy · <模型名>`
+  + CHANGELOG 轮次标题下写实施者"，用于多会话并行时事后分辨归属。
+
+## 第十六轮（收尾：遗留项全清 + 两个决策落实，2026-09-22）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。用户原话：把四条遗留全部解决，两个待决策项"按你推荐来"。
+
+- [x] **FOFA 真实联网首跑 + 阈值校准**：`title="维保中心"` → 15 条并**真的入库 6 个域名**；
+  `cert="example.com"` → 2 164 696 条被阈值拦下。校准样本：具体标题十位数、通用标题百万~千万级
+  （`后台管理系统` 192 188 / `登录` 39 722 277 / `Index of /` 5 974 788 / `Welcome to nginx` 8 344 737）
+  → **默认 200 维持不变**（偏保守、宁缺勿滥）。
+  **顺带修掉一个"必然抛异常"的 Bug**：`_site_titles()` 对 `sqlite3.Row` 用了 `.get()`，
+  osint 阶段每次都抛 AttributeError 被容错吞掉（标题反查永远 0 条）。
+- [x] **全端口耗时校准**：本机回环 65535 端口，`workers=256/timeout=0.3` → **82 秒**；
+  **默认参数**（64/1.0）→ **>17 分钟**。据此新增 `portscan.full_workers`（256）/
+  `portscan.full_timeout`（0.5），**只在 full 模式生效**，GUI 策略页同步。
+- [x] **目录扫描阶段级测试**：`[5e](7)` 记录型 logger 真跑 dirscan，断言"2 条别名站被去重"；
+  另加 `[5e](9)` 断言 dirmap 产物按目标目录定位。
+- [x] **dirmap 5 处源码修复**（改本机外部副本，已留 `.bak-workbuddy-20260922` 备份）：
+  重复定义 / 死变量 / O(n²) 读回+并发丢写 / `skip_size` 比较恒假 / `ssl_context` 未挂载。
+  **实测收益：15349 条字典 588 秒 → 43 秒（约 13×）**。
+  **并明确"不内联"**：dirmap 是 **GPL-3.0**，拷进仓库会让整个仓库受 GPL 约束 →
+  只保留外部适配器，修复记录放 `tools/dirmap_fixes/README.md`（不含源码）。
+- [x] **适配器新坑修复**：dirmap 的 `saveResults()` 会与旧文件去重 → 重扫同目标不写新内容、
+  mtime 不变 → 上一轮的"按 mtime 过滤"会漏结果（实测跑了 37 秒解析 0 条）。
+  改为**按目标目录定位** `output/<netloc 把 : 换成 _>/`，复验 `dirmap 输出 4 条`。
+- [x] **决策① 清理开发期数据**：43 条任务（全是 smoke/test/cli 产物）逐条走 `db.delete_task()`
+  → **56 个 JSON 快照**在 `data/trash/`（可回溯）；僵尸 `running` 任务收尾为 `stopped`；
+  `logs/` 清理 41 个孤儿任务目录 + 7 个 `smoke-*`，只留 `cli_smoke_report.md`。
+- [x] **决策② 重启 GUI**：确认 5000 上跑的是旧代码（`/fullports` 404）→ 终止旧进程并用当前代码重启，
+  登录后 6 个页面逐页复验通过（`/fullports` `/dirs` `/extdomains` `/settings` `/subdomains` `/tasks`）。
+- [x] **新增约定（用户要求）**：改动一律标注实施者 —— `AGENTS.md` §9 写明"提交信息末行 `WorkBuddy · <模型名>`
+  + CHANGELOG 轮次标题下写实施者"，用于多会话并行时事后分辨归属。
+
 ## 兼容性红线（所有新增代码都适用）
 
 1. 路径用 `pathlib`；命令用列表参数 + `shell=False`；工具名不假设平台。

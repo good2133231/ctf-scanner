@@ -3,6 +3,85 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十六轮（收尾）：遗留项全清 + 两个决策落实 + dirmap 源码修复
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**（本轮起，改动一律在提交信息与本文档标注实施者，
+> 以便多会话并行时能分辨是谁改的 —— 见 `AGENTS.md` §9 的新约定）。
+
+### 0）先立规矩：改动必须标注实施者
+
+用户明确要求"每次修改就备注 WorkBuddy + 模型名"：`AGENTS.md` §9 新增该约定；
+本文件从本轮起在每个轮次标题下写明实施者；提交信息末行也带 `WorkBuddy · <模型>`。
+
+### 1）决策①：清理开发期数据（已执行，可回溯）
+
+- 库里 43 条任务**全部**是开发/测试产物（`smoke*` / `smoke-port` / `test` / `cli-task`），
+  第十二轮误删事故后已无真实扫描数据；其中 `#142` 卡在 `running`（进程早退，僵尸状态）→ 先收尾为 `stopped`。
+- 删除**逐条走 `db.delete_task()`**（内部先 `backup_task()`）：**56 个 JSON 快照**落在 `data/trash/`，
+  含任务行与全部资产，误删可据此找回。
+- `logs/` 一并清理：删除 41 个孤儿任务目录 + 7 个 `smoke-*` 测试目录，
+  只保留 `cli_smoke_report.md`（文档引用过）。现在 `logs/` 是干净的。
+
+### 2）决策②：重启 GUI（5000 上那份跑的是旧代码）
+
+- 实测旧进程：`/fullports` 返回 **404**、`/settings` 里没有 `portscan_mode` → 确认是旧代码。
+- 已终止旧进程（PID 4900）并用当前代码重启；**登录后逐页复验**：`/fullports`、`/dirs`、
+  `/extdomains`、`/settings`、`/subdomains`、`/tasks` **全部 200 且关键标记齐全**。
+- 以后自己重启：`py -3 run_gui.py`（端口占用时 `serve()` 会给出可操作提示）。
+
+### 3）FOFA 真实跑 + 修掉一个"必然抛异常"的 Bug
+
+- **真跑**（用户 key）：`title="维保中心"` → 15 条 → 阶段把它按 `osint:fofa-title` **真的入库了 6 个域名**；
+  `cert="example.com"` → **2 164 696 条** → 被 `is_common_cert` 拦下（阈值设计得到真实印证）。
+- **Bug**：`_site_titles()` 写成 `r.get("title")`，而 `db.list_sites()` 返回 `sqlite3.Row`（**没有 `.get()`**）
+  → 整个 osint 阶段每次都抛 `AttributeError`，被阶段级容错吞掉，表现是"标题反查永远 0 条、
+  日志只有一行阶段异常"。纯函数测试完全抓不到，**真跑一次才暴露**。已改为下标取值。
+- **阈值校准（真实数据）**：`维保中心` 15 条；`后台管理系统` 192 188 条；`登录` 39 722 277 条；
+  `Index of /` 5 974 788 条；`Welcome to nginx` 8 344 737 条。
+  → 具体标题是**十位数**、通用标题是**百万到千万级**，默认阈值 200 处在安全的一侧（偏保守，宁缺勿滥），维持 200。
+
+### 4）全端口扫描耗时校准（决策依据）+ 新增 full 专用并发/超时
+
+- 实测（本机回环，65535 端口）：`workers=256 / timeout=0.3` → **82 秒**；
+  而**默认参数** `workers=64 / timeout=1.0` → **超过 17 分钟**（关闭端口要等满超时；该次测量超时被中止）。
+- 结论落地：新增 `portscan.full_workers`（默认 **256**）与 `portscan.full_timeout`（默认 **0.5**），
+  **只在 `mode=full` 时生效**，不动 TOP 端口扫描的既有行为；GUI 策略页同步两个字段。
+- 另：`nmap_scan()` 的两个超时封顶（host ≤1800s / 进程 ≤3600s，上一轮已做），
+  阶段日志会打印耗时量级预估。
+
+### 5）dirmap 源码修复（5 处）+ 明确"不内联"
+
+- **dirmap 是 GPL-3.0**（`LICENSE` 首行即 GPLv3）→ **决定不把源码拷进本仓库**（否则整个仓库受 GPL 约束），
+  只保留外部适配器；修复记录与复现步骤写在 `tools/dirmap_fixes/README.md`（**不含 dirmap 源码**）。
+- 修复的 5 处（改的是本机那份外部副本，已留 `bruter.py.bak-workbuddy-20260922` 备份）：
+  ① `saveResults()` 重复定义（删失效的那份）；② 死变量 `error_count`；
+  ③ `saveResults()` 每次 `r+` 读回整个文件 → **O(n²) 且并发丢写** → 改追加写 + 进程内去重 + 锁；
+  ④ `size == conf.skip_size` 比较**恒假**（开关形同虚设）→ 新增 `_parse_size()` 按字节比；
+  ⑤ `ssl_context` 建了没挂到 session → 新增 `_LegacySSLAdapter` 注入连接池。
+- **修复③的实测收益：同一靶场、同一 15349 条字典，588 秒 → 43 秒（约 13×）**。
+
+### 6）适配器新坑：dirmap 的"内容去重"会让 mtime 过滤失效
+
+- 现象：dirmap 跑了 37 秒，适配器却解析出 **0 条**并回退内置扫描。
+- 根因：dirmap 的 `saveResults()` 会与文件里已有行去重 —— **重扫同一目标且结果不变时不写新内容**，
+  `res.txt` 的 mtime 保持旧值，而我们上一轮改成"只读本次运行写过的文件"，于是全被过滤掉。
+- 修法：改为**按目标定位** —— dirmap 用 `netloc`（`:` → `_`）当目录名，直接读
+  `output/<我们扫过的主机>/*.txt`，再按目标 netloc 过滤行；mtime 过滤只作兜底。
+- 复验：`[dirscan] dirmap 输出 4 条`（`.env` 66B / `.git/config` 151B / `.git/` 344B /
+  `#/pages/login/login` 130B，状态与大小解析全对），整轮 39 秒。
+
+### 7）测试补强（`[5e]` 再扩）
+
+- **osint 阶段级（桩）**：替换 `fofa.search_title/search_cert` 为桩函数，断言
+  `osint:fofa-title` / `osint:fofa-cert` **真的写进 `subdomains`** —— 这类"函数对、接线错"的错，
+  纯函数测试抓不到（上面那个 `sqlite3.Row` Bug 正是这一类）。
+- **dirmap 产物定位**：断言 `_target_dirs()` 只挑 `output/<host>_<port>/`，不误读别的目标目录。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py     # SMOKE PASS（[5e] 现为 10 组断言）
+```
+
 ## 2026-09-22 —— 第十五轮（补）：真实数据验证后的三个修复（FOFA 裸 IP / nmap 超时封顶 / 目录扫描阶段级测试）
 
 第十五轮提交后按"验证优先"补做了三件**真跑**，其中一件直接暴露了 Bug：

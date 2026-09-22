@@ -651,6 +651,60 @@ def main():
     assert scan_line and "2 站点" in scan_line[0], scan_line
     assert "3 站点" not in (scan_line[0] if scan_line else ""), scan_line
 
+    # (9) dirmap 产物定位：按目标 netloc 找 `output/<host>_<port>/`（重扫时 dirmap 会跟旧文件
+    #     去重、不写新内容，mtime 过滤会漏；实测"跑了 37 秒却解析 0 条"就是这个问题）
+    d_root = Path(_TMPDIR) / "dirmap_out"
+    (d_root / "127.0.0.1_8765").mkdir(parents=True, exist_ok=True)
+    (d_root / "other.test").mkdir(parents=True, exist_ok=True)
+    (d_root / "127.0.0.1_8765" / "res.txt").write_text(
+        "[200][text/html][1.00kb] http://127.0.0.1:8765/admin\n", encoding="utf-8")
+    (d_root / "other.test" / "res.txt").write_text(
+        "[200][text/html][3.00kb] http://other.test/x\n", encoding="utf-8")
+    picked = DirscanStage._target_dirs(d_root, {"127.0.0.1:8765"})
+    assert [d.name for d in picked] == ["127.0.0.1_8765"], picked
+    assert DirscanStage._target_dirs(d_root, {"nope.test"}) == []
+
+    # (8) osint 阶段级：把 FOFA 查询换成桩（离线、不触网），验证标题/证书反查**真的把结果入库**。
+    #     这一层必须测：曾经 `_site_titles()` 把 `sqlite3.Row` 当 dict 用（`r.get("title")`），
+    #     整个 osint 阶段每次都抛 AttributeError 被阶段级容错吞掉 —— 表现是"标题反查永远 0 条"，
+    #     而纯函数测试完全看不出来（真实跑一次才发现）。
+    from scanner.stages import osint as osint_stage
+    os_calls = []
+
+    def _stub_title(title, settings, logger=None, size=None):
+        os_calls.append(("title", title))
+        return ([{"host": "https://x.test", "domain": "x.test", "ip": "1.2.3.4",
+                  "port": "443", "title": title}], 15, "")
+
+    def _stub_cert(domain, settings, logger=None, size=None):
+        os_calls.append(("cert", domain))
+        return ([{"host": "https://y.test", "domain": "y.test", "ip": "1.2.3.5",
+                  "port": "443", "title": ""}], 20, "")
+
+    _orig_title, _orig_cert = osint_stage.fofa_mod.search_title, osint_stage.fofa_mod.search_cert
+    osint_stage.fofa_mod.search_title, osint_stage.fofa_mod.search_cert = _stub_title, _stub_cert
+    try:
+        os_settings = copy.deepcopy(settings)
+        os_settings["iprecon"]["enabled"] = False
+        os_settings["fofa"].update({"enabled": True, "cert_enabled": True,
+                                    "title_enabled": True, "max_title_queries": 2,
+                                    "max_cert_queries": 2})
+        os_settings["keys"] = {"fofa": {"email": "stub@example.test", "key": "stub"}}
+        os_tid = db.create_task("smoke-osint", targets, ["osint"], {"offline": True})
+        db.insert_sites(os_tid, [{"url": targets, "host": "127.0.0.1", "port": "80",
+                                  "status": 200, "title": "维保中心", "length": 100,
+                                  "source": "builtin"}])
+        db.insert_subdomains(os_tid, [("www.example.test", "subfinder")])  # 给证书反查一个注册域
+        run_task(os_tid, "smoke-osint", targets, ["osint"], {"offline": True}, os_settings)
+        got = {(r["domain"], r["source"]) for r in db.list_subdomains(os_tid)}
+        assert ("x.test", "osint:fofa-title") in got, got
+        assert ("y.test", "osint:fofa-cert") in got, got
+        assert ("title", "维保中心") in os_calls, os_calls
+        assert ("cert", "example.test") in os_calls, os_calls
+    finally:
+        osint_stage.fofa_mod.search_title = _orig_title
+        osint_stage.fofa_mod.search_cert = _orig_cert
+
     # (6) 全端口扫描：新侧栏页 + 发起接口（run_task 用桩，真跑会去连 6.5 万个端口）
     fp_html = c.get("/fullports").get_data(as_text=True)
     assert 'href="/fullports"' in fp_html and "发起全端口扫描" in fp_html

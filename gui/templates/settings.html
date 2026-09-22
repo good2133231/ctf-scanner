@@ -120,6 +120,10 @@
         <option value="full" {{ 'selected' if s.portscan.mode == 'full' }}>全端口 1-65535（慢，分钟级）</option>
       </select></label>
     <label>全端口时的端口区间 <input name="portscan_full_ports" value="{{ s.portscan.full_ports }}"></label>
+    <label>全端口专用并发数 <input name="portscan_full_workers" value="{{ s.portscan.full_workers }}"></label>
+    <label>全端口专用单端口超时（秒） <input name="portscan_full_timeout" value="{{ s.portscan.full_timeout }}"></label>
+    <label>全端口专用并发数 <input name="portscan_full_workers" value="{{ s.portscan.full_workers }}"></label>
+    <label>全端口专用单端口超时（秒） <input name="portscan_full_timeout" value="{{ s.portscan.full_timeout }}"></label>
     <label class="chk"><input type="checkbox" name="portscan_exclude_scanned" value="1"
       {{ 'checked' if s.portscan.exclude_scanned }}> 跳过本任务已扫过的端口（全端口扫描时尤其省时间）</label>
     <p class="muted small">只想对个别 IP 补一次全端口，不必改这里的全局开关：去「全端口扫描」页勾选主机

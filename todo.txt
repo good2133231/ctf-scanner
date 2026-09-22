@@ -389,3 +389,63 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [待办] dirmap 若将来要内联进仓库，先修它自身那几个问题（见上）
 [待办] P2-3 Linux 实机验证（仍按你的指示挂起）
 [待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md）
+
+-----
+（第十六轮：遗留全清 + 两个决策落实）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+[完成] FOFA 真实联网首跑 + 阈值校准：title「维保中心」15 条并真的入库 6 个域名；
+       cert「example.com」2 164 696 条被阈值拦下。校准样本：具体标题十位数、通用标题百万~千万级
+       （后台管理系统 192188 / 登录 39722277 / Index of / 5974788 / Welcome to nginx 8344737）
+       → 默认阈值 200 维持不变。**顺带修掉真 Bug**：osint 的 _site_titles() 对 sqlite3.Row 用了
+       .get() → 阶段每次都抛 AttributeError 被容错吞掉，标题反查永远 0 条（真跑才暴露）
+[完成] 全端口耗时校准：本机回环 65535 端口 workers=256/timeout=0.3 → 82 秒；默认参数(64/1.0) → >17 分钟。
+       据此新增 portscan.full_workers(256)/full_timeout(0.5)，只在 full 模式生效（GUI 策略页同步）
+[完成] 目录扫描阶段级测试：[5e](7) 记录型 logger 真跑 dirscan 断言"2 条别名站被去重"；
+       另 [5e](9) 断言 dirmap 产物按目标目录定位
+[完成] dirmap 5 处源码修复（改本机外部副本，备份 bruter.py.bak-workbuddy-20260922）：
+       ① 删失效的重复 saveResults；② 删死变量 error_count；③ saveResults 改追加写+进程内去重+锁
+       （实测 15349 条字典 588 秒 → 43 秒，约 13×，原先 O(n²) 读回 + 并发丢写）；
+       ④ skip_size 改按字节比较（原比较恒假、开关形同虚设）；⑤ ssl_context 真正挂到 session
+       **并明确不内联**：dirmap 是 GPL-3.0，拷进仓库会让整个仓库受 GPL 约束 → 只保留外部适配器，
+       修复记录在 tools/dirmap_fixes/README.md（不含源码）
+[完成] 适配器新坑：dirmap 的 saveResults 会与旧文件去重 → 重扫同目标不写新内容、mtime 不变，
+       上一轮的"按 mtime 过滤"会漏结果（实测跑 37 秒解析 0 条）→ 改为按目标目录定位
+       output/<netloc 把 : 换成 _>/，复验「dirmap 输出 4 条」
+[完成] 决策① 数据清理：43 条任务（全是 smoke/test/cli 产物）逐条 db.delete_task() → 56 个 JSON
+       快照在 data/trash/（可回溯）；僵尸 running 任务收尾；logs/ 清 41 个孤儿任务目录 + 7 个 smoke-*
+[完成] 决策② GUI 重启：确认 5000 上跑的是旧代码（/fullports 404）→ 终止旧进程并用当前代码重启，
+       登录后 6 个页面逐页复验通过
+[完成] 新增约定（你要求）：改动一律标注实施者 —— AGENTS.md §9 写明"提交信息末行 WorkBuddy · <模型名>
+       + CHANGELOG 轮次标题下写实施者"，用于多会话并行时事后分辨归属
+
+[待办] P2-3 Linux 实机验证（仍按你的指示挂起）
+[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md）
+
+-----
+（第十六轮：遗留全清 + 两个决策落实）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+[完成] FOFA 真实联网首跑 + 阈值校准：title「维保中心」15 条并真的入库 6 个域名；
+       cert「example.com」2 164 696 条被阈值拦下。校准样本：具体标题十位数、通用标题百万~千万级
+       （后台管理系统 192188 / 登录 39722277 / Index of / 5974788 / Welcome to nginx 8344737）
+       → 默认阈值 200 维持不变。**顺带修掉真 Bug**：osint 的 _site_titles() 对 sqlite3.Row 用了
+       .get() → 阶段每次都抛 AttributeError 被容错吞掉，标题反查永远 0 条（真跑才暴露）
+[完成] 全端口耗时校准：本机回环 65535 端口 workers=256/timeout=0.3 → 82 秒；默认参数(64/1.0) → >17 分钟。
+       据此新增 portscan.full_workers(256)/full_timeout(0.5)，只在 full 模式生效（GUI 策略页同步）
+[完成] 目录扫描阶段级测试：[5e](7) 记录型 logger 真跑 dirscan 断言"2 条别名站被去重"；
+       另 [5e](9) 断言 dirmap 产物按目标目录定位
+[完成] dirmap 5 处源码修复（改本机外部副本，备份 bruter.py.bak-workbuddy-20260922）：
+       ① 删失效的重复 saveResults；② 删死变量 error_count；③ saveResults 改追加写+进程内去重+锁
+       （实测 15349 条字典 588 秒 → 43 秒，约 13×，原先 O(n²) 读回 + 并发丢写）；
+       ④ skip_size 改按字节比较（原比较恒假、开关形同虚设）；⑤ ssl_context 真正挂到 session
+       **并明确不内联**：dirmap 是 GPL-3.0，拷进仓库会让整个仓库受 GPL 约束 → 只保留外部适配器，
+       修复记录在 tools/dirmap_fixes/README.md（不含源码）
+[完成] 适配器新坑：dirmap 的 saveResults 会与旧文件去重 → 重扫同目标不写新内容、mtime 不变，
+       上一轮的"按 mtime 过滤"会漏结果（实测跑 37 秒解析 0 条）→ 改为按目标目录定位
+       output/<netloc 把 : 换成 _>/，复验「dirmap 输出 4 条」
+[完成] 决策① 数据清理：43 条任务（全是 smoke/test/cli 产物）逐条 db.delete_task() → 56 个 JSON
+       快照在 data/trash/（可回溯）；僵尸 running 任务收尾；logs/ 清 41 个孤儿任务目录 + 7 个 smoke-*
+[完成] 决策② GUI 重启：确认 5000 上跑的是旧代码（/fullports 404）→ 终止旧进程并用当前代码重启，
+       登录后 6 个页面逐页复验通过
+[完成] 新增约定（你要求）：改动一律标注实施者 —— AGENTS.md §9 写明"提交信息末行 WorkBuddy · <模型名>
+       + CHANGELOG 轮次标题下写实施者"，用于多会话并行时事后分辨归属
+
+[待办] P2-3 Linux 实机验证（仍按你的指示挂起）
+[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md）

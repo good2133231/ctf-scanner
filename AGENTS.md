@@ -172,56 +172,23 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - `owasp` 字段**格式是统一的**（`A01` 大写）：POC 引擎在 `engine.py` 里把 tag 的 `owasp-a01`
   规整为 `A01` 再入库，内置检查本身写 `A01`。*（本文件此前写的"POC 命中写 `owasp-a01`"与代码不符，
   已按代码更正 —— 见 `TODO.md` P1-3。）*
-- **dirmap 适配的三个实测坑**（第十五轮已修，改之前请先读 `stages/dirscan.py::_run_dirmap`）:
+- **dirmap 适配的三个实测坑**（改之前先读 `stages/dirscan.py::_run_dirmap`）：
   ① 产物在 `output/<域名>/` **子目录**里（`res.txt` / `403.txt` / `404.txt` / `重复长度.txt`），
-  不是早年的 `output/<域名>.txt`；② `output/` 是**持久目录**，必须按启动时间过滤本次产物，
-  否则会读到上次运行的残留；③ 结果行是 `[状态码][content-type][大小] URL`（大小形如 `1.23kb`），
+  不是早年的 `output/<域名>.txt`；② `output/` 是**持久目录**；
+  ③ **只按 mtime 过滤会漏结果** —— dirmap 的 `saveResults()` 会与文件已有行去重，
+  重扫同一目标且结果不变时**它不写新内容**、文件 mtime 保持旧值（实测「跑了 37 秒却解析 0 条」）。
+  **最终方案：按目标定位** `output/<netloc 把 : 换成 _>/*.txt`，再按目标 netloc 过滤行，
+  mtime 过滤只作兜底。结果行格式是 `[状态码][content-type][大小] URL`（大小形如 `1.23kb`），
   我们只读 `res.txt` / `403.txt`（`重复长度.txt` 按用户要求默认不展示）。
-- **dirmap 自身代码的问题（已审查、未改第三方代码）**：`saveResults()` 定义了两遍（前一个失效）、
-  `response_storage`/`error_count` 是全局量、`saveResults` 每次全文件 `r+` 读取再追加
-  （1.5 万条结果时 O(n²)，gevent 并发下还会丢写）、`conf.skip_size` 与 `intToSize()` 的字符串
-  比较永远不相等、`ssl_context` 建了却没挂到 session。**若将来要内联 dirmap，这几处必须先修**。
-- `config/dicts/sensitive.txt` 已存在但**未被读取**：内置敏感文件检查用 checks.py 里的硬编码清单。
-- `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
-  （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
-- GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
-  takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十五段（dirscan 段含 big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned）（含按级别 / 按 OWASP 分类 /
-  按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
-  于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭）；
-  外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
-  fofa 的 email/key 要手改 `config/keys.yaml`（控制台只读、不写回凭据）。
-- `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。
-- **任务详情为 8 个页签**（潜在漏洞(默认)/站点/子域名/端口服务/C 段/目录/目标与配置/运行日志）：参考 ARL 界面的
-  IP/SSL证书/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源
-  还不存在（分别依赖证书解析、爬虫数据模型等）。理由与依赖关系见 `TODO.md` B-7。
-- **`osint` 的联网往返无法离线自测**：`tests/smoke.py` 只断言了 `iprecon`/`fofa`/`mmh3` 的纯函数、
-  黑 ico 阈值边界与"两个子开关都关则无产出"的门控；`api.webscan.cc` 与 FOFA 的真实响应结构
-  需要联网（FOFA 还需 key）才能验证 —— 首次实跑请打开开关并观察 `logs/task_*/task.log` 的 `[osint]` 行。
-- `osint` 的阈值都是**保守估计值、未经真实数据校准**：黑 ico 阈值 200、通用证书阈值 200
-  （`fofa.cert_threshold`）、单 IP 域名数 30（判共享主机）。都可在「策略配置 → 外部情报拓展」调整，
-  不需要改代码。证书反查的"通用证书"判定尤其粗：**只按命中总数比阈值**，不做证书主体/颁发者分析。
-- **黑名单的语义边界**：过滤发生在**入库前**，所以它**不影响已入库的历史资产**（老任务里的域名照旧可见），
-  也不会因为后来把某域名加入黑名单就把既有行删掉。文件是纯文本、每次调用重读（改完立即生效，无需重启）。
-- **重叠隐藏是"显示层"判据，不是删除**：`OVERLAP_EXT_WHERE`（拓展域名域名级全局）与
-  `OVERLAP_SITE_WHERE`（站点 URL 级跨任务，保留 `MIN(id)` 最早一条）只作用于 `/extdomains`、`/sites`
-  两个列表页，`?all=1` 可放开；任务详情页签与报告仍显示全量。因此"站点页条数比任务详情少"是预期行为。
-- 任务已支持**停止（协作式取消）/删除/重启/导出 + 批量操作**；停止粒度是"当前批次跑完即停"，
-  不会强杀正在飞行的 HTTP 请求，任务终态记为 `stopped`（区别于 `failed`）。
-- **改完 GUI 必须重启服务**：若 5000 已被旧进程占用，新起的 `run_gui.py`（经 `gui/app.py serve()`）
-  会打印端口占用提示并以退出码 1 结束——按提示结束占用进程或改 `gui.port` 再试；
-  请求还是打到旧进程（新路由 404）——很容易误判成"代码没生效"，先确认端口占用再排查。
-  **实测代价**：曾有一个旧 GUI 进程（PID 18360，2026-09-21 14:09 启动）被点名却一直没人杀，
-  连续两天占着 5000；服务端 `debug=False` 既不重载代码也不重载 Jinja 模板，于是"代码明明改了、
-  页面却是 5 栏旧导航 + 还写着'疑似问题'"。**排查任何"页面不对"之前，先看进程启动时间**：
-  `Get-CimInstance Win32_Process -Filter "Name like '%python%'" | Select ProcessId,CreationDate`。
-- **不要让子代理/自动化去点 GUI 的写操作按钮**：批量停止/重启/删除、新建任务都是真写库。
-  本轮实测教训：一个被要求"只观察"的浏览器子代理点了「批量删除」并**把 `confirm()` 确认框也确认了**，
-  硬删掉 63 条历史任务行；紧接着又提交了「新建扫描任务」表单，对一个**外部真实域名**跑了全 8 阶段扫描。
-  派浏览器代理时必须在提示里明确写"只读浏览，禁止点击任何提交/删除类按钮"，并**限制其可操作页面**。
+- **dirmap 是 GPL-3.0，刻意不内联**（把源码拷进仓库会让整个仓库受 GPL 约束）：
+  只保留 `tools/dirmap/` 目录联接 + 外部适配器；对它的 5 处源码修复记录在
+  `tools/dirmap_fixes/README.md`（**该目录不含 dirmap 源码**）。
 - **`dirscan` 默认改为关闭**（第十五轮，用户要求）：它是全流水线里请求量最大的一段
   （大字典 15333 条 × 站点数）。打开后仍有两层节流：只扫**不重复站点**（同任务内标题+长度相同的
   别名站跳过）、单站点最多 `dirscan.max_paths`（默认 400）条。
-- **全端口扫描（1-65535）实测**（2026-09-22，本机回环，`workers=256`/`timeout=0.3`）：**82 秒**；
+- **全端口扫描（1-65535）实测**（2026-09-22，本机回环）：`workers=256`/`timeout=0.3` → **82 秒**；
+  **默认参数** `workers=64`/`timeout=1.0` → **超过 17 分钟**（关闭端口要等满超时）。
+  因此新增 `portscan.full_workers`（默认 256）/ `portscan.full_timeout`（默认 0.5），**只在 full 模式生效**；
   远端目标按默认 `workers=64`/`timeout=1.0` 会慢一个量级（关闭端口要等满超时），
   阶段日志会打印耗时量级预估，调大 `workers`、调小 `timeout` 可显著缩短。
   `nmap_scan()` 的两个超时已封顶（host ≤1800s / 进程 ≤3600s），否则全端口会算出 4.5~36 小时。
@@ -259,6 +226,10 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   含 A 采纳 / B 批判不采纳（8 条带理由）/ C 保留与间接处理标注——动手前先读，**避免重复调研或照搬有害设计**。
 - 跨平台（Linux + Windows）是硬要求：路径用 `pathlib`、命令用列表 argv + `shell=False`、
   解释器用 `utils.pick_python`、文件读写显式 `encoding="utf-8"`、工具探测用 `shutil.which`。
+- **改动必须标注实施者**（用户 2026-09-22 明确要求）：提交信息末行写 `WorkBuddy · <模型名>`，
+  并在 `CHANGELOG_AI.md` 的轮次标题下写明实施者。**背景**：本项目出现过两个 AI 会话同时改同一批文件
+  （文档被反复覆盖），标注实施者是事后分辨「谁改了什么」的唯一可靠线索。
+  例：`WorkBuddy · DeepSeek-V4.1-Flash`。
 - 每次改完代码的标准动作：跑 `tests/smoke.py` → 更新 `CHANGELOG_AI.md`（最新在最上面）
   → 必要时同步本文件与 `docs/` → **git 提交**
   （`C:\Users\材料\MinGit\cmd\git.exe add -A && ... commit -m "<轮次>: <一句话>"`）。

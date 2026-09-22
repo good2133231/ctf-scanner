@@ -16,6 +16,7 @@ import hashlib
 import random
 import re
 import time
+from urllib.parse import urlparse
 
 from .base import Stage
 from .. import db
@@ -128,10 +129,16 @@ class DirscanStage(Stage):
         """调用 dirmap 并解析产出。
 
         两个坑（都是实测踩过的）：
+        三个坑（都是实测踩出来的）：
         - dirmap 把结果写进 `output/<域名>/` **子目录**（`res.txt` / `403.txt` / `404.txt` /
-          `重复长度.txt` …），不再是早年的 `output/<域名>.txt`，所以必须递归找文件；
-        - `output/` 是**持久目录**，直接"取最新 N 个文件"会读到上一次运行的残留 ——
-          这里记录启动时间，只解析**本次运行之后**被写过的文件。
+          `重复长度.txt` …），不再是早年的 `output/<域名>.txt`，所以要按目录找文件；
+        - `output/` 是**持久目录**，直接"取最新 N 个文件"会读到上一次运行的残留；
+        - 但**只按 mtime 过滤也不对**：dirmap 的 `saveResults()` 会跟文件里已有的行去重，
+          所以"重扫同一个目标、结果和上次一样"时它**根本不写新内容**，文件 mtime 保持旧值 ——
+          实测表现为"dirmap 跑了 37 秒却解析出 0 条、白白回退内置扫描"。
+        因此这里改成**按目标定位**：dirmap 用 `netloc`（`:` 换成 `_`）当目录名，我们直接读
+        `output/<我们扫过的主机>/*.txt`；再用 mtime 过滤兜底（目录命名变了也不会全丢），
+        最后才回退内置扫描。
         """
         ctx = self.ctx
         in_file = write_lines(ctx.workdir / "dirmap_in.txt", urls)
@@ -142,10 +149,32 @@ class DirscanStage(Stage):
         rc, out, err = run_cmd(argv, cwd=script.parent, timeout=7200)
         if rc != 0 and err.strip():
             ctx.logger.info(f"[dirscan] dirmap rc={rc}：{err.strip()[:150]}")
+
+        out_dir = script.parent / "output"
+        targets = {urlparse(u).netloc for u in urls if urlparse(u).netloc}
         rows = []
-        for f in self._outputs_since(script.parent / "output", started):
-            rows.extend(self._parse_output(f))
+        for d in self._target_dirs(out_dir, targets):
+            for f in sorted(d.glob("*.txt")):
+                rows.extend(self._parse_output(f))
+        if not rows:      # 兜底：目录命名/层级变了，退回"本次运行写过的文件"
+            for f in self._outputs_since(out_dir, started):
+                rows.extend(self._parse_output(f))
+        # 只保留确实属于我们扫过的主机的行（防读到别人的历史产物）
+        if targets:
+            rows = [r for r in rows if urlparse(r.get("path") or "").netloc in targets]
         return rows
+
+    @staticmethod
+    def _target_dirs(out_dir, targets):
+        """dirmap 的产物目录名 = 目标 netloc 把 `:` 换成 `_`（如 `127.0.0.1_8765`）。"""
+        if not out_dir.is_dir():
+            return []
+        found = []
+        for netloc in targets:
+            d = out_dir / netloc.replace(":", "_")
+            if d.is_dir():
+                found.append(d)
+        return found
 
     @staticmethod
     def _outputs_since(out_dir, started, limit=200):

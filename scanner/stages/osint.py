@@ -301,8 +301,12 @@ class OsintStage(Stage):
         """
         ctx = self.ctx
         titles = []
+        # 注意：`db.list_sites()` 返回的是 `sqlite3.Row`，**没有 `.get()`**。
+        # 这里曾写成 `r.get("title")`，于是整个 osint 阶段每次都在这里抛 AttributeError
+        # 被阶段级容错吞掉 —— 表现是"标题反查永远 0 条、日志只有一行阶段异常"。
+        # 真实跑一次（2026-09-22）才暴露出来，故此处与全文件统一用下标取值。
         for r in db.list_sites(ctx.task_id):
-            t = (r.get("title") or "").strip()
+            t = (r["title"] or "").strip()
             if len(t) < 4 or fofa_mod.is_generic_title(t):
                 continue
             titles.append(t)

@@ -676,6 +676,12 @@ def create_app():
                                  # 全端口：top（内置 TOP 表）/ full（1-65535）
                                  "mode": "full" if f.get("portscan_mode") == "full" else "top",
                                  "full_ports": (f.get("portscan_full_ports") or "1-65535").strip(),
+                                 # 全端口专用并发/超时（只在 full 模式生效）
+                                 "full_workers": int(f.get("portscan_full_workers", 256) or 256),
+                                 "full_timeout": float(f.get("portscan_full_timeout", 0.5) or 0.5),
+                                 # 全端口专用并发/超时（只在 full 模式生效）
+                                 "full_workers": int(f.get("portscan_full_workers", 256) or 256),
+                                 "full_timeout": float(f.get("portscan_full_timeout", 0.5) or 0.5),
                                  "exclude_scanned": f.get("portscan_exclude_scanned") == "1",
                                  "timeout": float(f.get("portscan_timeout", 1) or 1),
                                  "workers": int(f.get("portscan_workers", 64) or 64),

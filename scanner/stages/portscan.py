@@ -71,6 +71,13 @@ class PortscanStage(Stage):
 
         workers = int(cfg.get("workers", 64))
         timeout = float(cfg.get("timeout", 1.0))
+        if full:
+            # 全端口用**另一组**并发/超时：默认的 64 并发 × 1.0s 超时下，关闭端口要等满超时，
+            # 65535 端口的最坏耗时是分钟级往上一大截（实测本机回环都超过 17 分钟；
+            # 换成 256 并发 × 0.3s 只要 82 秒）。这两个键只在 full 模式下生效，
+            # 不影响 TOP 端口扫描的既有行为。
+            workers = int(cfg.get("full_workers") or 256)
+            timeout = float(cfg.get("full_timeout") or 0.5)
         banner = cfg.get("banner", True) is not False
         nmap_bin = which((ctx.settings.get("tools", {}) or {}).get("nmap", "nmap"))
         engine = "nmap" if nmap_bin else "内置 TCP connect"
