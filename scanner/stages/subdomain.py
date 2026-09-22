@@ -218,7 +218,8 @@ class SubdomainStage(Stage):
             # `resolve_detail` 比 `cname_chain` 多返回一个**失败原因码**：
             # 页面上只显示一个 '-' 时，用户无从知道是"域名不存在"还是"解析超时"
             # 还是"被 max_resolve 上限挡掉了"（用户 2026-09-22 明确要求标出原因）。
-            chain, ips, reason = dnsq.resolve_detail(host, timeout=timeout)
+            chain, ips, reason = dnsq.resolve_detail(host, timeout=timeout,
+                                                     settings=ctx.settings)
             return host, ",".join(ips), cdn.match(chain, ctx.settings), reason
 
         mapping = {}

@@ -9,7 +9,7 @@ CNAME 解析本身就是资产数据，越早回填，后续阶段在日志/报�
 - 漏洞：疑似接管项直接 `db.insert_vuln()`，并放入 `ctx.results["takeovers"]`；
 - 中间产物：工作目录 `cnames.txt`。
 
-配置（`takeover` 段）：`enabled`（默认关，策略配置可打开）/ `max_hosts`（默认 300）/
+配置（`takeover` 段）：`enabled`（默认开，策略配置可关闭）/ `max_hosts`（默认 300）/
 `http_check`（默认 True）。检测逻辑见 `scanner/takeover.py`，DNS 客户端见 `scanner/dnsq.py`。
 """
 from .base import Stage
@@ -56,7 +56,8 @@ class TakeoverStage(Stage):
         def _chain(host):
             if ctx.stopped():
                 return None
-            chain, _ips = dnsq.cname_chain(host, timeout=dns_timeout)
+            chain, _ips = dnsq.cname_chain(host, timeout=dns_timeout,
+                                           settings=ctx.settings)
             return (host, chain) if chain else None
 
         pairs = pool_run(_chain, hosts, workers=workers)

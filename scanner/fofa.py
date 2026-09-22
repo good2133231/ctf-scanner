@@ -78,14 +78,24 @@ def build_query(icon_hash):
     return f'icon_hash="{int(icon_hash)}"'
 
 
+def _quote_value(raw):
+    """把值塞进 FOFA 的 `key="value"` 查询串：清掉引号与反斜杠。
+
+    域名/标题都来自扫描结果（外部输入），值里的 `"` 会提前闭合查询串、
+    `\\` 会把闭合引号转义掉，两种情况都会构造出错误甚至非预期的查询。
+    （此前只有标题做了去引号，域名和反斜杠都没处理。）
+    """
+    return str(raw or "").strip().replace("\\", "").replace('"', "")
+
+
 def build_cert_query(domain):
     """构造证书查询语句：`cert="example.com"` —— 找与该域名共用同一张 TLS 证书的其它资产。"""
-    return f'cert="{str(domain or "").strip().strip(".")}"'
+    return f'cert="{_quote_value(str(domain or "").strip().strip("."))}"'
 
 
 def build_title_query(title):
     """构造标题查询语句：`title="xxx"` —— 找与该站点**标题相同**的其它资产。"""
-    return 'title="{}"'.format(str(title or "").strip().replace('"', ""))
+    return f'title="{_quote_value(title)}"'
 
 
 def title_threshold(settings):

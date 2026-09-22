@@ -280,7 +280,7 @@ def pool_run(fn, items, workers=10):
                 r = fut.result()
             except Exception:
                 r = None
-            if r:
+            if r is not None:   # 只丢"无结果"（None）；falsy 但有效的结果（0/""/[]）不该被吞
                 results.append(r)
     return results
 

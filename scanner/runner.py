@@ -1,7 +1,8 @@
 """流水线编排：按顺序执行 Stage，统一更新任务状态与进度。
 
-阶段顺序：subdomain -> takeover -> portscan -> probe -> osint -> jsmine -> dirscan -> vulnscan
-（takeover / jsmine 默认开，portscan / osint 默认关，均可在「策略配置」按分类开关）
+阶段顺序：subdomain -> takeover -> portscan -> probe -> screenshot -> osint -> jsmine -> dirscan -> vulnscan
+（默认开：takeover / jsmine / vulnscan；默认关：portscan / screenshot / osint / dirscan，
+ 均可在「策略配置」按分类开关；subdomain 无开关，由任务勾选的 stages 决定）
 单个阶段异常不中断整条流水线（保留已完成阶段的产物），错误记录进任务表。
 
 停止机制（协作式取消）：

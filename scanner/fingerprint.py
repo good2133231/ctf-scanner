@@ -187,7 +187,9 @@ def fetch_favicon(base_url, settings=None, timeout=None):
         return b""
     # 图标是二进制；若服务端把 HTML 错误页当 favicon 返回，长度特征会明显不同，
     # 这里用一句廉价判断排掉最常见的"HTML 404 页"（避免不同站点共享同一个假指纹）
-    if content[:6].lstrip().lower().startswith((b"<!doctype", b"<html")):
+    # 取够长度再判：`content[:6]` 只有 6 字节，永远匹配不上 9 字节的 `<!doctype`
+    # （`<html` 能匹配），等于该分支只挡了一半。取 64 字节足够覆盖 BOM/前导空白 + 声明。
+    if content[:64].lstrip().lower().startswith((b"<!doctype", b"<html")):
         return b""
     return content
 

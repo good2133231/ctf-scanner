@@ -38,8 +38,10 @@ _MAX_DEPTH = 8        # CNAME 链最大跳数（防环）
 _UDP_BUF = 4096       # 单次 UDP 读取上限，超过会被 TC 截断并触发 TCP 重取
 _TTL_WAIT = 3         # 默认超时
 
-# 解析器列表缓存 + 轮询下标：一次任务里会有成百上千次查询，不能每次都读文件 / 只用一台 DNS
-_CACHE = {"list": None}
+# 解析器列表缓存 + 轮询下标：一次任务里会有成百上千次查询，不能每次都读文件 / 只用一台 DNS。
+# 缓存键是 resolvers 文件路径 —— `dicts.resolvers` 可配置，不同 settings 可能指向不同文件，
+# 只缓存一份会把"当前配置"错当成"全部配置"。
+_CACHE = {}
 _ROTATE = {"i": 0}
 _LOCK = threading.Lock()
 
@@ -81,21 +83,27 @@ def resolvers(settings=None):
     return out or list(DEFAULT_RESOLVERS)
 
 
-def _default_resolvers():
-    """缓存的默认解析器列表（cname_chain 无 settings 参数时用）。"""
+def _default_resolvers(settings=None):
+    """按 resolvers **文件路径**缓存的解析器列表。
+
+    此前只缓存 `resolvers(None)` 一份，导致调用方传入的 `dicts.resolvers` 覆盖被无视
+    （始终用默认路径那份）；现在把 settings 透传进来，缓存键换成解析后的路径，
+    既尊重配置、又不至于让热路径每个域名都去读一次文件。
+    """
+    dicts = (settings or {}).get("dicts") if isinstance(settings, dict) else None
+    path = str(resolve((dicts or {}).get("resolvers") or DEFAULTS["dicts"]["resolvers"]))
     with _LOCK:
-        cached = _CACHE.get("list")
-    if cached:
-        return cached
-    lst = resolvers(None)
+        if path in _CACHE:
+            return _CACHE[path]
+    lst = resolvers(settings)
     with _LOCK:
-        _CACHE["list"] = lst
+        _CACHE[path] = lst
     return lst
 
 
-def _pick_resolvers(n=1):
+def _pick_resolvers(n=1, settings=None):
     """轮询挑出 n 台解析器：避免所有查询都压在同一台 DNS 上被限流。"""
-    lst = _default_resolvers()
+    lst = _default_resolvers(settings)
     if not lst:
         return []
     n = max(1, min(int(n), len(lst)))
@@ -234,11 +242,11 @@ def _tcp_exchange(packet, resolver, timeout):
         return _recv_exact(s, n)
 
 
-def _exchange(name, qtype, timeout=_TTL_WAIT, resolver=None):
+def _exchange(name, qtype, timeout=_TTL_WAIT, resolver=None, settings=None):
     """一次问答，返回 (records, rcode, tc)。UDP 失败/ID 不符会换一台 DNS 重试。"""
     tid = random.randint(0, 0xFFFF)
     packet = _build_query(name, qtype, tid)
-    servers = [resolver] if resolver else _pick_resolvers(2)
+    servers = [resolver] if resolver else _pick_resolvers(2, settings)
     for srv in servers:
         if not srv or not _is_ip(srv):
             continue
@@ -266,7 +274,7 @@ def _exchange(name, qtype, timeout=_TTL_WAIT, resolver=None):
 
 # ---------- 对外接口 ----------
 
-def query(name, qtype="A", timeout=3, resolver=None):
+def query(name, qtype="A", timeout=3, resolver=None, settings=None):
     """查询单个名称，返回**指定类型**的 rdata 字符串列表（失败返回 []）。
 
     qtype 支持 "A" / "CNAME" / "AAAA" / "TXT" / "MX" / "NS" / "SOA" / "PTR"；
@@ -278,13 +286,13 @@ def query(name, qtype="A", timeout=3, resolver=None):
         if not qnum or not host:
             return []
         records, _rcode, _tc = _exchange(host, qnum, timeout=timeout or _TTL_WAIT,
-                                         resolver=resolver)
+                                         resolver=resolver, settings=settings)
         return [text for _owner, rtype, text in records if rtype == qnum and text]
     except Exception:
         return []
 
 
-def resolve_detail(name, timeout=3, resolver=None):
+def resolve_detail(name, timeout=3, resolver=None, settings=None):
     """解析 A/CNAME 并给出**失败原因** —— 供 GUI 解释"这个域名为什么没有 IP"。
 
     返回 `(chain, ips, reason)`：`reason` 为空串表示解析成功。取值：
@@ -303,7 +311,7 @@ def resolve_detail(name, timeout=3, resolver=None):
         rcode, got_records = 0, False
         for _ in range(_MAX_DEPTH):
             records, rcode, _tc = _exchange(current, _A, timeout=timeout or _TTL_WAIT,
-                                            resolver=resolver)
+                                            resolver=resolver, settings=settings)
             if records:
                 got_records = True
             for owner, rtype, text in records:
@@ -337,7 +345,7 @@ def resolve_detail(name, timeout=3, resolver=None):
         return [], [], "error"
 
 
-def cname_chain(name, timeout=3, resolver=None):
+def cname_chain(name, timeout=3, resolver=None, settings=None):
     """返回 (cname_chain, ips)。
 
     chain 是 CNAME 链，**不含原始名字**（如 a.x.com → b.cdn.net 时 chain=('b.cdn.net',)）；
@@ -351,7 +359,7 @@ def cname_chain(name, timeout=3, resolver=None):
         chain, ips, seen, cmap = [], [], {current.lower()}, {}
         for _ in range(_MAX_DEPTH):
             records, _rcode, _tc = _exchange(current, _A, timeout=timeout or _TTL_WAIT,
-                                             resolver=resolver)
+                                             resolver=resolver, settings=settings)
             if not records:
                 break
             for owner, rtype, text in records:

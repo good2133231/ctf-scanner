@@ -4,6 +4,15 @@ from . import db
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
+def _c(value):
+    """Markdown 表格单元格转义：`|` 转义成 `\\|`，换行/回车压成空格。
+
+    标题、URL、evidence 都可能带 `|` 或换行，直接拼进表格会把表格冲散。
+    """
+    s = str("" if value is None else value)
+    return s.replace("\\", "\\\\").replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+
+
 def generate(task_id):
     task = db.get_task(task_id)
     if not task:
@@ -27,8 +36,8 @@ def generate(task_id):
     lines.append("")
     lines.append("| 子域名 | 存活站点 | 目录发现 | 开放端口 | C 段 IP | 潜在漏洞 |")
     lines.append("|---|---|---|---|---|---|")
-    lines.append(f"| {len(subs)} | {len(sites)} | {len(dirs)} | {len(ports)} | "
-                 f"{len(csegs)} | {len(vulns)} |")
+    lines.append(f"| {_c(len(subs))} | {_c(len(sites))} | {_c(len(dirs))} | {_c(len(ports))} | "
+                 f"{_c(len(csegs))} | {_c(len(vulns))} |")
     lines.append("")
     lines.append("> 以下「潜在漏洞」均为自动化初筛结果，存在误报可能，处置前需人工验证。")
     lines.append("")
@@ -38,8 +47,8 @@ def generate(task_id):
         lines.append("| 级别 | 名称 | 检查/POC | OWASP | 目标 |")
         lines.append("|---|---|---|---|---|")
         for v in vulns:
-            lines.append(f"| {v['severity']} | {v['name']} | {v['poc_id']} | "
-                         f"{v['owasp'] or '-'} | {v['target']} |")
+            lines.append(f"| {_c(v['severity'])} | {_c(v['name'])} | {_c(v['poc_id'])} | "
+                         f"{_c(v['owasp'] or '-')} | {_c(v['target'])} |")
         lines.append("")
     if sites:
         lines.append("## 存活站点")
@@ -47,8 +56,8 @@ def generate(task_id):
         lines.append("| URL | 状态 | 标题 | 技术栈 | Server |")
         lines.append("|---|---|---|---|---|")
         for s in sites[:100]:
-            lines.append(f"| {s['url']} | {s['status']} | {s['title'] or '-'} | "
-                         f"{s['tech'] or '-'} | {s['server'] or '-'} |")
+            lines.append(f"| {_c(s['url'])} | {_c(s['status'])} | {_c(s['title'] or '-')} | "
+                         f"{_c(s['tech'] or '-')} | {_c(s['server'] or '-')} |")
         lines.append("")
     if ports:
         lines.append("## 开放端口与服务（前 200）")
@@ -56,8 +65,8 @@ def generate(task_id):
         lines.append("| 主机 | IP | 端口 | 服务 | banner |")
         lines.append("|---|---|---|---|---|")
         for p in ports[:200]:
-            lines.append(f"| {p['host'] or '-'} | {p['ip'] or '-'} | {p['port']} | "
-                         f"{p['service'] or '-'} | {(p['banner'] or '-')[:80]} |")
+            lines.append(f"| {_c(p['host'] or '-')} | {_c(p['ip'] or '-')} | {_c(p['port'])} | "
+                         f"{_c(p['service'] or '-')} | {_c((p['banner'] or '-')[:80])} |")
         lines.append("")
     if csegs:
         lines.append("## C 段视野（前 200）")
@@ -65,8 +74,8 @@ def generate(task_id):
         lines.append("| C 段 | IP | 域名数 | 反查到的域名 |")
         lines.append("|---|---|---|---|")
         for c in csegs[:200]:
-            lines.append(f"| {c['segment'] or '-'} | {c['ip'] or '-'} | {c['count']} | "
-                         f"{(c['domains'] or '-')[:120]} |")
+            lines.append(f"| {_c(c['segment'] or '-')} | {_c(c['ip'] or '-')} | {_c(c['count'])} | "
+                         f"{_c((c['domains'] or '-')[:120])} |")
         lines.append("")
     if subs:
         lines.append("## 子域名（前 200）")
@@ -81,6 +90,6 @@ def generate(task_id):
         lines.append("| 状态 | 路径 |")
         lines.append("|---|---|")
         for d in dirs[:100]:
-            lines.append(f"| {d['status']} | {d['path']} |")
+            lines.append(f"| {_c(d['status'])} | {_c(d['path'])} |")
         lines.append("")
     return "\n".join(lines)

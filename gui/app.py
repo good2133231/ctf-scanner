@@ -85,6 +85,19 @@ def _and_where(*parts):
     return " AND ".join(f"({p})" for p in items) if items else None
 
 
+def _safe_next(target, fallback):
+    """只放行**站内相对路径**的 `next` 跳转目标，其余一律回退（防开放重定向）。
+
+    `next` 来自表单，可被构造（如 `next=https://evil.com`），直接 `redirect()` 会把
+    用户带到任意外站。这里只接受以单个 `/` 开头、不含反斜杠的目标 —— 顺带挡住
+    `//evil.com`（协议相对）与 `/\\evil.com`（浏览器按路径规范化当外站）两种绕过写法。
+    """
+    t = str(target or "").strip()
+    if t.startswith("/") and not t.startswith("//") and "\\" not in t:
+        return t
+    return fallback
+
+
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
@@ -701,7 +714,7 @@ def create_app():
         domains = _picked_domains()
         n = blacklist.add(domains, settings)
         logger.info(f"[gui] 黑名单新增 {n} 条（提交 {len(domains)} 个）")
-        return redirect(request.form.get("next") or url_for("subdomains"))
+        return redirect(_safe_next(request.form.get("next"), url_for("subdomains")))
 
     @app.route("/api/blacklist/remove", methods=["POST"])
     @login_required
@@ -721,7 +734,7 @@ def create_app():
         """
         domains = _picked_domains()
         if not domains:
-            return redirect(request.form.get("next") or url_for("subdomains"))
+            return redirect(_safe_next(request.form.get("next"), url_for("subdomains")))
         stages = ["subdomain"]
         # 任务名：表单可显式指定前缀（拓展域名页按来源分类给出，如 `fofa标题拓展`），
         # 统一再拼上时间戳，避免同名任务互相覆盖辨认；没给前缀时退回旧的 "批量子域-…"。

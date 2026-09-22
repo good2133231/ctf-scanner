@@ -580,14 +580,22 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 13、AGENTS.md §0 第 2 条按用户口径重写：默认只读本项目，读外部需逐次按路径授权
 [完成] 14、新增 smoke [5l] 六条断言钉住上述静默失效型问题
 
-[待办] report.py 表格未转义 `|` 与换行（标题含 `|` 会破坏 Markdown 表格）
-[待办] dnsq 走 _default_resolvers()，忽略 dicts.resolvers 的 settings 覆盖（仅自定义 resolvers 路径）
-[待办] utils.pool_run 的 `if r:` 会丢弃 falsy 结果（当前调用点返回 tuple/dict，暂无实害）
-[待办] fingerprint 的 `content[:6]` 短于 `<!doctype`，该分支永不命中
-[待办] fofa.build_cert_query/build_title_query 未处理反斜杠转义
-[待办] iprecon.normalize_domain 允许 `_`，与 utils.is_domain 口径不一致
-[待办] settings.yaml 的 fofa.enabled=true 与 DEFAULTS 的 false 不一致（未配 key 时只多一行日志）
-[待办] 文档漂移：runner.py 阶段顺序注释漏 screenshot；takeover docstring 写"默认关"实为默认开
-[待办] /api/blacklist/add 的 next 参数属开放重定向（单机单口令场景危害低）
-[待办] dirmap 适配的 run_cmd 缺 stopped() 检查（dirmap 整体归另一个 AI）
+[完成] report.py 表格加 _c() 转义：`\`→`\\`、`|`→`\|`、换行压空格，覆盖概览/漏洞/站点/端口/C段/目录六张表
+[完成] dnsq 把 settings 透传到 _pick_resolvers/_exchange/query/resolve_detail/cname_chain，
+       并按 resolvers **文件路径**缓存（此前只缓存一份默认路径，dicts.resolvers 覆盖被无视）
+[完成] utils.pool_run 的 `if r:` 改为 `if r is not None:`：只丢"无结果"，falsy 但有效的 0/""/[] 保留
+       （已逐个核对 16 个调用点，均只返回 dict/tuple/list 或 None）
+[完成] fingerprint.fetch_favicon 的 `content[:6]` 改 `content[:64]`，`<!doctype` 分支此前永不命中
+[完成] fofa 新增 _quote_value()：cert/title 查询串一并清掉引号与反斜杠（此前只标题去引号）
+[完成] iprecon.normalize_domain 的 _DOMAIN_OK 去掉 `_`，与 utils.is_domain 口径一致
+[完成] config.DEFAULTS 的 fofa.enabled 加澄清注释：settings.yaml 由用户显式设为 true 是预期的，
+       代码默认值保持 false（"没填 key 就不发请求"），**不反向对齐**
+[完成] 文档漂移：runner.py 阶段顺序补 screenshot 并重写默认开关说明；takeover docstring「默认关」→「默认开」
+       （注：原清单里"dirscan docstring 默认关实为默认开"是**误报**——DEFAULTS["dirscan"]["enabled"] 实为
+        False，docstring 正确，未改）
+[完成] gui/app.py 新增 _safe_next()：/api/blacklist/add 与 /api/domains/run-subdomain 的 next
+       只放行站内相对路径（拒 https://、//evil.com、含 `\`）
+[完成] dirscan._run_dirmap 分组循环内加 stopped() 检查，停止不必再等 dirmap 整轮跑完
+[完成] 新增 smoke [5m] 九条断言钉住上述修复（报告转义/pool_run保falsy/开放重定向/favicon过滤/
+       域名口径/FOFA转义/dnsq路径缓存/dirmap停止/默认开关一致）
 

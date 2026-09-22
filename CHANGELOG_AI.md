@@ -3,6 +3,40 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十七轮（续 7）：续 6 遗留的 10 条低危项一并清理
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户对"要不要把那 10 条低危项也清掉"的提问回答"**可以 一起清理**"。逐条修复，全部是
+"错了不报错、功能静默失效"或"小口径不一致"型；其中 1 条经复核为**误报**，未改。
+
+| # | 位置 | 问题 | 修法 |
+|---|---|---|---|
+| 1 | `scanner/report.py` | Markdown 表格未转义：标题/URL/banner 里的 `\|` 会撑破表格、换行会断行 | 新增模块级 `_c()`（先 `\`→`\\` 再 `\|`→`\\\|`，`\r`/`\n` 压空格），包裹概览/漏洞/站点/端口/C 段/目录六张表的所有单元格 |
+| 2 | `scanner/utils.py` | `pool_run` 用 `if r:` 收集结果 → **falsy 但有效**的 `0`/`""`/`[]` 被静默吞掉 | 改 `if r is not None:`；逐个核对 16 个调用点，均只返回 dict/tuple/list 或 None，语义安全 |
+| 3 | `scanner/fingerprint.py` | `content[:6]` 只有 6 字节，**永远匹配不上** 9 字节的 `<!doctype` → HTML 错误页过滤只挡了一半 | 改 `content[:64]`（覆盖 BOM/前导空白 + 声明） |
+| 4 | `scanner/fofa.py` | `build_cert_query` 只 `strip(".")`、`build_title_query` 只去引号，都**没处理反斜杠**（会转义掉闭合引号） | 新增 `_quote_value()`：清引号 + 清反斜杠，两处共用 |
+| 5 | `scanner/iprecon.py` | `_DOMAIN_OK` 含 `_`，与 `utils.is_domain` 口径不一致 | 去掉 `_` |
+| 6 | `scanner/dnsq.py` | `_pick_resolvers` 只走 `_default_resolvers()`（缓存 `resolvers(None)` 一份）→ 调用方传入的 `dicts.resolvers` **覆盖被无视** | `settings` 透传到 `_pick_resolvers`/`_exchange`/`query`/`resolve_detail`/`cname_chain`；缓存键改为 resolvers **文件路径**（不同配置互不串台，热路径仍不读文件） |
+| 7 | `scanner/config.py` | `DEFAULTS["fofa"]["enabled"]=False` 与 `settings.yaml` 的 `true` "看起来"冲突 | 加澄清注释说明这是**预期内的用户覆盖层**，代码默认值保持 `False`（"没填 key 就不发请求"），**不反向对齐** |
+| 8 | `scanner/runner.py` / `scanner/stages/takeover.py` | 文档漂移：`runner.py` 阶段顺序注释漏 `screenshot`；`takeover` docstring 写"默认关"实为默认开 | 阶段顺序补 `screenshot` 并按 `DEFAULTS` 重写默认开关说明；docstring 改"默认开，策略配置可关闭" |
+| 9 | `gui/app.py` | `/api/blacklist/add` 与 `/api/domains/run-subdomain` 的 `next` 参数直接进 `redirect()` → **开放重定向** | 新增模块级 `_safe_next()`：只放行以单个 `/` 开头、不含 `\` 的目标（挡 `https://`、`//evil.com`、`/\evil.com`） |
+| 10 | `scanner/stages/dirscan.py` | `_run_dirmap` 的分组循环内缺 `stopped()` 检查 → 停止要等 dirmap 整轮（timeout=7200）跑完 | 循环体首行加 `stopped()` → `break` |
+
+### 复核为误报（未改）
+
+- 原清单里"`scanner/stages/dirscan.py` docstring 写「默认关」实为默认开"：实测
+  `DEFAULTS["dirscan"]["enabled"] is False`（`scanner/config.py`），docstring **正确**，不动。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py   # SMOKE PASS
+# 新增 [5m] 九条断言：报告 `_c()` 转义 / pool_run 保留 falsy / _safe_next 拒外站 /
+#   fetch_favicon 真能挡 <!doctype（monkeypatch http_request）/ iprecon 不含 `_` /
+#   FOFA 查询串清引号反斜杠 / dnsq 按路径缓存互不串台 / 已停止时不再拉 dirmap /
+#   DEFAULTS 默认开关与 docstring 一致
+```
+
 ## 2026-09-22 —— 第十七轮（续 6）：全流程体检（3 路并行静审）+ 12 处修复
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

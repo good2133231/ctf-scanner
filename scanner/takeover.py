@@ -294,7 +294,7 @@ def detect(subdomain, settings=None, logger=None):
     """
     settings = settings or {}
     cfg = settings.get("takeover", {}) or {}
-    chain, _ips = dnsq.cname_chain(subdomain)
+    chain, _ips = dnsq.cname_chain(subdomain, settings=settings)
     if not chain:
         if logger:
             logger.debug(f"[takeover] {subdomain} 无 CNAME，跳过")

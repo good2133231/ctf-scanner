@@ -237,6 +237,9 @@ class DirscanStage(Stage):
         started = time.time() - 1.0     # 留 1 秒余量，避免文件系统时间戳精度问题漏掉本次产物
         targets = set()
         for kind, sites in (groups or {}).items():
+            if ctx.stopped():
+                ctx.logger.warning("[dirscan] 任务已请求停止，中止 dirmap 扫描")
+                break
             urls = [s["url"] for s in sites if s.get("url")]
             if not urls:
                 continue

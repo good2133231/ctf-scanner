@@ -996,6 +996,73 @@ def main():
     enc = c.get("/subdomains?q=a%26b").get_data(as_text=True)
     assert "q=a%26b" in enc, "pager.qs 未对 q 做 URL 编码"
     print("[5l] 全流程体检修复 ok: js第三方名单生效/黑名单去重/站点筛选/union_passive 唯一/开关共存/q 编码")
+
+    # (5m) 第十七轮(续7)：低危项清理。同样是"错了不报错"型，逐条钉住。
+    from scanner.report import _c
+    from scanner.utils import pool_run
+    from scanner.config import DEFAULTS
+    from scanner import iprecon as iprecon_mod, dnsq as dnsq_mod
+    from scanner import fingerprint as fp_mod
+    import scanner.utils as utils_mod
+    from scanner.stages.dirscan import DirscanStage as _DS
+    import scanner.stages.dirscan as _ds_mod
+    from gui.app import _safe_next
+
+    # 1) 报告表格转义：`|` 会撑破表格、换行会断行；`\` 必须先转义（否则 `\|` 被二次转义）
+    assert _c("a|b") == "a\\|b" and _c("a\nb") == "a b" and _c("a\rb") == "a b"
+    assert _c("a\\b") == "a\\\\b" and _c(None) == "" and _c(0) == "0"
+    # 2) pool_run 只丢 None：falsy 但有效的结果（0/""/[]）不该被静默吞掉
+    kept = pool_run(lambda x: x, [0, "", [], "ok", None], workers=3)
+    assert len(kept) == 4 and None not in kept, kept
+    # 3) 开放重定向：next 只放行站内相对路径
+    assert _safe_next("https://evil.com", "/tasks") == "/tasks"
+    assert _safe_next("//evil.com", "/tasks") == "/tasks"
+    assert _safe_next("/\\evil.com", "/tasks") == "/tasks"
+    assert _safe_next("/subdomains?src=title", "/tasks") == "/subdomains?src=title"
+    assert _safe_next(None, "/tasks") == "/tasks"
+    # 4) favicon 的 HTML 错误页过滤要真能命中 <!doctype（此前 content[:6] 短于该字面量，永不命中）
+    _orig_http = utils_mod.http_request
+    try:
+        utils_mod.http_request = lambda *a, **k: {
+            "status": 200, "content": b"<!DOCTYPE html>\n<html><body>404</body></html>"}
+        assert fp_mod.fetch_favicon("http://x.test", timeout=1) == b"", \
+            "HTML 错误页未被拒（content[:64] 应能匹配 <!doctype）"
+        utils_mod.http_request = lambda *a, **k: {"status": 200, "content": b"\x00\x01ICO"}
+        assert fp_mod.fetch_favicon("http://x.test", timeout=1) == b"\x00\x01ICO"
+    finally:
+        utils_mod.http_request = _orig_http
+    # 5) 反查域名不再接受 `_`（与 utils.is_domain 口径一致）
+    assert "_" not in iprecon_mod._DOMAIN_OK
+    # 6) FOFA 查询串要清掉引号与反斜杠（会提前闭合/转义掉闭合引号）
+    assert fofa.build_cert_query('a"b\\c.com') == 'cert="abc.com"', fofa.build_cert_query('a"b\\c.com')
+    assert fofa.build_title_query('x"y') == 'title="xy"'
+    # 7) dnsq 尊重 dicts.resolvers 覆盖，且按**路径**缓存（不同配置互不串台）
+    _r1 = _TMPDIR / "res1.txt"; _r1.write_text("10.0.0.1\n", encoding="utf-8")
+    _r2 = _TMPDIR / "res2.txt"; _r2.write_text("10.0.0.2\n", encoding="utf-8")
+    _s1 = {"dicts": {"resolvers": str(_r1)}}
+    _s2 = {"dicts": {"resolvers": str(_r2)}}
+    assert dnsq_mod._pick_resolvers(1, _s1) == ["10.0.0.1"]
+    assert dnsq_mod._pick_resolvers(1, _s2) == ["10.0.0.2"]
+    assert dnsq_mod._pick_resolvers(1, _s1) == ["10.0.0.1"], "按路径缓存后 s1 不该被 s2 覆盖"
+    # 8) dirmap 循环内有 stopped() 检查（此前要等 dirmap 整轮跑完才响应停止）
+    _stop_ev = threading.Event(); _stop_ev.set()
+    _ds_stop = _DS(StageContext(tid, "smoke-stop", parse_lines([targets]), ["dirscan"], {},
+                                settings, Path(_TMPDIR) / "dicts-stop", rec, stop_event=_stop_ev))
+    _calls = []
+    _orig_run_cmd = _ds_mod.run_cmd
+    _ds_mod.run_cmd = lambda *a, **k: (_calls.append(a) or (0, "", ""))
+    try:
+        _rows = _ds_stop._run_dirmap(Path(_TMPDIR) / "fake" / "dirmap.py",
+                                     {"": [{"url": "http://127.0.0.1:8765/"}]}, {})
+    finally:
+        _ds_mod.run_cmd = _orig_run_cmd
+    assert _rows == [] and not _calls, f"已停止时不该再拉 dirmap：rows={_rows} calls={len(_calls)}"
+    # 9) 文档漂移：docstring 的默认开关必须与 DEFAULTS 一致（takeover 默认开、dirscan 默认关）
+    assert DEFAULTS["takeover"]["enabled"] is True
+    assert DEFAULTS["dirscan"]["enabled"] is False
+    assert "screenshot" in STAGE_ORDER
+    print("[5m] 低危清理 ok: 报告转义/pool_run保falsy/开放重定向/favicon HTML过滤/域名口径/"
+          "FOFA转义/dnsq路径缓存/dirmap停止检查/默认开关一致")
     print("SMOKE PASS")
 
 

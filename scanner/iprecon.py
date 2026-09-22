@@ -22,7 +22,7 @@ from .utils import http_request, pool_run
 DEFAULT_API = "https://api.webscan.cc/?action=query&ip={ip}"
 
 # 反查回来的域名做基本合法性过滤（公共接口的返回里偶尔混入 IP 或空值）
-_DOMAIN_OK = set("abcdefghijklmnopqrstuvwxyz0123456789.-_*")
+_DOMAIN_OK = set("abcdefghijklmnopqrstuvwxyz0123456789.-*")  # 不含 `_`：与 utils.is_domain 口径一致
 
 
 def is_public_ip(ip):
