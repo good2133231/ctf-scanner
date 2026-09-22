@@ -43,6 +43,35 @@ GENERIC_TITLES = frozenset({
     "403", "401", "500", "nginx", "apache", "iis", "default", "",
 })
 
+# 实测样本（2026-09-23，真实 FOFA 配额查询）：这些标题的命中数与"具体站点标题"差 4~6 个数量级，
+# 说明它们就是公共模板标题，**一发查询就是浪费**（结果肯定超过 title_threshold 被丢弃）：
+#   维保中心（具体站点标题）        → 15
+#   后台管理系统                    → 192188
+#   Index of /                      → 5974788
+#   Welcome to nginx                → 8344737
+#   登录                            → 39722277
+# 结论：阈值本身（200）落在 15 与 19 万之间的巨大空隙里，**不需要调**；
+# 真正值得做的是把上面这些"不用查也知道是公共"的标题前置到**零请求预筛**里。
+GENERIC_TITLE_PREFIX = (
+    # Apache/Nginx 目录列表页：`Index of /uploads`、`Index of /backup` 全是通用页
+    "index of /",
+    # 中文站点最常见的后台入口标题：`后台管理系统`、`后台管理系统 - 登录`、`后台管理系统v2`
+    "后台管理系统",
+    "directory listing for",
+)
+
+# 已知"占位证书"主体：实测 `cert="example.com"` → 2164696 条 —— 这是各家默认配置里的
+# 自签占位证书，按它拓展只会灌进百万条无关资产，**连查询都不发**。
+GENERIC_CERT_NAMES = frozenset({
+    "example.com", "example.org", "example.net", "test.com", "test.local",
+    "localhost", "localhost.localdomain", "invalid", "local", "domain.com",
+    "yourdomain.com", "changeme", "smtp.example.com", "mail.example.com",
+})
+# 占位证书的域名后缀（`*.example.com` 这类整域都算）。
+# 刻意**只收** RFC 2606 的示例域：像 `.test` / `.invalid` 这种保留后缀虽然也是"不该出现"，
+# 但真实目标里绝不使用它们，收进来只会误伤用示例域做自测的场景，收益为负。
+GENERIC_CERT_SUFFIX = (".example.com", ".example.org", ".example.net")
+
 
 def credentials(settings):
     """从 `settings["keys"]["fofa"]` 取 (email, key)；缺失时返回 ("", "")。"""
@@ -115,8 +144,32 @@ def is_common_title(total, settings):
 
 
 def is_generic_title(title):
-    """一眼就是模板页的标题（`404` / `Error` / `Welcome to nginx` …），连查询都不用发。"""
-    return str(title or "").strip().lower() in GENERIC_TITLES
+    """一眼就是模板/通用页的标题（`404` / `Error` / `Index of /uploads` …），连查询都不用发。
+
+    两层判据（依据 2026-09-23 实测样本，见 `GENERIC_TITLES` 上方注释）：
+    ① 精确命中 `GENERIC_TITLES`；
+    ② 前缀命中 `GENERIC_TITLE_PREFIX` —— 抓 `Index of /uploads`、`后台管理系统 - 登录`
+       这类"通用标题 + 后缀"的变体。②故意不设长度上限：这类标题无论后面跟什么都还是
+       同一张公共模板页，查出来必然是百万级结果，跳过**严格优于**发一次注定被丢的查询。
+    """
+    t = str(title or "").strip().lower()
+    if t in GENERIC_TITLES:
+        return True
+    return any(t.startswith(p) for p in GENERIC_TITLE_PREFIX)
+
+
+def is_generic_cert(domain):
+    """是否是已知的"占位证书"主体（`example.com` / `localhost` …），连查询都不用发。
+
+    实测 `cert="example.com"` 命中 **2164696** 条 —— 这类名字出现在各种默认配置的
+    自签证书里，按它拓展只会灌进百万条无关资产。
+    """
+    d = str(domain or "").strip().lower().strip(".")
+    if not d:
+        return True
+    if d in GENERIC_CERT_NAMES:
+        return True
+    return any(d.endswith(sfx) for sfx in GENERIC_CERT_SUFFIX)
 
 
 def search_title(title, settings, logger=None, size=None):

@@ -1,15 +1,21 @@
 # 流水线说明
 
-默认阶段顺序：`subdomain → takeover → portscan → probe → osint → jsmine → dirscan → vulnscan`
+默认阶段顺序（**11 个**，权威来源 `scanner/runner.py::STAGE_ORDER`）：
+`subdomain → takeover → portscan → probe → screenshot → osint → jsmine → dirscan → vulnscan → intel → heuristic`
 （CLI 可用 `-p` 裁剪，GUI 用复选框勾选）。
 
-其中 `takeover` / `jsmine` / `dirscan` / `vulnscan` 由**策略级开关**控制、默认开，
-`portscan` / `osint` 默认关：
+其中 `takeover` / `jsmine` / `vulnscan` 由**策略级开关**控制、默认开，
+`portscan` / `screenshot` / `dirscan` / `osint` / `intel` / `heuristic` 默认关：
 勾选只表示"这个阶段参与本次任务"，真正执行与否还看
-`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled` /
-`dirscan.enabled` / `vulnscan.enabled`
+`settings.takeover.enabled` / `portscan.enabled` / `screenshot.enabled` / `jsmine.enabled` /
+`dirscan.enabled` / `vulnscan.enabled` / `intel.enabled` / `heuristic.enabled`
 （阶段内部自查后打日志跳过，且**连请求都不发**）。`osint` 更特殊 —— 它没有自己的 `enabled`，
 而是由两个**子能力开关** `iprecon.enabled` / `fofa.enabled` 控制，**两者都关时整阶段直接跳过**。
+
+末尾两个阶段（`intel` / `heuristic`）的产物是**「线索」而不是漏洞**：它们只写独立的 `leads` 表
+（任务详情第 9 个页签「线索」+ 报告附录小节），**不写 `vulns`、不计入漏洞数、不自动导入 POC**。
+理由是这两类结论分别来自外部情报匹配与本地统计推断，误报率天然高于实测型检查，
+混进「潜在漏洞」表只会污染漏洞数（详见 `docs/security-notice.md` 与 `TODO.md` P3-2/P3-3）。
 
 > `subdomain` / `probe` 刻意**没有**阶段级开关：它们的产物（域名、存活站点）是所有后续阶段的输入，
 > 关掉等于整个任务不做 —— 这种需求用任务级的阶段勾选（建任务时的复选框 / CLI 的 `-p`）表达更清楚。
@@ -30,8 +36,15 @@
 | `httpx -l httpx_url -mc 200,301,302,403,404` | probe | httpx 适配器（另加 `-title -tech-detect -json` 提取信息）；`-mc` 白名单一致 |
 | `python dirmap.py -iF dir_out -e all` | dirscan | dirmap 适配器（`-iF` 批量 URL），并解析其 `output/` 产物 |
 | （手工没有的部分） | vulnscan | POC 引擎 + OWASP Top10 启发式检查（分级/分类门控 + WAF 探测） |
+| （手工没有的部分） | screenshot | 本机无头 Edge/Chrome（`--headless=new`）截图，产物 `shots/*.png` 并回填 `sites.shot`；默认关 |
+| （手工没有的部分） | intel | 拉 CISA KEV 公开 JSON → 与本地指纹**白名单式**匹配 → 「线索」（`leads` 表）；单向下行、默认关 |
+| （手工没有的部分） | heuristic | 对已采集数据做**零请求**差分/异常聚合（软 404 / 高价值入口 / 同标题 / 目录离群 / 同 C 段）→ 「线索」；默认关 |
 
 ## 各阶段细节
+
+> 小节编号 ①~⑧ 沿用历史书写顺序（那批里还没有 `screenshot`，且 ⑤/⑥ 的位置是旧编号），
+> **实际执行顺序一律以 `STAGE_ORDER` 为准**：`screenshot` 在 ④ probe 与 ⑤ osint 之间，
+> ⑨~⑪ 是后补的三个阶段（其中 `intel` / `heuristic` 固定在流水线最末）。
 
 ### ① subdomain 子域名收集
 
@@ -220,6 +233,62 @@
 - 产物：SQLite `vulns` 表、GUI 漏洞页、Markdown 报告；
 - 并发：站点级并发（max_workers/2），站点内部串行，避免对单目标压力过大。
 
+### ⑨ screenshot 站点截图（`screenshot.enabled`，**默认关**）
+
+- 位置：**`probe` 之后、`osint` 之前**（必须先有存活站点才能截图；旧编号里没有它，故排在 ①~⑧ 之后书写）；
+- 门控：`screenshot.enabled` 默认关；即便打开，`screenshot.available()` 探测不到可用浏览器时**只告警跳过、不抛错**；
+- 输入：`ctx.results["sites"]`（为空回退 `db.list_sites`），上限 `screenshot.max_sites`（默认 20，超出只截前 N 个）；
+- 处理：调用本机已装的 Edge/Chrome 无头模式（`--headless=new`）截整页，视口 `screenshot.window`
+  （默认 `1280x900`）、单站点超时 `screenshot.timeout`（默认 30s）；浏览器路径 `screenshot.browser`
+  留空则自动探测（配置值 → PATH → 注册表 → 标准安装位置，**无硬编码绝对路径**）；
+  **不引入任何新依赖**（不装 selenium/playwright）；
+- 产物：`shots/<md5>.png` + `shots.txt`；`sites.shot` 只存**相对任务工作目录**的路径（`shots/xxx.png`），
+  GUI 站点页 / 任务详情「站点」页签显示缩略图（点击看大图）；
+- 为什么默认关：拉起无头浏览器单站点通常 1~3 秒、内存占用明显高于纯 HTTP 探测，
+  且它不直接帮助"拿 flag"——需要看站点长相时再打开。
+
+### ⑩ intel 漏洞情报订阅（`intel.enabled`，**默认关**）
+
+- 位置：流水线**最末**（`vulnscan` 之后）—— 它不产出任何被后续阶段消费的数据；
+- 情报源：内置 `scanner/intel.py::FEEDS`（默认 `kev` = CISA `known_exploited_vulnerabilities.json`，
+  **免 key 公开 JSON**，只收录"已被在野利用"的 CVE）；`intel.url` 填了就覆盖内置地址
+  （需同结构 JSON，可指向自建镜像以**完全离线**）；
+- 缓存：落在 `data/intel/<source>.json`（目录跟随库位置 `db.DB_PATH.parent / "intel"`，
+  故测试用 `CTFSCANNER_DB` 时会自动隔离），有效期 `intel.cache_hours`（默认 24 小时，设 0 则每次拉取）；
+  **拉取失败会退回过期缓存并告警**（不静默失败，也不因一次网络抖动清空情报）；
+- 匹配（**白名单式**）：只有 `MATCH_RULES` 里显式写过的资产信号才参与，且要求
+  「资产侧信号命中 + 情报侧产品关键词命中 + 厂商关键词对得上」**三条同时成立**；
+  信号词带词边界 `(?<![a-z0-9])signal(?![a-z0-9])`，防止短信号（如 `iis`）被 `heliis` 这类单词吞掉。
+  参与匹配的资产指纹文本：站点 = `tech + server`（**刻意不含标题**，标题噪声太大），端口 = `service + banner`；
+- 代价：O(资产数 × 情报条数) 的纯字符串判断，**不发任何请求**（整个阶段只有"拉情报源"这一个出站请求）；
+  同一 CVE 命中多台主机时按 `high` 优先排序，再由 `max_leads`（默认 50）截断；
+- 产物：`leads` 表（`kind="intel"`）；级别：情报 `knownRansomwareCampaignUse == "Known"` → `high`，否则 `medium`；
+- **边界**：不写 `vulns`、不计入漏洞数、不自动导入 POC；方向是**单向下行**
+  （不向任何第三方发送目标信息，隐私方向与 `osint` 相反）；
+- 局限：KEV 覆盖面窄于全量 CVE 库；匹配到**产品/厂商关键词级**、**不含版本比对**，
+  命中只说明"这条已知被利用的 CVE 与你扫到的组件可能相关"，是不是真漏洞必须人工确认。
+
+### ⑪ heuristic 启发式候选发现（`heuristic.enabled`，**默认关**，零出站请求）
+
+- 位置：流水线**最末**（与 `intel` 同批）—— 它要读 `dirscan` 的目录结果与 `vulnscan` 的漏洞，
+  越晚跑看到的数据越全；本身**不发任何请求**，只对已采回的本机数据做差分与异常聚合；
+- 输入：`db.list_sites` / `db.list_dirs` / `db.list_vulns(limit=1000)` / `db.list_csegs`
+  （站点、目录、C 段**全空则整阶段跳过**）；
+- 5 条规则（阈值常量见 `scanner/heuristics.py`）：
+  1. **软 404 模板**：单站点 ≥ `SOFT404_MIN_ROWS`(8) 条"200 但内容重复"的目录记录、占比 ≥
+     `SOFT404_RATIO`(0.7) → 提示该站有软 404 兜底页，目录命中可能全是假的；
+  2. **高价值入口暴露**：已命中的目录路径匹配 `HIGH_VALUE_PATHS`（**15 条**：`.git` / `.env` /
+     `actuator` / `druid` / `swagger` / `phpmyadmin` / WordPress / Tomcat manager / ES / Nacos /
+     Jenkins / 备份文件 / Solr / Eureka / 控制台）**却没有对应漏洞结论** → 提出人工复核候选；
+  3. **多主机同标题**：同一标题出现在 ≥ `TITLE_MIN_HOSTS`(2) 台主机、标题长度 ≥ `TITLE_MIN_LEN`(4)
+     且非模板标题（复用 `scanner/fofa.py::is_generic_title`）→ 可能是同一套系统的多个入口；
+  4. **目录命中离群**：某站点目录命中数 ≥ `OUTLIER_MIN_HITS`(15) 且 ≥ 同任务站点中位数 ×
+     `OUTLIER_RATIO`(3) → 该站目录面异常宽（常意味着后台/调试接口暴露）；
+  5. **同 C 段多 IP**：单个 `/24` 归纳出 ≥ `CSEG_MIN_IPS`(3) 个 IP → 提示段内其它主机值得看
+     （`csegs` 非空本身来自默认关的 `osint`）；
+- 产物：`leads` 表（`kind="heuristic"`，级别一律 `info`）；`max_leads`（默认 50）截断；
+- **边界**：只写 `leads`，不写 `vulns`、不计入漏洞数；**主动 fuzz 仍不做**（样本量不够时那是纯噪声）。
+
 ## 阶段产物示例
 
 ```
@@ -236,11 +305,14 @@ logs/task_1_mytask/
 ├── httpx_out.json    # httpx JSONL 输出
 ├── sites.txt         # 存活站点
 ├── js_urls.txt       # 从 JS 提取到的接口 URL（jsmine 阶段产物）
+├── shots/            # 站点截图 PNG（screenshot 阶段，默认关）
+├── shots.txt         # 截图清单：URL<TAB>相对路径
 ├── dirmap_in.txt     # 传给 dirmap 的 URL
 └── dirs.txt          # 目录发现
 ```
 
 > `portscan` / `osint` 阶段不落文本产物（结果直接进 SQLite `ports` / `csegs` 表，新域名进 `subdomains` 表）；
+> `intel` / `heuristic` 同理 —— 只写 `leads` 表（情报缓存另落 `data/intel/<source>.json`，**不在任务目录**）；
 > 子域名阶段的 **IP / CDN 回填**同样只进 `subdomains` 表（`ip` / `cdn` 两列），不额外落文件；
 > `vulnscan` 结果进 `vulns` 表，Markdown 报告用 `scanner/report.py` 或 GUI 导出按钮生成。
 
@@ -262,7 +334,9 @@ logs/task_1_mytask/
 | fofa.max_title_queries | 10 | 每任务最多反查多少个站点标题 |
 | vulnscan.enabled | true | **阶段级**开关：漏洞初筛整阶段开关（关掉即"只测绘不探测"） |
 | takeover.enabled / jsmine.enabled | true | 子域接管 / JS 挖掘的阶段级开关 |
-| portscan.enabled | false | 端口与服务扫描的阶段级开关（默认关） |
+| portscan.enabled / screenshot.enabled | false | 端口与服务扫描 / 站点截图 的阶段级开关（**均默认关**） |
+| dirscan.enabled / vulnscan.enabled | false / true | 目录发现（**默认关**）/ 漏洞初筛（默认开）的阶段级开关 |
+| intel.enabled / heuristic.enabled | false | 两个「**线索**」阶段的阶段级开关（均默认关；只写 `leads` 表，不写 `vulns`） |
 | limits.brute_max_domains | 50 | 参与 DNS 爆破的域名上限 |
 | limits.wildcard_filter | true | 泛解析过滤：目标开 `*.domain` 时丢弃通配命中的字典结果 |
 | limits.favicon_md5 | true | probe 阶段计算 favicon MD5（POC 可据此做零请求前置判定） |
@@ -284,5 +358,11 @@ logs/task_1_mytask/
 | （`config/keys.yaml`） | 空占位 | 第三方 API key 专用文件，**不在本文件里**；`load_keys()` 只读、GUI 不写回 |
 | passive.enabled / sources / timeout | true / 默认 6 源 / 20s | 多来源被动子域名收集的开关、来源清单、单源超时 |
 | evasion.random_ua / spoof_xff / waf_bypass / bypass_level / waf_detect | true / false / true / 2 / true | 动态免杀：UA 随机化、XFF 伪装、payload 变形及强度、WAF 探测 |
-| tools.* | — | 外部工具路径/命令 |
-| dicts.* | — | 各字典路径（含 `dicts.cdn_cname` = CDN 厂商 CNAME 后缀名单，供子域名 CDN 标记） |
+| dirscan.tech_aware / fw_max_paths | true / 150 | 按 `sites.tech` 选字典；装了 dirmap 时再补一轮「框架字典 + 暴露面字典」内置扫描的额度（0 关闭） |
+| portscan.engine / full_workers / full_timeout | auto / 256 / 0.5s | 端口扫描引擎：`auto` = fscan → nmap → 内置 TCP connect（也可钉 `fscan`/`nmap`/`builtin`）；全端口模式的并发与超时 |
+| screenshot.enabled / max_sites / window / timeout / browser | **false** / 20 / 1280x900 / 30s / 空 | 站点截图（默认关）：站点上限、视口、单站超时、浏览器路径（留空自动探测 Edge/Chrome） |
+| intel.enabled / source / url / cache_hours / timeout / max_leads | **false** / kev / 空 / 24h / 20s / 50 | 情报订阅（默认关）：源名（内置 `FEEDS`）、覆盖地址（留空用内置，可换自建镜像）、缓存有效期（0 = 每次拉取）、拉取超时、单任务线索上限 |
+| heuristic.enabled / max_leads | **false** / 50 | 启发式候选（默认关、零出站）：阶段开关与单任务线索上限 |
+| tools.fscan | fscan | fscan 二进制名/路径（缺省只在 PATH 找，找不到跳过）；调用时强制 `-np -nobr -nopoc`，只用其端口发现能力 |
+| tools.* | — | 外部工具路径/命令（subfinder / puredns / httpx / nmap / dirmap.python·script·threads …） |
+| dicts.* | — | 各字典路径：技术栈字典（`dirs_common`/`dirs_jsp`/`dirs_php`/`dirs_asp`）+ 框架字典（`dirs_wordpress`/`dirs_spring`/`dirs_weblogic`…12 桶）+ 暴露面 `dirs_exposure` + `dicts.cdn_cname`（CDN 厂商 CNAME 后缀名单） |

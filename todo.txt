@@ -557,11 +557,18 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        日志里「dirmap 不可用」是旧时点输出：现 tools/dirmap/dirmap.py 存在且 gevent/lxml/progressbar
        三个依赖本机均已安装，当前代码会走 dirmap 分支；dirmap 自身改动按你的安排交给另一个 AI
 
-[待办] 目录字典还能再细分（如按框架：wordpress/spring 专属路径），当前只按语言拆三层
-[待办] P2-3 Linux 实机验证（挂起中；本机 WSL 被安全策略禁用、无 Docker）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘
-[待办] 端口扫描接入 fscan（可选，需你先放二进制到 tools/）
-[待办] osint 阈值继续按真实数据校准（已有首个样本：标题十位数 / 证书百万级）
+[完成] 目录字典还能再细分（按框架：wordpress/spring 专属路径已落地：dirs_<框架>.txt 12 桶 + dirs_exposure，
+       tools/import_fw_dicts.py 生成，运行时排在语言/通用字典之前，框架判不出就不吃这部分额度）
+[部分完成] P2-3 Linux 实机验证（本机 WSL 被安全策略禁用、无 Docker，**实机仍未跑**；
+       已把能自动化的部分变成断言：smoke [5o] 跨平台静态审计 —— 49 文件 compile / 39 模块 import /
+       禁 shell 直通与盘符路径 / 文本 IO 必带 encoding / run_cmd 实测 127·124 / pick_python 回退实测。
+       在 Linux 上跑 `python3 tests/smoke.py` 即等于那次验收）
+[完成] P3-2 实时漏洞情报订阅（CISA KEV × 本地指纹白名单匹配 → 只产「线索」，默认关、不写 vulns）
+[完成] P3-3 启发式 0day 挖掘（零请求差分/异常聚合 5 条规则 → 只产「线索」，默认关、级别 info）
+[完成] 端口扫描接入 fscan（强制 -np -nobr -nopoc，老版本自动去掉 -nopoc 重试；缺二进制优雅回退内置）
+[完成] osint 阈值继续按真实数据校准（实测样本：维保中心 15 / 后台管理系统 192188 / Index of / 5974788 /
+       Welcome to nginx 8344737 / 登录 39722277 —— 阈值 200 落在 15 与 19 万之间，**不需要调**；
+       实际动作是把公共标题与占位证书前置到零请求预筛，连查询都不发）
 
 -----
 （第十七轮续6：全流程体检 12 处修复）实施者：WorkBuddy · DeepSeek-V4.1-Flash

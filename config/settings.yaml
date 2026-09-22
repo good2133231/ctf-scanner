@@ -53,6 +53,8 @@ portscan:
   timeout: 1.0
   workers: 64
   banner: true
+  # auto = fscan → nmap → 内置 TCP connect；也可钉住 fscan / nmap / builtin
+  engine: auto
 jsmine:
   enabled: true
   max_pages: 20
@@ -65,6 +67,8 @@ dirscan:
   big_dict: true
   tech_aware: true
   max_paths: 400
+  # 框架补充扫描额度（dirmap 的 -e 吃不下自定义字典，用它把框架/暴露面字典补上；0 = 关闭）
+  fw_max_paths: 150
 vulnscan:
   enabled: true
 screenshot:
@@ -97,10 +101,25 @@ fofa:
 blacklist:
   enabled: true
   path: config/blacklist.txt
+intel:
+  # 漏洞情报订阅（默认关）：CISA KEV（免 key）拉回来后与本地指纹保守匹配，只产出线索（leads 表）
+  enabled: false
+  source: kev
+  url: ''
+  cache_hours: 24
+  timeout: 20
+  max_leads: 50
+heuristic:
+  # 启发式候选发现（默认关）：对已收集数据做差分/异常聚合，不发请求，只产出线索（leads 表）
+  enabled: false
+  max_leads: 50
 tools:
   subfinder: subfinder
   puredns: puredns
   httpx: httpx
+  nmap: nmap
+  # fscan（可选）：二进制名或路径；找不到就跳过它。调用时强制 -np -nobr -nopoc
+  fscan: fscan
   dirmap:
     python: python
     script: tools/dirmap/dirmap.py
@@ -114,6 +133,20 @@ dicts:
   dirs_jsp: config/dicts/dirs_jsp.txt
   dirs_php: config/dicts/dirs_php.txt
   dirs_asp: config/dicts/dirs_asp.txt
+  # 框架字典（tools/import_fw_dicts.py 派生；运行时按 sites.tech 命中的框架排在最前）
+  dirs_wordpress: config/dicts/dirs_wordpress.txt
+  dirs_phpmyadmin: config/dicts/dirs_phpmyadmin.txt
+  dirs_druid: config/dicts/dirs_druid.txt
+  dirs_spring: config/dicts/dirs_spring.txt
+  dirs_weblogic: config/dicts/dirs_weblogic.txt
+  dirs_tomcat: config/dicts/dirs_tomcat.txt
+  dirs_jenkins: config/dicts/dirs_jenkins.txt
+  dirs_elastic: config/dicts/dirs_elastic.txt
+  dirs_swagger: config/dicts/dirs_swagger.txt
+  dirs_confluence: config/dicts/dirs_confluence.txt
+  dirs_gitlab: config/dicts/dirs_gitlab.txt
+  # 通用暴露面（.git/.env/备份文件），排语言字典后、通用字典前
+  dirs_exposure: config/dicts/dirs_exposure.txt
   sensitive: config/dicts/sensitive.txt
   cdn_cname: config/dicts/cdn_cname.txt
 http:

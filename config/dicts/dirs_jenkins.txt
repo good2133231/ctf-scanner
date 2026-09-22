@@ -1,0 +1,31 @@
+# 由 tools/import_fw_dicts.py 从 config/dicts/dirs_big.txt 派生（jenkins 框架特征路径）
+# 共 29 条 · 运行时会排在语言字典之前，确保 max_paths 截断后仍被扫到 · 请勿手工排序
+.jenkins.sh
+secure/ConfigurePortalPages!default.jspa?view=search&searchOwnerUserName=%3Cscript%3Ealert(1)%3C/script%3E&Search=Search
+contact.php?theme=tes%22%3E%3Cscript%3Ealert(document.domain)%3C/script%3E
+doc/script/common.js
+guest/users/forgotten?email=%22%3E%3Cscript%3Econfirm(document.domain)%3C/script%3E
+help/index.jsp?view=%3Cscript%3Ealert(document.cookie)%3C/script%3E
+jenkins/descriptorByName/AuditTrailPlugin/regexCheck?value=*j%3Ch1%3Esample
+jenkins/script
+jnlpJars/
+log?type=%22%3C/script%3E%3Cscript%3Ealert(document.domain);%3C/script%3E%3Cscript%3E
+webapp/?fccc0\><script>alert(1)</script>5f43d=1
+.jenkins.yml
+admin/scripts/fckeditor
+CFIDE/scripts/ajax/FCKeditor
+jenkins/
+Jenkinsfile
+JNLP-INF/APPLICATION.JNLP
+learn/ruubikcms/ruubikcms/website/scripts/jquery.lightbox-0.5.js.php
+MyAdmin/scripts/setup.php
+mysql/scripts/setup.php
+mysqladmin/scripts/setup.php
+phpMyAdmin/scripts/setup.php
+pma/scripts/setup.php
+typo3/phpmyadmin/scripts/setup.php
+var/lib/cloud/instance/scripts/
+web/phpMyAdmin/scripts/setup.php
+web/scripts/setup.php
+xampp/phpmyadmin/scripts/setup.php
+phpmyadmin/scripts/setup.php

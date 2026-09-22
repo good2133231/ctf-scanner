@@ -268,10 +268,16 @@ class OsintStage(Stage):
             roots = roots[:cap]
 
         found = []
-        queried = common = 0
+        queried = common = pre = 0
         for root in roots:
             if ctx.stopped():
                 break
+            # 零请求预筛：占位证书（example.com / localhost …）实测命中百万级，连查询都不发
+            if fofa_mod.is_generic_cert(root):
+                pre += 1
+                ctx.logger.info(f'[osint] 证书 cert="{root}" 属已知占位证书（如 example.com），'
+                                f"跳过查询")
+                continue
             assets, total, err = fofa_mod.search_cert(root, ctx.settings, logger=ctx.logger)
             if err:
                 ctx.logger.info(f"[osint] 证书反查中止：{err}")
@@ -287,7 +293,8 @@ class OsintStage(Stage):
             for a in assets:
                 domain = _domain_of(a)
                 found.append((domain, "osint:fofa-cert"))
-        ctx.logger.info(f"[osint] 证书拓展：查询 {queried} 个注册域，跳过通用证书 {common} 个")
+        ctx.logger.info(f"[osint] 证书拓展：查询 {queried} 个注册域，跳过通用证书 {common} 个"
+                        + (f"（另有 {pre} 个占位证书连查询都未发）" if pre else ""))
         return found
 
     # ---------- FOFA 标题反查 ----------

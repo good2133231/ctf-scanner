@@ -1,0 +1,11 @@
+# 由 tools/import_fw_dicts.py 从 config/dicts/dirs_big.txt 派生（gitlab 框架特征路径）
+# 共 9 条 · 运行时会排在语言字典之前，确保 max_paths 截断后仍被扫到 · 请勿手工排序
+.gitlab-ci.yml
+.gitlab
+.gitlab-ci.off.yml
+.gitlab-ci/.env
+.gitlab/issue_templates
+.gitlab/merge_request_templates
+.gitlab/route-map.yml
+gitlab
+gitlab/

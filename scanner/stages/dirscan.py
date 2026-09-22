@@ -6,6 +6,17 @@
 阶段总开关 `dirscan.enabled`（**默认关** —— 目录爆破请求量最大、噪声最多，
 且绝大多数 CTF 拿分不靠它；要用请在「策略配置 → 资产面拓展」打开）：关闭后整阶段跳过。
 
+字典分层（越具体的排越前，`max_paths` 截断时先保住高价值路径）：
+**框架字典**（`dirs_<框架>.txt`，`tools/import_fw_dicts.py` 从全量字典派生，凭 `sites.tech` 指纹命中）
+→ **语言字典**（`dirs_jsp` / `dirs_php` / `dirs_asp`）→ **通用暴露面**（`dirs_exposure`：
+`.git` / `.env` / 备份文件）→ **通用字典**（`dirs_common`）。判不出语言栈的站点直接用全量字典
+（`dirs_big` 本身就是超集，不再叠加前几层）。
+为什么再拆一层框架：`dirs_common` 有上万条，400 条的额度根本轮不到 `wp-login.php` / `/actuator/env`
+这类真正决定 CTF 拿分的路径 —— 按框架单独成文件、排最前，才能保证"是 WordPress 就先扫 wp-*"。
+dirmap 的 `-e` 只认 `php/jsp/asp/d/big/all`，**吃不下自定义字典**，所以框架层只在**内置扫描**生效；
+但 dirmap 跑出结果后仍会补一轮"框架 + 暴露面"的小扫描（`dirscan.fw_max_paths`，默认 150，
+置 0 关闭），否则用户机器上装了 dirmap 时框架字典就等于死代码。
+
 两个"别浪费预算"的约束（用户要求，与站点资产的折叠口径一致）：
 - **只对不重复站点扫描**：同一任务内「标题 + 响应长度」完全相同的站点是同一台主机的别名/泛解析
   产物，对它们各扫一遍大字典纯属浪费；
@@ -72,6 +83,63 @@ def _dict_kind(tech, url=""):
     return ""
 
 
+# 框架桶 -> 命中它的指纹标签（标签来自 probe 阶段 `fingerprint.identify()`，写在 `sites.tech`）。
+# 桶名即 `config/dicts/dirs_<桶名>.txt` 的文件名后缀，两处必须一一对应。
+FRAMEWORK_TAGS = {
+    "wordpress": "wordpress", "wp": "wordpress",
+    "phpmyadmin": "phpmyadmin",
+    "druid": "druid",
+    "spring": "spring", "springboot": "spring",
+    "weblogic": "weblogic",
+    "tomcat": "tomcat",
+    "jenkins": "jenkins",
+    "elasticsearch": "elastic",
+    "swagger": "swagger", "fastapi": "swagger",
+    "confluence": "confluence",
+    "gitlab": "gitlab",
+}
+# 一个站点同时命中多个框架标签时，按这个顺序取**第一个**（越前越"抢占先机"，
+# 也就是越值得优先扫）。顺序与 `tools/import_fw_dicts.py` 的 BUCKETS 保持一致。
+FRAMEWORK_ORDER = ("wordpress", "phpmyadmin", "druid", "spring", "weblogic", "tomcat",
+                   "jenkins", "elastic", "swagger", "confluence", "gitlab")
+
+# URL 兜底判据：指纹抓的是首页，而框架可能只暴露在某个路径上（`/wp-content/`、`/actuator/`…）。
+_FW_URL_HINTS = (
+    (re.compile(r"(?i)/wp-(?:content|includes|admin|login|json)"), "wordpress"),
+    (re.compile(r"(?i)/phpmyadmin|/pma(?:/|$)"), "phpmyadmin"),
+    (re.compile(r"(?i)/druid(?:/|$)"), "druid"),
+    (re.compile(r"(?i)/actuator(?:/|$)"), "spring"),
+    (re.compile(r"(?i)/swagger|/api-docs|/openapi"), "swagger"),
+    (re.compile(r"(?i)/confluence(?:/|$)"), "confluence"),
+    (re.compile(r"(?i)/gitlab(?:/|$)|/users/sign_in"), "gitlab"),
+)
+
+
+def _framework_of(tech, url=""):
+    """判定站点的框架桶：`"wordpress"` / `"spring"` / … / `""`（判不出）。
+
+    先看指纹标签（probe 阶段写进 `sites.tech`），多命中时按 `FRAMEWORK_ORDER` 取最优先的一个；
+    再看 URL 里的特征路径兜底。都判不出返回 ""，调用方会跳过框架层 —— **不猜**。
+    """
+    tags = {t for t in re.split(r"[,\s;|]+", str(tech or "").lower()) if t}
+    hits = {FRAMEWORK_TAGS[t] for t in tags if t in FRAMEWORK_TAGS}
+    for fw in FRAMEWORK_ORDER:
+        if fw in hits:
+            return fw
+    low = str(url or "").lower()
+    for rx, fw in _FW_URL_HINTS:
+        if rx.search(low):
+            return fw
+    return ""
+
+
+# 内置扫描的字典层次组合（越具体的排越前）。
+# `_FW_LAYERS` 专给"框架补充扫描"用：dirmap 跑完后只补「框架 + 暴露面」两层，
+# 不再重复吃语言/通用字典（那些 dirmap 自己已经按 `-e` 打过了）。
+_FULL_LAYERS = ("fw", "lang", "exposure", "common")
+_FW_LAYERS = ("fw", "exposure")
+
+
 def _size_to_int(text):
     """把 dirmap 的 `1.23kb` / `512.00b` 转回字节数；解析不了返回 None。"""
     m = SIZE_RE.match(str(text or ""))
@@ -129,6 +197,14 @@ class DirscanStage(Stage):
 
         if not used_dirmap:
             entries = self._builtin_scan(sites, cfg, limits)
+        else:
+            # dirmap 的 `-e` 只认 php/jsp/asp/d/big/all，**吃不下我们的框架字典**
+            # （`dirs_wordpress` / `dirs_exposure` 这些自定义文件喂不进去）。装了 dirmap 的
+            # 机器上框架层会变成死代码，所以这里补一轮"框架 + 暴露面"的小扫描。
+            extra = self._builtin_scan(sites, cfg, limits, only_fw=True)
+            if extra:
+                ctx.logger.info(f"[dirscan] 框架补充扫描新增 {len(extra)} 条")
+                entries.extend(extra)
 
         uniq, seen = [], set()
         for e in entries:
@@ -183,33 +259,56 @@ class DirscanStage(Stage):
             groups.setdefault(kind, []).append(s)
         return groups
 
-    def _dict_paths_for(self, kind, cfg):
-        """给出某语言桶要用的字典文件列表（**语言字典在前、通用字典在后**）。
+    def _dict_paths_for(self, kind, cfg, fw=""):
+        """给出某站点要用的字典文件列表（**越具体的排越前**）。
 
-        顺序很关键：`dirscan.max_paths` 是硬上限，语言专属条目排在前面才能保证
-        "这个站是 Java 就一定会扫到 .jsp/.do 那些路径"，通用条目用来填满剩余额度。
-        未知技术栈时回退全量字典（`dirs_big`，或配置里的 `dirs` 小字典）。
+        顺序很关键：`dirscan.max_paths` 是硬上限，专属条目排在前面才能保证
+        "这个站是 Java 就一定会扫到 .jsp/.do 那些路径"。完整层次：
+        框架字典 → 语言字典 → 通用暴露面 → 通用字典。
+        未知技术栈时语言层回退全量字典（`dirs_big`，或配置里的 `dirs` 小字典）。
+        """
+        return self._layer_paths(kind, cfg, fw, _FULL_LAYERS)
+
+    def _layer_paths(self, kind, cfg, fw, layers):
+        """按 `layers` 挑出要用哪些层的字典文件（返回相对路径列表）。
+
+        单独抽出来是为了"框架补充扫描"能复用同一套取词逻辑：那种场景只要
+        `_FW_LAYERS = ("fw", "exposure")` 两层，不吃语言/通用字典。
         """
         dicts = self.ctx.settings.get("dicts", {}) or {}
-        if kind:
-            return [p for p in (dicts.get(f"dirs_{kind}"), dicts.get("dirs_common")) if p]
-        return [dicts.get("dirs_big") if cfg.get("big_dict") is not False else dicts.get("dirs")]
+        out = []
+        if "fw" in layers and fw:
+            out.append(dicts.get(f"dirs_{fw}"))
+        if "lang" in layers:
+            if kind:
+                out.append(dicts.get(f"dirs_{kind}"))
+            else:
+                out.append(dicts.get("dirs_big") if cfg.get("big_dict") is not False
+                           else dicts.get("dirs"))
+        if "exposure" in layers:
+            out.append(dicts.get("dirs_exposure"))
+        if "common" in layers and kind:
+            out.append(dicts.get("dirs_common"))
+        return [p for p in out if p]
 
-    def _load_paths(self, kind, cfg):
-        """读字典（去注释、按 max_paths 截断），返回路径列表。"""
-        max_paths = int(cfg.get("max_paths", 400) or 400)
-        paths = []
-        for rel in self._dict_paths_for(kind, cfg):
-            paths.extend(p for p in read_lines(resolve(rel)) if p and not p.startswith("#"))
-            if len(paths) >= max_paths:
-                break
-        return paths[:max_paths]
+    def _load_paths(self, kind, cfg, fw="", layers=_FULL_LAYERS, limit=None):
+        """读字典（去注释、保序去重、截断到上限），返回路径列表。
 
-    def _dict_path(self, cfg):
-        """（兼容旧调用）不区分技术栈时的单字典路径。"""
-        dicts = self.ctx.settings.get("dicts", {}) or {}
-        key = "dirs_big" if cfg.get("big_dict") is not False else "dirs"
-        return dicts.get(key) or dicts.get("dirs") or ""
+        `limit` 给了就用它当上限（框架补充扫描用 `dirscan.fw_max_paths`），
+        否则用 `dirscan.max_paths`。多个字典文件之间可能有重复条目（框架字典就是
+        从全量字典里抽出来的），去重后额度才不会被重复项吃掉。
+        """
+        max_paths = int(limit if limit is not None else (cfg.get("max_paths", 400) or 400))
+        paths, seen = [], set()
+        for rel in self._layer_paths(kind, cfg, fw, layers):
+            for p in read_lines(resolve(rel)):
+                if not p or p.startswith("#") or p in seen:
+                    continue
+                seen.add(p)
+                paths.append(p)
+                if len(paths) >= max_paths:
+                    return paths
+        return paths
 
     # ---------- dirmap 适配 ----------
 
@@ -321,31 +420,49 @@ class DirscanStage(Stage):
 
     # ---------- 内置兜底 ----------
 
-    def _builtin_scan(self, sites, cfg, limits):
-        """内置字典扫描（按站点技术栈选字典）。
+    def _builtin_scan(self, sites, cfg, limits, only_fw=False):
+        """内置字典扫描（按站点技术栈 + 框架选字典）。
 
-        每个站点用**它自己的**字典：Java 站 = `dirs_jsp` + `dirs_common`，
-        PHP 站 = `dirs_php` + `dirs_common`，未知栈 = `dirs_big`（全部），
+        每个站点用**它自己的**字典，越具体的排越前：框架字典（`dirs_wordpress`…）
+        → 语言字典（`dirs_jsp` / `dirs_php` / `dirs_asp`）→ 暴露面（`dirs_exposure`）
+        → 通用（`dirs_common`），未知栈 = `dirs_big`（本身是超集，不再叠加）。
         都受 `dirscan.max_paths` 截断。这样同一个任务里混合栈的站点也各扫各的，
         不会互相浪费额度。
+
+        `only_fw=True` 是"框架补充扫描"模式：dirmap 已经按 `-e` 打过语言/通用字典了，
+        这里只用「框架 + 暴露面」两层、每个站点最多 `dirscan.fw_max_paths` 条
+        （默认 150，置 0 表示不做补充扫描），把 dirmap 吃不到的自定义字典补上。
         """
         ctx = self.ctx
         workers = int(limits.get("max_workers", 20))
         timeout = int(limits.get("http_timeout", 10))
         tech_aware = cfg.get("tech_aware") is not False
+        fw_cap = int(cfg.get("fw_max_paths", 150) or 0)
+        if only_fw and fw_cap <= 0:
+            return []
+        layers = _FW_LAYERS if only_fw else _FULL_LAYERS
+        limit = fw_cap if only_fw else None
 
         jobs, tally = [], {}
         for s in sites:
             kind = _dict_kind(s.get("tech"), s.get("url")) if tech_aware else ""
-            paths = self._load_paths(kind, cfg)
+            fw = _framework_of(s.get("tech"), s.get("url")) if tech_aware else ""
+            if only_fw and not fw:
+                continue          # 补充扫描只针对判得出框架的站点
+            paths = self._load_paths(kind, cfg, fw=fw, layers=layers, limit=limit)
             if not paths:
                 continue
-            tally[kind or "未知"] = tally.get(kind or "未知", 0) + 1
+            label = f"{fw}/{kind}" if fw else (kind or "未知")
+            tally[label] = tally.get(label, 0) + 1
             jobs.extend((s["url"], p) for p in paths)
         if not jobs:
+            if only_fw:
+                ctx.logger.info("[dirscan] 无可识别的框架站点，跳过框架补充扫描")
             return []
 
-        ctx.logger.info(f"[dirscan] 内置扫描：{len(sites)} 站点 x 按栈选字典 "
+        ctx.logger.info(f"[dirscan] 内置扫描：{len(sites)} 站点 x 按"
+                        f"{'框架+暴露面' if only_fw else '栈+框架'}选字典"
+                        f"{'（框架补充）' if only_fw else ''}"
                         f"（{' / '.join(f'{k}:{v} 站' for k, v in tally.items())}），"
                         f"共 {len(jobs)} 个请求 …")
         baseline = {}

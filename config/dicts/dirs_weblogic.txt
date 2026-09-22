@@ -1,0 +1,37 @@
+# 由 tools/import_fw_dicts.py 从 config/dicts/dirs_big.txt 派生（weblogic 框架特征路径）
+# 共 35 条 · 运行时会排在语言字典之前，确保 max_paths 截断后仍被扫到 · 请勿手工排序
+bin/console
+crowd/console/login.action
+graphql/console
+v1/graphql/console
+v2/graphql/console
+v3/graphql/console
+v4/graphql/console
+bea_wls_cluster_internal/
+bea_wls_deployment_internal/
+bea_wls_deployment_internal/DeploymentService
+bea_wls_diagnostics/
+bea_wls_internal
+bea_wls_internal/
+bea_wls_internal/classes/
+bea_wls_internal/getior
+bea_wls_internal/HTTPClntRecv
+bea_wls_internal/HTTPClntSend
+bea_wls_internal/iiop/ClientClose
+bea_wls_internal/iiop/ClientLogin
+bea_wls_internal/iiop/ClientRecv
+bea_wls_internal/iiop/ClientSend
+bea_wls_internal/psquare/x.jsp
+bea_wls_internal/WebServiceServlet
+bea_wls_internal/WLDummyInitJVMIDs
+docpicker/internal_proxy/https/127.0.0.1:9043/ibm/console
+ibm/console
+META-INF/weblogic-application.xml
+META-INF/weblogic-ejb-jar.xml
+uddiexplorer
+v1/test/js/console.html
+v1/test/js/console_ajax.js
+WEB-INF/weblogic.xml
+wls-wsat/CoordinatorPortType
+bea_wls_internal/a2e2gp2r2/x.jsp
+graphql/console/

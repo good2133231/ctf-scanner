@@ -1,0 +1,27 @@
+# 由 tools/import_fw_dicts.py 从 config/dicts/dirs_big.txt 派生（tomcat 框架特征路径）
+# 共 25 条 · 运行时会排在语言字典之前，确保 max_paths 截断后仍被扫到 · 请勿手工排序
+..;/examples/jsp/index.html
+..;/examples/servlets/index.html
+..;/examples/websocket/index.xhtml
+..;/manager/html
+bin/catalina.sh
+examples/jsp/index.html
+examples/jsp/snp/snoop.jsp
+examples/servlets/index.html
+examples/websocket/index.xhtml
+host-manager/html
+logs/catalina.out
+manager/html
+conf/Catalina
+conf/catalina.policy
+conf/catalina.properties
+etc/lib/pChart2/examples/imageMap/index.php
+examples/
+examples/jsp/%252e%252e/%252e%252e/manager/html/
+examples/servlet/SnoopServlet
+examples/servlets/servlet/CookieExample
+examples/servlets/servlet/RequestHeaderExample
+host-manager/
+jsp-examples/
+manager/html/
+manager/jmxproxy/?invoke=Catalina%3Atype%3DService&op=findConnectors&ps=

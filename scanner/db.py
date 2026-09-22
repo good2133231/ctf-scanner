@@ -80,6 +80,20 @@ CREATE TABLE IF NOT EXISTS pocs (
   enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'ok',
   updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS leads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  kind TEXT DEFAULT '',        -- intel（外部情报订阅）/ heuristic（本地启发式候选）
+  code TEXT DEFAULT '',        -- CVE 号 / 规则 id（去重与溯源用）
+  title TEXT DEFAULT '',
+  target TEXT DEFAULT '',      -- 命中的资产（站点 URL / 主机 / C 段）
+  matched TEXT DEFAULT '',     -- 触发物（指纹信号 / 规则依据）
+  level TEXT DEFAULT 'info',   -- 仅用于排序着色：**不是漏洞级别**（见 scanner/intel.py 边界说明）
+  detail TEXT DEFAULT '',
+  source TEXT DEFAULT '',
+  url TEXT DEFAULT '',
+  created_at TEXT
+);
 """
 
 
@@ -171,11 +185,11 @@ def list_tasks(limit=200):
     return _query("SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (limit,))
 
 
-ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "dirs", "vulns")
+ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "dirs", "vulns", "leads")
 
 
 def clear_task_assets(task_id):
-    """清空某任务的全部资产（子域名/站点/端口/C段/目录/漏洞），用于"重启"前重置。"""
+    """清空某任务的全部资产（子域名/站点/端口/C段/目录/漏洞/线索），用于"重启"前重置。"""
     for t in ASSET_TABLES:
         _exec(f"DELETE FROM {t} WHERE task_id=?", (task_id,))
 
@@ -361,6 +375,38 @@ def list_dirs(task_id):
 
 def list_ports(task_id):
     return _query("SELECT * FROM ports WHERE task_id=? ORDER BY host, port", (task_id,))
+
+
+def insert_leads(task_id, rows):
+    """写入线索（`leads` 表），返回实际新增条数。
+
+    `(kind, code, target)` 相同的线索**不重复插入**：去重放在写入侧而不是靠表约束 ——
+    任务"只重跑 intel 阶段"或阶段被重复执行时，同一批线索会再次产出，
+    页面上看起来就像重复报（重启任务会走 `clear_task_assets`，不在此列）。
+    """
+    if not rows:
+        return 0
+    have = {(r["kind"], r["code"], r["target"]) for r in list_leads(task_id)}
+    fresh = []
+    for r in rows:
+        key = (str(r.get("kind") or ""), str(r.get("code") or ""), str(r.get("target") or ""))
+        if key in have:
+            continue
+        have.add(key)
+        fresh.append((task_id, key[0], key[1], str(r.get("title") or ""), key[2],
+                      str(r.get("matched") or ""), str(r.get("level") or "info"),
+                      str(r.get("detail") or ""), str(r.get("source") or ""),
+                      str(r.get("url") or ""), _now()))
+    if not fresh:
+        return 0
+    _exec("INSERT INTO leads(task_id,kind,code,title,target,matched,level,detail,source,url,"
+          "created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", fresh, many=True)
+    return len(fresh)
+
+
+def list_leads(task_id):
+    """任务线索（intel 在前、heuristic 在后，同级按 id 稳定排序）。"""
+    return _query("SELECT * FROM leads WHERE task_id=? ORDER BY kind, level DESC, id", (task_id,))
 
 
 def list_csegs(task_id):

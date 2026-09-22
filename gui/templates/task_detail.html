@@ -30,6 +30,7 @@
   <div class="tab" data-tab="ports">端口服务<span class="cnt">{{ ports|length }}</span></div>
   <div class="tab" data-tab="csegs">C 段<span class="cnt">{{ csegs|length }}</span></div>
   <div class="tab" data-tab="dirs">目录<span class="cnt">{{ dirs|length }}</span></div>
+  <div class="tab" data-tab="leads">线索<span class="cnt">{{ leads|length }}</span></div>
   <div class="tab" data-tab="target">目标与配置</div>
   <div class="tab" data-tab="log">运行日志</div>
 </div>
@@ -192,6 +193,41 @@
           <td class="muted">{{ d.note or '-' }}</td></tr>
       {% else %}
         <tr><td colspan="4" class="muted">暂无数据。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-leads">
+  <section class="panel">
+    <p class="muted small">本页是<b>线索</b>，不是漏洞：<b>外部情报订阅</b>（<span class="mono">intel</span>，
+      情报源里"已知被在野利用"的 CVE 与本站点/端口指纹的匹配）与<b>启发式候选</b>
+      （<span class="mono">heuristic</span>，对已收集数据做的差分/异常聚合）都只写这里，
+      <b>既不计入上面的「潜在漏洞」，也不进漏洞报告</b>。两条线索都默认关闭，
+      在「策略配置 → 情报与线索」打开；人工确认后才是漏洞结论。
+      {% if leads_intel %}（情报线索 {{ leads_intel }} 条，其余为启发式线索）{% endif %}</p>
+    <label class="muted">筛选 <input data-filter="#tbl-leads" placeholder="CVE / 名称 / 目标 / 触发物"></label>
+    <table id="tbl-leads">
+      <thead><tr><th>类型</th><th>级别</th><th>CVE / 规则</th><th>名称</th><th>目标</th>
+        <th>触发物</th><th>详情</th></tr></thead>
+      <tbody>
+      {% for l in leads %}
+        <tr><td>{% if l.kind == 'intel' %}<span class="tech-tag">情报</span>
+              {% else %}<span class="tech-tag">启发式</span>{% endif %}</td>
+          <td><span class="sev sev-{{ l.level }}">{{ l.level }}</span></td>
+          <td class="mono small">{% if l.url %}<a class="url-link" href="{{ l.url }}" target="_blank"
+              rel="noopener noreferrer">{{ l.code }}</a>{% else %}{{ l.code }}{% endif %}</td>
+          <td>{{ l.title }}</td>
+          <td class="muted mono small">{{ l.target }}</td>
+          <td class="muted small">{{ l.matched }}</td>
+          <td class="evidence"><details><summary class="muted">展开</summary>
+            <pre class="small">{{ l.detail }}</pre>
+            <p class="muted small">来源：{{ l.source }} ｜ 生成：{{ l.created_at }}</p></details></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="muted">暂无线索（intel / heuristic 两个阶段默认关闭，
+          在「策略配置 → 情报与线索」打开；线索只写本页，不影响漏洞结论）。</td></tr>
       {% endfor %}
       </tbody>
     </table>

@@ -3,6 +3,125 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-23 —— 第十七轮（续 8）：6 个长期挂起项一次性解决
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户原话：「长期挂起 ：目录字典按框架细分、P2-3 Linux 实机、P3-2 情报订阅、P3-3 启发式 0day、
+fscan 接入、osint 阈值校准。**把这些都解决了** 以及我要睡觉了 碰到交互式你选推荐的，全部修改」
+—— 用户不在场，交互式抉择一律取"更保守 / 不动现有行为"的推荐方案，且**不假装完成做不到的事**。
+
+### 1. 目录字典按框架细分（`fw`）
+
+- 新增 [`tools/import_fw_dicts.py`](tools/import_fw_dicts.py) —— 从 `dirs_big.txt` 按正则**派生**
+  12 个桶（11 框架 + `exposure`），产出 `config/dicts/dirs_<框架>.txt` 与 `dirs_exposure.txt`。
+  用法 `py -3 tools/import_fw_dicts.py --force`（源路径只走参数，代码里不留绝对路径）。
+- [`scanner/stages/dirscan.py`](scanner/stages/dirscan.py)：新增 `FRAMEWORK_TAGS`（tech 标签 → 桶名别名，
+  含 `wp`/`springboot`/`elasticsearch`/`fastapi`）、`FRAMEWORK_ORDER`（多框架命中时的抢占顺序，
+  与生成器 `BUCKETS` 顺序**锁死一致**）、`_FW_URL_HINTS`（指纹抓首页但框架只暴露在 `/actuator/`
+  这类路径上时的 URL 兜底）；字典分层改 `_FULL_LAYERS = ("fw","lang","exposure","common")`
+  与 `_FW_LAYERS = ("fw","exposure")`。
+- **框架判不出就不吃这部分额度**（`_fw_of()` 返回 `""` → 跳过 fw 层，**不猜**）；
+  保序去重（框架字典与语言字典必然重叠，额度不能被重复项吃掉）。
+- `_builtin_scan(only_fw=True)`：dirmap 跑完后只补「框架 + 暴露面」两层（dirmap `-e` 吃不下自定义
+  字典）；`dirscan.fw_max_paths=0` 时**连请求都不发**，判不出框架的站点也直接跳过。
+- 配置：[`scanner/config.py`](scanner/config.py) DEFAULTS 的 `dicts` 增 11 个 `dirs_*` + `dirs_exposure`，
+  `dirscan` 段增 `fw_max_paths: 150`；`config/settings.yaml` 同步（含中文注释）。
+
+### 2. P2-3 Linux 跨平台：把"做不到的"如实标注，把"能做的"变成断言
+
+- 本机 **WSL 被安全策略禁用、无 Docker**，"Linux 实机跑一次"在这里物理上做不了 ——
+  **不做假完成**：`TODO.md` P2-3 标题保持 `[ ]`、`todo.txt` 标 `[部分完成]`。
+- 替代方案：`tests/smoke.py` 新增 **`[5o]` 跨平台静态审计**，把能自动化的风险点全部断言化
+  （编译 49 个源文件 / import 39 个模块 / 禁 `shell=` 直通·`os.system`·写死盘符路径 /
+  文本 IO 必带 `encoding` / `run_cmd` 实测 127·124 / `pick_python` 回退实测）。
+  **在 Linux 上跑 `python3 tests/smoke.py` 即等于那次验收**（同一份代码，无平台分支）。
+- 明确列出**仍未覆盖**的三项：Linux 实机、无头浏览器截图、fscan/nmap/subfinder/dirmap 等
+  **外部二进制**的真实调用（代码里全走 `shutil.which` + 内置兜底，找不到不会崩）。
+
+### 3. P3-2 漏洞情报订阅（`intel`，默认关）
+
+- 新增 [`scanner/intel.py`](scanner/intel.py)：CISA KEV（免 key）拉取 → 本地缓存
+  `data/intel/<source>.json`（缓存名清掉路径穿越字符，不让配置决定往哪写文件）→
+  规整（拿不到 CVE 号的记录一律丢掉）→ **白名单式匹配**（`MATCH_RULES` 显式写过的产品/厂商才参与，
+  且要求"资产信号 + 产品关键词 + 厂商"同时对上；短信号有词边界 `(?<![a-z0-9])signal(?![a-z0-9])`，
+  `heliis` 不会被 `iis` 吞掉）→ 构造线索。
+- 匹配文本**刻意不含标题**（标题是用户内容，纳进来只会制造误报）。
+- 单向下行：**只拉取，不向第三方发送目标信息**。
+- 新增 [`scanner/stages/intel.py`](scanner/stages/intel.py)（`STAGE_ORDER` 第 10 个）+
+  `scanner/db.py` 的 **`leads` 表**（`task_id, kind, code, title, target, matched, level, detail,
+  source, url`；写入按 `(kind, code, target)` 去重）+ `db.insert_leads` / `db.list_leads`，
+  并登记进 `ASSET_TABLES`（重启任务时按资产表清空）。
+- **边界钉死**：只写 `leads`，**不写 `vulns`、不计入漏洞数、不自动导 POC**；`level`（high/medium）
+  只用于排序着色，**不是漏洞级别**、更不是 CVSS。
+
+### 4. P3-3 启发式候选发现（`heuristic`，默认关）
+
+- 新增 [`scanner/heuristics.py`](scanner/heuristics.py)：对**已收集数据**做差分/异常聚合，
+  **零请求**。5 条规则：软 404 泛命中（`SOFT404_MIN_ROWS=8` / `SOFT404_RATIO=0.7`）、
+  高价值路径可读（`HIGH_VALUE_PATHS` 15 条）、同任务多站同一标题（`TITLE_MIN_LEN=4` /
+  `TITLE_MIN_HOSTS=2`，**公共模板标题不算**）、响应长度离群（`OUTLIER_MIN_HITS=15` /
+  `OUTLIER_RATIO=3`）、C 段内多 IP 同服务（`CSEG_MIN_IPS=3`）。
+- 检测层已就同一路径给过结论的**不再重复报**；产出 `level` 固定 `info`。
+- 新增 [`scanner/stages/heuristic.py`](scanner/stages/heuristic.py)（`STAGE_ORDER` 第 11 个、
+  固定最后）：读 sites/dirs/vulns(limit=1000)/csegs，全空直接跳过。
+
+### 5. 端口扫描接入 fscan
+
+- [`scanner/portscan.py`](scanner/portscan.py) 新增 `fscan_scan()` 适配器；
+  `portscan.engine`（`auto = fscan → nmap → 内置 TCP connect`，也可钉住 `fscan`/`nmap`/`builtin`）。
+- **强制 `-np -nobr -nopoc`**（不 Ping、不爆破、不跑 POC，守住非破坏性红线），
+  老版本不认 `-nopoc` 时**自动去掉它重试**；端口串压缩（`1-65535`）保证命令行 <1000 字符；
+  缺二进制时优雅回退内置并在日志里说明，**不崩**。
+
+### 6. osint 阈值按实测样本校准
+
+- 实测样本：`维保中心` 15 / `后台管理系统` 192188 / `Index of /` 5974788 /
+  `Welcome to nginx` 8344737 / `登录` 39722277 —— 阈值 200 落在 15 与 19 万之间，
+  **不需要调**（调高会漏查真实站点，调低等于白烧配额）。
+- 实际动作：[`scanner/fofa.py`](scanner/fofa.py) 把公共标题与占位证书**前置到零请求预筛**
+  （`is_generic_title` 大小写与空白先归一化，支持前缀变体如 `后台管理系统 - 登录`、
+  `Index of /uploads`；`is_generic_cert` 覆盖 `example.com`/`localhost`/空串），
+  命中的**连查询都不发**。
+
+### 7. 接线：CLI / GUI / 报告
+
+- [`scanner/runner.py`](scanner/runner.py)：`STAGE_ORDER` **9 → 11**（补 `screenshot` 早已在列，
+  本轮新增 `intel`/`heuristic` 固定末尾）。
+- [`cli/client.py`](cli/client.py)：阶段数随 `STAGE_ORDER` 走（`阶段 N/11`），
+  结束摘要行增 `线索 N（情报/启发式，非漏洞结论）`。
+- [`gui/templates/settings.html`](gui/templates/settings.html)：策略配置由 8 个面板 → **9 个**
+  （新增 intel 面板；同时把 assets/osint 面板标题补上截图与目录发现、标题反查）。
+- [`gui/templates/task_detail.html`](gui/templates/task_detail.html)：任务详情由 9 个页签 → **10 个**
+  （新增第 8 个「线索」页签 + `pane-leads`）。
+- [`scanner/report.py`](scanner/report.py)：报告**仅在线索非空时**追加「线索（非漏洞结论…）」附录。
+
+### 8. 文档全量同步（以代码为准，逐条核对后写回）
+
+| 文件 | 修掉的漂移 |
+|---|---|
+| `docs/pipeline.md` | 默认顺序 8 → **11 阶段**并指向 `runner.STAGE_ORDER`；默认开/关列表改正（原文误写 `dirscan` 默认开）；手工流水线对应表补 `screenshot`/`intel`/`heuristic` 3 行；新增 ⑨⑩⑪ 三小节；产物树补 `shots/`；配置速查补 11 行 |
+| `docs/usage.md` | `-p` 说明、典型输出改 11 阶段（含结束摘要「线索」）；侧边栏改**真实 9 栏**（`/ports` `/csegs` `/dirs` `/extdomains` 已移出但路由保留）；页签 8 → **10**；面板 8 → **9**；新增「线索页签为什么是空的」FAQ |
+| `docs/architecture.md` | 分层图 11 阶段 + 3 个新模块；DB 表补 `leads`、`sites.shot`；GUI 路由改真实 9 栏；面板 8 → **9** |
+| `README.md` | 首段 8 → **11 阶段**；能力行补站点截图与线索层、端口与目录行补 fscan 与框架字典；ASCII 图改 ⑤-⑪；目录树补 `screenshot.py`/`intel.py`/`heuristics.py`/`import_fw_dicts.py` |
+| `AGENTS.md` | 侧栏改真实 9 栏清单；页签 9 → **10**（×2 处）；`settings.yaml` 段列表补 `screenshot`（×2 处）——这三处是**上一轮我自己写歪的**，本轮一并纠正 |
+| `TODO.md` / `todo.txt` | P2-1 分栏沿革与 10 页签、B-6（9 栏）、B-7（10 页签）；6 条长期挂起项状态改 `[完成]`（P2-3 保持 `[部分完成]`） |
+| `docs/roadmap.md` / `docs/security-notice.md` | P3-2/P3-3 落地说明与"线索不是漏洞结论"的边界声明 |
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py   # SMOKE PASS
+# [1b] 阶段数断言由 9 改 11（精确匹配 STAGE_ORDER）
+# [5e-0] fscan/nmap 适配：端口串压缩 + 强制 -np -nobr -nopoc（老版本回退仍保留 -np -nobr）
+# [5e]  osint 校准：公共标题前缀变体零请求跳过 / 具体标题照查 / 占位证书
+# [5g-2] 框架字典：12 桶非空 + 生成器与 FRAMEWORK_ORDER 顺序锁死 + 框架字典排在语言字典之前
+#        + 保序去重 + fw_max_paths=0 与判不出框架时零请求
+# [5n] 情报/启发式：KEV 解析 + 白名单匹配（词边界）+ 只写 leads（去重、不写 vulns）
+#        + 五条启发式规则正例与反例 + 默认关门控 + GUI 开关与页签 + 报告附录仅在非空时出现
+# [5o] 跨平台静态审计：编译 49 个源文件 / import 39 个模块 / 无 shell 直通·盘符路径·缺 encoding
+#        + run_cmd 127·124 + pick_python 回退
+```
+
 ## 2026-09-22 —— 第十七轮（续 7）：续 6 遗留的 10 条低危项一并清理
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

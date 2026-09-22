@@ -197,6 +197,9 @@ def create_app():
         ext_subs = [r for r in subs if (r["source"] or "").startswith(("js:", "osint:"))]
         # 目录结果同样默认折叠"重复长度"（同一站点下几百条同样长度的 200 基本是同一个软 404 模板）
         dirs, dirs_hidden = _fold_dirs(db.list_dirs(task_id), False)
+        # 「线索」页签：intel（外部情报订阅）+ heuristic（启发式候选）两类共用一张表，
+        # 两者都**不是漏洞结论**，所以单独列、单独计数，不混进 vulns
+        leads = db.list_leads(task_id)
         return render_template(
             "task_detail.html", task=task,
             subs=own, ext_subs=ext_subs,
@@ -204,6 +207,8 @@ def create_app():
             ports=db.list_ports(task_id), csegs=db.list_csegs(task_id),
             dirs=dirs, dirs_hidden=dirs_hidden,
             vulns=db.list_vulns(task_id=task_id, limit=1000),
+            leads=leads,
+            leads_intel=sum(1 for r in leads if r["kind"] == "intel"),
             running=set(runner.running_task_ids()))
 
     @app.route("/tasks/<int:task_id>/export")
@@ -798,7 +803,8 @@ def create_app():
                     "dirscan": {"enabled": f.get("dirscan_enabled") == "1",
                                 "big_dict": f.get("dirscan_big_dict") == "1",
                                 "tech_aware": f.get("dirscan_tech_aware") == "1",
-                                "max_paths": int(f.get("dirscan_max_paths", 400) or 400)},
+                                "max_paths": int(f.get("dirscan_max_paths", 400) or 400),
+                                "fw_max_paths": int(f.get("dirscan_fw_max_paths", 150) or 0)},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
                     # 站点截图（可选，默认关）：无头 Edge/Chrome
                     "screenshot": {"enabled": f.get("screenshot_enabled") == "1",
@@ -818,7 +824,9 @@ def create_app():
                                  "exclude_scanned": f.get("portscan_exclude_scanned") == "1",
                                  "timeout": float(f.get("portscan_timeout", 1) or 1),
                                  "workers": int(f.get("portscan_workers", 64) or 64),
-                                 "banner": f.get("portscan_banner") == "1"},
+                                 "banner": f.get("portscan_banner") == "1",
+                                 # auto / fscan / nmap / builtin（见 scanner/stages/portscan.py）
+                                 "engine": (f.get("portscan_engine") or "auto").strip()},
                     "jsmine": {"enabled": f.get("jsmine_enabled") == "1",
                                "max_pages": int(f.get("jsmine_max_pages", 20) or 20),
                                "max_js": int(f.get("jsmine_max_js", 40) or 40),
@@ -854,6 +862,15 @@ def create_app():
                     "blacklist": {"enabled": f.get("blacklist_enabled") == "1",
                                   "path": (settings.get("blacklist") or {}).get(
                                       "path", "config/blacklist.txt")},
+                    # 情报与线索（P3-2 / P3-3）：两项都默认关，且只写 leads 表
+                    "intel": {"enabled": f.get("intel_enabled") == "1",
+                              "source": (f.get("intel_source") or "kev").strip(),
+                              "url": (f.get("intel_url") or "").strip(),
+                              "cache_hours": float(f.get("intel_cache_hours", 24) or 0),
+                              "timeout": int(f.get("intel_timeout", 20) or 20),
+                              "max_leads": int(f.get("intel_max_leads", 50) or 50)},
+                    "heuristic": {"enabled": f.get("heuristic_enabled") == "1",
+                                  "max_leads": int(f.get("heuristic_max_leads", 50) or 50)},
                 }
             except ValueError:
                 return render_template("settings.html", s=load_settings(), checks=owasp_checks,

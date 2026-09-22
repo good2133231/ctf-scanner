@@ -88,9 +88,29 @@ class PortscanStage(Stage):
             workers = int(cfg.get("full_workers") or 256)
             timeout = float(cfg.get("full_timeout") or 0.5)
         banner = cfg.get("banner", True) is not False
-        nmap_bin = which((ctx.settings.get("tools", {}) or {}).get("nmap", "nmap"))
-        engine = "nmap" if nmap_bin else "内置 TCP connect"
-        ctx.logger.info(f"[portscan] {scope}扫描：{engine}，"
+        # 引擎选择：auto（默认）= fscan → nmap → 内置，谁可用/有结果就用谁；
+        # 也可以显式钉住某一个（比如 fscan 输出格式跟本机版本对不上时强制 nmap）。
+        # 钉住的那个不可用 → 日志明说，然后仍按 auto 剩下的顺序兜底（绝不空跑）。
+        tools_cfg = ctx.settings.get("tools", {}) or {}
+        engine = str(cfg.get("engine") or "auto").strip().lower()
+        if engine not in ("auto", "fscan", "nmap", "builtin"):
+            ctx.logger.warning(f"[portscan] 未知引擎 {engine!r}，按 auto 处理")
+            engine = "auto"
+        fscan_bin = (which(tools_cfg.get("fscan", "fscan"))
+                     if engine in ("auto", "fscan") else None)
+        nmap_bin = (which(tools_cfg.get("nmap", "nmap"))
+                    if engine in ("auto", "nmap") else None)
+        if engine == "builtin":
+            nmap_bin = None
+        picked = [n for n, b in (("fscan", fscan_bin), ("nmap", nmap_bin)) if b]
+        picked.append("内置 TCP connect")
+        if engine == "fscan" and not fscan_bin:
+            ctx.logger.warning("[portscan] 指定引擎 fscan 不可用"
+                               "（tools.fscan 未配置且不在 PATH），回退内置实现")
+        elif engine == "nmap" and not nmap_bin:
+            ctx.logger.warning("[portscan] 指定引擎 nmap 不可用"
+                               "（tools.nmap 未配置且不在 PATH），回退内置实现")
+        ctx.logger.info(f"[portscan] {scope}扫描：{picked[0]}，"
                         f"{len(hosts)} 个主机 x {len(ports)} 端口"
                         + ("（自动排除本任务已扫过的端口）" if exclude_scanned else ""))
         if full:
@@ -129,7 +149,10 @@ class PortscanStage(Stage):
             out = []
             for ip in ips[:2]:  # 一个主机名最多取前 2 个解析结果，避免 CDN 放大请求量
                 found = None
-                if nmap_bin:
+                if fscan_bin:
+                    found = portscan.fscan_scan(host, ip, target_ports, timeout=timeout,
+                                                binary=fscan_bin, workers=workers)
+                if found is None and nmap_bin:
                     found = portscan.nmap_scan(host, ip, target_ports, timeout=timeout,
                                                binary=nmap_bin)
                 if found is None:

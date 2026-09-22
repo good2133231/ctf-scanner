@@ -12,15 +12,20 @@
 ├────────────────────────────────────────────────────────────┤
 │  阶段层    scanner/stages/                                  │
 │            subdomain（+ wildcard/passive）→ takeover →       │
-│            portscan（默认关）→ probe → osint（默认关）→        │
-│            jsmine → dirscan → vulnscan（见 STAGE_ORDER）      │
+│            portscan（默认关）→ probe → screenshot（默认关）→   │
+│            osint（默认关）→ jsmine → dirscan（默认关）→       │
+│            vulnscan → intel / heuristic（默认关，只产"线索"）  │
+│            （11 个阶段，见 runner.STAGE_ORDER）               │
 │  资产层    scanner/dnsq.py（DNS 客户端）                      │
 │            scanner/cdn.py（CDN 判定：CNAME 后缀匹配厂商名单）  │
 │            scanner/takeover.py（子域接管指纹 41 条）           │
-│            scanner/portscan.py（nmap 优先 + 内置 connect 兜底）│
+│            scanner/portscan.py（fscan/nmap 优先 + 内置 connect 兜底）│
+│            scanner/screenshot.py（本机无头 Edge/Chrome 截图）  │
 │            scanner/iprecon.py（IP 反查域名 + /24 C 段归纳）    │
 │            scanner/fofa.py + mmh3.py（favicon/证书反查 + 阈值排除）│
 │            scanner/jsmine.py（JS 域名/接口/疑似凭据挖掘）       │
+│            scanner/intel.py（CISA KEV 情报 × 本地指纹白名单匹配）│
+│            scanner/heuristics.py（零请求差分/异常聚合，产线索）  │
 │            scanner/blacklist.py（用户黑名单：入库前过滤）      │
 │            scanner/portscan.py::parse_ports(max_span)（防手滑全端口）│
 │  检测层    scanner/pocs/engine.py（POC 引擎，nuclei 兼容子集）│
@@ -89,11 +94,12 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 |---|---|---|
 | tasks | targets, stages, options, status, progress, current_stage, log_file, error | 任务状态机：pending → running → done/stopped/failed |
 | subdomains | domain, source, cname, ip, cdn | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa / osint:fofa-cert）两类；cname 由 takeover 阶段回填，ip / cdn 由 subdomain 阶段回填（cdn 为空即"非 CDN"）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`；拓展域名页默认隐藏重叠（`db.OVERLAP_EXT_WHERE`：域名已存在于任意任务的"目标自身子域名"里） |
-| sites | url, host, port, status, title, length, server, tech, favicon, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定 |
+| sites | url, host, port, status, title, length, server, tech, favicon, shot, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定；shot 为截图相对路径（screenshot 阶段回填，默认关） |
 | ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认关闭） |
 | csegs | segment, ip, domains, count | `/24` C 段视野（osint 阶段产出，默认关闭）：每行一个 IP 与其反查到的域名（domains 截断存储、count 为截断前数量） |
 | dirs | site_url, path, status, length, note | 目录发现（dirscan 阶段产出；`length` 即返回包大小，页面按它折叠重复长度） |
 | vulns | target, poc_id, name, severity, owasp, detail, evidence | 统一存放 POC 命中与 OWASP 检查结果 |
+| leads | task_id, kind, code, title, target, matched, level, detail, source, url | **「线索」**（intel / heuristic 两个默认关阶段产出）：`kind` 区分情报/启发式，`level` 只用于排序着色、**不是漏洞级别**。**不是漏洞结论** —— 不进 `vulns`、不计入漏洞数、不自动导入 POC；GUI 单独页签、报告单独附录 |
 | pocs | path(唯一), poc_id, name, severity, tags, enabled, status | POC 注册表：由扫描目录同步生成，GUI 控制启停 |
 
 **老库原地迁移**：`db._ensure_columns()` 用 `ALTER TABLE ADD COLUMN` 给已存在的库补齐新增列
@@ -101,17 +107,20 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 
 ## GUI 路由与分栏
 
-侧边栏 **9 栏**：`/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
-`/extdomains`（JS 与情报带出的拓展域名，**默认隐藏重叠**，`?all=1` 看全部）/
-`/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/vulns`（级别筛选 + `?task_id=` 按任务筛选）/ `/pocs` / `/settings`。
-`/ports` / `/csegs` / `/dirs` 三条路由**仍在**（可直接访问 URL），但**已从侧边栏移除** ——
-它们是任务维度数据，在任务详情页签里看更贴合上下文，这也是用户明确要求的收敛。
+侧边栏 **9 栏**（以 `gui/templates/base.html` 的 `nav_items` 为准）：
+`/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
+`/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/ips`（IP 资产）/ `/fullports`（全端口扫描）/
+`/vulns`（级别筛选 + `?task_id=` 按任务筛选）/ `/pocs` / `/settings`。
+`/ports` / `/csegs` / `/dirs` / `/extdomains`（JS 与情报带出的拓展域名，**默认隐藏重叠**，`?all=1` 看全部）
+四条路由**仍在**（可直接访问 URL），但**已从侧边栏移除** ——
+前三条是任务维度数据，在任务详情页签里看更贴合上下文；`/extdomains` 与 `/subdomains` 是同一份
+`subdomains` 表的不同视图，单列一栏反而让人分不清资产归属。这是用户明确要求的收敛。
 筛选/分页统一走 `db.page_assets(table, limit, offset, q, extra_where, extra_params)`：
 `extra_where` 用于叠加业务条件（子域名分流、CDN 标签、重叠隐藏），`q` 是跨文本列的 LIKE。
 来源列统一走 `gui/app.py::source_label()`（`subfinder → 被动(subfinder)`、`passive:x → 被动(x)`、
 `osint:fofa → FOFA·ICO 反查`、`osint:fofa-cert → FOFA·证书反查` …），模板里以
 `app.jinja_env.globals["source_label"]` 注册；未知来源原样返回，不吞信息。
-「策略配置」页由 **8 个可折叠面板**组成（默认全折叠，展开状态存 `localStorage`，页顶有全部展开/折叠），
+「策略配置」页由 **9 个可折叠面板**组成（默认全折叠，展开状态存 `localStorage`，页顶有全部展开/折叠），
 面板切换与勾选交互在 `gui/static/app.js`（`initCollapsiblePanels` / `initPickAll`）。
 
 ## 扩展点

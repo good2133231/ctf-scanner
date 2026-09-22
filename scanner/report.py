@@ -24,6 +24,9 @@ def generate(task_id):
     csegs = db.list_csegs(task_id)
     vulns = sorted(db.list_vulns(task_id=task_id, limit=1000),
                    key=lambda r: SEV_ORDER.get(r["severity"], 9))
+    # 线索（intel 情报订阅 / heuristic 启发式）：**不是漏洞结论**，只作为附录列出，
+    # 既不进上面的「潜在漏洞」表，也不参与任何计数（见 scanner/intel.py 的边界说明）。
+    leads = list(db.list_leads(task_id))
 
     lines = [f"# 扫描报告：{task['name']}（任务 #{task_id}）", ""]
     lines.append(f"- 时间：{task['created_at']} ｜ 状态：{task['status']} ｜ 阶段：{task['stages']}")
@@ -91,5 +94,19 @@ def generate(task_id):
         lines.append("|---|---|")
         for d in dirs[:100]:
             lines.append(f"| {_c(d['status'])} | {_c(d['path'])} |")
+        lines.append("")
+    if leads:
+        # 附录：只在线索非空时输出，避免给"没开这两个阶段"的常规报告塞空表
+        lines.append("## 线索（非漏洞结论，需人工确认）")
+        lines.append("")
+        lines.append("> 本节来自「情报订阅（CISA KEV × 本地指纹）」与「启发式候选」两个默认关闭的阶段。")
+        lines.append("> 它们是**待确认的线索**，不是漏洞结论：不进上表、不计入漏洞数，请人工核实后再处置。")
+        lines.append("")
+        lines.append("| 类型 | 级别 | CVE/规则 | 名称 | 目标 | 触发物 |")
+        lines.append("|---|---|---|---|---|---|")
+        for ld in leads:
+            kind = "情报" if ld["kind"] == "intel" else "启发式"
+            lines.append(f"| {_c(kind)} | {_c(ld['level'])} | {_c(ld['code'])} | "
+                         f"{_c(ld['title'])} | {_c(ld['target'])} | {_c(ld['matched'])} |")
         lines.append("")
     return "\n".join(lines)

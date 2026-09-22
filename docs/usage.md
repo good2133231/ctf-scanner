@@ -14,7 +14,7 @@ python cli/client.py -t <单目标> [选项]
 | `-f, --file PATH` | 目标文件：每行一个 域名/URL/IP，`#` 开头为注释 |
 | `-t, --target` | 单目标，可重复 `-t a.com -t http://b.local/` |
 | `-n, --name` | 任务名（默认取文件名或 cli-task） |
-| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,osint,jsmine,dirscan,vulnscan`（默认全部；`takeover`/`jsmine`/`dirscan`/`vulnscan`/`portscan`/`osint` 另受策略级开关约束，见下） |
+| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic`（**共 11 个**，默认全部；`takeover`/`jsmine`/`vulnscan` 策略级默认开，`portscan`/`screenshot`/`dirscan`/`osint`/`intel`/`heuristic` 另受策略级开关约束，见下） |
 | `--offline` | 离线模式：不调用 subfinder/puredns/httpx/dirmap，仅内置实现 |
 | `--report PATH` | 扫描结束后生成 Markdown 报告 |
 | `--check` | 打印外部工具可用性并退出 |
@@ -35,20 +35,24 @@ python cli/client.py -f targets.txt --offline
 ### 典型输出
 
 ```
-[*] 任务 #1 开始：recon-0921（阶段：subdomain,takeover,portscan,probe,osint,jsmine,dirscan,vulnscan）
-===== 阶段 1/8：subdomain =====
+[*] 任务 #1 开始：recon-0921（阶段：subdomain,takeover,portscan,probe,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic）
+===== 阶段 1/11：subdomain =====
 [subdomain] subfinder 不可用，改用内置多来源被动收集 …
 [passive] crt.sh → 12 个（example.com）
 [passive] example.com 汇总 15 个（5/6 个源有响应）
 [subdomain] puredns 不可用，回退内置 DNS 爆破（系统解析器）
 [subdomain] 新增子域名 3 个，参与探测主机 4 个
 ...
-===== 阶段 8/8：vulnscan =====
+===== 阶段 9/11：vulnscan =====
 [vulnscan] 目标 2 个；级别门槛 medium；启用 POC 7 个；内置检查 5/12 项；info/low 级检测已跳过（连请求都不发）
 [vulnscan] 潜在漏洞 6 项（high:2 / medium:4），均为初筛结果，需人工确认
+===== 阶段 10/11：intel =====
+[intel] 未启用（策略配置 → 情报与线索 可打开），跳过
+===== 阶段 11/11：heuristic =====
+[heuristic] 未启用（策略配置 → 情报与线索 可打开），跳过
 ===== 流水线完成 =====
 [*] 任务 #1 结束：status=done
-    子域名 3 | 站点 2 | 目录 17 | 潜在漏洞 6
+    子域名 3 | 站点 2 | 目录 17 | 潜在漏洞 6 | 线索 0（情报/启发式，非漏洞结论）
     日志：logs\task_1_...\task.log
 ```
 
@@ -67,13 +71,15 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
 
 ### 页面与操作流
 
-界面外壳为**左侧固定侧边栏（8 栏导航）+ 顶栏（当前页名 + 退出）**；任务详情页内部为**横向页签**，
+界面外壳为**左侧固定侧边栏（9 栏导航）+ 顶栏（当前页名 + 退出）**；任务详情页内部为**横向页签**，
 页签内表格上方都有**前端筛选框**（按整行文本实时过滤，无需回车）。
 
-> 侧边栏只保留**资产总览级**入口（仪表盘 / 任务 / 子域名 / 拓展域名 / 站点 / 漏洞 / POC / 策略）。
-> 原「端口服务」「C 段视野」「目录发现」三栏已移除 —— 它们是**任务维度**的数据，
-> 在任务详情页签里本来就能看到，单开全局栏反而让人脱离上下文。
-> 数据与路由都还在（`/ports`、`/csegs`、`/dirs` 可直接访问 URL），只是不再占侧边栏。
+> 侧边栏 9 栏＝**仪表盘 / 任务管理 / 子域名资产 / 站点资产 / IP 资产 / 全端口扫描 / 漏洞风险 /
+> POC 管理 / 策略配置**（以 `gui/templates/base.html` 的 `nav_items` 为准）。
+> 原「端口服务」「C 段视野」「目录发现」「拓展域名」四栏已移除 —— 前三个是**任务维度**的数据，
+> 在任务详情页签里本来就能看到；「拓展域名」与「子域名资产」是同一份 `subdomains` 表的不同视图，
+> 单列一栏反而让人分不清资产归属。数据与路由都还在（`/ports`、`/csegs`、`/dirs`、`/extdomains`
+> 可直接访问 URL），只是不再占侧边栏。
 
 1. **仪表盘**：任务/子域名/站点/潜在漏洞/POC 总量，最近任务与最近潜在漏洞；
 2. **任务管理**：
@@ -84,8 +90,12 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    - **删除（单个或批量）前会自动备份**：任务行 + 其全部资产（站点/子域名/端口/C 段/目录/漏洞）
      导出为 `data/trash/task_<id>_<时间>.json`，误删可直接从该文件找回。备份失败只告警不阻断删除；
 3. **任务详情**：顶部为任务名与实时状态（状态徽标/当前阶段/进度，运行中每 2 秒刷新），
-   下方为 **8 个横向页签 —— 潜在漏洞（默认）/ 站点 / 子域名 / 端口服务 / C 段 / 目录 / 目标与配置 / 运行日志**，
-   每个页签内可先筛选再查看（潜在漏洞的 evidence 可展开；日志页签显示尾部）；
+   下方为 **10 个横向页签 —— 潜在漏洞（默认）/ 站点 / 子域名 / 拓展域名 / 端口服务 / C 段 / 目录 / 线索 /
+   目标与配置 / 运行日志**，每个页签内可先筛选再查看（潜在漏洞的 evidence 可展开；日志页签显示尾部）；
+   > 「**线索**」页签是「情报订阅（`intel`）」与「启发式候选（`heuristic`）」两个**默认关**阶段的产物。
+   > 它们**不是漏洞结论**（来自外部情报匹配或本地统计推断，误报率高于实测型检查），因此框架在结构上做了隔离：
+   > 独立 `leads` 表、独立页签、独立计数，**不并入「潜在漏洞」、不计入漏洞数、不自动导入 POC**，
+   > 报告里也只作附录列出。要人工核实后再自行处置。
    > 页签数量是**按数据源实有**的：IP、SSL 证书、文件泄露、nuclei、WIH 等页签要等
    > 证书解析 / 爬虫数据模型等数据源落地后才会加，不先做空占位（见 `TODO.md` B-7）。
 4. **子域名资产**：**只显示目标自身**的子域名（来源为 subfinder / `passive:*` / puredns / `dns-brute`），
@@ -129,38 +139,46 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    语法错误的 POC 会标 `error`，含 `raw`/`dsl`/`flow`/`workflows` 等不支持特性的模板会标
    `unsupported` 并显示原因。**路径列展示相对项目根的路径**（如 `config/pocs-user/x.yaml`），
    不暴露本机绝对目录；
-10. **策略配置**：由 **8 个面板**组成，**面板默认全部折叠**（一屏几百个勾选框实在难找）——
+10. **策略配置**：由 **9 个可折叠面板**组成（以 `gui/templates/settings.html` 的
+   `section.panel` 为准），**面板默认全部折叠**（一屏几百个勾选框实在难找）——
    点面板标题栏即可展开/收起，页顶有「全部展开 / 全部折叠」；展开状态记在浏览器 localStorage，
    刷新后保持。面板列表：
-   - **检测策略**：最低报告级别（`min_severity`，默认 medium）+ **漏洞初筛阶段总开关**
+   - **检测策略**（`detect`）：最低报告级别（`min_severity`，默认 medium）+ **漏洞初筛阶段总开关**
      （`vulnscan.enabled`，默认开；取消勾选＝整个 vulnscan 阶段跳过，适合"只做资产测绘"）+
-     POC 引擎总开关 + 指纹→POC 联动；
-   - **按级别分类批量开关**：`skip_severities`（默认勾掉 info 与 low）—— **勾上＝该级别连请求都不发**，
-     内置检查与 POC 引擎同时生效。这是"太 low 的洞暂时不开"的实现方式：它们的结论本来就会被
-     `min_severity` 丢掉，不执行纯属省请求；
-   - **按 OWASP 分类开关**：A01~A10 整类关闭（`disabled_categories`，被关闭的分类根本不执行）；
-   - **按检查项细粒度开关**：逐个 check id 关闭（`disabled_checks`），被级别门跳过的项会标注；
-   - **动态免杀**：UA 随机化 / XFF 伪装 / payload 变形开关与绕过强度（bypass_level 0~3）/ WAF 探测；
-   - **外部情报拓展（OSINT）**：`iprecon`（C 段反查开关 / 接口地址 / IP 上限 / 主机上限 /
+     POC 引擎总开关 + 指纹→POC 联动 + 采集 favicon MD5。**同一个面板内还有三个子区块**：
+     **按级别分类批量开关**（`skip_severities`，默认勾掉 info 与 low）—— **勾上＝该级别连请求都不发**，
+     内置检查与 POC 引擎同时生效，这是"太 low 的洞暂时不开"的实现方式（它们的结论本来就会被
+     `min_severity` 丢掉，不执行纯属省请求）；
+     **按 OWASP 分类开关**（`disabled_categories`，被关闭的分类根本不执行，A01~A10 整类）；
+     **按检查项细粒度开关**（`disabled_checks`，逐个 check id 关闭，被级别门跳过的项会标注「·已按级别跳过」）；
+   - **动态免杀**（`evasion`）：UA 随机化 / XFF 伪装 / payload 变形开关与绕过强度（bypass_level 0~3）/ WAF 探测；
+   - **信息收集**（`recon`）：泛解析过滤、多来源被动收集开关与单源超时、与 subfinder **取并集**；
+   - **资产面拓展**（`assets`）：子域接管、JS 挖掘、**端口服务**（端口列表 / **端口范围**
+     `portscan.mode`（top / full 全端口）/ `portscan.full_ports` / `portscan.exclude_scanned` 跳过已扫端口 /
+     **扫描引擎 `portscan.engine`**：`auto`＝fscan → nmap → 内置）、**站点截图**
+     （`screenshot.enabled`，**默认关**）、**目录/路径发现**（`dirscan.enabled`，**默认关**；打开后可勾大字典
+     `dirscan.big_dict`（15333 条）、设单站点条数上限 `dirscan.max_paths`（默认 400）与
+     框架补充扫描额度 `dirscan.fw_max_paths`（默认 150，填 0 关））这几类的开关与上限；
+   - **外部情报拓展（OSINT）**（`osint`）：`iprecon`（C 段反查开关 / 接口地址 / IP 上限 / 主机上限 /
      单 IP 域名上限 / 并发 / 超时）与 `fofa`（favicon 反查开关 / 站点上限 / 资产上限 /
      并发 / 黑 ico 阈值 / **证书反查子开关 `cert_enabled`** / **通用证书阈值 `cert_threshold`** /
      **每任务最多查几个注册域 `max_cert_queries`** / **标题反查子开关 `title_enabled`** /
      **公共标题阈值 `title_threshold`** / **每任务最多查几个标题 `max_title_queries`**）—— **默认关闭**，且 iprecon 与 fofa
      都关时整个 `osint` 阶段一次请求都不发。接口地址留空即用默认的 `api.webscan.cc`；
      FOFA 的 email/key 不在这里填（见 `config/keys.yaml`）；
-   - **用户黑名单**：显示黑名单文件路径（**相对路径**）、总开关与**当前条目列表**，
+   - **用户黑名单**（`blacklist`）：显示黑名单文件路径（**相对路径**）、总开关与**当前条目列表**，
      可勾选条目后点「移除勾选条目」。文件是纯文本 `config/blacklist.txt`，也可直接手工编辑；
-   - **资产面拓展 / 信息收集 / 扫描限制 / 控制台**：子域接管、**目录/路径发现**
-     （`dirscan.enabled`，**默认关**；打开后可选大字典 `dirscan.big_dict`（15333 条）与
-     单站点条数上限 `dirscan.max_paths`（默认 400））、JS 挖掘、端口服务这几类的开关与上限，
-     （端口服务含**端口范围** `portscan.mode`（top / full 全端口）、`portscan.full_ports`、
-     `portscan.exclude_scanned` 跳过已扫端口）
-     泛解析过滤与多来源被动收集，并发/超时/证书校验/站点上限，监听地址与口令。
-     子域名阶段的 **IP/CDN 回填**上限（`subdomain.max_resolve`，默认 500 个）与 DNS 超时
-     （`subdomain.dns_timeout`）也在这一组；超上限的子域名仍会入资产表，只是没有 IP/CDN 两列。
-     外部工具路径、字典路径与 `passive.sources` 来源清单请直接编辑 `config/settings.yaml`
-     （CDN 厂商后缀名单在 `config/dicts/cdn_cname.txt` —— 找不到 CNAME 后缀就一律判为「非 CDN」）；
-     **第三方 API key 写入 `config/keys.yaml`**（独立文件，控制台只读不改写）。
+   - **情报与线索**（`intel`，**两个开关都默认关**）：`intel`（CISA KEV 情报订阅：`source` / `url` /
+     `cache_hours` / `timeout` / `max_leads`）与 `heuristic`（启发式候选：`max_leads`）。
+     二者产出**只是线索**（任务详情「线索」页签 + 报告附录），**不写漏洞、不计入漏洞数、不自动导入 POC**。
+     细节见 `docs/pipeline.md` ⑩⑪；
+   - **扫描限制**（`limits`）：并发/超时/证书校验/目录与漏洞扫描站点上限；子域名阶段的
+     **IP/CDN 回填**上限（`subdomain.max_resolve`，默认 500 个）与 DNS 超时（`subdomain.dns_timeout`）
+     也在这一组，超上限的子域名仍会入资产表，只是没有 IP/CDN 两列；
+   - **控制台**（`gui`）：监听地址、端口与访问口令。
+   外部工具路径、字典路径与 `passive.sources` 来源清单请直接编辑 `config/settings.yaml`
+   （CDN 厂商后缀名单在 `config/dicts/cdn_cname.txt` —— 找不到 CNAME 后缀就一律判为「非 CDN」）；
+   **第三方 API key 写入 `config/keys.yaml`**（独立文件，控制台只读不改写）。
 
 ### 黑名单与批量操作
 
@@ -237,6 +255,14 @@ CIDR 已支持展开：`10.0.0.0/30` 会展开为可用主机逐条进入流水�
 命中数超过「黑 ico 阈值」（默认 200）的 favicon 会被判定为**公共图标**（默认页/通用框架图标）
 并放弃拓展 —— 否则一次查询会把大量无关资产灌进来。
 未填 key 时日志会写明「未配置 fofa.email / fofa.key（见 config/keys.yaml）」，不会静默失败。
+
+**Q：任务详情里的「线索」页签一直是空的？**（第 8 个页签）
+因为产出线索的两个阶段都**默认关闭** —— 「策略配置 → 情报与线索」里的
+`intel.enabled`（CISA KEV 情报订阅）与 `heuristic.enabled`（启发式候选），打开后**只对新任务生效**。
+另外两点容易误判：① 线索的语义是"值得人工看一眼"的**候选**，不是漏洞结论，所以它**不进「潜在漏洞」页签、
+不计入漏洞数、不自动导入 POC**（报告里也只作附录）；② `intel` 要求本地指纹命中白名单信号
+（`scanner/intel.py::MATCH_RULES`）才会出一条，扫到的资产若没有 weblogic / tomcat / iis 这类
+`tech`/`banner` 标签，本来就该是 0 条；`heuristic` 还需要站点/目录/C 段里有数据可比。
 
 **Q：站点标题是乱码（中文变 `????` / `Ã¤Â¸Â`）？**
 已修复。根因是部分服务器返回 `Content-Type: text/html` 却**不带 `charset`**，而 requests 在缺省时

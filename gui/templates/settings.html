@@ -96,8 +96,8 @@
   </section>
 
   <section class="panel collapsible" data-panel="assets">
-    <h2>资产面拓展（子域接管 / JS 挖掘 / 端口服务）</h2>
-    <p class="muted">这三项都属于"发散"用的资产面拓展，默认策略见下方勾选状态；
+    <h2>资产面拓展（子域接管 / JS 挖掘 / 端口服务 / 站点截图 / 目录发现）</h2>
+    <p class="muted">这几项都属于"发散"用的资产面拓展，默认策略见下方勾选状态；
       风险与耗时各不相同，可按需逐个开关。</p>
     <label class="chk"><input type="checkbox" name="takeover_enabled" value="1"
       {{ 'checked' if s.takeover.enabled }}> 子域接管检测（CNAME 指向已停用的第三方服务，如 S3 / Heroku / GitHub Pages）</label>
@@ -111,7 +111,7 @@
     <label>JS 挖掘页面上限 <input name="jsmine_max_pages" value="{{ s.jsmine.max_pages }}"></label>
     <label>JS 文件上限 <input name="jsmine_max_js" value="{{ s.jsmine.max_js }}"></label>
     <label class="chk"><input type="checkbox" name="portscan_enabled" value="1"
-      {{ 'checked' if s.portscan.enabled }}> <b>端口与服务扫描</b>（默认关闭；nmap 优先，内置 TCP connect 兜底）</label>
+      {{ 'checked' if s.portscan.enabled }}> <b>端口与服务扫描</b>（默认关闭；引擎 auto = fscan → nmap → 内置 TCP connect）</label>
     <label>端口列表（空=内置 TOP 表，也支持 "80,443" 或 "1-1024"）
       <input name="portscan_ports" value="{{ s.portscan.ports }}" placeholder="留空使用内置 TOP 端口"></label>
     <label>扫描主机上限 <input name="portscan_max_hosts" value="{{ s.portscan.max_hosts }}"></label>
@@ -127,10 +127,18 @@
     <label>全端口时的端口区间 <input name="portscan_full_ports" value="{{ s.portscan.full_ports }}"></label>
     <label>全端口专用并发数 <input name="portscan_full_workers" value="{{ s.portscan.full_workers }}"></label>
     <label>全端口专用单端口超时（秒） <input name="portscan_full_timeout" value="{{ s.portscan.full_timeout }}"></label>
-    <label>全端口专用并发数 <input name="portscan_full_workers" value="{{ s.portscan.full_workers }}"></label>
-    <label>全端口专用单端口超时（秒） <input name="portscan_full_timeout" value="{{ s.portscan.full_timeout }}"></label>
     <label class="chk"><input type="checkbox" name="portscan_exclude_scanned" value="1"
       {{ 'checked' if s.portscan.exclude_scanned }}> 跳过本任务已扫过的端口（全端口扫描时尤其省时间）</label>
+    <label>扫描引擎
+      <select name="portscan_engine">
+        <option value="auto" {{ 'selected' if s.portscan.engine not in ('fscan', 'nmap', 'builtin') }}>自动（fscan → nmap → 内置）</option>
+        <option value="fscan" {{ 'selected' if s.portscan.engine == 'fscan' }}>只用 fscan（快，需已安装）</option>
+        <option value="nmap" {{ 'selected' if s.portscan.engine == 'nmap' }}>只用 nmap</option>
+        <option value="builtin" {{ 'selected' if s.portscan.engine == 'builtin' }}>只用内置 TCP connect</option>
+      </select></label>
+    <p class="muted small">fscan 不是必需项：把它放进 PATH 或填 <code>tools.fscan</code> 才会用。
+      调用时<b>强制带 <code>-np -nobr -nopoc</code></b>（跳过存活探测、关闭内置暴力破解与 Web POC），
+      只用它的端口发现能力；老版本不认 <code>-nopoc</code> 时会去掉它重试，<code>-np -nobr</code> 始终保留。</p>
     <p class="muted small">只想对个别 IP 补一次全端口，不必改这里的全局开关：去「全端口扫描」页勾选主机
       → 点「发起全端口扫描」，它新建的任务会用任务级选项触发，跑完不影响全局策略。</p>
     <label class="chk"><input type="checkbox" name="screenshot_enabled" value="1"
@@ -145,24 +153,30 @@
       {{ 'checked' if s.dirscan.enabled }}> <b>目录/路径发现</b>（默认关 —— 请求量最大、噪声最多；
       取消勾选＝整阶段跳过）</label>
     <label class="chk"><input type="checkbox" name="dirscan_tech_aware" value="1"
-      {{ 'checked' if s.dirscan.tech_aware }}> <b>按技术栈选字典</b>：Java 站只吃
-      <code>dirs_jsp</code>、PHP 站只吃 <code>dirs_php</code>、ASP.NET 站只吃 <code>dirs_asp</code>
-      （各叠加 <code>dirs_common</code>），判不出技术栈才用全量字典</label>
+      {{ 'checked' if s.dirscan.tech_aware }}> <b>按技术栈 + 框架选字典</b>：Java 站只吃
+      <code>dirs_jsp</code>、PHP 站只吃 <code>dirs_php</code>、ASP.NET 站只吃 <code>dirs_asp</code>，
+      判出是 WordPress / Spring / Weblogic 等框架时先扫它的专属字典
+      （<code>dirs_wordpress</code>…），再叠 <code>dirs_exposure</code>（<code>.git</code>/<code>.env</code>/备份）
+      与 <code>dirs_common</code>；判不出技术栈才用全量字典</label>
     <label class="chk"><input type="checkbox" name="dirscan_big_dict" value="1"
       {{ 'checked' if s.dirscan.big_dict }}> 未知技术栈时用大字典
       （<code>config/dicts/dirs_big.txt</code>，由外部字典整理而来）</label>
     <label>单站点最多扫多少条字典（大字典 1.5 万条时必填此上限）
       <input name="dirscan_max_paths" value="{{ s.dirscan.max_paths }}"></label>
+    <label>框架补充扫描额度（dirmap 的 <code>-e</code> 只认 php/jsp/asp，喂不进框架字典，
+      故 dirmap 跑完后按这个条数补一轮"框架 + 暴露面"；填 <code>0</code> 关闭）
+      <input name="dirscan_fw_max_paths" value="{{ s.dirscan.fw_max_paths }}"></label>
     <p class="muted small">目录扫描只对<b>不重复站点</b>跑（同任务内标题+长度相同的别名站跳过），
       目录结果里<b>重复响应长度默认不显示</b>；dirmap 放在 <code>tools/dirmap/</code> 时会自动优先用它，
       找不到就回退内置扫描。</p>
   </section>
 
   <section class="panel collapsible" data-panel="osint">
-    <h2>外部情报拓展（OSINT：C 段反查 / ICO 反查 / 证书反查）</h2>
-    <p class="muted">三项都依赖<b>第三方公共接口</b>，默认关闭；接口不可用时只记一行日志，
+    <h2>外部情报拓展（OSINT：C 段反查 / ICO 反查 / 证书反查 / 标题反查）</h2>
+    <p class="muted">四项都依赖<b>第三方公共接口</b>，默认关闭；接口不可用时只记一行日志，
       不影响流水线其它阶段。产出的新域名都进 <b>「拓展域名」</b>页（来源 <code>osint:*</code>，
-      页面上标成「C 段反查 / FOFA·ICO 反查 / FOFA·证书反查」），C 段归纳结果进任务详情的「C 段」页签。</p>
+      页面上标成「C 段反查 / FOFA·ICO 反查 / FOFA·证书反查 / FOFA·标题反查」），
+      C 段归纳结果进任务详情的「C 段」页签。</p>
     <label class="chk"><input type="checkbox" name="iprecon_enabled" value="1"
       {{ 'checked' if s.iprecon.enabled }}> <b>C 段反查</b>（IP → 域名 + /24 C 段归纳，免 key）</label>
     <label>反查接口（<code>{ip}</code> 为占位符，可替换为自建/镜像）
@@ -217,6 +231,34 @@
     {% else %}
       <p class="muted">（名单为空）</p>
     {% endif %}
+  </section>
+
+  <section class="panel collapsible" data-panel="intel">
+    <h2>情报与线索（默认关：产出的是"线索"，不是漏洞结论）</h2>
+    <p class="muted">本面板两项都<b>只写「线索」表</b>（任务详情 →「线索」页签），
+      <b>不写漏洞、不计入漏洞数、不自动导入 POC</b>。线索的语义是"值得人工看一眼"，
+      人工确认后才是漏洞 —— 所以默认关闭，避免线索堆积把结果淹没。</p>
+    <label class="chk"><input type="checkbox" name="intel_enabled" value="1"
+      {{ 'checked' if s.intel.enabled }}> 漏洞情报订阅（P3-2）：拉取 CISA KEV（免 key）与本地指纹匹配</label>
+    <div class="row">
+      <label>情报源名 source <input name="intel_source" value="{{ s.intel.source }}"></label>
+      <label>情报源地址 url（留空用内置） <input name="intel_url" value="{{ s.intel.url }}"></label>
+      <label>缓存有效期（小时） <input name="intel_cache_hours" value="{{ s.intel.cache_hours }}"></label>
+      <label>拉取超时（秒） <input name="intel_timeout" value="{{ s.intel.timeout }}"></label>
+      <label>单任务线索上限 <input name="intel_max_leads" value="{{ s.intel.max_leads }}"></label>
+    </div>
+    <p class="muted small">匹配是白名单式的：只有 <code class="mono">scanner/intel.py::MATCH_RULES</code>
+      里显式写过的资产信号（如 weblogic / tomcat / iis / phpmyadmin…）才参与，且要求情报侧的产品与厂商
+      关键词同时对上，宁可漏报也不制造噪声。拉取走一次 HTTP（<b>单向下行，不向第三方发送目标信息</b>），
+      结果缓存到 <code class="mono">data/intel/</code>，缓存内不再联网；拉取失败会退回过期缓存并告警。</p>
+    <label class="chk"><input type="checkbox" name="heuristic_enabled" value="1"
+      {{ 'checked' if s.heuristic.enabled }}> 启发式候选发现（P3-3）：对已收集数据做差分/异常聚合</label>
+    <div class="row">
+      <label>单任务线索上限 <input name="heuristic_max_leads" value="{{ s.heuristic.max_leads }}"></label>
+    </div>
+    <p class="muted small">它<b>不发任何请求</b>，只读站点/目录/漏洞/C 段四类数据，产出软 404 模板、
+      高价值入口无结论、同标题多主机、目录命中离群、同 C 段多 IP 等线索（规则见
+      <code class="mono">scanner/heuristics.py</code>，阈值都写在代码里、刻意保守）。</p>
   </section>
 
   <section class="panel collapsible" data-panel="limits">

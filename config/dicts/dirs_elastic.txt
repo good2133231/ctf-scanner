@@ -1,0 +1,13 @@
+# 由 tools/import_fw_dicts.py 从 config/dicts/dirs_big.txt 派生（elastic 框架特征路径）
+# 共 11 条 · 运行时会排在语言字典之前，确保 max_paths 截断后仍被扫到 · 请勿手工排序
+_cat
+_cat/health
+_cat/indices
+_cluster/health
+_cluster/stats
+_nodes/stats
+config/elasticsearch.yml
+public/plugins/elasticsearch/..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fetc/passwd
+admin_cat.%EXT%
+bea_wls_cluster_internal/
+elasticsearch/

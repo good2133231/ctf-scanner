@@ -1,0 +1,7 @@
+# 由 tools/import_fw_dicts.py 从 config/dicts/dirs_big.txt 派生（druid 框架特征路径）
+# 共 5 条 · 运行时会排在语言字典之前，确保 max_paths 截断后仍被扫到 · 请勿手工排序
+druid/coordinator/v1/leader
+druid/coordinator/v1/metadata/datasources
+druid/index.html
+druid/indexer/v1/taskStatus
+prod-api/druid/index.html

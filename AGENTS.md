@@ -74,12 +74,15 @@ ctf-scanner/
 ├── gui/
 │   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
 │   ├── templates/ static/ # 页面与原生 JS（app.js：轮询状态/日志、建任务、POC 管理、页签、表格筛选、任务批量操作）
-│   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（9 栏：仪表盘/任务管理/子域名资产/拓展域名/站点资产/全端口扫描/漏洞风险/POC 管理/策略配置）
-│   │                      #   （原「端口服务/C 段视野/目录发现」三栏已移除，路由 /ports /csegs /dirs 仍在，只是不进侧栏）
-│   │                      #   任务详情＝横向 8 个页签（潜在漏洞(默认)/站点/子域名/端口服务/C 段/目录/目标与配置/运行日志）+ 页签内筛选框
+│   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（9 栏，以 base.html 的 nav_items 为准：
+│   │                      #     仪表盘/任务管理/子域名资产/站点资产/IP 资产/全端口扫描/漏洞风险/POC 管理/策略配置）
+│   │                      #   （原「端口服务/C 段视野/目录发现/拓展域名」四栏已移除，路由 /ports /csegs /dirs /extdomains
+│   │                      #    仍在，只是不进侧栏；前三条是任务维度数据，/extdomains 与 /subdomains 是同一张表的不同视图）
+│   │                      #   任务详情＝横向 10 个页签（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/线索/目标与配置/运行日志）+ 页签内筛选框
+│   │                      #   （「线索」＝intel 情报订阅 + heuristic 启发式候选两类共用，**不是漏洞结论**）
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
-│   ├── stages/            # base + subdomain/takeover/portscan/probe/**screenshot**/osint/jsmine/dirscan/vulnscan（9 个）
+│   ├── stages/            # base + subdomain/takeover/portscan/probe/**screenshot**/osint/jsmine/dirscan/vulnscan/intel/heuristic（11 个）
 │   ├── pocs/engine.py     # YAML POC 引擎（nuclei 兼容子集）
 │   ├── pocs/pocs/*.yaml   # 内置 7 个示例 POC
 │   ├── owasp/checks.py    # 12 项启发式检查（装饰器 @check 注册进 CHECKS）+ 分级/分类门控
@@ -95,8 +98,10 @@ ctf-scanner/
 │   ├── iprecon.py         # IP 反查域名 + /24 C 段归纳（is_public_ip/segment_of/parse_domains，不 eval）
 │   ├── fofa.py            # FOFA 反查（qbase64）：favicon(icon_hash) / cert="domain" / title="xxx" 三种；黑 ico / 通用证书 / 公共标题阈值
 │   ├── mmh3.py            # 纯标准库 MurmurHash3 x86_32（平台 favicon 指纹用；含 SELF_TEST 向量）
+│   ├── intel.py           # 漏洞情报订阅（P3-2）：CISA KEV 拉取+本地缓存+白名单式匹配 → **只产线索**（不写 vulns）
+│   ├── heuristics.py      # 启发式候选发现（P3-3）：对已有数据做差分/异常聚合（**零请求**）→ 线索；阈值与规则表在此
 │   ├── fingerprint.py     # 内置指纹规则表 → identify(resp) -> [tag] + fetch_favicon/favicon_md5/favicon_hash
-│   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs + page_assets/delete_task/task_counts
+│   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs/**leads** + page_assets/delete_task/task_counts
 │   │                      #   + OWN_SUBDOMAIN_WHERE/EXT_SUBDOMAIN_WHERE/OVERLAP_EXT_WHERE/OVERLAP_SITE_WHERE；DB_PATH 受 CTFSCANNER_DB 覆盖）
 │   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖
 │   ├── utils.py           # run_cmd / http_request / pool_run / resolve_host / IO / base_domain() / rel_display()
@@ -105,14 +110,18 @@ ctf-scanner/
 ├── tools/import_ref_pocs.py # ast 静态解析参考项目 Python POC → config/pocs-imported/（导入项默认关闭）
 ├── tools/import_dir_dict.py # 外部目录字典 → 清洗 + **按技术栈拆桶** → config/dicts/dirs_{big,common,jsp,php,asp}.txt
 │                          #   用法：py -3 tools/import_dir_dict.py --src <字典文件>（源路径只走参数，代码里不留绝对路径）
+├── tools/import_fw_dicts.py # 从 dirs_big 派生**按框架细分**的字典（wordpress/tomcat/weblogic/spring/… 12 个桶
+│                          #   + dirs_exposure）→ config/dicts/dirs_<框架>.txt；用法：py -3 tools/import_fw_dicts.py --force
 ├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
-├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十五段（dirscan 段含 big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned））
+├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot**/iprecon/fofa/blacklist/**intel/heuristic** 十七段（dirscan 段含 big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned））
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
 ├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / sensitive(11，暂未使用) / cdn_cname(292)
 │                          #   js_thirdparty(267：JS 第三方域名单 = 内置 + URLFinder jsFiler)
 │                          #   目录字典按技术栈拆分：dirs_big(11882 全量) / dirs_common(10671) /
 │                          #   dirs_php(933) / dirs_asp(162) / dirs_jsp(116)（tools/import_dir_dict.py 生成）
+│                          #   再按**框架**细分 12 桶 + dirs_exposure（tools/import_fw_dicts.py 生成，
+│                          #   运行时排在语言/通用字典**之前**，框架判不出就不吃这部分额度）
 ├── config/pocs-user/      # 用户上传 POC；config/pocs-imported/ 导入 POC（默认关闭）；config/nuclei-templates/ 官方模板投放点
 ├── tests/smoke.py         # 唯一测试：自包含靶场(127.0.0.1:8765) + 断言，见 §6
 ├── TODO.md                # 任务确认清单（待用户确认的排期，不是承诺，见 §9）
@@ -128,13 +137,17 @@ ctf-scanner/
 其中 `scanner/evasion.py` 是**所有 HTTP 出口的统一伪装层**（由 `utils.http_request` 调用），
 `scanner/wildcard.py` 与 `scanner/passive.py` 只在 subdomain 阶段生效。
 
-- 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **9 个**：
-  `subdomain → takeover → portscan → probe → **screenshot** → osint → jsmine → dirscan → vulnscan`；
+- 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **11 个**：
+  `subdomain → takeover → portscan → probe → **screenshot** → osint → jsmine → dirscan → vulnscan
+  → **intel** → **heuristic**`；
   `screenshot` 默认关、需要本机 Edge/Chrome，浏览器路径探测见 `scanner/screenshot.py`；
+  末尾两个**线索阶段默认关**，且**只写 `leads` 表**（不写 `vulns`、不计入漏洞数、不自动导 POC）：
+  `intel` = CISA KEV 情报 × 本地指纹白名单式匹配（`scanner/intel.py`），
+  `heuristic` = 对已收集数据做零请求的差分/异常聚合（`scanner/heuristics.py`）。
   新增阶段在此登记即可被 CLI `-p` 与 GUI 识别）。
 - 阶段开关有两层：**任务级**（建任务时勾选 stages / CLI `-p`）与**策略级**
   （`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled`，阶段内部自查后跳过）。
-  `takeover` / `jsmine` 默认开，`portscan` 默认关。
+  `takeover` / `jsmine` 默认开，`portscan` / `intel` / `heuristic` 默认关。
   **例外是 `osint`**：它自身没有 `enabled`，而是由 `iprecon.enabled` / `fofa.enabled` 两个
   子开关控制，**两者都关时整阶段直接跳过（一次请求都不发）**；`fofa` 下另有两个**子能力**：
   favicon（`icon_hash`，默认随 `fofa.enabled`）与**证书反查**（`cert_enabled`，默认跟随），
@@ -173,9 +186,9 @@ ctf-scanner/
 ## 6. 如何验证改动
 
 ```powershell
-py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(8 个)/POC 级别执行门/
+py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(11 个)/POC 级别执行门/
                             # 免杀变形/mmh3 公开向量+iprecon/fofa 纯函数/响应体解码/流水线+指纹/三层门控/阶段门控(含 osint)/
-                            # 非标端口候选/报告(含 C 段 IP)/停止/导出/GUI 路由(8 栏 + /ports /csegs /dirs)与批量接口/
+                            # 非标端口候选/报告(含 C 段 IP)/停止/导出/GUI 路由(9 栏侧边栏 + /ports /csegs /dirs)与批量接口/
                             # 子域名分流+CDN 标记+站点折叠+POC 相对路径/
                             # 第十四轮新增 `[5d]`：注册域折算(base_domain) + 相对路径(rel_display) + 黑名单
                             # (含临时文件与开关失效) + 证书反查(build_cert_query/is_common_cert/search_cert 空域名) +
@@ -186,10 +199,15 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             # 目录(dirmap 行解析/重复长度文件不读/别名站去重/大小列/折叠 1↔3) +
                             # JS 敏感字符(AKID/JWT/PEM 命中 + 占位降噪) + /fullports 页与发起接口(桩 run_task) +
                             # FOFA 裸 IP 收口(_domain_of) + dirscan 阶段级"只扫不重复站点"(记录型 logger)
+# 第十七轮(续8)新增 `[5n]`：情报订阅(intel：源地址/缓存命名安全/CVE 规整/白名单匹配
+                            # 与词边界/资产文本不含标题/级别/组装线索) + 启发式(5 条规则正反例) +
+                            # leads 写入侧去重 + 默认关门控不写库 + 报告「线索」附录只在非空时出现
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
+py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
 py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanner
+# Linux 验收（同一份代码，无平台分支）：python3 tests/smoke.py 应同样 SMOKE PASS（见 TODO.md P2-3）
 ```
 
 改动后**必须**跑 `tests/smoke.py`；GUI/模板改动还应 `run_gui.py` 亲眼确认页面。
@@ -212,15 +230,16 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
 - GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
-  takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十五段（dirscan 段含 big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned）（含按级别 / 按 OWASP 分类 /
+  takeover/portscan/jsmine/dirscan/vulnscan/screenshot/iprecon/fofa/blacklist/intel/heuristic 十七段（dirscan 段含 big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned）（含按级别 / 按 OWASP 分类 /
   按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
   于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭）；
   外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
   fofa 的 email/key 要手改 `config/keys.yaml`（控制台只读、不写回凭据）。
 - `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。
-- **任务详情为 8 个页签**（潜在漏洞(默认)/站点/子域名/端口服务/C 段/目录/目标与配置/运行日志）：参考 ARL 界面的
+- **任务详情为 10 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**线索**/目标与配置/运行日志）：参考 ARL 界面的
   IP/SSL证书/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源
   还不存在（分别依赖证书解析、爬虫数据模型等）。理由与依赖关系见 `TODO.md` B-7。
+  「线索」页签是 P3-2/P3-3 的落点：**线索 ≠ 漏洞结论**，因此单列、单计数，不混进「潜在漏洞」。
 - **`osint` 的联网往返无法离线自测**：`tests/smoke.py` 只断言了 `iprecon`/`fofa`/`mmh3` 的纯函数、
   黑 ico 阈值边界与"两个子开关都关则无产出"的门控；`api.webscan.cc` 与 FOFA 的真实响应结构
   需要联网（FOFA 还需 key）才能验证 —— 首次实跑请打开开关并观察 `logs/task_*/task.log` 的 `[osint]` 行。

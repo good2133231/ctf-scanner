@@ -96,6 +96,10 @@ DEFAULTS = {
         "timeout": 1.0,            # 单端口连接超时（秒）
         "workers": 64,             # 并发连接数
         "banner": True,            # 连接成功后尝试读取 banner（纯被动读取）
+        # 引擎选择：auto = fscan → nmap → 内置 TCP connect（谁可用/有结果用谁）；
+        # 也可钉住 "fscan" / "nmap" / "builtin"。fscan 快得多（默认 600 线程，适合全端口），
+        # 但输出格式随版本浮动；钉住的那个不可用时会退回内置实现并在日志里说明。
+        "engine": "auto",
     },
     "jsmine": {
         # JS 资产挖掘（P0-3）：从站点 JS 中提取域名/接口 URL/密钥，扩展资产面
@@ -114,7 +118,11 @@ DEFAULTS = {
         "enabled": False,
         "big_dict": True,      # 未知技术栈时用全量字典（config/dicts/dirs_big.txt）
         "tech_aware": True,    # 按 sites.tech 选字典：Java 站不吃 PHP/ASP 后缀（用户要求）
-        "max_paths": 400,      # 单站点最多扫多少条字典（语言字典优先占额度）
+        "max_paths": 400,      # 单站点最多扫多少条字典（框架字典优先占额度）
+        # 框架补充扫描额度：dirmap 的 `-e` 吃不下自定义字典（只认 php/jsp/asp/d/big/all），
+        # 装了 dirmap 时框架字典会变成死代码 —— dirmap 跑完后按这个额度再补一轮
+        # 「框架字典 + 暴露面字典」的内置扫描。置 0 关闭补充扫描。
+        "fw_max_paths": 150,
     },
     "vulnscan": {
         # 漏洞初筛阶段总开关。默认开；关闭后整阶段跳过（连请求都不发），
@@ -173,11 +181,35 @@ DEFAULTS = {
         "enabled": True,
         "path": "config/blacklist.txt",
     },
+    "intel": {
+        # 漏洞情报订阅（P3-2，**默认关**）：拉取公开情报源（默认 CISA KEV，免 key），
+        # 与本次扫到的资产指纹做保守匹配，产出**线索**（leads 表 kind=intel）。
+        # **不写 vulns、不计入漏洞数、不自动导入 POC** —— 情报命中只说明"这条已知被在利用的
+        # CVE 与你扫到的组件可能相关"，是不是真漏洞要人工确认（见 scanner/intel.py）。
+        "enabled": False,
+        "source": "kev",           # 内置源名（见 scanner/intel.py::FEEDS）
+        "url": "",                 # 留空用内置地址；填了则覆盖（需同结构 JSON）
+        "cache_hours": 24,         # 本地缓存有效期；拉取失败会退回过期缓存并告警
+        "timeout": 20,             # 拉取情报源的请求超时（秒）
+        "max_leads": 50,           # 单任务最多入库多少条情报线索
+    },
+    "heuristic": {
+        # 启发式候选发现（P3-3，**默认关**）：对**已收集的**站点/目录/漏洞/C 段数据做
+        # 差分与异常聚合（软 404 模板、高价值入口无结论、同标题多主机…），产出线索
+        # （leads 表 kind=heuristic）。**不发任何请求**，也不写 vulns。
+        "enabled": False,
+        "max_leads": 50,           # 单任务最多入库多少条线索
+    },
     "tools": {
         # 优先从 PATH 解析，也可以填绝对路径（Windows 下如 tools/scanner/httpx.exe）
         "subfinder": "subfinder",
         "puredns": "puredns",
         "httpx": "httpx",
+        "nmap": "nmap",
+        # fscan（可选）：填二进制名或路径（Windows 下如 tools/scanner/fscan.exe）。
+        # 缺省只会在 PATH 里找；找不到就跳过它。**调用时强制 `-np -nobr -nopoc`**
+        # —— 不要给它开暴力破解/POC，我们只用它的端口发现能力（见 scanner/portscan.py）。
+        "fscan": "fscan",
         "dirmap": {
             "python": "python",
             # dirmap 是**外部项目**（依赖 gevent/lxml/progressbar），不随本仓库分发。
@@ -195,10 +227,26 @@ DEFAULTS = {
         "dirs_big": "config/dicts/dirs_big.txt",     # 全量（未知技术栈时用）
         # 按技术栈拆分的字典（tools/import_dir_dict.py --src <外部字典> 生成）：
         # 运行时按 sites.tech 只取「语言字典 + 通用字典」，避免把三种语言的后缀全打一遍
-        "dirs_common": "config/dicts/dirs_common.txt",
+        "dirs_common": "config/dicts/dirs_common.txt",   # 通用路径（所有已判明语言栈的站点都吃）
         "dirs_jsp": "config/dicts/dirs_jsp.txt",     # Java 系（.jsp/.do/.action/.java…）
         "dirs_php": "config/dicts/dirs_php.txt",     # PHP 系（.php/.phtml…）
         "dirs_asp": "config/dicts/dirs_asp.txt",     # ASP/.NET 系（.asp/.aspx/.config…）
+        # 框架字典（tools/import_fw_dicts.py 从全量字典按特征正则派生，**运行时排在最前**）：
+        # 判出站点是 WordPress / Spring / Weblogic… 就先扫它的专属路径，
+        # 免得 `dirs_common` 上万条把 `wp-login.php`、`/actuator/env` 挤出 max_paths 额度。
+        "dirs_wordpress": "config/dicts/dirs_wordpress.txt",
+        "dirs_phpmyadmin": "config/dicts/dirs_phpmyadmin.txt",
+        "dirs_druid": "config/dicts/dirs_druid.txt",
+        "dirs_spring": "config/dicts/dirs_spring.txt",
+        "dirs_weblogic": "config/dicts/dirs_weblogic.txt",
+        "dirs_tomcat": "config/dicts/dirs_tomcat.txt",
+        "dirs_jenkins": "config/dicts/dirs_jenkins.txt",
+        "dirs_elastic": "config/dicts/dirs_elastic.txt",
+        "dirs_swagger": "config/dicts/dirs_swagger.txt",
+        "dirs_confluence": "config/dicts/dirs_confluence.txt",
+        "dirs_gitlab": "config/dicts/dirs_gitlab.txt",
+        # 通用暴露面（`.git` / `.env` / 备份文件）：对**所有**站点生效，排语言字典之后、通用字典之前
+        "dirs_exposure": "config/dicts/dirs_exposure.txt",
         "sensitive": "config/dicts/sensitive.txt",  # 预留：内置检查暂用硬编码清单
         "cdn_cname": "config/dicts/cdn_cname.txt",  # CDN 厂商 CNAME 后缀（子域名 CDN 标记用）
     },

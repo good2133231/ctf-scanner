@@ -80,9 +80,11 @@ def main():
     assert not expand_cidr("10.0.0.0/16") and not parse_lines(["10.0.0.0/16"])
     print("[1] targets ok:", ts, "| cidr:", cidr)
 
-    # 1b) 流水线阶段注册：takeover / portscan / osint / jsmine 均在顺序表与注册表中
+    # 1b) 流水线阶段注册：全部阶段都在顺序表与注册表中；
+    # intel / heuristic（P3-2/P3-3）固定排在**最后**且默认关，只写 leads 表
     assert STAGE_ORDER == ["subdomain", "takeover", "portscan", "probe",
-                           "screenshot", "osint", "jsmine", "dirscan", "vulnscan"], STAGE_ORDER
+                           "screenshot", "osint", "jsmine", "dirscan", "vulnscan",
+                           "intel", "heuristic"], STAGE_ORDER
     print("[1b] stages ok:", ",".join(STAGE_ORDER))
 
     # 2) POC 加载与校验
@@ -584,12 +586,117 @@ def main():
     assert len(full) == 65535 and full[0] == 1 and full[-1] == 65535, len(full)
     assert ps.parse_ports("80,443,8080") == [80, 443, 8080]
 
+    # (1b) 续8：外部工具端口扫描接入 —— fscan 适配器（强制 -np -nobr）+ nmap/fscan 命令行压缩。
+    # 命令行**长度**是硬约束：65535 个端口逐个数逗号拼出来约 38 万字符，Windows CreateProcess
+    # 上限 32767，会直接 OSError 起不来（原 nmap 路径就踩了这个坑，全端口时静默回退内置）。
+    assert ps.format_ports([80, 443, 8000, 8001, 8002, 8080]) == "80,443,8000-8002,8080"
+    assert ps.format_ports(range(1, 65536)) == "1-65535"
+    assert ps.format_ports([]) == ""
+    assert set(ps._fscan_flags()) >= {"-np", "-nobr", "-nopoc"}
+    assert set(ps._fscan_flags(with_nopoc=False)) >= {"-np", "-nobr"}, \
+        "老版本回退路径也必须保留 -np -nobr（非破坏性红线）"
+
+    _ps_calls = []
+    _orig_run_cmd = ps.run_cmd
+
+    def _stub_run(*a, **k):
+        _ps_calls.append([str(x) for x in (a[0] if a else k.get("argv"))])
+        return _stub_run.reply.pop(0)
+
+    _stub_run.reply = []
+    ps.run_cmd = _stub_run
+    try:
+        # fscan 输出带 ANSI 颜色码，必须剥掉才能解析；`[*]` 的 POC 行**故意不认**
+        _stub_run.reply = [(0, "[+] \x1b[32m10.0.0.1:80\x1b[0m open\n"
+                              "[+] 10.0.0.1:8080 open\n"
+                              "[*] 10.0.0.1:80 weblogic-poc\n"
+                              "[+] 10.0.0.1:8080 open\n", "")]
+        got = ps.fscan_scan("h.test", "10.0.0.1", [80, 8080], binary="fscan")
+        assert [r["port"] for r in got] == [80, 8080], got
+        assert got[0]["service"] == "http" and got[1]["service"] == "http-alt"
+        assert got[0]["host"] == "h.test" and got[0]["ip"] == "10.0.0.1"
+        cmd = _ps_calls[-1]
+        assert {"-np", "-nobr", "-nopoc"} <= set(cmd), cmd
+        assert cmd[cmd.index("-h") + 1] == "10.0.0.1" and cmd[cmd.index("-p") + 1] == "80,8080"
+        assert cmd[cmd.index("-t") + 1] == "512", cmd   # workers 缺省 64 × 8
+        # 老版本不认 -nopoc：去掉它重试一次，-np -nobr 必须还在
+        _before = len(_ps_calls)
+        _stub_run.reply = [(1, "", "flag provided but not defined: -nopoc"),
+                           (0, "[+] 10.0.0.1:443 open\n", "")]
+        got = ps.fscan_scan("h.test", "10.0.0.1", [443], binary="fscan")
+        assert [r["port"] for r in got] == [443]
+        assert len(_ps_calls) - _before == 2, _ps_calls[_before:]
+        assert "-nopoc" not in _ps_calls[-1] and {"-np", "-nobr"} <= set(_ps_calls[-1])
+        # rc≠0 且不是参数问题 → 返回 None，交给上层回退 nmap/内置
+        _stub_run.reply = [(1, "", "boom")]
+        assert ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan") is None
+        # 认不出任何 open 行 → 空结果（宁缺勿错，不拿 [*] POC 行当开放端口）
+        _stub_run.reply = [(0, "[*] 10.0.0.1:80 weblogic-poc\n", "")]
+        assert ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan") == []
+
+        # nmap 同样要走压缩后的端口串（否则全端口在 Windows 上起不来）
+        _stub_run.reply = [(0, "Host: 10.0.0.1 ()\tPorts: 80/open/tcp//http///\n", "")]
+        nm = ps.nmap_scan("h.test", "10.0.0.1", list(range(1, 65536)), binary="nmap")
+        assert nm and nm[0]["port"] == 80, nm
+        nm_cmd = _ps_calls[-1]
+        assert nm_cmd[nm_cmd.index("-p") + 1] == "1-65535", "nmap 端口参数也要压缩"
+        assert sum(len(x) for x in nm_cmd) < 1000, "命令行不该被 65535 个端口撑爆"
+    finally:
+        ps.run_cmd = _orig_run_cmd
+
+    # 引擎选择：钉住不存在的引擎 → 日志明说并回退内置（不允许空跑）
+    from scanner.stages import portscan as _ps_stage
+    _rec = []
+
+    class _Rec2:
+        info = warning = debug = staticmethod(lambda m, *a: _rec.append(str(m)))
+        error = exception = staticmethod(lambda m, *a: _rec.append(str(m)))
+
+    _eng_settings = copy.deepcopy(settings)
+    _eng_settings["portscan"] = {"enabled": True, "max_hosts": 5, "ports": "80",
+                                 "engine": "fscan", "banner": False}
+    _eng_calls = []
+    _orig_host = _ps_stage.portscan.scan_host
+    _orig_fs = _ps_stage.portscan.fscan_scan
+    _orig_nm = _ps_stage.portscan.nmap_scan
+    _orig_which = _ps_stage.which
+    _ps_stage.portscan.scan_host = lambda *a, **k: (_eng_calls.append("builtin") or [])
+    _ps_stage.portscan.fscan_scan = lambda *a, **k: _eng_calls.append("fscan")
+    _ps_stage.portscan.nmap_scan = lambda *a, **k: _eng_calls.append("nmap")
+    _ps_stage.which = lambda name: None          # 假装啥都没装
+    try:
+        _eng_tid = db.create_task("smoke-eng", "10.1.1.1", ["portscan"], {})
+        _eng_ctx = StageContext(_eng_tid, "smoke-eng", parse_lines(["10.1.1.1"]),
+                                ["portscan"], {}, _eng_settings,
+                                Path(_TMPDIR) / "eng", _Rec2())
+        _ps_stage.PortscanStage(_eng_ctx).run()
+        assert _eng_calls and set(_eng_calls) == {"builtin"}, _eng_calls
+        assert any("指定引擎 fscan 不可用" in x for x in _rec), _rec
+    finally:
+        _ps_stage.portscan.scan_host = _orig_host
+        _ps_stage.portscan.fscan_scan = _orig_fs
+        _ps_stage.portscan.nmap_scan = _orig_nm
+        _ps_stage.which = _orig_which
+    print("[5e-0] fscan/nmap 适配 ok: 端口串压缩为 1-65535（命令行 <1000 字符）；"
+          "fscan 强制 -np -nobr -nopoc（老版本回退仍保留 -np -nobr）")
+
     # (2) FOFA 标题反查：语句构造 + 公共标题阈值 + 模板页标题（连查询都不发）
     assert fofa.build_title_query("维保中心") == 'title="维保中心"'
     assert fofa.is_common_title(200, settings) is False
     assert fofa.is_common_title(201, settings) is True
     assert fofa.is_generic_title("404 Not Found") and fofa.is_generic_title("Welcome to nginx")
     assert not fofa.is_generic_title("维保中心后台管理系统")
+    # 续8：按 2026-09-23 实测样本校准 —— 公共标题前移到"零请求预筛"（前缀层）
+    assert fofa.is_generic_title("后台管理系统"), "实测 192188 条，应零请求跳过"
+    assert fofa.is_generic_title("后台管理系统 - 登录"), "前缀变体同样是公共模板页"
+    assert fofa.is_generic_title("Index of /uploads"), "Apache 目录列表页的各种子路径"
+    assert fofa.is_generic_title("  INDEX OF /Uploads  "), "大小写与前后空白都应先归一化"
+    assert not fofa.is_generic_title("维保中心"), "具体站点标题（实测仅 15 条）必须照查"
+    assert not fofa.is_generic_title("维保中心 - 后台管理系统"), "前缀不同就不该误杀"
+    assert fofa.is_generic_cert("example.com") and fofa.is_generic_cert("www.example.com")
+    assert fofa.is_generic_cert("localhost") and fofa.is_generic_cert("")
+    assert fofa.is_generic_cert("acme-corp.cn") is False
+    assert fofa.is_generic_cert("example.test") is False, "保留后缀不在黑名单里（免得误伤自测）"
     assert fofa.search_title("", settings)[2], "空标题应显式报错而不是发请求"
     assert source_label("osint:fofa-title") == "FOFA·标题反查"
 
@@ -749,7 +856,9 @@ def main():
     calls = {"subfinder": [], "passive": []}
 
     def _fake_which(name):
-        return "C:/fake/subfinder.exe" if name == "subfinder" else None
+        # 相对形式的假二进制路径：run_cmd 也被桩掉，这里只是"有个非空路径"而已；
+        # 刻意不写盘符（[5o] 的跨平台审计会拒绝源码里出现写死的盘符路径）。
+        return "fake-bin/subfinder" if name == "subfinder" else None
 
     def _fake_run_cmd(argv, cwd=None, timeout=None):
         calls["subfinder"].append(list(argv))
@@ -829,6 +938,86 @@ def main():
     print(f"[5g] 字典按栈拆分 ok: common/jsp/php/asp = "
           f"{counts['dirs_common']}/{counts['dirs_jsp']}/{counts['dirs_php']}/{counts['dirs_asp']}"
           f"（全量 {counts['dirs_big']}）；Java 站只吃 jsp+common")
+
+    # 5g-2) 续8：字典再按**框架**细分（tools/import_fw_dicts.py 派生，运行时排最前）
+    import importlib.util
+    import scanner.stages.dirscan as _ds_mod
+    from scanner.stages.dirscan import (FRAMEWORK_ORDER, FRAMEWORK_TAGS, _framework_of,
+                                        _FULL_LAYERS, _FW_LAYERS)
+    _spec = importlib.util.spec_from_file_location(
+        "_fw_dicts", ROOT / "tools" / "import_fw_dicts.py")
+    _fwgen = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_fwgen)
+    assert _framework_of("wordpress,nginx", "http://a/") == "wordpress"
+    assert _framework_of("springboot", "http://a/") == "spring", "同义词要归到同一个桶"
+    assert _framework_of("elasticsearch", "http://a/") == "elastic"
+    assert _framework_of("apache,nginx", "http://a/wp-admin/") == "wordpress", "URL 兜底判据"
+    assert _framework_of("apache,nginx", "http://a/actuator/env") == "spring"
+    assert _framework_of("apache,nginx", "http://a/env") == "", "判不出就返回空，不能瞎猜"
+    # 多命中时取 FRAMEWORK_ORDER 里最靠前的（顺序即优先级）
+    assert _framework_of("jenkins,wordpress", "http://a/") == "wordpress"
+    # 桶名 ↔ 生成器的 BUCKETS 必须一一对应（少一个键 = 运行时取不到文件）
+    fw_counts = {}
+    for name in FRAMEWORK_ORDER:
+        items = [x for x in (dict_dir / f"dirs_{name}.txt").read_text(
+            encoding="utf-8").splitlines() if x and not x.startswith("#")]
+        fw_counts[name] = len(items)
+        assert items, f"dirs_{name}.txt 为空（跑 tools/import_fw_dicts.py --force 生成）"
+    assert set(FRAMEWORK_TAGS.values()) == set(FRAMEWORK_ORDER), FRAMEWORK_TAGS
+    assert set(_fwgen.BUCKETS) == set(FRAMEWORK_ORDER) | {"exposure"}, (
+        f"dirscan.FRAMEWORK_ORDER 与 tools/import_fw_dicts.py 的 BUCKETS 已经对不上了："
+        f"{set(_fwgen.BUCKETS) ^ (set(FRAMEWORK_ORDER) | {'exposure'})}")
+    assert tuple(_fwgen.BUCKETS)[:-1] == FRAMEWORK_ORDER, (
+        "生成器的桶顺序（= 正则优先级）应与 FRAMEWORK_ORDER 一致")
+    exposure = [x for x in (dict_dir / "dirs_exposure.txt").read_text(
+        encoding="utf-8").splitlines() if x and not x.startswith("#")]
+    assert exposure, "dirs_exposure.txt 为空"
+    assert any(x in exposure for x in (".git/config", ".env")), "暴露面字典缺高价值条目"
+
+    # 框架字典必须排在**语言字典之前**（max_paths 截断时先保框架特征路径）
+    wp_paths = dstage._load_paths("php", {"max_paths": 50}, fw="wordpress")
+    wp_set = set(x for x in (dict_dir / "dirs_wordpress.txt").read_text(
+        encoding="utf-8").splitlines() if x and not x.startswith("#"))
+    assert len(wp_paths) == 50 and wp_paths[0] in wp_set, wp_paths[:3]
+    assert wp_paths != php_paths, "同一站点给了框架就该拿到不同的字典前缀"
+    # 保序去重：框架字典是从全量字典抽的，跨文件必然有重复条目，额度不能被重复项吃掉
+    assert len(set(wp_paths)) == len(wp_paths), "字典条目没去重"
+    # 同一个框架桶在多个站点上要拿到**同一批**路径（字典是纯函数，不该受站点顺序影响）
+    assert dstage._load_paths("php", {"max_paths": 50}, fw="wordpress") == wp_paths
+    # 框架补充扫描只要 fw + exposure 两层，不吃语言/通用字典
+    fw_only = dstage._load_paths("php", {"max_paths": 50}, fw="wordpress",
+                                 layers=_FW_LAYERS, limit=30)
+    assert len(fw_only) == 30 and fw_only[0] in wp_set, fw_only[:3]
+    assert _FULL_LAYERS[:2] == ("fw", "lang") and "common" not in _FW_LAYERS
+    # 只要框架层时，判不出框架就一条都取不到（`_builtin_scan(only_fw=True)` 靠这个
+    # 跳过无框架的站点 —— dirmap 自带的 default.txt 已含 .git/.env，不必重复扫）
+    assert dstage._load_paths("php", {"max_paths": 50}, fw="", layers=("fw",)) == []
+    exp_only = dstage._load_paths("php", {"max_paths": 50}, fw="", layers=_FW_LAYERS)
+    assert len(exp_only) == 50 and exp_only[0] in set(exposure), exp_only[:3]
+
+    # fw_max_paths=0 → 框架补充扫描必须**连请求都不发**（不能只靠截断变成 1 条）
+    sent = []
+    orig_req = _ds_mod.http_request
+    _ds_mod.http_request = lambda *a, **kw: (sent.append(a) or None)
+    try:
+        assert dstage._builtin_scan([{"url": "http://wp.example.com/", "tech": "wordpress"}],
+                                    {"max_paths": 400, "fw_max_paths": 0, "tech_aware": True},
+                                    {}, only_fw=True) == []
+        assert not sent, "fw_max_paths=0 时不该发任何请求"
+        # only_fw 还要跳过判不出框架的站点（省掉无意义请求）
+        assert dstage._builtin_scan([{"url": "http://plain.example.com/", "tech": "nginx"}],
+                                    {"max_paths": 400, "fw_max_paths": 150},
+                                    {}, only_fw=True) == []
+        assert not sent, "判不出框架的站点不该进补充扫描"
+        # tech_aware=False（用户主动关掉按栈选字典）时补充扫描也不该瞎猜框架
+        assert dstage._builtin_scan([{"url": "http://wp.example.com/", "tech": "wordpress"}],
+                                    {"max_paths": 400, "fw_max_paths": 150,
+                                     "tech_aware": False}, {}, only_fw=True) == []
+        assert not sent
+    finally:
+        _ds_mod.http_request = orig_req
+    print(f"[5g-2] 框架字典 ok: {'/'.join(f'{k}:{v}' for k, v in fw_counts.items())}"
+          f" + exposure:{len(exposure)}；wordpress 站首选 {wp_paths[0]}")
 
     # 5h) 第十七轮(3)：GUI 侧栏/新页面/解析原因 + portscan 用真实 IP
     from gui.app import ip_note_label
@@ -1063,6 +1252,171 @@ def main():
     assert "screenshot" in STAGE_ORDER
     print("[5m] 低危清理 ok: 报告转义/pool_run保falsy/开放重定向/favicon HTML过滤/域名口径/"
           "FOFA转义/dnsq路径缓存/dirmap停止检查/默认开关一致")
+
+    # (5n) 续8：P3-2 漏洞情报订阅 + P3-3 启发式候选。两者**默认关**、**只写 leads 表**，
+    #      边界（不写 vulns / 不计入漏洞数 / 不自动导 POC）必须钉死，否则下次有人顺手
+    #      把它们并进 vulns，误报噪声就回来了。
+    import json as _json
+    from scanner import intel as intel_mod
+    from scanner import heuristics as heur_mod
+    from scanner.stages.intel import IntelStage
+    from scanner.stages.heuristic import HeuristicStage
+
+    # 1) 情报源地址：intel.url 优先 → 内置表 → 认不出的 source 视为未配置
+    assert intel_mod.feed_url({"intel": {"url": "http://feed.test/x.json"}}) == "http://feed.test/x.json"
+    assert intel_mod.feed_url({}) == intel_mod.FEEDS["kev"], "默认源应是 KEV"
+    assert intel_mod.feed_url({"intel": {"source": "nope"}}) == ""
+    # 缓存文件名按 source 生成，且清掉路径穿越字符（不能让配置决定往哪写文件）
+    _cp = intel_mod.cache_path({"intel": {"source": "../KEV!"}})
+    assert _cp.parent == intel_mod.cache_dir() and _cp.name == "kev.json", _cp
+    # 2) 规整：拿不到 CVE 号的记录一律无效（CVE 号是去重与溯源的键）
+    assert intel_mod.normalize_item({"product": "x"}) is None
+    assert intel_mod.normalize_item("nope") is None
+    _kev = {"cveID": "CVE-2020-14882", "vendorProject": "Oracle",
+            "product": "Oracle WebLogic Server",
+            "vulnerabilityName": "Oracle WebLogic Server RCE",
+            "shortDescription": "desc", "requiredAction": "patch",
+            "knownRansomwareCampaignUse": "Known", "dateAdded": "2021-11-03",
+            "dueDate": "2021-11-17", "cwes": ["CWE-306"]}
+    _it = intel_mod.normalize_item(_kev)
+    assert _it["cve"] == "CVE-2020-14882" and _it["vendor"] == "Oracle"
+    assert _it["cwes"] == "CWE-306"
+    _items = intel_mod.parse_feed(_json.dumps({"vulnerabilities": [_kev, {"noCve": 1}]}))
+    assert len(_items) == 1, "无效记录（无 CVE 号）应被丢掉"
+    assert intel_mod.parse_feed("not json") == []
+    # 3) 匹配：必须同时满足"资产信号 + 产品关键词 + 厂商对得上"；短信号有词边界
+    assert intel_mod.match_item(_it, "weblogic 10.3.6 oracle") == ["weblogic"]
+    assert intel_mod.match_item(_it, "grafana/8.0") == []
+    assert intel_mod.match_item(_it, "") == []
+    assert not intel_mod._signal_hit("heliis", "iis"), "短信号不得被别的单词吞掉"
+    assert intel_mod._signal_hit("microsoft-iis/10.0", "iis")
+    # 参与匹配的文本**不含标题**（标题是用户内容，纳进来只会制造误报）
+    _kw = intel_mod.asset_keywords(site={"tech": "wordpress", "server": "nginx",
+                                        "title": "AcmePortal"})
+    assert _kw == "wordpress nginx" and "acme" not in _kw, _kw
+    assert intel_mod.asset_keywords(
+        port={"service": "http", "banner": "Apache-Coyote/1.1"}) == "http apache-coyote/1.1"
+    # 4) 级别只用于排序：已知被勒索利用 → high，其余 medium（不是 CVSS 评分）
+    assert intel_mod.level_of(_it) == "high" and intel_mod.level_of({}) == "medium"
+    _lead = intel_mod.build_lead(_it, "http://a/", ["weblogic"])
+    assert _lead["kind"] == "intel" and _lead["code"] == "CVE-2020-14882"
+    assert "nvd.nist.gov" in _lead["url"] and "人工验证" in _lead["detail"]
+
+    ld_tid = db.create_task("smoke-leads", targets, ["intel", "heuristic"], {"offline": True})
+    # 5) 写入侧去重：(kind, code, target) 相同不重复插入；leads 属于"资产表"（重启时会被清）
+    assert db.insert_leads(ld_tid, [_lead, dict(_lead)]) == 1
+    assert db.insert_leads(ld_tid, [_lead]) == 0, "同一条线索不该重复入库"
+    assert "leads" in db.ASSET_TABLES
+    _rows = db.list_leads(ld_tid)
+    assert len(_rows) == 1 and _rows[0]["kind"] == "intel"
+    assert not db.list_vulns(task_id=ld_tid, limit=10), "线索绝不能写进 vulns"
+
+    # 6) 启发式五条规则各一正例 + 关键反例
+    _d_soft = [{"site_url": "http://s1/", "path": f"/x{i}", "status": 200, "length": 100}
+               for i in range(10)]
+    assert [x["code"] for x in heur_mod.find_leads([], _d_soft, [], [])] == ["soft404"]
+    _d_entry = [{"site_url": "http://s2/", "path": "/.git/config", "status": 200, "length": 10}]
+    assert [x["code"] for x in heur_mod.find_leads([], _d_entry, [], [])] == ["entry-git-dir"]
+    # 检测层已经就这条路径给过结论 → 不再重复报线索
+    assert heur_mod.find_leads(
+        [], _d_entry, [{"target": "http://s2/", "detail": "/.git/config 可读"}], []) == []
+    _s_t = [{"url": f"http://a{i}/", "host": f"a{i}", "title": "AcmePortalLogin"} for i in (1, 2, 3)]
+    assert [x["code"] for x in heur_mod.find_leads(_s_t, [], [], [])] == ["same-title"]
+    # 公共模板标题（后台管理系统 / Index of /）不算"同一套系统"
+    assert heur_mod.find_leads(
+        [{"url": "http://b1/", "host": "b1", "title": "后台管理系统"},
+         {"url": "http://b2/", "host": "b2", "title": "后台管理系统"}], [], [], []) == []
+    _d_out = [{"site_url": "http://big/", "path": f"/p{i}", "status": 404, "length": i}
+              for i in range(20)]
+    _d_out += [{"site_url": "http://small/", "path": "/q", "status": 200, "length": 1}]
+    assert [x["code"] for x in heur_mod.find_leads([], _d_out, [], [])] == ["dir-outlier"]
+    _cseg = [{"segment": "10.0.0.0/24", "ip": f"10.0.0.{i}", "count": 2} for i in (1, 2, 3)]
+    assert [x["code"] for x in heur_mod.find_leads([], [], [], _cseg)] == ["cseg-cluster"]
+    assert heur_mod.find_leads([], [], [], [{"segment": "10.0.0.0/24", "ip": "10.0.0.1",
+                                             "count": 0}]) == [], "无反查结果不算聚集"
+    assert heur_mod.find_leads([], [], [], []) == []
+
+    # 7) 门控：默认关时两个阶段**连库都不写**（策略配置没打开就不该产生线索）
+    _gate = copy.deepcopy(settings)
+    _gate["intel"] = {"enabled": False}
+    _gate["heuristic"] = {"enabled": False}
+    _gctx = StageContext(ld_tid, "smoke-lead-gate", parse_lines([targets]),
+                         ["intel", "heuristic"], {}, _gate,
+                         Path(_TMPDIR) / "lead-gate", rec)
+    IntelStage(_gctx).run()
+    HeuristicStage(_gctx).run()
+    assert len(db.list_leads(ld_tid)) == 1, "默认关时不该写入任何新线索"
+    assert DEFAULTS["intel"]["enabled"] is False and DEFAULTS["heuristic"]["enabled"] is False
+    assert STAGE_ORDER[-2:] == ["intel", "heuristic"], "两个新阶段应固定在流水线最后"
+
+    # 8) GUI：策略配置渲染出两个开关、任务详情有「线索」页签；报告附录只在有关键线索时出现
+    _shtml = c.get("/settings").get_data(as_text=True)
+    assert 'name="intel_enabled"' in _shtml and 'name="heuristic_enabled"' in _shtml
+    _dhtml = c.get(f"/tasks/{ld_tid}").get_data(as_text=True)
+    assert 'data-tab="leads"' in _dhtml and 'id="pane-leads"' in _dhtml
+    _md_lead = generate(ld_tid)
+    assert "线索（非漏洞结论" in _md_lead and "CVE-2020-14882" in _md_lead
+    assert "线索（非漏洞结论" not in generate(ds_tid), "无线索的任务不该多出附录小节"
+    print("[5n] 情报订阅/启发式 ok: KEV 解析+白名单匹配(词边界)+只写 leads(去重)/"
+          "五条启发式规则+反例/默认关门控/GUI 开关与页签/报告附录")
+
+    # (5o) 续8：P2-3 跨平台（Linux + Windows）**可执行**验证。
+    #      本机只有 Windows/Python 3.9（无 WSL/Docker），"Linux 实机跑一次 smoke"这一步
+    #      在这里做不了；因此把**所有能自动化的跨平台风险点**都变成断言 ——
+    #      这一节在 Linux 上跑就等于那次验收（同一份代码，无平台分支）。
+    #      仍未覆盖（如实标注）：无头浏览器截图、fscan/nmap/subfinder 等**外部二进制**的真实调用，
+    #      需要 Linux 上装好对应工具才能验（代码里全部走 shutil.which + 内置兜底，找不到不会崩）。
+    import inspect as _inspect
+    import re as _re
+    from scanner.utils import pick_python, run_cmd
+
+    # 1) 全部源码能被 compile（语法层不存在平台差异；顺带覆盖 CLI/tools）
+    #    排除 tools/dirmap/：那是**第三方** Python2 项目（目录联接，不随仓库分发），
+    #    它的语法本来就不能用 Python3 compile（print 语句），不是本项目的问题。
+    _SKIP_DIRS = (ROOT / "tools" / "dirmap",)
+    _py = sorted(p for _d in ("scanner", "gui", "cli", "tools", "tests")
+                 for p in (ROOT / _d).rglob("*.py")
+                 if not any(str(p).startswith(str(s)) for s in _SKIP_DIRS))
+    assert len(_py) > 30, f"源码文件数异常：{len(_py)}"
+    for _p in _py:
+        compile(_p.read_text(encoding="utf-8", errors="replace"), str(_p), "exec")
+
+    # 2) 每个模块都能 import（只有模块级 winreg/msvcrt 这类才会在这里炸）
+    import importlib as _importlib
+    _mods = []
+    for _p in sorted((ROOT / "scanner").rglob("*.py")):
+        if _p.name == "__init__.py":
+            continue
+        _mods.append(".".join(_p.relative_to(ROOT).with_suffix("").parts))
+    _mods += ["gui.app", "cli.client"]
+    for _m in _mods:
+        _importlib.import_module(_m)
+    assert "scanner.intel" in _mods and "scanner.heuristics" in _mods, "新模块未被遍历到"
+
+    # 3) 源码级红线：不 shell、不 os.system、不写死盘符路径（这三类都会在 Linux 上翻车）
+    #    注意：下面这些**断言文本本身**也会被扫到，所以消息里刻意不写出被禁的字面量
+    #    （例如不写 "shell" 加等号加 True 的完整形式），否则测试会自己匹配自己。
+    _src = {p: p.read_text(encoding="utf-8", errors="replace") for p in _py}
+    for _p, _txt in _src.items():
+        _rel = _p.relative_to(ROOT).as_posix()
+        assert not _re.search(r"shell\s*=\s*" + "True", _txt), f"{_rel}: 子进程不得走 shell"
+        assert not _re.search(r"\bos\.(system|popen)\s*\(", _txt), f"{_rel}: 不得用 os 的 shell 调用"
+        assert not _re.search(r"['\"][A-Za-z]:[\\/]", _txt), f"{_rel}: 出现写死的盘符路径"
+        # 文本文件读写必须显式 encoding（否则 Windows 默认 GBK、Linux 默认 UTF-8，行为就分叉了）
+        assert not _re.search(r"\.(read_text|write_text)\(\s*\)", _txt), f"{_rel}: 文本读写缺 encoding"
+        assert not _re.search(r"\bopen\(\s*\)", _txt), f"{_rel}: 内建 open 缺参数"
+    assert "shell=False" in _inspect.getsource(run_cmd), "run_cmd 必须显式关闭 shell"
+
+    # 4) 子进程与解释器选择在两种系统上行为一致
+    _rc, _out, _err = run_cmd(["ctfscanner-no-such-binary-xyz"])
+    assert _rc == 127, f"命令不存在应返回 127，实际 {_rc}"
+    _rc2, _, _ = run_cmd([sys.executable, "-c", "import time; time.sleep(5)"], timeout=1)
+    assert _rc2 == 124, f"超时应返回 124，实际 {_rc2}"
+    assert pick_python("ctfscanner-no-such-python-xyz") == sys.executable, \
+        "配置的解释器不可用时必须回退到当前解释器（Linux 上 python 常常不存在）"
+    print(f"[5o] 跨平台静态审计 ok: 编译 {len(_py)} 个源文件 / import {len(_mods)} 个模块 / "
+          f"无 shell 直通·盘符路径·缺 encoding；run_cmd 127/124 与 pick_python 回退"
+          f"（Linux 实机验收仍需在 Linux 上跑本脚本，见 TODO.md P2-3）")
     print("SMOKE PASS")
 
 
