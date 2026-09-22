@@ -3,6 +3,118 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第九轮：接管第八轮成果审计（修 1 处文档事实错误 + 安全审计 + 补提交）
+
+### 背景
+
+用户反馈"刚才让别的 AI 完成了一部分任务，请继续工作、并修掉他残留的 bug"。接管时先做现状复核：
+`git log` 见单提交 `2267e51`（392 文件），但工作区**不干净**（`AGENTS.md` / `CHANGELOG_AI.md` /
+`TODO.md` 三个文件未提交，第八轮的文档改动停在提交之后）；`py -3 tests/smoke.py` → **SMOKE PASS**。
+
+### 变更（修正第八轮的 1 处事实错误）
+
+1. **`AGENTS.md` §2 把环境写错了（第八轮的"纠偏"本身是错的）**：
+   - 第八轮把「`python` / `git` 不在 PATH」改成「`python` / `py -3` 均在 PATH，实测可用」。
+   - 第九轮实测反证：`Get-Command python` → 无结果；`where.exe python` → `Could not find files`；
+     `python -V` → `CommandNotFoundException`；`Get-Command py` → `C:\WINDOWS\py.exe`，
+     `py -3 -V` → `Python 3.9.0`。**原文才是事实**。
+   - 已按实测改回，并加一行说明（`……\WindowsApps\python.exe` 的 App Execution Alias 存于磁盘，
+     但 `WindowsApps` 不在 PATH，所以 `python` 不可解析）。
+   - **影响评估**：纯文档错误，无功能影响 —— 框架取解释器一律走 `utils.pick_python()`
+     （`scanner/utils.py:28-36`：`which(configured)` 不中则回退 `sys.executable`），
+     实测回退到 `C:\Users\材料\AppData\Local\Programs\Python\Python39\python.exe`。
+     真正的风险是**误导下一个接手的 AI 去写 `python xxx.py` 命令**（会直接失败），故必须改。
+2. **`CHANGELOG_AI.md` 第八轮条目就地加修正标注**（不删历史）：第 6 条下方加 ⚠️ 修正块，
+   指出其结论错误、以及"验证"一节的 `python tests/smoke.py` 记法不成立（实际是 `py -3 tests/smoke.py`）。
+3. **`TODO.md` C-1** 第八轮实施记录里同步加注，避免"第八轮完成"被误读为"环境描述已可信"。
+
+### 变更（安全审计：本机可离线做的部分）
+
+4. **审计新增分页/筛选的 SQL 注入面**（`scanner/db.py::page_assets`）—— 结论**安全**：
+   `table` 只用于索引常量表 `_ASSET_PAGES`，`cols` / `order` 全部取自该常量；
+   用户输入 `q` 经 `?` 参数化（`params = [f"%{q}%"] * len(cols)`），无字符串拼接进 SQL。
+5. **审计 `db.update_task(**fields)` 的动态 SET 子句**（`scanner/db.py:144-147`，`sets` 由键名拼接）：
+   全仓 grep 确认 **10 处调用方全部传固定关键字**（`status` / `progress` / `current_stage` /
+   `error` / `log_file`），无任何用户可控键名进入 `sets` —— 不可注入。
+6. **复核第八轮 git 操作无敏感文件入库**（自称已验，独立复验）：`git ls-files` 中
+   `config/keys.yaml`、`data/`、`logs/`、`config/settings.json`、`config/pocs-user/`、
+   `config/nuclei-templates/` **均为空匹配**，与已提交的 `.gitignore` 一致。
+   `smoke_root/.env` 确实入库，但内容是靶场假凭据（`DB_PASSWORD=supersecret123`），
+   是 `exposure-env-file` 检查项的**必要夹具**，属故意提交，非疏漏。
+7. **复核 `logs/` 清理的副作用**：`gui/app.py:426-430` 的 `_tail()` 捕获 `OSError` 返回 `[]`，
+   `gui/app.py:224` 调用处另有 `if t["log_file"]` 保护，`task_detail.html` 也有 `{% if %}` 兜底
+   —— 日志文件被删后详情页只是显示空，**不报错**，第八轮的说法成立。
+
+### 验证
+
+- `py -3 tests/smoke.py` → **SMOKE PASS**（8 阶段 / 312 POC / 三层门控 / osint 全正常），
+  审计与文档改动**零代码回归**（本轮未改任何 `.py`）。
+- `py -3 -c "…pick_python()"` → `'C:\\Users\\材料\\AppData\\Local\\Programs\\Python\\Python39\\python.exe'`（回退生效）。
+
+### 仍未做（诚实汇报）
+
+- **P2-3 Linux 实机验证**：本机环境探明 —— **WSL 未安装**（`wsl.exe` 存在但 `--status` 提示需
+  `wsl --install`，需管理员 + 重启）、**Docker 未安装**、**VirtualBox/Vagrant 无**，
+  仅 `ssh.exe`（`C:\WINDOWS\System32\OpenSSH\ssh.exe`）可用。故仍需用户的虚拟机配合
+  （提供 `user@host` 即可由本机 ssh 跑验收），否则无法在本机完成。
+- **P3-2 / P3-3**、`osint` 联网往返、两个阈值校准：理由与第七轮一致，未变。
+
+## 2026-09-22 —— 第八轮：工程运维（git 仓库建立 + 开发期产物清理 + 环境描述纠偏）
+
+### 背景
+
+新会话接管。用户指示三件事：① `git init` + 首次提交（顺手核对 .gitignore 不放敏感文件）；
+② 清理 `logs/` 下开发期任务目录；③ 同步文档。接管时先做了现状复核：读 AGENTS/TODO/CHANGELOG、
+目录结构与关键代码、跑基线 `tests/smoke.py` → **SMOKE PASS**（312 POC / 8 阶段 / 三层门控全正常），
+代码状态与文档记载一致，无漂移。
+
+### 变更（无代码改动，纯工程运维）
+
+1. **git 通道建立（本轮核心阻塞点的解法）**：
+   - 现状：git 不在 PATH，常见安装路径均无；choco 2.7.2 存在但当前 shell **非管理员**，
+     机器级安装会卡 UAC；winget 存在但同样需要提权。
+   - 解法：下载官方 **MinGit 2.55.0 便携版**（37MB zip，免安装/免提权/不写系统 PATH）到
+     `C:\Users\材料\MinGit\`，git 入口 = `C:\Users\材料\MinGit\cmd\git.exe`。
+   - 网络：GitHub API + release 直连可用（无代理），下载与解压一次成功。
+2. **`.gitignore` 补全**：原 7 行追加 4 项 —— `.venv/` / `venv/`（Linux 部署文档建议 venv）、
+   `config/nuclei-templates/`（官方模板投放点，属外部大体积资产，不入库），
+   并加分组注释。原有的 `config/keys.yaml` / `data/` / `logs/` / `config/pocs-user/` 排除项**保留未动**。
+3. **`logs/` 清理**：删除 **64 个** `task_*` 开发期任务目录（第七轮记录为 60 个，
+   差额 4 个是后续 smoke 运行新增），保留最新重跑、与当前代码一致的 `cli_smoke_report.md`。
+   注意：`data/scanner.db` 里的历史任务**行**未删（用户只点名 logs/；删除任务行属越权，
+   且 `db.delete_task` 会连带清资产）。副作用是老任务详情页"运行日志"显示为空（代码有容错，不报错）。
+4. **首次提交**：`git init -b main` + 仓库级配置（`user.name=CTFScanner` / `user.email=ctfscanner@local`
+   / `core.autocrlf=false`，**未动全局配置**；身份是占位值，个人使用请自行 `git config` 改掉）→
+   `git add -A` → 提交 `2267e51`：**392 文件 / 17654 行**。
+   - 提交前校验：暂存清单 grep 确认 `config/keys.yaml`、`data/`、`logs/` **均未混入**；
+   - 提交后校验：`git status --short` 为空（工作区干净）。
+5. **一次性工具脚本用后即删**：`tools/_inspect.py`（目录探查）、`tools/_gitcheck.py`（git 探查）、
+   `tools/_cleanup.py`（清理）、`tools/_get_mingit.py`（MinGit 下载）——均未进入提交。
+
+### 变更（文档纠偏）
+
+6. **`AGENTS.md` §2 环境描述过时（文档与实际不符，按实际更正）**：原文写
+   "`python` / `git` 不在 PATH"，实测 **`python` 与 `py` 均在 PATH 且全程可用**（第七轮之前的记载，
+   环境后来变了）。已改为当前事实，并记录 MinGit 入口与仓库状态。
+   > ⚠️ **第九轮修正：本条结论是错的**。原文"`python` 不在 PATH"才是事实 —— 第九轮实测
+   > `where python` / `Get-Command python` 均找不到，`python -V` 直接 `CommandNotFoundException`，
+   > 本机只有 `C:\WINDOWS\py.exe`（`py -3` → Python 3.9.0）。`AGENTS.md` 已按实测改回。
+   > 下面「验证」一节里"跑一次 `python tests/smoke.py`"的记法同样不成立，实际执行的是 `py -3 tests/smoke.py`。
+7. **`AGENTS.md` §9 协作约定补第 4 步**：标准动作链补上"git 提交"（用 MinGit 绝对路径）。
+8. **`TODO.md`**：P2-3 补充"git 通道已建立"（Linux 验证搬运障碍已消除，剩实机跑 smoke）；
+   C-1 追加第八轮实施记录。
+
+### 验证
+
+- 接管基线与收尾各跑一次 `python tests/smoke.py` → 均为 **SMOKE PASS**（清理与 git 操作零回归）。
+- `git log --oneline` → 单提交 `2267e51`；`git status --short` → 空。
+
+### 仍未做（诚实汇报）
+
+- **P2-3** Linux 实机验证：git 通道已通，`ctf-scanner/` 可整体拷入 WSL2/VM 跑
+  `python3 tests/smoke.py` 验收（`config/keys.yaml` 不在 git 里，拷贝时需手动带上）。
+- **P3-2 / P3-3**、`osint` 联网往返、两个阈值校准：理由与第七轮记录一致，未变。
+
 ## 2026-09-21 —— 第七轮：新增 osint 阶段（P1-4 C 段反查 + P3-1 favicon/FOFA 反查）
 
 ### 背景

@@ -154,6 +154,9 @@
     解释器选择用 `utils.pick_python`（Windows `python` / Linux `python3`，不可用则回退 `sys.executable`）；
     文件读写全部显式 `encoding="utf-8"`；外部工具探测统一 `shutil.which`。
   - 待补：在 Linux 实机跑一次 `python3 tests/smoke.py` 做验收（本机只有 Windows/Python 3.9）。
+  - **已补（第八轮，2026-09-22）**：git 通道打通 —— MinGit 便携版就位，仓库已 `git init`
+    并完成首次提交 `2267e51`（392 文件）。搬运障碍已消除：整体 clone/拷贝进 WSL2 或 VM 即可验收；
+    `config/keys.yaml` 被 gitignore 排除、**不在仓库里**，拷贝时需手动带上（FOFA key 场景）。
   - **已补（本轮）**：GUI/CLI 端口占用的清晰报错 —— 实测发现 Windows 上 Werkzeug 因
     `SO_REUSEADDR` 会在端口被占用时**"绑定成功"**并打印 `Running on …`（页面打不开），
     现 `gui/app.py::serve()` 在 `app.run()` 前做一次真实 bind 预检，占用时打印可操作提示并 `exit 1`。
@@ -357,6 +360,15 @@
   favicon mmh3 → FOFA）；重跑 CLI 重新生成陈旧的 `logs/cli_smoke_report.md`
   （旧产物仍写「疑似问题」且仍列 info/low 三条，与当前执行级门矛盾）。
   仍原样保留未动：**P2-3** 剩余部分（Linux 实机验证）、**P3-2 / P3-3**（依赖外部情报源 / 样本量）。
+  第八轮实施（工程运维，2026-09-22，轮次编号沿 `CHANGELOG_AI.md` 口径）：git 仓库建立
+  （MinGit 便携版 `C:\Users\材料\MinGit\cmd\git.exe` + 首次提交 `2267e51`，392 文件）、
+  `.gitignore` 补全（`venv/` / `config/nuclei-templates/`）、`logs/` 清理 64 个开发期任务目录
+  （保留最新 `cli_smoke_report.md`）、`AGENTS.md` §2 环境描述更新。
+  **注：第八轮把该条写成"`python` 实际在 PATH，旧记载过时"是错的** —— 第九轮实测
+  `where python` 找不到、`python -V` 报 CommandNotFoundException，仅 `py -3`（3.9.0）可用；
+  原记载（`python` 不在 PATH）才是对的，已按实测改回。功能无影响：`utils.pick_python()`
+  找不到 `python` 时回退 `sys.executable`（实测生效）。详见 `CHANGELOG_AI.md` 第九轮。
+  零代码改动，接管基线与收尾各跑一次 `tests/smoke.py` 均 PASS。
   其中 **P0-7 / P0-8 是你写在 `todo.txt` 下方但此前未被任何文档收录的原话要求**
   （低危默认关闭 + 按分类开关面板、动态绕 WAF / UA 随机化），已拆分收录并落地实现。
 - **C-2 间接处理（已由现有实现覆盖，标注后不再重复排期）**：

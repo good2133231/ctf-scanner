@@ -13,9 +13,18 @@ Flask Web 控制台（仿 ARL）。
 
 ## 2. 运行环境（本机实际情况）
 
-- Python 3.9（`py -3` 可用；`python` / `git` **不在 PATH**，git 不是本仓库的一部分，无 .git）。
+- Python 3.9（**`py -3` 可用**，实测 `Python 3.9.0`；**`python` 不在 PATH** —— 本机只有
+  `C:\WINDOWS\py.exe`，`where python` / `Get-Command python` 均找不到，`python -V` 直接报
+  CommandNotFoundException。写命令请用 `py -3`）。
+  *（说明：第八轮曾把本条改成"`python` / `py -3` 均在 PATH"，第九轮实测证明那次"纠偏"本身是错的，
+  已按实测改回。功能上无影响：框架取解释器一律走 `utils.pick_python()`，找不到 `python` 时回退
+  `sys.executable`，实测返回 `…\Programs\Python\Python39\python.exe`。）*
 - 依赖已装：flask 3.1、requests 2.22、PyYAML 6.0（见 requirements.txt）。
 - 外部工具（subfinder / puredns / httpx / dirmap）**均未安装** → 全部走内置兜底，这是当前默认运行状态。
+- **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
+  git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
+  choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`
+  是占位身份，个人使用请自行改。
 
 ## 3. 目录地图
 
@@ -165,4 +174,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - 跨平台（Linux + Windows）是硬要求：路径用 `pathlib`、命令用列表 argv + `shell=False`、
   解释器用 `utils.pick_python`、文件读写显式 `encoding="utf-8"`、工具探测用 `shutil.which`。
 - 每次改完代码的标准动作：跑 `tests/smoke.py` → 更新 `CHANGELOG_AI.md`（最新在最上面）
-  → 必要时同步本文件与 `docs/`。
+  → 必要时同步本文件与 `docs/` → **git 提交**
+  （`C:\Users\材料\MinGit\cmd\git.exe add -A && ... commit -m "<轮次>: <一句话>"`）。
+  敏感文件靠 `.gitignore` 排除（keys.yaml / data / logs / pocs-user / nuclei-templates），
+  提交前瞄一眼 `status --short` 确认无混入。
