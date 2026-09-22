@@ -3,6 +3,7 @@
 输入为 probe 阶段的存活站点（或任务中直接给定的 URL）；
 扫描在站点级并发，站点内部串行执行各检查，避免对单目标压力过大。
 
+阶段总开关 `vulnscan.enabled`（默认开）：关闭后整阶段跳过，连请求都不发。
 门控（`checks` 段）：`poc_engine` 为 POC 引擎总开关；`min_severity` 对 POC 结果同样生效
 （内置 OWASP 检查在 `owasp.checks.run_all` 内部自行门控）。
 另外每站点会做一次 WAF 指纹识别（`evasion.waf_detect`），命中则在日志中提示，
@@ -22,6 +23,10 @@ class VulnscanStage(Stage):
 
     def run(self):
         ctx = self.ctx
+        scfg = ctx.settings.get("vulnscan", {}) or {}
+        if scfg.get("enabled") is not True:
+            ctx.logger.info("[vulnscan] 未启用（策略配置 → 检测策略 可打开），跳过")
+            return
         limits = ctx.settings.get("limits", {})
         ccfg = ctx.settings.get("checks", {}) or {}
         floor = str(ccfg.get("min_severity", "medium")).lower()

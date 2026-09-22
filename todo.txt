@@ -179,6 +179,35 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        已就地标注「已完成 → 见下方「第五轮」」，避免与现状冲突
 
 -----
+（第十轮：接管上一轮成果审计 —— 修残留文档错误 + 补齐「大功能阶段级总开关」缺口）
+[修复] config/settings.yaml 头部注释停留在此前状态：写"…/ iprecon / fofa 十段"且未列
+       dirscan / vulnscan，实际 DEFAULTS 已是 12 段 —— 已按代码更正为「十二段」并补全段名
+[修复] docs/usage.md 的 -p 参数说明只提 takeover/jsmine/portscan/osint 受策略级开关约束，
+       漏了 dirscan/vulnscan（这两段本轮才拿到 enabled）—— 已补
+[修复] README.md 的能力清单与架构图仍写「三层门控」—— vulnscan 阶段门控链现为四层
+       （阶段级 enabled + skip_severities + 分类/单项开关 + min_severity）—— 已改为「四层门控」
+[补全] 需求缺口：你要求"很大功能实现了 都要有一个菜单栏去有一个大体的开启或者关闭，根据分类来"，
+       但 dirscan / vulnscan 两段在 config.DEFAULTS 里**根本不存在**，无法从 GUI 关闭 ——
+       已补阶段级总开关（默认 true = 不改变任何既有默认行为）：
+       config.py DEFAULTS + config/settings.yaml 各加一段、DirscanStage/VulnscanStage 各加
+       阶段 gate（未启用时打日志跳过，**连请求都不发**）、settings.html 两个复选框 +
+       app.py POST 映射（未勾选必须落为 false，而非保持旧值）
+[完成] tests/smoke.py 扩充并跑通（SMOKE PASS）：`[3d]` 重写为**先开 probe 造出存活站点**再断言
+       takeover/portscan/osint/jsmine/dirscan/vulnscan 全部关闭后"有站点但无任何产出"（否则测的是
+       "没输入"而不是"门控生效"）；新增 `[5b]` 用桩函数接管 save_settings，断言策略页两个新开关
+       勾选/取消勾选**都**正确落库（且不污染真实 config/settings.yaml）
+[完成] 文档同步：AGENTS.md（十二段 + 每个大功能都有阶段级 enabled）、docs/pipeline.md
+       （阶段开关说明块、门控四层、配置速查 4 行）、docs/usage.md、README.md、
+       docs/architecture.md（关键设计决策新增一行「阶段级 enabled 总开关」）
+[说明] 轮次编号口径：本文件早前的「第四轮 / 第五轮」小节对应 `CHANGELOG_AI.md` 的
+       「第六轮 / 第七轮」（接管时重新编号所致），第八轮起已统一沿 CHANGELOG 口径；
+       本条按 CHANGELOG 口径记为第十轮，避免两处编号再次错位
+[待办] P2-3 Linux 实机验证（按用户指示挂起："先不做，等完全修改完毕我们再验证"，
+       但兼容 Linux 的约束照旧 —— 本轮跨平台静态审计通过：无 shell=True / os.system /
+       os.path.* / shell 专属调用，全部读写显式 UTF-8）
+[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
+
+-----
 本轮验证基线（可复现）：py -3 tests/smoke.py → SMOKE PASS
   engine.load_all_meta() → 312/312 ok；GUI 10 栏（含 /csegs）、任务详情 8 页签均 200
   第四轮补充：内置检查 5/12 项执行；POC 注册表全开时 级别门内 311 / 放开后 312
@@ -188,3 +217,8 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
       → 日志「内置检查 5/12 项；info/low 级检测已跳过（连请求都不发）」
       → 结果 3 项全为 high；a02-no-https / a05-security-headers / a05-banner-disclosure 一条都没有
     （复现靶场：py -3 -m http.server 8765 --bind 127.0.0.1 --directory smoke_root）
+  第十轮补充（阶段级总开关，**运行时证据**）：
+    `[3d]` probe 输出「存活站点 1 个」后，日志依次出现
+      [takeover]/[portscan]/[osint]/[jsmine]/[dirscan]/[vulnscan]「未启用……跳过」，
+      且 dirs / vulns / csegs / ports / takeovers 全为空 —— 证明是"门控生效"而非"没输入"
+    `[5b]` 策略页两个新开关勾选与取消勾选均正确落库（save_settings 用桩函数接管，settings.yaml 未被污染）

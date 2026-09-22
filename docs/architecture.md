@@ -48,6 +48,7 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 | POC 引擎向 nuclei 语法靠拢 | 社区事实标准（数千模板、可直接加载官方模板），声明式 YAML、无外部依赖 | 仅兼容核心子集（raw/dsl/flow/workflows 不支持） |
 | 启发式检查全部 GET + 无破坏 payload | 控制误伤与法律风险 | 检出率有限，定位是"初筛信号" |
 | 分级门控（`skip_severities` 执行级 + `min_severity` 结果级，默认 info/low 不执行、门槛 medium） | 默认屏蔽低危/info 噪声，连请求都不发，只留能拿 flag 的高位结果 | 想广谱信息收集需**同时**放宽级别开关与门槛 |
+| **阶段级 `enabled` 总开关**（`takeover`/`jsmine`/`dirscan`/`vulnscan` 默认开，`portscan` 默认关、`osint` 由 `iprecon`/`fofa` 两个子开关代替；`subdomain`/`probe` 刻意不设） | 用户要求"大功能都要有按分类的总开关"；关掉即整阶段跳过、连请求都不发，便于按需裁剪（如"只做资产测绘不探测"） | 开关分散在各段，新增阶段必须记得补 `enabled` 与 GUI 复选框（`tests/smoke.py` 的 `[3d]`/`[5b]` 已加断言防漏） |
 | 动态免杀（evasion）只改变 payload 编码形态与请求伪装 | 提升隐蔽性与 WAF 绕过率，同时不越过非破坏性红线 | 变形不改变语义，对非规则型 WAF 效果有限 |
 | 指纹用自研精简规则表（scanner/fingerprint.py） | 无外部依赖；httpx 缺失时也能填充 sites.tech | 规则少、只给组件标签不解析版本 |
 | 外部情报（osint）默认全关，且"两个子开关都关＝一次请求都不发" | 依赖第三方公共接口（api.webscan.cc / FOFA），可用性不由我们掌控；不配置就不该有网络行为 | 想用 C 段/favicon 拓展需先去「策略配置 → 外部情报拓展」显式打开 |

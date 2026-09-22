@@ -3,6 +3,8 @@
 工具适配器：dirmap（python dirmap.py -iF <urls> -e all，解析其 output/ 目录产物）
 内置兜底：requests/urllib 字典扫描，带随机路径基线做软 404 过滤。
 
+阶段总开关 `dirscan.enabled`（默认开，见 GUI「策略配置 → 资产面拓展」）：关闭后整阶段跳过。
+
 对应参考流水线：
   cd tools/scanner/dirmap-master && python dirmap.py -iF ../../../logs/dir_out -e all
 """
@@ -24,6 +26,10 @@ class DirscanStage(Stage):
 
     def run(self):
         ctx = self.ctx
+        cfg = ctx.settings.get("dirscan", {}) or {}
+        if cfg.get("enabled") is not True:
+            ctx.logger.info("[dirscan] 未启用（策略配置 → 资产面拓展 可打开），跳过")
+            return
         limits = ctx.settings.get("limits", {})
         sites = [s["url"] for s in ctx.results.get("sites", [])]
         sites = sites[: int(limits.get("dirscan_max_urls", 20))]

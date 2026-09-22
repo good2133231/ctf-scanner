@@ -60,7 +60,7 @@ ctf-scanner/
 │   ├── targets.py         # parse_lines → [(kind, raw)]，kind ∈ domain|url|ip|cidr|unknown（cidr 展开为多条 ip）
 │   └── report.py          # Markdown 报告
 ├── tools/import_ref_pocs.py # ast 静态解析参考项目 Python POC → config/pocs-imported/（导入项默认关闭）
-├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/passive/evasion/takeover/portscan/jsmine/iprecon/fofa 十段）
+├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/passive/evasion/takeover/dirscan/vulnscan/portscan/jsmine/iprecon/fofa 十二段）
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / sensitive(11，暂未使用)
 ├── config/pocs-user/      # 用户上传 POC；config/pocs-imported/ 导入 POC（默认关闭）；config/nuclei-templates/ 官方模板投放点
@@ -139,7 +139,9 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
 - GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/passive/evasion/
-  takeover/portscan/jsmine/iprecon/fofa 十段（含按级别 / 按 OWASP 分类 / 按检查项三级开关），
+  takeover/dirscan/vulnscan/portscan/jsmine/iprecon/fofa 十二段（含按级别 / 按 OWASP 分类 /
+  按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
+  于第九轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭）；
   外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
   fofa 的 email/key 要手改 `config/keys.yaml`（控制台只读、不写回凭据）。
 - `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。

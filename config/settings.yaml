@@ -1,6 +1,6 @@
 # CTFScanner 全局配置
-# GUI「策略配置」页可覆盖 gui / limits / checks / passive / evasion /
-# takeover / portscan / jsmine / iprecon / fofa 十段；
+# GUI「策略配置」页可覆盖 gui / limits / checks / passive / evasion / takeover /
+# dirscan / vulnscan / portscan / jsmine / iprecon / fofa 十二段；
 # tools 与 dicts（外部工具路径、字典路径）请直接编辑本文件。
 # 第三方 API key 请写入 config/keys.yaml（独立文件，默认不入库）。
 gui:
@@ -69,6 +69,18 @@ jsmine:
   max_js: 40                 # 每任务最多抓取多少个 JS 文件
   secrets: true              # 提取 AK/SK 等疑似凭据（带前后文过滤降噪）
   blacklist: []              # 额外排除的第三方域名后缀，如 ["cdn.example.com"]
+
+dirscan:
+  # 目录/路径发现阶段总开关（与 takeover / portscan / jsmine 同属"资产面拓展"）。
+  # 默认开：CTF 里 .git / 备份文件 / 后台入口这类高价值路径主要靠它发现；
+  # 纯资产测绘任务可整体关闭省时间。每站点上限见 limits.dirscan_max_urls。
+  enabled: true
+
+vulnscan:
+  # 漏洞初筛阶段总开关。默认开；关闭后整阶段跳过（连请求都不发），
+  # 适合"只做资产测绘、暂不探测"的场景。细粒度门控仍在上面 checks 段
+  # （min_severity / skip_severities / poc_engine / disabled_*）。
+  enabled: true
 
 iprecon:
   # C 段反查（P1-4）：IP → 域名反查 + /24 C 段归纳，产出「C 段」分栏。

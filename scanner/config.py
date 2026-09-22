@@ -77,6 +77,18 @@ DEFAULTS = {
         "secrets": True,           # 开启 AK/SK 等敏感密钥提取（带前后文过滤降噪）
         "blacklist": [],           # 额外排除的第三方域名后缀，如 ["cdn.example.com"]
     },
+    "dirscan": {
+        # 目录/路径发现阶段总开关（与 takeover/portscan/jsmine 同一类"资产面拓展"）。
+        # 默认开：CTF 里 .git / 备份文件 / 后台入口这类高价值路径主要靠它发现；
+        # 纯资产测绘任务可整体关闭省时间。每站点上限仍在 limits.dirscan_max_urls。
+        "enabled": True,
+    },
+    "vulnscan": {
+        # 漏洞初筛阶段总开关。默认开；关闭后整阶段跳过（连请求都不发），
+        # 适合"只做资产测绘、暂不探测"的场景。细粒度门控仍在 checks 段
+        # （min_severity / skip_severities / poc_engine / disabled_*）。
+        "enabled": True,
+    },
     "iprecon": {
         # C 段反查（P1-4）：IP → 域名反查 + /24 C 段归纳。
         # **默认关闭**：走第三方公共接口（可用性无保障），且反查结果属于"发散"资产，

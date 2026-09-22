@@ -14,7 +14,7 @@ python cli/client.py -t <单目标> [选项]
 | `-f, --file PATH` | 目标文件：每行一个 域名/URL/IP，`#` 开头为注释 |
 | `-t, --target` | 单目标，可重复 `-t a.com -t http://b.local/` |
 | `-n, --name` | 任务名（默认取文件名或 cli-task） |
-| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,osint,jsmine,dirscan,vulnscan`（默认全部；`takeover`/`jsmine`/`portscan`/`osint` 另受策略级开关约束，见下） |
+| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,osint,jsmine,dirscan,vulnscan`（默认全部；`takeover`/`jsmine`/`dirscan`/`vulnscan`/`portscan`/`osint` 另受策略级开关约束，见下） |
 | `--offline` | 离线模式：不调用 subfinder/puredns/httpx/dirmap，仅内置实现 |
 | `--report PATH` | 扫描结束后生成 Markdown 报告 |
 | `--check` | 打印外部工具可用性并退出 |
@@ -93,7 +93,9 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    语法错误的 POC 会标 `error`，含 `raw`/`dsl`/`flow`/`workflows` 等不支持特性的模板会标
    `unsupported` 并显示原因；
 11. **策略配置**：由 7 个面板组成 ——
-   - **检测策略**：最低报告级别（`min_severity`，默认 medium）+ POC 引擎总开关 + 指纹→POC 联动；
+   - **检测策略**：最低报告级别（`min_severity`，默认 medium）+ **漏洞初筛阶段总开关**
+     （`vulnscan.enabled`，默认开；取消勾选＝整个 vulnscan 阶段跳过，适合"只做资产测绘"）+
+     POC 引擎总开关 + 指纹→POC 联动；
    - **按级别分类批量开关**：`skip_severities`（默认勾掉 info 与 low）—— **勾上＝该级别连请求都不发**，
      内置检查与 POC 引擎同时生效。这是"太 low 的洞暂时不开"的实现方式：它们的结论本来就会被
      `min_severity` 丢掉，不执行纯属省请求；
@@ -104,7 +106,8 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
      单 IP 域名上限 / 并发 / 超时）与 `fofa`（favicon 反查开关 / 站点上限 / 资产上限 /
      并发 / 黑 ico 阈值）—— **两项默认关闭**，且**都关时整个 `osint` 阶段一次请求都不发**。
      接口地址留空即用默认的 `api.webscan.cc`；FOFA 的 email/key 不在这里填（见 `config/keys.yaml`）；
-   - **资产面拓展 / 信息收集 / 扫描限制 / 控制台**：子域接管、JS 挖掘、端口服务三类的开关与上限，
+   - **资产面拓展 / 信息收集 / 扫描限制 / 控制台**：子域接管、**目录/路径发现**
+     （`dirscan.enabled`，默认开；取消勾选＝整阶段跳过）、JS 挖掘、端口服务这几类的开关与上限，
      泛解析过滤与多来源被动收集，并发/超时/证书校验/站点上限，监听地址与口令。
      外部工具路径、字典路径与 `passive.sources` 来源清单请直接编辑 `config/settings.yaml`；
      **第三方 API key 写入 `config/keys.yaml`**（独立文件，控制台只读不改写）。

@@ -177,22 +177,28 @@ def main():
     assert "a01-sensitive-files" in ids_off and "a02-no-https" in ids_off, ids_off
     print(f"[3c] poc_engine=off ok: {ids_off}")
 
-    # 3d) 资产面拓展阶段门控：开关全部关闭时，跑这些阶段应完全跳过且不产生任何资产/请求
+    # 3d) 资产面拓展 / 检测阶段门控：开关全部关闭时，跑这些阶段应完全跳过且不产生任何资产/请求。
+    #     这里刻意**开启 probe 先造出存活站点** —— 否则 dirscan/vulnscan/jsmine 会因为"无站点"
+    #     而跳过，那样测出来的是"没输入"，而不是"门控生效"。
     st_gate = copy.deepcopy(settings)
-    for seg in ("takeover", "portscan", "jsmine"):
+    for seg in ("takeover", "portscan", "jsmine", "dirscan", "vulnscan"):
         st_gate[seg]["enabled"] = False
     for seg in ("iprecon", "fofa"):        # osint 的两个子开关
         st_gate[seg]["enabled"] = False
-    gate_stages = ["takeover", "portscan", "osint", "jsmine"]
+    gate_stages = ["probe", "takeover", "portscan", "osint", "jsmine", "dirscan", "vulnscan"]
     tid_gate = db.create_task("smoke-gate", targets, gate_stages, {"offline": True})
     ctx_gate = run_task(tid_gate, "smoke-gate", targets, gate_stages,
                         {"offline": True}, st_gate)
+    assert ctx_gate.results["sites"], "probe 未产出站点，下面的门控断言会失去意义"
     assert not ctx_gate.results["takeovers"] and not ctx_gate.results["ports"], ctx_gate.results
     assert not db.list_ports(tid_gate), db.list_ports(tid_gate)
+    # dirscan / vulnscan 关掉后：站点存在，但目录与漏洞都必须为空（连请求都不发）
+    assert not ctx_gate.results["dirs"] and not db.list_dirs(tid_gate), ctx_gate.results["dirs"]
+    assert not ctx_gate.results["vulns"] and not db.list_vulns(task_id=tid_gate)
     # osint 两项子开关都关 → 连请求都不发，C 段与新增域名均为空
     assert not ctx_gate.results["csegs"] and not db.list_csegs(tid_gate), ctx_gate.results["csegs"]
     assert not ctx_gate.results["osint_domains"], ctx_gate.results["osint_domains"]
-    print("[3d] gate ok: takeover/portscan/osint/jsmine 关闭后无产出")
+    print("[3d] gate ok: probe 有站点，但 takeover/portscan/osint/jsmine/dirscan/vulnscan 关闭后无产出")
 
     # 4) Markdown 报告
     md = generate(tid)
@@ -243,6 +249,34 @@ def main():
     # POC 管理页：分类批量开关 + 来源归类
     poc_html = c.get("/pocs").get_data(as_text=True)
     assert "按分类批量开关" in poc_html and "导入（参考项目转换）" in poc_html
+    # 策略配置页：新加的阶段总开关必须渲染出来，且**表单名与 app.py 读取的键一一对应**
+    # （这类"名字对不上"的错最隐蔽：页面照样 200，开关却永远不生效）
+    settings_html = c.get("/settings").get_data(as_text=True)
+    assert 'name="dirscan_enabled"' in settings_html, "策略配置缺 dirscan 总开关"
+    assert 'name="vulnscan_enabled"' in settings_html, "策略配置缺 vulnscan 总开关"
+    # 用桩函数接管 save_settings：既能验证 POST→配置字典的映射，又不改动真实 config/settings.yaml
+    import gui.app as gui_app
+    captured = {}
+
+    def _fake_save(d):
+        captured.clear()
+        captured.update(d)
+        return load_settings()
+
+    _orig_save = gui_app.save_settings
+    gui_app.save_settings = _fake_save
+    try:
+        assert c.post("/settings", data={"min_severity": "medium", "dirscan_enabled": "1",
+                                         "vulnscan_enabled": "1"}).status_code == 302
+        assert captured["dirscan"]["enabled"] is True, captured.get("dirscan")
+        assert captured["vulnscan"]["enabled"] is True, captured.get("vulnscan")
+        # 表单里不勾选 → 必须落为关闭（而不是保持旧值 True）
+        assert c.post("/settings", data={"min_severity": "medium"}).status_code == 302
+        assert captured["dirscan"]["enabled"] is False, captured.get("dirscan")
+        assert captured["vulnscan"]["enabled"] is False, captured.get("vulnscan")
+    finally:
+        gui_app.save_settings = _orig_save
+    print("[5b] settings POST ok: dirscan/vulnscan 总开关的勾选与取消勾选均正确落库")
     # 批量接口：导入 POC 默认关闭 → 启用（仅改不一致的）应影响全部导入项，再关闭还原原状
     assert db.bulk_set_poc_enabled(False, source="imported") > 0
     r = c.post("/api/pocs/bulk", json={"action": "enable", "source": "imported", "kind": "diff"})

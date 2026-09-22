@@ -3,11 +3,16 @@
 默认阶段顺序：`subdomain → takeover → portscan → probe → osint → jsmine → dirscan → vulnscan`
 （CLI 可用 `-p` 裁剪，GUI 用复选框勾选）。
 
-其中 `takeover` / `jsmine` 由**策略级开关**控制、默认开，`portscan` / `osint` 默认关：
+其中 `takeover` / `jsmine` / `dirscan` / `vulnscan` 由**策略级开关**控制、默认开，
+`portscan` / `osint` 默认关：
 勾选只表示"这个阶段参与本次任务"，真正执行与否还看
-`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled`
-（阶段内部自查后打日志跳过）。`osint` 更特殊 —— 它没有自己的 `enabled`，
+`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled` /
+`dirscan.enabled` / `vulnscan.enabled`
+（阶段内部自查后打日志跳过，且**连请求都不发**）。`osint` 更特殊 —— 它没有自己的 `enabled`，
 而是由两个**子能力开关** `iprecon.enabled` / `fofa.enabled` 控制，**两者都关时整阶段直接跳过**。
+
+> `subdomain` / `probe` 刻意**没有**阶段级开关：它们的产物（域名、存活站点）是所有后续阶段的输入，
+> 关掉等于整个任务不做 —— 这种需求用任务级的阶段勾选（建任务时的复选框 / CLI 的 `-p`）表达更清楚。
 
 ## 与手工流水线的对应关系
 
@@ -105,6 +110,8 @@
 
 ### ⑦ dirscan 目录发现
 
+- 开关：`dirscan.enabled`（**默认开**）—— 关闭后整阶段跳过；CTF 里 `.git` / 备份文件 / 后台入口
+  这类高价值路径主要靠它发现，所以默认开，纯资产测绘任务可整体关掉省时间；
 - 输入：存活站点（上限 `limits.dirscan_max_urls`，防止大目标拖爆）；
 - 处理：dirmap 适配器（cwd 固定在其项目目录运行，扫描 `output/` 最新产物解析 URL 与状态码）；
 - 产物：`dirs.txt`、SQLite `dirs` 表；
@@ -112,10 +119,13 @@
 
 ### ⑧ vulnscan 漏洞初筛
 
+- 开关：`vulnscan.enabled`（**默认开**）—— 关闭后整阶段跳过（连请求都不发），
+  适合"只做资产测绘、暂不探测"的场景；
 - 输入：存活站点（上限 `limits.vulnscan_max_urls`）；
 - 处理：每站点先做一次 WAF 指纹识别（`evasion.waf_detect`，命中在日志中提示厂商，便于判断"扫不出来"是没漏洞还是被拦），
   再跑**启用**的 OWASP 启发式检查（见 docs/owasp-mapping.md），最后逐个执行启用的 POC（每 POC 每目标最多一次命中）；
-- 门控三层：
+- 门控四层：
+  0. `vulnscan.enabled` —— **阶段级**：关掉则整阶段不执行；
   1. `checks.skip_severities`（默认 `["info","low"]`）—— **执行级**：这些级别连请求都不发
      （内置检查与 POC 引擎同规则），因为它们的结论本来就会被 `min_severity` 丢掉；
   2. `checks.poc_engine` = POC 引擎总开关；`checks.disabled_categories` / `disabled_checks`
@@ -162,6 +172,10 @@ logs/task_1_mytask/
 | limits.verify_tls | false | 是否校验 HTTPS 证书；默认关闭以适配自签名靶场/CTF |
 | limits.dirscan_max_urls | 20 | 参与目录扫描的站点上限 |
 | limits.vulnscan_max_urls | 100 | 参与漏洞扫描的站点上限 |
+| dirscan.enabled | true | **阶段级**开关：目录/路径发现整阶段开关（关掉连请求都不发） |
+| vulnscan.enabled | true | **阶段级**开关：漏洞初筛整阶段开关（关掉即"只测绘不探测"） |
+| takeover.enabled / jsmine.enabled | true | 子域接管 / JS 挖掘的阶段级开关 |
+| portscan.enabled | false | 端口与服务扫描的阶段级开关（默认关） |
 | limits.brute_max_domains | 50 | 参与 DNS 爆破的域名上限 |
 | limits.wildcard_filter | true | 泛解析过滤：目标开 `*.domain` 时丢弃通配命中的字典结果 |
 | limits.favicon_md5 | true | probe 阶段计算 favicon MD5（POC 可据此做零请求前置判定） |

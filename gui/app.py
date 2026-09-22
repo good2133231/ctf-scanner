@@ -389,6 +389,9 @@ def create_app():
                     "takeover": {"enabled": f.get("takeover_enabled") == "1",
                                  "max_hosts": int(f.get("takeover_max_hosts", 300) or 300),
                                  "http_check": f.get("takeover_http_check") == "1"},
+                    # 阶段级总开关（与 takeover/portscan/jsmine 同一类）：默认开
+                    "dirscan": {"enabled": f.get("dirscan_enabled") == "1"},
+                    "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
                     "portscan": {"enabled": f.get("portscan_enabled") == "1",
                                  "max_hosts": int(f.get("portscan_max_hosts", 100) or 100),
                                  "ports": f.get("portscan_ports", ""),

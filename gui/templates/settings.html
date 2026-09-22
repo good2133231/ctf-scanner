@@ -21,6 +21,8 @@
     <div class="row">
       <label class="chk"><input type="checkbox" name="poc_link_tags" value="1"
         {{ 'checked' if s.checks.poc_link_tags }}> 指纹→POC 联动（站点技术栈命中的 POC 优先执行）</label>
+      <label class="chk"><input type="checkbox" name="vulnscan_enabled" value="1"
+        {{ 'checked' if s.vulnscan.enabled }}> 启用漏洞初筛阶段（取消勾选＝整阶段跳过，只做资产测绘）</label>
       <label>每站点 POC 上限 <input name="poc_max_per_site" value="{{ s.checks.poc_max_per_site }}"></label>
       <label class="chk"><input type="checkbox" name="favicon_md5" value="1"
         {{ 'checked' if s.limits.favicon_md5 }}> 采集 favicon MD5（POC 可用它做零请求前置判定）</label>
@@ -106,6 +108,9 @@
     <label>并发连接数 <input name="portscan_workers" value="{{ s.portscan.workers }}"></label>
     <label class="chk"><input type="checkbox" name="portscan_banner" value="1"
       {{ 'checked' if s.portscan.banner }}> 被动读取 banner（仅 SSH/SMTP/MySQL/Redis 等会主动问候的端口）</label>
+    <label class="chk"><input type="checkbox" name="dirscan_enabled" value="1"
+      {{ 'checked' if s.dirscan.enabled }}> <b>目录/路径发现</b>（默认开；.git / 备份 / 后台入口主要靠它发现，
+      取消勾选＝整阶段跳过）</label>
   </section>
 
   <section class="panel">

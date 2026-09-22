@@ -3,6 +3,64 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十轮：补齐「大功能阶段级总开关」缺口 + 清掉上一轮残留的文档错漏
+
+### 背景
+
+承第九轮（同一条用户指令"继续工作、修掉残留的 bug"）。第九轮做完审计后，按用户原话
+"很大功能实现了 都要有一个菜单栏去有一个大体的开启或者关闭，根据分类来"逐段核对，
+**发现一个真实的需求缺口**：`dirscan` / `vulnscan` 两个重资产阶段**没有任何总开关** ——
+`config.DEFAULTS` 里根本没有这两段，GUI 也没有对应的复选框，即"从控制台关掉目录发现 /
+关掉漏洞初筛（只做资产测绘）"这件事此前**做不到**（其余阶段 takeover/portscan/jsmine 都有，
+osint 由 iprecon/fofa 两个子开关代替）。
+
+### 变更（功能缺口补齐，默认值不改变既有行为）
+
+1. **`scanner/config.py` DEFAULTS + `config/settings.yaml`**：新增 `dirscan.enabled: true` /
+   `vulnscan.enabled: true` 两段。**默认 true 是刻意的** —— 只补"能不能关"，不改变任何既有默认行为。
+2. **`scanner/stages/dirscan.py` / `vulnscan.py`**：`run()` 开头加阶段 gate，未启用时打日志
+   （`[dirscan] 未启用（策略配置 → 资产面拓展 可打开），跳过`）并 `return` —— **连请求都不发**；
+   两个 docstring 同步写明开关位置。
+3. **`gui/templates/settings.html` + `gui/app.py`**：策略页新增两个复选框
+   （`dirscan_enabled` 在「资产面拓展」面板、`vulnscan_enabled` 在「检测策略」面板），
+   POST 映射落到 `dirscan` / `vulnscan` 段。**未勾选必须落为 `false`**，不能"保持旧值"——
+   `[5b]` 专门断言了这条（否则取消勾选会静默失效）。
+
+### 变更（清掉残留的文档错漏）
+
+4. **`config/settings.yaml` 头部注释**：仍写"…/ iprecon / fofa **十段**"且未列 dirscan/vulnscan，
+   与代码（12 段）冲突 → 改为「十二段」并补全段名。
+5. **`docs/usage.md`** `-p` 参数说明：只提 `takeover/jsmine/portscan/osint` 受策略级开关约束，
+   漏了本轮才拿到 `enabled` 的 `dirscan/vulnscan` → 已补。
+6. **`README.md`**：能力清单与架构图仍写「三层门控」→ 改为「四层门控」（vulnscan 门控链现为
+   阶段级 `enabled` + `skip_severities` + 分类/单项开关 + `min_severity`）。
+7. **`AGENTS.md` / `docs/pipeline.md` / `docs/architecture.md`**：同步写入阶段级开关矩阵；
+   `architecture.md`「关键设计决策」表新增一行（理由：用户要求"大功能都要有按分类的总开关"；
+   代价：新增阶段必须记得补 `enabled` 与 GUI 复选框，`[3d]`/`[5b]` 已加断言防漏）。
+8. **`todo.txt`**：追加「第十轮」小节；并澄清一个**历史编号错位** —— 该文件早前的
+   「第四轮 / 第五轮」小节对应 `CHANGELOG_AI.md` 的「第六轮 / 第七轮」（接管时重新编号所致），
+   第八轮起已统一沿 CHANGELOG 口径。
+
+### 验证
+
+- `py -3 tests/smoke.py` → **SMOKE PASS**。本轮测试有两处刻意的设计：
+  - `[3d]` **重写**：先**开启 probe 造出存活站点**（实测日志 `[probe] 存活站点 1 个`）再断言
+    takeover/portscan/osint/jsmine/**dirscan**/vulnscan 全关后无任何产出 —— 否则测到的是
+    "没有输入导致跳过"，而不是"门控生效"，后者才是本轮要保护的语义。
+  - `[5b]` **新增**：用桩函数接管 `gui.app.save_settings` 后 POST `/settings`，断言两个新开关
+    **勾选与取消勾选都正确落库**。桩函数是必需的 —— 直接 POST 会用测试数据**覆写真实
+    `config/settings.yaml`**（该文件在 git 里）。跑完 `git diff -- config/settings.yaml` 复核：
+    只有刻意新增的 12 行，未被污染。
+- 跨平台静态复核（P2-3 挂起期间的常规动作）：无 `shell=True` / `os.system` / `os.path.*` /
+  `winreg` / `distutils`；`subprocess.run` 仅 `utils.run_cmd` 一处（列表 argv + `shell=False`）；
+  所有文件读写显式 `encoding="utf-8"` —— 未发现新增跨平台隐患。
+
+### 仍未做（诚实汇报）
+
+- **P2-3 Linux 实机验证**：按用户指示挂起（"先不做，等完全修改完毕我们再验证，但我们时刻要
+  记得兼容linux的事情"）。本机 WSL/Docker/VirtualBox 均不可用，仍需用户的虚拟机配合。
+- **P3-2 / P3-3**、`osint` 联网往返、两个阈值校准：理由与第七轮一致，未变。
+
 ## 2026-09-22 —— 第九轮：接管第八轮成果审计（修 1 处文档事实错误 + 安全审计 + 补提交）
 
 ### 背景
