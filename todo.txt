@@ -467,23 +467,5 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [待办] P2-3 Linux 实机验证（挂起中；本机无 WSL/Docker 可用，需你给环境或换机器跑）
 [待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（依赖检测层置信度校准）
 [待办] 端口扫描接入 fscan（可选，见本轮分析；需你先放二进制到 tools/，我才能真跑验证）
-[待办] osint 的 osint 阈值继续按真实数据校准（已有首个样本：标题十位数 / 证书百万级）
+[待办] osint 阈值继续按真实数据校准（已有首个样本：标题十位数 / 证书百万级）
 
------
-（第十七轮：硬规矩 + 子域名主动且全 + 绝对路径清理）实施者：WorkBuddy · DeepSeek-V4.1-Flash
-[完成] 1、AGENTS.md 加「§0 硬规矩」（优先级最高）：① 改动必须标注实施者 WorkBuddy · <模型名>
-       （提交信息末行 + CHANGELOG 轮次标题）；② **未经你许可不得读取/扫描项目以外的代码或文件**，
-       唯一例外是你主动指定路径；③ 代码/配置/模板/日志只允许相对路径，展示走 utils.rel_display()
-[完成] 2、清掉代码里仅存的两处绝对路径：scanner/passive.py 的 docstring 参考项目路径、
-       tools/import_ref_pocs.py 的 DEFAULT_SRC（改成项目内相对路径 tools/ref-project/...，可用 --src 覆盖）；
-       复检 grep Users → 0 命中
-[完成] 3、子域名"要主动且全"：发现原实现是 elif —— 装了 subfinder 就完全不跑内置被动源
-       （crt.sh / certspotter / alienvault / hackertarget / rapiddns / sublist3r 白丢）。
-       改为并集：新增 subdomain.union_passive（默认开）+ GUI 开关 + docs/pipeline.md 四条获取路径 + smoke [5f]
-[完成] 4、确认 subfinder 调用恒带 -all（-dL <文件> -all -t 200 -o <文件>）；-all = 使用全部数据源
-[说明] dirmap 的 5 处修复复核与"是否内联"，你说已交给其他 AI，本轮不碰
-
-[待办] P2-3 Linux 实机验证（挂起中；本机无 WSL/Docker 可用，需你给环境或换机器跑）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（依赖检测层置信度校准）
-[待办] 端口扫描接入 fscan（可选，见本轮分析；需你先放二进制到 tools/，我才能真跑验证）
-[待办] osint 的 osint 阈值继续按真实数据校准（已有首个样本：标题十位数 / 证书百万级）
