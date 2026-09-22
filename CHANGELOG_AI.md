@@ -3,6 +3,50 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-22 —— 第十七轮（续 6）：全流程体检（3 路并行静审）+ 12 处修复
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户要求"检查全流程还有什么 bug"。用 3 个子代理分区静态审查（流水线/阶段、GUI 层、核心库与数据层），
+各自只读不改，**我逐条复核后**再动手：报告里的"中"级问题全部为真；`settings.html` 端口字段重复一条
+实测不存在（该组字段只有一份），已剔除。
+
+### 已修（都属"错了不报错、功能静默失效"型）
+
+| # | 位置 | 问题 | 修法 |
+|---|---|---|---|
+| 1 | `scanner/stages/probe.py` | **域名目标被忽略**：候选只由 `url`/`ip` + `subdomain` 阶段写入的 `domains_for_probe` 生成，用户只勾 probe 时域名目标静默产出 0 站点 | 补 `elif kind == "domain"` 生成 https/http 候选（`dict.fromkeys` 已去重） |
+| 2 | `scanner/jsmine.py` | `_is_noise()` 遍历内置 `_ALL_NOISE`，`config/dicts/js_thirdparty.txt`（267 条）**加载了却没用** | 改遍历 `_noise_set()` |
+| 3 | `gui/templates/task_detail.html` | 站点页签筛选框 `data-filter="#tbl-sites"`，表格 id 实为 `#tbl-detail-sites` → 筛选静默失效 | 改对 id |
+| 4 | `gui/templates/sites.html` | 显示模式链接手写 `?q&size`，丢另一个开关 → `all=1` 与 `plain=1` 不能共存 | 改用 `pager.qs`（并 `replace` 掉要关掉的那个） |
+| 5 | `gui/static/app.js` | `bindTaskOps` 被 `DOMContentLoaded` 与模板内联**各绑一次** → 停止/重启/删除各发两次 POST（删除弹两次确认，第二次 404） | 用 `dataset.opBound` 去重（先绑的生效，故 `msgEl` 仍在） |
+| 6 | `gui/templates/settings.html` | 「与 subfinder 取并集」整块被复制成两份同名复选框 → 取消一份关不掉 | 删重复块 |
+| 7 | `scanner/config.py` | `import yaml` 写在分支内：无 PyYAML 时 ImportError 被兜底吞掉 → **整份配置失效**，`elif json_path` 永不执行 | 增 `except ImportError` 分支退回读 `settings.json` |
+| 8 | `gui/app.py` | `pager.qs` 里 `q` 未 URL 编码 → 关键字含 `&`/`#`/空格时翻页、切标签丢筛选 | `quote(q)`；模板里 `?q={{ q }}` 改 `{{ q\|urlencode }}`（subdomains/extdomains） |
+| 9 | `scanner/owasp/checks.py` | XSS 只搜标记串 → **被转义的**回显（`&lt;svg/onload=…&gt;`，任何搜索框都会这样）误报成 XSS | 改判定完整 payload 是否原样出现 |
+| 10 | `scanner/blacklist.py` | `add()` 用 `load()` 取 existing，而关开关时 `load()` 返回 `[]` → 去重失效、同一条目反复追加 | 拆出 `_read()`（无视开关）供 `add()` 用 |
+| 11 | `scanner/stages/subdomain.py` | ① 字典路径为空时 `resolve("")` 落到项目根 → `IsADirectoryError` 整阶段挂掉；② puredns 循环缺 `stopped()` 检查（每域名 timeout=3600，停止要等到跑完） | 先确认"配了路径且是文件"；循环内加 `stopped()` break |
+| 12 | `scanner/stages/takeover.py` / `vulnscan.py` | ① 判定异常用 `debug` 记录，用户会误判"没有接管"；② stopped 后文案写"结果不再入账"却仍入库（与行为矛盾） | 改 `warning`；文案改成如实描述（协作式取消，已完成批次照常入账） |
+
+### 本次未修，已记入 `todo.txt` 待办
+
+`report.py` 表格未转义 `|`/换行（含 `|` 的标题会破表格）、`dnsq` 走 `_default_resolvers()` 忽略
+`dicts.resolvers` 覆盖、`utils.pool_run` 的 `if r:` 会丢 falsy 结果、`fingerprint` 的
+`content[:6]` 分支永不命中、`fofa.build_*_query` 未处理反斜杠、`iprecon.normalize_domain` 允许 `_`、
+`settings.yaml` 的 `fofa.enabled: true` 与 DEFAULTS 的 `false` 不一致、`runner.py` 阶段顺序注释漏
+`screenshot`、`takeover` docstring 写"默认关"实为默认开、`/api/blacklist/add` 的 `next` 参数属开放重定向、
+dirmap 的 `run_cmd` 缺 `stopped()` 检查（dirmap 整体归另一个 AI）。
+
+### 验证
+
+```powershell
+py -3 tests/smoke.py   # SMOKE PASS
+# 新增 [5l]：js 第三方名单文件生效 / 黑名单关开关仍去重 / 站点页签筛选 id 正确 /
+#            union_passive 仅一份 / all=1 与 plain=1 共存 / 关键字 & 已 URL 编码
+```
+
+文档：`AGENTS.md §0 第 2 条` 按用户口径重写为"**默认只读本项目，读外部需逐次按路径授权**"，
+并把已批准过的 dirmap 路径登记在案（不构成新授权）。
+
 ## 2026-09-22 —— 第十七轮（续 5）：拓展域名按来源分类 + 批量扫描命名 + 去掉冗余提示
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

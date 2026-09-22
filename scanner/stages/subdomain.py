@@ -118,14 +118,24 @@ class SubdomainStage(Stage):
 
         # ---------- 4) DNS 字典爆破 ----------
         brute_domains = domains[: int(limits.get("brute_max_domains", 50))]
-        wordlist = [w for w in read_lines(resolve(
-            ctx.settings.get("dicts", {}).get("subdomains", ""))) if not w.startswith("#")]
+        # 字典路径为空时 `resolve("")` 会落到项目根目录，`read_text()` 抛 IsADirectoryError 并
+        # 让整阶段挂掉；这里先确认"配了路径且确实是文件"，否则按"无字典"走（只做被动收集）。
+        dict_raw = str(ctx.settings.get("dicts", {}).get("subdomains", "") or "")
+        wl_path = resolve(dict_raw) if dict_raw else None
+        wordlist = ([w for w in read_lines(wl_path) if not w.startswith("#")]
+                    if (wl_path and wl_path.is_file()) else [])
+        if dict_raw and not wordlist:
+            ctx.logger.warning("[subdomain] 子域名字典不可用（路径不存在或为空文件），跳过字典爆破")
         pd_bin = which(ctx.settings.get("tools", {}).get("puredns", "puredns"))
         if pd_bin and not offline and wordlist:
             dict_path = str(resolve(ctx.settings["dicts"]["subdomains"]))
             resolvers = str(resolve(ctx.settings["dicts"]["resolvers"]))
             ctx.logger.info(f"[subdomain] puredns 爆破 {len(brute_domains)} 个域名 …")
             for d in brute_domains:
+                if ctx.stopped():
+                    # 每个域名 timeout=3600，不检查停止会让"停止"最多等到全部域名跑完
+                    ctx.logger.warning("[subdomain] 任务已请求停止，中止 puredns 爆破")
+                    break
                 out_file = ctx.workdir / f"brute_{d}.txt"
                 rc, _, err = run_cmd([pd_bin, "bruteforce", dict_path, "-d", d,
                                       "-r", resolvers, "-w", str(out_file)], timeout=3600)

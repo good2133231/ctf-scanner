@@ -12,6 +12,7 @@ import socket
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 from flask import (Flask, Response, abort, jsonify, redirect, send_file,
                    render_template, request, session, url_for)
@@ -399,7 +400,8 @@ def create_app():
             rows, total = db.page_assets(table, limit=size, offset=(page - 1) * size,
                                          q=q or None, extra_where=extra_where,
                                          extra_params=extra_params, order=order)
-        qs = f"&q={q}&size={size}" if q else f"&size={size}"
+        # q 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页、切标签**丢掉筛选条件**
+        qs = f"&q={quote(q)}&size={size}" if q else f"&size={size}"
         pager = {"page": page, "size": size, "total": total, "pages": pages,
                  "base": base, "qs": qs}
         return rows, pager, q

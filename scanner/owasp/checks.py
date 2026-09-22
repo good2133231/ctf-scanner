@@ -290,8 +290,10 @@ def _xss_reflect(url, settings):
                     return None
                 r = _get(f"{url}{sep}{param}={payload}", settings)
                 used += 1
-                # 只认"标记原样出现"；编码形态若被服务端解码同样说明存在未编码回显
-                if r and XSS_MARKER in (r.get("text") or ""):
+                # 只认"payload 原样出现"：单看标记串会把**被转义的**回显
+                # （`&lt;svg/onload=…marker…&gt;`，任何带搜索框的页面都会这样回显）也算成 XSS，
+                # 属于典型误报；完整 payload 出现才说明服务端原样输出了可执行标签。
+                if r and payload in (r.get("text") or ""):
                     tip = ("" if payload == _XSS_BASE else
                            f"（命中 WAF 绕过变体：{payload}）")
                     return _mk("a03-xss-reflect", "XSS 反射回显", "medium", "A03", url,

@@ -118,8 +118,14 @@ async function taskOp(action, id, btn, msgEl) {
 
 /* 绑定容器内的 [data-op] 按钮 */
 function bindTaskOps(scope, msgEl) {
-  document.querySelectorAll(`${scope} button[data-op]`).forEach(b =>
-    b.addEventListener("click", () => taskOp(b.dataset.op, b.dataset.id, b, msgEl)));
+  document.querySelectorAll(`${scope} button[data-op]`).forEach(b => {
+    // 去重：DOMContentLoaded 与任务详情模板内联脚本都会绑一次，重复绑定会让
+    // "停止/重启/删除"各发两次 POST（删除还会弹两次确认，第二次 404）。
+    // 先绑定的那个生效（内联脚本先执行、带 msgEl，所以操作反馈仍能显示）。
+    if (b.dataset.opBound) return;
+    b.dataset.opBound = "1";
+    b.addEventListener("click", () => taskOp(b.dataset.op, b.dataset.id, b, msgEl));
+  });
 }
 
 function initTaskTable() {

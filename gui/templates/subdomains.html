@@ -9,10 +9,10 @@
   <p class="muted small">标签过滤：CDN 标记来自 CNAME 链与
     <span class="mono">config/dicts/cdn_cname.txt</span> 名单比对。
     <a class="btn-mini {{ 'ghost' if tag != 'cdn' else '' }}"
-       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=cdn">只看 CDN</a>
+       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=cdn">只看 CDN</a>
     <a class="btn-mini {{ 'ghost' if tag != 'nocdn' else '' }}"
-       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=nocdn">只看非 CDN</a>
-    {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}">全部</a>{% endif %}
+       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=nocdn">只看非 CDN</a>
+    {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}">全部</a>{% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="域名 / 来源 / CNAME / IP"></label>
@@ -23,7 +23,7 @@
   </form>
   <form method="post" action="{{ url_for('api_blacklist_add') }}">
     <input type="hidden" name="next"
-      value="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ '&tag=' + tag if tag }}">
+      value="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ '&tag=' + tag if tag }}">
     <div class="bulkbar">
       <button type="submit" class="ghost">加入黑名单（勾选行）</button>
       <button type="submit" class="ghost"

@@ -40,6 +40,12 @@ class ProbeStage(Stage):
                 candidates.append(raw)
             elif kind == "ip":
                 candidates.extend([f"https://{raw}", f"http://{raw}"])
+            elif kind == "domain":
+                # 域名目标此前只靠 subdomain 阶段写进 `domains_for_probe` 才被探测：
+                # 用户只勾 probe（不勾 subdomain）时，域名目标会**静默产出 0 个站点**（日志只写"无可探测目标"）。
+                # 这里自己补上候选，与子域名同规则（https 优先、失败回退 http）；
+                # 两条路都走时后面的 `dict.fromkeys` 会去重，不会产生重复请求。
+                candidates.extend([f"https://{raw}", f"http://{raw}"])
         # 域名 / 子域名按 https、http 两种 scheme 生成候选
         for h in ctx.results.get("domains_for_probe") or []:
             candidates.extend([f"https://{h}", f"http://{h}"])

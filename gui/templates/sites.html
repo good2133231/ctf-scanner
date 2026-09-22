@@ -13,18 +13,18 @@
     折叠只作用于当前页，分页条的「共 N 条」仍是未折叠的总数。
     {% if show_all %}
       当前<b>显示全部</b>（含 {{ hidden }} 条重复）。
-      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}">只看去重</a>
+      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs|replace('&all=1', '') }}">只看去重</a>
     {% else %}
       已折叠隐藏 {{ hidden }} 条。
-      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&all=1">显示全部（含重叠）</a>
+      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs }}&all=1">显示全部（含重叠）</a>
     {% endif %}
   </p>
   <p class="muted small">显示模式：
     {% if plain %}
       <b>纯净模式</b>（只显示 URL）
-      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}">显示全部列</a>
+      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs|replace('&plain=1', '') }}">显示全部列</a>
     {% else %}
-      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&plain=1">切到纯净模式（只看 URL）</a>
+      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs }}&plain=1">切到纯净模式（只看 URL）</a>
     {% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">

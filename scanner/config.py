@@ -269,6 +269,12 @@ def load_settings():
             _deep_merge(settings, data)
         elif json_path.exists():
             _deep_merge(settings, json.loads(json_path.read_text(encoding="utf-8")))
+    except ImportError:
+        # 有 settings.yaml 但环境没装 PyYAML：退回 settings.json 读取。
+        # （此前 `import yaml` 写在分支里，ImportError 会被下面的兜底吞掉 → 整份配置失效，
+        #  而 `elif json_path` 永远走不到，save_settings 写出的 json 也就永远读不回来。）
+        if json_path.exists():
+            _deep_merge(settings, json.loads(json_path.read_text(encoding="utf-8")))
     except Exception:
         # 配置损坏时退回默认值，保证框架可用
         settings = copy.deepcopy(DEFAULTS)

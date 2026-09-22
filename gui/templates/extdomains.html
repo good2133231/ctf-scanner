@@ -11,30 +11,30 @@
   {% set keep_tag = '&tag=' + tag if tag else '' %}
   <p class="muted small">来源分类（<b>默认按此顺序排列</b>：JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段）：
     <a class="btn-mini {{ 'ghost' if src else '' }}"
-       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep_tag }}{{ '&all=1' if show_all }}">全部</a>
+       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep_tag }}{{ '&all=1' if show_all }}">全部</a>
     {% for k, label, _s, _n in src_tags %}
       <a class="btn-mini {{ 'ghost' if src != k else '' }}"
-         href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&src={{ k }}{{ keep_tag }}{{ '&all=1' if show_all }}">{{ label }}</a>
+         href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&src={{ k }}{{ keep_tag }}{{ '&all=1' if show_all }}">{{ label }}</a>
     {% endfor %}
   </p>
   {% set keep_src = '&src=' + src if src else '' %}
   <p class="muted small">标签过滤：CDN 标记来自 CNAME 链与
     <span class="mono">config/dicts/cdn_cname.txt</span> 名单比对（接管检测之外的独立判定）。
     <a class="btn-mini {{ 'ghost' if tag != 'cdn' else '' }}"
-       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=cdn{{ keep_src }}{{ '&all=1' if show_all }}">只看 CDN</a>
+       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=cdn{{ keep_src }}{{ '&all=1' if show_all }}">只看 CDN</a>
     <a class="btn-mini {{ 'ghost' if tag != 'nocdn' else '' }}"
-       href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&tag=nocdn{{ keep_src }}{{ '&all=1' if show_all }}">只看非 CDN</a>
-    {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep_src }}{{ '&all=1' if show_all }}">全部</a>{% endif %}
+       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=nocdn{{ keep_src }}{{ '&all=1' if show_all }}">只看非 CDN</a>
+    {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep_src }}{{ '&all=1' if show_all }}">全部</a>{% endif %}
   </p>
   {% set keep = keep_src + keep_tag %}
   <p class="muted small">重叠资产：<b>该域名已作为「目标自身子域名」出现在任意任务里</b>（域名级全局判重），
     说明它早就在资产清单里，这里再列一遍纯属重复，所以<b>默认隐藏</b>。
     {% if show_all %}
       当前<b>显示全部</b>（含重叠）。
-      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep }}">只看不重叠</a>
+      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep }}">只看不重叠</a>
     {% else %}
       当前<b>只看不重叠</b>。
-      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep }}&all=1">显示全部（含重叠）</a>
+      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep }}&all=1">显示全部（含重叠）</a>
     {% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">
@@ -48,7 +48,7 @@
   </form>
   <form method="post" action="{{ url_for('api_blacklist_add') }}">
     <input type="hidden" name="next"
-      value="{{ pager.base }}?q={{ q }}&size={{ pager.size }}{{ keep }}{{ '&all=1' if show_all }}">
+      value="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep }}{{ '&all=1' if show_all }}">
     <input type="hidden" name="name" value="{{ scan_name }}">
     <div class="bulkbar">
       <button type="submit" class="ghost">加入黑名单（勾选行）</button>

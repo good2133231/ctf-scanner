@@ -563,3 +563,31 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [待办] 端口扫描接入 fscan（可选，需你先放二进制到 tools/）
 [待办] osint 阈值继续按真实数据校准（已有首个样本：标题十位数 / 证书百万级）
 
+-----
+（第十七轮续6：全流程体检 12 处修复）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+[完成] 1、probe 阶段补 domain 目标候选（此前只勾 probe 不勾 subdomain 时域名目标静默产出 0 站点）
+[完成] 2、jsmine._is_noise 改走 _noise_set()（config/dicts/js_thirdparty.txt 267 条此前加载了却没用）
+[完成] 3、task_detail 站点页签筛选框 id 改 #tbl-detail-sites（此前指向不存在的 #tbl-sites，筛选失效）
+[完成] 4、sites.html 显示模式链接改用 pager.qs（all=1 与 plain=1 此前互相冲掉，不能共存）
+[完成] 5、app.js bindTaskOps 去重绑定（此前停止/重启/删除各发两次 POST，删除弹两次确认）
+[完成] 6、settings.html 删掉重复的 union_passive 复选框（两份同名 → 取消一份关不掉）
+[完成] 7、config.load_settings 增 except ImportError 退回读 settings.json（此前无 PyYAML 时整份配置失效）
+[完成] 8、pager.qs 与 subdomains/extdomains 链接对 q 做 URL 编码（含 & 的关键字此前翻页丢筛选）
+[完成] 9、XSS 检查改判定完整 payload（此前只看标记串 → 被转义回显误报成 XSS）
+[完成] 10、blacklist.add 拆出 _read()，关开关时也能去重（此前同一条目反复追加）
+[完成] 11、subdomain：字典路径为空/非文件时不再崩；puredns 循环加 stopped() 检查
+[完成] 12、takeover 判定异常改 warning；vulnscan 停止文案改如实描述（不再与行为矛盾）
+[完成] 13、AGENTS.md §0 第 2 条按用户口径重写：默认只读本项目，读外部需逐次按路径授权
+[完成] 14、新增 smoke [5l] 六条断言钉住上述静默失效型问题
+
+[待办] report.py 表格未转义 `|` 与换行（标题含 `|` 会破坏 Markdown 表格）
+[待办] dnsq 走 _default_resolvers()，忽略 dicts.resolvers 的 settings 覆盖（仅自定义 resolvers 路径）
+[待办] utils.pool_run 的 `if r:` 会丢弃 falsy 结果（当前调用点返回 tuple/dict，暂无实害）
+[待办] fingerprint 的 `content[:6]` 短于 `<!doctype`，该分支永不命中
+[待办] fofa.build_cert_query/build_title_query 未处理反斜杠转义
+[待办] iprecon.normalize_domain 允许 `_`，与 utils.is_domain 口径不一致
+[待办] settings.yaml 的 fofa.enabled=true 与 DEFAULTS 的 false 不一致（未配 key 时只多一行日志）
+[待办] 文档漂移：runner.py 阶段顺序注释漏 screenshot；takeover docstring 写"默认关"实为默认开
+[待办] /api/blacklist/add 的 next 参数属开放重定向（单机单口令场景危害低）
+[待办] dirmap 适配的 run_cmd 缺 stopped() 检查（dirmap 整体归另一个 AI）
+

@@ -25,11 +25,20 @@ def enabled(settings=None):
 
 
 def load(settings=None):
-    """读取全部条目（已归一化：小写、去前后点、去掉 `*.` 前缀），保持文件顺序去重。"""
+    """读取全部条目（已归一化：小写、去前后点、去掉 `*.` 前缀），保持文件顺序去重。
+
+    开关关闭时返回空列表 —— 调用方据此判断"当前不拦任何域名"。
+    """
     if not enabled(settings):
         return []
+    return _read(path(settings))
+
+
+def _read(p):
+    """**无视开关**地读文件条目。`add()` 用它去重：若用 `load()`（关开关时返回空），
+    去重就会失效，同一条目会被反复追加到文件里。"""
     out, seen = [], set()
-    for line in read_lines(path(settings)):
+    for line in read_lines(p):
         entry = _norm(line)
         if entry and entry not in seen:
             seen.add(entry)
@@ -83,7 +92,7 @@ def filter_domains(domains, settings=None):
 def add(domains, settings=None):
     """把域名批量写入黑名单，返回**新增**条数（已存在的不重复写）。"""
     p = path(settings)
-    existing = load(settings)
+    existing = _read(p)
     have = set(existing)
     fresh = []
     for raw in domains:

@@ -191,7 +191,9 @@ def _is_noise(host, protect, blacklist):
         suf = str(suf or "").lower().strip(".")
         if suf and (host == suf or host.endswith("." + suf)):
             return True
-    for suf in _ALL_NOISE:
+    # 走 `_noise_set()`（= 内置清单 ∪ `config/dicts/js_thirdparty.txt` 的 267 条）。
+    # 此前这里直接遍历内置 `_ALL_NOISE`，导致那个"参考 URLFinder 整理"的名单文件**加载了却没用**。
+    for suf in _noise_set():
         if host == suf or host.endswith("." + suf):
             return True
     return False

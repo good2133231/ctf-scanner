@@ -101,7 +101,9 @@ class VulnscanStage(Stage):
         for batch in pool_run(_scan_site, sites, workers=workers):
             all_v.extend(batch)
         if ctx.stopped():
-            ctx.logger.warning("[vulnscan] 任务已请求停止，结果不再入账")
+            # 这里是"协作式取消"：已完成批次的结果是有效的，**照常入账**
+            # （此前文案写"结果不再入账"却仍入库，与行为矛盾，改成如实描述）。
+            ctx.logger.warning("[vulnscan] 任务已请求停止，只记录已完成批次的结果")
 
         uniq, seen = [], set()
         for v in all_v:

@@ -81,7 +81,9 @@ class TakeoverStage(Stage):
             try:
                 return takeover_mod.detect(host, ctx.settings, logger=ctx.logger)
             except Exception as e:
-                ctx.logger.debug(f"[takeover] {host} 判定失败：{e}")
+                # 用 warning 而不是 debug：整块判定异常时静默会让用户误判"没有接管"，
+                # 日志里必须留下痕迹（与已知"静默失败"坑同源）。
+                ctx.logger.warning(f"[takeover] {host} 判定失败：{e}")
                 return None
 
         found = pool_run(_detect, candidates, workers=workers)

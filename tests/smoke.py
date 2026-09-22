@@ -971,6 +971,31 @@ def main():
                        ("config/pocs-imported/conc-test.yaml",), one=True)["c"]
     assert n_rows == 1, f"同一个 path 应只有 1 行，实际 {n_rows}"
     print("[5k] 并发 POC 注册 ok: 8 线程同 path 无异常且只 1 行（原子 UPSERT + busy_timeout）")
+
+    # (5l) 全流程体检修复：这些都是"错了也不报错、只是功能静默失效"的坑，用断言钉住
+    from scanner import blacklist as bl_mod, jsmine as jsmine_mod
+    # 1) JS 第三方名单文件真的生效（此前 _is_noise 遍历内置集合，267 条文件白加载）
+    file_only = sorted(jsmine_mod._noise_set() - jsmine_mod._ALL_NOISE)
+    assert file_only, "config/dicts/js_thirdparty.txt 未加载进第三方名单"
+    assert jsmine_mod._is_noise("x." + file_only[0], set(), []) is True, \
+        f"名单文件里的 {file_only[0]} 未被识别（应走 _noise_set()）"
+    # 2) 黑名单开关关闭时 add() 仍能去重（此前用 load() 取 existing → 空 → 同一条反复追加）
+    bl_off = {"blacklist": {"enabled": False, "path": str(_TMPDIR / "bl-off.txt")}}
+    assert bl_mod.add(["dup-off.test", "dup-off.test"], bl_off) == 1
+    assert bl_mod.add(["dup-off.test"], bl_off) == 0, "关闭开关时 add 未去重"
+    # 3) 任务详情站点页签筛选框指向真实表格 id（此前 #tbl-sites 不存在 → 筛选静默失效）
+    detail = c.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert 'data-filter="#tbl-detail-sites"' in detail and 'id="tbl-detail-sites"' in detail
+    # 4) 策略页 union_passive 只有一份（此前复制成两份 → 取消一份关不掉）
+    st_html = c.get("/settings").get_data(as_text=True)
+    assert st_html.count('name="union_passive"') == 1, "settings 页 union_passive 复选框重复"
+    # 5) 站点页两个显示开关可共存（此前手写链接会互相冲掉）
+    both = c.get("/sites?all=1&plain=1").get_data(as_text=True)
+    assert "all=1" in both and "plain=1" in both
+    # 6) 关键字里的 & 会被 URL 编码进分页/切标签链接（此前原样拼接 → 翻页丢筛选）
+    enc = c.get("/subdomains?q=a%26b").get_data(as_text=True)
+    assert "q=a%26b" in enc, "pager.qs 未对 q 做 URL 编码"
+    print("[5l] 全流程体检修复 ok: js第三方名单生效/黑名单去重/站点筛选/union_passive 唯一/开关共存/q 编码")
     print("SMOKE PASS")
 
 
