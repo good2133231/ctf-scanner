@@ -453,8 +453,8 @@
 - [x] 拓展域名**移出侧栏**、改到任务详情页签；新增 `utils.is_domain()` 统一域名形态判断
   （挡掉裸 IP / 端口 / 路径 / 通配符 / 文件名）；`jsmine._FILE_EXT` 补服务端脚本后缀；
 - [x] JS 第三方黑名单改数据驱动：`config/dicts/js_thirdparty.txt`（**267 条** = 内置 + URLFinder `jsFiler` 212 条）；
-- [ ] **站点截图功能**（用户问"可以加吗"）：需要无头浏览器（Edge/Chrome headless）——
-  待确认浏览器可用后作为独立批次实现（计划：新增可选 `screenshot` 阶段 + `sites.shot` 列 + 站点页缩略图）。
+- [x] **站点截图功能**（用户问"可以加吗"）：需要无头浏览器（Edge/Chrome headless）——
+  已于「第十七轮（续 3）」实现（新增可选 `screenshot` 阶段 + `sites.shot` 列 + 站点页缩略图，smoke `[5j]`）。
 
 ## 第十七轮（续 3）站点截图（2026-09-22）
 
