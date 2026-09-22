@@ -165,6 +165,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
+
 - POC 引擎是** nuclei 兼容子集**：支持 `http:`/`requests:`、`payloads`（list / dict + `attack`）、
   `variables` + 内置变量、`path` 列表、`redirects`、匹配器 `status/word/regex/size` + `condition`/`negative`/
   `case-insensitive` + `part: body|header|all`、`extractors`（regex/kval）。**不支持 `raw`/`dsl`/`flow`/
@@ -172,6 +173,50 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - `owasp` 字段**格式是统一的**（`A01` 大写）：POC 引擎在 `engine.py` 里把 tag 的 `owasp-a01`
   规整为 `A01` 再入库，内置检查本身写 `A01`。*（本文件此前写的"POC 命中写 `owasp-a01`"与代码不符，
   已按代码更正 —— 见 `TODO.md` P1-3。）*
+- **dirmap 自身代码的 5 个问题**（第十六轮已**修在本机那份外部副本**里，见下一条）：
+  `saveResults()` 定义了两遍（前一个失效）、`response_storage`/`error_count` 是全局量、
+  `saveResults` 每次全文件 `r+` 读取再追加（1.5 万条结果时 O(n²)，gevent 并发下还会丢写）、
+  `conf.skip_size` 与 `intToSize()` 的字符串比较永远不相等、`ssl_context` 建了却没挂到 session。
+- `config/dicts/sensitive.txt` 已存在但**未被读取**：内置敏感文件检查用 checks.py 里的硬编码清单。
+- `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
+  （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
+- GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
+  takeover/portscan/jsmine/dirscan/vulnscan/iprecon/fofa/blacklist 十五段（dirscan 段含 big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned）（含按级别 / 按 OWASP 分类 /
+  按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
+  于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭）；
+  外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
+  fofa 的 email/key 要手改 `config/keys.yaml`（控制台只读、不写回凭据）。
+- `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。
+- **任务详情为 8 个页签**（潜在漏洞(默认)/站点/子域名/端口服务/C 段/目录/目标与配置/运行日志）：参考 ARL 界面的
+  IP/SSL证书/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源
+  还不存在（分别依赖证书解析、爬虫数据模型等）。理由与依赖关系见 `TODO.md` B-7。
+- **`osint` 的联网往返无法离线自测**：`tests/smoke.py` 只断言了 `iprecon`/`fofa`/`mmh3` 的纯函数、
+  黑 ico 阈值边界与"两个子开关都关则无产出"的门控；`api.webscan.cc` 与 FOFA 的真实响应结构
+  需要联网（FOFA 还需 key）才能验证 —— 首次实跑请打开开关并观察 `logs/task_*/task.log` 的 `[osint]` 行。
+- `osint` 的阈值都是**保守估计值、未经真实数据校准**：黑 ico 阈值 200、通用证书阈值 200
+  （`fofa.cert_threshold`）、单 IP 域名数 30（判共享主机）。都可在「策略配置 → 外部情报拓展」调整，
+  不需要改代码。证书反查的"通用证书"判定尤其粗：**只按命中总数比阈值**，不做证书主体/颁发者分析。
+- **黑名单的语义边界**：过滤发生在**入库前**，所以它**不影响已入库的历史资产**（老任务里的域名照旧可见），
+  也不会因为后来把某域名加入黑名单就把既有行删掉。文件是纯文本、每次调用重读（改完立即生效，无需重启）。
+- **重叠隐藏是"显示层"判据，不是删除**：`OVERLAP_EXT_WHERE`（拓展域名域名级全局）与
+  `OVERLAP_SITE_WHERE`（站点 URL 级跨任务，保留 `MAX(id)` **最新一条**）只作用于 `/extdomains`、`/sites`
+  两个列表页，`?all=1` 可放开；任务详情页签与报告仍显示全量。因此"站点页条数比任务详情少"是预期行为。
+- 任务已支持**停止（协作式取消）/删除/重启/导出 + 批量操作**；停止粒度是"当前批次跑完即停"，
+  不会强杀正在飞行的 HTTP 请求，任务终态记为 `stopped`（区别于 `failed`）。
+- **改完 GUI 必须重启服务**：若 5000 已被旧进程占用，新起的 `run_gui.py`（经 `gui/app.py serve()`）
+  会打印端口占用提示并以退出码 1 结束——按提示结束占用进程或改 `gui.port` 再试；
+  请求还是打到旧进程（新路由 404）——很容易误判成"代码没生效"，先确认端口占用再排查。
+  **实测代价**：曾有一个旧 GUI 进程（PID 18360，2026-09-21 14:09 启动）被点名却一直没人杀，
+  连续两天占着 5000；服务端 `debug=False` 既不重载代码也不重载 Jinja 模板，于是"代码明明改了、
+  页面却是 5 栏旧导航 + 还写着'疑似问题'"。**排查任何"页面不对"之前，先看进程启动时间**：
+  `Get-CimInstance Win32_Process -Filter "Name like '%python%'" | Select ProcessId,CreationDate`。
+  **本轮又踩一次（2026-09-22）**：GUI 于 17:17 重启，而我 17:20 才给 portscan 阶段加
+  `full_workers/full_timeout` —— 从那个 GUI 发起的全端口任务**仍按旧参数**跑（日志写「最坏约 17 分钟」），
+  因为 Python 进程早已把模块加载进内存。**结论：改完任何会被 GUI 调用的代码，都要重启 GUI 再验证。**
+- **不要让子代理/自动化去点 GUI 的写操作按钮**：批量停止/重启/删除、新建任务都是真写库。
+  本轮实测教训：一个被要求"只观察"的浏览器子代理点了「批量删除」并**把 `confirm()` 确认框也确认了**，
+  硬删掉 63 条历史任务行；紧接着又提交了「新建扫描任务」表单，对一个**外部真实域名**跑了全 8 阶段扫描。
+  派浏览器代理时必须在提示里明确写"只读浏览，禁止点击任何提交/删除类按钮"，并**限制其可操作页面**。
 - **dirmap 适配的三个实测坑**（改之前先读 `stages/dirscan.py::_run_dirmap`）：
   ① 产物在 `output/<域名>/` **子目录**里（`res.txt` / `403.txt` / `404.txt` / `重复长度.txt`），
   不是早年的 `output/<域名>.txt`；② `output/` 是**持久目录**；
@@ -181,20 +226,19 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   mtime 过滤只作兜底。结果行格式是 `[状态码][content-type][大小] URL`（大小形如 `1.23kb`），
   我们只读 `res.txt` / `403.txt`（`重复长度.txt` 按用户要求默认不展示）。
 - **dirmap 是 GPL-3.0，刻意不内联**（把源码拷进仓库会让整个仓库受 GPL 约束）：
-  只保留 `tools/dirmap/` 目录联接 + 外部适配器；对它的 5 处源码修复记录在
+  只保留 `tools/dirmap/` 目录联接 + 外部适配器；对它的 5 处源码修复（重复定义 / 死变量 /
+  O(n²) 读回+并发丢写 / `skip_size` 比较恒假 / `ssl_context` 未挂载，**588s → 43s**）记录在
   `tools/dirmap_fixes/README.md`（**该目录不含 dirmap 源码**）。
+- **全端口扫描（1-65535）实测**（2026-09-22，本机回环）：`workers=256`/`timeout=0.3` → **82 秒**；
+  **默认参数** `workers=64`/`timeout=1.0` → **1037 秒（17.3 分钟）**，差 12.6× —— 全端口用默认参数基本不可用，
+  故新增 `portscan.full_workers`（默认 256）/ `portscan.full_timeout`（默认 0.5），**只在 full 模式生效**。
+  阶段日志的耗时预估（`端口数/并发 × 单端口超时`）实测准确（预测 17 分钟 / 实测 1037 秒）。
+  `nmap_scan()` 的两个超时已封顶（host ≤1800s / 进程 ≤3600s），否则全端口会算出 4.5~36 小时。
+  GUI「全端口扫描」页发起的是**单次任务**（任务选项 `portscan_full`），不改全局策略 ——
+  全局 `portscan.mode=full` 会让每个任务都变慢，谨慎使用。`parse_ports()` 默认 `max_span=4096` 就是防手滑的。
 - **`dirscan` 默认改为关闭**（第十五轮，用户要求）：它是全流水线里请求量最大的一段
   （大字典 15333 条 × 站点数）。打开后仍有两层节流：只扫**不重复站点**（同任务内标题+长度相同的
   别名站跳过）、单站点最多 `dirscan.max_paths`（默认 400）条。
-- **全端口扫描（1-65535）实测**（2026-09-22，本机回环）：`workers=256`/`timeout=0.3` → **82 秒**；
-  **默认参数** `workers=64`/`timeout=1.0` → **超过 17 分钟**（关闭端口要等满超时）。
-  因此新增 `portscan.full_workers`（默认 256）/ `portscan.full_timeout`（默认 0.5），**只在 full 模式生效**；
-  远端目标按默认 `workers=64`/`timeout=1.0` 会慢一个量级（关闭端口要等满超时），
-  阶段日志会打印耗时量级预估，调大 `workers`、调小 `timeout` 可显著缩短。
-  `nmap_scan()` 的两个超时已封顶（host ≤1800s / 进程 ≤3600s），否则全端口会算出 4.5~36 小时。
-  GUI「全端口扫描」页发起的是
-  **单次任务**（任务选项 `portscan_full`），不改全局策略 —— 全局 `portscan.mode=full` 会让每个任务
-  都变慢，谨慎使用。`parse_ports()` 默认 `max_span=4096` 就是防手滑的。
 - **FOFA 三种反查已于 2026-09-22 真实跑过**（key 已配）：
   `title="维保中心"` → 15 条（正常拓展）；`cert="example.com"` → **2 164 696 条** →
   被 `is_common_cert` 判为通用证书而放弃拓展（**这条真实数据就是阈值存在的意义**：
@@ -209,6 +253,9 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   （sites/vulns/subdomains/dirs/csegs/ports）导出到 `data/trash/task_<id>_<时间>.json`；
   备份失败只告警、不阻断删除（GUI 的单个删除与批量删除都走 `db.delete_task`，无需额外操作）。
   即：**删除前请照常检查 `data/trash/`**，那里是"误删后唯一的救命稻草"。
+- **dirmap 是 GPL-3.0，刻意不内联**（把源码拷进仓库会让整个仓库受 GPL 约束）：
+  只保留 `tools/dirmap/` 目录联接 + 外部适配器；对它的 5 处源码修复记录在
+  `tools/dirmap_fixes/README.md`（**该目录不含 dirmap 源码**）。
 
 ## 8. 不要做的事
 
