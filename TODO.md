@@ -317,8 +317,10 @@
         任务名 `批量子域-<月日>-<时分秒>`）；`_picked_domains()` 去重保序；
       - **拓展资产重叠默认隐藏**：`db.OVERLAP_EXT_WHERE`（域名级全局：该域名已作为任意任务的"目标自身子域名"）
         + `/extdomains` 默认叠加，`?all=1` 放开。
-- [x] **Q6 站点重叠默认隐藏**：`db.OVERLAP_SITE_WHERE`（URL 级跨任务，`id IN (SELECT MIN(id) … GROUP BY url)`
-      保留最早一条）+ `/sites` 默认叠加；与既有的"同任务内 标题+长度 折叠"共用一个开关（`?all=1`）。
+- [x] **Q6 站点重叠默认隐藏**：`db.OVERLAP_SITE_WHERE`（URL 级跨任务，`id IN (SELECT MAX(id) … GROUP BY url)`
+      保留**最新一条**）+ `/sites` 默认叠加；与既有的"同任务内 标题+长度 折叠"共用一个开关（`?all=1`）。
+      *（接管复核时由 `MIN(id)` 改为 `MAX(id)`：留最旧那条会让默认视图永远显示首次扫描的 status/title/length，
+      重扫刷新不了；`tests/smoke.py` `[5d](7)` 已用两条不同标题的同 URL 站点把这个语义钉住。）*
 - [x] **`tests/smoke.py` 新增 `[5d]`**（一次通过 SMOKE PASS）：11 组断言覆盖
       `base_domain` / `rel_display` / 黑名单（临时文件 + 开关失效）/ 证书反查（`build_cert_query`、
       `is_common_cert` 200↔201 边界、`search_cert` 空域名）/ `source_label` / 拓展域名重叠隐藏与 `?all=1` /

@@ -326,7 +326,8 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
          （任务名 批量子域-<月日>-<时分秒>）；按你的选择用"新建任务"而非子任务
        - 拓展资产重叠默认隐藏：db.OVERLAP_EXT_WHERE（域名级全局：该域名已是任意任务的"目标自身子域名"），
          页顶开关「显示全部（含重叠）」→ ?all=1 放开
-[完成] 6、站点页同样默认隐藏重叠：db.OVERLAP_SITE_WHERE（URL 级跨任务，保留最早一条 id=MIN(id)），
+[完成] 6、站点页同样默认隐藏重叠：db.OVERLAP_SITE_WHERE（URL 级跨任务，保留**最新一条** id=MAX(id)，
+       站点行带当次扫描的 status/title/length/tech，留最旧会让默认视图一直显示陈旧数据），
        与既有的"同任务内 标题+长度 折叠"共用一个 ?all=1 开关
 [完成] tests/smoke.py 新增 [5d]（11 组断言）并跑通 SMOKE PASS：base_domain / rel_display / 黑名单 /
        证书反查（阈值 200↔201 边界、空域名）/ source_label / 重叠隐藏与 ?all=1 / 站点重叠 1↔2 条 /

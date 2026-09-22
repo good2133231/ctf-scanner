@@ -66,8 +66,11 @@ SQLite 单写者并发可能 `database is locked`、`app.run()` 是开发服务�
 
 ### 6）站点页重叠默认隐藏
 
-- `db.OVERLAP_SITE_WHERE`（`id IN (SELECT MIN(id) FROM sites GROUP BY url)`，URL 级跨任务保留最早一条）
+- `db.OVERLAP_SITE_WHERE`（`id IN (SELECT MAX(id) FROM sites GROUP BY url)`，URL 级跨任务保留**最新一条**）
   叠加到 `/sites`；与既有"同任务内 标题+长度 折叠"共用一个 `?all=1` 开关，页顶文案同步更新。
+  留最新而非最旧：站点行带的是当次扫描的 `status/title/length/tech`，留最旧那条等于默认视图永远显示
+  首次扫描的陈旧数据（重扫的目的正是刷新这些字段）；`tests/smoke.py` `[5d](7)` 已用两条不同标题的
+  同 URL 站点把这个语义钉住。
 
 ### 验证
 
