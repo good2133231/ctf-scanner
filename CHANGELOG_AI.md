@@ -72,6 +72,18 @@ SQLite 单写者并发可能 `database is locked`、`app.run()` 是开发服务�
   首次扫描的陈旧数据（重扫的目的正是刷新这些字段）；`tests/smoke.py` `[5d](7)` 已用两条不同标题的
   同 URL 站点把这个语义钉住。
 
+### 7）接管复核补记（新负责人接手后自查出的两个缺陷，本轮一并修掉）
+
+- **`blacklist.add()` 会把条目粘到上一行**（真 Bug，实测复现）：手工编辑过的
+  `config/blacklist.txt` **末尾常常没有换行**，原实现直接 `open(p,"a")` 追加 ——
+  实测 `example.com` + 新加 `a.test` → 文件变成 `example.coma.test`：原条目丢失、新增条目也不存在，
+  而黑名单的语义是"命中即丢弃"，写坏之后**不会报错、只会静默失效**（用户以为拉黑了，实际还在扫）。
+  修复：追加前读一次文件尾部，缺换行先补一个 `\n`。`tests/smoke.py` `[5d](3)` 新增该回归断言
+  （先写入"末尾无换行"的名单，再 `add()`，断言两条是分开的）。
+- **站点重叠保留 `MIN(id)`（最旧）→ `MAX(id)`（最新）**：见上节 6），理由与断言同上。
+  `AGENTS.md` / `docs/architecture.md` / `docs/usage.md` / `gui/app.py` 注释 /
+  `gui/templates/sites.html` / `TODO.md` 里"保留最早一条"的表述已全部改为"最新一条"。
+
 ### 验证
 
 ```powershell
