@@ -149,6 +149,10 @@ ctf-scanner/
   `subdomain → takeover → portscan → probe → **screenshot** → osint → jsmine → dirscan → vulnscan
   → **intel** → **heuristic**`；
   `screenshot` 默认关、需要本机 Edge/Chrome，浏览器路径探测见 `scanner/screenshot.py`；
+  **但"默认关"指的是策略级开关** —— 建任务时勾了 `screenshot`（或 CLI `-p screenshot`）即
+  **任务级点名**，GUI 落任务选项 `screenshot_on`，阶段据此越过策略开关执行且不改全局策略
+  （2026-09-23 续13：此前只认策略开关，用户勾了截图却被静默跳过，页面上永远没有缩略图；
+  站点页签的「补截图」按钮同样落 `screenshot_on`）；
   `dirscan` 默认开但**默认只跑浅扫**（`dirscan.mode=quick`，见 §8 的 dirscan 条目）；
   末尾两个**线索阶段默认关**，且**只写 `leads` 表**（不写 `vulns`、不计入漏洞数、不自动导 POC）：
   `intel` = CISA KEV 情报 × 本地指纹白名单式匹配（`scanner/intel.py`），
@@ -280,6 +284,14 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   IP/SSL证书/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源
   还不存在（分别依赖证书解析、爬虫数据模型等）。理由与依赖关系见 `TODO.md` B-7。
   「线索」页签是 P3-2/P3-3 的落点：**线索 ≠ 漏洞结论**，因此单列、单计数，不混进「潜在漏洞」。
+  「拓展域名」页签与跨任务 `/extdomains` **共用同一张来源顺序表**（`EXT_SRC_TAGS`：
+  JS 挖掘 → FOFA·标题 → 证书 → ICO → C 段，同类内新的在前），任务页另支持 `?esrc=` 分类过滤；
+  以及三个**手动**处置（2026-09-23 续13）：纯 DNS 解析 `POST /api/domains/resolve`、
+  送去探测 `POST /api/domains/scan-ext`（新任务 `probe→dirscan→vulnscan`）、
+  `POST /api/blacklist/add`（此前任务页签没有此入口）。
+  **为什么必须手动**：`osint`/`jsmine` 排在 `probe` **之后**，它们新挖出的域名赶不上本轮存活探测，
+  天然停在"有域名、无站点、无检测"；而拓展域名里大量是 CDN/开源库/JS 命名空间碎片，
+  全自动跑既越权又浪费额度 —— 这是**设计边界，不是缺陷**。
 - **`osint` 的联网往返无法离线自测**：`tests/smoke.py` 只断言了 `iprecon`/`fofa`/`mmh3` 的纯函数、
   黑 ico 阈值边界与"两个子开关都关则无产出"的门控；`api.webscan.cc` 与 FOFA 的真实响应结构
   需要联网（FOFA 还需 key）才能验证 —— 首次实跑请打开开关并观察 `logs/task_*/task.log` 的 `[osint]` 行。

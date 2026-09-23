@@ -35,6 +35,7 @@ import time
 from urllib.parse import urlparse
 
 from .base import Stage
+from .probe import TITLE_RE      # 命中页的 <title> 提取（与 probe 同一套正则，避免两处定义漂移）
 from .. import db
 from ..config import resolve
 from ..utils import read_lines, write_lines, pool_run, http_request, pick_python, run_cmd
@@ -599,8 +600,13 @@ class DirscanStage(Stage):
                 digest = hashlib.md5((r.get("text") or "").encode("utf-8", "replace")).hexdigest()
                 if digest in md5s or (sizes and (r.get("length") or 0) in sizes):
                     return None
+            # 命中页的标题：响应体已经在手里（上面算 md5 用过），提取 <title> 是零额外请求。
+            # 为什么值得存：路径命中后光看 `/backup.tar.gz 200 1818` 判断不了这是真备份包
+            # 还是一个"统一跳转页"；标题能立刻分辨（用户 2026-09-23 明确要求）。
+            t = TITLE_RE.search(r.get("text") or "")
             return {"site_url": u, "path": url, "status": st,
-                    "length": r.get("length"), "method": "GET", "note": "builtin"}
+                    "length": r.get("length"), "method": "GET", "note": "builtin",
+                    "title": (t.group(1).strip()[:200] if t else "")}
 
         entries = [e for e in pool_run(_hit, jobs, workers=workers) if e]
 

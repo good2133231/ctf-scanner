@@ -101,17 +101,26 @@
 
 <div class="tabpane" id="pane-sites">
   <section class="panel">
-    <p class="muted small">勾选站点 → 发起<b>深度目录补扫</b>：新建一个只跑 dirscan 的任务，
-      走全量分层字典 + dirmap + 后缀派生（任务选项 <span class="mono">dirscan_full</span>
-      强制全量，<b>不改全局策略</b>）。单次最多处理 {{ dir_cap }} 个站点
-      （<span class="mono">limits.dirscan_max_urls</span>）。
+    <p class="muted small">勾选站点 → 用下面的按钮发起补扫：<b>深度目录补扫</b>（新建只跑 dirscan
+      的任务，走全量分层字典 + dirmap + 后缀派生）或<b>补截图</b>（新建只跑 screenshot 的任务）。
+      两者都靠任务级选项（<span class="mono">dirscan_full</span> /
+      <span class="mono">screenshot_on</span>）强制生效，<b>不改全局策略</b>；
+      单次目录补扫最多处理 {{ dir_cap }} 个站点（<span class="mono">limits.dirscan_max_urls</span>）。
       {% if dir_full %}当前任务已按<b>深扫</b>跑过目录，通常无需再来一次。{% endif %}</p>
+    {% if shot_missing %}
+    <p class="muted small">{% if not shot_enabled %}本任务没有截图产物：截图阶段策略级<b>默认关闭</b>
+      （「策略配置 → 资产面拓展」）。点下面「补截图」只对本次勾选的站点生效，不改全局策略。
+      {% elif not shot_ready %}本任务已开启截图，但本机<b>没找到可用的无头浏览器</b>（Edge/Chrome），
+      所以没有产物；可在「策略配置 → 资产面拓展」填 <span class="mono">screenshot.browser</span>。
+      {% else %}本任务已开启截图但还没有产物（可能是截图失败），点「补截图」重试，
+      失败原因见运行日志。{% endif %}</p>
+    {% endif %}
     <form method="post" action="{{ url_for('api_rescan') }}">
-      <input type="hidden" name="stage" value="dirscan">
       <input type="hidden" name="from_task" value="{{ task.id }}">
       <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
       <div class="bulkbar">
-        <button type="submit" class="ghost">深度目录补扫（勾选站点）</button>
+        <button type="submit" class="ghost" name="stage" value="dirscan">深度目录补扫（勾选站点）</button>
+        <button type="submit" class="ghost" name="stage" value="screenshot">补截图（勾选站点）</button>
         <label class="muted">任务名
           <input name="name" placeholder="留空则用 补扫全目录-<月日>-<时分秒>"></label>
         <span class="muted small">补扫是<b>真实扫描</b>：请先确认对目标有授权。</span>
@@ -176,22 +185,59 @@
       <span class="mono">osint:fofa-cert</span> / <span class="mono">osint:fofa-title</span>）
       带出来的关联域名 —— 它们<b>未必属于目标自身</b>，所以不混进「子域名」页签。
       侧栏不再单列该页，跨任务视图仍可在 /extdomains 直接访问。</p>
-    <label class="muted">筛选域名 <input data-filter="#tbl-ext-subs" placeholder="域名 / 来源 / CNAME / IP"></label>
-    <table id="tbl-ext-subs">
-      <thead><tr><th>域名</th><th>解析 IP</th><th>CDN</th><th>CNAME</th><th>来源</th></tr></thead>
-      <tbody>
-      {% for s in ext_subs %}
-        <tr><td class="mono">{{ s.domain }}</td>
-          <td class="muted small mono">{{ s.ip or '-' }}</td>
-          <td>{% if s.cdn %}<span class="tech-tag">{{ s.cdn }}</span>
-              {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
-          <td class="muted small mono">{{ s.cname or '-' }}</td>
-          <td class="muted">{{ source_label(s.source) }}</td></tr>
-      {% else %}
-        <tr><td colspan="5" class="muted">暂无拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
+    <p class="muted small"><b>默认已按来源分类排序</b>（JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段，
+      同类内新的在前），不再交错；点下面按钮只看某一类。</p>
+    <div class="row">
+      <a class="btn-mini {{ 'ghost' if ext_src else '' }}"
+         href="{{ url_for('task_detail', task_id=task.id) }}">全部（{{ ext_counts.values()|sum }}）</a>
+      {% for k, label, srcval, _prefix in ext_src_tags %}
+        {% set n = ext_counts.get(srcval, 0) %}
+        <a class="btn-mini {{ 'ghost' if ext_src != k else '' }}"
+           href="{{ url_for('task_detail', task_id=task.id) }}?esrc={{ k }}">{{ label }}（{{ n }}）</a>
       {% endfor %}
-      </tbody>
-    </table>
+    </div>
+    <p class="muted small"><b>这些域名默认不会自动扫</b> —— probe / dirscan / vulnscan 的输入是
+      「存活站点」，而 osint、jsmine 两个阶段排在 probe <b>之后</b>，同一任务里新挖出的域名赶不上本轮探测，
+      于是停在"有域名、无检测"的状态。勾选你确认要看的域名，用下面三个按钮手动处理
+      （拓展域名里大量是 CDN / 开源库 / JS 命名空间碎片，全自动跑既越权又浪费额度）：</p>
+    <form method="post" action="{{ url_for('api_scan_ext') }}">
+      <input type="hidden" name="task_id" value="{{ task.id }}">
+      <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
+      <div class="bulkbar">
+        <button type="submit" class="ghost">送去探测（存活+目录+漏洞，新建任务）</button>
+        <button type="submit" class="ghost" formaction="{{ url_for('api_resolve_domains') }}"
+          title="纯 DNS 查询（零 HTTP）：回填解析 IP / CNAME / CDN 与失败原因">
+          解析选中域名（DNS）</button>
+        <button type="submit" class="ghost" formaction="{{ url_for('api_blacklist_add') }}"
+          title="命中黑名单的域名此后不再进入资产库，自然也不会被扫描">
+          加入黑名单</button>
+        <label class="muted">任务名
+          <input name="name" placeholder="留空则用 拓展探测-&lt;月日&gt;-&lt;时分秒&gt;"></label>
+      </div>
+      <label class="muted">筛选域名 <input data-filter="#tbl-ext-subs" placeholder="域名 / 来源 / CNAME / IP"></label>
+      <table id="tbl-ext-subs">
+        <thead><tr>
+          <th class="pick"><input type="checkbox" class="pick-all-page"
+            data-pick-all="#tbl-ext-subs" title="全选本页"></th>
+          <th>域名</th><th>解析 IP</th><th>CDN</th><th>CNAME</th><th>来源</th></tr></thead>
+        <tbody>
+        {% for s in ext_subs %}
+          <tr><td class="pick"><input type="checkbox" class="pick pick-row"
+                name="domain" value="{{ s.domain }}"></td>
+            <td class="mono">{{ s.domain }}</td>
+            <td class="muted small mono">{{ s.ip or '-' }}
+              {%- if not s.ip and s.ip_note %}<br><span class="muted small"
+                title="为什么没有解析结果">{{ ip_note_label(s.ip_note) }}</span>{% endif %}</td>
+            <td>{% if s.cdn %}<span class="tech-tag">{{ s.cdn }}</span>
+                {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
+            <td class="muted small mono">{{ s.cname or '-' }}</td>
+            <td class="muted">{{ source_label(s.source) }}</td></tr>
+        {% else %}
+          <tr><td colspan="6" class="muted">暂无拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </form>
   </section>
 </div>
 
@@ -257,33 +303,32 @@
 <div class="tabpane" id="pane-dirs">
   <section class="panel">
     <p class="muted small">「大小」是返回包字节数；同一站点下状态码与大小都相同的多条只留首个
-      （软 404 模板 / 统一跳转页），本页已隐藏 {{ dirs_hidden or 0 }} 条重复长度。</p>
+      （软 404 模板 / 统一跳转页），本页已隐藏 {{ dirs_hidden or 0 }} 条重复长度。
+      默认排序：<b>200 优先，其次按大小降序</b>（越大的响应越可能是真实页面）。</p>
     {% if not dir_full %}
-    <p class="muted small">本任务的目录探测是<b>浅扫</b>档（只打敏感路径精选字典）——
-      想深挖就用下面的按钮把<b>本任务全部站点</b>送去深度补扫，或到「站点」页签只挑几个。</p>
     <form method="post" action="{{ url_for('api_rescan') }}">
       <input type="hidden" name="stage" value="dirscan">
       <input type="hidden" name="from_task" value="{{ task.id }}">
       <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
       {% for s in sites %}<input type="hidden" name="target" value="{{ s.url }}">{% endfor %}
       <div class="bulkbar">
-        <button type="submit" class="ghost">对本任务全部站点深度补扫</button>
-        <span class="muted small">共 {{ sites|length }} 个站点，实际最多扫 {{ dir_cap }} 个
-          （<span class="mono">limits.dirscan_max_urls</span>）。</span>
+        <button type="submit" class="ghost">深度补扫</button>
+        <span class="muted small">共 {{ sites|length }} 个站点，最多扫 {{ dir_cap }} 个</span>
       </div>
     </form>
     {% endif %}
-    <label class="muted">筛选路径 <input data-filter="#tbl-dirs" placeholder="路径 / 状态码 / 大小"></label>
+    <label class="muted">筛选路径 <input data-filter="#tbl-dirs" placeholder="路径 / 状态码 / 大小 / 标题"></label>
     <table id="tbl-dirs">
-      <thead><tr><th>状态</th><th>路径</th><th>大小</th><th>来源</th></tr></thead>
+      <thead><tr><th>状态</th><th>路径</th><th>大小</th><th>标题</th><th>来源</th></tr></thead>
       <tbody>
       {% for d in dirs %}
         <tr><td>{{ d.status }}</td><td class="mono">{{ d.path }}</td>
           <td class="muted small mono">{{ d.length if d.length is not none else '-' }}
             {% if d.dup %}<span class="muted small">（另有 {{ d.dup }} 条相同）</span>{% endif %}</td>
+          <td class="muted small">{{ d.title or '-' }}</td>
           <td class="muted">{{ d.note or '-' }}</td></tr>
       {% else %}
-        <tr><td colspan="4" class="muted">暂无数据。</td></tr>
+        <tr><td colspan="5" class="muted">暂无数据。</td></tr>
       {% endfor %}
       </tbody>
     </table>

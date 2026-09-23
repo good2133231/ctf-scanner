@@ -679,3 +679,43 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [用户自办] 真实授权目标跑完整 11 阶段（用户明确"这个我回头自己跑就行"）
 [仍未验] subfinder / puredns / httpx 的适配分支（那台 Linux 上未装，代码走 which + 内置兜底）
 
+（第十八轮续13：拓展域名手动处置 + 目录可读性 + 截图"勾了就有用"）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+你当场提的四条（任务详情页，任务 #149）：
+「这个顺序和分类还是没有 比如他默认排序就是先 js挖掘 如何 JS 与 FOFA 不要交叉 并且你忘记了有手动
+让他们在运行的功能吗 我记得代办应该有 你看看是没完成还是你不记得了 还有加黑名单的功能呢
+以及我根据你这些域名都没有检测」/「这个要显示显示大小，以及降序排，优先拍200，并且要获取标题」/
+「这个显示深度补扫就可以」/「站点的截图显示为什么还没有完成」
+[完成] 1、拓展域名页签按来源分类排序：根因是 task_detail 直接渲染 db.list_subdomains()（ORDER BY domain）
+       → js:mine 与 osint:fofa-title 按字母序**交错**（跨任务 /extdomains 早有 EXT_SRC_ORDER，任务页签没跟上）。
+       改为与跨任务页共用同一张 EXT_SRC_TAGS（JS→标题→证书→ICO→C 段，同类内新的在前），并加 ?esrc= 分类过滤 +
+       各类计数按钮组
+[完成] 2、"这些域名都没有检测"的根因**不是漏做，是阶段顺序**：probe/dirscan/vulnscan 的输入是存活站点(sites)，
+       而 osint/jsmine 排在 probe **之后** → 同任务里新挖的域名永远停在"有域名、无站点、无检测"。
+       新增三个手动处置（此前只有跨任务页有黑名单，任务页签两个入口都没有）：
+       - POST /api/domains/resolve：纯 DNS（零 HTTP）回填 ip/cname/cdn/失败原因，复用 dnsq.resolve_detail
+         + cdn.match，并发 ≤20
+       - POST /api/domains/scan-ext：勾选域名打包成新任务跑 probe→dirscan→vulnscan，名 `拓展探测-月日-时分秒`，
+         记 rescan_of
+       - 复用 POST /api/blacklist/add（任务页签现在也能加黑名单）
+       仍**不做自动全跑**：拓展域名里大量是 CDN/开源库/JS 命名空间碎片，全跑既越权又浪费额度
+[完成] 3、目录：dirs 新增 title 列（_COLUMN_PATCHES 同步补列）；dirscan._hit() 从**已在手里的**响应体提取
+       <title>（与 probe 共用 TITLE_RE，零额外请求；dirmap 解析行无响应体 → 留空）；
+       db.list_dirs() 默认排序改 `200 优先 → 大小降序 → 有长度在前 → id`；
+       任务详情目录页签与跨任务 /dirs 都补「标题」列，筛选 placeholder 同步加"标题"
+[完成] 4、目录文案精简：删掉"本任务的目录探测是浅扫档…"整段，只留「深度补扫」按钮 + 站点数/额度
+[完成] 5、截图"为什么还没有完成"：实机核实任务 #149 日志 = `[screenshot] 未启用（策略配置 → 资产面拓展
+       可打开），跳过`，sites.shot 三行全空 → **策略级 screenshot.enabled=false 静默吃掉了任务级勾选**，
+       而 tasks.html 里该复选框**默认勾上**，于是"勾了没用"。
+       修法三处：① screenshot.py 门控改 `enabled is True or options["screenshot_on"] is True`（CLI -p screenshot 同）；
+       ② api_create_task 见 screenshot 阶段即落 options["screenshot_on"]=True；③ tasks.html 该框改默认不勾 + 标注；
+       ④ 站点页签加「补截图（勾选站点）」按钮（stage=screenshot 走 api_rescan，任务级 screenshot_on 生效），
+       并在有站点却无产物时**分三种情况说明原因**（策略关 / 本机无可用无头浏览器 → 提示填 screenshot.browser / 失败看日志）
+[完成] 6、smoke：`[5j]` 增补"策略关 + 任务级 screenshot_on 必须放行"断言（浏览器指到不存在的路径，
+       既不真拉浏览器又证明门控放行）；新增 `[5t]`（11 组断言：dirs.title 落库与排序 / dirmap 行缺 title 不炸 /
+       目录页签标题列与文案精简 / 拓展域名分类排序与 ?esrc= 过滤 / 三个手动端点含 next 防跳外站与空勾选不建任务 /
+       截图任务级选项与补截图入口+原因提示）→ **SMOKE PASS**
+[完成] 7、文档同步：AGENTS.md（阶段门控"默认关"的准确语义 + 拓展域名页签条）、docs/usage.md（§3 补扫入口、
+       拓展域名手动处置与"为何默认不自动扫"、目录标题列与排序、screenshot 门控）、docs/architecture.md（dirs 表列）、
+       README.md、CHANGELOG_AI.md（续13）
+[未变更] 截图实现本身、无头浏览器真实出图、fscan/nmap 真实调用：以 Linux 实机（10.10.3.121，2026-09-23）既有结论为准
+

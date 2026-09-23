@@ -20,14 +20,14 @@ from flask import (Flask, Response, abort, jsonify, redirect, send_file,
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import blacklist, db
+from scanner import blacklist, cdn, db, dnsq, screenshot
 from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
-from scanner.utils import rel_display
+from scanner.utils import pool_run, rel_display
 
 logger = get_logger("gui")
 
@@ -189,6 +189,11 @@ def create_app():
                 auto_stages.append(stage)
         # 补进来的阶段要回到流水线既定顺序：runner 按给定顺序执行，**不做排序**
         stages.sort(key=STAGE_ORDER.index)
+        # 截图阶段策略级默认关（`screenshot.enabled=false`），但建任务表单里它是**默认不勾**的，
+        # 勾了就是"这次我要截图"——落成任务级选项 `screenshot_on`，否则会出现
+        # "勾了截图却静默跳过、页面上永远没有缩略图"的错觉（用户 2026-09-23 的实际反馈）。
+        if "screenshot" in stages:
+            options["screenshot_on"] = True
         task_id = db.create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
         return jsonify({"id": task_id, "auto_stages": auto_stages})
@@ -208,6 +213,22 @@ def create_app():
         # 拓展域名（JS 挖掘 / C 段 / FOFA）在任务详情里单列一个页签 ——
         # 用户要求它不再单独占侧栏，但任务维度仍要能看到（这些域名未必属于目标）
         ext_subs = [r for r in subs if (r["source"] or "").startswith(("js:", "osint:"))]
+        # **按来源分类排序**（用户 2026-09-23：「这个顺序和分类还是没有 …… 如何 JS 挖掘与
+        # FOFA 不要交叉」）：原实现只是 `ORDER BY domain`，于是 js:mine 与 osint:fofa-title
+        # 按字母序交错在一起，看不出哪些是 JS 挖的、哪些是 FOFA 反查来的 —— 这里与
+        # 跨任务 `/extdomains` 页用**同一张顺序表 EXT_SRC_TAGS**（JS → 标题 → 证书 → ICO → C 段），
+        # 同类内新的在前；未知来源排最后。`?esrc=` 只显示某一类。
+        _rank = {tag[2]: i for i, tag in enumerate(EXT_SRC_TAGS)}
+        ext_counts = {}
+        for r in ext_subs:
+            ext_counts[r["source"]] = ext_counts.get(r["source"], 0) + 1
+        ext_src = (request.args.get("esrc") or "").strip().lower()
+        ext_pick = next((t for t in EXT_SRC_TAGS if t[0] == ext_src), None)
+        if not ext_pick:
+            ext_src = ""
+        else:
+            ext_subs = [r for r in ext_subs if r["source"] == ext_pick[2]]
+        ext_subs.sort(key=lambda r: (_rank.get(r["source"], 99), -(r["id"] or 0)))
         # 目录结果同样默认折叠"重复长度"（同一站点下几百条同样长度的 200 基本是同一个软 404 模板）
         dirs, dirs_hidden = _fold_dirs(db.list_dirs(task_id), False)
         # 「线索」页签：intel（外部情报订阅）+ heuristic（启发式候选）两类共用一张表，
@@ -225,10 +246,20 @@ def create_app():
                     or str((settings.get("dirscan") or {}).get("mode") or "quick") == "deep")
         port_full = (top.get("portscan_full") is True
                      or str((settings.get("portscan") or {}).get("mode") or "top") == "full")
+        sites = db.list_sites(task_id)
+        # 站点页签的截图状态：有站点却一张截图都没有时，页面上要说清"为什么没有"并给补截图入口
+        # （用户 2026-09-23：「站点的截图显示为什么还没有完成」—— 实际是策略开关默认关、
+        #   且当时建任务勾的 screenshot 阶段不生效，页面上只留一片空白）。
+        shot_enabled = ((settings.get("screenshot") or {}).get("enabled") is True
+                        or top.get("screenshot_on") is True)
+        shot_missing = bool(sites) and not any((s["shot"] or "").strip() for s in sites)
+        # 本机有没有可用的无头浏览器 —— 页面要区分"策略没开"和"没装浏览器"两种"没截图"
+        shot_ready = screenshot.available(settings)
         return render_template(
             "task_detail.html", task=task,
             subs=own, ext_subs=ext_subs,
-            sites=db.list_sites(task_id),
+            ext_src=ext_src, ext_counts=ext_counts, ext_src_tags=EXT_SRC_TAGS,
+            sites=sites,
             ports=db.list_ports(task_id), csegs=db.list_csegs(task_id),
             dirs=dirs, dirs_hidden=dirs_hidden,
             vulns=db.list_vulns(task_id=task_id, limit=1000),
@@ -238,6 +269,7 @@ def create_app():
             # 补扫入口：任务页对"本任务的站点/IP"直接发起新任务；rescan_of 用于反向回跳
             rescan_of=top.get("rescan_of"),
             dir_full=dir_full, port_full=port_full,
+            shot_enabled=shot_enabled, shot_missing=shot_missing, shot_ready=shot_ready,
             dir_cap=int((settings.get("limits") or {}).get("dirscan_max_urls", 20) or 20),
             running=set(runner.running_task_ids()))
 
@@ -814,6 +846,78 @@ def create_app():
         logger.info(f"[gui] 批量子域名任务 #{task_id} 已创建（{len(domains)} 个域名，仅 subdomain 阶段）")
         return redirect(url_for("task_detail", task_id=task_id))
 
+    @app.route("/api/domains/resolve", methods=["POST"])
+    @login_required
+    def api_resolve_domains():
+        """对勾选域名做**纯 DNS 解析**并回填 `ip` / `cname` / `cdn`（零 HTTP 请求）。
+
+        为什么需要（用户 2026-09-23：「我根据你这些域名都没有检测」）：扩展域名里的
+        「解析 IP / CNAME」全是 `-` —— 因为 `_fill_net()` 只在 **subdomain 阶段**对目标自身
+        子域名跑，而拓展域名是 jsmine / osint 在它之后才带出来的，没人给它们解析过。
+        这里按用户勾选的范围补解析（DNS 只读、不改目标状态），并复用与子域名完全相同的
+        解析器与 CDN 判据（`dnsq.resolve_detail` + `cdn.match`），`ip_note` 同样记下失败原因。
+
+        规模由"勾选了多少"决定：单个域名 3 秒超时、并发 20，几十个域名在秒级完成。
+        """
+        task_id = (request.form.get("task_id") or "").strip()
+        back = _safe_next(request.form.get("next"), url_for("tasks"))
+        domains = _picked_domains()
+        if not task_id.isdigit() or not domains:
+            return redirect(back)
+        tid = int(task_id)
+        if not db.get_task(tid):
+            return redirect(back)
+        subs_cfg = settings.get("subdomain", {}) or {}
+        timeout = float(subs_cfg.get("dns_timeout", 3) or 3)
+        workers = max(1, min(20, int((settings.get("limits") or {}).get("max_workers", 20) or 20)))
+
+        def _one(host):
+            chain, ips, reason = dnsq.resolve_detail(host, timeout=timeout, settings=settings)
+            return host, ",".join(ips), cdn.match(chain, settings), reason, (chain[-1] if chain else "")
+
+        net, cnames = {}, {}
+        for host, ips, cdn_label, reason, last_cname in pool_run(_one, domains, workers=workers):
+            net[host] = (ips, cdn_label, reason)
+            if last_cname:
+                cnames[host] = last_cname
+        db.set_subdomain_net(tid, net)
+        db.set_subdomain_cnames(tid, cnames)
+        ok = sum(1 for v in net.values() if v[0])
+        logger.info(f"[gui] 任务 #{tid} 解析回填 {len(net)} 个域名（成功 {ok} 个）")
+        return redirect(back)
+
+    @app.route("/api/domains/scan-ext", methods=["POST"])
+    @login_required
+    def api_scan_ext():
+        """把勾选的**拓展域名**送去真正检测：新建一个跑 `probe → dirscan → vulnscan` 的任务。
+
+        为什么需要（用户 2026-09-23：「我根据你这些域名都没有检测」）：拓展域名只入
+        `subdomains` 表，而 probe / dirscan / vulnscan 的输入是**存活站点**（`sites`）——
+        偏偏 osint 与 jsmine 两个阶段排在 probe **之后**，同一任务里它们新挖出来的域名
+        赶不上本轮的存活探测，于是这些域名永远停在"有域名、无站点、无检测"的状态。
+
+        为什么必须手动勾选而不是自动全跑：拓展域名里大量是第三方噪声
+        （CDN、开源库站点、JS 命名空间碎片），全跑既越权又浪费请求额度。
+        与「批量跑子域名」「补扫」同一套做法（新建任务、一任务一线程、可独立停止/删除）。
+        """
+        domains = _picked_domains()
+        fallback = _safe_next(request.form.get("next"), url_for("tasks"))
+        if not domains:
+            return redirect(fallback)
+        stages = ["probe", "dirscan", "vulnscan"]
+        options = {}
+        from_task = (request.form.get("task_id") or "").strip()
+        if from_task.isdigit():          # 只收任务号，避免把任意文本写进任务选项
+            options["rescan_of"] = int(from_task)
+        name = (request.form.get("name") or "").strip() or \
+            time.strftime("拓展探测-%m%d-%H%M%S")
+        targets = "\n".join(domains)
+        task_id = db.create_task(name, targets, stages, options)
+        _spawn(task_id, name, targets, stages, options)
+        logger.info(f"[gui] 拓展域名探测任务 #{task_id} 已创建"
+                    f"（{len(domains)} 个域名，probe→dirscan→vulnscan）")
+        return redirect(url_for("task_detail", task_id=task_id))
+
     @app.route("/api/rescan", methods=["POST"])
     @login_required
     def api_rescan():
@@ -825,12 +929,14 @@ def create_app():
         再回头去「漏洞风险」页给旧记录打「确认/误报」。任务级选项 `dirscan_full` / `portscan_full`
         让这个任务无视全局开关与档位走全量，**不改全局策略**；`rescan_of` 记下发起它的原任务，
         任务详情页据此显示「由任务 #N 的补扫发起」并可回跳。
+        `stage=screenshot` → **补截图**（站点页签）：勾选站点单独截图，任务选项 `screenshot_on`
+        让本次无视 `screenshot.enabled=false`（同样不改全局策略）。
 
         与「批量跑子域名」「发起全端口扫描」同一套做法（一任务一线程，可独立停止/删除）。
         """
         stage = (request.form.get("stage") or "").strip().lower()
         fallback = _safe_next(request.form.get("next"), url_for("tasks"))
-        if stage not in ("dirscan", "portscan", "vulnscan"):
+        if stage not in ("dirscan", "portscan", "vulnscan", "screenshot"):
             return redirect(fallback)
         targets, seen = [], set()
         # 字段名沿用各页既有习惯（`target`），同时接受 `targets` 便于直接调 API
@@ -841,12 +947,19 @@ def create_app():
                 targets.append(t)
         if not targets:
             return redirect(fallback)
-        label = {"dirscan": "全目录", "portscan": "全端口", "vulnscan": "漏洞复查"}[stage]
+        label = {"dirscan": "全目录", "portscan": "全端口", "vulnscan": "漏洞复查",
+                 "screenshot": "站点截图"}[stage]
         name = (request.form.get("name") or "").strip() or \
             time.strftime(f"补扫{label}-%m%d-%H%M%S")
         # vulnscan 没有"全量档"的概念（漏洞初筛的额度由 checks/limits 决定），
         # 所以只给它记 rescan_of，不塞一个引擎根本不读的 `vulnscan_full`。
-        options = {} if stage == "vulnscan" else {f"{stage}_full": True}
+        # screenshot 同理：它要的不是"全量档"，而是"本次无视策略开关"（`screenshot_on`）。
+        if stage == "vulnscan":
+            options = {}
+        elif stage == "screenshot":
+            options = {"screenshot_on": True}
+        else:
+            options = {f"{stage}_full": True}
         from_task = (request.form.get("from_task") or "").strip()
         if from_task.isdigit():          # 只收任务号，避免把任意文本写进任务选项
             options["rescan_of"] = int(from_task)

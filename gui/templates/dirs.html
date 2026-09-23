@@ -15,14 +15,14 @@
     {% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">
-    <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="路径 / 站点 / 备注"></label>
+    <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="路径 / 站点 / 标题 / 备注"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
     {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
     <button class="ghost" type="submit">查询</button>
     {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
   </form>
   <table id="tbl-all-dirs">
-    <thead><tr><th>#</th><th>任务</th><th>状态</th><th>路径</th><th>大小</th><th>来源</th></tr></thead>
+    <thead><tr><th>#</th><th>任务</th><th>状态</th><th>路径</th><th>大小</th><th>标题</th><th>来源</th></tr></thead>
     <tbody>
     {% for d in dirs %}
       <tr>
@@ -32,10 +32,11 @@
         <td>{{ d.path }}</td>
         <td class="muted small mono">{{ d.length if d.length is not none else '-' }}
           {% if d.dup %}<span class="muted small">（另有 {{ d.dup }} 条相同）</span>{% endif %}</td>
+        <td class="muted small">{{ d.title or '-' }}</td>
         <td class="muted">{{ d.note or '-' }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="6" class="muted">没有匹配的目录发现结果。</td></tr>
+      <tr><td colspan="7" class="muted">没有匹配的目录发现结果。</td></tr>
     {% endfor %}
     </tbody>
   </table>

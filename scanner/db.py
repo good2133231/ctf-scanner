@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS dirs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
   site_url TEXT, path TEXT NOT NULL, status INTEGER, length INTEGER,
-  method TEXT DEFAULT 'GET', note TEXT
+  method TEXT DEFAULT 'GET', note TEXT,
+  title TEXT DEFAULT ''            -- 命中页面的 <title>（仅内置扫描有；dirmap 解析行没有 body 取不到）
 );
 CREATE TABLE IF NOT EXISTS vulns (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,6 +140,8 @@ _COLUMN_PATCHES = {
     "vulns": {"review": "TEXT DEFAULT ''", "review_note": "TEXT DEFAULT ''",
               "reviewed_at": "TEXT DEFAULT ''"},
     "pocs": {"confidence": "TEXT DEFAULT ''"},
+    # 目录命中页的 <title>：老库补列（新库由 SCHEMA 直接建出）
+    "dirs": {"title": "TEXT DEFAULT ''"},
 }
 
 
@@ -349,9 +352,11 @@ def insert_csegs(task_id, rows):
 def insert_dirs(task_id, dirs):
     if not dirs:
         return
-    _exec("INSERT INTO dirs(task_id,site_url,path,status,length,method,note) VALUES(?,?,?,?,?,?,?)",
+    _exec("INSERT INTO dirs(task_id,site_url,path,status,length,method,note,title) "
+          "VALUES(?,?,?,?,?,?,?,?)",
           [(task_id, d.get("site_url", ""), d.get("path", ""), d.get("status"),
-            d.get("length"), d.get("method", "GET"), d.get("note", "")) for d in dirs], many=True)
+            d.get("length"), d.get("method", "GET"), d.get("note", ""),
+            d.get("title", "")) for d in dirs], many=True)
 
 
 def insert_vuln(task_id, v):
@@ -380,7 +385,14 @@ def list_sites(task_id):
 
 
 def list_dirs(task_id):
-    return _query("SELECT * FROM dirs WHERE task_id=? ORDER BY id", (task_id,))
+    # 默认排序按"可读性"而非插入顺序（用户 2026-09-23 明确要求）：
+    # ① `200` 排最前（403/302 是"路径存在但看不了"，价值低于能直接访问的 200）；
+    # ② 同状态码内按**响应大小降序** —— 大响应体更可能是真页面/真文件（备份包、源码泄露），
+    #    统一跳转页那种几百字节的小响应自然沉底；
+    # ③ 最后才按 id 兜底，保证顺序稳定（分页/折叠结果可复现）。
+    return _query("SELECT * FROM dirs WHERE task_id=? "
+                  "ORDER BY CASE WHEN status=200 THEN 0 ELSE 1 END, status, "
+                  "length IS NULL, length DESC, id", (task_id,))
 
 
 def list_ports(task_id):
@@ -432,7 +444,7 @@ _ASSET_PAGES = {
     "sites": ("task_id DESC, id DESC", ("url", "host", "title", "server", "tech")),
     "ports": ("task_id DESC, port", ("host", "ip", "service", "banner")),
     "csegs": ("task_id DESC, segment, ip", ("segment", "ip", "domains")),
-    "dirs": ("task_id DESC, id DESC", ("site_url", "path", "note")),
+    "dirs": ("task_id DESC, id DESC", ("site_url", "path", "note", "title")),
 }
 
 # 子域名来源分类（资产视图的"子域名 / 拓展域名"两个页面靠它分流）：

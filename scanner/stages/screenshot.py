@@ -22,8 +22,14 @@ class ScreenshotStage(Stage):
     def run(self):
         ctx = self.ctx
         cfg = ctx.settings.get("screenshot", {}) or {}
-        if cfg.get("enabled") is not True:
-            ctx.logger.info("[screenshot] 未启用（策略配置 → 资产面拓展 可打开），跳过")
+        # 门控：策略级 `screenshot.enabled`（默认关）**或** 任务级显式点名。
+        # 为什么要有任务级点名：建任务时"截图"复选框默认是**不勾**的（见 tasks.html），
+        # 用户勾上它就是在说"这次我要截图"；若只认策略开关，勾了却被静默跳过，
+        # 页面上就只剩一句"未启用"，看起来像功能没做完（用户 2026-09-23 的实际反馈）。
+        # CLI `-p screenshot` 同样走这条（显式点名即生效），不改全局策略。
+        if cfg.get("enabled") is not True and ctx.options.get("screenshot_on") is not True:
+            ctx.logger.info("[screenshot] 未启用（策略配置 → 资产面拓展 可打开；"
+                            "建任务时勾选「截图」也可只对本次生效），跳过")
             return
         if not screenshot.available(ctx.settings):
             ctx.logger.warning("[screenshot] 未找到可用的无头浏览器（Edge/Chrome），跳过；"

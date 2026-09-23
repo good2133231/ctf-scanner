@@ -3,6 +3,73 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-23 —— 续13：拓展域名手动处置 + 目录可读性 + 截图"勾了就有用"
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户在任务详情页（任务 #149，pengo.pro 系列）逐条提出的四条 GUI 反馈。
+**根因都先在代码/数据里核实过再动手**（详见各节），不是按字面猜着改。
+
+### 1. 拓展域名（JS 挖掘 / FOFA 反查）页签：分类排序 + 手动处置
+
+用户原话：「**这个顺序和分类还是没有** 比如他默认排序就是先 js挖掘 如何 JS 与 FOFA 不要交叉」、
+「**你忘记了有手动让他们在运行的功能吗**」、「还有**加黑名单**的功能呢」、
+「以及**我根据你这些域名都没有检测**」。
+
+- **分类排序**：根因是 `task_detail` 直接渲染 `db.list_subdomains()`（`ORDER BY domain`），
+  于是 `js:mine` 与 `osint:fofa-title` 按字母序**交错**；跨任务页 `/extdomains` 早就用
+  `EXT_SRC_ORDER` 分类排序，任务详情页签没跟上。现改为与跨任务页**共用同一张顺序表
+  `EXT_SRC_TAGS`**（JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段），同类内新的在前；
+  新增 `?esrc=` 只显示某一类，并按类给计数按钮组。
+- **"这些域名都没有检测"**：根因是**阶段顺序** —— probe/dirscan/vulnscan 的输入是**存活站点**
+  （`sites`），而 `osint`、`jsmine` 排在 `probe` **之后**，同一任务里新挖出的域名赶不上本轮
+  存活探测，于是永远停在"有域名、无站点、无检测"。新增三个**手动**处置入口（同一表单三按钮）：
+  - `POST /api/domains/resolve` → **纯 DNS** 解析勾选域名（零 HTTP），复用 `dnsq.resolve_detail`
+    + `cdn.match` 回填 `ip` / `cname` / `cdn` / `ip_note`（并发 ≤20，失败原因照旧显示）；
+  - `POST /api/domains/scan-ext` → 把勾选域名打包成**新任务**跑 `probe → dirscan → vulnscan`
+    （任务名默认 `拓展探测-<月日>-<时分秒>`，记 `rescan_of` 便于回跳）；
+  - 复用既有 `POST /api/blacklist/add`（任务详情页签现在也能加黑名单了，此前只有跨任务页有）。
+  **不自动全跑**：拓展域名里大量是 CDN / 开源库站点 / JS 命名空间碎片，全跑既越权又浪费额度。
+
+### 2. 目录页签：标题列 + 默认排序 + 文案精简
+
+用户原话：「这个要**显示显示大小**，以及**降序排，优先排 200**，并且要**获取标题**」、
+「这个显示**深度补扫**就可以」。
+
+- `dirs` 新增 `title TEXT DEFAULT ''`（`_COLUMN_PATCHES` 同步补列，老库自动增列）；
+  `dirscan._hit()` 从**已在手里的**响应体里提取 `<title>`（与 `probe` 共用 `TITLE_RE`，零额外请求）。
+  dirmap 解析行只有状态码/大小、没有响应体 → title 留空（`insert_dirs` 取默认值，不报错）。
+- `db.list_dirs()` 默认排序改为 `200 优先 → 大小降序 → 有长度的在前 → id`，
+  按用户口径「优先排 200、降序」。**注意与折叠口径的相互作用**：`_fold_dirs` 保留首个，
+  排序变化后保留的就是"同类里最大的那条"，比原来的插入序更可读（`[5t]` 钉住了这一点）。
+- 模板：任务详情目录页签与跨任务 `/dirs` 都补上「标题」列；筛选框与关键字 placeholder 同步加"标题"。
+- 文案精简：删掉"本任务的目录探测是浅扫档…"整段，只留一个「深度补扫」按钮 + 站点数/额度提示。
+
+### 3. 站点截图："为什么还没有完成"
+
+用户原话：「**站点的截图显示为什么还没有完成**」。实机核实任务 #149 的日志：
+`[screenshot] 未启用（策略配置 → 资产面拓展 可打开），跳过`，`sites.shot` 三行全空 ——
+**策略级 `screenshot.enabled=false` 静默吃掉了任务级勾选**，而建任务表单里 screenshot 复选框
+**默认是勾上的**，于是形成"勾了没用"的错觉。三处一起修：
+
+- `screenshot.py` 门控：`screenshot.enabled is True` **或** 任务级点名 `options["screenshot_on"] is True`
+  （CLI `-p screenshot` 同样走这条，显式点名即生效、不改全局策略）；
+- `api_create_task`：`stages` 里出现 screenshot 就自动落 `options["screenshot_on"] = True`；
+- `tasks.html`：该复选框改为**默认不勾**并标注「（勾上＝本次截图）」。
+- 站点页签新增**「补截图」按钮**（`stage=screenshot` 走 `api_rescan`，任务级 `screenshot_on` 生效），
+  并在 `sites` 非空却无截图产物时**说明原因**：策略关 / 本机没有可用无头浏览器（提示填
+  `screenshot.browser`）/ 失败（看运行日志）—— 三种情况分别显示，不再留一片空白。
+
+### 4. 回归与验证
+
+- `tests/smoke.py`：`[5j]` 增补"策略关 + 任务级 `screenshot_on` 必须放行"断言；
+  新增 `[5t]` 一节 11 组断言（dirs.title 落库与排序、dirmap 行缺 title 不炸、目录页签标题列与
+  文案精简、拓展域名分类排序与 `?esrc=` 过滤、三个手动端点（含 `next` 防跳外站、空勾选不建任务）、
+  截图任务级选项与补截图入口/原因提示）。**`py -3 tests/smoke.py` → SMOKE PASS**。
+- 文档同步：`AGENTS.md` / `TODO.md` / `todo.txt` / `docs/architecture.md` / `docs/usage.md`
+  / `README.md` 按本轮改动更新（拓展域名手动处置、目录标题列与排序、截图门控语义）。
+- **未验证边界（如实标注）**：无头浏览器真实出图、fscan/nmap 真实调用仍以 Linux 实机
+  （10.10.3.121，2026-09-23）的既有结论为准；本轮只改了门控与页面，未改截图实现本身。
+
 ## 2026-09-23 —— 续12：误报复核 + POC 置信度分层 + Linux 实机验收 + fscan 解析真缺陷
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

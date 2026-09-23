@@ -1167,6 +1167,17 @@ def main():
                              shot_settings, Path(_TMPDIR) / "shot2", rec)
     PipelineRunner(shot_ctx2).run()
     assert any("未找到可用的无头浏览器" in x for x in rec.lines), rec.lines[-3:]
+    # (续13) 任务级点名 `screenshot_on`：策略级仍是默认关，但"本次任务要截图"必须生效 ——
+    # 只认策略开关时，用户在新建任务里勾了「截图」却被静默跳过，页面上永远没有缩略图。
+    _n5j = len(rec.lines)
+    # 策略级仍是关（默认值）、且把浏览器指到不存在的路径 —— 既证明门控放行，又不会真拉起浏览器
+    _shot3_cfg = copy.deepcopy(settings)
+    _shot3_cfg["screenshot"] = {"enabled": False, "browser": "no-such-browser-xyz"}
+    shot_ctx3 = StageContext(tid, "smoke-shot3", parse_lines([targets]), ["screenshot"],
+                            {"screenshot_on": True},
+                            _shot3_cfg, Path(_TMPDIR) / "shot3", rec)
+    PipelineRunner(shot_ctx3).run()
+    assert not any("未启用" in x for x in rec.lines[_n5j:]), rec.lines[_n5j:]
     # 截图路由：只允许该任务 shots/ 下的 png，且防目录穿越
     assert c.get(f"/shots/{tid}/nope.png").status_code == 404
     assert c.get(f"/shots/{tid}/..%2F..%2Ftask.log").status_code == 404
@@ -1182,7 +1193,8 @@ def main():
     # 任务详情页（不受"跨任务重叠隐藏"影响）与站点页都要渲染缩略图
     assert "shot-thumb" in c.get(f"/tasks/{tid}").get_data(as_text=True), "任务详情应渲染缩略图"
     assert "shot-thumb" in c.get("/sites?all=1").get_data(as_text=True), "站点页应渲染缩略图"
-    print("[5j] 站点截图 ok: 阶段注册/门控/路由/防穿越/缩略图（真实截图 3.1s 已在实机验证）")
+    print("[5j] 站点截图 ok: 阶段注册/门控(策略关·任务级 screenshot_on 生效)/路由/防穿越/缩略图"
+          "（真实截图 3.1s 已在实机验证）")
 
     # 5k) 全面体检：并发注册同一个 POC 不能撞 UNIQUE(path)
     #     旧实现"先 SELECT 再 INSERT"，GUI 启动 + 多个任务线程同时 sync_pocs() 时
@@ -1882,6 +1894,148 @@ def main():
     print(f"[5o] 跨平台静态审计 ok: 编译 {len(_py)} 个源文件 / import {len(_mods)} 个模块 / "
           f"无 shell 直通·盘符路径·缺 encoding；run_cmd 127/124 与 pick_python 回退"
           f"（{_p23}）")
+
+    # (5t) 续13：用户 2026-09-23 的四条 GUI 反馈逐条钉住 ——
+    #   ① 拓展域名页签里 JS 挖掘与 FOFA 反查**交错**、看不出归类；
+    #   ② 这些拓展域名「从来没有被检测」（probe/dirscan/vulnscan 的输入是存活站点，
+    #      而 jsmine/osint 排在 probe 之后，同一任务里挖出来的域名赶不上本轮探测）；
+    #   ③ 目录页签看不到命中页标题、默认排序没有"200 优先 + 大小降序"；
+    #   ④ 站点页签永远没有截图产物（策略级默认关把任务级勾选静默吃掉了）。
+    import gui.app as _gui
+    from scanner import cdn as _cdn_mod, dnsq as _dnsq_mod
+
+    # 1) 目录：`dirs.title` 落库 + 默认排序（200 优先 → 大小降序 → 有长度的在前）
+    _dt = db.create_task("smoke-dirs-order", targets, ["dirscan"], {})
+    db.insert_dirs(_dt, [
+        {"path": "http://a.test/small", "status": 200, "length": 100, "title": "小页面",
+         "note": "builtin"},
+        {"path": "http://a.test/big", "status": 200, "length": 9000, "title": "大页面",
+         "note": "builtin"},
+        {"path": "http://a.test/.git", "status": 403, "length": 99999, "note": "builtin"},
+        {"path": "http://a.test/nolen", "status": 200, "length": None, "title": "无长度",
+         "note": "builtin"},
+    ])
+    _drows = [dict(r) for r in db.list_dirs(_dt)]
+    assert [r["path"] for r in _drows] == ["http://a.test/big", "http://a.test/small",
+                                           "http://a.test/nolen", "http://a.test/.git"], _drows
+    assert {r["title"] for r in _drows} >= {"大页面", "小页面", "无长度"}, "命中页标题未落库"
+    # dirmap 的解析行只有状态码/大小、没有响应体 → title 留空（不能因此写失败）
+    db.insert_dirs(_dt, [{"path": "http://a.test/dm", "status": 200, "length": 7,
+                          "note": "dirmap"}])
+    assert db._query("SELECT title FROM dirs WHERE task_id=? AND note='dirmap'",
+                     (_dt,), one=True)["title"] == "", "dirmap 行缺 title 时不应报错"
+
+    # 2) 目录页签：标题列表头 + 精简后的「深度补扫」入口；跨任务 /dirs 同步补上标题列
+    _dhtml = c.get(f"/tasks/{_dt}").get_data(as_text=True)
+    assert "<th>大小</th><th>标题</th>" in _dhtml, "任务详情目录页签缺「标题」列"
+    assert "深度补扫</button>" in _dhtml and "对本任务全部站点深度补扫" not in _dhtml, \
+        "深度补扫入口未按要求精简"
+    assert "<th>标题</th>" in c.get("/dirs").get_data(as_text=True), "跨任务 /dirs 缺标题列"
+
+    # 3) 拓展域名：按来源分类排序（JS 挖掘不再与 FOFA 交错）+ `?esrc=` 只看一类
+    _et = db.create_task("smoke-ext-sort", targets, ["probe"], {})
+    db.insert_subdomains(_et, [
+        ("zz-js.test", "js:mine"), ("aa-title.test", "osint:fofa-title"),
+        ("bb-js.test", "js:mine"), ("cc-title.test", "osint:fofa-title"),
+        ("own.test", "subfinder"),
+    ])
+    _ehtml = c.get(f"/tasks/{_et}").get_data(as_text=True)
+    # 同类内"新的在前"（id 倒序），整体顺序 JS 挖掘 → FOFA·标题
+    _pos = {d: _ehtml.index(d) for d in ("bb-js.test", "zz-js.test",
+                                         "cc-title.test", "aa-title.test")}
+    assert _pos["bb-js.test"] < _pos["zz-js.test"] < _pos["cc-title.test"] < _pos["aa-title.test"], \
+        f"拓展域名未按来源分类排序（JS 与 FOFA 交错）：{_pos}"
+    _jsonly = c.get(f"/tasks/{_et}?esrc=js").get_data(as_text=True)
+    assert "bb-js.test" in _jsonly and "aa-title.test" not in _jsonly, "?esrc= 分类过滤失效"
+
+    # 4) 拓展域名的三个手动处置：解析（纯 DNS）/ 送去探测（新建任务）/ 加黑名单
+    #    桩掉解析器与任务线程：断言的是端点行为（回填哪些字段、建出什么任务），不是真去查 DNS
+    _orig_resolve = _dnsq_mod.resolve_detail
+    _orig_run_ext = _gui.run_task
+    _suf = (_cdn_mod.suffixes(settings)[0] or ("cdn.example.test",))[0]
+    try:
+        _dnsq_mod.resolve_detail = lambda host, **kw: \
+            (["edge." + _suf, host], ["93.184.216.34"], "") if host.endswith("js.test") \
+            else ([], [], "nxdomain")
+        _gui.run_task = lambda *a, **kw: None
+        _r1 = c.post("/api/domains/resolve", data={
+            "task_id": str(_et), "domain": ["zz-js.test", "aa-title.test"],
+            "next": f"/tasks/{_et}"})
+        assert _r1.status_code == 302, _r1.status_code
+        _net = {r["domain"]: dict(r) for r in db.list_subdomains(_et)}
+        assert _net["zz-js.test"]["ip"] == "93.184.216.34", _net["zz-js.test"]
+        assert _net["zz-js.test"]["cdn"] == _suf, "CNAME 链里的 CDN 特征未被识别"
+        assert _net["zz-js.test"]["cname"] == "zz-js.test", "CNAME 未回填"
+        assert _net["aa-title.test"]["ip_note"] == "nxdomain", \
+            "解析失败必须落原因（页面上据此显示『为什么没有 IP』）"
+
+        _before = len(db.list_tasks(limit=1000))
+        _r2 = c.post("/api/domains/scan-ext", data={
+            "task_id": str(_et), "domain": ["zz-js.test"], "next": f"/tasks/{_et}"})
+        _new_id = int(_r2.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+        _new_t = db.get_task(_new_id)
+        assert _new_t["stages"] == "probe,dirscan,vulnscan", _new_t["stages"]
+        assert _new_t["targets"] == "zz-js.test", _new_t["targets"]
+        assert f'"rescan_of": {_et}' in _new_t["options"], _new_t["options"]
+        assert _re.match(r"^拓展探测-\d{4}-\d{6}$", _new_t["name"]), _new_t["name"]
+        # 空勾选 → 只回站内 next，不建任务
+        _r3 = c.post("/api/domains/scan-ext", data={"task_id": str(_et), "next": "/tasks"})
+        assert _r3.headers["Location"] == "/tasks" and \
+            len(db.list_tasks(limit=1000)) == _before + 1, "空勾选不该建出任务"
+
+        # 加黑名单：任务详情页签用的也是同一个端点，next 只放行站内相对路径。
+        # 这里把 `blacklist.add` 换成记录桩 —— 断言"端点把勾选域名交给了黑名单"，不去动真文件。
+        from scanner import blacklist as _bl_mod
+        _bl_calls = []
+        _orig_bl_add = _bl_mod.add
+        _bl_mod.add = lambda domains, st=None: (_bl_calls.append(list(domains)), len(domains))[1]
+        try:
+            _r4 = c.post("/api/blacklist/add", data={
+                "domain": ["noise-ext.test"], "next": f"/tasks/{_et}"})
+            assert _r4.headers["Location"] == f"/tasks/{_et}", _r4.headers.get("Location")
+            assert _bl_calls == [["noise-ext.test"]], _bl_calls
+            _r5 = c.post("/api/blacklist/add", data={"domain": ["x.test"],
+                                                    "next": "https://evil.com/"})
+            assert _r5.headers["Location"].startswith("/") and \
+                not _r5.headers["Location"].startswith("//"), _r5.headers.get("Location")
+        finally:
+            _bl_mod.add = _orig_bl_add
+    finally:
+        _dnsq_mod.resolve_detail = _orig_resolve
+        _gui.run_task = _orig_run_ext
+
+    # 5) 截图：建任务勾了「截图」就落任务级选项（策略级开关不动）；补截图走 stage=screenshot
+    _orig_run5 = _gui.run_task
+    try:
+        _gui.run_task = lambda *a, **kw: None
+        _j5 = c.post("/api/tasks", data={"name": "smoke-shot-on", "targets": targets,
+                                        "stages": ["probe", "screenshot"]}).get_json()
+        assert '"screenshot_on": true' in db.get_task(_j5["id"])["options"], "勾选截图未落任务级选项"
+        _j5b = c.post("/api/tasks", data={"name": "smoke-shot-off", "targets": targets,
+                                          "stages": ["probe"]}).get_json()
+        assert "screenshot_on" not in (db.get_task(_j5b["id"])["options"] or ""), \
+            "没勾截图不该凭空多出选项"
+        _r6 = c.post("/api/rescan", data={"stage": "screenshot", "target": ["http://a.test/"],
+                                          "from_task": str(tid), "next": f"/tasks/{tid}"})
+        _shot_tid = int(_r6.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+        _shot_t = db.get_task(_shot_tid)
+        assert _shot_t["stages"] == "screenshot", _shot_t["stages"]
+        assert '"screenshot_on": true' in _shot_t["options"], _shot_t["options"]
+        assert _re.match(r"^补扫站点截图-\d{4}-\d{6}$", _shot_t["name"]), _shot_t["name"]
+    finally:
+        _gui.run_task = _orig_run5
+    # 站点页签：有站点却一张截图都没有时，必须说清原因 + 给「补截图」入口
+    # （用户反馈的正是"站点截图为什么还没有完成"—— 页面上只留一片空白）
+    _nt = db.create_task("smoke-shot-none", targets, ["probe"], {})
+    db.insert_sites(_nt, [{"url": "http://a.test/", "host": "a.test", "status": 200,
+                           "title": "A", "length": 10}])
+    _shtml = c.get(f"/tasks/{_nt}").get_data(as_text=True)
+    assert 'name="stage" value="screenshot"' in _shtml, "站点页签缺「补截图」按钮"
+    assert "截图阶段策略级" in _shtml or "没找到可用的无头浏览器" in _shtml, \
+        "没有截图产物时页面未说明原因"
+    print("[5t] 续13 GUI 反馈修复 ok: 拓展域名按来源分类排序(?esrc= 过滤)/解析·送去探测·加黑名单"
+          "三个手动端点(含 next 防跳外站)/目录 title 列与 200 优先·大小降序/目录文案精简/"
+          "截图任务级 screenshot_on 生效 + 站点页补截图与原因提示")
     print("SMOKE PASS")
 
 

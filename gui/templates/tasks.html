@@ -13,7 +13,10 @@
     <div class="row">
       <span class="muted">阶段：</span>
       {% for s in stages %}
-      <label class="chk"><input type="checkbox" name="stages" value="{{ s }}" checked> {{ s }}</label>
+      {# screenshot 策略级默认关：这里也**默认不勾**，勾上即"本次任务要截图"
+         （任务级 `screenshot_on`，不改全局策略；见 scanner/stages/screenshot.py 的门控） #}
+      <label class="chk"><input type="checkbox" name="stages" value="{{ s }}"
+        {{ '' if s == 'screenshot' else 'checked' }}> {{ s }}{{ '（勾上＝本次截图）' if s == 'screenshot' else '' }}</label>
       {% endfor %}
       <label class="chk"><input type="checkbox" name="offline" value="1"> 离线模式（不使用外部工具）</label>
     </div>
