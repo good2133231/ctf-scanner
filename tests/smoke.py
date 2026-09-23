@@ -1470,18 +1470,19 @@ def main():
         f"浅扫没扫出 .git/config：{_e2e_paths[:20]}"
     assert len(_e2e_paths) >= 2, _e2e_paths
     assert db.list_dirs(_e2e_tid), "命中必须入库（否则结果页看不到）"
-    # 请求量受控：字典路径 ≤ quick_max_paths；软 404 基线每站只需 3 个探针，但它是**惰性**
-    # 算在并发里的（`_builtin_scan._baseline`），20 个线程同时 miss 会各算一遍 ——
-    # 实测单站点 150 条字典 + 27~60 个基线请求。这个上界写死在这里，一是钉住"不失控"，
-    # 二是把这个已知浪费显式暴露出来（真要省，把基线改成并发前先算一遍即可）。
+    # 请求量受控：字典路径 ≤ quick_max_paths；软 404 基线**每站恰好 3 个探针**。
+    # 这里钉成等号（不是 ≤）—— 基线是多样本、每站只需算一次，曾经因为
+    # `_builtin_scan._baseline` 的惰性字典没做同步，20 个线程同时 miss 就各算一遍，
+    # 单站点 3 个探针膨胀成 27~36 个。写成上界等于把这个回归放走，所以必须是精确值。
     _e2e_probes = [u for u in _e2e_sent if "ctfscan-none" not in u]
     _e2e_base = len(_e2e_sent) - len(_e2e_probes)
-    _e2e_workers = int((_e2e_cfg.get("limits") or {}).get("max_workers", 20) or 20)
+    _e2e_sites = len({s["url"] for s in (_e2e_ctx.results.get("sites") or [])})
     assert 0 < len(_e2e_probes) <= _e2e_cap, (len(_e2e_probes), _e2e_cap)
-    assert _e2e_base <= 3 * _e2e_workers, (_e2e_base, _e2e_workers)
+    assert _e2e_base == 3 * _e2e_sites, (
+        _e2e_base, _e2e_sites, "软 404 基线必须每站恰好 3 个探针（并发下不得重复计算）")
     _e2e_note = (f"端到端浅扫 {len(_e2e_paths)} 条命中（.env 与 .git/config 都在），"
                  f"请求 {len(_e2e_sent)} 个 = 字典 {len(_e2e_probes)}（≤{_e2e_cap}）"
-                 f" + 软404基线 {_e2e_base}（≤{3 * _e2e_workers}）")
+                 f" + 软404基线 {_e2e_base}（= 3 × {_e2e_sites} 站点）")
 
     # 4) 建任务：勾了全量却没勾对应阶段 → **自动补阶段** + options 落库（run_task 桩住，避免真扫）
     _orig_run4 = gui_app.run_task

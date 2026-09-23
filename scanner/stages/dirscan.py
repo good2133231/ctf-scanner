@@ -30,6 +30,7 @@ dirmap 的 `-e` 只认 `php/jsp/asp/d/big/all`，**吃不下自定义字典**，
 import hashlib
 import random
 import re
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -548,14 +549,25 @@ class DirscanStage(Stage):
                         f"（{' / '.join(f'{k}:{v} 站' for k, v in tally.items())}），"
                         f"共 {len(jobs)} 个请求 …")
         baseline = {}
+        baseline_lock = threading.Lock()
 
         def _baseline(u):
             """多样本软 404 基线（借鉴 dirmap 的 auto_check_404_page）。
 
             只用一个随机路径当基线时，碰上"随机路径也命中路由"的站点会误杀真实结果；
             取 3 个随机路径的 md5 与长度集合，命中其中任意一个即判为不存在。
+
+            **每个站点只算一次**：本函数是被 `pool_run` 的 20 个线程并发调用的，
+            原先的"惰性填字典"没有同步 —— 多线程同时 miss 就各算一遍，
+            实测单站点 3 个基线请求膨胀成 27~36 个（占 dirscan 请求量约 18%）。
+            这里用锁把「查缓存 + 计算 + 回填」整体串起来：首个线程真算，其余线程
+            阻塞在锁上、拿到锁后直接命中缓存，于是请求数恒定 = 3 × 站点数。
+            （不要把锁拆开成"锁内查、锁外算"——那样等于没锁。）
             """
-            if u not in baseline:
+            with baseline_lock:
+                cached = baseline.get(u)
+                if cached is not None:
+                    return cached
                 md5s, sizes = set(), set()
                 for _ in range(3):
                     marker = f"/{random.randint(10 ** 6, 10 ** 7 - 1)}/ctfscan-none"
@@ -568,7 +580,7 @@ class DirscanStage(Stage):
                     if r.get("length"):
                         sizes.add(int(r["length"]))
                 baseline[u] = (md5s, sizes)
-            return baseline[u]
+                return baseline[u]
 
         def _hit(item):
             if ctx.stopped():

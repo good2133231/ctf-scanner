@@ -344,13 +344,17 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - **dirmap 是 GPL-3.0，刻意不内联**（把源码拷进仓库会让整个仓库受 GPL 约束）：
   只保留 `tools/dirmap/` 目录联接 + 外部适配器；对它的 5 处源码修复记录在
   `tools/dirmap_fixes/README.md`（**该目录不含 dirmap 源码**）。
-- **软 404 基线在并发下被重复计算**（2026-09-23 续10 实测，**未修**）：
-  `DirscanStage._builtin_scan._baseline()` 惰性填 `baseline` 字典，`pool_run` 的 20 个线程
-  同时 miss → 各算一遍，单站点 3 个基线请求实测花掉 **27~33 个**（dirscan 请求量约 18%）。
-  实测基线（本机 127.0.0.1 靶场、`--offline`、全 11 阶段）：总耗时 7~8 s（流水线净 4~5 s），
-  靶场收到 256 / 262 个请求，其中 dirscan 177 / 183（150 字典 + 27~33 基线）≈ 1 s、
-  vulnscan 76 / 74 ≈ 1.5 s；`dirscan` 默认开**是可控的**（按 `dirscan_max_urls=20` 算，
-  单任务 dirscan 上限 ≈ 20 × 183 ≈ 3660 个请求）。
+- **软 404 基线的并发重复计算已修**（2026-09-23 续11）：
+  原先 `DirscanStage._builtin_scan._baseline()` 是"惰性填字典"且**没有同步**，`pool_run` 的
+  20 个线程同时 miss 就各算一遍 —— 单站点 3 个基线探针实测膨胀成 **27~36 个**
+  （占 dirscan 请求量约 18%）。现用 `threading.Lock` 把「查缓存 + 计算 + 回填」整体串起来：
+  首个线程真算、其余阻塞在锁上，取得锁后命缓存，请求数**恒定 = 3 × 站点数**。
+  （**不要**把它拆成"锁内查、锁外算"，那样等于没锁。）
+  回归门禁：`tests/smoke.py [5p] 3c` 的断言由**上界** `≤ 3×workers`（60）收紧为**精确等号**
+  —— 那个上界正是这个 bug 能长期藏住的原因。端到端浅扫实测：请求 **186 → 153**
+  （字典 150 + 基线 3），命中 `.env` + `.git/config` 不变。
+  *（AGENTS 早前记录的整轮 11 阶段数字 256/262、dirscan 177/183 是**修复前**的值，本轮未重跑；
+  按新规则 dirscan 段应为 `150 + 3 × 站点数`。）*
 
 ## 8. 不要做的事
 
@@ -368,6 +372,22 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   含 A 采纳 / B 批判不采纳（8 条带理由）/ C 保留与间接处理标注——动手前先读，**避免重复调研或照搬有害设计**。
 - 跨平台（Linux + Windows）是硬要求：路径用 `pathlib`、命令用列表 argv + `shell=False`、
   解释器用 `utils.pick_python`、文件读写显式 `encoding="utf-8"`、工具探测用 `shutil.which`。
+- **换行符：仓库内文本文件以 CRLF 存储**（仓库级 `core.autocrlf=false`），**禁止提交 LF-only 的文件**。
+  代价是实测过的：有一次用工具批量改写后文件变成 LF-only，提交时 `tests/smoke.py` 出现
+  **2811 行纯 EOL"假变更"**（`git show --stat` 里 1490+/1321-），真正的内容改动被淹没、
+  review 完全失效。**改完文件先自查再 `git add`**：
+
+  ```powershell
+  git diff --stat                      # 行数远超实际改动 → 大概率 EOL 被改写
+  $b=[IO.File]::ReadAllBytes('<文件>') # 按字节数：LF 总数
+  ($b | Where-Object { $_ -eq 10 }).Count
+  ```
+
+  归位办法（纯 EOL、不动内容，跨平台可靠）：
+  `$t=[IO.File]::ReadAllText($p) -replace "\r\n","\n" -replace "\n","\r\n"; [IO.File]::WriteAllText($p,$t,(New-Object Text.UTF8Encoding $false))`
+  *（**刻意不用** `.gitattributes text=auto eol=crlf`：它会把索引侧 EOL 全量改写，需要一次覆盖
+  全仓库的迁移提交，`git blame` 的归因随之失效 —— 与 §0.1「事后分辨谁改了什么」冲突。
+  宁可保留"提交前自查"这道人工闸门。）*
 - **改动必须标注实施者**（用户 2026-09-22 明确要求）：提交信息末行写 `WorkBuddy · <模型名>`，
   并在 `CHANGELOG_AI.md` 的轮次标题下写明实施者。**背景**：本项目出现过两个 AI 会话同时改同一批文件
   （文档被反复覆盖），标注实施者是事后分辨「谁改了什么」的唯一可靠线索。
