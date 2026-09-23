@@ -49,8 +49,9 @@ def main():
     ap.add_argument("-f", "--file", help="目标文件（每行一个：域名/URL/IP，# 为注释）")
     ap.add_argument("-t", "--target", action="append", default=[], help="单目标，可多次指定")
     ap.add_argument("-n", "--name", default="", help="任务名（默认取文件名或 cli-task）")
-    ap.add_argument("-p", "--stages", default=",".join(STAGE_ORDER),
-                    help=f"逗号分隔的阶段，可选：{','.join(STAGE_ORDER)}")
+    ap.add_argument("-p", "--stages", default=None,
+                    help=f"逗号分隔的阶段（默认全部：{','.join(STAGE_ORDER)}）；"
+                         "显式点名 cert / screenshot 时该阶段只对本次生效，不改全局策略")
     ap.add_argument("--offline", action="store_true",
                     help="离线模式：不调用 subfinder/puredns/httpx/dirmap，仅用内置实现")
     # 两个"全量档"开关都是**单次**语义（等价 GUI 的任务级选项，与建任务勾选同义）：
@@ -82,7 +83,10 @@ def main():
         print("[!] 未提供目标：使用 -f 目标文件 或 -t 单目标")
         sys.exit(1)
 
-    stages = [s.strip() for s in args.stages.split(",") if s.strip()]
+    # `-p` 不给＝全部阶段（与旧默认值同义，行为不变）；给了＝用户**显式点名**。
+    explicit = args.stages is not None
+    stages = [s.strip() for s in (args.stages or ",".join(STAGE_ORDER)).split(",")
+              if s.strip()]
     bad = [s for s in stages if s not in STAGE_REGISTRY]
     if bad:
         print(f"[!] 未知阶段：{','.join(bad)}（可选：{','.join(STAGE_ORDER)}）")
@@ -91,6 +95,14 @@ def main():
     db.init_db()
     name = args.name or (Path(args.file).stem if args.file else "cli-task")
     options = {"offline": bool(args.offline)}
+    # cert / screenshot 是**策略级默认关**的阶段。写进 `-p` 就是在说"这次要跑"，
+    # 因此落成任务级开关（与 GUI 建任务勾选同一套语义：只影响本次，不改全局策略）。
+    # 不点名时不加这些开关，照旧由 `settings.*.enabled` 决定 —— 不能因为 CLI 的
+    # 默认 `-p` 含全部阶段就偷偷把它们打开。
+    if explicit:
+        for st in ("screenshot", "cert"):
+            if st in stages:
+                options[f"{st}_on"] = True
     if args.full_ports:
         options["portscan_full"] = True
     if args.full_dir:

@@ -34,6 +34,65 @@ atexit.register(lambda: shutil.rmtree(_TMPDIR, ignore_errors=True))
 
 FIXTURE_PORT = 8765
 
+# [5v] 用的固定自签证书与配套私钥（一次性生成的**测试夹具**，不是任何生产凭据）。
+# 内联而不是放文件：证书解析的断言要"零外部依赖、可离线跑"，且这类夹具一旦落盘就容易被
+# 误当成真凭据管理；内联后整段测试自包含。
+# 证书自造特征（断言逐条依赖这些值，改动夹具必须同步改断言）：
+#   subject/issuer = CN=smoke.test.lab, O=CTFScanner Smoke, C=CN
+#   serial = 0x1234ABCD（DER 里带正数补位 0x00，解析器必须剥掉）
+#   notBefore 2020-01-02 03:04:05Z / notAfter 2021-02-03 04:05:06Z（已过期）
+#   SAN = smoke.test.lab / *.smoke.test.lab / 10.9.9.9，签名算法 sha256WithRSA
+_CERT_PEM = """-----BEGIN CERTIFICATE-----
+MIIDNTCCAh2gAwIBAgIEEjSrzTANBgkqhkiG9w0BAQsFADBBMQswCQYDVQQGEwJD
+TjEZMBcGA1UECgwQQ1RGU2Nhbm5lciBTbW9rZTEXMBUGA1UEAwwOc21va2UudGVz
+dC5sYWIwHhcNMjAwMTAyMDMwNDA1WhcNMjEwMjAzMDQwNTA2WjBBMQswCQYDVQQG
+EwJDTjEZMBcGA1UECgwQQ1RGU2Nhbm5lciBTbW9rZTEXMBUGA1UEAwwOc21va2Uu
+dGVzdC5sYWIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDq9op/NHZV
+ZiEMArTEhe+mPN3/4auHBnFBMd4XWL6Mkq1dTF1x48ry5VEAniWUaAXbh+FIi3h9
+z2jBuMqmOlJsv1N8Cduqb0lBm6Dk2qaeDit8bexjkEGHY+duFr9lQbc404JC+nFm
+y/S6e8Gnqg4WU4u2hb32Sp4DP9MSntQ1PGvrGfsafV9JmRlLLxX/bGNNm4mNcTKq
+vwbqh1oSjojri21NfVpSpb++OdzL9Xpgro39YlxWqwgtpxpPW67MfMetGugrFiGO
+w+d+B1r1zPERIMDsv0pHZ9ugYgKdezD6WD+nyKsSBKY4tDLcZfGpiDCCMcbX5kzb
++j370u974PxVAgMBAAGjNTAzMDEGA1UdEQQqMCiCDnNtb2tlLnRlc3QubGFighAq
+LnNtb2tlLnRlc3QubGFihwQKCQkJMA0GCSqGSIb3DQEBCwUAA4IBAQDBMEJ176ho
+08pY2hQoJQ6hrYYSElqrHx3QirSQwoo0/WFfxSHF8shY3l51vzKM2HCck0U1RiQ5
+I1dgBrkW43gMJDHFtEeEjsWDej3yj5ZdrM9c1vRrC3jfrLcRPcZNpwv+N1kXXjM6
+kbIg870QuCQY8PNQ6IgJKwoc8r7oGTgdubhrNeH6Vp/quCEqbqMVQylRvsri+0Fo
+VZc3UwQjQxetkJfcfsCz3U+JNeJeBIOQfxwh1JHF6TNBQQqjG+V1sH4PfdDnIHz+
+5zf3ERyE8QLF0cDwViGHaFssL1GChnMKs1fZltIaCgWS/AkFJs4y4dO6OmNsUMjy
+3UcR1T7xxwgi
+-----END CERTIFICATE-----
+"""
+
+_KEY_PEM = """-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA6vaKfzR2VWYhDAK0xIXvpjzd/+GrhwZxQTHeF1i+jJKtXUxd
+cePK8uVRAJ4llGgF24fhSIt4fc9owbjKpjpSbL9TfAnbqm9JQZug5Nqmng4rfG3s
+Y5BBh2Pnbha/ZUG3ONOCQvpxZsv0unvBp6oOFlOLtoW99kqeAz/TEp7UNTxr6xn7
+Gn1fSZkZSy8V/2xjTZuJjXEyqr8G6odaEo6I64ttTX1aUqW/vjncy/V6YK6N/WJc
+VqsILacaT1uuzHzHrRroKxYhjsPnfgda9czxESDA7L9KR2fboGICnXsw+lg/p8ir
+EgSmOLQy3GXxqYgwgjHG1+ZM2/o9+9Lve+D8VQIDAQABAoIBAAOChWacwBg9++YG
+nXTErcHk2Dz7ebKnvhCYGZ+pKFPuemJ1/Fqg5RHDPBQdRGWLHYXRclufHVXyUKsK
+a65GXdt4xqfD1kRhyOS1Yn0dfAoNfRoKwIWebJaRe0v1hEPGo8fyJdRozjkXvMQo
+kzSKjVNJSZJ61pqFxP3tu+Vj/qEFZEpTYuGwyTyzLvjwSU6gTKfyhFkFgNAptdsU
+1OZdxs49t4NdopJU1jsyKUF0AyyHTzXiRzcZcxqG+nNkxBClvqwg4oYsZGtrYXly
+zSoszTrJepUvRRDRAa3wofG8hrm71mBQEDv0e2fKHqbliF90/NDfrzYW/jfrEyVP
+YMYYAdECgYEA/1MtFetQxc2wjTmfS3ci52MrbZZKoUYdoH3fRPskce1o3N01RQrG
+GdXOqNgakpBReSCIDot5At/Sogrp/gFQv1RYWCoxhilUgS6Rj3pBGk5ID7Qk5UB7
+3kbmBVNFIVWhCKn44q9yw9rGI0xJQUMU4Ot21YdVXMu34nfxSXoUrBECgYEA65WV
+F35PsHx5U7/sva00RLBPY4FFwV1YlOqLPosej0soNh9ct+wm2rwKYjqtL0Lj2KD/
+1CkU4W2xjqDTgnHDlyJ/bDzHq4OucG1P1Lg1fwPKg5dG6FzPBFmOJmnxUuXDg/0k
+qAdhzRjpBl35aZyTy7aoporZG8GqAITCjDn/oAUCgYBavTmpr45uLdKP7imRjU6H
+QzQ85wuw0xVWY0WE42gpYQFCdQ8ocVLD/btLQDn5WnbKAGi6GpEwF1FpK03LarZC
+uPwIoT4meuvAWUd74Svf6HAtvIzcOJWNAk9fFx/bX+4yAQ4lqcq0ljyScNsb6XYz
+FRuPeWA58WBxiMTkoxFTsQKBgAKR+DVwaFgpk31Ja8DKAfb54XPZdjRc21mMkYZW
+KDgx/rdQckeDaQ0b3hUiRL9uQGQdpYzgAd1PwA8pTAVxTkv40WER7K+/WQja+HL+
+q36+QNhcryZb1NpcS8O5hit8XDy1Z0/5/KQrMGekYNM5JRek34QpoaK+4ybsS98R
+xustAoGBAJJ0QHYKM7evba1jiMb61999eat5ze6JMpk3nNCDJ2K92BWRvb+b18pP
+F5TcJN9eTewjvwZlT1m+KAlIFPimhJWDDWGhn+yn/Cik+ygsfDp8Dd9TqXVsoD9W
+EzRgvLIZT5hBD4Qifb5N+XsRSSnLpAiEGXgk7HU2To1k1jDtImgR
+-----END RSA PRIVATE KEY-----
+"""
+
 
 class _QuietHandler(SimpleHTTPRequestHandler):
     """靶场服务器：关闭逐请求日志，避免淹没测试输出。"""
@@ -81,9 +140,10 @@ def main():
     print("[1] targets ok:", ts, "| cidr:", cidr)
 
     # 1b) 流水线阶段注册：全部阶段都在顺序表与注册表中；
-    # intel / heuristic（P3-2/P3-3）固定排在**最后**且默认关，只写 leads 表
+    # cert（续14 证书取证）紧跟 probe；intel / heuristic（P3-2/P3-3）固定排在**最后**
+    # 且默认关，只写 leads 表
     assert STAGE_ORDER == ["subdomain", "takeover", "portscan", "probe",
-                           "screenshot", "osint", "jsmine", "dirscan", "vulnscan",
+                           "cert", "screenshot", "osint", "jsmine", "dirscan", "vulnscan",
                            "intel", "heuristic"], STAGE_ORDER
     print("[1b] stages ok:", ",".join(STAGE_ORDER))
 
@@ -1152,7 +1212,9 @@ def main():
     from scanner import screenshot as shot_mod
     from scanner.runner import STAGE_REGISTRY
     assert "screenshot" in STAGE_REGISTRY, "截图阶段未注册"
-    assert STAGE_ORDER.index("screenshot") == STAGE_ORDER.index("probe") + 1, "截图应紧跟 probe"
+    # 截图必须排在 probe（以及后来的 cert）**之后** —— 它要拿存活站点当输入。
+    # 精确顺序由 [1b] 断言，这里只守"在 probe 之后"这个不变量。
+    assert STAGE_ORDER.index("screenshot") > STAGE_ORDER.index("probe"), "截图应在 probe 之后"
     # 浏览器探测：指定不存在的路径必须判定为不可用（而不是拿去执行）
     assert shot_mod.browser_path({"screenshot": {"browser": "no-such-browser-xyz"}}) == ""
     # 关闭时不发任何截图（默认就是关的）
@@ -2088,6 +2150,161 @@ def main():
     assert n_sub == 12 * 30, f"并发写入丢行：期望 {12 * 30}，实际 {n_sub}"
     print(f"[5u] 续14 ok: sensitive.txt 签名列数据驱动 A01（裸路径/字典缺失回退内置清单，"
           f"靶场仍命中 .git/config）+ db 写锁串行化（12 线程 × 31 次写零异常、{n_sub} 行不丢）")
+
+    # 5v) 续14：TLS 证书取证（cert 阶段 + certs 表 + 「SSL 证书」页签）
+    #     为什么不用 `ssl.getpeercert()` 的"结构化"分支做断言：它在 CERT_NONE 下返回空 dict，
+    #     而自签/过期恰恰是 CTF 里最常见的情形 —— 所以这里断言的是**自写 DER 解析**的结果。
+    #     夹具是一对固定的自签证书与私钥（PEM 内联，见下），因此本段**零外部依赖、可离线跑**：
+    #     ① 直接解析内联 PEM（覆盖 SAN / 序列号补位 / 自签判定 / 过期天数）；
+    #     ② 起一个真的 TLS 监听端口，用 certs.fetch 真握手一次（覆盖网络路径与 SNI）。
+    from scanner import certs as certs_mod
+    from scanner.stages.cert import CertStage, pick_targets
+
+    fixture = _TMPDIR / "smoke-cert"
+    fixture.mkdir(parents=True, exist_ok=True)
+    cert_pem = fixture / "cert.pem"
+    key_pem = fixture / "key.pem"
+    cert_pem.write_text(_CERT_PEM, encoding="ascii")
+    key_pem.write_text(_KEY_PEM, encoding="ascii")
+
+    parsed = certs_mod.parse_der(certs_mod.parse_pem(cert_pem.read_text(encoding="ascii")))
+    assert parsed["cn"] == "smoke.test.lab", parsed
+    assert parsed["subject"] == "CN=smoke.test.lab, O=CTFScanner Smoke, C=CN", parsed["subject"]
+    assert parsed["not_before"] == "2020-01-02 03:04:05", parsed["not_before"]
+    assert parsed["not_after"] == "2021-02-03 04:05:06", parsed["not_after"]
+    # 序列号：DER 给正数补的 0x00 必须剥掉，否则与 `openssl x509 -serial` 对不上
+    assert parsed["serial"] == "1234ABCD", parsed["serial"]
+    assert parsed["sig_algo"] == "sha256WithRSA", parsed["sig_algo"]
+    assert parsed["self_signed"] == 1 and parsed["expired"] == 1, parsed
+    assert parsed["days_left"] is not None and parsed["days_left"] < 0, parsed["days_left"]
+    assert parsed["san"] == ["smoke.test.lab", "*.smoke.test.lab", "10.9.9.9"], parsed["san"]
+    assert parsed["sha256"] == ("C5:B1:A2:FE:D3:B3:1D:7D:D6:4B:9B:11:C4:38:D2:62:"
+                               "1D:8F:71:9E:3C:75:52:3E:E1:F9:D6:7A:10:C4:22:B3"), parsed["sha256"]
+    # 坏输入必须抛 ValueError（调用方统一只捕它；漏出 IndexError 会让整个阶段崩）
+    for bad_der in (b"", b"\x02\x01\x01", b"\x30\x03\x30\x01"):
+        try:
+            certs_mod.parse_der(bad_der)
+            raise AssertionError(f"坏 DER 未抛错：{bad_der!r}")
+        except ValueError:
+            pass
+
+    # 真握手一次（127.0.0.1 上临时 TLS 服务；端口 0 让系统分配，避免占端口）
+    import socket as _socket
+    import ssl as _ssl
+    _sctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+    _sctx.load_cert_chain(str(cert_pem), str(key_pem))
+    _srv = _socket.socket()
+    _srv.bind(("127.0.0.1", 0))
+    _srv.listen(4)
+    _tls_port = _srv.getsockname()[1]
+
+    def _tls_serve():
+        # 一直服务到套接字关闭为止：下面除了两次 `fetch()`，还要让 cert 阶段再握一次手，
+        # 只接受固定次数的话阶段那一步会撞上"连接被拒绝"，变成假失败。
+        while True:
+            try:
+                _conn, _ = _srv.accept()
+            except OSError:                                # 套接字已关 → 收工
+                return
+            try:
+                with _sctx.wrap_socket(_conn, server_side=True) as _s:
+                    _s.recv(1)
+            except Exception:                              # pragma: no cover - 收尾竞态
+                pass
+
+    threading.Thread(target=_tls_serve, daemon=True).start()
+    got, err = certs_mod.fetch("127.0.0.1", _tls_port, timeout=5)
+    assert err == "" and got, err
+    assert (got["cn"], got["serial"]) == ("smoke.test.lab", "1234ABCD"), got
+    got_sni, err_sni = certs_mod.fetch("127.0.0.1", _tls_port, timeout=5,
+                                       server_hostname="smoke.test.lab")
+    assert err_sni == "" and got_sni["san"] == parsed["san"], (err_sni, got_sni)
+    # 明文端口 / 连不上：必须**优雅返回错误串**而不是抛异常（阶段靠它写一行日志继续跑）
+    _bad, _berr = certs_mod.fetch("127.0.0.1", 1, timeout=3)
+    assert _bad is None and _berr, _berr
+
+    # 挑目标：https 无条件；非 https 只有端口命中 tls_ports 才试；同 host:port 去重
+    _sites = [{"url": "https://a.test/", "host": "a.test", "port": 443},
+              {"url": "http://a.test/", "host": "a.test", "port": 443},      # 同 host:port → 去重
+              {"url": "http://b.test:8443/", "host": "b.test", "port": 8443},  # 命中 tls_ports
+              {"url": "http://c.test:8080/", "host": "c.test", "port": 8080},  # 明文 → 不试
+              {"url": "http://d.test/", "host": "", "port": 80}]              # 无 host → 跳过
+    _picked = pick_targets(_sites, {443, 8443, 9443})
+    assert [p[1:] for p in _picked] == [("a.test", 443), ("b.test", 8443)], _picked
+
+    # 门控：策略级默认关（且任务级没点名）时，**一个请求都不发**
+    cert_settings = copy.deepcopy(settings)
+    cert_settings["cert"] = {"enabled": False, "max_sites": 5, "timeout": 3}
+    cv_tid = db.create_task("smoke-cert-off", targets, ["cert"], {"offline": True})
+    cv_wd = Path(_TMPDIR) / f"cert_off_{cv_tid}"
+    cv_wd.mkdir(parents=True, exist_ok=True)
+    cv_n0 = len(rec.lines)
+    cv_ctx = StageContext(cv_tid, "smoke-cert-off", parse_lines([targets]), ["cert"],
+                          {"offline": True}, cert_settings, cv_wd, rec)
+    cv_ctx.results["sites"] = [dict(_sites[0])]
+    CertStage(cv_ctx).run()
+    assert not db.list_certs(cv_tid), "策略关且未点名时不该取证"
+    assert any("未启用" in l for l in rec.lines[cv_n0:]), rec.lines[cv_n0:]
+
+    # 阶段真跑（任务级点名 cert_on）：对真站点握手 → 落库 + 写 certs.txt + 页签/报告可见
+    cv2_tid = db.create_task("smoke-cert-on", f"127.0.0.1:{_tls_port}", ["cert"],
+                             {"offline": True, "cert_on": True})
+    cv2_wd = Path(_TMPDIR) / f"cert_on_{cv2_tid}"
+    cv2_wd.mkdir(parents=True, exist_ok=True)
+    cv2_ctx = StageContext(cv2_tid, "smoke-cert-on", parse_lines([f"127.0.0.1:{_tls_port}"]),
+                           ["cert"], {"offline": True, "cert_on": True}, cert_settings,
+                           cv2_wd, rec)
+    # 站点用 https URL，等价于 probe 探到加密站点（阶段只认 URL 前缀与端口）
+    cv2_ctx.results["sites"] = [{"url": f"https://127.0.0.1:{_tls_port}/",
+                                 "host": "127.0.0.1", "port": _tls_port, "status": 200}]
+    CertStage(cv2_ctx).run()
+    _rows = db.list_certs(cv2_tid)
+    assert len(_rows) == 1 and _rows[0]["cn"] == "smoke.test.lab", [dict(r) for r in _rows]
+    assert _rows[0]["source"] == "tls" and _rows[0]["expired"] == 1
+    _ctxt = (cv2_wd / "certs.txt").read_text(encoding="utf-8", errors="replace")
+    assert "host:port\tcn\t" in _ctxt and "smoke.test.lab" in _ctxt, _ctxt[:200]
+    _srv.close()                                           # 握手到此为止，收掉夹具服务
+    # 页签与报告：库里有一条证书时，任务详情要出现「SSL 证书」页签，报告要有对应小节
+    _dcert = c.get(f"/tasks/{cv2_tid}").get_data(as_text=True)
+    assert "SSL 证书" in _dcert and "smoke.test.lab" in _dcert, "任务详情缺「SSL 证书」页签内容"
+    _rcert = generate(cv2_tid)
+    assert "## TLS 证书" in _rcert and "smoke.test.lab" in _rcert, "报告缺 TLS 证书小节"
+    # 没有证书时页签要**说清原因**（策略关 / 无 https 或加密端口站点 / 取了但失败）
+    _nohtm = c.get(f"/tasks/{cv_tid}").get_data(as_text=True)
+    assert "SSL 证书" in _nohtm and "cert 阶段默认关闭" in _nohtm, "空页签未说明原因"
+    # 重启任务会清空资产 → ASSET_TABLES 必须包含 certs，否则旧证书会残留成"幽灵资产"
+    assert "certs" in db.ASSET_TABLES, db.ASSET_TABLES
+    db.clear_task_assets(cv2_tid)
+    assert not db.list_certs(cv2_tid), "清空资产没清掉证书"
+    # 排序：已过期 + 自签的必须排在正常证书**前面**（默认视图要一眼看到异常项）
+    _sort_tid = db.create_task("smoke-cert-sort", "x.test", ["cert"], {})
+    db.insert_certs(_sort_tid, [
+        {"host": "ok.test", "port": 443, "cn": "ok.test", "not_after": "2099-01-01 00:00:00",
+         "days_left": 20000, "expired": 0, "self_signed": 0, "san": [], "source": "tls"},
+        {"host": "exp.test", "port": 443, "cn": "exp.test", "days_left": -5,
+         "expired": 1, "self_signed": 0, "san": [], "source": "tls"},
+        {"host": "self.test", "port": 443, "cn": "self.test", "days_left": 900,
+         "expired": 0, "self_signed": 1, "san": [], "source": "tls"}])
+    assert [r["host"] for r in db.list_certs(_sort_tid)] == \
+        ["exp.test", "self.test", "ok.test"], [r["host"] for r in db.list_certs(_sort_tid)]
+    # 建任务勾选 cert 阶段 → 任务级 cert_on（与 screenshot_on 同一套"勾了就有用"语义）。
+    # `/api/tasks` 会真的 `_spawn` 后台线程跑流水线，这里只验"选项落没落"，所以先打桩。
+    _orig_run5v = _gui.run_task
+    try:
+        _gui.run_task = lambda *a, **kw: None
+        _j5v = c.post("/api/tasks", data={"name": "smoke-cert-pick", "targets": targets,
+                                          "stages": ["probe", "cert"]}).get_json()
+        assert '"cert_on": true' in (db.get_task(_j5v["id"])["options"] or ""), \
+            db.get_task(_j5v["id"])["options"]
+        _j5v2 = c.post("/api/tasks", data={"name": "smoke-cert-nopick", "targets": targets,
+                                           "stages": ["probe"]}).get_json()
+        assert "cert_on" not in (db.get_task(_j5v2["id"])["options"] or ""), \
+            "没勾 cert 不该凭空多出选项"
+    finally:
+        _gui.run_task = _orig_run5v
+    print("[5v] 续15 ok: TLS 证书取证（内联夹具解析 CN/SAN/序列号剥补位/自签/过期 + "
+          "127.0.0.1 真握手与 SNI + 门控关零请求 + 落库/certs.txt/「SSL 证书」页签/报告小节 + "
+          "清空资产覆盖 certs + 异常优先排序 + 勾选即 cert_on）")
     print("SMOKE PASS")
 
 

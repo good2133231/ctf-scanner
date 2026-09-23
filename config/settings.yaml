@@ -85,6 +85,12 @@ screenshot:
   window: 1280x900
   timeout: 30
   browser: ''
+cert:
+  # TLS 证书取证（默认关）：对 https / tls_ports 站点做一次 TLS 握手，解析颁发者与有效期到「SSL 证书」页签
+  enabled: false
+  max_sites: 30
+  timeout: 8
+  tls_ports: [443, 8443, 9443]
 iprecon:
   enabled: false
   api: https://api.webscan.cc/?action=query&ip={ip}

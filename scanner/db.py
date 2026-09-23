@@ -73,6 +73,27 @@ CREATE TABLE IF NOT EXISTS csegs (
   domains TEXT DEFAULT '',
   count INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS certs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  url TEXT DEFAULT '',             -- 在哪个站点入口上取到的（同 host:port 可能对应多条 URL）
+  host TEXT DEFAULT '',
+  port INTEGER DEFAULT 0,
+  cn TEXT DEFAULT '',              -- 主体 CN（表格里最好读的一列）
+  subject TEXT DEFAULT '',
+  issuer TEXT DEFAULT '',
+  not_before TEXT DEFAULT '',
+  not_after TEXT DEFAULT '',
+  days_left INTEGER,               -- 距过期天数（已过期为负）
+  expired INTEGER DEFAULT 0,
+  self_signed INTEGER DEFAULT 0,   -- 主体与颁发者是同一组 RDN
+  san TEXT DEFAULT '',             -- dNSName / iPAddress，逗号连接（已按上限截断）
+  serial TEXT DEFAULT '',
+  sig_algo TEXT DEFAULT '',
+  sha256 TEXT DEFAULT '',          -- 指纹，AA:BB:… 大写冒号格式
+  source TEXT DEFAULT '',          -- tls（握手取证；留字段给后续 pem/ct 来源）
+  created_at TEXT
+);
 CREATE TABLE IF NOT EXISTS dirs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
@@ -211,11 +232,11 @@ def list_tasks(limit=200):
     return _query("SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (limit,))
 
 
-ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "dirs", "vulns", "leads")
+ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "certs", "dirs", "vulns", "leads")
 
 
 def clear_task_assets(task_id):
-    """清空某任务的全部资产（子域名/站点/端口/C段/目录/漏洞/线索），用于"重启"前重置。"""
+    """清空某任务的全部资产（子域名/站点/端口/C段/证书/目录/漏洞/线索），用于"重启"前重置。"""
     for t in ASSET_TABLES:
         _exec(f"DELETE FROM {t} WHERE task_id=?", (task_id,))
 
@@ -270,6 +291,7 @@ def task_counts(task_id):
         "subdomains": count("SELECT COUNT(*) c FROM subdomains WHERE task_id=?"),
         "ports": count("SELECT COUNT(*) c FROM ports WHERE task_id=?"),
         "csegs": count("SELECT COUNT(*) c FROM csegs WHERE task_id=?"),
+        "certs": count("SELECT COUNT(*) c FROM certs WHERE task_id=?"),
         "dirs": count("SELECT COUNT(*) c FROM dirs WHERE task_id=?"),
         "vulns": count("SELECT COUNT(*) c FROM vulns WHERE task_id=?"),
     }
@@ -362,6 +384,28 @@ def insert_csegs(task_id, rows):
            for r in rows], many=True)
 
 
+def insert_certs(task_id, rows):
+    """TLS 证书取证结果。items: `certs.parse_der()` 的返回 + {url, host, port, source}。
+
+    `san` 是列表（dNSName / iPAddress），这里按 `MAX_SAN` 之后再截一次总长：
+    一个 IP 直连的站点可能带着几百条 SAN，全塞进页面只会把表格撑爆。
+    只写**取证成功**的行（握手失败不进库，只留日志与 certs.txt）——
+    与截图阶段同一口径：表里出现的每一行都是"确认拿到的东西"。
+    """
+    if not rows:
+        return
+    _exec("INSERT INTO certs(task_id,url,host,port,cn,subject,issuer,not_before,not_after,"
+          "days_left,expired,self_signed,san,serial,sig_algo,sha256,source,created_at) "
+          "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          [(task_id, r.get("url", ""), r.get("host", ""), int(r.get("port") or 0),
+            r.get("cn", ""), r.get("subject", ""), r.get("issuer", ""),
+            r.get("not_before", ""), r.get("not_after", ""), r.get("days_left"),
+            int(r.get("expired") or 0), int(r.get("self_signed") or 0),
+            ",".join(r.get("san") or [])[:2000], r.get("serial", ""),
+            r.get("sig_algo", ""), r.get("sha256", ""), r.get("source", ""), _now())
+           for r in rows], many=True)
+
+
 def insert_dirs(task_id, dirs):
     if not dirs:
         return
@@ -446,6 +490,18 @@ def list_leads(task_id):
 
 def list_csegs(task_id):
     return _query("SELECT * FROM csegs WHERE task_id=? ORDER BY segment, ip", (task_id,))
+
+
+def list_certs(task_id):
+    """证书取证结果。默认排序：**异常优先**（已过期 → 自签 → 剩余天数升序）。
+
+    CTF / 授权测试里最该先看的就是"过期"与"自签"（往往是靶机临时自签、或旧版本残留），
+    按 id 排会把它们埋在几十行正常证书后面，所以按"可疑程度"排而不是按插入顺序。
+    """
+    return _query("SELECT * FROM certs WHERE task_id=? "
+                  "ORDER BY expired DESC, self_signed DESC, "
+                  "CASE WHEN days_left IS NULL THEN 1 ELSE 0 END, days_left, id",
+                  (task_id,))
 
 
 # ---------- 全局资产视图（GUI 资产分栏用） ----------

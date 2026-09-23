@@ -82,11 +82,12 @@ ctf-scanner/
 │   │                      #     仪表盘/任务管理/子域名资产/站点资产/IP 资产/全端口扫描/漏洞风险/POC 管理/策略配置）
 │   │                      #   （原「端口服务/C 段视野/目录发现/拓展域名」四栏已移除，路由 /ports /csegs /dirs /extdomains
 │   │                      #    仍在，只是不进侧栏；前三条是任务维度数据，/extdomains 与 /subdomains 是同一张表的不同视图）
-│   │                      #   任务详情＝横向 10 个页签（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/线索/目标与配置/运行日志）+ 页签内筛选框
-│   │                      #   （「线索」＝intel 情报订阅 + heuristic 启发式候选两类共用，**不是漏洞结论**）
+│   │                      #   任务详情＝横向 11 个页签（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/线索/目标与配置/运行日志）+ 页签内筛选框
+│   │                      #   （「线索」＝intel 情报订阅 + heuristic 启发式候选两类共用，**不是漏洞结论**；
+│   │                      #     「SSL 证书」＝cert 阶段产物；页签按数据源实有出现，没有产物时说明原因）
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
-│   ├── stages/            # base + subdomain/takeover/portscan/probe/**screenshot**/osint/jsmine/dirscan/vulnscan/intel/heuristic（11 个）
+│   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic（12 个）
 │   ├── pocs/engine.py     # YAML POC 引擎（nuclei 兼容子集）
 │   ├── pocs/pocs/*.yaml   # 内置 7 个示例 POC
 │   ├── owasp/checks.py    # 12 项启发式检查（装饰器 @check 注册进 CHECKS）+ 分级/分类门控
@@ -106,7 +107,8 @@ ctf-scanner/
 │   ├── intel.py           # 漏洞情报订阅（P3-2）：CISA KEV 拉取+本地缓存+白名单式匹配 → **只产线索**（不写 vulns）
 │   ├── heuristics.py      # 启发式候选发现（P3-3）：对已有数据做差分/异常聚合（**零请求**）→ 线索；阈值与规则表在此
 │   ├── fingerprint.py     # 内置指纹规则表 → identify(resp) -> [tag] + fetch_favicon/favicon_md5/favicon_hash
-│   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs/**leads** + page_assets/delete_task/task_counts
+│   ├── certs.py           # TLS 证书取证（**纯标准库** DER/ASN.1 解析，不引 cryptography）：parse_der/parse_pem/fetch/tls_ports
+│   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs/**leads**/**certs** + page_assets/delete_task/task_counts
 │   │                      #   + OWN_SUBDOMAIN_WHERE/EXT_SUBDOMAIN_WHERE/OVERLAP_EXT_WHERE/OVERLAP_SITE_WHERE；DB_PATH 受 CTFSCANNER_DB 覆盖）
 │   │                      #   复核（vulns.review/review_note/reviewed_at + set/bulk_set_vuln_review/review_counts）
 │   │                      #   与 POC 置信度（pocs.confidence + poc_confidence）见 §7
@@ -120,7 +122,7 @@ ctf-scanner/
 ├── tools/import_fw_dicts.py # 从 dirs_big 派生**按框架细分**的字典（wordpress/tomcat/weblogic/spring/… 12 个桶
 │                          #   + dirs_exposure）→ config/dicts/dirs_<框架>.txt；用法：py -3 tools/import_fw_dicts.py --force
 ├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
-├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot**/iprecon/fofa/blacklist/**intel/heuristic** 十七段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned））
+├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/blacklist/**intel/heuristic** 十八段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
 ├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / cdn_cname(292)
@@ -146,14 +148,18 @@ ctf-scanner/
 其中 `scanner/evasion.py` 是**所有 HTTP 出口的统一伪装层**（由 `utils.http_request` 调用），
 `scanner/wildcard.py` 与 `scanner/passive.py` 只在 subdomain 阶段生效。
 
-- 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **11 个**：
-  `subdomain → takeover → portscan → probe → **screenshot** → osint → jsmine → dirscan → vulnscan
+- 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **12 个**：
+  `subdomain → takeover → portscan → probe → **cert** → **screenshot** → osint → jsmine → dirscan → vulnscan
   → **intel** → **heuristic**`；
-  `screenshot` 默认关、需要本机 Edge/Chrome，浏览器路径探测见 `scanner/screenshot.py`；
-  **但"默认关"指的是策略级开关** —— 建任务时勾了 `screenshot`（或 CLI `-p screenshot`）即
-  **任务级点名**，GUI 落任务选项 `screenshot_on`，阶段据此越过策略开关执行且不改全局策略
+  `cert`（TLS 证书取证）与 `screenshot` 都**默认关**，都排在 `probe` 之后（要先有存活站点）；
+  `screenshot` 需要本机 Edge/Chrome，浏览器路径探测见 `scanner/screenshot.py`；
+  **但"默认关"指的是策略级开关** —— 建任务时勾了 `screenshot` / `cert`（或 CLI `-p screenshot` / `-p cert`）即
+  **任务级点名**，GUI 落任务选项 `screenshot_on` / `cert_on`，阶段据此越过策略开关执行且不改全局策略
   （2026-09-23 续13：此前只认策略开关，用户勾了截图却被静默跳过，页面上永远没有缩略图；
-  站点页签的「补截图」按钮同样落 `screenshot_on`）；
+  站点页签的「补截图」按钮同样落 `screenshot_on`；续14 的 `cert` 沿用同一套门控，
+  并把 CLI 的 `-p` 默认值改成 `None` —— 否则 `-p screenshot`/`-p cert` 会被策略门控静默吃掉）；
+  `cert` 只做**一次只读 TLS 握手**（`verify_mode=CERT_NONE`）并解析证书（CN/SAN/有效期/自签/指纹），
+  **是取证不是漏洞结论** —— 自签/过期是证书属性，不等于漏洞；解析用纯标准库 ASN.1/DER（`scanner/certs.py`）；
   `dirscan` 默认开但**默认只跑浅扫**（`dirscan.mode=quick`，见 §8 的 dirscan 条目）；
   末尾两个**线索阶段默认关**，且**只写 `leads` 表**（不写 `vulns`、不计入漏洞数、不自动导 POC）：
   `intel` = CISA KEV 情报 × 本地指纹白名单式匹配（`scanner/intel.py`），
@@ -161,7 +167,8 @@ ctf-scanner/
   新增阶段在此登记即可被 CLI `-p` 与 GUI 识别）。
 - 阶段开关有两层：**任务级**（建任务时勾选 stages / CLI `-p`）与**策略级**
   （`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled`，阶段内部自查后跳过）。
-  `takeover` / `jsmine` / `dirscan` / `vulnscan` 默认开，`portscan` / `intel` / `heuristic` 默认关。
+  `takeover` / `jsmine` / `dirscan` / `vulnscan` 默认开，
+  `portscan` / `screenshot` / `cert`（都受策略级开关约束）/ `intel` / `heuristic` 默认关。
   另有**任务级「全量档」选项**：`portscan_full`（全端口 1-65535，见 §8）与 `dirscan_full`（深扫，见 §8），
   二者都是"用户点名要扫"→ **即使对应全局 `enabled=false` 也执行**，且 GUI/CLI 在勾了全量档却漏勾阶段时
   **自动补上该阶段并按 `STAGE_ORDER` 归位**（`runner` 按给定顺序执行、不排序，所以必须显式 sort）。
@@ -288,9 +295,11 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
   fofa 的 email/key 要手改 `config/keys.yaml`（控制台只读、不写回凭据）。
 - `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。
-- **任务详情为 10 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**线索**/目标与配置/运行日志）：参考 ARL 界面的
-  IP/SSL证书/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源
-  还不存在（分别依赖证书解析、爬虫数据模型等）。理由与依赖关系见 `TODO.md` B-7。
+- **任务详情为 11 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/线索/目标与配置/运行日志）：参考 ARL 界面的
+  IP/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源
+  还不存在（分别依赖爬虫数据模型、nuclei 二进制等）。理由与依赖关系见 `TODO.md` B-7。
+  「SSL 证书」页签是续15 的落点（只读 TLS 握手 + 纯标准库 DER 解析，**握手不校验证书**）：
+  证书的「自签 / 已过期」是**属性**，页签与报告都写明不是漏洞结论，且没有产物时会说明原因。
   「线索」页签是 P3-2/P3-3 的落点：**线索 ≠ 漏洞结论**，因此单列、单计数，不混进「潜在漏洞」。
   「拓展域名」页签与跨任务 `/extdomains` **共用同一张来源顺序表**（`EXT_SRC_TAGS`：
   JS 挖掘 → FOFA·标题 → 证书 → ICO → C 段，同类内新的在前），任务页另支持 `?esrc=` 分类过滤；

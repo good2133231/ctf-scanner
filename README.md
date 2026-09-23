@@ -1,6 +1,6 @@
 # CTFScanner
 
-面向 **CTF 与授权渗透测试** 的一体化资产测绘与漏洞初筛框架。参考灯塔（ARL）的任务化思路，把常用的「子域名收集 → 子域接管 → 端口服务 → 存活探测 → 站点截图 → 外部情报拓展 → JS 资产挖掘 → 目录发现 → 漏洞初筛 → 情报订阅 / 启发式候选」**11 阶段**流水线产品化：
+面向 **CTF 与授权渗透测试** 的一体化资产测绘与漏洞初筛框架。参考灯塔（ARL）的任务化思路，把常用的「子域名收集 → 子域接管 → 端口服务 → 存活探测 → TLS 证书取证 → 站点截图 → 外部情报拓展 → JS 资产挖掘 → 目录发现 → 漏洞初筛 → 情报订阅 / 启发式候选」**12 阶段**流水线产品化：
 
 - **CLI 客户端**：导入目标文件，全自动执行完整流水线；
 - **Web 控制台（GUI）**：仿 ARL 的任务/资产/漏洞/POC 管理界面（**9 栏侧边栏**：仪表盘 / 任务 / 子域名 / 站点 / IP 资产 / **全端口扫描** / 漏洞 / POC / 策略），可视化添加目标并发起扫描，支持任务批量停止/重启/删除与报告导出；子域名标出**解析 IP 与 CDN/非 CDN**（可标签过滤）、**来源可读标签**（能一眼看出哪些是 FOFA 找出来的），可勾选行**批量加入黑名单**或**批量跑子域名（新建任务）**；拓展域名与站点页**默认隐藏重叠资产**（页顶开关 `?all=1` 放开），站点页另折叠同任务内「标题+响应长度」相同的重复项；
@@ -9,6 +9,7 @@
 - **动态免杀**：UA 随机化、浏览器化请求头、WAF 指纹识别、注入 payload 变形（分级 0~3，变体与参数顺序每次随机）；
 - **信息收集增强**：免 key 多来源被动子域名收集（crt.sh / certspotter / alienvault 等）+ 泛解析过滤 + 子域接管指纹（41 条第三方服务）+ 子域名**解析 IP / CDN 标记**（`config/dicts/cdn_cname.txt` 292 条厂商 CNAME 后缀，纯 DNS 只读判定）+ JS 资产挖掘（域名/接口/疑似凭据，JS 与情报带出的域名归入**拓展域名**页）+ **外部情报拓展**（`/24` C 段反查域名；favicon 的 mmh3 去 FOFA 反查同源资产，命中过多的"黑 ico"主动放弃拓展；**TLS 证书反查** `cert="domain"` 与**标题反查** `title="xxx"`，命中过多的"通用证书 / 公共标题"（如 404 默认页）同样放弃 —— 模板页标题连查询都不发）+ **用户黑名单**（`config/blacklist.txt`，入库前过滤，命中域名连子域都不入资产库）；**拓展域名**按来源分类排序（JS 挖掘 → FOFA·标题 / 证书 / ICO → C 段，不交错），并可对勾选域名手动**解析 DNS / 送去探测（新建 `probe→dirscan→vulnscan` 任务）/ 加入黑名单** —— 这类域名未必属于目标，不自动全跑）；
 - **端口与目录**：内置 TOP 48 端口表 + **fscan / nmap 适配**（`portscan.engine`：`auto` = fscan → nmap → 内置 TCP connect；调用 fscan 时强制 `-np -nobr -nopoc`，只用它的端口发现能力，输出解析按 fscan 2.2.1 **真实形态校准**并用其"发现 N 个开放端口"统计行交叉校验，数目不符即回退、不静默漏报）+ 内置 TCP connect 兜底；**全端口扫描（1-65535）**可从侧栏「全端口扫描」页对单个 IP 发起（按任务分布展示，自动跳过已扫过的端口，不污染全局策略）；**目录发现走「浅 / 深两档」**——默认**开**但只跑**浅扫**（`dirscan.mode=quick`：`config/dicts/dirs_shallow.txt` 精选通用敏感路径约 150 条/站，如 `.git`、`.env`、备份与数据库转储、中间件控制台），适合"先浅浅过一遍"；**深度扫**（`mode=deep` / 建任务勾「全目录深扫」/ 结果页「补扫」）才启用 **15333 条大字典**、dirmap 优先调用与备份后缀派生，**只扫不重复站点**、**按技术栈与框架选字典**（Java/PHP/ASP 各自的语言字典 + WordPress/Spring/Weblogic 等 12 个框架字典 + 通用暴露面字典），结果按**响应大小**折叠重复长度并展示包大小与**命中页标题**（内置扫描从已在手里的响应体提取，零额外请求），默认排序为 **200 优先 → 大小降序**；浅扫结果页可勾选站点**一键发起独立补扫任务**（`POST /api/rescan`，只跑 dirscan/portscan/screenshot 单阶段，不改全局策略）；
+- **TLS 证书取证**（策略级默认关，**建任务勾「SSL 证书」或 CLI `-p cert` 即对本次生效**）：对值得握手的站点（`https://` 或端口命中 `cert.tls_ports`）做**一次只读 TLS 握手**，用**纯标准库** ASN.1/DER 解析出 CN / 颁发者 / 有效期 / 剩余天数 / 是否自签 / 签名算法 / SAN / SHA256 指纹，进 `certs` 表 + 任务详情「SSL 证书」页签 + 报告小节，**不引入 `cryptography`**。握手**不校验证书**（CTF 目标多为自签/过期）—— **「自签 / 已过期」是证书属性、不是漏洞结论**，页签与报告都写明了这一点；页签按数据源实有出现，没有产物时说明原因；
 - **站点截图**（策略级默认关，**建任务勾「截图」即对本次生效**）：调用本机已装的 Edge/Chrome 无头模式截图，产物落在任务目录并在站点页 URL 旁显示缩略图，不引入任何新依赖；站点页签可对勾选站点**补截图**（`stage=screenshot`），没有产物时页面会说明原因（策略关 / 本机无可用浏览器 / 截图失败）；
 - **线索层：情报订阅 + 启发式候选**（两个阶段**默认关**）：拉取 **CISA KEV**（免 key 公开 JSON，只收录已被在野利用的 CVE）与本地指纹做**白名单式匹配**；以及对已采集数据做**零请求**的差分/异常聚合（软 404 模板 / 高价值入口暴露 / 同标题多主机 / 目录命中离群 / 同 C 段多 IP）。两者产出**只是「线索」**：独立 `leads` 表、任务详情独立页签、报告独立附录，**不写漏洞、不计入漏洞数、不自动导入 POC**；
 - **JS 敏感字符**：17 条凭据规则（AKID/LTAI/AKIA、JWT、私钥 PEM、数据库连接串、Slack/Telegram/SendGrid/Stripe 等）+ 两级降噪（占位符、变量引用、成员访问），命中值掩码脱敏后以 high 级入库，「拓展域名」页按域名显示敏感命中数；
@@ -90,7 +91,7 @@ ctf-scanner/
 │   ├── templates/ static/   #   页面与样式
 ├── scanner/                 # 核心引擎（CLI/GUI 共用）
 │   ├── runner.py            #   流水线编排、任务执行入口、协作式取消
-│   ├── stages/              #   11 个阶段：subdomain / takeover / portscan / probe / screenshot / osint / jsmine / dirscan / vulnscan / intel / heuristic
+│   ├── stages/              #   12 个阶段：subdomain / takeover / portscan / probe / cert / screenshot / osint / jsmine / dirscan / vulnscan / intel / heuristic
 │   ├── pocs/                #   POC 引擎（nuclei 兼容子集）+ 内置示例 POC
 │   ├── owasp/               #   OWASP Top10 启发式检查 + 分级/分类门控
 │   ├── evasion.py           #   动态免杀（UA/请求头伪装/WAF 指纹/payload 变形）
@@ -100,6 +101,7 @@ ctf-scanner/
 │   ├── cdn.py               #   CDN 判定（按 CNAME 后缀匹配厂商名单，只读加载）
 │   ├── takeover.py          #   子域接管指纹库（41 条第三方服务）
 │   ├── portscan.py          #   端口/服务扫描（fscan / nmap 优先，内置 TCP connect 兜底）
+│   ├── certs.py             #   TLS 证书取证（纯标准库 DER/ASN.1 解析，不引 cryptography）
 │   ├── screenshot.py        #   站点截图（本机无头 Edge/Chrome 路径探测 + 截图）
 │   ├── jsmine.py            #   JS 资产挖掘（域名/接口/疑似凭据 + 黑名单降噪）
 │   ├── blacklist.py         #   用户黑名单（config/blacklist.txt，入库前过滤）
@@ -133,7 +135,7 @@ ctf-scanner/
 | 文档 | 内容 |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 模块划分、数据流、数据库表结构、扩展点 |
-| [docs/pipeline.md](docs/pipeline.md) | 11 个阶段的输入输出、与你手工流水线命令的对应关系、降级策略 |
+| [docs/pipeline.md](docs/pipeline.md) | 12 个阶段的输入输出、与你手工流水线命令的对应关系、降级策略 |
 | [docs/poc-guide.md](docs/poc-guide.md) | POC YAML 格式、匹配器语义、编写规范、如何上传与启停 |
 | [docs/owasp-mapping.md](docs/owasp-mapping.md) | OWASP Top 10 逐项映射：已实现检查、实现方式、局限 |
 | [docs/usage.md](docs/usage.md) | CLI 全参数、GUI 操作流程、常见问题 |

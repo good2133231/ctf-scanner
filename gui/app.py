@@ -20,13 +20,14 @@ from flask import (Flask, Response, abort, jsonify, redirect, send_file,
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import blacklist, cdn, db, dnsq, screenshot
+from scanner import blacklist, cdn, certs as certs_mod, db, dnsq, screenshot
 from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
+from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import pool_run, rel_display
 
 logger = get_logger("gui")
@@ -96,6 +97,19 @@ def _safe_next(target, fallback):
     if t.startswith("/") and not t.startswith("//") and "\\" not in t:
         return t
     return fallback
+
+
+def parse_port_list(spec, default=None):
+    """把页面上的端口清单（`443,8443 9443` 这类逗号/空格混写）解析成排序去重的列表。
+
+    非法项直接跳过；解析结果为空时回退 `default`（默认 443/8443/9443）——
+    否则用户把这一栏填错就会让 cert 阶段"永远挑不到站点"，且页面上看不出原因。
+    """
+    out = []
+    for chunk in str(spec or "").replace(",", " ").split():
+        if chunk.isdigit() and 0 < int(chunk) <= 65535 and int(chunk) not in out:
+            out.append(int(chunk))
+    return sorted(out) or list(default or [443, 8443, 9443])
 
 
 def create_app():
@@ -194,6 +208,9 @@ def create_app():
         # "勾了截图却静默跳过、页面上永远没有缩略图"的错觉（用户 2026-09-23 的实际反馈）。
         if "screenshot" in stages:
             options["screenshot_on"] = True
+        # 证书取证同理：`cert.enabled` 策略级默认关，建任务勾了就落成 `cert_on`（只本次生效）。
+        if "cert" in stages:
+            options["cert_on"] = True
         task_id = db.create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
         return jsonify({"id": task_id, "auto_stages": auto_stages})
@@ -255,12 +272,22 @@ def create_app():
         shot_missing = bool(sites) and not any((s["shot"] or "").strip() for s in sites)
         # 本机有没有可用的无头浏览器 —— 页面要区分"策略没开"和"没装浏览器"两种"没截图"
         shot_ready = screenshot.available(settings)
+        # 「SSL 证书」页签：同样要说清"为什么没有证书"。分两种情况，用与 cert 阶段**同一个**
+        # pick_targets() 判定"本次有没有可取证的目标"，避免页面解说与实际行为不一致。
+        certs_rows = db.list_certs(task_id)
+        cert_enabled = ((settings.get("cert") or {}).get("enabled") is True
+                        or top.get("cert_on") is True)
+        # 注意 `db.list_sites()` 返回的是 `sqlite3.Row`，而 `pick_targets()` 按 dict 取值
+        # （阶段那边传的是 probe 的 dict 结果）—— 不转会在页面渲染时抛 AttributeError。
+        cert_pick = len(cert_pick_targets([dict(s) for s in sites], certs_mod.tls_ports(settings)))
         return render_template(
             "task_detail.html", task=task,
             subs=own, ext_subs=ext_subs,
             ext_src=ext_src, ext_counts=ext_counts, ext_src_tags=EXT_SRC_TAGS,
             sites=sites,
-            ports=db.list_ports(task_id), csegs=db.list_csegs(task_id),
+            ports=db.list_ports(task_id), csegs=db.list_csegs(task_id), certs=certs_rows,
+            cert_enabled=cert_enabled, cert_pick=cert_pick,
+            cert_tls_ports=sorted(certs_mod.tls_ports(settings)),
             dirs=dirs, dirs_hidden=dirs_hidden,
             vulns=db.list_vulns(task_id=task_id, limit=1000),
             review=db.review_counts(task_id),
@@ -1034,6 +1061,13 @@ def create_app():
                                    "window": (f.get("screenshot_window") or "1280x900").strip(),
                                    "timeout": int(f.get("screenshot_timeout", 30) or 30),
                                    "browser": (f.get("screenshot_browser") or "").strip()},
+                    # TLS 证书取证（可选，默认关）：只对 https / tls_ports 站点做一次只读握手
+                    "cert": {"enabled": f.get("cert_enabled") == "1",
+                             "max_sites": int(f.get("cert_max_sites", 30) or 30),
+                             "timeout": int(f.get("cert_timeout", 8) or 8),
+                             # 端口列表：页面输入 "443,8443" 这种逗号/空格分隔的写法；
+                             # 全非法时回退默认值（不要让一个手滑把功能变成"永不触发"）
+                             "tls_ports": parse_port_list(f.get("cert_tls_ports"))},
                     "portscan": {"enabled": f.get("portscan_enabled") == "1",
                                  "max_hosts": int(f.get("portscan_max_hosts", 100) or 100),
                                  "ports": f.get("portscan_ports", ""),

@@ -199,6 +199,19 @@ DEFAULTS = {
         "timeout": 30,          # 单站点截图超时（秒）
         "browser": "",
     },
+    "cert": {
+        # TLS 证书取证（可选，**默认关闭**）：对 https 站点 / tls_ports 站点做一次 TLS
+        # 握手，把颁发者、有效期、CN、SAN、指纹解析进 `certs` 表，GUI 任务详情
+        # 「SSL 证书」页签展示。**纯标准库**（socket/ssl + 自写 DER 解析），无新依赖；
+        # 握手**不校验证书**（verify_mode=CERT_NONE）—— 自签名/过期正是要看的东西。
+        # 只做一次只读握手，不发 HTTP、不写目标、不试探密码套件（见 scanner/certs.py）。
+        "enabled": False,
+        "max_sites": 30,           # 每任务最多对多少个 host:port 取证
+        "timeout": 8,              # 单次握手超时（秒）
+        # 值得试 TLS 的端口：https:// 站点无条件试；非 https 站点只有端口命中这里才试
+        # （覆盖"HTTPS 服务被 probe 记成 http://host:8443"的情况）
+        "tls_ports": [443, 8443, 9443],
+    },
     "iprecon": {
         # C 段反查（P1-4）：IP → 域名反查 + /24 C 段归纳。
         # **默认关闭**：走第三方公共接口（可用性无保障），且反查结果属于"发散"资产，
@@ -308,7 +321,7 @@ DEFAULTS = {
         "dirs_gitlab": "config/dicts/dirs_gitlab.txt",
         # 通用暴露面（`.git` / `.env` / 备份文件）：对**所有**站点生效，排语言字典之后、通用字典之前
         "dirs_exposure": "config/dicts/dirs_exposure.txt",
-        "sensitive": "config/dicts/sensitive.txt",  # 预留：内置检查暂用硬编码清单
+        "sensitive": "config/dicts/sensitive.txt",  # A01 检查的数据源（`路径|关键字|级别|说明`）
         "cdn_cname": "config/dicts/cdn_cname.txt",  # CDN 厂商 CNAME 后缀（子域名 CDN 标记用）
     },
     "http": {

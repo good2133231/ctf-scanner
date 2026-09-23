@@ -96,7 +96,7 @@
   </section>
 
   <section class="panel collapsible" data-panel="assets">
-    <h2>资产面拓展（子域接管 / JS 挖掘 / 端口服务 / 站点截图 / 目录发现）</h2>
+    <h2>资产面拓展（子域接管 / JS 挖掘 / 端口服务 / 站点截图 / TLS 证书 / 目录发现）</h2>
     <p class="muted">这几项都属于"发散"用的资产面拓展，默认策略见下方勾选状态；
       风险与耗时各不相同，可按需逐个开关。</p>
     <label class="chk"><input type="checkbox" name="takeover_enabled" value="1"
@@ -149,6 +149,15 @@
     <label>单站点截图超时（秒） <input name="screenshot_timeout" value="{{ s.screenshot.timeout }}"></label>
     <label>浏览器路径（留空＝自动探测 Edge/Chrome） <input name="screenshot_browser"
       value="{{ s.screenshot.browser }}" placeholder="留空自动探测（PATH → 注册表 → 标准安装位置）"></label>
+    <label class="chk"><input type="checkbox" name="cert_enabled" value="1"
+      {{ 'checked' if s.cert.enabled }}> <b>TLS 证书取证</b>（默认关；对 https 站点与加密端口
+      各做<b>一次只读握手</b>，把颁发者 / 有效期 / CN / SAN / 指纹记进任务详情的
+      <b>「SSL 证书」</b>页签。纯标准库、不发 HTTP、无新依赖）</label>
+    <label>取证书站点上限 <input name="cert_max_sites" value="{{ s.cert.max_sites }}"></label>
+    <label>单次握手超时（秒） <input name="cert_timeout" value="{{ s.cert.timeout }}"></label>
+    <label title="https:// 站点不看端口无条件试；非 https 站点只有端口在这里才试（覆盖 HTTPS 服务被记成 http://host:8443 的情况）">
+      额外试 TLS 的端口（逗号/空格分隔，非 https 站点命中才握手）
+      <input name="cert_tls_ports" value="{{ s.cert.tls_ports|join(',') }}"></label>
     <label class="chk"><input type="checkbox" name="dirscan_enabled" value="1"
       {{ 'checked' if s.dirscan.enabled }}> <b>目录/路径发现</b>（<b>默认开，但默认只跑浅扫</b>：
       只打敏感路径精选字典 <code>dirs_shallow</code>；取消勾选＝整阶段跳过）</label>

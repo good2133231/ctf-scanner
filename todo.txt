@@ -746,9 +746,63 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 4、文档同步：AGENTS.md（§3 目录地图 + §7 两条局限改写）、docs/architecture.md（存储层写串行化）、
        docs/owasp-mapping.md（A01 数据源）、README.md（A01 数据驱动 + dicts 目录说明）、
        TODO.md（两条 [ ] 转 [完成：续14]）、CHANGELOG_AI.md（续14）
-[未做] 5、用户整批下单中尚未动手的项（按依赖分组，见 CHANGELOG 续14 开头）：证书透明度解析 + SSL 证书页签 /
-       HTML·PDF 报告 / 工具版本管理 / Shodan·Quake 反查 / 登录态扫描 / XSS 上下文分析 / A10 SSRF 受控回连 /
-       盲注 SQL（须保持非破坏性）/ nuclei raw·flow·workflows / 任务队列·断点续扫 / 鉴权加固 / 分布式节点 /
-       目录递归爬取 / dirmap 复核对齐 / 运行时联网下载字典（拟改为显式手动工具 + 校验，默认关）
+[未做] 5、用户整批下单中尚未动手的项（按依赖分组，见 CHANGELOG 续14 开头）：HTML·PDF 报告 /
+       工具版本管理 / Shodan·Quake 反查 / CT 日志（crt.sh）在线查询 / 登录态扫描 / XSS 上下文分析 /
+       A10 SSRF 受控回连 / 盲注 SQL（须保持非破坏性）/ nuclei raw·flow·workflows / 任务队列·断点续扫 /
+       鉴权加固 / 分布式节点 / 目录递归爬取 / dirmap 复核对齐 /
+       运行时联网下载字典（拟改为显式手动工具 + 校验，默认关）
+       （「证书透明度解析 + SSL 证书页签」已于续15 落地为**站点证书取证**，CT 日志部分仍未做）
 [拒绝] 6、破坏性利用 / 口令爆破 / DDoS：与 AGENTS.md §1「检测一律非破坏性」红线冲突，不做。
        低危 info 噪声项：能力已具备（策略配置 checks.skip_severities 去掉 info/low 即可），不改默认值。
+
+========================================================================
+（续15：TLS 证书取证 —— cert 阶段 + certs 表 + 「SSL 证书」页签）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+触发：用户整批下单项「引擎：Shodan/Quake favicon 反查、证书透明度解析（SSL 证书页签）、登录态扫描」。
+本轮做其中最不需要外部资源的一条；**CT 日志（crt.sh）在线查询未做**，已在 roadmap/TODO 如实标注。
+
+[完成] 1、scanner/certs.py（新建，纯标准库）：为什么不用 ssl.getpeercert() 的结构化分支 ——
+       CERT_NONE 下它返回空 dict，而自签/过期恰恰是 CTF 里最常见的场景。
+       改为 CERT_NONE + getpeercert(binary_form=True) 取 DER，自写 ASN.1/DER 解析
+       （calendar/hashlib/re/socket/ssl/time，**不引 cryptography**）；
+       产出 serial/sig_algo/issuer/subject/cn/not_before/not_after/days_left/expired/
+       self_signed/san(≤20)/sha256；fetch() 失败返回 (None, "TypeError: …") 不抛异常。
+[完成] 2、写完发现的 5 个真实缺陷（拿真证书跑才暴露，已全修）：
+       ① _tlv 用 buf[i] 直接索引 → 无 SAN 扩展的证书传空 bytes 抛 IndexError，
+          而 _san/_extensions 只捕 ValueError → 150 张真实 CA 证书里 147 张崩；
+          修：_tlv 加边界判断抛 ValueError + 调用方 except (ValueError, IndexError) → 150/150 通过；
+       ② sig_algo 恒为空：_children() 已剥 SEQUENCE 头，代码又解一层 TLV → 抛异常被静默吞掉；
+       ③ _time 用 time.mktime 把 Z(UTC) 按本地时区解释（东八区最多差 8 小时，会把"还剩几天"算翻一天）→ 改 calendar.timegm；
+       ④ 自签判定用 subject == issuer 字符串比对，而 X.500 允许 issuer 按不同 RDN 顺序编码 → 改 RDN 集合比较；
+       ⑤ serial 与 openssl x509 -serial 对不上（00DEADBEEF vs DEADBEEF）→ 剥 DER 正数补位字节。
+[完成] 3、scanner/stages/cert.py（新建）+ 注册为第 12 个阶段（11 → 12）：位置 probe 之后、screenshot 之前；
+       pick_targets(sites, tls_ports) 放模块级，让 GUI 页签用**同一套判定**解释"为什么没有证书"；
+       判定 https 前缀优先、否则端口命中 tls_ports（默认 443/8443/9443），同 host:port 去重；
+       门控沿用 screenshot_on 那套（策略级 cert.enabled 默认关 **或** 任务级 cert_on）；
+       产物 certs 表 + certs.txt（13 列带表头）；只写成功行，失败只写一行日志。
+[完成] 4、顺带修既有缺陷：CLI -p screenshot / -p cert 被策略门控静默吃掉（screenshot.py docstring 早已
+       承诺"CLI -p screenshot 同样走这条"，但 client.py 只解析 stages、从不落 *_on）。
+       修：-p 默认值改 None + explicit 判定，**只有显式点名**才落 screenshot/cert 的 *_on，
+       避免默认"全部阶段"偷偷打开两个默认关的阶段。
+[完成] 5、其余：db.py（certs 表**不含 note 列** / insert_certs / list_certs 异常优先排序 /
+       ASSET_TABLES 加 certs 防幽灵资产 / task_counts）、config.py + settings.yaml（cert 段）、
+       gui/app.py（parse_port_list + 页签传参 + 建任务落 cert_on + 策略保存）、
+       templates/{tasks,task_detail,settings}.html（勾选提示 / 页签三态说明 + 11 列表格 / 四控件）、
+       report.py（「TLS 证书（取证，非漏洞结论）」小节 + 显式声明自签/过期≠漏洞）。
+       另修续14 遗留文档漂移：config.py 里 sensitive 注释仍写"预留：内置检查暂用硬编码清单"。
+[完成] 6、smoke 新增 [5v]（零外部依赖、可离线跑）：内联固定自签证书 + 私钥（PEM 常量，非生产凭据）
+       → 逐字段断言（含序列号剥补位、SAN 三条、SHA256 全指纹）；坏 DER 必须抛 ValueError；
+       127.0.0.1 起真 TLS 服务（端口 0）真握手 + SNI；明文端口优雅返回错误串；
+       pick_targets 去重筛选 / 门控关零请求 / 门控开真跑落库 + certs.txt + 页签 + 报告小节 +
+       空页签说明原因 + clear_task_assets 清证书 + 异常优先排序 + 勾选即 cert_on。
+       同时修两处测试自身的问题：截图断言"紧跟 probe"改为"在 probe 之后"（cert 插入后不再成立）、
+       GUI 页签渲染因 pick_targets 收到 sqlite3.Row（无 .get()）而 500 → 调用处转 dict。
+       → py -3 tests/smoke.py SMOKE PASS
+[完成] 7、解析器验证裁判（仅本机人工验证，不进代码依赖）：150 张 certifi CA 证书与 cryptography 逐字段核对；
+       自签夹具与 ssl._ssl._test_decode_cert（OpenSSL 解码器）交叉核对 serial。修复后 150/150 通过。
+[完成] 8、文档同步：README.md（12 阶段 + 证书条目 + 目录树）、AGENTS.md（§3 目录地图 + 页签 10→11 +
+       §4 阶段顺序与门控）、docs/pipeline.md（12 阶段 + ⑫ cert 小节 + 产物示例 + 配置速查 + 手工命令对照）、
+       docs/usage.md（CLI -p + 11 页签 + 策略面板）、docs/architecture.md（架构图 + certs 表）、
+       docs/roadmap.md（该条转 [x] 并标注未做部分）、TODO.md、CHANGELOG_AI.md（续15）；
+       换行符按仓库约定 CRLF 逐文件自查归位。
+[未做] 9、CT 日志（crt.sh）在线查询：roadmap 该条原文含"证书透明度"，本轮只做站点证书取证，
+       在线 CT 查询属外部接口，与 Shodan/Quake 反查一起排后续；HTML/PDF 报告仍未做（下一批）。

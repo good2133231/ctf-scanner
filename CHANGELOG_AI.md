@@ -3,6 +3,104 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-23 —— 续15：TLS 证书取证（`cert` 阶段 + `certs` 表 + 「SSL 证书」页签）
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户原话条目：「引擎：Shodan/Quake favicon 反查、**证书透明度解析（SSL 证书页签）**、登录态扫描」
+（整批下单末尾一句「**这些都做**」）。本轮做其中**零外部接口、纯增量、不碰既有代码路径**的一条。
+
+- **口径先说清（避免把未做的部分算成做了）**：roadmap 原文是「证书透明度解析（SSL 证书页签）」。
+  本轮落地的是**站点证书取证** —— 对站点做一次只读 TLS 握手 + 自写 DER 解析 → 进
+  `certs` 表 / 「SSL 证书」页签 / 报告小节。**CT 日志（crt.sh）在线查询没有做**：
+  那属于外部接口，与 Shodan/Quake 反查一起排在后续批次（`docs/roadmap.md` 该条已如实标注「未做」）。
+  另外 `osint` 阶段里既有的 FOFA 证书反查是**另一件事**（按证书找同源资产），不要混为一谈。
+
+### 1. `scanner/certs.py`（新建）：为什么不用 `ssl.getpeercert()` 的结构化分支
+
+- **根因**：`getpeercert()` 的"结构化 dict"只在**校验通过**时才有内容；一旦
+  `verify_mode=CERT_NONE`（CTF 目标必须如此 —— 自签/过期/域名不匹配是常态），它返回**空 dict**。
+  也就是说，恰恰在最需要取证书的场景里，标准库的高层接口给不出数据。
+- **改法**：`CERT_NONE` + `getpeercert(binary_form=True)` 拿 **DER**，再用**纯标准库**写 ASN.1/DER 解析
+  （`hashlib` 算 SHA256、`calendar.timegm` 解析 `Z` 时间）。**不引 `cryptography`** ——
+  它本机虽有（41.0.5），但为一次证书解析加一个编译型依赖不划算，也不该进 `requirements`。
+  产出：`serial / sig_algo / issuer / subject / cn / not_before / not_after / days_left / expired /
+  self_signed / san（≤20 条）/ sha256`；`fetch(host, port, timeout, server_hostname)` 失败时
+  返回 `(None, "TypeError: …")` 这样的**错误串**而不是抛异常（阶段靠它写一行日志继续跑）。
+- **写完之后发现的 5 个真实缺陷**（都是"拿真证书跑"才暴露的，已全部修复）：
+  1. **147/150 张真实 CA 证书直接崩（`IndexError`）**：`_tlv` 用 `buf[i]` 直接索引，
+     没有 SAN 扩展的证书传进空 `bytes` 就越界，而 `_san` / `_extensions` 只捕 `ValueError`。
+     → `_tlv` 开头加边界判断并抛 `ValueError`，调用方改 `except (ValueError, IndexError)`。
+  2. **`sig_algo` 恒为空串**：`_children()` 已剥掉 SEQUENCE 头，代码又对它解了一层 TLV，
+     解出来的东西当 TLV 再解必抛异常、被 `except` 静默吞掉。→ 直接取 `kids[1][1]` 的子项。
+  3. **`days_left` 会算翻一天**：`time.mktime` 把 `Z`（UTC）时间按**本地时区**解释，
+     东八区下最多差 8 小时。→ 改用 `calendar.timegm`。
+  4. **自签误判**：用 `subject == issuer` 字符串比对，而 X.500 允许 issuer 按不同 RDN 顺序编码。
+     → 改为 **RDN 集合**比较（`set(sub_parts) == set(iss_parts)`）。
+  5. **`serial` 与 `openssl x509 -serial` 对不上**（`00DEADBEEF` vs `DEADBEEF`）：
+     DER 的 INTEGER 为保持正数会补一个 `0x00`。→ `lstrip(b"\x00")` 后再 `hex().upper()`。
+
+### 2. `scanner/stages/cert.py`（新建）+ 注册为第 12 个阶段
+
+- 位置 **`probe` 之后、`screenshot` 之前**（同截图，必须先有存活站点）；`STAGE_ORDER` 11 → 12。
+- `pick_targets(sites, tls_ports)` **放在模块级**：GUI 的「SSL 证书」页签要用**同一套判定**
+  解释"为什么没有证书"（没有 https/加密端口站点 vs 阶段没开），两处各写一遍必然漂移。
+  判定：URL 是 `https://`，或端口命中 `cert.tls_ports`（默认 `443,8443,9443`）；同 `host:port` 去重
+  （probe 常把同一主机的 80 与 443 记成两条站点行）。上限 `cert.max_sites`（30）。
+- **门控沿用 `screenshot_on` 那一套**：`cert.enabled`（策略级，默认关）**或** 任务级点名
+  （建任务勾选 / CLI `-p cert` → 选项 `cert_on`）。只写**成功**的行进库，失败只写日志。
+- 产物：`certs` 表 + `<workdir>/certs.txt`（13 列，带表头 —— 表头里承诺了"序列号/签名算法"就真写出来）。
+
+### 3. 顺带修的一个既有缺陷：CLI `-p screenshot` / `-p cert` 被策略门控静默吃掉
+
+- **根因**：`cli/client.py` 的 `-p` 默认值就是全部阶段，且从不落 `*_on` 选项 ——
+  而 `screenshot.py` 的 docstring 早已承诺「CLI `-p screenshot` 同样走这条」。**文档说有、代码没有。**
+  不加这个，本轮的 `-p cert` 也会同样无效。
+- **改法**：`-p` 默认值改 `None` + `explicit = args.stages is not None`，
+  **只有显式点名**才给 `screenshot` / `cert` 落 `*_on` —— 否则"默认全部阶段"会偷偷打开两个默认关的阶段。
+
+### 4. 其余改动
+
+- `scanner/db.py`：新增 `certs` 表（**刻意不留 `note` 列**，无用列不留）、`insert_certs` / `list_certs`
+  （默认排序 `已过期 → 自签 → 剩余天数升序`，让异常项先露头）、`ASSET_TABLES` 加 `certs`
+  （否则重启任务会留下**幽灵证书资产**）、`task_counts` 加 `certs`。
+- `scanner/config.py` + `config/settings.yaml`：新增 `cert` 段（`enabled/max_sites/timeout/tls_ports`）；
+  并修掉**续14 遗留的文档漂移**：`sensitive` 的注释仍写"预留：内置检查暂用硬编码清单"。
+- `gui/app.py`：`parse_port_list()`、任务详情传 `certs/cert_enabled/cert_pick/cert_tls_ports`、
+  建任务勾 `cert` → `options["cert_on"]`、策略页保存 `cert` 段。
+- `gui/templates/{tasks,task_detail,settings}.html`：阶段复选框提示 `（勾上＝本次取证书）`、
+  「SSL 证书」页签（三态"为什么没有证书"说明 + 11 列表格）、策略页「TLS 证书」四控件。
+- `scanner/report.py`：新增「TLS 证书（取证，非漏洞结论）」小节，**显式声明**
+  「握手不校验证书，自签/已过期是证书属性不等于漏洞」。
+
+### 5. 回归与验证
+
+- `tests/smoke.py`：`[1b]` 阶段顺序断言加 `cert`；新增 **`[5v]`**，**零外部依赖、可离线跑**：
+  - **内联固定自签证书 + 私钥**（PEM 常量，不是生产凭据）→ 逐字段断言
+    CN / subject / notBefore / notAfter / **序列号剥正数补位** / 签名算法 / 自签 / 过期 / SAN 三条 / SHA256 全指纹；
+  - 坏 DER（空串、非 SEQUENCE、截断 SEQUENCE）**必须抛 `ValueError`**（漏 `IndexError` 会崩整阶段）；
+  - **127.0.0.1 上起真 TLS 服务**（端口 0 让系统分配）→ `certs.fetch` 真握手 + SNI 各一次；
+    明文端口（port 1）必须**优雅返回错误串**；
+  - `pick_targets` 的去重/筛选、门控关时**零请求**（断言只写"未启用"日志）、
+    门控开时真跑 → 落库 + `certs.txt` + 页签 + 报告小节 + 空页签说明原因 +
+    `clear_task_assets` 清掉证书 + 异常优先排序 + 勾选即 `cert_on`（未勾不凭空多选项）。
+  - **`py -3 tests/smoke.py` → SMOKE PASS**。
+- **解析器的验证裁判**（只在本机人工验证用，**不进代码依赖**）：150 张 `certifi` CA 证书与
+  `cryptography` 逐字段核对（CN/serial/notBefore/notAfter/SHA256/self_signed/expired/SAN 全集）；
+  自签夹具与 `ssl._ssl._test_decode_cert`（OpenSSL 解码器）交叉核对 serial。**修复后 150/150 通过。**
+- 文档同步：`README.md`（12 阶段 + TLS 证书取证条目 + 目录树）、`AGENTS.md`
+  （§3 目录地图 + 页签 10 → 11 + §4 阶段顺序与门控）、`docs/pipeline.md`（12 阶段 + ⑫ cert 小节 +
+  产物示例 + 配置项速查 + 手工命令对照）、`docs/usage.md`（CLI `-p` + 11 页签 + 策略面板）、
+  `docs/architecture.md`（架构图 + 12 阶段 + `certs` 表）、`docs/roadmap.md`（该条转 `[x]` 并标注未做部分）、
+  `TODO.md`、`todo.txt`。
+- 换行符按仓库约定（CRLF）逐文件自查并归位（`b.count(b"\n") == b.count(b"\r\n")`）。
+
+### 6. 本轮**未做**（如实标注）
+
+- **CT 日志（crt.sh）在线查询**：见开头"口径先说清"。
+- **HTML / PDF 报告**：仍是 Markdown（下一批）。
+- 真实目标上的证书取证只在本机自签服务与 `certifi` 静态样本上验证过；
+  未对真实授权目标跑过（用户自行执行）。
+
 ## 2026-09-23 —— 续14：A01 敏感文件改数据驱动（sensitive.txt 签名列）+ db 写操作串行化
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

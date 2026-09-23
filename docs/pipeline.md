@@ -1,16 +1,21 @@
 # 流水线说明
 
-默认阶段顺序（**11 个**，权威来源 `scanner/runner.py::STAGE_ORDER`）：
-`subdomain → takeover → portscan → probe → screenshot → osint → jsmine → dirscan → vulnscan → intel → heuristic`
+默认阶段顺序（**12 个**，权威来源 `scanner/runner.py::STAGE_ORDER`）：
+`subdomain → takeover → portscan → probe → cert → screenshot → osint → jsmine → dirscan → vulnscan → intel → heuristic`
 （CLI 可用 `-p` 裁剪，GUI 用复选框勾选）。
 
 其中 `takeover` / `jsmine` / `dirscan` / `vulnscan` 由**策略级开关**控制、默认开，
-`portscan` / `screenshot` / `osint` / `intel` / `heuristic` 默认关：
+`portscan` / `cert` / `screenshot` / `osint` / `intel` / `heuristic` 默认关：
 勾选只表示"这个阶段参与本次任务"，真正执行与否还看
-`settings.takeover.enabled` / `portscan.enabled` / `screenshot.enabled` / `jsmine.enabled` /
+`settings.takeover.enabled` / `portscan.enabled` / `cert.enabled` / `screenshot.enabled` / `jsmine.enabled` /
 `dirscan.enabled` / `vulnscan.enabled` / `intel.enabled` / `heuristic.enabled`
 （阶段内部自查后打日志跳过，且**连请求都不发**）。`osint` 更特殊 —— 它没有自己的 `enabled`，
 而是由两个**子能力开关** `iprecon.enabled` / `fofa.enabled` 控制，**两者都关时整阶段直接跳过**。
+
+> `cert` 与 `screenshot` 是"默认关但**能在任务级点名**"的一对：建任务时勾选、或 CLI 显式写
+> `-p cert` / `-p screenshot`，即落任务级选项 `cert_on` / `screenshot_on`，**只对本次生效、不改全局策略**。
+> 注意 CLI 的 `-p` 默认值是 `None`（不给＝全部阶段）：只有**显式点名**才落这两个 `*_on`，
+> 否则默认的"全部阶段"会偷偷打开两个默认关的阶段。
 
 > `dirscan` 走**浅/深两档**（`dirscan.mode`）：默认 `quick` 只打精选敏感路径（约 150 条/站），
 > `deep` 才启用全量分层字典 + dirmap + 后缀派生。用户要求"先浅浅过一遍，看清结果再手动决定深度扫"，
@@ -43,6 +48,7 @@
 | `python dirmap.py -iF dir_out -e all` | dirscan | dirmap 适配器（`-iF` 批量 URL），并解析其 `output/` 产物；**仅 `mode=deep` 时调用**（浅扫不碰外部工具） |
 | （手工没有的部分） | vulnscan | POC 引擎 + OWASP Top10 启发式检查（分级/分类门控 + WAF 探测） |
 | （手工没有的部分） | screenshot | 本机无头 Edge/Chrome（`--headless=new`）截图，产物 `shots/*.png` 并回填 `sites.shot`；默认关 |
+| `openssl s_client -connect host:443 -showcerts` | cert | 一次只读 TLS 握手取 DER → 纯标准库 ASN.1 解析（CN/SAN/有效期/自签/指纹）→ `certs` 表；**不校验证书**（自签/过期是常态）；默认关 |
 | （手工没有的部分） | intel | 拉 CISA KEV 公开 JSON → 与本地指纹**白名单式**匹配 → 「线索」（`leads` 表）；单向下行、默认关 |
 | （手工没有的部分） | heuristic | 对已采集数据做**零请求**差分/异常聚合（软 404 / 高价值入口 / 同标题 / 目录离群 / 同 C 段）→ 「线索」；默认关 |
 
@@ -50,7 +56,8 @@
 
 > 小节编号 ①~⑧ 沿用历史书写顺序（那批里还没有 `screenshot`，且 ⑤/⑥ 的位置是旧编号），
 > **实际执行顺序一律以 `STAGE_ORDER` 为准**：`screenshot` 在 ④ probe 与 ⑤ osint 之间，
-> ⑨~⑪ 是后补的三个阶段（其中 `intel` / `heuristic` 固定在流水线最末）。
+> ⑨~⑫ 是后补的阶段（编号只是书写顺序，`cert` 实际排在 `screenshot` **之前**；
+> 其中 `intel` / `heuristic` 固定在流水线最末）。
 
 ### ① subdomain 子域名收集
 
@@ -290,6 +297,28 @@
 - 为什么默认关：拉起无头浏览器单站点通常 1~3 秒、内存占用明显高于纯 HTTP 探测，
   且它不直接帮助"拿 flag"——需要看站点长相时再打开。
 
+### ⑫ cert TLS 证书取证（`cert.enabled`，**默认关**）
+
+- 位置：**`probe` 之后、`screenshot` 之前**（同截图，必须先有存活站点才知道去连谁；书写编号排在最后）；
+- 门控：`cert.enabled` 默认关；建任务勾选「SSL 证书」或 CLI 显式 `-p cert` → 任务级 `cert_on`，
+  **只对本次生效、不改全局策略**（与 `screenshot_on` 完全同一套门控）；
+- 输入：`ctx.results["sites"]`（为空回退 `db.list_sites`），只挑**值得握手**的目标（`pick_targets`）：
+  URL 是 `https://` 的，**或**端口命中 `cert.tls_ports`（默认 `443,8443,9443`）的
+  —— 覆盖"HTTPS 服务被 probe 记成 `http://host:8443`"这种情形；同一 `host:port` 去重；
+  上限 `cert.max_sites`（默认 30），单次超时 `cert.timeout`（默认 8s）；
+- 处理：**一次只读 TLS 握手**（`ssl`，`verify_mode=CERT_NONE` + `getpeercert(binary_form=True)` 取 DER），
+  再用**纯标准库** ASN.1/DER 解析（`scanner/certs.py`，**不引 cryptography**）；
+  取出 CN / subject / issuer / notBefore / notAfter / 剩余天数 / 是否自签（RDN 集合比较）/
+  签名算法 / 序列号（剥 DER 正数补位 0x00）/ SHA256 指纹 / SAN（上限 20 条）；
+- 产物：`certs` 表（一个 `host:port` 一行）+ `<workdir>/certs.txt`（13 列，带表头）；
+  任务详情「SSL 证书」页签 + 报告「TLS 证书」小节；进 `ASSET_TABLES`，重启任务会一并清掉；
+- **为什么用 `CERT_NONE`**：CTF / 授权测试里最常见的就是自签、过期、域名不匹配的证书，
+  恰恰是校验会失败的场景 —— 本阶段是**取证**（把颁发者与有效期读出来给人看），不是建立可信连接；
+  因此**「自签 / 已过期」是证书属性，不是漏洞结论**，报告与页签里都显式声明了这一点；
+- **不做什么**：不校验证书链、不做 CRL/OCSP、不做多协议/多密码套件试探（一次握手、只读）；
+  **CT 日志（crt.sh）在线查询未实现** —— 那属于外部接口，与 Shodan/Quake 一起排在后续批次；
+  `osint` 阶段里已有的 FOFA 证书反查是**另一件事**（按证书找同源资产，不是读站点证书）。
+
 ### ⑩ intel 漏洞情报订阅（`intel.enabled`，**默认关**）
 
 - 位置：流水线**最末**（`vulnscan` 之后）—— 它不产出任何被后续阶段消费的数据；
@@ -350,12 +379,14 @@ logs/task_1_mytask/
 ├── js_urls.txt       # 从 JS 提取到的接口 URL（jsmine 阶段产物）
 ├── shots/            # 站点截图 PNG（screenshot 阶段，默认关）
 ├── shots.txt         # 截图清单：URL<TAB>相对路径
+├── certs.txt         # TLS 证书取证（cert 阶段，默认关）13 列带表头
 ├── dirmap_in.txt     # 传给 dirmap 的 URL
 └── dirs.txt          # 目录发现
 ```
 
 > `portscan` / `osint` 阶段不落文本产物（结果直接进 SQLite `ports` / `csegs` 表，新域名进 `subdomains` 表）；
 > `intel` / `heuristic` 同理 —— 只写 `leads` 表（情报缓存另落 `data/intel/<source>.json`，**不在任务目录**）；
+> `cert` 两条都落：`certs` 表 + `certs.txt`（每次握手只成功一次，文本产物便于直接比对）；
 > 子域名阶段的 **IP / CDN 回填**同样只进 `subdomains` 表（`ip` / `cdn` 两列），不额外落文件；
 > `vulnscan` 结果进 `vulns` 表，Markdown 报告用 `scanner/report.py` 或 GUI 导出按钮生成。
 
@@ -380,6 +411,7 @@ logs/task_1_mytask/
 | vulnscan.enabled | true | **阶段级**开关：漏洞初筛整阶段开关（关掉即"只测绘不探测"） |
 | takeover.enabled / jsmine.enabled | true | 子域接管 / JS 挖掘的阶段级开关 |
 | portscan.enabled / screenshot.enabled | false | 端口与服务扫描 / 站点截图 的阶段级开关（**均默认关**） |
+| cert.enabled / max_sites / timeout / tls_ports | **false** / 30 / 8s / [443,8443,9443] | TLS 证书取证（**默认关**）：握手目标上限与超时；`tls_ports` 决定"非 https 但端口命中"的站点是否也试。建任务勾选或 CLI `-p cert` → 任务级 `cert_on` 单次生效 |
 | dirscan.enabled / vulnscan.enabled | true / true | 目录发现（**默认开、默认只浅扫**）/ 漏洞初筛（默认开）的阶段级开关。想要早期那种"目录默认不扫"的行为，把 `dirscan.mode` 之外的总开关关掉即可 |
 | intel.enabled / heuristic.enabled | false | 两个「**线索**」阶段的阶段级开关（均默认关；只写 `leads` 表，不写 `vulns`） |
 | limits.brute_max_domains | 50 | 参与 DNS 爆破的域名上限 |

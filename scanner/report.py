@@ -25,6 +25,7 @@ def generate(task_id):
     dirs = db.list_dirs(task_id)
     ports = db.list_ports(task_id)
     csegs = db.list_csegs(task_id)
+    certs = db.list_certs(task_id)
     all_vulns = sorted(db.list_vulns(task_id=task_id, limit=1000),
                        key=lambda r: SEV_ORDER.get(r["severity"], 9))
     # 人工复核（P1-1）：判为误报的**不再计入「潜在漏洞」**，单独成节放在文末 ——
@@ -93,6 +94,25 @@ def generate(task_id):
         for c in csegs[:200]:
             lines.append(f"| {_c(c['segment'] or '-')} | {_c(c['ip'] or '-')} | {_c(c['count'])} | "
                          f"{_c((c['domains'] or '-')[:120])} |")
+        lines.append("")
+    if certs:
+        # TLS 证书取证（默认关闭的 cert 阶段产物）。措辞刻意说清"取证 ≠ 漏洞"，
+        # 避免把自签名/过期当成结论直接写进交付物。
+        lines.append("## TLS 证书（取证，非漏洞结论）")
+        lines.append("")
+        lines.append("> 一次只读 TLS 握手的取证结果：握手**不校验证书**，因此"
+                     "「自签 / 已过期」是证书本身的属性，不等于漏洞。")
+        lines.append("")
+        lines.append("| 主机 | 端口 | CN | 颁发者 | 有效期 | 剩余 | 自签 | 签名算法 | 指纹(SHA256) |")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
+        for c in certs[:200]:
+            left = ("已过期" if c["expired"] else
+                    (f"{c['days_left']} 天" if c["days_left"] is not None else "-"))
+            lines.append(f"| {_c(c['host'])} | {_c(c['port'])} | {_c(c['cn'] or '-')} | "
+                         f"{_c(c['issuer'] or '-')} | "
+                         f"{_c((c['not_before'] or '-') + ' → ' + (c['not_after'] or '-'))} | "
+                         f"{_c(left)} | {_c('是' if c['self_signed'] else '-')} | "
+                         f"{_c(c['sig_algo'] or '-')} | {_c(c['sha256'] or '-')} |")
         lines.append("")
     if subs:
         lines.append("## 子域名（前 200）")

@@ -14,7 +14,7 @@ python cli/client.py -t <单目标> [选项]
 | `-f, --file PATH` | 目标文件：每行一个 域名/URL/IP，`#` 开头为注释 |
 | `-t, --target` | 单目标，可重复 `-t a.com -t http://b.local/` |
 | `-n, --name` | 任务名（默认取文件名或 cli-task） |
-| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic`（**共 11 个**，默认全部；`takeover`/`jsmine`/`dirscan`/`vulnscan` 策略级默认开，`portscan`/`screenshot`/`osint`/`intel`/`heuristic` 另受策略级开关约束，见下） |
+| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,cert,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic`（**共 12 个**，默认全部；`takeover`/`jsmine`/`dirscan`/`vulnscan` 策略级默认开，`portscan`/`cert`/`screenshot`/`osint`/`intel`/`heuristic` 另受策略级开关约束，见下。**显式点名 `cert` / `screenshot` 会落任务级 `cert_on`/`screenshot_on`，只对本次生效**；不写 `-p` 时不会偷偷打开这两个默认关的阶段） |
 | `--full-ports` | **本次任务**端口走全端口 `1-65535`（等价 GUI 任务选项 `portscan_full`）；选了却没把 `portscan` 写进 `-p` 时**自动补上该阶段** |
 | `--full-dir` | **本次任务**目录走深扫：全量分层字典 + dirmap + 后缀派生（等价 GUI 任务选项 `dirscan_full`）；同样自动补 `dirscan` 阶段 |
 | `--offline` | 离线模式：不调用 subfinder/puredns/httpx/dirmap，仅内置实现 |
@@ -99,14 +99,18 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    - **删除（单个或批量）前会自动备份**：任务行 + 其全部资产（站点/子域名/端口/C 段/目录/漏洞）
      导出为 `data/trash/task_<id>_<时间>.json`，误删可直接从该文件找回。备份失败只告警不阻断删除；
 3. **任务详情**：顶部为任务名与实时状态（状态徽标/当前阶段/进度，运行中每 2 秒刷新），
-   下方为 **10 个横向页签 —— 潜在漏洞（默认）/ 站点 / 子域名 / 拓展域名 / 端口服务 / C 段 / 目录 / 线索 /
+   下方为 **11 个横向页签 —— 潜在漏洞（默认）/ 站点 / 子域名 / 拓展域名 / 端口服务 / C 段 / 目录 / SSL 证书 / 线索 /
    目标与配置 / 运行日志**，每个页签内可先筛选再查看（潜在漏洞的 evidence 可展开；日志页签显示尾部）；
    > 「**线索**」页签是「情报订阅（`intel`）」与「启发式候选（`heuristic`）」两个**默认关**阶段的产物。
    > 它们**不是漏洞结论**（来自外部情报匹配或本地统计推断，误报率高于实测型检查），因此框架在结构上做了隔离：
    > 独立 `leads` 表、独立页签、独立计数，**不并入「潜在漏洞」、不计入漏洞数、不自动导入 POC**，
    > 报告里也只作附录列出。要人工核实后再自行处置。
-   > 页签数量是**按数据源实有**的：IP、SSL 证书、文件泄露、nuclei、WIH 等页签要等
-   > 证书解析 / 爬虫数据模型等数据源落地后才会加，不先做空占位（见 `TODO.md` B-7）。
+   > 「**SSL 证书**」页签是 `cert` 阶段（**默认关**）的取证产物：一次只读 TLS 握手读出的
+   > CN / 颁发者 / 有效期 / 剩余天数 / 是否自签 / 签名算法 / SAN / 指纹。
+   > **「自签 / 已过期」是证书属性、不是漏洞结论**（握手不校验证书 —— CTF 目标大多是自签或过期），
+   > 页签与报告里都写明了这一点。没有产物时页签会说明原因（策略关 / 没有 https 或加密端口站点 / 取了但失败）。
+   > 页签数量是**按数据源实有**的：IP、文件泄露、nuclei、WIH 等页签要等
+   > 反查 / 爬虫数据模型等数据源落地后才会加，不先做空占位（见 `TODO.md` B-7）。
    - **浅过一遍 → 深度补扫**（本节是用户"既要浅浅过一遍，又要有的时候深度扫"的落地）：
      「站点」页签与「端口服务」页签每行都有复选框，勾选后点页顶
      **「深度目录补扫（勾选站点）」** / **「全端口补扫（勾选主机）」**；「目录」页签还有一个
@@ -197,7 +201,11 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
      （`screenshot.enabled`，**默认关**；但**建任务时勾「截图」＝任务级点名**，
      落任务选项 `screenshot_on`，本次无视策略开关照跑，且**不改全局策略** ——
      勾了不该静默跳过；站点页签的「补截图」按钮走的是同一条。没产物时页面会说明
-     是策略关、没有可用无头浏览器（填 `screenshot.browser`）还是截图失败）、**目录/路径发现**
+     是策略关、没有可用无头浏览器（填 `screenshot.browser`）还是截图失败）、**TLS 证书取证**
+     （`cert.enabled`，**默认关**；门控与截图同一条 —— 建任务勾「SSL 证书」或 CLI `-p cert`
+     即任务级 `cert_on`，本次生效且不改全局策略。上限 `cert.max_sites`（30）、超时 `cert.timeout`（8s）、
+     `cert.tls_ports`（默认 `443,8443,9443`，决定"非 https 但端口命中"的站点是否也握手）。
+     注意它**只握手取证书、不校验证书**：自签/过期是证书属性而不是漏洞）、**目录/路径发现**
      （`dirscan.enabled`，**默认开，但默认只跑浅扫**；
      **探测强度 `dirscan.mode`**：`quick` = 只吃精选敏感路径字典 `dicts.dirs_shallow`（约 150 条/站，
      额度 `dirscan.quick_max_paths` 默认 150），`deep` = 全量分层字典 + dirmap + 后缀派生
@@ -325,7 +333,7 @@ CIDR 已支持展开：`10.0.0.0/30` 会展开为可用主机逐条进入流水�
 并放弃拓展 —— 否则一次查询会把大量无关资产灌进来。
 未填 key 时日志会写明「未配置 fofa.email / fofa.key（见 config/keys.yaml）」，不会静默失败。
 
-**Q：任务详情里的「线索」页签一直是空的？**（第 8 个页签）
+**Q：任务详情里的「线索」页签一直是空的？**（第 9 个页签）
 因为产出线索的两个阶段都**默认关闭** —— 「策略配置 → 情报与线索」里的
 `intel.enabled`（CISA KEV 情报订阅）与 `heuristic.enabled`（启发式候选），打开后**只对新任务生效**。
 另外两点容易误判：① 线索的语义是"值得人工看一眼"的**候选**，不是漏洞结论，所以它**不进「潜在漏洞」页签、

@@ -37,6 +37,7 @@
   <div class="tab" data-tab="ext">拓展域名<span class="cnt">{{ ext_subs|length }}</span></div>
   <div class="tab" data-tab="ports">端口服务<span class="cnt">{{ ports|length }}</span></div>
   <div class="tab" data-tab="csegs">C 段<span class="cnt">{{ csegs|length }}</span></div>
+  <div class="tab" data-tab="certs">SSL 证书<span class="cnt">{{ certs|length }}</span></div>
   <div class="tab" data-tab="dirs">目录<span class="cnt">{{ dirs|length }}</span></div>
   <div class="tab" data-tab="leads">线索<span class="cnt">{{ leads|length }}</span></div>
   <div class="tab" data-tab="target">目标与配置</div>
@@ -297,6 +298,61 @@
       {% endfor %}
       </tbody>
     </table>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-certs">
+  <section class="panel">
+    <p class="muted small">对 <b>https 站点</b>与<b>端口命中 {{ cert_tls_ports|join(' / ') }}</b> 的站点
+      各做<b>一次只读 TLS 握手</b>取出证书（纯标准库解析颁发者 / 有效期 / CN / SAN / 指纹，
+      不发 HTTP、不写目标）。握手<b>不校验证书</b> —— 自签名与过期正是要看的东西，
+      所以这里的「自签」「已过期」是<b>取证结论，不是漏洞判定</b>。
+      默认排序：<b>已过期 → 自签 → 剩余天数少</b>的在前。</p>
+    {% if not certs %}
+      {% if not cert_enabled %}
+      <p class="muted small">本任务没有取证书：<b>cert 阶段默认关闭</b>。可在「策略配置 → 资产面拓展」
+        打开「TLS 证书取证」，或新建任务时勾选阶段里的 <code>cert</code>「（勾上＝本次取证书）」。</p>
+      {% elif not cert_pick %}
+      <p class="muted small">本任务没有取证书：<b>没有可取证的目标</b> —— 需要站点走 https，
+        或端口是 {{ cert_tls_ports|join(' / ') }}（本次扫到 {{ sites|length }} 个站点，
+        没有一个是 https / 加密端口）。</p>
+      {% else %}
+      <p class="muted small">本任务有 {{ cert_pick }} 个可取证目标，但都没取到证书
+        （常见原因：目标没在做 TLS、连接被拒/超时、端口是明文 HTTP 但被记成加密端口）。
+        具体失败原因见「运行日志」里 <code>[cert]</code> 开头的行。</p>
+      {% endif %}
+    {% endif %}
+    <label class="muted">筛选 <input data-filter="#tbl-certs" placeholder="主机 / CN / 颁发者 / 端口 / 算法"></label>
+    <table id="tbl-certs">
+      <thead><tr><th>主机</th><th>端口</th><th>CN</th><th>颁发者</th><th>有效期</th>
+        <th>剩余</th><th>自签</th><th>签名算法</th><th>SAN</th><th>序列号</th>
+        <th>指纹(SHA256)</th></tr></thead>
+      <tbody>
+      {% for c in certs %}
+        <tr>
+          <td class="mono">{{ c.host }}</td>
+          <td class="mono">{{ c.port }}</td>
+          <td>{{ c.cn or '-' }}</td>
+          <td class="muted small">{{ c.issuer or '-' }}</td>
+          <td class="muted small mono">{{ c.not_before or '-' }} → {{ c.not_after or '-' }}</td>
+          <td>{% if c.expired %}<b>已过期</b>
+              {% elif c.days_left is not none %}{{ c.days_left }} 天
+              {% else %}-{% endif %}</td>
+          <td>{{ '是' if c.self_signed else '-' }}</td>
+          <td class="muted small">{{ c.sig_algo or '-' }}</td>
+          <td class="muted small mono">{{ c.san or '-' }}</td>
+          <td class="muted small mono">{{ c.serial or '-' }}</td>
+          <td class="muted small mono">{{ c.sha256 or '-' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="11" class="muted">暂无数据。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if certs %}
+    <p class="muted small">完整字段（含主体全称 <code>subject</code>）见任务工作目录下的
+      <code>certs.txt</code> 与数据库 <code>certs</code> 表。</p>
+    {% endif %}
   </section>
 </div>
 

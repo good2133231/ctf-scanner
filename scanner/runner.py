@@ -1,9 +1,10 @@
 """流水线编排：按顺序执行 Stage，统一更新任务状态与进度。
 
-阶段顺序：subdomain -> takeover -> portscan -> probe -> screenshot -> osint -> jsmine
--> dirscan -> vulnscan -> intel -> heuristic
-（默认开：takeover / jsmine / vulnscan；默认关：portscan / screenshot / osint / dirscan /
- intel / heuristic，均可在「策略配置」按分类开关；subdomain 无开关，由任务勾选的 stages 决定）
+阶段顺序：subdomain -> takeover -> portscan -> probe -> cert -> screenshot -> osint
+-> jsmine -> dirscan -> vulnscan -> intel -> heuristic
+（默认开：takeover / jsmine / vulnscan；默认关：portscan / cert / screenshot / osint /
+ dirscan / intel / heuristic，均可在「策略配置」按分类开关；
+ subdomain 无开关，由任务勾选的 stages 决定）
 单个阶段异常不中断整条流水线（保留已完成阶段的产物），错误记录进任务表。
 
 停止机制（协作式取消）：
@@ -24,6 +25,7 @@ from .stages.subdomain import SubdomainStage
 from .stages.takeover import TakeoverStage
 from .stages.portscan import PortscanStage
 from .stages.probe import ProbeStage
+from .stages.cert import CertStage
 from .stages.screenshot import ScreenshotStage
 from .stages.osint import OsintStage
 from .stages.jsmine import JsmineStage
@@ -33,17 +35,18 @@ from .stages.intel import IntelStage
 from .stages.heuristic import HeuristicStage
 
 STAGE_ORDER = ["subdomain", "takeover", "portscan", "probe",
-               # screenshot 需要"已有存活站点"，所以紧跟 probe；
-               # 它默认关闭（`screenshot.enabled`），打开后才会拉起无头浏览器
-               "screenshot", "osint", "jsmine", "dirscan", "vulnscan",
+               # cert 与 screenshot 都需要"已有存活站点"，所以紧跟 probe；
+               # cert 只做一次 TLS 握手（纯标准库、秒级），比截图廉价得多，故排在截图之前；
+               # 它默认关闭（`cert.enabled`），打开后才对 https / tls_ports 站点取证
+               "cert", "screenshot", "osint", "jsmine", "dirscan", "vulnscan",
                # 两个"线索"阶段固定排在最后：它们不产出被后续阶段消费的数据，
                # 只把外部情报（intel）与本地数据（heuristic）整理成人工复核用的线索。
                # 两者都默认关闭（`intel.enabled` / `heuristic.enabled`），
                # 且**只写 leads 表**，不写 vulns、不计入漏洞数。
                "intel", "heuristic"]
 STAGE_REGISTRY = {c.name: c for c in (SubdomainStage, TakeoverStage, PortscanStage,
-                                      ProbeStage, ScreenshotStage, OsintStage, JsmineStage,
-                                      DirscanStage, VulnscanStage, IntelStage,
+                                      ProbeStage, CertStage, ScreenshotStage, OsintStage,
+                                      JsmineStage, DirscanStage, VulnscanStage, IntelStage,
                                       HeuristicStage)}
 
 # 运行中任务的取消信号表：task_id -> threading.Event
