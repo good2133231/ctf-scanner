@@ -62,7 +62,7 @@
 - [`gui/templates/sites.html`](gui/templates/sites.html)：站点资产页同款勾选式深扫入口。
 - 提示语统一为「**补扫是真实扫描**：请先确认对目标有授权」——补扫会真的发请求，不能写成"不发请求"。
 
-### 5. 修掉三处真缺陷（都是"功能等于废掉"级别，非运行时报错）
+### 5. 修掉四处真缺陷（都是"功能等于废掉"级别，非运行时报错）
 
 - ① **`dirscan` 门控不认 `dirscan_full`**：原代码 `if cfg.get("enabled") is not True: return`，
   与 `portscan` 的 `forced` 语义不一致 → 全局关掉时补扫任务被**静默跳过**。
@@ -71,6 +71,14 @@
   补扫任务两个来源都为空 → "无存活站点，跳过"。新增 `dirscan._sites_from_targets(ctx)`
   从 `ctx.targets` 兜底（URL 原样用、domain/ip 补 `http://`），并在 smoke 里断言。
 - ③ 见 §3 的阶段顺序问题。
+- ④ **`_layer_paths` 没按 `layers` 顺序取词**：原实现是"几个独立 `if` 依次 `append`"，无论
+  `layers` 怎么写，`dirs_shallow` 永远排在语言层前面 → 两个后果：**已知技术栈的站点**（jsp/php/asp）
+  先被精选层吃掉 `max_paths` 额度，`_load_paths("jsp", …)[0]` 拿到的是 `.git/config` 而不是
+  `dirs_jsp` 的条目，"语言专属路径优先"这条不变量被破坏；同时新增的"未知栈才把精选层提前"那段
+  调整成了**空操作**，[5p] 的"深扫必须是浅扫超集"断言与 [5g] 的"Java 站先吃 jsp"断言互相打架。
+  改为 `for name in layers:` 按给定顺序取词（`_FULL_LAYERS = ("fw","lang","shallow","exposure","common")`），
+  两条断言同时成立：已知栈走「框架 → 语言 → 精选 → 暴露面 → 通用」，未知栈走「精选 → 全量 → 暴露面」。
+  实测 `_load_paths("jsp", {"max_paths":50})[:1]` 回到 jsp 字典首条。
 
 ### 6. 验证
 
@@ -84,6 +92,10 @@
 - **同时修正 `[5m]` 的陈旧断言**：`assert DEFAULTS["dirscan"]["enabled"] is False` 与本次默认值反转冲突，
   改为 `is True` 并加 `mode == "quick"`。
 - `[5o]` 跨平台静态审计仍通过（编译 49 个源文件 / import 39 个模块）。
+- **换行符归位**：本次编辑后有 9 个文件被写成了 **LF-only**（仓库约定是 CRLF，见 `AGENTS.md`），
+  提交时表现为 `tests/smoke.py` 2811 行、`docs/*.md` 数百行的"假变更"（纯 EOL 差异）。
+  已用 PowerShell 按字节归一化回 CRLF（无 BOM），`git diff` 随即恢复为真实改动。
+  **提醒后续 AI**：用工具改文件后，若 `git diff --stat` 行数远超预期，先按字节数一下 CRLF/LF 再判断。
 - **本轮明确不做**（写进 `TODO.md` 与 `todo.txt`）：① 递归目录爬取；② 重写 dirmap 等价的多语言字典引擎；
   ③ 运行时自动下载字典。
 

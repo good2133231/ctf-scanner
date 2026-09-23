@@ -140,13 +140,13 @@ def _framework_of(tech, url=""):
 # 内置扫描的字典层次组合（越具体的排越前）。
 # `_FW_LAYERS` 专给"框架补充扫描"用：dirmap 跑完后只补「框架 + 暴露面」两层，
 # 不再重复吃语言/通用字典（那些 dirmap 自己已经按 `-e` 打过了）。
-# `shallow` 排在 `_FULL_LAYERS` **最前面**：深扫必须是浅扫的**超集**。
+# `shallow` 是**深扫的兜底层**：深扫必须是浅扫的超集，否则"花更多请求却扫得更少"。
 # 实测（同一靶场）：浅扫 150 条命中 `.env` + `.git/config`，深扫 400 条只命中 `.git` ——
-# 技术栈未知时深扫吃的是 `dirs_big` 的前 400 条，而这两条在 big 里排在第 560 / 1919 位，
-# 被 `max_paths` 直接截掉了（big 是未排序的大字典，前 400 条是"字母序的运气"）。
-# 精选层只有 200 来条且按价值排序，排在前面既保证"深扫不会漏掉浅扫扫到的东西"，
-# 也**不增加请求量** —— `max_paths` 仍是硬上限，剩下的额度照旧给分层字典。
-_FULL_LAYERS = ("shallow", "fw", "lang", "exposure", "common")
+# 技术栈未知时语言层是 `dirs_big`（11882 条、未排序），会一口气把 `max_paths` 吃光，
+# 而这两条在 big 里排在第 560 / 1919 位，永远够不着。
+# 位置是**随技术栈变**的（见 `_layer_paths`）：已知栈时排在语言层之后，保住
+# "语言专属路径优先占额度"这条既有不变量；未知栈时提到语言层之前。
+_FULL_LAYERS = ("fw", "lang", "shallow", "exposure", "common")
 _FW_LAYERS = ("fw", "exposure")
 # `_SHALLOW_LAYERS` 专给"浅扫"（mode=quick）用：**只吃精选敏感路径字典**，
 # 不碰框架/语言/通用层，也不跑 dirmap —— 浅扫的意义就是"快而少"。
@@ -333,21 +333,32 @@ class DirscanStage(Stage):
         `_FW_LAYERS = ("fw", "exposure")` 两层，不吃语言/通用字典。
         """
         dicts = self.ctx.settings.get("dicts", {}) or {}
+        # **未知技术栈**时把精选层提到语言层之前：那一档的语言字典是 `dirs_big`
+        # （11882 条、未排序），`max_paths` 截断后拿到的是"字母序的运气"，实测会漏掉
+        # 浅扫能命中的 `.env` / `.git/config`（它们在 big 里排 560 / 1919）。
+        # 已知技术栈时语言字典很小（jsp 116 / php 933），保持"语言专属路径优先"不动。
+        if "shallow" in layers and "lang" in layers and not kind:
+            layers = ("shallow",) + tuple(x for x in layers if x != "shallow")
+        # **按 `layers` 的给定顺序**取词（不能写成"几个独立 if 依次 append"：
+        # 那样 `shallow` 永远排在语言层之前，上面那段"未知栈才提前"的调整就成了空操作，
+        # 已知栈的站点会先被精选层吃掉额度，语言专属路径反而排到后面去）。
         out = []
-        if "shallow" in layers:
-            out.append(dicts.get("dirs_shallow"))
-        if "fw" in layers and fw:
-            out.append(dicts.get(f"dirs_{fw}"))
-        if "lang" in layers:
-            if kind:
-                out.append(dicts.get(f"dirs_{kind}"))
-            else:
-                out.append(dicts.get("dirs_big") if cfg.get("big_dict") is not False
-                           else dicts.get("dirs"))
-        if "exposure" in layers:
-            out.append(dicts.get("dirs_exposure"))
-        if "common" in layers and kind:
-            out.append(dicts.get("dirs_common"))
+        for name in layers:
+            if name == "shallow":
+                out.append(dicts.get("dirs_shallow"))
+            elif name == "fw":
+                if fw:
+                    out.append(dicts.get(f"dirs_{fw}"))
+            elif name == "lang":
+                if kind:
+                    out.append(dicts.get(f"dirs_{kind}"))
+                else:
+                    out.append(dicts.get("dirs_big") if cfg.get("big_dict") is not False
+                               else dicts.get("dirs"))
+            elif name == "exposure":
+                out.append(dicts.get("dirs_exposure"))
+            elif name == "common" and kind:
+                out.append(dicts.get("dirs_common"))
         return [p for p in out if p]
 
     def _load_paths(self, kind, cfg, fw="", layers=_FULL_LAYERS, limit=None):
