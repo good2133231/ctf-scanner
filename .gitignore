@@ -23,3 +23,6 @@ tools/dirmap/
 
 # 会话/记忆目录（AI 工作笔记，不进仓库）
 .workbuddy-ai/
+# 另一个 IDE（Trae）的工程目录：里面是各会话的设计稿，随工具走、不属于本项目代码。
+# 需要留档的内容请**抄进 docs/** 再忽略（续 9 的三条"刻意不做"已抄进 docs/roadmap.md）。
+.trae/
