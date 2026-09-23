@@ -99,9 +99,9 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 | ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认关闭） |
 | csegs | segment, ip, domains, count | `/24` C 段视野（osint 阶段产出，默认关闭）：每行一个 IP 与其反查到的域名（domains 截断存储、count 为截断前数量） |
 | dirs | site_url, path, status, length, note | 目录发现（dirscan 阶段产出；`length` 即返回包大小，页面按它折叠重复长度） |
-| vulns | target, poc_id, name, severity, owasp, detail, evidence | 统一存放 POC 命中与 OWASP 检查结果 |
+| vulns | target, poc_id, name, severity, owasp, detail, evidence, **review, review_note, reviewed_at** | 统一存放 POC 命中与 OWASP 检查结果。`review` 是**人工复核三态**（`""` 待复核 / `confirmed` 已确认 / `false_positive` 误报，见 `db.REVIEW_STATES`，非法值经 `db.norm_review()` 归一）；**判误报的行不进「潜在漏洞」计数与报告主表**，改为报告文末「已判误报（人工复核排除）」附录 |
 | leads | task_id, kind, code, title, target, matched, level, detail, source, url | **「线索」**（intel / heuristic 两个默认关阶段产出）：`kind` 区分情报/启发式，`level` 只用于排序着色、**不是漏洞级别**。**不是漏洞结论** —— 不进 `vulns`、不计入漏洞数、不自动导入 POC；GUI 单独页签、报告单独附录 |
-| pocs | path(唯一), poc_id, name, severity, tags, enabled, status | POC 注册表：由扫描目录同步生成，GUI 控制启停 |
+| pocs | path(唯一), poc_id, name, severity, tags, enabled, status, **confidence** | POC 注册表：由扫描目录同步生成，GUI 控制启停。`enabled` 是**用户意图**（同步时不覆盖）；`confidence`（low/medium/high）是**推导值**，每次同步按 `db.poc_confidence(path, meta)` 重算（来源分 × 内容型匹配器，**只降级不升级**），仅作 `vulnscan` 同批候选的排序键，**不做过滤** |
 
 **老库原地迁移**：`db._ensure_columns()` 用 `ALTER TABLE ADD COLUMN` 给已存在的库补齐新增列
 （如 `subdomains.ip` / `subdomains.cdn`），不需要删库重建；`data/` 不入 git，各人本地库版本可以不同。
@@ -111,7 +111,8 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 侧边栏 **9 栏**（以 `gui/templates/base.html` 的 `nav_items` 为准）：
 `/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
 `/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/ips`（IP 资产）/ `/fullports`（全端口扫描）/
-`/vulns`（级别筛选 + `?task_id=` 按任务筛选）/ `/pocs` / `/settings`。
+`/vulns`（级别筛选 + `review=` 复核状态筛选 + `?task_id=` 按任务筛选，页内三态下拉与批量打标走
+`POST /api/vulns/review`）/ `/pocs`（含置信度列与按层批量启停）/ `/settings`。
 `/ports` / `/csegs` / `/dirs` / `/extdomains`（JS 与情报带出的拓展域名，**默认隐藏重叠**，`?all=1` 看全部）
 四条路由**仍在**（可直接访问 URL），但**已从侧边栏移除** ——
 前三条是任务维度数据，在任务详情页签里看更贴合上下文；`/extdomains` 与 `/subdomains` 是同一份

@@ -280,12 +280,78 @@ function initTheme() {
   if (sel) sel.addEventListener("change", () => apply(sel.value));
 }
 
+/* ---------- 漏洞人工复核（P1-1）：行内打标 + 勾选批量打标 ---------- */
+
+async function postReview(ids, state, note) {
+  const r = await fetch("/api/vulns/review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids, state, note: note || "" }),
+  });
+  return r.json();
+}
+
+function initVulnReview() {
+  // 行内下拉：<select class="rv" data-review-id="12">（三态：待复核 / 确认存在 / 误报）
+  document.querySelectorAll("select.rv[data-review-id]").forEach(sel => {
+    if (sel.dataset.bound) return;
+    sel.dataset.bound = "1";
+    // 记住原值：POST 失败要能还原，否则界面会显示一个库里并不存在的状态
+    const back = sel.value;
+    sel.addEventListener("change", async () => {
+      const state = sel.value;
+      // 判误报要理由（报告附录会带出来），确认存在不强制；备注可留空、可取消
+      let note = "";
+      if (state === "false_positive") {
+        const ans = prompt("判误报的理由（可留空，进报告备注）", "");
+        if (ans === null) { sel.value = back; return; }
+        note = ans;
+      }
+      sel.disabled = true;
+      try {
+        const j = await postReview([sel.dataset.reviewId], state, note);
+        if (j.ok) { location.reload(); return; }
+        alert(j.error || "操作失败");
+      } catch (e) { alert("网络错误"); }
+      sel.disabled = false;
+      sel.value = back;
+    });
+  });
+
+  // 批量：按钮 [data-review-bulk] 作用于本页所有勾选行（.pick-row:checked）
+  document.querySelectorAll("button[data-review-bulk]").forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", async () => {
+      const state = btn.dataset.reviewBulk;
+      const ids = [...document.querySelectorAll(".pick-row:checked")]
+        .map(c => c.dataset.vid || c.value).filter(Boolean);
+      const msg = document.querySelector("[data-review-msg]");
+      if (!ids.length) { if (msg) msg.textContent = "请先勾选要打标的漏洞"; return; }
+      let note = "";
+      if (state === "false_positive") {
+        const ans = prompt(`将 ${ids.length} 条标记为误报，理由（可留空）`, "");
+        if (ans === null) return;
+        note = ans;
+      }
+      btn.disabled = true;
+      try {
+        const j = await postReview(ids, state, note);
+        if (j.ok) { location.reload(); return; }
+        if (msg) msg.textContent = j.error || "操作失败";
+      } catch (e) { if (msg) msg.textContent = "网络错误"; }
+      btn.disabled = false;
+    });
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   initTheme();
   initTabs();
   initFilters();
   initCollapsiblePanels();
   initPickAll();
+  initVulnReview();
   // 任务列表页的轮询/筛选/批量操作由 initTaskTable() 负责（模板内显式调用）
   // 任务详情页工具栏的操作按钮
   bindTaskOps(".toolbar");
@@ -347,6 +413,7 @@ document.addEventListener("DOMContentLoaded", () => {
         action,
         source: document.getElementById("poc-bulk-source").value,
         severity: document.getElementById("poc-bulk-severity").value,
+        confidence: (document.getElementById("poc-bulk-confidence") || {}).value || "",
         kind: document.getElementById("poc-bulk-diff").checked ? "diff" : "",
       };
       const tip = action === "enable" ? "启用" : "关闭";

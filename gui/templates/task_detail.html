@@ -52,23 +52,50 @@
       {% endfor %}
       ｜ <label class="muted">关键词 <input data-filter="#tbl-vulns" placeholder="名称 / 检查项 / 目标"></label>
     </p>
-    <table id="tbl-vulns">
-      <thead><tr><th>级别</th><th>名称</th><th>检查/POC</th><th>目标</th><th>详情</th></tr></thead>
-      <tbody>
-      {% for v in vulns %}
-        <tr data-sev="{{ v.severity }}">
-          <td><span class="sev sev-{{ v.severity }}">{{ v.severity }}</span></td>
-          <td>{{ v.name }}</td>
-          <td class="muted">{{ v.poc_id }}</td>
-          <td class="muted mono">{{ v.target }}</td>
-          <td class="evidence"><details><summary class="muted">展开</summary>
-            <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre></details></td>
-        </tr>
-      {% else %}
-        <tr><td colspan="5" class="muted">暂无数据（低于「策略配置」中最低报告级别的结果不会收录）。</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
+    <p class="muted small">复核台账：待复核 <b>{{ review.pending }}</b> ｜ 已确认
+      <b>{{ review.confirmed }}</b> ｜ 已判误报 <b>{{ review.false_positive }}</b>。
+      勾选后批量打标；「复查」= 把这些目标重跑一次漏洞初筛（新建任务，不改本任务结论），
+      拿新结论再回来打标。复核状态与备注会进 Markdown 报告（误报单独成节）。
+    </p>
+    <form method="post" action="{{ url_for('api_rescan') }}">
+      <input type="hidden" name="stage" value="vulnscan">
+      <input type="hidden" name="from_task" value="{{ task.id }}">
+      <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
+      <div class="bulkbar">
+        <button type="submit" class="ghost">复查（勾选目标重跑漏洞初筛）</button>
+        <button type="button" class="ghost" data-review-bulk="confirmed">批量确认存在</button>
+        <button type="button" class="danger" data-review-bulk="false_positive">批量判误报</button>
+        <button type="button" class="ghost" data-review-bulk="">退回待复核</button>
+        <span class="muted" data-review-msg></span>
+      </div>
+      <table id="tbl-vulns">
+        <thead><tr><th><input type="checkbox" data-pick-all="#tbl-vulns"></th>
+          <th>级别</th><th>名称</th><th>检查/POC</th><th>目标</th><th>复核</th><th>详情</th></tr></thead>
+        <tbody>
+        {% for v in vulns %}
+          <tr data-sev="{{ v.severity }}" data-review="{{ v.review or 'pending' }}">
+            <td><input type="checkbox" class="pick-row" name="target" value="{{ v.target }}"
+                       data-vid="{{ v.id }}"></td>
+            <td><span class="sev sev-{{ v.severity }}">{{ v.severity }}</span></td>
+            <td>{{ v.name }}</td>
+            <td class="muted">{{ v.poc_id }}</td>
+            <td class="muted mono">{{ v.target }}</td>
+            <td><select class="rv" data-review-id="{{ v.id }}"
+                  title="{{ v.review_note or '复核备注（判误报时会让填）' }}">
+              <option value="" {{ 'selected' if not v.review }}>待复核</option>
+              <option value="confirmed" {{ 'selected' if v.review == 'confirmed' }}>确认存在</option>
+              <option value="false_positive" {{ 'selected' if v.review == 'false_positive' }}>误报</option>
+            </select></td>
+            <td class="evidence"><details><summary class="muted">展开</summary>
+              <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre>
+              {% if v.review_note %}<p class="muted small">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="muted">暂无数据（低于「策略配置」中最低报告级别的结果不会收录）。</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </form>
   </section>
 </div>
 

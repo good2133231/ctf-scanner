@@ -96,7 +96,8 @@ ctf-scanner/
 │   ├── dnsq.py            # 纯标准库 DNS 客户端（A/CNAME/TXT/MX/NS…，UDP+TCP 回退，异常不外抛）
 │   ├── cdn.py             # CDN 判定：读 config/dicts/cdn_cname.txt 按 CNAME 后缀匹配厂商（只读、无请求）
 │   ├── takeover.py        # 子域接管指纹库（41 条第三方服务 suffix）+ detect()
-│   ├── portscan.py        # 端口/服务扫描（TOP 表 + nmap 适配 + 内置 TCP connect 兜底 + 被动 banner；parse_ports(max_span) 防手滑全端口）
+│   ├── portscan.py        # 端口/服务扫描（TOP 表 + **fscan** + nmap 适配 + 内置 TCP connect 兜底 + 被动 banner；
+│   │                      #   `engine=auto` 顺序 fscan→nmap→内置；parse_ports(max_span) 防手滑全端口，见 §7）
 │   ├── jsmine.py          # JS 资产挖掘（域名/接口 URL/疑似凭据；17 条凭据规则 + 两级降噪）
 │   ├── blacklist.py       # 用户黑名单（config/blacklist.txt；load/matches/filter_pairs/filter_domains，每次重读不缓存）
 │   ├── iprecon.py         # IP 反查域名 + /24 C 段归纳（is_public_ip/segment_of/parse_domains，不 eval）
@@ -107,6 +108,8 @@ ctf-scanner/
 │   ├── fingerprint.py     # 内置指纹规则表 → identify(resp) -> [tag] + fetch_favicon/favicon_md5/favicon_hash
 │   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs/**leads** + page_assets/delete_task/task_counts
 │   │                      #   + OWN_SUBDOMAIN_WHERE/EXT_SUBDOMAIN_WHERE/OVERLAP_EXT_WHERE/OVERLAP_SITE_WHERE；DB_PATH 受 CTFSCANNER_DB 覆盖）
+│   │                      #   复核（vulns.review/review_note/reviewed_at + set/bulk_set_vuln_review/review_counts）
+│   │                      #   与 POC 置信度（pocs.confidence + poc_confidence）见 §7
 │   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖
 │   ├── utils.py           # run_cmd / http_request / pool_run / resolve_host / IO / base_domain() / rel_display()
 │   ├── targets.py         # parse_lines → [(kind, raw)]，kind ∈ domain|url|ip|cidr|unknown（cidr 展开为多条 ip）
@@ -226,12 +229,24 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   —— 前三条是桩实现，只验"走哪一档"，补的就是"真扫出什么"
                             #   新增 `[5q]`：CTFSCANNER_DB/LOGS 路径归一化（空值与引号回落默认、
                             #   盘符式 POSIX 路径 Windows 归一 / Linux 原样、普通路径不动）
+                            # 2026-09-23 续12 新增 `[5r]`：误报复核（状态枚举与非法值归一/单条与批量打标
+                            #   （含混入非法 id）/三态筛选/复核计数/报告台账 + 「已判误报」附录（不计入漏洞数））
+                            #   新增 `[5s]`：POC 置信度（来源分 × 内容型匹配器、只降级不升级、upsert 重算、
+                            #   内置 POC 全 high、按层批量启停 + kind=diff 幂等）
+                            #   重写 `[5e-0]`：fscan 2.2.1 真实输出 7 组断言（三正则解析 / 统计行交叉校验 /
+                            #   数目不符或 rc≠0 → None / 0 个 → [] / 跳转目标不被误记）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
 py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanner
-# Linux 验收（同一份代码，无平台分支）：python3 tests/smoke.py 应同样 SMOKE PASS（见 TODO.md P2-3）
+# Linux 实机验收（**2026-09-23 续12 已达成**：Ubuntu 22.04.5 / Python 3.10.12）
+#   python3 tests/smoke.py   → SMOKE PASS（`[5o]` 会按运行平台自报状态）
+#   搬运：整树拷贝（含 config/dicts/），远端 `python3 -m pip install --user -r requirements.txt`
+#   注意 `scp` 整树时别用 `tar --exclude=.git` —— libarchive 按 basename 匹配，会把
+#   `smoke_root/.git/config` 一起排掉，导致 `[3] pipeline` 少一条 exposure-git-config 而假失败。
+#   Windows 侧非交互 SSH：设 `SSH_ASKPASS`（**必须放在纯 ASCII 路径**，含中文会
+#   `CreateProcessW failed error:2`）+ `SSH_ASKPASS_REQUIRE=force`；凭据由用户提供、不入库。
 ```
 
 改动后**必须**跑 `tests/smoke.py`；GUI/模板改动还应 `run_gui.py` 亲眼确认页面。
@@ -317,6 +332,32 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   `nmap_scan()` 的两个超时已封顶（host ≤1800s / 进程 ≤3600s），否则全端口会算出 4.5~36 小时。
   GUI「全端口扫描」页发起的是**单次任务**（任务选项 `portscan_full`），不改全局策略 ——
   全局 `portscan.mode=full` 会让每个任务都变慢，谨慎使用。`parse_ports()` 默认 `max_span=4096` 就是防手滑的。
+- **fscan 适配的输出形态已用 fscan 2.2.1 实机校准**（2026-09-23 续12，Linux 实机抓取）：
+  开放端口**不是**早年以为的 `[+] ip:port open`，而是这四种行形态之一 ——
+  `[*] ip:port <service>` / `[*] http://ip:port` / `[+] http://ip:port code:NNN` / 老版本 `[+] ip:port open`；
+  收尾固定打一行 `[*] 扫描完成，发现 N 个开放端口`（**0 个时也打**）。因此 `portscan._parse_fscan()`
+  用三条**行首锚定**的正则取端口，再拿统计行的 N 做**交叉校验**：
+  - 返回 `None` = 没装 / 起不来 / `rc≠0` / **解析数与统计行不符**（少了=换了格式，多了=认进了非 open 行）
+    → 交回调用方回退 nmap / 内置扫描；
+  - 返回 `[]` = 统计行明确写"发现 0 个" → 确实没有开放端口，**不必回退**。
+  **必须行首锚定**：`[+]` 行的 title 段里会出现 `title:Redirecting to http://127.0.0.1:8081/system`，
+  行中间乱搜 URL 会把**跳转目标**误记成端口。回归见 `tests/smoke.py [5e-0]`（7 组断言，内嵌真实样本）。
+  *（此前的单条 `[+] ip:port open` 正则一条都匹配不上，且解析为空返回 `[]` 而不是 `None`，
+  于是阶段只在 `found is None` 时才回退 → 静默漏报且不兜底；这就是本轮修掉的真缺陷。）*
+- **`-nopoc` 只管 POC 模块，管不到 fscan 内置的"服务插件"**：实测它仍会输出
+  `[!] Redis未授权访问: ip:port` 这类**只读**探测结论。本模块**只解析"端口开放"的事实行，
+  不采信它的漏洞结论**（漏洞初筛归 vulnscan 阶段）。
+- **漏洞复核（P1-1）与 POC 置信度（P1-2）是两套独立机制**（2026-09-23 续12）：
+  - `vulns.review ∈ "" | confirmed | false_positive`（`db.REVIEW_STATES`，非法值经 `norm_review()`
+    归一为 `""`）。**判误报的行不参与"潜在漏洞"计数与报告主表**，但会在报告文末
+    「已判误报（人工复核排除）」附录里列出（保留可回溯）。批量打标走 `db.bulk_set_vuln_review` ——
+    它**自带连接用 `cur.rowcount`**，**不要**改成 `_exec()`（后者返回 `lastrowid`，UPDATE 上恒为 0，
+    会让 `/api/vulns/review` 一直回 `affected: 0`，前端以为一条都没改；这个坑已踩过一次）。
+  - `pocs.confidence ∈ low | medium | high`，由 `db.poc_confidence(path, meta)` 算：
+    来源分（`builtin`=high / `user`·`nuclei`=medium / `imported`·`other`=low）× **内容型匹配器**
+    （`word`/`words`/`regex`/`size`/`length`）是否存在 → 存在则**降一级**，且**只降级不升级**。
+    与 `enabled` 不同（那是用户意图，`upsert_poc` **不覆盖**），`confidence` 每次同步都重算。
+    `vulnscan` 只把它当**同批候选内的排序键**（指纹命中仍绝对优先），不做过滤。
 - **`dirscan` 的默认值于第十八轮（续9）反转为「开 + 只浅扫」**（第十五轮曾按用户要求默认关，
   现在用户要求"先用偏敏感信息的通用路径浅浅过一遍，看清结果再手动决定深度扫"）：
   `dirscan.enabled=true` + `dirscan.mode=quick`，只吃 `config/dicts/dirs_shallow.txt`

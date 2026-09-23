@@ -35,10 +35,17 @@
 - [~] POC 引擎补齐 nuclei 常用语义：`payloads` 池变量与 `extractors`（regex/kval）已实现；
       尚缺多请求串联（`raw`/`flow`/`workflows`）——这类模板被标 `unsupported`，不静默失效；
 - [ ] 盲注类 SQL 检测（当前只做报错回显型，避免破坏性与长耗时的延时探测）；
-- [ ] 误报管理：漏洞记录的人工复核状态（确认/误报）与复查工作流；
-- [ ] **POC 置信度分层与实测校准**：312 个 POC 里 305 个是参考项目静态提取的低置信规则（默认关闭），
-      先把"哪些规则真的准"用真实目标校准出来，再谈自动灌入新 POC
-      （P3-2 情报订阅已落地，但**只到「线索」层**，正是卡在这条前置条件上——不自动灌 POC）；
+- [x] **误报管理**（P1-1，2026-09-23 续12）：漏洞记录的人工复核三态（待复核/已确认/误报）+ 复查通道。
+      `vulns.review/review_note/reviewed_at` + `db.set_vuln_review`/`bulk_set_vuln_review`/`review_counts`
+      + `POST /api/vulns/review`（漏洞页三态下拉 + 批量打标）+ 报告「人工复核台账」；
+      **判误报的条目不进「潜在漏洞」表、不计入漏洞数**，单列文末附录保留可回溯；
+- [x] **POC 置信度分层**（P1-2，2026-09-23 续12）：`pocs.confidence` 由 `db.poc_confidence(path, meta)`
+      按来源分（builtin=high / user·nuclei=medium / imported·other=low）× 内容型匹配器降级得出，
+      **只降级不升级**；`vulnscan` 在同批候选里按置信度排序（指纹命中仍优先），
+      「POC 管理」页新增置信度列/分布/按层批量启停。
+      **"实测校准"仍是开放的长期项**：305 个导入 POC 目前只是"默认关闭 + 标了低置信并且排在后面"，
+      要真的放开它们，仍需在真实授权目标上把"哪些规则真的准"跑出来 —— 本条是"自动灌 POC"的前置，
+      情报订阅（P3-2）至今只到「线索」层，正是卡在这里；
 - [x] **osint 阈值校准**（2026-09-23 用真实配额实测）：样本为 维保中心 15 / 后台管理系统 192188 /
       `Index of /` 5974788 / `Welcome to nginx` 8344737 / 登录 39722277 —— 阈值 200 落在 15 与 19 万
       之间，**不需要调**；实际动作是把公共标题（`GENERIC_TITLES`/`GENERIC_TITLE_PREFIX`）与占位证书
@@ -58,10 +65,13 @@
 - [ ] 任务队列（Celery/RQ 或 asyncio）替代后台线程，支持并发任务与断点续扫；
 - [ ] 鉴权加固：多用户、CSRF、HTTPS 部署指引（当前仅限本机使用）；
 - [ ] 报告升级：HTML/PDF 模板、漏洞趋势统计；
-- [~] Linux 实机验证（当前 CI 与开发机均为 Windows + Python 3.9，代码层已按跨平台约束编写，
-      并已把可自动化的部分变成 `tests/smoke.py [5o]` 的断言：全量 compile / 全量 import /
-      禁 shell 直通与盘符路径 / 文本 IO 必带 encoding / `run_cmd` 实测 127·124 / `pick_python` 回退；
-      **实机仍未跑过** —— 无 WSL/Docker，需在 Linux 上 `python3 tests/smoke.py` 才算验收）；
+- [x] **Linux 实机验证**（P2-3，2026-09-23 续12 已达成）：在 Ubuntu 22.04.5 / Python 3.10.12 实机
+      跑 `python3 tests/smoke.py` → **SMOKE PASS**（同一份代码，无平台分支）；同时实机验证了
+      无头截图（snap `chromium` 出图 0.9s / 11274 字节合法 PNG）与外部二进制真实调用
+      （`/usr/bin/nmap` + fscan 2.2.1，fscan 的输出形态据此校准并修掉一个解析缺陷）。
+      `tests/smoke.py [5o]` 是**跨平台静态审计**（全量 compile / 全量 import / 禁 shell 直通与盘符路径 /
+      文本 IO 必带 encoding / `run_cmd` 实测 127·124 / `pick_python` 回退），会按运行平台自报状态。
+      **残留未验**：subfinder / puredns / httpx（那台机器上未装，代码走 `which` + 内置兜底）；
 - [x] **进度与线索分流**（第十七轮续8）：「漏洞」与「线索」分表、分页签、分计数
       （`leads` 表 + 任务详情第 9 个页签 + 报告附录），从结构上保证「线索」不会被算成漏洞数；
 - [ ] 分布式节点：多个执行节点认领任务（需要先替换 SQLite）；

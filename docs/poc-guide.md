@@ -122,3 +122,20 @@ http:
 尚不支持的是 nuclei 的 `raw`/`dsl`/`flow`/`workflows`/oob，这类模板会被标 `unsupported`；若确需完整能力，
 仍可另加适配器调用 nuclei 二进制，`vulns` 表结构可直接承接其 JSON 输出。另：`config/pocs-imported/` 下由
 `tools/import_ref_pocs.py` 批量导入的参考项目 POC **默认关闭**，需人工在 POC 管理页挑选后启用。
+
+## 置信度分层（P1-2）
+
+每个 POC 在注册表里会带一个 `confidence`（`high` / `medium` / `low`），由 `db.poc_confidence(path, meta)` 推导：
+
+- **来源分**：`scanner/pocs/pocs/` 内置 = `high`；`config/pocs-user/` 与 `config/nuclei-templates/` = `medium`；
+  `config/pocs-imported/`（参考项目静态转换）与其他 = `low`；
+- **内容型匹配器降级**：模板只要含 `word`/`words`/`regex`/`size`/`length` 这类匹配器，来源分**降一级**
+  （纯 `status` 匹配的规则几乎必然误报）；**只降级不升级**。
+
+它的作用是**排序**而非过滤：`vulnscan` 在同一站点的候选里按置信度排（**指纹命中的仍然绝对优先**），
+所以高置信先跑、低置信后跑，预算不足时先跑的是更可能准的规则。扫不扫仍由 `skip_severities`
+与 `enabled` 决定。POC 管理页可按置信度层**批量启停**。
+
+> **"实测校准"仍是开放项**：`confidence` 只是**结构上的先验**，不等于"这条规则真的准"。
+> 要放开那 305 个导入 POC，仍需在真实授权目标上把误报率跑出来 —— 这也是情报订阅（P3-2）
+> 只到「线索」层、不自动灌 POC 的原因（详见 `docs/roadmap.md`）。

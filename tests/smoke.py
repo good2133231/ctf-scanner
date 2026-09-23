@@ -606,33 +606,81 @@ def main():
     _stub_run.reply = []
     ps.run_cmd = _stub_run
     try:
-        # fscan 输出带 ANSI 颜色码，必须剥掉才能解析；`[*]` 的 POC 行**故意不认**
+        # ① fscan 2.2.1 **真实输出**（2026-09-23 在 Ubuntu 22.04 实机抓取，逐行原样）：
+        #    开放端口的实际行形态是 `[*] ip:port <service>` / `[*] http://ip:port` /
+        #    `[+] http://ip:port code:NNN`，**不是**老代码以为的 `[+] ip:port open`。
+        _real = (
+            "      Fscan 2.2.1 (95cc12e 2026-08-25T20:44:10Z)\n"
+            "\n"
+            "[*] 服务插件: webpoc, dnstcp, webtitle, mysql, redis ... 等6个\n"
+            "[*] 参数自适应: Timeout=1000ms, ModuleThread=20, Retry=1, ICMPRate=0.50\n"
+            "[*] \x1b[36m127.0.0.1:3306\x1b[0m                 mysql    "
+            "[Product:Genetec Security Center] Banner:(N 5.7.43-log ZN ,!ZP - X)\n"
+            "[*] 127.0.0.1:22                   ssh      "
+            "[Product:OpenSSH ||Version:8.9p1 Ubuntu 3ubuntu0.17]\n"
+            "[+] MySQL 127.0.0.1:3306 MySQL 5.7.43-log\n"
+            "[*] http://127.0.0.1:888           http     [Product:nginx]\n"
+            "[*] 127.0.0.1:6379                 redis    [Product:Redis key-value store]\n"
+            "[*] http://127.0.0.1:8766          http     [Product:Open Lighting ...]\n"
+            "[!] Redis未授权访问: 127.0.0.1:6379\n"
+            "[*] http://127.0.0.1:631           http     [Product:CUPS]\n"
+            "[*] http://127.0.0.1:8082          http     [Product:nginx]\n"
+            "[+] http://127.0.0.1:888           code:403 len:146   title:403 Forbidden\n"
+            "[+] https://127.0.0.1:631          code:200 len:2247  title:Home - CUPS 2.4.1\n"
+            "[*] http://127.0.0.1:8081          http     [Product:nginx]\n"
+            "[*] 扫描完成，发现 8 个开放端口\n"
+            "[+] http://127.0.0.1:8082          code:200 len:9659  title:None\n"
+            "[+] http://127.0.0.1:8081          code:302 len:358   "
+            "title:Redirecting to http://127.0.0.1:8081/system\n"
+            "[*] 扫描任务完成，耗时 3.449s，已扫描 14 个目标\n"
+        )
+        _ports = [22, 53, 631, 888, 3306, 6379, 8081, 8082, 8766]
+        _stub_run.reply = [(0, _real, "")]
+        got = ps.fscan_scan("h.test", "127.0.0.1", _ports, binary="fscan")
+        assert [r["port"] for r in got] == [22, 631, 888, 3306, 6379, 8081, 8082, 8766], got
+        assert got[0]["service"] == "ssh" and got[5]["service"] == "http-alt", got
+        assert got[0]["host"] == "h.test" and got[0]["ip"] == "127.0.0.1"
+        cmd = _ps_calls[-1]
+        assert {"-np", "-nobr", "-nopoc"} <= set(cmd), cmd
+        assert cmd[cmd.index("-h") + 1] == "127.0.0.1"
+        _parg = cmd[cmd.index("-p") + 1]
+        assert _parg.startswith("22,53,631,888,3306,6379,8081-8082") and _parg.endswith("8766"), _parg
+        assert cmd[cmd.index("-t") + 1] == "512", cmd   # workers 缺省 64 × 8
+
+        # ② 老版本 `[+] ip:port open` 形态仍要认（ANSI 颜色码也要能剥掉）
         _stub_run.reply = [(0, "[+] \x1b[32m10.0.0.1:80\x1b[0m open\n"
                               "[+] 10.0.0.1:8080 open\n"
-                              "[*] 10.0.0.1:80 weblogic-poc\n"
-                              "[+] 10.0.0.1:8080 open\n", "")]
+                              "[*] 扫描完成，发现 2 个开放端口\n", "")]
         got = ps.fscan_scan("h.test", "10.0.0.1", [80, 8080], binary="fscan")
         assert [r["port"] for r in got] == [80, 8080], got
         assert got[0]["service"] == "http" and got[1]["service"] == "http-alt"
-        assert got[0]["host"] == "h.test" and got[0]["ip"] == "10.0.0.1"
-        cmd = _ps_calls[-1]
-        assert {"-np", "-nobr", "-nopoc"} <= set(cmd), cmd
-        assert cmd[cmd.index("-h") + 1] == "10.0.0.1" and cmd[cmd.index("-p") + 1] == "80,8080"
-        assert cmd[cmd.index("-t") + 1] == "512", cmd   # workers 缺省 64 × 8
-        # 老版本不认 -nopoc：去掉它重试一次，-np -nobr 必须还在
+
+        # ③ 老版本不认 -nopoc：去掉它重试一次，-np -nobr 必须还在
         _before = len(_ps_calls)
         _stub_run.reply = [(1, "", "flag provided but not defined: -nopoc"),
-                           (0, "[+] 10.0.0.1:443 open\n", "")]
+                           (0, "[+] 10.0.0.1:443 open\n[*] 扫描完成，发现 1 个开放端口\n", "")]
         got = ps.fscan_scan("h.test", "10.0.0.1", [443], binary="fscan")
         assert [r["port"] for r in got] == [443]
         assert len(_ps_calls) - _before == 2, _ps_calls[_before:]
         assert "-nopoc" not in _ps_calls[-1] and {"-np", "-nobr"} <= set(_ps_calls[-1])
-        # rc≠0 且不是参数问题 → 返回 None，交给上层回退 nmap/内置
+        # ④ rc≠0 且不是参数问题 → 返回 None，交给上层回退 nmap/内置
         _stub_run.reply = [(1, "", "boom")]
         assert ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan") is None
-        # 认不出任何 open 行 → 空结果（宁缺勿错，不拿 [*] POC 行当开放端口）
-        _stub_run.reply = [(0, "[*] 10.0.0.1:80 weblogic-poc\n", "")]
+        # ⑤ 统计行说 0 → 空结果（**确实没有**，不必白跑一遍 nmap）
+        _stub_run.reply = [(0, "[*] 扫描完成，发现 0 个开放端口\n", "")]
         assert ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan") == []
+        # ⑥ 解析数与统计行不符 → None，绝不静默漏报（宁可白跑兜底，也不漏端口）
+        _stub_run.reply = [(0, "[+] 10.0.0.1:80 open\n[*] 扫描完成，发现 2 个开放端口\n", "")]
+        assert ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan") is None
+        #    没有统计行 → 无法交叉校验，同样交回兜底（老版本/未来版本换格式时安全）
+        _stub_run.reply = [(0, "[*] 10.0.0.1:80 some-svc\n", "")]
+        assert ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan") is None
+        # ⑦ `[+]` 行 title 里的"跳转目标 URL"不能被当成本机开放端口（正则行首锚定）
+        _stub_run.reply = [(0, "[+] http://10.0.0.1:80  code:302 len:1  "
+                              "title:Redirecting to http://10.0.0.9:9999/x\n"
+                              "[*] 扫描完成，发现 1 个开放端口\n", "")]
+        got = ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan")
+        assert [r["port"] for r in got] == [80], got
 
         # nmap 同样要走压缩后的端口串（否则全端口在 Windows 上起不来）
         _stub_run.reply = [(0, "Host: 10.0.0.1 ()\tPorts: 80/open/tcp//http///\n", "")]
@@ -678,7 +726,8 @@ def main():
         _ps_stage.portscan.nmap_scan = _orig_nm
         _ps_stage.which = _orig_which
     print("[5e-0] fscan/nmap 适配 ok: 端口串压缩为 1-65535（命令行 <1000 字符）；"
-          "fscan 强制 -np -nobr -nopoc（老版本回退仍保留 -np -nobr）")
+          "fscan 强制 -np -nobr -nopoc（老版本回退仍保留 -np -nobr）；"
+          "2.2.1 真实输出 8/8 全解析 + 统计行交叉校验（数目不符即回退，杜绝静默漏报）")
 
     # (2) FOFA 标题反查：语句构造 + 公共标题阈值 + 模板页标题（连查询都不发）
     assert fofa.build_title_query("维保中心") == 'title="维保中心"'
@@ -1633,14 +1682,148 @@ def main():
           f"普通路径不动 / LOGS_DIR 与 DB_PATH 仍在测试临时目录（os.name={os.name}）")
 
 
+    # (5r) P1-1 误报复核工作流：状态归一 / 单条与批量打标 / 台账计数 / 列表筛选 /
+    #      报告"误报移出结论、单独成节"。全部是纯数据层断言（GUI 只做透传，见 [7] 路由检查）。
+    _rv = db.REVIEW_STATES
+    assert _rv == ("", "confirmed", "false_positive"), _rv
+    # 归一：只认两种结论，其余（含 None / 大小写 / 未知值 / 空白）一律落回"待复核"
+    assert db.norm_review("CONFIRMED") == "confirmed" and db.norm_review(" false_positive ") \
+        == "false_positive"
+    for _bad in (None, "", "x", "pending", "true", 0):
+        assert db.norm_review(_bad) == "", _bad
+
+    _rv_tid = db.create_task("smoke-review", "10.2.2.2", ["vulnscan"], {})
+    for _i, _sev in enumerate(("high", "high", "medium")):
+        db.insert_vuln(_rv_tid, {"target": f"http://10.2.2.2/{_i}", "name": f"rule-{_i}",
+                                 "severity": _sev, "poc_id": f"p{_i}"})
+    _rows = db.list_vulns(task_id=_rv_tid, limit=10)
+    assert len(_rows) == 3 and all((r["review"] or "") == "" for r in _rows), _rows
+    assert db.review_counts(_rv_tid) == {"pending": 3, "confirmed": 0, "false_positive": 0}
+
+    # 单条：带备注的误报；不存在的 id 必须返回 0（不做全表兜底）
+    _fp_id, _ok_id = _rows[0]["id"], _rows[1]["id"]
+    assert db.set_vuln_review(_fp_id, "false_positive", "统一 404 页面，非漏洞") == 1
+    assert db.set_vuln_review(_ok_id, "confirmed", "手工复现成功") == 1
+    assert db.set_vuln_review(99999999, "confirmed") == 0
+    # note=None 表示"只改状态、不动备注"（前端行内下拉切换走的就是这条）
+    assert db.set_vuln_review(_ok_id, "") == 1
+    _okrow = [r for r in db.list_vulns(task_id=_rv_tid, review="pending") if r["id"] == _ok_id][0]
+    assert _okrow["review_note"] == "手工复现成功", "note=None 不该清掉已有备注"
+    db.set_vuln_review(_ok_id, "confirmed")
+
+    _c = db.review_counts(_rv_tid)
+    assert _c == {"pending": 1, "confirmed": 1, "false_positive": 1}, _c
+    assert len(db.list_vulns(task_id=_rv_tid, review="false_positive")) == 1
+    assert len(db.list_vulns(task_id=_rv_tid, review="pending")) == 1
+    assert len(db.list_vulns(task_id=_rv_tid, review="1")) == 1, '"1" 应归一为待复核'
+    assert len(db.list_vulns(task_id=_rv_tid)) == 3, "review=None 必须返回全部"
+
+    # 批量：混入非法 id 要整体忽略，合法 id 照改
+    assert db.bulk_set_vuln_review([_fp_id, _ok_id, "not-an-id"], "", "退回待复核") == 2
+    assert db.review_counts(_rv_tid) == {"pending": 3, "confirmed": 0, "false_positive": 0}
+    assert db.bulk_set_vuln_review([], "confirmed") == 0
+    assert db.bulk_set_vuln_review([_fp_id], "false_positive", "误报：WAF 拦截页") == 1
+
+    # 报告：误报不进"潜在漏洞"与概览，但仍出现在文末专门的"已判误报"小节（可追溯）
+    _md = generate(_rv_tid)
+    assert _md and "## 潜在漏洞" in _md
+    assert "| 0 | 0 | 0 | 0 | 0 | 2 |" in _md, "概览的潜在漏洞列应为 2（3 条里排除 1 条误报）"
+    assert "人工复核台账：已确认 0 ｜ 待复核 2 ｜ 已判误报 1" in _md
+    assert "（误报不计入上表，见文末附录）" in _md
+    assert "## 已判误报（人工复核排除）" in _md
+    _tbl = _md.split("## 潜在漏洞")[1].split("## 已判误报")[0]
+    _app = _md.split("## 已判误报（人工复核排除）")[1]
+    assert "rule-2" not in _tbl and "rule-0" in _tbl and "rule-1" in _tbl, _tbl
+    assert "rule-2" in _app and "rule-0" not in _app, "误报小节只应列已判误报的那一条"
+    assert "误报：WAF 拦截页" in _app, "判误报的理由（复核备注）必须进附录留痕"
+    print("[5r] 误报复核工作流 ok: 状态归一(未知值→待复核)/单条与批量打标(note=None 保留备注，"
+          "非法 id 不误伤)/台账计数与 review 三态筛选/报告误报移出结论并单独成节")
+
+
+    # (5s) P1-2 POC 置信度分层：由"来源 + 匹配器结构"推导（不靠人手填）+ 批量开关按层筛选
+    assert db.CONF_ORDER == ("low", "medium", "high")
+    # 来源定基：内置精选=high / 用户=medium / nuclei=medium / 导入的指纹型规则=low
+    assert db.poc_source("scanner/pocs/pocs/exposure-phpinfo.yaml") == "builtin"
+    assert db.poc_source("config/pocs-imported/360__finger.yaml") == "imported"
+    assert db.poc_source("config/nuclei-templates/x.yaml") == "nuclei"
+    assert db.poc_source("config/pocs-user/mine.yaml") == "user"
+    assert db.poc_source("config/whatever/x.yaml") == "other"
+    # 结构降权：只判状态码（没有 word/regex/size 匹配器）的规则再降一级
+    _with_word = {"http": [{"matchers": [{"type": "status", "status": [200]},
+                                         {"type": "word", "words": ["phpinfo()"]}]}]}
+    _only_status = {"http": [{"matchers": [{"type": "status", "status": [200]}]}]}
+    assert db._has_content_matcher(_with_word) and not db._has_content_matcher(_only_status)
+    assert not db._has_content_matcher({})
+    assert db.poc_confidence("scanner/pocs/pocs/exposure-phpinfo.yaml", _with_word) == "high"
+    assert db.poc_confidence("scanner/pocs/pocs/exposure-phpinfo.yaml", _only_status) == "medium"
+    assert db.poc_confidence("config/pocs-user/mine.yaml", _only_status) == "low"
+    assert db.poc_confidence("config/pocs-imported/360__finger.yaml", _only_status) == "low"
+    assert db.poc_confidence("config/pocs-user/mine.yaml", _with_word) == "medium"
+    # 结构分只"降级"不"升级"：导入的指纹型规则再像也不该越过 low（避免低质规则被捧成高置信）
+    assert db.poc_confidence("config/pocs-imported/360__finger.yaml", _with_word) == "low"
+    # meta=None（只有路径，例如从库里读老记录）→ 只按来源定级，不许崩
+    assert db.poc_confidence("scanner/pocs/pocs/exposure-phpinfo.yaml") == "high"
+    assert db.poc_confidence("config/pocs-imported/360__finger.yaml") == "low"
+
+    # 7 个内置 POC 全部 **同时** 带 status + word（`matchers-condition: and`），
+    # 所以按分层规则它们必须都是 high —— 这是"零误报"的实测校准依据（见 CHANGELOG 续12）
+    _builtin_hi = 0
+    for _p in sorted((ROOT / "scanner" / "pocs" / "pocs").glob("*.yaml")):
+        _meta = engine.load_poc_file(_p)
+        assert _meta.get("_status") == "ok", (_p.name, _meta.get("_error"))
+        assert db.poc_confidence(str(_p.relative_to(ROOT)), _meta) == "high", _p.name
+        _builtin_hi += 1
+    assert _builtin_hi >= 7, f"内置 POC 数量异常：{_builtin_hi}"
+
+    # 落库与批量筛选：confidence 每次同步按内容重算（不是用户意图，不能像 enabled 那样留存偏置）
+    _cid = db.upsert_poc("config/pocs-user/conf-smoke.yaml", {
+        "name": "smoke-conf", "severity": "medium", "status": "ok",
+        "http": [{"matchers": [{"type": "status", "status": [200]}]}]})
+    _crow = [r for r in db.list_pocs() if r["id"] == _cid][0]
+    assert _crow["confidence"] == "low", _crow
+    db.upsert_poc("config/pocs-user/conf-smoke.yaml", {
+        "name": "smoke-conf", "severity": "medium", "status": "ok",
+        "http": [{"matchers": [{"type": "status", "status": [200]},
+                               {"type": "regex", "regex": ["vuln-proof"]}]}]})
+    _crow = [r for r in db.list_pocs() if r["id"] == _cid][0]
+    assert _crow["confidence"] == "medium", f"加了内容匹配器应升到 medium：{_crow}"
+    # 批量开关按层筛选：先把 high 层全部关掉，再用 kind=diff 打开 —— 返回数必须**恰好等于**
+    # high 层条数。若 confidence 过滤被忽略，这里会连 imported/nuclei 那些默认关闭的 POC
+    # 一起算进来（数量明显更大），断言就会失败。（跑完把 high 层的原状态还原）
+    _hi = [r for r in db.list_pocs()
+           if r["status"] == "ok" and db.poc_confidence(r["path"]) == "high"]
+    assert len(_hi) >= 7, f"high 层数量异常：{len(_hi)}"
+    _hi_was = {r["id"]: int(r["enabled"]) for r in _hi}
+    try:
+        db.bulk_set_poc_enabled(False, confidence="high", only_ok=True)
+        _off_hi = len([r for r in db.list_pocs() if r["status"] == "ok" and not r["enabled"]
+                       and db.poc_confidence(r["path"]) == "high"])
+        assert _off_hi == len(_hi), (_off_hi, len(_hi))
+        assert db.bulk_set_poc_enabled(True, confidence="high", kind="diff", only_ok=True) \
+            == _off_hi, "confidence 维度的批量开关必须与手工筛选结果一致"
+        assert db.bulk_set_poc_enabled(True, confidence="high", kind="diff", only_ok=True) == 0, \
+            "已经全开之后 diff 应为 0"
+    finally:
+        for _pid, _en in _hi_was.items():
+            if _en == 0:
+                db.toggle_poc(_pid)
+    print(f"[5s] POC 置信度分层 ok: 来源定基(builtin=high/imported=low) + 只判状态码降一级；"
+          f"{_builtin_hi} 个内置 POC 全为 high（status+word 结构）且 confidence 随同步重算、"
+          f"批量开关按层筛选精确命中 {len(_hi)} 条")
+
+
     # (5o) 续8：P2-3 跨平台（Linux + Windows）**可执行**验证。
-    #      本机只有 Windows/Python 3.9（无 WSL/Docker），"Linux 实机跑一次 smoke"这一步
-    #      在这里做不了；因此把**所有能自动化的跨平台风险点**都变成断言 ——
-    #      这一节在 Linux 上跑就等于那次验收（同一份代码，无平台分支）。
-    #      仍未覆盖（如实标注）：①无头浏览器截图**在 Linux 上**的探测（Windows 侧已实机验证，
-    #      单站 3.1s/11036 字节合法 PNG，见 CHANGELOG 续3）；②fscan/subfinder/puredns/httpx
-    #      的适配分支（本机没装这些二进制，走的是内置兜底分支）。这些都需要在 Linux 上装好
-    #      对应工具才能验（代码里全部走 shutil.which + 内置兜底，找不到只会降级、不会崩）。
+    #      这一节在 Linux 上跑就等于那次验收（同一份代码，无平台分支）——
+    #      2026-09-23 已在 Ubuntu 22.04.5 / Python 3.10.12 实机跑通（含本节与 [5r]/[5s]）。
+    #      同一台机器上另做的两项实机补验（不在本节断言内，结论记在这里）：
+    #      ① 无头浏览器截图：`/snap/bin/chromium` 能出图（单站 0.9s / 11274 字节合法 PNG），
+    #         但 **snap 版 chromium 有私有 /tmp**，产物路径若落在 /tmp 下会写失败
+    #         （报 "Failed to write file"）—— 这是 snap 的沙箱限制，不是代码问题；
+    #         项目默认把产物写进 logs/task_<id>/shots/，正常路径不受影响；
+    #      ② fscan 真实调用：本文件 [5e-0] 的样本就是那次实机抓取的原文，
+    #         8 个开放端口 8/8 全解析（老解析器只认 `[+] ip:port open`，一条不中）；
+    #      仍未覆盖（如实标注）：subfinder/puredns/httpx 的适配分支（那台机器上没装，
+    #      代码里全部走 shutil.which + 内置兜底，找不到只会降级、不会崩）。
     import inspect as _inspect
     import re as _re
     from scanner.utils import pick_python, run_cmd
@@ -1689,9 +1872,16 @@ def main():
     assert _rc2 == 124, f"超时应返回 124，实际 {_rc2}"
     assert pick_python("ctfscanner-no-such-python-xyz") == sys.executable, \
         "配置的解释器不可用时必须回退到当前解释器（Linux 上 python 常常不存在）"
+    # P2-3 的验收口径就是"同一份脚本在 Linux 上跑出同样的 SMOKE PASS"，所以这里按运行平台
+    # 自报状态：在 Linux 上跑＝实机验收达成；在 Windows 上跑只完成静态审计那一半。
+    _p23 = ("本脚本正在 Linux 上运行 → P2-3 实机验收达成"
+            "（2026-09-23 首验：Ubuntu 22.04.5 / Python 3.10.12）"
+            if os.name == "posix" else
+            "本机为 Windows → 本节只完成静态审计那一半；"
+            "Linux 实机验收已于 2026-09-23 在 Ubuntu 22.04.5 上达成")
     print(f"[5o] 跨平台静态审计 ok: 编译 {len(_py)} 个源文件 / import {len(_mods)} 个模块 / "
           f"无 shell 直通·盘符路径·缺 encoding；run_cmd 127/124 与 pick_python 回退"
-          f"（Linux 实机验收仍需在 Linux 上跑本脚本，见 TODO.md P2-3）")
+          f"（{_p23}）")
     print("SMOKE PASS")
 
 

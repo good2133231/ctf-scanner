@@ -3,6 +3,9 @@ from . import db
 
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
+# 复核状态（P1-1）在报告里的展示名
+REVIEW_LABEL = {"": "待复核", "confirmed": "已确认", "false_positive": "误报"}
+
 
 def _c(value):
     """Markdown 表格单元格转义：`|` 转义成 `\\|`，换行/回车压成空格。
@@ -22,8 +25,12 @@ def generate(task_id):
     dirs = db.list_dirs(task_id)
     ports = db.list_ports(task_id)
     csegs = db.list_csegs(task_id)
-    vulns = sorted(db.list_vulns(task_id=task_id, limit=1000),
-                   key=lambda r: SEV_ORDER.get(r["severity"], 9))
+    all_vulns = sorted(db.list_vulns(task_id=task_id, limit=1000),
+                       key=lambda r: SEV_ORDER.get(r["severity"], 9))
+    # 人工复核（P1-1）：判为误报的**不再计入「潜在漏洞」**，单独成节放在文末 ——
+    # 报告是给人看的交付物，把已排除的噪声混在结论里等于把复核工作白做。
+    vulns = [v for v in all_vulns if (v["review"] or "") != "false_positive"]
+    review = db.review_counts(task_id)
     # 线索（intel 情报订阅 / heuristic 启发式）：**不是漏洞结论**，只作为附录列出，
     # 既不进上面的「潜在漏洞」表，也不参与任何计数（见 scanner/intel.py 的边界说明）。
     leads = list(db.list_leads(task_id))
@@ -43,15 +50,22 @@ def generate(task_id):
                  f"{_c(len(csegs))} | {_c(len(vulns))} |")
     lines.append("")
     lines.append("> 以下「潜在漏洞」均为自动化初筛结果，存在误报可能，处置前需人工验证。")
+    if review["confirmed"] or review["pending"] or review["false_positive"]:
+        line = (f"> 人工复核台账：已确认 {review['confirmed']} ｜ 待复核 {review['pending']}"
+                f" ｜ 已判误报 {review['false_positive']}")
+        if review["false_positive"]:
+            line += "（误报不计入上表，见文末附录）"
+        lines.append(line)
     lines.append("")
     if vulns:
         lines.append("## 潜在漏洞")
         lines.append("")
-        lines.append("| 级别 | 名称 | 检查/POC | OWASP | 目标 |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| 级别 | 名称 | 检查/POC | OWASP | 目标 | 复核 |")
+        lines.append("|---|---|---|---|---|---|")
         for v in vulns:
             lines.append(f"| {_c(v['severity'])} | {_c(v['name'])} | {_c(v['poc_id'])} | "
-                         f"{_c(v['owasp'] or '-')} | {_c(v['target'])} |")
+                         f"{_c(v['owasp'] or '-')} | {_c(v['target'])} | "
+                         f"{_c(REVIEW_LABEL.get(v['review'] or '', '待复核'))} |")
         lines.append("")
     if sites:
         lines.append("## 存活站点")
@@ -108,5 +122,19 @@ def generate(task_id):
             kind = "情报" if ld["kind"] == "intel" else "启发式"
             lines.append(f"| {_c(kind)} | {_c(ld['level'])} | {_c(ld['code'])} | "
                          f"{_c(ld['title'])} | {_c(ld['target'])} | {_c(ld['matched'])} |")
+        lines.append("")
+    fp = [v for v in all_vulns if (v["review"] or "") == "false_positive"]
+    if fp:
+        # 附录：人工复核判定的误报留痕。**保留**而不是从报告里删掉，理由是
+        # ① 交付时能说明"这条扫出来过、但已排除"；② 反向校准 POC/检查项的误报率。
+        lines.append("## 已判误报（人工复核排除）")
+        lines.append("")
+        lines.append("> 这些条目由人工复核判定为误报，**不计入上表与概览**；保留在此供溯源与规则校准。")
+        lines.append("")
+        lines.append("| 级别 | 名称 | 检查/POC | 目标 | 复核备注 |")
+        lines.append("|---|---|---|---|---|")
+        for v in fp:
+            lines.append(f"| {_c(v['severity'])} | {_c(v['name'])} | {_c(v['poc_id'])} | "
+                         f"{_c(v['target'])} | {_c(v['review_note'] or '-')} |")
         lines.append("")
     return "\n".join(lines)

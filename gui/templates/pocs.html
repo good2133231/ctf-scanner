@@ -16,7 +16,8 @@
 
 <section class="panel">
   <h2>按分类批量开关（当前启用 {{ stats.enabled }} / {{ stats.total }}）</h2>
-  <p class="muted">共 {{ stats.total }} 个 POC，逐个点显然不现实，这里按<b>来源</b>与<b>级别</b>下发。
+  <p class="muted">共 {{ stats.total }} 个 POC，逐个点显然不现实，这里按<b>来源</b>、<b>级别</b>与
+    <b>置信度</b>下发。
     「导入」= 参考项目批量转换的第三方 POC，默认全部关闭（指纹式匹配误报率偏高），
     建议先按级别启用 critical / high，跑通后再逐步放开。</p>
   <div class="row">
@@ -38,6 +39,14 @@
         {% endfor %}
       </select>
     </label>
+    <label>置信度
+      <select id="poc-bulk-confidence">
+        <option value="">全部置信度</option>
+        <option value="high">高（内置精选）</option>
+        <option value="medium">中（用户/nuclei 模板）</option>
+        <option value="low">低（导入的指纹型规则）</option>
+      </select>
+    </label>
     <label class="chk"><input type="checkbox" id="poc-bulk-diff" checked>
       仅调整状态与目标不一致的</label>
     <button type="button" id="poc-bulk-enable">批量启用</button>
@@ -52,34 +61,41 @@
     {% endfor %}
     ｜级别
     {% for sev, n in stats.severity.items() %}［{{ sev }} {{ n }}］{% endfor %}
+    ｜置信度
+    {% for c in ['high', 'medium', 'low'] %}［{{ c }} {{ stats.confidence.get(c, 0) }}］{% endfor %}
   </p>
+  <p class="muted small">置信度是<b>推导</b>出来的，不是人手填：内置精选暴露面检查（带内容特征关键字）= 高；
+    用户上传 / 官方 nuclei 模板 = 中；参考项目静态导入的指纹型规则 = 低，
+    且<b>只判状态码、不判响应内容</b>的规则再降一级（`status: [200]` 这类在真实站点上几乎必中）。
+    它影响的是"额度先给谁"：站点 POC 额度用尽时，高置信规则优先执行。</p>
 </section>
 
 <section class="panel">
   <h2>POC 列表（{{ pocs|length }}）</h2>
   <div class="filters">
     <label class="muted">筛选 <input data-filter="#tbl-pocs"
-      placeholder="ID / 名称 / 标签 / 来源 / 路径"></label>
+      placeholder="ID / 名称 / 标签 / 来源 / 置信度 / 路径"></label>
     <label class="muted">只看已启用
       <input type="checkbox" data-filter-enabled="#tbl-pocs"></label>
   </div>
   <table id="tbl-pocs">
-    <thead><tr><th>#</th><th>ID</th><th>名称</th><th>级别</th><th>标签</th>
+    <thead><tr><th>#</th><th>ID</th><th>名称</th><th>级别</th><th>置信度</th><th>标签</th>
       <th>状态</th><th>启用</th><th>来源</th></tr></thead>
     <tbody>
     {% for p in pocs %}
-      <tr data-enabled="{{ 1 if p.enabled else 0 }}">
+      <tr data-enabled="{{ 1 if p.enabled else 0 }}" data-confidence="{{ p.confidence }}">
         <td>{{ p.id }}</td>
         <td class="mono">{{ p.poc_id }}</td>
         <td>{{ p.name }}</td>
         <td><span class="sev sev-{{ p.severity }}">{{ p.severity }}</span></td>
+        <td>{{ p.confidence }}</td>
         <td class="muted">{{ p.tags }}</td>
         <td>{{ p.status }}</td>
         <td><button class="toggle" data-id="{{ p.id }}">{{ '开' if p.enabled else '关' }}</button></td>
         <td class="muted small">{{ p.source }}<br><span class="mono">{{ p.path }}</span></td>
       </tr>
     {% else %}
-      <tr><td colspan="8" class="muted">未发现 POC，点击上方「重新扫描 POC 目录」。</td></tr>
+      <tr><td colspan="9" class="muted">未发现 POC，点击上方「重新扫描 POC 目录」。</td></tr>
     {% endfor %}
     </tbody>
   </table>

@@ -2,14 +2,20 @@
 {% block title %}漏洞风险{% endblock %}
 {% block content %}
 <p class="muted">级别筛选：
-  <a href="{{ url_for('vulns', task_id=task_id or None) }}">全部</a>
+  <a href="{{ url_for('vulns', task_id=task_id or None, review=review or None) }}">全部</a>
   {% for s in ['critical', 'high', 'medium', 'low', 'info'] %}
-  <a href="{{ url_for('vulns', severity=s, task_id=task_id or None) }}">{{ s }}</a>
+  <a href="{{ url_for('vulns', severity=s, task_id=task_id or None, review=review or None) }}">{{ s }}</a>
   {% endfor %}
+  ｜ 复核筛选：
+  <a href="{{ url_for('vulns', severity=sev or None, task_id=task_id or None) }}">全部</a>
+  <a href="{{ url_for('vulns', severity=sev or None, task_id=task_id or None, review='pending') }}">待复核 {{ counts.pending }}</a>
+  <a href="{{ url_for('vulns', severity=sev or None, task_id=task_id or None, review='confirmed') }}">已确认 {{ counts.confirmed }}</a>
+  <a href="{{ url_for('vulns', severity=sev or None, task_id=task_id or None, review='false_positive') }}">已判误报 {{ counts.false_positive }}</a>
 </p>
 <section class="panel">
   <form class="filters" method="get" action="{{ url_for('vulns') }}">
     {% if sev %}<input type="hidden" name="severity" value="{{ sev }}">{% endif %}
+    {% if review %}<input type="hidden" name="review" value="{{ review }}">{% endif %}
     <label class="muted">按任务筛选
       <select name="task_id">
         <option value="">全部任务</option>
@@ -20,15 +26,26 @@
       </select>
     </label>
     <button class="ghost" type="submit">查询</button>
-    {% if task_id or sev %}<a class="btn-mini ghost" href="{{ url_for('vulns') }}">清空</a>{% endif %}
+    {% if task_id or sev or review %}<a class="btn-mini ghost" href="{{ url_for('vulns') }}">清空</a>{% endif %}
   </form>
+  <p class="muted small">复核打标（P1-1）：勾选行后批量标记 —「确认存在」= 人工验证过确实存在；
+    「误报」= 人工排除。打标只作用于<b>记录本身</b>（不重扫、不改资产）；
+    需要新证据时到任务详情页用「复查」对同一目标重跑一次漏洞初筛。</p>
+  <div class="bulkbar">
+    <button type="button" class="ghost" data-review-bulk="confirmed">批量确认存在</button>
+    <button type="button" class="danger" data-review-bulk="false_positive">批量判误报</button>
+    <button type="button" class="ghost" data-review-bulk="">退回待复核</button>
+    <span class="muted" data-review-msg></span>
+  </div>
   <label class="muted">筛选 <input data-filter="#tbl-vulns-all" placeholder="名称 / 检查项 / 目标"></label>
   <table id="tbl-vulns-all">
-    <thead><tr><th>#</th><th>任务</th><th>级别</th><th>名称</th><th>检查/POC</th>
-      <th>目标</th><th>详情</th></tr></thead>
+    <thead><tr><th><input type="checkbox" data-pick-all="#tbl-vulns-all"></th>
+      <th>#</th><th>任务</th><th>级别</th><th>名称</th><th>检查/POC</th>
+      <th>目标</th><th>复核</th><th>详情</th></tr></thead>
     <tbody>
     {% for v in vulns %}
-      <tr>
+      <tr data-review="{{ v.review or 'pending' }}">
+        <td><input type="checkbox" class="pick-row" value="{{ v.id }}" data-vid="{{ v.id }}"></td>
         <td>{{ v.id }}</td>
         <td><a href="{{ url_for('task_detail', task_id=v.task_id) }}"
                title="#{{ v.task_id }}">{{ task_names.get(v.task_id) or ('#' ~ v.task_id) }}</a></td>
@@ -36,11 +53,18 @@
         <td>{{ v.name }}</td>
         <td class="muted">{{ v.poc_id }}</td>
         <td class="muted">{{ v.target }}</td>
+        <td><select class="rv" data-review-id="{{ v.id }}"
+              title="{{ v.review_note or '复核备注（判误报时会让填）' }}">
+          <option value="" {{ 'selected' if not v.review }}>待复核</option>
+          <option value="confirmed" {{ 'selected' if v.review == 'confirmed' }}>确认存在</option>
+          <option value="false_positive" {{ 'selected' if v.review == 'false_positive' }}>误报</option>
+        </select></td>
         <td class="evidence"><details><summary class="muted">展开</summary>
-          <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre></details></td>
+          <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre>
+          {% if v.review_note %}<p class="muted small">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
       </tr>
     {% else %}
-      <tr><td colspan="7" class="muted">暂无数据。</td></tr>
+      <tr><td colspan="9" class="muted">暂无数据。</td></tr>
     {% endfor %}
     </tbody>
   </table>

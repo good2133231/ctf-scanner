@@ -154,8 +154,13 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    耗时以分钟计，只对真需要补全的 IP 用；
 8. **漏洞风险**：全库潜在漏洞，可按 **critical/high/medium/low/info 级别**筛选，
    列表带**任务名列**（点击直达该任务详情），页顶还可**按任务下拉过滤**（`?task_id=`）；
+   每行有**人工复核三态下拉**（待复核 / 已确认 / 误报，可填备注），勾选多行后可用**批量打标**条
+   一次改状态（`POST /api/vulns/review`）；**判误报的行不再计入「潜在漏洞」统计与报告主表**
+   （报告里单列「已判误报（人工复核排除）」附录，判错还能翻回来）；
 9. **POC 管理**：上传 YAML POC（落到 `config/pocs-user/`）、逐个启停、**按「来源 × 级别」批量开关**
    （来源分内置 / 导入（参考项目转换）/ nuclei / 用户），并有「来源」列与「只看已启用」筛选；
+   **另有一列「置信度」**（high/medium/low，由来源分 × 是否含内容型匹配器推导，只降级不升级），
+   可按置信度层**批量启停** —— 低置信（如参考项目导入的那批）默认就是"排在后面、可一键关掉"；
    语法错误的 POC 会标 `error`，含 `raw`/`dsl`/`flow`/`workflows` 等不支持特性的模板会标
    `unsupported` 并显示原因。**路径列展示相对项目根的路径**（如 `config/pocs-user/x.yaml`），
    不暴露本机绝对目录；
@@ -260,6 +265,12 @@ python3 run_gui.py
 - **对外访问**：默认 `gui.host: 127.0.0.1` 仅本机可访问；部署在服务器上给团队用时把 settings.yaml 的 host 改 `0.0.0.0` 并改掉默认口令——但控制台无 CSRF/HTTPS 加固，务必放在内网或套反代认证，不要直接暴露公网；
 - **权限**：不需要 root；工具放 `~/bin` 并加入 PATH 即可；
 - **常驻运行**：测试可用 `nohup python3 run_gui.py &`，正式使用建议 systemd（`Restart=on-failure`）或 tmux。
+
+> **实机验收状态（2026-09-23）**：已在 Ubuntu 22.04.5 / Python 3.10.12 上跑通
+> `python3 tests/smoke.py` → SMOKE PASS，并实测：无头截图走 `/snap/bin/chromium`（出图正常，
+> 但 **snap 版有私有 `/tmp` 沙箱**，产物路径落在系统 `/tmp` 下会写失败 —— 用项目默认的
+> `logs/task_<id>/shots/` 即可）、`/usr/bin/nmap` 与 fscan 2.2.1 真实调用正常。
+> 未验的是 subfinder / puredns / httpx（机器上未装，走内置兜底）。
 
 ## 常见问题
 

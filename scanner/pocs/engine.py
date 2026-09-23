@@ -129,6 +129,9 @@ def load_enabled_pocs(settings=None):
             continue
         if _norm_severity((m.get("info") or {}).get("severity")) in skip:
             continue
+        # 置信度分层（P1-2）：在内存里按同一套规则现算，供 vulnscan 排序用
+        # （库里也存了一份，那份是给 GUI 展示/筛选用的，两者算法同源 `db.poc_confidence`）。
+        m["_confidence"] = db.poc_confidence(m.get("_path") or "", m)
         out.append(m)
     return out
 

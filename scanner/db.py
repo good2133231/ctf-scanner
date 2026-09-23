@@ -72,13 +72,18 @@ CREATE TABLE IF NOT EXISTS vulns (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
   target TEXT, poc_id TEXT, name TEXT, severity TEXT DEFAULT 'medium',
-  owasp TEXT DEFAULT '', detail TEXT, evidence TEXT, created_at TEXT
+  owasp TEXT DEFAULT '', detail TEXT, evidence TEXT, created_at TEXT,
+  review TEXT DEFAULT '',          -- 人工复核（P1-1）：'' 待复核 / confirmed 确认存在 / false_positive 误报
+  review_note TEXT DEFAULT '',     -- 复核备注（判误报/确认的理由，进报告附录）
+  reviewed_at TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS pocs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   path TEXT UNIQUE NOT NULL,
   poc_id TEXT, name TEXT, severity TEXT DEFAULT 'medium', tags TEXT DEFAULT '',
   enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'ok',
+  -- 置信度分层（P1-2）：high/medium/low，由 poc_confidence() 按来源+匹配器结构推导（不是人手填）
+  confidence TEXT DEFAULT '',
   updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS leads (
@@ -130,6 +135,10 @@ _COLUMN_PATCHES = {
     "sites": {"favicon": "TEXT DEFAULT ''",
               # 站点截图的**相对项目根**路径（logs/task_x/shots/xxx.png）
               "shot": "TEXT DEFAULT ''"},
+    # P1-1 误报复核 / P1-2 置信度分层：老库补列（新库由 SCHEMA 直接建出）
+    "vulns": {"review": "TEXT DEFAULT ''", "review_note": "TEXT DEFAULT ''",
+              "reviewed_at": "TEXT DEFAULT ''"},
+    "pocs": {"confidence": "TEXT DEFAULT ''"},
 }
 
 
@@ -486,7 +495,78 @@ def list_all_ports(limit=500):
     return page_assets("ports", limit=limit)[0]
 
 
-def list_vulns(task_id=None, severity=None, limit=200):
+REVIEW_STATES = ("", "confirmed", "false_positive")   # '' = 待复核
+
+
+def norm_review(state):
+    """归一复核状态：只认 confirmed / false_positive，其余（含 None/未知值）一律当"待复核"。
+
+    单独成一个函数是为了让"API 传进来的任意字符串"永远写不进库 ——
+    否则前端传个 `x` 就会造出一条既不属于待复核、也不属于两种结论的幽灵状态。
+    """
+    s = str(state or "").strip().lower()
+    return s if s in ("confirmed", "false_positive") else ""
+
+
+def set_vuln_review(vuln_id, state, note=None):
+    """标记一条漏洞的复核状态（P1-1）。`note` 为 None 表示不改备注，返回受影响行数。"""
+    st = norm_review(state)
+    now = _now()
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        if note is None:
+            cur.execute("UPDATE vulns SET review=?, reviewed_at=? WHERE id=?",
+                        (st, now, int(vuln_id)))
+        else:
+            cur.execute("UPDATE vulns SET review=?, review_note=?, reviewed_at=? WHERE id=?",
+                        (st, str(note)[:500], now, int(vuln_id)))
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
+def bulk_set_vuln_review(ids, state, note=None):
+    """批量标记复核状态，返回受影响行数（只更新真实存在的 id，不做全表兜底）。"""
+    ids = [int(i) for i in (ids or []) if str(i).strip().lstrip("-").isdigit()]
+    if not ids:
+        return 0
+    st = norm_review(state)
+    now = _now()
+    marks = ",".join("?" for _ in ids)
+    # 必须用 `rowcount`，不能用 `_exec` —— 它返回的是 `lastrowid`，在 UPDATE 语句上恒为 0，
+    # 那样 `/api/vulns/review` 会一直回 `affected: 0`，前端会以为一条都没改。
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        if note is None:
+            cur.execute(f"UPDATE vulns SET review=?, reviewed_at=? WHERE id IN ({marks})",
+                        tuple([st, now] + ids))
+        else:
+            cur.execute(f"UPDATE vulns SET review=?, review_note=?, reviewed_at=? "
+                        f"WHERE id IN ({marks})", tuple([st, str(note)[:500], now] + ids))
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
+def review_counts(task_id=None):
+    """复核台账：{'pending': n, 'confirmed': n, 'false_positive': n}（供 GUI 概览与报告）。"""
+    sql = "SELECT review r, COUNT(*) c FROM vulns"
+    params = ()
+    if task_id:
+        sql += " WHERE task_id=?"
+        params = (task_id,)
+    out = {"pending": 0, "confirmed": 0, "false_positive": 0}
+    for row in _query(sql + " GROUP BY review", params):
+        out["pending" if not row["r"] else row["r"]] = row["c"]
+    return out
+
+
+def list_vulns(task_id=None, severity=None, limit=200, review=None):
+    """列出漏洞。`review` 三态：None=全部 / "pending"=待复核 / confirmed / false_positive。"""
     sql, params = "SELECT * FROM vulns WHERE 1=1", []
     if task_id:
         sql += " AND task_id=?"
@@ -494,6 +574,9 @@ def list_vulns(task_id=None, severity=None, limit=200):
     if severity:
         sql += " AND severity=?"
         params.append(severity)
+    if review is not None:
+        sql += " AND review=?"
+        params.append(norm_review(review))
     sql += " ORDER BY id DESC LIMIT ?"
     params.append(limit)
     return _query(sql, tuple(params))
@@ -531,7 +614,9 @@ def upsert_poc(path, meta):
     `IntegrityError: UNIQUE constraint failed: pocs.path`（实测 6 个并发任务里 **5 个失败**）。
     这里改成**原子 UPSERT**（`ON CONFLICT(path) DO UPDATE`），并用 `last_insert_rowid()`
     拿回 id；同时 `DO UPDATE` **不动 `enabled`** —— 用户手动开关过的不该被同步覆盖。
-    极老的 SQLite（<3.24 不支持 UPSERT）则回退到"INSERT 失败再 UPDATE"。
+
+    `confidence`（P1-2）每次同步都**重算**：它是由来源+匹配器结构推导的客观分层，
+    模板内容改了（或分层规则升级了）就该跟着变，与 `enabled`（用户意图）性质不同。
     """
     info = meta.get("info", {}) or {}
     tags = ",".join([str(t) for t in (info.get("tags") or [])])
@@ -540,18 +625,20 @@ def upsert_poc(path, meta):
     name = info.get("name", "")
     severity = info.get("severity", "medium")
     status = meta.get("_status", "ok")
+    conf = poc_confidence(path, meta)
     now = _now()
     try:
         conn = get_conn()
         try:
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO pocs(path,poc_id,name,severity,tags,enabled,status,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?) "
+                "INSERT INTO pocs(path,poc_id,name,severity,tags,enabled,status,confidence,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(path) DO UPDATE SET poc_id=excluded.poc_id, name=excluded.name, "
                 "severity=excluded.severity, tags=excluded.tags, status=excluded.status, "
-                "updated_at=excluded.updated_at",
-                (path, poc_id, name, severity, tags, default_poc_enabled(path), status, now))
+                "confidence=excluded.confidence, updated_at=excluded.updated_at",
+                (path, poc_id, name, severity, tags, default_poc_enabled(path), status,
+                 conf, now))
             rid = cur.lastrowid
             if rid in (None, 0):     # UPSERT 走 DO UPDATE 分支时 lastrowid 仍返回原行 id
                 row = conn.execute("SELECT id FROM pocs WHERE path=?", (path,)).fetchone()
@@ -563,18 +650,21 @@ def upsert_poc(path, meta):
     except sqlite3.OperationalError:        # 老 SQLite 不支持 UPSERT 语法
         row = _query("SELECT id FROM pocs WHERE path=?", (path,), one=True)
         if row:
-            _exec("UPDATE pocs SET poc_id=?, name=?, severity=?, tags=?, status=?, updated_at=? "
-                  "WHERE id=?", (poc_id, name, severity, tags, status, now, row["id"]))
+            _exec("UPDATE pocs SET poc_id=?, name=?, severity=?, tags=?, status=?, "
+                  "confidence=?, updated_at=? WHERE id=?",
+                  (poc_id, name, severity, tags, status, conf, now, row["id"]))
             return row["id"]
         try:
-            return _exec("INSERT INTO pocs(path,poc_id,name,severity,tags,enabled,status,updated_at) "
-                         "VALUES(?,?,?,?,?,?,?,?)",
-                         (path, poc_id, name, severity, tags, default_poc_enabled(path), status, now))
+            return _exec("INSERT INTO pocs(path,poc_id,name,severity,tags,enabled,status,"
+                         "confidence,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                         (path, poc_id, name, severity, tags, default_poc_enabled(path),
+                          status, conf, now))
         except sqlite3.IntegrityError:      # 仍然并发冲突 → 退化为更新
             row = _query("SELECT id FROM pocs WHERE path=?", (path,), one=True)
             if row:
-                _exec("UPDATE pocs SET poc_id=?, name=?, severity=?, tags=?, status=?, updated_at=? "
-                      "WHERE id=?", (poc_id, name, severity, tags, status, now, row["id"]))
+                _exec("UPDATE pocs SET poc_id=?, name=?, severity=?, tags=?, status=?, "
+                      "confidence=?, updated_at=? WHERE id=?",
+                      (poc_id, name, severity, tags, status, conf, now, row["id"]))
                 return row["id"]
             raise
 
@@ -611,15 +701,61 @@ def poc_source(path):
     return "other"
 
 
-def bulk_set_poc_enabled(enabled, severity=None, source=None, kind=None, only_ok=True):
+# 置信度分层（P1-2）：high > medium > low，由**来源 + 匹配器结构**推导，不靠人手填。
+CONF_ORDER = ("low", "medium", "high")
+
+_SRC_CONFIDENCE = {"builtin": "high", "user": "medium", "nuclei": "medium",
+                   "imported": "low", "other": "low"}
+
+# "证明漏洞"的匹配器类型：判响应内容/长度，而不是只看 HTTP 状态码
+_CONTENT_MATCHERS = ("word", "words", "regex", "size", "length")
+
+
+def _has_content_matcher(meta):
+    """POC 是否用**响应内容**做证据（word/regex/size），而不是只判状态码。
+
+    只判 `status: [200]` 的规则在真实站点上几乎必中（404 页、WAF 拦截页、统一跳转页
+    都可能回 200），这类规则是误报的主要来源，必须降一级。
+    """
+    blocks = meta.get("http") or meta.get("requests") or []
+    for b in (blocks if isinstance(blocks, list) else []):
+        if not isinstance(b, dict):
+            continue
+        for m in (b.get("matchers") or []):
+            if isinstance(m, dict) and str(m.get("type") or "").lower() in _CONTENT_MATCHERS:
+                return True
+    return False
+
+
+def poc_confidence(path, meta=None):
+    """给 POC 定置信度分层（P1-2）：high / medium / low。
+
+    依据（可复核，不是拍脑袋）：
+    ① **来源**：`builtin` 是人工精选的暴露面检查（每条都带内容特征关键字）→ high；
+       用户上传 → medium；官方 nuclei 模板 → medium；`tools/import_ref_pocs.py` 从参考项目
+       静态导入的**指纹型规则**（`tags: imported/finger`，本意是"识别组件"而不是"证明漏洞"）
+       → low；
+    ② **结构降权**：没有任何内容匹配器（只判状态码）的规则再降一级（见 `_has_content_matcher`）。
+
+    `meta=None` 表示只有路径、拿不到模板内容（例如从库里读老记录），此时只按来源定级。
+    """
+    base = _SRC_CONFIDENCE.get(poc_source(path), "low")
+    if meta is not None and not _has_content_matcher(meta or {}):
+        base = CONF_ORDER[max(0, CONF_ORDER.index(base) - 1)]
+    return base
+
+
+def bulk_set_poc_enabled(enabled, severity=None, source=None, kind=None, only_ok=True,
+                         confidence=None):
     """按分类批量开关 POC（POC 管理页的"按分类开关"，避免 312 个逐个点）。
 
     - severity：critical/high/medium/low/info
     - source：builtin/imported/nuclei/user/other
+    - confidence：high/medium/low（P1-2 分层；库里为空的老记录按路径即时补算）
     - kind：全部 / 变更（当前状态与目标状态不同的，便于"只改需要改的"）
     返回被更新的条数。
     """
-    rows = _query("SELECT id, path, severity, enabled, status FROM pocs")
+    rows = _query("SELECT id, path, severity, enabled, status, confidence FROM pocs")
     target = 1 if enabled else 0
     ids = []
     for r in rows:
@@ -628,6 +764,8 @@ def bulk_set_poc_enabled(enabled, severity=None, source=None, kind=None, only_ok
         if severity and (r["severity"] or "") != severity:
             continue
         if source and poc_source(r["path"]) != source:
+            continue
+        if confidence and (r["confidence"] or poc_confidence(r["path"])) != confidence:
             continue
         if kind == "diff" and int(r["enabled"] or 0) == target:
             continue

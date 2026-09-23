@@ -35,6 +35,7 @@
 | （无 subfinder 时的被动收集） | subdomain | 内置 `scanner/passive.py` 多来源免 key 接口（crt.sh / certspotter / alienvault / hackertarget / rapiddns / sublist3r） |
 | （字典爆破前先测通配） | subdomain | `scanner/wildcard.py` 泛解析识别与过滤（纯 DNS 查询） |
 | （手工常忘的 CNAME 检查） | takeover | `scanner/dnsq.py` 解析 CNAME 链 → `scanner/takeover.py` 比对 41 条第三方服务指纹 |
+| `fscan -np -nobr -nopoc -p <ports> <host>` | portscan | fscan 适配器（只取端口发现，不跑 POC/爆破）；解析其四种开放端口行 + 统计行交叉校验 |
 | `nmap -sT -Pn -n --open -p <ports> -oG -` | portscan | nmap 适配器（`-sT` 免 root）；未装则内置 TCP connect 兜底 + 被动 banner |
 | （手工没有的部分） | osint | IP 反查域名 + `/24` C 段归纳；favicon（mmh3）→ FOFA 反查同源资产，黑 ico 放弃拓展 |
 | （手工没有的部分） | jsmine | 抓站点 JS → 提取域名/接口 URL/疑似凭据，第三方域黑名单 + 前后文降噪 |
@@ -97,9 +98,17 @@
 
 - 输入：目标里的 `ip` / `url` 主机名 / `domain` + `ctx.results["domains_for_probe"]`，
   上限 `portscan.max_hosts`（默认 100）；
-- 处理：nmap 优先（`-sT -Pn -n --open -p <ports> -oG -`，`-sT` 无需 root），
-  未装则内置 TCP connect 兜底；`portscan.ports` 留空用内置 48 项 TOP 表，
-  也可写 `"80,443,8080"` 或 `"1-1024"`；连接成功后对会主动问候的端口读 **banner**（纯被动读取）；
+- 处理：**引擎顺序 `portscan.engine="auto"` = fscan → nmap → 内置 TCP connect**（也可钉死其中一个）。
+  fscan 调用强制 `-np -nobr -nopoc`（不暴力破解、不跑 POC，只取端口发现），老版本不认 `-nopoc`
+  时自动去掉重试；nmap 用 `-sT -Pn -n --open -p <ports> -oG -`（`-sT` 无需 root）；
+  未装则内置 TCP connect 兜底。`portscan.ports` 留空用内置 48 项 TOP 表，
+  也可写 `"80,443,8080"` 或 `"1-1024"`；连接成功后对会主动问候的端口读 **banner**（纯被动读取）。
+  **fscan 的返回语义（2026-09-23 续12 按 2.2.1 真实输出校准）**：开放端口行是
+  `[*] ip:port <service>` / `[*] http://ip:port` / `[+] http://ip:port code:NNN`（老版本 `[+] ip:port open`），
+  收尾固定打 `发现 N 个开放端口`。解析器用三条**行首锚定**正则取端口并与该统计行**交叉校验**，
+  数目不符一律交回回退（`None`）—— 所以"少解析"不会变成静默漏报；统计行写 0 个则返回 `[]`（不回退）。
+  `-nopoc` **管不到 fscan 内置的服务插件**（仍可能打印 `[!] Redis未授权访问` 这类只读结论），
+  本阶段**只采信"端口开放"的事实行，不采信它的漏洞结论**；
 - **全端口扫描（1-65535）**：`portscan.mode="full"`（配合 `portscan.full_ports`，默认 `1-65535`）
   或**任务选项** `portscan_full=true`。后者是 GUI「全端口扫描」页对单个 IP 发起的用法：
   它新建一个只跑 `portscan` 的阶段任务，**即使全局 `portscan.enabled=false` 也会执行**
@@ -255,12 +264,16 @@
      命中的检查根本不执行；注入类检查（SQLi/XSS）走 `scanner/evasion.py` 的 payload 变形绕过 WAF；
   3. `checks.min_severity`（默认 medium）—— **结果级**：过滤残余的低危/info 结果；
 - POC 选取顺序：`checks.poc_link_tags=true` 时，**站点技术栈命中的 POC 优先且不受
-  `checks.poc_max_per_site` 约束**，其余 POC 排在其后受限执行；POC 若声明了 `favicon_md5_list`
+  `checks.poc_max_per_site` 约束**，其余 POC 排在其后受限执行；**同一批候选内再按 POC 的
+  `confidence` 排序**（`db.poc_confidence`：来源分 × 内容型匹配器，只降级不升级 —— 详见
+  docs/poc-guide.md「置信度分层」），预算有限时先跑更可能准的规则；POC 若声明了 `favicon_md5_list`
   且与 `sites.favicon` 不符，**零请求**直接跳过；
 - 注入探测的"动态性"：payload 变体按 `evasion.bypass_level` 生成（注释替空格/大小写/内联注释/
   URL 编码/双重编码/关键字分片），**每次运行的变体顺序随机**，参数顺序也随机 —— 请求形态不固定，
   降低被 WAF 规则固化识别的概率；原始 payload 始终排第一（最便宜、命中率最高）；
-- 产物：SQLite `vulns` 表、GUI 漏洞页、Markdown 报告；
+- 产物：SQLite `vulns` 表、GUI 漏洞页、Markdown 报告。
+  **人工复核（P1-1）**：结果可在 GUI 漏洞页标「已确认 / 误报」，**判误报的行不计入漏洞数**，
+  报告里另立「已判误报（人工复核排除）」附录（判错可改回）；
 - 并发：站点级并发（max_workers/2），站点内部串行，避免对单目标压力过大。
 
 ### ⑨ screenshot 站点截图（`screenshot.enabled`，**默认关**）

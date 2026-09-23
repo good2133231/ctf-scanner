@@ -3,6 +3,99 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-23 —— 续12：误报复核 + POC 置信度分层 + Linux 实机验收 + fscan 解析真缺陷
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户本轮指令：「**指定授权目标，跑一遍完整 11 阶段 这个我回头自己跑就行 你把其他解决**，
+我有一台 linux 可以远程操作来验证 linux，你可以在 `10.10.3.121` …」。
+
+拆解后执行的边界：**完整 11 阶段真实授权目标扫描由用户自行执行**（红线：AI 不自行选靶）；
+AI 负责其余全部（P1-1 / P1-2 / P2-3 Linux 验收），并据 Linux 实机抓到的 fscan 真实输出修掉一个真缺陷。
+
+### 1. P1-1 误报复核工作流（`vulns` 复核三态）
+
+- `vulns` 新增 `review TEXT DEFAULT ''` / `review_note` / `reviewed_at` 三列（`_COLUMN_PATCHES` 同步补列，
+  老库自动增列）。状态枚举集中在 `db.REVIEW_STATES = ("", "confirmed", "false_positive")`，
+  非法值一律经 `db.norm_review()` 归一为 `""`（不接受自由文本，避免前端传脏值）。
+- API：`db.set_vuln_review(vuln_id, state, note=None)`（不存在 id 返回 0）、
+  `bulk_set_vuln_review(ids, state, note=None)`、`review_counts(task_id=None)`、
+  `list_vulns(..., review=None)`（`review="1"` 归一为 `"pending"`）。
+- **修掉一个自己引入的真缺陷**：`bulk_set_vuln_review` 原走 `_exec()`，而 `_exec` 返回的是
+  `cur.lastrowid` —— UPDATE 语句上恒为 0，于是 `POST /api/vulns/review` 一直回 `affected: 0`，
+  前端会以为"一条都没改"。改为自带连接 + `cur.rowcount`。`tests/smoke.py [5r]` 第一次跑就抓到了它。
+- GUI：漏洞页三态下拉（待复核/已确认/误报）+ 批量打标 bulkbar（`postReview` / `initVulnReview`）。
+- 报告：概览加一行 `> 人工复核台账：已确认 N ｜ 待复核 N ｜ 已判误报 N`；
+  **判误报的行不进「潜在漏洞」表、不计入漏洞数**，改为文末单列 `## 已判误报（人工复核排除）` 附录
+  （保留可回溯 —— 判错还能翻回来）。
+
+### 2. P1-2 POC 置信度分层
+
+- `pocs` 新增 `confidence TEXT DEFAULT ''`（同样走 `_COLUMN_PATCHES`）。
+- `db.poc_confidence(path, meta=None)` = **来源分**（`_SRC_CONFIDENCE`：builtin=high / user·nuclei=medium /
+  imported·other=low）× **内容型匹配器**（`word`/`words`/`regex`/`size`/`length`）是否存在 → 存在则降一级。
+  **只降级不升级**（`base = CONF_ORDER[max(0, CONF_ORDER.index(base)-1)]`）——
+  否则一个 imported 模板只要带了 `regex` 就升到 high，分层立刻失去意义。
+- `upsert_poc` 每次同步重算 `confidence`（`DO UPDATE SET confidence=excluded.confidence`）——
+  与 `enabled` 明确区分：**`enabled` 是用户意图，同步时绝不覆盖**；`confidence` 是推导值，重算才对。
+- `vulnscan._by_conf(items)`：三个返回分支全过它，**指纹命中仍绝对优先**，同批内才按置信度排。
+  只作排序键、**不做过滤** —— 低置信是"排在后面"，不是"不扫"（扫不扫由 `skip_severities` 与 `enabled` 决定）。
+- `bulk_set_poc_enabled(..., confidence=None)`：「POC 管理」页可按层批量启停，含 `kind=diff` 幂等语义。
+- 引擎侧：`load_enabled_pocs` 给每个 meta 附 `_confidence`；`load_poc_file(path)` 返回带 `_status`/`_path`
+  的 dict 且**失败永不抛异常**（smoke 用它加载内置 POC 做断言）。
+
+### 3. P2-3 Linux 实机验收（用户在 `10.10.3.121` 提供 Ubuntu 机器）
+
+用户此前把这条记为"物理上无法验证"，本轮解锁。整树拷到 `/tmp/ctfscanner` 后：
+
+- `python3 tests/smoke.py` → **SMOKE PASS**（Ubuntu 22.04.5 / Python 3.10.12，含 `[5r]`/`[5s]` 新断言）；
+  `[5o]` 现在会按运行平台自报状态（不再有"本机无 WSL/Docker、实机未跑"这类陈旧表述）。
+- **无头截图**：`/snap/bin/chromium` 对 `http://127.0.0.1:8766/` 出图 **11274 字节合法 PNG（0.9s）**，
+  路径探测与 `--headless=new --screenshot=` 参数均正确。**残留边界（不是代码缺陷）**：
+  snap 版 chromium 有**私有 `/tmp` 沙箱**，产物路径落在系统 `/tmp` 下会报 `Failed to write file`；
+  项目默认写 `logs/task_<id>/shots/`，不受影响。`firefox` 是 snap 包装脚本、`_CMD_NAMES` 也不含它。
+- **外部二进制**：`/usr/bin/nmap` 与手工下载的 **fscan 2.2.1** 真实调用成功。
+- **仍未验（如实标注）**：subfinder / puredns / httpx 的适配分支（那台机器上未装，走 `which` + 内置兜底）。
+
+搬运注意（已写进 `AGENTS.md §6`）：`scp` 整树时**别用 `tar --exclude=.git`** ——
+libarchive 按 basename 匹配，会把 `smoke_root/.git/config` 一起排掉，导致 `[3] pipeline`
+少一条 exposure-git-config 而**假失败**。Windows 侧非交互 SSH 用 `SSH_ASKPASS`
+（**必须放纯 ASCII 路径**，含中文会 `CreateProcessW failed error:2`）+ `SSH_ASKPASS_REQUIRE=force`。
+
+### 4. fscan 适配静默漏报（真缺陷，Linux 实机抓真实输出才暴露）
+
+- **现象**：Linux 上真跑 fscan 2.2.1，解析出来 **0 个端口**（而统计行明写 8 个）。
+- **根因**：`_FSCAN_OPEN_RE` 只认 `[+] ip:port open`，而 2.2.1 的开放端口行是
+  `[*] ip:port <service>` / `[*] http://ip:port` / `[+] http://ip:port code:NNN` —— 一条都不匹配。
+  **更糟的是返回语义**：解析为空返回 `[]`（不是 `None`），而阶段只在 `found is None` 时才回退
+  nmap / 内置 → **静默漏报且不兜底**（"扫了但什么都没扫到"）。
+- **修法**：三条**行首锚定**正则（`_FSCAN_SVC_RE` / `_FSCAN_WEB_RE` / `_FSCAN_OPEN_RE`）
+  → 取端口集合，再与收尾统计行 `发现 N 个开放端口` **交叉校验**：
+  - `None` = 没装 / 起不来 / `rc≠0` / **解析数与统计行不符**（少了=换了格式，多了=认进了非 open 行）
+    → 交回调用方回退；
+  - `[]` = 统计行明确写"发现 0 个" → 确实没有，**不必回退**。
+- **必须行首锚定**：`[+]` 行的 title 段会出现 `title:Redirecting to http://127.0.0.1:8081/system`，
+  行中间乱搜 URL 会把**跳转目标**误记成端口。
+- 另记：`-nopoc` **只管 POC 模块，管不到 fscan 内置的服务插件**（实测仍输出
+  `[!] Redis未授权访问: ip:port` 这类只读结论）—— 本模块**只解析"端口开放"的事实行，不采信其漏洞结论**。
+- Linux 实测：修复前 **0 条 → 修复后 8 条**；全闭端口 → `[]`；缺二进制 → `None`；`nmap_scan` 兜底正常。
+
+### 5. 回归与文档
+
+- `tests/smoke.py`：`[5e-0]` 重写为 7 组断言（内嵌 fscan 2.2.1 真实样本，含 ANSI 码与跳转 title）；
+  新增 `[5r]`（复核）、`[5s]`（置信度）。**Windows `py -3 tests/smoke.py` 与 Linux `python3 tests/smoke.py`
+  均 SMOKE PASS**。
+- 文档同步：`AGENTS.md`（§3 目录地图 portscan/db、§6 smoke 清单与 Linux 验收段、§7 新增 fscan 条 +
+  复核与置信度条）、`TODO.md`（P1-1/P1-2/P2-3 转 `[完成]`，P2-3 的 ②③ 补实机结论）、
+  `docs/roadmap.md`（误报管理 / POC 置信度打钩 + Linux 条目转 `[x]`，并注明"实测校准"仍是开放项）、
+  `docs/takeover-2026-09-23.md`（表格第 5/6 条 + 已知缺陷第 1 条）、`todo.txt`（本轮小节）、
+  `docs/pipeline.md` / `docs/architecture.md` / `docs/usage.md` / `docs/poc-guide.md` / `README.md`
+  （fscan 解析语义、vulns.review、pocs.confidence、Linux 验收结论）。
+- **换行符自查（`AGENTS.md §9`）**：本轮所改文件逐个按字节核对，`git diff --stat` 无纯 EOL 假变更。
+  发现仓库里仍有 6 个文件是**索引侧 LF-only**（此前提交遗留，非本轮引入）：
+  `scanner/portscan.py`、`scanner/report.py`、`scanner/stages/vulnscan.py`、`docs/poc-guide.md`、
+  `gui/templates/pocs.html`、`gui/templates/vulns.html` —— 按 §9 归位为 CRLF，
+  但**单独一个"纯 EOL"提交**，不与内容改动混在一起（否则整文件假变更会淹没 review，这正是 §9 的由来）。
+
 ## 2026-09-23 —— 接管收尾（续10）：路径归一化 + 端到端浅扫进 smoke + 全 11 阶段实测
 > 实施者：**WorkBuddy · Hy4-preview**
 

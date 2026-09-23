@@ -8,9 +8,12 @@
 - **不调用 masscan**：它依赖原始套接字与 root，且扫描速率激进，与"非破坏性"约束冲突。
   nmap 只使用 `-sT -Pn --open`（TCP connect、跳过主机发现、只列开放端口）。
 - fscan（可选，`tools.fscan` 填了路径或它在 PATH 里才会用）**强制带 `-np -nobr`**，
-  并额外带 `-nopoc`：`-nobr` 关掉内置暴力破解、`-nopoc` 关掉自带的 Web POC 攻击链，
+  并额外带 `-nopoc`（fscan 帮助原文：`-nobr` 禁用暴力破解 / `-nopoc` 禁用POC扫描），
   这两条是本项目的非破坏性红线（见 TODO.md）；我们只要它的端口发现能力，
   漏洞检测交给 vulnscan 阶段。老版本 fscan 不认 `-nopoc` 时会退到 `-np -nobr` 重试一次。
+  **实测补充**：`-nopoc` 只管 POC 模块，fscan 内置的**服务插件**（mysql/redis/webpoc 指纹）
+  仍会跑，输出里可能出现 `[!] Redis未授权访问: ip:port` 这类**只读**探测结论 ——
+  本模块只解析"端口开放"的事实行，不采信它的漏洞结论。
 
 TOP_PORTS 覆盖 CTF 里真正高频的面：Web 变体端口、数据库、远程管理、容器/中间件。
 """
@@ -179,10 +182,25 @@ def nmap_scan(host, ip, ports, timeout=1, binary=None):
 
 # fscan 打印结果时会带 ANSI 颜色码，不剥掉会污染解析
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-# `[+] 192.168.1.1:8080 open` —— 我们只认这一种"确实开了"的行；
-# `[*] ip:port MS17-010` 这类是它的漏洞/POC 判定，我们**故意不解析**
-# （`-nopoc` 已经在源头上关掉了它，服务识别交给 probe 阶段 —— 宁可少报，不猜）。
-_FSCAN_OPEN_RE = re.compile(r"\[\+\]\s*(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})\s+open\b", re.I)
+
+# 实测 fscan 2.2.1，"端口确实开着"的行形态有三种（外加老版本一种）：
+#   ① `[*] 127.0.0.1:22   ssh   [Product:OpenSSH …]`        服务插件连上并识别出服务
+#   ② `[*] http://127.0.0.1:888   http   [Product:nginx …]`  Web 插件连上并抓到 banner
+#   ③ `[+] http://127.0.0.1:8081  code:302 len:358 …`        Web 插件拿到了响应码
+#   ④ `[+] 192.168.1.1:8080 open`                            老版本（1.x）形态
+# 这四种都只表达"端口开放"这一个事实，可以放心采信。
+#
+# **一律行首锚定**（`^\s*\[…\]\s*…`）：③ 行的 title 段里会出现
+# `title:Redirecting to http://127.0.0.1:8081/system` 这种"跳转目标 URL"，
+# 若在行中间乱搜 URL，会把跳转目标误记成本机开放端口。
+_FSCAN_SVC_RE = re.compile(r"^\s*\[\*\]\s*(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})(?=\s)", re.M)
+_FSCAN_WEB_RE = re.compile(
+    r"^\s*\[[*+]\]\s*https?://(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})(?=[/\s])", re.M)
+_FSCAN_OPEN_RE = re.compile(
+    r"^\s*\[\+\]\s*(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})\s+open\b", re.I | re.M)
+# 收尾统计行 `[*] 扫描完成，发现 8 个开放端口`（0 个时同样会打）—— 权威总数，用于交叉校验
+_FSCAN_TOTAL_RE = re.compile(r"发现\s*(\d+)\s*个开放端口")
+
 # 老版本 fscan 不认新参数时，stderr/stdout 会打 usage 或 "flag provided but not defined"
 _FSCAN_BAD_FLAG_RE = re.compile(r"not defined|flag provided|Usage of|incorrect usage", re.I)
 
@@ -192,11 +210,35 @@ def _fscan_flags(with_nopoc=True):
     return ["-np", "-nobr"] + (["-nopoc"] if with_nopoc else [])
 
 
-def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None):
-    """fscan 端口扫描（装了 fscan 时可用）。失败返回 None → 调用方回退 nmap/内置。
+def _parse_fscan(text):
+    """从 fscan 输出里提取开放端口。返回 `(ports, declared)`。
 
-    比 nmap 快得多（默认 600 线程），适合全端口；代价是输出格式随版本浮动，
-    所以解析刻意写得很保守（只认 `[+] ip:port open`），认不出就返回 [] 而不是瞎猜。
+    `ports` 是去重后的端口集合；`declared` 是收尾统计行自报的开放端口数
+    （输出里没有那一行时为 None）。调用方拿两者判断"这份解析是否可信"。
+    """
+    ports = set()
+    for rx in (_FSCAN_SVC_RE, _FSCAN_WEB_RE, _FSCAN_OPEN_RE):
+        for m in rx.finditer(text):
+            p = int(m.group(2))
+            if 0 < p <= 65535:
+                ports.add(p)
+    m = _FSCAN_TOTAL_RE.search(text)
+    return ports, (int(m.group(1)) if m else None)
+
+
+def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None):
+    """fscan 端口扫描（装了 fscan 时可用）。**解析不可信时返回 None** → 回退 nmap/内置。
+
+    返回语义（踩过坑，务必保持）：
+    - `None` —— 没装 / 起不来 / 退出码非 0 / **解析数与统计行不符**（统计行自报 N 个，
+      我们解析出 ≠ N 个：少了说明该版本换了行格式、多了说明认进了不是"开放端口"的行）。
+      调用方据此回退；
+    - `[]`   —— 统计行明确写了 `发现 0 个开放端口`，即"确实没有开放端口"，不必回退。
+
+    早先的实现只认 `[+] ip:port open`，而 fscan 2.x 早已改用 `[*] ip:port <service>`
+    形态，于是"解析到 0 条 → 返回 [] → 阶段以为扫描成功、不再兜底"，
+    造成**静默漏报**。现在用统计行交叉校验，数目不符一律返回 None 交回兜底。
+
     `-t` 跟着策略里的 `portscan.workers` 走（×8，封顶 600），让用户仍能节制请求量。
     """
     bin_path = binary or which("fscan")
@@ -216,16 +258,8 @@ def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None):
         rc, out, err = run_cmd(base + _fscan_flags(with_nopoc=False), timeout=proc_timeout)
     if rc != 0:
         return None
-    text = _ANSI_RE.sub("", out or "")
-    seen, results = set(), []
-    for line in text.splitlines():
-        m = _FSCAN_OPEN_RE.search(line)
-        if not m:
-            continue
-        port = int(m.group(2))
-        if not 0 < port <= 65535 or port in seen:
-            continue
-        seen.add(port)
-        results.append({"host": host, "ip": ip, "port": port,
-                        "service": TOP_PORTS.get(port, ""), "banner": ""})
-    return sorted(results, key=lambda r: r["port"])
+    found, declared = _parse_fscan(_ANSI_RE.sub("", out or ""))
+    if declared is None or len(found) != declared:
+        return None
+    return [{"host": host, "ip": ip, "port": p,
+             "service": TOP_PORTS.get(p, ""), "banner": ""} for p in sorted(found)]

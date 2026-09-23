@@ -232,6 +232,7 @@ def create_app():
             ports=db.list_ports(task_id), csegs=db.list_csegs(task_id),
             dirs=dirs, dirs_hidden=dirs_hidden,
             vulns=db.list_vulns(task_id=task_id, limit=1000),
+            review=db.review_counts(task_id),
             leads=leads,
             leads_intel=sum(1 for r in leads if r["kind"] == "intel"),
             # 补扫入口：任务页对"本任务的站点/IP"直接发起新任务；rescan_of 用于反向回跳
@@ -348,15 +349,18 @@ def create_app():
     def pocs():
         # _query 返回 sqlite3.Row（只读），这里要往每行补 source 字段，故转成 dict
         rows = [dict(r) for r in db.list_pocs()]
-        # 分类统计（来源 / 级别），供页面上的"按分类批量开关"展示当前分布
-        stats = {"source": {}, "severity": {}, "enabled": 0, "total": len(rows)}
+        # 分类统计（来源 / 级别 / 置信度），供页面上的"按分类批量开关"展示当前分布
+        stats = {"source": {}, "severity": {}, "confidence": {}, "enabled": 0, "total": len(rows)}
         for r in rows:
             src = db.poc_source(r["path"])    # 来源判定依赖原始路径，必须在相对化之前算
             r["source"] = src                 # 列表展示 / 前端筛选用
+            # 置信度（P1-2）：库里为空的老记录按路径即时补算，页面永远有值可筛
+            r["confidence"] = r["confidence"] or db.poc_confidence(r["path"])
             r["path"] = rel_display(r["path"])  # 页面只展示相对路径
             stats["source"][f"{src}:on" if r["enabled"] else f"{src}:off"] = \
                 stats["source"].get(f"{src}:on" if r["enabled"] else f"{src}:off", 0) + 1
             stats["severity"][r["severity"] or "-"] = stats["severity"].get(r["severity"] or "-", 0) + 1
+            stats["confidence"][r["confidence"]] = stats["confidence"].get(r["confidence"], 0) + 1
             stats["enabled"] += int(r["enabled"] or 0)
         return render_template("pocs.html", pocs=rows, stats=stats)
 
@@ -384,7 +388,7 @@ def create_app():
     @app.route("/api/pocs/bulk", methods=["POST"])
     @login_required
     def api_poc_bulk():
-        """按分类批量开关 POC：body={action:'enable'|'disable', severity?, source?, kind?}。"""
+        """按分类批量开关 POC：body={action:'enable'|'disable', severity?, source?, confidence?, kind?}。"""
         data = request.get_json(silent=True) or request.form
         action = (data.get("action") or "").strip()
         if action not in ("enable", "disable"):
@@ -392,6 +396,7 @@ def create_app():
         n = db.bulk_set_poc_enabled(action == "enable",
                                     severity=(data.get("severity") or "").strip() or None,
                                     source=(data.get("source") or "").strip() or None,
+                                    confidence=(data.get("confidence") or "").strip() or None,
                                     kind=(data.get("kind") or "").strip() or None)
         return jsonify({"ok": True, "affected": n})
 
@@ -408,16 +413,42 @@ def create_app():
     def vulns():
         sev = request.args.get("severity") or None
         tid = request.args.get("task_id") or ""
+        # 复核筛选（P1-1）：`review` 三态。用 "1" 表示"只看未复核"是给链接用的短写法，
+        # 统一在 db.norm_review() 里归一，页面传任何非法值都只会落到"待复核"。
+        rev = request.args.get("review")
+        rev = (rev or "").strip().lower() or None
+        if rev == "1":
+            rev = "pending"
         try:
             tid = int(tid)
         except (TypeError, ValueError):
             tid = None
-        rows = db.list_vulns(task_id=tid, severity=sev, limit=500)
+        rows = db.list_vulns(task_id=tid, severity=sev, limit=500, review=rev)
         # 跨任务视图里只有 `任务 #12` 没法辨认，这里带上任务名，并支持按任务筛选。
         tasks = db.list_tasks(limit=1000)
         return render_template("vulns.html", vulns=rows, sev=sev or "",
+                               review=rev or "", counts=db.review_counts(tid),
                                task_id=tid or "", tasks=tasks,
                                task_names={t["id"]: t["name"] for t in tasks})
+
+    @app.route("/api/vulns/review", methods=["POST"])
+    @login_required
+    def api_vuln_review():
+        """人工复核打标（P1-1）：body={ids:[...], state:''|confirmed|false_positive, note?}。
+
+        `state` 空串 = 退回"待复核"（复核结论可以撤销）。状态非法一律归一成待复核，
+        不会把前端传来的任意字符串写进库（见 db.norm_review）。
+        """
+        data = request.get_json(silent=True) or request.form
+        raw_ids = data.get("ids")
+        if isinstance(raw_ids, str):
+            raw_ids = [x for x in raw_ids.replace(",", " ").split()]
+        ids = [str(i).strip() for i in (raw_ids or []) if str(i).strip()]
+        if not ids:
+            return jsonify({"error": "ids 不能为空"}), 400
+        note = data.get("note")
+        n = db.bulk_set_vuln_review(ids, data.get("state"), note=note)
+        return jsonify({"ok": True, "affected": n, "state": db.norm_review(data.get("state"))})
 
     # ---------- 资产分栏 ----------
     #
@@ -789,7 +820,9 @@ def create_app():
         """对勾选资产发起**补充扫描**：新建一个只跑对应阶段、走全量档的任务。
 
         `stage=dirscan` → 深度目录补扫（全量分层字典 + dirmap + 后缀派生）；
-        `stage=portscan` → 全端口补扫（1-65535）。任务级选项 `dirscan_full` / `portscan_full`
+        `stage=portscan` → 全端口补扫（1-65535）；
+        `stage=vulnscan` → **复查**（P1-1）：对勾选漏洞的目标重跑一次漏洞初筛，得到新鲜结论
+        再回头去「漏洞风险」页给旧记录打「确认/误报」。任务级选项 `dirscan_full` / `portscan_full`
         让这个任务无视全局开关与档位走全量，**不改全局策略**；`rescan_of` 记下发起它的原任务，
         任务详情页据此显示「由任务 #N 的补扫发起」并可回跳。
 
@@ -797,7 +830,7 @@ def create_app():
         """
         stage = (request.form.get("stage") or "").strip().lower()
         fallback = _safe_next(request.form.get("next"), url_for("tasks"))
-        if stage not in ("dirscan", "portscan"):
+        if stage not in ("dirscan", "portscan", "vulnscan"):
             return redirect(fallback)
         targets, seen = [], set()
         # 字段名沿用各页既有习惯（`target`），同时接受 `targets` 便于直接调 API
@@ -808,10 +841,12 @@ def create_app():
                 targets.append(t)
         if not targets:
             return redirect(fallback)
-        label = "全目录" if stage == "dirscan" else "全端口"
+        label = {"dirscan": "全目录", "portscan": "全端口", "vulnscan": "漏洞复查"}[stage]
         name = (request.form.get("name") or "").strip() or \
             time.strftime(f"补扫{label}-%m%d-%H%M%S")
-        options = {f"{stage}_full": True}
+        # vulnscan 没有"全量档"的概念（漏洞初筛的额度由 checks/limits 决定），
+        # 所以只给它记 rescan_of，不塞一个引擎根本不读的 `vulnscan_full`。
+        options = {} if stage == "vulnscan" else {f"{stage}_full": True}
         from_task = (request.form.get("from_task") or "").strip()
         if from_task.isdigit():          # 只收任务号，避免把任意文本写进任务选项
             options["rescan_of"] = int(from_task)

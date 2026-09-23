@@ -155,7 +155,9 @@
       （首页/上一页/下一页/末页 + "共 N 条 · 每页 X · 第 Y/Z 页"，`PAGE_SIZES=(50,100,200,500)`）；
       `/subdomains`、`/sites`、`/dirs` 三页由客户端筛选改为「SQL 侧过滤 + 分页」，
       页码越界自动回落到最后一页重查。跨任务视图不再被 `LIMIT 500` 截断。
-- [ ] **P2-3 跨平台（Linux + Windows）**：**已核查现有代码基本合规**，剩余是补验证与提示。
+- [完成：**Linux 实机验收已达成**（2026-09-23 续12）—— 在 Ubuntu 22.04.5 / Python 3.10.12 上
+  跑 `python3 tests/smoke.py` → **SMOKE PASS**，同一份代码无平台分支；①②③ 三项均已实机验证，
+  各自的残留边界见下方标注] **P2-3 跨平台（Linux + Windows）**：代码已基本合规，验证已补。
   - 已满足（实测 grep 过）：路径走 `pathlib`（`BASE_DIR / ...`，无硬编码分隔符）；
     `utils.run_cmd` 收列表 argv 且 `shell=False`（命令不存在返回 127、超时 124）；
     解释器选择用 `utils.pick_python`（Windows `python` / Linux `python3`，不可用则回退 `sys.executable`）；
@@ -170,10 +172,19 @@
     ⑤ `pick_python("不存在")` 实测回退 `sys.executable`。
     实测同时修掉 1 处真实漂移：`tests/smoke.py` 里的假二进制路径原本写 `C:/fake/subfinder.exe`，
     已改为相对形式（该路径只被桩掉的 `run_cmd` 接收、从不执行，但留着会诱导后来者照抄）。
-  - **仍未验证（如实标注，不假装完成）**：① Linux 实机跑 `python3 tests/smoke.py`（本机无 WSL/Docker）；
-    ② 无头浏览器截图（`screenshot.browser` 在 Linux 上要探测 `chromium`/`google-chrome`）；
-    ③ fscan / nmap / subfinder / dirmap 等**外部二进制**在 Linux 上的真实调用
-    （代码全部走 `shutil.which` + 内置兜底，找不到只会降级、不会崩，但没有实机跑过）。
+  - ~~① Linux 实机跑 `python3 tests/smoke.py`（本机无 WSL/Docker）~~ → **已完成（2026-09-23 续12）**：
+    用户在 `10.10.3.121` 提供了 Ubuntu 22.04.5 / Python 3.10.12 实机，整树拷过去后
+    `python3 tests/smoke.py` → **SMOKE PASS**（含 GUI 路由、并发 POC、端到端浅扫）。`[5o]` 现在会按平台自报状态。
+  - ~~② 无头浏览器截图（`screenshot.browser` 在 Linux 上要探测 `chromium`/`google-chrome`）~~ →
+    **已实机验证（2026-09-23 续12）**：`/snap/bin/chromium` 对 `http://127.0.0.1:8766/` 出图
+    **11274 字节合法 PNG（0.9s）**，路径探测与 `--headless=new --screenshot=` 参数均正常。
+    **残留边界（不是代码缺陷）**：snap 版 chromium 有**私有 `/tmp` 沙箱**，产物路径若落在系统
+    `/tmp` 下会报 `Failed to write file`；项目默认写 `logs/task_<id>/shots/`，不受影响。
+    另：`firefox` 是 snap 包装脚本、且 `_CMD_NAMES` 不含它，故不作为候选。
+  - ~~③ fscan / nmap / subfinder / dirmap 等**外部二进制**在 Linux 上的真实调用~~ →
+    **已实机验证（2026-09-23 续12）**：`/usr/bin/nmap` 与手工下载的 **fscan 2.2.1** 均真实调用成功。
+    fscan 真实输出形态与解析在 Linux 上抓取并据此**修掉一个真缺陷**（见 `AGENTS.md §7` 的 fscan 条）。
+    **仍未验**：subfinder / puredns / httpx（那台机器上未装，代码走 `which` + 内置兜底）。
     搬运方式：整体拷贝/clone 进 Linux 即可（`config/keys.yaml` 被 gitignore、需手动带上）。
   - **已补（第八轮，2026-09-22）**：git 通道打通 —— MinGit 便携版就位，仓库已 `git init`
     并完成首次提交 `2267e51`（392 文件）。搬运障碍已消除：整体 clone/拷贝进 WSL2 或 VM 即可验收；
@@ -579,10 +590,21 @@
 
 - [ ] **真实授权目标上跑一遍完整 11 阶段**（`dirscan` 默认开之后的请求量 / 耗时）——
       目前只有 127.0.0.1 靶场样本；红线要求由用户指定授权目标，AI 不自行选靶。
-- [ ] **P1-1 误报复核工作流**（漏洞人工复核状态 + 复查通道）：305 个导入 POC 放开的前置条件。
-- [ ] **P1-2 POC 置信度分层与实测校准**：同上，是"情报自动灌 POC"的前置。
-- [ ] **P2-3 Linux 实机验收**：本机无 WSL/Docker，当前只有 `[5o]` 跨平台静态审计兜底；
-      待验三块 = Linux 上的 `tests/smoke.py`、无头浏览器截图、fscan/nmap 等外部二进制的真实调用。
+      **2026-09-23 用户明确：「这个我回头自己跑就行」** → 由用户自行执行，AI 不代跑。
+- [完成：P1-1 误报复核工作流（2026-09-23 续12）] `vulns` 增 `review`/`review_note`/`reviewed_at`
+      三列（`REVIEW_STATES = "" | confirmed | false_positive`）+ `db.set_vuln_review` /
+      `bulk_set_vuln_review` / `review_counts` / `list_vulns(review=)` + `POST /api/vulns/review`
+      （漏洞页三态下拉 + 批量打标）+ 报告「人工复核台账」与「已判误报（人工复核排除）」附录；
+      **判误报的条目不进「潜在漏洞」表、不计入漏洞数**，但单列附录保留可回溯。
+      回归见 `tests/smoke.py [5r]`。
+- [完成：P1-2 POC 置信度分层（2026-09-23 续12）] `pocs` 增 `confidence` 列，
+      `db.poc_confidence(path, meta)`（来源分 × 内容型匹配器降级，**只降级不升级**）
+      + `vulnscan._by_conf` 排序（指纹命中优先 → 同批内置信度优先）
+      + 「POC 管理」页置信度列/分布/按层批量启停（`bulk_set_poc_enabled(confidence=)`）。
+      回归见 `tests/smoke.py [5s]`。
+- [完成：P2-3 Linux 实机验收（2026-09-23 续12）] 已在 Ubuntu 22.04.5 / Python 3.10.12 实机
+      （用户提供的 `10.10.3.121`）跑 `python3 tests/smoke.py` → **SMOKE PASS**；
+      无头截图与 fscan 真实调用也已实机验证（结论与残留边界见上方 P2-3 条目的 ②③）。
 - [ ] **（可选）给目录字典加"签名列"**，让 `config/dicts/sensitive.txt` 真正被内置检查读取。
 - [ ] **（可选）dirmap 相关**：5 处源码修复的复核 / 是否内联（用户已交由其他 AI 负责）。
 - [ ] **（可选）`db` 单写者限制的更彻底方案**（写操作串行化队列）。

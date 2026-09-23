@@ -61,23 +61,34 @@ class VulnscanStage(Stage):
         evcfg = ctx.settings.get("evasion", {}) or {}
         do_waf = evcfg.get("waf_detect", True)
 
+        def _by_conf(items):
+            """按置信度高低排序（P1-2）：high → medium → low，同级保持注册表内原顺序。
+
+            `list.sort` 是稳定排序，所以"同级保持原顺序"是免费的；这里只加一层排序键，
+            不改变"哪些 POC 会被执行"的集合 —— 那仍由注册表开关与级别门控决定。
+            """
+            return sorted(items, key=lambda p: -db.CONF_ORDER.index(
+                p.get("_confidence") or "low"))
+
         def _pocs_for(site):
             """指纹→POC 联动（P1-1）：站点技术栈命中的 POC 先跑，其余按上限补在后面。
 
             命中项**不受 `poc_max_per_site` 限制**（既然指纹对上了，就是最可能有结果的那批）；
             未命中项只是排在后面并受上限约束，不会被整体丢弃 —— 指纹库只有十几条规则，
             直接"不匹配就不跑"会漏掉大量没有指纹的组件。
+            批次内部再按置信度排序（P1-2）：注册表放开大批低置信规则时，
+            额度先给高置信规则，避免"字母序的运气"决定谁被执行。
             """
             if not link_tags or not pocs:
-                return pocs[:poc_cap] if pocs else []
+                return _by_conf(pocs)[:poc_cap] if pocs else []
             tech = {t.strip().lower() for t in str(site.get("tech") or "").split(",") if t.strip()}
             if not tech:
-                return pocs[:poc_cap]
+                return _by_conf(pocs)[:poc_cap]
             hit, rest = [], []
             for p in pocs:
                 tags = {str(t).lower() for t in ((p.get("info") or {}).get("tags") or [])}
                 (hit if tags & tech else rest).append(p)
-            return hit + rest[:max(0, poc_cap - len(hit))]
+            return _by_conf(hit) + _by_conf(rest)[:max(0, poc_cap - len(hit))]
 
         def _scan_site(site):
             if ctx.stopped():
