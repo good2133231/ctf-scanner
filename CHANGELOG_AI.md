@@ -3,6 +3,77 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-23 —— 接管收尾（续10）：路径归一化 + 端到端浅扫进 smoke + 全 11 阶段实测
+> 实施者：**WorkBuddy · Hy4-preview**
+
+三件事都是接管报告第 7 节里挂着的收尾项（原第 1 / 2 / 3 条）。**全过程只跑本机 127.0.0.1 靶场**，
+未扫描任何外部域名。
+
+### 1. `CTFSCANNER_DB` / `CTFSCANNER_LOGS` 路径归一化（机制修复，不再靠"记得用 `pwd -W`"）
+
+- 新增 `scanner/config.py::env_path(name, default)`，`LOGS_DIR` 与 `db.py::DB_PATH` 都改走它
+  （**不放 `utils.py`**：`utils` 与 `config` 会互相延迟导入，放那里会形成循环依赖）。
+- 行为（三条，其余交给 `pathlib`）：① 空值/纯空白 → 回落默认；② 剥掉外层成对引号；
+  ③ **仅 Windows**（`os.name == "nt"`）把 `/c/Users/x`、`/d/tmp` 这类**盘符式 POSIX 路径**
+  归一成 `C:\Users\x`、`D:\tmp`（`/c` 单个字母也处理成盘符根）。POSIX 系统上 `/d/...`
+  就是普通目录，**原样保留**，不翻译。
+- 为什么必须做（真实踩过，见上一个条目「踩坑」）：Git Bash 的 `$PWD` 是 `/c/Users/...`，
+  Windows `pathlib` 把它解析成**当前盘符根下的 c 目录**，测试库被建到盘符根，
+  `rel_display()` 还打印出缺盘符的残缺路径。清目录只治标，多会话并行必然再踩。
+- 刻意**不用 `resolve()`**：`tools/dirmap/` 是目录联接（指向仓库外），resolve 会穿过联接
+  把路径变成外部真实路径。
+- 验证：`tests/smoke.py` 新增 `[5q]`（空值/引号回落默认、Windows 归一、**Linux 不转换**、
+  普通路径不动、`LOGS_DIR`/`DB_PATH` 仍在测试临时目录；用 `os.name` 分支，两平台都要过）。
+  另实测：Git Bash 里 `export CTFSCANNER_DB="$PWD/logs/_posix/x.db"` →
+  `DB_PATH = C:\...\ctf-scanner\logs\_posix\x.db`，`rel_display()` 显示 `logs/_posix/x.db`，
+  盘符根不再出现 `c` 目录。
+
+### 2. 端到端浅扫固化为 smoke 断言（`[5p] 3c`）
+
+- 背景：`[5p]` 前三条把 `_builtin_scan` / `_run_dirmap` 桩掉了，只验"走了哪一档"；
+  而"深扫漏掉浅扫命中的 `.env` / `.git/config`"那个缺陷，恰恰**只有真跑才暴露得出来**。
+- 新增 `[5p] 3c`：**真跑一次浅扫**（记录型 logger + `StageContext` + `PipelineRunner`，
+  dirmap 指到不存在的相对路径强制走内置、`offline: True`），靶场就是 smoke 自带的
+  `smoke_root`，断言产物里**同时**命中以 `.env` 与 `.git/config` 结尾的路径、条数 ≥ 2、
+  结果入库，且请求量受控（见下）。`http_request` 只做计数包装，请求仍真发到 8765。
+- 实测输出：`端到端浅扫 2 条命中（.env 与 .git/config 都在），请求 177 个 = 字典 150（≤150） + 软404基线 27（≤60）`。
+
+### 3. 全 11 阶段本机实测（隔离库，数据支撑"dirscan 默认开是否可控"）
+
+- 环境：`CTFSCANNER_DB` / `CTFSCANNER_LOGS` 用 `$(pwd -W)`（Windows 风格）指到
+  `logs/_fullcheck/`，跑完删除；靶场 `py -3 -m http.server --directory smoke_root`
+  （**与扫描命令同一个 shell 调用**内起，否则后台进程会随上一条命令结束而死）。
+- 命令：`py -3 cli/client.py -t http://127.0.0.1:8799/ -n owner-full -p subdomain,takeover,portscan,probe,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic --offline`
+- 结果（两轮，可复现）：
+
+  | 项 | 第 1 轮 | 第 2 轮 |
+  |---|---|---|
+  | 总耗时（含解释器启动） | 8 s | 7 s |
+  | 流水线净耗时 | 5 s（13:43:27→32） | 4 s（13:45:16→20） |
+  | 靶场收到请求总数 | 256 | 262 |
+  | dirscan 请求 | 177（150 字典 + 27 基线）≈ 1 s | 183 ≈ 1 s |
+  | vulnscan 请求 | 76 ≈ 1.5 s | 74 ≈ 1.5 s |
+  | 其余阶段（probe/osint/jsmine） | 3 | 3 |
+  | 站点 / 子域名 / 目录 / 漏洞 / 线索 | 1 / 0 / 2 / 3 / 0 | 同 |
+  | 目录命中 | `.env` + `.git/config` | 同 |
+
+- **因默认开关被跳过的阶段：4 个** —— `portscan`、`screenshot`（都需要全局开关打开；
+  `screenshot` 还需要本机 Edge/Chrome）、`intel`、`heuristic`（末尾两个线索阶段默认关）。
+  另有 4 个阶段**因目标形态而空跑**：`subdomain`（目标无裸域名）、`takeover`（无子域名）、
+  `osint`（无注册域可查证书 + 未配 FOFA key → **0 外部请求**）、`jsmine`（页面无 JS）。
+- **结论：可控。** 单站 `dirscan` = 150 条字典请求（硬上限 `quick_max_paths`）+ 27~33 个
+  软 404 基线请求，本机耗时约 1 秒；按 `dirscan_max_urls=20` 算，**单任务 dirscan 请求上限
+  = 20 × 183 ≈ 3660 个**、量级仍是"几千请求/任务"，不再是深扫的万级。
+- **发现但未修的浪费**：软 404 基线是**惰性算在并发里**的（`_builtin_scan._baseline`），
+  20 个线程同时 miss 会各算一遍 → 单站 3 个基线请求实测花掉 27~33 个（占比约 18%）。
+  改法很小（并发扫描前先把每个站点的基线算一遍 / 用锁），本轮刻意不动 `dirscan.py`
+  （并行会话可能正在改它），已在接管报告登记。
+
+### 4. 回归
+
+- `py -3 tests/smoke.py` 跑两次均 **SMOKE PASS**（新增 `[5p-3c]` 与 `[5q]` 两行输出）。
+- `git diff --stat` 与 `git diff --ignore-cr-at-eol --stat` 一致 → 改动文件保持仓库约定的 CRLF。
+
 ## 2026-09-23 —— 接管收尾：`.trae/` 入 gitignore + 剩余待办与缺陷清单归位
 > 实施者：**WorkBuddy · Hy4-preview**
 

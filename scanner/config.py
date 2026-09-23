@@ -10,13 +10,62 @@ import copy
 import json
 import os
 import pathlib
+import re
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
+
+# Git Bash / MSYS / WSL 里 `$PWD` 展开成 `/c/Users/...` 这种"盘符式 POSIX 路径"
+# （单个字母的顶层目录 = 盘符，后面才是真正的目录）。
+_DRIVE_POSIX_RE = re.compile(r"^/([A-Za-z])(?:/(.*))?$")
+
+
+def _norm_drive_posix(text):
+    """（仅 Windows）把 `/c/Users/x` 归一成 `C:\\Users\\x`；不是这种形态则原样返回。
+
+    POSIX 系统（Linux/macOS）**必须原样保留**：那里 `/c/...` 就是一个普通目录，
+    当成盘符翻译会把路径改坏。
+    """
+    if os.name != "nt":
+        return text
+    m = _DRIVE_POSIX_RE.match(text)
+    if not m:
+        return text
+    rest = (m.group(2) or "").replace("/", os.sep)
+    return m.group(1).upper() + ":" + os.sep + rest
+
+
+def env_path(name, default):
+    """读"路径型"环境变量：`CTFSCANNER_DB` / `CTFSCANNER_LOGS` 这类入口统一走这里。
+
+    归一化只做三件必要的事，其余交给 `pathlib`：
+    ① 空值 / 纯空白 → 用默认值（Git Bash 里 `export X=` 很常见，不能据此建出 `.` 这种目录）；
+    ② 剥掉用户可能顺手加上的外层引号（从命令行复制路径时常带）；
+    ③ **仅 Windows**：把盘符式 POSIX 路径翻译成盘符形态（见下）。
+
+    为什么要 ③（真实踩过的坑，不是假想）：Git Bash 里写
+    `export CTFSCANNER_DB="$PWD/logs/x.db"`，传进来的是 `/c/Users/...`；
+    而 Windows 的 `pathlib.Path("/c/Users/...")` 会把它当成**"当前盘符根下的 c 目录"**，
+    解析出 `\\c\\Users\\...` —— 结果测试库被建到盘符根（`C:\\c\\...`），
+    且 `utils.rel_display()` 打印出缺了盘符的残缺路径。多会话并行时这个坑必然再踩一次，
+    光清目录只治标，所以归一放在入口。
+
+    刻意**不用 `resolve()`**：仓库里 `tools/dirmap/` 是**目录联接**（指向仓库外的第三方源码），
+    resolve 会穿过联接把路径变成外部真实路径，日志与测试断言就全变了。
+    """
+    raw = str(os.environ.get(name) or "").strip()
+    # 外层成对引号才剥（路径中间出现引号的情况不处理，交给 pathlib 原样保留）
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
+        raw = raw[1:-1].strip()
+    if not raw:
+        return pathlib.Path(str(default))
+    return pathlib.Path(_norm_drive_posix(raw))
+
 
 # 运行期产物目录（每任务一个子目录）。与数据库一样支持环境变量覆盖：
 # 跑测试时指到临时目录，就不会在真实工作区里堆出几十个 `logs/task_*` 目录，
 # 也让"开发/生产共用一份代码、数据分开"变得可行（见 tests/smoke.py 顶部）。
-LOGS_DIR = pathlib.Path(os.environ.get("CTFSCANNER_LOGS") or (BASE_DIR / "logs"))
+# 走 `env_path()` 是为了把"盘符式 POSIX 路径"在入口归一（见其注释里的踩坑说明）。
+LOGS_DIR = env_path("CTFSCANNER_LOGS", BASE_DIR / "logs")
 
 DEFAULTS = {
     "gui": {

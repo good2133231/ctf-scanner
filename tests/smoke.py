@@ -1433,6 +1433,56 @@ def main():
     assert set(_shallow_list).issubset(set(_deep_paths)), \
         f"深扫额度（{len(_deep_paths)} 条）内必须覆盖浅扫全部 {len(_shallow_list)} 条精选路径"
 
+    # 3c) **端到端真跑一次浅扫**：钉住"浅扫真的能扫出高价值路径"。
+    #     3 / 3b 把扫描实现桩掉了，只验"走了哪一档"和"取词是不是超集"；而本轮那个缺陷
+    #     （深扫漏掉浅扫已命中的 .env / .git/config）恰恰**只有真跑才暴露得出来** ——
+    #     取词顺序对了，软 404 基线过滤、状态门（只认 200/301/302/403）仍可能把命中吃掉。
+    #     所以这里不桩 `_builtin_scan`，只对 `http_request` 做计数包装（请求真发到 8765 靶场），
+    #     写法沿用 [5e](7)：记录型 logger + StageContext + PipelineRunner + dirmap 指到不存在的
+    #     相对路径强制走内置 + offline（不拉任何外部工具）。
+    #     靶场是 smoke 自带的 smoke_root，里面**确实有** .env 与 .git/config 两个"泄露"样本。
+    _e2e_cfg = copy.deepcopy(settings)
+    _e2e_cfg["dirscan"] = dict(_e2e_cfg.get("dirscan") or {}, mode="quick")
+    _e2e_cfg["tools"]["dirmap"]["script"] = "tools/does-not-exist.py"
+    _e2e_sent = []
+    _e2e_orig_http = _ds_mod.http_request
+
+    def _e2e_http(u, **kw):
+        _e2e_sent.append(str(u))
+        return _e2e_orig_http(u, **kw)          # 真发请求，只做计数
+
+    _e2e_tid = db.create_task("smoke-dir-e2e", targets, ["dirscan"], {"offline": True})
+    _e2e_wd = Path(_TMPDIR) / f"dir-e2e_{_e2e_tid}"
+    _e2e_wd.mkdir(parents=True, exist_ok=True)
+    _e2e_ctx = StageContext(_e2e_tid, "smoke-dir-e2e", parse_lines([targets]), ["dirscan"],
+                            {"offline": True}, _e2e_cfg, _e2e_wd, rec)
+    _e2e_ctx.results["sites"] = [{"url": targets, "host": "127.0.0.1", "tech": "",
+                                  "title": "E2E", "length": 123}]
+    _e2e_cap = int((_e2e_cfg.get("dirscan") or {}).get("quick_max_paths", 150) or 0)
+    _ds_mod.http_request = _e2e_http
+    try:
+        PipelineRunner(_e2e_ctx).run()
+    finally:
+        _ds_mod.http_request = _e2e_orig_http
+    _e2e_paths = [str(d.get("path") or "") for d in (_e2e_ctx.results.get("dirs") or [])]
+    assert any(p.endswith("/.env") for p in _e2e_paths), f"浅扫没扫出 .env：{_e2e_paths[:20]}"
+    assert any(p.endswith("/.git/config") for p in _e2e_paths), \
+        f"浅扫没扫出 .git/config：{_e2e_paths[:20]}"
+    assert len(_e2e_paths) >= 2, _e2e_paths
+    assert db.list_dirs(_e2e_tid), "命中必须入库（否则结果页看不到）"
+    # 请求量受控：字典路径 ≤ quick_max_paths；软 404 基线每站只需 3 个探针，但它是**惰性**
+    # 算在并发里的（`_builtin_scan._baseline`），20 个线程同时 miss 会各算一遍 ——
+    # 实测单站点 150 条字典 + 27~60 个基线请求。这个上界写死在这里，一是钉住"不失控"，
+    # 二是把这个已知浪费显式暴露出来（真要省，把基线改成并发前先算一遍即可）。
+    _e2e_probes = [u for u in _e2e_sent if "ctfscan-none" not in u]
+    _e2e_base = len(_e2e_sent) - len(_e2e_probes)
+    _e2e_workers = int((_e2e_cfg.get("limits") or {}).get("max_workers", 20) or 20)
+    assert 0 < len(_e2e_probes) <= _e2e_cap, (len(_e2e_probes), _e2e_cap)
+    assert _e2e_base <= 3 * _e2e_workers, (_e2e_base, _e2e_workers)
+    _e2e_note = (f"端到端浅扫 {len(_e2e_paths)} 条命中（.env 与 .git/config 都在），"
+                 f"请求 {len(_e2e_sent)} 个 = 字典 {len(_e2e_probes)}（≤{_e2e_cap}）"
+                 f" + 软404基线 {_e2e_base}（≤{3 * _e2e_workers}）")
+
     # 4) 建任务：勾了全量却没勾对应阶段 → **自动补阶段** + options 落库（run_task 桩住，避免真扫）
     _orig_run4 = gui_app.run_task
     try:
@@ -1528,6 +1578,59 @@ def main():
     print("[5p] 目录浅/深两档 + 全量勾选 + 补扫 ok: 默认浅扫 150 条/档位判定(portscan_full "
           "互不影响)/目标兜底/自动补阶段/补扫任务命名与 rescan_of/next 防跳外站/"
           "后缀派生去重限额/GUI 入口")
+    print(f"[5p-3c] {_e2e_note}")
+
+    # (5q) 续10：环境变量路径归一化（`scanner.config.env_path`）。
+    #      真实踩过的坑：Git Bash 里 `export CTFSCANNER_DB="$PWD/logs/x.db"` 传进来的是
+    #      `/c/Users/...`，Windows 的 pathlib 会把它解析成"当前盘符根下的 c 目录" ——
+    #      测试库被建到盘符根，`rel_display()` 还会打印出缺了盘符的残缺路径。
+    #      光清一次目录只治标（多会话并行必然再踩），归一必须做在入口；
+    #      **同一份断言在 Linux 上也要通过**：那里 `/d/tmp` 就是普通目录，绝不能当盘符翻译。
+    from scanner.config import env_path as _env_path
+    # 源码红线检查禁止出现"带引号的盘符路径"字面量，期望值一律用拼接构造
+    _SEP = "\\" if os.name == "nt" else "/"
+    _fallback = "logs/x.db"
+
+    # 1) 未设置 / 空值 / 纯空白 / 只有一对引号 → 回落默认值
+    assert _env_path("CTFSCANNER_SMOKE_UNSET_XYZ", _fallback) == Path(_fallback)
+    for _blank in ("   ", '""', "''"):
+        os.environ["CTFSCANNER_SMOKE_BLANK"] = _blank
+        assert _env_path("CTFSCANNER_SMOKE_BLANK", _fallback) == Path(_fallback), _blank
+    os.environ.pop("CTFSCANNER_SMOKE_BLANK", None)
+
+    # 2) 外层成对引号要被剥掉（用户从命令行复制路径时常带引号）
+    _q_path = str(ROOT / "logs" / "q.db")
+    os.environ["CTFSCANNER_SMOKE_QUOTED"] = '"' + _q_path + '"'
+    assert str(_env_path("CTFSCANNER_SMOKE_QUOTED", _fallback)) == _q_path, \
+        _env_path("CTFSCANNER_SMOKE_QUOTED", _fallback)
+
+    # 3) 盘符式 POSIX 路径：Windows 归一成盘符形态；**Linux 原样保留**
+    os.environ["CTFSCANNER_SMOKE_DRIVE"] = "/d/tmp/x"
+    _got = str(_env_path("CTFSCANNER_SMOKE_DRIVE", _fallback))
+    if os.name == "nt":
+        assert _got == "D:" + _SEP + "tmp" + _SEP + "x", _got
+    else:
+        assert _got == "/d/tmp/x", f"Linux 上 /d/... 是普通目录，不该被当成盘符：{_got}"
+    # 只有盘符没有路径（`/c`）也要归一成盘符根，而不是退化成相对路径 `\c`
+    os.environ["CTFSCANNER_SMOKE_DRIVE2"] = "/c"
+    _got2 = str(_env_path("CTFSCANNER_SMOKE_DRIVE2", _fallback))
+    if os.name == "nt":
+        assert _got2 == "C:" + _SEP and Path(_got2).is_absolute(), _got2
+    else:
+        assert _got2 == "/c", _got2
+
+    # 4) 非盘符式路径两种平台都不动（`/foo/bar` 不是盘符；相对路径保持相对）
+    for _plain in ("/foo/bar", "logs/x.db", str(ROOT / "logs")):
+        os.environ["CTFSCANNER_SMOKE_PLAIN"] = _plain
+        assert str(_env_path("CTFSCANNER_SMOKE_PLAIN", _fallback)) == str(Path(_plain)), _plain
+
+    # 5) 真实锚点：本脚本靠这两个环境变量做隔离，归一化后仍必须落在测试临时目录内
+    assert str(LOGS_DIR) == str(_TMPDIR), (LOGS_DIR, _TMPDIR)
+    assert str(db.DB_PATH).startswith(str(_TMPDIR)), db.DB_PATH
+    _plat = "Windows 归一成盘符" if os.name == "nt" else "Linux 原样保留"
+    print(f"[5q] 环境变量路径归一化 ok: 空值/引号回落默认 / 盘符式 POSIX 路径 {_plat} / "
+          f"普通路径不动 / LOGS_DIR 与 DB_PATH 仍在测试临时目录（os.name={os.name}）")
+
 
     # (5o) 续8：P2-3 跨平台（Linux + Windows）**可执行**验证。
     #      本机只有 Windows/Python 3.9（无 WSL/Docker），"Linux 实机跑一次 smoke"这一步

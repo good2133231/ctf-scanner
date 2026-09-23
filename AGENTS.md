@@ -166,6 +166,11 @@ ctf-scanner/
 - **测试隔离靠两个环境变量**：`CTFSCANNER_DB`（库路径）与 `CTFSCANNER_LOGS`（任务工作目录）。
   `tests/smoke.py` 顶部把两者指到 `logs/smoke-<随机>/` 并在退出时删除 —— 跑测试**不会**污染
   真实 `data/scanner.db` 与 `logs/`。跑任何"会写资产"的脚本时请沿用这一约定（见 `docs/usage.md` FAQ）。
+  两者都经 `scanner/config.py::env_path()` 归一（2026-09-23 续10）：空值回落默认、剥外层引号，
+  **仅 Windows** 把 `/c/Users/x` 这类盘符式 POSIX 路径翻译成盘符形态 —— Git Bash 里
+  `export CTFSCANNER_DB="$PWD/logs/x.db"` 传的是 `/c/...`，不归一就会被解析成**盘符根下的 c 目录**
+  （库建到盘符根，`rel_display()` 还打印残缺路径，已实测踩过）。POSIX 系统上不做转换
+  （那里 `/d/tmp` 就是普通目录）。新增"路径型"环境变量请复用 `env_path()`，不要各写一套。
 - 每个阶段结果**三写**：任务目录文本产物（如 sites.txt）、SQLite、`ctx.results`（供下一阶段直接用）。
 - 阶段级容错：单阶段异常不中断流水线，错误写入 `tasks.error`，任务最终仍置 `done`（docs 已声明此语义）。
 - GUI：Flask 请求线程 + 每任务一个 daemon 线程；无任务队列，进程重启则运行中任务中断。
@@ -216,6 +221,11 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             # + 补扫任务目标兜底(_sites_from_targets) + 建任务自动补阶段与顺序
                             # + POST /api/rescan（阶段/rescan_of/命名/next 防外站）
                             # + 后缀派生去重限额 + GUI 入口（portscan_full/dirscan_mode/api/rescan）
+                            # 2026-09-23 续10 新增 `[5p] 3c`：端到端**真跑一次浅扫**（产物必须同时
+                            #   命中 .env 与 .git/config、条数≥2、请求量 ≤ quick_max_paths + 基线）
+                            #   —— 前三条是桩实现，只验"走哪一档"，补的就是"真扫出什么"
+                            #   新增 `[5q]`：CTFSCANNER_DB/LOGS 路径归一化（空值与引号回落默认、
+                            #   盘符式 POSIX 路径 Windows 归一 / Linux 原样、普通路径不动）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -334,6 +344,13 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - **dirmap 是 GPL-3.0，刻意不内联**（把源码拷进仓库会让整个仓库受 GPL 约束）：
   只保留 `tools/dirmap/` 目录联接 + 外部适配器；对它的 5 处源码修复记录在
   `tools/dirmap_fixes/README.md`（**该目录不含 dirmap 源码**）。
+- **软 404 基线在并发下被重复计算**（2026-09-23 续10 实测，**未修**）：
+  `DirscanStage._builtin_scan._baseline()` 惰性填 `baseline` 字典，`pool_run` 的 20 个线程
+  同时 miss → 各算一遍，单站点 3 个基线请求实测花掉 **27~33 个**（dirscan 请求量约 18%）。
+  实测基线（本机 127.0.0.1 靶场、`--offline`、全 11 阶段）：总耗时 7~8 s（流水线净 4~5 s），
+  靶场收到 256 / 262 个请求，其中 dirscan 177 / 183（150 字典 + 27~33 基线）≈ 1 s、
+  vulnscan 76 / 74 ≈ 1.5 s；`dirscan` 默认开**是可控的**（按 `dirscan_max_urls=20` 算，
+  单任务 dirscan 上限 ≈ 20 × 183 ≈ 3660 个请求）。
 
 ## 8. 不要做的事
 

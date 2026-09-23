@@ -6,17 +6,18 @@
 - 若后续需要多节点/高并发，替换本层为 PostgreSQL 或 MongoDB 即可，上层接口不变。
 """
 import json
-import os
 import sqlite3
 import time
 from pathlib import Path
 
-from .config import BASE_DIR
+from .config import BASE_DIR, env_path
 
 # 库路径可用环境变量 CTFSCANNER_DB 覆盖 —— **测试必须走独立库**：
 # 回归测试（tests/smoke.py）会创建任务、写资产、改 POC 开关，若直接落在 data/scanner.db，
 # 真实任务库就会被测试数据污染（此前"站点计数不稳定"类问题正源于此）。
-DB_PATH = Path(os.environ.get("CTFSCANNER_DB") or (BASE_DIR / "data" / "scanner.db"))
+# 走 `config.env_path()`：Git Bash 传进来的 `/c/...` 在 Windows 上会被 pathlib 解析成
+# "当前盘符根下的 c 目录"（库被建到盘符根），归一化逻辑与 LOGS_DIR 共用同一处实现。
+DB_PATH = env_path("CTFSCANNER_DB", BASE_DIR / "data" / "scanner.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
