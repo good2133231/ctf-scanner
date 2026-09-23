@@ -1,11 +1,20 @@
-# 敏感路径字典（预留：当前内置 OWASP 检查使用硬编码清单，此文件供 POC 与后续扩展引用）
-# 格式：路径
-/.git/config
-/.git/HEAD
-/.env
-/.svn/entries
-/WEB-INF/web.xml
-/backup.sql
-/.DS_Store
-/composer.json
-/.htaccess
+# 敏感路径字典 —— 内置 OWASP 检查 a01-sensitive-files 的**数据源**（不再是预留位）。
+#
+# 格式（用 `|` 分隔，后两段可省）：
+#     路径 | 特征关键字1,特征关键字2 | 级别 | 说明
+#   - 带「特征关键字」的行**参与检测**：该路径返回 200 且响应体命中任一关键字才判"存在"；
+#   - 关键字用逗号分隔，关键字内部不要出现 `|` 或逗号；
+#   - **只有路径**的行＝预留位，不参与检测 —— 不带关键字就凭 200 判"文件存在"，
+#     会被统一 200 的软 404 页放大成一片误报，所以宁可空着也不裸用；
+#   - 级别取 critical / high / medium / low / info（非法值按 medium 处理）；
+#   - 逐条命中即返回（这条检查只报第一处），因此顺序＝优先级，重要的排前面。
+# 读不到本文件、或一条可检测的行都没有时，自动回退 scanner/owasp/checks.py::SENSITIVE_FILES 的内置清单。
+/.git/config | [core],repositoryformatversion | high | Git 仓库配置（可还原源码）
+/.git/HEAD | ref: | medium | Git HEAD 指针（.git 可读的信号）
+/.env | db_password,app_key,secret,database_url,api_key | high | 环境变量文件
+/.svn/entries | dir | medium | SVN 元数据
+/WEB-INF/web.xml | <web-app | high | Java Web 部署描述符
+/backup.sql | insert into,create table | high | 数据库备份
+/.DS_Store | bud1 | low | macOS 目录元数据（可能泄露文件名）
+/composer.json | "name":,"require": | medium | PHP 依赖清单（泄露组件与版本）
+/.htaccess | rewriteengine,deny from,order allow | medium | Apache 访问控制文件

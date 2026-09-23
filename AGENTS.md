@@ -123,7 +123,8 @@ ctf-scanner/
 ├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot**/iprecon/fofa/blacklist/**intel/heuristic** 十七段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned））
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
-├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / sensitive(11，暂未使用) / cdn_cname(292)
+├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / cdn_cname(292)
+│                          #   sensitive(9)：**A01 检查的数据源**（`路径|关键字|级别|说明`，见 §7）
 │                          #   dirs_shallow(206)：**浅扫专用**（dirscan.mode=quick 只用它），按价值排序、人工筛选
 │                          #   js_thirdparty(267：JS 第三方域名单 = 内置 + URLFinder jsFiler)
 │                          #   目录字典按技术栈拆分：dirs_big(11882 全量) / dirs_common(10671) /
@@ -269,7 +270,14 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   `saveResults()` 定义了两遍（前一个失效）、`response_storage`/`error_count` 是全局量、
   `saveResults` 每次全文件 `r+` 读取再追加（1.5 万条结果时 O(n²)，gevent 并发下还会丢写）、
   `conf.skip_size` 与 `intToSize()` 的字符串比较永远不相等、`ssl_context` 建了却没挂到 session。
-- `config/dicts/sensitive.txt` 已存在但**未被读取**：内置敏感文件检查用 checks.py 里的硬编码清单。
+- `config/dicts/sensitive.txt` **已是 A01 检查的数据源**（第十八轮续14 起）：文件格式改为
+  `路径 | 特征关键字1,特征关键字2 | 级别 | 说明`，`checks.sensitive_files()` 读它、按"200 + 关键字命中"
+  判定；**只有路径没有 `|` 的行＝预留位（跳过）**，文件缺失或一条可检测行都没有时回退
+  `checks.SENSITIVE_FILES` 硬编码清单 —— 不带关键字就凭 200 判"文件存在"会被统一 200 的软 404 页放大。
+- `db._WRITE_LOCK`（`threading.RLock`）把**所有写路径**串行化：`_exec` / `init_db` / `set_vuln_review` /
+  `bulk_set_vuln_review` / `upsert_poc` 主路径。WAL 只保证"读不被写阻塞"、`busy_timeout=10000` 只保证
+  "冲突时最多等 10 秒"，**都不保证写成功**；而本框架无任务队列，N 个任务线程 × `pool_run(workers=20)`
+  的回填是完全可能同时打满的。新增写路径时**必须**走 `_exec` 或显式加这把锁。
 - `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
 - GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/

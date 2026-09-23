@@ -2036,6 +2036,58 @@ def main():
     print("[5t] 续13 GUI 反馈修复 ok: 拓展域名按来源分类排序(?esrc= 过滤)/解析·送去探测·加黑名单"
           "三个手动端点(含 next 防跳外站)/目录 title 列与 200 优先·大小降序/目录文案精简/"
           "截图任务级 screenshot_on 生效 + 站点页补截图与原因提示")
+
+    # 5u) 续14：sensitive.txt 签名列（A01 改为数据驱动）+ db 写操作串行化
+    #     两条都是"静默失效"型收尾 —— 前者字典长期只当预留位、检查用硬编码清单；
+    #     后者只靠 WAL + busy_timeout 兜并发写，出问题（database is locked）才暴露。
+    sf = owasp_checks.sensitive_files(settings)
+    sf_paths = [r[0] for r in sf]
+    assert "/composer.json" in sf_paths and "/.htaccess" in sf_paths, \
+        f"未从数据文件读到条目（签名列没生效？）：{sf_paths}"
+    assert all(r[1] for r in sf), f"参与检测的行必须都带特征关键字：{sf}"
+    assert all(r[2] in owasp_checks.SEVERITY_ORDER for r in sf), f"级别非法：{sf}"
+
+    # 只有裸路径的字典＝预留位（一条可检测的行都没有）→ 回退内置清单，而不是"这条检查消失"
+    bare = Path(_TMPDIR) / "sensitive-bare.txt"
+    bare.write_text("/.git/config\n/.env\n# 只有路径的行是预留位\n", encoding="utf-8")
+    st_bare = copy.deepcopy(settings)
+    st_bare["dicts"]["sensitive"] = str(bare)
+    assert owasp_checks.sensitive_files(st_bare) == owasp_checks.SENSITIVE_FILES, \
+        "裸路径字典应回退内置清单（否则等于凭 200 裸判文件存在，误报会被软 404 页放大）"
+    st_gone = copy.deepcopy(settings)          # 换机器/字典被删，也不能让 A01 整条失效
+    st_gone["dicts"]["sensitive"] = str(Path(_TMPDIR) / "no-such-dict.txt")
+    assert owasp_checks.sensitive_files(st_gone) == owasp_checks.SENSITIVE_FILES
+
+    # 真打一次靶场：数据驱动之后 A01 仍要能命中 .git/config（读字典不许把检测读坏）
+    a01 = [v for v in owasp_checks.run_all(targets, settings)
+           if v["poc_id"] == "a01-sensitive-files"]
+    _a01_txt = str(a01[0].get("target", "")) + str(a01[0].get("detail", "")) if a01 else ""
+    assert a01 and ".git/config" in _a01_txt, a01
+
+    # db 写锁：必须是**可重入**锁（`init_db` / `upsert_poc` 内部还会再调 `_exec`）
+    assert isinstance(db._WRITE_LOCK, type(threading.RLock())), \
+        "写锁必须可重入，否则嵌套调用会自锁死"
+    w_errs, w_ids = [], []
+
+    def _writer(i):
+        try:
+            t = db.create_task(f"smoke-w{i}", f"w{i}.test", ["probe"], {})
+            w_ids.append(t)
+            db.insert_subdomains(t, [(f"a{j}.w{i}.test", "smoke") for j in range(30)])
+        except Exception as e:                            # pragma: no cover - 失败时记录
+            w_errs.append(f"{type(e).__name__}: {e}")
+
+    ws = [threading.Thread(target=_writer, args=(i,)) for i in range(12)]
+    for t in ws:
+        t.start()
+    for t in ws:
+        t.join()
+    assert not w_errs, f"并发写库抛异常：{w_errs[:2]}"
+    assert len(set(w_ids)) == 12 and None not in w_ids, f"并发建任务 id 异常：{sorted(w_ids)}"
+    n_sub = db._query("SELECT COUNT(*) c FROM subdomains WHERE source='smoke'", (), one=True)["c"]
+    assert n_sub == 12 * 30, f"并发写入丢行：期望 {12 * 30}，实际 {n_sub}"
+    print(f"[5u] 续14 ok: sensitive.txt 签名列数据驱动 A01（裸路径/字典缺失回退内置清单，"
+          f"靶场仍命中 .git/config）+ db 写锁串行化（12 线程 × 31 次写零异常、{n_sub} 行不丢）")
     print("SMOKE PASS")
 
 

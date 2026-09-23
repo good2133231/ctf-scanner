@@ -5,7 +5,7 @@
 | 类别 | 内置检查（check id） | 实现方式 | 局限 / 说明 |
 |---|---|---|---|
 | A01 失效的访问控制 | a01-directory-listing | 首页特征匹配目录列表 | 仅覆盖默认开启列表的场景 |
-| | a01-sensitive-files | 探测 /.git/config、/.env、/.svn/entries、/WEB-INF/web.xml、/backup.sql 等，内容签名确认 | 字典有限；签名可避免纯 200 误报 |
+| | a01-sensitive-files | 探测 /.git/config、/.env、/.svn/entries、/WEB-INF/web.xml、/backup.sql 等，内容签名确认 | **路径与签名都来自数据文件 `config/dicts/sensitive.txt`**（`路径 \| 关键字 \| 级别 \| 说明`，可直接加条目）；签名必填，故纯 200 不误报；文件缺失/无有效行时回退内置清单 |
 | | a01-open-redirect | 常见跳转参数 + 外部域，校验 3xx Location | 覆盖参数名有限，需人工确认 |
 | A02 加密机制失效 | a02-no-https | 明文 HTTP 判定 | — |
 | | a02-cookie-flags | Set-Cookie 缺少 HttpOnly/Secure | requests 合并重复响应头，多 Cookie 时解析为近似值 |

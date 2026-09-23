@@ -7,6 +7,7 @@
 """
 import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -18,6 +19,16 @@ from .config import BASE_DIR, env_path
 # 走 `config.env_path()`：Git Bash 传进来的 `/c/...` 在 Windows 上会被 pathlib 解析成
 # "当前盘符根下的 c 目录"（库被建到盘符根），归一化逻辑与 LOGS_DIR 共用同一处实现。
 DB_PATH = env_path("CTFSCANNER_DB", BASE_DIR / "data" / "scanner.db")
+
+# 写操作串行化（进程内）。
+# 为什么还要一把锁：SQLite 是**单写者**库，WAL 只让"读不被写阻塞"，`busy_timeout=10000`
+# 也只是"冲突时最多等 10 秒再抛 database is locked"，两者都**不保证写一定成功**。
+# 而本框架没有任务队列：GUI 里 N 个任务线程各自 `pool_run(workers=20)`，subdomain / dirscan
+# 阶段每完成一项就要回填（`set_subdomain_net` / `insert_dirs`），峰值是完全可能同时打满的。
+# 加锁后并发写退化为"排队执行"（锁内只有 execute + commit，是常数级开销），
+# 代价换来的是：**不会再有 OperationalError: database is locked 这类偶发失败**。
+# 用 RLock 而非 Lock：`init_db` 等路径内部还会再调到 `_exec`（可重入，避免自锁死）。
+_WRITE_LOCK = threading.RLock()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -121,7 +132,8 @@ def get_conn():
 
 
 def init_db():
-    with get_conn() as conn:
+    # 建表 + 补列是**多个 DDL 语句**，必须整体串行（否则两个线程同时 ADD COLUMN 会互相撞）
+    with _WRITE_LOCK, get_conn() as conn:
         conn.executescript(SCHEMA)
         _ensure_columns(conn)
 
@@ -156,14 +168,15 @@ def _ensure_columns(conn):
 
 
 def _exec(sql, params=(), many=False):
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        (cur.executemany if many else cur.execute)(sql, params)
-        conn.commit()
-        return cur.lastrowid
-    finally:
-        conn.close()
+    with _WRITE_LOCK:            # 全框架所有写入的**唯一**收口，见文件头 `_WRITE_LOCK` 说明
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            (cur.executemany if many else cur.execute)(sql, params)
+            conn.commit()
+            return cur.lastrowid
+        finally:
+            conn.close()
 
 
 def _query(sql, params=(), one=False):
@@ -524,19 +537,20 @@ def set_vuln_review(vuln_id, state, note=None):
     """标记一条漏洞的复核状态（P1-1）。`note` 为 None 表示不改备注，返回受影响行数。"""
     st = norm_review(state)
     now = _now()
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        if note is None:
-            cur.execute("UPDATE vulns SET review=?, reviewed_at=? WHERE id=?",
-                        (st, now, int(vuln_id)))
-        else:
-            cur.execute("UPDATE vulns SET review=?, review_note=?, reviewed_at=? WHERE id=?",
-                        (st, str(note)[:500], now, int(vuln_id)))
-        conn.commit()
-        return cur.rowcount or 0
-    finally:
-        conn.close()
+    with _WRITE_LOCK:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            if note is None:
+                cur.execute("UPDATE vulns SET review=?, reviewed_at=? WHERE id=?",
+                            (st, now, int(vuln_id)))
+            else:
+                cur.execute("UPDATE vulns SET review=?, review_note=?, reviewed_at=? WHERE id=?",
+                            (st, str(note)[:500], now, int(vuln_id)))
+            conn.commit()
+            return cur.rowcount or 0
+        finally:
+            conn.close()
 
 
 def bulk_set_vuln_review(ids, state, note=None):
@@ -549,19 +563,20 @@ def bulk_set_vuln_review(ids, state, note=None):
     marks = ",".join("?" for _ in ids)
     # 必须用 `rowcount`，不能用 `_exec` —— 它返回的是 `lastrowid`，在 UPDATE 语句上恒为 0，
     # 那样 `/api/vulns/review` 会一直回 `affected: 0`，前端会以为一条都没改。
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        if note is None:
-            cur.execute(f"UPDATE vulns SET review=?, reviewed_at=? WHERE id IN ({marks})",
-                        tuple([st, now] + ids))
-        else:
-            cur.execute(f"UPDATE vulns SET review=?, review_note=?, reviewed_at=? "
-                        f"WHERE id IN ({marks})", tuple([st, str(note)[:500], now] + ids))
-        conn.commit()
-        return cur.rowcount or 0
-    finally:
-        conn.close()
+    with _WRITE_LOCK:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            if note is None:
+                cur.execute(f"UPDATE vulns SET review=?, reviewed_at=? WHERE id IN ({marks})",
+                            tuple([st, now] + ids))
+            else:
+                cur.execute(f"UPDATE vulns SET review=?, review_note=?, reviewed_at=? "
+                            f"WHERE id IN ({marks})", tuple([st, str(note)[:500], now] + ids))
+            conn.commit()
+            return cur.rowcount or 0
+        finally:
+            conn.close()
 
 
 def review_counts(task_id=None):
@@ -640,25 +655,28 @@ def upsert_poc(path, meta):
     conf = poc_confidence(path, meta)
     now = _now()
     try:
-        conn = get_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO pocs(path,poc_id,name,severity,tags,enabled,status,confidence,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(path) DO UPDATE SET poc_id=excluded.poc_id, name=excluded.name, "
-                "severity=excluded.severity, tags=excluded.tags, status=excluded.status, "
-                "confidence=excluded.confidence, updated_at=excluded.updated_at",
-                (path, poc_id, name, severity, tags, default_poc_enabled(path), status,
-                 conf, now))
-            rid = cur.lastrowid
-            if rid in (None, 0):     # UPSERT 走 DO UPDATE 分支时 lastrowid 仍返回原行 id
-                row = conn.execute("SELECT id FROM pocs WHERE path=?", (path,)).fetchone()
-                rid = row["id"] if row else rid
-            conn.commit()
-            return rid
-        finally:
-            conn.close()
+        # 主路径整段（execute + 取回 id + commit）在同一把写锁内；
+        # 下面的老 SQLite 回退分支走 `_exec`（本身已加锁），并发窗口由 IntegrityError 重试兜住。
+        with _WRITE_LOCK:
+            conn = get_conn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO pocs(path,poc_id,name,severity,tags,enabled,status,confidence,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(path) DO UPDATE SET poc_id=excluded.poc_id, name=excluded.name, "
+                    "severity=excluded.severity, tags=excluded.tags, status=excluded.status, "
+                    "confidence=excluded.confidence, updated_at=excluded.updated_at",
+                    (path, poc_id, name, severity, tags, default_poc_enabled(path), status,
+                     conf, now))
+                rid = cur.lastrowid
+                if rid in (None, 0):     # UPSERT 走 DO UPDATE 分支时 lastrowid 仍返回原行 id
+                    row = conn.execute("SELECT id FROM pocs WHERE path=?", (path,)).fetchone()
+                    rid = row["id"] if row else rid
+                conn.commit()
+                return rid
+            finally:
+                conn.close()
     except sqlite3.OperationalError:        # 老 SQLite 不支持 UPSERT 语法
         row = _query("SELECT id FROM pocs WHERE path=?", (path,), one=True)
         if row:

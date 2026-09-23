@@ -719,3 +719,36 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        README.md、CHANGELOG_AI.md（续13）
 [未变更] 截图实现本身、无头浏览器真实出图、fscan/nmap 真实调用：以 Linux 实机（10.10.3.121，2026-09-23）既有结论为准
 
+
+========================================================================
+（第十八轮续14：A01 敏感文件改数据驱动 + db 写操作串行化）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+触发：用户把上一轮盘出的「可选项 / roadmap 未做项」整批下单 —— 原话「这些都做」。
+本轮只做自包含、零外部依赖的两条；需外部资源的项与"破坏性利用/爆破"类（与 §1 非破坏性红线冲突）不在本轮。
+
+[完成] 1、目录字典加"签名列" → 落成「A01 敏感文件检查改数据驱动」：
+       config/dicts/sensitive.txt 格式改 `路径 | 特征关键字1,特征关键字2 | 级别 | 说明`；
+       owasp/checks.py 新增 sensitive_files(settings) 读它（签名必填 —— 裸路径行按预留位跳过，
+       因为只凭 200 判"文件存在"会被统一 200 的软 404 页放大成误报）；
+       文件缺失/读失败/一条可检测行都没有 → 回退 SENSITIVE_FILES 内置清单（换机器也不失效）；
+       缓存按解析出的绝对路径做键，与 cdn.py 同一套只读加载约定；
+       顺带扩两条带签名条目：/composer.json（"name": / "require":）、/.htaccess（rewriteengine / deny from / order allow）
+       效果：以后加敏感路径＝改一行字典，不用改代码；检测口径不变（200 + 关键字命中）
+[完成] 2、db 单写者更彻底方案 → 进程内写操作串行化：模块级 _WRITE_LOCK = threading.RLock()，
+       包住所有写路径（_exec 唯一收口 / init_db 的 DDL / set_vuln_review / bulk_set_vuln_review /
+       upsert_poc 主路径；其老 SQLite 回退分支走 _exec，并发窗口由既有 IntegrityError 重试兜住）。
+       理由：WAL 只保证"读不被写阻塞"、busy_timeout 只是"最多等 10 秒"，都不保证写成功，
+       而无任务队列时 N 个任务线程 × pool_run(workers=20) 的回填完全可能同时打满。
+       跨进程多写者仍未做（属"多节点/任务队列"范畴，roadmap 长期项）
+[完成] 3、smoke 新增 [5u]：数据文件被真正读取（含新增两条）+ 每行必带关键字与合法级别 /
+       裸路径字典回退内置清单 / 字典文件缺失同样回退 / 真打靶场仍命中 .git/config /
+       _WRITE_LOCK 必须可重入 / 12 线程 × (建任务 + 30 行资产) 并发写零异常、id 不重复、360 行一条不丢
+       → py -3 tests/smoke.py SMOKE PASS
+[完成] 4、文档同步：AGENTS.md（§3 目录地图 + §7 两条局限改写）、docs/architecture.md（存储层写串行化）、
+       docs/owasp-mapping.md（A01 数据源）、README.md（A01 数据驱动 + dicts 目录说明）、
+       TODO.md（两条 [ ] 转 [完成：续14]）、CHANGELOG_AI.md（续14）
+[未做] 5、用户整批下单中尚未动手的项（按依赖分组，见 CHANGELOG 续14 开头）：证书透明度解析 + SSL 证书页签 /
+       HTML·PDF 报告 / 工具版本管理 / Shodan·Quake 反查 / 登录态扫描 / XSS 上下文分析 / A10 SSRF 受控回连 /
+       盲注 SQL（须保持非破坏性）/ nuclei raw·flow·workflows / 任务队列·断点续扫 / 鉴权加固 / 分布式节点 /
+       目录递归爬取 / dirmap 复核对齐 / 运行时联网下载字典（拟改为显式手动工具 + 校验，默认关）
+[拒绝] 6、破坏性利用 / 口令爆破 / DDoS：与 AGENTS.md §1「检测一律非破坏性」红线冲突，不做。
+       低危 info 噪声项：能力已具备（策略配置 checks.skip_severities 去掉 info/low 即可），不改默认值。

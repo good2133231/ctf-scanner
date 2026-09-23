@@ -12,7 +12,7 @@
 - **站点截图**（策略级默认关，**建任务勾「截图」即对本次生效**）：调用本机已装的 Edge/Chrome 无头模式截图，产物落在任务目录并在站点页 URL 旁显示缩略图，不引入任何新依赖；站点页签可对勾选站点**补截图**（`stage=screenshot`），没有产物时页面会说明原因（策略关 / 本机无可用浏览器 / 截图失败）；
 - **线索层：情报订阅 + 启发式候选**（两个阶段**默认关**）：拉取 **CISA KEV**（免 key 公开 JSON，只收录已被在野利用的 CVE）与本地指纹做**白名单式匹配**；以及对已采集数据做**零请求**的差分/异常聚合（软 404 模板 / 高价值入口暴露 / 同标题多主机 / 目录命中离群 / 同 C 段多 IP）。两者产出**只是「线索」**：独立 `leads` 表、任务详情独立页签、报告独立附录，**不写漏洞、不计入漏洞数、不自动导入 POC**；
 - **JS 敏感字符**：17 条凭据规则（AKID/LTAI/AKIA、JWT、私钥 PEM、数据库连接串、Slack/Telegram/SendGrid/Stripe 等）+ 两级降噪（占位符、变量引用、成员访问），命中值掩码脱敏后以 high 级入库，「拓展域名」页按域名显示敏感命中数；
-- **OWASP Top 10**：内置轻量启发式检查（全部非破坏性，结论为"潜在漏洞/初筛信号"，需人工确认）。
+- **OWASP Top 10**：内置轻量启发式检查（全部非破坏性，结论为"潜在漏洞/初筛信号"，需人工确认）；其中 **A01 敏感文件检查是数据驱动的** —— 路径、特征关键字、级别、说明都写在 `config/dicts/sensitive.txt`（`路径 | 关键字 | 级别 | 说明`，签名必填以免被统一 200 的软 404 页放大成误报），文件缺失时自动回退内置清单。
 
 > **法律与授权声明**：本工具仅可用于自己拥有或已获得书面授权的目标（CTF 平台、靶场、委托测试范围）。对未授权目标使用属于违法行为，后果自负。详见 [docs/security-notice.md](docs/security-notice.md)。
 
@@ -117,7 +117,7 @@ ctf-scanner/
 │   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/screenshot/iprecon/fofa/blacklist/intel/heuristic）
 │   ├── keys.yaml            # 第三方 API key 专用文件（gitignore，GUI 不写回）
 │   ├── blacklist.txt        # 用户黑名单（一行一个域名，# 注释；命中即不入资产库）
-│   ├── dicts/               #   子域名字典、resolvers、目录字典（dirs_shallow 206 浅扫精选 / dirs_small 55 / dirs_big 15333 / 技术栈与框架细分 + 暴露面）、cdn_cname.txt（CDN 厂商后缀）
+│   ├── dicts/               #   子域名字典、resolvers、目录字典（dirs_shallow 206 浅扫精选 / dirs_small 55 / dirs_big 15333 / 技术栈与框架细分 + 暴露面）、cdn_cname.txt（CDN 厂商后缀）、sensitive.txt（A01 敏感文件检查的数据源：路径 | 关键字 | 级别 | 说明）
 │   ├── pocs-user/           # 用户上传的 POC（GUI 上传后落在这里）
 │   ├── pocs-imported/       # 批量导入的 POC（默认关闭，需在 POC 管理页挑选启用）
 │   └── nuclei-templates/    # 官方 nuclei 模板投放点（可被本引擎直接加载）

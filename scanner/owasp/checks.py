@@ -9,9 +9,10 @@
 """
 import random
 import re
+import threading
 
 from .. import config, evasion
-from ..utils import http_request
+from ..utils import http_request, read_lines
 
 CHECKS = []  # [{id, name, severity, owasp, fn}]
 
@@ -181,6 +182,8 @@ def _default_pages(url, settings):
 
 # ---------- A01 敏感文件 ----------
 
+# 内置清单 = **兜底**（数据文件 `config/dicts/sensitive.txt` 缺失/没有可检测行时用它）。
+# 现在这份清单与数据文件同格式，检测一律走 `sensitive_files()` 读出的行。
 SENSITIVE_FILES = [
     ("/.git/config", ["[core]", "repositoryformatversion"], "high", "Git 仓库配置（可还原源码）"),
     ("/.git/HEAD", ["ref:"], "medium", "Git HEAD 指针（.git 可读的信号）"),
@@ -191,11 +194,61 @@ SENSITIVE_FILES = [
     ("/.DS_Store", ["bud1"], "low", "macOS 目录元数据（可能泄露文件名）"),
 ]
 
+# 数据文件只在首次调用时读一次（按解析出的绝对路径做键，settings 换路径即失效）
+_DICT_LOCK = threading.Lock()
+_DICT_CACHE = {"path": None, "rows": None}
+
+
+def _parse_sensitive_rows(lines):
+    """解析数据文件 → [(路径, [特征关键字], 级别, 说明)]。
+
+    为什么关键字是**必填**：不带关键字就凭"200 = 文件存在"下结论，会被统一返回 200 的
+    软 404 页放大成一片误报 —— 这正是这份字典长期只当"预留位"、检查改用硬编码清单的原因。
+    没有 `|` 的行（只有路径）按预留位跳过，既不裸判存在、也不必删掉。
+    """
+    rows = []
+    for raw in lines or []:
+        line = raw.strip()
+        if not line or line.startswith("#") or "|" not in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        path = parts[0]
+        sigs = [s.strip().lower() for s in parts[1].split(",") if s.strip()]
+        if not path.startswith("/") or not sigs:
+            continue
+        sev = (parts[2].lower() if len(parts) > 2 and parts[2] else "medium")
+        rows.append((path, sigs, sev if sev in SEVERITY_ORDER else "medium",
+                     parts[3] if len(parts) > 3 and parts[3] else path))
+    return rows
+
+
+def sensitive_files(settings=None):
+    """返回 A01 检查要用的 [(路径, 特征关键字, 级别, 说明)]。
+
+    数据源＝`settings["dicts"]["sensitive"]`（默认 `config/dicts/sensitive.txt`）；
+    读不到、或一条可检测的行都没有时回退内置 `SENSITIVE_FILES`，保证任何机器上都能跑。
+    """
+    path = ((settings or {}).get("dicts") or {}).get("sensitive") \
+        or config.DEFAULTS["dicts"]["sensitive"]
+    full = str(config.resolve(path))
+    with _DICT_LOCK:
+        if _DICT_CACHE["path"] == full and _DICT_CACHE["rows"] is not None:
+            return _DICT_CACHE["rows"]
+    try:
+        rows = _parse_sensitive_rows(read_lines(full))
+    except Exception:            # 文件缺失/编码异常都只影响这一条检查的数据源，不影响整轮
+        rows = []
+    rows = rows or list(SENSITIVE_FILES)
+    with _DICT_LOCK:
+        _DICT_CACHE["path"] = full
+        _DICT_CACHE["rows"] = rows
+    return rows
+
 
 @check("a01-sensitive-files", "敏感文件可匿名访问", "high", "A01")
 def _sensitive_files(url, settings):
     base = url.rstrip("/")
-    for path, sigs, sev, name in SENSITIVE_FILES:
+    for path, sigs, sev, name in sensitive_files(settings):
         r = _get(base + path, settings)
         if not r or r.get("status") != 200:
             continue

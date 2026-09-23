@@ -138,4 +138,8 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 - 扫描内部：`utils.pool_run` 线程池，阶段级并发（探测/目录/漏洞扫描），站点内检查串行；
 - **协作式取消**：`runner` 维护 task_id → `threading.Event` 的取消表，`request_stop` 置位、阶段在循环边界
   调 `ctx.stopped()` 主动退出，终态记为 `stopped`（粒度是"当前批次跑完即停"，不强杀飞行中的请求）；
-- SQLite 每次操作独立连接，规避跨线程共享连接问题。
+- SQLite 每次操作独立连接，规避跨线程共享连接问题；
+- **写操作在进程内串行化**（`db._WRITE_LOCK`，可重入锁）：SQLite 是单写者库，WAL 只让"读不被写阻塞"、
+  `busy_timeout` 只是"冲突时排队等待的上限"，两者都不保证写成功 —— 而无任务队列时
+  N 个任务线程 × `pool_run(workers=20)` 的回填会同时打满。所有写路径（`_exec` / `init_db` /
+  复核打标 / `upsert_poc`）都在锁内；**新增写路径必须走 `_exec` 或显式加锁**。
