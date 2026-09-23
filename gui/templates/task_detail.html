@@ -10,7 +10,9 @@
     id="btn-stop" {{ 'disabled' if task.status != 'running' }}>停止</button>
   <button class="btn-mini ghost" data-op="restart" data-id="{{ task.id }}"
     {{ 'disabled' if task.status == 'running' }}>重启</button>
-  <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">导出报告</a>
+  <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">导出 MD</a>
+  <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">导出 HTML</a>
+  <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='pdf') }}">导出 PDF</a>
   <button class="btn-mini danger" data-op="delete" data-id="{{ task.id }}">删除</button>
   <span id="op-msg" class="muted"></span>
   <span class="spacer"></span>

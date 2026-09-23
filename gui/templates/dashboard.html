@@ -46,4 +46,49 @@
     </table>
   </section>
 </div>
+<section>
+  <h2>漏洞趋势统计</h2>
+  <p class="muted">数据口径与报告一致：<b>已判误报不计入</b>。级别分布为全库累计，逐任务为最近 15 个任务。</p>
+  <div class="grid2">
+    <div>
+      <table>
+        <thead><tr><th>级别</th><th>数量</th><th>占比</th></tr></thead>
+        <tbody>
+        {% for k, n in trend.by_severity.items() %}
+          {% if k != 'other' %}
+          <tr>
+            <td><span class="sev sev-{{ k }}">{{ k }}</span></td>
+            <td>{{ n }}</td>
+            <td><span class="bar"><i style="width:{{ (n / trend.total * 100) if trend.total else 0 }}%"></i></span></td>
+          </tr>
+          {% endif %}
+        {% endfor %}
+        {% if trend.by_severity.other %}
+        <tr><td class="muted">other</td><td>{{ trend.by_severity.other }}</td><td class="muted">未知级别</td></tr>
+        {% endif %}
+        <tr><td><b>合计</b></td><td><b>{{ trend.total }}</b></td>
+          <td class="muted">待复核 {{ trend.review.pending }} ｜ 已确认 {{ trend.review.confirmed }}
+            ｜ 误报 {{ trend.review.false_positive }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <table>
+        <thead><tr><th>任务</th><th>crit</th><th>high</th><th>med</th><th>low</th><th>info</th><th>合计</th></tr></thead>
+        <tbody>
+        {% for r in trend.recent %}
+          <tr>
+            <td><a href="{{ url_for('task_detail', task_id=r.task_id) }}">#{{ r.task_id }} {{ r.name }}</a>
+              <span class="muted">{{ r.created_at }}</span></td>
+            <td>{{ r.critical }}</td><td>{{ r.high }}</td><td>{{ r.medium }}</td>
+            <td>{{ r.low }}</td><td>{{ r.info }}</td><td><b>{{ r.total }}</b></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="muted">暂无任务。</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
 {% endblock %}

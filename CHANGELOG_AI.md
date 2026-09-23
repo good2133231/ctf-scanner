@@ -3,6 +3,82 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-23 —— 续16：报告三格式（HTML / PDF）+ 漏洞趋势统计
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户原话条目：「工程化：任务队列 / 断点续扫、鉴权加固（多用户·CSRF·HTTPS）、**HTML·PDF 报告**、
+分布式节点、工具版本管理」（整批下单末尾一句「**这些都做**」）。本轮做其中**零外部接口、纯增量**的一条。
+
+- **口径**：`docs/roadmap.md` 的「报告升级：HTML/PDF 模板、漏洞趋势统计」**三项都落地**：
+  ① HTML 模板（自包含单文件）；② PDF（本机无头浏览器打印）；③ 漏洞趋势统计（HTML 报告内 + 仪表盘）。
+  **不做**：在线托管 / 报告分享链接。
+
+### 1. 三种格式共用同一份数据快照（`report.collect()`）
+
+- 新增 [`scanner/report.py::collect(task_id)`](scanner/report.py)：把原先散在 `generate()` 里的
+  取数逻辑抽成一个函数，`task/subs/sites/dirs/ports/csegs/certs/vulns/leads/review` 一次取齐。
+  **为什么不是"HTML 另写一份取数"**：两份取数迟早会漂移 —— 典型症状是"Markdown 里有 TLS 证书
+  小节、HTML 里没有"，而这种漂移没人会去比对。`generate()`（Markdown）的输出**逐字节不变**，
+  只是开头多了 `d = collect(...)` 与变量解包。
+
+### 2. HTML 报告（`generate_html`）
+
+- **自包含单文件**：样式内联在 `<style>`，不引任何外部资源（CTF 现场常离线；也避免交付物里出现外链）。
+- **小节与 Markdown 一一对应**：目标 / 概览（卡片）/ 漏洞趋势统计（级别分布条）/ 潜在漏洞 / 存活站点 /
+  开放端口 / C 段 / TLS 证书 / 子域名 / 目录发现 / 线索 / 已判误报。
+- **全量 `html.escape`（安全）**：报告里的标题 / URL / banner / evidence **都来自被测目标**，
+  漏一处转义就是一个"打开报告即执行 JS"的反射型 XSS。统一走 `_h()`（`quote=True`），
+  并用 `[5w]` 的 XSS 载荷断言把它钉死（`<script>`、`"`、banner 三处）。
+- `_html_table()` 只负责拼表：调用方传**已转义**的单元格，避免"转义在两条路径上不一致"。
+
+### 3. PDF 报告（`export_pdf`）
+
+- **为什么不自己写 PDF**：中文要嵌字体，纯标准库写 PDF 等于自带一个排版引擎（与 `certs.py`
+  手写 DER 不同 —— DER 是**读**，PDF 是**排版**）。截图功能已经在用本机 Edge/Chrome，
+  这里复用**同一条浏览器探测路径**（`scanner.screenshot.browser_path`），**不引入任何新依赖**。
+- 流程：`generate_html` → 临时目录写 `report.html` → `--headless=new --print-to-pdf=<out>`
+  （`--no-pdf-header-footer` 免得把浏览器的 URL/日期页眉印进交付物）→ 临时 profile 目录用完即删。
+- **找不到浏览器不是静默失败**：返回 `(False, 原因)`；GUI 把它渲染成一个说明页（400 + 可读原因 +
+  「改导出 HTML」的可点链接），CLI 打印原因并 `sys.exit(1)`（脚本里能立刻发现少了一份交付物）。
+- 正文里读文件用显式 `encoding="utf-8"`（AGENTS.md §0）。
+
+### 4. 漏洞趋势统计（`db.vuln_trend()`）
+
+- `SELECT severity, COUNT(*)` 全库分布 + 最近 15 个任务的逐任务计数，**已判误报不计入**
+  （口径与报告一致：复核过的噪声不该在趋势里反复出现），**未知级别归 `other`** 而不是静默丢掉。
+- 展示两处：HTML 报告的「漏洞趋势统计」小节（级别分布条 + 占比）、仪表盘新增「漏洞趋势统计」面板
+  （左：全库分布 + 复核台账；右：逐任务 crit/high/med/low/info 计数）。
+
+### 5. 入口
+
+- GUI：任务详情页「导出报告」→ 三个按钮 **导出 MD / 导出 HTML / 导出 PDF**；
+  路由 `GET /tasks/<id>/export?fmt=md|html|pdf`（**默认仍是 md**，旧链接行为不变）。
+- CLI：`--report PATH`（md，原有）/ **`--report-html PATH`** / **`--report-pdf PATH`**。
+- PDF 的临时目录在响应发出前就删掉，所以正文**先读进内存再回**（否则 Windows 上句柄还被占着，
+  目录删不掉的竞态）。
+
+### 6. 回归与验证
+
+- `tests/smoke.py` 新增 **`[5w]`**：造一个"八节齐全"的任务（站点标题/banner/证据都带 XSS 载荷 +
+  一条已判误报 + 一条线索 + 一张证书）→ 断言：
+  - MD 与 HTML **小节一一对应**（防格式漂移）；
+  - XSS 载荷在 HTML 里**必须**是 HTML 实体（`<script>` / 双引号 / banner 三处），且报告里没有
+    `<script>`、`<link>`、头部无外部资源；
+  - 趋势口径：误报不计入、`high=1/low=0/total=1`、未知级别进 `other`；
+  - 三个格式路由：md/html 的 `Content-Disposition` 与 `Content-Type`、PDF 在**打桩成无浏览器**时
+    返回 400 + 可读原因（并把 `fmt=html` 的替代路径写进页面）、`export_pdf` 对不存在的任务返回
+    `(False, "任务不存在")`；
+  - 仪表盘渲染出「漏洞趋势统计」面板与口径文案。
+- **`py -3 tests/smoke.py` → SMOKE PASS**（新增 `[5w]`，其余 21 节全绿）。
+- **真机验证 PDF 打印**：本机（Windows + Edge）实跑 `export_pdf` 出 `%PDF-1.4`、188320 字节。
+  **残留**：Linux 实机上未跑 PDF（该机浏览器为 snap chromium，`--print-to-pdf` 未实测），与
+  subfinder/puredns/httpx 一起如实标注在 `TODO.md`。
+
+### 7. 本轮**未做**（如实标注）
+
+- 任务队列 / 断点续扫、鉴权加固（多用户·CSRF·HTTPS）、分布式节点、工具版本管理（见 §工程化，后续批次）；
+- 报告在线托管 / 分享链接（刻意不做：控制台本身仅限本机使用）。
+
 ## 2026-09-23 —— 续15：TLS 证书取证（`cert` 阶段 + `certs` 表 + 「SSL 证书」页签）
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

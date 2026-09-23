@@ -58,6 +58,14 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 （`logs/task_1_x/task.log`），项目外路径与空值原样返回；CLI / GUI / 报告对外显示路径都走它，
 不向外暴露本机绝对目录。
 
+`scanner/report.py` 提供**三种报告格式**，共用 `collect(task_id)` 的同一份数据快照
+（避免"Markdown 有 TLS 证书小节、HTML 没有"这类格式漂移）：
+`generate()`（Markdown，默认）/ `generate_html()`（**自包含单文件**：样式内联、不引外链，
+所有来自被测目标的文本走 `html.escape` —— 漏一处就是"打开报告即执行 JS"的反射型 XSS）/
+`export_pdf()`（把 HTML 交给本机无头 Edge/Chrome 的 `--print-to-pdf`，**不引入新依赖**；
+找不到浏览器时返回明确原因，GUI 显示为 400 说明页、CLI 退出码非 0）。
+跨任务维度的「漏洞趋势统计」在 `db.vuln_trend()`（级别分布 + 最近 15 任务逐任务计数）。
+
 ## 关键设计决策
 
 | 决策 | 理由 | 代价 |

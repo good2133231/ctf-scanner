@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import db
 from scanner.config import load_settings, resolve
-from scanner.report import generate
+from scanner.report import export_pdf, generate, generate_html
 from scanner.runner import STAGE_ORDER, STAGE_REGISTRY, run_task
 from scanner.utils import rel_display, which, verify_tool
 
@@ -62,6 +62,9 @@ def main():
                     help="本次任务目录走深扫：全量分层字典 + dirmap + 后缀派生"
                          "（等价 GUI 任务选项 dirscan_full）")
     ap.add_argument("--report", metavar="PATH", help="结束后生成 Markdown 报告到指定路径")
+    ap.add_argument("--report-html", metavar="PATH", help="结束后生成 HTML 报告（自包含单文件）")
+    ap.add_argument("--report-pdf", metavar="PATH",
+                    help="结束后生成 PDF 报告（用本机无头 Edge/Chrome 打印；没有浏览器会明确报错）")
     ap.add_argument("--check", action="store_true", help="检查外部工具可用性后退出")
     args = ap.parse_args()
 
@@ -137,6 +140,22 @@ def main():
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(md, encoding="utf-8")
             print(f"[*] 报告已生成：{rel_display(out)}")
+    if args.report_html:
+        body = generate_html(task_id)
+        if body:
+            out = resolve(args.report_html)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(body, encoding="utf-8")
+            print(f"[*] HTML 报告已生成：{rel_display(out)}")
+    if args.report_pdf:
+        out = resolve(args.report_pdf)
+        ok, err = export_pdf(task_id, out, settings)
+        # 失败时**不静默**：打印原因并让退出码非 0（脚本里能立刻发现少了一份交付物）。
+        if ok:
+            print(f"[*] PDF 报告已生成：{rel_display(out)}")
+        else:
+            print(f"[!] PDF 报告生成失败：{err}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":

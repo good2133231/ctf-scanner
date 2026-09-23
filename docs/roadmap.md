@@ -67,7 +67,14 @@
 
 - [ ] 任务队列（Celery/RQ 或 asyncio）替代后台线程，支持并发任务与断点续扫；
 - [ ] 鉴权加固：多用户、CSRF、HTTPS 部署指引（当前仅限本机使用）；
-- [ ] 报告升级：HTML/PDF 模板、漏洞趋势统计；
+- [x] **报告升级**（续16）：Markdown（原有）+ **HTML**（`report.generate_html()`，自包含单文件、
+      内联样式、不引外链，全量 `html.escape`）+ **PDF**（`report.export_pdf()`，复用本机无头
+      Edge/Chrome 的 `--print-to-pdf`，**不引入新依赖**；没有浏览器时明确报错并指向 HTML 替代路径）
+      + **漏洞趋势统计**（`db.vuln_trend()`：级别分布 + 最近 15 个任务的逐任务计数，
+      **已判误报不计入**、未知级别归 `other`；HTML 报告内与仪表盘都有）。
+      入口：GUI 任务详情「导出 MD / HTML / PDF」、CLI `--report` / `--report-html` / `--report-pdf`。
+      **未做**：报告在线托管 / 分享链接（刻意不做，控制台仅限本机使用）；
+      **残留未验**：Linux 实机上未跑 `--print-to-pdf`（本机 Windows + Edge 已实跑出 `%PDF-1.4`）；
 - [x] **Linux 实机验证**（P2-3，2026-09-23 续12 已达成）：在 Ubuntu 22.04.5 / Python 3.10.12 实机
       跑 `python3 tests/smoke.py` → **SMOKE PASS**（同一份代码，无平台分支）；同时实机验证了
       无头截图（snap `chromium` 出图 0.9s / 11274 字节合法 PNG）与外部二进制真实调用

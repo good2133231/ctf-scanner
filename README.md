@@ -14,6 +14,7 @@
 - **线索层：情报订阅 + 启发式候选**（两个阶段**默认关**）：拉取 **CISA KEV**（免 key 公开 JSON，只收录已被在野利用的 CVE）与本地指纹做**白名单式匹配**；以及对已采集数据做**零请求**的差分/异常聚合（软 404 模板 / 高价值入口暴露 / 同标题多主机 / 目录命中离群 / 同 C 段多 IP）。两者产出**只是「线索」**：独立 `leads` 表、任务详情独立页签、报告独立附录，**不写漏洞、不计入漏洞数、不自动导入 POC**；
 - **JS 敏感字符**：17 条凭据规则（AKID/LTAI/AKIA、JWT、私钥 PEM、数据库连接串、Slack/Telegram/SendGrid/Stripe 等）+ 两级降噪（占位符、变量引用、成员访问），命中值掩码脱敏后以 high 级入库，「拓展域名」页按域名显示敏感命中数；
 - **OWASP Top 10**：内置轻量启发式检查（全部非破坏性，结论为"潜在漏洞/初筛信号"，需人工确认）；其中 **A01 敏感文件检查是数据驱动的** —— 路径、特征关键字、级别、说明都写在 `config/dicts/sensitive.txt`（`路径 | 关键字 | 级别 | 说明`，签名必填以免被统一 200 的软 404 页放大成误报），文件缺失时自动回退内置清单。
+- **报告三格式 + 漏洞趋势**：三种格式共用**同一份数据快照**（`report.collect()`，防"某种格式少一节"的漂移）——**Markdown**（默认，CLI `--report` / GUI 任务行「导出」）、**自包含单文件 HTML**（样式内联、不引外链，可直接发人）、**PDF**（复用本机无头 Edge/Chrome 的 `--print-to-pdf`，**不引入新依赖**）；报告里所有来自被测目标的文本（标题 / URL / banner / evidence）**全量 HTML 转义**，避免"打开报告即执行 JS"的反射型 XSS。本机没有可用浏览器时 PDF **明确报错**（GUI 给一页说明 + 替代路径，CLI 退出码 1），不静默丢交付物；仪表盘另有**漏洞趋势统计**面板（级别分布条 + 最近 15 个任务逐任务计数，口径与报告一致：**已判误报不计入**，未知级别归入 `other` 不静默丢）；
 
 > **法律与授权声明**：本工具仅可用于自己拥有或已获得书面授权的目标（CTF 平台、靶场、委托测试范围）。对未授权目标使用属于违法行为，后果自负。详见 [docs/security-notice.md](docs/security-notice.md)。
 
@@ -110,7 +111,8 @@ ctf-scanner/
 │   ├── intel.py             #   漏洞情报订阅：CISA KEV × 本地指纹白名单匹配（只产「线索」）
 │   ├── heuristics.py        #   启发式候选发现：零请求差分/异常聚合（只产「线索」）
 │   ├── fingerprint.py       #   内置指纹识别 + favicon MD5/mmh3（httpx 不可用时填充技术栈）
-│   ├── db.py  config.py  utils.py  targets.py  report.py
+│   ├── db.py  config.py  utils.py  targets.py
+│   ├── report.py            #   报告三格式（Markdown / 自包含 HTML / 无头浏览器打印 PDF），共用 collect() 快照
 ├── tools/import_ref_pocs.py #   参考项目 Python POC 静态导入器（产物默认关闭）
 ├── tools/import_dir_dict.py #   目录扫描大字典生成器（读 dirmap 字典 → config/dicts/dirs_big.txt）
 ├── tools/import_fw_dicts.py #   目录字典按框架细分生成器（从大字典派生 12 个框架字典 + 暴露面）

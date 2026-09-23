@@ -746,12 +746,13 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 4、文档同步：AGENTS.md（§3 目录地图 + §7 两条局限改写）、docs/architecture.md（存储层写串行化）、
        docs/owasp-mapping.md（A01 数据源）、README.md（A01 数据驱动 + dicts 目录说明）、
        TODO.md（两条 [ ] 转 [完成：续14]）、CHANGELOG_AI.md（续14）
-[未做] 5、用户整批下单中尚未动手的项（按依赖分组，见 CHANGELOG 续14 开头）：HTML·PDF 报告 /
-       工具版本管理 / Shodan·Quake 反查 / CT 日志（crt.sh）在线查询 / 登录态扫描 / XSS 上下文分析 /
+[未做] 5、用户整批下单中尚未动手的项（按依赖分组，见 CHANGELOG 续14 开头）：工具版本管理 /
+       Shodan·Quake 反查 / CT 日志（crt.sh）在线查询 / 登录态扫描 / XSS 上下文分析 /
        A10 SSRF 受控回连 / 盲注 SQL（须保持非破坏性）/ nuclei raw·flow·workflows / 任务队列·断点续扫 /
        鉴权加固 / 分布式节点 / 目录递归爬取 / dirmap 复核对齐 /
        运行时联网下载字典（拟改为显式手动工具 + 校验，默认关）
-       （「证书透明度解析 + SSL 证书页签」已于续15 落地为**站点证书取证**，CT 日志部分仍未做）
+       （「证书透明度解析 + SSL 证书页签」已于续15 落地为**站点证书取证**，CT 日志部分仍未做；
+        **HTML·PDF 报告**已于续16 落地，见文末续16 块）
 [拒绝] 6、破坏性利用 / 口令爆破 / DDoS：与 AGENTS.md §1「检测一律非破坏性」红线冲突，不做。
        低危 info 噪声项：能力已具备（策略配置 checks.skip_severities 去掉 info/low 即可），不改默认值。
 
@@ -805,4 +806,48 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        docs/roadmap.md（该条转 [x] 并标注未做部分）、TODO.md、CHANGELOG_AI.md（续15）；
        换行符按仓库约定 CRLF 逐文件自查归位。
 [未做] 9、CT 日志（crt.sh）在线查询：roadmap 该条原文含"证书透明度"，本轮只做站点证书取证，
-       在线 CT 查询属外部接口，与 Shodan/Quake 反查一起排后续；HTML/PDF 报告仍未做（下一批）。
+       在线 CT 查询属外部接口，与 Shodan/Quake 反查一起排后续。
+       （HTML/PDF 报告已于续16 落地，见下块。）
+
+========================================================================
+（续16：报告三格式（HTML / PDF）+ 漏洞趋势统计）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+触发：用户整批下单项「工程化：任务队列 / 断点续扫、鉴权加固、**HTML·PDF 报告**、分布式节点、工具版本管理」。
+本轮做其中**零外部接口、纯增量**的一条（报告 + 趋势），任务队列/鉴权加固排后续批次。
+
+[完成] 1、scanner/report.py 抽 collect(task_id) 共用快照：目的不是省代码，而是让三种格式**看到同一批数据**
+       （防"Markdown 有 TLS 证书小节、HTML 没有"这类无人比对的漂移）；generate() 改为以 collect() 开头
+       再解包成原有局部变量，**Markdown 输出逐字节不变**（零回归）。
+[完成] 2、generate_html()：自包含单文件（样式内联 _HTML_CSS、不引任何外链，CTF 现场常离线）；
+       小节与 Markdown 一一对应（目标/概览/趋势/潜在漏洞/站点/端口/C 段/TLS 证书/子域名/目录/线索/已判误报）；
+       全量 html.escape(quote=True)（统一走 _h()）—— 标题/URL/banner/evidence 都来自被测目标，
+       漏一处即"打开报告就执行 JS"的反射型 XSS；_html_table 只拼表，调用方传已转义单元格。
+[完成] 3、export_pdf()：为什么不自研 PDF —— 中文要嵌字体，纯标准库写 PDF 等于自带排版引擎（与 certs.py 手写
+       DER 不同：DER 是读，PDF 是排版）；复用 screenshot.browser_path 同一条探测路径 +
+       --headless=new --print-to-pdf（另加 --no-pdf-header-footer，免得把浏览器 URL/日期页眉印进交付物），
+       **零新依赖**；无浏览器返回 (False, 原因) 不抛异常；正文显式 encoding="utf-8"。
+[完成] 4、db.vuln_trend(limit_tasks=15)：全库级别分布 + 最近 N 任务逐任务计数；**已判误报不计入**
+       （否则复核过的噪声在趋势里反复出现，等于把人工复核白做）；未知级别归 other 而非静默丢弃。
+[完成] 5、入口：GUI 任务详情页「导出报告」→ 三按钮（导出 MD / HTML / PDF），路由
+       GET /tasks/<id>/export?fmt=md|html|pdf（**默认仍是 md**，旧链接行为不变；pdf 失败 → 400 说明页
+       _export_error_page 含可点的 fmt=html 替代路径）；PDF 临时目录在响应发出前删掉，所以正文先 read_bytes
+       再回（否则 Windows 上句柄还占着、目录删不掉的竞态）；仪表盘新增「漏洞趋势统计」面板；
+       CLI 新增 --report-html / --report-pdf（pdf 失败打印原因并 exit 1，脚本里能立刻发现少交付物）。
+[完成] 6、smoke 新增 [5w]：造"八节齐全"任务（站点标题/banner/证据带 XSS 载荷 + 一条已判误报 + 一条线索 +
+       一张证书）→ 断言 MD 与 HTML **小节一一对应** / XSS 载荷必须是 HTML 实体且报告里无 <script>·<link>、
+       头部无外部资源 / 趋势口径（误报不计入、high=1·low=0·total=1、未知级别进 other）/
+       三条路由（默认 md 与 ?fmt=html 的 Content-Type 与 Content-Disposition、打桩 browser_path="" 后
+       ?fmt=pdf → 400 含"未找到可用的无头浏览器"）/ export_pdf 对不存在任务返回 (False, "任务不存在")/
+       仪表盘渲染出趋势面板与口径文案。→ py -3 tests/smoke.py SMOKE PASS
+[完成] 7、真机验证 PDF 打印：本机（Windows + Edge）实跑 export_pdf 产出 %PDF-1.4 / 188320 字节。
+[完成] 8、文档同步：CHANGELOG_AI.md（续16）、README.md（报告条目 + 目录树 report.py）、
+       AGENTS.md（§3 目录地图 / §4 / smoke 注释 [5u][5v][5w] / §7 报告条目与 XSS 红线）、
+       docs/architecture.md（report.py 三格式 + db.vuln_trend）、docs/usage.md（--report-html/--report-pdf +
+       仪表盘趋势面板 + 任务行导出三格式 + 页签 8→9）、docs/roadmap.md（该条转 [x] 并标注未做）、
+       docs/pipeline.md、TODO.md、todo.txt；换行符按仓库约定 CRLF 逐文件自查归位
+       （只归位本轮新引入的 lone-LF，不动 HEAD 里既有的）。
+[未做] 9、残留未验（如实标注）：Linux 实机未跑 --print-to-pdf（本机 Windows/Edge 已实跑）；
+       PDF 页边距/分页走浏览器默认样式，未做自定义页眉页脚。
+[未做] 10、下一批：nuclei raw·flow·workflows + 登录态扫描（批次 3）；XSS 上下文分析 / A10 SSRF 受控回连 /
+       盲注 SQL / Shodan·Quake favicon 反查 / CT 日志（crt.sh）在线查询（批次 4）；
+       任务队列·断点续扫 / 鉴权加固（多用户·CSRF·HTTPS）/ 分布式节点 / 工具版本管理（批次 5）。
+[拒绝] 11、报告在线托管 / 分享链接：刻意不做 —— 控制台本身定位是仅限本机使用，加托管会引入鉴权面。

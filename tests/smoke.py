@@ -119,7 +119,7 @@ from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.targets import expand_cidr, parse_lines
 from scanner.pocs import engine
-from scanner.report import generate
+from scanner.report import export_pdf, generate, generate_html
 from scanner.runner import (STAGE_ORDER, PipelineRunner, StageContext, run_task,
                             sync_pocs)
 
@@ -2305,6 +2305,100 @@ def main():
     print("[5v] 续15 ok: TLS 证书取证（内联夹具解析 CN/SAN/序列号剥补位/自签/过期 + "
           "127.0.0.1 真握手与 SNI + 门控关零请求 + 落库/certs.txt/「SSL 证书」页签/报告小节 + "
           "清空资产覆盖 certs + 异常优先排序 + 勾选即 cert_on）")
+
+    # [5w] 续16：报告三格式（MD / HTML / PDF）+ 漏洞趋势统计
+    # 造一个"什么节都有"的任务：站点（标题带 XSS 载荷）/ 目录 / 端口 / C 段 / 证书 /
+    # 漏洞（含已判误报）/ 线索 —— HTML 的每一节都要能被断言到，空数据只会掩盖漏渲染。
+    _XSS = '<script>alert(1)</script>"onx'
+    w_tid = db.create_task("smoke-report-formats", targets, ["probe"], {"offline": True})
+    db.insert_sites(w_tid, [{"url": "http://w.test/", "host": "w.test", "port": 80,
+                             "status": 200, "title": _XSS, "server": "nginx <b>",
+                             "tech": "php", "source": "probe"}])
+    db.insert_dirs(w_tid, [{"site_url": "http://w.test/", "path": "/.env", "status": 200,
+                            "length": 21, "title": _XSS}])
+    db.insert_ports(w_tid, [{"host": "w.test", "ip": "10.0.0.9", "port": 22,
+                             "service": "ssh", "banner": "SSH-2.0 " + _XSS}])
+    db.insert_csegs(w_tid, [{"segment": "10.0.0.0/24", "ip": "10.0.0.9",
+                             "domains": ["a.test", "b.test"], "count": 2}])
+    db.insert_certs(w_tid, [{"url": "https://w.test/", "host": "w.test", "port": 443,
+                             "cn": "w.test", "issuer": "CN=w.test", "expired": 1,
+                             "self_signed": 1, "days_left": -3, "san": ["w.test"],
+                             "sig_algo": "sha256WithRSA", "sha256": "AA:BB", "source": "tls"}])
+    db.insert_vuln(w_tid, {"target": "http://w.test/", "poc_id": "smoke-xss", "name": _XSS,
+                           "severity": "high", "owasp": "A03", "evidence": _XSS})
+    db.insert_vuln(w_tid, {"target": "http://w.test/", "poc_id": "smoke-fp",
+                           "name": "复核掉的这条", "severity": "low"})
+    _fp_id = [v["id"] for v in db.list_vulns(task_id=w_tid, limit=50)
+              if v["poc_id"] == "smoke-fp"][0]
+    assert db.set_vuln_review(_fp_id, "false_positive", "统一 200 的软 404") == 1
+    db.insert_leads(w_tid, [{"kind": "intel", "code": "CVE-2021-44228", "title": "Log4Shell",
+                             "target": "w.test", "matched": "tech:log4j",
+                             "level": "high", "source": "kev"}])
+
+    _wmd = generate(w_tid)
+    _whtml = generate_html(w_tid)
+    # 三个格式必须**看到同一批数据**：MD 里有的小节 HTML 里也要有（避免格式间漂移）。
+    for _sec in ("潜在漏洞", "存活站点", "开放端口", "C 段视野", "TLS 证书", "目录发现", "线索",
+                 "已判误报"):
+        assert f"<h2>{_sec}" in _whtml, f"HTML 报告缺小节：{_sec}"
+        assert _sec in _wmd, f"MD 报告缺小节：{_sec}"
+    assert "漏洞趋势统计" in _whtml, "HTML 报告缺级别分布"
+    assert db.vuln_trend()["by_severity"]["high"] >= 1
+    # **安全断言**：目标可控的内容（标题/banner/证据）进 HTML 必须被转义 ——
+    # 报告是"打开就会执行 JS"的交付物，漏一处就是反射型 XSS。
+    assert "<script>alert(1)</script>" not in _whtml, "站点标题未转义（XSS）"
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in _whtml, "转义结果不是 HTML 实体"
+    assert 'SSH-2.0 &lt;script&gt;' in _whtml, "banner 未转义"
+    assert "&quot;onx" in _whtml, "双引号未转义（可逃出属性/文本）"
+    # 自包含单文件：不引任何外部资源（离线现场也要能看）
+    assert "http://" not in _whtml.split("</head>")[0], "HTML 头部引了外部资源"
+    assert "<link" not in _whtml and "<script" not in _whtml, "HTML 报告不该有外链/脚本标签"
+
+    # 趋势统计口径：**已判误报不计入**（否则复核过的噪声会在趋势里反复出现）
+    _tr = db.vuln_trend()
+    assert _tr["review"]["false_positive"] >= 1, _tr["review"]
+    _row = [r for r in _tr["recent"] if r["task_id"] == w_tid][0]
+    assert _row["high"] == 1 and _row["low"] == 0 and _row["total"] == 1, _row
+    # 未知级别归 other，不静默丢
+    _o_tid = db.create_task("smoke-report-other-sev", "x.test", ["probe"], {})
+    db.insert_vuln(_o_tid, {"target": "x.test", "poc_id": "p", "name": "脏级别",
+                            "severity": "weird"})
+    assert db.vuln_trend()["by_severity"]["other"] >= 1, "未知级别没归入 other"
+    db.delete_task(_o_tid, backup=False)
+
+    # GUI 三格式路由：md 默认、html、pdf 的失败路径都要**说清原因**（无浏览器时 400 + 原因）
+    _r1 = c.get(f"/tasks/{w_tid}/export")
+    assert _r1.status_code == 200 and "attachment" in _r1.headers["Content-Disposition"]
+    assert ".md" in _r1.headers["Content-Disposition"] and "扫描报告" in _r1.get_data(as_text=True)
+    _r2 = c.get(f"/tasks/{w_tid}/export?fmt=html")
+    assert _r2.status_code == 200 and "text/html" in _r2.headers["Content-Type"]
+    assert ".html" in _r2.headers["Content-Disposition"]
+    assert "&lt;script&gt;" in _r2.get_data(as_text=True), "路由返回的 HTML 未转义"
+    # 没有浏览器时必须 400 + 可读原因（把 browser_path 打桩成"找不到"再验；
+    # `export_pdf` 里是"调用时才 import"，所以打桩模块属性即可生效）
+    from scanner import screenshot as shot_mod
+    _orig_bp = shot_mod.browser_path
+    try:
+        shot_mod.browser_path = lambda *a, **kw: ""
+        _r3 = c.get(f"/tasks/{w_tid}/export?fmt=pdf")
+        assert _r3.status_code == 400, _r3.status_code
+        _r3t = _r3.get_data(as_text=True)
+        assert "未找到可用的无头浏览器" in _r3t and "fmt=html" in _r3t, _r3t[:300]
+        # CLI 侧同一函数：无浏览器也要返回 (False, 原因)，不能抛异常
+        _ok, _err = export_pdf(w_tid, Path(_TMPDIR) / "w.pdf", settings)
+        assert _ok is False and "无头浏览器" in _err, (_ok, _err)
+    finally:
+        shot_mod.browser_path = _orig_bp
+    _ok2, _err2 = export_pdf(999999, Path(_TMPDIR) / "nope.pdf", settings)
+    assert _ok2 is False and "任务不存在" in _err2, (_ok2, _err2)
+    # 仪表盘趋势面板：页面上要能看到"漏洞趋势统计"（不美化断言，只守"渲染得出来"）
+    _dash = c.get("/").get_data(as_text=True)
+    assert "漏洞趋势统计" in _dash and "smoke-report-formats" in _dash, "仪表盘缺趋势面板"
+    assert "已判误报不计入" in _dash, "趋势面板没写口径"
+    db.delete_task(w_tid, backup=False)
+    print("[5w] 续16 ok: 报告三格式（MD/HTML/PDF）与漏洞趋势统计（八节齐全 + XSS 载荷全转义 + "
+          "自包含无外链 + 误报不计入趋势/未知级别归 other + 三格式路由 + 无浏览器 400 说明原因 + "
+          "仪表盘趋势面板）")
     print("SMOKE PASS")
 
 

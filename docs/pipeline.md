@@ -278,7 +278,7 @@
 - 注入探测的"动态性"：payload 变体按 `evasion.bypass_level` 生成（注释替空格/大小写/内联注释/
   URL 编码/双重编码/关键字分片），**每次运行的变体顺序随机**，参数顺序也随机 —— 请求形态不固定，
   降低被 WAF 规则固化识别的概率；原始 payload 始终排第一（最便宜、命中率最高）；
-- 产物：SQLite `vulns` 表、GUI 漏洞页、Markdown 报告。
+- 产物：SQLite `vulns` 表、GUI 漏洞页、**三种格式的报告**（Markdown / 自包含单文件 HTML / PDF）。
   **人工复核（P1-1）**：结果可在 GUI 漏洞页标「已确认 / 误报」，**判误报的行不计入漏洞数**，
   报告里另立「已判误报（人工复核排除）」附录（判错可改回）；
 - 并发：站点级并发（max_workers/2），站点内部串行，避免对单目标压力过大。
@@ -388,7 +388,10 @@ logs/task_1_mytask/
 > `intel` / `heuristic` 同理 —— 只写 `leads` 表（情报缓存另落 `data/intel/<source>.json`，**不在任务目录**）；
 > `cert` 两条都落：`certs` 表 + `certs.txt`（每次握手只成功一次，文本产物便于直接比对）；
 > 子域名阶段的 **IP / CDN 回填**同样只进 `subdomains` 表（`ip` / `cdn` 两列），不额外落文件；
-> `vulnscan` 结果进 `vulns` 表，Markdown 报告用 `scanner/report.py` 或 GUI 导出按钮生成。
+> `vulnscan` 结果进 `vulns` 表，报告由 `scanner/report.py` 或 GUI 导出按钮生成 ——
+> 三种格式**共用同一份数据快照**（`collect(task_id)`，防格式漂移）：`generate()`（Markdown，默认）/
+> `generate_html()`（自包含单文件，所有来自被测目标的文本全量 `html.escape`）/
+> `export_pdf()`（复用本机无头 Edge/Chrome 的 `--print-to-pdf`，无浏览器时**明确报错**不静默丢交付物）。
 
 ## 配置项速查（config/settings.yaml）
 

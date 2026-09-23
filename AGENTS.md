@@ -115,7 +115,8 @@ ctf-scanner/
 │   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖
 │   ├── utils.py           # run_cmd / http_request / pool_run / resolve_host / IO / base_domain() / rel_display()
 │   ├── targets.py         # parse_lines → [(kind, raw)]，kind ∈ domain|url|ip|cidr|unknown（cidr 展开为多条 ip）
-│   └── report.py          # Markdown 报告
+│   └── report.py          # 报告三格式：Markdown（generate）/ HTML（generate_html，自包含单文件+全量转义）/
+│                          #   PDF（export_pdf，复用无头 Edge/Chrome 的 --print-to-pdf）；三者共用 collect() 同一份快照
 ├── tools/import_ref_pocs.py # ast 静态解析参考项目 Python POC → config/pocs-imported/（导入项默认关闭）
 ├── tools/import_dir_dict.py # 外部目录字典 → 清洗 + **按技术栈拆桶** → config/dicts/dirs_{big,common,jsp,php,asp}.txt
 │                          #   用法：py -3 tools/import_dir_dict.py --src <字典文件>（源路径只走参数，代码里不留绝对路径）
@@ -215,7 +216,7 @@ ctf-scanner/
 ## 6. 如何验证改动
 
 ```powershell
-py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(11 个)/POC 级别执行门/
+py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(12 个)/POC 级别执行门/
                             # 免杀变形/mmh3 公开向量+iprecon/fofa 纯函数/响应体解码/流水线+指纹/三层门控/阶段门控(含 osint)/
                             # 非标端口候选/报告(含 C 段 IP)/停止/导出/GUI 路由(9 栏侧边栏 + /ports /csegs /dirs)与批量接口/
                             # 子域名分流+CDN 标记+站点折叠+POC 相对路径/
@@ -247,6 +248,12 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   内置 POC 全 high、按层批量启停 + kind=diff 幂等）
                             #   重写 `[5e-0]`：fscan 2.2.1 真实输出 7 组断言（三正则解析 / 统计行交叉校验 /
                             #   数目不符或 rc≠0 → None / 0 个 → [] / 跳转目标不被误记）
+                            # 2026-09-23 续14 新增 `[5u]`（sensitive.txt 签名列数据驱动 A01 + db 写锁串行化）
+                            # 2026-09-23 续15 新增 `[5v]`（证书：内联夹具解析 + 127.0.0.1 真握手 + 门控零请求
+                            #   + 落库/产物/页签/报告 + 清空资产 + 勾选即 cert_on）
+                            #   新增 `[5w]`（报告三格式与趋势：八节 MD↔HTML 一一对应 / XSS 载荷全转义 /
+                            #   自包含无外链 / 误报不计入趋势·未知级别归 other / 三格式路由 /
+                            #   无浏览器时 PDF 返回 400 + 可读原因 / 仪表盘趋势面板）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -322,6 +329,10 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   两个列表页，`?all=1` 可放开；任务详情页签与报告仍显示全量。因此"站点页条数比任务详情少"是预期行为。
 - 任务已支持**停止（协作式取消）/删除/重启/导出 + 批量操作**；停止粒度是"当前批次跑完即停"，
   不会强杀正在飞行的 HTTP 请求，任务终态记为 `stopped`（区别于 `failed`）。
+  导出有三档（续16）：`/tasks/<id>/export?fmt=md|html|pdf`（默认 md），
+  **HTML 全量 `html.escape`**（报告里的标题/banner 来自被测目标，漏转义即反射型 XSS）、
+  **PDF 复用无头 Edge/Chrome 打印**（没有浏览器时返回 400 + 可读原因 + HTML 替代链接，不静默失败）；
+  仪表盘另有「漏洞趋势统计」面板（`db.vuln_trend()`：级别分布 + 最近 15 任务逐任务计数，**已判误报不计入**）。
 - **改完 GUI 必须重启服务**：若 5000 已被旧进程占用，新起的 `run_gui.py`（经 `gui/app.py serve()`）
   会打印端口占用提示并以退出码 1 结束——按提示结束占用进程或改 `gui.port` 再试；
   请求还是打到旧进程（新路由 404）——很容易误判成"代码没生效"，先确认端口占用再排查。

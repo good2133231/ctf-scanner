@@ -648,6 +648,44 @@ def review_counts(task_id=None):
     return out
 
 
+# 漏洞趋势统计用的级别顺序（与 report.SEV_ORDER / GUI 徽标同一套取值）
+SEV_LEVELS = ("critical", "high", "medium", "low", "info")
+
+
+def vuln_trend(limit_tasks=15):
+    """漏洞趋势统计：**级别分布** + **最近 N 个任务的逐任务计数**。
+
+    口径与报告一致：**已判误报（`review='false_positive'`）不计入**（否则复核过的噪声
+    会在趋势里反复出现，等于把人工复核工作白做）；未知级别归入 `other` 而不是静默丢掉
+    （脏数据要看得见）。
+    """
+    by_sev = {k: 0 for k in SEV_LEVELS}
+    by_sev["other"] = 0
+    for row in _query("SELECT severity s, COUNT(*) c FROM vulns "
+                      "WHERE COALESCE(review,'') <> 'false_positive' GROUP BY severity"):
+        by_sev[row["s"] if row["s"] in by_sev else "other"] += row["c"]
+    tasks = list(_query("SELECT id, name, created_at FROM tasks ORDER BY id DESC LIMIT ?",
+                        (int(limit_tasks),)))
+    counts = {}
+    ids = [t["id"] for t in tasks]
+    if ids:
+        marks = ",".join("?" for _ in ids)
+        for row in _query(f"SELECT task_id t, severity s, COUNT(*) c FROM vulns "
+                          f"WHERE task_id IN ({marks}) "
+                          f"AND COALESCE(review,'') <> 'false_positive' "
+                          f"GROUP BY task_id, severity", tuple(ids)):
+            counts.setdefault(row["t"], {})[row["s"]] = row["c"]
+    recent = []
+    for t in tasks:
+        sev = counts.get(t["id"], {})
+        item = {k: sev.get(k, 0) for k in SEV_LEVELS}
+        item.update({"task_id": t["id"], "name": t["name"], "created_at": t["created_at"],
+                     "total": sum(sev.values())})
+        recent.append(item)
+    return {"by_severity": by_sev, "total": sum(by_sev.values()),
+            "review": review_counts(), "recent": recent}
+
+
 def list_vulns(task_id=None, severity=None, limit=200, review=None):
     """列出漏洞。`review` 三态：None=全部 / "pending"=待复核 / confirmed / false_positive。"""
     sql, params = "SELECT * FROM vulns WHERE 1=1", []

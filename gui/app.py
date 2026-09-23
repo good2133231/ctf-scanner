@@ -7,8 +7,11 @@
 - 控制台本身没有做 CSRF 等加固，切勿部署到公网。
 """
 import functools
+import html
 import json
+import shutil
 import socket
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -45,6 +48,24 @@ IP_NOTE_LABELS = {
     "empty": "空域名",
     "over-limit": "超出回填上限(subdomain.max_resolve)",
 }
+
+
+def _export_error_page(err, task_id):
+    """导出失败时给用户看的页面（纯静态 HTML，不经模板）：说清**为什么**失败 + 下一步怎么走。
+
+    之所以不用模板：这是一条只在异常路径上出现的极简页面，为它开模板/上下文不值得；
+    里面的 `err` 与 `task_id` 都做了转义。
+    """
+    return ("<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
+            "<title>导出失败</title></head><body style='font:14px/1.7 sans-serif;margin:32px'>"
+            "<h1 style='font-size:18px'>导出 PDF 失败</h1>"
+            f"<p>原因：<code>{html.escape(str(err or '未知错误'))}</code></p>"
+            "<p>可以：①改导出 HTML（下载后用浏览器「打印 → 另存为 PDF」）；"
+            "②在「策略配置 → 站点截图」里把浏览器路径填进 <code>screenshot.browser</code>，"
+            "PDF 导出复用同一条探测路径。</p>"
+            f"<p><a href='/tasks/{int(task_id)}'>← 返回任务</a> ｜ "
+            f"<a href='/tasks/{int(task_id)}/export?fmt=html'>下载 HTML 报告</a></p>"
+            "</body></html>")
 
 
 def ip_note_label(note):
@@ -153,7 +174,7 @@ def create_app():
     @login_required
     def dashboard():
         return render_template(
-            "dashboard.html", stats=db.dashboard_stats(),
+            "dashboard.html", stats=db.dashboard_stats(), trend=db.vuln_trend(),
             tasks=db.list_tasks(limit=8), vulns=db.list_vulns(limit=8))
 
     # ---------- 任务 ----------
@@ -303,13 +324,40 @@ def create_app():
     @app.route("/tasks/<int:task_id>/export")
     @login_required
     def task_export(task_id):
-        """导出任务 Markdown 报告（下载 .md）。"""
+        """导出任务报告：`?fmt=md`（默认，下载 .md）/ `html`（下载 .html）/ `pdf`（下载 .pdf）。
+
+        PDF 走本机无头浏览器的 `--print-to-pdf`（见 `report.export_pdf`）：找不到浏览器时
+        **把原因显示出来**（而不是 500 或一个空文件），并提示可改导出 HTML。
+        """
         task = db.get_task(task_id)
         if not task:
             abort(404)
-        from scanner.report import generate
+        from scanner.report import export_pdf, generate, generate_html
+        fmt = (request.args.get("fmt") or "md").strip().lower()
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        if fmt == "pdf":
+            tmp_dir = Path(tempfile.mkdtemp(prefix="ctfscan-report-"))
+            out = tmp_dir / f"task_{task_id}_{stamp}.pdf"
+            try:
+                ok, err = export_pdf(task_id, out, settings)
+                if not ok:
+                    return Response(_export_error_page(err, task_id), status=400,
+                                    mimetype="text/html; charset=utf-8")
+                # 读进内存再回：临时目录马上要删，交给 Flask 流式发送会有句柄竞争
+                # （Windows 上更明显 —— 文件还被占着就删不掉）。
+                data = out.read_bytes()
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            return Response(data, mimetype="application/pdf",
+                            headers={"Content-Disposition":
+                                     f"attachment; filename=task_{task_id}_{stamp}.pdf"})
+        if fmt == "html":
+            body = generate_html(task_id) or ""
+            return Response(body, mimetype="text/html; charset=utf-8",
+                            headers={"Content-Disposition":
+                                     f"attachment; filename=task_{task_id}_{stamp}.html"})
         md = generate(task_id) or ""
-        fname = f"task_{task_id}_{time.strftime('%Y%m%d_%H%M%S')}.md"
+        fname = f"task_{task_id}_{stamp}.md"
         return Response(md, mimetype="text/markdown; charset=utf-8",
                         headers={"Content-Disposition": f"attachment; filename={fname}"})
 
