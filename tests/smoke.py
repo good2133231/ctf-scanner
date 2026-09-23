@@ -1364,8 +1364,10 @@ def main():
     #      本机只有 Windows/Python 3.9（无 WSL/Docker），"Linux 实机跑一次 smoke"这一步
     #      在这里做不了；因此把**所有能自动化的跨平台风险点**都变成断言 ——
     #      这一节在 Linux 上跑就等于那次验收（同一份代码，无平台分支）。
-    #      仍未覆盖（如实标注）：无头浏览器截图、fscan/nmap/subfinder 等**外部二进制**的真实调用，
-    #      需要 Linux 上装好对应工具才能验（代码里全部走 shutil.which + 内置兜底，找不到不会崩）。
+    #      仍未覆盖（如实标注）：①无头浏览器截图**在 Linux 上**的探测（Windows 侧已实机验证，
+    #      单站 3.1s/11036 字节合法 PNG，见 CHANGELOG 续3）；②fscan/subfinder/puredns/httpx
+    #      的适配分支（本机没装这些二进制，走的是内置兜底分支）。这些都需要在 Linux 上装好
+    #      对应工具才能验（代码里全部走 shutil.which + 内置兜底，找不到只会降级、不会崩）。
     import inspect as _inspect
     import re as _re
     from scanner.utils import pick_python, run_cmd

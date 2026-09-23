@@ -35,8 +35,13 @@ fscan 接入、osint 阈值校准。**把这些都解决了** 以及我要睡觉
   （编译 49 个源文件 / import 39 个模块 / 禁 `shell=` 直通·`os.system`·写死盘符路径 /
   文本 IO 必带 `encoding` / `run_cmd` 实测 127·124 / `pick_python` 回退实测）。
   **在 Linux 上跑 `python3 tests/smoke.py` 即等于那次验收**（同一份代码，无平台分支）。
-- 明确列出**仍未覆盖**的三项：Linux 实机、无头浏览器截图、fscan/nmap/subfinder/dirmap 等
-  **外部二进制**的真实调用（代码里全走 `shutil.which` + 内置兜底，找不到不会崩）。
+- 明确列出**仍未覆盖**的（如实标注，不假装完成）：
+  ① **Linux 实机**跑一遍（本机无 WSL/Docker，这一步在这里做不了）；
+  ② **无头浏览器截图在 Linux 上**的探测（`screenshot.browser` 要去找 `chromium`/`google-chrome`）
+  —— **Windows 侧已实机验证**：单站 3.1 秒、11036 字节合法 PNG、端到端 `sites.shot` 落库，
+  见「第十七轮（续 3）」；本轮复查本机 `msedge` 探测仍可得；
+  ③ `fscan` / `subfinder` / `puredns` / `httpx` 的**适配分支**（本机这些二进制都没有，
+  实际走的是内置兜底分支；nmap 已装、dirmap 已实机跑过 588 秒，见第十五轮）。
 
 ### 3. P3-2 漏洞情报订阅（`intel`，默认关）
 
