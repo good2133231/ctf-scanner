@@ -53,6 +53,13 @@ def main():
                     help=f"逗号分隔的阶段，可选：{','.join(STAGE_ORDER)}")
     ap.add_argument("--offline", action="store_true",
                     help="离线模式：不调用 subfinder/puredns/httpx/dirmap，仅用内置实现")
+    # 两个"全量档"开关都是**单次**语义（等价 GUI 的任务级选项，与建任务勾选同义）：
+    # 只影响本次任务，不改全局策略。
+    ap.add_argument("--full-ports", action="store_true",
+                    help="本次任务端口走全端口 1-65535（等价 GUI 任务选项 portscan_full）")
+    ap.add_argument("--full-dir", action="store_true",
+                    help="本次任务目录走深扫：全量分层字典 + dirmap + 后缀派生"
+                         "（等价 GUI 任务选项 dirscan_full）")
     ap.add_argument("--report", metavar="PATH", help="结束后生成 Markdown 报告到指定路径")
     ap.add_argument("--check", action="store_true", help="检查外部工具可用性后退出")
     args = ap.parse_args()
@@ -84,6 +91,16 @@ def main():
     db.init_db()
     name = args.name or (Path(args.file).stem if args.file else "cli-task")
     options = {"offline": bool(args.offline)}
+    if args.full_ports:
+        options["portscan_full"] = True
+    if args.full_dir:
+        options["dirscan_full"] = True
+    # 与 GUI 建任务一致：选了全量档却没把对应阶段写进 -p 时**自动补上**（否则勾了等于白勾）。
+    # `run_task` 按给定顺序执行、不排序，所以要按 STAGE_ORDER 归位。
+    for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan")):
+        if options.get(flag) and stage not in stages:
+            stages.append(stage)
+    stages.sort(key=STAGE_ORDER.index)
     targets_text = "\n".join(lines)
     task_id = db.create_task(name, targets_text, stages, options)
     mode = "，离线模式" if args.offline else ""

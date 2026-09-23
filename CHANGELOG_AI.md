@@ -3,6 +3,98 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-23 —— 第十八轮（续 9）：目录探测浅/深两档 + 「全端口/全目录」勾选 + 补扫
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户原话：「先用一些通用的偏敏感信息的路径探测一些 你可以自己搜集字典，以及网络收集字典，
+然后我手动选择深度目录扫描，我想知道没有的我们不会自己去下载吗？……就是我们目录扫描和端口扫描，
+可以有选项就是在勾选地方 可以选全端口，全目录的勾选，以及如果没有选全端口和全目录其中一个
+亦或是两个，显示页都可以让他补充扫描……你的 ui 我觉得你可以设计的方便一点 既要我有时候浅浅过一下，
+又要有的时候我深度扫，以及浅过一下再深度扫」。
+交互式抉择（用户授权"选推荐项"）：①"兼容双版本"= **外部工具与内置实现两条路都保留**；
+②**默认开浅扫**；③字典由**我整理精选清单内置**；④补扫**新建独立任务**。
+
+### 1. 浅扫精选字典（新增文件，不联网下载）
+
+- 新增 [`config/dicts/dirs_shallow.txt`](config/dicts/dirs_shallow.txt) —— **206 条**，9 个分区按价值排序：
+  VCS 泄露 → 环境/配置 → 备份与数据库转储 → 日志调试 → 中间件控制台 → 管理入口 →
+  目录泄露面 → 源码残留 → 健康检查；`.git/config` 为首条，高价值项集中在前 20 条内。
+- 来源：`dirs_exposure` 的高价值条目 + 长期**未被任何代码引用**的 `sensitive.txt` + 公开资料里
+  反复出现的敏感路径，**人工筛选、去重、排序**。**刻意不做运行时下载**
+  （供应链与离网现场两条理由，已写进文件头与 `TODO.md`）；要扩充请直接编辑该文件。
+
+### 2. `dirscan` 浅 / 深两档（[`scanner/stages/dirscan.py`](scanner/stages/dirscan.py)）
+
+- `dirscan.mode`：`quick`（默认）只吃 `_SHALLOW_LAYERS = ("shallow",)` —— 即 `dicts.dirs_shallow`，
+  上限 `dirscan.quick_max_paths`（默认 150），**不调用任何外部工具**；
+  `deep` 保持原有分层逻辑（框架桶 12 → 语言栈 → 暴露面 → 通用/全量 `dirs_big`）+
+  dirmap 优先调用 + 新增**后缀派生**。
+- 后缀派生（**仅 deep**，借鉴 dirmap 的备份扩展）：`_SUFFIXES` / `_suffix_jobs(entries, cap)`
+  对命中的**文件名型**路径派生 `.bak`/`.zip`/`.tar.gz`/`.rar`/`.old`/`~`/`.swp`/`.copy`/`.save`/`.txt`，
+  去重后与原始路径**共用同一份 `max_paths` 额度**（不会因派生而超预算）。
+- **默认值反转**（有意）：`DEFAULTS["dirscan"]["enabled"]` 与 `config/settings.yaml` 由 `false` → `true`，
+  并新增 `mode: quick` / `quick_max_paths: 150` / `suffix_aware: true`；`DEFAULTS["dicts"]` 增 `dirs_shallow`。
+  这是对**第十五轮"目录扫描默认关"决策的有意反转**，两处配置都写了中文注释说明原因
+  （用户要求"先浅浅过一遍，看清结果再手动决定深扫"）。
+
+### 3. 任务级「全量档」勾选与自动补阶段
+
+- [`gui/templates/tasks.html`](gui/templates/tasks.html)：建任务表单加一行「深度选项（可选）」——
+  **全端口扫描（1-65535）**（`portscan_full`）与**全目录深扫**（`dirscan_full`），带 tooltip 说明耗时差异。
+- [`gui/app.py`](gui/app.py) `/api/tasks`：勾了全量档就写进 `options`，且**勾了却没勾对应阶段时自动补上该阶段**，
+  响应里回 `auto_stages` 提示（否则用户会以为"勾了没用"）。
+- **踩到的坑（已修）**：`PipelineRunner.run()` 只做 `[s for s in ctx.stages if s in STAGE_REGISTRY]`，
+  **按给定顺序执行、不排序** —— 直接把补进来的 `portscan`/`dirscan` append 上去会让 `dirscan`
+  排到 `vulnscan` 之后。修法是两侧都加 `stages.sort(key=STAGE_ORDER.index)`，
+  并在 smoke 里断言最终顺序为 `["portscan","probe","dirscan"]`。
+- [`cli/client.py`](cli/client.py)：新增 `--full-ports` / `--full-dir`（**单次语义**，等价 GUI 任务选项），
+  与 GUI 同规则自动补阶段 + `STAGE_ORDER` 归位。
+
+### 4. 补扫（`POST /api/rescan`）与结果页入口
+
+- 新增端点 `POST /api/rescan`（结构照抄 `/api/domains/run-subdomain`）：入参 `stage`(dirscan|portscan)
+  + `target` / `targets[]` + `from_task` + `next`；行为 = `db.create_task("补扫全目录-<月日>-<时分秒>",
+  targets, [stage], {"<stage>_full": True, "rescan_of": int})` + `_spawn`；`_safe_next()` 防开放重定向。
+- [`gui/templates/task_detail.html`](gui/templates/task_detail.html)：`rescan_of` 时显示"本任务是补扫任务：
+  由任务 #N 的补扫发起"+ 回跳链接；「站点」页签与「端口服务」页签加复选框列 + 全选 + 补扫按钮；
+  「目录」页签在非全量档时显示提示条 + "对本任务全部站点深度补扫"（隐藏字段一次带上全部站点 URL）。
+- [`gui/templates/sites.html`](gui/templates/sites.html)：站点资产页同款勾选式深扫入口。
+- 提示语统一为「**补扫是真实扫描**：请先确认对目标有授权」——补扫会真的发请求，不能写成"不发请求"。
+
+### 5. 修掉三处真缺陷（都是"功能等于废掉"级别，非运行时报错）
+
+- ① **`dirscan` 门控不认 `dirscan_full`**：原代码 `if cfg.get("enabled") is not True: return`，
+  与 `portscan` 的 `forced` 语义不一致 → 全局关掉时补扫任务被**静默跳过**。
+  改为 `if cfg.get("enabled") is not True and not forced`（`forced = ctx.options.get("dirscan_full") is True`）。
+- ② **只跑 dirscan 的补扫任务会空跑**：`sites = ctx.results.get("sites") or db.list_sites(...)`，
+  补扫任务两个来源都为空 → "无存活站点，跳过"。新增 `dirscan._sites_from_targets(ctx)`
+  从 `ctx.targets` 兜底（URL 原样用、domain/ip 补 `http://`），并在 smoke 里断言。
+- ③ 见 §3 的阶段顺序问题。
+
+### 6. 验证
+
+- `py -3 -m py_compile` 四个改动文件通过；`py -3 tests/smoke.py` → **`SMOKE PASS`**。
+- `tests/smoke.py` 新增 **`[5p]`**（7 组断言）：默认值与字典文件存在 / 浅扫只吃 `dirs_shallow`
+  且 ≤ `quick_max_paths` / 档位判定（`_run_dirs({}) == [True]`、`{"dirscan_full": True} == [False]`、
+  `{"portscan_full": True} == [True]`，两档互不影响）+ `_sites_from_targets` 目标兜底 /
+  建任务自动补阶段与顺序 + `auto_stages` / `POST /api/rescan`（阶段 · `rescan_of` · 命名正则 · `next` 防外站）/
+  后缀派生（`_suffix_jobs` 规则 + 桩 `http_request`/`_load_paths` 对比：浅扫只发 1 个 URL、
+  深扫含 `.bak` 变体、总量 ≤ 1+`max_paths`）/ GUI 可见性（`name="portscan_full"`、`dirscan_mode`、`api/rescan`）。
+- **同时修正 `[5m]` 的陈旧断言**：`assert DEFAULTS["dirscan"]["enabled"] is False` 与本次默认值反转冲突，
+  改为 `is True` 并加 `mode == "quick"`。
+- `[5o]` 跨平台静态审计仍通过（编译 49 个源文件 / import 39 个模块）。
+- **本轮明确不做**（写进 `TODO.md` 与 `todo.txt`）：① 递归目录爬取；② 重写 dirmap 等价的多语言字典引擎；
+  ③ 运行时自动下载字典。
+
+### 7. 文档同步
+
+`README.md`（特性行 + 架构图 ⑧ + 目录树 dicts）·`docs/usage.md`（CLI 参数与示例 + 建任务「深度选项」+
+任务详情「浅过一遍→深度补扫」+ 站点资产页 + 策略面板「资产面拓展」+ 重写「目录探测：浅扫 → 深扫 → 补扫」小节）·
+`docs/pipeline.md`（默认开/关列表 + ⑦ dirscan 小节重写 + dirmap 对应表 + 配置速查表 4 行）·
+`docs/architecture.md`（阶段图 + 设计决策表 2 行）·`AGENTS.md`（dirmap 深扫前提 + 目录地图 + 阶段开关两层 +
+§6 验证清单 + §7 局限 + §8 dirscan 条目改写）·`TODO.md`（新增「第十八轮（续 9）」小节）·`todo.txt`（续 9 追加）。
+
 ## 2026-09-23 —— 第十七轮（续 8）：6 个长期挂起项一次性解决
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

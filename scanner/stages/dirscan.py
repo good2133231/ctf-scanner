@@ -3,8 +3,12 @@
 工具适配器：dirmap（`python dirmap.py -iF <urls> -e all`），解析其 `output/<域名>/*.txt` 产物
 内置兜底：requests/urllib 字典扫描 + **多样本软 404 基线**（借鉴 dirmap 的 auto_check_404）。
 
-阶段总开关 `dirscan.enabled`（**默认关** —— 目录爆破请求量最大、噪声最多，
-且绝大多数 CTF 拿分不靠它；要用请在「策略配置 → 资产面拓展」打开）：关闭后整阶段跳过。
+阶段总开关 `dirscan.enabled`（**默认开，但默认只跑浅扫**）：用户要求"先浅浅过一遍，看清结果后
+再手动决定要不要深度扫"，所以默认档位是 `mode=quick` —— 只打 `config/dicts/dirs_shallow.txt`
+这份精选敏感路径（约 150 条/站，按价值排序），请求量与噪声都可控。
+深度扫（`mode=deep`）才走全量分层字典 + dirmap + 后缀派生；它有三个入口：
+① 策略配置把 `dirscan.mode` 改成 `deep`（全局）；② 建任务时勾「全目录」（任务级选项
+`dirscan_full`）；③ 结果页对选定站点发起「深度目录补扫」（同样落 `dirscan_full` 的新任务）。
 
 字典分层（越具体的排越前，`max_paths` 截断时先保住高价值路径）：
 **框架字典**（`dirs_<框架>.txt`，`tools/import_fw_dicts.py` 从全量字典派生，凭 `sites.tech` 指纹命中）
@@ -136,8 +140,20 @@ def _framework_of(tech, url=""):
 # 内置扫描的字典层次组合（越具体的排越前）。
 # `_FW_LAYERS` 专给"框架补充扫描"用：dirmap 跑完后只补「框架 + 暴露面」两层，
 # 不再重复吃语言/通用字典（那些 dirmap 自己已经按 `-e` 打过了）。
-_FULL_LAYERS = ("fw", "lang", "exposure", "common")
+# `shallow` 排在 `_FULL_LAYERS` **最前面**：深扫必须是浅扫的**超集**。
+# 实测（同一靶场）：浅扫 150 条命中 `.env` + `.git/config`，深扫 400 条只命中 `.git` ——
+# 技术栈未知时深扫吃的是 `dirs_big` 的前 400 条，而这两条在 big 里排在第 560 / 1919 位，
+# 被 `max_paths` 直接截掉了（big 是未排序的大字典，前 400 条是"字母序的运气"）。
+# 精选层只有 200 来条且按价值排序，排在前面既保证"深扫不会漏掉浅扫扫到的东西"，
+# 也**不增加请求量** —— `max_paths` 仍是硬上限，剩下的额度照旧给分层字典。
+_FULL_LAYERS = ("shallow", "fw", "lang", "exposure", "common")
 _FW_LAYERS = ("fw", "exposure")
+# `_SHALLOW_LAYERS` 专给"浅扫"（mode=quick）用：**只吃精选敏感路径字典**，
+# 不碰框架/语言/通用层，也不跑 dirmap —— 浅扫的意义就是"快而少"。
+_SHALLOW_LAYERS = ("shallow",)
+
+# 后缀派生（深扫专用，借鉴 dirmap 的备份文件扩展）：只对命中的**文件名型**路径生效。
+_SUFFIXES = (".bak", ".zip", ".tar.gz", ".rar", ".old", "~", ".swp", ".copy", ".save", ".txt")
 
 
 def _size_to_int(text):
@@ -158,13 +174,19 @@ class DirscanStage(Stage):
     def run(self):
         ctx = self.ctx
         cfg = ctx.settings.get("dirscan", {}) or {}
-        if cfg.get("enabled") is not True:
+        # 任务选项 `dirscan_full`（建任务勾「全目录」/结果页发起「深度目录补扫」）视为显式授权：
+        # 即使全局 `dirscan.enabled` 关着，这种"用户点名要扫"的任务也要跑 —— 与 portscan 一致。
+        forced = ctx.options.get("dirscan_full") is True
+        if cfg.get("enabled") is not True and not forced:
             ctx.logger.info("[dirscan] 未启用（策略配置 → 资产面拓展 可打开），跳过")
             return
         limits = ctx.settings.get("limits", {})
         # 站点来源：优先内存结果；为空时**回退数据库**（单独跑本阶段 / 进程重启后内存结果丢失）。
         # 注意 `db.list_sites()` 返回 sqlite3.Row（没有 `.get()`），必须转 dict 再用。
         sites = ctx.results.get("sites") or [dict(r) for r in db.list_sites(ctx.task_id)]
+        if not sites:
+            # 只跑本阶段的补扫任务没有 probe 产物（内存与库里都没有站点），用目标本身兜底
+            sites = self._sites_from_targets(ctx)
         sites = self._dedup_sites(sites)
         sites = sites[: int(limits.get("dirscan_max_urls", 20))]
         if not sites:
@@ -175,16 +197,25 @@ class DirscanStage(Stage):
             return
 
         tech_aware = cfg.get("tech_aware") is not False
+        # 档位：浅扫（quick，默认）只打精选敏感路径；深扫（deep）走全量字典 + dirmap。
+        # 任务级选项 `dirscan_full`（建任务勾「全目录」/结果页发起「补扫」）可把**单个任务**
+        # 强制成深扫，不改全局策略 —— 与 portscan 的 `portscan_full` 同一套语义。
+        deep = (forced or str(cfg.get("mode") or "quick").strip().lower() == "deep")
         # 按技术栈把站点分组：Java 站只吃 jsp 字典、PHP 站只吃 php 字典……判不出的走全量
         groups = self._group_by_kind(sites, tech_aware)
-        ctx.logger.info("[dirscan] 技术栈分组：" + " / ".join(
+        ctx.logger.info(f"[dirscan] {'深扫' if deep else '浅扫'}模式；技术栈分组：" + " / ".join(
             f"{k or '未知'}={len(v)} 站点" for k, v in groups.items()))
 
         entries = []
         used_dirmap = False
         tool = ctx.settings.get("tools", {}).get("dirmap", {}) or {}
         script = resolve(tool.get("script") or "tools/dirmap/dirmap.py")
-        if script.exists() and not ctx.options.get("offline"):
+        if not deep:
+            # 浅扫：不跑 dirmap（那是深扫的重武器），只用精选敏感路径字典
+            ctx.logger.info(f"[dirscan] 浅扫：仅打敏感路径精选字典（上限 "
+                            f"{int(cfg.get('quick_max_paths', 150) or 0)} 条/站）")
+            entries = self._builtin_scan(sites, cfg, limits, shallow=True)
+        elif script.exists() and not ctx.options.get("offline"):
             ctx.logger.info(f"[dirscan] dirmap 处理 {len(sites)} 个站点 …")
             entries = self._run_dirmap(script, groups, tool)
             used_dirmap = bool(entries)
@@ -195,9 +226,10 @@ class DirscanStage(Stage):
         else:
             ctx.logger.info("[dirscan] dirmap 不可用（或 --offline），使用内置字典扫描")
 
-        if not used_dirmap:
+        # 浅扫结果在上面已经拿到，不再叠加任何字典（那是深扫的事）
+        if deep and not used_dirmap:
             entries = self._builtin_scan(sites, cfg, limits)
-        else:
+        elif deep:
             # dirmap 的 `-e` 只认 php/jsp/asp/d/big/all，**吃不下我们的框架字典**
             # （`dirs_wordpress` / `dirs_exposure` 这些自定义文件喂不进去）。装了 dirmap 的
             # 机器上框架层会变成死代码，所以这里补一轮"框架 + 暴露面"的小扫描。
@@ -221,6 +253,31 @@ class DirscanStage(Stage):
         ctx.logger.info(f"[dirscan] 目录发现 {len(uniq)} 条")
 
     # ---------- 目标筛选 ----------
+
+    @staticmethod
+    def _sites_from_targets(ctx):
+        """从任务目标直接搭出"站点"列表 —— **只跑 dirscan 的补扫任务**用。
+
+        正常任务里 sites 由 probe 阶段产出；但结果页发起的「深度目录补扫」是只跑本阶段的
+        任务（不重跑 probe，省一遍请求），内存结果与库里都没有站点。这里用目标本身兜底：
+        URL 原样用；域名 / IP 补 `http://` 前缀（猜协议，成功率不如 probe 出来的真实 URL，
+        但比直接"无存活站点，跳过"强得多）。
+        """
+        out, seen = [], set()
+        for kind, raw in ctx.targets or []:
+            if kind == "url":
+                url = raw
+            elif kind in ("domain", "ip"):
+                url = "http://" + raw
+            else:
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            out.append({"url": url, "tech": "", "title": "", "length": None})
+        if out:
+            ctx.logger.info(f"[dirscan] 目标直用兜底：{len(out)} 个 URL（无 probe 产物的补扫任务）")
+        return out
 
     @staticmethod
     def _dedup_sites(sites):
@@ -277,6 +334,8 @@ class DirscanStage(Stage):
         """
         dicts = self.ctx.settings.get("dicts", {}) or {}
         out = []
+        if "shallow" in layers:
+            out.append(dicts.get("dirs_shallow"))
         if "fw" in layers and fw:
             out.append(dicts.get(f"dirs_{fw}"))
         if "lang" in layers:
@@ -420,7 +479,7 @@ class DirscanStage(Stage):
 
     # ---------- 内置兜底 ----------
 
-    def _builtin_scan(self, sites, cfg, limits, only_fw=False):
+    def _builtin_scan(self, sites, cfg, limits, only_fw=False, shallow=False):
         """内置字典扫描（按站点技术栈 + 框架选字典）。
 
         每个站点用**它自己的**字典，越具体的排越前：框架字典（`dirs_wordpress`…）
@@ -432,16 +491,28 @@ class DirscanStage(Stage):
         `only_fw=True` 是"框架补充扫描"模式：dirmap 已经按 `-e` 打过语言/通用字典了，
         这里只用「框架 + 暴露面」两层、每个站点最多 `dirscan.fw_max_paths` 条
         （默认 150，置 0 表示不做补充扫描），把 dirmap 吃不到的自定义字典补上。
+
+        `shallow=True` 是"浅扫"模式（`dirscan.mode=quick`，默认）：**只吃
+        `dirs_shallow` 一份精选敏感路径字典**，上限 `dirscan.quick_max_paths`，
+        与框架/语言/大字典完全无关，也不做后缀派生。
         """
         ctx = self.ctx
         workers = int(limits.get("max_workers", 20))
         timeout = int(limits.get("http_timeout", 10))
         tech_aware = cfg.get("tech_aware") is not False
         fw_cap = int(cfg.get("fw_max_paths", 150) or 0)
-        if only_fw and fw_cap <= 0:
-            return []
-        layers = _FW_LAYERS if only_fw else _FULL_LAYERS
-        limit = fw_cap if only_fw else None
+        if shallow:
+            layers = _SHALLOW_LAYERS
+            limit = int(cfg.get("quick_max_paths", 150) or 0)
+            if limit <= 0:
+                ctx.logger.warning("[dirscan] 浅扫额度 quick_max_paths<=0，跳过")
+                return []
+        elif only_fw:
+            if fw_cap <= 0:
+                return []
+            layers, limit = _FW_LAYERS, fw_cap
+        else:
+            layers, limit = _FULL_LAYERS, None
 
         jobs, tally = [], {}
         for s in sites:
@@ -460,9 +531,9 @@ class DirscanStage(Stage):
                 ctx.logger.info("[dirscan] 无可识别的框架站点，跳过框架补充扫描")
             return []
 
-        ctx.logger.info(f"[dirscan] 内置扫描：{len(sites)} 站点 x 按"
-                        f"{'框架+暴露面' if only_fw else '栈+框架'}选字典"
-                        f"{'（框架补充）' if only_fw else ''}"
+        ctx.logger.info(f"[dirscan] 内置扫描：{len(sites)} 站点 x "
+                        f"{'敏感路径精选' if shallow else ('框架+暴露面' if only_fw else '栈+框架')}"
+                        f"选字典{'（浅扫）' if shallow else ('（框架补充）' if only_fw else '')}"
                         f"（{' / '.join(f'{k}:{v} 站' for k, v in tally.items())}），"
                         f"共 {len(jobs)} 个请求 …")
         baseline = {}
@@ -508,4 +579,44 @@ class DirscanStage(Stage):
             return {"site_url": u, "path": url, "status": st,
                     "length": r.get("length"), "method": "GET", "note": "builtin"}
 
-        return [e for e in pool_run(_hit, jobs, workers=workers) if e]
+        entries = [e for e in pool_run(_hit, jobs, workers=workers) if e]
+
+        # 后缀派生（深扫专用，借鉴 dirmap 的备份文件扩展）：第一轮命中的**文件名型**路径
+        # 再派生 `.bak/.zip/.old/…` 变体补一轮。浅扫与框架补充扫描都不做（省请求）。
+        if entries and not shallow and not only_fw and cfg.get("suffix_aware") is not False:
+            extra_jobs = self._suffix_jobs(entries, int(cfg.get("max_paths", 400) or 400))
+            if extra_jobs and not ctx.stopped():
+                ctx.logger.info(f"[dirscan] 后缀派生：对 {len(extra_jobs)} 个变体补扫 …")
+                entries.extend(e for e in pool_run(_hit, extra_jobs, workers=workers) if e)
+        return entries
+
+    @staticmethod
+    def _suffix_jobs(entries, cap):
+        """由第一轮命中结果派生"备份后缀"补扫任务（`(site_url, path)` 列表）。
+
+        只处理**文件名型**路径（最后一段含 `.`，如 `config.php`、`.env`），
+        目录型路径（`admin/`）不派生 —— 备份文件才有后缀，目录没有。
+        去重后按 `cap` 截断，避免这一轮把请求量放大到失控。
+        """
+        if cap <= 0:
+            return []
+        jobs, seen = [], set()
+        for e in entries:
+            site = str(e.get("site_url") or "")
+            full = str(e.get("path") or "")
+            prefix = site.rstrip("/") + "/"
+            if not site or not full.startswith(prefix):
+                continue
+            rel = full[len(prefix):]
+            last = rel.rsplit("/", 1)[-1]
+            if not rel or rel.endswith("/") or "." not in last:
+                continue
+            for suf in _SUFFIXES:
+                cand = rel + suf
+                if cand in seen:
+                    continue
+                seen.add(cand)
+                jobs.append((site, cand))
+                if len(jobs) >= cap:
+                    return jobs
+        return jobs

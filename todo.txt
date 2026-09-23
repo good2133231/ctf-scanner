@@ -23,7 +23,7 @@
 [另：Favicon MD5 仍保留作我们自己的零请求前置判定（POC favicon_md5_list），与 mmh3 分工不冲突]
 
 
-你现在是这个项目的新负责人。[完成]
+你现在是这个项目的新负责人。以及你要标注自己agent的修改，因为我会介入不同ai[完成]
 
 请不要急着修改代码，先自主接管整个项目。
 
@@ -605,4 +605,36 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] dirscan._run_dirmap 分组循环内加 stopped() 检查，停止不必再等 dirmap 整轮跑完
 [完成] 新增 smoke [5m] 九条断言钉住上述修复（报告转义/pool_run保falsy/开放重定向/favicon过滤/
        域名口径/FOFA转义/dnsq路径缓存/dirmap停止/默认开关一致）
+
+-----
+（第十八轮续9：目录探测浅/深两档 + 全量勾选 + 补扫）实施者：WorkBuddy · DeepSeek-V4.1-Flash
+用户原话：「先用一些通用的偏敏感信息的路径探测一些 你可以自己搜集字典，以及网络收集字典，
+然后我手动选择深度目录扫描……可以有选项就是在勾选地方可以选全端口，全目录的勾选，
+以及如果没有选全端口和全目录其中一个亦或是两个，显示页都可以让他补充扫描……
+既要我有时候浅浅过一下，又要有的时候我深度扫，以及浅过一下再深度扫」
+[完成] 1、新增浅扫精选字典 config/dicts/dirs_shallow.txt（206 条、9 个分区、按价值排序；
+       .git/config 等 VCS 泄露与 .env 在前 20 条内）。来源=dirs_exposure 高价值项 + 长期未用的
+       sensitive.txt + 公开资料人工筛选；**不联网下载**（供应链与离网现场）
+[完成] 2、dirscan 分档：mode=quick 只吃 dirs_shallow（≤ quick_max_paths=150，不调外部工具）；
+       mode=deep = 框架桶→语言栈→暴露面→通用/全量 + dirmap 优先 + 后缀派生（suffix_aware）
+[完成] 3、默认值反转：DEFAULTS/settings.yaml 的 dirscan.enabled 由 false 改 true + mode=quick
+       （第十五轮"默认关"的决策按用户新要求有意反转，配置里已写中文注释说明）
+[完成] 4、建任务「深度选项」两个复选框：全端口扫描（portscan_full）/ 全目录深扫（dirscan_full）；
+       **勾了却漏勾对应阶段时自动补上该阶段**，并按 STAGE_ORDER 归位（runner 按给定顺序执行、不排序），
+       响应 auto_stages 提示；CLI 同步加 --full-ports / --full-dir
+[完成] 5、新增 POST /api/rescan 补扫端点：stage(dirscan|portscan) + target(s)[] + from_task + next；
+       新建独立单阶段任务，名字 `补扫全目录-月日-时分秒` / `补扫全端口-…`，
+       选项写 <stage>_full + rescan_of；_safe_next() 防开放重定向
+[完成] 6、结果页入口：任务详情「站点」「端口服务」「目录」页签与「站点资产」页均加勾选式深扫/全端口补扫，
+       补扫任务详情页顶部显示"由任务 #N 的补扫发起"+ 回跳链接；「目录」页签在非全量档时显示提示条
+[完成] 7、修三处真缺陷：① dirscan 门控不认 dirscan_full（全局关时补扫被静默跳过）→ 与 portscan 的
+       forced 语义对齐；② 补扫任务没有 probe 产物会"无存活站点，跳过"→ 新增 _sites_from_targets 兜底；
+       ③ app.py 自动补阶段后没排序（dirscan 会排到 vulnscan 之后）→ stages.sort(key=STAGE_ORDER.index)
+[完成] 8、smoke 新增 [5p] 7 组断言（默认值与文件存在/浅扫只吃 dirs_shallow 且≤上限/档位判定与目标兜底/
+       自动补阶段与顺序/补扫端点与命名与 next/后缀派生去重限额/GUI 入口存在）；并修正 [5m] 里
+       "dirscan.enabled is False" 的陈旧断言。py -3 tests/smoke.py → SMOKE PASS
+[完成] 9、文档全量同步：README / docs/usage / docs/pipeline / docs/architecture / AGENTS / TODO.md / todo.txt
+[明确不做] ① 递归目录爬取（dirmap 的递归特性需单独设计请求量/深度上限）
+[明确不做] ② 重写 dirmap 等价的多语言字典引擎
+[明确不做] ③ 运行时自动下载字典（合规/离网现场考虑）
 

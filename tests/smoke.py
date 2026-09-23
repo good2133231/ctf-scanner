@@ -1246,9 +1246,11 @@ def main():
     finally:
         _ds_mod.run_cmd = _orig_run_cmd
     assert _rows == [] and not _calls, f"已停止时不该再拉 dirmap：rows={_rows} calls={len(_calls)}"
-    # 9) 文档漂移：docstring 的默认开关必须与 DEFAULTS 一致（takeover 默认开、dirscan 默认关）
+    # 9) 文档漂移：docstring 的默认开关必须与 DEFAULTS 一致
+    #    （takeover 默认开；dirscan 默认**开但只浅扫** —— 用户要求"先浅浅过一遍再决定深挖"）
     assert DEFAULTS["takeover"]["enabled"] is True
-    assert DEFAULTS["dirscan"]["enabled"] is False
+    assert DEFAULTS["dirscan"]["enabled"] is True
+    assert DEFAULTS["dirscan"]["mode"] == "quick"
     assert "screenshot" in STAGE_ORDER
     print("[5m] 低危清理 ok: 报告转义/pool_run保falsy/开放重定向/favicon HTML过滤/域名口径/"
           "FOFA转义/dnsq路径缓存/dirmap停止检查/默认开关一致")
@@ -1359,6 +1361,173 @@ def main():
     assert "线索（非漏洞结论" not in generate(ds_tid), "无线索的任务不该多出附录小节"
     print("[5n] 情报订阅/启发式 ok: KEV 解析+白名单匹配(词边界)+只写 leads(去重)/"
           "五条启发式规则+反例/默认关门控/GUI 开关与页签/报告附录")
+
+    # (5p) 续9：目录探测「浅扫 / 深扫」两档 + 建任务全量勾选 + 结果页补扫。
+    #      用户诉求：**先浅过一遍再手动决定深挖**，且勾了全量就不该"白勾"。
+    import re as _re5
+    from scanner.config import DEFAULTS as _DEF, resolve as _resolve
+    from scanner.stages.dirscan import _SHALLOW_LAYERS, _FULL_LAYERS, _SUFFIXES
+
+    # 1) 默认值一致：DEFAULTS ↔ settings.yaml ↔ 文件真实存在（GUI 表单/POST 映射在第 4 条用真请求验）
+    assert _DEF["dirscan"]["enabled"] is True and _DEF["dirscan"]["mode"] == "quick"
+    assert _DEF["dirscan"]["quick_max_paths"] == 150
+    assert _DEF["dirscan"]["suffix_aware"] is True
+    assert _DEF["dicts"]["dirs_shallow"] == "config/dicts/dirs_shallow.txt"
+    assert settings["dirscan"]["enabled"] is True and settings["dirscan"]["mode"] == "quick"
+    assert settings["dicts"]["dirs_shallow"] == _DEF["dicts"]["dirs_shallow"]
+    _shallow_file = _resolve(settings["dicts"]["dirs_shallow"])
+    assert _shallow_file.exists(), "浅扫字典文件不存在（config/dicts/dirs_shallow.txt）"
+
+    # 2) 浅扫取词：只吃 dirs_shallow，条数受 quick_max_paths 约束
+    _shallow_list = [x for x in _shallow_file.read_text(encoding="utf-8").splitlines()
+                     if x and not x.startswith("#")]
+    assert len(_shallow_list) >= 150, len(_shallow_list)   # 默认上限 150 必须能被填满
+    _sq40 = dstage._load_paths("php", {"quick_max_paths": 40},
+                               layers=_SHALLOW_LAYERS, limit=40)
+    assert len(_sq40) == 40 and set(_sq40) <= set(_shallow_list), _sq40[:3]
+    assert _SHALLOW_LAYERS == ("shallow",), "浅扫层不该夹带框架/语言/通用字典"
+    # 高价值条目必须在最前面（截断时先保它们）
+    assert any(x in _shallow_list[:20] for x in (".git/config", ".env")), _shallow_list[:5]
+
+    # 3) 档位判定：任务级 dirscan_full 压过全局 mode=quick；portscan_full 与目录档位**互不影响**。
+    #    `_builtin_scan` / `_run_dirmap` 都换成桩：既不发请求也不拉 dirmap，只看"走了哪一档"。
+    _q_settings = copy.deepcopy(settings)
+    _q_settings["dirscan"] = dict(_q_settings.get("dirscan") or {}, mode="quick")
+
+    def _run_dirs(opts):
+        seen = []
+        _bs0, _dm0 = DirscanStage._builtin_scan, DirscanStage._run_dirmap
+        DirscanStage._builtin_scan = (
+            lambda self, s, c, l, only_fw=False, shallow=False: (seen.append(shallow) or []))
+        DirscanStage._run_dirmap = lambda self, *a, **k: []
+        try:
+            _cx = StageContext(tid, "smoke-dir-mode", parse_lines([targets]), ["dirscan"],
+                               opts, _q_settings, Path(_TMPDIR) / "dir-mode", rec)
+            _cx.results["sites"] = [{"url": targets, "tech": "", "title": "", "length": None}]
+            DirscanStage(_cx).run()
+        finally:
+            DirscanStage._builtin_scan, DirscanStage._run_dirmap = _bs0, _dm0
+        return seen
+
+    assert _run_dirs({}) == [True], "全局 quick 档应走浅扫"
+    assert _run_dirs({"dirscan_full": True}) == [False], "任务级 dirscan_full 应压过 quick 走深扫"
+    assert _run_dirs({"portscan_full": True}) == [True], "端口全量选项不该改目录档位"
+    # 只跑 dirscan 的补扫任务没有 probe 产物：必须能从目标兜底出站点，否则整阶段空跑
+    _noactx = StageContext(tid, "smoke-dir-targets", parse_lines(["http://fallback.test/"]),
+                           ["dirscan"], {}, _q_settings, Path(_TMPDIR) / "dir-fb", rec)
+    # parse_lines 会去掉尾部 `/`，所以这里按归一化后的形态断言
+    _fb = DirscanStage._sites_from_targets(_noactx)
+    assert _fb and _fb[0]["url"] == "http://fallback.test", _fb
+    assert DirscanStage._sites_from_targets(
+        StageContext(tid, "smoke-dir-targets2", parse_lines(["fallback.test"]), ["dirscan"], {},
+                     _q_settings, Path(_TMPDIR) / "dir-fb2", rec))[0]["url"] == "http://fallback.test"
+
+    # 3b) **深扫必须是浅扫的超集**：精选层排在 `_FULL_LAYERS` 最前。
+    #     实测过的坑：未知技术栈时深扫吃 `dirs_big` 前 400 条，而 `.env`/`.git/config`
+    #     在 big 里排 560/1919 位 → 深扫 400 条只命中 `.git`，比浅扫 150 条还少。
+    _ds_cfg = _q_settings.get("dirscan") or {}
+    _deep_paths = dstage._load_paths("", _ds_cfg, layers=_FULL_LAYERS)
+    assert _deep_paths[:len(_shallow_list[:50])] == _shallow_list[:50], \
+        f"深扫必须把浅扫精选条目排在最前（否则深扫会漏掉浅扫已命中的高价值路径）：" \
+        f"{_deep_paths[:3]} vs {_shallow_list[:3]}"
+    assert set(_shallow_list).issubset(set(_deep_paths)), \
+        f"深扫额度（{len(_deep_paths)} 条）内必须覆盖浅扫全部 {len(_shallow_list)} 条精选路径"
+
+    # 4) 建任务：勾了全量却没勾对应阶段 → **自动补阶段** + options 落库（run_task 桩住，避免真扫）
+    _orig_run4 = gui_app.run_task
+    try:
+        gui_app.run_task = lambda *a, **kw: None
+        _j4 = c.post("/api/tasks", data={"name": "smoke-full-flags", "targets": targets,
+                                        "stages": ["probe"], "portscan_full": "1",
+                                        "dirscan_full": "1"}).get_json()
+        _t4 = db.get_task(_j4["id"])
+        assert '"portscan_full": true' in _t4["options"], _t4["options"]
+        assert '"dirscan_full": true' in _t4["options"], _t4["options"]
+        # 补进来的阶段按 STAGE_ORDER 归位（runner 不排序，乱序会跑错顺序）
+        assert _t4["stages"].split(",") == ["portscan", "probe", "dirscan"], _t4["stages"]
+        assert _j4["auto_stages"] == ["portscan", "dirscan"], _j4
+        # 不勾全量时不该凭空多出选项/阶段
+        _j4b = c.post("/api/tasks", data={"name": "smoke-no-full", "targets": targets,
+                                         "stages": ["probe"]}).get_json()
+        _t4b = db.get_task(_j4b["id"])
+        assert _t4b["stages"] == "probe" and "full" not in (_t4b["options"] or ""), dict(_t4b)
+        assert _j4b["auto_stages"] == [], _j4b
+
+        # 5) 补扫端点：只跑一个阶段 + 全量档 + 记录来源任务；外站 next 必须被拒
+        _before5 = len(db.list_tasks(limit=1000))
+        _r5 = c.post("/api/rescan", data={"stage": "dirscan", "target": ["http://a.test/"],
+                                          "from_task": str(tid), "next": "https://evil.com/x"})
+        assert _r5.status_code == 302, _r5.status_code
+        _id5 = int(_r5.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+        _t5 = db.get_task(_id5)
+        assert _t5["stages"] == "dirscan" and _t5["targets"] == "http://a.test/", dict(_t5)
+        assert '"dirscan_full": true' in _t5["options"], _t5["options"]
+        assert f'"rescan_of": {tid}' in _t5["options"], _t5["options"]
+        assert _re5.match(r"^补扫全目录-\d{4}-\d{6}$", _t5["name"]), _t5["name"]
+        # 非法 stage / 空目标 → 回站内 fallback，且**不产生任务**；外站 next 不得被放行
+        _r5b = c.post("/api/rescan", data={"stage": "nope", "target": ["x"],
+                                           "next": "https://evil.com/"})
+        assert _r5b.status_code == 302 and _r5b.headers["Location"].startswith("/") \
+            and not _r5b.headers["Location"].startswith("//"), _r5b.headers.get("Location")
+        _r5c = c.post("/api/rescan", data={"stage": "portscan", "next": "/sites"})
+        assert _r5c.headers["Location"] == "/sites", _r5c.headers.get("Location")
+        assert len(db.list_tasks(limit=1000)) == _before5 + 1, "非法请求不该建出任务"
+    finally:
+        gui_app.run_task = _orig_run4
+
+    # 6) 后缀派生（仅深扫）：只对**文件名型**路径派生，去重且受 max_paths 约束；浅扫一条都不派
+    _sj = DirscanStage._suffix_jobs(
+        [{"site_url": "http://a/", "path": "http://a/config.php"},
+         {"site_url": "http://a/", "path": "http://a/admin/"},
+         {"site_url": "http://a/", "path": "http://a/.env"}], 5)
+    assert len(_sj) == 5, _sj
+    assert _sj[0] == ("http://a/", "config.php" + _SUFFIXES[0]), _sj[0]
+    assert all(p.endswith(tuple(_SUFFIXES)) for _, p in _sj), _sj
+    assert len({p for _, p in _sj}) == len(_sj), "派生结果必须去重"
+    assert all("/admin/" not in p for _, p in _sj), "目录型路径不该派生后缀"
+    assert DirscanStage._suffix_jobs(
+        [{"site_url": "http://a/", "path": "http://a/x.php"}], 0) == []
+
+    _sent = []
+    _orig_http6, _orig_lp6 = _ds_mod.http_request, DirscanStage._load_paths
+
+    def _fake_http6(u, **k):
+        _sent.append(u)
+        if "ctfscan-none" in u:            # 软 404 基线（长度 1，与真实命中区分开）
+            return {"status": 200, "length": 1, "text": "base:" + u, "content": b"b"}
+        return {"status": 200, "length": 200, "text": "hit:" + u, "content": b"h"}
+
+    _site6 = [{"url": "http://sfx.test/", "tech": "", "title": "", "length": None}]
+    DirscanStage._load_paths = lambda self, kind, cfg, fw="", layers=None, limit=None: \
+        ["config.php"]
+    _ds_mod.http_request = _fake_http6
+    try:
+        _sent.clear()
+        DirscanStage(dstage.ctx)._builtin_scan(_site6, {"quick_max_paths": 5, "suffix_aware": True},
+                                               {}, shallow=True)
+        _hits_shallow = [u for u in _sent if "ctfscan-none" not in u]
+        _sent.clear()
+        DirscanStage(dstage.ctx)._builtin_scan(_site6, {"max_paths": 5, "suffix_aware": True}, {})
+        _hits_deep = [u for u in _sent if "ctfscan-none" not in u]
+    finally:
+        _ds_mod.http_request, DirscanStage._load_paths = _orig_http6, _orig_lp6
+    assert _hits_shallow == ["http://sfx.test/config.php"], _hits_shallow
+    assert "http://sfx.test/config.php.bak" in _hits_deep, _hits_deep
+    assert len(_hits_deep) > len(_hits_shallow), "深扫应派生出备份后缀变体"
+    assert len(_hits_deep) <= 1 + 5, "派生总量必须受 max_paths 约束"
+
+    # 7) GUI 可见性：建任务勾选、策略强度下拉/额度、任务详情与站点页的补扫入口
+    _tasks_html = c.get("/tasks").get_data(as_text=True)
+    assert 'name="portscan_full"' in _tasks_html and 'name="dirscan_full"' in _tasks_html
+    _set_html = c.get("/settings").get_data(as_text=True)
+    assert 'name="dirscan_mode"' in _set_html and 'name="dirscan_quick_max_paths"' in _set_html
+    assert 'name="dirscan_suffix_aware"' in _set_html
+    _det_html = c.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert "/api/rescan" in _det_html and "深度目录补扫" in _det_html, "任务详情缺补扫入口"
+    assert "/api/rescan" in c.get("/sites").get_data(as_text=True), "站点页缺补扫入口"
+    print("[5p] 目录浅/深两档 + 全量勾选 + 补扫 ok: 默认浅扫 150 条/档位判定(portscan_full "
+          "互不影响)/目标兜底/自动补阶段/补扫任务命名与 rescan_of/next 防跳外站/"
+          "后缀派生去重限额/GUI 入口")
 
     # (5o) 续8：P2-3 跨平台（Linux + Windows）**可执行**验证。
     #      本机只有 Windows/Python 3.9（无 WSL/Docker），"Linux 实机跑一次 smoke"这一步

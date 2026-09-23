@@ -13,7 +13,7 @@
 │  阶段层    scanner/stages/                                  │
 │            subdomain（+ wildcard/passive）→ takeover →       │
 │            portscan（默认关）→ probe → screenshot（默认关）→   │
-│            osint（默认关）→ jsmine → dirscan（默认关）→       │
+│            osint（默认关）→ jsmine → dirscan（默认开·浅扫）→  │
 │            vulnscan → intel / heuristic（默认关，只产"线索"）  │
 │            （11 个阶段，见 runner.STAGE_ORDER）               │
 │  资产层    scanner/dnsq.py（DNS 客户端）                      │
@@ -71,7 +71,8 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 | 指纹用自研精简规则表（scanner/fingerprint.py） | 无外部依赖；httpx 缺失时也能填充 sites.tech | 规则少、只给组件标签不解析版本 |
 | 外部情报（osint）默认全关，且"两个子开关都关＝一次请求都不发" | 依赖第三方公共接口（api.webscan.cc / FOFA），可用性不由我们掌控；不配置就不该有网络行为 | 想用 C 段/favicon 拓展需先去「策略配置 → 外部情报拓展」显式打开 |
 | mmh3 自实现（`scanner/mmh3.py`）而非引入 mmh3 包 | 平台指纹的社区统一键就是 mmh3；C 扩展包在离线 CTF 环境装不上 | 只实现社区在用的 `x86_32`，未做 128 位变体 |
-| 目录扫描**默认关** + 只扫不重复站点 + 单站点 `max_paths` 节流 | 目录爆破是全流水线请求量最大的一段（大字典 15333 条），而多数 CTF 拿分不靠它；不重复站点（同任务内标题+长度相同）是同一主机的别名，扫了也是白扫 | 想用必须显式打开；大字典必须配 `max_paths`，否则一个站点就要打到天亮 |
+| 目录扫描**默认开但只跑浅扫**（`dirscan.mode=quick`：`dirs_shallow` 精选敏感路径约 150 条/站） + 只扫不重复站点 + 单站点 `quick_max_paths`/`max_paths` 节流 | 用户要求"先用偏敏感信息的通用路径浅浅过一遍，看清结果再手动决定深扫"；浅扫档请求量可控，深扫（全量分层字典 + dirmap + 后缀派生）才需要在建任务时勾「全目录深扫」或结果页发起「补扫」 | 浅扫覆盖有限（不碰全量字典与框架桶）；深扫必须配 `max_paths`，否则一个站点就要打到天亮 |
+| 深扫走**任务选项**（`dirscan_full`）+ 独立补扫任务，而不是把全局改成 deep | 与 `portscan_full` 同一语义：用户点名要扫的那次才慢，跑完不改全局策略；补扫只跑单阶段、可独立停止/删除 | 任务列表会多出只跑 dirscan 的补扫任务行 |
 | 全端口扫描走**任务选项**（`portscan_full`）而不是全局开关 | 6.5 万端口逐连接是分钟级，改成全局 `portscan.mode=full` 会让每个任务都变慢 | GUI 只提供"对勾选 IP 发起"的入口；任务列表会多出只跑 portscan 的任务行 |
 | 用户黑名单**入库前过滤**（`scanner/blacklist.py`）而非入库打标 | 命中即不进资产库，后续阶段自然不扫；不必在每个阶段重复判"要不要跳过"，也不会被历史数据干扰 | 已入库的历史资产不受影响（需手动删任务）；`config/blacklist.txt` 为纯文本、需人工维护 |
 | 重叠资产**默认隐藏**（拓展域名域名级全局 / 站点 URL 级跨任务） | 反复扫同一目标时列表不被撑成 N 倍；默认视图是"新发现"，全量用 `?all=1` 显式打开 | 判重是"保留最早一条"，后扫到的新信息（如状态码变化）不会覆盖旧行 |

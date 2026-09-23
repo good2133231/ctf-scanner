@@ -150,8 +150,18 @@
     <label>浏览器路径（留空＝自动探测 Edge/Chrome） <input name="screenshot_browser"
       value="{{ s.screenshot.browser }}" placeholder="留空自动探测（PATH → 注册表 → 标准安装位置）"></label>
     <label class="chk"><input type="checkbox" name="dirscan_enabled" value="1"
-      {{ 'checked' if s.dirscan.enabled }}> <b>目录/路径发现</b>（默认关 —— 请求量最大、噪声最多；
-      取消勾选＝整阶段跳过）</label>
+      {{ 'checked' if s.dirscan.enabled }}> <b>目录/路径发现</b>（<b>默认开，但默认只跑浅扫</b>：
+      只打敏感路径精选字典 <code>dirs_shallow</code>；取消勾选＝整阶段跳过）</label>
+    <label>目录探测强度
+      <select name="dirscan_mode">
+        <option value="quick" {{ 'selected' if s.dirscan.mode != 'deep' }}>浅扫：敏感路径精选字典（快，默认）</option>
+        <option value="deep" {{ 'selected' if s.dirscan.mode == 'deep' }}>深扫：全量分层字典 + dirmap + 后缀派生（慢）</option>
+      </select></label>
+    <label>浅扫单站点条数上限（<code>dirs_shallow</code> 共约 150 条，填大了也只是把全部吃完）
+      <input name="dirscan_quick_max_paths" value="{{ s.dirscan.quick_max_paths }}"></label>
+    <label class="chk"><input type="checkbox" name="dirscan_suffix_aware" value="1"
+      {{ 'checked' if s.dirscan.suffix_aware }}> <b>备份后缀派生</b>（仅深扫）：对命中的文件名型路径
+      再试 <code>.bak</code>/<code>.zip</code>/<code>.old</code>/<code>~</code> 等变体</label>
     <label class="chk"><input type="checkbox" name="dirscan_tech_aware" value="1"
       {{ 'checked' if s.dirscan.tech_aware }}> <b>按技术栈 + 框架选字典</b>：Java 站只吃
       <code>dirs_jsp</code>、PHP 站只吃 <code>dirs_php</code>、ASP.NET 站只吃 <code>dirs_asp</code>，

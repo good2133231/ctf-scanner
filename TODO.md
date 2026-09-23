@@ -510,6 +510,53 @@
 - [ ] （可选后续）给 `db` 的单写者限制做更彻底的方案（如写操作串行化队列）——当前靠
       WAL + busy_timeout 已能扛住 6 并发；若以后支持更多并发任务再评估。
 
+## 第十八轮（续 9）目录探测浅/深两档 + 全量勾选 + 补扫（2026-09-23）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+> 触发：用户要求「先用一些通用的偏敏感信息的路径探测一些，你可以自己搜集字典，以及网络收集字典，
+> 然后我手动选择深度目录扫描……目录扫描和端口扫描可以有选项，在勾选地方可以选全端口/全目录的勾选，
+> 以及如果没勾其中一个或两个，显示页都可以让他补充扫描……UI 要方便：
+> 既要有时候浅浅过一下，又要有的时候深度扫，以及浅过一下再深度扫」。
+
+- [x] **浅扫字典**：新增 `config/dicts/dirs_shallow.txt`（**206 条**、9 个分区、按价值排序：
+  VCS 泄露 → 环境/配置 → 备份与数据库转储 → 日志调试 → 中间件控制台 → 管理入口 →
+  目录泄露面 → 源码残留 → 健康检查）。来源 = `dirs_exposure` 高价值项 + 长期未被引用的
+  `sensitive.txt` + 公开资料人工筛选；**不联网下载字典**（供应链与离网现场考虑）；
+- [x] **两档实现**（`scanner/stages/dirscan.py`）：`dirscan.mode` 分 `quick` / `deep`。
+  `quick` 只吃 `_SHALLOW_LAYERS=("shallow",)`，不调外部工具；`deep` 保持原逻辑
+  （框架桶 → 语言栈 → 暴露面 → 通用/全量 + dirmap 优先）并新增**后缀派生**
+  （`_suffix_jobs` + `dirscan.suffix_aware`：对文件名型命中派生 `.bak`/`.zip`/`.tar.gz`/`.old`/
+  `~`/`.swp`/`.copy`/`.save`/`.txt`，去重后共用 `max_paths` 额度）；
+- [x] **默认值反转**（有意）：`DEFAULTS["dirscan"]["enabled"]` 与 `settings.yaml` 由 `false` → `true`，
+  并加 `mode: quick` / `quick_max_paths: 150` / `suffix_aware: true`；
+  这是对第十五轮"默认关"决策的**有意反转**，配置与文档里都写明理由（用户要求先浅后深）；
+- [x] **建任务「深度选项」**：`gui/templates/tasks.html` 加「全端口扫描（1-65535）」
+  （`portscan_full`）与「全目录深扫」（`dirscan_full`）两个复选框；`/api/tasks` 写进 `options`，
+  **勾了却没勾对应阶段时自动补上该阶段**并按 `STAGE_ORDER` 归位（`runner` 按给定顺序执行、不排序），
+  响应里用 `auto_stages` 提示（否则用户会以为"勾了没用"）；
+- [x] **补扫端点**：新增 `POST /api/rescan`（`stage` = dirscan|portscan + `target`/`targets[]` +
+  `from_task` + `next`），新建**只跑单阶段**的独立任务，名字 `补扫全目录-<月日>-<时分秒>` /
+  `补扫全端口-…`，选项 `{"<stage>_full": True, "rescan_of": <from_task>}`，`_safe_next()` 防开放重定向；
+- [x] **结果页入口**：任务详情「站点」「端口服务」「目录」三个页签 + 「站点资产」页都加了勾选式
+  深扫 / 全端口补扫入口与"补扫是真实扫描，请先确认有授权"提示；补扫任务详情页顶部显示
+  "本任务是补扫任务：由任务 #N 的补扫发起"并提供回跳链接；
+- [x] **修三处真缺陷**：① `dirscan` 门控不认 `dirscan_full`（全局 `enabled=false` 时补扫任务被静默跳过）
+  → 改为 `if cfg.get("enabled") is not True and not forced`，与 `portscan` 的 forced 语义对齐；
+  ② 只跑 dirscan 的补扫任务没有 probe 产物（内存与库里都没有站点）→ 会"无存活站点，跳过"，
+  功能等于废掉 → 新增 `_sites_from_targets(ctx)` 从 `ctx.targets` 兜底（URL 原样、domain/ip 补 `http://`）；
+  ③ `app.py` 自动补阶段后没排序（`dirscan` 会排到 `vulnscan` 之后）→ 加 `stages.sort(key=STAGE_ORDER.index)`；
+- [x] **CLI**：`cli/client.py` 加 `--full-ports` / `--full-dir`（单次语义），并与 GUI 同规则自动补阶段 + 归位；
+- [x] **测试**：`tests/smoke.py` 新增 **`[5p]`**（7 组断言：默认值与文件存在 / 浅扫只吃 `dirs_shallow`
+  且 ≤ `quick_max_paths` / 档位判定与目标兜底 / 建任务自动补阶段与顺序 / 补扫端点与命名与 next 防外站 /
+  后缀派生去重限额 / GUI 入口存在），并修正 `[5m]` 里 `DEFAULTS["dirscan"]["enabled"] is False`
+  的**陈旧断言**。`py -3 tests/smoke.py` → `SMOKE PASS`；
+- [x] **文档**：`README.md` / `docs/usage.md` / `docs/pipeline.md` / `docs/architecture.md` /
+  `AGENTS.md` / `todo.txt` / 本文件 全量同步；`CHANGELOG_AI.md` 记「第十八轮（续 9）」；
+- [ ] **本轮明确不做**（避免一次改动过大，需要时再单独立项）：
+  ① **递归目录爬取**（dirmap 的递归特性，需要单独设计请求量 / 深度上限）；
+  ② **重写 dirmap 等价的多语言字典引擎**；③ **运行时自动下载字典**（合规 / 离网现场考虑）。
+
 ## 兼容性红线（所有新增代码都适用）
 
 1. 路径用 `pathlib`；命令用列表参数 + `shell=False`；工具名不假设平台。

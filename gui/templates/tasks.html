@@ -17,6 +17,16 @@
       {% endfor %}
       <label class="chk"><input type="checkbox" name="offline" value="1"> 离线模式（不使用外部工具）</label>
     </div>
+    <div class="row">
+      <span class="muted" title="勾选后本任务无视全局策略，强制走全量档；忘记勾对应阶段时会自动补上">
+        深度选项（可选）：</span>
+      <label class="chk" title="portscan 打 1-65535 全端口（分钟级，比 top 档慢很多）">
+        <input type="checkbox" name="portscan_full" value="1"> 全端口扫描（1-65535）</label>
+      <label class="chk" title="dirscan 走全量分层字典 + dirmap + 后缀派生（比默认浅扫慢很多）">
+        <input type="checkbox" name="dirscan_full" value="1"> 全目录深扫</label>
+      <span class="muted small">默认只跑「浅扫」：端口 top 档 + 目录敏感路径精选字典；
+        想深挖再勾上面两项，或在结果页对选中资产发起补扫。</span>
+    </div>
     <button type="submit">创建并开始扫描</button>
     <span id="task-msg" class="muted"></span>
   </form>

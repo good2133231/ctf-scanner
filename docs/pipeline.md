@@ -4,13 +4,18 @@
 `subdomain → takeover → portscan → probe → screenshot → osint → jsmine → dirscan → vulnscan → intel → heuristic`
 （CLI 可用 `-p` 裁剪，GUI 用复选框勾选）。
 
-其中 `takeover` / `jsmine` / `vulnscan` 由**策略级开关**控制、默认开，
-`portscan` / `screenshot` / `dirscan` / `osint` / `intel` / `heuristic` 默认关：
+其中 `takeover` / `jsmine` / `dirscan` / `vulnscan` 由**策略级开关**控制、默认开，
+`portscan` / `screenshot` / `osint` / `intel` / `heuristic` 默认关：
 勾选只表示"这个阶段参与本次任务"，真正执行与否还看
 `settings.takeover.enabled` / `portscan.enabled` / `screenshot.enabled` / `jsmine.enabled` /
 `dirscan.enabled` / `vulnscan.enabled` / `intel.enabled` / `heuristic.enabled`
 （阶段内部自查后打日志跳过，且**连请求都不发**）。`osint` 更特殊 —— 它没有自己的 `enabled`，
 而是由两个**子能力开关** `iprecon.enabled` / `fofa.enabled` 控制，**两者都关时整阶段直接跳过**。
+
+> `dirscan` 走**浅/深两档**（`dirscan.mode`）：默认 `quick` 只打精选敏感路径（约 150 条/站），
+> `deep` 才启用全量分层字典 + dirmap + 后缀派生。用户要求"先浅浅过一遍，看清结果再手动决定深度扫"，
+> 所以**默认开的是浅扫**；深扫用建任务勾选「全目录深扫」（`dirscan_full`，同时写任务选项
+> **并自动补上 `dirscan` 阶段**）或结果页的「补扫」按钮单独立任务，详见 ⑦。
 
 末尾两个阶段（`intel` / `heuristic`）的产物是**「线索」而不是漏洞**：它们只写独立的 `leads` 表
 （任务详情第 9 个页签「线索」+ 报告附录小节），**不写 `vulns`、不计入漏洞数、不自动导入 POC**。
@@ -34,7 +39,7 @@
 | （手工没有的部分） | osint | IP 反查域名 + `/24` C 段归纳；favicon（mmh3）→ FOFA 反查同源资产，黑 ico 放弃拓展 |
 | （手工没有的部分） | jsmine | 抓站点 JS → 提取域名/接口 URL/疑似凭据，第三方域黑名单 + 前后文降噪 |
 | `httpx -l httpx_url -mc 200,301,302,403,404` | probe | httpx 适配器（另加 `-title -tech-detect -json` 提取信息）；`-mc` 白名单一致 |
-| `python dirmap.py -iF dir_out -e all` | dirscan | dirmap 适配器（`-iF` 批量 URL），并解析其 `output/` 产物 |
+| `python dirmap.py -iF dir_out -e all` | dirscan | dirmap 适配器（`-iF` 批量 URL），并解析其 `output/` 产物；**仅 `mode=deep` 时调用**（浅扫不碰外部工具） |
 | （手工没有的部分） | vulnscan | POC 引擎 + OWASP Top10 启发式检查（分级/分类门控 + WAF 探测） |
 | （手工没有的部分） | screenshot | 本机无头 Edge/Chrome（`--headless=new`）截图，产物 `shots/*.png` 并回填 `sites.shot`；默认关 |
 | （手工没有的部分） | intel | 拉 CISA KEV 公开 JSON → 与本地指纹**白名单式**匹配 → 「线索」（`leads` 表）；单向下行、默认关 |
@@ -184,13 +189,31 @@
   入库前同样过用户黑名单（`config/blacklist.txt`）；
 - 局限：纯正则（不做 sourcemap 还原）；短 token 与含 `test/demo` 的真实值会被保守丢弃。
 
-### ⑦ dirscan 目录发现
+### ⑦ dirscan 目录发现（`dirscan.enabled`，**默认开，且默认只跑浅扫**）
 
-- 开关：`dirscan.enabled`（**默认关**）—— 它是全流水线里请求量最大、噪声最多的一段
-  （大字典 15333 条 × 站点数），需要时到「策略配置 → 资产面拓展」打开；
+- 开关：`dirscan.enabled`（默认开）。**但默认档位是 `dirscan.mode="quick"`** —— 只打
+  `config/dicts/dirs_shallow.txt` 里精选的通用敏感路径（**约 150 条/站**，见下），
+  请求量与噪声都可控。这是对早期"默认关闭"决策的**有意反转**：用户要求
+  "先用偏敏感信息的通用路径浅浅过一遍，看清结果再手动决定是否深度扫"。
+- **浅 / 深两档**（`dirscan.mode`）：
+
+  | 档位 | 触发方式 | 字典 | 外部工具 | 后缀派生 |
+  |---|---|---|---|---|
+  | `quick`（默认） | 默认 / 策略配置选 quick | **只用 `dicts.dirs_shallow`**（9 个分区：VCS 泄露 → 环境/配置 → 备份转储 → 日志调试 → 中间件控制台 → 管理入口 → 目录泄露面 → 源码残留 → 健康检查） | **不调用** dirmap | 不做 |
+  | `deep` | `dirscan.mode=deep`，或建任务勾「全目录深扫」，或结果页「补扫」 | 全量分层字典（框架桶 → 语言栈 → 暴露面 → 通用/全量） | 装了 `tools/dirmap/dirmap.py` 就优先用 | 对文件名型命中派生备份变体 |
+
+  浅扫单站点上限 `dirscan.quick_max_paths`（默认 150），深扫仍是 `dirscan.max_paths`（默认 400）。
+  两档都受 `limits.dirscan_max_urls` 站点数上限约束。
+- **`dirscan_full` 任务选项**：值为 `true` 时把**该任务**强制成 deep 档，且
+  **即使全局 `dirscan.enabled=false` 也执行**（与 `portscan_full` 同一语义：用户点名要扫，
+  跑完不改全局策略）。GUI 在 `/api/tasks` 里除了写选项**还会自动补上 `dirscan` 阶段**，
+  并按 `STAGE_ORDER` 归位（`runner` 按给定顺序执行、不排序），响应里用 `auto_stages` 提示。
 - 输入：存活站点，先做**去重**（`_dedup_sites`：同一任务内「标题 + 响应长度」相同的别名站只留首个，
   与 `/sites` 页折叠同一口径），再按 `limits.dirscan_max_urls` 截断；
-- **字典按技术栈拆分 + 运行时按栈选择**（`dirscan.tech_aware`，默认开）：
+  **补扫任务兜底**：只跑 `dirscan` 的补扫任务没有 `probe` 产物（内存与库里都没有站点），
+  此时用 `_sites_from_targets` 从 `ctx.targets` 兜底（URL 原样用，domain/ip 补 `http://`）——
+  否则补扫会"无存活站点，跳过"，功能等于废掉；
+- **字典按技术栈拆分 + 运行时按栈选择**（`dirscan.tech_aware`，默认开，深扫生效）：
   `tools/import_dir_dict.py --src <外部字典>` 把源字典切成
   `dirs_common`（与语言无关）/ `dirs_jsp`（Java 系）/ `dirs_php`（PHP 系）/ `dirs_asp`（ASP.NET 系）
   + `dirs_big`（全量）。运行时按 `sites.tech`（probe 阶段的指纹）与 URL 后缀判定技术栈，
@@ -198,9 +221,16 @@
   一种栈，把三种语言的后缀全打一遍纯属浪费 `max_paths` 额度。判不出技术栈才用全量字典。
   **语言字典排在通用字典之前**：`max_paths` 截断时先保语言专属路径。
   实测：PHP 站 40 条请求 100% 是 `.php`，Java 站无一条 `.php/.aspx`；
-- 字典文件（`config/dicts/`）：`dirs_big`（全量）/ `dirs_common` / `dirs_jsp` / `dirs_php` / `dirs_asp`，
-  另保留 `dirs_small`（55 条，快速档）；**单站点最多扫 `dirscan.max_paths`（默认 400）条**（硬节流）；
-- 处理（外部工具优先）：`tools/dirmap/dirmap.py` 存在时调用 dirmap
+- **框架字典在语言字典之前**（`tools/import_fw_dicts.py` 派生 12 桶 = 11 框架 + 暴露面，
+  运行时按 `sites.tech` 命中的框架把对应桶排最前）；**判不出框架时不吃框架字典额度**，
+  `dirscan.fw_max_paths=0` 时零请求；
+- **后缀派生**（`dirscan.suffix_aware`，默认开，**仅 deep**，借鉴 dirmap 的备份文件扩展）：
+  对命中的**文件名型**路径再派生 `.bak` / `.zip` / `.tar.gz` / `.rar` / `.old` / `~` / `.swp` /
+  `.copy` / `.save` / `.txt` 变体，去重后占用同一份 `max_paths` 额度（`_suffix_jobs`）；
+- 字典文件（`config/dicts/`）：`dirs_shallow`（浅扫专用，206 条，按价值排序）/
+  `dirs_big`（全量）/ `dirs_common` / `dirs_jsp` / `dirs_php` / `dirs_asp` /
+  框架桶 12 份 / `dirs_exposure`，另保留 `dirs_small`（55 条，快速档）；
+- 处理（外部工具优先，**仅 deep**）：`tools/dirmap/dirmap.py` 存在时调用 dirmap
   （`-iF <目标文件> -e all -t <线程>`，cwd 固定在其项目目录），解析其 `output/<域名>/*.txt`：
   **只读 `res.txt` 与 `403.txt`**（`重复长度.txt` / `404.txt` / `othercode.txt` 不读 —— 重复长度按用户要求默认不展示），
   **只解析本次运行写过的文件**（按启动时间过滤，`output/` 是持久目录）；
@@ -325,7 +355,9 @@ logs/task_1_mytask/
 | limits.verify_tls | false | 是否校验 HTTPS 证书；默认关闭以适配自签名靶场/CTF |
 | limits.dirscan_max_urls | 20 | 参与目录扫描的站点上限 |
 | limits.vulnscan_max_urls | 100 | 参与漏洞扫描的站点上限 |
-| dirscan.enabled | **false** | **阶段级**开关：目录/路径发现整阶段开关（关掉连请求都不发） |
+| dirscan.enabled | **true** | **阶段级**开关：目录/路径发现整阶段开关（关掉连请求都不发）。**默认开，但只跑浅扫**（见下一行 `dirscan.mode`） |
+| dirscan.mode / quick_max_paths | quick / 150 | `quick` = 只吃 `dicts.dirs_shallow`（精选敏感路径）；`deep` = 全量分层字典 + dirmap + 后缀派生。任务选项 `dirscan_full=true` 把单任务强制成 deep |
+| dirscan.suffix_aware | true | 深扫专用：对命中的文件名型路径派生 `.bak`/`.zip`/`.old` 等备份变体（额度同 `max_paths`） |
 | dirscan.tech_aware | true | 按 `sites.tech` 选字典：Java 站只吃 jsp+common，PHP 站只吃 php+common |
 | dirscan.big_dict / max_paths | true / 400 | 未知栈时用全量字典；单站点最多扫多少条（硬节流） |
 | portscan.mode / full_ports | top / 1-65535 | `full` 走全端口；也可由任务选项 `portscan_full` 单次触发 |
@@ -335,7 +367,7 @@ logs/task_1_mytask/
 | vulnscan.enabled | true | **阶段级**开关：漏洞初筛整阶段开关（关掉即"只测绘不探测"） |
 | takeover.enabled / jsmine.enabled | true | 子域接管 / JS 挖掘的阶段级开关 |
 | portscan.enabled / screenshot.enabled | false | 端口与服务扫描 / 站点截图 的阶段级开关（**均默认关**） |
-| dirscan.enabled / vulnscan.enabled | false / true | 目录发现（**默认关**）/ 漏洞初筛（默认开）的阶段级开关 |
+| dirscan.enabled / vulnscan.enabled | true / true | 目录发现（**默认开、默认只浅扫**）/ 漏洞初筛（默认开）的阶段级开关。想要早期那种"目录默认不扫"的行为，把 `dirscan.mode` 之外的总开关关掉即可 |
 | intel.enabled / heuristic.enabled | false | 两个「**线索**」阶段的阶段级开关（均默认关；只写 `leads` 表，不写 `vulns`） |
 | limits.brute_max_domains | 50 | 参与 DNS 爆破的域名上限 |
 | limits.wildcard_filter | true | 泛解析过滤：目标开 `*.domain` 时丢弃通配命中的字典结果 |
@@ -358,11 +390,11 @@ logs/task_1_mytask/
 | （`config/keys.yaml`） | 空占位 | 第三方 API key 专用文件，**不在本文件里**；`load_keys()` 只读、GUI 不写回 |
 | passive.enabled / sources / timeout | true / 默认 6 源 / 20s | 多来源被动子域名收集的开关、来源清单、单源超时 |
 | evasion.random_ua / spoof_xff / waf_bypass / bypass_level / waf_detect | true / false / true / 2 / true | 动态免杀：UA 随机化、XFF 伪装、payload 变形及强度、WAF 探测 |
-| dirscan.tech_aware / fw_max_paths | true / 150 | 按 `sites.tech` 选字典；装了 dirmap 时再补一轮「框架字典 + 暴露面字典」内置扫描的额度（0 关闭） |
+| dirscan.fw_max_paths | 150 | 深扫时补一轮「框架字典 + 暴露面字典」内置扫描的额度（0 = 关闭，判不出框架也不吃这份额度） |
 | portscan.engine / full_workers / full_timeout | auto / 256 / 0.5s | 端口扫描引擎：`auto` = fscan → nmap → 内置 TCP connect（也可钉 `fscan`/`nmap`/`builtin`）；全端口模式的并发与超时 |
 | screenshot.enabled / max_sites / window / timeout / browser | **false** / 20 / 1280x900 / 30s / 空 | 站点截图（默认关）：站点上限、视口、单站超时、浏览器路径（留空自动探测 Edge/Chrome） |
 | intel.enabled / source / url / cache_hours / timeout / max_leads | **false** / kev / 空 / 24h / 20s / 50 | 情报订阅（默认关）：源名（内置 `FEEDS`）、覆盖地址（留空用内置，可换自建镜像）、缓存有效期（0 = 每次拉取）、拉取超时、单任务线索上限 |
 | heuristic.enabled / max_leads | **false** / 50 | 启发式候选（默认关、零出站）：阶段开关与单任务线索上限 |
 | tools.fscan | fscan | fscan 二进制名/路径（缺省只在 PATH 找，找不到跳过）；调用时强制 `-np -nobr -nopoc`，只用其端口发现能力 |
 | tools.* | — | 外部工具路径/命令（subfinder / puredns / httpx / nmap / dirmap.python·script·threads …） |
-| dicts.* | — | 各字典路径：技术栈字典（`dirs_common`/`dirs_jsp`/`dirs_php`/`dirs_asp`）+ 框架字典（`dirs_wordpress`/`dirs_spring`/`dirs_weblogic`…12 桶）+ 暴露面 `dirs_exposure` + `dicts.cdn_cname`（CDN 厂商 CNAME 后缀名单） |
+| dicts.* | — | 各字典路径：**浅扫 `dirs_shallow`** + 技术栈字典（`dirs_common`/`dirs_jsp`/`dirs_php`/`dirs_asp`）+ 框架字典（`dirs_wordpress`/`dirs_spring`/`dirs_weblogic`…12 桶）+ 暴露面 `dirs_exposure` + `dicts.cdn_cname`（CDN 厂商 CNAME 后缀名单） |

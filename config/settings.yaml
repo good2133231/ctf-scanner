@@ -62,11 +62,18 @@ jsmine:
   secrets: true
   blacklist: []
 dirscan:
-  # 默认关闭：目录爆破请求量最大、噪声最多，需要时到「策略配置 → 资产面拓展」打开
-  enabled: false
+  # 默认**开启，但只跑浅扫**（mode=quick）：只打精选敏感路径（约 150 条/站），请求量可控。
+  # 这是对早期"默认关闭"决策的**有意反转**（用户要求"先浅浅过一遍，再手动决定深度扫"）。
+  # 深度扫 = mode 改 deep（或建任务时勾「全目录」/在结果页发起「补扫」）。
+  enabled: true
+  mode: quick
+  # 浅扫单站点上限（dirs_shallow 共约 150 条，基本全吃）
+  quick_max_paths: 150
   big_dict: true
   tech_aware: true
   max_paths: 400
+  # 深扫专用：对命中的文件名型路径派生 .bak/.zip/.old 等备份变体（额度同 max_paths）
+  suffix_aware: true
   # 框架补充扫描额度（dirmap 的 -e 吃不下自定义字典，用它把框架/暴露面字典补上；0 = 关闭）
   fw_max_paths: 150
 vulnscan:
@@ -128,6 +135,8 @@ dicts:
   subdomains: config/dicts/subdomains.txt
   resolvers: config/dicts/resolvers.txt
   dirs: config/dicts/dirs_small.txt
+  # 浅扫精选字典（dirscan.mode=quick 时只用这一份）
+  dirs_shallow: config/dicts/dirs_shallow.txt
   dirs_big: config/dicts/dirs_big.txt
   dirs_common: config/dicts/dirs_common.txt
   dirs_jsp: config/dicts/dirs_jsp.txt

@@ -111,14 +111,24 @@ DEFAULTS = {
     },
     "dirscan": {
         # 目录/路径发现阶段总开关（与 takeover/portscan/jsmine 同一类"资产面拓展"）。
-        # **默认关闭**：目录爆破是整条流水线里请求量最大、噪声最多的一段（大字典 1.5 万条），
-        # 而多数 CTF 拿分不靠它；需要时到「策略配置 → 资产面拓展」打开。
+        # **默认开启，但只跑"浅扫"**（mode=quick）：只打 config/dicts/dirs_shallow.txt 里
+        # 精选的敏感路径（约 150 条/站），请求量与噪声都可控 ——
+        # 用户要求"先浅浅过一遍，看清结果后再手动决定要不要深度扫"。
+        # 深度扫（全量字典 + 框架桶 + dirmap）需要显式选择：策略配置里把 mode 改成 deep，
+        # 或建任务时勾「全目录」，或在结果页发起「补扫」。
         # 打开后还有两层节流：只对**不重复站点**扫描（标题+长度相同的别名站跳过），
-        # 且每个站点最多扫 `max_paths` 条字典。每任务站点上限另见 limits.dirscan_max_urls。
-        "enabled": False,
+        # 且每个站点最多扫 max_paths（深扫）/ quick_max_paths（浅扫）条。每任务站点上限见 limits.dirscan_max_urls。
+        "enabled": True,
+        # quick = 只吃 dirs_shallow（敏感路径精选）；deep = 全量分层字典 + dirmap。
+        # 任务级选项 dirscan_full=true 可把单个任务强制成 deep（不改全局策略）。
+        "mode": "quick",
+        "quick_max_paths": 150,    # 浅扫单站点上限（dirs_shallow 共约 150 条，基本全吃）
         "big_dict": True,      # 未知技术栈时用全量字典（config/dicts/dirs_big.txt）
         "tech_aware": True,    # 按 sites.tech 选字典：Java 站不吃 PHP/ASP 后缀（用户要求）
-        "max_paths": 400,      # 单站点最多扫多少条字典（框架字典优先占额度）
+        "max_paths": 400,      # 深扫：单站点最多扫多少条字典（框架字典优先占额度）
+        # 后缀派生（deep 专用，借鉴 dirmap 的备份文件扩展）：对命中的**文件名型**路径再派生
+        # .bak/.zip/.tar.gz/.old/~/.swp/.copy/.txt 等变体，额度上限同 max_paths。浅扫不做（省请求）。
+        "suffix_aware": True,
         # 框架补充扫描额度：dirmap 的 `-e` 吃不下自定义字典（只认 php/jsp/asp/d/big/all），
         # 装了 dirmap 时框架字典会变成死代码 —— dirmap 跑完后按这个额度再补一轮
         # 「框架字典 + 暴露面字典」的内置扫描。置 0 关闭补充扫描。
@@ -224,6 +234,8 @@ DEFAULTS = {
         "subdomains": "config/dicts/subdomains.txt",
         "resolvers": "config/dicts/resolvers.txt",
         "dirs": "config/dicts/dirs_small.txt",       # 小字典（快，几十条）
+        # 浅扫精选字典（dirscan.mode=quick 时**只用这一份**，约 150 条敏感路径，按价值排序）
+        "dirs_shallow": "config/dicts/dirs_shallow.txt",
         "dirs_big": "config/dicts/dirs_big.txt",     # 全量（未知技术栈时用）
         # 按技术栈拆分的字典（tools/import_dir_dict.py --src <外部字典> 生成）：
         # 运行时按 sites.tech 只取「语言字典 + 通用字典」，避免把三种语言的后缀全打一遍

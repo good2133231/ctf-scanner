@@ -14,7 +14,9 @@ python cli/client.py -t <单目标> [选项]
 | `-f, --file PATH` | 目标文件：每行一个 域名/URL/IP，`#` 开头为注释 |
 | `-t, --target` | 单目标，可重复 `-t a.com -t http://b.local/` |
 | `-n, --name` | 任务名（默认取文件名或 cli-task） |
-| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic`（**共 11 个**，默认全部；`takeover`/`jsmine`/`vulnscan` 策略级默认开，`portscan`/`screenshot`/`dirscan`/`osint`/`intel`/`heuristic` 另受策略级开关约束，见下） |
+| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic`（**共 11 个**，默认全部；`takeover`/`jsmine`/`dirscan`/`vulnscan` 策略级默认开，`portscan`/`screenshot`/`osint`/`intel`/`heuristic` 另受策略级开关约束，见下） |
+| `--full-ports` | **本次任务**端口走全端口 `1-65535`（等价 GUI 任务选项 `portscan_full`）；选了却没把 `portscan` 写进 `-p` 时**自动补上该阶段** |
+| `--full-dir` | **本次任务**目录走深扫：全量分层字典 + dirmap + 后缀派生（等价 GUI 任务选项 `dirscan_full`）；同样自动补 `dirscan` 阶段 |
 | `--offline` | 离线模式：不调用 subfinder/puredns/httpx/dirmap，仅内置实现 |
 | `--report PATH` | 扫描结束后生成 Markdown 报告 |
 | `--check` | 打印外部工具可用性并退出 |
@@ -27,6 +29,9 @@ python cli/client.py -f targets.txt -n recon-0921 --report logs/report.md
 
 # 只做探测 + 漏洞初筛（URL 直达，跳过子域名）
 python cli/client.py -t http://target.local/ -p probe,vulnscan
+
+# 先浅浅过一遍（默认浅扫），回头对感兴趣的站点深扫目录 / 全端口
+python cli/client.py -t http://target.local/ -p probe,dirscan --full-dir --full-ports
 
 # 裸机演示：完全离线
 python cli/client.py -f targets.txt --offline
@@ -84,6 +89,10 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
 1. **仪表盘**：任务/子域名/站点/潜在漏洞/POC 总量，最近任务与最近潜在漏洞；
 2. **任务管理**：
    - 「新建扫描任务」：填任务名 → 目标文本框逐行填写，或上传 .txt 目标文件（二选一或同时，自动合并）→ 勾选阶段 → 需要时可勾「离线模式」→ 提交；
+     「**深度选项**」两个复选框是**单次语义**（只作用于本任务，不改全局策略）：
+     **全端口扫描（1-65535）**（`portscan_full`）与 **全目录深扫**（`dirscan_full`）；
+     **勾了却没勾对应阶段时会自动补上该阶段**并在提示里写明（`auto_stages`），否则用户会以为"勾了没用"。
+     不勾时按全局策略走 —— 目录默认只跑**浅扫**（见下）；
    - 任务列表实时轮询状态与进度条；表头支持**多条件筛选**（任务名/目标/状态/阶段），可**全选勾选**后执行**批量停止 / 批量重启 / 批量删除**；
    - 每行提供**行内操作**：查看 / 停止 / 重启 / 导出（下载该任务 Markdown 报告）/ 删除；点击任务号进入详情；
    - 停止为**协作式取消**（当前批次跑完即停），任务终态记为 `stopped`（区别于 `failed`）；
@@ -98,6 +107,15 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    > 报告里也只作附录列出。要人工核实后再自行处置。
    > 页签数量是**按数据源实有**的：IP、SSL 证书、文件泄露、nuclei、WIH 等页签要等
    > 证书解析 / 爬虫数据模型等数据源落地后才会加，不先做空占位（见 `TODO.md` B-7）。
+   - **浅过一遍 → 深度补扫**（本节是用户"既要浅浅过一遍，又要有的时候深度扫"的落地）：
+     「站点」页签与「端口服务」页签每行都有复选框，勾选后点页顶
+     **「深度目录补扫（勾选站点）」** / **「全端口补扫（勾选主机）」**；「目录」页签还有一条
+     **「对本任务全部站点深度补扫」**（隐藏字段一次性带上本任务全部站点 URL）。
+     补扫会**新建一个独立任务**（只跑 `dirscan` 或 `portscan` 一个阶段，与「批量跑子域名」同一套做法），
+     任务名按既有规则生成 `补扫全目录-<月日>-<时分秒>` / `补扫全端口-…`，任务选项写
+     `dirscan_full` / `portscan_full` + `rescan_of=<来源任务>`，因此**无视全局 `*.enabled` 也会执行**。
+     补扫任务详情页顶部会显示"本任务是补扫任务：由任务 #N 的补扫发起"并提供回跳链接。
+     **补扫是真实扫描**：请先确认对目标有授权。「站点资产」页也有同样的勾选式深扫入口；
 4. **子域名资产**：**只显示目标自身**的子域名（来源为 subfinder / `passive:*` / puredns / `dns-brute`），
    每行含 CNAME 链、**解析 IP**、**CDN 标记**与来源；页顶可一键切「全部 / CDN / 非 CDN」。
    来源列显示的是**可读标签**（`被动(subfinder)` / `被动(crt.sh)` / `爆破(puredns)` / `爆破(内置)`），
@@ -125,7 +143,9 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
      只留首个，被折叠的行标注「另有 N 条相同」。
 
    页顶开关「显示全部（含重叠）」可同时放开两层（`?all=1`）。
-   注意折叠键带 `task_id`：跨任务视图下不同任务的同名同长度站点**不会**被互相折叠；
+   注意折叠键带 `task_id`：跨任务视图下不同任务的同名同长度站点**不会**被互相折叠。
+   本页每行也可勾选，点「**深度目录补扫（勾选站点）**」对选中站点新建一个只跑 `dirscan` 的深扫任务
+   （与任务详情页「站点」页签同一入口，见 §3）；
 7. **全端口扫描**：**按任务分布**看端口资产（主机 × 任务视角：任务名 / 主机 / IP / 开放端口数 / 端口列表），
    勾选主机 → 点「发起全端口扫描」即可对某个 IP 补一次 `1-65535`。
    它新建一个**只跑 portscan 阶段**的任务（与「批量跑子域名」同一套做法：一任务一线程、
@@ -156,8 +176,11 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    - **资产面拓展**（`assets`）：子域接管、JS 挖掘、**端口服务**（端口列表 / **端口范围**
      `portscan.mode`（top / full 全端口）/ `portscan.full_ports` / `portscan.exclude_scanned` 跳过已扫端口 /
      **扫描引擎 `portscan.engine`**：`auto`＝fscan → nmap → 内置）、**站点截图**
-     （`screenshot.enabled`，**默认关**）、**目录/路径发现**（`dirscan.enabled`，**默认关**；打开后可勾大字典
-     `dirscan.big_dict`（15333 条）、设单站点条数上限 `dirscan.max_paths`（默认 400）与
+     （`screenshot.enabled`，**默认关**）、**目录/路径发现**（`dirscan.enabled`，**默认开，但默认只跑浅扫**；
+     **探测强度 `dirscan.mode`**：`quick` = 只吃精选敏感路径字典 `dicts.dirs_shallow`（约 150 条/站，
+     额度 `dirscan.quick_max_paths` 默认 150），`deep` = 全量分层字典 + dirmap + 后缀派生
+     （`dirscan.suffix_aware` 默认开，对命中的文件名型路径派生 `.bak`/`.zip`/`.old` 等备份变体）；
+     `dirscan.big_dict`（15333 条）只影响深扫；深扫单站点条数上限 `dirscan.max_paths`（默认 400）与
      框架补充扫描额度 `dirscan.fw_max_paths`（默认 150，填 0 关））这几类的开关与上限；
    - **外部情报拓展（OSINT）**（`osint`）：`iprecon`（C 段反查开关 / 接口地址 / IP 上限 / 主机上限 /
      单 IP 域名上限 / 并发 / 超时）与 `fofa`（favicon 反查开关 / 站点上限 / 资产上限 /
@@ -192,19 +215,34 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
   （一任务一线程、独立状态与独立停止/删除）可以直接复用，挂子任务要改表结构、任务树渲染、
   状态聚合与递归停止 —— 收益只是 UI 好看一点。
 
-### 全端口扫描 / 目录扫描 / dirmap
+### 全端口扫描 / 目录探测（浅扫 → 深扫 → 补扫）
 
 - **全端口扫描**：入口在侧栏「全端口扫描」页（勾选主机 → 发起），它新建一个只跑 portscan 的任务，
   不动全局策略；想让它成为默认行为才去「策略配置 → 端口范围」改成 `full`。
   自动跳过该任务已扫过的端口（`portscan.exclude_scanned`）；
-- **目录扫描**：默认关闭。打开后默认用 **15333 条大字典**（`config/dicts/dirs_big.txt`），
-  单站点最多扫 `dirscan.max_paths`（默认 400）条；**只对不重复站点**跑（同任务内标题+长度相同的
-  别名站跳过）；结果按**响应大小**折叠重复长度（`/dirs` 页「显示全部」可放开），列表展示返回包大小。
+- **默认浅扫**：`dirscan.enabled=true` + `dirscan.mode=quick`，只打 `config/dicts/dirs_shallow.txt`
+  里的**通用敏感路径**（约 150 条/站：VCS 泄露 / `.env` 等配置 / 备份与数据库转储 / 日志与调试 /
+  中间件控制台 / 管理入口 / 目录泄露面 / 源码残留 / 健康检查）。请求量可控，适合"先浅浅过一遍"。
+  字典是**本仓库自带、人工筛选并按价值排序**的（顺序即优先级，`quick_max_paths` 截断时靠前的先扫到）；
+  条目由 `dirs_exposure` 高价值项 + 长期未被引用的 `sensitive.txt` + 公开资料里反复出现的敏感路径整理而成；
+  **不联网下载字典**（供应链与离网现场考虑）。要扩充请直接编辑该文件，或用
+  `py -3 tools/import_dir_dict.py` 清洗导入外部字典；
+- **深度扫**（`dirscan.mode=deep`，或建任务勾「全目录深扫」/ 结果页「补扫」）：
+  吃**全量分层字典**（框架桶 12 份 → 语言栈 → 暴露面 → 通用/全量 `dirs_big`，15333 条），
+  单站点上限 `dirscan.max_paths`（默认 400），装了 `tools/dirmap/dirmap.py` 时优先调用它，
+  并对命中的文件名型路径派生备份后缀变体（`dirscan.suffix_aware`）。
+  **只对不重复站点**跑（同任务内标题+长度相同的别名站跳过）；结果按**响应大小**折叠重复长度
+  （`/dirs` 页「显示全部」可放开），列表展示返回包大小。
   重新生成大字典：`py -3 tools/import_dir_dict.py`（源：`tools/dirmap/data/dict_load/dict_mode_dict.txt`）；
+- **补扫**：见 GUI 页面说明 §3 —— 在结果页勾选站点（或对全部站点）发起，新建独立任务，
+  不勾全量档时全局策略保持浅扫不变。CLI 用 `--full-dir` / `--full-ports` 表达同一件事；
 - **dirmap**：本机用**目录联接**把它挂到 `tools/dirmap/`（第三方项目不随仓库分发，`.gitignore` 已排除），
-  `dirscan` 阶段会自动优先调用它（`tools.dirmap.script`，默认 `tools/dirmap/dirmap.py`）；
+  `dirscan` 阶段在**深扫档**会自动优先调用它（`tools.dirmap.script`，默认 `tools/dirmap/dirmap.py`）；
   找不到就回退内置字典扫描。它的产物在 `output/<域名>/` 下，我们只读 `res.txt` / `403.txt`
   且**只读本次运行写过的文件**（`output/` 是持久目录，否则会读到上次的残留）。
+  浅扫档**不调用任何外部工具**（只发字典请求）；
+- **本轮明确不做**（见 `TODO.md`）：① 递归目录爬取（dirmap 的递归特性需要单独设计请求量/深度上限）；
+  ② 重写 dirmap 等价的多语言字典引擎；③ 运行时自动下载字典（合规/离网现场）。
 
 ## 跨平台（Linux 部署要点）
 

@@ -176,9 +176,22 @@ def create_app():
         stages = [s for s in stages if s in STAGE_ORDER] or list(STAGE_ORDER)
         offline = str(data.get("offline", "")).lower() in ("1", "true", "on")
         options = {"offline": offline}
+        # 「全端口 / 全目录」是**任务级选项**（与 portscan_full 同一套语义：单任务强制全量档，
+        # 不改全局策略）。用户很容易只勾了全量却忘勾对应阶段，那样勾选就等于白勾 ——
+        # 这里自动把对应阶段补进来，并在响应里如实告知，避免"勾了没用"的错觉。
+        auto_stages = []
+        for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan")):
+            if str(data.get(flag, "")).lower() not in ("1", "true", "on"):
+                continue
+            options[flag] = True
+            if stage not in stages:
+                stages.append(stage)
+                auto_stages.append(stage)
+        # 补进来的阶段要回到流水线既定顺序：runner 按给定顺序执行，**不做排序**
+        stages.sort(key=STAGE_ORDER.index)
         task_id = db.create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
-        return jsonify({"id": task_id})
+        return jsonify({"id": task_id, "auto_stages": auto_stages})
 
     @app.route("/tasks/<int:task_id>")
     @login_required
@@ -200,6 +213,18 @@ def create_app():
         # 「线索」页签：intel（外部情报订阅）+ heuristic（启发式候选）两类共用一张表，
         # 两者都**不是漏洞结论**，所以单独列、单独计数，不混进 vulns
         leads = db.list_leads(task_id)
+        # 「补扫」相关提示条只在"本次没做全量"时出现，避免误导：
+        # 本任务带了 `dirscan_full`/`portscan_full`，或全局策略本身就是全量档 → 不提示。
+        try:
+            top = json.loads(task.get("options") or "{}")
+        except (TypeError, ValueError):
+            top = {}
+        if not isinstance(top, dict):
+            top = {}
+        dir_full = (top.get("dirscan_full") is True
+                    or str((settings.get("dirscan") or {}).get("mode") or "quick") == "deep")
+        port_full = (top.get("portscan_full") is True
+                     or str((settings.get("portscan") or {}).get("mode") or "top") == "full")
         return render_template(
             "task_detail.html", task=task,
             subs=own, ext_subs=ext_subs,
@@ -209,6 +234,10 @@ def create_app():
             vulns=db.list_vulns(task_id=task_id, limit=1000),
             leads=leads,
             leads_intel=sum(1 for r in leads if r["kind"] == "intel"),
+            # 补扫入口：任务页对"本任务的站点/IP"直接发起新任务；rescan_of 用于反向回跳
+            rescan_of=top.get("rescan_of"),
+            dir_full=dir_full, port_full=port_full,
+            dir_cap=int((settings.get("limits") or {}).get("dirscan_max_urls", 20) or 20),
             running=set(runner.running_task_ids()))
 
     @app.route("/tasks/<int:task_id>/export")
@@ -754,6 +783,46 @@ def create_app():
         logger.info(f"[gui] 批量子域名任务 #{task_id} 已创建（{len(domains)} 个域名，仅 subdomain 阶段）")
         return redirect(url_for("task_detail", task_id=task_id))
 
+    @app.route("/api/rescan", methods=["POST"])
+    @login_required
+    def api_rescan():
+        """对勾选资产发起**补充扫描**：新建一个只跑对应阶段、走全量档的任务。
+
+        `stage=dirscan` → 深度目录补扫（全量分层字典 + dirmap + 后缀派生）；
+        `stage=portscan` → 全端口补扫（1-65535）。任务级选项 `dirscan_full` / `portscan_full`
+        让这个任务无视全局开关与档位走全量，**不改全局策略**；`rescan_of` 记下发起它的原任务，
+        任务详情页据此显示「由任务 #N 的补扫发起」并可回跳。
+
+        与「批量跑子域名」「发起全端口扫描」同一套做法（一任务一线程，可独立停止/删除）。
+        """
+        stage = (request.form.get("stage") or "").strip().lower()
+        fallback = _safe_next(request.form.get("next"), url_for("tasks"))
+        if stage not in ("dirscan", "portscan"):
+            return redirect(fallback)
+        targets, seen = [], set()
+        # 字段名沿用各页既有习惯（`target`），同时接受 `targets` 便于直接调 API
+        for raw in request.form.getlist("target") + request.form.getlist("targets"):
+            t = (raw or "").strip()
+            if t and t not in seen:
+                seen.add(t)
+                targets.append(t)
+        if not targets:
+            return redirect(fallback)
+        label = "全目录" if stage == "dirscan" else "全端口"
+        name = (request.form.get("name") or "").strip() or \
+            time.strftime(f"补扫{label}-%m%d-%H%M%S")
+        options = {f"{stage}_full": True}
+        from_task = (request.form.get("from_task") or "").strip()
+        if from_task.isdigit():          # 只收任务号，避免把任意文本写进任务选项
+            options["rescan_of"] = int(from_task)
+        text = "\n".join(targets)
+        stages = [stage]
+        task_id = db.create_task(name, text, stages, options)
+        _spawn(task_id, name, text, stages, options)
+        logger.info(f"[gui] 补扫任务 #{task_id} 已创建（{stage} 全量档，"
+                    f"{len(targets)} 个目标，来源任务 #{from_task or '-'}）")
+        return redirect(url_for("task_detail", task_id=task_id))
+
     # ---------- 设置 ----------
 
     @app.route("/settings", methods=["GET", "POST"])
@@ -799,8 +868,13 @@ def create_app():
                                  "max_hosts": int(f.get("takeover_max_hosts", 300) or 300),
                                  "http_check": f.get("takeover_http_check") == "1"},
                     # 阶段级总开关（与 takeover/portscan/jsmine 同一类）：默认开
-                    # 目录扫描：默认关；大字典 + 单站点条数上限（1.5 万条字典必须节流）
+                    # 目录扫描：默认开但只跑浅扫（用户要求"先浅浅过一遍再决定要不要深挖"）；
+                    # 深扫走全量分层字典 + dirmap + 后缀派生
                     "dirscan": {"enabled": f.get("dirscan_enabled") == "1",
+                                "mode": f.get("dirscan_mode", "quick"),
+                                "quick_max_paths": int(
+                                    f.get("dirscan_quick_max_paths", 150) or 150),
+                                "suffix_aware": f.get("dirscan_suffix_aware") == "1",
                                 "big_dict": f.get("dirscan_big_dict") == "1",
                                 "tech_aware": f.get("dirscan_tech_aware") == "1",
                                 "max_paths": int(f.get("dirscan_max_paths", 400) or 400),

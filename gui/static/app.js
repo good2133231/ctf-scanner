@@ -301,8 +301,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const r = await fetch("/api/tasks", { method: "POST", body: new FormData(tf) });
         const j = await r.json();
         if (j.id) {
-          msg.textContent = "任务 #" + j.id + " 已创建";
-          setTimeout(() => location.reload(), 800);
+          // 勾了「全端口 / 全目录」却没勾对应阶段时，后端会自动补上并回传 auto_stages
+          const extra = (j.auto_stages && j.auto_stages.length)
+            ? "（已自动补上阶段：" + j.auto_stages.join("、") + "）" : "";
+          msg.textContent = "任务 #" + j.id + " 已创建" + extra;
+          setTimeout(() => location.reload(), 1200);
         } else {
           msg.textContent = j.error || "创建失败";
         }
