@@ -3147,6 +3147,52 @@ workflows:
           " + CT 日志（非 JSON/限流容错 + 通配符剥离 + 默认关门控 + 第三方不带登录态）"
           " + osint 阶段接线（限流只记日志不挂阶段 / 正常时证书落库 source=ct / 裸 IP 与通配符不入库）"
           " + 新开关三方一致（DEFAULTS/settings.yaml/GUI POST）+ 证书来源列")
+    # 5z) QA 独立补测（software-qa-engineer-2 复核批次 4 时补）：
+    #     ① SSRF 注入途中抛异常时 finally 仍要关监听（不留 ssrf-callback 线程）
+    #     ② ctlog 更多坏输入（None / 截断 JSON / name_value=null）不抛异常且不给通配符
+    #     ③ classify_xss 空 / 超长输入安全
+    _ssrf_on5z = copy.deepcopy(settings)
+    _ssrf_on5z["ssrf"] = {"enabled": True, "callback_base": "", "host": "127.0.0.1",
+                          "port": 0, "wait_seconds": 0.5, "max_params": 3}
+    _orig_http5z = ssrf_mod.http_request
+    ssrf_mod.http_request = lambda *a, **kw: {"status": 200, "headers": {},
+                                              "text": "<input name='url'>", "length": 20}
+
+    def _boom_get5z(u, s, **kw):
+        raise RuntimeError("boom")
+
+    owasp_checks._get = _boom_get5z
+    _raised5z = False
+    try:
+        owasp_checks._ssrf_callback(targets, _ssrf_on5z)
+    except RuntimeError:
+        _raised5z = True
+    finally:
+        ssrf_mod.http_request = _orig_http5z
+        owasp_checks._get = _orig_get5
+    assert _raised5z, "异常应当向上抛出（由 run_all 兜）"
+    assert not [t for t in threading.enumerate()
+                if t.name == "ssrf-callback" and t.is_alive()], "异常路径下监听线程没关"
+
+    # ② ctlog：None / 截断 JSON / name_value=null 一律不抛异常，且不给通配符
+    for _bad5z in (None, '{"issuer_name": "x"', '[{"name_value": null}]'):
+        try:
+            _rr5z, _ee5z = ctlog_mod.parse_records(_bad5z, settings)
+        except Exception as _e5z:                       # 这里就是要它不抛
+            raise AssertionError(f"parse_records 对 {_bad5z!r} 抛了异常：{_e5z!r}")
+        assert isinstance(_rr5z, list), (_bad5z, _rr5z)
+        assert all("*" not in d for r in _rr5z for d in (r.get("san") or [])), _bad5z
+    # 逗号连写的 name_value 不能被当成一个域名资产（domains_of 用 is_domain 挡掉）
+    _cm5z, _ = ctlog_mod.parse_records('[{"name_value": "a.example.com,b.example.com"}]',
+                                       settings)
+    assert "a.example.com,b.example.com" not in ctlog_mod.domains_of(_cm5z), \
+        "逗号连写值绝不能进资产库"
+
+    # ③ classify_xss：None / 超长输入安全（返回 None 或合法 dict）
+    assert owasp_checks.classify_xss(None, _BASE_P) is None
+    _long5z = owasp_checks.classify_xss("a" * 200000 + _BASE_P, _BASE_P)
+    assert _long5z is None or _long5z["context"], "超长输入应安全返回"
+    print("[5z] QA 复核补测 ok: SSRF 异常路径 close() 不留线程 / ctlog None·截断·null 不抛异常且逗号串不入资产 / classify_xss None·超长安全")
     print("SMOKE PASS")
 
 
