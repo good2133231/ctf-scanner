@@ -4941,7 +4941,7 @@ workflows:
     #      会话 Cookie 的 HttpOnly/SameSite 显式化。全程走 test client，不占端口、不发真实请求。
     from gui.app import _host_of
 
-    # 1) `_host_of` 是纯函数，先把口径钉死 —— 白名单与 Origin 比对都建立在它上面
+    # 1) `_host_of` 是纯函数，先把口径钉死 —— Host 白名单建立在它上面（**只比主机名**）
     assert _host_of("127.0.0.1:5000") == "127.0.0.1"
     assert _host_of("[::1]:5000") == "::1", "IPv6 字面量要剥方括号"
     assert _host_of("LOCALHOST") == "localhost" and _host_of("  Example.COM ") == "example.com", \
@@ -4949,6 +4949,22 @@ workflows:
     assert _host_of("0.0.0.0") == "0.0.0.0", "0.0.0.0 是绑定地址不是回环主机名，不得进白名单"
     assert _host_of("") == "" and _host_of(None) == "", "取不出主机名时返回空串（不猜）"
     assert _host_of("evil.example:5000") == "evil.example"
+
+    # 1b) `_authority` 是跨站校验用的那一个 —— 与 `_host_of` 的关键差别是**保留端口**
+    #     （续32-fix：首版错用了 `_host_of`，两边都把端口剥掉 → "同机异端口"整类请求被放行。
+    #      这个缺陷是**真实服务器上实测**发现的，当时的 smoke 断言因 test client 的 Host 是
+    #      `localhost`（与 `127.0.0.1:9999` 主机名本来就不同）而**假绿** —— 见下面 3) 的端口断言）
+    from gui.app import _authority
+    assert _authority("http://127.0.0.1:5057") == "127.0.0.1:5057"
+    assert _authority("127.0.0.1:5057") == "127.0.0.1:5057", "Host 头（无 scheme）也要能归一"
+    assert _authority("http://127.0.0.1") == "127.0.0.1"
+    assert _authority("http://127.0.0.1:80") == "127.0.0.1", \
+        "默认端口要按 scheme 归一 —— 浏览器在默认端口下不写端口，否则正常请求会被自己挡掉"
+    assert _authority("https://127.0.0.1:443") == "127.0.0.1"
+    assert _authority("HTTPS://Example.COM:443") == "example.com", "大小写要归一"
+    assert _authority("[::1]:5000") == "[::1]:5000" and _authority("http://[::1]") == "[::1]"
+    assert _authority("") == "" and _authority(None) == "" and _authority("http://") == ""
+    assert _authority("http://127.0.0.1:9999") != _authority("127.0.0.1:5057"), "端口必须参与比对"
 
     # 2) Host 白名单：绑定回环地址时，非回环 Host 一律 403。
     #    test client 默认 Host 就是 `localhost`（在白名单内），所以这里必须**显式**换成外站域名
@@ -4959,15 +4975,24 @@ workflows:
     assert c.get("/login", headers={"Host": "localhost:5000"}).status_code == 200, \
         "回环 + 端口仍应放行（白名单比的是主机名）"
 
-    # 3) 写方法的 Origin/Referer 校验（比 netloc **含端口**：Cookie 不按端口隔离）
+    # 3) 写方法的 Origin/Referer 校验（比**权威段**：Cookie 不按端口隔离，端口必须参与）
     _tok32 = settings["gui"]["token"]
     for _hdr32 in ({"Origin": "http://evil.example"},
-                   {"Origin": "http://127.0.0.1:9999"},     # 同机另一个服务 → 靠端口挡住
+                   # 同机另一个服务：**主机名相同、只有端口不同** —— 这条断言是续32-fix 的核心。
+                   # 首版用 `_host_of` 比，两边都把端口剥掉就相等了，整类请求被静默放行；
+                   # 当时之所以没被抓到，是因为 test client 的默认 Host 是 `localhost`，
+                   # 与 `127.0.0.1:9999` 的**主机名**本来就不同 → 断言"因为别的原因"通过了（假绿）。
+                   # 所以这里必须**显式给出带端口的 Host**，让比对真正落在端口上。
+                   {"Host": "127.0.0.1:5057", "Origin": "http://127.0.0.1:9999"},
+                   {"Host": "127.0.0.1:5057", "Referer": "http://127.0.0.1:9999/x"},
                    {"Origin": "null"},                      # file:// 页面 / 沙箱 iframe
                    {"Referer": "http://evil.example/x"}):   # 无 Origin 时退回 Referer
         assert c.post("/login", data={"token": _tok32}, headers=_hdr32).status_code == 403, _hdr32
-    for _hdr32 in ({"Origin": "http://localhost"},
-                   {"Origin": "http://localhost:5000"},
+    for _hdr32 in ({"Origin": "http://localhost"},                              # 两边都无端口
+                   {"Host": "localhost:5000", "Origin": "http://localhost:5000"},  # 真实浏览器形态
+                   {"Origin": "http://localhost:80"},                           # 默认端口归一
+                   {"Host": "127.0.0.1:5057", "Origin": "http://127.0.0.1:5057"},
+                   {"Host": "127.0.0.1:5057", "Referer": "http://127.0.0.1:5057/tasks"},
                    {"Referer": "http://localhost/x"}):
         assert c.post("/login", data={"token": _tok32}, headers=_hdr32).status_code == 302, _hdr32
     # 只拦写方法：带外站 Origin 的 GET 必须放行（否则正常导航会被误伤）
@@ -4983,8 +5008,9 @@ workflows:
     assert app.config["SESSION_COOKIE_SAMESITE"] == "Lax"
 
     print("[6t] 续32 本机守卫 ok: Host 白名单（外站 Host 403 / 回环与回环+端口放行）/ "
-          "写方法 Origin 与 Referer 校验（跨站与同机异端口与 null 均 403，同源放行）/ "
-          "GET 不拦 / 两个头都缺时放行 / _host_of 归一与解不出不猜 / Cookie HttpOnly+SameSite=Lax")
+          "写方法 Origin 与 Referer 校验（跨站·**同机异端口**·null 均 403，同源与默认端口归一放行）/ "
+          "GET 不拦 / 两个头都缺时放行 / _host_of 只比主机名、_authority 保留端口 / "
+          "Cookie HttpOnly+SameSite=Lax")
 
     print("SMOKE PASS")
 

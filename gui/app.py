@@ -169,11 +169,49 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _host_of(netloc):
-    """从 `host[:port]` / `[::1]:5000` 里取出**小写主机名**；取不出返回空串（不猜）。"""
+    """从 `host[:port]` / `[::1]:5000` 里取出**小写主机名**；取不出返回空串（不猜）。
+
+    **只用于 Host 白名单**（"是不是回环名"）—— 回环地址上的任意端口都该放行。
+    跨站校验不能用它：它**丢掉端口**，而端口恰恰是那道校验的关键（见 `_authority`）。
+    """
     text = str(netloc or "").strip().lower()
     if text.startswith("["):                 # IPv6 字面量：`[::1]:5000`
         return text[1:].split("]", 1)[0]
     return text.rsplit(":", 1)[0] if ":" in text else text
+
+
+# 默认端口：浏览器在默认端口下**不写端口**（Host 与 Origin 都省略），所以要按 scheme 归一，
+# 否则 `http://127.0.0.1` 与 Host `127.0.0.1` 会被误判成不同源，正常请求被自己挡掉。
+_DEFAULT_PORTS = {"http": "80", "https": "443"}
+
+
+def _authority(value):
+    """把 `[scheme://]host[:port]` 归一成**可比对的权威段**（小写、去默认端口）；取不出返回空串。
+
+    跨站校验必须比到端口这一层：**Cookie 不按端口隔离** —— 同机另一个 Web 服务
+    （如 `127.0.0.1:9999`）向本控制台发起的请求照样会带上会话 Cookie，
+    只比主机名就会把这类请求放过去（它正是这道校验存在的理由）。
+    """
+    text = str(value or "").strip().lower()
+    scheme = ""
+    if "://" in text:
+        parsed = urlparse(text)
+        scheme, text = parsed.scheme, parsed.netloc
+    text = text.rstrip(".")
+    if not text:
+        return ""
+    if text.startswith("["):                 # IPv6 字面量：`[::1]:5000`
+        end = text.find("]")
+        if end == -1:
+            return text
+        host, rest = text[:end + 1], text[end + 1:]
+    else:
+        host, _, tail = text.partition(":")
+        rest = f":{tail}" if tail else ""
+    port = rest[1:] if rest.startswith(":") else ""
+    if port and port == _DEFAULT_PORTS.get(scheme):
+        port = ""
+    return f"{host}:{port}" if port else host
 
 
 def create_app():
@@ -211,10 +249,11 @@ def create_app():
            扫描器就被整个接管（能拿它去打任意目标、并用上已配置的登录态）。校验 `Host`
            必须是回环名即可挡住整类攻击。
         ② **跨站状态变更拦截**：只对写方法（POST/PUT/PATCH/DELETE）校验 `Origin`（无 `Origin`
-           时退回 `Referer`），要求其 netloc 与本次请求的 `Host` **完全一致**（含端口 ——
-           Cookie 不按端口隔离，同机另一个服务发起的请求同样危险）。两者都缺失时放行
-           （curl / 脚本 / 老浏览器本就不带这两个头，本机工具必须能用）；`Origin: null`
-           （沙箱 iframe、`file://` 页面）**不放行**。
+           时退回 `Referer`），要求其**权威段**与本请求的 `Host` 一致 —— 比的是 `_authority()`
+           归一后的 `主机[:端口]`，**端口参与比对**（Cookie 不按端口隔离，同机另一个服务
+           发起的请求同样危险），默认端口按 scheme 归一（浏览器在默认端口下不写端口）。
+           两者都缺失时放行（curl / 脚本 / 老浏览器本就不带这两个头，本机工具必须能用）；
+           `Origin: null`（沙箱 iframe、`file://` 页面）**不放行**。
 
         刻意**不**做"每个表单塞 CSRF token"：本控制台的表单与 fetch 调用点有几十处，逐处改造
         与 ② 的防护面重叠，而漏掉任何一处就是"看起来有防护、实际有缺口"；`Origin` 校验在
@@ -227,11 +266,11 @@ def create_app():
             return None
         origin = (request.headers.get("Origin") or "").strip()
         if origin:
-            if origin.lower() == "null" or _host_of(urlparse(origin).netloc) != host:
+            if origin.lower() == "null" or _authority(origin) != _authority(request.host):
                 abort(403, description="跨站请求被拒绝：Origin 与 Host 不一致")
             return None
         referer = (request.headers.get("Referer") or "").strip()
-        if referer and _host_of(urlparse(referer).netloc) != host:
+        if referer and _authority(referer) != _authority(request.host):
             abort(403, description="跨站请求被拒绝：Referer 与 Host 不一致")
         return None
 

@@ -379,14 +379,18 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   全程桩掉 `run_task`，零真实请求；用 `os.getpid()` 占住 pid 才能
                             #   测到"运行中拒绝"（否则 reconcile 会先把该 running 判成孤儿 failed）。
 # 2026-09-25 续32 新增 `[6t]`：**本机守卫** —— `_host_of` 纯函数（`host:port` 剥端口 / IPv6 字面量
-                            #   剥方括号 / 大小写与空白归一 / `0.0.0.0` **不算**回环 / 解不出返回空串不猜）/
-                            #   Host 白名单（外站 Host 在 GET 与 POST 上均 403；`127.0.0.1` 与
+                            #   剥方括号 / 大小写与空白归一 / `0.0.0.0` **不算**回环 / 解不出返回空串不猜）
+                            #   与 `_authority` 纯函数（**保留端口** / 默认端口按 scheme 归一 / IPv6 保留
+                            #   方括号）/ Host 白名单（外站 Host 在 GET 与 POST 上均 403；`127.0.0.1` 与
                             #   `localhost:5000` 放行 —— 白名单比的是**主机名**）/ 写方法 Origin 与
-                            #   Referer 校验（跨站、**同机异端口**、`null` 均 403；同源放行）/
+                            #   Referer 校验（跨站、**同机异端口**、`null` 均 403；同源与默认端口放行）/
                             #   带外站 Origin 的 **GET 放行**（不误伤导航）/ 两个头都缺时放行
                             #   （curl/脚本必须能用）/ 登录响应 `Set-Cookie` 含 `HttpOnly` 与
                             #   `SameSite=Lax`。全走 test client，不占端口、零真实请求。
-                            #   **未验**：真实浏览器的 DNS rebinding 链路与反代场景（见续32 变更记录）。
+                            #   ⚠️ 写"同源/跨源"断言时**必须显式给出带端口的 Host** —— test client 默认
+                            #   Host 是 `localhost`，端口断言会因"主机名本来就不同"而**假绿**（续32-fix
+                            #   的真缺陷就是这样漏掉的；该缺陷最终是**真实服务器 + 真实浏览器**复核才暴露）。
+                            #   **未验**：真实浏览器的 DNS rebinding 链路与反代场景（见续32/-fix 变更记录）。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -508,7 +512,10 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   ① **Host 白名单** `_LOOPBACK_HOSTS = {127.0.0.1, localhost, ::1}` —— 挡 DNS rebinding
   （恶意域名解析到 127.0.0.1 即被浏览器视为同源，叠加上公开的默认口令 `ctfscanner` 就是完整接管）；
   只在下述**绑定回环地址**时启用。② **写方法 Origin/Referer 校验** —— POST/PUT/PATCH/DELETE
-  要求其 netloc 与本次 `Host` **完全一致**（含端口：Cookie 不按端口隔离，同机另一个服务同样危险）；
+  要求其**权威段**与本次 `Host` 一致，比的是 `_authority()` 归一后的 `主机[:端口]`：
+  **端口必须参与比对**（Cookie 不按端口隔离，同机另一个服务同样危险），默认端口按 scheme 归一
+  （浏览器在默认端口下不写端口）。**注意别用 `_host_of()` 做这件事 —— 它丢端口**
+  （续32-fix 的真缺陷就是两边都过 `_host_of`，导致"同机异端口"整类请求被静默放行）；
   `Origin: null` 不放行，两个头都缺失时放行（curl/脚本必须能用）。会话 Cookie 显式设
   `HttpOnly` + `SameSite=Lax`（不依赖浏览器默认值）。**刻意不做**逐表单 CSRF token（几十处调用点，
   漏一处就是"看起来有防护、实际有缺口"）。`serve()` 在绑非回环地址时打显式告警 —— 那种模式下
