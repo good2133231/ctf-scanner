@@ -10,6 +10,17 @@
 ① 策略配置把 `dirscan.mode` 改成 `deep`（全局）；② 建任务时勾「全目录」（任务级选项
 `dirscan_full`）；③ 结果页对选定站点发起「深度目录补扫」（同样落 `dirscan_full` 的新任务）。
 
+**目录递归**（`dirscan.recursive_depth`，续30，**默认 0 = 关**）：深扫时对**目录型命中**
+（`/admin`、`/api/v1` —— 最后一段不含 `.` 且不以 `.` 开头）再往下打层，字典用浅扫精选那份
+（`dirs_shallow`）截断到 `recursive_max_paths`。它是**三重闸**限流：层数 `recursive_depth`、
+每站跨层累计目录数 `recursive_max_dirs`、每目录路径数 `recursive_max_paths`。
+限"目录数"不能省 —— 单站浅扫约 153 请求，一层递归 = `+K×(3 软404基线 + M)`，
+K=5/M=40 时 +215 请求**比第一轮还多**，而 K 由"扫出多少个目录"决定、不受字典大小控制。
+刻意**不从 `tools/dirmap/dirmap.conf` 打开 dirmap 自带的递归**（`conf.recursive_scan`
+当前为 0，保持不动）：它的触发条件只有 `[301,403]`（200 的目录反而不递归）、深度仅靠
+`recursive_scan_max_url_length=60` 兜底，且只在装了 dirmap 的机器上生效 —— 与上面这套
+额度不可预测地叠加。
+
 字典分层（越具体的排越前，`max_paths` 截断时先保住高价值路径）：
 **框架字典**（`dirs_<框架>.txt`，`tools/import_fw_dicts.py` 从全量字典派生，凭 `sites.tech` 指纹命中）
 → **语言字典**（`dirs_jsp` / `dirs_php` / `dirs_asp`）→ **通用暴露面**（`dirs_exposure`：
@@ -265,6 +276,21 @@ class DirscanStage(Stage):
             if extra:
                 ctx.logger.info(f"[dirscan] 框架补充扫描新增 {len(extra)} 条")
                 entries.extend(extra)
+
+        # 目录递归（续30，**默认关**）：策略级 `recursive_depth>0` 才生效；但建任务勾了
+        # 「目录递归」时落成任务级选项 `recursive_dir` —— 那种情况下**即使策略是关的**也要
+        # 为本次开启（与 `screenshot_on` / `cert_on` 同一套"只本次生效、不改全局策略"语义，
+        # 否则用户勾了却没反应）。勾了就至少一层，策略里填了更大的值就按策略走。
+        rec_cfg = cfg
+        if ctx.options.get("recursive_dir") is True:
+            rec_cfg = dict(cfg)
+            rec_cfg["recursive_depth"] = max(1, int(cfg.get("recursive_depth", 0) or 0))
+
+        # 目录递归（续30）：对上面两种产物**一视同仁** —— 装了 dirmap 的机器走的是 `only_fw`
+        # 那条分支，所以不能挂进 `_builtin_scan` 内部，否则"有 dirmap 的机器反而没有递归"
+        # （离网 CTF 现场才是常态）。
+        if deep and entries:
+            entries.extend(self._recursive_scan(sites, entries, rec_cfg, limits))
 
         uniq, seen = [], set()
         for e in entries:
@@ -571,7 +597,7 @@ class DirscanStage(Stage):
                 continue
             label = f"{fw}/{kind}" if fw else (kind or "未知")
             tally[label] = tally.get(label, 0) + 1
-            jobs.extend((s["url"], p) for p in paths)
+            jobs.extend((s["url"], p, s["url"]) for p in paths)
         if not jobs:
             if only_fw:
                 ctx.logger.info("[dirscan] 无可识别的框架站点，跳过框架补充扫描")
@@ -582,6 +608,37 @@ class DirscanStage(Stage):
                         f"选字典{'（浅扫）' if shallow else ('（框架补充）' if only_fw else '')}"
                         f"（{' / '.join(f'{k}:{v} 站' for k, v in tally.items())}），"
                         f"共 {len(jobs)} 个请求 …")
+        entries = self._scan(jobs, limits)
+
+        # 后缀派生（深扫专用，借鉴 dirmap 的备份文件扩展）：第一轮命中的**文件名型**路径
+        # 再派生 `.bak/.zip/.old/…` 变体补一轮。浅扫与框架补充扫描都不做（省请求）。
+        if entries and not shallow and not only_fw and cfg.get("suffix_aware") is not False:
+            cap = int(cfg.get("max_paths", 400) or 400)
+            # `_suffix_jobs` 只回 `(站点根, 相对路径)`：派生轮的请求基址**就是站点根**
+            # （备份文件与它在同一层），补成 `_scan` 要的三元组。
+            extra_jobs = [(s, p, s) for s, p in self._suffix_jobs(entries, cap)]
+            if extra_jobs and not ctx.stopped():
+                ctx.logger.info(f"[dirscan] 后缀派生：对 {len(extra_jobs)} 个变体补扫 …")
+                entries.extend(self._scan(extra_jobs, limits))
+        return entries
+
+    # ---------- 单轮扫描（软 404 基线 + 命中提取）----------
+
+    def _scan(self, jobs, limits):
+        """跑一轮扫描，返回命中条目。`jobs` 元素是 `(基址, 相对路径, 站点根)` 三元组。
+
+        抽成独立方法是为了**目录递归能复用同一套请求语义**（续30）：递归那一轮同样要
+        「按基址缓存的软 404 基线 + 标题提取 + 只收 200/301/302/403」。复制一份实现
+        必然与这里漂移，而软 404 恰恰是本阶段最容易被改坏的地方（见 `_baseline` 注释）。
+
+        **基址与站点根为什么分开**：递归时请求要打到子目录（`http://h/admin`），但入库的
+        `site_url` 必须仍是**站点根** —— 它是这条目录结果的**数据身份**（见 `_origin_of`
+        的注释：`dirs` 折叠、跨运行去重键、启发式分组都在消费它）。若把子目录写进去，
+        「目录」页签会把一个站点按子目录拆成十几行，跨运行去重也会失效。
+        """
+        ctx = self.ctx
+        workers = int(limits.get("max_workers", 20))
+        timeout = int(limits.get("http_timeout", 10))
         baseline = {}
         baseline_lock = threading.Lock()
 
@@ -591,12 +648,16 @@ class DirscanStage(Stage):
             只用一个随机路径当基线时，碰上"随机路径也命中路由"的站点会误杀真实结果；
             取 3 个随机路径的 md5 与长度集合，命中其中任意一个即判为不存在。
 
-            **每个站点只算一次**：本函数是被 `pool_run` 的 20 个线程并发调用的，
+            **每个基址只算一次**：本函数是被 `pool_run` 的 20 个线程并发调用的，
             原先的"惰性填字典"没有同步 —— 多线程同时 miss 就各算一遍，
             实测单站点 3 个基线请求膨胀成 27~36 个（占 dirscan 请求量约 18%）。
             这里用锁把「查缓存 + 计算 + 回填」整体串起来：首个线程真算，其余线程
-            阻塞在锁上、拿到锁后直接命中缓存，于是请求数恒定 = 3 × 站点数。
+            阻塞在锁上、拿到锁后直接命中缓存，于是请求数恒定 = 3 × 基址数。
             （不要把锁拆开成"锁内查、锁外算"——那样等于没锁。）
+
+            `u` 既是缓存键也是请求基址：第一轮是站点根，目录递归轮是命中的子目录前缀，
+            两者天然各算一份 —— 子目录常有**自己的**统一跳转页，复用站点根的基线会把
+            子目录下的真实命中整片滤掉。
             """
             with baseline_lock:
                 cached = baseline.get(u)
@@ -619,7 +680,7 @@ class DirscanStage(Stage):
         def _hit(item):
             if ctx.stopped():
                 return None
-            u, p = item
+            u, p, root = item
             md5s, sizes = _baseline(u)
             url = u.rstrip("/") + "/" + p.lstrip("/")
             r = http_request(url, timeout=timeout, settings=ctx.settings, auth=True)
@@ -637,20 +698,11 @@ class DirscanStage(Stage):
             # 为什么值得存：路径命中后光看 `/backup.tar.gz 200 1818` 判断不了这是真备份包
             # 还是一个"统一跳转页"；标题能立刻分辨（用户 2026-09-23 明确要求）。
             t = TITLE_RE.search(r.get("text") or "")
-            return {"site_url": u, "path": url, "status": st,
+            return {"site_url": root, "path": url, "status": st,
                     "length": r.get("length"), "method": "GET", "note": "builtin",
                     "title": (t.group(1).strip()[:200] if t else "")}
 
-        entries = [e for e in pool_run(_hit, jobs, workers=workers) if e]
-
-        # 后缀派生（深扫专用，借鉴 dirmap 的备份文件扩展）：第一轮命中的**文件名型**路径
-        # 再派生 `.bak/.zip/.old/…` 变体补一轮。浅扫与框架补充扫描都不做（省请求）。
-        if entries and not shallow and not only_fw and cfg.get("suffix_aware") is not False:
-            extra_jobs = self._suffix_jobs(entries, int(cfg.get("max_paths", 400) or 400))
-            if extra_jobs and not ctx.stopped():
-                ctx.logger.info(f"[dirscan] 后缀派生：对 {len(extra_jobs)} 个变体补扫 …")
-                entries.extend(e for e in pool_run(_hit, extra_jobs, workers=workers) if e)
-        return entries
+        return [e for e in pool_run(_hit, jobs, workers=workers) if e]
 
     @staticmethod
     def _suffix_jobs(entries, cap):
@@ -682,3 +734,107 @@ class DirscanStage(Stage):
                 if len(jobs) >= cap:
                     return jobs
         return jobs
+
+    # ---------- 目录递归（续30，默认关）----------
+
+    @staticmethod
+    def _dir_prefix(root, full, status):
+        """命中条目是**目录型**时返回它的前缀 URL（可继续往下打），否则 `None`。
+
+        判据（三条都是"往下拼路径有意义吗"这一件事）：
+        - 状态码 ∈ `{200, 301, 302, 403}`，与 `_scan::_hit` 的收口一致。
+          `403` 的目录值得递归（"看得见进不去"的目录里常放备份与配置）；
+          `301/302` 是目录补斜杠（`/admin` → `/admin/`）的常见形态，不能一刀切掉；
+          其余状态（404/500/401…）是"不存在或没权限"，递归没有意义。
+        - `path` 在站点根之下、去掉 query/fragment 后**最后一段不含 `.`** ——
+          `/admin`、`/api/v1` 是目录；`/config.php`、`/.env`、`/backup.zip` 是文件，
+          在它们后面拼路径等于请求不存在的路径。
+        - **第一段不以 `.` 开头**：`.git/config`、`.svn/entries`、`.github/...` 的最后一段
+          也不含 `.`，但它们不是"可以爆破了"的目录（`.git` 本身就是要找的目标，
+          不是往里再钻的入口）。这条能挡掉一批纯浪费的递归（每个浪费 = 3 基线 + N 路径）。
+        """
+        if status not in (200, 301, 302, 403):
+            return None
+        root = str(root or "").rstrip("/")
+        full = str(full or "")
+        if not root or not full.startswith(root + "/"):
+            return None
+        rel = full[len(root) + 1:].split("#", 1)[0].split("?", 1)[0].strip("/")
+        if not rel:
+            return None
+        first = rel.split("/", 1)[0]
+        last = rel.rsplit("/", 1)[-1]
+        if not last or "." in last or first.startswith("."):
+            return None
+        return root + "/" + rel
+
+    def _recursive_scan(self, sites, entries, cfg, limits):
+        """对目录型命中再往下打 `recursive_depth` 层（**默认 0 = 关**），返回新命中。
+
+        **为什么必须同时限目录数**：单站浅扫约 153 请求（150 路径 + 3 软 404 基线），
+        一层递归 = `+K × (3 基线 + M)`（K = 递归目录数、M = 每目录路径数）。K=5/M=40 时
+        `+215` 请求，**比第一轮还多** —— 而 K 是"扫出多少个目录"决定的，不受字典大小控制，
+        所以只限深度不限 K 会随命中数线性放大。这里是**三重闸**：
+        层数 `recursive_depth`、每站**跨层累计**目录数 `recursive_max_dirs`、
+        每目录路径数 `recursive_max_paths`（用浅扫精选字典，不是再来一遍大字典）。
+
+        **软 404 基线按基址各算一份**（3 请求/目录）：`_scan` 里的基线缓存键就是基址，
+        递归前缀天然各算各的。这是必须的 —— 子目录常有**自己的**统一跳转页，
+        复用站点根的基线会把子目录下的真实命中整片滤掉（那正是"看起来扫了、其实全是空"）。
+
+        防环：`visited` 记已递归过的前缀（`/a` → `/a/a` → … 靠它和层数上限一起挡住）。
+        """
+        depth = int(cfg.get("recursive_depth", 0) or 0)
+        max_dirs = int(cfg.get("recursive_max_dirs", 5) or 0)
+        max_paths = int(cfg.get("recursive_max_paths", 40) or 0)
+        if depth <= 0 or max_dirs <= 0 or max_paths <= 0:
+            return []
+        ctx = self.ctx
+        paths = self._load_paths("", cfg, layers=_SHALLOW_LAYERS, limit=max_paths)
+        if not paths:
+            ctx.logger.warning("[dirscan] 目录递归：浅扫精选字典为空，跳过")
+            return []
+        # 只对**本轮真实扫过的站点**递归（dirmap 产物行可能带着别的 netloc）。
+        # 同时收站点原始 URL 与它的 origin：probe 存下来的站点可能是带路径的入口
+        # （`http://h/app`），而 dirmap 行的 site_url 一律是 origin（`http://h/`）。
+        roots = set()
+        for s in sites:
+            u = str(s.get("url") or "").rstrip("/")
+            if not u:
+                continue
+            roots.add(u)
+            o = _origin_of(u).rstrip("/")
+            if o:
+                roots.add(o)
+        used, visited = {}, set()
+        frontier, found = list(entries), []
+        for level in range(1, depth + 1):
+            jobs, dirs = [], []
+            for e in frontier:
+                root = str(e.get("site_url") or "").rstrip("/")
+                if not root or root not in roots:
+                    continue
+                if used.get(root, 0) >= max_dirs:
+                    continue
+                prefix = self._dir_prefix(root, e.get("path"), e.get("status"))
+                if not prefix or prefix in visited:
+                    continue
+                visited.add(prefix)
+                used[root] = used.get(root, 0) + 1
+                dirs.append(prefix)
+                jobs.extend((prefix, p, root) for p in paths)
+            if not jobs:
+                break
+            ctx.logger.info(f"[dirscan] 目录递归第 {level} 层：{len(dirs)} 个目录 x "
+                            f"{len(paths)} 条浅扫字典 = {len(jobs)} 个请求 …")
+            if ctx.stopped():
+                ctx.logger.warning("[dirscan] 任务已请求停止，中止目录递归")
+                break
+            frontier = self._scan(jobs, limits)
+            if not frontier:
+                break
+            found.extend(frontier)
+        if found:
+            ctx.logger.info(f"[dirscan] 目录递归新增 {len(found)} 条"
+                            f"（共递归 {len(visited)} 个目录，上限 {max_dirs} 个/站）")
+        return found

@@ -211,6 +211,17 @@
     <label>框架补充扫描额度（dirmap 的 <code>-e</code> 只认 php/jsp/asp，喂不进框架字典，
       故 dirmap 跑完后按这个条数补一轮"框架 + 暴露面"；填 <code>0</code> 关闭）
       <input name="dirscan_fw_max_paths" value="{{ s.dirscan.fw_max_paths }}"></label>
+    <label>目录递归层数（深扫专用，<code>0</code> = 关闭。对命中的<b>目录</b>再往下打一层浅扫精选字典）
+      <input name="dirscan_recursive_depth" value="{{ s.dirscan.recursive_depth }}"></label>
+    <label>每站点最多递归多少个目录（<b>所有层合计</b>；目录数由"扫出多少目录"决定，
+      不填上限会让请求量随命中数放大）
+      <input name="dirscan_recursive_max_dirs" value="{{ s.dirscan.recursive_max_dirs }}"></label>
+    <label>每个递归目录再打多少条浅扫精选字典
+      <input name="dirscan_recursive_max_paths" value="{{ s.dirscan.recursive_max_paths }}"></label>
+    <p class="muted small">目录递归只在<b>深扫</b>（<code>mode=deep</code> 或建任务勾「全目录深扫」）
+      里生效。请求量估算：一层递归 ≈ <code>+目录数 ×（3 个软 404 基线 + 每目录条数）</code>，
+      默认 5 目录 × 40 条时约 <b>+215</b> 请求/站（单站浅扫本身约 153）——
+      每个递归目录都会<b>单独</b>探一次软 404 基线，否则子目录自己的统一跳转页会把真实命中全滤掉。</p>
     <p class="muted small">目录扫描只对<b>不重复站点</b>跑（同任务内标题+长度相同的别名站跳过），
       目录结果里<b>重复响应长度默认不显示</b>；dirmap 放在 <code>tools/dirmap/</code> 时会自动优先用它，
       找不到就回退内置扫描。</p>

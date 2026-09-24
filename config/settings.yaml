@@ -84,6 +84,11 @@ dirscan:
   suffix_aware: true
   # 框架补充扫描额度（dirmap 的 -e 吃不下自定义字典，用它把框架/暴露面字典补上；0 = 关闭）
   fw_max_paths: 150
+  # 目录递归（深扫专用，**默认关**）：对目录型命中再往下打一层浅扫精选字典。
+  # 三个键必须一起看 —— 单站浅扫约 153 请求，一层递归 = +目录数×(3 基线 + 每目录路径数)。
+  recursive_depth: 0        # 层数上限，0 = 关闭
+  recursive_max_dirs: 5     # 每站点**所有层合计**最多递归多少个目录
+  recursive_max_paths: 40   # 每个递归目录再打多少条浅扫精选字典
 vulnscan:
   enabled: true
 screenshot:

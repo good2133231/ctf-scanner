@@ -944,7 +944,47 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ② 鉴权加固（多用户 / CSRF / HTTPS 部署指引 —— 当前刻意**仅限本机使用**）；
        ③ 分布式节点（**前置条件：先替换 SQLite**）；
        ④ 工具版本管理（一键下载 / 更新 subfinder · httpx · puredns）。
-       另：目录递归爬取 / 重写 dirmap 等价字典引擎 / 运行时联网下载字典 —— 刻意不做或需单独立项。
+       另：「目录递归爬取」已于 **续30 落地**（见下方续30 块）；重写 dirmap 等价字典引擎 /
+       运行时联网下载字典 —— 刻意不做或需单独立项。
+
+------
+（续30：目录递归爬取）实施者：Trae · DeepSeek-V4.1-Flash
+触发：用户先问「现在还有什么代办」，再在选项里选定「目录递归爬取」，并确认三点
+     （自研内置递归 / 默认关显式开 / 保守额度 1 层·5 目录·40 路径）。上方「[待办] …另：目录递归爬取
+     ……刻意不做」与旧批次 5 清单里的该项**就此作废**（只追加，不改历史行）。
+
+[完成] 1、上一段文字里"目录递归爬取 —— 刻意不做"的前提是错的：roadmap 说"dirmap 会递归"，
+       实际 `tools/dirmap/dirmap.conf` 里 `conf.recursive_scan = 0`（关），且它的触发条件只有 `[301,403]`
+       （200 的目录反而不递归）、深度仅靠 `recursive_scan_max_url_length=60` 兜底、只在装了 dirmap
+       的机器上生效 —— **真正的缺口是内置引擎完全没有递归**（无 dirmap / `--offline` /
+       dirmap 无结果回退时的常态）。故本轮走自研，**刻意不打开** dirmap 自带递归（保持 0 不动）。
+[完成] 2、scanner/stages/dirscan.py：`_dir_prefix`（目录型判定：status ∈ {200,301,302,403} +
+       路径最后一段不含 `.` + **第一段不以 `.` 开头**，挡掉 `.git/config` 这类纯浪费）+
+       `_recursive_scan`（三重闸：`recursive_depth` / `recursive_max_dirs` 每站**跨层累计** /
+       `recursive_max_paths`；字典用浅扫精选那份；`used` 计数 + `visited` 防环）+
+       把软 404 基线与命中提取抽成 `_scan(jobs, limits)` 复用（`jobs` 为 `(基址, 相对路径, 站点根)`
+       三元组 —— 请求要打到子目录，但入库 `site_url` **必须仍是站点根**，它是折叠/跨运行去重/
+       启发式分组的数据身份）。递归挂在 `run()` 里、对内置与 dirmap 补充扫描一视同仁
+       （挂进 `_builtin_scan` 会让"装了 dirmap 的机器反而没有递归"）。
+       限"目录数"不能省：单站浅扫 ≈153 请求，一层递归 = +K×(3 基线 + M)，K 由"扫出多少个目录"
+       决定、**不受字典大小控制**，K=5/M=40 时 +215 请求比第一轮还多。
+[完成] 3、配置三方一致：config.DEFAULTS.dirscan 三键（默认 0/5/40）+ config/settings.yaml +
+       GUI 策略页三个数字框（含请求量估算说明）+ 建任务表单复选框「目录递归（一层）」+
+       CLI `--recursive-dir`（与 GUI 同语义：自动带上 `dirscan_full` 与 `dirscan` 阶段）。
+[完成] 4、测试：tests/smoke.py `[6r]`（默认关零请求零读字典 / 目录型判定 10 组 / 每前缀独立软 404 基线 /
+       site_url 仍是站点根 / 目录数与每目录路径数上界「3×(3+1)=12 个请求」/ max_dirs 跨层累计 /
+       层数 / 重复目录只递归一次 / 任务级勾选覆盖策略且不原地改全局 / GUI 与建任务路由）。
+       变异证伪 3/3 全部被击杀（去掉目录数上界 → 10 个目录全递归；递归轮复用站点根基线 → 请求打回根；
+       `site_url` 写成请求基址 → 站点根断言挂）。
+[完成] 5、**测试抓到并修掉一处真缺陷**（gui/app.py::api_task_create）：补阶段的循环原先只读**表单字段**
+       `dirscan_full`，而勾「目录递归」是直接把 `dirscan_full` 写进 `options` 的 —— 表单里并没有这个
+       字段名，于是"勾了递归却连 `dirscan` 阶段都不跑"（递归静默失效，跑完什么都没有，看起来像功能坏了）。
+       改为按**生效选项**（`options` 或表单）判定，与 cli/client.py 原有的写法一致。
+[完成] 6、文档同步：AGENTS.md（§8 dirscan 条 + 配置键清单 + smoke 清单）、docs/roadmap.md
+       （「目录递归爬取」转 [x]）、docs/pipeline.md（⑦ 段 + 配置表三键）、docs/usage.md
+       （CLI `--recursive-dir` + 策略页说明）、TODO.md、CHANGELOG_AI.md、config/settings.yaml 注释。
+[未做] 7、残留（如实标注）：本次**没有**在真实授权目标上跑过递归（需用户指定目标）；
+       `docs/roadmap.md` 里「目录递归爬取」之外的另两条（重写字典引擎 / 联网下载字典）仍不做。
 [待办] 「dirmap 若将来要内联进仓库，先修它自身那几个问题」（1 处 [待办]）：用户已交由其他 AI 负责。
 [待办] flow 的 JS / 循环 / 带参数引用、workflow 的 subtemplates / args、dsl 表达式、oob 反连：
        仍显式标 unsupported（不静默失效），见 docs/poc-guide.md。

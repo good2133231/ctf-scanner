@@ -139,7 +139,7 @@ ctf-scanner/
 │                          #   → config/dicts/tlds.txt（含 `co.uk`/`com.cn` 等多段后缀）；用法：py -3 tools/import_tlds.py --force
 │                          #   tldextract 是**生成期可选依赖**，不进 requirements.txt；运行时只读生成好的 tlds.txt
 ├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
-├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/**ssrf/shodan/quake/ctlog**/blacklist/**intel/heuristic/github** 二十三段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
+├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/**ssrf/shodan/quake/ctlog**/blacklist/**intel/heuristic/github** 二十三段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
 │                          #   注：原文写「十八段」且漏列 ssrf/shodan/quake/ctlog，与 GUI 实际覆盖的段数不符，
 │                          #   2026-09-24（续26）按 config/settings.yaml 实测更正为 **23 段**（tools/dicts/http 不可从页面改）
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
@@ -361,6 +361,16 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   上次原因转存日志 / 无断点回退要明说 / GUI 拒绝无断点与运行中、
                             #   放行时 `resume=True` 且**剥掉 `append*`**（否则输入被收窄成空集）
                             #   注：`[6d]` 原 `current_stage == ""` 是空洞断言，已改为"对账保留断点"
+# 2026-09-25 续30 新增 `[6r]`：**目录递归** —— 默认关零请求零读字典 / 目录型判定
+                            #   （状态收口 200·301·302·403 + 剥 query/fragment + 文件型与**点目录**
+                            #   `.git/config` 不递归 + 站点根之外不递归）/ 每前缀**独立**软 404 基线 /
+                            #   入库 `site_url` 仍是站点根 / 目录数与每目录路径数上界（请求量 = K×(3+M)，
+                            #   10 个目录只递归 3 个、每目录只打 1 条 → 恰好 12 个请求）/ `max_dirs`
+                            #   是**跨层累计**（第 1 层用满则第 2 层一个都不发）/ 层数 / 同一目录重复命中
+                            #   只递归一次 / 任务级 `recursive_dir` 可覆盖策略且**不原地改全局** /
+                            #   GUI 勾选 + 策略页三键 + 建任务路由自动补 `dirscan_full` 与 dirscan 阶段
+                            #   （此处抓到真缺陷：补阶段循环原先只读表单字段，而 `recursive_dir` 是直接写
+                            #   进 options 的 → 勾了递归却连 dirscan 阶段都不跑；已改为按生效 options 判）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -479,7 +489,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
 - GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
   takeover/portscan/jsmine/dirscan/vulnscan/screenshot/cert/iprecon/fofa/**ssrf/shodan/quake/ctlog**/
-  blacklist/intel/heuristic/**github** **二十三段**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned）
+  blacklist/intel/heuristic/**github** **二十三段**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned）
   （含按级别 / 按 OWASP 分类 /
   按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
   于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭；
@@ -642,7 +652,20 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   两档都有的节流：只扫**不重复站点**（同任务内标题+长度相同的别名站跳过）。
   **补扫任务**（`POST /api/rescan`，名字 `补扫全目录-<月日>-<时分秒>`）只跑一个阶段，
   没有 probe 产物 → 用 `dirscan._sites_from_targets(ctx)` 从 `ctx.targets` 兜底，否则会"无存活站点"空跑。
-  **本轮明确不做**：递归目录爬取 / 重写 dirmap 等价多语言字典引擎 / 运行时自动下载字典（见 `TODO.md`）。
+  **目录递归（续30，默认关）**：`dirscan.recursive_depth=0`；深扫时对**目录型命中**
+  （status ∈ {200,301,302,403}、路径最后一段不含 `.`、**第一段不以 `.` 开头**）继续往下打，
+  字典用浅扫精选那份截断到 `recursive_max_paths`（默认 40）。**三重闸**：
+  层数 `recursive_depth`、每站**跨层累计**目录数 `recursive_max_dirs`（默认 5）、每目录路径数。
+  限目录数不能省 —— 一层递归 `+K×(3 软404基线 + M)`，K 由"扫出多少个目录"决定、不受字典大小控制
+  （K=5/M=40 时 +215 请求，比第一轮 153 还多）。软 404 基线**按基址各算一份**（子目录有自己的
+  统一跳转页，复用根基线会把子目录下的真实命中整片滤掉）；入库 `site_url` **仍是站点根**
+  （它是折叠/跨运行去重/启发式分组的数据身份，写成子目录会把一个站点拆成十几行）。
+  递归放在 `run()` 里对两种产物（内置 / dirmap 的 `only_fw` 补充）一视同仁 ——
+  挂进 `_builtin_scan` 会让"装了 dirmap 的机器反而没有递归"。任务级勾选 `recursive_dir`
+  只本次生效且**自动带上 `dirscan_full`**；策略里填了更大的层数就按策略走。
+  刻意**不打开** dirmap 自带的 `conf.recursive_scan`（其触发条件只有 `[301,403]`、深度靠
+  URL 长度 60 兜底，与上面的额度不可预测地叠加）。
+  **本轮明确不做**：重写 dirmap 等价多语言字典引擎 / 运行时自动下载字典（见 `TODO.md`）。
 - **FOFA 三种反查已于 2026-09-22 真实跑过**（key 已配）：
   `title="维保中心"` → 15 条（正常拓展）；`cert="example.com"` → **2 164 696 条** →
   被 `is_common_cert` 判为通用证书而放弃拓展（**这条真实数据就是阈值存在的意义**：

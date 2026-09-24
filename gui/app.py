@@ -306,8 +306,19 @@ def create_app():
         # 不改全局策略）。用户很容易只勾了全量却忘勾对应阶段，那样勾选就等于白勾 ——
         # 这里自动把对应阶段补进来，并在响应里如实告知，避免"勾了没用"的错觉。
         auto_stages = []
+        # 「目录递归」（续30）是深扫的附属能力（浅扫不递归），所以勾了它就等于点名要深扫 ——
+        # 先把 `dirscan_full` 落上，后面这个循环自然会连 `dirscan` 阶段一起补。
+        # 不这么做的话，勾了「目录递归」而没勾「全目录深扫」会**静默不递归**（跑完什么也没有，
+        # 看起来像功能坏了）。
+        if str(data.get("recursive_dir", "")).lower() in ("1", "true", "on"):
+            options["recursive_dir"] = True
+            options["dirscan_full"] = True
         for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan")):
-            if str(data.get(flag, "")).lower() not in ("1", "true", "on"):
+            # 判据是**生效选项**（options）或表单字段 —— 上面「目录递归」会直接把
+            # `dirscan_full` 写进 options，而表单里并没有这个字段名；只看表单会漏掉它，
+            # 结果是"任务里没有 dirscan 阶段"：勾了递归却连目录扫都不跑（静默失效）。
+            if options.get(flag) is not True \
+                    and str(data.get(flag, "")).lower() not in ("1", "true", "on"):
                 continue
             options[flag] = True
             if stage not in stages:
@@ -1313,7 +1324,14 @@ def create_app():
                                 "big_dict": f.get("dirscan_big_dict") == "1",
                                 "tech_aware": f.get("dirscan_tech_aware") == "1",
                                 "max_paths": int(f.get("dirscan_max_paths", 400) or 400),
-                                "fw_max_paths": int(f.get("dirscan_fw_max_paths", 150) or 0)},
+                                "fw_max_paths": int(f.get("dirscan_fw_max_paths", 150) or 0),
+                                # 目录递归（续30，默认关）：0 = 关闭
+                                "recursive_depth": int(
+                                    f.get("dirscan_recursive_depth", 0) or 0),
+                                "recursive_max_dirs": int(
+                                    f.get("dirscan_recursive_max_dirs", 5) or 0),
+                                "recursive_max_paths": int(
+                                    f.get("dirscan_recursive_max_paths", 40) or 0)},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
                     # 站点截图（可选，默认关）：无头 Edge/Chrome
                     "screenshot": {"enabled": f.get("screenshot_enabled") == "1",

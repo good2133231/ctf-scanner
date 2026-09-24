@@ -259,6 +259,22 @@
 - **后缀派生**（`dirscan.suffix_aware`，默认开，**仅 deep**，借鉴 dirmap 的备份文件扩展）：
   对命中的**文件名型**路径再派生 `.bak` / `.zip` / `.tar.gz` / `.rar` / `.old` / `~` / `.swp` /
   `.copy` / `.save` / `.txt` 变体，去重后占用同一份 `max_paths` 额度（`_suffix_jobs`）；
+- **目录递归**（`dirscan.recursive_depth`，**默认 0 = 关**，**仅 deep**，续30）：对**目录型命中**
+  继续往下打 `recursive_depth` 层。目录型判据（`_dir_prefix`）：status ∈ {200,301,302,403}、
+  路径去掉 query/fragment 后**最后一段不含 `.`**、且**第一段不以 `.` 开头**
+  （`.git/config`、`.svn/entries` 的最后一段也不含 `.`，但它们不是"可以爆破了"的目录）。
+  递归轮只吃**浅扫精选字典**（截断到 `recursive_max_paths`，默认 40），不是再来一遍大字典。
+  **三重闸**：`recursive_depth`（层数）/ `recursive_max_dirs`（每站**所有层合计**最多递归几个目录，
+  默认 5）/ `recursive_max_paths`。限目录数不能省 —— 一层递归 = `+K×(3 软404基线 + M)`，
+  K 由"扫出多少个目录"决定、**不受字典大小控制**（K=5/M=40 时 +215 请求，比第一轮 153 还多）。
+  两个容易写错的地方：① 软 404 基线**按基址各算一份**（子目录常有**自己的**统一跳转页，
+  复用站点根的基线会把子目录下的真实命中整片滤掉）；② 入库的 `site_url` **仍是站点根**
+  （它是折叠 / 跨运行去重 / 启发式分组的数据维度，写成子目录会把一个站点拆成十几行）。
+  递归放在 `run()` 里、对内置扫描与 dirmap 的补充扫描**一视同仁**（挂进 `_builtin_scan`
+  会让"装了 dirmap 的机器反而没有递归"）。任务级勾选 `recursive_dir`（GUI 复选框 / CLI
+  `--recursive-dir`）只本次生效，且**自动带上 `dirscan_full` 与 `dirscan` 阶段**。
+  刻意**不打开** dirmap 自带的 `conf.recursive_scan`：它只对 `[301,403]` 递归、深度靠
+  `recursive_scan_max_url_length=60` 兜底，与上面这套额度不可预测地叠加（保持 `0` 不动）；
 - 字典文件（`config/dicts/`）：`dirs_shallow`（浅扫专用，206 条，按价值排序）/
   `dirs_big`（全量）/ `dirs_common` / `dirs_jsp` / `dirs_php` / `dirs_asp` /
   框架桶 12 份 / `dirs_exposure`，另保留 `dirs_small`（55 条，快速档）；
@@ -454,6 +470,9 @@ logs/task_1_mytask/
 | dirscan.enabled | **true** | **阶段级**开关：目录/路径发现整阶段开关（关掉连请求都不发）。**默认开，但只跑浅扫**（见下一行 `dirscan.mode`） |
 | dirscan.mode / quick_max_paths | quick / 150 | `quick` = 只吃 `dicts.dirs_shallow`（精选敏感路径）；`deep` = 全量分层字典 + dirmap + 后缀派生。任务选项 `dirscan_full=true` 把单任务强制成 deep |
 | dirscan.suffix_aware | true | 深扫专用：对命中的文件名型路径派生 `.bak`/`.zip`/`.old` 等备份变体（额度同 `max_paths`） |
+| dirscan.recursive_depth | **0（关）** | 深扫专用：对命中的**目录型**路径再往下打几层。任务选项 `recursive_dir=true` 至少开 1 层（策略填了更大的值按策略走） |
+| dirscan.recursive_max_dirs | 5 | 每个站点在**所有递归层合计**最多递归几个目录（不是每层各算一份）。限"目录数"不能省：K 由扫出多少个目录决定，不受字典大小控制 |
+| dirscan.recursive_max_paths | 40 | 每个递归目录再打多少条**浅扫精选**字典（不是再来一遍大字典） |
 | dirscan.tech_aware | true | 按 `sites.tech` 选字典：Java 站只吃 jsp+common，PHP 站只吃 php+common |
 | dirscan.big_dict / max_paths | true / 400 | 未知栈时用全量字典；单站点最多扫多少条（硬节流） |
 | portscan.mode / full_ports | top / 1-65535 | `full` 走全端口；也可由任务选项 `portscan_full` 单次触发 |

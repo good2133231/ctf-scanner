@@ -17,6 +17,7 @@ python cli/client.py -t <单目标> [选项]
 | `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,cert,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic,github`（**共 13 个**，默认全部；`takeover`/`jsmine`/`dirscan`/`vulnscan` 策略级默认开，`portscan`/`cert`/`screenshot`/`osint`/`intel`/`heuristic`/`github` 另受策略级开关约束，见下。**显式点名 `cert` / `screenshot` 会落任务级 `cert_on`/`screenshot_on`，只对本次生效**；不写 `-p` 时不会偷偷打开这两个默认关的阶段） |
 | `--full-ports` | **本次任务**端口走全端口 `1-65535`（等价 GUI 任务选项 `portscan_full`）；选了却没把 `portscan` 写进 `-p` 时**自动补上该阶段** |
 | `--full-dir` | **本次任务**目录走深扫：全量分层字典 + dirmap + 后缀派生（等价 GUI 任务选项 `dirscan_full`）；同样自动补 `dirscan` 阶段 |
+| `--recursive-dir` | **本次任务**开启**目录递归**：深扫时对命中的目录再往下打一层（等价 GUI 任务选项 `recursive_dir`）；勾它就等于点名要深扫，会**自动带上 `dirscan_full` 并补 `dirscan` 阶段**。额度见策略 `dirscan.recursive_depth` / `recursive_max_dirs` / `recursive_max_paths`（默认 1 层 / 5 目录 / 40 条，约 +215 请求/站） |
 | `--offline` | 离线模式：不调用 subfinder/puredns/httpx/dirmap，仅内置实现 |
 | `-H, --header '名称: 值'` | **本次任务的登录态请求头**，可重复（如 `-H "Authorization: Bearer xxx"`）；只发给**目标侧**，第三方接口（crt.sh / FOFA / KEV / IP 反查）不带；非法行**打印原因并退出码 1**（不静默丢弃） |
 | `--cookie COOKIE` | 本次任务的 Cookie（等价 `-H "Cookie: ..."`），用于扫"登录后才存在"的资产（`/admin`、业务接口、需要会话的 POC） |
@@ -250,8 +251,11 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
      **探测强度 `dirscan.mode`**：`quick` = 只吃精选敏感路径字典 `dicts.dirs_shallow`（约 150 条/站，
      额度 `dirscan.quick_max_paths` 默认 150），`deep` = 全量分层字典 + dirmap + 后缀派生
      （`dirscan.suffix_aware` 默认开，对命中的文件名型路径派生 `.bak`/`.zip`/`.old` 等备份变体）；
-     `dirscan.big_dict`（15333 条）只影响深扫；深扫单站点条数上限 `dirscan.max_paths`（默认 400）与
-     框架补充扫描额度 `dirscan.fw_max_paths`（默认 150，填 0 关））这几类的开关与上限；
+     `dirscan.big_dict`（15333 条）只影响深扫；深扫单站点条数上限 `dirscan.max_paths`（默认 400）、
+     框架补充扫描额度 `dirscan.fw_max_paths`（默认 150，填 0 关），以及**目录递归**三键
+     `recursive_depth`（默认 0 = 关）/ `recursive_max_dirs`（5）/ `recursive_max_paths`（40）。
+     递归只对**目录型命中**生效（`/admin` 而非 `/config.php`），且**只在深扫档**；
+     建任务勾「目录递归（一层）」或 CLI `--recursive-dir` 可对**本次任务**打开（不改全局策略））这几类的开关与上限；
    - **外部情报拓展（OSINT）**（`osint`）：`iprecon`（C 段反查开关 / 接口地址 / IP 上限 / 主机上限 /
      单 IP 域名上限 / 并发 / 超时）与 `fofa`（favicon 反查开关 / 站点上限 / 资产上限 /
      并发 / 黑 ico 阈值 / **证书反查子开关 `cert_enabled`** / **通用证书阈值 `cert_threshold`** /

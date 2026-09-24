@@ -4700,6 +4700,164 @@ workflows:
           "沿用同一任务与日志、不清资产、error 按本次清空且上次原因转存日志 / 无断点回退要明说 / "
           "GUI 拒绝无断点与运行中、放行时 resume=True 且剥掉 append*")
 
+    # [6r] 续30 目录递归（**默认关**）：三重闸（层数 / 每站跨层累计目录数 / 每目录路径数）+
+    #      每前缀**独立**软 404 基线 + 入库 site_url 仍是站点根。
+    #      为什么目录数上界与层数同等重要：单站浅扫 ≈153 请求（150 路径 + 3 基线），
+    #      一层递归 = +K×(3 基线 + M)，K 是"扫出多少个目录"决定的、**不受字典大小控制** ——
+    #      只限深度不限 K，请求量会随命中目录数线性放大（K=5/M=40 时 +215，比第一轮还多）。
+    _dp30 = DirscanStage._dir_prefix
+    # 1) 目录型判定：只有"在它后面拼路径有意义"的命中才递归
+    assert _dp30("http://h", "http://h/admin", 200) == "http://h/admin"
+    assert _dp30("http://h/", "http://h/api/v1", 301) == "http://h/api/v1"
+    assert _dp30("http://h", "http://h/secret/", 403) == "http://h/secret", "403 目录也要递归"
+    assert _dp30("http://h", "http://h/api?x=1#f", 200) == "http://h/api", "query/fragment 必须剥掉"
+    # 与 `_scan::_hit` 的状态收口一致：其余状态根本进不了结果集，更不该被递归
+    for _s30 in (404, 500, 401, 204):
+        assert _dp30("http://h", "http://h/admin", _s30) is None, _s30
+    assert _dp30("http://h", "http://h/index.php", 200) is None, "文件型路径后面拼路径没意义"
+    assert _dp30("http://h", "http://h/.env", 200) is None
+    assert _dp30("http://h", "http://h/.git/config", 200) is None, \
+        "点目录不是可爆破目录（每个纯浪费 = 3 基线 + N 路径）"
+    assert _dp30("http://h", "http://h/", 200) is None, "站点根自身不是递归目标"
+    assert _dp30("http://h", "http://other/x", 200) is None, "站点根之外的条目不递归"
+
+    _sent30, _layers30 = [], []
+    _orig_http30, _orig_lp30 = _ds_mod.http_request, DirscanStage._load_paths
+    _PATHS30 = ["config.php", "sub"]        # `sub` 故意是目录型，用来验证"第二层"
+
+    def _fake_http30(u, **k):
+        _sent30.append(u)
+        if "ctfscan-none" in u:            # 软 404 基线（长度 1，与真实命中区分开）
+            return {"status": 200, "length": 1, "text": "base:" + u, "content": b"b"}
+        return {"status": 200, "length": 200, "text": "hit:" + u, "content": b"h"}
+
+    def _fake_lp30(self, kind, cfg, fw="", layers=None, limit=None):
+        # 真 `_load_paths` 的 limit 就是"截断到多少条"，这里如实模拟 ——
+        # 否则 recursive_max_paths 那条断言是空过的（桩忽略 limit 就永远 2 条）
+        _layers30.append(tuple(layers or ()))
+        return _PATHS30[:int(limit)] if limit else list(_PATHS30)
+
+    _st30 = DirscanStage(dstage.ctx)         # 复用 [5g] 建好的 ctx（task_id / settings 都齐）
+    _sites30 = [{"url": "http://h.test/", "tech": "", "title": "", "length": None}]
+    _dir30 = {"site_url": "http://h.test", "path": "http://h.test/admin", "status": 200,
+              "length": 10, "method": "GET", "note": "builtin", "title": ""}
+    _ds_mod.http_request, DirscanStage._load_paths = _fake_http30, _fake_lp30
+    try:
+        # 2) 默认关（recursive_depth=0）：连字典都不读、**一个请求都不发**
+        _sent30.clear()
+        assert _st30._recursive_scan(_sites30, [_dir30], {"recursive_depth": 0}, {}) == []
+        assert _sent30 == [] and _layers30 == [], f"关闭时必须是零请求零读字典：{_sent30}"
+
+        # 3) 真递归一层：请求打到**子目录**，且软 404 基线是**该子目录自己**的一份
+        _sent30.clear()
+        _out30 = _st30._recursive_scan(_sites30, [_dir30],
+                                       {"recursive_depth": 1, "recursive_max_dirs": 5,
+                                        "recursive_max_paths": 40}, {})
+        _base30 = [u for u in _sent30 if "ctfscan-none" in u]
+        _hit30 = [u for u in _sent30 if "ctfscan-none" not in u]
+        assert sorted(_hit30) == ["http://h.test/admin/config.php", "http://h.test/admin/sub"], _hit30
+        assert len(_base30) == 3 and all(u.startswith("http://h.test/admin/") for u in _base30), \
+            f"基线必须按**前缀**各算一份（子目录有自己的统一跳转页，复用根基线会整片误杀）：{_base30}"
+        assert all(tuple(_ds_mod._SHALLOW_LAYERS) == l for l in _layers30), \
+            f"递归轮只吃浅扫精选字典（不是再来一遍大字典）：{_layers30}"
+        assert _out30 and {e["site_url"] for e in _out30} == {"http://h.test"}, \
+            f"入库的 site_url 必须仍是**站点根**（折叠/跨运行去重/启发式分组的数据身份）：{_out30}"
+        assert {e["path"] for e in _out30} == set(_hit30), _out30
+
+        # 4) 请求量模型：目录数上界 × 每目录路径数，基线按目录各一份
+        #    （10 个目录只递归 recursive_max_dirs 个；每目录只打 recursive_max_paths 条）
+        _sent30.clear()
+        _many30 = [{"site_url": "http://h.test", "path": f"http://h.test/d{i}", "status": 200,
+                    "length": 10, "method": "GET", "note": "builtin", "title": ""}
+                   for i in range(10)]
+        _st30._recursive_scan(_sites30, _many30,
+                              {"recursive_depth": 1, "recursive_max_dirs": 3,
+                               "recursive_max_paths": 1}, {})
+        _dirs30 = {u.rsplit("/", 1)[0] for u in _sent30 if "ctfscan-none" not in u}
+        assert _dirs30 == {"http://h.test/d0", "http://h.test/d1", "http://h.test/d2"}, _dirs30
+        assert len([u for u in _sent30 if "ctfscan-none" in u]) == 9, "基线 = 3 × 目录数"
+        assert len(_sent30) == 12, \
+            f"总请求量上界 = 目录数 ×（3 基线 + 每目录条数）= 3×(3+1)：{sorted(_sent30)}"
+
+        # 5) 层数：depth=2 时对第一层新命中的**目录型**条目继续往下打
+        _sent30.clear()
+        _st30._recursive_scan(_sites30, [_dir30],
+                              {"recursive_depth": 2, "recursive_max_dirs": 2,
+                               "recursive_max_paths": 40}, {})
+        assert "http://h.test/admin/sub/sub" in _sent30, sorted(_sent30)
+        # 而 max_dirs 是"**所有层合计**"：第 1 层就把它用满时，第 2 层一个请求都不许发
+        _sent30.clear()
+        _st30._recursive_scan(_sites30, [_dir30],
+                              {"recursive_depth": 2, "recursive_max_dirs": 1,
+                               "recursive_max_paths": 40}, {})
+        assert not [u for u in _sent30 if "/admin/sub/" in u], \
+            f"max_dirs 是跨层累计，第 1 层用满即止：{sorted(_sent30)}"
+        assert len([u for u in _sent30 if "ctfscan-none" in u]) == 3, "只剩第 1 层那份基线"
+
+        # 6) 防重复：同一目录被重复命中只递归一次（否则白付一份基线 + 一遍字典）
+        _sent30.clear()
+        _st30._recursive_scan(_sites30, [_dir30, dict(_dir30)],
+                              {"recursive_depth": 1, "recursive_max_dirs": 5,
+                               "recursive_max_paths": 1}, {})
+        assert len(_sent30) == 4, f"3 基线 + 1 路径：{sorted(_sent30)}"
+    finally:
+        _ds_mod.http_request, DirscanStage._load_paths = _orig_http30, _orig_lp30
+
+    # 7) 接线：任务级「目录递归」勾选 = 本次强制开（策略关着也生效，且**不原地改全局策略**）；
+    #    没勾就按策略（默认关）。递归是深扫的附属能力，所以放在 `run()` 里对两种产物一视同仁
+    #    （挂进 `_builtin_scan` 会让"装了 dirmap 的机器反而没有递归"）。
+    assert int((settings.get("dirscan") or {}).get("recursive_depth", -1)) == 0, \
+        "本用例前提：策略里目录递归是**默认关**的"
+    _orig_bs30, _orig_rs30 = DirscanStage._builtin_scan, DirscanStage._recursive_scan
+    _cap30 = {}
+    _fake_ent30 = [dict(_dir30)]
+    DirscanStage._builtin_scan = lambda self, sites, cfg, limits, shallow=False, only_fw=False: \
+        list(_fake_ent30)
+    DirscanStage._recursive_scan = lambda self, sites, entries, cfg, limits: _cap30.update(cfg) or []
+    _run30 = db.create_task("smoke-rec-override", targets, ["dirscan"],
+                            {"dirscan_full": True, "offline": True, "recursive_dir": True})
+    try:
+        DirscanStage(StageContext(_run30, "smoke-rec-on", parse_lines([targets]), ["dirscan"],
+                                  {"dirscan_full": True, "offline": True, "recursive_dir": True},
+                                  settings, Path(_TMPDIR) / "rec30", rec)).run()
+        assert int(_cap30.get("recursive_depth", 0)) >= 1, \
+            f"任务级勾了「目录递归」就必须至少一层（策略关着也得放行）：{_cap30}"
+        assert int(settings["dirscan"]["recursive_depth"]) == 0, "只本次生效，不得原地改全局策略"
+        _cap30.clear()
+        DirscanStage(StageContext(_run30, "smoke-rec-off", parse_lines([targets]), ["dirscan"],
+                                  {"dirscan_full": True, "offline": True}, settings,
+                                  Path(_TMPDIR) / "rec30b", rec)).run()
+        assert int(_cap30.get("recursive_depth", 0)) == 0, "没勾就该按策略走（默认关）"
+    finally:
+        DirscanStage._builtin_scan, DirscanStage._recursive_scan = _orig_bs30, _orig_rs30
+        db.delete_task(_run30, backup=False)
+
+    # 8) GUI 可见性 + 建任务路由：勾「目录递归」必须**自动带上深扫**（否则勾了静默不递归，
+    #    看起来像功能坏了）；三个额度必须能在策略页改
+    assert 'name="recursive_dir"' in c.get("/tasks").get_data(as_text=True), "建任务表单缺勾选"
+    _set_html30 = c.get("/settings").get_data(as_text=True)
+    for _k30 in ("dirscan_recursive_depth", "dirscan_recursive_max_dirs",
+                 "dirscan_recursive_max_paths"):
+        assert f'name="{_k30}"' in _set_html30, f"策略页缺 {_k30}"
+    _orig_run30 = gui_app.run_task
+    gui_app.run_task = lambda *a, **kw: None
+    try:
+        _j30 = c.post("/api/tasks", data={"name": "smoke-rec-route", "targets": targets,
+                                         "stages": ["probe"], "recursive_dir": "1"}).get_json()
+        _t30 = db.get_task(_j30["id"])
+        assert '"recursive_dir": true' in _t30["options"], _t30["options"]
+        assert '"dirscan_full": true' in _t30["options"], \
+            "勾「目录递归」必须自动补上深扫（递归只在深扫里生效），否则勾了没反应"
+        assert _t30["stages"].split(",") == ["probe", "dirscan"], _t30["stages"]
+        assert _j30["auto_stages"] == ["dirscan"], _j30
+        db.delete_task(_j30["id"], backup=False)
+    finally:
+        gui_app.run_task = _orig_run30
+
+    print("[6r] 续30 目录递归 ok: 默认关零请求 / 目录型判定（状态收口+剥 query+文件与点目录不递归）/ "
+          "每前缀独立软404基线 / site_url 仍是站点根 / 目录数与每目录路径数上界（请求量=K×(3+M)）/ "
+          "跨层累计 max_dirs / 层数 / 重复目录只递归一次 / 任务级勾选可覆盖策略且不改全局 / GUI 与路由")
+
     print("SMOKE PASS")
 
 

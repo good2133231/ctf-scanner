@@ -62,6 +62,9 @@ def main():
     ap.add_argument("--full-dir", action="store_true",
                     help="本次任务目录走深扫：全量分层字典 + dirmap + 后缀派生"
                          "（等价 GUI 任务选项 dirscan_full）")
+    ap.add_argument("--recursive-dir", action="store_true",
+                    help="本次任务开启**目录递归**：对命中的目录再往下打一层（等价 GUI 任务选项 "
+                         "recursive_dir + dirscan_full；额度见策略 dirscan.recursive_*）")
     ap.add_argument("--report", metavar="PATH", help="结束后生成 Markdown 报告到指定路径")
     ap.add_argument("--report-html", metavar="PATH", help="结束后生成 HTML 报告（自包含单文件）")
     ap.add_argument("--report-pdf", metavar="PATH",
@@ -132,6 +135,11 @@ def main():
     if args.full_ports:
         options["portscan_full"] = True
     if args.full_dir:
+        options["dirscan_full"] = True
+    # 目录递归只存在于**深扫**里（浅扫不递归），所以勾它就等于点名要深扫 ——
+    # 与 GUI 建任务同一套处理（`gui/app.py` 的 `api_task_create`）。
+    if args.recursive_dir:
+        options["recursive_dir"] = True
         options["dirscan_full"] = True
     # 与 GUI 建任务一致：选了全量档却没把对应阶段写进 -p 时**自动补上**（否则勾了等于白勾）。
     # `run_task` 按给定顺序执行、不排序，所以要按 STAGE_ORDER 归位。

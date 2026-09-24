@@ -29,8 +29,10 @@
         <input type="checkbox" name="portscan_full" value="1"> 全端口扫描（1-65535）</label>
       <label class="chk" title="dirscan 走全量分层字典 + dirmap + 后缀派生（比默认浅扫慢很多）">
         <input type="checkbox" name="dirscan_full" value="1"> 全目录深扫</label>
+      <label class="chk" title="对命中的目录再往下打一层浅扫精选字典（深扫专属能力，勾了就自动带上「全目录深扫」；每站最多 5 个目录 × 40 条，约 +215 请求/站）">
+        <input type="checkbox" name="recursive_dir" value="1"> 目录递归（一层）</label>
       <span class="muted small">默认只跑「浅扫」：端口 top 档 + 目录敏感路径精选字典；
-        想深挖再勾上面两项，或在结果页对选中资产发起补扫。</span>
+        想深挖再勾上面三项，或在结果页对选中资产发起补扫。</span>
     </div>
     <div class="row">
       <span class="muted" title="登录态只发给目标侧；crt.sh / FOFA / CISA KEV / IP 反查等第三方接口不带（避免把目标凭据外发）；值不会写进日志与报告">
