@@ -3715,6 +3715,148 @@ workflows:
           "预算耗尽=按停止(任务标 stopped + [throttle] 错误行) / inject 不原地改 / "
           "进程级闸跨任务共享 / http_request·run_cmd 耗尽时按停止不抛")
 
+    # 6g) 预算原子化（续21 修复）：预算"检查 + 扣减"必须在**同一临界区**内完成，否则任务闸
+    #     饱和时 N 个线程会读到同一个旧 `_budget_left` 全部放行 → 超发 ≈ 池大小−1。
+    #     用**真实线程池**复现：pool=20 / 100 个作业 / 小任务闸（制造"多线程同时读旧值"）。
+    from concurrent.futures import ThreadPoolExecutor as _TPE6g
+
+    def _run_6g(_cap, _budget):
+        _th = _th6f.build({"limits": {"max_inflight_per_task": _cap,
+                                      "max_inflight_global": 0,
+                                      "budget_total": _budget}},
+                          100 + _cap, threading.Event(), rec)
+
+        def _job():
+            try:
+                with _th.slot("http"):
+                    _t6f.sleep(0.01)      # 持有一小会，逼出"闸饱和 → 多线程同读旧预算"
+            except _th6f.BudgetExhausted:
+                pass
+
+        with _TPE6g(max_workers=20) as _ex:
+            _futs = [_ex.submit(_job) for _ in range(100)]
+            for _f in _futs:
+                _f.result()
+        return _th.snapshot()
+
+    _snap6g_a = _run_6g(2, 3)
+    # ✱ 修复前实测：cap=2/budget=3 → granted=21（超发 ≈ 池大小−1）；修复后必须 == 3
+    assert _snap6g_a["granted"] == 3, \
+        f"[6g] 预算原子化：cap=2/budget=3 应 granted==3（修复前 21），实际 {_snap6g_a}"
+    _snap6g_b = _run_6g(1, 3)
+    # ✱ 修复前实测：cap=1/budget=3 → granted=22；修复后必须 == 3
+    #    （触发条件是 budget > cap：闸饱和时"已过检查"的线程远多于预算才会超发；
+    #     budget ≤ cap 时首笔预留即耗尽预算，反而不会超发 —— 故此处取 budget=3 > cap=1。）
+    assert _snap6g_b["granted"] == 3, \
+        f"[6g] 预算原子化：cap=1/budget=3 应 granted==3（修复前 22），实际 {_snap6g_b}"
+
+    # 6h) 失败路径退还预算：线程在"等闸"时被取消 → 必须**全额退还**已预留的预算，且**不能挂死**。
+    #     （说明：5719886 的旧写法在闸前不扣预算，故旧代码在本场景"碰巧"也退还；本用例真正守的是
+    #      "闸前预留 + 失败退还"这套新逻辑 —— 去掉 `_refund_budget` 后 budget_left 会停在 4 ≠ 10。）
+    _ev6h = threading.Event()
+    _th6h = _th6f.build({"limits": {"max_inflight_per_task": 1, "max_inflight_global": 0,
+                                    "budget_total": 10}}, 200, _ev6h, rec)
+    _th6h._task_gate.acquire(None)          # 占住唯一任务名额 → 后续线程会卡在步骤 2（等闸）
+    _res6h = []
+
+    def _wait6h():
+        try:
+            with _th6h.slot("http"):
+                pass
+        except _th6f.StopRequested:
+            _res6h.append("stop")
+        except _th6f.BudgetExhausted:
+            _res6h.append("budget")
+
+    _ths6h = [threading.Thread(target=_wait6h, daemon=True) for _ in range(6)]
+    for _t in _ths6h:
+        _t.start()
+    _dead6h = _t6f.monotonic() + 3.0
+    while _th6h.snapshot()["budget_left"] > 4 and _t6f.monotonic() < _dead6h:
+        _t6f.sleep(0.01)
+    # 6 个线程各预留 1 → budget_left 应到 4（确保它们确实"已预留、正等闸"）
+    assert _th6h.snapshot()["budget_left"] == 4, \
+        f"[6h] 6 线程应各预留 1 预算（budget_left→4）：{_th6h.snapshot()}"
+    _ev6h.set()                             # 在它们等闸时请求停止
+    for _t in _ths6h:
+        _t.join(timeout=3.0)
+    # ✱ 绝不能挂死：所有线程都要退出（旧式无轮询等待会卡住）
+    assert all(not _t.is_alive() for _t in _ths6h), "[6h] 取消后线程不应挂死在等闸"
+    assert _res6h == ["stop"] * 6, f"[6h] 6 个等待线程都应因取消抛 StopRequested：{_res6h}"
+    _snap6h = _th6h.snapshot()
+    # ✱ 全额退还：失败路径必须退还已预留预算（漏退还 → budget_left==4 ≠ 10）
+    assert _snap6h["budget_left"] == 10, f"[6h] 失败路径应全额退还预算：{_snap6h}"
+    # ✱ 退还 ≠ 被拒：取消不该计入 rejected（rejected 只统计"预算耗尽被拒"）
+    assert _snap6h["rejected"] == 0, f"[6h] 取消不应计入 rejected：{_snap6h}"
+    assert _snap6h["granted"] == 0, f"[6h] 无线程真正拿到名额：{_snap6h}"
+    _th6h._task_gate.release()
+
+    # 6i) 混合容量告警：不同 `max_inflight_global` 的并发任务不共享闸（旧闸仍在飞）→
+    #     进程级有效上限暂时是两者之和。这里**必须打 warning**（不静默），且两任务仍能正常取名额。
+    class _Warn6i:
+        def __init__(self):
+            self.warnings = []
+
+        def warning(self, msg, *a):
+            self.warnings.append(str(msg))
+
+        def info(self, *a):
+            pass
+
+        def debug(self, *a):
+            pass
+
+        def error(self, *a):
+            pass
+
+        def exception(self, *a):
+            pass
+
+    _wl6i = _Warn6i()
+    _th6i_a = _th6f.build({"limits": {"max_inflight_global": 4}}, 300, threading.Event(), _wl6i)
+    assert _th6i_a._global_gate.acquire(None) is True      # 让 A 的全局闸有在飞请求
+    assert _th6i_a._global_gate.in_flight > 0
+    _th6i_b = _th6f.build({"limits": {"max_inflight_global": 8}}, 301, threading.Event(), _wl6i)
+    # ✱ 容量变化重建闸时，旧闸仍有在飞 → 必须告警（明示"有效上限暂时是两者之和"）
+    assert any(("改为" in w) or ("有效上限" in w) for w in _wl6i.warnings), \
+        f"[6i] 混合容量重建闸时必须告警（不静默）：{_wl6i.warnings}"
+    with _th6i_b.slot("http"):             # 两任务仍能正常取名额（告警不影响功能）
+        pass
+    assert _th6i_b.snapshot()["granted"] == 1, _th6i_b.snapshot()
+    _th6i_a._global_gate.release()
+
+    # 6j) slot() 不可重入：同线程嵌套取名额会自锁（`_Gate` 是计数信号量）—— 靠"停止"解开。
+    _ev6j = threading.Event()
+    _th6j = _th6f.build({"limits": {"max_inflight_per_task": 1, "max_inflight_global": 0,
+                                    "budget_total": 0}}, 400, _ev6j, rec)
+    _in6j = threading.Event()
+    _done6j = []
+
+    def _nested6j():
+        with _th6j.slot("http"):           # 占住唯一名额
+            _in6j.set()                    # 已进临界区 → 接下来会自锁
+            try:
+                with _th6j.slot("http"):   # 同线程再取 → 该自锁
+                    _done6j.append("acquired")
+            except _th6f.StopRequested:
+                _done6j.append("stop")
+
+    _t6j = threading.Thread(target=_nested6j, daemon=True)
+    _t6j.start()
+    assert _in6j.wait(3.0), "[6j] 线程应已进入临界区"
+    _t6j.join(timeout=0.5)
+    # ✱ 同线程嵌套应自锁（等 0.5s 仍拿不到第二名额、也没抛异常）
+    assert _t6j.is_alive() and not _done6j, "[6j] 同线程嵌套 slot() 应自锁（不该拿到第二名额）"
+    _ev6j.set()                            # 用"停止"把它解开（否则 smoke 会挂死）
+    _t6j.join(timeout=3.0)
+    assert not _t6j.is_alive(), "[6j] 置位 stop_event 后嵌套等待应被解开"
+    assert _done6j == ["stop"], f"[6j] 嵌套等待应因取消抛 StopRequested：{_done6j}"
+
+    print("[6g] F2 预算原子化 ok: 真实线程池 pool=20/100 作业，cap=2·budget=3 → granted==3"
+          "（修复前 21）、cap=1·budget=3 → granted==3（修复前 22）")
+    print("[6h] F2 失败路径退还预算 ok: 6 线程等闸时取消 → 全部退出(不挂死) / budget_left 全额退还(10) / "
+          "rejected==0")
+    print("[6i] F2 混合容量告警 ok: 不同 max_inflight_global 重建闸且旧闸在飞 → 打 warning（不静默）")
     print("SMOKE PASS")
 
 

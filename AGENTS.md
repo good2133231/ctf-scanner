@@ -251,6 +251,10 @@ ctf-scanner/
    （`ctx.throttle` / `settings["_throttle"]`）—— 不传就等于绕过并发 / 限速 / 预算。
    `throttle=None` 时按旧行为直通，那是给**离线工具与单测**留的口子，**不是给扫描路径用的**：
    漏接一处就会出现"点了停止仍有请求在飞"或"预算形同虚设"。
+   补充（续21）：`throttle.slot()` **不可重入** —— 底层 `_Gate` 是**计数信号量**，同一线程在已持有
+   名额时再 `slot()` 会**自锁**（等自己释放，永不返回）；**禁止在同线程里嵌套取名额**（需要"同一
+   动作占多份"时用 `weight=` 一次取足，别嵌套）。`budget_total` 是**硬上限**：预算的"检查 + 扣减"
+   在**同一临界区**内原子完成（`Throttle._reserve_budget`），并发下**不可能超发**（回归 `[6g]`）。
 
 ## 6. 如何验证改动
 
@@ -313,6 +317,10 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   **F2 统一门控**（闸门计数与取消不卡 / 令牌桶限速 / effective_cap=min(阶段,任务,全局) /
                             #   预算耗尽=按停止→任务标 `stopped` + `[throttle]` 错误行 / inject 不原地改 /
                             #   进程级闸跨任务共享 / http_request·run_cmd 耗尽时按停止不抛）
+# 2026-09-24 续21 新增 `[6g]`~`[6j]`：F2 预算**原子化**（真实线程池 pool=20/100 作业，cap<budget 时
+                            #   旧代码超发 21/22 → 修复后恒 == budget）/ 失败路径**退还预算**（等闸时取消：
+                            #   不挂死 + 全额退还 + rejected==0）/ 混合 `max_inflight_global` 重建闸**告警**
+                            #   （不静默）/ `slot()` **不可重入**（同线程嵌套会自锁、靠 stop 解开）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -509,6 +517,10 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
     settings、没有 `_throttle`）；
   - **拦不住外部工具内部的连接**：我们只做"边界闸（同时起几个子进程）+ 把算好的线程数传进去"，
     `budget_total` **不约束外部工具内部发多少连接** —— 设了预算 ≠ 外部工具也被限住了；
+  - **不同 `max_inflight_global` 的并发任务不共享闸**：`_GlobalState.gate_for` 在容量变化时重建闸
+    （"配置改了即生效"），旧任务仍握旧闸 —— 若旧闸此刻仍有在飞请求，进程级**有效上限暂时是两者之和**
+    （如 256 + 64）。重建时**会打一条 warning 明示**（不静默，回归 `[6i]`）；要真正的"全局硬上限"
+    需让所有并发任务用同一个 `max_inflight_global`（**不改成"闸只建一次"、不合并两个闸**）；
   - 预算耗尽是**按停止处理**（任务标 `stopped` + `[throttle]` 错误行），但被拒的那一次调用仍可能
     让调用点报出"网络不可达"这类文案，**任务级错误行与状态才是权威**；
   - 默认值取"恰好等于现有单任务最大并发"（`max_inflight_*`=256 = `portscan.full_workers`），

@@ -3,6 +3,63 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续21：F2 预算原子化 + 混合容量告警（验证后修复）
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+F2（`5719886`）经独立验证发现 **1 个真缺陷**：`scanner/throttle.py` 里"预算检查"与"预算扣减"
+**不在同一临界区** —— 旧 `_Slot.__enter__` 在**闸之前**读 `_budget_left`（不持锁），而扣减放在闸
+**之后**的 `_note_granted()`（步骤 5）。中间隔着任务闸 / 进程闸 / 令牌桶三段等待窗口：任务闸饱和时
+N 个线程读到同一个旧 `_budget_left` 全部放行，最后依次扣减 → **超发 ≈ 池大小−1**。
+实测（真实 `ThreadPoolExecutor`，pool=20、100 个作业、`budget_total=3`）：`max_inflight_per_task=2`
+→ 实发 **21**；`=1` → 实发 **22**；`≥4` → **3**。触发条件是 **`budget_total > max_inflight_per_task`**。
+可达场景：HTTP 阶段用 20 线程池 + `max_inflight_per_task ≤ 2` + 设了 `budget_total`。
+
+### 修复（`scanner/throttle.py`）
+- 新增 `Throttle._reserve_budget(weight)`：**持 `self._lock`**，"检查 + 扣减"在**同一临界区**完成
+  （`budget_total>0` 且 `_budget_left<weight` → False；否则扣减后 True）。
+- 新增 `Throttle._refund_budget(weight)`：持锁，仅当 `budget_total>0` 时 `_budget_left += weight`。
+- `_note_granted()` **不再碰预算**（只 `_granted += 1` / `_in_flight += 1`），并注释"预算已由
+  `_reserve_budget` 原子消耗"。
+- `_Slot.__enter__`：步骤 1 改为 `_reserve_budget`；失败仍抛 `BudgetExhausted` 并调 `_note_rejected()`
+  （保持"预算耗尽＝按停止"）。⚠️ `_note_rejected()` 必须在 `_reserve_budget()` **返回之后**调
+  （`threading.Lock` **不可重入**，在临界区内调会自锁）。步骤 2–4 包进 `try/except BaseException`
+  （用 `BaseException` 以覆盖等待中被取消的 `StopRequested`）：失败时释放已占的闸 + **退还预算**，再 `raise`。
+  `__exit__` **不退还**（成功拿到名额＝消费掉）；用实例标志 `self._reserved` 保证不重复退还。
+- `snapshot()["budget_left"]` 语义不变。
+- `_GlobalState.gate_for(capacity, logger=None)`：容量变化重建闸时，若**旧闸 `in_flight>0`** 则打一条
+  warning（明示"旧闸仍在飞、进程级有效上限暂时是两者之和"）；`build()` 传入自己的 logger。
+  **不改成"闸只建一次"、不合并两个闸**（"配置改了即生效"的语义要保住）。
+
+### 文档（4 处）
+- `AGENTS.md §5` 第 8 条：补 `slot()` **不可重入**（`_Gate` 是计数信号量，同线程嵌套取名额会**自锁**，
+  需多份时用 `weight=` 一次取足）+ `budget_total` 是**硬上限**（检查+扣减原子，不可能超发）。
+- `AGENTS.md §7`「F2 统一门控 v1 的覆盖缺口」：补"不同 `max_inflight_global` 的并发任务不共享闸 →
+  重建时告警、有效上限暂时是两者之和"。
+- `throttle.py::exhausted()` docstring：真实语义是「**已被拒绝过**」，不是"预算刚好用完"；
+  预算恰好用尽任务仍 `done`，只有真被截断才 `stopped`。
+- `throttle.py` 模块 docstring 预算段：预算是**硬上限**，并发下**不可能超发**。
+
+### 测试（`tests/smoke.py`，新增于 `[6f]` 之后）
+- `[6g]` **预算原子化**：真实 `ThreadPoolExecutor(pool=20)` / 100 作业 → `cap=2,budget=3` 断言
+  `granted==3`（**修复前 21**）；`cap=1,budget=3` 断言 `granted==3`（**修复前 22**）。
+- `[6h]` **失败路径退还预算**：6 线程在等闸时 `request_stop()` → 全部退出（带超时，**不挂死**）、
+  `budget_left == budget_total`（全额退还 10）、`rejected == 0`。
+- `[6i]` **混合容量告警**：`max_inflight_global=4` 且旧闸 `in_flight>0` 时改 8 → 断言打出 warning
+  （收集型 logger）且两任务仍正常取名额。
+- `[6j]`（附加）**`slot()` 不可重入**：同线程嵌套取名额会自锁（0.5s 仍拿不到第二名额）；置位
+  `stop_event` 后被解开（daemon + 超时 join，不挂 smoke）。
+- **证伪**（临时退回旧行为，跑出真 `AssertionError`，随后还原）：
+  - ✱ `_reserve_budget` 改回"检查不扣减、扣减留到 `_note_granted`" → `[6g]` 失败（granted **21 / 22** ≠ 3）。
+  - ✱ 去掉失败路径的 `_refund_budget` → `[6h]` 失败（`budget_left == 4` ≠ 10）。
+  - ✱ 关掉 `gate_for` 的告警分支 → `[6i]` 失败（`warnings == []`）。
+- 全程 `py -3 tests/smoke.py` → `SMOKE PASS`（含 `[6f]`）；默认路径不变（`max_inflight_per_task=256`、
+  `max_inflight_global=0/256` 跑 300 并发 × 600 次：峰值 ≤ 256、`rejected == 0`）。
+
+### 明确不做
+- 不给 HTTP 阶段加"`effective_cap` 收敛"：QA 观察到的"pool 20 / cap 2 → 18 个线程堵在闸前"是
+  **正确行为**（闸就该在饱和时阻塞），不是缺陷。
+- 未动 `scanner/db.py`、未加 UNIQUE 约束。
+
 ## 2026-09-24 —— 续20-F2：统一并发 / 限速 / 全局预算门控（`scanner/throttle.py`）
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

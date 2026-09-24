@@ -16,9 +16,12 @@
 检查一次 `stop_event`；置位即释放已持有的闸并抛 `StopRequested` ——
 **绝不出现"点了停止却卡在等锁"**。
 
-预算语义（与"静默失败"划清界限）：预算耗尽**不是**"网络故障"，而是**按停止处理** ——
-`Throttle.exhausted()` 返回 True → `StageContext.stopped()` 为真 → 各阶段在循环边界干净收尾，
-`PipelineRunner` 把任务标 `stopped` 并追加一条明确的错误行（见 `scanner/runner.py`）。
+预算语义（与"静默失败"划清界限）：预算是**硬上限** —— 检查与扣减在**同一临界区内原子完成**
+（`_reserve_budget`），并发下**不可能超发**（回归见 `tests/smoke.py [6g]`）。预算耗尽**不是**
+"网络故障"，而是**按停止处理** —— `Throttle.exhausted()` 返回 True → `StageContext.stopped()`
+为真 → 各阶段在循环边界干净收尾，`PipelineRunner` 把任务标 `stopped` 并追加一条明确的错误行
+（见 `scanner/runner.py`）。注意 `exhausted()` 的真实语义是「**已被拒绝过**」：预算恰好用尽
+（最后一次预留正好花光）时任务仍 `done`，只有**真被截断**才 `stopped`。
 **残留（如实登记）**：被拒的那一次调用仍可能让调用点报出"网络不可达"这类文案，
 但**任务级错误行与状态才是权威**。
 
@@ -29,7 +32,10 @@ v1 覆盖缺口（如实登记，不装作全覆盖）：
 - **不覆盖** GUI 里任务外的独立动作（如 `/api/domains/resolve` 用的是 `load_settings()` 原始
   settings、没有 `_throttle`）；
 - **拦不住外部工具内部的连接**：我们只做"边界闸（同时起几个子进程）+ 把算好的线程数传进去"，
-  `budget_total` **不约束外部工具内部发多少连接** —— 设了预算 ≠ 外部工具也被限住了。
+  `budget_total` **不约束外部工具内部发多少连接** —— 设了预算 ≠ 外部工具也被限住了；
+- **不同 `max_inflight_global` 的并发任务不共享闸**：`_GlobalState.gate_for` 在容量变化时重建闸
+  （"配置改了即生效"），旧任务仍握旧闸 → 此刻进程级有效上限**暂时是两者之和**。重建时会打一条
+  warning 明示（不静默），但要真正做到"全局硬上限"需所有并发任务用同一 `max_inflight_global`。
 """
 import threading
 import time
@@ -116,6 +122,7 @@ class _Slot:
         self._weight = weight
         self._got_task = False
         self._got_global = False
+        self._reserved = 0        # 已原子预留的预算（失败路径按此退还；成功路径消费掉）
 
     def __enter__(self):
         th = self._th
@@ -123,29 +130,45 @@ class _Slot:
         #    这样"点了停止"之后不会有任何新请求溜出去（配合各阶段循环边界的 stopped()）。
         if th._stop_event is not None and th._stop_event.is_set():
             raise StopRequested("任务已请求停止")
-        # 1) 预算检查：**进入闸之前**先判，避免白占名额；耗尽即按停止处理。
-        if th._budget_total > 0 and th._budget_left < self._weight:
+        # 1) 预算**原子预留**（持锁检查 + 扣减）：必须在进入闸**之前**、且与检查同一临界区完成。
+        #    旧写法把"检查"放在这里（不持锁）、"扣减"放在 `_note_granted`（步骤 5，闸之后），
+        #    中间隔着闸等待窗口 —— 任务闸饱和时 N 个线程读到同一个旧 `_budget_left` 全部通过，
+        #    最后依次扣减 → **超发 ≈ 池大小−1**（回归见 `tests/smoke.py [6g]`）。
+        if not th._reserve_budget(self._weight):
+            # ⚠️ `_note_rejected` 自己会取 `_lock`，而 `threading.Lock` **不可重入** ——
+            # 必须在 `_reserve_budget` **返回之后**再调，绝不能在它持锁期间调（会自锁）。
             th._note_rejected()
             raise BudgetExhausted(f"任务预算耗尽（budget_total={th._budget_total}）")
-        # 2) 任务级闸
-        if not th._task_gate.acquire(th._stop_event):
-            raise StopRequested("任务已请求停止")
-        self._got_task = True
-        # 3) 进程级闸（跨任务共享）
-        if not th._global_gate.acquire(th._stop_event):
-            th._task_gate.release()
-            self._got_task = False
-            raise StopRequested("任务已请求停止")
-        self._got_global = True
-        # 4) 令牌桶
-        if not th._rate.acquire(th._stop_event):
-            th._global_gate.release()
-            th._task_gate.release()
-            self._got_global = False
-            self._got_task = False
-            raise StopRequested("任务已请求停止")
-        # 5) 记账
-        th._note_granted(self._weight)
+        self._reserved = self._weight
+        try:
+            # 2) 任务级闸
+            if not th._task_gate.acquire(th._stop_event):
+                raise StopRequested("任务已请求停止")
+            self._got_task = True
+            # 3) 进程级闸（跨任务共享）
+            if not th._global_gate.acquire(th._stop_event):
+                raise StopRequested("任务已请求停止")
+            self._got_global = True
+            # 4) 令牌桶
+            if not th._rate.acquire(th._stop_event):
+                raise StopRequested("任务已请求停止")
+        except BaseException:
+            # 步骤 2–4 任一失败/被取消（含等待中 `stop_event` 置位抛出的 `StopRequested`）：
+            # 释放已占的闸 + **退还已预留的预算**（集中在同一处，避免分步遗漏）。
+            # 用 `BaseException` 是为了把 `StopRequested` 也纳入退还（它是 Exception 子类，
+            # 但用 BaseException 可一并覆盖 KeyboardInterrupt 之类的异常退出）。
+            if self._got_global:
+                th._global_gate.release()
+                self._got_global = False
+            if self._got_task:
+                th._task_gate.release()
+                self._got_task = False
+            if self._reserved:
+                th._refund_budget(self._reserved)
+                self._reserved = 0
+            raise
+        # 5) 记账：预算已在上面的 `_reserve_budget` 里原子消耗，这里**只**记 granted/in_flight。
+        th._note_granted()
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -157,6 +180,8 @@ class _Slot:
         if self._got_task:
             th._task_gate.release()
             self._got_task = False
+        # 成功拿到名额就是**消费掉了**：不退还预算（`_reserved` 已在失败路径清零，
+        # 故失败路径与这里**不会重复退还**）。body 抛异常也不退还（名额确实被用了）。
         return False        # 不吞异常
 
 
@@ -175,7 +200,7 @@ class Throttle:
         self._stop_event = stop_event
         self._logger = logger
         self._task_gate = _Gate(self._task_cap)
-        self._global_gate = global_state.gate_for(self._global_cap)
+        self._global_gate = global_state.gate_for(self._global_cap, logger)
         self._rate = TokenBucket(rate, burst)
         self._lock = threading.Lock()
         self._granted = 0
@@ -202,16 +227,45 @@ class Throttle:
                     "in_flight": self._in_flight, "budget_left": self._budget_left}
 
     def exhausted(self):
+        """是否**已被拒绝过**（不是"预算刚好用完"）。
+
+        真实语义是「有请求因预算不足被拒过」：预算恰好用尽（最后一次预留正好花光）时任务仍以
+        `done` 收尾；只有**真被截断**（`_note_rejected` 被调用过）才为真 → `StageContext.stopped()`
+        为真 → 任务标 `stopped`。这个区别决定了"刚好用完预算"不会被误报成"任务不完整"。
+        """
         with self._lock:
             return self._exhausted
 
     # ---- 内部记账（由 _Slot 调用）----
 
-    def _note_granted(self, weight):
+    def _reserve_budget(self, weight):
+        """**原子**预留预算：持锁检查 + 扣减，成功返回 True、不足返回 False。
+
+        必须原子：若"检查"不持锁、而"扣减"在闸之后（旧写法），任务闸饱和时 N 个线程会读到
+        同一个旧 `_budget_left` 全部通过检查，最后依次扣减 → 超发 ≈ 池大小−1（`[6g]`）。
+        `_budget_total<=0`（不限）时恒 True 且不记账。
+        """
+        with self._lock:
+            if self._budget_total > 0:
+                if self._budget_left < weight:
+                    return False
+                self._budget_left -= weight
+            return True
+
+    def _refund_budget(self, weight):
+        """退还已预留但最终没拿到名额的预算（闸等待中被取消 / 失败路径）。"""
+        with self._lock:
+            if self._budget_total > 0:
+                self._budget_left += weight
+
+    def _note_granted(self):
+        """记账：名额已拿到。**预算已由 `_reserve_budget` 原子消耗，这里绝不能再扣一次**。
+
+        （历史上扣减曾放在这里，导致"检查在闸前、扣减在闸后"不原子 → 超发。谁若"好心"
+        把扣减加回来，`tests/smoke.py [6g]` 会立刻变红。）
+        """
         with self._lock:
             self._granted += 1
-            if self._budget_total > 0:
-                self._budget_left -= weight
             self._in_flight += 1
 
     def _note_released(self):
@@ -238,10 +292,23 @@ class _GlobalState:
         self.gate = None
         self.capacity = None
 
-    def gate_for(self, capacity):
-        """取（必要时重建）进程级闸门。容量变化时重建 —— 配置改了就按新值生效。"""
+    def gate_for(self, capacity, logger=None):
+        """取（必要时重建）进程级闸门。容量变化时重建 —— 配置改了就按新值生效。
+
+        ⚠️ 代价（见模块 docstring 的缺口清单）：**不同 `max_inflight_global` 的并发任务不共享闸** ——
+        重建时旧任务仍握旧闸。若旧闸此刻仍有在飞请求（`in_flight>0`），进程级有效上限会**暂时是
+        两者之和**。这里**不静默**：打一条 warning 明示。**不改成"闸只建一次"**，也不合并两个闸 ——
+        "配置改了即生效"的语义要保住。
+        """
         with self.lock:
             if self.gate is None or self.capacity != capacity:
+                old = self.gate
+                if old is not None and old.in_flight > 0 and logger is not None:
+                    logger.warning(
+                        f"[throttle] 进程级并发上限由 {self.capacity} 改为 {capacity}：旧闸仍有 "
+                        f"{old.in_flight} 个在飞请求未结束，它们与新建的闸**不共享**，"
+                        f"此刻进程级有效上限暂时是两者之和（配置改了即生效的代价；"
+                        f"要真正的全局硬上限请让所有并发任务用同一个 max_inflight_global）")
                 self.gate = _Gate(capacity)
                 self.capacity = capacity
             return self.gate
