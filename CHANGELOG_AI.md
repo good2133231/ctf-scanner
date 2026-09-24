@@ -3,6 +3,102 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续26：GitHub 泄露检索（最小形态）
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+> 起点是本轮排期的最后一项（`.workbuddy-ai/memory/2026-09-24.md:441`）：
+> 「续26 GitHub 最小形态（只落仓库/文件路径/规则名元数据，**绝不落明文 secret**；`auth=False`）」。
+> 仓库里此前**没有任何 GitHub 相关代码**，规格只有这一行。用户当天经选项确认两条口径：
+> ① 范围＝**GitHub 泄露检索**（新增一个默认关的阶段，产出走既有「线索」口径：`leads` 表 + JSONL，**不写 vulns**）；
+> ② 授权＝**只读**参考项目 `myscan_20250825` 的 GitHub 相关模块。
+
+### A. 三个设计决策（都是被既有代码约束推出来的，不是偏好）
+
+1. **新增第 13 个阶段 `github`，不塞进 `intel`**。一阶段＝一能力＋一个门控；
+   `intel` 的输入是 `_assets()`（站点/端口/指纹），而 GitHub 检索的输入是**注册域**——
+   混进去要重构一个已经工作的阶段，收益只是少一个阶段名。
+2. **只查注册域，不逐个查子域名**。子域与主域在代码搜索里的命中高度重叠，而该接口
+   限流约 **10 次/分钟**（未认证更低），逐个查会打满额度还拿不到新东西。
+3. **同一 `(域名, 仓库, 路径)` 只出一条线索，多条规则的命中名并进 `matched`**。
+   因为 `db.insert_leads` 的去重键是 `(kind, code, target)`——不合并的话，同一个文件被
+   `credential` 与 `apikey` 两条规则命中时，**后一条会被静默丢掉**。
+
+### B. 实现：检测层 + 阶段层两个新模块
+
+- **`scanner/github_leak.py`（检测层，新）**：`SEARCH_RULES` 4 条规则（mention / credential /
+  apikey / env-file）、`build_query`（`q = "域名" + 可选关键词`，整体 `quote(safe='')` 编码——
+  引号与冒号不编码会被 422 拒）、`parse_response` / `_status_reason`（401＝token 无效、
+  422＝查询语法被拒、其余＝限流提示）、`collect()` 主流程、`target_domains()`（目标 → 注册域）。
+  **三条硬边界写在这里**：
+  - `normalize_hit()` 用**字段白名单**（`repo` / `path` / `url` / `rule`），**刻意不读 `text_matches`**
+    —— 这是"绝不落明文 secret"的落点（GitHub 的 code search 默认会把命中片段放在 `text_matches` 里）；
+  - `http_request(...)` **不传 `auth`**（保持默认 `False`）：任务级登录态（目标侧 Cookie / Token）
+    绝不外发；发给 GitHub 的 `Authorization: Bearer <token>` 是使用者自配的 **GitHub token**，
+    两者来源不同。token 只从 `config/keys.yaml` 的 `github.token` 读（`load_token()`）；
+  - **没 token 零请求**：`collect()` 直接返回 `queries=0`，一次 HTTP 都不发（该接口要求认证，
+    发了也是 401 —— 浪费配额且掩盖真实原因）。每次 200 响应后还检查
+    `X-RateLimit-Remaining == "0"` 主动收手。
+- **`scanner/stages/github.py`（阶段层，新）**：门控三连（策略开关 → 未配 token → 无可用注册域），
+  上限裁剪（`max_leads`）→ `db.insert_leads` → `ctx.results["leads_github"]`，日志写明
+  「只记仓库/文件路径/命中规则，不保存文件内容」与「线索≠漏洞结论」。
+- **`target_domains()` 的一个真缺陷（写测试时发现并修）**：`url` 目标取 `urlparse().hostname` 后
+  必须再过 `is_domain()`——否则 `http://127.0.0.1:8765/` 会被 `base_domain()` 切成 **`"0.1"`**
+  （含 `.` 所以能过原有的 `"." not in d` 检查），真的去搜 GitHub、白耗额度。已加守门 + 反例断言。
+
+### C. 接线（沿用既有骨架，零新机制）
+
+- `scanner/runner.py`：`STAGE_ORDER` 末尾加 `"github"`（**12 → 13 阶段**），
+  三个「线索」阶段固定排在最后；`STAGE_REGISTRY` 注册 `GithubStage`。
+- `scanner/config.py`：`DEFAULTS["github"]`（`enabled=False` / `max_domains=3` / `max_queries=4` /
+  `per_page=30` / `max_leads=30` / `timeout=20`）；`config/settings.yaml` 同步加 `github:` 段。
+- `gui/app.py`：settings POST 映射加 `github` 六项；`gui/templates/settings.html`：「情报与线索」
+  面板新增 GitHub 开关 + 5 个字段 + 说明（token 在 `config/keys.yaml`、GUI 不写回）。
+- `cli/client.py`：汇总行线索计数并入 `leads_github`，文案改「情报/启发式/GitHub」。
+
+### D. 测试与证伪（`tests/smoke.py`，`[6p]` 新增 7 组；`+223/−4`）
+
+- `[6p]` 覆盖：三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单/POST，含**不勾选时回退 `enabled=False`**，
+  防"静默打开外发能力"）、注册域收敛（含裸 IP 反例）、**没 token 零请求**（测试期任何请求都会 raise）、
+  阶段层三态门控、正常路径（伪造响应 + 断言 `%22example.com%22` 在 URL、`Authorization` 前缀、
+  `per_page`、合并结果、`level`）、入库与 JSONL、失败路径（401/422/403/限流/非 JSON/网络不可达）。
+- **实现变异证伪 2 处**：
+  - **M1 通过**：把 `auth=True` 塞回 `collect()` 的调用 → smoke 在 `tests/smoke.py:4446` 挂掉
+    （「GitHub 请求不得带任务登录态」），还原后复跑 PASS。
+  - **M2 第一版是假通过（教训，已写进断言）**：把 `raw.get("text_matches")` 加进 `normalize_hit`
+    的返回值后 **smoke 仍 PASS** —— 因为下游 `_leads_from` / `build_lead` 恰好只取那 5 个字段，
+    上游多读的内容到不了产出，所以"断言最终线索里没有内容字段"**测不到**这个变异。
+    修法：补一条**直接钉在 `normalize_hit` 上**的断言
+    （`set(normalize_hit(...)) == {"repo","path","url","rule"}`），再复现 M2 → 在
+    `tests/smoke.py:4474` 按预期挂掉，还原后复跑 PASS。
+    **推广：断言要钉在"决定安全属性的那一层"，钉在最终产出上会被中间层洗掉。**
+- 另修 `tests/smoke.py` **三处过时断言**：`[1b]`（STAGE_ORDER 全表）、`[5n]` 第 7/8 组
+  （`STAGE_ORDER[-2:]` → `[-3:]`、新增 `github_enabled` 表单断言）。其中 `[1b]` 是**实读代码发现的**
+  （排期记录里没提），说明"改阶段表必查 smoke 里所有硬编码的阶段全表"。
+
+### E. 文档同步 + 两处顺带修正
+
+- 同步 `README.md` / `AGENTS.md` / `docs/pipeline.md`（含配置项速查表 + 新增 ⑫ 小节）/
+  `docs/architecture.md` / `docs/usage.md` / `docs/security-notice.md` / `TODO.md`（新增 P3-4 条目）。
+  阶段数 **12 → 13**、线索阶段 **两个 → 三个** 的表述全量对齐。
+- **顺带修正两处文档漂移（实测发现，非本次功能引入）**：
+  - `AGENTS.md` 的 settings.yaml 段数：L142 写「十八段」且漏列 ssrf/shodan/quake/ctlog，
+    L475 写「二十一段」但列了 22 项 —— 按 `config/settings.yaml` 实测更正为 **23 段**（GUI 可改）
+    并加注说明口径。
+  - `docs/security-notice.md` 原写线索阶段「独立页签」，而续24 已按用户口径**移除**页签 ——
+    改为「出口只有 JSONL 导出」。
+- **行尾（EOL）自查**：`docs/pipeline.md`（i/crlf）与 `docs/security-notice.md`（i/mixed）
+  在编辑后出现 CR-only 差异，已按各文件原有形态**逐行还原**；最终
+  `git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` **逐文件完全一致**（无 CR-only 噪声）。
+
+### F. 未做 / 范围外（如实标注）
+
+- **`config/keys.yaml` 不代改**：那是使用者的真实凭据文件（已 gitignore，内含真实 FOFA key），
+  AI 不代写。要启用 GitHub 检索请自行加 `github: {token: "ghp_..."}`；没配也能跑（阶段会写明原因跳过）。
+- **未在真实 GitHub 上验证**：本机无可用 token，全部验证靠伪造响应 + 断言（smoke `[6p]`）。
+  真实调用需使用者自备 token 后自行验证。
+- `todo.txt` 第 1/3 条状态与代码不符（启发式 0day / 实时情报已落地到「线索」层却仍标 `[待办]`），
+  **本轮未动**，待用户确认。
+
 ## 2026-09-24 —— 续24：目录折叠的「站点身份」根因修复 + 线索出口收敛到 JSONL
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

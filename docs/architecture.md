@@ -15,8 +15,8 @@
 │            portscan（默认关）→ probe → cert（默认关）→         │
 │            screenshot（默认关）→ osint（默认关）→ jsmine →     │
 │            dirscan（默认开·浅扫）→ vulnscan →                 │
-│            intel / heuristic（默认关，只产"线索"）             │
-│            （12 个阶段，见 runner.STAGE_ORDER）               │
+│            intel / heuristic / github（默认关，只产"线索"）    │
+│            （13 个阶段，见 runner.STAGE_ORDER）               │
 │  资产层    scanner/dnsq.py（DNS 客户端）                      │
 │            scanner/cdn.py（CDN 判定：CNAME 后缀匹配厂商名单）  │
 │            scanner/takeover.py（子域接管指纹 41 条）           │
@@ -28,6 +28,8 @@
 │            scanner/jsmine.py（JS 域名/接口/疑似凭据挖掘）       │
 │            scanner/intel.py（CISA KEV 情报 × 本地指纹白名单匹配）│
 │            scanner/heuristics.py（零请求差分/异常聚合，产线索）  │
+│            scanner/github_leak.py（GitHub 公开代码搜目标注册域，  │
+│              只落仓库/路径/规则名；auth=False、没 token 零请求）  │
 │            scanner/blacklist.py（用户黑名单：入库前过滤）      │
 │            scanner/portscan.py::parse_ports(max_span)（防手滑全端口）│
 │  检测层    scanner/pocs/engine.py（POC 引擎，nuclei 兼容子集）│
@@ -126,8 +128,8 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 4. 阶段结果落点**并不统一**（改代码前先看具体阶段，不要假定"都写三处"）：
    - **文本产物 + SQLite + `ctx.results` 三处都写**：`subdomain` / `takeover` / `probe` / `jsmine` / `dirscan`
      （文本产物如 `sites.txt`，`ctx.results` 供下一阶段直接使用）；
-   - **只写 SQLite + `ctx.results`（不落文本产物）**：`portscan` / `osint` / `vulnscan` / `intel` / `heuristic`
-     （`intel` / `heuristic` 只写 `leads` 表）；
+   - **只写 SQLite + `ctx.results`（不落文本产物）**：`portscan` / `osint` / `vulnscan` / `intel` / `heuristic` / `github`
+     （`intel` / `heuristic` / `github` 只写 `leads` 表）；
    - **只写文本产物 + SQLite（不写 `ctx.results`）**：`cert`（`certs.txt` + `certs` 表）/
      `screenshot`（`shots/*.png` + `sites.shot`）—— 二者排在流水线后段，没有后续阶段消费其结果；
 5. GUI 通过 `tasks` 表轮询状态（status/progress/current_stage），详情页从 SQLite 读资产与漏洞。
@@ -143,7 +145,7 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 | csegs | segment, ip, domains, count | `/24` C 段视野（osint 阶段产出，默认关闭）：每行一个 IP 与其反查到的域名（domains 截断存储、count 为截断前数量） |
 | dirs | site_url, path, status, length, note, title | 目录发现（dirscan 阶段产出；`length` 即返回包大小，`title` 为命中页 `<title>` —— 内置扫描从已在手里的响应体提取、零额外请求，dirmap 解析行没有响应体故留空。默认排序为 `200 优先 → 大小降序`，页面按 `(site_url,status,length)` 折叠重复长度） |
 | vulns | target, poc_id, name, severity, owasp, detail, evidence, **review, review_note, reviewed_at** | 统一存放 POC 命中与 OWASP 检查结果。`review` 是**人工复核三态**（`""` 待复核 / `confirmed` 已确认 / `false_positive` 误报，见 `db.REVIEW_STATES`，非法值经 `db.norm_review()` 归一）；**判误报的行不进「潜在漏洞」计数与报告主表**，改为报告文末「已判误报（人工复核排除）」附录 |
-| leads | task_id, kind, code, title, target, matched, level, detail, source, url | **「线索」**（intel / heuristic 两个默认关阶段产出）：`kind` 区分情报/启发式，`level` 只用于排序着色、**不是漏洞级别**。**不是漏洞结论** —— 不进 `vulns`、不计入漏洞数、不自动导入 POC；**出口只有 JSONL 导出**（`type=lead` 行 + `counts.leads`），GUI 页签与人读报告（MD / HTML）自 2026-09-24（续24）起不再露出 |
+| leads | task_id, kind, code, title, target, matched, level, detail, source, url | **「线索」**（intel / heuristic / github 三个默认关阶段产出）：`kind` 区分情报/启发式/GitHub，`level` 只用于排序着色、**不是漏洞级别**。**不是漏洞结论** —— 不进 `vulns`、不计入漏洞数、不自动导入 POC；**出口只有 JSONL 导出**（`type=lead` 行 + `counts.leads`），GUI 页签与人读报告（MD / HTML）自 2026-09-24（续24）起不再露出。GitHub 线索（`kind="github"`）的 `code` 是 `仓库:文件路径`、`detail` 写明只记录了仓库/路径/命中规则 —— **文件内容与命中的凭据明文不入库** |
 | certs | url, host, port, cn, subject, issuer, not_before, not_after, days_left, expired, self_signed, san, serial, sig_algo, sha256, source | TLS 证书取证（cert 阶段产出，**默认关**）：一个 `host:port` 一行。`san` 用 `,` 拼接截断到 2000 字符；`expired` / `self_signed` 是**证书属性而非漏洞结论**（握手不校验证书）。默认排序 `已过期 → 自签 → 剩余天数升序`，让异常项先露头；进 `db.ASSET_TABLES`，重启任务会一并清掉 |
 | pocs | path(唯一), poc_id, name, severity, tags, enabled, status, **confidence** | POC 注册表：由扫描目录同步生成，GUI 控制启停。`enabled` 是**用户意图**（同步时不覆盖）；`confidence`（low/medium/high）是**推导值**，每次同步按 `db.poc_confidence(path, meta)` 重算（来源分 × 内容型匹配器，**只降级不升级**），仅作 `vulnscan` 同批候选的排序键，**不做过滤** |
 

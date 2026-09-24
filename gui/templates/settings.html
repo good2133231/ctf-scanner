@@ -336,7 +336,7 @@
 
   <section class="panel collapsible" data-panel="intel">
     <h2>情报与线索（默认关：产出的是"线索"，不是漏洞结论）</h2>
-    <p class="muted">本面板两项产出的都是<b>「线索」</b>（独立 <code class="mono">leads</code> 表）：
+    <p class="muted">本面板各项产出的都是<b>「线索」</b>（独立 <code class="mono">leads</code> 表）：
       续24 起<b>不再进 GUI 页签与人读报告（MD / HTML）</b>，只在 <b>JSONL 导出</b>里以
       <code class="mono">type=lead</code> 保留，<b>不写漏洞、不计入漏洞数、不自动导入 POC</b>。
       线索的语义是"值得人工看一眼"，人工确认后才是漏洞 —— 所以默认关闭，避免线索堆积把结果淹没。</p>
@@ -361,6 +361,24 @@
     <p class="muted small">它<b>不发任何请求</b>，只读站点/目录/漏洞/C 段四类数据，产出软 404 模板、
       高价值入口无结论、同标题多主机、目录命中离群、同 C 段多 IP 等线索（规则见
       <code class="mono">scanner/heuristics.py</code>，阈值都写在代码里、刻意保守）。</p>
+    <label class="chk"><input type="checkbox" name="github_enabled" value="1"
+      {{ 'checked' if s.github.enabled }}> GitHub 泄露检索（续26）：拿目标注册域搜 GitHub 公开代码</label>
+    <div class="row">
+      <label>最多注册域数 <input name="github_max_domains" value="{{ s.github.max_domains }}"></label>
+      <label>最多查询次数 <input name="github_max_queries" value="{{ s.github.max_queries }}"></label>
+      <label>单次取回条数 <input name="github_per_page" value="{{ s.github.per_page }}"></label>
+      <label>单任务线索上限 <input name="github_max_leads" value="{{ s.github.max_leads }}"></label>
+      <label>请求超时（秒） <input name="github_timeout" value="{{ s.github.timeout }}"></label>
+    </div>
+    <p class="muted small">需先在本机 <code class="mono">config/keys.yaml</code> 填
+      <code class="mono">github.token</code>（GitHub 代码搜索接口<b>要求认证</b>；
+      未配置时<b>一次请求都不发</b>，日志里会写明原因，而不是报"没查到"）。
+      本功能<b>只落元数据</b>（仓库 / 文件路径 / 命中规则名）—— <b>不保存文件内容</b>，
+      避免把可能出现的凭据明文写进本地库、日志与报告；要看内容请人工打开线索里的 URL。
+      请求一律 <code class="mono">auth=False</code>：GitHub 自己的 token 只作为
+      <code class="mono">Authorization</code> 头发出，<b>任务级登录态（目标侧 Cookie / Token）
+      绝不会发给 GitHub</b>。三项限额的理由：代码搜索限流约 <b>10 次/分钟</b>，
+      所以只查目标的<b>注册域</b>（子域名与主域命中高度重叠），不逐个查子域名。</p>
   </section>
 
   <section class="panel collapsible" data-panel="limits">

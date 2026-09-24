@@ -335,6 +335,20 @@ DEFAULTS = {
         "enabled": False,
         "max_leads": 50,           # 单任务最多入库多少条线索
     },
+    "github": {
+        # GitHub 泄露检索（续26，**默认关**）：拿目标的注册域去 GitHub 公开代码里搜命中，
+        # 产出**线索**（leads 表 kind=github）。三条硬边界见 scanner/github_leak.py 文件头：
+        # ① **只落元数据**（仓库 / 文件路径 / 命中规则名），**绝不落文件内容**（避免存下凭据明文）；
+        # ② 所有请求 `auth=False` —— **任务级登录态（目标侧 Cookie / Token）绝不发给 GitHub**；
+        # ③ token 在 `config/keys.yaml` 的 `github.token`（代码搜索接口要求认证），
+        #    没配 token 时**一次请求都不发**。**不写 vulns、不计入漏洞数、不自动导入 POC**。
+        "enabled": False,
+        "max_domains": 3,          # 最多对几个**注册域**检索（子域名不单独查，见 stages/github.py）
+        "max_queries": 4,          # 最多发几次搜索请求（代码搜索限流约 10 次/分钟）
+        "per_page": 30,            # 单次请求最多取回多少条命中（GitHub 上限 100）
+        "max_leads": 30,           # 单任务最多入库多少条线索
+        "timeout": 20,             # 单次请求超时（秒）
+    },
     "tools": {
         # 优先从 PATH 解析，也可以填绝对路径（Windows 下如 tools/scanner/httpx.exe）
         "subfinder": "subfinder",

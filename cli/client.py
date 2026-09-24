@@ -155,8 +155,8 @@ def main():
           f"站点 {len(ctx.results.get('sites', []))} | "
           f"目录 {len(ctx.results.get('dirs', []))} | "
           f"潜在漏洞 {len(ctx.results.get('vulns', []))} | "
-          f"线索 {len(ctx.results.get('leads_intel', [])) + len(ctx.results.get('leads_heuristic', []))}"
-          f"（情报/启发式，非漏洞结论）")
+          f"线索 {len(ctx.results.get('leads_intel', [])) + len(ctx.results.get('leads_heuristic', [])) + len(ctx.results.get('leads_github', []))}"
+          f"（情报/启发式/GitHub，非漏洞结论）")
     print(f"    日志：{rel_display(ctx.workdir / 'task.log')}")
     print(f"    数据库：{rel_display(db.DB_PATH)}")
     if args.report:

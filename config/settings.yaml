@@ -167,6 +167,16 @@ heuristic:
   # 启发式候选发现（默认关）：对已收集数据做差分/异常聚合，不发请求，只产出线索（leads 表）
   enabled: false
   max_leads: 50
+github:
+  # GitHub 泄露检索（默认关）：拿目标注册域去 GitHub 公开代码里搜命中，只产出线索（leads 表）。
+  # token 不在本文件：填 config/keys.yaml 的 github.token（GUI 不写回、该文件已 gitignore）。
+  # 边界见 scanner/github_leak.py 文件头：只落元数据（不保存文件内容）、auth=False、没 token 零请求。
+  enabled: false
+  max_domains: 3
+  max_queries: 4
+  per_page: 30
+  max_leads: 30
+  timeout: 20
 tools:
   subfinder: subfinder
   puredns: puredns

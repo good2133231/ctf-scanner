@@ -35,21 +35,24 @@ from .stages.dirscan import DirscanStage
 from .stages.vulnscan import VulnscanStage
 from .stages.intel import IntelStage
 from .stages.heuristic import HeuristicStage
+from .stages.github import GithubStage
 
 STAGE_ORDER = ["subdomain", "takeover", "portscan", "probe",
                # cert 与 screenshot 都需要"已有存活站点"，所以紧跟 probe；
                # cert 只做一次 TLS 握手（纯标准库、秒级），比截图廉价得多，故排在截图之前；
                # 它默认关闭（`cert.enabled`），打开后才对 https / tls_ports 站点取证
                "cert", "screenshot", "osint", "jsmine", "dirscan", "vulnscan",
-               # 两个"线索"阶段固定排在最后：它们不产出被后续阶段消费的数据，
-               # 只把外部情报（intel）与本地数据（heuristic）整理成人工复核用的线索。
-               # 两者都默认关闭（`intel.enabled` / `heuristic.enabled`），
+               # 三个"线索"阶段固定排在最后：它们不产出被后续阶段消费的数据，
+               # 只把外部情报（intel / github）与本地数据（heuristic）整理成人工复核用的线索。
+               # 三者都默认关闭（`intel.enabled` / `github.enabled` / `heuristic.enabled`），
                # 且**只写 leads 表**，不写 vulns、不计入漏洞数。
-               "intel", "heuristic"]
+               # github（续26）排在 intel 之后：它要发外部请求、受第三方限流约束，
+               # 而 intel 只是拉一次 KEV，谁先谁后不影响结果，排在最后便于"只重跑本阶段"。
+               "intel", "heuristic", "github"]
 STAGE_REGISTRY = {c.name: c for c in (SubdomainStage, TakeoverStage, PortscanStage,
                                       ProbeStage, CertStage, ScreenshotStage, OsintStage,
                                       JsmineStage, DirscanStage, VulnscanStage, IntelStage,
-                                      HeuristicStage)}
+                                      HeuristicStage, GithubStage)}
 
 # 运行中任务的取消信号表：task_id -> threading.Event
 _STOP_EVENTS = {}

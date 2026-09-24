@@ -1,16 +1,18 @@
 # 流水线说明
 
-默认阶段顺序（**12 个**，权威来源 `scanner/runner.py::STAGE_ORDER`）：
-`subdomain → takeover → portscan → probe → cert → screenshot → osint → jsmine → dirscan → vulnscan → intel → heuristic`
+默认阶段顺序（**13 个**，权威来源 `scanner/runner.py::STAGE_ORDER`）：
+`subdomain → takeover → portscan → probe → cert → screenshot → osint → jsmine → dirscan → vulnscan → intel → heuristic → github`
 （CLI 可用 `-p` 裁剪，GUI 用复选框勾选）。
 
 其中 `takeover` / `jsmine` / `dirscan` / `vulnscan` 由**策略级开关**控制、默认开，
-`portscan` / `cert` / `screenshot` / `osint` / `intel` / `heuristic` 默认关：
+`portscan` / `cert` / `screenshot` / `osint` / `intel` / `heuristic` / `github` 默认关：
 勾选只表示"这个阶段参与本次任务"，真正执行与否还看
 `settings.takeover.enabled` / `portscan.enabled` / `cert.enabled` / `screenshot.enabled` / `jsmine.enabled` /
-`dirscan.enabled` / `vulnscan.enabled` / `intel.enabled` / `heuristic.enabled`
+`dirscan.enabled` / `vulnscan.enabled` / `intel.enabled` / `heuristic.enabled` / `github.enabled`
 （阶段内部自查后打日志跳过，且**连请求都不发**）。`osint` 更特殊 —— 它没有自己的 `enabled`，
 而是由两个**子能力开关** `iprecon.enabled` / `fofa.enabled` 控制，**两者都关时整阶段直接跳过**。
+`github`（续26）另有一条"没配 token 就**一次请求都不发**"的前置门：GitHub 代码搜索接口要求认证，
+没配 `github.token` 时直接写明原因跳过（而不是报"没查到"）。
 
 > `cert` 与 `screenshot` 是"默认关但**能在任务级点名**"的一对：建任务时勾选、或 CLI 显式写
 > `-p cert` / `-p screenshot`，即落任务级选项 `cert_on` / `screenshot_on`，**只对本次生效、不改全局策略**。
@@ -22,11 +24,11 @@
 > 所以**默认开的是浅扫**；深扫用建任务勾选「全目录深扫」（`dirscan_full`，同时写任务选项
 > **并自动补上 `dirscan` 阶段**）或结果页的「补扫」按钮单独立任务，详见 ⑦。
 
-末尾两个阶段（`intel` / `heuristic`）的产物是**「线索」而不是漏洞**：它们只写独立的 `leads` 表，
+末尾三个阶段（`intel` / `heuristic` / `github`）的产物是**「线索」而不是漏洞**：它们只写独立的 `leads` 表，
 **不写 `vulns`、不计入漏洞数、不自动导入 POC**。**出口只有 JSONL 导出**（`type=lead` 行与
 `counts.leads`）—— 任务详情页签与人读报告（MD / HTML）自 2026-09-24（续24）起不再露出，
 沿用续20「机器格式保留全部、筛选权交下游」的取舍。
-理由是这两类结论分别来自外部情报匹配与本地统计推断，误报率天然高于实测型检查，
+理由是这三类结论分别来自外部情报匹配、本地统计推断与第三方代码搜索，误报率天然高于实测型检查，
 混进「潜在漏洞」表只会污染漏洞数（详见 `docs/security-notice.md` 与 `TODO.md` P3-2/P3-3）。
 
 > `subdomain` / `probe` 刻意**没有**阶段级开关：它们的产物（域名、存活站点）是所有后续阶段的输入，
@@ -53,13 +55,14 @@
 | `openssl s_client -connect host:443 -showcerts` | cert | 一次只读 TLS 握手取 DER → 纯标准库 ASN.1 解析（CN/SAN/有效期/自签/指纹）→ `certs` 表；**不校验证书**（自签/过期是常态）；默认关 |
 | （手工没有的部分） | intel | 拉 CISA KEV 公开 JSON → 与本地指纹**白名单式**匹配 → 「线索」（`leads` 表）；单向下行、默认关 |
 | （手工没有的部分） | heuristic | 对已采集数据做**零请求**差分/异常聚合（软 404 / 高价值入口 / 同标题 / 目录离群 / 同 C 段）→ 「线索」；默认关 |
+| （手工没有的部分） | github | 拿目标**注册域**去 GitHub 公开代码里搜命中（`api.github.com/search/code`）→ 「线索」（只落仓库/文件路径/命中规则名）；默认关、没 token 零请求 |
 
 ## 各阶段细节
 
 > 小节编号 ①~⑧ 沿用历史书写顺序（那批里还没有 `screenshot`，且 ⑤/⑥ 的位置是旧编号），
 > **实际执行顺序一律以 `STAGE_ORDER` 为准**：`screenshot` 在 ④ probe 与 ⑤ osint 之间，
-> ⑨~⑫ 是后补的阶段（编号只是书写顺序，`cert` 实际排在 `screenshot` **之前**；
-> 其中 `intel` / `heuristic` 固定在流水线最末）。
+> ⑨~⑬ 是后补的阶段（编号只是书写顺序，`cert` 实际排在 `screenshot` **之前**；
+> 其中 `intel` / `heuristic` / `github` 固定在流水线最末）。
 
 ### ① subdomain 子域名收集
 
@@ -375,6 +378,33 @@
 - 产物：`leads` 表（`kind="heuristic"`，级别一律 `info`）；`max_leads`（默认 50）截断；
 - **边界**：只写 `leads`，不写 `vulns`、不计入漏洞数；**主动 fuzz 仍不做**（样本量不够时那是纯噪声）。
 
+### ⑫ github GitHub 泄露检索（`github.enabled`，**默认关**，需 `config/keys.yaml` 的 `github.token`）
+
+- 位置：流水线**最末**（排在 `intel` 之后）—— 它要发外部请求、受第三方限流约束，
+  不产出任何被后续阶段消费的数据，放在最后便于"只重跑本阶段"；
+- 目标收敛（`scanner/github_leak.py::target_domains`）：只对目标的**注册域**检索 ——
+  子域名与主域的泄露命中高度重叠，逐个查只会把额度瞬间打满；IP / CIDR / 认不出主机的目标一律跳过（不猜）。
+  注意这里用 `utils.is_domain` 做形态守门：`http://127.0.0.1:8765/` 这类 **URL 里的裸 IP**
+  若直接交给 `base_domain()` 会切出 `"0.1"` 这种垃圾域名；
+- 4 条检索规则（`SEARCH_RULES`，顺序即优先级，"外层按规则、内层按域名"遍历，
+  于是最便宜的 `mention` 先覆盖到所有域名）：`mention`(info) / `credential`(medium，`password`) /
+  `apikey`(medium，`api_key`) / `env-file`(medium，`filename:.env`)；级别只用于 `leads.level` 排序着色；
+- **三条硬边界**（改代码前先读 `scanner/github_leak.py` 文件头）：
+  1. **只落元数据**：字段白名单只取 `repository.full_name` / `path` / `html_url` + 规则名。
+     代码搜索若带上 `text-match` 类 Accept 头，响应里会出现 `text_matches`（**命中片段，可能含凭据明文**）——
+     `normalize_hit()` **刻意不读它**，让凭据明文只存在于浏览器里，不进本地库 / 日志 / 报告 / JSONL。
+     `tests/smoke.py [6p]` 直接用「含 `text_matches` 的响应」验这一点（并在入库与 JSONL 里断言 0 处明文）；
+  2. **`auth=False`**：GitHub 自己的 token 只作为 `Authorization` 头发出，
+     **任务级登录态（目标侧 Cookie / Token）绝不发给 GitHub**；
+  3. **默认关 + 限额 + 没 token 零请求**：代码搜索认证后限流约 **10 次/分钟**，
+     `max_queries`（默认 4）到顶即收手；每次 200 响应后检查 `X-RateLimit-Remaining=0` 也主动收手；
+     没配 token 时**一次请求都不发**并把原因写进日志（不报"没查到"，否则用户会把 401 当成"确实没泄露"）；
+- 产物：`leads` 表（`kind="github"`，`code="<仓库>:<路径>"`，`source="GitHub"`），`max_leads`（默认 30）截断；
+  同一 `(域名, 仓库, 路径)` 被多条规则命中只出一条、规则名并进 `matched`
+  （`db.insert_leads` 的去重键是 `(kind, code, target)`，不在这里合并后面的规则会被静默丢掉）；
+- **边界**：只写 `leads`，不写 `vulns`、不计入漏洞数、不自动导入 POC —— 命中只说明
+  "这个域名出现在某个公开仓库里"，**不是漏洞结论**，需人工打开 URL 确认（并注意其中可能含真实凭据）。
+
 ## 阶段产物示例
 
 ```
@@ -399,7 +429,8 @@ logs/task_1_mytask/
 ```
 
 > `portscan` / `osint` 阶段不落文本产物（结果直接进 SQLite `ports` / `csegs` 表，新域名进 `subdomains` 表）；
-> `intel` / `heuristic` 同理 —— 只写 `leads` 表（情报缓存另落 `data/intel/<source>.json`，**不在任务目录**）；
+> `intel` / `heuristic` / `github` 同理 —— 只写 `leads` 表（情报缓存另落 `data/intel/<source>.json`，**不在任务目录**；
+> `github` 连缓存都不落，命中只以元数据进 `leads`）；
 > `cert` 两条都落：`certs` 表 + `certs.txt`（每次握手只成功一次，文本产物便于直接比对）；
 > 子域名阶段的 **IP / CDN 回填**同样只进 `subdomains` 表（`ip` / `cdn` 两列），不额外落文件；
 > `vulnscan` 结果进 `vulns` 表，报告由 `scanner/report.py` 或 GUI 导出按钮生成 ——
@@ -431,7 +462,7 @@ logs/task_1_mytask/
 | portscan.enabled / screenshot.enabled | false | 端口与服务扫描 / 站点截图 的阶段级开关（**均默认关**） |
 | cert.enabled / max_sites / timeout / tls_ports | **false** / 30 / 8s / [443,8443,9443] | TLS 证书取证（**默认关**）：握手目标上限与超时；`tls_ports` 决定"非 https 但端口命中"的站点是否也试。建任务勾选或 CLI `-p cert` → 任务级 `cert_on` 单次生效 |
 | dirscan.enabled / vulnscan.enabled | true / true | 目录发现（**默认开、默认只浅扫**）/ 漏洞初筛（默认开）的阶段级开关。想要早期那种"目录默认不扫"的行为，把 `dirscan.mode` 之外的总开关关掉即可 |
-| intel.enabled / heuristic.enabled | false | 两个「**线索**」阶段的阶段级开关（均默认关；只写 `leads` 表，不写 `vulns`） |
+| intel.enabled / heuristic.enabled / github.enabled | false | 三个「**线索**」阶段的阶段级开关（均默认关；只写 `leads` 表，不写 `vulns`） |
 | limits.brute_max_domains | 50 | 参与 DNS 爆破的域名上限 |
 | limits.wildcard_filter | true | 泛解析过滤：目标开 `*.domain` 时丢弃通配命中的字典结果 |
 | limits.favicon_md5 | true | probe 阶段计算 favicon MD5（POC 可据此做零请求前置判定） |
@@ -464,6 +495,7 @@ logs/task_1_mytask/
 | screenshot.enabled / max_sites / window / timeout / browser | **false** / 20 / 1280x900 / 30s / 空 | 站点截图（默认关）：站点上限、视口、单站超时、浏览器路径（留空自动探测 Edge/Chrome） |
 | intel.enabled / source / url / cache_hours / timeout / max_leads | **false** / kev / 空 / 24h / 20s / 50 | 情报订阅（默认关）：源名（内置 `FEEDS`）、覆盖地址（留空用内置，可换自建镜像）、缓存有效期（0 = 每次拉取）、拉取超时、单任务线索上限 |
 | heuristic.enabled / max_leads | **false** / 50 | 启发式候选（默认关、零出站）：阶段开关与单任务线索上限 |
+| github.enabled / max_domains / max_queries / per_page / max_leads / timeout | **false** / 3 / 4 / 30 / 30 / 20s | GitHub 泄露检索（默认关）：待检索注册域上限、查询条数上限、单查询返回条数、单任务线索上限、请求超时。**token 不在这里** —— 填 `config/keys.yaml` 的 `github.token`，没配就一次请求都不发（代码搜索接口要求认证）；只落仓库/文件路径/命中规则名，且请求恒 `auth=False` |
 | tools.fscan | fscan | fscan 二进制名/路径（缺省只在 PATH 找，找不到跳过）；调用时强制 `-np -nobr -nopoc`，只用其端口发现能力 |
 | tools.* | — | 外部工具路径/命令（subfinder / puredns / httpx / nmap / dirmap.python·script·threads …） |
 | dicts.* | — | 各字典路径：**浅扫 `dirs_shallow`** + 技术栈字典（`dirs_common`/`dirs_jsp`/`dirs_php`/`dirs_asp`）+ 框架字典（`dirs_wordpress`/`dirs_spring`/`dirs_weblogic`…12 桶）+ 暴露面 `dirs_exposure` + `dicts.cdn_cname`（CDN 厂商 CNAME 后缀名单） |

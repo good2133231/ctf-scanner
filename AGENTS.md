@@ -87,7 +87,7 @@ ctf-scanner/
 │   │                      #     「SSL 证书」＝cert 阶段产物；页签按数据源实有出现，没有产物时说明原因）
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
-│   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic（12 个）
+│   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic/**github**（13 个）
 │   ├── pocs/engine.py     # YAML POC 引擎（nuclei 兼容子集）
 │   ├── pocs/pocs/*.yaml   # 内置 7 个示例 POC
 │   ├── owasp/checks.py    # 14 项启发式检查（装饰器 @check 注册进 CHECKS）+ 分级/分类门控
@@ -139,7 +139,9 @@ ctf-scanner/
 │                          #   → config/dicts/tlds.txt（含 `co.uk`/`com.cn` 等多段后缀）；用法：py -3 tools/import_tlds.py --force
 │                          #   tldextract 是**生成期可选依赖**，不进 requirements.txt；运行时只读生成好的 tlds.txt
 ├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
-├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/blacklist/**intel/heuristic** 十八段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
+├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/**ssrf/shodan/quake/ctlog**/blacklist/**intel/heuristic/github** 二十三段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
+│                          #   注：原文写「十八段」且漏列 ssrf/shodan/quake/ctlog，与 GUI 实际覆盖的段数不符，
+│                          #   2026-09-24（续26）按 config/settings.yaml 实测更正为 **23 段**（tools/dicts/http 不可从页面改）
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
 ├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / cdn_cname(292)
@@ -166,9 +168,9 @@ ctf-scanner/
 其中 `scanner/evasion.py` 是**所有 HTTP 出口的统一伪装层**（由 `utils.http_request` 调用），
 `scanner/wildcard.py` 与 `scanner/passive.py` 只在 subdomain 阶段生效。
 
-- 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **12 个**：
+- 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **13 个**：
   `subdomain → takeover → portscan → probe → **cert** → **screenshot** → osint → jsmine → dirscan → vulnscan
-  → **intel** → **heuristic**`；
+  → **intel** → **heuristic** → **github**`；
   `cert`（TLS 证书取证）与 `screenshot` 都**默认关**，都排在 `probe` 之后（要先有存活站点）；
   `screenshot` 需要本机 Edge/Chrome，浏览器路径探测见 `scanner/screenshot.py`；
   **但"默认关"指的是策略级开关** —— 建任务时勾了 `screenshot` / `cert`（或 CLI `-p screenshot` / `-p cert`）即
@@ -179,14 +181,18 @@ ctf-scanner/
   `cert` 只做**一次只读 TLS 握手**（`verify_mode=CERT_NONE`）并解析证书（CN/SAN/有效期/自签/指纹），
   **是取证不是漏洞结论** —— 自签/过期是证书属性，不等于漏洞；解析用纯标准库 ASN.1/DER（`scanner/certs.py`）；
   `dirscan` 默认开但**默认只跑浅扫**（`dirscan.mode=quick`，见 §8 的 dirscan 条目）；
-  末尾两个**线索阶段默认关**，且**只写 `leads` 表**（不写 `vulns`、不计入漏洞数、不自动导 POC）：
+  末尾三个**线索阶段默认关**，且**只写 `leads` 表**（不写 `vulns`、不计入漏洞数、不自动导 POC）：
   `intel` = CISA KEV 情报 × 本地指纹白名单式匹配（`scanner/intel.py`），
-  `heuristic` = 对已收集数据做零请求的差分/异常聚合（`scanner/heuristics.py`）。
+  `heuristic` = 对已收集数据做零请求的差分/异常聚合（`scanner/heuristics.py`），
+  `github`（续26）= 拿目标**注册域**去 GitHub 公开代码里搜命中（`scanner/github_leak.py`）
+  —— 三条硬边界：**只落仓库 / 文件路径 / 命中规则名**（绝不落文件内容，避免凭据明文入库）、
+  **`auth=False`**（任务级登录态绝不发给 GitHub；GitHub 自己的 token 走 `Authorization`）、
+  **默认关 + 没 token 零请求**（token 在 `config/keys.yaml` 的 `github.token`，代码搜索接口要求认证）。
   新增阶段在此登记即可被 CLI `-p` 与 GUI 识别）。
 - 阶段开关有两层：**任务级**（建任务时勾选 stages / CLI `-p`）与**策略级**
   （`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled`，阶段内部自查后跳过）。
   `takeover` / `jsmine` / `dirscan` / `vulnscan` 默认开，
-  `portscan` / `screenshot` / `cert`（都受策略级开关约束）/ `intel` / `heuristic` 默认关。
+  `portscan` / `screenshot` / `cert`（都受策略级开关约束）/ `intel` / `heuristic` / `github` 默认关。
   另有**任务级「全量档」选项**：`portscan_full`（全端口 1-65535，见 §8）与 `dirscan_full`（深扫，见 §8），
   二者都是"用户点名要扫"→ **即使对应全局 `enabled=false` 也执行**，且 GUI/CLI 在勾了全量档却漏勾阶段时
   **自动补上该阶段并按 `STAGE_ORDER` 归位**（`runner` 按给定顺序执行、不排序，所以必须显式 sort）。
@@ -466,7 +472,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
 - GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
   takeover/portscan/jsmine/dirscan/vulnscan/screenshot/cert/iprecon/fofa/**ssrf/shodan/quake/ctlog**/
-  blacklist/intel/heuristic **二十一段**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned）
+  blacklist/intel/heuristic/**github** **二十三段**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned）
   （含按级别 / 按 OWASP 分类 /
   按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
   于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭；
@@ -480,7 +486,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   「SSL 证书」页签是续15 的落点（只读 TLS 握手 + 纯标准库 DER 解析，**握手不校验证书**）：
   证书的「自签 / 已过期」是**属性**，页签与报告都写明不是漏洞结论，且没有产物时会说明原因。
   **「线索」页签（及 MD/HTML 报告的小节）已于 2026-09-24（续24）按用户口径移除** ——
-  `intel` / `heuristic` 两个阶段与 `leads` 表**完全不变**，只是不再进 GUI 页签与人读报告：
+  `intel` / `heuristic` / `github` 三个阶段与 `leads` 表**完全不变**，只是不再进 GUI 页签与人读报告：
   线索现在只从 **JSONL 导出**出（`type=lead` 行 + `counts.leads`），沿用续20 的取舍
   「机器格式保留全部、筛选权交给下游」。这是**口径变更**不是缺陷，`tests/smoke.py` 的
   `[5n]` / `[5w]` 已把它翻成**反向断言**（页签与小节必须不在、JSONL 必须仍在）。

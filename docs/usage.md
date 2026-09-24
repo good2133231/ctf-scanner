@@ -14,7 +14,7 @@ python cli/client.py -t <单目标> [选项]
 | `-f, --file PATH` | 目标文件：每行一个 域名/URL/IP，`#` 开头为注释 |
 | `-t, --target` | 单目标，可重复 `-t a.com -t http://b.local/` |
 | `-n, --name` | 任务名（默认取文件名或 cli-task） |
-| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,cert,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic`（**共 12 个**，默认全部；`takeover`/`jsmine`/`dirscan`/`vulnscan` 策略级默认开，`portscan`/`cert`/`screenshot`/`osint`/`intel`/`heuristic` 另受策略级开关约束，见下。**显式点名 `cert` / `screenshot` 会落任务级 `cert_on`/`screenshot_on`，只对本次生效**；不写 `-p` 时不会偷偷打开这两个默认关的阶段） |
+| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,cert,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic,github`（**共 13 个**，默认全部；`takeover`/`jsmine`/`dirscan`/`vulnscan` 策略级默认开，`portscan`/`cert`/`screenshot`/`osint`/`intel`/`heuristic`/`github` 另受策略级开关约束，见下。**显式点名 `cert` / `screenshot` 会落任务级 `cert_on`/`screenshot_on`，只对本次生效**；不写 `-p` 时不会偷偷打开这两个默认关的阶段） |
 | `--full-ports` | **本次任务**端口走全端口 `1-65535`（等价 GUI 任务选项 `portscan_full`）；选了却没把 `portscan` 写进 `-p` 时**自动补上该阶段** |
 | `--full-dir` | **本次任务**目录走深扫：全量分层字典 + dirmap + 后缀派生（等价 GUI 任务选项 `dirscan_full`）；同样自动补 `dirscan` 阶段 |
 | `--offline` | 离线模式：不调用 subfinder/puredns/httpx/dirmap，仅内置实现 |
@@ -48,24 +48,26 @@ python cli/client.py -t http://target.local/ --cookie "SESSION=xxx" -H "X-Api-Ke
 ### 典型输出
 
 ```
-[*] 任务 #1 开始：recon-0921（阶段：subdomain,takeover,portscan,probe,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic）
-===== 阶段 1/11：subdomain =====
+[*] 任务 #1 开始：recon-0921（阶段：subdomain,takeover,portscan,probe,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic,github）
+===== 阶段 1/12：subdomain =====
 [subdomain] subfinder 不可用，改用内置多来源被动收集 …
 [passive] crt.sh → 12 个（example.com）
 [passive] example.com 汇总 15 个（5/6 个源有响应）
 [subdomain] puredns 不可用，回退内置 DNS 爆破（系统解析器）
 [subdomain] 新增子域名 3 个，参与探测主机 4 个
 ...
-===== 阶段 9/11：vulnscan =====
+===== 阶段 9/12：vulnscan =====
 [vulnscan] 目标 2 个；级别门槛 medium；启用 POC 7 个；内置检查 7/14 项；info/low 级检测已跳过（连请求都不发）
 [vulnscan] 潜在漏洞 6 项（high:2 / medium:4），均为初筛结果，需人工确认
-===== 阶段 10/11：intel =====
+===== 阶段 10/12：intel =====
 [intel] 未启用（策略配置 → 情报与线索 可打开），跳过
-===== 阶段 11/11：heuristic =====
+===== 阶段 11/12：heuristic =====
 [heuristic] 未启用（策略配置 → 情报与线索 可打开），跳过
+===== 阶段 12/12：github =====
+[github] 未启用（策略配置 → 情报与线索 可打开），跳过
 ===== 流水线完成 =====
 [*] 任务 #1 结束：status=done
-    子域名 3 | 站点 2 | 目录 17 | 潜在漏洞 6 | 线索 0（情报/启发式，非漏洞结论）
+    子域名 3 | 站点 2 | 目录 17 | 潜在漏洞 6 | 线索 0（情报/启发式/GitHub，非漏洞结论）
     日志：logs\task_1_...\task.log
 ```
 
@@ -127,11 +129,14 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
 3. **任务详情**：顶部为任务名与实时状态（状态徽标/当前阶段/进度，运行中每 2 秒刷新），
    下方为 **10 个横向页签 —— 潜在漏洞（默认）/ 站点 / 子域名 / 拓展域名 / 端口服务 / C 段 / 目录 / SSL 证书 /
    目标与配置 / 运行日志**，每个页签内可先筛选再查看（潜在漏洞的 evidence 可展开；日志页签显示尾部）；
-   > 「**线索**」是「情报订阅（`intel`）」与「启发式候选（`heuristic`）」两个**默认关**阶段的产物。
-   > 它们**不是漏洞结论**（来自外部情报匹配或本地统计推断，误报率高于实测型检查），框架在结构上做了隔离：
+   > 「**线索**」是「情报订阅（`intel`）」「启发式候选（`heuristic`）」与「GitHub 泄露检索（`github`）」
+   > 三个**默认关**阶段的产物。它们**不是漏洞结论**（来自外部情报匹配、本地统计推断或第三方代码搜索，
+   > 误报率高于实测型检查），框架在结构上做了隔离：
    > 独立 `leads` 表、独立计数，**不并入「潜在漏洞」、不计入漏洞数、不自动导入 POC**。
    > **自 2026-09-24（续24）起不再有独立页签、也不进人读报告（MD / HTML）** —— 唯一出口是
    > **JSONL 导出**（`type=lead` 行与 `counts.leads`），筛选权交给下游。这是用户口径，不是缺陷。
+   > `github` 另有两条硬边界：只落**仓库 / 文件路径 / 命中规则名**（绝不保存文件内容与命中的凭据明文），
+   > 且调 GitHub 时恒 `auth=False` —— 任务级登录态（目标侧 Cookie / Token）绝不外发给第三方。
    > 「**SSL 证书**」页签是 `cert` 阶段（**默认关**）的取证产物：一次只读 TLS 握手读出的
    > CN / 颁发者 / 有效期 / 剩余天数 / 是否自签 / 签名算法 / SAN / 指纹。
    > **「自签 / 已过期」是证书属性、不是漏洞结论**（握手不校验证书 —— CTF 目标大多是自签或过期），
@@ -250,11 +255,14 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
      FOFA 的 email/key 不在这里填（见 `config/keys.yaml`）；
    - **用户黑名单**（`blacklist`）：显示黑名单文件路径（**相对路径**）、总开关与**当前条目列表**，
      可勾选条目后点「移除勾选条目」。文件是纯文本 `config/blacklist.txt`，也可直接手工编辑；
-   - **情报与线索**（`intel`，**两个开关都默认关**）：`intel`（CISA KEV 情报订阅：`source` / `url` /
-     `cache_hours` / `timeout` / `max_leads`）与 `heuristic`（启发式候选：`max_leads`）。
-     二者产出**只是线索**（独立 `leads` 表），**不写漏洞、不计入漏洞数、不自动导入 POC**；
+   - **情报与线索**（`intel`，**三个开关都默认关**）：`intel`（CISA KEV 情报订阅：`source` / `url` /
+     `cache_hours` / `timeout` / `max_leads`）、`heuristic`（启发式候选：`max_leads`）与
+     `github`（GitHub 泄露检索：`max_domains` / `max_queries` / `per_page` / `max_leads` / `timeout`）。
+     三者产出**只是线索**（独立 `leads` 表），**不写漏洞、不计入漏洞数、不自动导入 POC**；
      自 2026-09-24（续24）起**不再进 GUI 页签与人读报告（MD / HTML）**，只在 **JSONL 导出**里
-     以 `type=lead` 保留。细节见 `docs/pipeline.md` ⑩⑪；
+     以 `type=lead` 保留。`github` 的 token 不在本面板（填 `config/keys.yaml` 的 `github.token`，
+     GUI 不写回），**没配 token 时一次请求都不发**；其产出只含仓库 / 文件路径 / 命中规则名，
+     且请求恒 `auth=False`。细节见 `docs/pipeline.md` ⑩⑪⑫；
    - **扫描限制**（`limits`）：并发/超时/证书校验/目录与漏洞扫描站点上限；子域名阶段的
      **IP/CDN 回填**上限（`subdomain.max_resolve`，默认 500 个）与 DNS 超时（`subdomain.dns_timeout`）
      也在这一组，超上限的子域名仍会入资产表，只是没有 IP/CDN 两列；
@@ -374,14 +382,18 @@ CIDR 已支持展开：`10.0.0.0/30` 会展开为可用主机逐条进入流水�
 未填 key 时日志会写明「未配置 fofa.email / fofa.key（见 config/keys.yaml）」，不会静默失败。
 
 **Q：打开了「情报与线索」开关，界面上却看不到线索？**
-这是**预期行为**（2026-09-24 续24 起）：产出线索的两个阶段 —— 「策略配置 → 情报与线索」里的
-`intel.enabled`（CISA KEV 情报订阅）与 `heuristic.enabled`（启发式候选）—— 都**默认关闭**，
+这是**预期行为**（2026-09-24 续24 起）：产出线索的三个阶段 —— 「策略配置 → 情报与线索」里的
+`intel.enabled`（CISA KEV 情报订阅）、`heuristic.enabled`（启发式候选）与 `github.enabled`
+（GitHub 泄露检索）—— 都**默认关闭**，
 打开后**只对新任务生效**；而它们写出的 `leads` 表**不再有 GUI 页签、也不进人读报告（MD / HTML）**，
 唯一出口是**任务详情页顶的「导出 JSONL」**（里面的 `type=lead` 行与 `counts.leads`）。
 另外两点容易误判：① 线索的语义是"值得人工看一眼"的**候选**，不是漏洞结论，所以它**不进「潜在漏洞」、
 不计入漏洞数、不自动导入 POC**；② `intel` 要求本地指纹命中白名单信号
 （`scanner/intel.py::MATCH_RULES`）才会出一条，扫到的资产若没有 weblogic / tomcat / iis 这类
 `tech`/`banner` 标签，本来就该是 0 条；`heuristic` 还需要站点/目录/C 段里有数据可比。
+`github` 除开关外还有一道前置门：**没配 `config/keys.yaml` 的 `github.token` 时一次请求都不发**
+（GitHub 代码搜索接口要求认证），日志会写明原因而不是"没查到"；配了 token 也只拿**注册域**去搜
+（不逐个查子域名，因为接口限流约 10 次/分钟），产出只含仓库 / 文件路径 / 命中规则名。
 
 **Q：站点标题是乱码（中文变 `????` / `Ã¤Â¸Â`）？**
 已修复。根因是部分服务器返回 `Content-Type: text/html` 却**不带 `charset`**，而 requests 在缺省时

@@ -208,11 +208,11 @@ def main():
     print("[1] targets ok:", ts, "| cidr:", cidr)
 
     # 1b) 流水线阶段注册：全部阶段都在顺序表与注册表中；
-    # cert（续14 证书取证）紧跟 probe；intel / heuristic（P3-2/P3-3）固定排在**最后**
-    # 且默认关，只写 leads 表
+    # cert（续14 证书取证）紧跟 probe；intel / heuristic / github（P3-2/P3-3、续26）
+    # 固定排在**最后**且默认关，只写 leads 表
     assert STAGE_ORDER == ["subdomain", "takeover", "portscan", "probe",
                            "cert", "screenshot", "osint", "jsmine", "dirscan", "vulnscan",
-                           "intel", "heuristic"], STAGE_ORDER
+                           "intel", "heuristic", "github"], STAGE_ORDER
     print("[1b] stages ok:", ",".join(STAGE_ORDER))
 
     # 2) POC 加载与校验
@@ -1574,7 +1574,8 @@ def main():
     HeuristicStage(_gctx).run()
     assert len(db.list_leads(ld_tid)) == 1, "默认关时不该写入任何新线索"
     assert DEFAULTS["intel"]["enabled"] is False and DEFAULTS["heuristic"]["enabled"] is False
-    assert STAGE_ORDER[-2:] == ["intel", "heuristic"], "两个新阶段应固定在流水线最后"
+    assert DEFAULTS["github"]["enabled"] is False, "GitHub 泄露检索必须默认关（续26）"
+    assert STAGE_ORDER[-3:] == ["intel", "heuristic", "github"], "三个线索阶段应固定在流水线最后"
 
     # 8) 出口口径（续24 变更，用户 2026-09-24 拍板）：策略配置渲染出两个开关；任务详情
     #    **不再有**「线索」页签；人读报告（MD/HTML）**不再有**线索小节；但**机器格式 JSONL
@@ -1582,6 +1583,7 @@ def main():
     #    这里不是"删断言让测试变绿" —— 翻成**反向断言**钉住新口径，并补上「JSONL 没被误删」。
     _shtml = c.get("/settings").get_data(as_text=True)
     assert 'name="intel_enabled"' in _shtml and 'name="heuristic_enabled"' in _shtml
+    assert 'name="github_enabled"' in _shtml, "策略面板应有 GitHub 泄露检索开关（续26）"
     assert "不再进 GUI 页签" in _shtml, "策略面板应说明线索现在只从 JSONL 出（旧文案指向已删页签）"
     _dhtml = c.get(f"/tasks/{ld_tid}").get_data(as_text=True)
     assert 'data-tab="leads"' not in _dhtml and 'id="pane-leads"' not in _dhtml, \
@@ -4321,6 +4323,223 @@ workflows:
     assert not _sw_cur.exists()
     print("[6o] 续27 沙箱残留自愈清扫 ok: 只删过期 smoke-*（2 小时前）/ 10 秒前的新沙箱保留"
           "（并发保护）/ task_* 等非 smoke 前缀保留 / 当前沙箱保留 / 重复清扫幂等")
+
+    # [6p] 续26 GitHub 泄露检索（最小形态）：三条硬边界一次钉死 ——
+    #      ① **只落元数据**（绝不把文件内容/凭据明文写进库、日志、报告、JSONL）；
+    #      ② **auth=False**（任务级登录态 —— 目标侧 Cookie / Token —— 绝不发给 GitHub）；
+    #      ③ **默认关 + 没 token 零请求**（代码搜索接口要求认证，发了也是 401）。
+    #      另含：注册域收敛、多规则命中合并、入库去重、不写 vulns、限流主动收手。
+    from scanner import github_leak as gh_mod
+    from scanner.stages.github import GithubStage
+
+    # 假凭据：只允许出现在**我们伪造的 GitHub 响应**里，绝不许出现在任何产出中
+    _SECRET = "ghp_SMOKEsecretVALUE0123456789"
+
+    # 1) 三方一致：DEFAULTS ↔ settings.yaml ↔ GUI 表单 / POST 映射
+    from scanner.config import DEFAULTS as _DEF6P
+    _gh_keys = ("enabled", "max_domains", "max_queries", "per_page", "max_leads", "timeout")
+    assert "github" in _DEF6P and "github" in settings, "缺 github 配置段（续26）"
+    for _k in _gh_keys:
+        assert _k in _DEF6P["github"], f"DEFAULTS.github 缺 {_k}"
+        assert _k in (settings.get("github") or {}), f"settings.yaml.github 缺 {_k}"
+    assert _DEF6P["github"]["enabled"] is False, "GitHub 泄露检索必须默认关"
+    _sh6p = c.get("/settings").get_data(as_text=True)
+    for _n6p in ("github_enabled", "github_max_domains", "github_max_queries",
+                 "github_per_page", "github_max_leads", "github_timeout"):
+        assert f'name="{_n6p}"' in _sh6p, f"策略配置缺字段 {_n6p}"
+    _cap6p = {}
+
+    def _fake_save6p(d):
+        _cap6p.clear()
+        _cap6p.update(d)
+        return load_settings()
+
+    _orig_save6p = gui_app.save_settings
+    gui_app.save_settings = _fake_save6p
+    try:
+        assert c.post("/settings", data={"min_severity": "medium", "github_enabled": "1",
+                                         "github_max_queries": "6"}).status_code == 302
+        assert (_cap6p.get("github") or {}).get("enabled") is True, _cap6p.get("github")
+        assert (_cap6p.get("github") or {}).get("max_queries") == 6, _cap6p.get("github")
+        # 未提交时必须回退默认（关 + 4）：不能因为"表单没带"就静默打开这个外发请求的能力
+        assert c.post("/settings", data={"min_severity": "medium"}).status_code == 302
+        assert (_cap6p.get("github") or {}).get("enabled") is False, _cap6p.get("github")
+        assert (_cap6p.get("github") or {}).get("max_queries") == 4, _cap6p.get("github")
+    finally:
+        gui_app.save_settings = _orig_save6p
+
+    # 2) 注册域收敛：URL / 子域名 / 裸域 → 只留注册域并去重；IP / CIDR / unknown 一律跳过。
+    #    重点反例：`http://127.0.0.1:8765/` 这类 **URL 里的裸 IP**，`urlparse().hostname`
+    #    拿到 `127.0.0.1`，若不加 `is_domain` 守门，`base_domain()` 会切出 `"0.1"` 这种
+    #    被误当成域名的垃圾并真的去搜 GitHub（写法修正见 scanner/github_leak.py::target_domains）。
+    assert gh_mod.target_domains([("url", "https://a.corp.example.com.cn:8443/x"),
+                                  ("domain", "b.example.com"),
+                                  ("domain", "example.com"),
+                                  ("ip", "10.0.0.1"), ("cidr", "10.0.0.0/24"),
+                                  ("unknown", "???"),
+                                  ("url", "http://127.0.0.1:8765/")]) \
+        == ["example.com.cn", "example.com"], "应只留注册域且去重（IP 目标不得切出 '0.1'）"
+    assert gh_mod.target_domains([("domain", "a.example.com"), ("domain", "b.example.com")],
+                                 max_domains=1) == ["example.com"], "max_domains 应生效"
+
+    # 3) 没 token → **零请求**，且把原因写清楚（否则用户会把 401 当成"确实没泄露"）
+    _req6p = []
+
+    def _req_must_not_happen(*a, **kw):
+        _req6p.append((a, kw))
+        raise AssertionError("这一步不该发任何请求")
+
+    _orig_req6p = gh_mod.http_request
+    gh_mod.http_request = _req_must_not_happen
+    try:
+        _l0, _m0 = gh_mod.collect(["example.com"], {"github": {"enabled": True}})
+        assert _m0["queries"] == 0 and not _l0 and _req6p == [], _m0
+        assert "github.token" in (_m0.get("error") or ""), _m0
+
+        # 4) 阶段层门控：默认关 / 开着但没 token / 目标全是 IP —— 三种情况都零请求、零入库
+        _gh_tid = db.create_task("smoke-github", targets, ["github"], {"offline": True})
+        _g6p = copy.deepcopy(settings)
+        _g6p["keys"] = {}                       # 显式清掉 keys：不依赖本机 keys.yaml 是否配了 token
+        _g6p["github"] = {"enabled": False}
+        GithubStage(StageContext(_gh_tid, "smoke-gh-off", parse_lines([targets]), ["github"],
+                                 {}, _g6p, Path(_TMPDIR) / "gh-off", rec)).run()
+        _g6p["github"] = {"enabled": True, "max_domains": 3}          # 开着但没 token
+        GithubStage(StageContext(_gh_tid, "smoke-gh-notoken", parse_lines([targets]), ["github"],
+                                 {}, _g6p, Path(_TMPDIR) / "gh-notoken", rec)).run()
+        _g6p["keys"] = {"github": {"token": "ghp_FAKE"}}             # 有 token，但目标只有 IP
+        GithubStage(StageContext(_gh_tid, "smoke-gh-noasset", parse_lines([targets]), ["github"],
+                                 {}, _g6p, Path(_TMPDIR) / "gh-noasset", rec)).run()
+        assert _req6p == [], "默认关 / 没 token / 无注册域时都不该发请求"
+        assert not db.list_leads(_gh_tid), "不该写入任何线索"
+    finally:
+        gh_mod.http_request = _orig_req6p
+
+    # 5) 正常路径：伪造一条**含 `text_matches` 明文**的 GitHub 响应，验硬边界 ①②。
+    _gh_items = [
+        {"path": ".env", "html_url": "https://github.com/acme/infra/blob/main/.env",
+         "repository": {"full_name": "acme/infra", "owner": {"login": "acme"}},
+         "text_matches": [{"fragment": f"DB_PASSWORD={_SECRET}"}]},
+        {"path": "conf/app.yaml",
+         "html_url": "https://github.com/acme/app/blob/main/conf/app.yaml",
+         "repository": {"full_name": "acme/app"},
+         "text_matches": [{"fragment": f"api_key: {_SECRET}"}]},
+        {"path": "no-repo.txt"},                       # 拿不到仓库 → 必须丢掉（没法溯源）
+    ]
+    _gh_body = _json.dumps({"total_count": 3, "items": _gh_items})
+    _gh_settings = {"github": {"enabled": True, "max_queries": 4, "per_page": 30},
+                    "keys": {"github": {"token": "ghp_FAKEtoken"}}}
+
+    def _gh_http6p(url, **kw):
+        _req6p.append((url, kw))
+        return {"status": 200, "headers": {"X-RateLimit-Remaining": "29",
+                                           "Content-Type": "application/json"},
+                "text": _gh_body, "length": len(_gh_body), "url": url}
+
+    gh_mod.http_request = _gh_http6p
+    try:
+        _leads6p, _meta6p = gh_mod.collect(["example.com"], _gh_settings)
+    finally:
+        gh_mod.http_request = _orig_req6p
+    assert _meta6p["queries"] == 4 and _meta6p["error"] == "", _meta6p
+    # ② auth=False：每个请求都**没有**带任务登录态（`auth` 未传或显式为 False）
+    assert all(kw.get("auth") in (None, False) for _u, kw in _req6p), \
+        "GitHub 请求不得带任务登录态（目标侧 Cookie / Token 绝不外发）"
+    # GitHub 自己的 token 仍走 Authorization 头（代码搜索接口**要求**认证，这不是"任务登录态"）
+    assert all(kw.get("headers", {}).get("Authorization", "").startswith("Bearer ")
+               for _u, kw in _req6p)
+    # `q` 必须整体 percent 编码：引号 / `filename:.env` 的冒号不编码会被 GitHub 直接 422
+    assert "%22example.com%22" in _req6p[0][0], _req6p[0][0]
+    assert "per_page=30" in _req6p[0][0], _req6p[0][0]
+    # 5a) 合并：(域名, 仓库, 路径) 唯一的命中只出一条 —— 四条规则都命中同一份文件时全靠这步收敛，
+    #     否则 db.insert_leads 只认首条，后面的规则会被**静默丢掉**
+    assert [x["code"] for x in _leads6p] == ["acme/app:conf/app.yaml", "acme/infra:.env"], \
+        [x["code"] for x in _leads6p]
+    _merged = [x for x in _leads6p if x["code"] == "acme/infra:.env"][0]
+    assert all(r in _merged["matched"] for r in ("mention", "credential", "apikey", "env-file")), \
+        _merged["matched"]
+    assert _merged["level"] == "medium" and _merged["kind"] == "github", _merged
+    assert _merged["source"] == "GitHub" and _merged["target"] == "example.com"
+    assert _merged["url"].startswith("https://github.com/acme/infra"), _merged["url"]
+    # ① 只落元数据：字段集合是白名单，`text_matches` 一个字都不读
+    for _ld in _leads6p:
+        assert set(_ld) == {"kind", "code", "title", "target", "matched", "level",
+                            "detail", "source", "url"}, sorted(_ld)
+        assert "text_matches" not in _ld and "fragment" not in _ld
+        assert _SECRET not in _json.dumps(_ld, ensure_ascii=False), "凭据明文绝不许进线索"
+    # 白名单要**直接钉在 `normalize_hit` 上**：只断言"最终线索里没有内容字段"是不够的 ——
+    # 下游 `_leads_from`/`build_lead` 恰好只取 5 个字段，会让"上游多读一个 `text_matches`"
+    # 这类改动**悄悄通过**（实测：把 `text_matches` 加进 `normalize_hit` 的返回值，
+    # 只靠上面的断言时 smoke 仍 PASS，属假通过）。这里补直接断言把它堵死。
+    assert set(gh_mod.normalize_hit(_gh_items[0], "mention")) == {"repo", "path", "url", "rule"}, \
+        "normalize_hit 必须只回这 4 个元数据字段（多读 text_matches 会带出凭据明文）"
+    assert gh_mod.normalize_hit(_gh_items[2], "mention") is None, "拿不到仓库的命中应丢弃"
+    assert gh_mod.normalize_hit("not-a-dict", "mention") is None
+
+    # 6) 入库：去重键 (kind, code, target)；只进 leads，**绝不进 vulns**；JSONL 仍保留 github 线索
+    assert db.insert_leads(_gh_tid, _leads6p) == 2
+    assert db.insert_leads(_gh_tid, _leads6p) == 0, "同一条 GitHub 线索不该重复入库"
+    _gh_rows = db.list_leads(_gh_tid)
+    assert len(_gh_rows) == 2 and all(r["kind"] == "github" for r in _gh_rows)
+    assert not db.list_vulns(task_id=_gh_tid, limit=50), "线索绝不能写进 vulns"
+    _jl6p = generate_jsonl(_gh_tid)
+    assert '"type": "lead"' in _jl6p and "acme/infra:.env" in _jl6p, "JSONL 必须保留 GitHub 线索"
+    assert _SECRET not in _jl6p, "JSONL 里也绝不能出现凭据明文"
+
+    # 7) 失败路径必须**说出来**（不能让人以为"查过了、没泄露"）
+    assert "401" in gh_mod._status_reason(401) and "token" in gh_mod._status_reason(401)
+    assert "422" in gh_mod._status_reason(422)
+    assert "限流" in gh_mod._status_reason(403)
+
+    def _resp6p(status, headers=None):
+        return {"status": status, "headers": headers or {}, "text": _gh_body,
+                "length": len(_gh_body), "url": "u"}
+
+    # 7a) 401 / 403 是**致命**的：立刻收手，不再发后续请求（不刷爆额度、不刷日志）
+    for _st, _want in ((401, "401"), (403, "限流")):
+        _n6p = []
+        gh_mod.http_request = lambda u, **kw: (_n6p.append(u), _resp6p(_st))[1]
+        try:
+            _l6p, _m6p = gh_mod.collect(["example.com"], _gh_settings)
+        finally:
+            gh_mod.http_request = _orig_req6p
+        assert len(_n6p) == 1, f"HTTP {_st} 后不该继续发请求（实发 {len(_n6p)} 次）"
+        assert _want in (_m6p.get("error") or "") and not _l6p, _m6p
+    # 7b) 配额见底（X-RateLimit-Remaining=0）主动收手，不必等 GitHub 回 403
+    _n6p = []
+    gh_mod.http_request = lambda u, **kw: (_n6p.append(u),
+                                           _resp6p(200, {"X-RateLimit-Remaining": "0"}))[1]
+    try:
+        _l6p, _m6p = gh_mod.collect(["example.com"], _gh_settings)
+    finally:
+        gh_mod.http_request = _orig_req6p
+    assert len(_n6p) == 1, f"配额见底后不该继续发请求（实发 {len(_n6p)} 次）"
+    assert "配额" in (_m6p.get("error") or ""), _m6p
+    # 7c) 网络不可达同样是"说出来"而不是"没查到"
+    gh_mod.http_request = lambda *a, **kw: None
+    try:
+        _l6p, _m6p = gh_mod.collect(["example.com"], _gh_settings)
+    finally:
+        gh_mod.http_request = _orig_req6p
+    assert not _l6p and "请求失败" in (_m6p.get("error") or ""), _m6p
+    # 7d) 响应不是 JSON → 不抛异常，返回原因
+    _bad6p = {"status": 200, "headers": {}, "text": "<html>nope</html>", "length": 16, "url": "u"}
+    gh_mod.http_request = lambda u, **kw: _bad6p
+    try:
+        _l6p, _m6p = gh_mod.collect(["example.com"], _gh_settings)
+    finally:
+        gh_mod.http_request = _orig_req6p
+    assert not _l6p and "JSON" in (_m6p.get("error") or ""), _m6p
+    # 7e) 规则表：四条规则的（关键词 / 级别）就是实现口径，写死防漂移
+    assert [r[0] for r in gh_mod.SEARCH_RULES] == ["mention", "credential", "apikey", "env-file"]
+    assert gh_mod.rule_of("nope") is None and gh_mod.rule_of("mention")[2] == "info"
+    assert gh_mod.build_query("a.example.com") == '"a.example.com"'
+    assert gh_mod.build_query("a.example.com", "filename:.env") == '"a.example.com" filename:.env'
+
+    print("[6p] 续26 GitHub 泄露检索 ok: 默认关/没 token 零请求（原因写明）/ auth=False（目标侧"
+          "登录态不外发，GitHub token 走 Authorization）/ 只落仓库+路径+规则名（含 text_matches"
+          "的响应入库/JSONL 里 0 处凭据明文）/ 注册域收敛（URL 里的裸 IP 不再切出 '0.1'）/ "
+          "四规则命中合并为一条 / 去重且不进 vulns / 401·403·配额见底均立刻收手")
+
     print("SMOKE PASS")
 
 

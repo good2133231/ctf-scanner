@@ -1369,6 +1369,13 @@ def create_app():
                               "max_leads": int(f.get("intel_max_leads", 50) or 50)},
                     "heuristic": {"enabled": f.get("heuristic_enabled") == "1",
                                   "max_leads": int(f.get("heuristic_max_leads", 50) or 50)},
+                    # GitHub 泄露检索（续26）：默认关；token 在 config/keys.yaml（本页不碰凭据）
+                    "github": {"enabled": f.get("github_enabled") == "1",
+                               "max_domains": int(f.get("github_max_domains", 3) or 3),
+                               "max_queries": int(f.get("github_max_queries", 4) or 4),
+                               "per_page": int(f.get("github_per_page", 30) or 30),
+                               "max_leads": int(f.get("github_max_leads", 30) or 30),
+                               "timeout": int(f.get("github_timeout", 20) or 20)},
                 }
             except ValueError:
                 return render_template("settings.html", s=load_settings(), checks=owasp_checks,
