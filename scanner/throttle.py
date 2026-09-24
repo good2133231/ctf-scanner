@@ -303,6 +303,9 @@ class _GlobalState:
         with self.lock:
             if self.gate is None or self.capacity != capacity:
                 old = self.gate
+                # ⚠️ 下面这条 warning 在**持有 `_GlobalState.lock`** 时打出（与 `_note_rejected` 刻意
+                #    把日志放在锁外不同）。当前安全的前提是：现有 logging handler 不会回调进 throttle；
+                #    若将来引入此类 handler，需把 warning 移到释放 `_GlobalState.lock` 之后（本次不改行为）。
                 if old is not None and old.in_flight > 0 and logger is not None:
                     logger.warning(
                         f"[throttle] 进程级并发上限由 {self.capacity} 改为 {capacity}：旧闸仍有 "

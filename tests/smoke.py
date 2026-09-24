@@ -3751,8 +3751,10 @@ workflows:
         f"[6g] 预算原子化：cap=1/budget=3 应 granted==3（修复前 22），实际 {_snap6g_b}"
 
     # 6h) 失败路径退还预算：线程在"等闸"时被取消 → 必须**全额退还**已预留的预算，且**不能挂死**。
-    #     （说明：5719886 的旧写法在闸前不扣预算，故旧代码在本场景"碰巧"也退还；本用例真正守的是
-    #      "闸前预留 + 失败退还"这套新逻辑 —— 去掉 `_refund_budget` 后 budget_left 会停在 4 ≠ 10。）
+    #     （旧代码 5719886 上本用例**整条仍失败**，失败点就是下方的 `budget_left == 4`：旧写法在闸前
+    #      **只读不扣**，budget_left 恒为 10 → 上面的等待循环跑满 3s 超时 → 断言失败。只有末尾那条
+    #      **退还断言**（`budget_left == 10`）在旧代码上偶然成立（旧代码压根没扣过预算）。
+    #      本用例真正守的是"闸前预留 + 失败退还"这套新逻辑 —— 去掉 `_refund_budget` 后 budget_left 停在 4 ≠ 10。）
     _ev6h = threading.Event()
     _th6h = _th6f.build({"limits": {"max_inflight_per_task": 1, "max_inflight_global": 0,
                                     "budget_total": 10}}, 200, _ev6h, rec)
