@@ -3245,7 +3245,55 @@ workflows:
         f"命中参数应为非首位的 {_blind_hit_param6}（旧实现只测第一个参数，必然漏报）：{_v_cover6['detail']}"
     assert "长度差 300B" in _v_cover6["evidence"], _v_cover6["evidence"]
 
-    # ② ssrf close() 的 join 不是死代码：正常路径下线程必须真的被回收
+    # ② ssrf close() 的 join 不是死代码。
+    #    注意：**只靠真实监听的生命周期没有区分度** —— srv.shutdown() 本身会阻塞到
+    #    serve_forever 退出、线程随之自然结束，所以旧死代码下 `not th.is_alive()` 照样
+    #    成立；旧写法 `srv, self._server, self._thread = self._server, None, None` 也照样
+    #    把 _server/_thread 清成 None。因此必须**桩注入、断言"调用行为"**。
+    class _FakeServer6:
+        def __init__(self):
+            self.shutdown_calls = 0
+            self.server_close_calls = 0
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+        def server_close(self):
+            self.server_close_calls += 1
+
+    class _FakeThread6:
+        def __init__(self):
+            self.join_calls = []
+
+        def join(self, timeout=None):
+            self.join_calls.append(timeout)
+
+        def is_alive(self):
+            return True
+
+    #    (a) 桩注入：直接断言调用行为（这几条才抓得住死代码回归）
+    _fs6, _ft6 = _FakeServer6(), _FakeThread6()
+    _h6 = ssrf_mod.CallbackListener("127.0.0.1", 0)      # 不必真 start()
+    _h6._server, _h6._thread = _fs6, _ft6
+    _h6.close()
+    assert _fs6.shutdown_calls == 1, f"shutdown() 应恰好调用 1 次，实际 {_fs6.shutdown_calls}"
+    assert _fs6.server_close_calls == 1, \
+        f"server_close() 应恰好调用 1 次，实际 {_fs6.server_close_calls}"
+    assert _ft6.join_calls == [2], \
+        f"join(timeout=2) 必须恰好被调用 1 次 —— 旧死代码下这里是 []：{_ft6.join_calls}"
+    assert _h6._server is None and _h6._thread is None, "close() 后应清空 server/thread"
+
+    #    (b) 边界：从未 start() 就 close() → 走 `if srv is None: return` 早退。
+    #        给一个从未 start 的实例挂上假线程，断言 join **一次都没被调用** ——
+    #        这证明早退发生在 join 之前（而非靠 srv 恰好没副作用蒙对）。
+    _ft6b = _FakeThread6()
+    _h6b = ssrf_mod.CallbackListener("127.0.0.1", 0)      # _server 默认 None
+    _h6b._thread = _ft6b
+    _h6b.close()                                          # 不该抛异常
+    assert _ft6b.join_calls == [], f"srv 为 None 时应早退、不 join：{_ft6b.join_calls}"
+    assert _h6b._server is None and _h6b._thread is None
+
+    #    (c) 真实监听：负责验"真的没泄漏"（与桩那组职责不同，都要留）
     _lsn6 = ssrf_mod.CallbackListener("127.0.0.1", 0).start()
     _th6 = _lsn6._thread
     assert _th6 is not None and _th6.is_alive(), "监听线程没起来"
@@ -3254,7 +3302,7 @@ workflows:
     assert not _th6.is_alive(), "close() 必须真的 join 掉监听线程（此前是死代码）"
     assert not [t for t in threading.enumerate()
                 if t.name == "ssrf-callback" and t.is_alive()], "仍有存活监听线程"
-    _lsn6.close()                                        # 幂等：重复 close 不该抛异常
+    _lsn6.close()                                         # 幂等：重复 close 不该抛异常
 
     # ③ ctlog：逗号连写的 name_value 要真的切开（而不是靠下游 is_domain 擦屁股）
     _cm6, _ = ctlog_mod.parse_records('[{"name_value": "a.example.com,b.example.com"}]',

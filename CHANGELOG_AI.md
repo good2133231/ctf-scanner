@@ -60,7 +60,30 @@ QA（`software-qa-engineer-2`）独立复核批次 4 后报出 1 个真缺陷 + 
   （QA 的 `[5z]` 覆盖的是**异常路径**，这里补**正常路径**。）
 - 同步把 `[5y]` 里那条"抖动不判"的预算断言从硬编码 12 改成引用 `_SQLI_BLIND_MAX_REQ`。
 
-### 5. 验证
+### 5. 补强 `[6a]` 里 ssrf close 的断言（QA 二轮：原断言**不具区分度**）
+
+- **问题**：`[6a]` 原先只用**真实监听**验证 `close()` —— 断言"线程不存活 / `_server`·`_thread` 清空"。
+  但把 `close()` 退回旧死代码后这三条**照样全过**：`srv.shutdown()` 本身会阻塞到 `serve_forever`
+  退出、线程随之自然结束（`not th.is_alive()` 恒真）；旧赋值也照样把字段清成 `None`。
+  等于 Fix 2 **没有回归保护**，这三条只是"陪着过"。
+- **改法**（`tests/smoke.py [6a]`）：加**桩注入**，直接断言**调用行为** ——
+  假 server 记录 `shutdown()` / `server_close()` 次数，假 thread 记录 `join(timeout=...)`：
+  - (a) 桩注入：`shutdown()` 恰好 1 次、`server_close()` 恰好 1 次、
+    **`join()` 恰好 1 次且 `timeout == 2`**（这条才抓得住死代码回归）、字段已清空；
+  - (b) 边界：从未 `start()` 就 `close()` → 走 `if srv is None: return` 早退、
+    **`join` 一次都没被调用**（证明早退发生在 join 之前，而非靠 srv 恰好无副作用蒙对）；
+  - (c) 真实监听（保留）：真 `start()`→真 `close()` 后无存活 `ssrf-callback` 线程、重复 `close()` 幂等。
+  (a)/(b) 验"代码路径真的走到了"，(c) 验"真的没泄漏"，两组职责不同都要留。
+- **自证**（硬要求）：把 `scanner/ssrf.py::close()` **临时**退回旧死代码写法后跑 smoke ——
+  **`[6a]` 挂在 (a) 的 join 断言**，原始输出：
+  ```
+  File "C:\Users\材料\Desktop\code\ctf-scanner\tests\smoke.py", line 3282, in main
+      assert _ft6.join_calls == [2], \
+  AssertionError: join(timeout=2) 必须恰好被调用 1 次 —— 旧死代码下这里是 []：[]
+  ```
+  随即还原为正确实现，smoke 复跑 **SMOKE PASS**（`scanner/ssrf.py` 与 HEAD 无 diff，未提交临时版本）。
+
+### 6. 验证
 
 - `py -3 tests/smoke.py` → **SMOKE PASS**，新增行：
   `[6a] 复核修复回归 ok: 盲注覆盖全部 5 个参数（非首位参数可命中，预算 30 = 2×5×3） / ssrf close() 真 join（幂等、无线程残留）/ ctlog 逗号连写正确切分且不误标通配符`
