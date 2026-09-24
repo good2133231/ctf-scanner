@@ -3,6 +3,32 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 补充 LICENSE（MIT）并同步第三方许可口径
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户拍板：仓库自有代码采用 **MIT**。此前 `NOTICE.md §5` 写的是"尚未声明（all rights reserved）"。
+
+### 改动
+- 新增 `LICENSE`（MIT，版权年 2026）。
+- `NOTICE.md §5` 改写：由"尚未声明"改为"自有代码 MIT"，并**显式写出边界** ——
+  `config/dicts/dirs_*.txt` 派生自 **dirmap（GPL-3.0，传染性）**，而本仓库整体是 MIT；
+  本项目收录的是**由该字典整理出的路径清单**且**未内联 dirmap 代码**（`tools/dirmap/` 是目录联接、
+  已 gitignore、不随仓库分发），但**两者在这部分数据上的兼容性存在讨论，本项目不作法律结论**，
+  要求使用者再分发/商用前自行厘清、必要时从副本中移除这些字典。305 个导入 POC 与 URLFinder 清单同理。
+- `README.md` 末尾新增「许可」一节（MIT + 第三方数据不受覆盖 + 指向 `NOTICE.md`），
+  并把"仅用于自有或已授权目标、检测一律非破坏性"的**使用边界**放到同一节，便于访客一眼看到。
+
+### 为什么这样写
+- **不把 MIT 说成全仓库覆盖**：仓库里确实混着 GPL-3.0 派生数据，含糊表述会误导下游使用者。
+- **不作法律结论**：兼容性应由使用者按自己的场景判断，项目方只做事实性标注。
+- **未改动** `config/dicts/` 下任何数据文件本身。
+
+### 验证
+- 行尾自查：`LICENSE` / `README.md` / `NOTICE.md` 三文件均符合仓库 CRLF 约定（裸 LF = 0）；
+  `git diff --cached --numstat` 与 `--ignore-cr-at-eol --numstat` 输出完全一致。
+- 本次为文档 / 许可改动，不涉及运行时代码；`git diff --cached --numstat` 可证只有这 4 个文件被改。
+
 ## 2026-09-24 —— 续20-fix：续20 独立验证后的修复（CLI JSONL 行尾 / append_task_error 原子化 / OpenProcess fail-safe）
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

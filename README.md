@@ -164,3 +164,14 @@ ctf-scanner/
 - 外部情报（`osint` 阶段：C 段反查 / FOFA favicon 反查 / FOFA 证书反查）**默认全关**且依赖第三方接口/配额，
   其阈值（黑 ico 200、通用证书 200、"共享主机"单 IP 域名数 30）是保守估计值、未经真实数据校准；
   `osint` 的联网往返也无法离线自测（`tests/smoke.py` 只覆盖纯函数与门控）。
+
+## 许可
+
+本仓库**自有代码**采用 **MIT**，见 [`LICENSE`](LICENSE)。
+
+`config/` 下的部分**数据文件**派生自第三方项目，**不受 MIT 覆盖**，仍适用其原始条款
+（其中 `config/dicts/dirs_*.txt` 派生自 GPL-3.0 的 dirmap）。逐项来源与边界见
+[`NOTICE.md`](NOTICE.md)。
+
+> **使用边界**：本工具仅用于**自有或已获得书面授权**的目标。检测一律非破坏性（只做探测类请求，
+> 无爆破、无写操作、无 DoS 延时）。详见 [`docs/security-notice.md`](docs/security-notice.md)。
