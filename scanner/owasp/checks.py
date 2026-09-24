@@ -337,16 +337,24 @@ def _sqli_error(url, settings):
 #   ③ 它慢：每个参数每个变体都要等满一个 sleep 周期，与"每站点几十个请求"的预算不兼容。
 # 布尔差分没有这些问题：两次请求**只差一个布尔条件**，比状态码 / 长度 / 正文即可。
 _SQLI_BLIND_PARAMS = ("id", "page", "cat", "user", "item")
+# 只留两种**最常见**的注入上下文：数字型与单引号串型。
+# **刻意放弃** `1) AND (1=1`（括号闭合）与 `1" AND "1"="1`（双引号串）两种形态 —— 见下方预算说明：
+# 预算优先给**参数覆盖**，因为"从没发过请求的参数"是必然盲区，而这两种上下文相对少见
+# （括号闭合多见于 `WHERE id IN (...)` 这类特定写法，双引号串多见于 MSSQL/Oracle 的标识符引用）。
+# 这是**已知覆盖缺口**，不是"覆盖全了"；需要时把它们加回来并同步调大 `_SQLI_BLIND_MAX_REQ`。
 _SQLI_BLIND_PAIRS = (
     ("1 AND 1=1", "1 AND 1=2"),
     ("1' AND '1'='1", "1' AND '1'='2"),
-    ("1) AND (1=1", "1) AND (1=2"),
-    ('1" AND "1"="1', '1" AND "1"="2'),
 )
-# 每参数固定 3 个请求（恒真 / 恒假 / 恒真复验），所以 12 = 4 个参数。
+# 请求预算 = 2 形态 × 5 参数 × 3 请求（恒真 / 恒假 / 恒真复验）= 30。
+# 为什么取 30：与同文件的报错型检查 `_SQLI_MAX_REQ = 30` 内部一致，单站点注入类总开销可预期。
+# 为什么循环是**形态外层、参数内层**（见 `_sqli_blind`）：预算必须先把 5 个候选参数**都覆盖一遍**。
+# 若反过来（参数外层），第一个参数就会吃掉 2 形态 × 3 = 6 个请求、第二个再吃 6 个……
+# 参数顺序又被 `_ordered()` 打乱，结果变成"每次随机只测到前几个参数"，覆盖率与可复现性都崩
+# —— 这正是本文件此前 12 预算下"5 个参数只测到 1 个"的成因。
 # 复验那一发不是浪费：页面自带随机数/时间戳时"恒真"自己都会抖动，不复验就会把抖动
 # 当成注入信号 —— 这是布尔盲注最主要的误报源。
-_SQLI_BLIND_MAX_REQ = 12
+_SQLI_BLIND_MAX_REQ = 30
 # "差异显著"的双阈值：绝对字节差 OR 相对比例（小页面靠比例，大页面靠绝对值）
 _SQLI_BLIND_MIN_DELTA = 40
 _SQLI_BLIND_MIN_RATIO = 0.05
@@ -386,11 +394,14 @@ def _sqli_blind(url, settings):
     为什么**不套 `evasion.mutate_sqli`**：差分判定的前提是"两次请求只差一个布尔条件"，
     变形会引入注释、编码、大小写这些额外变量，让"响应不同"无法归因 —— 宁可少绕一点
     WAF，也要保证结论站得住。预算仍受 `_SQLI_BLIND_MAX_REQ` 封顶。
+
+    循环是**形态外层、参数内层**：预算优先保证 5 个候选参数**都被两种形态各试一次**
+    （没测到的参数是必然盲区），参数顺序仍走 `_ordered()` 打乱以打散 WAF 的频率/序列特征。
     """
     used = 0
     sep = "&" if "?" in url else "?"
-    for param in _ordered(_SQLI_BLIND_PARAMS):
-        for true_p, false_p in _SQLI_BLIND_PAIRS:
+    for true_p, false_p in _SQLI_BLIND_PAIRS:
+        for param in _ordered(_SQLI_BLIND_PARAMS):
             if used + 3 > _SQLI_BLIND_MAX_REQ:
                 return None
             r_true = _get(f"{url}{sep}{param}={true_p}", settings)

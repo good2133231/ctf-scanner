@@ -30,6 +30,7 @@
   等于白丢一批域名）。
 """
 import json
+import re
 import time
 import urllib.parse
 
@@ -118,14 +119,20 @@ def _norm_time(text):
 
 
 def _split_names(raw):
-    """`name_value` → 域名列表：按换行切、剥通配符、去重保序。
+    """`name_value` → 域名列表：按换行**与逗号**切、剥通配符、去重保序。
 
     通配符（`*.x.example.com`）**剥掉 `*.` 后保留**（CT 日志里它就是这么存的），
     并在记录上打 `wildcard=1` —— 剥掉 `*.` 是为了让它能进资产库，
     打标记是为了让人知道"这张证书覆盖了整段子域"。
+
+    为什么逗号也要切：不同 CT 源/中间层的 `name_value` 分隔符不一致，有源用逗号连写
+    （`a.example.com,b.example.com`）。只按换行切会把整串当成**一个**"域名"：
+    普通串要等下游 `utils.is_domain()` 才被挡掉（下游被迫替我们擦屁股），
+    而 `*.a.example.com,b.example.com` 会因 `startswith("*.")` 命中、被剥成
+    `a.example.com,b.example.com` 并**错误地打上 `wildcard=1`** —— 那是一条假通配符记录。
     """
     out, seen, wildcard = [], set(), 0
-    for line in str(raw or "").splitlines():
+    for line in re.split(r"[\r\n,]+", str(raw or "")):
         name = line.strip().lower().strip(".")
         if name.startswith("*."):
             wildcard = 1

@@ -301,19 +301,27 @@ class CallbackListener:
         return len(self.hits())
 
     def close(self):
-        srv, self._server, self._thread = self._server, None, None
+        """关闭监听并回收线程（可重复调用；没起过监听时是空操作）。
+
+        线程必须**先取到局部变量再清空**：写成 `srv, self._server, self._thread = ..., None, None`
+        会让下面那句 `if self._thread is not None: join()` 永远为假（死代码），
+        代码与注释宣称的行为就对不上了。清空字段是为了让 `close()` 幂等，
+        与"把线程 join 掉"是两件事，不能混在一条赋值里。
+        """
+        srv, th = self._server, self._thread
+        self._server, self._thread = None, None
         if srv is None:
             return
         try:
-            srv.shutdown()
+            srv.shutdown()          # 阻塞到 serve_forever 退出
         except Exception:
             pass
         try:
             srv.server_close()
         except Exception:
             pass
-        if self._thread is not None:
-            self._thread.join(timeout=2)
+        if th is not None:
+            th.join(timeout=2)
 
     def __enter__(self):
         return self.start()

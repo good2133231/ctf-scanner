@@ -3,6 +3,72 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续19：批次 4 复核后的三处修复（盲注预算分配 / ssrf close 死代码 / ctlog 逗号分隔）
+> 实施者：**WorkBuddy · Hy4-preview**
+
+QA（`software-qa-engineer-2`）独立复核批次 4 后报出 1 个真缺陷 + 2 个小问题，主理人逐行确认成立。
+本轮只改这三处 + 补一节回归测试，不动任何既有设计。
+
+### 1. `scanner/owasp/checks.py` —— 布尔盲注的预算分配反了（**中，真缺陷**）
+
+- **症状**：`_SQLI_BLIND_MAX_REQ = 12` 而循环是**参数外层、形态内层**，预算判定 `used + 3 > 12`。
+  第一个参数吃掉 4 形态 × 3 请求 = 12 后，下一个参数立刻 `return None` ——
+  **5 个候选参数里只有 1 个真发过请求**。更糟的是 `_ordered()` 会 `random.shuffle` 参数顺序，
+  于是表现成"每次随机抽 1/5 的参数、抽中才可能命中"：覆盖率 20% 且**不可复现**。
+  第 346 行的注释还写着"12 = 4 个参数"，与代码自相矛盾。
+- **改法**（`checks.py` 常量区 + `_sqli_blind()` 循环）：
+  1. `_SQLI_BLIND_PAIRS` 由 4 组裁到 **2 组**（数字型 `1 AND 1=1` / 单引号串型 `1' AND '1'='1`）；
+  2. `_SQLI_BLIND_MAX_REQ` 12 → **30**（= 2 形态 × 5 参数 × 3 请求，与同文件 `_SQLI_MAX_REQ = 30` 内部一致）；
+  3. 循环嵌套改成**形态外层、参数内层** —— 预算优先保证 5 个候选参数**都被两种形态各试一次**
+     （没测到的参数是必然盲区）；参数顺序仍走 `_ordered()` 打乱以保留反 WAF 频率识别的意图；
+  4. "恒真 / 恒假 / 恒真复验"三个请求与"复验不一致即视为页面抖动、不判"的逻辑**原样保留**；
+  5. 注释里写明**刻意放弃** `1) AND (1=1`（括号闭合）与 `1" AND "1"="1`（双引号串）两种形态
+     + 理由（预算优先给参数覆盖，这两种上下文相对少见），作为**已知覆盖缺口**登记，不装作覆盖全了。
+- **红线未破**：`poc_id` 仍是 `a03-sqli-blind`；未引入 `SLEEP(`/`BENCHMARK`/`WAITFOR`/`pg_sleep`。
+
+### 2. `scanner/ssrf.py::CallbackListener.close()` —— join 是死代码（**低，代码与意图不符**）
+
+- `srv, self._server, self._thread = self._server, None, None` 先把 `self._thread` 置 `None`，
+  后面 `if self._thread is not None: self._thread.join(timeout=2)` **永远不执行**。
+  （没有真线程泄漏 —— `srv.shutdown()` 本身会阻塞到 `serve_forever` 退出 —— 但代码与注释宣称的
+  行为不符，"先清空再判空"这种写法会误导下一个接手者。）
+- 改为先把线程取到局部变量再清空：`srv, th = self._server, self._thread` +
+  `self._server, self._thread = None, None`，后面判 `if th is not None: th.join(timeout=2)`；
+  `if srv is None: return` 的位置保证**即使 `srv` 为空也已把 `self._thread` 清空**（`close()` 幂等）。
+
+### 3. `scanner/ctlog.py::_split_names()` —— 逗号连写的 `name_value` 没切开（**低，健壮性**）
+
+- 原来只按 `splitlines()` 切。部分 CT 源的 `name_value` 用**逗号**连写，于是
+  `"a.example.com,b.example.com"` 被当成**一个**"域名"（要等下游 `utils.is_domain()` 才被挡掉，
+  等于让下游替我们擦屁股）；而 `"*.a.example.com,b.example.com"` 会因 `startswith("*.")` 命中、
+  被剥成 `a.example.com,b.example.com` 并**错误地打上 `wildcard=1`** —— 一条假通配符记录。
+- 改为按换行**与逗号**同时切：`re.split(r"[\r\n,]+", ...)`（补 `import re`），
+  其余逻辑（strip、剥 `*.`、`elif "*" in name: continue`、去重保序、`wildcard` 标记）保持不变。
+
+### 4. 回归测试 `tests/smoke.py [6a]`（新增，紧跟 QA 的 `[5z]` 之后）
+
+- ① **盲注参数覆盖**：(a) 全程无信号 → 断言请求数**恰好等于 30** 且 **5 个候选参数一个都没漏测**
+  （旧实现下必挂）；(b) 只让**非首位参数**（第 3 个）对布尔条件敏感 → 断言命中且证据写的是那个参数
+  （旧实现"参数外层"时第一个参数就吃光预算，这条必然漏报）。
+- ② **盲注预算**：断言 `_SQLI_BLIND_MAX_REQ == 30`、`len(_SQLI_BLIND_PAIRS) == 2`，
+  且首个 payload 不含 `sleep|benchmark|waitfor|pg_sleep`。
+- ③ **ctlog 逗号**：`"a.example.com,b.example.com"` → `san == ["a.example.com", "b.example.com"]`
+  且 `wildcard == 0`；`"*.a.example.com,b.example.com"` → 同样两条且 `wildcard == 1`；
+  混排（换行 + 逗号 + 空格）也正确切分。
+- ④ **ssrf close 真 join**：`close()` 后 `_thread is None`、`_server is None`、线程已不存活、
+  `threading.enumerate()` 无残留 `ssrf-callback`，且**重复 `close()` 幂等**。
+  （QA 的 `[5z]` 覆盖的是**异常路径**，这里补**正常路径**。）
+- 同步把 `[5y]` 里那条"抖动不判"的预算断言从硬编码 12 改成引用 `_SQLI_BLIND_MAX_REQ`。
+
+### 5. 验证
+
+- `py -3 tests/smoke.py` → **SMOKE PASS**，新增行：
+  `[6a] 复核修复回归 ok: 盲注覆盖全部 5 个参数（非首位参数可命中，预算 30 = 2×5×3） / ssrf close() 真 join（幂等、无线程残留）/ ctlog 逗号连写正确切分且不误标通配符`
+- 行尾自查：`git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` **逐文件完全一致**
+  （`docs/owasp-mapping.md` 在本仓库原本就是 LF-only，本轮未改变其行尾状态，故不产生 EOL 假 diff）。
+- 文档同步：`docs/owasp-mapping.md` 盲注行、`docs/roadmap.md` 盲注条、`AGENTS.md §7` 盲注段
+  都改为"2 形态 × 5 参数 × 3 请求 = 30"并写明**已知覆盖缺口**（放弃 `)` 与 `"` 两种上下文）。
+
 ## 2026-09-24 —— 收尾：批次 4 提交 + `AGENTS.md §6` 补「删除确认」说明
 > 实施者：**WorkBuddy · Hy4-preview**
 

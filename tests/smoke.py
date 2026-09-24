@@ -2899,7 +2899,7 @@ workflows:
     owasp_checks._get = _jitter_get
     try:
         assert owasp_checks._sqli_blind(targets, settings) is None, "页面抖动不该判盲注"
-        assert _n5["i"] <= 12, f"请求预算超了：{_n5['i']}"
+        assert _n5["i"] <= owasp_checks._SQLI_BLIND_MAX_REQ, f"请求预算超了：{_n5['i']}"
     finally:
         owasp_checks._get = _orig_get5
     # 明确不做延时型：payload 表里不许出现 sleep/benchmark/waitfor
@@ -3193,6 +3193,85 @@ workflows:
     _long5z = owasp_checks.classify_xss("a" * 200000 + _BASE_P, _BASE_P)
     assert _long5z is None or _long5z["context"], "超长输入应安全返回"
     print("[5z] QA 复核补测 ok: SSRF 异常路径 close() 不留线程 / ctlog None·截断·null 不抛异常且逗号串不入资产 / classify_xss None·超长安全")
+
+    # 6a) QA 复核后的三处修复回归（盲注预算分配 / ssrf close 死代码 / ctlog 逗号分隔）
+    #     ① 盲注预算：旧实现是"参数外层、形态内层"，第一个参数就吃掉全部预算（12），
+    #        于是 5 个候选参数**只有 1 个真发过请求**；加上 `_ordered()` 打乱顺序，
+    #        等于"每次随机只测 1/5"。这里让**非首位参数**（第 3 个）才有信号 ——
+    #        旧实现下必然漏报，新实现（形态外层、参数内层、预算 30）必须命中。
+    assert owasp_checks._SQLI_BLIND_MAX_REQ == 30, owasp_checks._SQLI_BLIND_MAX_REQ
+    assert len(owasp_checks._SQLI_BLIND_PAIRS) == 2, owasp_checks._SQLI_BLIND_PAIRS
+
+    def _param_of6(u):
+        for _p in owasp_checks._SQLI_BLIND_PARAMS:
+            if f"?{_p}=" in u or f"&{_p}=" in u:
+                return _p
+        return ""
+
+    # (a) 全程无信号 → 跑满预算，且 **5 个候选参数一个都不能漏测**（旧实现只测到第一个）
+    _blind_urls6 = []
+    owasp_checks._get = lambda u, s, **kw: (_blind_urls6.append(u),
+                                            {"status": 200, "headers": {},
+                                             "text": "x" * 1000, "length": 1000})[1]
+    try:
+        assert owasp_checks._sqli_blind(targets, settings) is None
+    finally:
+        owasp_checks._get = _orig_get5
+    assert len(_blind_urls6) == owasp_checks._SQLI_BLIND_MAX_REQ, \
+        f"预算应为 2 形态 × 5 参数 × 3 请求 = 30，实际 {len(_blind_urls6)}"
+    for _p6 in owasp_checks._SQLI_BLIND_PARAMS:
+        assert any(_param_of6(u) == _p6 for u in _blind_urls6), f"参数 {_p6} 从没被测到"
+    assert not _re5.search(r"sleep|benchmark|waitfor|pg_sleep", _blind_urls6[0], _re5.I), \
+        "红线：不得引入延时型 payload"
+
+    # (b) 只有**非首位参数**（第 3 个）对布尔条件敏感 → 必须命中它
+    #     （旧实现"参数外层"时第一个参数就吃光预算，这条必然漏报）
+    _blind_hit_param6 = owasp_checks._SQLI_BLIND_PARAMS[2]
+
+    def _blind_cover6(u, s, **kw):
+        if _param_of6(u) == _blind_hit_param6:
+            _len = 900 if _re5.search(r"(1=2|'1'='2)", u) else 1200
+        else:
+            _len = 1000
+        return {"status": 200, "headers": {}, "text": "x" * _len, "length": _len}
+
+    owasp_checks._get = _blind_cover6
+    try:
+        _v_cover6 = owasp_checks._sqli_blind(targets, settings)
+    finally:
+        owasp_checks._get = _orig_get5
+    assert _v_cover6 and _v_cover6["poc_id"] == "a03-sqli-blind", _v_cover6
+    assert f"参数 {_blind_hit_param6} 的" in _v_cover6["detail"], \
+        f"命中参数应为非首位的 {_blind_hit_param6}（旧实现只测第一个参数，必然漏报）：{_v_cover6['detail']}"
+    assert "长度差 300B" in _v_cover6["evidence"], _v_cover6["evidence"]
+
+    # ② ssrf close() 的 join 不是死代码：正常路径下线程必须真的被回收
+    _lsn6 = ssrf_mod.CallbackListener("127.0.0.1", 0).start()
+    _th6 = _lsn6._thread
+    assert _th6 is not None and _th6.is_alive(), "监听线程没起来"
+    _lsn6.close()
+    assert _lsn6._thread is None and _lsn6._server is None, "close() 后应清空 server/thread"
+    assert not _th6.is_alive(), "close() 必须真的 join 掉监听线程（此前是死代码）"
+    assert not [t for t in threading.enumerate()
+                if t.name == "ssrf-callback" and t.is_alive()], "仍有存活监听线程"
+    _lsn6.close()                                        # 幂等：重复 close 不该抛异常
+
+    # ③ ctlog：逗号连写的 name_value 要真的切开（而不是靠下游 is_domain 擦屁股）
+    _cm6, _ = ctlog_mod.parse_records('[{"name_value": "a.example.com,b.example.com"}]',
+                                      settings)
+    assert _cm6[0]["san"] == ["a.example.com", "b.example.com"], _cm6[0]["san"]
+    assert _cm6[0]["wildcard"] == 0, "逗号连写的普通串不该被当成通配符"
+    _cm7, _ = ctlog_mod.parse_records('[{"name_value": "*.a.example.com,b.example.com"}]',
+                                      settings)
+    assert _cm7[0]["san"] == ["a.example.com", "b.example.com"], _cm7[0]["san"]
+    assert _cm7[0]["wildcard"] == 1, "带 *. 的整串应剥出干净域名并标记通配符"
+    assert ctlog_mod.domains_of(_cm6) == ["a.example.com", "b.example.com"]
+    # 混排（换行 + 逗号 + 空白）也要正确切开
+    _cm8, _ = ctlog_mod.parse_records(
+        '[{"name_value": "a.example.com\\n b.example.com,c.example.com ,, "}]', settings)
+    assert _cm8[0]["san"] == ["a.example.com", "b.example.com", "c.example.com"], _cm8[0]["san"]
+    print("[6a] 复核修复回归 ok: 盲注覆盖全部 5 个参数（非首位参数可命中，预算 30 = 2×5×3）"
+          " / ssrf close() 真 join（幂等、无线程残留）/ ctlog 逗号连写正确切分且不误标通配符")
     print("SMOKE PASS")
 
 
