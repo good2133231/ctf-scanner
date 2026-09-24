@@ -989,3 +989,43 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [待办] flow 的 JS / 循环 / 带参数引用、workflow 的 subtemplates / args、dsl 表达式、oob 反连：
        仍显式标 unsupported（不静默失效），见 docs/poc-guide.md。
 [待办] 真实授权目标上跑完整 13 阶段：2026-09-23 用户明确「这个我回头自己跑就行」，由用户自行执行，AI 不代跑。
+
+------
+（续31：补 CLI 断点续跑入口 --resume-task）实施者：Trae · DeepSeek-V4.1-Flash
+触发：沿用用户「我需要睡觉去了 等会你跑完自动再跑其他代办」的授权，收尾续29 的**对称缺口**。
+（明细见 CHANGELOG_AI.md 续31 条目；上方「[待办] 批次 5 ① 任务队列·断点续扫」里的续跑部分**就此作废**，
+只追加不改历史行。）
+
+[完成] 1、cli/client.py 新增 `--resume-task <ID>`：输入取自任务自身（name/targets/stages/options），
+       调 `run_task(..., resume=True)`；与 -f/-t/-n/-p/--offline/--full-*/--recursive-dir/-H/--cookie
+       **互斥并直接报错**（这些参数一律不生效，静默忽略会让人以为"这次换了目标"）。
+[完成] 2、无可用断点时在**入口**拒绝（exit 1 + 指向"新建任务"），**不落到** run_task 的
+       "找不到断点就按全部阶段重跑"分支 —— resume_stages() 的 docstring 明确要求调用方拒绝而非回退全量。
+[完成] 3、main() 尾部"摘要打印 + 四个 --report* 导出"抽成 `_print_summary()` / `_emit_reports()`，
+       新建与续跑共用（复制一份必然漂移：JSONL 的 write_bytes、PDF 失败要 exit(1) 都只在其中一份里）。
+[完成] 4、tests/smoke.py `[6s]`（全程桩掉 run_task，零真实请求）；变异证伪 3/3 全被击杀。
+[未做] 5、真实中断任务上的 CLI 续跑实测（需要用户的授权目标先跑一次中断）。
+
+------
+（续32：本机守卫）实施者：Trae · DeepSeek-V4.1-Flash
+触发：继续自主推进 docs/roadmap.md 明列的 [ ] 项「鉴权加固：多用户、CSRF、HTTPS 部署指引」。
+
+[完成] 1、gui/app.py 四处：模块级 `_LOOPBACK_HOSTS`（127.0.0.1 / localhost / ::1，**刻意不含 0.0.0.0**
+       —— 它是绑定地址不是可访问主机名）+ 纯函数 `_host_of()`（剥端口、IPv6 去方括号、归一大小写与空白、
+       解不出返回空串不猜）+ 会话 Cookie 显式 `HttpOnly`/`SameSite=Lax` + `before_request` 守卫
+       `_local_guard()`（Host 白名单 + 写方法 Origin/Referer 校验） + serve() 绑非回环地址时显式告警。
+[完成] 2、根因（威胁建模）：DNS rebinding（恶意域名解析到 127.0.0.1 → 浏览器视作同源）+ 公开默认口令
+       `ctfscanner`（app.secret_key 由它派生）= **一键接管扫描器**（能拿它打任意目标，并用上已配置的
+       目标侧登录态）；另 Cookie **不按端口隔离**，同机另一个服务发起的请求同样带 Cookie，
+       所以 Origin 必须比 netloc **含端口**。
+[完成] 3、刻意**不做**逐表单 CSRF token：表单与 fetch 调用点几十处，逐处改造与 Origin 校验防护面重叠，
+       且漏一处就是"看起来有防护、实际有缺口"；中间件层一次性覆盖所有写操作。
+[完成] 4、tests/smoke.py `[6t]`（全走 test client，零真实请求）；变异证伪 3/3 全被击杀
+       （① `_guard_local` 恒 False ② 关掉 Origin 校验 ③ 去掉 SESSION_COOKIE_SAMESITE）。
+[完成] 5、文档同步：docs/roadmap.md L112 转 [~]（并写明"多用户/HTTPS 与定位冲突、要做应单独立项"）、
+       docs/security-notice.md 新增「控制台加固现状」一节、AGENTS.md（GUI 鉴权段 + smoke 清单 [6t]）、
+       docs/usage.md（对外访问与端口占用两处口径）、TODO.md、CHANGELOG_AI.md。
+[未做] 6、**多用户 / 角色 / 访问审计 / HTTPS** 仍未做 —— 与"单用户本机工具"的定位冲突（前者要引入用户表、
+       权限模型、任务归属与审计；后者是反代与证书的部署形态问题），应作为独立需求重估，不在本条里加壳。
+[未做] 7、**未验**：真实浏览器的 DNS rebinding 攻击链、反向代理场景（X-Forwarded-Host 等）——
+       前者需构造恶意域名与 DNS 解析，后者需真实反代部署。

@@ -356,7 +356,7 @@ python3 run_gui.py
 
 - **工具版本**：subfinder/httpx/puredns 下载 `linux_amd64` 包；dirmap 是纯 Python，clone 即用；
 - **解释器名**：多数发行版只有 `python3` 没有 `python`。dirmap 配置项若不调整，框架会自动退回当前解释器（`utils.pick_python`），无需手动改；
-- **对外访问**：默认 `gui.host: 127.0.0.1` 仅本机可访问；部署在服务器上给团队用时把 settings.yaml 的 host 改 `0.0.0.0` 并改掉默认口令——但控制台无 CSRF/HTTPS 加固，务必放在内网或套反代认证，不要直接暴露公网；
+- **对外访问**：默认 `gui.host: 127.0.0.1` 仅本机可访问（续32 起另有 Host 白名单与写操作 Origin 校验两道本机守卫，详见 `docs/security-notice.md`）。**推荐做法是保持回环绑定 + 前面套反向代理**（反代层做 TLS 与强口令/访问日志），而不是把 host 改 `0.0.0.0`；确需绑非回环地址时 `serve()` 会打印显式告警，且 Host 白名单会自动放宽。控制台**没有**多用户、HTTPS 与访问审计，务必同时改掉默认口令（`gui.token` 也是 Flask 会话密钥的派生源）；
 - **权限**：不需要 root；工具放 `~/bin` 并加入 PATH 即可；
 - **常驻运行**：测试可用 `nohup python3 run_gui.py &`，正式使用建议 systemd（`Restart=on-failure`）或 tmux。
 
@@ -375,7 +375,8 @@ python3 run_gui.py
 均为 Go 程序，官方 release 有 exe；puredns 依赖 resolvers 文件，框架已自带。
 
 **Q：控制台乱码 / 端口占用？**
-端口在 settings.yaml `gui.port` 修改；控制台仅建议本机访问，不要暴露公网（无 CSRF/HTTPS 加固）。
+端口在 settings.yaml `gui.port` 修改；控制台仅建议本机访问，不要暴露公网（无多用户/HTTPS/审计；
+续32 的本机守卫只在绑回环地址时生效，见 `docs/security-notice.md`）。
 
 **Q：扫内网大段 C 类？**
 CIDR 已支持展开：`10.0.0.0/30` 会展开为可用主机逐条进入流水线；但**上限 256 个地址**，

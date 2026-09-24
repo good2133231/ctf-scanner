@@ -378,6 +378,15 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   互斥报错 / 任务不存在与运行中均拒绝 / 选项取自任务自身而非本次参数。
                             #   全程桩掉 `run_task`，零真实请求；用 `os.getpid()` 占住 pid 才能
                             #   测到"运行中拒绝"（否则 reconcile 会先把该 running 判成孤儿 failed）。
+# 2026-09-25 续32 新增 `[6t]`：**本机守卫** —— `_host_of` 纯函数（`host:port` 剥端口 / IPv6 字面量
+                            #   剥方括号 / 大小写与空白归一 / `0.0.0.0` **不算**回环 / 解不出返回空串不猜）/
+                            #   Host 白名单（外站 Host 在 GET 与 POST 上均 403；`127.0.0.1` 与
+                            #   `localhost:5000` 放行 —— 白名单比的是**主机名**）/ 写方法 Origin 与
+                            #   Referer 校验（跨站、**同机异端口**、`null` 均 403；同源放行）/
+                            #   带外站 Origin 的 **GET 放行**（不误伤导航）/ 两个头都缺时放行
+                            #   （curl/脚本必须能用）/ 登录响应 `Set-Cookie` 含 `HttpOnly` 与
+                            #   `SameSite=Lax`。全走 test client，不占端口、零真实请求。
+                            #   **未验**：真实浏览器的 DNS rebinding 链路与反代场景（见续32 变更记录）。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -494,7 +503,18 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   的回填是完全可能同时打满的。新增写路径时**必须**走 `_exec` 或显式加这把锁。
 - `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
-- GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
+- GUI **仅限本机使用**（单用户、无多用户/HTTPS/审计）。续32 起有两道**本机守卫**
+  （`gui/app.py` 的 `_local_guard`，两个都只服务于"本机单用户"这一模型）：
+  ① **Host 白名单** `_LOOPBACK_HOSTS = {127.0.0.1, localhost, ::1}` —— 挡 DNS rebinding
+  （恶意域名解析到 127.0.0.1 即被浏览器视为同源，叠加上公开的默认口令 `ctfscanner` 就是完整接管）；
+  只在下述**绑定回环地址**时启用。② **写方法 Origin/Referer 校验** —— POST/PUT/PATCH/DELETE
+  要求其 netloc 与本次 `Host` **完全一致**（含端口：Cookie 不按端口隔离，同机另一个服务同样危险）；
+  `Origin: null` 不放行，两个头都缺失时放行（curl/脚本必须能用）。会话 Cookie 显式设
+  `HttpOnly` + `SameSite=Lax`（不依赖浏览器默认值）。**刻意不做**逐表单 CSRF token（几十处调用点，
+  漏一处就是"看起来有防护、实际有缺口"）。`serve()` 在绑非回环地址时打显式告警 —— 那种模式下
+  Host 白名单自动放宽，暴露必须看得见。**注意 `_LOOPBACK_HOSTS` 刻意不含 `0.0.0.0`**（它是绑定
+  地址、不是可访问的主机名）；`gui.host` 改了要**重启**才生效（守卫在 `create_app()` 算一次）。
+- 「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
   takeover/portscan/jsmine/dirscan/vulnscan/screenshot/cert/iprecon/fofa/**ssrf/shodan/quake/ctlog**/
   blacklist/intel/heuristic/**github** **二十三段**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned）
   （含按级别 / 按 OWASP 分类 /

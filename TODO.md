@@ -644,7 +644,11 @@
 - [ ] **仍未做（2026-09-25 按代码复核，权威清单见 `docs/roadmap.md`）**：
       ① **任务队列**（替代后台线程、支持并发任务；**同项的「断点续扫」已在续29 落地** ——
          详情页「续跑」按钮 + `POST /api/tasks/<id>/resume`，见 `docs/roadmap.md` 该条的 `[~]`）；
-      ② **鉴权加固**（多用户 / CSRF / HTTPS 部署指引 —— 当前刻意**仅限本机使用**）；
+      ② **鉴权加固**（多用户 / CSRF / HTTPS 部署指引）—— **2026-09-25 续32 部分落地**：
+         `gui/app.py` 的 `_local_guard` 两道本机守卫（Host 白名单挡 DNS rebinding；写方法
+         Origin/Referer 校验比 netloc **含端口**，因 Cookie 不按端口隔离）+ 会话 Cookie 显式
+         `HttpOnly`/`SameSite=Lax` + 绑非回环地址时 `serve()` 显式告警（回归见 `tests/smoke.py [6t]`）。
+         **多用户与 HTTPS 部署指引仍未做**，理由是二者与"单用户本机工具"的定位冲突（见 roadmap 该条）；
       ③ **分布式节点**（**前置条件：先替换 SQLite**，依赖最重）；
       ④ **工具版本管理**（一键下载 / 更新 subfinder · httpx · puredns）；
       ⑤ ~~目录递归爬取~~ → **2026-09-25 续30 已落地**：没有打开 dirmap 的 `conf.recursive_scan`，

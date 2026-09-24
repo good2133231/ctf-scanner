@@ -109,7 +109,13 @@
       详情页「续跑」按钮，断点复用 `tasks.current_stage`；**续31 补齐 CLI 入口 `--resume-task <ID>`**，
       与 GUI 同口径：互斥参数直接报错、无断点在入口拒绝，见 `docs/architecture.md`）；
       **任务队列本身仍未做**（当前仍是任务级后台线程 + 进程内写锁 `db._WRITE_LOCK`）；
-- [ ] 鉴权加固：多用户、CSRF、HTTPS 部署指引（当前仅限本机使用）；
+- [~] 鉴权加固：多用户、CSRF、HTTPS 部署指引（当前仅限本机使用）：
+      **「本机守卫」已落地**（续32：`gui/app.py` 的 `_local_guard` —— Host 白名单挡 DNS rebinding，
+      写方法的 Origin/Referer 校验比 netloc **含端口**（Cookie 不按端口隔离），会话 Cookie 显式
+      `HttpOnly` + `SameSite=Lax`，绑非回环地址时 `serve()` 打显式告警）。
+      **未做**：多用户/角色与访问审计、以及 HTTPS 部署指引 —— 二者与"单用户本机工具"的定位冲突
+      （前者要引入用户表/权限/任务归属，后者是反代与证书的部署形态问题），
+      要做应作为一条独立需求重估，而不是在本条里顺手加壳；
 - [x] **报告升级**（续16）：Markdown（原有）+ **HTML**（`report.generate_html()`，自包含单文件、
       内联样式、不引外链，全量 `html.escape`）+ **PDF**（`report.export_pdf()`，复用本机无头
       Edge/Chrome 的 `--print-to-pdf`，**不引入新依赖**；没有浏览器时明确报错并指向 HTML 替代路径）

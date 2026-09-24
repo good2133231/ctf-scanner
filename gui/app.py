@@ -4,7 +4,10 @@
 - 单进程 Flask + 后台线程执行流水线，满足 CTF 单机场景；生产化改造（任务队列、鉴权体系）
   见 docs/roadmap.md；
 - 默认仅监听 127.0.0.1，登录口令为 config/settings.yaml 的 gui.token（默认 ctfscanner）；
-- 控制台本身没有做 CSRF 等加固，切勿部署到公网。
+- 续32 起有两道**本机守卫**（Host 白名单防 DNS rebinding + 写操作的 Origin/Referer 校验，
+  见 `create_app` 的 `_local_guard`），但它们只为"本机单用户"这一模型兜底，
+  **不是**面向公网的鉴权体系：没有多用户/角色、没有 HTTPS、没有访问审计与限流。
+  **故意暴露到局域网/公网前**，请先自己做反向代理 + 强口令 + 传输加密，并读 docs/security-notice.md。
 """
 import functools
 import html
@@ -15,7 +18,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from flask import (Flask, Response, abort, jsonify, redirect, send_file,
                    render_template, request, session, url_for)
@@ -159,6 +162,20 @@ def parse_port_list(spec, default=None):
     return sorted(out) or list(default or [443, 8443, 9443])
 
 
+# 本机访问的白名单口径（续32）：`127.0.0.1` / `localhost` / IPv6 回环。
+# 用于两道"仅限本机"的技术落实 —— Host 白名单（挡 DNS rebinding）与会话 Cookie 的 SameSite。
+# 注意：这里**不含** `0.0.0.0`（它是"监听所有网卡"的绑定地址，不是可访问的主机名）。
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _host_of(netloc):
+    """从 `host[:port]` / `[::1]:5000` 里取出**小写主机名**；取不出返回空串（不猜）。"""
+    text = str(netloc or "").strip().lower()
+    if text.startswith("["):                 # IPv6 字面量：`[::1]:5000`
+        return text[1:].split("]", 1)[0]
+    return text.rsplit(":", 1)[0] if ":" in text else text
+
+
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
@@ -173,6 +190,50 @@ def create_app():
     sync_pocs(settings)
 
     # ---------- 鉴权 ----------
+
+    # 会话 Cookie 显式收紧（续32）：不依赖浏览器默认值 —— `SameSite=Lax` 让**跨站 POST 不携带**
+    # 这个 Cookie（现代浏览器默认就是 Lax，但"依赖默认值"在旧浏览器上等于没有），
+    # `HttpOnly` 让页面脚本读不到它。注意 Cookie **不按端口隔离**，所以同机的另一个 Web 服务
+    # 访问 `127.0.0.1:5000` 时仍算同站、Cookie 照样会带上 —— 这就是下面还必须校验 Origin 的原因。
+    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+    # 只在**绑定回环地址**时才强制 Host 白名单：用户显式绑到局域网/公网时，我们无法预知他用哪个
+    # 地址或域名访问，强制白名单会把人直接挡在门外（那种用法本就该先做反向代理与鉴权，
+    # `serve()` 会打警告）。`gui.host` 改了要重启才生效，与 `app.run` 的取值时点一致。
+    _guard_local = _host_of(settings.get("gui", {}).get("host", "127.0.0.1")) in _LOOPBACK_HOSTS
+
+    @app.before_request
+    def _local_guard():
+        """续32「仅限本机使用」的两道**技术**落实（此前只有文档里一句"切勿部署到公网"）。
+
+        ① **Host 白名单**（挡 DNS rebinding）：攻击者页面把自己的域名解析到 `127.0.0.1` 后，
+           浏览器就认为它与本机控制台"同源"，于是能带着 Cookie 打进来；默认口令 `ctfscanner`
+           又是公开写在代码里的 —— 两件事一叠加，用户只要在开着控制台时访问了恶意页面，
+           扫描器就被整个接管（能拿它去打任意目标、并用上已配置的登录态）。校验 `Host`
+           必须是回环名即可挡住整类攻击。
+        ② **跨站状态变更拦截**：只对写方法（POST/PUT/PATCH/DELETE）校验 `Origin`（无 `Origin`
+           时退回 `Referer`），要求其 netloc 与本次请求的 `Host` **完全一致**（含端口 ——
+           Cookie 不按端口隔离，同机另一个服务发起的请求同样危险）。两者都缺失时放行
+           （curl / 脚本 / 老浏览器本就不带这两个头，本机工具必须能用）；`Origin: null`
+           （沙箱 iframe、`file://` 页面）**不放行**。
+
+        刻意**不**做"每个表单塞 CSRF token"：本控制台的表单与 fetch 调用点有几十处，逐处改造
+        与 ② 的防护面重叠，而漏掉任何一处就是"看起来有防护、实际有缺口"；`Origin` 校验在
+        中间件层**一次性覆盖所有写操作**，不存在漏一个表单的可能。
+        """
+        host = _host_of(request.host)
+        if _guard_local and host not in _LOOPBACK_HOSTS:
+            abort(403, description="仅允许从本机访问：Host 不是回环地址")
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return None
+        origin = (request.headers.get("Origin") or "").strip()
+        if origin:
+            if origin.lower() == "null" or _host_of(urlparse(origin).netloc) != host:
+                abort(403, description="跨站请求被拒绝：Origin 与 Host 不一致")
+            return None
+        referer = (request.headers.get("Referer") or "").strip()
+        if referer and _host_of(urlparse(referer).netloc) != host:
+            abort(403, description="跨站请求被拒绝：Referer 与 Host 不一致")
+        return None
 
     def login_required(fn):
         @functools.wraps(fn)
@@ -1494,6 +1555,12 @@ def serve():
         raise SystemExit(1)
     print(f"[*] CTFScanner 控制台: http://{host}:{port}")
     print(f"[*] 登录口令: {s.get('token', 'ctfscanner')}（config/settings.yaml 可修改）")
+    # 续32：绑到非回环地址 = **主动放弃了上面那道 Host 白名单**（我们无法预知你用哪个地址访问），
+    # 而控制台没有多用户/HTTPS/审计 —— 这里必须**显式告警**，不能让"暴露"悄无声息地发生。
+    if _host_of(host) not in _LOOPBACK_HOSTS:
+        print(f"[!] 警告：正在监听 {host}（非回环地址），局域网/公网上的任何人都能访问本控制台。")
+        print("    本控制台没有多用户、HTTPS 与访问审计；Host 白名单在本模式下已自动放宽。")
+        print("    确需远程使用时，请走反向代理（带强口令与 TLS），并把它限制在可信网段。")
     app.run(host=host, port=port, debug=False)
 
 

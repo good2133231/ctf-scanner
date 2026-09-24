@@ -4935,6 +4935,57 @@ workflows:
           "无断点入口即拒绝（不回退全量）/ 与 -t·--offline·--recursive-dir·-n 互斥 / "
           "任务不存在与运行中均拒绝 / 选项取自任务自身")
 
+    # [6t] 续32 本机守卫：把「仅限本机使用」从文档里的一句"切勿部署到公网"变成**技术落实** ——
+    #      Host 白名单（挡 DNS rebinding，叠加上公开的默认口令 `ctfscanner` 就是完整接管）+ 写方法的
+    #      Origin/Referer 校验（Cookie 不按端口隔离，同机另一个服务也能带 Cookie 打进来）+
+    #      会话 Cookie 的 HttpOnly/SameSite 显式化。全程走 test client，不占端口、不发真实请求。
+    from gui.app import _host_of
+
+    # 1) `_host_of` 是纯函数，先把口径钉死 —— 白名单与 Origin 比对都建立在它上面
+    assert _host_of("127.0.0.1:5000") == "127.0.0.1"
+    assert _host_of("[::1]:5000") == "::1", "IPv6 字面量要剥方括号"
+    assert _host_of("LOCALHOST") == "localhost" and _host_of("  Example.COM ") == "example.com", \
+        "大小写/空白必须归一，否则白名单与 Origin 比对都能被绕过"
+    assert _host_of("0.0.0.0") == "0.0.0.0", "0.0.0.0 是绑定地址不是回环主机名，不得进白名单"
+    assert _host_of("") == "" and _host_of(None) == "", "取不出主机名时返回空串（不猜）"
+    assert _host_of("evil.example:5000") == "evil.example"
+
+    # 2) Host 白名单：绑定回环地址时，非回环 Host 一律 403。
+    #    test client 默认 Host 就是 `localhost`（在白名单内），所以这里必须**显式**换成外站域名
+    assert c.get("/login", headers={"Host": "evil.example"}).status_code == 403
+    assert c.post("/login", data={"token": settings["gui"]["token"]},
+                  headers={"Host": "evil.example"}).status_code == 403
+    assert c.get("/login", headers={"Host": "127.0.0.1"}).status_code == 200
+    assert c.get("/login", headers={"Host": "localhost:5000"}).status_code == 200, \
+        "回环 + 端口仍应放行（白名单比的是主机名）"
+
+    # 3) 写方法的 Origin/Referer 校验（比 netloc **含端口**：Cookie 不按端口隔离）
+    _tok32 = settings["gui"]["token"]
+    for _hdr32 in ({"Origin": "http://evil.example"},
+                   {"Origin": "http://127.0.0.1:9999"},     # 同机另一个服务 → 靠端口挡住
+                   {"Origin": "null"},                      # file:// 页面 / 沙箱 iframe
+                   {"Referer": "http://evil.example/x"}):   # 无 Origin 时退回 Referer
+        assert c.post("/login", data={"token": _tok32}, headers=_hdr32).status_code == 403, _hdr32
+    for _hdr32 in ({"Origin": "http://localhost"},
+                   {"Origin": "http://localhost:5000"},
+                   {"Referer": "http://localhost/x"}):
+        assert c.post("/login", data={"token": _tok32}, headers=_hdr32).status_code == 302, _hdr32
+    # 只拦写方法：带外站 Origin 的 GET 必须放行（否则正常导航会被误伤）
+    assert c.get("/login", headers={"Origin": "http://evil.example"}).status_code == 200
+    # 两个头都缺失时放行（curl / 脚本 / 老浏览器本就不带；本机工具必须能用）
+    assert c.post("/login", data={"token": _tok32}).status_code == 302
+
+    # 4) 会话 Cookie 显式收紧（不依赖浏览器默认值 —— 旧浏览器上"默认"等于没有）
+    _ck32 = c.post("/login", data={"token": _tok32}).headers.get("Set-Cookie", "")
+    assert "HttpOnly" in _ck32, _ck32
+    assert "SameSite=Lax" in _ck32, _ck32
+    assert app.config["SESSION_COOKIE_HTTPONLY"] is True
+    assert app.config["SESSION_COOKIE_SAMESITE"] == "Lax"
+
+    print("[6t] 续32 本机守卫 ok: Host 白名单（外站 Host 403 / 回环与回环+端口放行）/ "
+          "写方法 Origin 与 Referer 校验（跨站与同机异端口与 null 均 403，同源放行）/ "
+          "GET 不拦 / 两个头都缺时放行 / _host_of 归一与解不出不猜 / Cookie HttpOnly+SameSite=Lax")
+
     print("SMOKE PASS")
 
 
