@@ -3,6 +3,113 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续23：主题配色修复（浅色主题「字看不见」）+ 新增配色门禁
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+> 接管说明：本轮由新负责人接管后按排期实施。**这是「排期项」而非「丢失的工作」** ——
+> 仓库里从未有过续23 的提交，`CHANGELOG_AI.md` 也没有对应条目，只在
+> `.workbuddy-ai/memory/2026-09-24.md` 的「待办（本轮排期）」里挂着。
+> 唯一遗留物是未跟踪的 `tools/check_contrast.py`，它自称是续23 的验收工具，
+> 但对当时的 CSS 实测 **132 项检查 / 99 项失败**（全是假 `MISSING`，见下 B）。
+
+### A. `gui/static/style.css`：裸 hex 提升为 CSS 变量（缺陷本体）
+
+- **症状**：四套主题靠 `html[data-theme=...]` 覆盖 `:root`，但**规则体里有 20 处硬编码色**
+  不随主题走。用户可见的后果是切到**浅色**主题后「深底深字」：
+  * `tr:hover td{background:#1a2230}` → 悬停行的 URL 对比度 **1.06:1**（几乎全黑）
+  * `input,textarea,select,button{background:#0d1218}` 与 `pre{background:#0d1218}`
+    → 筛选框、输入框、代码块里的文字 **1.25:1**
+  这两处就是用户在浅色主题下点名"看不见"的元凶。
+- **改法（最小改动，只动这一个文件）**：主题变量从 **9 个扩到 46 个**，
+  `:root` 给出深色**完整默认值**，light/ocean/violet 三块**只覆盖差异项**（层叠继承）。
+  新增变量：`--side-active / --topbar-bg / --chip-bg / --bar-track / --input-bg / --code-bg /
+  --border / --ghost-bg / --ghost-fg / --ghost-hover / --btn-bg / --btn-border / --btn-fg /
+  --btn-hover / --danger / --danger-bg / --danger-border` + 10 组徽章前景/背景对
+  （`--st-{run,done,fail,wait,stop}-*`、`--sev-{crit,high,med,low,info}-*`）。
+  正文替换：`.side-item:hover/.active`、`.topbar`、`.error`、`button.ghost(+hover)`、
+  `button.danger`、`.panel-toggle(+hover)`、`tr:hover td`、`.badge`、`.st-*`、`.sev-*`、
+  `.bar`、`input/textarea/select/button`、`button(+hover)`、`pre`、`.theme-switch select`。
+- **同时修掉浅色主题原本就不达标的取值**（这些不是裸值，是变量值本身偏暗）：
+  `--muted` `#6b7686→#5f6a7b`、`--accent` `#0f8f6f→#0b6b52`、`--border` `#7b8899`
+  （原 `--line` 既做分隔线又做控件描边，2.9:1，现拆出 `--border` 专管交互控件）；
+  深色 `--muted` 为过 4.5:1 从 `#7d8b9d` 提到 `#8795a7`。
+- **删掉原来那两条"只遮一半"的浅色补丁**（`html[data-theme="light"] pre,.topbar{background:#eef1f6}`
+  与 `.side-item:hover,.active{background:var(--hover)}`）—— 它们正是"补丁式修色"的产物，
+  现在每个元素都走变量，不需要特例。
+- 评委/维护者要注意：**徽章是"自包含色块"**（前景背景成对），四套主题刻意共用一套，
+  故只在 `:root` 声明一次、不在三套主题里重复。
+
+### B. `tools/check_contrast.py`：从"假红"到可用的门禁（工具本身的缺陷）
+
+- **症状（接手时）**：该脚本 `parse_themes()` 把 `:root` 归成 `"dark"` 后**不模拟层叠继承**，
+  于是"某主题没显式写的变量"一律报 `MISSING` → 对真实 CSS 实测 **132 项 / 99 项失败**，
+  全是**假失败**。一个永远红的门禁等于没有门禁。
+- **改法 1 · 层叠语义**：`parse_themes()` 先收集各主题**显式**声明，再把 `:root` 的键值
+  `dict(base, **raw[theme])` 补进每套主题。这样「某主题漏写变量」会真实退化成深色取值，
+  由**对比度 FAIL** 抓（这才是缺陷的真实形态）；只有四套都没定义才算 `MISSING`。
+- **改法 2 · 新增裸值守卫 `find_stray_literals()`**：**这才是本轮 bug 的可自动化形态** ——
+  漏定义变量会失效，但"写了裸 hex"不会。实现要点：
+  * 先按等长把 `/* 注释 */` 替换成空白（保留换行，行号不漂），注释里的 hex 不算；
+  * 只扫**规则体**（`{...}` 内部），选择器里的 `#tbl-all-sites` 这类 `#id` 天然不参与；
+  * 主题块按**字符区间**排除，**不做选择器字符串比对** —— 我第一版用
+    `sel.strip() == ":root"` 判断，在带 BOM / 前置注释的文件上直接失效，把主题块自身
+    的 109 个色值全报成裸值。改用「`_ANY_BLOCK_RE` 的 **body 区间**落在 `_BLOCK_RE` 的
+    主题区间内」判定后免疫。
+- **改法 3 · 收敛成唯一口径 `gate(css_text) -> List[str]`**：命令行退出码、`smoke.py [6n]`、
+  证伪脚本都调它，避免"门禁说绿、断言其实测的是别的东西"。
+- **改法 4**：新增 UI 配对 `--border / --input-bg`（描边两侧底色都要能分辨，
+  WCAG 1.4.11 的口径是"与相邻颜色"而非只与页面对比）。
+- **结果**：`py -3 tools/check_contrast.py` → **137 项检查 / 0 项失败**（四主题各 34 项配对
+  + 1 项裸值守卫）。深色最低 3.45:1、浅色最低 3.33:1（都是控件描边），文字类最低 5.06:1。
+
+### C. `tests/smoke.py [6n]`（新增，紧跟 `[6m]`）
+
+- 用 `importlib` 按路径加载 `tools/check_contrast.py`（`tools/` 不是包，故不用 `import`），
+  断言 `gate(style.css 全文)` 为空。**不在 smoke 里另写一套判断** —— 口径漂移是这类
+  "看起来有门禁"的最大风险。
+- 顺带断言四套主题都在（`set(parse_themes(...)) == set(THEMES)`）。
+
+### D. 证伪（按 `AGENTS.md §6.1`：必须证明新断言在旧代码下会挂）
+
+用与 `[6n]` **同一个 `gate()`** 对 6 种变异逐一验证，**6/6 全部被抓到**：
+
+| 变异 | 门禁反应 |
+|---|---|
+| `tr:hover td` 退回 `#1a2230` | 裸值 1 处（`style.css:140`） |
+| `input/pre` 退回 `#0d1218` | 裸值 1 处（`style.css:158`） |
+| 删掉 light 的 `--muted` | 对比度 FAIL 4 项（最低 **2.82:1**） |
+| 删掉 light 的 `--accent` | 对比度 FAIL 3 项（最低 **1.63:1**） |
+| 删掉 light 的 `--danger` | 对比度 FAIL 3 项（最低 **1.61:1**） |
+| 删掉整个 light 主题块 | 27 项（含"主题未定义"） |
+
+**基线必须先绿**（`assert not gate(text)`）—— 否则证伪没有意义。
+
+### E. 验证与实测
+
+- `py -3 tools/check_contrast.py` → 137/0（见 B）。
+- `py -3 tests/smoke.py` → **SMOKE PASS**（含 `[6n]`）。
+- **GUI 只读实测**（浏览器子代理，独立实例 `127.0.0.1:5099` + `CTFSCANNER_DB/LOGS` 隔离到
+  `logs/_gui23/`，未碰 `data/scanner.db`）：浅色 / 深蓝 / 紫罗兰三套主题下，
+  正文与标题、`th` 与单元格、**筛选框与输入框内部的文字**、折叠面板按钮、灰字次要说明
+  全部清晰可读，无「文字与背景几乎同色」；浏览器 console **无报错**（CSS 未 404）。
+
+### F. 文档
+
+- `AGENTS.md §7` 新增一条：**界面颜色一律走 CSS 变量、规则体不许出现裸 hex**，
+  写明门禁命令（`tools/check_contrast.py` + `smoke.py [6n]`）与"新增颜色时先在 `:root` 声明"。
+- `AGENTS.md §9` **改掉了一条会咬人的 EOL 归位命令**：原文给的 PowerShell 写法
+  `-replace "\r\n","\n" -replace "\n","\r\n"` 在当前环境**会失效** ——
+  PowerShell 的转义符是反引号 `` ` `` 而非反斜杠，`"\r\n"` 被当成 **4 个字的字面文本**，
+  结果把 `\r\n` 真的写进源文件（本轮实测 `tools/check_contrast.py` 中了 **368 处**，
+  文件变成一整行、Python 直接语法错误）。已替换为 Python 字节级写法并补自查口径
+  （`LF 数 == CR 数` 且能正常 import）。**这是本轮新发现、文档里没有记录的问题。**
+
+### 本轮范围外（如实标注，未做）
+
+- 续24（截图默认开 + 目录/折叠修正 + 线索隐藏）、续26（GitHub 最小形态）**未开工**。
+- `logs/` 下 120+ 个 `smoke-*` 残留目录（gitignored）未清理，需用户点头。
+- Windows 真实浏览器渲染只做了截图目视 + 数值计算两条；**未做**真实色盲模拟器 / 打印样式表检查。
+
 ## 2026-09-24 —— 续25-fix：QA 复验 `c8d51c4` 报出的三项低风险缺陷
 > 实施者：**WorkBuddy · Hy4-preview**
 

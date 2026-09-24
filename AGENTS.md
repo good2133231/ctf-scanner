@@ -638,6 +638,18 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   （字典 150 + 基线 3），命中 `.env` + `.git/config` 不变。
   *（AGENTS 早前记录的整轮 11 阶段数字 256/262、dirscan 177/183 是**修复前**的值，本轮未重跑；
   按新规则 dirscan 段应为 `150 + 3 × 站点数`。）*
+- **界面颜色一律走 CSS 变量，规则体里不许出现裸 hex**（2026-09-24 续23）：
+  `gui/static/style.css` 的四套主题（`:root` 深色默认 + `html[data-theme="light"/"ocean"/"violet"]`）
+  靠**层叠**切换 —— 主题块只写「与深色不同」的项。此前 `tr:hover td{background:#1a2230}` 与
+  `input/pre{background:#0d1218}` 是**裸值**，切到浅色主题后成了「深底深字」：
+  实测对比度 **1.06:1 / 1.25:1**，表格悬停行的 URL、筛选框与输入框文字**直接看不见**。
+  现在这两处以及 `.badge` / `.st-*` / `.sev-*` / `.bar` / `button` 各态 / `.topbar` /
+  `.side-item` / `.error` / `.panel-toggle` 全部改用变量（46 个变量）。
+  **门禁两道，改样式后必须都过**：① `py -3 tools/check_contrast.py`（四主题 x 34 项配对
+  对比度，文字 ≥ 4.5:1、UI 控件描边 ≥ 3:1，另加主题块外**裸值守卫**，全绿退出码 0）；
+  ② `tests/smoke.py [6n]`（复用同一个 `gate()`，口径与命令行一致）。
+  新增主题或新增颜色时：**在 `:root` 声明默认值**，只在确实要变的三套主题里覆盖，
+  然后跑门禁。纯装饰的分隔线 `--line` 刻意不参与 3:1 判定（理由见该脚本模块 docstring）。
 
 ## 8. 不要做的事
 
@@ -666,8 +678,17 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   ($b | Where-Object { $_ -eq 10 }).Count
   ```
 
-  归位办法（纯 EOL、不动内容，跨平台可靠）：
-  `$t=[IO.File]::ReadAllText($p) -replace "\r\n","\n" -replace "\n","\r\n"; [IO.File]::WriteAllText($p,$t,(New-Object Text.UTF8Encoding $false))`
+  归位办法（纯 EOL、不动内容，跨平台可靠）——
+  **注意 PowerShell 的转义符是反引号 `` ` `` 不是反斜杠**，所以下面这种写法是**错的**：
+  `$t=[IO.File]::ReadAllText($p) -replace "\r\n","\n" -replace "\n","\r\n"`
+  —— 它会把 4 个字符 `\` `r` `\` `n` **当字面文本插进文件**（本轮续23 实测：368 处）。
+  用这个（Python，行为确定）：
+
+  ```powershell
+  py -3 -c "from pathlib import Path; p=Path(r'<文件>'); b=p.read_bytes(); b=b.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'); p.write_bytes(b)"
+  ```
+
+  自查：`LF 数 == CR 数` 且文件能正常 import/运行。
   *（**刻意不用** `.gitattributes text=auto eol=crlf`：它会把索引侧 EOL 全量改写，需要一次覆盖
   全仓库的迁移提交，`git blame` 的归因随之失效 —— 与 §0.1「事后分辨谁改了什么」冲突。
   宁可保留"提交前自查"这道人工闸门。）*

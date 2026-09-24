@@ -4155,6 +4155,19 @@ workflows:
     print("[6m] 续25-fix 三项缺陷回归 ok: drop_existing 0/None/'' 不再混为一谈"
           "（443↔'443' 仍同一键）/ full-scan append 显式 409 不再静默新建 / "
           "append_scope 空集不折 None（不回退全库）")
+    # [6n] 续23 主题配色门禁：四套主题配对对比度全达 WCAG AA + 主题块外 0 处颜色字面量。
+    # 走 tools/check_contrast.gate()（与命令行、证伪脚本同一口径），不在这里另写一套判断。
+    import importlib.util as _ilu6n
+    _spec6n = _ilu6n.spec_from_file_location("_smoke_check_contrast", ROOT / "tools" / "check_contrast.py")
+    _cc6n = _ilu6n.module_from_spec(_spec6n)
+    _spec6n.loader.exec_module(_cc6n)
+    _css6n = (ROOT / "gui" / "static" / "style.css").read_text(encoding="utf-8")
+    _problems6n = _cc6n.gate(_css6n)
+    assert not _problems6n, "续23 主题配色门禁未通过：\n  " + "\n  ".join(_problems6n)
+    _pairs6n = len(_cc6n.TEXT_PAIRS) + len(_cc6n.BADGE_PAIRS) + len(_cc6n.UI_PAIRS)
+    print("[6n] 续23 主题配色门禁 ok: 四套主题 x %d 项配对（文字>=4.5:1 / UI 边界>=3:1）全达标，"
+          "主题块外 0 处颜色字面量（tr:hover td / input / pre / .badge / .st-* / .sev-* 均已走变量）"
+          % _pairs6n)
     print("SMOKE PASS")
 
 
