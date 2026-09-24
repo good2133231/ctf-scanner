@@ -337,8 +337,12 @@ def reconcile_orphan_tasks():
 
     判据：
     - `pid` 指向**存活进程** → **跳过**（可能另一个进程正在正常跑它，绝不能误杀）；
-    - `pid` 已死 / 为 0（老库遗留行）→ `status='failed'`、`current_stage=''`，
-      并追加一条"进程重启，任务中断（启动时对账）"到 `error`。
+    - `pid` 已死 / 为 0（老库遗留行）→ `status='failed'`，并追加一条"进程重启，任务中断
+      （启动时对账）"到 `error`。
+    **刻意保留 `current_stage`**（续29）：它是"最后进入的阶段"，也就是断点续扫的断点
+    （`runner.resume_stages` 按它切片）。原来这里把它清成 `''`，等于把断点抹掉 ——
+    而"进程被重启打断"正是最需要续跑的场景之一。清理它由两种显式操作负责：
+    正常跑完（`PipelineRunner.run` 的 done 分支）与 GUI「重启」（从头跑）。
 
     整体包一层 try/except：启动流程**不能被它拖垮**（库损坏 / 列缺失都应静默跳过）。
     返回被标记的任务 id 列表（便于日志与测试断言）。
@@ -351,7 +355,7 @@ def reconcile_orphan_tasks():
                 continue
             tid = r["id"]
             try:
-                _exec("UPDATE tasks SET status='failed', current_stage='', updated_at=? WHERE id=?",
+                _exec("UPDATE tasks SET status='failed', updated_at=? WHERE id=?",
                       (_now(), tid))
                 append_task_error(tid, "进程重启，任务中断（启动时对账）")
                 marked.append(tid)

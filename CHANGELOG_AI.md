@@ -3,6 +3,54 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续29：断点续扫（`resume`，与「重启」「追加」三分）
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+**触发**：用户授权按我的优先级推进（原话「可以 按你的优先级来办」）。选本项而非 POC 实测校准的理由：
+后者必须有**用户指定的真实授权目标**才能产生有效结论（AI 不自行选靶），我单方面能造的只是空跑跑分；
+而断点续扫的基础已就位（续25 的 append 模式、阶段回退到库中数据、`current_stage` 列、启动时孤儿对账）。
+
+**关键设计（省掉一次库表迁移）**：`tasks.current_stage` **天然就是断点** —— `PipelineRunner.run()`
+在**每个阶段开始前**写它（`db.update_task(current_stage=sname)`），正常跑完才清空。所以
+"进程被硬杀 / 点了停止 / 预算耗尽"时它指向的就是那个（可能只跑了一半的）阶段，**不需要新增
+`stages_done` 列**：零 schema 迁移、零每阶段额外写入，且天然 fail-safe（不会把半途阶段误判成已完成）。
+
+**改了什么**
+
+1. `scanner/runner.py`
+   - 新增纯函数 **`resume_stages(stages, current_stage)`**：按断点切片，返回该阶段**及其之后**的阶段。
+     返回 `[]` **只表示"没有可用断点"**，调用方据此**拒绝**续跑而不是回退全量 —— 静默换成
+     "全量重跑"与用户"接着跑"的预期不符（请求量、耗时是另一个量级）。
+   - `run_task(..., resume=False)` 新参数：沿用原任务 / 同一 `log_file`、**不设 `append_targets`**、
+     `error` 按本次运行清空（**清空前**把上次中断原因转存进任务日志 —— 日志是持久产物，信息不丢）。
+   - `PipelineRunner.run()` 的 **stopped 分支不再清 `current_stage`**。
+2. `scanner/db.py`：`reconcile_orphan_tasks()` 的 SQL 去掉 `current_stage=''`（保留断点）。
+   —— 以上两处是**真缺陷**：原实现恰好抹掉"被停止 / 预算耗尽 / 进程重启"这三类**最需要续跑**的收场。
+3. `gui/app.py`：新增 `POST /api/tasks/<int:task_id>/resume`（拒绝"正在运行"与"没有可用断点"，
+   各返回可读原因）；`_spawn(..., resume=...)`；`task_detail` 计算并传 `resume_rest`；
+   **剥掉 `options` 里的 `append` / `append_targets`**（上一次追加的运行期参数会把输入收窄）。
+4. `gui/templates/task_detail.html`：工具栏「续跑」按钮（无断点则置灰 + `title` 说明）+ 断点提示块
+   （写明"不清资产、只重跑哪些阶段、断点阶段会重跑是故意的；与「重启」的区别"）。
+5. `tests/smoke.py`：新增 **`[6q]`**（切片口径 / 端到端"跑到一半被停止 → 续跑只跑断点及其之后" /
+   同一日志 + 不清资产 + error 清空且原因转存 / 无断点回退要明说 / GUI 三态）；
+   **强化 `[6d]`**：原 `assert current_stage == ""` 是**空洞断言**（`create_task` 后本就是空，
+   把对账里"清断点"那行删掉也照样通过），改为先设成 `probe` 再断言"被保留"。
+
+**为什么 `resume` 必须是独立参数（不能复用 `append=True`）**：`StageContext.append_scope()` 在
+"`append=True` 但 `append_targets` 缺失"时返回**空集**，`scope_sites()` 会把输入过滤光 ——
+复用的结果是"跑起来了一次都没扫"，而且**不报错**。
+
+**范围外（如实标注）**：CLI 未加 `--resume-task`（CLI 是"一次性新建任务"入口，续跑语义是"对既有任务
+继续"；且 `-f/-t` 必填逻辑要先重构），已记入 `TODO.md`；**任务队列（Celery/RQ/asyncio）本身仍未做**，
+故 `docs/roadmap.md` 该条标 `[~]` 而非 `[x]`。
+
+**怎么验证**：`py -3 tests/smoke.py` → `SMOKE PASS`。实现变异证伪 **4/4** 均按预期挂掉：
+① `resume_stages` 切片改成 `index(cur)+1`（漏掉断点阶段）→ 挂 `[6q]` 第一条断言；
+② stopped 分支加回 `current_stage=""` → 挂 `[6q]`「被停止的任务必须保留断点」；
+③ 对账 SQL 加回 `current_stage=''` → 挂 `[6d]`；
+④ 路由不再剥 `append*` → 挂 `[6q]`「上次追加的运行期参数绝不能带进续跑」。
+`git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` 逐文件一致（无 CR-only 噪声）。
+
 ## 2026-09-25 —— 续28：文档漂移清理（`todo.txt` / `TODO.md` 与代码对齐）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

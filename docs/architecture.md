@@ -133,6 +133,15 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
    - **只写文本产物 + SQLite（不写 `ctx.results`）**：`cert`（`certs.txt` + `certs` 表）/
      `screenshot`（`shots/*.png` + `sites.shot`）—— 二者排在流水线后段，没有后续阶段消费其结果；
 5. GUI 通过 `tasks` 表轮询状态（status/progress/current_stage），详情页从 SQLite 读资产与漏洞。
+6. **断点续扫**（续29）：`tasks.current_stage` 被**复用为断点** —— `PipelineRunner.run()` 在
+   每个阶段**开始前**写它、正常跑完才清空，所以"被停止 / 预算耗尽 / 进程被重启打断"时它就是
+   最后进入的那个（可能只跑了一半的）阶段。`runner.resume_stages(stages, current_stage)`
+   返回该阶段**及其之后**的阶段（**故意重跑断点阶段**：中断时它可能只跑了一半，跳过它才是真丢结果；
+   各阶段产物按去重键入库，重跑不产生重复行）。`POST /api/tasks/<id>/resume` 据此续跑：
+   沿用原任务 / 同一日志 / 库里已有资产，**不设 `append_targets`**（`append_scope()` 在
+   `append=True` 却无 `append_targets` 时返回**空集**，会把输入收窄成"一次都不扫"，故 `resume`
+   是**独立参数**）。两处原本会抹掉断点的代码（`PipelineRunner.run` 的 stopped 分支、
+   `db.reconcile_orphan_tasks`）已改为**保留**；清理断点由"正常跑完"与 GUI「重启」负责。
 
 ## 数据库表
 

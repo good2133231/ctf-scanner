@@ -208,12 +208,17 @@ def create_app():
 
     # ---------- 任务 ----------
 
-    def _spawn(task_id, name, targets, stages, options, append=False):
-        """后台线程执行任务（GUI 不阻塞）。`append=True` = 续25 同任务追加式执行。"""
+    def _spawn(task_id, name, targets, stages, options, append=False, resume=False):
+        """后台线程执行任务（GUI 不阻塞）。
+
+        `append=True` = 续25 同任务追加式执行；`resume=True` = 续29 断点续跑。
+        两者的区别见 `runner.run_task` 的 docstring —— 最关键的一条：**续跑不能复用
+        `append=True`**（那会带上 `append_targets` 的收窄语义，传空等于一次都不扫）。
+        """
         threading.Thread(target=run_task, daemon=True,
                          args=(task_id, name, targets, stages, options,
                                load_settings()),
-                         kwargs={"append": append}).start()
+                         kwargs={"append": append, "resume": resume}).start()
 
     def _append_guard(src_id):
         """续25：能否对源任务追加执行。返回 `(ok, 错误信息)`。
@@ -404,10 +409,16 @@ def create_app():
         # 注意 `db.list_sites()` 返回的是 `sqlite3.Row`，而 `pick_targets()` 按 dict 取值
         # （阶段那边传的是 probe 的 dict 结果）—— 不转会在页面渲染时抛 AttributeError。
         cert_pick = len(cert_pick_targets([dict(s) for s in sites], certs_mod.tls_ports(settings)))
+        # 续29「断点续扫」：断点 = `current_stage`（最后进入的阶段，见 runner.resume_stages）。
+        # 没有断点（正常跑完 / 从没跑起来）时返回 `[]`，页面据此把「续跑」按钮置灰并给出解释，
+        # 而不是让用户点了才收到一句报错。
+        resume_rest = runner.resume_stages((task["stages"] or "").split(","),
+                                           task["current_stage"])
         return render_template(
             "task_detail.html", task=task,
             subs=own, ext_subs=ext_subs,
             ext_src=ext_src, ext_counts=ext_counts, ext_src_tags=EXT_SRC_TAGS,
+            resume_rest=resume_rest,
             sites=sites,
             ports=db.list_ports(task_id), csegs=db.list_csegs(task_id), certs=certs_rows,
             cert_enabled=cert_enabled, cert_pick=cert_pick,
@@ -507,6 +518,45 @@ def create_app():
         _spawn(task_id, task["name"], task["targets"], stages or list(STAGE_ORDER),
                json.loads(task["options"] or "{}"))
         return jsonify({"ok": True})
+
+    @app.route("/api/tasks/<int:task_id>/resume", methods=["POST"])
+    @login_required
+    def api_task_resume(task_id):
+        """续29「断点续扫」：沿用原任务与库里已有的资产，只重跑断点及其之后的阶段。
+
+        三个入口的分工（页面上三个按钮紧挨着，必须各不相同）：
+        - **重启** —— 清空该任务全部资产，按原参数**从头**跑；
+        - **续跑**（本条）—— **不清资产**、不从头跑，跳过已跑完的阶段；
+        - **追加** —— 对源任务"再跑一遍某些目标/阶段"，输入收窄到本次勾选项。
+
+        拒绝的两种情况都返回 `ok=False` + 可读原因（页面直接显示，不静默）：
+        任务正在运行；没有可用断点（`current_stage` 为空或已不在阶段列表里）。
+        """
+        task = db.get_task(task_id)
+        if not task:
+            return jsonify({"error": "not found"}), 404
+        if task_id in runner.running_task_ids() or task["status"] == "running":
+            return jsonify({"ok": False, "error": "任务正在运行，无需续跑（如需中断请先「停止」）"})
+        rest = runner.resume_stages((task["stages"] or "").split(","), task["current_stage"])
+        if not rest:
+            return jsonify({"ok": False,
+                            "error": "没有可用断点：该任务没有停在某个阶段上"
+                                     "（已正常跑完、或从没真正跑起来）；如需从头重跑请用「重启」"})
+        try:
+            opts = json.loads(task["options"] or "{}")
+        except (TypeError, ValueError):
+            opts = {}
+        if not isinstance(opts, dict):
+            opts = {}
+        # 上一次"追加执行"的**运行期**参数绝不能带进续跑：`append_targets` 会把输入
+        # 收窄到那一次勾选的目标（本次续跑的输入应当是库里已有的全部资产）。
+        opts.pop("append", None)
+        opts.pop("append_targets", None)
+        db.update_task(task_id, status="pending", progress=0)
+        _spawn(task_id, task["name"], task["targets"], rest, opts, resume=True)
+        logger.info(f"[gui] 任务 #{task_id} 从断点续跑：{task['current_stage']} 起，"
+                    f"阶段 {'/'.join(rest)}")
+        return jsonify({"ok": True, "msg": f"已从断点续跑：{','.join(rest)}"})
 
     @app.route("/api/tasks/bulk", methods=["POST"])
     @login_required

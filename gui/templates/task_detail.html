@@ -10,6 +10,9 @@
     id="btn-stop" {{ 'disabled' if task.status != 'running' }}>停止</button>
   <button class="btn-mini ghost" data-op="restart" data-id="{{ task.id }}"
     {{ 'disabled' if task.status == 'running' }}>重启</button>
+  <button class="btn-mini ghost" data-op="resume" data-id="{{ task.id }}"
+    {{ 'disabled' if task.status == 'running' or not resume_rest }}
+    title="{{ '从断点续跑：' + resume_rest|join(' / ') if resume_rest else '没有可用断点（任务未停在某个阶段上）' }}">续跑</button>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">导出 MD</a>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">导出 HTML</a>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='pdf') }}">导出 PDF</a>
@@ -41,6 +44,14 @@
 {% if task.id in running %}
 <p class="muted small"><b>任务运行中：追加执行暂不可用</b>（避免并发覆盖停止信号），
   请先「停止」或等它跑完再追加。</p>
+{% endif %}
+
+{% if resume_rest %}
+<p class="muted small"><span class="badge">停在 {{ task.current_stage }}</span>
+  可<b>断点续跑</b>：沿用本任务已有资产（<b>不清空</b>），只重跑
+  <span class="mono">{{ resume_rest|join(' / ') }}</span>。
+  断点所在阶段会<b>重跑</b>是故意的 —— 中断时它可能只跑了一半；各阶段产物按去重键入库，
+  不会产生重复行。<span class="muted">（与「重启」的区别：重启会清空资产从头跑。）</span></p>
 {% endif %}
 
 <div class="tabs">

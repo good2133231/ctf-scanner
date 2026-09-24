@@ -937,8 +937,10 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 续17 的后续批、续20 ~ 续27 各轮：并发预算门控（throttle.py）/
        JSONL 导出 / 静默失败治理 / 线索出口收敛 / 配色门禁 / GitHub 泄露检索 / 沙箱残留自愈
        —— 见 CHANGELOG_AI.md 与 TODO.md「续12 ~ 续27 速览」。
-[待办] 批次 5 四项（**仍未做**，权威清单见 docs/roadmap.md「工程化」）：
-       ① 任务队列（Celery/RQ 或 asyncio，替代后台线程 + 断点续扫）；
+[待办] 批次 5 四项（权威清单见 docs/roadmap.md「工程化」）：
+       ① 任务队列（Celery/RQ 或 asyncio，替代后台线程）—— **仍未做**；
+          同项的「断点续扫」已单独落地（续29：runner.resume_stages + POST /api/tasks/<id>/resume
+          + 详情页「续跑」按钮，断点复用 tasks.current_stage），故本条在 roadmap 里标 [~]；
        ② 鉴权加固（多用户 / CSRF / HTTPS 部署指引 —— 当前刻意**仅限本机使用**）；
        ③ 分布式节点（**前置条件：先替换 SQLite**）；
        ④ 工具版本管理（一键下载 / 更新 subfinder · httpx · puredns）。

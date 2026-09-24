@@ -54,6 +54,30 @@ STAGE_REGISTRY = {c.name: c for c in (SubdomainStage, TakeoverStage, PortscanSta
                                       JsmineStage, DirscanStage, VulnscanStage, IntelStage,
                                       HeuristicStage, GithubStage)}
 
+
+def resume_stages(stages, current_stage):
+    """续29「断点续扫」：按 `current_stage`（= 最后**进入**的阶段）算出还要重跑哪些阶段。
+
+    **为什么不需要额外的"已完成阶段"列**：`PipelineRunner.run()` 在**每个阶段开始前**写
+    `current_stage=sname`，任务正常跑完时清空。所以这个字段天然就是断点 ——
+    "进程被硬杀 / 用户点了停止 / 预算耗尽"时它指向的就是那个（可能只跑了一半的）阶段。
+    落到这里的两处容易把断点抹掉，都已改掉（见 `PipelineRunner.run` 与 `db.reconcile_orphan_tasks`）。
+
+    **返回值语义（`[]` 只表示"没有可用断点"）**：调用方应据此**拒绝**续跑并提示改用「重启」，
+    不要在这里回退成"全量重跑" —— 静默换成全量重跑与用户"接着跑"的预期不符
+    （请求量、耗时都是另一个量级）。`run_task(resume=True)` 里那条回退分支只服务于
+    **直接调用方**（测试 / 未来 CLI），且会打一条 warning 明说。
+
+    **重跑断点所在的那个阶段是故意的**：中断时它可能只跑了一半，跳过它才是真丢结果。
+    各阶段产物按去重键入库，重跑不会产生重复行。
+    """
+    seq = [s for s in (stages or []) if s in STAGE_REGISTRY]
+    cur = (current_stage or "").strip()
+    if not seq or cur not in seq:
+        return []
+    return seq[seq.index(cur):]
+
+
 # 运行中任务的取消信号表：task_id -> threading.Event
 _STOP_EVENTS = {}
 _STOP_LOCK = threading.Lock()
@@ -202,7 +226,10 @@ class PipelineRunner:
         budget_exhausted = bool(th and th.exhausted() and not ctx.stop_event.is_set())
         if stopped:
             done = int((i + 1) * 100 / total) if stages else 0
-            db.update_task(ctx.task_id, status="stopped", progress=done, current_stage="")
+            # **刻意不清 `current_stage`**（续29）：它是"最后进入的阶段"，也就是断点续扫的断点
+            # （`resume_stages` 按它切片）。原来的 `current_stage=""` 会把断点抹掉 ——
+            # "被停止 / 预算耗尽"恰恰是最需要续跑的两类收场。
+            db.update_task(ctx.task_id, status="stopped", progress=done)
             if budget_exhausted:
                 # 预算耗尽与"用户点了停止"是**两种原因**：都用 `stopped` 状态（结果确实不完整），
                 # 但错误行必须写清楚，否则事后无法区分"被拒绝"与"被人为停"。
@@ -228,7 +255,8 @@ def sync_pocs(settings=None):
         db.upsert_poc(m.get("_path") or m.get("id"), m)
 
 
-def run_task(task_id, name, targets_text, stages, options, settings, append=False):
+def run_task(task_id, name, targets_text, stages, options, settings, append=False,
+             resume=False):
     """CLI 与 GUI 共用的任务执行入口（阻塞执行，调用方负责放线程）。
 
     `append=True`（续25「同任务追加式执行」）与默认的"新建式"执行的差别只有三处：
@@ -238,9 +266,19 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
        `ctx.scope_sites()` 落实），避免 dirscan/vulnscan/screenshot 回退到"库里全部站点"
        而重扫未勾选项。
     其余（阶段顺序、阶段级容错、停止/预算语义、任务状态）与原逻辑完全一致。
+
+    `resume=True`（续29「断点续扫」）与 `append` 有两点相同、一点**关键不同**：
+    - 相同：沿用原任务与**同一个日志/工作目录**（不新建 workdir、不新建任务）；
+    - 相同：`error` 按"本次运行"清空（与 `append` 相反，理由见下）；
+    - **不同**：**不设 `append_targets`**。续跑的输入就是库里已有的资产，
+      走 `ctx.scope_sites()` 反而会把输入收窄 —— `append_scope()` 在"`append=True` 但没有
+      `append_targets`"时返回**空集**，那会把所有站点过滤光、一次都不扫。所以这里必须是
+      独立参数，不能复用 `append=True`。
+    本次真正执行的阶段 = `resume_stages(stages, 任务的 current_stage)`（见该函数）。
     """
     log_file = None
-    if append:
+    prev = None
+    if append or resume:
         prev = db.get_task(task_id)
         if prev and prev["log_file"]:
             # 续写同一日志文件（D9）：workdir 沿用原任务目录，文本产物也落在同一处。
@@ -254,6 +292,24 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
     # 同名的 logger 已绑定原日志文件时 `get_logger` 会直接复用（见 scanner/log.py）——
     # 追加执行正好靠这一点把新日志**续写**进原文件。
     logger = get_logger(f"task-{task_id}", log_file)
+    if resume:
+        # 这一段必须在下面 `db.update_task(..., error="")` **之前**跑完：
+        # 清空前把上次的中断原因转存进任务日志（日志是持久产物，信息不丢）。
+        prev_err = str(prev["error"] or "").strip() if prev else ""
+        cur = str(prev["current_stage"] or "").strip() if prev else ""
+        rest = resume_stages(stages, cur)
+        if rest:
+            logger.info(f"[resume] 从断点续跑：上次停在 {cur}，本次只跑 {'/'.join(rest)}"
+                        f"（断点所在阶段会重跑 —— 中断时它可能只跑了一半；"
+                        f"此前各阶段的产物沿用库中已有数据，不重扫）")
+            stages = rest
+        else:
+            # 只服务直接调用方（测试 / 未来的 CLI）：GUI 的 `/api/tasks/<id>/resume`
+            # 已经在路由层拒绝过这种情况，不会走到这里。
+            logger.warning("[resume] 找不到可用断点（current_stage 为空或不在本任务阶段列表里），"
+                           "按全部阶段重跑；如需清空已有资产请改用「重启」")
+        if prev_err:
+            logger.warning(f"[resume] 上次中断原因（转存到这里后，error 字段按本次运行清空）：{prev_err}")
     from .targets import parse_lines
     targets = parse_lines(targets_text.splitlines())
     stop_event = _register_stop(task_id)

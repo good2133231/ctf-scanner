@@ -3585,7 +3585,9 @@ workflows:
     _o_alive = db.create_task("smoke-orphan-alive", targets, ["probe"], {"offline": True})
     db.update_task(_o_alive, status="running", pid=os.getpid())
     _o_dead = db.create_task("smoke-orphan-dead", targets, ["probe"], {"offline": True})
-    db.update_task(_o_dead, status="running", pid=_dead_pid)
+    # current_stage **刻意设成非空**：它是断点续扫的断点（runner.resume_stages 按它切片），
+    # 对账必须保留它 —— 见下面 6q 与其断言。
+    db.update_task(_o_dead, status="running", pid=_dead_pid, current_stage="probe")
     _o_zero = db.create_task("smoke-orphan-zero", targets, ["probe"], {"offline": True})
     db.update_task(_o_zero, status="running", pid=0)
     _o_done = db.create_task("smoke-orphan-done", targets, ["probe"], {"offline": True})
@@ -3597,7 +3599,12 @@ workflows:
     # pid 已死 → failed + 对账标记
     assert db.get_task(_o_dead)["status"] == "failed", db.get_task(_o_dead)["status"]
     assert "进程重启" in (db.get_task(_o_dead)["error"] or ""), db.get_task(_o_dead)["error"]
-    assert db.get_task(_o_dead)["current_stage"] == "", db.get_task(_o_dead)["current_stage"]
+    # 断点必须被**保留**：原断言 `current_stage == ""` 是空洞断言 ——
+    # `create_task` 后它本来就是 `""`，把对账里"清断点"那行删掉也照样通过（假绿）。
+    # 现在先把它设成某个阶段，再断言原样留下。
+    assert db.get_task(_o_dead)["current_stage"] == "probe", \
+        f"对账抹掉了断点（current_stage 是「最后进入的阶段」，续跑靠它切片）：" \
+        f"{db.get_task(_o_dead)['current_stage']!r}"
     # pid=0（老库遗留）→ failed
     assert db.get_task(_o_zero)["status"] == "failed", db.get_task(_o_zero)["status"]
     # done 的任务不受影响
@@ -3605,7 +3612,7 @@ workflows:
     for _ot in (_o_alive, _o_dead, _o_zero, _o_done):
         db.delete_task(_ot, backup=False)
     print("[6d] 孤儿任务对账 ok: 存活 pid 保留 running / 死 pid 与 pid=0 标 failed 且带标记 / "
-          "done 不受影响")
+          "断点（current_stage）被保留 / done 不受影响")
 
     # 6e) 续20 验证后修复：① CLI 导出的 JSONL 行尾必须是 \n（Windows 文本模式会把 \n 翻成 \r\n，
     #     而 generate_jsonl() 与 HTTP 路由产出的都是 \n —— 同一条导出经两条路径字节必须一致）；
@@ -4554,6 +4561,144 @@ workflows:
           "登录态不外发，GitHub token 走 Authorization）/ 只落仓库+路径+规则名（含 text_matches"
           "的响应入库/JSONL 里 0 处凭据明文）/ 注册域收敛（URL 里的裸 IP 不再切出 '0.1'）/ "
           "四规则命中合并为一条 / 去重且不进 vulns / 401·403·配额见底均立刻收手")
+
+    # 6q) 续29「断点续扫」：沿用原任务 / 同一日志 / 库里已有资产，只重跑断点**及其之后**的阶段。
+    #     断点直接复用 `current_stage`（`PipelineRunner.run` 在**每个阶段开始前**写它）——
+    #     零 schema 迁移、零额外写入，且天然 fail-safe：中断时断点所在阶段可能只跑了一半，
+    #     重跑它才是真不丢结果（各阶段产物按去重键入库，重跑不会产生重复行）。
+    import json as _json6q
+
+    # (1) 纯函数切片。`[]` **只**表示"没有可用断点"，调用方据此拒绝续跑 ——
+    #     在这里静默回退成"全量重跑"与用户"接着跑"的预期不符（请求量/耗时是另一个量级）。
+    assert _rn6.resume_stages(["probe", "dirscan", "vulnscan"], "dirscan") == ["dirscan", "vulnscan"]
+    assert _rn6.resume_stages(["probe", "dirscan"], "probe") == ["probe", "dirscan"]
+    assert _rn6.resume_stages(["probe"], "") == [], "空断点 = 没有可用断点（不得回退全量）"
+    assert _rn6.resume_stages(["probe"], "dirscan") == [], "断点不在本任务阶段列表里 → 无可用断点"
+    assert _rn6.resume_stages(["probe"], "无此阶段") == []
+    assert _rn6.resume_stages([], "probe") == [] and _rn6.resume_stages(None, None) == []
+    # 顺带把不在注册表里的非法阶段名过滤掉（与 PipelineRunner.run 的过滤口径一致）
+    assert _rn6.resume_stages(["probe", "smoke-nope", "dirscan"], "dirscan") == ["dirscan"]
+
+    # (2) 端到端：三个假阶段，第二段末尾置 stop_event（模拟"跑到一半被停止 / 预算耗尽"）。
+    #     只在**首次**运行时置（续跑那一轮要能真的跑到 r3，否则测不出"断点之后的阶段也跑了"）。
+    _seen6q = []
+    _stop_once6q = [True]
+
+    def _mk6q(_name):
+        class _Stub6q:
+            name = _name
+
+            def __init__(self, ctx):
+                self.ctx = ctx
+
+            def run(self):
+                _seen6q.append(self.name)
+                if self.name == "smoke-r2" and _stop_once6q[0]:
+                    _stop_once6q[0] = False
+                    self.ctx.stop_event.set()
+
+        return _Stub6q
+
+    _saved6q = dict(_rn6.STAGE_REGISTRY)
+    _q_stages = ["smoke-r1", "smoke-r2", "smoke-r3"]
+    _q_tid = None
+    try:
+        for _n in _q_stages:
+            _rn6.STAGE_REGISTRY[_n] = _mk6q(_n)
+        _q_tid = db.create_task("smoke-resume", targets, _q_stages, {"offline": True})
+        run_task(_q_tid, "smoke-resume", targets, _q_stages, {"offline": True}, settings)
+        _q1 = db.get_task(_q_tid)
+        assert _q1["status"] == "stopped", _q1["status"]
+        assert _seen6q == ["smoke-r1", "smoke-r2"], _seen6q
+        # **被停止时必须保留断点**：原实现把它清成 ""，恰好抹掉"被停止 / 预算耗尽"这两类
+        # 最需要续跑的收场（本断言在改回清空后必挂）。
+        assert _q1["current_stage"] == "smoke-r2", \
+            f"被停止的任务必须保留断点：{_q1['current_stage']!r}"
+
+        # 造一条已有资产 + 一条"上次中断原因"（模拟进程重启被对账标 failed 后留下的 error）
+        db.insert_sites(_q_tid, [{"url": "http://resume.example", "host": "resume.example",
+                                  "port": "80", "status": 200, "title": "resume",
+                                  "length": 12, "server": "", "tech": "", "source": "probe"}])
+        db.append_task_error(_q_tid, "进程重启，任务中断（启动时对账）")
+
+        _seen6q.clear()
+        run_task(_q_tid, "smoke-resume", targets, _q_stages, {"offline": True}, settings,
+                 resume=True)
+        _q2 = db.get_task(_q_tid)
+        assert _seen6q == ["smoke-r2", "smoke-r3"], \
+            f"续跑应只重跑断点及其之后的阶段（断点所在阶段**故意重跑**）：{_seen6q}"
+        assert _q2["status"] == "done" and _q2["current_stage"] == "", dict(_q2)
+        assert _q2["log_file"] == _q1["log_file"], "续跑必须续写**同一**日志（不新建 workdir）"
+        assert _q2["stages"] == ",".join(_q_stages), "续跑不得改写任务原有的阶段列表"
+        assert (_q2["error"] or "") == "", "续跑按本次运行清空 error（上次原因已转存进日志）"
+        assert len(db.list_sites(_q_tid)) == 1, "续跑**不得**清空已有资产（那是「重启」的语义）"
+        _q_txt = Path(_q2["log_file"]).read_text(encoding="utf-8")
+        assert "[resume] 从断点续跑" in _q_txt, "续跑的起始动作要落日志（否则事后无法判断跑过什么）"
+        assert "进程重启，任务中断（启动时对账）" in _q_txt, \
+            "上次中断原因必须在 error 被清空前转存进日志（日志是持久产物，信息不丢）"
+
+        # (3) 无断点时的**直接调用方**回退：明说找不到断点、按全部阶段重跑（GUI 路由不会走到这）
+        _seen6q.clear()
+        run_task(_q_tid, "smoke-resume", targets, _q_stages, {"offline": True}, settings,
+                 resume=True)
+        assert _seen6q == _q_stages, f"无断点时应按全部阶段重跑并明说：{_seen6q}"
+        assert "找不到可用断点" in Path(db.get_task(_q_tid)["log_file"]).read_text(encoding="utf-8")
+    finally:
+        if _q_tid:
+            db.delete_task(_q_tid, backup=False)
+        _rn6.STAGE_REGISTRY.clear()
+        _rn6.STAGE_REGISTRY.update(_saved6q)
+
+    # (4) GUI 路由 `/api/tasks/<id>/resume`：该拒的拒、该放行的放行，且放行时**必须**
+    #     是 `resume=True` 且不带 `append*`（否则输入会被收窄成空集 —— 一次都不扫）。
+    _gq_tid = db.create_task("smoke-resume-route", targets, ["probe", "dirscan", "vulnscan"],
+                             {"offline": True, "append": True,
+                              "append_targets": ["http://leftover.example"]})
+    # 4a 无断点（刚建的任务）→ 明确拒绝 + 可读原因（页面据此把按钮置灰，后端也不放行）
+    _ra6q = c.post(f"/api/tasks/{_gq_tid}/resume")
+    assert _ra6q.get_json()["ok"] is False and "断点" in _ra6q.get_json()["error"], \
+        _ra6q.get_json()
+    # 4b 运行中 → 拒绝（续跑会 _register_stop 覆盖停止事件，必须硬拒）
+    db.update_task(_gq_tid, current_stage="dirscan")
+    _rn6._register_stop(_gq_tid)
+    try:
+        _rb6q = c.post(f"/api/tasks/{_gq_tid}/resume")
+        assert _rb6q.get_json()["ok"] is False and "正在运行" in _rb6q.get_json()["error"], \
+            _rb6q.get_json()
+    finally:
+        _rn6._unregister_stop(_gq_tid)
+    # 4c 有断点 → 放行：复用同一任务、阶段切到"断点及其之后"、resume=True、append* 已剥掉
+    _n_tasks6q = len(db.list_tasks(limit=1000))
+    _orig_rt6q = gui_app.run_task
+    _spawned6q = []
+    gui_app.run_task = lambda tid, *a, **kw: _spawned6q.append(
+        (tid, a[2], kw.get("append"), kw.get("resume"), a[3]))
+    try:
+        _rc6q = c.post(f"/api/tasks/{_gq_tid}/resume")
+        assert _rc6q.get_json()["ok"] is True and "dirscan" in _rc6q.get_json()["msg"], \
+            _rc6q.get_json()
+        for _ in range(100):
+            if _spawned6q:
+                break
+            time.sleep(0.02)
+    finally:
+        gui_app.run_task = _orig_rt6q
+    assert len(db.list_tasks(limit=1000)) == _n_tasks6q, "续跑**不得**新建任务"
+    assert len(_spawned6q) == 1, _spawned6q
+    _q_spawn_tid, _q_spawn_stages, _q_spawn_append, _q_spawn_resume, _q_spawn_opts = _spawned6q[0]
+    assert _q_spawn_tid == _gq_tid and _q_spawn_stages == ["dirscan", "vulnscan"], _spawned6q[0]
+    assert _q_spawn_resume is True and _q_spawn_append is False, \
+        "续跑必须是独立参数（复用 append=True 会带上「输入收窄」的语义，传空等于一次都不扫）"
+    assert _json6q.loads(db.get_task(_gq_tid)["options"] or "{}").get("append") is True, \
+        "本用例前提：库里确实存着上次追加的运行期参数（否则下面那条断言是空过的）"
+    assert "append" not in _q_spawn_opts and "append_targets" not in _q_spawn_opts, \
+        f"上次追加的运行期参数绝不能带进续跑：{_q_spawn_opts}"
+    assert _q_spawn_opts.get("offline") is True, "其余任务选项必须原样保留"
+    db.delete_task(_gq_tid, backup=False)
+
+    print("[6q] 续29 断点续扫 ok: 切片口径（断点及其之后，空断点=拒绝而非全量）/ 停止时保留断点 / "
+          "沿用同一任务与日志、不清资产、error 按本次清空且上次原因转存日志 / 无断点回退要明说 / "
+          "GUI 拒绝无断点与运行中、放行时 resume=True 且剥掉 append*")
 
     print("SMOKE PASS")
 
