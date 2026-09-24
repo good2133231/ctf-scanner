@@ -122,6 +122,10 @@ ctf-scanner/
 │   │                      #   与 POC 置信度（pocs.confidence + poc_confidence）见 §7
 │   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖
 │   ├── utils.py           # run_cmd / http_request / pool_run / resolve_host / IO / base_domain() / rel_display()
+│   ├── throttle.py        # **统一并发 / 限速 / 全局预算门控（F2）**：两级闸（任务级 + 进程级共享）
+│   │                      #   + 令牌桶 + 任务预算；经 `settings["_throttle"]` 注入（沿用 auth.inject 的
+│   │                      #   "任务专用副本、绝不原地改"）。三条出口都过它：`http_request` / `run_cmd` /
+│   │                      #   `portscan` 裸 socket。预算耗尽＝**按停止处理**（见 §4/§5/§7）
 │   ├── targets.py         # parse_lines → [(kind, raw)]，kind ∈ domain|url|ip|cidr|unknown（cidr 展开为多条 ip）
 │   └── report.py          # 报告三格式：Markdown（generate）/ HTML（generate_html，自包含单文件+全量转义）/
 │                          #   PDF（export_pdf，复用无头 Edge/Chrome 的 --print-to-pdf）；三者共用 collect() 同一份快照
@@ -199,6 +203,18 @@ ctf-scanner/
 - 每个阶段结果**三写**：任务目录文本产物（如 sites.txt）、SQLite、`ctx.results`（供下一阶段直接用）。
 - 阶段级容错：单阶段异常不中断流水线，错误写入 `tasks.error`，任务最终仍置 `done`（docs 已声明此语义）。
 - GUI：Flask 请求线程 + 每任务一个 daemon 线程；无任务队列，进程重启则运行中任务中断。
+- **统一并发 / 限速 / 全局预算门控（F2，`scanner/throttle.py`）**：`StageContext.__init__` 在注入
+  登录态**之后**，用 `throttle.inject` 给 settings 副本再挂一个任务级限流器（`settings["_throttle"]`）。
+  三条出口——`utils.http_request`（HTTP）、`utils.run_cmd`（外部子进程）、`portscan` 的裸 socket
+  （`_probe_port`）——取"在飞名额"都走 `throttle.slot(kind)`：先**任务级闸**、再**进程级闸
+  （跨任务共享，`_GLOBAL_STATE`）**、最后**令牌桶**，顺序固定以防死锁。实际并发是
+  `min(阶段并发, max_inflight_per_task, max_inflight_global)`（`Throttle.effective_cap`）——
+  这才是"消灭 `stages/portscan.py` 8 主机 × `full_workers`(256) = 2048 在飞 / 进程级零上限"的落点。
+  **预算耗尽（`budget_total`）＝按停止处理**：`Throttle.exhausted()` → `StageContext.stopped()` 为真
+  → 各阶段在循环边界干净收尾 → `PipelineRunner` 把任务标 **`stopped`（不是 `done`）** 并追加一条
+  `[throttle] 请求预算耗尽…结果不完整` 的错误行（与"用户点了停止"用不同文案区分）。
+  取消仍是协作式：所有等待都是 `Condition + wait(poll)` 轮询 + 入口检查，置位即抛 `StopRequested`
+  并释放已持有的闸，**绝不"点了停止却卡在等锁"**。v1 覆盖缺口见 §7。
 
 ## 5. 关键不变量（改代码时务必保持）
 
@@ -229,6 +245,12 @@ ctf-scanner/
    2. `disabled_categories` / `disabled_checks` 命中的检查根本不执行（省请求）；
    3. `min_severity` 默认 `medium` —— **结果级**，过滤残余的低危/info 结果。
    即 `a02-no-https`、`a05-security-headers`、`a05-banner-disclosure` 这类项默认既不执行也不产出。
+8. **所有对外"在飞动作"必须过统一门控（F2，`scanner/throttle.py`）**：HTTP 走 `utils.http_request`
+   （已自动读 `settings["_throttle"]`）、外部子进程走 `utils.run_cmd(..., throttle=...)`、裸 socket 走
+   `throttle.slot("socket")`。新增任何"会连目标 / 起进程"的调用点时，**必须显式把限流器传进去**
+   （`ctx.throttle` / `settings["_throttle"]`）—— 不传就等于绕过并发 / 限速 / 预算。
+   `throttle=None` 时按旧行为直通，那是给**离线工具与单测**留的口子，**不是给扫描路径用的**：
+   漏接一处就会出现"点了停止仍有请求在飞"或"预算形同虚设"。
 
 ## 6. 如何验证改动
 
@@ -285,6 +307,12 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   + CT 日志（非 JSON/限流容错 + `*.x` 通配符剥离 + 默认关门控 +
                             #     第三方不带登录态）+ 新开关三方一致（DEFAULTS/settings.yaml/GUI POST）
                             #     + 证书来源列
+# 2026-09-24 续20（含 -fix 与 F2）新增 `[6a]`~`[6f]`：复核修复回归（盲注全参数 / ssrf close 真 join /
+                            #   ctlog 逗号切分）/ JSONL 导出（含误报行、与 MD 刻意差异）/ 错误追加不丢 /
+                            #   孤儿任务对账 / CLI JSONL 行尾 `\n` 与 OpenProcess fail-safe /
+                            #   **F2 统一门控**（闸门计数与取消不卡 / 令牌桶限速 / effective_cap=min(阶段,任务,全局) /
+                            #   预算耗尽=按停止→任务标 `stopped` + `[throttle]` 错误行 / inject 不原地改 /
+                            #   进程级闸跨任务共享 / http_request·run_cmd 耗尽时按停止不抛）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -474,6 +502,17 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   `nmap_scan()` 的两个超时已封顶（host ≤1800s / 进程 ≤3600s），否则全端口会算出 4.5~36 小时。
   GUI「全端口扫描」页发起的是**单次任务**（任务选项 `portscan_full`），不改全局策略 ——
   全局 `portscan.mode=full` 会让每个任务都变慢，谨慎使用。`parse_ports()` 默认 `max_span=4096` 就是防手滑的。
+- **F2 统一门控 v1 的覆盖缺口（如实登记，不装作全覆盖）**（2026-09-24）：
+  - **不覆盖** `scanner/certs.py` 的 TLS 握手、`scanner/dnsq.py` / `utils.resolve_host` 的 DNS 查询
+    （量级远小于 portscan，且已被 `cert.max_sites` / `subdomain.max_resolve` 低量约束）；
+  - **不覆盖** GUI 里任务外的独立动作（如 `/api/domains/resolve` 用的是 `load_settings()` 原始
+    settings、没有 `_throttle`）；
+  - **拦不住外部工具内部的连接**：我们只做"边界闸（同时起几个子进程）+ 把算好的线程数传进去"，
+    `budget_total` **不约束外部工具内部发多少连接** —— 设了预算 ≠ 外部工具也被限住了；
+  - 预算耗尽是**按停止处理**（任务标 `stopped` + `[throttle]` 错误行），但被拒的那一次调用仍可能
+    让调用点报出"网络不可达"这类文案，**任务级错误行与状态才是权威**；
+  - 默认值取"恰好等于现有单任务最大并发"（`max_inflight_*`=256 = `portscan.full_workers`），
+    故**默认不改变既有行为**（0 = 不限也是同一目的）；要收紧再往下调。
 - **fscan 适配的输出形态已用 fscan 2.2.1 实机校准**（2026-09-23 续12，Linux 实机抓取）：
   开放端口**不是**早年以为的 `[+] ip:port open`，而是这四种行形态之一 ——
   `[*] ip:port <service>` / `[*] http://ip:port` / `[+] http://ip:port code:NNN` / 老版本 `[+] ip:port open`；

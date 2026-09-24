@@ -21,6 +21,7 @@ from pathlib import Path
 from . import db
 from .config import LOGS_DIR, load_settings
 from . import auth as taskauth
+from . import throttle
 from .log import get_logger
 from .stages.subdomain import SubdomainStage
 from .stages.takeover import TakeoverStage
@@ -98,20 +99,36 @@ class StageContext:
         self.targets = targets          # [(kind, raw), ...] 由 targets.parse_lines 产出
         self.stages = stages
         self.options = options or {}
+        # 取消信号：**必须在注入限流器之前**赋值 —— `throttle.inject` 要把它交给限流器，
+        # 让所有等待闸门 / 令牌的地方都能在 `stop_event` 置位时立刻醒来（见 scanner/throttle.py）。
+        self.stop_event = stop_event or threading.Event()
         # 任务级**登录态请求头**（Cookie / Token，见 scanner/auth.py）：注入本次任务**专用**的
         # settings 副本。不做原地修改 —— CLI 与测试会复用同一个 settings dict，原地写会把
         # 一个任务的凭据带到另一个任务上（越权 + 误报源）。
         # 只在目标侧出口生效：`utils.http_request(auth=True)` 是各目标侧调用点显式声明的。
         self.settings = taskauth.inject(settings, taskauth.from_task_options(self.options))
+        # 任务级限流器（F2，见 scanner/throttle.py）：同样是"任务专用副本、绝不原地改"。
+        # 引用**进程级共享闸**，因此 N 个任务线程各自注入，但共享同一个全局并发上限。
+        self.settings = throttle.inject(self.settings, task_id, self.stop_event, logger)
         self.workdir = Path(workdir)
         self.logger = logger
         self.results = {"subdomains": [], "sites": [], "dirs": [], "vulns": [],
                         "ports": [], "takeovers": [], "csegs": [], "osint_domains": []}
-        self.stop_event = stop_event or threading.Event()
+
+    @property
+    def throttle(self):
+        """本任务的限流器（`settings["_throttle"]`）；调用点只读它，从不直接碰全局。"""
+        return self.settings.get("_throttle")
 
     def stopped(self):
-        """是否已被请求停止（阶段在循环边界调用）。"""
-        return self.stop_event.is_set()
+        """是否应停止（阶段在循环边界调用）。
+
+        两种来源合并为"停止"：**协作式取消**（用户点了停止 / `request_stop`）与
+        **请求预算耗尽**（F2：`budget_total` 用光后限流器拒绝一切新请求）。二者都让阶段
+        在循环边界干净收尾、保留已完成产物；`PipelineRunner` 会用不同文案区分它们。
+        """
+        th = self.throttle
+        return self.stop_event.is_set() or bool(th and th.exhausted())
 
 
 class PipelineRunner:
@@ -145,10 +162,24 @@ class PipelineRunner:
         if failed:
             # "部分跑坏"必须在日志里一眼可见（此前只有分散的 error 行，容易被后面的日志淹没）
             ctx.logger.warning(f"[runner] {len(failed)} 个阶段异常：{', '.join(failed)}")
+        th = ctx.throttle
+        budget_exhausted = bool(th and th.exhausted() and not ctx.stop_event.is_set())
         if stopped:
             done = int((i + 1) * 100 / total) if stages else 0
             db.update_task(ctx.task_id, status="stopped", progress=done, current_stage="")
-            ctx.logger.warning("===== 任务已按请求停止（已完成阶段产物保留）=====")
+            if budget_exhausted:
+                # 预算耗尽与"用户点了停止"是**两种原因**：都用 `stopped` 状态（结果确实不完整），
+                # 但错误行必须写清楚，否则事后无法区分"被拒绝"与"被人为停"。
+                snap = th.snapshot()
+                ctx.logger.warning(
+                    f"===== 任务因请求预算耗尽提前结束：已放行 {snap['granted']} 次、"
+                    f"拒绝 {snap['rejected']} 次，结果不完整 =====")
+                db.append_task_error(
+                    ctx.task_id,
+                    f"[throttle] 请求预算耗尽（budget_total={th.budget_total}），"
+                    f"已拒绝 {snap['rejected']} 次请求，任务提前结束、结果不完整")
+            else:
+                ctx.logger.warning("===== 任务已按请求停止（已完成阶段产物保留）=====")
         else:
             db.update_task(ctx.task_id, status="done", progress=100, current_stage="")
             ctx.logger.info("===== 流水线完成 =====")

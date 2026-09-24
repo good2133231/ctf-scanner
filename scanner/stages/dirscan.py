@@ -403,6 +403,7 @@ class DirscanStage(Stage):
         最后才回退内置扫描。
         """
         ctx = self.ctx
+        th = ctx.throttle        # F2 统一门控：本任务的限流器（可能是 None）
         py = pick_python(tool.get("python", "python"))
         threads = str(int(tool.get("threads", 30) or 30))
         started = time.time() - 1.0     # 留 1 秒余量，避免文件系统时间戳精度问题漏掉本次产物
@@ -421,7 +422,7 @@ class DirscanStage(Stage):
                             f" → -e {e_arg}）…")
             rc, _, err = run_cmd([py, str(script), "-iF", str(in_file),
                                   "-e", e_arg, "-t", threads],
-                                 cwd=script.parent, timeout=7200)
+                                 cwd=script.parent, timeout=7200, throttle=th)
             if rc != 0 and err.strip():
                 ctx.logger.info(f"[dirscan] dirmap（-e {e_arg}）rc={rc}：{err.strip()[:150]}")
 

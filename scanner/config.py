@@ -82,6 +82,16 @@ DEFAULTS = {
         "brute_max_domains": 50,  # 每任务最多参与 DNS 爆破的域名数
         "wildcard_filter": True,  # 泛解析过滤（关闭后字典爆破会保留通配命中，噪声极大）
         "favicon_md5": True,      # probe 阶段计算 favicon MD5（零请求前置指纹，见 P1-1）
+        # 统一并发 / 限速 / 全局预算门控（F2，见 scanner/throttle.py）。
+        # 默认路径**永不触发拒绝**：256 恰好等于现有单任务最大并发（portscan.full_workers），
+        # 单任务行为完全不变，只把"跨任务的 N×2048"夹到 256；rate / budget 默认 0 = opt-in
+        # （限速会改变扫描时长语义、预算会截断合法扫描，无普适值，故默认不启用）。
+        "max_inflight_global": 256,     # 进程级在飞上限（跨任务共享）；0=不限
+        "max_inflight_per_task": 256,   # 单任务在飞上限；0=不限
+        "rate_per_sec": 0,              # 令牌桶速率（次/秒）；0=不限速
+        "rate_burst": 0,                # 令牌桶突发容量；0 → 取 max(rate_per_sec, 1)
+        "budget_total": 0,              # 单任务请求总预算（HTTP/裸 socket/子进程共用）；0=不设预算
+        "budget_subprocess_weight": 1,  # 每次外部工具调用消耗的预算单位
     },
     "checks": {
         # 检测分级门控：只保留 severity >= min_severity 的结果。

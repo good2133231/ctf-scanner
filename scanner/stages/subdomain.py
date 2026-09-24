@@ -32,6 +32,7 @@ class SubdomainStage(Stage):
 
     def run(self):
         ctx = self.ctx
+        th = ctx.throttle        # F2 统一门控：本任务的限流器（可能是 None）
         limits = ctx.settings.get("limits", {})
         domains, seen = [], set()
         for kind, raw in ctx.targets:
@@ -74,7 +75,7 @@ class SubdomainStage(Stage):
             in_file = write_lines(ctx.workdir / "subfinder_in.txt", domains)
             out_file = ctx.workdir / "passive.txt"
             rc, _, err = run_cmd([sf_bin, "-dL", str(in_file), "-all", "-t", "200",
-                                  "-o", str(out_file)], timeout=1800)
+                                  "-o", str(out_file)], timeout=1800, throttle=th)
             if rc == 0:
                 used_subfinder = True
                 n = add_many((line, "subfinder") for line in read_lines(out_file))
@@ -138,7 +139,8 @@ class SubdomainStage(Stage):
                     break
                 out_file = ctx.workdir / f"brute_{d}.txt"
                 rc, _, err = run_cmd([pd_bin, "bruteforce", dict_path, "-d", d,
-                                      "-r", resolvers, "-w", str(out_file)], timeout=3600)
+                                      "-r", resolvers, "-w", str(out_file)], timeout=3600,
+                                     throttle=th)
                 if rc == 0:
                     add_many((line, "puredns") for line in read_lines(out_file))
                 else:

@@ -61,7 +61,8 @@ class ScreenshotStage(Stage):
                 continue
             name = screenshot.shot_name(url)
             out = shot_dir / name
-            good, err = screenshot.capture(url, out, ctx.settings, timeout=timeout)
+            good, err = screenshot.capture(url, out, ctx.settings, timeout=timeout,
+                                           throttle=ctx.throttle)
             if good:
                 ok += 1
                 # 库里只存**相对任务工作目录**的路径（shots/xxx.png）：

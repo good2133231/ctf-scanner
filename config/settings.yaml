@@ -11,6 +11,14 @@ limits:
   brute_max_domains: 50
   wildcard_filter: true
   favicon_md5: true
+  # 统一并发/限速/全局预算门控（F2）。默认路径永不触发拒绝：256 恰等于现有单任务最大并发，
+  # 单任务行为不变，只把跨任务的 N×2048 夹到 256。rate/budget 默认 0 = 不启用（opt-in）。
+  max_inflight_global: 256       # 进程级在飞上限（跨任务共享）；0=不限
+  max_inflight_per_task: 256     # 单任务在飞上限；0=不限
+  rate_per_sec: 0                # 令牌桶速率（次/秒）；0=不限速
+  rate_burst: 0                  # 令牌桶突发容量；0 → 取 max(rate_per_sec, 1)
+  budget_total: 0                # 单任务请求总预算（HTTP/裸 socket/子进程共用）；0=不设预算
+  budget_subprocess_weight: 1    # 每次外部工具调用消耗的预算单位
 checks:
   min_severity: medium
   skip_severities:

@@ -26,6 +26,7 @@ class ProbeStage(Stage):
 
     def run(self):
         ctx = self.ctx
+        th = ctx.throttle        # F2 统一门控：本任务的限流器（可能是 None）
         limits = ctx.settings.get("limits", {})
         workers = int(limits.get("max_workers", 20))
         timeout = int(limits.get("http_timeout", 10))
@@ -85,7 +86,7 @@ class ProbeStage(Stage):
             rc, _, err = run_cmd(
                 [hx_bin, "-l", str(url_file), "-mc", "200,301,302,403,404",
                  "-title", "-tech-detect", "-status-code", "-content-length",
-                 "-json", "-silent", "-o", str(out_json)], timeout=3600)
+                 "-json", "-silent", "-o", str(out_json)], timeout=3600, throttle=th)
             if rc == 0 and out_json.exists():
                 for line in read_lines(out_json):
                     try:

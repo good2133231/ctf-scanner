@@ -20,6 +20,7 @@ TOP_PORTS 覆盖 CTF 里真正高频的面：Web 变体端口、数据库、远�
 import re
 import socket
 
+from . import throttle as _throttle_mod
 from .utils import pool_run, run_cmd, which
 
 # 端口 -> 服务名（内置 TOP 表；`portscan.ports` 留空时用它）
@@ -89,15 +90,37 @@ def _banner(sock, port):
     return " ".join(text.split())[:_MAX_BANNER]
 
 
-def _probe_port(args):
-    host, ip, port, timeout, want_banner = args
+def _connect_banner(ip, port, timeout, want_banner):
+    """TCP connect（`connect_ex`）+ 可选被动 banner。连不上（拒绝/超时/出错）返回 None。
+
+    抽出来是为了把"统一闸"（F2）套在外面 —— 拿不到名额就不该起这个连接。
+    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
             if s.connect_ex((ip, port)) != 0:
                 return None
-            banner = _banner(s, port) if want_banner else ""
+            return _banner(s, port) if want_banner else ""
     except OSError:
+        return None
+
+
+def _probe_port(args):
+    host, ip, port, timeout, want_banner, throttle = args
+    try:
+        if throttle is not None:
+            # 裸 socket 也走统一闸（F2）：一次在飞连接占一个 `"socket"` 名额。
+            # 预算耗尽 / 被取消 → 不建连接、按"无结果"返回；真正的停止由 `ctx.stopped()`
+            # （含 `throttle.exhausted()`）在阶段循环边界体现（见 scanner/throttle.py）。
+            with throttle.slot("socket"):
+                banner = _connect_banner(ip, port, timeout, want_banner)
+        else:
+            banner = _connect_banner(ip, port, timeout, want_banner)
+    except _throttle_mod.BudgetExhausted:
+        return None
+    except _throttle_mod.StopRequested:
+        return None
+    if banner is None:
         return None
     service = TOP_PORTS.get(port, "")
     if banner:
@@ -112,15 +135,25 @@ def _probe_port(args):
     return {"host": host, "ip": ip, "port": port, "service": service, "banner": banner}
 
 
-def scan_host(host, ip, ports, timeout=1.0, workers=64, banner=True, stopped=None):
-    """扫描单个主机的开放端口。`stopped` 是可选的 `() -> bool` 回调（协作式取消）。"""
+def scan_host(host, ip, ports, timeout=1.0, workers=64, banner=True, stopped=None,
+              throttle=None):
+    """扫描单个主机的开放端口。`stopped` 是可选的 `() -> bool` 回调（协作式取消）。
+
+    `throttle`（`settings["_throttle"]`，F2）：传入时每个在飞连接占一个 `"socket"` 名额，
+    并把线程数收敛到 `throttle.effective_cap(workers)` —— 这是"消灭 8×256"的关键：
+    实际并发不再由阶段自己说了算，而是 `min(阶段并发, 任务上限, 进程上限)`。
+    """
     jobs = []
     for p in ports:
         if stopped and stopped():
             break
-        jobs.append((host, ip, p, timeout, banner))
+        jobs.append((host, ip, p, timeout, banner, throttle))
     if not jobs:
         return []
+    if throttle is not None:
+        cap = throttle.effective_cap(workers)
+        if cap > 0:
+            workers = cap
     found = pool_run(_probe_port, jobs, workers=min(workers, len(jobs)))
     return sorted(found, key=lambda r: r["port"])
 
@@ -151,8 +184,11 @@ def format_ports(ports):
     return ",".join(chunks)
 
 
-def nmap_scan(host, ip, ports, timeout=1, binary=None):
-    """nmap TCP connect 扫描（装了 nmap 时优先走这里，输出更权威）。失败返回 None。"""
+def nmap_scan(host, ip, ports, timeout=1, binary=None, throttle=None):
+    """nmap TCP connect 扫描（装了 nmap 时优先走这里，输出更权威）。失败返回 None。
+
+    `throttle`（F2）：传入时这次子进程调用占一个 `"subprocess"` 名额（并消耗预算）。
+    """
     bin_path = binary or which("nmap")
     if not bin_path:
         return None
@@ -164,7 +200,7 @@ def nmap_scan(host, ip, ports, timeout=1, binary=None):
     rc, out, _ = run_cmd([bin_path, "-sT", "-Pn", "-n", "--open",
                           "--host-timeout", f"{host_timeout}s",
                           "-p", port_arg, "-oG", "-", ip],
-                         timeout=proc_timeout)
+                         timeout=proc_timeout, throttle=throttle)
     if rc != 0 or not out:
         return None
     results = []
@@ -226,7 +262,7 @@ def _parse_fscan(text):
     return ports, (int(m.group(1)) if m else None)
 
 
-def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None):
+def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None, throttle=None):
     """fscan 端口扫描（装了 fscan 时可用）。**解析不可信时返回 None** → 回退 nmap/内置。
 
     返回语义（踩过坑，务必保持）：
@@ -240,6 +276,10 @@ def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None):
     造成**静默漏报**。现在用统计行交叉校验，数目不符一律返回 None 交回兜底。
 
     `-t` 跟着策略里的 `portscan.workers` 走（×8，封顶 600），让用户仍能节制请求量。
+
+    `throttle`（F2）：传入时这次子进程调用占一个 `"subprocess"` 名额（并消耗预算）。
+    **注意**：`budget_total` 只约束"我们起几个子进程"，**不约束 fscan 内部发多少连接**
+    （见 scanner/throttle.py 的覆盖缺口说明）。
     """
     bin_path = binary or which("fscan")
     if not bin_path:
@@ -252,10 +292,11 @@ def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None):
     proc_timeout = min(1800, max(60, int(len(ports) * timeout / 4)))
     base = [bin_path, "-h", ip, "-p", port_arg,
             "-t", str(threads), "-time", str(max(1, int(round(timeout))))]
-    rc, out, err = run_cmd(base + _fscan_flags(), timeout=proc_timeout)
+    rc, out, err = run_cmd(base + _fscan_flags(), timeout=proc_timeout, throttle=throttle)
     if rc != 0 and _FSCAN_BAD_FLAG_RE.search((out or "") + (err or "")):
         # 老版本不认 `-nopoc`：去掉它重试一次，`-np -nobr` 依然保留（红线不动）
-        rc, out, err = run_cmd(base + _fscan_flags(with_nopoc=False), timeout=proc_timeout)
+        rc, out, err = run_cmd(base + _fscan_flags(with_nopoc=False), timeout=proc_timeout,
+                               throttle=throttle)
     if rc != 0:
         return None
     found, declared = _parse_fscan(_ANSI_RE.sub("", out or ""))

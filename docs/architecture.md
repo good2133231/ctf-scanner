@@ -33,6 +33,8 @@
 │  检测层    scanner/pocs/engine.py（POC 引擎，nuclei 兼容子集）│
 │            scanner/owasp/checks.py（启发式检查 + 三级门控）    │
 │  伪装层    scanner/evasion.py（HTTP 出口统一伪装 + payload 变形）│
+│  门控层    scanner/throttle.py（F2 统一并发/限速/预算：          │
+│            HTTP + 子进程 + 裸 socket，两级闸+令牌桶+预算）        │
 ├────────────────────────────────────────────────────────────┤
 │  基础层    utils（HTTP/命令/线程池/DNS/IO/路径相对化） config log │
 │  存储层    scanner/db.py → SQLite（data/scanner.db，可用        │
@@ -67,6 +69,19 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 `mask_value()` 掩码。注入方式是把凭据写进**本次任务专用的 settings 副本**（`inject()` 返回副本），
 避免 CLI/测试复用同一个 dict 时把凭据带到别的任务上。
 
+`scanner/throttle.py` 是**统一并发 / 限速 / 全局预算门控（F2）**：项目对外承诺"检测一律非破坏性"，
+但在此之前**并发量完全不受控** —— HTTP（`utils.http_request`）、裸 socket（`portscan._probe_port`）、
+子进程（`utils.run_cmd`）三条出口各自放大，且跨任务没有进程级上限（`stages/portscan.py` 是
+8 主机并发 × `full_workers`(256) = 最坏 2048 在飞 socket，GUI 里 N 个任务各跑各的）。
+它用**两级闸（任务级 + 进程级共享，`_GLOBAL_STATE`）+ 令牌桶 + 任务预算**把三条出口统一收口，
+通过 `settings["_throttle"]` 注入（沿用 `auth.inject` 的"任务专用副本、绝不原地改"模式），
+调用点只读它、从不直接碰全局。实际并发是 `min(阶段并发, max_inflight_per_task, max_inflight_global)`。
+**预算耗尽＝按停止处理**（不是"网络故障"）：`Throttle.exhausted()` → `StageContext.stopped()` 为真
+→ 任务标 `stopped` 并追加 `[throttle]` 错误行。取消兼容是硬约束：所有等待都是
+`threading.Condition + wait(poll)` 轮询 + 入口检查，置位即抛 `StopRequested`，
+绝不"点了停止却卡在等锁"。v1 覆盖缺口（TLS 握手 / DNS 查询 / 外部工具内部连接 / 任务外动作）
+见 `AGENTS.md §7`。
+
 `scanner/report.py` 提供**三种报告格式**，共用 `collect(task_id)` 的同一份数据快照
 （避免"Markdown 有 TLS 证书小节、HTML 没有"这类格式漂移）：
 `generate()`（Markdown，默认）/ `generate_html()`（**自包含单文件**：样式内联、不引外链，
@@ -93,6 +108,7 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 | 目录扫描**默认开但只跑浅扫**（`dirscan.mode=quick`：`dirs_shallow` 精选敏感路径约 150 条/站） + 只扫不重复站点 + 单站点 `quick_max_paths`/`max_paths` 节流 | 用户要求"先用偏敏感信息的通用路径浅浅过一遍，看清结果再手动决定深扫"；浅扫档请求量可控，深扫（全量分层字典 + dirmap + 后缀派生）才需要在建任务时勾「全目录深扫」或结果页发起「补扫」 | 浅扫覆盖有限（不碰全量字典与框架桶）；深扫必须配 `max_paths`，否则一个站点就要打到天亮 |
 | 深扫走**任务选项**（`dirscan_full`）+ 独立补扫任务，而不是把全局改成 deep | 与 `portscan_full` 同一语义：用户点名要扫的那次才慢，跑完不改全局策略；补扫只跑单阶段、可独立停止/删除 | 任务列表会多出只跑 dirscan 的补扫任务行 |
 | 全端口扫描走**任务选项**（`portscan_full`）而不是全局开关 | 6.5 万端口逐连接是分钟级，改成全局 `portscan.mode=full` 会让每个任务都变慢 | GUI 只提供"对勾选 IP 发起"的入口；任务列表会多出只跑 portscan 的任务行 |
+| **统一并发/限速/预算门控**（F2，`scanner/throttle.py`）：HTTP + 子进程 + 裸 socket 三条出口过同一套**两级闸（任务级 + 进程级共享）+ 令牌桶 + 任务预算** | "非破坏性"是红线，但并发量此前完全不受控（任务内 8×256、跨任务进程级零上限）；一个入口统一收口比在三条出口各写一套更可靠，也让"停止/预算耗尽"有唯一落点 | 门控是**边界闸**，拦不住外部工具内部发多少连接；默认值取"恰好等于现有单任务最大并发"（`max_inflight_*`=256），故默认不改变既有行为 |
 | 用户黑名单**入库前过滤**（`scanner/blacklist.py`）而非入库打标 | 命中即不进资产库，后续阶段自然不扫；不必在每个阶段重复判"要不要跳过"，也不会被历史数据干扰 | 已入库的历史资产不受影响（需手动删任务）；`config/blacklist.txt` 为纯文本、需人工维护 |
 | 重叠资产**默认隐藏**（拓展域名域名级全局 / 站点 URL 级跨任务） | 反复扫同一目标时列表不被撑成 N 倍；默认视图是"新发现"，全量用 `?all=1` 显式打开 | 判重是"保留最早一条"，后扫到的新信息（如状态码变化）不会覆盖旧行 |
 | 批量跑子域名**新建任务**而非挂子任务 | 现有任务模型（一任务一线程 / 独立状态 / 独立停止删除）可直接复用 | 任务列表会多出一行；无法在一个树里聚合查看（收益不抵改表结构 + 任务树渲染的成本） |
@@ -105,6 +121,8 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 3. `runner.run_task` 创建任务工作目录 `LOGS_DIR/task_<id>_<ts>/`，绑定日志，按顺序执行启用的阶段；
    `LOGS_DIR` 取自 `scanner/config.py`，默认 `BASE_DIR/logs`，可用环境变量 `CTFSCANNER_LOGS` 覆盖
    （测试/并行开发时指向临时目录，真实工作区不被污染）；数据库同理支持 `CTFSCANNER_DB`；
+   `StageContext` 先注入**任务级登录态**（`auth.inject`）再注入**统一限流器**（`throttle.inject`），
+   两者都写进**任务专用 settings 副本**（绝不原地改共享 dict）；
 4. 阶段结果落点**并不统一**（改代码前先看具体阶段，不要假定"都写三处"）：
    - **文本产物 + SQLite + `ctx.results` 三处都写**：`subdomain` / `takeover` / `probe` / `jsmine` / `dirscan`
      （文本产物如 `sites.txt`，`ctx.results` 供下一阶段直接使用）；

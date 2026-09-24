@@ -365,6 +365,26 @@
       {{ 'checked' if s.limits.verify_tls }}> 校验 HTTPS 证书（CTF 自签名靶场请保持关闭）</label>
     <label>目录扫描站点上限 <input name="dirscan_max_urls" value="{{ s.limits.dirscan_max_urls }}"></label>
     <label>漏洞扫描站点上限 <input name="vulnscan_max_urls" value="{{ s.limits.vulnscan_max_urls }}"></label>
+    <details class="subpanel">
+      <summary>统一并发 / 限速 / 预算门控（F2）</summary>
+      <p class="hint">对三条出口（HTTP 请求 / 裸 socket 端口探测 / 外部子进程）统一生效；
+        <span class="mono">0</span> = 不限（保持向后兼容）。全局那项<b>跨任务共享</b>，
+        这才是"进程级零上限"的解药：N 个任务线程不再各跑各的。</p>
+      <label>全局并发上限（进程级，所有任务共享）
+        <input name="max_inflight_global" value="{{ s.limits.max_inflight_global }}"></label>
+      <label>单任务并发上限
+        <input name="max_inflight_per_task" value="{{ s.limits.max_inflight_per_task }}"></label>
+      <label>全局限速（每秒请求数，0=不限）
+        <input name="rate_per_sec" value="{{ s.limits.rate_per_sec }}"></label>
+      <label>限速突发容量（0=按速率自动）
+        <input name="rate_burst" value="{{ s.limits.rate_burst }}"></label>
+      <label>单任务请求总预算（0=不限；耗尽后任务按"停止"收尾、结果不完整）
+        <input name="budget_total" value="{{ s.limits.budget_total }}"></label>
+      <label>子进程计费权重（一次外部工具调用抵几次请求）
+        <input name="budget_subprocess_weight" value="{{ s.limits.budget_subprocess_weight }}"></label>
+      <p class="hint">注意：<span class="mono">budget_total</span> 只约束"我们起几个外部子进程"，
+        <b>不约束外部工具内部发多少连接</b> —— 设了预算 ≠ 外部工具也被限住了。</p>
+    </details>
   </section>
 
   <section class="panel collapsible" data-panel="gui">

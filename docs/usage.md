@@ -255,6 +255,13 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    - **扫描限制**（`limits`）：并发/超时/证书校验/目录与漏洞扫描站点上限；子域名阶段的
      **IP/CDN 回填**上限（`subdomain.max_resolve`，默认 500 个）与 DNS 超时（`subdomain.dns_timeout`）
      也在这一组，超上限的子域名仍会入资产表，只是没有 IP/CDN 两列；
+     面板内另有一个「**统一并发 / 限速 / 预算门控（F2）**」子区块（默认折叠）：全局并发上限
+     `max_inflight_global`（进程级、**跨任务共享**）/ 单任务并发上限 `max_inflight_per_task` /
+     全局限速 `rate_per_sec` / 突发 `rate_burst` / 单任务请求总预算 `budget_total` /
+     子进程计费权重 `budget_subprocess_weight`（**0 = 不限**；默认值恰好等于现有单任务最大并发，
+     所以默认不改变既有行为）。**预算耗尽＝按停止处理**：任务状态标 `stopped` 并在错误里追加
+     `[throttle]` 说明。**注意**：`budget_total` 只约束"我们起几个外部子进程"，**不约束外部工具内部
+     发多少连接** —— 设了预算 ≠ 外部工具也被限住了（见 `AGENTS.md §7` 的覆盖缺口）；
    - **控制台**（`gui`）：监听地址、端口与访问口令。
    外部工具路径、字典路径与 `passive.sources` 来源清单请直接编辑 `config/settings.yaml`
    （CDN 厂商后缀名单在 `config/dicts/cdn_cname.txt` —— 找不到 CNAME 后缀就一律判为「非 CDN」）；

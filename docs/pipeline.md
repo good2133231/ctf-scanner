@@ -129,6 +129,10 @@
   同时 `ports` 会被下一阶段 `probe` 消费（见 ④）—— 这是"能扫出 `:9007` 这类非标端口站点"的原因；
 - 为什么默认关：端口扫描耗时与噪声明显高于其他阶段，CTF 里常只给一个 Web 入口；
   **明确不调用 masscan**（需 root 且激进，违反非破坏性红线）。
+- **并发受统一门控约束（F2）**：本阶段"8 主机并发 × 每主机 `full_workers`(默认 256)"此前最坏会到
+  **2048 个在飞 socket**；现在每个裸连接都要过 `throttle.slot("socket")`，且 `scan_host` 的线程数会被
+  收敛到 `min(阶段并发, max_inflight_per_task, max_inflight_global)`。外部工具（fscan/nmap）调用走
+  `run_cmd(..., throttle=...)` 计一个 `"subprocess"` 名额。详见 `docs/architecture.md` 与 `AGENTS.md §5/§7`。
 
 ### ④ probe 存活探测
 
@@ -420,6 +424,12 @@ logs/task_1_mytask/
 | limits.brute_max_domains | 50 | 参与 DNS 爆破的域名上限 |
 | limits.wildcard_filter | true | 泛解析过滤：目标开 `*.domain` 时丢弃通配命中的字典结果 |
 | limits.favicon_md5 | true | probe 阶段计算 favicon MD5（POC 可据此做零请求前置判定） |
+| limits.max_inflight_global | 256 | **F2 统一门控**：进程级在飞上限（**跨任务共享**）；0 = 不限 |
+| limits.max_inflight_per_task | 256 | F2：单任务在飞上限；0 = 不限。实际并发 = `min(阶段并发, 本项, max_inflight_global)` |
+| limits.rate_per_sec | 0 | F2：全局限速（令牌桶，次/秒）；0 = 不限速 |
+| limits.rate_burst | 0 | F2：令牌桶突发容量；0 → 取 `max(rate_per_sec, 1)` |
+| limits.budget_total | 0 | F2：单任务请求总预算（HTTP / 裸 socket / 子进程共用）；0 = 不设预算。**耗尽＝按停止**（任务标 `stopped` + `[throttle]` 错误行） |
+| limits.budget_subprocess_weight | 1 | F2：一次外部工具调用消耗的预算单位 |
 | subdomain.union_passive | true | subfinder(-all) 与内置免 key 被动源**取并集**（关掉＝只用 subfinder，省时间） |
 | subdomain.max_resolve / dns_timeout | 500 / 3s | 子域名 IP/CDN 回填的解析上限与单次 DNS 超时（超上限的子域名仍入表，只是无 IP/CDN） |
 | checks.min_severity | medium | 最低报告级别（结果级门控）；info/low 项默认不产出 |

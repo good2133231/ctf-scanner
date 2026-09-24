@@ -1134,7 +1134,19 @@ def create_app():
                                "dirscan_max_urls": int(f.get("dirscan_max_urls", 20) or 20),
                                "vulnscan_max_urls": int(f.get("vulnscan_max_urls", 100) or 100),
                                "wildcard_filter": f.get("wildcard_filter") == "1",
-                               "favicon_md5": f.get("favicon_md5") == "1"},
+                               "favicon_md5": f.get("favicon_md5") == "1",
+                               # F2 统一并发 / 限速 / 全局预算门控（见 scanner/throttle.py）。
+                               # 0 = 不限（保持向后兼容）；`max_inflight_*` 是"同时最多几个在飞请求"，
+                               # 进程级那个跨任务共享 —— 这才是"进程级零上限"的解药。
+                               "max_inflight_global": int(
+                                   f.get("max_inflight_global", 256) or 256),
+                               "max_inflight_per_task": int(
+                                   f.get("max_inflight_per_task", 256) or 256),
+                               "rate_per_sec": float(f.get("rate_per_sec", 0) or 0),
+                               "rate_burst": float(f.get("rate_burst", 0) or 0),
+                               "budget_total": int(f.get("budget_total", 0) or 0),
+                               "budget_subprocess_weight": int(
+                                   f.get("budget_subprocess_weight", 1) or 1)},
                     # 检测策略：级别门槛 + POC 引擎总开关 + 按 OWASP 分类/检查项/级别关闭
                     "checks": {"min_severity": f.get("min_severity", "medium"),
                                "skip_severities": f.getlist("skip_severities"),

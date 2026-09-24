@@ -969,7 +969,7 @@ def main():
         # 刻意不写盘符（[5o] 的跨平台审计会拒绝源码里出现写死的盘符路径）。
         return "fake-bin/subfinder" if name == "subfinder" else None
 
-    def _fake_run_cmd(argv, cwd=None, timeout=None):
+    def _fake_run_cmd(argv, cwd=None, timeout=None, throttle=None):
         calls["subfinder"].append(list(argv))
         return 0, "", ""
 
@@ -1161,7 +1161,8 @@ def main():
     from scanner.stages import portscan as ps_stage
     ps_calls = []
 
-    def _fake_scan_host(host, ip, ports, timeout=1.0, workers=64, banner=True, stopped=None):
+    def _fake_scan_host(host, ip, ports, timeout=1.0, workers=64, banner=True, stopped=None,
+                        throttle=None):
         ps_calls.append((host, ip, len(ports)))
         return []
 
@@ -3514,6 +3515,205 @@ workflows:
     assert db._win_open_alive(0) is True, "拿不准的错误码应一律按存活处理（fail-safe）"
     print("[6e] 续20 修复 ok: CLI JSONL 行尾为 \\n（与 generate_jsonl 字节一致）/ "
           "OpenProcess 失败按错误码 fail-safe（5 与未知→存活、87→已死）")
+
+    # 6f) F2：统一并发 / 限速 / 全局预算门控（scanner/throttle.py + 三条出口接线 + 停止语义）。
+    #     逐条覆盖：闸门计数与取消、令牌桶、min(阶段,任务,全局) 组合、预算耗尽=按停止、
+    #     inject 不原地改、进程级闸跨任务共享、http_request/run_cmd 在预算耗尽时"不抛、按停止"。
+    import time as _t6f
+    from scanner import throttle as _th6f
+    from scanner.utils import http_request as _http6f
+
+    # TP1) _Gate 基本计数：未满立即拿；满则阻塞；capacity<=0 视为"不限"。
+    _g6f = _th6f._Gate(2)
+    assert _g6f.acquire(None) and _g6f.acquire(None), "未满时应立即拿到名额"
+    assert _g6f.in_flight == 2, _g6f.in_flight
+    _ev6f_full = threading.Event()
+    _ev6f_full.set()
+    # ✱ 满 + 已置位 → 必须返回 False（不能拿到名额）—— 这条抓"等待里没检查取消"
+    assert _g6f.acquire(_ev6f_full, poll=0.02) is False, "满 + 已取消 → 不该拿到名额"
+    _g6f.release()
+    assert _g6f.acquire(None, poll=0.02) is True, "释放后应能拿到名额"
+    _g6f.release()
+    _g6f.release()
+    assert _g6f.in_flight == 0, "释放后计数应归零"
+    _g6f_un = _th6f._Gate(0)
+    for _ in range(50):
+        assert _g6f_un.acquire(None) is True
+    assert _g6f_un.in_flight == 0, "capacity<=0 视为不限、不计数"
+
+    # TP2) 等待中被取消：置位后应尽快退出（不卡死）—— F2 的硬约束"绝不卡在等锁"。
+    _g6f2 = _th6f._Gate(1)
+    _g6f2.acquire(None)
+    _ev6f2 = threading.Event()
+    _t0 = _t6f.monotonic()
+    threading.Timer(0.15, _ev6f2.set).start()
+    _got6f = _g6f2.acquire(_ev6f2, poll=0.02)
+    _el6f = _t6f.monotonic() - _t0
+    # ✱ 取消后必须尽快返回 False（旧式 `cond.wait()` 无轮询会一直卡住）
+    assert _got6f is False and _el6f < 2.0, f"取消后应尽快退出等待（实际 {_el6f:.2f}s）"
+    _g6f2.release()
+
+    # TP3) TokenBucket：rate<=0 不限；有速率时 N 次取用会被真的拖慢。
+    _tb0 = _th6f.TokenBucket(0, 0)
+    assert all(_tb0.acquire(None) for _ in range(50)), "rate<=0 应恒放行"
+    _tb = _th6f.TokenBucket(50, 1)          # 50/s、突发 1（先花掉突发）
+    _tb.acquire(None)
+    _t0 = _t6f.monotonic()
+    for _ in range(4):
+        _tb.acquire(None)
+    _el6f = _t6f.monotonic() - _t0
+    # ✱ 限速必须真的生效（4 次 @50/s 至少 ~0.06s）；不限速的实现这里会接近 0
+    assert _el6f >= 0.05, f"限速应真的拖慢（4 次 @50/s 实际 {_el6f:.3f}s）"
+
+    # TP4) effective_cap = min(阶段并发, 任务上限, 全局上限)；三者皆 0 → 0（不限）。
+    _s6f = {"limits": {"max_inflight_per_task": 32, "max_inflight_global": 16,
+                       "rate_per_sec": 0, "rate_burst": 0, "budget_total": 0,
+                       "budget_subprocess_weight": 1}}
+    _thc = _th6f.build(_s6f, 1, threading.Event(), rec)
+    # ✱ 这是"消灭 8×256"的核心：阶段要 1000，也只能拿到 min(1000,32,16)=16
+    assert _thc.effective_cap(1000) == 16, _thc.effective_cap(1000)
+    assert _thc.effective_cap(8) == 8, "阶段并发更小则取它"
+    assert _thc.effective_cap(0) == 16, "阶段传 0（不限）仍受任务/全局约束"
+    _thc_zero = _th6f.build({"limits": {"max_inflight_per_task": 0,
+                                        "max_inflight_global": 0}}, 2, threading.Event(), rec)
+    assert _thc_zero.effective_cap(0) == 0, "三者皆 0 → 不限（返回 0）"
+    assert _thc_zero.effective_cap(7) == 7, "阶段并发是唯一的正数 → 取它"
+
+    # TP5) build 对非法/缺失值的兜底（不能让一个手滑把门控变成"永远拒绝"或"永不生效"）。
+    _thc_bad = _th6f.build({"limits": {"max_inflight_per_task": "not-a-number",
+                                       "budget_total": None}}, 99, threading.Event(), rec)
+    assert _thc_bad._task_cap == 256, "非法值应回退默认 256"
+    assert _thc_bad.budget_total == 0, "None 应回退默认 0（不限）"
+
+    # TP6) 预算耗尽：用满后下一次 slot 抛 BudgetExhausted，且 exhausted() 变真。
+    _s6f_b = {"limits": {"max_inflight_per_task": 0, "max_inflight_global": 0,
+                         "budget_total": 3, "budget_subprocess_weight": 1}}
+    _thb = _th6f.build(_s6f_b, 4, threading.Event(), rec)
+    assert _thb.exhausted() is False
+    for _ in range(3):
+        with _thb.slot("http"):
+            pass
+    assert _thb.snapshot() == {"granted": 3, "rejected": 0, "in_flight": 0,
+                               "budget_left": 0}, _thb.snapshot()
+    try:
+        with _thb.slot("http"):
+            pass
+        raise AssertionError("预算耗尽后应抛 BudgetExhausted")
+    except _th6f.BudgetExhausted:
+        pass
+    # ✱ 耗尽标志必须变真 —— 它是 ctx.stopped() 为真的两个来源之一（驱动干净收尾）
+    assert _thb.exhausted() is True, "耗尽后 exhausted() 必须为真"
+    assert _thb.snapshot()["rejected"] == 1, _thb.snapshot()
+
+    # TP7) 子进程按权重计预算（budget_subprocess_weight），http/socket 记 1。
+    _s6f_w = {"limits": {"max_inflight_per_task": 0, "max_inflight_global": 0,
+                         "budget_total": 10, "budget_subprocess_weight": 4}}
+    _thw = _th6f.build(_s6f_w, 5, threading.Event(), rec)
+    with _thw.slot("subprocess"):
+        pass
+    assert _thw.snapshot()["budget_left"] == 6, "子进程一次抵 4 次请求"
+    with _thw.slot("http"):
+        pass
+    assert _thw.snapshot()["budget_left"] == 5, "http 一次抵 1 次"
+    assert _thw.snapshot()["in_flight"] == 0, "with 退出后名额必须释放（无泄漏）"
+
+    # TP8) stop_event 已置位 → 取名额直接抛 StopRequested（不占名额、不白等）。
+    _ev8 = threading.Event()
+    _ev8.set()
+    _th8 = _th6f.build({"limits": {}}, 6, _ev8, rec)
+    try:
+        with _th8.slot("http"):
+            pass
+        raise AssertionError("stop_event 已置位时应抛 StopRequested")
+    except _th6f.StopRequested:
+        pass
+    assert _th8.snapshot()["in_flight"] == 0, "被取消时不该占住名额"
+
+    # TP9) inject 绝不原地改原 settings（沿用 auth.inject 的模式：任务专用副本）。
+    _orig9 = {"limits": {"max_inflight_per_task": 8}}
+    _copy9 = copy.deepcopy(_orig9)
+    _inj9 = _th6f.inject(_orig9, 7, threading.Event(), rec)
+    assert "_throttle" in _inj9 and "_throttle" not in _orig9, "inject 不得把限流器写进原 settings"
+    assert _orig9 == _copy9, "原 settings 必须原样不动"
+    assert _inj9["_throttle"].task_id == 7
+
+    # TP10) 进程级闸跨任务共享 —— 否则"N 个任务各跑各的"= 进程级上限形同虚设。
+    _gA = _th6f.build({"limits": {"max_inflight_global": 5}}, 8, threading.Event(), rec)
+    _gB = _th6f.build({"limits": {"max_inflight_global": 5}}, 9, threading.Event(), rec)
+    # ✱ 两个任务必须引用同一个全局闸对象
+    assert _gA._global_gate is _gB._global_gate, \
+        "同容量的进程级闸必须跨任务共享（否则进程级上限形同虚设）"
+
+    # TP11) 出口接线：预算耗尽时 http_request 返回 None（不抛）、run_cmd 返回 (1,'',原因)。
+    _thx = _th6f.build({"limits": {"budget_total": 1}}, 10, threading.Event(), rec)
+    _sx = {"_throttle": _thx, "limits": {"verify_tls": False}}
+    _http6f("http://127.0.0.1:1/", settings=_sx, timeout=0.5)      # 花掉唯一的预算（连不上也记账）
+    _r2 = _http6f("http://127.0.0.1:1/", settings=_sx, timeout=0.5)
+    # ✱ 预算耗尽 → None（按"停止"语义），而不是把异常抛给调用点
+    assert _r2 is None, "预算耗尽时 http_request 应返回 None（不是抛异常）"
+    assert _thx.exhausted() is True
+    _thc2 = _th6f.build({"limits": {"budget_total": 1}}, 11, threading.Event(), rec)
+    run_cmd([sys.executable, "-c", "pass"], timeout=5, throttle=_thc2)   # 花掉预算
+    _rc_x, _ox, _ex = run_cmd([sys.executable, "-c", "pass"], timeout=5, throttle=_thc2)
+    # ✱ 预算耗尽 → (1, '', '原因')，绝不抛；原因里要能看出是 throttle
+    assert _rc_x == 1 and "throttle" in _ex, f"预算耗尽时 run_cmd 应返回 (1,'',原因)：{(_rc_x, _ex)!r}"
+
+    # TP12) 端到端停止语义：预算耗尽 → 任务标 stopped（**不是 done**）+ 追加 [throttle] 错误行。
+    class _Thrift6:
+        name = "smoke-thrift"
+
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+        def run(self):
+            while True:
+                if self.ctx.stopped():
+                    break
+                try:
+                    with self.ctx.throttle.slot("http"):
+                        pass
+                except _th6f.BudgetExhausted:
+                    break
+
+    _saved6f = dict(_rn6.STAGE_REGISTRY)
+    _rn6.STAGE_REGISTRY["smoke-thrift"] = _Thrift6
+    try:
+        _bt6f = db.create_task("smoke-budget", targets, ["smoke-thrift"], {"offline": True})
+        _bs6f = copy.deepcopy(settings)
+        _bs6f["limits"] = dict(_bs6f.get("limits") or {}, budget_total=2,
+                               max_inflight_per_task=0, max_inflight_global=0)
+        _bctx6f = StageContext(_bt6f, "smoke-budget", parse_lines(["x.test"]),
+                               ["smoke-thrift"], {"offline": True}, _bs6f,
+                               Path(_TMPDIR) / "budget6f", rec)
+        PipelineRunner(_bctx6f).run()
+        _bt6f_row = db.get_task(_bt6f)
+        # ✱ 预算耗尽必须标 stopped（不是 done）—— 这是"按停止处理"的落点
+        assert _bt6f_row["status"] == "stopped", \
+            f"预算耗尽必须标 stopped（不是 done）：{_bt6f_row['status']}"
+        # ✱ 必须追加一条明确的 [throttle] 错误行（否则事后分不清"被拒绝"与"被人为停"）
+        assert "[throttle]" in (_bt6f_row["error"] or "") \
+            and "预算耗尽" in (_bt6f_row["error"] or ""), \
+            f"应追加预算耗尽的错误行：{_bt6f_row['error']!r}"
+        assert _bctx6f.stopped() is True, "预算耗尽后 ctx.stopped() 必须为真"
+        assert any("[throttle]" in x for x in rec.lines), "日志里应有 [throttle] 警告"
+        db.delete_task(_bt6f, backup=False)
+    finally:
+        _rn6.STAGE_REGISTRY.clear()
+        _rn6.STAGE_REGISTRY.update(_saved6f)
+
+    # TP13) StageContext 注入 + stopped() 双来源（stop_event 与 exhausted 任一为真）。
+    _ctx6f = StageContext(12345, "smoke-ctx6f", parse_lines(["x.test"]), ["probe"], {},
+                          settings, Path(_TMPDIR) / "ctx6f", rec)
+    assert _ctx6f.throttle is not None and _ctx6f.throttle is _ctx6f.settings["_throttle"], \
+        "StageContext 必须把限流器注入到 settings['_throttle']"
+    assert _ctx6f.stopped() is False
+    _ctx6f.stop_event.set()
+    # ✱ stop_event 置位 → stopped() 为真（协作式取消仍有效）
+    assert _ctx6f.stopped() is True, "stop_event 置位后 stopped() 必须为真"
+
+    print("[6f] F2 门控 ok: 闸门计数/取消不卡 / 令牌桶限速 / effective_cap=min(阶段,任务,全局) / "
+          "预算耗尽=按停止(任务标 stopped + [throttle] 错误行) / inject 不原地改 / "
+          "进程级闸跨任务共享 / http_request·run_cmd 耗尽时按停止不抛")
 
     print("SMOKE PASS")
 

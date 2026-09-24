@@ -8,6 +8,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from . import throttle as _throttle_mod
+
 
 # ---------- 外部命令 ----------
 
@@ -38,11 +40,27 @@ def pick_python(configured="python"):
     return sys.executable
 
 
-def run_cmd(argv, cwd=None, timeout=900):
+def run_cmd(argv, cwd=None, timeout=900, throttle=None):
     """执行外部命令，返回 (returncode, stdout, stderr)。
 
     命令不存在返回 127；超时返回 124。统一 shell=False，避免注入。
+
+    `throttle` 是任务级限流器（`settings["_throttle"]`，见 `scanner/throttle.py`）：
+    传入时本次子进程调用占用一个 `"subprocess"` 名额（并消耗预算），
+    预算耗尽 / 被取消时**不启动进程**、直接返回 `(1, "", 原因)`。
     """
+    if throttle is None:
+        return _do_run_cmd(argv, cwd, timeout)
+    try:
+        with throttle.slot("subprocess"):
+            return _do_run_cmd(argv, cwd, timeout)
+    except _throttle_mod.BudgetExhausted:
+        return 1, "", "throttle: 请求预算耗尽"
+    except _throttle_mod.StopRequested:
+        return 1, "", "throttle: 任务已请求停止"
+
+
+def _do_run_cmd(argv, cwd, timeout):
     try:
         p = subprocess.run([str(a) for a in argv], cwd=str(cwd) if cwd else None,
                            capture_output=True, text=True, errors="replace",
@@ -218,7 +236,27 @@ def http_request(url, method="GET", headers=None, data=None, timeout=10,
     requests 缺失时自动退回 urllib（urllib 不校验重定向语义差异，见文档）。
     verify 为 None 时取配置 limits.verify_tls（默认 False：CTF/靶场自签名证书常见，
     默认不校验；需要严格校验时在 settings.yaml 打开该开关）。
+
+    限流（F2）：`settings["_throttle"]` 存在时本次请求占用一个 `"http"` 名额
+    （见 `scanner/throttle.py`）。预算耗尽 / 被取消时返回 None —— 语义上按"停止"处理，
+    不是网络故障（任务级错误行与状态才是权威）。
     """
+    th = (settings or {}).get("_throttle")
+    if th is None:
+        return _do_http(url, method, headers, data, timeout, verify, allow_redirects,
+                        settings, want_bytes, auth)
+    try:
+        with th.slot("http"):
+            return _do_http(url, method, headers, data, timeout, verify,
+                            allow_redirects, settings, want_bytes, auth)
+    except _throttle_mod.BudgetExhausted:
+        return None
+    except _throttle_mod.StopRequested:
+        return None
+
+
+def _do_http(url, method, headers, data, timeout, verify, allow_redirects,
+             settings, want_bytes, auth):
     if verify is None:
         verify = bool((settings or {}).get("limits", {}).get("verify_tls", False))
     hdrs = _headers(settings, headers, auth=auth)

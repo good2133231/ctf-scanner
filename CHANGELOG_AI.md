@@ -3,6 +3,67 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续20-F2：统一并发 / 限速 / 全局预算门控（`scanner/throttle.py`）
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+四项缺口里唯一与"非破坏性"红线直接相关的一项（用户已拍板要做）。此前**并发量完全不受控**：
+HTTP（`utils.http_request`）、裸 socket（`portscan._probe_port`）、子进程（`utils.run_cmd`）三条出口
+各自放大 —— `stages/portscan.py` 是 8 主机并发 × `full_workers`(默认 256) = 最坏 **2048 个在飞 socket**，
+且 GUI 里 N 个任务线程各跑各的，**进程级零上限**。本轮把三条出口统一收口到一个门控。
+
+### 新增 `scanner/throttle.py`
+- **两级闸**：任务级（`max_inflight_per_task`）+ **进程级共享**（`max_inflight_global`，`_GLOBAL_STATE`
+  单例，容量变化时重建）；**令牌桶**限速（`rate_per_sec` / `rate_burst`）；**任务预算**（`budget_total`，
+  `budget_subprocess_weight` 决定一次外部子进程抵几次请求）。取名额顺序固定
+  （预算 → 任务闸 → 进程闸 → 令牌桶），释放逆序，**防死锁**。
+- **并发组合**：`Throttle.effective_cap(阶段并发) = min(阶段并发, max_inflight_per_task, max_inflight_global)`，
+  三者皆 0 表示不限 —— 这是"消灭 8×256 / 进程级零上限"的落点。
+- **取消兼容（硬约束）**：所有等待都是 `threading.Condition + wait(poll)` 轮询，并在 `slot()` **入口**检查
+  `stop_event`；置位即抛 `StopRequested` 并释放已持有的闸 —— **绝不"点了停止却卡在等锁"**。
+- **预算耗尽＝按停止处理**（不是"网络故障"）：`Throttle.exhausted()` → `StageContext.stopped()` 为真 →
+  各阶段在循环边界干净收尾 → `PipelineRunner` 把任务标 **`stopped`（不是 `done`）** 并追加一条
+  `[throttle] 请求预算耗尽…结果不完整` 的错误行（与"用户点了停止"用不同文案区分）。
+- **注入方式**沿用 `auth.inject` 的既有先例：`throttle.inject(settings, task_id, stop_event, logger)`
+  返回**任务专用副本**（`settings["_throttle"]`），**绝不原地改**共享 dict。调用点只读它、从不碰全局。
+
+### 出口接线（三条）
+- `utils.http_request`：读 `settings["_throttle"]`，本次请求占一个 `"http"` 名额；耗尽/取消 → 返回 `None`。
+- `utils.run_cmd(..., throttle=...)`：本次子进程调用占一个 `"subprocess"` 名额；耗尽/取消 → 返回 `(1, "", 原因)`。
+- `portscan`：`_probe_port` 占一个 `"socket"` 名额；`scan_host` 的线程数收敛到 `effective_cap`；
+  `nmap_scan` / `fscan_scan` 把 throttle 透传给 `run_cmd`。
+- 各阶段（`subdomain` / `probe` / `dirscan` / `screenshot` / `portscan`）显式把 `ctx.throttle` 传进上述出口。
+- `runner.StageContext`：把 `self.stop_event` 的赋值**提到注入之前**，随后 `throttle.inject(...)`；
+  新增只读属性 `throttle`；`stopped()` 改为 `stop_event.is_set() or throttle.exhausted()`。
+
+### 配置 / GUI
+- `scanner/config.py::DEFAULTS["limits"]` 与 `config/settings.yaml` 新增 6 键：
+  `max_inflight_global=256` / `max_inflight_per_task=256` / `rate_per_sec=0` / `rate_burst=0` /
+  `budget_total=0` / `budget_subprocess_weight=1`（**默认值恰好等于现有单任务最大并发，故默认不改变既有行为**）。
+- `gui/app.py` 的 `/settings` POST 与 `gui/templates/settings.html` 的「扫描限制」面板新增对应控件
+  （一个默认折叠的「统一并发 / 限速 / 预算门控（F2）」子区块）。
+- 文档：`AGENTS.md`（目录地图 §3 / 数据流 §4 / 不变量 §5-8 / 验证 §6 / 局限 §7）、
+  `docs/architecture.md`（分层图 + 门控层段落 + 设计决策表 + 数据流第 3 步）、
+  `docs/pipeline.md`（portscan 并发说明 + 配置项速查 6 行）、`docs/usage.md`（策略配置面板说明）。
+
+### 测试
+- `tests/smoke.py` 新增 `[6f]`（TP1–TP13）：闸门计数与取消不卡 / 令牌桶限速 / `effective_cap` 组合 /
+  非法配置兜底 / 预算耗尽与权重计费 / `StopRequested` / `inject` 不原地改 / 进程级闸跨任务共享 /
+  `http_request`·`run_cmd` 耗尽时按停止不抛 / 端到端"预算耗尽→任务标 `stopped` + `[throttle]` 错误行" /
+  `StageContext` 注入与 `stopped()` 双来源。同步修好两处既有桩（`_fake_scan_host` / `_fake_run_cmd`）以接受新形参。
+- 逐条**证伪**（把实现临时退回旧行为跑出真实 `AssertionError`，随后还原；脚本放 `logs/` 下、跑完删除）：
+  - ✱ `effective_cap` 改回"只用阶段并发" → `AssertionError: ('F1 FAILED', 1000)`（应为 16）。
+  - ✱ `runner` 改回"不区分预算耗尽"（`stopped()` 只看 `stop_event`）→ `AssertionError: ('F2 FAILED', 'done')`（应为 `stopped`）。
+  - ✱ `http_request` 去掉异常捕获 → 抛 `scanner.throttle.BudgetExhausted`（应返回 `None`）。
+  - ✱ 进程级闸改回"每任务各建一个" → `AssertionError: F4 FAILED: 全局闸未共享`。
+  - ✱ `slot()` 去掉入口 `stop_event` 检查 → `AssertionError: F5 FAILED: 未抛 StopRequested`。
+- 全程 `python tests/smoke.py` → `SMOKE PASS`。
+
+### 明确不做 / 覆盖缺口（如实登记，见 `AGENTS.md §7`）
+- **不覆盖** TLS 握手（`certs.py`）、DNS 查询（`dnsq.py` / `utils.resolve_host`）、GUI 里任务外的独立动作
+  （如 `/api/domains/resolve` 用原始 settings、没有 `_throttle`）；**拦不住外部工具内部的连接**
+  （`budget_total` 只约束"我们起几个子进程"）。
+- 未给 `vulns` 加 UNIQUE 约束、未改流水线终态语义（阶段失败仍 `done`）。
+
 ## 2026-09-24 —— 补充 LICENSE（MIT）并同步第三方许可口径
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**

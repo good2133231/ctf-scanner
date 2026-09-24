@@ -90,8 +90,11 @@ def available(settings=None):
     return bool(browser_path(settings))
 
 
-def capture(url, out_path, settings=None, timeout=30):
-    """给单个 URL 截图，写入 `out_path`。返回 `(ok, err)`。"""
+def capture(url, out_path, settings=None, timeout=30, throttle=None):
+    """给单个 URL 截图，写入 `out_path`。返回 `(ok, err)`。
+
+    `throttle`（F2）：传入时这次子进程调用占一个 `"subprocess"` 名额（并消耗预算）。
+    """
     binary = browser_path(settings)
     if not binary:
         return False, "未找到可用的无头浏览器（Edge/Chrome）；可在策略配置里填 screenshot.browser"
@@ -114,7 +117,7 @@ def capture(url, out_path, settings=None, timeout=30):
             f"--screenshot={out_path}",
             str(url),
         ]
-        rc, _out, err = run_cmd(argv, timeout=int(timeout or 30))
+        rc, _out, err = run_cmd(argv, timeout=int(timeout or 30), throttle=throttle)
         if out_path.exists() and out_path.stat().st_size > 0:
             return True, ""
         return False, (err or f"退出码 {rc}")[:200]

@@ -18,6 +18,7 @@ class PortscanStage(Stage):
 
     def run(self):
         ctx = self.ctx
+        th = ctx.throttle        # F2 统一门控：本任务的限流器（可能是 None，见 runner.StageContext）
         cfg = ctx.settings.get("portscan", {}) or {}
         # 任务选项 `portscan_full`（GUI「全端口扫描」页对某个 IP 发起的任务）视为显式授权：
         # 即使全局 `portscan.enabled` 关着，这种"用户点名要扫"的任务也要跑。
@@ -151,14 +152,15 @@ class PortscanStage(Stage):
                 found = None
                 if fscan_bin:
                     found = portscan.fscan_scan(host, ip, target_ports, timeout=timeout,
-                                                binary=fscan_bin, workers=workers)
+                                                binary=fscan_bin, workers=workers,
+                                                throttle=th)
                 if found is None and nmap_bin:
                     found = portscan.nmap_scan(host, ip, target_ports, timeout=timeout,
-                                               binary=nmap_bin)
+                                               binary=nmap_bin, throttle=th)
                 if found is None:
                     found = portscan.scan_host(host, ip, target_ports, timeout=timeout,
                                                workers=workers, banner=banner,
-                                               stopped=ctx.stopped)
+                                               stopped=ctx.stopped, throttle=th)
                 out.extend(found)
             return out
 
