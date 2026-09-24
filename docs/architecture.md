@@ -142,6 +142,10 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
    `append=True` 却无 `append_targets` 时返回**空集**，会把输入收窄成"一次都不扫"，故 `resume`
    是**独立参数**）。两处原本会抹掉断点的代码（`PipelineRunner.run` 的 stopped 分支、
    `db.reconcile_orphan_tasks`）已改为**保留**；清理断点由"正常跑完"与 GUI「重启」负责。
+   三个入口同口径（GUI 详情页「续跑」按钮 / `POST /api/tasks/<id>/resume` / CLI
+   `--resume-task <ID>`，续31）：运行中拒绝、**无可用断点也拒绝**（不回退成全量重跑）。
+   CLI 额外把 `-f/-t/-n/-p/--offline/--full-*/--recursive-dir/-H/--cookie` 判为**互斥并报错** ——
+   续跑的输入是库中资产与任务自身的阶段/选项，这些参数一律不生效，静默忽略等于骗人。
 
 ## 数据库表
 

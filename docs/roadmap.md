@@ -106,7 +106,8 @@
 
 - [~] 任务队列（Celery/RQ 或 asyncio）替代后台线程，支持并发任务与断点续扫：
       **「断点续扫」已落地**（续29：`runner.resume_stages()` + `POST /api/tasks/<id>/resume` +
-      详情页「续跑」按钮，断点复用 `tasks.current_stage`，见 `docs/architecture.md`）；
+      详情页「续跑」按钮，断点复用 `tasks.current_stage`；**续31 补齐 CLI 入口 `--resume-task <ID>`**，
+      与 GUI 同口径：互斥参数直接报错、无断点在入口拒绝，见 `docs/architecture.md`）；
       **任务队列本身仍未做**（当前仍是任务级后台线程 + 进程内写锁 `db._WRITE_LOCK`）；
 - [ ] 鉴权加固：多用户、CSRF、HTTPS 部署指引（当前仅限本机使用）；
 - [x] **报告升级**（续16）：Markdown（原有）+ **HTML**（`report.generate_html()`，自包含单文件、

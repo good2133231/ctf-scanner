@@ -371,6 +371,13 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   GUI 勾选 + 策略页三键 + 建任务路由自动补 `dirscan_full` 与 dirscan 阶段
                             #   （此处抓到真缺陷：补阶段循环原先只读表单字段，而 `recursive_dir` 是直接写
                             #   进 options 的 → 勾了递归却连 dirscan 阶段都不跑；已改为按生效 options 判）
+# 2026-09-25 续31 新增 `[6s]`：**CLI `--resume-task`**（续29 只做了 GUI 入口）—— 有断点走
+                            #   `run_task(resume=True)` 且**阶段列表原样传**（切片由 run_task 内部做，
+                            #   CLI 不自己切，避免两份切片逻辑漂移）/ 无断点**入口即拒绝**、不调用
+                            #   run_task（不许退化成全量重跑）/ 与 -t·--offline·--recursive-dir·-n
+                            #   互斥报错 / 任务不存在与运行中均拒绝 / 选项取自任务自身而非本次参数。
+                            #   全程桩掉 `run_task`，零真实请求；用 `os.getpid()` 占住 pid 才能
+                            #   测到"运行中拒绝"（否则 reconcile 会先把该 running 判成孤儿 failed）。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）

@@ -7,8 +7,10 @@
   python cli/client.py -f targets.txt --offline                 # 不调用外部工具
   python cli/client.py -f targets.txt --report logs/report.md   # 结束后出 Markdown 报告
   python cli/client.py --check                                  # 检查外部工具可用性
+  python cli/client.py --resume-task 12                         # 续跑任务 #12 的断点
 """
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -18,8 +20,111 @@ from scanner import auth as taskauth
 from scanner import db
 from scanner.config import load_settings, resolve
 from scanner.report import export_pdf, generate, generate_html, generate_jsonl
-from scanner.runner import STAGE_ORDER, STAGE_REGISTRY, run_task
+from scanner.runner import STAGE_ORDER, STAGE_REGISTRY, resume_stages, run_task
 from scanner.utils import rel_display, which, verify_tool
+
+
+def _print_summary(task_id, ctx):
+    """任务结束时的统一摘要（新建 / 追加 / 续跑三条入口共用，避免副本漂移）。"""
+    task = db.get_task(task_id)
+    print(f"[*] 任务 #{task_id} 结束：status={task['status']}")
+    print(f"    子域名 {len(ctx.results.get('subdomains', []))} | "
+          f"站点 {len(ctx.results.get('sites', []))} | "
+          f"目录 {len(ctx.results.get('dirs', []))} | "
+          f"潜在漏洞 {len(ctx.results.get('vulns', []))} | "
+          f"线索 {len(ctx.results.get('leads_intel', [])) + len(ctx.results.get('leads_heuristic', [])) + len(ctx.results.get('leads_github', []))}"
+          f"（情报/启发式/GitHub，非漏洞结论）")
+    print(f"    日志：{rel_display(ctx.workdir / 'task.log')}")
+    print(f"    数据库：{rel_display(db.DB_PATH)}")
+
+
+def _emit_reports(args, task_id, settings):
+    """按 `--report*` 参数导出报告（四条入口共用）。"""
+    if args.report:
+        md = generate(task_id)
+        if md:
+            out = resolve(args.report)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(md, encoding="utf-8")
+            print(f"[*] 报告已生成：{rel_display(out)}")
+    if args.report_html:
+        body = generate_html(task_id)
+        if body:
+            out = resolve(args.report_html)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(body, encoding="utf-8")
+            print(f"[*] HTML 报告已生成：{rel_display(out)}")
+    if args.report_pdf:
+        out = resolve(args.report_pdf)
+        ok, err = export_pdf(task_id, out, settings)
+        # 失败时**不静默**：打印原因并让退出码非 0（脚本里能立刻发现少了一份交付物）。
+        if ok:
+            print(f"[*] PDF 报告已生成：{rel_display(out)}")
+        else:
+            print(f"[!] PDF 报告生成失败：{err}")
+            sys.exit(1)
+    if args.report_jsonl:
+        body = generate_jsonl(task_id)
+        if body:
+            out = resolve(args.report_jsonl)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            # 用 write_bytes 而不是 write_text：Windows 文本模式会把 `\n` 翻成 `\r\n`，
+            # 而 JSONL 规范要求行尾是 `\n`（`generate_jsonl()` 与 HTTP 路由产出的都是 `\n`）。
+            # Python 3.9 的 `write_text` 没有 `newline` 参数，故显式写字节，保证两条导出路径
+            # 字节一致。（MD / HTML 仍用 write_text —— 它们对行尾不敏感，不在本次范围内。）
+            out.write_bytes(body.encode("utf-8"))
+            print(f"[*] JSONL 报告已生成：{rel_display(out)}")
+
+
+def do_resume(args, settings):
+    """`--resume-task`：续跑已有任务的断点（等价 GUI 任务详情页的「续跑」按钮）。
+
+    为什么**不复用** `-f/-t/-p/--offline/...`：续跑的输入是"库里已有的资产"与"任务自身记的
+    阶段/选项"，这些参数一律不生效。静默忽略它们会让人以为改了参数（比如以为这次能换目标或
+    加上 `--offline`），实际没变 —— 所以冲突就**直接报错退出**，不猜。
+    """
+    conflicts = [name for name, val in (("-f/--file", args.file), ("-t/--target", args.target),
+                                        ("-n/--name", args.name), ("-p/--stages", args.stages),
+                                        ("--offline", args.offline),
+                                        ("--full-ports", args.full_ports),
+                                        ("--full-dir", args.full_dir),
+                                        ("--recursive-dir", args.recursive_dir),
+                                        ("-H/--header", args.header),
+                                        ("--cookie", args.cookie)) if val]
+    if conflicts:
+        print(f"[!] --resume-task 不能与这些参数同用：{', '.join(conflicts)}")
+        print("    续跑用的是**该任务已有的**目标/阶段/选项（不会重新解析本次输入）；"
+              "要换参数请新建任务。")
+        sys.exit(1)
+
+    db.init_db()
+    db.reconcile_orphan_tasks()
+    task = db.get_task(args.resume_task)
+    if not task:
+        print(f"[!] 任务 #{args.resume_task} 不存在")
+        sys.exit(1)
+    if task["status"] == "running":
+        print(f"[!] 任务 #{args.resume_task} 正在运行，请先停止再续跑")
+        sys.exit(1)
+    stages = [s for s in (task["stages"] or "").split(",") if s in STAGE_REGISTRY]
+    stages = stages or list(STAGE_ORDER)
+    # **入口就拒绝**"没有可用断点"，不交给 `run_task` 的回退分支 —— 那条分支会**全量重跑**
+    # （请求量与耗时是另一个量级），与用户"接着跑"的预期不符。GUI 路由层也是同一口径。
+    rest = resume_stages(stages, task["current_stage"])
+    if not rest:
+        cur = (task["current_stage"] or "").strip()
+        print(f"[!] 任务 #{args.resume_task} 没有可用断点"
+              f"（current_stage={'（空）' if not cur else cur}）")
+        print("    没有断点意味着它已跑完或从未开始；要从头重跑请新建任务（续跑不清资产）。")
+        sys.exit(1)
+    options = json.loads(task["options"] or "{}")
+    print(f"[*] 续跑任务 #{args.resume_task}：{task['name']}"
+          f"（断点 {task['current_stage']} → 本次只跑 {','.join(rest)}）")
+    print("    已有资产沿用库中数据，不清空、不重扫已完成阶段。")
+    ctx = run_task(args.resume_task, task["name"], task["targets"], stages, options, settings,
+                   resume=True)
+    _print_summary(args.resume_task, ctx)
+    _emit_reports(args, args.resume_task, settings)
 
 
 def check_tools(settings):
@@ -77,6 +182,10 @@ def main():
     ap.add_argument("--cookie", default="", metavar="COOKIE",
                     help="本次任务的 Cookie（等价 -H \"Cookie: ...\"），用于扫登录后才存在的资产")
     ap.add_argument("--check", action="store_true", help="检查外部工具可用性后退出")
+    ap.add_argument("--resume-task", type=int, metavar="ID",
+                    help="续跑**指定任务的断点**：沿用该任务已有的目标/阶段/选项与库中资产，"
+                         "只重跑断点及其之后的阶段（等价 GUI 任务详情页的「续跑」按钮）。"
+                         "与 -f/-t/-n/-p/--offline/--full-*/--recursive-dir/-H/--cookie 互斥")
     args = ap.parse_args()
 
     settings = load_settings()
@@ -84,6 +193,10 @@ def main():
         print("外部工具可用性：")
         for name, status in check_tools(settings):
             print(f"  {name:<10} {status}")
+        return
+    # 续跑走独立入口：它不需要 `-f/-t`（输入来自库），也不该被下面"未提供目标"的判断拦掉。
+    if args.resume_task is not None:
+        do_resume(args, settings)
         return
 
     lines = list(args.target)
@@ -157,50 +270,8 @@ def main():
 
     ctx = run_task(task_id, name, targets_text, stages, options, settings)
 
-    task = db.get_task(task_id)
-    print(f"[*] 任务 #{task_id} 结束：status={task['status']}")
-    print(f"    子域名 {len(ctx.results.get('subdomains', []))} | "
-          f"站点 {len(ctx.results.get('sites', []))} | "
-          f"目录 {len(ctx.results.get('dirs', []))} | "
-          f"潜在漏洞 {len(ctx.results.get('vulns', []))} | "
-          f"线索 {len(ctx.results.get('leads_intel', [])) + len(ctx.results.get('leads_heuristic', [])) + len(ctx.results.get('leads_github', []))}"
-          f"（情报/启发式/GitHub，非漏洞结论）")
-    print(f"    日志：{rel_display(ctx.workdir / 'task.log')}")
-    print(f"    数据库：{rel_display(db.DB_PATH)}")
-    if args.report:
-        md = generate(task_id)
-        if md:
-            out = resolve(args.report)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(md, encoding="utf-8")
-            print(f"[*] 报告已生成：{rel_display(out)}")
-    if args.report_html:
-        body = generate_html(task_id)
-        if body:
-            out = resolve(args.report_html)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(body, encoding="utf-8")
-            print(f"[*] HTML 报告已生成：{rel_display(out)}")
-    if args.report_pdf:
-        out = resolve(args.report_pdf)
-        ok, err = export_pdf(task_id, out, settings)
-        # 失败时**不静默**：打印原因并让退出码非 0（脚本里能立刻发现少了一份交付物）。
-        if ok:
-            print(f"[*] PDF 报告已生成：{rel_display(out)}")
-        else:
-            print(f"[!] PDF 报告生成失败：{err}")
-            sys.exit(1)
-    if args.report_jsonl:
-        body = generate_jsonl(task_id)
-        if body:
-            out = resolve(args.report_jsonl)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            # 用 write_bytes 而不是 write_text：Windows 文本模式会把 `\n` 翻成 `\r\n`，
-            # 而 JSONL 规范要求行尾是 `\n`（`generate_jsonl()` 与 HTTP 路由产出的都是 `\n`）。
-            # Python 3.9 的 `write_text` 没有 `newline` 参数，故显式写字节，保证两条导出路径
-            # 字节一致。（MD / HTML 仍用 write_text —— 它们对行尾不敏感，不在本次范围内。）
-            out.write_bytes(body.encode("utf-8"))
-            print(f"[*] JSONL 报告已生成：{rel_display(out)}")
+    _print_summary(task_id, ctx)
+    _emit_reports(args, task_id, settings)
 
 
 if __name__ == "__main__":

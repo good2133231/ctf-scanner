@@ -4858,6 +4858,83 @@ workflows:
           "每前缀独立软404基线 / site_url 仍是站点根 / 目录数与每目录路径数上界（请求量=K×(3+M)）/ "
           "跨层累计 max_dirs / 层数 / 重复目录只递归一次 / 任务级勾选可覆盖策略且不改全局 / GUI 与路由")
 
+    # [6s] 续29 补入口：CLI `--resume-task`（GUI 早有「续跑」按钮，CLI 一直没有对称入口；
+    #      `run_task(resume=True)` 的 docstring 里本来就写了"只服务于测试 / 未来的 CLI"）。
+    #      全程桩掉 `run_task`，**不发任何真实请求**。
+    import contextlib
+    import io as _io
+    import types
+    import cli.client as _cli
+
+    _calls30b = []
+    _orig_rt30b = _cli.run_task
+
+    def _fake_rt30b(task_id, name, targets, stages, options, settings, append=False,
+                    resume=False):
+        _calls30b.append({"task_id": task_id, "name": name, "stages": list(stages),
+                          "options": dict(options), "append": append, "resume": resume})
+        return types.SimpleNamespace(results={}, workdir=Path(_TMPDIR) / "cli-resume")
+
+    def _cli_run30b(argv):
+        """跑一次 CLI，返回 (退出码, stdout)。捕获 SystemExit 而不让它带走整个冒烟测试。"""
+        buf = _io.StringIO()
+        _calls30b.clear()
+        old_argv = sys.argv
+        sys.argv = ["client.py"] + argv
+        try:
+            with contextlib.redirect_stdout(buf):
+                _cli.main()
+        except SystemExit as e:
+            return (e.code or 0), buf.getvalue()
+        finally:
+            sys.argv = old_argv
+        return 0, buf.getvalue()
+
+    _t30b = db.create_task("smoke-cli-resume", targets, ["probe", "dirscan"], {"offline": True})
+    db.update_task(_t30b, current_stage="dirscan")
+    _cli.run_task = _fake_rt30b
+    try:
+        # 1) 有断点：stub 必须收到 resume=True，且**阶段列表按任务原样传**（切片发生在
+        #    `run_task` 内部，CLI 不自己切 —— 两处各切一份必然漂移）
+        _code, _out = _cli_run30b(["--resume-task", str(_t30b)])
+        assert _code == 0, (_code, _out)
+        assert len(_calls30b) == 1, _calls30b
+        assert _calls30b[0]["resume"] is True and _calls30b[0]["append"] is False, _calls30b
+        assert _calls30b[0]["task_id"] == _t30b, _calls30b
+        assert _calls30b[0]["stages"] == ["probe", "dirscan"], _calls30b
+        assert _calls30b[0]["options"] == {"offline": True}, "选项必须来自任务自身，不吃本次参数"
+        assert "续跑任务 #" in _out and "dirscan" in _out, _out
+
+        # 2) 没有断点 → **入口就拒绝**，绝不回退成全量重跑（请求量/耗时是另一个量级）
+        db.update_task(_t30b, current_stage="")
+        _code, _out = _cli_run30b(["--resume-task", str(_t30b)])
+        assert _code == 1 and not _calls30b, f"无断点必须拒绝且不调用 run_task：{_out}"
+        assert "没有可用断点" in _out, _out
+
+        # 3) 与本次输入类参数同用 → 报错退出（静默忽略会让人以为"这次换了目标/开了离线"）
+        for _extra in (["-t", "example.com"], ["--offline"], ["--recursive-dir"], ["-n", "x"]):
+            _code, _out = _cli_run30b(["--resume-task", str(_t30b)] + _extra)
+            assert _code == 1 and not _calls30b, f"{_extra} 必须拒绝：{_out}"
+            assert "不能与这些参数同用" in _out, _out
+        assert "-t/--target" in _cli_run30b(["--resume-task", str(_t30b), "-t", "x"])[1]
+
+        # 4) 任务不存在
+        _code, _out = _cli_run30b(["--resume-task", "99999999"])
+        assert _code == 1 and not _calls30b and "不存在" in _out, _out
+
+        # 5) 任务正在运行 → 拒绝。**pid 必须设成本进程**：否则 `reconcile_orphan_tasks`
+        #    会先把这个 running 判成孤儿 failed，就测不到运行中这条分支了
+        db.update_task(_t30b, current_stage="dirscan", status="running", pid=os.getpid())
+        _code, _out = _cli_run30b(["--resume-task", str(_t30b)])
+        assert _code == 1 and not _calls30b and "正在运行" in _out, _out
+    finally:
+        _cli.run_task = _orig_rt30b
+        db.delete_task(_t30b, backup=False)
+
+    print("[6s] 续29 CLI --resume-task ok: 有断点走 resume=True（阶段原样交给 run_task 切）/ "
+          "无断点入口即拒绝（不回退全量）/ 与 -t·--offline·--recursive-dir·-n 互斥 / "
+          "任务不存在与运行中均拒绝 / 选项取自任务自身")
+
     print("SMOKE PASS")
 
 
