@@ -363,9 +363,8 @@ def create_app():
         ext_subs.sort(key=lambda r: (_rank.get(r["source"], 99), -(r["id"] or 0)))
         # 目录结果同样默认折叠"重复长度"（同一站点下几百条同样长度的 200 基本是同一个软 404 模板）
         dirs, dirs_hidden = _fold_dirs(db.list_dirs(task_id), False)
-        # 「线索」页签：intel（外部情报订阅）+ heuristic（启发式候选）两类共用一张表，
-        # 两者都**不是漏洞结论**，所以单独列、单独计数，不混进 vulns
-        leads = db.list_leads(task_id)
+        # 「线索」页签按用户口径在续24 移除（线索只在 JSONL 导出里按 `type=lead` 保留），
+        # 所以这里不再查 `leads` 表、也不再往模板传 `leads` / `leads_intel`。
         # 「补扫」相关提示条只在"本次没做全量"时出现，避免误导：
         # 本任务带了 `dirscan_full`/`portscan_full`，或全局策略本身就是全量档 → 不提示。
         try:
@@ -416,8 +415,6 @@ def create_app():
             dirs=dirs, dirs_hidden=dirs_hidden,
             vulns=db.list_vulns(task_id=task_id, limit=1000),
             review=db.review_counts(task_id),
-            leads=leads,
-            leads_intel=sum(1 for r in leads if r["kind"] == "intel"),
             # 补扫入口：任务页对"本任务的站点/IP"直接发起新任务；rescan_of 用于反向回跳
             rescan_of=top.get("rescan_of"),
             # 续25：本任务是否被"追加执行"过（次数）—— 详情页据此显示标记与横幅
@@ -741,12 +738,24 @@ def create_app():
         为什么按大小折叠：一个站点下动辄几百条同样长度的 `200`（软 404 模板、统一的
         重定向页），它们不是真发现 —— 与 dirmap 把这类结果单独写进「重复长度.txt」
         是同一口径。默认只留首个，`?all=1`（`/dirs`）放开。
+
+        **站点身份取 `dirs.site_url`，并把尾斜杠归一掉**（续24）：
+        * 归一的原因：同一个站点在库里既可能是 `http://a:8080`（目标直接给域名/IP 时
+          由 probe 拼出来）也可能是 `http://a:8080/`（httpx 回显的带斜杠形式），
+          同一个站点的两组结果不该因为一个斜杠就分成两桶；
+        * 折叠键能正确区分站点，**前提是 `site_url` 真的写了值** —— 早先 dirmap 解析行
+          一律写空串（见 `scanner/stages/dirscan.py::_origin_of` 的说明），导致两个方向都错：
+          同站点的 dirmap 行与内置行永不互折（"同样大小的没过滤"），
+          而不同站点的 dirmap 行会因 site_url 都为空被误折成一条（真丢结果）。
+          该缺陷已在解析侧修正；本函数只做归一，**不做"空值兜底估算"** ——
+          站点身份必须来自数据本身，不能靠展示层猜。
         """
         rows = [dict(r) for r in rows]
         seen, hidden = {}, 0
         for r in rows:
             r["dup"] = 0
-            key = (r.get("site_url") or "", r.get("status"), r.get("length") or -1)
+            key = ((r.get("site_url") or "").rstrip("/"), r.get("status"),
+                   r.get("length") or -1)
             first = seen.get(key)
             if first is None:
                 seen[key] = r

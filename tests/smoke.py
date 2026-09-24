@@ -907,7 +907,39 @@ def main():
     assert "显示全部" in dirs_html
     assert c.get("/dirs?all=1").get_data(as_text=True).count("777") == 3
 
-    # (4b) FOFA 资产行的域名收口：真实查询里大量行 `domain` 为空、只有 IP 形式的 host，
+    # (4b) 续24：折叠的**站点身份**必须来自数据本身。旧代码里 dirmap 解析行的 site_url 恒为
+    #      空串（dirmap 的 `path` 存的是完整 URL），于是折叠键 `(site_url, 状态码, 大小)`
+    #      两个方向都错：① 同站点的 dirmap 行与内置行永不互折（"同样大小的没过滤"）；
+    #      ② **不同站点**的 dirmap 行因 site_url 都为空，同 (状态码, 大小) 就被误折成一条（真丢结果）。
+    #      这里**不手写 site_url**（旧用例正是手写了真 URL 才漏掉这个缺陷），而是先真解一遍
+    #      dirmap 产物、拿解析结果入库，再走页面折叠验数。
+    d_out2 = Path(_TMPDIR) / "output" / "fold2"
+    d_out2.mkdir(parents=True, exist_ok=True)
+    (d_out2 / "res.txt").write_text(
+        "[200][text/html][2.00kb] http://d1.test/zzfoldalpha\n"
+        "[200][text/html][2.00kb] http://d2.test/zzfoldalpha\n", encoding="utf-8")
+    _parsed2 = DirscanStage._parse_output(d_out2 / "res.txt")
+    assert [p["site_url"] for p in _parsed2] == ["http://d1.test/", "http://d2.test/"], _parsed2
+    db.insert_dirs(tid, _parsed2)
+    # d1 站点再来一条**内置**结果：同站同 (200, 2048) → 必须与上面 d1 的 dirmap 行折成一条
+    # （site_url 故意不带尾斜杠，顺带验折叠键的尾斜杠归一）
+    db.insert_dirs(tid, [{"site_url": "http://d1.test", "path": "/zzfoldalpha", "status": 200,
+                          "length": 2048, "method": "GET", "note": "builtin"}])
+    # d3 站点：同大小但**另一个站点** → 绝不能被折掉
+    db.insert_dirs(tid, [{"site_url": "http://d3.test/", "path": "http://d3.test/zzfoldalpha",
+                          "status": 200, "length": 2048, "method": "GET", "note": "dirmap"}])
+    # 任务详情目录页签：本页共有两批重复 —— 777 那批 3 条折 1（隐藏 2）+ 2048 那批 4 条折 3（隐藏 1）
+    _pane2 = c.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert _pane2.count(">dirmap<") + _pane2.count(">builtin<") == 4, \
+        "2048 那批应渲染 3 行 + 777 那批渲染 1 行；旧口径会把跨站点的 dirmap 行折掉（只渲染 3 行）"
+    assert "本页已隐藏 3 条重复长度" in _pane2, "隐藏数应为 2（777 批）+ 1（2048 批）"
+    # 跨任务 /dirs 用**唯一关键字**把这 4 条隔离出来：本站点 2 条折 1、另两个站点各留 1
+    _dirs2 = c.get("/dirs?q=zzfoldalpha").get_data(as_text=True)
+    assert _dirs2.count(">dirmap<") + _dirs2.count(">builtin<") == 3, \
+        "跨任务页折叠应只折「同站点」的 2 条（旧代码会因 site_url 全空把 3 个站点的行折成 1 条）"
+    assert "已隐藏 1 条重复长度" in _dirs2
+
+    # (4c) FOFA 资产行的域名收口：真实查询里大量行 `domain` 为空、只有 IP 形式的 host，
     #      裸 IP 绝不能当域名写进 subdomains 表（实测数据见 osint.py::_domain_of 注释）
     from scanner.stages.osint import _domain_of
     assert _domain_of({"domain": "www.BeimingCloud.com", "host": "https://x"}) == "www.beimingcloud.com"
@@ -1024,7 +1056,8 @@ def main():
         assert '"portscan_full": true' in (t["options"] or ""), t["options"]
     finally:
         gui_app.run_task = _orig_run3
-    print("[5e] 十五轮新增 ok: 全端口/标题反查/目录(大字典·重复长度·大小)/JS敏感字符")
+    print("[5e] 十五轮新增 ok: 全端口/标题反查/目录(大字典·重复长度·大小)/JS敏感字符；"
+          "续24 折叠站点身份 ok: dirmap 行 site_url 由 URL 反推 + 同站互折 + 跨站不误折")
 
     # 5f) 第十七轮：子域名收集"主动且全" —— subfinder(-all) 与内置被动源**取并集**。
     #     原实现是 elif：装了 subfinder 就完全不跑内置源（白丢 crt.sh/alienvault 这批证书情报源）。
@@ -1543,16 +1576,27 @@ def main():
     assert DEFAULTS["intel"]["enabled"] is False and DEFAULTS["heuristic"]["enabled"] is False
     assert STAGE_ORDER[-2:] == ["intel", "heuristic"], "两个新阶段应固定在流水线最后"
 
-    # 8) GUI：策略配置渲染出两个开关、任务详情有「线索」页签；报告附录只在有关键线索时出现
+    # 8) 出口口径（续24 变更，用户 2026-09-24 拍板）：策略配置渲染出两个开关；任务详情
+    #    **不再有**「线索」页签；人读报告（MD/HTML）**不再有**线索小节；但**机器格式 JSONL
+    #    仍全量保留** `type=lead` 与计数（续20 先例：机器格式保留全部、筛选权交下游）。
+    #    这里不是"删断言让测试变绿" —— 翻成**反向断言**钉住新口径，并补上「JSONL 没被误删」。
     _shtml = c.get("/settings").get_data(as_text=True)
     assert 'name="intel_enabled"' in _shtml and 'name="heuristic_enabled"' in _shtml
+    assert "不再进 GUI 页签" in _shtml, "策略面板应说明线索现在只从 JSONL 出（旧文案指向已删页签）"
     _dhtml = c.get(f"/tasks/{ld_tid}").get_data(as_text=True)
-    assert 'data-tab="leads"' in _dhtml and 'id="pane-leads"' in _dhtml
-    _md_lead = generate(ld_tid)
-    assert "线索（非漏洞结论" in _md_lead and "CVE-2020-14882" in _md_lead
-    assert "线索（非漏洞结论" not in generate(ds_tid), "无线索的任务不该多出附录小节"
+    assert 'data-tab="leads"' not in _dhtml and 'id="pane-leads"' not in _dhtml, \
+        "续24：「线索」页签应已移除"
+    _md_lead, _html_lead = generate(ld_tid), generate_html(ld_tid)
+    assert "## 线索" not in _md_lead and "<h2>线索" not in _html_lead, \
+        "续24：人读报告（MD/HTML）不应再有线索小节"
+    assert "<span>线索</span>" not in _html_lead, "续24：HTML 概览卡片也不再列线索计数"
+    assert "## 线索" not in generate(ds_tid), "没有线索的任务同样不该出现线索小节"
+    _jl_lead = generate_jsonl(ld_tid)
+    assert '"type": "lead"' in _jl_lead and "CVE-2020-14882" in _jl_lead, \
+        "续24：JSONL 是机器格式，线索必须保留（否则等于连数据出口一起删了）"
+    assert '"leads": 1' in _jl_lead, "JSONL 概览计数应仍含 leads"
     print("[5n] 情报订阅/启发式 ok: KEV 解析+白名单匹配(词边界)+只写 leads(去重)/"
-          "五条启发式规则+反例/默认关门控/GUI 开关与页签/报告附录")
+          "五条启发式规则+反例/默认关门控/策略开关/线索只走 JSONL（页签与人读报告已按续24 移除）")
 
     # (5p) 续9：目录探测「浅扫 / 深扫」两档 + 建任务全量勾选 + 结果页补扫。
     #      用户诉求：**先浅过一遍再手动决定深挖**，且勾了全量就不该"白勾"。
@@ -2378,6 +2422,7 @@ def main():
     # [5w] 续16：报告三格式（MD / HTML / PDF）+ 漏洞趋势统计
     # 造一个"什么节都有"的任务：站点（标题带 XSS 载荷）/ 目录 / 端口 / C 段 / 证书 /
     # 漏洞（含已判误报）/ 线索 —— HTML 的每一节都要能被断言到，空数据只会掩盖漏渲染。
+    # （线索自续24 起**只进 JSONL**，不进人读报告，见下面单独的一组断言。）
     _XSS = '<script>alert(1)</script>"onx'
     w_tid = db.create_task("smoke-report-formats", targets, ["probe"], {"offline": True})
     db.insert_sites(w_tid, [{"url": "http://w.test/", "host": "w.test", "port": 80,
@@ -2407,10 +2452,18 @@ def main():
     _wmd = generate(w_tid)
     _whtml = generate_html(w_tid)
     # 三个格式必须**看到同一批数据**：MD 里有的小节 HTML 里也要有（避免格式间漂移）。
-    for _sec in ("潜在漏洞", "存活站点", "开放端口", "C 段视野", "TLS 证书", "目录发现", "线索",
+    for _sec in ("潜在漏洞", "存活站点", "开放端口", "C 段视野", "TLS 证书", "目录发现",
                  "已判误报"):
         assert f"<h2>{_sec}" in _whtml, f"HTML 报告缺小节：{_sec}"
         assert _sec in _wmd, f"MD 报告缺小节：{_sec}"
+    # 续24：这个任务**有**一条线索，但线索已从人读报告移除 —— 必须断言"有数据却不出现"，
+    # 否则"没渲染"和"没这条数据"分不开；同时机器格式 JSONL 必须仍在（数据出口不能一起删）。
+    assert "## 线索" not in _wmd and "<h2>线索" not in _whtml, \
+        "续24：人读报告不该再有线索小节（本任务确实有 1 条线索）"
+    assert "<span>线索</span>" not in _whtml, "续24：HTML 概览卡片也不该再列线索计数"
+    _wjsonl = generate_jsonl(w_tid)
+    assert '"type": "lead"' in _wjsonl and "CVE-2021-44228" in _wjsonl, \
+        "续24：JSONL 必须保留线索（机器格式的口径不变）"
     assert "漏洞趋势统计" in _whtml, "HTML 报告缺级别分布"
     assert db.vuln_trend()["by_severity"]["high"] >= 1
     # **安全断言**：目标可控的内容（标题/banner/证据）进 HTML 必须被转义 ——
@@ -2465,9 +2518,9 @@ def main():
     assert "漏洞趋势统计" in _dash and "smoke-report-formats" in _dash, "仪表盘缺趋势面板"
     assert "已判误报不计入" in _dash, "趋势面板没写口径"
     db.delete_task(w_tid, backup=False)
-    print("[5w] 续16 ok: 报告三格式（MD/HTML/PDF）与漏洞趋势统计（八节齐全 + XSS 载荷全转义 + "
+    print("[5w] 续16 ok: 报告三格式（MD/HTML/PDF）与漏洞趋势统计（七节齐全 + XSS 载荷全转义 + "
           "自包含无外链 + 误报不计入趋势/未知级别归 other + 三格式路由 + 无浏览器 400 说明原因 + "
-          "仪表盘趋势面板）")
+          "仪表盘趋势面板）；续24 线索只走 JSONL ok: 有线索却不进 MD/HTML 小节与概览卡片")
 
     # [5x] 续17：登录态扫描（任务级 Cookie/Token）+ nuclei raw / flow / workflows 子集
     from http.server import BaseHTTPRequestHandler as _BaseHTTP

@@ -3,6 +3,99 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续24：目录折叠的「站点身份」根因修复 + 线索出口收敛到 JSONL
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+> 起点是排期项（`.workbuddy-ai/memory/2026-09-24.md` 的「待办（本轮排期）」）：
+> 「续24 截图默认打开 + 目录/折叠修正 + 线索隐藏」。用户 2026-09-24 拍板范围：
+> 线索 **只隐藏页签与人读报告附录**（`leads` 表与两个阶段保留），目录折叠**修在写入侧**。
+
+### A. 三项需求的真实状态（先核实再动手，两项与排期文案不符）
+
+| 排期项 | 代码实测结论 |
+|---|---|
+| 「截图默认打开」 | **无需改动，且方向相反**：`gui/templates/tasks.html:15-21` 的 `off_by_default = s in ['screenshot','cert']` 就是**默认不勾** + 提示「勾上＝本次截图」；门控 `screenshot.enabled or options["screenshot_on"]` 亦已支持任务级放行。排期文案是旧判断，未动代码。 |
+| 「目录/折叠修正」 | **真 bug**（见 B），且**两层口径都错**。 |
+| 「线索隐藏」 | 未做：页签 + MD/HTML 附录都还露着（见 C）。 |
+
+### B. 折叠 bug：根因在**写入侧**，不在展示侧
+
+**症状（用户报）**：「同一个站点下有些同样大小的路径没被过滤」，同时另有站点结果**凭空少了几条**。
+
+**根因（单一，两处表现）**：`scanner/stages/dirscan.py::_parse_output()` 解析 dirmap 产物时
+`"site_url": ""` 是**恒空串**（dirmap 的解析行只有完整 URL，`path` 存的就是它，没有独立站点字段）。
+而折叠键是 `(site_url, 状态码, 响应大小)`：
+
+1. **漏折**：dirmap 行（`site_url=""`）与同站点的内置行（`site_url=` 真 URL）**永不相等** →
+   "同样大小没过滤"；
+2. **误折（更严重，等于真丢结果）**：`/dirs` 是跨任务视图，**不同站点**的 dirmap 行
+   `site_url` 全都等于 `""`，只要 `(状态码, 大小)` 相同就被折成一条 → 结果被静默吞掉；
+3. **连带污染启发式**：`scanner/heuristics.py` 的 `_soft404` / `dir_outlier` 按 `site_url` 分组，
+   dirmap 行全被并进 `"-"` 一组，判据失去意义。
+
+**改法（最小改动）**：
+- `dirscan.py` 新增模块级 `_origin_of(url)`：从完整 URL 反推 `scheme://netloc/`，
+  **反推不出返回空串（不猜）**；`_parse_output` 的两个分支都改用它。
+- `gui/app.py::_fold_dirs()` 折叠键加尾斜杠归一（`(site_url or "").rstrip("/")`）——
+  同站点可能是 `http://a:8080`（probe 拼）或 `http://a:8080/`（httpx 回显）。
+- **为什么修在写入侧而不是展示侧兜底**：`site_url` 是这条目录结果的**数据身份** ——
+  库里 `dirs.site_url`、跨运行去重自然键 `("site_url","path")`、启发式分组都在消费它。
+  只让展示层临时推算，等于放任库里的数据继续错、并且掩盖启发式那两处污染。
+
+### C. 线索出口收敛（沿用续20「机器格式保留全部、筛选权交下游」）
+
+- **页签**：`gui/templates/task_detail.html` 删 `data-tab="leads"` 与 `#pane-leads` 整块（11 → **10** 个页签）；
+  `gui/app.py` 任务详情路由不再查 `list_leads`、不再传 `leads` / `leads_intel`。
+- **人读报告**：`scanner/report.py` 的 MD 附录段与 HTML 小节段整块删除，HTML 概览卡片也不再列线索计数；
+  两处 `all_vulns, vulns, review, leads = ...` 解包同步收敛为三元组。
+- **JSONL 一行未动**：`generate_jsonl()` 仍全量 emit `type=lead` 行与 `counts.leads`
+  —— 这是**唯一出口**，删它等于把机器格式的数据一起删了。
+- **文案**：`gui/templates/settings.html` 的「情报与线索」面板原说明指向**已删的页签**，改为
+  「续24 起不再进 GUI 页签与人读报告，只在 JSONL 里以 `type=lead` 保留」。
+
+### D. 回归断言（`tests/smoke.py`，+64/−11）
+
+- **`[5e]` 新增 `(4b)`**：旧用例的缺陷是**自己把 `site_url` 手写成真 URL**，绕开了生产形态
+  （dirmap 真实产物）。新用例改为**先真跑一遍 `DirscanStage._parse_output()`、拿解析结果入库**，
+  再验两条：同站的 dirmap 行与内置行必须互折（顺带验尾斜杠归一）、**跨站点同 (状态码,大小) 绝不能被折**。
+  任务详情页与跨任务 `/dirs` 两处折叠分别断言。（原 FOFA 块重编号 `(4b)` → `(4c)`。）
+- **`[5n]` 第 8 组断言整块翻转成反向断言**：策略面板文案不再指向页签、任务详情**不含** `data-tab="leads"`、
+  MD/HTML **不含**线索小节与概览卡片计数；同时**正向**断言 JSONL 仍含 `"type": "lead"` 与 `"leads": 1`。
+  这不是"删断言让测试变绿" —— 口径变了就翻成反向断言钉住，并补上"数据出口没被误删"。
+- **`[5w]`**：该块造的任务**确实有 1 条线索**，因此断言「有数据却不出现」，
+  否则"没渲染"与"没这条数据"分不开。
+
+### E. 证伪（按 `AGENTS.md §6.1`，4/4 与预期一致）
+
+| 变异 | 结果 |
+|---|---|
+| M1 `_parse_output` 退回 `"site_url": ""` | 挂在 `smoke.py:922`（解析结果 site_url 为空）✓ |
+| M2 `_fold_dirs` 折叠键退回 `("", status, length)`（复现跨站误折） | 挂在 `smoke.py:933`「2048 那批应渲染 3 行」✓ |
+| M4 `task_detail.html` 加回 `data-tab="leads"` | 挂在 `smoke.py:1586`「线索页签应已移除」✓ |
+| M3 `report.py` 加回 MD 线索附录 | 挂在 `smoke.py:1589`「人读报告不应再有线索小节」✓ |
+
+> 过程中的一个**假通过**：M3 第一次用「先 `Copy-Item` 备份 report.py 再还原」，
+> 但备份发生在**编辑之后** → 备份的就是"已修复版"，还原等于什么都没变，跑出 `SMOKE PASS`。
+> 改用 Edit **真实变异**（把附录块与解包真改回去）才复现。教训：**证伪必须确认"变异确实落到了代码上"**。
+
+### F. 验证
+
+- `py -3 tests/smoke.py` → **SMOKE PASS**（变异全部还原后复跑）。
+- `git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` **逐文件一致**（未引入 lone-LF）。
+
+### G. 文档
+
+- `README.md`（线索层条目 + 目录折叠键）、`AGENTS.md`（页签 11→10、`[5n]` 说明、已知局限、
+  折叠键真 bug 的详细留痕）、`docs/usage.md`（页签 11→10 + 线索说明三处 + FAQ 改写）、
+  `docs/pipeline.md`、`docs/architecture.md`（leads 表行）、`TODO.md`（P2-1 / B-7 页签数）。
+- **未动 `todo.txt`**：它记的是用户原始待办（最后一块是续17），续18 起的所有轮次都只在
+  `CHANGELOG_AI.md` + `.workbuddy-ai/memory` 留痕（`git log -- todo.txt` 可验），本轮沿用该既有实践。
+
+### 本轮范围外（如实标注，未做）
+
+- 续26（GitHub 最小形态）仍未开工。
+- 「截图默认打开」经核实**不存在该缺陷**，故无代码改动（见 A 表）。
+
 ## 2026-09-24 —— 续27：冒烟沙箱残留「自愈清理」+ 更正一处被证伪的归因
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

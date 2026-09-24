@@ -169,6 +169,31 @@ def _size_to_int(text):
         return None
 
 
+def _origin_of(url):
+    """从一条完整 URL 反推**站点入口** `scheme://netloc/`；反推不出返回空串（不猜）。
+
+    dirmap 的解析行只有完整 URL（`path` 存的就是它），没有独立的站点字段 —— 早先这里
+    一律写空串，直接造成两处缺陷（续24 修）：
+
+    ① **目录折叠判错站点**：`gui/app.py::_fold_dirs` 的折叠键是
+       `(site_url, 状态码, 大小)`。dirmap 行的 site_url 全是空串，于是
+       a) 与同站点的内置行（site_url 是真 URL）**永远折不到一起** —— 表现为"同站点同样大小
+          的重复没被过滤"；
+       b) 更糟：**不同站点**的 dirmap 行因为 site_url 都等于 `""`，只要 (状态码, 大小) 相同
+          就被误折成一条 —— `/dirs` 是跨任务视图，这等于**真丢结果**。
+    ② **启发式分组被污染**：`scanner/heuristics.py` 的软 404（`_soft404`）与目录离群
+       （`_dir_outlier`）都按 `site_url` 分组，dirmap 行全被并进 `"-"` 一组，判据失去意义。
+
+    之所以修在**写入侧**而不是展示侧兜底：`site_url` 是这条目录结果的**数据身份**，
+    库里的 `dirs.site_url`、跨运行去重键 `("site_url", "path")`、启发式分组都在消费它；
+    只在展示侧临时推算等于让库里的数据继续错。
+    """
+    p = urlparse(str(url or ""))
+    if p.scheme not in ("http", "https") or not p.netloc:
+        return ""
+    return f"{p.scheme}://{p.netloc}/"
+
+
 class DirscanStage(Stage):
     name = "dirscan"
     description = "目录/路径爆破（dirmap 或内置字典扫描）"
@@ -484,7 +509,8 @@ class DirscanStage(Stage):
         for line in lines:
             m = DIRMAP_RE.match(line)
             if m:
-                rows.append({"site_url": "", "path": m.group(4), "status": int(m.group(1)),
+                rows.append({"site_url": _origin_of(m.group(4)), "path": m.group(4),
+                             "status": int(m.group(1)),
                              "length": _size_to_int(m.group(3)), "method": "GET",
                              "note": "dirmap"})
                 continue
@@ -492,7 +518,7 @@ class DirscanStage(Stage):
             if not urls:
                 continue
             sm = re.match(r"^\s*[\[(]?(\d{3})[\])]?", line)
-            rows.append({"site_url": "", "path": urls[0],
+            rows.append({"site_url": _origin_of(urls[0]), "path": urls[0],
                          "status": int(sm.group(1)) if sm else None,
                          "length": None, "method": "GET", "note": "dirmap"})
         return rows

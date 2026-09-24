@@ -95,8 +95,10 @@ def collect(task_id):
     # 人工复核（P1-1）：判为误报的**不再计入「潜在漏洞」**，单独成节放在文末 ——
     # 报告是给人看的交付物，把已排除的噪声混在结论里等于把复核工作白做。
     vulns = [v for v in all_vulns if (v["review"] or "") != "false_positive"]
-    # 线索（intel 情报订阅 / heuristic 启发式）：**不是漏洞结论**，只作为附录列出，
-    # 既不进上面的「潜在漏洞」表，也不参与任何计数（见 scanner/intel.py 的边界说明）。
+    # 线索（intel 情报订阅 / heuristic 启发式）：**不是漏洞结论**，续24 起不再进**人读报告**
+    # （MD / HTML）——与 GUI 的「线索」页签同步移除（用户口径：只隐藏页签与报告附录）。
+    # **数据层照旧**：`leads` 表、两个阶段都不变；**机器格式仍全量输出**（`generate_jsonl`
+    # 的 `type=lead` 行与 `counts.leads`），沿用续20 的取舍「机器格式保留全部、筛选权交下游」。
     leads = list(db.list_leads(task_id))
     return {"task": task, "subs": subs, "sites": sites, "dirs": dirs, "ports": ports,
             "csegs": csegs, "certs": certs, "all_vulns": all_vulns, "vulns": vulns,
@@ -109,7 +111,7 @@ def generate(task_id):
         return None
     task, subs, sites, dirs = d["task"], d["subs"], d["sites"], d["dirs"]
     ports, csegs, certs = d["ports"], d["csegs"], d["certs"]
-    all_vulns, vulns, review, leads = d["all_vulns"], d["vulns"], d["review"], d["leads"]
+    all_vulns, vulns, review = d["all_vulns"], d["vulns"], d["review"]
 
     lines = [f"# 扫描报告：{task['name']}（任务 #{task_id}）", ""]
     lines.append(f"- 时间：{task['created_at']} ｜ 状态：{task['status']} ｜ 阶段：{task['stages']}")
@@ -216,20 +218,6 @@ def generate(task_id):
         for d in dirs[:100]:
             lines.append(f"| {_c(d['status'])} | {_c(d['path'])} |")
         lines.append("")
-    if leads:
-        # 附录：只在线索非空时输出，避免给"没开这两个阶段"的常规报告塞空表
-        lines.append("## 线索（非漏洞结论，需人工确认）")
-        lines.append("")
-        lines.append("> 本节来自「情报订阅（CISA KEV × 本地指纹）」与「启发式候选」两个默认关闭的阶段。")
-        lines.append("> 它们是**待确认的线索**，不是漏洞结论：不进上表、不计入漏洞数，请人工核实后再处置。")
-        lines.append("")
-        lines.append("| 类型 | 级别 | CVE/规则 | 名称 | 目标 | 触发物 |")
-        lines.append("|---|---|---|---|---|---|")
-        for ld in leads:
-            kind = "情报" if ld["kind"] == "intel" else "启发式"
-            lines.append(f"| {_c(kind)} | {_c(ld['level'])} | {_c(ld['code'])} | "
-                         f"{_c(ld['title'])} | {_c(ld['target'])} | {_c(ld['matched'])} |")
-        lines.append("")
     fp = [v for v in all_vulns if (v["review"] or "") == "false_positive"]
     if fp:
         # 附录：人工复核判定的误报留痕。**保留**而不是从报告里删掉，理由是
@@ -308,7 +296,7 @@ def generate_html(task_id):
         return None
     task, subs, sites, dirs = d["task"], d["subs"], d["sites"], d["dirs"]
     ports, csegs, certs = d["ports"], d["csegs"], d["certs"]
-    all_vulns, vulns, review, leads = d["all_vulns"], d["vulns"], d["review"], d["leads"]
+    all_vulns, vulns, review = d["all_vulns"], d["vulns"], d["review"]
     by_sev = {}
     for v in vulns:
         by_sev[v["severity"]] = by_sev.get(v["severity"], 0) + 1
@@ -328,7 +316,7 @@ def generate_html(task_id):
                  f'结果为多次运行的合并（同名资产已跨运行去重，不产生重复行）。</div>')
     cards = [("子域名", len(subs)), ("存活站点", len(sites)), ("目录发现", len(dirs)),
              ("开放端口", len(ports)), ("C 段 IP", len(csegs)), ("TLS 证书", len(certs)),
-             ("潜在漏洞", len(vulns)), ("线索", len(leads))]
+             ("潜在漏洞", len(vulns))]
     p.append("<h2>概览</h2><div class='cards'>")
     p.extend(f"<div class='card'><b>{n}</b><span>{_h(k)}</span></div>" for k, n in cards)
     p.append("</div>")
@@ -393,16 +381,6 @@ def generate_html(task_id):
         p.append("<h2>目录发现（前 100）</h2>")
         p.append(_html_table(["状态", "路径"],
                              [[_h(x["status"]), _h(x["path"])] for x in dirs[:100]]))
-    if leads:
-        p.append("<h2>线索（非漏洞结论，需人工确认）</h2>")
-        p.append('<div class="note">来自「情报订阅（CISA KEV × 本地指纹）」与「启发式候选」'
-                 "两个默认关闭的阶段：它们是<b>待确认的线索</b>，不是漏洞结论 —— "
-                 "不进上表、不计入漏洞数，请人工核实后再处置。</div>")
-        p.append(_html_table(
-            ["类型", "级别", "CVE/规则", "名称", "目标", "触发物"],
-            [[_h("情报" if x["kind"] == "intel" else "启发式"), _h(x["level"]),
-              _h(x["code"]), _h(x["title"]), _h(x["target"]), _h(x["matched"])]
-             for x in leads]))
     fp = [v for v in all_vulns if (v["review"] or "") == "false_positive"]
     if fp:
         p.append("<h2>已判误报（人工复核排除）</h2>")

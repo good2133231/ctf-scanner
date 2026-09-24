@@ -336,9 +336,10 @@
 
   <section class="panel collapsible" data-panel="intel">
     <h2>情报与线索（默认关：产出的是"线索"，不是漏洞结论）</h2>
-    <p class="muted">本面板两项都<b>只写「线索」表</b>（任务详情 →「线索」页签），
-      <b>不写漏洞、不计入漏洞数、不自动导入 POC</b>。线索的语义是"值得人工看一眼"，
-      人工确认后才是漏洞 —— 所以默认关闭，避免线索堆积把结果淹没。</p>
+    <p class="muted">本面板两项产出的都是<b>「线索」</b>（独立 <code class="mono">leads</code> 表）：
+      续24 起<b>不再进 GUI 页签与人读报告（MD / HTML）</b>，只在 <b>JSONL 导出</b>里以
+      <code class="mono">type=lead</code> 保留，<b>不写漏洞、不计入漏洞数、不自动导入 POC</b>。
+      线索的语义是"值得人工看一眼"，人工确认后才是漏洞 —— 所以默认关闭，避免线索堆积把结果淹没。</p>
     <label class="chk"><input type="checkbox" name="intel_enabled" value="1"
       {{ 'checked' if s.intel.enabled }}> 漏洞情报订阅（P3-2）：拉取 CISA KEV（免 key）与本地指纹匹配</label>
     <div class="row">

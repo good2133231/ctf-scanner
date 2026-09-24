@@ -82,8 +82,8 @@ ctf-scanner/
 │   │                      #     仪表盘/任务管理/子域名资产/站点资产/IP 资产/全端口扫描/漏洞风险/POC 管理/策略配置）
 │   │                      #   （原「端口服务/C 段视野/目录发现/拓展域名」四栏已移除，路由 /ports /csegs /dirs /extdomains
 │   │                      #    仍在，只是不进侧栏；前三条是任务维度数据，/extdomains 与 /subdomains 是同一张表的不同视图）
-│   │                      #   任务详情＝横向 11 个页签（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/线索/目标与配置/运行日志）+ 页签内筛选框
-│   │                      #   （「线索」＝intel 情报订阅 + heuristic 启发式候选两类共用，**不是漏洞结论**；
+│   │                      #   任务详情＝横向 10 个页签（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/目标与配置/运行日志）+ 页签内筛选框
+│   │                      #   （「线索」页签 2026-09-24 续24 按用户口径**移除** —— 线索只从 JSONL 导出出，见 §已知局限；
 │   │                      #     「SSL 证书」＝cert 阶段产物；页签按数据源实有出现，没有产物时说明原因）
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
@@ -291,7 +291,8 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             # FOFA 裸 IP 收口(_domain_of) + dirscan 阶段级"只扫不重复站点"(记录型 logger)
 # 第十七轮(续8)新增 `[5n]`：情报订阅(intel：源地址/缓存命名安全/CVE 规整/白名单匹配
                             # 与词边界/资产文本不含标题/级别/组装线索) + 启发式(5 条规则正反例) +
-                            # leads 写入侧去重 + 默认关门控不写库 + 报告「线索」附录只在非空时出现
+                            # leads 写入侧去重 + 默认关门控不写库 + 策略开关渲染 +
+                            # 线索出口口径（续24 翻转：页签与 MD/HTML 小节**必须不在**，JSONL 必须仍在）
 # 第十八轮(续9)新增 `[5p]`：目录浅/深两档（默认 quick + 只吃 dirs_shallow + ≤quick_max_paths）
                             # + 档位判定（dirscan_full 强制 deep、portscan_full 不互相影响）
                             # + 补扫任务目标兜底(_sites_from_targets) + 建任务自动补阶段与顺序
@@ -473,12 +474,16 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
   fofa 的 email/key 要手改 `config/keys.yaml`（控制台只读、不写回凭据）。
 - `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。
-- **任务详情为 11 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/线索/目标与配置/运行日志）：参考 ARL 界面的
+- **任务详情为 10 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/目标与配置/运行日志）：参考 ARL 界面的
   IP/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源
   还不存在（分别依赖爬虫数据模型、nuclei 二进制等）。理由与依赖关系见 `TODO.md` B-7。
   「SSL 证书」页签是续15 的落点（只读 TLS 握手 + 纯标准库 DER 解析，**握手不校验证书**）：
   证书的「自签 / 已过期」是**属性**，页签与报告都写明不是漏洞结论，且没有产物时会说明原因。
-  「线索」页签是 P3-2/P3-3 的落点：**线索 ≠ 漏洞结论**，因此单列、单计数，不混进「潜在漏洞」。
+  **「线索」页签（及 MD/HTML 报告的小节）已于 2026-09-24（续24）按用户口径移除** ——
+  `intel` / `heuristic` 两个阶段与 `leads` 表**完全不变**，只是不再进 GUI 页签与人读报告：
+  线索现在只从 **JSONL 导出**出（`type=lead` 行 + `counts.leads`），沿用续20 的取舍
+  「机器格式保留全部、筛选权交给下游」。这是**口径变更**不是缺陷，`tests/smoke.py` 的
+  `[5n]` / `[5w]` 已把它翻成**反向断言**（页签与小节必须不在、JSONL 必须仍在）。
   「拓展域名」页签与跨任务 `/extdomains` **共用同一张来源顺序表**（`EXT_SRC_TAGS`：
   JS 挖掘 → FOFA·标题 → 证书 → ICO → C 段，同类内新的在前），任务页另支持 `?esrc=` 分类过滤；
   以及三个**手动**处置（2026-09-23 续13）：纯 DNS 解析 `POST /api/domains/resolve`、
@@ -627,6 +632,16 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   **裸 IP 绝不写进 `subdomains`**（IP 类资产归 portscan / probe）。新增 FOFA 类能力时请复用它。
 - 目录结果的「重复长度」折叠**只作用于当前页**（分页条的「共 N 条」是未折叠总数）；
   任务详情页签则是一次性折叠（无分页）。
+- 折叠键是 `(站点, 状态码, 响应大小)`，**站点身份取 `dirs.site_url` 并把尾斜杠归一**
+  （`gui/app.py::_fold_dirs`）。2026-09-24（续24）修过一个真 bug：dirmap 解析行早先
+  `site_url` **恒为空串**（dirmap 的 `path` 里存的是完整 URL），于是 a) 同站点的 dirmap 行
+  与内置行永不互折（"同样大小的没过滤"）、b) **不同站点**的 dirmap 行同 (状态码, 大小)
+  反而被误折成一条（跨任务 `/dirs` 真丢结果）；同一空串还污染了 `heuristics.py` 里
+  按 `site_url` 分组的软 404 / 目录离群两条规则。修法是**在解析侧**用
+  `scanner/stages/dirscan.py::_origin_of()` 从 URL 反推站点（写入侧修，不是展示侧兜底 ——
+  `site_url` 是数据身份，跨运行去重键 `("site_url","path")` 与启发式都在消费它）。
+  **回归用例必须用 `_parse_output` 真解析出的行**：旧用例自己手写 `site_url` 为真 URL，
+  恰好绕开了生产形态，所以一直没抓到。
 - **删除不是不可逆的了**：`db.delete_task()` 默认先调用 `backup_task()`，把该任务行与全部资产
   （sites/vulns/subdomains/dirs/csegs/ports）导出到 `data/trash/task_<id>_<时间>.json`；
   备份失败只告警、不阻断删除（GUI 的单个删除与批量删除都走 `db.delete_task`，无需额外操作）。
