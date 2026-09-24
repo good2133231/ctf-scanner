@@ -136,12 +136,18 @@ class StageContext:
         追加执行时阶段可能回退到"库里的全部站点"（如 dirscan / vulnscan / screenshot），
         那样会把**没勾选**的资产也重扫一遍。返回这个集合让阶段把输入**限定到本次勾选**。
         URL 归一：去首尾空白、去末尾 `/`（`http://a/` 与 `http://a` 视为同一目标）。
+
+        返回值三态，**调用方靠 `is None` 区分前两态**：
+        - 非追加 → `None`（`scope_sites()` 原样返回，行为与续25 之前一致）；
+        - 追加且勾选非空 → 目标集合；
+        - 追加但**一个都没勾上** → **空集**（曾误写成 `scope or None`→`None`，被
+          `scope_sites()` 当成"非追加"而放开全库，与下面 `scope_sites` 文档里
+          「空集就是空集（不扫）」自相矛盾）。空集必须**原样返回**，不能折成 None。
         """
         if not self.options.get("append"):
             return None
         raw = self.options.get("append_targets") or []
-        scope = {str(t).strip().rstrip("/") for t in raw if str(t).strip()}
-        return scope or None
+        return {str(t).strip().rstrip("/") for t in raw if str(t).strip()}
 
     def scope_sites(self, sites):
         """把站点列表限定到本次追加勾选（按 URL 归一匹配）；非追加/无 scope 时原样返回。

@@ -379,6 +379,18 @@ def clear_task_assets(task_id):
         _exec(f"DELETE FROM {t} WHERE task_id=?", (task_id,))
 
 
+def _norm_key_val(v):
+    """`drop_existing` 自然键的取值归一：`None` → `""`，其余一律 `str()` 化。
+
+    刻意**不用** `v or ""`：那会把 `0`、`None`、`""` 三种值全归一成 `""`，
+    于是库里 `port=0` 时，内存侧的 `0` / `None` / `""` 被判成**同一个键** ——
+    `certs` 表（自然键 host/port/sha256/serial）里 CT 日志来源的记录常是 `port=0`
+    且 sha256/serial 同时为空，同一 host 的多条证书会被合并成 1 条，资产凭空变少。
+    这里 `0 → "0"`、`None → ""`、`"" → ""`，0 与空值不再混为一谈。
+    """
+    return "" if v is None else str(v)
+
+
 def drop_existing(task_id, table, cols, items, key):
     """过滤掉"该任务该表里**已存在**"的条目 —— 续25「同任务追加式执行」的跨运行去重。
 
@@ -387,20 +399,23 @@ def drop_existing(task_id, table, cols, items, key):
 
     - `key(item)` 返回组成自然键的元组，顺序与 `cols` 一致；
     - 两侧都 `str()` 化再比 —— SQLite 里 `port` 存的是 int、内存里可能是 str，
-      `443` 与 `"443"` 必须算同一个键，否则去重会漏。
+      `443` 与 `"443"` 必须算同一个键，否则去重会漏；
+    - 两侧**共用同一个** `_norm_key_val()`（库行与内存项不能各写一套、也不能只改一边，
+      否则去重直接失效，比原 bug 更糟）：`None → ""`、其余 `str()` 化，
+      因此 `0` 与 `None` / `""` **不是**同一个键。
     - **只在"阶段即将 insert"这一步调用**：新任务 / 重启（已清空）时表为空 → 空过滤，
       对既有流程零影响；只有追加执行才有非空交集。
     """
     if not items:
         return []
-    have = {tuple(str(r[c] or "") for c in cols)
+    have = {tuple(_norm_key_val(r[c]) for c in cols)
             for r in _query(f"SELECT {', '.join(cols)} FROM {table} WHERE task_id=?",
                             (task_id,))}
     if not have:
         return list(items)
     out = []
     for it in items:
-        if tuple(str(x or "") for x in key(it)) in have:
+        if tuple(_norm_key_val(x) for x in key(it)) in have:
             continue
         out.append(it)
     return out

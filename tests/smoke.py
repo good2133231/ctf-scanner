@@ -4084,6 +4084,77 @@ workflows:
     print("[6l] 续25 同任务追加式执行 ok: 续写同一 log_file + 不清 error + 进度重置 / "
           "跨运行去重（同 站点+路径·站点 不重复）/ 并发 409 硬拒绝 / 无源入口 409 / "
           "仅勾选目标 / append_count 标记 + 导出横幅")
+
+    # 6m) 续25-fix：QA 复验 c8d51c4 报出的三项低风险缺陷回归
+    #     A. db.drop_existing 自然键归一：0 / None / "" 不再被 `x or ""` 混为一谈
+    #     B. /api/ports/full-scan 显式 409 拒绝 append（此前静默忽略、照样新建任务）
+    #     C. StageContext.append_scope() 空集不再折成 None（不再回退全库）
+
+    # A —— 三条语义。真实受害者是 certs 表：自然键 (host, port, sha256, serial)，
+    #      CT 日志来源常是 port=0 且 sha256/serial 为空 → 同 host 多条证书被合并成 1 条。
+    assert (db._norm_key_val(0) == "0" and db._norm_key_val(None) == ""
+            and db._norm_key_val("") == "" and db._norm_key_val(443) == "443"), \
+        '自然键归一：0→"0"、None→""、""→""、443→"443"（两侧共用这一个函数）'
+    _tid6m = db.create_task("smoke-6m", "h6m", ["portscan"], {"offline": True})
+    db._exec("INSERT INTO ports (task_id, host, port) VALUES (?,?,?)", (_tid6m, "h6m_a", 443))
+    db._exec("INSERT INTO ports (task_id, host, port) VALUES (?,?,?)", (_tid6m, "h6m_b", 0))
+    _items6m = [
+        {"host": "h6m_a", "port": "443"},   # ① 内存 str "443" vs 库 int 443 → 同一键
+        {"host": "h6m_a", "port": 443},
+        {"host": "h6m_b", "port": None},    # ② 库 0 vs 内存 None → **必须不同键**（核心）
+        {"host": "h6m_b", "port": 0},       #    同值仍应命中
+        {"host": "h6m_b", "port": 443},     # ③ 0 vs 443 → 不同键（防过度去重）
+    ]
+    _kept6m = {(i["host"], i["port"]) for i in db.drop_existing(
+        _tid6m, "ports", ("host", "port"), _items6m,
+        lambda i: (i.get("host"), i.get("port")))}
+    assert ("h6m_a", "443") not in _kept6m and ("h6m_a", 443) not in _kept6m, \
+        f"① 443(int) 与 '443'(str) 必须算同一键（drop_existing 存在的初衷）：{_kept6m}"
+    assert ("h6m_b", None) in _kept6m, \
+        f"② 库里 0 与内存 None 必须**不同键**（`x or ''` 会把两者都归一成空串）：{_kept6m}"
+    assert ("h6m_b", 0) not in _kept6m, f"②b 0 与 0 必须同一键：{_kept6m}"
+    assert ("h6m_b", 443) in _kept6m, f"③ 0 与 443 必须不同键（防过度去重）：{_kept6m}"
+    db.delete_task(_tid6m, backup=False)
+
+    # B —— /api/ports/full-scan 带 append 必须 409 显式拒绝（此前静默新建任务）
+    _n6m = len(db.list_tasks(limit=1000))
+    _r6m = c.post("/api/ports/full-scan", data={"host": "127.0.0.1", "append": "1"})
+    assert _r6m.status_code == 409, f"append 必须显式 409 拒绝，实际 {_r6m.status_code}"
+    assert "无法追加执行" in _r6m.get_data(as_text=True), "应给出可读原因"
+    assert len(db.list_tasks(limit=1000)) == _n6m, "被拒后**不得**新建任务"
+    # 不带 append 仍走原路径（新建任务 302），行为不变
+    _orig_rt6m = gui_app.run_task
+    gui_app.run_task = lambda *a, **kw: None        # 打桩：不真起任务线程
+    try:
+        _r6mb = c.post("/api/ports/full-scan", data={"host": "127.0.0.1"})
+    finally:
+        gui_app.run_task = _orig_rt6m
+    assert _r6mb.status_code == 302, _r6mb.status_code
+    assert len(db.list_tasks(limit=1000)) == _n6m + 1, "不带 append 应正常新建任务"
+    db.delete_task(int(str(_r6mb.headers["Location"]).rstrip("/").rsplit("/", 1)[-1]),
+                   backup=False)
+
+    # C —— append_scope() 三态：非追加 None / 追加空集 **空集**（不再折成 None）/ 追加非空
+    _wd6m = LOGS_DIR / "smoke-6m"
+    _wd6m.mkdir(parents=True, exist_ok=True)
+
+    def _ctx6m(options):
+        return StageContext(0, "smoke-6m", [], [], options, settings, _wd6m,
+                            get_logger("smoke-6m", _wd6m / "t.log"))
+
+    assert _ctx6m({}).append_scope() is None, "非追加必须仍返回 None（原行为不变）"
+    _empty6m = _ctx6m({"append": True, "append_targets": []}).append_scope()
+    assert _empty6m is not None and _empty6m == set(), \
+        f"追加但一个都没勾上必须返回**空集**（`scope or None` 折成 None 会放开全库）：{_empty6m!r}"
+    _all6m = [{"url": "http://a6m"}, {"url": "http://b6m"}]
+    assert _ctx6m({"append": True, "append_targets": []}).scope_sites(_all6m) == [], \
+        "空集就是空集（不扫）—— 不得回退到库里全部站点"
+    _s6m = _ctx6m({"append": True, "append_targets": ["http://a6m/", "  http://b6m  ", ""]})
+    assert _s6m.append_scope() == {"http://a6m", "http://b6m"}, _s6m.append_scope()
+    assert [x["url"] for x in _s6m.scope_sites(_all6m)] == ["http://a6m", "http://b6m"]
+    print("[6m] 续25-fix 三项缺陷回归 ok: drop_existing 0/None/'' 不再混为一谈"
+          "（443↔'443' 仍同一键）/ full-scan append 显式 409 不再静默新建 / "
+          "append_scope 空集不折 None（不回退全库）")
     print("SMOKE PASS")
 
 

@@ -947,7 +947,16 @@ def create_app():
         实现上走"新建一个只跑 portscan 的任务"（与「批量跑子域名」同一套做法）：
         任务选项 `portscan_full` 让这个任务无视全局 `portscan.enabled` 也会执行，
         并且会自动跳过本任务已经扫过的端口。
+
+        续25-fix：本入口**不支持「追加」** —— IP/全端口页是跨任务视图（汇总所有任务的
+        主机），没有唯一源任务可追加。此前 `append` 参数被**静默忽略**、照样新建任务，
+        属静默失败；这里显式 409 拒绝，文案与 `ips.html` / `fullports.html` 的提示一致。
         """
+        if str(request.form.get("append", "")).lower() in ("1", "true", "on"):
+            return _append_err("IP 资产页是跨任务视图，没有唯一源任务，"
+                               "此入口不支持追加执行；"
+                               "请在任务详情页对已勾选资产点「追加」。",
+                               url_for("fullports"))
         hosts, seen = [], set()
         for raw in request.form.getlist("host"):
             h = (raw or "").strip()
