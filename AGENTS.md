@@ -296,6 +296,15 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 
 改动后**必须**跑 `tests/smoke.py`；GUI/模板改动还应 `run_gui.py` 亲眼确认页面。
 
+> **弹「删除」确认是正常的，不是脚本在删你的数据**：`tests/smoke.py` 会在 `logs/` 下用
+> `tempfile.mkdtemp(prefix="smoke-")` 造一个隔离沙箱（库与任务目录都指进去，见文件头 21–33 行），
+> 跑完靠 `atexit` 里的 `shutil.rmtree` 自清。沙箱/杀软的 safe-delete 守卫按**每轮累计删除条目数**
+> 计数（实测提示 `{"count":50,"threshold":50,"scope":"turn","targetCount":1}` —— 一个目标目录里
+> 有 50 个条目），到阈值就弹确认；而 `ignore_errors=True` 把"被拦"变成**静默失败**，于是
+> `logs/smoke-*` 会攒下来（本机攒到过 56 个 / 12 MB）。
+> **它只删自己刚造的那一个目录**，不碰 `data/scanner.db`，也不碰 `logs/task_*`；残留本身是纯垃圾
+> （`logs/` 已在 `.gitignore`），定期手删 `logs/smoke-*` 即可，不必为此改脚本。
+
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
 

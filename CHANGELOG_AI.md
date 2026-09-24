@@ -3,6 +3,22 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 收尾：批次 4 提交 + `AGENTS.md §6` 补「删除确认」说明
+> 实施者：**WorkBuddy · Hy4-preview**
+
+- **批次 4 提交**（`e753fd0`，21 文件 / +2262 −55）：续18 那五项（XSS 上下文 / A10 SSRF 受控回连 /
+  布尔盲注 / Shodan·Quake 反查 / CT 日志）此前只落在工作区未提交。提交前跑 `py -3 tests/smoke.py`
+  → `SMOKE PASS`；行尾自查发现 `docs/usage.md` 有 4 行纯 EOL 差异，查证后是**修好**
+  （HEAD 的 223–226 行是裸 LF，现已全文件 CRLF），属净改善，随本次一并提交。
+- **`AGENTS.md §6` 新增一段说明**：跑 smoke 时沙箱/杀软弹「删除」确认是**正常的** ——
+  `tests/smoke.py` 用 `tempfile.mkdtemp(prefix="smoke-", dir=logs/)` 造隔离沙箱、跑完靠
+  `atexit` 的 `shutil.rmtree` 自清；守卫按**每轮累计删除条目数**计数（实测
+  `{"count":50,"threshold":50,"scope":"turn","targetCount":1}`），到阈值即弹确认，而
+  `ignore_errors=True` 把"被拦"变成静默失败 → `logs/smoke-*` 残留（本机攒到 56 个 / 12 MB）。
+  写明"只删自己刚造的那个目录、不碰 `data/scanner.db` 与 `logs/task_*`"，免得下一个接手者
+  误以为脚本在删真实数据，也免得有人为了消除弹窗去改测试脚本。
+
+
 ## 2026-09-23 —— 续18：「批次 4」五项（XSS 上下文 / A10 SSRF 受控回连 / 布尔盲注 / Shodan·Quake 反查 / CT 日志）+ 静态体检
 > 实施者：**WorkBuddy · Hy4-preview**
 
