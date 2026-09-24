@@ -517,7 +517,10 @@ class OsintStage(Stage):
                 for d in ctlog_mod.domains_of([rec]):
                     found.append((d, "osint:ctlog"))
         if certs:
-            db.insert_certs(ctx.task_id, certs)
+            # 跨运行去重（续25）：同一 (host, port, sha256, serial) 的证书记录不再重复入库
+            db.insert_certs(ctx.task_id, db.drop_existing(
+                ctx.task_id, "certs", ("host", "port", "sha256", "serial"), certs,
+                lambda r: (r.get("host"), r.get("port"), r.get("sha256"), r.get("serial"))))
         ctx.logger.info(f"[osint] CT 日志：查询 {queried} 个注册域，失败 {failed} 个，"
                         f"证书记录 {len(certs)} 条"
                         + ("（已写入「SSL 证书」页签，来源 ct）" if certs else ""))

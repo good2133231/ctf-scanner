@@ -3,6 +3,44 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续25：同任务「追加式执行」（补扫/复查结果累积进同一任务）
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+此前「补扫 / 复查 / 送去探测」一律**新建任务**：结果散落在多个任务里、要来回比对，复查产生的新行与
+旧行分属不同任务，用户已打的 `review` / `review_note` 无从对照。本轮让这些入口可**追加进源任务**。
+
+### T01 追加内核（`scanner/runner.py`）
+- `run_task(..., append=True)`：**续写原任务日志/工作目录**（不新建 workdir）、**不清 `error`**
+  （保留历史错误）、`progress` 重置为 0、`current_stage` 清空；其余（阶段顺序、阶段级容错、
+  停止/预算语义、任务状态）与原逻辑完全一致。
+- `StageContext.append_scope()` / `scope_sites(sites)`：追加执行时把 dirscan/vulnscan/screenshot 的
+  站点输入**限定到本次勾选**（否则会回退到"库里全部站点"而重扫未勾选项）。
+
+### T02 阶段跨运行去重（`scanner/db.py` + 6 个阶段）
+- 新增 `db.drop_existing(task_id, table, cols, items, key)`：按自然键过滤掉"该任务该表里已存在"的行
+  （两侧 `str()` 化比对，`443` 与 `"443"` 视为同键）。
+- 应用到 subdomain（domain）/ probe（url）/ portscan（host,port）/ dirscan（site_url,path）/
+  vulnscan（target,poc_id，D2）/ cert·osint（host,port,sha256,serial）。**只在"即将 insert"处调用**：
+  新任务/重启（已清空）时表为空 → 空过滤，对既有流程零影响。
+
+### T03 GUI（`gui/app.py` + 5 个模板）
+- 任务详情页 4 个补扫表单 + 拓展域名「送去探测」表单加「追加到本任务」勾选；`_do_append()` 统一处理：
+  无源任务 → 409「没有源任务」；源任务在跑/并发 → 409（`_append_guard` 硬拒绝）；成功 → 复用源任务、
+  `options.append_count += 1`、302 回详情页。
+- 站点/IP/全端口三个**无源**入口加提示「此入口没有源任务，无法追加」。
+- 详情页显示「追加 ×N」横幅；`scanner/report.py` 的 MD/HTML 导出加「含追加执行」横幅（**不阻断**导出）。
+
+### T04 测试 + 文档
+- `tests/smoke.py` 新增 `[6l]`：续写日志/不清 error/进度重置、跨运行去重、并发 409、无源 409、
+  仅勾选目标、append_count 标记 + 导出横幅。
+- `AGENTS.md`（§4/§6/§7）、`docs/usage.md`。
+
+### 验证
+- `py -3 tests/smoke.py` → `SMOKE PASS`。
+- 证伪（§6.1，临时退回旧行为跑 smoke）：关掉 `drop_existing` → 去重断言失败；让 `append` 走新建式 →
+  续写 log_file 断言失败；关掉 `_append_guard` → 并发 409 断言失败；三次观察都真的失败，已还原。
+- 全文件 CRLF；`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 一致；不 push。
+
 ## 2026-09-24 —— 续22：拓展域名降噪三件套（jsmine PSL 校验 / 第三方清单 / FOFA 标题归属相关性）
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

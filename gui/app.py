@@ -208,11 +208,68 @@ def create_app():
 
     # ---------- 任务 ----------
 
-    def _spawn(task_id, name, targets, stages, options):
-        """后台线程执行任务（GUI 不阻塞）。"""
+    def _spawn(task_id, name, targets, stages, options, append=False):
+        """后台线程执行任务（GUI 不阻塞）。`append=True` = 续25 同任务追加式执行。"""
         threading.Thread(target=run_task, daemon=True,
                          args=(task_id, name, targets, stages, options,
-                               load_settings())).start()
+                               load_settings()),
+                         kwargs={"append": append}).start()
+
+    def _append_guard(src_id):
+        """续25：能否对源任务追加执行。返回 `(ok, 错误信息)`。
+
+        **必须硬拒绝同任务并发**：`runner._register_stop` 是"同 task 覆盖式注册"，
+        第二次追加会顶掉第一次的停止事件 —— 用户点「停止」就停不掉正在跑的那一次。
+        所以只要该任务在 `running_task_ids()` 里、或库状态是 running，一律拒绝。
+        """
+        task = db.get_task(src_id)
+        if not task:
+            return False, "源任务不存在"
+        if src_id in runner.running_task_ids() or task["status"] == "running":
+            return False, "该任务正在运行，无法追加（避免并发覆盖停止信号）；请先停止或等它跑完"
+        return True, ""
+
+    def _append_err(msg, fallback):
+        """追加被拒：返回 409 + 一个可读的最小页面（表单 POST 直接看到原因）。"""
+        return ("<!doctype html><meta charset='utf-8'>"
+                f"<h3>无法追加执行</h3><p>{msg}</p>"
+                f"<p><a href='{fallback}'>返回</a></p>"), 409
+
+    def _do_append(src_raw, stages, text, targets, stage_opts, fallback):
+        """续25：把 `stages` **追加到源任务**上执行（不新建任务）。
+
+        - 无源任务（sites/ips/fullports 三个入口的表单没有任务号）→ 409「无法追加」；
+        - 源任务在跑 / 并发第二次追加 → 409（见 `_append_guard`）；
+        - 成功：沿用源任务、把本次勾选目标与阶段选项塞进**本次运行**的 options，
+          持久化只记 `appended` / `append_count`（供详情页显示标记），302 回详情页。
+        """
+        if not str(src_raw or "").strip().isdigit():
+            return _append_err("此入口没有源任务，无法追加执行"
+                               "（请在**任务详情页**对已勾选资产点「追加」）", fallback)
+        src_id = int(str(src_raw).strip())
+        ok, err = _append_guard(src_id)
+        if not ok:
+            return _append_err(err, fallback)
+        task = db.get_task(src_id)
+        try:
+            base = json.loads(task["options"] or "{}")
+        except (TypeError, ValueError):
+            base = {}
+        if not isinstance(base, dict):
+            base = {}
+        run_opts = dict(base)
+        run_opts.update(stage_opts or {})
+        run_opts.pop("rescan_of", None)     # 追加是在**同一任务**里跑，不记"来源任务"
+        run_opts["append"] = True
+        run_opts["append_targets"] = list(targets)
+        meta = dict(base)
+        meta["appended"] = True
+        meta["append_count"] = int(base.get("append_count") or 0) + 1
+        db.update_task(src_id, options=json.dumps(meta), status="pending", current_stage="")
+        _spawn(src_id, task["name"], text, stages, run_opts, append=True)
+        logger.info(f"[gui] 任务 #{src_id} 追加执行（阶段 {'/'.join(stages)}，"
+                    f"{len(targets)} 个目标，第 {meta['append_count']} 次追加）")
+        return redirect(url_for("task_detail", task_id=src_id))
 
     @app.route("/tasks")
     @login_required
@@ -363,6 +420,8 @@ def create_app():
             leads_intel=sum(1 for r in leads if r["kind"] == "intel"),
             # 补扫入口：任务页对"本任务的站点/IP"直接发起新任务；rescan_of 用于反向回跳
             rescan_of=top.get("rescan_of"),
+            # 续25：本任务是否被"追加执行"过（次数）—— 详情页据此显示标记与横幅
+            append_count=int(top.get("append_count") or 0),
             # 登录态只显示**掩码后的**名字 + 值（`Cookie=abc***xyz`），见上面的 auth_view
             auth_view=auth_view,
             dir_full=dir_full, port_full=port_full,
@@ -1051,6 +1110,8 @@ def create_app():
         name = (request.form.get("name") or "").strip() or \
             time.strftime("拓展探测-%m%d-%H%M%S")
         targets = "\n".join(domains)
+        if str(request.form.get("append", "")).lower() in ("1", "true", "on"):
+            return _do_append(from_task, stages, targets, domains, options, fallback)
         task_id = db.create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
         logger.info(f"[gui] 拓展域名探测任务 #{task_id} 已创建"
@@ -1109,6 +1170,8 @@ def create_app():
             options["auth"] = inherit
         text = "\n".join(targets)
         stages = [stage]
+        if str(request.form.get("append", "")).lower() in ("1", "true", "on"):
+            return _do_append(from_task, stages, text, targets, options, fallback)
         task_id = db.create_task(name, text, stages, options)
         _spawn(task_id, name, text, stages, options)
         logger.info(f"[gui] 补扫任务 #{task_id} 已创建（{stage} 全量档，"

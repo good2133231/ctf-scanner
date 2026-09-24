@@ -304,6 +304,9 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
   重新生成大字典：`py -3 tools/import_dir_dict.py`（源：`tools/dirmap/data/dict_load/dict_mode_dict.txt`）；
 - **补扫**：见 GUI 页面说明 §3 —— 在结果页勾选站点（或对全部站点）发起，新建独立任务，
   不勾全量档时全局策略保持浅扫不变。CLI 用 `--full-dir` / `--full-ports` 表达同一件事；
+  **追加到本任务**（续25，勾选补扫/复查/送去探测表单里的「追加到本任务」）：**不新建任务**，
+  把该阶段追加进源任务、结果累积，同名资产**跨运行去重**（不产生重复行），续写同一日志、不清错误；
+  任务运行中无法追加（避免并发覆盖停止信号），站点/IP/全端口三个无源入口也不提供追加。
 - **dirmap**：本机用**目录联接**把它挂到 `tools/dirmap/`（第三方项目不随仓库分发，`.gitignore` 已排除），
   `dirscan` 阶段在**深扫档**会自动优先调用它（`tools.dirmap.script`，默认 `tools/dirmap/dirmap.py`）；
   找不到就回退内置字典扫描。它的产物在 `output/<域名>/` 下，我们只读 `res.txt` / `403.txt`

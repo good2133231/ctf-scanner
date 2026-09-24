@@ -65,6 +65,20 @@ def _h(value):
     return html.escape(str("" if value is None else value), quote=True)
 
 
+def _append_count(task):
+    """续25：任务被"追加执行"的次数（0 = 从未追加）。`options` 是 JSON 文本。"""
+    try:
+        top = json.loads(task["options"] or "{}")
+    except (TypeError, ValueError):
+        return 0
+    if not isinstance(top, dict):
+        return 0
+    try:
+        return int(top.get("append_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def collect(task_id):
     """把一份报告要用的数据一次性取出来（Markdown / HTML / PDF 共用），任务不存在返回 None。"""
     task = db.get_task(task_id)
@@ -99,6 +113,11 @@ def generate(task_id):
 
     lines = [f"# 扫描报告：{task['name']}（任务 #{task_id}）", ""]
     lines.append(f"- 时间：{task['created_at']} ｜ 状态：{task['status']} ｜ 阶段：{task['stages']}")
+    # 续25：追加执行过的任务在报告顶部留**横幅**（提示"结果为多次运行的合并"），不阻断导出。
+    _ap = _append_count(task)
+    if _ap:
+        lines.append(f"- ⚠ 本任务含**追加执行** ×{_ap}：结果是多次运行的合并"
+                     f"（同名资产已跨运行去重，不产生重复行）。")
     lines.append("- 目标：")
     lines.append("```")
     lines.append(task["targets"])
@@ -302,6 +321,11 @@ def generate_html(task_id):
          f'<p class="muted">时间：{_h(task["created_at"])} ｜ 状态：{_h(task["status"])} '
          f'｜ 阶段：{_h(task["stages"])}</p>',
          "<h2>目标</h2>", f"<pre>{_h(task['targets'])}</pre>"]
+    # 续25：追加执行过的任务在报告顶部留**横幅**（提示"结果为多次运行的合并"），不阻断导出。
+    _ap = _append_count(task)
+    if _ap:
+        p.append(f'<div class="note">⚠ 本任务含<b>追加执行</b> ×{_ap}：'
+                 f'结果为多次运行的合并（同名资产已跨运行去重，不产生重复行）。</div>')
     cards = [("子域名", len(subs)), ("存活站点", len(sites)), ("目录发现", len(dirs)),
              ("开放端口", len(ports)), ("C 段 IP", len(csegs)), ("TLS 证书", len(certs)),
              ("潜在漏洞", len(vulns)), ("线索", len(leads))]

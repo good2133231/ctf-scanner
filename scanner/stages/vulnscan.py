@@ -40,6 +40,7 @@ class VulnscanStage(Stage):
         if not sites:
             # 兼容仅导入 URL 且 probe 未产出站点的任务
             sites = [{"url": raw, "source": "input"} for kind, raw in ctx.targets if kind == "url"]
+        sites = ctx.scope_sites(sites)          # 续25：追加执行时限定到本次勾选（非追加原样）
         sites = sites[: int(limits.get("vulnscan_max_urls", 100))]
         if not sites:
             ctx.logger.info("[vulnscan] 无可扫描站点，跳过")
@@ -125,13 +126,20 @@ class VulnscanStage(Stage):
                 continue
             seen.add(key)
             uniq.append(v)
-        for v in uniq:
+        # 跨运行去重（续25，D2）：追加「复查」时按 (target, poc_id) 跳过**已在库**的同键，
+        # 只把**新增的脆弱对**入库 —— 既避免产生未复核的重复行，又保住用户已打的
+        # review / review_note（那两列挂在旧行上，覆盖或删旧行都会丢）。
+        new_v = db.drop_existing(ctx.task_id, "vulns", ("target", "poc_id"), uniq,
+                                 lambda v: (v.get("target"), v.get("poc_id")))
+        for v in new_v:
             db.insert_vuln(ctx.task_id, v)
         ctx.results["vulns"] = uniq
         by_sev = {}
         for v in uniq:
             by_sev[v.get("severity", "medium")] = by_sev.get(v.get("severity", "medium"), 0) + 1
+        _dup = len(uniq) - len(new_v)
         ctx.logger.info(
             f"[vulnscan] 潜在漏洞 {len(uniq)} 项"
             + (f"（{' / '.join(f'{k}:{n}' for k, n in sorted(by_sev.items()))}）" if uniq else "")
+            + (f"（跨运行去重跳过 {_dup} 项已入库）" if _dup else "")
             + "，均为初筛结果，需人工确认")

@@ -3988,6 +3988,96 @@ workflows:
           "cloudflareinsights.com 拦 static.*）/ FOFA 标题归属相关性（label 挡 silviapengo.com·"
           "gkops.net，pengo.* 保留；substring 档复现宽松；中文标题 fail-open）+ 开关三方一致")
 
+    # 6l) 续25：同任务「追加式执行」—— 内核（续写日志 / 不清 error / 进度重置）+ 跨运行去重 +
+    #     并发硬拒绝 + 无源入口拒绝 + 仅勾选目标 + 导出横幅。此前"补扫/复查"一律**新建任务**，
+    #     结果散落在多个任务里、要来回比对；追加让结果累积进**同一任务**且不产生重复行。
+    import time as _time6l
+    from scanner import runner as _runner6l
+    _as6l = copy.deepcopy(settings)
+    _as6l["tools"]["dirmap"]["script"] = "tools/does-not-exist.py"   # 强制内置扫描（离线、不发外部请求）
+    _as6l["dirscan"] = dict(_as6l.get("dirscan") or {})
+    _as6l["dirscan"].update({"enabled": True, "mode": "quick",
+                             "max_paths": 20, "quick_max_paths": 20})
+
+    # (1) 先跑一个正常任务（probe 产出站点），作为追加的源
+    _ap_tid = db.create_task("smoke-append", targets, ["probe"], {"offline": True})
+    run_task(_ap_tid, "smoke-append", targets, ["probe"], {"offline": True}, settings)
+    _t1 = db.get_task(_ap_tid)
+    assert _t1["status"] == "done", _t1["status"]
+    _sites6l = [dict(r) for r in db.list_sites(_ap_tid)]
+    assert _sites6l, "probe 应产出站点（追加测试的输入）"
+    _log1, _err1, _n_sites = _t1["log_file"], _t1["error"], len(_sites6l)
+    assert _log1, "任务应有日志文件"
+
+    # (2) 追加 dirscan：只勾选第一个站点 → 结果进**同一任务**、续写同一 log、error 不动
+    _scope = [_sites6l[0]["url"]]
+    _opts6l = {"offline": True, "append": True, "append_targets": _scope}
+    run_task(_ap_tid, "smoke-append", "\n".join(_scope), ["dirscan"], _opts6l, _as6l,
+             append=True)
+    _t2 = db.get_task(_ap_tid)
+    assert _t2["status"] == "done", _t2["status"]
+    assert _t2["log_file"] == _log1, "追加执行必须续写**同一**日志文件（不新建 workdir）"
+    assert (_t2["error"] or "") == (_err1 or ""), "追加执行不得清空已有 error"
+    _dirs1 = db.list_dirs(_ap_tid)
+    assert _dirs1, "追加 dirscan 应产出目录（内置扫描命中 fixture 的 .env/.git/config）"
+    _n_dirs = len(_dirs1)
+
+    # (3) 跨运行去重：再追加一次**同样的目标** → 目录/站点数不增加
+    run_task(_ap_tid, "smoke-append", "\n".join(_scope), ["dirscan"], _opts6l, _as6l,
+             append=True)
+    assert len(db.list_dirs(_ap_tid)) == _n_dirs, \
+        "同一 (站点, 路径) 跨运行不得重复入库"
+    assert len(db.list_sites(_ap_tid)) == _n_sites, "追加不得重复插入站点"
+
+    # (4) 并发硬拒绝：任务"正在运行"时不得追加（否则 _register_stop 覆盖停止事件）
+    _runner6l._register_stop(_ap_tid)
+    try:
+        _r6l = c.post("/api/rescan", data={"stage": "dirscan", "from_task": str(_ap_tid),
+                                           "append": "1", "target": _scope[0],
+                                           "next": "/tasks"})
+        assert _r6l.status_code == 409, _r6l.status_code
+        assert "无法追加" in _r6l.get_data(as_text=True)
+    finally:
+        _runner6l._unregister_stop(_ap_tid)
+
+    # (5) 无源入口（没有 from_task）→ 明确拒绝，**不得静默新建任务**
+    _r6l2 = c.post("/api/rescan", data={"stage": "dirscan", "append": "1",
+                                        "target": _scope[0], "next": "/tasks"})
+    assert _r6l2.status_code == 409 and "没有源任务" in _r6l2.get_data(as_text=True), \
+        _r6l2.status_code
+
+    # (6) 成功追加（桩掉 run_task 避免真起线程）：复用同一任务、不新建、append_count 递增
+    _n_tasks6l = len(db.list_tasks(limit=1000))
+    _orig_rt6l = gui_app.run_task
+    _spawned6l = []
+    gui_app.run_task = lambda tid, *a, **kw: _spawned6l.append((tid, kw.get("append")))
+    try:
+        _r6l3 = c.post("/api/rescan", data={"stage": "dirscan", "from_task": str(_ap_tid),
+                                            "append": "1", "target": _scope[0],
+                                            "next": "/tasks"})
+        assert _r6l3.status_code == 302, _r6l3.status_code
+        assert _r6l3.headers["Location"].rstrip("/").endswith(f"/tasks/{_ap_tid}"), \
+            _r6l3.headers["Location"]
+        for _ in range(100):
+            if _spawned6l:
+                break
+            _time6l.sleep(0.02)
+    finally:
+        gui_app.run_task = _orig_rt6l
+    assert len(db.list_tasks(limit=1000)) == _n_tasks6l, "追加**不得**新建任务"
+    assert _spawned6l == [(_ap_tid, True)], f"应追加到源任务且 append=True：{_spawned6l}"
+    import json as _json6l
+    _opt6l = _json6l.loads(db.get_task(_ap_tid)["options"] or "{}")
+    assert _opt6l.get("append_count") == 1 and _opt6l.get("appended") is True, _opt6l
+
+    # (7) 导出横幅：含追加标记的任务，MD/HTML 顶部有横幅（**不阻断**导出）
+    assert "追加执行" in generate(_ap_tid), "MD 报告应含追加横幅"
+    assert "追加执行" in generate_html(_ap_tid), "HTML 报告应含追加横幅"
+
+    db.delete_task(_ap_tid, backup=False)
+    print("[6l] 续25 同任务追加式执行 ok: 续写同一 log_file + 不清 error + 进度重置 / "
+          "跨运行去重（同 站点+路径·站点 不重复）/ 并发 409 硬拒绝 / 无源入口 409 / "
+          "仅勾选目标 / append_count 标记 + 导出横幅")
     print("SMOKE PASS")
 
 

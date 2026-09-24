@@ -130,6 +130,33 @@ class StageContext:
         th = self.throttle
         return self.stop_event.is_set() or bool(th and th.exhausted())
 
+    def append_scope(self):
+        """续25「追加式执行」：本次勾选的目标集合（URL/host，已归一化）；非追加返回 None。
+
+        追加执行时阶段可能回退到"库里的全部站点"（如 dirscan / vulnscan / screenshot），
+        那样会把**没勾选**的资产也重扫一遍。返回这个集合让阶段把输入**限定到本次勾选**。
+        URL 归一：去首尾空白、去末尾 `/`（`http://a/` 与 `http://a` 视为同一目标）。
+        """
+        if not self.options.get("append"):
+            return None
+        raw = self.options.get("append_targets") or []
+        scope = {str(t).strip().rstrip("/") for t in raw if str(t).strip()}
+        return scope or None
+
+    def scope_sites(self, sites):
+        """把站点列表限定到本次追加勾选（按 URL 归一匹配）；非追加/无 scope 时原样返回。
+
+        刻意在**各阶段拿到 sites 之后**再过滤，而不是预填 `ctx.results["sites"]` ——
+        后者在"勾选目标一个都没匹配上"时会被阶段里的 `or db.list_sites(...)` 当成"空"
+        而回退到全库，反而把未勾选的站点全扫了。这里显式过滤，空集就是空集（不扫）。
+        """
+        scope = self.append_scope()
+        if scope is None:
+            return sites
+        return [s for s in sites
+                if str((s.get("url") if isinstance(s, dict) else s) or "").strip().rstrip("/")
+                in scope]
+
 
 class PipelineRunner:
     def __init__(self, ctx):
@@ -192,11 +219,32 @@ def sync_pocs(settings=None):
         db.upsert_poc(m.get("_path") or m.get("id"), m)
 
 
-def run_task(task_id, name, targets_text, stages, options, settings):
-    """CLI 与 GUI 共用的任务执行入口（阻塞执行，调用方负责放线程）。"""
-    workdir = LOGS_DIR / f"task_{task_id}_{time.strftime('%Y%m%d_%H%M%S')}"
-    workdir.mkdir(parents=True, exist_ok=True)
-    logger = get_logger(f"task-{task_id}", workdir / "task.log")
+def run_task(task_id, name, targets_text, stages, options, settings, append=False):
+    """CLI 与 GUI 共用的任务执行入口（阻塞执行，调用方负责放线程）。
+
+    `append=True`（续25「同任务追加式执行」）与默认的"新建式"执行的差别只有三处：
+    1. **续写原任务的日志/工作目录**（不新建 workdir），产物落在同一处；
+    2. **不清空 `error`**（保留历史错误），`progress` 重置为 0、`current_stage` 清空；
+    3. 阶段输入限定到 `options["append_targets"]`（本次勾选的目标，由各阶段调
+       `ctx.scope_sites()` 落实），避免 dirscan/vulnscan/screenshot 回退到"库里全部站点"
+       而重扫未勾选项。
+    其余（阶段顺序、阶段级容错、停止/预算语义、任务状态）与原逻辑完全一致。
+    """
+    log_file = None
+    if append:
+        prev = db.get_task(task_id)
+        if prev and prev["log_file"]:
+            # 续写同一日志文件（D9）：workdir 沿用原任务目录，文本产物也落在同一处。
+            log_file = Path(prev["log_file"])
+            workdir = log_file.parent
+            workdir.mkdir(parents=True, exist_ok=True)
+    if log_file is None:
+        workdir = LOGS_DIR / f"task_{task_id}_{time.strftime('%Y%m%d_%H%M%S')}"
+        workdir.mkdir(parents=True, exist_ok=True)
+        log_file = workdir / "task.log"
+    # 同名的 logger 已绑定原日志文件时 `get_logger` 会直接复用（见 scanner/log.py）——
+    # 追加执行正好靠这一点把新日志**续写**进原文件。
+    logger = get_logger(f"task-{task_id}", log_file)
     from .targets import parse_lines
     targets = parse_lines(targets_text.splitlines())
     stop_event = _register_stop(task_id)
@@ -207,7 +255,12 @@ def run_task(task_id, name, targets_text, stages, options, settings):
         # 只记名字与掩码值：日志文件会被打包/分享，凭据不进日志
         logger.info(f"[auth] 本次任务带登录态请求头 {len(_auth)} 条："
                     f"{taskauth.summary(_auth)}（值已掩码）")
-    db.update_task(task_id, log_file=str(workdir / "task.log"), status="running", error="")
+    # 追加执行**不清 error**（保留前面各阶段已记下的错误），只重置进度。
+    fields = {"log_file": str(log_file), "status": "running", "progress": 0,
+              "current_stage": ""}
+    if not append:
+        fields["error"] = ""
+    db.update_task(task_id, **fields)
     try:
         try:
             sync_pocs(ctx.settings)

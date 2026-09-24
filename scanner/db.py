@@ -379,6 +379,33 @@ def clear_task_assets(task_id):
         _exec(f"DELETE FROM {t} WHERE task_id=?", (task_id,))
 
 
+def drop_existing(task_id, table, cols, items, key):
+    """过滤掉"该任务该表里**已存在**"的条目 —— 续25「同任务追加式执行」的跨运行去重。
+
+    追加执行时阶段会**第二次**（第 N 次）往同一任务里写资产，若不过滤就会灌入重复行。
+    这里按 `cols` 组成自然键、与库里已有行比对：命中即丢弃该条（返回未命中的部分）。
+
+    - `key(item)` 返回组成自然键的元组，顺序与 `cols` 一致；
+    - 两侧都 `str()` 化再比 —— SQLite 里 `port` 存的是 int、内存里可能是 str，
+      `443` 与 `"443"` 必须算同一个键，否则去重会漏。
+    - **只在"阶段即将 insert"这一步调用**：新任务 / 重启（已清空）时表为空 → 空过滤，
+      对既有流程零影响；只有追加执行才有非空交集。
+    """
+    if not items:
+        return []
+    have = {tuple(str(r[c] or "") for c in cols)
+            for r in _query(f"SELECT {', '.join(cols)} FROM {table} WHERE task_id=?",
+                            (task_id,))}
+    if not have:
+        return list(items)
+    out = []
+    for it in items:
+        if tuple(str(x or "") for x in key(it)) in have:
+            continue
+        out.append(it)
+    return out
+
+
 # 备份目录跟随库位置（默认 data/trash —— 与库同处 data/ 下）：
 # 用独立测试库时，测试产生的备份不会混进真实库的回收站。
 TRASH_DIR = DB_PATH.parent / "trash"

@@ -214,6 +214,12 @@ ctf-scanner/
 - 每个阶段结果**三写**：任务目录文本产物（如 sites.txt）、SQLite、`ctx.results`（供下一阶段直接用）。
 - 阶段级容错：单阶段异常不中断流水线，错误写入 `tasks.error`，任务最终仍置 `done`（docs 已声明此语义）。
 - GUI：Flask 请求线程 + 每任务一个 daemon 线程；无任务队列，进程重启则运行中任务中断。
+- **同任务「追加式执行」**（续25）：任务详情页的「补扫 / 复查 / 送去探测」可勾「追加到本任务」，
+  把该阶段**追加进源任务**（不新建），结果累积、**跨运行去重**（同名站点/目录/端口/漏洞/子域名/
+  证书不重复入库），续写同一 `log_file`、**不清 `error`**、进度重置。硬约束：**同任务并发追加必须
+  拒绝**（`runner._register_stop` 是覆盖式注册，第二次追加会顶掉停止事件）；站点/IP/全端口三个
+  **无源**入口**不能追加**（只保留"新建任务"）。被追加过则 `options.append_count>0`，详情页与
+  导出报告显示「追加」横幅。内核在 `runner.run_task(..., append=True)`，去重在 `db.drop_existing()`。
 - **统一并发 / 限速 / 全局预算门控（F2，`scanner/throttle.py`）**：`StageContext.__init__` 在注入
   登录态**之后**，用 `throttle.inject` 给 settings 副本再挂一个任务级限流器（`settings["_throttle"]`）。
   三条出口——`utils.http_request`（HTTP）、`utils.run_cmd`（外部子进程）、`portscan` 的裸 socket
@@ -338,6 +344,9 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   （含 `cloudflareinsights.com` 单独成行才拦得住 `static.*`）/ FOFA 标题**归属相关性**
                             #   （默认 `label` 档丢 `silviapengo.com`/`gkops.net`/`yulw.cn`、留 `pengo.*`；`substring` 档
                             #   复现宽松；中文标题 fail-open）+ 新开关 `fofa.title_match` 三方一致
+# 2026-09-24 续25 新增 `[6l]`：同任务**追加式执行** —— 续写同一 log_file + 不清 error + 进度重置 /
+                            #   跨运行去重（同 站点+路径·站点 不重复）/ 并发 409 硬拒绝 / 无源入口 409 /
+                            #   仅勾选目标 / append_count 标记 + 导出横幅
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -488,6 +497,11 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   两个列表页，`?all=1` 可放开；任务详情页签与报告仍显示全量。因此"站点页条数比任务详情少"是预期行为。
 - 任务已支持**停止（协作式取消）/删除/重启/导出 + 批量操作**；停止粒度是"当前批次跑完即停"，
   不会强杀正在飞行的 HTTP 请求，任务终态记为 `stopped`（区别于 `failed`）。
+- **追加执行的语义边界**（续25）：追加**只影响本轮跑的那些阶段**，不重跑整条流水线；跨运行去重是
+  "**入库前跳过同键**"（不删已有行），所以用户已打的 `review` / `review_note` 不会被覆盖；
+  续写 `log_file` 会把多轮日志拼在同一文件里（有意的 —— 便于按任务维度回溯全部运行）。
+  追加**不改 `tasks.stages`**（任务对外仍声明原阶段集），进度按本轮重新计时；
+  **同任务并发追加硬拒绝**（否则停止信号被覆盖），**无源入口**（站点/IP/全端口三页）不提供追加。
   导出有三档（续16）：`/tasks/<id>/export?fmt=md|html|pdf`（默认 md），
   **HTML 全量 `html.escape`**（报告里的标题/banner 来自被测目标，漏转义即反射型 XSS）、
   **PDF 复用无头 Edge/Chrome 打印**（没有浏览器时返回 400 + 可读原因 + HTML 替代链接，不静默失败）；

@@ -104,7 +104,10 @@ class CertStage(Stage):
                             f"有效至 {info.get('not_after') or '-'}"
                             f"{'（已过期）' if info.get('expired') else ''}")
         if rows:
-            db.insert_certs(ctx.task_id, rows)
+            # 跨运行去重（续25）：同一 (host, port, sha256, serial) 的证书不再重复入库
+            db.insert_certs(ctx.task_id, db.drop_existing(
+                ctx.task_id, "certs", ("host", "port", "sha256", "serial"), rows,
+                lambda r: (r.get("host"), r.get("port"), r.get("sha256"), r.get("serial"))))
         # 产物文件：一行一条完整记录，字段用 tab 分隔（失败的行不写，与截图阶段一致）。
         # 表头写在首行，便于直接拿 Excel / awk 打开核对。
         write_lines(ctx.workdir / "certs.txt",

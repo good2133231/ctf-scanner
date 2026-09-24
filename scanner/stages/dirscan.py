@@ -190,6 +190,7 @@ class DirscanStage(Stage):
             # 只跑本阶段的补扫任务没有 probe 产物（内存与库里都没有站点），用目标本身兜底
             sites = self._sites_from_targets(ctx)
         sites = self._dedup_sites(sites)
+        sites = ctx.scope_sites(sites)          # 续25：追加执行时限定到本次勾选（非追加原样）
         sites = sites[: int(limits.get("dirscan_max_urls", 20))]
         if not sites:
             ctx.logger.info("[dirscan] 无存活站点，跳过")
@@ -251,8 +252,13 @@ class DirscanStage(Stage):
         write_lines(ctx.workdir / "dirs.txt",
                     [f"{d.get('status', '')} {d.get('length') or '-'} {d.get('path', '')}"
                      for d in uniq])
-        db.insert_dirs(ctx.task_id, uniq)
-        ctx.logger.info(f"[dirscan] 目录发现 {len(uniq)} 条")
+        # 跨运行去重（续25）：追加执行时同一 (站点, 路径) 不再重复入库
+        new_dirs = db.drop_existing(ctx.task_id, "dirs", ("site_url", "path"), uniq,
+                                    lambda e: (e.get("site_url"), e.get("path")))
+        db.insert_dirs(ctx.task_id, new_dirs)
+        _dup = len(uniq) - len(new_dirs)
+        ctx.logger.info(f"[dirscan] 目录发现 {len(uniq)} 条"
+                        + (f"（跨运行去重跳过 {_dup} 条已入库）" if _dup else ""))
 
     # ---------- 目标筛选 ----------
 

@@ -190,7 +190,10 @@ class SubdomainStage(Stage):
         write_lines(ctx.workdir / "passive_multi.txt",
                     sorted(n for n in found if sources.get(n, "").startswith("passive:")))
         write_lines(ctx.workdir / "hosts.txt", all_hosts)
-        db.insert_subdomains(ctx.task_id, [(s, sources.get(s, "")) for s in subs])
+        # 跨运行去重（续25）：追加执行时已在库的子域名不再重复入库
+        _rows = [(s, sources.get(s, "")) for s in subs]
+        db.insert_subdomains(ctx.task_id, db.drop_existing(
+            ctx.task_id, "subdomains", ("domain",), _rows, lambda it: (it[0],)))
         self._fill_net(subs, workers)
         ctx.logger.info(f"[subdomain] 新增子域名 {len(subs)} 个，参与探测主机 {len(all_hosts)} 个")
 

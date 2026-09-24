@@ -40,6 +40,7 @@ class ScreenshotStage(Stage):
             return
 
         sites = ctx.results.get("sites") or [dict(r) for r in db.list_sites(ctx.task_id)]
+        sites = ctx.scope_sites(sites)          # 续25：追加执行时限定到本次勾选（非追加原样）
         cap = int(cfg.get("max_sites", 20) or 20)
         if len(sites) > cap:
             ctx.logger.info(f"[screenshot] 站点 {len(sites)} 个超过上限 {cap}，只截前 {cap} 个")

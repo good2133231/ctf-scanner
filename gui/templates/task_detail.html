@@ -33,6 +33,16 @@
   （{{ task.options }}），不改全局策略。</p>
 {% endif %}
 
+{% if append_count %}
+<p class="muted small"><span class="badge">追加 ×{{ append_count }}</span>
+  本任务被<b>追加执行</b>过 {{ append_count }} 次：结果是**多次运行的合并**（同名资产已跨运行去重，
+  不产生重复行；导出的报告带同样标记）。</p>
+{% endif %}
+{% if task.id in running %}
+<p class="muted small"><b>任务运行中：追加执行暂不可用</b>（避免并发覆盖停止信号），
+  请先「停止」或等它跑完再追加。</p>
+{% endif %}
+
 <div class="tabs">
   <div class="tab active" data-tab="vulns">潜在漏洞<span class="cnt">{{ vulns|length }}</span></div>
   <div class="tab" data-tab="sites">站点<span class="cnt">{{ sites|length }}</span></div>
@@ -67,6 +77,8 @@
       <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
       <div class="bulkbar">
         <button type="submit" class="ghost">复查（勾选目标重跑漏洞初筛）</button>
+        <label class="muted" title="勾选后不新建任务，把本次复查追加进本任务（同名 (target,poc_id) 不重复入库，保留你已打的复核状态）">
+          <input type="checkbox" name="append" value="1"> 追加到本任务</label>
         <button type="button" class="ghost" data-review-bulk="confirmed">批量确认存在</button>
         <button type="button" class="danger" data-review-bulk="false_positive">批量判误报</button>
         <button type="button" class="ghost" data-review-bulk="">退回待复核</button>
@@ -125,6 +137,8 @@
       <div class="bulkbar">
         <button type="submit" class="ghost" name="stage" value="dirscan">深度目录补扫（勾选站点）</button>
         <button type="submit" class="ghost" name="stage" value="screenshot">补截图（勾选站点）</button>
+        <label class="muted" title="勾选后不新建任务，把本次补扫追加进本任务（同一 站点+路径 不重复入库）">
+          <input type="checkbox" name="append" value="1"> 追加到本任务</label>
         <label class="muted">任务名
           <input name="name" placeholder="留空则用 补扫全目录-<月日>-<时分秒>"></label>
         <span class="muted small">补扫是<b>真实扫描</b>：请先确认对目标有授权。</span>
@@ -209,6 +223,8 @@
       <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
       <div class="bulkbar">
         <button type="submit" class="ghost">送去探测（存活+目录+漏洞，新建任务）</button>
+        <label class="muted" title="勾选后不新建任务，把探测结果追加进本任务（站点/目录/漏洞跨运行去重）">
+          <input type="checkbox" name="append" value="1"> 追加到本任务</label>
         <button type="submit" class="ghost" formaction="{{ url_for('api_resolve_domains') }}"
           title="纯 DNS 查询（零 HTTP）：回填解析 IP / CNAME / CDN 与失败原因">
           解析选中域名（DNS）</button>
@@ -258,6 +274,8 @@
       <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
       <div class="bulkbar">
         <button type="submit" class="ghost">全端口补扫（勾选主机）</button>
+        <label class="muted" title="勾选后不新建任务，把本次全端口结果追加进本任务（同一 主机+端口 不重复入库）">
+          <input type="checkbox" name="append" value="1"> 追加到本任务</label>
         <label class="muted">任务名
           <input name="name" placeholder="留空则用 补扫全端口-<月日>-<时分秒>"></label>
       </div>
@@ -377,6 +395,8 @@
       {% for s in sites %}<input type="hidden" name="target" value="{{ s.url }}">{% endfor %}
       <div class="bulkbar">
         <button type="submit" class="ghost">深度补扫</button>
+        <label class="muted" title="勾选后不新建任务，把本次深度补扫追加进本任务（同一 站点+路径 不重复入库）">
+          <input type="checkbox" name="append" value="1"> 追加到本任务</label>
         <span class="muted small">共 {{ sites|length }} 个站点，最多扫 {{ dir_cap }} 个</span>
       </div>
     </form>

@@ -164,5 +164,10 @@ class ProbeStage(Stage):
 
         ctx.results["sites"] = uniq
         write_lines(ctx.workdir / "sites.txt", [s["url"] for s in uniq])
-        db.insert_sites(ctx.task_id, uniq)
-        ctx.logger.info(f"[probe] 存活站点 {len(uniq)} 个")
+        # 跨运行去重（续25）：追加执行时已在库的站点 URL 不再重复入库（新任务/重启为空表，零影响）
+        new_sites = db.drop_existing(ctx.task_id, "sites", ("url",), uniq,
+                                     lambda s: (s["url"],))
+        db.insert_sites(ctx.task_id, new_sites)
+        _dup = len(uniq) - len(new_sites)
+        ctx.logger.info(f"[probe] 存活站点 {len(uniq)} 个"
+                        + (f"（跨运行去重跳过 {_dup} 个已入库站点）" if _dup else ""))

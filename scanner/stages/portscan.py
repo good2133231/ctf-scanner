@@ -180,10 +180,15 @@ class PortscanStage(Stage):
             uniq.append(r)
         uniq.sort(key=lambda r: (r["host"], r["port"]))
         ctx.results["ports"] = uniq
-        db.insert_ports(ctx.task_id, uniq)
+        # 跨运行去重（续25）：追加执行时同一 (主机, 端口) 不再重复入库
+        new_ports = db.drop_existing(ctx.task_id, "ports", ("host", "port"), uniq,
+                                     lambda r: (r["host"], r["port"]))
+        db.insert_ports(ctx.task_id, new_ports)
         services = {}
         for r in uniq:
             services[r["service"] or "unknown"] = services.get(r["service"] or "unknown", 0) + 1
+        _dup = len(uniq) - len(new_ports)
         ctx.logger.info(
             f"[portscan] 开放端口 {len(uniq)} 个 / 主机 {len({r['host'] for r in uniq})} 台"
+            + (f"（跨运行去重跳过 {_dup} 个已入库）" if _dup else "")
             + (f"（{' / '.join(f'{k}:{n}' for k, n in sorted(services.items()))}）" if uniq else ""))
