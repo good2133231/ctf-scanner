@@ -3,6 +3,45 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续20-fix：续20 独立验证后的修复（CLI JSONL 行尾 / append_task_error 原子化 / OpenProcess fail-safe）
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+续20（commit `37ba9a0`）经 QA 独立验证：改动整体成立、3 处证伪被独立复现、凭据红线与范围边界干净。
+验证报出 2 个低危真问题 + 1 处安全加固，本轮一并修复（未碰范围外内容）。
+
+### 1. CLI 的 JSONL 在 Windows 上写成 CRLF（`cli/client.py`，必要）
+- **症状**：`out.write_text(body, encoding="utf-8")` 在 Windows 文本模式下把 `\n` 翻成 `\r\n`，
+  于是 **CLI 产出的 JSONL 行尾是 `\r\n`，而 `generate_jsonl()` 与 HTTP 路由产出的是 `\n`** ——
+  同一条导出经两条路径**字节不一致**，违反 JSONL 规范（行尾应为 `\n`）。
+- **改法**：JSONL 这条路径改用 `out.write_bytes(body.encode("utf-8"))`（Python 3.9 的 `write_text`
+  没有 `newline` 参数）。**只改 JSONL**：MD / HTML 仍用 `write_text`（对行尾不敏感，且改它们会动
+  既有行为、超出本批范围）。
+
+### 2. `append_task_error` 改成单条 SQL 原子追加（`scanner/db.py`，必要）
+- **症状**：旧实现"先 `get_task` 读、再 `_exec` 写"，两步之间没有锁 —— 同一 `task_id` 并发追加会
+  **静默丢更新**（QA 实测 16 线程 × 40 次期望 640、**实际只剩 43 条**，且不抛异常）。现有调用点
+  不可达（阶段循环 / 外层 except 同线程、reconcile 各 task_id 不同且启动单线程），但属"埋了个陷阱"。
+- **改法**：改为单条
+  `UPDATE tasks SET error = CASE WHEN COALESCE(error,'')='' THEN ? ELSE error || char(10) || ? END, updated_at=? WHERE id=?`，
+  走 `_exec` 即进入 `_WRITE_LOCK`，**同时**拿到原子性与写锁保护。语义不变：空 msg 在**进入 SQL 之前**
+  no-op、error 为空时不产生前导分隔符。
+
+### 3. Windows `OpenProcess` 失败时的 fail-safe 方向（`scanner/db.py::_win_open_alive`，加固）
+- **症状**：旧实现 `OpenProcess` 失败**一律判"已死"** —— 若 pid 属于受保护 / 跨用户进程，会因**权限被拒**
+  （而非"进程不存在"）被误判为死 → 任务被标 `failed`。这是 **fail-open（危险方向）**，与"宁可漏杀
+  不可误杀"的承诺相反。
+- **改法**：新增纯函数 `_win_open_alive(err)`，用 `ctypes.get_last_error()`（配合
+  `WinDLL("kernel32", use_last_error=True)`）区分：`ERROR_INVALID_PARAMETER`(87)→已死；
+  `ERROR_ACCESS_DENIED`(5) 与一切拿不准的错误码 → **存活**。本机实测：无效 pid 的 `GetLastError` 确为 87。
+  **无句柄泄漏的结构未动**（失败路径在 `try` 前 return、不调 `CloseHandle`；成功路径 try/finally）。
+
+### 测试
+- `tests/smoke.py` 新增 `[6e]`：① CLI 导出的 JSONL 行尾是 `\n`（且与 `generate_jsonl()` 字节一致）；
+  ② `_win_open_alive` 的 fail-safe 判定（5/未知→存活、87→已死）。
+- 逐条**证伪**（还原旧写法跑出真实 `AssertionError` 后改回）：
+  - ① 把 CLI 改回 `write_text` → `AssertionError: CLI 产出的 JSONL 含 CR —— 行尾被 Windows 文本模式翻成了 \r\n（应为 \n）`。
+  - ② 把 `_win_open_alive` 改回"失败即已死" → `AssertionError: ERROR_ACCESS_DENIED(5) 应视为存活（不误杀）`。
+
 ## 2026-09-24 —— 续20：框架对账小切口三件套（JSONL 导出 / 静默失败治理 / 孤儿任务对账）
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

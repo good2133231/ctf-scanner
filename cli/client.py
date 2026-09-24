@@ -187,7 +187,11 @@ def main():
         if body:
             out = resolve(args.report_jsonl)
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(body, encoding="utf-8")
+            # 用 write_bytes 而不是 write_text：Windows 文本模式会把 `\n` 翻成 `\r\n`，
+            # 而 JSONL 规范要求行尾是 `\n`（`generate_jsonl()` 与 HTTP 路由产出的都是 `\n`）。
+            # Python 3.9 的 `write_text` 没有 `newline` 参数，故显式写字节，保证两条导出路径
+            # 字节一致。（MD / HTML 仍用 write_text —— 它们对行尾不敏感，不在本次范围内。）
+            out.write_bytes(body.encode("utf-8"))
             print(f"[*] JSONL 报告已生成：{rel_display(out)}")
 
 

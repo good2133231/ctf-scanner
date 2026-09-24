@@ -3483,6 +3483,38 @@ workflows:
     print("[6d] 孤儿任务对账 ok: 存活 pid 保留 running / 死 pid 与 pid=0 标 failed 且带标记 / "
           "done 不受影响")
 
+    # 6e) 续20 验证后修复：① CLI 导出的 JSONL 行尾必须是 \n（Windows 文本模式会把 \n 翻成 \r\n，
+    #     而 generate_jsonl() 与 HTTP 路由产出的都是 \n —— 同一条导出经两条路径字节必须一致）；
+    #     ② Windows OpenProcess 失败时按错误码 fail-safe 判定（权限被拒/拿不准 → 视为存活）。
+    _cli_out = _TMPDIR / "cli_jsonl.jsonl"
+    _orig_argv6e = sys.argv
+    try:
+        _cli.run_task = lambda *a, **kw: _CliCtx()
+        sys.argv = ["client.py", "-t", "cli-jsonl.test", "-p", "probe",
+                    "-n", "smoke-cli-jsonl", "--report-jsonl", str(_cli_out)]
+        _cli.main()
+    finally:
+        sys.argv = _orig_argv6e
+        _cli.run_task = _orig_cli_run
+    assert _cli_out.exists(), "CLI 未生成 JSONL 文件"
+    _cli_bytes = _cli_out.read_bytes()
+    assert b"\r" not in _cli_bytes, \
+        "CLI 产出的 JSONL 含 CR —— 行尾被 Windows 文本模式翻成了 \\r\\n（应为 \\n）"
+    assert _cli_bytes.endswith(b"\n"), "CLI 产出的 JSONL 最后一行应以 \\n 结尾"
+    # 与 generate_jsonl() 直接产出的字节**完全一致**（两条导出路径不再漂移）
+    _cli_tid = [t for t in db.list_tasks(limit=80) if t["name"] == "smoke-cli-jsonl"][0]["id"]
+    assert _cli_bytes == generate_jsonl(_cli_tid).encode("utf-8"), \
+        "CLI 产出的 JSONL 与 generate_jsonl() 字节不一致（行尾漂移）"
+    db.delete_task(_cli_tid, backup=False)
+
+    # 加固 3：真实的"OpenProcess 权限被拒"在本机不易稳定构造，故直接单测这条**纯判定函数**
+    # （有区分度，不是恒真断言：把逻辑改回"失败即已死"这条会挂）。
+    assert db._win_open_alive(87) is False, "ERROR_INVALID_PARAMETER(87) 应视为已死"
+    assert db._win_open_alive(5) is True, "ERROR_ACCESS_DENIED(5) 应视为存活（不误杀）"
+    assert db._win_open_alive(0) is True, "拿不准的错误码应一律按存活处理（fail-safe）"
+    print("[6e] 续20 修复 ok: CLI JSONL 行尾为 \\n（与 generate_jsonl 字节一致）/ "
+          "OpenProcess 失败按错误码 fail-safe（5 与未知→存活、87→已死）")
+
     print("SMOKE PASS")
 
 

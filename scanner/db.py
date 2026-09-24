@@ -238,16 +238,41 @@ def append_task_error(task_id, msg):
     覆盖一次，前面的错误信息**永久丢失**。追加让"部分跑坏"可回溯、可见。
 
     `msg` 为空/纯空白时是 **no-op**：避免产生前导分隔符（只留一个 `\\n`）或把 error 写脏。
+    这个判断放在**进入 SQL 之前**，空 msg 不会写出一条空行。
+
+    **单条 UPDATE 完成"读-改-写"**：走 `_exec` 即进入 `_WRITE_LOCK`，同时拿到**原子性**与
+    写锁保护。旧实现是"先 `get_task` 读、再 `_exec` 写"，两步之间没有锁 —— 同一 `task_id`
+    并发追加会**静默丢更新**（实测 16 线程 × 40 次期望 640、实际只剩 43 条）。现有调用点
+    虽不可达（阶段循环/外层 except 同线程、reconcile 各 task_id 不同且启动单线程），
+    但那是"埋了个陷阱"：任何新增的并发写 error 的调用点都会静默丢错误，故直接消灭。
+    `CASE WHEN COALESCE(error,'') = ''` 保证 error 为空时不产生前导分隔符。
     """
     text = str(msg or "").strip()
     if not text:
         return
-    row = get_task(task_id)
-    if not row:
-        return
-    prev = str(row["error"] or "").strip()
-    merged = f"{prev}\n{text}" if prev else text
-    _exec("UPDATE tasks SET error=?, updated_at=? WHERE id=?", (merged, _now(), task_id))
+    _exec("UPDATE tasks SET error = CASE WHEN COALESCE(error, '') = '' THEN ? "
+          "ELSE error || char(10) || ? END, updated_at = ? WHERE id = ?",
+          (text, text, _now(), task_id))
+
+
+# Windows `OpenProcess` 失败时的错误码（`GetLastError`），用于 fail-safe 判定。
+_WIN_ERROR_ACCESS_DENIED = 5         # 受保护/跨用户进程：**不是**"进程不存在"
+_WIN_ERROR_INVALID_PARAMETER = 87    # pid 无效/进程不存在
+
+
+def _win_open_alive(err):
+    """Windows `OpenProcess` **失败**时按错误码做 fail-safe 判定：返回 True = 视为**存活**。
+
+    对用户的承诺是"宁可漏杀不可误杀"（把可能仍在跑的任务误标 `failed` 会掩盖它）：
+    - `ERROR_ACCESS_DENIED`（5，权限被拒）→ **存活**（进程在，只是我们无权打开）；
+    - `ERROR_INVALID_PARAMETER`（87，pid 无效/不存在）→ 已死；
+    - 其它拿不准的错误码 → **存活**（fail-safe，绝不误杀）。
+
+    单独抽成纯函数是为了能直接单测这条判定（真实的"权限被拒"在本机不易稳定构造）。
+    """
+    if err == _WIN_ERROR_INVALID_PARAMETER:
+        return False
+    return True
 
 
 def _pid_alive(pid):
@@ -256,6 +281,8 @@ def _pid_alive(pid):
     - Windows：`OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject(h, 0)`，返回
       `WAIT_TIMEOUT` 即进程仍在运行；句柄必须在 `finally` 里 `CloseHandle`（否则泄漏内核句柄）。
       必须显式声明 `argtypes`/`restype`：默认按 32 位 int 处理会**截断 64 位句柄**。
+      `OpenProcess` **失败**时不直接判"已死"，而是按 `GetLastError` 走 `_win_open_alive()`
+      （权限被拒/拿不准 → 视为存活，fail-safe 不误杀）。
     - POSIX：`os.kill(pid, 0)` —— `ProcessLookupError` 即进程已死；`PermissionError`
       表示进程存在但无权限（仍算存活）。
     - `pid` 为 0 / None / 非法 → 一律视为已死（老库遗留行没有 pid 语义）。
@@ -271,7 +298,9 @@ def _pid_alive(pid):
         from ctypes import wintypes
         SYNCHRONIZE = 0x00100000
         WAIT_TIMEOUT = 0x00000102
-        kernel32 = ctypes.windll.kernel32
+        # use_last_error=True：ctypes 在每次调用后把 GetLastError 存到线程局部，
+        # 这样 `ctypes.get_last_error()` 才能拿到 OpenProcess 的真实失败原因。
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
         kernel32.WaitForSingleObject.restype = wintypes.DWORD
@@ -280,7 +309,9 @@ def _pid_alive(pid):
         kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
         handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
         if not handle:
-            return False
+            # 失败 ≠ 已死：权限被拒时按存活处理（fail-safe，见 _win_open_alive）。
+            # 注意失败路径**在 try 之前 return**，不调用 CloseHandle（本就没有有效句柄）。
+            return _win_open_alive(ctypes.get_last_error())
         try:
             return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
         finally:
