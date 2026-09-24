@@ -10,8 +10,8 @@
     <span id="poc-msg" class="muted"></span>
   </form>
   <p class="muted">格式规范见 docs/poc-guide.md；上传后保存在 config/pocs-user/。
-    官方 nuclei 模板可直接放进 config/nuclei-templates/（引擎兼容其常用子集，
-    不支持的 raw/dsl/flow 会标为 <span class="mono">unsupported</span> 而不是静默失效）。</p>
+    官方 nuclei 模板可直接放进 config/nuclei-templates/（引擎兼容其常用子集 + raw/flow/workflows 子集，
+    超出子集的部分（dsl、oob、flow 的 JS/循环等）会标为 <span class="mono">unsupported</span> 而不是静默失效）。</p>
 </section>
 
 <section class="panel">

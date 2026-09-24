@@ -18,6 +18,8 @@ python cli/client.py -t <单目标> [选项]
 | `--full-ports` | **本次任务**端口走全端口 `1-65535`（等价 GUI 任务选项 `portscan_full`）；选了却没把 `portscan` 写进 `-p` 时**自动补上该阶段** |
 | `--full-dir` | **本次任务**目录走深扫：全量分层字典 + dirmap + 后缀派生（等价 GUI 任务选项 `dirscan_full`）；同样自动补 `dirscan` 阶段 |
 | `--offline` | 离线模式：不调用 subfinder/puredns/httpx/dirmap，仅内置实现 |
+| `-H, --header '名称: 值'` | **本次任务的登录态请求头**，可重复（如 `-H "Authorization: Bearer xxx"`）；只发给**目标侧**，第三方接口（crt.sh / FOFA / KEV / IP 反查）不带；非法行**打印原因并退出码 1**（不静默丢弃） |
+| `--cookie COOKIE` | 本次任务的 Cookie（等价 `-H "Cookie: ..."`），用于扫"登录后才存在"的资产（`/admin`、业务接口、需要会话的 POC） |
 | `--report PATH` | 扫描结束后生成 **Markdown** 报告到指定路径 |
 | `--report-html PATH` | 结束后生成 **HTML** 报告（自包含单文件：样式内联、不引外链，可直接发人） |
 | `--report-pdf PATH` | 结束后生成 **PDF** 报告（用本机无头 Edge/Chrome 打印；**没有浏览器会打印原因并以退出码 1 结束**，不静默丢交付物） |
@@ -37,6 +39,9 @@ python cli/client.py -t http://target.local/ -p probe,dirscan --full-dir --full-
 
 # 裸机演示：完全离线
 python cli/client.py -f targets.txt --offline
+
+# 带登录态扫"登录后才存在"的资产（Cookie 只发给目标侧，不进日志/报告）
+python cli/client.py -t http://target.local/ --cookie "SESSION=xxx" -H "X-Api-Key: yyy"
 ```
 
 ### 典型输出
@@ -97,6 +102,12 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
      **全端口扫描（1-65535）**（`portscan_full`）与 **全目录深扫**（`dirscan_full`）；
      **勾了却没勾对应阶段时会自动补上该阶段**并在提示里写明（`auto_stages`），否则用户会以为"勾了没用"。
      不勾时按全局策略走 —— 目录默认只跑**浅扫**（见下）；
+   - 「**登录态（可选）**」文本框（`scanner/auth.py`）：每行一条 `名称: 值`（`Cookie: SESSION=xxx`、
+     `Authorization: Bearer xxx`），用于扫**登录后才存在**的资产（`/admin`、业务接口、需要会话的 POC）。
+     **只发给目标侧** —— crt.sh / FOFA / CISA KEV / IP 反查等第三方接口一律不带（避免把目标凭据外发）；
+     解析失败（缺冒号、请求头名非法等）会**拒绝建任务并列出第几行**，不静默丢字段；日志、页面与报告里
+     的值都是**掩码**（`Cookie=SES***456`），凭据不进交付物。本任务发起的**补扫 / 拓展域名探测会自动继承**
+     这份登录态（否则"复查"变成未登录视角）。CLI 侧等价参数：`-H` / `--cookie`；
    - 任务列表实时轮询状态与进度条；表头支持**多条件筛选**（任务名/目标/状态/阶段），可**全选勾选**后执行**批量停止 / 批量重启 / 批量删除**；
    - 每行提供**行内操作**：查看 / 停止 / 重启 / 导出（下载该任务报告，默认 **Markdown**）/ 删除；点击任务号进入详情；
      任务详情页顶另有**三个导出按钮**：`导出 MD` / `导出 HTML` / `导出 PDF`
@@ -188,8 +199,9 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    （来源分内置 / 导入（参考项目转换）/ nuclei / 用户），并有「来源」列与「只看已启用」筛选；
    **另有一列「置信度」**（high/medium/low，由来源分 × 是否含内容型匹配器推导，只降级不升级），
    可按置信度层**批量启停** —— 低置信（如参考项目导入的那批）默认就是"排在后面、可一键关掉"；
-   语法错误的 POC 会标 `error`，含 `raw`/`dsl`/`flow`/`workflows` 等不支持特性的模板会标
-   `unsupported` 并显示原因。**路径列展示相对项目根的路径**（如 `config/pocs-user/x.yaml`），
+   语法错误的 POC 会标 `error`；`raw`/`flow`/`workflows` 已支持**核心子集**（见 docs/poc-guide.md），
+   超出子集的部分（`dsl` 表达式、oob 反连、flow 的 JS/循环、workflow 的 `subtemplates`/`args`）会标
+   `unsupported`（或写进 `_note`）并显示原因，**不静默失效**。**路径列展示相对项目根的路径**（如 `config/pocs-user/x.yaml`），
    不暴露本机绝对目录；
 10. **策略配置**：由 **9 个可折叠面板**组成（以 `gui/templates/settings.html` 的
    `section.panel` 为准），**面板默认全部折叠**（一屏几百个勾选框实在难找）——

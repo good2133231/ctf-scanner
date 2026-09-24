@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scanner import auth as taskauth
 from scanner import db
 from scanner.config import load_settings, resolve
 from scanner.report import export_pdf, generate, generate_html
@@ -65,6 +66,11 @@ def main():
     ap.add_argument("--report-html", metavar="PATH", help="结束后生成 HTML 报告（自包含单文件）")
     ap.add_argument("--report-pdf", metavar="PATH",
                     help="结束后生成 PDF 报告（用本机无头 Edge/Chrome 打印；没有浏览器会明确报错）")
+    ap.add_argument("-H", "--header", action="append", default=[], metavar="'名称: 值'",
+                    help="本次任务的**登录态请求头**，可重复（如 -H \"Authorization: Bearer xxx\"）；"
+                         "只发给目标侧，第三方接口（crt.sh/FOFA/KEV/IP 反查）不带")
+    ap.add_argument("--cookie", default="", metavar="COOKIE",
+                    help="本次任务的 Cookie（等价 -H \"Cookie: ...\"），用于扫登录后才存在的资产")
     ap.add_argument("--check", action="store_true", help="检查外部工具可用性后退出")
     args = ap.parse_args()
 
@@ -98,6 +104,19 @@ def main():
     db.init_db()
     name = args.name or (Path(args.file).stem if args.file else "cli-task")
     options = {"offline": bool(args.offline)}
+    # 登录态请求头（任务级）：解析出问题就**直接退出**，不静默丢弃 ——
+    # 少带一条 Authorization 会让"已登录扫描"变成假象（扫不到还以为本来就没洞）。
+    auth_lines = list(args.header)
+    if args.cookie:
+        auth_lines.append(f"Cookie: {args.cookie}")
+    auth_headers, auth_errors = taskauth.parse_headers("\n".join(auth_lines))
+    if auth_errors:
+        print("[!] 登录态请求头有误，已中止（不静默丢弃）：")
+        for e in auth_errors:
+            print(f"    - {e}")
+        sys.exit(1)
+    if auth_headers:
+        options["auth"] = auth_headers
     # cert / screenshot 是**策略级默认关**的阶段。写进 `-p` 就是在说"这次要跑"，
     # 因此落成任务级开关（与 GUI 建任务勾选同一套语义：只影响本次，不改全局策略）。
     # 不点名时不加这些开关，照旧由 `settings.*.enabled` 决定 —— 不能因为 CLI 的
@@ -120,6 +139,9 @@ def main():
     task_id = db.create_task(name, targets_text, stages, options)
     mode = "，离线模式" if args.offline else ""
     print(f"[*] 任务 #{task_id} 开始：{name}（阶段：{','.join(stages)}{mode}）")
+    if auth_headers:
+        print(f"[*] 登录态请求头 {len(auth_headers)} 条："
+              f"{taskauth.summary(auth_headers)}（值已掩码）")
 
     ctx = run_task(task_id, name, targets_text, stages, options, settings)
 

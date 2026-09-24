@@ -72,8 +72,9 @@ def _mk(cid, name, severity, owasp, target, detail, evidence=""):
 
 
 def _get(url, settings, **kw):
+    """OWASP 检查的统一出口（全部发往目标，**带上登录态**：登录后才会暴露的项才扫得到）。"""
     return http_request(url, timeout=int(settings.get("limits", {}).get("http_timeout", 10)),
-                        settings=settings, **kw)
+                        settings=settings, auth=True, **kw)
 
 
 def _low_headers(resp):

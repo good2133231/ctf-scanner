@@ -440,13 +440,18 @@
         <tr><th>任务 ID</th><td>{{ task.id }}</td></tr>
         <tr><th>阶段</th><td>{{ task.stages }}</td></tr>
         <tr><th>选项</th><td class="mono">{{ task.options }}</td></tr>
+        <tr><th>登录态</th><td class="mono small">
+          {% if auth_view %}{% for k, v in auth_view %}{{ k }}={{ v }}{% if not loop.last %}<br>{% endif %}{% endfor %}
+          {% else %}-{% endif %}</td></tr>
         <tr><th>状态</th><td><span class="badge st-{{ task.status }}">{{ task.status }}</span></td></tr>
         <tr><th>日志文件</th><td class="mono small">{{ task.log_file or '-' }}</td></tr>
         <tr><th>创建 / 更新</th><td>{{ task.created_at }} / {{ task.updated_at }}</td></tr>
       </tbody>
     </table>
     <p class="muted">检测策略（最低报告级别 / 分类开关 / 免杀强度）在「策略配置」页统一调整，
-      对之后新建的任务生效。</p>
+      对之后新建的任务生效。
+      {% if auth_view %}登录态只发给<b>目标侧</b>（crt.sh / FOFA / KEV / IP 反查等第三方接口不带），
+      值在本页与日志里都是掩码；本任务发起的「补扫 / 拓展域名探测」会<b>自动继承</b>这份登录态。{% endif %}</p>
   </section>
 </div>
 

@@ -262,7 +262,7 @@ def _http_probe(subdomain, svc, settings, timeout):
     """
     for scheme in ("https", "http"):
         url = f"{scheme}://{subdomain}"
-        resp = http_request(url, timeout=timeout, settings=settings)
+        resp = http_request(url, timeout=timeout, settings=settings, auth=True)
         if not resp:
             continue
         body = resp.get("text") or ""

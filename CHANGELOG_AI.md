@@ -3,6 +3,98 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-23 —— 续17：登录态扫描（任务级 Cookie/Token）+ nuclei `raw`/`flow`/`workflows` 子集
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户原话条目：「**引擎**：Shodan/Quake favicon 反查、证书透明度解析（SSL 证书页签）、**登录态扫描**」
+＋「**检测**：A10 SSRF 受控回连、XSS 上下文分析、盲注 SQL、nuclei `raw`/`flow`/`workflows`
+（现在标 `unsupported`，不静默失效）」（整批下单末尾一句「**这些都做**」）。
+本轮做其中两条**纯本地、零外部接口**的（批次 3）：登录态扫描 + POC 引擎补齐 raw/flow/workflows 子集。
+
+### 1. `scanner/auth.py`（新建）：任务级登录态请求头
+
+- **为什么要有这一层**：实测型检查里有相当一部分资产**登录后才存在** —— 未登录访问 `/admin`、
+  `/api/user/list` 拿到的是 302/401，带上登录态才是 200；JS 里的接口、需要会话的 POC 同理。
+  没有这个能力时，框架只能扫"匿名可见面"，对授权范围内的业务面几乎无感。
+- 解析规则：逐行 `名称: 值`、空行与 `#` 注释忽略、按**第一个**冒号切（`Referer: http://x` 不被截断）、
+  请求头名走 RFC 7230 token 正则（挡 `Cookie: a=b\r\nX: y` 这类注入形状）、上限 20 条 / 单值 4096 字符。
+- **不静默丢弃**：`parse_headers()` 返回 `(headers, errors)`，非法行进 errors 带**行号**与原因。
+  CLI 打印原因 `sys.exit(1)`；GUI 返回 400「登录态请求头有误：第 N 行 …」。理由：少带一条
+  `Authorization` 会让"已登录扫描"变成**假象**（扫不到还以为本来就没洞）。
+- `mask_value()`（敏感名保留首尾各 3 字符、≤6 全星号）/ `summary()`（一行名字+掩码值）供日志与页面；
+  `inject()` 返回 settings **副本** —— CLI / 测试会复用同一个 settings dict，原地写会把这一个任务的
+  凭据带到另一个任务上（越权 + 误报源）。
+
+### 2. 出口 **fail-closed**（本轮最关键的设计约束）
+
+- `utils.http_request(..., auth=False)` / `_headers(settings, extra, auth=False)`：**默认不带凭据**。
+  只有**目标侧**调用点显式 `auth=True`：`stages/probe.py`、`stages/dirscan.py`（2 处）、
+  `owasp/checks.py`、`fingerprint.py`、`takeover.py`、`jsmine.py`（2 处）、`evasion.py`（2 处）+ POC 引擎。
+- **第三方 4 处保持默认**：`passive.py`（crt.sh）、`intel.py`（CISA KEV）、`fofa.py`（FOFA API）、
+  `iprecon.py`（api.webscan.cc）。`settings` 被 16 处调用点共用，如果"有 settings 就自动附"，
+  等于把目标会话 Cookie 发给这 4 个第三方 —— 用户从未授权这种外发。
+- `tests/smoke.py [5x] ②` 用**回显靶场**（收到空 vs 收到 `SESSION=zz9`）+ **逐行断言 4 个第三方
+  调用点不含 `auth=True`** 把这条红线钉死（改坏就红）。
+
+### 3. 入口：GUI / CLI / 补扫继承
+
+- GUI 建任务新增「**登录态（可选）**」文本框（`tasks.html`，跟在深度选项之后；`app.js` 用 `FormData`
+  整体提交，**无需改 JS**）：解析失败 → 400 并列出第几行。
+- CLI 新增 `-H/--header`（可重复）与 `--cookie`（等价 `-H "Cookie: ..."`），落 `options["auth"]`。
+- `runner.StageContext` 注入任务专用副本 + `run_task` 打一行**掩码**日志
+  （`[auth] 本次任务带登录态请求头 N 条：Authorization=Bea******k17（值已掩码）`）—— 日志文件会被
+  打包/分享，凭据不进日志。
+- **补扫 / 拓展域名探测自动继承**来源任务的登录态（`gui/app.py::_source_auth(from_task)`）：
+  否则"复查"变成未登录视角，与第一次的结果不可比。
+- **页面上的第二处泄漏点（自查发现并修掉）**：`task_detail.html` 的「运行配置 → 选项」一行原样打印
+  `{{ task.options }}`（含 `auth` 明文 JSON）。现在把 `top["auth"]` 换成掩码后再 `json.dumps` 覆盖，
+  另加「登录态」一行专列；smoke 用"页面含掩码值、**不含**明文 `SESSION=abcdef123456`"守住。
+
+### 4. POC 引擎：`raw` / `flow` / `workflows` 子集
+
+- `_UNSUPPORTED_KEYS` 由 `("raw", "dsl", "flow", "workflows")` **收缩为 `("dsl",)`**。
+- **raw**（`_parse_raw`）：解析 nuclei HTTP 原文（`\r\n`/\r 归一、去开头空行、请求行 `方法 路径 HTTP/1.1`、
+  方法白名单、头按第一个冒号切）。两个工程坑：① **丢弃 `Content-Length`** —— 变量渲染后长度不一致会
+  截断或挂起；② **保留 `Host`** —— vhost 是模板作者的意图，但请求真正发往的地址**永远由 `base_url` 决定**。
+  破坏性方法 `PUT/PATCH/DELETE/TRACE/CONNECT` **拒绝执行**并把原因写进 `_note`/`_error`；同一套白名单
+  也对普通 `method:` 生效（原先只有 raw 之外没有这道闸）。
+- **flow**（`_flow_tokens`/`_flow_parse`/`_flow_tree`/`_flow_bad_refs`）：递归下降解析
+  `||` < `&&` < `!` < 括号/引用，引用支持 `http(N)`（1-based）与 `id_name()`。
+  装载期就校验引用可解析性（越界、或引用了**被跳过的块** → 整份 `unsupported`），
+  避免运行期"条件永远不成立"式静默不命中。运行期：`&&` 两块都发、`||` 短路（左真不发右）、
+  **纯否定式成立返回 `[]`** —— `!http(1)` 成立时没有任何正向响应证据，报出来就是纯误报
+  （与 `_match_one` 对未知匹配器"按不命中处理"同一口径）。
+- **workflows**（`_run_workflow`）：顶层 `- template: <相对路径>`，路径先按 workflow 文件所在目录、
+  再按项目根 `resolve()`；**深度上限 3 + 同一路径单次执行只跑一次**（自环直接挡住）。
+  `subtemplates` / `args` / workflow 级 matchers **未实现 → 写进 `_note`**（不静默失效）。
+- `_vuln_of(...)` 的 `target` 仍固定为站点 `base_url`（**不改** vulnscan 的 `(target, poc_id)` 去重键
+  与库中 `target` 列口径 —— 一度改成命中 URL，会在同一站点内产生重复记录）。
+- 刻意不做（仍显式标注）：`dsl` 表达式、oob 反连、flow 的 JS/循环/带参数引用、workflow 的
+  `subtemplates`/`args`。
+
+### 5. 回归与验证
+
+- `tests/smoke.py` 新增 **`[5x]`**（六小节）：① 解析/掩码/不静默丢弃/上限/注入副本；
+  ② fail-closed（回显靶场 + 4 个第三方调用点逐行断言）；③ raw 解析（丢 `Content-Length`、留 `Host`）+
+  端到端命中 + raw DELETE 与 `method: PUT` 均 unsupported + dsl 仍 unsupported；④ flow 树形/优先级/
+  短路/纯否定不报/越界与被跳过块引用标 unsupported；⑤ workflows 子模板命中 + 全 subtemplates 标
+  unsupported + 自环不挂；⑥ CLI `-H/--cookie` 落 options 与非法行 exit 1、GUI 建任务合法/非法
+  （400 含「第 1 行」）、补扫继承 `auth`、任务详情页含掩码值且**不含明文**。
+- **`py -3 tests/smoke.py` → SMOKE PASS**（23 节全绿）。
+  过程中修掉两条**写错的断言**（是测试错、不是引擎错）：`flow: http(2)` 引用的块本身可执行，
+  第 1 块被跳过**不构成**引用错位 → 改为 `http(1) || http(2)` 断言 unsupported，另加
+  `http(2)` 应为 `ok` 且 `_note` 含 `DELETE` 的断言（跳过原因要看得见）；任务详情页掩码断言
+  误抄了 `[5x] ①` 的字面量（`SESSION=abcdef123456` 是 20 字符 → 掩码为 `SES` + 14 个 `*` + `456`）。
+- 换行符：按仓库 CRLF 约定逐文件自查归位，**只归位本轮新引入的 lone-LF 行**（内容多重集比对 HEAD），
+  新建的 `scanner/auth.py` 整份 CRLF；`git diff --stat` 无 EOL 假变更。
+
+### 6. 本轮**未做**（如实标注，下一批）
+
+- 批次 4：XSS 上下文分析、A10 SSRF 受控回连、盲注 SQL、Shodan/Quake favicon 反查、CT 日志（crt.sh）在线查询；
+- 批次 5：任务队列 / 断点续扫、鉴权加固（多用户·CSRF·HTTPS）、分布式节点、工具版本管理；
+- **拒绝**：登录爆破 / 自动提交表单 / 解验证码 —— 与「只做只读验证」红线冲突；凭据由使用者在授权范围内
+  自行取得，框架只负责"带上它去扫"，且凭据**不写进报告**（`report.collect()` 不打印 options）。
+
 ## 2026-09-23 —— 续16：报告三格式（HTML / PDF）+ 漏洞趋势统计
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

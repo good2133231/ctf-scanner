@@ -20,6 +20,7 @@ from pathlib import Path
 
 from . import db
 from .config import LOGS_DIR, load_settings
+from . import auth as taskauth
 from .log import get_logger
 from .stages.subdomain import SubdomainStage
 from .stages.takeover import TakeoverStage
@@ -97,7 +98,11 @@ class StageContext:
         self.targets = targets          # [(kind, raw), ...] 由 targets.parse_lines 产出
         self.stages = stages
         self.options = options or {}
-        self.settings = settings
+        # 任务级**登录态请求头**（Cookie / Token，见 scanner/auth.py）：注入本次任务**专用**的
+        # settings 副本。不做原地修改 —— CLI 与测试会复用同一个 settings dict，原地写会把
+        # 一个任务的凭据带到另一个任务上（越权 + 误报源）。
+        # 只在目标侧出口生效：`utils.http_request(auth=True)` 是各目标侧调用点显式声明的。
+        self.settings = taskauth.inject(settings, taskauth.from_task_options(self.options))
         self.workdir = Path(workdir)
         self.logger = logger
         self.results = {"subdomains": [], "sites": [], "dirs": [], "vulns": [],
@@ -160,6 +165,11 @@ def run_task(task_id, name, targets_text, stages, options, settings):
     stop_event = _register_stop(task_id)
     ctx = StageContext(task_id, name, targets, stages, options, settings or load_settings(),
                        workdir, logger, stop_event=stop_event)
+    _auth = taskauth.from_task_options(options)
+    if _auth:
+        # 只记名字与掩码值：日志文件会被打包/分享，凭据不进日志
+        logger.info(f"[auth] 本次任务带登录态请求头 {len(_auth)} 条："
+                    f"{taskauth.summary(_auth)}（值已掩码）")
     db.update_task(task_id, log_file=str(workdir / "task.log"), status="running", error="")
     try:
         try:

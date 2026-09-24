@@ -32,6 +32,15 @@
       <span class="muted small">默认只跑「浅扫」：端口 top 档 + 目录敏感路径精选字典；
         想深挖再勾上面两项，或在结果页对选中资产发起补扫。</span>
     </div>
+    <div class="row">
+      <span class="muted" title="登录态只发给目标侧；crt.sh / FOFA / CISA KEV / IP 反查等第三方接口不带（避免把目标凭据外发）；值不会写进日志与报告">
+        登录态（可选）：</span>
+      <textarea name="auth" rows="2"
+        placeholder="Cookie: SESSION=xxx&#10;Authorization: Bearer xxx"></textarea>
+      <span class="muted small">扫"登录后才存在"的资产（/admin、接口、POC）时填；
+        每行一条「名称: 值」，支持 Cookie / Authorization 等。解析失败会
+        <b>拒绝建任务并列出原因</b>，不会静默丢字段；页面与日志只显示掩码值。</span>
+    </div>
     <button type="submit">创建并开始扫描</button>
     <span id="task-msg" class="muted"></span>
   </form>

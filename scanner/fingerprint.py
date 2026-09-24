@@ -179,7 +179,7 @@ def fetch_favicon(base_url, settings=None, timeout=None):
     if timeout is None:
         timeout = int((settings or {}).get("limits", {}).get("http_timeout", 10))
     url = str(base_url).rstrip("/") + "/favicon.ico"
-    resp = http_request(url, timeout=timeout, settings=settings, want_bytes=True)
+    resp = http_request(url, timeout=timeout, settings=settings, want_bytes=True, auth=True)
     if not resp or resp.get("status") != 200:
         return b""
     content = resp.get("content") or b""

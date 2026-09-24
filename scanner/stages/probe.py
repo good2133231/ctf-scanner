@@ -118,7 +118,7 @@ class ProbeStage(Stage):
                     return None
                 tries = [c] if str(c).startswith("http") else [f"https://{c}", f"http://{c}"]
                 for u in tries:
-                    resp = http_request(u, timeout=timeout, settings=ctx.settings)
+                    resp = http_request(u, timeout=timeout, settings=ctx.settings, auth=True)
                     if resp and resp.get("status") in ALLOW_STATUS:
                         t = TITLE_RE.search(resp.get("text") or "")
                         p = urlparse(resp.get("url") or u)

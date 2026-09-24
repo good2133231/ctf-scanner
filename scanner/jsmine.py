@@ -331,7 +331,7 @@ def mine(url, settings, logger=None):
     # 目标自身域名保护集：seed 主机 + 其注册域，避免被第三方黑名单误杀
     protect = {seed.hostname.lower().strip("."), base_domain(seed.hostname)}
 
-    resp = http_request(url, timeout=timeout, settings=settings)
+    resp = http_request(url, timeout=timeout, settings=settings, auth=True)
     if not resp:
         if logger:
             logger.info(f"[jsmine] {url} 页面不可达，跳过")
@@ -362,7 +362,7 @@ def mine(url, settings, logger=None):
         workers = max(1, min(int(limits.get("max_workers", 20)), len(scripts)))
 
         def _get(u):
-            r = http_request(u, timeout=timeout, settings=settings)
+            r = http_request(u, timeout=timeout, settings=settings, auth=True)
             if not r:
                 return None
             return {"url": r.get("url") or u, "text": r.get("text") or ""}

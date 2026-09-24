@@ -231,7 +231,7 @@ def detect(url, settings, logger=None):
 
     cfg = _cfg(settings)
     timeout = int((settings or {}).get("limits", {}).get("http_timeout", 10) or 10)
-    resp = http_request(url, timeout=timeout, settings=settings)
+    resp = http_request(url, timeout=timeout, settings=settings, auth=True)
     hit = fingerprint_from(resp)
     found = hit[0] if hit else ""
     where = hit[1] if hit else ""
@@ -239,7 +239,7 @@ def detect(url, settings, logger=None):
     if not found and cfg.get("waf_detect", True):
         sep = "&" if "?" in url else "?"
         probe = http_request(f"{url}{sep}ctfscan_waf_probe={_ACTIVE_MARKER}",
-                             timeout=timeout, settings=settings)
+                             timeout=timeout, settings=settings, auth=True)
         if probe:
             marker_echoed = _ACTIVE_MARKER.lower() in (probe.get("text") or "").lower()
             if not marker_echoed and probe.get("status") in _BLOCK_STATUS:

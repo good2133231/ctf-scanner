@@ -29,14 +29,18 @@
 - [x] **截图取证**（第十五轮）：无头浏览器（本机 Edge/Chrome，`--headless=new`）对存活站点截图，
       **默认关闭**（`screenshot.enabled`），截图落在任务目录并在站点页 URL 旁显示缩略图；
       浏览器路径探测见 `scanner/screenshot.py`（配置 → PATH → 注册表 → 标准安装位置，无硬编码绝对路径）；
-- [ ] **登录态扫描**：任务级 Cookie/Token 配置，检查登录后才能覆盖的面。
+- [x] **登录态扫描**（第十七轮）：任务级 Cookie/Token 配置（GUI 文本框 / CLI `-H` 与 `--cookie`），
+      只发往目标侧（第三方接口 fail-closed 不带），非法行拒绝建任务并列出原因，日志/页面/报告全部掩码；
+      补扫与拓展域名探测**自动继承**来源任务的登录态。
 
 ## 检测深化
 
 - [ ] A10 SSRF 受控回连（内置 DNS/HTTP 回连服务，判定出网行为）；
 - [ ] XSS 上下文分析（当前仅未编码回显信号）；
 - [~] POC 引擎补齐 nuclei 常用语义：`payloads` 池变量与 `extractors`（regex/kval）已实现；
-      尚缺多请求串联（`raw`/`flow`/`workflows`）——这类模板被标 `unsupported`，不静默失效；
+      `raw` / `flow`（布尔子集）/ `workflows`（子模板编排）已于第十七轮落地，见 docs/poc-guide.md；
+      仍缺 `dsl` 表达式、oob 反连、flow 的 JS/循环、workflow 的 `subtemplates`/`args`
+      ——这类模板（或未实现子项）被标 `unsupported`/`_note`，不静默失效；
 - [ ] 盲注类 SQL 检测（当前只做报错回显型，避免破坏性与长耗时的延时探测）；
 - [x] **误报管理**（P1-1，2026-09-23 续12）：漏洞记录的人工复核三态（待复核/已确认/误报）+ 复查通道。
       `vulns.review/review_note/reviewed_at` + `db.set_vuln_review`/`bulk_set_vuln_review`/`review_counts`

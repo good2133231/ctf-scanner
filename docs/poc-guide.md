@@ -9,7 +9,7 @@
 | `config/pocs-imported/*.yaml` | `tools/import_ref_pocs.py` 批量导入的参考项目 POC，**默认关闭**（关键字命中误报率高，需人工在 POC 管理页挑选后启用） |
 | `config/nuclei-templates/*.yaml` | 官方 nuclei 模板投放点：本引擎兼容其核心子集，可直接丢进来加载 |
 
-控制台启动时会自动扫描以上目录并写入注册表；之后可在 GUI 里启停每个 POC，也可以点「重新扫描 POC 目录」增量加载。语法错误的 POC 会标注 `error`；含 `raw`/`dsl`/`flow`/`workflows` 等不支持特性的模板会标注 `unsupported` 并显示原因（不静默失效），扫描时自动跳过。
+控制台启动时会自动扫描以上目录并写入注册表；之后可在 GUI 里启停每个 POC，也可以点「重新扫描 POC 目录」增量加载。语法错误的 POC 会标注 `error`；`raw` / `flow` / `workflows` 已支持**核心子集**（见下节），超出子集的部分（`dsl` 表达式、flow 里的 JS/循环、workflow 的 `subtemplates`/`args`、oob 反连）会标注 `unsupported` 或写进 `_note` 并显示原因（不静默失效），扫描时自动跳过或跳过该子项。
 
 ## YAML 格式
 
@@ -57,8 +57,40 @@ http:                               # 请求列表；兼容 nuclei 的 requests:
 
 内置变量（可直接在 path/headers/body 中引用）：`BaseURL` / `RootURL` / `Hostname` / `Host` / `Port` / `Scheme` / `Path`。
 
-**不支持**：`raw`（HTTP 原文请求）、`dsl` 表达式、`flow` / `workflows`（多请求串联/工作流）、oob 反连。
-含这些特性的模板会被标 `unsupported`，不会静默失效。
+**不支持**：`dsl` 表达式、oob 反连、flow 里的 JS/循环/带参数引用、workflow 的 `subtemplates`/`args`。
+含这些特性的模板会被标 `unsupported`（或把未实现子项写进原因/`_note`），不会静默失效。
+
+## raw / flow / workflows（2026-09-23 起支持核心子集）
+
+```yaml
+id: example-raw-flow
+info: {name: 示例, severity: medium}
+flow: http(1) && !http(2)          # 布尔子集：&& / || / ! / 括号，引用 id() 或 http(N)
+http:
+  - raw:                           # nuclei 的 HTTP 原文
+      - |
+        GET /admin HTTP/1.1
+        Host: {{Hostname}}
+        X-Test: {{BaseURL}}
+
+    matchers: [{type: status, status: [200]}]
+  - id: second
+    path: ["/login"]
+    matchers: [{type: word, words: ["password"]}]
+```
+
+- **raw**：一段手写 HTTP 原文（请求行 + 头 + 空行 + body）。请求**方法白名单**与普通 `method:` 同一套：
+  `GET/POST/HEAD/OPTIONS` 等只读方法可用，`PUT`/`PATCH`/`DELETE`/`TRACE`/`CONNECT` **一律拒绝执行**
+  并把原因记进 `_note`/`_error`（框架红线：只做只读验证，不做状态变更）。原文里的 `Content-Length`
+  会被**丢弃**（由 HTTP 客户端按最终 body 重算，变量渲染后长度不一致会导致截断/挂起）；
+  `Host` 头保留（vhost 场景是模板作者的意图），但**请求真正发往的地址永远由目标 `base_url` 决定**。
+- **flow**：`&&` / `||` / `!` / 括号 组成的布尔表达式，引用请求块的 `id`（`id_name()`）或 1-based 序号
+  （`http(1)`）。语义同 nuclei：表达式成立才算命中。**纯否定式成立不报**（如只有 `!http(1)` —— 没有
+  正向响应证据，报出来就是纯误报）。引用越界、或引用了**被跳过的块** → 装载期即标 `unsupported`
+  （避免运行期静默不命中）。`||` 短路（左真不发右），`&&` 两块都发。
+- **workflows**：workflow 文件顶层写 `workflows: - template: <相对路径>`，路径先按 workflow 文件所在
+  目录、再按项目根解析；有递归保护（深度上限 3 + 同一路径单次执行内只跑一次，自环直接挡住）。
+  `subtemplates` / `args` / workflow 级 matchers **未实现**，会写进 `_note`（不静默失效）。
 
 ## 匹配器与提取器语义
 
@@ -114,12 +146,15 @@ http:
 
 ## 与 nuclei 的关系（客观）
 
-本引擎**主动向 nuclei 语法靠拢**（兼容 `http:`/`requests:`、`payloads` + `attack`、`variables` + 内置变量、
-`path` 列表、`redirects`、`status/word/regex/size` 匹配器 + `condition`/`negative`/`case-insensitive`/`part`、
-`regex`/`kval` extractors），官方模板可直接投放进 `config/nuclei-templates/` 被本引擎加载——从此不依赖 nuclei
+本引擎**主动向 nuclei 语法靠拢**（兼容 `http:`/`requests:`、`raw` HTTP 原文、
+`payloads` + `attack`、`variables` + 内置变量、`path` 列表、`redirects`、
+`status/word/regex/size` 匹配器 + `condition`/`negative`/`case-insensitive`/`part`、
+`regex`/`kval` extractors、`flow` 布尔子集、`workflows` 子模板编排），官方模板可直接投放进
+`config/nuclei-templates/` 被本引擎加载——从此不依赖 nuclei
 二进制，也不与它冲突（同一份模板两边都能跑）。因此不再需要"接入 nuclei 适配器"作为前置项。
 
-尚不支持的是 nuclei 的 `raw`/`dsl`/`flow`/`workflows`/oob，这类模板会被标 `unsupported`；若确需完整能力，
+尚不支持的是 nuclei 的 `dsl` 表达式、oob 反连、flow 里的 JS/循环、workflow 的 `subtemplates`/`args`，
+这类模板（或其未实现子项）会被标 `unsupported` / `_note`；若确需完整能力，
 仍可另加适配器调用 nuclei 二进制，`vulns` 表结构可直接承接其 JSON 输出。另：`config/pocs-imported/` 下由
 `tools/import_ref_pocs.py` 批量导入的参考项目 POC **默认关闭**，需人工在 POC 管理页挑选后启用。
 

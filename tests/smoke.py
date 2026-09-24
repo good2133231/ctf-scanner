@@ -2399,6 +2399,331 @@ def main():
     print("[5w] 续16 ok: 报告三格式（MD/HTML/PDF）与漏洞趋势统计（八节齐全 + XSS 载荷全转义 + "
           "自包含无外链 + 误报不计入趋势/未知级别归 other + 三格式路由 + 无浏览器 400 说明原因 + "
           "仪表盘趋势面板）")
+
+    # [5x] 续17：登录态扫描（任务级 Cookie/Token）+ nuclei raw / flow / workflows 子集
+    from http.server import BaseHTTPRequestHandler as _BaseHTTP
+    from scanner import auth as _auth
+    from scanner import utils as _utils
+
+    # 本地"活靶"：`/a` 回 hello-AAA、`/b` 回 hello-BBB，并记录收到的路径 ——
+    # raw/flow 的命中与短路都靠它证（不依赖公网，也不产生真实外部请求）。
+    _hits17 = []
+
+    class _Lab17(_BaseHTTP):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            _hits17.append(self.path)
+            body = (b"hello-AAA" if self.path.startswith("/a")
+                    else b"hello-BBB" if self.path.startswith("/b") else b"root")
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    _lab17 = ThreadingHTTPServer(("127.0.0.1", 0), _Lab17)
+    _base_url17 = f"http://127.0.0.1:{_lab17.server_address[1]}"
+    threading.Thread(target=_lab17.serve_forever, daemon=True).start()
+
+    # ---- ① 登录态解析 / 掩码 / 不静默丢弃 ----
+    _h, _errs = _auth.parse_headers(
+        "# 注释行\n\nCookie: SESSION=abcdef123456; theme=dark\n"
+        "Referer: http://x.test/a:b\nAuthorization: Bearer abcdefghijklmn\n")
+    assert _errs == [] and _h["Cookie"] == "SESSION=abcdef123456; theme=dark", (_h, _errs)
+    assert _h["Referer"] == "http://x.test/a:b", "值里的冒号被切掉了（应按第一个冒号切分）"
+    assert len(_h) == 3, _h
+    _h2, _e2 = _auth.parse_headers("没有冒号的一行\nCookie: ok\nBad Name: v\nEmpty:\n")
+    assert _h2 == {"Cookie": "ok"}, (_h2, _e2)          # 合法行照常收下，非法行**不丢**进 errors
+    assert len(_e2) == 3 and any("第 1 行" in e for e in _e2) and any("第 3 行" in e for e in _e2), _e2
+    _, _e3 = _auth.parse_headers("\n".join(f"X-{i}: v" for i in range(25)))
+    assert _e3 and f"超过 {_auth.MAX_HEADERS} 条" in _e3[0], _e3
+    # 掩码：只掩敏感名，保留首尾各 3 字符便于"认出来是哪一条"；短值全星号
+    assert _auth.mask_value("Cookie", "abcdef123456") == "abc******456"
+    assert _auth.mask_value("Cookie", "abc") == "***"
+    assert _auth.mask_value("X-Trace", "abcdef") == "abcdef", "非凭据头不该被掩码"
+    assert "abcdef123456" not in _auth.summary({"Cookie": "abcdef123456"}), "摘要里出现了明文凭据"
+    # inject 返回**副本**（CLI/测试复用同一份 settings，原地写会把凭据带到别的任务）
+    _base_st = {"limits": {}}
+    _st2 = _auth.inject(_base_st, {"Cookie": "a=1"})
+    assert "_auth_headers" not in _base_st and _st2["_auth_headers"] == {"Cookie": "a=1"}
+    _sauth_wd = _TMPDIR / "sauth"
+    _sauth_wd.mkdir(parents=True, exist_ok=True)
+    _ctx_auth = StageContext(db.create_task("smoke-auth-ctx", targets, ["probe"],
+                                           {"auth": {"Cookie": "S=1"}}),
+                             "smoke-auth-ctx", parse_lines([targets]), ["probe"],
+                             {"auth": {"Cookie": "S=1"}}, _base_st, _sauth_wd,
+                             get_logger("smoke-auth-ctx", _sauth_wd / "task.log"))
+    assert _ctx_auth.settings["_auth_headers"] == {"Cookie": "S=1"}
+    assert "_auth_headers" not in _base_st, "StageContext 污染了调用方的 settings"
+
+    # ---- ② 只发目标侧：第三方接口默认不带（fail-closed） ----
+    # 起一个"回显 Cookie"的本地服务，同一份 settings 分别用 auth=True / 默认打一次 ——
+    # 这是"目标侧带、第三方不带"最直接的证据（比读代码可靠）。
+    _saw = []
+
+    class _EchoAuth(_BaseHTTP):
+        def do_GET(self):
+            _saw.append(self.headers.get("Cookie") or "")
+            body = b"ok"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    _asrv = ThreadingHTTPServer(("127.0.0.1", 0), _EchoAuth)
+    _aport = _asrv.server_address[1]
+    threading.Thread(target=_asrv.serve_forever, daemon=True).start()
+    _ast = _auth.inject({}, {"Cookie": "SESSION=zz9"})
+    _utils.http_request(f"http://127.0.0.1:{_aport}/a", settings=_ast)              # 默认 auth=False
+    assert _saw[-1] == "", f"第三方出口默认竟带上了目标凭据：{_saw[-1]}"
+    _utils.http_request(f"http://127.0.0.1:{_aport}/b", settings=_ast, auth=True)
+    assert _saw[-1] == "SESSION=zz9", f"目标侧出口没带上登录态：{_saw[-1]}"
+    # 第三方调用点必须保持默认（改动它们等于把目标 Cookie 发给 crt.sh/FOFA/KEV）
+    for _f, _ln in (("scanner/passive.py", 55), ("scanner/intel.py", 182),
+                    ("scanner/fofa.py", 238), ("scanner/iprecon.py", 114)):
+        _src = (ROOT / _f).read_text(encoding="utf-8").splitlines()[_ln - 1]
+        assert "auth=True" not in _src, f"{_f}:{_ln} 是第三方接口，不该带登录态：{_src.strip()}"
+
+    # ---- ③ POC 引擎：raw 解析 + 破坏性方法拒绝 + 端到端 ----
+    _ptmp = _TMPDIR / "pocs17"
+    _ptmp.mkdir(parents=True, exist_ok=True)
+
+    def _wpoc(name, text):
+        p = _ptmp / name
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    _p_raw = _wpoc("raw.yaml", """
+id: smoke-raw
+info: {name: raw e2e, severity: medium}
+http:
+  - raw:
+      - |
+        GET /a HTTP/1.1
+        Host: {{Hostname}}
+        Content-Length: 999
+
+    matchers:
+      - type: word
+        words: ["hello-AAA"]
+""")
+    _m_raw = engine.load_poc_file(_p_raw)
+    assert _m_raw["_status"] == "ok", _m_raw
+    _items, _reasons = engine._block_requests(_m_raw["http"][0])
+    assert _reasons == [] and _items[0]["method"] == "GET" and _items[0]["path"] == "/a", _items
+    assert _items[0]["headers"]["Host"] == "{{Hostname}}", "Host 头被吃掉了"
+    assert "Content-Length" not in _items[0]["headers"], "Content-Length 应丢弃（交给 requests 重算）"
+    assert engine.run_poc_on_target(_m_raw, _base_url17, {})[0]["poc_id"] == "smoke-raw"
+    # 破坏性方法：raw 的 DELETE 与普通块的 method: PUT 都要被拒，且原因可见
+    _m_del = engine.load_poc_file(_wpoc("raw-del.yaml", """
+id: smoke-raw-del
+info: {name: del, severity: high}
+http:
+  - raw:
+      - |
+        DELETE /api/user/1 HTTP/1.1
+        Host: {{Hostname}}
+"""))
+    assert _m_del["_status"] == "unsupported" and "DELETE" in _m_del["_error"], _m_del
+    _m_put = engine.load_poc_file(_wpoc("put.yaml", """
+id: smoke-put
+info: {name: put, severity: low}
+http:
+  - method: PUT
+    path: ["/x"]
+    matchers: [{type: status, status: [200]}]
+"""))
+    assert _m_put["_status"] == "unsupported" and "PUT" in _m_put["_error"], _m_put
+    # dsl 仍显式 unsupported（不能被 raw 的放开顺手带成"静默跳过"）
+    _m_dsl = engine.load_poc_file(_wpoc("dsl.yaml", """
+id: smoke-dsl
+info: {name: d, severity: medium}
+http:
+  - path: ["/a"]
+    dsl: [status_code == 200]
+    matchers: [{type: status, status: [200]}]
+"""))
+    assert _m_dsl["_status"] == "unsupported" and "dsl" in _m_dsl["_error"], _m_dsl
+
+    # ---- ④ flow 布尔子集：&&/||/!/序号与 id ----
+    _p_flow = _wpoc("flow.yaml", """
+id: smoke-flow
+info: {name: flow e2e, severity: medium}
+flow: http(1) && http(2)
+http:
+  - id: a
+    path: ["/a"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+  - id: b
+    path: ["/b"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+""")
+    _m_flow = engine.load_poc_file(_p_flow)
+    assert _m_flow["_status"] == "ok" and _m_flow["_flow"] == ("&&", ("ref", 1), ("ref", 2)), _m_flow
+    assert engine._flow_tree("a() && (b() || !c())")[0] == (
+        "&&", ("ref", "a"), ("||", ("ref", "b"), ("not", ("ref", "c"))))
+    # 优先级：&& 紧于 ||
+    assert engine._flow_tree("a() || b() && c()")[0][0] == "||"
+    assert engine._flow_tree('template("x.yaml")')[0] is None, "含参数的引用必须判不支持"
+    _hits17.clear()
+    assert engine.run_poc_on_target(_m_flow, _base_url17, {})[0]["poc_id"] == "smoke-flow"
+    assert _hits17 == ["/a", "/b"], f"&& 两块都要跑：{_hits17}"
+    # || 短路：第一块命中就不该再打第二块（省的是真实请求额度）
+    _p_or = _wpoc("flow-or.yaml", """
+id: smoke-flow-or
+info: {name: flow or, severity: medium}
+flow: http(1) || http(2)
+http:
+  - path: ["/a"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+  - path: ["/b"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+""")
+    _hits17.clear()
+    assert engine.run_poc_on_target(engine.load_poc_file(_p_or), _base_url17, {})
+    assert _hits17 == ["/a"], f"|| 未短路：{_hits17}"
+    # 纯否定式成立 → **不报**（没有正向响应证据，报出来就是纯误报）
+    _p_neg = _wpoc("flow-neg.yaml", """
+id: smoke-flow-neg
+info: {name: flow neg, severity: medium}
+flow: "!http(1)"
+http:
+  - path: ["/missing"]
+    matchers: [{type: word, words: ["NOT-THERE"]}]
+""")
+    _m_neg = engine.load_poc_file(_p_neg)
+    assert _m_neg["_status"] == "ok", _m_neg
+    assert engine.run_poc_on_target(_m_neg, _base_url17, {}) == []
+    # 引用越界 / 跳过块后序号错位：装载期就标 unsupported
+    _m_oob = engine.load_poc_file(_wpoc("flow-oob.yaml", """
+id: smoke-flow-oob
+info: {name: f, severity: medium}
+flow: http(1) && http(3)
+http:
+  - path: ["/a"]
+    matchers: [{type: status, status: [200]}]
+  - path: ["/b"]
+    matchers: [{type: status, status: [200]}]
+"""))
+    assert _m_oob["_status"] == "unsupported" and "http(3)" in _m_oob["_error"], _m_oob
+    # 引用**被跳过的块** → 该引用无法解析（`http(N)` 按原始块下标判定），判 unsupported
+    _m_skip = engine.load_poc_file(_wpoc("flow-skip.yaml", """
+id: smoke-flow-skip
+info: {name: f, severity: medium}
+flow: http(1) || http(2)
+http:
+  - method: DELETE
+    path: ["/del"]
+    matchers: [{type: status, status: [200]}]
+  - path: ["/b"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+"""))
+    assert _m_skip["_status"] == "unsupported" and "http(1)" in _m_skip["_error"], _m_skip
+    # 引用**可执行的块**时不受"另一块被跳过"影响：应为 ok，且跳过原因必须看得见（不静默）
+    _m_skip2 = engine.load_poc_file(_wpoc("flow-skip2.yaml", """
+id: smoke-flow-skip2
+info: {name: f, severity: medium}
+flow: http(2)
+http:
+  - method: DELETE
+    path: ["/del"]
+    matchers: [{type: status, status: [200]}]
+  - path: ["/b"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+"""))
+    assert _m_skip2["_status"] == "ok" and _m_skip2["_flow"] == ("ref", 2), _m_skip2
+    assert "DELETE" in (_m_skip2["_note"] or ""), _m_skip2
+    _hits17.clear()
+    assert engine.run_poc_on_target(_m_skip2, _base_url17, {})[0]["poc_id"] == "smoke-flow-skip2"
+    assert _hits17 == ["/b"], f"被跳过的 DELETE 块不该发出请求：{_hits17}"
+
+    # ---- ⑤ workflows 子模板编排 + 递归保护 ----
+    _m_wf = engine.load_poc_file(_wpoc("wf.yaml", """
+id: smoke-wf
+info: {name: wf, severity: medium}
+workflows:
+  - template: flow.yaml
+  - subtemplates: [{tags: x}]
+"""))
+    assert _m_wf["_status"] == "ok" and _m_wf["_templates"] == ["flow.yaml"], _m_wf
+    assert "subtemplates" in (_m_wf["_note"] or ""), "未实现的子项要标出来（不静默失效）"
+    _hits17.clear()
+    assert engine.run_poc_on_target(_m_wf, _base_url17, {})[0]["poc_id"] == "smoke-flow"
+    _m_wf0 = engine.load_poc_file(_wpoc("wf-none.yaml", """
+id: smoke-wf-none
+info: {name: wf, severity: medium}
+workflows:
+  - subtemplates: [{tags: x}]
+"""))
+    assert _m_wf0["_status"] == "unsupported" and "subtemplates" in _m_wf0["_error"], _m_wf0
+    # 自环必须被去重挡住（否则 A→A 会无限下钻）
+    _m_loop = engine.load_poc_file(_wpoc("wf-loop.yaml", """
+id: smoke-wf-loop
+info: {name: loop, severity: medium}
+workflows:
+  - template: wf-loop.yaml
+"""))
+    assert _m_loop["_status"] == "ok" and engine.run_poc_on_target(_m_loop, _base_url17, {}) == []
+
+    # ---- ⑥ CLI 与 GUI 入口 ----
+    _spec_cli = importlib.util.spec_from_file_location("_smoke_cli", ROOT / "cli" / "client.py")
+    _cli = importlib.util.module_from_spec(_spec_cli)
+    _spec_cli.loader.exec_module(_cli)
+    _orig_argv, _orig_cli_run = sys.argv, _cli.run_task
+
+    class _CliCtx:
+        results = {"subdomains": [], "sites": [], "dirs": [], "vulns": [],
+                   "leads_intel": [], "leads_heuristic": []}
+        workdir = _TMPDIR / "cli17"
+    try:
+        _cli.run_task = lambda *a, **kw: _CliCtx()
+        sys.argv = ["client.py", "-t", "cli17.test", "-p", "probe", "-n", "smoke-cli17",
+                    "-H", "Authorization: Bearer tok17", "--cookie", "S=1"]
+        _cli.main()
+        _cli_t = [t for t in db.list_tasks(limit=50) if t["name"] == "smoke-cli17"][0]
+        assert '"Authorization": "Bearer tok17"' in _cli_t["options"], _cli_t["options"]
+        assert '"Cookie": "S=1"' in _cli_t["options"], _cli_t["options"]
+        # 非法行必须**中止**（exit 1），不能带着残缺的凭据开跑
+        sys.argv = ["client.py", "-t", "cli17.test", "-p", "probe", "-n", "smoke-cli17-bad",
+                    "-H", "坏的没有冒号"]
+        try:
+            _cli.main()
+            raise AssertionError("非法请求头应中止 CLI")
+        except SystemExit as _se:
+            assert _se.code == 1, _se.code
+    finally:
+        sys.argv, _cli.run_task = _orig_argv, _orig_cli_run
+    # GUI 建任务：合法→落选项（掩码后上屏）；非法→400 且列出原因
+    _orig_run5x = _gui.run_task
+    try:
+        _gui.run_task = lambda *a, **kw: None
+        _ja = c.post("/api/tasks", data={"name": "smoke-auth-gui", "targets": targets,
+                                        "stages": ["probe"],
+                                        "auth": "Cookie: SESSION=abcdef123456"}).get_json()
+        assert '"auth"' in (db.get_task(_ja["id"])["options"] or ""), \
+            db.get_task(_ja["id"])["options"]
+        _jb = c.post("/api/tasks", data={"name": "smoke-auth-bad", "targets": targets,
+                                         "stages": ["probe"], "auth": "乱写的一行"})
+        assert _jb.status_code == 400 and "第 1 行" in _jb.get_json()["error"], _jb.get_json()
+        # 补扫 / 拓展域名探测要**继承**原任务登录态（否则"复查"变成未登录视角）
+        c.post("/api/rescan", data={"stage": "dirscan", "target": "http://a.test/",
+                                    "from_task": str(_ja["id"])})
+        _jr = [t for t in db.list_tasks(limit=50) if str(t["id"]) != str(_ja["id"])
+               and f'"rescan_of": {_ja["id"]}' in (t["options"] or "")]
+        assert _jr and '"auth"' in _jr[0]["options"], _jr and _jr[0]["options"]
+    finally:
+        _gui.run_task = _orig_run5x
+    # 任务详情页：显示掩码值、**不回显明文**（含「运行配置 → 选项」那一行）
+    _ahtml = c.get(f"/tasks/{_ja['id']}").get_data(as_text=True)
+    # 值 `SESSION=abcdef123456`（20 字符）→ 首 3 + 星号 + 末 3 = 中部 14 个星号
+    assert "登录态" in _ahtml and "SES**************456" in _ahtml, \
+        "任务详情没显示掩码后的登录态"
+    assert "SESSION=abcdef123456" not in _ahtml, "任务详情把明文凭据回显到页面了"
+    print("[5x] 续17 ok: 登录态扫描（解析/掩码/不静默丢弃 + 目标侧带·第三方 fail-closed + "
+          "CLI(-H/--cookie)/GUI/补扫继承 + 页面只显示掩码）与 nuclei raw/flow/workflows 子集"
+          "（raw 解析·破坏性方法拒绝·端到端命中 + flow &&/|| 短路·纯否定不报·引用越界标 unsupported "
+          "+ workflow 子模板与自环保护 + dsl 仍显式 unsupported）")
     print("SMOKE PASS")
 
 

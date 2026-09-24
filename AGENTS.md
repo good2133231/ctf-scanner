@@ -101,6 +101,8 @@ ctf-scanner/
 │   │                      #   `engine=auto` 顺序 fscan→nmap→内置；parse_ports(max_span) 防手滑全端口，见 §7）
 │   ├── jsmine.py          # JS 资产挖掘（域名/接口 URL/疑似凭据；17 条凭据规则 + 两级降噪）
 │   ├── blacklist.py       # 用户黑名单（config/blacklist.txt；load/matches/filter_pairs/filter_domains，每次重读不缓存）
+│   ├── auth.py            # 任务级登录态请求头（parse_headers/mask_value/summary/inject/from_task_options）；
+│   │                      #   **只发目标侧**（http_request 的 auth=False 是默认值），日志/页面/报告一律掩码，见 §7
 │   ├── iprecon.py         # IP 反查域名 + /24 C 段归纳（is_public_ip/segment_of/parse_domains，不 eval）
 │   ├── fofa.py            # FOFA 反查（qbase64）：favicon(icon_hash) / cert="domain" / title="xxx" 三种；黑 ico / 通用证书 / 公共标题阈值
 │   ├── mmh3.py            # 纯标准库 MurmurHash3 x86_32（平台 favicon 指纹用；含 SELF_TEST 向量）
@@ -196,6 +198,9 @@ ctf-scanner/
 1. **所有 HTTP 必须走 `utils.http_request`** —— 统一 UA、超时、`limits.verify_tls`（verify=None 时读配置）。
    不要直接 import requests/urllib。这也是**唯一伪装出口**：`utils._headers` → `evasion.browser_headers`
    （UA 随机化、浏览器化请求头、可选 XFF 伪装），改 HTTP 行为只在这一处生效。
+   **登录态（任务级 Cookie/Token）同理只在这一处生效**：`http_request(..., auth=True)` 才附带
+   `settings["_auth_headers"]`（由 `runner.StageContext` 注入的任务专用副本）。**默认 `auth=False`** ——
+   新增调用点时先问一句"这个 URL 是目标侧还是第三方接口"，第三方**永远不加 `auth=True`**（见 §7 凭据红线）。
 2. **外部工具优先 + 内置兜底**：调用前用 `which()`，Good 工具再用 `verify_tool()` 做版本握手
    （防止 pip 的 Python `httpx` 同名命令被误用）。
 3. **非破坏性**：新增检查/POC 只允许探测类请求；POC 规范见 docs/poc-guide.md。免杀（evasion）只改变
@@ -254,6 +259,11 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   新增 `[5w]`（报告三格式与趋势：八节 MD↔HTML 一一对应 / XSS 载荷全转义 /
                             #   自包含无外链 / 误报不计入趋势·未知级别归 other / 三格式路由 /
                             #   无浏览器时 PDF 返回 400 + 可读原因 / 仪表盘趋势面板）
+                            # 2026-09-23 续17 新增 `[5x]`（登录态扫描：解析/掩码/不静默丢弃 + fail-closed
+                            #   （回显靶场 + 逐行断言 4 个第三方调用点不带 auth）+ CLI -H/--cookie 与
+                            #   GUI 400 + 补扫继承 + 页面只显掩码不回显明文；POC raw 解析与破坏性方法拒绝、
+                            #   flow 布尔子集（短路/纯否定不报/越界与被跳过块引用标 unsupported）、
+                            #   workflows 子模板与自环保护、dsl 仍显式 unsupported）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -275,8 +285,14 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 
 - POC 引擎是** nuclei 兼容子集**：支持 `http:`/`requests:`、`payloads`（list / dict + `attack`）、
   `variables` + 内置变量、`path` 列表、`redirects`、匹配器 `status/word/regex/size` + `condition`/`negative`/
-  `case-insensitive` + `part: body|header|all`、`extractors`（regex/kval）。**不支持 `raw`/`dsl`/`flow`/
-  `workflows`**，这类模板会被标 `_status=unsupported` 并在 POC 管理页显示原因（不静默失效）。
+  `case-insensitive` + `part: body|header|all`、`extractors`（regex/kval）；**`raw` / `flow`（布尔子集）/
+  `workflows`（子模板编排）自 2026-09-23 续17 起为子集支持**。仍不支持的 `dsl`、oob 反连、
+  flow 的 JS/循环/带参数引用、workflow 的 `subtemplates`/`args` 会被标 `_status=unsupported`
+  （或写进 `_note`）并在 POC 管理页显示原因（不静默失效）。
+- **凭据红线（2026-09-23 续17）**：登录态（`scanner/auth.py` 的任务级请求头）**只发目标侧**，
+  `utils.http_request(auth=False)` 是默认值、4 个第三方调用点（crt.sh / FOFA / CISA KEV / IP 反查）
+  **永不带**；日志/页面/报告只显掩码（`mask_value`）；解析非法行必须报错（CLI exit 1 / GUI 400），
+  **不许静默丢弃**（少带一条 Authorization 会让"已登录扫描"变成假象）。框架**不做**登录爆破/表单提交。
 - `owasp` 字段**格式是统一的**（`A01` 大写）：POC 引擎在 `engine.py` 里把 tag 的 `owasp-a01`
   规整为 `A01` 再入库，内置检查本身写 `A01`。*（本文件此前写的"POC 命中写 `owasp-a01`"与代码不符，
   已按代码更正 —— 见 `TODO.md` P1-3。）*

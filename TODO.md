@@ -98,7 +98,9 @@
         `path` 为列表、`redirects`、匹配器 `status/word/regex/size` + `condition/negative/case-insensitive`
         + `part: body|header|all`、`extractors`（regex/kval，结果写入 evidence）。
         `config/nuclei-templates/` 已加入加载目录，**官方模板可直接投放使用，不依赖 nuclei 二进制**。
-        `raw` / `dsl` / `flow` / `workflows` 明确**不支持**，但会标 `_status="unsupported"` 并给出 `_error`，
+        `raw` / `flow` / `workflows` **已于第十七轮（续17）落地子集支持**（raw 解析 + 破坏性方法拒绝、
+        `flow` 布尔子集、`workflows` 子模板编排），`dsl` 与 oob、flow 的 JS/循环、workflow 的
+        `subtemplates`/`args` 仍明确**不支持**，会标 `_status="unsupported"`（或写进 `_note`）并给出原因，
         **不静默失效**。
       - **结论**：自研引擎在"轻量 + 可控 + 免依赖"上优于引 nuclei（后者要装 Go 二进制、
         CTF 现场多了部署风险）；但语法向 nuclei 靠拢后两者**不冲突**：能用 nuclei 模板，
@@ -613,13 +615,28 @@
       内置清单；新增 `/composer.json`、`/.htaccess` 两条带签名条目。回归见 `tests/smoke.py [5u]`。
 - [ ] **（可选）dirmap 相关**：5 处源码修复的复核 / 是否内联（用户已交由其他 AI 负责）。
 - [完成：续14] **（可选）`db` 单写者限制的更彻底方案**（写操作串行化队列）—— 见上方第十六轮条目。
-- [ ] **P3 / roadmap 长期项**：目录递归爬取、登录态扫描、
+- [完成：续17] **登录态扫描 + nuclei `raw`/`flow`/`workflows` 子集**（用户清单 C 组「引擎→登录态扫描」
+      与「检测→nuclei raw/flow/workflows（现在标 unsupported，不静默失效）」）。
+      ① 新增 `scanner/auth.py`：任务级 `Cookie`/`Authorization`/自定义头 —— 解析非法行**不静默丢弃**
+      （CLI `sys.exit(1)`、GUI 400 并列出第几行）、`mask_value()` 掩码后才进日志/页面/报告、
+      `inject()` 写**任务专用 settings 副本**（不污染调用方）；`utils.http_request(auth=False)` 是默认值，
+      只有目标侧 11 处调用点显式 `auth=True`（crt.sh / FOFA / KEV / IP 反查 4 处第三方**不带**凭据，
+      否则等于把目标会话 Cookie 外发）。入口：GUI 建任务「登录态（可选）」文本框、CLI `-H/--header`
+      与 `--cookie`；补扫与拓展域名探测按 `from_task` **自动继承**。
+      ② POC 引擎：`_UNSUPPORTED_KEYS` 收缩为 `("dsl",)`，新增 raw 解析（丢 `Content-Length` 防截断、
+      保留 `Host`；`PUT/PATCH/DELETE/TRACE/CONNECT` 与普通 `method:` **双向拒绝**）、
+      `flow` 布尔子集（`&&`/`||`/`!`/括号 + `id()`/`http(N)` 引用，装载期校验引用可解析性，
+      `||` 短路，纯否定式成立**不报**）、`workflows` 子模板编排（深度上限 3 + 自环去重；
+      `subtemplates`/`args` 写进 `_note`）。回归见 `tests/smoke.py [5x]`。
+- [ ] **P3 / roadmap 长期项**：目录递归爬取、
       Shodan·Quake 反查、CT 日志（crt.sh）在线查询、任务队列、鉴权加固 —— 见 `docs/roadmap.md`
       （含续 9 刻意推迟的 3 条）。
       *已落地*：「证书解析页签」→ 续15 做成 **`cert` 阶段（站点 TLS 证书取证）+ `certs` 表 +
-      任务详情「SSL 证书」页签**，见下方续15 条目；**报告 HTML·PDF** → 续16 做成
+      任务详情「SSL 证书」页签**；**报告 HTML·PDF** → 续16 做成
       **三格式共用 `collect()` 快照 + 仪表盘漏洞趋势统计**（HTML 全量转义 / PDF 走本机无头浏览器、
-      无浏览器不静默丢交付物），见下方续16 条目；**CT 日志在线查询仍未做**。
+      无浏览器不静默丢交付物）；**登录态扫描 + nuclei `raw`/`flow`/`workflows` 子集** → 续17 做成
+      **`scanner/auth.py` 任务级请求头（fail-closed 只发目标侧、掩码、非法行拒绝建任务）
+      + GUI/CLI 入口 + 补扫继承**，见下方续17 条目；**CT 日志在线查询仍未做**。
 
 ## 兼容性红线（所有新增代码都适用）
 

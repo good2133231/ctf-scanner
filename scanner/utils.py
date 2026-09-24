@@ -149,18 +149,26 @@ def _ua(settings=None):
     return "Mozilla/5.0 CTFScanner/0.1"
 
 
-def _headers(settings=None, extra=None):
-    """统一请求头：优先走 evasion.browser_headers（浏览器化 + 可选 XFF 伪装）。"""
+def _headers(settings=None, extra=None, auth=False):
+    """统一请求头：优先走 evasion.browser_headers（浏览器化 + 可选 XFF 伪装）。
+
+    `auth=True` 时才带上任务的**登录态请求头**（`settings["_auth_headers"]`，由 runner 注入，
+    见 scanner/auth.py）。默认不带是刻意的：同一个 `settings` 也会被 crt.sh / FOFA / CISA KEV /
+    IP 反查这些**第三方**调用点使用，自动附带等于把目标的会话凭据发给第三方。
+    优先级：调用点自己的 `extra` > 登录态 > 浏览器化默认头（POC 里显式写的头应当赢）。
+    """
+    merged = dict((settings or {}).get("_auth_headers") or {}) if auth else {}
+    if extra:
+        merged.update(extra)
     try:
         from . import evasion
-        hdrs = evasion.browser_headers(settings, extra)
+        hdrs = evasion.browser_headers(settings, merged or None)
         if hdrs:
             return hdrs
     except Exception:
         pass
     hdrs = {"User-Agent": _ua(settings)}
-    if extra:
-        hdrs.update(extra)
+    hdrs.update(merged)
     return hdrs
 
 
@@ -196,11 +204,16 @@ def _decode_body(raw, content_type):
 
 
 def http_request(url, method="GET", headers=None, data=None, timeout=10,
-                 verify=None, allow_redirects=True, settings=None, want_bytes=False):
+                 verify=None, allow_redirects=True, settings=None, want_bytes=False,
+                 auth=False):
     """统一 HTTP 入口。返回 dict(status, headers, text, length, url) 或 None。
 
     `want_bytes=True` 时额外返回 `content`（原始字节）——favicon MD5 这类场景需要
     真实字节而不是解码后的文本；默认不返回，避免每个响应都多留一份内存副本。
+
+    `auth=True` 时带上任务的登录态请求头（`settings["_auth_headers"]`）。**只有发往目标侧**的
+    调用点才该传 True；第三方接口（crt.sh / FOFA / KEV / IP 反查）保持默认 False，
+    否则等于把目标的会话凭据送给第三方。
 
     requests 缺失时自动退回 urllib（urllib 不校验重定向语义差异，见文档）。
     verify 为 None 时取配置 limits.verify_tls（默认 False：CTF/靶场自签名证书常见，
@@ -208,7 +221,7 @@ def http_request(url, method="GET", headers=None, data=None, timeout=10,
     """
     if verify is None:
         verify = bool((settings or {}).get("limits", {}).get("verify_tls", False))
-    hdrs = _headers(settings, headers)
+    hdrs = _headers(settings, headers, auth=auth)
     try:
         import requests
         try:

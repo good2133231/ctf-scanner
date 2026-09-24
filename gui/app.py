@@ -23,7 +23,7 @@ from flask import (Flask, Response, abort, jsonify, redirect, send_file,
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import blacklist, cdn, certs as certs_mod, db, dnsq, screenshot
+from scanner import auth as taskauth, blacklist, cdn, certs as certs_mod, db, dnsq, screenshot
 from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
@@ -118,6 +118,28 @@ def _safe_next(target, fallback):
     if t.startswith("/") and not t.startswith("//") and "\\" not in t:
         return t
     return fallback
+
+
+def _source_auth(from_task):
+    """从**来源任务**的 options 里取出登录态请求头，供补扫/拓展探测继承。
+
+    为什么补扫要继承（而不是每次重填）：用户点「深度目录补扫 / 漏洞复查」时心里想的是
+    "把刚才那个任务的资产再挖深一点"，如果新任务丢了 Cookie，扫的就是**未登录视角**——
+    结果看起来"没洞"，而这恰恰是登录态扫描最容易产生的误判（false negative 被读成"安全"）。
+    取不到（没有来源任务 / 原任务没配登录态）就返回 `{}`，即新任务不带登录态。
+    """
+    try:
+        tid = int(from_task)
+    except (TypeError, ValueError):
+        return {}
+    row = db.get_task(tid)
+    if not row:
+        return {}
+    try:
+        top = json.loads(row["options"] or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return taskauth.from_task_options(top if isinstance(top, dict) else {})
 
 
 def parse_port_list(spec, default=None):
@@ -232,6 +254,14 @@ def create_app():
         # 证书取证同理：`cert.enabled` 策略级默认关，建任务勾了就落成 `cert_on`（只本次生效）。
         if "cert" in stages:
             options["cert_on"] = True
+        # 登录态（可选）：`auth` 是每行一条「名称: 值」的 textarea。解析失败**拒绝建任务**
+        # 并逐条列出原因 —— 少带一条 `Authorization` 会让"已登录扫描"变成假象，
+        # 用户会把 false negative 读成"没洞"。这里刻意不做"尽力而为"的静默丢弃。
+        auth_headers, auth_errors = taskauth.parse_headers(data.get("auth") or "")
+        if auth_errors:
+            return jsonify({"error": "登录态请求头有误：" + "；".join(auth_errors)}), 400
+        if auth_headers:
+            options["auth"] = auth_headers
         task_id = db.create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
         return jsonify({"id": task_id, "auto_stages": auto_stages})
@@ -280,6 +310,16 @@ def create_app():
             top = {}
         if not isinstance(top, dict):
             top = {}
+        # 登录态：页面要能确认"这次带了登录态"，但**不能把凭据回显出去** ——
+        # 下面「运行配置 → 选项」一行原样打印 options JSON，若含 `auth` 就是把明文 Cookie
+        # 上屏（还会进页面截图、浏览器历史、导出的报告）。所以先把值掩码，再交给模板；
+        # 日志同理（见 runner 的 [auth] 行）。
+        auth_view = [(k, taskauth.mask_value(k, v))
+                     for k, v in taskauth.from_task_options(top).items()]
+        if "auth" in top:
+            opts_display = dict(top)
+            opts_display["auth"] = dict(auth_view)
+            task["options"] = json.dumps(opts_display, ensure_ascii=False)
         dir_full = (top.get("dirscan_full") is True
                     or str((settings.get("dirscan") or {}).get("mode") or "quick") == "deep")
         port_full = (top.get("portscan_full") is True
@@ -316,6 +356,8 @@ def create_app():
             leads_intel=sum(1 for r in leads if r["kind"] == "intel"),
             # 补扫入口：任务页对"本任务的站点/IP"直接发起新任务；rescan_of 用于反向回跳
             rescan_of=top.get("rescan_of"),
+            # 登录态只显示**掩码后的**名字 + 值（`Cookie=abc***xyz`），见上面的 auth_view
+            auth_view=auth_view,
             dir_full=dir_full, port_full=port_full,
             shot_enabled=shot_enabled, shot_missing=shot_missing, shot_ready=shot_ready,
             dir_cap=int((settings.get("limits") or {}).get("dirscan_max_urls", 20) or 20),
@@ -984,6 +1026,10 @@ def create_app():
         from_task = (request.form.get("task_id") or "").strip()
         if from_task.isdigit():          # 只收任务号，避免把任意文本写进任务选项
             options["rescan_of"] = int(from_task)
+        # 登录态继承：新挖出的域名同样要用原来的会话去探（否则探到的是未登录视角）
+        inherit = _source_auth(from_task)
+        if inherit:
+            options["auth"] = inherit
         name = (request.form.get("name") or "").strip() or \
             time.strftime("拓展探测-%m%d-%H%M%S")
         targets = "\n".join(domains)
@@ -1038,6 +1084,11 @@ def create_app():
         from_task = (request.form.get("from_task") or "").strip()
         if from_task.isdigit():          # 只收任务号，避免把任意文本写进任务选项
             options["rescan_of"] = int(from_task)
+        # 登录态继承（同 api_scan_ext）：补扫必须沿用原任务的会话，否则"复查"变成
+        # 换一个未登录身份重看一遍，与用户点「复查」的预期不符。
+        inherit = _source_auth(from_task)
+        if inherit:
+            options["auth"] = inherit
         text = "\n".join(targets)
         stages = [stage]
         task_id = db.create_task(name, text, stages, options)

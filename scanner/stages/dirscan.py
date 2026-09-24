@@ -573,7 +573,7 @@ class DirscanStage(Stage):
                 for _ in range(3):
                     marker = f"/{random.randint(10 ** 6, 10 ** 7 - 1)}/ctfscan-none"
                     r = http_request(u.rstrip("/") + marker, timeout=timeout,
-                                     settings=ctx.settings)
+                                     settings=ctx.settings, auth=True)
                     if not r:
                         continue
                     md5s.add(hashlib.md5((r.get("text") or "").encode(
@@ -589,7 +589,7 @@ class DirscanStage(Stage):
             u, p = item
             md5s, sizes = _baseline(u)
             url = u.rstrip("/") + "/" + p.lstrip("/")
-            r = http_request(url, timeout=timeout, settings=ctx.settings)
+            r = http_request(url, timeout=timeout, settings=ctx.settings, auth=True)
             if not r:
                 return None
             st = r.get("status")

@@ -58,6 +58,15 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 （`logs/task_1_x/task.log`），项目外路径与空值原样返回；CLI / GUI / 报告对外显示路径都走它，
 不向外暴露本机绝对目录。
 
+`scanner/auth.py` 是**任务级登录态请求头**（Cookie / Authorization / 自定义头），用于扫"登录后才存在"
+的资产（`/admin`、业务接口、需要会话的 POC）。设计上是 **fail-closed**：`utils.http_request(auth=False)`
+是默认值，只有**目标侧**调用点显式传 `auth=True` 才带上凭据 —— 因为 `settings` 被 16 处调用点共用，
+其中 4 处是第三方接口（crt.sh / FOFA / CISA KEV / IP 反查），"有 settings 就自动附"等于把目标会话
+Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（框架**不做**登录爆破 / 自动提交表单），
+解析非法行时**不静默丢弃**（CLI 退出码非 0、GUI 400 并列出原因），日志/页面/报告一律走
+`mask_value()` 掩码。注入方式是把凭据写进**本次任务专用的 settings 副本**（`inject()` 返回副本），
+避免 CLI/测试复用同一个 dict 时把凭据带到别的任务上。
+
 `scanner/report.py` 提供**三种报告格式**，共用 `collect(task_id)` 的同一份数据快照
 （避免"Markdown 有 TLS 证书小节、HTML 没有"这类格式漂移）：
 `generate()`（Markdown，默认）/ `generate_html()`（**自包含单文件**：样式内联、不引外链，
@@ -73,7 +82,7 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 | 外部工具优先 + 内置兜底 | 你的手工流水线效果最好时用原工具；任何裸机也能跑通框架 | 兜底实现能力弱于本体 |
 | SQLite 单文件 | 零部署成本，单机 CTF 场景足够 | 不支持多节点并发写，需要时替换 db.py 即可 |
 | Flask + 后台线程 | GUI 只做"发任务 + 看结果"，逻辑全部复用核心引擎 | 无任务队列，进程重启则运行中任务中断 |
-| POC 引擎向 nuclei 语法靠拢 | 社区事实标准（数千模板、可直接加载官方模板），声明式 YAML、无外部依赖 | 仅兼容核心子集（raw/dsl/flow/workflows 不支持） |
+| POC 引擎向 nuclei 语法靠拢 | 社区事实标准（数千模板、可直接加载官方模板），声明式 YAML、无外部依赖 | 仅兼容核心子集（raw/flow/workflows 为子集支持，dsl、oob、flow 的 JS/循环等显式标 unsupported） |
 | 启发式检查全部 GET + 无破坏 payload | 控制误伤与法律风险 | 检出率有限，定位是"初筛信号" |
 | 分级门控（`skip_severities` 执行级 + `min_severity` 结果级，默认 info/low 不执行、门槛 medium） | 默认屏蔽低危/info 噪声，连请求都不发，只留能拿 flag 的高位结果 | 想广谱信息收集需**同时**放宽级别开关与门槛 |
 | **阶段级 `enabled` 总开关**（`takeover`/`jsmine`/`dirscan`/`vulnscan` 默认开，`portscan` 默认关、`osint` 由 `iprecon`/`fofa` 两个子开关代替；`subdomain`/`probe` 刻意不设） | 用户要求"大功能都要有按分类的总开关"；关掉即整阶段跳过、连请求都不发，便于按需裁剪（如"只做资产测绘不探测"） | 开关分散在各段，新增阶段必须记得补 `enabled` 与 GUI 复选框（`tests/smoke.py` 的 `[3d]`/`[5b]` 已加断言防漏） |
@@ -139,7 +148,7 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 ## 扩展点
 
 - **新增阶段**：在 `scanner/stages/` 建一个 `Stage` 子类（实现 `name` 与 `run()`），到 `runner.STAGE_REGISTRY` 注册即可被 CLI `-p` 与 GUI 复选框识别；
-- **新增 POC**：把 YAML 放进 `scanner/pocs/pocs/`（内置）、`config/pocs-user/`（用户上传）、`config/pocs-imported/`（批量导入，**默认关闭**）或 `config/nuclei-templates/`（官方 nuclei 模板投放点），控制台「重新扫描 POC 目录」或重启即生效；含 `raw`/`dsl`/`flow`/`workflows` 的模板会被标记 `unsupported`；
+- **新增 POC**：把 YAML 放进 `scanner/pocs/pocs/`（内置）、`config/pocs-user/`（用户上传）、`config/pocs-imported/`（批量导入，**默认关闭**）或 `config/nuclei-templates/`（官方 nuclei 模板投放点），控制台「重新扫描 POC 目录」或重启即生效；`raw`/`flow`/`workflows` 已支持核心子集，超出部分（`dsl`、oob、flow 的 JS/循环等）会被标记 `unsupported` 并显示原因；
 - **接入 nuclei**（可选）：引擎已兼容 nuclei 模板核心子集，官方模板可直接投放加载；若仍需 nuclei 二进制的完整能力，可在 vulnscan 阶段加适配器，把 sites 导出为 `-l` 文件调用 nuclei，结果解析回 `vulns` 表；
 - **替换存储/队列**：`db.py` 与 `runner.run_task` 是唯一边界，替换后 CLI/GUI 不用动。
 
