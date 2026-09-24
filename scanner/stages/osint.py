@@ -28,6 +28,7 @@
 裸 IP / 带端口 / 带路径 / 通配符**绝不写进 `subdomains`**（IP 类资产归 portscan / probe）。
 """
 import ipaddress
+import re
 from urllib.parse import urlparse
 
 from .base import Stage
@@ -38,6 +39,18 @@ from .. import quake as quake_mod
 from .. import ctlog as ctlog_mod
 from ..fingerprint import favicon_hash
 from ..utils import base_domain, is_domain, pool_run, resolve_host
+
+# ---------- FOFA 标题反查的相关性过滤 ----------
+
+# 标题按非字母数字切 token 后，这些通用词不参与"是否相关"的判断
+# （避免把 `com` / `www` / `home` 这类通用词误当品牌词）。
+_TITLE_STOPWORDS = frozenset({
+    "www", "http", "https", "com", "net", "org", "the", "and", "for", "you",
+    "your", "our", "official", "home", "homepage", "index", "page", "site",
+    "web", "welcome", "login", "sign", "account", "app", "mobile", "document",
+    "untitled", "new", "error", "admin", "portal",
+})
+_TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 class OsintStage(Stage):
@@ -354,8 +367,9 @@ class OsintStage(Stage):
             ctx.logger.info(f"[osint] 站点标题 {len(titles)} 个超过上限 {cap}，仅反查前 {cap} 个")
             titles = titles[:cap]
 
+        title_match = str(cfg.get("title_match") or "label").lower()
         found = []
-        queried = common = 0
+        queried = common = skipped = 0
         for title in titles:
             if ctx.stopped():
                 break
@@ -373,8 +387,15 @@ class OsintStage(Stage):
             ctx.logger.info(f'[osint] 标题反查 title="{title}" → {len(assets)} 条 / 共 {total} 条')
             for a in assets:
                 domain = _domain_of(a)
+                # 相关性过滤（默认 `label`：标题 token 与域名 label 完全相等）：挡掉"标题里
+                # 恰好含同一子串"的无关域名。**不碰 `_domain_of()`** —— 它是 favicon / 证书 /
+                # 标题 / C 段共用的收口，改它会波及全部 osint 来源。
+                if domain and not _title_relevant(title, domain, title_match):
+                    skipped += 1
+                    continue
                 found.append((domain, "osint:fofa-title"))
-        ctx.logger.info(f"[osint] 标题拓展：查询 {queried} 个标题，跳过公共标题 {common} 个")
+        ctx.logger.info(f"[osint] 标题拓展：查询 {queried} 个标题，跳过公共标题 {common} 个"
+                        + (f"，相关性过滤掉 {skipped} 条" if skipped else ""))
         return found
 
     # ---------- Shodan / Quake favicon 反查（与 FOFA 同构，只换客户端） ----------
@@ -502,6 +523,37 @@ class OsintStage(Stage):
                         + ("（已写入「SSL 证书」页签，来源 ct）" if certs else ""))
         return found
 
+
+
+def _title_tokens(title):
+    """把标题切成小写 token（按非字母数字切），去掉停用词与纯数字。"""
+    return [t for t in _TITLE_TOKEN_RE.findall(str(title or "").lower())
+            if not t.isdigit() and t not in _TITLE_STOPWORDS]
+
+
+def _title_relevant(title, domain, mode="label"):
+    """标题是否与候选域名相关（过滤 FOFA 标题反查带进来的**无关域名**）。
+
+    用户真实数据：标题含 "pengo" 时，FOFA 既带回 `pengo.money` / `pengo.me`（**同品牌不同
+    TLD，可能真相关**），也带回 `silviapengo.com` / `pengowireline.com` / `kufungapengo.com`
+    / `gkops.net` / `yulw.cn`（只是**恰好含同一子串**，与目标无关）。
+
+    - `mode="label"`（默认）：至少一个标题 token 与域名的某个 label **完全相等**；
+    - `mode="substring"`：放宽为"至少一个 token 是域名的**子串**"（回退 / 对照用）；
+    - 其它值一律按 `"label"` 处理（未知值不能变成"全放行"）。
+    - **fail-open**：标题切不出任何 token（纯中文 / 纯符号标题）时**保留** —— 无法判定相关性
+      时宁可不丢（丢资产比留噪音更糟，与 jsmine 的 PSL fail-open 同一取向）。
+    """
+    host = str(domain or "").lower().strip(".")
+    if not host:
+        return False
+    tokens = _title_tokens(title)
+    if not tokens:
+        return True
+    if mode == "substring":
+        return any(tok in host for tok in tokens)
+    labels = set(host.split("."))
+    return any(tok in labels for tok in tokens)
 
 
 def _domain_of(asset):

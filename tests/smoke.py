@@ -3859,6 +3859,135 @@ workflows:
     print("[6h] F2 失败路径退还预算 ok: 6 线程等闸时取消 → 全部退出(不挂死) / budget_left 全额退还(10) / "
           "rejected==0")
     print("[6i] F2 混合容量告警 ok: 不同 max_inflight_global 重建闸且旧闸在飞 → 打 warning（不静默）")
+    # 6k) 续22：拓展域名降噪三件套（jsmine PSL 校验 / 第三方清单 / FOFA 标题归属相关性）。
+    #     A) jsmine 加公共后缀（PSL）校验 —— 此前末位 label 只要是 2–24 个字母就当 TLD，
+    #        于是 `wallet.filter.withdraw` / `react.transitional.element` / `i.test` 这类
+    #        "点号连接的 JS 成员访问链"全被当成域名资产（用户从「拓展域名」页拷来的真实数据）。
+    #     B) js_thirdparty.txt 补齐用户数据里的第三方域名（纯数据）。
+    #     C) FOFA 标题反查加"归属相关性"过滤（默认 label 相等），挡掉"标题恰好含同一子串"的无关域名。
+    from scanner import jsmine as _jm6k
+    from scanner.stages import osint as _os6k
+
+    # ---- A) PSL 校验 ----
+    assert _jm6k._public_suffixes(), "公共后缀清单未加载（config/dicts/tlds.txt）"
+    for _h6k in ("wallet.filter.withdraw", "react.transitional.element",
+                 "react.client.reference", "i.test"):
+        # ✱ 修复前（末位纯字母即当 TLD）这些全是 True —— 就是用户拷来的那批"假域名"。
+        #    证伪实测（bbec7f0 旧代码）：4/4 全被接受，故 `is False` 断言在旧代码上真的失败。
+        assert _jm6k._valid_host(_h6k) is False, f"[6k] PSL 应拒绝：{_h6k}"
+    for _h6k in ("example.com", "a.b.example.com.cn", "foo.co.uk", "x.io",
+                 "sub.target.co.jp"):
+        # ✱ 真实域名（含多段后缀）必须仍被接受 —— 默认路径不受影响
+        assert _jm6k._valid_host(_h6k) is True, f"[6k] 真实域名应接受：{_h6k}"
+    # fail-open：清单缺失 → 回退旧的宽松判断（绝不静默丢资产）+ 只告警一次
+    _sfile6k, _scache6k, _swarn6k = _jm6k._TLDS_FILE, _jm6k._tlds_cache, _jm6k._tlds_warned
+    try:
+        _jm6k._TLDS_FILE = "config/dicts/__no_such_tlds__.txt"
+        _jm6k._tlds_cache = None
+        assert _jm6k._public_suffixes() is None
+        assert _jm6k._valid_host("wallet.filter.withdraw") is True, "[6k] fail-open 应回退宽松判断"
+        _w6k = _Rec()
+        _jm6k._tlds_warned = False
+        _jm6k._warn_missing_tlds(_w6k)
+        _jm6k._warn_missing_tlds(_w6k)
+        assert len(_w6k.lines) == 1, "[6k] 清单缺失应恰好告警一次"
+    finally:
+        _jm6k._TLDS_FILE, _jm6k._tlds_cache, _jm6k._tlds_warned = _sfile6k, _scache6k, _swarn6k
+
+    # ---- B) 第三方清单（纯数据）----
+    _noise6k = _jm6k._noise_set()
+    for _d6k in ("reactjs.org", "react.dev", "bscscan.com", "solscan.io",
+                 "cloudflareinsights.com", "api.qrserver.com", "capacitorjs.com",
+                 "debox.pro", "pong-pengo.de"):
+        assert _d6k in _noise6k, f"[6k] 第三方清单缺 {_d6k}"
+    # ✱ `static.cloudflareinsights.com` 结尾是 `.cloudflareinsights.com` —— `cloudflare.com` 拦不住它。
+    #    证伪实测（bbec7f0 旧清单 267 条）：9/9 目标域名全缺、`_is_noise(static.cloudflareinsights.com)`
+    #    为 False，故 `in _noise6k` / `is True` 断言在旧代码上真的失败。
+    assert _jm6k._is_noise("static.cloudflareinsights.com", set(), []) is True, \
+        "[6k] cloudflareinsights.com 必须单独成行"
+
+    # ---- C) FOFA 标题归属相关性 ----
+    for _d6k in ("pengo.money", "pengo.me", "pengo.uk", "pengo.com.vn"):
+        assert _os6k._title_relevant("Pengo", _d6k, "label") is True, f"[6k] 同品牌应保留：{_d6k}"
+    for _d6k in ("silviapengo.com", "pengowireline.com", "kufungapengo.com",
+                 "gkops.net", "yulw.cn"):
+        # ✱ 修复前不做任何过滤 → 这些"恰好含同一子串"的无关域名全被当资产入库。
+        #    证伪实测（bbec7f0 旧 osint，端到端）：9/9 全入库（silviapengo.com / gkops.net /
+        #    yulw.cn 都在），故"默认档应丢弃"断言在旧代码上真的失败。
+        assert _os6k._title_relevant("Pengo", _d6k, "label") is False, f"[6k] 无关域名应丢弃：{_d6k}"
+    assert _os6k._title_relevant("Pengo", "silviapengo.com", "substring") is True, \
+        "[6k] substring 档应放宽为子串匹配（回退/对照）"
+    # fail-open：标题切不出 token（纯中文）时不丢 —— 否则会误杀非拉丁标题的真实资产
+    assert _os6k._title_relevant("维保中心", "x.test", "label") is True
+
+    # C-端到端：真跑 osint 阶段，默认档丢 silviapengo.com、substring 档留下它（开关真的起作用）
+    _ret6k = [{"host": "https://" + _d, "domain": _d, "ip": "1.2.3.4", "port": "443",
+               "title": "Pengo"} for _d in
+              ("pengo.money", "pengo.me", "pengo.uk", "pengo.com.vn", "silviapengo.com",
+               "pengowireline.com", "kufungapengo.com", "gkops.net", "yulw.cn")]
+
+    def _stub6k(title, settings, logger=None, size=None):
+        return ([dict(a) for a in _ret6k], len(_ret6k), "")
+
+    _orig6k = _os6k.fofa_mod.search_title
+    _os6k.fofa_mod.search_title = _stub6k
+    try:
+        def _os_run6k(match):
+            _s6k = copy.deepcopy(settings)
+            _s6k["iprecon"]["enabled"] = False
+            _s6k["fofa"].update({"enabled": True, "cert_enabled": False,
+                                 "title_enabled": True, "max_title_queries": 2,
+                                 "title_match": match})
+            _s6k["keys"] = {"fofa": {"email": "stub@example.test", "key": "stub"}}
+            _tid6k = db.create_task(f"smoke-6k-{match}", targets, ["osint"], {"offline": True})
+            db.insert_sites(_tid6k, [{"url": targets, "host": "127.0.0.1", "port": "80",
+                                      "status": 200, "title": "Pengo", "length": 100,
+                                      "source": "builtin"}])
+            run_task(_tid6k, f"smoke-6k-{match}", targets, ["osint"], {"offline": True}, _s6k)
+            _dom = {r["domain"] for r in db.list_subdomains(_tid6k)}
+            db.delete_task(_tid6k, backup=False)
+            return _dom
+
+        _lab6k = _os_run6k("label")
+        assert "pengo.money" in _lab6k and "pengo.com.vn" in _lab6k, _lab6k
+        assert "silviapengo.com" not in _lab6k, f"[6k] 默认档应丢弃 silviapengo.com：{_lab6k}"
+        assert "gkops.net" not in _lab6k and "yulw.cn" not in _lab6k, _lab6k
+        _sub6k = _os_run6k("substring")
+        assert "silviapengo.com" in _sub6k, f"[6k] substring 档应保留 silviapengo.com：{_sub6k}"
+    finally:
+        _os6k.fofa_mod.search_title = _orig6k
+
+    # 新开关三方一致：DEFAULTS ↔ settings.yaml ↔ GUI 表单/POST 映射
+    from scanner.config import DEFAULTS as _DEF6K
+    assert _DEF6K["fofa"].get("title_match") == "label", "DEFAULTS.fofa 缺 title_match"
+    assert (settings.get("fofa") or {}).get("title_match") == "label", \
+        "settings.yaml.fofa 缺 title_match"
+    _sh6k = c.get("/settings").get_data(as_text=True)
+    assert 'name="fofa_title_match"' in _sh6k, "策略配置缺 fofa_title_match 字段"
+    _cap6k = {}
+
+    def _fake_save6k(d):
+        _cap6k.clear()
+        _cap6k.update(d)
+        return load_settings()
+
+    _orig_save6k = gui_app.save_settings
+    gui_app.save_settings = _fake_save6k
+    try:
+        assert c.post("/settings", data={"min_severity": "medium",
+                                         "fofa_title_match": "substring"}).status_code == 302
+        assert (_cap6k.get("fofa") or {}).get("title_match") == "substring", _cap6k.get("fofa")
+        # 未提交时回退默认 label（不能把配置吃成空）
+        assert c.post("/settings", data={"min_severity": "medium"}).status_code == 302
+        assert (_cap6k.get("fofa") or {}).get("title_match") == "label", _cap6k.get("fofa")
+    finally:
+        gui_app.save_settings = _orig_save6k
+
+    print("[6k] 续22 拓展域名降噪 ok: jsmine PSL 校验（拒 withdraw/element/reference/test，"
+          "多段后缀仍接受，清单缺失 fail-open+告警）/ 第三方清单补 9 条（含 "
+          "cloudflareinsights.com 拦 static.*）/ FOFA 标题归属相关性（label 挡 silviapengo.com·"
+          "gkops.net，pengo.* 保留；substring 档复现宽松；中文标题 fail-open）+ 开关三方一致")
+
     print("SMOKE PASS")
 
 

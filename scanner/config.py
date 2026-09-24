@@ -256,6 +256,11 @@ DEFAULTS = {
         "title_enabled": True,
         "title_threshold": 200,
         "max_title_queries": 10,   # 每任务最多反查多少个站点标题（省配额）
+        # 标题反查的**归属相关性**过滤（续22）：FOFA 会带回"标题里恰好含同一子串"的无关域名
+        # （实测：标题含 "pengo" → 带回 silviapengo.com / gkops.net / yulw.cn …）。
+        #   label     = 标题 token 与域名的某个 label **完全相等**才算相关（默认，最严）
+        #   substring = 只要 token 是域名的**子串**就算相关（更宽松，回退/对照用）
+        "title_match": "label",
     },
     "ssrf": {
         # A10 SSRF 受控回连（**默认关**）：任务内起一个本机 HTTP 回连监听，把

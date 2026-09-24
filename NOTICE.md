@@ -37,8 +37,21 @@
 
 ## 3. `config/dicts/js_thirdparty.txt` —— 含 URLFinder 的过滤清单
 
-267 条 JS 第三方域名单 = 本项目内置清单 + **[URLFinder](https://github.com/pingc0y/URLFinder)**
-「含过滤规则版」`config.yaml` 中的 `jsFiler` 段。URLFinder 的许可状态本项目未做核实。
+287 条 JS 第三方域名单 = 本项目内置清单 + **[URLFinder](https://github.com/pingc0y/URLFinder)**
+「含过滤规则版」`config.yaml` 中的 `jsFiler` 段（续22 又追加了 20 条常见库 / CDN / 区块浏览器 /
+Web3 域名）。URLFinder 的许可状态本项目未做核实。**这是黑名单，永远不可能穷尽** —— 它只挡已知
+噪声，**不代表"已覆盖第三方域名"**。
+
+## 3.1 `config/dicts/tlds.txt` —— 派生自 Public Suffix List（MPL-2.0）
+
+6423 条公共后缀，由 `tools/import_tlds.py` 从 **tldextract 内置的 PSL 快照**生成，
+供 `scanner/jsmine.py` 校验"末位是否为合法公共后缀"。PSL（Public Suffix List，
+<https://publicsuffix.org/>）以 **MPL-2.0** 授权。
+
+> **注意**：此处收录的是**由该清单整理派生出的后缀列表**（去掉了 PSL 的通配 `*.` 与例外 `!`
+> 前缀、只保留 ASCII 后缀），**未内联 PSL 的任何代码**，生成过程**完全离线**（只读 tldextract
+> 打包进 wheel 的快照，不联网取 publicsuffix.org）。MPL-2.0 与本仓库 MIT 的兼容性**本项目不作
+> 法律结论**：若你要再分发本仓库、或用于商业用途，请自行厘清这部分数据的许可义务。
 
 ## 4. 其他数据文件（本项目自建，无第三方来源）
 

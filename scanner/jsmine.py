@@ -84,6 +84,60 @@ def _noise_set():
     _noise_cache = items or set(_ALL_NOISE)
     return _noise_cache
 
+
+# 公共后缀清单（PSL）同样数据驱动：读 `config/dicts/tlds.txt`（由 `tools/import_tlds.py`
+# 从 tldextract 内置快照生成）。用于把"末位不是合法公共后缀"的串挡掉 —— 否则
+# `wallet.filter.withdraw` / `react.transitional.element` / `react.client.reference` /
+# `i.test` 这类"点号连接的 JS 成员访问链"会被形态判断当成域名（用户从 GUI「拓展域名」
+# 页拷来的真实数据即如此）。**fail-open**：文件缺失/为空时回退旧的宽松判断并告警 ——
+# 绝不因一个数据文件没随仓库走就静默丢掉真实资产（丢资产比留噪音更糟）。
+_TLDS_FILE = "config/dicts/tlds.txt"
+_tlds_cache = None
+_tlds_warned = False
+
+
+def _public_suffixes():
+    """返回公共后缀集合（首次读文件后缓存）；文件缺失/为空返回 None（fail-open）。"""
+    global _tlds_cache
+    if _tlds_cache is not None:
+        return _tlds_cache or None
+    items = set()
+    try:
+        from .config import resolve
+        from .utils import read_lines
+        for line in read_lines(resolve(_TLDS_FILE)):
+            line = line.strip().lower().strip(".")
+            if line and not line.startswith("#"):
+                items.add(line)
+    except Exception:
+        items = set()
+    _tlds_cache = items
+    return items or None
+
+
+def _has_public_suffix(host, tlds):
+    """host 末尾的若干 label 拼起来是否 ∈ 公共后缀集合（从最长到最短试）。
+
+    必须试多段：`foo.co.uk` 的**末位 label 是 `uk`**，只比末位 label 会漏掉 `co.uk`。
+    """
+    labels = host.split(".")
+    for i in range(1, len(labels)):
+        if ".".join(labels[i:]) in tlds:
+            return True
+    return False
+
+
+def _warn_missing_tlds(logger):
+    """公共后缀清单缺失/为空时告警一次（fail-open 的可见性，不静默）。"""
+    global _tlds_warned
+    if _tlds_warned or logger is None:
+        return
+    _tlds_warned = True
+    logger.warning(
+        f"[jsmine] 公共后缀清单 {_TLDS_FILE} 缺失或为空，已回退到宽松的形态判断"
+        "（可能把 JS 成员访问链误当域名）；重新生成：py -3 tools/import_tlds.py --force")
+
+
 # 静态资源文件名后缀（出现在引号里的 `jquery.min.js` 之类会被误当域名，需排除）
 _FILE_EXT = frozenset({
     "js", "css", "json", "map", "min", "vue", "txt",
@@ -172,7 +226,13 @@ def _valid_host(host):
     labels = host.split(".")
     if labels[0] in _CODE_LABELS:                       # process.env.token 类成员访问链
         return False
-    if not re.fullmatch(r"[a-z]{2,24}", labels[-1]):  # TLD 必须纯字母（排除 IP/端口残留）
+    tlds = _public_suffixes()
+    if tlds is None:
+        # fail-open：清单缺失 → 退回旧的宽松判断（末位纯字母 2–24 位，排除 IP/端口残留）
+        if not re.fullmatch(r"[a-z]{2,24}", labels[-1]):
+            return False
+    elif not _has_public_suffix(host, tlds):
+        # 末位若干 label 拼起来都不是合法公共后缀 → 不是域名（withdraw / element / test …）
         return False
     if labels[-1] in _FILE_EXT:
         return False
@@ -315,6 +375,8 @@ def mine(url, settings, logger=None):
     JS 文件数，供调用方汇总日志）。
     """
     settings = settings or {}
+    if _public_suffixes() is None:
+        _warn_missing_tlds(logger)      # fail-open 的可见性：清单缺失要能看见（不静默）
     cfg = settings.get("jsmine") or {}
     limits = settings.get("limits") or {}
     timeout = int(limits.get("http_timeout", 10))

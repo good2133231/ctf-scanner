@@ -179,6 +179,10 @@
   **黑名单是两层的**（对应用户原话"只要结果找出一定熵值就判断为黑名单，比如 404 这种一找一大堆"）：
   ① `fofa.GENERIC_TITLES`（`404` / `Error` / `Welcome to nginx` / `Apache2 Ubuntu Default Page` …）
   **连查询都不发**；② 查完发现命中数 > `fofa.title_threshold`（默认 200）判为"公共标题"，放弃拓展。
+  **③ 归属相关性过滤**（`fofa.title_match`，续22）：把标题按非字母数字切 token（去停用词与纯数字），
+  默认 `label` 档要求**至少一个 token 与候选域名的某个 label 完全相等**才入库 —— 挡掉"标题里恰好含
+  同一子串"的无关域名（标题含 `pengo` 时保留 `pengo.money`，丢弃 `silviapengo.com`/`pengowireline.com`）；
+  设 `substring` 可回退到旧的子串匹配。切不出 token 的标题（如纯中文）**fail-open 保留**。
   来源 `osint:fofa-title`（页面显示「FOFA·标题反查」）。
 - 产物：SQLite `csegs` 表（任务详情「C 段」页签、报告「C 段视野」小节；
   `/csegs` 路由仍在但已不进侧边栏 —— 该数据属任务维度）、
@@ -197,7 +201,10 @@
 - 输入：`ctx.results["sites"]`（为空时回退 `db.list_sites`），页面上限 `jsmine.max_pages`（默认 20）、
   JS 文件上限 `jsmine.max_js`（默认 40）；
 - 处理：抓页面与其中引用的 JS，正则提取**域名 / 接口 URL / 疑似凭据**；
-  第三方公共域走 78 条黑名单过滤（统计/CDN 等），**目标自身域永不误杀**；
+  第三方公共域走黑名单过滤（统计/CDN/开源库等，`config/dicts/js_thirdparty.txt`，**黑名单不可能穷尽**），
+  **目标自身域永不误杀**；域名形态判断含**公共后缀（PSL）校验**（`config/dicts/tlds.txt`，含 `co.uk`/
+  `com.cn` 等多段后缀）—— 挡掉 `wallet.filter.withdraw` 这类"点号连接的 JS 成员访问链"；清单缺失时
+  fail-open 回退宽松判断并告警一次；
   `jsmine.secrets=true` 时启用凭据提取：**17 条规则**（`AKID[0-9A-Za-z]{16,32}` / `AKIA` / `LTAI` /
   `AIza` / `gh[pousr]_` / `xox[baprs]-` / Slack webhook / Telegram bot / SendGrid / Stripe /
   **JWT** / **私钥 PEM 头** / 数据库连接串 `mysql://user:pass@host` / 通用 `api_key=...` 等），
@@ -250,6 +257,7 @@
 - 字典文件（`config/dicts/`）：`dirs_shallow`（浅扫专用，206 条，按价值排序）/
   `dirs_big`（全量）/ `dirs_common` / `dirs_jsp` / `dirs_php` / `dirs_asp` /
   框架桶 12 份 / `dirs_exposure`，另保留 `dirs_small`（55 条，快速档）；
+  非目录类：`tlds`（6423，公共后缀，`tools/import_tlds.py` 生成）与 `js_thirdparty`（287，JS 第三方域名单）；
 - 处理（外部工具优先，**仅 deep**）：`tools/dirmap/dirmap.py` 存在时调用 dirmap
   （`-iF <目标文件> -e all -t <线程>`，cwd 固定在其项目目录），解析其 `output/<域名>/*.txt`：
   **只读 `res.txt` 与 `403.txt`**（`重复长度.txt` / `404.txt` / `othercode.txt` 不读 —— 重复长度按用户要求默认不展示），
@@ -414,6 +422,7 @@ logs/task_1_mytask/
 | portscan.mode / full_ports | top / 1-65535 | `full` 走全端口；也可由任务选项 `portscan_full` 单次触发 |
 | portscan.exclude_scanned | true | 跳过本任务已扫过的端口 |
 | fofa.title_enabled / title_threshold | true / 200 | 标题反查开关；命中数超过阈值判为"公共标题"放弃拓展 |
+| fofa.title_match | label | 标题反查**归属相关性**：`label`＝标题 token 须与候选域名某个 label 完全相等；`substring`＝旧的子串匹配（回退/对照） |
 | fofa.max_title_queries | 10 | 每任务最多反查多少个站点标题 |
 | vulnscan.enabled | true | **阶段级**开关：漏洞初筛整阶段开关（关掉即"只测绘不探测"） |
 | takeover.enabled / jsmine.enabled | true | 子域接管 / JS 挖掘的阶段级开关 |

@@ -135,6 +135,9 @@ ctf-scanner/
 │                          #   用法：py -3 tools/import_dir_dict.py --src <字典文件>（源路径只走参数，代码里不留绝对路径）
 ├── tools/import_fw_dicts.py # 从 dirs_big 派生**按框架细分**的字典（wordpress/tomcat/weblogic/spring/… 12 个桶
 │                          #   + dirs_exposure）→ config/dicts/dirs_<框架>.txt；用法：py -3 tools/import_fw_dicts.py --force
+├── tools/import_tlds.py    # 从 tldextract **内置快照**（`suffix_list_urls=()`，离线、绝不联网）导出公共后缀清单
+│                          #   → config/dicts/tlds.txt（含 `co.uk`/`com.cn` 等多段后缀）；用法：py -3 tools/import_tlds.py --force
+│                          #   tldextract 是**生成期可选依赖**，不进 requirements.txt；运行时只读生成好的 tlds.txt
 ├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
 ├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/blacklist/**intel/heuristic** 十八段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
@@ -142,7 +145,8 @@ ctf-scanner/
 ├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / cdn_cname(292)
 │                          #   sensitive(9)：**A01 检查的数据源**（`路径|关键字|级别|说明`，见 §7）
 │                          #   dirs_shallow(206)：**浅扫专用**（dirscan.mode=quick 只用它），按价值排序、人工筛选
-│                          #   js_thirdparty(267：JS 第三方域名单 = 内置 + URLFinder jsFiler)
+│                          #   js_thirdparty(287：JS 第三方域名单 = 内置 + URLFinder jsFiler + 续22 补 20 条常用库/CDN/链上浏览器)
+│                          #   tlds(6423：公共后缀清单 = tldextract 内置快照，含多段后缀；tools/import_tlds.py 生成)
 │                          #   目录字典按技术栈拆分：dirs_big(11882 全量) / dirs_common(10671) /
 │                          #   dirs_php(933) / dirs_asp(162) / dirs_jsp(116)（tools/import_dir_dict.py 生成）
 │                          #   再按**框架**细分 12 桶 + dirs_exposure（tools/import_fw_dicts.py 生成，
@@ -189,9 +193,16 @@ ctf-scanner/
   **例外是 `osint`**：它自身没有 `enabled`，而是由 `iprecon.enabled` / `fofa.enabled` 两个
   子开关控制，**两者都关时整阶段直接跳过（一次请求都不发）**；`fofa` 下另有两个**子能力**：
   favicon（`icon_hash`，默认随 `fofa.enabled`）与**证书反查**（`cert_enabled`，默认跟随），
-  各自有阈值排除（黑 ico / 通用证书）。
+  各自有阈值排除（黑 ico / 通用证书）。第三个子能力是**标题反查**（`title_enabled`），续22 起带
+  **归属相关性过滤**（`fofa.title_match`，默认 `label`：标题 token 须与候选域名某个 label **完全相等**
+  才入库，挡掉"标题恰好含同一子串"的无关域名；设 `substring` 回退旧的子串匹配）；切不出 token 的标题
+  （如纯中文）**fail-open 保留**。
 - **黑名单在三处入库前过滤**（`subdomain` / `jsmine` / `osint`，统一走 `scanner/blacklist.py`）：
   命中即不写资产库，因此后续阶段自然不扫 —— 新增"产出域名"的阶段必须记得在入库前过一遍。
+- **jsmine 的域名形态判断含公共后缀（PSL）校验**（续22）：末位必须是合法公共后缀（读
+  `config/dicts/tlds.txt`，支持 `co.uk`/`com.cn` 等多段后缀），否则 `wallet.filter.withdraw`
+  这类"点号连接的 JS 成员访问链"会被当成域名。清单缺失/为空时 **fail-open**：回退旧的宽松判断
+  并告警一次（绝不静默丢资产）。
 - **测试隔离靠两个环境变量**：`CTFSCANNER_DB`（库路径）与 `CTFSCANNER_LOGS`（任务工作目录）。
   `tests/smoke.py` 顶部把两者指到 `logs/smoke-<随机>/` 并在退出时删除 —— 跑测试**不会**污染
   真实 `data/scanner.db` 与 `logs/`。跑任何"会写资产"的脚本时请沿用这一约定（见 `docs/usage.md` FAQ）。
@@ -321,6 +332,12 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   旧代码超发 21/22 → 修复后恒 == budget）/ 失败路径**退还预算**（等闸时取消：
                             #   不挂死 + 全额退还 + rejected==0）/ 混合 `max_inflight_global` 重建闸**告警**
                             #   （不静默）/ `slot()` **不可重入**（同线程嵌套会自锁、靠 stop 解开）
+# 2026-09-24 续22 新增 `[6k]`：拓展域名降噪三件套 —— jsmine 加**公共后缀（PSL）校验**
+                            #   （拒 `wallet.filter.withdraw` / `react.transitional.element` / `react.client.reference` / `i.test`，
+                            #   多段后缀 `co.uk`/`com.cn` 仍接受；清单缺失 fail-open + 只告警一次）/ 第三方清单补 9 条
+                            #   （含 `cloudflareinsights.com` 单独成行才拦得住 `static.*`）/ FOFA 标题**归属相关性**
+                            #   （默认 `label` 档丢 `silviapengo.com`/`gkops.net`/`yulw.cn`、留 `pengo.*`；`substring` 档
+                            #   复现宽松；中文标题 fail-open）+ 新开关 `fofa.title_match` 三方一致
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -460,6 +477,10 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - `osint` 的阈值都是**保守估计值、未经真实数据校准**：黑 ico 阈值 200、通用证书阈值 200
   （`fofa.cert_threshold`）、单 IP 域名数 30（判共享主机）。都可在「策略配置 → 外部情报拓展」调整，
   不需要改代码。证书反查的"通用证书"判定尤其粗：**只按命中总数比阈值**，不做证书主体/颁发者分析。
+- **`js_thirdparty.txt` 是黑名单，永远不可能穷尽**（续22）：它是"已知第三方/公共库域名"清单，
+  新库/新 CDN 出现就得补；漏网的表现是「拓展域名」页出现某个开源库域名。`tlds.txt` 同理是
+  **PSL 快照**，会滞后于 IANA 的 TLD 变更（重生成：`py -3 tools/import_tlds.py --force`）。
+  两者缺失/为空都 **fail-open**（回退宽松判断并告警一次，绝不静默丢资产）。
 - **黑名单的语义边界**：过滤发生在**入库前**，所以它**不影响已入库的历史资产**（老任务里的域名照旧可见），
   也不会因为后来把某域名加入黑名单就把既有行删掉。文件是纯文本、每次调用重读（改完立即生效，无需重启）。
 - **重叠隐藏是"显示层"判据，不是删除**：`OVERLAP_EXT_WHERE`（拓展域名域名级全局）与

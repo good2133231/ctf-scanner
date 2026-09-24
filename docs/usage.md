@@ -243,7 +243,8 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
      单 IP 域名上限 / 并发 / 超时）与 `fofa`（favicon 反查开关 / 站点上限 / 资产上限 /
      并发 / 黑 ico 阈值 / **证书反查子开关 `cert_enabled`** / **通用证书阈值 `cert_threshold`** /
      **每任务最多查几个注册域 `max_cert_queries`** / **标题反查子开关 `title_enabled`** /
-     **公共标题阈值 `title_threshold`** / **每任务最多查几个标题 `max_title_queries`**）—— **默认关闭**，且 iprecon 与 fofa
+     **公共标题阈值 `title_threshold`** / **每任务最多查几个标题 `max_title_queries`** /
+     **标题反查归属相关性 `title_match`（`label`＝label 完全相等 / `substring`＝子串匹配）**）—— **默认关闭**，且 iprecon 与 fofa
      都关时整个 `osint` 阶段一次请求都不发。接口地址留空即用默认的 `api.webscan.cc`；
      FOFA 的 email/key 不在这里填（见 `config/keys.yaml`）；
    - **用户黑名单**（`blacklist`）：显示黑名单文件路径（**相对路径**）、总开关与**当前条目列表**，

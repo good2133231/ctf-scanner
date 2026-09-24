@@ -1,6 +1,6 @@
 # JS 挖掘的第三方域名单（命中即视为噪声，不纳入资产）
 # 来源：本项目原有内置清单 + URLFinder「含过滤规则版」config.yaml 的 jsFiler
-# 共 267 条；一行一个域名后缀，`#` 注释；可直接手工增删（改完立即生效）
+# 共 287 条（续22 追加 20 条：用户真实数据里的第三方域名 + 同类常见缺失）；一行一个域名后缀，`#` 注释；可直接手工增删（改完立即生效）
 cloudflare.com
 bytedance.com
 segment.com
@@ -268,3 +268,24 @@ reddit.com
 wandoujia.com
 livechatinc.com
 direct.lc.chat
+# 续22 追加：用户真实数据里出现的第三方域名 + 同类常见缺失（黑名单永远不可能穷尽）
+reactjs.org
+react.dev
+vuejs.org
+angular.io
+svelte.dev
+esm.sh
+skypack.dev
+etherscan.io
+polygonscan.com
+bscscan.com
+solscan.io
+tronscan.org
+metamask.io
+walletconnect.com
+infura.io
+api.qrserver.com
+cloudflareinsights.com
+capacitorjs.com
+debox.pro
+pong-pengo.de

@@ -256,6 +256,11 @@
     <label>公共标题阈值（命中数超过该值 = 一搜一大堆的通用标题，放弃拓展）
       <input name="fofa_title_threshold" value="{{ s.fofa.title_threshold }}"></label>
     <label>每任务最多反查几个标题 <input name="fofa_max_title_queries" value="{{ s.fofa.max_title_queries }}"></label>
+    <label>标题反查的归属相关性（挡掉"标题里恰好含同一子串"的无关域名）
+      <select name="fofa_title_match">
+        <option value="label" {{ 'selected' if s.fofa.title_match != 'substring' }}>label：标题词与域名某段完全相等（默认，最严）</option>
+        <option value="substring" {{ 'selected' if s.fofa.title_match == 'substring' }}>substring：标题词是域名的子串（宽松，回退/对照用）</option>
+      </select></label>
 
     <h2>Shodan / Quake favicon 反查（同一批 mmh3，换一家平台）</h2>
     <p class="muted">与 FOFA 的 favicon 反查<b>同构</b>：三家的指纹都是 MurmurHash3

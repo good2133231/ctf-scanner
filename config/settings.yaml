@@ -119,6 +119,8 @@ fofa:
   title_enabled: true
   title_threshold: 200
   max_title_queries: 10
+  # 标题反查的归属相关性过滤：label（默认，标题 token == 域名 label）/ substring（回退，子串）
+  title_match: label
 ssrf:
   # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token，收到回连即判"服务端会出网"。
   # 只在目标能回访扫描机时有效（NAT/云主机大概率收不到）；callback_base 留空 = 用本机监听地址

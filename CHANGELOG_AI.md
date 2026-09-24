@@ -3,6 +3,62 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续22：拓展域名降噪三件套（jsmine PSL 校验 / 第三方清单 / FOFA 标题归属相关性）
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+用户从 GUI「拓展域名」页拷来一批"JS 挖掘"来源的资产，发现里面混着**不是域名**的串
+（`wallet.filter.withdraw` / `wallet.filter.upgrade` / … / `react.transitional.element` /
+`react.client.reference` / `i.test`）、**第三方公共库/CDN**（`reactjs.org` / `react.dev` /
+`bscscan.com` / `solscan.io` / `api.qrserver.com` / `capacitorjs.com` / `debox.pro` /
+`cloudflareinsights.com` / `static.cloudflareinsights.com` / `pong-pengo.de`），以及 FOFA
+**标题反查**带回来的**无关域名**（`silviapengo.com` / `pengowireline.com` / `gkops.net` /
+`yulw.cn` 等 —— 只是标题里恰好含同一子串）。根因：整条链只有**形态判断**，没有**公共后缀校验**；
+标题反查也没有**归属相关性**判定。三件事分别修：
+
+### A) jsmine 加公共后缀（PSL）校验
+- 新增 `tools/import_tlds.py`：从 `tldextract` 的**内置快照**（`TLDExtract(suffix_list_urls=())`，
+  **离线、绝不联网**）导出 `config/dicts/tlds.txt`（**6423 条**，含 `co.uk` / `com.cn` / `ac.uk`
+  等多段后缀，一行一个）。`tldextract` 只作**生成期可选依赖**，**不进 requirements.txt**。
+- `scanner/jsmine.py`：`_valid_host()` 的末位 label 判断由"`[a-z]{2,24}`"改为**必须命中公共后缀**
+  （`_public_suffixes()` 读文件缓存 / `_has_public_suffix()` 按"末尾 N 个 label 拼起来"从长到短匹配，
+  故 `foo.co.uk` 的 `uk` 不再是唯一判据）。**fail-open**：文件缺失/为空 → 回退旧的宽松判断，
+  并 `_warn_missing_tlds()` **只告警一次**（绝不静默丢资产）。
+- 证伪（旧代码 `bbec7f0`）：4 个假域名 **4/4 全被接受**（`_valid_host` 全 True）。
+
+### B) `config/dicts/js_thirdparty.txt` 补第三方域名（纯数据，零代码）
+- 追加 20 条（含用户数据里的 9 条 + 常用库/CDN/链上浏览器）：`reactjs.org` / `react.dev` /
+  `bscscan.com` / `solscan.io` / `cloudflareinsights.com` / `api.qrserver.com` / `capacitorjs.com` /
+  `debox.pro` / `pong-pengo.de` …；清单 **267 → 287** 条。
+- 匹配是"**相等或 `.suffix`**"（`jsmine._is_noise`），所以 `static.cloudflareinsights.com` 结尾是
+  `.cloudflareinsights.com` —— `cloudflare.com` **拦不住**它，必须 `cloudflareinsights.com` 单独成行。
+- 证伪（旧清单）：9 条目标域名 **9/9 全缺**、`_is_noise("static.cloudflareinsights.com")` = **False**。
+
+### C) FOFA 标题反查加"归属相关性"过滤
+- `scanner/stages/osint.py`：新增 `_title_tokens()`（标题按非字母数字切 token、去停用词与纯数字）
+  与 `_title_relevant(title, domain, mode)`；`_fofa_title()` 在 `found.append` 前按相关性过滤，
+  并统计 `相关性过滤掉 N 条`。**默认档 `label`**：至少一个 token 与域名某个 label **完全相等**；
+  `substring`：旧的子串匹配（回退/对照）。切不出 token（纯中文）→ **fail-open 保留**。
+- **不动 `_domain_of()`**（favicon / 证书 / 标题 / C 段共用的收口）。
+- 新开关 `fofa.title_match`（默认 `label`）**三方一致**：`scanner/config.py` DEFAULTS /
+  `config/settings.yaml` / GUI「策略配置 → 外部情报拓展」表单 + `gui/app.py` POST 映射。
+- 证伪（旧 osint，端到端）：9 条资产 **9/9 全入库**（`silviapengo.com` / `gkops.net` / `yulw.cn` 都在）。
+
+### 改动文件
+- 新增：`tools/import_tlds.py`、`config/dicts/tlds.txt`（生成物）。
+- 代码：`scanner/jsmine.py`、`scanner/stages/osint.py`、`scanner/config.py`、`gui/app.py`、
+  `gui/templates/settings.html`、`config/settings.yaml`、`config/dicts/js_thirdparty.txt`（纯数据）。
+- 文档：`AGENTS.md`（§3 地图 / §4 数据流 / §6 smoke 清单 / §7 局限）、`docs/pipeline.md`、
+  `docs/usage.md`、`NOTICE.md`（登记 tlds.txt 来源 PSL / MPL-2.0）、`CHANGELOG_AI.md`（本条）。
+- 测试：`tests/smoke.py` 新增 `[6k]`（A/B/C 单元 + C 端到端 + 开关三方一致）。
+
+### 验证
+- `py -3 tests/smoke.py` → `SMOKE PASS`（`[6k]` 通过）。
+- A/B/C 证伪实测数字见上（旧代码下"拒绝"断言真的失败）。
+- 行尾：全部新/改文件 CRLF；`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 完全一致
+  （无行尾-only 改动）。
+- 默认路径不变：`example.com` / `a.b.example.com.cn` / `foo.co.uk` / `x.io` / `sub.target.co.jp`
+  仍被 `_valid_host` 接受。
+
 ## 2026-09-24 —— 续21-fix：修正 `[6h]` 证伪声明措辞 + `gate_for` 登记"锁内日志"前提（纯注释/文档）
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 

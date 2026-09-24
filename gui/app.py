@@ -1242,7 +1242,9 @@ def create_app():
                              "title_threshold": int(
                                  f.get("fofa_title_threshold", 200) or 200),
                              "max_title_queries": int(
-                                 f.get("fofa_max_title_queries", 10) or 10)},
+                                 f.get("fofa_max_title_queries", 10) or 10),
+                             # 标题反查的归属相关性：label（默认）/ substring（回退）
+                             "title_match": (f.get("fofa_title_match") or "label")},
                     # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token
                     "ssrf": {"enabled": f.get("ssrf_enabled") == "1",
                              # 留空 = 用本机监听地址；填了外部基址后本模块读不到命中，
