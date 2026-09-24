@@ -363,14 +363,21 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 
 改动后**必须**跑 `tests/smoke.py`；GUI/模板改动还应 `run_gui.py` 亲眼确认页面。
 
-> **弹「删除」确认是正常的，不是脚本在删你的数据**：`tests/smoke.py` 会在 `logs/` 下用
-> `tempfile.mkdtemp(prefix="smoke-")` 造一个隔离沙箱（库与任务目录都指进去，见文件头 21–33 行），
-> 跑完靠 `atexit` 里的 `shutil.rmtree` 自清。沙箱/杀软的 safe-delete 守卫按**每轮累计删除条目数**
-> 计数（实测提示 `{"count":50,"threshold":50,"scope":"turn","targetCount":1}` —— 一个目标目录里
-> 有 50 个条目），到阈值就弹确认；而 `ignore_errors=True` 把"被拦"变成**静默失败**，于是
-> `logs/smoke-*` 会攒下来（本机攒到过 56 个 / 12 MB）。
-> **它只删自己刚造的那一个目录**，不碰 `data/scanner.db`，也不碰 `logs/task_*`；残留本身是纯垃圾
-> （`logs/` 已在 `.gitignore`），定期手删 `logs/smoke-*` 即可，不必为此改脚本。
+> **`logs/smoke-*` 是什么**：`tests/smoke.py` 会在 `logs/` 下用
+> `tempfile.mkdtemp(prefix="smoke-")` 造一个隔离沙箱（库与任务目录都指进去，见文件头 30–101 行），
+> 跑完靠 `atexit` 删掉。**它只碰自己刚造的那一个目录**，不碰 `data/scanner.db`、不碰 `logs/task_*`。
+>
+> **残留从哪来（2026-09-24 实测更正）**：以前这里写的是「safe-delete 守卫拦截 + `ignore_errors=True`
+> 静默失败」，**已被实测证伪** —— 脚本单次 `shutil.rmtree` 删掉 70 个条目一次成功，守卫并不拦
+> Python 的删除；且正常跑完前后 `logs/smoke-*` 数量不变（`120 → 120`）。真实原因是**被强杀的运行**
+> （SIGTERM / 命令超时 / 手动中断）里 `atexit` 根本没机会执行 —— 任何「退出时清理」都挡不住 SIGKILL。
+> 本机攒到过 **120 个 / 21.8 MB / 7770 个条目**。
+>
+> **现在的兜底（自愈）**：`smoke.py` 启动时清扫 `logs/` 下**超过 60 分钟**没被触碰过的 `smoke-*`
+> 目录，删不掉时**明说**（不再用 `ignore_errors=True` 静默吞异常）。60 分钟下限是为了不误删
+> **并发运行**中的另一个沙箱（运行期间会不断写它，mtime 一直是新的）。回归见 `[6o]`。
+> 因此看到 `[清扫] logs/ 历史残留沙箱：删除 N 个` 是正常的自愈动作；残留也可以随时手删
+> （`logs/` 已在 `.gitignore`）。
 
 ### 6.1 修 bug 时，必须证明新断言**在旧代码下会挂**（2026-09-24 立的规矩）
 

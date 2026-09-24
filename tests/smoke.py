@@ -12,6 +12,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -27,10 +28,77 @@ sys.path.insert(0, str(ROOT))
 # 注意：临时目录刻意放在项目**内部** —— `rel_display()` 只能把项目内的路径显示成相对路径，
 # 放到系统临时目录反而会让页面显示出绝对路径（那就测不出"路径相对化"了）。
 (ROOT / "logs").mkdir(exist_ok=True)
+
+
+# ---- 沙箱残留的自愈清扫（2026-09-24 加）----
+# 正常跑完由 atexit 删除，实测是干净的（跑一次前后 `logs/smoke-*` 数量不变）。
+# 残留**只来自被强杀**的运行：SIGTERM / 命令超时 / 手动中断时 atexit 根本没有机会执行。
+# （旧注释把原因写成"safe-delete 守卫拦截 + ignore_errors 静默失败"，已被实测**证伪**：
+#  脚本单次 rmtree 删掉 70 个条目一次成功，守卫并不拦 Python 的删除。详见 CHANGELOG「续27」。）
+# 任何"退出时清理"方案都挡不住 SIGKILL，所以这里补一条**下次运行自动清扫**的兜底：
+# 删掉 `logs/` 下超过 `_SWEEP_MIN_AGE` 秒没被触碰过的 `smoke-*` 目录。
+# 之所以要 60 分钟下限：并发的另一个 smoke 运行期间会不断写自己的沙箱，mtime 一直是新的，
+# 不会被误删。
+_SWEEP_MIN_AGE = 3600.0
+
+
+def _sweep_stale_sandboxes(base: Path, now: float, min_age: float = _SWEEP_MIN_AGE,
+                           skip: Path = None) -> list:
+    """清扫 ``base`` 下过期的 ``smoke-*`` 残留沙箱，返回被删目录名列表。
+
+    只碰 ``smoke-`` 前缀的**目录**：不碰 ``data/scanner.db``、不碰 ``logs/task_*`` 与真实任务日志。
+    单个目录删不掉（Windows 句柄占用等）就跳过，**绝不因为清扫失败而让测试挂**。
+    """
+    swept = []
+    failed = []
+    if not base.is_dir():
+        return swept
+    for entry in sorted(base.iterdir()):
+        if not entry.is_dir() or not entry.name.startswith("smoke-"):
+            continue
+        if skip is not None and entry == skip:
+            continue
+        try:
+            if now - entry.stat().st_mtime < min_age:
+                continue            # 太新：可能是并发运行中的沙箱，别动
+        except OSError:
+            continue
+        try:
+            shutil.rmtree(entry)
+            swept.append(entry.name)
+        except OSError:
+            failed.append(entry.name)
+    if swept or failed:
+        print("[清扫] logs/ 历史残留沙箱：删除 %d 个%s"
+              % (len(swept), ("，%d 个删除失败（下次再试）" % len(failed)) if failed else ""))
+    return swept
+
+
+_sweep_stale_sandboxes(ROOT / "logs", now=time.time())
+
 _TMPDIR = Path(tempfile.mkdtemp(prefix="smoke-", dir=str(ROOT / "logs")))
 os.environ["CTFSCANNER_DB"] = str(_TMPDIR / "scanner.db")
 os.environ["CTFSCANNER_LOGS"] = str(_TMPDIR)
-atexit.register(lambda: shutil.rmtree(_TMPDIR, ignore_errors=True))
+
+
+def _cleanup_sandbox() -> None:
+    """退出时删掉本轮沙箱。
+
+    **不再静默吞异常**（原来写的是 ``shutil.rmtree(_TMPDIR, ignore_errors=True)``）：
+    清不掉就明说，否则残留会无声地一直攒（本机曾攒到 120 个 / 21.8 MB / 7770 个条目）。
+    路径按仓库约定用**相对路径**打印，且这条提示绝不影响测试结论。
+    """
+    if not _TMPDIR.exists():
+        return
+    try:
+        shutil.rmtree(_TMPDIR)
+    except OSError as exc:
+        rel = _TMPDIR.relative_to(ROOT).as_posix() if _TMPDIR.is_relative_to(ROOT) else _TMPDIR.name
+        print("[!] 本轮冒烟沙箱未删净（不影响测试结论）：%s —— %s" % (rel, exc))
+        print("    下次跑 smoke 会自动清扫 %d 分钟前的 logs/smoke-* 残留。" % int(_SWEEP_MIN_AGE // 60))
+
+
+atexit.register(_cleanup_sandbox)
 
 FIXTURE_PORT = 8765
 
@@ -4168,6 +4236,38 @@ workflows:
     print("[6n] 续23 主题配色门禁 ok: 四套主题 x %d 项配对（文字>=4.5:1 / UI 边界>=3:1）全达标，"
           "主题块外 0 处颜色字面量（tr:hover td / input / pre / .badge / .st-* / .sev-* 均已走变量）"
           % _pairs6n)
+
+    # [6o] 续27 沙箱残留自愈清扫：只删「够旧的 smoke-* 目录」，别的都不许碰。
+    #      用真目录 + 显式 mtime（不 sleep），四条边界一起验：旧的删、新的留、
+    #      非 smoke- 前缀留、作为「当前沙箱」传入的即便很旧也留。
+    _sw_base = _TMPDIR / "sweep-probe"
+    _sw_base.mkdir(parents=True, exist_ok=True)
+    _sw_now = 1_700_000_000.0          # 固定时间轴，避免依赖真实时钟
+    _sw_old = _sw_base / "smoke-old"
+    _sw_new = _sw_base / "smoke-fresh"
+    _sw_keep = _sw_base / "task_keep"          # 非 smoke- 前缀：绝不能删（真实任务日志长这样）
+    _sw_cur = _sw_base / "smoke-current"
+    for _sw_d in (_sw_old, _sw_new, _sw_keep, _sw_cur):
+        _sw_d.mkdir()
+    os.utime(_sw_old, (_sw_now - 7200, _sw_now - 7200))    # 2 小时前 → 该删
+    os.utime(_sw_new, (_sw_now - 10, _sw_now - 10))        # 10 秒前 → 太新，留
+    os.utime(_sw_keep, (_sw_now - 7200, _sw_now - 7200))   # 很旧但前缀不符，留
+    os.utime(_sw_cur, (_sw_now - 7200, _sw_now - 7200))    # 很旧但是本轮沙箱，留
+    _sw_got = _sweep_stale_sandboxes(_sw_base, now=_sw_now, skip=_sw_cur)
+    assert _sw_got == ["smoke-old"], f"清扫范围不对：应只删 smoke-old，实得 {_sw_got}"
+    assert not _sw_old.exists(), "过期 smoke-* 沙箱应被删掉"
+    assert _sw_new.exists(), "刚创建（10 秒前）的沙箱不得被删 —— 那是并发运行中的沙箱"
+    assert _sw_keep.exists(), "非 smoke- 前缀目录不得被删（真实任务日志就是 task_* 形态）"
+    assert _sw_cur.exists(), "作为当前沙箱传入的目录即便很旧也必须保留"
+    # 幂等：同参数（含同一个 skip）再扫一次不应再删任何东西
+    assert _sweep_stale_sandboxes(_sw_base, now=_sw_now, skip=_sw_cur) == [], \
+        "同参数下重复清扫不应再删任何东西（幂等）"
+    # 反面：不给 skip 时，那个「很旧的当前沙箱」确实会被删 —— 证明上一条不是靠"什么都没删"蒙对的
+    assert _sweep_stale_sandboxes(_sw_base, now=_sw_now) == ["smoke-current"], \
+        "去掉 skip 后，过期的同名前缀目录应被删（否则说明前一条断言没有区分度）"
+    assert not _sw_cur.exists()
+    print("[6o] 续27 沙箱残留自愈清扫 ok: 只删过期 smoke-*（2 小时前）/ 10 秒前的新沙箱保留"
+          "（并发保护）/ task_* 等非 smoke 前缀保留 / 当前沙箱保留 / 重复清扫幂等")
     print("SMOKE PASS")
 
 
