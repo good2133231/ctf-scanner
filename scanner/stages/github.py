@@ -50,8 +50,13 @@ class GithubStage(Stage):
 
         leads, meta = github_leak.collect(domains, ctx.settings,
                                           logger=ctx.logger, stopped=ctx.stopped)
+        # `error` 只装真失败（限流 / 401 / 网络不可达）；`capped` 是**设计内的上限收手**，
+        # 打 info —— 默认 max_domains=3 × 4 条规则 = 12 次潜在查询、上限 4，正常跑必触顶。
         if meta.get("error"):
             ctx.logger.warning(f"[github] {meta['error']}")
+        elif meta.get("capped"):
+            ctx.logger.info(f"[github] 已查满单任务上限 {meta.get('queries', 0)} 次"
+                            f"（github.max_queries），剩余查询未发出 —— 属设计上限，不是失败")
         if not leads:
             ctx.logger.info(f"[github] 检索 {meta.get('queries', 0)} 次，未命中（GitHub 报告共 "
                             f"{meta.get('hits', 0)} 条），未产生线索")

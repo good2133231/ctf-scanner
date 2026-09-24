@@ -3,6 +3,54 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续26-fix：接真实 token 后的真机验证 + 一处默认路径缺陷修复
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+用户 2026-09-25 提供真实 GitHub PAT，要求写入 `config/keys.yaml` 并**真机验证**。
+按"1 次查询 / 每条 1 条结果"的最小调用跑通了端到端（`github_leak.collect()` 真实命中
+`facebook/memlab:AI.md`），并用 GitHub 返回的限流头**实测**了配额口径。真机跑出一个
+默认路径上的缺陷，已修。
+
+### A. 实测到的限流口径（GitHub `/rate_limit`，2026-09-25）
+
+| 桶 | limit | 说明 |
+|---|---|---|
+| `core` | 5000 / 小时 | 普通 REST（含 `/user`） |
+| `search` | 30 / 分钟 | 一般搜索接口 |
+| `code_search` | **10 / 分钟** | **本阶段实际走的就是这个**（认证后 10 次/分钟，实测确认） |
+
+结论：**限制的是速率、不是总额度**。本阶段默认单任务 ≤ 4 次查询，用掉 10 次/分钟的 40%，
+等一分钟即可继续 —— 对"按任务触发"的用法完全够用（所以"不能长期使用"不成立；
+真正会撞墙的是"把它当常驻监控、持续抓取"）。另：响应头 `github-authentication-token-expiration`
+给出到期时间（本 token 为 2026-10-24），fine-grained PAT 建议**不勾任何 scope + 设短有效期**。
+
+### B. 修的缺陷：默认配置下「触顶」被当成错误打 warning
+
+- **根因**：`collect()` 在 `queries >= max_queries` 时写的是 `meta["error"]`
+  （"已达单任务查询上限…"），而阶段层对 `meta["error"]` 一律 `logger.warning`。
+  但默认 `max_domains=3` × 4 条规则 = **12 次潜在查询 > 上限 4** —— **正常跑必然触顶**，
+  于是每次正常运行都会打一条 warning：**把"设计内的收手"说成"出错了"**。
+- **影响**：日志噪声 + 误导（用户会以为 GitHub 检索失败）；`error` 非空还让"没命中"与
+  "没查完"两条分支的语义混在一起。
+- **为什么旧断言测不到**：`[6p]` 原本用 1 个域名跑 4 条规则，**正好等于上限**、外层循环自然结束，
+  `capped` 那条分支**一次都没被走到** —— 又一个"测了个寂寞"的范式。
+- **修复**：`collect()` 新增独立的 `meta["capped"]`（触顶不再写 `error`）；
+  阶段层 `capped` 打 info、`error` 才打 warning。
+- **回归断言**（`tests/smoke.py [6p]` 新增 4b 组）：`max_queries=1` + 2 个域名 →
+  `(queries, error, capped) == (1, "", True)`、**实发 1 次请求**、且**触顶前那次查询的命中必须保留**
+  （触顶只停后续查询，不丢已有结果）。
+- **实现变异证伪**：把 `capped = True` 改回 `err = "MUTATION: …"` →
+  smoke 在 `tests/smoke.py:4464` 按预期挂掉；还原后复跑 **SMOKE PASS**。
+
+### C. 凭据落位与安全边界
+
+- token 写入 `config/keys.yaml` 的 `github.token`。该文件**未被 git 跟踪**，且被 `.gitignore:15`
+  忽略（已用 `git ls-files --error-unmatch` + `git check-ignore -v` 复核）；
+  **本仓库是公开仓库**，凭据一旦误提交即等于公开 —— 故仓库内**任何**文档/代码都不得出现 token 明文。
+- ⚠️ **该 token 已出现在聊天记录里（等于已披露）**，已提示用户使用后到 GitHub 轮换 / 重置。
+- 真机验证消耗额度：`/rate_limit` 与 `/user` 各 1 次（core 桶）、代码搜索 2 次。
+
+
 ## 2026-09-24 —— 续26：GitHub 泄露检索（最小形态）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

@@ -195,15 +195,18 @@ def collect(domains, settings, logger=None, stopped=None):
     规则名并进 `matched`（`db.insert_leads` 的去重键是 `(kind, code, target)`，
     `code` 就是 `仓库:路径`，所以合并必须在这里做完，否则后面的规则会被静默丢掉）。
 
-    `meta` = `{"queries", "hits", "error"}`：
+    `meta` = `{"queries", "hits", "error", "capped"}`：
     - `queries` 实际发出的请求数（**没 token 时为 0**）；
     - `hits` GitHub 报告的命中总数（`total_count` 累加，不是我们取回的条数）；
-    - `error` 空串表示正常；非空是"可直接展示给用户"的原因，**不是异常**。
+    - `error` 空串表示正常；非空是"可直接展示给用户"的原因，**不是异常**；
+    - `capped` 为 True 表示**因 `max_queries` 上限主动收手** —— 这是**设计内的行为，
+      不是错误**（默认 `max_domains=3` × 4 条规则 = 12 次潜在查询，而上限是 4，
+      所以正常跑就一定会触顶），调用方应据此打 info 而不是 warning。
     """
     cfg = (settings or {}).get("github", {}) or {}
     token = load_token(settings)
     if not token:
-        return [], {"queries": 0, "hits": 0,
+        return [], {"queries": 0, "hits": 0, "capped": False,
                     "error": "未配置 github.token（见 config/keys.yaml）——"
                              "GitHub 代码搜索接口要求认证，已跳过（一次请求都不发）"}
 
@@ -222,12 +225,16 @@ def collect(domains, settings, logger=None, stopped=None):
                "X-GitHub-Api-Version": "2022-11-28"}
 
     bucket, hits_total, queries, err = {}, 0, 0, ""
+    capped = False
     for rule in SEARCH_RULES:
         if err:
             break                      # 已经是"致命原因"（限流 / 认证失败 / 网络不可达），不再发请求
         for domain in domains:
             if queries >= max_queries:
-                err = f"已达单任务查询上限 github.max_queries={max_queries}，后续查询未发出"
+                # 上限触顶是**设计内的收手**，不是失败：默认 max_domains=3 × 4 条规则
+                # = 12 次潜在查询 > 默认上限 4，正常跑就一定在这里停住。故不进 `error`
+                # （否则每次正常运行都会打一条 warning，把"正常"说成"出错"）。
+                capped = True
                 break
             if stopped and stopped():
                 err = "任务已请求停止，后续查询未发出"
@@ -263,7 +270,8 @@ def collect(domains, settings, logger=None, stopped=None):
                 err = ("GitHub 配额已用尽（X-RateLimit-Remaining=0），"
                        "等配额重置后再跑，或调小 github.max_queries")
                 break
-    return _leads_from(bucket), {"queries": queries, "hits": hits_total, "error": err}
+    return _leads_from(bucket), {"queries": queries, "hits": hits_total,
+                                 "error": err, "capped": capped}
 
 
 def target_domains(targets, max_domains=DEFAULT_MAX_DOMAINS):

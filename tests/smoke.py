@@ -4450,6 +4450,21 @@ workflows:
     # `q` 必须整体 percent 编码：引号 / `filename:.env` 的冒号不编码会被 GitHub 直接 422
     assert "%22example.com%22" in _req6p[0][0], _req6p[0][0]
     assert "per_page=30" in _req6p[0][0], _req6p[0][0]
+    # 4b) 触顶（`max_queries` 上限）是**设计内的收手**，不得混进 `error`：默认
+    #     max_domains=3 × 4 条规则 = 12 次潜在查询 > 上限 4，**正常跑必然触顶**；
+    #     若把它塞进 error，阶段层就会在每次正常运行里打 warning（把"正常"说成"出错"）。
+    _req6p.clear()
+    _cap6p_set = {"github": {"enabled": True, "max_queries": 1, "per_page": 30},
+                  "keys": {"github": {"token": "ghp_FAKEtoken"}}}
+    gh_mod.http_request = _gh_http6p
+    try:
+        _l6p_cap, _m6p_cap = gh_mod.collect(["a.example", "b.example"], _cap6p_set)
+    finally:
+        gh_mod.http_request = _orig_req6p
+    assert (_m6p_cap["queries"], _m6p_cap["error"], _m6p_cap["capped"]) == (1, "", True), _m6p_cap
+    assert len(_req6p) == 1, _req6p
+    assert _l6p_cap, "触顶前那次查询的命中必须保留（触顶只是停止后续查询，不是丢弃结果）"
+    _req6p.clear()
     # 5a) 合并：(域名, 仓库, 路径) 唯一的命中只出一条 —— 四条规则都命中同一份文件时全靠这步收敛，
     #     否则 db.insert_leads 只认首条，后面的规则会被**静默丢掉**
     assert [x["code"] for x in _leads6p] == ["acme/app:conf/app.yaml", "acme/infra:.env"], \
