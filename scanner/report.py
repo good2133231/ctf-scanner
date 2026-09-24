@@ -18,6 +18,24 @@ SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 REVIEW_LABEL = {"": "待复核", "confirmed": "已确认", "false_positive": "误报"}
 
 
+def _cert_source(row):
+    """证书行的来源标签：`ct` = 公开 CT 日志（crt.sh），其余 = 本次真实 TLS 握手。
+
+    `db.list_certs()` 返回的是 `sqlite3.Row`，**没有 `.get()`**（本文件其它处踩过同类坑），
+    所以这里先按下标取、取不到再退回 dict 形态，不能只写 `row.get(...)`。
+    """
+    src = ""
+    try:
+        if "source" in row.keys():
+            src = row["source"] or ""
+    except (AttributeError, IndexError, TypeError):
+        try:
+            src = (row or {}).get("source") or ""
+        except (AttributeError, TypeError):
+            src = ""
+    return "CT 日志" if str(src) == "ct" else "TLS 握手"
+
+
 def _c(value):
     """Markdown 表格单元格转义：`|` 转义成 `\\|`，换行/回车压成空格。
 
@@ -132,12 +150,19 @@ def generate(task_id):
         lines.append("> 一次只读 TLS 握手的取证结果：握手**不校验证书**，因此"
                      "「自签 / 已过期」是证书本身的属性，不等于漏洞。")
         lines.append("")
-        lines.append("| 主机 | 端口 | CN | 颁发者 | 有效期 | 剩余 | 自签 | 签名算法 | 指纹(SHA256) |")
-        lines.append("|---|---|---|---|---|---|---|---|---|")
+        lines.append("> 「来源」列区分两件事：**TLS 握手**＝本次真的连上去取到的证书；"
+                     "**CT 日志**＝公开证书透明度日志里与该域名相关的历史证书"
+                     "（开关 `ctlog.enabled`，默认关）—— 后者是线索，不等于"
+                     "「目标此刻在用这张证书」。")
+        lines.append("")
+        lines.append("| 来源 | 主机 | 端口 | CN | 颁发者 | 有效期 | 剩余 | 自签 | 签名算法 |"
+                     " 指纹(SHA256) |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
         for c in certs[:200]:
             left = ("已过期" if c["expired"] else
                     (f"{c['days_left']} 天" if c["days_left"] is not None else "-"))
-            lines.append(f"| {_c(c['host'])} | {_c(c['port'])} | {_c(c['cn'] or '-')} | "
+            lines.append(f"| {_c(_cert_source(c))} | {_c(c['host'])} | {_c(c['port'])} | "
+                         f"{_c(c['cn'] or '-')} | "
                          f"{_c(c['issuer'] or '-')} | "
                          f"{_c((c['not_before'] or '-') + ' → ' + (c['not_after'] or '-'))} | "
                          f"{_c(left)} | {_c('是' if c['self_signed'] else '-')} | "
@@ -308,10 +333,16 @@ def generate_html(task_id):
     if certs:
         p.append("<h2>TLS 证书（取证，非漏洞结论）</h2>")
         p.append('<div class="note">一次只读 TLS 握手的取证结果：握手<b>不校验证书</b>，因此'
-                 "「自签 / 已过期」是证书本身的属性，不等于漏洞。</div>")
+                 "「自签 / 已过期」是证书本身的属性，不等于漏洞。<br>"
+                 "「来源」列区分：<b>TLS 握手</b>＝本次真的连上去取到的证书；"
+                 "<b>CT 日志</b>＝公开证书透明度日志里与该域名相关的历史证书"
+                 "（开关 <code>ctlog.enabled</code>，默认关）—— 后者是线索，不等于"
+                 "「目标此刻在用这张证书」。</div>")
         p.append(_html_table(
-            ["主机", "端口", "CN", "颁发者", "有效期", "剩余", "自签", "签名算法", "指纹(SHA256)"],
-            [[_h(c["host"]), _h(c["port"]), _h(c["cn"] or "-"), _h(c["issuer"] or "-"),
+            ["来源", "主机", "端口", "CN", "颁发者", "有效期", "剩余", "自签", "签名算法",
+             "指纹(SHA256)"],
+            [[_h(_cert_source(c)), _h(c["host"]), _h(c["port"]), _h(c["cn"] or "-"),
+              _h(c["issuer"] or "-"),
               _h((c["not_before"] or "-") + " → " + (c["not_after"] or "-")),
               _h("已过期" if c["expired"] else
                  (f"{c['days_left']} 天" if c["days_left"] is not None else "-")),

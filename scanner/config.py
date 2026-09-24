@@ -247,6 +247,54 @@ DEFAULTS = {
         "title_threshold": 200,
         "max_title_queries": 10,   # 每任务最多反查多少个站点标题（省配额）
     },
+    "ssrf": {
+        # A10 SSRF 受控回连（**默认关**）：任务内起一个本机 HTTP 回连监听，把
+        # `http://<回调基址>/<token>` 喂给候选参数，收到该 token 的访问即判定
+        # "目标服务端会发起出网请求"。详见 `scanner/ssrf.py` 文件头。
+        # **只在目标能回访扫描机时才有效** —— NAT / 云主机场景大概率一条都收不到。
+        "enabled": False,
+        # 外部可达的回调基址（自建 OOB 服务 / 反向代理）。**留空 = 用本机监听地址**。
+        # 填了之后本模块读不到那侧的命中，因此只注入、不报命中（宁可不报也不谎报），
+        # 注入过的 token 会写进任务日志供你在那侧核对。
+        "callback_base": "",
+        "host": "127.0.0.1",   # 本机监听地址
+        "port": 0,             # 0 = 交给系统分配（避免与本机服务抢端口）
+        "wait_seconds": 6.0,   # 注入完成后等回连的秒数（期间不再向目标发请求）
+        "max_params": 12,      # 每个 URL 最多注入多少个候选参数
+    },
+    "shodan": {
+        # Shodan favicon 反查（`http.favicon.hash:<mmh3>`，与 FOFA 同一个哈希键，
+        # 见 `scanner/mmh3.py`）。需 config/keys.yaml 填 shodan.key；
+        # **默认关** —— 任何外部接口都不该在用户没点头时产生流量。
+        "enabled": False,
+        "max_sites": 30,           # 每任务最多对多少个站点算 favicon 并反查
+        "max_assets": 100,         # 单个 favicon 最多取回多少条资产
+        "workers": 5,
+        "black_ico_threshold": 200,  # 命中数超过该值 → 公共图标，放弃拓展
+    },
+    "quake": {
+        # 360 Quake favicon 反查（`favicon: "<mmh3>"`）。需 config/keys.yaml 填 quake.key；
+        # **默认关**。结构与 shodan 段一致（POST + X-QuakeToken 头，见 scanner/quake.py）。
+        "enabled": False,
+        "max_sites": 30,
+        "max_assets": 100,
+        "workers": 5,
+        "black_ico_threshold": 200,
+    },
+    "ctlog": {
+        # 证书透明度（CT）日志在线查询（crt.sh，**免 key** 但属外部接口 → **默认关**）。
+        # 产出**证书维度**记录（签发者 / 有效期 / 序列号 / 涉及的域名 / CT 条目数），
+        # 字段口径与 `scanner/certs.py` 对齐，可直接进「SSL 证书」页签（source=ct）；
+        # 顺带把这些证书覆盖的域名当作拓展域名来源。
+        # 与 passive.py 的 crt.sh（只取主机名做子域收集）、certs.py（真握手取线上证书）
+        # 是三件不同的事，区别写在 `scanner/ctlog.py` 文件头。
+        "enabled": False,
+        "max_domains": 10,         # 单任务最多查几个域名（每个域名一次请求，别把 crt.sh 打挂）
+        "max_records": 50,         # 单域名最多收多少张证书记录
+        "max_domains_per_cert": 50,  # 单张证书最多保留多少个域名（大证书 SAN 有几百条）
+        "timeout": 25,             # 单次查询超时（crt.sh 很慢，别设太短）
+        "write_certs": True,       # 是否把证书维度记录写进 certs 表（source='ct'）
+    },
     "blacklist": {
         # 用户黑名单：命中的域名不入资产库，因此也不会被 dirscan/vulnscan 扫到。
         # 文件是纯文本（一行一个域名，含其所有子域），可手工编辑；GUI 支持批量加入/移除。

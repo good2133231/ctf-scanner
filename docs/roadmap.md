@@ -21,11 +21,26 @@
       关联域名（JS 挖掘 / C 段 / favicon 反查）与目标自身子域名**分页展示**（「拓展域名」/「子域名资产」）；
 - [x] **FOFA 三种反查齐活**（第十五轮）：favicon（`icon_hash`）/ 证书（`cert="domain"`）/ **标题**（`title="xxx"`），
       三者都有"命中过多即放弃拓展"的黑名单阈值（黑 ico / 通用证书 / 公共标题），模板页标题连查询都不发；
-- [ ] **favicon 反查的姊妹能力**：Shodan / Quake 的 favicon 反查（同一 mmh3 键已具备，只差各自 API 客户端）；
+- [x] **favicon 反查的姊妹能力**（续18）：Shodan（`scanner/shodan.py`，`http.favicon.hash:<mmh3>`）
+      与 360 Quake（`scanner/quake.py`，`favicon: "<mmh3>"`，POST + `X-QuakeToken`）各自一个文件，
+      与 `fofa.py` **同构照抄**（刻意不抽公共基类）；`shodan.enabled` / `quake.enabled` **默认关**，
+      无 key 时显式返回"未配置 …（见 config/keys.yaml）"且**一个请求都不发**；
+      沿用"命中过多即放弃拓展"的黑 ico 阈值；结果走 `osint._domain_of()` 收口（**裸 IP 不进资产库**）；
+
 - [x] **站点证书取证**（续15）：一次只读 TLS 握手 + **纯标准库** ASN.1/DER 解析（`scanner/certs.py`），
       产出 CN / 颁发者 / 有效期 / 剩余天数 / 是否自签 / 签名算法 / SAN / 指纹 → `certs` 表 +
       任务详情「SSL 证书」页签 + 报告小节（`cert` 阶段，**默认关**，可在任务级点名）；**不校验证书**。
-      *未做*：**CT 日志（crt.sh）在线查询** —— 属外部接口，与 Shodan/Quake 反查一起排在后续批次；
+      续18 起页签与报告都带**来源列**（`TLS 握手` vs `CT 日志`），两类记录不会被混着看；
+- [x] **CT 日志（crt.sh）在线查询**（续18）：`scanner/ctlog.py` 查
+      `https://crt.sh/?q=<域>&output=json`，产出**证书维度**记录（签发者 / 生效失效时间 / 序列号 /
+      CT 条目数 / 涉及域名），字段口径与 `certs.py` 对齐 → 写进 `certs` 表（`source='ct'`）并进
+      「SSL 证书」页签；这些域名同时作拓展域名来源（`osint:ctlog`）。
+      **免 key 但属外部接口 → 默认关**（`ctlog.enabled=false`）；走 `utils.http_request` 且
+      **`auth=False`**（第三方绝不带登录态）；crt.sh 的非 JSON / 429 限流 / 超时一律容错
+      （记一行日志继续跑，不让阶段挂掉）；`name_value` 的通配符 `*.x` 剥掉 `*.` 并单独标记
+      （**绝不把 `*` 写进资产库**）。它与 `passive.py` 的 crt.sh（只取主机名做子域收集）、
+      `certs.py`（真握手取线上证书）、FOFA 的 `cert=`（拿证书反查共用资产）是**四件不同的事**，
+      区别写在 `scanner/ctlog.py` 文件头；
 - [x] **截图取证**（第十五轮）：无头浏览器（本机 Edge/Chrome，`--headless=new`）对存活站点截图，
       **默认关闭**（`screenshot.enabled`），截图落在任务目录并在站点页 URL 旁显示缩略图；
       浏览器路径探测见 `scanner/screenshot.py`（配置 → PATH → 注册表 → 标准安装位置，无硬编码绝对路径）；
@@ -35,13 +50,31 @@
 
 ## 检测深化
 
-- [ ] A10 SSRF 受控回连（内置 DNS/HTTP 回连服务，判定出网行为）；
-- [ ] XSS 上下文分析（当前仅未编码回显信号）；
+- [x] **A10 SSRF 受控回连**（续18）：`scanner/ssrf.py` + 检查项 `a10-ssrf-callback`（high）。
+      任务内起一个**本机** HTTP 回连监听（`127.0.0.1`，端口 0 由系统分配），每参数一个唯一 token，
+      把 `http://<回调基址>/<token>` 注入候选参数（参数名来自 URL 查询串 + 页面表单字段名 + 内置清单），
+      收到该 token 的访问即判"**目标服务端会发起出网请求**"。
+      **默认关**（`ssrf.enabled`）；`ssrf.callback_base` 留空＝本机监听地址，填了外部 OOB 时
+      **读不到命中 → 只注入不报，绝不伪造**；监听端口用完即关（`finally`）。
+      **刻意不做**：不打内网地址（那属于利用，越线）、不提交表单（可能是写操作）、不做延时判定。
+      **局限**：只在目标能回访扫描机时有效，NAT / 云主机场景大概率一条都收不到 —— 见 AGENTS.md §7；
+      只做 **HTTP 回连**，**未做** DNS 回连（需要自有域名与 NS 托管，属部署前置条件，暂不排期）；
+- [x] **XSS 上下文分析**（续18）：`a03-xss-reflect` 不再一律 medium —— 判回显上下文（文本节点 /
+      双引号属性 / 单引号属性 / 无引号属性 / `<script>` 内 JS 字符串 / JS 代码 / 标签名 / HTML 注释）
+      并按上下文定级（JS 与无引号属性→high；引号属性与文本节点→medium；HTML 注释→降级为 low）。
+      补了 1 条"上下文探针"（标记串 + `"'<>`）看哪些定界符**活着回来** ——
+      大量站点只转义 `<` `>` 却留下引号，那正是属性注入最常成立的场景，旧逻辑整片漏报。
+      请求预算**不变**（仍是 `_XSS_MAX_REQ=20`），`poc_id` 不变；**全转义的回显一律不报**；
 - [~] POC 引擎补齐 nuclei 常用语义：`payloads` 池变量与 `extractors`（regex/kval）已实现；
       `raw` / `flow`（布尔子集）/ `workflows`（子模板编排）已于第十七轮落地，见 docs/poc-guide.md；
       仍缺 `dsl` 表达式、oob 反连、flow 的 JS/循环、workflow 的 `subtemplates`/`args`
       ——这类模板（或未实现子项）被标 `unsupported`/`_note`，不静默失效；
-- [ ] 盲注类 SQL 检测（当前只做报错回显型，避免破坏性与长耗时的延时探测）；
+- [x] **盲注类 SQL 检测（布尔型）**（续18）：`a03-sqli-blind`（high）—— 同一参数发"恒真"与"恒假"
+      两个 payload 比状态码 / 响应长度 / 正文差异，**再发一次恒真做稳定性复验**（页面自带随机数或
+      时间戳时恒真自己都会抖，不复验就是误报）；命中必须给出**对比数字**（两次的状态码与长度）。
+      **明确不做延时型**（`SLEEP`/`BENCHMARK`/`WAITFOR`/`pg_sleep`）：会挂住目标数据库连接线程
+      （并发一上去就是事实上的 DoS，与"非破坏性"红线冲突），且跨公网抖动常盖过几秒的时间差。
+      每参数 3 个请求、总预算 12；受现有 SQL 请求预算封顶约束；
 - [x] **误报管理**（P1-1，2026-09-23 续12）：漏洞记录的人工复核三态（待复核/已确认/误报）+ 复查通道。
       `vulns.review/review_note/reviewed_at` + `db.set_vuln_review`/`bulk_set_vuln_review`/`review_counts`
       + `POST /api/vulns/review`（漏洞页三态下拉 + 批量打标）+ 报告「人工复核台账」；

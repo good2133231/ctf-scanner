@@ -86,6 +86,10 @@ SOURCE_LABELS = {
     "osint:fofa": "FOFA·ICO 反查",
     "osint:fofa-cert": "FOFA·证书反查",
     "osint:fofa-title": "FOFA·标题反查",
+    # 批次 4 新增的三家同源/同源类来源：都带厂商名，一眼看出是哪个平台找出来的
+    "osint:shodan": "Shodan·ICO 反查",
+    "osint:quake": "Quake·ICO 反查",
+    "osint:ctlog": "CT 日志(crt.sh)",
 }
 
 
@@ -752,6 +756,9 @@ def create_app():
         ("title", "FOFA·标题反查", "osint:fofa-title", "fofa标题拓展"),
         ("cert", "FOFA·证书反查", "osint:fofa-cert", "fofa证书拓展"),
         ("ico", "FOFA·ICO 反查", "osint:fofa", "fofa-ico拓展"),
+        ("shodan", "Shodan·ICO 反查", "osint:shodan", "shodan-ico拓展"),
+        ("quake", "Quake·ICO 反查", "osint:quake", "quake-ico拓展"),
+        ("ctlog", "CT 日志(crt.sh)", "osint:ctlog", "ct日志拓展"),
         ("cseg", "C 段反查", "osint:cseg", "c段反查拓展"),
     )
     # 分类排序表达式：按 EXT_SRC_TAGS 的顺序，未知来源排最后，同类内按 id 倒序（新的在前）。
@@ -1213,6 +1220,36 @@ def create_app():
                                  f.get("fofa_title_threshold", 200) or 200),
                              "max_title_queries": int(
                                  f.get("fofa_max_title_queries", 10) or 10)},
+                    # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token
+                    "ssrf": {"enabled": f.get("ssrf_enabled") == "1",
+                             # 留空 = 用本机监听地址；填了外部基址后本模块读不到命中，
+                             # 只注入并把 token 写进任务日志（宁可不报也不谎报）
+                             "callback_base": (f.get("ssrf_callback_base") or "").strip(),
+                             "host": (f.get("ssrf_host") or "127.0.0.1").strip(),
+                             "port": int(f.get("ssrf_port", 0) or 0),
+                             "wait_seconds": float(f.get("ssrf_wait_seconds", 6) or 0),
+                             "max_params": int(f.get("ssrf_max_params", 12) or 12)},
+                    # Shodan / Quake favicon 反查：与 FOFA 同构，各自独立开关（默认都关）
+                    "shodan": {"enabled": f.get("shodan_enabled") == "1",
+                               "max_sites": int(f.get("shodan_max_sites", 30) or 30),
+                               "max_assets": int(f.get("shodan_max_assets", 100) or 100),
+                               "workers": int(f.get("shodan_workers", 5) or 5),
+                               "black_ico_threshold": int(
+                                   f.get("shodan_black_ico_threshold", 200) or 200)},
+                    "quake": {"enabled": f.get("quake_enabled") == "1",
+                              "max_sites": int(f.get("quake_max_sites", 30) or 30),
+                              "max_assets": int(f.get("quake_max_assets", 100) or 100),
+                              "workers": int(f.get("quake_workers", 5) or 5),
+                              "black_ico_threshold": int(
+                                  f.get("quake_black_ico_threshold", 200) or 200)},
+                    # CT 日志（crt.sh，免 key）在线查询：证书维度记录 + 拓展域名来源
+                    "ctlog": {"enabled": f.get("ctlog_enabled") == "1",
+                              "max_domains": int(f.get("ctlog_max_domains", 10) or 10),
+                              "max_records": int(f.get("ctlog_max_records", 50) or 50),
+                              "max_domains_per_cert": int(
+                                  f.get("ctlog_max_domains_per_cert", 50) or 50),
+                              "timeout": int(f.get("ctlog_timeout", 25) or 25),
+                              "write_certs": f.get("ctlog_write_certs") == "1"},
                     # 黑名单：开关可从页面改，文件路径保持原值（改路径请直接编辑 settings.yaml）
                     "blacklist": {"enabled": f.get("blacklist_enabled") == "1",
                                   "path": (settings.get("blacklist") or {}).get(

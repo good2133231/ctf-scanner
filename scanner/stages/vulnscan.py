@@ -99,7 +99,9 @@ class VulnscanStage(Stage):
                     detect_waf(url, ctx.settings, logger=ctx.logger)
                 except Exception as e:
                     ctx.logger.debug(f"[vulnscan] WAF 探测失败（{url}）：{e}")
-            found = list(owasp_checks.run_all(url, ctx.settings))
+            # 把任务 logger 传给检查：需要写过程日志的检查（SSRF 回连在外部回调模式下
+            # 要交代注入了哪些 token）才能写进 `logs/task_*/task.log`。
+            found = list(owasp_checks.run_all(url, ctx.settings, logger=ctx.logger))
             for poc in _pocs_for(site if isinstance(site, dict) else {}):
                 for v in engine.run_poc_on_target(poc, url, ctx.settings, site=site):
                     # POC 结果与内置检查共用同一级别门槛（critical 恒保留）

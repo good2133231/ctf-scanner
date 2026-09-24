@@ -111,6 +111,37 @@ fofa:
   title_enabled: true
   title_threshold: 200
   max_title_queries: 10
+ssrf:
+  # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token，收到回连即判"服务端会出网"。
+  # 只在目标能回访扫描机时有效（NAT/云主机大概率收不到）；callback_base 留空 = 用本机监听地址
+  enabled: false
+  callback_base: ''
+  host: 127.0.0.1
+  port: 0
+  wait_seconds: 6.0
+  max_params: 12
+shodan:
+  # Shodan favicon 反查（默认关）：http.favicon.hash:<mmh3>，需 config/keys.yaml 填 shodan.key
+  enabled: false
+  max_sites: 30
+  max_assets: 100
+  workers: 5
+  black_ico_threshold: 200
+quake:
+  # 360 Quake favicon 反查（默认关）：favicon: "<mmh3>"，需 config/keys.yaml 填 quake.key
+  enabled: false
+  max_sites: 30
+  max_assets: 100
+  workers: 5
+  black_ico_threshold: 200
+ctlog:
+  # 证书透明度（CT）日志在线查询（crt.sh，免 key，默认关）：证书维度记录 + 拓展域名来源
+  enabled: false
+  max_domains: 10
+  max_records: 50
+  max_domains_per_cert: 50
+  timeout: 25
+  write_certs: true
 blacklist:
   enabled: true
   path: config/blacklist.txt

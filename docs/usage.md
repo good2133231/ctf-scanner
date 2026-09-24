@@ -56,7 +56,7 @@ python cli/client.py -t http://target.local/ --cookie "SESSION=xxx" -H "X-Api-Ke
 [subdomain] 新增子域名 3 个，参与探测主机 4 个
 ...
 ===== 阶段 9/11：vulnscan =====
-[vulnscan] 目标 2 个；级别门槛 medium；启用 POC 7 个；内置检查 5/12 项；info/low 级检测已跳过（连请求都不发）
+[vulnscan] 目标 2 个；级别门槛 medium；启用 POC 7 个；内置检查 7/14 项；info/low 级检测已跳过（连请求都不发）
 [vulnscan] 潜在漏洞 6 项（high:2 / medium:4），均为初筛结果，需人工确认
 ===== 阶段 10/11：intel =====
 [intel] 未启用（策略配置 → 情报与线索 可打开），跳过
@@ -68,8 +68,10 @@ python cli/client.py -t http://target.local/ --cookie "SESSION=xxx" -H "X-Api-Ke
     日志：logs\task_1_...\task.log
 ```
 
-> `内置检查 5/12 项` 是**执行级门控**的结果：`checks.skip_severities`（默认 `["info","low"]`）
-> 里的级别连请求都不发，因此 12 项内置检查里只有 5 项真正执行。
+> `内置检查 7/14 项` 是**执行级门控**的结果：`checks.skip_severities`（默认 `["info","low"]`）
+> 里的级别连请求都不发，因此 14 项内置检查里只有 7 项真正执行。
+> 其中 `a10-ssrf-callback`（A10 受控回连）虽是 high 级，但另有 `ssrf.enabled` 总开关且**默认关**，
+> 关着的时候它一次请求都不发、也不起监听（见「策略配置 → A10 SSRF 受控回连」）。
 
 > 用 `--offline` 时不调用外部工具、也不跑被动收集（仅内置 DNS 爆破）；被动来源不可用只影响该源，不影响整轮。
 

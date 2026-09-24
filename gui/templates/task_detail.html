@@ -310,6 +310,10 @@
       不发 HTTP、不写目标）。握手<b>不校验证书</b> —— 自签名与过期正是要看的东西，
       所以这里的「自签」「已过期」是<b>取证结论，不是漏洞判定</b>。
       默认排序：<b>已过期 → 自签 → 剩余天数少</b>的在前。</p>
+    <p class="muted small">「来源」列区分两件事：<b>TLS 握手</b>＝本次真的连上去取到的证书
+      （<code>cert</code> 阶段）；<b>CT 日志</b>＝公开证书透明度日志里与该域名相关的历史证书
+      （<code>osint</code> 阶段，开关 <code>ctlog.enabled</code>，默认关）——
+      后者是<b>线索与资产面补充</b>，不等于"目标此刻在用这张证书"。</p>
     {% if not certs %}
       {% if not cert_enabled %}
       <p class="muted small">本任务没有取证书：<b>cert 阶段默认关闭</b>。可在「策略配置 → 资产面拓展」
@@ -324,14 +328,15 @@
         具体失败原因见「运行日志」里 <code>[cert]</code> 开头的行。</p>
       {% endif %}
     {% endif %}
-    <label class="muted">筛选 <input data-filter="#tbl-certs" placeholder="主机 / CN / 颁发者 / 端口 / 算法"></label>
+    <label class="muted">筛选 <input data-filter="#tbl-certs" placeholder="来源 / 主机 / CN / 颁发者 / 端口 / 算法"></label>
     <table id="tbl-certs">
-      <thead><tr><th>主机</th><th>端口</th><th>CN</th><th>颁发者</th><th>有效期</th>
+      <thead><tr><th>来源</th><th>主机</th><th>端口</th><th>CN</th><th>颁发者</th><th>有效期</th>
         <th>剩余</th><th>自签</th><th>签名算法</th><th>SAN</th><th>序列号</th>
         <th>指纹(SHA256)</th></tr></thead>
       <tbody>
       {% for c in certs %}
         <tr>
+          <td class="muted small">{% if c.source == 'ct' %}CT 日志{% else %}TLS 握手{% endif %}</td>
           <td class="mono">{{ c.host }}</td>
           <td class="mono">{{ c.port }}</td>
           <td>{{ c.cn or '-' }}</td>
@@ -347,7 +352,7 @@
           <td class="muted small mono">{{ c.sha256 or '-' }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="11" class="muted">暂无数据。</td></tr>
+        <tr><td colspan="12" class="muted">暂无数据。</td></tr>
       {% endfor %}
       </tbody>
     </table>

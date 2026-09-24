@@ -1,9 +1,9 @@
-"""阶段：外部情报拓展（C 段反查 + FOFA favicon 反查 + FOFA 证书反查）。
+"""阶段：外部情报拓展（C 段反查 + favicon 反查 + 证书反查 + 标题反查 + CT 日志）。
 
 位置：probe 之后、jsmine 之前 —— 输入是"存活站点 + 已解析 IP"，产出是**新域名**，
 越早入账，后面的 dirscan / vulnscan 覆盖越广。
 
-三个子能力各自独立开关，**默认全部关闭**（都依赖第三方公共接口，可用性不由我们掌控）：
+子能力各自独立开关，**默认全部关闭**（都依赖第三方公共接口，可用性不由我们掌控）：
 - `iprecon.enabled`：把已知 IP（目标 IP + 站点解析 IP + 子域名 A 记录）反查成域名，
   并把 IP 归纳成 `/24` 段落 `csegs` 表（任务详情「C 段」页签）；
 - `fofa.enabled`：取站点 favicon 的 mmh3 去 FOFA 反查**同源资产**
@@ -13,11 +13,19 @@
 - `fofa.title_enabled`：按 `title="<站点标题>"` 反查**标题相同**的资产。它的黑名单是两层的：
   ① 一眼就是模板页的标题（`404` / `Error` / `Welcome to nginx` …）**连查询都不发**；
   ② 查完发现命中数超过 `fofa.title_threshold`（默认 200）判为"公共标题"，放弃拓展
-  —— 与"黑 ico"同构，只是判据换成标题。
+  —— 与"黑 ico"同构，只是判据换成标题；
+- `shodan.enabled` / `quake.enabled`：**同一批 favicon 哈希**再去这两家反查
+  （`scanner/shodan.py` / `scanner/quake.py`，与 fofa.py 同构、各自独立文件）；
+  阈值思路完全沿用"命中过多即放弃拓展"；
+- `ctlog.enabled`：查 crt.sh 的**证书透明度日志**（`scanner/ctlog.py`），产出证书维度记录
+  （写进 `certs` 表，source='ct'）并把它覆盖的域名当作拓展域名来源。
 
-产出的域名来源分别是 `osint:cseg` / `osint:fofa` / `osint:fofa-cert` / `osint:fofa-title`，
-都归「拓展域名」页。
+产出的域名来源分别是 `osint:cseg` / `osint:fofa` / `osint:fofa-cert` / `osint:fofa-title` /
+`osint:shodan` / `osint:quake` / `osint:ctlog`，都归「拓展域名」页。
 全部子能力都关时整个阶段直接跳过 —— 一次请求都不发（与低危检查的处理方式一致）。
+
+**收口不变量**：所有外部来源产出的域名一律经 `_domain_of()` 过滤，
+裸 IP / 带端口 / 带路径 / 通配符**绝不写进 `subdomains`**（IP 类资产归 portscan / probe）。
 """
 import ipaddress
 from urllib.parse import urlparse
@@ -25,6 +33,9 @@ from urllib.parse import urlparse
 from .base import Stage
 from .. import blacklist, db, iprecon
 from .. import fofa as fofa_mod
+from .. import shodan as shodan_mod
+from .. import quake as quake_mod
+from .. import ctlog as ctlog_mod
 from ..fingerprint import favicon_hash
 from ..utils import base_domain, is_domain, pool_run, resolve_host
 
@@ -40,7 +51,10 @@ class OsintStage(Stage):
         do_fofa = fofa_cfg.get("enabled") is True
         do_cert = do_fofa and fofa_cfg.get("cert_enabled") is not False
         do_title = do_fofa and fofa_cfg.get("title_enabled") is not False
-        if not (do_ip or do_fofa):
+        do_shodan = (ctx.settings.get("shodan", {}) or {}).get("enabled") is True
+        do_quake = (ctx.settings.get("quake", {}) or {}).get("enabled") is True
+        do_ctlog = ctlog_mod.enabled(ctx.settings)
+        if not (do_ip or do_fofa or do_shodan or do_quake or do_ctlog):
             ctx.logger.info("[osint] 未启用（策略配置 → 外部情报拓展 可打开），跳过")
             return
         if ctx.stopped():
@@ -56,6 +70,12 @@ class OsintStage(Stage):
             found += self._fofa_cert()
         if do_title and not ctx.stopped():
             found += self._fofa_title()
+        if do_shodan and not ctx.stopped():
+            found += self._platform_assets(shodan_mod, "shodan")
+        if do_quake and not ctx.stopped():
+            found += self._platform_assets(quake_mod, "quake")
+        if do_ctlog and not ctx.stopped():
+            found += self._ctlog()
 
         if ctx.stopped():
             ctx.logger.warning("[osint] 任务已请求停止，结果不再入账")
@@ -355,6 +375,131 @@ class OsintStage(Stage):
                 domain = _domain_of(a)
                 found.append((domain, "osint:fofa-title"))
         ctx.logger.info(f"[osint] 标题拓展：查询 {queried} 个标题，跳过公共标题 {common} 个")
+        return found
+
+    # ---------- Shodan / Quake favicon 反查（与 FOFA 同构，只换客户端） ----------
+
+    def _favicon_hashes(self, cap, workers):
+        """站点 favicon 的 mmh3（**同任务内按 (cap, workers) 缓存**，多平台共用一份）。
+
+        为什么要缓存：Shodan 与 Quake 用的**就是 FOFA 那一批哈希**（同一个 mmh3 键），
+        逐个平台重算等于把每个站点的 favicon 再拉一遍，白白多出几十个请求。
+        缓存按 `(cap, workers)` 分桶 —— 两家的上限可能配得不一样，取小那份会漏站点，
+        取大那份会多算，所以按实际参数各存一份。
+        """
+        ctx = self.ctx
+        cache = self.__dict__.setdefault("_fav_cache", {})
+        cached = cache.get((cap, workers))
+        if cached is not None:
+            return cached
+        sites = [dict(r) for r in db.list_sites(ctx.task_id)]
+        if not sites:
+            ctx.logger.info("[osint] 无存活站点，跳过 favicon 指纹计算")
+            cache[(cap, workers)] = {}
+            return {}
+        if len(sites) > cap:
+            ctx.logger.info(f"[osint] 站点 {len(sites)} 个超过上限 {cap}，仅取前 {cap} 个算 favicon")
+            sites = sites[:cap]
+
+        def _fav(s):
+            if ctx.stopped():
+                return None
+            return {"url": s["url"], "hash": favicon_hash(s["url"], ctx.settings)}
+
+        hashes = {}
+        for r in pool_run(_fav, sites, workers=max(1, workers)):
+            if r and r["hash"]:
+                hashes.setdefault(r["hash"], r["url"])
+        ctx.logger.info(f"[osint] favicon 指纹 {len(hashes)}/{len(sites)} 个站点可算（mmh3）")
+        cache[(cap, workers)] = hashes
+        return hashes
+
+    def _platform_assets(self, mod, name):
+        """按 favicon 哈希去 Shodan / Quake 反查同源资产（`osint:shodan` / `osint:quake`）。
+
+        与 `_fofa_assets` 是同一套流程（查 → 命中过多即放弃拓展），刻意**照抄**而不是
+        抽公共基类 —— 三家的字段、鉴权与配额模型各不相同，抽象只会把差异塞进分支里。
+        """
+        ctx = self.ctx
+        cfg = ctx.settings.get(name, {}) or {}
+        if not mod.available(ctx.settings):
+            ctx.logger.info(f"[osint] {name} 未配置 key（config/keys.yaml），跳过 favicon 反查")
+            return []
+        try:
+            cap = int(cfg.get("max_sites", 30))
+        except (TypeError, ValueError):
+            cap = 30
+        hashes = self._favicon_hashes(cap, max(1, int(cfg.get("workers", 5) or 5)))
+        if not hashes:
+            return []
+
+        found = []
+        queried = black = 0
+        for icon_hash, url in hashes.items():
+            if ctx.stopped():
+                break
+            assets, total, err = mod.search(icon_hash, ctx.settings, logger=ctx.logger)
+            if err:
+                ctx.logger.info(f"[osint] {name} 反查中止：{err}")
+                break
+            if mod.is_black_ico(total, ctx.settings):
+                black += 1
+                ctx.logger.info(f"[osint] {url} 的 favicon（mmh3 {icon_hash}）在 {name} 命中 "
+                                f"{total} 条，超过黑 ico 阈值 {mod.black_ico_threshold(ctx.settings)}，"
+                                f"判为公共图标，不拓展")
+                continue
+            queried += 1
+            ctx.logger.info(f"[osint] {name} 反查 mmh3 {icon_hash}（{url}）→ "
+                            f"{len(assets)} 条 / 共 {total} 条")
+            for a in assets:
+                found.append((_domain_of(a), f"osint:{name}"))
+        ctx.logger.info(f"[osint] {name} 拓展：查询 {queried} 个 favicon，跳过黑 ico {black} 个")
+        return found
+
+    # ---------- CT 日志（crt.sh） ----------
+
+    def _ctlog(self):
+        """查 crt.sh 的证书透明度日志：产出**证书维度**记录 + 它覆盖的域名。
+
+        容错是这里的重点：crt.sh 是公共免费服务，返回 HTML 限流页 / 超时 / 502 都是常态。
+        任何失败都只记一行日志并**继续跑下一个域名**，绝不让整个 osint 阶段挂掉
+        （阶段级容错只兜异常，不兜"静默没结果"）。
+        """
+        ctx = self.ctx
+        roots = self._root_domains()
+        if not roots:
+            ctx.logger.info("[osint] 没有可用于 CT 日志查询的注册域")
+            return []
+        cap = ctlog_mod.max_domains(ctx.settings)
+        if len(roots) > cap:
+            ctx.logger.info(f"[osint] 注册域 {len(roots)} 个超过上限 {cap}，仅查前 {cap} 个")
+            roots = roots[:cap]
+
+        found, certs = [], []
+        queried = failed = 0
+        for root in roots:
+            if ctx.stopped():
+                break
+            records, err = ctlog_mod.search(root, ctx.settings, logger=ctx.logger)
+            if err:
+                failed += 1
+                ctx.logger.info(f"[osint] CT 日志查询 {root} 失败：{err}（记一行，继续）")
+                continue
+            queried += 1
+            n_dom = sum(len(r.get("san") or []) for r in records)
+            ctx.logger.info(f"[osint] CT 日志 {root} → 证书 {len(records)} 张 / 域名 {n_dom} 个")
+            for rec in records:
+                if ctlog_mod.write_certs(ctx.settings):
+                    row = dict(rec)
+                    row.update({"url": "", "host": root, "port": 0, "source": "ct"})
+                    certs.append(row)
+                for d in ctlog_mod.domains_of([rec]):
+                    found.append((d, "osint:ctlog"))
+        if certs:
+            db.insert_certs(ctx.task_id, certs)
+        ctx.logger.info(f"[osint] CT 日志：查询 {queried} 个注册域，失败 {failed} 个，"
+                        f"证书记录 {len(certs)} 条"
+                        + ("（已写入「SSL 证书」页签，来源 ct）" if certs else ""))
         return found
 
 

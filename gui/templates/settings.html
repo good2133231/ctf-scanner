@@ -60,6 +60,32 @@
     </div>
   </section>
 
+  <section class="panel collapsible" data-panel="ssrf">
+    <h2>A10 SSRF 受控回连（<b>默认关</b>）</h2>
+    <p class="muted">原理：任务内起一个<b>本机</b> HTTP 回连监听，为每个候选参数生成一个唯一
+      token，把 <code>http://&lt;回调基址&gt;/&lt;token&gt;</code> 喂进去；收到携带该 token 的
+      访问，就说明<b>目标服务端真的按我们给的地址发起了出网请求</b> —— 这是 SSRF 存在性的
+      直接证据，不依赖任何错误回显。</p>
+    <label class="chk"><input type="checkbox" name="ssrf_enabled" value="1"
+      {{ 'checked' if s.ssrf.enabled }}> <b>启用受控回连</b>（打开后 vulnscan 会多出
+      <code>a10-ssrf-callback</code> 这一项）</label>
+    <label>回调基址（<b>留空＝用本机监听地址</b>；填了就得在你自己的 OOB 服务上核对 token，
+      本模块读不到那侧的命中，<b>不会伪造命中</b>）
+      <input name="ssrf_callback_base" value="{{ s.ssrf.callback_base }}"
+             placeholder="留空 = http://127.0.0.1:&lt;随机端口&gt;"></label>
+    <div class="row">
+      <label>监听地址 <input name="ssrf_host" value="{{ s.ssrf.host }}"></label>
+      <label>监听端口（0＝系统分配） <input name="ssrf_port" value="{{ s.ssrf.port }}"></label>
+      <label>等待回连秒数 <input name="ssrf_wait_seconds" value="{{ s.ssrf.wait_seconds }}"></label>
+      <label>每 URL 最多注入几个参数 <input name="ssrf_max_params" value="{{ s.ssrf.max_params }}"></label>
+    </div>
+    <p class="muted small"><b>局限先看清楚</b>：本机监听只在<b>目标能回访扫描机</b>时有效 ——
+      扫描机在 NAT 后 / 云主机无公网 IP / 目标出网被拦时，一条回连都收不到，这是环境限制。
+      <b>刻意不做</b>：不打内网地址（<code>127.0.0.1:8080</code>、<code>169.254.169.254</code> 那类
+      属于利用，越线），不提交页面表单（可能是写操作，表单只被用来取字段名，注入一律走 GET），
+      不做延时型判定。监听端口用完即关。</p>
+  </section>
+
   <section class="panel collapsible" data-panel="evasion">
     <h2>动态免杀（绕过 WAF / 流量识别）</h2>
     <label class="chk"><input type="checkbox" name="random_ua" value="1"
@@ -230,6 +256,57 @@
     <label>公共标题阈值（命中数超过该值 = 一搜一大堆的通用标题，放弃拓展）
       <input name="fofa_title_threshold" value="{{ s.fofa.title_threshold }}"></label>
     <label>每任务最多反查几个标题 <input name="fofa_max_title_queries" value="{{ s.fofa.max_title_queries }}"></label>
+
+    <h2>Shodan / Quake favicon 反查（同一批 mmh3，换一家平台）</h2>
+    <p class="muted">与 FOFA 的 favicon 反查<b>同构</b>：三家的指纹都是 MurmurHash3
+      （<code>scanner/mmh3.py</code>），所以这里复用同一批哈希，只是查询语句、鉴权方式与响应
+      结构不同（<code>scanner/shodan.py</code> / <code>scanner/quake.py</code> 各自一个文件）。
+      阈值思路完全沿用"命中过多即放弃拓展"。key 请写入 <code>config/keys.yaml</code>。</p>
+    <label class="chk"><input type="checkbox" name="shodan_enabled" value="1"
+      {{ 'checked' if s.shodan.enabled }}> <b>Shodan favicon 反查</b>
+      （<code>http.favicon.hash:&lt;mmh3&gt;</code>，需 <code>config/keys.yaml</code> 的 shodan.key）</label>
+    <div class="row">
+      <label>站点上限 <input name="shodan_max_sites" value="{{ s.shodan.max_sites }}"></label>
+      <label>单次取回上限 <input name="shodan_max_assets" value="{{ s.shodan.max_assets }}"></label>
+      <label>并发数 <input name="shodan_workers" value="{{ s.shodan.workers }}"></label>
+      <label>黑 ico 阈值 <input name="shodan_black_ico_threshold"
+        value="{{ s.shodan.black_ico_threshold }}"></label>
+    </div>
+    <label class="chk"><input type="checkbox" name="quake_enabled" value="1"
+      {{ 'checked' if s.quake.enabled }}> <b>360 Quake favicon 反查</b>
+      （<code>favicon: "&lt;mmh3&gt;"</code>，需 <code>config/keys.yaml</code> 的 quake.key）</label>
+    <div class="row">
+      <label>站点上限 <input name="quake_max_sites" value="{{ s.quake.max_sites }}"></label>
+      <label>单次取回上限 <input name="quake_max_assets" value="{{ s.quake.max_assets }}"></label>
+      <label>并发数 <input name="quake_workers" value="{{ s.quake.workers }}"></label>
+      <label>黑 ico 阈值 <input name="quake_black_ico_threshold"
+        value="{{ s.quake.black_ico_threshold }}"></label>
+    </div>
+
+    <h2>CT 日志在线查询（crt.sh，免 key）</h2>
+    <p class="muted">查 <code>https://crt.sh/?q=&lt;域&gt;&amp;output=json</code>，产出
+      <b>证书维度</b>记录（签发者 / 有效期 / 序列号 / 涉及的域名 / CT 条目数），字段口径与
+      <code>scanner/certs.py</code> 对齐，可直接进任务详情的「<b>SSL 证书</b>」页签（来源标成
+      <code>ct</code>）；这些证书覆盖的域名同时进「拓展域名」（来源 <code>osint:ctlog</code>）。
+      <b>它与另外两处不是一回事</b>：<code>passive.py</code> 的 crt.sh 只取主机名做子域收集、
+      <code>certs.py</code> 是对目标做真实 TLS 握手取线上证书、FOFA 的 <code>cert=</code>
+      是拿证书去反查共用资产的其它域名。</p>
+    <label class="chk"><input type="checkbox" name="ctlog_enabled" value="1"
+      {{ 'checked' if s.ctlog.enabled }}> <b>启用 CT 日志查询</b>（免 key，但仍是外部接口 → 默认关）</label>
+    <div class="row">
+      <label>单任务最多查几个域名 <input name="ctlog_max_domains" value="{{ s.ctlog.max_domains }}"></label>
+      <label>单域名最多收几张证书 <input name="ctlog_max_records" value="{{ s.ctlog.max_records }}"></label>
+      <label>单证书最多留几个域名 <input name="ctlog_max_domains_per_cert"
+        value="{{ s.ctlog.max_domains_per_cert }}"></label>
+      <label>单次超时（秒） <input name="ctlog_timeout" value="{{ s.ctlog.timeout }}"></label>
+    </div>
+    <label class="chk"><input type="checkbox" name="ctlog_write_certs" value="1"
+      {{ 'checked' if s.ctlog.write_certs }}> 把证书记录写进「SSL 证书」页签（来源 <code>ct</code>，
+      与「TLS 握手」来源的行<b>分列显示</b>）</label>
+    <p class="muted small">crt.sh 是公共免费服务，返回 HTML 限流页 / 超时 / 502 都是常态：
+      所有失败都只记一行日志并继续跑下一个域名，<b>不会让阶段挂掉</b>。
+      <code>name_value</code> 里的通配符（<code>*.x.example.com</code>）会剥掉 <code>*.</code>
+      再入库并单独标记，<b>不会把 <code>*</code> 写进资产库</b>。</p>
   </section>
 
   <section class="panel collapsible" data-panel="blacklist">

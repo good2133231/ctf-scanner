@@ -90,7 +90,9 @@ ctf-scanner/
 │   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic（12 个）
 │   ├── pocs/engine.py     # YAML POC 引擎（nuclei 兼容子集）
 │   ├── pocs/pocs/*.yaml   # 内置 7 个示例 POC
-│   ├── owasp/checks.py    # 12 项启发式检查（装饰器 @check 注册进 CHECKS）+ 分级/分类门控
+│   ├── owasp/checks.py    # 14 项启发式检查（装饰器 @check 注册进 CHECKS）+ 分级/分类门控
+│   │                      #   （默认执行 7 项 —— 其余是 info/low 级，被 skip_severities 整级跳过；
+│   │                      #     a10-ssrf-callback 虽是 high，但另有 ssrf.enabled 总开关、默认关）
 │   ├── evasion.py         # 动态免杀：UA 池/浏览器化头/WAF 指纹/payload 变形
 │   ├── wildcard.py        # 泛解析识别与过滤（纯 DNS 查询）
 │   ├── passive.py         # 免 key 多来源被动子域名收集
@@ -105,6 +107,10 @@ ctf-scanner/
 │   │                      #   **只发目标侧**（http_request 的 auth=False 是默认值），日志/页面/报告一律掩码，见 §7
 │   ├── iprecon.py         # IP 反查域名 + /24 C 段归纳（is_public_ip/segment_of/parse_domains，不 eval）
 │   ├── fofa.py            # FOFA 反查（qbase64）：favicon(icon_hash) / cert="domain" / title="xxx" 三种；黑 ico / 通用证书 / 公共标题阈值
+│   ├── shodan.py          # Shodan 反查（http.favicon.hash:<mmh3>）—— 与 fofa.py **同构照抄**，默认关，无 key 显式报错
+│   ├── quake.py           # 360 Quake 反查（favicon: "<mmh3>"，POST + X-QuakeToken）—— 同上，默认关
+│   ├── ctlog.py           # 证书透明度日志在线查询（crt.sh，免 key，**默认关**）：产出**证书维度**记录
+│   ├── ssrf.py            # A10 SSRF 受控回连（**默认关**）：本机 HTTP 回连监听 + 每参数唯一 token
 │   ├── mmh3.py            # 纯标准库 MurmurHash3 x86_32（平台 favicon 指纹用；含 SELF_TEST 向量）
 │   ├── intel.py           # 漏洞情报订阅（P3-2）：CISA KEV 拉取+本地缓存+白名单式匹配 → **只产线索**（不写 vulns）
 │   ├── heuristics.py      # 启发式候选发现（P3-3）：对已有数据做差分/异常聚合（**零请求**）→ 线索；阈值与规则表在此
@@ -119,6 +125,7 @@ ctf-scanner/
 │   ├── targets.py         # parse_lines → [(kind, raw)]，kind ∈ domain|url|ip|cidr|unknown（cidr 展开为多条 ip）
 │   └── report.py          # 报告三格式：Markdown（generate）/ HTML（generate_html，自包含单文件+全量转义）/
 │                          #   PDF（export_pdf，复用无头 Edge/Chrome 的 --print-to-pdf）；三者共用 collect() 同一份快照
+│                          #   「SSL 证书」小节带**来源列**：TLS 握手（真握手） vs CT 日志（crt.sh 历史）
 ├── tools/import_ref_pocs.py # ast 静态解析参考项目 Python POC → config/pocs-imported/（导入项默认关闭）
 ├── tools/import_dir_dict.py # 外部目录字典 → 清洗 + **按技术栈拆桶** → config/dicts/dirs_{big,common,jsp,php,asp}.txt
 │                          #   用法：py -3 tools/import_dir_dict.py --src <字典文件>（源路径只走参数，代码里不留绝对路径）
@@ -264,6 +271,15 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   GUI 400 + 补扫继承 + 页面只显掩码不回显明文；POC raw 解析与破坏性方法拒绝、
                             #   flow 布尔子集（短路/纯否定不报/越界与被跳过块引用标 unsupported）、
                             #   workflows 子模板与自环保护、dsl 仍显式 unsupported）
+                            # 2026-09-23 续18 新增 `[5y]`（批次 4 五项）：
+                            #   XSS 上下文判定表（8 上下文 / 探针定界符存活 / 全转义不报 + poc_id 不变）
+                            #   + A10 SSRF 受控回连（默认关零请求 / 本机监听自证 / 外部回调不谎报 /
+                            #     监听线程不泄漏）+ 布尔盲注（恒真恒假对比数字 + 页面抖动不判 + 无 SLEEP）
+                            #   + Shodan/Quake（无 key 不发请求 + 查询串 + 阈值 + 裸 IP 收口 +
+                            #     POST/X-QuakeToken + 配额报错）
+                            #   + CT 日志（非 JSON/限流容错 + `*.x` 通配符剥离 + 默认关门控 +
+                            #     第三方不带登录态）+ 新开关三方一致（DEFAULTS/settings.yaml/GUI POST）
+                            #     + 证书来源列
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -283,6 +299,39 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
 
+- **XSS 上下文分析（2026-09-23 续18）把"反射回显"拆成 8 种上下文并分级**：
+  `<script>` 内 JS 字符串 / JS 代码、无引号属性、标签名位置 → **high**（可直接逃逸或执行）；
+  双/单引号属性 → medium（需先闭合引号）；HTML 文本节点 → medium（**证据里写明"需 `<` 未被转义"**）；
+  HTML 注释内 → **降级为 low**（要先闭合 `-->`，多数场景不可利用；默认门槛 medium 下不产出，
+  把 `checks.min_severity` 调到 low 才看得到）。
+  判定靠两条探针：① 原 payload 是否**原样**回显；② 上下文探针（标记串 + `"'<>`）看哪些定界符
+  **活着回来**（引号活着＝属性/JS 串可逃逸，尖括号活着＝文本节点能插标签）。
+  **全部被转义的回显一律不报** —— 那是旧逻辑最大的误报源。
+  `poc_id` 仍是 `a03-xss-reflect`（去重键 `(target, poc_id)` 不变），只是级别与证据随上下文变。
+- **盲注只做布尔型，明确不做延时型**：`SLEEP()` / `BENCHMARK()` / `WAITFOR DELAY` / `pg_sleep()`
+  会挂住目标数据库的连接线程（并发一上去就是事实上的 DoS，与"非破坏性"红线冲突），
+  且跨公网抖动经常盖过几秒的差值。`a03-sqli-blind` 走"恒真 vs 恒假"差分（比状态码与长度），
+  并**再发一次恒真做稳定性复验** —— 页面自带随机数/时间戳时恒真自己都会抖，不复验就是误报。
+  每参数 3 个请求、总预算 12；命中必须给出**对比数字**（两次的状态码与长度）。
+- **A10 SSRF 受控回连只在"目标能回访扫描机"时有效**：本机监听（`127.0.0.1`，端口 0 由系统分配）
+  在扫描机位于 NAT 后 / 云主机没有公网 IP / 目标出网被出口防火墙拦掉时**一条回连都收不到**
+  —— 这是**环境限制，不是缺陷**。填了 `ssrf.callback_base`（外部 OOB 服务）时本模块
+  **读不到那侧的命中**，因此只注入、把 token 写进任务日志、**不伪造命中**（宁可不报）。
+  **刻意不做**：不打内网地址（`127.0.0.1:8080` / `169.254.169.254` 那类属于利用，越线）、
+  **不提交页面表单**（表单可能是写操作，所以表单只被用来取**字段名**，注入一律走 GET）、
+  不做延时判定。监听端口用完即关（`finally` 里 `close()`）。
+- **crt.sh 的三个"看起来很像"的能力别混**（`ctlog` / `passive` / `certs` / FOFA `cert=`）：
+  `scanner/ctlog.py` 查公开 **CT 日志**，产出**证书维度**记录（签发者/有效期/序列号/涉及域名/
+  CT 条目数，写进 `certs` 表且 `source='ct'`）；`scanner/passive.py` 的 crt.sh 只取主机名做
+  **子域名收集**；`scanner/certs.py` 是对目标做**真实 TLS 握手**取线上正在用的证书；
+  FOFA 的 `cert="domain"` 是拿证书去反查**共用它的其它资产**（不产出证书字段）。
+  同一个域名在 CT 里往往有几十张历史证书，**CT 记录是线索与资产面补充，不等于"目标现在用的证书"**，
+  所以「SSL 证书」页签与报告都有**来源列**区分。
+  crt.sh 是公共免费服务：返回 HTML 限流页 / 超时 / 502 都是常态，所有失败只记一行日志继续跑。
+- **Shodan / Quake 反查与 FOFA 是同构的三份代码**（`scanner/shodan.py` / `quake.py` / `fofa.py`），
+  刻意**不抽公共基类**：查询语法、鉴权方式（query 串 / X-QuakeToken 头 / qbase64）、响应结构与
+  配额模型各不相同，抽象只会把差异塞进一堆分支。三家共用同一个 mmh3 键（`scanner/mmh3.py`），
+  `osint` 阶段内 **favicon 哈希按 (max_sites, workers) 缓存**，避免每家各拉一遍。
 - POC 引擎是** nuclei 兼容子集**：支持 `http:`/`requests:`、`payloads`（list / dict + `attack`）、
   `variables` + 内置变量、`path` 列表、`redirects`、匹配器 `status/word/regex/size` + `condition`/`negative`/
   `case-insensitive` + `part: body|header|all`、`extractors`（regex/kval）；**`raw` / `flow`（布尔子集）/
@@ -311,7 +360,9 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
 - GUI 无 CSRF/HTTPS 加固，仅限本机；「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
-  takeover/portscan/jsmine/dirscan/vulnscan/screenshot/iprecon/fofa/blacklist/intel/heuristic 十七段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned）（含按级别 / 按 OWASP 分类 /
+  takeover/portscan/jsmine/dirscan/vulnscan/screenshot/cert/iprecon/fofa/**ssrf/shodan/quake/ctlog**/
+  blacklist/intel/heuristic **二十一段**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths；portscan 段含 mode/full_ports/exclude_scanned）
+  （含按级别 / 按 OWASP 分类 /
   按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
   于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭；
   `dirscan` 默认值于**第十八轮（续9）**由 `false` 反转为 `true`+`mode=quick`）；

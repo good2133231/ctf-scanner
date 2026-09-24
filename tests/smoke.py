@@ -2724,6 +2724,429 @@ workflows:
           "CLI(-H/--cookie)/GUI/补扫继承 + 页面只显示掩码）与 nuclei raw/flow/workflows 子集"
           "（raw 解析·破坏性方法拒绝·端到端命中 + flow &&/|| 短路·纯否定不报·引用越界标 unsupported "
           "+ workflow 子模板与自环保护 + dsl 仍显式 unsupported）")
+
+    # 5y) 批次 4：① XSS 上下文分析 ② A10 SSRF 受控回连 ③ 布尔盲注 ④ Shodan/Quake 反查
+    #     ⑤ CT 日志（crt.sh）。**所有外部接口一律打桩，禁止触网**（[2c] 的历史教训）。
+    import json as _json5
+    import re as _re5
+    import urllib.parse as _up5
+    from scanner import ssrf as ssrf_mod, shodan as shodan_mod, quake as quake_mod
+    from scanner import ctlog as ctlog_mod
+    from scanner import utils as utils_mod
+    from scanner.stages import osint as osint_mod
+
+    _MK = owasp_checks.XSS_MARKER
+    _BASE_P = owasp_checks._XSS_BASE
+    _CTX_P = owasp_checks._XSS_CTX_PROBE
+
+    # ---- ① XSS 上下文判定表（纯函数，不发请求）----
+    #     同一句 payload 落在不同位置 → 不同上下文 / 不同级别，这就是"上下文分析"的全部意义。
+    _tbl = [
+        ("<div>hello MARK</div>", _BASE_P, "text-node", "medium", True),
+        ('<input value="MARK">', _BASE_P, "dquote-attr", "medium", True),
+        ("<input value='MARK'>", _BASE_P, "squote-attr", "medium", True),
+        ("<input value=MARK>", _BASE_P, "unquoted-attr", "high", True),
+        ('<script>var a = "MARK";</script>', _BASE_P, "js-string", "high", True),
+        ("<script>var a = MARK;</script>", _BASE_P, "js-code", "high", True),
+        ("<!-- MARK -->", _BASE_P, "html-comment", "low", True),
+        ("<MARK class=x>", _BASE_P, "tag-name", "high", True),
+    ]
+    for _tpl, _p, _ctx, _sev, _ok in _tbl:
+        _info = owasp_checks.classify_xss(_tpl.replace("MARK", _p), _p)
+        assert _info is not None, _tpl
+        assert _info["context"] == _ctx, (_tpl, _info)
+        assert _info["severity"] == _sev, (_tpl, _info)
+        assert _info["usable"] is _ok, (_tpl, _info)
+        assert _info["verbatim"] is True and _info["label"], _info
+    # 上下文探针（非原样回显）：靠"哪些定界符活着"判能不能逃逸
+    _p_tbl = [
+        # 双引号属性里 `"` 被转义、而 `'` 活着 —— 单引号救不了双引号属性 → 不报
+        ('<input value="MARK&quot;&#39;&lt;&gt;">', "dquote-attr", False),
+        ('<input value="MARK&quot;&#39;&lt;&gt;">'.replace("&#39;", "'"), "dquote-attr", False),
+        # 无引号属性：`"` 被转义但 `<` `>` 活着 → 任一定界符可用即可逃逸 → 报
+        ('<input value=MARK&quot;\'<>>', "unquoted-attr", True),
+        # 文本节点要看 `<` 有没有活着：转义了就插不进标签 → 不报
+        ("<div>MARK&quot;&#39;&lt;&gt;</div>", "text-node", False),
+        ("<div>MARK&quot;&#39;<></div>", "text-node", True),
+    ]
+    for _tpl5, _ctx, _ok in _p_tbl:
+        _html = _tpl5.replace("MARK", _MK)
+        _info = owasp_checks.classify_xss(_html, _CTX_P)
+        assert _info is not None and _info["context"] == _ctx, (_html, _info)
+        assert _info["verbatim"] is False and _info["usable"] is _ok, (_html, _info)
+    assert owasp_checks.classify_xss("<div>no reflection</div>", _BASE_P) is None
+    assert owasp_checks.classify_xss("", _BASE_P) is None
+    # poc_id 去重键**不能变**（`(target, poc_id)` 是唯一键，改了就等于换了一种漏洞）
+    assert any(m["id"] == "a03-xss-reflect" for m in owasp_checks.CHECKS)
+
+    # 端到端：同一句回显落在不同上下文 → 检查给出不同级别（_get 打桩，不发请求）
+    _orig_get5 = owasp_checks._get
+
+    def _stub_get(text, matcher=None):
+        def _f(u, s, **kw):
+            return {"status": 200, "headers": {}, "text": text if (matcher is None or matcher(u))
+                    else "no", "length": len(text)}
+        return _f
+
+    try:
+        owasp_checks._get = _stub_get(f'<html><script>var q = "{_BASE_P}";</script></html>')
+        _v_js = owasp_checks._xss_reflect(targets, settings)
+        assert _v_js and _v_js["poc_id"] == "a03-xss-reflect" and _v_js["severity"] == "high", _v_js
+        assert "JS 字符串" in _v_js["detail"], _v_js["detail"]
+        # 文本节点维持 medium，且证据必须写明"需该上下文的定界符未被转义"这一前提
+        owasp_checks._get = _stub_get(f"<div>hello {_BASE_P}</div>")
+        _v_txt = owasp_checks._xss_reflect(targets, settings)
+        assert _v_txt and _v_txt["severity"] == "medium", _v_txt
+        assert "文本节点" in _v_txt["detail"] and "定界符未被转义" in _v_txt["detail"], _v_txt["detail"]
+        # 全转义（只有被 HTML 实体化的回显）→ 一个都不该报（这是旧逻辑最大的误报源）
+        owasp_checks._get = _stub_get("<div>&lt;svg/onload=" + _MK + "&gt;</div>")
+        assert owasp_checks._xss_reflect(targets, settings) is None, "全转义回显不该判成 XSS"
+    finally:
+        owasp_checks._get = _orig_get5
+
+    # ---- ② A10 SSRF 受控回连（默认关 + 本机监听自证 + 外部回调不谎报）----
+    assert ssrf_mod.enabled(settings) is False, "ssrf 必须默认关"
+    _calls5 = []
+    owasp_checks._get = lambda u, s, **kw: (_calls5.append(u), None)[1]
+    try:
+        assert owasp_checks._ssrf_callback(targets, settings) is None
+    finally:
+        owasp_checks._get = _orig_get5
+    assert not _calls5, "默认关时 SSRF 检查一个请求都不该发"
+    assert ssrf_mod.form_field_names('<input name="q"><input type="submit" name="go">'
+                                     '<input name="Url">') == ["q", "url"]
+    assert ssrf_mod.token_of_path("/abc123?x=1") == "abc123" and ssrf_mod.token_of_path("") == ""
+    # 本机监听真收一次回连（127.0.0.1 自环，不是外部网络）
+    with ssrf_mod.CallbackListener("127.0.0.1", 0) as _lsn:
+        _tok = ssrf_mod.new_token()
+        _cb = ssrf_mod.payload_url(_lsn.base_url, _tok)
+        assert _cb.startswith("http://127.0.0.1:") and _cb.endswith("/" + _tok)
+        _r5 = utils_mod.http_request(_cb, timeout=5)
+        assert _r5 and _r5.get("status") == 200, _r5
+        assert _lsn.wait(3.0) >= 1
+        _h5 = _lsn.hits_for(_tok)
+        assert _h5 and _h5[0]["method"] == "GET" and _h5[0]["path"].startswith("/" + _tok), _h5
+        assert _lsn.hits_for("nosuchtoken") == []
+    assert not [t for t in threading.enumerate()
+                if t.name == "ssrf-callback" and t.is_alive()], "监听线程没关（线程泄漏）"
+
+    _ssrf_on5 = copy.deepcopy(settings)
+    _ssrf_on5["ssrf"] = {"enabled": True, "callback_base": "", "host": "127.0.0.1",
+                         "port": 0, "wait_seconds": 3.0, "max_params": 3}
+    _seen5 = []
+
+    def _vuln_get(u, s, **kw):
+        """模拟"服务端真的按我们给的 URL 出网"：把参数里的回调地址真的访问一次。"""
+        _seen5.append(u)
+        m = _re5.search(r"http://127\.0\.0\.1:(\d+)/([a-f0-9]{16})", _up5.unquote(u))
+        if m:
+            utils_mod.http_request(f"http://127.0.0.1:{m.group(1)}/{m.group(2)}", timeout=5)
+        return {"status": 200, "headers": {}, "text": "ok", "length": 2}
+
+    owasp_checks._get = _vuln_get
+    try:
+        _v_ssrf = owasp_checks._ssrf_callback(targets, _ssrf_on5)
+    finally:
+        owasp_checks._get = _orig_get5
+    assert _v_ssrf and _v_ssrf["poc_id"] == "a10-ssrf-callback" and _v_ssrf["severity"] == "high", \
+        _v_ssrf
+    assert "收到 GET" in _v_ssrf["evidence"] and "127.0.0.1" in _v_ssrf["evidence"], _v_ssrf
+    assert _seen5, "一个参数都没注入"
+    # 外部回调基址：注入照做，但**读不到命中就绝不能伪造**
+    _ssrf_ext5 = copy.deepcopy(settings)
+    _ssrf_ext5["ssrf"] = {"enabled": True, "callback_base": "http://oob.invalid",
+                          "max_params": 2, "wait_seconds": 0.5}
+    _seen6 = []
+    owasp_checks._get = lambda u, s, **kw: (_seen6.append(u),
+                                            {"status": 200, "headers": {}, "text": "ok",
+                                             "length": 2})[1]
+    try:
+        _v_ext = owasp_checks._ssrf_callback(targets, _ssrf_ext5, logger=rec)
+    finally:
+        owasp_checks._get = _orig_get5
+    assert _v_ext is None, "外部回调模式下读不到命中，绝不能伪造命中"
+    assert _seen6 and all("oob.invalid" in u for u in _seen6), _seen6
+
+    # ---- ③ 布尔型盲注（只做恒真/恒假差分，不做延时）----
+    def _blind_get(u, s, **kw):
+        _len = 900 if _re5.search(r"(1=2|1'='2|\(1=2|\"1\"=\"2)", u) else 1200
+        return {"status": 200, "headers": {}, "text": "x" * _len, "length": _len}
+
+    _n5 = {"i": 0}
+    owasp_checks._get = _blind_get
+    try:
+        _v_blind = owasp_checks._sqli_blind(targets, settings)
+    finally:
+        owasp_checks._get = _orig_get5
+    assert _v_blind and _v_blind["poc_id"] == "a03-sqli-blind" \
+        and _v_blind["severity"] == "high", _v_blind
+    # 命中必须给出**对比数字**，不能只写"疑似存在"
+    assert "长度差 300B" in _v_blind["evidence"] and "1200B" in _v_blind["evidence"] \
+        and "900B" in _v_blind["evidence"], _v_blind["evidence"]
+    # 恒真恒假一致 → 不报
+    owasp_checks._get = _stub_get("same page")
+    try:
+        assert owasp_checks._sqli_blind(targets, settings) is None, "无差异不该判盲注"
+    finally:
+        owasp_checks._get = _orig_get5
+
+    def _jitter_get(u, s, **kw):
+        """页面自带抖动：恒真两次都不一样 → 必须判为不稳定而不是盲注。"""
+        _n5["i"] += 1
+        _len = 1000 + _n5["i"] * 500
+        return {"status": 200, "headers": {}, "text": "y" * _len, "length": _len}
+
+    owasp_checks._get = _jitter_get
+    try:
+        assert owasp_checks._sqli_blind(targets, settings) is None, "页面抖动不该判盲注"
+        assert _n5["i"] <= 12, f"请求预算超了：{_n5['i']}"
+    finally:
+        owasp_checks._get = _orig_get5
+    # 明确不做延时型：payload 表里不许出现 sleep/benchmark/waitfor
+    _sql_src = (ROOT / "scanner" / "owasp" / "checks.py").read_text(encoding="utf-8")
+    assert "布尔型盲注" in _sql_src
+    for _pair in owasp_checks._SQLI_BLIND_PAIRS:
+        assert not _re5.search(r"sleep|benchmark|waitfor|pg_sleep", _pair[0] + _pair[1], _re5.I)
+
+    # ---- ④ Shodan / Quake favicon 反查（无 key 不发请求 + 查询串 + 阈值 + 解析）----
+    assert shodan_mod.build_query(-12345) == "http.favicon.hash:-12345"
+    assert quake_mod.build_query(-12345) == 'favicon: "-12345"'
+    assert shodan_mod.is_black_ico(200, settings) is False \
+        and shodan_mod.is_black_ico(201, settings) is True
+    assert quake_mod.is_black_ico(200, settings) is False \
+        and quake_mod.is_black_ico(201, settings) is True
+
+    _nokey5 = copy.deepcopy(settings)
+    _nokey5["keys"] = {"shodan": {"key": ""}, "quake": {"key": ""}}
+    _net5 = {"n": 0}
+
+    def _no_http(*a, **kw):
+        _net5["n"] += 1
+        raise AssertionError("无 key 时绝不能发请求")
+
+    _orig_sh5, _orig_qk5 = shodan_mod.http_request, quake_mod.http_request
+    shodan_mod.http_request = quake_mod.http_request = _no_http
+    try:
+        assert shodan_mod.available(_nokey5) is False and quake_mod.available(_nokey5) is False
+        _e_sh = shodan_mod.search(-12345, _nokey5)[2]
+        _e_qk = quake_mod.search(-12345, _nokey5)[2]
+    finally:
+        shodan_mod.http_request, quake_mod.http_request = _orig_sh5, _orig_qk5
+    assert "未配置 shodan.key（见 config/keys.yaml）" in _e_sh, _e_sh
+    assert "未配置 quake.key（见 config/keys.yaml）" in _e_qk, _e_qk
+    assert _net5["n"] == 0, "无 key 时一个请求都不该发"
+
+    _key5 = copy.deepcopy(settings)
+    _key5["keys"] = {"shodan": {"key": "K"}, "quake": {"key": "K"}}
+    _sh_resp = {"status": 200, "headers": {}, "text": _json5.dumps({
+        "total": 7,
+        "matches": [{"ip_str": "1.2.3.4", "port": 443, "hostnames": ["a.example.com"],
+                     "domains": ["example.com"], "http": {"title": "T"}},
+                    {"ip_str": "8.8.8.8", "port": 80}],
+    })}
+    shodan_mod.http_request = lambda *a, **kw: _sh_resp
+    try:
+        _a5, _t5, _err5 = shodan_mod.search(-1, _key5)
+    finally:
+        shodan_mod.http_request = _orig_sh5
+    assert _err5 == "" and _t5 == 7 and len(_a5) == 2, (_err5, _t5, _a5)
+    assert osint_mod._domain_of(_a5[0]) == "example.com", _a5[0]
+    assert osint_mod._domain_of(_a5[1]) == "", "裸 IP 绝不能变成域名资产"
+
+    _qk_resp = {"status": 200, "headers": {}, "text": _json5.dumps({
+        "code": 0, "data": [{"ip": "5.6.7.8", "port": 8080, "domain": "b.example.com",
+                             "service": {"http": {"title": "Q"}}}],
+        "meta": {"pagination": {"total": 3}}})}
+    _qk_seen = {}
+
+    def _qk_http(url, **kw):
+        _qk_seen.update(kw)
+        return _qk_resp
+
+    quake_mod.http_request = _qk_http
+    try:
+        _a6, _t6, _err6 = quake_mod.search(-1, _key5)
+    finally:
+        quake_mod.http_request = _orig_qk5
+    assert _err6 == "" and _t6 == 3 and _a6[0]["domain"] == "b.example.com", (_err6, _t6, _a6)
+    assert _qk_seen.get("method") == "POST", _qk_seen          # Quake 是 POST + JSON 体
+    assert (_qk_seen.get("headers") or {}).get("X-QuakeToken") == "K", _qk_seen
+    # 业务失败（配额耗尽）必须显式报错而不是静默空结果
+    quake_mod.http_request = lambda *a, **kw: {"status": 200, "headers": {},
+                                               "text": _json5.dumps({"code": 1,
+                                                                     "message": "配额不足"})}
+    try:
+        assert "配额不足" in quake_mod.search(-1, _key5)[2]
+    finally:
+        quake_mod.http_request = _orig_qk5
+
+    # ---- ⑤ CT 日志（crt.sh）：非 JSON/限流容错 + 通配符处理 + 默认关门控 ----
+    assert ctlog_mod.enabled(settings) is False, "ctlog 必须默认关"
+    assert ctlog_mod.build_url("example.com") == "https://crt.sh/?q=example.com&output=json"
+    _ct5 = _json5.dumps([
+        {"issuer_name": "C=US, O=Let's Encrypt, CN=R3", "common_name": "a.example.com",
+         "name_value": "a.example.com\n*.b.example.com", "id": "111", "serial_number": "03a1",
+         "not_before": "2020-01-01T00:00:00", "not_after": "2021-01-01T00:00:00"},
+        {"issuer_name": "C=US, O=Let's Encrypt, CN=R3", "common_name": "a.example.com",
+         "name_value": "a.example.com", "id": "222", "serial_number": "03a1",
+         "not_before": "2020-01-01T00:00:00", "not_after": "2021-01-01T00:00:00"},
+    ])
+    _recs5, _e5 = ctlog_mod.parse_records(_ct5, settings)
+    assert _e5 == "" and len(_recs5) == 1, (_e5, _recs5)
+    _r5 = _recs5[0]
+    assert _r5["entry_count"] == 2, _r5                     # 同一张证书的两条日志条目
+    assert _r5["wildcard"] == 1, _r5
+    assert "b.example.com" in _r5["san"] and all("*" not in d for d in _r5["san"]), _r5["san"]
+    assert _r5["serial"] == "03A1" and _r5["expired"] == 1 and _r5["cn"] == "a.example.com", _r5
+    assert ctlog_mod.domains_of(_recs5) == ["a.example.com", "b.example.com"]
+    for _bad5 in ("", "   ", "<html><body>429 Too Many Requests</body></html>", "null", "[]"):
+        _rr, _ee = ctlog_mod.parse_records(_bad5, settings)
+        assert _rr == [], (_bad5, _rr)
+        assert _ee or _bad5 == "[]", f"坏输入必须给出原因而不是静默成功：{_bad5!r}"
+
+    _ct_calls = []
+
+    def _ct_http(url, **kw):
+        _ct_calls.append((url, kw))
+        return {"status": 429, "headers": {}, "text": "slow down", "length": 9}
+
+    _orig_ct5 = ctlog_mod.http_request
+    ctlog_mod.http_request = _ct_http
+    _ct_on5 = copy.deepcopy(settings)
+    _ct_on5["ctlog"] = dict(_ct_on5.get("ctlog") or {}, enabled=True)
+    try:
+        _rr5, _ee5 = ctlog_mod.search("example.com", _ct_on5)
+    finally:
+        ctlog_mod.http_request = _orig_ct5
+    assert _rr5 == [] and "429" in _ee5 and "限流" in _ee5, _ee5
+    assert _ct_calls and all("auth" not in kw for _, kw in _ct_calls), "第三方出口绝不能带登录态"
+    # 默认关 → 一次请求都不发
+    _ct_calls.clear()
+    ctlog_mod.http_request = _ct_http
+    try:
+        _rr6, _ee6 = ctlog_mod.search("example.com", settings)
+    finally:
+        ctlog_mod.http_request = _orig_ct5
+    assert _rr6 == [] and "ctlog.enabled=false" in _ee6 and not _ct_calls, (_ee6, _ct_calls)
+
+    # 三个新模块：必须走 utils.http_request，且**不许带 auth=True**（凭据红线）
+    for _p5 in ("scanner/shodan.py", "scanner/quake.py", "scanner/ctlog.py"):
+        _src5 = (ROOT / _p5).read_text(encoding="utf-8")
+        assert "http_request" in _src5, f"{_p5} 没走统一 HTTP 出口"
+        assert "auth=True" not in _src5, f"{_p5} 第三方出口不该带登录态"
+
+    # ---- ⑤b osint 阶段接线：开关打开后真的会跑，且 crt.sh 失败只记日志不挂阶段 ----
+    #      （[2c] 的老教训：纯函数测过了、阶段里没接上，表现就是"永远 0 条、日志无异常"）
+    _os_tid = db.create_task("smoke-osint5y", "example.test", ["osint"], {})
+    _os_cfg = copy.deepcopy(settings)
+    _os_cfg["shodan"] = dict(_os_cfg.get("shodan") or {}, enabled=True)
+    _os_cfg["ctlog"] = dict(_os_cfg.get("ctlog") or {}, enabled=True)
+    _os_cfg["keys"] = {"shodan": {"key": "K"}}
+    _stage5 = osint_mod.OsintStage
+    _orig_fav5, _orig_roots5 = _stage5._favicon_hashes, _stage5._root_domains
+    _stage5._favicon_hashes = lambda self, cap, workers: {12345: "http://127.0.0.1:8765/"}
+    _stage5._root_domains = lambda self: ["example.test"]
+
+    def _run_osint5(ct_http):
+        _cx5 = StageContext(_os_tid, "smoke-osint5y", parse_lines(["example.test"]), ["osint"],
+                            {}, _os_cfg, Path(_TMPDIR) / "osint5y", rec)
+        shodan_mod.http_request = lambda *a, **kw: _sh_resp
+        ctlog_mod.http_request = ct_http
+        try:
+            _stage5(_cx5).run()
+        finally:
+            shodan_mod.http_request, ctlog_mod.http_request = _orig_sh5, _orig_ct5
+        return _cx5
+
+    try:
+        # crt.sh 限流：阶段照跑完，只是 CT 那一路没有产出（不抛异常、不中断）
+        _cx_bad = _run_osint5(lambda url, **kw: {"status": 429, "headers": {},
+                                                 "text": "slow down", "length": 9})
+        assert "example.com" in _cx_bad.results["osint_domains"], _cx_bad.results["osint_domains"]
+        assert not any("example.test" == d for d in _cx_bad.results["osint_domains"])
+        assert not db.list_certs(_os_tid), "限流时不该写出证书"
+        # crt.sh 正常：证书记录落库（source=ct）+ 域名进拓展域名
+        _cx_ok = _run_osint5(lambda url, **kw: {"status": 200, "headers": {},
+                                                "text": _ct5, "length": len(_ct5)})
+        _doms5 = _cx_ok.results["osint_domains"]
+        assert "a.example.com" in _doms5 and "b.example.com" in _doms5, _doms5
+        _certs5 = [dict(r) for r in db.list_certs(_os_tid)]
+        assert len(_certs5) == 1 and _certs5[0]["source"] == "ct", _certs5
+        assert _certs5[0]["cn"] == "a.example.com" and _certs5[0]["expired"] == 1, _certs5
+        _srcs5 = {r["source"] for r in db.list_subdomains(_os_tid)}
+        assert "osint:ctlog" in _srcs5 and "osint:shodan" in _srcs5, _srcs5
+        assert all("*" not in r["domain"] for r in db.list_subdomains(_os_tid)), \
+            "通配符绝不能写进资产库"
+    finally:
+        _stage5._favicon_hashes, _stage5._root_domains = _orig_fav5, _orig_roots5
+
+    # ---- ⑥ 新开关的三方一致：DEFAULTS ↔ settings.yaml ↔ GUI 表单/POST 映射 ----
+    _def5 = _DEF if "_DEF" in dir() else __import__(
+        "scanner.config", fromlist=["DEFAULTS"]).DEFAULTS
+    for _sec5, _keys5 in (("ssrf", ("enabled", "callback_base", "wait_seconds", "max_params")),
+                          ("shodan", ("enabled", "max_sites", "max_assets",
+                                      "black_ico_threshold")),
+                          ("quake", ("enabled", "max_sites", "max_assets",
+                                     "black_ico_threshold")),
+                          ("ctlog", ("enabled", "max_domains", "max_records",
+                                     "write_certs"))):
+        assert _sec5 in _def5 and _sec5 in settings, f"缺配置段 {_sec5}"
+        for _k5 in _keys5:
+            assert _k5 in _def5[_sec5], f"DEFAULTS.{_sec5} 缺 {_k5}"
+            assert _k5 in (settings.get(_sec5) or {}), f"settings.yaml.{_sec5} 缺 {_k5}"
+    assert _def5["ssrf"]["enabled"] is False and _def5["shodan"]["enabled"] is False
+    assert _def5["quake"]["enabled"] is False and _def5["ctlog"]["enabled"] is False
+    _sh5 = c.get("/settings").get_data(as_text=True)
+    for _n5b in ("ssrf_enabled", "ssrf_callback_base", "shodan_enabled",
+                 "shodan_black_ico_threshold", "quake_enabled", "quake_max_sites",
+                 "ctlog_enabled", "ctlog_write_certs"):
+        assert f'name="{_n5b}"' in _sh5, f"策略配置缺字段 {_n5b}"
+    _cap5 = {}
+
+    def _fake_save5(d):
+        _cap5.clear()
+        _cap5.update(d)
+        return load_settings()
+
+    _orig_save5 = gui_app.save_settings
+    gui_app.save_settings = _fake_save5
+    try:
+        assert c.post("/settings", data={"min_severity": "medium", "ssrf_enabled": "1",
+                                         "shodan_enabled": "1", "quake_enabled": "1",
+                                         "ctlog_enabled": "1",
+                                         "ctlog_write_certs": "1"}).status_code == 302
+        assert _cap5["ssrf"]["enabled"] is True, _cap5.get("ssrf")
+        assert _cap5["shodan"]["enabled"] is True and _cap5["quake"]["enabled"] is True
+        assert _cap5["ctlog"]["enabled"] is True and _cap5["ctlog"]["write_certs"] is True
+        # 未勾选 → 必须落为关闭（否则 GUI 存一次策略就把配置吃掉）
+        assert c.post("/settings", data={"min_severity": "medium"}).status_code == 302
+        assert _cap5["ssrf"]["enabled"] is False and _cap5["shodan"]["enabled"] is False
+        assert _cap5["quake"]["enabled"] is False and _cap5["ctlog"]["enabled"] is False
+    finally:
+        gui_app.save_settings = _orig_save5
+    # 「SSL 证书」页签要能区分 TLS 握手与 CT 日志两种来源（否则两类记录会混在一起看不懂）
+    _ct_tid = db.create_task("smoke-ctlog", targets, ["osint"], {})
+    db.insert_certs(_ct_tid, [
+        {"url": "https://a.test/", "host": "a.test", "port": 443, "cn": "a.test",
+         "issuer": "CN=R3", "not_before": "", "not_after": "", "days_left": None,
+         "expired": 0, "self_signed": 0, "san": ["a.test"], "serial": "1",
+         "sig_algo": "sha256WithRSA", "sha256": "AA:BB", "source": "tls"},
+        {"url": "", "host": "example.com", "port": 0, "cn": "example.com",
+         "issuer": "CN=R3", "not_before": "2020-01-01 00:00:00",
+         "not_after": "2021-01-01 00:00:00", "days_left": -1, "expired": 1,
+         "self_signed": 0, "san": ["example.com", "b.example.com"], "serial": "03A1",
+         "sig_algo": "", "sha256": "", "source": "ct"},
+    ])
+    _ch5 = c.get(f"/tasks/{_ct_tid}").get_data(as_text=True)
+    assert "<th>来源</th>" in _ch5, "「SSL 证书」页签缺来源列"
+    assert "TLS 握手" in _ch5 and "CT 日志" in _ch5, "页签没区分两种证书来源"
+    print("[5y] 批次4 ok: XSS 上下文判定表（8 上下文定级 + 探针定界符存活判定 + 全转义不报）"
+          " + A10 SSRF 受控回连（默认关零请求 / 本机监听自证 / 外部回调不谎报 / 线程不泄漏）"
+          " + 布尔盲注（恒真恒假对比数字 + 抖动不判 + 无 SLEEP）"
+          " + Shodan/Quake（无 key 不发请求 + 查询串 + 阈值 + 裸 IP 收口 + POST/配额报错）"
+          " + CT 日志（非 JSON/限流容错 + 通配符剥离 + 默认关门控 + 第三方不带登录态）"
+          " + osint 阶段接线（限流只记日志不挂阶段 / 正常时证书落库 source=ct / 裸 IP 与通配符不入库）"
+          " + 新开关三方一致（DEFAULTS/settings.yaml/GUI POST）+ 证书来源列")
     print("SMOKE PASS")
 
 

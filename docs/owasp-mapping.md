@@ -9,8 +9,9 @@
 | | a01-open-redirect | 常见跳转参数 + 外部域，校验 3xx Location | 覆盖参数名有限，需人工确认 |
 | A02 加密机制失效 | a02-no-https | 明文 HTTP 判定 | — |
 | | a02-cookie-flags | Set-Cookie 缺少 HttpOnly/Secure | requests 合并重复响应头，多 Cookie 时解析为近似值 |
-| A03 注入 | a03-sqli-error | 常见参数注入单引号，匹配数据库报错特征（带 payload 变形绕 WAF） | 仅报错回显型；盲注不做（避免破坏性/耗时） |
-| | a03-xss-reflect | 常见参数注入标记串，检查未编码回显（带变形） | 仅反射型信号；不做上下文分析 |
+| A03 注入 | a03-sqli-error | 常见参数注入单引号，匹配数据库报错特征（带 payload 变形绕 WAF） | 仅报错回显型 |
+| | a03-sqli-blind | **布尔型盲注**：同一参数发"恒真/恒假"两个 payload，比状态码与响应长度；恒真再发一次做稳定性复验（排除页面抖动） | 只做布尔差分；**明确不做 `SLEEP`/`BENCHMARK`/`WAITFOR` 延时型**（会挂住目标数据库连接线程＝事实上的 DoS，且跨公网抖动会盖过时间差）。每参数 3 个请求，总预算 12 |
+| | a03-xss-reflect | 常见参数注入标记串 + 上下文探针，判**回显上下文**（文本节点/双引号属性/单引号属性/无引号属性/JS 字符串/JS 代码/标签名/HTML 注释）并按上下文定级 | 级别随上下文：JS 串·JS 代码·无引号属性·标签名＝high；引号属性·文本节点＝medium（文本节点要求 `<` 未被转义）；HTML 注释＝降级为 low。**全转义的回显一律不报** |
 | A04 不安全设计 | — | 不自动化 | 需要业务建模，黑盒无法可靠判定 |
 | A05 安全配置错误 | a05-security-headers | CSP/X-Content-Type-Options/X-Frame-Options/HSTS 缺失检查 | 信息级，非漏洞 |
 | | a05-banner-disclosure | Server/X-Powered-By 带版本 | 信息级 |
@@ -20,7 +21,7 @@
 | A07 认证与身份失败 | — | 不自动化（避免口令爆破） | 弱口令检测建议用专用工具在授权范围内进行 |
 | A08 软件与数据完整性失效 | a08-missing-sri | 外部脚本缺 integrity 属性 | 信息级，仅 CDN 供应链风险信号 |
 | A09 日志与监控失效 | — | 不自动化 | 属于工程流程问题，非黑盒可测 |
-| A10 SSRF | — | 不自动化 | 可靠检测需要受控回连服务器，留待 roadmap（回连 DNS/HTTP 服务） |
+| A10 SSRF | a10-ssrf-callback | **受控回连**（默认关，`ssrf.enabled`）：任务内起本机 HTTP 监听，每参数唯一 token，把 `http://<回调基址>/<token>` 注入候选参数；收到该 token 的访问即判"目标服务端会发起出网请求" | 只证明"**会出网**"，**刻意不拿这个通道去打内网地址**（那是利用，越线）、不提交表单、不做延时判定。只在目标能回访扫描机时有效（NAT/云主机大概率收不到）；外部回调基址（`ssrf.callback_base`）模式下读不到命中 → 只注入不报，不伪造 |
 
 ## 与 POC 库的分工
 
@@ -34,9 +35,10 @@
 检查结果受 `checks` 段**三级门控**（GUI「策略配置」页可改）：
 
 - **执行级 `skip_severities`**：默认 `["info","low"]`。列在这里的级别**连请求都不发**——内置检查与
-  POC 引擎同规则（`config.skip_severities()` 是唯一判定入口）。因此下表里 12 项内置检查**默认只有
-  5 项真正执行**，`a02-no-https`、`a02-cookie-flags`、`a05-security-headers`、`a05-banner-disclosure`、
+  POC 引擎同规则（`config.skip_severities()` 是唯一判定入口）。因此下表里 14 项内置检查**默认只有
+  7 项真正执行**，`a02-no-https`、`a02-cookie-flags`、`a05-security-headers`、`a05-banner-disclosure`、
   `a05-default-pages`、`a06-legacy-banner`、`a08-missing-sri` 这 7 项直接不跑。
+  （那 7 项里的 `a10-ssrf-callback` 另有 `ssrf.enabled` 总开关且**默认关**，关着时一次请求都不发。）
 - **结果级 `min_severity`**：默认 `medium`，只保留 `severity >= medium` 的结果——即使上面的执行门被
   放宽（清空 `skip_severities`），低危/info 结果仍默认不产出。CTF 实战里它们只会淹没注入/RCE 类
   的高位结果。需要广谱信息收集时，两个开关要**一起**放宽（取消勾选 info/low，并把门槛改成 `low`/`info`）。
