@@ -288,4 +288,3 @@ api.qrserver.com
 cloudflareinsights.com
 capacitorjs.com
 debox.pro
-pong-pengo.de

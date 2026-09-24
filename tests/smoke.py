@@ -3898,10 +3898,16 @@ workflows:
     _noise6k = _jm6k._noise_set()
     for _d6k in ("reactjs.org", "react.dev", "bscscan.com", "solscan.io",
                  "cloudflareinsights.com", "api.qrserver.com", "capacitorjs.com",
-                 "debox.pro", "pong-pengo.de"):
+                 "debox.pro"):
         assert _d6k in _noise6k, f"[6k] 第三方清单缺 {_d6k}"
+    # ✱ `pong-pengo.de` **已从清单移除**（续22-fix）：它含目标品牌词 `pengo`，可能是"相关域名"
+    #    而不是噪声 —— **黑名单漏一条的成本远低于误杀一个相关域名**（QA 独立复验建议，
+    #    主理人采纳）。这里**反向断言**它不在清单里：防止有人"顺手加回去"却不知道为什么被删过。
+    assert "pong-pengo.de" not in _noise6k, \
+        "[6k] pong-pengo.de 已按品牌误杀风险移除，不应再在清单里"
     # ✱ `static.cloudflareinsights.com` 结尾是 `.cloudflareinsights.com` —— `cloudflare.com` 拦不住它。
-    #    证伪实测（bbec7f0 旧清单 267 条）：9/9 目标域名全缺、`_is_noise(static.cloudflareinsights.com)`
+    #    证伪实测（bbec7f0 旧清单 267 条）：上述 8 个目标域名全缺（`pong-pengo.de` 已于续22-fix
+    #    移除，不再计入）、`_is_noise(static.cloudflareinsights.com)`
     #    为 False，故 `in _noise6k` / `is True` 断言在旧代码上真的失败。
     assert _jm6k._is_noise("static.cloudflareinsights.com", set(), []) is True, \
         "[6k] cloudflareinsights.com 必须单独成行"

@@ -560,6 +560,20 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
     让调用点报出"网络不可达"这类文案，**任务级错误行与状态才是权威**；
   - 默认值取"恰好等于现有单任务最大并发"（`max_inflight_*`=256 = `portscan.full_workers`），
     故**默认不改变既有行为**（0 = 不限也是同一目的）；要收紧再往下调。
+- **拓展域名降噪（续22，`09044ee`）的能力边界（如实登记，不装作全能）**（2026-09-24）：
+  - **PSL 是快照、不是实时**：`config/dicts/tlds.txt`（6423 条）由 `tools/import_tlds.py`
+    **离线**从 **tldextract 5.1.3 打包的 PSL 快照**生成（包约 2024-11 安装；快照的确切日期未标注）。
+    快照之后新委派的 gTLD **不在其中**，且未收录的后缀按 **fail-closed 处理（会被丢弃）**。
+    清单缺失/为空时 **fail-open**（回退宽松判断 + 告警一次）—— **宁可留噪音，也不静默丢资产**。
+  - **IDN / 中文域名整体不被识别**（**既有**能力缺失，非续22 引入）：`utils.is_domain()` 的
+    `_DOMAIN_RE` 要求末位 label 是**纯 ASCII 字母** `^[a-z]{2,24}$`，所以 `例子.中国`、
+    `foo.xn--fiqs8s` 全部被挡。**要支持 IDN 需另开一轮。**
+  - **`.zip` 域名不被识别**（**既有**）：`jsmine._valid_host()` 的 `_FILE_EXT` 把 `zip`
+    当文件后缀挡掉（`foo.zip` → False）。要支持需调整 `_FILE_EXT`。
+  - **FOFA 标题归属过滤（`fofa.title_match`）的边界**：默认 `label` 档要求"标题某个 token
+    与域名某个 label **完全相等**"，因此**连字符域名永不命中** —— `pengo-wallet.com` 的 label
+    是整段 `pengo-wallet`，标题 token 被切成 `pengo`/`wallet`，永不相等 → **会被丢弃**。
+    需要时用 `substring` 档放宽（能救回，但 `silvia-pengo.com` 那类也会跟着回来）。
 - **fscan 适配的输出形态已用 fscan 2.2.1 实机校准**（2026-09-23 续12，Linux 实机抓取）：
   开放端口**不是**早年以为的 `[+] ip:port open`，而是这四种行形态之一 ——
   `[*] ip:port <service>` / `[*] http://ip:port` / `[+] http://ip:port code:NNN` / 老版本 `[+] ip:port open`；

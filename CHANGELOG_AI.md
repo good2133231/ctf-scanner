@@ -3,6 +3,40 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续22-fix：移除 `pong-pengo.de` + 登记拓展域名降噪的能力边界
+> 实施者：**WorkBuddy · Hy4-preview**（改动极小，主理人本轮直接实施：1 行数据 + 1 处测试断言 + 1 段文档）
+
+处理 QA 独立复验 `09044ee`（续22）报出的三项待办。**均非代码缺陷**，属"收紧之后要如实登记的边界"。
+
+### 改动
+- `config/dicts/js_thirdparty.txt`：**移除 `pong-pengo.de`**（291 → 290 条）。
+  理由：它**含目标品牌词 `pengo`**，可能是"相关域名"而不是噪声 ——
+  **黑名单漏一条的成本，远低于误杀一个相关域名**（QA 建议，主理人采纳）。
+  其余 crypto 类（`etherscan` / `bscscan` / `solscan` / `tronscan` / `metamask` /
+  `walletconnect` / `infura` / `debox.pro`）**保留**：项目有 `protect` 机制，
+  **它本身就是目标时不会被误杀**（实测 `_is_noise("bscscan.com", protect={"bscscan.com"}) = False`）。
+- `tests/smoke.py [6k]`：同步改断言 —— 目标域名元组去掉该条（9 → 8），并**反向断言**
+  `"pong-pengo.de" not in _noise6k`，防止有人"顺手加回去"却不知道它为什么被删过。
+- `AGENTS.md §7`：新增「拓展域名降噪（续22）的能力边界」一条，**如实登记**四类边界 ——
+  ① `tlds.txt` 是 tldextract 5.1.3 的 **PSL 快照（非实时）**，未收录后缀按 **fail-closed 丢弃**，
+  清单缺失/为空时 **fail-open**（宁可留噪音，也不静默丢资产）；
+  ② **IDN / 中文域名整体不被识别**（**既有**能力缺失：`is_domain` 的 `_DOMAIN_RE` 要求末位
+  label 是纯 ASCII 字母）；③ **`.zip` 域名不被识别**（**既有**：`_FILE_EXT` 把 `zip` 当文件后缀）；
+  ④ **FOFA 标题 `label` 档连字符域名永不命中**（`pengo-wallet.com` 会被丢弃，需 `substring` 档）。
+
+### 验证
+- `py -3 tests/smoke.py` → **SMOKE PASS**（`[6k]` 绿）。
+- 行尾：3 个改动文件均为纯 CRLF、裸 LF = 0；`git diff --numstat` 与
+  `--ignore-cr-at-eol --numstat` **完全一致**（无行尾-only 改动）。
+- **⚠️ 本轮踩坑（已修，记录下来以免再犯）**：先用 `sed -i` 删行，把 `js_thirdparty.txt`
+  **整体转成了 LF**（`CRLF=0 / 裸LF=290`，`numstat` 立刻暴露成 290/291 整文件重写）。
+  已改为**字节级 `replace(b'pong-pengo.de\r\n', b'')`** 处理。
+  **结论：本项目禁止用 `sed` 动数据文件**（行尾敏感，且 numstat 会立刻出卖你）。
+
+### 明确不做
+- **不修** IDN / `.zip` 的既有识别缺失（需另开一轮，不是本轮范围）。
+- **不改** `label` 档规则：连字符边界已写进文档，需要时用 `substring` 档放宽。
+
 ## 2026-09-24 —— 续25：同任务「追加式执行」（补扫/复查结果累积进同一任务）
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 
