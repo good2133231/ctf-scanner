@@ -167,6 +167,9 @@ def create_app():
     app.jinja_env.globals["source_label"] = source_label
     app.jinja_env.globals["ip_note_label"] = ip_note_label
     db.init_db()
+    # 启动时对账：进程重启后，之前 status='running' 的孤儿任务没人推进，标为 failed
+    # （不自动续跑；pid 仍存活的跳过，见 db.reconcile_orphan_tasks）
+    db.reconcile_orphan_tasks()
     sync_pocs(settings)
 
     # ---------- 鉴权 ----------
@@ -370,7 +373,8 @@ def create_app():
     @app.route("/tasks/<int:task_id>/export")
     @login_required
     def task_export(task_id):
-        """导出任务报告：`?fmt=md`（默认，下载 .md）/ `html`（下载 .html）/ `pdf`（下载 .pdf）。
+        """导出任务报告：`?fmt=md`（默认，下载 .md）/ `html`（下载 .html）/ `pdf`（下载 .pdf）/
+        `jsonl`（下载 .jsonl，机器可读的 JSON Lines）。
 
         PDF 走本机无头浏览器的 `--print-to-pdf`（见 `report.export_pdf`）：找不到浏览器时
         **把原因显示出来**（而不是 500 或一个空文件），并提示可改导出 HTML。
@@ -378,7 +382,8 @@ def create_app():
         task = db.get_task(task_id)
         if not task:
             abort(404)
-        from scanner.report import export_pdf, generate, generate_html
+        from scanner.report import (export_pdf, generate, generate_html,
+                                    generate_jsonl)
         fmt = (request.args.get("fmt") or "md").strip().lower()
         stamp = time.strftime("%Y%m%d_%H%M%S")
         if fmt == "pdf":
@@ -402,6 +407,12 @@ def create_app():
             return Response(body, mimetype="text/html; charset=utf-8",
                             headers={"Content-Disposition":
                                      f"attachment; filename=task_{task_id}_{stamp}.html"})
+        if fmt == "jsonl":
+            body = generate_jsonl(task_id) or ""
+            # NDJSON 的标准 mimetype；`charset=utf-8` 保证中文可读（JSONL 用 ensure_ascii=False）
+            return Response(body, mimetype="application/x-ndjson; charset=utf-8",
+                            headers={"Content-Disposition":
+                                     f"attachment; filename=task_{task_id}_{stamp}.jsonl"})
         md = generate(task_id) or ""
         fname = f"task_{task_id}_{stamp}.md"
         return Response(md, mimetype="text/markdown; charset=utf-8",

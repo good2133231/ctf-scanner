@@ -216,7 +216,12 @@ ctf-scanner/
 5. **POC 注册表与扫描联动**：`engine.load_enabled_pocs` 只返回注册表里 `enabled=1 AND status='ok'`
    且级别未被 `skip_severities` 排除的记录，因此新增 POC 后需 `runner.sync_pocs()`
    （GUI 启动/刷新时会调用）。
-6. 单条漏洞去重键 = `(target, poc_id)`，即**每 POC 每目标最多一条**。
+6. **漏洞去重是调用方约定，数据库层没有约束兜底**：约定的去重键是 `(target, poc_id)`
+   （即"每 POC 每目标最多一条"），但 `vulns` 表**没有** UNIQUE 约束（`scanner/db.py` 建表语句）、
+   `db.insert_vuln` 是**裸 INSERT** —— 去重完全由**调用方**在做：
+   `scanner/stages/vulnscan.py` 与 `scanner/stages/takeover.py` 各自建 `seen` 集合去重；
+   `scanner/stages/jsmine.py` 则是直接插入、靠上游按主机名去重。因此新增任何写 `vulns` 的路径
+   **必须自己保证去重**，不能指望数据库拦（用户已明确把"给 `vulns` 加 UNIQUE 约束"划到范围外）。
 7. **分级门控（三层，`checks` 段）**：
    1. `skip_severities` 默认 `["info","low"]` —— **执行级**：这些级别连请求都不发
       （`owasp.checks.enabled_checks` + `pocs.engine.load_enabled_pocs` 同规则，helper 是

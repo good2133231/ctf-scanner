@@ -3,6 +3,72 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-24 —— 续20：框架对账小切口三件套（JSONL 导出 / 静默失败治理 / 孤儿任务对账）
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
+
+按用户拍板的"最小变更 + 高确定性"范围实施（**不做** F2 统一并发/请求预算、**不做** F4 加表约束/迁移、
+**不改**流水线最终状态语义）。三件套 + 5 处文档/代码冲突订正。
+
+### A. JSONL 结果导出（`scanner/report.py::generate_jsonl`，F6）
+
+- 新增 `generate_jsonl(task_id)`：复用现成的 `collect(task_id)`（四种格式共用同一份数据快照，
+  防格式漂移），输出 JSON Lines（每行一个 JSON 对象，首行 `type="meta"`，随后
+  `vuln` / `site` / `subdomain` / `dir` / `port` / `cseg` / `cert` / `lead`）。
+  `ensure_ascii=False` + UTF-8、每行（含末行）以 `\n` 结尾；任务不存在返回 `None`。
+- **刻意差异**：漏洞导出 `collect()` 的 `all_vulns`（**全部**行，含 `review` / `review_note`），
+  而不是已过滤误报的 `vulns` —— JSONL 给机器消费，复核状态交给下游自己筛，不替它静默丢数据。
+  理由写进 docstring。
+- 序列化陷阱：`db.*` 返回 `sqlite3.Row`（**没有 `.get()`**），新增 `_row_dict()` 先转普通 dict 再序列化。
+- `gui/app.py` `/tasks/<id>/export` 加 `jsonl` 分支（`application/x-ndjson; charset=utf-8`，
+  文件名 `task_<id>_<stamp>.jsonl`）；`task_detail.html` 加「导出 JSONL」按钮；
+  `cli/client.py` 加 `--report-jsonl`（CLI 本就有导出入口，按同样模式补）；
+  `docs/usage.md` 同步。
+
+### B. 静默失败治理（`scanner/db.py::append_task_error` + `scanner/runner.py`，F1）
+
+- 新增 `db.append_task_error(task_id, msg)`：读当前 `error` 后**追加**（`\n` 分隔），
+  走唯一写收口 `_exec`；`msg` 为空/纯空白是 no-op（不产生前导分隔符）。
+- `runner.py`：阶段异常改用 `append_task_error`（不再覆盖）；外层 except 拆开——
+  状态照旧 `update_task`、错误改 `append_task_error`；`PipelineRunner.run()` 收集失败阶段名，
+  循环后若有失败额外打一条 WARNING 汇总（`[runner] N 个阶段异常：…`）。
+  **终态语义不变**（阶段失败时任务仍以 `done` 收尾）。
+- 顺手订正 `runner.py` 文件头 docstring：`dirscan` 实际默认**开**（`config.DEFAULTS.dirscan.enabled=true`），
+  已从"默认关"移到"默认开"那组；并逐段核对了 `DEFAULTS` 各 `enabled`。
+
+### C. 重启后 `running` 任务对账（`scanner/db.py::reconcile_orphan_tasks`）
+
+- `tasks` 加 `pid INTEGER DEFAULT 0`（建表 + `_COLUMN_PATCHES` 老库原地补列），
+  `create_task()` 写 `os.getpid()`。
+- 新增 `_pid_alive(pid)`（零依赖跨平台）：Windows 走 `ctypes` `OpenProcess(SYNCHRONIZE)` +
+  `WaitForSingleObject(h,0)`（显式声明 argtypes/restype 防 64 位句柄截断，`finally` 里 `CloseHandle`）；
+  POSIX 走 `os.kill(pid,0)`。`pid` 为 0/None 视为已死。
+- 新增 `reconcile_orphan_tasks()`：扫 `status='running'`，`pid` 存活 → **跳过**（不误杀），
+  否则标 `failed` + `current_stage=''` + 追加"进程重启，任务中断（启动时对账）"；整体不抛异常。
+- 调用点：`gui/app.py` 与 `cli/client.py` 的 `db.init_db()` 之后各一次。
+  **刻意不加**到 `tests/smoke.py` 的 `init_db()` 之后（测试要自己显式、可控地验证）。
+
+### D. 5 处文档/代码冲突订正
+
+1. `runner.py` docstring 的 `dirscan` 默认值（见 B）——**属实，已改**。
+2. `docs/architecture.md` subdomains 字段列表补 `ip_note` + 语义说明——**属实，已改**。
+3. `docs/architecture.md` 的 `source` 枚举补 4 个（`osint:fofa-title` / `osint:shodan` /
+   `osint:quake` / `osint:ctlog`）——**属实，已改**。
+4. `docs/architecture.md`「每个阶段三处都写」——**不成立，已按实际改写**：
+   subdomain/takeover/probe/jsmine/dirscan 三处都写；portscan/osint/vulnscan/intel/heuristic
+   只写 SQLite + `ctx.results`（无文本产物）；cert/screenshot 只写文本产物 + SQLite（无 `ctx.results`）。
+5. `AGENTS.md` §5 第 6 条「去重键 = (target, poc_id) 是不变量」——**表述不准，已改**：
+   `vulns` 表无 UNIQUE 约束、`insert_vuln` 是裸 INSERT，去重是**调用方约定**
+   （vulnscan/takeover 各自 `seen` 集合，jsmine 直接插入靠上游按主机名去重），数据库层无兜底。
+   **本次不加 UNIQUE 约束**（用户已划到范围外）。
+
+### 测试
+
+- `tests/smoke.py` 新增 `[6b]`（JSONL）/ `[6c]`（错误不丢）/ `[6d]`（孤儿对账）三节。
+- 按 §6.1 逐条**证伪**（还原旧写法跑出真实 `AssertionError` 后改回）：
+  - `[6b]`：把 `generate_jsonl` 的漏洞循环改回 `d["vulns"]` → `AssertionError: []`（误报行丢失）。
+  - `[6c]`：把 `runner` 改回 `update_task(error=...)` 覆盖 → `AssertionError: 第一个阶段的错误丢失了（覆盖式写法下只剩最后一条）：'smoke-boom-b: 阶段B异常'`。
+  - `[6d]`：把 `reconcile_orphan_tasks` 改成 no-op → `AssertionError: running`（孤儿未被标 failed）。
+
 ## 2026-09-24 —— 续19：批次 4 复核后的三处修复（盲注预算分配 / ssrf close 死代码 / ctlog 逗号分隔）
 > 实施者：**WorkBuddy · Hy4-preview**
 

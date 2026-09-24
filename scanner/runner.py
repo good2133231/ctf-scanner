@@ -2,10 +2,10 @@
 
 阶段顺序：subdomain -> takeover -> portscan -> probe -> cert -> screenshot -> osint
 -> jsmine -> dirscan -> vulnscan -> intel -> heuristic
-（默认开：takeover / jsmine / vulnscan；默认关：portscan / cert / screenshot / osint /
- dirscan / intel / heuristic，均可在「策略配置」按分类开关；
+（默认开：takeover / jsmine / dirscan / vulnscan；默认关：portscan / cert / screenshot /
+ osint / intel / heuristic，均可在「策略配置」按分类开关；
  subdomain 无开关，由任务勾选的 stages 决定）
-单个阶段异常不中断整条流水线（保留已完成阶段的产物），错误记录进任务表。
+单个阶段异常不中断整条流水线（保留已完成阶段的产物），错误**追加**记录进任务表。
 
 停止机制（协作式取消）：
 Python 线程无法被安全强杀，因此采用"取消事件 + 阶段内主动检查"的协作式方案：
@@ -124,6 +124,7 @@ class PipelineRunner:
         db.update_task(ctx.task_id, status="running", progress=0)
         total = max(1, len(stages))
         stopped = False
+        failed = []
         for i, sname in enumerate(stages):
             if ctx.stopped():
                 stopped = True
@@ -135,10 +136,15 @@ class PipelineRunner:
             except Exception as e:  # 阶段级容错
                 ctx.logger.error(f"[{sname}] 阶段异常：{e}")
                 ctx.logger.debug(traceback.format_exc())
-                db.update_task(ctx.task_id, error=f"{sname}: {e}")
+                # **追加**而不是覆盖：一条任务可能有多个阶段失败，覆盖式写法会让前面的错误丢失
+                db.append_task_error(ctx.task_id, f"{sname}: {e}")
+                failed.append(sname)
             if ctx.stopped():
                 stopped = True
                 break
+        if failed:
+            # "部分跑坏"必须在日志里一眼可见（此前只有分散的 error 行，容易被后面的日志淹没）
+            ctx.logger.warning(f"[runner] {len(failed)} 个阶段异常：{', '.join(failed)}")
         if stopped:
             done = int((i + 1) * 100 / total) if stages else 0
             db.update_task(ctx.task_id, status="stopped", progress=done, current_stage="")
@@ -181,8 +187,9 @@ def run_task(task_id, name, targets_text, stages, options, settings):
         PipelineRunner(ctx).run()
     except Exception as e:
         logger.error(f"任务失败：{e}\n{traceback.format_exc()}")
-        db.update_task(task_id,
-                       status="stopped" if ctx.stopped() else "failed", error=str(e))
+        db.update_task(task_id, status="stopped" if ctx.stopped() else "failed")
+        # 错误信息**追加**（不覆盖）：保留前面各阶段已经记下的错误（否则只剩这一条）
+        db.append_task_error(task_id, str(e))
     finally:
         _unregister_stop(task_id)
     return ctx

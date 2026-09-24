@@ -119,7 +119,7 @@ from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.targets import expand_cidr, parse_lines
 from scanner.pocs import engine
-from scanner.report import export_pdf, generate, generate_html
+from scanner.report import export_pdf, generate, generate_html, generate_jsonl
 from scanner.runner import (STAGE_ORDER, PipelineRunner, StageContext, run_task,
                             sync_pocs)
 
@@ -3320,6 +3320,169 @@ workflows:
     assert _cm8[0]["san"] == ["a.example.com", "b.example.com", "c.example.com"], _cm8[0]["san"]
     print("[6a] 复核修复回归 ok: 盲注覆盖全部 5 个参数（非首位参数可命中，预算 30 = 2×5×3）"
           " / ssrf close() 真 join（幂等、无线程残留）/ ctlog 逗号连写正确切分且不误标通配符")
+
+    # 6b) 交付物 A：JSONL 结果导出（机器可读的结构化导出，F6）
+    #     与 MD/HTML 的**刻意差异**：JSONL 导出 collect() 的 all_vulns（含已判误报的行），
+    #     把复核状态交给下游自己筛，而不是替它静默丢数据。这条断言专门锁住该差异。
+    import json as _json6
+    _j_tid = db.create_task("smoke-jsonl-中文任务", targets, ["probe"], {"offline": True})
+    db.insert_sites(_j_tid, [{"url": "http://j.test/", "host": "j.test", "port": 80,
+                              "status": 200, "title": "中文标题·测试", "server": "nginx",
+                              "tech": "php", "source": "probe"}])
+    db.insert_certs(_j_tid, [{"url": "https://j.test/", "host": "j.test", "port": 443,
+                              "cn": "j.test", "issuer": "CN=j.test", "expired": 1,
+                              "self_signed": 1, "days_left": -3, "san": ["j.test"],
+                              "sig_algo": "sha256WithRSA", "sha256": "AA:BB", "source": "tls"}])
+    db.insert_vuln(_j_tid, {"target": "http://j.test/", "poc_id": "smoke-jsonl-hit",
+                            "name": "中文漏洞名", "severity": "high", "owasp": "A03"})
+    db.insert_vuln(_j_tid, {"target": "http://j.test/", "poc_id": "smoke-jsonl-fp",
+                            "name": "复核掉的中文漏洞", "severity": "low"})
+    _j_fp_id = [v["id"] for v in db.list_vulns(task_id=_j_tid, limit=50)
+                if v["poc_id"] == "smoke-jsonl-fp"][0]
+    assert db.set_vuln_review(_j_fp_id, "false_positive", "统一 200 的软 404") == 1
+
+    _jl = generate_jsonl(_j_tid)
+    assert _jl is not None, "真实任务的 generate_jsonl 不该返回 None"
+    assert generate_jsonl(999999) is None, "不存在的 task_id 应返回 None（与 generate 一致）"
+    assert _jl.endswith("\n"), "每行（含最后一行）都必须以 \\n 结尾，才是合法 JSON Lines"
+    _j_lines = _jl.splitlines()
+    _j_objs = [_json6.loads(ln) for ln in _j_lines]        # 每行都能 json.loads
+    assert _j_objs[0]["type"] == "meta", _j_objs[0]
+    assert _j_objs[0]["task_id"] == _j_tid and "counts" in _j_objs[0], _j_objs[0]
+    # 中文原样还原（证明 ensure_ascii=False + UTF-8）
+    _j_site = [o for o in _j_objs if o["type"] == "site"][0]
+    assert _j_site["title"] == "中文标题·测试", repr(_j_site["title"])
+    # 先前插入的漏洞能以 type=vuln 找到，且 poc_id / severity 正确
+    _j_vulns = [o for o in _j_objs if o["type"] == "vuln"]
+    _j_hit = [v for v in _j_vulns if v["poc_id"] == "smoke-jsonl-hit"]
+    assert _j_hit and _j_hit[0]["severity"] == "high", _j_hit
+    # **刻意差异**：已判误报的漏洞仍以 type=vuln 出现在 JSONL 里（review=false_positive），
+    # 而 MD 的「潜在漏洞」结论表里**不含**它（只在文末「已判误报」附录留痕）。
+    _j_fp = [v for v in _j_vulns if v["poc_id"] == "smoke-jsonl-fp"]
+    assert _j_fp and _j_fp[0]["review"] == "false_positive", _j_fp
+
+    def _md_section(md_text, title):
+        """取 MD 里 `## <title>` 到下一个 `## ` 之间的片段（区分结论表与附录）。"""
+        marker = f"## {title}"
+        if marker not in md_text:
+            return ""
+        return md_text.split(marker, 1)[1].split("\n## ", 1)[0]
+
+    _j_md = generate(_j_tid)
+    assert "smoke-jsonl-fp" not in _md_section(_j_md, "潜在漏洞"), \
+        "已判误报的行不该进 MD「潜在漏洞」结论表（JSONL 才保留它）"
+    assert "smoke-jsonl-fp" in _md_section(_j_md, "已判误报"), \
+        "MD 文末「已判误报」附录应保留该行供溯源"
+    # 证书行能正常序列化（证明 sqlite3.Row → dict 转换有效，没踩 .get() 那个坑）
+    _j_cert = [o for o in _j_objs if o["type"] == "cert"]
+    assert _j_cert and _j_cert[0]["cn"] == "j.test", _j_cert
+    # GUI 路由：fmt=jsonl 走 NDJSON mimetype + .jsonl 文件名
+    _jr = c.get(f"/tasks/{_j_tid}/export?fmt=jsonl")
+    assert _jr.status_code == 200, _jr.status_code
+    assert "application/x-ndjson" in _jr.headers["Content-Type"], _jr.headers["Content-Type"]
+    assert ".jsonl" in _jr.headers["Content-Disposition"], _jr.headers["Content-Disposition"]
+    db.delete_task(_j_tid, backup=False)
+    print(f"[6b] JSONL 导出 ok: {len(_j_lines)} 行合法 / 首行 meta / 中文原样 / "
+          "误报行仍在（与 MD 结论表刻意差异）/ 证书行可序列化 / 路由 NDJSON")
+
+    # 6c) 交付物 B：阶段失败的错误**追加**而非覆盖（F1 静默失败治理）
+    #     先单测 append_task_error 的分隔符语义，再真跑一条"两个阶段都炸"的流水线。
+    _e_tid = db.create_task("smoke-err", targets, ["probe"], {"offline": True})
+    db.append_task_error(_e_tid, "第一条错误")
+    assert db.get_task(_e_tid)["error"] == "第一条错误", repr(db.get_task(_e_tid)["error"])
+    db.append_task_error(_e_tid, "第二条错误")
+    _e_err = db.get_task(_e_tid)["error"]
+    assert _e_err == "第一条错误\n第二条错误", \
+        f"空 error 不该产生前导分隔符、多条应换行分隔：{_e_err!r}"
+    # msg 为空 / 纯空白 → no-op（不追加空行、不产生尾随分隔符）
+    db.append_task_error(_e_tid, "")
+    db.append_task_error(_e_tid, "   \n ")
+    assert db.get_task(_e_tid)["error"] == "第一条错误\n第二条错误", \
+        repr(db.get_task(_e_tid)["error"])
+    db.delete_task(_e_tid, backup=False)
+
+    # 真跑一条两个阶段都异常的流水线（临时把两个桩阶段注册进 STAGE_REGISTRY）
+    import scanner.runner as _rn6
+
+    class _BoomA6:
+        name = "smoke-boom-a"
+
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+        def run(self):
+            raise RuntimeError("阶段A异常")
+
+    class _BoomB6:
+        name = "smoke-boom-b"
+
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+        def run(self):
+            raise RuntimeError("阶段B异常")
+
+    _saved_reg6 = dict(_rn6.STAGE_REGISTRY)
+    _rn6.STAGE_REGISTRY["smoke-boom-a"] = _BoomA6
+    _rn6.STAGE_REGISTRY["smoke-boom-b"] = _BoomB6
+    try:
+        _b_tid = db.create_task("smoke-两阶段失败", targets,
+                                ["smoke-boom-a", "smoke-boom-b"], {"offline": True})
+        run_task(_b_tid, "smoke-两阶段失败", targets,
+                 ["smoke-boom-a", "smoke-boom-b"], {"offline": True}, settings)
+        _b_err = db.get_task(_b_tid)["error"]
+        assert "smoke-boom-a: 阶段A异常" in _b_err, \
+            f"第一个阶段的错误丢失了（覆盖式写法下只剩最后一条）：{_b_err!r}"
+        assert "smoke-boom-b: 阶段B异常" in _b_err, \
+            f"第二个阶段的错误丢失了：{_b_err!r}"
+        # 终态语义不变：阶段失败时任务仍以 done 收尾（本次只让它"可见且不丢"）
+        assert db.get_task(_b_tid)["status"] == "done", db.get_task(_b_tid)["status"]
+        # 循环结束后的 WARNING 汇总要落进日志
+        _b_log = Path(db.get_task(_b_tid)["log_file"])
+        assert _b_log.exists() and "[runner] 2 个阶段异常" in _b_log.read_text(encoding="utf-8"), \
+            "缺少「N 个阶段异常」的 WARNING 汇总"
+        db.delete_task(_b_tid, backup=False)
+    finally:
+        _rn6.STAGE_REGISTRY.clear()
+        _rn6.STAGE_REGISTRY.update(_saved_reg6)
+    print("[6c] 错误不丢 ok: 两阶段失败两条错误都在 / 空 error 无前导分隔符 / "
+          "空 msg 为 no-op / 终态仍 done / 有 WARNING 汇总")
+
+    # 6d) 交付物 C：启动时对孤儿 running 任务对账（用户拍板语义：标 failed、不自动续跑）
+    import subprocess as _sp6
+    # 拿一个"确定已死"的 pid：起一个立即退出的短命进程，等它结束后再用它的 pid
+    _dead_proc = _sp6.Popen([sys.executable, "-c", "pass"])
+    _dead_proc.wait()
+    _dead_pid = _dead_proc.pid
+    assert db._pid_alive(os.getpid()) is True, "本进程必须被判定为存活"
+    assert db._pid_alive(_dead_pid) is False, "已退出的进程必须被判定为已死"
+    assert db._pid_alive(0) is False and db._pid_alive(None) is False, "0/None 一律视为已死"
+
+    _o_alive = db.create_task("smoke-orphan-alive", targets, ["probe"], {"offline": True})
+    db.update_task(_o_alive, status="running", pid=os.getpid())
+    _o_dead = db.create_task("smoke-orphan-dead", targets, ["probe"], {"offline": True})
+    db.update_task(_o_dead, status="running", pid=_dead_pid)
+    _o_zero = db.create_task("smoke-orphan-zero", targets, ["probe"], {"offline": True})
+    db.update_task(_o_zero, status="running", pid=0)
+    _o_done = db.create_task("smoke-orphan-done", targets, ["probe"], {"offline": True})
+    db.update_task(_o_done, status="done", pid=_dead_pid)
+    db.reconcile_orphan_tasks()
+    # pid 指向存活进程 → 跳过（绝不能误杀可能正在跑它的进程）
+    assert db.get_task(_o_alive)["status"] == "running", \
+        f"存活 pid 的任务被误杀：{db.get_task(_o_alive)['status']}"
+    # pid 已死 → failed + 对账标记
+    assert db.get_task(_o_dead)["status"] == "failed", db.get_task(_o_dead)["status"]
+    assert "进程重启" in (db.get_task(_o_dead)["error"] or ""), db.get_task(_o_dead)["error"]
+    assert db.get_task(_o_dead)["current_stage"] == "", db.get_task(_o_dead)["current_stage"]
+    # pid=0（老库遗留）→ failed
+    assert db.get_task(_o_zero)["status"] == "failed", db.get_task(_o_zero)["status"]
+    # done 的任务不受影响
+    assert db.get_task(_o_done)["status"] == "done", db.get_task(_o_done)["status"]
+    for _ot in (_o_alive, _o_dead, _o_zero, _o_done):
+        db.delete_task(_ot, backup=False)
+    print("[6d] 孤儿任务对账 ok: 存活 pid 保留 running / 死 pid 与 pid=0 标 failed 且带标记 / "
+          "done 不受影响")
+
     print("SMOKE PASS")
 
 

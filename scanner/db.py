@@ -6,6 +6,7 @@
 - 若后续需要多节点/高并发，替换本层为 PostgreSQL 或 MongoDB 即可，上层接口不变。
 """
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -42,6 +43,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   current_stage TEXT DEFAULT '',
   log_file TEXT DEFAULT '',
   error TEXT DEFAULT '',
+  -- 创建该任务时跑流水线的进程 pid（0 = 老库遗留行）：进程重启后靠它识别孤儿任务
+  pid INTEGER DEFAULT 0,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS subdomains (
@@ -175,6 +178,8 @@ _COLUMN_PATCHES = {
     "pocs": {"confidence": "TEXT DEFAULT ''"},
     # 目录命中页的 <title>：老库补列（新库由 SCHEMA 直接建出）
     "dirs": {"title": "TEXT DEFAULT ''"},
+    # 孤儿任务对账用：老库补 pid 列（0 = 老库遗留行，一律视为进程已死）
+    "tasks": {"pid": "INTEGER DEFAULT 0"},
 }
 
 
@@ -213,15 +218,117 @@ def _query(sql, params=(), one=False):
 
 def create_task(name, targets, stages, options=None):
     return _exec(
-        "INSERT INTO tasks(name, targets, stages, options, created_at, updated_at) "
-        "VALUES(?,?,?,?,?,?)",
-        (name, targets, ",".join(stages), json.dumps(options or {}), _now(), _now()))
+        "INSERT INTO tasks(name, targets, stages, options, pid, created_at, updated_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (name, targets, ",".join(stages), json.dumps(options or {}), os.getpid(), _now(), _now()))
 
 
 def update_task(task_id, **fields):
     fields["updated_at"] = _now()
     sets = ", ".join(f"{k}=?" for k in fields)
     _exec(f"UPDATE tasks SET {sets} WHERE id=?", (*fields.values(), task_id))
+
+
+def append_task_error(task_id, msg):
+    """把一条错误信息**追加**到任务的 `error` 字段（`\\n` 分隔），而不是覆盖。
+
+    为什么是追加不是覆盖：`update_task(task_id, error=...)` 是**纯覆盖**写，而流水线的
+    阶段级容错**刻意不中断**（一条任务里可能有多个阶段失败）—— 覆盖式写法下，N 个阶段
+    失败只有**最后一条**能留下，`runner.run_task` 的外层 except 还会再用 `error=str(e)`
+    覆盖一次，前面的错误信息**永久丢失**。追加让"部分跑坏"可回溯、可见。
+
+    `msg` 为空/纯空白时是 **no-op**：避免产生前导分隔符（只留一个 `\\n`）或把 error 写脏。
+    """
+    text = str(msg or "").strip()
+    if not text:
+        return
+    row = get_task(task_id)
+    if not row:
+        return
+    prev = str(row["error"] or "").strip()
+    merged = f"{prev}\n{text}" if prev else text
+    _exec("UPDATE tasks SET error=?, updated_at=? WHERE id=?", (merged, _now(), task_id))
+
+
+def _pid_alive(pid):
+    """判断 `pid` 指向的进程是否仍存活（零依赖、跨平台）。
+
+    - Windows：`OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject(h, 0)`，返回
+      `WAIT_TIMEOUT` 即进程仍在运行；句柄必须在 `finally` 里 `CloseHandle`（否则泄漏内核句柄）。
+      必须显式声明 `argtypes`/`restype`：默认按 32 位 int 处理会**截断 64 位句柄**。
+    - POSIX：`os.kill(pid, 0)` —— `ProcessLookupError` 即进程已死；`PermissionError`
+      表示进程存在但无权限（仍算存活）。
+    - `pid` 为 0 / None / 非法 → 一律视为已死（老库遗留行没有 pid 语义）。
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        SYNCHRONIZE = 0x00100000
+        WAIT_TIMEOUT = 0x00000102
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        try:
+            return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def reconcile_orphan_tasks():
+    """启动时对账：把"进程已不在、状态却仍是 `running`"的孤儿任务标记为 `failed`。
+
+    背景：`runner._STOP_EVENTS` 是**进程内**字典。进程一重启，之前 `status='running'`
+    的任务再也没人推进，也永远不会被标失败 —— 就永久挂住了。用户拍板的语义是
+    **启动时标 `failed`、不自动续跑**（自动续跑会重复请求目标，且与"重启=新任务"的
+    既有模型冲突）。
+
+    判据：
+    - `pid` 指向**存活进程** → **跳过**（可能另一个进程正在正常跑它，绝不能误杀）；
+    - `pid` 已死 / 为 0（老库遗留行）→ `status='failed'`、`current_stage=''`，
+      并追加一条"进程重启，任务中断（启动时对账）"到 `error`。
+
+    整体包一层 try/except：启动流程**不能被它拖垮**（库损坏 / 列缺失都应静默跳过）。
+    返回被标记的任务 id 列表（便于日志与测试断言）。
+    """
+    marked = []
+    try:
+        rows = _query("SELECT id, pid FROM tasks WHERE status='running'")
+        for r in rows:
+            if _pid_alive(r["pid"]):
+                continue
+            tid = r["id"]
+            try:
+                _exec("UPDATE tasks SET status='failed', current_stage='', updated_at=? WHERE id=?",
+                      (_now(), tid))
+                append_task_error(tid, "进程重启，任务中断（启动时对账）")
+                marked.append(tid)
+            except Exception:
+                continue
+    except Exception:
+        return marked
+    return marked
 
 
 def get_task(task_id):

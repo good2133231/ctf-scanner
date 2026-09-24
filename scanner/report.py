@@ -1,10 +1,14 @@
-"""任务报告生成：Markdown（默认）/ HTML（自包含单文件）/ PDF（本机无头浏览器打印）。
+"""任务报告生成：Markdown（默认）/ HTML（自包含单文件）/ PDF（本机无头浏览器打印）/
+JSONL（机器可读，每行一个 JSON 对象）。
 
-三种格式**共用 `collect()` 取到的同一份数据快照** —— 否则"Markdown 里有 TLS 证书、
+四种格式**共用 `collect()` 取到的同一份数据快照** —— 否则"Markdown 里有 TLS 证书、
 HTML 里没有"这类漂移没人会发现。HTML 必须走 `html.escape` 全量转义：报告里的标题 /
 URL / banner 都来自被测目标，不转义等于把对方的内容当我们的页面渲染（反射型 XSS）。
+JSONL 是**唯一面向机器**的格式，与 MD/HTML 有一处**刻意差异**：它导出 `collect()` 的
+`all_vulns`（含已判误报的行），把复核状态原样交给下游自己筛（理由见 `generate_jsonl`）。
 """
 import html
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -34,6 +38,16 @@ def _cert_source(row):
         except (AttributeError, TypeError):
             src = ""
     return "CT 日志" if str(src) == "ct" else "TLS 握手"
+
+
+def _row_dict(row):
+    """`sqlite3.Row`（或 None）→ 普通 dict。
+
+    `db.*` 的多数访问器返回 `sqlite3.Row`，**没有 `.get()`**、也不能直接当 dict 交给
+    `json.dumps`（见 `_cert_source()` 里的同类坑）。JSONL 导出必须先把行转成 dict 再
+    序列化，否则要么抛异常、要么漏字段。
+    """
+    return dict(row) if row is not None else {}
 
 
 def _c(value):
@@ -376,6 +390,72 @@ def generate_html(task_id):
               _h(v["review_note"] or "-")] for v in fp]))
     p.append(f'<p class="muted">由 CTFScanner 生成 ｜ 任务 #{task_id}</p></body></html>')
     return "\n".join(p)
+
+
+def generate_jsonl(task_id):
+    """生成 JSON Lines 导出（每行一个 JSON 对象，含末尾换行），任务不存在返回 None。
+
+    与 Markdown / HTML 的**刻意差异**：漏洞导出的是 `collect()` 的 `all_vulns`
+    （**全部**行，含 `review` / `review_note`），而不是已过滤掉误报的 `vulns`。
+    理由：JSONL 是给**机器消费**的中间产物，复核状态（待复核 / 已确认 / 误报）本就是
+    数据的一部分，应当原样交给下游、由下游按自己的口径筛选；替它静默丢掉
+    `false_positive` 行，等于把"这里曾经扫出过、只是被人工排除了"这一事实抹掉。
+    MD / HTML 是给人看的交付物，才需要"误报不进结论表"。
+
+    每行带 `"type"` 判别字段：首行 `meta`（任务 id / name / status / stages / created_at /
+    targets / 各资产计数 / review 台账），随后每条记录一行，`type` ∈ `vuln` / `site` /
+    `subdomain` / `dir` / `port` / `cseg` / `cert` / `lead`。`ensure_ascii=False` + UTF-8
+    （中文原样可读）；每行（**含最后一行**）都以 `\\n` 结尾，才是合法 JSON Lines。
+    """
+    d = collect(task_id)
+    if not d:
+        return None
+    task, subs, sites, dirs = d["task"], d["subs"], d["sites"], d["dirs"]
+    ports, csegs, certs = d["ports"], d["csegs"], d["certs"]
+    all_vulns, review, leads = d["all_vulns"], d["review"], d["leads"]
+
+    lines = []
+
+    def emit(obj):
+        lines.append(json.dumps(obj, ensure_ascii=False, default=str))
+
+    def emit_row(kind, row):
+        obj = {"type": kind}
+        obj.update(_row_dict(row))
+        emit(obj)
+
+    emit({
+        "type": "meta",
+        "task_id": task["id"],
+        "name": task["name"],
+        "status": task["status"],
+        "stages": task["stages"],
+        "created_at": task["created_at"],
+        "targets": task["targets"],
+        "counts": {
+            "subdomains": len(subs), "sites": len(sites), "dirs": len(dirs),
+            "ports": len(ports), "csegs": len(csegs), "certs": len(certs),
+            "vulns": len(all_vulns), "leads": len(leads),
+        },
+        "review": review,
+    })
+    for v in all_vulns:
+        emit_row("vuln", v)
+    for s in sites:
+        emit_row("site", s)
+    for s in subs:
+        emit_row("subdomain", s)
+    for r in dirs:
+        emit_row("dir", r)
+    for p in ports:
+        emit_row("port", p)
+    for c in csegs:
+        emit_row("cseg", c)
+    for c in certs:
+        emit_row("cert", c)
+    for ld in leads:
+        emit_row("lead", ld)
+    return "\n".join(lines) + "\n"
 
 
 def export_pdf(task_id, out_path, settings=None, timeout=90):

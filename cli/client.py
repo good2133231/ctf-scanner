@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scanner import auth as taskauth
 from scanner import db
 from scanner.config import load_settings, resolve
-from scanner.report import export_pdf, generate, generate_html
+from scanner.report import export_pdf, generate, generate_html, generate_jsonl
 from scanner.runner import STAGE_ORDER, STAGE_REGISTRY, run_task
 from scanner.utils import rel_display, which, verify_tool
 
@@ -66,6 +66,8 @@ def main():
     ap.add_argument("--report-html", metavar="PATH", help="结束后生成 HTML 报告（自包含单文件）")
     ap.add_argument("--report-pdf", metavar="PATH",
                     help="结束后生成 PDF 报告（用本机无头 Edge/Chrome 打印；没有浏览器会明确报错）")
+    ap.add_argument("--report-jsonl", metavar="PATH",
+                    help="结束后生成 JSONL 报告（每行一个 JSON 对象，机器可读；漏洞含复核状态）")
     ap.add_argument("-H", "--header", action="append", default=[], metavar="'名称: 值'",
                     help="本次任务的**登录态请求头**，可重复（如 -H \"Authorization: Bearer xxx\"）；"
                          "只发给目标侧，第三方接口（crt.sh/FOFA/KEV/IP 反查）不带")
@@ -102,6 +104,8 @@ def main():
         sys.exit(1)
 
     db.init_db()
+    # 启动时对账：进程重启后残留的 status='running' 孤儿任务标为 failed（见 db.reconcile_orphan_tasks）
+    db.reconcile_orphan_tasks()
     name = args.name or (Path(args.file).stem if args.file else "cli-task")
     options = {"offline": bool(args.offline)}
     # 登录态请求头（任务级）：解析出问题就**直接退出**，不静默丢弃 ——
@@ -178,6 +182,13 @@ def main():
         else:
             print(f"[!] PDF 报告生成失败：{err}")
             sys.exit(1)
+    if args.report_jsonl:
+        body = generate_jsonl(task_id)
+        if body:
+            out = resolve(args.report_jsonl)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(body, encoding="utf-8")
+            print(f"[*] JSONL 报告已生成：{rel_display(out)}")
 
 
 if __name__ == "__main__":

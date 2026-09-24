@@ -13,6 +13,7 @@
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">导出 MD</a>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">导出 HTML</a>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='pdf') }}">导出 PDF</a>
+  <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='jsonl') }}">导出 JSONL</a>
   <button class="btn-mini danger" data-op="delete" data-id="{{ task.id }}">删除</button>
   <span id="op-msg" class="muted"></span>
   <span class="spacer"></span>

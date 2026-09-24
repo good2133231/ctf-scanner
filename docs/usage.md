@@ -23,6 +23,7 @@ python cli/client.py -t <单目标> [选项]
 | `--report PATH` | 扫描结束后生成 **Markdown** 报告到指定路径 |
 | `--report-html PATH` | 结束后生成 **HTML** 报告（自包含单文件：样式内联、不引外链，可直接发人） |
 | `--report-pdf PATH` | 结束后生成 **PDF** 报告（用本机无头 Edge/Chrome 打印；**没有浏览器会打印原因并以退出码 1 结束**，不静默丢交付物） |
+| `--report-jsonl PATH` | 结束后生成 **JSONL** 报告（每行一个 JSON 对象、带 `type` 判别字段，**机器可读**；漏洞含全部行与 `review`/`review_note` 复核状态） |
 | `--check` | 打印外部工具可用性并退出 |
 
 ### 示例
@@ -112,12 +113,14 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
      这份登录态（否则"复查"变成未登录视角）。CLI 侧等价参数：`-H` / `--cookie`；
    - 任务列表实时轮询状态与进度条；表头支持**多条件筛选**（任务名/目标/状态/阶段），可**全选勾选**后执行**批量停止 / 批量重启 / 批量删除**；
    - 每行提供**行内操作**：查看 / 停止 / 重启 / 导出（下载该任务报告，默认 **Markdown**）/ 删除；点击任务号进入详情；
-     任务详情页顶另有**三个导出按钮**：`导出 MD` / `导出 HTML` / `导出 PDF`
-     （对应 `GET /tasks/<id>/export?fmt=md|html|pdf`，CLI 侧等价参数 `--report` / `--report-html` / `--report-pdf`，见上）。
+     任务详情页顶另有**四个导出按钮**：`导出 MD` / `导出 HTML` / `导出 PDF` / `导出 JSONL`
+     （对应 `GET /tasks/<id>/export?fmt=md|html|pdf|jsonl`，CLI 侧等价参数 `--report` / `--report-html` / `--report-pdf` / `--report-jsonl`，见上）。
      **HTML 是自包含单文件**（样式内联、不引任何外链，可直接发人）；**PDF 走本机无头 Edge/Chrome 打印**，
      本机没有可用浏览器时**不静默丢交付物**，而是显示一页说明（含"改导出 HTML 后用浏览器另存为 PDF"的替代路径），
-     CLI 则以退出码 1 结束并打印原因。三种格式**共用同一份数据快照**（`report.collect()`），不会出现
+     CLI 则以退出码 1 结束并打印原因。四种格式**共用同一份数据快照**（`report.collect()`），不会出现
      "Markdown 有 TLS 证书小节、HTML 没有"这类格式漂移；
+     **JSONL 是唯一面向机器的格式**，与 MD/HTML 有一处刻意差异：漏洞导出 `collect()` 的 `all_vulns`
+     （**含已判误报的行**，带 `review`/`review_note`），把复核状态交给下游自己筛，而不是替它静默丢数据；
    - 停止为**协作式取消**（当前批次跑完即停），任务终态记为 `stopped`（区别于 `failed`）；
    - **删除（单个或批量）前会自动备份**：任务行 + 其全部资产（站点/子域名/端口/C 段/目录/漏洞）
      导出为 `data/trash/task_<id>_<时间>.json`，误删可直接从该文件找回。备份失败只告警不阻断删除；

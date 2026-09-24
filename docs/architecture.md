@@ -105,7 +105,13 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 3. `runner.run_task` 创建任务工作目录 `LOGS_DIR/task_<id>_<ts>/`，绑定日志，按顺序执行启用的阶段；
    `LOGS_DIR` 取自 `scanner/config.py`，默认 `BASE_DIR/logs`，可用环境变量 `CTFSCANNER_LOGS` 覆盖
    （测试/并行开发时指向临时目录，真实工作区不被污染）；数据库同理支持 `CTFSCANNER_DB`；
-4. 每个阶段把结果同时写入三处：任务工作目录的文本产物、SQLite、`ctx.results`（供下一阶段直接使用）；
+4. 阶段结果落点**并不统一**（改代码前先看具体阶段，不要假定"都写三处"）：
+   - **文本产物 + SQLite + `ctx.results` 三处都写**：`subdomain` / `takeover` / `probe` / `jsmine` / `dirscan`
+     （文本产物如 `sites.txt`，`ctx.results` 供下一阶段直接使用）；
+   - **只写 SQLite + `ctx.results`（不落文本产物）**：`portscan` / `osint` / `vulnscan` / `intel` / `heuristic`
+     （`intel` / `heuristic` 只写 `leads` 表）；
+   - **只写文本产物 + SQLite（不写 `ctx.results`）**：`cert`（`certs.txt` + `certs` 表）/
+     `screenshot`（`shots/*.png` + `sites.shot`）—— 二者排在流水线后段，没有后续阶段消费其结果；
 5. GUI 通过 `tasks` 表轮询状态（status/progress/current_stage），详情页从 SQLite 读资产与漏洞。
 
 ## 数据库表
@@ -113,7 +119,7 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 | 表 | 字段要点 | 说明 |
 |---|---|---|
 | tasks | targets, stages, options, status, progress, current_stage, log_file, error | 任务状态机：pending → running → done/stopped/failed |
-| subdomains | domain, source, cname, ip, cdn | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa / osint:fofa-cert）两类；cname 由 takeover 阶段回填，ip / cdn 由 subdomain 阶段回填（cdn 为空即"非 CDN"）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`；拓展域名页默认隐藏重叠（`db.OVERLAP_EXT_WHERE`：域名已存在于任意任务的"目标自身子域名"里） |
+| subdomains | domain, source, cname, ip, cdn, **ip_note** | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa / osint:fofa-cert / osint:fofa-title / osint:shodan / osint:quake / osint:ctlog）两类；cname 由 takeover 阶段回填，ip / cdn / ip_note 由 subdomain 阶段回填（cdn 为空即"非 CDN"；`ip_note` 是解析失败/未解析的**原因码**：nxdomain / no-a / servfail / refused / timeout / error / empty / over-limit，页面上经 `gui.app.ip_note_label` 翻成中文）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`；拓展域名页默认隐藏重叠（`db.OVERLAP_EXT_WHERE`：域名已存在于任意任务的"目标自身子域名"里） |
 | sites | url, host, port, status, title, length, server, tech, favicon, shot, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定；shot 为截图相对路径（screenshot 阶段回填，默认关） |
 | ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认关闭） |
 | csegs | segment, ip, domains, count | `/24` C 段视野（osint 阶段产出，默认关闭）：每行一个 IP 与其反查到的域名（domains 截断存储、count 为截断前数量） |
