@@ -27,7 +27,15 @@
       ends_with / regex / len / tolower / toupper；`condition: and` 作用于同一 matcher 的
       多条表达式。**超出子集在装载期就拒**（整份模板标 unsupported 并写明原因），
       不做"运行期恒不命中"这种静默失效。
-  提取器：type: regex | kval | dsl（命中内容会写进 evidence，便于人工确认）
+  提取器：type: regex | kval | dsl（命中内容会写进 evidence，便于人工确认）；
+          `internal: true` 的提取器值**不进 evidence**，而是回填模板上下文供后续请求
+          `{{name}}` 使用（2026-09-25 续42 起）—— 语义对齐 nuclei 源码
+          `pkg/operators/extractors/extractors.go` / `pkg/tmplexec/multiproto/multi.go`：
+          回填**只认 `internal: true`**（不设的具名提取器在 nuclei 里同样只进输出、不当变量），
+          同一名字的第 1 个值给 `{{name}}`、第 2/3 个给 `{{name1}}`/`{{name2}}`（上限
+          `_EXTRACT_VARS_MAX` 个）；回填发生在**匹配之前**（nuclei 的 extractors 本就排在
+          matchers 前，且 internal 值的传递不受命中与否影响），所以"第一个请求只取 csrf_token、
+          后续请求带着它打"的模板在本引擎里也能跑通。
   flow（2026-09-23 起支持**布尔子集**）：`&&` / `||` / `!` 作用于请求块的 `id` 或
       `http(N)` 1-based 序号；引用能全部解析时才生效，否则整份模板标 unsupported。
       语义同 nuclei：条件成立才算命中；纯否定式成立（如只有 `!http(1)`）**不报**
@@ -40,7 +48,8 @@
       `&& || !`、`== != === !== < > <= >=`、`+`。解析不了的一律**装载期**标 unsupported
       （未声明变量、引用越界、循环不终止、静态语句数超 `_FLOW_MAX_STEPS`）。
       与 nuclei 的已知差异（详见 docs/poc-guide.md）：块要有 matchers 命中才算真（nuclei 对
-      无 operators 的块隐式返回 true）、extractor 结果不回填 `template`、不做类型转换。
+      无 operators 的块隐式返回 true；但 `internal: true` 提取器的回填照做，见上文）、
+      不做类型转换、单值 / 多值命名最多到 `name` + 9 个序号（nuclei 无上限）。
   workflows（2026-09-23 起支持**子模板编排子集**，2026-09-25 续38 补齐条件编排）：
       workflow 文件顶层写 `workflows:`，每个子项（语义对齐 nuclei 源码
       `pkg/templates/workflows.go` / `pkg/core/workflow_execute.go`，不自己发明）：
@@ -54,8 +63,9 @@
       单个步骤一次最多展开 `_WORKFLOW_MAX_SUBS` 个子模板。
       **不支持**：`matchers:`（按匹配器名分支 —— 本引擎的匹配器没有名字概念）与
       `args:`（**不是 nuclei 的 workflow 字段**，`WorkflowTemplate` 只有 template / tags /
-      matchers / subtemplates；nuclei 的变量传递靠"命名 extractor + 共享执行上下文"，
-      本引擎未实现）—— 两者都把该子项跳过并写进 `_note`（不静默失效）。
+      matchers / subtemplates；nuclei 的变量传递靠"`internal: true` 命名提取器 + 共享执行
+      上下文"，而本引擎的每个子模板各自独立加载、上下文不串，**跨子模板**的传递未实现）——
+      两者都把该子项跳过并写进 `_note`（不静默失效）。
 
 **raw 的安全边界**（红线，2026-09-23）：raw 是"手写 HTTP 原文"，最容易被写成利用动作。
 因此 `PUT` / `PATCH` / `DELETE` / `TRACE` / `CONNECT` 一律**拒绝执行**并把原因记进
@@ -88,6 +98,11 @@ POC_DIRS = ["scanner/pocs/pocs", "config/pocs-user", "config/pocs-imported",
 
 # 单个 POC 对单个目标的最大请求数（防止 payload 笛卡尔积把目标打爆）
 MAX_REQUESTS_PER_POC = 10
+
+# 命名提取器回填模板上下文时，同一名字最多向外暴露几个值（`name` / `name1` / …）。
+# nuclei 是**全部**累积（`pkg/tmplexec/multiproto/multi.go` 里 k / k1 / k2…），这里加个上限
+# 只为防"宽 regex 一页抽几千个"把上下文撑爆 —— 取前 10 个已覆盖模板的真实用法。
+_EXTRACT_VARS_MAX = 10
 
 # 仍**不支持**的是**请求块级/顶层** `dsl`：nuclei 的 dsl 写在 `matchers` / `extractors` 里，
 # 那里已由 `_prepare_dsl()` + `scanner/pocs/dsl.py` 支持安全子集；块级写法按不支持处理 ——
@@ -1323,26 +1338,32 @@ def _match_response(resp, matchers, condition):
     return all(results) if str(condition or "or").lower() == "and" else any(results)
 
 
-def _extract(resp, extractors):
-    """执行 extractors，返回命中的文本片段列表（用于 evidence）。"""
+def _extract_items(resp, extractors):
+    """执行 extractors，返回 `[(name, value, internal)]`（`name` 为 None ＝ 未命名）。
+
+    **只负责取值，不决定用途**：evidence（给人看的证据）与模板变量回填（`{{name}}` 跨请求
+    传递）都从这一份结果取 —— 避免两套匹配逻辑各判一遍（改一处忘另一处是这类引擎的老毛病）。
+    """
     out = []
     for ex in extractors or []:
         if not isinstance(ex, dict):
             continue
         t = str(ex.get("type") or "").lower()
+        name = str(ex.get("name") or "") or None
+        internal = ex.get("internal") is True
         text = _part_text(resp, ex.get("part"))
         if t == "regex":
             for pat in (ex.get("regex") or []):
                 try:
                     for m in re.finditer(str(pat), text):
-                        out.append(m.group(0))
+                        out.append((name, m.group(0), internal))
                 except re.error:
                     continue
         elif t == "kval":
             for key in (ex.get("kval") or []):
                 m = re.search(rf"(?im)^{re.escape(str(key))}\s*:\s*(.+)$", text)
                 if m:
-                    out.append(f"{key}: {m.group(1).strip()}")
+                    out.append((name, f"{key}: {m.group(1).strip()}", internal))
         elif t == "dsl":
             # dsl 提取器只收**非布尔**结果：布尔值本身就是"命中/不命中"，写进 evidence
             # 没有人工确认价值（判命中的职责在 `_match_dsl`，两者分工不重叠）。
@@ -1353,8 +1374,52 @@ def _extract(resp, extractors):
                     continue
                 s = str(val).strip()
                 if s:
-                    out.append(s)
-    return sorted(set(str(x)[:200] for x in out))[:5]
+                    out.append((name, s, internal))
+    return out
+
+
+def _extract(resp, extractors):
+    """evidence 用的文本片段：去重后取前 5 条。
+
+    `internal: true` 的提取器在这里被挡掉（nuclei 语义：值照样能当变量用，但**不进输出**）——
+    csrf token / nonce 这类字段本来就不该出现在报告与页面里。
+    **带 `name` 的并不排他**：nuclei 里命名提取器同样会出现在输出中，"别显示"的开关只有
+    `internal`，故这里只按 internal 过滤、不按 name 过滤。
+    """
+    return sorted({str(v)[:200] for _n, v, _i in _extract_items(resp, extractors)
+                   if not _i})[:5]
+
+
+def _extract_vars(resp, extractors):
+    """命名 extractor 的回填值 `{name: 值, name1: 第2个值, ...}`，供后续请求 `{{name}}` 用。
+
+    **只有 `internal: true` 的命名提取器才回填** —— 这是 nuclei 的语义，不是保守起见：
+    `pkg/operators/extractors/extractors.go` 里 `Internal` 字段的注释就写着 "when set to true
+    will allow using the value extracted in the next request"；不设 internal 的具名提取器只进
+    `Result.OutputExtracts`（给人看的输出），**不会**写进模板级 templateCtx，后续块取不到。
+    若在这里放宽成"具名即可回填"，就会出现"nuclei 里取不到、我们却取了"的偏差，最坏的同名
+    撞车是把模板 `variables:` 的初值顶掉（本该发 admin，结果发了页面上抽出来的串）。
+
+    多值命名也照抄 nuclei（`pkg/tmplexec/multiproto/multi.go`）：第 1 个值是 `{{name}}`，
+    第 2/3 个是 `{{name1}}` / `{{name2}}`（**不是** `name2` 对应第 2 个）。值的累积顺序 =
+    提取器书写顺序 → 匹配出现顺序（同一名字抽到多个候选值时，第一个通常是页面主表单那个）。
+
+    同名覆盖规则：回填**晚于**模板 `variables:` 与内置变量，故同名的回填值生效。
+    """
+    out = {}
+    seen = {}
+    for name, val, internal in _extract_items(resp, extractors):
+        if not internal or not name:
+            continue
+        s = str(val).strip()[:200]
+        if not s:
+            continue
+        i = seen.get(name, 0)
+        if i >= _EXTRACT_VARS_MAX:
+            continue
+        seen[name] = i + 1
+        out[name if i == 0 else f"{name}{i}"] = s
+    return out
 
 
 # ---------- 执行 ----------
@@ -1372,6 +1437,16 @@ def _vuln_of(poc, info, resp, method, url, base_url, extractors):
     vulnscan 按 `(target, poc_id)` 去重、库里那一列也是站点，换口径会把既有记录割裂。
     """
     extracted = _extract(resp, extractors)
+    if extracted:
+        evidence = "\n".join(extracted)
+    elif extractors and all(isinstance(ex, dict) and ex.get("internal") is True
+                            for ex in extractors):
+        # 提取器**全都**是 `internal: true` 时不能退回整段响应体：`internal` 的全部意义就是
+        # "这个值不进输出"，而命中的那一页正文里往往正含着它（csrf token / nonce 就在页面里）
+        # —— 退回正文等于把刚按约定藏起来的值从后门放出去。给一行自解释的说明。
+        evidence = "(该响应的提取器均标注 internal: true —— 值只作模板变量，按约定不进输出)"
+    else:
+        evidence = (resp.get("text") or "")[:400]
     return {
         "poc_id": poc.get("id"),
         "name": info.get("name") or poc.get("id"),
@@ -1380,7 +1455,7 @@ def _vuln_of(poc, info, resp, method, url, base_url, extractors):
         "target": base_url,
         "detail": (f"POC 命中：{info.get('name') or poc.get('id')}"
                    f"（请求 {method} {url}）。" + (info.get("description") or "")),
-        "evidence": "\n".join(extracted) if extracted else (resp.get("text") or "")[:400],
+        "evidence": evidence,
     }
 
 
@@ -1389,6 +1464,10 @@ def _run_block(block, poc, info, base_url, variables, settings, timeout, limit, 
 
     `budget` 是**跨块共享**的剩余请求数（`[int]`），flow 里多个块共用一份额度 ——
     否则 `flow: http(1) && http(2)` 会把单 POC 的请求上限翻倍。
+
+    **副作用（有意为之）**：每拿到一次响应就把 `internal: true` 的命名 extractor 值写进
+    `variables`（模板上下文），因此调用方传进来的那个 dict 会被**就地更新** —— 这正是
+    `{{name}}` 能跨块传递的机制，与 flow 的 `set()` 写的是同一份 dict。
     """
     items, _reasons = _block_requests(block)
     if not items:
@@ -1397,11 +1476,14 @@ def _run_block(block, poc, info, base_url, variables, settings, timeout, limit, 
     for varset in _payload_sets(block, limit):
         if budget[0] <= 0:
             return None
-        ctx_vars = dict(variables)
-        ctx_vars.update({str(k): str(v) for k, v in varset.items()})
         for one in items:
             if budget[0] <= 0:
                 return None
+            # 每个请求都重新快照一次模板上下文：`internal: true` 命名提取器的回填（见下）
+            # 要让**同一个块里后面的请求**也用得上（nuclei 一个块里写多条 `path:` 就是按
+            # 请求逐个取值）。payload 池变量叠在快照之上，仍是"payload 优先"。
+            ctx_vars = dict(variables)
+            ctx_vars.update({str(k): str(v) for k, v in varset.items()})
             # header 也要用**带 payload 的变量**渲染：nuclei 模板里常见
             # `X-Fuzz: {{payload}}` 这种写法，只渲染一次基础变量会漏掉替换。
             headers = {str(k): _render(v, ctx_vars) for k, v in one["headers"].items()}
@@ -1415,6 +1497,14 @@ def _run_block(block, poc, info, base_url, variables, settings, timeout, limit, 
             budget[0] -= 1
             if not resp:
                 continue
+            # 命名 extractor **回填模板上下文**（nuclei 的 `{{name}}` 跨请求传递就靠这个；
+            # 只有 `internal: true` 的才回填，见 `_extract_vars`）。
+            # 刻意放在匹配**之前**：nuclei 的 extractors 本来就排在 matchers 前面，且命中与否
+            # 不影响 internal 值的传递（`pkg/operators/operators.go::Execute` 在有 DynamicValues
+            # 时即使 matchers 全不命中也返回 true）。挂到命中之后，会让最常见的"第一个请求只负责
+            # 取 csrf_token"模板在本引擎里**静默失效** —— 后续请求会带着字面量 `{{csrf_token}}`
+            # 发出去。宁可多写变量：取错值只会让后面的匹配不中（看得见），取不到整条模板失效（看不见）。
+            variables.update(_extract_vars(resp, block.get("extractors")))
             if not _match_response(resp, block.get("matchers"),
                                    block.get("matchers-condition") or "or"):
                 continue

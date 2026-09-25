@@ -2530,8 +2530,9 @@ def main():
     from scanner import auth as _auth
     from scanner import utils as _utils
 
-    # 本地"活靶"：`/a` 回 hello-AAA、`/b` 回 hello-BBB，并记录收到的路径 ——
-    # raw/flow 的命中与短路都靠它证（不依赖公网，也不产生真实外部请求）。
+    # 本地"活靶"：`/a` 回 hello-AAA、`/b` 回 hello-BBB、`/csrf` 回一段带两个令牌的页面
+    # （续42 的跨请求取值要"从响应里抽出来再发出去"，故需要一个可控的令牌源），
+    # 并记录收到的路径 —— raw/flow 的命中与短路都靠它证（不依赖公网，也不产生真实外部请求）。
     _hits17 = []
 
     class _Lab17(_BaseHTTP):
@@ -2540,8 +2541,11 @@ def main():
 
         def do_GET(self):
             _hits17.append(self.path)
-            body = (b"hello-AAA" if self.path.startswith("/a")
-                    else b"hello-BBB" if self.path.startswith("/b") else b"root")
+            if self.path.startswith("/csrf"):
+                body = b'<input name="csrf" value="TOK123"><i>SEC789</i>'
+            else:
+                body = (b"hello-AAA" if self.path.startswith("/a")
+                        else b"hello-BBB" if self.path.startswith("/b") else b"root")
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -6235,6 +6239,169 @@ http:
           "当子域入库/归属本项目→追加 promote:<原来源>（原行保留·第三方不误加·子域页显示·"
           "拓展页默认隐藏）/按主域名分组折叠(?group=0 平铺)/建任务 auto_expand 补 osint·jsmine/"
           "流水线在最后拓展阶段后自动后处理（不勾则不动）")
+
+    # [7b] 续42：`internal: true` 命名提取器的值**回填模板上下文**（A1）—— nuclei 的
+    # `{{csrf_token}}` 跨请求取值就靠这条链。语义照 nuclei 源码钉（一手核对，非二手转述）：
+    #   `pkg/operators/operators.go::Execute` 先跑 extractors 再跑 matchers（回填**不受命中与否
+    #   影响**）；`extractors.go` 的 `Internal` 注释写明"设 true 才能在下一个请求里用"，
+    #   不设的具名提取器只进 `Result.OutputExtracts` → **只有 internal 才回填**；
+    #   `multiproto/multi.go` 多值命名：`{{name}}`=第 1 个、`{{name1}}`=第 2 个。
+    # 函数级先钉两条最容易写错的合同（不依赖 HTTP）：
+    _xv_resp = {"status": 200, "length": 9, "text": "a=TOK1 b=TOK2",
+                "headers": {}, "url": "http://x/"}
+    assert engine._extract_vars(_xv_resp, [
+        {"type": "regex", "name": "t", "internal": True, "part": "body",
+         "regex": ["TOK[0-9]"]},
+        {"type": "regex", "name": "u", "part": "body", "regex": ["TOK[0-9]"]}]) == \
+        {"t": "TOK1", "t1": "TOK2"}, "多值命名该是 name/name1，且非 internal 的 u 完全不进回填"
+    _xv_many = {"status": 200, "length": 60, "headers": {}, "url": "http://x/",
+                "text": " ".join(f"M{i}" for i in range(20))}
+    _xv_keys = engine._extract_vars(_xv_many, [
+        {"type": "regex", "name": "m", "internal": True, "part": "body", "regex": ["M[0-9]+"]}])
+    assert len(_xv_keys) == engine._EXTRACT_VARS_MAX and _xv_keys["m"] == "M0" \
+        and _xv_keys["m9"] == "M9" and "m10" not in _xv_keys, \
+        f"同名声明的上限该是 name + 9 个序号（防宽 regex 撑爆上下文）：{sorted(_xv_keys)}"
+    # ① 取令牌的块**没有 matchers**（本引擎判它不命中）也必须回填 —— 否则"第一个请求只负责
+    #    拿 csrf_token"这类最常见的模板在本引擎里静默失效（后续请求带字面量发出去）
+    _xv1 = engine.load_poc_file(_wpoc("xvar-cross.yaml", """
+id: smoke-xvar-cross
+info: {name: xvar cross, severity: medium}
+http:
+  - path: ["/csrf"]
+    extractors:
+      - {type: regex, name: tok, internal: true, part: body, regex: ["TOK[0-9]+"]}
+  - path: ["/a{{tok}}"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+"""))
+    assert _xv1["_status"] == "ok", _xv1.get("_error")
+    _hits17.clear()
+    _xv1_hits = engine.run_poc_on_target(_xv1, _base_url17, {})
+    assert [v["poc_id"] for v in _xv1_hits] == ["smoke-xvar-cross"]
+    assert _hits17 == ["/csrf", "/aTOK123"], \
+        f"无 matchers 的取令牌块也要回填，第二个请求该带真值：{_hits17}"
+    assert "/aTOK123" in _xv1_hits[0]["detail"], \
+        f"命中详情里的请求 URL 也要是替换后的：{_xv1_hits[0]['detail']}"
+    # ② 多值命名 + `internal` 的值不进 evidence（同一响应里就有令牌，退回正文等于从后门放出去）
+    _xv2 = engine.load_poc_file(_wpoc("xvar-multi.yaml", """
+id: smoke-xvar-multi
+info: {name: xvar multi, severity: medium}
+flow: http(1) && http(2)
+http:
+  - path: ["/csrf"]
+    extractors:
+      - {type: regex, name: tok, internal: true, part: body,
+         regex: ["TOK[0-9]+", "SEC[0-9]+"]}
+    matchers: [{type: word, words: ["TOK123"]}]
+  - path: ["/b{{tok1}}"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+"""))
+    assert _xv2["_status"] == "ok", _xv2.get("_error")
+    _hits17.clear()
+    _xv2_hits = engine.run_poc_on_target(_xv2, _base_url17, {})
+    assert [v["poc_id"] for v in _xv2_hits] == ["smoke-xvar-multi"]
+    assert _hits17 == ["/csrf", "/bSEC789"], \
+        f"第二个值该是 name1（不是 name2）且真的发出去：{_hits17}"
+    assert "TOK123" not in _xv2_hits[0]["evidence"] \
+        and "SEC789" not in _xv2_hits[0]["evidence"] \
+        and "internal" in _xv2_hits[0]["evidence"], \
+        f"internal 的值不许出现在 evidence 里（含退回正文这条后门）：{_xv2_hits[0]['evidence']}"
+    # ③ 非 internal 的具名提取器**不回填**（nuclei 里它只进输出）—— 第二个请求该带字面量；
+    #    但它的值照旧进 evidence（"别显示"的开关只有 internal）
+    _xv3 = engine.load_poc_file(_wpoc("xvar-nointernal.yaml", """
+id: smoke-xvar-nointernal
+info: {name: xvar nointernal, severity: medium}
+flow: http(1) && http(2)
+http:
+  - path: ["/csrf"]
+    extractors:
+      - {type: regex, name: tok, part: body, regex: ["TOK[0-9]+"]}
+    matchers: [{type: word, words: ["TOK123"]}]
+  - path: ["/a{{tok}}"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+"""))
+    assert _xv3["_status"] == "ok", _xv3.get("_error")
+    _hits17.clear()
+    _xv3_hits = engine.run_poc_on_target(_xv3, _base_url17, {})
+    assert _hits17[0] == "/csrf" and _hits17[1] in ("/a{{tok}}", "/a%7B%7Btok%7D%7D"), \
+        f"非 internal 的具名提取器不该当变量（nuclei 亦是如此）：{_hits17}"
+    assert "TOK123" in _xv3_hits[0]["evidence"], \
+        f"非 internal 的值该照常进 evidence：{_xv3_hits[0]['evidence']}"
+    # ④ **同一个块**里后一条 `path:` 也要用上前一条刚回填的值（上下文快照按请求取，
+    #    快照挂在 payload 层就会漏掉这一条 —— nuclei 一个块里多行 path 正是按请求逐个取值）
+    _xv4 = engine.load_poc_file(_wpoc("xvar-itempath.yaml", """
+id: smoke-xvar-itempath
+info: {name: xvar itempath, severity: medium}
+http:
+  - path: ["/csrf", "/a{{tok}}"]
+    extractors:
+      - {type: regex, name: tok, internal: true, part: body, regex: ["TOK[0-9]+"]}
+    matchers: [{type: word, words: ["hello-AAA"]}]
+"""))
+    assert _xv4["_status"] == "ok", _xv4.get("_error")
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_xv4, _base_url17, {})] == \
+        ["smoke-xvar-itempath"]
+    assert _hits17 == ["/csrf", "/aTOK123"], f"同块后一条 path 该用上前一条的值：{_hits17}"
+
+    print("[7b] 续42 extractor 回填 ok: 只认 internal: true（非 internal 只进输出，与 nuclei "
+          "一致）/ 多值 name·name1（上限 name+9）/ 回填在匹配之前（无 matchers 的取令牌块也回填）/ "
+          "同块后一条 path 用得上刚回填的值 / internal 的值不进 evidence（也不从"
+          "「退回正文」这条后门漏出）")
+
+    # [7c] 续42：第三方接口的证书校验（A3）—— 两把开关按出口分流，别把凭据挂到明文信道上。
+    # 缺陷原委见 `scanner/utils.py::http_request` docstring 与 `limits.verify_tls_external`。
+    _real_do7c = _utils._do_http
+    _seen7c = []
+
+    def _fake_do7c(url, method, headers, data, timeout, verify, allow_redirects,
+                    settings, want_bytes, auth):
+        _seen7c.append((auth, verify))
+        return {"status": 200, "headers": {}, "text": "", "length": 0, "url": url}
+
+    try:
+        _utils._do_http = _fake_do7c
+        _utils.http_request("https://api.github.com/x", settings={})
+        _utils.http_request("https://target.local/x", settings={}, auth=True)
+        _utils.http_request("https://api.github.com/x",
+                            settings={"limits": {"verify_tls_external": False}})
+        _utils.http_request("https://target.local/x",
+                            settings={"limits": {"verify_tls": True}}, auth=True)
+        _utils.http_request("https://api.github.com/x", settings={}, verify=False)
+    finally:
+        _utils._do_http = _real_do7c
+    # ① 五个探测点分别钉住：第三方默认校验 / 目标侧默认不校验 / 两把开关互不连带 / 显式传参优先
+    assert _seen7c == [(False, True), (True, False), (False, False), (True, True),
+                        (False, False)], f"[7c] verify 按出口解析的结果不符合预期：{_seen7c}"
+
+    # ② 分流能成立的前提是**调用点自己声明对了出口**，这本身就是安全属性，按源码钉死：
+    #    第三方模块恒不传 auth=（传了就会被降级成不校验证书）；目标侧模块逐个必传 auth=True
+    #    （漏一个就会被当成第三方去校验 → 自签名靶场静默失联）。
+    #    用 ast 而不是正则：调用跨行、嵌套括号多，正则在截断处会产生假阳/假阴。
+    import ast as _ast7c
+    _third7c = ("passive", "ctlog", "intel", "iprecon", "fofa", "shodan", "quake",
+                 "github_leak")
+    _tgt7c = ("takeover", "jsmine", "fingerprint", "evasion", "ssrf",
+               "stages/probe", "stages/dirscan", "pocs/engine", "owasp/checks")
+    _calls7c = {}
+    for _rel7c in _third7c + _tgt7c:
+        _src7c = (ROOT / "scanner" / f"{_rel7c}.py").read_text(encoding="utf-8")
+        for _n7c in _ast7c.walk(_ast7c.parse(_src7c)):
+            if isinstance(_n7c, _ast7c.Call) and \
+                    getattr(_n7c.func, "id", "") == "http_request":
+                _calls7c.setdefault(_rel7c, []).append(
+                    "auth" in {k.arg for k in _n7c.keywords})
+    for _rel7c in _third7c:
+        assert _calls7c.get(_rel7c), f"[7c] {_rel7c}.py 里找不到 http_request 调用"
+        assert not any(_calls7c[_rel7c]), \
+            f"[7c] {_rel7c}.py 是第三方出口，调用点不得传 auth=（那会被降级为不校验证书）"
+    for _rel7c in _tgt7c:
+        assert _calls7c.get(_rel7c), f"[7c] {_rel7c}.py 里找不到 http_request 调用"
+        assert all(_calls7c[_rel7c]), \
+            f"[7c] {_rel7c}.py 是目标侧出口，每个调用点都必须显式 auth=True"
+
+    print("[7c] 续42 第三方证书校验 ok: auth=False→verify_tls_external（默认 True）/ "
+          "auth=True→verify_tls（默认 False）/ 两把开关互不连带 / 显式 verify 优先 / "
+          "8 个第三方模块零 auth= / 9 个目标侧模块全覆盖 auth=True")
 
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），

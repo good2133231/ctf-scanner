@@ -127,10 +127,11 @@ http:
     `unsupported`），刻意不做"跑到一半掐断"这种会**静默半执行**的运行期兜底；
   - 脚本没有"整体真值"，因此**报第一个正向命中**（这条与布尔路的门控语义并列，不混用）。
 
-  **已知与 nuclei 的差异**（不假装一致）：a) 无 `matchers` 的请求块本引擎判**假**，nuclei 隐式真；
-  b) extractor 结果**不回填** `template`（nuclei 靠它把前一个请求的提取值喂给后一个）；
-  c) 不做真正的 JS：无类型转换（`1 == "1"` 在 JS 里为真、这里为假）、无方法调用/闭包/异常、
-  无 `while`/`break`/`continue`、除 `+` 之外没有算术。子集之外的写法一律**装载期**标 `unsupported`。
+  **已知与 nuclei 的差异**（不假装一致）：a) 无 `matchers` 的请求块本引擎判**假**，nuclei 隐式真
+  （但 `internal: true` 提取器的**回填照做**，见下节 —— 否则"第一个请求只取 token"的模板会静默失效）；
+  b) 不做真正的 JS：无类型转换（`1 == "1"` 在 JS 里为真、这里为假）、无方法调用/闭包/异常、
+  无 `while`/`break`/`continue`、除 `+` 之外没有算术；c) 同一名字的回填值最多暴露 10 个
+  （`name` + `name1`…`name9`，nuclei 无上限）。子集之外的写法一律**装载期**标 `unsupported`。
 - **workflows**（2026-09-23 起支持，2026-09-25 续38 补齐条件编排）：workflow 文件顶层写
   `workflows:`，每个子项（语义对齐 nuclei 源码，不自己发明）：
 
@@ -154,7 +155,9 @@ http:
     **40** 个子模板（`tags:` 可能命中整个模板库、目录可能很大，超出部分不执行）。
   - **未实现**：`matchers:`（按匹配器名分支跑 subtemplates —— 本引擎的匹配器没有名字概念）、
     `args:`（**nuclei 的 workflow 没有这个字段**，`WorkflowTemplate` 只有 template / tags /
-    matchers / subtemplates；nuclei 的变量传递靠"命名 extractor + 共享执行上下文"，本引擎未实现）。
+    matchers / subtemplates；nuclei 的变量传递靠"`internal: true` 命名 extractor + 共享执行上下文"，
+    **跨子模板**的传递本引擎未实现 —— 子模板各自独立加载、上下文不串；单个模板**内部**的跨请求
+    取值已于续42 落地，见下节）。
     这两类子项会被**跳过**并把原因写进 `_note`（全部子项都被跳过 → 整份标 `unsupported`），不静默失效。
 - **dsl**（2026-09-25 起支持**安全子集**，仅 `matchers` / `extractors` 里的写法）：变量 6 个 ——
   `status_code` / `content_length`（数值）、`body` / `all_headers` / `header`（后两者同值）/ `host`；
@@ -181,6 +184,37 @@ http:
 - 多匹配器整体关系由 `matchers-condition` 控制（默认 `or`）；单个匹配器可用 `negative: true` 取反。
 - `extractors` 支持 `type: regex` 与 `type: kval`（按 `Key: Value` 抽取响应头），命中片段写入 evidence（最多 5 条）；
   `type: dsl` 只把**非布尔**结果写进 evidence（见上节）。
+
+### 跨请求取值：`internal: true` 的命名提取器（2026-09-25 续42 起）
+
+nuclei 官方模板里最常见的"两段式"写法 —— **第一个请求只负责把 token 抽出来，第二个请求带着它打**：
+
+```yaml
+http:
+  - path: ["/login"]
+    extractors:                       # 这一块没有 matchers：nuclei 里照跑，本引擎也照样回填
+      - type: regex
+        name: csrf                    # 名字就是变量名
+        internal: true                # ← **必须写**，否则值只进 evidence、不能当变量
+        part: body
+        regex: ['name="csrf" value="([0-9a-zA-Z]+)"']
+  - method: POST
+    path: ["/login"]
+    body: "csrf={{csrf}}&user=admin"
+    matchers: [{type: word, words: ["welcome"]}]
+```
+
+规则（语义对齐 nuclei 源码 `pkg/operators/extractors/extractors.go`、`pkg/tmplexec/multiproto/multi.go`）：
+
+- **只有 `internal: true` 的命名提取器会回填模板上下文**。不写 `internal` 的具名提取器在 nuclei 里
+  也只进输出、**不当变量**，本引擎保持一致（否则会出现"nuclei 取不到、我们却取了"的偏差，
+  最坏是把模板 `variables:` 的初值顶掉）。
+- 同一个名字抽到多个值时：第 1 个是 `{{name}}`，第 2/3 个是 `{{name1}}` / `{{name2}}`（**不是** `name2`）；
+  本引擎同一名字最多暴露 `_EXTRACT_VARS_MAX` = **10** 个。
+- 回填**晚于**模板 `variables:` 与内置变量 → 同名时回填值生效。
+- 回填发生在**匹配之前**，且**同一个块里后面的 `path:` 也用得上**（一个块里写多条 path 是按请求逐个取值的）。
+- `internal: true` 的值**不进 evidence**；若某次命中的提取器**全部**标了 internal，evidence 显示
+  一行说明而不是退回响应正文（正文里往往正含着那个 token）。
 
 ## 执行模型
 

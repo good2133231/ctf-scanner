@@ -73,8 +73,9 @@
       iterate(...)` / C 式 `for` / `if` 门控 / `template["k"]`；装载期把脚本解析成 AST 并做静态校验
       —— 未声明变量、引用越界、循环不终止、静态语句数上限 `_FLOW_MAX_STEPS=200`；运行期只解释执行）。
       两条路并存且顺序固定（先布尔后脚本），`http()` 按模板顺序跑全部块、`http(N)` 是 1-based、
-      脚本路的 `http(...)` **不缓存**（循环才有意义）。与 nuclei 的已知差异：无 matchers 的块我们判假
-      （nuclei 隐式真）、extractor 结果不回填 `template`、不做类型转换/方法调用/闭包/异常；
+      脚本路的 `http(...)` **不缓存**（循环才有意义）。`internal: true` 命名 extractor 的
+      **值回填模板上下文已于续42 落地**（跨请求 `{{name}}` 取值，多值 `name`/`name1`…）。
+      与 nuclei 的已知差异：无 matchers 的块我们判假（nuclei 隐式真）、不做类型转换/方法调用/闭包/异常；
       仍缺 oob 反连、flow 里**超出脚本子集**的真正 JS 语义（方法调用/闭包/异常/除 `+` 外的算术/
       `while`/`new`）、workflow 的 `matchers:`（按匹配器名分支；`subtemplates`
       条件编排与 `tags:` 选择已于续38 落地）/`args:`（nuclei 无此字段），以及**块级/顶层** `dsl`
