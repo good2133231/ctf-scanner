@@ -186,7 +186,7 @@ details pre { margin:8px 0; }
                        border-radius:6px; padding:3px 6px; font-size:12px; }
 /* ---------- 站点表：行距加大（用户要求"站点间距远一点"） ---------- */
 #tbl-all-sites td, #tbl-all-sites th, #tbl-detail-sites td, #tbl-detail-sites th,
-#tbl-plain-sites td { padding:11px 10px; }
+#tbl-plain-sites td { padding:13px 10px; }
 #tbl-all-sites tr, #tbl-detail-sites tr, #tbl-plain-sites tr { border-bottom:1px solid var(--line); }
 /* ---------- 技术栈标签 ---------- */
 .tech-tag { display:inline-block; padding:1px 6px; margin:1px 3px 1px 0; font-size:11px;
@@ -194,7 +194,19 @@ details pre { margin:8px 0; }
             background:var(--soft); }
 .url-link { word-break:break-all; }
 
-/* ---------- 站点截图缩略图 ---------- */
-.shot-thumb { max-width:132px; max-height:84px; border:1px solid var(--line);
-              border-radius:5px; vertical-align:middle; margin-left:6px; display:inline-block; }
-.shot-cell { white-space:nowrap; }
+/* ---------- 站点截图缩略图 + 灯箱 ---------- */
+.shot-thumb { max-width:120px; max-height:78px; border:1px solid var(--line);
+              border-radius:5px; vertical-align:middle; display:inline-block; cursor:pointer; }
+.shot-thumb:hover { border-color:var(--accent); box-shadow:0 0 0 2px var(--soft); }
+.shot-cell { white-space:nowrap; text-align:center; }
+/* 灯箱：点击缩略图放大查看，点遮罩/关闭钮/Esc 关闭（不再新开标签页） */
+.lb-overlay { position:fixed; inset:0; background:rgba(0,0,0,.82); z-index:50;
+              display:none; align-items:center; justify-content:center; padding:24px; }
+.lb-overlay.open { display:flex; }
+.lb-img { max-width:94vw; max-height:90vh; border-radius:6px; box-shadow:0 8px 40px rgba(0,0,0,.5); }
+.lb-close { position:fixed; top:18px; right:22px; width:38px; height:38px; font-size:22px;
+            line-height:1; border-radius:50%; background:var(--ghost-bg); color:var(--text);
+            border:1px solid var(--border); cursor:pointer; }
+.lb-close:hover { color:var(--accent); }
+.agg-samples { margin:4px 0 0; padding-left:16px; max-height:170px; overflow:auto; }
+.agg-samples li { margin:2px 0; word-break:break-all; }

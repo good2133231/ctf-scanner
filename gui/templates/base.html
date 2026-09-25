@@ -58,6 +58,10 @@
     </main>
   </div>
 </div>
+<div class="lb-overlay" id="lb-overlay" aria-hidden="true">
+  <button type="button" class="lb-close" id="lb-close" aria-label="关闭">×</button>
+  <img class="lb-img" id="lb-img" alt="站点截图大图">
+</div>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 {% block script %}{% endblock %}
 </body>

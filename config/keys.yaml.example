@@ -1,0 +1,16 @@
+# CTFScanner 第三方 API key 样例
+# 用法：复制本文件为 config/keys.yaml 并填入真实值。
+# 重要：config/keys.yaml 已被 .gitignore 忽略，不会进版本库——请勿把真实 key 提交。
+#       GUI「策略配置」页只写回 settings.yaml，绝不碰本文件。
+# 不配任何 key 也能跑（子域名/端口/探测/目录/漏洞初筛走内置兜底或免 key 来源），
+# 只有下面这些"外部情报拓展"线路才需要 key。
+
+fofa:
+  email: ""      # FOFA 账号邮箱（osint 阶段 favicon / 证书 / 标题反查用）
+  key: ""        # FOFA API key
+shodan:
+  key: ""        # Shodan API key（favicon 反查，默认关）
+quake:
+  key: ""        # 360 Quake API key（favicon 反查，默认关）
+github:
+  token: ""      # GitHub PAT（GitHub 泄露检索阶段用，默认关；没配就一次请求都不发）

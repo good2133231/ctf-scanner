@@ -264,6 +264,26 @@ function initPickAll() {
   });
 }
 
+/* ---------- 站点截图灯箱（点击缩略图放大，遮罩/关闭钮/Esc 关闭，不新开标签页） ---------- */
+function initLightbox() {
+  const overlay = document.getElementById("lb-overlay");
+  const img = document.getElementById("lb-img");
+  const close = document.getElementById("lb-close");
+  if (!overlay || !img) return;
+  const open = src => {
+    img.src = src; overlay.classList.add("open"); overlay.setAttribute("aria-hidden", "false");
+  };
+  const shut = () => { overlay.classList.remove("open"); img.src = ""; overlay.setAttribute("aria-hidden", "true"); };
+  // 事件委托：缩略图可能跨页/动态渲染，绑在 document 上更稳
+  document.addEventListener("click", e => {
+    const t = e.target.closest && e.target.closest(".shot-thumb");
+    if (t && t.dataset.full) { e.preventDefault(); open(t.dataset.full); }
+  });
+  if (close) close.addEventListener("click", shut);
+  overlay.addEventListener("click", e => { if (e.target === overlay) shut(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") shut(); });
+}
+
 /* ---------- 主题切换：写 html[data-theme]，localStorage 记忆 ---------- */
 
 function initTheme() {
@@ -352,6 +372,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initCollapsiblePanels();
   initPickAll();
   initVulnReview();
+  initLightbox();
   // 任务列表页的轮询/筛选/批量操作由 initTaskTable() 负责（模板内显式调用）
   // 任务详情页工具栏的操作按钮
   bindTaskOps(".toolbar");

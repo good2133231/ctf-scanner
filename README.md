@@ -83,6 +83,24 @@ python3 run_gui.py
 > 2. （可选）放置外部工具到 PATH 或 tools/scanner/，见 tools/scanner/README.md —— 需下载对应操作系统的版本（Windows 取 .exe，Linux 取 linux_amd64）。
 
 
+## 配置说明（部署前必看）
+
+框架**开箱即跑**：不配任何 key 也能完成子域名 / 端口 / 探测 / 目录 / 漏洞初筛（这些走内置兜底或免 key 来源）。只有「外部情报拓展」的几条线路需要 key。
+
+- **`config/keys.yaml`（第三方 API key，必须自建，已被 `.gitignore` 忽略）**：从仓库的 `config/keys.yaml.example` 复制一份 `config/keys.yaml` 填真实值。**切勿把真实 key 提交进仓库**（它已 gitignore；CI 跑者无此文件时 `load_keys()` 返回 `{}`，整轮冒烟仍可通过）。结构：
+  ```yaml
+  fofa:   {email: "", key: ""}   # FOFA（favicon / 证书 / 标题反查；当前 settings.yaml 里 fofa.enabled=true，会真查并消耗配额）
+  shodan: {key: ""}              # Shodan favicon 反查（默认关）
+  quake:  {key: ""}              # 360 Quake favicon 反查（默认关）
+  github: {token: ""}            # GitHub 泄露检索（默认关；没配就一次请求都不发）
+  ```
+- **`config/settings.yaml`（全局策略，已随仓库提交）**：GUI「策略配置」页可图形化修改并写回；CLI 也可直接编辑。常见开关：`fofa.enabled` / `iprecon.enabled` / `shodan` / `quake` / `ctlog` / `intel` / `heuristic` / `github`（外部情报类默认关）；`dirscan.mode`（`quick` 浅扫 / `deep` 深扫）；`screenshot.enabled`（站点截图，默认关，需本机有 Edge/Chrome 无头）；`portscan.engine`（`auto` = fscan → nmap → 内置）。
+- **`config/blacklist.txt`**：一行一个域名，命中即不入资产库（入库前过滤）。
+- **`config/dicts/`**：子域名字典、`dirs_shallow.txt`（浅扫精选路径 ~150 条）、`dirs_big.txt`（深扫大字典 15333 条）、`cdn_cname.txt`（CDN 厂商后缀）、`sensitive.txt`（A01 敏感文件检查的数据源：`路径 | 关键字 | 级别 | 说明`）。
+- **外部工具（可选）**：把 `subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 放进 PATH 或 `tools/scanner/`，存在时优先调用、否则降级内置实现。无这些工具框架仍能跑通。
+
+> 部署 checklist：① 复制 `config/keys.yaml.example` → `config/keys.yaml` 并填 key（仅当要用 FOFA 等外部情报）；② 按需改 `config/settings.yaml`（或 GUI 策略配置页）；③ `pip install -r requirements.txt`；④ 跑 `python cli/client.py --check` 自检。
+
 ## 目录结构
 
 ```

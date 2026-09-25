@@ -14,6 +14,11 @@
       <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&all=1">显示全部</a>
     {% endif %}
   </p>
+  <p class="muted small">聚合视图：
+    {% if agg %}<b>按响应聚合</b>（同「状态码+大小+标题」的响应折叠成一行，如多个站点的同款 403 拦截页只显示一条）
+    {% else %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&agg=1">按响应聚合</a>{% endif %}
+    {% if agg %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}">返回明细</a>{% endif %}
+  </p>
   <form class="filters" method="get" action="{{ pager.base }}">
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="路径 / 站点 / 标题 / 备注"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
@@ -21,6 +26,31 @@
     <button class="ghost" type="submit">查询</button>
     {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
   </form>
+  {% if agg %}
+  <table id="tbl-dirs-agg">
+    <thead><tr><th>状态</th><th>大小</th><th>标题</th><th>命中数</th><th>样本路径 / 站点</th></tr></thead>
+    <tbody>
+    {% for g in dirs %}
+      <tr>
+        <td>{{ g.status or '-' }}</td>
+        <td class="muted small mono">{{ g.length if g.length is not none else '-' }}</td>
+        <td class="muted small">{{ g.title }}</td>
+        <td><b>{{ g.count }}</b></td>
+        <td class="muted small">
+          {% if g.samples %}
+          <details><summary>{{ g.samples[0].path }}</summary>
+            <ul class="agg-samples">{% for s in g.samples %}<li>{{ s.path }} <span class="muted">@ {{ s.site }}</span></li>{% endfor %}</ul>
+          </details>
+          {% else %}-{% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="muted">没有匹配的目录发现结果。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">聚合视图跨全库（上限 5000 条）按「状态码 + 大小 + 标题」分组，不分页；点「样本路径」可展开看各站点命中。</p>
+  {% else %}
   <table id="tbl-all-dirs">
     <thead><tr><th>#</th><th>任务</th><th>状态</th><th>路径</th><th>大小</th><th>标题</th><th>来源</th></tr></thead>
     <tbody>
@@ -41,5 +71,6 @@
     </tbody>
   </table>
   {% include "_pager.html" %}
+  {% endif %}
 </section>
 {% endblock %}

@@ -27,7 +27,7 @@
       <thead><tr>
         <th class="pick"><input type="checkbox" class="pick-all-page"
           data-pick-all="#tbl-ips" title="全选本页"></th>
-        <th>IP</th><th>域名数</th><th>域名</th><th>CDN</th></tr></thead>
+        <th>IP</th><th>域名数</th><th>反查域名</th><th>域名</th><th>CDN</th></tr></thead>
       <tbody>
       {% for row in ips %}
         <tr>
@@ -35,12 +35,13 @@
             value="{{ row.ip }}"></td>
           <td class="mono">{{ row.ip }}</td>
           <td>{{ row.domains|length }}</td>
+          <td>{% if row.reverse %}{{ row.reverse }}{% else %}-{% endif %}</td>
           <td class="muted small mono">{{ row.domains[:8]|join(', ') }}{% if row.domains|length > 8 %} …{% endif %}</td>
           <td>{% if row.cdn %}<span class="tech-tag">{{ row.cdn }}</span>
               {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
         </tr>
       {% else %}
-        <tr><td colspan="5" class="muted">还没有解析数据（子域名阶段会回填 IP；
+        <tr><td colspan="6" class="muted">还没有解析数据（子域名阶段会回填 IP；
           若全是「域名不存在 / 解析超时」，请到「子域名资产」页看 IP 列下方的原因标注）。</td></tr>
       {% endfor %}
       </tbody>

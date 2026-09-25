@@ -928,6 +928,31 @@ def create_app():
             rows = [r for r in rows if not r.get("hidden_dup")]
         return rows, hidden
 
+    def _agg_dirs(rows):
+        """目录按「状态码 + 响应大小 + 标题」聚合（忽略站点），返回指纹分组列表。
+
+        解决"同一响应（如 Cloudflare 的 403 拦截页、各站点大小都是 5665）在多个站点各显示
+        一行、大小列重复"的问题：折叠成一行，显示命中条数 + 样本路径/站点（可展开）。
+        与 `_fold_dirs` 的区别：那里按「站点 + 状态码 + 大小」折叠（保留每个站点的代表行），
+        这里跨站点、按响应指纹折叠，专门对付"全库同一类响应刷屏"的观感问题。
+        """
+        groups, order = {}, []
+        for r in rows:
+            key = (r.get("status"), r.get("length") or -1, (r.get("title") or "").strip())
+            g = groups.get(key)
+            if g is None:
+                g = {"status": r.get("status"), "length": r.get("length"),
+                     "title": (r.get("title") or "").strip() or "-",
+                     "count": 0, "samples": []}
+                groups[key] = g
+                order.append(key)
+            g["count"] += 1
+            if len(g["samples"]) < 12:
+                g["samples"].append({"path": r.get("path"),
+                                      "site": (r.get("site_url") or "").rstrip("/") or "-",
+                                      "note": r.get("note") or "-"})
+        return [groups[k] for k in order]
+
     @app.route("/shots/<int:task_id>/<path:name>")
     @login_required
     def shot_file(task_id, name):
@@ -974,6 +999,12 @@ def create_app():
                 if cdn_label and not item["cdn"]:
                     item["cdn"] = cdn_label
         rows = sorted(agg.values(), key=lambda x: (-len(x["domains"]), x["ip"]))
+        # 反查域名数：从 csegs 表按 IP 聚合（各任务里该 IP 的反查命中数之和）
+        reverse_counts = {}
+        for c in db._query("SELECT ip, SUM(count) c FROM csegs WHERE ip <> '' GROUP BY ip"):
+            reverse_counts[c["ip"]] = int(c["c"] or 0)
+        for row in rows:
+            row["reverse"] = reverse_counts.get(row["ip"], 0)
         return render_template("ips.html", ips=rows, include_cdn=include_cdn)
 
     @app.route("/subdomains")
@@ -1155,9 +1186,20 @@ def create_app():
     @login_required
     def dirs():
         show_all = _overlap_args()
+        agg = request.args.get("agg") == "1"
         rows, pager, q = _asset_page("dirs", "/dirs")
         # 重复长度默认隐藏：同一站点下状态码与响应大小都相同的多条只留首个，`?all=1` 放开
         rows, hidden = _fold_dirs(rows, show_all)
+        if agg:
+            # 聚合需跨全库（不再按页切）：拉全部（受 q 过滤），上限 5000 防极端库
+            all_rows, _ = db.page_assets("dirs", limit=5000, offset=0, q=q or None)
+            all_rows, _ = _fold_dirs(all_rows, show_all)
+            groups = _agg_dirs(all_rows)
+            pager["qs"] += "&agg=1"
+            if show_all:
+                pager["qs"] += "&all=1"
+            return render_template("dirs.html", dirs=groups, pager=pager, q=q,
+                                   show_all=show_all, hidden=hidden, agg=True)
         if show_all:
             pager["qs"] += "&all=1"
         return render_template("dirs.html", dirs=rows, pager=pager, q=q,

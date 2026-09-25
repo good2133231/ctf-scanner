@@ -3,6 +3,23 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续34：IP 反查多源增强 + IP 资产页显示每 IP 反查域名数
+> 实施者：**WorkBuddy · Hy4-preview**
+
+**背景（用户要求"精进真实 IP 反查"）**：原 `iprecon` 只走 webscan 单源，且 IP 资产页「域名数」列是正向解析计数、不含反查。本次：① `iprecon` 增加 hackertarget / ip138（及可选 dnsdblookup）多源、结果 union；② IP 资产页新增「反查域名」列，从 `csegs` 表按 IP 聚合反查命中数；③ 反查域名仍经 `osint:cseg` 进拓展资产（链路未动）。
+
+**改了什么**
+
+1. `scanner/iprecon.py`：抽出 `_reverse_webscan`（原 `reverse_lookup` 的 webscan 逻辑，保留 `settings["iprecon"]["api"]` 配置点）；新增 `_reverse_hackertarget`（纯文本每行一域名）、`_reverse_ip138`（HTML 链接正则抽域名）、`_reverse_dnsdblookup`（可选第四源，默认不启用）。注册 `_SOURCES` 表与 `DEFAULT_SOURCES=["webscan","hackertarget","ip138"]`。`reverse_lookup` 改为按 `settings["iprecon"]["sources"]` 依次尝试各源、结果 union；单源失败/空继续下一源，全部失败返回 `[]`。**未改 `lookup_many` 签名/返回结构**，未引入新第三方依赖，反查全部走 `utils.http_request`、失败即弃、绝不 eval。
+2. `gui/app.py` `ips()`：聚合 `csegs` 表（`db._query("SELECT ip, SUM(count) c FROM csegs WHERE ip <> '' GROUP BY ip")`）得到 `{ip: 反查域名数}` 映射，给每行 `row["reverse"]` 赋值（无则 0）。
+3. `gui/templates/ips.html`：表头与每行新增「反查域名」列（位于「域名数」之后），值为 `row.reverse`，0 显示 `-`；空表 colspan 5→6。
+4. `CHANGELOG_AI.md`：本条目。
+
+**验证**
+- `py -3 -m py_compile scanner/iprecon.py gui/app.py` → 通过（无语法错误）。
+- 逻辑自检：`reverse_lookup` 单源（webscan）失败时回退 hackertarget/ip138；`lookup_many` 行为不变；`osint:cseg` 域名入库链路未改动（`scanner/stages/osint.py` 的 `_c_segments` 未碰）。
+- CRLF 自查：`git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` 逐文件一致（全部改的文件保持 CRLF）。
+
 ## 2026-09-25 —— 续33：接管盘点 + 全 13 阶段端到端回归门禁
 > 实施者：**WorkBuddy · Hy4-preview**
 
