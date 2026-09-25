@@ -986,7 +986,12 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        （CLI `--recursive-dir` + 策略页说明）、TODO.md、CHANGELOG_AI.md、config/settings.yaml 注释。
 [未做] 7、残留（如实标注）：本次**没有**在真实授权目标上跑过递归（需用户指定目标）；
        `docs/roadmap.md` 里「目录递归爬取」之外的另两条（重写字典引擎 / 联网下载字典）仍不做。
-[待办] 「dirmap 若将来要内联进仓库，先修它自身那几个问题」（1 处 [待办]）：用户已交由其他 AI 负责。
+[完成] 「dirmap 若将来要内联进仓库，先修它自身那几个问题」（续44，2026-09-25 自行复核）：5 处修复
+       **全部在位**（对照 `.bak-workbuddy-20260922`），#3 的收益用 15315 行等比微基准复现
+       （旧 n=4000→82s、新 n=4000→0.84s，与记录里的 588s→43s 同量级）；适配器口径差异已改正
+       （`-e` 的真实语义与 `dict_mode=3` 前置、产物漏了 `othercode.txt`、`-t` 是并发目标数）；
+       本机回环靶场端到端跑通（13 条命中、无回退、重扫 mtime 不变仍解析 13 条）。
+       **「内联」结论不变：不做**（GPL-3.0）；残留 4 条见下条第 7 项与 `tools/dirmap_fixes/README.md`。
 [待办] flow 的 JS / 循环 / 带参数引用、workflow 的 subtemplates / args、dsl 表达式、oob 反连：
        仍显式标 unsupported（不静默失效），见 docs/poc-guide.md。
 [完成] 真实授权目标上跑完整 13 阶段（2026-09-25 续43，授权目标 pengo.pro）：临时打开 6 个默认关阶段
@@ -1356,6 +1361,22 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        文档同步：`AGENTS.md`、`docs/architecture.md`、`docs/pipeline.md`、`docs/usage.md`、
        `docs/roadmap.md`、`docs/poc-guide.md`、`README.md`、`NOTICE.md`、`TODO.md`、`todo.txt`、
        `docs/takeover-2026-09-25.md`、`CHANGELOG_AI.md`。
-[待办] 6、仍未做：`--check` 补 nmap/fscan 探测；B 组架构级四项（任务队列 / 鉴权加固续 / 分布式节点 /
-       工具版本管理）；C 组需用户输入（305 个导入 POC 实测校准、dirmap 源码复核、GitHub 只读 token
-       覆盖 `config/keys.yaml`）；D 组明确不做（多用户/HTTPS 部署指引、重写 dirmap 等价字典引擎）。
+[完成] 6、C 组三项（原记"需用户输入"，2026-09-25 **续44** 全部落地，详见 `CHANGELOG_AI.md` 续44）：
+       ① **GitHub token 已可用** —— `config/keys.yaml` 的 `github.token` 活体探测
+       `GET api.github.com/rate_limit` = HTTP 200 / `x-ratelimit-limit: 5000` / core 5000、search 30；
+       `github.txt` 已 0 字节、被 `.gitignore` 忽略且未入库。**无需再让用户新建 token**。
+       ② **305 个导入 POC 实测校准** —— 装载期：`_status` ok 305/305、confidence 全 low、
+       severity high 290/medium 14/low 1（**与 confidence 自相矛盾**）、`skip_severities` 只挡 1/305、
+       path 合计 832、155/305 含通用词；pengo.pro 实测：阶段 1 miss 304 / hit 1（305 个 POC）、
+       阶段 2 命中项 × 另 2 台 = hit 2/2 —— 唯一命中 `Dashboard__blast.yaml` 在 3 台主机全中、
+       evidence 是 SPA 首页 HTML ⇒ **确认误报**（`word` 的 `condition: or` 分支含通用串
+       `"data"`/`"token"`）；同构高风险模板 14/305。**结论：「情报订阅自动灌 POC」不能自动灌** ——
+       前置是逐条实测校准 + 白名单启用，且 severity 不能采信导入器写的值；
+       `config/pocs-imported/` 默认关闭状态**保持不变**。
+       ③ **dirmap 源码复核** —— 5 处修复全部在位 + 适配器 3 处口径差异已改正（含 `recursiveScan()`
+       是死代码这一事实纠正）+ 本机回环端到端跑通（13 条命中、无回退）。细节见
+       `tools/dirmap_fixes/README.md`。
+[待办] 7、仍未做：`--check` 补 nmap/fscan 探测；B 组架构级四项（任务队列 / 鉴权加固续 / 分布式节点 /
+       工具版本管理）；dirmap 残留 4 条（`intToSize` 量化误差 / `plugins/inspector.py` 绕过
+       `_LegacySSLAdapter` / 含 fragment 的产出行 / `output/` 无清理）；D 组明确不做（多用户/HTTPS
+       部署指引、重写 dirmap 等价字典引擎）。

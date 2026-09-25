@@ -3,6 +3,97 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续44：C 组三项收口（305 个导入 POC 实测校准 / dirmap 源码复核 / GitHub token 核实）
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+**背景**：`todo.txt` 里挂着的 C 组三项，此前被记成"需用户输入"（305 个 POC 要真实授权目标、dirmap
+复核已交由其他 AI、GitHub token 待用户新建）。本轮把它们**全部落地**：用户指出 `pengo.pro`
+本来就可作授权目标，dirmap 复核收回自做，token 实探后确认**早已可用**。
+**本轮不改任何扫描逻辑** —— 唯一的代码改动是 `scanner/stages/dirscan.py` 里一段**注释**的事实纠错。
+
+### C-4 GitHub 只读 token —— 已解决，无需再动
+
+- `config/keys.yaml` 的 `github.token` 是有效 fine-grained PAT（len 93）。
+- 活体探测 `GET https://api.github.com/rate_limit` → **HTTP 200**、`x-ratelimit-limit: 5000`、
+  `core 5000/5000`、`search 30/30`（未认证只有 60/60 与 10/10）⇒ 已认证。
+- `github.txt`（仓库根）**已是 0 字节**，`.gitignore` 第 36 行已忽略它，`git ls-files` 确认未入库。
+- 即此前记的"当前那个已 401"与"`github.txt` 里的失效 PAT 该删"**两项都已完成**。
+
+### C-2 305 个导入 POC 的实测校准
+
+**第 1 步 · 装载期统计（零请求）**
+
+- `_status`：**ok 305 / 305**（零 unsupported、零 error）；匹配器只有 `status` + `word`，
+  无 `extractors`、无 `dsl`/`flow`/`workflow`/`payloads`/`raw`。
+- `db.poc_confidence` 全为 **low 305/305**；`info.severity` 原始值 **high 290 / medium 14 / low 1**。
+- **结构性风险**：导入器把 severity 平铺成 high，置信度层却全判 low —— **两者自相矛盾**。
+  而 `checks.skip_severities = [info, low]` 只挡掉 **1/305（0.3%）**、`min_severity = medium`
+  也拦不住 high ⇒ **一旦全量 enable，就有 304 个真的进 vulnscan，并以 high/medium 直接进
+  「潜在漏洞」报告**。
+- 请求面：模板内 `path` 合计 **832** 条（1 个 path 43 / 2 个 158 / 3+ 个 104）。
+- 关键词特异性：**155/305 至少含一个 `≤8 字符 或 通用词`**（如 `"data"`、`"token"`、`"code":0`）。
+
+**第 2 步 · 对 pengo.pro 实测**（走引擎真身 `run_poc_on_target()`，与正式扫描同一条 HTTP 路径）
+
+- 口径：绕过注册表开关，直接跑全部 305 个导入 POC。阶段 1 = 305 × `https://pengo.pro`；
+  阶段 2 = 命中项 × 另 2 台主机（`admin.pengo.pro` / `app.pengo.pro`）复验。原始 307 行结果留在
+  `%TEMP%\calib_pengo.jsonl`（**临时产物，未进仓库**）。
+- 结果：**阶段 1 = miss 304 / hit 1**；**阶段 2 = hit 2/2**；各 POC 耗时合计 292 秒（并发执行，非墙钟）。
+- 唯一命中 = `config/pocs-imported/Dashboard__blast.yaml`，**在 3 台主机上全部命中** ⇒ **确认误报**。
+  根因：它是 `matchers-condition: and`（status 200）**AND** `word` 的 `condition: or` 分支，
+  而该分支里写着通用串 `"data"` / `"token"`；目标是 Cloudflare + SPA，evidence 就是首页
+  `<!doctype html>…`，与 `Apache APISIX Dashboard` 毫无关系。
+- 同构高风险模板 **14/305**（and(status) + word(or 含通用 JSON 键)），最极端的是
+  `v10__blast.yaml`（words `['/decision/file?path', '"data"']`）与
+  `SpringBlade__anyuserlogin.yaml`（words `['"code":200']`）。
+
+**结论（对「情报订阅自动灌 POC」的直接回答）**：**不能自动灌**。前置是"逐条实测校准 + 白名单启用"，
+且 **severity 不能采信导入器写的值**（全写 high，而置信度层全判 low，两者必有一错）。
+`config/pocs-imported/` 的默认关闭状态**保持不变**。
+
+### C-3 dirmap 源码复核
+
+**1 · 5 处修复全部在位**（逐条对照 `lib/controller/bruter.py.bak-workbuddy-20260922`）：
+
+- 重复的 `saveResults(domain,msg)` 已删（只剩 @629 那份 `saveResults(file_path,msg)`）；
+  `error_count` 死变量已无；`_written_lines`(@625) + `_write_lock`(@626) 已加（"首次载入已有行 →
+  之后只追加"+ 锁）；`_parse_size`(@542) 在 `responseHandler`(@575) **真被调用**（运行时
+  `None/0b/1k/1m/1g → None/0/1024/1M/1G`）；`_LegacySSLAdapter`(@72) 已 mount 到 `https://`
+  （运行时实测 `poolmanager.connection_pool_kw['ssl_context'] is ssl_context → True`）。
+- 修复 #3 的收益用 15315 行等比微基准复现（旧 n=4000 → 82s，新 n=4000 → 0.84s），与 README 记的
+  588s → 43s **同量级**（未逐秒复现）。
+
+**2 · 适配器/文档口径差异（已改正，不涉及行为）**
+
+- **`recursiveScan()` 是死代码**：定义在 `bruter.py` @143，**唯一引用在 @528-529 且整块被注释**；
+  `conf.recursive_scan` 现在只影响两句控制台文案与进度条长度 ⇒ 原注释把"`[301,403]` 才触发 /
+  60 长度兜底"当成"可用但不想开"，实际是**这段死代码的描述**。`scanner/stages/dirscan.py`
+  的注释已按事实改写（**结论不变**：递归一律走本阶段自己的三重闸）。
+- **`-e` 的真实语义**：`cmdline.py` @31 里 `-e` = `target_type`（`all|d|php|jsp|asp|big`，其它值
+  直接 `sys.exit()`），决定**装哪几本字典**（`loadCustomDict` @208），且**只在外部
+  `dirmap.conf` 的 `conf.dict_mode == 3` 时生效**（@412）。`tools/dirmap_fixes/README.md` 原写
+  "`-e all`"过时（真实调用是**按技术栈分组**各跑一次，判不出语言才 `all`），已改正并补上前置。
+- **产物清单漏了一个**：实际写 `res.txt` / `重复长度.txt` / `403.txt` / `404.txt` /
+  **`othercode.txt`**（401/500 等落这里，@617）；README 已补齐，并写明适配器**只读 `res.txt` 与 `403.txt`**。
+- **`-t` 是"并发目标数"**：`engine.py` @54 `gevent.spawn(scan) × thread_num`，每个 `scan()` 串行取一个
+  目标；**单目标内的并发**由外部 `conf.request_limit`（本机 20）决定，`-t` 超出 1~200 会静默回退 30。
+
+**3 · 本机回环端到端实跑通过**：走仓库真实入口 `runner.run_task`（probe + dirscan，`mode=deep`），
+自建回环靶场 `127.0.0.1:8791`；日志 `dirmap：1 个站点（技术栈 未知 → -e all）…` → 34 秒 →
+`dirmap 输出 13 条` → `目录发现 13 条`，**无"回退内置"**；13 条解析全对（`200/365 admin`、
+`200/563 api`、`200/512 backup.zip`，`403.txt` 9 条 `403/35`）。当时 `output/` 下另有 8 个历史目标
+目录、却只读到本目标 13 条 ⇒ **定向定位 + netloc 过滤有效**；重扫（24 秒）后 4 个产物文件
+**mtime/size 完全不变**、仍解析 13 条 ⇒ README 里"mtime 不变也能按目标目录定位"成立。
+**本轮只读复核，未改动 dirmap 外部副本**。
+
+### 顺带记入待办的残留（未修，属"外部工具既有行为"或额度取舍）
+
+dirmap 行里的大小是 `intToSize()` 量化值（`_size_to_int` 反算有 ±0.5% 误差，同页面的 dirmap 行与
+内置行折不到一起）；`plugins/inspector.py` 的 auto-404 预检走裸 `requests.get`、绕过
+`_LegacySSLAdapter`；含 fragment 的产出行被原样解析（开递归时会被当目录前缀）；
+`output/` 无清理（`404.txt` 每目标约 1 MB、长期累积）。见 `todo.txt` 与
+`tools/dirmap_fixes/README.md`。
+
 ## 2026-09-25 —— 续43：jsmine 按 URL 主机判 auth（混合出口）+ CDN 双判据（CNAME / 任播 IP 段）+ pengo.pro 全 13 阶段实跑
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

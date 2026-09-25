@@ -14,13 +14,20 @@ dirmap 是 **GPL-3.0** 第三方项目（`LICENSE` 第 1 行即 GPLv3）。把�
 - 配置：`config/settings.yaml` → `tools.dirmap.script`（默认 `tools/dirmap/dirmap.py`，
   **只写相对路径**，绝对路径不进代码与配置）+ `tools.dirmap.threads`。
 - 找不到该文件时，`dirscan` 阶段自动回退内置字典扫描（不会报错、也不会静默失败：日志会写明）。
-- 调用方式：`python dirmap.py -iF <任务目录/目标文件> -e all -t <线程>`，**cwd 固定在其项目目录**
+- 调用方式：`python dirmap.py -iF <任务目录/目标文件> -e <kind> -t <线程>`，**cwd 固定在其项目目录**
   （dirmap 用 `os.getcwd()` 定位 `data/` 与 `output/`）。
+  - `-e` 是 **`target_type`**（`all|d|php|jsp|asp|big`，其它值会直接 `sys.exit()`），决定**装哪几本
+    字典**；我们**按技术栈分组各跑一次**（`jsp` / `php` / `asp`），判不出语言的那组才用 `all`。
+  - **前置**：`-e` 只在**外部** `dirmap.conf` 的 `conf.dict_mode = 3` 时才生效（本机当前值即 3）；
+    被改成 1/2 会让 `-e` 静默失效（不报错，只是换用另一套字典）。
+  - `-t` 是**并发目标数**（`gevent.spawn(scan) × thread_num`，每个 `scan()` 串行取一个目标）；
+    **单目标内的并发**由外部 `conf.request_limit`（本机 20）决定。`-t` 超出 1~200 会静默回退 30。
 
 ## 适配器踩过的三个坑（已在 `scanner/stages/dirscan.py` 修掉）
 
-1. 产物在 `output/<域名>/` **子目录**里（`res.txt` / `403.txt` / `404.txt` / `重复长度.txt`），
-   不再是早年的 `output/<域名>.txt`；
+1. 产物在 `output/<域名>/` **子目录**里（`res.txt` / `重复长度.txt` / `403.txt` / `404.txt` /
+   `othercode.txt` —— 401 / 500 等其它状态码落在最后一个），不再是早年的 `output/<域名>.txt`；
+   **适配器只读 `res.txt` 与 `403.txt`**；
 2. `output/` 是**持久目录**，`output/` 里的旧结果会被下次运行读到；
 3. **只按 mtime 过滤也不行**：dirmap 的 `saveResults()` 会与文件里已有的行去重，
    重扫同一目标且结果不变时**它不写新内容**，文件 mtime 保持旧值 ——
@@ -50,6 +57,19 @@ dirmap 是 **GPL-3.0** 第三方项目（`LICENSE` 第 1 行即 GPLv3）。把�
 | 修复后 | **43 秒** |
 
 （约 13× —— 差异几乎全部来自那个 O(n²) 的读回放大。这也解释了为什么"跑一次 dirmap 要十分钟"。）
+
+## 2026-09-25 续44 复核结论（只读复核，未再改本机那份副本）
+
+- 上表 5 处修复**全部在位**（逐条与 `bruter.py.bak-workbuddy-20260922` 对照）；#3 的收益用
+  15315 行等比微基准复现（旧 n=4000 → 82s，新 n=4000 → 0.84s），与「588s → 43s」同量级。
+- **`recursiveScan()` 是死代码**：它定义在 `bruter.py`，唯一引用在 `responseHandler` 里、而那段
+  早已被整块注释掉。所以 `conf.recursive_scan` 现在只影响两句控制台文案与进度条长度 ——
+  **打开它也不会递归**，别指望改这个开关能得到递归（递归由本仓库 `scanner/stages/dirscan.py`
+  自己的三重闸实现）。
+- **已知残留（未修）**：dirmap 行里的大小是 `intToSize()` 量化值（我们反算字节数时有 ±0.5%
+  误差，同页面的 dirmap 行与内置行折不到一起）；`plugins/inspector.py` 的 auto-404 预检走裸
+  `requests.get`、绕过了 `_LegacySSLAdapter`；含 fragment 的产出行会被原样解析（开递归时会被
+  当目录前缀）；`output/` 无清理（`404.txt` 每目标约 1 MB、长期累积）。
 
 ## 复现步骤
 
