@@ -471,7 +471,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 
 [待办] P2-3 Linux 实机验证（挂起中；本机无 WSL/Docker 可用，需你给环境或换机器跑）
 [完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（依赖检测层置信度校准）
-[部分完成] 端口扫描接入 fscan（可选，见本轮分析；需你先放二进制到 tools/，我才能真跑验证）　↳ 续44 核对：**代码已接入**（scanner/stages/portscan.py 引擎 auto = fscan→nmap→内置，settings.yaml 有 portscan 段）；缺的只是 fscan 二进制真跑验证
+[完成] 端口扫描接入 fscan（可选，见本轮分析；需你先放二进制到 tools/，我才能真跑验证）　↳ 续44 核对：**代码已接入**（scanner/stages/portscan.py 引擎 auto = fscan→nmap→内置，settings.yaml 有 portscan 段）　↳ 续45 核对：**二进制真跑验证已达成** —— 本机从源码自编译 fscan 2.2.1（Go 1.25.4 便携版；预编译 exe 会被 Defender 拦而自编译不会）、回环真跑三种行形态 + 统计行全解析、交叉校验一致；真跑踩出并修掉「`result.txt` 落进进程 CWD（= 仓库根）」的缺陷。**仍未做**：让 fscan 在 `tools.fscan` 裸名下"可被发现"（junction 或改 PATH）—— 那会改变实际扫描引擎，待你拍板
 [待办] osint 阈值继续按真实数据校准（已有首个样本：标题十位数 / 证书百万级）
 
 -----
@@ -492,7 +492,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 目录字典还能再细分（如按框架：wordpress/spring 专属路径），当前只按语言拆三层　↳ 续44 核对：**已落地**（scanner/stages/dirscan.py 的 FRAMEWORK_TAGS / fw_max_paths；tools/import_fw_dicts.py 派生 12 桶）
 [待办] P2-3 Linux 实机验证（挂起中；本机 WSL 被安全策略禁用、无 Docker）
 [完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘
-[部分完成] 端口扫描接入 fscan（可选，需你先放二进制）
+[完成] 端口扫描接入 fscan（可选，需你先放二进制）　↳ 续45 核对：**已验证**（自编译 2.2.1 + 回环真跑，见本文件续45 第 10 项）
 
 -----
 （第十七轮续2：GUI / 资产视图 8 项）实施者：WorkBuddy · DeepSeek-V4.1-Flash
@@ -1400,3 +1400,15 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        （`1.21kb`）仍可解析（向后兼容）；`tests/smoke.py` 新增 `[7g]` 钉住适配器侧两条，
        变异证伪 2/2 被击杀。残留规模记档：`tools/dirmap/output/` 11 目录 / 50 文件 / 12.0 MB
        （属既有数据，未动）。细节见 `tools/dirmap_fixes/README.md`。
+[完成] 10、fscan 二进制**真跑**验证（**续45**，2026-09-25，用户授权安装）：本机从源码自编译 fscan
+       2.2.1（阿里云镜像 Go 1.25.4 便携 zip → `shadow1ng/fscan` tag `v2.2.1` = `95cc12e` →
+       `go build -ldflags="-s -w" -trimpath`，27.2 MB；预编译 exe 会被 Defender 拦而自编译不会）。
+       回环真跑（真起 SSHD/HTTP，非注入桩）：rc=0；三种真实行形态 + 统计行全解析；
+       `ports={8899,9998}` 与 `declared=2` 交叉校验一致；关闭的 9997 不在结果里；只扫关闭端口返回 `[]`。
+       真跑踩出并修掉一个真缺陷：fscan 默认 `-o result.txt` 且按**进程 CWD** 落盘，而 `fscan_scan()`
+       既不传 `-o` 也不设 `cwd` → 仓库根被塞进一个**跨轮追加**的结果文件（含别的目标 IP 与 banner，
+       `git add .` 会带进提交）。修法：`fscan_scan(..., workdir=None)` → `cwd = workdir or
+       tempfile.gettempdir()`，两处 `run_cmd`（含老版本去 `-nopoc` 的重试）都带；阶段调用点传
+       `workdir=ctx.workdir`。回归：`[5e-0]` 新增第 ⑧ 组 + 引擎选择段第二遍（阶段必须把 workdir
+       传下去），全量 SMOKE PASS、变异证伪 2/2 被击杀并还原。
+       仍未做：让 fscan 真正上位（junction `tools/fscan/` 或改 PATH）—— 会改变实际扫描引擎，待你拍板。

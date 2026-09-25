@@ -725,10 +725,12 @@ def main():
         "老版本回退路径也必须保留 -np -nobr（非破坏性红线）"
 
     _ps_calls = []
+    _ps_cwds = []       # 每次调用传下去的 cwd（见第 ⑧ 组：fscan 的 -o 按**进程 CWD** 落盘）
     _orig_run_cmd = ps.run_cmd
 
     def _stub_run(*a, **k):
         _ps_calls.append([str(x) for x in (a[0] if a else k.get("argv"))])
+        _ps_cwds.append(k.get("cwd"))
         return _stub_run.reply.pop(0)
 
     _stub_run.reply = []
@@ -791,6 +793,8 @@ def main():
         assert [r["port"] for r in got] == [443]
         assert len(_ps_calls) - _before == 2, _ps_calls[_before:]
         assert "-nopoc" not in _ps_calls[-1] and {"-np", "-nobr"} <= set(_ps_calls[-1])
+        assert _ps_cwds[-1] and _ps_cwds[-1] == _ps_cwds[-2], \
+            f"老版本回退重试也要带同一个 cwd（否则产物又落回进程 CWD）：{_ps_cwds[-2:]}"
         # ④ rc≠0 且不是参数问题 → 返回 None，交给上层回退 nmap/内置
         _stub_run.reply = [(1, "", "boom")]
         assert ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan") is None
@@ -809,6 +813,18 @@ def main():
                               "[*] 扫描完成，发现 1 个开放端口\n", "")]
         got = ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan")
         assert [r["port"] for r in got] == [80], got
+        # ⑧ `cwd` 必须显式给：fscan 默认 `-o result.txt`（common/flag.go）且写的是**进程 CWD**。
+        #    真跑踩坑（续45 自编译 2.2.1 + 本机回环）：不给 cwd 时每轮扫描都往仓库根丢一个
+        #    result.txt，而且是**跨轮追加**的（里面带着别的目标的 IP / 服务 banner / URL），
+        #    `git add .` 会顺手把它带进提交。给了 workdir 就用它，没给也不能继承进程 CWD。
+        _wd = Path(_TMPDIR) / "fs_run"
+        _stub_run.reply = [(0, "[+] 10.0.0.1:80 open\n[*] 扫描完成，发现 1 个开放端口\n", "")]
+        assert ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan", workdir=_wd)
+        assert _ps_cwds[-1] == str(_wd), _ps_cwds[-1]
+        _stub_run.reply = [(0, "[+] 10.0.0.1:80 open\n[*] 扫描完成，发现 1 个开放端口\n", "")]
+        assert ps.fscan_scan("h.test", "10.0.0.1", [80], binary="fscan")
+        assert _ps_cwds[-1] and _ps_cwds[-1] != os.getcwd(), \
+            f"未传 workdir 也不能继承进程 CWD（否则产物落到仓库根）：{_ps_cwds[-1]!r}"
 
         # nmap 同样要走压缩后的端口串（否则全端口在 Windows 上起不来）
         _stub_run.reply = [(0, "Host: 10.0.0.1 ()\tPorts: 80/open/tcp//http///\n", "")]
@@ -836,6 +852,13 @@ def main():
     _orig_fs = _ps_stage.portscan.fscan_scan
     _orig_nm = _ps_stage.portscan.nmap_scan
     _orig_which = _ps_stage.which
+    _eng_wd = {}
+
+    def _stub_fs_eng(*a, **k):
+        _eng_calls.append("fscan")
+        _eng_wd.update(k)
+        return []
+
     _ps_stage.portscan.scan_host = lambda *a, **k: (_eng_calls.append("builtin") or [])
     _ps_stage.portscan.fscan_scan = lambda *a, **k: _eng_calls.append("fscan")
     _ps_stage.portscan.nmap_scan = lambda *a, **k: _eng_calls.append("nmap")
@@ -848,6 +871,16 @@ def main():
         _ps_stage.PortscanStage(_eng_ctx).run()
         assert _eng_calls and set(_eng_calls) == {"builtin"}, _eng_calls
         assert any("指定引擎 fscan 不可用" in x for x in _rec), _rec
+
+        # 第二遍：让 which 认得 fscan → 钉住"阶段必须把任务产物目录传下去"。
+        # 不钉的话，谁把调用点的 `workdir=ctx.workdir` 删掉都不会红，而 fscan 会默默把
+        # result.txt 写进启动扫描器的目录（GUI/CLI 就是仓库根）。
+        _eng_calls.clear()
+        _ps_stage.portscan.fscan_scan = _stub_fs_eng
+        _ps_stage.which = lambda name: "fake-fscan" if name == "fscan" else None
+        _ps_stage.PortscanStage(_eng_ctx).run()
+        assert _eng_calls == ["fscan"], _eng_calls
+        assert _eng_wd.get("workdir") == Path(_TMPDIR) / "eng", _eng_wd
     finally:
         _ps_stage.portscan.scan_host = _orig_host
         _ps_stage.portscan.fscan_scan = _orig_fs
@@ -855,7 +888,8 @@ def main():
         _ps_stage.which = _orig_which
     print("[5e-0] fscan/nmap 适配 ok: 端口串压缩为 1-65535（命令行 <1000 字符）；"
           "fscan 强制 -np -nobr -nopoc（老版本回退仍保留 -np -nobr）；"
-          "2.2.1 真实输出 8/8 全解析 + 统计行交叉校验（数目不符即回退，杜绝静默漏报）")
+          "2.2.1 真实输出 8/8 全解析 + 统计行交叉校验（数目不符即回退，杜绝静默漏报）；"
+          "cwd 一律显式给（fscan 的 -o result.txt 落在任务产物目录，不落进程 CWD）")
 
     # (2) FOFA 标题反查：语句构造 + 公共标题阈值 + 模板页标题（连查询都不发）
     assert fofa.build_title_query("维保中心") == 'title="维保中心"'

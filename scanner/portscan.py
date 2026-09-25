@@ -14,11 +14,14 @@
   **实测补充**：`-nopoc` 只管 POC 模块，fscan 内置的**服务插件**（mysql/redis/webpoc 指纹）
   仍会跑，输出里可能出现 `[!] Redis未授权访问: ip:port` 这类**只读**探测结论 ——
   本模块只解析"端口开放"的事实行，不采信它的漏洞结论。
+  **另一个实测补充**：fscan 默认 `-o result.txt` 且写的是**进程 CWD**，所以调用它时一律显式
+  传 `cwd=`（任务产物目录），否则会在启动扫描器的那个目录里留下一个跨轮追加的结果文件。
 
 TOP_PORTS 覆盖 CTF 里真正高频的面：Web 变体端口、数据库、远程管理、容器/中间件。
 """
 import re
 import socket
+import tempfile
 
 from . import throttle as _throttle_mod
 from .utils import pool_run, run_cmd, which
@@ -262,7 +265,8 @@ def _parse_fscan(text):
     return ports, (int(m.group(1)) if m else None)
 
 
-def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None, throttle=None):
+def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None, throttle=None,
+               workdir=None):
     """fscan 端口扫描（装了 fscan 时可用）。**解析不可信时返回 None** → 回退 nmap/内置。
 
     返回语义（踩过坑，务必保持）：
@@ -280,6 +284,12 @@ def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None, throttle=N
     `throttle`（F2）：传入时这次子进程调用占一个 `"subprocess"` 名额（并消耗预算）。
     **注意**：`budget_total` 只约束"我们起几个子进程"，**不约束 fscan 内部发多少连接**
     （见 scanner/throttle.py 的覆盖缺口说明）。
+
+    `workdir`（2026-09-25 续45 真跑踩坑）：fscan 默认 `-o result.txt`（`common/flag.go`），
+    而 `-o` 的相对路径是按**进程 CWD** 落的 —— 不显式指定 `cwd` 就会落到启动扫描器的那个目录
+    （GUI/CLI 从仓库根启动 → 仓库根多出一个 `result.txt`，内容是**跨轮追加**的，还带着别的目标
+    的服务 banner，`git add .` 会顺手把它带进提交）。因此这里一律显式给 `cwd`：优先任务的产物
+    目录（与 dirmap/cert/screenshot 产物同级），没给就退到系统临时目录，**绝不继承进程 CWD**。
     """
     bin_path = binary or which("fscan")
     if not bin_path:
@@ -290,13 +300,15 @@ def fscan_scan(host, ip, ports, timeout=1, binary=None, workers=None, throttle=N
     threads = min(600, max(30, int(workers or 64) * 8))
     # 进程超时封顶：全端口时也要保证"最坏情况会结束"（不封顶会卡到天荒地老）
     proc_timeout = min(1800, max(60, int(len(ports) * timeout / 4)))
+    cwd = str(workdir) if workdir else tempfile.gettempdir()
     base = [bin_path, "-h", ip, "-p", port_arg,
             "-t", str(threads), "-time", str(max(1, int(round(timeout))))]
-    rc, out, err = run_cmd(base + _fscan_flags(), timeout=proc_timeout, throttle=throttle)
+    rc, out, err = run_cmd(base + _fscan_flags(), timeout=proc_timeout, throttle=throttle,
+                           cwd=cwd)
     if rc != 0 and _FSCAN_BAD_FLAG_RE.search((out or "") + (err or "")):
         # 老版本不认 `-nopoc`：去掉它重试一次，`-np -nobr` 依然保留（红线不动）
         rc, out, err = run_cmd(base + _fscan_flags(with_nopoc=False), timeout=proc_timeout,
-                               throttle=throttle)
+                               throttle=throttle, cwd=cwd)
     if rc != 0:
         return None
     found, declared = _parse_fscan(_ANSI_RE.sub("", out or ""))

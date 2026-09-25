@@ -119,6 +119,42 @@
 `CHANGELOG_AI.md`（本节）。
 
 
+### 5. fscan 二进制**真跑**验证（用户本轮授权安装）+ 真跑踩出的 `result.txt` 缺陷
+
+**背景**：`todo.txt` 里一直挂着「端口扫描接入 fscan……缺的只是 fscan 二进制真跑验证」。用户本轮授权
+"本机没装可以安装"，于是**从源码自编译**（预编译 exe 会被 Defender 拦，而本机不是管理员、加不了排除项）：
+阿里云镜像取 Go 1.25.4 便携 zip（免管理员）→ `shadow1ng/fscan` 检出 tag `v2.2.1`（`95cc12e`）→
+`go build -ldflags="-s -w" -trimpath`（Makefile 官方命令，`main_cli.go` 带 `//go:build !web`）→
+27.2 MB `fscan.exe`，**Defender 未拦、rc=0**。
+
+**真跑结果（本机回环，真起 SSHD + HTTP，不是注入桩）**：
+
+| 验证项 | 结果 |
+|---|---|
+| 进程 | rc=0、stdout 978 B、stderr 0 B |
+| 输出行形态 | 三种全抓到：`[*] 127.0.0.1:9998 ssh Banner:(…)` / `[*] http://127.0.0.1:8899 http [Product:…]` / `[+] http://127.0.0.1:8899 code:200 len:1538 title:…` |
+| 统计行 | `[*] 扫描完成，发现 2 个开放端口` |
+| `_parse_fscan()` | `ports={8899, 9998}`、`declared=2` → 交叉校验一致；**关闭**的 9997 不在结果里 |
+| `fscan_scan()` | 完整链路返回 2 条；只扫关闭端口 → `[]`（与"解析不可信"的 `None` 区分开） |
+
+**真跑顺带踩出一个真缺陷（已修）**：`git status` 里多出未跟踪的 `result.txt`。根因：fscan 默认
+`-o result.txt`（`common/flag.go`）且相对路径按**进程 CWD** 落盘，而 `fscan_scan()` 既不传 `-o` 也不设
+`cwd`。影响：① 仓库根被污染；② 该文件跨轮**追加**（我读到的那份已累积两轮，含别的目标的 IP 与
+服务 banner），`git add .` 会把它带进提交；③ 无法定位/清理。修法（最小改动，仿 dirmap 的 `cwd=script.parent`
+先例）：加 `workdir` 参数 → `cwd = workdir or tempfile.gettempdir()`，两处 `run_cmd` 都带；
+`scanner/stages/portscan.py` 调用点传 `workdir=ctx.workdir`（产物落 `logs/task_<id>_<时间>/`）。
+那个 stray `result.txt` 已删除。
+
+**回归**：`tests/smoke.py [5e-0]` 新增第 ⑧ 组 + "引擎选择"段第二遍（阶段必须把 `workdir` 传下去）；
+全量 SMOKE PASS；变异证伪 2/2 被击杀并还原。
+
+**结论（回答"我们现在端口扫描用的是啥"）**：本机**实走 nmap**（`C:\Program Files (x86)\Nmap\nmap.EXE`
+7.98）—— `tools.fscan` 填的是**裸名** `fscan`，走 PATH 查找，而自编译产物在 `Desktop\tools\fscan-build\`，
+不在 PATH，所以 `engine=auto` 的 fscan → nmap → 内置里**第一环一直落空**。**没有擅自改**：让 fscan 上位
+要先让二进制"可被发现"（junction 到 `tools/fscan/` + `.gitignore`，仿 dirmap 先例；或改 PATH），
+那会改变真实扫描引擎（fscan 默认 600 线程，比 nmap 激进），留给用户拍板。
+
+
 ## 2026-09-25 —— 续44：C 组三项收口（305 个导入 POC 实测校准 / dirmap 源码复核 / GitHub token 核实）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

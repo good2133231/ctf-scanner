@@ -151,9 +151,11 @@ class PortscanStage(Stage):
             for ip in ips[:2]:  # 一个主机名最多取前 2 个解析结果，避免 CDN 放大请求量
                 found = None
                 if fscan_bin:
+                    # `workdir=ctx.workdir` 不是可选项：fscan 默认 `-o result.txt` 且按**进程 CWD**
+                    # 落盘，不传就会在启动扫描器的目录（通常是仓库根）留下一个跨轮追加的结果文件。
                     found = portscan.fscan_scan(host, ip, target_ports, timeout=timeout,
                                                 binary=fscan_bin, workers=workers,
-                                                throttle=th)
+                                                throttle=th, workdir=ctx.workdir)
                 if found is None and nmap_bin:
                     found = portscan.nmap_scan(host, ip, target_ports, timeout=timeout,
                                                binary=nmap_bin, throttle=th)
