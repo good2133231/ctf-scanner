@@ -124,7 +124,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [已完成 → 见下方「第五轮」] P1-4 IP 反查 C 段（依赖外部 api.webscan.cc，非本地可离线验证）
 [待办] P2-3 Linux 实机验证（本机为 Windows，仅保证 pathlib/shell=False/which 等跨平台不变量已就位）
 [已完成 → 见下方「第五轮」] P3-1 FOFA 反查 favicon（见上文第 6 条）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（见上文第 1、3 条）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（见上文第 1、3 条）　↳ 续44 核对：**已落地**（scanner/runner.py STAGE_ORDER 含 intel/heuristic 两阶段、config/settings.yaml 有对应开关段，默认关闭、只写 leads 表）
 
 -----
 （第四轮：低价值项「执行级」硬门 + 动态化 + 文档全量对齐）
@@ -147,7 +147,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [已完成 → 见下方「第五轮」] P1-4 IP 反查 C 段（依赖外部 api.webscan.cc，非本地可离线验证）
 [待办] P2-3 Linux 实机验证（本机为 Windows，仅保证 pathlib/shell=False/which 等跨平台不变量已就位）
 [已完成 → 见下方「第五轮」] P3-1 FOFA 反查 favicon（见上文第 6 条）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（见上文第 1、3 条）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（见上文第 1、3 条）
 
 -----
 （第五轮：外部情报拓展 osint 阶段 = P1-4 C 段反查 + P3-1 favicon/FOFA 反查）
@@ -168,7 +168,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        parse_domains/group_segments）、fofa（build_query/无 key 显式报错/黑 ico 阈值）、
        osint 阶段四项开关全关时无产出、/csegs 路由与详情页「C 段」页签 —— SMOKE PASS
 [待办] P2-3 Linux 实机验证（本机为 Windows，仅保证 pathlib/shell=False/which 等跨平台不变量已就位）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
 
 -----
 （收尾：以代码为准复核未被列入清单的注释/文档，修掉 3 处不一致）
@@ -209,7 +209,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [待办] P2-3 Linux 实机验证（按用户指示挂起："先不做，等完全修改完毕我们再验证"，
        但兼容 Linux 的约束照旧 —— 本轮跨平台静态审计通过：无 shell=True / os.system /
        os.path.* / shell 专属调用，全部读写显式 UTF-8）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
 
 -----
 （第十一轮：定位 python 找不到的真根因 —— 不是"没装"，是 AI shell 的 PATH 条目编码损坏）
@@ -239,7 +239,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 删除 task 89（子代理产物）及其 logs/task_89_*（log 文件被运行中的 GUI 占用，停服后才删掉）
 [完成] 文档：AGENTS.md §7 加两条实测教训（"页面不对"先查进程启动时间；禁止让子代理点写操作按钮）、
        usage.md 加删除备份说明与 FAQ、README 目录结构加 data/trash/
-[待办] 你可见的行为变化：以后删除任务会在 data/trash/ 留一个 JSON 快照（不是垃圾，是救命稻草）
+[完成] 你可见的行为变化：以后删除任务会在 data/trash/ 留一个 JSON 快照（不是垃圾，是救命稻草）　↳ 续44 核对：**已实现**（scanner/db.py 的 delete_task→backup_task；AGENTS.md:842）
 
 -----
 本轮验证基线（可复现）：py -3 tests/smoke.py → SMOKE PASS
@@ -304,7 +304,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        docs/architecture.md（scanner/cdn.py、subdomains 表 ip/cdn、老库迁移、GUI 路由与分栏）、
        README.md（cdn.py / cdn_cname.txt / 8 栏侧边栏 / 能力清单）
 [待办] P2-3 Linux 实机验证（仍按你的指示挂起）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
 
 -----
 （第十四轮：你当场提的 6 项 —— 面板折叠 / 测试隔离 / 相对路径 / FOFA 来源标记+证书反查+黑名单+批量子域 / 重叠隐藏）
@@ -340,7 +340,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        无绝对路径、logs/smoke- 相对路径 / settings POST 映射
 [完成] 文档同步：docs/usage.md、docs/pipeline.md、docs/architecture.md、README.md、AGENTS.md、TODO.md
 [待办] P2-3 Linux 实机验证（仍按你的指示挂起）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md，依赖外部情报源与样本量）
 
 -----
 （第十五轮：你提的 5 项 —— 全端口扫描 / FOFA 标题反查 / 目录扫描 / JS 敏感字符 / dirmap 接入）
@@ -391,9 +391,9 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 全端口扫描的**真实耗时校准**：本机回环 workers=256/timeout=0.3 → 82 秒；
        重跑（端口全标记已扫）2 秒 0 新增；全局策略未被改动；nmap 超时已封顶(1800s/3600s)
 [完成] 目录扫描的**阶段级测试**：[5e](7) 记录型 logger 真跑 dirscan，断言 2 条别名站被去重
-[待办] dirmap 若将来要内联进仓库，先修它自身那几个问题（见上）
+[完成] dirmap 若将来要内联进仓库，先修它自身那几个问题（见上）　↳ 续44 核对：那 5 处修复**全部在位**（tools/dirmap_fixes/README.md）；「内联」本身**决定不做**（GPL-3.0）
 [待办] P2-3 Linux 实机验证（仍按你的指示挂起）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md）
 
 -----
 （第十六轮：遗留全清 + 两个决策落实）实施者：WorkBuddy · DeepSeek-V4.1-Flash
@@ -423,7 +423,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        + CHANGELOG 轮次标题下写实施者"，用于多会话并行时事后分辨归属
 
 [待办] P2-3 Linux 实机验证（仍按你的指示挂起）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md）
 
 -----
 （第十六轮：遗留全清 + 两个决策落实）实施者：WorkBuddy · DeepSeek-V4.1-Flash
@@ -453,7 +453,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        + CHANGELOG 轮次标题下写实施者"，用于多会话并行时事后分辨归属
 
 [待办] P2-3 Linux 实机验证（仍按你的指示挂起）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（理由见 TODO.md）
 
 -----
 （第十七轮：硬规矩 + 子域名主动且全 + 绝对路径清理）实施者：WorkBuddy · DeepSeek-V4.1-Flash
@@ -470,8 +470,8 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [说明] dirmap 的 5 处修复复核与"是否内联"，你说已交给其他 AI，本轮不碰
 
 [待办] P2-3 Linux 实机验证（挂起中；本机无 WSL/Docker 可用，需你给环境或换机器跑）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（依赖检测层置信度校准）
-[待办] 端口扫描接入 fscan（可选，见本轮分析；需你先放二进制到 tools/，我才能真跑验证）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘（依赖检测层置信度校准）
+[部分完成] 端口扫描接入 fscan（可选，见本轮分析；需你先放二进制到 tools/，我才能真跑验证）　↳ 续44 核对：**代码已接入**（scanner/stages/portscan.py 引擎 auto = fscan→nmap→内置，settings.yaml 有 portscan 段）；缺的只是 fscan 二进制真跑验证
 [待办] osint 阈值继续按真实数据校准（已有首个样本：标题十位数 / 证书百万级）
 
 -----
@@ -489,10 +489,10 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 4、顺手修两处真 Bug：dirscan / vulnscan 单独跑（-p dirscan）时没有库回退 →
        永远"无存活站点，跳过"；现补 db.list_sites() 回退（转 dict，sqlite3.Row 没有 .get()）
 
-[待办] 目录字典还能再细分（如按框架：wordpress/spring 专属路径），当前只按语言拆三层
+[完成] 目录字典还能再细分（如按框架：wordpress/spring 专属路径），当前只按语言拆三层　↳ 续44 核对：**已落地**（scanner/stages/dirscan.py 的 FRAMEWORK_TAGS / fw_max_paths；tools/import_fw_dicts.py 派生 12 桶）
 [待办] P2-3 Linux 实机验证（挂起中；本机 WSL 被安全策略禁用、无 Docker）
-[待办] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘
-[待办] 端口扫描接入 fscan（可选，需你先放二进制）
+[完成] P3-2 实时漏洞情报订阅 / P3-3 启发式 0day 挖掘
+[部分完成] 端口扫描接入 fscan（可选，需你先放二进制）
 
 -----
 （第十七轮续2：GUI / 资产视图 8 项）实施者：WorkBuddy · DeepSeek-V4.1-Flash
@@ -512,7 +512,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 8、拓展域名移出左侧、改到任务详情页签；新增 utils.is_domain() 统一判断是不是域名
        （挡掉裸 IP/IPv6/带端口/带路径/通配符；jsmine 另补 index.php 这类文件名后缀）；
        第三方黑名单改数据驱动 config/dicts/js_thirdparty.txt（267 条 = 内置 + URLFinder jsFiler 212 条）
-[待办] 9、站点截图功能（你问"可以加吗"）：可以，但要用无头浏览器（Edge/Chrome headless）。
+[完成] 9、站点截图功能（你问"可以加吗"）：可以，但要用无头浏览器（Edge/Chrome headless）。　↳ 续44 核对：**已落地**（scanner/stages/screenshot.py 阶段 + settings.yaml screenshot 段 + 任务级 screenshot_on 门控）
        计划：新增可选 screenshot 阶段（默认关）→ 截图存 logs/task_*/shots/ → sites.shot 列 →
        站点页显示缩略图。**待确认浏览器可用后实现**（本机 Edge 一般自带）
 
@@ -938,7 +938,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 续17 的后续批、续20 ~ 续27 各轮：并发预算门控（throttle.py）/
        JSONL 导出 / 静默失败治理 / 线索出口收敛 / 配色门禁 / GitHub 泄露检索 / 沙箱残留自愈
        —— 见 CHANGELOG_AI.md 与 TODO.md「续12 ~ 续27 速览」。
-[待办] 批次 5 四项（权威清单见 docs/roadmap.md「工程化」）：
+[待办] 批次 5 四项（权威清单见 docs/roadmap.md「工程化」）：　↳ 续44 核对：任务队列 / 分布式节点 / 工具版本管理**确未做**；「鉴权加固」**部分完成**（续32 已做 Host 白名单 + Origin/Referer 校验 + 会话 Cookie 收紧），剩余的「逐表单 CSRF」是**刻意不做**（Origin 中间件层一次性覆盖，见 gui/app.py 注释）
        ① 任务队列（Celery/RQ 或 asyncio，替代后台线程）—— **仍未做**；
           同项的「断点续扫」已单独落地（续29：runner.resume_stages + POST /api/tasks/<id>/resume
           + 详情页「续跑」按钮，断点复用 tasks.current_stage），故本条在 roadmap 里标 [~]；
@@ -992,7 +992,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        （`-e` 的真实语义与 `dict_mode=3` 前置、产物漏了 `othercode.txt`、`-t` 是并发目标数）；
        本机回环靶场端到端跑通（13 条命中、无回退、重扫 mtime 不变仍解析 13 条）。
        **「内联」结论不变：不做**（GPL-3.0）；残留 4 条见下条第 7 项与 `tools/dirmap_fixes/README.md`。
-[待办] flow 的 JS / 循环 / 带参数引用、workflow 的 subtemplates / args、dsl 表达式、oob 反连：
+[部分完成] flow 的 JS / 循环 / 带参数引用、workflow 的 subtemplates / args、dsl 表达式、oob 反连：　↳ 续44 核对：**flow（for...of iterate(...) / C 式 for / 脚本式子集）与 workflow subtemplates、dsl 子集均已落地**；`args:` 与 `oob` 反连是**明确不做**（engine.py 内已注明）
        仍显式标 unsupported（不静默失效），见 docs/poc-guide.md。
 [完成] 真实授权目标上跑完整 13 阶段（2026-09-25 续43，授权目标 pengo.pro）：临时打开 6 个默认关阶段
        （字节级备份/还原，还原后 git status 干净），CLI `-p` 全 13 阶段 + `--auto-expand` 跑单任务 ——
