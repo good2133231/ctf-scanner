@@ -69,7 +69,8 @@
       `raw` / `flow`（布尔子集）/ `workflows`（子模板编排）已于第十七轮落地，见 docs/poc-guide.md；
       `matchers`/`extractors` 里的 `dsl` 表达式已于续37 落地（**安全子集**：`scanner/pocs/dsl.py`
       手写词法 + 递归下降、白名单封闭、**不用 eval**；越界在装载期即标 `unsupported`）；
-      仍缺 oob 反连、flow 的 JS/循环、workflow 的 `subtemplates`/`args`，以及**块级/顶层** `dsl`
+      仍缺 oob 反连、flow 的 JS/循环、workflow 的 `matchers:`（按匹配器名分支；`subtemplates`
+      条件编排与 `tags:` 选择已于续38 落地）/`args:`（nuclei 无此字段），以及**块级/顶层** `dsl`
       ——这类模板（或未实现子项）被标 `unsupported`/`_note`，不静默失效；
 - [x] **盲注类 SQL 检测（布尔型）**（续18）：`a03-sqli-blind`（high）—— 同一参数发"恒真"与"恒假"
       两个 payload 比状态码 / 响应长度 / 正文差异，**再发一次恒真做稳定性复验**（页面自带随机数或

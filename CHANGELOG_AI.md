@@ -3,6 +3,51 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续38：nuclei workflow **条件编排**（`subtemplates` / `tags` / 目录引用）
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+**背景**：续17 落地的 workflow 只认 `- template: <相对路径>` 这一种最简形态；`subtemplates` / `tags`
+/directory 引用都被跳过（写进 `_note`）。本轮补齐 nuclei workflow 的**条件编排**，范围经与用户确认。
+
+**前置调研（先查准 nuclei 真实语义，不自创）**：读 nuclei 源码
+`pkg/workflows/workflows.go`（`WorkflowTemplate` 只有 `template` / `tags` / `matchers` / `subtemplates`）、
+`pkg/templates/workflows.go`（`parseWorkflow` / `parseWorkflowTemplate`）、
+`pkg/core/workflow_execute.go`（`runWorkflowStep`）、`pkg/templates/tag_filter.go`
+（`isExtraTagMatch`）。**结论：nuclei 的 workflow 里没有 `args` 字段** —— 原任务描述里的
+"`args`（给子模板传变量）"是**前提有误**：nuclei 的变量传递靠"命名 extractor + 共享执行上下文"
+（`ctx.Input.Set`），本引擎未实现。因此本轮**不发明 `args` 语义**，改为：见到 `args:` 就把该子项
+跳过并写明原因（与 `matchers:` 同待遇），真语义记进文档与 roadmap 的缺口。
+
+**改了什么**
+- `scanner/pocs/engine.py`
+  - 新增 `_wf_tags(item)`（nuclei 的 StringSlice：`"a,b"` 与 `[a, b]` 等价）与
+    `_wf_steps(items, skipped)`：**装载期**把 `workflows:` 解析成步骤树
+    `{"path", "tags", "subtemplates"}`。每项必须有 `template:` 或 `tags:`（nuclei 两者都空即判
+    `invalid workflow`；**顶层只有 `subtemplates:` 的项永远不生效**，因为它是挂在别的步骤下的）；
+    两者同写时 **`tags` 优先**（nuclei 如此，照抄）；`matchers:` / `args:` / 非映射项跳过并写进 `_note`；
+    全部子项都被跳过 → 整份标 `unsupported` 且原因指认写法。`_templates` 字段由 `_workflow` 取代。
+  - 新增 `_wf_targets(step, base, registry, settings)`：运行期把步骤展开成待跑子模板。`tags:` 走
+    **OR 语义**过滤候选集（默认 `load_enabled_pocs`，与"注册表启用 + 级别门控"一视同仁；vulnscan 传
+    `registry=` 复用已加载的那份，省掉每站点重读 300+ 文件）；`template:` 先按 workflow 文件所在目录
+    解析、再退一步按项目根，指向**目录**时展开目录下的 yaml。单步展开上限 `_WORKFLOW_MAX_SUBS=40`。
+  - 新增 `_run_wf_step(...)`：**父步骤命中才下钻**（父不命中 → 子模板零请求）；带 `subtemplates` 的
+    步骤**父模板只当开关**、自身结果不报（同 nuclei，否则"技术栈识别"会和子模板结果一起冒出来）。
+    `_run_workflow` 改为遍历步骤树，递归保护沿用深度上限 3 + `seen` 去重，`run_poc_on_target` 新增
+    `registry=` 形参（透传标签候选集）。
+- `scanner/stages/vulnscan.py`：`run_poc_on_target(..., registry=pocs)`（一行，避免每站点重复读盘）。
+
+**验证**
+- `py -3 tests/smoke.py` → `SMOKE PASS`（新增 `[6y]` 通过）。
+- 变异证伪 **5/5 被击杀**（均为"语义正确、逻辑改坏"）：① 父没命中也让子模板跑 →
+  `run_poc_on_target(_y_gate0, ...) == []` 挂；② `tags` 选择写成 AND → ④ OR 语义断言挂；
+  ③ 父结果照报 → `poc_id` 变成 `smoke-wf-parent`；④ 去掉单步上限 → `len(...) == 40` 挂；
+  ⑤ 不跳过 `args:` 子项 → `len(_workflow) == 1` 挂。五处均已还原。
+- CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致。
+
+**未做（如实登记）**：`matchers:`（按匹配器名分支）需要把"哪个 matcher 命中了"从匹配层带到结果层，
+本引擎的匹配器没有名字概念，本轮不做；nuclei 的"命名 extractor + 共享执行上下文"（真正的传变量机制）
+不做；oob 反连需用户提供回调域名。
+
 ## 2026-09-25 —— 续37：nuclei `dsl` 表达式**安全子集**（`matchers` / `extractors` 级）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

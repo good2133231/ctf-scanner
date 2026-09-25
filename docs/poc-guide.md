@@ -9,7 +9,7 @@
 | `config/pocs-imported/*.yaml` | `tools/import_ref_pocs.py` 批量导入的参考项目 POC，**默认关闭**（关键字命中误报率高，需人工在 POC 管理页挑选后启用） |
 | `config/nuclei-templates/*.yaml` | 官方 nuclei 模板投放点：本引擎兼容其核心子集，可直接丢进来加载 |
 
-控制台启动时会自动扫描以上目录并写入注册表；之后可在 GUI 里启停每个 POC，也可以点「重新扫描 POC 目录」增量加载。语法错误的 POC 会标注 `error`；`raw` / `flow` / `workflows` / `dsl` 已支持**核心子集**（见下节），超出子集的部分（**块级/顶层** `dsl`、flow 里的 JS/循环、workflow 的 `subtemplates`/`args`、oob 反连）会标注 `unsupported` 或写进 `_note` 并显示原因（不静默失效），扫描时自动跳过或跳过该子项。
+控制台启动时会自动扫描以上目录并写入注册表；之后可在 GUI 里启停每个 POC，也可以点「重新扫描 POC 目录」增量加载。语法错误的 POC 会标注 `error`；`raw` / `flow` / `workflows` / `dsl` 已支持**核心子集**（见下节），超出子集的部分（**块级/顶层** `dsl`、flow 里的 JS/循环、workflow 的 `matchers:` / `args:`、oob 反连）会标注 `unsupported` 或写进 `_note` 并显示原因（不静默失效），扫描时自动跳过或跳过该子项。
 
 ## YAML 格式
 
@@ -57,7 +57,8 @@ http:                               # 请求列表；兼容 nuclei 的 requests:
 
 内置变量（可直接在 path/headers/body 中引用）：`BaseURL` / `RootURL` / `Hostname` / `Host` / `Port` / `Scheme` / `Path`。
 
-**不支持**：**块级/顶层** `dsl`、oob 反连、flow 里的 JS/循环/带参数引用、workflow 的 `subtemplates`/`args`
+**不支持**：**块级/顶层** `dsl`、oob 反连、flow 里的 JS/循环/带参数引用、workflow 的 `matchers:`
+（按匹配器名分支）与 `args:`（**不是 nuclei 的 workflow 字段**）
 （`matchers` / `extractors` 里的 `dsl` 已支持**安全子集**，见下节）。
 含这些特性的模板会被标 `unsupported`（或把未实现子项写进原因/`_note`），不会静默失效。
 
@@ -89,9 +90,31 @@ http:
   （`http(1)`）。语义同 nuclei：表达式成立才算命中。**纯否定式成立不报**（如只有 `!http(1)` —— 没有
   正向响应证据，报出来就是纯误报）。引用越界、或引用了**被跳过的块** → 装载期即标 `unsupported`
   （避免运行期静默不命中）。`||` 短路（左真不发右），`&&` 两块都发。
-- **workflows**：workflow 文件顶层写 `workflows: - template: <相对路径>`，路径先按 workflow 文件所在
-  目录、再按项目根解析；有递归保护（深度上限 3 + 同一路径单次执行内只跑一次，自环直接挡住）。
-  `subtemplates` / `args` / workflow 级 matchers **未实现**，会写进 `_note`（不静默失效）。
+- **workflows**（2026-09-23 起支持，2026-09-25 续38 补齐条件编排）：workflow 文件顶层写
+  `workflows:`，每个子项（语义对齐 nuclei 源码，不自己发明）：
+
+  ```yaml
+  workflows:
+    - template: technologies/jira-detect.yaml     # 单个文件，或目录（`exploits/jira/`）
+      subtemplates:                               # 父步骤**命中才跑**；父只当开关、结果不报
+        - tags: [jira]                            # 按标签从候选集里挑（OR 语义）
+        - template: exploits/jira/
+    - tags: [cve, ssrf]                           # 顶层也可以是纯 tags 选择
+  ```
+
+  - `template:`：相对 workflow 文件所在目录解析，解析不到再按项目根解析（官方 workflow 常按
+    模板库根写路径）；指向**目录**时展开目录下的 yaml。
+  - `tags:`：从候选集里按标签挑，候选集 = 已启用且未被级别门控排除的 POC（与普通 POC 一视同仁）。
+    **OR 语义**（命中任意一个标签即选中）；与 `template:` 同时写时 **`tags` 优先**（nuclei 如此）。
+  - `subtemplates:`：**父步骤命中才跑**（父没命中 → 子模板一个请求都不发）；带 `subtemplates` 的
+    步骤里父模板只当**开关**，父模板自己的命中结果**不报**（否则"技术栈识别"会和子模板结果一起
+    冒出来）。多级嵌套同理，逐层门控。
+  - 递归保护：深度上限 3、同一模板单次执行内只跑一次（自环直接挡住）、单个步骤一次最多展开
+    **40** 个子模板（`tags:` 可能命中整个模板库、目录可能很大，超出部分不执行）。
+  - **未实现**：`matchers:`（按匹配器名分支跑 subtemplates —— 本引擎的匹配器没有名字概念）、
+    `args:`（**nuclei 的 workflow 没有这个字段**，`WorkflowTemplate` 只有 template / tags /
+    matchers / subtemplates；nuclei 的变量传递靠"命名 extractor + 共享执行上下文"，本引擎未实现）。
+    这两类子项会被**跳过**并把原因写进 `_note`（全部子项都被跳过 → 整份标 `unsupported`），不静默失效。
 - **dsl**（2026-09-25 起支持**安全子集**，仅 `matchers` / `extractors` 里的写法）：变量 6 个 ——
   `status_code` / `content_length`（数值）、`body` / `all_headers` / `header`（后两者同值）/ `host`；
   比较 `==` `!=`（两侧都是数字按数字比）与 `>` `>=` `<` `<=`（**只允许数值**）；逻辑 `&&` `||` `!`
@@ -167,8 +190,9 @@ http:
 `config/nuclei-templates/` 被本引擎加载——从此不依赖 nuclei
 二进制，也不与它冲突（同一份模板两边都能跑）。因此不再需要"接入 nuclei 适配器"作为前置项。
 
-尚不支持的是 nuclei 的 oob 反连、flow 里的 JS/循环、workflow 的 `subtemplates`/`args`，
-以及**块级/顶层**的 `dsl`（`matchers`/`extractors` 里的 `dsl` 走上面的安全子集），
+尚不支持的是 nuclei 的 oob 反连、flow 里的 JS/循环、workflow 的 `matchers:`（按匹配器名分支）
+与 `args:`（**nuclei 的 workflow 里没有这个字段**），以及**块级/顶层**的 `dsl`
+（`matchers`/`extractors` 里的 `dsl` 走上面的安全子集），
 这类模板（或其未实现子项）会被标 `unsupported` / `_note`；若确需完整能力，
 仍可另加适配器调用 nuclei 二进制，`vulns` 表结构可直接承接其 JSON 输出。另：`config/pocs-imported/` 下由
 `tools/import_ref_pocs.py` 批量导入的参考项目 POC **默认关闭**，需人工在 POC 管理页挑选后启用。

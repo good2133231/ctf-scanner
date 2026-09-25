@@ -326,7 +326,8 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   （回显靶场 + 逐行断言 4 个第三方调用点不带 auth）+ CLI -H/--cookie 与
                             #   GUI 400 + 补扫继承 + 页面只显掩码不回显明文；POC raw 解析与破坏性方法拒绝、
                             #   flow 布尔子集（短路/纯否定不报/越界与被跳过块引用标 unsupported）、
-                            #   workflows 子模板与自环保护、**块级** dsl 仍显式 unsupported）
+                            #   workflows 子模板与自环保护、**块级** dsl 仍显式 unsupported；续38 起
+                            #   `subtemplates`/`tags:` 条件编排由 `[6y]` 单独覆盖）
                             # 2026-09-23 续18 新增 `[5y]`（批次 4 五项）：
                             #   XSS 上下文判定表（8 上下文 / 探针定界符存活 / 全转义不报 + poc_id 不变）
                             #   + A10 SSRF 受控回连（默认关零请求 / 本机监听自证 / 外部回调不谎报 /
@@ -427,6 +428,17 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   ④ **块级 / 顶层** `dsl` 仍拒（与 matchers 级放开严格区分）。
                             #   防假绿：反向用例（`contains(body,'NOT-THERE')`）必须**不报** —— 否则
                             #   "dsl 分支恒 True"照样全绿。
+                            # 2026-09-25 续38 新增 `[6y]`：**nuclei workflow 条件编排**（语义对着
+                            #   nuclei 源码 `pkg/templates/workflows.go` / `pkg/core/workflow_execute.go` /
+                            #   `pkg/templates/tag_filter.go` 写，不自己发明）—— ① 父命中才下钻，父**不命中**
+                            #   时子模板**零请求**（挡"无条件跑子模板"的假实现）；② 带 `subtemplates` 的步骤
+                            #   父模板只当**开关**，报出来的是子模板的 `poc_id`（父结果不报）；③ 多级门控
+                            #   逐层生效；④ `tags:` 是 **OR** 选择、候选集来自注册表（vulnscan 传 `registry=`），
+                            #   未被选中的模板一个请求都不发；⑤ `tags` 与 `template` 同时写时 `tags` 优先；
+                            #   ⑥ `template:` 指向目录会展开；⑦ 单步展开上限 `_WORKFLOW_MAX_SUBS`=40；
+                            #   ⑧ `matchers:` / `args:`（**不是 nuclei 字段**）/ 裸 `subtemplates:` 子项跳过
+                            #   并把原因写进 `_note`，全跳过则整份 `unsupported`；⑨ 带 subtemplates 的自环
+                            #   被 `seen` 去重挡住（子模板只跑一次）。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -521,8 +533,14 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   `case-insensitive` + `part: body|header|all`、`extractors`（regex/kval/dsl）；**`raw` / `flow`（布尔子集）/
   `workflows`（子模板编排）自 2026-09-23 续17 起为子集支持**，**`matchers`/`extractors` 里的 `dsl`
   自 2026-09-25 续37 起为安全子集支持**（`scanner/pocs/dsl.py`，白名单封闭 + 不用 `eval`）。
+  **workflow 条件编排自 2026-09-25 续38 起支持**（语义对齐 nuclei 源码，不自己发明）：`template:`
+  文件**或目录**、`tags:`（OR 选择，候选集 = 注册表启用 + 级别门控；与 `template` 同写时 `tags` 优先）、
+  `subtemplates:`（**父步骤命中才跑**；带 subtemplates 的步骤父模板只当开关、父结果不报）、
+  深度上限 3 + 同模板单次执行只跑一次 + 单步展开上限 `_WORKFLOW_MAX_SUBS`=40（vulnscan 通过
+  `registry=` 复用已加载的候选集，不再每站点重读 POC 目录）。
   仍不支持的是**块级/顶层** `dsl`、oob 反连、
-  flow 的 JS/循环/带参数引用、workflow 的 `subtemplates`/`args`，它们会被标 `_status=unsupported`
+  flow 的 JS/循环/带参数引用、workflow 的 `matchers:`（按匹配器名分支）与 `args:`（**nuclei 的
+  workflow 没有这个字段**），它们会被标 `_status=unsupported`
   （或写进 `_note`）并在 POC 管理页显示原因（不静默失效）；`dsl` 越界同样在**装载期**就被标掉。
 - **凭据红线（2026-09-23 续17）**：登录态（`scanner/auth.py` 的任务级请求头）**只发目标侧**，
   `utils.http_request(auth=False)` 是默认值、4 个第三方调用点（crt.sh / FOFA / CISA KEV / IP 反查）

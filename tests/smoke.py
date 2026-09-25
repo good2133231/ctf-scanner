@@ -2770,7 +2770,8 @@ workflows:
   - template: flow.yaml
   - subtemplates: [{tags: x}]
 """))
-    assert _m_wf["_status"] == "ok" and _m_wf["_templates"] == ["flow.yaml"], _m_wf
+    assert _m_wf["_status"] == "ok", _m_wf
+    assert [s["path"] for s in _m_wf["_workflow"]] == ["flow.yaml"], _m_wf
     assert "subtemplates" in (_m_wf["_note"] or ""), "未实现的子项要标出来（不静默失效）"
     _hits17.clear()
     assert engine.run_poc_on_target(_m_wf, _base_url17, {})[0]["poc_id"] == "smoke-flow"
@@ -5625,6 +5626,218 @@ dsl: [status_code == 200]
           "不成立不报 / condition or·and 与 negative 取反 / header·all_headers·host 变量 / "
           "8 类越界（方法调用·未知函数·未知变量·算术·链式比较·字符串大小比较·坏 regex·空 dsl）"
           "装载期即标 unsupported 且原因指认写法 / 提取器级同样拦 / 块级与顶层 dsl 仍拒绝")
+
+    # [6y] nuclei workflow 的**条件编排**（续38）：`template:`（文件/目录）+ `tags:` +
+    # `subtemplates:`（父步骤命中才跑）。语义对着 nuclei 源码写（`pkg/templates/workflows.go`
+    # / `pkg/core/workflow_execute.go` / `pkg/templates/tag_filter.go`），不自己发明：
+    #   - 带 subtemplates 的步骤，父模板只当**开关**，父模板自己的结果不报；
+    #   - `tags:` 是 **OR** 选择，候选集 = 注册表启用 + 级别门控（与普通 POC 一视同仁）；
+    #   - `matchers:` / `args:` 不支持（后者根本不是 nuclei 的 workflow 字段）。
+    _y_parent = engine.load_poc_file(_wpoc("wf-parent-hit.yaml", """
+id: smoke-wf-parent
+info: {name: parent, severity: medium}
+http:
+  - path: ["/a"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+"""))
+    assert _y_parent["_status"] == "ok", _y_parent
+    engine.load_poc_file(_wpoc("wf-parent-miss.yaml", """
+id: smoke-wf-parent-miss
+info: {name: parent miss, severity: medium}
+http:
+  - path: ["/nope"]
+    matchers: [{type: word, words: ["NOT-THERE"]}]
+"""))
+    engine.load_poc_file(_wpoc("wf-child.yaml", """
+id: smoke-wf-child
+info: {name: child, severity: medium}
+http:
+  - path: ["/b"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+"""))
+    # ① 父命中 → 跑子模板；且**父模板自己的结果不报**（报出来的是子模板的 poc_id）
+    _y_gate = engine.load_poc_file(_wpoc("wf-gate.yaml", """
+id: smoke-wf-gate
+info: {name: gate, severity: medium}
+workflows:
+  - template: wf-parent-hit.yaml
+    subtemplates:
+      - template: wf-child.yaml
+"""))
+    assert _y_gate["_status"] == "ok", _y_gate
+    assert [s["path"] for s in _y_gate["_workflow"][0]["subtemplates"]] == ["wf-child.yaml"], _y_gate
+    _hits17.clear()
+    _y_got = engine.run_poc_on_target(_y_gate, _base_url17, {})
+    assert [v["poc_id"] for v in _y_got] == ["smoke-wf-child"], _y_got
+    assert _hits17 == ["/a", "/b"], f"父模板当开关要先打，命中后才打子模板：{_hits17}"
+    # ② 父**不命中** → 子模板一个请求都不发（条件编排的全部意义；这条挡"无条件跑子模板"的假实现）
+    _y_gate0 = engine.load_poc_file(_wpoc("wf-gate-miss.yaml", """
+id: smoke-wf-gate-miss
+info: {name: gate miss, severity: medium}
+workflows:
+  - template: wf-parent-miss.yaml
+    subtemplates:
+      - template: wf-child.yaml
+"""))
+    _hits17.clear()
+    assert engine.run_poc_on_target(_y_gate0, _base_url17, {}) == []
+    assert _hits17 == ["/nope"], f"父没命中就不该跑子模板：{_hits17}"
+    # ③ 多级：中间层没命中 → 第三层同样不跑
+    _y_nest = engine.load_poc_file(_wpoc("wf-nest.yaml", """
+id: smoke-wf-nest
+info: {name: nest, severity: medium}
+workflows:
+  - template: wf-parent-hit.yaml
+    subtemplates:
+      - template: wf-parent-miss.yaml
+        subtemplates:
+          - template: wf-child.yaml
+"""))
+    _hits17.clear()
+    assert engine.run_poc_on_target(_y_nest, _base_url17, {}) == []
+    assert _hits17 == ["/a", "/nope"], f"中间层没命中，第三层不该跑：{_hits17}"
+    # ④ `tags:` 从候选集里挑（OR 语义）+ 未选中的模板绝不发请求
+    _y_ta = engine.load_poc_file(_wpoc("wf-tag-a.yaml", """
+id: smoke-wf-tag-a
+info: {name: a, severity: medium, tags: [smoke17wf]}
+http:
+  - path: ["/a"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+"""))
+    _y_tb = engine.load_poc_file(_wpoc("wf-tag-b.yaml", """
+id: smoke-wf-tag-b
+info: {name: b, severity: medium, tags: [other17tag]}
+http:
+  - path: ["/b"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+"""))
+    _y_reg = [_y_ta, _y_tb]
+    _y_tags = engine.load_poc_file(_wpoc("wf-tags.yaml", """
+id: smoke-wf-tags
+info: {name: tags, severity: medium}
+workflows:
+  - tags: [smoke17wf]
+"""))
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_y_tags, _base_url17, {},
+                                                          registry=_y_reg)] == ["smoke-wf-tag-a"]
+    assert _hits17 == ["/a"], f"未被标签选中的模板不该跑：{_hits17}"
+    _y_tags2 = engine.load_poc_file(_wpoc("wf-tags2.yaml", """
+id: smoke-wf-tags2
+info: {name: tags2, severity: medium}
+workflows:
+  - tags: [nope17tag, other17tag]
+"""))
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_y_tags2, _base_url17, {},
+                                                          registry=_y_reg)] == ["smoke-wf-tag-b"]
+    assert _hits17 == ["/b"], f"OR 语义：命中第二个标签也要选中：{_hits17}"
+    # 字符串写法（nuclei 的 StringSlice：`"a, b"` 与 `[a, b]` 等价）
+    _y_tags3 = engine.load_poc_file(_wpoc("wf-tags3.yaml", """
+id: smoke-wf-tags3
+info: {name: tags3, severity: medium}
+workflows:
+  - tags: "smoke17wf, other17tag"
+"""))
+    assert _y_tags3["_workflow"][0]["tags"] == ["smoke17wf", "other17tag"], _y_tags3
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_y_tags3, _base_url17, {},
+                                                          registry=_y_reg)] == ["smoke-wf-tag-a"]
+    assert _hits17 == ["/a"], _hits17
+    # 不传 registry → 懒加载 `load_enabled_pocs`（真实模板库里没有这个标签 → 空跑且不报错）
+    assert engine.run_poc_on_target(_y_tags, _base_url17, {}) == []
+    assert engine._wf_tags({"tags": "A, b"}) == ["a", "b"]
+    assert engine._wf_tags({}) == [] and engine._wf_tags({"tags": ["x,y"]}) == ["x", "y"]
+    # ⑤ `tags` 与 `template` 同时写 → **tags 优先**、template 被忽略（nuclei 的行为，照抄）
+    _y_prio = engine.load_poc_file(_wpoc("wf-prio.yaml", """
+id: smoke-wf-prio
+info: {name: prio, severity: medium}
+workflows:
+  - template: wf-child.yaml
+    tags: [smoke17wf]
+"""))
+    assert _y_prio["_workflow"][0]["path"] == "", _y_prio
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_y_prio, _base_url17, {},
+                                                          registry=_y_reg)] == ["smoke-wf-tag-a"], \
+        "tags 优先时 template 必须被忽略"
+    assert _hits17 == ["/a"], _hits17
+    # ⑥ `template:` 指向**目录**（nuclei 的 `- template: exploits/jira/` 写法）
+    _y_dir = _ptmp / "wfdir" / "d1.yaml"
+    _y_dir.parent.mkdir(parents=True, exist_ok=True)
+    _y_dir.write_text("""
+id: smoke-wf-dir
+info: {name: dir, severity: medium}
+http:
+  - path: ["/a"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+""", encoding="utf-8")
+    _y_dirwf = engine.load_poc_file(_wpoc("wf-dir.yaml", """
+id: smoke-wf-dir-wf
+info: {name: dir wf, severity: medium}
+workflows:
+  - template: wfdir/
+"""))
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_y_dirwf, _base_url17, {})] == \
+        ["smoke-wf-dir"]
+    assert _hits17 == ["/a"], _hits17
+    # ⑦ 单个步骤的展开上限（`tags:` 可能命中整个模板库、目录可能很大 → 必须封顶）
+    _y_step = {"path": "", "tags": ["cap17"], "subtemplates": []}
+    _y_cap = [{"id": f"cap{i}", "_status": "ok", "_path": f"/tmp/cap{i}.yaml",
+               "info": {"tags": ["cap17"]}} for i in range(45)]
+    assert len(engine._wf_targets(_y_step, _ptmp, _y_cap, {})) == engine._WORKFLOW_MAX_SUBS
+    assert len(engine._wf_targets(_y_step, _ptmp, _y_cap[:5], {})) == 5, "不足上限时不该截断"
+    # ⑧ `matchers:` / `args:` / 只有 `subtemplates:` 的项：跳过并写明原因（不静默失效）
+    _y_skip = engine.load_poc_file(_wpoc("wf-skip.yaml", """
+id: smoke-wf-skip
+info: {name: skip, severity: medium}
+workflows:
+  - template: wf-child.yaml
+    matchers: [{name: x, subtemplates: [{template: wf-child.yaml}]}]
+  - template: wf-child.yaml
+    args: {foo: bar}
+  - subtemplates: [{template: wf-child.yaml}]
+  - template: wf-child.yaml
+"""))
+    assert _y_skip["_status"] == "ok" and len(_y_skip["_workflow"]) == 1, _y_skip
+    for _y_k in ("matchers:", "args:", "subtemplates:"):
+        assert _y_k in (_y_skip["_note"] or ""), f"`{_y_k}` 被跳过的原因要能看见：{_y_skip}"
+    # 全部子项都被跳过 → 整份 workflow 判不可用，且原因指认写法
+    _y_onlym = engine.load_poc_file(_wpoc("wf-only-matchers.yaml", """
+id: smoke-wf-only-matchers
+info: {name: m, severity: medium}
+workflows:
+  - template: wf-child.yaml
+    matchers: [{name: x, subtemplates: [{template: wf-child.yaml}]}]
+"""))
+    assert _y_onlym["_status"] == "unsupported" and "matchers:" in _y_onlym["_error"], _y_onlym
+    _y_onlya = engine.load_poc_file(_wpoc("wf-only-args.yaml", """
+id: smoke-wf-only-args
+info: {name: a, severity: medium}
+workflows:
+  - template: wf-child.yaml
+    args: {foo: bar}
+"""))
+    assert _y_onlya["_status"] == "unsupported" and "args:" in _y_onlya["_error"], _y_onlya
+    # ⑨ 带 subtemplates 的自环：同一模板单次执行只跑一次（否则 A→A 会无限下钻）
+    _wpoc("wf-loop-sub.yaml", """
+id: smoke-wf-loop-sub
+info: {name: loop sub, severity: medium}
+workflows:
+  - template: wf-child.yaml
+    subtemplates:
+      - template: wf-loop-sub.yaml
+""")
+    _y_loop = engine.load_poc_file(_ptmp / "wf-loop-sub.yaml")
+    _hits17.clear()
+    assert engine.run_poc_on_target(_y_loop, _base_url17, {}) == []
+    assert _hits17 == ["/b"], f"自环应被去重挡住，子模板只跑一次：{_hits17}"
+
+    print("[6y] 续38 nuclei workflow 条件编排 ok: 父命中才下钻（不命中则子模板零请求）/ 带 "
+          "subtemplates 的父模板只当开关·结果不报 / 多级门控 / `tags:` OR 选择且只打选中的模板 "
+          "/ `tags` 优先于 `template` / 目录展开 / 单步 40 个上限 / `matchers:`·`args:`·裸 "
+          "`subtemplates:` 跳过并写明原因（全跳过则整份 unsupported）/ 自环去重")
 
 print("SMOKE PASS")
 

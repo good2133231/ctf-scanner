@@ -104,7 +104,10 @@ class VulnscanStage(Stage):
             # 要交代注入了哪些 token）才能写进 `logs/task_*/task.log`。
             found = list(owasp_checks.run_all(url, ctx.settings, logger=ctx.logger))
             for poc in _pocs_for(site if isinstance(site, dict) else {}):
-                for v in engine.run_poc_on_target(poc, url, ctx.settings, site=site):
+                # `registry=pocs`：workflow 里 `tags:` 步骤的候选集，直接用本阶段已加载好的
+                # 那份（否则每个站点都会把 300+ 个 POC 文件重读一遍）。
+                for v in engine.run_poc_on_target(poc, url, ctx.settings, site=site,
+                                                  registry=pocs):
                     # POC 结果与内置检查共用同一级别门槛（critical 恒保留）
                     if not owasp_checks.severity_ok(v.get("severity", "medium"), floor):
                         continue

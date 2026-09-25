@@ -32,18 +32,29 @@
       `http(N)` 1-based 序号；引用能全部解析时才生效，否则整份模板标 unsupported。
       语义同 nuclei：条件成立才算命中；纯否定式成立（如只有 `!http(1)`）**不报**
       （没有正向响应证据，报出来就是纯误报）。
-  workflows（2026-09-23 起支持**子模板编排子集**）：workflow 文件顶层写
-      `workflows: - template: <相对路径>`，相对 workflow 文件所在目录解析；有递归保护
-      （深度上限 + 同一路径单次执行内只跑一次）。`subtemplates` / `args` / workflow 级
-      matchers 未实现，装载期标 `_note`（不静默失效）。
+  workflows（2026-09-23 起支持**子模板编排子集**，2026-09-25 续38 补齐条件编排）：
+      workflow 文件顶层写 `workflows:`，每个子项（语义对齐 nuclei 源码
+      `pkg/templates/workflows.go` / `pkg/core/workflow_execute.go`，不自己发明）：
+        `template: <文件或目录>` —— 相对 workflow 文件所在目录解析，解析不到再按项目根；
+        目录会展开成目录下的 yaml（nuclei 的 `- template: exploits/jira/` 就是这种写法）
+        `tags: [a, b]` —— 从候选集（默认 `load_enabled_pocs`，即注册表开关 + 级别门控）
+          按标签挑，**OR 语义**（命中任意一个标签即选中）；与 `template` 同时写时 `tags` 优先
+        `subtemplates: [...]` —— **父步骤命中才跑**；带 subtemplates 的步骤里父模板只当
+          开关，**父模板自己的结果不报**（否则 workflow 一命中就同时冒出"技术栈识别"噪声）
+      递归保护：深度上限 `_WORKFLOW_MAX_DEPTH` + 同一模板单次执行内只跑一次（`seen`），
+      单个步骤一次最多展开 `_WORKFLOW_MAX_SUBS` 个子模板。
+      **不支持**：`matchers:`（按匹配器名分支 —— 本引擎的匹配器没有名字概念）与
+      `args:`（**不是 nuclei 的 workflow 字段**，`WorkflowTemplate` 只有 template / tags /
+      matchers / subtemplates；nuclei 的变量传递靠"命名 extractor + 共享执行上下文"，
+      本引擎未实现）—— 两者都把该子项跳过并写进 `_note`（不静默失效）。
 
 **raw 的安全边界**（红线，2026-09-23）：raw 是"手写 HTTP 原文"，最容易被写成利用动作。
 因此 `PUT` / `PATCH` / `DELETE` / `TRACE` / `CONNECT` 一律**拒绝执行**并把原因记进
 `_note`/`_error`（框架只做只读验证，不做状态变更）；同一套方法白名单也对普通 `method:` 生效。
 
-刻意不做：oob（反连）、workflow 的 `subtemplates`/`args`、**请求块级/顶层** `dsl`
-（nuclei 的 dsl 只写在 `matchers` / `extractors` 里；块级写法仍按不支持处理 ——
-该块跳过并把原因记进 `_note`，不静默失效）。
+刻意不做：oob（反连）、flow 的 JS/循环、workflow 的 `matchers:`（按匹配器名分支），以及
+**请求块级/顶层** `dsl`（nuclei 的 dsl 只写在 `matchers` / `extractors` 里；块级写法仍按
+不支持处理 —— 该块跳过并把原因记进 `_note`，不静默失效）。
 含这些特性的模板会被标记 `unsupported` 并在 POC 管理页显示原因，而不是静默失效。
 """
 import itertools
@@ -83,6 +94,11 @@ _RAW_DROP_HEADERS = ("content-length",)
 
 # workflow 编排的递归深度上限（A→B→C 之后不再下钻）与单次执行的路径去重
 _WORKFLOW_MAX_DEPTH = 3
+
+# workflow 单个步骤一次最多展开多少个子模板：`tags:` 可能命中整个模板库、`template:` 可能
+# 指向一个目录，两者都可能把单站点的请求量放大到不可控（nuclei 有 `-rate-limit` 兜着，
+# 本引擎没有）。超出部分**不执行**（在 docs/poc-guide.md 里写明）。
+_WORKFLOW_MAX_SUBS = 40
 
 _SEVERITIES = ("critical", "high", "medium", "low", "info")
 
@@ -363,6 +379,61 @@ def _prepare_dsl(blocks, ok_idx):
     return ""
 
 
+def _wf_tags(item):
+    """取一个 workflow 子项的 `tags:`（nuclei 的 StringSlice：`"a,b"` 与 `[a, b]` 都合法）。"""
+    raw = item.get("tags")
+    if raw is None:
+        return []
+    out = []
+    for v in (raw if isinstance(raw, list) else [raw]):
+        for part in str(v).split(","):
+            part = part.strip().lower()
+            if part:
+                out.append(part)
+    return out
+
+
+def _wf_steps(items, skipped):
+    """把 `workflows:` 子项解析成步骤树（装载期，纯结构解析，不发任何请求）。
+
+    语义对着 nuclei 源码（`pkg/templates/workflows.go::parseWorkflow` /
+    `parseWorkflowTemplate`）写，不自己发明：
+
+    - 每项必须有 `template:` 或 `tags:`；两者都空 → nuclei 直接判
+      `invalid workflow with no templates or tags`。**顶层只有 `subtemplates:` 的项永远
+      不生效** —— 它是挂在别的步骤下面的，不能单独当步骤；这里跳过该项并写明原因。
+    - 两者**同时写时 `tags` 优先**、`template` 被忽略（nuclei 就是这么写的，照抄）。
+    - `subtemplates:` 递归解析，**只在父步骤命中时才跑**。
+    - `matchers:`（按匹配器名分支跑 subtemplates）不支持：本引擎的匹配器没有名字概念，
+      跳过该项并把原因记进 `_note`（不静默失效）。
+    - `args:` **不是 nuclei 的 workflow 字段**（`pkg/workflows/workflows.go` 的
+      `WorkflowTemplate` 只有 template / tags / matchers / subtemplates）。nuclei 的变量
+      传递靠"命名 extractor + 共享执行上下文"，本引擎未实现 —— 见到 `args:` 说明模板作者
+      写错了字段，跳过该项并写明原因，而不是假装支持。
+    """
+    steps = []
+    for item in items:
+        if not isinstance(item, dict):
+            skipped.append("非映射（不是 `键: 值`）的 workflow 子项")
+            continue
+        if item.get("matchers"):
+            skipped.append("`matchers:`（按匹配器名分支的 subtemplates）")
+            continue
+        if item.get("args"):
+            skipped.append("`args:`（nuclei workflow 无此字段，变量共享靠命名 extractor）")
+            continue
+        tags = _wf_tags(item)
+        tpl = item.get("template")
+        tpl = tpl.strip() if isinstance(tpl, str) else ""
+        if not tags and not tpl:
+            skipped.append("既无 `template:` 也无 `tags:` 的子项"
+                           "（只有 `subtemplates:` 不算步骤，nuclei 判为非法）")
+            continue
+        steps.append({"path": "" if tags else tpl, "tags": tags,
+                      "subtemplates": _wf_steps(item.get("subtemplates") or [], skipped)})
+    return steps
+
+
 def load_poc_file(path):
     """加载并校验单个 POC 文件，返回带 _status 标记的 dict（永不抛异常）。"""
     p = pathlib.Path(str(path))
@@ -377,23 +448,19 @@ def load_poc_file(path):
     data["_path"] = str(p)
 
     # nuclei **workflow** 文件：顶层只有 `workflows:`（编排若干子模板），没有 http/requests 段。
+    # 支持的是 nuclei 的**结构子集**：`template:`（文件/目录）、`tags:`（按标签挑）、
+    # `subtemplates:`（父步骤命中才跑）；`matchers:` / `args:` 见 `_wf_steps` 的说明。
     if isinstance(data.get("workflows"), list) and data["workflows"]:
-        refs, skipped = [], 0
-        for item in data["workflows"]:
-            tpl = item.get("template") if isinstance(item, dict) else None
-            if isinstance(tpl, str) and tpl.strip():
-                refs.append(tpl.strip())
-            else:
-                skipped += 1        # subtemplates / args / workflow 级 matchers 未实现
-        if not refs:
+        skipped = []
+        data["_workflow"] = _wf_steps(data["workflows"], skipped)
+        if not data["_workflow"]:
             data["_status"] = "unsupported"
-            data["_error"] = ("workflow 子项均非 `template: <路径>`"
-                              "（subtemplates / args 未支持）")
+            data["_error"] = ("workflow 子项均不可用：" + "；".join(dict.fromkeys(skipped))
+                              if skipped else "workflow 子项为空")
             return data
         data["_status"] = "ok"
-        data["_templates"] = refs
         if skipped:
-            data["_note"] = f"{skipped} 个 workflow 子项（subtemplates/args）已跳过"
+            data["_note"] = "；".join(dict.fromkeys(skipped))
         return data
 
     if not _requests_of(data):
@@ -747,41 +814,89 @@ def _run_block(block, poc, info, base_url, variables, settings, timeout, limit, 
     return None
 
 
-def _run_workflow(poc, base_url, settings, max_requests, site, depth, seen):
-    """执行 workflow 子集：`- template: <相对路径>`（相对 workflow 文件所在目录）。
+def _wf_targets(step, base, registry, settings):
+    """把一个 workflow 步骤展开成待跑的子模板列表（按 `_WORKFLOW_MAX_SUBS` 截断）。
 
-    递归保护两条：① 深度上限 `_WORKFLOW_MAX_DEPTH`；② 同一次执行内**同一路径只跑一次**
+    - `tags:` 步骤：从**候选集**里挑。nuclei 是 **OR 语义**（模板命中任意一个标签即选中，
+      见 `pkg/templates/tag_filter.go::isExtraTagMatch`）。候选集默认取 `load_enabled_pocs()`，
+      即"注册表启用 + 级别门控"与普通 POC 一视同仁；vulnscan 会把已经加载好的那份传进来
+      （`registry=`），省掉每个站点重复读盘。
+    - `template:` 步骤：先按 workflow 文件所在目录解析，再退一步按项目根解析（官方 workflow
+      常按模板库根写路径）；指向目录时展开目录下的 yaml。
+    """
+    if step.get("tags"):
+        want = set(step["tags"])
+        pool = load_enabled_pocs(settings) if registry is None else registry
+        subs = [p for p in pool
+                if want & {str(t).lower() for t in ((p.get("info") or {}).get("tags") or [])}]
+    else:
+        ref = str(step.get("path") or "")
+        cand = base / ref
+        if not cand.exists():
+            cand = resolve(ref)
+        if cand.is_dir():
+            subs = [load_poc_file(f) for f in
+                    sorted(cand.rglob("*.yaml")) + sorted(cand.rglob("*.yml"))]
+        else:
+            subs = [load_poc_file(cand)]
+    return [m for m in subs if m.get("_status") == "ok"][:_WORKFLOW_MAX_SUBS]
+
+
+def _run_wf_step(step, base, base_url, settings, max_requests, site, depth, seen, registry):
+    """跑一个 workflow 步骤，命中返回结果列表（空 = 没命中）。
+
+    nuclei 语义（`pkg/core/workflow_execute.go::runWorkflowStep`）：**带 `subtemplates` 的
+    步骤，父模板只当开关** —— 父模板自己的命中结果不报（否则"技术栈识别"这类父模板会和
+    子模板的结果一起冒出来），只报子步骤的结果。所以这里先跑本步骤的子模板：没命中直接
+    返回空（`subtemplates` 一个请求都不发 —— 这正是条件编排的全部意义），命中了才下钻。
+    """
+    child_steps = step.get("subtemplates") or []
+    for sub in _wf_targets(step, base, registry, settings):
+        key = str(pathlib.Path(str(sub.get("_path") or sub.get("id") or "")).resolve())
+        if key in seen:                     # 同一模板单次执行内只跑一次（自环直接挡住）
+            continue
+        seen.add(key)
+        hits = run_poc_on_target(sub, base_url, settings, max_requests, site=site,
+                                 _depth=depth + 1, _seen=seen, registry=registry)
+        if not hits:
+            continue
+        if not child_steps:
+            return hits
+        for cstep in child_steps:
+            sub_hits = _run_wf_step(cstep, base, base_url, settings, max_requests,
+                                    site, depth + 1, seen, registry)
+            if sub_hits:
+                return sub_hits
+    return []
+
+
+def _run_workflow(poc, base_url, settings, max_requests, site, depth, seen, registry=None):
+    """执行 workflow 子集（结构见模块 docstring）。
+
+    递归保护两条：① 深度上限 `_WORKFLOW_MAX_DEPTH`；② 同一次执行内**同一模板只跑一次**
     （`seen`），否则 A→B→A 这种环会把请求量放大成爆炸。语义同 nuclei：命中即停。
-    路径先按 workflow 文件所在目录解析，再按项目根解析（模板常按项目根写路径）。
     """
     if depth > _WORKFLOW_MAX_DEPTH:
         return []
     base = pathlib.Path(poc.get("_path") or ".").parent
-    for ref in (poc.get("_templates") or []):
-        cand = base / ref
-        if not cand.is_file():
-            cand = resolve(ref)                     # 退一步：按项目根解析
-        key = str(cand.resolve()) if cand.exists() else str(cand)
-        if key in seen:
-            continue
-        seen.add(key)
-        sub = load_poc_file(cand)
-        if sub.get("_status") != "ok":
-            continue
-        hits = run_poc_on_target(sub, base_url, settings, max_requests,
-                                 site=site, _depth=depth + 1, _seen=seen)
+    for step in (poc.get("_workflow") or []):
+        hits = _run_wf_step(step, base, base_url, settings, max_requests, site, depth,
+                            seen, registry)
         if hits:
             return hits
     return []
 
 
 def run_poc_on_target(poc, base_url, settings, max_requests=MAX_REQUESTS_PER_POC, site=None,
-                      _depth=0, _seen=None):
+                      _depth=0, _seen=None, registry=None):
     """对单个目标执行单个 POC；命中即返回一条 vuln dict（每 POC 每目标最多一条）。
 
     `site` 为 probe 产出的站点信息（可含 `favicon`/`tech`），用于**零请求前置判定**：
     POC 声明了 `favicon_md5_list` 且当前站点 favicon 已知但不匹配时直接跳过，
     省掉整个 POC 的请求；站点 favicon 未知时**不**做排除（宁可多打，不漏判）。
+
+    `registry` 是 workflow 里 `tags:` 步骤的候选集（`load_enabled_pocs` 的结果）；不传则
+    在需要时懒加载。vulnscan 传的是它已经加载好的那份，避免每个站点重复读盘。
 
     三种形态：普通请求块（`path` × `payloads`）、`raw` 原文块、带 `flow` 的多块编排
     （见模块 docstring；`flow` 下每块只跑一次，条件成立且**有正向命中**才报）。
@@ -792,9 +907,9 @@ def run_poc_on_target(poc, base_url, settings, max_requests=MAX_REQUESTS_PER_POC
         cur = str(site.get("favicon") or "").lower()
         if cur and cur not in {str(h).lower() for h in fav_list}:
             return []
-    if poc.get("_templates"):
+    if poc.get("_workflow"):
         return _run_workflow(poc, base_url, settings, max_requests, site, _depth,
-                             _seen if _seen is not None else set())
+                             _seen if _seen is not None else set(), registry)
     info = poc.get("info", {}) or {}
     variables = dict(builtin_vars(base_url))
     for k, v in (poc.get("variables") or {}).items():

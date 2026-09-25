@@ -1176,3 +1176,46 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        `docs/roadmap.md`、`AGENTS.md`、`CHANGELOG_AI.md`、`TODO.md`、`todo.txt`。
 [未做] 7、仍缺：oob 反连（需用户提供回调域名）、flow 的 JS/循环、workflow 的 `subtemplates`/`args`
        —— 这三项各自需要一套执行引擎，不在本切片内；**块级/顶层** `dsl` 仍按不支持处理。
+
+=== 续38（2026-09-25）：nuclei workflow **条件编排**（`template:` / `tags:` / `subtemplates:`） ===
+[完成] 1、补齐 `[待办]`：续37 `[未做]` 7 里的「workflow 的 `subtemplates`/`args`」（用户选定）。
+       **前提纠错**：选项描述里的 `args`（给子模板传变量）在 nuclei workflow schema 里**并不存在** ——
+       查证 `pkg/workflows/workflows.go::WorkflowTemplate` 只有 `template`/`tags`/`matchers`/`subtemplates`，
+       `pkg/templates/workflows.go` 与 `pkg/core/workflow_execute.go` 里也没有 `Args`。故**不发明语义**：
+       见到 `args:` 就把该子项跳过，并在 `_note` 写明"nuclei workflow 无此字段，变量共享靠命名 extractor"。
+       同理选项描述里的 `subtemplates: [{tags: cve, severity: high}]` 也不是真实写法（workflow 级不支持
+       内联 severity），实现按真实写法（`- template: X` 加缩进 `subtemplates:`）走。
+[完成] 2、实现（`scanner/pocs/engine.py`）：装载期 `_wf_tags()`（`"a,b"` 与 `[a, b]` 都认）+ `_wf_steps()`
+       （把 `workflows:` 递归解析成步骤树，纯结构、零请求），`load_poc_file()` 的 workflow 分支改为挂
+       `_workflow`（原 `_templates` 字段废弃）；运行期新增 `_wf_targets()`（按 `tags` 或 `template` 展开
+       候选并**截断到 40**）与 `_run_wf_step()`（父命中才下钻、父结果不报），`_run_workflow()` 重写；
+       `run_poc_on_target()` 新增 `registry` 形参，`scanner/stages/vulnscan.py` 传 `registry=pocs`。
+[说明] 3、为什么这么写（逐条对着 nuclei 源码，不自创）：① **父命中才跑子模板**且**父结果不打印** ——
+       `pkg/core/workflow_execute.go::runWorkflowStep` 对带 `subtemplates` 的步骤会替换掉 `ctx.OnResult`，
+       而 `results.CompareAndSwap(false, firstMatched)` 只在无 subtemplates 时执行；② `tags` 非空时
+       **优先于 `template`**（`pkg/templates/workflows.go::parseWorkflowTemplate` 命中 tags 就忽略
+       template），`template` 与 `tags` 都为空的子项 nuclei 直接判非法（本引擎跳过并写明原因）；
+       ③ workflow 的 `tags` 是 **OR** 语义（`pkg/templates/tag_filter.go::isExtraTagMatch` 逐个试）。
+       为什么装载期只解析结构、`tags:` 候选集留到运行期展开 —— 候选集依赖运行期的启用设置与注册表，
+       装载期展开会退化成 O(#workflow × 全部 POC) 的重复解析，还会和嵌套展开保护纠缠；运行期由
+       `vulnscan` 传已加载的 `pocs` 当注册表，避免每个站点把 300+ 个 POC 文件重读一遍。
+       另加 `_WORKFLOW_MAX_SUBS = 40`：`tags:` 可能命中整个模板库、`template:` 可能指向一个目录，
+       nuclei 有 `-rate-limit` 兜着、本引擎没有，超出的部分**不执行**（guide 里写明）。
+[完成] 4、验证：`py -3 tests/smoke.py` → SMOKE PASS（新增 `[6y]`，9 组口径）：父命中→跑子模板且报出的
+       是**子**的 `poc_id`；父不命中→子模板**零请求**（不只看返回值，钉到请求数）；多级门控；
+       `tags:` OR 语义（双向用例 + 字符串写法等价）+ `registry` 传入 / 不传（懒加载）两条路径；
+       `tags` 优先于 `template`（path 为空）；目录展开；`_WORKFLOW_MAX_SUBS` 截断（45→40、5→5）；
+       `matchers:` / `args:` / 裸 `subtemplates:` 三项跳过且 `_note` 指认、全跳过则 `unsupported`；
+       带 subtemplates 的自环被 `seen` 挡住。`[5x]` ⑤ 的断言从 `_templates` 改到新数据模型 `_workflow`。
+[完成] 5、变异证伪 **5/5 被击杀**（均为"语义正确、逻辑改坏"）：① 父没命中仍跑子模板；
+       ② `tags` 的 OR 误写成 AND；③ 父结果照报（`poc_id` 变父模板）；④ 去掉 40 上限；
+       ⑤ 不跳过 `args:` 子项。五处均已还原。
+[完成] 6、CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致
+       （engine.py 154/39、vulnscan.py 4/1、smoke.py 214/1）。文档同步：`docs/poc-guide.md`
+       （workflows 小节重写 + YAML 示例 + 与 nuclei 的关系）、`docs/roadmap.md`、`docs/usage.md`、
+       `AGENTS.md`（`[5x]` 口径、新增 `[6y]`、POC 引擎能力段）、`CHANGELOG_AI.md`（续38）、
+       `TODO.md`、`todo.txt`。
+[未做] 7、仍缺：workflow 的 **`matchers:`**（按匹配器名分支进子模板 —— 需要把匹配器名带到结果层，
+       当前结果结构里没有这一层，属独立切片）；workflow **真正的"传变量"机制**（nuclei 靠**命名 extractor**
+       写进共享执行上下文 `ctx.Input.Set`，本引擎的 extractor 结果只挂在本模板的 evid 上，没有跨模板
+       上下文）；oob 反连（需用户提供回调域名）；flow 的 JS/循环。**块级/顶层** `dsl` 仍按不支持处理。
