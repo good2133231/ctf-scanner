@@ -155,6 +155,31 @@
 那会改变真实扫描引擎（fscan 默认 600 线程，比 nmap 激进），留给用户拍板。
 
 
+### 6. fscan 上位：`tools/fscan/` 目录联接 + `which()` 相对路径按项目根折算
+
+用户点单"junction 接入"。做法：自编译的 `fscan.exe` 留在仓库外，`tools/fscan/` 做**目录联接**
+指向它、`.gitignore` 排除（与 `tools/dirmap/` 同一套先例），`config/settings.yaml` 的
+`tools.fscan` 从裸名 `fscan` 改成相对路径 `tools/fscan/fscan.exe`。
+
+**顺带修掉一个"文档说支持、代码其实不支持"的口径**：`scanner/config.py` 的 `tools` 段一直写着
+"可以填 `tools/scanner/httpx.exe`"这类相对路径，但 `utils.which()` 直接 `shutil.which(t)` ——
+Windows 上带分隔符的相对路径是按**进程 CWD** 找的，从仓库外启动 GUI/CLI 就会"工具明明在却被判
+未安装"，然后**静默**降级到内置实现。现在 `which()`：裸名走 PATH（行为不变）、绝对路径原样、
+带分隔符的相对路径在 PATH/CWD 都不中时再按**项目根**折算一次（严格增量，不改变任何"本来能找到"
+的结果）。这条同时让 subfinder / puredns / httpx / nmap 配相对路径也真正可用。
+
+**端到端真跑**（从仓库外 `C:\Users\材料` 启动，专门验折算）：`which("tools/fscan/fscan.exe")`
+→ `…\ctf-scanner\tools\fscan\fscan.exe`；任务 #159 日志 `[portscan] 内置 TOP 端口扫描：fscan，
+1 个主机 x 2 端口`、6 秒完成、`127.0.0.1:8899` 落库（关闭的 9997 不在）；`result.txt` 落在
+`logs/task_159_20260926_003333/`，**仓库根干净**。回归：全量 SMOKE PASS；顺带修了 smoke 里
+"引擎选择"那段的桩 —— 它按裸名 `"fscan"` 匹配 `which` 的入参，`tools.fscan` 改成相对路径后桩失效
+（表现是第二遍断言 `['builtin']`），改为"名字里含 fscan"。
+
+文档同步：`AGENTS.md`（§1 本机外部工具三个例外 / §3 目录地图补 `tools/fscan/` / §5 第 2 条补
+`which()` 的相对路径口径 / §7 fscan 段补 junction 接入结论）、`todo.txt`（第 474、495 行与续45
+第 10 项）、`config.py` 与 `.gitignore` 注释就地改。
+
+
 ## 2026-09-25 —— 续44：C 组三项收口（305 个导入 POC 实测校准 / dirmap 源码复核 / GitHub token 核实）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

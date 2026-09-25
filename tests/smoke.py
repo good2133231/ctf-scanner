@@ -877,7 +877,9 @@ def main():
         # result.txt 写进启动扫描器的目录（GUI/CLI 就是仓库根）。
         _eng_calls.clear()
         _ps_stage.portscan.fscan_scan = _stub_fs_eng
-        _ps_stage.which = lambda name: "fake-fscan" if name == "fscan" else None
+        # 按"名字里含 fscan"匹配：settings.yaml 里 `tools.fscan` 现在填的是**相对路径**
+        # （tools/fscan/fscan.exe），桩不能再拿裸名 `"fscan"` 去比。
+        _ps_stage.which = lambda name: "fake-fscan" if "fscan" in str(name) else None
         _ps_stage.PortscanStage(_eng_ctx).run()
         assert _eng_calls == ["fscan"], _eng_calls
         assert _eng_wd.get("workdir") == Path(_TMPDIR) / "eng", _eng_wd

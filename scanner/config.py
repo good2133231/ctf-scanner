@@ -371,9 +371,10 @@ DEFAULTS = {
         "puredns": "puredns",
         "httpx": "httpx",
         "nmap": "nmap",
-        # fscan（可选）：填二进制名或路径（Windows 下如 tools/scanner/fscan.exe）。
+        # fscan（可选）：填二进制名或路径（Windows 下如 tools/fscan/fscan.exe）。
         # 缺省只会在 PATH 里找；找不到就跳过它。**调用时强制 `-np -nobr -nopoc`**
         # —— 不要给它开暴力破解/POC，我们只用它的端口发现能力（见 scanner/portscan.py）。
+        # 相对路径（带 `/` 或 `\`）按**项目根**解析，不按进程 CWD（见 utils.which）。
         "fscan": "fscan",
         "dirmap": {
             "python": "python",

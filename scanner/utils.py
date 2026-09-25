@@ -13,8 +13,26 @@ from . import throttle as _throttle_mod
 
 # ---------- 外部命令 ----------
 
+_BASE_DIR = Path(__file__).resolve().parent.parent
+
+
 def which(tool):
-    return shutil.which(str(tool))
+    """解析外部工具：裸名走 PATH；带路径分隔符的**相对路径按项目根**解析。
+
+    为什么必须折算项目根：`shutil.which("tools/fscan/fscan.exe")` 是按**进程 CWD** 找的，
+    从仓库外启动 GUI/CLI（或任何换了工作目录的调用方）就会找不到 —— 表现是"工具明明在，
+    却被判成未安装"然后**静默降级**到内置实现。`config.py` 的 `tools` 段一直写着"可以填
+    `tools/scanner/httpx.exe`"这类相对路径，这条折算才让那句话成立。
+    """
+    t = str(tool or "").strip()
+    if not t:
+        return None
+    found = shutil.which(t)
+    if found or t.startswith(("/", "\\")) or (":" in t[:3]):
+        return found
+    if "/" not in t and "\\" not in t:
+        return found                      # 裸名：只在 PATH 里找，不做任何臆造
+    return shutil.which(str(_BASE_DIR / t))
 
 
 def verify_tool(bin_path, flag="-version", timeout=60):

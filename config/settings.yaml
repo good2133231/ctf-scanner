@@ -192,8 +192,9 @@ tools:
   puredns: puredns
   httpx: httpx
   nmap: nmap
-  # fscan（可选）：二进制名或路径；找不到就跳过它。调用时强制 -np -nobr -nopoc
-  fscan: fscan
+  # fscan（可选）：二进制名或路径；找不到就跳过它（回退 nmap / 内置）。调用时强制 -np -nobr -nopoc。
+  # 本机是自编译产物挂目录联接（tools/fscan/ → 仓库外，见 .gitignore）；相对路径按**项目根**解析。
+  fscan: tools/fscan/fscan.exe
   dirmap:
     python: python
     script: tools/dirmap/dirmap.py

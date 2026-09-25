@@ -56,8 +56,10 @@ Flask Web 控制台（仿 ARL）。
   功能上无影响：框架取解释器一律走 `utils.pick_python()` —— `which(configured)` 不中则回退
   `sys.executable`，实测返回 `…\Programs\Python\Python39\python.exe`。）*
 - 依赖已装：flask 3.1、requests 2.22、PyYAML 6.0（见 requirements.txt）。
-- 外部工具：subfinder / puredns / httpx **均未安装** → 走内置兜底。**两个例外**：
-  **nmap 已安装**（`C:\Program Files (x86)\Nmap\nmap`，实测 `which` 命中）→ 端口扫描默认走 nmap 适配器；
+- 外部工具：subfinder / puredns / httpx **均未安装** → 走内置兜底。**三个例外**：
+  **fscan 可用**（续45 自编译 2.2.1 挂到 `tools/fscan/` 的**目录联接**，`settings.yaml` 的
+  `tools.fscan=tools/fscan/fscan.exe`）→ 端口扫描 `engine=auto` 的**第一环命中**，实走 fscan；
+  **nmap 已安装**（`C:\Program Files (x86)\Nmap\nmap`，实测 `which` 命中）→ 退为 fscan 之后的兜底；
   **dirmap 可用**：
   它的 Python 依赖（gevent 24.11 / lxml / progressbar）本机都有，且已在 `tools/dirmap/` 建了
   **目录联接**指向机器上的 dirmap 源码 —— 因此 dirscan 阶段在**深扫档**（`dirscan.mode=deep`、
@@ -139,6 +141,7 @@ ctf-scanner/
 │                          #   → config/dicts/tlds.txt（含 `co.uk`/`com.cn` 等多段后缀）；用法：py -3 tools/import_tlds.py --force
 │                          #   tldextract 是**生成期可选依赖**，不进 requirements.txt；运行时只读生成好的 tlds.txt
 ├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
+├── tools/fscan/           # fscan 落点（同上：**目录联接**指向仓库外的自编译二进制；.gitignore 排除）
 ├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/**ssrf/shodan/quake/ctlog**/blacklist/**intel/heuristic/github** 二十三段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
 │                          #   注：原文写「十八段」且漏列 ssrf/shodan/quake/ctlog，与 GUI 实际覆盖的段数不符，
 │                          #   2026-09-24（续26）按 config/settings.yaml 实测更正为 **23 段**（tools/dicts/http 不可从页面改）
@@ -251,7 +254,9 @@ ctf-scanner/
    **`jsmine` 是唯一的"混合出口"模块**（续43）：页面自身请求按定义发往目标侧（`auth=True`），但同一页
    `<script src>` 绝对化后可能指向第三方，必须**按 URL 主机逐个判** `auth=`（`_is_self_host` 命中自家
    注册域才带），不能因为"URL 来自目标页面"就把整批脚本请求都带上登录态。
-2. **外部工具优先 + 内置兜底**：调用前用 `which()`，Good 工具再用 `verify_tool()` 做版本握手
+2. **外部工具优先 + 内置兜底**：调用前用 `which()`（裸名走 PATH；**带 `/` 或 `\` 的相对路径按
+   项目根折算**，不按进程 CWD —— 否则从仓库外启动 GUI/CLI 会把装好的工具判成"未安装"再**静默降级**），
+   Good 工具再用 `verify_tool()` 做版本握手
    （防止 pip 的 Python `httpx` 同名命令被误用）。**例外：`fscan` 不做握手** —— 它的 `-h` 是
    "指定主机"而不是 help，也没有 `-version`；套默认探针会把**装好的** fscan 误报成"未通过版本
    校验"，`portscan` 随即**静默**降级到内置扫描（慢一个量级且无任何报错）。见
@@ -810,6 +815,14 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   产物落在 `logs/task_<id>_<时间>/`，与 dirmap / cert / screenshot 的产物同级。
   回归钉在两处：`[5e-0]` 第 ⑧ 组（给了 workdir 用它 / 没给也不能继承进程 CWD / 重试带同一个 cwd）、
   以及同段"引擎选择"的第二遍（`which` 认得 fscan 时，**阶段**必须把 `workdir` 传下去）。
+- **fscan 上位：`tools/fscan/` 目录联接 + `settings.yaml` 填相对路径**（续45，用户点单）：
+  本机 fscan 是**自编译**的（预编译 exe 会被 Defender 拦，本机非管理员加不了排除项 —— 阿里云镜像
+  取 Go 1.25.4 便携 zip → `shadow1ng/fscan` 检出 tag `v2.2.1`（`95cc12e`）→
+  `go build -ldflags="-s -w" -trimpath`，27.2 MB）。二进制放仓库外、`tools/fscan/` 做目录联接、
+  `.gitignore` 排除（仿 dirmap 先例），`tools.fscan` 填**相对路径** `tools/fscan/fscan.exe`。
+  端到端真跑（从**仓库外**的 CWD 启动，专门验"相对路径按项目根解析"）：日志
+  `[portscan] 内置 TOP 端口扫描：fscan`、`127.0.0.1:8899` 落库、`result.txt` 落在
+  `logs/task_<id>_<时间>/`、仓库根干净。fscan 不可用时仍按 `engine=auto` 退 nmap → 内置。
 - **`-nopoc` 只管 POC 模块，管不到 fscan 内置的"服务插件"**：实测它仍会输出
   `[!] Redis未授权访问: ip:port` 这类**只读**探测结论。本模块**只解析"端口开放"的事实行，
   不采信它的漏洞结论**（漏洞初筛归 vulnscan 阶段）。

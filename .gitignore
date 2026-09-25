@@ -18,8 +18,9 @@ config/keys.yaml
 config/pocs-user/
 config/nuclei-templates/
 
-# 外部工具落点（dirmap 是第三方项目，本机用目录联接挂到这里，不随仓库分发）
+# 外部工具落点（dirmap / fscan 是第三方项目或二进制，本机用目录联接挂到这里，不随仓库分发）
 tools/dirmap/
+tools/fscan/
 
 # 会话/记忆目录（AI 工作笔记，不进仓库）
 .workbuddy-ai/
