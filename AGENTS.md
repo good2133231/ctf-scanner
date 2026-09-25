@@ -283,7 +283,7 @@ ctf-scanner/
 ## 6. 如何验证改动
 
 ```powershell
-py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(12 个)/POC 级别执行门/
+py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(13 个)/POC 级别执行门/
                             # 免杀变形/mmh3 公开向量+iprecon/fofa 纯函数/响应体解码/流水线+指纹/三层门控/阶段门控(含 osint)/
                             # 非标端口候选/报告(含 C 段 IP)/停止/导出/GUI 路由(9 栏侧边栏 + /ports /csegs /dirs)与批量接口/
                             # 子域名分流+CDN 标记+站点折叠+POC 相对路径/
@@ -750,6 +750,15 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   ② `tests/smoke.py [6n]`（复用同一个 `gate()`，口径与命令行一致）。
   新增主题或新增颜色时：**在 `:root` 声明默认值**，只在确实要变的三套主题里覆盖，
   然后跑门禁。纯装饰的分隔线 `--line` 刻意不参与 3:1 判定（理由见该脚本模块 docstring）。
+
+- **`config/settings.yaml` 里 `fofa.enabled` 当前为 `true`，与 `scanner/config.py` 的 `DEFAULTS`
+  （`False`）及 README / roadmap / 本文件「osint 默认全关」的口径不一致**（2026-09-25 接管盘点发现）：
+  ① `settings.yaml` 被 **git 跟踪**，所以新克隆会继承这个开启态；② 默认阶段集是**全 13 阶段**
+  （CLI `-p` 缺省、GUI 未勾选时 `or list(STAGE_ORDER)`），`osint` 在其中；③ `config/keys.yaml`
+  里有**真实 FOFA 凭据** + GitHub token → **每次默认任务都会真查 FOFA 并花配额**（这是用户为校准
+  阈值主动开的，2026-09-22 续15/18「FOFA 三种反查已真实跑过，key 已配」）。结论是「默认就开、会花配额」，
+  不是「默认关」——已把文档口径改过来（`docs/roadmap.md` 已登记续23~27 与 github 阶段）。
+  不动用户的开关；要改回零开销默认行为，把 `fofa.enabled` 改 `false` 即可（与 DEFAULTS 对齐）。
 
 ## 8. 不要做的事
 

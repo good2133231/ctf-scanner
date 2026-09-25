@@ -163,9 +163,11 @@ ctf-scanner/
   **XSS 按回显上下文分级**（JS 串/无引号属性→high，引号属性/文本节点→medium，HTML 注释→降级）；
   **A10 SSRF 只做受控回连**（证明"服务端会出网"），**刻意不去打内网地址**；
 - A04（不安全设计）、A07（认证缺陷）、A09（日志与监控）等依赖业务上下文的类别，黑盒自动化无法可靠覆盖，文档中如实标注；
-- 外部情报（`osint` 阶段：C 段反查 / FOFA favicon 反查 / FOFA 证书反查）**默认全关**且依赖第三方接口/配额，
-  其阈值（黑 ico 200、通用证书 200、"共享主机"单 IP 域名数 30）是保守估计值、未经真实数据校准；
-  `osint` 的联网往返也无法离线自测（`tests/smoke.py` 只覆盖纯函数与门控）。
+- 外部情报（`osint` 阶段：C 段反查 / FOFA favicon 反查 / FOFA 证书反查）：**`fofa.enabled` 在当前配置里为 `true`**，
+  即每次默认任务都会真查 FOFA 并消耗配额（`config/keys.yaml` 已配真实凭据）；`iprecon.enabled` /
+  `shodan` / `quake` / `ctlog` 与 `intel` / `heuristic` / `github` 默认关。`osint` 的阈值
+  （黑 ico 200、通用证书 200、"共享主机"单 IP 域名数 30）是保守估计值、未经真实数据校准，
+  其联网往返也无法离线自测（`tests/smoke.py` 只覆盖纯函数与门控，全阶段真跑见 `[6u]`）。
 
 ## 许可
 

@@ -5012,7 +5012,178 @@ workflows:
           "GET 不拦 / 两个头都缺时放行 / _host_of 只比主机名、_authority 保留端口 / "
           "Cookie HttpOnly+SameSite=Lax")
 
-    print("SMOKE PASS")
+    
+    # [6u] 续33 **全 13 阶段端到端真跑**：把"13 个阶段能不能串起来跑完"钉进回归门禁。
+    #      背景（这是本用例存在的理由）：此前**真跑**的只有 `[3]`（probe + vulnscan 两阶段）
+    #      与 `[5p] 3c`（只真跑 dirscan）；"全量串起来"只在 2026-09-23 续10 手工跑过一次，
+    #      那时才 11 阶段 —— cert / github / 目录递归 / 追加 / 续跑 / F2 门控都是后来的，
+    #      也就是说"13 个阶段还能不能跑完"**从来没有回归覆盖**。
+    #      为什么不能把阶段桩掉：阶段级容错会把异常记进 `tasks.error` 后继续跑完、任务照样置
+    #      `done`。只断言"13 个阶段都被调用过"抓不到"流水线其实崩了" —— 必须断言
+    #      **终态 / error / 产物 / 请求量** 四件事，且请求是真发到 8765 靶场的。
+    from scanner import utils as _utils6u
+    from scanner.config import DEFAULTS as _DEF6U
+
+    _u_cfg = copy.deepcopy(settings)
+
+    # (1) 先关掉**一切会发外部第三方请求**的阶段：冒烟测试必须零外部请求。
+    #     这不是洁癖，是实测踩到的坑：本机 `config/keys.yaml` 里填着**真实的 FOFA 凭据**，
+    #     而 `config/settings.yaml`（被 git 跟踪的用户覆盖层）把 `fofa.enabled` 设成了 true
+    #     （`scanner/config.py` 的 DEFAULTS 是 False）—— 不显式关掉，一次默认任务就会真的
+    #     去查 FOFA 并花掉用户配额。
+    #     `osint` 阶段自身**没有** enabled，靠下面五个子开关共同决定：全关 = 整阶段跳过。
+    for _k6u in ("iprecon", "fofa", "shodan", "quake", "ctlog"):
+        _u_cfg[_k6u] = dict(_u_cfg.get(_k6u) or {}, enabled=False)
+        assert _u_cfg[_k6u]["enabled"] is False, _k6u
+    _u_cfg["intel"] = dict(_u_cfg.get("intel") or {}, enabled=False)
+    _u_cfg["github"] = dict(_u_cfg.get("github") or {}, enabled=False)
+    # 内置被动子域源（crt.sh / certspotter / alienvault …）同样是外部接口：一并关掉。
+    # 本用例目标是 URL，`subdomain` 阶段对 URL 目标本来就整阶段跳过；关它是为了让
+    # "零外部请求"**构造性成立**，而不是"恰好这次目标里没有裸域名"。
+    _u_cfg["passive"] = dict(_u_cfg.get("passive") or {}, enabled=False)
+    assert _u_cfg["intel"]["enabled"] is False and _u_cfg["github"]["enabled"] is False
+
+    # (2) 打开其余全部阶段。两处"没有 enabled 键"的坑必须绕开（KeyError 已实测踩过）：
+    #     `subdomain` 段存在但**没有** enabled（它只由任务勾选的 stages 决定）；
+    #     `probe` 段在 DEFAULTS 里**根本不存在**（它没有任何策略级开关）。
+    #     这两条断言同时把"别给它们补 enabled"这件事写进测试，防止后人按
+    #     "每个阶段都有 enabled"的错觉去改配置层。
+    assert "enabled" not in (_DEF6U.get("subdomain") or {}), \
+        "DEFAULTS.subdomain 本就没有 enabled（它只由任务阶段列表决定），别给它补一个"
+    assert "probe" not in _DEF6U, \
+        "DEFAULTS 里没有 probe 段（probe 没有策略级开关）—— 别按'所有阶段都有 enabled'写"
+    for _k6u in ("takeover", "portscan", "cert", "screenshot", "jsmine", "dirscan",
+                 "vulnscan", "heuristic"):
+        _u_cfg[_k6u] = dict(_u_cfg.get(_k6u) or {}, enabled=True)
+        assert _u_cfg[_k6u]["enabled"] is True, _k6u
+    # 前提：确确实实是 13 个阶段（续26 之后才是 13；续10 手工跑那次才 11 个）
+    assert len(STAGE_ORDER) == 13 and set(STAGE_ORDER) == set(_rn6.STAGE_REGISTRY), \
+        (len(STAGE_ORDER), sorted(STAGE_ORDER))
+
+    # (3) 请求计数：沿用 `[5p] 3c` 的"真发请求 + 只做计数"手法，但**覆盖全部出口**。
+    #     各模块是 `from ..utils import http_request`（把函数对象绑进自己的命名空间），
+    #     只改 `utils.http_request` 对它们无效 —— 所以要把**所有持有原函数对象的 scanner.* 模块**
+    #     都换掉（含 utils 自己：`evasion.py` / `fingerprint.py` 是函数内局部导入，走的就是它）。
+    _u_orig_http = _utils6u.http_request
+    _u_mods = [m for m in list(sys.modules.values())
+               if str(getattr(m, "__name__", "") or "").startswith("scanner")
+               and getattr(m, "http_request", None) is _u_orig_http]
+    _u_sent = []
+
+    def _u_http(u, **kw):
+        _u_sent.append(str(u))
+        return _u_orig_http(u, **kw)      # 真发请求，只做计数（绝不桩掉扫描实现）
+
+    # (4) 真跑：`sync_pocs` 不能省 —— 沙箱库是空的，没有它 vulnscan 会撞
+    #     `no such table: pocs`（`engine.load_enabled_pocs` 要读 pocs 表）。
+    db.init_db()
+    sync_pocs(_u_cfg)
+    _u_name = "smoke-all13"
+    _u_stages = list(STAGE_ORDER)
+    _u_tid = db.create_task(_u_name, targets, _u_stages, {})
+    for _m6u in _u_mods:
+        _m6u.http_request = _u_http
+    _u_per = []            # TEMP-MEASURE
+    _saved_reg6u = dict(_rn6.STAGE_REGISTRY)            # TEMP-MEASURE
+    for _n6u, _c6u in list(_rn6.STAGE_REGISTRY.items()):            # TEMP-MEASURE
+        def _mk6u(_base):            # TEMP-MEASURE
+            class _W6u(_base):            # TEMP-MEASURE
+                def run(self):            # TEMP-MEASURE
+                    _n0 = len(_u_sent)            # TEMP-MEASURE
+                    try:            # TEMP-MEASURE
+                        return super().run()            # TEMP-MEASURE
+                    finally:            # TEMP-MEASURE
+                        _u_per.append((self.name, len(_u_sent) - _n0))            # TEMP-MEASURE
+            return _W6u            # TEMP-MEASURE
+        _rn6.STAGE_REGISTRY[_n6u] = _mk6u(_c6u)            # TEMP-MEASURE
+    _u_t0 = time.time()
+    try:
+        run_task(_u_tid, _u_name, targets, _u_stages, {}, _u_cfg)
+    finally:
+        _rn6.STAGE_REGISTRY.clear()            # TEMP-MEASURE
+        _rn6.STAGE_REGISTRY.update(_saved_reg6u)            # TEMP-MEASURE
+        for _m6u in _u_mods:
+            _m6u.http_request = _u_orig_http
+    _u_el = time.time() - _u_t0
+    print("TEMP-MEASURE per-stage:", _u_per)            # TEMP-MEASURE
+
+    # (5) 终态：**正常跑完**才可能是 `done` + error 为空 + `current_stage` 被清空。
+    #     `db.get_task()` 返回 `sqlite3.Row`（没有 `.get()`），必须按下标取 —— 已实测踩过。
+    _u_t = db.get_task(_u_tid)
+    assert _u_t["status"] == "done", \
+        f"全 13 阶段应正常跑完置 done（不是 done 说明流水线被中断/预算耗尽）：{_u_t['status']}"
+    assert (_u_t["error"] or "") == "", \
+        f"任何阶段异常都会被 append 进 error，跑完必须为空：{_u_t['error']}"
+    assert (_u_t["current_stage"] or "") == "", \
+        f"正常跑完必须清空断点（续29 的语义：留着就是'待续跑'）：{_u_t['current_stage']}"
+    assert int(_u_t["progress"] or 0) == 100, _u_t["progress"]
+    _u_counts = db.task_counts(_u_tid)
+    _u_sites = [dict(r) for r in db.list_sites(_u_tid)]
+    _u_dirs = [dict(r) for r in db.list_dirs(_u_tid)]
+    _u_vulns = [dict(r) for r in db.list_vulns(task_id=_u_tid, limit=200)]
+    _u_leads = [dict(r) for r in db.list_leads(_u_tid)]
+    assert len(_u_sites) >= 1 and _u_sites[0]["url"].startswith("http://127.0.0.1:8765"), _u_sites
+    assert len(_u_dirs) >= 2, f"浅扫应至少命中 .env 与 .git/config 两条：{_u_dirs}"
+    assert any(str(d.get("path") or "").endswith("/.env") for d in _u_dirs), _u_dirs
+    assert any(str(d.get("path") or "").endswith("/.git/config") for d in _u_dirs), _u_dirs
+    assert len(_u_vulns) >= 1, _u_vulns
+    assert all(v.get("severity") in ("high", "critical") for v in _u_vulns), \
+        f"默认门槛 medium 下剩下的应是 high 级（exposure-git-config 等）：{_u_vulns}"
+
+    # (6) 三个外部依赖阶段必须**被跳过而非报错**：intel / github / osint 都不该产出任何东西，
+    #     且任务 error 依然为空（"跳过"和"跑挂了"必须分得开 —— 后者会被上面 (5) 抓住）。
+    #     heuristic 开着但**零请求**，它若产线索是合法的，所以只钉"外部那两条不许有"。
+    assert not [x for x in _u_leads if x["kind"] in ("intel", "github")], \
+        f"intel / github 已显式关闭，不该有任何线索（有的话说明默认行为在偷偷发外部请求）：{_u_leads}"
+    assert db.list_csegs(_u_tid) == [], "osint 的 C 段产物必须为空（iprecon 已关）"
+    assert db.list_certs(_u_tid) == [], "靶场没有 https，cert 阶段应跳过而非报错（ctlog 也已关）"
+    assert not [s for s in db.list_subdomains(_u_tid)
+                if "osint" in str(s["source"] or "")], "osint 阶段的域名产物必须为空"
+
+    # (7) **零外部请求**：所有请求的**主机名**必须是回环。这条比"请求总数"更硬 ——
+    #     它直接证明没有向 FOFA / crt.sh / GitHub / CISA KEV 等任何第三方发过一次请求。
+    #     只比前缀是不够的：portscan 会把扫到的其它开放端口（本机 135 / 445）交回 probe 当候选，
+    #     于是请求里会有 `http://127.0.0.1:445` 这类**同机异端口**的 URL —— 它们仍是本机的。
+    from urllib.parse import urlparse as _up6u
+    _u_out = [u for u in _u_sent
+              if ((_up6u(u).hostname or "").strip().lower())
+              not in ("127.0.0.1", "localhost", "::1")]
+    assert not _u_out, f"冒烟测试必须零外部请求，实测打到站外：{_u_out[:5]}"
+
+    # (8) 请求总量上界：**实测标定**后写死（构成见下方注释）。
+    #     为什么是上界而不是等号：各阶段的请求数会随本机装了什么工具（nmap / fscan）、
+    #     指纹命中情况而浮动，钉等号会让用例在别的机器上必然假失败。
+    #     构成（本机实测）：dirscan 浅扫 = 字典 150 + 软 404 基线 3；probe ≈ 5（含 http/https
+    #     与 favicon）；vulnscan ≈ 76（内置 OWASP 检查 + 联动 POC）；jsmine 抓首页与 JS 若干；
+    #     cert / screenshot / osint / intel / github 各 0；portscan 走裸 socket，不经 http_request。
+    _U_MAX_REQ = 400
+    assert len(_u_sent) <= _U_MAX_REQ, \
+        f"全 13 阶段请求量 {len(_u_sent)} 超过上界 {_U_MAX_REQ}（阶段预算失控？）：" \
+        f"{sorted(set(u.split('?')[0] for u in _u_sent))[:10]}"
+
+    # (9) 对外部工具/浏览器的依赖必须**可移植**：这两处只能断言"不失败、产物可为 0"，
+    #     绝不能断言"必须扫出端口"或"必须出图" —— 换一台没装 nmap / 没装浏览器的机器
+    #     （以及 Linux CI）就会假失败。
+    _u_ports = db.list_ports(_u_tid)
+    assert isinstance(len(_u_ports), int), _u_ports          # 产物可为 0
+    _u_shots = sorted((Path(db.get_task(_u_tid)["log_file"]).parent / "shots").glob("*.png")) \
+        if (Path(db.get_task(_u_tid)["log_file"]).parent / "shots").is_dir() else []
+    assert isinstance(len(_u_shots), int), _u_shots          # 没浏览器时 0 张是合法的
+    assert (_u_t["error"] or "") == "", \
+        f"跑完全 13 阶段后 error 仍必须为空（截图/端口扫描缺依赖不算错）：{_u_t['error']}"
+
+    print("[6u] 续33 全 13 阶段端到端真跑 ok: 耗时 %.1fs / %s / 请求 %d 个（上界 %d，"
+          "全部落在 127.0.0.1:8765，站外 0 个）/ 终态 done·error 空·断点已清 / "
+          "heuristic 线索 %d 条（intel·github 必须为 0）/ csegs·certs·osint 域名均为 0"
+          % (_u_el,
+             " ".join(f"{k}={v}" for k, v in _u_counts.items() if v),
+             len(_u_sent), _U_MAX_REQ,
+             len([x for x in _u_leads if x["kind"] not in ("intel", "github")])))
+    db.delete_task(_u_tid, backup=False)
+
+    
+
+print("SMOKE PASS")
 
 
 if __name__ == "__main__":

@@ -131,8 +131,18 @@
       `tests/smoke.py [5o]` 是**跨平台静态审计**（全量 compile / 全量 import / 禁 shell 直通与盘符路径 /
       文本 IO 必带 encoding / `run_cmd` 实测 127·124 / `pick_python` 回退），会按运行平台自报状态。
       **残留未验**：subfinder / puredns / httpx（那台机器上未装，代码走 `which` + 内置兜底）；
-- [x] **进度与线索分流**（第十七轮续8）：「漏洞」与「线索」分表、分页签、分计数
-      （`leads` 表 + 任务详情第 9 个页签 + 报告附录），从结构上保证「线索」不会被算成漏洞数；
+- [x] **进度与线索分流**（第十七轮续8）：「漏洞」与「线索」分表、分计数（`leads` 表），
+      从结构上保证「线索」不会被算成漏洞数；
+      **续24 起线索出口收敛到 JSONL**（`type=lead` 行 + `counts.leads`）：GUI「线索」页签与 MD/HTML 报告附录
+      **已移除**（用户口径：只隐藏页签与报告附录），`leads` 表与 `intel`/`heuristic`/`github` 三个默认关阶段完全不变，
+      机器格式保留全部、筛选权交下游（见 `AGENTS.md §7` 与 `scanner/report.py`）。
+- [x] **GitHub 泄露检索（第 13 个阶段 `github`，续26）**：`scanner/github_leak.py` + `scanner/stages/github.py`，
+      默认关、没 `github.token` 零请求、只落「仓库:路径 + 规则名」元数据（文件内容与命中的凭据明文**不入库**）；
+      接入后 `runner.STAGE_ORDER` 共 **13 个阶段**（续26-fix 接真实 token 真机验证）。
+- [x] **续23~续27 收尾（2026-09-24~25）**：续23 主题配色修复 + 配色门禁（`tools/check_contrast.py` + smoke `[6n]`）；
+      续24 目录折叠「站点身份」根因修复 + 线索出口收敛到 JSONL；续25 同任务「追加式执行」（补扫/复查累积进同一任务）；
+      续26-fix 接真实 token 真机验证 + 修「触顶被当错误」；续27 冒烟沙箱残留「自愈清扫」+ 一处被证伪归因更正。
+      （本文件此前漏登这 5 轮，2026-09-25 接管盘点补回。）
 - [ ] 分布式节点：多个执行节点认领任务（需要先替换 SQLite）；
 - [ ] 工具版本管理：一键下载/更新 subfinder/httpx/puredns。
 

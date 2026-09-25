@@ -3,6 +3,39 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续33：接管盘点 + 全 13 阶段端到端回归门禁
+> 实施者：**WorkBuddy · Hy4-preview**
+
+**背景（自主接管盘点发现的缺口）**：作为新负责人通读 `AGENTS.md` / `README.md` / `ARCHITECTURE.md` /
+`TODO.md` / `CHANGELOG_AI.md` + 目录结构 + git 历史 + 未完成任务代码与测试，确认项目真实完成到
+续32-fix（git clean、冒烟绿）。复盘发现：① "13 个阶段串起来能不能跑完"**从来没有回归覆盖**
+（此前只有续10 手工跑过、且当时才 11 阶段；cert / github / 目录递归 / 追加 / 续跑 / F2 门控都是后来的）；
+② 配置与文档漂移：`fofa.enabled` 在 `config/settings.yaml` 为 `true` 但文档写"外部情报默认全关"；
+`AGENTS.md` 写"阶段注册(12 个)"实为 13；`roadmap.md` 漏登 5 轮且"线索=第 9 页签+报告附录"已在续24 移除。
+
+**改了什么**
+
+1. `tests/smoke.py` 新增 `[6u]`：全 13 阶段端到端真跑（本地靶场 127.0.0.1:8765）。先显式关掉一切会发
+   外部请求的开关（iprecon / fofa / shodan / quake / ctlog / intel / github / passive），再断言
+   **终态 `done`·`error` 空·断点已清** + 产物（sites≥1 / dirs≥2 含 `.env` 与 `.git/config` /
+   vulns≥1 high 级）+ **零外部请求**（所有请求主机名都是回环）+ 请求量上界 400。
+   为什么不全桩掉阶段：阶段级容错会把异常记进 `tasks.error` 后继续跑完、任务照样置 `done`，
+   只断言"被调用过"抓不到"流水线其实崩了"，必须断言终态/error/产物/请求量四件事。
+2. 文档对齐：`README.md` 修正 fofa 口径；`AGENTS.md` 阶段数 12→13 并新增 §7 说明 `fofa.enabled`
+   的 DEFAULTS/settings.yaml 差异（用户有意开启）；`docs/roadmap.md` 修正线索出口口径并补登漏的 5 轮。
+3. 新建 `docs/takeover-2026-09-25.md`：接管报告（架构 / 已完成 / 进行中 / 已知问题 / 我发现的未登记问题 / 下一步建议）。
+
+**验证**
+- `py -3 tests/smoke.py` → `SMOKE PASS`；`[6u]` 实测 18.5s，sites=1 / ports=2 / dirs=2 / vulns=3、
+  请求 265 个（上界 400）全部落在 127.0.0.1:8765、站外 0 个、终态 done·error 空·断点已清、
+  intel/github 线索必须为 0、csegs/certs/osint 域名均为 0。
+- CRLF 自查：`git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` 逐文件一致
+  （`smoke.py` 172/1、`roadmap.md` 12/2、`AGENTS.md` 10/1、`README.md` 5/3）。
+  注意 `smoke.py` / `roadmap.md` HEAD 本身是混合换行，按字节归位、未整体翻 CRLF，避免伪造大 diff。
+
+**下一步建议**（详见接管报告）：把"全 13 阶段真跑"纳入 CI；补 `fofa`/`osint` 子开关最小形态单测；
+补"FOFA 真查命中→落拓展域名"的离线桩测（当前 `[6u]` 为防烧配额显式关了 FOFA）。
+
 ## 2026-09-25 —— 续32-fix：跨站校验漏了端口（在真实服务器上实测才暴露）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 
