@@ -18,7 +18,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import db
+from . import db, extdom
 from .config import LOGS_DIR, load_settings
 from . import auth as taskauth
 from . import throttle
@@ -191,6 +191,11 @@ class StageContext:
                 in scope]
 
 
+# 会**产出拓展域名**的阶段。它们的产物（`js:*` / `osint:*`）是在 subdomain 阶段之后才入库的，
+# 所以流水线里没人给它们做过解析 —— 存在性判定与归属追加必须挂在**最后一个**这类阶段之后。
+_EXT_STAGES = ("osint", "jsmine")
+
+
 class PipelineRunner:
     def __init__(self, ctx):
         self.ctx = ctx
@@ -202,6 +207,12 @@ class PipelineRunner:
         total = max(1, len(stages))
         stopped = False
         failed = []
+        # 自动拓展扫描（任务级 `auto_expand`，见 `scanner/extdom.py`）：只在**最后一个**
+        # 产出拓展域名的阶段之后跑一次 —— 挂在中间会把后一个阶段的产物漏掉，
+        # 每个阶段后都跑则重复解析（虽然幂等，但白白多一轮 DNS）。
+        auto_expand = ctx.options.get("auto_expand") is True
+        last_ext = max((i for i, s in enumerate(stages) if s in _EXT_STAGES), default=-1) \
+            if auto_expand else -1
         for i, sname in enumerate(stages):
             if ctx.stopped():
                 stopped = True
@@ -216,6 +227,16 @@ class PipelineRunner:
                 # **追加**而不是覆盖：一条任务可能有多个阶段失败，覆盖式写法会让前面的错误丢失
                 db.append_task_error(ctx.task_id, f"{sname}: {e}")
                 failed.append(sname)
+            if i == last_ext:
+                # 拓展域名的存在性判定 + 归属追加（纯 DNS 只读 + 本地写库）。
+                # 单独 try：这是**附加动作**，它挂了不该把 osint/jsmine 已经入库的产物牵连掉。
+                try:
+                    extdom.process(ctx.task_id, ctx.settings, logger=ctx.logger,
+                                   stopped=ctx.stopped)
+                except Exception as e:  # 附加动作级容错
+                    ctx.logger.error(f"[extdom] 拓展域名后处理异常：{e}")
+                    ctx.logger.debug(traceback.format_exc())
+                    db.append_task_error(ctx.task_id, f"extdom: {e}")
             if ctx.stopped():
                 stopped = True
                 break

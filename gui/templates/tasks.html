@@ -35,6 +35,16 @@
         想深挖再勾上面三项，或在结果页对选中资产发起补扫。</span>
     </div>
     <div class="row">
+      <span class="muted" title="任务级选项 auto_expand：只影响本次任务，不改全局策略">
+        拓展选项（可选）：</span>
+      <label class="chk" title="① 自动补上 osint / jsmine 两个拓展阶段（没勾也补）；② 拓展结束后自动做 DNS 存在性判定，并把「归属本项目」的拓展域名追加成子域名；③ 目标是子域（如 aaa.pengo.pro）时自动补收它的主域名 pengo.pro，并把该子域也记成一条子域资产">
+        <input type="checkbox" name="auto_expand" value="1"> 自动拓展扫描</label>
+      <span class="muted small">勾上后本次任务默认把拓展做全：挖出来的拓展域名会<b>自动判断存不存在</b>，
+        其中<b>注册域属于本项目</b>的（如目标 <span class="mono">pengo.pro</span> 拓展出
+        <span class="mono">aaa.pengo.pro</span>）会<b>追加成正常子域</b>；
+        不勾则维持原样（拓展域名只入库，需要手动处置）。</span>
+    </div>
+    <div class="row">
       <span class="muted" title="登录态只发给目标侧；crt.sh / FOFA / CISA KEV / IP 反查等第三方接口不带（避免把目标凭据外发）；值不会写进日志与报告">
         登录态（可选）：</span>
       <textarea name="auth" rows="2"

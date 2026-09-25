@@ -3,6 +3,84 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续40：拓展域名「自动化」六条（自动拓展扫描 `auto_expand`）
+> 实施者：**WorkBuddy · Hy4-preview**
+
+**背景（用户原话）**：「拓展域名如果再去检测也需要去子域名扫描，以及我们有能力加一个自动判断这个
+域名存在不存在吗 如果选择的是带子域的 自动提取他的主域名，并且把这个子域也直接带着当子域解析，
+如果是归属本项目的子域名 比如说pengo.pro 拓展出来一个aaa.pengo.pro是我们没发现的 也要像正常
+子域对待，可以实现追加功能吗？就是分域名而来，以及拓展扫描域名我希望是可以在主域名的分页下，
+就是可以折叠，并且任务管理功能也有选择自动拓展扫描，就会默认的拓展扫描」。
+
+拆成 6 条：① 拓展域名送去检测时**带上 subdomain 阶段**；② 自动**存在性判定**（DNS）；
+③ 目标是子域（如 `aaa.pengo.pro`）时自动补收主域名 `pengo.pro` + 该子域按子域资产解析；
+④ 归属本项目的拓展域名**追加**成正常子域，且"分域名而来"（出处可查）；
+⑤ 拓展域名页**按主域名分组折叠**；⑥ 建任务页新增「自动拓展扫描」勾选，勾了就默认把拓展做全。
+
+**关键设计决定（先说清，避免后面的人踩）**
+- **一切自动行为都挂在新的任务级选项 `auto_expand` 上**（与 `portscan_full` / `dirscan_full`
+  同一套"只影响本次任务、不改全局策略"的语义）。不勾时行为与改动前**逐字一致** ——
+  这是硬要求：既有任务不能因为升级而悄悄扩大扫描面。
+- ②/③/④ 的"归属"判定用 `utils.base_domain()` 的粗切注册域（**不引入公共后缀库**，离线 CTF 场景
+  装不了、也不该联网取）。粗切在 `foo.bar.co` 这类双段后缀上会切错，但只影响"算不算本项目的"，
+  且**偏保守**（切错 → 少归一些，不会把别人的域名误当自己的资产）。
+- ④ 的"追加"是**新增一行** `source=promote:<原来源>`，**原拓展行保留不动**：
+  - 新行以 `promote:` 开头 → 不属于 `js:` / `osint:`，于是按"自身子域名"对待（子域名页可见）；
+  - 原拓展行还在（出处永远可查），但因为"该域名已作为自身子域名存在"，被既有的
+    `db.OVERLAP_EXT_WHERE` **自动默认隐藏**（`?all=1` 仍可看）—— 一行新数据换来两个视图都不重复。
+- ⑤ 分组必须在 Python 里做（SQL 侧没有"注册域"函数），所以分组模式**按"主域名"分页**
+  （每页 20 个主域名），分页单位变了才不会把同一个主域名切到两页上；`?group=0` 回到平铺表
+  （原分页单位=行，走 `?size=`）。分组上限 `extdom.GROUP_ROW_CAP=4000`，超了页面如实提示。
+- ① 的 subdomain 阶段会多一轮被动收集 + DNS 字典爆破（都是只读的 DNS / 公开接口查询，非破坏性），
+  因此**只对用户明确勾选**的域名执行，不做全自动。
+
+**改了什么**
+- 新增 `scanner/extdom.py`（唯一新文件）：`base_of` / `is_owned` / `task_bases` / `ext_rows` /
+  `resolve_extended`（②，幂等：只解析还没结论的行，失败落 `ip_note`）/
+  `promote_owned`（④，幂等）/ `promote_domains`（④ 的跨任务版：勾选框里只有域名，按域名反查
+  它属于哪些任务再逐个判定）/`group_by_base`（⑤）/`process`（流水线入口）。所有写库路径都过黑名单。
+- `scanner/stages/subdomain.py`：新增"第 0 步"（③）——只在 `auto_expand` 时把目标子域的主域名补进
+  收集范围，并把目标子域以 `source=target` 记成一条子域资产（此前它只进 `hosts.txt` 参与探测，
+  资产表里查不到 = "扫过但没记账"）。
+- `scanner/runner.py`：在**最后一个**产出拓展域名的阶段（osint / jsmine）之后挂钩
+  `extdom.process()`（只在 `auto_expand` 时）。挂在"最后一个"而不是"每个"，否则后一个阶段的
+  产物会漏掉；单独 try，附加动作挂了不牵连已入库的拓展域名。
+- `gui/app.py`：`api_create_task` 认 `auto_expand`（⑥，并自动补 `osint` / `jsmine` 阶段，
+  避免"勾了却没阶段去挖"）；`api_scan_ext` 的阶段改为 `subdomain→probe→dirscan→vulnscan`（①）；
+  新增 `/api/domains/promote`（④ 手动入口，跨任务）；`/extdomains` 支持分组折叠（⑤）；
+  `source_label` 认 `promote:` 前缀 → 显示「归属追加(JS 挖掘)」，`SOURCE_LABELS` 加 `target` →
+  「目标自带子域」。
+- `gui/templates/extdomains.html`：分组折叠（`<details class="ext-group">` + 全部展开/折叠按钮，
+  ≤10 条的组默认展开）+「归属本项目的追加为子域名」按钮；行渲染抽成 Jinja 宏（平铺与分组共用，
+  避免两处改一处漏）。`gui/templates/tasks.html`：新增「自动拓展扫描」勾选（含 ①②③ 的说明）。
+  `gui/templates/task_detail.html`：拓展域名页签补「追加为本任务子域名」按钮。
+- `cli/client.py`：新增 `--auto-expand`（与 GUI 同一套语义，同样自动补 osint / jsmine）。
+- `tests/smoke.py`：新增 `[7a]`；并把 `[5t]` 里"送去检测"的阶段断言从 `probe,dirscan,vulnscan`
+  同步改成 `subdomain,probe,dirscan,vulnscan`。
+
+**验证**
+- `py -3 tests/smoke.py` → `SMOKE PASS`（新增 `[7a]` 通过）。覆盖：存在性判定（桩解析器，成功/失败
+  分别落 `ip` 与 `ip_note=nxdomain`，**第二次调用 scanned=0 证幂等**）；目标是子域时
+  `auto_expand` 补收主域名 + `source=target` 入库、**不勾时逐条断言"不该改既有行为"**；归属追加
+  （`promote:js:mine` 新增 + 原 `js:mine` 行仍在 + 第三方 `third.example.com` 不被误加 + 重复调用幂等
+  + 子域名页显示「归属追加(JS 挖掘)」+ 拓展页默认隐藏而 `?all=1` 可见）；分组（`class="ext-group"`
+  与本组行在、另一主域名的行不在、`?group=0` 无分组块）；`auto_expand` 落选项 + 自动补阶段；
+  流水线挂钩（勾了调 `extdom.process`、不勾不调）。
+  **以上均为桩测（DNS/HTTP 全部打桩），真实网络行为未实测 —— 见下。**
+- 静态审查：`py -3 -c "import scanner.extdom, scanner.runner, gui.app"` 通过；Jinja 模板改动
+  经 `/extdomains`、`/extdomains?group=0`、`/tasks` 三个路由在冒烟里真实渲染（断言基于渲染出的 HTML）。
+- CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致。
+
+**未做 / 如实登记**
+- `base_domain()` 仍是粗切：`foo.bar.co` 一类双段后缀会切错（本轮只让它"偏保守"，未引入 PSL）。
+- ② 的存在性判定只做 **A/CNAME 解析**（`dnsq.resolve_detail`），不做 HTTP 存活探测 —— 拓展示例里
+  大量是第三方域名，"能解析"不等于"可以扫"，是否探测仍由用户勾选决定（非破坏性 + 不越权）。
+- ⑤ 分组模式下分页单位是"主域名"，`共 N 条` 显示的是主域数；域名总数另起一行标注。
+- **未做真实网络实测**（无授权目标、也不该拿别人的域名试）：DNS 解析、FOFA/Shodan 反查、
+  subdomain 阶段在真实网络上跑通与否，本轮**没有任何实测证据**，只有桩测与静态审查。
+- ④ 的归属判定只看**注册域是否命中任务目标**：目标 `pengo.pro` 下拓展出 `aaa.bbb.pengo.pro`
+  也会归进来（这是期望行为）；同项目多目标时按"命中任一目标"算。
+
 ## 2026-09-25 —— 续39：nuclei `flow:` 的**脚本子集**（循环 + `set()` + 请求）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

@@ -114,6 +114,8 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 | 用户黑名单**入库前过滤**（`scanner/blacklist.py`）而非入库打标 | 命中即不进资产库，后续阶段自然不扫；不必在每个阶段重复判"要不要跳过"，也不会被历史数据干扰 | 已入库的历史资产不受影响（需手动删任务）；`config/blacklist.txt` 为纯文本、需人工维护 |
 | 重叠资产**默认隐藏**（拓展域名域名级全局 / 站点 URL 级跨任务） | 反复扫同一目标时列表不被撑成 N 倍；默认视图是"新发现"，全量用 `?all=1` 显式打开 | 判重是"保留最早一条"，后扫到的新信息（如状态码变化）不会覆盖旧行 |
 | 批量跑子域名**新建任务**而非挂子任务 | 现有任务模型（一任务一线程 / 独立状态 / 独立停止删除）可直接复用 | 任务列表会多出一行；无法在一个树里聚合查看（收益不抵改表结构 + 任务树渲染的成本） |
+| **拓展域名的自动化走任务级选项 `auto_expand`**（续40：建任务页勾选「自动拓展扫描」/ CLI `--auto-expand`） | 自动补 `osint`/`jsmine` 阶段、拓展结束后自动做 DNS 存在性判定、把注册域属于本项目的拓展域名追加成子域名、目标是子域时补收其主域名 —— 这些都是**扩大扫描面**的行为，必须用户点名才做，不能让既有任务悄悄变样（与 `portscan_full` / `dirscan_full` 同一套语义） | 归属判定用 `utils.base_domain()` 的粗切注册域（不引公共后缀库，离线约束），双段后缀会切错但**偏保守**（少归不误归）；不勾时行为与续40 之前逐字一致 |
+| 拓展域名按**主域名分组折叠**（`/extdomains`，`?group=0` 回平铺） | 拓展出来的域名常几十上百个同属一个注册域，摊平看不出「这批是从哪个域来的」；分组只能在 Python 里做（SQL 侧没有注册域函数），故分组模式下**分页单位是主域名**（每页 20 个），否则同一主域名会被切到两页 | 分组上限 `extdom.GROUP_ROW_CAP=4000`，超了页面如实提示并建议切平铺；平铺模式仍是按行分页（走 `?size=`） |
 
 ## 数据流
 
@@ -160,7 +162,10 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 | 表 | 字段要点 | 说明 |
 |---|---|---|
 | tasks | targets, stages, options, status, progress, current_stage, log_file, error, pid, **started_at, finished_at, elapsed_seconds** | 任务状态机：pending → running → done/stopped/failed；三列运行时长字段由 `start_task_run` / `finish_task_run` 维护（续35，见上 §流水线 7） |
-| subdomains | domain, source, cname, ip, cdn, **ip_note** | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa / osint:fofa-cert / osint:fofa-title / osint:shodan / osint:quake / osint:ctlog）两类；cname 由 takeover 阶段回填，ip / cdn / ip_note 由 subdomain 阶段回填（cdn 为空即"非 CDN"；`ip_note` 是解析失败/未解析的**原因码**：nxdomain / no-a / servfail / refused / timeout / error / empty / over-limit，页面上经 `gui.app.ip_note_label` 翻成中文）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`；拓展域名页默认隐藏重叠（`db.OVERLAP_EXT_WHERE`：域名已存在于任意任务的"目标自身子域名"里） |
+| subdomains | domain, source, cname, ip, cdn, **ip_note** | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa / osint:fofa-cert / osint:fofa-title / osint:shodan / osint:quake / osint:ctlog）两类；cname 由 takeover 阶段回填，ip / cdn / ip_note 由 subdomain 阶段回填（cdn 为空即"非 CDN"；`ip_note` 是解析失败/未解析的**原因码**：nxdomain / no-a / servfail / refused / timeout / error / empty / over-limit，页面上经 `gui.app.ip_note_label` 翻成中文）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`；拓展域名页默认隐藏重叠（`db.OVERLAP_EXT_WHERE`：域名已存在于任意任务的"目标自身子域名"里）。
+续40 新增两个来源：`target`（目标是子域时把它自己也记成子域资产，仅任务级 `auto_expand` 打开时）
+与 `promote:<原来源>`（拓展域名经**归属判定**——注册域命中任务目标——后**追加**出的自身子域行，
+见 `scanner/extdom.py`；原拓展行保留不动，出处可查） |
 | sites | url, host, port, status, title, length, server, tech, favicon, shot, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定；shot 为截图相对路径（screenshot 阶段回填，默认关） |
 | ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认关闭） |
 | csegs | segment, ip, domains, count | `/24` C 段视野（osint 阶段产出，默认关闭）：每行一个 IP 与其反查到的域名（domains 截断存储、count 为截断前数量） |

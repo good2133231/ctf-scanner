@@ -20,7 +20,8 @@
 from .base import Stage
 from .. import blacklist, cdn, db, dnsq, passive, wildcard
 from ..config import resolve
-from ..utils import which, verify_tool, run_cmd, read_lines, write_lines, pool_run
+from ..utils import (base_domain, is_domain, which, verify_tool, run_cmd, read_lines,
+                     write_lines, pool_run)
 
 # 需要做泛解析复核的来源（爆破类来源已自带通配过滤，不重复查询）
 _PASSIVE_SRC = ("subfinder", "passive:")
@@ -49,6 +50,28 @@ class SubdomainStage(Stage):
         offline = ctx.options.get("offline")
         workers = int(limits.get("max_workers", 20))
         found, sources = set(), {}
+
+        # ---------- 0) 自动拓展扫描（`auto_expand`）：目标是子域时补收主域名 ----------
+        # 用户 2026-09-25 的口径：目标是 `aaa.pengo.pro` 时，子域名收集要**连它的主域名
+        # `pengo.pro` 一起收**（否则只能收到 aaa 下面再往下的名字，pengo.pro 的其他子域全漏），
+        # 而 `aaa.pengo.pro` 本身也要**当作一条子域名资产**入库并解析 —— 此前它只进
+        # `hosts.txt` 参与探测，资产表里查不到（"扫过但没记账"，报告里也看不到）。
+        # 只在任务级选项 `auto_expand` 打开时做：这是**扩大扫描面**的行为，
+        # 不能让既有任务在用户不知情的情况下变样。
+        if ctx.options.get("auto_expand") is True:
+            for d in list(domains):
+                b = base_domain(d)
+                if b and b != d and is_domain(b) and b not in seen:
+                    seen.add(b)
+                    domains.append(b)
+                    ctx.logger.info(f"[subdomain] 自动拓展：目标 {d} 是子域，补收主域名 {b}")
+            for d in domains:
+                if base_domain(d) != d and d not in found:
+                    found.add(d)
+                    sources[d] = "target"
+            if sources:
+                ctx.logger.info("[subdomain] 自动拓展：目标自带的子域按子域资产入库 "
+                                + " / ".join(sorted(n for n, s in sources.items() if s == "target")))
 
         def add_many(items):
             """items: (name, source) 可迭代；同名只记首个来源。返回新增条数。"""

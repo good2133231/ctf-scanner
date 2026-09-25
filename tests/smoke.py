@@ -2151,7 +2151,8 @@ def main():
             "task_id": str(_et), "domain": ["zz-js.test"], "next": f"/tasks/{_et}"})
         _new_id = int(_r2.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
         _new_t = db.get_task(_new_id)
-        assert _new_t["stages"] == "probe,dirscan,vulnscan", _new_t["stages"]
+        # 续40：送去检测**带上 subdomain 阶段**（用户要求"拓展域名再去检测也要去子域名扫描"）
+        assert _new_t["stages"] == "subdomain,probe,dirscan,vulnscan", _new_t["stages"]
         assert _new_t["targets"] == "zz-js.test", _new_t["targets"]
         assert f'"rescan_of": {_et}' in _new_t["options"], _new_t["options"]
         assert _re.match(r"^拓展探测-\d{4}-\d{6}$", _new_t["name"]), _new_t["name"]
@@ -6095,6 +6096,145 @@ http:
           "（条件假则零请求）/ `http()` 全跑·`http(\"id\")` 与多参按序 / 只报第一个正向命中 / "
           "`log()` 实参求值 / 13 条子集外写法装载期给原因 / 脚本路引用越界·跳过块·不存在的 id "
           "也判 unsupported / 手工 dict 兜底顺序（先布尔后脚本）/ 布尔子集语义零回归")
+
+    # (7a) 续40：拓展域名"六条" ——
+    #   ① 送去检测要带 subdomain 阶段（[5t]④ 的断言已同步改，这里不再重复）；
+    #   ② 自动**存在性判定**（纯 DNS：这个域名到底存不存在）；
+    #   ③ 目标是子域（aaa.pengo.pro）→ 自动补收主域名 pengo.pro + 该子域当子域资产解析；
+    #   ④ 归属本项目的拓展域名（pengo.pro 拓展出 aaa.pengo.pro）→ **追加**成正常子域，
+    #      来源记 `promote:<原来源>`（"分域名而来"，原拓展行保留不动）；
+    #   ⑤ 拓展域名页**按主域名分组折叠**，`?group=0` 回平铺；
+    #   ⑥ 建任务「自动拓展扫描」落成任务级选项 auto_expand，并自动补 osint / jsmine 阶段。
+    from scanner import dnsq as _dq7, extdom as _exd7
+    from scanner.stages import subdomain as _sub7
+
+    # ② 存在性判定：桩掉解析器（断言的是"回填哪些字段、是否幂等"，不是真去查 DNS）
+    _et7 = db.create_task("smoke-ext-alive", "pengo.pro", ["probe"], {})
+    db.insert_subdomains(_et7, [("alive.pengo.pro", "js:mine"),
+                                ("gone.pengo.pro", "js:mine")])
+    _orig_res7 = _dq7.resolve_detail
+    try:
+        _dq7.resolve_detail = lambda host, **kw: \
+            ([host], ["1.2.3.4"], "") if host.startswith("alive.") else ([], [], "nxdomain")
+        _r7 = _exd7.resolve_extended(_et7, settings, logger=rec)
+        assert (_r7["scanned"], _r7["alive"], _r7["dead"]) == (2, 1, 1), _r7
+        _net7 = {r["domain"]: dict(r) for r in db.list_subdomains(_et7)}
+        assert _net7["alive.pengo.pro"]["ip"] == "1.2.3.4", _net7["alive.pengo.pro"]
+        assert _net7["gone.pengo.pro"]["ip_note"] == "nxdomain", \
+            "解析失败必须落原因（页面上据此显示『域名不存在』）"
+        # 幂等：已有结论的行不再重复解析（重复调用不会白白多一轮 DNS）
+        assert _exd7.resolve_extended(_et7, settings, logger=rec)["scanned"] == 0
+    finally:
+        _dq7.resolve_detail = _orig_res7
+
+    # ③ 目标是子域 → 补收主域名 + 该子域入库解析（只在任务级 auto_expand 打开时）
+    _seen7 = []
+    _orig7 = (_sub7.which, _sub7.verify_tool, _sub7.run_cmd, _sub7.passive.collect)
+    _s7 = copy.deepcopy(settings)
+    _s7["subdomain"] = {"max_resolve": 0, "dns_timeout": 1}   # 0 = 不做真实解析（离线可跑）
+    _s7["limits"] = dict(_s7.get("limits") or {}, wildcard_filter=False)
+    _s7["dicts"]["subdomains"] = "config/dicts/does-not-exist.txt"   # 跳过字典爆破
+    _sub7.which = lambda name: None
+    _sub7.verify_tool = lambda b: True
+    _sub7.run_cmd = lambda *a, **k: (0, "", "")
+    _sub7.passive.collect = lambda d, s, logger=None, workers=6: (_seen7.append(d), {})[1]
+    try:
+        for _opt7, _want_base in (({"auto_expand": True}, True), ({}, False)):
+            _seen7.clear()
+            _t7c = db.create_task(f"smoke-expand-target-{bool(_opt7)}", "aaa.pengo.pro",
+                                  ["subdomain"], {})
+            _wd7 = Path(_TMPDIR) / f"expand7_{bool(_opt7)}"
+            _wd7.mkdir(parents=True, exist_ok=True)
+            PipelineRunner(StageContext(_t7c, "smoke-expand-target",
+                                        parse_lines(["aaa.pengo.pro"]), ["subdomain"],
+                                        dict(_opt7), _s7, _wd7, rec)).run()
+            _rows7 = {r["domain"]: r["source"] for r in db.list_subdomains(_t7c)}
+            assert "aaa.pengo.pro" in _seen7, "目标自身一定要进子域名收集"
+            if _want_base:
+                assert "pengo.pro" in _seen7, f"auto_expand 未补收主域名：{_seen7}"
+                assert _rows7.get("aaa.pengo.pro") == "target", \
+                    f"目标自带子域应按子域资产入库：{_rows7}"
+            else:
+                assert "pengo.pro" not in _seen7, f"没勾 auto_expand 不该改既有行为：{_seen7}"
+                assert "aaa.pengo.pro" not in _rows7, \
+                    f"没勾 auto_expand 不该把目标子域塞进资产表：{_rows7}"
+    finally:
+        (_sub7.which, _sub7.verify_tool, _sub7.run_cmd, _sub7.passive.collect) = _orig7
+
+    # ④ 归属追加：注册域命中任务目标的拓展域名 → 追加成自身子域（原拓展行保留）
+    _t7d = db.create_task("smoke-promote", "pengo.pro", ["probe"], {})
+    db.insert_subdomains(_t7d, [("aaa.pengo.pro", "js:mine"),
+                                ("third.example.com", "js:mine")])
+    _p7 = _exd7.promote_owned(_t7d, settings, logger=rec)
+    assert _p7["promoted"] == ["aaa.pengo.pro"], _p7
+    _rows7d = {(r["domain"], r["source"]) for r in db.list_subdomains(_t7d)}
+    assert ("aaa.pengo.pro", "promote:js:mine") in _rows7d, _rows7d
+    assert ("aaa.pengo.pro", "js:mine") in _rows7d, "原拓展行必须保留（出处可查）"
+    assert not any(d == "third.example.com" and s.startswith("promote:") for d, s in _rows7d), \
+        "非本项目的第三方域名不该被追加"
+    assert _exd7.promote_owned(_t7d, settings, logger=rec)["promoted"] == [], "重复调用应幂等"
+    # 页面上：子域名页按正常子域显示（带「归属追加」标签）；拓展页因"已作为自身子域"默认隐藏
+    assert "归属追加(JS 挖掘)" in c.get("/subdomains").get_data(as_text=True)
+    assert "aaa.pengo.pro" in c.get("/subdomains").get_data(as_text=True)
+    assert "aaa.pengo.pro" not in c.get("/extdomains").get_data(as_text=True), \
+        "已归属本项目的拓展域名不该再占拓展页"
+    assert "aaa.pengo.pro" in c.get("/extdomains?all=1").get_data(as_text=True)
+    # 手动「追加」端点（跨任务视图按域名反查所属任务）
+    _r7p = c.post("/api/domains/promote", data={"domain": ["aaa.pengo.pro"],
+                                                "next": "/extdomains"})
+    assert _r7p.status_code == 302 and _r7p.headers["Location"] == "/extdomains", _r7p.headers
+
+    # ⑤ 拓展域名页按主域名分组折叠（?group=0 回平铺）
+    _t7g = db.create_task("smoke-ext-group", "zzgrp7.test", ["probe"], {})
+    db.insert_subdomains(_t7g, [("g1a.zzgrp7.test", "js:mine"),
+                                ("g1b.zzgrp7.test", "js:mine"),
+                                ("g2a.yygrp7.test", "osint:cseg")])
+    _gh = c.get("/extdomains?q=zzgrp7").get_data(as_text=True)
+    assert 'class="ext-group"' in _gh and "zzgrp7.test" in _gh, "分组视图缺主域名分组块"
+    assert "g1a.zzgrp7.test" in _gh and "g1b.zzgrp7.test" in _gh, "分组里的行没渲染"
+    assert "g2a.yygrp7.test" not in _gh, "另一个主域名的行不该混进同一组"
+    _gf = c.get("/extdomains?q=zzgrp7&group=0").get_data(as_text=True)
+    assert 'class="ext-group"' not in _gf and "g1a.zzgrp7.test" in _gf, "平铺模式失效"
+
+    # ⑥ 建任务「自动拓展扫描」：落任务级 auto_expand + 自动补 osint / jsmine 阶段
+    _orig_run7 = _gui.run_task
+    try:
+        _gui.run_task = lambda *a, **kw: None
+        _j7 = c.post("/api/tasks", data={"name": "smoke-auto-expand", "targets": "pengo.pro",
+                                         "stages": ["subdomain", "probe"],
+                                         "auto_expand": "1"}).get_json()
+        assert '"auto_expand": true' in db.get_task(_j7["id"])["options"], "未落成任务级选项"
+        _st7 = set(db.get_task(_j7["id"])["stages"].split(","))
+        assert _st7 >= {"subdomain", "probe", "osint", "jsmine"}, _st7
+        assert set(_j7["auto_stages"]) >= {"osint", "jsmine"}, _j7
+        _j7b = c.post("/api/tasks", data={"name": "smoke-no-expand", "targets": "pengo.pro",
+                                          "stages": ["subdomain"]}).get_json()
+        assert "auto_expand" not in (db.get_task(_j7b["id"])["options"] or ""), \
+            "没勾就不该凭空多出选项（既有行为不变）"
+    finally:
+        _gui.run_task = _orig_run7
+
+    # ⑥b 流水线挂钩：auto_expand 时在**最后一个**拓展阶段后自动做后处理（不勾则不做）
+    _calls7 = []
+    _orig_proc7 = _exd7.process
+    try:
+        _exd7.process = lambda *a, **kw: _calls7.append(a[0] if a else None)
+        for _opt7b, _want in (({"auto_expand": True}, True), ({}, False)):
+            _calls7.clear()
+            _t7e = db.create_task(f"smoke-hook-{bool(_opt7b)}", "pengo.pro", ["jsmine"], {})
+            PipelineRunner(StageContext(_t7e, "smoke-hook", parse_lines(["pengo.pro"]),
+                                        ["jsmine"], dict(_opt7b), _s7,
+                                        Path(_TMPDIR) / f"hook7_{bool(_opt7b)}", rec)).run()
+            assert bool(_calls7) is _want, (_opt7b, _calls7)
+            if _want:
+                assert _calls7 == [_t7e], _calls7
+    finally:
+        _exd7.process = _orig_proc7
+
+    print("[7a] 续40 拓展域名六条 ok: 存在性判定(幂等·失败落原因)/目标是子域→补收主域名+"
+          "当子域入库/归属本项目→追加 promote:<原来源>（原行保留·第三方不误加·子域页显示·"
+          "拓展页默认隐藏）/按主域名分组折叠(?group=0 平铺)/建任务 auto_expand 补 osint·jsmine/"
+          "流水线在最后拓展阶段后自动后处理（不勾则不动）")
 
 print("SMOKE PASS")
 

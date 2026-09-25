@@ -26,7 +26,8 @@ from flask import (Flask, Response, abort, jsonify, redirect, send_file,
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import auth as taskauth, blacklist, cdn, certs as certs_mod, db, dnsq, screenshot
+from scanner import (auth as taskauth, blacklist, cdn, certs as certs_mod, db, dnsq, extdom,
+                     screenshot)
 from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
@@ -93,6 +94,8 @@ SOURCE_LABELS = {
     "osint:shodan": "Shodan·ICO 反查",
     "osint:quake": "Quake·ICO 反查",
     "osint:ctlog": "CT 日志(crt.sh)",
+    # 自动拓展扫描（`auto_expand`）：目标是子域时，把它自己也记成一条子域名资产
+    "target": "目标自带子域",
 }
 
 
@@ -105,6 +108,10 @@ def source_label(source):
         return SOURCE_LABELS[text]
     if text.startswith("passive:"):
         return f"被动({text.split(':', 1)[1]})"
+    # 归属追加（`scanner/extdom.py`）：`promote:<原来源>` —— 说明这条**原本是拓展域名**，
+    # 因为注册域命中任务目标而被追加成自身子域名（"分域名而来"的出处一眼可查）。
+    if text.startswith(extdom.PROMOTE_PREFIX):
+        return "归属追加(" + source_label(text[len(extdom.PROMOTE_PREFIX):]) + ")"
     return text
 
 
@@ -438,6 +445,19 @@ def create_app():
         if str(data.get("recursive_dir", "")).lower() in ("1", "true", "on"):
             options["recursive_dir"] = True
             options["dirscan_full"] = True
+        # 「自动拓展扫描」（`auto_expand`，2026-09-25）：勾了就默认把拓展扫描做全 ——
+        # ① 自动补 `osint` / `jsmine` 两个拓展阶段（只勾了「自动拓展」却没勾阶段 = 白勾，
+        #    与上面对全量档的处理同一套"勾了就要生效"的口径）；
+        # ② 流水线在拓展阶段结束后自动做**存在性判定**（DNS，判断域名存不存在）与
+        #    **归属追加**（`pengo.pro` 拓展出 `aaa.pengo.pro` → 按正常子域对待）；
+        # ③ 目标是子域（如 `aaa.pengo.pro`）时自动补收它的主域名 `pengo.pro`。
+        # 全部只在本次任务生效（任务级选项），**不改全局策略、不改既有任务的默认行为**。
+        if str(data.get("auto_expand", "")).lower() in ("1", "true", "on"):
+            options["auto_expand"] = True
+            for stage in ("osint", "jsmine"):
+                if stage not in stages:
+                    stages.append(stage)
+                    auto_stages.append(stage)
         for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan")):
             # 判据是**生效选项**（options）或表单字段 —— 上面「目录递归」会直接把
             # `dirscan_full` 写进 options，而表单里并没有这个字段名；只看表单会漏掉它，
@@ -1064,6 +1084,9 @@ def create_app():
     EXT_SRC_ORDER = "CASE source " + " ".join(
         f"WHEN '{s}' THEN {i}" for i, (_k, _l, s, _n) in enumerate(EXT_SRC_TAGS)
     ) + " ELSE 99 END, id DESC"
+    # 分组模式下**每页多少个主域名**：分页单位是"组"，一页 20 个主域名足够扫一眼来源分布，
+    # 再多就要滚很久（平铺模式下分页单位仍是行，走 `?size=`）。
+    EXT_GROUPS_PER_PAGE = 20
 
     @app.route("/extdomains")
     @login_required
@@ -1074,6 +1097,11 @@ def create_app():
         用户要求"不要夹在一起"；`?src=` 只显示某一类。
         **默认隐藏重叠资产**：某域名若已经作为"目标自身子域名"存在过（任意任务），
         说明它早就在资产清单里，这里再列一遍纯属重复；`?all=1` 可显示全部。
+
+        **默认按主域名（注册域）分组折叠**（用户 2026-09-25：「分域名而来」）：拓展出来的
+        域名往往几十上百个同属一个主域名，摊平成一张长表看不出"这批是从哪个域来的"。
+        分组必须按**组**分页才能不把同一个主域名切到两页上，所以分组模式下分页的
+        单位是"主域名"而不是"行"。`?group=0` 回到原来的平铺表。
         """
         src = (request.args.get("src") or "").strip().lower()
         picked = next((t for t in EXT_SRC_TAGS if t[0] == src), None)
@@ -1083,20 +1111,48 @@ def create_app():
         scan_name = picked[3] if picked else "拓展域名"
         tag, where, params = _cdn_tag()
         show_all = _overlap_args()
-        rows, pager, q = _asset_page(
-            "subdomains", "/extdomains",
-            extra_where=_and_where(db.EXT_SUBDOMAIN_WHERE, where, src_where,
-                                   None if show_all else db.OVERLAP_EXT_WHERE),
-            extra_params=params, order=EXT_SRC_ORDER)
-        if tag:
-            pager["qs"] += f"&tag={tag}"
-        if src:
-            pager["qs"] += f"&src={src}"
+        page, size, q = _page_args()
+        grouped = request.args.get("group", "1") != "0"
+        ext_where = _and_where(db.EXT_SUBDOMAIN_WHERE, where, src_where,
+                               None if show_all else db.OVERLAP_EXT_WHERE)
+        # 分组模式下 `size` 的含义变成"每页多少个主域名"：翻页链接与分页条必须同一个口径，
+        # 否则链接里会出现两个 `size=`（Flask 取第一个，页面显示的却是第二个）。
+        if grouped:
+            size = EXT_GROUPS_PER_PAGE
+        qs = f"&q={quote(q)}&size={size}" if q else f"&size={size}"
+        for flag, value in (("tag", tag), ("src", src)):
+            if value:
+                qs += f"&{flag}={value}"
         if show_all:
-            pager["qs"] += "&all=1"
-        return render_template("extdomains.html", subs=rows, pager=pager, q=q, tag=tag,
+            qs += "&all=1"
+        if not grouped:
+            qs += "&group=0"
+        row_total, groups = 0, []
+        if grouped:
+            # 分组在 Python 里做（SQL 侧没有"注册域"函数），因此按上限取整批匹配行；
+            # 上限之外的行不参与分组，页面会如实提示（见模板里的 `capped` 提示）。
+            rows, row_total = db.page_assets("subdomains", limit=extdom.GROUP_ROW_CAP,
+                                             offset=0, q=q or None, extra_where=ext_where,
+                                             extra_params=params, order=EXT_SRC_ORDER)
+            all_groups = extdom.group_by_base([dict(r) for r in rows])
+            pages = max(1, (len(all_groups) + EXT_GROUPS_PER_PAGE - 1) // EXT_GROUPS_PER_PAGE)
+            if page > pages:      # 页码越界（例如过滤后组数变少）→ 回落到最后一页
+                page = pages
+            groups = all_groups[(page - 1) * EXT_GROUPS_PER_PAGE: page * EXT_GROUPS_PER_PAGE]
+            pager = {"page": page, "size": EXT_GROUPS_PER_PAGE, "total": len(all_groups),
+                     "pages": pages, "base": "/extdomains", "qs": qs}
+            subs = []
+        else:
+            subs, pager, q = _asset_page(
+                "subdomains", "/extdomains", extra_where=ext_where,
+                extra_params=params, order=EXT_SRC_ORDER)
+            pager["qs"] = qs
+            row_total = pager["total"]
+        return render_template("extdomains.html", subs=subs, groups=groups, grouped=grouped,
+                               row_total=row_total, pager=pager, q=q, tag=tag,
                                show_all=show_all, secrets=_secret_counts(),
-                               src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name)
+                               src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name,
+                               row_cap=extdom.GROUP_ROW_CAP)
 
     @app.route("/sites")
     @login_required
@@ -1332,12 +1388,19 @@ def create_app():
     @app.route("/api/domains/scan-ext", methods=["POST"])
     @login_required
     def api_scan_ext():
-        """把勾选的**拓展域名**送去真正检测：新建一个跑 `probe → dirscan → vulnscan` 的任务。
+        """把勾选的**拓展域名**送去真正检测：新建一个跑 `subdomain → probe → dirscan → vulnscan` 的任务。
 
         为什么需要（用户 2026-09-23：「我根据你这些域名都没有检测」）：拓展域名只入
         `subdomains` 表，而 probe / dirscan / vulnscan 的输入是**存活站点**（`sites`）——
         偏偏 osint 与 jsmine 两个阶段排在 probe **之后**，同一任务里它们新挖出来的域名
         赶不上本轮的存活探测，于是这些域名永远停在"有域名、无站点、无检测"的状态。
+
+        **`subdomain` 阶段为什么也在里面**（用户 2026-09-25：「拓展域名如果再去检测也
+        需要去子域名扫描」）：只探 `aaa.pengo.pro` 一个点是远远不够的，它下面往往还挂着
+        `api.aaa.pengo.pro` 一类的资产。放在最前面是因为后续阶段的输入来自它的产出
+        （`domains_for_probe` 含目标自身），这样子域也能一起进存活探测。
+        代价是**多一轮被动收集 + DNS 字典爆破**（两者都是只读的 DNS / 公开接口查询，
+        非破坏性），因此只对**用户明确勾选**的域名执行，不做全自动。
 
         为什么必须手动勾选而不是自动全跑：拓展域名里大量是第三方噪声
         （CDN、开源库站点、JS 命名空间碎片），全跑既越权又浪费请求额度。
@@ -1347,7 +1410,7 @@ def create_app():
         fallback = _safe_next(request.form.get("next"), url_for("tasks"))
         if not domains:
             return redirect(fallback)
-        stages = ["probe", "dirscan", "vulnscan"]
+        stages = ["subdomain", "probe", "dirscan", "vulnscan"]
         options = {}
         from_task = (request.form.get("task_id") or "").strip()
         if from_task.isdigit():          # 只收任务号，避免把任意文本写进任务选项
@@ -1364,8 +1427,36 @@ def create_app():
         task_id = db.create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
         logger.info(f"[gui] 拓展域名探测任务 #{task_id} 已创建"
-                    f"（{len(domains)} 个域名，probe→dirscan→vulnscan）")
+                    f"（{len(domains)} 个域名，subdomain→probe→dirscan→vulnscan）")
         return redirect(url_for("task_detail", task_id=task_id))
+
+    @app.route("/api/domains/promote", methods=["POST"])
+    @login_required
+    def api_promote_domains():
+        """把勾选的**拓展域名**里"归属本项目"的那些**追加**为子域名（分域名而来）。
+
+        判据（见 `scanner/extdom.promote_domains`）：域名的注册域命中**它所在任务**的目标
+        注册域 —— 例如目标是 `pengo.pro`，JS 里挖出 `aaa.pengo.pro`（此前没发现），
+        那它就是本项目的资产，不该一直躺在"拓展域名"里当第三方噪声。
+
+        实现上是**新增一行** `source=promote:<原来源>`（原拓展行保留）：
+        - 新行以 `promote:` 开头 → 属于"自身子域名"，于是「子域名资产」页按正常子域对待；
+        - 原拓展行还在，但因为"该域名已作为自身子域名存在"，被 `db.OVERLAP_EXT_WHERE`
+          默认隐藏（`?all=1` 仍可看）—— 既不重复占位，出处也永远可查。
+
+        跨任务视图里勾选框只有域名，所以按域名反查它出现在哪些任务的拓展域名里，
+        再逐个任务判定归属（同一个域名在两个任务里的归属结论可以不同）。
+        """
+        back = _safe_next(request.form.get("next"), url_for("extdomains"))
+        domains = _picked_domains()
+        if not domains:
+            return redirect(back)
+        task_id = (request.form.get("task_id") or "").strip()
+        res = extdom.promote_domains(domains, settings, logger=logger,
+                                     task_id=int(task_id) if task_id.isdigit() else None)
+        logger.info(f"[gui] 归属追加：勾选 {len(domains)} 个 → 追加 {len(res['promoted'])} 个"
+                    f"（任务 {res['tasks'] or '无'}）")
+        return redirect(back)
 
     @app.route("/api/rescan", methods=["POST"])
     @login_required

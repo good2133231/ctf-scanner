@@ -173,6 +173,10 @@ def main():
     ap.add_argument("--recursive-dir", action="store_true",
                     help="本次任务开启**目录递归**：对命中的目录再往下打一层（等价 GUI 任务选项 "
                          "recursive_dir + dirscan_full；额度见策略 dirscan.recursive_*）")
+    ap.add_argument("--auto-expand", action="store_true",
+                    help="本次任务开启**自动拓展扫描**（等价 GUI 任务选项 auto_expand）："
+                         "自动补 osint/jsmine 阶段、拓展结束后自动做 DNS 存在性判定、"
+                         "把注册域属于本项目的拓展域名追加成子域名；目标是子域时自动补收其主域名")
     ap.add_argument("--report", metavar="PATH", help="结束后生成 Markdown 报告到指定路径")
     ap.add_argument("--report-html", metavar="PATH", help="结束后生成 HTML 报告（自包含单文件）")
     ap.add_argument("--report-pdf", metavar="PATH",
@@ -257,6 +261,13 @@ def main():
     if args.recursive_dir:
         options["recursive_dir"] = True
         options["dirscan_full"] = True
+    # 自动拓展扫描（与 GUI 建任务的「自动拓展扫描」同一套语义）：勾了就等于点名要拓展，
+    # 所以这里同样把 osint / jsmine 两个阶段补进 -p（否则选项生效却没有阶段去挖）。
+    if args.auto_expand:
+        options["auto_expand"] = True
+        for st in ("osint", "jsmine"):
+            if st not in stages:
+                stages.append(st)
     # 与 GUI 建任务一致：选了全量档却没把对应阶段写进 -p 时**自动补上**（否则勾了等于白勾）。
     # `run_task` 按给定顺序执行、不排序，所以要按 STAGE_ORDER 归位。
     for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan")):
