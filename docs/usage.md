@@ -223,8 +223,9 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    （来源分内置 / 导入（参考项目转换）/ nuclei / 用户），并有「来源」列与「只看已启用」筛选；
    **另有一列「置信度」**（high/medium/low，由来源分 × 是否含内容型匹配器推导，只降级不升级），
    可按置信度层**批量启停** —— 低置信（如参考项目导入的那批）默认就是"排在后面、可一键关掉"；
-   语法错误的 POC 会标 `error`；`raw`/`flow`/`workflows` 已支持**核心子集**（见 docs/poc-guide.md），
-   超出子集的部分（flow 的 JS/循环、workflow 的 `matchers:`/`args:`）会标
+   语法错误的 POC 会标 `error`；`raw`/`flow`（布尔子集 + **脚本子集**）/`workflows` 已支持**核心子集**
+   （见 docs/poc-guide.md），超出子集的部分（flow 里**真正的 JS 语义**——方法调用/闭包/异常/除 `+`
+   外的算术/`while`/`new`，workflow 的 `matchers:`/`args:`）会标
    `unsupported`（或写进 `_note`）并显示原因，**不静默失效**。**路径列展示相对项目根的路径**（如 `config/pocs-user/x.yaml`），
    不暴露本机绝对目录；
 10. **策略配置**：由 **9 个可折叠面板**组成（以 `gui/templates/settings.html` 的

@@ -1219,3 +1219,33 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        当前结果结构里没有这一层，属独立切片）；workflow **真正的"传变量"机制**（nuclei 靠**命名 extractor**
        写进共享执行上下文 `ctx.Input.Set`，本引擎的 extractor 结果只挂在本模板的 evid 上，没有跨模板
        上下文）；oob 反连（需用户提供回调域名）；flow 的 JS/循环。**块级/顶层** `dsl` 仍按不支持处理。
+=== 续39（2026-09-25）：nuclei flow 的**脚本子集**（循环 + set() + 请求） ===
+[完成] 1、补待办：flow 只支持布尔子集是续17 的遗留（官方模板最常见的是"循环 + set + 请求"）。
+       先查准 nuclei 真语义再动手：flow 实际在 `pkg/tmplexec/flow/`（**不在** `protocols/common/flow`），
+       `http(N)` 是 1-based、`http()` 按模板顺序跑全部块、`iterate()` 把参数扁平化成数组、`template` 是**对象**。
+[完成] 2、实现：`scanner/pocs/engine.py` 新增 `_FlowJsParser` / `_flow_js_parse` / `_flow_js_iters` /
+       `_flow_js_steps` / `_run_flow_script` / `_js_eq` / `_js_cmp`（+ `_FLOW_MAX_STEPS=200`、
+       `_FLOW_JS_REJECT` 点名清单）；`load_poc_file` 的 flow 分支改为**先布尔后脚本**、两个原因都写进
+       `_error`；`run_poc_on_target` 新增脚本路（`_run_refs` 不缓存 + 只报第一个正向命中）；
+       抽出 `_bad_refs` 供两条路共用；修 `_for_of` 少吞 `for` 自身右括号的 bug。
+[说明] 3、为什么这么写（逐条对着 nuclei 源码，不自创）：
+       - 装载期把能判的全判掉（未声明变量 / 引用越界 / 循环不终止 / 静态语句数上界），运行期只按 AST
+         解释执行 —— 与 `dsl` 子集同一条红线：**绝不把模板变成可执行代码**，也绝不"运行期静默不命中"；
+       - 刻意不做"跑到一半掐断"这种运行期兜底，那会**静默半执行**；
+       - 运行期兜底必须**尊重装载期判定**（先布尔后脚本）：布尔源串 `http(1) && http(2)` 本身也能被
+         脚本解析器解析成"一条表达式语句"，顺序错了就会把布尔路抢成脚本路 → 语义漂移（自查时发现并修掉）。
+[完成] 4、验证：`tests/smoke.py` 新增 `[6z]`（循环**每轮重发** / `for...of iterate(...)` 与 C 式 `for` /
+       `template["k"]` 读值 + `if` 门控零请求 / `http()` 全跑与多参按序 / 只报第一个正向命中 /
+       `log()` 实参求值 / 13 条子集外写法装载期给原因 / 脚本路引用越界·被跳过块·不存在的 id /
+       手工 dict 兜底顺序 / 布尔子集**零回归**）→ 全量 `py -3 tests/smoke.py` → `SMOKE PASS`。
+[完成] 5、变异证伪 **5/5 被击杀**并全部还原：① 脚本路 `_run_refs` 加缓存 → `[6z]①` 挂；
+       ② `_flow_js_iters` 方向判断改坏 → `[6z]②` 的 `_status == "ok"` 挂；③ `_bad_refs` 去掉
+       `ok_idx` 检查 → `[5x]` 的 `_m_skip` 挂；④ 运行期 while 的 `<` 与 `<=` 互换 → `[6z]②`
+       请求序列变成 `/u0..u3` 挂；⑤ 去掉 `hits[:1]` → `[6z]④` 挂。
+[完成] 6、CRLF 两口径自查逐文件一致 + 文档同步：`docs/poc-guide.md`（flow 小节重写为布尔/脚本两段 +
+       YAML 示例 + 与 nuclei 的差异）、`docs/roadmap.md`、`docs/usage.md`、`AGENTS.md`（`[5x]` 口径、
+       新增 `[6z]`、POC 引擎能力段）、`CHANGELOG_AI.md`（续39）、`TODO.md`、`todo.txt`。
+[未做] 7、仍缺：extractor 结果**回填** `template`（nuclei 靠它把前一个请求的提取值喂给后一个 ——
+       同时是 workflow"命名 extractor + 共享执行上下文"的缺口）；空 matchers 块我们判假、nuclei
+       隐式真的差异（已写进 poc-guide）；oob 反连（需用户提供回调域名）；flow 里**真正的 JS 语义**
+       （方法调用 / 闭包 / 异常 / 除 `+` 外的算术 / `while` / `new`）。**块级 / 顶层** `dsl` 仍按不支持处理。

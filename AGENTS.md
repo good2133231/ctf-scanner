@@ -327,7 +327,8 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   GUI 400 + 补扫继承 + 页面只显掩码不回显明文；POC raw 解析与破坏性方法拒绝、
                             #   flow 布尔子集（短路/纯否定不报/越界与被跳过块引用标 unsupported）、
                             #   workflows 子模板与自环保护、**块级** dsl 仍显式 unsupported；续38 起
-                            #   `subtemplates`/`tags:` 条件编排由 `[6y]` 单独覆盖）
+                            #   `subtemplates`/`tags:` 条件编排由 `[6y]` 单独覆盖，续39 起 flow 的
+                            #   **脚本子集**由 `[6z]` 单独覆盖）
                             # 2026-09-23 续18 新增 `[5y]`（批次 4 五项）：
                             #   XSS 上下文判定表（8 上下文 / 探针定界符存活 / 全转义不报 + poc_id 不变）
                             #   + A10 SSRF 受控回连（默认关零请求 / 本机监听自证 / 外部回调不谎报 /
@@ -439,6 +440,26 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   ⑧ `matchers:` / `args:`（**不是 nuclei 字段**）/ 裸 `subtemplates:` 子项跳过
                             #   并把原因写进 `_note`，全跳过则整份 `unsupported`；⑨ 带 subtemplates 的自环
                             #   被 `seen` 去重挡住（子模板只跑一次）。
+                            # 2026-09-25 续39 新增 `[6z]`：**nuclei flow 的脚本子集**（语义对着 nuclei
+                            #   源码 `pkg/tmplexec/flow/{flow_executor,flow_internal,vm}.go` 写 —— 注意 flow
+                            #   实际不在 `pkg/protocols/common/flow/`；`http(N)` 是 1-based、`http()` 跑该协议
+                            #   全部块、`iterate(...)` 扁平化成数组、`template` 是**对象**）——
+                            #   ① `for...of iterate(...)` + `set()` + `http(1)`：钉 `_hits17` 路径序列，
+                            #   证明循环**每轮真的重发**（脚本路的 `http(...)` 不缓存；缓存会把循环抹掉）；
+                            #   ② C 式 `for`：`_flow_js_iters` 的静态轮次必须与运行期 while 条件同口径
+                            #   （只改一处 → 请求数会多/少一轮）；
+                            #   ③ `template["k"]` 读值 + `if` 门控：条件假 → **零请求**；
+                            #   ④ `http()` 全跑（模板顺序）/ `http("id")` 与多参按**传入顺序**；
+                            #   ⑤ 脚本没有整体真值 → 只报**第一个**正向命中（`hits[:1]`）；
+                            #   ⑥ `log(...)` 实参先求值（其内请求照跑）、本引擎不打印；
+                            #   ⑦ 13 条子集外写法**装载期**给原因（`while`/`Math`/`dns()`/未声明变量/
+                            #   动态键/非字面量序号/`*`/`for...of [..]`/不终止的 `for`/超
+                            #   `_FLOW_MAX_STEPS`/`eval`/未知函数/多余 `}`）；脚本路引用越界·被跳过块·
+                            #   不存在的 id 同样判 `unsupported`（与布尔路**共用** `_bad_refs`）；
+                            #   ⑧ 手工构造的 poc dict 走运行期兜底时，顺序必须**先布尔后脚本** ——
+                            #   顺序错了会把 `http(1) && http(2)` 当脚本跑成一命中就报（语义漂移）；
+                            #   ⑨ 布尔子集**零回归**：`_flow_script` 不得出现在布尔 flow 上、`||` 仍短路、
+                            #   纯否定仍不报。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -538,8 +559,20 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   `subtemplates:`（**父步骤命中才跑**；带 subtemplates 的步骤父模板只当开关、父结果不报）、
   深度上限 3 + 同模板单次执行只跑一次 + 单步展开上限 `_WORKFLOW_MAX_SUBS`=40（vulnscan 通过
   `registry=` 复用已加载的候选集，不再每站点重读 POC 目录）。
+  **flow 的脚本子集自 2026-09-25 续39 起支持**（nuclei 那条"循环 + `set()` + 请求"的主干）：
+  `scanner/pocs/engine.py` 的 `_FlowJsParser` 在**装载期**把脚本解析成 AST 并做静态校验
+  （未声明变量、引用越界、循环是否终止、静态语句数上限 `_FLOW_MAX_STEPS`=200），运行期只按 AST
+  解释执行 —— 与 `dsl` 同一条红线：**绝不把模板变成可执行代码**，也绝不"运行期静默不命中"。
+  支持 `let/const/var`、`if/else`、`for...of iterate(...)`、C 式 `for`、`template["k"]`、
+  `set()`（写模板上下文 → 后续请求的 `{{name}}`）、`log()`（实参先求值、不打印）、
+  `http(N)`（1-based）/ `http("id")` / `http()`（该协议全部块）/ `http(1, 2)`（按传入顺序）。
+  两条路**并存且顺序固定：先布尔、后脚本**（装载期与运行期兜底同一顺序 —— 布尔源串本身也能被
+  脚本解析器解析成一条表达式语句，顺序错了就会语义漂移）；脚本路的 `http(...)` **不缓存**。
+  与 nuclei 的已知差异：无 matchers 的块我们判假（nuclei 隐式真）、extractor 结果不回填 `template`、
+  不做类型转换/方法调用/闭包/异常。
   仍不支持的是**块级/顶层** `dsl`、oob 反连、
-  flow 的 JS/循环/带参数引用、workflow 的 `matchers:`（按匹配器名分支）与 `args:`（**nuclei 的
+  flow 里**超出脚本子集**的真正 JS 语义（方法调用/闭包/异常/除 `+` 外的算术/`while`/`new`/
+  带参数引用）、workflow 的 `matchers:`（按匹配器名分支）与 `args:`（**nuclei 的
   workflow 没有这个字段**），它们会被标 `_status=unsupported`
   （或写进 `_note`）并在 POC 管理页显示原因（不静默失效）；`dsl` 越界同样在**装载期**就被标掉。
 - **凭据红线（2026-09-23 续17）**：登录态（`scanner/auth.py` 的任务级请求头）**只发目标侧**，

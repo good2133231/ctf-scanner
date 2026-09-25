@@ -3,6 +3,65 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续39：nuclei `flow:` 的**脚本子集**（循环 + `set()` + 请求）
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+**背景**：续17 的 flow 只支持布尔子集（`http(1) && http(2)`），而 nuclei 的 `flow:` 本是一段 **JS**，
+官方模板里最常见的是"循环 + `set()` + 请求"（多步登录、按用户/路径轮询）。本轮补这条主干，
+范围经与用户确认（AskUserQuestion 选「flow 的 JS 子集（推荐）」）。
+
+**前置调研（先查准 nuclei 真实语义，不自创）**：读 nuclei 源码
+`pkg/tmplexec/flow/flow_executor.go` / `flow_internal.go` / `vm.go`（**flow 实际在 `pkg/tmplexec/flow/`，
+不在 `pkg/protocols/common/flow/`**）、`pkg/tmplexec/exec.go`（语法校验入口）、
+`pkg/js/compiler/compiler.go`（goja fork，`SourceAutoMode` 非 strict）、
+`pkg/protocols/common/protocolstate/js.go`（沙箱只把全局 `eval` 覆盖成字符串 `"undefined"`）、
+`pkg/protocols/javascript/js.go`（顶层 `javascript:` 协议块是**另一个机制**，与 flow 无关）。
+**硬事实**：`http(N)` 是 **1-based**（`counter++ // start index from 1`）、也支持字符串 id、
+**无参 = 按模板顺序跑该协议全部块**、多参按传入顺序（README 里的 `http(0)` 是过时文档，代码里 0 号报
+invalid id）；协议调用返回 **bool**（有 matcher 取 `Matched`；**无 operators 的块隐式 true**）；
+宿主函数全集 = `log` / `iterate`（把参数**扁平化成数组**，不是"遍历请求块"）+ 每次执行注册又删除的
+`set`（写 template ctx）+ 按模板实际存在的协议块动态生成同名函数；**没有 `get`、没有 `wait`**；
+`template` 是**对象不是函数**（这个仓库的 publish-* workflow 就是靠它共享 ctx）。查不到的项
+（goja fork 内部加固、`Function` 构造器是否被阻断）如实标 not found，不猜。
+
+**改了什么**（全部在 `scanner/pocs/engine.py`）
+- 模块 docstring 的"刻意不做"从"flow 里的 JS"改为**真正的 JS 语义**（方法调用/闭包/异常/除 `+`
+  外的算术/类型转换），并新增一整段说明脚本子集的口径与**与 nuclei 的已知差异**。
+- 抽出 `_bad_refs(refs, blocks, ok_idx, str_as_call=True)`：布尔子集与脚本子集**共用同一处**引用
+  可解析性判定（`http(N)` 按**原始块下标**判 `1<=N<=len(blocks) and (N-1) in ok_idx`），
+  `_flow_bad_refs` 变薄包装（行为一字未变）。
+- 新增脚本子集整块（`_FLOW_MAX_STEPS=200` / `_FLOW_JS_REJECT` 点名清单 / `_flow_js_tokens` /
+  `_flow_js_iters` / `_flow_js_steps` / `class _FlowJsParser` / `_flow_js_parse` / `_js_eq` /
+  `_js_cmp` / `_run_flow_script`）：**装载期**把脚本解析成 AST 并做静态校验（未声明变量、引用越界、
+  循环是否终止、静态语句数上界），**运行期只按 AST 解释执行**。刻意不做"跑到一半掐断"的运行期兜底
+  —— 那会**静默半执行**，与「绝不静默失效」冲突；因此循环次数与语句数都在装载期算清。
+- `load_poc_file` 的 flow 分支：**先布尔、再脚本**，两条都过不了才判 `unsupported`，
+  `_error` 里把两个原因都写上（用户能一眼看出是"写错了"还是"用了子集外的写法"）。
+- `run_poc_on_target`：新增脚本执行路径（`_run_refs`：`refs=None` → 全部块按模板顺序；
+  否则按传入顺序解析序号/id；**不缓存**——循环里每轮配不同的 `set()` 值重发才有意义），
+  报**第一个**正向命中（脚本没有"整体真值"）。运行期兜底**尊重装载期判定**：
+  `tree, prog = poc.get("_flow"), poc.get("_flow_script")`，两个都空（手工构造的 poc dict）才
+  按"先布尔后脚本"兜底 —— 修掉了一处自查发现的**严重隐患**：初版写成"没有 `_flow` 就试脚本"，
+  而布尔源串 `http(1) && http(2)` 本身也能被脚本解析器解析成"一条表达式语句"，于是运行期会被抢到
+  脚本路，导致「只 http(1) 命中时布尔路不报、脚本路却报」的**语义漂移**。
+- 修 `_for_of` 少吞 `for` 自身右括号的真实 bug（`for (const u of iterate("a","b")) { ... }` 会报
+  "缺少 `{`（实际是 `)`）"）。
+
+**验证**
+- `py -3 tests/smoke.py` → `SMOKE PASS`（新增 `[6z]` 通过；`[5x]` 的布尔 flow 断言全部原样通过）。
+- 变异证伪 **5/5 被击杀**（均为"语义正确、逻辑改坏"）：① 脚本路 `_run_refs` 加缓存（循环失效）→
+  `[6z]①` 挂；② `_flow_js_iters` 的方向判断改坏（`i < 3` 配 `i++` 被判不终止）→ `[6z]②`
+  `_status == "ok"` 挂；③ `_bad_refs` 去掉 `ok_idx` 检查（引用了被跳过的块也放行）→
+  `[5x]` 的 `_m_skip` 挂；④ 运行期 while 条件把 `<` 与 `<=` 互换（静态轮次与运行期不同口径）→
+  `[6z]②` 请求序列变成 `/u0..u3` 挂；⑤ 脚本路去掉 `hits[:1]`（一个 POC 报多条）→ `[6z]④` 挂。
+  五处均已还原。
+- CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致。
+
+**未做/如实登记**：`extractor` 结果**不回填** `template`（nuclei 靠它把前一个请求的提取值喂给后一个，
+即 workflow 的"命名 extractor + 共享执行上下文"缺口仍在）；无 matchers 的请求块本引擎判**假**
+（nuclei 隐式真）——这两条已写进 `docs/poc-guide.md` 的"与 nuclei 的差异"；`oob` 反连需用户提供
+回调域名，仍不做。
+
 ## 2026-09-25 —— 续38：nuclei workflow **条件编排**（`subtemplates` / `tags` / 目录引用）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

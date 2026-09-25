@@ -5839,6 +5839,263 @@ workflows:
           "/ `tags` 优先于 `template` / 目录展开 / 单步 40 个上限 / `matchers:`·`args:`·裸 "
           "`subtemplates:` 跳过并写明原因（全跳过则整份 unsupported）/ 自环去重")
 
+    # [6z] 续39：nuclei `flow:` 的**脚本子集**（循环 + `set()` + 请求 → 多轮/多步编排）。
+    # 语义对着 nuclei 源码写（`pkg/tmplexec/flow/{flow_executor,flow_internal,vm}.go`）：
+    #   - `http(N)` 是 **1-based**；`http()` = 按模板顺序跑该协议**全部块**；多参按传入顺序；
+    #   - `set(name, value)` 写模板上下文 → 后续请求里的 `{{name}}`；
+    #   - `iterate(...)` 把参数扁平化成数组（**不是**"遍历请求块"）；
+    #   - `template` 是**对象**不是函数，读值是 `template["key"]`。
+    # 与布尔子集（[5x]）**并存**：装载期先按布尔解析、不行再按脚本解析；脚本里的
+    # `http(...)` **不缓存**（缓存等于把循环的意义抹掉）。
+    # ① `for...of iterate(...)` + `set()` + `http(1)`：每轮**真的重发**（钉请求路径序列）
+    _fjs_loop = engine.load_poc_file(_wpoc("fjs-loop.yaml", """
+id: smoke-fjs-loop
+info: {name: fjs loop, severity: medium}
+flow: |
+  for (const u of iterate("admin", "root")) {
+    set("user", u)
+    http(1)
+  }
+http:
+  - path: ["/{{user}}"]
+    matchers: [{type: word, words: ["root"]}]
+"""))
+    assert _fjs_loop["_status"] == "ok", _fjs_loop.get("_error")
+    assert "_flow_script" in _fjs_loop and "_flow" not in _fjs_loop, \
+        f"脚本式 flow 该走脚本路：{_fjs_loop.get('_error')}"
+    assert _fjs_loop["_flow_script"][0] == "script" and _fjs_loop["_flow_script"][2] == [1], \
+        _fjs_loop["_flow_script"]
+    _fjs_s0 = _fjs_loop["_flow_script"][1][0]
+    assert _fjs_s0[0] == "forof" and _fjs_s0[4] == 2, _fjs_s0
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_fjs_loop, _base_url17, {})] == \
+        ["smoke-fjs-loop"]
+    assert _hits17 == ["/admin", "/root"], \
+        f"`http(1)` 在循环里必须每轮重发（缓存就把循环抹掉了）：{_hits17}"
+    # ② C 式 `for (let i = 0; i < 3; i++)`：三轮 → 三个请求（序号也进模板变量）
+    _fjs_num = engine.load_poc_file(_wpoc("fjs-num.yaml", """
+id: smoke-fjs-num
+info: {name: fjs num, severity: medium}
+flow: |
+  for (let i = 0; i < 3; i++) {
+    set("user", i)
+    http(1)
+  }
+http:
+  - path: ["/u{{user}}"]
+    matchers: [{type: word, words: ["root"]}]
+"""))
+    assert _fjs_num["_status"] == "ok", _fjs_num.get("_error")
+    assert _fjs_num["_flow_script"][1][0][0] == "fornum", _fjs_num["_flow_script"][1]
+    _hits17.clear()
+    assert engine.run_poc_on_target(_fjs_num, _base_url17, {})
+    assert _hits17 == ["/u0", "/u1", "/u2"], f"C 式 for 的三轮：{_hits17}"
+    # ③ `template["key"]` 读值与 `if` 门控：条件为假时**一句请求都不发**
+    _fjs_on = engine.load_poc_file(_wpoc("fjs-tmpl-on.yaml", """
+id: smoke-fjs-tmpl-on
+info: {name: fjs tmpl on, severity: medium}
+variables: {who: a}
+flow: |
+  if (template["who"] == "a") {
+    http(1)
+  }
+http:
+  - path: ["/a"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+"""))
+    _fjs_off = engine.load_poc_file(_wpoc("fjs-tmpl-off.yaml", """
+id: smoke-fjs-tmpl-off
+info: {name: fjs tmpl off, severity: medium}
+variables: {who: zzz}
+flow: |
+  if (template["who"] == "a") {
+    http(1)
+  }
+http:
+  - path: ["/a"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+"""))
+    assert _fjs_on["_status"] == "ok" and _fjs_off["_status"] == "ok", \
+        (_fjs_on.get("_error"), _fjs_off.get("_error"))
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_fjs_on, _base_url17, {})] == \
+        ["smoke-fjs-tmpl-on"]
+    assert _hits17 == ["/a"], f"`template[\"who\"] == \"a\"` 成立时才打：{_hits17}"
+    _hits17.clear()
+    assert engine.run_poc_on_target(_fjs_off, _base_url17, {}) == []
+    assert _hits17 == [], f"条件为假时分支里的请求一句都不该发：{_hits17}"
+    # ④ `http()` 跑全部块（模板顺序）+ `http("id")` / 多参按传入顺序
+    _fjs_all = engine.load_poc_file(_wpoc("fjs-all.yaml", """
+id: smoke-fjs-all
+info: {name: fjs all, severity: medium}
+flow: |
+  http()
+  http("b", 1)
+http:
+  - id: a
+    path: ["/a"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+  - id: b
+    path: ["/b"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+"""))
+    assert _fjs_all["_status"] == "ok", _fjs_all.get("_error")
+    assert _fjs_all["_flow_script"][2] == ["b", 1], _fjs_all["_flow_script"]
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_fjs_all, _base_url17, {})] == \
+        ["smoke-fjs-all"]
+    assert _hits17 == ["/a", "/b", "/b", "/a"], \
+        f"`http()` 该按模板顺序跑全部块、`http(\"b\", 1)` 该按传入顺序：{_hits17}"
+    # ⑤ 脚本**不是**布尔短路：两句都真发；但只报**第一个**正向命中（脚本没有"整体真值"）
+    _fjs_first = engine.load_poc_file(_wpoc("fjs-first.yaml", """
+id: smoke-fjs-first
+info: {name: fjs first, severity: medium}
+flow: |
+  http(1)
+  http(2)
+http:
+  - path: ["/a"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+  - path: ["/b"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+"""))
+    assert _fjs_first["_status"] == "ok", _fjs_first.get("_error")
+    _hits17.clear()
+    _fjs_got = engine.run_poc_on_target(_fjs_first, _base_url17, {})
+    assert len(_fjs_got) == 1 and _fjs_got[0]["poc_id"] == "smoke-fjs-first", _fjs_got
+    assert _hits17 == ["/a", "/b"], f"脚本里的两句都要真发（不做布尔短路）：{_hits17}"
+    # ⑥ `log(...)` 的参数**先求值**（其内的请求照跑）；本引擎不打印，只按返回值语义用它
+    _fjs_log = engine.load_poc_file(_wpoc("fjs-log.yaml", """
+id: smoke-fjs-log
+info: {name: fjs log, severity: medium}
+flow: |
+  log(http(1))
+  http("b")
+http:
+  - id: a
+    path: ["/a"]
+    matchers: [{type: word, words: ["hello-AAA"]}]
+  - id: b
+    path: ["/b"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+"""))
+    assert _fjs_log["_status"] == "ok", _fjs_log.get("_error")
+    _hits17.clear()
+    assert engine.run_poc_on_target(_fjs_log, _base_url17, {})
+    assert _hits17 == ["/a", "/b"], f"`log()` 里的调用要照跑（实参先求值）：{_hits17}"
+    # ⑦ `if` 门控的另一半：**条件块不命中 → 分支里的请求零发出**
+    _fjs_gate = engine.load_poc_file(_wpoc("fjs-gate.yaml", """
+id: smoke-fjs-gate
+info: {name: fjs gate, severity: medium}
+flow: |
+  if (http(1)) {
+    http(2)
+  }
+http:
+  - path: ["/nope"]
+    matchers: [{type: word, words: ["NOT-THERE"]}]
+  - path: ["/b"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+"""))
+    assert _fjs_gate["_status"] == "ok", _fjs_gate.get("_error")
+    _hits17.clear()
+    assert engine.run_poc_on_target(_fjs_gate, _base_url17, {}) == []
+    assert _hits17 == ["/nope"], f"分支条件不成立 → 分支里的请求一句都不该发：{_hits17}"
+    # ⑧ 子集外的写法一律**装载期**判 unsupported，且原因指认到具体写法（不静默不命中）
+    for _fjs_src, _fjs_needle in (
+        ("while (true) { http(1) }", "while"),
+        ("let x = Math.random(); http(1)", "Math"),
+        ("dns('x'); http(1)", "dns()"),
+        ("let y = zzz + 1; http(1)", "未声明"),
+        ('let k = \'a\'; http(template[k])', "字符串字面量"),
+        ("let n = 1; http(n)", "参数只能是请求序号"),
+        ("let x = 1 * 2; http(1)", "不支持的字符 `*`"),
+        ("for (const x of [1, 2]) { http(1) }", "iterate"),
+        ("for (let i = 0; i < 3; i--) { http(1) }", "不会终止"),
+        ("for (let i = 0; i < 300; i++) { http(1) }", "超过上限"),
+        ("eval('x'); http(1)", "eval"),
+        ("foo(1); http(1)", "不支持的函数"),
+        ("http(1); }", "多了一个"),
+    ):
+        _fjs_bad_poc = _wpoc("fjs-bad.yaml", (
+            "id: smoke-fjs-bad\n"
+            "info: {name: fjs bad, severity: medium}\n"
+            "flow: |\n"
+            + "\n".join("  " + _ln for _ln in _fjs_src.splitlines()) + "\n"
+            'http:\n'
+            '  - path: ["/a"]\n'
+            '    matchers: [{type: word, words: ["hello-AAA"]}]\n'))
+        _fjs_m = engine.load_poc_file(_fjs_bad_poc)
+        assert _fjs_m["_status"] == "unsupported", (_fjs_src, _fjs_m.get("_error"))
+        assert _fjs_needle in _fjs_m["_error"], (_fjs_src, _fjs_m["_error"])
+    # 脚本路的引用校验（用 `;` 让布尔路先失效，才验得到脚本路共用的 `_bad_refs`）
+    _fjs_oob = engine.load_poc_file(_wpoc("fjs-oob.yaml", (
+        "id: smoke-fjs-oob\n"
+        "info: {name: fjs oob, severity: medium}\n"
+        'flow: "http(3); http(1)"\n'
+        'http:\n'
+        '  - path: ["/a"]\n'
+        '    matchers: [{type: word, words: ["hello-AAA"]}]\n'
+        '  - path: ["/b"]\n'
+        '    matchers: [{type: word, words: ["hello-BBB"]}]\n')))
+    assert _fjs_oob["_status"] == "unsupported" and "http(3)" in _fjs_oob["_error"], _fjs_oob
+    _fjs_skip = engine.load_poc_file(_wpoc("fjs-skip.yaml", (
+        "id: smoke-fjs-skip\n"
+        "info: {name: fjs skip, severity: medium}\n"
+        'flow: "http(1); http(2)"\n'
+        'http:\n'
+        '  - method: DELETE\n'
+        '    path: ["/del"]\n'
+        '    matchers: [{type: status, status: [200]}]\n'
+        '  - path: ["/b"]\n'
+        '    matchers: [{type: word, words: ["hello-BBB"]}]\n')))
+    assert _fjs_skip["_status"] == "unsupported" and "http(1)" in _fjs_skip["_error"], _fjs_skip
+    _fjs_noid = engine.load_poc_file(_wpoc("fjs-noid.yaml", (
+        "id: smoke-fjs-noid\n"
+        "info: {name: fjs noid, severity: medium}\n"
+        "flow: 'http(\"nope\"); http(1)'\n"
+        'http:\n'
+        '  - id: a\n'
+        '    path: ["/a"]\n'
+        '    matchers: [{type: word, words: ["hello-AAA"]}]\n')))
+    assert _fjs_noid["_status"] == "unsupported" and '"nope"' in _fjs_noid["_error"], _fjs_noid
+    # ⑨ 手工构造的 poc dict（没有装载期的 `_flow`/`_flow_script`）→ 运行期兜底必须**同样的顺序**
+    #    （先布尔后脚本）。顺序错了就会把 `http(1) && http(2)` 当脚本跑：第二块没命中时
+    #    布尔路应"不报"，脚本路却会报第一块的命中 —— 这正是本条要钉住的语义漂移。
+    _fjs_mb = {"id": "smoke-fjs-manual-bool", "info": {}, "flow": "http(1) && http(2)",
+               "http": [{"path": ["/a"], "matchers": [{"type": "word", "words": ["hello-AAA"]}]},
+                        {"path": ["/nope"], "matchers": [{"type": "word", "words": ["NOT-THERE"]}]}]}
+    _hits17.clear()
+    assert engine.run_poc_on_target(_fjs_mb, _base_url17, {}) == [], \
+        "手工 dict 的布尔 flow：有一块不命中就不该报"
+    assert _hits17 == ["/a", "/nope"], _hits17
+    _fjs_mj = {"id": "smoke-fjs-manual-js", "info": {}, "flow": "http(1); http(1)",
+               "http": [{"path": ["/a"], "matchers": [{"type": "word", "words": ["hello-AAA"]}]}]}
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_fjs_mj, _base_url17, {})] == \
+        ["smoke-fjs-manual-js"]
+    assert _hits17 == ["/a", "/a"], f"手工 dict 走脚本兜底时同样不缓存：{_hits17}"
+    # ⑩ 布尔子集**回归**：脚本子集加入后，[5x] 的语义一个字都不能变
+    assert "_flow_script" not in _m_flow and _m_flow["_flow"] == ("&&", ("ref", 1), ("ref", 2)), \
+        "布尔 flow 被脚本路抢走了（装载期顺序必须是先布尔后脚本）"
+    # 前提确认：布尔源串本身**也**能被脚本解析器解析成"一条表达式语句"——正因如此，
+    # 运行期只能尊重装载期判定，不能再"没有 `_flow` 就试脚本"。
+    assert engine._flow_js_parse("http(1) && http(2)")[0] is not None, \
+        "前提变了：脚本解析器不再接受布尔源串，第 ⑨ 条回归的意义需要重写"
+    _m_or6z = engine.load_poc_file(_p_or)
+    assert "_flow_script" not in _m_or6z, _m_or6z.get("_error")
+    _hits17.clear()
+    assert engine.run_poc_on_target(_m_or6z, _base_url17, {})
+    assert _hits17 == ["/a"], f"`||` 短路在脚本子集加入后仍须生效：{_hits17}"
+    _hits17.clear()
+    assert engine.run_poc_on_target(_m_neg, _base_url17, {}) == []
+
+    print("[6z] 续39 nuclei flow **脚本子集** ok: 循环里 `http(1)` 每轮重发（不缓存）/ "
+          "`for...of iterate(...)`·C 式 `for` 都能数清轮次 / `template[\"k\"]` 读值 + `if` 门控"
+          "（条件假则零请求）/ `http()` 全跑·`http(\"id\")` 与多参按序 / 只报第一个正向命中 / "
+          "`log()` 实参求值 / 13 条子集外写法装载期给原因 / 脚本路引用越界·跳过块·不存在的 id "
+          "也判 unsupported / 手工 dict 兜底顺序（先布尔后脚本）/ 布尔子集语义零回归")
+
 print("SMOKE PASS")
 
 

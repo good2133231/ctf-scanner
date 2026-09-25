@@ -32,6 +32,15 @@
       `http(N)` 1-based 序号；引用能全部解析时才生效，否则整份模板标 unsupported。
       语义同 nuclei：条件成立才算命中；纯否定式成立（如只有 `!http(1)`）**不报**
       （没有正向响应证据，报出来就是纯误报）。
+  flow 的**脚本子集**（2026-09-25 续39 起，`scanner/pocs/engine.py` 里 `_FlowJsParser` /
+      `_run_flow_script`）：nuclei 的 flow 本来就是一段 JS，官方模板最常见的是
+      `for (const v of iterate(...)) { set("v", v); http(1) }`。本引擎**不跑真 JS**，只支持
+      封闭子集：`let/const/var`、`if/else`、`for...of iterate(...)`、`for (let i = 0; i < 5; i++)`
+      （循环次数必须在装载期算得出来）、`set()` / `http()` / `log()` / `template["k"]`、
+      `&& || !`、`== != === !== < > <= >=`、`+`。解析不了的一律**装载期**标 unsupported
+      （未声明变量、引用越界、循环不终止、静态语句数超 `_FLOW_MAX_STEPS`）。
+      与 nuclei 的已知差异（详见 docs/poc-guide.md）：块要有 matchers 命中才算真（nuclei 对
+      无 operators 的块隐式返回 true）、extractor 结果不回填 `template`、不做类型转换。
   workflows（2026-09-23 起支持**子模板编排子集**，2026-09-25 续38 补齐条件编排）：
       workflow 文件顶层写 `workflows:`，每个子项（语义对齐 nuclei 源码
       `pkg/templates/workflows.go` / `pkg/core/workflow_execute.go`，不自己发明）：
@@ -52,8 +61,9 @@
 因此 `PUT` / `PATCH` / `DELETE` / `TRACE` / `CONNECT` 一律**拒绝执行**并把原因记进
 `_note`/`_error`（框架只做只读验证，不做状态变更）；同一套方法白名单也对普通 `method:` 生效。
 
-刻意不做：oob（反连）、flow 的 JS/循环、workflow 的 `matchers:`（按匹配器名分支），以及
-**请求块级/顶层** `dsl`（nuclei 的 dsl 只写在 `matchers` / `extractors` 里；块级写法仍按
+刻意不做：oob（反连）、**真正的 JS 语义**（方法调用/闭包/异常/除 `+` 外的算术/类型转换，
+flow 只支持上面那个封闭子集）、workflow 的 `matchers:`（按匹配器名分支），以及**请求块级/顶层**
+`dsl`（nuclei 的 dsl 只写在 `matchers` / `extractors` 里；块级写法仍按
 不支持处理 —— 该块跳过并把原因记进 `_note`，不静默失效）。
 含这些特性的模板会被标记 `unsupported` 并在 POC 管理页显示原因，而不是静默失效。
 """
@@ -190,7 +200,7 @@ def _block_requests(block):
 # ---------- flow（条件编排，布尔子集）----------
 
 class _FlowUnsupported(Exception):
-    """flow 表达式超出支持子集（含 JS/循环/`template()` 等）时抛出。"""
+    """flow（布尔子集或脚本子集）超出支持范围时抛出，消息即给用户看的原因。"""
 
 
 _FLOW_ATOM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_\-]*|\d+")
@@ -313,20 +323,606 @@ def _flow_refs(node, out=None):
 
 
 def _flow_bad_refs(tree, blocks, ok_idx):
+    """布尔子集的引用可解析性（口径见 `_bad_refs`）。"""
+    return _bad_refs(_flow_refs(tree), blocks, ok_idx)
+
+
+def _bad_refs(refs, blocks, ok_idx, str_as_call=True):
     """返回解析不到的引用（序号越界/该块被跳过、或本文件没有该 id）。
 
     `http(N)` 指的是核模板里 `http:` 列表的**第 N 块**（原始顺序），所以这里按原始下标
     判定 —— 跳过一块后序号会错位，把 `http(2)` 当成"跳过后剩下的第 2 块"就是错判。
+
+    布尔子集与脚本子集**共用这一处判定**（两种写法引用的是同一份块表，口径必须一致）；
+    `str_as_call` 只影响报错文本的写法（`a()` 还是 `http("a")`）。
     """
     ids = {str(blocks[i].get("id")) for i in ok_idx if blocks[i].get("id")}
     bad = []
-    for ref in sorted(_flow_refs(tree), key=str):
+    for ref in sorted(set(refs), key=str):
         if isinstance(ref, int):
             if not 1 <= ref <= len(blocks) or (ref - 1) not in ok_idx:
                 bad.append(f"http({ref})")
         elif ref not in ids:
-            bad.append(f"{ref}()")
+            bad.append(f"{ref}()" if str_as_call else f'http("{ref}")')
     return bad
+
+
+# ---------- flow 的 JS 子集（脚本式编排，2026-09-25 续39）----------
+#
+# nuclei 的 `flow:` 是**一段 JS**（goja 执行，见 `pkg/tmplexec/flow/flow_executor.go`，
+# 注意不在 `pkg/protocols/common/flow/`），官方模板里最常见的就是"循环 + set + 请求"：
+#
+#     flow: |
+#       for (const user of iterate("admin", "root")) {
+#         set("user", user)
+#         http(1)
+#       }
+#
+# 本引擎没有 JS 解释器，也**不允许**把模板变成可执行代码，所以只支持一个**封闭子集**：
+# 装载期把脚本解析成 AST 并做静态校验（未声明变量、引用越界、循环是否终止、语句数上限），
+# 运行期只按 AST 解释执行。子集之外的写法在装载期整份标 `unsupported` 并写明原因 ——
+# 与 `dsl` 子集同一条红线：绝不"运行期静默不命中"。
+#
+# 与 nuclei 对齐的口径（逐条对着源码写，不自己发明）：
+#   - `http(N)` 是 1-based（`flow_executor.go` 里 `counter++ // start index from 1`）；
+#     `http("id")` 按块 id；`http()` 按模板顺序跑该协议**全部块**；`http(1, 2)` 按传入顺序；
+#     文档里的 `http(0)` 是过时写法，代码里 0 号不存在（本引擎同样拒）
+#   - `set(name, value)` 写进模板上下文 → 后续请求里的 `{{name}}`（`flow_internal.go`）
+#   - `iterate(...)` 把参数**扁平化成数组**（`pkg/tmplexec/flow/vm.go`），不是"遍历请求块"
+#   - `template` 是**对象不是函数**（`flow_executor.go`），读模板上下文的值
+# 与 nuclei 的**已知差异**（写在 docs/poc-guide.md 里，不假装一致）：
+#   - 本引擎"块要有 matchers 命中才算真"（`_match_response` 对空 matchers 返回 False），
+#     nuclei 对**无 operators** 的块隐式返回 true；
+#   - extractor 结果**不回填** `template`（nuclei 靠它把 http(1) 的提取值喂给 http(2)）；
+#   - 不做真正的 JS：没有类型转换（`1 == "1"` 在 JS 里为真、这里为假）、没有方法调用、
+#     没有闭包/异常/`while`/`break`/`continue`、除 `+` 之外没有算术。
+
+# flow 脚本一次执行的语句数上限。循环次数与语句数都在**装载期算清**（本引擎不跑真 JS，
+# 也就不需要"跑到一半掐断"这种会**静默半执行**的运行期兜底）。
+_FLOW_MAX_STEPS = 200
+
+# 明确点名的写法：给专门的原因，而不是笼统的"语法错误"。键是标识符写法。
+_FLOW_JS_REJECT = {
+    "while": "`while` 循环（只支持能静态数清的 `for`）",
+    "do": "`do...while` 循环",
+    "break": "`break`",
+    "continue": "`continue`",
+    "return": "`return`",
+    "function": "`function` 定义",
+    "new": "`new`（含 `new Dedupe()`）",
+    "class": "`class`",
+    "switch": "`switch`",
+    "try": "`try`/`catch`",
+    "throw": "`throw`",
+    "typeof": "`typeof`",
+    "delete": "`delete`",
+    "await": "`await`",
+    "async": "`async`",
+    "eval": "`eval`（模板不是可执行代码）",
+    "require": "`require`",
+    "console": "`console`",
+    "Math": "`Math`",
+    "JSON": "`JSON`",
+    "String": "`String`",
+    "Number": "`Number`",
+    "Array": "`Array`",
+    "Object": "`Object`",
+    "Date": "`Date`",
+    "RegExp": "`RegExp`",
+    "dns": "`dns()`：本引擎只有 http/requests 块，没有 dns 协议",
+    "network": "`network()`：本引擎只有 http/requests 块，没有 network 协议",
+    "file": "`file()`：本引擎只有 http/requests 块，没有 file 协议",
+    "headless": "`headless()`：本引擎只有 http/requests 块，没有 headless 协议",
+    "ssl": "`ssl()`：本引擎只有 http/requests 块，没有 ssl 协议",
+    "websocket": "`websocket()`：本引擎只有 http/requests 块，没有 websocket 协议",
+    "whois": "`whois()`：本引擎只有 http/requests 块，没有 whois 协议",
+    "code": "`code()`：本引擎只有 http/requests 块，没有 code 协议",
+    "javascript": "`javascript()`：本引擎只有 http/requests 块，没有 javascript 协议",
+}
+
+_FLOW_JS_TOKEN_RE = re.compile(r"""
+    (?P<ws>\s+)
+  | (?P<num>\d+)
+  | (?P<str>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')
+  | (?P<id>[A-Za-z_$][A-Za-z0-9_$]*)
+  | (?P<op>===|!==|=>|==|!=|<=|>=|&&|\|\||\+\+|--|[{}()\[\];,.=<>!+])
+""", re.X)
+
+
+def _flow_js_tokens(text):
+    """把 flow 脚本切词；子集外的字符（反引号模板串、`*` `/` `%` 等算术）即判不支持。"""
+    toks, i, text = [], 0, str(text or "")
+    while i < len(text):
+        m = _FLOW_JS_TOKEN_RE.match(text, i)
+        if not m:
+            raise _FlowUnsupported(
+                f"脚本含不支持的字符 `{text[i]}`（子集里除 `+` 之外没有算术）")
+        i = m.end()
+        kind, val = m.lastgroup, m.group(0)
+        if kind == "ws":
+            continue
+        if kind == "num":
+            toks.append(("num", int(val)))
+        elif kind == "str":
+            toks.append(("str", dsl_mod._unquote(val)))   # 字符串去转义复用 dsl 那套
+        elif kind == "id":
+            toks.append(("id", val))
+        else:
+            toks.append(("op", val))
+    return toks
+
+
+def _flow_js_iters(start, op, bound, step):
+    """C 式 `for` 的**静态**迭代次数；返回 `None` 表示这个循环不会终止（装载期就拒）。
+
+    条件一开始就不成立 → 0 次（JS 如此），哪怕步进方向与条件相反。
+    """
+    if op == "<":
+        return max(0, bound - start) if step > 0 else (0 if start >= bound else None)
+    if op == "<=":
+        return max(0, bound - start + 1) if step > 0 else (0 if start > bound else None)
+    if op == ">":
+        return max(0, start - bound) if step < 0 else (0 if start <= bound else None)
+    return max(0, start - bound + 1) if step < 0 else (0 if start < bound else None)
+
+
+def _flow_js_steps(stmts):
+    """静态语句数**上界**（`if` 两支都算，循环按装载期算好的次数展开）。"""
+    total = 0
+    for s in stmts:
+        total += 1
+        if s[0] == "if":
+            total += _flow_js_steps(s[2]) + _flow_js_steps(s[3])
+        elif s[0] == "forof":
+            total += s[4] * _flow_js_steps(s[3])
+        elif s[0] == "fornum":
+            total += s[7] * _flow_js_steps(s[6])
+    return total
+
+
+class _FlowJsParser:
+    """`flow:` 脚本子集的装载期解析器（纯结构 + 静态校验，不发任何请求）。
+
+    语法（封闭白名单）：
+      语句：`let/const/var NAME = expr`（`;` 可有可无）、
+            `if (expr) { ... } [else { ... } / else if ...]`、
+            `for (const NAME of iterate(...)) { ... }`、
+            `for (let i = 0; i < 5; i++) { ... }`（起止必须是**整数字面量**，步进 `++`/`--`）、
+            表达式语句（`set(...)` / `http(1)` / `log(...)`）
+      表达式：整数/字符串/`true`/`false`/`null`/`undefined`、局部变量、
+            `template["key"]` / `template.key`、`&&` `||` `!`、`== != === !== < > <= >=`、
+            `+`（数值相加或字符串拼接）、括号
+    子集之外的写法（`while`、对象/数组字面量、`new`、`console`/`Math`、方法调用、算术、
+    本引擎没有的协议块如 `dns()`）一律在装载期报错，**错误文本就是给用户看的原因**。
+    """
+
+    def __init__(self, text):
+        self.toks = _flow_js_tokens(text)
+        self.pos = 0
+        self.refs = []              # `http(...)` 引用（装载期用 `_bad_refs` 校验）
+        self.scopes = [set()]       # 已声明的局部变量（分层；本子集不做变量提升）
+
+    # ---------- 记号工具 ----------
+    def _peek(self, k=0):
+        i = self.pos + k
+        return self.toks[i] if i < len(self.toks) else None
+
+    def _take(self):
+        t = self._peek()
+        self.pos += 1
+        return t
+
+    def _is_op(self, *vals):
+        t = self._peek()
+        return bool(t) and t[0] == "op" and t[1] in vals
+
+    def _is_word(self, *words):
+        t = self._peek()
+        return bool(t) and t[0] == "id" and t[1] in words
+
+    def _expect_op(self, val):
+        t = self._take()
+        got = t[1] if t else "脚本结束"
+        if not t or t[0] != "op" or t[1] != val:
+            raise _FlowUnsupported(f"缺少 `{val}`（实际是 `{got}`）")
+
+    def _name(self, what="变量名"):
+        t = self._take()
+        if not t or t[0] != "id":
+            raise _FlowUnsupported(f"{what}不合法（实际是 `{t[1] if t else '脚本结束'}`）")
+        return t[1]
+
+    def _declared(self, name):
+        return any(name in s for s in self.scopes)
+
+    def _end_stmt(self):
+        if self._is_op(";"):
+            self._take()
+
+    # ---------- 语句 ----------
+    def parse(self):
+        stmts = self._stmts(top=True)
+        if not stmts:
+            raise _FlowUnsupported("脚本为空")
+        return ("script", stmts, self.refs)
+
+    def _stmts(self, top=False):
+        out = []
+        while True:
+            t = self._peek()
+            if t is None:
+                break
+            if t[0] == "op" and t[1] == "}":
+                if top:
+                    raise _FlowUnsupported("多了一个 `}`")
+                break
+            if t[0] == "op" and t[1] == ";":        # 空语句
+                self._take()
+                continue
+            out.append(self._stmt())
+        return out
+
+    def _stmt(self):
+        t = self._peek()
+        if t[0] == "id" and t[1] in _FLOW_JS_REJECT:
+            raise _FlowUnsupported(f"不支持 {_FLOW_JS_REJECT[t[1]]}")
+        if self._is_word("let", "const", "var"):
+            return self._let()
+        if self._is_word("if"):
+            return self._if()
+        if self._is_word("for"):
+            return self._for()
+        node = self._expr()
+        self._end_stmt()
+        return ("expr", node)
+
+    def _let(self):
+        self._take()                                # let / const / var
+        name = self._name()
+        if self._is_op(";"):                        # `let x;`（未初始化 → 空值）
+            self._take()
+            self.scopes[-1].add(name)
+            return ("let", name, ("null",))
+        self._expect_op("=")
+        val = self._expr()
+        self._end_stmt()
+        self.scopes[-1].add(name)
+        return ("let", name, val)
+
+    def _if(self):
+        self._take()
+        self._expect_op("(")
+        cond = self._expr()
+        self._expect_op(")")
+        then = self._block()
+        other = []
+        if self._is_word("else"):
+            self._take()
+            other = [self._if()] if self._is_word("if") else self._block()
+        return ("if", cond, then, other)
+
+    def _block(self):
+        self._expect_op("{")
+        self.scopes.append(set())
+        stmts = self._stmts()
+        self._expect_op("}")
+        self.scopes.pop()
+        return stmts
+
+    def _for(self):
+        self._take()
+        self._expect_op("(")
+        if not self._is_word("let", "const", "var"):
+            got = self._peek()
+            raise _FlowUnsupported(
+                f"`for` 的初始化必须是 `let/const/var` 声明（实际是 "
+                f"`{got[1] if got else '脚本结束'}`）")
+        self._take()
+        name = self._name()
+        if self._is_word("of"):
+            self._take()
+            return self._for_of(name)
+        return self._for_num(name)
+
+    def _for_of(self, name):
+        if not self._is_word("iterate"):
+            got = self._peek()
+            raise _FlowUnsupported(
+                f"`for...of` 只能遍历 `iterate(...)`（本引擎没有数组值，实际是 "
+                f"`{got[1] if got else '脚本结束'}`）")
+        self._take()
+        args = self._args()
+        self._expect_op(")")                        # `for (...)` 自己的右括号
+        iters = len(args)                           # 每个参数恰好产生一个迭代值
+        self.scopes.append({name})
+        body = self._block()
+        self.scopes.pop()
+        return ("forof", name, args, body, iters)
+
+    def _for_num(self, name):
+        self._expect_op("=")
+        start = self._int_literal("循环起点")
+        self._expect_op(";")
+        if self._name("循环条件里的变量") != name:
+            raise _FlowUnsupported("`for` 的循环变量在三处必须一致")
+        op = self._take()
+        if not op or op[0] != "op" or op[1] not in ("<", "<=", ">", ">="):
+            raise _FlowUnsupported("`for` 的条件要写成 `i < 5` / `i >= 0` 这种整数字面量比较")
+        bound = self._int_literal("循环终点")
+        self._expect_op(";")
+        if self._name("步进里的变量") != name:
+            raise _FlowUnsupported("`for` 的循环变量在三处必须一致")
+        upd = self._take()
+        if not upd or upd[0] != "op" or upd[1] not in ("++", "--"):
+            raise _FlowUnsupported("`for` 的步进只支持 `i++` / `i--`")
+        self._expect_op(")")
+        step = 1 if upd[1] == "++" else -1
+        iters = _flow_js_iters(start, op[1], bound, step)
+        if iters is None:
+            raise _FlowUnsupported(
+                f"这个 `for` 不会终止（`i {op[1]} {bound}` 配 `i{upd[1]}`）—— "
+                f"循环次数必须在装载期算得出来")
+        self.scopes.append({name})
+        body = self._block()
+        self.scopes.pop()
+        return ("fornum", name, start, op[1], bound, step, body, iters)
+
+    def _int_literal(self, what):
+        t = self._take()
+        if not t or t[0] != "num":
+            raise _FlowUnsupported(f"{what}必须是整数字面量（实际是 "
+                                   f"`{t[1] if t else '脚本结束'}`）")
+        return t[1]
+
+    # ---------- 表达式 ----------
+    def _expr(self):
+        return self._or()
+
+    def _or(self):
+        node = self._and()
+        while self._is_op("||"):
+            self._take()
+            node = ("bin", "||", node, self._and())
+        return node
+
+    def _and(self):
+        node = self._cmp()
+        while self._is_op("&&"):
+            self._take()
+            node = ("bin", "&&", node, self._cmp())
+        return node
+
+    def _cmp(self):
+        node = self._add()
+        while self._is_op("==", "!=", "===", "!==", "<", ">", "<=", ">="):
+            op = self._take()[1]
+            node = ("bin", op, node, self._add())
+        return node
+
+    def _add(self):
+        node = self._unary()
+        while self._is_op("+"):
+            self._take()
+            node = ("bin", "+", node, self._unary())
+        return node
+
+    def _unary(self):
+        if self._is_op("!"):
+            self._take()
+            return ("not", self._unary())
+        return self._primary()
+
+    def _args(self):
+        """解析 `(a, b, c)` 形式的实参列表（`(` 还没被吃掉）。"""
+        self._expect_op("(")
+        out = []
+        if not self._is_op(")"):
+            out.append(self._expr())
+            while self._is_op(","):
+                self._take()
+                out.append(self._expr())
+        self._expect_op(")")
+        return out
+
+    def _primary(self):
+        t = self._take()
+        if t is None:
+            raise _FlowUnsupported("表达式意外结束")
+        kind, val = t
+        if kind == "num":
+            return ("num", val)
+        if kind == "str":
+            return ("str", val)
+        if kind == "op" and val == "(":
+            node = self._expr()
+            self._expect_op(")")
+            return node
+        if kind == "op" and val == "=>":
+            raise _FlowUnsupported("箭头函数（`=>`）不在子集里")
+        if kind != "id":
+            raise _FlowUnsupported(f"不支持的写法 `{val}`")
+        if val in ("true", "false"):
+            return ("bool", val == "true")
+        if val in ("null", "undefined"):
+            return ("null",)
+        if val in _FLOW_JS_REJECT:
+            raise _FlowUnsupported(f"不支持 {_FLOW_JS_REJECT[val]}")
+        if val == "template":
+            return self._template_member()
+        if self._is_op("("):
+            return self._call(val)
+        if not self._declared(val):
+            raise _FlowUnsupported(
+                f"未声明的变量 `{val}`（脚本只能读 `template[\"key\"]` 与前面声明过的局部变量）")
+        return ("id", val)
+
+    def _template_member(self):
+        if self._is_op("["):
+            self._take()
+            key = self._take()
+            if not key or key[0] != "str":
+                raise _FlowUnsupported("`template[...]` 的键必须是字符串字面量（不做动态键）")
+            self._expect_op("]")
+            return ("tmpl", key[1])
+        if self._is_op("."):
+            self._take()
+            return ("tmpl", self._name("`template.` 后面的键名"))
+        raise _FlowUnsupported("`template` 是对象不是函数，读值要写成 `template[\"key\"]`")
+
+    def _call(self, name):
+        args = self._args()
+        if name == "iterate":
+            raise _FlowUnsupported("`iterate()` 只能用在 `for (... of iterate(...))` 的头部")
+        if name in ("http", "requests"):
+            for a in args:
+                if a[0] == "num":
+                    self.refs.append(a[1])
+                elif a[0] == "str":
+                    self.refs.append(a[1])
+                else:
+                    raise _FlowUnsupported(
+                        "`http(...)` 的参数只能是请求序号 `http(1)` 或块 id `http(\"id\")`，"
+                        "且必须是字面量（不做动态序号）")
+            return ("call", "http", args)
+        if name == "set":
+            if len(args) != 2:
+                raise _FlowUnsupported(f"`set()` 需要 2 个参数，实际 {len(args)} 个")
+            if args[0][0] != "str":
+                raise _FlowUnsupported("`set()` 的第一个参数必须是字符串字面量（变量名）")
+            return ("call", "set", args)
+        if name == "log":
+            if len(args) > 1:
+                raise _FlowUnsupported(f"`log()` 最多 1 个参数，实际 {len(args)} 个")
+            return ("call", "log", args)
+        raise _FlowUnsupported(
+            f"不支持的函数 `{name}()`（脚本可调用的只有 `http` / `set` / `iterate` / `log`）")
+
+
+def _flow_js_parse(flow):
+    """`flow:` 源串 → `(prog, reason)`；可解析且通过静态校验时 `reason` 为空串。"""
+    try:
+        prog = _FlowJsParser(flow).parse()
+    except _FlowUnsupported as e:
+        return None, str(e)
+    steps = _flow_js_steps(prog[1])
+    if steps > _FLOW_MAX_STEPS:
+        return None, (f"静态语句数上界 {steps} 超过上限 {_FLOW_MAX_STEPS}"
+                      f"（循环次数在装载期就算清，本引擎不做“跑到一半掐断”）")
+    return prog, ""
+
+
+def _js_eq(a, b, strict):
+    """`==` / `===`。本引擎**不做** JS 的类型转换（`1 == "1"` JS 为真、这里为假）：
+    同类型按类型比，`===` 另要求类型一致，其余按文本比。"""
+    if strict and type(a) is not type(b):
+        return False
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    if isinstance(a, str) and isinstance(b, str):
+        return a == b
+    return str(a) == str(b)
+
+
+def _js_cmp(op, a, b):
+    """`<` `>` `<=` `>=`：两侧都是数字按数值比，否则按字符串比。"""
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    x, y = (a, b) if num(a) and num(b) else (str(a), str(b))
+    return {"<": x < y, "<=": x <= y, ">": x > y, ">=": x >= y}[op]
+
+
+def _run_flow_script(prog, run_blocks, variables):
+    """执行 flow 脚本子集，返回按执行顺序收集到的**正向命中**（vuln dict 列表）。
+
+    `run_blocks(refs)` 负责真正发请求：`refs` 为 `None` 表示"该协议的全部块（按模板顺序）"，
+    否则是 `http(1)` / `http("id")` 的引用列表（**按传入顺序**）；返回命中的 vuln dict 或 None。
+    `variables` 就是模板上下文（`{{name}}` 的来源），`set()` 直接写它 —— nuclei 也是把整份
+    上下文当 input event 交给请求的（`pkg/tmplexec/flow/flow_internal.go`）。
+
+    这里不做运行期次数兜底：循环次数与语句数在装载期都算清了（见 `_flow_js_steps`），
+    请求总量另受 `budget`（`MAX_REQUESTS_PER_POC`）约束。
+    """
+    ctx = {"vars": variables, "run": run_blocks, "hits": []}
+
+    def ev(n, env):
+        k = n[0]
+        if k in ("num", "str"):
+            return n[1]
+        if k == "bool":
+            return n[1]
+        if k == "null":
+            return None
+        if k == "id":
+            return env.get(n[1], "")
+        if k == "tmpl":
+            return ctx["vars"].get(n[1], "")
+        if k == "not":
+            return not dsl_mod.truthy(ev(n[1], env))
+        if k == "call":
+            if n[1] == "set":
+                ctx["vars"][str(ev(n[2][0], env))] = ev(n[2][1], env)
+                return None
+            if n[1] == "log":
+                # nuclei 的 `log()` 打到 stdout 仅作调试；本引擎没有引擎级日志器，这里按它的
+                # 返回值语义「原样返回参数」处理，**不打印**（docs/poc-guide.md 写明）。
+                return ev(n[2][0], env) if n[2] else ""
+            args = [ev(a, env) for a in n[2]]
+            hit = ctx["run"](args if args else None)
+            if hit:
+                ctx["hits"].append(hit)
+            return bool(hit)
+        op = n[1]                                   # ("bin", op, a, b)
+        a = ev(n[2], env)
+        if op == "&&":
+            return dsl_mod.truthy(a) and dsl_mod.truthy(ev(n[3], env))
+        if op == "||":
+            return dsl_mod.truthy(a) or dsl_mod.truthy(ev(n[3], env))
+        b = ev(n[3], env)
+        if op in ("==", "!="):
+            eq = _js_eq(a, b, False)
+            return (not eq) if op == "!=" else eq
+        if op in ("===", "!=="):
+            eq = _js_eq(a, b, True)
+            return (not eq) if op == "!==" else eq
+        if op == "+":
+            num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+            if num(a) and num(b):
+                return a + b
+            if a is None:
+                return b
+            return b if b is None else f"{a}{b}"
+        return _js_cmp(op, a, b)
+
+    def stmts(items, env):
+        for s in items:
+            k = s[0]
+            if k == "expr":
+                ev(s[1], env)
+            elif k == "let":
+                env[s[1]] = ev(s[2], env)
+            elif k == "if":
+                branch = s[2] if dsl_mod.truthy(ev(s[1], env)) else s[3]
+                stmts(branch, dict(env))             # 块内声明不外泄（let/const 语义）
+            elif k == "forof":
+                for v in [ev(a, env) for a in s[2]]:
+                    if v is None:                    # nuclei：nil 跳过（`vm.go`）
+                        continue
+                    inner = dict(env)
+                    inner[s[1]] = v
+                    stmts(s[3], inner)
+            else:                                    # ("fornum", name, start, op, bound, step, body, iters)
+                name, start, op, bound, step = s[1], s[2], s[3], s[4], s[5]
+                i = start
+                while (i < bound if op == "<" else i <= bound if op == "<="
+                       else i > bound if op == ">" else i >= bound):
+                    inner = dict(env)
+                    inner[name] = i
+                    stmts(s[6], inner)
+                    i += step
+
+    stmts(prog[1], {})
+    return ctx["hits"]
 
 
 def _runnable_blocks(data):
@@ -483,18 +1079,31 @@ def load_poc_file(path):
                 "_error": f"dsl 表达式超出支持子集：{dsl_err}", "_path": str(p)}
     # flow：解析 + 引用可解析性都在**装载期**判掉。运行期才发现引用不到，只能"按不命中"
     # 处理 —— 那正是本引擎最反对的静默失效（用户会以为模板没洞）。
+    # 先按**布尔子集**解析（`http(1) && http(2)` 这类，语义与续17 完全一致）；解析不了再按
+    # **脚本子集**解析（`for (...) { set(...); http(1) }`，续39）。两条路都过不了才判不支持，
+    # 报错文本把两个原因都带上（用户能一眼看出是"写错了"还是"用了子集外的东西"）。
     if data.get("flow"):
         tree, reason = _flow_tree(data["flow"])
-        if tree is None:
-            data["_status"] = "unsupported"
-            data["_error"] = f"flow 表达式超出支持子集：{reason}"
-            return data
-        bad = _flow_bad_refs(tree, blocks, ok_idx)
-        if bad:
-            data["_status"] = "unsupported"
-            data["_error"] = "flow 引用了不存在/被跳过的请求块：" + "、".join(bad)
-            return data
-        data["_flow"] = tree
+        if tree is not None:
+            bad = _flow_bad_refs(tree, blocks, ok_idx)
+            if bad:
+                data["_status"] = "unsupported"
+                data["_error"] = "flow 引用了不存在/被跳过的请求块：" + "、".join(bad)
+                return data
+            data["_flow"] = tree
+        else:
+            prog, js_reason = _flow_js_parse(data["flow"])
+            if prog is None:
+                data["_status"] = "unsupported"
+                data["_error"] = (f"flow 超出支持子集：{reason}；"
+                                  f"脚本子集也不支持：{js_reason}")
+                return data
+            bad = _bad_refs(prog[2], blocks, ok_idx, str_as_call=False)
+            if bad:
+                data["_status"] = "unsupported"
+                data["_error"] = "flow 引用了不存在/被跳过的请求块：" + "、".join(bad)
+                return data
+            data["_flow_script"] = prog
     data["_status"] = "ok"
     if notes:
         data["_note"] = "；".join(dict.fromkeys(notes))
@@ -899,7 +1508,9 @@ def run_poc_on_target(poc, base_url, settings, max_requests=MAX_REQUESTS_PER_POC
     在需要时懒加载。vulnscan 传的是它已经加载好的那份，避免每个站点重复读盘。
 
     三种形态：普通请求块（`path` × `payloads`）、`raw` 原文块、带 `flow` 的多块编排
-    （见模块 docstring；`flow` 下每块只跑一次，条件成立且**有正向命中**才报）。
+    （见模块 docstring）。`flow` 有两条路：**布尔子集**每块只跑一次、条件成立且**有正向命中**
+    才报（`||` 短路）；**脚本子集**按脚本执行、每次 `http(...)` 都真的发（不缓存，循环才有效），
+    报第一个正向命中（脚本没有"整体真值"，与 nuclei"匹配即报"一致）。
     """
     timeout = int((settings or {}).get("limits", {}).get("http_timeout", 10))
     fav_list = poc.get("favicon_md5_list") or []
@@ -923,9 +1534,37 @@ def run_poc_on_target(poc, base_url, settings, max_requests=MAX_REQUESTS_PER_POC
         return _run_block(blocks[i], poc, info, base_url, variables, settings, timeout,
                           max_requests, budget)
 
-    tree = poc.get("_flow")
-    if tree is None and poc.get("flow"):
-        tree, _reason = _flow_tree(poc.get("flow"))   # 装载期已校验，这里只兜底
+    # 装载期已把 `flow` 判成布尔子集（`_flow`）或脚本子集（`_flow_script`）之一；两个都没有
+    # 说明是**手工构造的 poc dict**（测试/调用方直接拼 dict），这里按同样的顺序兜底解析。
+    tree, prog = poc.get("_flow"), poc.get("_flow_script")
+    if tree is None and prog is None and poc.get("flow"):
+        tree, _reason = _flow_tree(poc.get("flow"))
+        if tree is None:
+            prog, _reason = _flow_js_parse(poc.get("flow"))
+    if prog is not None:
+        def _run_refs(refs):
+            """跑脚本里的一次协议调用（`refs=None` = 该协议**全部块**，按模板顺序）。
+
+            与布尔子集不同：这里**不缓存** —— 脚本里的 `http(1)` 常被放进循环、每轮配着不同的
+            `set()` 值重发（nuclei 就是这么跑的），缓存等于把循环的意义抹掉。请求总量仍由
+            `budget`（`MAX_REQUESTS_PER_POC`）兜着。只取第一个正向命中返回。
+            """
+            idxs = ok_idx if refs is None else [
+                r - 1 if isinstance(r, int) else
+                next((i for i in ok_idx if str(blocks[i].get("id")) == r), None)
+                for r in refs]
+            first = None
+            for idx in idxs:
+                if idx is None or budget[0] <= 0:
+                    continue
+                hit = _run_at(idx)
+                if hit and first is None:
+                    first = hit
+            return first
+
+        hits_list = _run_flow_script(prog, _run_refs, variables)
+        return hits_list[:1]
+
     if tree is not None:
         hits = {}
 

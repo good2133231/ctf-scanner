@@ -662,9 +662,9 @@
       `scanner/ctlog.py`（`ctlog` 段）；「证书解析页签」→ 续15 的 `cert` 阶段；报告 HTML·PDF →
       续16 的三格式共用 `collect()` 快照；登录态扫描 + nuclei `raw`/`flow`/`workflows` → 续17。
 
-## 续12 ~ 续38（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
+## 续12 ~ 续39（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
 
-> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 27 轮变更只记在 `CHANGELOG_AI.md`。
+> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 28 轮变更只记在 `CHANGELOG_AI.md`。
 > 这里补一份**一句话 + 落地位置**的索引，避免"翻待办看不出做过什么"。**不重复 CHANGELOG 全文**。
 
 - [x] **续12** 误报复核三态 + POC 置信度分层 + Linux 实机验收（Ubuntu 22.04 跑通 smoke）
@@ -714,6 +714,14 @@
       schema 里没有 `args` 字段**，见到即跳过并在 `_note` 写明原因；workflow 真正的"传变量"
       （命名 extractor + 共享执行上下文 `ctx.Input.Set`）与 `matchers:` 分支登记为缺口；
       回归 `tests/smoke.py [6y]`；
+- [x] **续39** nuclei `flow:` 的**脚本子集**（循环 + `set()` + 请求，`scanner/pocs/engine.py`
+      的 `_FlowJsParser` / `_run_flow_script`）：装载期解析成 AST 并静态校验（未声明变量、引用越界、
+      循环不终止、静态语句数上限 `_FLOW_MAX_STEPS`=200），运行期只解释执行；支持 `for...of
+      iterate(...)` / C 式 `for` / `if` / `template["k"]` / `set()` / `log()` / `http(N)`（1-based）
+      / `http("id")` / `http()`（全部块）/ 多参按序。两条路**先布尔后脚本**且脚本路 `http(...)`
+      不缓存；语义逐条对着 nuclei 源码 `pkg/tmplexec/flow/*` 写（flow **不在** `protocols/common/flow`）。
+      与 nuclei 的差异（空 matchers 判假、extractor 不回填 `template`）写进 `docs/poc-guide.md`；
+      回归 `tests/smoke.py [6z]`；
 - [x] **另（2026-09-24）** 补 `LICENSE`：本仓库自有代码 MIT；`config/dicts/dirs_*.txt`
       派生自 dirmap（GPL-3.0），**不被 MIT 覆盖**，边界见 `NOTICE.md §5`。
 

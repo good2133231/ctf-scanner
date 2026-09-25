@@ -69,7 +69,14 @@
       `raw` / `flow`（布尔子集）/ `workflows`（子模板编排）已于第十七轮落地，见 docs/poc-guide.md；
       `matchers`/`extractors` 里的 `dsl` 表达式已于续37 落地（**安全子集**：`scanner/pocs/dsl.py`
       手写词法 + 递归下降、白名单封闭、**不用 eval**；越界在装载期即标 `unsupported`）；
-      仍缺 oob 反连、flow 的 JS/循环、workflow 的 `matchers:`（按匹配器名分支；`subtemplates`
+      **flow 的脚本子集已于续39 落地**（nuclei 那条"循环 + `set()` + 请求"的主干：`for...of
+      iterate(...)` / C 式 `for` / `if` 门控 / `template["k"]`；装载期把脚本解析成 AST 并做静态校验
+      —— 未声明变量、引用越界、循环不终止、静态语句数上限 `_FLOW_MAX_STEPS=200`；运行期只解释执行）。
+      两条路并存且顺序固定（先布尔后脚本），`http()` 按模板顺序跑全部块、`http(N)` 是 1-based、
+      脚本路的 `http(...)` **不缓存**（循环才有意义）。与 nuclei 的已知差异：无 matchers 的块我们判假
+      （nuclei 隐式真）、extractor 结果不回填 `template`、不做类型转换/方法调用/闭包/异常；
+      仍缺 oob 反连、flow 里**超出脚本子集**的真正 JS 语义（方法调用/闭包/异常/除 `+` 外的算术/
+      `while`/`new`）、workflow 的 `matchers:`（按匹配器名分支；`subtemplates`
       条件编排与 `tags:` 选择已于续38 落地）/`args:`（nuclei 无此字段），以及**块级/顶层** `dsl`
       ——这类模板（或未实现子项）被标 `unsupported`/`_note`，不静默失效；
 - [x] **盲注类 SQL 检测（布尔型）**（续18）：`a03-sqli-blind`（high）—— 同一参数发"恒真"与"恒假"

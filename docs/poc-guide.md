@@ -57,9 +57,10 @@ http:                               # 请求列表；兼容 nuclei 的 requests:
 
 内置变量（可直接在 path/headers/body 中引用）：`BaseURL` / `RootURL` / `Hostname` / `Host` / `Port` / `Scheme` / `Path`。
 
-**不支持**：**块级/顶层** `dsl`、oob 反连、flow 里的 JS/循环/带参数引用、workflow 的 `matchers:`
-（按匹配器名分支）与 `args:`（**不是 nuclei 的 workflow 字段**）
-（`matchers` / `extractors` 里的 `dsl` 已支持**安全子集**，见下节）。
+**不支持**：**块级/顶层** `dsl`、oob 反连、flow 里**超出脚本子集**的写法（真正的 JS 语义：
+方法调用/闭包/异常/除 `+` 外的算术/`while`/`new`/带参数的引用如 `template("x.yaml")`）、
+workflow 的 `matchers:`（按匹配器名分支）与 `args:`（**不是 nuclei 的 workflow 字段**）
+（`matchers` / `extractors` 里的 `dsl` 已支持**安全子集**，flow 的脚本子集见下节）。
 含这些特性的模板会被标 `unsupported`（或把未实现子项写进原因/`_note`），不会静默失效。
 
 ## raw / flow / workflows（2026-09-23 起支持核心子集）
@@ -86,10 +87,50 @@ http:
   并把原因记进 `_note`/`_error`（框架红线：只做只读验证，不做状态变更）。原文里的 `Content-Length`
   会被**丢弃**（由 HTTP 客户端按最终 body 重算，变量渲染后长度不一致会导致截断/挂起）；
   `Host` 头保留（vhost 场景是模板作者的意图），但**请求真正发往的地址永远由目标 `base_url` 决定**。
-- **flow**：`&&` / `||` / `!` / 括号 组成的布尔表达式，引用请求块的 `id`（`id_name()`）或 1-based 序号
-  （`http(1)`）。语义同 nuclei：表达式成立才算命中。**纯否定式成立不报**（如只有 `!http(1)` —— 没有
-  正向响应证据，报出来就是纯误报）。引用越界、或引用了**被跳过的块** → 装载期即标 `unsupported`
-  （避免运行期静默不命中）。`||` 短路（左真不发右），`&&` 两块都发。
+- **flow**：两条路并存，**装载期先按布尔子集解析、解析不了再按脚本子集解析**（两条都过不了 →
+  整份 `unsupported`，`_error` 里把两个原因都写上，用户能一眼看出是"写错了"还是"用了子集外的写法"）。
+
+  **① 布尔子集**：`&&` / `||` / `!` / 括号 组成的布尔表达式，引用请求块的 `id`（`id_name()`）或
+  1-based 序号（`http(1)`）。语义同 nuclei：表达式成立才算命中。**纯否定式成立不报**
+  （如只有 `!http(1)` —— 没有正向响应证据，报出来就是纯误报）。引用越界、或引用了**被跳过的块**
+  → 装载期即标 `unsupported`（避免运行期静默不命中）。`||` 短路（左真不发右），`&&` 两块都发；
+  每块**只跑一次**（缓存），表达式成立后报第一个正向命中的块。
+
+  **② 脚本子集**（2026-09-25 续39 起）：nuclei 的 `flow` 本是一段 JS，官方模板里最常见的是
+  "循环 + `set()` + 请求"，本引擎支持这条主干的**封闭子集**：
+
+  ```yaml
+  id: login-bruteforce-lite
+  info: {name: 弱口令探测（只读）, severity: medium}
+  flow: |
+    for (const user of iterate("admin", "root")) {
+      set("user", user)          # 写模板上下文 → 后续请求里的 {{user}}
+      http(1)
+    }
+  http:
+    - path: ["/login?u={{user}}"]
+      matchers: [{type: word, words: ["welcome"]}]
+  ```
+
+  - 语句：`let/const/var NAME = 表达式`（`;` 可有可无）、`if (...) { ... } [else { ... } / else if]`、
+    `for (const NAME of iterate(...))`、`for (let i = 0; i < 5; i++)` / `i--`（起止必须是整数字面量、
+    三处循环变量同名）、表达式语句（`set(...)` / `http(1)` / `log(...)`）；
+  - 表达式：整数/字符串/`true`/`false`/`null`/`undefined`、局部变量、`template["key"]`
+    （也支持 `template.key`；**不做动态键**）、`&&` `||` `!`、`== != === !== < > <= >=`、
+    `+`（数值相加或字符串拼接）、括号；
+  - 引用：`http(N)`（**1-based**）、`http("块id")`、`http()`（按模板顺序跑该协议**全部**块）、
+    `http(1, 2)`（按传入顺序）。脚本里的 `http(...)` **不缓存** —— 放进循环就是每轮真的重发
+    （缓存会把循环的意义抹掉）；请求总量仍受 `MAX_REQUESTS_PER_POC` 约束；
+  - `iterate(...)` 把实参**扁平化成数组**（`nil` 跳过），**不是**"遍历请求块"；
+  - `log(...)` 的实参**先求值**（其内的请求照跑）；本引擎没有引擎级日志器，**不打印**；
+  - 循环次数与静态语句数**在装载期算清**（循环不会终止、或静态语句数上界超过 **200** → 直接判
+    `unsupported`），刻意不做"跑到一半掐断"这种会**静默半执行**的运行期兜底；
+  - 脚本没有"整体真值"，因此**报第一个正向命中**（这条与布尔路的门控语义并列，不混用）。
+
+  **已知与 nuclei 的差异**（不假装一致）：a) 无 `matchers` 的请求块本引擎判**假**，nuclei 隐式真；
+  b) extractor 结果**不回填** `template`（nuclei 靠它把前一个请求的提取值喂给后一个）；
+  c) 不做真正的 JS：无类型转换（`1 == "1"` 在 JS 里为真、这里为假）、无方法调用/闭包/异常、
+  无 `while`/`break`/`continue`、除 `+` 之外没有算术。子集之外的写法一律**装载期**标 `unsupported`。
 - **workflows**（2026-09-23 起支持，2026-09-25 续38 补齐条件编排）：workflow 文件顶层写
   `workflows:`，每个子项（语义对齐 nuclei 源码，不自己发明）：
 
@@ -186,11 +227,12 @@ http:
 本引擎**主动向 nuclei 语法靠拢**（兼容 `http:`/`requests:`、`raw` HTTP 原文、
 `payloads` + `attack`、`variables` + 内置变量、`path` 列表、`redirects`、
 `status/word/regex/size/dsl` 匹配器 + `condition`/`negative`/`case-insensitive`/`part`、
-`regex`/`kval`/`dsl` extractors、`flow` 布尔子集、`workflows` 子模板编排），官方模板可直接投放进
+`regex`/`kval`/`dsl` extractors、`flow` 布尔子集与**脚本子集**、`workflows` 子模板编排），官方模板可直接投放进
 `config/nuclei-templates/` 被本引擎加载——从此不依赖 nuclei
 二进制，也不与它冲突（同一份模板两边都能跑）。因此不再需要"接入 nuclei 适配器"作为前置项。
 
-尚不支持的是 nuclei 的 oob 反连、flow 里的 JS/循环、workflow 的 `matchers:`（按匹配器名分支）
+尚不支持的是 nuclei 的 oob 反连、flow 里**超出脚本子集**的真正 JS 语义（方法调用/闭包/异常/
+除 `+` 外的算术/`while`/`new`）、workflow 的 `matchers:`（按匹配器名分支）
 与 `args:`（**nuclei 的 workflow 里没有这个字段**），以及**块级/顶层**的 `dsl`
 （`matchers`/`extractors` 里的 `dsl` 走上面的安全子集），
 这类模板（或其未实现子项）会被标 `unsupported` / `_note`；若确需完整能力，
