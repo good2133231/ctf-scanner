@@ -6826,6 +6826,157 @@ http:
     print("[7g] 续45 dirmap 残留（适配器侧）ok: 解析剥 #fragment 且保留 query（两个分支）/ "
           "产物行精确字节数直读 / 清理只删本次目标目录（别人的不动、失败只告警）")
 
+    # [7h] 续46 **多用户**：账号密码登录 + 「管理员 / 子用户」两级角色。
+    #      要钉死的是用户那句话「可以创建子用户，子用户没有查看配置的权限，只有使用扫描功能」——
+    #      所以这里**真的开两个 client** 同时在线（管理员 + 子用户），逐个路由验证权限，
+    #      而不是"加个装饰器就宣称实现了"（本项目第四次强调：装饰器在位 ≠ 门关得上）。
+    from scanner import users as users_mod
+
+    # 1) 口令派生（纯函数先行：哈希串格式 / 同口令不同盐 / 坏数据判失败不抛 / 常数时间比较）
+    _h7h = users_mod.hash_password("smoke-pass-1234")
+    assert _h7h.startswith("pbkdf2_sha256$") and len(_h7h.split("$")) == 4, _h7h
+    assert "smoke-pass-1234" not in _h7h, "哈希串里绝不能出现明文口令"
+    assert users_mod.verify_password(_h7h, "smoke-pass-1234")
+    assert not users_mod.verify_password(_h7h, "smoke-pass-1235"), "错一位就必须失败"
+    assert users_mod.hash_password("smoke-pass-1234") != _h7h, "同口令两次派生必须不同（每账号独立盐）"
+    assert not users_mod.verify_password("", "x")
+    assert not users_mod.verify_password("pbkdf2_sha256$abc$!!!$@@@", "x"), "坏哈希串判失败而不是抛"
+    assert users_mod.const_eq("abc", "abc") and not users_mod.const_eq("abc", "abd")
+    assert users_mod.const_eq("中文口令", "中文口令"), "非 ASCII 不能让 compare_digest 抛 TypeError"
+    assert not users_mod.const_eq("中文口令", "中文口今")
+    assert users_mod.validate_password("1234567")[0] is False, "口令下限 8 位"
+    assert users_mod.validate_password("12345678")[0] is True
+    assert users_mod.validate_password("smoke-admin-pw", "smoke-admin-pw")[0] is False, "口令不能等于用户名"
+    assert users_mod.validate_password("   ")[0] is False
+    assert users_mod.validate_username("")[0] is False and users_mod.validate_username("a")[0] is False
+    assert users_mod.validate_username("a b")[0] is False, "用户名不能含空白"
+    assert users_mod.validate_username("smoke-admin")[0] is True
+
+    # 2) 管理员登录（本轮沙箱库里**还没有账号**，先建一个管理员）
+    assert users_mod.count_users() == 0, "本轮沙箱库应为无账号状态"
+    _ADMIN_PW, _SUB_PW, _SUB_PW2 = "SmokeAdmin#2026", "SmokeSub#2026", "SmokeSub#2026-new"
+    assert users_mod.create_user("smoke-admin", _ADMIN_PW, role="admin", must_change=False)[0]
+    _admin7h = users_mod.get_by_name("smoke-admin")
+    assert _admin7h and _admin7h["role"] == "admin"
+    # 口令列只在 `check_login` 内部用：对外（登录结果 / 列表）一律不带上
+    assert "password" not in users_mod.check_login("smoke-admin", _ADMIN_PW)
+    assert all("password" not in u for u in users_mod.list_users())
+
+    _ca = app.test_client()      # 管理员
+    _cs = app.test_client()      # 子用户（**独立会话**：换账号共用一个 client 证明不了权限差异）
+    assert _ca.get("/").status_code == 302, "未登录必须跳登录页"
+    assert _ca.post("/login", data={"username": "smoke-admin", "password": "wrong-pw"}).status_code == 200
+    assert _ca.post("/login", data={"username": "smoke-admin",
+                                    "password": _ADMIN_PW}).status_code == 302
+    assert _ca.get("/settings").status_code == 200, "管理员必须能进策略配置"
+    assert _ca.get("/pocs").status_code == 200 and _ca.get("/users").status_code == 200
+    _users7h_html = _ca.get("/users").get_data(as_text=True)
+    assert "smoke-admin" in _users7h_html and "创建账号" in _users7h_html
+    # 页面绝不吐出口令哈希（list_users 不取 password 列 + 模板不渲染它）
+    assert "pbkdf2_sha256" not in _users7h_html and _ADMIN_PW not in _users7h_html, \
+        "账号页泄漏了口令哈希/明文"
+
+    # 3) 建子用户（走**路由**，顺带验"管理员才能建号"）
+    assert _ca.post("/api/users/create", data={"username": "smoke-sub", "password": _SUB_PW,
+                                               "role": "user"}).status_code == 302
+    _sub7h = users_mod.get_by_name("smoke-sub")
+    assert _sub7h and _sub7h["role"] == "user", _sub7h
+    assert _sub7h["must_change"] == 1, "新建账号默认待改密（初始口令管理员也知道）"
+    assert _sub7h["enabled"] == 1
+
+    # 4) 子用户登录 → 首次登录**强制改密**（被带到 /profile，改完才能继续）
+    assert _cs.post("/login", data={"username": "smoke-sub", "password": _SUB_PW}).status_code == 302
+    _r7h = _cs.get("/tasks")
+    assert _r7h.status_code == 302 and "/profile" in (_r7h.headers.get("Location") or ""), \
+        "待改密账号必须被带到修改口令页"
+    assert _cs.get("/profile").status_code == 200, "/profile 自己必须放行（否则是跳转死循环）"
+    assert _cs.post("/profile", data={"old_password": "wrong", "password": _SUB_PW2,
+                                      "password2": _SUB_PW2}).status_code == 200
+    assert users_mod.verify_password(users_mod.get_by_name("smoke-sub")["password"], _SUB_PW), \
+        "当前口令不对时必须改失败"
+    assert _cs.post("/profile", data={"old_password": _SUB_PW, "password": _SUB_PW2,
+                                      "password2": _SUB_PW2}).status_code == 200
+    assert users_mod.verify_password(users_mod.get_by_name("smoke-sub")["password"], _SUB_PW2)
+    assert not users_mod.verify_password(users_mod.get_by_name("smoke-sub")["password"], _SUB_PW)
+    assert _cs.get("/tasks").status_code == 200, "改完密就能正常用"
+
+    # 5) **核心断言**：子用户看不到配置 —— 路由层硬挡（不是只藏侧边栏）
+    for _p7h in ("/settings", "/pocs", "/users"):
+        assert _cs.get(_p7h).status_code == 403, (_p7h, _cs.get(_p7h).status_code)
+    # 写操作同样挡：改策略 / 启停 POC / 建账号 —— 这些比只读更要命
+    assert _cs.post("/settings", data={"host": "127.0.0.1", "port": 5000}).status_code == 403
+    assert _cs.post("/api/pocs/1/toggle").status_code == 403
+    assert _cs.post("/api/pocs/bulk", json={"action": "enable"}).status_code == 403
+    assert _cs.post("/api/pocs/refresh").status_code == 403
+    assert _cs.post("/api/users/create", data={"username": "smoke-evil",
+                                               "password": "evil-pw-1234"}).status_code == 403
+    assert not users_mod.get_by_name("smoke-evil"), "子用户绝不能建出账号"
+    # 403 页面要把话说清（静默跳首页会让人以为是自己点错了）
+    assert "无权限" in _cs.get("/settings").get_data(as_text=True)
+
+    # 6) 子用户**能**用的：扫描 + 看结果（"只有使用扫描功能"的另一半，别一禁就禁过头）
+    _tid_mu = db.create_task("smoke-multiauth", targets, ["probe"], {"offline": True})
+    for _p7h in ("/", "/tasks", "/subdomains", "/sites", "/ips", "/vulns", "/fullports",
+                 "/dirs", "/ports", "/csegs", "/extdomains", f"/tasks/{_tid_mu}",
+                 f"/api/tasks/{_tid_mu}/status"):
+        assert _cs.get(_p7h).status_code == 200, (_p7h, _cs.get(_p7h).status_code)
+    # 扫描类的 POST 也对子用户开放（空勾选只会重定向，不会真发请求）——证明不是"见 POST 就拦"
+    assert _cs.post("/api/domains/resolve", data={"task_id": str(_tid_mu)}).status_code == 302
+
+    # 7) 侧边栏：子用户看不到管理入口，管理员看得到（UI 与路由两层都要有）
+    _sub7h_html = _cs.get("/tasks").get_data(as_text=True)
+    assert "策略配置" not in _sub7h_html, "侧边栏不得向子用户露出「策略配置」"
+    assert "账号管理" not in _sub7h_html and "POC 管理" not in _sub7h_html
+    assert "修改口令" in _sub7h_html and "smoke-sub" in _sub7h_html, "顶栏要显示当前登录者"
+    assert "子用户" in _sub7h_html
+    _admin7h_html = _ca.get("/tasks").get_data(as_text=True)
+    assert "策略配置" in _admin7h_html and "账号管理" in _admin7h_html
+    assert "管理员" in _admin7h_html
+
+    # 8) 停用**立即**生效：子用户手里的旧会话在下一个请求即被踢下线（不等他下次登录）
+    assert _ca.post(f"/api/users/{_sub7h['id']}/toggle").status_code == 302
+    assert users_mod.get_by_name("smoke-sub")["enabled"] == 0
+    assert _cs.get("/tasks").status_code == 302, "已停用账号的会话必须当场失效"
+    _cs3 = app.test_client()
+    assert _cs3.post("/login", data={"username": "smoke-sub",
+                                     "password": _SUB_PW2}).status_code == 200, "停用后不能再登录"
+    assert _ca.post(f"/api/users/{_sub7h['id']}/toggle").status_code == 302     # 再启用（补救路径）
+    assert users_mod.get_by_name("smoke-sub")["enabled"] == 1
+
+    # 9) 防锁死三条：不能动自己 / 至少留一个启用中的管理员 / 用户名不重复
+    assert _ca.post(f"/api/users/{_admin7h['id']}/toggle").status_code == 302
+    assert users_mod.get_by_name("smoke-admin")["enabled"] == 1, "不能停用自己"
+    assert _ca.post(f"/api/users/{_admin7h['id']}/delete").status_code == 302
+    assert users_mod.get_by_name("smoke-admin"), "至少保留一个启用中的管理员"
+    _n7h = users_mod.count_users()
+    assert _ca.post("/api/users/create", data={"username": "smoke-admin",
+                                               "password": "another-pw-1234"}).status_code == 302
+    assert users_mod.count_users() == _n7h, "同名账号不能重复创建"
+
+    # 10) 迁移口径：`gui.token` 只在"还没有任何账号"时是引导口令 —— 建了号就**不再是后门**
+    _cb = app.test_client()
+    assert _cb.post("/login", data={"token": settings["gui"]["token"]}).status_code == 200, \
+        "已有账号后，旧共享口令必须失效"
+    assert _cb.post("/login", data={"username": "", "password": settings["gui"]["token"]}).status_code == 200
+    users_mod.delete_user(_sub7h["id"])
+    users_mod.delete_user(_admin7h["id"])
+    assert users_mod.count_users() == 0
+    assert _cb.post("/login", data={"token": settings["gui"]["token"]}).status_code == 302, \
+        "老部署升级后不能一上来就被锁在门外：无账号时 gui.token 仍可登录（管理员身份）"
+    assert _cb.get("/settings").status_code == 200, "引导会话即管理员"
+    # 第一个账号被**强制**成管理员：否则"先建了个子用户"就是单行道，从此没人能再建号
+    assert _cb.post("/api/users/create", data={"username": "smoke-first",
+                                               "password": "first-pw-1234",
+                                               "role": "user"}).status_code == 302
+    assert users_mod.get_by_name("smoke-first")["role"] == "admin", "第一个账号必须是管理员"
+    assert _cb.get("/settings").status_code == 302, "建号后引导会话必须立即作废"
+
+    print("[7h] 续46 多用户 ok: 口令只存 pbkdf2 派生值（同口令不同盐/坏串不抛）/ 账号密码登录 / "
+          "管理员建子用户（默认待改密→强制改密后才可用）/ 子用户 403 挡在 策略配置·POC 管理·账号 "
+          "（GET+POST 都挡，键策略/启停 POC/建号全拒）/ 子用户仍可扫描与看结果（含扫描类 POST）/ "
+          "侧边栏对子用户隐藏管理入口 / 停用即时踢下线 / 防锁死（不动自己·至少一管理员）/ "
+          "gui.token 仅作无账号时的引导口令（建号即失效）")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

@@ -143,6 +143,20 @@ CREATE TABLE IF NOT EXISTS leads (
   url TEXT DEFAULT '',
   created_at TEXT
 );
+-- 续46 多用户：账号密码登录 + 管理员/子用户两级角色（见 scanner/users.py）。
+-- 与上面各表同走 `CREATE TABLE IF NOT EXISTS` —— 老库**原地补表**，不需要删库重建；
+-- 新增列时按本文件 `_COLUMN_PATCHES` 的老办法 `ALTER TABLE ADD COLUMN` 追加。
+-- `password` 列存的是 `pbkdf2_sha256$<迭代>$<盐>$<哈希>`，**绝不是明文**（同上）。
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL,
+  password TEXT NOT NULL,
+  role TEXT DEFAULT 'user',        -- admin / user（见 scanner/users.ROLES）
+  enabled INTEGER DEFAULT 1,       -- 0 = 停用（其会话在下一个请求即失效）
+  must_change INTEGER DEFAULT 0,   -- 1 = 首次登录强制改口令（管理员建号默认置 1）
+  created_at TEXT, updated_at TEXT,
+  last_login_at TEXT DEFAULT ''
+);
 """
 
 

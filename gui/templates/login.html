@@ -11,10 +11,18 @@
   <h1>CTF<span>Scanner</span></h1>
   <p class="muted">仅用于授权测试与 CTF 场景</p>
   <form method="post">
-    <input type="password" name="token" placeholder="访问口令" autofocus>
+    <input type="text" name="username" placeholder="用户名" autocomplete="username" autofocus>
+    <input type="password" name="password" placeholder="口令" autocomplete="current-password">
     <button type="submit">登录</button>
     {% if error %}<p class="error">{{ error }}</p>{% endif %}
   </form>
+  {% if bootstrap %}
+  <p class="muted" style="margin-top:14px;font-size:12px;line-height:1.6">
+    当前<b>还没有任何账号</b>：可把 <code>config/settings.yaml</code> 里的
+    <code>gui.token</code> 直接填进上面的「口令」登录（管理员身份），
+    然后到「账号管理」页创建账号 —— <b>建好第一个账号后该口令立即失效</b>。
+  </p>
+  {% endif %}
 </div>
 </body>
 </html>

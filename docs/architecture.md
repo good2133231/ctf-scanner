@@ -37,6 +37,10 @@
 │  伪装层    scanner/evasion.py（HTTP 出口统一伪装 + payload 变形）│
 │  门控层    scanner/throttle.py（F2 统一并发/限速/预算：          │
 │            HTTP + 子进程 + 裸 socket，两级闸+令牌桶+预算）        │
+│  鉴权层    scanner/users.py（控制台账号与角色；口令只存           │
+│            pbkdf2_sha256 派生值，零第三方依赖 —— 续46）          │
+│            gui/app.py：login_required（登录）+                   │
+│            admin_required（管理员门：策略配置/POC/账号）          │
 ├────────────────────────────────────────────────────────────┤
 │  基础层    utils（HTTP/命令/线程池/DNS/IO/路径相对化） config log │
 │  存储层    scanner/db.py → SQLite（data/scanner.db，可用        │
@@ -176,17 +180,35 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 | leads | task_id, kind, code, title, target, matched, level, detail, source, url | **「线索」**（intel / heuristic / github 三个默认关阶段产出）：`kind` 区分情报/启发式/GitHub，`level` 只用于排序着色、**不是漏洞级别**。**不是漏洞结论** —— 不进 `vulns`、不计入漏洞数、不自动导入 POC；**出口只有 JSONL 导出**（`type=lead` 行 + `counts.leads`），GUI 页签与人读报告（MD / HTML）自 2026-09-24（续24）起不再露出。GitHub 线索（`kind="github"`）的 `code` 是 `仓库:文件路径`、`detail` 写明只记录了仓库/路径/命中规则 —— **文件内容与命中的凭据明文不入库** |
 | certs | url, host, port, cn, subject, issuer, not_before, not_after, days_left, expired, self_signed, san, serial, sig_algo, sha256, source | TLS 证书取证（cert 阶段产出，**默认关**）：一个 `host:port` 一行。`san` 用 `,` 拼接截断到 2000 字符；`expired` / `self_signed` 是**证书属性而非漏洞结论**（握手不校验证书）。默认排序 `已过期 → 自签 → 剩余天数升序`，让异常项先露头；进 `db.ASSET_TABLES`，重启任务会一并清掉 |
 | pocs | path(唯一), poc_id, name, severity, tags, enabled, status, **confidence** | POC 注册表：由扫描目录同步生成，GUI 控制启停。`enabled` 是**用户意图**（同步时不覆盖）；`confidence`（low/medium/high）是**推导值**，每次同步按 `db.poc_confidence(path, meta)` 重算（来源分 × 内容型匹配器，**只降级不升级**），仅作 `vulnscan` 同批候选的排序键，**不做过滤** |
+| **users**（续46） | username(唯一), password, role, enabled, must_change, created_at, updated_at, last_login_at | 控制台账号。`password` 存的是 `pbkdf2_sha256$<迭代>$<盐>$<哈希>`（**绝不是明文**，由 `scanner/users.py` 派生与校验，20 万次迭代 + 每账号随机盐 + `hmac.compare_digest`）；`role` 只有 `admin` / `user` 两级；`enabled=0` 时其现有会话在下一个请求即失效；`must_change=1` 表示首次登录强制改口令（管理员建号默认置 1）。**不含**任何扫描数据，删表/重建都不影响任务与资产 |
 
 **老库原地迁移**：`db._ensure_columns()` 用 `ALTER TABLE ADD COLUMN` 给已存在的库补齐新增列
 （如 `subdomains.ip` / `subdomains.cdn`），不需要删库重建；`data/` 不入 git，各人本地库版本可以不同。
+新增**表**走 `db.SCHEMA` 的 `CREATE TABLE IF NOT EXISTS`（`init_db` 每次启动都跑一遍整体 script），
+`users` 表即是这样补进老库的 —— 升级不需要删库、也不会动任务与资产。
 
 ## GUI 路由与分栏
 
-侧边栏 **9 栏**（以 `gui/templates/base.html` 的 `nav_items` 为准）：
+侧边栏 **9 栏 + 管理员第 10 栏**（以 `gui/templates/base.html` 的 `nav_items` 为准，
+每项的**第 5 个字段** `admin_only` 决定"是否只对管理员显示"）：
 `/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
 `/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/ips`（IP 资产）/ `/fullports`（全端口扫描）/
 `/vulns`（级别筛选 + `review=` 复核状态筛选 + `?task_id=` 按任务筛选，页内三态下拉与批量打标走
-`POST /api/vulns/review`）/ `/pocs`（含置信度列与按层批量启停）/ `/settings`。
+`POST /api/vulns/review`）/ `/pocs`（含置信度列与按层批量启停，`admin_only`）/ `/settings`（`admin_only`）
+/ `/users`（账号管理，`admin_only`）。
+
+**续46 多用户与角色**：登录由"一个共享口令"改为**账号 + 口令**（`scanner/users.py`），
+会话里放的是**身份 + 角色**（`uid` / `user` / `role`，不再是续32 那个布尔 `auth`），
+`gui/app.py` 的 `_session_user()` 是登录态的**唯一口径**（每次请求回库核一遍角色，
+因此"停用 / 降级"对已登录的人**立即**生效）。路由分两级门：
+`login_required`（任何登录者）与 `admin_required`（仅管理员，非管理员 403）：
+`/settings`、`/pocs` 与 4 个 POC 接口、`/users` 与 4 个账号接口在管理员门内；
+建任务/跑扫描/看结果/导出报告（`dashboard` `tasks` `subdomains` `sites` `ips` `ports`
+`fullports` `vulns` `dirs` `csegs` `extdomains` 及各 `/api/tasks/*`）对**所有登录者**开放 ——
+也就是"子用户只能使用扫描功能、看不到配置"。侧边栏隐藏只是 UI 纪律，
+**真正的控制是路由层**（直接敲 URL 也被 403 挡回，`tests/smoke.py [7h]` 有断言钉住）。
+迁移：`gui.token` 只在"库里还没有任何账号"时作**引导口令**（管理员身份），建号后即失效；
+第一个账号被强制设为管理员（防锁死）。
 `/ports` / `/csegs` / `/dirs` / `/extdomains`（JS 与情报带出的拓展域名，**默认隐藏重叠**，`?all=1` 看全部）
 四条路由**仍在**（可直接访问 URL），但**已从侧边栏移除** ——
 前三条是任务维度数据，在任务详情页签里看更贴合上下文；`/extdomains` 与 `/subdomains` 是同一份

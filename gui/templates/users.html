@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}账号管理{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if ok %}<p><b>已完成：</b>{{ ok }}</p>{% endif %}
+
+<section class="panel">
+  <h2>账号（{{ rows|length }} 个）</h2>
+  <p class="muted">
+    <b>管理员</b>：能用扫描 + 看结果，另有策略配置、POC 管理与本页；
+    <b>子用户</b>：只能建任务跑扫描、看结果与导出报告 —— <b>看不到配置页</b>
+    （路由上就会挡回来 403，不只是侧边栏不显示）。
+    口令只存 pbkdf2 派生值，<b>没有明文</b>，也没人能在这里"查回"旧口令，只能重置。
+  </p>
+  {% if total == 0 %}
+  <p class="error">还没有任何账号：下面创建的<b>第一个账号会被强制设为管理员</b>
+    （否则子用户进不了本页，从此没人能再建号）。创建后旧的 <code>gui.token</code> 立即失效。</p>
+  {% endif %}
+  <table id="tbl-users">
+    <thead><tr><th>#</th><th>用户名</th><th>角色</th><th>状态</th><th>最近登录</th>
+      <th>创建于</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for u in rows %}
+      <tr>
+        <td>{{ u.id }}</td>
+        <td>{{ u.username }}{% if me and u.id == me.id %} <span class="muted">（我）</span>{% endif %}</td>
+        <td>{% if u.role == 'admin' %}<span class="sev sev-high">管理员</span>
+            {% else %}<span class="muted">子用户</span>{% endif %}</td>
+        <td>{% if u.enabled %}启用{% else %}<span class="muted">已停用</span>{% endif %}
+            {% if u.must_change %}<span class="muted"> · 待改密</span>{% endif %}</td>
+        <td class="muted">{{ u.last_login_at or '-' }}</td>
+        <td class="muted">{{ u.created_at or '-' }}</td>
+        <td>
+          {% if me and u.id == me.id %}
+            <span class="muted">改自己的口令请走右上角「修改口令」</span>
+          {% else %}
+          <form method="post" style="display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0"
+                action="{{ url_for('api_user_password', uid=u.id) }}">
+            <input type="password" name="password" placeholder="新口令（≥8 位）" required>
+            <button type="submit" class="btn-mini ghost"
+                    onclick="return confirm('重置 {{ u.username }} 的口令？对方下次登录必须修改。')">重置口令</button>
+          </form>
+          <form method="post" style="display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0"
+                action="{{ url_for('api_user_toggle', uid=u.id) }}">
+            <button type="submit" class="btn-mini ghost"
+                    onclick="return confirm('{{ '停用' if u.enabled else '启用' }}账号 {{ u.username }}？')">
+              {{ '停用' if u.enabled else '启用' }}</button>
+          </form>
+          <form method="post" style="display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0"
+                action="{{ url_for('api_user_role', uid=u.id) }}">
+            <input type="hidden" name="role" value="{{ 'user' if u.role == 'admin' else 'admin' }}">
+            <button type="submit" class="btn-mini ghost"
+                    onclick="return confirm('把 {{ u.username }} 改为{{ '子用户' if u.role == 'admin' else '管理员' }}？')">
+              {{ '降为子用户' if u.role == 'admin' else '升为管理员' }}</button>
+          </form>
+          <form method="post" style="display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0"
+                action="{{ url_for('api_user_delete', uid=u.id) }}">
+            <button type="submit" class="btn-mini danger"
+                    onclick="return confirm('确认删除账号 {{ u.username }}？删除后其会话立即失效。')">删除</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if not rows %}<p class="muted">（空）</p>{% endif %}
+</section>
+
+<section class="panel">
+  <h2>创建账号</h2>
+  <form method="post" class="row" action="{{ url_for('api_user_create') }}">
+    <label>用户名 <input name="username" placeholder="2-32 字符，不含空白与斜杠" required></label>
+    <label>初始口令 <input type="password" name="password" placeholder="至少 8 位" required></label>
+    <label>角色
+      <select name="role" {% if total == 0 %}disabled title="第一个账号强制为管理员"{% endif %}>
+        {% if total == 0 %}
+        <option value="admin" selected>管理员（第一个账号）</option>
+        {% else %}
+        <option value="user" selected>子用户（只能扫描与看结果）</option>
+        <option value="admin">管理员（可进策略配置 / POC 管理 / 本页）</option>
+        {% endif %}
+      </select>
+    </label>
+    <button type="submit">创建</button>
+  </form>
+  <p class="muted small">
+    建号即置「待改密」：该账号首次登录会被带到「修改口令」页，改完才能用 ——
+    管理员给队友建号时<b>一定知道</b>那个初始口令，不改就等于它长期有效且被第二个人掌握。
+    {% if total == 0 %}（当前还没有账号，创建出来的<b>必定是管理员</b>，避免把自己锁在门外。）{% endif %}
+  </p>
+</section>
+
+<section class="panel">
+  <h2>口令丢了怎么办</h2>
+  <p class="muted">
+    没有任何人能"找回"口令（库里只有派生值）。管理员可在上面直接重置；
+    若连管理员都进不去，在项目根执行一条命令重新建一个管理员（不影响任务与资产数据）：
+  </p>
+  <p><code>py -3 -c "from scanner import db, users; db.init_db(); print(users.create_user('admin', '新的口令', role='admin'))"</code></p>
+</section>
+{% endblock %}

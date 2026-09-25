@@ -11,18 +11,23 @@
   <aside class="sidebar">
     <div class="brand">CTF<span>Scanner</span></div>
     <nav class="side-nav">
+      {# 续46：第 5 项是 `admin_only` —— 管理员专属入口（策略配置 / POC 管理 / 账号管理）。
+         隐藏只是 UI 纪律（别让子用户看到点不开的入口），**真正的控制是路由上的
+         `admin_required`**：直接敲 URL 也会被 403 挡回来。 #}
       {% set nav_items = [
-        ('dashboard',   '/',           '仪表盘',   'M3 3h6v6H3zM11 3h4v4h-4zM3 11h6v4H3zM11 9h4v6h-4z'),
-        ('tasks',       '/tasks',      '任务管理', 'M4 5h12M4 9h12M4 13h8'),
-        ('subdomains',  '/subdomains', '子域名资产', 'M9 2a7 7 0 100 14 7 7 0 000-14zM2 9h14M9 2c2.5 3.5 2.5 10.5 0 14'),
-        ('sites',       '/sites',      '站点资产', 'M2 3h14v9H2zM6 15h6M9 12v3'),
-        ('ips',         '/ips',        'IP 资产',  'M9 2a7 7 0 100 14 7 7 0 000-14zM9 6v6M6 9h6'),
-        ('fullports',   '/fullports',  '全端口扫描', 'M3 6h12M3 10h12M3 14h12M6 6v0M9 10v0'),
-        ('vulns',       '/vulns',      '漏洞风险', 'M9 2l6 2.5v5c0 3.5-2.5 6-6 7-3.5-1-6-3.5-6-7v-5z'),
-        ('pocs',        '/pocs',       'POC 管理', 'M7 5L2 9l5 4M11 5l5 4-5 4'),
-        ('settings_page','/settings',  '策略配置', 'M9 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zM9 1v2M9 15v2M1 9h2M15 9h2M3.5 3.5l1.5 1.5M13 13l1.5 1.5M14.5 3.5L13 5M5 13l-1.5 1.5'),
+        ('dashboard',   '/',           '仪表盘',   'M3 3h6v6H3zM11 3h4v4h-4zM3 11h6v4H3zM11 9h4v6h-4z', False),
+        ('tasks',       '/tasks',      '任务管理', 'M4 5h12M4 9h12M4 13h8', False),
+        ('subdomains',  '/subdomains', '子域名资产', 'M9 2a7 7 0 100 14 7 7 0 000-14zM2 9h14M9 2c2.5 3.5 2.5 10.5 0 14', False),
+        ('sites',       '/sites',      '站点资产', 'M2 3h14v9H2zM6 15h6M9 12v3', False),
+        ('ips',         '/ips',        'IP 资产',  'M9 2a7 7 0 100 14 7 7 0 000-14zM9 6v6M6 9h6', False),
+        ('fullports',   '/fullports',  '全端口扫描', 'M3 6h12M3 10h12M3 14h12M6 6v0M9 10v0', False),
+        ('vulns',       '/vulns',      '漏洞风险', 'M9 2l6 2.5v5c0 3.5-2.5 6-6 7-3.5-1-6-3.5-6-7v-5z', False),
+        ('pocs',        '/pocs',       'POC 管理', 'M7 5L2 9l5 4M11 5l5 4-5 4', True),
+        ('settings_page','/settings',  '策略配置', 'M9 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zM9 1v2M9 15v2M1 9h2M15 9h2M3.5 3.5l1.5 1.5M13 13l1.5 1.5M14.5 3.5L13 5M5 13l-1.5 1.5', True),
+        ('users_page',  '/users',      '账号管理', 'M9 8.5a3 3 0 100 6 3 3 0 000-6zM3 16c0-3 3-4.5 6-4.5s6 1.5 6 4.5M13 5h4M15 3v4', True),
       ] %}
-      {% for endpoint, prefix, label, icon in nav_items %}
+      {% for endpoint, prefix, label, icon, admin_only in nav_items %}
+      {% if not admin_only or (me and me.role == 'admin') %}
       <a href="{{ url_for(endpoint) }}"
          class="side-item {{ 'active' if request.path == prefix or (prefix != '/' and request.path.startswith(prefix)) }}">
         <svg viewBox="0 0 18 18" width="15" height="15" fill="none" stroke="currentColor"
@@ -31,6 +36,7 @@
         </svg>
         <span>{{ label }}</span>
       </a>
+      {% endif %}
       {% endfor %}
     </nav>
     <div class="sidebar-foot muted">仅授权测试 / CTF 场景</div>
@@ -48,8 +54,10 @@
           <option value="violet">紫罗兰</option>
         </select>
       </span>
-      <span class="muted">admin</span>
-      <a href="{{ url_for('settings_page') }}">修改口令</a>
+      <span class="muted" title="当前登录账号">{{ me.username if me else '未登录' }}
+        {% if me %}<span class="muted">（{{ '管理员' if me.role == 'admin' else '子用户' }}）</span>{% endif %}</span>
+      <a href="{{ url_for('profile') }}">修改口令</a>
+      {% if me and me.role == 'admin' %}<a href="{{ url_for('users_page') }}">账号管理</a>{% endif %}
       <a href="{{ url_for('logout') }}">退出</a>
     </header>
     <main>

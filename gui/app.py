@@ -3,11 +3,15 @@
 说明（客观取舍）：
 - 单进程 Flask + 后台线程执行流水线，满足 CTF 单机场景；生产化改造（任务队列、鉴权体系）
   见 docs/roadmap.md；
-- 默认仅监听 127.0.0.1，登录口令为 config/settings.yaml 的 gui.token（默认 ctfscanner）；
+- 默认仅监听 127.0.0.1。续46 起是**多用户**：账号 + 口令登录（`scanner/users.py`，口令只存
+  pbkdf2 派生值），分「管理员 / 子用户」两级角色 —— 子用户能建任务跑扫描、看结果，但**进不去**
+  策略配置 / POC 管理 / 账号管理（路由层 + 侧边栏两层都挡，见 `admin_required`）；
+  `config/settings.yaml` 的 `gui.token` 只作**迁移期的引导口令**：库里还没有任何账号时它仍可
+  登录（管理员身份），一旦建了第一个账号就立即失效（防"旧口令长期是后门"）；
 - 续32 起有两道**本机守卫**（Host 白名单防 DNS rebinding + 写操作的 Origin/Referer 校验，
-  见 `create_app` 的 `_local_guard`），但它们只为"本机单用户"这一模型兜底，
-  **不是**面向公网的鉴权体系：没有多用户/角色、没有 HTTPS、没有访问审计与限流。
-  **故意暴露到局域网/公网前**，请先自己做反向代理 + 强口令 + 传输加密，并读 docs/security-notice.md。
+  见 `create_app` 的 `_local_guard`），它们是**网络侧**兜底，与"你是谁、能看什么"是两件事；
+  本控制台仍然没有 HTTPS、没有访问审计与限流。
+  **故意暴露到局域网/公网前**，请先自己做反向代理 + 传输加密，并读 docs/security-notice.md。
 """
 import functools
 import html
@@ -27,7 +31,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import (auth as taskauth, blacklist, cdn, certs as certs_mod, db, dnsq, extdom,
-                     screenshot)
+                     screenshot, users)
 from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
@@ -301,28 +305,281 @@ def create_app():
             abort(403, description="跨站请求被拒绝：Referer 与 Host 不一致")
         return None
 
+    # 强制改密期间仍然放行的端点（少了这张白名单，"必须改密"会把自己卡成跳转死循环）
+    _MUST_CHANGE_ENDPOINTS = {"login", "logout", "profile", "static"}
+
+    def _session_user():
+        """当前登录者（`{id, username, role, must_change}`）或 None —— **登录态的唯一口径**。
+
+        三件事都在这里收口，别处不许自己读 session 判身份：
+        ① 会话里要有身份（续32 那个布尔 `auth` 保留下来只为兼容老会话）；
+        ② 有 `uid` 的会话**每次回库核一遍**：管理员刚把某账号停用或降级时，那人的浏览器里
+           还留着旧会话 —— 不回库就等于"停用要等他下次登录才生效"，口令已经可疑的场景里
+           这个延迟不可接受（核查时直接清会话，等于当场踢下线）；
+        ③ 没有 `uid` 的是**引导会话**（用 `gui.token` 登进来的），只在"库里还没有任何账号"
+           的迁移期有效；建了第一个账号后立刻作废 —— 旧口令不该长期是后门。
+        """
+        if not session.get("auth"):
+            return None
+        uid = session.get("uid")
+        if uid:
+            row = users.get_user(int(uid))
+            if not row or int(row["enabled"] or 0) != 1:
+                session.clear()          # 账号被删/被停用 → 当场下线，不等下次登录
+                return None
+            role = row["role"] if row["role"] in users.ROLES else users.ROLE_USER
+            return {"id": int(row["id"]), "username": row["username"], "role": role,
+                    "must_change": int(row["must_change"] or 0) == 1}
+        if users.count_users() > 0:      # 已经有真账号了 → 引导会话作废
+            session.clear()
+            return None
+        role = session.get("role")
+        return {"id": 0, "username": str(session.get("user") or "admin"),
+                "role": role if role in users.ROLES else users.ROLE_ADMIN,
+                "must_change": False}
+
+    @app.context_processor
+    def _inject_me():
+        """让每个模板都能拿到 `me`（当前登录者），侧边栏据此隐藏无权入口。"""
+        return {"me": _session_user()}
+
     def login_required(fn):
         @functools.wraps(fn)
         def wrapper(*a, **k):
-            if not session.get("auth"):
+            me = _session_user()
+            if not me:
                 return redirect(url_for("login"))
+            # 管理员建号时一定知道初始口令 → 首次登录强制改掉（`/profile` 自己放行）
+            if me["must_change"] and request.endpoint not in _MUST_CHANGE_ENDPOINTS:
+                return redirect(url_for("profile"))
+            return fn(*a, **k)
+        return wrapper
+
+    def _denied(msg):
+        """无权访问的**明确**响应：403 + 一句话说清"为什么"。
+
+        刻意不做"悄悄跳回首页"：那会让人以为是自己点错了，而这里要传达的是
+        "你的账号本来就没这个权限"—— 子用户看不到配置，正是本次要实现的东西。
+        """
+        who = str(session.get("user") or "-")
+        return ("<!doctype html><meta charset='utf-8'><title>无权限</title>"
+                "<div style='font:14px/1.7 sans-serif;margin:40px'>"
+                "<h3 style='font-size:16px;margin:0 0 8px'>无权限</h3>"
+                f"<p>{html.escape(str(msg))}</p>"
+                f"<p style='color:#888'>当前账号：<code>{html.escape(who)}</code>"
+                "（仅管理员可用）</p>"
+                f"<p><a href='{url_for('dashboard')}'>← 返回仪表盘</a></p></div>"), 403
+
+    def admin_required(fn):
+        """管理员门：续46 的多用户里**只有管理员**能进策略配置 / POC 管理 / 账号管理。
+
+        为什么是"装饰器 + 侧边栏隐藏"两层而不是只藏入口：藏入口只是 UI 纪律，
+        URL 直接敲进来照样能打开 —— 真正的控制必须在路由层，且要**回库取角色**
+        （不能信会话里那份，管理员刚把你降级时那份是过期的）。
+        """
+        @functools.wraps(fn)
+        def wrapper(*a, **k):
+            me = _session_user()
+            if not me:
+                return redirect(url_for("login"))
+            if me["role"] != users.ROLE_ADMIN:
+                return _denied("此页面仅管理员可访问（子用户只能使用扫描功能与查看结果）")
             return fn(*a, **k)
         return wrapper
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
         error = ""
+        # 迁移期引导的开关：**库里还没有账号**时旧的共享口令仍可登录（见下）
+        bootstrap = users.count_users() == 0
         if request.method == "POST":
-            if request.form.get("token", "") == load_settings().get("gui", {}).get("token", ""):
-                session["auth"] = True
-                return redirect(url_for("dashboard"))
-            error = "口令错误"
-        return render_template("login.html", error=error)
+            username = (request.form.get("username") or "").strip()
+            password = request.form.get("password") or ""
+            # `token` 是续32 时代老表单/脚本用的字段名，迁移期继续收（不收会让老脚本 401）
+            token = request.form.get("token") or ""
+            target = _safe_next(request.form.get("next"), url_for("dashboard"))
+            if username:
+                row = users.check_login(username, password)
+                if row is None:
+                    error = "用户名或口令错误"
+                    logger.info(f"[gui] 登录失败：{username}（用户名或口令错误）")
+                elif int(row["enabled"] or 0) != 1:
+                    error = "该账号已被停用，请联系管理员"
+                    logger.info(f"[gui] 登录失败：{username}（账号已停用）")
+                else:
+                    session.clear()        # 先清旧身份，避免上一份会话的角色残留
+                    session["auth"] = True
+                    session["uid"] = int(row["id"])
+                    session["user"] = row["username"]
+                    session["role"] = row["role"]
+                    users.touch_login(int(row["id"]))
+                    logger.info(f"[gui] 登录成功：{row['username']}（{row['role']}）")
+                    return redirect(target)
+            elif bootstrap:
+                real = str((load_settings().get("gui") or {}).get("token", "") or "")
+                if real and (users.const_eq(token, real) or users.const_eq(password, real)):
+                    session.clear()
+                    session["auth"] = True
+                    session["user"] = "admin"
+                    session["role"] = users.ROLE_ADMIN
+                    logger.info("[gui] 登录成功：引导口令（迁移期，管理员身份）")
+                    return redirect(target)
+                error = "口令错误"
+                logger.info("[gui] 登录失败：引导口令错误")
+            else:
+                error = "请输入用户名与口令"
+        return render_template("login.html", error=error, bootstrap=bootstrap)
 
     @app.route("/logout")
     def logout():
         session.clear()
         return redirect(url_for("login"))
+
+    # ---------- 账号（续46：管理员建/改/停用子用户；本人改自己的口令） ----------
+
+    def _users_page(error="", ok=""):
+        return render_template("users.html", rows=users.list_users(), error=error, ok=ok,
+                               total=users.count_users(),
+                               admins=users.count_enabled_admins())
+
+    def _users_back(error):
+        """账号页的操作结果用重定向 + 查询串回传（表单 POST 后不留在危险的重提交里）。"""
+        return redirect(url_for("users_page", error=error))
+
+    @app.route("/users")
+    @login_required
+    @admin_required
+    def users_page():
+        return _users_page()
+
+    @app.route("/api/users/create", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_user_create():
+        """建账号。**防锁死**：库里还没有账号时，建出来的**必须是管理员** ——
+        否则"第一个账号是子用户"就是一条单行道：子用户进不了本页，从此没人能再建号。
+        """
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        role = users.ROLE_ADMIN if request.form.get("role") == "admin" else users.ROLE_USER
+        if users.count_users() == 0:
+            role = users.ROLE_ADMIN
+        ok, msg = users.create_user(username, password, role=role, must_change=True)
+        if not ok:
+            return _users_back(msg)
+        logger.info(f"[gui] 建账号：{msg}（{role}），操作者 {session.get('user')}")
+        return redirect(url_for("users_page",
+                                ok=f"已创建 {msg}（{'管理员' if role == users.ROLE_ADMIN else '子用户'}），"
+                                   f"初始口令请线下告知，首次登录须修改"))
+
+    def _user_target(uid, allow_last_admin=False):
+        """取出被操作账号 + 一条"动不了"的理由（没有则返回 ""）。
+
+        两条防锁死判据都在这一处，任何新增的账号操作都绕不过去：
+        ① **不能对自己下手**（停用/删除/降级自己 → 把自己关在门外，改口令走「修改口令」）；
+        ② **至少留一个启用中的管理员**（动最后一个管理员＝永久失去账号管理入口）。
+        `allow_last_admin=True` 只给"把停用的管理员重新启用"这一条**补救**路径用 ——
+        那条路的另一端就是"一个启用中的管理员都没有"，此时正需要放行。
+        """
+        row = users.get_user(uid)
+        if not row:
+            return None, "账号不存在"
+        if int(row["id"]) == int(session.get("uid") or -1):
+            return row, "不能对自己做这个操作（改自己的口令请去「修改口令」）"
+        if (not allow_last_admin and row["role"] == users.ROLE_ADMIN
+                and users.count_enabled_admins() <= 1):
+            return row, "至少要保留一个启用中的管理员（否则再也没人能进本页）"
+        return row, ""
+
+    @app.route("/api/users/<int:uid>/password", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_user_password(uid):
+        """管理员重置他人口令（置 `must_change` → 对方首次登录必须改掉）。"""
+        row, why = _user_target(uid)
+        if not row or why:
+            return _users_back(why)
+        new = request.form.get("password") or ""
+        ok, msg = users.set_password(uid, new, must_change=True)
+        if not ok:
+            return _users_back(msg)
+        logger.info(f"[gui] 重置口令：{row['username']}，操作者 {session.get('user')}")
+        return redirect(url_for("users_page", ok=f"已重置 {row['username']} 的口令"
+                                                 "（其下次登录须修改）"))
+
+    @app.route("/api/users/<int:uid>/toggle", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_user_toggle(uid):
+        """停用 / 启用。停用后对方的现有会话在**下一个请求**即失效（见 `_session_user`）。"""
+        row, why = _user_target(uid, allow_last_admin=True)
+        if not row or why:
+            return _users_back(why)
+        enable = int(row["enabled"] or 0) != 1      # 当前停用 → 这次是启用
+        # 停用（不是启用）时才受"至少留一个管理员"约束 —— 那条约束是防锁死，
+        # 不能反过来把"把最后一个停用的管理员救回来"这条路也堵上。
+        if not enable and row["role"] == users.ROLE_ADMIN and users.count_enabled_admins() <= 1:
+            return _users_back("至少要保留一个启用中的管理员（否则再也没人能进本页）")
+        users.set_enabled(uid, enable)
+        logger.info(f"[gui] {'启用' if enable else '停用'}账号：{row['username']}，"
+                    f"操作者 {session.get('user')}")
+        return redirect(url_for("users_page",
+                                ok=f"已{'启用' if enable else '停用'} {row['username']}"))
+
+    @app.route("/api/users/<int:uid>/role", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_user_role(uid):
+        """升/降角色。降级管理员时同样受"至少留一个管理员"约束（`_user_target`）。"""
+        row, why = _user_target(uid)
+        if not row or why:
+            return _users_back(why)
+        role = users.ROLE_ADMIN if request.form.get("role") == "admin" else users.ROLE_USER
+        users.set_role(uid, role)
+        logger.info(f"[gui] 改角色：{row['username']} → {role}，操作者 {session.get('user')}")
+        return redirect(url_for("users_page",
+                                ok=f"{row['username']} 已改为"
+                                   f"{'管理员' if role == users.ROLE_ADMIN else '子用户'}"))
+
+    @app.route("/api/users/<int:uid>/delete", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_user_delete(uid):
+        row, why = _user_target(uid)
+        if not row or why:
+            return _users_back(why)
+        name = row["username"]
+        users.delete_user(uid)
+        logger.info(f"[gui] 删除账号：{name}，操作者 {session.get('user')}")
+        return redirect(url_for("users_page", ok=f"已删除 {name}"))
+
+    @app.route("/profile", methods=["GET", "POST"])
+    @login_required
+    def profile():
+        """改自己的口令（所有登录者都可用；被置了"必须改密"的人会先落到这里）。"""
+        me = _session_user()
+        error, ok = "", ""
+        if request.method == "POST":
+            old = request.form.get("old_password") or ""
+            new = request.form.get("password") or ""
+            again = request.form.get("password2") or ""
+            if not me or not me["id"]:
+                error = "引导登录没有账号可改，请先在「账号」页创建管理员账号"
+            elif not users.get_user(me["id"]):
+                error = "账号不存在（可能已被删除）"
+            elif not users.check_login(me["username"], old):
+                error = "当前口令不正确"
+            elif new != again:
+                error = "两次输入的新口令不一致"
+            else:
+                good, msg = users.set_password(me["id"], new, must_change=False)
+                if not good:
+                    error = msg
+                else:
+                    ok = "口令已修改"
+                    logger.info(f"[gui] 修改口令：{me['username']}")
+        return render_template("profile.html", me=me, error=error, ok=ok,
+                               must_change=bool(me and me["must_change"]))
 
     # ---------- 仪表盘 ----------
 
@@ -773,8 +1030,11 @@ def create_app():
 
     # ---------- POC 管理 ----------
 
+    # POC 管理与策略配置**同为管理员门内**（续46）：它决定"扫什么、报什么"，且上传会往
+    # config/pocs-user/ 落文件 —— 与策略配置是同一类"改平台行为"的操作，不是"看扫描结果"。
     @app.route("/pocs")
     @login_required
+    @admin_required
     def pocs():
         # _query 返回 sqlite3.Row（只读），这里要往每行补 source 字段，故转成 dict
         rows = [dict(r) for r in db.list_pocs()]
@@ -795,6 +1055,7 @@ def create_app():
 
     @app.route("/api/pocs/upload", methods=["POST"])
     @login_required
+    @admin_required
     def api_poc_upload():
         f = request.files.get("file")
         if not f or not f.filename.lower().endswith((".yaml", ".yml")):
@@ -810,12 +1071,14 @@ def create_app():
 
     @app.route("/api/pocs/<int:pid>/toggle", methods=["POST"])
     @login_required
+    @admin_required
     def api_poc_toggle(pid):
         db.toggle_poc(pid)
         return jsonify({"ok": True})
 
     @app.route("/api/pocs/bulk", methods=["POST"])
     @login_required
+    @admin_required
     def api_poc_bulk():
         """按分类批量开关 POC：body={action:'enable'|'disable', severity?, source?, confidence?, kind?}。"""
         data = request.get_json(silent=True) or request.form
@@ -831,6 +1094,7 @@ def create_app():
 
     @app.route("/api/pocs/refresh", methods=["POST"])
     @login_required
+    @admin_required
     def api_poc_refresh():
         sync_pocs(load_settings())
         return jsonify({"ok": True})
@@ -1522,8 +1786,11 @@ def create_app():
 
     # ---------- 设置 ----------
 
+    # 策略配置：FOFA/Shodan/Quake 的三方配置与全部策略开关都在这一页 —— 续46 起**仅管理员**。
+    # 这是本次多用户需求的**核心**诉求：子用户能跑扫描、看结果，但看不到配置（含接口凭据入口）。
     @app.route("/settings", methods=["GET", "POST"])
     @login_required
+    @admin_required
     def settings_page():
         nonlocal settings
         if request.method == "POST":
@@ -1757,12 +2024,19 @@ def serve():
         print("    处理：结束占用该端口的进程，或改 config/settings.yaml 的 gui.port 后重试。")
         raise SystemExit(1)
     print(f"[*] CTFScanner 控制台: http://{host}:{port}")
-    print(f"[*] 登录口令: {s.get('token', 'ctfscanner')}（config/settings.yaml 可修改）")
+    # 续46：多用户之后，启动提示必须**分清两种状态** —— 有账号就别再宣扬那个共享口令
+    # （它此时已经失效了，还打印出来等于引导人去试一个不存在的入口）。
+    if users.count_users() == 0:
+        print(f"[*] 尚未创建账号：可用 config/settings.yaml 的 gui.token"
+              f"（{s.get('token', 'ctfscanner')}）以管理员身份登录，"
+              f"随后到「账号」页创建账号 —— 建号后该口令立即失效。")
+    else:
+        print("[*] 多用户已启用：请用已创建的账号登录（管理员可在「账号」页建/停用子用户）。")
     # 续32：绑到非回环地址 = **主动放弃了上面那道 Host 白名单**（我们无法预知你用哪个地址访问），
     # 而控制台没有多用户/HTTPS/审计 —— 这里必须**显式告警**，不能让"暴露"悄无声息地发生。
     if _host_of(host) not in _LOOPBACK_HOSTS:
         print(f"[!] 警告：正在监听 {host}（非回环地址），局域网/公网上的任何人都能访问本控制台。")
-        print("    本控制台没有多用户、HTTPS 与访问审计；Host 白名单在本模式下已自动放宽。")
+        print("    本控制台没有 HTTPS 与访问审计；Host 白名单在本模式下已自动放宽。")
         print("    确需远程使用时，请走反向代理（带强口令与 TLS），并把它限制在可信网段。")
     app.run(host=host, port=port, debug=False)
 

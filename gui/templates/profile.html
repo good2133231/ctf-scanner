@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}修改口令{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if ok %}<p><b>已完成：</b>{{ ok }}</p>{% endif %}
+
+<section class="panel">
+  <h2>修改口令</h2>
+  {% if must_change %}
+  <p class="error">这是管理员为你创建的账号，初始口令管理员也知道 ——
+    <b>请先改成只有你自己知道的口令</b>，改完才能继续使用。</p>
+  {% endif %}
+  <p class="muted">当前账号：<code>{{ me.username if me else '-' }}</code>
+    （{{ '管理员' if me and me.role == 'admin' else '子用户' }}）。
+    口令至少 8 位，只存 pbkdf2 派生值，不存明文。</p>
+  <form method="post" class="row">
+    <label>当前口令 <input type="password" name="old_password" autocomplete="current-password" required></label>
+    <label>新口令 <input type="password" name="password" autocomplete="new-password" required></label>
+    <label>再输一次 <input type="password" name="password2" autocomplete="new-password" required></label>
+    <button type="submit">修改</button>
+  </form>
+  {% if not me or not me.id %}
+  <p class="muted">当前是<b>引导登录</b>（用 <code>gui.token</code> 进来的），没有可改的账号：
+    请到「账号管理」页创建管理员账号，然后用那个账号登录。</p>
+  {% endif %}
+</section>
+{% endblock %}
