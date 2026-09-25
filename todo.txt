@@ -1071,4 +1071,4 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        AGENTS.md 阶段数 12→13 + 新增 §7 登记 fofa.enabled 差异；roadmap.md 修正线索出口口径并补登漏的 5 轮
        （GitHub 泄露检索续26 / 续23~续27 收尾）
 [说明] fofa.enabled 用户明确保持 true（原本就是），本轮只把文档改到与现实一致，未翻转开关
-[待办] 把 `[6u]` 纳入 CI；补 fofa/osint 子开关最小形态单测；补"FOFA 真查命中→落拓展域名"离线桩测
+[完成] 把 `[6u]` 纳入 CI（.github/workflows/smoke.yml，push/PR/workflow_dispatch 自动跑 smoke，无 keys.yaml 亦绿）；[待办] 补 fofa/osint 子开关最小形态单测；补"FOFA 真查命中→落拓展域名"离线桩测

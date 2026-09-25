@@ -36,6 +36,8 @@
 **下一步建议**（详见接管报告）：把"全 13 阶段真跑"纳入 CI；补 `fofa`/`osint` 子开关最小形态单测；
 补"FOFA 真查命中→落拓展域名"的离线桩测（当前 `[6u]` 为防烧配额显式关了 FOFA）。
 
+（2026-09-25 补：CI 已接上 —— `.github/workflows/smoke.yml`，push/PR/workflow_dispatch 自动跑 `tests/smoke.py`；CI runner 无 keys.yaml 实测仍 SMOKE PASS，无凭据也能守住回归门禁。）
+
 ## 2026-09-25 —— 续32-fix：跨站校验漏了端口（在真实服务器上实测才暴露）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 
