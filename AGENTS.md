@@ -593,6 +593,9 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   带参数引用）、workflow 的 `args:`（**nuclei 的
   workflow 没有这个字段**），它们会被标 `_status=unsupported`
   （或写进 `_note`）并在 POC 管理页显示原因（不静默失效）；`dsl` 越界同样在**装载期**就被标掉。
+  2026-09-25 续45 实测：仓内 **312 个模板全部 `_status=ok`、0 个带 `_note`**（7 个内置 + 305 个导入），
+  上面这些"不支持"目前**没有任何模板卡在上面** —— 故按"不为假设需求写代码"结项，不实现；
+  要重启这个话题，先拿出真的卡住的模板（而不是 roadmap 上的条目）。
   **workflow `matchers:` 与跨子模板传值已于续43 落地**：父模板照跑但结果一律不报（nuclei 的
   matchers 分支直接 `return`），只拿它的**非 `internal` 具名提取器**名字挑分支（`condition`
   and/or、名字大小写不敏感、`"a, b"` 与 `[a, b]` 等价），命中的分支才跑其 `subtemplates:`

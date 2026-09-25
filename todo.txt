@@ -1383,7 +1383,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        这两条性质，变异证伪 2/2 被击杀；本机 `py -3 cli/client.py --check` 实跑已见 nmap OK。
 [待办] 8、仍未做：B 组架构级四项（任务队列 / 分布式节点 / 工具版本管理；「鉴权加固」剩余部分是
        **刻意不做**的逐表单 CSRF）；dirmap 残留 4 条（`intToSize` 量化误差 / `plugins/inspector.py`
-       绕过 `_LegacySSLAdapter` / 含 fragment 的产出行 / `output/` 无清理）；A2 POC 引擎残余
-       （flow 的 JS 深水区与带参数引用、workflow 的 `args`、`oob` 反连）；C 组需环境（P2-3 Linux
+       绕过 `_LegacySSLAdapter` / 含 fragment 的产出行 / `output/` 无清理）；C 组需环境（P2-3 Linux
        实机验证挂起中、fscan 二进制真跑验证）；D 组明确不做（多用户/HTTPS 部署指引、重写 dirmap
-       等价字典引擎）。
+       等价字典引擎、**A2** 的 flow 深水 JS / workflow `args` / `oob` 反连 —— 续45 实测仓内
+       312/312 模板 `_status=ok` 且 0 个 `_note`，零模板受阻，故结项不做）。
