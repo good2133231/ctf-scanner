@@ -49,7 +49,9 @@
 `scanner/wildcard.py`（泛解析识别/过滤）与 `scanner/passive.py`（免 key 多来源被动收集）只在 subdomain 阶段被调用。
 `scanner/dnsq.py` 是纯标准库 DNS 客户端（takeover 阶段用它拿 CNAME 链，不依赖外部命令）。
 `scanner/cdn.py` 同样是**只读加载 + 纯字符串匹配**：读 `config/dicts/cdn_cname.txt` 的 292 条厂商后缀，
-按 CNAME 链判定"CDN / 直连源站"（数据文件缺失时一律判非 CDN），供 `subdomain` 阶段回填 `subdomains.cdn`。
+按 CNAME 链判定"CDN / 直连源站"，并读 `config/dicts/cdn_ips.txt` 的 15 段厂商**任播 IP 段**作第二条判据
+（**CNAME 优先**，未命中再看解析 IP —— 覆盖"任播 CDN 直连边缘 IP、CNAME 链为空"的 Cloudflare 类目标；
+两条数据文件缺失时一律判非 CDN），供 `subdomain` 阶段回填 `subdomains.cdn`。
 `scanner/mmh3.py` 是**纯标准库**的 MurmurHash3 x86_32 实现 —— 第三方平台（FOFA `icon_hash`、
 Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**，而 `mmh3` 包是 C 扩展、
 离线环境装不上，故自实现并附公开已知向量自检。MD5（`sites.favicon`）仍用于我们自己的零请求前置判定，

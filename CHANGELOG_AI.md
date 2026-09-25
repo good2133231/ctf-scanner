@@ -3,6 +3,112 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续43：jsmine 按 URL 主机判 auth（混合出口）+ CDN 双判据（CNAME / 任播 IP 段）+ pengo.pro 全 13 阶段实跑
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+**背景**：为一处安全缺陷、一处准确性缺陷，以及把长期挂牌的「真实授权目标上跑一遍完整 13 阶段」
+真正跑掉。两处缺陷都是 2026-09-25 实跑 `pengo.pro` 时逮到的。
+
+### 问题 1（安全 / 中危）jsmine 抓 JS 时把目标登录态发给了第三方
+
+**现象**：实跑时日志出现 `InsecureRequestWarning ... host 'static.cloudflareinsights.com'` ——
+那是首页 `<script src>` 引的**第三方埋点**，不是目标主机，却按 `auth=True` 发了。
+
+**根因**：`auth=True` 的语义是"该请求发往**目标侧**，要带任务登录态"；而 jsmine 抓 `<script src>`
+时**一律** `auth=True`，把"URL 来自目标页面"错当成"URL 发往目标侧"。后果：任务一旦配了
+Cookie / Authorization，目标会话凭据会被发给 CDN / 埋点厂商 —— 与 §5/§7 的"第三方接口绝不带登录态"
+直接冲突。
+
+**改法**（`scanner/jsmine.py`）：新增 `_is_self_host(host, protect)`（主机是否属于目标自身注册域；
+后缀按 label 比、大小写归一，`notpengo.pro` 不算 `pengo.pro` 子域），`_is_noise()` 复用它
+（同一概念不再两处各算一套）；`mine()` 里抓 `<script src>` 的 `_get(u)` 改为**按 URL 主机**决定
+`auth=`（同注册域才带）。页面自身那次请求仍是 `auth=True`（种子 URL 定义上就是目标侧）。
+jsmine 因此被定位为**混合出口**模块：页面请求发往目标侧、脚本请求可能发往第三方。
+
+### 问题 2（准确性 / 低危）CDN 判定漏了「任播 IP 段」这条判据
+
+**现象**：实跑时 `pengo.pro` / `admin.pengo.pro` / `app.pengo.pro` 的 A 记录直接是
+`172.66.40.229` / `172.66.43.27`，**CNAME 链为空**。原实现只按 CNAME 后缀判 CDN → 三个主机全被
+标成"非 CDN"：① 资产页看不出走 CDN；② `portscan` 照样去打 Cloudflare 边缘节点，得出"30 个端口
+开放"这种与目标无关的结论（同一时刻手工 TCP connect 22 端口是超时的）。
+
+**改法**：新增数据文件 `config/dicts/cdn_ips.txt`（行格式 `CIDR | 厂商`；数据来源 = Cloudflare 官方
+`https://www.cloudflare.com/ips-v4`，取数日期 2026-09-25，15 段，全部 `| cloudflare`；只收 IPv4，
+因为 `dnsq.resolve_detail()` 只解析 A/CNAME）。`scanner/cdn.py` 新增 `_parse_nets()` / `networks()` /
+`ip_match()`，`match()` 签名变为 `match(cname_chain, settings=None, ips=None)`：**CNAME 判据优先**
+（厂商特征更明确），CNAME 未命中才看 IP 段；坏行逐条跳过、文件缺失返回空名单（fail-safe，判定退回
+"非 CDN"）。三处调用点改为把解析出的 IP 一起传进去：`scanner/stages/subdomain.py`（subdomain 阶段
+回填）、`scanner/extdom.py`（拓展域名）、`gui/app.py`（拓展域名页「解析选中域名（DNS）」按钮）。
+配置项：`scanner/config.py` 的 `DEFAULTS["dicts"]` 与 `config/settings.yaml` 的 `dicts:` 段各新增
+`cdn_ips: config/dicts/cdn_ips.txt`。GUI 文案（`gui/templates/subdomains.html` / `extdomains.html`）
+的"CDN 标记来自…"说明已改为"CNAME 链与 `cdn_cname.txt`、解析 IP 段与 `cdn_ips.txt` 的比对"。
+
+### pengo.pro 全 13 阶段实跑（归档结论）
+
+- 方式：临时打开 6 个默认关阶段（字节级备份/还原，还原后 `git status` 干净），CLI `-p <全 13 阶段>
+  --auto-expand` 跑单任务。
+- 结果：`status=done`、耗时 **2 分 55 秒**、退出码 0；子域名 3 / 站点 3 / 目录 119 / 潜在漏洞 0 /
+  线索 46；报告四格式 MD 9337 / HTML 14928 / JSONL 80166 / PDF 306383 字节。
+- 808 条 `InsecureRequestWarning` **只出现在目标主机与 `static.cloudflareinsights.com`**，第三方
+  （FOFA / crt.sh / api.github.com / webscan.cc / CISA KEV）**零警告** —— 这是 A3「证书校验按出口
+  分流」的真机实证。
+- GitHub token 有效（响应头 `X-RateLimit-Limit = 5000`）。
+- 30 个开放端口经人工 TCP connect 复核，确认是 Cloudflare 边缘节点行为、**不是扫描器 bug**。
+- 由此**关闭**长期挂牌的待办「真实授权目标上跑一遍完整 13 阶段」。
+
+### A2（同轮点单）workflow `matchers:` 分支 + 跨子模板传值
+
+**背景**：`docs/poc-guide.md` / `TODO.md` 里长期登记为"未实现"的两条 workflow 缺口（续38 的
+`[未做]`）：① `matchers:`（按匹配器名分支跑 `subtemplates`）；② workflow 真正的"传变量"
+（命名 extractor + 共享执行上下文）。
+
+**语义一手核对 nuclei 源码**（不自己发明）：`pkg/core/workflow_execute.go::runWorkflowStep`
+**有 Matchers 时走 matchers 分支并直接 `return`** —— 普通 `subtemplates:` 被忽略、父结果连
+`CompareAndSwap` 都不执行（＝不报）；`pkg/operators/operators.go::Execute` 里
+`result.Extracts[name]` 的记录条件是 **`len(值) > 0 && !extractor.Internal && extractor.Name != ""`**
+—— 即 Extracts 只装**非 internal 的具名提取器**（`internal` 的值进 `DynamicValues`，既不分流也不外传；
+这与续42 的"只有 internal 才回填"是两个不同的通道，一开始我按"internal 才跨模板传"设想，**已按源码改正**）；
+`pkg/workflows/workflows.go::Matcher.Match()` 用 `strings.EqualFold`（大小写不敏感）判
+`HasMatch(name) || HasExtract(name)`，`condition` 默认 or、`Compile()` 遇未知值报错；
+子模板拿到的是 `ctx.Input.Clone()` —— **只向下传、同级互不可见**。
+
+**改了什么**（`scanner/pocs/engine.py`）
+- 装载期：`_wf_slice()`（`StringSlice` 口径：`"a, b"` 与 `[a, b]` 等价、归一化小写，`tags:` 与
+  `matchers:[].name:` 共用一份解析）、`_wf_groups()`（`name`/`condition`/`subtemplates`；
+  `condition` 非 and/or → 返回原因，交 `_wf_steps` 记进 `_note`，不抛异常）；`_wf_steps()` 解析
+  `matchers:` 并递归填各分支的 `subtemplates:`，步骤结构变为
+  `{path, tags, matchers, subtemplates}`；与 `matchers:` 同写的普通 `subtemplates:` 置空并把
+  "被忽略"写进 `_note`（照抄 nuclei 的 `return` 行为）。
+- 运行期：`_wf_collect()`（只收**非 internal 具名**提取器值，同名去重、上限 `_EXTRACT_VARS_MAX`）、
+  `_wf_flatten()`（展平成 `name`/`name1`…，与模板内多值命名一致）、`_wf_group_hit()`（and/or）、
+  `_run_wf_groups()`（跑父模板**丢弃结果**、按名字分流、命中分支才跑）；`_run_wf_step()` /
+  `_run_workflow()` / `run_poc_on_target()` 增加 `shared` / `_wf_out` 两个口子把父模板收集到的值
+  向下传（`_shared` 叠在模板 `variables:` **之后** → 父值优先；每个子模板各建自己的 `variables`，
+  同级天然不回流）。
+
+**已知下界（写进文档，不假装一致）**：本引擎的匹配器**没有名字概念** ⇒ nuclei 的
+`HasMatch(name)` 那一半恒不成立，**只写 `name:` 匹配器、没写具名提取器的模板分不出支**；
+值口径是模板级 `name`/`name1`（nuclei 是 `k`/`k1`）。`args:` 仍不做（nuclei workflow 无此字段）。
+
+**验证**
+- `tests/smoke.py` 新增 `[7d]`（jsmine 混合出口）与 `[7e]`（CDN 双判据）；`[6y]` 从 9 组扩到
+  13 组（⑧ 改写为"`matchers:` 已是有效步骤 + `condition` 非法才跳过"，新增 ⑩~⑬：分流/父结果不报/
+  未命中分支零请求/名字大小写不敏感/and·or/`internal` 不参与分流/跨子模板 `{{tok}}` 传值/
+  同级不回流）；**全量 `py -3 tests/smoke.py` → `SMOKE PASS`**。
+- 变异证伪：问题 1 的 4/4、问题 2 的 5/5、A2 的 **6/6** 全部被击杀（问题 2 的 M1「退回到只按
+  CNAME 判」另跑一次全量 smoke，退出码 1，断言挂在 `[7e]`）。A2 的六处：忽略匹配器名字（分支全跑）／
+  `internal` 也参与分流／`condition: and` 退化成 or／名字不归一化（大小写敏感）／同级子模板共用
+  收集容器／父模板结果照报。
+
+**受影响文件**
+- 代码：`scanner/jsmine.py`、`scanner/cdn.py`、`scanner/pocs/engine.py`、`scanner/config.py`、
+  `scanner/stages/subdomain.py`、`scanner/extdom.py`、`gui/app.py`、`gui/templates/subdomains.html`、
+  `gui/templates/extdomains.html`、`config/settings.yaml`；新增数据文件 `config/dicts/cdn_ips.txt`；
+  `tests/smoke.py`（`[6y]` 扩写 / `[7d]` / `[7e]`）。
+- 文档：`AGENTS.md`、`docs/architecture.md`、`docs/pipeline.md`、`docs/usage.md`、`docs/roadmap.md`、
+  `docs/poc-guide.md`、`README.md`、`NOTICE.md`、`TODO.md`、`todo.txt`、`docs/takeover-2026-09-25.md`、
+  `CHANGELOG_AI.md`。
+
 ## 2026-09-25 —— 续42：extractor 回填 template（A1）+ 证书校验按出口分流（A3）+ `.gitignore` 错话（A4）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

@@ -1372,7 +1372,9 @@ def create_app():
 
         def _one(host):
             chain, ips, reason = dnsq.resolve_detail(host, timeout=timeout, settings=settings)
-            return host, ",".join(ips), cdn.match(chain, settings), reason, (chain[-1] if chain else "")
+            # 与 subdomain/extdom 阶段同一口径：CNAME 链 + 解析 IP 段两条判据。
+            return host, ",".join(ips), cdn.match(chain, settings, ips), reason, \
+                (chain[-1] if chain else "")
 
         net, cnames = {}, {}
         for host, ips, cdn_label, reason, last_cname in pool_run(_one, domains, workers=workers):

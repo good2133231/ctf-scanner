@@ -51,7 +51,8 @@
   </p>
   {% set keep_src = '&src=' + src if src else '' %}
   <p class="muted small">标签过滤：CDN 标记来自 CNAME 链与
-    <span class="mono">config/dicts/cdn_cname.txt</span> 名单比对（接管检测之外的独立判定）。
+    <span class="mono">config/dicts/cdn_cname.txt</span>、解析 IP 段与
+    <span class="mono">config/dicts/cdn_ips.txt</span> 的比对（接管检测之外的独立判定）。
     <a class="btn-mini {{ 'ghost' if tag != 'cdn' else '' }}"
        href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=cdn{{ keep_src }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}">只看 CDN</a>
     <a class="btn-mini {{ 'ghost' if tag != 'nocdn' else '' }}"

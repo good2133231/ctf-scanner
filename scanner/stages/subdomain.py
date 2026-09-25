@@ -248,7 +248,9 @@ class SubdomainStage(Stage):
             # 还是"被 max_resolve 上限挡掉了"（用户 2026-09-22 明确要求标出原因）。
             chain, ips, reason = dnsq.resolve_detail(host, timeout=timeout,
                                                      settings=ctx.settings)
-            return host, ",".join(ips), cdn.match(chain, ctx.settings), reason
+            # CDN 判定要看**两条判据**：CNAME 链（`cdn_cname.txt`）与解析 IP 段
+            # （`cdn_ips.txt`）—— 后者覆盖"任播 CDN 直连 IP、CNAME 为空"的情况。
+            return host, ",".join(ips), cdn.match(chain, ctx.settings, ips), reason
 
         mapping = {}
         for item in pool_run(_one, subs, workers=workers):

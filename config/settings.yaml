@@ -225,5 +225,7 @@ dicts:
   dirs_exposure: config/dicts/dirs_exposure.txt
   sensitive: config/dicts/sensitive.txt
   cdn_cname: config/dicts/cdn_cname.txt
+  # CDN 厂商任播 IP 段（CNAME 链为空时兜底判定，见 scanner/cdn.py）
+  cdn_ips: config/dicts/cdn_ips.txt
 http:
   user_agent: Mozilla/5.0 (compatible; CTFScanner/0.1; +authorized-testing-only)

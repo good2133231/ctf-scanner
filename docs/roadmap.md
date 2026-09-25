@@ -17,7 +17,7 @@
 - [x] **外部情报拓展阶段**（osint，**默认全关**）：IP 反查域名 + `/24` C 段归纳（`iprecon.py`，入 `csegs` 表与任务详情「C 段」页签）、
       favicon 的 mmh3（`mmh3.py`，纯标准库自实现）去 FOFA 反查同源资产（`fofa.py`），
       命中数超过「黑 ico 阈值」的公共图标主动放弃拓展；两个子开关都关时整阶段一次请求都不发；
-- [x] **子域名 IP / CDN 标记**（`scanner/cdn.py` + `config/dicts/cdn_cname.txt` 292 条厂商后缀，纯 DNS 只读判定）；
+- [x] **子域名 IP / CDN 标记**（`scanner/cdn.py` + `config/dicts/cdn_cname.txt` 292 条厂商后缀 + `config/dicts/cdn_ips.txt` 15 段厂商任播 IP 段，**CNAME 优先、IP 段兜底**，纯 DNS 只读判定）；
       关联域名（JS 挖掘 / C 段 / favicon 反查）与目标自身子域名**分页展示**（「拓展域名」/「子域名资产」）；
 - [x] **FOFA 三种反查齐活**（第十五轮）：favicon（`icon_hash`）/ 证书（`cert="domain"`）/ **标题**（`title="xxx"`），
       三者都有"命中过多即放弃拓展"的黑名单阈值（黑 ico / 通用证书 / 公共标题），模板页标题连查询都不发；
@@ -77,9 +77,11 @@
       **值回填模板上下文已于续42 落地**（跨请求 `{{name}}` 取值，多值 `name`/`name1`…）。
       与 nuclei 的已知差异：无 matchers 的块我们判假（nuclei 隐式真）、不做类型转换/方法调用/闭包/异常；
       仍缺 oob 反连、flow 里**超出脚本子集**的真正 JS 语义（方法调用/闭包/异常/除 `+` 外的算术/
-      `while`/`new`）、workflow 的 `matchers:`（按匹配器名分支；`subtemplates`
-      条件编排与 `tags:` 选择已于续38 落地）/`args:`（nuclei 无此字段），以及**块级/顶层** `dsl`
-      ——这类模板（或未实现子项）被标 `unsupported`/`_note`，不静默失效；
+      `while`/`new`）、workflow 的 `args:`（nuclei 无此字段），以及**块级/顶层** `dsl`
+      ——这类模板（或未实现子项）被标 `unsupported`/`_note`，不静默失效。
+      workflow 的 `subtemplates` 条件编排与 `tags:` 选择已于续38 落地，**`matchers:` 分支
+      （按具名提取器名字分流）与跨子模板传值已于续43 落地**（已知下界：本引擎匹配器无名字概念，
+      故 `HasMatch(name)` 那一半恒不成立，只写 `name:` 匹配器而没写具名提取器的模板分不出支）；
 - [x] **盲注类 SQL 检测（布尔型）**（续18）：`a03-sqli-blind`（high）—— 同一参数发"恒真"与"恒假"
       两个 payload 比状态码 / 响应长度 / 正文差异，**再发一次恒真做稳定性复验**（页面自带随机数或
       时间戳时恒真自己都会抖，不复验就是误报）；命中必须给出**对比数字**（两次的状态码与长度）。

@@ -292,7 +292,9 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
      发多少连接** —— 设了预算 ≠ 外部工具也被限住了（见 `AGENTS.md §7` 的覆盖缺口）；
    - **控制台**（`gui`）：监听地址、端口与访问口令。
    外部工具路径、字典路径与 `passive.sources` 来源清单请直接编辑 `config/settings.yaml`
-   （CDN 厂商后缀名单在 `config/dicts/cdn_cname.txt` —— 找不到 CNAME 后缀就一律判为「非 CDN」）；
+   （CDN 判定看**两条判据**：厂商 CNAME 后缀名单 `config/dicts/cdn_cname.txt` 与厂商任播 IP 段名单
+   `config/dicts/cdn_ips.txt` —— CNAME 链与解析 IP 段**都没命中**才判为「非 CDN」；只按 CNAME 会把
+   Cloudflare 这类" A 记录直连边缘 IP、CNAME 为空"的任播 CDN 误判成非 CDN）；
    **第三方 API key 写入 `config/keys.yaml`**（独立文件，控制台只读不改写）。
 
 ### 黑名单与批量操作

@@ -274,7 +274,8 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        dns-brute）与 `EXT_SUBDOMAIN_WHERE`（js:/osint:）两个判据 + 新页 `/extdomains`
        （导航项 + `gui/templates/extdomains.html`）；子域名页与任务详情子域名 Tab 只列目标自身
 [完成] 3、目标 IP + CDN 标记 + 标签过滤：新增 `scanner/cdn.py`（数据驱动，读
-       `config/dicts/cdn_cname.txt` 的 292 条厂商 CNAME 后缀，纯只读匹配）+ `subdomains.ip/cdn`
+       `config/dicts/cdn_cname.txt` 的 292 条厂商 CNAME 后缀 + `config/dicts/cdn_ips.txt` 的 15 段
+       厂商任播 IP 段，**CNAME 优先、IP 段兜底**，纯只读匹配）+ `subdomains.ip/cdn`
        两列（`_ensure_columns` 原地 ALTER TABLE 迁移）+ subdomain 阶段 `_fill_net()` 回填
        （上限 `subdomain.max_resolve` 默认 500、`subdomain.dns_timeout` 默认 3s，纯 DNS 零 HTTP）；
        子域名页/拓展域名页均加「全部 / CDN / 非 CDN」标签过滤（`?tag=`）
@@ -988,7 +989,13 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [待办] 「dirmap 若将来要内联进仓库，先修它自身那几个问题」（1 处 [待办]）：用户已交由其他 AI 负责。
 [待办] flow 的 JS / 循环 / 带参数引用、workflow 的 subtemplates / args、dsl 表达式、oob 反连：
        仍显式标 unsupported（不静默失效），见 docs/poc-guide.md。
-[待办] 真实授权目标上跑完整 13 阶段：2026-09-23 用户明确「这个我回头自己跑就行」，由用户自行执行，AI 不代跑。
+[完成] 真实授权目标上跑完整 13 阶段（2026-09-25 续43，授权目标 pengo.pro）：临时打开 6 个默认关阶段
+       （字节级备份/还原，还原后 git status 干净），CLI `-p` 全 13 阶段 + `--auto-expand` 跑单任务 ——
+       status=done、耗时 2 分 55 秒、退出码 0；子域名 3 / 站点 3 / 目录 119 / 潜在漏洞 0 / 线索 46，
+       报告四格式 MD 9337 / HTML 14928 / JSONL 80166 / PDF 306383 字节；808 条 InsecureRequestWarning
+       只出现在目标主机与 static.cloudflareinsights.com（第三方 FOFA/crt.sh/api.github.com/webscan.cc/
+       CISA KEV 零警告）；30 个开放端口经人工 TCP connect 复核为 Cloudflare 边缘节点行为、非扫描器 bug。
+       （原 2026-09-23 用户明确「这个我回头自己跑就行」由用户自行执行 —— 现已完成、就此关闭。）
 
 ------
 （续31：补 CLI 断点续跑入口 --resume-task）实施者：Trae · DeepSeek-V4.1-Flash
@@ -1247,7 +1254,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        新增 `[6z]`、POC 引擎能力段）、`CHANGELOG_AI.md`（续39）、`TODO.md`、`todo.txt`。
 [未做] 7、仍缺：extractor 结果**回填** `template`（nuclei 靠它把前一个请求的提取值喂给后一个 ——
        同时是 workflow"命名 extractor + 共享执行上下文"的缺口）**[已于续42 补齐单模板内的跨请求
-       取值；跨子模板仍未做]**；空 matchers 块我们判假、nuclei
+       取值，跨子模板的部分已于续43 补齐]**；空 matchers 块我们判假、nuclei
        隐式真的差异（已写进 poc-guide）；oob 反连（需用户提供回调域名）；flow 里**真正的 JS 语义**
        （方法调用 / 闭包 / 异常 / 除 `+` 外的算术 / `while` / `new`）。**块级 / 顶层** `dsl` 仍按不支持处理。
 === 续41（2026-09-25）：SMOKE PASS 搬进 main()（修第四次假绿）+ 提交前行尾规范化 ===
@@ -1316,3 +1323,39 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        CHANGELOG_AI.md、todo.txt（本条）。
 [未做] 10、跨子模板（workflow）的变量传递仍未做（子模板各自独立加载、上下文不串）；flow 里真正的
        JS 语义、oob 反连、块级/顶层 dsl 依旧是登记在案的缺口。
+=== 续43（2026-09-25）：pengo.pro 全 13 阶段实跑 + jsmine 登录态外发（问题1）+ CDN 双判据（问题2）+ workflow matchers（A2） ===
+       实施者：Trae · DeepSeek-V4.1-Flash（用户点单：「就用 pengo.pro 这个来验证」，并在多选里
+       勾定「修问题 1 / 修问题 2 + 归档实跑结论 / 做 A2」）
+[完成] 1、pengo.pro 全 13 阶段实跑并归档：临时打开 6 个默认关阶段（字节级备份/还原，还原后
+       `git status` 干净），CLI `-p <全 13 阶段> --auto-expand`；`status=done`、2 分 55 秒、退出码 0；
+       子域名 3 / 站点 3 / 目录 119 / 漏洞 0 / 线索 46；报告四格式 9337/14928/80166/306383 字节。
+       808 条 `InsecureRequestWarning` **只在目标主机与 static.cloudflareinsights.com**，第三方零警告
+       （＝A3 证书分流的真机实证）；GitHub token 有效（`X-RateLimit-Limit=5000`）；30 个开放端口经
+       人工 TCP connect 复核确认为 Cloudflare 边缘行为。由此**关闭**长期待办「真实授权目标跑完整 13 阶段」。
+[完成] 2、问题 1（安全/中危）jsmine 把目标登录态发给了第三方埋点：根因是抓 `<script src>` 时**一律**
+       `auth=True`，把"URL 来自目标页面"错当"URL 发往目标侧"。改法：新增 `_is_self_host()`（后缀按
+       label 比、大小写归一，`notpengo.pro` 不算 `pengo.pro` 子域），`_is_noise()` 复用它，`_get()` 按
+       URL 主机决定 `auth=`（同注册域才带）；jsmine 由此定位为**混合出口**模块。回归 `[7d]`，变异 4/4 击杀。
+[完成] 3、问题 2（准确性/低危）CDN 只看 CNAME 漏了任播 IP：实跑时三个主机的 A 记录直接是 Cloudflare
+       边缘 IP、CNAME 链为空 → 全标"非 CDN"，portscan 还会去打边缘节点。改法：新增数据文件
+       `config/dicts/cdn_ips.txt`（`CIDR | 厂商`，来源 = Cloudflare 官方 ips-v4，取数日 2026-09-25，
+       15 段），`cdn.py` 加 `_parse_nets()`/`networks()`/`ip_match()`，`match(chain, settings, ips)`
+       **CNAME 优先、IP 段兜底**，坏行逐条跳过、缺文件 fail-safe；三处调用点传 ips。回归 `[7e]`，
+       变异 5/5 击杀（M1 退回只按 CNAME 判另跑全量 smoke，exit 1 挂在 `[7e]`）。
+[完成] 4、A2 workflow 的 `matchers:` 分支 + 跨子模板传值（续38 `[未做]` 的两条缺口）：先一手核对
+       nuclei 源码再动手 —— `runWorkflowStep` 有 Matchers 时直接 `return`（普通 `subtemplates:` 被忽略、
+       父结果连 `CompareAndSwap` 都跳过＝不报）；`operators.go` 里 `result.Extracts[name]` 的条件是
+       `len(值)>0 && !Internal && Name!=""` ⇒ **只有非 internal 的具名提取器**参与分流/外传（与我最初
+       "internal 才跨模板传"的设想相反，按源码改正）；`Matcher.Match()` 用 `EqualFold`（大小写不敏感）、
+       condition 默认 or；子模板拿 `ctx.Input.Clone()`（只向下传、同级互不可见）。实现：装载期
+       `_wf_slice()`/`_wf_groups()`，运行期 `_wf_collect()`/`_wf_flatten()`/`_wf_group_hit()`/
+       `_run_wf_groups()`，`run_poc_on_target()` 加 `_shared`/`_wf_out` 两个口子。**已知下界**：本引擎
+       匹配器无名字概念 ⇒ `HasMatch(name)` 恒假，只写 `name:` 匹配器而没写具名提取器的模板分不出支；
+       `args:` 仍不做。回归 `[6y]`（9 组 → 13 组，新增 ⑩~⑬），全量 smoke PASS，变异 6/6 击杀。
+[完成] 5、CRLF 两口径自查逐文件一致（`git diff --numstat` 与 `--ignore-cr-at-eol --numstat`）；
+       文档同步：`AGENTS.md`、`docs/architecture.md`、`docs/pipeline.md`、`docs/usage.md`、
+       `docs/roadmap.md`、`docs/poc-guide.md`、`README.md`、`NOTICE.md`、`TODO.md`、`todo.txt`、
+       `docs/takeover-2026-09-25.md`、`CHANGELOG_AI.md`。
+[待办] 6、仍未做：`--check` 补 nmap/fscan 探测；B 组架构级四项（任务队列 / 鉴权加固续 / 分布式节点 /
+       工具版本管理）；C 组需用户输入（305 个导入 POC 实测校准、dirmap 源码复核、GitHub 只读 token
+       覆盖 `config/keys.yaml`）；D 组明确不做（多用户/HTTPS 部署指引、重写 dirmap 等价字典引擎）。

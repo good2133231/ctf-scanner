@@ -134,7 +134,9 @@ def resolve_extended(task_id, settings=None, logger=None, only_missing=True,
         if stopped is not None and stopped():
             return None
         chain, ips, reason = dnsq.resolve_detail(host, timeout=timeout, settings=settings)
-        return host, ",".join(ips), cdn.match(chain, settings), reason, (chain[-1] if chain else "")
+        # CDN 判定同 subdomain 阶段：CNAME 链 + 解析 IP 段两条判据（后者兜"无 CNAME 的任播 CDN"）。
+        return host, ",".join(ips), cdn.match(chain, settings, ips), reason, \
+            (chain[-1] if chain else "")
 
     net, cnames = {}, {}
     for host, ips, cdn_label, reason, last in pool_run(_one, todo, workers=workers):

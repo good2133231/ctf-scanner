@@ -416,6 +416,7 @@ DEFAULTS = {
         "dirs_exposure": "config/dicts/dirs_exposure.txt",
         "sensitive": "config/dicts/sensitive.txt",  # A01 检查的数据源（`路径|关键字|级别|说明`）
         "cdn_cname": "config/dicts/cdn_cname.txt",  # CDN 厂商 CNAME 后缀（子域名 CDN 标记用）
+        "cdn_ips": "config/dicts/cdn_ips.txt",  # CDN 厂商任播 IP 段（CNAME 为空时兜底判定）
     },
     "http": {
         "user_agent": "Mozilla/5.0 (compatible; CTFScanner/0.1; +authorized-testing-only)",

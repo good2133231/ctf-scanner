@@ -7,7 +7,8 @@
   解析 IP 与 CNAME 由 subdomain 阶段回填（纯 DNS 只读查询）。</p>
 <section class="panel">
   <p class="muted small">标签过滤：CDN 标记来自 CNAME 链与
-    <span class="mono">config/dicts/cdn_cname.txt</span> 名单比对。
+    <span class="mono">config/dicts/cdn_cname.txt</span>、解析 IP 段与
+    <span class="mono">config/dicts/cdn_ips.txt</span> 的比对（任一命中即算走 CDN）。
     <a class="btn-mini {{ 'ghost' if tag != 'cdn' else '' }}"
        href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=cdn">只看 CDN</a>
     <a class="btn-mini {{ 'ghost' if tag != 'nocdn' else '' }}"

@@ -50,7 +50,8 @@
       与 nuclei 的已知差异（详见 docs/poc-guide.md）：块要有 matchers 命中才算真（nuclei 对
       无 operators 的块隐式返回 true；但 `internal: true` 提取器的回填照做，见上文）、
       不做类型转换、单值 / 多值命名最多到 `name` + 9 个序号（nuclei 无上限）。
-  workflows（2026-09-23 起支持**子模板编排子集**，2026-09-25 续38 补齐条件编排）：
+  workflows（2026-09-23 起支持**子模板编排子集**，2026-09-25 续38 补齐条件编排、
+      续43 补齐 `matchers:` 分支与跨子模板变量传递）：
       workflow 文件顶层写 `workflows:`，每个子项（语义对齐 nuclei 源码
       `pkg/templates/workflows.go` / `pkg/core/workflow_execute.go`，不自己发明）：
         `template: <文件或目录>` —— 相对 workflow 文件所在目录解析，解析不到再按项目根；
@@ -59,20 +60,30 @@
           按标签挑，**OR 语义**（命中任意一个标签即选中）；与 `template` 同时写时 `tags` 优先
         `subtemplates: [...]` —— **父步骤命中才跑**；带 subtemplates 的步骤里父模板只当
           开关，**父模板自己的结果不报**（否则 workflow 一命中就同时冒出"技术栈识别"噪声）
+        `matchers: [{name: [n1, n2], condition: and|or, subtemplates: [...]}]` —— 按**名字**
+          分支：父模板照跑但结果**同样不报**，只把它产出的"非 internal 的**具名**提取器"当名字；
+          每个 matcher 对 `name` 里每个名字判"父结果里有这个名字"（大小写不敏感），
+          `condition: and` 全中、`or`（默认）任一，成立就把它自己的 subtemplates 跑起来。
+          与 `matchers:` 同时写的普通 `subtemplates:` 被忽略（nuclei 的 matchers 分支直接
+          `return`），装载期会写进 `_note`。
+      跨子模板变量：父模板的具名提取值以 `name` / `name1`… 的口径交给子模板的 `{{name}}`
+      （`_run_wf_groups` / `_wf_collect` / `_wf_flatten`），**只向下传、同级互不可见**
+      （nuclei 给每个子步骤的是 `ctx.Input.Clone()`）。父模板的值优先于子模板 `variables:` 的初值。
       递归保护：深度上限 `_WORKFLOW_MAX_DEPTH` + 同一模板单次执行内只跑一次（`seen`），
       单个步骤一次最多展开 `_WORKFLOW_MAX_SUBS` 个子模板。
-      **不支持**：`matchers:`（按匹配器名分支 —— 本引擎的匹配器没有名字概念）与
-      `args:`（**不是 nuclei 的 workflow 字段**，`WorkflowTemplate` 只有 template / tags /
-      matchers / subtemplates；nuclei 的变量传递靠"`internal: true` 命名提取器 + 共享执行
-      上下文"，而本引擎的每个子模板各自独立加载、上下文不串，**跨子模板**的传递未实现）——
-      两者都把该子项跳过并写进 `_note`（不静默失效）。
+      与 nuclei 的两处已知差异（都不是"能跑就行"，而是本引擎结构决定的下界）：
+      ① 匹配器**没有名字概念**，所以 `Matcher.Match()` 里的 `HasMatch(name)` 在本引擎恒假 ——
+         分流只能由**具名提取器**触发（模板只写了 `name:` 匹配器、没写具名提取器时分不出支）；
+      ② 值的口径是模板级命名 `name`/`name1`…，不是 nuclei workflow 分支里的 `k`/`k1`…。
+      **不支持**：`args:`（**不是 nuclei 的 workflow 字段**，`WorkflowTemplate` 只有
+      template / tags / matchers / subtemplates）—— 跳过该项并写进 `_note`（不静默失效）。
 
 **raw 的安全边界**（红线，2026-09-23）：raw 是"手写 HTTP 原文"，最容易被写成利用动作。
 因此 `PUT` / `PATCH` / `DELETE` / `TRACE` / `CONNECT` 一律**拒绝执行**并把原因记进
 `_note`/`_error`（框架只做只读验证，不做状态变更）；同一套方法白名单也对普通 `method:` 生效。
 
 刻意不做：oob（反连）、**真正的 JS 语义**（方法调用/闭包/异常/除 `+` 外的算术/类型转换，
-flow 只支持上面那个封闭子集）、workflow 的 `matchers:`（按匹配器名分支），以及**请求块级/顶层**
+flow 只支持上面那个封闭子集），以及**请求块级/顶层**
 `dsl`（nuclei 的 dsl 只写在 `matchers` / `extractors` 里；块级写法仍按
 不支持处理 —— 该块跳过并把原因记进 `_note`，不静默失效）。
 含这些特性的模板会被标记 `unsupported` 并在 POC 管理页显示原因，而不是静默失效。
@@ -990,9 +1001,12 @@ def _prepare_dsl(blocks, ok_idx):
     return ""
 
 
-def _wf_tags(item):
-    """取一个 workflow 子项的 `tags:`（nuclei 的 StringSlice：`"a,b"` 与 `[a, b]` 都合法）。"""
-    raw = item.get("tags")
+def _wf_slice(raw):
+    """按 nuclei 的 `StringSlice` 口径读一组字符串：`"a,b"` 与 `[a, b]` 等价，一律归一成小写。
+
+    `tags:` 与 `matchers:[].name:` 都是 `StringSlice` 类型（`pkg/templates/workflows.go`），
+    两边共用这一份解析 —— 各写一遍迟早会在其中一处漏掉 `"a,b"` 这种写法。
+    """
     if raw is None:
         return []
     out = []
@@ -1002,6 +1016,34 @@ def _wf_tags(item):
             if part:
                 out.append(part)
     return out
+
+
+def _wf_tags(item):
+    """取一个 workflow 子项的 `tags:`。"""
+    return _wf_slice(item.get("tags"))
+
+
+def _wf_groups(raw):
+    """解析 `matchers:`（按匹配器名分流），返回 `(groups, reason)`；`reason` 非空＝该项不可用。
+
+    语义对着 nuclei `pkg/workflows/workflows.go`：`Matcher{Name StringSlice,
+    Condition and|or(默认 or), Subtemplates}`，`Compile()` 遇到未知 condition 直接报错。
+    本引擎不抛异常，改为把原因交回给 `_wf_steps` 记进 `_note`（不静默失效）。
+
+    `name:` 为空不报错（照抄 nuclei：`Match()` 遍历空的 name 列表 → 永不成立），
+    这种分支会在运行期自然不生效，不需要额外提示。
+    """
+    if not isinstance(raw, list):
+        return None, "`matchers:` 应是列表"
+    out = []
+    for g in raw:
+        if not isinstance(g, dict):
+            return None, "`matchers:` 的子项应是映射（`name:` / `condition:` / `subtemplates:`）"
+        cond = str(g.get("condition") or "or").strip().lower()
+        if cond not in ("and", "or"):
+            return None, f"`matchers:` 的 condition 只能是 and/or，实际写的是 `{g.get('condition')}`"
+        out.append({"names": _wf_slice(g.get("name")), "condition": cond, "subtemplates": []})
+    return out, ""
 
 
 def _wf_steps(items, skipped):
@@ -1015,33 +1057,42 @@ def _wf_steps(items, skipped):
       不生效** —— 它是挂在别的步骤下面的，不能单独当步骤；这里跳过该项并写明原因。
     - 两者**同时写时 `tags` 优先**、`template` 被忽略（nuclei 就是这么写的，照抄）。
     - `subtemplates:` 递归解析，**只在父步骤命中时才跑**。
-    - `matchers:`（按匹配器名分支跑 subtemplates）不支持：本引擎的匹配器没有名字概念，
-      跳过该项并把原因记进 `_note`（不静默失效）。
+    - `matchers:`（按匹配器名分支）解析成步骤的 `matchers` 字段，语义见 `_wf_groups` 与
+      `_run_wf_groups`；与 `matchers:` 同时写的普通 `subtemplates:` 会被 nuclei 忽略
+      （`runWorkflowStep` 的 matchers 分支直接 `return`），这里照抄并把"被忽略"写进 `_note`。
     - `args:` **不是 nuclei 的 workflow 字段**（`pkg/workflows/workflows.go` 的
-      `WorkflowTemplate` 只有 template / tags / matchers / subtemplates）。nuclei 的变量
-      传递靠"命名 extractor + 共享执行上下文"，本引擎未实现 —— 见到 `args:` 说明模板作者
-      写错了字段，跳过该项并写明原因，而不是假装支持。
+      `WorkflowTemplate` 只有 template / tags / matchers / subtemplates）。见到 `args:` 说明
+      模板作者写错了字段，跳过该项并写明原因，而不是假装支持。
     """
     steps = []
     for item in items:
         if not isinstance(item, dict):
             skipped.append("非映射（不是 `键: 值`）的 workflow 子项")
             continue
-        if item.get("matchers"):
-            skipped.append("`matchers:`（按匹配器名分支的 subtemplates）")
-            continue
         if item.get("args"):
             skipped.append("`args:`（nuclei workflow 无此字段，变量共享靠命名 extractor）")
             continue
+        groups = None
+        if item.get("matchers"):
+            groups, why = _wf_groups(item.get("matchers"))
+            if groups is None:
+                skipped.append(f"`matchers:` 不可用（{why}）")
+                continue
+            for g, raw_g in zip(groups, item["matchers"]):
+                g["subtemplates"] = _wf_steps(raw_g.get("subtemplates") or [], skipped)
+            if item.get("subtemplates"):
+                skipped.append("`subtemplates:`（与 `matchers:` 同时写时 nuclei 只跑 matchers "
+                               "里的子模板，这里的被忽略）")
         tags = _wf_tags(item)
         tpl = item.get("template")
         tpl = tpl.strip() if isinstance(tpl, str) else ""
         if not tags and not tpl:
             skipped.append("既无 `template:` 也无 `tags:` 的子项"
-                           "（只有 `subtemplates:` 不算步骤，nuclei 判为非法）")
+                           "（只有 `subtemplates:`/`matchers:` 不算步骤，nuclei 判为非法）")
             continue
-        steps.append({"path": "" if tags else tpl, "tags": tags,
-                      "subtemplates": _wf_steps(item.get("subtemplates") or [], skipped)})
+        steps.append({"path": "" if tags else tpl, "tags": tags, "matchers": groups or [],
+                      "subtemplates": ([] if groups else
+                                       _wf_steps(item.get("subtemplates") or [], skipped))})
     return steps
 
 
@@ -1060,7 +1111,8 @@ def load_poc_file(path):
 
     # nuclei **workflow** 文件：顶层只有 `workflows:`（编排若干子模板），没有 http/requests 段。
     # 支持的是 nuclei 的**结构子集**：`template:`（文件/目录）、`tags:`（按标签挑）、
-    # `subtemplates:`（父步骤命中才跑）；`matchers:` / `args:` 见 `_wf_steps` 的说明。
+    # `subtemplates:`（父步骤命中才跑）、`matchers:`（按具名提取器分流，续43）；`args:` 见
+    # `_wf_steps` 的说明。
     if isinstance(data.get("workflows"), list) and data["workflows"]:
         skipped = []
         data["_workflow"] = _wf_steps(data["workflows"], skipped)
@@ -1422,6 +1474,54 @@ def _extract_vars(resp, extractors):
     return out
 
 
+def _wf_collect(out, resp, extractors):
+    """把**非 internal 的具名提取器**值累积进 `out`（`{原样名字: [值, ...]}`，供 workflow 用）。
+
+    为什么偏偏是这一类（`pkg/operators/operators.go::Execute`）：`result.Extracts[name]` 的记录
+    条件是 `len(值) > 0 && !extractor.Internal && extractor.Name != ""` —— 即"非 internal 的
+    **具名**提取器"。`internal: true` 的值进的是 `DynamicValues`（只在本模板内 `{{name}}` 可见），
+    **不进** Extracts，所以它既不能作为 workflow `matchers:` 的分流依据、也不能跨模板传递。
+
+    多值上限沿用 `_EXTRACT_VARS_MAX`（防一页宽 regex 抽几千个把上下文撑爆）；同名去重。
+    """
+    for name, val, internal in _extract_items(resp, extractors):
+        if internal or not name:
+            continue
+        s = str(val).strip()[:200]
+        if not s:
+            continue
+        bucket = out.setdefault(name, [])
+        if len(bucket) < _EXTRACT_VARS_MAX and s not in bucket:
+            bucket.append(s)
+
+
+def _wf_flatten(collected):
+    """把 `_wf_collect` 的累积结果展平成 `{"name": 值, "name1": 第2个值, ...}`。
+
+    多值命名口径与 `_extract_vars` 一致（第 1 个是 `name`、第 2 个是 `name1`）—— 两处若各用
+    一套命名，模板作者在 workflow 里写的 `{{csrf_token}}` 与模板内写的就是两个含义了。
+    """
+    out = {}
+    for name, vals in (collected or {}).items():
+        for i, v in enumerate(list(vals)[:_EXTRACT_VARS_MAX]):
+            out[name if i == 0 else f"{name}{i}"] = v
+    return out
+
+
+def _wf_group_hit(group, names):
+    """一个 `matchers:` 项是否成立（nuclei `pkg/workflows/workflows.go::Matcher.Match`）。
+
+    对 `name:` 里的每个名字判 `result.HasMatch(name) || result.HasExtract(name)`，比较用
+    `strings.EqualFold`（**大小写不敏感**）；`condition: and` 要求全中，`or`（默认）任一即可。
+    本引擎的匹配器**没有名字概念**，所以 `HasMatch` 恒假 —— 分流只可能由具名提取器触发。
+    """
+    want = group.get("names") or []
+    if not want:
+        return False
+    hits = [w in names for w in want]
+    return all(hits) if group.get("condition") == "and" else any(hits)
+
+
 # ---------- 执行 ----------
 
 def _owasp_tags(info):
@@ -1459,7 +1559,8 @@ def _vuln_of(poc, info, resp, method, url, base_url, extractors):
     }
 
 
-def _run_block(block, poc, info, base_url, variables, settings, timeout, limit, budget):
+def _run_block(block, poc, info, base_url, variables, settings, timeout, limit, budget,
+               collect=None):
     """执行一个请求块（含 raw / path×payload 展开），命中返回 vuln dict，否则 None。
 
     `budget` 是**跨块共享**的剩余请求数（`[int]`），flow 里多个块共用一份额度 ——
@@ -1468,6 +1569,10 @@ def _run_block(block, poc, info, base_url, variables, settings, timeout, limit, 
     **副作用（有意为之）**：每拿到一次响应就把 `internal: true` 的命名 extractor 值写进
     `variables`（模板上下文），因此调用方传进来的那个 dict 会被**就地更新** —— 这正是
     `{{name}}` 能跨块传递的机制，与 flow 的 `set()` 写的是同一份 dict。
+
+    `collect` 非 None 时是 workflow 用的收集器（`_wf_collect`）：把**非 internal 的具名提取器**
+    值也累积进去，供上层做 `matchers:` 分流与跨子模板传递。与 internal 回填同理，收集也放在
+    匹配**之前**且不受命中与否影响（nuclei 的 OnResult 每个 result 都会触发）。
     """
     items, _reasons = _block_requests(block)
     if not items:
@@ -1505,6 +1610,8 @@ def _run_block(block, poc, info, base_url, variables, settings, timeout, limit, 
             # 取 csrf_token"模板在本引擎里**静默失效** —— 后续请求会带着字面量 `{{csrf_token}}`
             # 发出去。宁可多写变量：取错值只会让后面的匹配不中（看得见），取不到整条模板失效（看不见）。
             variables.update(_extract_vars(resp, block.get("extractors")))
+            if collect is not None:
+                _wf_collect(collect, resp, block.get("extractors"))
             if not _match_response(resp, block.get("matchers"),
                                    block.get("matchers-condition") or "or"):
                 continue
@@ -1541,35 +1648,96 @@ def _wf_targets(step, base, registry, settings):
     return [m for m in subs if m.get("_status") == "ok"][:_WORKFLOW_MAX_SUBS]
 
 
-def _run_wf_step(step, base, base_url, settings, max_requests, site, depth, seen, registry):
-    """跑一个 workflow 步骤，命中返回结果列表（空 = 没命中）。
+def _wf_step_key(sub):
+    """子模板的单次执行去重键（同一份 yaml 被多条路径引用时只跑一次）。"""
+    return str(pathlib.Path(str(sub.get("_path") or sub.get("id") or "")).resolve())
 
-    nuclei 语义（`pkg/core/workflow_execute.go::runWorkflowStep`）：**带 `subtemplates` 的
-    步骤，父模板只当开关** —— 父模板自己的命中结果不报（否则"技术栈识别"这类父模板会和
-    子模板的结果一起冒出来），只报子步骤的结果。所以这里先跑本步骤的子模板：没命中直接
-    返回空（`subtemplates` 一个请求都不发 —— 这正是条件编排的全部意义），命中了才下钻。
+
+def _run_wf_groups(step, groups, base, base_url, settings, max_requests, site, depth, seen,
+                   registry, shared):
+    """`matchers:` 分支：先跑父模板收集"具名提取器"名字，再按名字分流跑各 matcher 的子模板。
+
+    nuclei（`pkg/core/workflow_execute.go::runWorkflowStep`）里这条分支与普通分支的差别：
+    ① 父模板照跑，但结果**一律不报**（matchers 分支直接 `return`，连 `CompareAndSwap` 都跳过）
+    —— 所以父模板只当"取值的开关"，不是结果；
+    ② 分流依据是父模板结果里的 `Matches ∪ Extracts` 名字（`Matcher.Match()`），本引擎的匹配器
+    没有名字概念，故只剩 `Extracts` = 非 internal 的具名提取器（见 `_wf_collect`）；
+    ③ 每个 matcher 命中的子模板拿到的是**父上下文的克隆**（`ctx.Input.Clone()`）—— 只向下传，
+    同级 matcher 之间互不可见。这里对应关系是：同一个 `child_vars` 交给本步骤各 matcher 的
+    子步骤（同级之间不共享各自后续的写入）。
     """
-    child_steps = step.get("subtemplates") or []
+    collected = {}
     for sub in _wf_targets(step, base, registry, settings):
-        key = str(pathlib.Path(str(sub.get("_path") or sub.get("id") or "")).resolve())
-        if key in seen:                     # 同一模板单次执行内只跑一次（自环直接挡住）
+        key = _wf_step_key(sub)
+        if key in seen:
             continue
         seen.add(key)
-        hits = run_poc_on_target(sub, base_url, settings, max_requests, site=site,
-                                 _depth=depth + 1, _seen=seen, registry=registry)
-        if not hits:
+        # 父模板的命中结果**丢弃**，只要它的具名提取值（nuclei 的 matchers 分支不 CompareAndSwap）
+        run_poc_on_target(sub, base_url, settings, max_requests, site=site, _depth=depth + 1,
+                          _seen=seen, registry=registry, _shared=shared, _wf_out=collected)
+        if collected:
+            break       # 名字够分流了；继续跑其余父模板只是白花请求（本引擎无并发额度兜底）
+    if not collected:
+        return []
+    names = {str(k).lower() for k in collected}
+    child_vars = dict(shared or {})
+    child_vars.update(_wf_flatten(collected))
+    for g in groups:
+        if not _wf_group_hit(g, names):
             continue
-        if not child_steps:
-            return hits
-        for cstep in child_steps:
+        for cstep in (g.get("subtemplates") or []):
             sub_hits = _run_wf_step(cstep, base, base_url, settings, max_requests,
-                                    site, depth + 1, seen, registry)
+                                    site, depth + 1, seen, registry, child_vars)
             if sub_hits:
                 return sub_hits
     return []
 
 
-def _run_workflow(poc, base_url, settings, max_requests, site, depth, seen, registry=None):
+def _run_wf_step(step, base, base_url, settings, max_requests, site, depth, seen, registry,
+                 shared=None):
+    """跑一个 workflow 步骤，命中返回结果列表（空 = 没命中）。
+
+    语义对着 nuclei `pkg/core/workflow_execute.go::runWorkflowStep`：
+
+    - **普通步骤**：带 `subtemplates` 的步骤，**父模板只当开关** —— 父模板自己的命中结果不报
+      （否则"技术栈识别"这类父模板会和子模板的结果一起冒出来），只报子步骤的结果。所以这里先
+      跑本步骤的模板：没命中直接返回空（`subtemplates` 一个请求都不发 —— 这正是条件编排的
+      全部意义），命中了才下钻。父模板收集到的具名提取值一并交给子步骤（见下）。
+    - **`matchers:` 步骤**：转 `_run_wf_groups`。
+    - `shared`：上层（父模板）传下来的具名提取值，会叠进子模板的模板上下文 —— 这是 nuclei
+      "`internal`/具名提取器 + 共享 Input"在本引擎里的对应物。**只向下传**：同一层里先跑完的
+      子模板写入的变量不会回流给同层的下一个（本引擎每个子模板各自建 `variables`，天然如此）。
+    """
+    groups = step.get("matchers") or []
+    if groups:
+        return _run_wf_groups(step, groups, base, base_url, settings, max_requests, site,
+                              depth, seen, registry, shared)
+    child_steps = step.get("subtemplates") or []
+    for sub in _wf_targets(step, base, registry, settings):
+        key = _wf_step_key(sub)
+        if key in seen:                     # 同一模板单次执行内只跑一次（自环直接挡住）
+            continue
+        seen.add(key)
+        collected = {}
+        hits = run_poc_on_target(sub, base_url, settings, max_requests, site=site,
+                                 _depth=depth + 1, _seen=seen, registry=registry,
+                                 _shared=shared, _wf_out=collected)
+        if not hits:
+            continue
+        if not child_steps:
+            return hits
+        child_vars = dict(shared or {})
+        child_vars.update(_wf_flatten(collected))
+        for cstep in child_steps:
+            sub_hits = _run_wf_step(cstep, base, base_url, settings, max_requests,
+                                    site, depth + 1, seen, registry, child_vars)
+            if sub_hits:
+                return sub_hits
+    return []
+
+
+def _run_workflow(poc, base_url, settings, max_requests, site, depth, seen, registry=None,
+                  shared=None):
     """执行 workflow 子集（结构见模块 docstring）。
 
     递归保护两条：① 深度上限 `_WORKFLOW_MAX_DEPTH`；② 同一次执行内**同一模板只跑一次**
@@ -1580,14 +1748,14 @@ def _run_workflow(poc, base_url, settings, max_requests, site, depth, seen, regi
     base = pathlib.Path(poc.get("_path") or ".").parent
     for step in (poc.get("_workflow") or []):
         hits = _run_wf_step(step, base, base_url, settings, max_requests, site, depth,
-                            seen, registry)
+                            seen, registry, shared)
         if hits:
             return hits
     return []
 
 
 def run_poc_on_target(poc, base_url, settings, max_requests=MAX_REQUESTS_PER_POC, site=None,
-                      _depth=0, _seen=None, registry=None):
+                      _depth=0, _seen=None, registry=None, _shared=None, _wf_out=None):
     """对单个目标执行单个 POC；命中即返回一条 vuln dict（每 POC 每目标最多一条）。
 
     `site` 为 probe 产出的站点信息（可含 `favicon`/`tech`），用于**零请求前置判定**：
@@ -1596,6 +1764,10 @@ def run_poc_on_target(poc, base_url, settings, max_requests=MAX_REQUESTS_PER_POC
 
     `registry` 是 workflow 里 `tags:` 步骤的候选集（`load_enabled_pocs` 的结果）；不传则
     在需要时懒加载。vulnscan 传的是它已经加载好的那份，避免每个站点重复读盘。
+
+    `_shared` / `_wf_out` 是 workflow **跨子模板传递**的两个口子（只有 `_run_wf_step` 会用，
+    普通调用方留空即无任何行为变化）：`_shared` 是上层传下来的具名提取值（叠进模板上下文），
+    `_wf_out` 是本次执行"收集到的非 internal 具名提取值"的出参容器（`_wf_collect` 写它）。
 
     三种形态：普通请求块（`path` × `payloads`）、`raw` 原文块、带 `flow` 的多块编排
     （见模块 docstring）。`flow` 有两条路：**布尔子集**每块只跑一次、条件成立且**有正向命中**
@@ -1610,11 +1782,15 @@ def run_poc_on_target(poc, base_url, settings, max_requests=MAX_REQUESTS_PER_POC
             return []
     if poc.get("_workflow"):
         return _run_workflow(poc, base_url, settings, max_requests, site, _depth,
-                             _seen if _seen is not None else set(), registry)
+                             _seen if _seen is not None else set(), registry, _shared)
     info = poc.get("info", {}) or {}
     variables = dict(builtin_vars(base_url))
     for k, v in (poc.get("variables") or {}).items():
         variables[str(k)] = _render(v, variables)
+    # 父模板传下来的值叠在**最后**：它是父模板实测抓到的，本模板 `variables:` 里同名的只是初值。
+    # （nuclei 里子模板用的是 `ctx.Input.Clone()`，父上下文已有的键不会被模板默认值顶掉。）
+    if _shared:
+        variables.update({str(k): str(v) for k, v in _shared.items()})
     blocks, ok_idx, _notes = _runnable_blocks(poc)
     if not ok_idx:
         return []
@@ -1622,7 +1798,7 @@ def run_poc_on_target(poc, base_url, settings, max_requests=MAX_REQUESTS_PER_POC
 
     def _run_at(i):
         return _run_block(blocks[i], poc, info, base_url, variables, settings, timeout,
-                          max_requests, budget)
+                          max_requests, budget, collect=_wf_out)
 
     # 装载期已把 `flow` 判成布尔子集（`_flow`）或脚本子集（`_flow_script`）之一；两个都没有
     # 说明是**手工构造的 poc dict**（测试/调用方直接拼 dict），这里按同样的顺序兜底解析。

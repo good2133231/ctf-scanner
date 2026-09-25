@@ -5632,12 +5632,15 @@ dsl: [status_code == 200]
           "8 类越界（方法调用·未知函数·未知变量·算术·链式比较·字符串大小比较·坏 regex·空 dsl）"
           "装载期即标 unsupported 且原因指认写法 / 提取器级同样拦 / 块级与顶层 dsl 仍拒绝")
 
-    # [6y] nuclei workflow 的**条件编排**（续38）：`template:`（文件/目录）+ `tags:` +
-    # `subtemplates:`（父步骤命中才跑）。语义对着 nuclei 源码写（`pkg/templates/workflows.go`
-    # / `pkg/core/workflow_execute.go` / `pkg/templates/tag_filter.go`），不自己发明：
+    # [6y] nuclei workflow 的**条件编排**（续38；`matchers:` 分支为续43 补齐）：`template:`
+    # （文件/目录）+ `tags:` + `subtemplates:`（父步骤命中才跑）+ `matchers:`（按具名提取器
+    # 分流）。语义对着 nuclei 源码写（`pkg/templates/workflows.go` /
+    # `pkg/core/workflow_execute.go` / `pkg/templates/tag_filter.go`），不自己发明：
     #   - 带 subtemplates 的步骤，父模板只当**开关**，父模板自己的结果不报；
     #   - `tags:` 是 **OR** 选择，候选集 = 注册表启用 + 级别门控（与普通 POC 一视同仁）；
-    #   - `matchers:` / `args:` 不支持（后者根本不是 nuclei 的 workflow 字段）。
+    #   - `matchers:` 步骤的父模板同样只当开关（连命中都不报），按父模板结果里的
+    #     **非 internal 具名提取器**名字挑分支；同名比较大小写不敏感，and 全中 / or 任一；
+    #   - `args:` 不支持（它根本不是 nuclei 的 workflow 字段）。
     _y_parent = engine.load_poc_file(_wpoc("wf-parent-hit.yaml", """
 id: smoke-wf-parent
 info: {name: parent, severity: medium}
@@ -5793,30 +5796,33 @@ workflows:
                "info": {"tags": ["cap17"]}} for i in range(45)]
     assert len(engine._wf_targets(_y_step, _ptmp, _y_cap, {})) == engine._WORKFLOW_MAX_SUBS
     assert len(engine._wf_targets(_y_step, _ptmp, _y_cap[:5], {})) == 5, "不足上限时不该截断"
-    # ⑧ `matchers:` / `args:` / 只有 `subtemplates:` 的项：跳过并写明原因（不静默失效）
+    # ⑧ `args:` / 只有 `subtemplates:` 的项：跳过并写明原因（不静默失效）。
+    #    `matchers:` 从续43 起是**有效**步骤（按具名提取器分流）；与它同写的普通
+    #    `subtemplates:` 被忽略，"被忽略"要能看见（照抄 nuclei：matchers 分支直接 return）。
     _y_skip = engine.load_poc_file(_wpoc("wf-skip.yaml", """
 id: smoke-wf-skip
 info: {name: skip, severity: medium}
 workflows:
   - template: wf-child.yaml
     matchers: [{name: x, subtemplates: [{template: wf-child.yaml}]}]
+    subtemplates:
+      - template: wf-child.yaml
   - template: wf-child.yaml
     args: {foo: bar}
   - subtemplates: [{template: wf-child.yaml}]
   - template: wf-child.yaml
 """))
-    assert _y_skip["_status"] == "ok" and len(_y_skip["_workflow"]) == 1, _y_skip
-    for _y_k in ("matchers:", "args:", "subtemplates:"):
+    assert _y_skip["_status"] == "ok" and len(_y_skip["_workflow"]) == 2, _y_skip
+    for _y_k in ("args:", "subtemplates:"):
         assert _y_k in (_y_skip["_note"] or ""), f"`{_y_k}` 被跳过的原因要能看见：{_y_skip}"
+    assert "被忽略" in (_y_skip["_note"] or ""), \
+        f"与 `matchers:` 同时写的 `subtemplates:` 被忽略这件事要能看见：{_y_skip}"
+    _y_ms = _y_skip["_workflow"][0]
+    assert [g["names"] for g in _y_ms["matchers"]] == [["x"]], _y_ms
+    assert len(_y_ms["matchers"][0]["subtemplates"]) == 1, _y_ms
+    assert _y_ms["subtemplates"] == [], \
+        f"与 `matchers:` 同时写的 `subtemplates:` 必须被忽略（nuclei 只跑 matchers 里的）：{_y_ms}"
     # 全部子项都被跳过 → 整份 workflow 判不可用，且原因指认写法
-    _y_onlym = engine.load_poc_file(_wpoc("wf-only-matchers.yaml", """
-id: smoke-wf-only-matchers
-info: {name: m, severity: medium}
-workflows:
-  - template: wf-child.yaml
-    matchers: [{name: x, subtemplates: [{template: wf-child.yaml}]}]
-"""))
-    assert _y_onlym["_status"] == "unsupported" and "matchers:" in _y_onlym["_error"], _y_onlym
     _y_onlya = engine.load_poc_file(_wpoc("wf-only-args.yaml", """
 id: smoke-wf-only-args
 info: {name: a, severity: medium}
@@ -5825,6 +5831,26 @@ workflows:
     args: {foo: bar}
 """))
     assert _y_onlya["_status"] == "unsupported" and "args:" in _y_onlya["_error"], _y_onlya
+    _y_badcond = engine.load_poc_file(_wpoc("wf-bad-condition.yaml", """
+id: smoke-wf-bad-condition
+info: {name: b, severity: medium}
+workflows:
+  - template: wf-child.yaml
+    matchers: [{name: x, condition: xor, subtemplates: [{template: wf-child.yaml}]}]
+"""))
+    assert _y_badcond["_status"] == "unsupported" and "matchers:" in _y_badcond["_error"], \
+        _y_badcond
+    assert "condition" in _y_badcond["_error"], _y_badcond
+    # 名字一律归一成小写（`StringSlice`：`"a, b"` 与 `[a, b]` 等价）、condition 默认 or
+    assert engine._wf_slice("A, b") == ["a", "b"] and engine._wf_slice(None) == []
+    assert engine._wf_slice(["x,y"]) == ["x", "y"], "列表里塞了逗号串也要拆开"
+    _y_g, _y_why = engine._wf_groups([{"name": "a"}, {"name": ["b", "c"]}])
+    assert [g["names"] for g in _y_g] == [["a"], ["b", "c"]] and _y_why == "", (_y_g, _y_why)
+    assert all(g["condition"] == "or" for g in _y_g), f"condition 默认应是 or：{_y_g}"
+    _y_g2, _y_why2 = engine._wf_groups([{"name": "a", "condition": "AND"}])
+    assert _y_g2[0]["condition"] == "and" and _y_why2 == "", (_y_g2, _y_why2)
+    assert engine._wf_groups("x")[0] is None and "列表" in engine._wf_groups("x")[1]
+    assert engine._wf_groups(["x"])[0] is None and "映射" in engine._wf_groups(["x"])[1]
     # ⑨ 带 subtemplates 的自环：同一模板单次执行只跑一次（否则 A→A 会无限下钻）
     _wpoc("wf-loop-sub.yaml", """
 id: smoke-wf-loop-sub
@@ -5839,10 +5865,154 @@ workflows:
     assert engine.run_poc_on_target(_y_loop, _base_url17, {}) == []
     assert _hits17 == ["/b"], f"自环应被去重挡住，子模板只跑一次：{_hits17}"
 
-    print("[6y] 续38 nuclei workflow 条件编排 ok: 父命中才下钻（不命中则子模板零请求）/ 带 "
+    # ⑩ `matchers:` 分流（续43）：父模板只当"取值开关"（连命中都不报），按**非 internal 具名
+    #    提取器**的名字挑分支。语义对着 nuclei `pkg/core/workflow_execute.go::runWorkflowStep`
+    #    的 matchers 分支 + `pkg/workflows/workflows.go::Matcher.Match`（EqualFold 比较、
+    #    and 全中 / or 任一）写。本引擎的匹配器没有名字概念，故 `HasMatch` 恒假、只能靠 Extracts。
+    _wpoc("wf-tok-parent.yaml", """
+id: smoke-wf-tok-parent
+info: {name: tok parent, severity: medium}
+http:
+  - path: ["/csrf"]
+    matchers: [{type: word, words: ["TOK123"]}]
+    extractors:
+      - type: regex
+        name: tok
+        regex: ["TOK[0-9]+"]
+""")
+    _wpoc("wf-tok-use.yaml", """
+id: smoke-wf-tok-use
+info: {name: tok use, severity: medium}
+http:
+  - path: ["/b/{{tok}}"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+""")
+    _y_tok = engine.load_poc_file(_wpoc("wf-tok.yaml", """
+id: smoke-wf-tok
+info: {name: tok wf, severity: medium}
+workflows:
+  - template: wf-tok-parent.yaml
+    matchers:
+      - name: nope
+        subtemplates:
+          - template: wf-child.yaml
+      - name: TOK
+        subtemplates:
+          - template: wf-tok-use.yaml
+"""))
+    assert _y_tok["_status"] == "ok", _y_tok
+    assert [g["names"] for g in _y_tok["_workflow"][0]["matchers"]] == [["nope"], ["tok"]], _y_tok
+    _hits17.clear()
+    _y_tokres = engine.run_poc_on_target(_y_tok, _base_url17, {})
+    # 名字大小写不敏感（`TOK` 命中父模板抽出的 `tok`）/ 未命中的 matcher 子模板零请求 /
+    # 父模板本身命中了也**不报**（报出来的是子模板）
+    assert _hits17 == ["/csrf", "/b/TOK123"], \
+        f"matchers 分流：未命中的分支不该发请求、命中的分支要拿到父模板取到的值：{_hits17}"
+    assert [v["poc_id"] for v in _y_tokres] == ["smoke-wf-tok-use"], _y_tokres
+    # ⑪ `condition: and` 要求名字全中（父模板只抽得到 tok，抽不到 sec → 子模板零请求）
+    _y_and = engine.load_poc_file(_wpoc("wf-tok-and.yaml", """
+id: smoke-wf-tok-and
+info: {name: and, severity: medium}
+workflows:
+  - template: wf-tok-parent.yaml
+    matchers:
+      - name: "tok, sec"
+        condition: and
+        subtemplates:
+          - template: wf-tok-use.yaml
+"""))
+    assert [g["names"] for g in _y_and["_workflow"][0]["matchers"]] == [["tok", "sec"]], _y_and
+    assert _y_and["_workflow"][0]["matchers"][0]["condition"] == "and", _y_and
+    _hits17.clear()
+    assert engine.run_poc_on_target(_y_and, _base_url17, {}) == []
+    assert _hits17 == ["/csrf"], f"and 未全中就不该跑分支子模板：{_hits17}"
+    # 同一份父模板换成 `or`（默认值）→ 任一命中即跑
+    _y_or = engine.load_poc_file(_wpoc("wf-tok-or.yaml", """
+id: smoke-wf-tok-or
+info: {name: or, severity: medium}
+workflows:
+  - template: wf-tok-parent.yaml
+    matchers:
+      - name: [tok, sec]
+        subtemplates:
+          - template: wf-tok-use.yaml
+"""))
+    assert _y_or["_workflow"][0]["matchers"][0]["condition"] == "or", _y_or
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_y_or, _base_url17, {})] == \
+        ["smoke-wf-tok-use"]
+    assert _hits17 == ["/csrf", "/b/TOK123"], _hits17
+    # ⑫ `internal: true` 的提取器**不参与**分流（nuclei：internal 值进 DynamicValues、
+    #    不进 `result.Extracts`）→ 父模板跑了也分不出支，子模板零请求
+    _wpoc("wf-tok-int.yaml", """
+id: smoke-wf-tok-int
+info: {name: tok int, severity: medium}
+http:
+  - path: ["/csrf"]
+    extractors:
+      - type: regex
+        name: tok
+        internal: true
+        regex: ["TOK[0-9]+"]
+""")
+    _y_int = engine.load_poc_file(_wpoc("wf-tok-int-wf.yaml", """
+id: smoke-wf-tok-int-wf
+info: {name: int wf, severity: medium}
+workflows:
+  - template: wf-tok-int.yaml
+    matchers:
+      - name: [tok]
+        subtemplates:
+          - template: wf-tok-use.yaml
+"""))
+    assert _y_int["_status"] == "ok", _y_int
+    _hits17.clear()
+    assert engine.run_poc_on_target(_y_int, _base_url17, {}) == []
+    assert _hits17 == ["/csrf"], f"internal 提取值不该参与分流：{_hits17}"
+    # ⑬ 同级子模板互不回流：兄弟 A 也抽到一个**非 internal** 的 `tok`（值是 AAA）但没命中，
+    #    兄弟 B 用的必须是**父模板给的** TOK123 —— 若把同级/各步的收集容器共用，B 会发 `/b/AAA`
+    _wpoc("wf-sib-a.yaml", """
+id: smoke-wf-sib-a
+info: {name: sib a, severity: medium}
+http:
+  - path: ["/a"]
+    matchers: [{type: word, words: ["NOT-THERE"]}]
+    extractors:
+      - type: regex
+        name: tok
+        regex: ["AAA"]
+""")
+    _wpoc("wf-sib-b.yaml", """
+id: smoke-wf-sib-b
+info: {name: sib b, severity: medium}
+http:
+  - path: ["/b/{{tok}}"]
+    matchers: [{type: word, words: ["hello-BBB"]}]
+""")
+    _y_sib = engine.load_poc_file(_wpoc("wf-sib.yaml", """
+id: smoke-wf-sib
+info: {name: sib, severity: medium}
+workflows:
+  - template: wf-tok-parent.yaml
+    matchers:
+      - name: [tok]
+        subtemplates:
+          - template: wf-sib-a.yaml
+          - template: wf-sib-b.yaml
+"""))
+    assert _y_sib["_status"] == "ok", _y_sib
+    _hits17.clear()
+    assert [v["poc_id"] for v in engine.run_poc_on_target(_y_sib, _base_url17, {})] == \
+        ["smoke-wf-sib-b"]
+    assert _hits17 == ["/csrf", "/a", "/b/TOK123"], \
+        f"兄弟模板自己收集到的值不该回流给同层的下一个：{_hits17}"
+
+    print("[6y] 续38/续43 nuclei workflow 条件编排 ok: 父命中才下钻（不命中则子模板零请求）/ 带 "
           "subtemplates 的父模板只当开关·结果不报 / 多级门控 / `tags:` OR 选择且只打选中的模板 "
-          "/ `tags` 优先于 `template` / 目录展开 / 单步 40 个上限 / `matchers:`·`args:`·裸 "
-          "`subtemplates:` 跳过并写明原因（全跳过则整份 unsupported）/ 自环去重")
+          "/ `tags` 优先于 `template` / 目录展开 / 单步 40 个上限 / `args:`·裸 `subtemplates:` "
+          "跳过并写明原因（全跳过则整份 unsupported）；续43 `matchers:` 按**非 internal 具名"
+          "提取器**分流：父模板命中也不报、未命中的分支零请求、名字大小写不敏感、and/or、"
+          "internal 不参与分流、跨子模板传值 `{{tok}}` 而同级不回流 / 自环去重")
 
     # [6z] 续39：nuclei `flow:` 的**脚本子集**（循环 + `set()` + 请求 → 多轮/多步编排）。
     # 语义对着 nuclei 源码写（`pkg/tmplexec/flow/{flow_executor,flow_internal,vm}.go`）：
@@ -6380,10 +6550,14 @@ http:
     import ast as _ast7c
     _third7c = ("passive", "ctlog", "intel", "iprecon", "fofa", "shodan", "quake",
                  "github_leak")
-    _tgt7c = ("takeover", "jsmine", "fingerprint", "evasion", "ssrf",
+    _tgt7c = ("takeover", "fingerprint", "evasion", "ssrf",
                "stages/probe", "stages/dirscan", "pocs/engine", "owasp/checks")
+    # jsmine 是**混合出口**（续43）：页面请求发往目标侧，但 `<script src>` 可能指向第三方
+    # CDN/埋点 —— 那里必须不带登录态。所以它只要求"显式声明 auth"（不许靠默认 False 蒙过去），
+    # 值的正确性由 [7d] 的运行期断言钉（这里用 ast 判不出表达式真假）。
+    _hybrid7c = ("jsmine",)
     _calls7c = {}
-    for _rel7c in _third7c + _tgt7c:
+    for _rel7c in _third7c + _tgt7c + _hybrid7c:
         _src7c = (ROOT / "scanner" / f"{_rel7c}.py").read_text(encoding="utf-8")
         for _n7c in _ast7c.walk(_ast7c.parse(_src7c)):
             if isinstance(_n7c, _ast7c.Call) and \
@@ -6398,10 +6572,145 @@ http:
         assert _calls7c.get(_rel7c), f"[7c] {_rel7c}.py 里找不到 http_request 调用"
         assert all(_calls7c[_rel7c]), \
             f"[7c] {_rel7c}.py 是目标侧出口，每个调用点都必须显式 auth=True"
+    for _rel7c in _hybrid7c:
+        assert _calls7c.get(_rel7c), f"[7c] {_rel7c}.py 里找不到 http_request 调用"
+        assert all(_calls7c[_rel7c]), \
+            f"[7c] {_rel7c}.py 是混合出口，每个调用点都必须显式写 auth=（值见 [7d]）"
 
     print("[7c] 续42 第三方证书校验 ok: auth=False→verify_tls_external（默认 True）/ "
           "auth=True→verify_tls（默认 False）/ 两把开关互不连带 / 显式 verify 优先 / "
-          "8 个第三方模块零 auth= / 9 个目标侧模块全覆盖 auth=True")
+          "8 个第三方模块零 auth= / 8 个目标侧模块全覆盖 auth=True / "
+          "jsmine 为混合出口（显式 auth，值由 [7d] 钉）")
+
+    # [7d] 续43：jsmine 抓 JS 时**第三方主机不得带登录态**（实跑 pengo.pro 逮到的缺陷）。
+    #     现象：日志里出现 `InsecureRequestWarning ... host 'static.cloudflareinsights.com'`
+    #     —— 那是首页 `<script src>` 引的第三方埋点，不是目标主机，却也走了 auth=True。
+    #     后果：任务一旦配了 Cookie/Authorization（-H / --cookie），目标会话凭据会被发到
+    #     CDN 与埋点厂商，与 AGENTS.md §5"第三方绝不带登录态"直接冲突（本次实跑未配登录态，
+    #     所以没有真的外发，只是路径被证实）。修复：按 URL 主机是否属目标注册域决定 auth。
+    from scanner import jsmine as _jm7d
+    # ① 判定口径本身（与 `_is_noise` 的 protect 放行同一份，后缀必须按 label 比）
+    assert _jm7d._is_self_host("pengo.pro", {"pengo.pro"}) is True
+    assert _jm7d._is_self_host("a.b.pengo.pro", {"pengo.pro"}) is True
+    assert _jm7d._is_self_host("PENGO.PRO", {"pengo.pro"}) is True, "[7d] 主机大小写应归一"
+    assert _jm7d._is_self_host("static.cloudflareinsights.com", {"pengo.pro"}) is False
+    assert _jm7d._is_self_host("notpengo.pro", {"pengo.pro"}) is False, \
+        "[7d] 后缀匹配必须带点号：notpengo.pro 不是 pengo.pro 的子域"
+    assert _jm7d._is_self_host("", {"pengo.pro"}) is False
+    # ② 运行期：把 http_request 换成记录 auth 的桩，页面里放三条 `<script src>`
+    _seen7d = {}
+
+    def _fake_jm7d(url, **kw):
+        _seen7d[url] = bool(kw.get("auth"))
+        if url.endswith(".js"):
+            return {"status": 200, "headers": {}, "text": "var a=1;", "length": 7,
+                    "url": url}
+        return {"status": 200, "headers": {}, "text":
+                '<script src="/same.js"></script>'
+                '<script src="https://cdn.pengo.pro/lib.js"></script>'
+                '<script src="https://static.cloudflareinsights.com/beacon.min.js"></script>',
+                "length": 64, "url": url}
+
+    _real_jm7d = _jm7d.http_request
+    try:
+        _jm7d.http_request = _fake_jm7d
+        _jm7d.mine("http://pengo.pro/",
+                   {"jsmine": {"secrets": False}, "limits": {"max_workers": 4}})
+    finally:
+        _jm7d.http_request = _real_jm7d
+    assert _seen7d.get("http://pengo.pro/") is True, \
+        f"[7d] 目标页面本身应带登录态：{_seen7d}"
+    assert _seen7d.get("http://pengo.pro/same.js") is True, \
+        f"[7d] 同主机脚本应带登录态：{_seen7d}"
+    assert _seen7d.get("https://cdn.pengo.pro/lib.js") is True, \
+        f"[7d] 同注册域子域脚本应带登录态：{_seen7d}"
+    assert _seen7d.get("https://static.cloudflareinsights.com/beacon.min.js") is False, \
+        f"[7d] 第三方脚本**不得**带登录态（缺陷原形）：{_seen7d}"
+    assert len(_seen7d) == 4, f"[7d] 抓取点数量不符（页面 1 + 脚本 3）：{_seen7d}"
+
+    print("[7d] 续43 jsmine 出站凭据 ok: 同注册域（含子域、大小写归一）带登录态 / "
+          "第三方 CDN·埋点不带 / 后缀按 label 比（notpengo.pro 不误判）")
+
+    # [7e] 续43：CDN 判定补**任播 IP 段**判据（实跑 pengo.pro 逮到的准确性缺陷）。
+    #     现象：pengo.pro / admin.pengo.pro / app.pengo.pro 的 A 记录直接指向 Cloudflare 边缘
+    #     （`172.66.40.229` / `172.66.43.27`），**CNAME 链为空** —— 只按 CNAME 判会把三个主机
+    #     全标成"非 CDN"：① 资产页看不出走 CDN；② portscan 照样去打边缘节点，得出"30 个端口
+    #     开放"这种与目标无关的结论（同一时刻手工 TCP connect 22 是超时的）。
+    #     修复：`config/dicts/cdn_ips.txt`（Cloudflare 官方 ips-v4 的 15 段，文件头记来源+日期）
+    #     作第二条判据；CNAME 仍是**第一**判据（厂商特征比 IP 归属更明确）。
+    import ast as _ast7e, ipaddress as _ipaddr7e
+    from scanner import cdn as _cdn7e
+    _s7e = {}
+    _nets7e = _cdn7e.networks(_s7e)
+    assert len(_nets7e) >= 10, f"[7e] CDN IP 段名单没加载出来：{len(_nets7e)} 条"
+    _vend7e = {_v for _n, _v in _nets7e}
+    assert _vend7e == {"cloudflare"}, f"[7e] 厂商名应与数据文件里的 `| cloudflare` 一致：{_vend7e}"
+    # ① 实跑命中的那两个 IP（缺陷原形：CNAME 为空时它们必须仍判成 CDN）
+    assert _cdn7e.ip_match(["172.66.40.229"], _s7e) == "cloudflare"
+    assert _cdn7e.ip_match(["172.66.43.27"], _s7e) == "cloudflare"
+    # ② 段边界（钉住"按网段判定"，而不是写成前缀/字符串比较）：`172.64.0.0/13` 两端都在内，
+    #    刚出界的一侧必须不命中 —— 把 `in net` 改成 `startswith` 这类改法会在这里死。
+    assert _cdn7e.ip_match(["172.64.0.0"], _s7e) == "cloudflare"
+    assert _cdn7e.ip_match(["172.71.255.255"], _s7e) == "cloudflare"
+    assert _cdn7e.ip_match(["172.72.0.0"], _s7e) == "", "[7e] 172.72.0.0 已在 172.64.0.0/13 之外"
+    assert _cdn7e.ip_match(["172.63.255.255"], _s7e) == "", "[7e] 172.63.255.255 在 172.64.0.0/13 之前"
+    # ③ 非 CDN 的公共 IP 不得误命中；空/None/非法条目一律安全返回空（不许让整次判定失败）
+    assert _cdn7e.ip_match(["8.8.8.8", "9.9.9.9"], _s7e) == ""
+    assert _cdn7e.ip_match([], _s7e) == ""
+    assert _cdn7e.ip_match(None, _s7e) == ""
+    assert _cdn7e.ip_match(["", "  ", "not-an-ip"], _s7e) == ""
+    assert _cdn7e.ip_match(["", "not-an-ip", "172.66.40.229"], _s7e) == "cloudflare", \
+        "[7e] 非法条目应逐条跳过，而不是让整次判定作废"
+    # ④ IPv6 不得抛异常（`ipaddress` 对不同版本做包含判断会抛 TypeError），也不得误命中 IPv4 段
+    assert _cdn7e.ip_match(["2606:4700::1111"], _s7e) == ""
+    assert _cdn7e.ip_match(["2606:4700::1111", "172.66.40.229"], _s7e) == "cloudflare"
+    # ⑤ CNAME 判据优先于 IP 判据：把 IP 名单的厂商换成假名后，CNAME 命中时不得返回假名
+    #    （反过来写 = "IP 先判"，会把厂商明确的 CNAME 特征降级成"某个 IP 段"）
+    _real_nets7e = _cdn7e.networks
+    try:
+        _cdn7e.networks = lambda settings=None: \
+            ((_ipaddr7e.ip_network("172.66.0.0/16"), "fakevendor"),)
+        assert _cdn7e.ip_match(["172.66.40.229"], _s7e) == "fakevendor", "[7e] 桩没生效"
+        assert _cdn7e.match(["x.cloudflare.net"], _s7e, ["172.66.40.229"]) == "cloudflare", \
+            "[7e] CNAME 链是厂商明确特征，必须优先于 IP 段判据"
+        assert _cdn7e.match([], _s7e, ["172.66.40.229"]) == "fakevendor", \
+            "[7e] CNAME 为空时才轮到 IP 判据"
+    finally:
+        _cdn7e.networks = _real_nets7e
+    # ⑥ 向后兼容：老调用（只传 CNAME 链）行为完全不变
+    assert _cdn7e.match(["x.cloudflare.net"], _s7e) == "cloudflare"
+    assert _cdn7e.match([], _s7e) == ""
+    assert _cdn7e.match([], _s7e, ["172.66.40.229"]) == "cloudflare"
+    # ⑦ fail-safe：数据文件缺行/缺文件时都不许抛，判定退回"非 CDN"（与 cdn_cname 的既有口径一致）
+    _bad7e = _TMPDIR / "cdn_ips_bad.txt"
+    _bad7e.write_text("# 注释行\n172.66.0.0/16 | goodvendor\n这不是CIDR | badvendor\n\n"
+                      "104.16.0.0/13\n", encoding="utf-8")
+    _bad_s7e = {"dicts": {"cdn_ips": str(_bad7e)}}
+    assert [_v for _n, _v in _cdn7e.networks(_bad_s7e)] == ["goodvendor", "104.16.0.0/13"], \
+        f"[7e] 坏行应逐条跳过、厂商缺失应回退成 CIDR 原文：{_cdn7e.networks(_bad_s7e)}"
+    assert _cdn7e.ip_match(["172.66.40.229"], _bad_s7e) == "goodvendor"
+    _miss_s7e = {"dicts": {"cdn_ips": str(_TMPDIR / "no_such_cdn_ips.txt")}}
+    assert _cdn7e.networks(_miss_s7e) == (), "[7e] 文件缺失应返回空名单"
+    assert _cdn7e.match([], _miss_s7e, ["172.66.40.229"]) == ""
+    # ⑧ 判据要生效必须**调用点把解析 IP 传进来** —— 少传一处，那一处就永远退回"只看 CNAME"
+    #    （静默退化成修复前的行为）。三处调用点按源码钉死（ast：调用跨行、续行反斜杠多）。
+    for _rel7e in ("scanner/stages/subdomain.py", "scanner/extdom.py", "gui/app.py"):
+        _hits7e = []
+        for _n7e in _ast7e.walk(_ast7e.parse((ROOT / _rel7e).read_text(encoding="utf-8"))):
+            _f7e = getattr(_n7e, "func", None)
+            if isinstance(_n7e, _ast7e.Call) and \
+                    getattr(_f7e, "attr", "") == "match" and \
+                    getattr(getattr(_f7e, "value", None), "id", "") == "cdn":
+                _hits7e.append((len(_n7e.args), {k.arg for k in _n7e.keywords}))
+        assert _hits7e, f"[7e] {_rel7e} 里找不到 cdn.match 调用"
+        for _nargs7e, _kw7e in _hits7e:
+            assert _nargs7e >= 3 or "ips" in _kw7e, \
+                f"[7e] {_rel7e} 的 cdn.match 没传解析 IP（IP 判据会沦为死代码）：" \
+                f"args={_nargs7e} kw={_kw7e}"
+
+    print("[7e] 续43 CDN 双判据 ok: CNAME 优先→IP 段兜底（172.66.40.229 命中）/ "
+          "段边界按网段判 / 8.8.8.8 不误命中 / IPv6 不抛 / 坏行跳过+缺文件 fail-safe / "
+          "三处调用点都传了 ips")
 
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），

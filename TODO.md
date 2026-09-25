@@ -329,7 +329,7 @@
       GB18030 → 带替换 UTF-8），requests 与 urllib 两路共用；存量核查 36 条标题 0 条乱码。
 - [x] **拓展域名独立成页**：`db.OWN_SUBDOMAIN_WHERE` / `EXT_SUBDOMAIN_WHERE` 两判据 + `/extdomains`；
       子域名页与任务详情子域名 Tab 只列目标自身来源。
-- [x] **子域名 IP / CDN 标记 + 标签过滤**：`scanner/cdn.py`（数据文件 `config/dicts/cdn_cname.txt`，292 条）+
+- [x] **子域名 IP / CDN 标记 + 标签过滤**：`scanner/cdn.py`（数据文件 `config/dicts/cdn_cname.txt` 292 条厂商 CNAME 后缀 + `config/dicts/cdn_ips.txt` 15 段厂商任播 IP 段，CNAME 优先、IP 段兜底）+
       `subdomains.ip/cdn`（原地 ALTER TABLE 迁移）+ `subdomain._fill_net()` 回填 + 「全部/CDN/非 CDN」过滤。
 - [x] **POC 页相对路径**：`gui/app.py::_rel_path()`，来源判定先于相对化执行。
 - [x] **侧栏收敛 + 漏洞页加强**：删 3 栏、加「拓展域名」（见 P2-1）；漏洞页保留级别筛选并新增任务名列 +
@@ -606,9 +606,15 @@
 
 **仍未完成（= 用户待办，按建议优先级）**：
 
-- [ ] **真实授权目标上跑一遍完整 13 阶段**（`dirscan` 默认开之后的请求量 / 耗时）——
+- [x] **真实授权目标上跑一遍完整 13 阶段**（`dirscan` 默认开之后的请求量 / 耗时）——
       目前只有 127.0.0.1 靶场样本；红线要求由用户指定授权目标，AI 不自行选靶。
       **2026-09-23 用户明确：「这个我回头自己跑就行」** → 由用户自行执行，AI 不代跑。
+      **2026-09-25（续43）已完成**（授权目标 `pengo.pro`）：CLI `-p` 全 13 阶段 + `--auto-expand` 跑单任务，
+      `status=done`、耗时 **2 分 55 秒**、退出码 0；子域名 3 / 站点 3 / 目录 119 / 潜在漏洞 0 / 线索 46，
+      报告四格式 MD 9337 / HTML 14928 / JSONL 80166 / PDF 306383 字节；808 条 `InsecureRequestWarning`
+      只出现在目标主机与 `static.cloudflareinsights.com`（第三方 FOFA/crt.sh/GitHub/KEV **零警告**，即
+      A3「证书校验按出口分流」的真机实证）；30 个开放端口经人工 TCP connect 复核为 Cloudflare 边缘节点
+      行为、**非扫描器 bug**。长期挂牌的这条待办**就此关闭**。
 - [完成：P1-1 误报复核工作流（2026-09-23 续12）] `vulns` 增 `review`/`review_note`/`reviewed_at`
       三列（`REVIEW_STATES = "" | confirmed | false_positive`）+ `db.set_vuln_review` /
       `bulk_set_vuln_review` / `review_counts` / `list_vulns(review=)` + `POST /api/vulns/review`
@@ -713,8 +719,8 @@
       `subtemplates:` 父命中才下钻、**父结果不报**，单步展开上限 40；语义逐条对着 nuclei 源码
       `workflow_execute.go` / `workflows.go` / `tag_filter.go` 写，不自创）。查证 **nuclei workflow
       schema 里没有 `args` 字段**，见到即跳过并在 `_note` 写明原因；workflow 真正的"传变量"
-      （命名 extractor + 共享执行上下文 `ctx.Input.Set`）与 `matchers:` 分支登记为缺口
-      （**单个模板内**的跨请求取值已于续42 补齐；**跨子模板**的仍未做，子模板各自独立加载）；
+      （命名 extractor + 共享执行上下文 `ctx.Input.Set`）与 `matchers:` 分支当时登记为缺口
+      —— 两者已于**续43 补齐**（见续43 条；**单个模板内**的跨请求取值则早在续42 落地）；
       回归 `tests/smoke.py [6y]`；
 - [x] **续39** nuclei `flow:` 的**脚本子集**（循环 + `set()` + 请求，`scanner/pocs/engine.py`
       的 `_FlowJsParser` / `_run_flow_script`）：装载期解析成 AST 并静态校验（未声明变量、引用越界、
@@ -750,6 +756,20 @@
       分流判定收口在 `http_request` 入口，调用点无需改动）；**A4** 修正 `.gitignore` 里
       "推送时读 github.txt"的错话（实测推送走 Windows 凭据管理器里的 GCM 凭据，无代码读该文件）；
       回归 `tests/smoke.py [7b]`/`[7c]`，变异证伪 6/6 被击杀；
+- [x] **续43** nuclei workflow 的 `matchers:` 分支 + **跨子模板传值**（`scanner/pocs/engine.py`：
+      `_wf_slice` / `_wf_groups` / `_wf_collect` / `_wf_flatten` / `_wf_group_hit` / `_run_wf_groups`）：
+      父模板照跑但**结果一律不报**（nuclei 的 matchers 分支直接 `return`、连 `CompareAndSwap` 都跳过），
+      只拿它的**非 `internal` 具名提取器**名字挑分支（nuclei `Extracts` 的记录条件正是
+      `len(值)>0 && !Internal && Name!=""`；`internal` 的值进 `DynamicValues`，既不分流也不外传），
+      `condition` and/or（默认 or）、名字比较大小写不敏感（`EqualFold`）、`name: "a, b"` 与
+      `[a, b]` 等价（`StringSlice`）；命中分支才跑其 `subtemplates:` 并继承父模板的收集值
+      （照 nuclei 的 `ctx.Input.Clone()`：只向下传、同级子模板互不回流、父值优先于子模板
+      `variables:` 同名初值）。与 `matchers:` 同写的普通 `subtemplates:` 被忽略且把"被忽略"
+      写进 `_note`；`condition` 非法 → 该项跳过（全跳过则整份 `unsupported`）。
+      **已知下界（结构决定，不假装一致）**：本引擎的匹配器没有名字概念 ⇒ nuclei 的
+      `HasMatch(name)` 那一半恒不成立，**只写 `name:` 匹配器、没写具名提取器的模板分不出支**；
+      本节仍**不做** `args:`（nuclei 无此字段）。回归 `tests/smoke.py [6y]`（⑩~⑬），
+      变异证伪 6/6 被击杀；
 
 ## 兼容性红线（所有新增代码都适用）
 

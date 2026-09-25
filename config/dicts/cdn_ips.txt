@@ -1,0 +1,30 @@
+# CDN 厂商**任播 IP 段**名单（`CIDR | 厂商`），与 `cdn_cname.txt`（CNAME 后缀）互补。
+#
+# 为什么需要它（2026-09-25 续43，实跑 pengo.pro 逮到）：`cdn_cname.txt` 只认"从 CNAME 指向
+# 厂商域名"的那种 CDN；Cloudflare 这类**任播** CDN 常常是 A 记录直接解析到边缘 IP、CNAME 链
+# 为空 —— 实测 pengo.pro / admin.pengo.pro / app.pengo.pro 都解析到 172.66.40.229 /
+# 172.66.43.27，只按 CNAME 判会一律标成"非 CDN"，后果是
+#   ① 资产页看不出走 CDN；② portscan 会去打 Cloudflare 边缘节点，得出"30 个端口开放"这种
+#      与本项目标毫无关系的结论（同一时刻手工 TCP connect 22 端口是超时的）。
+#
+# 数据来源：Cloudflare 官方 https://www.cloudflare.com/ips-v4 （2026-09-25 取回，15 段）。
+#           厂商自己发布并声明"以这份列表为准"，故不用任何第三方汇总清单。
+# 只收 IPv4：本引擎 `dnsq.resolve_detail()` 只解析 A/CNAME（不查 AAAA），IPv6 段进来用不上；
+#           将来要收 IPv6，把 `CIDR | 厂商` 直接续在下面即可（解析按 `ipaddress` 自动认版本）。
+# 行格式：`CIDR | 厂商`（`#` 开头是注释；`|` 两侧空白可有可无）。厂商名会**原样**显示在
+#         子域名 / 拓展域名页的「CDN」列与 IP 资产页上。
+173.245.48.0/20 | cloudflare
+103.21.244.0/22 | cloudflare
+103.22.200.0/22 | cloudflare
+103.31.4.0/22 | cloudflare
+141.101.64.0/18 | cloudflare
+108.162.192.0/18 | cloudflare
+190.93.240.0/20 | cloudflare
+188.114.96.0/20 | cloudflare
+197.234.240.0/22 | cloudflare
+198.41.128.0/17 | cloudflare
+162.158.0.0/15 | cloudflare
+104.16.0.0/13 | cloudflare
+104.24.0.0/14 | cloudflare
+172.64.0.0/13 | cloudflare
+131.0.72.0/22 | cloudflare

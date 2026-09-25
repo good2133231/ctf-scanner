@@ -60,6 +60,9 @@ Web3 域名）。URLFinder 的许可状态本项目未做核实。**这是黑名
 - `config/dicts/resolvers.txt` —— 公共 DNS 解析器地址（阿里 DNS 等公开信息）。
 - `config/dicts/cdn_cname.txt` —— CDN 厂商 CNAME 后缀清单（公开厂商域名，事实性数据；
   本文件**无来源标注**，如你知晓其出处请补记于此）。
+- `config/dicts/cdn_ips.txt` —— CDN 厂商**任播 IP 段**清单（`CIDR | 厂商`，15 段，全部 Cloudflare）。
+  数据来源：**Cloudflare 官方** `https://www.cloudflare.com/ips-v4`（**2026-09-25** 取回），
+  厂商自行发布并声明以其为准；属公开**事实性数据**，本项目只做只读加载与匹配，不发请求。
 - `config/dicts/subdomains.txt` —— 自建子域名字典。
 - `scanner/pocs/pocs/*.yaml`（7 个内置 POC）、`scanner/fingerprint.py`、
   `scanner/owasp/checks.py`、`scanner/takeover.py` 指纹库 —— 本项目自行编写。

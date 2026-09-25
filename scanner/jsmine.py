@@ -239,14 +239,28 @@ def _valid_host(host):
     return all(re.fullmatch(r"[a-z0-9\-_]{1,63}", lb) for lb in labels)
 
 
+def _is_self_host(host, protect):
+    """URL 的主机是否属于目标自身（seed 主机 / 其注册域）。
+
+    判定口径与 `_is_noise` 的"protected 放行"**完全一致**（同一份 `protect`、同一条
+    `== / 点号后缀` 规则），`_is_noise` 现在也调它 —— 同一个概念不能一处算自家、另一处
+    算第三方。后缀必须带 `.` 前缀：`notpengo.pro` 不算 `pengo.pro` 的子域。
+
+    抽出来是为了管**出站凭据**：抓 JS 时只有自家主机的请求才该带任务登录态（见 `mine()`）。
+    """
+    host = (host or "").lower().strip(".")
+    if not host:
+        return False
+    return any(p and (host == p or host.endswith("." + p)) for p in protect)
+
+
 def _is_noise(host, protect, blacklist):
     """黑名单判定：目标自身域名（protected）优先放行，其余按后缀匹配过滤。"""
     host = (host or "").lower().strip(".")
     if not host:
         return True
-    for p in protect:
-        if p and (host == p or host.endswith("." + p)):
-            return False
+    if _is_self_host(host, protect):
+        return False
     for suf in blacklist:
         suf = str(suf or "").lower().strip(".")
         if suf and (host == suf or host.endswith("." + suf)):
@@ -424,7 +438,13 @@ def mine(url, settings, logger=None):
         workers = max(1, min(int(limits.get("max_workers", 20)), len(scripts)))
 
         def _get(u):
-            r = http_request(u, timeout=timeout, settings=settings, auth=True)
+            # **第三方主机绝不能带目标登录态**（2026-09-25 续43 修）：`auth=True` 的语义是
+            # "发往目标侧"，不是"URL 来自目标页面"。`<script src>` 的绝对化结果常常指向第三方
+            # （实测 pengo.pro 首页就引了 `static.cloudflareinsights.com`），原先一律 auth=True
+            # 等于把任务 Cookie/Authorization 发给 CDN 与埋点厂商 —— 与 AGENTS.md §5 的
+            # "第三方接口绝不带登录态"直接冲突。改为按 URL 主机判：同注册域（protect 命中）才带。
+            r = http_request(u, timeout=timeout, settings=settings,
+                             auth=_is_self_host(urlparse(u).hostname, protect))
             if not r:
                 return None
             return {"url": r.get("url") or u, "text": r.get("text") or ""}

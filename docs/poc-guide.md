@@ -59,8 +59,9 @@ http:                               # 请求列表；兼容 nuclei 的 requests:
 
 **不支持**：**块级/顶层** `dsl`、oob 反连、flow 里**超出脚本子集**的写法（真正的 JS 语义：
 方法调用/闭包/异常/除 `+` 外的算术/`while`/`new`/带参数的引用如 `template("x.yaml")`）、
-workflow 的 `matchers:`（按匹配器名分支）与 `args:`（**不是 nuclei 的 workflow 字段**）
-（`matchers` / `extractors` 里的 `dsl` 已支持**安全子集**，flow 的脚本子集见下节）。
+workflow 的 `args:`（**不是 nuclei 的 workflow 字段**）
+（`matchers` / `extractors` 里的 `dsl` 已支持**安全子集**，flow 的脚本子集见下节，
+workflow 的 `matchers:` 分支已于续43 落地）。
 含这些特性的模板会被标 `unsupported`（或把未实现子项写进原因/`_note`），不会静默失效。
 
 ## raw / flow / workflows（2026-09-23 起支持核心子集）
@@ -132,8 +133,8 @@ http:
   b) 不做真正的 JS：无类型转换（`1 == "1"` 在 JS 里为真、这里为假）、无方法调用/闭包/异常、
   无 `while`/`break`/`continue`、除 `+` 之外没有算术；c) 同一名字的回填值最多暴露 10 个
   （`name` + `name1`…`name9`，nuclei 无上限）。子集之外的写法一律**装载期**标 `unsupported`。
-- **workflows**（2026-09-23 起支持，2026-09-25 续38 补齐条件编排）：workflow 文件顶层写
-  `workflows:`，每个子项（语义对齐 nuclei 源码，不自己发明）：
+- **workflows**（2026-09-23 起支持，2026-09-25 续38 补齐条件编排、续43 补齐 `matchers:` 分支）：
+  workflow 文件顶层写 `workflows:`，每个子项（语义对齐 nuclei 源码，不自己发明）：
 
   ```yaml
   workflows:
@@ -142,6 +143,11 @@ http:
         - tags: [jira]                            # 按标签从候选集里挑（OR 语义）
         - template: exploits/jira/
     - tags: [cve, ssrf]                           # 顶层也可以是纯 tags 选择
+    - template: csrf-token-grab.yaml              # 先跑父模板取具名提取值
+      matchers:                                   # 再按提取器名字分流跑子模板
+        - name: [token]
+          subtemplates:
+            - template: csrf-exploit.yaml
   ```
 
   - `template:`：相对 workflow 文件所在目录解析，解析不到再按项目根解析（官方 workflow 常按
@@ -151,14 +157,27 @@ http:
   - `subtemplates:`：**父步骤命中才跑**（父没命中 → 子模板一个请求都不发）；带 `subtemplates` 的
     步骤里父模板只当**开关**，父模板自己的命中结果**不报**（否则"技术栈识别"会和子模板结果一起
     冒出来）。多级嵌套同理，逐层门控。
+  - `matchers:`（续43）：父模板先跑，**结果一律不报**（nuclei 的 matchers 分支直接 `return`、
+    连 `CompareAndSwap` 都跳过），只拿它的**具名提取器**名字去挑分支：
+    `name:` 里任一名字（`condition: or`，默认）或全部名字（`condition: and`）出现在父模板结果里
+    就跑该 matcher 的 `subtemplates:`，否则**一个请求都不发**；`condition` 只能是 `and`/`or`
+    （写别的 → 该项跳过并把原因写进 `_note`）。名字比较**大小写不敏感**，`name: "a, b"` 与
+    `name: [a, b]` 等价（nuclei 的 `StringSlice`）。与 `matchers:` 同时写的普通 `subtemplates:`
+    会被**忽略**（照抄 nuclei），忽略这件事写进 `_note`，不静默吞掉。
+    分流依据只可能是**非 `internal` 的具名提取器**（nuclei：`internal: true` 的值进
+    `DynamicValues`、**不进** `result.Extracts`）；本引擎的匹配器没有名字概念，所以 nuclei 里
+    `HasMatch(name)` 那一半恒不成立 —— 只写了 `name:` 匹配器、没写具名提取器的模板分不出支。
+  - **跨子模板传值**（续43）：父模板收集到的具名提取值会叠进子模板的模板上下文（子模板里
+    直接写 `{{token}}` 即可；多值命名与模板内一致 —— 第 1 个是 `name`、第 2 个是 `name1`）。
+    与 nuclei 的 `ctx.Input.Clone()` 一样是**只向下传**：父值优先于子模板 `variables:` 里的同名
+    初值；同一层的兄弟子模板拿到的是各自独立的一份，**互不回流**（先跑的那个写进去的值不会
+    影响同层后跑的）。
   - 递归保护：深度上限 3、同一模板单次执行内只跑一次（自环直接挡住）、单个步骤一次最多展开
     **40** 个子模板（`tags:` 可能命中整个模板库、目录可能很大，超出部分不执行）。
-  - **未实现**：`matchers:`（按匹配器名分支跑 subtemplates —— 本引擎的匹配器没有名字概念）、
-    `args:`（**nuclei 的 workflow 没有这个字段**，`WorkflowTemplate` 只有 template / tags /
-    matchers / subtemplates；nuclei 的变量传递靠"`internal: true` 命名 extractor + 共享执行上下文"，
-    **跨子模板**的传递本引擎未实现 —— 子模板各自独立加载、上下文不串；单个模板**内部**的跨请求
-    取值已于续42 落地，见下节）。
-    这两类子项会被**跳过**并把原因写进 `_note`（全部子项都被跳过 → 整份标 `unsupported`），不静默失效。
+  - **未实现**：`args:`（**nuclei 的 workflow 没有这个字段**，`WorkflowTemplate` 只有 template /
+    tags / matchers / subtemplates；nuclei 的变量传递靠"具名 extractor + 共享执行上下文"，本引擎
+    用上一条的向下传值来对应）。
+    这类子项会被**跳过**并把原因写进 `_note`（全部子项都被跳过 → 整份标 `unsupported`），不静默失效。
 - **dsl**（2026-09-25 起支持**安全子集**，仅 `matchers` / `extractors` 里的写法）：变量 6 个 ——
   `status_code` / `content_length`（数值）、`body` / `all_headers` / `header`（后两者同值）/ `host`；
   比较 `==` `!=`（两侧都是数字按数字比）与 `>` `>=` `<` `<=`（**只允许数值**）；逻辑 `&&` `||` `!`
@@ -266,8 +285,8 @@ http:
 二进制，也不与它冲突（同一份模板两边都能跑）。因此不再需要"接入 nuclei 适配器"作为前置项。
 
 尚不支持的是 nuclei 的 oob 反连、flow 里**超出脚本子集**的真正 JS 语义（方法调用/闭包/异常/
-除 `+` 外的算术/`while`/`new`）、workflow 的 `matchers:`（按匹配器名分支）
-与 `args:`（**nuclei 的 workflow 里没有这个字段**），以及**块级/顶层**的 `dsl`
+除 `+` 外的算术/`while`/`new`）、workflow 的 `args:`（**nuclei 的 workflow 里没有这个字段**），
+以及**块级/顶层**的 `dsl`
 （`matchers`/`extractors` 里的 `dsl` 走上面的安全子集），
 这类模板（或其未实现子项）会被标 `unsupported` / `_note`；若确需完整能力，
 仍可另加适配器调用 nuclei 二进制，`vulns` 表结构可直接承接其 JSON 输出。另：`config/pocs-imported/` 下由

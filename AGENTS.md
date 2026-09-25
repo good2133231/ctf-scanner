@@ -97,7 +97,7 @@ ctf-scanner/
 │   ├── wildcard.py        # 泛解析识别与过滤（纯 DNS 查询）
 │   ├── passive.py         # 免 key 多来源被动子域名收集
 │   ├── dnsq.py            # 纯标准库 DNS 客户端（A/CNAME/TXT/MX/NS…，UDP+TCP 回退，异常不外抛）
-│   ├── cdn.py             # CDN 判定：读 config/dicts/cdn_cname.txt 按 CNAME 后缀匹配厂商（只读、无请求）
+│   ├── cdn.py             # CDN 判定：两条判据 —— CNAME 链读 config/dicts/cdn_cname.txt 按后缀匹配厂商，解析 IP 段读 config/dicts/cdn_ips.txt（CNAME 优先、IP 兜底任播 CDN；只读、无请求）
 │   ├── takeover.py        # 子域接管指纹库（41 条第三方服务 suffix）+ detect()
 │   ├── portscan.py        # 端口/服务扫描（TOP 表 + **fscan** + nmap 适配 + 内置 TCP connect 兜底 + 被动 banner；
 │   │                      #   `engine=auto` 顺序 fscan→nmap→内置；parse_ports(max_span) 防手滑全端口，见 §7）
@@ -144,7 +144,7 @@ ctf-scanner/
 │                          #   2026-09-24（续26）按 config/settings.yaml 实测更正为 **23 段**（tools/dicts/http 不可从页面改）
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
-├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / cdn_cname(292)
+├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / cdn_cname(292) / cdn_ips(15)
 │                          #   sensitive(9)：**A01 检查的数据源**（`路径|关键字|级别|说明`，见 §7）
 │                          #   dirs_shallow(206)：**浅扫专用**（dirscan.mode=quick 只用它），按价值排序、人工筛选
 │                          #   js_thirdparty(287：JS 第三方域名单 = 内置 + URLFinder jsFiler + 续22 补 20 条常用库/CDN/链上浏览器)
@@ -248,6 +248,9 @@ ctf-scanner/
    **登录态（任务级 Cookie/Token）同理只在这一处生效**：`http_request(..., auth=True)` 才附带
    `settings["_auth_headers"]`（由 `runner.StageContext` 注入的任务专用副本）。**默认 `auth=False`** ——
    新增调用点时先问一句"这个 URL 是目标侧还是第三方接口"，第三方**永远不加 `auth=True`**（见 §7 凭据红线）。
+   **`jsmine` 是唯一的"混合出口"模块**（续43）：页面自身请求按定义发往目标侧（`auth=True`），但同一页
+   `<script src>` 绝对化后可能指向第三方，必须**按 URL 主机逐个判** `auth=`（`_is_self_host` 命中自家
+   注册域才带），不能因为"URL 来自目标页面"就把整批脚本请求都带上登录态。
 2. **外部工具优先 + 内置兜底**：调用前用 `which()`，Good 工具再用 `verify_tool()` 做版本握手
    （防止 pip 的 Python `httpx` 同名命令被误用）。
 3. **非破坏性**：新增检查/POC 只允许探测类请求；POC 规范见 docs/poc-guide.md。免杀（evasion）只改变
@@ -584,9 +587,15 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   `name`/`name1`/`name2`（上限 `_EXTRACT_VARS_MAX`=10），回填发生在**匹配之前**（不受命中与否影响）。
   仍不支持的是**块级/顶层** `dsl`、oob 反连、
   flow 里**超出脚本子集**的真正 JS 语义（方法调用/闭包/异常/除 `+` 外的算术/`while`/`new`/
-  带参数引用）、workflow 的 `matchers:`（按匹配器名分支）与 `args:`（**nuclei 的
+  带参数引用）、workflow 的 `args:`（**nuclei 的
   workflow 没有这个字段**），它们会被标 `_status=unsupported`
   （或写进 `_note`）并在 POC 管理页显示原因（不静默失效）；`dsl` 越界同样在**装载期**就被标掉。
+  **workflow `matchers:` 与跨子模板传值已于续43 落地**：父模板照跑但结果一律不报（nuclei 的
+  matchers 分支直接 `return`），只拿它的**非 `internal` 具名提取器**名字挑分支（`condition`
+  and/or、名字大小写不敏感、`"a, b"` 与 `[a, b]` 等价），命中的分支才跑其 `subtemplates:`
+  并继承父模板收集到的值（只向下传、同级互不回流）；与 `matchers:` 同写的普通 `subtemplates:`
+  被忽略（照抄 nuclei）且把"被忽略"写进 `_note`。本引擎的匹配器**没有名字概念**，
+  故 nuclei 的 `HasMatch(name)` 那一半恒不成立 —— 只写 `name:` 匹配器、没写具名提取器的模板分不出支。
 - **凭据红线（2026-09-23 续17）**：登录态（`scanner/auth.py` 的任务级请求头）**只发目标侧**，
   `utils.http_request(auth=False)` 是默认值、4 个第三方调用点（crt.sh / FOFA / CISA KEV / IP 反查）
   **永不带**；日志/页面/报告只显掩码（`mask_value`）；解析非法行必须报错（CLI exit 1 / GUI 400），
@@ -869,6 +878,21 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   阈值主动开的，2026-09-22 续15/18「FOFA 三种反查已真实跑过，key 已配」）。结论是「默认就开、会花配额」，
   不是「默认关」——已把文档口径改过来（`docs/roadmap.md` 已登记续23~27 与 github 阶段）。
   不动用户的开关；要改回零开销默认行为，把 `fofa.enabled` 改 `false` 即可（与 DEFAULTS 对齐）。
+
+- **`auth=` 按"URL 主机发往谁"判，不是按"URL 从哪来"判**（2026-09-25 续43）：`http_request(auth=True)`
+  的语义是"该请求发往**目标侧**，要带任务登录态"。jsmine 是**唯一的混合出口**模块 —— 页面请求
+  按定义发往目标侧（种子 URL），但页面里 `<script src>` 绝对化后常指向**第三方**（实测 pengo.pro
+  首页引了 `static.cloudflareinsights.com`），原实现一律 `auth=True` 等于把任务 Cookie/Authorization
+  发给 CDN/埋点厂商。改为按 URL 主机判：`jsmine._is_self_host(host, protect)`（seed 主机 + 其注册域，
+  后缀带 `.` 比、大小写归一，`notpengo.pro` 不算 `pengo.pro` 子域）命中才带。新增出口模块/调用点时，
+  先想清"这条 URL 最终发往谁"，别被"它来自目标页面"骗了（见 §5、§7 凭据红线）。
+
+- **CDN 判定不能只认 CNAME**（2026-09-25 续43）：Cloudflare 这类**任播** CDN 常常 A 记录直接解析到
+  边缘 IP、**CNAME 链为空**（实测 pengo.pro / admin.pengo.pro / app.pengo.pro 都解析到
+  `172.66.40.229` / `172.66.43.27`）。只按 `cdn_cname.txt` 判会一律标成"非 CDN"，既看不出走 CDN，
+  又会让 `portscan` 去打 Cloudflare 边缘节点、得出与本项目标无关的"30 个端口开放"。故 `cdn.match()`
+  现在两条判据：**CNAME 优先**（厂商特征明确）→ 未命中再看 `cdn_ips.txt` 的**任播 IP 段**
+  （`match(cname_chain, settings, ips)`；subdomain / extdom / GUI 解析三处都把解析 IP 传进去）。
 
 ## 8. 不要做的事
 

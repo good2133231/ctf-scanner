@@ -87,7 +87,8 @@
 - **IP/CDN 回填**：入账后对子域名做一次 `scanner/dnsq.py` 的 **CNAME 链 + A 记录**解析
   （上限 `subdomain.max_resolve`，默认 500，超出的仍入表、只是没有这两列；DNS 超时 `subdomain.dns_timeout`），
   回填 `subdomains.ip`（逗号连接的 A 记录）与 `subdomains.cdn`
-  （`scanner/cdn.py` 用 `config/dicts/cdn_cname.txt` 的 292 条厂商 CNAME 后缀匹配，未命中留空 = 非 CDN）。
+  （`scanner/cdn.py` 两条判据：**CNAME 链优先**匹配 `config/dicts/cdn_cname.txt` 的 292 条厂商 CNAME 后缀，
+  未命中再看解析出的 IP 落在 `config/dicts/cdn_ips.txt` 的厂商任播 IP 段即算 CDN；**两者都没命中才留空 = 非 CDN**）。
   纯 DNS 只读查询、零 HTTP；数据文件缺失时一律判"非 CDN"，不会抛错；
 - 产物：`subdomains.txt`、`passive_multi.txt`（被动来源命中）、`hosts.txt`（子域名 ∪ 主域名，交给下一阶段）、SQLite `subdomains` 表（含 `ip` / `cdn`）；
 - **入库前过用户黑名单**（`scanner/blacklist.py`，文件 `config/blacklist.txt`）：命中的域名**不入资产库**，
@@ -522,4 +523,4 @@ logs/task_1_mytask/
 | github.enabled / max_domains / max_queries / per_page / max_leads / timeout | **false** / 3 / 4 / 30 / 30 / 20s | GitHub 泄露检索（默认关）：待检索注册域上限、查询条数上限、单查询返回条数、单任务线索上限、请求超时。**token 不在这里** —— 填 `config/keys.yaml` 的 `github.token`，没配就一次请求都不发（代码搜索接口要求认证）；只落仓库/文件路径/命中规则名，且请求恒 `auth=False` |
 | tools.fscan | fscan | fscan 二进制名/路径（缺省只在 PATH 找，找不到跳过）；调用时强制 `-np -nobr -nopoc`，只用其端口发现能力 |
 | tools.* | — | 外部工具路径/命令（subfinder / puredns / httpx / nmap / dirmap.python·script·threads …） |
-| dicts.* | — | 各字典路径：**浅扫 `dirs_shallow`** + 技术栈字典（`dirs_common`/`dirs_jsp`/`dirs_php`/`dirs_asp`）+ 框架字典（`dirs_wordpress`/`dirs_spring`/`dirs_weblogic`…12 桶）+ 暴露面 `dirs_exposure` + `dicts.cdn_cname`（CDN 厂商 CNAME 后缀名单） |
+| dicts.* | — | 各字典路径：**浅扫 `dirs_shallow`** + 技术栈字典（`dirs_common`/`dirs_jsp`/`dirs_php`/`dirs_asp`）+ 框架字典（`dirs_wordpress`/`dirs_spring`/`dirs_weblogic`…12 桶）+ 暴露面 `dirs_exposure` + `dicts.cdn_cname`（CDN 厂商 CNAME 后缀名单）+ `dicts.cdn_ips`（CDN 厂商任播 IP 段名单） |
