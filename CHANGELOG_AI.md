@@ -3,7 +3,7 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
-## 2026-09-25 —— 续45：清掉 todo.txt 的过期 [待办] + `--check` 补上端口扫描的两个引擎
+## 2026-09-25 —— 续45：清掉 todo.txt 的过期 [待办] + `--check` 补上端口扫描的两个引擎 + dirmap 残留 4 条全修
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 
 ### 1. todo.txt 过期 `[待办]` 清理（纯文档，不改任何行为）
@@ -77,7 +77,46 @@
 
 文档同步：`todo.txt`（第 7 项收口 + 新增第 8 项 + A2 结项）、`AGENTS.md`（§5 第 2 条补 fscan
 握手例外；§5 POC 能力段记下 A2"实测零受阻"）、`docs/usage.md`（`--check` 一行列出实际覆盖
-的工具）、`CHANGELOG_AI.md`（本条）。
+的工具）、`CHANGELOG_AI.md`（本条 + 第 4 节 dirmap 4 条）。
+
+### 4. dirmap 残留 4 条全部修掉（用户授权改本机外部副本）
+
+`tools/dirmap_fixes/README.md` 在续44 复核时留下 4 条「已知残留（未修）」。用户本轮明确授权
+改外部副本，于是逐条定位根因后修掉 —— **2 条改 dirmap 自己的源码、2 条改本仓适配器**：
+
+| # | 残留 | 根因 / 影响 | 修在哪 |
+|---|---|---|---|
+| 1 | `intToSize()` 量化误差 | 产物行写的是量化值（`1.21kb`），我们反算得 1239、真值 1234；同一条路径的 dirmap 行与内置行在 `(站点, 码, 长度)` 折叠键上对不上 | dirmap 源码 `bruter.py::responseHandler` 改写 `size_bytes`（内部去重仍按量化值，保持「重复长度」分组不变） |
+| 2 | `inspector.py` 绕过 `_LegacySSLAdapter` | auto-404 预检走裸 `requests.get`，为旧版 SSL / 自签名证书建的 `ssl_context`（SECLEVEL=1）等于没用；这类目标在基线阶段就失败，后面去重跟着失效 | dirmap 源码 `inspector.py::_give_it_a_try` 延迟导入 `lib.controller.bruter.session` 复用（避开 `bruter → inspector` 循环导入） |
+| 3 | 含 fragment 的产出行 | fragment 从不发给服务端（RFC 3986），dirmap 原样写 `response.url`；不剥则开目录递归会拼出 `.../b#x/` 这种无效前缀（白花请求），折叠去重也对不上 | 本仓 `scanner/stages/dirscan.py::_strip_fragment()`（两个解析分支都过一遍） |
+| 4 | `output/` 无清理 | 持久目录、无上限（`404.txt` 每目标约 1 MB）；我们只读 `res.txt`/`403.txt`，其余无价值。隐患：`saveResults()` 与旧文件去重 → 残留文件让「重扫同目标」写出 0 行（mtime 也不变） | 本仓 `DirscanStage._cleanup_output()`：只删 `_target_dirs()` 返回的（= 本次扫过的目标）目录，**解析之后**才删，删除失败只告警不抛 |
+
+**验证（真跑，非推断）**：
+
+- 直调改过的 `responseHandler`（1234 字节响应）→ 产物行 `[200][text/plain][1234] http://…/robots.txt`；
+  `_size_to_int("1261") == 1261` vs `_size_to_int("1.21kb") == 1239` —— 误差确认存在，且适配器
+  本来就能读精确值，所以**只改 dirmap 源码这一侧**，适配器不动（最小改动）。
+- `auto_check_404_page=True` 端到端跑真 dirmap **没崩** ⇒ 延迟导入那条代码路径被真实走到。
+- 本机回环靶场：`py -3 -m http.server 8899`（`robots.txt`=1234B / `admin/index.html`=777B /
+  `config/index.html`=4096B / `index.html`=17B）+ 真实 dirmap → 任务 #155 `status=done`、dirmap
+  真跑 58 秒、`dirmap 输出 4 条`、**无「回退内置」**；入库长度 `4096 / 1234 / 777 / 17`（全是文件
+  真实字节数）、无一条 `path` 带 fragment；日志 `[dirscan] 已清理 dirmap 产物目录 1 个（释放 1130 KB）`，
+  `output/127.0.0.1_8899/` 确实消失，其它目标目录（pengo.pro / weiyuansj.com 等）**未被误删**。
+- 向后兼容：历史 `1.21kb` 行仍解析出 1239，不因改格式丢老结果。
+
+**回归**：`tests/smoke.py` 新增 `[7g]`，钉住**适配器侧**两条（剥 fragment 且保留 query / 解析出精确
+字节数 / `_cleanup_output` 只删给定目录、别人的不动、删不存在目录只告警不抛）。另两条改的是外部
+副本（GPL-3.0、不入仓库），**无法**在 smoke 里断言，只能靠上面那轮真机端到端 —— 这一点如实记在此处，
+不假装被单测覆盖。变异证伪 **2/2 被击杀**（把 `_strip_fragment` 改成恒等 → `[7g]` 挂；把
+`_cleanup_output` 的 `shutil.rmtree` 删掉 → `[7g]` 挂），改后已还原。
+
+**没动的**：`tools/dirmap/output/` 里 11 个目标目录 / 50 个文件 / 12.0 MB 历史残留 —— 那是用户机器
+上的既有数据，清理需其确认（新版适配器只会清「本次扫过目标」的目录，不会碰这些）。
+
+文档同步：`tools/dirmap_fixes/README.md`（「5 处修复」→ 7 处 + 新增续45 节 + 残留清单改为已修）、
+`todo.txt`（第 8 项摘掉 dirmap 残留、新增第 9 项 `[完成]`）、`AGENTS.md`（§5 两处源码修复口径 5 → 7、
+`大小形如 1.23kb` → 精确字节数 + 剥 fragment + 清产物目录、§7 的 `recursiveScan()` 死代码口径改正）、
+`CHANGELOG_AI.md`（本节）。
 
 
 ## 2026-09-25 —— 续44：C 组三项收口（305 个导入 POC 实测校准 / dirmap 源码复核 / GitHub token 核实）

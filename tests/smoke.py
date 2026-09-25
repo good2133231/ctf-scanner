@@ -6749,6 +6749,47 @@ http:
     print("[7f] 续45 --check 覆盖端口引擎 ok: nmap 走 -version 握手且判 OK / fscan 跳过握手"
           "（不误报未通过校验）/ 两者缺失时都给出内置兜底文案")
 
+    # 7g) 续45：dirmap 4 条残留里**适配器侧**的两条。另两条改的是外部 dirmap 副本
+    #     （GPL-3.0、不入仓库），只能在真机上跑真实 dirmap 验证，故这里不假装覆盖。
+    #     ① `_strip_fragment`：fragment 从不发给服务端（RFC 3986），剥掉是**数据正确性**问题 ——
+    #        dirmap 原样写 `response.url`（实测确认），不剥则开目录递归会把它当目录前缀拼出
+    #        `.../b#x/` 这种无效 URL（白花请求），折叠去重时也与同一路径的其它行对不上。
+    #     ② `_cleanup_output`：`output/` 是无上限的持久目录，**删错目录的代价不可逆** ——
+    #        「只删给定（= 本次扫过）的目录 / 别人的历史产物不动 / 失败只告警不抛」必须钉住。
+    from scanner.stages.dirscan import _strip_fragment as _sf7g
+    from scanner.stages.dirscan import DirscanStage as _DS7g
+    assert _sf7g("http://h/a/b#x") == "http://h/a/b"
+    assert _sf7g("http://h/a/b?q=1#frag") == "http://h/a/b?q=1", \
+        "query 必须保留（那一段是要发给服务端的，fragment 才不是）"
+    assert _sf7g("http://h/a/b") == "http://h/a/b"
+    assert _sf7g("") == "" and _sf7g(None) == "", "空值不能抛"
+    # 解析侧两个分支都要过一遍：命中 DIRMAP_RE 的行 + 只能靠 URL_RE 兜底的行
+    _d7g = Path(_TMPDIR) / "dm7g"
+    _d7g.mkdir(parents=True, exist_ok=True)
+    (_d7g / "res.txt").write_text(
+        "[200][text/html][1234] http://h7g/a#frag\n"
+        "[403][text/html][10] http://h7g/b#frag2\n"
+        "http://h7g/c#frag3\n", encoding="utf-8")
+    _p7g = _DS7g._parse_output(_d7g / "res.txt")
+    assert [r["path"] for r in _p7g] == ["http://h7g/a", "http://h7g/b", "http://h7g/c"], _p7g
+    assert [r["length"] for r in _p7g] == [1234, 10, None], \
+        "续45 起 dirmap 产物行写精确字节数，必须直读出真值（量化值 1.21kb 会差 ±0.5%）"
+    # 清理：只删传入的目录；不计入本次扫描目标的目录必须原地不动
+    _out7g = Path(_TMPDIR) / "dm7g_out"
+    (_out7g / "keep.test").mkdir(parents=True, exist_ok=True)
+    (_out7g / "kill.test").mkdir(parents=True, exist_ok=True)
+    (_out7g / "kill.test" / "404.txt").write_text("x" * 4096, encoding="utf-8")
+    _rec7g = _Rec()
+    _DS7g._cleanup_output(_rec7g, [_out7g / "kill.test"])
+    assert not (_out7g / "kill.test").exists(), "本次扫过的目标目录必须被清掉"
+    assert (_out7g / "keep.test").is_dir(), "没在本次扫描目标里的目录一律不能动"
+    assert any("已清理 dirmap 产物目录 1 个" in l for l in _rec7g.lines), _rec7g.lines
+    _DS7g._cleanup_output(_rec7g, [_out7g / "nope.test"])   # 目录不存在：只告警，不能带崩阶段
+    assert any("清理 dirmap 产物目录失败" in l for l in _rec7g.lines), _rec7g.lines
+
+    print("[7g] 续45 dirmap 残留（适配器侧）ok: 解析剥 #fragment 且保留 query（两个分支）/ "
+          "产物行精确字节数直读 / 清理只删本次目标目录（别人的不动、失败只告警）")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

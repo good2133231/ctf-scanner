@@ -609,10 +609,19 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 - `owasp` 字段**格式是统一的**（`A01` 大写）：POC 引擎在 `engine.py` 里把 tag 的 `owasp-a01`
   规整为 `A01` 再入库，内置检查本身写 `A01`。*（本文件此前写的"POC 命中写 `owasp-a01`"与代码不符，
   已按代码更正 —— 见 `TODO.md` P1-3。）*
-- **dirmap 自身代码的 5 个问题**（第十六轮已**修在本机那份外部副本**里，见下一条）：
-  `saveResults()` 定义了两遍（前一个失效）、`response_storage`/`error_count` 是全局量、
+- **dirmap 自身代码的 7 个问题**（第十六轮 5 个 + 续45 2 个，均已**修在本机那份外部副本**里，
+  见下一条）：`saveResults()` 定义了两遍（前一个失效）、`response_storage`/`error_count` 是全局量、
   `saveResults` 每次全文件 `r+` 读取再追加（1.5 万条结果时 O(n²)，gevent 并发下还会丢写）、
-  `conf.skip_size` 与 `intToSize()` 的字符串比较永远不相等、`ssl_context` 建了却没挂到 session。
+  `conf.skip_size` 与 `intToSize()` 的字符串比较永远不相等、`ssl_context` 建了却没挂到 session；
+  续45 补的 2 条：**产物行写 `intToSize()` 的量化值**（`1.21kb` 反算 1239、真值 1234，±0.5% 误差
+  让同一条路径的 dirmap 行与内置行在折叠去重时对不上 → 改写 `size_bytes` 精确字节数，内部
+  `response_storage` 去重仍按量化值）、**`plugins/inspector.py` 的 auto-404 预检走裸
+  `requests.get`**（绕过 `_LegacySSLAdapter`，旧版 SSL/自签名目标在基线阶段就失败 → 延迟导入
+  `lib.controller.bruter.session` 复用，避开 `bruter → inspector` 循环导入）。
+  另**适配器侧**（`scanner/stages/dirscan.py`）续45 补 2 条：解析时 `_strip_fragment()` 剥
+  `#fragment`（fragment 从不发给服务端；不剥则开递归会拼出 `.../b#x/` 这种无效目录前缀）、
+  `DirscanStage._cleanup_output()` 清掉本次扫过的 `output/<netloc>/`（`output/` 是持久目录、
+  无上限；顺带解掉「残留文件让重扫写出 0 行、mtime 也不变」的隐患，只删本次扫过的目标）。
 - `config/dicts/sensitive.txt` **已是 A01 检查的数据源**（第十八轮续14 起）：文件格式改为
   `路径 | 特征关键字1,特征关键字2 | 级别 | 说明`，`checks.sensitive_files()` 读它、按"200 + 关键字命中"
   判定；**只有路径没有 `|` 的行＝预留位（跳过）**，文件缺失或一条可检测行都没有时回退
@@ -728,11 +737,15 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   ③ **只按 mtime 过滤会漏结果** —— dirmap 的 `saveResults()` 会与文件已有行去重，
   重扫同一目标且结果不变时**它不写新内容**、文件 mtime 保持旧值（实测「跑了 37 秒却解析 0 条」）。
   **最终方案：按目标定位** `output/<netloc 把 : 换成 _>/*.txt`，再按目标 netloc 过滤行，
-  mtime 过滤只作兜底。结果行格式是 `[状态码][content-type][大小] URL`（大小形如 `1.23kb`），
-  我们只读 `res.txt` / `403.txt`（`重复长度.txt` 按用户要求默认不展示）。
+  mtime 过滤只作兜底。结果行格式是 `[状态码][content-type][大小] URL`，**续45 起大小是精确
+  字节数**（如 `1234`）；老产物仍可能是量化值 `1.23kb`，`_size_to_int()` 两种都吃。
+  解析时用 `_strip_fragment()` 剥掉 `#fragment`（dirmap 原样写 `response.url`，请求里带了就落盘）。
+  我们只读 `res.txt` / `403.txt`（`重复长度.txt` 按用户要求默认不展示），解析完清掉本次扫过目标的
+  `output/<netloc>/`（`_cleanup_output()`：只删本次扫过的，别人的历史产物不动，失败只告警）。
 - **dirmap 是 GPL-3.0，刻意不内联**（把源码拷进仓库会让整个仓库受 GPL 约束）：
-  只保留 `tools/dirmap/` 目录联接 + 外部适配器；对它的 5 处源码修复（重复定义 / 死变量 /
-  O(n²) 读回+并发丢写 / `skip_size` 比较恒假 / `ssl_context` 未挂载，**588s → 43s**）记录在
+  只保留 `tools/dirmap/` 目录联结 + 外部适配器；对它的 7 处源码修复（重复定义 / 死变量 /
+  O(n²) 读回+并发丢写 / `skip_size` 比较恒假 / `ssl_context` 未挂载，**588s → 43s**；
+  续45 补：`intToSize` 量化值改精确字节数 / `inspector` 复用带 SSL 适配器的 session）记录在
   `tools/dirmap_fixes/README.md`（**该目录不含 dirmap 源码**）。
 - **全端口扫描（1-65535）实测**（2026-09-22，本机回环）：`workers=256`/`timeout=0.3` → **82 秒**；
   **默认参数** `workers=64`/`timeout=1.0` → **1037 秒（17.3 分钟）**，差 12.6× —— 全端口用默认参数基本不可用，
@@ -822,8 +835,9 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   递归放在 `run()` 里对两种产物（内置 / dirmap 的 `only_fw` 补充）一视同仁 ——
   挂进 `_builtin_scan` 会让"装了 dirmap 的机器反而没有递归"。任务级勾选 `recursive_dir`
   只本次生效且**自动带上 `dirscan_full`**；策略里填了更大的层数就按策略走。
-  刻意**不打开** dirmap 自带的 `conf.recursive_scan`（其触发条件只有 `[301,403]`、深度靠
-  URL 长度 60 兜底，与上面的额度不可预测地叠加）。
+  刻意**不打开** dirmap 自带的 `conf.recursive_scan` —— 2026-09-25（续44）复核源码后更正口径：
+  `recursiveScan()` **是死代码**（唯一引用那段早被整块注释掉），打开它**也不会递归**，只影响
+  两句控制台文案与进度条长度；递归一律走上面的三重闸，额度才可预测。
   **本轮明确不做**：重写 dirmap 等价多语言字典引擎 / 运行时自动下载字典（见 `TODO.md`）。
 - **FOFA 三种反查已于 2026-09-22 真实跑过**（key 已配）：
   `title="维保中心"` → 15 条（正常拓展）；`cert="example.com"` → **2 164 696 条** →
@@ -850,7 +864,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   备份失败只告警、不阻断删除（GUI 的单个删除与批量删除都走 `db.delete_task`，无需额外操作）。
   即：**删除前请照常检查 `data/trash/`**，那里是"误删后唯一的救命稻草"。
 - **dirmap 是 GPL-3.0，刻意不内联**（把源码拷进仓库会让整个仓库受 GPL 约束）：
-  只保留 `tools/dirmap/` 目录联接 + 外部适配器；对它的 5 处源码修复记录在
+  只保留 `tools/dirmap/` 目录联结 + 外部适配器；对它的 7 处源码修复记录在
   `tools/dirmap_fixes/README.md`（**该目录不含 dirmap 源码**）。
 - **软 404 基线的并发重复计算已修**（2026-09-23 续11）：
   原先 `DirscanStage._builtin_scan._baseline()` 是"惰性填字典"且**没有同步**，`pool_run` 的

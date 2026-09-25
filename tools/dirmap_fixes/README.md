@@ -35,7 +35,7 @@ dirmap 是 **GPL-3.0** 第三方项目（`LICENSE` 第 1 行即 GPLv3）。把�
    → 现在改为**按目标定位**：`output/<netloc 把 : 换成 _>/`，再按目标 netloc 过滤行，
    mtime 过滤只作为兜底。
 
-## 我们对 dirmap 源码做的 5 处修复（改的是本机那份外部副本）
+## 我们对 dirmap 源码做的 7 处修复（改的是本机那份外部副本）
 
 > 备份：`lib/controller/bruter.py.bak-workbuddy-20260922`（同目录）。**未内联、未提交进本仓库。**
 
@@ -46,6 +46,8 @@ dirmap 是 **GPL-3.0** 第三方项目（`LICENSE` 第 1 行即 GPLv3）。把�
 | 3 | `saveResults()` 每次 `open(path,'r+')` **读回整个文件**再追加 | 1.5 万条字典下是 O(n²) 读放大；且 gevent 并发下多协程同时 r+ 会**互相覆盖丢结果** | 首次写载入已有行 → 之后只追加，并加 `threading.Lock` 串行化 |
 | 4 | `if size == conf.skip_size`：左边是 `intToSize()` 的字符串（`1.23kb`），右边是配置里的 `None`/`1k` | **永远不相等**，这个开关形同虚设 | 新增 `_parse_size()` 按字节数比较 |
 | 5 | 建了 `ssl_context`（SECLEVEL=1 / 不校验证书）却 mount 的是**默认** adapter | 等于白建，旧版 SSL/自签名目标仍会失败 | 新增 `_LegacySSLAdapter` 把 ssl_context 注入 urllib3 连接池 |
+| 6 | 产物行的大小写的是 `intToSize()` 的**量化值**（如 `1.21kb`） | 我们反算字节数有 ±0.5% 误差（`1.21kb`→1239，真值 1234），同一路径的 dirmap 行与内置行在折叠去重时对不上 | 产物行改写 `size_bytes` **精确字节数**；内部去重（`response_storage`）仍按量化值走，保持「重复长度」分组行为不变 |
+| 7 | `plugins/inspector.py` 的 auto-404 预检走**裸 `requests.get`** | 绕过了为旧版 SSL / 自签名证书准备的 `ssl_context`（SECLEVEL=1 + 不校验证书）：这类目标在 auto-404 基线阶段就失败，基线拿不到、后面去重跟着失效 | 延迟导入 `lib.controller.bruter.session` 复用（避开 `bruter → inspector` 的循环导入） |
 
 ### 修复 #3 的实测收益
 
@@ -66,17 +68,49 @@ dirmap 是 **GPL-3.0** 第三方项目（`LICENSE` 第 1 行即 GPLv3）。把�
   早已被整块注释掉。所以 `conf.recursive_scan` 现在只影响两句控制台文案与进度条长度 ——
   **打开它也不会递归**，别指望改这个开关能得到递归（递归由本仓库 `scanner/stages/dirscan.py`
   自己的三重闸实现）。
-- **已知残留（未修）**：dirmap 行里的大小是 `intToSize()` 量化值（我们反算字节数时有 ±0.5%
-  误差，同页面的 dirmap 行与内置行折不到一起）；`plugins/inspector.py` 的 auto-404 预检走裸
-  `requests.get`、绕过了 `_LegacySSLAdapter`；含 fragment 的产出行会被原样解析（开递归时会被
-  当目录前缀）；`output/` 无清理（`404.txt` 每目标约 1 MB、长期累积）。
+- **已知残留 4 条**：同日（续45）**全部修掉** —— 见下一节。
+
+## 2026-09-25 续45 —— 4 条残留全部修掉（2 条改 dirmap 源码 / 2 条改本仓适配器）
+
+| # | 残留 | 改在哪 | 修法 |
+|---|---|---|---|
+| 1 | `intToSize()` 量化误差（`1.21kb` 反算 1239、真值 1234，±0.5%） | dirmap 源码 | 上表 #6 |
+| 2 | `plugins/inspector.py` 的 auto-404 预检绕过 `_LegacySSLAdapter` | dirmap 源码 | 上表 #7 |
+| 3 | 含 fragment 的产出行（`http://h/a#x`） | 本仓适配器 | `dirscan._strip_fragment()` |
+| 4 | `output/` 无清理（`404.txt` 每目标约 1 MB、长期累积） | 本仓适配器 | `DirscanStage._cleanup_output()` |
+
+**#3 为什么必须剥 fragment**：fragment **永远不会发给服务端**（RFC 3986：它是客户端侧的定位
+片段），`http://h/a/b#x` 表示的资源就是 `http://h/a/b`。dirmap 的产物行直接写 `response.url`，
+请求里带了 fragment 就原样落盘（实测确认）。不剥掉的话：① 开目录递归时这条会被当成目录前缀
+去拼 `.../b#x/`（拼出来是无效 URL，白花请求）；② 折叠去重时与同一路径的其它行对不上。
+
+**#4 为什么必须清**：`output/` 是 dirmap 的**持久**目录、没有上限；而我们只读 `res.txt` 与
+`403.txt`，`404.txt` / `othercode.txt` / `重复长度.txt` 对我们没有任何价值。顺带解掉另一个隐患：
+`saveResults()` 会与文件里已有的行去重，残留文件会让「重扫同一目标」写出 0 行新内容（mtime
+也不变）。清理**只删本次扫过的目标目录**（`_target_dirs()` 的返回），别人的历史产物不动；
+删除失败只告警不抛；且放在**解析之后**——解析出问题时现场还在。
+
+**验证证据（都是真跑，不是推断）**：
+
+- 直调改过的 `responseHandler`（1234 字节响应）→ 产物行 `[200][text/plain][1234] http://…`；
+  `_size_to_int("1261") == 1261` 而 `_size_to_int("1.21kb") == 1239` —— ±0.5% 误差确实存在，
+  且适配器本来就能读精确值（**无需改适配器**，故只改 dirmap 源码这一侧）。
+- `auto_check_404_page=True` 端到端跑真 dirmap **没有崩** ⇒ 延迟导入那条路径被真实走到。
+- 本机回环靶场（`py -3 -m http.server 8899` + 真实 dirmap）：任务 #155 入库长度
+  `4096 / 1234 / 777 / 17`（全是文件真实字节数）、无一条 `path` 带 fragment、日志出现
+  `[dirscan] 已清理 dirmap 产物目录 1 个（释放 1130 KB）`，`output/127.0.0.1_8899/` 确实消失，
+  其它目标目录（pengo.pro / weiyuansj.com 等）**未被误删**。
+- 老产物兼容：`1.21kb` 这类历史行仍能解析（1239），不因改格式而丢历史结果。
+
+**历史残留规模（未动，属你机器上既有数据）**：`tools/dirmap/output/` 11 个目标目录 / 50 个
+文件 / 12.0 MB（`404.txt`、`重复长度.txt` 各 1 MB 级）—— 正是 #4 要治的东西；要清随时说。
 
 ## 复现步骤
 
 ```powershell
 # 1) 挂载（已建好；换机器时重建）
 #    mklink /J tools\dirmap <本机 dirmap 目录>
-# 2) 打补丁：见上表 5 处（备份文件就在 bruter.py 同目录）
+# 2) 打补丁：见上表 7 处（备份文件就在 bruter.py 同目录）
 # 3) 验证：跑一个只开 dirscan 的任务，日志应出现
 #    [dirscan] dirmap 处理 N 个站点 … / [dirscan] dirmap 输出 M 条
 ```

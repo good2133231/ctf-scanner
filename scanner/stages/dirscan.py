@@ -43,6 +43,7 @@ dirmap 的 `-e` 只认 `php/jsp/asp/d/big/all`，**吃不下自定义字典**，
 import hashlib
 import random
 import re
+import shutil
 import threading
 import time
 from urllib.parse import urlparse
@@ -180,6 +181,17 @@ def _size_to_int(text):
         return int(float(m.group(1)) * _UNITS.get((m.group(2) or "").lower(), 1))
     except (TypeError, ValueError):
         return None
+
+
+def _strip_fragment(url):
+    """去掉 URL 里的 `#fragment`。
+
+    fragment **永远不会发给服务端**（RFC 3986：它是客户端侧的定位片段），`http://h/a/b#x`
+    表示的资源就是 `http://h/a/b`。dirmap 的产物行直接写 `response.url`，请求里带了 fragment
+    就原样落盘；不剥掉的话开目录递归时这条会被当成目录前缀去拼 `.../b#x/`（拼出来是无效 URL，
+    白花请求），折叠去重时也与同一路径的其它行对不上。
+    """
+    return str(url or "").split("#", 1)[0]
 
 
 def _origin_of(url):
@@ -487,7 +499,8 @@ class DirscanStage(Stage):
 
         out_dir = script.parent / "output"
         rows = []
-        for d in self._target_dirs(out_dir, targets):
+        dirs = self._target_dirs(out_dir, targets)
+        for d in dirs:
             for f in sorted(d.glob("*.txt")):
                 rows.extend(self._parse_output(f))
         if not rows:      # 兜底：目录命名/层级变了，退回"本次运行写过的文件"
@@ -496,6 +509,8 @@ class DirscanStage(Stage):
         # 只保留确实属于我们扫过的主机的行（防读到别人的历史产物）
         if targets:
             rows = [r for r in rows if urlparse(r.get("path") or "").netloc in targets]
+        # 清理由**本次解析过**的目标目录。放在最后一步：解析出问题时现场还在。
+        self._cleanup_output(ctx.logger, dirs)
         return rows
 
     @staticmethod
@@ -509,6 +524,30 @@ class DirscanStage(Stage):
             if d.is_dir():
                 found.append(d)
         return found
+
+    @staticmethod
+    def _cleanup_output(logger, dirs):
+        """删掉本次解析过的 dirmap 产物目录（`output/<netloc>/`）。
+
+        为什么必须清：`output/` 是 dirmap 的**持久**目录、没有上限 —— `404.txt` 每目标约 1 MB，
+        一个长期跑的任务列表就能堆到几百 MB；而我们的适配器只读 `res.txt` 与 `403.txt`，
+        其余文件（`404.txt` / `othercode.txt` / `重复长度.txt`）对我们没有任何价值。
+        顺带解决另一个隐患：dirmap 的 `saveResults()` 会与文件里已有的行去重，残留文件会让
+        "重扫同一目标"写出 0 行新内容（mtime 也不变）——清理后每次拿到的都是新产物。
+        **只删本次扫过的目标对应的目录**，别人的历史产物不动；删除失败只告警不抛。
+        """
+        freed = removed = 0
+        for d in dirs:
+            try:
+                size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+                shutil.rmtree(d)
+            except OSError as e:
+                logger.warning(f"[dirscan] 清理 dirmap 产物目录失败：{d}（{e}）")
+                continue
+            removed += 1
+            freed += size
+        if removed:
+            logger.info(f"[dirscan] 已清理 dirmap 产物目录 {removed} 个（释放 {freed / 1024:.0f} KB）")
 
     @staticmethod
     def _outputs_since(out_dir, started, limit=200):
@@ -537,7 +576,8 @@ class DirscanStage(Stage):
         for line in lines:
             m = DIRMAP_RE.match(line)
             if m:
-                rows.append({"site_url": _origin_of(m.group(4)), "path": m.group(4),
+                rows.append({"site_url": _origin_of(m.group(4)),
+                             "path": _strip_fragment(m.group(4)),
                              "status": int(m.group(1)),
                              "length": _size_to_int(m.group(3)), "method": "GET",
                              "note": "dirmap"})
@@ -546,7 +586,8 @@ class DirscanStage(Stage):
             if not urls:
                 continue
             sm = re.match(r"^\s*[\[(]?(\d{3})[\])]?", line)
-            rows.append({"site_url": _origin_of(urls[0]), "path": urls[0],
+            rows.append({"site_url": _origin_of(urls[0]),
+                         "path": _strip_fragment(urls[0]),
                          "status": int(sm.group(1)) if sm else None,
                          "length": None, "method": "GET", "note": "dirmap"})
         return rows

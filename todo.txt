@@ -1382,8 +1382,21 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        装好的 fscan 误报成"未通过版本校验"并**静默**降级到内置扫描）。tests/smoke.py 新增 [7f] 钉住
        这两条性质，变异证伪 2/2 被击杀；本机 `py -3 cli/client.py --check` 实跑已见 nmap OK。
 [待办] 8、仍未做：B 组架构级四项（任务队列 / 分布式节点 / 工具版本管理；「鉴权加固」剩余部分是
-       **刻意不做**的逐表单 CSRF）；dirmap 残留 4 条（`intToSize` 量化误差 / `plugins/inspector.py`
-       绕过 `_LegacySSLAdapter` / 含 fragment 的产出行 / `output/` 无清理）；C 组需环境（P2-3 Linux
-       实机验证挂起中、fscan 二进制真跑验证）；D 组明确不做（多用户/HTTPS 部署指引、重写 dirmap
-       等价字典引擎、**A2** 的 flow 深水 JS / workflow `args` / `oob` 反连 —— 续45 实测仓内
-       312/312 模板 `_status=ok` 且 0 个 `_note`，零模板受阻，故结项不做）。
+       **刻意不做**的逐表单 CSRF）；C 组需环境（P2-3 Linux 实机验证挂起中）；D 组明确不做
+       （多用户/HTTPS 部署指引、重写 dirmap 等价字典引擎、**A2** 的 flow 深水 JS / workflow `args` /
+       `oob` 反连 —— 续45 实测仓内 312/312 模板 `_status=ok` 且 0 个 `_note`，零模板受阻，结项不做）。
+[完成] 9、dirmap 残留 4 条（**续45**，2026-09-25）：前 2 条改**本机那份 dirmap 外部副本**（GPL-3.0、
+       不入仓库，已留 `.bak-workbuddy-20260922` 备份）—— ① 产物行改写 `size_bytes` 精确字节数
+       （原写 `intToSize()` 量化值，反算 ±0.5% 误差让同路径的 dirmap 行与内置行折不到一起）；
+       ② `plugins/inspector.py` 的 auto-404 预检改为延迟导入 `lib.controller.bruter.session`，
+       复用挂载了 `_LegacySSLAdapter` 的那条 session（原先裸 `requests.get` 绕过了它，旧版 SSL /
+       自签名目标在基线阶段就失败）。后 2 条改**本仓适配器**：③ `dirscan._strip_fragment()` 剥
+       `#fragment`（fragment 从不发给服务端，不剥则开递归会拼出无效目录前缀）；
+       ④ `DirscanStage._cleanup_output()` 清掉本次扫过的 `output/<netloc>/`（持久目录无上限；
+       顺带解掉「残留文件让重扫写出 0 行」）。
+[完成] 验证：本机回环靶场端到端（真 dirmap + `py -3 -m http.server 8899`）任务 #155 入库长度
+       `4096 / 1234 / 777 / 17`（全是文件真实字节数）、无一条 path 带 fragment、日志出现
+       `已清理 dirmap 产物目录 1 个（释放 1130 KB）` 且其它目标目录未被误删；老量化格式
+       （`1.21kb`）仍可解析（向后兼容）；`tests/smoke.py` 新增 `[7g]` 钉住适配器侧两条，
+       变异证伪 2/2 被击杀。残留规模记档：`tools/dirmap/output/` 11 目录 / 50 文件 / 12.0 MB
+       （属既有数据，未动）。细节见 `tools/dirmap_fixes/README.md`。
