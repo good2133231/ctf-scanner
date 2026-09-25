@@ -5285,6 +5285,14 @@ workflows:
         assert "运行时长" in _v_html and _v_expect in _v_html, \
             f"「目标与配置」必须显示运行时长 {_v_expect!r}"
         assert _v1["started_at"] in _v_html, "「开始 / 结束」行要显示起止时刻"
+        # 3a'') 任务**列表页**是同一口径的第二个落点（续36 补 续35 的 [未做] 7）：光测
+        #       `run_duration_text()` 抓不到"列表路由忘了传 durations / 模板删了列"，所以直接看渲染结果。
+        _v_list_html = c.get("/tasks").get_data(as_text=True)
+        import re as _re6v
+        _v_row = _re6v.search(r'<tr data-id="%d".*?</tr>' % _va, _v_list_html, _re6v.S)
+        assert "运行时长" in _v_list_html, "任务列表页缺「运行时长」列"
+        assert _v_row and _v_expect in _v_row.group(0), \
+            f"任务列表页该行应显示运行时长 {_v_expect!r}（钉到行上，避免别处凑巧出现同串而假绿）"
         # 3b) stopped 分支（用户点停止 / 预算耗尽）——断点必须保留，供续跑
         _stop_once6v[0] = True
         _vb = db.create_task("smoke-duration-stop", targets, _v_stages, {"offline": True})
@@ -5346,7 +5354,8 @@ workflows:
     print("[6v] 续35 运行时长 ok: format_duration 口径（0/59/60/3599/3600/3661/None/负值）/ "
           "起止写入 + 多段**累加**（90→150）/ fresh 清零·续跑不清零 / 没起点·时钟回拨均记 0 秒 "
           "（不写负数）/ task_run_seconds 四情形（运行中按注入的 now 算、被强杀只报已确认值）/ "
-          "页面文案（老任务 `-`）/ runner 三条终态（done·stopped·外层 except→failed）都落了 "
+          "页面文案（老任务 `-`）/ 详情页与**任务列表页**两处都渲染出同一口径（续36 补列表列）/ "
+          "runner 三条终态（done·stopped·外层 except→failed）都落了 "
           "started_at+finished_at / 启动对账按 updated_at 结账（不把停机时长算成运行时长）")
 
     # [6w] FOFA 三路反查的**阶段级**桩测（续36）—— 补 `[6u]` 留下的两条待办。

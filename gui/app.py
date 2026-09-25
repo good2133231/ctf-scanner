@@ -402,8 +402,13 @@ def create_app():
         rows = db.list_tasks(limit=200)
         # 「统计」列：站点/域名数量（对齐参考图的 站点: N / 域名: N 展示）
         counts = {t["id"]: db.task_counts(t["id"]) for t in rows}
+        # 续36「运行时长」列：与详情页「目标与配置」**同一口径**（`run_duration_text`）。
+        # 注意 `list_tasks` 返回的是 `sqlite3.Row`，必须先 `dict(...)` 再传 —— `run_duration_text`
+        # 内部走 `task.get(...)`，而 `sqlite3.Row` **没有** `.get()`（`_site_titles()` 踩过同一个坑）。
+        durations = {t["id"]: run_duration_text(dict(t)) for t in rows}
         return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER,
-                               counts=counts, running=set(runner.running_task_ids()))
+                               counts=counts, durations=durations,
+                               running=set(runner.running_task_ids()))
 
     @app.route("/api/tasks", methods=["POST"])
     @login_required

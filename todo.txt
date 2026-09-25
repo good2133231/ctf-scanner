@@ -1132,3 +1132,12 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 6、CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致（`tests/smoke.py` 两口径均 `120 1`）。
 [未做] 7、Shodan / Quake 的 favicon 反查仍是**同构照抄** FOFA 的实现，本轮未做阶段级桩测（只覆盖了 FOFA
        这一路；C 段反查目前也只有纯函数级覆盖）。
+[完成] 8、任务列表页 `/tasks` 显示运行时长 —— **关掉续35 的 `[未做]` 7**：`gui/app.py` 的 `/tasks`
+       路由补 `durations = {t["id"]: run_duration_text(dict(t)) for t in rows}`（`list_tasks` 返回的是
+       `sqlite3.Row`，必须 `dict(...)` 再传 —— `run_duration_text` 内部走 `task.get(...)`，
+       `sqlite3.Row` 没有 `.get()`，是 `_site_titles()` 的同型坑）；`gui/templates/tasks.html` 在
+       「开始时间」后加「运行时长」列（空表 `colspan` 10→11），措辞与详情页**同一口径**、不新造文案。
+[完成] 9、验证（同上第 2 条口径）：`[6v]` 扩一条 **渲染级**断言（从 `/tasks` 页面正则取出**该任务那一行**
+       再断言时长在本行内，避免"整页凑巧出现同串"假绿）；smoke PASS；**变异证伪 2/2 被击杀**
+       （路由不传 `durations` / 模板删掉表头），均已还原；CRLF 逐行归位后两口径一致
+       （app.py 6/1、tasks.html 5/2、smoke.py 10/1）。

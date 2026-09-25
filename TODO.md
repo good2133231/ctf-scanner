@@ -702,6 +702,8 @@
 - [x] **续36** 补 `[6u]` 遗留：FOFA 三路反查的**阶段级桩测**（`tests/smoke.py [6w]` —— 子开关各管哪一路、
       命中落 `osint:fofa`/`fofa-cert`/`fofa-title`、裸 IP 不入库、黑 ico·通用证书不拓展、占位证书与
       模板标题零请求预筛；纯函数级覆盖之外补上"阶段里接线也接对了"这一层）；
+      **续36 补** 任务列表页 `/tasks` 显示运行时长（同一口径 `run_duration_text`，渲染级断言，
+      关掉续35 的 `[未做]` 7）；
 - [x] **另（2026-09-24）** 补 `LICENSE`：本仓库自有代码 MIT；`config/dicts/dirs_*.txt`
       派生自 dirmap（GPL-3.0），**不被 MIT 覆盖**，边界见 `NOTICE.md §5`。
 

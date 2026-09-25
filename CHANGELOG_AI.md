@@ -3,6 +3,30 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续36 补：任务列表页显示运行时长（关掉续35 自己标的 `[未做]` 7）
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+**背景**：续35 把「运行时长」落在详情页「目标与配置」与 CLI 摘要两处，任务**列表页** `/tasks`
+当时被显式标成 `[未做]` —— 本轮补齐这第三个落点，口径**完全复用** `gui.app.run_duration_text()`，
+不新造文案、不改 `db` 侧。
+
+**改了什么**（三处，最小改动）
+- `gui/app.py` 的 `/tasks` 路由：`durations = {t["id"]: run_duration_text(dict(t)) for t in rows}`。
+  必须 `dict(...)` 再传：`db.list_tasks()` 返回 `sqlite3.Row`，而 `run_duration_text` 内部走
+  `task.get(...)`，`sqlite3.Row` **没有** `.get()` —— 正是 `_site_titles()` 踩过的同型坑（已写进注释）。
+- `gui/templates/tasks.html`：「开始时间」后新增「运行时长」列（`{{ durations[t.id] }}`），
+  空表 `colspan` 10 → 11。列里直接呈现同一套措辞（运行中 / 上次被中断尾段未计入 / 老任务 `-`）。
+- `tests/smoke.py` `[6v]` 扩一条 3a'')：**渲染级**断言 —— 从 `/tasks` 页面里正则取出该任务那一行，
+  断言运行时长出现在**这一行内**（而不是"整页里出现过"），避免别处凑巧同串造成假绿。
+
+**验证**
+- `py -3 tests/smoke.py` → `SMOKE PASS`。
+- 变异证伪 **2/2 被击杀**：① 路由不传 `durations`（`durations = {}`）→
+  `AssertionError: 任务列表页该行应显示运行时长 '2 秒'…`；② 模板删掉表头 `<th>运行时长</th>` →
+  `AssertionError: 任务列表页缺「运行时长」列`。两处变异均已还原（内容与还原前字节一致）。
+- CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 一致
+  （本轮改写的行起初被写成 LF，逐行归位后 `app.py` 6/1、`tasks.html` 5/2、`smoke.py` 10/1）。
+
 ## 2026-09-25 —— 续36：补 `[6u]` 遗留 —— FOFA 三路反查的阶段级桩测
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 
