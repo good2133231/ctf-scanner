@@ -662,9 +662,9 @@
       `scanner/ctlog.py`（`ctlog` 段）；「证书解析页签」→ 续15 的 `cert` 阶段；报告 HTML·PDF →
       续16 的三格式共用 `collect()` 快照；登录态扫描 + nuclei `raw`/`flow`/`workflows` → 续17。
 
-## 续12 ~ 续35（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
+## 续12 ~ 续36（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
 
-> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 24 轮变更只记在 `CHANGELOG_AI.md`。
+> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 25 轮变更只记在 `CHANGELOG_AI.md`。
 > 这里补一份**一句话 + 落地位置**的索引，避免"翻待办看不出做过什么"。**不重复 CHANGELOG 全文**。
 
 - [x] **续12** 误报复核三态 + POC 置信度分层 + Linux 实机验收（Ubuntu 22.04 跑通 smoke）
@@ -699,6 +699,9 @@
 - [x] **续34** IP 反查多源增强（webscan / hackertarget / ip138…）+ IP 资产页「反查域名」列；
 - [x] **续35** 任务运行时长（`tasks.started_at`/`finished_at`/`elapsed_seconds` + 详情页「目标与配置」
       与 CLI 摘要同口径，续跑/追加**累加**、重启清零、对账按最后已知存活时刻结账，回归 `[6v]`）；
+- [x] **续36** 补 `[6u]` 遗留：FOFA 三路反查的**阶段级桩测**（`tests/smoke.py [6w]` —— 子开关各管哪一路、
+      命中落 `osint:fofa`/`fofa-cert`/`fofa-title`、裸 IP 不入库、黑 ico·通用证书不拓展、占位证书与
+      模板标题零请求预筛；纯函数级覆盖之外补上"阶段里接线也接对了"这一层）；
 - [x] **另（2026-09-24）** 补 `LICENSE`：本仓库自有代码 MIT；`config/dicts/dirs_*.txt`
       派生自 dirmap（GPL-3.0），**不被 MIT 覆盖**，边界见 `NOTICE.md §5`。
 

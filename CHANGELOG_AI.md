@@ -3,6 +3,44 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续36：补 `[6u]` 遗留 —— FOFA 三路反查的阶段级桩测
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+**背景（续33 登记的两条 `[待办]`）**：`[6u]` 全 13 阶段真跑时为防烧配额**显式关掉了 FOFA**，
+于是 osint 阶段里"FOFA 真的把命中域名写进 `subdomains`"这条链路一直没有回归覆盖。
+
+**为什么"纯函数测过"不算数**：`is_black_ico` / `is_generic_cert` / `is_generic_title` /
+`is_common_cert` 早就有纯函数断言，但**接线**是独立的一件事 —— 本项目已踩过同型坑
+（`_site_titles()` 把 `sqlite3.Row` 当 dict 用，纯函数全绿而阶段里每次抛异常被吞，
+表现是"标题反查永远 0 条"）。
+
+**改了什么**：`tests/smoke.py` 新增 `[6w]`，桩掉 `fofa_mod.search` / `search_cert` /
+`search_title` 与 `favicon_hash`（**零真实请求、不占配额**），跑**真 `run_task`** 三个阶段：
+
+1. **A 总开关关**（其余外部能力也全关）→ 整个阶段跳过：三个桩**零调用**、一个域名都不落库。
+2. **B 只开 favicon 那一路**（`cert_enabled=False` / `title_enabled=False`）→
+   `search` 恰好被调用一次且实参是 mmh3 值；**cert / title 的桩一次都没被调用**；
+   命中域名落库且来源是 `osint:fofa`，**桩里那条裸 IP 行没被当域名写进 `subdomains`**。
+3. **C 三路全开 + 阈值/预筛**：
+   - favicon 命中 999 条（> 黑 ico 阈值 200）→ 有 assets 也**不拓展**（并断言"确实查过"，
+     否则"没落库"可能只是压根没查 —— 那是假绿）；
+   - 证书：`example.com` 属占位证书 → **连查询都不发**；正常注册域命中落 `osint:fofa-cert`；
+     另一个注册域命中 999 条 → 判通用证书不拓展；
+   - 标题：`Index of /backup` 是模板页 → **连查询都不发**；具体标题 `Acme Portal` 命中落
+     `osint:fofa-title`。
+
+**验证**
+- `py -3 tests/smoke.py` → `SMOKE PASS`（`[6w]` 通过）。
+- **变异证伪 4/4 全部被击杀**：① 去掉黑 ico 判定 → C 组域名集合挂（`black-ico.cn` 落库）；
+  ② 去掉模板标题预筛 → `('title','Index of /backup')` 出现在调用记录里挂；
+  ③ 忽略 `cert_enabled`/`title_enabled` → B 组"不该查证书/标题"挂；
+  ④ 去掉占位证书预筛 → `('cert','example.com')` 出现在调用记录里挂。
+  变异已全部还原（`git diff` 中 `scanner/stages/osint.py` 不再出现 = 字节一致）。
+- CRLF 自查：`git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` 一致（`smoke.py` 120/1）。
+
+**未做**：Shodan / Quake 两路 favicon 反查的**阶段级**桩测（`[5y]` 已有 shodan 的接线断言，
+quake 尚未单列）；`osint` 的 C 段反查仍只有纯函数级覆盖（联网往返无法离线自测，见 `AGENTS.md`）。
+
 ## 2026-09-25 —— 续35：任务运行时长（详情页「目标与配置」/ CLI 摘要 / 启动对账）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

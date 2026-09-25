@@ -1103,3 +1103,32 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 [完成] 6、CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致（归位前 app.py 2 行
        CR-only 噪声、app.py 23 行 + client.py 4 行新增行是 LF；只对**本次新增行**逐字节归位，未碰既有混合换行）。
 [未做] 7、任务列表页 `/tasks` 未显示运行时长（本轮只落在详情页「目标与配置」与 CLI 摘要）。
+
+------
+
+（2026-09-25 续36：补 `[6u]` 遗留的两条测试缺口）实施者：Trae · DeepSeek-V4.1-Flash
+触发：续33 的 `[6u]`（全 13 阶段端到端真跑）为防烧配额把 FOFA 关了，留下两条待办未做；
+本轮按用户「可以 接着做」把 A 组第 1 项做完。
+
+[完成] 1、上方第 1074 行（续33）留的 `[待办] 补 fofa/osint 子开关最小形态单测；补"FOFA 真查命中→落拓展域名"离线桩测`
+       —— **本轮补齐**（按本文件先例：只追加、不改历史行）。
+[完成] 2、实现：`tests/smoke.py` 新增 `[6w]`（+120/−1）。桩掉 `fofa_mod.search` / `search_cert` / `search_title`
+       与 `favicon_hash`，用**真 `run_task`** 跑 osint 阶段，断言同时看**调用记录**与 `subdomains` 落库：
+       A) `fofa.enabled=false`（shodan/quake/ctlog/iprecon 也全关）→ 整阶段直接跳过、**一次查询都不发**；
+       B) 只开 favicon 那一路 → `cert_enabled`/`title_enabled=false` 时 cert·title **一次都不查**
+          （断言 `[("icon", 12345)]`），命中只落 `osint:fofa` 一条、桩里的**裸 IP 行不入库**；
+       C) 三路全开 → 黑 ico（999>200）与通用证书**不拓展**、占位证书（`example.com`）与模板标题
+          （`Index of /backup`）**零请求**跳过，落库来源恰为 `osint:fofa-cert` / `osint:fofa-title`。
+[说明] 3、为什么纯函数测过不算数：既有覆盖有阈值/预筛的**纯函数**级测试（`[5y]` 等）与标题·证书的
+       落库测试，但 favicon 路的「命中→落拓展域名」接线、以及三个子开关**各管哪一路**此前没有
+       阶段级断言 —— 纯函数全绿、阶段里把 `do_cert` 写成 `do_fofa` 也照样绿（M3 变异就是这么被抓出来的）。
+[完成] 4、验证：`py -3 tests/smoke.py` → SMOKE PASS；**变异证伪 4/4 全被击杀**（去掉黑 ico 判定 /
+       去掉模板标题预筛 / `do_cert=do_title=do_fofa` / 去掉占位证书预筛），改坏的 4 处已全部还原
+       （`scanner/stages/osint.py` 与 HEAD **字节一致**，`git diff --stat` 只剩 `tests/smoke.py`）。
+[说明] 5、防假绿两条：①「黑 ico 不拓展」必须**同时**断言 `("icon", 12345)` 确实查过 —— 否则"没落库"
+       可能只是"压根没查"；② 零请求预筛用**调用记录里不出现**来钉，而不是只看日志文字。
+       首跑踩过一次坑：B 组多插了一个子域名 `acme-portal.cn`，严格相等断言把"目标自身子域名"也算进来，
+       改为 B 组 `subs=[]`（口径更强：表里只该有 favicon 命中那一条）。
+[完成] 6、CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致（`tests/smoke.py` 两口径均 `120 1`）。
+[未做] 7、Shodan / Quake 的 favicon 反查仍是**同构照抄** FOFA 的实现，本轮未做阶段级桩测（只覆盖了 FOFA
+       这一路；C 段反查目前也只有纯函数级覆盖）。

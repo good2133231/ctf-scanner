@@ -401,6 +401,18 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   启动对账按该行原 `updated_at` 结账（**不把停机时长算成运行时长**）。
                             #   注意：改坏实现时若只删 SQL 表达式不同步删绑定参数，报的是
                             #   `Incorrect number of bindings supplied` —— 那是绑定错、**不算有效变异**。
+# 2026-09-25 续36 新增 `[6w]`：**FOFA 三路反查的阶段级桩测**（补续33 留下、`[6u]` 为省配额关掉 FOFA
+                            #   后一直没盖上的两条：三个子开关各管哪一路 / 真查命中→落「拓展域名」）——
+                            #   桩掉 `fofa_mod.search` / `search_cert` / `search_title` 与 `favicon_hash` 后跑**真流水线**，
+                            #   按调用记录 + `subdomains` 落库断言：A) `fofa.enabled=false`（其余外部开关全关）→
+                            #   整阶段跳过、一次查询都不发；B) 只开 favicon 那一路 → `cert_enabled`/`title_enabled=false`
+                            #   时 cert·title **一次都不查**，命中只落 `osint:fofa` 一条、桩里的**裸 IP 行不入库**；
+                            #   C) 三路全开：黑 ico（999>200）/ 通用证书**不拓展**，占位证书（`example.com`）与
+                            #   模板标题（`Index of /backup`）**零请求**跳过，来源串 `osint:fofa-cert`/`fofa-title` 各就对。
+                            #   防假绿：「黑 ico 不拓展」那条必须**同时**断言 `("icon", 12345)` 确实查过 —— 否则
+                            #   "没落库"可能只是"压根没查"；零请求预筛用**调用记录里不出现**来钉，而不是只看日志。
+                            #   补它的理由：既有覆盖只有阈值/预筛的**纯函数**级与标题·证书落库，favicon 路的
+                            #   「命中→落库」接线与子开关判定此前**没有阶段级断言**（纯函数全绿、阶段里接错线照样绿）。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）

@@ -5349,7 +5349,126 @@ workflows:
           "页面文案（老任务 `-`）/ runner 三条终态（done·stopped·外层 except→failed）都落了 "
           "started_at+finished_at / 启动对账按 updated_at 结账（不把停机时长算成运行时长）")
 
-    
+    # [6w] FOFA 三路反查的**阶段级**桩测（续36）—— 补 `[6u]` 留下的两条待办。
+    #      `[6u]` 全 13 阶段真跑时为防烧配额**显式关掉了 FOFA**，于是这几件事一直没有回归覆盖：
+    #      ① favicon 那一路（`fofa_mod.search`）"命中 → 落拓展域名"的接线；
+    #      ② 三个子开关各管哪一路（cert / title 关掉后 favicon 照跑、总开关关掉则一次都不查）；
+    #      ③ "命中过多即放弃拓展"（黑 ico / 通用证书）与两类**零请求预筛**（占位证书 / 模板标题）
+    #         在阶段里是否真的接上 —— 纯函数测过 ≠ 接线正确（本项目已踩过这类坑）。
+    #      桩掉 `fofa_mod.search*` 与 `favicon_hash`：零真实请求、不占配额。
+    _fw_calls, _fw_batch = [], {}
+
+    def _fw_icon(icon_hash, settings, logger=None, size=None):
+        _fw_calls.append(("icon", icon_hash))
+        return _fw_batch["icon"]
+
+    def _fw_cert(domain, settings, logger=None, size=None):
+        _fw_calls.append(("cert", domain))
+        return _fw_batch["cert"].get(domain, ([], 0, ""))
+
+    def _fw_title(title, settings, logger=None, size=None):
+        _fw_calls.append(("title", title))
+        return _fw_batch["title"].get(title, ([], 0, ""))
+
+    _fw_orig = (osint_mod.fofa_mod.search, osint_mod.fofa_mod.search_cert,
+                osint_mod.fofa_mod.search_title, osint_mod.favicon_hash)
+    osint_mod.fofa_mod.search = _fw_icon
+    osint_mod.fofa_mod.search_cert = _fw_cert
+    osint_mod.fofa_mod.search_title = _fw_title
+    osint_mod.favicon_hash = lambda url, settings=None: 12345
+
+    def _fw_asset(domain, ip="1.2.3.4"):
+        return {"host": "https://" + (domain or ip), "domain": domain, "ip": ip,
+                "port": "443", "title": ""}
+
+    def _fw_settings(**fofa):
+        """osint 的 settings 副本：只留 FOFA 这一路开，其余外部开关一律关（零真实请求）。"""
+        s = copy.deepcopy(settings)
+        s["iprecon"] = dict(s.get("iprecon") or {}, enabled=False)
+        for _n in ("shodan", "quake", "ctlog"):
+            s[_n] = dict(s.get(_n) or {}, enabled=False)
+        s["fofa"] = dict(s.get("fofa") or {}, black_ico_threshold=200, cert_threshold=200,
+                         title_threshold=200)
+        s["fofa"].update(fofa)
+        s["keys"] = {"fofa": {"email": "stub@example.test", "key": "stub"}}
+        return s
+
+    def _fw_site(url, title):
+        return {"url": url, "host": "127.0.0.1", "port": "80", "status": 200, "title": title,
+                "length": 100, "source": "builtin"}
+
+    def _fw_run(tag, s, sites, subs):
+        _tid = db.create_task(f"smoke-fofa-{tag}", targets, ["osint"], {"offline": True})
+        db.insert_sites(_tid, sites)
+        if subs:
+            db.insert_subdomains(_tid, subs)
+        run_task(_tid, f"smoke-fofa-{tag}", targets, ["osint"], {"offline": True}, s)
+        return _tid
+
+    _fw_ids = []
+    try:
+        # A) 总开关关 + 其余子能力都关 → 整个阶段直接跳过：一次查询都不发
+        _fw_batch.update({"icon": ([], 0, ""), "cert": {}, "title": {}})
+        _fw_mark = len(_fw_calls)
+        _fw_ids.append(_fw_run("off", _fw_settings(enabled=False),
+                               [_fw_site(targets, "Acme Portal")], []))
+        assert len(_fw_calls) == _fw_mark, f"fofa.enabled=False 应零查询：{_fw_calls[_fw_mark:]}"
+        assert not db.list_subdomains(_fw_ids[-1]), "总开关关着不该拓展出任何域名"
+
+        # B) 只开 favicon 那一路：命中落库且来源是 osint:fofa；cert / title **一次都不查**
+        _fw_batch.update({"icon": ([_fw_asset("ico-hit.cn"), _fw_asset("", ip="9.9.9.9")],
+                                   5, ""), "cert": {}, "title": {}})
+        _fw_mark = len(_fw_calls)
+        _fw_ids.append(_fw_run("icon", _fw_settings(enabled=True, cert_enabled=False,
+                                                    title_enabled=False),
+                               [_fw_site(targets, "Acme Portal")], []))
+        _fw_got = {(r["domain"], r["source"]) for r in db.list_subdomains(_fw_ids[-1])}
+        assert _fw_got == {("ico-hit.cn", "osint:fofa")}, \
+            f"favicon 命中要落 osint:fofa，裸 IP 那行不得当域名入库：{_fw_got}"
+        assert _fw_calls[_fw_mark:] == [("icon", 12345)], \
+            f"cert_enabled/title_enabled=False 时不该查证书 / 标题：{_fw_calls[_fw_mark:]}"
+
+        # C) 三路全开，钉"命中过多即放弃拓展"与"零请求预筛"：
+        #    - favicon 命中 999 条（> 黑 ico 阈值 200）→ 有 assets 也**不拓展**
+        #    - 证书：`example.com` 是占位证书 → **连查询都不发**；正常注册域命中 → 落 osint:fofa-cert；
+        #      另一个注册域命中 999 条 → 判通用证书，不拓展
+        #    - 标题：`Index of /backup` 是模板页 → **连查询都不发**；具体标题命中 → 落 osint:fofa-title
+        _fw_batch.update({
+            "icon": ([_fw_asset("black-ico.cn")], 999, ""),
+            "cert": {"acme-portal.cn": ([_fw_asset("shared-cert.cn")], 20, ""),
+                     "common-cert.org": ([_fw_asset("should-not-land.org")], 999, "")},
+            "title": {"Acme Portal": ([_fw_asset("acme.cn")], 15, "")},
+        })
+        _fw_mark = len(_fw_calls)
+        _fw_ids.append(_fw_run("all", _fw_settings(enabled=True, cert_enabled=True,
+                                                   title_enabled=True),
+                               [_fw_site(targets, "Acme Portal"),
+                                _fw_site("http://127.0.0.1:8765/backup", "Index of /backup")],
+                               [("acme-portal.cn", "subfinder"),
+                                ("common-cert.org", "subfinder"),
+                                ("example.com", "subfinder")]))
+        _fw_c = _fw_calls[_fw_mark:]
+        _fw_os = {(r["domain"], r["source"]) for r in db.list_subdomains(_fw_ids[-1])
+                  if str(r["source"]).startswith("osint:")}
+        assert _fw_os == {("shared-cert.cn", "osint:fofa-cert"),
+                          ("acme.cn", "osint:fofa-title")}, \
+            f"黑 ico / 通用证书 / 公共标题都不该拓展：{_fw_os}"
+        assert ("icon", 12345) in _fw_c, "黑 ico 那条必须先**查过**才谈得上放弃（否则测的是没查）"
+        assert ("cert", "example.com") not in _fw_c, \
+            f"占位证书（example.com）实测百万级命中，应零请求跳过：{_fw_c}"
+        assert ("title", "Index of /backup") not in _fw_c, \
+            f"模板标题应零请求跳过：{_fw_c}"
+        assert ("cert", "acme-portal.cn") in _fw_c and ("cert", "common-cert.org") in _fw_c, _fw_c
+        assert ("title", "Acme Portal") in _fw_c, _fw_c
+    finally:
+        for _fid in _fw_ids:
+            db.delete_task(_fid, backup=False)
+        (osint_mod.fofa_mod.search, osint_mod.fofa_mod.search_cert,
+         osint_mod.fofa_mod.search_title, osint_mod.favicon_hash) = _fw_orig
+
+    print("[6w] FOFA 三路反查（阶段级桩测）ok: fofa.enabled=False 零查询 / 只开 favicon 那路时 "
+          "cert·title 一次都不查 / 命中落库来源正确（osint:fofa·fofa-cert·fofa-title，裸 IP 行不入库）/ "
+          "黑 ico·通用证书不拓展（且证明确实查过）/ 占位证书与模板标题**零请求**预筛")
 
 print("SMOKE PASS")
 
