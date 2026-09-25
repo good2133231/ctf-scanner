@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   error TEXT DEFAULT '',
   -- 创建该任务时跑流水线的进程 pid（0 = 老库遗留行）：进程重启后靠它识别孤儿任务
   pid INTEGER DEFAULT 0,
+  -- 运行时长（续35）：下面三列由 `start_task_run` / `finish_task_run` 维护，
+  -- `created_at`/`updated_at` 不能拿来算时长 —— `updated_at` 会被补扫/补截图/复核等**非运行期**
+  -- 写入刷新（越等越长），`created_at` 到 `updated_at` 之间还可能夹着几天的停机。
+  started_at TEXT DEFAULT '',        -- 最近一次运行的开始时刻
+  finished_at TEXT DEFAULT '',       -- 最近一次运行的结束时刻（'' = 还没收场）
+  -- 同一任务多次运行（续跑 / 追加执行）的**累计**实际运行秒数，见 `finish_task_run`
+  elapsed_seconds INTEGER DEFAULT 0,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS subdomains (
@@ -179,7 +186,11 @@ _COLUMN_PATCHES = {
     # 目录命中页的 <title>：老库补列（新库由 SCHEMA 直接建出）
     "dirs": {"title": "TEXT DEFAULT ''"},
     # 孤儿任务对账用：老库补 pid 列（0 = 老库遗留行，一律视为进程已死）
-    "tasks": {"pid": "INTEGER DEFAULT 0"},
+    "tasks": {"pid": "INTEGER DEFAULT 0",
+              # 续35「运行时长」：老库补三列（新库由 SCHEMA 直接建出）。
+              # 老行的 `started_at` 为空 → `task_run_seconds()` 返回 0、页面显示 `-`（**不编数**）
+              "started_at": "TEXT DEFAULT ''", "finished_at": "TEXT DEFAULT ''",
+              "elapsed_seconds": "INTEGER DEFAULT 0"},
 }
 
 
@@ -227,6 +238,47 @@ def update_task(task_id, **fields):
     fields["updated_at"] = _now()
     sets = ", ".join(f"{k}=?" for k in fields)
     _exec(f"UPDATE tasks SET {sets} WHERE id=?", (*fields.values(), task_id))
+
+
+def start_task_run(task_id, fresh=False, **fields):
+    """记一次运行的**开始**（续35「运行时长」）：置 `running` 并写 `started_at`。
+
+    `fresh=True` = **新建式执行**（CLI 首跑 / GUI「重启」）→ 累计时长清零。理由：「重启」会先
+    `clear_task_assets()` 把结果集推翻重来，旧的累计时长与新的结果集不是一回事。而**续跑**
+    （续29）与**追加执行**（续25）沿用同一任务、同一份资产 → 累加不清零。
+
+    其余 `fields`（`log_file` / `error` …）与 `update_task` 同义。`started_at` 必须由本模块写：
+    它的格式由 `task_run_seconds()` 解析，两处各写一份 strftime 格式串一旦漂移，时长会**静默**算错。
+    """
+    fields.update({"status": "running", "progress": 0, "current_stage": "", "started_at": _now()})
+    if fresh:
+        fields["elapsed_seconds"] = 0
+    update_task(task_id, **fields)
+
+
+def finish_task_run(task_id, ended_at=None, **fields):
+    """记一次运行的**结束**（续35）：写 `finished_at`，并把本次用时**累加**进 `elapsed_seconds`。
+
+    为什么是"累加"而不是每次算 `finished_at - started_at`：同一任务会被续跑（续29）与追加执行
+    （续25）跑多次，页面要的是"这个任务一共跑了多久" —— 只留最后一段的话，"跑了 20 分钟、
+    中断后接着跑 2 分钟"的任务会显示成 2 分钟。
+
+    为什么累加必须在**同一条 UPDATE** 里做算术：与 `append_task_error` 同理 —— "先读 elapsed
+    再写回"两步之间没有锁，同一任务的并发收尾会静默丢时长。`MAX(0, …)` 兜住两种脏输入：
+    `started_at` 为空（本功能上线前的老行、或被直接调用的 `PipelineRunner`）与时钟回拨，
+    二者都记 0 秒而不写负数（`strftime('%s', 空)` 为 NULL，靠 `COALESCE` 退化成 0）。
+
+    `ended_at` 显式指定"结束时刻"（默认当前时间）：**启动对账**（`reconcile_orphan_tasks`）发现
+    进程早已不在时，只能用该行最后一次写入的 `updated_at` 当"最后已知存活时刻" ——
+    用当前时间会把停机时长也算进去（进程可能几天前就死了）。
+    """
+    end = str(ended_at).strip() if ended_at else _now()
+    sets = "".join(f"{k}=?, " for k in fields)
+    _exec(f"UPDATE tasks SET {sets}finished_at=?, "
+          "elapsed_seconds = COALESCE(elapsed_seconds, 0) + "
+          "MAX(0, strftime('%s', ?) - COALESCE(strftime('%s', started_at), strftime('%s', ?))), "
+          "updated_at=? WHERE id=?",
+          (*fields.values(), end, end, end, end, task_id))
 
 
 def append_task_error(task_id, msg):
@@ -344,19 +396,23 @@ def reconcile_orphan_tasks():
     而"进程被重启打断"正是最需要续跑的场景之一。清理它由两种显式操作负责：
     正常跑完（`PipelineRunner.run` 的 done 分支）与 GUI「重启」（从头跑）。
 
+    **运行时长按"最后已知存活时刻"结账**（续35）：这里走 `finish_task_run(ended_at=本行原来的
+    `updated_at`)` 而不是普通 `update_task`。`updated_at` 是进程死前最后一次写库（阶段切换 /
+    进度回填）的时刻，用它当结束时刻能把这段运行的时长**回收**进 `elapsed_seconds`；
+    若改用"对账时刻"，进程几天前就死了的话会把停机时长整段算成运行时长。
+
     整体包一层 try/except：启动流程**不能被它拖垮**（库损坏 / 列缺失都应静默跳过）。
     返回被标记的任务 id 列表（便于日志与测试断言）。
     """
     marked = []
     try:
-        rows = _query("SELECT id, pid FROM tasks WHERE status='running'")
+        rows = _query("SELECT id, pid, updated_at FROM tasks WHERE status='running'")
         for r in rows:
             if _pid_alive(r["pid"]):
                 continue
             tid = r["id"]
             try:
-                _exec("UPDATE tasks SET status='failed', updated_at=? WHERE id=?",
-                      (_now(), tid))
+                finish_task_run(tid, ended_at=r["updated_at"], status="failed")
                 append_task_error(tid, "进程重启，任务中断（启动时对账）")
                 marked.append(tid)
             except Exception:
@@ -372,6 +428,39 @@ def get_task(task_id):
 
 def list_tasks(limit=200):
     return _query("SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (limit,))
+
+
+def _parse_ts(text):
+    """把 `_now()` 格式的时间戳解析成 epoch 秒；解不出返回 `None`（**不猜**）。"""
+    try:
+        return time.mktime(time.strptime(str(text or "").strip(), "%Y-%m-%d %H:%M:%S"))
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def task_run_seconds(task, now=None):
+    """任务**当前**的累计实际运行秒数（续35）= `elapsed_seconds` + 正在跑的这一段。
+
+    四种情形，页面按 `status` / `finished_at` 分别措辞（见 `gui.app.run_duration_text`）：
+    - 从没跑起来（`started_at` 为空：老库遗留行 / 刚建的任务）→ 只报已累计的值（这种行恒为 0）；
+    - 本次已收场（`finished_at` 非空：done / stopped / failed）→ 累计值就是答案；
+    - 正在跑 → 累计值 + (`started_at` → 现在)；
+    - 进程被强杀且**还没被对账**（`finished_at` 为空但不是 `running`）→ 只报已确认的累计值
+      （尾段无据可依，不拿"现在"去顶）。
+
+    `task` 传 **dict**（`dict(sqlite3.Row)`，页面里本来就是这么转的）；`now` 是测试注入点。
+    """
+    try:
+        acc = max(0, int(task.get("elapsed_seconds") or 0))
+    except (TypeError, ValueError):
+        acc = 0
+    started = _parse_ts(task.get("started_at"))
+    if started is None or str(task.get("finished_at") or "").strip():
+        return acc
+    if str(task.get("status") or "") != "running":
+        return acc
+    cur = _parse_ts(now) if now is not None else _parse_ts(_now())
+    return acc if cur is None else acc + max(0, int(cur - started))
 
 
 ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "certs", "dirs", "vulns", "leads")

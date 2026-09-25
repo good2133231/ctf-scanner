@@ -389,8 +389,18 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   `SameSite=Lax`。全走 test client，不占端口、零真实请求。
                             #   ⚠️ 写"同源/跨源"断言时**必须显式给出带端口的 Host** —— test client 默认
                             #   Host 是 `localhost`，端口断言会因"主机名本来就不同"而**假绿**（续32-fix
-                            #   的真缺陷就是这样漏掉的；该缺陷最终是**真实服务器 + 真实浏览器**复核才暴露）。
+                            #   真缺陷就是这样漏掉的；该缺陷最终是**真实服务器 + 真实浏览器**复核才暴露）。
                             #   **未验**：真实浏览器的 DNS rebinding 链路与反代场景（见续32/-fix 变更记录）。
+# 2026-09-25 续35 新增 `[6v]`：**任务运行时长** —— `format_duration` 口径（0 / 59 / 60 / 3599 / 3600 /
+                            #   3661 / None / 负值）/ db 侧 SQL 算术（手工钉 `started_at` 后 `finish_task_run`
+                            #   得 90，第二段累加得 150）/ `fresh=True` 清零 · 续跑（`fresh=False`）保留 /
+                            #   无起点与时钟回拨都记 0（**不写负数**）/ `task_run_seconds` 四情形（含 `now=`
+                            #   注入，避免依赖真实时钟）/ `run_duration_text` 页面文案（老任务 `-` / 已收场 /
+                            #   运行中 / 被强杀尾段未计入）/ **真跑流水线**（桩阶段 + 真 `run_task`）的
+                            #   done · stopped · 外层 except→failed 三条终态都落 `started_at`+`finished_at` /
+                            #   启动对账按该行原 `updated_at` 结账（**不把停机时长算成运行时长**）。
+                            #   注意：改坏实现时若只删 SQL 表达式不同步删绑定参数，报的是
+                            #   `Incorrect number of bindings supplied` —— 那是绑定错、**不算有效变异**。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -583,6 +593,15 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   **HTML 全量 `html.escape`**（报告里的标题/banner 来自被测目标，漏转义即反射型 XSS）、
   **PDF 复用无头 Edge/Chrome 打印**（没有浏览器时返回 400 + 可读原因 + HTML 替代链接，不静默失败）；
   仪表盘另有「漏洞趋势统计」面板（`db.vuln_trend()`：级别分布 + 最近 15 任务逐任务计数，**已判误报不计入**）。
+- **运行时长的时间口径**（续35）：`tasks.started_at` / `finished_at` / `elapsed_seconds` 由
+  `db.start_task_run()` / `db.finish_task_run()` 维护，**不要拿 `created_at`/`updated_at` 推** ——
+  `updated_at` 会被补扫 / 补截图 / 误报复核等**非运行期**写入刷新（越等越长），两时间戳之间还可能夹着停机。
+  续跑 / 追加是同一任务的第二、三段运行 → **累加**（读侧只认 `db.task_run_seconds()`：已累计 + 正在跑的
+  这一段）；GUI「重启」会 `clear_task_assets()` 推翻结果集从头跑 → 清零（`start_task_run(fresh=True)`）。
+  累加必须在**同一条 UPDATE 内用 SQL 算术**完成：先读后写两步之间无锁，会静默丢时长；`MAX(0,…)` +
+  `COALESCE` 兜住"无起点 / 时钟回拨"（不写负数）。进程被强杀时对账按该行**原 `updated_at`**
+  （最后已知存活时刻）结账，**不把停机时长算成运行时长**；老库行没有 `started_at` → 页面显示 `-`（不编数）。
+  落点：详情页「目标与配置」的「运行时长」「开始 / 结束」两行 + CLI 摘要一行（同一口径，回归见 `[6v]`）。
 - **改完 GUI 必须重启服务**：若 5000 已被旧进程占用，新起的 `run_gui.py`（经 `gui/app.py serve()`）
   会打印端口占用提示并以退出码 1 结束——按提示结束占用进程或改 `gui.port` 再试；
   请求还是打到旧进程（新路由 404）——很容易误判成"代码没生效"，先确认端口占用再排查。

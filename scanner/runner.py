@@ -229,7 +229,8 @@ class PipelineRunner:
             # **刻意不清 `current_stage`**（续29）：它是"最后进入的阶段"，也就是断点续扫的断点
             # （`resume_stages` 按它切片）。原来的 `current_stage=""` 会把断点抹掉 ——
             # "被停止 / 预算耗尽"恰恰是最需要续跑的两类收场。
-            db.update_task(ctx.task_id, status="stopped", progress=done)
+            # 走 `finish_task_run` 而不是 `update_task`（续35）：收场时必须结一次运行时长的账。
+            db.finish_task_run(ctx.task_id, status="stopped", progress=done)
             if budget_exhausted:
                 # 预算耗尽与"用户点了停止"是**两种原因**：都用 `stopped` 状态（结果确实不完整），
                 # 但错误行必须写清楚，否则事后无法区分"被拒绝"与"被人为停"。
@@ -244,7 +245,7 @@ class PipelineRunner:
             else:
                 ctx.logger.warning("===== 任务已按请求停止（已完成阶段产物保留）=====")
         else:
-            db.update_task(ctx.task_id, status="done", progress=100, current_stage="")
+            db.finish_task_run(ctx.task_id, status="done", progress=100, current_stage="")
             ctx.logger.info("===== 流水线完成 =====")
 
 
@@ -321,11 +322,14 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
         logger.info(f"[auth] 本次任务带登录态请求头 {len(_auth)} 条："
                     f"{taskauth.summary(_auth)}（值已掩码）")
     # 追加执行**不清 error**（保留前面各阶段已记下的错误），只重置进度。
-    fields = {"log_file": str(log_file), "status": "running", "progress": 0,
-              "current_stage": ""}
+    fields = {"log_file": str(log_file)}
     if not append:
         fields["error"] = ""
-    db.update_task(task_id, **fields)
+    # 续35「运行时长」：`started_at` 在这里写（`status`/`progress`/`current_stage` 由 `start_task_run`
+    # 一并置好），`finished_at` 与累计秒数由 `PipelineRunner.run()` 的两个终态分支和下面的 except
+    # 经 `db.finish_task_run` 写入。`fresh` = **新建式执行**（含 GUI「重启」）→ 累计时长清零；
+    # 续跑（续29）/ 追加执行（续25）沿用同一任务与同一份资产 → 累加，见 `db.start_task_run`。
+    db.start_task_run(task_id, fresh=not (append or resume), **fields)
     try:
         try:
             sync_pocs(ctx.settings)
@@ -336,7 +340,8 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
         PipelineRunner(ctx).run()
     except Exception as e:
         logger.error(f"任务失败：{e}\n{traceback.format_exc()}")
-        db.update_task(task_id, status="stopped" if ctx.stopped() else "failed")
+        # 第三条终态（续35）：异常收场同样要结一次运行时长，否则这条任务的时长永远停在 0
+        db.finish_task_run(task_id, status="stopped" if ctx.stopped() else "failed")
         # 错误信息**追加**（不覆盖）：保留前面各阶段已经记下的错误（否则只剩这一条）
         db.append_task_error(task_id, str(e))
     finally:

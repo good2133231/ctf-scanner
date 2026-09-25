@@ -662,9 +662,9 @@
       `scanner/ctlog.py`（`ctlog` 段）；「证书解析页签」→ 续15 的 `cert` 阶段；报告 HTML·PDF →
       续16 的三格式共用 `collect()` 快照；登录态扫描 + nuclei `raw`/`flow`/`workflows` → 续17。
 
-## 续12 ~ 续27（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
+## 续12 ~ 续35（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
 
-> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 16 轮变更只记在 `CHANGELOG_AI.md`。
+> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 24 轮变更只记在 `CHANGELOG_AI.md`。
 > 这里补一份**一句话 + 落地位置**的索引，避免"翻待办看不出做过什么"。**不重复 CHANGELOG 全文**。
 
 - [x] **续12** 误报复核三态 + POC 置信度分层 + Linux 实机验收（Ubuntu 22.04 跑通 smoke）
@@ -689,6 +689,16 @@
 - [x] **续26** GitHub 泄露检索（第 13 个阶段 `github`，默认关、没 token 零请求、只落元数据）；
       **续26-fix** 接真实 token 真机验证 + 修「触顶被当错误打 warning」；
 - [x] **续27** 冒烟沙箱残留「自愈清理」+ 更正一处被证伪的归因；
+- [x] **续28** 文档漂移清理（`todo.txt` / `TODO.md` 与代码对齐）；
+- [x] **续29** 断点续扫（复用 `tasks.current_stage` 作断点，与「重启」「追加」三分）；
+      **续31** 补 CLI 入口 `--resume-task`（与 GUI 同口径：互斥报错、无断点入口拒绝）；
+- [x] **续30** 目录递归爬取（自研内置递归，默认关，三重闸限流）；
+- [x] **续32** 本机守卫（Host 白名单 + 写方法 Origin/Referer 校验含端口 + 会话 Cookie 加固）；
+      **续32-fix** 修「跨站校验漏了端口」（真实服务器 + 真实浏览器复核才暴露）；
+- [x] **续33** 接管盘点 + 全 13 阶段端到端回归门禁（`tests/smoke.py [6u]`，已纳入 GitHub Actions）；
+- [x] **续34** IP 反查多源增强（webscan / hackertarget / ip138…）+ IP 资产页「反查域名」列；
+- [x] **续35** 任务运行时长（`tasks.started_at`/`finished_at`/`elapsed_seconds` + 详情页「目标与配置」
+      与 CLI 摘要同口径，续跑/追加**累加**、重启清零、对账按最后已知存活时刻结账，回归 `[6v]`）；
 - [x] **另（2026-09-24）** 补 `LICENSE`：本仓库自有代码 MIT；`config/dicts/dirs_*.txt`
       派生自 dirmap（GPL-3.0），**不被 MIT 覆盖**，边界见 `NOTICE.md §5`。
 

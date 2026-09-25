@@ -3,6 +3,54 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续35：任务运行时长（详情页「目标与配置」/ CLI 摘要 / 启动对账）
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+**背景（用户要求"扫描完之后要显示运行时长，可以写到目标和配置里面"）**：`tasks` 原有 `created_at` /
+`updated_at` 两个时间戳，**都不能拿来算运行时长** —— `updated_at` 会被补扫 / 补截图 / 误报复核等
+**非运行期**写入刷新（任务停在那儿越久、数字越大），`created_at → updated_at` 之间还可能夹着几天停机。
+
+**改了什么**
+
+1. `scanner/db.py`：`tasks` 新增三列 `started_at` / `finished_at` / `elapsed_seconds`（新库由 `SCHEMA`
+   直接建出，老库由 `_COLUMN_PATCHES` 原地 `ADD COLUMN` 补 —— 沿用 `pid` 的先例，**零整表迁移**）；
+   新增写侧 `start_task_run(task_id, fresh=False, **fields)` / `finish_task_run(task_id, ended_at=None, **fields)`
+   与读侧 `task_run_seconds(task, now=None)`。
+2. **多段累加**：续跑（续29）/ 追加执行（续25）是同一任务的第二、三段运行 → **累加**；`fresh=True`
+   （CLI 首跑 / GUI「重启」—— 后者先 `clear_task_assets()` 把结果集推翻重来）才清零。累加在**同一条
+   UPDATE 内用 SQL 算术**完成（`COALESCE(elapsed_seconds,0) + MAX(0, strftime('%s',end) -
+   COALESCE(strftime('%s',started_at), strftime('%s',end)))`）：先读后写两步之间没有锁，会**静默丢时长**；
+   `MAX(0,…)` + `COALESCE` 兜住"没有起点 / 时钟回拨"两种脏输入（**不写负数**）。
+3. `scanner/runner.py`：`PipelineRunner.run()` 的 done / stopped 两个终态分支与 `run_task` 外层 except
+   改走 `finish_task_run()`（收场时结账），起点改走 `start_task_run(fresh=not (append or resume))`。
+   `run()` 开头原有的 `update_task(status="running")` **刻意未动**（直接调 `PipelineRunner` 的场景不产生假时长）。
+4. **启动对账按"最后已知存活时刻"结账**：`db.reconcile_orphan_tasks()` 用该行**原 `updated_at`** 当
+   `ended_at`，不用对账时刻 —— 否则进程几天前就死了，会把整段停机时长算成运行时长。
+5. `scanner/utils.py` 新增 `format_duration()`（`1 小时 02 分 03 秒` / `12 分 05 秒` / `45 秒`）：放 utils
+   而非 `gui/app.py`，因 CLI 摘要与 GUI 详情页要显示**同一口径**，放 GUI 会让 CLI 反向依赖 Flask 应用。
+6. GUI：`gui/app.py` 新增 `run_duration_text(task)` 并在 `task_detail` 路由传入 `run_duration`；
+   `gui/templates/task_detail.html` 的「目标与配置」表格新增「运行时长」与「开始 / 结束」两行。
+   四种情形分别措辞：从没跑过 → `-`（**不编数**）；已收场 → 累计值；正在跑 → `运行中，已 …`；
+   被强杀且还没被对账 → `…（上次运行被中断，尾段未计入）`。
+7. CLI `cli/client.py` 摘要新增 `运行时长 …（起 → 止）` 一行（脚本里可直接抓这一行）。
+
+**验证**
+- `py -3 tests/smoke.py` → `SMOKE PASS`。新增 `[6v]`：`format_duration` 口径（0/59/60/3599/3600/3661/
+  None/负值）/ db 侧算术（90 → 累加后 150）/ `fresh` 清零与续跑不清零 / 无起点与时钟回拨均记 0 /
+  `task_run_seconds` 四情形（含 `now=` 注入）/ `run_duration_text` 页面文案 / **真跑流水线**的
+  done·stopped·failed 三条终态都落了 `started_at`+`finished_at` / 启动对账按 `updated_at` 结账。
+- **变异证伪 4/4 全部被击杀**：① 去掉累加（改为只保留 `COALESCE(elapsed_seconds,0)`）→ 累加断言挂；
+  ② runner done 分支换回 `update_task` → `finished_at` / `elapsed_seconds` 断言挂；
+  ③ 去掉 `fresh` 清零 → 重启清零断言挂；④ 对账不用 `ended_at` → 停机时长断言挂。
+  （M1 第一次改坏时只删了表达式没同步删参数，报 `Incorrect number of bindings supplied` —— 这类
+  绑定错**不算有效变异**，改成"语义正确但逻辑改坏"后重跑才拿到真失败。）
+- CRLF 自查：`git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` 逐文件一致。归位前
+  `gui/app.py` 有 2 行 CR-only 噪声、`cli/client.py` 4 行与 `gui/app.py` 23 行新增行是 LF（该文件
+  HEAD 本身有 52 行 LF 遗留），已只对**本次新增行**逐字节归位为 CRLF，既有的混合换行未碰；
+  `tests/smoke.py` HEAD 本身混合换行，按邻居形态归位、未整体翻 CRLF。
+
+**未做**：任务列表页 `/tasks` 未显示运行时长（本轮只落在详情页「目标与配置」与 CLI 摘要）。
+
 ## 2026-09-26 —— 续34：IP 反查多源增强 + IP 资产页显示每 IP 反查域名数
 > 实施者：**WorkBuddy · Hy4-preview**
 

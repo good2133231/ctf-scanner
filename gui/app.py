@@ -34,7 +34,7 @@ from scanner.pocs import engine
 from scanner import runner
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
-from scanner.utils import pool_run, rel_display
+from scanner.utils import format_duration, pool_run, rel_display
 
 logger = get_logger("gui")
 
@@ -160,6 +160,26 @@ def parse_port_list(spec, default=None):
         if chunk.isdigit() and 0 < int(chunk) <= 65535 and int(chunk) not in out:
             out.append(int(chunk))
     return sorted(out) or list(default or [443, 8443, 9443])
+
+
+def run_duration_text(task):
+    """「目标与配置」页签里「运行时长」一行要显示的文案（续35）。
+
+    四种情形各说各话，**不编数**是底线：
+    - 本功能上线前建的老任务没有 `started_at` → `-`（不拿 `created_at` 顶一个假起点）；
+    - 已收场（done / stopped / failed）→ 累计实际运行秒数（续跑 / 追加跑的每一段都在里面）；
+    - 正在跑 → `运行中，已 X`（页面轮询时这个数会自己长）；
+    - 进程被强杀且**还没被对账**（`finished_at` 空但不是 `running`）→ 只报已确认的累计值，
+      并明确标注尾段没算进去 —— 静默少报会让人以为"扫得很快"。
+    """
+    if not str(task.get("started_at") or "").strip():
+        return "-"
+    seconds = format_duration(db.task_run_seconds(task))
+    if str(task.get("finished_at") or "").strip():
+        return seconds
+    if str(task.get("status") or "") == "running":
+        return "运行中，已 " + seconds
+    return seconds + "（上次运行被中断，尾段未计入）"
 
 
 # 本机访问的白名单口径（续32）：`127.0.0.1` / `localhost` / IPv6 回环。
@@ -543,6 +563,9 @@ def create_app():
             append_count=int(top.get("append_count") or 0),
             # 登录态只显示**掩码后的**名字 + 值（`Cookie=abc***xyz`），见上面的 auth_view
             auth_view=auth_view,
+            # 续35「运行时长」：目标是"这个任务一共跑了多久" —— 续跑 / 追加会跑多段，
+            # 故报的是累计值（`tasks.elapsed_seconds`）+ 正在跑的这一段，见 `db.task_run_seconds`。
+            run_duration=run_duration_text(task),
             dir_full=dir_full, port_full=port_full,
             shot_enabled=shot_enabled, shot_missing=shot_missing, shot_ready=shot_ready,
             dir_cap=int((settings.get("limits") or {}).get("dirscan_max_urls", 20) or 20),

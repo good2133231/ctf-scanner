@@ -5181,6 +5181,174 @@ workflows:
              len([x for x in _u_leads if x["kind"] not in ("intel", "github")])))
     db.delete_task(_u_tid, backup=False)
 
+    # [6v] 续35「运行时长」：任务详情「目标与配置」要显示"这个任务一共跑了多久"。
+    #      为什么不复用现成时间戳：`updated_at` 会被补扫 / 补截图 / 误报复核这些**非运行期**
+    #      写入刷新（越等越长），`created_at → finished_at` 之间还可能夹着几天的停机。
+    #      所以起点/终点由 `start_task_run` / `finish_task_run` 单写，真实缺陷面在两处：
+    #      ① **续跑 / 追加会跑多段**（只留最后一段会把 20 分钟的任务显示成 2 分钟）；
+    #      ② **进程被强杀没收场**（尾段无据可依，绝不能拿"现在"去顶）。
+    #      断言分两层：先钉 `db` 侧算术（可注入时刻，精确到秒），再钉 `runner` 侧三条终态分支
+    #      **真的调了** `finish_task_run` —— 只测前者的话，把调用换回 `update_task` 照样全绿。
+    from scanner.utils import format_duration
+
+    # 1) 纯函数口径（展示层兜底：负数 / None / 非数字都不许抛）
+    assert format_duration(0) == "0 秒" and format_duration(59) == "59 秒"
+    assert format_duration(60) == "1 分 00 秒" and format_duration(3599) == "59 分 59 秒"
+    assert format_duration(3600) == "1 小时 00 分 00 秒"
+    assert format_duration(3661) == "1 小时 01 分 01 秒"
+    assert format_duration(None) == "0 秒" and format_duration("abc") == "0 秒"
+    assert format_duration(-5) == "0 秒", "负时长不得显示成 -5 秒"
+
+    # 2) 起止与**累计**：手工钉住起点/结束时刻 —— 真跑只有 0~1 秒，验不出口径
+    _d35 = db.create_task("smoke-duration", targets, ["probe"], {"offline": True})
+    assert dict(db.get_task(_d35))["started_at"] == "", "刚建的任务没有起点"
+    assert db.task_run_seconds(dict(db.get_task(_d35))) == 0
+    db.update_task(_d35, started_at="2026-01-01 00:00:00")
+    db.finish_task_run(_d35, ended_at="2026-01-01 00:01:30", status="done")
+    _t35 = dict(db.get_task(_d35))
+    assert int(_t35["elapsed_seconds"]) == 90, _t35
+    assert _t35["finished_at"] == "2026-01-01 00:01:30", _t35
+    # 第二段**累加**（续29/续25 会跑多段 —— 这条就是"只留最后一段"的证伪点）
+    db.update_task(_d35, started_at="2026-01-01 00:05:00")
+    db.finish_task_run(_d35, ended_at="2026-01-01 00:06:00", status="done")
+    assert int(db.get_task(_d35)["elapsed_seconds"]) == 150, dict(db.get_task(_d35))
+    # fresh（新建式执行：含 GUI「重启」）清零；非 fresh（续跑 / 追加）**不清零**
+    db.start_task_run(_d35, fresh=True)
+    assert int(db.get_task(_d35)["elapsed_seconds"]) == 0, "重启是清空资产从头跑 → 累计清零"
+    db.update_task(_d35, elapsed_seconds=42)
+    db.start_task_run(_d35, fresh=False, log_file="x")
+    assert int(db.get_task(_d35)["elapsed_seconds"]) == 42, "续跑/追加沿用同一任务 → 不清零"
+    db.update_task(_d35, started_at="2026-01-01 00:00:00")
+    db.finish_task_run(_d35, ended_at="2026-01-01 00:00:10", status="done")
+    assert int(db.get_task(_d35)["elapsed_seconds"]) == 52, dict(db.get_task(_d35))
+    # 脏输入：没有起点（老库遗留行 / 被直接调用的 PipelineRunner）与时钟回拨都记 0 秒
+    db.update_task(_d35, started_at="", elapsed_seconds=7)
+    db.finish_task_run(_d35, ended_at="2026-01-01 00:00:10", status="done")
+    assert int(db.get_task(_d35)["elapsed_seconds"]) == 7, "没起点 = 0 秒（不编数）"
+    db.update_task(_d35, started_at="2026-01-01 00:01:00", elapsed_seconds=7)
+    db.finish_task_run(_d35, ended_at="2026-01-01 00:00:10", status="done")
+    assert int(db.get_task(_d35)["elapsed_seconds"]) == 7, "时钟回拨不得扣成负数"
+    # `task_run_seconds` 的四种情形（"正在跑的那一段"用 now 注入点钉死，不依赖真实时钟）
+    assert db.task_run_seconds({"started_at": "", "elapsed_seconds": 9}) == 9, \
+        "没有起点就没有\"正在跑的那一段\"可加（这种行累计值恒为 0，报它即可）"
+    assert db.task_run_seconds({"started_at": "", "elapsed_seconds": 0}) == 0
+    assert db.task_run_seconds({"started_at": "2026-01-01 00:00:00", "elapsed_seconds": 9,
+                                "finished_at": "2026-01-01 00:00:20", "status": "done"}) == 9
+    assert db.task_run_seconds({"started_at": "2026-01-01 00:00:00", "elapsed_seconds": 9,
+                                "finished_at": "", "status": "running"},
+                               now="2026-01-01 00:00:30") == 39
+    assert db.task_run_seconds({"started_at": "2026-01-01 00:00:00", "elapsed_seconds": 9,
+                                "finished_at": "", "status": "failed"},
+                               now="2026-01-01 00:00:30") == 9, \
+        "被强杀且未被对账：尾段无据可依，只报已确认的累计值（不拿现在去顶）"
+    # 页面文案：老任务显示 `-`（不拿 created_at 顶一个假起点）
+    assert gui_app.run_duration_text({"started_at": "", "status": "done"}) == "-"
+    assert gui_app.run_duration_text({"started_at": "2026-01-01 00:00:00", "elapsed_seconds": 90,
+                                      "finished_at": "2026-01-01 00:01:30",
+                                      "status": "done"}) == "1 分 30 秒"
+    assert gui_app.run_duration_text({"started_at": "2026-01-01 00:00:00", "elapsed_seconds": 9,
+                                      "finished_at": "", "status": "failed"}).endswith("尾段未计入）")
+
+    # 3) runner 侧三条终态分支：每条都必须是**新建任务**（`finished_at` 初值为空），
+    #    否则"没写"会被上一段留下的旧值掩盖 —— 断言就抓不到把调用换回 `update_task` 的变异。
+    _saved6v = dict(_rn6.STAGE_REGISTRY)
+    # 停止开关平时是**关**的（3a 要的是 done 分支），到 3b 前才打开 —— 否则 3a 会被 stop 掉
+    _stop_once6v = [False]
+
+    def _mk6v(name):
+        class _Stub6v:
+            def __init__(self, ctx):
+                self.ctx = ctx
+
+            def run(self):
+                if name == "smoke-v2" and _stop_once6v[0]:
+                    _stop_once6v[0] = False
+                    self.ctx.stop_event.set()      # 覆盖 run() 的 stopped 分支
+
+        return _Stub6v
+
+    _v_stages = ["smoke-v1", "smoke-v2"]
+    _v_ids = []
+    try:
+        for _n in _v_stages:
+            _rn6.STAGE_REGISTRY[_n] = _mk6v(_n)
+        # 3a) done 分支
+        _va = db.create_task("smoke-duration-done", targets, _v_stages, {"offline": True})
+        _v_ids.append(_va)
+        run_task(_va, "smoke-duration-done", targets, _v_stages, {"offline": True}, settings)
+        _v1 = dict(db.get_task(_va))
+        assert _v1["status"] == "done" and _v1["started_at"] and _v1["finished_at"], _v1
+        assert _v1["current_stage"] == "", "断点仍要清（原有行为不受影响）"
+        # 3a') 页面**真的渲染**出这一行：只测 `run_duration_text()` 抓不到"路由忘了传/模板删了行"
+        _v_html = c.get(f"/tasks/{_va}").get_data(as_text=True)
+        _v_expect = gui_app.run_duration_text(dict(db.get_task(_va)))
+        assert "运行时长" in _v_html and _v_expect in _v_html, \
+            f"「目标与配置」必须显示运行时长 {_v_expect!r}"
+        assert _v1["started_at"] in _v_html, "「开始 / 结束」行要显示起止时刻"
+        # 3b) stopped 分支（用户点停止 / 预算耗尽）——断点必须保留，供续跑
+        _stop_once6v[0] = True
+        _vb = db.create_task("smoke-duration-stop", targets, _v_stages, {"offline": True})
+        _v_ids.append(_vb)
+        run_task(_vb, "smoke-duration-stop", targets, _v_stages, {"offline": True}, settings)
+        _v2 = dict(db.get_task(_vb))
+        assert _v2["status"] == "stopped" and _v2["started_at"] and _v2["finished_at"], _v2
+        assert _v2["current_stage"] == "smoke-v2", _v2
+        # 3c) 续跑是**第二段**：预置一个累计值，跑完必须"不清零"（`fresh` 误用到续跑上会被这条抓住）
+        db.update_task(_vb, elapsed_seconds=123)
+        run_task(_vb, "smoke-duration-stop", targets, _v_stages, {"offline": True}, settings,
+                 resume=True)
+        _v3 = dict(db.get_task(_vb))
+        assert _v3["status"] == "done" and int(_v3["elapsed_seconds"]) >= 123, _v3
+        # 3d) failed 分支 = `run_task` 的**外层 except**（阶段级异常不走这里：它只记 error
+        #     后继续跑完，任务照样 done —— 这正是要用"收尾路径之外炸掉"来区分的原因）
+        class _BadInfoLogger:
+            def __init__(self, real):
+                self._real = real
+
+            def info(self, *a, **k):
+                raise RuntimeError("smoke-6v：故意让 logger.info 炸掉")
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        _v_real_get_logger = _rn6.get_logger
+        _rn6.get_logger = lambda *a, **k: _BadInfoLogger(_v_real_get_logger(*a, **k))
+        try:
+            _vc = db.create_task("smoke-duration-fail", targets, _v_stages, {"offline": True})
+            _v_ids.append(_vc)
+            run_task(_vc, "smoke-duration-fail", targets, _v_stages, {"offline": True}, settings)
+        finally:
+            _rn6.get_logger = _v_real_get_logger
+        _v4 = dict(db.get_task(_vc))
+        assert _v4["status"] == "failed" and _v4["started_at"] and _v4["finished_at"], _v4
+
+        # 4) 启动对账（进程被强杀）按**最后已知存活时刻**结账：进程可能几天前就死了，
+        #    拿"对账时刻"当结束时刻会把停机时长整段算成运行时长。
+        #    造这个输入只能直接写列：`update_task` 总会把 updated_at 刷成"现在"。
+        _r35 = db.create_task("smoke-duration-reconcile", targets, ["probe"], {"offline": True})
+        _v_ids.append(_r35)
+        db.update_task(_r35, status="running", pid=0,     # pid=0 = 进程已不在（老库遗留行的口径）
+                       started_at="2026-01-01 00:00:00", elapsed_seconds=0)
+        db._exec("UPDATE tasks SET updated_at=? WHERE id=?", ("2026-01-01 00:02:00", _r35))
+        assert _r35 in db.reconcile_orphan_tasks(), "pid=0 的 running 任务必须被对账标失败"
+        _r35_row = dict(db.get_task(_r35))
+        assert _r35_row["status"] == "failed", _r35_row
+        assert int(_r35_row["elapsed_seconds"]) == 120, \
+            f"必须按 updated_at−started_at 结账（拿对账时刻会算成停机+运行）：{_r35_row}"
+        assert _r35_row["finished_at"] == "2026-01-01 00:02:00", _r35_row
+    finally:
+        for _vid in _v_ids:
+            db.delete_task(_vid, backup=False)
+        db.delete_task(_d35, backup=False)
+        _rn6.STAGE_REGISTRY.clear()
+        _rn6.STAGE_REGISTRY.update(_saved6v)
+
+    print("[6v] 续35 运行时长 ok: format_duration 口径（0/59/60/3599/3600/3661/None/负值）/ "
+          "起止写入 + 多段**累加**（90→150）/ fresh 清零·续跑不清零 / 没起点·时钟回拨均记 0 秒 "
+          "（不写负数）/ task_run_seconds 四情形（运行中按注入的 now 算、被强杀只报已确认值）/ "
+          "页面文案（老任务 `-`）/ runner 三条终态（done·stopped·外层 except→failed）都落了 "
+          "started_at+finished_at / 启动对账按 updated_at 结账（不把停机时长算成运行时长）")
+
     
 
 print("SMOKE PASS")

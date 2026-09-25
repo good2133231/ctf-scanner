@@ -146,12 +146,20 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
    `--resume-task <ID>`，续31）：运行中拒绝、**无可用断点也拒绝**（不回退成全量重跑）。
    CLI 额外把 `-f/-t/-n/-p/--offline/--full-*/--recursive-dir/-H/--cookie` 判为**互斥并报错** ——
    续跑的输入是库中资产与任务自身的阶段/选项，这些参数一律不生效，静默忽略等于骗人。
+7. **运行时长**（续35）：`tasks` 的 `started_at` / `finished_at` / `elapsed_seconds` 三列由
+   `db.start_task_run()` / `db.finish_task_run()` 维护，**不能用 `created_at`/`updated_at` 推** ——
+   `updated_at` 会被补扫 / 补截图 / 复核等**非运行期**写入刷新，两时间戳之间还可能夹着停机。
+   续跑 / 追加是同一任务的第二、三段运行 → **累加**；`fresh=True`（CLI 首跑 / GUI「重启」，后者先
+   `clear_task_assets()` 推翻结果集）才清零。累加在**同一条 UPDATE 里用 SQL 算术**完成，避免
+   先读后写之间丢时长；`MAX(0,…)` + `COALESCE` 兜住"无起点 / 时钟回拨"（不写负数）。
+   `db.task_run_seconds()` 是唯一读侧口径（已累计 + 正在跑的这一段），GUI 详情页「目标与配置」与
+   CLI 摘要都用它；孤儿任务对账按该行**原 `updated_at`**（最后已知存活时刻）结账，不把停机算进去。
 
 ## 数据库表
 
 | 表 | 字段要点 | 说明 |
 |---|---|---|
-| tasks | targets, stages, options, status, progress, current_stage, log_file, error | 任务状态机：pending → running → done/stopped/failed |
+| tasks | targets, stages, options, status, progress, current_stage, log_file, error, pid, **started_at, finished_at, elapsed_seconds** | 任务状态机：pending → running → done/stopped/failed；三列运行时长字段由 `start_task_run` / `finish_task_run` 维护（续35，见上 §流水线 7） |
 | subdomains | domain, source, cname, ip, cdn, **ip_note** | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa / osint:fofa-cert / osint:fofa-title / osint:shodan / osint:quake / osint:ctlog）两类；cname 由 takeover 阶段回填，ip / cdn / ip_note 由 subdomain 阶段回填（cdn 为空即"非 CDN"；`ip_note` 是解析失败/未解析的**原因码**：nxdomain / no-a / servfail / refused / timeout / error / empty / over-limit，页面上经 `gui.app.ip_note_label` 翻成中文）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`；拓展域名页默认隐藏重叠（`db.OVERLAP_EXT_WHERE`：域名已存在于任意任务的"目标自身子域名"里） |
 | sites | url, host, port, status, title, length, server, tech, favicon, shot, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定；shot 为截图相对路径（screenshot 阶段回填，默认关） |
 | ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认关闭） |

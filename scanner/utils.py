@@ -147,6 +147,30 @@ def rel_display(path, base=None):
         return text
 
 
+def format_duration(seconds):
+    """把秒数格式化成中文时长：`1 小时 02 分 03 秒` / `12 分 05 秒` / `45 秒`。
+
+    负数 / `None` / 非法值一律归 `0 秒` —— 时长是**展示值**，不该让页面或 CLI 抛错
+    （真实的脏输入由 `db.finish_task_run` 的 `MAX(0, …)` 在写入侧就挡住）。
+
+    放在 `utils` 而不是 `gui/app.py`：CLI 摘要（`cli/client.py`）与 GUI 详情页要显示**同一口径**，
+    放 GUI 会让 CLI 反向依赖 Flask 应用。
+    """
+    try:
+        total = int(seconds)
+    except (TypeError, ValueError):
+        total = 0
+    if total < 0:
+        total = 0
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours} 小时 {minutes:02d} 分 {secs:02d} 秒"
+    if minutes:
+        return f"{minutes} 分 {secs:02d} 秒"
+    return f"{secs} 秒"
+
+
 # ---------- HTTP ----------
 
 def _ua(settings=None):

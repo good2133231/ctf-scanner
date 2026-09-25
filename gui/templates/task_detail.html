@@ -444,6 +444,8 @@
           {% if auth_view %}{% for k, v in auth_view %}{{ k }}={{ v }}{% if not loop.last %}<br>{% endif %}{% endfor %}
           {% else %}-{% endif %}</td></tr>
         <tr><th>状态</th><td><span class="badge st-{{ task.status }}">{{ task.status }}</span></td></tr>
+        <tr><th>运行时长</th><td>{{ run_duration }}</td></tr>
+        <tr><th>开始 / 结束</th><td class="mono small">{{ task.started_at or '-' }} / {{ task.finished_at or '-' }}</td></tr>
         <tr><th>日志文件</th><td class="mono small">{{ task.log_file or '-' }}</td></tr>
         <tr><th>创建 / 更新</th><td>{{ task.created_at }} / {{ task.updated_at }}</td></tr>
       </tbody>

@@ -1072,3 +1072,34 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        （GitHub 泄露检索续26 / 续23~续27 收尾）
 [说明] fofa.enabled 用户明确保持 true（原本就是），本轮只把文档改到与现实一致，未翻转开关
 [完成] 把 `[6u]` 纳入 CI（.github/workflows/smoke.yml，push/PR/workflow_dispatch 自动跑 smoke，无 keys.yaml 亦绿）；[待办] 补 fofa/osint 子开关最小形态单测；补"FOFA 真查命中→落拓展域名"离线桩测
+
+------
+
+（2026-09-25 续35：任务运行时长）实施者：Trae · DeepSeek-V4.1-Flash
+触发：用户要求"扫描完之后要显示运行时长，可以写到目标和配置里面"。
+
+[完成] 1、口径决策：**不复用 `created_at`/`updated_at`** 推算时长 —— `updated_at` 会被补扫/补截图/误报
+       复核等**非运行期**写入刷新（任务搁在那儿越久数字越大），而 `created_at → updated_at` 之间还可能
+       夹着几天停机。改为 `tasks` 新增三列 `started_at` / `finished_at` / `elapsed_seconds`
+       （新库由 SCHEMA 建出，老库走 `_COLUMN_PATCHES` 原地 ADD COLUMN，沿用 `pid` 的先例、零整表迁移）。
+[完成] 2、多段语义：续跑（续29）/ 追加执行（续25）是同一任务的第二、三段运行 → **累加**；`fresh=True`
+       （CLI 首跑 / GUI「重启」，后者先 `clear_task_assets()` 把结果集推翻重来）才清零。
+       累加在**同一条 UPDATE 内用 SQL 算术**（`COALESCE(elapsed_seconds,0) + MAX(0, strftime('%s',end) -
+       COALESCE(strftime('%s',started_at), strftime('%s',end)))`）：先读后写两步之间无锁 → 会**静默丢时长**；
+       `MAX(0,…)` + `COALESCE` 兜住"无起点 / 时钟回拨"两种脏输入（**不写负数**）。
+[完成] 3、落点：`scanner/runner.py` 三处（done / stopped / 外层 except→failed）走 `finish_task_run`，
+       起点走 `start_task_run`（`run()` 开头原有的 `update_task(status="running")` 刻意未动）；
+       `scanner/utils.py` 加 `format_duration()`（放 utils 而非 GUI，因 CLI 与页面要同一口径）；
+       `gui/app.py` 加 `run_duration_text()` + 详情页「目标与配置」新增「运行时长」「开始 / 结束」两行
+       （老任务无起点 → 显示 `-`，**不编数**）；`cli/client.py` 摘要加一行（脚本可抓取）。
+[完成] 4、崩溃场景：`db.reconcile_orphan_tasks()` 用该行**原 `updated_at`** 当 `ended_at`（最后已知存活
+       时刻）结账，而不是对账时刻 —— 否则进程几天前就死了，会把整段停机时长算成运行时长。
+[完成] 5、验证：`py -3 tests/smoke.py` → SMOKE PASS；新增 `[6v]`（纯函数口径 / SQL 算术 90→150 /
+       fresh 清零与续跑不清零 / 无起点与时钟回拨记 0 / `task_run_seconds` 四情形含 `now=` 注入 /
+       页面文案 / **真跑流水线** done·stopped·failed 三条终态都落起止 / 对账按 updated_at 结账）；
+       **变异证伪 4/4 全被击杀**（去掉累加 / done 分支换回 update_task / 去掉 fresh 清零 / 对账不用 ended_at）。
+       教训：改坏 SQL 时只删表达式不同步删绑定参数，报 `Incorrect number of bindings supplied` —— 那是
+       绑定错、**不算有效变异**，必须改成"语义正确但逻辑改坏"再跑。
+[完成] 6、CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致（归位前 app.py 2 行
+       CR-only 噪声、app.py 23 行 + client.py 4 行新增行是 LF；只对**本次新增行**逐字节归位，未碰既有混合换行）。
+[未做] 7、任务列表页 `/tasks` 未显示运行时长（本轮只落在详情页「目标与配置」与 CLI 摘要）。

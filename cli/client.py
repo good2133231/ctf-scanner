@@ -21,13 +21,16 @@ from scanner import db
 from scanner.config import load_settings, resolve
 from scanner.report import export_pdf, generate, generate_html, generate_jsonl
 from scanner.runner import STAGE_ORDER, STAGE_REGISTRY, resume_stages, run_task
-from scanner.utils import rel_display, which, verify_tool
+from scanner.utils import format_duration, rel_display, which, verify_tool
 
 
 def _print_summary(task_id, ctx):
     """任务结束时的统一摘要（新建 / 追加 / 续跑三条入口共用，避免副本漂移）。"""
     task = db.get_task(task_id)
-    print(f"[*] 任务 #{task_id} 结束：status={task['status']}")
+    print(f"[*] 任务 #{task_id} 结束：status={task['status']} | "
+          # 续35：续跑 / 追加执行会跑多段，报的是该任务的**累计**运行时长（脚本里可直接抓这一行）
+          f"运行时长 {format_duration(db.task_run_seconds(dict(task)))}"
+          f"（{task['started_at'] or '-'} → {task['finished_at'] or '-'}）")
     print(f"    子域名 {len(ctx.results.get('subdomains', []))} | "
           f"站点 {len(ctx.results.get('sites', []))} | "
           f"目录 {len(ctx.results.get('dirs', []))} | "
