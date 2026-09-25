@@ -6712,6 +6712,43 @@ http:
           "段边界按网段判 / 8.8.8.8 不误命中 / IPv6 不抛 / 坏行跳过+缺文件 fail-safe / "
           "三处调用点都传了 ips")
 
+    # 7f) 续45：`--check` 自检必须覆盖端口扫描的两个外部引擎，且 fscan **不能**走版本握手。
+    #     为什么专门钉这一条：`verify_tool()` 的默认探针是 `<bin> -version`，而 fscan 的 `-h` 是
+    #     "指定主机"、根本没有 `-version` —— 一旦有人"顺手统一"成 `_row(...verify_tool...)`，
+    #     装了 fscan 的机器会被误报成"找到但未通过版本校验"，接着 portscan 就白白回退内置扫描。
+    #     这个错误**不会抛异常**，只会让端口扫描慢一个量级，所以必须用断言钉住。
+    import cli.client as _cli7f
+    _orig7f = (_cli7f.which, _cli7f.verify_tool)
+    _seen7f = []
+    #    注意路径不能写成盘符样式（如 C:\...），否则会被本文件的 [5o] 跨平台静态审计拦下。
+    _fake7f = {"nmap": "fake-tools/nmap.exe", "fscan": "fake-tools/fscan.exe"}
+
+    def _verify7f(bin_path, *a, **k):
+        _seen7f.append(str(bin_path))
+        return True
+
+    try:
+        _cli7f.which, _cli7f.verify_tool = (lambda n: _fake7f.get(n)), _verify7f
+        _rows7f = dict(_cli7f.check_tools({"tools": {}}))
+        assert "nmap" in _rows7f and "fscan" in _rows7f, \
+            f"[7f] 自检漏了端口扫描引擎：{sorted(_rows7f)}"
+        assert _rows7f["nmap"].startswith("OK"), f"[7f] nmap 应判 OK：{_rows7f['nmap']}"
+        assert _rows7f["fscan"].startswith("OK"), f"[7f] fscan 应判 OK：{_rows7f['fscan']}"
+        _nmap_verified = any("nmap" in p for p in _seen7f)
+        _fscan_verified = any("fscan" in p for p in _seen7f)
+        # 缺二进制时两者都要给出"内置兜底"文案（fscan 的兜底链是回退 nmap/内置）
+        _cli7f.which = lambda n: None
+        _none7f = dict(_cli7f.check_tools({"tools": {}}))
+    finally:
+        _cli7f.which, _cli7f.verify_tool = _orig7f
+    assert _nmap_verified, f"[7f] nmap 应当走版本握手：{_seen7f}"
+    assert not _fscan_verified, \
+        f"[7f] fscan 不能走 `-version` 握手（会被误报成未通过校验，静默降级到内置）：{_seen7f}"
+    assert "未找到" in _none7f["nmap"] and "未找到" in _none7f["fscan"], _none7f
+
+    print("[7f] 续45 --check 覆盖端口引擎 ok: nmap 走 -version 握手且判 OK / fscan 跳过握手"
+          "（不误报未通过校验）/ 两者缺失时都给出内置兜底文案")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

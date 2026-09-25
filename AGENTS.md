@@ -252,7 +252,10 @@ ctf-scanner/
    `<script src>` 绝对化后可能指向第三方，必须**按 URL 主机逐个判** `auth=`（`_is_self_host` 命中自家
    注册域才带），不能因为"URL 来自目标页面"就把整批脚本请求都带上登录态。
 2. **外部工具优先 + 内置兜底**：调用前用 `which()`，Good 工具再用 `verify_tool()` 做版本握手
-   （防止 pip 的 Python `httpx` 同名命令被误用）。
+   （防止 pip 的 Python `httpx` 同名命令被误用）。**例外：`fscan` 不做握手** —— 它的 `-h` 是
+   "指定主机"而不是 help，也没有 `-version`；套默认探针会把**装好的** fscan 误报成"未通过版本
+   校验"，`portscan` 随即**静默**降级到内置扫描（慢一个量级且无任何报错）。见
+   `cli/client.py::check_tools()` 与 `tests/smoke.py` 的 `[7f]`。
 3. **非破坏性**：新增检查/POC 只允许探测类请求；POC 规范见 docs/poc-guide.md。免杀（evasion）只改变
    payload 的**编码形态**与请求伪装，不改变语义，不越过"无爆破/无 DoS/无写操作"红线。
 4. **SQLite 线程安全靠"每次调用独立连接"**（db.get_conn 用完即关）——不要改成共享长连接。

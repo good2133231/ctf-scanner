@@ -1376,7 +1376,14 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ③ **dirmap 源码复核** —— 5 处修复全部在位 + 适配器 3 处口径差异已改正（含 `recursiveScan()`
        是死代码这一事实纠正）+ 本机回环端到端跑通（13 条命中、无回退）。细节见
        `tools/dirmap_fixes/README.md`。
-[待办] 7、仍未做：`--check` 补 nmap/fscan 探测；B 组架构级四项（任务队列 / 鉴权加固续 / 分布式节点 /
-       工具版本管理）；dirmap 残留 4 条（`intToSize` 量化误差 / `plugins/inspector.py` 绕过
-       `_LegacySSLAdapter` / 含 fragment 的产出行 / `output/` 无清理）；D 组明确不做（多用户/HTTPS
-       部署指引、重写 dirmap 等价字典引擎）。
+[完成] 7、`--check` 补 nmap/fscan 探测（**续45**，2026-09-25）：`cli/client.py::check_tools()` 现在
+       覆盖端口扫描的两个外部引擎 —— nmap 走 `-version` 握手（本机实测 rc=0 / Nmap 7.98 → 判 OK）；
+       fscan **只判二进制在不在、跳过握手**（它的 `-h` 是"指定主机"、没有 `-version`，套默认握手会把
+       装好的 fscan 误报成"未通过版本校验"并**静默**降级到内置扫描）。tests/smoke.py 新增 [7f] 钉住
+       这两条性质，变异证伪 2/2 被击杀；本机 `py -3 cli/client.py --check` 实跑已见 nmap OK。
+[待办] 8、仍未做：B 组架构级四项（任务队列 / 分布式节点 / 工具版本管理；「鉴权加固」剩余部分是
+       **刻意不做**的逐表单 CSRF）；dirmap 残留 4 条（`intToSize` 量化误差 / `plugins/inspector.py`
+       绕过 `_LegacySSLAdapter` / 含 fragment 的产出行 / `output/` 无清理）；A2 POC 引擎残余
+       （flow 的 JS 深水区与带参数引用、workflow 的 `args`、`oob` 反连）；C 组需环境（P2-3 Linux
+       实机验证挂起中、fscan 二进制真跑验证）；D 组明确不做（多用户/HTTPS 部署指引、重写 dirmap
+       等价字典引擎）。

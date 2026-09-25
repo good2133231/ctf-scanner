@@ -26,7 +26,7 @@ python cli/client.py -t <单目标> [选项]
 | `--report-html PATH` | 结束后生成 **HTML** 报告（自包含单文件：样式内联、不引外链，可直接发人） |
 | `--report-pdf PATH` | 结束后生成 **PDF** 报告（用本机无头 Edge/Chrome 打印；**没有浏览器会打印原因并以退出码 1 结束**，不静默丢交付物） |
 | `--report-jsonl PATH` | 结束后生成 **JSONL** 报告（每行一个 JSON 对象、带 `type` 判别字段，**机器可读**；漏洞含全部行与 `review`/`review_note` 复核状态） |
-| `--check` | 打印外部工具可用性并退出 |
+| `--check` | 打印外部工具可用性并退出（`subfinder` / `httpx` / `puredns` / `nmap` / `fscan` / `dirmap`） |
 
 ### 示例
 

@@ -3,6 +3,65 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续45：清掉 todo.txt 的过期 [待办] + `--check` 补上端口扫描的两个引擎
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+### 1. todo.txt 过期 `[待办]` 清理（纯文档，不改任何行为）
+
+`todo.txt` 是逐轮追加的，同一个待办被抄了十几遍，其中相当一部分**早就落地但标记没改** —— 清单在
+骗人。本次逐条**核对当前代码**（不采信文档描述）后改标，每处补一行证据：
+
+| 原 `[待办]` | 改标 | 依据（代码） |
+|---|---|---|
+| P3-2 情报订阅 / P3-3 启发式（**11 处重复行**） | `[完成]` | `runner.py` 的 `STAGE_ORDER` 已含 `intel` / `heuristic`，`config/settings.yaml` 有对应开关段 |
+| 行 242「删除任务留 `data/trash` 快照」 | `[完成]` | `scanner/db.py` 的 `delete_task` → `backup_task`（AGENTS.md:842）；这条措辞本就不是待办 |
+| 行 394「dirmap 内联前先修它自身问题」 | `[完成]` | 5 处修复全部在位；「内联」本身决定**不做**（GPL-3.0） |
+| 行 474/495「端口扫描接入 fscan」 | `[部分完成]` | `portscan.py` 已接入（`auto = fscan → nmap → 内置`），缺的只是二进制真跑验证 |
+| 行 492「目录字典按框架细分」 | `[完成]` | `dirscan.py` 的 `FRAMEWORK_TAGS` / `fw_max_paths` + `tools/import_fw_dicts.py`（12 桶） |
+| 行 515「站点截图功能」 | `[完成]` | `scanner/stages/screenshot.py` + `settings.yaml` 的 `screenshot` 段 + 任务级门控 |
+| 行 995「POC 引擎残余」 | `[部分完成]` | flow（`for...of iterate(...)` / C 式 for / 脚本式子集）、workflow `subtemplates`、dsl 子集均已落地；`args` / `oob` 是**明确不做** |
+| 行 941「批次 5 四项」 | 保持 `[待办]` + 补注 | 队列 / 分布式 / 工具版本管理确未做；「鉴权加固」**部分完成**（续32 的 Host 白名单 + Origin/Referer + 会话 Cookie），逐表单 CSRF 是**刻意不做** |
+
+仍保持 `[待办]` 的：P2-3 Linux 实机验证（按用户指示挂起）、行 475 osint 阈值按真实数据校准（长期项）。
+
+### 2. A1 · `--check` 覆盖端口扫描的两个外部引擎
+
+`cli/client.py::check_tools()` 原先只探 subfinder / httpx / puredns / dirmap，**端口扫描的两个引擎
+完全没进自检** —— 于是 `portscan.engine=auto` 这一轮究竟会走 fscan、nmap 还是内置，用户跑 `--check`
+时根本看不到。现已补齐：
+
+- **nmap**：`which()` + `verify_tool()` 版本握手。本机实测 `nmap -version` → **rc=0**（Nmap 7.98）。
+- **fscan**：**只判"二进制在不在"，跳过版本握手**。根因：`verify_tool()` 的默认探针是
+  `<bin> -version`，而 fscan 的 `-h` 是**"指定主机"**而不是 help、也没有 `-version` —— 一旦有人
+  "顺手统一"成 `verify_tool()`，**装了 fscan 的机器会被误报成"找到但未通过版本校验"**，
+  `portscan` 随即**静默**降级到内置 TCP connect 扫描（慢一个量级，且没有任何报错）。
+  这条错误不抛异常，所以必须用断言钉住，而不是靠注释提醒。
+- 本机实跑 `py -3 cli/client.py --check`（真实证据）：
+
+  ```
+  外部工具可用性：
+    subfinder  未找到（自动使用内置兜底）
+    httpx      未找到（自动使用内置兜底）
+    puredns    未找到（自动使用内置兜底）
+    nmap       OK（C:\Program Files (x86)\Nmap\nmap.EXE）
+    fscan      未找到（自动回退 nmap / 内置 TCP connect）
+    dirmap     OK
+  ```
+
+**验证**：`tests/smoke.py` 新增 `[7f]`，守三条性质（覆盖两个引擎 / nmap 走握手 / **fscan 不走**握手
+且缺件时文案正确）；全量 `py -3 tests/smoke.py` = **SMOKE PASS**。
+
+**变异证伪 2/2 被击杀**：① 把 fscan 改成 `_row("fscan", fs, verify_tool(fs) ...)` → `[7f]` 的
+"fscan 不能走 `-version` 握手"断言失败；② 把 nmap+fscan 两行整体删掉 → "自检漏了端口扫描引擎"
+断言失败。
+
+> 写 `[7f]` 时还**误踩了本仓自己的 `[5o]` 跨平台静态审计**（假路径写成了盘符样式 `C:\...`）被当场拦下，
+> 改成相对路径后才过 —— 顺手证明那道守卫是活的。
+
+文档同步：`todo.txt`（第 7 项收口 + 新增第 8 项）、`AGENTS.md`（§5 第 2 条补 fscan 握手例外）、
+`docs/usage.md`（`--check` 一行列出实际覆盖的工具）、`CHANGELOG_AI.md`（本条）。
+
+
 ## 2026-09-25 —— 续44：C 组三项收口（305 个导入 POC 实测校准 / dirmap 源码复核 / GitHub token 核实）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 
