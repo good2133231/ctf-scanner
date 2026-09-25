@@ -18,9 +18,16 @@
     单请求项：method, path(字符串或列表), headers, body, payloads, attack,
               variables, redirects, matchers, matchers-condition, extractors
               **raw**（nuclei 的 HTTP 原文，2026-09-23 起支持，见下）
-  匹配器：type: status | word | regex | size；part: body | header | all；
+  匹配器：type: status | word | regex | size | dsl；part: body | header | all；
           condition: or|and；negative: true；case-insensitive
-  提取器：type: regex | kval（命中内容会写进 evidence，便于人工确认）
+  dsl 匹配器（2026-09-25 起支持**安全子集**）：`dsl: [表达式, ...]` 由
+      `scanner/pocs/dsl.py` 手写词法 + 递归下降求值（**绝不 eval** —— 模板是外部输入）。
+      变量 6 个（status_code / content_length / body / all_headers / header / host）、
+      比较 `== != > >= < <=`、逻辑 `&& || !`、函数 contains / icontains / starts_with /
+      ends_with / regex / len / tolower / toupper；`condition: and` 作用于同一 matcher 的
+      多条表达式。**超出子集在装载期就拒**（整份模板标 unsupported 并写明原因），
+      不做"运行期恒不命中"这种静默失效。
+  提取器：type: regex | kval | dsl（命中内容会写进 evidence，便于人工确认）
   flow（2026-09-23 起支持**布尔子集**）：`&&` / `||` / `!` 作用于请求块的 `id` 或
       `http(N)` 1-based 序号；引用能全部解析时才生效，否则整份模板标 unsupported。
       语义同 nuclei：条件成立才算命中；纯否定式成立（如只有 `!http(1)`）**不报**
@@ -34,7 +41,9 @@
 因此 `PUT` / `PATCH` / `DELETE` / `TRACE` / `CONNECT` 一律**拒绝执行**并把原因记进
 `_note`/`_error`（框架只做只读验证，不做状态变更）；同一套方法白名单也对普通 `method:` 生效。
 
-刻意不做：dsl 表达式、oob（反连）、workflow 的 `subtemplates`/`args`。
+刻意不做：oob（反连）、workflow 的 `subtemplates`/`args`、**请求块级/顶层** `dsl`
+（nuclei 的 dsl 只写在 `matchers` / `extractors` 里；块级写法仍按不支持处理 ——
+该块跳过并把原因记进 `_note`，不静默失效）。
 含这些特性的模板会被标记 `unsupported` 并在 POC 管理页显示原因，而不是静默失效。
 """
 import itertools
@@ -50,6 +59,7 @@ except ImportError:
 from ..config import resolve, skip_severities
 from .. import db
 from ..utils import http_request
+from . import dsl as dsl_mod
 
 # POC 目录：内置 / 用户上传 / 参考项目批量导入 / 官方 nuclei 模板投放点
 POC_DIRS = ["scanner/pocs/pocs", "config/pocs-user", "config/pocs-imported",
@@ -58,8 +68,9 @@ POC_DIRS = ["scanner/pocs/pocs", "config/pocs-user", "config/pocs-imported",
 # 单个 POC 对单个目标的最大请求数（防止 payload 笛卡尔积把目标打爆）
 MAX_REQUESTS_PER_POC = 10
 
-# 仍**不支持**的块级/顶层特性：`dsl` 是"把判定逻辑写在模板里"，等价于让模板执行任意逻辑，
-# 与"引擎只认声明式匹配器"的定位冲突。含它的块被跳过并标注原因。
+# 仍**不支持**的是**请求块级/顶层** `dsl`：nuclei 的 dsl 写在 `matchers` / `extractors` 里，
+# 那里已由 `_prepare_dsl()` + `scanner/pocs/dsl.py` 支持安全子集；块级写法按不支持处理 ——
+# 该块跳过并把原因记进 `_note`（整份模板若只有它，则标 unsupported）。
 _UNSUPPORTED_KEYS = ("dsl",)
 
 # 破坏性/异常方法白名单（框架红线：只做只读验证）。`POST` 保留 —— 大量官方模板用它做
@@ -312,7 +323,8 @@ def _runnable_blocks(data):
     ok_idx, notes = [], []
     for i, b in enumerate(blocks):
         if not isinstance(b, dict) or any(k in b for k in _UNSUPPORTED_KEYS):
-            notes.append("含 dsl 的请求块已跳过")
+            notes.append("含请求块级 dsl 的请求块已跳过"
+                         "（nuclei 的 dsl 写在 matchers / extractors 里）")
             continue
         items, reasons = _block_requests(b)
         if not items:
@@ -320,6 +332,35 @@ def _runnable_blocks(data):
             continue
         ok_idx.append(i)
     return blocks, ok_idx, notes
+
+
+def _prepare_dsl(blocks, ok_idx):
+    """装载期把 `type: dsl` 的匹配器/提取器解析成 AST；任一表达式越界就返回原因（否则空串）。
+
+    解析结果挂在各自的 dict 上（`_dsl_ast`），运行期只求值、不再解析 —— 与 `_flow` 同一思路：
+    能在装载期判掉的一律判掉，运行期只允许"确定的事"。
+    """
+    for i in ok_idx:
+        b = blocks[i]
+        for holder in ("matchers", "extractors"):
+            for entry in (b.get(holder) or []):
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("type") or "").lower() != "dsl":
+                    continue
+                exprs = dsl_mod.expressions(entry)
+                if not exprs:
+                    return f"{holder} 里有一条 `dsl` 为空"
+                asts = []
+                for e in exprs:
+                    node, reason = dsl_mod.parse(e)
+                    if node is None:
+                        # 带上 `matchers`/`extractors` 与原文：模板里可能有多处 dsl，
+                        # 只说"哪个表达式错"不够 —— 用户要能直接定位到改哪一行。
+                        return f"{holder} 的 `{str(e)[:60]}`：{reason}"
+                    asts.append(node)
+                entry["_dsl_ast"] = asts
+    return ""
 
 
 def load_poc_file(path):
@@ -358,7 +399,8 @@ def load_poc_file(path):
     if not _requests_of(data):
         if any(k in data for k in _UNSUPPORTED_KEYS):
             return {"id": data.get("id"), "_status": "unsupported",
-                    "_error": "dsl 类模板暂不支持（见 docs/poc-guide.md）",
+                    "_error": ("顶层 dsl 不支持（nuclei 的 dsl 写在 matchers / extractors 里，"
+                               "形如 `matchers: [{type: dsl, dsl: ['status_code == 200']}]`）"),
                     "_path": str(p)}
         return {"id": p.stem, "_status": "error", "_error": "缺少 http/requests 段"}
     blocks, ok_idx, notes = _runnable_blocks(data)
@@ -366,6 +408,12 @@ def load_poc_file(path):
         return {"id": data.get("id"), "_status": "unsupported",
                 "_error": f"全部请求块被跳过（{notes[0] if notes else '空块'}）",
                 "_path": str(p)}
+    # dsl：与 flow 同理，**装载期**解析并校验。运行期才发现表达式不合法，只能按不命中处理
+    # —— 那正是本引擎最反对的静默失效（用户会以为"模板跑过了、没洞"）。
+    dsl_err = _prepare_dsl(blocks, ok_idx)
+    if dsl_err:
+        return {"id": data.get("id"), "_status": "unsupported",
+                "_error": f"dsl 表达式超出支持子集：{dsl_err}", "_path": str(p)}
     # flow：解析 + 引用可解析性都在**装载期**判掉。运行期才发现引用不到，只能"按不命中"
     # 处理 —— 那正是本引擎最反对的静默失效（用户会以为模板没洞）。
     if data.get("flow"):
@@ -511,6 +559,44 @@ def _part_text(resp, part):
     return body
 
 
+def _dsl_ctx(resp):
+    """dsl 求值上下文（键与 `scanner/pocs/dsl.py::VARIABLES` 一一对应，不能少也不能多名字）。"""
+    headers = resp.get("headers") or {}
+    htext = "\n".join(f"{k}: {v}" for k, v in headers.items())
+
+    def _int(v):
+        try:
+            return int(v or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {"status_code": _int(resp.get("status")), "content_length": _int(resp.get("length")),
+            "body": resp.get("text") or "", "all_headers": htext, "header": htext,
+            "host": urlparse(resp.get("url") or "").netloc}
+
+
+def _dsl_asts(entry):
+    """取 `_dsl_ast`（装载期填的）；缺失时现解析一次（手工构造的 POC dict 会走到这里）。"""
+    asts = entry.get("_dsl_ast")
+    if asts is None:
+        asts = [dsl_mod.parse(e)[0] for e in dsl_mod.expressions(entry)]
+    return asts or []
+
+
+def _match_dsl(m, resp):
+    """`type: dsl` 匹配器：多条表达式按 `condition`（默认 or）合并。"""
+    asts = _dsl_asts(m)
+    if not asts:
+        return False
+    ctx = _dsl_ctx(resp)
+    vals = []
+    for ast in asts:
+        if ast is None:              # 装载期已拦，这里只兜手工构造的 POC dict
+            return False
+        vals.append(dsl_mod.truthy(dsl_mod.evaluate(ast, ctx)))
+    return all(vals) if str(m.get("condition") or "or").lower() == "and" else any(vals)
+
+
 def _match_one(m, resp):
     t = str(m.get("type") or "").lower()
     ci = m.get("case-insensitive", True) is not False
@@ -538,8 +624,10 @@ def _match_one(m, resp):
         except (TypeError, ValueError):
             sizes = []
         ok = resp.get("length") in sizes
+    elif t == "dsl":
+        ok = _match_dsl(m, resp)
     else:
-        ok = False  # binary / dsl 等暂不支持，按不命中处理（不产生误报）
+        ok = False  # binary 等暂不支持，按不命中处理（不产生误报）
     if m.get("negative"):
         ok = not ok
     return ok
@@ -579,6 +667,17 @@ def _extract(resp, extractors):
                 m = re.search(rf"(?im)^{re.escape(str(key))}\s*:\s*(.+)$", text)
                 if m:
                     out.append(f"{key}: {m.group(1).strip()}")
+        elif t == "dsl":
+            # dsl 提取器只收**非布尔**结果：布尔值本身就是"命中/不命中"，写进 evidence
+            # 没有人工确认价值（判命中的职责在 `_match_dsl`，两者分工不重叠）。
+            ctx = _dsl_ctx(resp)
+            for ast in _dsl_asts(ex):
+                val = None if ast is None else dsl_mod.evaluate(ast, ctx)
+                if isinstance(val, bool) or val is None:
+                    continue
+                s = str(val).strip()
+                if s:
+                    out.append(s)
     return sorted(set(str(x)[:200] for x in out))[:5]
 
 

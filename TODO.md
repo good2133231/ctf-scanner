@@ -662,9 +662,9 @@
       `scanner/ctlog.py`（`ctlog` 段）；「证书解析页签」→ 续15 的 `cert` 阶段；报告 HTML·PDF →
       续16 的三格式共用 `collect()` 快照；登录态扫描 + nuclei `raw`/`flow`/`workflows` → 续17。
 
-## 续12 ~ 续36（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
+## 续12 ~ 续37（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
 
-> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 25 轮变更只记在 `CHANGELOG_AI.md`。
+> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 26 轮变更只记在 `CHANGELOG_AI.md`。
 > 这里补一份**一句话 + 落地位置**的索引，避免"翻待办看不出做过什么"。**不重复 CHANGELOG 全文**。
 
 - [x] **续12** 误报复核三态 + POC 置信度分层 + Linux 实机验收（Ubuntu 22.04 跑通 smoke）
@@ -704,6 +704,10 @@
       模板标题零请求预筛；纯函数级覆盖之外补上"阶段里接线也接对了"这一层）；
       **续36 补** 任务列表页 `/tasks` 显示运行时长（同一口径 `run_duration_text`，渲染级断言，
       关掉续35 的 `[未做]` 7）；
+- [x] **续37** nuclei `dsl` 表达式**安全子集**（新增 `scanner/pocs/dsl.py`：手写词法 + 递归下降、
+      白名单封闭、**不用 eval**；`engine.py` 在**装载期**把 `matchers`/`extractors` 里的 `type: dsl`
+      解析成 AST、越界即整份标 `unsupported` 并写明是哪一处的哪个表达式；运行期只求值，
+      提取器只收非布尔结果）。**块级 / 顶层** `dsl` 仍按不支持处理；回归 `tests/smoke.py [6x]`；
 - [x] **另（2026-09-24）** 补 `LICENSE`：本仓库自有代码 MIT；`config/dicts/dirs_*.txt`
       派生自 dirmap（GPL-3.0），**不被 MIT 覆盖**，边界见 `NOTICE.md §5`。
 

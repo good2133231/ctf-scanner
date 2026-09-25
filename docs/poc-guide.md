@@ -9,7 +9,7 @@
 | `config/pocs-imported/*.yaml` | `tools/import_ref_pocs.py` 批量导入的参考项目 POC，**默认关闭**（关键字命中误报率高，需人工在 POC 管理页挑选后启用） |
 | `config/nuclei-templates/*.yaml` | 官方 nuclei 模板投放点：本引擎兼容其核心子集，可直接丢进来加载 |
 
-控制台启动时会自动扫描以上目录并写入注册表；之后可在 GUI 里启停每个 POC，也可以点「重新扫描 POC 目录」增量加载。语法错误的 POC 会标注 `error`；`raw` / `flow` / `workflows` 已支持**核心子集**（见下节），超出子集的部分（`dsl` 表达式、flow 里的 JS/循环、workflow 的 `subtemplates`/`args`、oob 反连）会标注 `unsupported` 或写进 `_note` 并显示原因（不静默失效），扫描时自动跳过或跳过该子项。
+控制台启动时会自动扫描以上目录并写入注册表；之后可在 GUI 里启停每个 POC，也可以点「重新扫描 POC 目录」增量加载。语法错误的 POC 会标注 `error`；`raw` / `flow` / `workflows` / `dsl` 已支持**核心子集**（见下节），超出子集的部分（**块级/顶层** `dsl`、flow 里的 JS/循环、workflow 的 `subtemplates`/`args`、oob 反连）会标注 `unsupported` 或写进 `_note` 并显示原因（不静默失效），扫描时自动跳过或跳过该子项。
 
 ## YAML 格式
 
@@ -57,7 +57,8 @@ http:                               # 请求列表；兼容 nuclei 的 requests:
 
 内置变量（可直接在 path/headers/body 中引用）：`BaseURL` / `RootURL` / `Hostname` / `Host` / `Port` / `Scheme` / `Path`。
 
-**不支持**：`dsl` 表达式、oob 反连、flow 里的 JS/循环/带参数引用、workflow 的 `subtemplates`/`args`。
+**不支持**：**块级/顶层** `dsl`、oob 反连、flow 里的 JS/循环/带参数引用、workflow 的 `subtemplates`/`args`
+（`matchers` / `extractors` 里的 `dsl` 已支持**安全子集**，见下节）。
 含这些特性的模板会被标 `unsupported`（或把未实现子项写进原因/`_note`），不会静默失效。
 
 ## raw / flow / workflows（2026-09-23 起支持核心子集）
@@ -91,6 +92,17 @@ http:
 - **workflows**：workflow 文件顶层写 `workflows: - template: <相对路径>`，路径先按 workflow 文件所在
   目录、再按项目根解析；有递归保护（深度上限 3 + 同一路径单次执行内只跑一次，自环直接挡住）。
   `subtemplates` / `args` / workflow 级 matchers **未实现**，会写进 `_note`（不静默失效）。
+- **dsl**（2026-09-25 起支持**安全子集**，仅 `matchers` / `extractors` 里的写法）：变量 6 个 ——
+  `status_code` / `content_length`（数值）、`body` / `all_headers` / `header`（后两者同值）/ `host`；
+  比较 `==` `!=`（两侧都是数字按数字比）与 `>` `>=` `<` `<=`（**只允许数值**）；逻辑 `&&` `||` `!`
+  与括号；函数 `contains` / `icontains` / `starts_with` / `ends_with` / `regex(pattern, input)` /
+  `len` / `tolower` / `toupper`。同一 matcher 的多条表达式按 `condition`（默认 `or`）合并；
+  `extractors` 里的 `type: dsl` 只把**非布尔**结果写进 evidence（布尔值本身就是"命中/不命中"）。
+  **不用 `eval`**（模板是外部输入）：`scanner/pocs/dsl.py` 手写词法 + 递归下降，白名单之外的写法
+  在**装载期**就被判掉 —— 整份模板标 `unsupported`，原因写明是哪一处（`matchers`/`extractors`）
+  的哪个表达式越界。方法调用式（`body.contains('x')`）、算术（`+`）、`md5()` 等摘要函数、链式比较、
+  拿字符串做大小比较、坏 `regex` 模式、空 `dsl` 都属这一类；刻意**不**落成"运行期恒不命中"
+  （那会让人以为"模板跑过了、没洞"）。**块级 / 顶层** `dsl` 仍不支持（与上一段的 `dsl` 匹配器严格区分）。
 
 ## 匹配器与提取器语义
 
@@ -100,9 +112,11 @@ http:
 | word | `words: [...]`, `condition: or/and`, `part: body/header/all`, `case-insensitive` | 关键字是否出现在对应部分 |
 | regex | `regex: [...]`, `part`, `case-insensitive` | 任一正则命中即真 |
 | size | `size: [1234]` | 响应体长度命中 |
+| dsl | `dsl: [...]`, `condition: or/and` | 白名单表达式的求值结果（`condition` 默认 `or`，多条同时给时用 `and`） |
 
 - 多匹配器整体关系由 `matchers-condition` 控制（默认 `or`）；单个匹配器可用 `negative: true` 取反。
-- `extractors` 支持 `type: regex` 与 `type: kval`（按 `Key: Value` 抽取响应头），命中片段写入 evidence（最多 5 条）。
+- `extractors` 支持 `type: regex` 与 `type: kval`（按 `Key: Value` 抽取响应头），命中片段写入 evidence（最多 5 条）；
+  `type: dsl` 只把**非布尔**结果写进 evidence（见上节）。
 
 ## 执行模型
 
@@ -148,12 +162,13 @@ http:
 
 本引擎**主动向 nuclei 语法靠拢**（兼容 `http:`/`requests:`、`raw` HTTP 原文、
 `payloads` + `attack`、`variables` + 内置变量、`path` 列表、`redirects`、
-`status/word/regex/size` 匹配器 + `condition`/`negative`/`case-insensitive`/`part`、
-`regex`/`kval` extractors、`flow` 布尔子集、`workflows` 子模板编排），官方模板可直接投放进
+`status/word/regex/size/dsl` 匹配器 + `condition`/`negative`/`case-insensitive`/`part`、
+`regex`/`kval`/`dsl` extractors、`flow` 布尔子集、`workflows` 子模板编排），官方模板可直接投放进
 `config/nuclei-templates/` 被本引擎加载——从此不依赖 nuclei
 二进制，也不与它冲突（同一份模板两边都能跑）。因此不再需要"接入 nuclei 适配器"作为前置项。
 
-尚不支持的是 nuclei 的 `dsl` 表达式、oob 反连、flow 里的 JS/循环、workflow 的 `subtemplates`/`args`，
+尚不支持的是 nuclei 的 oob 反连、flow 里的 JS/循环、workflow 的 `subtemplates`/`args`，
+以及**块级/顶层**的 `dsl`（`matchers`/`extractors` 里的 `dsl` 走上面的安全子集），
 这类模板（或其未实现子项）会被标 `unsupported` / `_note`；若确需完整能力，
 仍可另加适配器调用 nuclei 二进制，`vulns` 表结构可直接承接其 JSON 输出。另：`config/pocs-imported/` 下由
 `tools/import_ref_pocs.py` 批量导入的参考项目 POC **默认关闭**，需人工在 POC 管理页挑选后启用。

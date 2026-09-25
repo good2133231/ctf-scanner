@@ -3,6 +3,45 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续37：nuclei `dsl` 表达式**安全子集**（`matchers` / `extractors` 级）
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+**背景**：`docs/roadmap.md` 的 POC 引擎那条 `[~]` 里，"仍缺 `dsl` 表达式"是续17 之后剩下的最大一块
+nuclei 语义缺口（大量官方模板用 `type: dsl` 写状态码 + 长度 + 关键字的组合条件）。本轮补它，
+范围经与用户确认后**只做 `matchers` / `extractors` 里的 dsl**（nuclei 就写在那里）。
+
+**为什么不用 `eval`**：`dsl` 是**模板（外部输入）**里写的表达式，`eval`/`exec` 等于把任意代码执行权
+交给模板文件 —— 与本引擎"只认声明式匹配器、绝不执行模板逻辑"的红线直接冲突。所以手写词法 + 递归下降，
+语法是**封闭白名单**。
+
+**改了什么**
+- **新增 `scanner/pocs/dsl.py`**：词法（`_tokens`，遇到白名单外的字符即抛）→ 递归下降
+  （`||` < `&&` < `!` < 比较 < 括号/字面量/变量/函数）→ `parse()` 返回 `(node, reason)`；
+  白名单：变量 6 个（`status_code`/`content_length`/`body`/`all_headers`/`header`/`host`）、
+  比较 `== != > >= < <=`、逻辑 `&& || !`、函数 `contains`/`icontains`/`starts_with`/`ends_with`/
+  `regex`/`len`/`tolower`/`toupper`。**大小比较只允许数值子表达式**（拿字符串比大小属写错模板，
+  装载期直接拒，不给"恒 False"这种静默语义）；链式比较、方法调用式、算术、未知变量/函数、
+  坏 regex 模式、空 `dsl` 同样在装载期拒。
+- `scanner/pocs/engine.py`：`_prepare_dsl()` 在 `load_poc_file()` 里**装载期**把
+  `type: dsl` 的表达式解析成 AST 挂到各自 dict 的 `_dsl_ast`（越界则整份标 `unsupported`，
+  原因写明是 `matchers`/`extractors` 里的哪个表达式）；运行期只求值 —— `_dsl_ctx()` / `_match_dsl()`
+  接线进 `_match_one()`（`condition` 默认 `or`，支持 `negative`）与 `_extract()`（只收**非布尔**结果）。
+  **块级 / 顶层** `dsl` 仍按不支持处理（保留原有语义与既有断言），docstring 同步。
+- 文档同步：`docs/poc-guide.md`（新增 dsl 小节 + 匹配器/提取器表 + 与 nuclei 关系段）、
+  `docs/roadmap.md`、`AGENTS.md`（smoke 清单 `[6x]` + POC 引擎能力段 + `[5x]` 口径改为"**块级** dsl"）。
+
+**验证**
+- `py -3 tests/smoke.py` → `SMOKE PASS`（新增 `[6x]` 通过）。
+- 变异证伪 **4/4 被击杀**（均为"语义正确、逻辑改坏"）：① `_match_dsl` 恒 `True` →
+  `AssertionError: dsl 不成立竟报命中`；② `_prepare_dsl` 不再返回越界原因 → `dot 应判 unsupported`；
+  ③ `_extract` 不排除布尔结果 → evidence 变成 `['200','9','True','hello-aaa']`；
+  ④ `dsl._compare` 把 `==` 写成 `!=` → `基本断言：期望 True，实际 False`。四处均已还原。
+- CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 一致
+  （`engine.py` 107/8、`smoke.py` 147/0；新增的 `dsl.py` 归位为 CRLF：LF == CR == 299）。
+
+**未做（如实登记）**：oob 反连需要用户提供回调域名；flow 的 JS/循环、workflow 的
+`subtemplates`/`args` 仍需各自的执行引擎，不在本切片内。
+
 ## 2026-09-25 —— 续36 补：任务列表页显示运行时长（关掉续35 自己标的 `[未做]` 7）
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 

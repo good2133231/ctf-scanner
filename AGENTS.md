@@ -326,7 +326,7 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   （回显靶场 + 逐行断言 4 个第三方调用点不带 auth）+ CLI -H/--cookie 与
                             #   GUI 400 + 补扫继承 + 页面只显掩码不回显明文；POC raw 解析与破坏性方法拒绝、
                             #   flow 布尔子集（短路/纯否定不报/越界与被跳过块引用标 unsupported）、
-                            #   workflows 子模板与自环保护、dsl 仍显式 unsupported）
+                            #   workflows 子模板与自环保护、**块级** dsl 仍显式 unsupported）
                             # 2026-09-23 续18 新增 `[5y]`（批次 4 五项）：
                             #   XSS 上下文判定表（8 上下文 / 探针定界符存活 / 全转义不报 + poc_id 不变）
                             #   + A10 SSRF 受控回连（默认关零请求 / 本机监听自证 / 外部回调不谎报 /
@@ -415,6 +415,18 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   "没落库"可能只是"压根没查"；零请求预筛用**调用记录里不出现**来钉，而不是只看日志。
                             #   补它的理由：既有覆盖只有阈值/预筛的**纯函数**级与标题·证书落库，favicon 路的
                             #   「命中→落库」接线与子开关判定此前**没有阶段级断言**（纯函数全绿、阶段里接错线照样绿）。
+# 2026-09-25 续37 新增 `[6x]`：**nuclei `dsl` 表达式安全子集**（`scanner/pocs/dsl.py` 手写词法 +
+                            #   递归下降，**不用 eval** —— 模板是外部输入）—— ① 命中路径：装载期把 AST 挂到
+                            #   匹配器/提取器 dict 的 `_dsl_ast`（断言 7 / 4 条），端到端打本地靶场命中，
+                            #   提取器只收**非布尔**结果（evidence 恰为 `200`/`9`/`hello-aaa`，`True` 不进）；
+                            #   ② 合并口径：matcher 内 `condition`（默认 or）与 `negative`、`header`==`all_headers`、
+                            #   `host` 变量、`dsl` 写成整串字符串、手工 POC dict（无 `_dsl_ast`）走现解析兜底；
+                            #   ③ **装载期拒** 8 类越界（`.` 方法调用 / 未知函数 / 未知变量 / `+` 算术 / 链式比较 /
+                            #   字符串大小比较 / 坏 regex / 空 dsl），每条都要能指认出是哪种写法，
+                            #   且**提取器级**同样拦（`extractors` 字样出现在原因里）；
+                            #   ④ **块级 / 顶层** `dsl` 仍拒（与 matchers 级放开严格区分）。
+                            #   防假绿：反向用例（`contains(body,'NOT-THERE')`）必须**不报** —— 否则
+                            #   "dsl 分支恒 True"照样全绿。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
@@ -505,11 +517,13 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   配额模型各不相同，抽象只会把差异塞进一堆分支。三家共用同一个 mmh3 键（`scanner/mmh3.py`），
   `osint` 阶段内 **favicon 哈希按 (max_sites, workers) 缓存**，避免每家各拉一遍。
 - POC 引擎是** nuclei 兼容子集**：支持 `http:`/`requests:`、`payloads`（list / dict + `attack`）、
-  `variables` + 内置变量、`path` 列表、`redirects`、匹配器 `status/word/regex/size` + `condition`/`negative`/
-  `case-insensitive` + `part: body|header|all`、`extractors`（regex/kval）；**`raw` / `flow`（布尔子集）/
-  `workflows`（子模板编排）自 2026-09-23 续17 起为子集支持**。仍不支持的 `dsl`、oob 反连、
-  flow 的 JS/循环/带参数引用、workflow 的 `subtemplates`/`args` 会被标 `_status=unsupported`
-  （或写进 `_note`）并在 POC 管理页显示原因（不静默失效）。
+  `variables` + 内置变量、`path` 列表、`redirects`、匹配器 `status/word/regex/size/dsl` + `condition`/`negative`/
+  `case-insensitive` + `part: body|header|all`、`extractors`（regex/kval/dsl）；**`raw` / `flow`（布尔子集）/
+  `workflows`（子模板编排）自 2026-09-23 续17 起为子集支持**，**`matchers`/`extractors` 里的 `dsl`
+  自 2026-09-25 续37 起为安全子集支持**（`scanner/pocs/dsl.py`，白名单封闭 + 不用 `eval`）。
+  仍不支持的是**块级/顶层** `dsl`、oob 反连、
+  flow 的 JS/循环/带参数引用、workflow 的 `subtemplates`/`args`，它们会被标 `_status=unsupported`
+  （或写进 `_note`）并在 POC 管理页显示原因（不静默失效）；`dsl` 越界同样在**装载期**就被标掉。
 - **凭据红线（2026-09-23 续17）**：登录态（`scanner/auth.py` 的任务级请求头）**只发目标侧**，
   `utils.http_request(auth=False)` 是默认值、4 个第三方调用点（crt.sh / FOFA / CISA KEV / IP 反查）
   **永不带**；日志/页面/报告只显掩码（`mask_value`）；解析非法行必须报错（CLI exit 1 / GUI 400），

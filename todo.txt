@@ -1141,3 +1141,38 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        再断言时长在本行内，避免"整页凑巧出现同串"假绿）；smoke PASS；**变异证伪 2/2 被击杀**
        （路由不传 `durations` / 模板删掉表头），均已还原；CRLF 逐行归位后两口径一致
        （app.py 6/1、tasks.html 5/2、smoke.py 10/1）。
+
+=== 续37（2026-09-25）：nuclei `dsl` 表达式**安全子集**（`matchers` / `extractors` 级） ===
+[完成] 1、补齐 `[待办]`：roadmap 里 POC 引擎那条 `[~]` 的"仍缺 `dsl` 表达式"是续17 之后最大一块
+       nuclei 语义缺口（官方模板大量用 `type: dsl` 组合状态码 + 长度 + 关键字）。范围经用户确认后
+       **只做 `matchers`/`extractors` 里的 dsl**（nuclei 就写在那里），块级/顶层仍不动。
+[完成] 2、实现：新增 `scanner/pocs/dsl.py` —— 词法（`_tokens`，遇到白名单外的字符即抛）
+       → 递归下降（`||` < `&&` < `!` < 比较 < 括号/字面量/变量/函数）→ `parse()` 返回 `(node, reason)`；
+       白名单：变量 6 个（`status_code`/`content_length`/`body`/`all_headers`/`header`/`host`）、
+       比较 `== != > >= < <=`、逻辑 `&& || !`、函数 `contains`/`icontains`/`starts_with`/`ends_with`/
+       `regex`/`len`/`tolower`/`toupper`。`engine.py` 侧：`_prepare_dsl()` 在 `load_poc_file()` 的
+       **装载期**解析并挂 `_dsl_ast`（与 `flow` 同一思路：能装载期判掉的一律判掉），运行期只求值 ——
+       `_dsl_ctx()` / `_match_dsl()` 接线进 `_match_one()`（`condition` 默认 `or`，支持 `negative`）
+       与 `_extract()`（dsl 提取器只收**非布尔**结果，判命中的职责在匹配器，分工不重叠）。
+[说明] 3、为什么不用 `eval`：模板是**外部输入**，`eval`/`exec` 等于把任意代码执行权交给模板文件 ——
+       与"只认声明式匹配器、绝不执行模板逻辑"的红线直接冲突。故白名单封闭、越界即拒。
+       为什么"拒"要放在装载期：落到运行期只能"按不命中处理"，用户会以为"模板跑过了、没洞"，
+       正是本引擎反复反对的静默失效。大小比较另加限制：`>`/`<` 等**只允许数值子表达式**
+       （字符串比大小属写错模板，不予"恒 False"这种静默语义）。
+[完成] 4、验证：`py -3 tests/smoke.py` → SMOKE PASS（新增 `[6x]`）。覆盖：装载期 AST 落点
+       （匹配器 7 条 / 提取器 4 条）→ 端到端打本地靶场命中且 evidence 恰为 `200`/`9`/`hello-aaa`
+       （`True` 不进）；反向用例**必须不报**；`condition` or/and、`negative`、`header == all_headers`、
+       `host` 变量、`dsl` 写成整串字符串、手工 POC dict 无 `_dsl_ast` 走现解析兜底；
+       **装载期拒 8 类**越界（`.` 方法调用 / 未知函数 / 未知变量 / `+` 算术 / 链式比较 /
+       字符串大小比较 / 坏 regex / 空 dsl）且原因指认写法；提取器级同样拦；块级与顶层 dsl 仍拒。
+[完成] 5、变异证伪 **4/4 被击杀**（均为"语义正确、逻辑改坏"）：① `_match_dsl` 恒 `True` →
+       `dsl 不成立竟报命中`；② `_prepare_dsl` 不再返回越界原因 → `dot 应判 unsupported`；
+       ③ `_extract` 不排除布尔结果 → evidence 变 `['200','9','True','hello-aaa']`；
+       ④ `dsl._compare` 把 `==` 写成 `!=` → `基本比较：期望 True，实际 False`。四处已还原。
+       首跑的失败是断言写错（把 `` `dsl` 为空 `` 写成 `dsl 为空`，反引号使其不匹配），不是实现错。
+[完成] 6、CRLF 自查：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 一致
+       （engine.py 107/8、smoke.py 147/0）；新增的 `scanner/pocs/dsl.py` 与 engine.py 里上一轮插入的
+       `_prepare_dsl` 段一并归位为 CRLF（LF == CR == 299 / 847）。文档同步：`docs/poc-guide.md`、
+       `docs/roadmap.md`、`AGENTS.md`、`CHANGELOG_AI.md`、`TODO.md`、`todo.txt`。
+[未做] 7、仍缺：oob 反连（需用户提供回调域名）、flow 的 JS/循环、workflow 的 `subtemplates`/`args`
+       —— 这三项各自需要一套执行引擎，不在本切片内；**块级/顶层** `dsl` 仍按不支持处理。

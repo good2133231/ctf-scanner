@@ -2847,7 +2847,7 @@ workflows:
     print("[5x] 续17 ok: 登录态扫描（解析/掩码/不静默丢弃 + 目标侧带·第三方 fail-closed + "
           "CLI(-H/--cookie)/GUI/补扫继承 + 页面只显示掩码）与 nuclei raw/flow/workflows 子集"
           "（raw 解析·破坏性方法拒绝·端到端命中 + flow &&/|| 短路·纯否定不报·引用越界标 unsupported "
-          "+ workflow 子模板与自环保护 + dsl 仍显式 unsupported）")
+          "+ workflow 子模板与自环保护 + **块级** dsl 仍显式 unsupported）")
 
     # 5y) 批次 4：① XSS 上下文分析 ② A10 SSRF 受控回连 ③ 布尔盲注 ④ Shodan/Quake 反查
     #     ⑤ CT 日志（crt.sh）。**所有外部接口一律打桩，禁止触网**（[2c] 的历史教训）。
@@ -5478,6 +5478,153 @@ workflows:
     print("[6w] FOFA 三路反查（阶段级桩测）ok: fofa.enabled=False 零查询 / 只开 favicon 那路时 "
           "cert·title 一次都不查 / 命中落库来源正确（osint:fofa·fofa-cert·fofa-title，裸 IP 行不入库）/ "
           "黑 ico·通用证书不拓展（且证明确实查过）/ 占位证书与模板标题**零请求**预筛")
+
+    # [6x] nuclei `dsl` 表达式**安全子集**（续37）—— 补 `[5x]` 里"dsl 仍显式 unsupported"的缺口。
+    #      只放开 `matchers` / `extractors` 里的 dsl（nuclei 就写在那里），**块级/顶层仍拒**。
+    #      三条口径必须同时成立，缺一条都算没做完：
+    #      ① 命中路径真的接上：装载期解析成 AST → 运行期求值 → 提取器落 evidence；
+    #      ② 超出子集的写法**在装载期**就拒（整份模板 unsupported 且写明是哪种写法），
+    #         绝不落到"运行期恒不命中"—— 那会让人以为"模板跑过了、没洞"；
+    #      ③ 匹配器/提取器级放开 ≠ 块级放开（后者仍按不支持处理，原因可见）。
+    _p_dsl_hit = _wpoc("dsl-hit.yaml", """
+id: smoke-dsl-hit
+info: {name: dsl hit, severity: medium}
+http:
+  - path: ["/a"]
+    matchers-condition: and
+    matchers:
+      - type: dsl
+        dsl:
+          - "contains(body, 'hello-AAA') && status_code == 200"
+          - "content_length > 3 && status_code < 500 && len(body) >= 9"
+          - "starts_with(tolower(body), 'hello') && ends_with(body, 'AAA')"
+          - "icontains(body, 'HELLO-aaa') && !(status_code == 404)"
+          - "regex('^hello-[A-Z]{3}$', body)"
+          - "toupper(body) == 'HELLO-AAA'"
+          - "(contains(body, 'ZZZ') || contains(body, 'AAA')) && host != ''"
+    extractors:
+      - type: dsl
+        dsl: ["status_code", "tolower(body)", "len(body)", "contains(body, 'AAA')"]
+""")
+    _m_dsl_hit = engine.load_poc_file(_p_dsl_hit)
+    assert _m_dsl_hit["_status"] == "ok", _m_dsl_hit
+    _dsl_m0 = _m_dsl_hit["http"][0]["matchers"][0]
+    _dsl_e0 = _m_dsl_hit["http"][0]["extractors"][0]
+    assert len(_dsl_m0.get("_dsl_ast") or []) == 7, "dsl 匹配器的 AST 应在装载期就挂上"
+    assert len(_dsl_e0.get("_dsl_ast") or []) == 4, "dsl 提取器的 AST 应在装载期就挂上"
+    _hits17.clear()
+    _h_dsl = engine.run_poc_on_target(_m_dsl_hit, _base_url17, {})
+    assert _hits17 == ["/a"], f"dsl 命中路径没发出请求：{_hits17}"
+    assert len(_h_dsl) == 1 and _h_dsl[0]["poc_id"] == "smoke-dsl-hit", _h_dsl
+    _dsl_ev = _h_dsl[0]["evidence"].splitlines()
+    # 提取器只收**非布尔**结果：布尔值本身就是"命中/不命中"，当证据没有人工确认价值
+    assert _dsl_ev == ["200", "9", "hello-aaa"], \
+        f"dsl 提取器应落 status_code/len/tolower 三值、且不含布尔结果：{_dsl_ev}"
+    # 不成立就是**不报**（钉住"dsl 分支恒 True"这类假绿）
+    _m_dsl_miss = engine.load_poc_file(_wpoc("dsl-miss.yaml", """
+id: smoke-dsl-miss
+info: {name: dsl miss, severity: medium}
+http:
+  - path: ["/a"]
+    matchers:
+      - type: dsl
+        dsl: ["contains(body, 'NOT-THERE')"]
+"""))
+    assert _m_dsl_miss["_status"] == "ok", _m_dsl_miss
+    assert engine.run_poc_on_target(_m_dsl_miss, _base_url17, {}) == [], "dsl 不成立竟报命中"
+    # 合并口径：matcher 内 `condition`（默认 or）与顶层 `negative`；变量与手工 POC dict 的兜底
+    _dsl_resp = {"status": 200, "length": 9, "text": "hello-AAA",
+                 "headers": {"Server": "lab"}, "url": _base_url17 + "/a"}
+    _dsl_host = _dsl_resp["url"].split("/")[2]
+
+    def _dsl_ok(matcher, expect, why):
+        got = engine._match_one(matcher, _dsl_resp)
+        assert got is expect, f"{why}：期望 {expect}，实际 {got}"
+
+    _dsl_ok({"type": "dsl", "dsl": ["status_code == 200"]}, True, "基本比较")
+    _dsl_ok({"type": "dsl", "dsl": "status_code == 200"}, True, "dsl 写成一整个字符串")
+    _dsl_ok({"type": "dsl", "dsl": ["status_code == 200", "contains(body, 'zzz')"]},
+            True, "多条默认 or")
+    _dsl_ok({"type": "dsl", "condition": "and",
+             "dsl": ["status_code == 200", "contains(body, 'zzz')"]}, False, "condition: and")
+    _dsl_ok({"type": "dsl", "negative": True, "dsl": ["status_code == 200"]},
+            False, "negative 取反")
+    _dsl_ok({"type": "dsl", "dsl": ["header == all_headers", f"host == '{_dsl_host}'",
+                                    "len(all_headers) > 0"]}, True,
+            "header/all_headers/host 变量")
+    # 手工构造的 POC dict 没有装载期的 `_dsl_ast` → 现解析兜底；越界/为空时按不命中（不炸）
+    _dsl_ok({"type": "dsl", "dsl": ["body.contains('x')"]}, False, "越界表达式兜底不炸")
+    _dsl_ok({"type": "dsl", "dsl": []}, False, "空 dsl 兜底不炸")
+    # 越界写法（8 类）必须在**装载期**被拒，且原因能指认出是哪种写法
+    def _dsl_reject(tag, expr, must):
+        m = engine.load_poc_file(_wpoc(f"dsl-bad-{tag}.yaml", """
+id: smoke-dsl-bad-%s
+info: {name: bad, severity: low}
+http:
+  - path: ["/a"]
+    matchers:
+      - type: dsl
+        dsl: ["%s"]
+""" % (tag, expr)))
+        assert m["_status"] == "unsupported", f"{tag} 应判 unsupported：{m}"
+        assert "dsl 表达式超出支持子集" in m["_error"], f"{tag} 的原因没写清：{m['_error']}"
+        assert must in m["_error"], f"{tag} 的原因应提到 {must!r}：{m['_error']}"
+
+    _dsl_reject("dot", "body.contains('x')", "含不支持的字符 `.`")
+    _dsl_reject("fn", "md5(body) == 'x'", "不支持的函数 `md5()`")
+    _dsl_reject("var", "status == 200", "不支持的变量 `status`")
+    _dsl_reject("arith", "status_code + 1 == 200", "含不支持的字符 `+`")
+    _dsl_reject("chain", "status_code == 200 == 200", "链式比较")
+    _dsl_reject("strcmp", "body > 'a'", "只允许数值比较")
+    _dsl_reject("badregex", "regex('([', body)", "模式不合法")
+    _m_dsl_empty = engine.load_poc_file(_wpoc("dsl-empty.yaml", """
+id: smoke-dsl-empty
+info: {name: e, severity: low}
+http:
+  - path: ["/a"]
+    matchers:
+      - type: dsl
+        dsl: []
+"""))
+    assert _m_dsl_empty["_status"] == "unsupported" and "为空" in _m_dsl_empty["_error"], \
+        _m_dsl_empty
+    # 提取器里的越界同样在装载期拦（不能只查 matchers）
+    _m_dsl_exbad = engine.load_poc_file(_wpoc("dsl-bad-extractor.yaml", """
+id: smoke-dsl-bad-extractor
+info: {name: e, severity: low}
+http:
+  - path: ["/a"]
+    matchers: [{type: status, status: [200]}]
+    extractors:
+      - type: dsl
+        dsl: ["body.contains('x')"]
+"""))
+    assert _m_dsl_exbad["_status"] == "unsupported" and "extractors" in _m_dsl_exbad["_error"], \
+        _m_dsl_exbad
+    # 块级 / 顶层 dsl 仍按不支持处理（与 matchers 级的放开严格区分开）
+    _m_dsl_block = engine.load_poc_file(_wpoc("dsl-block.yaml", """
+id: smoke-dsl-block
+info: {name: b, severity: low}
+http:
+  - path: ["/a"]
+    dsl: [status_code == 200]
+    matchers: [{type: dsl, dsl: ["status_code == 200"]}]
+"""))
+    assert _m_dsl_block["_status"] == "unsupported" and "dsl" in _m_dsl_block["_error"], \
+        _m_dsl_block
+    _m_dsl_top = engine.load_poc_file(_wpoc("dsl-top.yaml", """
+id: smoke-dsl-top
+info: {name: t, severity: low}
+dsl: [status_code == 200]
+"""))
+    assert _m_dsl_top["_status"] == "unsupported" and "顶层 dsl 不支持" in _m_dsl_top["_error"], \
+        _m_dsl_top
+
+    print("[6x] 续37 nuclei dsl 安全子集 ok: 装载期解析成 AST（匹配器 7 条 / 提取器 4 条，"
+          "运行期只求值）→ 端到端命中本地靶场且 evidence 只收非布尔结果（200/9/hello-aaa）/ "
+          "不成立不报 / condition or·and 与 negative 取反 / header·all_headers·host 变量 / "
+          "8 类越界（方法调用·未知函数·未知变量·算术·链式比较·字符串大小比较·坏 regex·空 dsl）"
+          "装载期即标 unsupported 且原因指认写法 / 提取器级同样拦 / 块级与顶层 dsl 仍拒绝")
 
 print("SMOKE PASS")
 
