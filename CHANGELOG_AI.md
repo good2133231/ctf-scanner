@@ -3,6 +3,78 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续42：extractor 回填 template（A1）+ 证书校验按出口分流（A3）+ `.gitignore` 错话（A4）
+> 实施者：**Trae · DeepSeek-V4.1-Flash**
+
+**背景（用户点单）**：上一轮我把剩余待办分成 A/B/C/D 四组，用户选「先做 A1；A1 若放后台跑，
+等待时把 A3/A4 解决」。A1＝`extractor` 结果**回填** `template`（跨请求取值），A3＝第三方 API
+的证书校验，A4＝`.gitignore` 里关于推送凭据的错话。
+
+### A1 `internal: true` 命名 extractor 的值回填模板上下文
+
+**改了什么**（`scanner/pocs/engine.py`）
+- 原 `_extract(resp, extractors)` 拆成三件：`_extract_items()`（**只取值**，返回
+  `[(name, value, internal)]`）、`_extract()`（evidence，挡掉 internal）、`_extract_vars()`
+  （回填值）。拆分的理由：evidence 与变量回填**共用一份取值结果**，避免两套匹配逻辑各判一遍
+  （改一处忘另一处是这类引擎的老毛病）。
+- `_run_block()` 每拿到响应就 `variables.update(_extract_vars(resp, block["extractors"]))`；
+  `ctx_vars` 快照**从 payload 层下移到请求层**（一个块里多条 `path:` 按请求逐个取值）。
+- `_vuln_of()`：提取器**全部**为 `internal` 时不再退回响应正文作 evidence（正文里往往正含着
+  那个 token —— 退回正文等于把刚按约定藏起来的值从后门放出去），改显示一行说明。
+
+**语义不自己发明，逐条对着 nuclei 源码核**（后台 agent 一手下载 `main` 分支逐文件检索，
+非二手转述）
+- `pkg/operators/operators.go::Execute`：**先跑 extractors、后跑 matchers**，且模板有 matchers
+  时若全不命中，**非 internal** 的提取结果被丢弃，而**有 DynamicValues**（internal 抽到了值）
+  时仍 `return result, true` → 回填**不受命中与否影响**。
+- `pkg/operators/extractors/extractors.go` 的 `Internal` 字段注释自证：*"when set to true will
+  allow using the value extracted in the next request"*；不设 internal 的具名提取器只进
+  `Result.OutputExtracts`（输出），**不进**模板级 templateCtx → **只有 `internal: true` 才回填**。
+  （我第一版写的是"具名即可回填"，属**放宽**：会出现"nuclei 取不到、我们却取了"的偏差，
+  最坏是把模板 `variables:` 的初值顶掉 —— 已按源码收紧。）
+- `pkg/tmplexec/multiproto/multi.go`：多值命名 `{{name}}`=第 1 个、`{{name1}}`=第 2 个
+  （**不是** `name2`）；跨块导出只在模板**请求数 > 1** 时发生。本引擎加一条上限
+  `_EXTRACT_VARS_MAX`=10（防宽 regex 一页抽几千个把上下文撑爆）。
+
+**为什么回填要放在匹配之前**：本引擎对"没有 matchers 的块"判**假**（nuclei 隐式真，是既有的
+已登记差异）。若把回填挂在命中之后，最常见的"第一个请求只负责取 csrf_token"模板会**静默失效**
+—— 后续请求带着字面量 `{{csrf_token}}` 发出去。宁可多写变量：取错值只会让后面的匹配不中
+（看得见），取不到则整条模板失效（看不见）。
+
+### A3 证书校验按出口分流（修"为扫靶场把凭据挂上 MITM 信道"）
+
+**根因**：`limits.verify_tls`（默认 False，为 CTF 自签名靶场降级）原先在 `_do_http` 里对
+**所有**出口生效 —— FOFA / Shodan / Quake 带 API key、`api.github.com` 带 PAT，全都
+`verify=False`（上一轮实测到 `InsecureRequestWarning: ... 'api.github.com'` 即证据）。
+
+**改法**：新增 `limits.verify_tls_external`（**默认 True**），判定**收口在 `http_request` 入口**
+按出口分流（`auth=True` → 目标侧那把；`auth=False` → 第三方那把，两把刻意不共用）。
+之所以改一处而不是散改 11 个第三方调用点：已枚举全部 30 处 `http_request` 调用点，确认
+"目标侧调用点无一例外带 `auth=True`、第三方调用点无一例外不带"这条不变量成立。
+企业 MITM 代理下可显式关掉（用户显式选择，不做静默回退）。
+三方一致（`config.DEFAULTS` / `config/settings.yaml` / GUI 复选框 + `app.py` POST 显式读取——
+该页 POST 会 replace 整个 limits dict，新键不显式读就会在保存时丢失）。
+
+### A4 `.gitignore` 的错话
+
+原注释写"推送时由 AI 读取走一次性认证头"，与实测不符（推送走 Windows 凭据管理器里的 GCM
+凭据，**本仓库没有任何代码读该文件**），会继续误导"换个 token 放进去就能推"。改为如实说明，
+保留忽略规则本身（万一有 token 落进项目根也不被提交）。
+
+### 验证
+- `py -3 tests/smoke.py` → `SMOKE PASS`；新增 `[7b]`（A1：函数级钉"只认 internal + 多值命名
+  name/name1 + 上限"；端到端钉"无 matchers 的取令牌块也回填""第二个值是 name1 且真发出去"
+  "非 internal 不回填但值照进 evidence""同块后一条 path 用上前一条的值""internal 的值不进
+  evidence 也不从退回正文的后门漏出"）与 `[7c]`（A3：五个探测点钉住两把开关互不连带，
+  并用 `ast` 遍历 8 个第三方模块断言**不传** `auth=`、9 个目标侧模块断言**必传** ——
+  分流能成立的前提是调用点自己声明对了出口，这本身就是安全属性）。
+- **变异证伪 6/6 被击杀**（AGENTS.md §6.1，全部已还原）：M1 回填不认 internal（→`[7b]` 函数级断言）；
+  M2 回填挂到命中之后（→`[7b]①`）；M3 上下文快照退回 payload 层（→`[7b]④`）；
+  M4 多值命名错位成 `name2`（→`[7b]` 函数级断言）；M5 internal 退回正文（→`[7b]②` evidence 断言）；
+  M6 证书校验退回单开关（→`[7c]` 第一个断言）。前两条最初与其它变异并行跑，因**并行副本都去占
+  固定端口 8765** 而死在早先无关的 `[5p-3c]` 断言上（不是被自己的断言击杀）→ 串行重跑确认。
+- CRLF 两口径 `--numstat` 逐文件一致。
+
 ## 2026-09-25 —— 续41：`SMOKE PASS` 搬进 `main()`（修第四次「假绿」）+ 提交前行尾规范化
 > 实施者：**WorkBuddy · Hy4-preview**（语义改动，留在工作区未提交）／
 > **Trae · DeepSeek-V4.1-Flash**（行尾还原、证伪、文档、提交）

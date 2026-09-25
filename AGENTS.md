@@ -242,7 +242,7 @@ ctf-scanner/
 
 ## 5. 关键不变量（改代码时务必保持）
 
-1. **所有 HTTP 必须走 `utils.http_request`** —— 统一 UA、超时、`limits.verify_tls`（verify=None 时读配置）。
+1. **所有 HTTP 必须走 `utils.http_request`** —— 统一 UA、超时、证书校验开关（`verify=None` 时**按出口**读配置：目标侧 `limits.verify_tls`／第三方 `limits.verify_tls_external`，续42，见 §7 凭据红线）。
    不要直接 import requests/urllib。这也是**唯一伪装出口**：`utils._headers` → `evasion.browser_headers`
    （UA 随机化、浏览器化请求头、可选 XFF 伪装），改 HTTP 行为只在这一处生效。
    **登录态（任务级 Cookie/Token）同理只在这一处生效**：`http_request(..., auth=True)` 才附带
@@ -578,8 +578,10 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   `http(N)`（1-based）/ `http("id")` / `http()`（该协议全部块）/ `http(1, 2)`（按传入顺序）。
   两条路**并存且顺序固定：先布尔、后脚本**（装载期与运行期兜底同一顺序 —— 布尔源串本身也能被
   脚本解析器解析成一条表达式语句，顺序错了就会语义漂移）；脚本路的 `http(...)` **不缓存**。
-  与 nuclei 的已知差异：无 matchers 的块我们判假（nuclei 隐式真）、extractor 结果不回填 `template`、
-  不做类型转换/方法调用/闭包/异常。
+  与 nuclei 的已知差异：无 matchers 的块我们判假（nuclei 隐式真）、不做类型转换/方法调用/闭包/异常；
+  **extractor 回填模板上下文已于续42 落地** —— 只认 `internal: true` 的命名提取器（nuclei 的
+  `Internal` 注释就写着"设了才能在下一个请求里用"，不设的只进输出），多值命名照抄
+  `name`/`name1`/`name2`（上限 `_EXTRACT_VARS_MAX`=10），回填发生在**匹配之前**（不受命中与否影响）。
   仍不支持的是**块级/顶层** `dsl`、oob 反连、
   flow 里**超出脚本子集**的真正 JS 语义（方法调用/闭包/异常/除 `+` 外的算术/`while`/`new`/
   带参数引用）、workflow 的 `matchers:`（按匹配器名分支）与 `args:`（**nuclei 的

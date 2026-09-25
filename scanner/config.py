@@ -77,6 +77,10 @@ DEFAULTS = {
         "max_workers": 20,        # HTTP 探测 / 目录扫描 / DNS 爆破线程数
         "http_timeout": 10,       # 单请求超时（秒）
         "verify_tls": False,
+        # 第三方接口（FOFA/Shodan/Quake/crt.sh/KEV/iprecon/api.github.com）的证书校验。
+        # **与 verify_tls 刻意分开**：那一项是给**目标侧**自签名靶场降级用的；第三方是公网
+        # CA 签名、且多带 API key / PAT，跟着一起降级＝把凭据挂上可被中间人读的信道（续42）。
+        "verify_tls_external": True,
         "dirscan_max_urls": 20,   # 每任务最多参与目录扫描的站点数
         "vulnscan_max_urls": 100, # 每任务最多参与漏洞扫描的站点数
         "brute_max_domains": 50,  # 每任务最多参与 DNS 爆破的域名数

@@ -464,7 +464,8 @@ logs/task_1_mytask/
 |---|---|---|
 | limits.max_workers | 20 | HTTP/DNS 并发线程数 |
 | limits.http_timeout | 10 | 单请求超时 |
-| limits.verify_tls | false | 是否校验 HTTPS 证书；默认关闭以适配自签名靶场/CTF |
+| limits.verify_tls | false | 是否校验 HTTPS 证书；默认关闭以适配自签名靶场/CTF。**只对目标侧出口生效**（`auth=True` 的调用点） |
+| limits.verify_tls_external | **true** | **第三方接口**（FOFA/Shodan/Quake/crt.sh/KEV/iprecon/api.github.com）的证书校验，独立于上一行。理由：第三方都是公网 CA 签名，且带着 API key / PAT —— 让它们跟着 `verify_tls` 一起降级，等于为扫自签名靶场把凭据交给中间人（续42）。只有企业 MITM 代理下 certifi 认不出根证书时才关 |
 | limits.dirscan_max_urls | 20 | 参与目录扫描的站点上限 |
 | limits.vulnscan_max_urls | 100 | 参与漏洞扫描的站点上限 |
 | dirscan.enabled | **true** | **阶段级**开关：目录/路径发现整阶段开关（关掉连请求都不发）。**默认开，但只跑浅扫**（见下一行 `dirscan.mode`） |

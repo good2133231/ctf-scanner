@@ -258,14 +258,33 @@ def http_request(url, method="GET", headers=None, data=None, timeout=10,
     否则等于把目标的会话凭据送给第三方。
 
     requests 缺失时自动退回 urllib（urllib 不校验重定向语义差异，见文档）。
-    verify 为 None 时取配置 limits.verify_tls（默认 False：CTF/靶场自签名证书常见，
-    默认不校验；需要严格校验时在 settings.yaml 打开该开关）。
+
+    verify 为 None 时**按出口分流**取配置（两把开关刻意不共用）：
+    - `auth=True`（发往**目标侧**）→ `limits.verify_tls`（默认 False：CTF/靶场自签名常见）；
+    - `auth=False`（发往**第三方接口**）→ `limits.verify_tls_external`（**默认 True**）。
+
+    分流的原因（续42 修掉的缺陷）：第三方接口都是公网 CA 签名的，而且 FOFA / Shodan /
+    Quake 要带 API key、api.github.com 要带 PAT —— 原先这条降级开关对**所有**出口生效，
+    等于"为了扫自签名靶场，顺手把凭据挂上一条可被中间人读的信道"。
+    企业 MITM 代理环境下若 certifi 认不出其根证书，可在 settings.yaml 把
+    `verify_tls_external` 显式关掉（属用户显式选择，不做静默回退）。
 
     限流（F2）：`settings["_throttle"]` 存在时本次请求占用一个 `"http"` 名额
     （见 `scanner/throttle.py`）。预算耗尽 / 被取消时返回 None —— 语义上按"停止"处理，
     不是网络故障（任务级错误行与状态才是权威）。
     """
     th = (settings or {}).get("_throttle")
+    if verify is None:
+        # 出口分流放在**入口**里做（而不是 `_do_http` 里）：解析结果要能被调用方/测试
+        # 直接观测到，且限流分支与非限流分支共用同一份判定，不会出现"两处各判一次"。
+        _lim = (settings or {}).get("limits", {}) or {}
+        if auth:
+            # 目标侧：把**目标自己**的证书当不可信源处理（CTF 靶场自签名/过期是常态）
+            verify = bool(_lim.get("verify_tls", False))
+        else:
+            # 第三方接口：公网 CA 签名，且多带 API key / PAT —— 默认校验
+            # （与目标侧那项分开，绝不互相连带，见 docstring）
+            verify = bool(_lim.get("verify_tls_external", True))
     if th is None:
         return _do_http(url, method, headers, data, timeout, verify, allow_redirects,
                         settings, want_bytes, auth)
@@ -281,8 +300,8 @@ def http_request(url, method="GET", headers=None, data=None, timeout=10,
 
 def _do_http(url, method, headers, data, timeout, verify, allow_redirects,
              settings, want_bytes, auth):
-    if verify is None:
-        verify = bool((settings or {}).get("limits", {}).get("verify_tls", False))
+    # `verify` 为 None 的分流在 `http_request` 入口处就解完了（见那里的注释）—— 这里拿到的
+    # 一定是布尔值，不再自己读配置，避免两处判定漂移。
     hdrs = _headers(settings, headers, auth=auth)
     try:
         import requests

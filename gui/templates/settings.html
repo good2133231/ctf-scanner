@@ -398,6 +398,9 @@
     <label>HTTP 超时（秒） <input name="http_timeout" value="{{ s.limits.http_timeout }}"></label>
     <label class="chk"><input type="checkbox" name="verify_tls" value="1"
       {{ 'checked' if s.limits.verify_tls }}> 校验 HTTPS 证书（CTF 自签名靶场请保持关闭）</label>
+    <label class="chk"><input type="checkbox" name="verify_tls_external" value="1"
+      {{ 'checked' if s.limits.verify_tls_external }}> 校验第三方接口证书（FOFA/Shodan/Quake/crt.sh/GitHub，
+      带 API key 或令牌，<b>建议保持开启</b>；仅企业 MITM 代理下才需要关）</label>
     <label>目录扫描站点上限 <input name="dirscan_max_urls" value="{{ s.limits.dirscan_max_urls }}"></label>
     <label>漏洞扫描站点上限 <input name="vulnscan_max_urls" value="{{ s.limits.vulnscan_max_urls }}"></label>
     <details class="subpanel">

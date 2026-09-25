@@ -27,5 +27,10 @@ tools/dirmap/
 # 需要留档的内容请**抄进 docs/** 再忽略（续 9 的三条"刻意不做"已抄进 docs/roadmap.md）。
 .trae/
 
-# 本地 GitHub 令牌（用户放置于项目根，含 PAT，**绝不入库**；推送时由 AI 读取走一次性认证头）
+# 本地 GitHub 令牌暂存（用户放置于项目根，含 PAT，**绝不入库**）。
+# **注意：它不参与推送** —— 推送用的是 Git Credential Manager 存在 Windows 凭据管理器里的
+# OAuth token（凭据 target = `git:https://github.com`），本仓库**没有任何代码读这个文件**
+# （2026-09-25 实测校正：此前这里写的"推送时由 AI 读取走一次性认证头"与事实不符，会误导人
+# 以为"换个 token 放进去就能推"）。扫描器查询 GitHub 用的**只读** token 在
+# config/keys.yaml 的 github.token。保留这条忽略规则，只为万一有 token 落进项目根也不被提交。
 github.txt

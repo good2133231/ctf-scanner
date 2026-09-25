@@ -1246,7 +1246,8 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        YAML 示例 + 与 nuclei 的差异）、`docs/roadmap.md`、`docs/usage.md`、`AGENTS.md`（`[5x]` 口径、
        新增 `[6z]`、POC 引擎能力段）、`CHANGELOG_AI.md`（续39）、`TODO.md`、`todo.txt`。
 [未做] 7、仍缺：extractor 结果**回填** `template`（nuclei 靠它把前一个请求的提取值喂给后一个 ——
-       同时是 workflow"命名 extractor + 共享执行上下文"的缺口）；空 matchers 块我们判假、nuclei
+       同时是 workflow"命名 extractor + 共享执行上下文"的缺口）**[已于续42 补齐单模板内的跨请求
+       取值；跨子模板仍未做]**；空 matchers 块我们判假、nuclei
        隐式真的差异（已写进 poc-guide）；oob 反连（需用户提供回调域名）；flow 里**真正的 JS 语义**
        （方法调用 / 闭包 / 异常 / 除 `+` 外的算术 / `while` / `new`）。**块级 / 顶层** `dsl` 仍按不支持处理。
 === 续41（2026-09-25）：SMOKE PASS 搬进 main()（修第四次假绿）+ 提交前行尾规范化 ===
@@ -1276,3 +1277,42 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        26 个待推提交就是靠它推上去的。github.txt **没有任何代码读取**，只是"给 AI 用的一次性凭据"约定。
        另：config/keys.yaml 的 github.token **同样已 401**（另一个 token）→ github 阶段按"HTTP 401
        凭据无效"写明原因跳过（容错正常、不崩），需用户换新 token（**只读**即可）。
+=== 续42（2026-09-25）：extractor 回填 template（A1）+ 证书校验按出口分流（A3）+ .gitignore 错话（A4） ===
+       实施者：Trae · DeepSeek-V4.1-Flash（用户点单：先做 A1，A1 若放后台跑、等待时做 A3/A4）
+[完成] 1、A1 `internal: true` 命名 extractor 的值**回填模板上下文**（跨请求 `{{name}}` 取值，
+       补齐续39 [未做]7 的一半 —— 单模板内的跨请求取值；跨子模板仍未做）。改法：`_extract()` 拆成
+       `_extract_items()`（只取值，evidence 与回填共用一份结果，避免两套逻辑分叉）/ `_extract()`
+       （挡 internal）/ `_extract_vars()`（回填）；`_run_block()` 每拿到响应就 update，且 `ctx_vars`
+       快照从 payload 层下移到请求层（同块多条 path 按请求逐个取值）。
+[完成] 2、语义**一手核对 nuclei 源码**（后台 agent 下载 main 分支逐文件检索）：① `operators.go::Execute`
+       先跑 extractors 后跑 matchers，且"有 DynamicValues 就 return true"→ 回填**不受命中与否影响**；
+       ② `extractors.go` 的 `Internal` 注释："设 true 才能在下一个请求里用"→ **只有 internal 才回填**
+       （我第一版"具名即可回填"属放宽，已收紧：否则会出现 nuclei 取不到、我们却取了，最坏顶掉
+       模板 `variables:` 初值）；③ `multi.go` 多值命名 `name`/`name1`/`name2`（不是 name2 对应第 2 个），
+       本引擎加上限 `_EXTRACT_VARS_MAX`=10。
+[完成] 3、回填**刻意放在匹配之前**：本引擎对"无 matchers 的块"判假（已登记差异），挂到命中之后会让
+       最常见的"第一个请求只取 csrf_token"模板静默失效（后续请求带字面量发出去）。
+[完成] 4、顺手堵一处泄漏：`_vuln_of()` 在提取器**全部** internal 时不再退回响应正文作 evidence
+       （正文里往往正含着那个 token —— 刚按约定藏起来又从后门放出去），改显示一行说明。
+[完成] 5、A3 证书校验**按出口分流**：`limits.verify_tls` 从此只管目标侧；新增
+       `limits.verify_tls_external`（默认 True）管第三方。根因：原先 `_do_http` 对所有出口都读那把
+       开关，等于"为扫自签名靶场，把 FOFA/Shodan/Quake 的 API key 与 api.github.com 的 PAT 挂到
+       可被中间人读的信道上"（上轮实测到 InsecureRequestWarning 即证据）。判定收口在 `http_request`
+       入口（枚举全部 30 处调用点后确认"目标侧恒带 auth=True、第三方恒不带"这条不变量成立，故改一处
+       而非散改 11 个调用点）；三方一致（DEFAULTS/settings.yaml/GUI 复选框 + app.py POST 显式读取
+       —— 该页 POST 会 replace 整个 limits dict）。
+[完成] 6、A4 `.gitignore` 里"推送时由 AI 读取走一次性认证头"是**错话**（实测推送走 Windows 凭据
+       管理器里的 GCM 凭据，本仓库无任何代码读该文件），会误导"换个 token 放进去就能推"；改成如实
+       说明，忽略规则本身保留。
+[完成] 7、回归 `py -3 tests/smoke.py` → SMOKE PASS：新增 `[7b]`（A1 五组断言 + 两条函数级合同）、
+       `[7c]`（A3：五个探测点 + ast 遍历 8 个第三方模块断言不传 auth=、9 个目标侧模块断言必传）。
+[完成] 8、变异证伪 **6/6 被击杀**并全部还原：M1 回填不认 internal / M2 回填挂到命中之后 /
+       M3 上下文快照退回 payload 层 / M4 多值命名错位 / M5 internal 退回正文 / M6 证书校验退回单开关。
+       注意：用 6 份仓库副本**并行**跑时，副本都会去占固定端口 8765，M1/M4 死在早先无关的 `[5p-3c]`
+       断言上（不算被自己的断言击杀）→ 串行重跑后确认死在 `[7b]` 函数级断言。
+[完成] 9、文档同步：AGENTS.md（§5 POC 引擎能力段 + 已知差异）、docs/poc-guide.md（新增「跨请求取值」
+       小节 + YAML 示例 + 差异清单改写 + workflow args 说明）、docs/roadmap.md、TODO.md（索引补续42、
+       小节标题改「续12 ~ 续42」共 31 轮、POC 能力行与两条历史缺口标注"已于续42 补齐"）、
+       CHANGELOG_AI.md、todo.txt（本条）。
+[未做] 10、跨子模板（workflow）的变量传递仍未做（子模板各自独立加载、上下文不串）；flow 里真正的
+       JS 语义、oob 反连、块级/顶层 dsl 依旧是登记在案的缺口。

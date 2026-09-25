@@ -1534,6 +1534,7 @@ def create_app():
                     "limits": {"max_workers": int(f.get("max_workers", 20) or 20),
                                "http_timeout": int(f.get("http_timeout", 10) or 10),
                                "verify_tls": f.get("verify_tls") == "1",
+                               "verify_tls_external": f.get("verify_tls_external") == "1",
                                "dirscan_max_urls": int(f.get("dirscan_max_urls", 20) or 20),
                                "vulnscan_max_urls": int(f.get("vulnscan_max_urls", 100) or 100),
                                "wildcard_filter": f.get("wildcard_filter") == "1",

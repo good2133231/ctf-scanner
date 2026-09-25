@@ -6,6 +6,11 @@ limits:
   max_workers: 20
   http_timeout: 10
   verify_tls: false
+  # 第三方接口（FOFA/Shodan/Quake/crt.sh/KEV/iprecon/api.github.com）的证书校验，**默认开**。
+  # 与上面那项分开：verify_tls 只为**目标侧**自签名靶场降级；第三方是公网 CA 签名、还带
+  # API key / PAT，跟着降级等于把凭据交给中间人。企业 MITM 代理下 certifi 认不出根证书时
+  # 才需要关掉它（属显式降级）。
+  verify_tls_external: true
   dirscan_max_urls: 20
   vulnscan_max_urls: 100
   brute_max_domains: 50

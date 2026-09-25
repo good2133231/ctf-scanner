@@ -96,7 +96,8 @@
         两种顶层键；支持 `payloads`（list / dict + `attack: clusterbomb|pitchfork|batteringram`）、
         `variables` + `builtin_vars`（BaseURL/RootURL/Hostname/Host/Port/Scheme/Path）、
         `path` 为列表、`redirects`、匹配器 `status/word/regex/size` + `condition/negative/case-insensitive`
-        + `part: body|header|all`、`extractors`（regex/kval，结果写入 evidence）。
+        + `part: body|header|all`、`extractors`（regex/kval，结果写入 evidence；`internal: true`
+        的命名提取器另把值回填模板上下文，供后续请求 `{{name}}` 跨请求取值 —— 续42）。
         `config/nuclei-templates/` 已加入加载目录，**官方模板可直接投放使用，不依赖 nuclei 二进制**。
         `raw` / `flow` / `workflows` **已于第十七轮（续17）落地子集支持**（raw 解析 + 破坏性方法拒绝、
         `flow` 布尔子集、`workflows` 子模板编排），`dsl` 与 oob、flow 的 JS/循环、workflow 的
@@ -662,9 +663,9 @@
       `scanner/ctlog.py`（`ctlog` 段）；「证书解析页签」→ 续15 的 `cert` 阶段；报告 HTML·PDF →
       续16 的三格式共用 `collect()` 快照；登录态扫描 + nuclei `raw`/`flow`/`workflows` → 续17。
 
-## 续12 ~ 续41（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
+## 续12 ~ 续42（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
 
-> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 30 轮变更只记在 `CHANGELOG_AI.md`。
+> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 31 轮变更只记在 `CHANGELOG_AI.md`。
 > 这里补一份**一句话 + 落地位置**的索引，避免"翻待办看不出做过什么"。**不重复 CHANGELOG 全文**。
 
 - [x] **续12** 误报复核三态 + POC 置信度分层 + Linux 实机验收（Ubuntu 22.04 跑通 smoke）
@@ -712,7 +713,8 @@
       `subtemplates:` 父命中才下钻、**父结果不报**，单步展开上限 40；语义逐条对着 nuclei 源码
       `workflow_execute.go` / `workflows.go` / `tag_filter.go` 写，不自创）。查证 **nuclei workflow
       schema 里没有 `args` 字段**，见到即跳过并在 `_note` 写明原因；workflow 真正的"传变量"
-      （命名 extractor + 共享执行上下文 `ctx.Input.Set`）与 `matchers:` 分支登记为缺口；
+      （命名 extractor + 共享执行上下文 `ctx.Input.Set`）与 `matchers:` 分支登记为缺口
+      （**单个模板内**的跨请求取值已于续42 补齐；**跨子模板**的仍未做，子模板各自独立加载）；
       回归 `tests/smoke.py [6y]`；
 - [x] **续39** nuclei `flow:` 的**脚本子集**（循环 + `set()` + 请求，`scanner/pocs/engine.py`
       的 `_FlowJsParser` / `_run_flow_script`）：装载期解析成 AST 并静态校验（未声明变量、引用越界、
@@ -720,7 +722,8 @@
       iterate(...)` / C 式 `for` / `if` / `template["k"]` / `set()` / `log()` / `http(N)`（1-based）
       / `http("id")` / `http()`（全部块）/ 多参按序。两条路**先布尔后脚本**且脚本路 `http(...)`
       不缓存；语义逐条对着 nuclei 源码 `pkg/tmplexec/flow/*` 写（flow **不在** `protocols/common/flow`）。
-      与 nuclei 的差异（空 matchers 判假、extractor 不回填 `template`）写进 `docs/poc-guide.md`；
+      与 nuclei 的差异（空 matchers 判假、extractor 不回填 `template` —— 后者已于**续42 补齐**）
+      写进 `docs/poc-guide.md`；
       回归 `tests/smoke.py [6z]`；
 - [x] **续40** 拓展域名「自动化」六条（新增 `scanner/extdom.py`）：拓展域名送去检测时带上 subdomain 阶段 /
       自动存在性判定（DNS，幂等、失败落 `ip_note`）/ 目标是子域时补收主域名且该子域按子域资产入库 /
@@ -735,7 +738,18 @@
       回归 `py -3 tests/smoke.py`。语义改动出自 **WorkBuddy · Hy4-preview**，
       行尾还原·证伪·文档·提交出自 **Trae · DeepSeek-V4.1-Flash**；
 - [x] **另（2026-09-24）** 补 `LICENSE`：本仓库自有代码 MIT；`config/dicts/dirs_*.txt`
-      派生自 dirmap（GPL-3.0），**不被 MIT 覆盖**，边界见 `NOTICE.md §5`。
+      派生自 dirmap（GPL-3.0），**不被 MIT 覆盖**，边界见 `NOTICE.md §5`；
+- [x] **续42** 三件（A1/A3/A4，实施者 **Trae · DeepSeek-V4.1-Flash**）：
+      **A1** `internal: true` 命名 extractor 的值**回填模板上下文**（跨请求 `{{name}}` 取值，
+      语义一手核对 nuclei 源码：只认 `internal`、多值 `name`/`name1`…（上限 10）、extractors
+      排在 matchers 之前且回填不受命中与否影响；同一份取值结果同时供 evidence 与回填，
+      避免两套匹配逻辑分叉；`internal` 全标的响应不再退回正文，堵住"从后门漏 token"）；
+      **A3** 证书校验**按出口分流**（`limits.verify_tls` 只管目标侧、新增
+      `limits.verify_tls_external` 默认 **true** 管第三方 —— 原先"为扫自签名靶场"的降级
+      连带把 FOFA/Shodan/Quake 的 API key 与 `api.github.com` 的 PAT 挂到可被中间人读的信道上；
+      分流判定收口在 `http_request` 入口，调用点无需改动）；**A4** 修正 `.gitignore` 里
+      "推送时读 github.txt"的错话（实测推送走 Windows 凭据管理器里的 GCM 凭据，无代码读该文件）；
+      回归 `tests/smoke.py [7b]`/`[7c]`，变异证伪 6/6 被击杀；
 
 ## 兼容性红线（所有新增代码都适用）
 
