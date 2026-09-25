@@ -3,6 +3,56 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-25 —— 续41：`SMOKE PASS` 搬进 `main()`（修第四次「假绿」）+ 提交前行尾规范化
+> 实施者：**WorkBuddy · Hy4-preview**（语义改动，留在工作区未提交）／
+> **Trae · DeepSeek-V4.1-Flash**（行尾还原、证伪、文档、提交）
+
+**背景**：`tests/smoke.py` 的 `print("SMOKE PASS")` 原本写在**模块顶层** —— 位置在
+`if __name__ == "__main__": main()` **之前**，也就是 `main()` 里几千条断言**一条都还没跑**，它就打印了。
+后果：**用例挂了照样打印 `SMOKE PASS`**，唯一真判据只剩退出码（而人看输出时很容易只看到那行 PASS）。
+这是本项目**第四次**假绿（前三次见 `AGENTS.md §6.1`）。
+
+**改了什么（语义部分，WorkBuddy 那部分）**
+- `tests/smoke.py`：该句搬进 `main()` **末尾**（4 空格缩进 + 3 行说明注释），"只有全部断言都过了才打印"。
+- `gui/static/style.css`：截图缩略图改 `display:block; margin:0 auto`；新增
+  `th.col-shot, td.col-shot { text-align:center }`；`.shot-cell` 补 `vertical-align:middle`
+  —— 修"图居中了、表头标题还偏左"的错位。
+- `gui/templates/sites.html`：截图表头加 `class="col-shot"`。
+- `gui/templates/subdomains.html`：IP 备注（"为什么没有解析结果"）由**另起一行**改成**行内**，不再撑高行。
+
+**接手时发现并修掉的提交级缺陷（Trae 本轮）**
+- 上面四处改动把 `tests/smoke.py` 的**行尾整文件改写了**：HEAD 是 `CRLF 5114 行 + LF 1129 行`的**混排原貌**
+  （历史遗留形态），工作区被写成**全 LF 6247 行** → `git diff --numstat` 报 `5118/5114`，而
+  `--ignore-cr-at-eol --numstat` 只有 `5/1`。直接提交会让 5114 行 diff 全是噪声，`git blame` 的归因
+  也被冲掉（与 §0.1「事后分辨谁改了什么」冲突）。
+- 修法：按"**逐行沿用 HEAD 那一行的行尾**"重排（用 `difflib` 对齐内容 → 改动的那几行取插入点前一行
+  HEAD 的行尾），**零语义变更**。还原后两口径 numstat 逐文件一致。
+
+**验证**
+- **证伪 2/2**（§6.1；两处变异均已还原）：
+  ① 把 `print` 退回模块顶层 + 在 `main()` 首行插 `assert False, "MUTATION-A"` → 输出**第 1 行就是
+     `SMOKE PASS`**、断言失败信息在其后（**假绿复现**，退出码 1）；
+  ② 恢复"搬进 `main()` 末尾"、保留**同一个**坏断言 → 输出**不含 `SMOKE PASS`**（修复确有区分度）。
+- `py -3 tests/smoke.py` → `SMOKE PASS`（退出码 0），且该行是**输出的最后一行**。
+- CRLF 自查：`git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` 逐文件一致
+  （`tests/smoke.py` 5/1）。
+
+**文档**
+- `AGENTS.md §6.1`：背景由"出过**两次**假测试"改为**四次** —— 补第 3 次（续32-fix 的 Host 端口断言，
+  那句此前只在 `[6w]` 段内联提到）与第 4 次（本轮）；并加"**推论二：绿信号本身也要能被证伪**"
+  （`SMOKE PASS` 的位置、退出码、日志里的一行，都必须由"真的全部通过"产生，否则只是装饰）。
+  改后代码注释里"前三次见 `AGENTS.md §6.1`"的说法才成立。
+- `TODO.md`：索引补 **续40**（那一轮此前没进索引）+ 续41；`todo.txt`：追加本轮块（CRLF 字节级写入）。
+
+**未做 / 如实登记**
+- 三处模板·样式改动**未在真实浏览器里复核**（纯展示类；冒烟只渲染 HTML 断言结构，不校验像素）。
+- **推送与令牌现状**（本轮顺带查明，与代码无关但影响交付链路）：`github.txt` 里那个 PAT 已**失效**
+  （`api.github.com` 返回 401；`git push` 内嵌它报 `Invalid username or token`）；仓库是 **public**；
+  真正能推的是 **Windows 凭据管理器里 GCM 存的那条** `git:https://github.com`（有写权限）—— 26 个待推
+  提交就是靠它推上去的。`github.txt` **没有任何代码读取**，只是"给 AI 用的一次性凭据"约定。
+  另：`config/keys.yaml` 的 `github.token` **同样已 401**（另一个 token）→ `github` 阶段会按
+  "HTTP 401 凭据无效"写明原因跳过（容错正常、不崩），需要用户换新 token（**只读**即可）。
+
 ## 2026-09-25 —— 续40：拓展域名「自动化」六条（自动拓展扫描 `auto_expand`）
 > 实施者：**WorkBuddy · Hy4-preview**
 

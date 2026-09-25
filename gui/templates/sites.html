@@ -65,7 +65,7 @@
         <th class="pick"><input type="checkbox" class="pick-all-page"
           data-pick-all="#tbl-all-sites" title="全选本页"></th>
         <th>#</th><th>任务</th><th>URL</th><th>状态</th><th>标题</th>
-        <th>技术栈</th><th>Server</th><th>favicon</th><th>重复</th><th>截图</th></tr></thead>
+        <th>技术栈</th><th>Server</th><th>favicon</th><th>重复</th><th class="col-shot">截图</th></tr></thead>
       <tbody>
       {% for s in sites %}
         <tr class="{{ 'muted' if s.hidden_dup else '' }}">

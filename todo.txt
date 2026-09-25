@@ -1249,3 +1249,30 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        同时是 workflow"命名 extractor + 共享执行上下文"的缺口）；空 matchers 块我们判假、nuclei
        隐式真的差异（已写进 poc-guide）；oob 反连（需用户提供回调域名）；flow 里**真正的 JS 语义**
        （方法调用 / 闭包 / 异常 / 除 `+` 外的算术 / `while` / `new`）。**块级 / 顶层** `dsl` 仍按不支持处理。
+=== 续41（2026-09-25）：SMOKE PASS 搬进 main()（修第四次假绿）+ 提交前行尾规范化 ===
+[完成] 1、语义改动（WorkBuddy · Hy4-preview 留在工作区未提交）：tests/smoke.py 的 print("SMOKE PASS")
+       原本写在**模块顶层**（位置在 `if __name__ == "__main__": main()` 之前）→ main() 里几千条断言
+       一条都没跑它就打印了，**用例挂了照样打印 SMOKE PASS**，唯一真判据只剩退出码。已搬进 main() 末尾
+       （4 空格缩进 + 3 行说明注释）。另三处纯展示改动：gui/static/style.css（缩略图 display:block +
+       新增 th.col-shot/td.col-shot 居中）、gui/templates/sites.html（截图表头加 col-shot）、
+       gui/templates/subdomains.html（IP 备注由另起一行改行内）。
+[完成] 2、接手时修掉一个提交级缺陷：上面这四处把 tests/smoke.py 的**行尾整文件改写**了 —— HEAD 是
+       CRLF 5114 行 + LF 1129 行的混排原貌，工作区被写成全 LF 6247 行（numstat 5118/5114，
+       --ignore-cr-at-eol 只有 5/1）。按"逐行沿用 HEAD 那一行的行尾"还原（difflib 对齐内容、改动那几行
+       取插入点前一行 HEAD 的行尾），零语义变更；还原后两口径 numstat 逐文件一致。
+[完成] 3、证伪 2/2（AGENTS.md §6.1，两处变异均已还原）：① print 退回模块顶层 + main() 首行插
+       assert False, "MUTATION-A" → 输出**第 1 行就是 SMOKE PASS**、断言失败在后（假绿复现，退出码 1）；
+       ② 恢复"搬进 main() 末尾"、保留**同一个**坏断言 → 输出**不含 SMOKE PASS**（修复确有区分度）。
+[完成] 4、py -3 tests/smoke.py → SMOKE PASS（退出码 0），且该行是**输出的最后一行**；
+       CRLF 两口径 numstat 逐文件一致（tests/smoke.py 5/1）。
+[完成] 5、文档同步：AGENTS.md §6.1 背景由"两次假测试"改为**四次**（补第 3 次＝续32-fix 的 Host 端口
+       断言，那句此前只在 [6w] 段内联提到；第 4 次＝本轮）+ 新增"推论二：绿信号本身也要能被证伪"；
+       CHANGELOG_AI.md 新增续41（双实施者署名）；TODO.md 索引补**续40**（那轮此前没进索引）+ 续41，
+       小节标题改「续12 ~ 续41」共 30 轮；todo.txt 本条（CRLF 字节级写入）。
+[未做] 6、三处模板/样式改动**未在真实浏览器里复核**（纯展示类，冒烟只渲染 HTML 断言结构，不校验像素）。
+[登记] 7、推送与令牌现状（本轮顺带查明，与代码无关但影响交付链路）：github.txt 里那个 PAT 已**失效**
+       （api.github.com 返回 401；git push 内嵌它报 Invalid username or token）；仓库是 **public**；
+       真正能推的是**Windows 凭据管理器里 GCM 存的那条** git:https://github.com（有写权限）——
+       26 个待推提交就是靠它推上去的。github.txt **没有任何代码读取**，只是"给 AI 用的一次性凭据"约定。
+       另：config/keys.yaml 的 github.token **同样已 401**（另一个 token）→ github 阶段按"HTTP 401
+       凭据无效"写明原因跳过（容错正常、不崩），需用户换新 token（**只读**即可）。

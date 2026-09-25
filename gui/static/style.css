@@ -196,9 +196,11 @@ details pre { margin:8px 0; }
 
 /* ---------- 站点截图缩略图 + 灯箱 ---------- */
 .shot-thumb { max-width:120px; max-height:78px; border:1px solid var(--line);
-              border-radius:5px; vertical-align:middle; display:inline-block; cursor:pointer; }
+              border-radius:5px; display:block; margin:0 auto; cursor:pointer; }
 .shot-thumb:hover { border-color:var(--accent); box-shadow:0 0 0 2px var(--soft); }
-.shot-cell { white-space:nowrap; text-align:center; }
+.shot-cell { white-space:nowrap; text-align:center; vertical-align:middle; }
+/* 截图列表头也居中，否则「图居中、标题偏左」看着没对齐 */
+th.col-shot, td.col-shot { text-align:center; }
 /* 灯箱：点击缩略图放大查看，点遮罩/关闭钮/Esc 关闭（不再新开标签页） */
 .lb-overlay { position:fixed; inset:0; background:rgba(0,0,0,.82); z-index:50;
               display:none; align-items:center; justify-content:center; padding:24px; }

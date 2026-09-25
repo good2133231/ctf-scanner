@@ -662,9 +662,9 @@
       `scanner/ctlog.py`（`ctlog` 段）；「证书解析页签」→ 续15 的 `cert` 阶段；报告 HTML·PDF →
       续16 的三格式共用 `collect()` 快照；登录态扫描 + nuclei `raw`/`flow`/`workflows` → 续17。
 
-## 续12 ~ 续39（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
+## 续12 ~ 续41（2026-09-23 ~ 09-25）已完成项速览（详见证 `CHANGELOG_AI.md`）
 
-> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 28 轮变更只记在 `CHANGELOG_AI.md`。
+> 本文件的小节此前停在「第十八轮（续 11）」，续12 起共 30 轮变更只记在 `CHANGELOG_AI.md`。
 > 这里补一份**一句话 + 落地位置**的索引，避免"翻待办看不出做过什么"。**不重复 CHANGELOG 全文**。
 
 - [x] **续12** 误报复核三态 + POC 置信度分层 + Linux 实机验收（Ubuntu 22.04 跑通 smoke）
@@ -722,6 +722,18 @@
       不缓存；语义逐条对着 nuclei 源码 `pkg/tmplexec/flow/*` 写（flow **不在** `protocols/common/flow`）。
       与 nuclei 的差异（空 matchers 判假、extractor 不回填 `template`）写进 `docs/poc-guide.md`；
       回归 `tests/smoke.py [6z]`；
+- [x] **续40** 拓展域名「自动化」六条（新增 `scanner/extdom.py`）：拓展域名送去检测时带上 subdomain 阶段 /
+      自动存在性判定（DNS，幂等、失败落 `ip_note`）/ 目标是子域时补收主域名且该子域按子域资产入库 /
+      归属本项目的拓展域名以 `promote:<原来源>` **追加成正常子域**（原行保留、拓展页默认隐藏）/
+      拓展域名页按主域名分组折叠（`?group=0` 平铺）/ 建任务勾「自动拓展扫描」`auto_expand` 后自动补
+      `osint`·`jsmine` 并在**最后一个**产出拓展域名的阶段后挂钩 `extdom.process()`；
+      回归 `tests/smoke.py [7a]`（实施者 **WorkBuddy · Hy4-preview**）；
+- [x] **续41** `SMOKE PASS` 从模块顶层搬进 `main()` 末尾（修"断言一条没跑就打印 PASS"的**第四次假绿**）
+      + 提交前修掉 `tests/smoke.py` 的**整文件行尾改写**（还原成 HEAD 的 CRLF/LF 混排原貌，
+      `--ignore-cr-at-eol` 后只留 5 行真实改动）+ `AGENTS.md §6.1` 假绿清单补齐至 4 次并加
+      "绿信号本身也要能被证伪"推论；证伪 2/2（旧位置+坏断言→仍打印 PASS / 新位置+同一坏断言→不打印）；
+      回归 `py -3 tests/smoke.py`。语义改动出自 **WorkBuddy · Hy4-preview**，
+      行尾还原·证伪·文档·提交出自 **Trae · DeepSeek-V4.1-Flash**；
 - [x] **另（2026-09-24）** 补 `LICENSE`：本仓库自有代码 MIT；`config/dicts/dirs_*.txt`
       派生自 dirmap（GPL-3.0），**不被 MIT 覆盖**，边界见 `NOTICE.md §5`。
 
