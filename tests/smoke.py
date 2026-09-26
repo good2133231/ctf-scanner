@@ -8428,6 +8428,152 @@ http:
           "SKIP 分类带**日志真实原因**（token 缺失的 github 归 未配置）/ GUI 自检走 subprocess / "
           "5 条变异证伪全部按预期变红")
 
+    # [7o] 续53 **任务列表页 + 任务详情页漏洞列表** 分页（P0 数据正确性）。背景：续51 修了
+    #      跨任务 `/vulns` 的 500 截断，但**同源**的另两处仍静默丢：`/tasks` 固定
+    #      `list_tasks(limit=200)`、任务详情固定 `list_vulns(task_id, limit=1000)`。
+    #      本组钉死（末尾 §6.1 变异证伪 + logs/ 下两个真·路由变异脚本）：
+    #      ① `/tasks` 分页：造 250 个任务 → `pager.total==250`、第 1 页恰 `size` 行、
+    #         **最老那个**（id 最小）第 1 页看不到、翻到末页能看到；旧写法 `list_tasks(limit=200)`
+    #         只回 200（丢 50），最老那条**永久不可达**；
+    #      ② `/tasks` 服务端筛选：`?q=`（名字/目标子串）与 `?status=`（精确）真的在 SQL 侧过滤；
+    #      ③ 任务详情漏洞列表分页：同一任务造 1200 条 → 页签计数==1200、第 1 页恰 `vsize` 行、
+    #         id 最小那条第 1 页看不到、翻到末页能看到；旧写法 `list_vulns(limit=1000)` 只回 1000；
+    #      ④ 详情页漏洞筛选 `?vsev=` / `?vq=` 服务端生效；
+    #      ⑤ 非法 `page` / `vpage`（9999）不 500，回落末页；
+    #      ⑥ 详情页 GET 筛选表单与 POST 复核表单**没有嵌套**（HTML 不允许 form 嵌套）。
+    # 说明：为让"最老任务在末页"这条断言确定成立，先把库里任务清空（本组是 main() 最后一组，
+    # 其后只打印 SMOKE PASS；冒烟库本就是隔离的 logs/ 临时库，跑完整体删除）。
+    for _t0_7o in db.list_tasks(limit=100000):
+        db.delete_task(_t0_7o["id"], backup=False)
+    assert len(db.list_tasks(limit=100000)) == 0, "本组开始前应已清空任务表"
+
+    _N7O = 250
+    _ids7o = []
+    for _i7o in range(_N7O):
+        if _i7o == 0:
+            _nm7o = "smoke53-OLDEST-NEEDLE53"
+        elif _i7o <= 60:
+            _nm7o = f"smoke53 SPACE-{_i7o:03d}"     # 带空格：测 pager 的 q 是否 URL 编码
+        else:
+            _nm7o = f"smoke53-task-{_i7o:03d}"
+        _ids7o.append(db.create_task(_nm7o, "127.0.0.1", ["osint"], {}))
+    _oldest7o, _oldest_name7o = _ids7o[0], "smoke53-OLDEST-NEEDLE53"
+    for _t7o in _ids7o[:7]:            # 前 7 个置 done（供 `?status=done` 服务端筛选断言）
+        db.update_task(_t7o, status="done")
+
+    _app7o = _app_with7i()
+    _c7o = _app7o.test_client()
+    assert _c7o.post("/login", data={"token": settings["gui"]["token"]},
+                     environ_base={"REMOTE_ADDR": "203.0.113.221"}).status_code == 302
+
+    # ① /tasks 分页
+    _r1_7o = _c7o.get("/tasks?size=50")
+    assert _r1_7o.status_code == 200, _r1_7o.status_code
+    _h1_7o = _r1_7o.get_data(as_text=True)
+    assert "任务列表（250）" in _h1_7o, "分页后标题应显示**过滤后总数** 250"
+    _n1_7o = _h1_7o.count('<tr data-id="')
+    assert _n1_7o == 50, f"第 1 页应恰好 50 行：实测 {_n1_7o}"
+    assert _oldest_name7o not in _h1_7o, "最老任务（id 最小）不该出现在第 1 页"
+    _hlast_7o = _c7o.get("/tasks?size=50&page=5").get_data(as_text=True)
+    assert _oldest_name7o in _hlast_7o, "翻到末页应能看到最老任务（旧写法下它永久不可达）"
+    assert _hlast_7o.count('<tr data-id="') == 50
+    _old7o = db.list_tasks(limit=200)   # 对照：旧写法只回 200 且看不到最老那条
+    assert len(_old7o) == 200, f"旧写法必须只回 200 条：实测 {len(_old7o)}"
+    assert _oldest_name7o not in {r["name"] for r in _old7o}, \
+        "旧写法（limit=200）看不到最老任务 → 证明静默丢结果真实存在"
+
+    # ② /tasks 服务端筛选：q（名字/目标子串）与 status（精确）
+    _hq_7o = _c7o.get("/tasks?q=NEEDLE53").get_data(as_text=True)
+    assert "任务列表（1）" in _hq_7o, "服务端 q 必须精确命中 1 条（旧前端过滤只搜当前页）"
+    assert _oldest_name7o in _hq_7o and "smoke53-task-100" not in _hq_7o, "q 只应返回匹配行"
+    _hs_7o = _c7o.get("/tasks?status=done").get_data(as_text=True)
+    assert "任务列表（7）" in _hs_7o, "服务端 status 筛选必须只回 7 个 done"
+    assert "smoke53-task-100" not in _hs_7o, "status=done 不应包含非 done 任务"
+    # 翻页保持筛选：用 total>size 的组合让 pager 真的渲染出翻页链接（total=1 时无链接、查不到 qs）
+    _pgseg7o = _c7o.get("/tasks?q=smoke53&status=pending&size=50").get_data(as_text=True)
+    _pgseg7o = _pgseg7o.split('<div class="pager">', 1)[-1].split("</div>", 1)[0]
+    assert "q=smoke53" in _pgseg7o and "status=pending" in _pgseg7o, "翻页必须保持全部筛选条件"
+    # q 含空格必须 URL 编码（否则翻页丢条件）：60 个带空格的命中 → total 60 > size 50 → 有翻页链接
+    _sp7o = _c7o.get("/tasks",
+                     query_string={"q": "smoke53 SPACE", "size": "50"}).get_data(as_text=True)
+    assert "任务列表（60）" in _sp7o, "q 含空格的服务端过滤应命中 60 条"
+    _spp7o = _sp7o.split('<div class="pager">', 1)[-1].split("</div>", 1)[0]
+    assert "q=smoke53%20SPACE" in _spp7o, "pager 里的 q 必须 URL 编码（空格→%20）"
+
+    # ③ 任务详情漏洞列表分页（复用最老那个任务）
+    _tidB7o, _MARKER7o = _oldest7o, "VULN-NEEDLE-1001"
+    _sevs7o = ["critical", "high", "medium", "low", "info"]
+    for _iv7o in range(1200):
+        db.insert_vuln(_tidB7o, {
+            "target": f"http://smoke53/{_iv7o}", "poc_id": f"poc-{_iv7o}",
+            "name": (_MARKER7o if _iv7o == 0 else f"smoke53 vuln {_iv7o}"),
+            "severity": _sevs7o[_iv7o % 5], "owasp": "A01",
+            "detail": f"d-{_iv7o}", "evidence": f"e-{_iv7o}"})
+    _dh1_7o = _c7o.get(f"/tasks/{_tidB7o}?vsize=100").get_data(as_text=True)
+    assert '潜在漏洞<span class="cnt">1200</span>' in _dh1_7o, \
+        "页签计数必须是**过滤后总数** 1200（不是本页数）"
+    _nv1_7o = _dh1_7o.count('data-review="')
+    assert _nv1_7o == 100, f"详情页漏洞表第 1 页应恰好 100 行：实测 {_nv1_7o}"
+    assert _MARKER7o not in _dh1_7o, "id 最小的漏洞不该出现在第 1 页"
+    _dhlast_7o = _c7o.get(f"/tasks/{_tidB7o}?vsize=100&vpage=12").get_data(as_text=True)
+    assert _MARKER7o in _dhlast_7o, "翻到末页应能看到 id 最小的漏洞"
+    assert _dhlast_7o.count('data-review="') == 100
+    _oldv7o = db.list_vulns(task_id=_tidB7o, limit=1000)   # 对照：旧写法只回 1000
+    assert len(_oldv7o) == 1000, f"旧写法必须只回 1000 条：实测 {len(_oldv7o)}"
+    assert _MARKER7o not in {r["name"] for r in _oldv7o}, \
+        "旧写法（limit=1000）看不到第 1001 条 → 证明静默丢结果真实存在"
+
+    # ④ 详情页服务端筛选：vsev 与 vq
+    _dvsev_7o = _c7o.get(f"/tasks/{_tidB7o}?vsev=critical").get_data(as_text=True)
+    assert "共 240 条" in _dvsev_7o, "vsev=critical 服务端过滤后 total 应为 240"
+    _dvq_7o = _c7o.get(f"/tasks/{_tidB7o}?vq={_MARKER7o}").get_data(as_text=True)
+    assert "共 1 条" in _dvq_7o and _MARKER7o in _dvq_7o, "vq 服务端过滤应精确命中第 1001 条"
+
+    # ⑤ 非法页码不 500（回落末页）
+    assert _c7o.get("/tasks?page=9999").status_code == 200
+    assert _c7o.get(f"/tasks/{_tidB7o}?vpage=9999").status_code == 200
+
+    # ⑥ 详情页 GET 筛选表单与 POST 复核表单没有嵌套（HTML 不允许 form 嵌套）
+    _iget7o = _dh1_7o.find('<form class="filters" method="get"')
+    _ipost7o = _dh1_7o.find('action="/api/rescan"')
+    assert 0 <= _iget7o < _ipost7o, "详情页 GET 筛选表单必须排在 POST 复核表单之前"
+    assert "</form>" in _dh1_7o[_iget7o:_ipost7o], \
+        "GET 表单必须在 POST 表单开始前闭合（HTML 不允许 form 嵌套）"
+
+    # ---- §6.1 变异证伪（把新行为退回"旧/天真"实现，确认上面的断言真的变红）----
+    # (M1) `/tasks` 数据源退回固定 `list_tasks(limit=200)`（旧写法，忽略分页/筛选）→ ①② 必红
+    _real_page_tasks7o = db.page_tasks
+    db.page_tasks = lambda limit=100, offset=0, **kw: (db.list_tasks(limit=200), 200)
+    try:
+        _m1_7o = _c7o.get("/tasks?size=50").get_data(as_text=True)
+        assert "任务列表（250）" not in _m1_7o, \
+            "变异（/tasks 退回 limit=200）后总数变 200 → 证明 ① 测的是**真分页**"
+        _m1last_7o = _c7o.get("/tasks?size=50&page=5").get_data(as_text=True)
+        assert _oldest_name7o not in _m1last_7o, \
+            "变异后最老任务翻到末页也看不到（永久不可达）→ 证明 ① 测的是**真分页**"
+    finally:
+        db.page_tasks = _real_page_tasks7o
+
+    # (M2) 任务详情漏洞列表退回固定 `list_vulns(limit=1000)`（旧写法，忽略分页/筛选）→ ③④ 必红
+    _real_page_vulns7o = db.page_vulns
+    db.page_vulns = lambda limit=100, offset=0, **kw: (
+        db.list_vulns(task_id=kw.get("task_id"), limit=1000), 1000)
+    try:
+        _m2_7o = _c7o.get(f"/tasks/{_tidB7o}?vsize=100").get_data(as_text=True)
+        assert '潜在漏洞<span class="cnt">1200</span>' not in _m2_7o, \
+            "变异（详情页退回 limit=1000）后页签计数变 1000 → 证明 ③ 测的是**真分页**"
+        _m2last_7o = _c7o.get(f"/tasks/{_tidB7o}?vsize=100&vpage=12").get_data(as_text=True)
+        assert _MARKER7o not in _m2last_7o, \
+            "变异后 id 最小的漏洞翻到末页也看不到 → 证明 ③ 测的是**真分页**"
+    finally:
+        db.page_vulns = _real_page_vulns7o
+
+    print("[7o] 续53 任务列表页 + 任务详情页漏洞列表分页 ok: /tasks 造 250 任务→total 250·第 1 页 50 行·"
+          "最老末页可见（旧 limit=200 永久不可达，已证伪）/ q·status 服务端筛选生效 + q 含空格 URL 编码 / "
+          "详情页造 1200 漏洞→页签 1200·第 1 页 100 行·id 最小末页可见（旧 limit=1000 静默丢，已证伪）/ "
+          "vsev·vq 服务端筛选生效 / page·vpage=9999 不 500 / GET 与 POST 表单无嵌套 / "
+          "2 条变异证伪全部按预期变红（另有 logs/ 下 2 个真·路由变异脚本产出报错原文）")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

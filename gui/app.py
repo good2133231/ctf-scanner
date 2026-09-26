@@ -932,24 +932,51 @@ def create_app():
     @app.route("/tasks")
     @login_required
     def tasks():
-        rows = db.list_tasks(limit=200)
+        # 分页 + 服务端筛选（续53）：原先固定 `list_tasks(limit=200)` —— 任务 >200 个**静默丢**。
+        # 筛选也从**前端**（`data-tfilter`，分页后只会筛当前页 —— 比原来更误导）搬到 SQL 侧，
+        # 与续51 把 `/vulns` 的 `q` 从前端过滤搬到服务端是同一条理由。
+        page, size, q = _page_args()
+        status = (request.args.get("status") or "").strip()
+        if status not in ("queued", "pending", "running", "done", "stopped", "failed"):
+            status = ""      # 非法状态一律按"全部"处理（不把任意字符串带进 SQL）
+        stages_f = (request.args.get("stages") or "").strip()
+        if stages_f not in STAGE_ORDER:
+            stages_f = ""    # 阶段白名单：非法一律按"全部"
+        rows, total = db.page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
+                                    status=status or None, stages=stages_f or None)
+        pages = max(1, (total + size - 1) // size)
+        if page > pages:     # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
+            page = pages
+            rows, total = db.page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
+                                        status=status or None, stages=stages_f or None)
+        # 翻页必须带上**全部**筛选状态；`q` 要 URL 编码 —— 关键字里带 `&` / `#` / 空格时
+        # 不编码会让翻页**丢掉条件**（见 `/vulns`、`_asset_page` 的同一处理）。
+        parts = []
+        if q:
+            parts.append(f"q={quote(q)}")
+        if status:
+            parts.append(f"status={quote(status)}")
+        if stages_f:
+            parts.append(f"stages={quote(stages_f)}")
+        parts.append(f"size={size}")
+        pager = {"page": page, "size": size, "total": total, "pages": pages,
+                 "base": "/tasks", "qs": "&" + "&".join(parts)}
         # 「统计」列：站点/域名数量（对齐参考图的 站点: N / 域名: N 展示）
         counts = {t["id"]: db.task_counts(t["id"]) for t in rows}
         # 续36「运行时长」列：与详情页「目标与配置」**同一口径**（`run_duration_text`）。
         # 注意 `list_tasks` 返回的是 `sqlite3.Row`，必须先 `dict(...)` 再传 —— `run_duration_text`
         # 内部走 `task.get(...)`，而 `sqlite3.Row` **没有** `.get()`（`_site_titles()` 踩过同一个坑）。
         durations = {t["id"]: run_duration_text(dict(t)) for t in rows}
-        # 续49：排队位置（队首=1）。队列按 id 升序消费（`db.claim_next_queued`），
-        # 所以这里也按 id 升序数，页面才能和 worker 的取用顺序对得上。
-        qpos = {}
-        _qi = 0
-        for _t in sorted(rows, key=lambda r: r["id"]):
-            if _t["status"] == "queued":
-                _qi += 1
-                qpos[_t["id"]] = _qi
+        # 续49：排队位置（队首=1）。队列按 id 升序消费（`db.claim_next_queued`）。
+        # 续53 修正：分页后本页 rows 只含**一页**，旧的"对本页 rows 按 id 数位次"会漏算
+        # 排在前面但不在本页的 queued 任务（页面显示的"第 N 位"偏小）→ 改用权威实现
+        # `db.queued_position()`（详情页 `task_detail` 用的就是它）。队列规模小，逐行调用可接受。
+        qpos = {t["id"]: db.queued_position(t["id"]) for t in rows}
         return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER,
                                counts=counts, durations=durations,
-                               running=set(runner.running_task_ids()), qpos=qpos)
+                               running=set(runner.running_task_ids()), qpos=qpos,
+                               pager=pager, page_sizes=PAGE_SIZES, q=q,
+                               status=status, stages_f=stages_f)
 
     @app.route("/api/tasks", methods=["POST"])
     @login_required
@@ -1105,6 +1132,40 @@ def create_app():
         # 而不是让用户点了才收到一句报错。
         resume_rest = runner.resume_stages((task["stages"] or "").split(","),
                                            task["current_stage"])
+        # 任务详情页「潜在漏洞」页签分页（续53）：原先固定 `list_vulns(task_id, limit=1000)`
+        # —— 同一任务扫出 >1000 条就**静默丢**（与 `/vulns` 的 500 截断同源）。参数加 `v` 前缀
+        # 以免与资产页签的 `esrc`（以及将来可能的 `page`）撞车。排序 `sort="id", desc=True`，
+        # 与旧 `list_vulns` 的 `ORDER BY id DESC` 一致 —— 页面行序**不变**（刻意如此）。
+        def _vint(_name, _default):
+            try:
+                return int(request.args.get(_name, _default) or _default)
+            except (TypeError, ValueError):
+                return _default
+        vpage = max(1, _vint("vpage", 1))
+        _vsize = _vint("vsize", 100)
+        vsize = _vsize if _vsize in PAGE_SIZES else 100   # 非法每页数回落 100
+        vq = (request.args.get("vq") or "").strip()
+        vsev = (request.args.get("vsev") or "").strip().lower()
+        if vsev not in ("critical", "high", "medium", "low", "info"):
+            vsev = ""    # 级别白名单：非法一律按"全部"
+        vuln_rows, vuln_total = db.page_vulns(limit=vsize, offset=(vpage - 1) * vsize,
+                                              q=vq or None, severity=vsev or None,
+                                              task_id=task_id, sort="id", desc=True)
+        _vpages = max(1, (vuln_total + vsize - 1) // vsize)
+        if vpage > _vpages:  # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
+            vpage = _vpages
+            vuln_rows, vuln_total = db.page_vulns(limit=vsize, offset=(vpage - 1) * vsize,
+                                                  q=vq or None, severity=vsev or None,
+                                                  task_id=task_id, sort="id", desc=True)
+        # 翻页必须带上全部筛选；`vq` 要 URL 编码（含 `&` / `#` / 空格时不编码会**丢掉条件**）
+        _vparts = []
+        if vsev:
+            _vparts.append(f"vsev={quote(vsev)}")
+        if vq:
+            _vparts.append(f"vq={quote(vq)}")
+        _vparts.append(f"vsize={vsize}")
+        vuln_pager = {"page": vpage, "size": vsize, "total": vuln_total, "pages": _vpages,
+                      "base": f"/tasks/{task_id}", "qs": "&" + "&".join(_vparts)}
         return render_template(
             "task_detail.html", task=task,
             subs=own, ext_subs=ext_subs,
@@ -1115,7 +1176,8 @@ def create_app():
             cert_enabled=cert_enabled, cert_pick=cert_pick,
             cert_tls_ports=sorted(certs_mod.tls_ports(settings)),
             dirs=dirs, dirs_hidden=dirs_hidden,
-            vulns=db.list_vulns(task_id=task_id, limit=1000),
+            vulns=vuln_rows, vuln_total=vuln_total, vuln_pager=vuln_pager,
+            vuln_sev=vsev, vuln_q=vq, vuln_page_sizes=PAGE_SIZES,
             review=db.review_counts(task_id),
             # 补扫入口：任务页对"本任务的站点/IP"直接发起新任务；rescan_of 用于反向回跳
             rescan_of=top.get("rescan_of"),

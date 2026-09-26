@@ -3,6 +3,96 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续53 收掉另两处同源静默截断（/tasks + 任务详情页漏洞列表）（P0）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash** · 需求由**用户**点名（P0）、**主理人**派单
+
+### 0. 是什么（需求）
+
+续51 修掉了跨任务漏洞页 `/vulns` 的 `limit=500` 静默截断。用户批准把**同源**的另两处一起收掉：
+① `/tasks` 页固定 `db.list_tasks(limit=200)`（任务 >200 个**静默丢**）；
+② 任务详情页漏洞列表固定 `db.list_vulns(task_id, limit=1000)`（同一任务 >1000 条**静默丢**）。
+两处都是"名字看着能取全部、实际悄悄截断且界面不提示"，正是续51 要消灭的那类**数据正确性**问题。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/db.py` | 新增 `page_tasks(limit, offset, q, status, stages)` → `(rows, total)`（紧挨 `list_tasks`；`list_tasks` **保持不动**，它仍有 4 个调用方）。过滤口径**对齐原前端** `initTaskTable()`：`q`=`name`/`targets` 子串、`status`=精确、`stages`=**子串**；`total` 用**同一组 where** 单独 `COUNT`；排序恒 `id DESC`；**绝不拼用户输入进 SQL** |
+| `gui/app.py`（`/tasks`） | 改用 `_page_args()` + `db.page_tasks` + `_pager.html`；`status`/`stages` 走白名单校验（非法按"全部"）；页码越界回落末页；pager `qs` 含 `q`（`quote()` 编码）/`status`/`stages`/`size`；**`qpos` 改用权威 `db.queued_position()`**（分页后旧的"对本页 rows 数位次"会漏算本页外的 queued 任务，"第 N 位"偏小）；传 `pager/page_sizes/q/status/stages_f` |
+| `gui/templates/tasks.html` | 标题计数改 `pager.total`；`.filters` 由 `data-tfilter` **前端筛选**改成 **GET form**（q/status/stages/size + 查询 + 清空）；**删掉全部 `data-tfilter`**；表后 `{% include "_pager.html" %}`；补"批量操作作用于**本页已勾选**的行" |
+| `gui/static/app.js` | `initTaskTable()` 删掉前端多条件筛选段（`inputs`/`applyFilters`/两个监听）；⚠️ `rows` 变量**保留**（第 5 步轮询要用） |
+| `gui/app.py`（`task_detail`） | 漏洞列表改用 `db.page_vulns(task_id=…, sort="id", desc=True)` + `vpage/vsize/vsev/vq`（前缀避免与资产页签 `esrc` 撞）；`vsize` 校验落 `PAGE_SIZES`；页码越界回落；传 `vuln_rows/vuln_total/vuln_pager/vuln_sev/vuln_q/vuln_page_sizes` |
+| `gui/templates/task_detail.html` | 页签计数 `vulns\|length` → `vuln_total`；级别链接 + 关键词框（`data-sev`/`data-filter`）**整块换成 GET form**（vsev/vq/vsize + 查询 + 清空 + "在「漏洞风险」页打开（含排序）"链接），置于 POST 复核表单**之前**（HTML 不允许 form 嵌套）；表后 `{% set pager = vuln_pager %}{% include "_pager.html" %}`；`initSevFilter()` 调用删除；`<tr data-sev=…>` 属性删除（已无消费者） |
+| `gui/static/app.js` | 删掉 `initSevFilter()`（`a[data-sev]`，改完零调用方）；`initFilters()` 通用处理器**保留**（其它页签仍用 `data-filter`） |
+| `tests/smoke.py` | 新增 `[7o]` 组（6 组断言 + 2 条 §6.1 变异证伪） |
+| `README.md` / `docs/roadmap.md` | README 补"列表页服务端分页 + 筛选"说明；roadmap 新增续53 条 |
+
+另：同轮**另一个提交**删掉 `db.list_all_subdomains/list_all_sites/list_all_dirs/list_all_ports`
+（零调用方的误导性 API）。
+
+### 2. 关键设计取舍（为什么这么做）
+
+- **为什么筛选也要搬服务端**：`tasks.html` 的筛选原是**前端**（`data-tfilter`，只筛当前页）。一旦分页，
+  前端筛选就只筛当前页 —— **比原来更误导**。这与续51 把 `/vulns` 的 `q` 从"前端过滤当前页"搬到 SQL
+  侧是同一条理由，本次沿用。
+- **`qpos` 为什么必须改**：旧的排队位次是"对本页 rows 按 id 升序数"。分页后本页只含一页，
+  排在前面但不在本页的 queued 任务没被计入 → 页面"第 N 位"偏小。改用权威 `db.queued_position()`
+  （详情页 `task_detail` 用的就是它；队列规模小，逐行调用可接受）。
+- **form 嵌套**：任务详情页新增的筛选是 **GET form**，必须放在 POST 复核表单（`api_rescan`）**之前**
+  —— HTML 不允许 form 嵌套，放进去会被浏览器拆散、`data-*` 全乱。用**字符串位置断言**钉死（见 `[7o]` ⑥）。
+- **详情页排序固定 `id`**：`page_vulns(sort="id", desc=True)` 与旧 `list_vulns` 的 `ORDER BY id DESC`
+  一致 —— 页面行序**不变**（刻意，别改成别的默认排序）。列排序只在 `/vulns` 有，故加了一个
+  「在「漏洞风险」页打开（含排序）」链接。
+- **`list_tasks` 保持不动**：它还有 4 个调用方（仪表盘 limit=8、漏洞页任务下拉 limit=1000、
+  端口视图名字映射 limit=1000、找最近一次 dev-selfcheck limit=200），改它会影响它们。
+
+### 3. 验证（实测）
+
+- `py -3 -u tests/smoke.py` → **EXIT=0 / `SMOKE PASS` ×1 / `AssertionError` 0**（`logs/smoke-53.txt`），
+  `[7o]` 打印：造 250 任务→total 250·第 1 页 50 行·最老末页可见（旧 limit=200 永久不可达，已证伪）/
+  q·status 服务端筛选生效 + q 含空格 URL 编码 / 详情页造 1200 漏洞→页签 1200·第 1 页 100 行·
+  id 最小末页可见（旧 limit=1000 静默丢，已证伪）/ vsev·vq 服务端筛选生效 / page·vpage=9999 不 500 /
+  GET 与 POST 表单无嵌套 / 2 条变异证伪全部按预期变红。
+- 聚焦探针 `logs/_probe53.py`（隔离库，秒级）：A1..A7 / B1..B7 全 True。
+- 关键实测数字：`/tasks` 造 250 任务 → `total=250`、第 1 页 50 行、最老（id 最小）第 1 页不可见、
+  末页可见；旧 `list_tasks(limit=200)` 只回 200；`q=NEEDLE53`→1 条、`status=done`→7 条、
+  `q="smoke53 SPACE"`→60 条且 pager 里 `q=smoke53%20SPACE`。详情页造 1200 漏洞 → 页签 1200、
+  第 1 页 100 行、id 最小末页可见；旧 `list_vulns(limit=1000)` 只回 1000；`vsev=critical`→240、
+  `vq=MARKER`→1 条；`page=9999`/`vpage=9999` 均 200。
+- `git diff --numstat` == `git diff --ignore-cr-at-eol --numstat` 逐文件一致。
+
+### 4. §6.1 变异证伪（新断言在旧代码下真的变红）
+
+**（a）smoke 内联变异（随回归门禁跑）**
+- M1：把 `db.page_tasks` 退回 `(db.list_tasks(limit=200), 200)` → `[7o]` ① 的
+  "总数 250 / 最老末页可见"两条断言必然不成立（变异后标题变 200、最老翻到末页也不出现）。
+- M2：把 `db.page_vulns` 退回 `(db.list_vulns(task_id, limit=1000), 1000)` → `[7o]` ③ 的
+  "页签 1200 / id 最小末页可见"两条断言必然不成立。
+
+**（b）真·路由变异脚本（`logs/_mut53_tasks.py` / `logs/_mut53_vulns.py`，不入 git）**
+把 `/tasks` 路由退回 `rows = db.list_tasks(limit=200)`、把 task_detail 退回
+`vulns = db.list_vulns(task_id=task_id, limit=1000)`，各跑一次完整 smoke（退出码均为 1），报错原文：
+
+```
+A（/tasks 退回 list_tasks(limit=200)）：
+  File "tests/smoke.py", line 8473, in main
+    assert "任务列表（250）" in _h1_7o, "分页后标题应显示**过滤后总数** 250"
+AssertionError: 分页后标题应显示**过滤后总数** 250
+
+B（task_detail 退回 list_vulns(task_id, limit=1000)）：
+  File "tests/smoke.py", line 8513, in main
+    assert '潜在漏洞<span class="cnt">1200</span>' in _dh1_7o, \
+AssertionError: 页签计数必须是**过滤后总数** 1200（不是本页数）
+```
+
+### 5. 仍未做（如实说明）
+
+- 任务详情页**其它**资产页签（站点/子域/端口/C段/证书/目录）仍是**全量返回、不分页** —— 本轮按派单
+  只修 vulns。
+- `/tasks` 排序固定 `id DESC`（未提供列排序）；`q` 只匹配 `name`/`targets`（不含 `stages` 等）。
+- 详情页漏洞列表未做列排序（排序只在 `/vulns`，已加跳转链接）。
+
 ## 2026-09-26 —— 续52 自检夹具补域名 + HTTPS + SKIP 分类（P0）
 
 > 实施者：**WorkBuddy · Hy4-preview** · 需求由**用户**点名（P0）、**主理人**派单

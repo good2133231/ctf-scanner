@@ -589,6 +589,40 @@ def list_tasks(limit=200):
     return _query("SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (limit,))
 
 
+def page_tasks(limit=100, offset=0, q=None, status=None, stages=None):
+    """任务列表分页查询（续53），返回 `(rows, total)`。
+
+    **为什么要它**：`/tasks` 页原先固定 `list_tasks(limit=200)` —— 任务超过 200 个就**静默丢**、
+    界面不提示（与续51 修的漏洞页 `limit=500` 截断同源）。本函数把过滤与分页**全部下推到 SQL**，
+    并返回**应用了同样过滤条件**后的 `total`（不是全表数），供分页条显示"共 N 条"。
+
+    过滤口径**对齐原前端 `initTaskTable()`**（`data-tfilter`，逐字段 `String.includes`）：
+    - `q`      → `name` / `targets` 子串（`LIKE`，参数两份 `%q%`）；
+    - `status` → **精确等值**（前端是下拉框，本就精确）；
+    - `stages` → `stages` 列**子串包含**（对齐前端 `includes`，刻意**不**做精确等值）。
+
+    **绝不把用户输入拼进 SQL** —— 进 f-string 的只有常量列名 / 常量 SQL 片段，值一律走 `?` 占位。
+    排序恒 `id DESC`（与 `list_tasks` 一致，页面行序**不变**）。`total` 与 `rows` 共用同一组 where，
+    保证"共 N 条"与页内行数一致（不重不漏）。
+    """
+    clauses, params = [], []
+    if q:
+        clauses.append("(name LIKE ? OR targets LIKE ?)")
+        params.extend([f"%{q}%", f"%{q}%"])
+    if status:
+        clauses.append("status = ?")
+        params.append(str(status))
+    if stages:
+        clauses.append("stages LIKE ?")
+        params.append(f"%{stages}%")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    total_row = _query(f"SELECT COUNT(*) c FROM tasks{where}", tuple(params), one=True)
+    total = total_row["c"] if total_row else 0
+    rows = _query(f"SELECT * FROM tasks{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                  tuple(params) + (int(limit), int(offset)))
+    return rows, total
+
+
 def _parse_ts(text):
     """把 `_now()` 格式的时间戳解析成 epoch 秒；解不出返回 `None`（**不猜**）。"""
     try:

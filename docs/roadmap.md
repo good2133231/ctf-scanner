@@ -107,6 +107,21 @@
       **仍未做**：排序只支持白名单里的 **3 列**（ID / 任务 / 级别，**无按名称/目标/时间**）；
       任务详情页的漏洞列表仍固定 `limit=1000`、`/tasks` 仍固定 `limit=200`（见续51「顺带核查」，
       **未在本轮改**，等主理人决定是否另开一轮）；
+- [x] **另两处同源静默截断收掉**（**P0 数据正确性**，2026-09-26 续53）：续51 修了跨任务 `/vulns` 的
+      500 截断，本轮收掉**同源**的另两处 —— `/tasks` 原先固定 `db.list_tasks(limit=200)`（任务 >200 个
+      **静默丢**）、任务详情页漏洞列表原先固定 `db.list_vulns(task_id, limit=1000)`（>1000 条**静默丢**）。
+      新增 `db.page_tasks(limit, offset, q, status, stages)` → `(rows, total)`（过滤对齐原前端
+      `initTaskTable()`：`q`=name/targets 子串、`status`=精确、`stages`=子串；**绝不拼用户输入进 SQL**）；
+      `/tasks` 改用 `_page_args()` + `_pager.html`，筛选从**前端**搬到**服务端**（分页后前端筛选只会筛
+      当前页，比原来更误导 —— 同续51 把 `/vulns` 的 `q` 下推 SQL 的理由），移除 `tasks.html` 的
+      `data-tfilter` 与 `app.js` `initTaskTable` 的前端过滤段；任务详情页漏洞列表改用
+      `db.page_vulns(task_id=…, sort="id", desc=True)` + `vpage/vsize/vsev/vq` 前缀参数（与资产页签
+      `esrc` 不撞）+ `_pager.html`，级别/关键字筛选也搬到服务端，移除 `data-sev` / `initSevFilter`，
+      GET 筛选表单置于 POST 复核表单**之前**（HTML 不允许 form 嵌套）；`/tasks` 的「排队位置」改用
+      权威实现 `db.queued_position()`（分页后旧的"对本页数位次"会偏小）。顺带删掉
+      `db.list_all_subdomains/sites/dirs/ports`（**零调用方**的误导性 API，见同轮另一提交）。
+      **仍未做**：任务详情页其它资产页签（站点/子域/端口/C段/证书/目录）仍是**全量返回、不分页**
+      （本轮按派单只修 vulns）；`/tasks` 排序固定 `id DESC`（未提供列排序）。
 - [x] **POC 置信度分层**（P1-2，2026-09-23 续12）：`pocs.confidence` 由 `db.poc_confidence(path, meta)`
       按来源分（builtin=high / user·nuclei=medium / imported·other=low）× 内容型匹配器降级得出，
       **只降级不升级**；`vulnscan` 在同批候选里按置信度排序（指纹命中仍优先），

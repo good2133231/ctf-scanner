@@ -59,26 +59,38 @@
 </section>
 
 <section class="panel">
-  <h2>任务列表（{{ tasks|length }}）</h2>
+  <h2>任务列表（{{ pager.total }}）</h2>
 
-  <div class="filters">
-    <label>任务名 <input data-tfilter="name" placeholder="按任务名筛选"></label>
-    <label>目标 <input data-tfilter="targets" placeholder="按目标筛选"></label>
-    <label>状态
-      <select data-tfilter="status">
+  {# 分页 + 服务端筛选（续53）：过滤（关键字/状态/阶段）全在**服务端**做（`db.page_tasks`），
+     原先固定 `limit=200`、>200 个任务静默丢结果的问题已修；筛选也从前端搬到 SQL 侧，
+     否则分页后前端筛选只会筛当前页 —— 比原来更误导（同续51 `/vulns` 的 q）。 #}
+  <form class="filters" method="get" action="{{ url_for('tasks') }}">
+    <label class="muted">关键字
+      <input name="q" value="{{ q }}" placeholder="任务名 / 目标"></label>
+    <label class="muted">状态
+      <select name="status">
         <option value="">全部</option>
         {% for st in ['queued', 'pending', 'running', 'done', 'stopped', 'failed'] %}
-        <option value="{{ st }}">{{ '排队中' if st == 'queued' else st }}</option>
+        <option value="{{ st }}" {{ 'selected' if status == st else '' }}>{{ '排队中' if st == 'queued' else st }}</option>
         {% endfor %}
       </select>
     </label>
-    <label>阶段
-      <select data-tfilter="stages">
+    <label class="muted">阶段
+      <select name="stages">
         <option value="">全部</option>
-        {% for s in stages %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        {% for s in stages %}<option value="{{ s }}" {{ 'selected' if stages_f == s else '' }}>{{ s }}</option>{% endfor %}
       </select>
     </label>
-  </div>
+    <label class="muted">每页
+      <select name="size" onchange="this.form.submit()">
+        {% for s in page_sizes %}
+        <option value="{{ s }}" {{ 'selected' if pager.size == s else '' }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="ghost" type="submit">查询</button>
+    {% if q or status or stages_f %}<a class="btn-mini ghost" href="{{ url_for('tasks') }}">清空</a>{% endif %}
+  </form>
 
   <div class="bulkbar">
     <button type="button" class="ghost" data-bulk="stop">批量停止</button>
@@ -86,6 +98,7 @@
     <button type="button" class="danger" data-bulk="delete">批量删除</button>
     <span id="bulk-msg" class="muted"></span>
   </div>
+  <p class="muted small">批量操作作用于<b>本页已勾选</b>的行。</p>
 
   <table id="tbl-tasks">
     <thead><tr>
@@ -128,6 +141,7 @@
       {% endfor %}
     </tbody>
   </table>
+  {% include "_pager.html" %}
 </section>
 {% endblock %}
 

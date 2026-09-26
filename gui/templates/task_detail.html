@@ -61,7 +61,7 @@
 {% endif %}
 
 <div class="tabs">
-  <div class="tab active" data-tab="vulns">潜在漏洞<span class="cnt">{{ vulns|length }}</span></div>
+  <div class="tab active" data-tab="vulns">潜在漏洞<span class="cnt">{{ vuln_total }}</span></div>
   <div class="tab" data-tab="sites">站点<span class="cnt">{{ sites|length }}</span></div>
   <div class="tab" data-tab="subs">子域名<span class="cnt">{{ subs|length }}</span></div>
   <div class="tab" data-tab="ext">拓展域名<span class="cnt">{{ ext_subs|length }}</span></div>
@@ -75,13 +75,32 @@
 
 <div class="tabpane active" id="pane-vulns">
   <section class="panel">
-    <p class="muted">级别筛选：
-      <a href="#" data-sev="">全部</a>
-      {% for s in ['critical', 'high', 'medium', 'low', 'info'] %}
-      <a href="#" data-sev="{{ s }}">{{ s }}</a>
-      {% endfor %}
-      ｜ <label class="muted">关键词 <input data-filter="#tbl-vulns" placeholder="名称 / 检查项 / 目标"></label>
-    </p>
+    {# 漏洞列表分页（续53）：过滤（级别 / 关键字）与分页全在**服务端**做（`db.page_vulns`），
+       原先固定 `limit=1000`、>1000 条静默丢结果的问题已修；级别 / 关键字筛选也从前端
+       （`data-sev` / `data-filter`，只筛当前页）搬到 SQL 侧。⚠️ 这是 **GET form**，必须放在
+       下面的 POST form（`api_rescan`）**之前** —— HTML 不允许 form 嵌套。 #}
+    <form class="filters" method="get" action="{{ url_for('task_detail', task_id=task.id) }}">
+      <label class="muted">级别
+        <select name="vsev">
+          <option value="">全部</option>
+          {% for s in ['critical', 'high', 'medium', 'low', 'info'] %}
+          <option value="{{ s }}" {{ 'selected' if vuln_sev == s else '' }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="muted">关键词
+        <input name="vq" value="{{ vuln_q }}" placeholder="名称 / 检查项 / 目标"></label>
+      <label class="muted">每页
+        <select name="vsize" onchange="this.form.submit()">
+          {% for s in vuln_page_sizes %}
+          <option value="{{ s }}" {{ 'selected' if vuln_pager.size == s else '' }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="ghost" type="submit">查询</button>
+      {% if vuln_sev or vuln_q %}<a class="btn-mini ghost" href="{{ url_for('task_detail', task_id=task.id) }}">清空</a>{% endif %}
+      <a class="btn-mini ghost" href="{{ url_for('vulns', task_id=task.id) }}">在「漏洞风险」页打开（含排序）</a>
+    </form>
     <p class="muted small">复核台账：待复核 <b>{{ review.pending }}</b> ｜ 已确认
       <b>{{ review.confirmed }}</b> ｜ 已判误报 <b>{{ review.false_positive }}</b>。
       勾选后批量打标；「复查」= 把这些目标重跑一次漏洞初筛（新建任务，不改本任务结论），
@@ -105,7 +124,7 @@
           <th>级别</th><th>名称</th><th>检查/POC</th><th>目标</th><th>复核</th><th>详情</th></tr></thead>
         <tbody>
         {% for v in vulns %}
-          <tr data-sev="{{ v.severity }}" data-review="{{ v.review or 'pending' }}">
+          <tr data-review="{{ v.review or 'pending' }}">
             <td><input type="checkbox" class="pick-row" name="target" value="{{ v.target }}"
                        data-vid="{{ v.id }}"></td>
             <td><span class="sev sev-{{ v.severity }}">{{ v.severity }}</span></td>
@@ -127,6 +146,8 @@
         {% endfor %}
         </tbody>
       </table>
+      {# 分页条（续53）：`_pager.html` 内部用变量名 `pager`（本模板原先没有 pager，不撞） #}
+      {% set pager = vuln_pager %}{% include "_pager.html" %}
     </form>
   </section>
 </div>
@@ -481,7 +502,6 @@
 {% block script %}
 <script>
 initTabs();
-initSevFilter();
 bindTaskOps(".toolbar", document.getElementById("op-msg"));
 </script>
 {% if task.status in ('running', 'pending', 'queued') %}

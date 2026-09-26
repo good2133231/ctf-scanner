@@ -48,19 +48,6 @@ function initTabs() {
   }));
 }
 
-/* 潜在漏洞：按级别快速筛选（详情页 / 漏洞页共用） */
-function initSevFilter() {
-  document.querySelectorAll("a[data-sev]").forEach(a => {
-    a.addEventListener("click", ev => {
-      ev.preventDefault();
-      const sev = a.dataset.sev;
-      document.querySelectorAll("tr[data-sev]").forEach(tr => {
-        tr.style.display = (!sev || tr.dataset.sev === sev) ? "" : "none";
-      });
-    });
-  });
-}
-
 /* 通用表格筛选：<input data-filter="#tbl-x"> 按整行文本做前端包含匹配 */
 function initFilters() {
   document.querySelectorAll("input[data-filter]").forEach(inp => {
@@ -132,22 +119,9 @@ function initTaskTable() {
   const rows = [...document.querySelectorAll("#task-rows tr[data-id]")];
   if (!rows.length) return;
 
-  // 1) 多条件筛选（各条件 AND）
-  const inputs = [...document.querySelectorAll("[data-tfilter]")];
-  const applyFilters = () => {
-    const crit = {};
-    inputs.forEach(i => { crit[i.dataset.tfilter] = i.value.trim().toLowerCase(); });
-    rows.forEach(tr => {
-      const ok = Object.entries(crit).every(([k, v]) => {
-        if (!v) return true;
-        const field = k === "stages" ? tr.dataset.stages : tr.dataset[k];
-        return String(field || "").toLowerCase().includes(v);
-      });
-      tr.style.display = ok ? "" : "none";
-    });
-  };
-  inputs.forEach(i => i.addEventListener("input", applyFilters));
-  inputs.forEach(i => i.addEventListener("change", applyFilters));
+  // 1) 筛选已搬到**服务端**（续53）：`/tasks` 现在分页，前端筛选只会筛当前页 —— 比原来更误导。
+  //    原来那段 `[data-tfilter]` 前端过滤已删除。⚠️ 上面的 `rows` 仍要保留：下面第 5 步
+  //    轮询未完成任务状态时要用它（别顺手删掉）。
 
   // 2) 勾选
   const pickAll = document.getElementById("pick-all");
