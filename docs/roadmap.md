@@ -122,11 +122,20 @@
 
 ## 工程化
 
-- [~] 任务队列（Celery/RQ 或 asyncio）替代后台线程，支持并发任务与断点续扫：
+- [x] 任务队列（**持久化队列已落地**，2026-09-26 续49）：GUI 不再直接起后台线程，而是把任务
+      **入队**（`tasks.run_mode` / `queued_at` / `run_payload` + `db.enqueue_task`），由
+      `scanner/queue.py` 的 worker 原子认领执行（`db.claim_next_queued`，`WHERE status='queued'`
+      兜住并发，保证同一任务只有一个消费者）；默认**单消费者**（`queue.workers=1`，串行最省带宽、
+      最不易触发风控），服务器上可调大（上限 8）。**进程重启不丢任务**：启动对账
+      （`db.reconcile_orphan_tasks`）把"pid 已死"的 `running` **重新入队**（原 resume→resume、
+      原 append→append、原 fresh 有断点→resume、无断点→fresh，**保留 `current_stage` 断点**），
+      无运行规格的（CLI 直跑 / 老库行）仍标 `failed`。
       **「断点续扫」已落地**（续29：`runner.resume_stages()` + `POST /api/tasks/<id>/resume` +
       详情页「续跑」按钮，断点复用 `tasks.current_stage`；**续31 补齐 CLI 入口 `--resume-task <ID>`**，
       与 GUI 同口径：互斥参数直接报错、无断点在入口拒绝，见 `docs/architecture.md`）；
-      **任务队列本身仍未做**（当前仍是任务级后台线程 + 进程内写锁 `db._WRITE_LOCK`）；
+      **仍未做**：worker **只在控制台进程（`serve()`）里启动** —— CLI 仍是前台阻塞、没有队列
+      （`--resume-task` 是显式手动续跑）；**无优先级 / 定时任务 / 跨节点**；仍用 SQLite + 进程内写锁
+      （分布式节点认领需要先替换 SQLite，见下方「分布式节点」）；
 - [~] 鉴权加固：多用户、CSRF、HTTPS 部署指引：
       **「本机守卫」已落地**（续32：`gui/app.py` 的 `_local_guard` —— Host 白名单挡 DNS rebinding，
       写方法的 Origin/Referer 校验比 netloc **含端口**（Cookie 不按端口隔离），会话 Cookie 显式

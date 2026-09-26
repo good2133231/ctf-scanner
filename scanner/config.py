@@ -105,6 +105,15 @@ DEFAULTS = {
             "retention_days": 30,
         },
     },
+    "queue": {
+        # ---- 持久化任务队列（续49，见 scanner/queue.py）----
+        # 任务不再由 GUI 直接起线程，而是入队由 worker 消费 —— 进程重启后任务不丢
+        # （死掉的 running 会被对账**重新入队**，见 db.reconcile_orphan_tasks）。
+        # workers：并发消费者数。**默认 1 = 串行** —— 最省目标侧带宽、最不容易触发风控/封禁；
+        #   只有部署到服务器、确有多任务并行需求时才调大（上限 8）。>1 时靠
+        #   `db.claim_next_queued` 的原子认领保证同一任务不被重复消费。
+        "workers": 1,
+    },
     "limits": {
         "max_workers": 20,        # HTTP 探测 / 目录扫描 / DNS 爆破线程数
         "http_timeout": 10,       # 单请求超时（秒）

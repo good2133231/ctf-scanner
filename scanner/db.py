@@ -52,6 +52,19 @@ CREATE TABLE IF NOT EXISTS tasks (
   finished_at TEXT DEFAULT '',       -- 最近一次运行的结束时刻（'' = 还没收场）
   -- 同一任务多次运行（续跑 / 追加执行）的**累计**实际运行秒数，见 `finish_task_run`
   elapsed_seconds INTEGER DEFAULT 0,
+  -- 续49「持久化任务队列」：任务不再由 GUI 直接起线程，而是**入队**、由 `scanner/queue.py`
+  -- 的 worker 消费 —— 这样进程重启后任务不丢（见 `enqueue_task` / `claim_next_queued`）。
+  --   run_mode    ：本次运行模式 fresh / append / resume（''=非队列任务：CLI 直跑、老库行）。
+  --                 重启对账靠它判断"该按什么模式重新入队"（见 `reconcile_orphan_tasks`）。
+  --   queued_at   ：入队时刻（排队位置、"排了多久"都靠它）。
+  --   run_payload ：本次运行的**精确入参**（`{"stages":[...], "options":{...}}` 的 JSON）——
+  --                 队列必须能在进程重启后原样重建这一次运行（尤其"追加执行"的运行阶段与
+  --                 任务自身的 `stages` **不同**）。刻意与 `options` 分列：`options` 是任务的
+  --                 **持久配置**，而 `append_targets` 这类**运行期**参数不能污染它，否则下次
+  --                 「重启」会把它误当成追加、把输入收窄成空集（一次都不扫）。
+  run_mode TEXT DEFAULT '',
+  queued_at TEXT DEFAULT '',
+  run_payload TEXT DEFAULT '',
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS subdomains (
@@ -232,7 +245,11 @@ _COLUMN_PATCHES = {
               # 续35「运行时长」：老库补三列（新库由 SCHEMA 直接建出）。
               # 老行的 `started_at` 为空 → `task_run_seconds()` 返回 0、页面显示 `-`（**不编数**）
               "started_at": "TEXT DEFAULT ''", "finished_at": "TEXT DEFAULT ''",
-              "elapsed_seconds": "INTEGER DEFAULT 0"},
+              "elapsed_seconds": "INTEGER DEFAULT 0",
+              # 续49「持久化任务队列」：老库补三列（新库由 SCHEMA 直接建出）。
+              # 老行的 `run_mode=''` → 重启对账按"非队列任务"处理（仍标 failed，见 `reconcile`）。
+              "run_mode": "TEXT DEFAULT ''", "queued_at": "TEXT DEFAULT ''",
+              "run_payload": "TEXT DEFAULT ''"},
 }
 
 
@@ -282,6 +299,83 @@ def update_task(task_id, **fields):
     _exec(f"UPDATE tasks SET {sets} WHERE id=?", (*fields.values(), task_id))
 
 
+# ---------- 持久化任务队列（续49）----------
+# 设计要点（为什么是"入队 + worker 消费"而不是"直接起线程"）：
+# GUI 原来是 `threading.Thread(target=run_task, ...)`，进程一重启线程就没了、任务却仍挂
+# `running`（旧实现只能把它标 `failed`）。改成"把这次运行的**入参**写进库 + 置 `queued`"，
+# 由 worker 认领执行 —— 重启后对账把死掉的 `running` **重新入队**，任务不丢。
+# 队列的**认领**必须原子（`claim_next_queued`）：`runner._register_stop` 是"同 task 覆盖式
+# 注册"，若同一任务被两个消费者拿到，第二次会顶掉第一次的停止事件 → 用户点「停止」停不掉。
+_QUEUE_MODES = ("fresh", "append", "resume")
+
+
+def enqueue_task(task_id, mode="fresh", stages=None, options=None):
+    """把任务置为 `queued` 并记下本次运行的**精确入参**，等待 worker 认领（续49）。
+
+    - `mode`：`fresh` / `append` / `resume`（非法值一律归一为 `fresh`）。
+    - `stages`：本次要执行的阶段列表（**与任务自身的 `stages` 可能不同** —— 追加执行的运行
+      阶段就是本次勾选的阶段；续跑则是"断点及其之后"的切片）。
+    - `options`：本次运行的选项（含 `append` / `append_targets` 这类**运行期**参数）。
+
+    这两者写进 `run_payload`（JSON）而**不碰任务的 `stages` / `options` 列**：那些列是任务的
+    持久配置，被运行期参数污染会让下一次「重启」误判（详见 `tasks` 建表处 run_payload 注释）。
+    进程重启后 `reconcile_orphan_tasks` 会把死掉的 `running` 重新入队，`run_payload` 原样还在，
+    于是这一次运行能被**逐字重建**。
+    """
+    m = str(mode or "fresh").strip().lower()
+    if m not in _QUEUE_MODES:
+        m = "fresh"
+    fields = {"status": "queued", "run_mode": m, "queued_at": _now()}
+    if stages is not None:
+        payload = {"stages": [str(s) for s in stages]}
+        if options is not None:
+            payload["options"] = options
+        fields["run_payload"] = json.dumps(payload, ensure_ascii=False)
+    update_task(task_id, **fields)
+
+
+def claim_next_queued():
+    """原子地认领队首任务：把它从 `queued` 置为 `running` 并返回该行；无任务返回 `None`（续49）。
+
+    两步，各有理由：
+    1. **只读探一下队首**（`_query`）—— 用只读连接、**不进 `_WRITE_LOCK`**：队列是**空**的绝大多数
+       时间（worker 空转），空转时若也去抢那把全库唯一的写锁，就会和 dirscan / portscan 那几百行
+       一批的资产写入**争锁**。所以"有没有活"这件事走只读查询。
+    2. **一条原子 UPDATE 认领**（`WHERE id=? AND status='queued'`）：只有真正把状态从 `queued`
+       改成 `running` 的那一次 `rowcount==1` 才算认领成功 —— 并发下另一个消费者抢到同一行时
+       这里会得 0，于是返回 `None`、不重复消费（重复消费会顶掉停止事件，见文件头说明）。
+    """
+    head = _query("SELECT id FROM tasks WHERE status='queued' ORDER BY id ASC LIMIT 1", one=True)
+    if not head:
+        return None
+    tid = head["id"]
+    with _WRITE_LOCK:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE tasks SET status='running', updated_at=? "
+                        "WHERE id=? AND status='queued'", (_now(), tid))
+            conn.commit()
+            claimed = cur.rowcount == 1
+        finally:
+            conn.close()
+    return get_task(tid) if claimed else None
+
+
+def queued_position(task_id):
+    """该任务在队列里的位置（从 1 开始）；不在队列里返回 0（续49，页面展示用）。"""
+    rows = _query("SELECT id FROM tasks WHERE status='queued' ORDER BY id ASC")
+    for i, r in enumerate(rows):
+        if r["id"] == task_id:
+            return i + 1
+    return 0
+
+
+def queued_count():
+    """当前排队中的任务数（续49）。"""
+    return int(_query("SELECT COUNT(*) c FROM tasks WHERE status='queued'", one=True)["c"] or 0)
+
+
 def start_task_run(task_id, fresh=False, **fields):
     """记一次运行的**开始**（续35「运行时长」）：置 `running` 并写 `started_at`。
 
@@ -291,8 +385,12 @@ def start_task_run(task_id, fresh=False, **fields):
 
     其余 `fields`（`log_file` / `error` …）与 `update_task` 同义。`started_at` 必须由本模块写：
     它的格式由 `task_run_seconds()` 解析，两处各写一份 strftime 格式串一旦漂移，时长会**静默**算错。
+    `finished_at` 一并清空（续49）：一次新运行的开始意味着"上一段的结束时刻"已过期 ——
+    不清的话，被队列重新入队后又跑起来的任务会一直显示旧 `finished_at`，页面上的
+    「运行中，已 X」不再增长（`task_run_seconds` 见 `finished_at` 非空即只报累计值）。
     """
-    fields.update({"status": "running", "progress": 0, "current_stage": "", "started_at": _now()})
+    fields.update({"status": "running", "progress": 0, "current_stage": "",
+                   "started_at": _now(), "finished_at": ""})
     if fresh:
         fields["elapsed_seconds"] = 0
     update_task(task_id, **fields)
@@ -422,46 +520,65 @@ def _pid_alive(pid):
 
 
 def reconcile_orphan_tasks():
-    """启动时对账：把"进程已不在、状态却仍是 `running`"的孤儿任务标记为 `failed`。
+    """启动时对账：进程重启后把"进程已不在、状态却仍是 `running`"的孤儿任务**重新入队**。
 
-    背景：`runner._STOP_EVENTS` 是**进程内**字典。进程一重启，之前 `status='running'`
-    的任务再也没人推进，也永远不会被标失败 —— 就永久挂住了。用户拍板的语义是
-    **启动时标 `failed`、不自动续跑**（自动续跑会重复请求目标，且与"重启=新任务"的
-    既有模型冲突）。
+    背景：`runner._STOP_EVENTS` 是**进程内**字典，进程一重启，之前 `status='running'`
+    的任务就再也没人推进。续20~续35 的语义是"启动时标 `failed`、不自动续跑"；**续49 起
+    用户要求"重启不丢任务"**，于是带队列运行规格的任务改为**自动重新入队**（`status='queued'`），
+    由控制台的队列 worker（`scanner/queue.py`）接着跑。
 
     判据：
     - `pid` 指向**存活进程** → **跳过**（可能另一个进程正在正常跑它，绝不能误杀）；
-    - `pid` 已死 / 为 0（老库遗留行）→ `status='failed'`，并追加一条"进程重启，任务中断
-      （启动时对账）"到 `error`。
-    **刻意保留 `current_stage`**（续29）：它是"最后进入的阶段"，也就是断点续扫的断点
-    （`runner.resume_stages` 按它切片）。原来这里把它清成 `''`，等于把断点抹掉 ——
-    而"进程被重启打断"正是最需要续跑的场景之一。清理它由两种显式操作负责：
-    正常跑完（`PipelineRunner.run` 的 done 分支）与 GUI「重启」（从头跑）。
+    - `pid` 已死 / 为 0 **且该行带队列运行规格**（`run_mode` 非空）→ 重新入队；
+    - `pid` 已死 / 为 0 **且不带**运行规格（CLI 直跑、老库遗留行）→ 仍标 `failed`：
+      这类任务没有持久化的运行入参，且 CLI 是**前台阻塞、根本没有 worker**，重排只会让它
+      永远停在 `queued` —— 对它旧语义（明说中断）才是对的，也是既有回归 `[6d]`/`[6v]` 的口径。
 
-    **运行时长按"最后已知存活时刻"结账**（续35）：这里走 `finish_task_run(ended_at=本行原来的
+    重新入队的运行模式（续49 规则）：
+    - 原 `resume` → `resume`；原 `append` → `append`（`run_payload` 已含运行阶段与
+      `append_targets`，**注意 `run_task(append=True)` 不按 `current_stage` 切片** —— 追加执行
+      本就没有"断点续跑"语义，原样重跑那批阶段即可）；
+    - 原 `fresh` + 有断点（`current_stage` 非空）→ `resume`（从断点续跑，不白跑已完成的阶段）；
+    - 原 `fresh` + 无断点 → `fresh`（从头跑）。
+    **刻意保留 `current_stage`**（续29）：它是"最后进入的阶段"，也就是断点续扫的断点
+    （`runner.resume_stages` 按它切片）。清理它由两种显式操作负责：正常跑完与 GUI「重启」。
+
+    **运行时长按"最后已知存活时刻"结账**（续35）：走 `finish_task_run(ended_at=本行原来的
     `updated_at`)` 而不是普通 `update_task`。`updated_at` 是进程死前最后一次写库（阶段切换 /
     进度回填）的时刻，用它当结束时刻能把这段运行的时长**回收**进 `elapsed_seconds`；
     若改用"对账时刻"，进程几天前就死了的话会把停机时长整段算成运行时长。
 
     整体包一层 try/except：启动流程**不能被它拖垮**（库损坏 / 列缺失都应静默跳过）。
-    返回被标记的任务 id 列表（便于日志与测试断言）。
+    返回被处理（重新入队或标失败）的任务 id 列表（便于日志与测试断言）。
     """
-    marked = []
+    handled = []
     try:
-        rows = _query("SELECT id, pid, updated_at FROM tasks WHERE status='running'")
+        rows = _query("SELECT id, pid, updated_at, run_mode, current_stage "
+                      "FROM tasks WHERE status='running'")
         for r in rows:
             if _pid_alive(r["pid"]):
                 continue
             tid = r["id"]
             try:
-                finish_task_run(tid, ended_at=r["updated_at"], status="failed")
-                append_task_error(tid, "进程重启，任务中断（启动时对账）")
-                marked.append(tid)
+                mode = str(r["run_mode"] or "").strip().lower()
+                if mode in _QUEUE_MODES:
+                    # 带队列运行规格 → 重新入队（保留 run_payload，worker 能原样重建这次运行）
+                    new_mode = mode
+                    if mode == "fresh":
+                        new_mode = "resume" if str(r["current_stage"] or "").strip() else "fresh"
+                    finish_task_run(tid, ended_at=r["updated_at"], status="queued",
+                                    run_mode=new_mode, queued_at=_now())
+                    append_task_error(tid, "进程重启，任务已重新入队（自动续跑，启动时对账）")
+                else:
+                    # 无运行规格（CLI 直跑 / 老库行）→ 维持旧语义：标 failed
+                    finish_task_run(tid, ended_at=r["updated_at"], status="failed")
+                    append_task_error(tid, "进程重启，任务中断（启动时对账）")
+                handled.append(tid)
             except Exception:
                 continue
     except Exception:
-        return marked
-    return marked
+        return handled
+    return handled
 
 
 def get_task(task_id):

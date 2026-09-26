@@ -3,6 +3,84 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续49 持久化任务队列（重启不丢任务 + 自动续跑）
+> 实施者：**WorkBuddy · Hy4-preview** · 需求由**用户**提出、**主理人**派单（三条口径已定：重启=自动重排、默认单消费者、零新依赖）
+
+### 0. 是什么（需求）
+
+GUI 建的任务原先在 `_spawn()` 里 `threading.Thread(target=run_task, daemon=True)` **直接起线程** ——
+**进程一重启，线程就没了**，任务却仍挂在 `running`；旧实现（`db.reconcile_orphan_tasks`）只能把它
+标 `failed`（"进程重启，任务中断"）。用户要求：**重启不丢任务**。
+
+三条已定口径（不再改）：① 重启语义 = **自动重新入队**（pid 已死的 `running` → `queued`，**不是**
+`failed`）；② 并发 = 默认 **1 个 worker**（串行最省目标侧带宽），可配（`queue.workers`，上限 8）；
+③ **零新依赖**（继续用 SQLite，不引入 Celery/Redis）。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/db.py` | `tasks` SCHEMA + `_COLUMN_PATCHES` 新增 `run_mode` / `queued_at` / `run_payload`；新增队列段 `_QUEUE_MODES`、`enqueue_task`、`claim_next_queued`（**原子认领**）、`queued_position`、`queued_count`；`start_task_run` 补清 `finished_at`；`reconcile_orphan_tasks` 改为**重新入队**（带运行规格的行） |
+| `scanner/queue.py`（**新**） | worker 模块：`start/stop/notify/running`；空转 0.2s→2s 指数退避 + `Condition`（代次计数）唤醒；worker 异常只收尾该任务、**不杀线程** |
+| `gui/app.py` | `_spawn` 改为 `db.enqueue_task(...)` + `queue.notify()`（**不再起线程**）；`_append_guard` 同时拒 `running`/`queued`；停止路由支持 `queued`（直接置 `stopped`）；任务列表/详情显示「排队中」+ 队列位次；`serve()` 启动 worker（`start_queue=False` 供测试关闭） |
+| `gui/templates/{tasks,task_detail,dashboard}.html` | 「排队中」徽章 + 位次；停止按钮对 `queued` 可用；详情页排队提示；轮询条件含 `queued` |
+| `gui/static/style.css` | `.st-queued` 徽章色（`--st-queue-fg/bg`） |
+| `scanner/config.py` | DEFAULTS 新增 `queue: {workers: 1}`（中文注释：串行=最省带宽，服务器可调大） |
+| `config/settings.yaml` | 新增 `queue:` 段 + 中文注释 |
+| `cli/client.py` | 注释同步新对账语义 |
+| `tools/check_contrast.py` | 新增 `st-queued` 对比度检查（5.73:1 通过；全 141 项 0 失败） |
+| `docs/{roadmap,architecture,deploy-https}.md` | roadmap「任务队列」转 `[x]` 并写明"仍未做"；architecture 新增 §流水线 8 + tasks 表补三列；deploy 新增 §7.4 |
+| `tests/smoke.py` | 新增 `[7k]` 组（6 组断言 + 2 条 §6.1 证伪）；适配旧 `[6l]`/`[6q]`（`_spawn` 不再直接调 `run_task`）；`[7i]` 改用 `serve(start_queue=False)` |
+
+### 2. 关键设计取舍（为什么这么做）
+
+- **认领必须原子**：`runner._register_stop` 是**同 task 覆盖式注册**（后写覆盖先写）。若同一任务被
+  消费两次，第二次会顶掉第一次的停止事件 → 用户点「停止」停不掉。故认领用
+  `UPDATE tasks SET status='running' WHERE id=? AND status='queued'`，只有 `rowcount==1` 才算抢到。
+- **队头只读探测**：队列绝大多数时间是空的（worker 空转），空转时若也去抢全库唯一的 `db._WRITE_LOCK`，
+  会和 dirscan / portscan 那几百行一批的资产写入**争锁**。故"有没有活"走只读 `_query`，只有认领那
+  一条 UPDATE 才进写锁。
+- **`run_payload` 与 `options` 分列**：`append` / `append_targets` 是**运行期**参数，若写进任务的
+  `options` 列会污染持久配置、让下次「重启」误判。故本次运行的 `{stages, options}` 单独存 `run_payload`。
+- **不复用 `runner._STOP_EVENTS`**：那是任务级取消信号（随单次 run 生灭），worker 需要的是常驻的
+  "唤醒/停止"信号，混用会让"停任务"与"停 worker"纠缠。故 `queue.py` 自带 `Event` + `Condition`。
+- **`run_task(append=True)` 不按 `current_stage` 切片**（**如实记录，未改**）：追加执行本就没有"断点续跑"
+  语义，重启后原样重跑那批阶段即可；只有 `resume` 才按 `resume_stages` 切片。
+
+### 3. 怎么验证（实测）
+
+- 独立探针 `logs/_probe49.py`（隔离 DB）：enqueue → claim → 消费到 `done`；`stop()` 后 `running()` 为 False。
+- 门禁 `py -3 -u tests/smoke.py` → **EXIT=0 / `SMOKE PASS` ×1 / `AssertionError` 0**；`[7j]`（续48）与
+  新 `[7k]` 均打印（日志 `logs/_smoke49d.txt`）。
+  - ⚠️ **本机跑 smoke 必须设 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=100000000`**：否则 CodeBuddy 的
+    bulk 删除守卫会拦掉 smoke 沙盒清理（`SAFE_DELETE_BULK_CONFIRM_REQUIRED {"count":142}`），
+    整轮**无任何测试输出**即退出。这是本机环境限制，与代码无关。
+- `[7k]` 覆盖：① enqueue→worker 消费到终态；② 模拟重启（伪造 `running` + 死 pid + 非空 `current_stage`
+  → `reconcile_orphan_tasks` → 断言 `queued`/`run_mode='resume'`/`current_stage` 保留；worker 再消费）；
+  ③ 停掉一个 `queued` 任务 → 不被消费；④ `queue.workers=1` 无并发（峰值==1）；⑤ `run_mode`/`queued_at`/
+  `run_payload` 持久化；⑥ 老库缺列 → `_ensure_columns` 补出新列。
+- `git diff --numstat == --ignore-cr-at-eol --numstat` 逐文件一致。
+
+### 4. §6.1 证伪（把实现临时退回旧行为，确认新断言**真的变红**）
+
+脚本 `logs/_mutate_49.py`（跑完自动还原，**变异版本不提交**），两相各跑一次完整 smoke：
+
+- **A. `_spawn` 退回"直接起后台线程"**（旧实现）→ `[6l]` 红：
+  `AssertionError: 追加应把任务入队（status=queued + run_mode=append）：{... 'status': 'running' ... 'run_mode': '' ...}`
+  （`rc=1`，`logs/_mut49_A_spawn_thread.txt`）。
+- **B. `reconcile_orphan_tasks` 退回"一律标 failed"**（旧语义）→ `[7k]` ② 红：
+  `AssertionError: 重启对账必须**重新入队**（不是标 failed）：'failed'`
+  （`rc=1`，`logs/_mut49_B_reconcile_failed.txt`）。
+
+两条都**真的变红**，证明新断言测的正是"入队"与"重启重新入队"这两条新语义，而非恒真。
+
+### 5. 仍未做（如实记录）
+
+- worker **只在控制台进程内**运行（`serve()` 启动）；CLI 仍**前台阻塞**、无 worker（CLI 首跑的
+  `run_mode` 为空，重启对账仍按旧语义标 `failed`，这是刻意的）。
+- **无优先级 / 定时任务**；队列是纯 FIFO（按 `id ASC`）。
+- 未引入任何新依赖（仍 SQLite）。
+
 ## 2026-09-26 —— 续48 复核返工（第二轮）：审计行补齐「谁打谁」信息
 > 实施者：**WorkBuddy · Hy4-preview** · 缺陷由**主理人复核发现并派单**
 

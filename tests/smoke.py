@@ -4224,27 +4224,24 @@ workflows:
     assert _r6l2.status_code == 409 and "没有源任务" in _r6l2.get_data(as_text=True), \
         _r6l2.status_code
 
-    # (6) 成功追加（桩掉 run_task 避免真起线程）：复用同一任务、不新建、append_count 递增
-    _n_tasks6l = len(db.list_tasks(limit=1000))
-    _orig_rt6l = gui_app.run_task
-    _spawned6l = []
-    gui_app.run_task = lambda tid, *a, **kw: _spawned6l.append((tid, kw.get("append")))
-    try:
-        _r6l3 = c.post("/api/rescan", data={"stage": "dirscan", "from_task": str(_ap_tid),
-                                            "append": "1", "target": _scope[0],
-                                            "next": "/tasks"})
-        assert _r6l3.status_code == 302, _r6l3.status_code
-        assert _r6l3.headers["Location"].rstrip("/").endswith(f"/tasks/{_ap_tid}"), \
-            _r6l3.headers["Location"]
-        for _ in range(100):
-            if _spawned6l:
-                break
-            _time6l.sleep(0.02)
-    finally:
-        gui_app.run_task = _orig_rt6l
-    assert len(db.list_tasks(limit=1000)) == _n_tasks6l, "追加**不得**新建任务"
-    assert _spawned6l == [(_ap_tid, True)], f"应追加到源任务且 append=True：{_spawned6l}"
+    # (6) 成功追加：复用同一任务、不新建、append_count 递增。
+    #     续49 起 `_spawn` 不再直接起线程，而是**入队**（写 run_payload + 置 queued）——
+    #     所以这里改断言"队列状态"（status/run_mode/run_payload），不再断言"run_task 被调用"。
     import json as _json6l
+    _n_tasks6l = len(db.list_tasks(limit=1000))
+    _r6l3 = c.post("/api/rescan", data={"stage": "dirscan", "from_task": str(_ap_tid),
+                                        "append": "1", "target": _scope[0],
+                                        "next": "/tasks"})
+    assert _r6l3.status_code == 302, _r6l3.status_code
+    assert _r6l3.headers["Location"].rstrip("/").endswith(f"/tasks/{_ap_tid}"), \
+        _r6l3.headers["Location"]
+    assert len(db.list_tasks(limit=1000)) == _n_tasks6l, "追加**不得**新建任务"
+    _ap6l = dict(db.get_task(_ap_tid))
+    assert _ap6l["status"] == "queued" and _ap6l["run_mode"] == "append", \
+        f"追加应把任务入队（status=queued + run_mode=append）：{_ap6l}"
+    _pl6l = _json6l.loads(_ap6l["run_payload"] or "{}")
+    assert (_pl6l.get("options") or {}).get("append") is True, f"追加运行入参缺 append：{_pl6l}"
+    assert _pl6l.get("stages") == ["dirscan"], f"追加运行的阶段应写进入参：{_pl6l}"
     _opt6l = _json6l.loads(db.get_task(_ap_tid)["options"] or "{}")
     assert _opt6l.get("append_count") == 1 and _opt6l.get("appended") is True, _opt6l
 
@@ -4709,28 +4706,21 @@ workflows:
             _rb6q.get_json()
     finally:
         _rn6._unregister_stop(_gq_tid)
-    # 4c 有断点 → 放行：复用同一任务、阶段切到"断点及其之后"、resume=True、append* 已剥掉
+    # 4c 有断点 → 放行：复用同一任务、阶段切到"断点及其之后"、resume=True、append* 已剥掉。
+    #     续49 起改断言"队列入参"（run_payload）：`_spawn` 不再起线程，而是把入参写进
+    #     `tasks.run_payload` 并置 `queued`，由 worker 认领。
     _n_tasks6q = len(db.list_tasks(limit=1000))
-    _orig_rt6q = gui_app.run_task
-    _spawned6q = []
-    gui_app.run_task = lambda tid, *a, **kw: _spawned6q.append(
-        (tid, a[2], kw.get("append"), kw.get("resume"), a[3]))
-    try:
-        _rc6q = c.post(f"/api/tasks/{_gq_tid}/resume")
-        assert _rc6q.get_json()["ok"] is True and "dirscan" in _rc6q.get_json()["msg"], \
-            _rc6q.get_json()
-        for _ in range(100):
-            if _spawned6q:
-                break
-            time.sleep(0.02)
-    finally:
-        gui_app.run_task = _orig_rt6q
+    _rc6q = c.post(f"/api/tasks/{_gq_tid}/resume")
+    assert _rc6q.get_json()["ok"] is True and "dirscan" in _rc6q.get_json()["msg"], \
+        _rc6q.get_json()
     assert len(db.list_tasks(limit=1000)) == _n_tasks6q, "续跑**不得**新建任务"
-    assert len(_spawned6q) == 1, _spawned6q
-    _q_spawn_tid, _q_spawn_stages, _q_spawn_append, _q_spawn_resume, _q_spawn_opts = _spawned6q[0]
-    assert _q_spawn_tid == _gq_tid and _q_spawn_stages == ["dirscan", "vulnscan"], _spawned6q[0]
-    assert _q_spawn_resume is True and _q_spawn_append is False, \
-        "续跑必须是独立参数（复用 append=True 会带上「输入收窄」的语义，传空等于一次都不扫）"
+    _gq_row = dict(db.get_task(_gq_tid))
+    assert _gq_row["status"] == "queued" and _gq_row["run_mode"] == "resume", \
+        f"续跑应把任务入队（status=queued + run_mode=resume）：{_gq_row}"
+    _q_spawn = _json6q.loads(_gq_row["run_payload"] or "{}")
+    assert _q_spawn.get("stages") == ["dirscan", "vulnscan"], \
+        f"续跑入参的阶段应是断点及其之后：{_q_spawn}"
+    _q_spawn_opts = _q_spawn.get("options") or {}
     assert _json6q.loads(db.get_task(_gq_tid)["options"] or "{}").get("append") is True, \
         "本用例前提：库里确实存着上次追加的运行期参数（否则下面那条断言是空过的）"
     assert "append" not in _q_spawn_opts and "append_targets" not in _q_spawn_opts, \
@@ -7161,7 +7151,9 @@ http:
         gui_app.app.run = lambda *a, **k: None        # 不真起服务器（否则测试会挂在这里）
         try:
             with _ctx7i.redirect_stdout(_buf):
-                gui_app.serve()
+                # 续49：本用例只验启动**提示**文案，绝不能顺手起任务队列 worker
+                # （否则本测试库里残留的 queued 行会被真消费，污染其它用例）。
+                gui_app.serve(start_queue=False)
         finally:
             gui_app.load_settings, gui_app._port_free = _orig_load7i, _orig_port_free
             if _had_run:
@@ -7617,6 +7609,200 @@ http:
           "审计记全『谁打谁』（IP 级锁也记被尝试账号、用户名级锁也记来源 IP）/ IP 级锁不误升级成账号级锁 / "
           "target·detail 均擦洗 / 引导口令同样受 IP 限速 / guard·audit 抛异常不阻断登录 / "
           "审计只记元数据（明文口令·哈希·引导口令值·提交值均不落表·不上页）/ 6 条变异证伪全部按预期变红")
+
+    # [7k] 续49 **持久化任务队列**（`scanner/queue.py` + `db.enqueue_task` / `claim_next_queued`）。
+    #      背景：原 `_spawn()` 直接 `threading.Thread(target=run_task)` —— 进程一重启线程没了、
+    #      任务却仍挂 `running`（旧实现只能标 failed）。用户要求"重启不丢任务"，于是改成
+    #      "把本次运行入参写库 + 置 queued，由 worker 认领执行"；重启对账把死掉的 running
+    #      **重新入队**。本组用**独立临时库**（与前面用例的库隔离）：前面不少用例 POST 过建任务
+    #      路由、库里会残留 `queued` 行，共用库的话本组起的 worker 会把它们一并消费掉。
+    #      钉死 6 条语义（末尾 §6.1 变异证伪）：
+    #      ① 入队 → worker 认领（queued→running）→ 执行 → 终态 done；
+    #      ② 模拟进程重启：死 pid + 非空断点的 running → 对账**重新入队**（run_mode=resume、
+    #         断点保留），worker 能接着消费；
+    #      ③ 排队中的任务被「停止」→ 从队列移除、**不被认领**（db 层 + `/api stop` 路由）；
+    #      ④ `queue.workers=1` **不并发**（同一时刻最多一个任务在跑）；
+    #      ⑤ `run_mode` / `queued_at` / `run_payload` 落库；⑥ 老库（缺列）经 `_ensure_columns` 补出。
+    import json as _json49
+    import sqlite3 as _sqlite49
+    import scanner.queue as _q49
+
+    _qdb49 = _TMPDIR / "queue49.db"
+    _saved_db49 = db.DB_PATH
+    db.DB_PATH = _qdb49
+    _seen49 = []
+    _live49 = {"cur": 0, "max": 0}
+    _lk49 = threading.Lock()
+
+    def _consume49(tid, mode):
+        """消费者桩：记录 (task_id, mode)、统计并发峰值、模拟 run_task 的终态（done）。
+
+        本组只验**队列本身**（认领 / 模式 / 并发 / 重启），不真跑流水线 —— 用桩把
+        `runner.run_task` 换掉，既快又不产生任何真实请求。
+        """
+        with _lk49:
+            _live49["cur"] += 1
+            _live49["max"] = max(_live49["max"], _live49["cur"])
+        try:
+            _seen49.append((tid, mode))
+            time.sleep(0.05)          # 留出并发窗口：串行时峰值恒为 1
+            db.update_task(tid, status="done", progress=100, current_stage="")
+        finally:
+            with _lk49:
+                _live49["cur"] -= 1
+
+    def _wait49(tid, want, timeout=6.0):
+        end = time.time() + timeout
+        while time.time() < end and db.get_task(tid)["status"] != want:
+            time.sleep(0.02)
+        return db.get_task(tid)["status"] == want
+
+    try:
+        db.init_db()
+        _qset49 = copy.deepcopy(settings)
+        _qset49["queue"] = {"workers": 1}
+        # 配置口径：默认单消费者、非法值回落、上限 8
+        assert _q49.config(_qset49)["workers"] == 1
+        assert _q49.config({"queue": {"workers": 99}})["workers"] == 8, "workers 必须夹到 1..8"
+        assert _q49.config({})["workers"] == 1, "缺省必须单消费者（串行 = 最省带宽、最不易触发风控）"
+        assert _q49.config({"queue": {"workers": "x"}})["workers"] == 1, "非法值回落 1"
+
+        # ① 入队 → 消费 → 终态；⑤ run_mode / queued_at / run_payload 落库
+        _t1 = db.create_task("smoke-q1", targets, ["probe"], {"offline": True})
+        db.enqueue_task(_t1, "fresh", ["probe"], {"offline": True})
+        _r1 = dict(db.get_task(_t1))
+        assert _r1["status"] == "queued" and _r1["run_mode"] == "fresh", _r1
+        assert str(_r1["queued_at"] or "").strip(), "queued_at 必须落库（排队位置/时长靠它）"
+        assert _r1["run_payload"] and '"probe"' in _r1["run_payload"], \
+            "本次运行的精确入参必须写进 run_payload（重启后靠它重建）"
+        _q49.start(_qset49, dispatch=_consume49)
+        assert _wait49(_t1, "done"), \
+            f"入队任务必须被 worker 消费到终态：{db.get_task(_t1)['status']!r}"
+        assert (_t1, "fresh") in _seen49, _seen49
+        assert db.queued_count() == 0
+
+        # ② 模拟进程重启：带运行规格 + 死 pid + 非空断点 → 对账**重新入队**（resume、断点保留），
+        #    worker 接着消费。先停 worker，让对账结果可观测（否则 worker 会立刻把它领走）。
+        _q49.stop()
+        _t2 = db.create_task("smoke-q2", targets, ["probe", "dirscan"], {"offline": True})
+        db._exec("UPDATE tasks SET status='running', pid=0, current_stage='dirscan', "
+                 "run_mode='fresh', run_payload=? WHERE id=?",
+                 (_json49.dumps({"stages": ["probe", "dirscan"], "options": {"offline": True}}), _t2))
+        _handled49 = db.reconcile_orphan_tasks()
+        _r2 = dict(db.get_task(_t2))
+        assert _t2 in _handled49, "带运行规格的孤儿任务必须被对账处理"
+        assert _r2["status"] == "queued", \
+            f"重启对账必须**重新入队**（不是标 failed）：{_r2['status']!r}"
+        assert _r2["run_mode"] == "resume", \
+            f"有断点的 fresh 任务重启后应按 resume 续跑：{_r2['run_mode']!r}"
+        assert _r2["current_stage"] == "dirscan", "对账必须**保留断点**（续跑靠它切片）"
+        assert "重新入队" in (_r2["error"] or ""), "重新入队要留一条可读说明"
+        _q49.start(_qset49, dispatch=_consume49)
+        assert _wait49(_t2, "done"), \
+            f"重新入队的任务必须被 worker 接着消费：{db.get_task(_t2)['status']!r}"
+        assert (_t2, "resume") in _seen49, f"必须以 resume 模式消费：{_seen49}"
+        # §6.1 证伪：把"队列模式"清空 → 同一输入会退回旧语义（标 failed），② 的断言必红
+        _real_modes49 = db._QUEUE_MODES
+        db._QUEUE_MODES = ()
+        try:
+            _t2b = db.create_task("smoke-q2b", targets, ["probe", "dirscan"], {"offline": True})
+            db._exec("UPDATE tasks SET status='running', pid=0, current_stage='dirscan', "
+                     "run_mode='fresh', run_payload='{}' WHERE id=?", (_t2b,))
+            db.reconcile_orphan_tasks()
+            assert db.get_task(_t2b)["status"] == "failed", \
+                "变异后应退回旧语义（failed）→ 证明 ② 测的就是'重新入队'这条路径"
+        finally:
+            db._QUEUE_MODES = _real_modes49
+
+        # ③ 排队中的任务被「停止」→ 从队列移除、不被认领（db 层）
+        _q49.stop()
+        _t3 = db.create_task("smoke-q3-stop", targets, ["probe"], {"offline": True})
+        _t3b = db.create_task("smoke-q3-keep", targets, ["probe"], {"offline": True})
+        db.enqueue_task(_t3, "fresh", ["probe"], {"offline": True})
+        db.enqueue_task(_t3b, "fresh", ["probe"], {"offline": True})
+        assert db.queued_position(_t3) == 1 and db.queued_position(_t3b) == 2, "排队位置按 id 升序"
+        db.update_task(_t3, status="stopped")     # 等价于「停止」路由对 queued 的处置
+        _nxt49 = db.claim_next_queued()
+        assert _nxt49 and _nxt49["id"] == _t3b, \
+            f"被停止的排队任务不得被认领，应认领下一条：{_nxt49 and _nxt49['id']}"
+        assert db.get_task(_t3)["status"] == "stopped"
+        db.update_task(_t3b, status="stopped")    # 还原，别留给后面的用例
+        # 路由层：/api/tasks/<id>/stop 对 queued 必须"从队列移除"（而不是回"未在运行"）
+        _t4 = db.create_task("smoke-q4-route", targets, ["probe"], {"offline": True})
+        db.enqueue_task(_t4, "fresh", ["probe"], {"offline": True})
+        _cq49 = app.test_client()
+        assert _cq49.post("/login", data={"token": settings["gui"]["token"]},
+                          environ_base={"REMOTE_ADDR": "203.0.113.91"}).status_code == 302, \
+            "前置：无账号时引导口令可登录（[7j] 末尾已清空账号）"
+        _rs49 = _cq49.post(f"/api/tasks/{_t4}/stop")
+        _rj49 = _rs49.get_json()
+        assert _rs49.status_code == 200 and _rj49.get("ok") is True, _rj49
+        assert "队列" in (_rj49.get("msg") or ""), f"排队任务停止应说明'从队列移除'：{_rj49}"
+        assert db.get_task(_t4)["status"] == "stopped", "停止后必须离开队列"
+        assert db.claim_next_queued() is None, "停止后队列里不该再认领到它"
+        # §6.1 证伪：把认领的 status 过滤放宽到含 stopped → 被停止的任务也会被认领（③ 必红）
+        _real_claim49 = db.claim_next_queued
+
+        def _claim_loose49():
+            r = db._query("SELECT id FROM tasks WHERE status IN ('queued','stopped') "
+                          "ORDER BY id ASC LIMIT 1", one=True)
+            return db.get_task(r["id"]) if r else None
+
+        db.claim_next_queued = _claim_loose49
+        try:
+            _m49 = db.claim_next_queued()
+            assert _m49 and _m49["status"] == "stopped", \
+                "变异后应能认领到被停止的任务 → 证明 ③ 测的就是'认领只看 queued'"
+        finally:
+            db.claim_next_queued = _real_claim49
+
+        # ④ queue.workers=1 不并发：一次入队 3 个，单 worker 串行消费，并发峰值恒为 1
+        _q49.stop()
+        _t5s = []
+        for _i in range(3):
+            _tx = db.create_task(f"smoke-q5-{_i}", targets, ["probe"], {"offline": True})
+            db.enqueue_task(_tx, "fresh", ["probe"], {"offline": True})
+            _t5s.append(_tx)
+        _live49["max"] = 0
+        _q49.start(_qset49, dispatch=_consume49)
+        for _tx in _t5s:
+            assert _wait49(_tx, "done"), f"#{_tx} 必须被消费：{db.get_task(_tx)['status']!r}"
+        assert _live49["max"] == 1, f"workers=1 时同一时刻只能有一个任务在跑：峰值 {_live49['max']}"
+        assert all((_tx, "fresh") in _seen49 for _tx in _t5s), _seen49
+        # §6.1 证伪（①）：消费者啥也不做 → 任务停在 running（不会被置 done）
+        _q49.stop()
+        _t5 = db.create_task("smoke-q5-noop", targets, ["probe"], {"offline": True})
+        db.enqueue_task(_t5, "fresh", ["probe"], {"offline": True})
+        _q49.start(_qset49, dispatch=lambda tid, mode: None)
+        time.sleep(0.3)
+        assert db.get_task(_t5)["status"] != "done", \
+            "消费者不做收尾时任务不该 done → 证明 ① 的 done 真由消费者产生（不是入队自带）"
+        _q49.stop()
+    finally:
+        _q49.stop()
+        db.DB_PATH = _saved_db49
+
+    # ⑥ 老库补列：造一张"缺 run_mode/queued_at/run_payload"的 tasks 表 → `_ensure_columns` 补出
+    _legacy49 = _TMPDIR / "queue49-legacy.db"
+    _lc49 = _sqlite49.connect(str(_legacy49))
+    _lc49.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY, name TEXT, targets TEXT, stages TEXT)")
+    _lc49.commit()
+    _lc49.close()
+    _saved_db49b = db.DB_PATH
+    db.DB_PATH = _legacy49
+    try:
+        db.init_db()
+        _cols49 = {r["name"] for r in db._query("PRAGMA table_info(tasks)")}
+        for _c in ("run_mode", "queued_at", "run_payload"):
+            assert _c in _cols49, f"老库必须被补出列 {_c}：{sorted(_cols49)}"
+    finally:
+        db.DB_PATH = _saved_db49b
+
+    print("[7k] 续49 持久化任务队列 ok: 入队→worker 认领→终态 done / 重启对账把带运行规格的 "
+          "running **重新入队**（fresh+断点→resume、断点保留、留说明；无规格仍标 failed）/ "
+          "排队中「停止」从队列移除且不被认领（db 层 + /api stop 路由）/ workers=1 不并发"
+          "（峰值恒 1）/ run_mode·queued_at·run_payload 落库 / 老库缺列经 _ensure_columns 补出 / "
+          "3 条变异证伪全部按预期变红")
 
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），

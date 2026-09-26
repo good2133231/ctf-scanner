@@ -162,12 +162,26 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
    先读后写之间丢时长；`MAX(0,…)` + `COALESCE` 兜住"无起点 / 时钟回拨"（不写负数）。
    `db.task_run_seconds()` 是唯一读侧口径（已累计 + 正在跑的这一段），GUI 详情页「目标与配置」与
    CLI 摘要都用它；孤儿任务对账按该行**原 `updated_at`**（最后已知存活时刻）结账，不把停机算进去。
+8. **持久化任务队列**（续49）：GUI 不再直接 `threading.Thread(target=run_task)`，而是把任务
+   **入队**（`tasks.run_mode` / `queued_at` / `run_payload` + `db.enqueue_task`），由 `scanner/queue.py`
+   的 worker 认领执行。认领是**单条原子 UPDATE**（`db.claim_next_queued`：`UPDATE tasks SET
+   status='running' WHERE id=? AND status='queued'`，`rowcount==1` 才算抢到），保证同一任务只有
+   一个消费者 —— `runner._register_stop` 是**覆盖式**注册（后写覆盖先写），若同一任务被消费两次，
+   停止信号会指向错的线程。队头**只读探测**走 `db._query`（不进 `db._WRITE_LOCK`），空队列 / worker
+   空闲时不与 dirscan / portscan 争写锁。worker 数 = `queue.workers`（默认 1，串行最省带宽；上限 8），
+   空闲按 0.2s→2s 指数退避 + `Condition`（代次计数）唤醒，不忙等；worker 异常捕获记日志、**不杀线程**。
+   **进程重启**：`db.reconcile_orphan_tasks` 对 `run_mode ∈ {fresh,append,resume}` 的 pid-死 `running`
+   行**重新入队**（不标 failed）：原 `resume`→`resume`、原 `append`→`append`、原 `fresh` 且
+   `current_stage` 非空→`resume`（`current_stage` 即断点，**保留**）、原 `fresh` 且无断点→`fresh`；
+   并往任务日志追加「进程重启，任务已重新入队（自动续跑）」。**旧行**（无 `run_mode`，如 CLI 首跑）
+   仍按旧语义标 `failed`。worker 只在**控制台进程内**运行（`serve()` 启动，`start_queue=False` 可关），
+   CLI 仍前台阻塞。
 
 ## 数据库表
 
 | 表 | 字段要点 | 说明 |
 |---|---|---|
-| tasks | targets, stages, options, status, progress, current_stage, log_file, error, pid, **started_at, finished_at, elapsed_seconds** | 任务状态机：pending → running → done/stopped/failed；三列运行时长字段由 `start_task_run` / `finish_task_run` 维护（续35，见上 §流水线 7） |
+| tasks | targets, stages, options, status, progress, current_stage, log_file, error, pid, **started_at, finished_at, elapsed_seconds, run_mode, queued_at, run_payload** | 任务状态机：pending → **queued** → running → done/stopped/failed；三列运行时长字段由 `start_task_run` / `finish_task_run` 维护（续35，见上 §流水线 7）；续49 三列供持久化队列：`run_mode`（fresh/append/resume，空=旧行/CLI 首跑）、`queued_at`（入队时刻）、`run_payload`（本次运行的 `{stages, options}` 快照，与持久 `options` 分开以免 `append_targets` 污染） |
 | subdomains | domain, source, cname, ip, cdn, **ip_note** | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa / osint:fofa-cert / osint:fofa-title / osint:shodan / osint:quake / osint:ctlog）两类；cname 由 takeover 阶段回填，ip / cdn / ip_note 由 subdomain 阶段回填（cdn 为空即"非 CDN"；`ip_note` 是解析失败/未解析的**原因码**：nxdomain / no-a / servfail / refused / timeout / error / empty / over-limit，页面上经 `gui.app.ip_note_label` 翻成中文）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`；拓展域名页默认隐藏重叠（`db.OVERLAP_EXT_WHERE`：域名已存在于任意任务的"目标自身子域名"里）。
 续40 新增两个来源：`target`（目标是子域时把它自己也记成子域资产，仅任务级 `auto_expand` 打开时）
 与 `promote:<原来源>`（拓展域名经**归属判定**——注册域命中任务目标——后**追加**出的自身子域行，

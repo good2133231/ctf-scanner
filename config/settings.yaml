@@ -30,6 +30,13 @@ gui:
   audit:
     enabled: true
     retention_days: 30
+# ---- 持久化任务队列（续49，见 scanner/queue.py）----
+# 任务不再由控制台直接起线程，而是**入队**由 worker 消费 —— 进程重启后任务不丢
+# （死掉的 running 会被启动对账**重新入队**，见 db.reconcile_orphan_tasks）。
+# workers：并发消费者数。默认 1 = 串行 —— 最省目标侧带宽、最不容易触发风控/封禁；
+#   只有部署到服务器、确有多任务并行需求时才调大（上限 8）。
+queue:
+  workers: 1
 limits:
   max_workers: 20
   http_timeout: 10

@@ -215,13 +215,15 @@ TEXT_PAIRS: Sequence[Pair] = (
     ("技术栈标签 正文 / --soft",      "--text",     "--soft",        TH_TEXT),
 )
 
-#: 10 组徽章：任务状态 5 组 + 漏洞等级 5 组，前景/背景成对定义，全部按正文 4.5:1 判定。
+#: 11 组徽章：任务状态 6 组（含续49 的 st-queued 排队中）+ 漏洞等级 5 组，
+#: 前景/背景成对定义，全部按正文 4.5:1 判定。
 BADGE_PAIRS: Sequence[Pair] = (
     ("徽章 st-running",   "--st-run-fg",  "--st-run-bg",  TH_TEXT),
     ("徽章 st-done",      "--st-done-fg", "--st-done-bg", TH_TEXT),
     ("徽章 st-failed",    "--st-fail-fg", "--st-fail-bg", TH_TEXT),
     ("徽章 st-pending",   "--st-wait-fg", "--st-wait-bg", TH_TEXT),
     ("徽章 st-stopped",   "--st-stop-fg", "--st-stop-bg", TH_TEXT),
+    ("徽章 st-queued",    "--st-queue-fg", "--st-queue-bg", TH_TEXT),
     ("徽章 sev-critical", "--sev-crit-fg", "--sev-crit-bg", TH_TEXT),
     ("徽章 sev-high",     "--sev-high-fg", "--sev-high-bg", TH_TEXT),
     ("徽章 sev-medium",   "--sev-med-fg",  "--sev-med-bg",  TH_TEXT),

@@ -200,6 +200,21 @@ py -3 -m scanner.login_guard --clear            # 全清
 塞一个 `X-Forwarded-For` 把限速按 IP 的判据整个绕开。这正是 §6 表格里 `behind_proxy` 那行"必须同时
 保证 5000 端口不对外"的原因。
 
+### 7.4 任务队列 worker 与"进程重启"（续49 新增）
+
+续49 起任务不再由控制台直接起后台线程，而是**入队**、由 `scanner/queue.py` 的 worker 消费：
+
+- **worker 只在控制台进程里启动**（`serve()`，即 `python run_gui.py` / `python gui/app.py`），
+  与进程**同生共死**（daemon 线程）。它**刻意不在 `create_app()` 里启动** —— 那个函数会被测试 /
+  WSGI 在 import 期调用，在工厂里起后台线程会产生 import 副作用。因此用**反向代理 + 多进程**部署时，
+  请只跑**一个**控制台进程：多个进程会各起一套 worker，既把并发数翻倍、又会同时抢同一个 SQLite。
+- **进程重启不丢任务**：重启后启动对账（`db.reconcile_orphan_tasks`）会把"pid 已死、状态仍是
+  `running`"的**队列任务重新入队**，worker 接着跑（原续跑→续跑、原追加→追加、原新建但有断点→
+  从断点续跑，断点 `current_stage` 保留）。CLI 直跑 / 老库遗留行没有持久化运行规格，
+  仍按旧语义标 `failed`（CLI 是前台阻塞、没有 worker）。
+- **并发数** `queue.workers`（默认 1 = 串行）：串行最省目标侧带宽、最不容易触发风控；确需多任务
+  并行时才调大（上限 8）。所有 worker 共享同一个 SQLite（`db._WRITE_LOCK` 串行化写）。
+
 ## 8. 明确"仍然没做"（别把本文当安全承诺）
 
 - **没有验证码 / 账号锁定通知**：限速只是"慢下来 + 临时锁"（续48），挡不住低速慢猜；口令强度仍靠

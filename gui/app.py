@@ -41,7 +41,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import (audit, auth as taskauth, blacklist, cdn, certs as certs_mod, db, dnsq,
-                     extdom, login_guard, screenshot, users)
+                     extdom, login_guard, queue, screenshot, users)
 from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
@@ -342,8 +342,11 @@ def create_app():
     app.jinja_env.globals["source_label"] = source_label
     app.jinja_env.globals["ip_note_label"] = ip_note_label
     db.init_db()
-    # 启动时对账：进程重启后，之前 status='running' 的孤儿任务没人推进，标为 failed
-    # （不自动续跑；pid 仍存活的跳过，见 db.reconcile_orphan_tasks）
+    # 启动时对账（续49 语义变更）：进程重启后，之前 status='running' 的孤儿任务没人推进 ——
+    # 带队列运行规格的**重新入队**（等 worker 接着跑），无规格的（CLI 直跑 / 老库行）仍标 failed；
+    # pid 仍存活的跳过。详见 db.reconcile_orphan_tasks。
+    # 注意：**worker 不在这里启动** —— `create_app()` 会被测试/WSGI 在 import 期调用，
+    # 在工厂里起后台线程会产生 import 副作用；真正的启动点在控制台进程入口 `serve()`。
     db.reconcile_orphan_tasks()
     sync_pocs(settings)
     # 续48：启动时清一次过期审计（保留期见 gui.audit.retention_days）与过期登录限速计数。
@@ -800,29 +803,37 @@ def create_app():
     # ---------- 任务 ----------
 
     def _spawn(task_id, name, targets, stages, options, append=False, resume=False):
-        """后台线程执行任务（GUI 不阻塞）。
+        """把任务**入队**执行（GUI 不阻塞）—— 续49 起不再直接起线程。
 
         `append=True` = 续25 同任务追加式执行；`resume=True` = 续29 断点续跑。
         两者的区别见 `runner.run_task` 的 docstring —— 最关键的一条：**续跑不能复用
         `append=True`**（那会带上 `append_targets` 的收窄语义，传空等于一次都不扫）。
+
+        为什么改成入队（而不是 `threading.Thread(target=run_task, ...)`）：直接起线程的话，
+        进程一重启线程就没了、任务却仍挂 `running`。入队把这次运行的**精确入参**（`stages` +
+        `options`）写进 `tasks.run_payload`，由 `scanner/queue.py` 的 worker 认领执行；进程重启后
+        `db.reconcile_orphan_tasks` 会把死掉的 `running` **重新入队** —— 任务不丢。
+
+        `name` / `targets` 保留在签名里只为**调用点稳定**：worker 直接从任务行读它们（它们是
+        任务的持久字段，不需要进 payload）。
         """
-        threading.Thread(target=run_task, daemon=True,
-                         args=(task_id, name, targets, stages, options,
-                               load_settings()),
-                         kwargs={"append": append, "resume": resume}).start()
+        mode = "resume" if resume else ("append" if append else "fresh")
+        db.enqueue_task(task_id, mode, stages, options)
+        queue.notify()
 
     def _append_guard(src_id):
         """续25：能否对源任务追加执行。返回 `(ok, 错误信息)`。
 
         **必须硬拒绝同任务并发**：`runner._register_stop` 是"同 task 覆盖式注册"，
         第二次追加会顶掉第一次的停止事件 —— 用户点「停止」就停不掉正在跑的那一次。
-        所以只要该任务在 `running_task_ids()` 里、或库状态是 running，一律拒绝。
+        所以只要该任务在 `running_task_ids()` 里、或库状态是 `running` / `queued`，一律拒绝
+        （`queued` = 已入队还没轮到跑，同样不能被追加顶掉它的入队入参）。
         """
         task = db.get_task(src_id)
         if not task:
             return False, "源任务不存在"
-        if src_id in runner.running_task_ids() or task["status"] == "running":
-            return False, "该任务正在运行，无法追加（避免并发覆盖停止信号）；请先停止或等它跑完"
+        if src_id in runner.running_task_ids() or task["status"] in ("running", "queued"):
+            return False, "该任务正在运行或排队中，无法追加（避免并发覆盖停止信号）；请先停止或等它跑完"
         return True, ""
 
     def _append_err(msg, fallback):
@@ -879,9 +890,17 @@ def create_app():
         # 注意 `list_tasks` 返回的是 `sqlite3.Row`，必须先 `dict(...)` 再传 —— `run_duration_text`
         # 内部走 `task.get(...)`，而 `sqlite3.Row` **没有** `.get()`（`_site_titles()` 踩过同一个坑）。
         durations = {t["id"]: run_duration_text(dict(t)) for t in rows}
+        # 续49：排队位置（队首=1）。队列按 id 升序消费（`db.claim_next_queued`），
+        # 所以这里也按 id 升序数，页面才能和 worker 的取用顺序对得上。
+        qpos = {}
+        _qi = 0
+        for _t in sorted(rows, key=lambda r: r["id"]):
+            if _t["status"] == "queued":
+                _qi += 1
+                qpos[_t["id"]] = _qi
         return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER,
                                counts=counts, durations=durations,
-                               running=set(runner.running_task_ids()))
+                               running=set(runner.running_task_ids()), qpos=qpos)
 
     @app.route("/api/tasks", methods=["POST"])
     @login_required
@@ -1061,7 +1080,9 @@ def create_app():
             dir_full=dir_full, port_full=port_full,
             shot_enabled=shot_enabled, shot_missing=shot_missing, shot_ready=shot_ready,
             dir_cap=int((settings.get("limits") or {}).get("dirscan_max_urls", 20) or 20),
-            running=set(runner.running_task_ids()))
+            running=set(runner.running_task_ids()),
+            # 续49：排队位置（0=不在队列里）。页面据此显示「排队中（第 N 位）」。
+            queue_pos=db.queued_position(task_id), queued_total=db.queued_count())
 
     @app.route("/tasks/<int:task_id>/export")
     @login_required
@@ -1114,8 +1135,17 @@ def create_app():
     @app.route("/api/tasks/<int:task_id>/stop", methods=["POST"])
     @login_required
     def api_task_stop(task_id):
-        if not db.get_task(task_id):
+        task = db.get_task(task_id)
+        if not task:
             return jsonify({"error": "not found"}), 404
+        if task["status"] == "queued":
+            # 排队中：还没有线程可发停止信号 —— 直接从队列移除（置 stopped）。同时试一次
+            # `request_stop`，兜住"worker 刚好在那一刻把它认领走"的极小竞态（认领后才注册停止事件）。
+            db.update_task(task_id, status="stopped")
+            runner.request_stop(task_id)
+            _audit(audit.KIND_TASK, target=f"#{task_id}", ok=True,
+                   detail="从队列移除任务（尚未开始执行）")
+            return jsonify({"ok": True, "msg": "已从队列移除（该任务尚未开始）"})
         ok = runner.request_stop(task_id)
         _audit(audit.KIND_TASK, target=f"#{task_id}", ok=bool(ok),
                detail=("请求停止任务" if ok else "请求停止任务（当时未在运行）"))
@@ -1165,8 +1195,9 @@ def create_app():
         task = db.get_task(task_id)
         if not task:
             return jsonify({"error": "not found"}), 404
-        if task_id in runner.running_task_ids() or task["status"] == "running":
-            return jsonify({"ok": False, "error": "任务正在运行，无需续跑（如需中断请先「停止」）"})
+        if task_id in runner.running_task_ids() or task["status"] in ("running", "queued"):
+            return jsonify({"ok": False,
+                            "error": "任务正在运行或排队中，无需续跑（如需中断请先「停止」）"})
         rest = runner.resume_stages((task["stages"] or "").split(","), task["current_stage"])
         if not rest:
             return jsonify({"ok": False,
@@ -2329,15 +2360,28 @@ def _deploy_hints(gui_cfg):
     return lines
 
 
-def serve():
-    """控制台统一启动入口（run_gui.py 与 `python gui/app.py` 共用）。"""
-    s = load_settings().get("gui", {})
+def serve(start_queue=True):
+    """控制台统一启动入口（run_gui.py 与 `python gui/app.py` 共用）。
+
+    `start_queue=False` 用于**嵌入 / 测试**：只做端口预检 + 打印提示 + `app.run()`，**不起
+    后台 worker**。回归 `[7i]` 会真调 `serve()` 校验启动提示，若在这里顺手起了 worker，
+    测试库里残留的 `queued` 行会被真消费掉（污染其它用例）—— 故给它一个显式的关闭开关。
+    """
+    _settings = load_settings()
+    s = _settings.get("gui", {})
     host, port = s.get("host", "127.0.0.1"), int(s.get("port", 5000))
     if not _port_free(host, port):
         print(f"[!] 启动失败：{host}:{port} 已被占用"
               "（上一次的控制台进程还在运行，或端口被其他服务占用）。")
         print("    处理：结束占用该端口的进程，或改 config/settings.yaml 的 gui.port 后重试。")
         raise SystemExit(1)
+    # 续49：启动持久化任务队列的 worker（默认单消费者，见 scanner/queue.py）。
+    # 放在控制台进程入口而不是 create_app()：create_app 会被测试 / WSGI 在 import 期调用，
+    # 在工厂里起后台线程会产生 import 副作用。worker 与**控制台进程同生共死**（daemon 线程）。
+    if start_queue:
+        queue.start(_settings)
+        print(f"[*] 任务队列已启动：{queue.config(_settings)['workers']} 个 worker"
+              "（queue.workers；进程重启后未完成任务会自动重新入队）")
     print(f"[*] CTFScanner 控制台: http://{host}:{port}")
     # 续46：多用户之后，启动提示必须**分清两种状态** —— 有账号就别再宣扬那个共享口令
     # （它此时已经失效了，还打印出来等于引导人去试一个不存在的入口）。

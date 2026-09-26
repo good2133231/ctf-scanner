@@ -3,15 +3,15 @@
 
 {% block actions %}
 <div class="toolbar">
-  <span class="badge st-{{ task.status }}" id="st-badge">{{ task.status }}</span>
+  <span class="badge st-{{ task.status }}" id="st-badge">{{ '排队中' if task.status == 'queued' else task.status }}</span>
   <span class="muted">当前阶段 <b id="st-stage">{{ task.current_stage or '-' }}</b></span>
   <span class="muted">进度 <b id="st-progress">{{ task.progress }}%</b></span>
   <button class="btn-mini ghost" data-op="stop" data-id="{{ task.id }}"
-    id="btn-stop" {{ 'disabled' if task.status != 'running' }}>停止</button>
+    id="btn-stop" {{ 'disabled' if task.status not in ('running', 'queued') }}>停止</button>
   <button class="btn-mini ghost" data-op="restart" data-id="{{ task.id }}"
     {{ 'disabled' if task.status == 'running' }}>重启</button>
   <button class="btn-mini ghost" data-op="resume" data-id="{{ task.id }}"
-    {{ 'disabled' if task.status == 'running' or not resume_rest }}
+    {{ 'disabled' if task.status in ('running', 'queued') or not resume_rest }}
     title="{{ '从断点续跑：' + resume_rest|join(' / ') if resume_rest else '没有可用断点（任务未停在某个阶段上）' }}">续跑</button>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">导出 MD</a>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">导出 HTML</a>
@@ -41,8 +41,14 @@
   本任务被<b>追加执行</b>过 {{ append_count }} 次：结果是**多次运行的合并**（同名资产已跨运行去重，
   不产生重复行；导出的报告带同样标记）。</p>
 {% endif %}
-{% if task.id in running %}
-<p class="muted small"><b>任务运行中：追加执行暂不可用</b>（避免并发覆盖停止信号），
+{% if task.status == 'queued' %}
+<p class="muted small"><span class="badge st-queued">排队中</span>
+  本任务已<b>入队</b>，等待 worker 认领执行
+  {%- if queue_pos %}（当前第 <b>{{ queue_pos }}</b> 位{% if queued_total %}，队列共 {{ queued_total }} 个{% endif %}）{%- endif %}。
+  排队中的任务可点「停止」直接从队列移除（尚未开始）。</p>
+{% endif %}
+{% if task.id in running or task.status == 'queued' %}
+<p class="muted small"><b>任务运行中或排队中：追加执行暂不可用</b>（避免并发覆盖停止信号），
   请先「停止」或等它跑完再追加。</p>
 {% endif %}
 
@@ -450,7 +456,7 @@
         <tr><th>登录态</th><td class="mono small">
           {% if auth_view %}{% for k, v in auth_view %}{{ k }}={{ v }}{% if not loop.last %}<br>{% endif %}{% endfor %}
           {% else %}-{% endif %}</td></tr>
-        <tr><th>状态</th><td><span class="badge st-{{ task.status }}">{{ task.status }}</span></td></tr>
+        <tr><th>状态</th><td><span class="badge st-{{ task.status }}">{{ '排队中' if task.status == 'queued' else task.status }}</span></td></tr>
         <tr><th>运行时长</th><td>{{ run_duration }}</td></tr>
         <tr><th>开始 / 结束</th><td class="mono small">{{ task.started_at or '-' }} / {{ task.finished_at or '-' }}</td></tr>
         <tr><th>日志文件</th><td class="mono small">{{ task.log_file or '-' }}</td></tr>
@@ -478,7 +484,7 @@ initTabs();
 initSevFilter();
 bindTaskOps(".toolbar", document.getElementById("op-msg"));
 </script>
-{% if task.status in ('running', 'pending') %}
+{% if task.status in ('running', 'pending', 'queued') %}
 <script>pollTask({{ task.id }});</script>
 {% else %}
 <script>loadLog({{ task.id }});</script>

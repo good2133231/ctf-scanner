@@ -17,6 +17,8 @@
         --st-run-fg:#5eead4; --st-run-bg:#134e3a; --st-done-fg:#7cc4ff; --st-done-bg:#1d3a5f;
         --st-fail-fg:#fda4af; --st-fail-bg:#4c1d1d; --st-wait-fg:#fde68a; --st-wait-bg:#3a341d;
         --st-stop-fg:#d4d4d8; --st-stop-bg:#3f3f46;
+        /* 续49：排队中（任务已入队、等 worker 认领）——与 running/pending 都区分开 */
+        --st-queue-fg:#a5b4fc; --st-queue-bg:#312e81;
         --sev-crit-fg:#fecaca; --sev-crit-bg:#7f1d1d; --sev-high-fg:#fed7aa; --sev-high-bg:#7c2d12;
         --sev-med-fg:#fde68a; --sev-med-bg:#78350f; --sev-low-fg:#bfdbfe; --sev-low-bg:#1e3a5f;
         --sev-info-fg:#cbd5e1; --sev-info-bg:#26313f; }
@@ -144,6 +146,7 @@ tr:hover td { background:var(--hover); }
 .st-failed { background:var(--st-fail-bg); color:var(--st-fail-fg); }
 .st-pending { background:var(--st-wait-bg); color:var(--st-wait-fg); }
 .st-stopped { background:var(--st-stop-bg); color:var(--st-stop-fg); }
+.st-queued { background:var(--st-queue-bg); color:var(--st-queue-fg); }
 .sev { padding:1px 8px; border-radius:4px; font-size:12px; display:inline-block; }
 .sev-critical { background:var(--sev-crit-bg); color:var(--sev-crit-fg); }
 .sev-high { background:var(--sev-high-bg); color:var(--sev-high-fg); }

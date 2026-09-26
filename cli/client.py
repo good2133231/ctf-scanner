@@ -237,7 +237,9 @@ def main():
         sys.exit(1)
 
     db.init_db()
-    # 启动时对账：进程重启后残留的 status='running' 孤儿任务标为 failed（见 db.reconcile_orphan_tasks）
+    # 启动时对账（续49 语义变更）：进程重启后残留的 status='running' 孤儿任务 —— 带队列运行
+    # 规格的**重新入队**（等控制台 worker 接着跑），无规格的（CLI 直跑 / 老库行）仍标 failed
+    # （CLI 是前台阻塞、没有 worker，重排只会让它永远停在 queued）。见 db.reconcile_orphan_tasks。
     db.reconcile_orphan_tasks()
     name = args.name or (Path(args.file).stem if args.file else "cli-task")
     options = {"offline": bool(args.offline)}
