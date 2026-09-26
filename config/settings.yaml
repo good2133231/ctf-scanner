@@ -117,8 +117,10 @@ iprecon:
   max_domains_per_ip: 30
   workers: 5
   timeout: 10.0
+# FOFA 反查（默认关）：favicon(icon_hash) / cert="domain" / title 三种。需 config/keys.yaml 填 fofa.key。
+# 2026-09-26 用户决定**先关，投入生产时再开** —— 本机开发期少一个出网依赖，也避免误触额度。
 fofa:
-  enabled: true
+  enabled: false
   max_sites: 30
   max_assets: 100
   workers: 5

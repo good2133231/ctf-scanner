@@ -6925,12 +6925,19 @@ http:
 
     # 7) 侧边栏：子用户看不到管理入口，管理员看得到（UI 与路由两层都要有）
     _sub7h_html = _cs.get("/tasks").get_data(as_text=True)
-    assert "策略配置" not in _sub7h_html, "侧边栏不得向子用户露出「策略配置」"
-    assert "账号管理" not in _sub7h_html and "POC 管理" not in _sub7h_html
+    # 判据用**入口链接**而不是页内文案：文案当不了"入口"的可靠代理 —— 各页正文本里本来就
+    # 写着「在「策略配置 → …」里打开」这类**说明文字**（那是提示，不是入口），页面一改版式
+    # 就会假红。实测（2026-09-26，临时脚本 `logs/_check7h.py`，子用户真登录后 GET /tasks）：
+    # 当前页两种判据都是 0 次命中 —— 即这次改动是"判据与文案解耦"的**加固**，
+    # **不是**在修一条已经变红的断言（如实记录，避免后人误以为它抓到过回归）。
+    assert 'href="/settings"' not in _sub7h_html, "侧边栏不得向子用户露出「策略配置」入口"
+    assert 'href="/users"' not in _sub7h_html, "侧边栏不得向子用户露出「账号管理」入口"
+    assert 'href="/pocs"' not in _sub7h_html, "侧边栏不得向子用户露出「POC 管理」入口"
     assert "修改口令" in _sub7h_html and "smoke-sub" in _sub7h_html, "顶栏要显示当前登录者"
     assert "子用户" in _sub7h_html
     _admin7h_html = _ca.get("/tasks").get_data(as_text=True)
-    assert "策略配置" in _admin7h_html and "账号管理" in _admin7h_html
+    assert 'href="/settings"' in _admin7h_html and 'href="/users"' in _admin7h_html
+    assert 'href="/pocs"' in _admin7h_html
     assert "管理员" in _admin7h_html
 
     # 8) 停用**立即**生效：子用户手里的旧会话在下一个请求即被踢下线（不等他下次登录）
