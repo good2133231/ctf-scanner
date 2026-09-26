@@ -99,6 +99,10 @@ def record(kind, actor, ip, target="", detail="", ok=True, actor_role="", settin
     签名与调用侧约定一致：`record(kind, actor, ip, target="", detail="", ok=True)`；
     `actor_role` 与 `settings` 是可选补充。**任何异常都被吞掉并只打 warning** ——
     审计是旁路，绝不能因为它挂了而阻断登录 / 建任务（可用性优先）。
+
+    **擦洗范围**：`target` 与 `detail` 都过 `_scrub()` 兜底（手滑把值塞进任一字段都不会落库）；
+    `actor` 是**用户名**，**刻意不擦** —— 用户名里出现 `token=` 之类形状是合法的，擦洗会把真实
+    用户名改花、对不上账号表，得不偿失（且调用侧从不把值放进 actor）。
     """
     try:
         if not config(settings)["enabled"]:
@@ -107,7 +111,7 @@ def record(kind, actor, ip, target="", detail="", ok=True, actor_role="", settin
             "INSERT INTO audit_log(at, kind, actor, actor_role, ip, target, detail, ok) "
             "VALUES(?,?,?,?,?,?,?,?)",
             (_now(), str(kind or "")[:40], str(actor or "")[:64], str(actor_role or "")[:16],
-             str(ip or "")[:64], str(target or "")[:200], _scrub(detail), 1 if ok else 0))
+             str(ip or "")[:64], _scrub(target)[:200], _scrub(detail), 1 if ok else 0))
         return True
     except Exception as e:      # noqa: BLE001 - 审计失败绝不阻断主流程
         try:

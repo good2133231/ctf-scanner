@@ -7468,7 +7468,81 @@ http:
     finally:
         _audit48.record = _real_rec48
 
-    # 11) ⑥ `gui.token` 引导口令登录**同样受 IP 限速**：清空账号（bootstrap 分支才可达），
+    # 11) 续48 复核返工：**"被拦截"的审计只在"锁刚被创建"时写一次**（防未认证者无界放大）。
+    #     背景（主理人实测到的缺陷）：路由的"被拦截"分支曾**每次请求**都写一行 `login_blocked` ——
+    #     未认证者可按请求速率持续往 `audit_log` 追加：既让磁盘无界增长，又持续抢占全库**唯一**的
+    #     写锁（`db._WRITE_LOCK`），与 dirscan / portscan 那几百行一批的资产写入**争锁** → 相当于用
+    #     一个新功能把扫描主流程拖慢甚至搞挂。修法：写点收口到 `login_guard` 里"锁刚被创建"那一刻
+    #     （`_audit_lock`），路由侧不再写。钉死三条不变量：
+    #     ① 同一锁窗口内连打 40 次被拦截请求 → `login_blocked` 只新增 1 行，且那 1 行真的存在；
+    #     ② 锁窗口过期后再次被锁 → 再新增 1 行（第二次事件同样留痕）；
+    #     ③ §6.1 变异证伪：拆掉"锁定后不再走判锁" → ① 必须变红。
+    _T_LK = "2026-03-01 00:00:00"
+    _IP_LK = "203.0.113.31"
+    assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_LK)[1] == 0, "前置：该 IP 不应有记录"
+    for _i in range(10):                                  # 第 10 次触发锁 → 写 1 条
+        _lg48.record_fail(_IP_LK, "", settings, now=_T_LK)
+    assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_LK)[1] == 1, \
+        "锁被创建时必须留 1 条 login_blocked（信号不能为了'少写'而丢）"
+    for _i in range(40):                                  # 锁定期内继续刷"被拦截请求"
+        _lg48.record_fail(_IP_LK, "", settings, now=_T_LK)
+    assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_LK)[1] == 1, \
+        "同一锁窗口内 40 次被拦截后 login_blocked 仍须只有 1 行（否则未认证者可无界放大）"
+    for _i in range(10):                                  # ② 锁窗口（900s）过期后再次打满
+        _lg48.record_fail(_IP_LK, "", settings, now="2026-03-01 00:16:00")
+    assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_LK)[1] == 2, \
+        "锁窗口过期后再次被锁必须新增一行（不能因为'见过这个 IP'就永久不再记）"
+    # 端到端（路由侧）：被拦截请求不再写审计 —— 40 次 429 后仍只有锁创建时那 1 条
+    _IP_HT = "203.0.113.32"
+    _envHT = {"REMOTE_ADDR": _IP_HT}
+    _cht = app.test_client()
+    for _i in range(10):
+        _cht.post("/login", data={"username": "smoke-audit", "password": "wrong-yy"},
+                  environ_base=_envHT)
+    assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_HT)[1] == 1, "路由侧锁创建应留 1 条"
+    for _i in range(40):
+        assert _cht.post("/login", data={"username": "smoke-audit", "password": "wrong-yy"},
+                         environ_base=_envHT).status_code == 429
+    assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_HT)[1] == 1, \
+        "路由侧 40 次被拦截请求后 login_blocked 仍须只有 1 行"
+    # ③ §6.1 变异证伪：破坏"锁定后不再走判锁"（让 record_fail 每次都继续去判锁）→ ① 必须变红
+    _real_al48 = _lg48._active_locks
+    _lg48._active_locks = lambda *_a, **_k: []
+    _IP_MUT = "203.0.113.33"
+    try:
+        for _i in range(10):
+            _lg48.record_fail(_IP_MUT, "", settings, now=_T_LK)
+        _m1 = _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_MUT)[1]
+        for _i in range(40):
+            _lg48.record_fail(_IP_MUT, "", settings, now=_T_LK)
+        _m2 = _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_MUT)[1]
+        assert _m2 - _m1 > 1, "变异后仍只新增 1 行 → 断言测的不是'锁只写一次'"
+    finally:
+        _lg48._active_locks = _real_al48
+    db._exec("DELETE FROM login_fails WHERE ip IN (?,?,?)", (_IP_LK, _IP_HT, _IP_MUT))
+
+    # 12) 续48 复核返工加固：`_scrub` 也作用到 `target`（此前只作用在 `detail`）。
+    #     调用侧目前只往 target 传对象名，但"手滑把值塞进 target"这条路径原先**没有兜底**。
+    _audit48.record(_audit48.KIND_TASK, "probe-tgt", "1.2.3.4",
+                    target=f"password={_AUD_PW}", settings=settings)
+    _tgt = db._query("SELECT target FROM audit_log WHERE actor='probe-tgt' "
+                     "ORDER BY id DESC LIMIT 1", one=True)
+    assert _tgt and _AUD_PW not in (_tgt["target"] or ""), "target 必须被擦洗（不能原样落库）"
+    assert _AUD_PW not in _cau.get("/audit").get_data(as_text=True), "target 里的值不能出现在 /audit 页"
+    # §6.1 证伪：关掉擦洗 → target 会原样落库（证明上面那条断言测的就是擦洗）
+    _real_scrub48b = _audit48._scrub
+    _audit48._scrub = lambda t: str(t or "")
+    try:
+        _audit48.record(_audit48.KIND_TASK, "probe-tgt2", "1.2.3.4",
+                        target=f"password={_AUD_PW}", settings=settings)
+        _tgt2 = db._query("SELECT target FROM audit_log WHERE actor='probe-tgt2' "
+                          "ORDER BY id DESC LIMIT 1", one=True)
+        assert _AUD_PW in (_tgt2["target"] or ""), "变异后 target 仍未泄漏 → 红线断言测的不是擦洗"
+    finally:
+        _audit48._scrub = _real_scrub48b
+    db._exec("DELETE FROM audit_log WHERE actor IN ('probe-tgt','probe-tgt2')")
+
+    # 13) ⑥ `gui.token` 引导口令登录**同样受 IP 限速**：清空账号（bootstrap 分支才可达），
     #     先从一个 IP 打满，再验证"即使引导口令正确也 429"；换干净 IP 仍能登录（反向对照）。
     for _u in users_mod.list_users():
         users_mod.delete_user(_u["id"])
@@ -7487,8 +7561,9 @@ http:
     print("[7j] 续48 登录限速 + 访问审计 ok: 两级限速（IP 10 次/5 分钟为主、用户名 20 次兜底，"
           "900s 后自动解锁）/ 锁定返回 429+Retry-After（非 403）· 正确口令也拒 · 存在性不泄漏"
           "（两页逐字节相同）/ 成功清用户名计数不清 IP / 计数不无界增长（锁定期不累加 + prune 清过期）/ "
-          "引导口令同样受 IP 限速 / guard·audit 抛异常不阻断登录 / 审计只记元数据"
-          "（明文口令·哈希·引导口令值·提交值均不落表·不上页）/ 3 条变异证伪全部按预期变红")
+          "被拦截审计只在锁创建时写一次（40 次被拦截仍只 1 行、过期再锁再记 1 行）/ "
+          "target·detail 均擦洗 / 引导口令同样受 IP 限速 / guard·audit 抛异常不阻断登录 / "
+          "审计只记元数据（明文口令·哈希·引导口令值·提交值均不落表·不上页）/ 5 条变异证伪全部按预期变红")
 
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），

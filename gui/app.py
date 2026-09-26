@@ -568,15 +568,21 @@ def create_app():
             #   这一步在**所有分支之前**，因此 `gui.token` 引导口令登录同样受 IP 限速。
             verdict = _guard_check(ip, username)
             if verdict.locked:
-                _audit(audit.KIND_LOGIN_BLOCKED, actor=username, target=username, ok=False,
-                       actor_role="",
-                       detail=f"登录被限速拦截（{verdict.reason}，约 {verdict.retry_after}s 后可再试）")
+                # 续48 复核返工：**这里刻意不写审计**。被拦截的请求每次都会走到这一支，若在此写审计，
+                # 未认证者可按请求速率持续往 audit_log 追加（磁盘增长 + 抢全库唯一的写锁 → 与扫描主流程
+                # 的批量写入争锁、拖慢甚至搞挂）。"被拦截"的落库点已收口到 login_guard 里"锁刚被创建"
+                # 那一刻（一个锁窗口内最多一条），见 scanner/login_guard.py::_audit_lock。
                 logger.info(f"[gui] 登录被限速拦截：{username or '(引导口令)'}（{verdict.reason}）")
                 resp = app.make_response(render_template(
                     "login.html", error=_lockout_message(verdict.retry_after), bootstrap=bootstrap))
                 resp.status_code = 429
                 resp.headers["Retry-After"] = str(int(verdict.retry_after))
                 return resp
+            # `login_fail` 侧**无需额外限流**：失败分支只在"守卫未判锁"时才可达，而 `record_fail` 一旦把
+            # 该 IP / 用户名推到阈值就会创建锁 → 之后请求都在上面那一支被 429 拦下，根本到不了这里。
+            # 因此每个键在一个窗口内最多留下 `max_fails_per_*` 条（默认 10 / 20），天然有界。
+            # （若管理员把 `gui.login_lockout.enabled` 关掉、或把阈值设为 0，失败审计就不再被限 —— 那是
+            #   管理员显式选择"不限速"，此时审计量随请求量增长属预期行为。）
             if username:
                 row = users.check_login(username, password)
                 if row is None:

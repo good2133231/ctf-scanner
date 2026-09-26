@@ -3,6 +3,75 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续48 复核返工：被拦截审计只在"锁刚被创建"时写一次（修未认证可无界放大）+ `target` 擦洗
+> 实施者：**WorkBuddy · Hy4-preview** · 缺陷由**主理人复核发现并派单**
+
+### 0. 是什么（缺陷）
+
+续48 首版把"登录被限速拦截"的审计写在**路由的"被拦截"分支**（`gui/app.py`）。主理人独立探针实测：
+把一个 IP 锁住后再打 30 次请求 → `audit_log` 里 `login_blocked` **从 3 行涨到 33 行（一次请求一行）**
+—— 未认证者可**按请求速率**无界放大审计表。
+
+### 1. 为什么必须修（第二条最要命）
+
+1. **磁盘增长**：单行约 150 字节，按 100 req/s 算 ≈ 13 MB/天，30 天保留期就是几百 MB；
+   `retention_days` 只管"过期才删"，不管"来得太快"。
+2. **写锁争用（真正的风险）**：`audit.record` 走 `db._exec`，而 `_exec` 是**全框架唯一的写收口**
+   （`db._WRITE_LOCK` + 每次新建 sqlite 连接 + commit）。未认证者可按住请求速率持续占锁，
+   与 dirscan / portscan 那几百行一批的资产写入**直接争锁**（`busy_timeout` 到点即失败）——
+   相当于**用一个新功能把扫描主流程拖慢甚至搞挂**。
+3. **审计被噪声淹没**：真出事时管理员打开 `/audit`，满屏同一个 IP 的重复行，反而看不清。
+
+### 2. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/login_guard.py` | `_maybe_lock` 改为**返回本次真正新建的锁事件**；新增 `_audit_lock()`：**只在锁刚被创建时**写一条 `login_blocked`（天然 O(1)）；`record_fail` 只为新建的锁写审计；模块 docstring 补该不变量 |
+| `gui/app.py` | `/login` 的"被拦截"分支**不再写任何审计行**（保留 `logger.info` 观测）；补注释说明 `login_fail` 侧为何天然有界 |
+| `scanner/audit.py` | `_scrub()` 也作用到 `target`（此前只作用 `detail`）；注释说明 `actor`（用户名）**刻意不擦**的理由 |
+| `tests/smoke.py` | `[7j]` 新增第 11 组（被拦截审计只写一次）+ 第 12 组（`target` 擦洗），各含 §6.1 变异证伪 |
+
+**为什么把写点放在"锁刚被创建"**：语义正好是"IP X 因失败过多被锁定 900 秒"——**事件**而非**请求**。
+一个锁窗口内最多一条；锁窗口过期后再次被锁会**再写一条**（第二次事件同样留痕，不会因"见过这个 IP"
+而永久静音）。`audit_log` 的"只追加"语义不受影响。
+
+### 3. 新钉死的不变量（`[7j]` 第 11 组）
+
+1. 同一锁窗口内连打 **40 次被拦截请求** → `login_blocked` **只新增 1 行**，且**那 1 行真的存在**
+   （不能为了"少写"把"这个 IP 被锁过"的信号丢掉）；
+2. 锁窗口**过期后再次被锁** → **再新增 1 行**（第二次事件同样留痕）；
+3. 端到端（路由侧）：40 次 429 后仍只有锁创建时那 1 行；
+4. `target` 被擦洗（`password=…` 塞进 `target` → 落库被抹、且不上 `/audit` 页）。
+
+第 11 / 12 组**插在 bootstrap 组之前**：bootstrap 组会清空账号，而 `login_required` 会回库核验、
+把失效会话踢下线，插在其后 `_cau` 会拿不到 `/audit`。
+
+### 4. 怎么验证（实测）
+
+- **独立探针** `logs/_probe48_rework.py`（隔离 DB）：锁住后连打 40 次被拦截请求（状态码集合 `{429}`）
+  → `login_blocked` **实际新增 0 行**（保持 1 行）；锁定期内再刷 40 次 `record_fail` → 新增 **0 行**；
+  锁窗口过期后再次被锁 → **1 → 2 行（+1）**；`target` 塞 `password=…` → 落库 `'***'`。
+  （对比：修复前同口径是 **+40 行**。）
+- **门禁**：`py -3 -u tests/smoke.py` → **EXIT=0 / `SMOKE PASS` ×1 / `AssertionError` 0**；
+  `[6u]`/`[7h]`/`[7i]` **一行未改**、仍绿。
+- **§6.1 文件级变异证伪**（`logs/_mutate_48b.py`，改文件→跑 smoke→还原）：
+  - 变异 A（在路由"被拦截"分支重新加回**每请求**写审计）→ `[7j]` 红：
+    `AssertionError: 路由侧 40 次被拦截请求后 login_blocked 仍须只有 1 行`；
+  - 变异 B（`audit.record` 不再对 `target` 擦洗）→ `[7j]` 红：
+    `AssertionError: target 必须被擦洗（不能原样落库）`。
+  - 结论行：`MUTATE48B OK（两处变异均按预期变红）`。
+- `git diff --numstat == --ignore-cr-at-eol --numstat` 逐文件一致。
+
+### 5. 复核中发现的另一件事（非本次改动引入，供后续避坑）
+
+主理人自己的探针 `logs/_lead_probe_48.py:72` POST `/settings` 时**没有桩掉 `save_settings`** →
+真实 `config/settings.yaml` 被 `save_settings()` 写回（**注释全丢**、`verify_tls_external` 变 `false`、
+`skip_severities` 变 `[]`、多个 `*_enabled` 变 `false`），导致**下一次 smoke 的 `[2]` 断言失败**
+（`AssertionError: (312, 312, 'info/low 级 POC 应被级别执行门挡在扫描外')`）。
+已 `git checkout HEAD -- config/settings.yaml` 还原。**教训**：任何会 POST `/settings` 的探针/用例都必须
+桩掉 `save_settings`（`[7j]` 第 6 组就是这么做的）；若 smoke 的 `[2]` 莫名失败，先查 `config/settings.yaml`
+是否被写花。
+
 ## 2026-09-26 —— 续48：登录限速/失败锁定 + 访问审计流水
 > 实施者：**WorkBuddy · Hy4-preview**
 

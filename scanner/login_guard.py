@@ -22,6 +22,8 @@
   "账号存在但被锁"与"账号不存在但被锁"返回**逐字节相同**的 429 页面；
 - 锁定期内**即使口令正确也拒绝**（先问 guard，再校验口令）；
 - **计数不无界增长**：成功登录清该用户名计数；锁定期间不再落 `fail`；`prune()` 清过期行；
+- **"被拦截"审计只在"锁刚被创建"时写一条**（`_audit_lock`）：路由的"被拦截"分支**不写审计**，
+  否则未认证者能按请求速率无界放大 `audit_log` 并抢全库唯一的写锁（见 `_audit_lock` 的说明）；
 - `gui.token` 引导口令登录**同样受 IP 限速**（check 在所有分支之前）；
 - guard 自身出错**绝不阻断登录**（调用侧 try/except → 放行 + warning）。
 
@@ -31,7 +33,7 @@
 import time
 from collections import namedtuple
 
-from . import db
+from . import audit, db
 from .log import get_logger
 
 logger = get_logger("login-guard")
@@ -164,14 +166,42 @@ def _insert_lock(ip, username, now_ep):
 
 
 def _maybe_lock(cfg, ip, username, now_ep):
-    """窗口内失败数达到阈值 → 落锁标记（IP 与用户名各自独立判定）。"""
+    """窗口内失败数达到阈值 → 落锁标记（IP 与用户名各自独立判定）。
+
+    **返回本次真正新建的锁事件** `[(原因, ip, username), ...]`（可能为空、也可能一次两个）。
+    返回值是"被拦截"信号**唯一**的落库触发点 —— 见 `_audit_lock` 与 `record_fail`：
+    审计只在**锁刚被创建**这一刻写一次，而不是每次被拦截请求都写。
+    """
+    events = []
     window_start = _ts(now_ep - cfg["window_seconds"])
     if ip and cfg["max_fails_per_ip"] > 0:
         if _count_fails("ip=?", (ip,), window_start) >= cfg["max_fails_per_ip"]:
             _insert_lock(ip, "", now_ep)
+            events.append(("IP 失败过多", ip, ""))
     if username and cfg["max_fails_per_user"] > 0:
         if _count_fails("username=?", (username,), window_start) >= cfg["max_fails_per_user"]:
             _insert_lock("", username, now_ep)
+            events.append(("该账号失败过多", "", username))
+    return events
+
+
+def _audit_lock(reason, ip, username, settings):
+    """锁**刚被创建**时写一条审计（`login_blocked`）—— "被拦截"信号**唯一**的落库点。
+
+    为什么**不**在路由的"被拦截"分支写（续48 复核返工）：那条分支每次被拦截请求都会走到，
+    未认证者可据此**按请求速率**持续往 `audit_log` 追加 —— 既让磁盘无界增长，又持续抢占全库
+    **唯一**的写锁（`db._WRITE_LOCK` + 每写一次新建 sqlite 连接），与 dirscan / portscan 那
+    几百行一批的资产写入**直接争锁**（`busy_timeout` 到点即失败）→ 相当于用一个新功能把扫描主
+    流程拖慢甚至搞挂。把写点收口到"锁刚被创建"这一刻后天然 O(1)：一个锁窗口内最多一条；
+    锁窗口过期后再次被锁会**再写一条**（第二次事件同样留痕，不会因"见过这个 IP"而永久静音）。
+    """
+    try:
+        lockout = int(config(settings)["lockout_seconds"])
+        audit.record(audit.KIND_LOGIN_BLOCKED, actor=username, ip=ip, target=username,
+                     ok=False, settings=settings,
+                     detail=f"登录失败过多被锁定（{reason}），锁 {lockout}s")
+    except Exception as e:      # noqa: BLE001 - 审计失败绝不阻断登录
+        logger.warning(f"[login-guard] 锁定审计写入失败（已忽略）：{e}")
 
 
 def _prune_old(cfg, now_ep):
@@ -196,7 +226,9 @@ def record_fail(ip, username, settings=None, now=None):
             return
         db._exec("INSERT INTO login_fails(at, ip, username, kind) VALUES(?,?,?,?)",
                  (_ts(now_ep), ip, uname, "fail"))
-        _maybe_lock(cfg, ip, uname, now_ep)
+        # 只为"本次真正新建的锁"写审计（O(1)）—— 不是每次失败都写，更不是每次被拦截请求都写。
+        for _reason, _ev_ip, _ev_user in _maybe_lock(cfg, ip, uname, now_ep):
+            _audit_lock(_reason, _ev_ip, _ev_user, settings)
         _prune_old(cfg, now_ep)
     except Exception as e:      # noqa: BLE001 - 计数写失败绝不阻断登录
         logger.warning(f"[login-guard] 登录失败计数写入失败（已忽略）：{e}")
