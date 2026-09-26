@@ -3,6 +3,120 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续50 开发模式 + 全流程自检
+
+> 实施者：**WorkBuddy · Hy4-preview** · 需求由**用户**提出、**主理人**派单（口径已定：**全量压到最小**、
+> **本地靶场 + 全 13 阶段**、**有 key 的阶段真跑、没 key 的记录为「跳过」**）
+
+### 0. 是什么（需求）
+
+项目还在开发期，用户要一个「开发模式」把各阶段的**量**（并发 / 在飞 / 速率 / 每阶段配额）**全部压到最小 `1`**，
+用最小代价验证**流程本身跑得通**、在哪一阶段断；配套一个**「全流程自检」**：把 13 个阶段都跑一遍看哪步断了，
+**控制台可点、CLI 可跑**。这是"验证流程"而不是"验证覆盖面"（后者是生产跑的事）。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/devmode.py`（**新**） | 纯函数模块（无 I/O）：`DEV_LIMITS`（`路径→值`，47 项压到最小 1）、`DEV_KEEP`（**刻意不压**的 2 项）、`_get`/`_set`/`_split`（容忍脏配置）、`apply`（**深拷贝**后逐项压量）、`enable_all_stages`、`enabled`、`report`。文件头写明为何是"深拷贝压量"而非"改 yaml" |
+| `scanner/devfixture.py`（**新**） | 产品侧内置靶场：标准库 `ThreadingHTTPServer`，**只绑 `127.0.0.1`（绝不 `0.0.0.0`）**，`start(port=0)` 即时生成 index/admin/robots/app.js/.env（`.env` 为**明显假的样例值**），返回 `(httpd, base_url)`；`stop(httpd)` 幂等并清理临时目录；**不复用** `tests/smoke.py` 的 `smoke_root/` |
+| `run_devflow.py`（**新**，根目录） | 全流程自检 CLI 入口（对称 `run_gui.py`）：起靶场 → `devmode.apply(load_settings())` → 全 13 阶段 `runner.run_task` 前台跑 → 打**每阶段 OK/SKIP/FAIL + 请求数 + 耗时**，无 FAIL 退出 0。`CTFSCANNER_DB`/`CTFSCANNER_LOGS` 在 `import scanner.*` **之前**设好 |
+| `gui/app.py` | 引入 `devfixture`/`devmode`；`_dev_fixture_start/stop`（进程内单例）；`create_app()` 注入 `app.jinja_env.globals["dev_enabled"]` 并在打开时**打印显式告警**；新路由 `/devmode`（`@login_required @admin_required`）+ `/api/devmode/fixture/start|stop` + `/api/devmode/selfcheck`（建带 `dev_selfcheck` 标记的任务 + `_spawn` 入队） |
+| `gui/templates/devmode.html`（**新**） | 「开发模式」页：靶场地址 + 三按钮（启动/停止内置靶场、跑一次全流程自检）+ `devmode.report()` 压量清单 + budget 例外说明 + 最近一次自检链接；未开启时显示说明 |
+| `gui/templates/base.html` | `dev_enabled` 为真时**才**追加第 11 栏「开发模式」（`admin_only`；未开启**根本不渲染**） |
+| `scanner/queue.py` | `_default_dispatch` 认 `options["dev_selfcheck"]`：为真则 `devmode.enable_all_stages(devmode.apply(eff))`，让自检任务在**压缩副本**下由 worker 跑全 13 阶段 |
+| `scanner/config.py` | DEFAULTS 新增 `dev: {enabled: False, fixture_port: 0}` |
+| `config/settings.yaml` | 新增 `dev:` 段 + 中文注释（`enabled: false` / `fixture_port: 0`） |
+| `tests/smoke.py` | 新增 `[7l]` 组（6 组断言 + 5 条 §6.1 变异证伪） |
+| `README.md` / `docs/{roadmap,architecture}.md` | README 新增「开发模式 + 全流程自检」节 + 目录树补 3 个新文件；roadmap 工程化新增一条；architecture 新增 §流水线 9 + GUI 分栏补 `/devmode` |
+
+### 2. 关键设计取舍（为什么这么做）
+
+- **`apply` 深拷贝、绝不改入参、绝不写回 yaml**：项目一贯铁律是"任务专用副本"（`runner.StageContext`）。
+  开发模式的压量只是**运行时内存里的副本**，`config/settings.yaml` 一个字节都不动 —— 否则一次自检会把
+  全局策略永久改成"量=1"。
+- **`budget_total` 与 `budget_subprocess_weight` 刻意不压**（`DEV_KEEP`）：`budget_total=1` 会让**第 2 个请求
+  即被预算拒绝**、流水线永远跑不完 —— 自检本身自相矛盾。这是**唯一**的例外，注释与文档都写明了理由，
+  `[7l]` ② 与 M2/M5 专门钉住"它确实不压"且"压了会跑不完"。
+- **阶段归类用模块级全局 `_CURRENT`，不用 `threading.local()`**：池化请求跑在 worker 线程上，
+  线程局部变量在那里是**空的**，会让 dirscan/vulnscan 被误判成 SKIP。改用模块级全局 + 包装
+  `http_request`/`run_cmd` 计数。
+- **`STAGE_REGISTRY` 换成"记录并重抛"的代理**：保留 PhaseRunner 的阶段级容错（单阶段异常不致整任务崩），
+  同时把 OK/FAIL 记下来。
+- **「跳过」= 本次零网络活动**，不是"假成功"：目标不匹配 / 未配 key / 无对应资产 / 命中缓存都归 `SKIP`；
+  `portscan`（裸 socket）/ `heuristic`（零请求）恒 `OK`。
+- **夹具只绑 `127.0.0.1`**：绝不 `0.0.0.0`（否则成了对外暴露的服务）；证伪 M3 也**只改成 `127.0.0.2`**
+  （仍是回环），不为证伪去绑 `0.0.0.0`。
+
+### 3. 怎么验证（实测）
+
+- **自己真跑一次** `py -3 run_devflow.py`（这是本功能的**验收证据**），原文：
+
+```
+[*] 内置靶场已启动：http://127.0.0.1:6317（仅 127.0.0.1，零外网）
+[*] 开发模式：47 项压到最小
+      limits.max_workers: 20 → 1
+      ...（47 项逐条列出，含 limits.max_inflight_* / rate_* / 各阶段 max_* / tools.dirmap.threads）...
+      tools.dirmap.threads: 30 → 1
+[*] 预算不压（刻意）：limits.budget_total, limits.budget_subprocess_weight 保持不设 —— budget_total=1 会让第 2 个请求即被拒、全流程跑不完
+...（13 阶段逐阶段 INFO 日志）...
+[*] 全流程自检结果（13 个阶段）：
+    SKIP subdomain   本次零网络活动（目标不匹配 / 未配 key / 无对应资产 / 命中缓存）
+    SKIP takeover    本次零网络活动（目标不匹配 / 未配 key / 无对应资产 / 命中缓存）
+    OK   portscan    1 次网络活动
+    OK   probe       7 次网络活动
+    SKIP cert        本次零网络活动（目标不匹配 / 未配 key / 无对应资产 / 命中缓存）
+    OK   screenshot  1 次网络活动
+    OK   osint       2 次网络活动
+    OK   jsmine      2 次网络活动
+    OK   dirscan     4 次网络活动
+    OK   vulnscan    97 次网络活动
+    SKIP intel       本次零网络活动（目标不匹配 / 未配 key / 无对应资产 / 命中缓存）
+    OK   heuristic   0 次网络活动
+    SKIP github      本次零网络活动（目标不匹配 / 未配 key / 无对应资产 / 命中缓存）
+
+[*] 网络活动总数：114    总耗时：151.4s    任务终态：done
+[*] 任务日志：logs/devflow_20260926_202833/task_1_20260926_202837/task.log
+
+[*] 自检通过：13 个阶段均无异常（SKIP 表示本次无对应活动，不是报错）
+EXIT=0
+```
+
+  - `subdomain`/`takeover`/`cert`/`github` 本次 `SKIP` 是**正常**：目标是 `http://127.0.0.1:<port>`（IP、非域名）
+    → 无裸域名可爆破、无子域资产、无 `https`/`443` 站点可取证、无注册域可查 GitHub；
+    `intel` 命中 0 但**用本地缓存**（未联网，故计 0 网络活动）；`osint` 的 shodan/quake/ctlog 因**未配 key**
+    跳过（这是"没 key 记跳过"的口径）。
+- **门禁** `py -3 -u tests/smoke.py` → **EXIT=0 / `SMOKE PASS` ×1 / `AssertionError` 0**；`[7l]` 打印
+  （日志 `logs/smoke-50.txt`）。⚠️ 本机跑 smoke 仍必须设 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=100000000`。
+- `[7l]` 覆盖：① `apply` 逐项压到最小（并发/在飞/速率/配额）+ **深拷贝**（入参不动）+ 脏配置补段不抛；
+  ② `budget_total` **刻意不压**（==0）；③ `dev.enabled` 默认 False + 脏值不炸；④ 夹具起/停
+  （**只绑 `127.0.0.1`** + 内容可取 + stop 后端口释放 + 幂等）；⑤ 全 13 阶段在夹具上**真跑一遍**
+  （`done` + `error` 空 + **站外请求 0**）；⑥ GUI 入口随 `dev.enabled` 出现 / 消失（桩 `load_settings`/`sync_pocs`）。
+- `git diff --numstat == --ignore-cr-at-eol --numstat` 逐文件一致。
+
+### 4. §6.1 证伪（把新行为退回"旧/天真"实现，确认新断言**真的变红**）
+
+`[7l]` 末尾内置 5 条**运行期变异**（跑完自动还原，变异版本不提交）：
+
+- **M1 `apply` 退回"恒等"（不压量）** → ① 的"逐项==1"必红：变异后 `limits.max_workers` 不再是 1。
+- **M2 把 `limits.budget_total` 塞进 `DEV_LIMITS`** → ② 的"不压"必红：变异后它会被压到 1
+  （证明"不压预算"是**有内容的**，不是恒真）。
+- **M3 夹具 `HOST` 改成 `127.0.0.2`** → ④ 的"绑定必须是 `127.0.0.1`"必红（证明 ④ 测的是**真实绑定地址**，
+  不是常量恒等）。**绝不**为证伪去绑 `0.0.0.0`。
+- **M4 `devmode.enabled` 恒真** → ⑥ 的"`dev.enabled=false` 不渲染入口"必红（证明 ⑥ 测的是**开关本身**）。
+- **M5 `budget_total=1` 跑全流程** → ⑤ 的 `done` 必红：预算耗尽 → `stopped`，`status != "done"`
+  （证明 ⑤ 的 `done` 与 ② 的"不压预算"都测的是真东西）。
+
+五条都**按预期变红**，证明新断言测的是"压量 / 不压预算 / 真绑定 / 开关控制入口 / 压了预算跑不完"
+这些**真语义**，而非恒真。
+
+### 5. 仍未做（如实记录）
+
+- 自检只跑**本地内置靶场**（`127.0.0.1`），**不**对真实目标压量跑 —— 想压量打真实目标请自行改 `dev.enabled`
+  后在控制台建任务（不在自检范围内）。
+- 无**阶段级耗时基线 / 回归对比**：自检只报本次耗时，不比对历史。
+- `dev.enabled` 目前**只控制"开发模式栏是否出现"**，不自动对所有任务压量（自检任务靠 `dev_selfcheck` 标记）。
+
 ## 2026-09-26 —— 续49 持久化任务队列（重启不丢任务 + 自动续跑）
 > 实施者：**WorkBuddy · Hy4-preview** · 需求由**用户**提出、**主理人**派单（三条口径已定：重启=自动重排、默认单消费者、零新依赖）
 

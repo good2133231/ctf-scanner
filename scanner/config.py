@@ -114,6 +114,15 @@ DEFAULTS = {
         #   `db.claim_next_queued` 的原子认领保证同一任务不被重复消费。
         "workers": 1,
     },
+    "dev": {
+        # ---- 开发模式 / 全流程自检（续50，见 scanner/devmode.py）----
+        # 打开后，各阶段的"量"（并发 / 在飞 / 速率 / 每阶段配额）被**运行时压到最小（1）**，
+        # 目的是先验证**流程本身能不能跑通**，不被"量"的问题干扰。压量只作用于**本次运行的内存副本**，
+        # 绝不写回 config/settings.yaml（见 devmode 文件头）。默认关。
+        # fixture_port：内置靶场端口，0 = 交给系统分配（避免与已占用端口冲突）。
+        "enabled": False,
+        "fixture_port": 0,
+    },
     "limits": {
         "max_workers": 20,        # HTTP 探测 / 目录扫描 / DNS 爆破线程数
         "http_timeout": 10,       # 单请求超时（秒）

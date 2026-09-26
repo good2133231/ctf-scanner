@@ -176,6 +176,25 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
    并往任务日志追加「进程重启，任务已重新入队（自动续跑）」。**旧行**（无 `run_mode`，如 CLI 首跑）
    仍按旧语义标 `failed`。worker 只在**控制台进程内**运行（`serve()` 启动，`start_queue=False` 可关），
    CLI 仍前台阻塞。
+9. **开发模式 + 全流程自检**（续50）：`scanner/devmode.py` 是**纯函数模块（无 I/O）**，把配置里各阶段的
+   「量」压到最小 `1`：`DEV_LIMITS` 是 `路径 → 值` 表（共 47 项，含 `queue.workers` / `limits.max_workers`
+   / `max_inflight_global` / `max_inflight_per_task` / `rate_per_sec` / `rate_burst` / 各阶段 `max_*`
+   配额 / `dirscan.recursive_depth` 等）；`apply(settings)` 先 `copy.deepcopy` 再逐项 `_set`，
+   **从不修改入参**（项目一贯的「任务专用副本」原则），`enabled(settings)` 读 `dev.enabled`，
+   `report(settings)` 返回「路径: 原值 → 1」清单。**例外**：`DEV_KEEP=("limits.budget_total",
+   "limits.budget_subprocess_weight")` **刻意不压** —— `budget_total=1` 会让第 2 个请求被预算拒绝、
+   流水线永远跑不完，自检自相矛盾。`enable_all_stages(settings)` 供自检强制打开外部阶段。
+   **绝不写回真实 `config/settings.yaml`**（仅运行时内存副本）。`scanner/devfixture.py` 是**产品侧**内置
+   靶场（标准库 `ThreadingHTTPServer` + `SimpleHTTPRequestHandler`，**只绑 `127.0.0.1`，绝不 `0.0.0.0`**），
+   `start(port=0)` 即时生成 `index.html` / `admin/index.html` / `robots.txt` / `app.js` / `.env`
+   （`.env` 为**明显假的样例值**），返回 `(httpd, base_url)`；`stop(httpd)` 幂等、清理临时目录。
+   **自检入口两条**：CLI `run_devflow.py`（根目录，对称 `run_gui.py`：起靶场 → `devmode.apply(load_settings())`
+   → 全 13 阶段 `runner.run_task` 前台跑 → 打每阶段 OK/SKIP/FAIL + 请求数 + 耗时，无 FAIL 退出 0）与
+   控制台 `/devmode` 页（`@login_required @admin_required`，仅 `dev.enabled=true` 时导航渲染）。
+   **阶段归类**：包装 `http_request` / `run_cmd` 计数并打 `stage` 标记（用**模块级全局** `_CURRENT`，
+   **不用 `threading.local()`** —— 池化请求跑在 worker 线程上、线程局部为空），再换 `runner.STAGE_REGISTRY`
+   为记录 OK/FAIL 且**重抛**异常的代理（保留 PhaseRunner 的阶段级容错）；某阶段**本次零网络活动**记为 `SKIP`
+   （目标不匹配 / 未配 key / 无对应资产 / 命中缓存），`portscan`（裸 socket）/ `heuristic`（零请求）恒 `OK`。
 
 ## 数据库表
 
@@ -210,6 +229,10 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 `/vulns`（级别筛选 + `review=` 复核状态筛选 + `?task_id=` 按任务筛选，页内三态下拉与批量打标走
 `POST /api/vulns/review`）/ `/pocs`（含置信度列与按层批量启停，`admin_only`）/ `/settings`（`admin_only`）
 / `/users`（账号管理，`admin_only`）。
+**续50**：`dev.enabled=true` 时另追加**第 11 栏**「开发模式」`/devmode`（`admin_only`，
+由 `create_app()` 注入 `app.jinja_env.globals["dev_enabled"]` 决定**是否渲染**，未打开时该栏根本不出现、
+直接敲 URL 也被 `admin_required` 挡回）；页内三按钮走 `/api/devmode/fixture/start` / `.../stop` /
+`/api/devmode/selfcheck`（后者建带 `dev_selfcheck` 标记的任务并 `_spawn` 入队）。
 
 **续46 多用户与角色**：登录由"一个共享口令"改为**账号 + 口令**（`scanner/users.py`），
 会话里放的是**身份 + 角色**（`uid` / `user` / `role`，不再是续32 那个布尔 `auth`），

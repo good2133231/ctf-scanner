@@ -7804,6 +7804,243 @@ http:
           "（峰值恒 1）/ run_mode·queued_at·run_payload 落库 / 老库缺列经 _ensure_columns 补出 / "
           "3 条变异证伪全部按预期变红")
 
+    # [7l] 续50 **开发模式 + 全流程自检**（`scanner/devmode.py` + `scanner/devfixture.py` +
+    #      `run_devflow.py`）。背景：项目还在开发期，用户要一个"开发模式"把各阶段的"量"
+    #      （并发/在飞/速率/每阶段配额）压到最小（1），先验证**流程本身能不能跑通**；配套
+    #      "全流程自检"：13 个阶段都跑一遍看哪一步断了（CLI `run_devflow.py` + 控制台「开发模式」页）。
+    #      钉死 6 组语义（末尾 §6.1 变异证伪）：
+    #      ① `devmode.apply` 逐项压量到最小 + **深拷贝**（入参一个字节不动）；
+    #      ② apply **刻意不压** `budget_total`（压到 1 会让第 2 个请求即被拒、全流程跑不完）；
+    #      ③ `dev.enabled` 默认 False；`devmode.enabled()` 对缺段 / 脏值不炸；
+    #      ④ `devfixture` 起 / 停：只绑 `127.0.0.1`、能取到 index/admin/.env、stop 后端口释放；
+    #      ⑤ 全 13 阶段在夹具上**真跑一遍**（用 apply 后的 settings）→ done + error 空 + 站外请求 0；
+    #      ⑥ GUI：`dev.enabled=false` 时**无**「开发模式」入口、`true` 时**有**（桩 load_settings/sync_pocs）。
+    import copy as _copy7l
+    import urllib.request as _url7l
+    from scanner import devfixture as _df7l
+    from scanner import devmode as _dm7l
+    from scanner.config import DEFAULTS as _DEF7L
+
+    # ① 逐项压量 + 深拷贝（入参不动）
+    _s7l = _copy7l.deepcopy(settings)
+    _before7l = _copy7l.deepcopy(_s7l)
+    _c7l = _dm7l.apply(_s7l)
+    assert _s7l == _before7l, \
+        "apply 必须**深拷贝**、绝不原地改入参（项目铁律：任务专用副本，见 runner.StageContext）"
+    for _p7l, _v7l in (("queue.workers", 1), ("limits.max_workers", 1),
+                       ("limits.max_inflight_global", 1), ("limits.max_inflight_per_task", 1),
+                       ("limits.rate_per_sec", 1), ("limits.dirscan_max_urls", 1),
+                       ("subdomain.max_resolve", 1), ("dirscan.quick_max_paths", 1),
+                       ("takeover.max_hosts", 1), ("portscan.full_workers", 1),
+                       ("jsmine.max_js", 1), ("checks.poc_max_per_site", 1)):
+        _got7l = _dm7l._get(_c7l, _p7l)
+        assert _got7l == _v7l, f"apply 必须把 {_p7l} 压到 {_v7l}：实测 {_got7l!r}"
+    # 两个"关"（0）项：框架补充额度 / 目录递归层数
+    assert _dm7l._get(_c7l, "dirscan.fw_max_paths") == 0
+    assert _dm7l._get(_c7l, "dirscan.recursive_depth") == 0
+    # 脏配置也能压得住：缺段 / 非 dict 的中间段都不抛（_set 会补建 dict）
+    _dirty7l = _dm7l.apply({"limits": "dirty", "dirscan": None})
+    assert _dm7l._get(_dirty7l, "limits.max_workers") == 1
+    assert _dm7l._get(_dirty7l, "dirscan.quick_max_paths") == 1
+
+    # ② 预算**刻意不压**（例外，理由见 scanner/devmode.py 文件头）
+    assert _dm7l._get(_c7l, "limits.budget_total") == 0, \
+        "budget_total 必须保持 0（不设预算）—— 压到 1 会让第 2 个请求即被拒、全流程跑不完"
+    assert _dm7l._get(_c7l, "limits.budget_total") == _dm7l._get(_s7l, "limits.budget_total")
+    for _k7l in _dm7l.DEV_KEEP:
+        assert _k7l not in _dm7l.DEV_LIMITS, f"{_k7l} 属刻意不压项，不得进 DEV_LIMITS"
+
+    # ③ 默认关 + 脏值不炸
+    assert (_DEF7L.get("dev") or {}).get("enabled") is False, "DEFAULTS 里 dev.enabled 必须默认 False"
+    assert _dm7l.enabled({}) is False and _dm7l.enabled({"dev": {}}) is False
+    assert _dm7l.enabled({"dev": {"enabled": True}}) is True
+    assert _dm7l.enabled({"dev": "dirty"}) is False, "脏值（非 dict）必须回落 False，不抛"
+    assert _dm7l.enabled(None) is False
+
+    # ④ 夹具起 / 停（只绑回环 + 内容可取 + 停后端口释放）
+    _fx7l, _base7l = _df7l.start()
+    try:
+        assert _fx7l.server_address[0] == "127.0.0.1", \
+            f"夹具只许绑 127.0.0.1（绝不 0.0.0.0）：{_fx7l.server_address}"
+        assert _base7l.startswith("http://127.0.0.1:"), _base7l
+        with _url7l.urlopen(_base7l + "/", timeout=5) as _r7l:
+            _body7l = _r7l.read().decode("utf-8", "replace")
+        assert "<title>DevFixture Site</title>" in _body7l, _body7l[:200]
+        with _url7l.urlopen(_base7l + "/admin/", timeout=5) as _r7l:
+            assert _r7l.status == 200
+        with _url7l.urlopen(_base7l + "/.env", timeout=5) as _r7l:
+            assert "devfixture-not-a-real-secret" in _r7l.read().decode("utf-8", "replace")
+    finally:
+        _df7l.stop(_fx7l)
+    try:
+        _url7l.urlopen(_base7l + "/", timeout=2)
+        _fx_stopped7l = False
+    except OSError:
+        _fx_stopped7l = True
+    assert _fx_stopped7l, "stop() 后端口必须释放（再连应失败）"
+    _df7l.stop(_fx7l)      # 幂等：重复 stop 不炸
+
+    # ⑤ 全 13 阶段在夹具上**真跑一遍**（用 apply 后的 settings；关掉外部第三方阶段保证零外网）
+    from scanner import utils as _u7l
+    from urllib.parse import urlparse as _up7l
+    _fx7l2, _base7l2 = _df7l.start()
+    try:
+        _cfg7l = _dm7l.apply(_copy7l.deepcopy(settings))
+        # 冒烟必须**零外网**（同 [6u]）：关掉一切会发外部请求的阶段 / 子能力。
+        for _k7l in ("iprecon", "fofa", "shodan", "quake", "ctlog", "intel", "github"):
+            _cfg7l[_k7l] = dict(_cfg7l.get(_k7l) or {}, enabled=False)
+        _cfg7l["passive"] = dict(_cfg7l.get("passive") or {}, enabled=False)
+        for _k7l in ("takeover", "portscan", "cert", "screenshot", "jsmine", "dirscan",
+                     "vulnscan", "heuristic"):
+            _cfg7l[_k7l] = dict(_cfg7l.get(_k7l) or {}, enabled=True)
+        _orig_http7l = _u7l.http_request
+        _mods7l = [m for m in list(sys.modules.values())
+                   if str(getattr(m, "__name__", "") or "").startswith("scanner")
+                   and getattr(m, "http_request", None) is _orig_http7l]
+        _sent7l = []
+
+        def _u_http7l(u, **kw):
+            _sent7l.append(str(u))
+            return _orig_http7l(u, **kw)
+
+        db.init_db()
+        sync_pocs(_cfg7l)
+        _tg7l = _base7l2 + "/"
+        _st7l = list(STAGE_ORDER)
+        _tid7l = db.create_task("smoke-devflow", _tg7l, _st7l, {})
+        for _m7l in _mods7l:
+            _m7l.http_request = _u_http7l
+        try:
+            run_task(_tid7l, "smoke-devflow", _tg7l, _st7l, {}, _cfg7l)
+        finally:
+            for _m7l in _mods7l:
+                _m7l.http_request = _orig_http7l
+        _t7l = db.get_task(_tid7l)
+        assert _t7l["status"] == "done", \
+            f"压量后全 13 阶段应跑完置 done：{_t7l['status']} / error={_t7l['error']!r}"
+        assert (_t7l["error"] or "") == "", \
+            f"压量后跑完 error 必须为空（任何阶段异常都会被 append）：{_t7l['error']}"
+        assert len(list(db.list_sites(_tid7l))) >= 1, "夹具上至少应有 1 个存活站点"
+        _out7l = [u for u in _sent7l
+                  if ((_up7l(u).hostname or "").strip().lower())
+                  not in ("127.0.0.1", "localhost", "::1")]
+        assert not _out7l, f"自检必须零外网，实测打到站外：{_out7l[:5]}"
+        db.delete_task(_tid7l, backup=False)
+    finally:
+        _df7l.stop(_fx7l2)
+
+    # ⑥ GUI：dev.enabled 控制「开发模式」入口（桩 load_settings/sync_pocs，复用 [7h]/[7i] 范式）
+    _orig_load7l, _orig_sync7l = gui_app.load_settings, gui_app.sync_pocs
+
+    def _app7l(dev_on):
+        _b7l = _copy7l.deepcopy(settings)
+        _b7l["dev"] = {"enabled": dev_on, "fixture_port": 0}
+        gui_app.load_settings = lambda: _b7l
+        gui_app.sync_pocs = lambda *_a, **_k: None
+        try:
+            return gui_app.create_app()
+        finally:
+            gui_app.load_settings, gui_app.sync_pocs = _orig_load7l, _orig_sync7l
+
+    for _u7l2 in users_mod.list_users():
+        users_mod.delete_user(_u7l2["id"])
+    assert users_mod.count_users() == 0, "无账号时引导口令即管理员（[7j]/[7k] 已清空账号）"
+    _app_off7l = _app7l(False)
+    _c_off7l = _app_off7l.test_client()
+    assert _c_off7l.post("/login", data={"token": settings["gui"]["token"]},
+                         environ_base={"REMOTE_ADDR": "203.0.113.211"}).status_code == 302
+    _html_off7l = _c_off7l.get("/").get_data(as_text=True)
+    assert 'href="/devmode"' not in _html_off7l, \
+        "dev.enabled=false 时**不得**渲染「开发模式」入口（默认完全不出现）"
+    _app_on7l = _app7l(True)
+    _c_on7l = _app_on7l.test_client()
+    assert _c_on7l.post("/login", data={"token": settings["gui"]["token"]},
+                        environ_base={"REMOTE_ADDR": "203.0.113.212"}).status_code == 302
+    _html_on7l = _c_on7l.get("/").get_data(as_text=True)
+    assert 'href="/devmode"' in _html_on7l, "dev.enabled=true 时**必须**渲染「开发模式」入口"
+    _dev_html7l = _c_on7l.get("/devmode").get_data(as_text=True)
+    assert _c_on7l.get("/devmode").status_code == 200, "开发模式页对管理员应可访问"
+    assert "跑一次全流程自检" in _dev_html7l and "启动内置靶场" in _dev_html7l, "页面三个按钮必须在"
+
+    # ---- §6.1 变异证伪（把新行为退回"旧/天真"实现，确认上面的断言**真的变红**）----
+    _real_apply7l = _dm7l.apply
+    _real_limits7l = dict(_dm7l.DEV_LIMITS)
+    _real_host7l = _df7l.HOST
+    _real_en7l = _dm7l.enabled
+
+    # (M1) apply 退回"恒等"（不压量）→ ① 的断言必红
+    _dm7l.apply = lambda s: _copy7l.deepcopy(s)
+    try:
+        _m1_7l = _dm7l.apply(_copy7l.deepcopy(settings))
+        assert _dm7l._get(_m1_7l, "limits.max_workers") != 1, \
+            "变异（apply 恒等）后 max_workers 不该是 1 → 证明 ① 测的是'apply 真的压量'"
+    finally:
+        _dm7l.apply = _real_apply7l
+
+    # (M2) 把 budget_total 塞进 DEV_LIMITS → ② 的"不压"必红
+    _dm7l.DEV_LIMITS["limits.budget_total"] = 1
+    try:
+        _m2_7l = _dm7l.apply(_copy7l.deepcopy(settings))
+        assert _dm7l._get(_m2_7l, "limits.budget_total") == 1, \
+            "变异（把 budget_total 放进 DEV_LIMITS）后它会被压到 1 → 证明 ② 的'不压'是有内容的"
+    finally:
+        _dm7l.DEV_LIMITS.clear()
+        _dm7l.DEV_LIMITS.update(_real_limits7l)
+
+    # (M3) 夹具 HOST 改成 127.0.0.2（仍是回环，**绝不**为了证伪去绑 0.0.0.0）→ ④ 必红
+    _df7l.HOST = "127.0.0.2"
+    _fxm7l, _ = _df7l.start()
+    try:
+        _bind7l = _fxm7l.server_address[0]
+    finally:
+        _df7l.stop(_fxm7l)
+        _df7l.HOST = _real_host7l
+    assert _bind7l == "127.0.0.2", f"变异生效（绑到改后的地址）：{_bind7l}"
+    assert _bind7l != "127.0.0.1", \
+        "变异后'绑定必须是 127.0.0.1'为假 → 证明 ④ 测的是**真实绑定地址**（不是常量恒等）"
+
+    # (M4) devmode.enabled 恒真 → ⑥ 的"disabled 不渲染入口"必红
+    _dm7l.enabled = lambda s: True
+    try:
+        _appm7l = _app7l(False)
+        _cm7l = _appm7l.test_client()
+        _cm7l.post("/login", data={"token": settings["gui"]["token"]},
+                   environ_base={"REMOTE_ADDR": "203.0.113.213"})
+        _htmlm7l = _cm7l.get("/").get_data(as_text=True)
+        assert 'href="/devmode"' in _htmlm7l, \
+            "变异（enabled 恒真）后入口出现了 → 证明 ⑥ 的'disabled 不渲染'测的是开关本身"
+    finally:
+        _dm7l.enabled = _real_en7l
+
+    # (M5) budget_total=1 → 全流程**跑不完**（预算耗尽→stopped）→ ⑤ 的 done 与 ② 必红
+    _dm7l.DEV_LIMITS["limits.budget_total"] = 1
+    _fx7l3, _base7l3 = _df7l.start()
+    try:
+        _cfg7l3 = _dm7l.apply(_copy7l.deepcopy(settings))
+        for _k7l in ("iprecon", "fofa", "shodan", "quake", "ctlog", "intel", "github", "passive"):
+            _cfg7l3[_k7l] = dict(_cfg7l3.get(_k7l) or {}, enabled=False)
+        for _k7l in ("takeover", "portscan", "cert", "screenshot", "jsmine", "dirscan",
+                     "vulnscan", "heuristic"):
+            _cfg7l3[_k7l] = dict(_cfg7l3.get(_k7l) or {}, enabled=True)
+        _tg7l3 = _base7l3 + "/"
+        _tid7l3 = db.create_task("smoke-devflow-budget", _tg7l3, list(STAGE_ORDER), {})
+        run_task(_tid7l3, "smoke-devflow-budget", _tg7l3, list(STAGE_ORDER), {}, _cfg7l3)
+        _st7l3 = db.get_task(_tid7l3)["status"]
+        db.delete_task(_tid7l3, backup=False)
+        assert _st7l3 != "done", \
+            f"budget_total=1 时全流程**必跑不完**（预算耗尽→stopped），实测 {_st7l3!r} → " \
+            "证明 ⑤ 的 done 与 ② 的'不压预算'都测的是真东西"
+    finally:
+        _df7l.stop(_fx7l3)
+        _dm7l.DEV_LIMITS.clear()
+        _dm7l.DEV_LIMITS.update(_real_limits7l)
+
+    print("[7l] 续50 开发模式 + 全流程自检 ok: apply 逐项压到最小（并发/在飞/速率/配额）+ **深拷贝**"
+          "（入参不动）+ 脏配置补段不抛 / **刻意不压** budget_total（压到 1 全流程跑不完，已证伪）/ "
+          "dev.enabled 默认 False + 脏值不炸 / 夹具只绑 127.0.0.1·内容可取·stop 后端口释放 / "
+          "全 13 阶段在夹具上真跑一遍（done·error 空·站外 0）/ GUI 入口随 dev.enabled 出现或消失 / "
+          "5 条变异证伪全部按预期变红")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

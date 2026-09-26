@@ -95,8 +95,15 @@ def _default_dispatch(task_id, mode, settings):
     task, stages, options = _load_run_spec(task_id, mode)
     if not task:
         return
+    eff = settings or {}
+    # 续50：开发模式「全流程自检」任务 —— 本次运行改用"压量到最小 + 全阶段打开"的 settings
+    # **副本**（只影响这一个任务；绝不写回 config/settings.yaml，见 scanner/devmode.py 文件头）。
+    # 标记写在任务 options 的 `dev_selfcheck` 上（由 GUI 自检按钮 / 调用方设置）。
+    if isinstance(options, dict) and options.get("dev_selfcheck"):
+        from . import devmode
+        eff = devmode.enable_all_stages(devmode.apply(eff))
     runner.run_task(task_id, task["name"], task["targets"], stages, options,
-                    settings or {}, append=(mode == "append"), resume=(mode == "resume"))
+                    eff, append=(mode == "append"), resume=(mode == "resume"))
 
 
 class _Queue:

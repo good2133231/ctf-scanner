@@ -40,7 +40,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import (audit, auth as taskauth, blacklist, cdn, certs as certs_mod, db, dnsq,
+from scanner import (audit, auth as taskauth, blacklist, cdn, certs as certs_mod, db,
+                     devfixture, devmode, dnsq,
                      extdom, login_guard, queue, screenshot, users)
 from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
@@ -334,6 +335,37 @@ def _client_ip():
         return ""
 
 
+# 续50：内置靶场的**进程内句柄**（由「开发模式」页的启动/停止按钮显式控制）。
+# 生命周期刻意做成"显式按钮控制"，不做成"入队后自动起、跑完自动关" —— 队列里任务的收尾点
+# 不可靠（进程被杀 / 异常收场），自动关容易泄漏端口。见 scanner/devfixture.py。
+_DEV_FIXTURE = {"httpd": None, "base": ""}
+
+
+def _dev_fixture_start(port=0):
+    """起内置靶场（已在跑则复用），返回 `base_url`；失败返回空串。"""
+    if _DEV_FIXTURE.get("httpd") is not None:
+        return _DEV_FIXTURE.get("base") or ""
+    try:
+        httpd, base = devfixture.start(int(port or 0))
+    except Exception as e:      # noqa: BLE001 - 端口占用等：只记一行，不让页面崩
+        logger.warning(f"[dev] 内置靶场启动失败：{e}")
+        return ""
+    _DEV_FIXTURE["httpd"], _DEV_FIXTURE["base"] = httpd, base
+    return base
+
+
+def _dev_fixture_stop():
+    """停内置靶场；返回 True 表示确实停了一个（本就没在跑返回 False）。"""
+    httpd = _DEV_FIXTURE.get("httpd")
+    if httpd is None:
+        return False
+    try:
+        devfixture.stop(httpd)
+    finally:
+        _DEV_FIXTURE["httpd"], _DEV_FIXTURE["base"] = None, ""
+    return True
+
+
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
@@ -341,6 +373,9 @@ def create_app():
     # 模板里可直接调用 `source_label('osint:fofa')` → 「ICO 反查」（来源列的可读标签）
     app.jinja_env.globals["source_label"] = source_label
     app.jinja_env.globals["ip_note_label"] = ip_note_label
+    # 续50：开发模式开关 —— 供 base.html 决定是否渲染「开发模式」侧栏入口。
+    # 与 gui.host / allowed_hosts 同口径：改 config/settings.yaml 后需**重启控制台**才生效。
+    app.jinja_env.globals["dev_enabled"] = devmode.enabled(settings)
     db.init_db()
     # 启动时对账（续49 语义变更）：进程重启后，之前 status='running' 的孤儿任务没人推进 ——
     # 带队列运行规格的**重新入队**（等 worker 接着跑），无规格的（CLI 直跑 / 老库行）仍标 failed；
@@ -353,6 +388,12 @@ def create_app():
     # 两者都是 best-effort（内部已 try/except），失败只 warning，绝不影响控制台启动。
     audit.prune(settings=settings)
     login_guard.prune(settings=settings)
+
+    # 续50：开发模式开启时**醒目提示** —— 它把所有配额压到 1，只适合流程自检，
+    # 拿它扫真实目标会得到"几乎什么都没扫到"的假象。放在启动段（与上面两条 prune 同处）。
+    if devmode.enabled(settings):
+        print("[!] ⚠️ 开发模式已开启（dev.enabled=true）：所有配额压到 1，"
+              "仅供流程自检，勿用于真实目标。侧栏「开发模式」页可起内置靶场 / 跑全流程自检。")
 
     # ---------- 鉴权 ----------
 
@@ -2292,6 +2333,78 @@ def create_app():
         n = audit.prune(settings=settings)
         _audit(audit.KIND_ACCOUNT, target="audit_log", detail=f"手动清理过期审计 {n} 条")
         return redirect(url_for("audit_page", msg=f"已清理 {n} 条过期记录"))
+
+    # ---------- 续50：开发模式 / 全流程自检（仅 dev.enabled=true 时侧栏才出现入口） ----------
+
+    @app.route("/devmode")
+    @login_required
+    @admin_required
+    def devmode_page():
+        """开发模式页：起/停内置靶场 + 跑一次全流程自检（全 13 阶段、压量到最小）。
+
+        夹具生命周期由「启动 / 停止」两个**显式按钮**控制（不做成"入队后自动起、跑完自动关"：
+        队列里任务的收尾点不可靠，自动关容易泄漏端口）。
+        """
+        last = None
+        for t in db.list_tasks(limit=200):
+            if t["name"] == "dev-selfcheck":
+                last = t
+                break
+        return render_template(
+            "devmode.html",
+            enabled=devmode.enabled(settings),
+            base=_DEV_FIXTURE.get("base") or "",
+            fixture_on=_DEV_FIXTURE.get("httpd") is not None,
+            compressed=devmode.report(settings),
+            kept=devmode.DEV_KEEP,
+            fixture_port=(settings.get("dev") or {}).get("fixture_port", 0),
+            last=last, stages=list(STAGE_ORDER),
+            msg=(request.args.get("msg") or "").strip(),
+            error=(request.args.get("error") or "").strip())
+
+    @app.route("/api/devmode/fixture/start", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_devmode_fixture_start():
+        if not devmode.enabled(settings):
+            return redirect(url_for("devmode_page", error="开发模式未开启（dev.enabled=false）"))
+        base = _dev_fixture_start((settings.get("dev") or {}).get("fixture_port", 0))
+        if not base:
+            return redirect(url_for("devmode_page", error="内置靶场启动失败（端口被占用？）"))
+        _audit(audit.KIND_TASK, target="devfixture", detail=f"启动内置靶场 {base}")
+        return redirect(url_for("devmode_page", msg=f"内置靶场已启动：{base}"))
+
+    @app.route("/api/devmode/fixture/stop", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_devmode_fixture_stop():
+        stopped = _dev_fixture_stop()
+        _audit(audit.KIND_TASK, target="devfixture", detail="停止内置靶场")
+        return redirect(url_for("devmode_page",
+                                msg=("内置靶场已停止" if stopped else "内置靶场本就没在跑")))
+
+    @app.route("/api/devmode/selfcheck", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_devmode_selfcheck():
+        """起夹具（若未起）→ 入队一个**全 13 阶段 + dev 压量**的自检任务。
+
+        压量由 `scanner/queue.py::_default_dispatch` 依据任务的 `dev_selfcheck` 选项施加
+        （`devmode.apply` + `devmode.enable_all_stages`），**绝不写回 config/settings.yaml**。
+        """
+        if not devmode.enabled(settings):
+            return redirect(url_for("devmode_page", error="开发模式未开启（dev.enabled=false）"))
+        base = _dev_fixture_start((settings.get("dev") or {}).get("fixture_port", 0))
+        if not base:
+            return redirect(url_for("devmode_page", error="内置靶场启动失败（端口被占用？）"))
+        targets = base + "/"
+        stages = list(STAGE_ORDER)
+        options = {"dev_selfcheck": True}
+        tid = db.create_task("dev-selfcheck", targets, stages, options)
+        _spawn(tid, "dev-selfcheck", targets, stages, options)
+        _audit(audit.KIND_TASK, target=f"#{tid}",
+               detail="开发模式全流程自检（全 13 阶段，配额压到最小）")
+        return redirect(url_for("task_detail", task_id=tid))
 
     def _tail(path, n=150):
         try:

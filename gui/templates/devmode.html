@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}开发模式{% endblock %}
+{% block content %}
+{% if msg %}<p><b>已完成：</b>{{ msg }}</p>{% endif %}
+{% if error %}<p><b>未完成：</b>{{ error }}</p>{% endif %}
+
+{% if not enabled %}
+<section class="panel">
+  <h2>开发模式 / 全流程自检</h2>
+  <p class="muted">
+    <b>当前未开启。</b>把 <code>config/settings.yaml</code> 的 <code>dev.enabled</code>
+    设为 <code>true</code> 并重启控制台后，侧栏才会出现本页。
+  </p>
+</section>
+{% else %}
+<section class="panel">
+  <h2>开发模式 / 全流程自检</h2>
+  <p class="muted">
+    开发模式把各阶段的"量"（并发 / 在飞 / 速率 / 每阶段配额）<b>压到最小（1）</b>，
+    目的是先验证<b>流程本身能不能跑通</b>，不被"量"的问题干扰。压量只作用于<b>本次运行的内存副本</b>，
+    <b>绝不写回 config/settings.yaml</b>（关掉 <code>dev.enabled</code> 即恢复原策略）。
+  </p>
+  <p class="muted">⚠️ 本模式仅供流程自检，<b>勿用于真实目标</b>（会得到"几乎什么都没扫到"的假象）。</p>
+  <table>
+    <tr><th>内置靶场</th>
+        <td>{{ base or '未启动' }}{% if fixture_on %} <span class="sev sev-low">运行中</span>{% endif %}</td></tr>
+    <tr><th>夹具端口配置</th><td>{{ fixture_port }}（0 = 系统自动分配）</td></tr>
+    <tr><th>阶段（{{ stages|length }}）</th><td class="muted">{{ stages|join(' → ') }}</td></tr>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>操作</h2>
+  <form method="post" action="{{ url_for('api_devmode_fixture_start') }}" style="display:inline">
+    <button type="submit">启动内置靶场</button>
+  </form>
+  <form method="post" action="{{ url_for('api_devmode_fixture_stop') }}" style="display:inline"
+        onsubmit="return confirm('停止内置靶场？（仅停本机夹具，不影响其它）')">
+    <button type="submit">停止内置靶场</button>
+  </form>
+  <form method="post" action="{{ url_for('api_devmode_selfcheck') }}" style="display:inline"
+        onsubmit="return confirm('跑一次全流程自检？（全 13 阶段、配额压到最小，仅打本机夹具）')">
+    <button type="submit">跑一次全流程自检</button>
+  </form>
+  <p class="muted small">自检 = 起夹具（若未起）→ 入队一个全 13 阶段、配额压到最小的任务，目标为本机夹具。</p>
+</section>
+
+<section class="panel">
+  <h2>压量清单（{{ compressed|length }} 项）</h2>
+  {% if compressed %}
+  <ul class="muted small">
+    {% for line in compressed %}<li><code>{{ line }}</code></li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">所有项都已是目标值（无需改动）。</p>
+  {% endif %}
+  <p class="muted small">
+    预算刻意<b>不压</b>：{% for k in kept %}<code>{{ k }}</code>{% if not loop.last %}、{% endif %}{% endfor %}
+    保持不设 —— <code>budget_total=1</code> 会让第 2 个请求即被预算拒绝、全流程根本跑不完。
+  </p>
+</section>
+
+<section class="panel">
+  <h2>最近一次自检</h2>
+  {% if last %}
+  <p><a href="{{ url_for('task_detail', task_id=last['id']) }}">任务 #{{ last['id'] }}</a>
+     —— 状态 <code>{{ last['status'] }}</code>，创建于 {{ last['created_at'] }}</p>
+  {% else %}
+  <p class="muted">还没有跑过自检。</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

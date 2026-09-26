@@ -27,6 +27,12 @@
         ('users_page',  '/users',      '账号管理', 'M9 8.5a3 3 0 100 6 3 3 0 000-6zM3 16c0-3 3-4.5 6-4.5s6 1.5 6 4.5M13 5h4M15 3v4', True),
         ('audit_page',  '/audit',      '访问审计', 'M4 4h10M4 9h10M4 14h7M2 2v14', True),
       ] %}
+      {# 续50：开发模式入口**只在 dev.enabled=true 时**才追加进导航（默认完全不渲染）。 #}
+      {% if dev_enabled %}
+      {% set nav_items = nav_items + [
+        ('devmode_page', '/devmode', '开发模式', 'M6 2h6M7 2v5L3 14a1 1 0 00.9 1.5h10.2A1 1 0 0015 14L11 7V2', True),
+      ] %}
+      {% endif %}
       {% for endpoint, prefix, label, icon, admin_only in nav_items %}
       {% if not admin_only or (me and me.role == 'admin') %}
       <a href="{{ url_for(endpoint) }}"

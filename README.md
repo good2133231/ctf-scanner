@@ -117,11 +117,42 @@ Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错�
 被锁返回 429 + `Retry-After` 且不泄漏账号存在性）**默认就开**、阈值宽松，可在策略配置里调；
 被锁在门外时用 `py -3 -m scanner.login_guard --clear` 自救（详见 docs/deploy-https.md §7）。
 
+## 开发模式 + 全流程自检
+
+**用途**：把各阶段的「量」（并发数 / 在飞数 / 速率 / 每阶段配额，共 47 项）**全部压到最小 `1`**，
+用最小代价把整条流水线走一遍，验证**流程本身**跑得通、在哪一阶段断 —— 而不是测覆盖面（那是生产跑的事）。
+
+- **开发模式开关**：`config/settings.yaml` 的 `dev.enabled`（默认 `false`）。打开后控制台侧边栏**才出现**
+  第 11 栏「开发模式」（**仅管理员可见**，未打开时该栏**根本不渲染**，直接敲 `/devmode` 也进不去）。
+- **全流程自检**（本功能的验收手段，控制台与 CLI 双入口）：
+  - **控制台**：「开发模式」页三个按钮 —— 「启动内置靶场」/「停止内置靶场」/「跑一次全流程自检」；
+    自检按钮会 `db.create_task` 一个带 `dev_selfcheck` 标记的任务并 `_spawn` 入队，由队列 worker 在
+    **压缩后的内存配置副本**下跑完 13 个阶段；
+  - **CLI**：`py -3 run_devflow.py`（与 `run_gui.py` 对称的独立入口）。它先起内置靶场 → `devmode.apply(load_settings())`
+    → 依次跑全部 13 阶段（`runner.run_task` 前台执行）→ 打印**每阶段 `OK`/`SKIP`/`FAIL` + 请求数 + 耗时**，
+    无 `FAIL` 退出码 0，否则 1。**这是本功能的验收证据**。
+- **内置靶场**（`scanner/devfixture.py`）：标准库 `ThreadingHTTPServer`，**只绑 `127.0.0.1`（绝不 `0.0.0.0`）**，
+  即时生成 `index.html` / `admin/index.html` / `robots.txt` / `app.js` / `.env`（`.env` 是**明显假的样例值**
+  `devfixture-not-a-real-secret`，只为让敏感文件检查有命中），每次启动写独立临时目录、停止即清理。
+  它**不复用** `tests/smoke.py` 的 `smoke_root/`，是产品侧模块（不依赖测试夹具）。
+- **「跳过」的口径**：某阶段**本次零网络活动**即记为 `SKIP`（目标不匹配 / 未配 key / 无对应资产 / 命中缓存），
+  **有 key 的阶段照常真跑**、没 key 的记为「跳过」—— 不做假成功。`portscan`（裸 socket）与 `heuristic`
+  （零请求）恒为 `OK`。
+- **`budget_total` 例外（**不压到 1**）**：`limits.budget_total` 与 `limits.budget_subprocess_weight`
+  **刻意不压缩** —— 若把 `budget_total` 压到 `1`，第 2 个请求就被预算拒绝、流水线**永远跑不完**，
+  自检本身自相矛盾（见 `scanner/devmode.py` 的 `DEV_KEEP` 与文件头注释）。
+- **铁律（绝不写回）**：`devmode.apply()` 对入参**深拷贝**后逐项压量，**从不修改入参**，更**绝不把压缩结果
+  写回真实 `config/settings.yaml`** —— 它只是运行时内存里的副本（与项目一贯的「任务专用副本」原则一致）。
+  `devmode.report()` 返回「路径: 原值 → 1」清单，控制台开发模式页会把它列出来，便于核对压了哪些项。
+
+> 打开开发模式后 `create_app()` 启动时会打印一行显式告警，提醒"当前是开发模式（量已压到最小）"。
+
 ## 目录结构
 
 ```
 ctf-scanner/
 ├── cli/client.py            # CLI 客户端（导入文件、全自动执行）
+├── run_devflow.py           # 全流程自检 CLI 入口（起内置靶场 → 压缩配置 → 跑全 13 阶段 → 打 OK/SKIP/FAIL）
 ├── gui/                     # Web 控制台（Flask + 原生 JS，仿 ARL）
 │   ├── app.py               #   路由与后台任务线程
 │   ├── templates/ static/   #   页面与样式
@@ -152,13 +183,16 @@ ctf-scanner/
 │   ├── github_leak.py       #   GitHub 泄露检索：GitHub 公开代码里搜目标注册域（只产「线索」）
 │   ├── fingerprint.py       #   内置指纹识别 + favicon MD5/mmh3（httpx 不可用时填充技术栈）
 │   ├── db.py  config.py  utils.py  targets.py
+│   ├── queue.py             #   持久化任务队列 worker（续49：原子认领 + 重启重新入队）
+│   ├── devmode.py           #   开发模式：把各阶段「量」压到最小 1（深拷贝、不写回、budget_total 例外）
+│   ├── devfixture.py        #   内置靶场（标准库 HTTP，只绑 127.0.0.1，自检用）
 │   ├── report.py            #   报告三格式（Markdown / 自包含 HTML / 无头浏览器打印 PDF），共用 collect() 快照
 ├── tools/import_ref_pocs.py #   参考项目 Python POC 静态导入器（产物默认关闭）
 ├── tools/import_dir_dict.py #   目录扫描大字典生成器（读 dirmap 字典 → config/dicts/dirs_big.txt）
 ├── tools/import_fw_dicts.py #   目录字典按框架细分生成器（从大字典派生 12 个框架字典 + 暴露面）
 ├── tools/dirmap/            #   dirmap 落点（目录联接，第三方项目不随仓库分发）
 ├── config/
-│   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/screenshot/iprecon/fofa/blacklist/intel/heuristic/github）
+│   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/screenshot/iprecon/fofa/blacklist/intel/heuristic/github；另有 queue/dev 两个非策略页配置）
 │   ├── keys.yaml            # 第三方 API key 专用文件（gitignore，GUI 不写回）
 │   ├── blacklist.txt        # 用户黑名单（一行一个域名，# 注释；命中即不入资产库）
 │   ├── dicts/               #   子域名字典、resolvers、目录字典（dirs_shallow 206 浅扫精选 / dirs_small 55 / dirs_big 15333 / 技术栈与框架细分 + 暴露面）、cdn_cname.txt（CDN 厂商后缀）、cdn_ips.txt（CDN 厂商任播 IP 段）、sensitive.txt（A01 敏感文件检查的数据源：路径 | 关键字 | 级别 | 说明）
