@@ -25,6 +25,7 @@
         ('pocs',        '/pocs',       'POC 管理', 'M7 5L2 9l5 4M11 5l5 4-5 4', True),
         ('settings_page','/settings',  '策略配置', 'M9 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zM9 1v2M9 15v2M1 9h2M15 9h2M3.5 3.5l1.5 1.5M13 13l1.5 1.5M14.5 3.5L13 5M5 13l-1.5 1.5', True),
         ('users_page',  '/users',      '账号管理', 'M9 8.5a3 3 0 100 6 3 3 0 000-6zM3 16c0-3 3-4.5 6-4.5s6 1.5 6 4.5M13 5h4M15 3v4', True),
+        ('audit_page',  '/audit',      '访问审计', 'M4 4h10M4 9h10M4 14h7M2 2v14', True),
       ] %}
       {% for endpoint, prefix, label, icon, admin_only in nav_items %}
       {% if not admin_only or (me and me.role == 'admin') %}

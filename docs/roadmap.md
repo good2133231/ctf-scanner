@@ -138,8 +138,14 @@
       —— Caddy / Nginx 样例 + 自签路径 + 验证清单；应用侧三个开关 `gui.allowed_hosts`
       （Host 白名单显式枚举，默认空=只回环、`*` 被忽略）、`gui.behind_proxy`
       （默认关，开了才信 `X-Forwarded-*`，`ProxyFix` 一跳）、`gui.secure_cookie`
-      （默认关，TLS 就绪后开，给会话 Cookie 加 `Secure`）；`serve()` 启动提示指向该文档）。
-      **仍未做**：访问审计流水、登录失败锁定/验证码/限速、**逐表单 CSRF token**
+      （默认关，TLS 就绪后开，给会话 Cookie 加 `Secure`）；`serve()` 启动提示指向该文档）；
+      **「访问审计流水」已落地**（续48：`scanner/audit.py` + `audit_log` 表 —— 登录/退出/账号/策略/
+      POC/任务/越权都留一条"谁·何时·从哪 IP·做了什么·成败"，**只记元数据、绝不记口令凭据**，
+      管理员在「访问审计」页过滤查看，`retention_days` 默认 30）；
+      **「登录失败锁定 / 限速」已落地**（续48：`scanner/login_guard.py` —— 按 IP 为主（10 次/5 分钟）、
+      按用户名兜底（20 次/5 分钟），触发后锁 15 分钟，返回 429 + `Retry-After` 且不泄漏账号存在性；
+      引导口令登录同样受 IP 限速；命令行 `py -3 -m scanner.login_guard --clear` 可自救）；
+      **仍未做**：登录**验证码**、**逐表单 CSRF token**
       （仍依赖续32 的 Origin/Referer 中间件，是**刻意**取舍：几十处表单逐处改造，
       漏一处就是"看起来有防护、实际有缺口"）、SSO/找回口令、多租户隔离
       （所有账号看到同一批任务与资产，隔离的只是配置页）、HSTS/TLS 套件策略（交给反代）；

@@ -112,6 +112,11 @@ Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错�
 **[docs/deploy-https.md](docs/deploy-https.md)**。
 > 多用户上线后口令是**账号密码**，明文 HTTP 下会明文过线 —— 这一项不是"可选优化"。
 
+放到服务器后，**访问审计流水**（`gui.audit`：谁/何时/从哪 IP/做了什么/成败，只记元数据、绝不记口令凭据；
+管理员在「访问审计」页查看）与**登录限速/失败锁定**（`gui.login_lockout`：按 IP 为主、按用户名兜底，
+被锁返回 429 + `Retry-After` 且不泄漏账号存在性）**默认就开**、阈值宽松，可在策略配置里调；
+被锁在门外时用 `py -3 -m scanner.login_guard --clear` 自救（详见 docs/deploy-https.md §7）。
+
 ## 目录结构
 
 ```
@@ -138,6 +143,8 @@ ctf-scanner/
 │   ├── blacklist.py         #   用户黑名单（config/blacklist.txt，入库前过滤）
 │   ├── auth.py              #   任务级登录态请求头（只发目标侧；fail-closed + 掩码 + 非法行不静默丢弃）
 │   ├── users.py             #   控制台多用户：账号/角色 + 口令派生与校验（pbkdf2_sha256，零依赖、不存明文）
+│   ├── login_guard.py       #   登录限速/失败锁定（续48：按 IP 为主 + 按用户名兜底，DB 计数，命令行自救）
+│   ├── audit.py             #   访问审计流水（续48：只记元数据、绝不记口令凭据；按保留期清理）
 │   ├── iprecon.py           #   IP 反查域名 + /24 C 段归纳（C 段视野）
 │   ├── fofa.py  mmh3.py     #   FOFA favicon/证书反查 + 黑 ico / 通用证书判定；纯标准库 MurmurHash3
 │   ├── intel.py             #   漏洞情报订阅：CISA KEV × 本地指纹白名单匹配（只产「线索」）

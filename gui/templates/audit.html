@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}访问审计{% endblock %}
+{% block content %}
+{% if msg %}<p><b>已完成：</b>{{ msg }}</p>{% endif %}
+
+<section class="panel">
+  <h2>访问审计（共 {{ summary.total }} 条 · 保留 {{ retention }} 天）</h2>
+  <p class="muted">
+    记录"谁、何时、从哪个 IP、做了什么、成败" —— 登录、退出、账号操作、策略配置、POC 管理与任务操作
+    都会留一条。<b>只记元数据，不含任何口令或凭据</b>（写入侧不传值，写入前再兜底擦洗一遍）。
+    超过保留期的记录在控制台启动时自动清理，也可以手动清。
+  </p>
+  <p class="muted small">
+    {% for k in kinds %}{{ labels.get(k, k) }} {{ summary.by_kind.get(k, 0) }}{% if not loop.last %} · {% endif %}{% endfor %}
+  </p>
+  <form method="post" action="{{ url_for('api_audit_prune') }}"
+        onsubmit="return confirm('清理超过 {{ retention }} 天的审计记录？（只清审计表，不动任务与资产）')">
+    <button type="submit" class="btn-mini ghost">清理超过 {{ retention }} 天的记录</button>
+  </form>
+</section>
+
+<section class="panel">
+  <form method="get" class="filters">
+    <label>类型
+      <select name="kind">
+        <option value="">全部</option>
+        {% for k in kinds %}
+        <option value="{{ k }}" {{ 'selected' if kind == k }}>{{ labels.get(k, k) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>操作者 <input name="actor" value="{{ actor }}" placeholder="用户名"></label>
+    <label>IP <input name="ip" value="{{ ip }}" placeholder="如 127.0.0.1"></label>
+    <label>结果
+      <select name="ok">
+        <option value="" {{ 'selected' if okarg == '' }}>全部</option>
+        <option value="1" {{ 'selected' if okarg == '1' }}>成功</option>
+        <option value="0" {{ 'selected' if okarg == '0' }}>失败</option>
+      </select>
+    </label>
+    <label>关键字 <input name="q" value="{{ q }}" placeholder="对象 / 说明 / IP"></label>
+    <button type="submit">筛选</button>
+  </form>
+
+  <table id="tbl-audit">
+    <thead><tr><th>时间</th><th>类型</th><th>操作者</th><th>角色</th><th>IP</th>
+      <th>对象</th><th>说明</th><th>结果</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td class="muted">{{ r.at }}</td>
+        <td>{{ labels.get(r.kind, r.kind or '-') }}</td>
+        <td>{{ r.actor or '-' }}</td>
+        <td class="muted">{{ '管理员' if r.actor_role == 'admin' else ('子用户' if r.actor_role == 'user' else '-') }}</td>
+        <td class="muted">{{ r.ip or '-' }}</td>
+        <td>{{ r.target or '-' }}</td>
+        <td>{{ r.detail or '-' }}</td>
+        <td>{% if r.ok %}<span class="sev sev-low">成功</span>{% else %}<span class="sev sev-high">失败</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if not rows %}<p class="muted">（没有匹配的记录）</p>{% endif %}
+  {% include "_pager.html" %}
+</section>
+{% endblock %}

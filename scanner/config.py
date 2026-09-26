@@ -86,6 +86,24 @@ DEFAULTS = {
         #   默认关 —— 走 HTTP 时开了它浏览器根本不回传 Cookie，等于登录不上；
         #   上了 TLS 反代之后再打开，否则口令 Cookie 可能被明文带出去。
         "secure_cookie": False,
+        # ---- 登录限速 / 失败锁定（续48，见 scanner/login_guard.py）----
+        # 保护性开关**默认开**，但阈值刻意宽松：本机/小队共用场景里，"一次记错口令"不该把
+        # 队友挡在门外。两级判据：按 IP 为主（10 次/5 分钟），按用户名兜底（20 次/5 分钟），
+        # 触发后锁 15 分钟。被锁时返回 429 + Retry-After（不是 403），且文案与"账号是否存在"无关。
+        "login_lockout": {
+            "enabled": True,
+            "window_seconds": 300,      # 失败计数时间窗（秒）
+            "max_fails_per_ip": 10,     # 同一 IP 在窗口内的失败上限
+            "max_fails_per_user": 20,   # 同一用户名在窗口内的失败上限（兜底，更宽松）
+            "lockout_seconds": 900,     # 触发后的锁定时长（秒）
+        },
+        # ---- 访问审计流水（续48，见 scanner/audit.py）----
+        # 记录"谁/何时/从哪个 IP/做了什么/成败"，**只记元数据、绝不记口令与凭据**。
+        # retention_days：超过该天数的审计行在启动时被清理（只清 audit_log 一张表）。
+        "audit": {
+            "enabled": True,
+            "retention_days": 30,
+        },
     },
     "limits": {
         "max_workers": 20,        # HTTP 探测 / 目录扫描 / DNS 爆破线程数

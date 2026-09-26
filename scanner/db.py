@@ -157,6 +157,34 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT, updated_at TEXT,
   last_login_at TEXT DEFAULT ''
 );
+-- 续48 访问审计流水（scanner/audit.py）：谁（actor/actor_role）在何时（at）从哪个 IP（ip）
+-- 对什么对象（target）做了什么（kind），成败如何（ok），并附一句人类可读说明（detail）。
+-- **只记元数据，绝不记口令/凭据**：写入侧只传"改了哪一块 / 动了哪个对象"，detail 再经 _scrub() 兜底擦洗。
+-- 与 users 同走 `CREATE TABLE IF NOT EXISTS` —— 老库**原地补表**，不需要删库重建。
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,                -- 'YYYY-MM-DD HH:MM:SS'（与全库 _now() 同格式，可直接字符串比大小）
+  kind TEXT DEFAULT '',            -- login_ok/login_fail/login_blocked/logout/account/settings/poc/task/denied
+  actor TEXT DEFAULT '',           -- 操作者用户名（登录类事件里是"被尝试的用户名"）
+  actor_role TEXT DEFAULT '',      -- admin/user/''（引导口令登录时为空）
+  ip TEXT DEFAULT '',              -- 客户端 IP（request.remote_addr；见 docs/deploy-https.md 的 behind_proxy 说明）
+  target TEXT DEFAULT '',          -- 被操作对象（任务名 / 账号名 / 资源…）
+  detail TEXT DEFAULT '',          -- 补充说明（**已擦洗**，不得含口令/凭据）
+  ok INTEGER DEFAULT 1             -- 1 成功 / 0 失败
+);
+CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at);
+-- 续48 登录限速计数（scanner/login_guard.py 专用）：**可变状态**，与只读的 audit_log **刻意分表** ——
+-- audit_log 是只追加的审计流水（只按保留期清），限速计数要"成功清用户名计数 / 锁定打标记 / 清过期行"，
+-- 两种语义混在一张表里，任一侧改动都会波及另一侧；分表后 `gui.audit` 关掉不影响限速、反之亦然。
+-- kind='fail' 记一次失败；kind='lock' 是"已触发锁定"的标记（锁定从该行时刻起持续 lockout_seconds）。
+CREATE TABLE IF NOT EXISTS login_fails (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,                -- 'YYYY-MM-DD HH:MM:SS'
+  ip TEXT DEFAULT '',              -- 失败来源 IP（IP 级判据）
+  username TEXT DEFAULT '',        -- 归一后的用户名（用户名级判据；与 users.get_by_name 同口径）
+  kind TEXT DEFAULT 'fail'         -- fail / lock
+);
+CREATE INDEX IF NOT EXISTS idx_login_fails_at ON login_fails(at);
 """
 
 

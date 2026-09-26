@@ -7202,6 +7202,294 @@ http:
           "4 条变异证伪全部按预期变红 / `serve()` 真跑：提示逐行恰好一次·无重复行·"
           "回环下不出现「请走反向代理」的错误建议")
 
+    # [7j] 续48 **登录限速/失败锁定 + 访问审计流水**。
+    #      背景：控制台即将放到服务器给队友用 —— 口令会被在线爆破，操作需要可回溯。
+    #      钉死 8 条安全语义（每条一组断言，末尾 §6.1 变异证伪）：
+    #      ① 两级限速（按 IP 为主 / 按用户名兜底）触发后返回 **429 + Retry-After**（不是 403）；
+    #      ② **不泄漏账号是否存在**："存在但被锁"与"不存在但被锁"返回**逐字节相同**的页面；
+    #      ③ 锁定期内**即使口令正确也拒绝**；④ 成功登录清该用户名计数（IP 计数不清）；
+    #      ⑤ 计数**不无界增长**（锁定期间不再累加、过期行被 prune）；
+    #      ⑥ `gui.token` 引导口令登录**同样受 IP 限速**；
+    #      ⑦ guard/audit 出错**绝不阻断登录**；
+    #      ⑧ 审计**只记元数据**：明文口令 / 口令哈希 / 引导口令值都不得出现在审计表与 /audit 页面。
+    #      与既有 [6u]/[7h]/[7i] 的关系：它们都用 `app.test_client()`（IP 恒为 127.0.0.1），
+    #      且 [7h] 有**故意的失败登录** —— 所以本用例的"打满阈值"一律用**独立 REMOTE_ADDR**，
+    #      **绝不为迁就测试而调低默认阈值**（默认仍 10 次/5 分钟，见 scanner/config.py）。
+    import scanner.audit as _audit48
+    import scanner.login_guard as _lg48
+
+    _AUD_PW = "SmokeAudit#2026"
+    _SEC48 = "smoke-secret-token-ABC123"       # 会经 /settings 提交，用来验"值不落审计"
+    assert users_mod.create_user("smoke-audit", _AUD_PW, role="admin", must_change=False)[0]
+    _hash48 = users_mod.get_by_name("smoke-audit")["password"]   # pbkdf2 串（红线用）
+
+    def _count_audit():
+        return int(db._query("SELECT COUNT(*) c FROM audit_log", one=True)["c"] or 0)
+
+    def _count_fails():
+        return int(db._query("SELECT COUNT(*) c FROM login_fails", one=True)["c"] or 0)
+
+    # 一个"提交 /settings 但不落盘"的 app —— 否则测试会把**真实 config/settings.yaml** 改掉。
+    _orig_load48, _orig_sync48 = gui_app.load_settings, gui_app.sync_pocs
+
+    def _make_app48():
+        _base = copy.deepcopy(settings)
+        gui_app.load_settings = lambda: _base
+        gui_app.sync_pocs = lambda *_a, **_k: None
+        try:
+            _obj = gui_app.create_app()
+        finally:
+            gui_app.load_settings, gui_app.sync_pocs = _orig_load48, _orig_sync48
+        return _obj, _base
+
+    _app48, _base48 = _make_app48()      # 早建：它的启动 prune 会清过期行，别清掉后面造的样本
+    _c48 = _app48.test_client()
+    _cau = app.test_client()             # 主 app 的管理员会话（审计各路由用）
+    assert _cau.post("/login", data={"username": "smoke-audit",
+                                     "password": _AUD_PW}).status_code == 302
+
+    # 1) 配置默认值 + 用户名归一必须与 `users.get_by_name()` **同口径**
+    _cfg48 = _lg48.config(settings)
+    assert _cfg48["enabled"] is True
+    assert (_cfg48["window_seconds"], _cfg48["max_fails_per_ip"],
+            _cfg48["max_fails_per_user"], _cfg48["lockout_seconds"]) == (300, 10, 20, 900), _cfg48
+    assert _lg48.norm_username("  smoke-audit  ") == "smoke-audit"
+    assert users_mod.get_by_name("  smoke-audit  ")["username"] == _lg48.norm_username("  smoke-audit "), \
+        "guard 的用户名归一必须与 users.get_by_name 同口径（否则计数与查询会对不上）"
+    # 关掉开关 → 永远不锁（纯函数，不依赖时间）
+    _off48 = copy.deepcopy(settings)
+    _off48["gui"]["login_lockout"] = dict(_off48["gui"]["login_lockout"], enabled=False)
+    assert not _lg48.check("9.9.9.9", "x", _off48, now="2026-01-01 00:00:00").locked
+
+    # 2) 两级判据 + 锁定窗口（注入时间，不真 sleep）：9 次不锁、第 10 次锁、900s 后自动解锁
+    _IP_L, _U_L, _T0 = "198.51.100.77", "smoke-lock-target", "2026-01-01 00:00:00"
+    assert not _lg48.check(_IP_L, _U_L, settings, now=_T0).locked
+    for _i in range(9):
+        _lg48.record_fail(_IP_L, _U_L, settings, now=_T0)
+    assert not _lg48.check(_IP_L, _U_L, settings, now=_T0).locked, "9 次（<10）不该锁"
+    _lg48.record_fail(_IP_L, _U_L, settings, now=_T0)          # 第 10 次 → 触发
+    _v48 = _lg48.check(_IP_L, _U_L, settings, now=_T0)
+    assert _v48.locked and _v48.retry_after > 0, _v48
+    _v48b = _lg48.check(_IP_L, _U_L, settings, now="2026-01-01 00:14:59")
+    assert _v48b.locked and _v48b.retry_after == 1, _v48b
+    assert not _lg48.check(_IP_L, _U_L, settings, now="2026-01-01 00:15:01").locked, "900s 后应解锁"
+    # 按用户名的**兜底**判据：换一批 IP、只打同一个用户名，到 20 次才锁（IP 各自都没满）
+    _U_2 = "smoke-user-2nd"
+    for _i in range(20):
+        _lg48.record_fail(f"198.51.100.{100 + _i % 5}", _U_2, settings, now=_T0)
+    assert _lg48.check("10.0.0.1", _U_2, settings, now=_T0).locked, "同名失败满 20 次必须按用户名锁"
+
+    # 3) 成功登录清**该用户名**计数、**不清 IP**（同一 IP 上"别人的失败"仍在）
+    _IP_C = "198.51.100.88"
+    _lg48.record_fail(_IP_C, "smoke-other", settings, now=_T0)
+    _lg48.record_fail(_IP_C, "smoke-lock-x", settings, now=_T0)
+    _before48 = _lg48.fail_counts(_IP_C, "smoke-lock-x", settings, now=_T0)
+    assert _before48["user"] == 1 and _before48["ip"] == 2, _before48
+    _lg48.record_success(_IP_C, "smoke-lock-x", settings)
+    _after48 = _lg48.fail_counts(_IP_C, "smoke-lock-x", settings, now=_T0)
+    assert _after48["user"] == 0, "成功登录必须清掉该用户名的失败计数"
+    assert _after48["ip"] == 1, "IP 计数不清（另一用户名的失败仍在）"
+
+    # 4) 计数**不无界增长**：锁定期间继续刷也不落行；过期行被 prune 清掉
+    _IP_U = "198.51.100.99"
+    for _i in range(10):
+        _lg48.record_fail(_IP_U, "", settings, now=_T0)
+    assert _lg48.check(_IP_U, "", settings, now=_T0).locked
+    _nf48 = _count_fails()
+    for _i in range(50):
+        _lg48.record_fail(_IP_U, "", settings, now=_T0)       # 锁定期间"攻击者"继续刷
+    assert _count_fails() == _nf48, "锁定期间不得继续累加计数（否则可无限刷大 / 撑爆表）"
+    db._exec("INSERT INTO login_fails(at, ip, username, kind) VALUES(?,?,?,?)",
+             ("2020-01-01 00:00:00", "203.0.113.200", "", "fail"))
+    _nf2 = _count_fails()
+    assert _nf2 > _nf48
+    assert _lg48.prune(settings) >= 1 and _count_fails() < _nf2, "prune 必须清掉过期计数行"
+
+    # 5) HTTP 层：429 + Retry-After（不是 403）/ 正确口令也拒 / 存在性不泄漏
+    _IP_H = "203.0.113.11"
+    _envH = {"REMOTE_ADDR": _IP_H}
+    _cl = app.test_client()
+    _codes = [_cl.post("/login", data={"username": "smoke-audit", "password": "wrong-xx"},
+                       environ_base=_envH).status_code for _i in range(11)]
+    assert _codes[:10] == [200] * 10 and _codes[10] == 429, _codes
+    _r429 = _cl.post("/login", data={"username": "smoke-audit", "password": "wrong-xx"},
+                     environ_base=_envH)
+    assert _r429.status_code == 429 and _r429.headers.get("Retry-After", "").isdigit(), _r429.headers
+    assert 1 <= int(_r429.headers["Retry-After"]) <= 900
+    assert _cl.post("/login", data={"username": "smoke-audit", "password": _AUD_PW},
+                    environ_base=_envH).status_code == 429, "锁定期间即使口令正确也必须拒绝"
+    # 存在性不泄漏：**同一个已被锁定的 IP** 上，"存在"与"不存在"的用户名必须返回**逐字节相同**的 429。
+    # （守卫只看"提交的用户名 + IP"、不查库 —— 所以被锁文案与账号是否存在无关；
+    #  若拿两个不同的 IP 去比，锁定时点不同 → Retry-After 不同 → 页面自然不同，那是测错了。）
+    _v_a = _lg48.check(_IP_H, "smoke-audit", settings)
+    _v_b = _lg48.check(_IP_H, "smoke-no-such-user", settings)
+    assert (_v_a.locked, _v_a.retry_after) == (_v_b.locked, _v_b.retry_after), (_v_a, _v_b)
+    _b1 = _cl.post("/login", data={"username": "smoke-audit", "password": "x"}, environ_base=_envH)
+    _b2 = _cl.post("/login", data={"username": "smoke-no-such-user", "password": "x"},
+                   environ_base=_envH)
+    assert _b1.status_code == _b2.status_code == 429 and _b1.status_code != 403
+    assert _b1.get_data(as_text=True) == _b2.get_data(as_text=True), \
+        "锁定文案必须与『账号是否存在』无关（否则可拿来枚举用户名）"
+
+    # 6) 审计：登录成功/失败/退出/账号操作/策略配置/POC/任务 都留下流水
+    _ok_rows, _ok_total = _audit48.query(kind=_audit48.KIND_LOGIN_OK, limit=50)
+    assert _ok_total >= 1 and any(r["actor"] == "smoke-audit" for r in _ok_rows), _ok_rows
+    assert _audit48.query(kind=_audit48.KIND_LOGIN_FAIL, ip=_IP_H)[1] >= 10, "失败登录必须有审计"
+    assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_H)[1] >= 1, "被拦截也要留痕"
+    # 退出
+    _cau.get("/logout")
+    assert _audit48.query(kind=_audit48.KIND_LOGOUT)[1] >= 1
+    assert _cau.post("/login", data={"username": "smoke-audit",
+                                     "password": _AUD_PW}).status_code == 302
+    # 账号操作（建号）
+    assert _cau.post("/api/users/create", data={"username": "smoke-audit-sub",
+                                                "password": "smoke-audit-pw1"}).status_code == 302
+    _acc_rows, _acc_total = _audit48.query(kind=_audit48.KIND_ACCOUNT, actor="smoke-audit")
+    assert _acc_total >= 1 and any("smoke-audit-sub" in (r["target"] or "") for r in _acc_rows)
+    # 越权：子用户敲管理页 → 403 且留一条 denied。
+    # 本用例只验"权限 + 审计"，不验"必须改密"（[7h] 已覆盖），所以先把 must_change 清掉 ——
+    # 否则子用户会被 login_required 先重定向到 /profile（302），拿不到 403。
+    users_mod.set_must_change(users_mod.get_by_name("smoke-audit-sub")["id"], False)
+    _csub48 = app.test_client()
+    assert _csub48.post("/login", data={"username": "smoke-audit-sub",
+                                        "password": "smoke-audit-pw1"}).status_code == 302
+    _den_before = _audit48.query(kind=_audit48.KIND_DENIED)[1]
+    assert _csub48.get("/settings").status_code == 403
+    assert _audit48.query(kind=_audit48.KIND_DENIED)[1] == _den_before + 1
+    # 策略配置（走 stub 过的 save_settings，**不落盘**）：只记"改了哪一块"，绝不记值
+    _orig_save48 = gui_app.save_settings
+    gui_app.save_settings = lambda data: _base48
+    try:
+        _c48.post("/login", data={"username": "smoke-audit", "password": _AUD_PW})
+        assert _c48.post("/settings", data={"host": "127.0.0.1", "port": "5000",
+                                            "token": _SEC48}).status_code == 302
+    finally:
+        gui_app.save_settings = _orig_save48
+    _set_rows, _set_total = _audit48.query(kind=_audit48.KIND_SETTINGS, limit=5)
+    assert _set_total >= 1, "保存策略配置必须留审计"
+    assert all(_SEC48 not in (r["detail"] or "") and _SEC48 not in (r["target"] or "")
+               for r in _set_rows), "策略配置审计绝不能带上提交的值（哪怕是 token）"
+    # POC 操作
+    _poc_before = _audit48.query(kind=_audit48.KIND_POC)[1]
+    assert _cau.post("/api/pocs/1/toggle").status_code == 200
+    assert _audit48.query(kind=_audit48.KIND_POC)[1] == _poc_before + 1
+    # 任务操作（删除一个任务）
+    _task_before = _audit48.query(kind=_audit48.KIND_TASK)[1]
+    _tid48 = db.create_task("smoke-audit-task", targets, ["probe"], {"offline": True})
+    assert _cau.post(f"/api/tasks/{_tid48}/delete").status_code == 200
+    assert _audit48.query(kind=_audit48.KIND_TASK)[1] >= _task_before + 1
+
+    # 7) query 过滤器 + prune **只清 audit_log**（不碰业务表）
+    _kr, _kt = _audit48.query(kind=_audit48.KIND_LOGIN_FAIL)
+    assert _kt >= 1 and all(r["kind"] == _audit48.KIND_LOGIN_FAIL for r in _kr)
+    _ir, _it = _audit48.query(ip=_IP_H)
+    assert _it >= 1 and all(r["ip"] == _IP_H for r in _ir)
+    _tasks_before48 = len(db.list_tasks())
+    db._exec("INSERT INTO audit_log(at, kind, actor, actor_role, ip, target, detail, ok) "
+             "VALUES(?,?,?,?,?,?,?,?)",
+             ("2020-01-01 00:00:00", "login_ok", "old-user", "", "1.2.3.4", "", "远古记录", 1))
+    _an48 = _count_audit()
+    _pr48 = _audit48.prune(days=1, settings=settings)
+    assert _pr48 >= 1 and _count_audit() == _an48 - _pr48, (_pr48, _an48, _count_audit())
+    assert len(db.list_tasks()) == _tasks_before48, "prune 绝不能碰业务表"
+    assert not _audit48.query(since="2020-01-01 00:00:00", until="2020-01-01 00:00:01")[0]
+
+    # 8) **凭据红线**：明文口令 / 口令哈希 / 引导口令值 / 提交的 token 值
+    #    都不得出现在 `audit_log` 表与渲染出的 `/audit` 页面里。
+    _dump48 = "\n".join("|".join(str(r[c]) for c in
+                                 ("at", "kind", "actor", "actor_role", "ip", "target", "detail"))
+                        for r in db._query("SELECT * FROM audit_log"))
+    _html48 = _cau.get("/audit").get_data(as_text=True)
+    for _needle, _what in ((_AUD_PW, "明文口令"), (_hash48, "口令哈希"),
+                           (settings["gui"]["token"], "引导口令值"), (_SEC48, "提交的新口令值")):
+        assert _needle not in _dump48, f"{_what} 泄漏进了审计表"
+        assert _needle not in _html48, f"{_what} 泄漏进了 /audit 页面"
+    assert "smoke-audit-sub" in _html48, "/audit 页面应能看到账号操作流水（否则上面几条是空断言）"
+
+    # 9) **§6.1 变异证伪**（真改同一条代码路径，断言必须变红）
+    #    ① 关掉限速 → 已锁的 IP 立刻放行（证明 5) 测的就是 login_lockout）
+    _real_cfg48 = _lg48.config
+    _lg48.config = lambda _s=None: {"enabled": False, "window_seconds": 300,
+                                    "max_fails_per_ip": 10, "max_fails_per_user": 20,
+                                    "lockout_seconds": 900}
+    try:
+        assert not _lg48.check(_IP_H, "smoke-audit", settings).locked, "变异后仍锁定"
+        assert _cl.post("/login", data={"username": "smoke-audit", "password": "wrong-xx"},
+                        environ_base=_envH).status_code != 429, \
+            "变异后仍 429 → 说明那条断言测的不是 login_lockout"
+    finally:
+        _lg48.config = _real_cfg48
+    assert _lg48.check(_IP_H, "smoke-audit", settings).locked, "还原后必须重新锁定"
+    #    ② 关掉审计擦洗 → 带 `password=` 的 detail 会原样落库（证明红线断言测的就是擦洗）
+    _real_scrub48 = _audit48._scrub
+    _audit48._scrub = lambda t: str(t or "")
+    try:
+        _audit48.record(_audit48.KIND_LOGIN_FAIL, "scrub-probe", "1.2.3.4",
+                        detail=f"password={_AUD_PW}", settings=settings)
+        _leak48 = "\n".join(str(r["detail"]) for r in db._query(
+            "SELECT detail FROM audit_log WHERE actor='scrub-probe'"))
+        assert _AUD_PW in _leak48, "变异后口令仍未出现 → 红线断言测的不是擦洗"
+    finally:
+        _audit48._scrub = _real_scrub48
+    _audit48.record(_audit48.KIND_LOGIN_FAIL, "scrub-probe", "1.2.3.4",
+                    detail=f"password={_AUD_PW}", settings=settings)
+    _leak48b = "\n".join(str(r["detail"]) for r in db._query(
+        "SELECT detail FROM audit_log WHERE actor='scrub-probe' ORDER BY id DESC LIMIT 1"))
+    assert _AUD_PW not in _leak48b, "擦洗必须把口令抹掉"
+    db._exec("DELETE FROM audit_log WHERE actor='scrub-probe'")   # 别把变异期的"泄漏样本"留在沙箱里
+    #    ③ 关掉审计开关 → 不再落行（证明"审计在写"确实由 gui.audit.enabled 控制）
+    _offaud48 = copy.deepcopy(settings)
+    _offaud48["gui"]["audit"] = {"enabled": False, "retention_days": 30}
+    _n_off48 = _count_audit()
+    assert _audit48.record(_audit48.KIND_TASK, "x", "1.2.3.4", detail="x",
+                           settings=_offaud48) is False
+    assert _count_audit() == _n_off48
+
+    # 10) ⑦ guard/audit 出错**绝不阻断登录**：把 check / record 打成会抛，登录仍必须成功
+    def _boom48(*_a, **_k):
+        raise RuntimeError("boom")
+
+    _real_check48 = _lg48.check
+    _lg48.check = _boom48
+    try:
+        _ct48 = app.test_client()
+        assert _ct48.post("/login", data={"username": "smoke-audit",
+                                          "password": _AUD_PW}).status_code == 302, \
+            "guard 抛异常时必须放行登录（可用性优先）"
+    finally:
+        _lg48.check = _real_check48
+    _real_rec48 = _audit48.record
+    _audit48.record = _boom48
+    try:
+        _ct49 = app.test_client()
+        assert _ct49.post("/login", data={"username": "smoke-audit",
+                                          "password": _AUD_PW}).status_code == 302, \
+            "审计抛异常时必须放行登录"
+    finally:
+        _audit48.record = _real_rec48
+
+    # 11) ⑥ `gui.token` 引导口令登录**同样受 IP 限速**：清空账号（bootstrap 分支才可达），
+    #     先从一个 IP 打满，再验证"即使引导口令正确也 429"；换干净 IP 仍能登录（反向对照）。
+    for _u in users_mod.list_users():
+        users_mod.delete_user(_u["id"])
+    assert users_mod.count_users() == 0, "bootstrap 分支只在无账号时可达"
+    _IP_T = "203.0.113.13"
+    _envT = {"REMOTE_ADDR": _IP_T}
+    _ctok = app.test_client()
+    for _i in range(10):
+        _ctok.post("/login", data={"token": "wrong-token"}, environ_base=_envT)
+    _rtok = _ctok.post("/login", data={"token": settings["gui"]["token"]}, environ_base=_envT)
+    assert _rtok.status_code == 429, "引导口令登录也必须受 IP 限速"
+    assert _ctok.post("/login", data={"token": settings["gui"]["token"]},
+                      environ_base={"REMOTE_ADDR": "203.0.113.14"}).status_code == 302, \
+        "干净 IP 上正确的引导口令仍须能登录（证明刚才的 429 是限速，不是口令坏了）"
+
+    print("[7j] 续48 登录限速 + 访问审计 ok: 两级限速（IP 10 次/5 分钟为主、用户名 20 次兜底，"
+          "900s 后自动解锁）/ 锁定返回 429+Retry-After（非 403）· 正确口令也拒 · 存在性不泄漏"
+          "（两页逐字节相同）/ 成功清用户名计数不清 IP / 计数不无界增长（锁定期不累加 + prune 清过期）/ "
+          "引导口令同样受 IP 限速 / guard·audit 抛异常不阻断登录 / 审计只记元数据"
+          "（明文口令·哈希·引导口令值·提交值均不落表·不上页）/ 3 条变异证伪全部按预期变红")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

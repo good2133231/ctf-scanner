@@ -13,7 +13,11 @@
 - 续47 起**有 HTTPS 落地路径**：由反向代理终止 TLS（Caddy/Nginx 样例 + 自签路径见
   docs/deploy-https.md），应用侧只需 `gui.behind_proxy`（信任 X-Forwarded-*）、
   `gui.allowed_hosts`（放行部署域名）、`gui.secure_cookie`（会话 Cookie 加 Secure）三项配置，
-  默认值都是**最保守**的关/空。**访问审计与限流仍然没有**。
+  默认值都是**最保守**的关/空。
+- 续48 起有**访问审计流水**（`scanner/audit.py`：谁/何时/从哪个 IP/做了什么/成败，只记元数据、
+  绝不记口令凭据；管理员在「访问审计」页查看）与**登录限速/失败锁定**（`scanner/login_guard.py`：
+  按 IP 为主、按用户名兜底，被锁返回 429 + Retry-After，文案与"账号是否存在"无关）；
+  两项都是**保护性开关、默认开但阈值宽松**，可在策略配置里调（见 `gui.login_lockout` / `gui.audit`）。
   **故意暴露到局域网/公网前**，请读 docs/deploy-https.md 与 docs/security-notice.md。
 """
 import functools
@@ -36,8 +40,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import (auth as taskauth, blacklist, cdn, certs as certs_mod, db, dnsq, extdom,
-                     screenshot, users)
+from scanner import (audit, auth as taskauth, blacklist, cdn, certs as certs_mod, db, dnsq,
+                     extdom, login_guard, screenshot, users)
 from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
@@ -131,6 +135,27 @@ def _and_where(*parts):
     return " AND ".join(f"({p})" for p in items) if items else None
 
 
+def _changed_sections(old, new):
+    """比较"提交上来的配置"与"当前配置"，返回**顶层区块名**列表（续48 审计用）。
+
+    只回**区块名**（`gui` / `limits` / `dirscan` …），不回叶子键名 —— 续48 的红线是
+    "审计里不得出现口令/凭据值"；把键名也省掉，等于连 `gui.token` 这种**键名**都不落库，
+    彻底断掉"键名 + 值"一起泄漏的可能。比较只针对 `new` 里出现的键：表单只提交它管的那些
+    字段，未提交的（如 `gui.allowed_hosts`）不该被判成"变更"。
+    """
+    out = []
+    for k, nv in (new or {}).items():
+        if k == "keys":          # keys 段来自独立文件，不属于策略配置
+            continue
+        ov = (old or {}).get(k)
+        if isinstance(nv, dict):
+            if _changed_sections(ov if isinstance(ov, dict) else {}, nv):
+                out.append(k)
+        elif nv != ov:
+            out.append(k)
+    return sorted(out)
+
+
 def _safe_next(target, fallback):
     """只放行**站内相对路径**的 `next` 跳转目标，其余一律回退（防开放重定向）。
 
@@ -142,6 +167,16 @@ def _safe_next(target, fallback):
     if t.startswith("/") and not t.startswith("//") and "\\" not in t:
         return t
     return fallback
+
+
+def _lockout_message(retry_after):
+    """登录限速拦截页面的**固定文案**（续48）。
+
+    刻意与"账号是否存在"完全无关：被锁的可能是真实账号，也可能根本不存在 —— 两种情形返回
+    **逐字节相同**的页面，才不会被人拿来枚举用户名（"被锁=存在"本身就是一条泄漏）。
+    """
+    return (f"登录尝试过于频繁，已被暂时限制；请约 {int(retry_after)} 秒后重试，"
+            "或联系管理员。")
 
 
 def _source_auth(from_task):
@@ -285,6 +320,20 @@ def _authority(value):
     return f"{host}:{port}" if port else host
 
 
+def _client_ip():
+    """客户端 IP（审计与登录限速用）—— 取 `request.remote_addr`。
+
+    **behind_proxy 的注意点**（续47/续48）：开了 `gui.behind_proxy` 时，`ProxyFix` 会把
+    `remote_addr` 改写成 `X-Forwarded-For` 的**最后一跳**；因此"应用只被自己的反向代理访问"
+    这条前提必须成立（否则任何人都能伪造这个头，把限速按 IP 的判据整个绕开）。
+    这一条写进 docs/deploy-https.md §7。取不到（极端环境）返回空串，审计里记 `-`。
+    """
+    try:
+        return str(request.remote_addr or "")
+    except Exception:      # noqa: BLE001 - 极端环境下没有 request 上下文
+        return ""
+
+
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
@@ -297,6 +346,10 @@ def create_app():
     # （不自动续跑；pid 仍存活的跳过，见 db.reconcile_orphan_tasks）
     db.reconcile_orphan_tasks()
     sync_pocs(settings)
+    # 续48：启动时清一次过期审计（保留期见 gui.audit.retention_days）与过期登录限速计数。
+    # 两者都是 best-effort（内部已 try/except），失败只 warning，绝不影响控制台启动。
+    audit.prune(settings=settings)
+    login_guard.prune(settings=settings)
 
     # ---------- 鉴权 ----------
 
@@ -412,6 +465,45 @@ def create_app():
         """让每个模板都能拿到 `me`（当前登录者），侧边栏据此隐藏无权入口。"""
         return {"me": _session_user()}
 
+    # ---------- 续48：访问审计 + 登录限速（统一收口，失败绝不影响主流程） ----------
+
+    def _audit(kind, target="", detail="", ok=True, actor=None, actor_role=None):
+        """审计写入的统一入口：actor/role 默认取当前登录者。
+
+        `audit.record` 自身已 try/except；这里再包一层是为了兜住 `_session_user()` 可能抛的
+        异常 —— 任何情况下审计都不能把主流程（建任务 / 改配置 / 登录）带崩。
+        """
+        try:
+            me = _session_user()
+            audit.record(kind,
+                         actor if actor is not None else (me["username"] if me else ""),
+                         _client_ip(), target=target, detail=detail, ok=ok,
+                         actor_role=(actor_role if actor_role is not None
+                                     else (me["role"] if me else "")),
+                         settings=settings)
+        except Exception as e:      # noqa: BLE001
+            logger.warning(f"[gui] 审计写入失败（已忽略）：{e}")
+
+    def _guard_check(ip, username):
+        """问限速守卫（只读）。守卫自身出错 → 放行本次登录（可用性优先），并 warning。"""
+        try:
+            return login_guard.check(ip, username, settings)
+        except Exception as e:      # noqa: BLE001
+            logger.warning(f"[gui] 登录限速检查失败（放行本次）：{e}")
+            return login_guard.Verdict(False, 0, "")
+
+    def _guard_fail(ip, username):
+        try:
+            login_guard.record_fail(ip, username, settings)
+        except Exception as e:      # noqa: BLE001
+            logger.warning(f"[gui] 登录失败计数写入失败（已忽略）：{e}")
+
+    def _guard_ok(ip, username):
+        try:
+            login_guard.record_success(ip, username, settings)
+        except Exception as e:      # noqa: BLE001
+            logger.warning(f"[gui] 登录成功计数清理失败（已忽略）：{e}")
+
     def login_required(fn):
         @functools.wraps(fn)
         def wrapper(*a, **k):
@@ -452,6 +544,9 @@ def create_app():
             if not me:
                 return redirect(url_for("login"))
             if me["role"] != users.ROLE_ADMIN:
+                # 续48：越权访问也留一条流水（"子用户试图打开管理页"本身是值得知道的事）
+                _audit(audit.KIND_DENIED, target=request.path, ok=False,
+                       detail="非管理员访问管理页被拒")
                 return _denied("此页面仅管理员可访问（子用户只能使用扫描功能与查看结果）")
             return fn(*a, **k)
         return wrapper
@@ -462,19 +557,40 @@ def create_app():
         # 迁移期引导的开关：**库里还没有账号**时旧的共享口令仍可登录（见下）
         bootstrap = users.count_users() == 0
         if request.method == "POST":
+            ip = _client_ip()
             username = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
             # `token` 是续32 时代老表单/脚本用的字段名，迁移期继续收（不收会让老脚本 401）
             token = request.form.get("token") or ""
             target = _safe_next(request.form.get("next"), url_for("dashboard"))
+            # 续48 ① **先问限速守卫**（只读）：被锁就直接 429 + Retry-After，既不校验口令、
+            #   也不累加计数。守卫只看"提交的用户名 + IP"、**不查库** → 账号是否存在不影响响应文案。
+            #   这一步在**所有分支之前**，因此 `gui.token` 引导口令登录同样受 IP 限速。
+            verdict = _guard_check(ip, username)
+            if verdict.locked:
+                _audit(audit.KIND_LOGIN_BLOCKED, actor=username, target=username, ok=False,
+                       actor_role="",
+                       detail=f"登录被限速拦截（{verdict.reason}，约 {verdict.retry_after}s 后可再试）")
+                logger.info(f"[gui] 登录被限速拦截：{username or '(引导口令)'}（{verdict.reason}）")
+                resp = app.make_response(render_template(
+                    "login.html", error=_lockout_message(verdict.retry_after), bootstrap=bootstrap))
+                resp.status_code = 429
+                resp.headers["Retry-After"] = str(int(verdict.retry_after))
+                return resp
             if username:
                 row = users.check_login(username, password)
                 if row is None:
                     error = "用户名或口令错误"
                     logger.info(f"[gui] 登录失败：{username}（用户名或口令错误）")
+                    _guard_fail(ip, username)
+                    _audit(audit.KIND_LOGIN_FAIL, actor=username, target=username, ok=False,
+                           actor_role="", detail="用户名或口令错误")
                 elif int(row["enabled"] or 0) != 1:
                     error = "该账号已被停用，请联系管理员"
                     logger.info(f"[gui] 登录失败：{username}（账号已停用）")
+                    _guard_fail(ip, username)
+                    _audit(audit.KIND_LOGIN_FAIL, actor=username, target=username, ok=False,
+                           actor_role="", detail="账号已停用")
                 else:
                     session.clear()        # 先清旧身份，避免上一份会话的角色残留
                     session["auth"] = True
@@ -482,6 +598,9 @@ def create_app():
                     session["user"] = row["username"]
                     session["role"] = row["role"]
                     users.touch_login(int(row["id"]))
+                    _guard_ok(ip, username)
+                    _audit(audit.KIND_LOGIN_OK, actor=username, target=username, ok=True,
+                           actor_role=row["role"], detail=f"登录成功（{row['role']}）")
                     logger.info(f"[gui] 登录成功：{row['username']}（{row['role']}）")
                     return redirect(target)
             elif bootstrap:
@@ -491,16 +610,22 @@ def create_app():
                     session["auth"] = True
                     session["user"] = "admin"
                     session["role"] = users.ROLE_ADMIN
+                    _guard_ok(ip, "")     # 引导登录无用户名：只记成功（IP 计数刻意不清）
+                    _audit(audit.KIND_LOGIN_OK, actor="admin", ok=True,
+                           actor_role=users.ROLE_ADMIN, detail="引导口令登录成功（迁移期，管理员身份）")
                     logger.info("[gui] 登录成功：引导口令（迁移期，管理员身份）")
                     return redirect(target)
                 error = "口令错误"
                 logger.info("[gui] 登录失败：引导口令错误")
+                _guard_fail(ip, "")
+                _audit(audit.KIND_LOGIN_FAIL, actor="", ok=False, detail="引导口令错误")
             else:
                 error = "请输入用户名与口令"
         return render_template("login.html", error=error, bootstrap=bootstrap)
 
     @app.route("/logout")
     def logout():
+        _audit(audit.KIND_LOGOUT, detail="退出登录")   # 先记（session.clear 之后就读不到身份了）
         session.clear()
         return redirect(url_for("login"))
 
@@ -537,6 +662,7 @@ def create_app():
         if not ok:
             return _users_back(msg)
         logger.info(f"[gui] 建账号：{msg}（{role}），操作者 {session.get('user')}")
+        _audit(audit.KIND_ACCOUNT, target=msg, detail=f"创建账号（{role}）")
         return redirect(url_for("users_page",
                                 ok=f"已创建 {msg}（{'管理员' if role == users.ROLE_ADMIN else '子用户'}），"
                                    f"初始口令请线下告知，首次登录须修改"))
@@ -573,6 +699,7 @@ def create_app():
         if not ok:
             return _users_back(msg)
         logger.info(f"[gui] 重置口令：{row['username']}，操作者 {session.get('user')}")
+        _audit(audit.KIND_ACCOUNT, target=row["username"], detail="重置口令（对方下次登录须修改）")
         return redirect(url_for("users_page", ok=f"已重置 {row['username']} 的口令"
                                                  "（其下次登录须修改）"))
 
@@ -592,6 +719,8 @@ def create_app():
         users.set_enabled(uid, enable)
         logger.info(f"[gui] {'启用' if enable else '停用'}账号：{row['username']}，"
                     f"操作者 {session.get('user')}")
+        _audit(audit.KIND_ACCOUNT, target=row["username"],
+               detail=('启用账号' if enable else '停用账号'))
         return redirect(url_for("users_page",
                                 ok=f"已{'启用' if enable else '停用'} {row['username']}"))
 
@@ -606,6 +735,7 @@ def create_app():
         role = users.ROLE_ADMIN if request.form.get("role") == "admin" else users.ROLE_USER
         users.set_role(uid, role)
         logger.info(f"[gui] 改角色：{row['username']} → {role}，操作者 {session.get('user')}")
+        _audit(audit.KIND_ACCOUNT, target=row["username"], detail=f"改角色为 {role}")
         return redirect(url_for("users_page",
                                 ok=f"{row['username']} 已改为"
                                    f"{'管理员' if role == users.ROLE_ADMIN else '子用户'}"))
@@ -620,6 +750,7 @@ def create_app():
         name = row["username"]
         users.delete_user(uid)
         logger.info(f"[gui] 删除账号：{name}，操作者 {session.get('user')}")
+        _audit(audit.KIND_ACCOUNT, target=name, detail="删除账号")
         return redirect(url_for("users_page", ok=f"已删除 {name}"))
 
     @app.route("/profile", methods=["GET", "POST"])
@@ -647,6 +778,7 @@ def create_app():
                 else:
                     ok = "口令已修改"
                     logger.info(f"[gui] 修改口令：{me['username']}")
+                    _audit(audit.KIND_ACCOUNT, target=me["username"], detail="本人修改口令")
         return render_template("profile.html", me=me, error=error, ok=ok,
                                must_change=bool(me and me["must_change"]))
 
@@ -727,6 +859,8 @@ def create_app():
         _spawn(src_id, task["name"], text, stages, run_opts, append=True)
         logger.info(f"[gui] 任务 #{src_id} 追加执行（阶段 {'/'.join(stages)}，"
                     f"{len(targets)} 个目标，第 {meta['append_count']} 次追加）")
+        _audit(audit.KIND_TASK, target=f"#{src_id}",
+               detail=f"追加执行（{'/'.join(stages)}，{len(targets)} 个目标）")
         return redirect(url_for("task_detail", task_id=src_id))
 
     @app.route("/tasks")
@@ -815,6 +949,7 @@ def create_app():
             options["auth"] = auth_headers
         task_id = db.create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
+        _audit(audit.KIND_TASK, target=name, detail=f"创建任务 #{task_id}（阶段 {'/'.join(stages)}）")
         return jsonify({"id": task_id, "auto_stages": auto_stages})
 
     @app.route("/tasks/<int:task_id>")
@@ -976,6 +1111,8 @@ def create_app():
         if not db.get_task(task_id):
             return jsonify({"error": "not found"}), 404
         ok = runner.request_stop(task_id)
+        _audit(audit.KIND_TASK, target=f"#{task_id}", ok=bool(ok),
+               detail=("请求停止任务" if ok else "请求停止任务（当时未在运行）"))
         return jsonify({"ok": ok, "msg": "已请求停止，当前批次跑完即停" if ok
                         else "该任务当前未在运行"})
 
@@ -986,6 +1123,7 @@ def create_app():
             return jsonify({"error": "not found"}), 404
         runner.request_stop(task_id)   # 先停线程，避免它继续往已删除的任务里写数据
         db.delete_task(task_id)
+        _audit(audit.KIND_TASK, target=f"#{task_id}", detail="删除任务（已自动备份）")
         return jsonify({"ok": True})
 
     @app.route("/api/tasks/<int:task_id>/restart", methods=["POST"])
@@ -1002,6 +1140,7 @@ def create_app():
         db.update_task(task_id, status="pending", progress=0, current_stage="", error="")
         _spawn(task_id, task["name"], task["targets"], stages or list(STAGE_ORDER),
                json.loads(task["options"] or "{}"))
+        _audit(audit.KIND_TASK, target=f"#{task_id}", detail="重启任务（清空资产后从头跑）")
         return jsonify({"ok": True})
 
     @app.route("/api/tasks/<int:task_id>/resume", methods=["POST"])
@@ -1041,6 +1180,8 @@ def create_app():
         _spawn(task_id, task["name"], task["targets"], rest, opts, resume=True)
         logger.info(f"[gui] 任务 #{task_id} 从断点续跑：{task['current_stage']} 起，"
                     f"阶段 {'/'.join(rest)}")
+        _audit(audit.KIND_TASK, target=f"#{task_id}",
+               detail=f"从断点续跑（{'/'.join(rest)}）")
         return jsonify({"ok": True, "msg": f"已从断点续跑：{','.join(rest)}"})
 
     @app.route("/api/tasks/bulk", methods=["POST"])
@@ -1082,6 +1223,7 @@ def create_app():
                 _spawn(tid, task["name"], task["targets"], stages or list(STAGE_ORDER),
                        json.loads(task["options"] or "{}"))
                 affected += 1
+        _audit(audit.KIND_TASK, target="批量", detail=f"批量 {action}：影响 {affected} 个任务")
         return jsonify({"ok": True, "action": action, "affected": affected,
                         "skipped": skipped})
 
@@ -1135,6 +1277,8 @@ def create_app():
         f.save(str(dest))
         meta = engine.load_poc_file(dest)
         db.upsert_poc(str(dest), meta)
+        _audit(audit.KIND_POC, target=dest.name, ok=meta.get("_status") == "ok",
+               detail=f"上传 POC（{meta.get('_status', '?')}）")
         return jsonify({"ok": meta.get("_status") == "ok", "id": meta.get("id"),
                         "error": meta.get("_error", "")})
 
@@ -1143,6 +1287,7 @@ def create_app():
     @admin_required
     def api_poc_toggle(pid):
         db.toggle_poc(pid)
+        _audit(audit.KIND_POC, target=f"poc#{pid}", detail="切换 POC 启用状态")
         return jsonify({"ok": True})
 
     @app.route("/api/pocs/bulk", methods=["POST"])
@@ -1159,6 +1304,8 @@ def create_app():
                                     source=(data.get("source") or "").strip() or None,
                                     confidence=(data.get("confidence") or "").strip() or None,
                                     kind=(data.get("kind") or "").strip() or None)
+        _audit(audit.KIND_POC, target="批量",
+               detail=f"批量{'启用' if action == 'enable' else '停用'} POC：{n} 条")
         return jsonify({"ok": True, "affected": n})
 
     @app.route("/api/pocs/refresh", methods=["POST"])
@@ -1166,6 +1313,7 @@ def create_app():
     @admin_required
     def api_poc_refresh():
         sync_pocs(load_settings())
+        _audit(audit.KIND_POC, target="注册表", detail="刷新 POC 注册表")
         return jsonify({"ok": True})
 
     # ---------- 漏洞 ----------
@@ -2050,11 +2198,63 @@ def create_app():
                                        bl=blacklist.load(settings),
                                        bl_path=rel_display(blacklist.path(settings)),
                                        error="参数必须是整数")
+            # 续48：审计只记"改了哪几个区块"，**绝不记值**（键名也省掉 —— 见 `_changed_sections`）。
+            _changed = _changed_sections(settings, data)
             settings = save_settings(data)
+            _audit(audit.KIND_SETTINGS, target=",".join(_changed) or "（无变化）",
+                   detail=f"保存策略配置（变更区块：{','.join(_changed) or '无'}）")
             return redirect(url_for("settings_page"))
         return render_template("settings.html", s=settings, checks=owasp_checks,
                                bl=blacklist.load(settings),
                                bl_path=rel_display(blacklist.path(settings)))
+
+    # ---------- 访问审计（续48） ----------
+
+    @app.route("/audit")
+    @login_required
+    @admin_required
+    def audit_page():
+        """访问审计流水页（管理员）：按 kind / actor / ip / 成败 / 关键字过滤 + 服务端分页。
+
+        审计内容**只含元数据**（谁/何时/从哪个 IP/做了什么/成败），不含任何口令或凭据；
+        写入侧与 `audit._scrub()` 两道网共同保证这一点（见 tests/smoke.py [7j] 的凭据红线）。
+        """
+        page, size, q = _page_args()
+        kind = (request.args.get("kind") or "").strip()
+        actor = (request.args.get("actor") or "").strip()
+        ip = (request.args.get("ip") or "").strip()
+        okarg = (request.args.get("ok") or "").strip()
+        okf = None if okarg not in ("0", "1") else (okarg == "1")
+
+        def _fetch(_page):
+            return audit.query(kind=kind or None, actor=actor or None, ip=ip or None,
+                               ok=okf, q=q or None, limit=size, offset=(_page - 1) * size)
+
+        rows, total = _fetch(page)
+        pages = max(1, (total + size - 1) // size)
+        if page > pages:      # 页码越界（过滤后总页数变少）→ 回落最后一页重查
+            page = pages
+            rows, total = _fetch(page)
+        parts = [f"size={size}"]
+        for _k, _v in (("kind", kind), ("actor", actor), ("ip", ip), ("ok", okarg), ("q", q)):
+            if _v:
+                parts.append(f"{_k}={quote(_v)}")
+        pager = {"page": page, "size": size, "total": total, "pages": pages,
+                 "base": "/audit", "qs": "&" + "&".join(parts)}
+        return render_template("audit.html", rows=rows, pager=pager, kinds=audit.KINDS,
+                               labels=audit.KIND_LABELS, kind=kind, actor=actor, ip=ip,
+                               okarg=okarg, q=q, summary=audit.summary(settings=settings),
+                               retention=audit.config(settings)["retention_days"],
+                               msg=(request.args.get("msg") or "").strip())
+
+    @app.route("/api/audit/prune", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_audit_prune():
+        """手动清理超过保留期（`gui.audit.retention_days`）的审计行 —— **只清 audit_log**。"""
+        n = audit.prune(settings=settings)
+        _audit(audit.KIND_ACCOUNT, target="audit_log", detail=f"手动清理过期审计 {n} 条")
+        return redirect(url_for("audit_page", msg=f"已清理 {n} 条过期记录"))
 
     def _tail(path, n=150):
         try:

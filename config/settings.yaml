@@ -14,6 +14,22 @@ gui:
   # secure_cookie：会话 Cookie 是否加 Secure（只在 HTTPS 下回传）。
   #   默认 false —— 走 HTTP 时开了会直接登录不上；上了 TLS 反代后请改 true。
   secure_cookie: false
+  # ---- 登录限速 / 失败锁定（续48，见 scanner/login_guard.py）----
+  # 保护性开关默认开，阈值刻意宽松（本机/小队共用：一次记错口令不该把队友挡在门外）。
+  # 两级判据：按 IP 为主、按用户名兜底；被锁时返回 429 + Retry-After，文案与"账号是否存在"无关。
+  # 自救：等 lockout_seconds 过期，或命令行清除（见 docs/deploy-https.md §7）。
+  login_lockout:
+    enabled: true
+    window_seconds: 300      # 失败计数时间窗（秒）
+    max_fails_per_ip: 10     # 同一 IP 在窗口内的失败上限
+    max_fails_per_user: 20   # 同一用户名在窗口内的失败上限（兜底，更宽松）
+    lockout_seconds: 900     # 触发后的锁定时长（秒）
+  # ---- 访问审计流水（续48，见 scanner/audit.py）----
+  # 记录"谁/何时/从哪个 IP/做了什么/成败"，**只记元数据、绝不记口令与凭据**；
+  # 管理员可在「访问审计」页查看，超过 retention_days 的行在启动时被清理（只清 audit_log）。
+  audit:
+    enabled: true
+    retention_days: 30
 limits:
   max_workers: 20
   http_timeout: 10
