@@ -3,6 +3,33 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续47 收尾清理：删掉 `[6u]` 遗留的 `TEMP-MEASURE` 标定脚手架
+> 实施者：**WorkBuddy · Hy4-preview** · 缺陷由**主理人复核发现并派单**
+
+**是什么**：续33 做「全 13 阶段端到端真跑」时，为了**标定** `[6u]` 末尾的请求量上界
+`_U_MAX_REQ = 400`，临时给 `STAGE_REGISTRY` 里**每个阶段类**套了一层动态子类来统计"每阶段发了
+几个请求"。标定完**没删**，一直留在仓库里（共 16 处 `# TEMP-MEASURE` 标记）。它做了三件不该
+留在门禁里的事：① 在 `run_task` 期间**改写 `STAGE_REGISTRY` 的每一个阶段类**，跑完再换回 ——
+给最关键的那条用例加了一层不必要的运行时改写；② 维护一个只用于打印的 `_u_per`；
+③ 每次跑 smoke 都往 stdout 打一行**裸 Python 列表**（`print("TEMP-MEASURE per-stage:", _u_per)`）。
+
+**删了什么（纯删除，语义零变化）**：`_u_per` / `_saved_reg6u` / `_mk6u`·`_W6u` 那段包装 /
+`STAGE_REGISTRY` 的恢复逻辑 / 那行 `print`。
+**保留了什么**：`try/finally` 里**另一件**必须做的事（把 `_u_mods` 的 `http_request` 换回
+`_u_orig_http`）原样保留 —— 它和标定无关，删了就成"改了 http_request 不还原"；
+`_U_MAX_REQ = 400` 与它的注释也保留（那是标定的**结论**），并把注释里"构成（本机实测）"一段
+**补上逐阶段实测数据**：dirscan 153 / vulnscan 105 / probe 6 / jsmine 1，其余 9 个阶段各 0
+（portscan 走裸 socket，不经 `http_request`，故恒为 0），合计约 265 → 上界 400 留约 1.5 倍余量。
+这样"为什么是 400"有据可查，且**不再需要留一段脚手架才能复现**。
+
+**验证（实测）**：`py -3 -u tests/smoke.py` → **EXIT=0 / `SMOKE PASS` 恰好 1 次 / 0 个 `AssertionError`**；
+`grep -c TEMP-MEASURE tests/smoke.py` = **0**、`grep -c TEMP-MEASURE logs/_smoke_run.txt` = **0**
+（输出里那行噪声真的没了）；`[6u]` 通过行原文：
+`[6u] 续33 全 13 阶段端到端真跑 ok: 耗时 30.4s / sites=1 ports=2 dirs=2 vulns=3 / 请求 265 个（上界 400，全部落在 127.0.0.1:8765，站外 0 个）/ 终态 done·error 空·断点已清 / heuristic 线索 0 条（intel·github 必须为 0）/ csegs·certs·osint 域名均为 0`
+—— **请求 265 与删除前的逐阶段数据完全对上**，说明删除没有改变任何行为。
+`[6u]` 的既有断言（终态 `done`、`error` 空、断点已清、零外部请求、`_U_MAX_REQ`、产物断言）
+**一条未放宽**。`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致。
+
 ## 2026-09-26 —— 续47：HTTPS 部署（反向代理终止 TLS + ProxyFix/Host 白名单可配 + Secure Cookie）
 > 实施者：**WorkBuddy · Hy4-preview**
 

@@ -5125,29 +5125,13 @@ workflows:
     _u_tid = db.create_task(_u_name, targets, _u_stages, {})
     for _m6u in _u_mods:
         _m6u.http_request = _u_http
-    _u_per = []            # TEMP-MEASURE
-    _saved_reg6u = dict(_rn6.STAGE_REGISTRY)            # TEMP-MEASURE
-    for _n6u, _c6u in list(_rn6.STAGE_REGISTRY.items()):            # TEMP-MEASURE
-        def _mk6u(_base):            # TEMP-MEASURE
-            class _W6u(_base):            # TEMP-MEASURE
-                def run(self):            # TEMP-MEASURE
-                    _n0 = len(_u_sent)            # TEMP-MEASURE
-                    try:            # TEMP-MEASURE
-                        return super().run()            # TEMP-MEASURE
-                    finally:            # TEMP-MEASURE
-                        _u_per.append((self.name, len(_u_sent) - _n0))            # TEMP-MEASURE
-            return _W6u            # TEMP-MEASURE
-        _rn6.STAGE_REGISTRY[_n6u] = _mk6u(_c6u)            # TEMP-MEASURE
     _u_t0 = time.time()
     try:
         run_task(_u_tid, _u_name, targets, _u_stages, {}, _u_cfg)
     finally:
-        _rn6.STAGE_REGISTRY.clear()            # TEMP-MEASURE
-        _rn6.STAGE_REGISTRY.update(_saved_reg6u)            # TEMP-MEASURE
         for _m6u in _u_mods:
             _m6u.http_request = _u_orig_http
     _u_el = time.time() - _u_t0
-    print("TEMP-MEASURE per-stage:", _u_per)            # TEMP-MEASURE
 
     # (5) 终态：**正常跑完**才可能是 `done` + error 为空 + `current_stage` 被清空。
     #     `db.get_task()` 返回 `sqlite3.Row`（没有 `.get()`），必须按下标取 —— 已实测踩过。
@@ -5195,9 +5179,14 @@ workflows:
     # (8) 请求总量上界：**实测标定**后写死（构成见下方注释）。
     #     为什么是上界而不是等号：各阶段的请求数会随本机装了什么工具（nmap / fscan）、
     #     指纹命中情况而浮动，钉等号会让用例在别的机器上必然假失败。
-    #     构成（本机实测）：dirscan 浅扫 = 字典 150 + 软 404 基线 3；probe ≈ 5（含 http/https
-    #     与 favicon）；vulnscan ≈ 76（内置 OWASP 检查 + 联动 POC）；jsmine 抓首页与 JS 若干；
-    #     cert / screenshot / osint / intel / github 各 0；portscan 走裸 socket，不经 http_request。
+    #     构成（本机实测，2026-09-26 逐阶段标定）：dirscan 153（浅扫字典 150 + 软 404 基线 3）/
+    #     vulnscan 105（内置 OWASP 检查 + 联动 POC；续33 当时注释里的 ≈76 是 POC 集更小时的值）/
+    #     probe 6（含 http/https 与 favicon）/ jsmine 1；其余 9 个阶段（subdomain / takeover /
+    #     portscan / cert / screenshot / osint / intel / heuristic / github）各 0（portscan 走
+    #     裸 socket，不经 http_request，故恒为 0）。合计约 265，上界 400 留了约 1.5 倍余量
+    #     （给『本机装了 nmap / fscan、指纹命中更多 POC』的浮动留空间）。
+    #     这份逐阶段数据来自续33 为标定临时加的阶段包装 —— 主理人 2026-09-26 派单清理时已删除；
+    #     结论留在注释里，要重新标定就用本用例的 `_u_sent` 自己套一层计数。
     _U_MAX_REQ = 400
     assert len(_u_sent) <= _U_MAX_REQ, \
         f"全 13 阶段请求量 {len(_u_sent)} 超过上界 {_U_MAX_REQ}（阶段预算失控？）：" \
