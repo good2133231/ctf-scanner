@@ -1026,22 +1026,6 @@ def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_para
     return rows, (total["c"] if total else 0)
 
 
-def list_all_subdomains(limit=500):
-    return page_assets("subdomains", limit=limit)[0]
-
-
-def list_all_sites(limit=500):
-    return page_assets("sites", limit=limit)[0]
-
-
-def list_all_dirs(limit=500):
-    return page_assets("dirs", limit=limit)[0]
-
-
-def list_all_ports(limit=500):
-    return page_assets("ports", limit=limit)[0]
-
-
 REVIEW_STATES = ("", "confirmed", "false_positive")   # '' = 待复核
 
 

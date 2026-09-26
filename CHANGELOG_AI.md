@@ -3,9 +3,48 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续53 补：删掉 4 个零调用方 API `db.list_all_*`（P0 文档/代码一致性）
+
+> 实施者：**Trae · DeepSeek-V4.1-Flash**（新负责人接管复核；需求＝把续53 自己声称已做、实际未做的那一步补上）
+
+### 0. 是什么（问题）
+
+续53 的 CHANGELOG §1 与 `docs/roadmap.md` 都写着：「另：同轮**另一个提交**删掉
+`db.list_all_subdomains/list_all_sites/list_all_dirs/list_all_ports`（零调用方的误导性 API）」。
+**但该提交并未产生** —— 接管复核时全仓 grep 发现这四个函数仍原样躺在 `scanner/db.py`，工作区也没有
+对应改动。这是典型的**文档声称已做、代码实际未做**，也就是续51「顺带核查」里点名的那个地雷：
+名字像"取全部"、签名默认 `limit=500`，谁照着名字调用谁就踩静默截断。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/db.py` | 删除 `list_all_subdomains/list_all_sites/list_all_dirs/list_all_ports`（4 个函数 16 行）。被 GUI 资产分栏真正使用的 `page_assets()` **保留不动**（这四个当初只是它的一层薄包装） |
+| `todo.txt` | 按本文件「只追加、不改历史行」的先例追加 2 条：第 11 条澄清「批次 5 四项 / B 组架构级四项」里**任务队列已完成**（续46~续53 一串提交，权威清单见本文件），第 12 条记本次删除 |
+
+### 2. 为什么敢删（证据）
+
+- 全仓 `grep -r "list_all_(subdomains|sites|dirs|ports)"` → 除定义处外**只有文档引用**，零调用方；
+- 无 `from scanner.db import *`、无 `from .db import ...` 点名导入、无 `getattr(db, ...)` 动态取用
+  （均已 grep 确认）；
+- `py -3 -c "import scanner.db; hasattr(...)"` → 四个名字均已消失，模块导入正常。
+
+### 3. 验证（实测）
+
+- `py -3 -u tests/smoke.py` → EXIT=0 / `SMOKE PASS`（删除后重跑；本轮同时是续53 终态的第一次门禁覆盖）。
+- `git diff --numstat` == `git diff --ignore-cr-at-eol --numstat` 逐文件一致（纯删除，无行尾污染）。
+
+### 4. 仍未做（如实说明）
+
+删的是死代码，**没有**顺带改任何调用点 —— 因为本来就没有调用点。若有新页面真需要"跨任务全量资产"，
+请走 `page_assets()`（它带分页与 `total`），不要再造一个默认 `limit=` 的"取全部"包装。
+
+---
+
 ## 2026-09-26 —— 续53 收掉另两处同源静默截断（/tasks + 任务详情页漏洞列表）（P0）
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash** · 需求由**用户**点名（P0）、**主理人**派单
+> 复核并提交：**Trae · DeepSeek-V4.1-Flash**（前序会话留下未提交终态；本会话独立重跑门禁 + 行尾自查后提交）
 
 ### 0. 是什么（需求）
 
