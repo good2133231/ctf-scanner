@@ -3,6 +3,114 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续54：外部工具版本管理（一键下载/更新 subfinder / httpx / puredns）
+
+> 实施者：**Trae · DeepSeek-V4.1-Flash**（新负责人接管后的第一项落地；需求＝用户从 roadmap 点名
+> 「工具版本管理：一键下载/更新 subfinder/httpx/puredns」）
+
+### 0. 是什么（问题）
+
+`docs/roadmap.md` 的 `[ ] 工具版本管理` 一直没做。接管复核时的**实际状态**（不是文档状态）：
+`config/settings.yaml` 的 `tools` 段里 subfinder / httpx / puredns **全是裸名**，
+`which()` 在 PATH 里找不到 → subdomain / probe / dirscan 三阶段**全程走内置兜底**；
+想装只能手工下二进制、手工放进 PATH 或手工编辑 `settings.yaml`。
+这是**覆盖面最大的一个缺口**：三个阶段的"上限"被外部工具是否存在直接决定，而装它们的路径最麻烦。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/toolmgr.py` | **新增**（449 行）。查 GitHub release → 按平台挑产物 → 取 SHA256 校验和 → 校验 → 单成员解包落盘 → 逐行回写 `tools.<名>`。`install()` / `update()` **永不抛异常**，失败一律走 `ok=False` + `reason`（GUI/CLI 都要能把原因原样显示给用户） |
+| `cli/client.py` | 新增 `--update-tools`，附属 `--tool`（可重复）/ `--allow-unverified` / `--no-wire` / `--tools-dest`；**附属参数脱离 `--update-tools` 单用时报错退出 1**（不静默忽略）；`--check` 结尾补"可用 `--update-tools` 一键装"提示 |
+| `gui/app.py` | 新增管理员页 `/tools`（`tools_page`，`login_required` + `admin_required`）与 `POST /api/tools/update`；结果存**进程内单槽** `_TOOLS_LAST`（POST→redirect 带不了结构化结果）；写访问审计（`audit.KIND_TASK`, `target="external-tools"`） |
+| `gui/templates/tools.html` | **新增**。四个 panel：现状表 / 下载更新表单 / 平台差异说明 / 最近一次结果（含"装好了但没写回"的告警行） |
+| `gui/templates/base.html` | `nav_items` 在 `pocs` 之后插入「外部工具」（`admin_only=True`） |
+| `tests/smoke.py` | 新增 `[7p]` 组（8 组断言，**全离线**） |
+| `tools/scanner/README.md` | 补「方式 0：一键下载/更新」；**勘误工具清单表**（见下） |
+| `docs/roadmap.md` | `[ ] 工具版本管理` → `[x]`（2026-09-26 续54 落地） |
+| `AGENTS.md` | §1 补一键安装入口 + 平台事实；§3 加 `toolmgr.py` 条目、nav 栏数按 `base.html` **实测更正**（"9 栏"→12 栏，含 admin_only 说明）；§7 新增"`settings.yaml` 两条写回路径别混用"；§6 命令块补 `--update-tools` |
+| `README.md` | 快速开始第 2 步改为一键安装；配置说明「外部工具」条、目录结构补 `toolmgr.py`；开发模式"第 11 栏"改为不写死栏号 |
+| `docs/security-notice.md` | 新增"外部工具下载的联网边界"；**更正**"多用户与角色、访问审计仍未提供"（续46/续48 早已落地） |
+
+### 2. 关键设计取舍（为什么这么做）
+
+- **不在扫描期联网**：装工具是**管理操作**，不是扫描的一部分。为了把这条钉成结构而不是习惯，
+  `scanner/` 包内**除 `toolmgr.py` 自己**之外零引用的断言写进了 `[7p]`（并配了一条"喂一条假引用必须报出来"
+  的检测器变异，防止检测器本身写歪）。
+- **回写不走 `config.save_settings()`**：那个实现是 `load_settings()` + `yaml.safe_dump` **整份重写** ——
+  会把 `settings.yaml` 里**全部中文注释**（本仓 276 行里有 77 处 `#`）一次抹掉。装工具只是"改一个键"，
+  不该有这个副作用。故 `patch_settings_tool()` 做**逐行文本替换**：只替换 `tools:` 段内那一行，
+  保注释、保行尾形态（实测本仓是 CRLF）、保尾换行。回归断言：改完 `#` 计数相等且 >50、行数不变、
+  文件仍是纯 CRLF、尾换行保留。
+- **宁可报错也不猜**：
+  - 无 checksums 的 release **默认拒绝安装**（要装得显式 `allow_unverified`），且结果里 `verified=False`
+    页面如实标"未校验"，**不静默降级成"装好了"**；
+  - 校验和不符 → **拒绝落盘**（断言里额外钉了"**不覆盖**已装好的旧文件"）；
+  - 校验和文件里没有该产物条目 → 拒绝（不是"跳过校验"）；
+  - 平台没有产物（puredns on Windows）→ 直接说清是哪个平台缺、并指向 `go install` 兜底。
+- **解包只取单文件**：不用 `extractall`；成员名先过 `_safe_member_name()`（拒 `..`、拒盘符/绝对路径、
+  拒目录项），再按预期文件名取一个成员。压缩炸弹由"下载上限 120 MB + 只读单成员"两道限制兜住。
+- **不传递任何凭据**：查 release 与下产物都不带 `Authorization`（与本项目"第三方接口不带目标登录态"
+  的红线一致；这里更彻底 —— 连使用者自己的 token 都不需要）。
+
+### 3. 实测平台事实（2026-09-26 查 GitHub API，**非推测**）
+
+| 工具 | 产物命名 | checksums |
+|---|---|---|
+| `projectdiscovery/subfinder` v2.16.0 | `subfinder_2.16.0_{linux\|windows\|macOS}_{386\|amd64\|arm\|arm64}.zip` | 有 |
+| `projectdiscovery/httpx` v1.12.0 | `httpx_1.12.0_{linux\|windows\|macOS}_{…}.zip` | 有 |
+| `d3mondev/puredns` v2.1.1 | **只有 `puredns-{Linux\|macOS}-{amd64\|arm64}.tgz`** | **无** |
+
+⇒ `tools/scanner/README.md` 原写"官方产物双平台都有 + checksums（puredns 行）"是**错的**，本轮勘误为
+"官方只发布 Linux / macOS 产物、且无 checksums；Windows 上请 `go install` 或依赖内置爆破兜底"。
+本轮**刻意不做**"自动编译"：那要拉 Go 工具链、引入不受控的构建期联网与产物不确定性。
+
+### 4. 验证
+
+- `tests/smoke.py` 新增 `[7p]`（全离线，8 组）：
+  ① `scanner/` 包内零引用（含检测器变异 M5）；
+  ② 平台/命名纯函数（显式传平台，不依赖跑测机器）+ puredns/Windows 的说明文案；
+  ③ 出口白名单 `_check_url` 的三种绕过形态（http / 非白名单主机 / **后缀伪装** `api.github.com.evil.example`）
+     全拒 + 302 落白名单外被拒 + 超限中止（变异 M1 证明该断言敏感）；
+  ④ `_safe_member_name` 四种形态 + 含 `../` 成员的 zip 被拒（变异 M2）；
+  ⑤⑥⑦ 端到端安装（`release=`/`blob=` 注入口，**完全不联网**）：成功路径校验字节一致 /
+  篡改包被拒且**不覆盖已装文件** / 无 checksums 默认拒装且**连目录都不建** / `allow_unverified` 才装且
+  `verified is False` / 回写后 `#` 计数与行数不变、纯 CRLF、尾换行保留、其它三个工具行未被动；
+  ⑧ GUI 与 CLI 的接线（`/tools` 200、三工具名、白名单主机串；POST 桩断言收到的
+  `{tools, allow, wire}`；子用户 403 且 `/tasks` 里没有该 nav 项；CLI 附属参数守卫与未知工具名退出 1）。
+  另含 5 条 §6.1 变异（M1~M5，其中 M4 用"跳过 SHA256 的朴素实现"走 `update()`，证明"拒绝落盘"是真校验而非分支巧合）。
+- `py -3 cli/client.py --check` 实测：输出 6 行 + 一键安装提示；`--tool subfinder`（无 `--update-tools`）→ 退出 1；
+  `--update-tools --tool nope` → 退出 1 并列出可选工具。
+- 全量 `py -3 -u tests/smoke.py` → `SMOKE PASS`。
+- `git diff --numstat` == `git diff --ignore-cr-at-eol --numstat` 逐文件一致（含新增文件按 CRLF 入库）。
+
+### 5. 本轮自己踩的坑（如实记录，给下一个 AI 提个醒）
+
+1. **`install()` 的 blob 注入口写错了一层索引**（**真 bug，已被 `[7p]` 抓出**）：
+   校验和那一支原本写成 `text = (blob if blob is not None and csum_name in blob else download_bytes(...)).decode(...)` ——
+   条件成立时取的是**整个 dict** 而不是 `blob[csum_name]`，于是 `.decode()` 抛
+   `'dict' object has no attribute 'decode'`。**扫描期零影响**（真实路径 `blob=None` 走下载，返回的是 bytes），
+   只有"注入口"这条路会炸 —— 这正是"断言要钉在真实现上"的价值：不写这条端到端断言，这个 bug 会一直躺着。
+   已改为显式 if/else（`blob[csum_name].decode(...)`）。
+2. **行尾符被整体归一化过一次**（违反 §9）：`cli/client.py` / `gui/app.py` / `tests/smoke.py` /
+   `docs/roadmap.md` / `docs/security-notice.md` / `gui/templates/base.html` 在这几轮编辑中被写成了
+   "整个文件统一一种行尾"，把 HEAD 里那 102 / 52 / 1494 / 13 / 6 / 1 处**另一种行尾的行**全改了。
+   症状很隐蔽：代码照跑、测试照过，**只有 §9 的两口径自查会露馅**
+   （`git diff --numstat` 里那些行会算成"改了"，`--ignore-cr-at-eol` 里却不算）。
+   已用**按内容对齐 HEAD** 的字节级脚本逐行还原（内容一字未动，只改行尾），两口径现已逐文件一致。
+   ⇒ 结论：**改完必须跑 §9 自查**，不能只看测试绿不绿。
+
+### 6. 仍未做（如实说明）
+
+- **没有"版本回滚 / 多版本共存"**：装上就是替换，不留旧版；
+- **没有"有新版本"的提示**：要更新得自己点一次（刻意不做定时检查 —— 那等于后台联网）；
+- **没有纯 Python 依赖安装**：只装三个二进制工具，`requirements.txt` 不参与；
+- **Windows 上装不了 puredns**：官方没有产物，本轮只做到"如实说明 + 指向 `go install`"；
+- **`nmap` / `fscan` / `dirmap` 不在这套里**：nmap 是系统安装程序、fscan 是自编译目录联接、
+  dirmap 是 git 克隆的 Python 项目，三者的获取方式与"下个 zip 解出个 exe"完全不同，**刻意不硬塞进同一套逻辑**。
+
+---
+
 ## 2026-09-26 —— 续53 补：删掉 4 个零调用方 API `db.list_all_*`（P0 文档/代码一致性）
 
 > 实施者：**Trae · DeepSeek-V4.1-Flash**（新负责人接管复核；需求＝把续53 自己声称已做、实际未做的那一步补上）

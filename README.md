@@ -81,7 +81,11 @@ python3 cli/client.py -f examples/targets.txt -n my-first-task
 python3 run_gui.py
 ```
 
-> 2. （可选）放置外部工具到 PATH 或 tools/scanner/，见 tools/scanner/README.md —— 需下载对应操作系统的版本（Windows 取 .exe，Linux 取 linux_amd64）。
+> 2. （可选）外部工具走**一键安装**（续54）：`python cli/client.py --update-tools`，或控制台管理员侧栏的
+>    「外部工具」页点按钮。装完会自动把 `config/settings.yaml` 的 `tools.<名>` 改成刚装好的相对路径。
+>    两条路都**只在显式触发时联网**（扫描期任何阶段都不会自动下载），只允许 https + 官方主机，
+>    默认必须通过 release 自带的 SHA256 校验和才落盘。也可手工放置到 PATH 或 `tools/scanner/`，
+>    详见 `tools/scanner/README.md`（注意 `puredns` 官方无 Windows 产物）。
 
 
 ## 配置说明（部署前必看）
@@ -98,7 +102,7 @@ python3 run_gui.py
 - **`config/settings.yaml`（全局策略，已随仓库提交）**：GUI「策略配置」页可图形化修改并写回；CLI 也可直接编辑。常见开关：`fofa.enabled` / `iprecon.enabled` / `shodan` / `quake` / `ctlog` / `intel` / `heuristic` / `github`（外部情报类默认关）；`dirscan.mode`（`quick` 浅扫 / `deep` 深扫）；`screenshot.enabled`（站点截图，默认关，需本机有 Edge/Chrome 无头）；`portscan.engine`（`auto` = fscan → nmap → 内置）。
 - **`config/blacklist.txt`**：一行一个域名，命中即不入资产库（入库前过滤）。
 - **`config/dicts/`**：子域名字典、`dirs_shallow.txt`（浅扫精选路径 ~150 条）、`dirs_big.txt`（深扫大字典 15333 条）、`cdn_cname.txt`（CDN 厂商后缀）、`cdn_ips.txt`（CDN 厂商任播 IP 段）、`sensitive.txt`（A01 敏感文件检查的数据源：`路径 | 关键字 | 级别 | 说明`）。
-- **外部工具（可选）**：把 `subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 放进 PATH 或 `tools/scanner/`，存在时优先调用、否则降级内置实现。无这些工具框架仍能跑通。
+- **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，默认必须通过 release 自带的 SHA256 校验和。
 
 > 部署 checklist：① 复制 `config/keys.yaml.example` → `config/keys.yaml` 并填 key（仅当要用 FOFA 等外部情报）；② 按需改 `config/settings.yaml`（或 GUI 策略配置页，**仅管理员可改**）；③ `pip install -r requirements.txt`；④ 跑 `python cli/client.py --check` 自检；⑤ 起控制台后用 `gui.token` 引导登录，**立即到「账号管理」建管理员与子用户账号**（建号后引导口令失效）。
 
@@ -123,7 +127,7 @@ Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错�
 用最小代价把整条流水线走一遍，验证**流程本身**跑得通、在哪一阶段断 —— 而不是测覆盖面（那是生产跑的事）。
 
 - **开发模式开关**：`config/settings.yaml` 的 `dev.enabled`（默认 `false`）。打开后控制台侧边栏**才出现**
-  第 11 栏「开发模式」（**仅管理员可见**，未打开时该栏**根本不渲染**，直接敲 `/devmode` 也进不去）。
+  「开发模式」一栏（**仅管理员可见**，未打开时该栏**根本不渲染**，直接敲 `/devmode` 也进不去）。
 - **全流程自检**（本功能的验收手段，控制台与 CLI 双入口）：
   - **控制台**：「开发模式」页「跑一次全流程自检」按钮 —— 它**以子进程**调 `py -3 run_devflow.py`
     （`gui/app.py::api_devmode_selfcheck`），把子进程 stdout 原文渲染到页面。**为什么必须是子进程**：
@@ -204,6 +208,7 @@ ctf-scanner/
 │   ├── devfixture.py        #   内置靶场（标准库 HTTP/HTTPS，只绑 127.0.0.1，自检用；含内联自签证书 + 情报源夹具）
 │   ├── devflow.py           #   全流程自检核心（夹具域名 + DNS 覆盖 + 压量 + 逐阶段 真跑/跳过/FAIL 分类；CLI 与 smoke 共用）
 │   ├── report.py            #   报告三格式（Markdown / 自包含 HTML / 无头浏览器打印 PDF），共用 collect() 快照
+│   ├── toolmgr.py           #   外部工具版本管理（续54：查 release → SHA256 校验 → 解包落盘 → 回写 tools.<名>；仅显式入口触发）
 ├── tools/import_ref_pocs.py #   参考项目 Python POC 静态导入器（产物默认关闭）
 ├── tools/import_dir_dict.py #   目录扫描大字典生成器（读 dirmap 字典 → config/dicts/dirs_big.txt）
 ├── tools/import_fw_dicts.py #   目录字典按框架细分生成器（从大字典派生 12 个框架字典 + 暴露面）
@@ -216,7 +221,7 @@ ctf-scanner/
 │   ├── pocs-user/           # 用户上传的 POC（GUI 上传后落在这里）
 │   ├── pocs-imported/       # 批量导入的 POC（默认关闭，需在 POC 管理页挑选启用）
 │   └── nuclei-templates/    # 官方 nuclei 模板投放点（可被本引擎直接加载）
-├── tools/scanner/           # 外部工具放置区（subfinder/httpx/puredns/dirmap）
+├── tools/scanner/           # 外部工具放置区（subfinder/httpx/puredns/dirmap；前三个可一键安装，见该目录 README）
 ├── docs/                    # 文档（架构/流水线/POC 开发/OWASP 映射/使用/路线图）
 ├── data/scanner.db          # SQLite（首次运行自动创建）
 ├── data/trash/              # 删除任务前的自动备份（每任务一个 JSON，误删可据此找回）

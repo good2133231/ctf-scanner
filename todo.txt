@@ -1437,3 +1437,15 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        （文档声称已做、代码实际未做，属文档/代码冲突）。本次补齐删除：全仓 grep 确认**零调用方**
        （无 from-import、无 `import *`、无 getattr 动态取用），被 GUI 资产分栏真正使用的
        `page_assets()` 保留。全量 `py -3 tests/smoke.py` → SMOKE PASS。
+[完成] 13、工具版本管理：一键下载/更新 subfinder / httpx / puredns（续54，2026-09-26，Trae · DeepSeek-V4.1-Flash）：
+       新增 scanner/toolmgr.py（查 release → 按平台挑产物 → SHA256 校验 → 单成员解包落盘 → 逐行回写 tools.<名>），
+       CLI 入口 python cli/client.py --update-tools（附属 --tool / --allow-unverified / --no-wire / --tools-dest），
+       GUI 入口＝管理员侧栏「外部工具」页 + POST /api/tools/update。两条路都只在显式触发时联网（扫描期零下载，
+       已钉成 [7p] 的结构性断言）；只允许 https + 官方主机白名单；默认必须过 release 自带的 SHA256 才落盘，
+       无校验和默认拒装、校验不符绝不覆盖旧文件。回写刻意不走 config.save_settings()（那是 safe_dump 整份重写、
+       会抹掉 settings.yaml 全部中文注释），改走 patch_settings_tool() 逐行文本替换（保注释、保 CRLF、保尾换行）。
+       实测平台事实（查 GitHub API）：subfinder/httpx 双平台 + checksums 齐；puredns 官方只发 Linux/macOS
+       且无 checksums（tools/scanner/README.md 原写"双平台都有"已勘误）。验证：tests/smoke.py 新增 [7p]
+       （8 组全离线断言 + M1~M5 变异证伪）、cli --check/附属参数守卫/未知工具名实测、全量 SMOKE PASS。
+       仍未做：版本回滚/多版本共存、有新版本提示（刻意不做定时检查）、nmap/fscan/dirmap 不纳入本套逻辑。
+       注：本条落地后，上方第 11 条里"仍未做：工具版本管理"一句即告失效（保留原样，按本文件只追加的先例）。

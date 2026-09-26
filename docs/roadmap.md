@@ -249,7 +249,17 @@
       资产从头跑 → 清零；进程被强杀时对账按该行原 `updated_at`（最后已知存活时刻）结账，
       **不把停机时长算成运行时长**；老库行显示 `-`（不编数）。回归见 `tests/smoke.py [6v]`。
 - [ ] 分布式节点：多个执行节点认领任务（需要先替换 SQLite）；
-- [ ] 工具版本管理：一键下载/更新 subfinder/httpx/puredns。
+- [x] **工具版本管理**（2026-09-26 续54 落地）：一键下载/更新 subfinder/httpx/puredns。
+      入口只有两个 —— CLI `--update-tools`（`--tool` / `--allow-unverified` / `--no-wire` / `--tools-dest`）
+      与 GUI 管理员侧栏「外部工具」页；**扫描期任何阶段都不联网下载**（`scanner/` 包内除
+      `scanner/toolmgr.py` 自身外零引用，`tests/smoke.py [7p]` 用检测器变异钉住）。
+      安全口径：https + 主机白名单（含**跳转后**的真实 URL 再校验）／单产物大小上限／
+      **默认必须过 release 自带的 SHA256 校验和**，不符即拒绝落盘且不覆盖已装好的（`verified` 三态，
+      未校验的安装如实标注）／解包只按预期成员名取（拒绝 `..` 与绝对路径成员）／
+      回写 `config/settings.yaml` 走**逐行文本替换**（不调 `config.save_settings()` 的整份重写，保住注释）。
+      实测平台事实：puredns 官方**只有 Linux/macOS 产物、无 checksums**，Windows 上如实报"未提供当前平台产物"
+      （不猜、不自动编译，见 `tools/scanner/README.md` 的勘误）。仍未做：版本回滚 / 多版本共存 /
+      自动检测本机已装工具的"有新版本"提示（只做"显式点一次、装上当前最新"）。
 
 ## 刻意推迟（不是不做，是这一轮刻意收窄改动面）
 

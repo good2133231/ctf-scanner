@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import (audit, auth as taskauth, blacklist, cdn, certs as certs_mod, db,
                      devfixture, devmode, dnsq,
-                     extdom, login_guard, queue, screenshot, users)
+                     extdom, login_guard, queue, screenshot, toolmgr, users)
 from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
@@ -347,6 +347,10 @@ _DEV_FIXTURE = {"httpd": None, "base": ""}
 # 续52：最近一次「全流程自检」的子进程输出（POST → redirect 跨请求带不了大文本，故存进程内）。
 # 自检是**串行**的开发工具，用单槽缓存即可（不需要并发安全）。
 _DEV_SELFCHECK = {"out": "", "code": None, "at": ""}
+
+# 续54：最近一次「外部工具下载/更新」的结果（POST → redirect 带不了结构化结果，故存进程内）。
+# 更新是**串行的管理操作**（单人点一次按钮），用单槽缓存即可，不需要并发安全。
+_TOOLS_LAST = {"results": [], "at": "", "os": "", "error": ""}
 
 
 def _dev_fixture_start(port=0):
@@ -2533,6 +2537,62 @@ def create_app():
             "devmode_page",
             msg=(f"自检完成（退出码 {code}）" if code == 0
                  else f"自检结束但退出码非 0（{code}）—— 见下方输出")))
+
+    # ---------- 续54：外部工具（版本管理）—— 一键下载/更新 subfinder/httpx/puredns ----------
+    # roadmap「工具版本管理」。实现全在 scanner/toolmgr.py（安全红线见其文件头）。
+    # **本页与 CLI `--update-tools` 是仅有的两个联网入口**：扫描期任何阶段都不下载。
+
+    @app.route("/tools")
+    @login_required
+    @admin_required
+    def tools_page():
+        """外部工具页：列出三个工具的现状 + 一键下载/更新（结果在下方持久显示到下次更新）。"""
+        rows = toolmgr.status(settings)
+        os_label, arch = toolmgr.host_arch()
+        return render_template("tools.html", rows=rows,
+                               platform=f"{os_label}/{arch}",
+                               defaults=list(toolmgr.TOOLS),
+                               last_at=_TOOLS_LAST.get("at") or "",
+                               last_os=_TOOLS_LAST.get("os") or "",
+                               last_error=_TOOLS_LAST.get("error") or "",
+                               last_results=_TOOLS_LAST.get("results") or [],
+                               max_mb=toolmgr._MAX_BYTES // (1024 * 1024),
+                               hosts=sorted(toolmgr._ALLOWED_HOSTS),
+                               dest=toolmgr.DEFAULT_DEST,
+                               msg=(request.args.get("msg") or "").strip(),
+                               error=(request.args.get("error") or "").strip())
+
+    @app.route("/api/tools/update", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_tools_update():
+        """下载/更新选中的外部工具。
+
+        ⚠️ 这是**同步阻塞**请求（逐个工具下载，默认单个超时 120s）—— 与 devmode 自检同一取舍：
+        本机管理员手动点一次的管理操作，宁可让请求等，也不引入后台线程 + 状态轮询那一套。
+        联网只在这里发生；`toolmgr.update()` 内部对每个工具**永不抛异常**，失败都走结果里的
+        `reason`（因此这里再包一层 try 只为兜"连结果都构造不出来"的极端情况）。
+        """
+        picked = [t for t in request.form.getlist("tool") if t in toolmgr.TOOLS]
+        allow = bool(request.form.get("allow_unverified"))
+        wire = not bool(request.form.get("no_wire"))
+        os_label, arch = toolmgr.host_arch()
+        try:
+            results = toolmgr.update(picked or None, allow_unverified=allow, wire=wire)
+            error = ""
+        except Exception as e:      # noqa: BLE001 - 不让页面崩；失败如实展示
+            results, error = [], f"{type(e).__name__}: {e}"
+        _TOOLS_LAST.update({"results": results,
+                            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "os": f"{os_label}/{arch}", "error": error})
+        okn = sum(1 for r in results if r.get("ok"))
+        _audit(audit.KIND_TASK, target="external-tools",
+               detail=(f"外部工具更新（{'、'.join(picked) if picked else '全部'}）："
+                       f"成功 {okn}/{len(results)}；"
+                       f"校验={'可跳过' if allow else '必须'}；"
+                       f"写回配置={'否' if not wire else '是'}"),
+               ok=(not error) and len(results) > 0 and okn == len(results))
+        return redirect(url_for("tools_page", msg=f"更新完成：成功 {okn}/{len(results)}"))
 
     def _tail(path, n=150):
         try:

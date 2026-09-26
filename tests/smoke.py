@@ -8574,6 +8574,362 @@ http:
           "vsev·vq 服务端筛选生效 / page·vpage=9999 不 500 / GET 与 POST 表单无嵌套 / "
           "2 条变异证伪全部按预期变红（另有 logs/ 下 2 个真·路由变异脚本产出报错原文）")
 
+    # [7p] 续54 **外部工具版本管理**（roadmap「工程化 → 工具版本管理」；实现 scanner/toolmgr.py）。
+    #      这是**新模块**，没有"旧实现"可比，故 §6.1 的"退回旧实现必红"改用**变异注入**表达：
+    #      把某个安全属性的判定点换回"天真实现"，确认下面的断言真的变红。
+    #      钉死的安全属性（**全部离线** —— 下载/查版本两个出口都被桩掉，一个字节都不出网）：
+    #      ① 只在显式入口联网：`scanner/` 包内除 toolmgr.py 外**零引用**（扫描期不可能下载）；
+    #      ② 只允许 https + 主机白名单，且**跳转后的真实 URL 再校验一次**（302 绕不过白名单）；
+    #      ③ 大小上限：超限即中止；
+    #      ④ 默认必须过 SHA256：不符 → 拒绝落盘、**不覆盖已装好的**、不留 `.part`；
+    #         release 无校验和 → 默认拒绝；显式 allow_unverified 才装且 `verified is False`；
+    #      ⑤ 解包只按预期成员名取，`..` / 绝对路径成员**从根上拒绝**（zip slip 不成立）；
+    #      ⑥ puredns 在 Windows 无官方产物 → 如实报"只发布 Linux / macOS"，不猜、不自动编译；
+    #      ⑦ 回写 settings.yaml 走**逐行文本替换**：中文注释条数 / 行数 / 行尾 / 其它键全不变
+    #         （对照 `config.save_settings()` 的整份重写会把这些注释一次抹掉）；
+    #      ⑧ 两个显式入口：GUI「外部工具」页管理员可见可点、子用户 403；CLI 附属参数脱离
+    #         `--update-tools` 直接报错（不静默忽略）、有工具没装上时退出码非 0。
+    import hashlib as _hl7p
+    import io as _io7p
+    import types as _ty7p
+    import zipfile as _zip7p
+    from scanner import toolmgr as tm7p
+
+    _tz7p = _TMPDIR / "toolmgr7p"
+    _tz7p.mkdir(parents=True, exist_ok=True)
+    _os7p, _ar7p = tm7p.host_arch()
+    assert _os7p in ("windows", "linux", "macOS") and _ar7p in ("386", "amd64", "arm", "arm64"), \
+        (_os7p, _ar7p)
+
+    # ① `scanner/` 包内（除 toolmgr 自身）不得引用 toolmgr —— 扫描期"零下载"的结构性保证
+    def _refs7p(pairs):
+        return [n for n, t in pairs if "toolmgr" in t]
+
+    _pairs7p = [(_f7p.relative_to(ROOT).as_posix(),
+                 _f7p.read_text(encoding="utf-8", errors="replace"))
+                for _f7p in sorted((ROOT / "scanner").rglob("*.py")) if _f7p.name != "toolmgr.py"]
+    assert _refs7p(_pairs7p) == [], f"scanner 包内不得引用 toolmgr（扫描期零下载）：{_refs7p(_pairs7p)}"
+    # 变异（M5）：把"阶段里顺手下载工具"的天真写法喂给**同一个检测器** → 必须报出来
+    assert _refs7p(_pairs7p + [("scanner/stages/probe.py", "from scanner import toolmgr\n")]) \
+        == ["scanner/stages/probe.py"], "检测器对'阶段里 import toolmgr'不敏感 → ① 是假绿"
+
+    # ② 平台/命名事实（**显式传平台**，与当前主机无关，便于在 Linux/Windows 上给出同一结论）
+    assert tm7p.asset_name("subfinder", "v2.16.0", "windows", "amd64") \
+        == "subfinder_2.16.0_windows_amd64.zip"
+    assert tm7p.asset_name("httpx", "v1.12.0", "linux", "arm64") == "httpx_1.12.0_linux_arm64.zip"
+    # 注：`os_label`/`arch` 传 `None`/空串＝"用本机平台"（这是 `asset_name` 的既有语义），
+    # 所以"平台缺失就编不出名字"要用**显式平台**去测 —— 下一条测的是**版本号**为空。
+    assert tm7p.asset_name("subfinder", "", "windows", "amd64") is None, "版本号空不得编产物名"
+    assert tm7p.asset_name("subfinder", "v", "windows", "amd64") is None, "只有 v 前缀也不得编产物名"
+    assert tm7p.asset_name("nope", "v1.0.0", "windows", "amd64") is None, "未知工具不得编产物名"
+    assert tm7p.asset_name("puredns", "v2.1.1", "windows", "amd64") is None, "puredns 官方无 Windows 产物"
+    assert tm7p.asset_name("puredns", "v2.1.1", "linux", "amd64") == "puredns-Linux-amd64.tgz"
+    _insp7p = tm7p.inspect("puredns", "windows", "amd64")
+    assert _insp7p["asset"] is None and "只发布 Linux / macOS" in _insp7p["reason"], _insp7p
+    assert "go install" in _insp7p["reason"], "要给出替代路径（不猜、不自动编译）"
+    assert tm7p.inspect("subfinder", "windows", "amd64")["asset"], "subfinder 在 Windows 有官方产物"
+    assert tm7p.parse_checksums("ab" * 32 + "  *a.zip\nbad-line\n") == {"a.zip": "ab" * 32}
+
+    # ③ URL 白名单：三种绕过形态全拒（http 降级 / 非白名单主机 / 后缀伪装）
+    for _u7p, _needle7p in (("http://api.github.com/x", "https"),
+                            ("https://evil.example.com/x", "白名单"),
+                            ("https://api.github.com.evil.example/x", "白名单")):
+        try:
+            tm7p._check_url(_u7p)
+            raise AssertionError(f"必须拒绝：{_u7p}")
+        except ValueError as _e7p:
+            assert _needle7p in str(_e7p), (_u7p, str(_e7p))
+    assert tm7p._check_url("https://objects.githubusercontent.com/x") == "objects.githubusercontent.com"
+
+    # 下载出口：跳转后落到白名单外必须拒（否则一个 302 就绕过了白名单）、超限必须中止
+    # ⚠️ 桩要**连 `urllib.parse` 一起带上**：`_check_url()` 也读它，只换 `request` 会
+    #    把"校验 URL"变成 AttributeError（那样测的就不是校验逻辑了）。
+    _real_urllib7p = tm7p.urllib
+
+    class _Req7p:
+        def __init__(self, url, headers=None):
+            self.url, self.headers = url, headers
+
+    class _Resp7p:
+        def __init__(self, data, url):
+            self._b, self._u, self._i = data, url, 0
+
+        def read(self, n=-1):
+            if n is None or n < 0:
+                n = len(self._b) - self._i
+            _c7p = self._b[self._i:self._i + n]
+            self._i += len(_c7p)
+            return _c7p
+
+        def geturl(self):
+            return self._u
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a7p):
+            return False
+
+    class _Una7p:
+        def __init__(self, resp):
+            self._resp = resp
+
+        Request = _Req7p
+
+        def urlopen(self, req, timeout=None):
+            return self._resp
+
+    def _fake_urllib7p(resp):
+        return _ty7p.SimpleNamespace(request=_Una7p(resp), parse=_real_urllib7p.parse)
+
+    try:
+        tm7p.urllib = _fake_urllib7p(_Resp7p(b"x", "https://evil.example.com/payload"))
+        try:
+            tm7p.download_bytes("https://github.com/projectdiscovery/subfinder/releases/x")
+            raise AssertionError("跳转后的主机不在白名单，必须拒绝")
+        except ValueError as _e7p:
+            assert "白名单" in str(_e7p), _e7p
+        tm7p.urllib = _fake_urllib7p(_Resp7p(b"a" * 4096, "https://api.github.com/x"))
+        try:
+            tm7p.download_bytes("https://api.github.com/x", max_bytes=1024)
+            raise AssertionError("超过上限必须中止")
+        except ValueError as _e7p:
+            assert "上限" in str(_e7p), _e7p
+        # 变异（M1）：把白名单判定换回"天真实现"（不校验）→ 上面那条断言必红
+        _real_chk7p = tm7p._check_url
+        tm7p._check_url = lambda _u: "github.com"
+        try:
+            tm7p.urllib = _fake_urllib7p(_Resp7p(b"leaked", "https://evil.example.com/payload"))
+            assert tm7p.download_bytes("https://github.com/x") == b"leaked", \
+                "变异（不校验主机）后跳转目标不再被拦 → 证明 ③ 测的是**真校验**"
+        finally:
+            tm7p._check_url = _real_chk7p
+    finally:
+        tm7p.urllib = _real_urllib7p
+
+    # ④ 成员名安全 + zip slip
+    assert tm7p._safe_member_name("subfinder.exe") and tm7p._safe_member_name("d/sub.exe")
+    assert not tm7p._safe_member_name("../evil.exe")
+    assert not tm7p._safe_member_name("/etc/passwd")
+    # Windows 绝对路径形态：字面量刻意拼出来（源码级红线扫描禁止写死的盘符路径字面量）
+    assert not tm7p._safe_member_name("C:" + "\\" + "Windows" + "\\" + "evil.exe")
+
+    def _mkzip7p(files):
+        _buf7p = _io7p.BytesIO()
+        with _zip7p.ZipFile(_buf7p, "w") as _z7p:
+            for _n7p, _d7p in files.items():
+                _z7p.writestr(_n7p, _d7p)
+        return _buf7p.getvalue()
+
+    _bin7p = tm7p.binary_name("subfinder")
+    _asset7p = tm7p.asset_name("subfinder", "v9.9.9")
+    assert _asset7p and _asset7p.endswith(".zip"), _asset7p
+    _pay7p = b"FAKE-SUBFINDER-BINARY-7p"
+    _zip7p_ok = _mkzip7p({_bin7p: _pay7p})
+    _dig7p = _hl7p.sha256(_zip7p_ok).hexdigest()
+    _slip7p = _mkzip7p({"../evil.exe": b"pwn", "sub/../../evil2.exe": b"pwn2", _bin7p: b"good"})
+    try:
+        tm7p.extract_binary(_slip7p, "x.zip", _bin7p)
+        raise AssertionError("含 .. 成员的压缩包必须拒绝（zip slip）")
+    except ValueError as _e7p:
+        assert "不安全" in str(_e7p), _e7p
+    # 变异（M2）：去掉成员名校验（天真实现最可能就是直接 extractall）→ 上面那条必红
+    _real_safe7p = tm7p._safe_member_name
+    tm7p._safe_member_name = lambda _n: True
+    try:
+        assert tm7p.extract_binary(_slip7p, "x.zip", _bin7p) == b"good", \
+            "变异（不校验成员名）后 zip slip 不再被拒 → 证明 ④ 测的是**真校验**"
+    finally:
+        tm7p._safe_member_name = _real_safe7p
+
+    # ⑤ 端到端安装（release / blob 注入 = 全离线）。settings 用**临时副本**，绝不碰真实配置
+    _dest7p = _tz7p / "bin"
+    _set7p = _tz7p / "settings.yaml"
+    _set7p.write_bytes((ROOT / "config" / "settings.yaml").read_bytes())
+    _set_txt7p = _set7p.read_text(encoding="utf-8")
+    _base_asset7p = "subfinder_9.9.9_checksums.txt"
+    _csum7p = f"{_dig7p}  {_asset7p}\n".encode()
+    _rel7p = {"tag": "v9.9.9", "assets": {
+        _asset7p: f"https://github.com/projectdiscovery/subfinder/releases/download/v9.9.9/{_asset7p}",
+        _base_asset7p: "https://github.com/projectdiscovery/subfinder/releases/download/v9.9.9/"
+                       + _base_asset7p}}
+    _blob7p = {_base_asset7p: _csum7p, _asset7p: _zip7p_ok}
+    _r7p1 = tm7p.install("subfinder", dest_dir=str(_dest7p), settings_path=str(_set7p),
+                         release=_rel7p, blob=_blob7p)
+    assert _r7p1["ok"] and _r7p1["verified"] is True, _r7p1
+    assert (_dest7p / _bin7p).read_bytes() == _pay7p
+    assert not list(_dest7p.glob("*.part")), "落盘必须原子替换，不留 .part"
+    assert _r7p1["path"] == f"logs/{_TMPDIR.name}/toolmgr7p/bin/{_bin7p}", \
+        f"仓库内安装必须回写**相对路径**：{_r7p1['path']}"
+    assert _r7p1.get("wired") is True, _r7p1
+
+    # ⑦ 回写 settings.yaml：注释/行数/行尾/其它键全不变，只改 tools.<名> 那一行
+    _after7p = _set7p.read_bytes()
+    _after_txt7p = _after7p.decode("utf-8")
+    assert f"  subfinder: {_r7p1['path']}" in _after_txt7p, "tools.subfinder 必须被改成刚装好的路径"
+    assert _after_txt7p.count("#") == _set_txt7p.count("#") > 50, \
+        "回写必须保住中文注释（整份重写会把这些注释抹掉）"
+    assert len(_after_txt7p.splitlines()) == len(_set_txt7p.splitlines()), "行数不得变化"
+    assert b"\r\n" in _after7p and b"\n" not in _after7p.replace(b"\r\n", b""), \
+        "行尾必须沿用文件原有形态（本仓 settings.yaml 是 CRLF）"
+    assert _after7p.endswith(b"\r\n"), "结尾换行必须保留"
+    assert "  httpx: httpx" in _after_txt7p and "  puredns: puredns" in _after_txt7p, "不得动其它键"
+    assert "  fscan: tools/fscan/fscan.exe" in _after_txt7p, "不得动其它键（含 fscan）"
+
+    # ⑥ 校验不过：拒绝落盘、**不覆盖已装好的**、不留 .part
+    _tampered7p = dict(_blob7p)
+    _tampered7p[_asset7p] = _mkzip7p({_bin7p: b"TAMPERED"})
+    _r7p2 = tm7p.install("subfinder", dest_dir=str(_dest7p), settings_path=str(_set7p),
+                         release=_rel7p, blob=_tampered7p)
+    assert not _r7p2["ok"] and "SHA256" in _r7p2["reason"], _r7p2
+    assert (_dest7p / _bin7p).read_bytes() == _pay7p, "校验不过绝不许覆盖已装好的二进制"
+    assert not list(_dest7p.glob("*.part"))
+
+    # release 没发校验和 → 默认拒绝；显式 allow_unverified 才装，且**如实**记 verified=False
+    _rel_nc7p = {"tag": "v9.9.9", "assets": {_asset7p: "https://github.com/x/" + _asset7p}}
+    _r7p3 = tm7p.install("subfinder", dest_dir=str(_dest7p / "n1"), settings_path=str(_set7p),
+                         release=_rel_nc7p, blob={_asset7p: _zip7p_ok})
+    assert not _r7p3["ok"] and "未发布校验和" in _r7p3["reason"], _r7p3
+    assert not (_dest7p / "n1").exists(), "拒绝时不该建出目录"
+    _r7p4 = tm7p.install("subfinder", dest_dir=str(_dest7p / "n2"), allow_unverified=True,
+                         wire=False, release=_rel_nc7p, blob={_asset7p: _zip7p_ok})
+    assert _r7p4["ok"] and _r7p4["verified"] is False, _r7p4
+    assert (_dest7p / "n2" / _bin7p).read_bytes() == _pay7p
+
+    # 校验和文件里**没有**本产物的条目 → 同样拒绝（不许"找不到就跳过校验"）
+    _a_httpx7p = tm7p.asset_name("httpx", "v1.12.0")
+    assert _a_httpx7p
+    _r7p6 = tm7p.install("httpx", dest_dir=str(_dest7p / "n4"), settings_path=str(_set7p),
+                         release={"tag": "v1.12.0", "assets": {
+                             _a_httpx7p: "https://github.com/x/" + _a_httpx7p,
+                             "httpx_1.12.0_checksums.txt": "https://github.com/x/c.txt"}},
+                         blob={"httpx_1.12.0_checksums.txt": b"not-a-digest  other.zip\n"})
+    assert not _r7p6["ok"] and "没有" in _r7p6["reason"], _r7p6
+    assert not (_dest7p / "n4").exists()
+
+    # ⑥ puredns 在 Windows 上：如实报平台不可用（不猜、不自动编译）
+    if _os7p == "windows":
+        _r7p5 = tm7p.update(["puredns"], dest_dir=str(_dest7p / "n3"), wire=False,
+                            fetch=lambda _repo, timeout=0: {"tag": "v2.1.1", "assets": {}})
+        assert len(_r7p5) == 1 and not _r7p5[0]["ok"], _r7p5
+        assert "只发布 Linux / macOS" in _r7p5[0]["reason"], _r7p5
+        assert not (_dest7p / "n3").exists()
+    # 变异（M3）：把 puredns 的命名规则当成 pd（忽略"只发 Linux/macOS"这条平台事实）→ 平台判据失效
+    _real_tools7p = tm7p.TOOLS["puredns"]
+    tm7p.TOOLS["puredns"] = {"repo": "d3mondev/puredns", "style": "pd", "verify": None}
+    try:
+        assert tm7p.inspect("puredns", "windows", "amd64")["asset"], \
+            "变异（丢掉平台事实）后 inspect 不再拒绝 Windows → 证明 ⑥ 测的是**真平台事实**"
+    finally:
+        tm7p.TOOLS["puredns"] = _real_tools7p
+    # 变异（M4）：装上"跳过 SHA256"的天真实现 → 篡改包会被装进去，证明 ⑥ 的拒绝是真校验
+    def _naive7p(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
+                 settings_path=None, release=None, blob=None):
+        _n7p = tm7p.binary_name(tool)
+        _d7p = Path(dest_dir) if dest_dir else (ROOT / tm7p.DEFAULT_DEST)
+        _d7p.mkdir(parents=True, exist_ok=True)
+        _as7p = tm7p.asset_name(tool, (release or {}).get("tag"))
+        (_d7p / _n7p).write_bytes(tm7p.extract_binary((blob or {})[_as7p], _as7p, _n7p))
+        return {"tool": tool, "ok": True, "version": (release or {}).get("tag") or "",
+                "path": str(_d7p / _n7p), "verified": True, "reason": ""}
+
+    _real_inst7p = tm7p.install
+    tm7p.install = _naive7p
+    try:
+        _rm7p = tm7p.update(["subfinder"], dest_dir=str(_dest7p / "naive"), settings_path=str(_set7p),
+                            fetch=lambda _repo, timeout=0: _rel7p, blobs={"subfinder": _tampered7p})
+        assert _rm7p[0]["ok"] and (_dest7p / "naive" / _bin7p).read_bytes() == b"TAMPERED", \
+            "变异（跳过 SHA256）后篡改包被装上 → 证明 ⑥ 的拒绝落盘测的是**真校验**"
+    finally:
+        tm7p.install = _real_inst7p
+
+    # 仓库内路径 → 相对路径（项目硬规矩）；含分隔符的相对路径按**项目根**折算
+    assert tm7p._setting_value(ROOT / "tools" / "scanner" / "httpx.exe") == "tools/scanner/httpx.exe"
+
+    # ⑧ GUI：管理员可进可点；子用户 403（路由层，不只是藏侧栏）
+    _c7p = _app_with7i().test_client()
+    assert _c7p.post("/login", data={"token": settings["gui"]["token"]}).status_code == 302
+    _h7p = _c7p.get("/tools")
+    assert _h7p.status_code == 200, _h7p.status_code
+    _ht7p = _h7p.get_data(as_text=True)
+    assert "外部工具" in _ht7p and "下载 / 更新" in _ht7p, "页面主体缺失"
+    for _n7p in ("subfinder", "httpx", "puredns"):
+        assert _n7p in _ht7p, _n7p
+    assert 'href="/tools"' in _ht7p, "管理员侧栏必须有入口"
+    assert "objects.githubusercontent.com" in _ht7p, "页面要把允许的主机如实列出来"
+
+    _real_upd7p = tm7p.update
+    _seen7p = {}
+
+    def _stub7p(tools=None, dest_dir=None, allow_unverified=False, wire=True, settings_path=None,
+                timeout=120, fetch=None, blobs=None):
+        _seen7p.update(tools=tools, allow=allow_unverified, wire=wire)
+        return [{"tool": "httpx", "ok": False, "version": "v1.12.0", "path": "",
+                 "verified": None, "reason": "桩：离线测试，未联网"}]
+
+    try:
+        tm7p.update = _stub7p
+        _rp7p = _c7p.post("/api/tools/update", data={"tool": "httpx", "no_wire": "1"})
+        assert _rp7p.status_code == 302, _rp7p.status_code
+        assert _seen7p == {"tools": ["httpx"], "allow": False, "wire": False}, _seen7p
+    finally:
+        tm7p.update = _real_upd7p
+    _h2_7p = _c7p.get("/tools").get_data(as_text=True)
+    assert "桩：离线测试，未联网" in _h2_7p, "更新结果必须留在页面上（进程内单槽）"
+    assert "未安装" in _h2_7p, "失败必须如实展示"
+
+    assert users_mod.create_user("smoke-sub7p", "sub7p-pw-1234", role="user",
+                                 must_change=False)[0]
+    _cs7p = _app_with7i().test_client()
+    assert _cs7p.post("/login", data={"username": "smoke-sub7p",
+                                      "password": "sub7p-pw-1234"}).status_code == 302
+    assert _cs7p.get("/tools").status_code == 403, "子用户不得进外部工具页"
+    assert _cs7p.post("/api/tools/update", data={"tool": "httpx"}).status_code == 403, \
+        "子用户不得触发下载（这是唯一会联网的写操作）"
+    assert 'href="/tools"' not in _cs7p.get("/tasks").get_data(as_text=True), \
+        "子用户侧栏不该看到外部工具入口"
+    users_mod.delete_user(users_mod.get_by_name("smoke-sub7p")["id"])
+    assert users_mod.count_users() == 0, "本组结束应恢复无账号状态"
+
+    # ⑧ CLI：`--update-tools` 的附属参数脱离主开关 → 直接报错（不静默忽略）；
+    #    有工具没装上 → 退出码非 0；`--no-wire` 真的传成 wire=False
+    _ns7p = _ty7p.SimpleNamespace(tool=["httpx"], allow_unverified=True, no_wire=True, tools_dest=None)
+    _seen_cli7p = {}
+
+    def _stub_cli7p(tools=None, dest_dir=None, allow_unverified=False, wire=True, **_kw7p):
+        _seen_cli7p.update(tools=tools, dest_dir=dest_dir, allow=allow_unverified, wire=wire)
+        return [{"tool": "httpx", "ok": True, "version": "v1.12.0",
+                 "path": "tools/scanner/httpx.exe", "verified": False, "reason": ""}]
+
+    try:
+        tm7p.update = _stub_cli7p
+        _cli.do_update_tools(_ns7p)
+        assert _seen_cli7p == {"tools": ["httpx"], "dest_dir": None, "allow": True, "wire": False}, \
+            _seen_cli7p
+        tm7p.update = lambda *_a, **_k: [{"tool": "httpx", "ok": False, "version": "", "path": "",
+                                          "verified": None, "reason": "桩：装不上"}]
+        try:
+            _cli.do_update_tools(_ns7p)
+            raise AssertionError("有工具没装上时 CLI 必须退出码非 0（否则脚本会当成成功）")
+        except SystemExit as _se7p:
+            assert _se7p.code == 1, _se7p.code
+    finally:
+        tm7p.update = _real_upd7p
+    try:
+        _cli.do_update_tools(_ty7p.SimpleNamespace(tool=["nope"], allow_unverified=False,
+                                                  no_wire=False, tools_dest=None))
+        raise AssertionError("未知工具名必须中止（不静默忽略）")
+    except SystemExit as _se7p:
+        assert _se7p.code == 1, _se7p.code
+
+    print("[7p] 续54 外部工具版本管理 ok: 平台 "
+          f"{_os7p}/{_ar7p}｜scanner 包内零引用（M5 检测器敏感）｜https+白名单"
+          "（跳转后再校验，M1 证伪）｜超限中止｜SHA256 不符拒绝落盘且不覆盖（M4 证伪）｜"
+          "无校验和默认拒绝·显式允许则 verified=False｜'校验和文件里没有该条目'也拒绝｜"
+          "zip slip 拒绝（M2 证伪）｜puredns Windows 无产物如实报（M3 证伪）｜"
+          "回写相对路径且注释/行数/CRLF 行尾/其它键全不变｜GUI 管理员 200·子用户 403·结果留页｜"
+          "CLI --no-wire 生效·失败退出码 1·未知工具名中止")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

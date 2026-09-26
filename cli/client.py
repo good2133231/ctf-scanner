@@ -7,6 +7,7 @@
   python cli/client.py -f targets.txt --offline                 # 不调用外部工具
   python cli/client.py -f targets.txt --report logs/report.md   # 结束后出 Markdown 报告
   python cli/client.py --check                                  # 检查外部工具可用性
+  python cli/client.py --update-tools                           # 联网下载/更新 subfinder/httpx/puredns
   python cli/client.py --resume-task 12                         # 续跑任务 #12 的断点
 """
 import argparse
@@ -162,6 +163,43 @@ def check_tools(settings):
     return rows
 
 
+def do_update_tools(args):
+    """`--update-tools`：显式联网下载/更新外部工具（subfinder/httpx/puredns）。
+
+    **联网只发生在这里**（以及 GUI「外部工具」页的按钮）—— 扫描期任何阶段都不会调用
+    `scanner.toolmgr` 的 `install`/`update`（红线见 scanner/toolmgr.py 文件头，测试用变异钉住）。
+    装完默认把 `config/settings.yaml` 的 `tools.<名>` 改成刚装好的相对路径 —— 否则
+    "装了但 which() 找不到"，等于白装。
+    """
+    from scanner import toolmgr
+    names = [t.strip() for t in (args.tool or []) if t.strip()]
+    unknown = [t for t in names if t not in toolmgr.TOOLS]
+    if unknown:
+        print(f"[!] 不支持的工具：{','.join(unknown)}（可选：{'、'.join(toolmgr.TOOLS)}）")
+        sys.exit(1)
+    os_label, arch = toolmgr.host_arch()
+    print(f"[*] 外部工具更新：平台 {os_label}/{arch}"
+          f"（{'允许未校验安装' if args.allow_unverified else '默认必须通过校验和'}；"
+          f"{'仅下载，不写回配置' if args.no_wire else '装好后写回 config/settings.yaml'}）")
+    results = toolmgr.update(names or None, dest_dir=args.tools_dest,
+                             allow_unverified=args.allow_unverified,
+                             wire=not args.no_wire)
+    bad = 0
+    for r in results:
+        tag = r.get("version") or "-"
+        if not r.get("ok"):
+            bad += 1
+            print(f"  {r['tool']:<10} 未安装：{r.get('reason') or '未知原因'}")
+            continue
+        mark = "SHA256 已校验" if r.get("verified") else "**未校验**，按你的显式要求"
+        print(f"  {r['tool']:<10} OK  {tag}（{mark}）→ {r['path']}")
+        if r.get("wired") is False and r.get("reason"):
+            print(f"     注意：{r['reason']}")
+    if bad:
+        print(f"[!] {bad} 个工具未安装成功（原因见上；内置兜底仍然可用）")
+        sys.exit(1)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="CTFScanner CLI —— 仅用于授权测试与 CTF 场景")
@@ -199,17 +237,46 @@ def main():
     ap.add_argument("--cookie", default="", metavar="COOKIE",
                     help="本次任务的 Cookie（等价 -H \"Cookie: ...\"），用于扫登录后才存在的资产")
     ap.add_argument("--check", action="store_true", help="检查外部工具可用性后退出")
+    # ---- 外部工具版本管理（roadmap「工具版本管理」；实现见 scanner/toolmgr.py）----
+    # **只有敲了 `--update-tools` 才会联网** —— 扫描期任何阶段都不会自动下载（红线见该模块文件头）。
+    ap.add_argument("--update-tools", action="store_true",
+                    help="联网下载/更新外部工具（subfinder/httpx/puredns）并回写 tools 配置后退出")
+    ap.add_argument("--tool", action="append", default=None, metavar="NAME",
+                    help="只更新指定工具，可重复（默认三个都更新）")
+    ap.add_argument("--allow-unverified", action="store_true",
+                    help="允许安装**没有官方校验和**的 release（默认拒绝；装了会在输出里标注「未校验」）")
+    ap.add_argument("--no-wire", action="store_true",
+                    help="只下载不写回 config/settings.yaml（默认写回 tools.<名> 为相对路径）")
+    ap.add_argument("--tools-dest", metavar="DIR",
+                    help="安装目录（默认 tools/scanner/）")
     ap.add_argument("--resume-task", type=int, metavar="ID",
                     help="续跑**指定任务的断点**：沿用该任务已有的目标/阶段/选项与库中资产，"
                          "只重跑断点及其之后的阶段（等价 GUI 任务详情页的「续跑」按钮）。"
                          "与 -f/-t/-n/-p/--offline/--full-*/--recursive-dir/-H/--cookie 互斥")
     args = ap.parse_args()
 
+    # 不给 `--update-tools` 却给了它的附属参数 → **直接报错**，不静默忽略
+    # （静默忽略会让人以为"已经按我说的装了某个工具"，实际没生效）。
+    stray = [n for n, v in (("--tool", args.tool), ("--allow-unverified", args.allow_unverified),
+                            ("--no-wire", args.no_wire), ("--tools-dest", args.tools_dest)) if v]
+    if stray and not args.update_tools:
+        print(f"[!] 这些参数只在 --update-tools 时有效：{', '.join(stray)}")
+        sys.exit(1)
+
     settings = load_settings()
     if args.check:
         print("外部工具可用性：")
-        for name, status in check_tools(settings):
+        rows = check_tools(settings)
+        for name, status in rows:
             print(f"  {name:<10} {status}")
+        # 一键安装入口要在**能找到它的地方**提示（此前只有"未找到"，用户没有任何安装路径）。
+        missing = [n for n, s in rows if n in ("subfinder", "httpx", "puredns") and "未找到" in s]
+        if missing:
+            print(f"  提示：{'、'.join(missing)} 可用 `python cli/client.py --update-tools` "
+                  "联网下载安装（或 GUI「外部工具」页一键更新）。")
+        return
+    if args.update_tools:
+        do_update_tools(args)
         return
     # 续跑走独立入口：它不需要 `-f/-t`（输入来自库），也不该被下面"未提供目标"的判断拦掉。
     if args.resume_task is not None:

@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}外部工具{% endblock %}
+{% block content %}
+{% if msg %}<p><b>已完成：</b>{{ msg }}</p>{% endif %}
+{% if error %}<p><b>未完成：</b>{{ error }}</p>{% endif %}
+
+<section class="panel">
+  <h2>外部工具（版本管理）</h2>
+  <p class="muted">
+    这三个工具决定 subdomain / probe / 目录扫描三阶段的"上限"：没装时一律退到内置兜底
+    （<code>cli --check</code> 只会打印"未找到"），覆盖面与速度差一个量级。
+  </p>
+  <p class="muted small">
+    本页是<b>两个联网入口之一</b>（另一个是 <code>python cli/client.py --update-tools</code>）：
+    <b>只有点下面的按钮才会联网</b>，扫描期任何阶段都不会自动下载。
+    下载只允许 https + 官方主机（{{ hosts|join(' / ') }}，含跳转后的真实地址），
+    单产物上限 {{ max_mb }} MB，默认<b>必须通过 release 自带的 SHA256 校验和</b>（比对不过绝不落盘）；
+    解包只按预期文件名取（不用 <code>extractall</code>，并拒绝 <code>..</code> / 绝对路径成员）。
+    安装目录：<code>{{ dest }}/</code>（当前平台 {{ platform }}）。
+  </p>
+  <table>
+    <tr><th>工具</th><th>配置值</th><th>解析到的路径</th><th>版本</th><th>状态</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td><code>{{ r.tool }}</code></td>
+      <td class="muted">{{ r.configured }}</td>
+      <td class="muted">{{ r.path or '—' }}</td>
+      <td class="muted">{{ r.version or '—' }}</td>
+      <td>
+        {% if r.path %}<span class="sev sev-low">OK</span>{% endif %}
+        {{ r.note }}
+        {% if r.reason %}<span class="muted small">（{{ r.reason }}）</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted small">
+    "配置值"是 <code>config/settings.yaml</code> 里 <code>tools.&lt;名&gt;</code> 的原样值：
+    裸名（如 <code>httpx</code>）只在 PATH 里找，含分隔符的相对路径按<b>项目根</b>折算。
+  </p>
+</section>
+
+<section class="panel">
+  <h2>下载 / 更新</h2>
+  <form method="post" action="{{ url_for('api_tools_update') }}"
+        onsubmit="return confirm('联网下载/更新选中的外部工具？（访问 GitHub 官方 release，默认校验 SHA256；可能耗时较久）')">
+    <p class="muted">要更新的工具（<b>一个都不勾＝三个都更新</b>）：</p>
+    <p>
+      {% for name in defaults %}
+      <label style="margin-right:1rem"><input type="checkbox" name="tool" value="{{ name }}"> {{ name }}</label>
+      {% endfor %}
+    </p>
+    <p><label><input type="checkbox" name="allow_unverified">
+      允许安装<b>没有官方校验和</b>的 release（默认拒绝；装了会如实标注"未校验"）</label></p>
+    <p><label><input type="checkbox" name="no_wire">
+      只下载，<b>不</b>写回 config/settings.yaml</label></p>
+    <p><button type="submit">开始下载 / 更新</button></p>
+  </form>
+  <p class="muted small">
+    装好后会把 <code>tools.&lt;名&gt;</code> 改成刚装好的<b>相对路径</b>（逐行文本替换，保住文件里的中文注释）——
+    不改的话 <code>which()</code> 找不到，等于白装。改完到
+    <a href="{{ url_for('settings_page') }}">策略配置</a> 页即可看到。
+  </p>
+  <p class="muted small">
+    平台差异（实测，非推测）：<code>puredns</code> 官方<b>只发布 Linux / macOS 产物</b>，
+    Windows 上本页会如实报"未提供当前平台产物"（不猜、不自动编译；可用内置 DNS 爆破兜底）。
+  </p>
+</section>
+
+<section class="panel">
+  <h2>最近一次更新结果</h2>
+  {% if last_at %}
+  <p class="muted small">运行于 {{ last_at }}（平台 {{ last_os }}）</p>
+  {% if last_error %}<p><b>未完成：</b>{{ last_error }}</p>{% endif %}
+  {% if last_results %}
+  <table>
+    <tr><th>工具</th><th>结果</th><th>版本</th><th>校验</th><th>路径 / 原因</th></tr>
+    {% for r in last_results %}
+    <tr>
+      <td><code>{{ r.tool }}</code></td>
+      <td>
+        {% if r.ok %}<span class="sev sev-low">已安装</span>
+        {% else %}<span class="sev sev-high">未安装</span>{% endif %}
+      </td>
+      <td class="muted">{{ r.version or '—' }}</td>
+      <td class="muted">{% if r.get('verified') %}SHA256 已校验
+        {% elif r.ok %}未校验（按你的显式要求）{% else %}—{% endif %}</td>
+      <td class="muted">{{ r.path if r.ok else (r.reason or '') }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% for r in last_results %}
+  {% if r.get('wired') is sameas false and r.reason %}
+  <p class="muted small">⚠️ <code>{{ r.tool }}</code>：{{ r.reason }}</p>
+  {% endif %}
+  {% endfor %}
+  {% else %}
+  <p class="muted">本次没有任何工具进入安装流程。</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">还没跑过更新。结果会保留在进程内，供你回来核对（重启控制台即清空）。</p>
+  {% endif %}
+</section>
+{% endblock %}

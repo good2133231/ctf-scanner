@@ -66,6 +66,12 @@ Flask Web 控制台（仿 ARL）。
   建任务勾「全目录深扫」或结果页「补扫」）会**优先真的调用 dirmap**（第十五轮实测
   15348 条字典跑完约 588 秒、解析正确）；找不到 `tools/dirmap/dirmap.py` 时自动回退内置扫描。
   **默认档 `quick` 不调用任何外部工具**：只吃 `config/dicts/dirs_shallow.txt` 的精选敏感路径。
+  **续54 起有了"装它们"的入口**（此前只能手工放 PATH 或手改 `settings.yaml`）：
+  `scanner/toolmgr.py` + CLI `--update-tools` + GUI 管理员侧栏「外部工具」页 —— 仍是
+  **只在显式触发时才联网**（扫描期任何阶段都不会自动下载），只允许 https + 官方主机，
+  默认必须通过 release 自带的 SHA256 校验和才落盘；装完**逐行文本替换**回写 `tools.<名>`。
+  平台事实（2026-09-26 查 GitHub API 实测）：subfinder、httpx 双平台产物 + checksums 齐；
+  **puredns 官方只发 Linux / macOS 产物且无 checksums**，Windows 上会如实报"未提供当前平台产物"。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`
@@ -80,8 +86,10 @@ ctf-scanner/
 ├── gui/
 │   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
 │   ├── templates/ static/ # 页面与原生 JS（app.js：轮询状态/日志、建任务、POC 管理、页签、表格筛选、任务批量操作）
-│   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（9 栏，以 base.html 的 nav_items 为准：
-│   │                      #     仪表盘/任务管理/子域名资产/站点资产/IP 资产/全端口扫描/漏洞风险/POC 管理/策略配置）
+│   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（12 栏，以 base.html 的 nav_items 为准：
+│   │                      #     仪表盘/任务管理/子域名资产/站点资产/IP 资产/全端口扫描/漏洞风险/POC 管理/外部工具/策略配置/账号管理/访问审计；
+│   │                      #     其中后 5 栏 admin_only＝只对管理员渲染；dev.enabled=true 时再追加第 13 栏「开发模式」）
+│   │                      #   （注：本节曾写「9 栏」且漏列账号管理/访问审计，2026-09-26 续54 按 base.html 实测更正）
 │   │                      #   （原「端口服务/C 段视野/目录发现/拓展域名」四栏已移除，路由 /ports /csegs /dirs /extdomains
 │   │                      #    仍在，只是不进侧栏；前三条是任务维度数据，/extdomains 与 /subdomains 是同一张表的不同视图）
 │   │                      #   任务详情＝横向 10 个页签（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/目标与配置/运行日志）+ 页签内筛选框
@@ -118,6 +126,9 @@ ctf-scanner/
 │   ├── heuristics.py      # 启发式候选发现（P3-3）：对已有数据做差分/异常聚合（**零请求**）→ 线索；阈值与规则表在此
 │   ├── fingerprint.py     # 内置指纹规则表 → identify(resp) -> [tag] + fetch_favicon/favicon_md5/favicon_hash
 │   ├── certs.py           # TLS 证书取证（**纯标准库** DER/ASN.1 解析，不引 cryptography）：parse_der/parse_pem/fetch/tls_ports
+│   ├── toolmgr.py         # 外部工具版本管理（续54）：查 GitHub release → 按平台挑产物 → SHA256 校验 →
+│   │                      #   单文件解包落盘 → 逐行回写 tools.<名>。**只在显式入口调用**（CLI/GUI），
+│   │                      #   扫描期零下载；出口仅 https + 主机白名单；宁可报错也不猜（无校验和默认拒装）
 │   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs/**leads**/**certs** + page_assets/delete_task/task_counts
 │   │                      #   + OWN_SUBDOMAIN_WHERE/EXT_SUBDOMAIN_WHERE/OVERLAP_EXT_WHERE/OVERLAP_SITE_WHERE；DB_PATH 受 CTFSCANNER_DB 覆盖）
 │   │                      #   复核（vulns.review/review_note/reviewed_at + set/bulk_set_vuln_review/review_counts）
@@ -296,7 +307,7 @@ ctf-scanner/
 ```powershell
 py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(13 个)/POC 级别执行门/
                             # 免杀变形/mmh3 公开向量+iprecon/fofa 纯函数/响应体解码/流水线+指纹/三层门控/阶段门控(含 osint)/
-                            # 非标端口候选/报告(含 C 段 IP)/停止/导出/GUI 路由(9 栏侧边栏 + /ports /csegs /dirs)与批量接口/
+                            # 非标端口候选/报告(含 C 段 IP)/停止/导出/GUI 路由(10 栏侧边栏 + /ports /csegs /dirs)与批量接口/
                             # 子域名分流+CDN 标记+站点折叠+POC 相对路径/
                             # 第十四轮新增 `[5d]`：注册域折算(base_domain) + 相对路径(rel_display) + 黑名单
                             # (含临时文件与开关失效) + 证书反查(build_cert_query/is_common_cert/search_cert 空域名) +
@@ -472,6 +483,9 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   ⑨ 布尔子集**零回归**：`_flow_script` 不得出现在布尔 flow 上、`||` 仍短路、
                             #   纯否定仍不报。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
+py -3 cli/client.py --update-tools            # 续54：联网装/更新 subfinder/httpx/puredns 并回写 tools.<名>
+                                              #   可选 --tool <名>（可重复）/ --allow-unverified / --no-wire / --tools-dest
+                                              #   GUI 等价入口＝管理员侧栏「外部工具」页；两条路都**只在这时联网**
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
@@ -660,6 +674,13 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   `dirscan` 默认值于**第十八轮（续9）**由 `false` 反转为 `true`+`mode=quick`）；
   外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
   fofa 的 email/key 要手改 `config/keys.yaml`（控制台只读、不写回凭据）。
+  （**但"装外部工具"不再需要手改**：续54 的 CLI `--update-tools` / GUI「外部工具」页会自己回写。）
+- **`settings.yaml` 有两条写回路径，别混用**（续54 起因）：GUI「策略配置」保存走 `config.save_settings()`
+  —— 它是 `load_settings()` + `yaml.safe_dump` **整份重写**，会抹掉 `settings.yaml` 里的**全部中文注释**
+  （既有行为，本仓已知）；而"装工具只改一个键"这种操作走 `toolmgr.patch_settings_tool()` 的
+  **逐行文本替换**（只动 `tools.<名>` 那一行，保注释、保行尾形态、保尾换行）。
+  以后凡是要"只改一个键"的新功能请沿用后者，**不要图省事调 `save_settings()`** —— 那等于顺手删掉
+  用户文件里的注释。回归钉在 `tests/smoke.py` 的 `[7p]`（`#` 计数与行数不变 + 纯 CRLF + 尾换行保留）。
 - `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。
 - **任务详情为 10 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/目标与配置/运行日志）：参考 ARL 界面的
   IP/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源
