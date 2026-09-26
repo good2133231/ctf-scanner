@@ -7331,6 +7331,58 @@ http:
     assert _b1.get_data(as_text=True) == _b2.get_data(as_text=True), \
         "锁定文案必须与『账号是否存在』无关（否则可拿来枚举用户名）"
 
+    # 5b) 审计行必须带全"谁打谁"（复核返工第二轮）：IP 级锁的审计曾丢 actor/target（都为空）——
+    #     而"这个 IP 在死磕哪个账号"恰恰是审计最该回答的。该信息此前只在 login_fails 的 fail 行里，
+    #     而那张表按 max(window, lockout)（900s）清理、audit_log 却留 30 天 → 事故过去 15 分钟再翻
+    #     审计就**永远查不出"那个 IP 打的是谁"**。修法：只把"真实 ip + 真实 username"传进审计元组，
+    #     **不改** `_insert_lock` 写进 login_fails 的行（否则 IP 级锁会被误升级成账号级锁）。
+    #     （放在 group 5 之后、group 6 之前：让"IP 级锁不误升级"这条回归断言成为文件级变异
+    #       `_insert_lock(ip, "")` → `_insert_lock(ip, username)` 的**首个**捕获点。）
+    _U_WHO = "smoke-who"
+    _PW_WHO = "SmokeWho#2026"
+    assert users_mod.create_user(_U_WHO, _PW_WHO, role="user", must_change=False)[0]
+    _IP_WHO = "203.0.113.61"
+    for _i in range(10):                        # 触发 IP 级锁（用户名非空；真实时间 → 锁真实有效）
+        _lg48.record_fail(_IP_WHO, _U_WHO, settings)
+    _blk = _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_WHO, limit=10)[0]
+    _rip = [r for r in _blk if "IP 失败过多" in (r["detail"] or "")]
+    assert _rip, "IP 级锁必须留审计（含 'IP 失败过多'）"
+    assert _rip[0]["actor"] == _U_WHO and _rip[0]["target"] == _U_WHO, \
+        f"IP 级锁审计必须记下'打的是哪个账号'，实得 actor={_rip[0]['actor']!r} target={_rip[0]['target']!r}"
+    assert _rip[0]["ip"] == _IP_WHO, "IP 级锁审计的 ip 必须是该 IP"
+    # 用户名级锁：审计的 ip 必须非空（= 触发它的那个 IP）
+    _U_WHO2 = "smoke-who-2"
+    _who2_ips = [f"198.51.100.{150 + _i % 4}" for _i in range(20)]
+    for _ip2 in _who2_ips:
+        _lg48.record_fail(_ip2, _U_WHO2, settings, now="2026-06-01 00:00:00")
+    _blk2 = _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, actor=_U_WHO2, limit=10)[0]
+    _ru = [r for r in _blk2 if "该账号失败过多" in (r["detail"] or "")]
+    assert _ru, "用户名级锁必须留审计（含 '该账号失败过多'）"
+    assert _ru[0]["actor"] == _U_WHO2 and _ru[0]["target"] == _U_WHO2
+    assert (_ru[0]["ip"] or "") != "", "用户名级锁审计必须记下'来自哪个 IP'（否则查不出攻击源）"
+    assert _ru[0]["ip"] == _who2_ips[-1], \
+        f"用户名级锁应记触发它的 IP {_who2_ips[-1]!r}，实得 {_ru[0]['ip']!r}"
+    # **回归保护（最重要）**：IP 级锁**不能**被误升级成账号级锁 —— 换一个 IP 用同一账号仍能正常登录。
+    # 含两条 §6.1 证伪：① 同进程"给 IP 级锁行补上用户名"（模拟文件级变异）；② 文件级真改见
+    # logs/_mutate_48c.py。
+    _IP_FREE = "203.0.113.62"
+
+    def _free_login():
+        return app.test_client().post(
+            "/login", data={"username": _U_WHO, "password": _PW_WHO},
+            environ_base={"REMOTE_ADDR": _IP_FREE}).status_code
+
+    assert _free_login() == 302, \
+        "IP 级锁只该锁那个 IP；换一个 IP 用同一账号必须仍能登录（否则 IP 级锁被误升级成账号级锁）"
+    db._exec("UPDATE login_fails SET username=? WHERE kind='lock' AND ip=? AND username=''",
+             (_U_WHO, _IP_WHO))                    # 变异：IP 级锁行被"账号级"污染
+    assert _free_login() != 302, "污染后仍能登录 → 回归断言测的不是'IP 级锁没带用户名'"
+    db._exec("UPDATE login_fails SET username='' WHERE kind='lock' AND ip=? AND username=?",
+             (_IP_WHO, _U_WHO))                    # 还原
+    assert _free_login() == 302, "清掉污染后必须恢复可登录"
+    db._exec("DELETE FROM login_fails WHERE ip=? OR username=? OR ip LIKE ?",
+             (_IP_WHO, _U_WHO2, "198.51.100.15%"))
+
     # 6) 审计：登录成功/失败/退出/账号操作/策略配置/POC/任务 都留下流水
     _ok_rows, _ok_total = _audit48.query(kind=_audit48.KIND_LOGIN_OK, limit=50)
     assert _ok_total >= 1 and any(r["actor"] == "smoke-audit" for r in _ok_rows), _ok_rows
@@ -7562,8 +7614,9 @@ http:
           "900s 后自动解锁）/ 锁定返回 429+Retry-After（非 403）· 正确口令也拒 · 存在性不泄漏"
           "（两页逐字节相同）/ 成功清用户名计数不清 IP / 计数不无界增长（锁定期不累加 + prune 清过期）/ "
           "被拦截审计只在锁创建时写一次（40 次被拦截仍只 1 行、过期再锁再记 1 行）/ "
+          "审计记全『谁打谁』（IP 级锁也记被尝试账号、用户名级锁也记来源 IP）/ IP 级锁不误升级成账号级锁 / "
           "target·detail 均擦洗 / 引导口令同样受 IP 限速 / guard·audit 抛异常不阻断登录 / "
-          "审计只记元数据（明文口令·哈希·引导口令值·提交值均不落表·不上页）/ 5 条变异证伪全部按预期变红")
+          "审计只记元数据（明文口令·哈希·引导口令值·提交值均不落表·不上页）/ 6 条变异证伪全部按预期变红")
 
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），

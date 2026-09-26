@@ -3,6 +3,51 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续48 复核返工（第二轮）：审计行补齐「谁打谁」信息
+> 实施者：**WorkBuddy · Hy4-preview** · 缺陷由**主理人复核发现并派单**
+
+### 0. 是什么（缺陷）
+
+两类锁的审计行**各丢一半信息**：
+```
+IP 级锁    -> ip=<IP>  actor=''      target=''      detail='…（IP 失败过多）…'
+用户名级锁 -> ip=''    actor=<user>  target=<user>  detail='…（该账号失败过多）…'
+```
+IP 级锁那行丢了"**打的是哪个账号**" —— 而这恰是审计最该回答的（"这个 IP 在死磕 `admin`，还是
+无差别扫？"）。该信息此前只存在于 `login_fails` 的 `fail` 行里，而那张表按 `max(window, lockout)`
+（默认 900s）清理、`audit_log` 却留 `retention_days`（默认 30 天）→ **事故过去 15 分钟再翻审计，
+就永远查不出"那个 IP 打的是谁"** —— 一个以"能查清是谁干的"为目的的功能，在这里是缺的。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/login_guard.py` | `_maybe_lock` 返回的**审计元组**改为带**调用方真实的 ip + username**（两个都给，不只给触发的那一维）；`_insert_lock` 写进 `login_fails` 的行**保持不变**；`_audit_lock` docstring 说明"谁打谁" |
+| `tests/smoke.py` | `[7j]` 新增「谁打谁」组（5b）：3 条断言 + 2 条 §6.1 证伪 |
+
+**⚠️ 必须绕开的坑**：`_insert_lock()` 写进 `login_fails` 的行**绝不能**跟着带上另一维 ——
+`_active_locks` 的判据是 `ip=? OR username=?` 再逐字段核对；若 IP 级锁那行也带上 `username`，
+**任何别的 IP** 去试同一账号都会被误判成"已锁"，等于把"IP 级锁"悄悄升级成"账号级锁"（真 bug）。
+**只改传给审计的元组，不改写进 `login_fails` 的行**（代码里已用 ⚠️ 写明）。
+
+### 2. 怎么验证（实测）
+
+- 独立探针 `logs/_probe48_who.py`（隔离 DB）：IP 级锁审计 → `actor='who-user' target='who-user'
+  ip='203.0.113.71'`；用户名级锁审计 → `actor='who-user2' ip='198.51.100.161'`（= 触发 IP）；
+  IP 级锁生效时换 IP（`203.0.113.72`）用同一账号登录 → **302**。
+- 门禁 `py -3 -u tests/smoke.py` → **EXIT=0 / `SMOKE PASS` ×1 / `AssertionError` 0**；
+  `[6u]`/`[7h]`/`[7i]` 未改、仍绿。
+- §6.1 证伪（针对"IP 级锁不误升级成账号级锁"这条回归断言）：
+  - **同进程**：给 IP 级锁行补上用户名（模拟文件级变异）→ `[7j]` 红：
+    `AssertionError: 污染后仍能登录 → 回归断言测的不是'IP 级锁没带用户名'`；
+  - **文件级**（`logs/_mutate_48c.py`：把 `_insert_lock(ip, "")` 改成 `_insert_lock(ip, username)`）
+    → 门禁红：`AssertionError: IP 级锁只该锁那个 IP；换一个 IP 用同一账号必须仍能登录
+    （否则 IP 级锁被误升级成账号级锁）`（`tests/smoke.py:7375`）。
+- 该回归断言刻意放在 **group 5 之后、group 6 之前**：否则文件级变异会被 group 6 的既有断言
+  （`_cau.post("/login", …) == 302`，同样编码了"IP 级锁不带用户名"这一性质）**更早**捕获，
+  拿不到"这条断言本身"的证伪报错。
+- `git diff --numstat == --ignore-cr-at-eol --numstat` 逐文件一致。
+
 ## 2026-09-26 —— 续48 复核返工：被拦截审计只在"锁刚被创建"时写一次（修未认证可无界放大）+ `target` 擦洗
 > 实施者：**WorkBuddy · Hy4-preview** · 缺陷由**主理人复核发现并派单**
 

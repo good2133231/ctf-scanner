@@ -168,25 +168,37 @@ def _insert_lock(ip, username, now_ep):
 def _maybe_lock(cfg, ip, username, now_ep):
     """窗口内失败数达到阈值 → 落锁标记（IP 与用户名各自独立判定）。
 
-    **返回本次真正新建的锁事件** `[(原因, ip, username), ...]`（可能为空、也可能一次两个）。
-    返回值是"被拦截"信号**唯一**的落库触发点 —— 见 `_audit_lock` 与 `record_fail`：
-    审计只在**锁刚被创建**这一刻写一次，而不是每次被拦截请求都写。
+    **返回本次真正新建的锁事件** `[(原因, 审计ip, 审计username), ...]`（可能为空、也可能一次两个）。
+    元组里的 ip / username 是**调用方这次尝试的真实 IP 与用户名**（两个都给，而不是只给触发的那一维）——
+    审计要回答的是"**谁在打谁**"：IP 级锁也得记下"这个 IP 在死磕哪个账号"，用户名级锁也得记下
+    "来自哪个 IP"。返回值是"被拦截"信号**唯一**的落库触发点（见 `_audit_lock`）。
+
+    ⚠️ **`_insert_lock()` 写进 `login_fails` 的那一行必须保持现状**：IP 级锁仍写 `username=''`、
+    用户名级锁仍写 `ip=''`。原因：`_active_locks` 的判据是 `ip=? OR username=?` 再逐字段核对 ——
+    若 IP 级锁那行也带上 `username`，**任何别的 IP** 去试同一账号都会被误判成"已锁"，等于把
+    "IP 级锁"悄悄升级成"账号级锁"（真 bug）。**只改传给审计的元组，不改写进 `login_fails` 的行。**
     """
     events = []
     window_start = _ts(now_ep - cfg["window_seconds"])
     if ip and cfg["max_fails_per_ip"] > 0:
         if _count_fails("ip=?", (ip,), window_start) >= cfg["max_fails_per_ip"]:
-            _insert_lock(ip, "", now_ep)
-            events.append(("IP 失败过多", ip, ""))
+            _insert_lock(ip, "", now_ep)                    # login_fails 保持现状（见上 ⚠️）
+            events.append(("IP 失败过多", ip, username))     # 审计：真实 ip + 真实 username
     if username and cfg["max_fails_per_user"] > 0:
         if _count_fails("username=?", (username,), window_start) >= cfg["max_fails_per_user"]:
-            _insert_lock("", username, now_ep)
-            events.append(("该账号失败过多", "", username))
+            _insert_lock("", username, now_ep)              # login_fails 保持现状（见上 ⚠️）
+            events.append(("该账号失败过多", ip, username))
     return events
 
 
 def _audit_lock(reason, ip, username, settings):
     """锁**刚被创建**时写一条审计（`login_blocked`）—— "被拦截"信号**唯一**的落库点。
+
+    `actor` / `target` = **当时尝试的用户名**，`ip` = **发起尝试的 IP**（两个维度都给）——
+    这样无论是 IP 级锁还是用户名级锁，审计行都能回答"**谁在打谁**"。之所以要显式带上被尝试的
+    用户名：该信息此前只存在于 `login_fails` 的 `fail` 行里，而那张表按 `max(window, lockout)`
+    （默认 900s）清理，`audit_log` 却留 `retention_days`（默认 30 天）—— 事故过去 15 分钟再翻审计，
+    若 IP 级锁行不带用户名，就**永远查不出"那个 IP 打的是谁"**。
 
     为什么**不**在路由的"被拦截"分支写（续48 复核返工）：那条分支每次被拦截请求都会走到，
     未认证者可据此**按请求速率**持续往 `audit_log` 追加 —— 既让磁盘无界增长，又持续抢占全库
