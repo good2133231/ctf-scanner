@@ -7149,11 +7149,69 @@ http:
     assert _env7i_mut["wsgi.url_scheme"] == "http", \
         "摘掉 ProxyFix 后仍信转发头 → 说明那条断言测的不是 ProxyFix"
 
+    # 10) `serve()` **真跑一遍**（三个打桩：load_settings / _port_free / app.run）。
+    #     这一组是**主理人复核探针**抓出来的缺陷所加：`_deploy_hints()` 之外还残留了一句旧文案
+    #     （"确需远程使用时，请走反向代理…"）被留在 `for _line in _deploy_hints(s):` 的**循环体**里 ——
+    #     于是它按 hint 行数重复打印，而且在**回环地址**下也会冒出来（用户明明在本机跑，
+    #     却收到"请走反向代理"的错误建议）。
+    #     **为什么我原来的 [7i] 抓不到**：只测了 `_deploy_hints()` 这个纯函数，
+    #     没有真调 `serve()` —— "纯函数返回正确"与"调用方打印正确"是两件事。
+    #     （教训与 `_deploy_hints` 抽出来的理由相反：抽函数让文案可测，但**调用点**仍需实测。）
+    import contextlib as _ctx7i
+
+    def _serve_out7i(gui_over):
+        """真调 `serve()` 并捕获 stdout，返回 `(输出行列表, 实际用到的 settings)`。"""
+        _base = _copy7i.deepcopy(settings)
+        _base.setdefault("gui", {}).update(gui_over)
+        _buf = _io7i.StringIO()
+        _orig_port_free = gui_app._port_free
+        _orig_run = gui_app.app.run
+        _had_run = "run" in gui_app.app.__dict__      # 恢复时别留下多余的实例属性
+        gui_app.load_settings = lambda: _base
+        gui_app._port_free = lambda h, p: True        # 不真 bind（否则占用端口 / 依赖环境）
+        gui_app.app.run = lambda *a, **k: None        # 不真起服务器（否则测试会挂在这里）
+        try:
+            with _ctx7i.redirect_stdout(_buf):
+                gui_app.serve()
+        finally:
+            gui_app.load_settings, gui_app._port_free = _orig_load7i, _orig_port_free
+            if _had_run:
+                gui_app.app.run = _orig_run
+            else:
+                gui_app.app.__dict__.pop("run", None)
+        return _buf.getvalue().splitlines(), _base
+
+    # 10a) 默认本机配置：`serve()` 不该打印任何部署提示（别给本机单人用户刷噪声）
+    _out7i_def, _ = _serve_out7i({})
+    assert not any(("deploy-https" in l or "Host 白名单放行" in l or "确需远程使用" in l)
+                   for l in _out7i_def), "默认本机配置不该刷部署提示：" + repr(_out7i_def)
+
+    # 10b) 反代部署配置：`_deploy_hints()` 的**每一行**在 serve() 输出里恰好出现 1 次，且整段输出无重复行
+    _cfg7i = {"behind_proxy": True, "secure_cookie": True,
+              "allowed_hosts": ["scanner.example.test"]}
+    _out7i_proxy, _cfg7i_used = _serve_out7i(_cfg7i)
+    _hints7i_used = _deploy_hints(_cfg7i_used["gui"])
+    assert _hints7i_used, "反代部署配置下 `_deploy_hints` 不该为空（否则这条断言没有意义）"
+    for _line in _hints7i_used:
+        assert _out7i_proxy.count(_line) == 1, \
+            f"启动提示必须逐行恰好一次，实际 {_out7i_proxy.count(_line)} 次：{_line!r}"
+    _dup7i = sorted(l for l in set(_out7i_proxy) if l.strip() and _out7i_proxy.count(l) > 1)
+    assert not _dup7i, "serve() 输出里有重复行：" + "; ".join(
+        f"{_out7i_proxy.count(l)}× {l!r}" for l in _dup7i)
+
+    # 10c) **回环地址**下不得出现"请走反向代理"这类建议（用户就在本机，那是错误建议）
+    _out7i_loop, _ = _serve_out7i({"allowed_hosts": ["scanner.example.test"]})
+    assert any("Host 白名单放行" in l for l in _out7i_loop), \
+        "配了白名单就该打印放行清单（排错用）：" + repr(_out7i_loop)
+    assert not any("确需远程使用" in l for l in _out7i_loop), \
+        "回环地址下不得出现「请走反向代理」的建议：" + repr(_out7i_loop)
+
     print("[7i] 续47 HTTPS 部署 ok: Host 白名单可显式枚举扩展（默认仍只回环、`*` 被忽略并告警）/ "
           "X-Forwarded-* 默认不信任（伪造头不改 scheme·Host·IP，也不成为绕过白名单的后门）、"
           "behind_proxy=true 才生效（x_for/x_proto/x_host 各一跳）/ 会话 Cookie 在 HTTPS 下带 "
           "Secure 且 HttpOnly+SameSite=Lax 未被放宽 / 启动部署提示（指向 docs/deploy-https.md）/ "
-          "4 条变异证伪全部按预期变红")
+          "4 条变异证伪全部按预期变红 / `serve()` 真跑：提示逐行恰好一次·无重复行·"
+          "回环下不出现「请走反向代理」的错误建议")
 
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
