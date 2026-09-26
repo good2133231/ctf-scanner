@@ -94,6 +94,19 @@
       `vulns.review/review_note/reviewed_at` + `db.set_vuln_review`/`bulk_set_vuln_review`/`review_counts`
       + `POST /api/vulns/review`（漏洞页三态下拉 + 批量打标）+ 报告「人工复核台账」；
       **判误报的条目不进「潜在漏洞」表、不计入漏洞数**，单列文末附录保留可回溯；
+- [x] **漏洞页分页 + 排序**（**P0 数据正确性**，2026-09-26 续51）：漏洞页原先固定
+      `db.list_vulns(..., limit=500)`，扫出 >500 条**静默丢结果**（界面还不提示）—— 本轮修掉。
+      新增 `db.page_vulns(limit, offset, q, severity, review, task_id, sort, desc)` → `(rows, total)`：
+      过滤（severity / review / task_id / 关键字 `q`）与排序**全走 SQL**，`total` 是**过滤后**总数；
+      `/vulns` 改用 `_page_args()` + `_pager.html`（每页 50/100/200/500），关键字 `q` 从**前端过滤**
+      移到**服务端**（否则在第 2 页搜关键字只会搜当前页，比原来更误导），并移除了漏洞页的前端
+      `initFilters` 关键字框；表头可按 **ID / 任务 / 级别** 点击排序、当前列带方向箭头；翻页保持
+      全部筛选 + 排序（`q` 经 URL 编码）。**排序字段走白名单映射**（`db._VULN_SORT`），
+      **绝不把用户输入拼进 SQL**；级别排序用**有序 CASE**（critical→high→medium→low→info），
+      不是字典序；非法 page/size/sort/desc 一律回落默认且不注入。
+      **仍未做**：排序只支持白名单里的 **3 列**（ID / 任务 / 级别，**无按名称/目标/时间**）；
+      任务详情页的漏洞列表仍固定 `limit=1000`、`/tasks` 仍固定 `limit=200`（见续51「顺带核查」，
+      **未在本轮改**，等主理人决定是否另开一轮）；
 - [x] **POC 置信度分层**（P1-2，2026-09-23 续12）：`pocs.confidence` 由 `db.poc_confidence(path, meta)`
       按来源分（builtin=high / user·nuclei=medium / imported·other=low）× 内容型匹配器降级得出，
       **只降级不升级**；`vulnscan` 在同批候选里按置信度排序（指纹命中仍优先），

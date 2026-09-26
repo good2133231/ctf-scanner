@@ -1,21 +1,41 @@
 {% extends "base.html" %}
 {% block title %}漏洞风险{% endblock %}
 {% block content %}
+{# 分页 + 排序（P0，续51）：过滤（含关键字 q）与排序全在**服务端**做（`db.page_vulns`），
+   原先固定 `limit=500`、>500 条静默丢结果的问题已修。q 已从"前端过滤当前页"改为 SQL 侧，
+   否则在第 2 页搜关键字只能搜到本页匹配 —— 比原来更误导。 #}
+{% set base_args = dict(task_id=(task_id or None), q=(q or None), size=pager.size,
+                        sort=sort, desc=('1' if desc else '0')) %}
+{% set col_args = dict(base_args, severity=(sev or None), review=(review or None)) %}
+<p class="muted small">跨任务漏洞视图：<b>服务端分页 + 排序 + 关键字过滤</b>（共 {{ pager.total }} 条，过滤后）。
+  级别 / 复核 / 任务 / 关键字 / 排序状态在翻页时**全部保持**。</p>
 <p class="muted">级别筛选：
-  <a href="{{ url_for('vulns', task_id=task_id or None, review=review or None) }}">全部</a>
+  <a href="{{ url_for('vulns', **dict(base_args, severity=None, review=(review or None))) }}">全部</a>
   {% for s in ['critical', 'high', 'medium', 'low', 'info'] %}
-  <a href="{{ url_for('vulns', severity=s, task_id=task_id or None, review=review or None) }}">{{ s }}</a>
+  <a href="{{ url_for('vulns', **dict(base_args, severity=s, review=(review or None))) }}"
+     {% if sev == s %}style="font-weight:700"{% endif %}>{{ s }}</a>
   {% endfor %}
   ｜ 复核筛选：
-  <a href="{{ url_for('vulns', severity=sev or None, task_id=task_id or None) }}">全部</a>
-  <a href="{{ url_for('vulns', severity=sev or None, task_id=task_id or None, review='pending') }}">待复核 {{ counts.pending }}</a>
-  <a href="{{ url_for('vulns', severity=sev or None, task_id=task_id or None, review='confirmed') }}">已确认 {{ counts.confirmed }}</a>
-  <a href="{{ url_for('vulns', severity=sev or None, task_id=task_id or None, review='false_positive') }}">已判误报 {{ counts.false_positive }}</a>
+  <a href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review=None)) }}">全部</a>
+  <a href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review='pending')) }}">待复核 {{ counts.pending }}</a>
+  <a href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review='confirmed')) }}">已确认 {{ counts.confirmed }}</a>
+  <a href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review='false_positive')) }}">已判误报 {{ counts.false_positive }}</a>
+</p>
+<p class="muted small">
+  当前生效筛选：
+  级别 <b>{{ sev or '全部' }}</b> ·
+  复核 <b>{% if review == 'confirmed' %}已确认{% elif review == 'false_positive' %}已判误报{% elif review == 'pending' %}待复核{% else %}全部{% endif %}</b> ·
+  任务 <b>{% if task_id %}#{{ task_id }} {{ task_names.get(task_id) or '' }}{% else %}全部{% endif %}</b> ·
+  关键字 <b>{{ q or '（无）' }}</b>
 </p>
 <section class="panel">
   <form class="filters" method="get" action="{{ url_for('vulns') }}">
     {% if sev %}<input type="hidden" name="severity" value="{{ sev }}">{% endif %}
     {% if review %}<input type="hidden" name="review" value="{{ review }}">{% endif %}
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="desc" value="{{ '1' if desc else '0' }}">
+    <label class="muted">关键字
+      <input name="q" value="{{ q }}" placeholder="名称 / 检查项 / 目标 / 详情"></label>
     <label class="muted">按任务筛选
       <select name="task_id">
         <option value="">全部任务</option>
@@ -25,22 +45,37 @@
         {% endfor %}
       </select>
     </label>
+    <label class="muted">每页
+      <select name="size" onchange="this.form.submit()">
+        {% for s in page_sizes %}
+        <option value="{{ s }}" {{ 'selected' if pager.size == s else '' }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
     <button class="ghost" type="submit">查询</button>
-    {% if task_id or sev or review %}<a class="btn-mini ghost" href="{{ url_for('vulns') }}">清空</a>{% endif %}
+    {% if task_id or sev or review or q %}<a class="btn-mini ghost" href="{{ url_for('vulns') }}">清空</a>{% endif %}
   </form>
   <p class="muted small">复核打标（P1-1）：勾选行后批量标记 —「确认存在」= 人工验证过确实存在；
     「误报」= 人工排除。打标只作用于<b>记录本身</b>（不重扫、不改资产）；
-    需要新证据时到任务详情页用「复查」对同一目标重跑一次漏洞初筛。</p>
+    需要新证据时到任务详情页用「复查」对同一目标重跑一次漏洞初筛。
+    批量操作作用于<b>本页已勾选</b>的行。</p>
   <div class="bulkbar">
     <button type="button" class="ghost" data-review-bulk="confirmed">批量确认存在</button>
     <button type="button" class="danger" data-review-bulk="false_positive">批量判误报</button>
     <button type="button" class="ghost" data-review-bulk="">退回待复核</button>
     <span class="muted" data-review-msg></span>
   </div>
-  <label class="muted">筛选 <input data-filter="#tbl-vulns-all" placeholder="名称 / 检查项 / 目标"></label>
   <table id="tbl-vulns-all">
-    <thead><tr><th><input type="checkbox" data-pick-all="#tbl-vulns-all"></th>
-      <th>#</th><th>任务</th><th>级别</th><th>名称</th><th>检查/POC</th>
+    <thead><tr><th><input type="checkbox" data-pick-all="#tbl-vulns-all" title="全选本页"></th>
+      <th><a href="{{ url_for('vulns', **dict(col_args, sort='id', desc=('0' if (sort == 'id' and desc) else '1'))) }}"
+             title="按记录 ID 排序">#{% if sort == 'id' %} {{ '▼' if desc else '▲' }}{% endif %}</a></th>
+      <th><a href="{{ url_for('vulns', **dict(col_args, sort='task', desc=('0' if (sort == 'task' and desc) else '1'))) }}"
+             title="按任务排序">任务
+        {%- if sort == 'task' %} {{ '▼' if desc else '▲' }}{% endif %}</a></th>
+      <th><a href="{{ url_for('vulns', **dict(col_args, sort='severity', desc=('0' if (sort == 'severity' and desc) else '1'))) }}"
+             title="按级别排序（critical → info）">级别
+        {%- if sort == 'severity' %} {{ '▼' if desc else '▲' }}{% endif %}</a></th>
+      <th>名称</th><th>检查/POC</th>
       <th>目标</th><th>复核</th><th>详情</th></tr></thead>
     <tbody>
     {% for v in vulns %}
@@ -68,5 +103,6 @@
     {% endfor %}
     </tbody>
   </table>
+  {% include "_pager.html" %}
 </section>
 {% endblock %}

@@ -1135,6 +1135,71 @@ def list_vulns(task_id=None, severity=None, limit=200, review=None):
     return _query(sql, tuple(params))
 
 
+# ---------- 漏洞页分页 + 排序（P0，续51） ----------
+
+# 排序白名单：键 = 前端 `sort` 参数，值 = 排序表达式。**只允许这里的常量进 SQL** ——
+# 绝不把用户传入的字符串拼进语句（那是 SQL 注入面）。`severity` 用**有序 CASE**：
+# 直接 `ORDER BY severity` 是字典序，会排出 high < info < low < medium < critical 这种垃圾顺序
+# （取值口径以 `SEV_LEVELS` / GUI 徽标为准）。未知键一律回落 `VULN_SORT_DEFAULT`。
+_VULN_SORT = {
+    "id": "id",
+    "task": "task_id",
+    "severity": ("CASE severity WHEN 'critical' THEN 5 WHEN 'high' THEN 4 "
+                 "WHEN 'medium' THEN 3 WHEN 'low' THEN 2 WHEN 'info' THEN 1 ELSE 0 END"),
+}
+VULN_SORT_KEYS = ("id", "task", "severity")   # 供 GUI 校验 / 模板高亮（顺序 = 页面列序）
+VULN_SORT_DEFAULT = "id"
+
+# 关键字 `q` 参与匹配的文本列（按 `vulns` 表实际列名：name=名称/标题、target=目标 URL、
+# poc_id=检查项/POC id）。severity / review / id / task_id 有各自的筛选控件，不进 `q`。
+_VULN_Q_COLS = ("name", "target", "poc_id", "owasp", "detail")
+
+
+def norm_vuln_sort(sort):
+    """把外部传入的 `sort` 归一到白名单键；未知 / 非法一律回落默认（`id`）。"""
+    s = str(sort or "").strip().lower()
+    return s if s in _VULN_SORT else VULN_SORT_DEFAULT
+
+
+def page_vulns(limit=100, offset=0, q=None, severity=None, review=None, task_id=None,
+               sort=None, desc=True):
+    """漏洞分页查询（P0，续51），返回 `(rows, total)`。
+
+    **为什么要它**：漏洞页原先固定 `list_vulns(..., limit=500)`，既无分页也无排序 ——
+    扫出 800 条只能看到 500 条、界面还不提示，属**静默丢结果**（数据正确性问题）。
+    本函数把过滤（severity / review / task_id / 关键字 `q`）与排序**全部下推到 SQL**，
+    并返回**应用了同样过滤条件**后的 `total`（不是全表数），供分页条显示"共 N 条"。
+
+    `sort` 只接受 `_VULN_SORT` 白名单键（未知回落默认 `id`），**绝不拼用户输入**；
+    `severity` 排序走有序 CASE（见 `_VULN_SORT`）。默认 `id DESC`（最新在前），与旧行为一致。
+    次级排序键恒为 `id`，保证同级别 / 同时间的行顺序**稳定**（否则翻页会重复或漏行）。
+    `desc` 兼容布尔与字符串（`"0"/"false"/"no"/"off"` 视为升序，其余视为降序）。
+    """
+    clauses, params = [], []
+    if task_id:
+        clauses.append("task_id = ?")
+        params.append(int(task_id))
+    if severity:
+        clauses.append("severity = ?")
+        params.append(str(severity))
+    if review is not None:
+        clauses.append("review = ?")
+        params.append(norm_review(review))
+    if q:
+        clauses.append("(" + " OR ".join(f"{c} LIKE ?" for c in _VULN_Q_COLS) + ")")
+        params.extend([f"%{q}%"] * len(_VULN_Q_COLS))
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    total_row = _query(f"SELECT COUNT(*) c FROM vulns{where}", tuple(params), one=True)
+    total = total_row["c"] if total_row else 0
+    if isinstance(desc, str):
+        desc = desc.strip().lower() not in ("0", "false", "no", "off")
+    direction = "DESC" if desc else "ASC"
+    order_by = f"{_VULN_SORT[norm_vuln_sort(sort)]} {direction}, id {direction}"
+    rows = _query(f"SELECT * FROM vulns{where} ORDER BY {order_by} LIMIT ? OFFSET ?",
+                  tuple(params) + (int(limit), int(offset)))
+    return rows, total
+
+
 def dashboard_stats():
     def count(sql):
         row = _query(sql, one=True)

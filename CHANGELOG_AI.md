@@ -3,6 +3,84 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续51 漏洞页分页 + 排序（P0 数据正确性）
+
+> 实施者：**WorkBuddy · Hy4-preview** · 需求由**用户**点名（P0）、**主理人**派单
+
+### 0. 是什么（需求）
+
+漏洞页原先固定 `db.list_vulns(..., limit=500)` —— **写死 500 条、无分页、无排序**，扫出 800 条只能
+看到 500 条、**界面还不提示**。这是**数据正确性问题**（静默丢结果），用户点名要修。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/db.py` | 新增 `_VULN_SORT`（排序白名单：`id`/`task`/`severity`）、`VULN_SORT_KEYS`、`VULN_SORT_DEFAULT`、`_VULN_Q_COLS`、`norm_vuln_sort`、`page_vulns(limit, offset, q, severity, review, task_id, sort, desc)` → `(rows, total)`。`list_vulns` **保留不动**（dashboard/详情页仍在用） |
+| `gui/app.py` | `vulns()` 改用 `db.page_vulns` + `_page_args()`，构建 `pager`（复用 `_pager.html`）；新增 `_vuln_sort_args()`（`sort` 白名单校验、`desc` 布尔解析）；`q` 从**前端过滤**移到**服务端**；翻页 qs 带全部筛选 + 排序且 `q`/`severity` 经 `quote()` 编码；页码越界回落最后一页 |
+| `gui/templates/vulns.html` | 接 `_pager.html`；表头 ID/任务/级别 **可点排序**（当前列带 ▲/▼）；顶部显示**当前生效筛选**；每页条数下拉（50/100/200/500）；**移除**前端 `initFilters` 关键字框（改 `q` 输入框提交到服务端）；批量操作仍作用于**本页已勾选**行 |
+| `tests/smoke.py` | 新增 `[7m]` 组（6 组断言 + 5 条 §6.1 变异证伪） |
+| `docs/roadmap.md` | 「漏洞页分页 + 排序」标 `[x]` 并如实写明"仍未做"（排序仅 3 列；详情页/`/tasks` 仍有固定上限，未在本轮改） |
+
+### 2. 关键设计取舍（为什么这么做）
+
+- **关键字 `q` 必须下推到 SQL**：若只加分页、`q` 仍在前端过滤，用户在第 2 页搜关键字只会搜到
+  **当前页**的匹配 —— 比原来更误导。故同步**移除**了 `vulns.html` 的前端 `initFilters` 关键字框，
+  只留一个服务端 `q`（避免"两个搜索框、一个只在当前页生效"的坑）。
+- **排序字段走白名单映射**（`db._VULN_SORT`），**绝不把用户输入拼进 SQL**（注入面）。
+  `page_vulns` 用 `_VULN_SORT[norm_vuln_sort(sort)]` 取值，未知 / 非法一律回落 `id`。
+- **severity 排序用有序 CASE**：`ORDER BY severity` 是**字典序**，会排出
+  `high < info < low < medium < critical` 这种垃圾顺序。故用
+  `CASE severity WHEN 'critical' THEN 5 … WHEN 'info' THEN 1 ELSE 0 END`（取值口径对齐 `SEV_LEVELS`）。
+- **默认排序保持 `id DESC`（最新在前）**：与现状一致，不给用户"排序怎么变了"的意外。
+  **次级排序键恒为 `id`**：同级别 / 同时间的行顺序要**稳定**，否则翻页会重复或漏行。
+- **`total` 是过滤后总数**（不是全表数），供分页条显示"共 N 条"—— 让人一眼知道看到的是**过滤后的子集**。
+
+### 3. 怎么验证（实测）
+
+- 独立探针 `logs/_probe51.py` / `logs/_probe51b.py`（隔离库）：造 600 条 → `total==600`、第 2 页可取、
+  `offset=500` 首行即**第 501 条**；`list_vulns(limit=500)` 只回 500（**截断真实存在**）；`q` 服务端
+  精确命中第 501 条；severity 降序 = critical→info；非法 sort 不注入（表完好）；路由 200 + 翻页链接
+  带编码后的全部条件。**5 条变异全部按预期变红**。
+- 门禁 `py -3 -u tests/smoke.py` → **EXIT=0 / `SMOKE PASS` ×1 / `AssertionError` 0**；`[7m]` 打印
+  （日志 `logs/smoke-51.txt`）。⚠️ 本机跑 smoke 仍必须设 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=100000000`。
+- 全流程自检 `py -3 run_devflow.py` → **EXIT=0**（确认没把续50 自检搞坏）。
+- `git diff --numstat == --ignore-cr-at-eol --numstat` 逐文件一致。
+
+### 4. §6.1 证伪（把新行为退回"旧/天真"实现，确认新断言**真的变红**）
+
+`[7m]` 末尾内置 5 条**运行期变异**（跑完自动还原，变异版本不提交）：
+
+- **M1 severity 排序退回字典序**（`db._VULN_SORT["severity"]="severity"`）→ ④ 的主断言必红：
+  `AssertionError: severity 降序必须是有序 CASE（critical 在前、info 在后），不是字典序：medium…`
+- **M2 服务端忽略 `q`**（`page_vulns` 把 `q` 置 None，模拟"关键字只在前端过滤"）→ ③ 的主断言必红：
+  `AssertionError: 服务端 q 必须精确命中第 501 条：实测 total=600`
+- **M3 `page_vulns` 退回"固定 `limit=500` 截断"**（忽略 offset）→ ① 的主断言必红：
+  `AssertionError: total 必须是过滤后的总数 600：实测 500`（且第 501 条取不到）
+- **M4 `quote` 恒等（不 URL 编码）** → ⑥ 的翻页断言必红：
+  `AssertionError: 翻页必须保持筛选+排序（缺 'q=smoke%20vuln'）：…q=smoke vuln…`
+- **M5 排序字段去掉白名单、直接拼 `sort` 进 SQL** → ⑤ 的"不注入"必红（非法 `sort` 触发
+  `sqlite3.Warning: You can only execute one statement at a time`，而白名单版**回落默认、不抛**）。
+
+五条都**按预期变红**，证明新断言测的是"真有序 CASE / 真服务端过滤 / 真分页 / 真 URL 编码 /
+白名单挡注入"这些**真语义**，而非恒真。
+
+### 5. 顺带核查（**只报告，本轮未改**）：其它固定上限 / 静默截断点
+
+`grep -n "limit=500\|limit=200\|limit=1000" scanner/db.py gui/app.py` 结果逐条判定：
+
+| 位置 | 是否真会丢数据 |
+|---|---|
+| `gui/app.py:1110` 任务详情页 `db.list_vulns(task_id, limit=1000)` | **会**。单个任务 >1000 条漏洞时静默丢，无分页/无提示（与本次修的漏洞页**同一类**问题，只是阈值更高） |
+| `gui/app.py:927` `/tasks` 页 `db.list_tasks(limit=200)` | **会**。任务数 >200 时更早的任务从列表消失，无分页/无提示 |
+| `gui/app.py:1877` `/dirs?agg=1` 聚合 `page_assets("dirs", limit=5000)` | **会**（阈值高）。仅聚合视图；代码注释已写"上限 5000 防极端库"，属**有意的**保护 |
+| `scanner/db.py:995-1008` `list_all_subdomains/sites/dirs/ports(limit=500)` | **不会**（当前）。全仓库**无调用方**（只有定义），是"看似取全部、实则 500"的**潜在陷阱**，建议后续删或改名 |
+| `scanner/db.py:588` `list_tasks(limit=200)` 默认值 / `app.py:1443,1814` `limit=1000`（任务名映射） | **轻微**。>1000 任务时个别任务名回退成 `#id`，非数据丢失 |
+| `scanner/db.py:863` `list_subdomain_net(limit=20000)` | 阈值很高，实际难触发 |
+
+⇒ 建议**另开一轮**处理"任务详情页漏洞列表"与"`/tasks` 列表"两处（与本次同源）；`list_all_*` 建议
+清理。本轮**只做漏洞页**，未顺手全改。
+
 ## 2026-09-26 —— 续50 开发模式 + 全流程自检
 
 > 实施者：**WorkBuddy · Hy4-preview** · 需求由**用户**提出、**主理人**派单（口径已定：**全量压到最小**、

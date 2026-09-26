@@ -1411,13 +1411,42 @@ def create_app():
             tid = int(tid)
         except (TypeError, ValueError):
             tid = None
-        rows = db.list_vulns(task_id=tid, severity=sev, limit=500, review=rev)
+        # 分页 + 排序（P0，续51）：原先固定 `list_vulns(limit=500)`，>500 条静默丢结果。
+        # 现在过滤（含关键字 q）与排序全走 SQL（`db.page_vulns`），q 从**前端过滤**移到服务端。
+        page, size, q = _page_args()
+        sort, desc = _vuln_sort_args()
+        rows, total = db.page_vulns(limit=size, offset=(page - 1) * size, q=q or None,
+                                    severity=sev, review=rev, task_id=tid, sort=sort, desc=desc)
+        pages = max(1, (total + size - 1) // size)
+        if page > pages:  # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
+            page = pages
+            rows, total = db.page_vulns(limit=size, offset=(page - 1) * size, q=q or None,
+                                        severity=sev, review=rev, task_id=tid,
+                                        sort=sort, desc=desc)
+        # 翻页必须带上**全部**筛选 + 排序状态；`q` / `severity` 要 URL 编码 ——
+        # 关键字里带 `&` / `#` / 空格时不编码会让翻页、切筛选**丢掉条件**（见 _asset_page 注释）。
+        parts = []
+        if sev:
+            parts.append(f"severity={quote(sev)}")
+        if rev:
+            parts.append(f"review={quote(rev)}")
+        if tid:
+            parts.append(f"task_id={tid}")
+        if q:
+            parts.append(f"q={quote(q)}")
+        parts.append(f"sort={sort}")
+        parts.append(f"desc={'1' if desc else '0'}")
+        parts.append(f"size={size}")
+        pager = {"page": page, "size": size, "total": total, "pages": pages,
+                 "base": "/vulns", "qs": "&" + "&".join(parts)}
         # 跨任务视图里只有 `任务 #12` 没法辨认，这里带上任务名，并支持按任务筛选。
         tasks = db.list_tasks(limit=1000)
         return render_template("vulns.html", vulns=rows, sev=sev or "",
                                review=rev or "", counts=db.review_counts(tid),
                                task_id=tid or "", tasks=tasks,
-                               task_names={t["id"]: t["name"] for t in tasks})
+                               task_names={t["id"]: t["name"] for t in tasks},
+                               q=q, pager=pager, sort=sort, desc=desc,
+                               page_sizes=PAGE_SIZES)
 
     @app.route("/api/vulns/review", methods=["POST"])
     @login_required
@@ -1454,6 +1483,16 @@ def create_app():
         size = _int("size", 100)
         return max(1, _int("page", 1)), (size if size in PAGE_SIZES else 100), \
             (request.args.get("q") or "").strip()
+
+    def _vuln_sort_args():
+        """漏洞页排序参数（P0，续51）：`sort` 只认 `db.VULN_SORT_KEYS` 白名单，非法回落默认；
+        `desc` 解析布尔（只有明确的"否"才算升序，缺省 / 非法一律回落**降序** = 最新在前）。"""
+        sort = (request.args.get("sort") or "").strip().lower()
+        if sort not in db.VULN_SORT_KEYS:
+            sort = db.VULN_SORT_DEFAULT
+        raw = (request.args.get("desc") or "").strip().lower()
+        desc = raw not in ("0", "false", "no", "off")
+        return sort, desc
 
     def _asset_page(table, base, extra_where=None, extra_params=(), order=None):
         page, size, q = _page_args()

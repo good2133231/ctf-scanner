@@ -8041,6 +8041,177 @@ http:
           "全 13 阶段在夹具上真跑一遍（done·error 空·站外 0）/ GUI 入口随 dev.enabled 出现或消失 / "
           "5 条变异证伪全部按预期变红")
 
+    # [7m] 续51 **漏洞页分页 + 排序**（P0 数据正确性）。背景：漏洞页原先固定
+    #      `db.list_vulns(..., limit=500)` —— 扫出 800 条只能看到 500 条、界面还不提示，
+    #      属**静默丢结果**。本组钉死 6 组语义（末尾 §6.1 变异证伪）：
+    #      ① 分页：造 600 条 → `total==600`、能取到第 2 页、**第 501 条（id DESC 下 offset=500 的首行）可查**；
+    #      ② 截断真实存在：旧写法 `list_vulns(limit=500)` 只回 500 条，第 501 条正好落在外面；
+    #      ③ 关键字 `q` 是**服务端**过滤（不是"只搜当前页"）—— 只有第 501 条命中的关键字能找到它；
+    #      ④ severity 排序是**有序 CASE**（critical 在前、info 在最后），不是字典序；
+    #      ⑤ 非法输入不炸 / 不注入：page=0·page=99999·size=7·sort='; DROP TABLE'·desc=abc；
+    #      ⑥ 筛选 + 排序在翻页后**保持**（pager qs 含 URL 编码后的全部条件）。
+    # 目标行位置说明：造 600 条（i=0..599，id 递增），`id DESC` 下**第 501 条 = i=99**
+    # （position p ↔ id 索引 600-p）。故唯一关键字挂在 i=99 —— 它正是旧写法会丢掉的那条。
+    _tid7m = db.create_task("smoke-vulns-page", "127.0.0.1", ["vulnscan"], {})
+    _sevs7m = ["info", "low", "medium", "high", "critical"]
+    _R7M = {s: i for i, s in enumerate(_sevs7m)}     # info=0 … critical=4
+    _MARKER7M = "UNIQUE-MARKER-501"
+    for _i7m in range(600):
+        db.insert_vuln(_tid7m, {
+            "target": f"http://smoke/{_i7m}", "poc_id": f"poc-{_i7m}",
+            "name": (_MARKER7M if _i7m == 99 else f"smoke vuln {_i7m}"),
+            "severity": _sevs7m[_i7m % 5], "owasp": "A01",
+            "detail": f"detail-{_i7m}", "evidence": f"ev-{_i7m}"})
+
+    # ① 分页（服务端）：total 是**过滤后**总数；第 1 / 2 页各 100；第 501 条（offset=500 首行）可查
+    _p1_7m, _tot7m = db.page_vulns(limit=100, offset=0, task_id=_tid7m, sort="id", desc=True)
+    assert _tot7m == 600, f"total 必须是过滤后的总数 600：实测 {_tot7m}"
+    assert len(_p1_7m) == 100, f"第 1 页应 100 条：实测 {len(_p1_7m)}"
+    _p2_7m, _ = db.page_vulns(limit=100, offset=100, task_id=_tid7m, sort="id", desc=True)
+    assert len(_p2_7m) == 100 and _p2_7m[0]["id"] < _p1_7m[-1]["id"], \
+        "第 2 页应 100 条且 id 继续递减（服务端分页真的换了页）"
+    _first500_7m, _ = db.page_vulns(limit=500, offset=0, task_id=_tid7m, sort="id", desc=True)
+    _rest_7m, _ = db.page_vulns(limit=500, offset=500, task_id=_tid7m, sort="id", desc=True)
+    _s500 = {r["id"] for r in _first500_7m}
+    _srest = {r["id"] for r in _rest_7m}
+    assert len(_first500_7m) == 500 and len(_rest_7m) == 100, \
+        f"分页必须覆盖全部 600 条：前 500={len(_first500_7m)} / 后 {len(_rest_7m)}"
+    assert not (_s500 & _srest) and len(_s500 | _srest) == 600, \
+        "前后两段必须无重叠且并集=600（不重不漏）"
+
+    # ② 截断真实存在：旧写法 `list_vulns(limit=500)` 只回 500，且**丢掉了第 501 条（MARKER）**
+    _old7m = db.list_vulns(task_id=_tid7m, limit=500)
+    _all7m = db.list_vulns(task_id=_tid7m, limit=100000)
+    assert len(_old7m) == 500 and len(_all7m) == 600, \
+        f"旧写法必须只回 500 条（截断）：实测 old={len(_old7m)} all={len(_all7m)}"
+    assert _MARKER7M not in {r["name"] for r in _old7m}, \
+        "旧写法（limit=500）**看不到**第 501 条 → 证明静默丢结果真实存在"
+
+    # ③ 关键字 `q` 是**服务端**过滤：只有第 501 条命中的关键字能找到它（旧前端过滤只能搜当前页）
+    _qrows7m, _qtot7m = db.page_vulns(limit=100, offset=0, task_id=_tid7m, q=_MARKER7M)
+    assert _qtot7m == 1 and _qrows7m[0]["name"] == _MARKER7M, \
+        f"服务端 q 必须精确命中第 501 条：实测 total={_qtot7m}"
+    assert _MARKER7M not in {r["name"] for r in _p1_7m}, \
+        "第 501 条不在第 1 页 → 若 q 仍在前端过滤（只搜当前页）就永远搜不到它"
+
+    # ④ severity 排序是**有序 CASE**（critical→info），不是字典序
+    _srows7m, _ = db.page_vulns(limit=600, offset=0, task_id=_tid7m, sort="severity", desc=True)
+    _ranks7m = [_R7M[r["severity"]] for r in _srows7m]
+    assert _ranks7m == sorted(_ranks7m, reverse=True), \
+        f"severity 降序必须是有序 CASE（critical 在前、info 在后），不是字典序：{_srows7m[0]['severity']}…"
+    assert _srows7m[0]["severity"] == "critical" and _srows7m[-1]["severity"] == "info", \
+        f"首行应 critical、末行应 info：实测 {_srows7m[0]['severity']} / {_srows7m[-1]['severity']}"
+    assert db.norm_vuln_sort("; DROP TABLE vulns") == "id" and db.norm_vuln_sort(None) == "id", \
+        "非法 / 空 sort 必须回落白名单默认（id）"
+
+    # ⑤ 非法输入不炸 / 不注入（db 层）
+    _before5_7m = db._query("SELECT COUNT(*) c FROM vulns", one=True)["c"]
+    for _kw5_7m in ({"sort": "; DROP TABLE vulns"}, {"sort": "bogus"}, {"desc": "abc"},
+                    {"desc": "0"}, {"sort": None}, {"desc": ""}):
+        _r5_7m, _t5_7m = db.page_vulns(limit=10, offset=0, task_id=_tid7m, **_kw5_7m)
+        assert len(_r5_7m) == 10 and _t5_7m == 600, f"非法/边界 {_kw5_7m} 必须回落默认且不炸"
+    assert db._query("SELECT COUNT(*) c FROM vulns", one=True)["c"] == _before5_7m, \
+        "非法 sort 绝不能影响库（白名单挡注入）"
+
+    # ⑥ 路由：分页 + 排序 + 筛选 + 翻页保持（桩 load_settings/sync_pocs，复用 [7h]/[7l] 范式）
+    _orig_load7m, _orig_sync7m = gui_app.load_settings, gui_app.sync_pocs
+    _b7m = copy.deepcopy(settings)
+    _b7m["dev"] = {"enabled": False, "fixture_port": 0}
+    gui_app.load_settings = lambda: _b7m
+    gui_app.sync_pocs = lambda *_a, **_k: None
+    try:
+        _app7m = gui_app.create_app()
+    finally:
+        gui_app.load_settings, gui_app.sync_pocs = _orig_load7m, _orig_sync7m
+    _c7m = _app7m.test_client()
+    assert _c7m.post("/login", data={"token": settings["gui"]["token"]},
+                     environ_base={"REMOTE_ADDR": "203.0.113.220"}).status_code == 302
+    # 合法查询：high 级 + 待复核 + q="smoke vuln"（含空格→测编码）+ 按 severity 降序 + 每页 50
+    _url7m = (f"/vulns?size=50&q=smoke%20vuln&sort=severity&desc=1&severity=high"
+              f"&review=pending&task_id={_tid7m}")
+    _resp7m = _c7m.get(_url7m)
+    assert _resp7m.status_code == 200, _resp7m.status_code
+    _html7m = _resp7m.get_data(as_text=True)
+    assert "共 120 条" in _html7m, "过滤后总数（high 级 120 条）必须显示在分页条上"
+    # 翻页链接必须带**全部**筛选 + 排序，且 q 要 URL 编码（空格→%20）—— 只检查 pager 区块
+    _pg7m = _html7m.split('<div class="pager">', 1)[-1].split("</div>", 1)[0]
+    for _need7m in ("q=smoke%20vuln", "sort=severity", "desc=1", "severity=high",
+                    "review=pending", f"task_id={_tid7m}", "size=50"):
+        assert _need7m in _pg7m, f"翻页必须保持筛选+排序（缺 {_need7m!r}）：{_pg7m}"
+    # 非法输入：不炸、不注入，均回落到合法视图
+    assert _c7m.get("/vulns?page=0&size=7&sort=; DROP TABLE vulns&desc=abc").status_code == 200
+    assert _c7m.get("/vulns?page=99999&size=200").status_code == 200
+    assert db._query("SELECT COUNT(*) c FROM vulns", one=True)["c"] == _before5_7m, \
+        "非法 sort 经路由也不能影响库"
+
+    # ---- §6.1 变异证伪（把新行为退回"旧/天真"实现，确认上面的断言真的变红）----
+    _real_sort7m = dict(db._VULN_SORT)
+    _real_page7m = db.page_vulns
+
+    # (M1) severity 排序退回字典序（`ORDER BY severity`）→ ④ 的有序 CASE 断言必红
+    db._VULN_SORT["severity"] = "severity"
+    try:
+        _ms7m, _ = db.page_vulns(limit=600, offset=0, task_id=_tid7m, sort="severity", desc=True)
+        _mrank7m = [_R7M[r["severity"]] for r in _ms7m]
+        assert _mrank7m != sorted(_mrank7m, reverse=True), \
+            "变异（severity 退回字典序）后顺序不再是有序 CASE → 证明 ④ 测的是**真有序 CASE**"
+    finally:
+        db._VULN_SORT.clear()
+        db._VULN_SORT.update(_real_sort7m)
+
+    # (M2) 服务端忽略 `q`（退回"关键字只在前端过滤"）→ ③ 的服务端过滤断言必红
+    def _noq7m(limit=100, offset=0, q=None, severity=None, review=None, task_id=None,
+               sort=None, desc=True):
+        return _real_page7m(limit=limit, offset=offset, q=None, severity=severity,
+                            review=review, task_id=task_id, sort=sort, desc=desc)
+    db.page_vulns = _noq7m
+    try:
+        _mq7m, _mqt7m = db.page_vulns(task_id=_tid7m, q=_MARKER7M)
+        assert _mqt7m != 1, \
+            "变异（服务端忽略 q）后关键字不再过滤（total 变 600）→ 证明 ③ 测的是**真服务端过滤**"
+    finally:
+        db.page_vulns = _real_page7m
+
+    # (M3) `page_vulns` 退回"固定 limit=500 截断"（旧 list_vulns 语义，且忽略 offset）→ ①② 必红
+    def _trunc7m(limit=100, offset=0, **kw):
+        _rows = db.list_vulns(task_id=kw.get("task_id"), limit=500)
+        return _rows[:limit], len(_rows)
+    db.page_vulns = _trunc7m
+    try:
+        _mt7m, _mtt7m = db.page_vulns(limit=100, offset=500, task_id=_tid7m, sort="id", desc=True)
+        assert _mtt7m == 500 and _MARKER7M not in {r["name"] for r in _mt7m}, \
+            "变异（退回固定 limit=500 截断）后 total=500、第 501 条取不到 → 证明 ①② 测的是**真分页**"
+    finally:
+        db.page_vulns = _real_page7m
+
+    # (M4) `quote` 恒等（不编码）→ ⑥ 的"翻页 q 必须 %20 编码"必红
+    _real_quote7m = gui_app.quote
+    gui_app.quote = lambda s, *a, **k: s
+    try:
+        _pgm7m = _c7m.get(_url7m).get_data(as_text=True)
+        _pgm7m = _pgm7m.split('<div class="pager">', 1)[-1].split("</div>", 1)[0]
+        assert "q=smoke%20vuln" not in _pgm7m, \
+            "变异（quote 恒等）后 pager 里 q 变裸 'smoke vuln' → 证明 ⑥ 测的是**真 URL 编码**"
+    finally:
+        gui_app.quote = _real_quote7m
+
+    # (M5) 排序字段去掉白名单（退回"直接把 sort 拼进 SQL"）→ ⑤ 的"不注入"必红
+    def _naive7m(sort=None, **_k):
+        return db._query(f"SELECT * FROM vulns ORDER BY {str(sort or 'id')} DESC LIMIT 1")
+    _blew7m = False
+    try:
+        _naive7m(sort="id; SELECT 1")     # 非破坏性注入载荷：多语句会被 sqlite 拒绝
+    except Exception:                     # noqa: BLE001
+        _blew7m = True
+    assert _blew7m, \
+        "变异（去掉白名单、直接拼 sort）后非法 sort 真的拼进 SQL → 证明 ⑤ 靠**白名单映射**挡注入"
+
+    db.delete_task(_tid7m, backup=False)
+    print("[7m] 续51 漏洞页分页 + 排序 ok: 造 600 条→total 600·第 2 页可取·**第 501 条可查** / "
+          "旧 limit=500 截断真实存在（第 501 条被丢，已证伪）/ q 是**服务端**过滤（第 501 条唯一命中）/ "
+          "severity 有序 CASE（critical→info，非字典序）/ 非法 page·size·sort·desc 全部回落不炸不注入 / "
+          "翻页保持筛选+排序且 q 经 URL 编码 / 5 条变异证伪全部按预期变红")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。
