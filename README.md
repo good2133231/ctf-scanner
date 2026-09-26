@@ -102,6 +102,16 @@ python3 run_gui.py
 
 > 部署 checklist：① 复制 `config/keys.yaml.example` → `config/keys.yaml` 并填 key（仅当要用 FOFA 等外部情报）；② 按需改 `config/settings.yaml`（或 GUI 策略配置页，**仅管理员可改**）；③ `pip install -r requirements.txt`；④ 跑 `python cli/client.py --check` 自检；⑤ 起控制台后用 `gui.token` 引导登录，**立即到「账号管理」建管理员与子用户账号**（建号后引导口令失效）。
 
+### 部署到服务器（给队友用 → 必须走 HTTPS）
+
+控制台默认只绑 `127.0.0.1:5000`、只认回环 Host —— **本机单人使用**的开箱形态。
+要放到服务器上用域名访问，请**由反向代理终止 TLS**（应用侧不碰证书），并按需打开三项配置：
+`gui.allowed_hosts`（放行部署域名，**不填会整站 403**）、`gui.behind_proxy`（信任
+`X-Forwarded-*`，默认关）、`gui.secure_cookie`（会话 Cookie 加 `Secure`，TLS 就绪后再开）。
+Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错对照表见
+**[docs/deploy-https.md](docs/deploy-https.md)**。
+> 多用户上线后口令是**账号密码**，明文 HTTP 下会明文过线 —— 这一项不是"可选优化"。
+
 ## 目录结构
 
 ```
@@ -164,6 +174,7 @@ ctf-scanner/
 | [docs/poc-guide.md](docs/poc-guide.md) | POC YAML 格式、匹配器语义、编写规范、如何上传与启停 |
 | [docs/owasp-mapping.md](docs/owasp-mapping.md) | OWASP Top 10 逐项映射：已实现检查、实现方式、局限 |
 | [docs/usage.md](docs/usage.md) | CLI 全参数、GUI 操作流程、常见问题 |
+| [docs/deploy-https.md](docs/deploy-https.md) | **部署到服务器**：反向代理终止 TLS（Caddy / Nginx 样例）、自签证书、三项 `gui` 配置对照、验证清单与排错 |
 | [docs/roadmap.md](docs/roadmap.md) | 实际完成度对照与后续计划（含刻意不做的项及理由） |
 | [docs/security-notice.md](docs/security-notice.md) | 授权与法律边界 |
 

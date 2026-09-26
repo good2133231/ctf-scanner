@@ -3,6 +3,90 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续47：HTTPS 部署（反向代理终止 TLS + ProxyFix/Host 白名单可配 + Secure Cookie）
+> 实施者：**WorkBuddy · Hy4-preview**
+
+### 0. 需求与验收口径
+
+续46 之后控制台是**账号密码登录**，而用户说过"大规模回头在服务器上测" —— 两件事叠加意味着
+**口令可能在明文 HTTP 上过线**。本机单人用时风险低（有 Host 白名单 + Origin 校验），
+但放到服务器给队友用就是真实缺口。本次把"控制台能安全地放到服务器上"这条路打通：
+**由反向代理终止 TLS**（不选 Flask 内建 `ssl_context`：开发服务器不适合生产，
+且证书/续期/跳转塞进业务代码是错的），应用侧只做三件事 —— **信转发头、放行部署域名、给 Cookie 加 Secure**。
+
+验收口径（三条硬要求）：① 反代部署后控制台**能用**（域名访问不再被 Host 白名单整站 403）；
+② 续32 的 DNS rebinding 防护与续46 的 Cookie 收紧**一条都不许削弱**；
+③ 三项新配置默认值必须是**最保守**的（空 / 关 / 关）。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `docs/deploy-https.md`（**新增**） | 部署主体文档：为什么走反代、Caddy 样例、Nginx 样例（含四个 `proxy_set_header`）、自签证书路径（openssl + 信任导入）、三项配置对照表、`curl` 验证清单、排错对照表、以及"仍然没做"清单 |
+| `scanner/config.py` | `DEFAULTS["gui"]` 新增 `allowed_hosts: []` / `behind_proxy: false` / `secure_cookie: false`（默认最保守），每项带中文注释说明"什么时候改" |
+| `config/settings.yaml` | `gui` 段把三项显式写出并加注释（该文件是 **LF**，未整份改写） |
+| `gui/app.py` | ① 新增纯函数 `_allowed_hosts()`（放行集合 = 回环名 ∪ 显式枚举，`*`/`?` 忽略并告警）；② `create_app` 按 `behind_proxy` 挂 `ProxyFix(x_for=1, x_proto=1, x_host=1)`、按 `secure_cookie` 设 `SESSION_COOKIE_SECURE`、把放行集合与"是否校验"挂到 `app.config`（`CS_ALLOWED_HOSTS` / `CS_GUARD_HOST` / `CS_BAD_ALLOWED_HOSTS`）；③ `_local_guard` 改为读这两个配置；④ 新增纯函数 `_deploy_hints()`（启动提示）并由 `serve()` 打印 |
+| `tests/smoke.py` | 新增 `[7i]`（见 §2） |
+| `docs/roadmap.md` | 「鉴权加固」条目：HTTPS 从"未做"改为**已落地（反向代理终止 TLS）**，并如实列出仍未做的项 |
+| `README.md` | 新增「部署到服务器（给队友用 → 必须走 HTTPS）」小节 + 文档索引加 `docs/deploy-https.md` |
+
+**为什么 `ProxyFix` 必须显式开关**：`X-Forwarded-*` 是**请求头**，任何客户端都能自己塞一个
+`X-Forwarded-Host: evil.com` —— 无条件信任等于把"我以为你是谁"交给攻击者决定，
+Host 白名单与 Origin 校验会一起失效。所以默认关，只在"应用只被自己的反代访问"时打开，且只信一跳。
+
+**为什么 Host 白名单必须可配（本次最大的坑）**：反代部署时应用仍绑 `127.0.0.1`，
+`_guard_local` 为真，而浏览器发来的 `Host` 是部署域名 → **每个请求都 403，整站打不开**
+（现象很像"服务没起来"）。放行集合因此可显式枚举，但**只接受枚举**：
+写 `*` / `?` 一律**忽略**并在启动时点名告警 —— 刻意不提供"放行一切"的口子（那种口子一定会被图省事地打开）。
+
+### 2. 怎么验证
+
+**`py -3 -u tests/smoke.py` → 退出码 0，`SMOKE PASS` 恰好 1 次。** 新增 `[7i]` 钉死六组：
+
+1. `_allowed_hosts()` 纯函数：默认只回环 / 显式枚举可扩（含整条 URL 与 `"a,b"` 手写串）/ 通配被忽略但**只忽略该值**（不是整段作废）；
+2. 默认严格：`Host: evil.example.com` → **403**，回环 → 200，`CS_GUARD_HOST is True`；
+3. 显式放行：`allowed_hosts=["scanner.example.test"]` 时该域名 200（带 `:443` 也 200，端口不参与），别的域名 403，回环不受影响；
+4. `"*"` **不放行一切**：`CS_BAD_ALLOWED_HOSTS == ("*",)` 且 `Host: evil.example.com` 仍 403；
+5. 转发头默认不信 / 开了才信：直接看 `app.wsgi_app` 改写后的 **WSGI environ**（`request.scheme`/`host` 没有页面读得出来，environ 才是 `ProxyFix` 的唯一输出面）—— 默认下 `X-Forwarded-Proto/Host/For` 均**不生效**；`behind_proxy=true` 后 scheme 变 `https`、Host 变转发域名、`REMOTE_ADDR` 变转发 IP；另外证明 `X-Forwarded-Host` **不能**成为绕过 Host 白名单的后门；
+6. 会话 Cookie：`secure_cookie=true` 时登录响应带 `Secure`（且 `HttpOnly`/`SameSite=Lax` **未被放宽**）；默认配置**不带** `Secure`；
+7. 启动提示：`_deploy_hints()` 在默认配置下**返回空**（本机单人使用不刷噪声），在"绑非回环 + behind_proxy + 未开 secure_cookie + 含通配值"时同时给出 `deploy-https` 指引、`secure_cookie` 告警、通配点名、放行清单。
+
+**§6.1 变异证伪（真跑，不是嘴上说）**：见 §3 表格 —— 三处改动各自退回旧写法跑一次 smoke，
+确认对应断言**真的变红**（`logs/_mut47_*.txt` 是三次运行的完整输出）。
+
+### 3. 实测 / 静态审查的边界
+
+**实测（本机真跑）**：
+- `py -3 tests/smoke.py` 退出码 **0**、`SMOKE PASS` **1 次**（含 `[6t]` 续32 守卫与 `[7h]` 续46 多用户**全绿**，未为新功能放宽任何旧断言）；
+- 变异证伪三连（`logs/_mutate_47.py` 真跑）：
+
+| 变异（退回旧写法） | 期望变红的断言 | 实跑结果（`logs/_mut47_*.txt`） |
+|---|---|---|
+| A：`app.config.update(...)` 退回续46 写法（不设 `SESSION_COOKIE_SECURE`） | `secure_cookie=true 时登录 Cookie 必须带 Secure` | **RED**（`rc=1`）：`AssertionError: secure_cookie=true 时登录 Cookie 必须带 Secure：session=…; HttpOnly; Path=/; SameSite=Lax` —— 报错里把**实际 Cookie**打了出来，确实**没有** `Secure` |
+| B：`_local_guard` 退回续32 写法（只比回环集合，`allowed_hosts` 不参与） | 部署域名 `Host` 应 200 | **RED**（`rc=1`）：`tests/smoke.py:7038 assert … Host: scanner.example.test … == 200` → `AssertionError`（这正是"不扩白名单就整站 403"那个坑） |
+| C：不挂 `ProxyFix`（`behind_proxy` 开着也不信转发头） | `开了 behind_proxy 必须挂 ProxyFix` | **RED**（`rc=1`）：`AssertionError: 开了 behind_proxy 必须挂 ProxyFix` |
+
+变异脚本 `logs/_mutate_47.py`（在 `logs/` 下，不入仓库）跑完会把 `gui/app.py` 还原；
+**注意第一次跑 B 时我写的"旧写法"少了 `abort(...)` 那两行 → 结果是 `IndentationError`（`rc=1` 但报的不是断言）**，
+这种"因为语法错而变红"证明不了断言有牙，所以我补齐片段**重跑**，第二次才是上表里的真 `AssertionError`
+—— 这条也写在这里，免得后来者以为"变红就算数"。
+
+**静态审查（推理，未执行）**：
+- **真实 Caddy / Nginx 的端到端握手没有实测** —— 本机没有反代、也不做真实网络请求（用户要求离线）。
+  文档里的配置样例是按两者的官方语义写的，但**"照抄就能跑通"未经实机验证**；
+- `curl` 验证清单里的三条命令**没有在本机对真实域名执行过**（无域名、无证书），
+  它们是"给部署者的操作步骤"，不是本次的验证证据；
+- 自签证书流程（`openssl` + 信任导入）未实测；
+- `ProxyFix` 的 `x_for/x_proto/x_host` 一跳语义按 werkzeug 文档实现，本机用**构造的 WSGI environ**
+  验证了改写结果（这是实测），但**多级代理（CDN + 反代两层）的取值未验证**。
+
+### 4. 明确没做（别把本次当安全承诺）
+
+无访问审计流水、无登录失败锁定/验证码/限速、**无逐表单 CSRF token**（仍依赖续32 的
+Origin/Referer 中间件，是**刻意**取舍）、无 SSO/找回口令、无多租户隔离（所有账号看到同一批
+任务与资产，隔离的只是配置页）、无 HSTS/TLS 套件策略（交给反代）。
+`gui.token` 仍是"无账号时的引导口令"，建号即失效（续46）。
+
 ## 2026-09-26 —— 续46：多用户（账号密码登录 + 管理员/子用户两级角色，子用户看不到配置）
 > 实施者：**WorkBuddy · Hy4-preview**
 

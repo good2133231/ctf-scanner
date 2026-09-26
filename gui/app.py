@@ -10,8 +10,11 @@
   登录（管理员身份），一旦建了第一个账号就立即失效（防"旧口令长期是后门"）；
 - 续32 起有两道**本机守卫**（Host 白名单防 DNS rebinding + 写操作的 Origin/Referer 校验，
   见 `create_app` 的 `_local_guard`），它们是**网络侧**兜底，与"你是谁、能看什么"是两件事；
-  本控制台仍然没有 HTTPS、没有访问审计与限流。
-  **故意暴露到局域网/公网前**，请先自己做反向代理 + 传输加密，并读 docs/security-notice.md。
+- 续47 起**有 HTTPS 落地路径**：由反向代理终止 TLS（Caddy/Nginx 样例 + 自签路径见
+  docs/deploy-https.md），应用侧只需 `gui.behind_proxy`（信任 X-Forwarded-*）、
+  `gui.allowed_hosts`（放行部署域名）、`gui.secure_cookie`（会话 Cookie 加 Secure）三项配置，
+  默认值都是**最保守**的关/空。**访问审计与限流仍然没有**。
+  **故意暴露到局域网/公网前**，请读 docs/deploy-https.md 与 docs/security-notice.md。
 """
 import functools
 import html
@@ -26,6 +29,9 @@ from urllib.parse import quote, urlparse
 
 from flask import (Flask, Response, abort, jsonify, redirect, send_file,
                    render_template, request, session, url_for)
+# 反向代理支持（续47）：`ProxyFix` 随 werkzeug 一起装（Flask 的依赖），**不新增第三方依赖**。
+# 只在 `gui.behind_proxy` 显式打开时才挂上 —— 见 `create_app` 里的说明。
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -211,6 +217,40 @@ def _host_of(netloc):
     return text.rsplit(":", 1)[0] if ":" in text else text
 
 
+def _allowed_hosts(gui):
+    """Host 白名单的放行集合 = 回环名 ∪ `gui.allowed_hosts` 里归一化后的主机名。
+
+    为什么必须可配置（续47）：控制台放到服务器给队友用时，由**反向代理终止 TLS** 并转发，
+    浏览器发来的 `Host` 是**部署域名**（如 `scanner.example.com`）—— 续32 那道"只认回环名"
+    的白名单会把**每一个请求都 403**（控制台整站打不开，且现象很像"服务没起来"）。
+    所以放行集合要能显式扩；但**只允许显式枚举**：含 `*` / `?` 的值一律忽略并在启动时告警
+    —— 宁可让用户 403 之后去看 `docs/deploy-https.md`，也不提供"一键关掉 DNS rebinding 防护"
+    的口子（那种口子一旦存在，就一定会被图省事地打开）。
+
+    返回 `(allowed, bad)`：`allowed` 是放行集合（`frozenset` 语义），`bad` 是被忽略的非法值
+    （给 `serve()` 打告警用）。
+    """
+    allowed = set(_LOOPBACK_HOSTS)
+    bad = []
+    raw = (gui or {}).get("allowed_hosts") if isinstance(gui, dict) else None
+    if isinstance(raw, str):                       # 也接受 "a.com,b.com" / "a.com b.com" 这种手写
+        raw = raw.replace(",", " ").split()
+    for item in (raw or []):
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if "://" in text:                          # 顺手接受整条 URL：只取主机名部分
+            text = urlparse(text).netloc or text
+        if "*" in text or "?" in text:             # 通配一律不认（见 docstring）
+            bad.append(text)
+            continue
+        name = _host_of(text)
+        if not name or name in _LOOPBACK_HOSTS:
+            continue                               # 空值 / 回环名：集合里本来就有
+        allowed.add(name)
+    return allowed, bad
+
+
 # 默认端口：浏览器在默认端口下**不写端口**（Host 与 Origin 都省略），所以要按 scheme 归一，
 # 否则 `http://127.0.0.1` 与 Host `127.0.0.1` 会被误判成不同源，正常请求被自己挡掉。
 _DEFAULT_PORTS = {"http": "80", "https": "443"}
@@ -264,11 +304,33 @@ def create_app():
     # 这个 Cookie（现代浏览器默认就是 Lax，但"依赖默认值"在旧浏览器上等于没有），
     # `HttpOnly` 让页面脚本读不到它。注意 Cookie **不按端口隔离**，所以同机的另一个 Web 服务
     # 访问 `127.0.0.1:5000` 时仍算同站、Cookie 照样会带上 —— 这就是下面还必须校验 Origin 的原因。
-    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
-    # 只在**绑定回环地址**时才强制 Host 白名单：用户显式绑到局域网/公网时，我们无法预知他用哪个
-    # 地址或域名访问，强制白名单会把人直接挡在门外（那种用法本就该先做反向代理与鉴权，
-    # `serve()` 会打警告）。`gui.host` 改了要重启才生效，与 `app.run` 的取值时点一致。
-    _guard_local = _host_of(settings.get("gui", {}).get("host", "127.0.0.1")) in _LOOPBACK_HOSTS
+    # `Secure`（续47）默认**关**：走 HTTP 时带 `Secure` 的 Cookie 浏览器**根本不回传**，
+    # 等于登录不上 —— 所以它是"上 HTTPS（反向代理终止 TLS）之后才开"的开关，
+    # 由 `gui.secure_cookie` 控制，见 docs/deploy-https.md。
+    _gui_cfg = settings.get("gui") or {}
+    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                      SESSION_COOKIE_SECURE=bool(_gui_cfg.get("secure_cookie")))
+    # 信任反向代理转发的 `X-Forwarded-*`（续47）：**必须显式打开，默认关**。
+    # 为什么默认关：`X-Forwarded-*` 是**请求头**，任何客户端都能自己塞一个
+    # `X-Forwarded-Host: evil.com` —— 无条件信任等于把"我以为你是谁"交给攻击者决定
+    # （Host 白名单与 Origin 校验会一起失效）。只有"应用只被自己的反代访问"时才该开，
+    # 且只信一跳（`x_for=1, x_proto=1, x_host=1`：只取最后一个代理追加的那段）。
+    # 为什么需要它：反代常用 `Host: 127.0.0.1:5000` 回源、把真实域名放 `X-Forwarded-Host`，
+    # 此时 `request.host` 是 `127.0.0.1:5000` 而浏览器 `Origin` 是 `https://<域名>` ——
+    # 下面 `_local_guard` 的 Origin/Host 比对会**每个写请求都 403**。
+    if _gui_cfg.get("behind_proxy"):
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    # Host 白名单（续32 立、续47 可配）：只在**绑定回环地址**或**显式配了 allowed_hosts**
+    # 时强制校验；用户显式绑到局域网/公网又没配白名单时无法预知他用哪个地址访问，
+    # 强制会把人直接挡在门外（那种用法本就该先做反向代理 + 白名单，`serve()` 会打警告）。
+    # `gui.host` / `allowed_hosts` 改了要重启才生效，与 `app.run` 的取值时点一致。
+    _bound_loopback = _host_of(_gui_cfg.get("host", "127.0.0.1")) in _LOOPBACK_HOSTS
+    _allowed, _bad_allowed = _allowed_hosts(_gui_cfg)
+    # 挂在 `app.config` 上（而不是闭包变量）有两个理由：① `serve()` 要打印放行清单；
+    # ② 测试可以对它做**变异证伪**（把集合改坏，看断言是否真的变红，见 tests/smoke.py [7i]）。
+    app.config["CS_ALLOWED_HOSTS"] = frozenset(_allowed)
+    app.config["CS_GUARD_HOST"] = bool(_allowed - _LOOPBACK_HOSTS) or _bound_loopback
+    app.config["CS_BAD_ALLOWED_HOSTS"] = tuple(_bad_allowed)
 
     @app.before_request
     def _local_guard():
@@ -278,7 +340,9 @@ def create_app():
            浏览器就认为它与本机控制台"同源"，于是能带着 Cookie 打进来；默认口令 `ctfscanner`
            又是公开写在代码里的 —— 两件事一叠加，用户只要在开着控制台时访问了恶意页面，
            扫描器就被整个接管（能拿它去打任意目标、并用上已配置的登录态）。校验 `Host`
-           必须是回环名即可挡住整类攻击。
+           必须是回环名即可挡住整类攻击。续47 起放行集合可用 `gui.allowed_hosts`
+           **显式枚举**扩展（部署到服务器时浏览器发来的 Host 是域名，不扩就整站 403），
+           但**不含通配**：`*` 这类值被忽略（见 `_allowed_hosts`）。
         ② **跨站状态变更拦截**：只对写方法（POST/PUT/PATCH/DELETE）校验 `Origin`（无 `Origin`
            时退回 `Referer`），要求其**权威段**与本请求的 `Host` 一致 —— 比的是 `_authority()`
            归一后的 `主机[:端口]`，**端口参与比对**（Cookie 不按端口隔离，同机另一个服务
@@ -290,9 +354,14 @@ def create_app():
         与 ② 的防护面重叠，而漏掉任何一处就是"看起来有防护、实际有缺口"；`Origin` 校验在
         中间件层**一次性覆盖所有写操作**，不存在漏一个表单的可能。
         """
-        host = _host_of(request.host)
-        if _guard_local and host not in _LOOPBACK_HOSTS:
-            abort(403, description="仅允许从本机访问：Host 不是回环地址")
+        # 放行集合**每次请求现读** `app.config`：测试里的"变异证伪"（把它改坏，看断言是否变红）
+        # 才能落在同一条代码路径上；顺带避免把配置烤进闭包（`serve()` 之外没人会改它，代价是一次字典取值）。
+        if app.config.get("CS_GUARD_HOST"):
+            host = _host_of(request.host)
+            if host not in app.config["CS_ALLOWED_HOSTS"]:
+                abort(403, description="Host 不在允许列表内"
+                                       "（未配置 gui.allowed_hosts 时仅允许回环地址；"
+                                       "部署到服务器请见 docs/deploy-https.md）")
         if request.method in ("GET", "HEAD", "OPTIONS"):
             return None
         origin = (request.headers.get("Origin") or "").strip()
@@ -2014,6 +2083,46 @@ def _port_free(host, port):
     return True
 
 
+def _deploy_hints(gui_cfg):
+    """启动时要说明白的**部署现状**（续47），返回待打印的行；`serve()` 只负责打印。
+
+    为什么抽成纯函数：这些告警是"部署踩坑时的第一手线索"（整站 403、Cookie 不回传、
+    伪造头被信任），必须有回归断言钉住；而 `serve()` 会起真实服务器、测试调不动它，
+    "grep 源码里有这句话"又证明不了运行期真的会打印 —— 所以让文案可被直接调用。
+    """
+    lines = []
+    cfg = gui_cfg or {}
+    if cfg.get("behind_proxy"):
+        lines.append("[*] 已启用 X-Forwarded-* 信任（gui.behind_proxy=true）："
+                     "request.host / scheme 以反代转发的头为准。")
+        lines.append("[!] 请确保本控制台**只被你的反向代理访问**（端口别对局域网/公网暴露）——"
+                     "否则任何人都能自己塞 X-Forwarded-Host 来伪造 Host 与 scheme。")
+        if not cfg.get("secure_cookie"):
+            lines.append("[!] 警告：已确认在 TLS 反代后（behind_proxy=true）却没开 "
+                         "gui.secure_cookie，会话 Cookie 不会带 Secure —— 等于白做一半，"
+                         "建议打开（见 docs/deploy-https.md）。")
+    allowed, bad = _allowed_hosts(cfg)
+    if bad:
+        lines.append("[!] 警告：gui.allowed_hosts 里这些值含通配符，已被**忽略**"
+                     "（不允许放行一切）：" + ", ".join(bad))
+    if allowed - _LOOPBACK_HOSTS:
+        lines.append("[*] Host 白名单放行：" + ", ".join(sorted(allowed))
+                     + "（可用 gui.allowed_hosts 扩展）")
+    # 续32：绑到非回环地址 = **主动放弃了上面那道 Host 白名单**（我们无法预知你用哪个地址访问），
+    # 这里必须**显式告警**，不能让"暴露"悄无声息地发生。续47 起 HTTPS 有了落地路径（反代终止 TLS），
+    # 所以文案不再说"没有 HTTPS"，但**访问审计确实仍然没有**，这句要留着。
+    if _host_of(cfg.get("host", "127.0.0.1")) not in _LOOPBACK_HOSTS:
+        lines.append(f"[!] 警告：正在监听 {cfg.get('host')}（非回环地址），"
+                     "局域网/公网上的任何人都能访问本控制台。")
+        if cfg.get("allowed_hosts"):
+            lines.append("    已配置 gui.allowed_hosts → Host 白名单仍然生效（只放行清单里的域名）。")
+        else:
+            lines.append("    未配置 gui.allowed_hosts → Host 白名单在本模式下已自动放宽。")
+        lines.append("    HTTPS 需由反向代理终止（见 docs/deploy-https.md）；"
+                     "**访问审计仍然没有**，请自行限制在可信网段。")
+    return lines
+
+
 def serve():
     """控制台统一启动入口（run_gui.py 与 `python gui/app.py` 共用）。"""
     s = load_settings().get("gui", {})
@@ -2032,11 +2141,11 @@ def serve():
               f"随后到「账号」页创建账号 —— 建号后该口令立即失效。")
     else:
         print("[*] 多用户已启用：请用已创建的账号登录（管理员可在「账号」页建/停用子用户）。")
-    # 续32：绑到非回环地址 = **主动放弃了上面那道 Host 白名单**（我们无法预知你用哪个地址访问），
-    # 而控制台没有多用户/HTTPS/审计 —— 这里必须**显式告警**，不能让"暴露"悄无声息地发生。
-    if _host_of(host) not in _LOOPBACK_HOSTS:
-        print(f"[!] 警告：正在监听 {host}（非回环地址），局域网/公网上的任何人都能访问本控制台。")
-        print("    本控制台没有 HTTPS 与访问审计；Host 白名单在本模式下已自动放宽。")
+    # 续47：HTTPS 与 Host 白名单的现状**在启动时就说明白**（部署排错时最先看的就是这几行）。
+    # 文案由 `_deploy_hints()` 生成 —— 抽成纯函数是为了让回归门禁能**真跑**这些告警
+    # （`serve()` 会起真实服务器，测试不能调它；而"只 grep 源码里有这个字符串"证明不了运行期行为）。
+    for _line in _deploy_hints(s):
+        print(_line)
         print("    确需远程使用时，请走反向代理（带强口令与 TLS），并把它限制在可信网段。")
     app.run(host=host, port=port, debug=False)
 

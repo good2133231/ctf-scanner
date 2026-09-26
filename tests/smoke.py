@@ -6984,6 +6984,177 @@ http:
           "侧边栏对子用户隐藏管理入口 / 停用即时踢下线 / 防锁死（不动自己·至少一管理员）/ "
           "gui.token 仅作无账号时的引导口令（建号即失效）")
 
+    # [7i] 续47 HTTPS 部署（反向代理终止 TLS）：控制台要能在服务器上用域名 + HTTPS 访问，
+    #      且**不许削弱**续32 的 Host 白名单与续46 的 Cookie 收紧。四件事各钉一组断言：
+    #      ① Host 白名单可**显式枚举**扩展（不扩的话部署域名会被整站 403 —— 这是最大的坑）；
+    #      ② 扩展**不能**变成"放行一切"（`*` 必须被忽略）；③ `X-Forwarded-*` 只在显式打开
+    #      `behind_proxy` 时才信（默认信 = 任何人伪造 Host/scheme，白名单与 Origin 校验一起失效）；
+    #      ④ 会话 Cookie 的 `Secure` 由 `secure_cookie` 控制（默认关：HTTP 下开了会登录不上）。
+    #      每条关键断言都在末尾 §9 做了**变异证伪**（把开关改坏，断言必须真变红）。
+    import copy as _copy7i
+    import io as _io7i
+    import gui.app as gui_app
+    from gui.app import _allowed_hosts, _deploy_hints, _LOOPBACK_HOSTS as _LOOPBACK7i
+
+    # 1) `_allowed_hosts` 纯函数：默认只回环 / 显式枚举可扩 / 通配被忽略（只忽略该值，不整段作废）
+    assert _allowed_hosts({})[0] == {"127.0.0.1", "localhost", "::1"}, _allowed_hosts({})
+    assert _allowed_hosts({})[1] == []
+    _a7i, _b7i = _allowed_hosts({"allowed_hosts": ["scanner.example.test",
+                                                   "https://b.example.test:8443"]})
+    assert _a7i - _LOOPBACK7i == {"scanner.example.test", "b.example.test"}, _a7i
+    assert _b7i == [], "整条 URL 写法要能归一，不该被判非法"
+    _a7i2, _b7i2 = _allowed_hosts({"allowed_hosts": ["*", "*.example.test", "?x", "ok.example"]})
+    assert _b7i2 == ["*", "*.example.test", "?x"], _b7i2
+    assert "ok.example" in _a7i2 and not any(("*" in h or "?" in h) for h in _a7i2), _a7i2
+    _a7i3, _ = _allowed_hosts({"allowed_hosts": "x.test, y.test"})     # 手写字符串写法也要能吃
+    assert {"x.test", "y.test"} <= _a7i3, _a7i3
+
+    _orig_load7i, _orig_sync7i = gui_app.load_settings, gui_app.sync_pocs
+
+    def _app_with7i(**gui_over):
+        """用改过的 gui 配置**新建一个 app**（不动真实 settings.yaml、不动模块级那个 app）。
+
+        `sync_pocs` 在这几个 app 里打桩成 no-op：本用例只验守卫/Cookie/转发头，
+        没必要为每个 app 重扫一遍 300+ 模板（几十秒纯浪费，且与本用例无关）。
+        """
+        _base = _copy7i.deepcopy(settings)
+        _base.setdefault("gui", {}).update(gui_over)
+        gui_app.load_settings = lambda: _base
+        gui_app.sync_pocs = lambda *_a, **_k: None
+        try:
+            return gui_app.create_app()
+        finally:
+            gui_app.load_settings, gui_app.sync_pocs = _orig_load7i, _orig_sync7i
+
+    # 2) 默认严格（DNS rebinding 防护没被削弱）：非回环 Host 一律 403，回环照常
+    assert app.config["CS_GUARD_HOST"] is True, "绑回环地址时必须做 Host 校验"
+    assert app.config["CS_BAD_ALLOWED_HOSTS"] == ()
+    assert app.test_client().get("/login", headers={"Host": "evil.example.com"}).status_code == 403
+    assert app.test_client().get("/login", headers={"Host": "127.0.0.1"}).status_code == 200
+
+    # 3) 显式放行才过：清单里的域名能过，别的仍 403；回环不受影响（端口不参与比对）
+    _app_allow7i = _app_with7i(allowed_hosts=["scanner.example.test"])
+    _c_allow7i = _app_allow7i.test_client()
+    assert _c_allow7i.get("/login", headers={"Host": "scanner.example.test"}).status_code == 200
+    assert _c_allow7i.get("/login",
+                          headers={"Host": "scanner.example.test:443"}).status_code == 200, \
+        "端口不参与白名单比对（_host_of 剥端口）"
+    assert _c_allow7i.get("/login", headers={"Host": "other.example.test"}).status_code == 403
+    assert _c_allow7i.get("/login", headers={"Host": "127.0.0.1"}).status_code == 200
+
+    # 4) `*` 绝不放行一切：写通配值 = 被忽略 + 启动点名告警（而不是"整站放行"）
+    _app_star7i = _app_with7i(allowed_hosts=["*"])
+    assert _app_star7i.config["CS_BAD_ALLOWED_HOSTS"] == ("*",), _app_star7i.config
+    assert _app_star7i.test_client().get(
+        "/login", headers={"Host": "evil.example.com"}).status_code == 403
+
+    def _env7i(app_obj, extra):
+        """把 WSGI environ 直接喂给 `app.wsgi_app`，返回**被中间件改写后**的 environ。
+
+        为什么不走 test_client：`request.host` / `request.scheme` 没有哪个页面读得出来，
+        而 environ 正是 `ProxyFix` 唯一的输出面 —— 看它最贴近"到底信没信这些转发头"。
+        """
+        env = {"wsgi.url_scheme": "http", "REQUEST_METHOD": "GET", "PATH_INFO": "/login",
+               "QUERY_STRING": "", "SERVER_NAME": "127.0.0.1", "SERVER_PORT": "5000",
+               "SERVER_PROTOCOL": "HTTP/1.1", "HTTP_HOST": "127.0.0.1:5000",
+               "REMOTE_ADDR": "127.0.0.1", "wsgi.input": _io7i.BytesIO(b""),
+               "wsgi.errors": _io7i.StringIO(), "wsgi.version": (1, 0),
+               "wsgi.multithread": False, "wsgi.multiprocess": False, "wsgi.run_once": False}
+        env.update(extra)
+        app_obj.wsgi_app(env, lambda status, headers, exc_info=None: None)
+        return env
+
+    # 5) 默认**不**信 X-Forwarded-*：伪造头不改变 scheme / Host / 客户端 IP
+    _env7i_def = _env7i(app, {"HTTP_X_FORWARDED_PROTO": "https",
+                              "HTTP_X_FORWARDED_HOST": "evil.example.com",
+                              "HTTP_X_FORWARDED_FOR": "203.0.113.9"})
+    assert _env7i_def["wsgi.url_scheme"] == "http", "behind_proxy 默认关：scheme 不得被伪造头改掉"
+    assert _env7i_def["HTTP_HOST"] == "127.0.0.1:5000", "Host 不得被伪造头改掉"
+    assert _env7i_def["REMOTE_ADDR"] == "127.0.0.1", "客户端 IP 不得被伪造头改掉"
+    # 顺带证明"信了会怎样"：Host 是白名单外的域名时，用 X-Forwarded-Host 伪装成回环也必须 403
+    assert app.test_client().get("/login", headers={
+        "Host": "evil.example.com", "X-Forwarded-Host": "127.0.0.1"}).status_code == 403, \
+        "X-Forwarded-Host 不得成为绕过 Host 白名单的后门"
+
+    # 6) 打开 `behind_proxy` 后才生效（x_for / x_proto / x_host 各信一跳）
+    _app_proxy7i = _app_with7i(behind_proxy=True, secure_cookie=True,
+                               allowed_hosts=["scanner.example.test"])
+    assert isinstance(_app_proxy7i.wsgi_app, gui_app.ProxyFix), "开了 behind_proxy 必须挂 ProxyFix"
+    assert not isinstance(app.wsgi_app, gui_app.ProxyFix), "默认配置不得挂 ProxyFix"
+    _env7i_on = _env7i(_app_proxy7i, {"HTTP_X_FORWARDED_PROTO": "https",
+                                      "HTTP_X_FORWARDED_HOST": "scanner.example.test",
+                                      "HTTP_X_FORWARDED_FOR": "203.0.113.9"})
+    assert _env7i_on["wsgi.url_scheme"] == "https", _env7i_on["wsgi.url_scheme"]
+    assert _env7i_on["HTTP_HOST"] == "scanner.example.test", _env7i_on["HTTP_HOST"]
+    assert _env7i_on["REMOTE_ADDR"] == "203.0.113.9", _env7i_on["REMOTE_ADDR"]
+    # 反代场景端到端：用转发来的域名访问能过白名单，别的域名仍被挡
+    _c_proxy7i = _app_proxy7i.test_client()
+    assert _c_proxy7i.get("/login", headers={"Host": "scanner.example.test"}).status_code == 200
+    assert _c_proxy7i.get("/login", headers={"Host": "evil.example.com"}).status_code == 403
+
+    # 7) 会话 Cookie 的 Secure：HTTPS 部署下必须带；默认配置下**不能**带（HTTP 下会登录不上）
+    _PW7I = "SmokeHttps#2026"
+    assert users_mod.create_user("smoke-https", _PW7I, role="user", must_change=False)[0]
+    _ck7i = _c_proxy7i.post("/login", data={"username": "smoke-https", "password": _PW7I},
+                            headers={"Host": "scanner.example.test"}).headers.get("Set-Cookie", "")
+    assert "Secure" in _ck7i, "secure_cookie=true 时登录 Cookie 必须带 Secure：" + _ck7i
+    assert "HttpOnly" in _ck7i and "SameSite=Lax" in _ck7i, \
+        "续32 的 HttpOnly/SameSite 不能被新功能放宽：" + _ck7i
+    _ck7i_plain = app.test_client().post(
+        "/login", data={"username": "smoke-https", "password": _PW7I},
+        headers={"Host": "127.0.0.1"}).headers.get("Set-Cookie", "")
+    assert "HttpOnly" in _ck7i_plain and "SameSite=Lax" in _ck7i_plain, _ck7i_plain
+    assert "Secure" not in _ck7i_plain, "默认配置不得给会话 Cookie 加 Secure（HTTP 下会登录不上）"
+
+    # 8) 启动提示（抽成 `_deploy_hints` 才测得动）：默认配置安静，部署配置要把坑说全
+    assert _deploy_hints({"host": "127.0.0.1"}) == [], "本机单人使用不该刷一堆部署告警"
+    _hints7i = "\n".join(_deploy_hints({"host": "0.0.0.0", "behind_proxy": True,
+                                        "secure_cookie": False,
+                                        "allowed_hosts": ["*", "scanner.example.test"]}))
+    assert "deploy-https" in _hints7i, "绑非回环地址时必须指向部署文档"
+    assert "secure_cookie" in _hints7i, "TLS 反代下没开 Secure 要告警"
+    assert "通配符" in _hints7i and "*" in _hints7i, "通配值要被点名"
+    assert "scanner.example.test" in _hints7i, "放行清单要打印出来（排错用）"
+    assert "只被你的反向代理访问" in _hints7i
+
+    # 9) **变异证伪**（AGENTS.md §6.1）：在**同一条代码路径**上把开关改坏，断言必须真的变红。
+    #    ① 关掉 Host 校验 → 恶意 Host 必须放行（证明 2)/3) 测的就是这道守卫）
+    _app_allow7i.config["CS_GUARD_HOST"] = False
+    assert _app_allow7i.test_client().get(
+        "/login", headers={"Host": "evil.example.com"}).status_code == 200, \
+        "变异后恶意 Host 仍被挡 → 说明那条断言测的不是 CS_GUARD_HOST"
+    _app_allow7i.config["CS_GUARD_HOST"] = True
+    assert _app_allow7i.test_client().get(
+        "/login", headers={"Host": "evil.example.com"}).status_code == 403
+    #    ② 把放行集合里的部署域名摘掉 → 它反而被挡（证明"显式放行"确实走这个集合）
+    _keep7i = _app_allow7i.config["CS_ALLOWED_HOSTS"]
+    _app_allow7i.config["CS_ALLOWED_HOSTS"] = _keep7i - {"scanner.example.test"}
+    assert _app_allow7i.test_client().get(
+        "/login", headers={"Host": "scanner.example.test"}).status_code == 403, \
+        "变异后部署域名仍放行 → 说明放行不是靠 CS_ALLOWED_HOSTS"
+    _app_allow7i.config["CS_ALLOWED_HOSTS"] = _keep7i
+    #    ③ 关掉 Secure → 登录 Cookie 不该再带 Secure（证明 7) 测的就是这个开关）
+    _app_proxy7i.config["SESSION_COOKIE_SECURE"] = False
+    _ck7i_mut = _app_proxy7i.test_client().post(
+        "/login", data={"username": "smoke-https", "password": _PW7I},
+        headers={"Host": "scanner.example.test"}).headers.get("Set-Cookie", "")
+    assert "Secure" not in _ck7i_mut, "变异后仍带 Secure → 说明那条断言测的不是这个开关"
+    _app_proxy7i.config["SESSION_COOKIE_SECURE"] = True
+    #    ④ 摘掉 ProxyFix → 转发头立刻失效（证明 6) 测的就是 ProxyFix 本身）
+    _inner7i = getattr(_app_proxy7i.wsgi_app, "app", None)
+    assert _inner7i is not None, "ProxyFix 应把内层 app 挂在 `.app` 上（werkzeug 约定）"
+    _app_proxy7i.wsgi_app = _inner7i
+    _env7i_mut = _env7i(_app_proxy7i, {"HTTP_X_FORWARDED_PROTO": "https",
+                                       "HTTP_X_FORWARDED_HOST": "scanner.example.test"})
+    assert _env7i_mut["wsgi.url_scheme"] == "http", \
+        "摘掉 ProxyFix 后仍信转发头 → 说明那条断言测的不是 ProxyFix"
+
+    print("[7i] 续47 HTTPS 部署 ok: Host 白名单可显式枚举扩展（默认仍只回环、`*` 被忽略并告警）/ "
+          "X-Forwarded-* 默认不信任（伪造头不改 scheme·Host·IP，也不成为绕过白名单的后门）、"
+          "behind_proxy=true 才生效（x_for/x_proto/x_host 各一跳）/ 会话 Cookie 在 HTTPS 下带 "
+          "Secure 且 HttpOnly+SameSite=Lax 未被放宽 / 启动部署提示（指向 docs/deploy-https.md）/ "
+          "4 条变异证伪全部按预期变红")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

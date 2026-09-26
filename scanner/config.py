@@ -72,6 +72,20 @@ DEFAULTS = {
         "host": "127.0.0.1",
         "port": 5000,
         "token": "ctfscanner",  # 仅本地实验用途，请勿将控制台暴露公网
+        # ---- 部署到服务器（续47，见 docs/deploy-https.md）----
+        # 三项默认值都是**最保守**的：不开任何"图省事"的口子，要用必须显式配。
+        # allowed_hosts：Host 白名单的**显式**扩展（空 = 只认回环名，与续32 行为逐字节一致）。
+        #   反代部署时浏览器发来的 Host 是部署域名，不填这里会**整站 403**；
+        #   只接受明确枚举的域名，含 `*` / `?` 的值会被忽略（不允许"放行一切"）。
+        "allowed_hosts": [],
+        # behind_proxy：是否信任反向代理转发的 `X-Forwarded-Proto/Host/For`。
+        #   默认关 —— 它是**请求头**，任何客户端都能伪造，无条件信任会让 Host 白名单
+        #   与 Origin 校验一起失效。只有"应用只被自己的反代访问"时才该打开。
+        "behind_proxy": False,
+        # secure_cookie：会话 Cookie 是否加 `Secure`（只在 HTTPS 下回传）。
+        #   默认关 —— 走 HTTP 时开了它浏览器根本不回传 Cookie，等于登录不上；
+        #   上了 TLS 反代之后再打开，否则口令 Cookie 可能被明文带出去。
+        "secure_cookie": False,
     },
     "limits": {
         "max_workers": 20,        # HTTP 探测 / 目录扫描 / DNS 爆破线程数

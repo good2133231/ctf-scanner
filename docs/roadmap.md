@@ -127,13 +127,22 @@
       详情页「续跑」按钮，断点复用 `tasks.current_stage`；**续31 补齐 CLI 入口 `--resume-task <ID>`**，
       与 GUI 同口径：互斥参数直接报错、无断点在入口拒绝，见 `docs/architecture.md`）；
       **任务队列本身仍未做**（当前仍是任务级后台线程 + 进程内写锁 `db._WRITE_LOCK`）；
-- [~] 鉴权加固：多用户、CSRF、HTTPS 部署指引（当前仅限本机使用）：
+- [~] 鉴权加固：多用户、CSRF、HTTPS 部署指引：
       **「本机守卫」已落地**（续32：`gui/app.py` 的 `_local_guard` —— Host 白名单挡 DNS rebinding，
       写方法的 Origin/Referer 校验比 netloc **含端口**（Cookie 不按端口隔离），会话 Cookie 显式
-      `HttpOnly` + `SameSite=Lax`，绑非回环地址时 `serve()` 打显式告警）。
-      **未做**：多用户/角色与访问审计、以及 HTTPS 部署指引 —— 二者与"单用户本机工具"的定位冲突
-      （前者要引入用户表/权限/任务归属，后者是反代与证书的部署形态问题），
-      要做应作为一条独立需求重估，而不是在本条里顺手加壳；
+      `HttpOnly` + `SameSite=Lax`，绑非回环地址时 `serve()` 打显式告警）；
+      **「多用户 + 角色」已落地**（续46：`scanner/users.py` 账号表 + pbkdf2 口令派生，
+      `gui/app.py` 的 `login_required` / `admin_required` 两级路由门 —— 子用户只能用扫描与看结果，
+      进不去策略配置 / POC 管理 / 账号管理；`gui.token` 降为"无账号时的引导口令"，建号即失效）；
+      **「HTTPS 部署」已落地（反向代理终止 TLS）**（续47：新增 `docs/deploy-https.md`
+      —— Caddy / Nginx 样例 + 自签路径 + 验证清单；应用侧三个开关 `gui.allowed_hosts`
+      （Host 白名单显式枚举，默认空=只回环、`*` 被忽略）、`gui.behind_proxy`
+      （默认关，开了才信 `X-Forwarded-*`，`ProxyFix` 一跳）、`gui.secure_cookie`
+      （默认关，TLS 就绪后开，给会话 Cookie 加 `Secure`）；`serve()` 启动提示指向该文档）。
+      **仍未做**：访问审计流水、登录失败锁定/验证码/限速、**逐表单 CSRF token**
+      （仍依赖续32 的 Origin/Referer 中间件，是**刻意**取舍：几十处表单逐处改造，
+      漏一处就是"看起来有防护、实际有缺口"）、SSO/找回口令、多租户隔离
+      （所有账号看到同一批任务与资产，隔离的只是配置页）、HSTS/TLS 套件策略（交给反代）；
 - [x] **报告升级**（续16）：Markdown（原有）+ **HTML**（`report.generate_html()`，自包含单文件、
       内联样式、不引外链，全量 `html.escape`）+ **PDF**（`report.export_pdf()`，复用本机无头
       Edge/Chrome 的 `--print-to-pdf`，**不引入新依赖**；没有浏览器时明确报错并指向 HTML 替代路径）
