@@ -1449,3 +1449,15 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        （8 组全离线断言 + M1~M5 变异证伪）、cli --check/附属参数守卫/未知工具名实测、全量 SMOKE PASS。
        仍未做：版本回滚/多版本共存、有新版本提示（刻意不做定时检查）、nmap/fscan/dirmap 不纳入本套逻辑。
        注：本条落地后，上方第 11 条里"仍未做：工具版本管理"一句即告失效（保留原样，按本文件只追加的先例）。
+[完成] 14、固定上限收口（收尾）：报告/阶段/GUI 里最后四处固定上限（续55，2026-09-27，Trae · DeepSeek-V4.1-Flash）：
+       承续51/续53 同源根因（固定上限 + 不提示 = 静默丢结果/静默失效），本轮收掉不走分页的四处：
+       report.collect() 的 list_vulns(limit=1000)（报告是交付物，>1000 条漏洞静默丢且顶部计数也少）、
+       heuristic 阶段的 list_vulns(limit=1000)（老任务重跑规则时第 1001 条起的线索永远算不出）、
+       /vulns 的 list_tasks(limit=1000)（任务下拉缺老任务、行内任务名退化成 #id）、全端口页任务名映射
+       （老任务名显示为空）；另修 devmode 页在 list_tasks(limit=200) 里线性找 dev-selfcheck 的静默失效。
+       改法：db.list_tasks/list_vulns 支持显式 limit=None ＝ 不加上限（limit=0 仍是"一条都不要"，刻意不反转）；
+       新增 db.tasks_with_vulns()（IN (SELECT DISTINCT task_id ...)，与 /vulns 页面语义严格对齐）与
+       db.find_task_by_name(name)。验证：tests/smoke.py 新增 [7q]（5 组断言 + M1/M2 变异证伪，含"报告数据源
+       不得再出现 limit=1000"的源码红线）、全量 SMOKE PASS。刻意不改/仍未做：任务详情页其余资产页签不分页
+       （经排查是性能/UX 而非丢数据，依赖跨行汇总与整表语义，改造面大 → 留单独一轮）；/dirs?agg=1 的 5000
+       与报告资产小节的 [:100]/[:200] 展示上限属有意护栏；报告资产小节"仅列前 N 条"提示留待下一轮。

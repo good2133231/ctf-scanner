@@ -8930,6 +8930,99 @@ http:
           "回写相对路径且注释/行数/CRLF 行尾/其它键全不变｜GUI 管理员 200·子用户 403·结果留页｜"
           "CLI --no-wire 生效·失败退出码 1·未知工具名中止")
 
+    # ---- [7q] 续55：收掉报告 / 阶段 / GUI 里剩余的固定上限（静默丢结果 · 静默失效） ----
+    # 续51 修了 `/vulns` 的 500、续53 修了 `/tasks` 的 200 与详情页的 1000，但**同源**的固定上限
+    # 还在三处：① 报告导出 `list_vulns(limit=1000)`（交付物少内容）；② 启发式阶段同一条 1000
+    # （规则在截断样本上做差分）；③ GUI 里两处"从最新 N 个任务里查一个"。本组全离线。
+    print("[7q] 续55 报告/阶段/GUI 固定上限收口 …")
+    import re as _re7q
+    from scanner import report as _rep7q
+
+    # 复用 [7o] 那个装 1200 条漏洞的任务（`_tidB7o`，第 1001 条起是旧写法看不到的）
+    _q_n7q = len(db.list_vulns(task_id=_tidB7o, limit=None))
+    assert _q_n7q == 1200, f"该任务应有 1200 条漏洞：实测 {_q_n7q}"
+
+    # ① `list_vulns` / `list_tasks` 的 `limit=None` ＝ 不加上限，且 `limit=0` **不得**被反转成"全部"
+    assert len(db.list_vulns(task_id=_tidB7o, limit=1000)) == 1000, "limit=1000 应只回 1000 条"
+    assert len(db.list_vulns(task_id=_tidB7o, limit=None)) == 1200, "limit=None 应回全部 1200 条"
+    assert len(db.list_vulns(task_id=_tidB7o, limit=0)) == 0, \
+        "limit=0 必须仍然是'一条都不要'（不能被静默反转成'全部'）"
+    _q_tasks_total = db._query("SELECT COUNT(*) c FROM tasks", one=True)["c"]
+    assert len(db.list_tasks(limit=None)) == _q_tasks_total, \
+        f"list_tasks(limit=None) 应等于任务总数 {_q_tasks_total}"
+    assert len(db.list_tasks(limit=0)) == 0, "list_tasks(limit=0) 同理不得被反转"
+
+    # ② 报告是**交付物**：`collect()` 必须拿到全量漏洞，且第 1001 条要真的出现在生成的报告里
+    _q_d = _rep7q.collect(_tidB7o)
+    assert _q_d and len(_q_d["all_vulns"]) == 1200, \
+        f"报告 collect() 必须拿到全部 1200 条：实测 {len(_q_d['all_vulns']) if _q_d else 'None'}"
+    assert _MARKER7o in {v["name"] for v in _q_d["all_vulns"]}, \
+        "旧写法（limit=1000）看不到的第 1001 条，报告里必须看得到"
+    _q_md = _rep7q.generate(_tidB7o)
+    assert _MARKER7o in _q_md, "生成的 Markdown 报告里必须出现第 1001 条（漏洞清单不截断）"
+    _q_old = db.list_vulns(task_id=_tidB7o, limit=1000)      # 对照：旧写法
+    assert _MARKER7o not in {v["name"] for v in _q_old}, \
+        "旧写法（limit=1000）确实看不到它 → 证明修的是真截断"
+
+    # ③ 调用点不得再出现"固定 1000"（源码级红线，与 §5o 的静态审计同一路数）——
+    #    先用一个**变异体**证明检测器本身敏感，再拿去扫真文件。
+    def _q_calls_1000(_text):
+        return bool(_re7q.search(r"list_vulns\([^)]*limit\s*=\s*1000", _text))
+
+    assert _q_calls_1000("db.list_vulns(task_id=t, limit=1000)"), \
+        "检测器自身必须能抓到'固定 1000'的调用形态"
+    for _q_rel in ("scanner/report.py", "scanner/stages/heuristic.py"):
+        _q_src = (ROOT / _q_rel).read_text(encoding="utf-8")
+        assert not _q_calls_1000(_q_src), f"{_q_rel} 不得再对 list_vulns 传固定 limit=1000"
+    assert "limit=None" in (ROOT / "scanner" / "stages" / "heuristic.py").read_text(
+        encoding="utf-8"), "启发式阶段应显式用 limit=None（全量）"
+
+    # ④ `/vulns` 的任务下拉与「任务」列名：必须覆盖"页面上可能出现的行"的任务全集
+    _q_tids_all = {r["task_id"] for r in db.list_vulns(limit=None) if r["task_id"]}
+    assert {t["id"] for t in db.tasks_with_vulns()} == _q_tids_all, \
+        "tasks_with_vulns() 必须恰好等于'漏洞表里出现过的 task_id'全集"
+    assert _tidB7o in _q_tids_all, "装漏洞的任务必须在集合里"
+    _q_app = _app_with7i()
+    _q_c = _q_app.test_client()
+    assert _q_c.post("/login", data={"token": settings["gui"]["token"]},
+                     environ_base={"REMOTE_ADDR": "203.0.113.231"}).status_code == 302
+    _q_vh = _q_c.get("/vulns", query_string={"task_id": str(_tidB7o)}).get_data(as_text=True)
+    assert _oldest_name7o in _q_vh, \
+        "该任务的**名字**必须能在页面上解析出来（旧写法会给不出名字、只剩 #id）"
+    assert '<select name="task_id"' in _q_vh, "页面应有任务筛选下拉框"
+    _q_sel = _q_vh.split('<select name="task_id"', 1)[-1].split("</select>", 1)[0]
+    assert _oldest_name7o in _q_sel, \
+        "它还必须出现在任务下拉框里（否则这个任务根本选不到、筛不了）"
+
+    # ⑤ `find_task_by_name`：按名精确查一条，不受"最新 200 条"影响
+    _q_ft = db.find_task_by_name(_oldest_name7o)
+    assert _q_ft and _q_ft["id"] == _oldest7o, "最老的任务也必须能按名查到"
+    assert db.find_task_by_name("smoke55-绝不存在这个名字") is None
+
+    _q_real_twv, _q_real_ftn = db.tasks_with_vulns, db.find_task_by_name
+    try:
+        # (M1) 模拟**旧写法**：下拉只取"最新 N 个任务"（N=1，等价于 limit=1000 在任务数超 1000 时失效）
+        db.tasks_with_vulns = lambda: db.list_tasks(limit=1)
+        _q_vh_m = _q_c.get("/vulns", query_string={"task_id": str(_tidB7o)}).get_data(as_text=True)
+        assert _oldest_name7o not in _q_vh_m, \
+            "变异（只取最新 1 个任务）后名字应消失 → 证明 ④ 测的是**完整性**而不是巧合"
+        assert {t["id"] for t in db.tasks_with_vulns()} != _q_tids_all
+        # (M2) 模拟"从最新 N 条里线性找"：最老的同名任务查不到 → ⑤ 必红
+        db.find_task_by_name = lambda _n: next(
+            (t for t in db.list_tasks(limit=200) if t["name"] == _n), None)
+        assert db.find_task_by_name(_oldest_name7o) is None, \
+            "变异（退回最新 200 条里线性找）后查不到 → 证明 ⑤ 钉的是真实现"
+    finally:
+        db.tasks_with_vulns, db.find_task_by_name = _q_real_twv, _q_real_ftn
+        _q_vh_after = _q_c.get("/vulns", query_string={"task_id": str(_tidB7o)}).get_data(as_text=True)
+        assert _oldest_name7o in _q_vh_after, "还原后名字必须回来"
+
+    print("[7q] 续55 固定上限收口 ok: list_vulns/list_tasks 的 limit=None 全量、limit=0 不反转｜"
+          "报告 collect()=1200 条且第 1001 条进了 Markdown（旧写法看不到，已对照）｜"
+          "report/heuristic 调用点无固定 1000（检测器自证 + 源码红线）｜"
+          "tasks_with_vulns()==漏洞表 task_id 全集 + 名字与下拉都覆盖最老任务（M1 证伪）｜"
+          "find_task_by_name 不受最新 200 条限制（M2 证伪）")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

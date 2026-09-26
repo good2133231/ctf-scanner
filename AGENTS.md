@@ -307,7 +307,7 @@ ctf-scanner/
 ```powershell
 py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(13 个)/POC 级别执行门/
                             # 免杀变形/mmh3 公开向量+iprecon/fofa 纯函数/响应体解码/流水线+指纹/三层门控/阶段门控(含 osint)/
-                            # 非标端口候选/报告(含 C 段 IP)/停止/导出/GUI 路由(10 栏侧边栏 + /ports /csegs /dirs)与批量接口/
+                            # 非标端口候选/报告(含 C 段 IP)/停止/导出/GUI 路由(12 栏侧边栏 + /ports /csegs /dirs)与批量接口/
                             # 子域名分流+CDN 标记+站点折叠+POC 相对路径/
                             # 第十四轮新增 `[5d]`：注册域折算(base_domain) + 相对路径(rel_display) + 黑名单
                             # (含临时文件与开关失效) + 证书反查(build_cert_query/is_common_cert/search_cert 空域名) +
@@ -681,6 +681,13 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   **逐行文本替换**（只动 `tools.<名>` 那一行，保注释、保行尾形态、保尾换行）。
   以后凡是要"只改一个键"的新功能请沿用后者，**不要图省事调 `save_settings()`** —— 那等于顺手删掉
   用户文件里的注释。回归钉在 `tests/smoke.py` 的 `[7p]`（`#` 计数与行数不变 + 纯 CRLF + 尾换行保留）。
+- **`db.list_tasks/list_vulns` 的 `limit` 三态别搞混**（续55 定口径）：`limit=None` ＝ **不加上限（全量）**、
+  正整数 ＝ 取最新 N 条、**`limit=0` ＝ 一条都不要**（`0` **不反转**成"全部"）。默认值 `200` 是
+  "分页之外的合理默认"，**GUI 列表一律走分页**（`page_tasks`/`page_vulns`/`page_assets`）；
+  只有**报告导出、阶段内部计算、全表映射**这类"不能漏"的调用方显式传 `limit=None`。
+  同理，按名字找一个已知任务用 `db.find_task_by_name()`，**不要在 `list_tasks(limit=N)` 里线性找**
+  —— 那个 N 一被超出就是**静默失效**（续55 修的 `devmode` 页就是这么坏的）。
+  回归钉在 `tests/smoke.py` 的 `[7q]`（含"报告数据源不得再出现 `limit=1000`"的源码红线 + 2 条变异）。
 - `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。
 - **任务详情为 10 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/目标与配置/运行日志）：参考 ARL 界面的
   IP/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源

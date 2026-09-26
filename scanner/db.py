@@ -586,7 +586,27 @@ def get_task(task_id):
 
 
 def list_tasks(limit=200):
-    return _query("SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (limit,))
+    """任务列表（`id DESC`）。
+
+    `limit=None` ＝ **不加上限**（续55）：给"确实要全量"的调用方用（如全端口页的
+    任务名映射 —— 那里对 `ports` 做的是**全表** GROUP BY，名称表却只取最新 1000 个任务，
+    结果老任务的名字显示为空）。**`limit=0` 仍然是"一条都不要"**，与 `None` 语义刻意区分，
+    避免老调用方被静默反转成"全部"。要分页请用 `page_tasks()`。
+    """
+    if limit is None:
+        return _query("SELECT * FROM tasks ORDER BY id DESC")
+    return _query("SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (int(limit),))
+
+
+def find_task_by_name(name):
+    """按名字取**最新**的一个任务（无则 None）。`devmode` 用它找 `dev-selfcheck`（续55）。
+
+    原先是在 `list_tasks(limit=200)` 里线性找第一个同名任务 —— 任务数一超过 200，
+    自检任务被挤出这 200 条后就"凭空消失"（开发模式页显示"没有自检任务"），
+    与本次修的其它几处同源：**固定上限 + 不提示 = 静默失效**。
+    """
+    return _query("SELECT * FROM tasks WHERE name=? ORDER BY id DESC LIMIT 1",
+                  (str(name),), one=True)
 
 
 def page_tasks(limit=100, offset=0, q=None, status=None, stages=None):
@@ -1137,7 +1157,13 @@ def vuln_trend(limit_tasks=15):
 
 
 def list_vulns(task_id=None, severity=None, limit=200, review=None):
-    """列出漏洞。`review` 三态：None=全部 / "pending"=待复核 / confirmed / false_positive。"""
+    """列出漏洞（`id DESC`）。`review` 三态：None=全部 / "pending"=待复核 / confirmed / false_positive。
+
+    `limit=None` ＝ **不加上限**（续55）：给"要全量、不能漏"的调用方用 —— 报告导出
+    （`report.collect`：交付物里少 1000 条以外的东西是**静默丢结果**）与启发式阶段
+    （`stages/heuristic`：规则只看最新 1000 条，大任务的结论会失真）。
+    **`limit=0` 仍然是"一条都不要"**，与 `None` 语义刻意区分。要分页请用 `page_vulns()`。
+    """
     sql, params = "SELECT * FROM vulns WHERE 1=1", []
     if task_id:
         sql += " AND task_id=?"
@@ -1148,9 +1174,25 @@ def list_vulns(task_id=None, severity=None, limit=200, review=None):
     if review is not None:
         sql += " AND review=?"
         params.append(norm_review(review))
+    if limit is None:
+        sql += " ORDER BY id DESC"          # 不加上限（续55），与 limit=0（一条都不要）不同
+        return _query(sql, tuple(params))
     sql += " ORDER BY id DESC LIMIT ?"
-    params.append(limit)
+    params.append(int(limit))
     return _query(sql, tuple(params))
+
+
+def tasks_with_vulns():
+    """**有漏洞的任务**（`id DESC`），「漏洞风险」页的任务下拉与「任务」列名用它（续55）。
+
+    为什么不用 `list_tasks()`：那个下拉原先取 `list_tasks(limit=1000)`（最新 1000 个任务），
+    任务数一超就**两处都不对** —— 老任务在下拉里**根本选不到**（筛不了），
+    且它出现在表格里时「任务」列取不到名字、退化成 `#123`（模板兜底，见 `vulns.html`）。
+    这里的口径是"页面上可能出现的行，其任务一定在内"：漏洞表里出现过的 `task_id`
+    恰好就是全集，而且规模只跟"有多少任务出过漏洞"相关，不会随任务总数膨胀成几千项的下拉框。
+    """
+    return _query("SELECT t.* FROM tasks t WHERE t.id IN (SELECT DISTINCT task_id FROM vulns) "
+                  "ORDER BY t.id DESC")
 
 
 # ---------- 漏洞页分页 + 排序（P0，续51） ----------

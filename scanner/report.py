@@ -90,7 +90,10 @@ def collect(task_id):
     ports = db.list_ports(task_id)
     csegs = db.list_csegs(task_id)
     certs = db.list_certs(task_id)
-    all_vulns = sorted(db.list_vulns(task_id=task_id, limit=1000),
+    # `limit=None` ＝ 全量（续55）：报告是**交付物**，原先固定 `limit=1000` 时同一任务扫出
+    # 1001 条漏洞，报告里就只有 1000 条、且页面上的统计跟着少 —— 与续51/续53 修的
+    # `/vulns` 500 截断、`/tasks` 200 截断同源，属**静默丢结果**。
+    all_vulns = sorted(db.list_vulns(task_id=task_id, limit=None),
                        key=lambda r: SEV_ORDER.get(r["severity"], 9))
     # 人工复核（P1-1）：判为误报的**不再计入「潜在漏洞」**，单独成节放在文末 ——
     # 报告是给人看的交付物，把已排除的噪声混在结论里等于把复核工作白做。

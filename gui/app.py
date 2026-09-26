@@ -1514,7 +1514,11 @@ def create_app():
         pager = {"page": page, "size": size, "total": total, "pages": pages,
                  "base": "/vulns", "qs": "&" + "&".join(parts)}
         # 跨任务视图里只有 `任务 #12` 没法辨认，这里带上任务名，并支持按任务筛选。
-        tasks = db.list_tasks(limit=1000)
+        # 续55：改用"**有漏洞的任务**"（而不是 `list_tasks(limit=1000)`）—— 下拉只覆盖最新 1000 个
+        # 任务时，老任务在下拉里**根本选不到**（筛不了），且它出现在表格里时「任务」列取不到名字、
+        # 退化成 `#123`（`vulns.html` 的兜底）。`tasks_with_vulns()` 恰好等于"页面上可能出现的行"
+        # 的任务全集，且规模不随任务总数膨胀。
+        tasks = db.tasks_with_vulns()
         return render_template("vulns.html", vulns=rows, sev=sev or "",
                                review=rev or "", counts=db.review_counts(tid),
                                task_id=tid or "", tasks=tasks,
@@ -1885,7 +1889,9 @@ def create_app():
         raw_rows = db._query(
             "SELECT task_id, host, ip, COUNT(*) c, GROUP_CONCAT(port) ports "
             "FROM ports GROUP BY task_id, host, ip ORDER BY task_id DESC, host")
-        names = {t["id"]: t["name"] for t in db.list_tasks(limit=1000)}
+        # 续55：名称表要**全量**任务 —— 上面是对 `ports` 的**全表** GROUP BY（不按任务切），
+        # 名称表却只取最新 1000 个任务时，更老的任务在这里查不到名字、行上直接显示空。
+        names = {t["id"]: t["name"] for t in db.list_tasks(limit=None)}
         rows = []
         for r in raw_rows:
             item = dict(r)      # sqlite3.Row 不支持赋值，先转成 dict 再加工
@@ -2458,11 +2464,9 @@ def create_app():
         夹具生命周期由「启动 / 停止」两个**显式按钮**控制（不做成"入队后自动起、跑完自动关"：
         队列里任务的收尾点不可靠，自动关容易泄漏端口）。
         """
-        last = None
-        for t in db.list_tasks(limit=200):
-            if t["name"] == "dev-selfcheck":
-                last = t
-                break
+        # 续55：原先在 `list_tasks(limit=200)` 里线性找 —— 任务数一超过 200，自检任务被挤出
+        # 这 200 条后页面就显示"没有自检任务"（静默失效）。改为按名精确查一条。
+        last = db.find_task_by_name("dev-selfcheck")
         return render_template(
             "devmode.html",
             enabled=devmode.enabled(settings),

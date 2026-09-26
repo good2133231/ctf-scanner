@@ -29,7 +29,9 @@ class HeuristicStage(Stage):
 
         sites = [dict(r) for r in db.list_sites(ctx.task_id)]
         dirs = [dict(r) for r in db.list_dirs(ctx.task_id)]
-        vulns = [dict(r) for r in db.list_vulns(task_id=ctx.task_id, limit=1000)]
+        # `limit=None` ＝ 全量（续55）：原先固定 `limit=1000`（只取最新 1000 条），
+        # 大任务下规则是在一个被截断的样本上做差分，结论会失真且**没有任何提示**。
+        vulns = [dict(r) for r in db.list_vulns(task_id=ctx.task_id, limit=None)]
         csegs = [dict(r) for r in db.list_csegs(ctx.task_id)]
         if not (sites or dirs or csegs):
             ctx.logger.info("[heuristic] 无可用数据（站点/目录/C 段都为空），跳过")

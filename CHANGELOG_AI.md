@@ -3,6 +3,102 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-27 —— 续55：收掉报告 / 阶段 / GUI 里剩余的固定上限（静默丢结果 · 静默失效）
+
+> 实施者：**Trae · DeepSeek-V4.1-Flash**（新负责人接管后的第二项落地。承接续51「`/vulns` 500 截断」、
+> 续53「`/tasks` 200 截断」的同一根因 —— **固定上限 + 不提示 = 静默丢结果/静默失效**）
+
+### 0. 是什么（问题）
+
+续51 / 续53 修掉了分页列表里的固定上限，但**同一根因**还残留在四处**不走分页**的调用点上。
+它们不报错、不提示，只是安静地少给结果：
+
+| 位置 | 原实现 | 后果 |
+|---|---|---|
+| `scanner/report.py::collect()` | `db.list_vulns(task_id=..., limit=1000)` | 报告是**交付物**：扫出 1200 条漏洞，Markdown/HTML 里只有最新 1000 条，**且报告顶部的「潜在漏洞」计数也跟着少** |
+| `scanner/stages/heuristic.py` | `db.list_vulns(task_id=ctx.task_id, limit=1000)` | 启发式规则只看最新 1000 条漏洞 —— 老任务**重跑启发式**时，第 1001 条起的线索永远算不出来 |
+| `gui/app.py::vulns_page`（`/vulns`） | `db.list_tasks(limit=1000)` → 任务下拉 + 行内任务名 | 任务数超 1000 后，老任务在下拉里消失、列表里那一列退化成兜底 `#123` |
+| `gui/app.py` 全端口页 | `db.list_tasks(limit=1000)` 的任务名映射 | 页面数据是 `ports` **全表** GROUP BY，名字表却只有最新 1000 个任务 → 老任务名字显示为空 |
+| `gui/app.py::devmode_page` | 在 `list_tasks(limit=200)` 里 `for` 线性找 `dev-selfcheck` | 任务数超 200 后，自检任务被挤出这 200 条 → 开发模式页显示"没有自检任务"（**静默失效**） |
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/db.py` | `list_tasks()` / `list_vulns()` 支持显式 **`limit=None` ＝ 不加上限**（`limit=0` **仍是"一条都不要"**，刻意不反转，避免老调用方被静默改成"全部"）；新增 `find_task_by_name(name)`（按名取最新一条）；新增 `tasks_with_vulns()`（`SELECT t.* FROM tasks t WHERE t.id IN (SELECT DISTINCT task_id FROM vulns)`） |
+| `scanner/report.py` | `collect()` 改 `db.list_vulns(task_id=task_id, limit=None)` |
+| `scanner/stages/heuristic.py` | 改 `db.list_vulns(task_id=ctx.task_id, limit=None)` |
+| `gui/app.py` | `/vulns` 用新的 `db.tasks_with_vulns()`；全端口页名称映射用 `db.list_tasks(limit=None)`；`devmode` 用 `db.find_task_by_name("dev-selfcheck")` |
+| `tests/smoke.py` | 新增 `[7q]` 组（5 组断言 + 2 条 §6.1 变异 M1/M2） |
+
+### 2. 关键设计取舍（为什么这么做）
+
+- **`limit=None` 而不是把默认值改大 / 改成 0**：`list_vulns(task_id, severity, limit=200, review)` /
+  `list_tasks(limit=200)` 的默认 200 是**分页之外的合理默认**（GUI 多数列表不该一次拉全）。
+  真正需要全量的是**报告导出、阶段内部计算、全表映射**这几类"不能漏"的调用方 ——
+  用**显式 `limit=None`** 让"我要全量"成为调用点上的**可见声明**，而不是某个不知名的默认值。
+- **`limit=0` 不反转成"全部"**（续51 已定的口径）：`0` ＝ 一条都不要。若把 `None` 与 `0` 混为一谈，
+  会把"老调用方传 0 表示空列表"静默变成"拉全表"，是**新的性能/语义事故**。
+- **`/vulns` 下拉不用 `limit=None` 而是 `tasks_with_vulns()`**：下拉要的是"**页面上可能出现的行**
+  涉及哪些任务" —— 一个任务从没产出过漏洞，列进下拉没有任何意义；而 `limit=None` 会把几千个
+  无漏洞任务也拉进内存。`tasks_with_vulns()` 走一条 `IN (SELECT DISTINCT …)`，既**完整覆盖**
+  又与页面语义严格对齐（断言钉了"必须恰好等于漏洞表里出现过的 `task_id` 全集"）。
+- **`find_task_by_name()` 而不是 `list_tasks(limit=None)` 再线性找**：devmode 只关心一个已知名字，
+  没必要拉全表。按 `name=? ORDER BY id DESC LIMIT 1` 走一条索引查询即可。
+
+### 3. 本轮**刻意不改**的两处（已识别，属"设计上的展示上限"，非 bug）
+
+1. **`/dirs?agg=1` 的 5000**：源码里有注释说明（聚合视图的一次性上限），属**有意的护栏**，不改。
+2. **报告里资产小节的 `sites[:100]` / `ports[:200]` / `csegs[:200]` / `certs[:200]` / `subs[:200]` /
+   `dirs[:100]`**：这是**报告可读性**的展示上限（小标题里已写"前 200"/"前 100"），
+   与"漏洞清单"不同 —— 漏洞清单是**结论**，一条都不能少（本轮已改成全量且**标题里本就没有"前 N"字样**，
+   语义自洽）。
+   ⇒ 但资产小节**只列前 N、却没有任何"还有多少条"的提示**，读者无法判断是否被截断。
+   下一轮建议：在这些小节末尾补一行"（共 X 条，此处仅列前 N 条）"。本轮**不动**，避免把交付物格式
+   在同一个提交里改两件事。
+
+### 4. 验证
+
+- `tests/smoke.py` 新增 `[7q]`（全离线，复用 `[7o]` 造的 1200 条漏洞任务）：
+  ① `list_vulns(limit=1000)==1000` / `limit=None==1200` / `limit=0==0`；`list_tasks(limit=None)==COUNT(*)` / `limit=0==0`；
+  ② `report.collect()["all_vulns"]` 长度 1200 且**含第 1001 条**；`report.generate()` 的 Markdown 里也有它
+     （对照 `list_vulns(limit=1000)` 不含它 —— 证明改的是报告数据源、不是渲染）；
+  ③ 源码红线：`scanner/report.py` / `scanner/stages/heuristic.py` 里**不得再出现** `limit=1000`
+     （检测器先自证：喂一条假 `limit=1000` 必须报出来），且 `heuristic.py` 显式含 `limit=None`；
+  ④ `tasks_with_vulns()` 的 `task_id` 集合 == 漏洞表里出现过的 `task_id` 全集；`GET /vulns` 页面
+     的任务下拉（`<select name="task_id">` 块）与行内任务名都覆盖到**最老的那个任务**；
+  ⑤ `find_task_by_name(老名字)["id"] == 老任务 id`；查不存在的名字返回 `None`。
+  另含 2 条 §6.1 变异：**M1** 把 `tasks_with_vulns` 换成 `list_tasks(limit=1)` → 页面里老任务名消失且集合不等；
+  **M2** 把 `find_task_by_name` 换回"最新 200 条里线性找" → 查不到老任务（两条变异均在 `finally` 还原后断言名字回来）。
+- 全量 `py -3 -u tests/smoke.py` → `SMOKE PASS`。
+- `git diff --numstat` == `git diff --ignore-cr-at-eol --numstat` 逐文件一致。
+  **唯一例外（如实记录）**：`todo.txt` 为 `13/1` vs `12/0` —— 它的 **HEAD 末行本身没有行尾**
+  （EOL=∅），本轮在末尾追加内容时，该行**必须**获得一个行尾才能与新行分开，属**追加到无尾换行文件的
+  必然结果**，不是行尾被归一化。为此本轮额外复核了各文件的行尾计数（HEAD vs 工作区）：
+  `tests/smoke.py` 7447 CRLF + **1494 LF 原样保留**、`gui/app.py` 2656 CRLF + **52 LF 原样保留**、
+  `docs/roadmap.md` 271 CRLF + **13 LF 原样保留**、`scanner/stages/heuristic.py` 保持 **LF-only**。
+
+### 4.1 本轮自己踩的坑（延续54 §5 的记录习惯）
+
+**编辑工具把"混合行尾"文件的既有行尾归一化了**（违反 §9）：本轮编辑过 `tests/smoke.py` /
+`docs/roadmap.md` / `gui/app.py` 后，这三个文件里 HEAD 原有的 1494 / 13 / 52 处 **LF-only 行**
+被写成了 CRLF；`todo.txt` 则是**新增的 12 行**被写成 LF（其余仍是 CRLF）。
+症状与续54 一样隐蔽 —— **代码照跑、`SMOKE PASS` 照过**，只有 §9 两口径自查会露馅
+（`git diff --numstat` 里那 1494/13/52 行算成"改了"，`--ignore-cr-at-eol` 里却不算）。
+已用**按内容对齐 HEAD**（`difflib.SequenceMatcher`，只按行内容比对、改完断言"内容一字未变"）
+的字节级脚本逐行还原，两口径随即一致（除上述 `todo.txt` 的必然 1 行）。
+⇒ 再次印证续54 的结论：**改完必须跑 §9 自查**，不能只看测试绿不绿。
+
+### 5. 仍**未做**（如实说明）
+
+- **任务详情页其余资产页签（子域名 / 站点 / 扩展域名 / 目录 / 证书）未分页**：排查后确认这是
+  **性能/UX 问题而非"丢数据"**（`list_*` 无 LIMIT，页面拿到的是全量），且这几个页签各自依赖
+  **跨行汇总与整表语义**（截图缺失判定、证书目标数、目录页签表单的 `target` 预填、目录折叠去重、
+  来源分类排序）—— 改造面大、回归风险高，**本轮刻意不做**，留待单独一轮专门处理。
+- 报告资产小节的"仅列前 N 条"提示（见 §3）。
+
+---
+
 ## 2026-09-26 —— 续54：外部工具版本管理（一键下载/更新 subfinder / httpx / puredns）
 
 > 实施者：**Trae · DeepSeek-V4.1-Flash**（新负责人接管后的第一项落地；需求＝用户从 roadmap 点名
