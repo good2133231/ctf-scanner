@@ -8212,6 +8212,222 @@ http:
           "severity 有序 CASE（critical→info，非字典序）/ 非法 page·size·sort·desc 全部回落不炸不注入 / "
           "翻页保持筛选+排序且 q 经 URL 编码 / 5 条变异证伪全部按预期变红")
 
+    # [7n] 续52 **自检夹具补域名 + HTTPS + SKIP 分类**（P0）。背景：续50 的自检报
+    #      "13 个阶段均无异常"，但其中 5 个阶段**空转**（零网络活动）—— 结论名不副实。
+    #      本组钉"该跑的真的跑、跑不了的如实说清为什么"，**不**硬凑全绿。5 组语义（末尾 §6.1）：
+    #      ① 夹具 HTTPS：起/停、GET index、HTTP 与 HTTPS **都只绑 127.0.0.1**、stop 后两端口都释放、
+    #         stop 幂等；夹具证书自签且 CN=devfixture.test（可被 cert 阶段取证）；
+    #      ② DNS 覆盖：白名单（devfixture.test 及子域）→ 127.0.0.1；**非白名单一律放行**；退出**必还原**；
+    #      ③ 全流程自检：cert 与 subdomain 由 SKIP 变 **OK**（有网络活动）、**零外网**；
+    #      ④ SKIP 分类：每行都有**非空真实原因**（取自任务日志），token 缺失的 github 归 `未配置`；
+    #      ⑤ GUI 自检走 **subprocess**（DNS 覆盖不进长驻 web 进程），输出渲染到页面。
+    import copy as _copy7n
+    import ssl as _ssl7n
+    import socket as _sock7n
+    import urllib.request as _url7n
+    from scanner import certs as _certs7n
+    from scanner import devfixture as _df7n
+    from scanner import devflow as _dv7n
+
+    # ① 夹具 HTTPS（HTTP + HTTPS 双监听器，都只绑回环）
+    _fx7n, _hb7n, _sb7n = _df7n.start_both()
+    try:
+        assert _fx7n.servers[0].server_address[0] == "127.0.0.1", \
+            f"HTTP 夹具只许绑 127.0.0.1（绝不 0.0.0.0）：{_fx7n.servers[0].server_address}"
+        assert _fx7n.servers[1].server_address[0] == "127.0.0.1", \
+            f"HTTPS 夹具只许绑 127.0.0.1（绝不 0.0.0.0）：{_fx7n.servers[1].server_address}"
+        assert _hb7n.startswith("http://127.0.0.1:") and _sb7n.startswith("https://127.0.0.1:"), \
+            (_hb7n, _sb7n)
+        _ctx7n = _ssl7n.create_default_context()
+        _ctx7n.check_hostname = False
+        _ctx7n.verify_mode = _ssl7n.CERT_NONE
+        with _url7n.urlopen(_sb7n + "/", timeout=5, context=_ctx7n) as _r7n:
+            assert _r7n.status == 200
+            assert "<title>DevFixture Site</title>" in _r7n.read().decode("utf-8", "replace")
+        # 夹具证书：自签、CN=devfixture.test、**未过期**（供 cert 阶段取证）
+        _info7n, _err7n = _certs7n.fetch("127.0.0.1", int(_sb7n.rsplit(":", 1)[1]), timeout=5)
+        assert _info7n, f"HTTPS 夹具应能取到证书：{_err7n}"
+        assert _info7n["cn"] == "devfixture.test", _info7n.get("cn")
+        assert int(_info7n["expired"]) == 0 and int(_info7n["self_signed"]) == 1, _info7n
+        # 情报源夹具（intel 自检时指过来，让 intel 真跑却不出网）
+        with _url7n.urlopen(_hb7n + "/intel/kev.json", timeout=5) as _r7n:
+            assert "NOT real data" in _r7n.read().decode("utf-8", "replace")
+    finally:
+        _df7n.stop(_fx7n)
+    for _b7n in (_hb7n, _sb7n):
+        _h7n, _p7n = _b7n.split("://")[1].split(":")
+        _s7n = _sock7n.socket()
+        try:
+            _s7n.connect((_h7n, int(_p7n)))
+            _rel7n = False
+        except OSError:
+            _rel7n = True
+        finally:
+            _s7n.close()
+        assert _rel7n, f"stop() 后 {_b7n} 端口必须释放（再连应失败）"
+    _df7n.stop(_fx7n)      # 幂等：重复 stop 不炸
+    _fx7n_s, _sb7n_s = _df7n.start(port=0, https=True)     # 单监听器 HTTPS 也能起
+    try:
+        assert _fx7n_s.server_address[0] == "127.0.0.1", _fx7n_s.server_address
+        assert _sb7n_s.startswith("https://127.0.0.1:"), _sb7n_s
+    finally:
+        _df7n.stop(_fx7n_s)
+
+    # ② DNS 覆盖：白名单重定向 / 非白名单放行 / 退出必还原。
+    #    用"哨兵原解析器"做证伪 → **零网络依赖**（不真去解析 example.com）。
+    _orig_gai7n = _sock7n.getaddrinfo
+    try:
+        _sock7n.getaddrinfo = lambda _h, _p, *_a, **_k: [("SENTINEL", _h)]
+        with _dv7n.DnsOverride([_dv7n.FIXTURE_DOMAIN]):
+            _g_fx7n = _sock7n.getaddrinfo(_dv7n.FIXTURE_DOMAIN, 80)
+            _g_sub7n = _sock7n.getaddrinfo("a." + _dv7n.FIXTURE_DOMAIN, 80)
+            _g_oth7n = _sock7n.getaddrinfo("example.com", 80)
+        assert _g_fx7n[0][4][0] == "127.0.0.1", _g_fx7n
+        assert _g_sub7n[0][4][0] == "127.0.0.1", _g_sub7n
+        assert _g_oth7n[0][0] == "SENTINEL", \
+            "非白名单域名必须**放行给真实解析器**（绝不重定向）：example.com 被劫持了"
+    finally:
+        _sock7n.getaddrinfo = _orig_gai7n
+    assert _sock7n.getaddrinfo is _orig_gai7n, "DNS 覆盖退出后必须还原"
+    try:
+        _sock7n.getaddrinfo = lambda _h, _p, *_a, **_k: [("AFTER", _h)]
+        _g_after7n = _sock7n.getaddrinfo(_dv7n.FIXTURE_DOMAIN, 80)
+    finally:
+        _sock7n.getaddrinfo = _orig_gai7n
+    assert _g_after7n[0][0] == "AFTER", "退出后夹具域名仍被重定向 → 覆盖没还原干净"
+
+    # ③ 全流程自检（隔离库/日志已在文件顶部设好）：cert / subdomain 由 SKIP 变 OK，且**零外网**
+    _res7n = _dv7n.run_selfcheck(settings, name="smoke-devflow-52")
+    try:
+        assert _res7n["exit_code"] == 0 and _res7n["fail"] == 0, \
+            f"自检不得有 FAIL：{_res7n['fail']} 个 —— {_res7n['error']}"
+        assert _res7n["task_status"] == "done", _res7n["task_status"]
+        _by7n = {n: (s, d, c) for n, s, d, c in _res7n["rows"]}
+        assert _by7n["subdomain"][0] == "OK", \
+            f"subdomain 有裸域名目标 + DNS 覆盖，应真跑（OK）：{_by7n['subdomain']}"
+        assert _by7n["cert"][0] == "OK", \
+            f"cert 有 https 站点可取证，应真跑（OK）：{_by7n['cert']}"
+        assert _res7n["_net"].get("subdomain", 0) > 0 and _res7n["_net"].get("cert", 0) > 0, \
+            f"subdomain / cert 的 OK 必须来自**真实网络活动**：{_res7n['_net']}"
+        assert not _res7n["external"], \
+            f"自检必须零外网，实测打到站外：{_res7n['external'][:5]}"
+        # ④ SKIP 分类：每行都有**非空真实原因**，归类在已知集合里
+        _cats7n = {"无输入", "未配置", "无匹配", "命中缓存"}
+        for _n7n, _st7n, _d7n, _c7n in _res7n["rows"]:
+            if _st7n == "SKIP":
+                assert _d7n and _d7n.strip(), f"{_n7n} 的 SKIP 原因不得为空：{_d7n!r}"
+                assert _c7n in _cats7n, f"{_n7n} 的 SKIP 归类异常：{_c7n!r}（原因 {_d7n!r}）"
+        # 自检清空了第三方凭据 → github 无 token → 必须归 SKIP(未配置)，原因取自日志（含 token）
+        assert _by7n["github"][0] == "SKIP" and _by7n["github"][2] == "未配置", \
+            f"没配 token 的 github 应归 SKIP(未配置)：{_by7n['github']}"
+        assert "token" in _by7n["github"][1], \
+            f"github 的 SKIP 原因应取自日志（含 token）：{_by7n['github'][1]!r}"
+    finally:
+        if _res7n.get("task_id"):
+            db.delete_task(_res7n["task_id"], backup=False)
+
+    # ⑤ GUI 自检走 **subprocess**（DNS 覆盖 / 夹具不进长驻 web 进程），输出渲染到页面
+    _orig_sub7n = gui_app.subprocess.run
+    _orig_load7n, _orig_sync7n = gui_app.load_settings, gui_app.sync_pocs
+
+    class _FakeProc7n:
+        returncode = 0
+        stdout = "[*] FAKE-SELFCHECK-OUT\n[*] 13 个阶段：2 个真跑、11 个跳过（原因见上）、0 个 FAIL\n"
+        stderr = ""
+
+    _cfg7n = _copy7n.deepcopy(settings)
+    _cfg7n["dev"] = {"enabled": True, "fixture_port": 0}
+    gui_app.load_settings = lambda: _cfg7n
+    gui_app.sync_pocs = lambda *_a, **_k: None
+    try:
+        _app7n = gui_app.create_app()
+    finally:
+        gui_app.load_settings, gui_app.sync_pocs = _orig_load7n, _orig_sync7n
+    _c7n = _app7n.test_client()
+    for _u7n in users_mod.list_users():
+        users_mod.delete_user(_u7n["id"])
+    assert _c7n.post("/login", data={"token": settings["gui"]["token"]},
+                     environ_base={"REMOTE_ADDR": "203.0.113.221"}).status_code == 302
+    gui_app.subprocess.run = lambda *_a, **_k: _FakeProc7n()
+    try:
+        _resp7n = _c7n.post("/api/devmode/selfcheck")
+    finally:
+        gui_app.subprocess.run = _orig_sub7n
+    assert _resp7n.status_code == 302, _resp7n.status_code
+    _dev7n = _c7n.get("/devmode").get_data(as_text=True)
+    assert "FAKE-SELFCHECK-OUT" in _dev7n, "GUI 自检必须把**子进程输出**渲染到页面"
+    assert "子进程" in _dev7n, "页面必须说明自检走子进程（DNS 覆盖不进 web 进程）"
+    assert not [t for t in db.list_tasks(limit=200) if t["name"] == "dev-selfcheck"], \
+        "GUI 自检不得再在 web 进程里入队（必须走子进程）"
+
+    # ---- §6.1 变异证伪（把新行为退回"旧/天真"实现，确认上面的断言**真的变红**）----
+    # (M1) DnsOverride 重定向**一切** → ② 的"非白名单放行"必红
+    _real_hit7n = _dv7n.DnsOverride._hit
+    _dv7n.DnsOverride._hit = lambda self, host: True
+    try:
+        with _dv7n.DnsOverride([_dv7n.FIXTURE_DOMAIN]):
+            _m1_7n = _sock7n.getaddrinfo("example.com", 80)
+    finally:
+        _sock7n.getaddrinfo = _orig_gai7n
+        _dv7n.DnsOverride._hit = _real_hit7n
+    assert _m1_7n[0][4][0] == "127.0.0.1", \
+        "变异（_hit 恒真）后 example.com 也被重定向 → 证明 ② 测的是**白名单**"
+
+    # (M2) DnsOverride 退出**不还原** → ② 的"退出必还原"必红
+    _real_exit7n = _dv7n.DnsOverride.__exit__
+    _dv7n.DnsOverride.__exit__ = lambda self, *a: False
+    try:
+        with _dv7n.DnsOverride([_dv7n.FIXTURE_DOMAIN]):
+            pass
+        _m2_7n = _sock7n.getaddrinfo is _orig_gai7n
+    finally:
+        _sock7n.getaddrinfo = _orig_gai7n
+        _dv7n.DnsOverride.__exit__ = _real_exit7n
+    assert _m2_7n is False, \
+        "变异（__exit__ 不还原）后 socket.getaddrinfo 没被还原 → 证明 ② 测的是**真还原**"
+
+    # (M3) 夹具 https=True **不包 TLS** → ① 的 HTTPS GET 必红（绑 127.0.0.2 那种改法这里不适用）
+    _real_make7n = _df7n._make_server
+    _df7n._make_server = lambda root, port, https: _real_make7n(root, port, False)
+    try:
+        _fxm7n, _bm7n = _df7n.start(port=0, https=True)
+        try:
+            _https_ok7n = True
+            try:
+                with _url7n.urlopen(_bm7n + "/", timeout=3, context=_ctx7n) as _r7n:
+                    _r7n.read()
+            except Exception:      # noqa: BLE001 - 期望这里抛（不是 TLS 服务）
+                _https_ok7n = False
+        finally:
+            _df7n.stop(_fxm7n)
+    finally:
+        _df7n._make_server = _real_make7n
+    assert _https_ok7n is False, \
+        "变异（https 不包 TLS）后 HTTPS GET 应失败 → 证明 ① 测的是**真 TLS 握手**"
+
+    # (M4) skip_category 恒返回"无输入" → ④ 的 github 归 未配置 必红（用已抓到的原始输入复算）
+    _real_sc7n = _dv7n.skip_category
+    _dv7n.skip_category = lambda _r: "无输入"
+    try:
+        _rows_m4_7n = _dv7n.classify(_res7n["_results"], _res7n["_net"], _res7n["_log_lines"])
+    finally:
+        _dv7n.skip_category = _real_sc7n
+    assert {n: c for n, s, d, c in _rows_m4_7n}.get("github") != "未配置", \
+        "变异（skip_category 恒'无输入'）后 github 不再归 未配置 → 证明 ④ 的分类是真判定"
+
+    # (M5) 抹掉 subdomain 的网络活动 → ③ 的 subdomain OK 必红（证明 OK 靠**真实活动**而非常量）
+    _net_m5_7n = dict(_res7n["_net"])
+    _net_m5_7n["subdomain"] = 0
+    _rows_m5_7n = _dv7n.classify(_res7n["_results"], _net_m5_7n, _res7n["_log_lines"])
+    assert {n: s for n, s, d, c in _rows_m5_7n}.get("subdomain") != "OK", \
+        "变异（抹掉 subdomain 活动）后仍判 OK → 证明 ③ 的 OK 测的是**真实网络活动**"
+
+    print("[7n] 续52 自检夹具补域名 + HTTPS + SKIP 分类 ok: 夹具 HTTPS 起/停（HTTP·HTTPS 都只绑 "
+          "127.0.0.1，stop 后两端口都释放，证书自签 CN=devfixture.test）/ DNS 覆盖只重定向白名单"
+          "（非白名单放行，退出必还原）/ 全流程自检 **cert·subdomain 由 SKIP 变 OK** 且零外网 / "
+          "SKIP 分类带**日志真实原因**（token 缺失的 github 归 未配置）/ GUI 自检走 subprocess / "
+          "5 条变异证伪全部按预期变红")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

@@ -25,6 +25,7 @@ import html
 import json
 import shutil
 import socket
+import subprocess
 import tempfile
 import threading
 import time
@@ -338,7 +339,14 @@ def _client_ip():
 # 续50：内置靶场的**进程内句柄**（由「开发模式」页的启动/停止按钮显式控制）。
 # 生命周期刻意做成"显式按钮控制"，不做成"入队后自动起、跑完自动关" —— 队列里任务的收尾点
 # 不可靠（进程被杀 / 异常收场），自动关容易泄漏端口。见 scanner/devfixture.py。
+# ⚠️ 续52 澄清：**这两个按钮起的夹具与「全流程自检」用的夹具是两码事** ——
+# 自检在**子进程**（`run_devflow.py`）里起自己的夹具并装 DNS 覆盖，跟这里的进程内夹具无关，
+# 也**不会**给控制台进程装任何 DNS 覆盖。这里保留按钮只是为了"手动看一眼夹具长什么样"。
 _DEV_FIXTURE = {"httpd": None, "base": ""}
+
+# 续52：最近一次「全流程自检」的子进程输出（POST → redirect 跨请求带不了大文本，故存进程内）。
+# 自检是**串行**的开发工具，用单槽缓存即可（不需要并发安全）。
+_DEV_SELFCHECK = {"out": "", "code": None, "at": ""}
 
 
 def _dev_fixture_start(port=0):
@@ -2398,6 +2406,9 @@ def create_app():
             kept=devmode.DEV_KEEP,
             fixture_port=(settings.get("dev") or {}).get("fixture_port", 0),
             last=last, stages=list(STAGE_ORDER),
+            selfcheck_out=_DEV_SELFCHECK.get("out") or "",
+            selfcheck_code=_DEV_SELFCHECK.get("code"),
+            selfcheck_at=_DEV_SELFCHECK.get("at") or "",
             msg=(request.args.get("msg") or "").strip(),
             error=(request.args.get("error") or "").strip())
 
@@ -2426,24 +2437,40 @@ def create_app():
     @login_required
     @admin_required
     def api_devmode_selfcheck():
-        """起夹具（若未起）→ 入队一个**全 13 阶段 + dev 压量**的自检任务。
+        """跑一次全流程自检 —— **以子进程**调 `py -3 run_devflow.py`，把输出渲染到页面。
 
-        压量由 `scanner/queue.py::_default_dispatch` 依据任务的 `dev_selfcheck` 选项施加
-        （`devmode.apply` + `devmode.enable_all_stages`），**绝不写回 config/settings.yaml**。
+        ⚠️ **这是续52 最重要的安全取舍**：自检要在进程内装 **DNS 覆盖**（`socket.getaddrinfo`
+        的进程级全局钩子）+ 起本地夹具 + 把配额压到最小。这套东西装在**长驻的 web 进程**里
+        非常危险 —— 全局钩子会影响控制台自身的每一次解析，夹具端口 / 线程也可能泄漏。
+        放进**子进程**后，覆盖与夹具随子进程退出一起消失，**控制台进程一个字节都不受影响**。
+        故这里**不再**走"入队 + `dev_selfcheck` 选项"那条老路（那条路是在 web 进程里跑的）。
+
+        安全：命令**不含任何用户输入**（固定 `sys.executable` + `run_devflow.py`），无注入面；
+        脚本路径从**项目根**（`BASE_DIR`）解析，不依赖 cwd；子进程超时上限 600s。
         """
         if not devmode.enabled(settings):
             return redirect(url_for("devmode_page", error="开发模式未开启（dev.enabled=false）"))
-        base = _dev_fixture_start((settings.get("dev") or {}).get("fixture_port", 0))
-        if not base:
-            return redirect(url_for("devmode_page", error="内置靶场启动失败（端口被占用？）"))
-        targets = base + "/"
-        stages = list(STAGE_ORDER)
-        options = {"dev_selfcheck": True}
-        tid = db.create_task("dev-selfcheck", targets, stages, options)
-        _spawn(tid, "dev-selfcheck", targets, stages, options)
-        _audit(audit.KIND_TASK, target=f"#{tid}",
-               detail="开发模式全流程自检（全 13 阶段，配额压到最小）")
-        return redirect(url_for("task_detail", task_id=tid))
+        script = Path(BASE_DIR) / "run_devflow.py"
+        if not script.is_file():
+            return redirect(url_for("devmode_page", error=f"找不到自检脚本：{script}"))
+        try:
+            proc = subprocess.run([sys.executable, str(script)], cwd=str(BASE_DIR),
+                                  capture_output=True, text=True, timeout=600)
+            out = (proc.stdout or "") + (proc.stderr or "")
+            code = proc.returncode
+        except subprocess.TimeoutExpired:
+            out, code = "自检超时（>600s）已被中止。", -1
+        except Exception as e:      # noqa: BLE001 - 子进程起不来：只记一行，不让页面崩
+            out, code = f"自检子进程启动失败：{type(e).__name__}: {e}", -1
+        _DEV_SELFCHECK["out"] = out
+        _DEV_SELFCHECK["code"] = code
+        _DEV_SELFCHECK["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _audit(audit.KIND_TASK, target="dev-selfcheck",
+               detail=f"开发模式全流程自检（子进程，退出码 {code}）")
+        return redirect(url_for(
+            "devmode_page",
+            msg=(f"自检完成（退出码 {code}）" if code == 0
+                 else f"自检结束但退出码非 0（{code}）—— 见下方输出")))
 
     def _tail(path, n=150):
         try:

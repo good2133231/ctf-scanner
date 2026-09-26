@@ -195,6 +195,30 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
    **不用 `threading.local()`** —— 池化请求跑在 worker 线程上、线程局部为空），再换 `runner.STAGE_REGISTRY`
    为记录 OK/FAIL 且**重抛**异常的代理（保留 PhaseRunner 的阶段级容错）；某阶段**本次零网络活动**记为 `SKIP`
    （目标不匹配 / 未配 key / 无对应资产 / 命中缓存），`portscan`（裸 socket）/ `heuristic`（零请求）恒 `OK`。
+10. **自检夹具补域名 + HTTPS + SKIP 分类**（续52）：续50 的自检报「13 个阶段均无异常」，但其中
+   **5 个阶段空转**（零网络活动）—— 结论名不副实。本轮把自检核心抽到 **`scanner/devflow.py`**
+   （`run_devflow.py` CLI 与 `tests/smoke.py [7n]` **共用**，避免两处判定漂移），并让"该跑的真的跑"：
+   - **夹具** `scanner/devfixture.py` 增 **HTTPS**（`ssl.SSLContext(PROTOCOL_TLS_SERVER)` + `wrap_socket`，
+     内联自签证书 `_CERT_PEM`/`_KEY_PEM`，CN=`devfixture.test`，**只绑 `127.0.0.1`**、**临时端口**）
+     与 `/intel/kev.json` 情报源夹具；`start(port=0, https=False)` 单监听器、`start_both()` 双监听器
+     （返回 `_Fixture` 句柄，`stop()` 一次关掉两者并删临时目录、幂等）；
+   - **目标与 DNS 覆盖**：自检目标是夹具域名 `devfixture.test` / `www.devfixture.test`（RFC 2606 保留 TLD，
+     **永不解析到公网**）+ 带显式端口的 HTTPS URL。`DnsOverride` 只覆盖 `socket.getaddrinfo` 这一个
+     **汇聚点**（`utils.resolve_host` 直调它；`socket.create_connection`（certs/dnsq）与 `requests`/`urllib`
+     的连接建立内部也走它），且**只重定向白名单主机名**（夹具域名及子域 → `127.0.0.1`），**其余一律
+     放行给真实解析器、绝不重定向**，`__exit__` 保证还原。于是 `subdomain`（DNS 爆破）与 `cert`（TLS 握手）
+     有网络活动 → 由 SKIP 变 **OK**。`dnsq` 走自建 DNS 报文、**不认**该覆盖（对夹具域名只得 NXDOMAIN）；
+   - **网络活动计数扩容**：除 `http_request` / `run_cmd`，还数 `socket.getaddrinfo`（`DnsOverride(on_lookup=…)`）；
+   - **SKIP 分类**：`classify()` 对零活动阶段从**任务日志**里取该阶段 `[<stage>]` 那行的**真实文本**作原因，
+     `skip_category()` 归到 `无输入` / `未配置` / `无匹配` / `命中缓存`；`summarize()` 输出
+     「N 个真跑、M 个跳过（原因见上）、0 个 FAIL」；
+   - **零外网铁律**：`selfcheck_settings()` 关掉会真出网的第三方能力（`fofa`/`shodan`/`quake`/`ctlog`）、
+     **清空 `keys`**（免得真花用户配额）、`intel.url` 改指本地夹具源且 `cache_hours=0`；`no_proxy_env()`
+     把夹具域名加进 `NO_PROXY`（本机若配了代理，否则 `requests` 会把夹具请求塞给代理）；
+   - **控制台自检改子进程**：`gui/app.py::api_devmode_selfcheck` 以 `subprocess.run([sys.executable,
+     run_devflow.py])`（固定命令、无用户输入、超时 600s）跑自检并把 stdout 渲染到页面 ——
+     DNS 覆盖是**进程级全局钩子**，装进长驻 web 进程很危险，放进子进程后随它退出一起消失。
+     页内「启动/停止内置靶场」两按钮保留但**与自检夹具无关**（仅手动查看、不装 DNS 覆盖）。
 
 ## 数据库表
 
@@ -231,8 +255,12 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 / `/users`（账号管理，`admin_only`）。
 **续50**：`dev.enabled=true` 时另追加**第 11 栏**「开发模式」`/devmode`（`admin_only`，
 由 `create_app()` 注入 `app.jinja_env.globals["dev_enabled"]` 决定**是否渲染**，未打开时该栏根本不出现、
-直接敲 URL 也被 `admin_required` 挡回）；页内三按钮走 `/api/devmode/fixture/start` / `.../stop` /
-`/api/devmode/selfcheck`（后者建带 `dev_selfcheck` 标记的任务并 `_spawn` 入队）。
+直接敲 URL 也被 `admin_required` 挡回）；页内按钮走 `/api/devmode/fixture/start` / `.../stop` /
+`/api/devmode/selfcheck`。
+**续52 起**：`/api/devmode/selfcheck` **不再入队**，改为 `subprocess.run([sys.executable, run_devflow.py])`
+（固定命令、无用户输入、`cwd=BASE_DIR`、超时 600s）跑自检，stdout 存进模块级 `_DEV_SELFCHECK` 并渲染到
+页面「最近一次自检输出」—— 因为自检要装 **DNS 覆盖**（进程级全局钩子）与本地夹具，**不能**在长驻 web
+进程里跑。`fixture/start|stop` 两按钮保留，但起的夹具**与自检无关**（仅手动查看、不装 DNS 覆盖）。
 
 **续46 多用户与角色**：登录由"一个共享口令"改为**账号 + 口令**（`scanner/users.py`），
 会话里放的是**身份 + 角色**（`uid` / `user` / `role`，不再是续32 那个布尔 `auth`），

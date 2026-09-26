@@ -125,19 +125,35 @@ Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错�
 - **开发模式开关**：`config/settings.yaml` 的 `dev.enabled`（默认 `false`）。打开后控制台侧边栏**才出现**
   第 11 栏「开发模式」（**仅管理员可见**，未打开时该栏**根本不渲染**，直接敲 `/devmode` 也进不去）。
 - **全流程自检**（本功能的验收手段，控制台与 CLI 双入口）：
-  - **控制台**：「开发模式」页三个按钮 —— 「启动内置靶场」/「停止内置靶场」/「跑一次全流程自检」；
-    自检按钮会 `db.create_task` 一个带 `dev_selfcheck` 标记的任务并 `_spawn` 入队，由队列 worker 在
-    **压缩后的内存配置副本**下跑完 13 个阶段；
-  - **CLI**：`py -3 run_devflow.py`（与 `run_gui.py` 对称的独立入口）。它先起内置靶场 → `devmode.apply(load_settings())`
-    → 依次跑全部 13 阶段（`runner.run_task` 前台执行）→ 打印**每阶段 `OK`/`SKIP`/`FAIL` + 请求数 + 耗时**，
-    无 `FAIL` 退出码 0，否则 1。**这是本功能的验收证据**。
-- **内置靶场**（`scanner/devfixture.py`）：标准库 `ThreadingHTTPServer`，**只绑 `127.0.0.1`（绝不 `0.0.0.0`）**，
-  即时生成 `index.html` / `admin/index.html` / `robots.txt` / `app.js` / `.env`（`.env` 是**明显假的样例值**
-  `devfixture-not-a-real-secret`，只为让敏感文件检查有命中），每次启动写独立临时目录、停止即清理。
+  - **控制台**：「开发模式」页「跑一次全流程自检」按钮 —— 它**以子进程**调 `py -3 run_devflow.py`
+    （`gui/app.py::api_devmode_selfcheck`），把子进程 stdout 原文渲染到页面。**为什么必须是子进程**：
+    自检要在进程内装 **DNS 覆盖**（`socket.getaddrinfo` 的进程级全局钩子）+ 起本地夹具 + 把配额压到最小；
+    装在**长驻的 web 进程**里非常危险（全局钩子会影响控制台自身的每一次解析、夹具端口/线程也可能泄漏）。
+    放进子进程后覆盖随它退出一起消失，**控制台进程一个字节都不受影响**。页内另有「启动 / 停止内置靶场」
+    两个按钮 —— 它们起的夹具**与自检用的夹具无关**（自检在子进程里起自己的），仅供**手动打开看一眼**，
+    **不装任何 DNS 覆盖**。
+  - **CLI**：`py -3 run_devflow.py`（与 `run_gui.py` 对称的独立入口）。它先起夹具 → 压量 → 依次跑全部
+    13 阶段（`runner.run_task` 前台执行）→ 打印**每阶段 `真跑 / 跳过（带原因）/ FAIL` + 网络活动数 + 耗时**，
+    无 `FAIL` 退出码 0，否则 1。**这是本功能的验收证据**。核心逻辑在 `scanner/devflow.py`
+    （CLI 与 `tests/smoke.py [7n]` **共用**，避免两处判定漂移）。
+- **内置靶场**（`scanner/devfixture.py`）：标准库 `ThreadingHTTPServer`，**HTTP 与 HTTPS 都只绑 `127.0.0.1`
+  （绝不 `0.0.0.0`）**、**临时端口**（不占 80/443）。即时生成 `index.html` / `admin/index.html` /
+  `robots.txt` / `app.js` / `.env`（`.env` 是**明显假的样例值** `devfixture-not-a-real-secret`）+
+  `/intel/kev.json`（**情报源夹具**，内容标注 "NOT real data"）。HTTPS 用**内联自签证书**
+  （CN=`devfixture.test`，有效期约 10 年，**不是任何生产凭据**）。每次启动写独立临时目录、停止即清理。
   它**不复用** `tests/smoke.py` 的 `smoke_root/`，是产品侧模块（不依赖测试夹具）。
-- **「跳过」的口径**：某阶段**本次零网络活动**即记为 `SKIP`（目标不匹配 / 未配 key / 无对应资产 / 命中缓存），
-  **有 key 的阶段照常真跑**、没 key 的记为「跳过」—— 不做假成功。`portscan`（裸 socket）与 `heuristic`
-  （零请求）恒为 `OK`。
+- **自检怎么让"该跑的真的跑"**（续52）：目标是**夹具域名** `devfixture.test` / `www.devfixture.test`
+  （RFC 2606 保留 TLD，**永远不解析到公网**）+ 一个带显式端口的 HTTPS URL。自检装**只覆盖白名单主机名**
+  的 DNS 覆盖（`devfixture.test` 及其子域 → `127.0.0.1`，**其它域名一律放行给真实解析器、绝不重定向**，
+  `try/finally` 保证还原）—— 于是 `subdomain`（有裸域名目标 + DNS 爆破）与 `cert`（有 https 站点可取证）
+  都会**真跑**而不是空转。**零外网铁律**：自检副本里关掉会真出网的第三方能力（FOFA / Shodan / Quake /
+  crt.sh）、**清空第三方凭据**（`keys` 置空，免得一次自检真花掉用户配额），`intel` 改指**本地夹具源**。
+- **「跳过」的口径（续52 起带原因分类）**：某阶段**本次零网络活动**即记为 `SKIP`，**原因取自任务日志里
+  该阶段的真实文本**（不是写死一张表），并归到 `无输入` / `未配置` / `无匹配` / `命中缓存` 之一 ——
+  不再用一句笼统的"零网络活动"把四种原因混在一起。`portscan`（裸 socket）与 `heuristic`（零请求）恒为 `OK`。
+  报告末句不再是"13 个阶段均无异常"，而是「**N 个真跑、M 个跳过（原因见上）、0 个 FAIL**」。
+- **网络活动怎么数**（续52 起）：除了 `http_request` / `run_cmd`，还数**系统解析器**（`socket.getaddrinfo`）——
+  因为 `subdomain` 的内置 DNS 爆破、`cert` 的 TLS 握手、`osint` 的 IP 反查都**不走** HTTP / 子进程。
 - **`budget_total` 例外（**不压到 1**）**：`limits.budget_total` 与 `limits.budget_subprocess_weight`
   **刻意不压缩** —— 若把 `budget_total` 压到 `1`，第 2 个请求就被预算拒绝、流水线**永远跑不完**，
   自检本身自相矛盾（见 `scanner/devmode.py` 的 `DEV_KEEP` 与文件头注释）。
@@ -185,7 +201,8 @@ ctf-scanner/
 │   ├── db.py  config.py  utils.py  targets.py
 │   ├── queue.py             #   持久化任务队列 worker（续49：原子认领 + 重启重新入队）
 │   ├── devmode.py           #   开发模式：把各阶段「量」压到最小 1（深拷贝、不写回、budget_total 例外）
-│   ├── devfixture.py        #   内置靶场（标准库 HTTP，只绑 127.0.0.1，自检用）
+│   ├── devfixture.py        #   内置靶场（标准库 HTTP/HTTPS，只绑 127.0.0.1，自检用；含内联自签证书 + 情报源夹具）
+│   ├── devflow.py           #   全流程自检核心（夹具域名 + DNS 覆盖 + 压量 + 逐阶段 真跑/跳过/FAIL 分类；CLI 与 smoke 共用）
 │   ├── report.py            #   报告三格式（Markdown / 自包含 HTML / 无头浏览器打印 PDF），共用 collect() 快照
 ├── tools/import_ref_pocs.py #   参考项目 Python POC 静态导入器（产物默认关闭）
 ├── tools/import_dir_dict.py #   目录扫描大字典生成器（读 dirmap 字典 → config/dicts/dirs_big.txt）

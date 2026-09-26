@@ -3,6 +3,82 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-26 —— 续52 自检夹具补域名 + HTTPS + SKIP 分类（P0）
+
+> 实施者：**WorkBuddy · Hy4-preview** · 需求由**用户**点名（P0）、**主理人**派单
+
+### 0. 是什么（需求）
+
+续50 的全流程自检报「13 个阶段均无异常」，但其中 **5 个阶段是空转**（零网络活动）—— 这句结论
+**名不副实**。用户要的**不是**硬凑全绿，而是让自检「**该跑的真的跑、跑不了的如实说清为什么**」。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/devfixture.py` | 增 **HTTPS**（`ssl.SSLContext(PROTOCOL_TLS_SERVER)` + `wrap_socket`，**内联自签证书** `_CERT_PEM`/`_KEY_PEM`，CN=`devfixture.test`，有效期约 10 年）+ `/intel/kev.json` **情报源夹具**（内容标注 "NOT real data"）；`start(port=0, https=False)`（单监听器）/ `start_both()`（双监听器，返回 `_Fixture` 句柄）；`stop()` 一次关掉两者、删临时目录、**幂等**；`_QuietServer.handle_error` 吞掉逐连接噪声（浏览器/扫描器握完手就断，不是夹具故障）。**仍只绑 `127.0.0.1`** |
+| `scanner/devflow.py`（**新**） | 自检核心（CLI 与 smoke **共用**）：`FIXTURE_DOMAIN`/`FIXTURE_SUBDOMAIN`、`DnsOverride`（只覆盖 `socket.getaddrinfo`、**只重定向白名单主机名**、其余放行、退出必还原）、`no_proxy_env()`（夹具域名加进 `NO_PROXY`，否则本机代理会把夹具请求截走）、`selfcheck_settings()`（压量 + 全阶段 + 关外网第三方 + **清空 keys** + intel 指夹具源）、`build_targets()`、`instrument()`（计数 http_request/run_cmd **+ getaddrinfo**）、`classify()`/`skip_category()`/`summarize()`（**SKIP 带日志真实原因 + 归类**）、`run_selfcheck()` |
+| `run_devflow.py` | 改为**薄 CLI**：顶部隔离 `CTFSCANNER_DB`/`CTFSCANNER_LOGS`（**库放进本轮专属目录**，连带隔离 intel 缓存）→ 调 `devflow.run_selfcheck` → 打印报告。报告新增 SKIP 归类与「N 个真跑、M 个跳过、0 个 FAIL」 |
+| `gui/app.py` | `api_devmode_selfcheck` **改为子进程** `subprocess.run([sys.executable, run_devflow.py])`（固定命令、无用户输入、`cwd=BASE_DIR`、超时 600s），stdout 存 `_DEV_SELFCHECK` 并渲染到页面；`devmode_page` 传 `selfcheck_out/code/at`；「起/停内置靶场」两按钮保留但**与自检夹具无关** |
+| `gui/templates/devmode.html` | 自检按钮说明改为"**子进程**调 `run_devflow.py`"；新增「最近一次自检输出」`<pre>`；「内置靶场（手动查看用）」单列并说明**不装 DNS 覆盖、与自检无关** |
+| `tests/smoke.py` | 新增 `[7n]` 组（5 组断言 + 5 条 §6.1 变异证伪） |
+| `README.md` / `docs/{roadmap,architecture}.md` | README「开发模式 + 全流程自检」节重写（子进程、夹具域名/HTTPS、DNS 覆盖、零外网、SKIP 分类）；目录树补 `devflow.py`；roadmap 新增续52 条；architecture 新增 §流水线 10 + `/devmode` 段更新 |
+
+### 2. 关键设计取舍（为什么这么做）
+
+- **为什么让自检"真的跑"**：续50 的目标是一个 URL（`http://127.0.0.1:PORT/`），于是 `subdomain`
+  没有裸域名输入、`cert` 没有 https 站点可取证 —— 两阶段直接空转。改成**夹具域名**（`devfixture.test`
+  及子域）+ **HTTPS 夹具** + 带显式端口的 HTTPS URL 后，两阶段都有了真实输入。
+- **为什么用 `.test`**：RFC 2606 保留 TLD，**永远不解析到公网**。即使有阶段用了**不认 Python DNS 覆盖**
+  的外部工具（subfinder / httpx / nmap / puredns），它们对 `devfixture.test` 也只能从公网解析器拿到
+  NXDOMAIN，**不会产生任何"打到真实主机"的外网流量**。
+- **DNS 覆盖的红线**：只覆盖 `socket.getaddrinfo` 这一个**汇聚点**（已 grep 确认：`resolve_host` 直调它，
+  `create_connection`（certs/dnsq）与 `requests`/`urllib` 内部也走它），且**只重定向白名单主机名**
+  （夹具域名及子域 → `127.0.0.1`），**其它任何域名一律放行给真实解析器、绝不重定向**，`try/finally`
+  保证还原。`scanner.dnsq` 走**自建 DNS 报文**、不认该覆盖（对夹具域名只得 NXDOMAIN）。
+- **SKIP 为什么必须分类**：四种原因（无输入 / 未配置 / 无匹配 / 命中缓存）混成一句"零网络活动"
+  **等于没说**。续52 起原因取自**任务日志里该阶段的真实文本**（不是写死一张 stage→原因 表，
+  改代码时报告自动跟着变），归类后再渲染。
+- **网络活动计数为什么要数 `getaddrinfo`**：`subdomain` 的内置 DNS 爆破、`cert` 的 TLS 握手、
+  `osint` 的 IP 反查都**不走** `http_request`/`run_cmd`；只数后两者，这三个阶段真跑了也会被误判空转
+  —— 正是续50 的老毛病。
+- **零外网铁律**：`enable_all_stages` 会打开 github（要 token 才发请求），而用户机器上 `config/keys.yaml`
+  **往往真配了** FOFA / GitHub 凭据 —— 不清空就会**真花掉用户配额**、并打到站外。故自检副本**清空 `keys`**、
+  关掉 `fofa`/`shodan`/`quake`/`ctlog`、`intel` 改指本地夹具源（`cache_hours=0` 强制不吃旧缓存）。
+- **控制台自检为什么必须是子进程**：自检要装 **DNS 覆盖**（进程级全局钩子）+ 起本地夹具 + 压量。
+  装进**长驻 web 进程**很危险（全局钩子影响控制台自身每次解析、夹具端口/线程可能泄漏）。放进子进程后
+  随它退出一起消失，**控制台进程一个字节都不受影响**。命令**不含任何用户输入**（无注入面），路径从
+  **项目根**（`BASE_DIR`）解析。
+
+### 3. 怎么验证（实测）
+
+- **`py -3 run_devflow.py` → EXIT=0**（真跑，日志 `logs/_devflow52_run4.txt`）。关键变化：
+  `subdomain` 由 `SKIP` → **`OK`（90 次网络活动）**、`cert` 由 `SKIP` → **`OK`（1 次）**；
+  `intel` 由 `SKIP` → `OK`（2 次，走本地夹具源）；`takeover` 仍 `SKIP(无输入)`（无子域名资产 ——
+  DNS 覆盖把 `*.devfixture.test` 都解析到 `127.0.0.1`，被泛解析过滤掉了）、`github` `SKIP(未配置)`
+  （自检清空了 token）。末句：`13 个阶段：11 个真跑、2 个跳过（原因见上）、0 个 FAIL`。
+- 门禁 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=100000000 py -3 tests/smoke.py` →
+  **EXIT=0 / `SMOKE PASS` ×1 / `AssertionError` 0**；`[7n]` 打印（日志 `logs/smoke-52.txt`）。
+- `git diff --numstat == --ignore-cr-at-eol --numstat` 逐文件一致（新文件 `devflow.py` 也按仓库约定存 CRLF）。
+
+### 4. §6.1 证伪（把新行为退回"旧/天真"实现，确认新断言**真的变红**）
+
+`[7n]` 末尾内置 5 条**运行期变异**（跑完自动还原，变异版本不提交）：
+
+- **M1 `DnsOverride._hit` 恒真（重定向一切）** → ② 的"非白名单放行"必红（`example.com` 被劫持成 `127.0.0.1`）。
+- **M2 `DnsOverride.__exit__` 不还原** → ② 的"退出必还原"必红（`socket.getaddrinfo` 未还原）。
+- **M3 夹具 `https=True` 不包 TLS** → ① 的 HTTPS GET 必红（握手失败）。
+- **M4 `skip_category` 恒返回"无输入"** → ④ 的"token 缺失的 github 归 `未配置`"必红。
+- **M5 抹掉 `subdomain` 的网络活动** → ③ 的"`subdomain` 为 `OK`"必红（证明 `OK` 靠**真实网络活动**而非常量）。
+
+五条都**按预期变红**，证明新断言测的是"真白名单 / 真还原 / 真 TLS / 真分类 / 真活动"这些**真语义**。
+
+### 5. 仍未做 / 说明
+
+- 自检仍**只跑本地夹具**（不对真实目标压量跑）；无阶段级耗时基线 / 回归对比。
+- `scanner/queue.py::_default_dispatch` 里 `dev_selfcheck` 那条老路（在 web 进程里入队跑自检）
+  **已不再被 GUI 使用**（改走子进程），但**保留未删**（属既有机制，本轮只做"GUI 改子进程"，不顺手删）。
+
 ## 2026-09-26 —— 续51 漏洞页分页 + 排序（P0 数据正确性）
 
 > 实施者：**WorkBuddy · Hy4-preview** · 需求由**用户**点名（P0）、**主理人**派单

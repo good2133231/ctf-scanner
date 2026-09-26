@@ -31,6 +31,23 @@
 
 <section class="panel">
   <h2>操作</h2>
+  <form method="post" action="{{ url_for('api_devmode_selfcheck') }}" style="display:inline"
+        onsubmit="return confirm('跑一次全流程自检？（全 13 阶段、配额压到最小，仅打本机夹具，可能耗时几分钟）')">
+    <button type="submit">跑一次全流程自检</button>
+  </form>
+  <p class="muted small">
+    自检以 <b>子进程</b> 调 <code>run_devflow.py</code>：起夹具（域名 <code>devfixture.test</code>
+    → 本机 127.0.0.1）→ 压量到最小 → 真跑全 13 阶段 → 逐阶段列出 <b>真跑 / 跳过（带原因）/ FAIL</b>。
+    结果输出见下方「最近一次自检输出」。
+  </p>
+  <p class="muted small">
+    ⚠️ 自检里的 DNS 覆盖 / 夹具 / 压量都只作用于那个<b>子进程</b>，随它退出一起消失，
+    <b>不会影响控制台本身</b>（这也是它必须走子进程的原因）。
+  </p>
+</section>
+
+<section class="panel">
+  <h2>内置靶场（手动查看用）</h2>
   <form method="post" action="{{ url_for('api_devmode_fixture_start') }}" style="display:inline">
     <button type="submit">启动内置靶场</button>
   </form>
@@ -38,11 +55,11 @@
         onsubmit="return confirm('停止内置靶场？（仅停本机夹具，不影响其它）')">
     <button type="submit">停止内置靶场</button>
   </form>
-  <form method="post" action="{{ url_for('api_devmode_selfcheck') }}" style="display:inline"
-        onsubmit="return confirm('跑一次全流程自检？（全 13 阶段、配额压到最小，仅打本机夹具）')">
-    <button type="submit">跑一次全流程自检</button>
-  </form>
-  <p class="muted small">自检 = 起夹具（若未起）→ 入队一个全 13 阶段、配额压到最小的任务，目标为本机夹具。</p>
+  <p class="muted small">
+    这两个按钮起的夹具<b>与上面「全流程自检」用的夹具无关</b>：这里只是起一个进程内的静态站，
+    供你<b>手动</b>打开看一眼（<code>{{ base or '（未启动）' }}</code>）。它<b>不装任何 DNS 覆盖</b>，
+    也不参与自检 —— 自检有自己独立的夹具（在子进程里，临时端口）。
+  </p>
 </section>
 
 <section class="panel">
@@ -61,12 +78,16 @@
 </section>
 
 <section class="panel">
-  <h2>最近一次自检</h2>
-  {% if last %}
-  <p><a href="{{ url_for('task_detail', task_id=last['id']) }}">任务 #{{ last['id'] }}</a>
-     —— 状态 <code>{{ last['status'] }}</code>，创建于 {{ last['created_at'] }}</p>
+  <h2>最近一次自检输出</h2>
+  {% if selfcheck_out %}
+  <p class="muted small">
+    运行于 {{ selfcheck_at }}，退出码
+    {% if selfcheck_code == 0 %}<code>0</code>（无阶段 FAIL）{% else %}
+    <code>{{ selfcheck_code }}</code>（非 0，见输出）{% endif %}
+  </p>
+  <pre class="muted small" style="max-height:520px;overflow:auto;white-space:pre-wrap">{{ selfcheck_out }}</pre>
   {% else %}
-  <p class="muted">还没有跑过自检。</p>
+  <p class="muted">还没有跑过自检（自检在<b>子进程</b>里跑，输出会显示在这里）。</p>
   {% endif %}
 </section>
 {% endif %}
