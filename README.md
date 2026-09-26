@@ -90,7 +90,7 @@ python3 run_gui.py
 
 - **`config/keys.yaml`（第三方 API key，必须自建，已被 `.gitignore` 忽略）**：从仓库的 `config/keys.yaml.example` 复制一份 `config/keys.yaml` 填真实值。**切勿把真实 key 提交进仓库**（它已 gitignore；CI 跑者无此文件时 `load_keys()` 返回 `{}`，整轮冒烟仍可通过）。结构：
   ```yaml
-  fofa:   {email: "", key: ""}   # FOFA（favicon / 证书 / 标题反查；当前 settings.yaml 里 fofa.enabled=true，会真查并消耗配额）
+  fofa:   {email: "", key: ""}   # FOFA（favicon / 证书 / 标题反查；settings.yaml 里 fofa.enabled 现为 false，配好 key 并显式打开才会真查并消耗配额）
   shodan: {key: ""}              # Shodan favicon 反查（默认关）
   quake:  {key: ""}              # 360 Quake favicon 反查（默认关）
   github: {token: ""}            # GitHub 泄露检索（默认关；没配就一次请求都不发）
@@ -183,8 +183,9 @@ ctf-scanner/
   **XSS 按回显上下文分级**（JS 串/无引号属性→high，引号属性/文本节点→medium，HTML 注释→降级）；
   **A10 SSRF 只做受控回连**（证明"服务端会出网"），**刻意不去打内网地址**；
 - A04（不安全设计）、A07（认证缺陷）、A09（日志与监控）等依赖业务上下文的类别，黑盒自动化无法可靠覆盖，文档中如实标注；
-- 外部情报（`osint` 阶段：C 段反查 / FOFA favicon 反查 / FOFA 证书反查）：**`fofa.enabled` 在当前配置里为 `true`**，
-  即每次默认任务都会真查 FOFA 并消耗配额（`config/keys.yaml` 已配真实凭据）；`iprecon.enabled` /
+- 外部情报（`osint` 阶段：C 段反查 / FOFA favicon 反查 / FOFA 证书反查）：**`fofa.enabled` 当前为 `false`**
+  （2026-09-26 用户决定"先关，投入生产时再开"）—— 即默认任务不会碰 FOFA。需要时在「策略配置」页打开，
+  打开后每次任务都会真查 FOFA 并消耗配额（前提是 `config/keys.yaml` 已配真实凭据）；`iprecon.enabled` /
   `shodan` / `quake` / `ctlog` 与 `intel` / `heuristic` / `github` 默认关。`osint` 的阈值
   （黑 ico 200、通用证书 200、"共享主机"单 IP 域名数 30）是保守估计值、未经真实数据校准，
   其联网往返也无法离线自测（`tests/smoke.py` 只覆盖纯函数与门控，全阶段真跑见 `[6u]`）。
