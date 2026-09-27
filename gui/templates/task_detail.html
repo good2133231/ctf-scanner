@@ -159,6 +159,7 @@
       两者都靠任务级选项（<span class="mono">dirscan_full</span> /
       <span class="mono">screenshot_on</span>）强制生效，<b>不改全局策略</b>；
       单次目录补扫最多处理 {{ dir_cap }} 个站点（<span class="mono">limits.dirscan_max_urls</span>）。
+      「批量打开」只在你自己的浏览器里开标签页（单次最多 20 个），<b>不发任何请求</b>。
       {% if dir_full %}当前任务已按<b>深扫</b>跑过目录，通常无需再来一次。{% endif %}</p>
     {% if shot_missing %}
     <p class="muted small">{% if not shot_enabled %}本任务没有截图产物：截图阶段策略级<b>默认关闭</b>
@@ -174,6 +175,8 @@
       <div class="bulkbar">
         <button type="submit" class="ghost" name="stage" value="dirscan">深度目录补扫（勾选站点）</button>
         <button type="submit" class="ghost" name="stage" value="screenshot">补截图（勾选站点）</button>
+        <button type="button" class="ghost" id="btn-open-sites"
+          title="把勾选的站点逐个在新标签页打开；只开标签页，不发送任何扫描请求">批量打开（勾选站点）</button>
         <label class="muted" title="勾选后不新建任务，把本次补扫追加进本任务（同一 站点+路径 不重复入库）">
           <input type="checkbox" name="append" value="1"> 追加到本任务</label>
         <label class="muted">任务名

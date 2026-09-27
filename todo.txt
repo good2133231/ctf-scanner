@@ -1461,3 +1461,16 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        不得再出现 limit=1000"的源码红线）、全量 SMOKE PASS。刻意不改/仍未做：任务详情页其余资产页签不分页
        （经排查是性能/UX 而非丢数据，依赖跨行汇总与整表语义，改造面大 → 留单独一轮）；/dirs?agg=1 的 5000
        与报告资产小节的 [:100]/[:200] 展示上限属有意护栏；报告资产小节"仅列前 N 条"提示留待下一轮。
+[完成] 15、续56（2026-09-27）：站点页签「批量打开」+ 报告资产小节的截断提示。
+       ① 站点页签勾选站点 → 一次在**你自己的浏览器**里逐个开新标签页：纯客户端 window.open
+       （gui/static/app.js 新增 initOpenSites()），**不发任何请求**，与同排的「深度目录补扫 / 补截图」
+       性质不同（那两个会真扫）；上限 OPEN_SITES_MAX=20 防手滑，超出条数与被弹窗拦截条数如实显示
+       （不假装"全开"）；拿到句柄即 w.opener=null 断反向标签劫持。按钮**必须** type="button"
+       —— 它落在补扫 POST /api/rescan 表单内，写成 submit 会误触发真扫描。
+       ② 报告资产小节原先"只列前 N 条、标题写死'前 200'、不给总数"，读者无法判断是否被截断 →
+       新增 CAP_* 常量 + report._cap_title()，**只在真的被截断时**把总数写进小节标题
+       （"存活站点（共 120 条，此处仅列前 100 条）"），MD / HTML 共 12 处同改；漏洞清单仍不设上限。
+       文件：gui/static/app.js、gui/templates/task_detail.html、scanner/report.py、tests/smoke.py。
+       验证：tests/smoke.py 新增 [7r] 组（模板 redline / JS 注册 / _cap_title 三态 + 120 条注入 /
+       源码 [:100]·[:200] 红线，含 type=button 变异证伪）、全量 SMOKE PASS、§9 行尾两口径逐文件一致
+       （tests/smoke.py 被归一化的 1494 处已按内容对齐 HEAD 逐行还原）。

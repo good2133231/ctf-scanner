@@ -9023,6 +9023,64 @@ http:
           "tasks_with_vulns()==漏洞表 task_id 全集 + 名字与下拉都覆盖最老任务（M1 证伪）｜"
           "find_task_by_name 不受最新 200 条限制（M2 证伪）")
 
+    # ---- [7r] 续56：站点页签「批量打开」+ 报告资产小节的截断提示 ----
+    print("[7r] 续56 站点批量打开 + 报告截断提示 …")
+    _rep7r = _rep7q                                   # 同一个模块，沿用 [7q] 的导入
+    _q_tpl7r = (ROOT / "gui" / "templates" / "task_detail.html").read_text(encoding="utf-8")
+    _q_det7r = _q_c.get(f"/tasks/{_tidB7o}").get_data(as_text=True)
+
+    # ① 「批量打开」按钮**必须是 type="button"** —— 它长在补扫表单（POST /api/rescan）里，
+    #    一旦退回默认的 submit，勾几个站点点一下就会**真的发起一次扫描**。这是安全属性，钉死。
+    def _q_open_btn_ok(_text):
+        _m = _re7q.search(r'<button[^>]*id="btn-open-sites"[^>]*>', _text)
+        return bool(_m) and 'type="button"' in _m.group(0)
+
+    assert not _q_open_btn_ok('<button type="submit" id="btn-open-sites">开</button>'), \
+        "检测器必须识破'提交型'的批量打开按钮（变异体）"
+    assert _q_open_btn_ok('<button type="button" id="btn-open-sites">开</button>'), \
+        "检测器必须认得正确形态"
+    assert _q_open_btn_ok(_q_det7r), \
+        "站点页签的「批量打开」必须存在且为 type=button（否则点一下就会误触发真实补扫）"
+    assert 'id="btn-open-sites"' in _q_det7r.split('id="pane-sites"', 1)[1].split(
+        'id="pane-subs"', 1)[0], "「批量打开」必须落在站点页签内（放错页签等于按钮消失）"
+
+    # ② 前端接线：函数存在 **且** 在 DOMContentLoaded 里注册（只写函数不注册 = 点了没反应）
+    _q_js7r = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "function initOpenSites(" in _q_js7r and "initOpenSites();" in _q_js7r, \
+        "app.js 必须有 initOpenSites 且在 DOMContentLoaded 中注册"
+    # 勾选行的 value 必须就是站点 URL —— 这正是 JS 读去 window.open 的数据源
+    assert _re7q.search(r'class="pick pick-row"\s+name="target" value="\{\{\s*s\.url\s*\}\}"',
+                        _q_tpl7r), "站点勾选框的 value 必须是站点 URL（批量打开的数据来源）"
+
+    # ③ 报告：资产小节被截断时必须写出总数（纯函数口径 + 注入 120 个站点走真渲染）
+    assert _rep7r._cap_title("存活站点", 100, 100) == "存活站点", "刚好等于上限不算截断，不得加注"
+    assert _rep7r._cap_title("存活站点", 99, 100) == "存活站点"
+    assert _rep7r._cap_title("存活站点", 101, 100) == "存活站点（共 101 条，此处仅列前 100 条）"
+    _q_real_ls7r = _rep7r.db.list_sites
+    try:
+        _rep7r.db.list_sites = lambda _t: [
+            {"url": f"http://only-{i}.example/", "status": 200, "title": "t",
+             "tech": "", "server": ""} for i in range(120)]
+        _q_md7r = _rep7r.generate(_tidB7o)
+        _q_html7r = _rep7r.generate_html(_tidB7o)
+    finally:
+        _rep7r.db.list_sites = _q_real_ls7r
+    assert "共 120 条，此处仅列前 100 条" in _q_md7r, "MD 报告被截断时必须写出总数"
+    assert "共 120 条，此处仅列前 100 条" in _q_html7r, "HTML 报告同理（两格式不得漂移）"
+    assert "共 120 条" not in _rep7r.generate(_tidB7o), "还原真实数据后不该再有那条注（避免噪声）"
+    # 源码红线：展示上限必须走 CAP_* 常量 —— 字面量切片会让"标题说的上限"与"真实切片"脱钩
+    def _q_lit_slice(_text):
+        return bool(_re7q.search(r"\b(sites|ports|csegs|certs|subs|dirs)\[:(100|200)\]", _text))
+
+    assert _q_lit_slice("for s in sites[:100]:"), "检测器必须能抓到字面量切片（变异体）"
+    assert not _q_lit_slice((ROOT / "scanner" / "report.py").read_text(encoding="utf-8")), \
+        "report.py 的资产小节展示上限必须走 CAP_* 常量，不得再写字面量切片"
+
+    print("[7r] 续56 站点批量打开 + 报告截断提示 ok: 按钮在站点页签内且 type=button"
+          "（检测器变异证伪｜否则点一下会误触发真实补扫）｜initOpenSites 已注册｜勾选行 value＝站点 URL｜"
+          "_cap_title 三态（等于上限不加注）｜注入 120 站点后 MD/HTML 都写出'共 120 条，此处仅列前 100 条'｜"
+          "还原后无该注｜report.py 无字面量切片（检测器变异证伪）")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

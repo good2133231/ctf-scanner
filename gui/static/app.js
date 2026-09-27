@@ -238,6 +238,40 @@ function initPickAll() {
   });
 }
 
+/* ---------- 站点页签：批量在浏览器打开勾选站点 ---------- */
+// 浏览器的弹窗拦截只认「用户手势」：必须在 click 处理器里**同步**逐个 window.open，
+// 一旦塞进 setTimeout / await 之后就会被拦成"只开第一个"。所以这里不 await、不延迟。
+// 上限 20 是防手滑（勾 200 个站点 = 200 个标签页，浏览器直接卡死），超出的部分如实报出来。
+// 只开标签页、不发任何请求 —— 与旁边的「深度目录补扫 / 补截图」是两个性质（那两个会真扫）。
+const OPEN_SITES_MAX = 20;
+
+function initOpenSites() {
+  const btn = document.getElementById("btn-open-sites");
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", () => {
+    const msg = document.getElementById("op-msg");
+    const urls = [...document.querySelectorAll("#tbl-detail-sites .pick-row:checked")]
+      .map(c => c.value).filter(Boolean);
+    if (!urls.length) { if (msg) msg.textContent = "请先勾选要打开的站点"; return; }
+    const list = urls.slice(0, OPEN_SITES_MAX);
+    let blocked = 0;
+    list.forEach(u => {
+      let w = null;
+      try { w = window.open(u, "_blank"); } catch (e) { w = null; }
+      // 反向标签劫持：新页面能通过 window.opener 改写本页；拿到句柄就立刻断开
+      if (w) { try { w.opener = null; } catch (e) { /* 跨域句柄，忽略 */ } }
+      else blocked++;
+    });
+    let text = `已打开 ${list.length - blocked} / ${list.length} 个站点`;
+    if (urls.length > list.length) {
+      text += `（另有 ${urls.length - list.length} 个未开，单次上限 ${OPEN_SITES_MAX}）`;
+    }
+    if (blocked) text += `；${blocked} 个被浏览器弹窗拦截，请允许本站弹出窗口后重试`;
+    if (msg) msg.textContent = text;
+  });
+}
+
 /* ---------- 站点截图灯箱（点击缩略图放大，遮罩/关闭钮/Esc 关闭，不新开标签页） ---------- */
 function initLightbox() {
   const overlay = document.getElementById("lb-overlay");
@@ -345,6 +379,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initFilters();
   initCollapsiblePanels();
   initPickAll();
+  initOpenSites();
   initVulnReview();
   initLightbox();
   // 任务列表页的轮询/筛选/批量操作由 initTaskTable() 负责（模板内显式调用）

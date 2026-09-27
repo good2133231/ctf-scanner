@@ -21,6 +21,19 @@ SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 # 复核状态（P1-1）在报告里的展示名
 REVIEW_LABEL = {"": "待复核", "confirmed": "已确认", "false_positive": "误报"}
 
+# 报告里「资产小节」的展示上限：这是**可读性护栏**（续55 已确认为刻意设计，不是 bug），
+# 但"只列前 N 条、不说还有多少"会让读者**无法判断自己看到的是不是全部** —— 续56 起把总数
+# 写进小节标题（只在真的被截断时写）。
+# **漏洞清单不设上限**：那是结论，一条都不能少（见 `collect()` 的 `limit=None`）。
+CAP_SITES, CAP_PORTS, CAP_CSEGS, CAP_CERTS, CAP_SUBS, CAP_DIRS = 100, 200, 200, 200, 200, 100
+
+
+def _cap_title(name, total, cap):
+    """小节标题：**只在本节真的被截断时**才带上总数（没截断就只留小节名，不给报告添噪声）。"""
+    if total > cap:
+        return f"{name}（共 {total} 条，此处仅列前 {cap} 条）"
+    return name
+
 
 def _cert_source(row):
     """证书行的来源标签：`ct` = 公开 CT 日志（crt.sh），其余 = 本次真实 TLS 握手。
@@ -154,36 +167,37 @@ def generate(task_id):
                          f"{_c(REVIEW_LABEL.get(v['review'] or '', '待复核'))} |")
         lines.append("")
     if sites:
-        lines.append("## 存活站点")
+        lines.append("## " + _cap_title("存活站点", len(sites), CAP_SITES))
         lines.append("")
         lines.append("| URL | 状态 | 标题 | 技术栈 | Server |")
         lines.append("|---|---|---|---|---|")
-        for s in sites[:100]:
+        for s in sites[:CAP_SITES]:
             lines.append(f"| {_c(s['url'])} | {_c(s['status'])} | {_c(s['title'] or '-')} | "
                          f"{_c(s['tech'] or '-')} | {_c(s['server'] or '-')} |")
         lines.append("")
     if ports:
-        lines.append("## 开放端口与服务（前 200）")
+        lines.append("## " + _cap_title("开放端口与服务", len(ports), CAP_PORTS))
         lines.append("")
         lines.append("| 主机 | IP | 端口 | 服务 | banner |")
         lines.append("|---|---|---|---|---|")
-        for p in ports[:200]:
+        for p in ports[:CAP_PORTS]:
             lines.append(f"| {_c(p['host'] or '-')} | {_c(p['ip'] or '-')} | {_c(p['port'])} | "
                          f"{_c(p['service'] or '-')} | {_c((p['banner'] or '-')[:80])} |")
         lines.append("")
     if csegs:
-        lines.append("## C 段视野（前 200）")
+        lines.append("## " + _cap_title("C 段视野", len(csegs), CAP_CSEGS))
         lines.append("")
         lines.append("| C 段 | IP | 域名数 | 反查到的域名 |")
         lines.append("|---|---|---|---|")
-        for c in csegs[:200]:
+        for c in csegs[:CAP_CSEGS]:
             lines.append(f"| {_c(c['segment'] or '-')} | {_c(c['ip'] or '-')} | {_c(c['count'])} | "
                          f"{_c((c['domains'] or '-')[:120])} |")
         lines.append("")
     if certs:
         # TLS 证书取证（默认关闭的 cert 阶段产物）。措辞刻意说清"取证 ≠ 漏洞"，
         # 避免把自签名/过期当成结论直接写进交付物。
-        lines.append("## TLS 证书（取证，非漏洞结论）")
+        lines.append("## " + _cap_title("TLS 证书（取证，非漏洞结论）",
+                                       len(certs), CAP_CERTS))
         lines.append("")
         lines.append("> 一次只读 TLS 握手的取证结果：握手**不校验证书**，因此"
                      "「自签 / 已过期」是证书本身的属性，不等于漏洞。")
@@ -196,7 +210,7 @@ def generate(task_id):
         lines.append("| 来源 | 主机 | 端口 | CN | 颁发者 | 有效期 | 剩余 | 自签 | 签名算法 |"
                      " 指纹(SHA256) |")
         lines.append("|---|---|---|---|---|---|---|---|---|---|")
-        for c in certs[:200]:
+        for c in certs[:CAP_CERTS]:
             left = ("已过期" if c["expired"] else
                     (f"{c['days_left']} 天" if c["days_left"] is not None else "-"))
             lines.append(f"| {_c(_cert_source(c))} | {_c(c['host'])} | {_c(c['port'])} | "
@@ -207,18 +221,18 @@ def generate(task_id):
                          f"{_c(c['sig_algo'] or '-')} | {_c(c['sha256'] or '-')} |")
         lines.append("")
     if subs:
-        lines.append("## 子域名（前 200）")
+        lines.append("## " + _cap_title("子域名", len(subs), CAP_SUBS))
         lines.append("")
         lines.append("```")
-        lines.extend(r["domain"] for r in subs[:200])
+        lines.extend(r["domain"] for r in subs[:CAP_SUBS])
         lines.append("```")
         lines.append("")
     if dirs:
-        lines.append("## 目录发现（前 100）")
+        lines.append("## " + _cap_title("目录发现", len(dirs), CAP_DIRS))
         lines.append("")
         lines.append("| 状态 | 路径 |")
         lines.append("|---|---|")
-        for d in dirs[:100]:
+        for d in dirs[:CAP_DIRS]:
             lines.append(f"| {_c(d['status'])} | {_c(d['path'])} |")
         lines.append("")
     fp = [v for v in all_vulns if (v["review"] or "") == "false_positive"]
@@ -342,25 +356,26 @@ def generate_html(task_id):
               _h(v["name"]), _h(v["poc_id"]), _h(v["owasp"] or "-"), _h(v["target"]),
               _h(REVIEW_LABEL.get(v["review"] or "", "待复核"))] for v in vulns]))
     if sites:
-        p.append("<h2>存活站点</h2>")
+        p.append("<h2>" + _cap_title("存活站点", len(sites), CAP_SITES) + "</h2>")
         p.append(_html_table(
             ["URL", "状态", "标题", "技术栈", "Server"],
             [[_h(s["url"]), _h(s["status"]), _h(s["title"] or "-"),
-              _h(s["tech"] or "-"), _h(s["server"] or "-")] for s in sites[:100]]))
+              _h(s["tech"] or "-"), _h(s["server"] or "-")] for s in sites[:CAP_SITES]]))
     if ports:
-        p.append("<h2>开放端口与服务（前 200）</h2>")
+        p.append("<h2>" + _cap_title("开放端口与服务", len(ports), CAP_PORTS) + "</h2>")
         p.append(_html_table(
             ["主机", "IP", "端口", "服务", "banner"],
             [[_h(x["host"] or "-"), _h(x["ip"] or "-"), _h(x["port"]),
-              _h(x["service"] or "-"), _h((x["banner"] or "-")[:80])] for x in ports[:200]]))
+              _h(x["service"] or "-"), _h((x["banner"] or "-")[:80])] for x in ports[:CAP_PORTS]]))
     if csegs:
-        p.append("<h2>C 段视野（前 200）</h2>")
+        p.append("<h2>" + _cap_title("C 段视野", len(csegs), CAP_CSEGS) + "</h2>")
         p.append(_html_table(
             ["C 段", "IP", "域名数", "反查到的域名"],
             [[_h(x["segment"] or "-"), _h(x["ip"] or "-"), _h(x["count"]),
-              _h((x["domains"] or "-")[:120])] for x in csegs[:200]]))
+              _h((x["domains"] or "-")[:120])] for x in csegs[:CAP_CSEGS]]))
     if certs:
-        p.append("<h2>TLS 证书（取证，非漏洞结论）</h2>")
+        p.append("<h2>" + _cap_title("TLS 证书（取证，非漏洞结论）",
+                                    len(certs), CAP_CERTS) + "</h2>")
         p.append('<div class="note">一次只读 TLS 握手的取证结果：握手<b>不校验证书</b>，因此'
                  "「自签 / 已过期」是证书本身的属性，不等于漏洞。<br>"
                  "「来源」列区分：<b>TLS 握手</b>＝本次真的连上去取到的证书；"
@@ -376,14 +391,14 @@ def generate_html(task_id):
               _h("已过期" if c["expired"] else
                  (f"{c['days_left']} 天" if c["days_left"] is not None else "-")),
               _h("是" if c["self_signed"] else "-"), _h(c["sig_algo"] or "-"),
-              _h(c["sha256"] or "-")] for c in certs[:200]]))
+              _h(c["sha256"] or "-")] for c in certs[:CAP_CERTS]]))
     if subs:
-        p.append("<h2>子域名（前 200）</h2>")
-        p.append("<pre>" + _h("\n".join(r["domain"] for r in subs[:200])) + "</pre>")
+        p.append("<h2>" + _cap_title("子域名", len(subs), CAP_SUBS) + "</h2>")
+        p.append("<pre>" + _h("\n".join(r["domain"] for r in subs[:CAP_SUBS])) + "</pre>")
     if dirs:
-        p.append("<h2>目录发现（前 100）</h2>")
+        p.append("<h2>" + _cap_title("目录发现", len(dirs), CAP_DIRS) + "</h2>")
         p.append(_html_table(["状态", "路径"],
-                             [[_h(x["status"]), _h(x["path"])] for x in dirs[:100]]))
+                             [[_h(x["status"]), _h(x["path"])] for x in dirs[:CAP_DIRS]]))
     fp = [v for v in all_vulns if (v["review"] or "") == "false_positive"]
     if fp:
         p.append("<h2>已判误报（人工复核排除）</h2>")
