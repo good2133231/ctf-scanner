@@ -1433,9 +1433,13 @@ def main():
     bl_off = {"blacklist": {"enabled": False, "path": str(_TMPDIR / "bl-off.txt")}}
     assert bl_mod.add(["dup-off.test", "dup-off.test"], bl_off) == 1
     assert bl_mod.add(["dup-off.test"], bl_off) == 0, "关闭开关时 add 未去重"
-    # 3) 任务详情站点页签筛选框指向真实表格 id（此前 #tbl-sites 不存在 → 筛选静默失效）
+    # 3) 任务详情站点页签的关键字筛选有落点（此前 #tbl-sites 不存在 → 筛选静默失效）。
+    #    续57 起资产页签改**服务端分页**，筛选也随之从「前端 data-filter」搬到服务端 GET 表单
+    #    （分页后前端过滤只筛当前页，比原来更误导）—— 所以这条断言跟着改口径：
+    #    表格 id 仍在 + 筛选参数 `stq` 已落到站点页签的 GET 表单里（不再是 data-filter）。
     detail = c.get(f"/tasks/{tid}").get_data(as_text=True)
-    assert 'data-filter="#tbl-detail-sites"' in detail and 'id="tbl-detail-sites"' in detail
+    assert 'id="tbl-detail-sites"' in detail, "任务详情页站点表格 id 丢失"
+    assert 'name="stq"' in detail, "站点页签筛选框没有落点（服务端筛选参数 stq 缺失）"
     # 4) 策略页 union_passive 只有一份（此前复制成两份 → 取消一份关不掉）
     st_html = c.get("/settings").get_data(as_text=True)
     assert st_html.count('name="union_passive"') == 1, "settings 页 union_passive 复选框重复"
@@ -9080,6 +9084,169 @@ http:
           "（检测器变异证伪｜否则点一下会误触发真实补扫）｜initOpenSites 已注册｜勾选行 value＝站点 URL｜"
           "_cap_title 三态（等于上限不加注）｜注入 120 站点后 MD/HTML 都写出'共 120 条，此处仅列前 100 条'｜"
           "还原后无该注｜report.py 无字面量切片（检测器变异证伪）")
+
+    # ---- [7s] 续57：任务详情页 7 个资产页签的服务端分页 + 服务端筛选 ----
+    print("[7s] 续57 资产页签服务端分页 …")
+    _tpl7s = (ROOT / "gui" / "templates" / "task_detail.html").read_text(encoding="utf-8")
+    _pg7s = (ROOT / "gui" / "templates" / "_pager.html").read_text(encoding="utf-8")
+    _apa7s = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+
+    # ① 分页条不得写死页码参数名 —— 详情页一屏 8 个分页条（漏洞 + 7 个资产页签），
+    #    谁写死 `page=` 谁就出事：要么"点了下一页却把别的页签一起翻了"，要么**根本没人读它**
+    #    （续53 的漏洞页签正是后者：链接发 `?page=N`、路由读 `vpage` → 「下一页」静默失效）。
+    def _q_hard_pagename(_text):
+        return bool(_re7q.search(r"[\?&]page=", _text))
+
+    assert _q_hard_pagename('href="{{ pager.base }}?page=1{{ pager.qs }}"'), \
+        "检测器变异体：写死的 ?page= 必须被判不合格"
+    assert not _q_hard_pagename(_pg7s), \
+        "_pager.html 不得写死页码参数名（必须走 `_pname`），否则多分页条共存会互相翻页 / 静默失效"
+    assert "{{ _pname }}" in _pg7s and "{{ _anchor }}" in _pg7s, \
+        "_pager.html 必须支持 pname（参数名前缀）与 anchor（翻页后回到原页签）"
+    assert '"pname": "vpage"' in _apa7s, \
+        "漏洞页签的分页条必须指名 `vpage`（写死 `page=` 时「下一页」点了没反应）"
+
+    # ② 注入"有 1000 行的表"走**真实渲染**：分页必须真的按 limit/offset 取数（旧写法是
+    #    `db.list_*` 全量返回 → 每页行数不受控）。假的 `page_assets` 尊重 limit/offset，
+    #    所以"第 1 页没有第 101 行、第 2 页有"是真的端到端可证。
+    def _row7s(_i):
+        """一行"什么列都有"的假资产行：模板读到的每个字段都有值，避免 Undefined 干扰判据。"""
+        return {"url": f"http://row{_i}.test/", "domain": f"row{_i}.test",
+                "host": f"row{_i}.test", "ip": "127.0.0.1", "port": 80, "status": 200,
+                "title": "", "tech": "", "server": "", "shot": "", "cdn": "",
+                "cname": "", "ip_note": "", "source": "passive:test", "service": "",
+                "banner": "", "segment": "127.0.0.1/24", "count": 1, "domains": "",
+                "cn": "", "issuer": "", "not_before": "", "not_after": "", "expired": 0,
+                "days_left": 1, "self_signed": 0, "sig_algo": "", "san": "",
+                "serial": "", "sha256": ""}
+
+    def _fake_pa7s(table, limit=200, offset=0, **_kw):
+        _n = max(0, min(int(limit), 1000 - int(offset)))
+        return [_row7s(int(offset) + _i) for _i in range(_n)], 1000
+
+    _real_pa7s, _real_pv7s, _real_ld7s = db.page_assets, db.page_vulns, db.list_dirs
+    db.page_assets = _fake_pa7s
+    db.page_vulns = lambda **_kw: ([], 5000)
+    # 目录页签走 Python 折叠 + 切片（折叠是整表语义，不能下推 SQL）→ 用"互不重复"的假行
+    db.list_dirs = lambda _t: [
+        dict(_row7s(_i), site_url=f"http://d{_i}.test/", path=f"/p{_i}", length=_i)
+        for _i in range(250)]
+    try:
+        _det7s = _c7o.get(f"/tasks/{_tidB7o}").get_data(as_text=True)
+        _det2_7s = _c7o.get(f"/tasks/{_tidB7o}", query_string={"stpage": "2",
+                                                              "stsize": "100"}).get_data(as_text=True)
+        # 拓展域名：带分类再看一眼（`esrc` 是**筛选状态**，查询/翻页都不能把它丢掉）
+        _det3_7s = _c7o.get(f"/tasks/{_tidB7o}",
+                            query_string={"esrc": "js"}).get_data(as_text=True)
+    finally:
+        db.page_assets, db.page_vulns, db.list_dirs = _real_pa7s, _real_pv7s, _real_ld7s
+
+    # 页签徽标必须是**总数**（不是当前页行数）
+    for _lbl7s, _n7s in (("站点", 1000), ("子域名", 1000), ("拓展域名", 1000),
+                         ("端口服务", 1000), ("C 段", 1000), ("SSL 证书", 1000),
+                         ("目录", 250), ("潜在漏洞", 5000)):
+        assert f'{_lbl7s}<span class="cnt">{_n7s}</span>' in _det7s, \
+            f"「{_lbl7s}」页签徽标必须显示总数 {_n7s}（分页后 |length 只是本页行数）"
+
+    # 真分页：第 1 页恰好 stsize 行、且不含第 101 行；第 2 页才有
+    _pane_sites7s = _det7s.split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0]
+    _pane_sites2_7s = _det2_7s.split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0]
+    _npick7s = _pane_sites7s.count('class="pick pick-row"')
+    assert _npick7s == 100, f"站点页签第 1 页应恰好 100 行：实测 {_npick7s}"
+    assert "http://row0.test/" in _pane_sites7s and "http://row100.test/" not in _pane_sites7s, \
+        "第 1 页不得出现第 101 行（offset 必须真的下推到 SQL）"
+    assert "http://row100.test/" in _pane_sites2_7s and "http://row0.test/" not in _pane_sites2_7s, \
+        "第 2 页必须从第 101 行开始（否则分页是装饰：每页都返回同一批）"
+
+    # ③ 8 个分页条各用**独立**的页码参数名，且资产页签的翻页链接带锚点
+    for _pfx7s, _anch7s in (("vpage", "#vulns"), ("sdpage", "#subs"), ("expage", "#ext"),
+                            ("stpage", "#sites"), ("ptpage", "#ports"), ("cspage", "#csegs"),
+                            ("crpage", "#certs"), ("drpage", "#dirs")):
+        assert _pfx7s + "=2" in _det7s, f"`{_pfx7s}` 的「下一页」链接缺失（该页签的分页没接上）"
+        assert _re7q.search(_pfx7s + r'=2[^"]*' + _anch7s.replace("#", r"\#") + r'"', _det7s), \
+            f"`{_pfx7s}` 的翻页链接必须带锚点 {_anch7s}（否则翻完掉回第一个页签）"
+    assert not _re7q.search(r'[\?&]page=\d', _det7s), \
+        "渲染结果里不得出现裸 `?page=` —— 没有任何页签读它（续53 的漏洞页签就栽在这里）"
+
+    # ④ 7 个资产页签的筛选必须搬到**服务端**（GET form）；前端 `data-filter` 只能筛当前页，
+    #    分页之后它比原来更误导（用户以为筛了全表，其实只筛了这一页）。
+    _forms7s = _re7q.findall(r'<form class="filters" method="get".*?</form>', _det7s, _re7q.S)
+    _names7s = {_n for _f in _forms7s for _n in _re7q.findall(r'name="(\w+)"', _f)}
+    assert {"stq", "sdq", "exq", "ptq", "csq", "crq", "drq"} <= _names7s, \
+        f"7 个资产页签都必须有服务端关键字输入：缺 {sorted({'stq', 'sdq', 'exq', 'ptq', 'csq', 'crq', 'drq'} - _names7s)}"
+    assert {"stsize", "sdsize", "exsize", "ptsize", "cssize", "crsize", "drsize"} <= _names7s, \
+        "7 个资产页签都必须能在服务端改每页条数"
+    # 拓展域名：分类（`esrc`）也是筛选状态 —— 带分类访问时，GET 表单必须把它带上，
+    # 否则"筛了某一类再点查询"会静默变回全部。
+    assert 'name="esrc" value="js"' in _det3_7s, \
+        "拓展域名页签带 `esrc` 时，筛选表单必须用 hidden 带上它（否则查询一次就丢掉分类）"
+    for _tid7s in ("tbl-detail-sites", "tbl-subs", "tbl-ext-subs", "tbl-ports",
+                   "tbl-csegs", "tbl-certs", "tbl-dirs"):
+        assert f'data-filter="#{_tid7s}"' not in _det7s, \
+            f"{_tid7s} 已服务端分页，不得再挂前端 data-filter（只筛当前页 = 更误导）"
+
+    # ⑤ HTML 不允许 form 嵌套：3 个"GET 筛选表单 + POST 补扫表单"的页签，
+    #    GET 必须排在 POST **之前**且在其开始前闭合（否则浏览器把表单一拆，按钮就失灵）。
+    #    ⚠️ POST 表单的实际 URL 必须照抄路由表（`api_scan_ext` 的规则是
+    #    `/api/domains/scan-ext`，不是想当然的 `/api/scan_ext`）—— 写错的话 `find()` 返回 -1，
+    #    这条断言会以"顺序不对"的名义误红。
+    for _pane7s, _post7s in (("pane-sites", 'action="/api/rescan"'),
+                             ("pane-ext", 'action="/api/domains/scan-ext"'),
+                             ("pane-ports", 'action="/api/rescan"')):
+        _seg7s = _det7s.split(f'id="{_pane7s}"', 1)[1].split('class="tabpane"', 1)[0]
+        _ig7s = _seg7s.find('<form class="filters" method="get"')
+        _ip7s = _seg7s.find(_post7s)
+        assert _ip7s >= 0, f"{_pane7s}: 段内找不到 POST 表单 {_post7s}（URL 照抄错了会让顺序断言误判）"
+        assert 0 <= _ig7s < _ip7s, f"{_pane7s}: GET 筛选表单必须排在 POST 补扫表单之前"
+        assert "</form>" in _seg7s[_ig7s:_ip7s], \
+            f"{_pane7s}: GET 表单必须在 POST 表单开始前闭合（HTML 不允许 form 嵌套）"
+
+    # ⑥ 目录页签「深度补扫」把站点 URL 当 hidden 提交 → 必须是**全任务**的 URL 列表。
+    #    若沿用当前页的 `sites`，站点一多就会"只补扫当前页那几个"（静默少扫，无任何报错）。
+    def _q_dir_targets_ok(_text):
+        return bool(_re7q.search(
+            r'\{%\s*for\s+\w+\s+in\s+site_urls\s*%\}\s*<input[^>]*name="target"', _text))
+
+    assert _q_dir_targets_ok(
+        '{% for u in site_urls %}<input type="hidden" name="target" value="{{ u }}">'), \
+        "检测器必须认得正确形态"
+    assert not _q_dir_targets_ok(
+        '{% for s in sites %}<input type="hidden" name="target" value="{{ s.url }}">'), \
+        "检测器必须识破「拿当前页站点当补扫目标」的变异体（那会让补扫静默少扫）"
+    assert _q_dir_targets_ok(_tpl7s), \
+        "目录页签的补扫表单必须遍历 `site_urls`（全任务 URL），不是当前页的 `sites`"
+    assert _re7q.search(r'site_urls\s*=\s*\[r\["url"\]\s+for\s+r\s+in\s+db\._query\(', _apa7s), \
+        "`site_urls` 必须是 route 里单独取的**全量** URL 列表（不是某一页）"
+
+    # ⑦ 详情页不得再全量读资产表（否则分页只是装饰，大任务照样卡死）
+    def _q_full_assets(_text):
+        return bool(_re7q.search(r"(ports=db\.list_ports\(|csegs=db\.list_csegs\(|"
+                                 r"certs=db\.list_certs\(|sites=db\.list_sites\(|"
+                                 r"subs=db\.list_subdomains\()", _text))
+
+    assert _q_full_assets("ports=db.list_ports(task_id), csegs=db.list_csegs(task_id),"), \
+        "检测器变异体：全量读资产表必须被判不合格"
+    assert not _q_full_assets(_apa7s), \
+        "gui/app.py 不得再 `db.list_*(task_id)` 全量读资产表（目录页签的 `list_dirs` 除外：折叠是整表语义）"
+
+    # ---- §6.1 变异证伪：把分页退回"忽略 limit/offset 的全量返回"（旧写法）⇒ ② 必红 ----
+    db.page_assets = lambda table, limit=200, offset=0, **_kw: (
+        [_row7s(0) for _ in range(1000)], 1000)
+    try:
+        _mut7s = _c7o.get(f"/tasks/{_tidB7o}").get_data(as_text=True)
+        _mut_sites7s = _mut7s.split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0]
+        assert _mut_sites7s.count('class="pick pick-row"') != 100, \
+            "变异（忽略 limit/offset 的全量返回）后每页行数必然不是 100 → 证明 ② 测的是**真分页**"
+        assert "http://row0.test/" in _mut_sites7s and "http://row100.test/" not in _mut_sites7s, \
+            "变异后第 1 页仍是同一批行（旧写法下「翻页」根本不动）"
+    finally:
+        db.page_assets = _real_pa7s
+
+    print("[7s] 续57 资产页签服务端分页 ok: 8 个分页条各有独立页码参数名（检测器变异证伪）｜"
+          "漏洞页签指名 vpage（续53 的静默失效已修）｜注入 1000 行真渲染：第 1 页恰好 100 行、"
+          "第 2 页从第 101 行起（变异忽略 limit/offset 即红）｜徽标＝总数｜翻页带锚点｜"
+          "7 个页签的服务端筛选（含 esrc 保持）且已无 data-filter｜3 处 GET 表单排在 POST 之前且未嵌套｜"
+          "目录补扫走全量 site_urls（检测器变异证伪）｜不再全量读资产表（检测器变异证伪）")
 
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），

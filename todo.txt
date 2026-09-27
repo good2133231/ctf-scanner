@@ -1474,3 +1474,26 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        验证：tests/smoke.py 新增 [7r] 组（模板 redline / JS 注册 / _cap_title 三态 + 120 条注入 /
        源码 [:100]·[:200] 红线，含 type=button 变异证伪）、全量 SMOKE PASS、§9 行尾两口径逐文件一致
        （tests/smoke.py 被归一化的 1494 处已按内容对齐 HEAD 逐行还原）。
+[完成] 16、续57（2026-09-27）：任务详情页 7 个资产页签服务端分页 + 修掉续53「漏洞页签下一页」静默失效。
+       ① 7 个资产页签原先一律 db.list_*(task_id) 全量取数 + 模板全量渲染（几万条子域名/目录一次吐上万行
+       HTML、站点页每行带缩略图），页签徽标 |length 也只等于"本轮全量行数"→ 站点/子域名/拓展域名/端口/
+       C 段/证书 6 个页签接到 db.page_assets（task_id=? 当 extra_where 传进去，排序/关键字/总数口径与
+       跨任务资产页一致）；目录页签保持"取全量 → _fold_dirs 折叠 → 过滤 → 切片"（折叠是整表语义，
+       下推 SQL 等于把同一规则写两遍）。certs 登记进 _ASSET_PAGES、抽出 CERT_ORDER 常量（list_certs()
+       与分页共用一份，避免"已过期/自签被挤到第 2 页"），page_assets 文档串改为"资产分页查询"。
+       ② 筛选从**前端 data-filter** 搬到**服务端 GET 表单**（分页后前端筛选只筛当前页，比原来更误导；
+       同续53 撤 [data-tfilter] 的理由），站点/拓展域名/端口 3 处的 GET 表单按 HTML 规则挪到 POST 补扫
+       表单**之前**；目录补扫表单的 hidden target 由"当前页 sites"改为全任务 site_urls（否则静默少扫）；
+       shot_missing 改一条聚合、cert_pick 只取 url/host/port 三列（不再为一句提示读整张 sites）。
+       ③ 修 Bug（续53 引入，静默失效）：_pager.html 写死 ?page=N，而漏洞页签读 vpage → 「下一页/末页」
+       点了毫无效果（页码照常显示、不报错）。给 _pager.html 加 pname（页码参数名）与 anchor（翻页后回到
+       原页签），8 个分页条各用独立前缀 vpage/stpage/sdpage/expage/ptpage/cspage/crpage/drpage；
+       app.js::initTabs() 认 location.hash 配合锚点。
+       文件：scanner/db.py、gui/templates/_pager.html、gui/app.py、gui/templates/task_detail.html、
+       gui/static/app.js、tests/smoke.py。验证：tests/smoke.py 新增 [7s] 组（7 组断言 + 3 处 §6.1 变异，
+       含"假表注入 + 真实渲染"证明 offset 真下推到 SQL、徽标＝总数、翻页带锚点、7 页签服务端筛选齐备且
+       已无 data-filter、3 处 GET 在 POST 之前且未嵌套、目录补扫走全量 site_urls、不再全量读资产表）、
+       全量 SMOKE PASS、§9 行尾两口径逐文件一致（会话中再次被归一化：tests/smoke.py 1494 处 +
+       gui/app.py 52 处，已按内容对齐 HEAD 逐行还原）。顺带按新口径改掉 [5l] ③ 的既有断言
+       （站点页签筛选有"落点"的判据：data-filter → 服务端 stq）。仍未做：真浏览器点一次"下一页/查询"
+       验锚点（本机无头环境限制，同续56）；/extdomains 的分组分页与详情页返回键未涉及。

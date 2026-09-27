@@ -36,16 +36,23 @@ async function loadLog(id) {
   } catch (e) { box.textContent = "加载失败"; }
 }
 
-/* 任务详情页签切换 */
+/* 任务详情页签切换。认 URL 锚点（#sites / #dirs / …）：资产页签的翻页与筛选都是**整页刷新**，
+   分页条与 GET 表单的链接/action 尾部都带锚点，这里据此回到原页签 —— 否则用户翻一页、
+   查一次就掉回第一个页签（「潜在漏洞」），看起来像"翻页没生效"。
+   锚点认不出来（或被删掉）时保持模板的默认页签，不报错。 */
 function initTabs() {
   const tabs = [...document.querySelectorAll(".tab[data-tab]")];
-  tabs.forEach(t => t.addEventListener("click", () => {
+  const show = t => {
     tabs.forEach(x => x.classList.remove("active"));
     document.querySelectorAll(".tabpane").forEach(p => p.classList.remove("active"));
     t.classList.add("active");
     const pane = document.getElementById("pane-" + t.dataset.tab);
     if (pane) pane.classList.add("active");
-  }));
+  };
+  tabs.forEach(t => t.addEventListener("click", () => show(t)));
+  const want = (location.hash || "").replace(/^#/, "");
+  const hit = want && tabs.find(t => t.dataset.tab === want);
+  if (hit) show(hit);
 }
 
 /* 通用表格筛选：<input data-filter="#tbl-x"> 按整行文本做前端包含匹配 */

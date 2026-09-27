@@ -984,10 +984,14 @@ def list_certs(task_id):
     CTF / 授权测试里最该先看的就是"过期"与"自签"（往往是靶机临时自签、或旧版本残留），
     按 id 排会把它们埋在几十行正常证书后面，所以按"可疑程度"排而不是按插入顺序。
     """
-    return _query("SELECT * FROM certs WHERE task_id=? "
-                  "ORDER BY expired DESC, self_signed DESC, "
-                  "CASE WHEN days_left IS NULL THEN 1 ELSE 0 END, days_left, id",
-                  (task_id,))
+    return _query(f"SELECT * FROM certs WHERE task_id=? ORDER BY {CERT_ORDER}", (task_id,))
+
+
+# 证书页签的排序（续57 抽成常量）：`list_certs()` 与任务详情页的**服务端分页**
+# （`page_assets("certs", ...)`，见 `_ASSET_PAGES`）必须用**同一份** ORDER BY ——
+# 各写一遍就会出现"分页后行序和以前不一样、异常证书被挤到第 2 页"的静默漂移。
+CERT_ORDER = ("expired DESC, self_signed DESC, "
+              "CASE WHEN days_left IS NULL THEN 1 ELSE 0 END, days_left, id")
 
 
 # ---------- 全局资产视图（GUI 资产分栏用） ----------
@@ -1000,6 +1004,10 @@ _ASSET_PAGES = {
     "ports": ("task_id DESC, port", ("host", "ip", "service", "banner")),
     "csegs": ("task_id DESC, segment, ip", ("segment", "ip", "domains")),
     "dirs": ("task_id DESC, id DESC", ("site_url", "path", "note", "title")),
+    # 证书不是「跨任务资产页」的表（侧栏没有它），但任务详情页的「SSL 证书」页签要分页，
+    # 于是同样登记在这里（续57）。默认排序 = `CERT_ORDER`（与 `list_certs()` 一字不差）。
+    "certs": (CERT_ORDER, ("url", "host", "cn", "subject", "issuer", "san",
+                           "serial", "sig_algo", "sha256")),
 }
 
 # 子域名来源分类（资产视图的"子域名 / 拓展域名"两个页面靠它分流）：
@@ -1023,7 +1031,10 @@ OVERLAP_SITE_WHERE = "id IN (SELECT MAX(id) FROM sites GROUP BY url)"
 
 def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_params=(),
                 order=None):
-    """跨任务资产分页查询，返回 (rows, total)。
+    """资产分页查询，返回 (rows, total)。
+
+    跨任务的资产页（`/subdomains`、`/sites` …）与**任务详情页的资产页签**（续57）共用这一个
+    入口：后者把 `task_id=?` 当 `extra_where` 传进来，于是排序 / 关键字 / 总数口径天然一致。
 
     `q` 是"整行关键字"（对若干文本列做 LIKE），与前端 `initFilters()` 的体验一致，
     区别是过滤与分页都放在 SQL 侧 —— 数据量上去后不再被固定 `LIMIT 500` 截断。
