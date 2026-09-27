@@ -284,6 +284,12 @@ def main():
         if missing:
             print(f"  提示：{'、'.join(missing)} 可用 `python cli/client.py --update-tools` "
                   "联网下载安装（或 GUI「外部工具」页一键更新）。")
+        # 这三个**永远不在** `--update-tools` 的覆盖范围内（官方不发"可校验的单二进制产物"）。
+        # 不写出来，用户会一直等一个不会出现的"一键安装"；也不必真去下载 —— 本框架不为它们发请求。
+        from scanner import toolmgr
+        print("  需手工安装（本框架不自动下载）：")
+        for _mn, _mwhy in toolmgr.MANUAL.items():
+            print(f"    {_mn:<10} {_mwhy}（步骤见 tools/scanner/README.md「手工安装」）")
         return
     if args.update_tools:
         do_update_tools(args)

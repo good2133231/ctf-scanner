@@ -27,7 +27,7 @@ python cli/client.py -t <单目标> [选项]
 | `--report-pdf PATH` | 结束后生成 **PDF** 报告（用本机无头 Edge/Chrome 打印；**没有浏览器会打印原因并以退出码 1 结束**，不静默丢交付物） |
 | `--report-jsonl PATH` | 结束后生成 **JSONL** 报告（每行一个 JSON 对象、带 `type` 判别字段，**机器可读**；漏洞含全部行与 `review`/`review_note` 复核状态） |
 | `--full-report` | **「完整版」报告**：资产小节**不截断**（默认各节限 100/200 条，被截断时小节标题会写明总数与出口）。只影响 `--report` / `--report-html` / `--report-pdf`；`--report-jsonl` 本来就是全量 |
-| `--check` | 打印外部工具可用性并退出（`subfinder` / `httpx` / `puredns` / `nmap` / `fscan` / `dirmap`） |
+| `--check` | 打印外部工具可用性并退出（`subfinder` / `httpx` / `puredns` / `nmap` / `fscan` / `dirmap`）。末尾另列一段**「需手工安装（本框架不自动下载）」**（`nmap` / `fscan` / `dirmap` + 各自原因）：这三个**不在** `--update-tools` 的覆盖范围内，官方没有"可校验的单二进制产物" |
 
 ### 示例
 
@@ -378,9 +378,13 @@ python3 run_gui.py
 
 **Q：提示工具不可用？**
 跑 `python cli/client.py --check`。要么把工具加入 PATH，要么在 settings.yaml 写路径；不装也能跑（内置兜底），但效果打折。
+输出末尾会另列**「需手工安装（本框架不自动下载）」**（`nmap` / `fscan` / `dirmap`）—— 这三个官方没有
+"可校验的单二进制产物"，`--update-tools` 装不了，步骤见 `tools/scanner/README.md` 的「手工安装」一节。
 
 **Q：Windows 下 puredns / subfinder？**
-均为 Go 程序，官方 release 有 exe；puredns 依赖 resolvers 文件，框架已自带。
+subfinder 是 Go 程序，官方 release 有 exe。**puredns 官方只发 Linux / macOS 产物**（无 Windows 包、
+也无 checksums），Windows 上要么自行 `go install`、要么用内置 DNS 爆破兜底
+（2026-09-26 查 GitHub API 实测，见 `tools/scanner/README.md`）。puredns 依赖 resolvers 文件，框架已自带。
 
 **Q：控制台乱码 / 端口占用？**
 端口在 settings.yaml `gui.port` 修改；控制台仅建议本机访问，不要暴露公网（无多用户/HTTPS/审计；

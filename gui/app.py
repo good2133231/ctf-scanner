@@ -2806,12 +2806,15 @@ def create_app():
     @login_required
     @admin_required
     def tools_page():
-        """外部工具页：列出三个工具的现状 + 一键下载/更新（结果在下方持久显示到下次更新）。"""
+        """外部工具页：列出三个可自动安装工具的现状 + 一键下载/更新，并**如实列出**需手工安装的三个。"""
         rows = toolmgr.status(settings)
         os_label, arch = toolmgr.host_arch()
         return render_template("tools.html", rows=rows,
                                platform=f"{os_label}/{arch}",
                                defaults=list(toolmgr.TOOLS),
+                               # 「需手工安装」的三个（nmap/fscan/dirmap）：本页只**展示**它们，
+                               # 不给下载入口（官方没有"可校验的单二进制产物"，见 scanner/toolmgr.py 的 MANUAL）。
+                               manual=list(toolmgr.MANUAL.items()),
                                last_at=_TOOLS_LAST.get("at") or "",
                                last_os=_TOOLS_LAST.get("os") or "",
                                last_error=_TOOLS_LAST.get("error") or "",

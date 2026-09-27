@@ -8926,13 +8926,79 @@ http:
     except SystemExit as _se7p:
         assert _se7p.code == 1, _se7p.code
 
+    # ⑨ 续59-3：「需手工安装」的三个（nmap / fscan / dirmap）**如实展示**，且**绝不混进 TOOLS**
+    #    —— 2026-09-27 实测：nmap 官方只发安装器/源码包/dmg（不在 GitHub release）、fscan 官方不发
+    #    二进制、dirmap 的 release `assets` 是空数组。硬塞进 TOOLS 就等于让它们绕过"必须过官方
+    #    SHA256 才落盘"这条红线，所以这里用**不变式 + 变异证伪**把它钉死，而不是只写个注释。
+    assert sorted(tm7p.MANUAL) == ["dirmap", "fscan", "nmap"], sorted(tm7p.MANUAL)
+    assert all(str(v).strip() for v in tm7p.MANUAL.values()), "每条都要写明原因（页面直接展示它）"
+
+    def _overlap7p(_tools, _manual):
+        """`TOOLS`（可自动下载并校验）与 `MANUAL`（只能手工）必须**不相交**。"""
+        return sorted(set(_tools) & set(_manual))
+
+    assert _overlap7p(tm7p.TOOLS, tm7p.MANUAL) == [], \
+        f"手工安装的工具不得出现在 TOOLS 里（会绕过 SHA256 红线）：{_overlap7p(tm7p.TOOLS, tm7p.MANUAL)}"
+    _mut_tools7p = dict(tm7p.TOOLS)
+    _mut_tools7p["nmap"] = {"repo": "nmap/nmap", "style": "pd", "verify": "-version"}
+    assert _overlap7p(_mut_tools7p, tm7p.MANUAL) == ["nmap"], \
+        "检测器对'把 nmap 塞进 TOOLS'不敏感 → ⑨ 是假绿（这正是要防的绕道）"
+
+    # GUI：面板渲染出三条原因原文，且**不给**它们的下载复选框
+    _h3_7p = _c7p.get("/tools").get_data(as_text=True)
+    assert "需手工安装（本框架不自动下载）" in _h3_7p, "外部工具页必须如实列出需手工安装的工具"
+    for _mn7p in ("nmap", "fscan", "dirmap"):
+        assert tm7p.MANUAL[_mn7p] in _h3_7p, f"页面必须展示 {_mn7p} 的**原因原文**"
+        assert f'name="tool" value="{_mn7p}"' not in _h3_7p, f"{_mn7p} 不得出现下载复选框"
+    assert 'name="tool" value="httpx"' in _h3_7p, "可自动安装的三个仍要有下载复选框"
+    _real_manual7p = tm7p.MANUAL
+    try:
+        tm7p.MANUAL = {}
+        _h4_7p = _c7p.get("/tools").get_data(as_text=True)
+        assert "官方只发安装器 / 源码包 / dmg（无便携 zip），自动装会变成系统级安装" not in _h4_7p, \
+            "页面那三条必须来自 MANUAL（不是模板里写死的）→ 否则改一处会漏一处"
+    finally:
+        tm7p.MANUAL = _real_manual7p
+
+    # CLI `--check`：同一份 MANUAL 驱动，同样要列出这三个（`check_tools` 桩掉，避免真去 which/握手）
+    import contextlib as _cl7p
+    import io as _io7p
+    _real_ck7p, _real_argv7p = _cli.check_tools, sys.argv
+
+    def _run_check7p():
+        _buf = _io7p.StringIO()
+        try:
+            _cli.check_tools = lambda _s: [("httpx", "未找到（自动使用内置兜底）")]
+            sys.argv = ["client.py", "--check"]
+            with _cl7p.redirect_stdout(_buf):
+                _cli.main()
+        finally:
+            _cli.check_tools, sys.argv = _real_ck7p, _real_argv7p
+        return _buf.getvalue()
+
+    _out7p = _run_check7p()
+    assert "需手工安装（本框架不自动下载）" in _out7p, _out7p
+    for _mn7p in ("nmap", "fscan", "dirmap"):
+        assert _mn7p in _out7p, f"`--check` 必须列出需手工安装的 {_mn7p}"
+    assert "--update-tools" in _out7p, "可自动安装那条提示不能因为加了这个块就没了"
+    try:
+        tm7p.MANUAL = {}
+        _out2_7p = _run_check7p()
+        assert "nmap" not in _out2_7p and "fscan" not in _out2_7p and "dirmap" not in _out2_7p, \
+            "`--check` 的三个名字必须来自 MANUAL（写死就会与 GUI 漂移）"
+    finally:
+        tm7p.MANUAL = _real_manual7p
+
     print("[7p] 续54 外部工具版本管理 ok: 平台 "
           f"{_os7p}/{_ar7p}｜scanner 包内零引用（M5 检测器敏感）｜https+白名单"
           "（跳转后再校验，M1 证伪）｜超限中止｜SHA256 不符拒绝落盘且不覆盖（M4 证伪）｜"
           "无校验和默认拒绝·显式允许则 verified=False｜'校验和文件里没有该条目'也拒绝｜"
           "zip slip 拒绝（M2 证伪）｜puredns Windows 无产物如实报（M3 证伪）｜"
           "回写相对路径且注释/行数/CRLF 行尾/其它键全不变｜GUI 管理员 200·子用户 403·结果留页｜"
-          "CLI --no-wire 生效·失败退出码 1·未知工具名中止")
+          "CLI --no-wire 生效·失败退出码 1·未知工具名中止｜"
+          "续59-3 需手工安装三项（nmap/fscan/dirmap）TOOLS∩MANUAL=∅（M6 证伪·塞进 TOOLS 即红）、"
+          "GUI 面板展示原因原文且无下载框（M7 证伪·MANUAL 清空即消失）、"
+          "`--check` 同源列出三项（M8 证伪·清空 MANUAL 即不再出现）")
 
     # ---- [7q] 续55：收掉报告 / 阶段 / GUI 里剩余的固定上限（静默丢结果 · 静默失效） ----
     # 续51 修了 `/vulns` 的 500、续53 修了 `/tasks` 的 200 与详情页的 1000，但**同源**的固定上限

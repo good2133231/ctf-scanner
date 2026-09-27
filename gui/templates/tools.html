@@ -7,8 +7,9 @@
 <section class="panel">
   <h2>外部工具（版本管理）</h2>
   <p class="muted">
-    这三个工具决定 subdomain / probe / 目录扫描三阶段的"上限"：没装时一律退到内置兜底
+    上表这三个工具决定 subdomain / probe / 目录扫描三阶段的"上限"：没装时一律退到内置兜底
     （<code>cli --check</code> 只会打印"未找到"），覆盖面与速度差一个量级。
+    另有 <b>nmap / fscan / dirmap 三个需手工安装</b>（见下方），本页不提供它们的下载入口。
   </p>
   <p class="muted small">
     本页是<b>两个联网入口之一</b>（另一个是 <code>python cli/client.py --update-tools</code>）：
@@ -37,6 +38,27 @@
   <p class="muted small">
     "配置值"是 <code>config/settings.yaml</code> 里 <code>tools.&lt;名&gt;</code> 的原样值：
     裸名（如 <code>httpx</code>）只在 PATH 里找，含分隔符的相对路径按<b>项目根</b>折算。
+  </p>
+</section>
+
+<section class="panel">
+  <h2>需手工安装（本框架不自动下载）</h2>
+  <p class="muted">
+    下面这三个<b>不在上表里</b>，也<b>永远不在</b>「下载 / 更新」的覆盖范围内：官方没有提供
+    "可直接下载、且带官方校验和的单二进制产物"，硬做只能改成<b>运行系统安装器</b>或
+    <b>接受未校验源码</b>，那会越过本功能的安全口径（默认必须过官方 SHA256 才落盘）。
+  </p>
+  <table>
+    <tr><th>工具</th><th>为什么不能自动装</th></tr>
+    {% for name, why in manual %}
+    <tr><td><code>{{ name }}</code></td><td class="muted">{{ why }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="muted small">
+    安装步骤见 <code>tools/scanner/README.md</code> 的「手工安装」一节
+    （nmap 的 <code>sigs/&lt;文件&gt;.digest.txt</code> 校验、fscan 的 Go 自编译、dirmap 的
+    <code>pip install</code>）；装完把 <code>config/settings.yaml</code> 的
+    <code>tools.&lt;名&gt;</code> 填成对应路径即可。
   </p>
 </section>
 

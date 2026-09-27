@@ -483,6 +483,7 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   ⑨ 布尔子集**零回归**：`_flow_script` 不得出现在布尔 flow 上、`||` 仍短路、
                             #   纯否定仍不报。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
+                            #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）
 py -3 cli/client.py --update-tools            # 续54：联网装/更新 subfinder/httpx/puredns 并回写 tools.<名>
                                               #   可选 --tool <名>（可重复）/ --allow-unverified / --no-wire / --tools-dest
                                               #   GUI 等价入口＝管理员侧栏「外部工具」页；两条路都**只在这时联网**
@@ -1026,6 +1027,18 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   又会让 `portscan` 去打 Cloudflare 边缘节点、得出与本项目标无关的"30 个端口开放"。故 `cdn.match()`
   现在两条判据：**CNAME 优先**（厂商特征明确）→ 未命中再看 `cdn_ips.txt` 的**任播 IP 段**
   （`match(cname_chain, settings, ips)`；subdomain / extdom / GUI 解析三处都把解析 IP 传进去）。
+
+- **"能自动下载"的边界＝`toolmgr.TOOLS`；不能的进 `toolmgr.MANUAL`，两者必须不相交**（2026-09-27
+  续59-3）：`TOOLS` 的语义是"**能自动下载、且默认必须过 release 自带 SHA256 才落盘**"，
+  所以凡官方**没有"可下载且带官方校验和的单二进制产物"**的工具，一律**不得**塞进 `TOOLS`
+  —— 塞进去等于让它们绕过那条校验红线（`tests/smoke.py [7p] ⑨` 用 `TOOLS∩MANUAL=∅` 不变式 +
+  变异钉住）。**2026-09-27 实测**（查官方发布页 / GitHub API）三个只能手工装：
+  `nmap`（官方发在 `nmap.org/dist`，**不在** GitHub release；Windows 只有 NSIS 安装器、
+  Linux 只有源码包、macOS 只有 dmg —— 自动装＝跑系统级安装器）；`fscan`（官方**不发二进制**，
+  本仓既定做法是 Go 自编译）；`dirmap`（最新 release 的 `assets` 是**空数组**、无 checksums，
+  且是纯 Python 项目需 pip 依赖）。这三个由 `MANUAL` 如实展示在 GUI「外部工具」页与 `cli --check`
+  末尾（含原因 + 指向 `tools/scanner/README.md`「手工安装」），**本框架不为它们发任何请求**。
+  新增"要不要纳入自动安装"时，先问一句"官方有没有带校验和的单二进制产物"，没有就写进 `MANUAL`。
 
 ## 8. 不要做的事
 

@@ -3,6 +3,78 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-27 —— 续59-3：`nmap` / `fscan` / `dirmap` 明确为**需手工安装**（不纳入自动下载）
+
+> 实施者：**Trae · DeepSeek-V4.1-Flash**。用户指令「做」＝执行上一轮点名的第 1 项
+> 「能验证的收益：把 nmap / dirmap 纳入 toolmgr」。路线经 AskUserQuestion 确认＝**轻量路线**：
+> 不动 `toolmgr` 的下载模型，只做「如实告知 + 文档给手工步骤」。**零自动下载、零新白名单。**
+
+### 0. 是什么（问题）
+
+想把端口扫描的 `nmap` 与目录扫描的 `dirmap` 也做成 `--update-tools` 一键装。**实测后结论是做不到**，
+且**不该硬做** —— 三件事实（2026-09-27 查官方发布页与 GitHub API）：
+
+| 工具 | 官方实际发布形态 | 为什么自动装做不了 |
+|---|---|---|
+| `nmap` | 发在 `https://nmap.org/dist/`，**不在** GitHub release | Windows **只有 NSIS 安装器**（`nmap-7.991-setup.exe`，36MB）、Linux 只有源码包（`tar.bz2`/`tgz`）、macOS 只有 `.dmg`。自动装＝**跑系统级安装器**，不是"解包取一个可执行文件" |
+| `fscan` | 官方**不发二进制**（只有源码） | 本仓既定做法是 Go 自编译（Go 1.25.4 便携版 + v2.2.1 + `-ldflags="-s -w" -trimpath`，为避开 Defender 拦截） |
+| `dirmap` | 最新 release `v1.1` 的 `assets` 是**空数组** | 零二进制、零 checksums；且是**纯 Python 项目**（需 `pip install` 依赖），不是单二进制 |
+
+`toolmgr` 的 `TOOLS` 语义是"**能自动下载、且默认必须过 release 自带 SHA256 才落盘**"（续54 的安全口径）。
+把上表三个塞进去，等于让它们**绕过那条校验红线**；改跑系统安装器 / 采信未校验源码则会**越过功能的安全边界**。
+所以本轮的正确答案不是"想办法装"，而是"**如实告诉用户这三个要手工装、并把怎么装写清楚**"。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/toolmgr.py` | 新增 `MANUAL`（`nmap`/`fscan`/`dirmap` → 各自原因），**刻意不并入 `TOOLS`**（两者必须不相交）；文件头 docstring 补一行指向它。`status()` **未改动**（仍只遍历 `TOOLS`） |
+| `cli/client.py` | `--check` 分支末尾新增「需手工安装（本框架不自动下载）」块，逐条打印 `MANUAL` 的名字 + 原因 + 指向 README；可自动安装那条 `--update-tools` 提示**保持不变** |
+| `gui/app.py` | `tools_page()` 多传一个 `manual=list(toolmgr.MANUAL.items())`（**只传数据，路由逻辑不变**） |
+| `gui/templates/tools.html` | 首面板 intro 补一句"另有 nmap / fscan / dirmap 三个需手工安装"；新增 `<section>`「需手工安装（本框架不自动下载）」——两列表格（工具 / 为什么不能自动装）+ 指向 README「手工安装」的说明。**这一节没有下载复选框**（它们不在 `defaults` 里） |
+| `tools/scanner/README.md` | 「工具清单与获取」表加「一键下载」列 + `nmap`/`fscan` 两行（`dirmap` 行改标**手工**）+ 端口引擎优先级引述；yaml 示例补 `nmap`/`fscan`；新增整节**「手工安装（无法自动下载）」**（nmap 的 `sigs/<文件>.digest.txt` 校验示例 / fscan 的 `go build` / dirmap 的 `git clone` + `pip install` + 两段式 yaml）；「验证」节说明 `--check` 会单列这一段 |
+| `tests/smoke.py` | `[7p]` 组末尾新增 ⑨ 块（见第 3 节） |
+| `CHANGELOG_AI.md` / `AGENTS.md`（§7 + §6 命令区）/ `docs/architecture.md`（关键设计决策新增一行）/ `docs/roadmap.md`（工具版本管理补"覆盖边界"）/ `docs/usage.md`（`--check` 行 + 两条 FAQ）/ `todo.txt`（第 20 条） | 文档同步 |
+
+**顺手更正一处文档与事实的冲突**：`docs/usage.md` 原写「Windows 下 puredns / subfinder？均为 Go 程序，
+官方 release 有 exe」—— 与续54 的实测（**puredns 官方只发 Linux / macOS 产物，无 Windows 包、也无
+checksums**）**直接冲突**。按"代码/实测优先于文档"，已改成 subfinder 有 exe、puredns 在 Windows 无产物。
+
+### 2. 关键设计取舍
+
+- **不为了"功能更全"改动已验证的安全模型**：`toolmgr` 的"必须过官方校验和才落盘"是**红线**，
+  而这三个工具在**官方侧就不存在**"带校验和的单二进制产物"这一前提。前提不成立时，
+  正确做法是**缩小功能的声明范围**（哪些能装、哪些不能），不是放宽校验去凑覆盖面。
+- **`MANUAL` 与 `TOOLS` 分离而不是合并**：合并会让 `status()` / 下载循环 / `--tool` 白名单
+  全都把"手工工具"当成"可下载工具"处理（点一下必然失败）。分离后 `MANUAL` 只承担**展示**职责，
+  于是"新增一个只能手工装的工具"＝往字典里加一行，**不触碰任何下载路径**。
+- **用不变式而不是注释钉住边界**：`tests/smoke.py [7p] ⑨` 断言 `TOOLS ∩ MANUAL == ∅`，
+  并对"把 nmap 塞进 TOOLS"做变异证伪 —— 以后有人图省事合并，测试**立刻红**。
+- **GUI 与 CLI 同源**：两处都从 `toolmgr.MANUAL` 取值（⑨ 的 M7/M8 变异就是"清空 `MANUAL`
+  两处文案必须同时消失"），避免"页面写了、CLI 没写"这类漂移。
+
+### 3. 怎么验证
+
+- `py -3 -m py_compile scanner/toolmgr.py cli/client.py gui/app.py tests/smoke.py` → rc=0；
+- §9 行尾两口径（`git diff --numstat` vs `--ignore-cr-at-eol --numstat`）**逐文件一致**；
+- `tests/smoke.py [7p] ⑨`：
+  - `sorted(toolmgr.MANUAL) == ["dirmap", "fscan", "nmap"]` 且每条原因非空；
+  - **不变式** `TOOLS ∩ MANUAL == []`；**变异 M6**：把 `nmap` 塞进 `TOOLS` 的副本 →
+    `_overlap7p()` 必须返回 `["nmap"]`（检测器真的敏感，不是假绿）；
+  - **GUI**：`/tools` 页面含面板标题与三条原因**原文**、含 `name="tool" value="httpx"`、
+    **不含** `name="tool" value="nmap|fscan|dirmap"`；**变异 M7**：`MANUAL = {}` 后三条原因原文必须消失
+    （证明文案来自数据、不是模板里写死的）；
+  - **CLI**：桩掉 `check_tools` + `sys.argv=["client.py","--check"]` 调 `_cli.main()`（`redirect_stdout` 捕获），
+    断言输出含面板标题、三个名字、且 `--update-tools` 提示**仍在**；**变异 M8**：`MANUAL = {}` 后
+    三个名字必须不出现。
+- 全量 `py -3 -u tests/smoke.py` → **SMOKE PASS**（退出码 0）。
+
+### 4. 未做 / 残留未验
+
+- **真机照着 README「手工安装」重装一遍**：本机 `nmap` 已装（`C:\Program Files (x86)\Nmap\nmap`）、
+  `dirmap` 走目录联接、`fscan` 已自编译 2.2.1 —— 三者的**实际可用性**本轮未重新验证（无需重装），
+  与续54 的"下载链路未在真实网络完整跑一遍"属同一类**残留未验**，如实登记。
+
 ## 2026-09-27 —— 续59-2：全量渲染收口（`/fullports` · `/dirs?agg=1` · `/pocs`）+ 报告「完整版」出口
 
 > 实施者：**Trae · DeepSeek-V4.1-Flash**。用户指令三项：①「`/extdomains` 平铺模式之外的其余资产页

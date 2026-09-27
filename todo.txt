@@ -1578,3 +1578,31 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        条目）、AGENTS.md §7（报告"完整版"出口 + 全量渲染收口的两种下推口径）、docs/architecture.md
        （report 的 full 参数、/fullports · /dirs?agg=1 · /pocs 路由说明）、docs/usage.md（--full-report）。
        仍未做：真浏览器点一次"下一页/查询"（本机无头环境限制，同续56~59）。
+[完成] 20、续59-3（2026-09-27，Trae · DeepSeek-V4.1-Flash）：nmap / fscan / dirmap 明确为
+       「需手工安装」（**不**纳入自动下载），GUI 与 --check 如实告知，README 补手工步骤。
+       ① 起因：AI 提议把 nmap / dirmap 也纳入「外部工具」一键下载。**实测（2026-09-27）三件事**
+       说明做不到 —— nmap 官方发在 nmap.org/dist（**不在** GitHub release）：Windows 只有 NSIS
+       安装器 nmap-7.991-setup.exe（36MB）、Linux 只有源码包（tar.bz2/tgz）、macOS 只有 dmg，
+       校验值在 https://nmap.org/dist/sigs/<文件名>.digest.txt；dirmap 最新 release v1.1 的
+       `assets` 是**空数组**（零二进制、零 checksums），且是纯 Python 项目（需 pip install）；
+       fscan 官方从来不发二进制（本仓既定做法＝Go 自编译 v2.2.1）。
+       ② 结论：三者都**没有"可下载且带官方校验和的单二进制产物"**。硬塞进 `toolmgr.TOOLS` 等于让
+       它们绕过"默认必须过 release 自带 SHA256 才落盘"这条安全红线；改跑系统安装器 / 采信未校验
+       源码则越过了本功能的安全口径。用户选**轻量路线**（AskUserQuestion 确认）：**不动 toolmgr 的
+       下载模型**，零自动下载、零新白名单。
+       ③ 改法：`scanner/toolmgr.py` 新增 `MANUAL`（nmap/fscan/dirmap → 各自原因；**刻意不并入
+       `TOOLS`**，与 `TOOLS` 必须不相交）；`cli/client.py` 的 `--check` 末尾、GUI `tools_page()`
+       与 `gui/templates/tools.html` 新增「需手工安装（本框架不自动下载）」面板（只展示、无下载框）；
+       `tools/scanner/README.md` 新增整节「手工安装」（nmap 的 digest.txt 校验、fscan 的
+       `go build -ldflags="-s -w" -trimpath`、dirmap 的 git clone + pip 两段式 yaml），
+       工具表补「一键下载」列与 nmap/fscan 行。
+       ④ 验证：`tests/smoke.py [7p]` 新增 ⑨ —— `TOOLS∩MANUAL=∅` 不变式 + 三条原因非空 +
+       **三处变异证伪**（M6 把 nmap 塞进 TOOLS → 不变式即红；M7 清空 MANUAL → GUI 面板三条原因
+       原文消失；M8 清空 MANUAL → `--check` 三个名字不再出现）。
+       ⑤ 文档：CHANGELOG_AI（续59-3）、AGENTS.md §7（TOOLS/MANUAL 边界 + 实测事实）与 §6 命令区、
+       docs/architecture.md（关键设计决策新增一行）、docs/roadmap.md（工具版本管理覆盖边界）、
+       docs/usage.md（--check 行与两条 FAQ）。**顺手更正一处文档与事实的冲突**：usage.md 原写
+       "puredns / subfinder 均为 Go 程序，官方 release 有 exe"—— 与续54 实测（puredns 官方只发
+       Linux/macOS 产物、无 Windows 包也无 checksums）冲突，已按代码/实测事实改掉。
+       仍未做：真机照着 README「手工安装」重装一遍（本机 nmap 已装、dirmap 用目录联接、fscan
+       已自编译 2.2.1，故未重装；与续54 的"下载链路未在真实网络完整跑一遍"同一类残留未验）。

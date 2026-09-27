@@ -24,6 +24,8 @@ subfinder/httpx/puredns 时一律退到内置兜底（覆盖面与速度差一�
   os 标签是 `linux` / `windows` / `macOS`，arch 有 `386/amd64/arm/arm64`。
 - d3mondev/puredns：产物 `puredns-{Linux|macOS}-{amd64|arm64}.tgz` —— **官方没有 Windows 产物，
   也没有 checksums 文件**。所以 Windows 上本模块会如实报"未提供当前平台产物"，**不猜、不自动编译**。
+- nmap / fscan / dirmap 走**手工安装**（本模块不为它们发任何请求）：逐条原因见下方 `MANUAL`，
+  步骤见 `tools/scanner/README.md`「手工安装」。
 """
 import hashlib
 import io
@@ -50,6 +52,24 @@ TOOLS = {
     "subfinder": {"repo": "projectdiscovery/subfinder", "style": "pd", "verify": "-version"},
     "httpx": {"repo": "projectdiscovery/httpx", "style": "pd", "verify": "-version"},
     "puredns": {"repo": "d3mondev/puredns", "style": "puredns", "verify": None},
+}
+
+#  「需手工安装」的工具 —— **刻意不进 `TOOLS`**：`TOOLS` 的语义是"能自动下载、且默认必须过
+#  release 自带的 SHA256 校验才落盘"。这三个都不满足（2026-09-27 实测，不是推测）：
+#    - nmap   官方发布在 nmap.org/dist（**不在** GitHub release，本模块的 fetch_release 够不着）；
+#             Windows 只发 NSIS 安装器 `nmap-7.991-setup.exe`（是"装到 Program Files"的系统级动作，
+#             不是"解包取一个可执行文件"）；Linux 只发源码包（要编译）；macOS 只发 .dmg（要挂载）。
+#             校验值是有的，但在 `sigs/<文件名>.digest.txt`（URL 模式与本模块的 "checksums" 不同）。
+#    - fscan  官方不发二进制，本仓的既定做法是用 Go 从源码自编译（见 tools/scanner/README.md）。
+#    - dirmap 最新 release 的 `assets` 是**空数组**（零二进制、零 checksums）；且它是纯 Python 项目
+#             （要 `pip install` 依赖），不是单二进制 —— `extract_binary()` 的模型套不上。
+#  之所以**写出来**而不是"眼不见为净"：GUI「外部工具」页若只列 `TOOLS`，会让人以为
+#  "没列出来的框架不管"，而 `cli --check` 里它们又都是"未找到（自动使用内置兜底）"。
+#  这三条只做**如实展示 + 指向 README 的手工步骤**，本模块不会为它们发任何请求。
+MANUAL = {
+    "nmap": "官方只发安装器 / 源码包 / dmg（无便携 zip），自动装会变成系统级安装",
+    "fscan": "官方不发二进制，需用 Go 从源码自编译（本仓为避免 Defender 拦截的既定做法）",
+    "dirmap": "release 零产物、无 checksums，且是纯 Python 项目（需 pip 依赖）",
 }
 
 

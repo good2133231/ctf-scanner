@@ -107,6 +107,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 | 决策 | 理由 | 代价 |
 |---|---|---|
 | 外部工具优先 + 内置兜底 | 你的手工流水线效果最好时用原工具；任何裸机也能跑通框架 | 兜底实现能力弱于本体 |
+| **自动安装只覆盖"有带校验和的单二进制产物"的工具**（`toolmgr.TOOLS`＝subfinder/httpx/puredns；其余进 `toolmgr.MANUAL`，两者不相交） | "默认必须过 release 自带 SHA256 才落盘"是这条功能的安全口径；`nmap`（官方只发安装器/源码包/dmg）、`fscan`（官方不发二进制，本仓 Go 自编译）、`dirmap`（release 零产物、纯 Python）硬塞进来就等于绕过校验 | 这三个只能在 GUI「外部工具」页与 `cli --check` 里被**如实告知"需手工安装"**，本框架不为它们发任何请求；用户得自己照着 `tools/scanner/README.md` 装（`tests/smoke.py [7p] ⑨` 用不变式钉住） |
 | SQLite 单文件 | 零部署成本，单机 CTF 场景足够 | 不支持多节点并发写，需要时替换 db.py 即可 |
 | Flask + 后台线程 | GUI 只做"发任务 + 看结果"，逻辑全部复用核心引擎 | 无任务队列，进程重启则运行中任务中断 |
 | POC 引擎向 nuclei 语法靠拢 | 社区事实标准（数千模板、可直接加载官方模板），声明式 YAML、无外部依赖 | 仅兼容核心子集（raw/flow/workflows 为子集支持，dsl、oob、flow 的 JS/循环等显式标 unsupported） |

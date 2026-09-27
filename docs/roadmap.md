@@ -269,7 +269,13 @@
       未校验的安装如实标注）／解包只按预期成员名取（拒绝 `..` 与绝对路径成员）／
       回写 `config/settings.yaml` 走**逐行文本替换**（不调 `config.save_settings()` 的整份重写，保住注释）。
       实测平台事实：puredns 官方**只有 Linux/macOS 产物、无 checksums**，Windows 上如实报"未提供当前平台产物"
-      （不猜、不自动编译，见 `tools/scanner/README.md` 的勘误）。仍未做：版本回滚 / 多版本共存 /
+      （不猜、不自动编译，见 `tools/scanner/README.md` 的勘误）。
+      **覆盖边界（续59-3 明确，2026-09-27 实测）**：自动安装**只覆盖"有带官方校验和的单二进制产物"**的工具
+      （`toolmgr.TOOLS`）；`nmap`（官方发在 `nmap.org/dist`，**不在** GitHub release；Windows 只有安装器 /
+      Linux 只有源码包 / macOS 只有 dmg）、`fscan`（官方不发二进制，本仓 Go 自编译）、
+      `dirmap`（release `assets` 空数组、无 checksums、纯 Python 需 pip 依赖）归入 `toolmgr.MANUAL`，
+      在 GUI「外部工具」页与 `cli --check` 里**如实标"需手工安装"**（步骤见 README「手工安装」一节）。
+      仍未做：版本回滚 / 多版本共存 /
       自动检测本机已装工具的"有新版本"提示（只做"显式点一次、装上当前最新"）。
 - [x] **站点页签「批量打开」**（续56，2026-09-27）：勾选站点后一次把勾中的站点在**你自己的浏览器**里
       逐个开新标签页。纯客户端 `window.open`（`gui/static/app.js::initOpenSites()`），
