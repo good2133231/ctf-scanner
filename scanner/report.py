@@ -28,10 +28,28 @@ REVIEW_LABEL = {"": "待复核", "confirmed": "已确认", "false_positive": "�
 CAP_SITES, CAP_PORTS, CAP_CSEGS, CAP_CERTS, CAP_SUBS, CAP_DIRS = 100, 200, 200, 200, 200, 100
 
 
+def _caps(full=False):
+    """本次导出各资产小节的展示上限，按 `CAP_*` 的**顺序**返回六元组（续59-2）。
+
+    `full=True`（「完整版」导出）时全为 `None` —— 用 `None` 而不是"一个很大的数"：
+    切片 `rows[:None]` 本来就是整表，`_cap_title()` 也据 `None` 判定"本节没截断"，
+    不必拿魔数去比大小。报告是**交付物**，上限只是**可读性**护栏：需要完整清单时
+    （第三方要台账、要按资产逐条核对）走「完整版」，机器可读的全量则一直在 JSONL 里。
+    """
+    if full:
+        return (None,) * 6
+    return (CAP_SITES, CAP_PORTS, CAP_CSEGS, CAP_CERTS, CAP_SUBS, CAP_DIRS)
+
+
 def _cap_title(name, total, cap):
-    """小节标题：**只在本节真的被截断时**才带上总数（没截断就只留小节名，不给报告添噪声）。"""
-    if total > cap:
-        return f"{name}（共 {total} 条，此处仅列前 {cap} 条）"
+    """小节标题：**只在本节真的被截断时**才带上总数（没截断就只留小节名，不给报告添噪声）。
+
+    `cap is None`（「完整版」导出）= 不截断 → 永远不加注。截断时额外点明**完整清单怎么拿**：
+    续56 只写了"共 N 条、此处仅列前 M 条"，读者知道少了、却不知道去哪儿要 —— 出口是
+    显式的「完整版」导出（`report.generate(..., full=True)` / GUI `?full=1` / CLI `--full-report`）。
+    """
+    if cap is not None and total > cap:
+        return f"{name}（共 {total} 条，此处仅列前 {cap} 条 —— 完整清单请用「完整版」导出）"
     return name
 
 
@@ -121,10 +139,15 @@ def collect(task_id):
             "review": db.review_counts(task_id), "leads": leads}
 
 
-def generate(task_id):
+def generate(task_id, full=False):
+    """Markdown 报告。`full=True` = 「完整版」：资产小节**不截断**（见 `_caps()`）。"""
     d = collect(task_id)
     if not d:
         return None
+    # 续59-2：这里**故意**用同名局部变量遮蔽模块级常量 —— 本函数下面 12 处 `CAP_*`
+    # （切片 + `_cap_title`）一处都不用改，也就不存在"「完整版」漏改某一节"的风险；
+    # 本函数内 `CAP_*` 的含义从此是"**本次导出实际生效的**上限"，默认值仍是那 6 个常量。
+    CAP_SITES, CAP_PORTS, CAP_CSEGS, CAP_CERTS, CAP_SUBS, CAP_DIRS = _caps(full)
     task, subs, sites, dirs = d["task"], d["subs"], d["sites"], d["dirs"]
     ports, csegs, certs = d["ports"], d["csegs"], d["certs"]
     all_vulns, vulns, review = d["all_vulns"], d["vulns"], d["review"]
@@ -306,11 +329,17 @@ def _sev_bars(by_sev, total):
     return "".join(items)
 
 
-def generate_html(task_id):
-    """生成自包含的 HTML 报告（单文件、内联样式、无外链）。任务不存在返回 None。"""
+def generate_html(task_id, full=False):
+    """生成自包含的 HTML 报告（单文件、内联样式、无外链）。任务不存在返回 None。
+
+    `full=True` = 「完整版」：资产小节**不截断**（见 `_caps()`）。PDF 走同一份 HTML，
+    所以 `export_pdf(..., full=True)` 出来的 PDF 也是完整版。
+    """
     d = collect(task_id)
     if not d:
         return None
+    # 同 `generate()`：用同名局部变量遮蔽模块常量，避免"完整版漏改某一节"
+    CAP_SITES, CAP_PORTS, CAP_CSEGS, CAP_CERTS, CAP_SUBS, CAP_DIRS = _caps(full)
     task, subs, sites, dirs = d["task"], d["subs"], d["sites"], d["dirs"]
     ports, csegs, certs = d["ports"], d["csegs"], d["certs"]
     all_vulns, vulns, review = d["all_vulns"], d["vulns"], d["review"]
@@ -478,7 +507,7 @@ def generate_jsonl(task_id):
     return "\n".join(lines) + "\n"
 
 
-def export_pdf(task_id, out_path, settings=None, timeout=90):
+def export_pdf(task_id, out_path, settings=None, timeout=90, full=False):
     """把 HTML 报告交给本机无头浏览器打印成 PDF（`--print-to-pdf`），返回 `(ok, err)`。
 
     为什么用浏览器而不是自己写 PDF：中文要嵌字体，纯标准库写 PDF 等于自带一个排版引擎；
@@ -486,7 +515,7 @@ def export_pdf(task_id, out_path, settings=None, timeout=90):
     找不到浏览器时返回**明确原因**（GUI 会把它显示出来，并提示改导出 HTML / 在策略里
     填 `screenshot.browser`），不做静默失败。
     """
-    html_text = generate_html(task_id)
+    html_text = generate_html(task_id, full=full)
     if html_text is None:
         return False, "任务不存在"
     from .screenshot import browser_path          # 延迟导入：report 不被 GUI 之外的场景拖住

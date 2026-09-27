@@ -1518,3 +1518,63 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        逐行还原）。文档：CHANGELOG_AI（续58）、docs/roadmap.md（续57 条勘误 + 续58 条目）、
        AGENTS.md §7（page_assets 的 limit=None/columns 口径 + 分组不许截断）、docs/architecture.md
        （page_assets 签名与分组视图的做法）。仍未做：真浏览器点一次"下一页"（本机无头环境限制）。
+[完成] 18、续59（2026-09-27，Trae · DeepSeek-V4.1-Flash）：IP 资产页收口 —— 去掉 20000 行静默截断
+       + 服务端筛选 + 按 IP 分页。
+       ① 问题：db.list_subdomain_net(limit=20000) 把固定上限**写死在函数签名里**，而唯一调用方
+       /ips 的语义是"按 IP 聚合域名" → 超过 2 万行时被丢掉的行所属的 IP 及其域名在**任何一页
+       都不会出现**（当时页面根本没有分页），也没有任何提示；而这一页正是"要不要对这个真实 IP
+       发起全端口扫描"的决策面。同页另有两个小问题：聚合结果**全量渲染**（几万个 IP 一行不落，
+       页面卡死，同续57 的渲染问题）、关键字筛选还是前端 data-filter（分页后只筛当前页，
+       比原来更误导，同续53/续57 口径）。
+       ② 改法：list_subdomain_net 默认改 limit=None（不加上限，三态口径同 list_tasks/list_vulns/
+       page_assets；SQLite 里"不加上限"写 LIMIT -1）；ips() 改为「**全量**取 domain/ip/cdn 三列
+       → Python 聚合（口径逐字不变）→ 服务端关键字筛选 → **按 IP 切片分页**」，与
+       extdom.group_page() 同一套口径（省内存靠"只查小列"，不靠"少查几行"；聚合只能在 Python 做
+       —— subdomains.ip 是逗号连接的多 A 记录，SQLite 没有 split 函数）；ips.html 的筛选改服务端
+       GET 表单（排在 POST 全端口扫描表单**之前**，HTML 不允许 form 嵌套）、挂分页条
+       （unit="个 IP"）、计数由当页行数改为总数、空表文案区分"筛选无命中"与"还没有解析数据"。
+       文件：scanner/db.py、gui/app.py、gui/templates/ips.html、tests/smoke.py。
+       ③ 验证：tests/smoke.py 新增 [7u]（205 个非 CDN IP + 1 条 CDN → 共 205 个 IP / 第 1 / 3 页 /
+       每页 100 末页 5 / 3 页覆盖全 205 个 IP 且不重切 / 默认仍排除 CDN（?cdn=1 才 206）/
+       关键字三路（IP·域名·CDN）各命中 1 条 / 越界回落末页 / 无命中文案分开，外加 5 条源码红线与
+       "聚合前截成 20 行"的 §6.1 变异证伪）、全量 SMOKE PASS、§9 行尾两口径逐文件一致。
+       ④ 文档：CHANGELOG_AI（续59）、docs/roadmap.md（续59 条目）、AGENTS.md §7（/ips 的
+       limit=None 与"聚合先于分页"口径）、docs/architecture.md（/ips 路由说明）。
+       仍未做：真浏览器点一次"下一页/查询"（本机无头环境限制，同续56/57/58）。
+       另注：上一轮我列的候选②「github_leak/intel 的 POC 置信度校准」经读码确认**已完成且有明确
+       结论**（续12 分层 + 续44 实测校准，结论"暂时不要放开"，自动灌 POC 的前置不满足）→ 按
+       §0/§8 不为 roadmap 打勾而动手，本轮改收这一处真会丢数据的调用点。
+[完成] 19、续59-2（2026-09-27，Trae · DeepSeek-V4.1-Flash）：「全量渲染」残余收口（/fullports ·
+       /dirs?agg=1 · /pocs）+ 报告「完整版」出口。
+       ① 问题（用户点名"其余资产页是否还有全量渲染残余"，逐路由审计后确认真残余恰好三处）：
+       /fullports 对 ports 做**全表 GROUP BY**，既无分页也无筛选，模板整表吐 HTML；
+       /dirs?agg=1 先 limit=5000 **截断**再聚合 → 第 5001 行起所属的组在**任何一页**都不会出现
+       （静默丢资产，且聚合视图**根本没有分页条**），四条切换链接的 q 未 URL 编码、筛选表单不带
+       agg（在聚合视图里点「查询」会悄悄跳回明细视图）；/pocs 全量渲染 + 前端 data-filter
+       （POC 上千条时又卡，且只筛当前页）。与续51/53/57/59 是同一条口径：分页切的是"渲染"，
+       筛选必须在服务端。
+       ② 报告侧（用户选定"加「完整版」导出开关"）：续56 只加了截断提示，读者知道少了却不知道
+       去哪儿要 —— 补**出口**：report._caps(full) + generate/generate_html/export_pdf(..., full=False)，
+       GUI ?full=1、CLI --full-report，截断提示里写明"完整清单请用「完整版」导出"；
+       默认版上限**仍是** 100/200（可读性护栏不动）。generate/generate_html 内部用**同名局部变量
+       遮蔽模块常量 CAP_***，12 处切片与 _cap_title 一处都不用改（不存在"漏改某一节"）。
+       ③ 改法：/fullports 改服务端分页 + q（主机 / IP / 任务名，任务名走子查询避免 JOIN 放大；
+       GROUP BY 本就在 SQL 侧，故 LIMIT/OFFSET **直接下推**，"计数"与"取行"共用同一段聚合子句）；
+       /dirs 的 agg 分支去掉 limit=5000，改「**全量取回 → 折叠 → 聚合 → 按组切片**」（同 /ips、
+       extdom.group_page() 口径：省内存靠"只查小列"，不靠"少查几行"），dirs.html 的四条切换链接
+       改由服务端 _state()/_link() 生成（q 已 quote()、带上 agg/all）、筛选表单补 hidden agg、
+       挂 _pager.html（unit="组"）；/pocs 改服务端分页 + q/on=1 筛选（分类统计仍按**全量**算），
+       pocs.html 撤 data-filter、加 GET 筛选表单（**只包筛选控件** —— 表里 <button class="toggle">
+       没写 type，默认是 submit，被包进表单就会"点开关＝提交表单"）。
+       文件：gui/app.py、gui/templates/{fullports,dirs,pocs,task_detail}.html、scanner/report.py、
+       cli/client.py、tests/smoke.py。
+       ④ 验证：tests/smoke.py 新增 [7v]（源码红线五条 + 两个表单形态检测器各自先变异证伪 +
+       /fullports 55 行/每页 50/两页覆盖全 55 不重切/关键字三路/越界回落/无命中文案 +
+       /dirs?agg=1 60 组按组翻页覆盖全 60/切换链接带 agg·all 且 q 已编码/表单含 hidden agg +
+       /pocs 服务端筛选·enabled 过滤·越界回落·空表文案两种 + 报告默认截断写明出口·full=True/
+       GUI ?full=1/CLI --full-report 三路不截断 + 两处 §6.1 变异证伪：摘掉 LIMIT 下推即红、
+       _caps 退回旧行为即红）。
+       ⑤ 文档：CHANGELOG_AI（续59-2，含对 /dirs?agg=1 审计误报的更正）、docs/roadmap.md（续59-2
+       条目）、AGENTS.md §7（报告"完整版"出口 + 全量渲染收口的两种下推口径）、docs/architecture.md
+       （report 的 full 参数、/fullports · /dirs?agg=1 · /pocs 路由说明）、docs/usage.md（--full-report）。
+       仍未做：真浏览器点一次"下一页/查询"（本机无头环境限制，同续56~59）。

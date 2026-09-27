@@ -71,13 +71,21 @@
 </section>
 
 <section class="panel">
-  <h2>POC 列表（{{ pocs|length }}）</h2>
-  <div class="filters">
-    <label class="muted">筛选 <input data-filter="#tbl-pocs"
+  <h2>POC 列表（共 {{ pager.total }} 个 POC，本页 {{ pocs|length }} 个）</h2>
+  {# 筛选走**服务端**（续59-2）：原先前端 `data-filter` 只筛当前页，分页后比原来更误导。
+     ⚠️ 这个 GET form 只包住筛选控件 —— 绝不能把下面的表格也包进来：表里那些
+     `<button class="toggle">` 没写 `type`（默认 submit），一旦落进 form 里，点「开/关」
+     就会变成提交这个筛选表单（整页刷新），静默改掉原来的行为。 #}
+  <form class="filters" method="get" action="{{ url_for('pocs') }}">
+    <label class="muted">筛选 <input name="q" value="{{ q }}"
       placeholder="ID / 名称 / 标签 / 来源 / 置信度 / 路径"></label>
     <label class="muted">只看已启用
-      <input type="checkbox" data-filter-enabled="#tbl-pocs"></label>
-  </div>
+      <input type="checkbox" name="on" value="1"{% if only_on %} checked{% endif %}></label>
+    <input type="hidden" name="size" value="{{ pager.size }}">
+    <button class="ghost" type="submit">查询</button>
+    {% if q or only_on %}<a class="btn-mini ghost"
+      href="{{ url_for('pocs', size=pager.size) }}">清空</a>{% endif %}
+  </form>
   <table id="tbl-pocs">
     <thead><tr><th>#</th><th>ID</th><th>名称</th><th>级别</th><th>置信度</th><th>标签</th>
       <th>状态</th><th>启用</th><th>来源</th></tr></thead>
@@ -95,9 +103,11 @@
         <td class="muted small">{{ p.source }}<br><span class="mono">{{ p.path }}</span></td>
       </tr>
     {% else %}
-      <tr><td colspan="9" class="muted">未发现 POC，点击上方「重新扫描 POC 目录」。</td></tr>
+      <tr><td colspan="9" class="muted">{% if q or only_on %}没有匹配当前筛选条件的 POC。
+        {% else %}未发现 POC，点击上方「重新扫描 POC 目录」。{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  {% include "_pager.html" %}
 </section>
 {% endblock %}

@@ -914,13 +914,21 @@ def list_subdomains(task_id):
     return _query("SELECT * FROM subdomains WHERE task_id=? ORDER BY domain", (task_id,))
 
 
-def list_subdomain_net(limit=20000):
+def list_subdomain_net(limit=None):
     """跨任务返回解析过的子域名（domain/ip/cdn）——「IP 资产」页用。
 
-    只取 `ip <> ''` 的行（没解析出来的行对"按 IP 聚合"没有意义），并给个上限防止
-    大库把页面拖死。
+    只取 `ip <> ''` 的行（没解析出来的行对"按 IP 聚合"没有意义）。
+
+    **默认不加上限**（续59）：原先硬写 `limit=20000`，超过 2 万行就被**静默丢掉**，
+    而调用方是"按 IP 聚合"—— 丢行等于**丢 IP**（该 IP 及其域名在页面上任何一页都不会出现），
+    与续51/53/55/57/58 一路在修的"固定上限 + 不提示"同源。
+    三态口径与 `list_tasks()/list_vulns()` 一致：数字＝限制条数 / `None`＝不加上限 /
+    `0`＝一条都不要（SQLite 里"不加上限"写 `LIMIT -1`，同 `page_assets()`）。
+    分页改由调用方在**聚合之后**按 IP 做（见 `gui/app.py::ips()`）—— 聚合是整表语义，
+    下推成 SQL 的 `LIMIT` 只会把"截断"从一处挪到另一处。
     """
-    return _query("SELECT domain, ip, cdn FROM subdomains WHERE ip <> '' LIMIT ?", (limit,))
+    cap = -1 if limit is None else int(limit)
+    return _query("SELECT domain, ip, cdn FROM subdomains WHERE ip <> '' LIMIT ?", (cap,))
 
 
 def list_sites(task_id):

@@ -8,21 +8,23 @@
     同一个软 404 模板 / 统一跳转页，只留首个出现的。
     {% if show_all %}
       当前<b>显示全部</b>（含 {{ hidden }} 条重复）。
-      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}">只看去重</a>
+      <a class="btn-mini ghost" href="{{ link_all }}">只看去重</a>
     {% else %}
       已隐藏 {{ hidden }} 条重复长度。
-      <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&all=1">显示全部</a>
+      <a class="btn-mini ghost" href="{{ link_all }}">显示全部</a>
     {% endif %}
   </p>
   <p class="muted small">聚合视图：
-    {% if agg %}<b>按响应聚合</b>（同「状态码+大小+标题」的响应折叠成一行，如多个站点的同款 403 拦截页只显示一条）
-    {% else %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}&agg=1">按响应聚合</a>{% endif %}
-    {% if agg %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q }}&size={{ pager.size }}">返回明细</a>{% endif %}
+    {% if agg %}<b>按响应聚合</b>（同「状态码+大小+标题」的响应折叠成一行，如多个站点的同款 403 拦截页只显示一条；跨全库聚合后<b>按组分页</b>）
+    {% else %}<a class="btn-mini ghost" href="{{ link_agg }}">按响应聚合</a>{% endif %}
+    {% if agg %}<a class="btn-mini ghost" href="{{ link_agg }}">返回明细</a>{% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="路径 / 站点 / 标题 / 备注"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
     {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
+    {# `agg` 必须一起带上：漏了它，在聚合视图里点「查询」会**悄悄跳回明细视图** #}
+    {% if agg %}<input type="hidden" name="agg" value="1">{% endif %}
     <button class="ghost" type="submit">查询</button>
     {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
   </form>
@@ -49,7 +51,9 @@
     {% endfor %}
     </tbody>
   </table>
-  <p class="muted small">聚合视图跨全库（上限 5000 条）按「状态码 + 大小 + 标题」分组，不分页；点「样本路径」可展开看各站点命中。</p>
+  <p class="muted small">聚合视图跨全库按「状态码 + 大小 + 标题」分组（<b>不设行数上限</b>，分页单位是<b>组</b>）；
+    点「样本路径」可展开看各站点命中。</p>
+  {% include "_pager.html" %}
   {% else %}
   <table id="tbl-all-dirs">
     <thead><tr><th>#</th><th>任务</th><th>状态</th><th>路径</th><th>大小</th><th>标题</th><th>来源</th></tr></thead>

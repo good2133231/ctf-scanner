@@ -96,6 +96,10 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 所有来自被测目标的文本走 `html.escape` —— 漏一处就是"打开报告即执行 JS"的反射型 XSS）/
 `export_pdf()`（把 HTML 交给本机无头 Edge/Chrome 的 `--print-to-pdf`，**不引入新依赖**；
 找不到浏览器时返回明确原因，GUI 显示为 400 说明页、CLI 退出码非 0）。
+三个入口都带 `full=False` 参数（**续59-2**）：默认版把**资产小节**（站点/端口/C 段/证书/子域名/目录）
+截在 `CAP_*`（100/200，可读性护栏，**漏洞清单不设上限**），被截断时小节标题写明总数与出口；
+`full=True` 即「完整版」，走 `_caps(full)` 返回全 `None`（不截断）—— GUI 是 `?full=1`、
+CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不受该参数影响。
 跨任务维度的「漏洞趋势统计」在 `db.vuln_trend()`（级别分布 + 最近 15 任务逐任务计数）。
 
 ## 关键设计决策
@@ -249,9 +253,12 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 侧边栏 **9 栏 + 管理员第 10 栏**（以 `gui/templates/base.html` 的 `nav_items` 为准，
 每项的**第 5 个字段** `admin_only` 决定"是否只对管理员显示"）：
 `/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
-`/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/ips`（IP 资产）/ `/fullports`（全端口扫描）/
+`/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/ips`（IP 资产：按解析 IP 聚合域名，**先全量聚合、
+再按 IP 分页**（续59），关键字走服务端；默认只显示非 CDN，`?cdn=1` 看全部）/ `/fullports`（全端口扫描：
+**按「任务 × 主机」分组，服务端分页 + 关键字（主机 / IP / 任务名）**，续59-2）/
 `/vulns`（级别筛选 + `review=` 复核状态筛选 + `?task_id=` 按任务筛选，页内三态下拉与批量打标走
-`POST /api/vulns/review`）/ `/pocs`（含置信度列与按层批量启停，`admin_only`）/ `/settings`（`admin_only`）
+`POST /api/vulns/review`）/ `/pocs`（含置信度列与按层批量启停，**列表服务端分页 + `q` / `on=1` 筛选**
+（续59-2，分类统计仍按全量算），`admin_only`）/ `/settings`（`admin_only`）
 / `/users`（账号管理，`admin_only`）。
 **续50**：`dev.enabled=true` 时另追加**第 11 栏**「开发模式」`/devmode`（`admin_only`，
 由 `create_app()` 注入 `app.jinja_env.globals["dev_enabled"]` 决定**是否渲染**，未打开时该栏根本不出现、
@@ -285,6 +292,11 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 拓展域名页的**分组**视图是唯一不走"整页 SQL 分页"的地方：SQLite 没有"注册域"函数，分组只能在
 Python 里做，于是 `extdom.group_page()` 先按全量 `id/domain/ip` 三列分组、再对当前页的组取回整行
 （省内存靠"只查小列"，**不**靠"少查几行" —— 截断会让后面的主域名组在任何一页都看不到）。
+`/dirs?agg=1`（按「状态码 + 响应大小 + 标题」跨站点聚合）与 `/ips` 是同一套口径的另两处：
+**全量取回 → Python 折叠/聚合 → 按「组」/「IP」切片分页**（续59-2 / 续59），
+分页条用 `unit` 写明单位（「组」/「个 IP」），否则与"命中数""域名数"撞成两个不同的"条"。
+`/fullports` 则相反：它的 `GROUP BY` 本就在 SQL 侧，所以 `LIMIT/OFFSET` **直接下推**，
+"计数"与"取行"共用同一段聚合子句（避免两边口径漂移）。
 来源列统一走 `gui/app.py::source_label()`（`subfinder → 被动(subfinder)`、`passive:x → 被动(x)`、
 `osint:fofa → FOFA·ICO 反查`、`osint:fofa-cert → FOFA·证书反查` …），模板里以
 `app.jinja_env.globals["source_label"]` 注册；未知来源原样返回，不吞信息。

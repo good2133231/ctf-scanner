@@ -43,16 +43,22 @@ def _print_summary(task_id, ctx):
 
 
 def _emit_reports(args, task_id, settings):
-    """按 `--report*` 参数导出报告（四条入口共用）。"""
+    """按 `--report*` 参数导出报告（四条入口共用）。
+
+    `--full-report` 只影响 MD / HTML / PDF 的**资产小节上限**（默认每节 100/200 条，续56 起
+    被截断时会在小节标题里写明总数）：续59-2 给报告加了「完整版」出口，CLI 侧就是它。
+    JSONL 本来就是全量（机器格式），不受此开关影响。
+    """
+    full = bool(getattr(args, "full_report", False))
     if args.report:
-        md = generate(task_id)
+        md = generate(task_id, full=full)
         if md:
             out = resolve(args.report)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(md, encoding="utf-8")
             print(f"[*] 报告已生成：{rel_display(out)}")
     if args.report_html:
-        body = generate_html(task_id)
+        body = generate_html(task_id, full=full)
         if body:
             out = resolve(args.report_html)
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -60,7 +66,7 @@ def _emit_reports(args, task_id, settings):
             print(f"[*] HTML 报告已生成：{rel_display(out)}")
     if args.report_pdf:
         out = resolve(args.report_pdf)
-        ok, err = export_pdf(task_id, out, settings)
+        ok, err = export_pdf(task_id, out, settings, full=full)
         # 失败时**不静默**：打印原因并让退出码非 0（脚本里能立刻发现少了一份交付物）。
         if ok:
             print(f"[*] PDF 报告已生成：{rel_display(out)}")
@@ -231,6 +237,10 @@ def main():
                     help="结束后生成 PDF 报告（用本机无头 Edge/Chrome 打印；没有浏览器会明确报错）")
     ap.add_argument("--report-jsonl", metavar="PATH",
                     help="结束后生成 JSONL 报告（每行一个 JSON 对象，机器可读；漏洞含复核状态）")
+    ap.add_argument("--full-report", action="store_true",
+                    help="报告资产小节**不截断**（「完整版」）：默认每节限 100/200 条（截断时"
+                         "小节标题会写明总数）；需要按资产逐条核对时用。只影响 --report / "
+                         "--report-html / --report-pdf，JSONL 本来就是全量")
     ap.add_argument("-H", "--header", action="append", default=[], metavar="'名称: 值'",
                     help="本次任务的**登录态请求头**，可重复（如 -H \"Authorization: Bearer xxx\"）；"
                          "只发给目标侧，第三方接口（crt.sh/FOFA/KEV/IP 反查）不带")

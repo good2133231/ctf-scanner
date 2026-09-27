@@ -1333,6 +1333,10 @@ def create_app():
         """导出任务报告：`?fmt=md`（默认，下载 .md）/ `html`（下载 .html）/ `pdf`（下载 .pdf）/
         `jsonl`（下载 .jsonl，机器可读的 JSON Lines）。
 
+        `?full=1` = **完整版**（续59-2）：资产小节**不截断**（默认版各节仍限 100/200 条，
+        那是可读性护栏）。默认版的小节标题会写明"共 N 条，此处仅列前 M 条 —— 完整清单请用
+        「完整版」导出"，这个参数就是那句话指向的出口。`jsonl` 本来就是全量，不受影响。
+
         PDF 走本机无头浏览器的 `--print-to-pdf`（见 `report.export_pdf`）：找不到浏览器时
         **把原因显示出来**（而不是 500 或一个空文件），并提示可改导出 HTML。
         """
@@ -1342,12 +1346,13 @@ def create_app():
         from scanner.report import (export_pdf, generate, generate_html,
                                     generate_jsonl)
         fmt = (request.args.get("fmt") or "md").strip().lower()
+        full = request.args.get("full") == "1"
         stamp = time.strftime("%Y%m%d_%H%M%S")
         if fmt == "pdf":
             tmp_dir = Path(tempfile.mkdtemp(prefix="ctfscan-report-"))
             out = tmp_dir / f"task_{task_id}_{stamp}.pdf"
             try:
-                ok, err = export_pdf(task_id, out, settings)
+                ok, err = export_pdf(task_id, out, settings, full=full)
                 if not ok:
                     return Response(_export_error_page(err, task_id), status=400,
                                     mimetype="text/html; charset=utf-8")
@@ -1360,7 +1365,7 @@ def create_app():
                             headers={"Content-Disposition":
                                      f"attachment; filename=task_{task_id}_{stamp}.pdf"})
         if fmt == "html":
-            body = generate_html(task_id) or ""
+            body = generate_html(task_id, full=full) or ""
             return Response(body, mimetype="text/html; charset=utf-8",
                             headers={"Content-Disposition":
                                      f"attachment; filename=task_{task_id}_{stamp}.html"})
@@ -1370,7 +1375,7 @@ def create_app():
             return Response(body, mimetype="application/x-ndjson; charset=utf-8",
                             headers={"Content-Disposition":
                                      f"attachment; filename=task_{task_id}_{stamp}.jsonl"})
-        md = generate(task_id) or ""
+        md = generate(task_id, full=full) or ""
         fname = f"task_{task_id}_{stamp}.md"
         return Response(md, mimetype="text/markdown; charset=utf-8",
                         headers={"Content-Disposition": f"attachment; filename={fname}"})
@@ -1527,7 +1532,13 @@ def create_app():
     @login_required
     @admin_required
     def pocs():
-        # _query 返回 sqlite3.Row（只读），这里要往每行补 source 字段，故转成 dict
+        # `db.list_pocs()` 仍是**全量**读取：本页顶部「按分类批量开关」要的就是全量分布
+        # （来源 / 级别 / 置信度各多少、总共启用多少），`stats` 只按当前页算会直接骗人。
+        # 分页只切**渲染**，与 `/ips`（续59）同一口径：省的是"一次吐出几千行 HTML"，不是"少查几行"。
+        #
+        # 续59-2：原先整表渲染 + 前端 `data-filter`（`static/app.js::initFilters()` 按
+        # `tr.textContent` 包含匹配）+ `data-filter-enabled`。POC 上千条时页面又卡，且筛选只作用于
+        # 当前页 —— 与续51/53/57/59 把筛选搬到服务端是同一条口径，故这里一并收口。
         rows = [dict(r) for r in db.list_pocs()]
         # 分类统计（来源 / 级别 / 置信度），供页面上的"按分类批量开关"展示当前分布
         stats = {"source": {}, "severity": {}, "confidence": {}, "enabled": 0, "total": len(rows)}
@@ -1542,7 +1553,29 @@ def create_app():
             stats["severity"][r["severity"] or "-"] = stats["severity"].get(r["severity"] or "-", 0) + 1
             stats["confidence"][r["confidence"]] = stats["confidence"].get(r["confidence"], 0) + 1
             stats["enabled"] += int(r["enabled"] or 0)
-        return render_template("pocs.html", pocs=rows, stats=stats)
+        page, size, q = _page_args()
+        only_on = request.args.get("on") == "1"
+        if q:
+            # 判据与旧前端一致：**整行关键字**，大小写不敏感，任一列命中即保留。
+            # 匹配的是表格里可见的**数据列**；「启用」那列的 `开/关` 是状态指示不是数据，不参与匹配
+            # （旧前端对 `tr.textContent` 匹配会连它一起算，搜"开"就命中所有已启用的行 —— 那是噪声）。
+            _cols = ("id", "poc_id", "name", "severity", "confidence", "tags",
+                     "status", "source", "path")
+            _needle = q.lower()
+            rows = [r for r in rows
+                    if any(_needle in str(r.get(c) or "").lower() for c in _cols)]
+        if only_on:
+            rows = [r for r in rows if r["enabled"]]
+        total = len(rows)
+        pages = max(1, (total + size - 1) // size)
+        page = min(max(1, page), pages)      # 越界（筛选后行数变少）→ 回落到最后一页
+        rows = rows[(page - 1) * size: page * size]
+        # `q` 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页**丢掉筛选条件**
+        qs = (f"&q={quote(q)}&size={size}" if q else f"&size={size}") + ("&on=1" if only_on else "")
+        pager = {"page": page, "size": size, "total": total, "pages": pages,
+                 "base": "/pocs", "qs": qs, "unit": "个 POC"}
+        return render_template("pocs.html", pocs=rows, stats=stats, pager=pager, q=q,
+                               only_on=only_on)
 
     @app.route("/api/pocs/upload", methods=["POST"])
     @login_required
@@ -1833,8 +1866,17 @@ def create_app():
         **默认只显示"非 CDN 解析"**（用户要求）：走 CDN 的域名解析出来是一堆边缘节点 IP，
         对"找到真实源站"没有帮助；`?cdn=1` 可把带 CDN 标记的也显示出来（仍单独标注厂商）。
         每行可勾选 → 直接对**真实 IP** 发起全端口扫描（复用 `/api/ports/full-scan`）。
+
+        分页（续59）：聚合**必须**先跑完全量（同一个 IP 的域名可能落在任意行），因此这里与
+        `/extdomains` 的分组视图是同一套口径——「全量取回小列 → Python 聚合 → 筛选 → 按组切片」
+        （见 `scanner/extdom.py::group_page()` 的注释）。原先 `db.list_subdomain_net` 被硬写
+        limit=20000，超限时**静默丢行**，而这里丢行就是**丢 IP**（该 IP 在任何一页都不会出现），
+        且无任何提示。
+        关键字从**前端 `data-filter`** 一并下推到服务端：分页后前端筛选只筛当前页，比原来更误导
+        （同续53 撤 `[data-tfilter]`、续57 撤 7 个页签 `data-filter` 的理由）。
         """
         include_cdn = request.args.get("cdn") == "1"
+        page, size, q = _page_args()
         agg = {}
         for r in db.list_subdomain_net():
             ip_text, cdn_label = (r["ip"] or ""), (r["cdn"] or "")
@@ -1851,13 +1893,29 @@ def create_app():
                 if cdn_label and not item["cdn"]:
                     item["cdn"] = cdn_label
         rows = sorted(agg.values(), key=lambda x: (-len(x["domains"]), x["ip"]))
+        if q:
+            # 判据与旧前端 `data-filter` 一致：IP / 域名 / CDN 任一命中即保留该行（大小写不敏感）
+            needle = q.lower()
+            rows = [x for x in rows
+                    if needle in x["ip"].lower() or needle in (x["cdn"] or "").lower()
+                    or any(needle in d.lower() for d in x["domains"])]
+        total = len(rows)
+        pages = max(1, (total + size - 1) // size)
+        page = min(max(1, page), pages)     # 越界（过滤后行数变少）→ 回落到最后一页
+        rows = rows[(page - 1) * size: page * size]
         # 反查域名数：从 csegs 表按 IP 聚合（各任务里该 IP 的反查命中数之和）
         reverse_counts = {}
         for c in db._query("SELECT ip, SUM(count) c FROM csegs WHERE ip <> '' GROUP BY ip"):
             reverse_counts[c["ip"]] = int(c["c"] or 0)
         for row in rows:
             row["reverse"] = reverse_counts.get(row["ip"], 0)
-        return render_template("ips.html", ips=rows, include_cdn=include_cdn)
+        # `total` 是**IP 个数**（不是行数）→ 分页条传 `unit`，否则与"域名数"列撞成两个"条"
+        qs = f"&size={size}" + ("&cdn=1" if include_cdn else "") \
+            + (f"&q={quote(q)}" if q else "")
+        pager = {"page": page, "size": size, "total": total, "pages": pages,
+                 "base": "/ips", "qs": qs, "unit": "个 IP"}
+        return render_template("ips.html", ips=rows, include_cdn=include_cdn,
+                               pager=pager, q=q)
 
     @app.route("/subdomains")
     @login_required
@@ -2012,13 +2070,35 @@ def create_app():
 
         与 `/ports`（端口明细表）的区别：这里是"主机 × 任务"的视角 —— 一眼看出
         哪个任务在哪些主机上开了哪些端口，再决定要不要对某个 IP 补一次 1-65535 全端口。
+
+        **服务端分页 + 关键字（续59-2）**：本页是对 `ports` 的**全表 GROUP BY**，行数随
+        "任务 × 主机"无界增长，而原先既**没有分页**也**没有筛选**、模板整表渲染 —— 与续57 修的
+        7 个资产页签、续59 修的 `/ips` 同属"全量渲染"问题。与那两处的差别：**聚合本身就在 SQL 侧**
+        （`GROUP BY`），所以 `LIMIT/OFFSET` 可以**直接下推**（不必先全量取回再在 Python 里聚合，
+        见 `/ips` 的注释）；`LIMIT` 只是把"渲染"切成一页，聚合集合仍是全表。
+        `q` 命中：主机 / IP / **任务名**（任务名走子查询而不是 JOIN，避免同主机多端口时被 JOIN 放大）。
         """
-        raw_rows = db._query(
-            "SELECT task_id, host, ip, COUNT(*) c, GROUP_CONCAT(port) ports "
-            "FROM ports GROUP BY task_id, host, ip ORDER BY task_id DESC, host")
-        # 续55：名称表要**全量**任务 —— 上面是对 `ports` 的**全表** GROUP BY（不按任务切），
-        # 名称表却只取最新 1000 个任务时，更老的任务在这里查不到名字、行上直接显示空。
-        names = {t["id"]: t["name"] for t in db.list_tasks(limit=None)}
+        page, size, q = _page_args()
+        where, params = "", ()
+        if q:
+            like = f"%{q}%"
+            where = ("WHERE host LIKE ? OR ip LIKE ? "
+                     "OR task_id IN (SELECT id FROM tasks WHERE name LIKE ?)")
+            params = (like, like, like)
+        # 聚合子句只写一遍：`total` 与取行两处共用，避免"计数口径与取行口径漂移"
+        _agg_sql = ("SELECT task_id, host, ip, COUNT(*) c, GROUP_CONCAT(port) ports "
+                    f"FROM ports {where} GROUP BY task_id, host, ip")
+        _cnt = db._query(f"SELECT COUNT(*) c FROM ({_agg_sql})", params, one=True)
+        total = int(_cnt["c"] or 0) if _cnt else 0
+        pages = max(1, (total + size - 1) // size)
+        if page > pages:      # 越界（筛选后行数变少）→ 回落到最后一页
+            page = pages
+        raw_rows = db._query(_agg_sql + " ORDER BY task_id DESC, host LIMIT ? OFFSET ?",
+                             params + (size, (page - 1) * size))
+        # 续55：名称表要**全量**任务 —— 上面是对 `ports` 的 GROUP BY（不按任务切），本页行可能
+        # 属于**任意**老任务，名称表只取最新 N 个的话更老的任务会显示成 `#id`。
+        # 没有行时不必查（省一次全表读）。
+        names = {t["id"]: t["name"] for t in db.list_tasks(limit=None)} if raw_rows else {}
         rows = []
         for r in raw_rows:
             item = dict(r)      # sqlite3.Row 不支持赋值，先转成 dict 再加工
@@ -2027,7 +2107,11 @@ def create_app():
                  if str(p).strip().isdigit()})
             item["task_name"] = names.get(item["task_id"], f"#{item['task_id']}")
             rows.append(item)
-        return render_template("fullports.html", hosts=rows)
+        # `q` 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页**丢掉筛选条件**
+        qs = (f"&q={quote(q)}&size={size}" if q else f"&size={size}")
+        pager = {"page": page, "size": size, "total": total, "pages": pages,
+                 "base": "/fullports", "qs": qs}
+        return render_template("fullports.html", hosts=rows, pager=pager, q=q)
 
     @app.route("/api/ports/full-scan", methods=["POST"])
     @login_required
@@ -2076,23 +2160,68 @@ def create_app():
     def dirs():
         show_all = _overlap_args()
         agg = request.args.get("agg") == "1"
+        page, size, q = _page_args()
+
+        def _state(**over):
+            """当前页的**全部**状态（`None` = 去掉该参数）—— 链接与翻页条都从这里派生。"""
+            st = {"q": q or None, "size": size,
+                  "all": "1" if show_all else None, "agg": "1" if agg else None}
+            st.update(over)
+            return {k: v for k, v in st.items() if v}
+
+        def _link(**over):
+            """「只看去重 / 显示全部」「按响应聚合 / 返回明细」这些开关的目标链接。
+
+            以前这两对链接是模板里手拼 `?q={{ q }}&size=...`，有两个坑：① `q` 没 URL 编码 ——
+            关键字带 `&` / `#` / 空格时链接会**丢筛选条件**（`&` 之后被当成新参数）；② 没带 `agg`
+            —— 在聚合视图里点「显示全部」会**悄悄跳回明细视图**。统一由这里生成就不会漏。
+            """
+            return url_for("dirs", **_state(**over))
+
+        def _qs():
+            """`_pager.html` 用的 `&k=v` 片段：必须带上当前**全部**状态（含 `agg` / `all`），
+            否则翻一页就悄悄换了视图或丢了筛选条件（同 `_asset_page()` 的注释）。"""
+            st = _state()
+            parts = [f"q={quote(st['q'])}"] if "q" in st else []
+            parts.append(f"size={st['size']}")
+            if "all" in st:
+                parts.append("all=1")
+            if "agg" in st:
+                parts.append("agg=1")
+            return "&" + "&".join(parts)
+
+        link_all = _link(all=None if show_all else "1")
+        link_agg = _link(agg=None if agg else "1")
+        if agg:
+            # 聚合是**整库语义**（同一个「状态码 + 大小 + 标题」的响应可能落在任意任务/站点），
+            # 与 `/ips`（续59）、`/extdomains` 分组视图是同一套口径：「全量取回 → 折叠 → 聚合 →
+            # 按组切片」（折叠/聚合都只能在 Python 里做，下推 SQL 等于把规则写两遍，必然漂移）。
+            #
+            # 续59-2 去掉 `limit=5000`：它把聚合建在**截断集合**上 —— 第 5001 行起的数据所属的组
+            # 在任何一页都看不到（静默丢资产）。旧文案写的"（上限 5000 条）"只披露了"上限存在"，
+            # 没说"超出的部分会消失"；而"防页面被拖死"的正解是**分页**，不是**截断**。
+            all_rows, _ = db.page_assets("dirs", limit=None, offset=0, q=q or None)
+            folded, hidden = _fold_dirs(all_rows, show_all)
+            groups = _agg_dirs(folded)
+            total = len(groups)
+            pages = max(1, (total + size - 1) // size)
+            if page > pages:        # 越界（筛选后组数变少）→ 回落到最后一页
+                page = pages
+            groups = groups[(page - 1) * size: page * size]
+            # 分页单位是**组**（`total` 是组数、不是行数）→ 传 `unit`，否则与「命中数」列
+            # 撞成两个含义不同的"条"（`_pager.html` 的 `unit`，同 `/extdomains` 分组视图）。
+            pager = {"page": page, "size": size, "total": total, "pages": pages,
+                     "base": "/dirs", "qs": _qs(), "unit": "组"}
+            return render_template("dirs.html", dirs=groups, pager=pager, q=q,
+                                   show_all=show_all, hidden=hidden, agg=True,
+                                   link_all=link_all, link_agg=link_agg)
         rows, pager, q = _asset_page("dirs", "/dirs")
         # 重复长度默认隐藏：同一站点下状态码与响应大小都相同的多条只留首个，`?all=1` 放开
         rows, hidden = _fold_dirs(rows, show_all)
-        if agg:
-            # 聚合需跨全库（不再按页切）：拉全部（受 q 过滤），上限 5000 防极端库
-            all_rows, _ = db.page_assets("dirs", limit=5000, offset=0, q=q or None)
-            all_rows, _ = _fold_dirs(all_rows, show_all)
-            groups = _agg_dirs(all_rows)
-            pager["qs"] += "&agg=1"
-            if show_all:
-                pager["qs"] += "&all=1"
-            return render_template("dirs.html", dirs=groups, pager=pager, q=q,
-                                   show_all=show_all, hidden=hidden, agg=True)
-        if show_all:
-            pager["qs"] += "&all=1"
+        pager["qs"] = _qs()
         return render_template("dirs.html", dirs=rows, pager=pager, q=q,
-                               show_all=show_all, hidden=hidden)
+                               show_all=show_all, hidden=hidden,
+                               link_all=link_all, link_agg=link_agg)
 
     # ---------- 黑名单 / 批量子域名 ----------
     #

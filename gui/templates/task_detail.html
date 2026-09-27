@@ -17,6 +17,13 @@
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">导出 HTML</a>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='pdf') }}">导出 PDF</a>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='jsonl') }}">导出 JSONL</a>
+  {# 续59-2「按需加载」的出口：默认版报告把资产小节截断在 100/200 条（**可读性**护栏，不是丢数据），
+     小节标题会写"共 N 条，此处仅列前 M 条 —— 完整清单请用「完整版」导出"，这里就是那个入口。
+     JSONL 本来就是全量（机器格式），不在这里重复列。 #}
+  <span class="muted small" title="资产小节不截断：需要按资产逐条核对时用（默认版每节限 100/200 条）"
+    >完整版：<a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, full=1) }}">MD</a>
+    <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html', full=1) }}">HTML</a>
+    <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='pdf', full=1) }}">PDF</a></span>
   <button class="btn-mini danger" data-op="delete" data-id="{{ task.id }}">删除</button>
   <span id="op-msg" class="muted"></span>
   <span class="spacer"></span>

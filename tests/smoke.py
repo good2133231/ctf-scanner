@@ -9059,7 +9059,11 @@ http:
     # ③ 报告：资产小节被截断时必须写出总数（纯函数口径 + 注入 120 个站点走真渲染）
     assert _rep7r._cap_title("存活站点", 100, 100) == "存活站点", "刚好等于上限不算截断，不得加注"
     assert _rep7r._cap_title("存活站点", 99, 100) == "存活站点"
-    assert _rep7r._cap_title("存活站点", 101, 100) == "存活站点（共 101 条，此处仅列前 100 条）"
+    # 续59-2：截断提示里补了「完整版」出口指引（读者知道少了，还得知道去哪儿要）
+    assert _rep7r._cap_title("存活站点", 101, 100) == \
+        "存活站点（共 101 条，此处仅列前 100 条 —— 完整清单请用「完整版」导出）"
+    assert _rep7r._cap_title("存活站点", 101, None) == "存活站点", \
+        "cap=None（完整版）永不截断，也就不该有任何注"
     _q_real_ls7r = _rep7r.db.list_sites
     try:
         _rep7r.db.list_sites = lambda _t: [
@@ -9082,7 +9086,8 @@ http:
 
     print("[7r] 续56 站点批量打开 + 报告截断提示 ok: 按钮在站点页签内且 type=button"
           "（检测器变异证伪｜否则点一下会误触发真实补扫）｜initOpenSites 已注册｜勾选行 value＝站点 URL｜"
-          "_cap_title 三态（等于上限不加注）｜注入 120 站点后 MD/HTML 都写出'共 120 条，此处仅列前 100 条'｜"
+          "_cap_title 三态（等于上限不加注·cap=None 也不加注）｜注入 120 站点后 MD/HTML 都写出'共 120 条，此处仅列前 100 条'"
+          "（续59-2 起带「完整版」出口指引）｜"
           "还原后无该注｜report.py 无字面量切片（检测器变异证伪）")
 
     # ---- [7s] 续57：任务详情页 7 个资产页签的服务端分页 + 服务端筛选 ----
@@ -9306,6 +9311,345 @@ http:
     print("[7t] 续58 拓展域名分组分页 ok: 45 主域名 / 每页 20 / 3 页、跨页覆盖全 45 个且不重切｜"
           "分页条单位词＝个主域名｜越界回落末页｜当前页的组取回整行（来源/IP 列在）｜"
           "分组上限已删（变异截断成 20 行即红）")
+
+    # ---------------- [7u] 续59：IP 资产页收口（全量聚合 + 服务端筛选 + 按 IP 分页） ----------------
+    # ① 根因：`db.list_subdomain_net(limit=20000)` 把固定上限**写死在函数签名里**，超限的行走
+    #    `LIMIT 20000` 被静默丢掉；而调用方（/ips）是"按 IP 聚合"—— 丢行就是**丢 IP**：
+    #    该 IP 及其域名在页面上**任何一页**都不会出现，且没有任何提示。与续51/53/55/57/58
+    #    一路在修的"固定上限 + 静默丢"同源（CHANGELOG_AI 里旧审计只写了"阈值很高，实际难触发"，
+    #    那是对概率的判断，不是设计取舍）。
+    _db59 = (ROOT / "scanner" / "db.py").read_text(encoding="utf-8")
+    assert _re7q.search(r"def list_subdomain_net\(limit=None\)", _db59), \
+        "list_subdomain_net 必须用 limit=None（不加上限）作默认，三态口径同 list_tasks/list_vulns"
+    assert not _re7q.search(r"def list_subdomain_net\(limit=\d", _db59), \
+        "list_subdomain_net 的参数默认值不得是**固定行数上限**（超限的行会被静默丢掉 = 丢 IP）"
+    assert not _re7q.search(r"list_subdomain_net\(\s*limit\s*=", _apa7s), \
+        "gui/app.py 不得再给 list_subdomain_net 传固定上限（聚合前的截断＝丢 IP，且分页救不回来）"
+    _ips59 = (ROOT / "gui" / "templates" / "ips.html").read_text(encoding="utf-8")
+    assert "data-filter" not in _ips59, \
+        "IP 资产页已服务端分页，前端 data-filter 只能筛当前页（比原来更误导），必须撤掉"
+    _ipf59, _ipp59 = (_ips59.find('<form class="filters" method="get"'),
+                      _ips59.find('<form method="post"'))
+    assert _ipf59 >= 0 and _ipp59 >= 0 and _ipf59 < _ipp59, \
+        "IP 资产页的 GET 筛选表单必须在 POST（发起全端口扫描）之前 —— HTML 不允许 form 嵌套"
+    assert "_pager.html" in _ips59, "IP 资产页要挂分页条（服务端分页）"
+
+    _t59 = db.create_task("smoke-ips-page", "z59.test", ["probe"], {})
+    db.insert_subdomains(_t59, [(f"a{i}.z59.test", "brute:builtin") for i in range(205)]
+                         + [("cdn.z59.test", "brute:builtin")])
+    db.set_subdomain_net(_t59, {f"a{i}.z59.test": (f"10.1.0.{i}", "") for i in range(205)})
+    # CDN 标签用**夹具专用**的串（`z59cdn`）：用真厂商名会让断言被别的任务里的同厂商行污染
+    db.set_subdomain_net(_t59, {"cdn.z59.test": ("10.9.9.9", "z59cdn")})
+
+    def _ips59_get(_qs):
+        _txt = _c7o.get(f"/ips?{_qs}").get_data(as_text=True)
+        return _txt, set(_re7q.findall(r'name="host"\s+value="([^"]+)"', _txt))
+
+    _txt59a, _p59a = _ips59_get("q=z59.test")
+    _txt59b, _p59b = _ips59_get("q=z59.test&page=2")
+    _txt59c, _p59c = _ips59_get("q=z59.test&page=3")
+    assert "共 205 个 IP" in _txt59a, \
+        "总数必须是**全量聚合**后的 IP 个数（默认视图只算非 CDN：206 行 - 1 条 CDN = 205）"
+    assert "第 1 / 3 页" in _txt59a, "205 个 IP / 每页 100 → 恰好 3 页"
+    assert (len(_p59a), len(_p59b), len(_p59c)) == (100, 100, 5), \
+        f"每页 100 个 IP、末页剩 5：实际 {len(_p59a)}/{len(_p59b)}/{len(_p59c)}"
+    assert len(_p59a | _p59b | _p59c) == 205, \
+        f"3 页合起来必须覆盖全部 205 个 IP（实际 {len(_p59a | _p59b | _p59c)}）—— 少了就是有 IP 不可达"
+    assert not (_p59a & _p59b) and not (_p59b & _p59c), "同一个 IP 不许被切到两页上"
+    assert "10.9.9.9" not in (_p59a | _p59b | _p59c), \
+        "默认视图必须仍然只显示**非 CDN** 的解析（CDN 那条要等 ?cdn=1 才出现）"
+    assert "共 206 个 IP" in _ips59_get("q=z59.test&cdn=1")[0], "?cdn=1 时 CDN 那条要一起算进总数"
+
+    # ② 关键字筛选在**服务端**（分页后前端筛选只筛当前页 = 更误导）：命中的那个 IP 落在第几页都找得到。
+    #    这里刻意挑一个"按字典序排在很后面"的 IP/域名（service 端过滤才能一条命中）。
+    _txt59q, _p59q = _ips59_get("q=10.1.0.204")
+    assert _p59q == {"10.1.0.204"} and "共 1 个 IP" in _txt59q, \
+        "服务端按 IP 精确筛选：应恰好命中 1 条（前端只筛当前页做不到这件事）"
+    assert _ips59_get("q=a204.z59.test")[1] == {"10.1.0.204"}, \
+        "关键字也要能按**域名**筛（判据与旧前端 data-filter 一致：IP / 域名 / CDN 任一命中）"
+    assert _ips59_get("q=z59cdn&cdn=1")[1] == {"10.9.9.9"}, "关键字按 CDN 标签筛也要生效"
+    _txt59z, _p59z = _ips59_get("q=z59.test&page=99")
+    assert "第 3 / 3 页" in _txt59z and len(_p59z) == 5, \
+        "页码越界要回落到最后一页（而不是显示空页）"
+    assert "没有匹配" in _c7o.get("/ips?q=zz-no-such-59.test").get_data(as_text=True), \
+        "筛选无命中时不能显示'还没有解析数据'（那会把'筛选没匹配'误导成'没有资产'）"
+
+    # §6.1 变异证伪：把"不加上限"偷偷当成旧行为（聚合前截成 20 行）⇒ 总数必红
+    _real_net59 = db.list_subdomain_net
+    db.list_subdomain_net = lambda limit=None: _real_net59(limit=20)
+    try:
+        _mut59 = _c7o.get("/ips?q=z59.test").get_data(as_text=True)
+        assert "共 205 个 IP" not in _mut59, \
+            "变异（聚合前截成 20 行）后仍报 205 个 IP → 说明上面那条断言没测到'全量聚合'"
+    finally:
+        db.list_subdomain_net = _real_net59
+
+    print("[7u] 续59 IP 资产页收口 ok: 全量聚合 205 个 IP / 每页 100 / 3 页、跨页覆盖全 205 且不重切｜"
+          "默认仍排除 CDN（?cdn=1 才 206）｜关键字服务端筛 IP·域名·CDN 三路｜越界回落末页｜"
+          "筛选无命中与'无资产'文案分开｜固定上限已删（变异截成 20 行即红）")
+
+    # ---------- [7v] 续59-2：全量渲染收口（/fullports · /dirs?agg=1 · /pocs）+ 报告「完整版」 ----------
+    # ① 根因：这三处**当时**仍是"整表渲染"（或"截断后再渲染"）——
+    #    · `/fullports`：对 `ports` 做**全表 GROUP BY**，既无分页也无筛选，模板整表吐 HTML，
+    #      行数随"任务 × 主机"无界增长；
+    #    · `/dirs?agg=1`：先 `page_assets("dirs", limit=5000)` **截断**再聚合 —— 第 5001 行起
+    #      所属的组在**任何一页**都不会出现（静默丢资产，且分页条压根不存在），四条切换链接的
+    #      `q` 未 URL 编码、筛选表单不带 `agg`（在聚合视图里点「查询」会悄悄跳回明细视图）；
+    #    · `/pocs`：全量渲染 + 前端 `data-filter`（POC 上千条时又卡，且只筛当前页）。
+    #    与续51/53/57/59 是同一条口径：**分页切的是"渲染"，筛选必须在服务端**。
+    # ② 报告侧：默认版把资产小节截在 `CAP_*`（可读性护栏，续56 已在标题写明总数），本轮补
+    #    **出口** —— `report.generate(..., full=True)` / GUI `?full=1` / CLI `--full-report`。
+    print("[7v] 续59-2 全量渲染收口 + 报告「完整版」…")
+    _fpp7v = (ROOT / "gui" / "templates" / "fullports.html").read_text(encoding="utf-8")
+    _poc7v = (ROOT / "gui" / "templates" / "pocs.html").read_text(encoding="utf-8")
+    _rep7v = _rep7q
+    _repsrc7v = (ROOT / "scanner" / "report.py").read_text(encoding="utf-8")
+    _det7v = (ROOT / "gui" / "templates" / "task_detail.html").read_text(encoding="utf-8")
+    _cli7v = (ROOT / "cli" / "client.py").read_text(encoding="utf-8")
+
+    # ① 源码红线：旧写法必须是"能被正则认出来"的形态（正则只认**代码引用**，不认注释里的提及）
+    assert _re7q.search(r'page_assets\("dirs",\s*limit=None', _apa7s), \
+        "/dirs 聚合必须建在**全量**集合上（limit=None）—— 传固定行数时超出部分所属的组任何一页都看不到"
+    assert not _re7q.search(r'page_assets\("dirs",\s*limit\s*=\s*\d', _apa7s), \
+        "/dirs 聚合不得再传固定行数上限（聚合前截断＝丢组，分页救不回来）"
+
+    def _strip_jinja_comments7v(_text):
+        """剥掉 Jinja 注释 `{# … #}` —— 红线只该看**会渲染出来的标记**，不该看注释措辞。
+
+        `pocs.html` 的注释里正写着"原先前端 `data-filter` …"（那是本轮**要保留**的说明），
+        纯子串匹配会把它当成"还有残留"而误报（[7u] 在 `ips()` docstring 上踩过同一个坑）。
+        剥注释而不是放宽判据：后者会让「属性被偷偷加回表格」也测不出来。
+        """
+        return _re7q.sub(r"\{#.*?#\}", "", _text, flags=_re7q.S)
+
+    assert "data-filter" in _strip_jinja_comments7v("{# 旧写法 data-filter #}<input data-filter>"), \
+        "检测器必须能抓到注释之外的真实属性（变异体）"
+    assert "data-filter" not in _strip_jinja_comments7v("{# 旧写法 data-filter #}"), \
+        "注释里的提及必须被剥掉（否则判据从「代码」漂到「注释措辞」）"
+    assert "data-filter" not in _strip_jinja_comments7v(_poc7v), \
+        "POC 列表已服务端分页，前端 data-filter 只筛当前页（比原来更误导），必须撤掉"
+    assert _re7q.search(r"def generate\(task_id, full=False\)", _repsrc7v) \
+        and _re7q.search(r"def generate_html\(task_id, full=False\)", _repsrc7v) \
+        and _re7q.search(r"def export_pdf\([^)]*full=False", _repsrc7v), \
+        "报告三个入口都必须带 full 参数（否则「完整版」只是个说法）"
+    assert _cli7v.count("full=full") >= 3 and "--full-report" in _cli7v, \
+        "CLI 必须把 `--full-report` 真的传到三个导出（开关不许是装饰）"
+    assert "full=1" in _det7v, "任务详情页要给出「完整版」入口 —— 否则截断提示指向的出口并不存在"
+
+    # 两个表单形态检测器，各自先变异证伪再用于红线（§6.1：先证明断言有区分度）
+    def _get_form_before_post7v(_text):
+        """GET 筛选表单必须整段排在 POST 表单之前：HTML 不允许 form 嵌套，嵌进去后
+        浏览器会把内层表单拆掉，按钮静默失灵（[7s] 已因这条踩过坑）。"""
+        _g = _text.find('<form class="filters" method="get"')
+        _p = _text.find('<form method="post"')
+        return _g >= 0 and _p >= 0 and _g < _p
+
+    def _form_excludes7v(_text, _marker):
+        """表单必须在 `_marker`（表格）**之前闭合**：表里的裸 `<button class="toggle">`
+        默认是 submit，被包进筛选表单后点一下"开/关"就变成提交表单（整页刷新）。"""
+        _g = _text.find('<form class="filters" method="get"')
+        if _g < 0:
+            return False
+        _close = _text.find("</form>", _g)
+        _t = _text.find(_marker)
+        return _close >= 0 and (_t < 0 or _close < _t)
+
+    assert not _get_form_before_post7v('<form method="post"></form>'
+                                       '<form class="filters" method="get"></form>'), \
+        "检测器必须识破'POST 在前'的形态（变异体）"
+    assert _get_form_before_post7v('<form class="filters" method="get"></form>'
+                                   '<form method="post"></form>'), \
+        "检测器必须认得正确形态（否则下面的红线是假绿）"
+    assert not _form_excludes7v('<form class="filters" method="get">'
+                                '<table id="tbl-x"></table></form>', '<table id="tbl-x">'), \
+        "检测器必须识破'表格被包进筛选表单'的形态（变异体）"
+    assert _form_excludes7v('<form class="filters" method="get"></form>'
+                            '<table id="tbl-x"></table>', '<table id="tbl-x">'), \
+        "检测器必须认得正确形态（否则下面的红线是假绿）"
+
+    assert _get_form_before_post7v(_fpp7v), \
+        "/fullports 的 GET 筛选表单必须排在 POST（发起全端口扫描）之前"
+    assert _form_excludes7v(_fpp7v, '<table id="tbl-fullports">'), \
+        "/fullports 的 GET 筛选表单不得把端口表格包进来"
+    assert _form_excludes7v(_poc7v, '<table id="tbl-pocs">'), \
+        "/pocs 的 GET 筛选表单不得把 POC 表格包进来（表里 <button class=\"toggle\"> 默认 submit）"
+    assert "_pager.html" in _fpp7v, "/fullports 要挂分页条（服务端分页）"
+
+    # ② /fullports：55 个主机 × 1 任务，每页 50 → 恰好 2 页
+    _t59v = db.create_task("smoke-z59v-tname-needle", "z59v.test", ["portscan"], {})
+    db.insert_ports(_t59v, [{"host": f"z59vh{i}.test", "ip": f"10.59.{i}.1",
+                             "port": 8000 + i, "service": "http"} for i in range(55)])
+
+    def _fp59v(_qs):
+        _txt = _c7o.get(f"/fullports?{_qs}").get_data(as_text=True)
+        return _txt, set(_re7q.findall(r'name="host"\s+value="([^"]+)"', _txt))
+
+    _txt59va, _p59va = _fp59v("q=z59v&size=50")
+    _txt59vb, _p59vb = _fp59v("q=z59v&size=50&page=2")
+    assert "共 55 行" in _txt59va, "总数必须是**分组后的行数**（55 个主机，跨任务视图）"
+    assert "第 1 / 2 页" in _txt59va and "第 2 / 2 页" in _txt59vb, "每页 50 行 → 恰好 2 页"
+    assert (len(_p59va), len(_p59vb)) == (50, 5), \
+        f"每页 50 行、末页 5：实际 {len(_p59va)}/{len(_p59vb)}"
+    assert len(_p59va | _p59vb) == 55 and not (_p59va & _p59vb), \
+        "两页合起来必须恰好覆盖 55 个主机且不重切（少了就是有主机不可达）"
+    assert _fp59v("q=z59vh7.test")[1] == {"10.59.7.1"}, "关键字要能按**主机名**命中"
+    assert _fp59v("q=10.59.7.1")[1] == {"10.59.7.1"}, "关键字要能按 **IP** 命中"
+    assert _fp59v("q=tname-needle")[1] == (_p59va | _p59vb), \
+        "关键字要能按**任务名**命中该任务的全部主机（任务名走子查询，不被 JOIN 放大）"
+    _txt59vz, _p59vz = _fp59v("q=z59v&size=50&page=99")
+    assert "第 2 / 2 页" in _txt59vz and len(_p59vz) == 5, \
+        "页码越界要回落到最后一页（而不是显示空页）"
+    assert "没有匹配" in _fp59v("q=zz-no-such-59v")[0], \
+        "筛选无命中时不能显示'还没有端口数据'（那会把'筛选没匹配'误导成'没有资产'）"
+
+    # §6.1 变异证伪：把分页下推的 `LIMIT ? OFFSET ?` 摘掉（＝旧写法"整表取回、整表渲染"）⇒ 第 1 页必不是 50 行
+    _real_q59v = db._query
+
+    def _q59v_mut(_sql, _params=(), one=False):
+        if "GROUP BY task_id, host, ip" in _sql and _sql.endswith(" LIMIT ? OFFSET ?"):
+            return _real_q59v(_sql[:-len(" LIMIT ? OFFSET ?")], tuple(_params)[:-2], one=one)
+        return _real_q59v(_sql, _params, one=one)
+
+    db._query = _q59v_mut
+    try:
+        _mp59v = _fp59v("q=z59v&size=50")[1]
+        assert len(_mp59v) != 50, \
+            "变异（摘掉 LIMIT/OFFSET 下推）后第 1 页仍是 50 行 → 说明上面那条断言没测到'分页真的生效'"
+    finally:
+        db._query = _real_q59v
+
+    # ③ /dirs?agg=1：60 个「状态+大小+标题」各不相同的响应 = 60 组，每页 50 组 → 2 页
+    _t59vd = db.create_task("smoke-z59v-dirsagg", "z59vd.test", ["dirscan"], {})
+    db.insert_dirs(_t59vd, [{"site_url": f"http://z59vd{i}.test/", "path": f"/z59v/{i}",
+                             "status": 200, "length": 1000 + i, "title": f"z59vG{i}"}
+                            for i in range(60)])
+
+    def _agg59v(_qs):
+        _txt = _c7o.get(f"/dirs?{_qs}").get_data(as_text=True)
+        return _txt, set(_re7q.findall(r'<td class="muted small">(z59vG\d+)</td>', _txt))
+
+    _txt59v_g1, _g59v1 = _agg59v("agg=1&q=z59v&size=50")
+    _txt59v_g2, _g59v2 = _agg59v("agg=1&q=z59v&size=50&page=2")
+    assert "共 60 组" in _txt59v_g1, \
+        "聚合视图的计数单位是**组**（60 个各不相同的响应指纹）—— 写成'条'会与命中数撞成两个不同的'条'"
+    assert "第 1 / 2 页" in _txt59v_g1 and "第 2 / 2 页" in _txt59v_g2, "聚合视图要能翻页"
+    assert (len(_g59v1), len(_g59v2)) == (50, 10), \
+        f"每页 50 组、末页 10：实际 {len(_g59v1)}/{len(_g59v2)}"
+    assert len(_g59v1 | _g59v2) == 60 and not (_g59v1 & _g59v2), \
+        "两页必须真的覆盖全部 60 组且不重切（旧写法**根本没有分页条**，第 2 页只是同一份内容）"
+    _hrefs59v = set(_re7q.findall(r'href="(/dirs\?[^"]*)"', _txt59v_g1))
+    assert any("agg=1" in _h and "all=1" in _h for _h in _hrefs59v), \
+        "聚合视图里点「显示全部 / 只看去重」不得**悄悄跳回明细视图**（切换链接必须带上 agg）"
+    assert any("agg=" not in _h and "q=z59v" in _h for _h in _hrefs59v), \
+        "「返回明细」要给出**去掉 agg**、但保留当前 q 的链接"
+    _form59v = _re7q.search(r'<form class="filters" method="get".*?</form>',
+                             _txt59v_g1, _re7q.S).group(0)
+    assert 'name="agg" value="1"' in _form59v, \
+        "聚合视图的筛选表单必须带 hidden `agg` —— 漏了它，点「查询」会悄悄跳回明细视图"
+    _enc59v = _c7o.get("/dirs?agg=1&q=z59v%26zz&size=50").get_data(as_text=True)
+    # 新写法出现的是 `%26`（`quote()` 编码后的 `&`）；旧写法把 q 直接拼进 URL，只会出现
+    # Jinja 转义后的裸 `&amp;` —— 两条一起判，才能区分"编码了"与"看起来像编码了"。
+    assert "q=z59v%26zz" in _enc59v, \
+        "链接里的 q 必须 URL 编码：不编码时关键字带 `&` / `#` / 空格会**丢掉筛选条件**"
+    assert "q=z59v&amp;zz" not in _enc59v, \
+        "链接里不得出现未编码的裸 `&`（会被 Jinja 转义成 `&amp;`）—— 那说明 q 是直接拼进 URL 的"
+
+    # §6.1 变异证伪：把聚合前的全量读改成"只拿前 50 行"（＝旧写法 limit=5000 的同型缺陷）⇒ 组数必不是 60
+    _real_pa59v = db.page_assets
+
+    def _pa59v_mut(_table, limit=200, offset=0, **kw):
+        return _real_pa59v(_table, limit=50, offset=offset, **kw)
+
+    db.page_assets = _pa59v_mut
+    try:
+        assert "共 60 组" not in _c7o.get("/dirs?agg=1&q=z59v").get_data(as_text=True), \
+            "变异（聚合前截成 50 行）后仍报 60 组 → 说明上面那条断言没测到'聚合建在全量上'"
+    finally:
+        db.page_assets = _real_pa59v
+
+    # ④ /pocs：服务端筛选 + enabled 过滤 + 越界回落；统计仍按**全量**算（不能被筛选带偏）
+    _pid59v = db.upsert_poc("config/pocs-user/smoke59v.yaml", {
+        "id": "z59v-poc-001", "info": {"name": "smoke59v NEEDLE", "severity": "low"},
+        "http": [{"matchers": [{"type": "status", "status": [200]},
+                               {"type": "regex", "regex": ["z59v-poc-proof"]}]}]})
+    _p59v_on = _c7o.get("/pocs?q=z59v").get_data(as_text=True)
+    assert "共 1 个 POC" in _p59v_on and "z59v-poc-001" in _p59v_on, \
+        "服务端按关键字筛选：标题要显示**筛选后的总数**，且命中的那条真的在页面上"
+    assert '<div class="pager">' in _p59v_on, "POC 列表要挂分页条（服务端分页）"
+    assert "第 1 / 1 页" in _c7o.get("/pocs?q=z59v&page=2").get_data(as_text=True), \
+        "页码越界（筛选后只剩 1 页）要回落到最后一页，而不是显示空表"
+    db.toggle_poc(_pid59v)                        # 关掉它
+    _p59v_off = _c7o.get("/pocs?q=z59v&on=1").get_data(as_text=True)
+    assert "共 0 个 POC" in _p59v_off and "没有匹配当前筛选条件的 POC" in _p59v_off \
+        and "未发现 POC" not in _p59v_off, \
+        "「只看已启用」筛掉后必须报'筛选没匹配'（报'未发现 POC'会把人误导成 POC 目录是空的）"
+    db.toggle_poc(_pid59v)                        # 开回来
+    assert "共 1 个 POC" in _c7o.get("/pocs?q=z59v&on=1").get_data(as_text=True), \
+        "「只看已启用」要真的按 enabled 过滤（服务端）"
+
+    # ⑤ 报告「完整版」：205 条子域名（默认版只列前 200 —— 第 201 条是判据）
+    _t59vr = db.create_task("smoke-z59v-report-full", "z59vr.test", ["subdomain"], {})
+    db.insert_subdomains(_t59vr, [(f"z59vr{i:03d}.test", "brute:builtin") for i in range(205)])
+    _subs59v = db.list_subdomains(_t59vr)
+    _d201_59v = _subs59v[200]["domain"]
+    assert _d201_59v == "z59vr200.test", \
+        f"夹具命名要保证字典序与数字序一致（第 201 条应是 z59vr200.test）：实测 {_d201_59v}"
+    _md59v_def = _rep7v.generate(_t59vr)
+    _md59v_full = _rep7v.generate(_t59vr, full=True)
+    assert "## 子域名（共 205 条，此处仅列前 200 条 —— 完整清单请用「完整版」导出）" in _md59v_def, \
+        "默认版被截断时必须写明**总数**与**出口**（续56 只写了总数，读者不知道去哪儿要完整清单）"
+    assert _d201_59v not in _md59v_def, "默认版只列前 200 条"
+    assert _d201_59v in _md59v_full, "「完整版」必须真的不截断（第 201 条要在里面）"
+    assert "完整清单请用「完整版」导出" not in _md59v_full and "## 子域名（" not in _md59v_full, \
+        "「完整版」没被截断，小节标题不该再带括号注"
+    _h59v_def = _rep7v.generate_html(_t59vr)
+    _h59v_full = _rep7v.generate_html(_t59vr, full=True)
+    assert _d201_59v not in _h59v_def and _d201_59v in _h59v_full, \
+        "HTML 报告必须与 Markdown 同口径（同一个 full 参数、同一份快照）"
+    assert _d201_59v not in _c7o.get(f"/tasks/{_t59vr}/export").get_data(as_text=True), \
+        "GUI 默认导出仍是截断版"
+    assert _d201_59v in _c7o.get(f"/tasks/{_t59vr}/export?full=1").get_data(as_text=True), \
+        "GUI `?full=1` 必须走「完整版」（否则页面上的那个入口是假的）"
+    assert _d201_59v in _c7o.get(
+        f"/tasks/{_t59vr}/export?fmt=html&full=1").get_data(as_text=True), \
+        "HTML 的「完整版」导出同样要生效"
+
+    # CLI 侧：直接调 `_emit_reports`（唯一入口，四条命令行入口共用），不带/带 `--full-report` 各导一次
+    import importlib.util as _ilu59v
+    _spec59v = _ilu59v.spec_from_file_location("cli_client59v", ROOT / "cli" / "client.py")
+    _cli_mod59v = _ilu59v.module_from_spec(_spec59v)
+    _spec59v.loader.exec_module(_cli_mod59v)
+    _out59v = _TMPDIR / "cli-report59v.md"
+
+    class _Args59v:
+        report = str(_out59v)
+        report_html = ""
+        report_pdf = ""
+        report_jsonl = ""
+        full_report = False
+
+    _cli_mod59v._emit_reports(_Args59v(), _t59vr, settings)
+    assert _d201_59v not in _out59v.read_text(encoding="utf-8"), \
+        "CLI 不加 `--full-report` 时仍是默认的截断版"
+    _Args59v.full_report = True
+    _cli_mod59v._emit_reports(_Args59v(), _t59vr, settings)
+    assert _d201_59v in _out59v.read_text(encoding="utf-8"), \
+        "CLI `--full-report` 必须把 full 真的传到 generate（否则开关是装饰）"
+
+    # §6.1 变异证伪：把 `_caps` 退回旧行为（**永远**返回默认上限）⇒ 「完整版」看不到第 201 条
+    _real_caps59v = _rep7v._caps
+    _rep7v._caps = lambda full=False: (100, 200, 200, 200, 200, 100)
+    try:
+        assert _d201_59v not in _rep7v.generate(_t59vr, full=True), \
+            "变异（「完整版」退回旧行为）后仍能看到第 201 条 → 说明'不截断'这条断言没有区分度"
+    finally:
+        _rep7v._caps = _real_caps59v
+
+    print("[7v] 续59-2 全量渲染收口 + 报告「完整版」ok: /fullports 55 行/每页 50/跨页覆盖全 55 不重切、"
+          "关键字按主机·IP·任务名三路命中、越界回落｜/dirs?agg=1 60 组按组翻页覆盖全 60、"
+          "切换链接带 agg/all 且 q 已编码、表单含 hidden agg、聚合建在全量上｜/pocs 服务端筛选+"
+          "enabled 过滤+越界回落、空表文案分两种｜报告默认截断写明出口、full=True/GUI ?full=1/"
+          "CLI --full-report 三路不截断（两处变异证伪：摘 LIMIT 下推即红、_caps 退回旧行为即红）")
 
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），

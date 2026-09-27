@@ -8,6 +8,18 @@
     一任务一线程、可独立停止/删除），任务选项 <span class="mono">portscan_full</span> 让它无视全局开关也会执行；
     扫描时<b>自动跳过该任务已经扫过的端口</b>（<span class="mono">portscan.exclude_scanned</span>）。
     注意：6.5 万个端口逐连接，耗时以分钟计 —— 只对你真需要补全的 IP 用。</p>
+  <p class="muted small">共 {{ pager.total }} 行（主机 × 任务，跨任务，服务端分页 + 关键字过滤；
+    行数随任务数增长，故不再整表渲染）。</p>
+  {# ⚠️ 这是 **GET form**，必须放在下面那个 POST（发起全端口扫描）的 form **之前** ——
+     HTML 不允许 form 嵌套，嵌进去只会让内层表单静默失效。 #}
+  <form class="filters" method="get" action="{{ url_for('fullports') }}">
+    <label class="muted">筛选 <input name="q" value="{{ q }}"
+      placeholder="主机 / IP / 任务名"></label>
+    <input type="hidden" name="size" value="{{ pager.size }}">
+    <button class="ghost" type="submit">查询</button>
+    {% if q %}<a class="btn-mini ghost"
+      href="{{ url_for('fullports', size=pager.size) }}">清空</a>{% endif %}
+  </form>
   <form method="post" action="{{ url_for('api_full_scan') }}">
     <div class="bulkbar">
       <button type="submit" class="ghost">发起全端口扫描（勾选主机）</button>
@@ -32,11 +44,13 @@
           <td class="muted small mono">{{ h.ports[:30]|join(', ') }}{% if h.ports|length > 30 %} …{% endif %}</td>
         </tr>
       {% else %}
-        <tr><td colspan="6" class="muted">还没有端口数据（端口扫描默认关闭，可在「策略配置 → 资产面拓展」打开，
-          或在这里直接对某个 IP 发起全端口扫描）。</td></tr>
+        <tr><td colspan="6" class="muted">{% if q %}没有匹配「{{ q }}」的主机。
+          {% else %}还没有端口数据（端口扫描默认关闭，可在「策略配置 → 资产面拓展」打开，
+          或在这里直接对某个 IP 发起全端口扫描）。{% endif %}</td></tr>
       {% endfor %}
       </tbody>
     </table>
   </form>
+  {% include "_pager.html" %}
 </section>
 {% endblock %}

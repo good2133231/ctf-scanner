@@ -1,19 +1,31 @@
 {% extends "base.html" %}
 {% block title %}IP 资产{% endblock %}
 {% block content %}
-<p class="muted">按**解析 IP** 聚合的资产视图：同一台机器上挂了哪些域名，一眼可见。
+<p class="muted">按**解析 IP** 聚合的资产视图（跨任务，服务端分页 + 关键字过滤）：同一台机器上挂了哪些域名，一眼可见。
   默认<b>只显示非 CDN 的解析</b>（走 CDN 的域名解析出来是边缘节点 IP，对找源站没帮助），
   需要时切到「含 CDN」。勾选 IP → 直接对<b>真实 IP</b> 发起全端口扫描。</p>
 <section class="panel">
   <p class="muted small">显示范围：
     {% if include_cdn %}
-      <b>含 CDN 的解析</b>
-      <a class="btn-mini ghost" href="{{ url_for('ips') }}">只看非 CDN</a>
+      <b>含 CDN 的解析</b>（共 {{ pager.total }} 个 IP）
+      <a class="btn-mini ghost"
+         href="{{ url_for('ips', q=(q or none), size=pager.size) }}">只看非 CDN</a>
     {% else %}
-      <b>只看非 CDN</b>（{{ ips|length }} 个 IP）
-      <a class="btn-mini ghost" href="{{ url_for('ips', cdn=1) }}">显示含 CDN 的解析</a>
+      <b>只看非 CDN</b>（共 {{ pager.total }} 个 IP）
+      <a class="btn-mini ghost"
+         href="{{ url_for('ips', cdn=1, q=(q or none), size=pager.size) }}">显示含 CDN 的解析</a>
     {% endif %}
   </p>
+  {# ⚠️ 这是 **GET form**，必须放在下面那个 POST（发起全端口扫描）的 form **之前** ——
+     HTML 不允许 form 嵌套，嵌进去只会让内层表单静默失效。 #}
+  <form class="filters" method="get" action="{{ url_for('ips') }}">
+    <label class="muted">筛选 <input name="q" value="{{ q }}" placeholder="IP / 域名 / CDN"></label>
+    <input type="hidden" name="size" value="{{ pager.size }}">
+    {% if include_cdn %}<input type="hidden" name="cdn" value="1">{% endif %}
+    <button class="ghost" type="submit">查询</button>
+    {% if q %}<a class="btn-mini ghost"
+      href="{{ url_for('ips', cdn=(1 if include_cdn else none), size=pager.size) }}">清空</a>{% endif %}
+  </form>
   <form method="post" action="{{ url_for('api_full_scan') }}">
     <div class="bulkbar">
       <button type="submit" class="ghost">对勾选 IP 发起全端口扫描（1-65535）</button>
@@ -22,7 +34,6 @@
       <span class="muted">新建一个只跑 portscan 的任务；已扫过的端口会自动跳过。</span>
       <span class="muted small">（此入口没有源任务，<b>无法追加</b>到已有任务 —— 要追加请到「任务详情页」勾选资产后操作。）</span>
     </div>
-    <label class="muted">筛选 <input data-filter="#tbl-ips" placeholder="IP / 域名 / CDN"></label>
     <table id="tbl-ips">
       <thead><tr>
         <th class="pick"><input type="checkbox" class="pick-all-page"
@@ -41,11 +52,13 @@
               {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
         </tr>
       {% else %}
-        <tr><td colspan="6" class="muted">还没有解析数据（子域名阶段会回填 IP；
-          若全是「域名不存在 / 解析超时」，请到「子域名资产」页看 IP 列下方的原因标注）。</td></tr>
+        <tr><td colspan="6" class="muted">{% if q %}没有匹配「{{ q }}」的 IP。
+          {% else %}还没有解析数据（子域名阶段会回填 IP；
+          若全是「域名不存在 / 解析超时」，请到「子域名资产」页看 IP 列下方的原因标注）。{% endif %}</td></tr>
       {% endfor %}
       </tbody>
     </table>
   </form>
+  {% include "_pager.html" %}
 </section>
 {% endblock %}
