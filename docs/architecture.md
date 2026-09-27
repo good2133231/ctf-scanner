@@ -278,8 +278,13 @@ Cookie 外发给第三方。凭据由使用者在授权范围内自行取得（�
 四条路由**仍在**（可直接访问 URL），但**已从侧边栏移除** ——
 前三条是任务维度数据，在任务详情页签里看更贴合上下文；`/extdomains` 与 `/subdomains` 是同一份
 `subdomains` 表的不同视图，单列一栏反而让人分不清资产归属。这是用户明确要求的收敛。
-筛选/分页统一走 `db.page_assets(table, limit, offset, q, extra_where, extra_params)`：
-`extra_where` 用于叠加业务条件（子域名分流、CDN 标签、重叠隐藏），`q` 是跨文本列的 LIKE。
+筛选/分页统一走 `db.page_assets(table, limit, offset, q, extra_where, extra_params, order, columns)`：
+`extra_where` 用于叠加业务条件（子域名分流、CDN 标签、重叠隐藏），`q` 是跨文本列的 LIKE，
+`order` 覆盖表的默认排序（拓展域名页的"按来源分类"），`columns` 只选若干列（见下），
+`limit=None` = 不加上限（三态口径同 `list_tasks()` / `list_vulns()`）。
+拓展域名页的**分组**视图是唯一不走"整页 SQL 分页"的地方：SQLite 没有"注册域"函数，分组只能在
+Python 里做，于是 `extdom.group_page()` 先按全量 `id/domain/ip` 三列分组、再对当前页的组取回整行
+（省内存靠"只查小列"，**不**靠"少查几行" —— 截断会让后面的主域名组在任何一页都看不到）。
 来源列统一走 `gui/app.py::source_label()`（`subfinder → 被动(subfinder)`、`passive:x → 被动(x)`、
 `osint:fofa → FOFA·ICO 反查`、`osint:fofa-cert → FOFA·证书反查` …），模板里以
 `app.jinja_env.globals["source_label"]` 注册；未知来源原样返回，不吞信息。

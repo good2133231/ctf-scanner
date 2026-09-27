@@ -1933,18 +1933,18 @@ def create_app():
             qs += "&group=0"
         row_total, groups = 0, []
         if grouped:
-            # 分组在 Python 里做（SQL 侧没有"注册域"函数），因此按上限取整批匹配行；
-            # 上限之外的行不参与分组，页面会如实提示（见模板里的 `capped` 提示）。
-            rows, row_total = db.page_assets("subdomains", limit=extdom.GROUP_ROW_CAP,
-                                             offset=0, q=q or None, extra_where=ext_where,
-                                             extra_params=params, order=EXT_SRC_ORDER)
-            all_groups = extdom.group_by_base([dict(r) for r in rows])
-            pages = max(1, (len(all_groups) + EXT_GROUPS_PER_PAGE - 1) // EXT_GROUPS_PER_PAGE)
-            if page > pages:      # 页码越界（例如过滤后组数变少）→ 回落到最后一页
-                page = pages
-            groups = all_groups[(page - 1) * EXT_GROUPS_PER_PAGE: page * EXT_GROUPS_PER_PAGE]
-            pager = {"page": page, "size": EXT_GROUPS_PER_PAGE, "total": len(all_groups),
-                     "pages": pages, "base": "/extdomains", "qs": qs}
+            # 分组必须在 Python 里做（SQLite 没有"注册域"函数），但**不设行数上限** ——
+            # 旧实现的 `GROUP_ROW_CAP=4000` 会让第 4001 行起的主域名组在任何一页都看不到
+            # （静默丢资产），理由与取舍见 `extdom.group_page()`。
+            gp = extdom.group_page(q=q, extra_where=ext_where, extra_params=params,
+                                   page=page, per_page=EXT_GROUPS_PER_PAGE,
+                                   order=EXT_SRC_ORDER)
+            groups, page = gp["groups"], gp["page"]
+            row_total = gp["row_total"]
+            pager = {"page": page, "size": EXT_GROUPS_PER_PAGE, "total": gp["group_total"],
+                     "pages": gp["pages"], "base": "/extdomains", "qs": qs,
+                     # 分页条默认写"共 N 条"，而这里 N 是**主域名个数**（行数在下方单独一句）。
+                     "unit": "个主域名"}
             subs = []
         else:
             subs, pager, q = _asset_page(
@@ -1955,8 +1955,7 @@ def create_app():
         return render_template("extdomains.html", subs=subs, groups=groups, grouped=grouped,
                                row_total=row_total, pager=pager, q=q, tag=tag,
                                show_all=show_all, secrets=_secret_counts(),
-                               src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name,
-                               row_cap=extdom.GROUP_ROW_CAP)
+                               src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name)
 
     @app.route("/sites")
     @login_required

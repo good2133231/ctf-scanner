@@ -3,6 +3,85 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-27 —— 续58：拓展域名「按主域名分组」不再截断（+ 勘误续57 的一句错话）
+
+> 实施者：**Trae · DeepSeek-V4.1-Flash**。用户从三个候选中先选「`/extdomains` 的分组分页」。
+>
+> **⚠️ 先勘误**：续57 我在 `docs/roadmap.md` 与 `todo.txt` 里写下"`/extdomains` 的分组分页**未涉及**"
+> —— 这句**是错的**。按 §0「以实际代码为准**优先于**任何文字描述」：分组分页 2026-09-25 就落地了
+> （`gui/app.py::extdomains()` 的 `grouped` 分支，`EXT_GROUPS_PER_PAGE = 20`，`?group=0` 回平铺表）。
+> 真正的缺口不是"没有分组分页"，而是**分组结果被截断**（下面第 0 节）。两处原文已在 roadmap 里
+> 加了勘误、在 todo.txt 续58 条目开头写明。
+
+### 0. 是什么（问题）
+
+`extdom.GROUP_ROW_CAP = 4000`：分组视图只把**前 4000 行**（`page_assets(limit=4000, offset=0)`，按
+`EXT_SRC_ORDER` 排）拿去 `group_by_base()` 分组，**再**在这批组里按组切页。后果：
+
+1. **组在任何一页都看不到**：第 4001 行起所属的主域名组，翻遍所有页都不会出现（只有切平铺表才能
+   逐行翻到）。这是"静默丢资产"家族里最隐蔽的一种 —— 页面**有序号、有分页条、有页码**，看着完全正常。
+2. **分页条上的数字是假的**：`pager.total = len(all_groups)` 是**截断后**的组数，所以"共 N 个主域名"
+   本身就偏小；而下方那句"共 M 条拓展域名，分在 N 个主域名下"里的 M 是全量 COUNT、N 是截断值，
+   两句话对不上，用户没有任何办法发现。
+3. 模板里虽有一句"超过分组上限 4000 条时只取前 4000 条参与分组"的提示，但它**没说丢了哪些组、
+   也没给出路**（"切到平铺表可分页看全部"仍是逐行翻，看不出"哪批域名没被分组"）。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `scanner/db.py` | `page_assets()` 新增两个口子：`limit=None` = **不加上限**（三态口径与 `list_tasks()/list_vulns()` 一致：数字 / `None` / `0`；SQLite 里写 `LIMIT -1 OFFSET n`，这样"无上限但仍要 OFFSET"也成立）；`columns=` 只选若干列（`SELECT {cols}` 替代 `SELECT *`）。`q` 的 LIKE 白名单仍来自 `_ASSET_PAGES`，与 SELECT 的列互不影响 |
+| `scanner/extdom.py` | 删掉 `GROUP_ROW_CAP`，新增 `GROUP_LIGHT_COLS = ("id","domain","ip")` 与 **`group_page()`**：① 用 `limit=None` 取**全量**三列分组；② 按组分页；③ 只对**当前页的组**按 id 取回整行。返回 `{groups, page, pages, group_total, row_total}` |
+| `gui/app.py` | `extdomains()` 的分组分支改调 `extdom.group_page()`；`pager` 增加 `unit="个主域名"`；`render_template` 去掉 `row_cap` |
+| `gui/templates/_pager.html` | 新增**可选**键 `unit`（缺省「条」，行为与以前完全一致） |
+| `gui/templates/extdomains.html` | 删掉"超过分组上限…只取前 4000 条"的提示（上限已不存在，留着反而误导） |
+| `tests/smoke.py` | 新增 `[7t]` 组（见 §3） |
+
+### 2. 关键设计取舍（为什么这么改，而不是那么改）
+
+- **不把"注册域"下推成 SQL**：`_ASSET_PAGES` 那套"整页 SQL 分页"的前提是排序/过滤都能进 SQL，而
+  分组键（注册域）只有 Python 侧有（`utils.base_domain` 是**粗切**：取末两段，`foo.bar.co` 会切错）。
+  想用 SQL 近似就得把这条粗切规则在 SQL 里**再写一遍**，必然与 Python 侧漂移（同一规则写两遍是
+  本项目反复踩的坑，见续57 的 `", ".join` 事故）。所以**保留 Python 分组**，只把"读多少"改对。
+- **省内存靠"只查小列"，不靠"少查几行"**：旧注释的意图是"不把整表读进内存"，方向没错，但手段选错
+  了 —— 截断会丢数据。改成"分组阶段只 SELECT `id/domain/ip`"（`domain`/`ip` 都是短字符串，而整行
+  含 `banner` 级大字段），既达成同样的内存目标，又**不丢任何组**。
+- **组内顺序不做二次排序**：取回整行后**按分组阶段记下的 id 顺序原样展开**，不用 `ORDER BY id` ——
+  调用方排好的是"按来源分类"（`EXT_SRC_ORDER`），重排会把这个顺序冲掉。
+- **分页条单位词**：分组模式的 `pager.total` 是**主域名个数**，而 `_pager.html` 写死"共 N 条" ——
+  同一页下面还有"共 M 条拓展域名"（行数），两个"条"指不同东西。加可选 `unit` 比"改死文案"好：
+  平铺模式与其它页面保持原样（缺省「条」）。
+
+### 3. 验证
+
+- `tests/smoke.py` 新增 **`[7t]`**（`续58` 拓展域名分组分页）：
+  1. **红线**：`extdom.GROUP_ROW_CAP` 已不存在；`gui/app.py` 不再引用 `extdom.GROUP_ROW_CAP` / `row_cap`；
+     `db.py` 里有 `if limit is None:` 与 `LIMIT -1 OFFSET`；`extdom.group_page` 用 `limit=None` +
+     `columns=GROUP_LIGHT_COLS`。
+  2. **行为**（真渲染）：造 45 个主域名 × 2 行 → 每页 20 个组、恰好 3 页；**3 页合起来覆盖全部
+     45 个主域名**（旧实现下最后一批组不可达，这条会红）；同一个主域名不被切到两页；
+     `page=99` 越界回落到末页；第 3 页的组里"JS 挖掘"（来源列）与 IP 列都在 ——
+     证明取回的是**整行**，三列没有漏进渲染。
+  3. **§6.1 变异证伪**：把 `db.page_assets` 换成"把 `limit=None` 偷偷当成 20 行"（= 旧
+     `GROUP_ROW_CAP` 的行为）⇒ 总数断言必红。
+- 全量 `py -3 -u tests/smoke.py` → **`SMOKE PASS`**。
+- `git diff --numstat` == `git diff --ignore-cr-at-eol --numstat` **逐文件一致**（编辑工具再次归一化
+  `gui/app.py` 52 处、`gui/templates/_pager.html` 11 处、`tests/smoke.py` 1494 处，已按内容对齐 HEAD
+  逐行还原）。
+
+### 3.1 自己踩的坑
+
+- **红线断言被自己的注释误伤**：`[7t]` 第一版写 `assert "GROUP_ROW_CAP" not in _apa7s`，而我在
+  `app.py` 的新注释里为了说明缘由写了"旧实现的 `GROUP_ROW_CAP=4000`…" → 断言直接红。改成只盯
+  **代码引用**（`extdom\.GROUP_ROW_CAP|row_cap`）：红线要钉"代码怎么写"，不是"文件里有没有这几个字"。
+
+### 4. 仍未做
+
+- **真浏览器里点一次"下一页"**：`[7t]` 是 HTTP 级真渲染，覆盖路由/模板/SQL，但本机没有可用无头
+  浏览器，端到端点击仍未验证（同续56/续57）。
+- `/extdomains` 的**重叠隐藏**与分组走的是两条 SQL 条件（`OVERLAP_EXT_WHERE` 在 `extra_where` 里），
+  本轮未动；详情页的返回键也未涉及。
+
 ## 2026-09-27 —— 续57：任务详情页 7 个资产页签服务端分页（+ 修掉续53「漏洞页签下一页」静默失效）
 
 > 实施者：**Trae · DeepSeek-V4.1-Flash**。承接续51「`/vulns` 500 截断」→ 续53「`/tasks` 200 截断 +

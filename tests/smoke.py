@@ -9248,6 +9248,65 @@ http:
           "7 个页签的服务端筛选（含 esrc 保持）且已无 data-filter｜3 处 GET 表单排在 POST 之前且未嵌套｜"
           "目录补扫走全量 site_urls（检测器变异证伪）｜不再全量读资产表（检测器变异证伪）")
 
+    # ---- [7t] 续58：拓展域名「按主域名分组」的分页不再设行数上限 ----
+    #   旧实现写死 `extdom.GROUP_ROW_CAP = 4000`：只把**前 4000 行**拿去分组，于是第 4001 行起
+    #   所属的主域名组**在任何一页都不会出现**，分页条上的"共 N 个主域名"也是截断后的假数字
+    #   （与续51/53/55/57 一路在修的"固定上限 + 静默丢"同源）。新实现：分组阶段用
+    #   `page_assets(limit=None, columns=("id","domain","ip"))` 取**全量**轻列来分组，
+    #   按组分页后只对**当前页的组**按 id 取回整行 —— 省内存靠"只查三列"，不靠"少查几行"。
+    assert not hasattr(_exd7, "GROUP_ROW_CAP"), \
+        "分组不许再留固定行数上限（超出的主域名组会在任何一页都看不到）"
+    assert not _re7q.search(r"extdom\.GROUP_ROW_CAP|row_cap", _apa7s), \
+        "gui/app.py 不得再引用分组行数上限（`extdom.GROUP_ROW_CAP` / 模板变量 row_cap）"
+    _db58 = (ROOT / "scanner" / "db.py").read_text(encoding="utf-8")
+    assert "if limit is None:" in _db58 and "LIMIT -1 OFFSET" in _db58, \
+        "page_assets 必须支持 limit=None（不加上限，与 list_tasks/list_vulns 的三态口径一致）"
+    _exd58 = (ROOT / "scanner" / "extdom.py").read_text(encoding="utf-8")
+    assert _re7q.search(r"limit=None,\s*offset=0", _exd58), \
+        "extdom.group_page 必须用 limit=None 取全量（自己截断就等于丢组）"
+    assert "columns=GROUP_LIGHT_COLS" in _exd58, \
+        "分组阶段只取 id/domain/ip 三列，不能为分组把整表读进内存"
+
+    _t58 = db.create_task("smoke-ext-group-page", "zz58.test", ["probe"], {})
+    db.insert_subdomains(_t58, [(f"a{i}.t{i}z58.test", "js:mine") for i in range(45)]
+                         + [(f"x{i}.t{i}z58.test", "js:mine") for i in range(45)])
+    _grp58 = r'class="ext-group"[^>]*>\s*<summary>\s*<span class="mono">([^<]+)</span>'
+
+    def _page58(_n):
+        _txt = _c7o.get(f"/extdomains?q=z58.test&page={_n}").get_data(as_text=True)
+        return _txt, set(_re7q.findall(_grp58, _txt, _re7q.S))
+
+    _txt58a, _b58a = _page58(1)
+    _txt58b, _b58b = _page58(2)
+    _txt58c, _b58c = _page58(3)
+    assert "共 45 个主域名" in _txt58a, "分组分页条要按**主域名个数**显示总数（单位词 = 个主域名）"
+    assert "第 1 / 3 页" in _txt58a, "45 个主域名 / 每页 20 → 恰好 3 页"
+    assert (len(_b58a), len(_b58b), len(_b58c)) == (20, 20, 5), \
+        f"每页 20 个主域名、第 3 页剩 5：实际 {len(_b58a)}/{len(_b58b)}/{len(_b58c)}"
+    assert len(_b58a | _b58b | _b58c) == 45, \
+        f"3 页合起来必须覆盖全部 45 个主域名（实际 {len(_b58a | _b58b | _b58c)}）—— 少了就是有组不可达"
+    assert not (_b58a & _b58b) and not (_b58b & _b58c), "同一个主域名不许被切到两页上"
+    # 取回的是**整行**（模板要渲染 IP/CDN/CNAME/来源四列）：只选了三列的话 source 会是空
+    assert "JS 挖掘" in _txt58c and 'class="muted small mono">-' in _txt58c, \
+        "当前页的组必须取回整行（来源/IP 列都在），否则分组阶段的三列就漏进渲染了"
+    assert "共 45 个主域名" in _c7o.get("/extdomains?q=z58.test&page=99").get_data(as_text=True), \
+        "页码越界要回落到最后一页（而不是显示空页）"
+
+    # §6.1 变异证伪：把 `limit=None` 偷偷当成 20 行（= 旧 GROUP_ROW_CAP 的行为）⇒ 总数必红
+    _real_pa58 = db.page_assets
+    db.page_assets = lambda table, limit=200, offset=0, **kw: _real_pa58(
+        table, limit=20 if limit is None else limit, offset=offset, **kw)
+    try:
+        _mut58 = _c7o.get("/extdomains?q=z58.test").get_data(as_text=True)
+        assert "共 45 个主域名" not in _mut58, \
+            "变异（截断成 20 行）后仍报 45 个主域名 → 说明上面那条断言没测到全量分组"
+    finally:
+        db.page_assets = _real_pa58
+
+    print("[7t] 续58 拓展域名分组分页 ok: 45 主域名 / 每页 20 / 3 页、跨页覆盖全 45 个且不重切｜"
+          "分页条单位词＝个主域名｜越界回落末页｜当前页的组取回整行（来源/IP 列在）｜"
+          "分组上限已删（变异截断成 20 行即红）")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

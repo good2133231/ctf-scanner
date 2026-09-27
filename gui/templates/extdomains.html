@@ -116,9 +116,6 @@
       {% if not groups %}
         <p class="muted">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</p>
       {% else %}
-        {% if row_total > row_cap %}<p class="muted small">注意：匹配到 {{ row_total }} 条，
-          超过分组上限 {{ row_cap }} 条时只取前 {{ row_cap }} 条参与分组
-          （切到平铺表可分页看全部）。</p>{% endif %}
         {% for g in groups %}
           {% set tid = 'g' + loop.index|string %}
           <details class="ext-group" {% if g.count <= 10 %}open{% endif %}>

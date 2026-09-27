@@ -31,9 +31,10 @@ from .utils import base_domain, is_domain, pool_run
 # 冒号后面原样保留拓展来源（`promote:js:mine`），"分域名而来"的出处一眼可查。
 PROMOTE_PREFIX = "promote:"
 
-# 分组视图一次最多参与分组的行数（超了只取前 N 条并在页面提示）——分组必须在 Python 里做
-# （SQL 侧没有注册域函数），这是为不把整表读进内存设的上限。
-GROUP_ROW_CAP = 4000
+# 分组阶段只取这三列：分组要 `domain`、算"可解析条数"要 `ip`、取回整行要 `id`。
+# 只为分组把这些小列读进内存，而**不是** `SELECT *`（整行含 banner 级的大字段），
+# 也**不再**设"前 N 行"的上限 —— 见 `group_page()` 的注释。
+GROUP_LIGHT_COLS = ("id", "domain", "ip")
 
 
 def base_of(host):
@@ -265,6 +266,45 @@ def group_by_base(rows):
         groups.append({"base": base, "rows": items, "count": len(items), "alive": alive})
     groups.sort(key=lambda g: (-g["count"], g["base"]))
     return groups
+
+
+def group_page(q=None, extra_where=None, extra_params=(), page=1, per_page=20, order=None):
+    """分组视图的分页：返回 `{groups, page, pages, group_total, row_total}`。
+
+    - `groups` 是**当前页**的主域名组，每组的 `rows` 是**完整资产行**（模板要渲染 IP/CDN/CNAME/来源）；
+    - `group_total` 是主域名个数，`row_total` 是匹配到的行数 —— 页面上两个数都会显示。
+
+    为什么分两步查：SQLite 没有"注册域"函数，分组只能在 Python 里做（`base_of`）。于是
+    ① 先在**全量匹配行**上只取 `GROUP_LIGHT_COLS` 做分组；
+    ② 再对当前页的组按 id 取回整行。
+
+    这里**刻意不设"前 N 行"上限**：旧实现（写死的 `GROUP_ROW_CAP = 4000`）只把前 4000 行拿去
+    分组，于是第 4001 行起所属的主域名组**在任何一页都不会出现**，分页条上的"共 N 个主域名"
+    也是截断后的假数字（与续51/53/55/57 一路在修的"固定上限 + 静默丢"是同一个病）。省内存的
+    正确做法是"分组阶段只查三列"，而不是"少查几行"。
+    """
+    light, row_total = db.page_assets(
+        "subdomains", limit=None, offset=0, q=q or None, extra_where=extra_where,
+        extra_params=extra_params, order=order, columns=GROUP_LIGHT_COLS)
+    all_groups = group_by_base([dict(r) for r in light])
+    group_total = len(all_groups)
+    per_page = max(1, int(per_page))
+    pages = max(1, (group_total + per_page - 1) // per_page)
+    page = min(max(1, int(page)), pages)     # 越界（过滤后组数变少）→ 回落到最后一页
+    picked = all_groups[(page - 1) * per_page: page * per_page]
+
+    # 取回当前页各组的整行。组内顺序按分组阶段的先后**原样展开**，不能用 `ORDER BY id` 重排
+    # （那会丢掉调用方排好的"按来源分类"顺序）。
+    ids = [int(r["id"]) for g in picked for r in g["rows"]]
+    full = {}
+    for chunk in _chunks(ids):
+        marks = ",".join("?" for _ in chunk)
+        for r in db._query(f"SELECT * FROM subdomains WHERE id IN ({marks})", tuple(chunk)):
+            full[int(r["id"])] = dict(r)
+    for g in picked:
+        g["rows"] = [full[i] for i in (int(r["id"]) for r in g["rows"]) if i in full]
+    return {"groups": picked, "page": page, "pages": pages,
+            "group_total": group_total, "row_total": row_total}
 
 
 def process(task_id, settings=None, logger=None, stopped=None):

@@ -1030,7 +1030,7 @@ OVERLAP_SITE_WHERE = "id IN (SELECT MAX(id) FROM sites GROUP BY url)"
 
 
 def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_params=(),
-                order=None):
+                order=None, columns=None):
     """资产分页查询，返回 (rows, total)。
 
     跨任务的资产页（`/subdomains`、`/sites` …）与**任务详情页的资产页签**（续57）共用这一个
@@ -1041,6 +1041,15 @@ def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_para
     `extra_where` 是**服务端**附加条件（如子域名来源分流、CDN 标签），参数走 `extra_params`。
     `order` 留空用 `_ASSET_PAGES` 里的表默认排序；拓展域名页用它做"按来源分类排序"
     （`CASE source ... END` 显式指定分类先后），不改动表默认行为。
+
+    `limit=None` = **不加上限**（与 `list_tasks()` / `list_vulns()` 的三态口径一致：
+    数字 = 限制条数，`None` = 不加限制，`0` = 一条都不要）。拓展域名页的**分组**视图靠它
+    一次取全（见 `extdom.group_page()`）—— 以前写死 `GROUP_ROW_CAP=4000` 时，超出部分所属的
+    主域名组在任何一页都不会出现（静默丢资产）。`total` 恒为**过滤后的总行数**，与 limit 无关。
+
+    `columns` 只在"要分组/去重、但不需要整行"时用（如分组阶段只要 `id/domain/ip`）；
+    **列名由包内调用方给常量**，不接用户输入 —— 这里的 `q` 白名单仍来自 `_ASSET_PAGES`，
+    两者互不影响（LIKE 的列与 SELECT 的列本来就不必相同）。
     """
     default_order, cols = _ASSET_PAGES[table]
     clauses, params = [], []
@@ -1052,8 +1061,14 @@ def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_para
         params.extend([f"%{q}%"] * len(cols))
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     total = _query(f"SELECT COUNT(*) c FROM {table}{where}", tuple(params), one=True)
-    rows = _query(f"SELECT * FROM {table}{where} ORDER BY {order or default_order} LIMIT ? OFFSET ?",
-                  tuple(params) + (int(limit), int(offset)))
+    if limit is None:
+        # SQLite 里"不加上限但仍要 OFFSET"的写法是 `LIMIT -1 OFFSET n`。
+        tail, args = " LIMIT -1 OFFSET ?", tuple(params) + (int(offset),)
+    else:
+        tail, args = " LIMIT ? OFFSET ?", tuple(params) + (int(limit), int(offset))
+    select = ", ".join(columns) if columns else "*"
+    rows = _query(f"SELECT {select} FROM {table}{where} "
+                  f"ORDER BY {order or default_order}{tail}", args)
     return rows, (total["c"] if total else 0)
 
 

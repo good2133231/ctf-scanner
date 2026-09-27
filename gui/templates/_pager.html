@@ -1,14 +1,17 @@
 {# 通用分页条（服务端分页，P2-2）。需要 pager = {page,size,total,pages,base,qs} #
-   续57 追加两个**可选**键（缺省时行为与以前完全一致）：
+   续57 追加三个**可选**键（缺省时行为与以前完全一致）：
      - `pname`：页码参数的**名字**，默认 `page`。任务详情页一屏有 7 个分页条（漏洞 + 6 个资产页签），
        各自必须用独立前缀（`vpage` / `stpage` / `sdpage` …），否则翻站点页会顺带把漏洞页也翻了。
      - `anchor`：链接尾部要带的锚点（如 `#sites`）。任务详情页的页签是纯前端切换，
-       翻页会整页刷新 → 不带锚点就**掉回第一个页签**，用户以为"翻页没生效"。 #}
+       翻页会整页刷新 → 不带锚点就**掉回第一个页签**，用户以为"翻页没生效"。
+     - `unit`：`total` 的**单位词**，默认「条」。拓展域名页的分组视图里 `total` 是**主域名个数**
+       而不是行数 → 传「个主域名」，否则和页面下方"共 N 条拓展域名"撞成两个不同的"条"。 #}
 {% set _pname = (pager.pname if pager else 'page') or 'page' %}
 {% set _anchor = (pager.anchor if pager else '') or '' %}
+{% set _unit = (pager.unit if pager else '') or '条' %}
 {% if pager %}
 <div class="pager">
-  <span class="muted">共 {{ pager.total }} 条 · 每页 {{ pager.size }} · 第 {{ pager.page }} / {{ pager.pages }} 页</span>
+  <span class="muted">共 {{ pager.total }} {{ _unit }} · 每页 {{ pager.size }} · 第 {{ pager.page }} / {{ pager.pages }} 页</span>
   <span class="spacer"></span>
   {% if pager.page > 1 %}
     <a class="btn-mini ghost" href="{{ pager.base }}?{{ _pname }}=1{{ pager.qs }}{{ _anchor }}">首页</a>

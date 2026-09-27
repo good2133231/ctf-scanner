@@ -1497,3 +1497,24 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        gui/app.py 52 处，已按内容对齐 HEAD 逐行还原）。顺带按新口径改掉 [5l] ③ 的既有断言
        （站点页签筛选有"落点"的判据：data-filter → 服务端 stq）。仍未做：真浏览器点一次"下一页/查询"
        验锚点（本机无头环境限制，同续56）；/extdomains 的分组分页与详情页返回键未涉及。
+[完成] 17、续58（2026-09-27）：拓展域名「按主域名分组」不再截断（顺带纠正续57 写错的一句）。
+       ① 勘误：续57 我写"`/extdomains` 的分组分页未涉及"是**错的** —— 以代码为准，分组分页
+       2026-09-25 就有了（EXT_GROUPS_PER_PAGE=20、?group=0 回平铺）。真缺口是**分组被截断**：
+       extdom.GROUP_ROW_CAP=4000 时只把前 4000 行（按来源分类序）拿去分组 → 第 4001 行起所属的
+       主域名组**在任何一页都不会出现**，分页条"共 N 个主域名"也是截断后的假数字（与续51/53/55/57
+       一路在修的"固定上限 + 静默丢"同源）。
+       ② 改法：db.page_assets 新增 limit=None（不加上限，三态口径同 list_tasks/list_vulns；SQLite 里
+       写 `LIMIT -1 OFFSET n`）与 columns（只选若干列，列名由包内调用方给常量）；新增
+       extdom.group_page()：先用**全量** id/domain/ip 三列分组（GROUP_LIGHT_COLS）、按组分页后只对
+       **当前页的组**按 id 取回整行，组内顺序按 order（来源分类）原样展开（不用 ORDER BY id 重排）。
+       省内存靠"只查小列"，不靠"少查几行"。删掉 GROUP_ROW_CAP 与模板里的截断提示。
+       ③ 顺带修文案：_pager.html 新增可选 unit（默认「条」），分组视图传「个主域名」—— 否则同页
+       "共 N 条"（主域名个数）与下方"共 M 条拓展域名"（行数）撞成两个"条"。
+       文件：scanner/db.py、scanner/extdom.py、gui/app.py、gui/templates/_pager.html、
+       gui/templates/extdomains.html、tests/smoke.py。验证：tests/smoke.py 新增 [7t]（45 主域名 × 2 行
+       → 每页 20、3 页覆盖全 45 个且不重切、越界回落末页、当前页的组取回整行（来源/IP 列在）、
+       常量已删 + "把 limit=None 偷偷当 20 行"的变异证伪）、全量 SMOKE PASS、§9 行尾两口径逐文件
+       一致（gui/app.py 52 处、_pager.html 11 处、tests/smoke.py 1494 处被归一化，已按内容对齐 HEAD
+       逐行还原）。文档：CHANGELOG_AI（续58）、docs/roadmap.md（续57 条勘误 + 续58 条目）、
+       AGENTS.md §7（page_assets 的 limit=None/columns 口径 + 分组不许截断）、docs/architecture.md
+       （page_assets 签名与分组视图的做法）。仍未做：真浏览器点一次"下一页"（本机无头环境限制）。
