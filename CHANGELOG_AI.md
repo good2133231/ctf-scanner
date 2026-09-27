@@ -3,6 +3,114 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-27 —— 续60：**不采信导入器 severity**（POC 有效级别）+ 本地可重复校准 + 真浏览器 E2E
+
+> 实施者：**Trae · DeepSeek-V4.1-Flash**。用户点名收掉两笔长期挂账：
+> ① "`github_leak` / `intel` 的 POC 置信度校准"是**唯一还挂着"安全前提未满足"**的功能点
+> （项目记忆原文：「情报订阅的自动灌 POC 需先逐条实测校准 + 白名单启用，且**不能采信导入器的 severity**」）；
+> ② 续56~59 攒下的"点下一页 / 点查询 / 点批量打开"**从未在真浏览器里跑过**。
+> 范围经 AskUserQuestion 确认为「修 severity 采信口径 + 建本地可重复校准」+「加进 smoke 作可降级组」。
+> 承接上文：续12（置信度分层）/ 续44（首次实测校准）/ 续55（`limit` 三态）/
+> 续56~59（全量渲染收口）—— 本轮**不改** `github.py` / `intel.py`（续59 已核实：两阶段**只写
+> `leads` 表，没有任何自动灌 POC 的路径**），改的是"一旦人去执行这些 POC，级别判据是谁说了算"。
+
+### 0. 问题与根因（先读完再改）
+
+**根因链**：`tools/import_ref_pocs.py:205` 把参考项目的 `bug_level` **原样抄**成 nuclei
+`severity`（`LEVEL_MAP` 只做大小写映射），而参考项目把这些脚本**一律标 HIGH** ——
+实测 305 条：`high 290 / medium 14 / low 1`。可这批文件里绝大多数是
+`__finger` / `__blast` 的**指纹**规则（"这页像不像某某 OA"），不是漏洞证明。
+于是库里 `pocs.severity` 与 `pocs.confidence`（全 low）**自相矛盾**：置信度说"不敢信"，
+级别却写 high。**影响面是四处消费点全都在拿这个伪造值当判据**：
+
+| # | 消费点 | 后果 |
+|---|---|---|
+| ① | `engine.load_enabled_pocs()` 执行闸（比对 `skip_severities`） | 默认 `skip_severities=["info","low"]` 只挡得住 1/305，等于**执行闸对导入 POC 形同虚设** |
+| ② | `db.bulk_set_poc_enabled(severity=...)` | 管理员想"按 high 批量关掉高危的"，反而把 290 条指纹规则一起选中 |
+| ③ | `/pocs` 级别列与级别分布统计 | 页面显示"high 290"是假象，人据此做决策 |
+| ④ | `engine._vuln_of()` 命中入库级别 | 命中结果带假 high 落 `vulns` 表，**越过 `min_severity=medium` 结果闸** |
+
+**为什么加"有效级别"而不是直接改导入器**：改导入器只能修**未来**新导入的模板，
+库里**已有的 305 条**（以及任何用户已导入的）不会变；且"采信哪个字段"是**读取侧的判据问题**，
+不是写入侧的格式问题。所以修在读取侧，且**只对 `imported` 来源生效** —— 这是最小改动面：
+内置（7 条）与用户自写 POC 的声明级别**照信**。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/db.py` | 新增 `_CONF_SEV_CAP` + `effective_poc_severity(path, meta=None, declared=None)`（`poc_confidence()` 之后）；`bulk_set_poc_enabled()` 的 `severity` 过滤改按**有效级别**（docstring 同步改写） |
+| `scanner/pocs/engine.py` | `load_enabled_pocs()` 的执行闸、`_vuln_of()` 的入库级别 改用 `db.effective_poc_severity()`；`load_enabled_pocs` docstring 补 ⚠️ 段（要放开该走"整理进 `config/pocs-user/`"，**不是**清 `skip_severities`） |
+| `gui/app.py` | `pocs()` 路由：把库里的声明值另存 `declared_severity`，`severity` 换成效级别（**只改数据，统计口径跟着一起变**） |
+| `gui/templates/pocs.html` | 批量下拉与分布行的「级别」→「有效级别」；新增"有效级别=声明级别受置信度上限约束"说明段；表格级别单元格在有压级时给 `title`（"模板声明 X → 有效 Y"） |
+| `tools/calibrate_pocs.py` | **新增**（264 行）：合成靶场 + 逐条跑 POC + 报告（见下） |
+| `tests/browser_e2e.py` | **新增**：真浏览器 E2E（见下） |
+| `tests/smoke.py` | 新增 `[7w]`（有效级别口径 + 校准）、`[7x]`（真浏览器 E2E，可降级） |
+| `docs/roadmap.md` / `AGENTS.md` / `docs/architecture.md` / `docs/usage.md` / `docs/poc-guide.md` / `todo.txt` | 文档同步 + **更正四处错话**（见第 4 节） |
+
+**`effective_poc_severity` 的口径**：
+```python
+sev = 归一(declared 或 meta.info.severity 或 "medium")   # 非法 → info，缺失 → medium（同 engine._norm_severity）
+if poc_source(path) != "imported": return sev            # 内置/用户 POC 原样返回
+cap = _CONF_SEV_CAP[poc_confidence(path, meta)]          # high→critical / medium→medium / low→low
+return SEV_LEVELS[max(SEV_LEVELS.index(sev), SEV_LEVELS.index(cap))]   # 两害相权取其低
+```
+
+### 2. 关键设计取舍
+
+- **只降不升，且只约束"声明"方**：`_CONF_SEV_CAP` 里 high→critical 而非 high→high，是因为
+  上限的语义是"**这个置信度允许声明的最高级别**"；内置 POC 本来就 high 置信度、声明 critical
+  也是合理的，不能被压成 high。
+- **`pocs.severity` 列不改**：库里存的是**原始声明值**（数据不篡改、可回溯"导入器当时写了什么"），
+  有效级别是**读取期换算**。页面同时展示两者（`declared_severity` + `title`），
+  避免"数据被悄悄改写、事后查不出原因"。
+- **四处必须一起改**：只改执行闸会造成更糟的状态 —— "闸门说不该执行，一执行就产出假 high"。
+  第 ④ 处（入库级别）最容易漏，因为它不在"筛选/展示"的直觉里。
+- **默认姿态是"完全惰性"而不是"可配开关"**：305 条导入 POC 有效级别 100% low ⇒ 注册表全开 +
+  默认 `skip_severities` 时**进 0 条**；清了 `skip_severities` 也过不了 `min_severity` 结果闸。
+  这与 roadmap 一直记的"「自动灌 POC」前置未满足"**姿态一致**，且给出**唯一逃生口**：
+  人工复核后把模板整理进 `config/pocs-user/`（`user` 来源 → confidence medium → 上限 medium）。
+- **校准工具只报告不判分**：命中数≠误报数（可能是靶场页恰好含该词）。所以报告里给
+  `hits[] + matched`，由人看，**不自动改 level、不自动启用** —— 自动判分就是"采信机器判分"，
+  而本轮恰恰在修"采信不该信的来源"。
+
+### 3. 怎么验证
+
+- `py -3 -m py_compile scanner/db.py scanner/pocs/engine.py gui/app.py tools/calibrate_pocs.py tests/browser_e2e.py tests/smoke.py` → rc=0；
+- **本地校准实测**（零外网请求）：`py -3 tools/calibrate_pocs.py` 跑 305 条导入 POC
+  **8.0 秒**、命中 **3** 条（`ref-dashboard-blast` / `ref-unidoc-unauth_uploadfile` / `ref-v10-blast`，
+  全是通用 JSON 键名误报、有效级别全 low）；`--src scanner/pocs/pocs` 内置 7 条 **0 命中**。
+  ⚠️ **与文档旧数字的口径差异**：roadmap 续44 记的是"同构高风险模板 **14/305**"——
+  那是"含通用串的模板**静态计数**"，不是"合成靶场上**实际命中**数"（命中 3 条）。
+  本轮**不硬套旧数字**，报告里直接给实测命中清单。
+- **§9 行尾两口径**：`git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` **逐文件一致**；
+- `tests/smoke.py [7w]`（6 组断言 + **3 处 §6.1 变异证伪**）：口径（只降不升 / 非导入原样 /
+  缺失 medium / 非法 info / nuclei 的 critical 不打折 / **未知来源 `other` 也原样返回** ——
+  这条边界一并钉住：`iter_poc_files()` 只遍历 `POC_DIRS`，`other` 在扫描路径上不可达）→ 全量实测（305 条声明 high ≥200、
+  有效级别 100% low；非导入来源一条不许改写）→ 执行闸（全开注册表 + 默认 skip ⇒ 导入 0 条；
+  **变异**：打桩 `db.effective_poc_severity` 回声明值 → 导入立刻涌入）→ 批量开关（按 high 启用
+  只影响有效 high、导入一条不动；**变异**：退回声明值过滤 → 导入被打开 200+ 条）→
+  展示与入库（页面有 `sev-low` + "模板声明 high"、无 `sev-high`，库里仍存 high，
+  `engine._vuln_of` 返回 low）→ 负样本校准（通用词页上 `Dashboard__blast` 必须命中、
+  **变异**：换纯文本页后必须不命中、全量基线 = 那 3 条、命中项有效级别全 low）。
+- `tests/smoke.py [7x]`（**可降级**）：子进程跑 `tests/browser_e2e.py`，rc=0 记过；
+  rc=2 **断言跳过原因含"未找到可用的无头"**否则按失败；rc=1 直接红。`browser_e2e.py` 自身
+  35 条真交互断言（分页"下一页"真跳页 + 锚点回页签 / POC 开关按钮**不**误提交筛选表单 /
+  `window.open` 真被调 20 次且超出如实报告 / `localStorage` 真持久化），含 2 处证伪自检。
+
+### 4. 更正一处长期错话（代码/实测优先于文档）
+
+`docs/roadmap.md` 续56~59 的四个条目里都写着"仍未做：真浏览器里点一次…（**本机无头环境限制**）"。
+**这句是错的**：实测本机 Chrome 与 Edge 都在标准安装位置、都能被 CDP 驱动
+（`--headless=old` + `--remote-debugging-port`，本文件所在的 `browser_e2e.py` 就是证据）。
+四处已逐处改为「真浏览器验证见续60 的 `[7x]`」。**历史日志不改**：`CHANGELOG_AI.md` 与
+`todo.txt` 里同样的旧话**保持原样**（那是当时的记录），由本条与第 21 条记下更正。
+
+**未做 / 仍需人**：① `import_ref_pocs.py` 本身**未改**（它抄 `bug_level` 的行为现在被读取侧
+兜住了；要不要改成"导入即标 low"是另一笔口径，需先定"导入器该不该保留原始级别以备查"）；
+② 校准报告**未接入 CI 门禁**（此刻是人工看报告的基线，不是自动判分）；
+③ `github.py` / `intel.py` 一行未动（它们本来就没有灌 POC 的路径）。
+
 ## 2026-09-27 —— 续59-3：`nmap` / `fscan` / `dirmap` 明确为**需手工安装**（不纳入自动下载）
 
 > 实施者：**Trae · DeepSeek-V4.1-Flash**。用户指令「做」＝执行上一轮点名的第 1 项

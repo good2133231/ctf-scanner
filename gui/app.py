@@ -1547,6 +1547,11 @@ def create_app():
             r["source"] = src                 # 列表展示 / 前端筛选用
             # 置信度（P1-2）：库里为空的老记录按路径即时补算，页面永远有值可筛
             r["confidence"] = r["confidence"] or db.poc_confidence(r["path"])
+            # 有效级别（续60）：库里那列是**模板声明值**（导入 POC 的声明值不可采信），
+            # 展示与统计一律换成效级别，与执行闸（engine.load_enabled_pocs）和按级别批量开关
+            # （db.bulk_set_poc_enabled）同一份逻辑。`declared_severity` 只留给页面做对照提示。
+            r["declared_severity"] = r["severity"]
+            r["severity"] = db.effective_poc_severity(r["path"], declared=r["severity"])
             r["path"] = rel_display(r["path"])  # 页面只展示相对路径
             stats["source"][f"{src}:on" if r["enabled"] else f"{src}:off"] = \
                 stats["source"].get(f"{src}:on" if r["enabled"] else f"{src}:off", 0) + 1

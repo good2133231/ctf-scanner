@@ -9717,6 +9717,220 @@ http:
           "enabled 过滤+越界回落、空表文案分两种｜报告默认截断写明出口、full=True/GUI ?full=1/"
           "CLI --full-report 三路不截断（两处变异证伪：摘 LIMIT 下推即红、_caps 退回旧行为即红）")
 
+    # ---------------- [7w] 续60：POC「有效级别」口径 + 本地负样本校准 ----------------
+    # 根因：`tools/import_ref_pocs.py` 把参考项目的 `bug_level` 原样抄成 nuclei `severity`
+    # （实测 305 条：high 290 / medium 14 / low 1），可它们多是"这页像不像某某 OA"的**指纹**规则。
+    # 而**执行闸**（engine.load_enabled_pocs 的 skip_severities）、**展示**（/pocs 的级别列与统计）、
+    # **批量开关**（db.bulk_set_poc_enabled 的 severity 过滤）、**入库级别**（engine._vuln_of）
+    # 四处都拿这个声明值当判据 ⇒ 290 条低可信规则靠一个伪造的数字站在 high 上，
+    # 清空 skip_severities 就能 290 条一起放行、命中还带着 high 写进 vulns 表刷进报告。
+    # 修法：`db.effective_poc_severity()` —— 声明级别受该模板置信度上限约束
+    # （一条规则的可信度，就是它能声明的最高级别），四处统一改用它；导入来源恒为 low。
+    print("[7w] 续60 POC 有效级别口径 + 本地负样本校准 …")
+    import importlib.util as _ilu7w
+
+    _meta7w = {"id": "lab", "info": {"name": "lab", "severity": "high", "tags": []},
+               "http": [{"matchers": [{"type": "status", "status": [200]},
+                                      {"type": "word", "words": ["whatever"]}]}]}
+    _imp7w = "config/pocs-imported/calib-x.yaml"
+    _usr7w = "config/pocs-user/calib-x.yaml"
+    _blt7w = "scanner/pocs/pocs/exposure-phpinfo.yaml"
+
+    # ① 口径本身：导入来源只降不升；其余来源原样返回；缺失/非法级别与 _norm_severity 同口径
+    assert db.effective_poc_severity(_imp7w, _meta7w) == "low", \
+        "导入 POC 的声明 high 必须被压到 low（否则执行闸还是建在伪造数字上）"
+    assert db.effective_poc_severity(_imp7w, _meta7w, declared="critical") == "low"
+    assert db.effective_poc_severity(_imp7w, _meta7w, declared="info") == "info", "只降不升"
+    assert db.effective_poc_severity(_blt7w, _meta7w) == "high", "内置精选不替它打折"
+    assert db.effective_poc_severity(_usr7w, _meta7w, declared="critical") == "critical"
+    assert db.effective_poc_severity("config/nuclei-templates/x.yaml", _meta7w,
+                                     declared="critical") == "critical", \
+        "官方 nuclei 模板的声明级别由上游维护，不得打折（否则真 CVE 被降成 medium）"
+    # 上限**只约束 imported**：未知来源（`poc_source` = other）原样返回声明级别。
+    # 这么写不是"放过 other"——`iter_poc_files()` 只遍历 `POC_DIRS`（那四个目录全部有归属），
+    # other 在实际扫描路径上**不可达**；要连它一起压，得先改 `effective_poc_severity` 的口径
+    # 与 CHANGELOG / AGENTS.md §7 / docs/poc-guide.md 里「只对 imported 生效」的四处说明。
+    assert db.effective_poc_severity("config/whatever/x.yaml", _meta7w) == "high", \
+        "上限只约束 imported 来源：未知来源不替它打折（不可达，但口径边界要钉住）"
+    assert db.effective_poc_severity(_blt7w, {"info": {}}) == "medium", \
+        "缺失级别按 medium —— 与 engine._norm_severity 同口径"
+    assert db.effective_poc_severity(_blt7w, {"info": {"severity": "bogus"}}) == "info"
+    assert db.effective_poc_severity(_imp7w, {"info": {"severity": "bogus"}}) == "info"
+
+    # ② 全量实测（不是举例）：305 条导入 POC 里声明 high 的占绝大多数，有效级别 100% 是 low；
+    #    非导入来源一条都不许被改写
+    _all7w = engine.load_all_meta()
+    _ok7w = [m for m in _all7w if m.get("_status") == "ok"]
+    _imp_ok7w = [m for m in _ok7w if db.poc_source(m.get("_path") or "") == "imported"]
+    _dec_high7w = [m for m in _imp_ok7w
+                   if str((m.get("info") or {}).get("severity") or "").lower() == "high"]
+    assert len(_imp_ok7w) >= 300, f"导入 POC 数量异常：{len(_imp_ok7w)}"
+    assert len(_dec_high7w) >= 200, \
+        f"声明 high 的导入 POC 只有 {len(_dec_high7w)}/{len(_imp_ok7w)} 条？与实测基线不符"
+    assert all(db.effective_poc_severity(m["_path"], m) == "low" for m in _imp_ok7w), \
+        "导入 POC 的有效级别必须恒为 low（置信度恒 low）"
+    for _m7w in _ok7w:
+        _p7w = _m7w.get("_path") or ""
+        if db.poc_source(_p7w) != "imported":
+            assert db.effective_poc_severity(_p7w, _m7w) == \
+                engine._norm_severity((_m7w.get("info") or {}).get("severity")), \
+                f"非导入来源的级别不得被改写：{_p7w}"
+
+    # ③ 执行闸：全开注册表 + 默认 skip_severities → 一条导入 POC 都不许进；清空 skip 才进来
+    _snap7w = [(r["id"], int(r["enabled"] or 0)) for r in db.list_pocs()]
+    _gate_imp7w = []
+    try:
+        db.bulk_set_poc_enabled(True, only_ok=True)
+        _gate_imp7w = [m for m in engine.load_enabled_pocs(load_settings())
+                       if db.poc_source(m.get("_path") or "") == "imported"]
+        assert not _gate_imp7w, \
+            f"默认级别闸下不该有导入 POC 进入扫描，实际 {len(_gate_imp7w)} 条"
+        _wide7w = copy.deepcopy(load_settings())
+        _wide7w["checks"]["skip_severities"] = []
+        assert [m for m in engine.load_enabled_pocs(_wide7w)
+                if db.poc_source(m.get("_path") or "") == "imported"], \
+            "清空 skip_severities 后导入 POC 才被加载 —— 否则上面那条断言测的可能不是这条口径"
+
+        # §6.1 变异证伪：把有效级别打桩回「声明值」（＝改动前的行为）⇒ 默认闸下导入 POC 立刻涌入
+        _real_eff7w = db.effective_poc_severity
+        db.effective_poc_severity = lambda p, m=None, declared=None: engine._norm_severity(
+            declared or ((m or {}).get("info") or {}).get("severity"))
+        try:
+            _mut7w = [m for m in engine.load_enabled_pocs(load_settings())
+                      if db.poc_source(m.get("_path") or "") == "imported"]
+            assert _mut7w, "变异（按声明值定闸）后导入 POC 仍被挡住 → 说明这条断言没有区分度"
+        finally:
+            db.effective_poc_severity = _real_eff7w
+    finally:
+        for _pid7w, _en7w in _snap7w:
+            db._exec("UPDATE pocs SET enabled=? WHERE id=?", (_en7w, _pid7w))
+
+    # ④ 按级别批量开关也走有效级别：声明 high 的条数必须**明显多于**有效 high 的条数，
+    #    且"按 high 批量启用"一条导入 POC 都不许顺带打开（旧行为会打开 290 条）
+    _rows7w = [dict(r) for r in db.list_pocs() if r["status"] == "ok"]
+    _eff7w = {r["id"]: db.effective_poc_severity(r["path"], declared=r["severity"])
+              for r in _rows7w}
+    _imp_ids7w = {r["id"] for r in _rows7w if db.poc_source(r["path"]) == "imported"}
+    _before_on7w = {r["id"] for r in _rows7w if r["enabled"]}
+    _eff_high7w = {i for i, v in _eff7w.items() if v == "high"}
+    assert sum(1 for r in _rows7w if (r["severity"] or "") == "high") > len(_eff_high7w), \
+        "声明 high 的必须多于有效 high —— 否则这条断言测不出两种口径的差别"
+    try:
+        db.bulk_set_poc_enabled(True, severity="high", only_ok=True)
+        _after_on7w = {r["id"] for r in db.list_pocs() if r["enabled"]}
+        assert (_after_on7w & _imp_ids7w) == (_before_on7w & _imp_ids7w), \
+            ("按 high 批量启用不许碰到导入 POC（被顺带打开 "
+             f"{len((_after_on7w - _before_on7w) & _imp_ids7w)} 条）")
+        assert _after_on7w - _before_on7w == _eff_high7w - _before_on7w, \
+            "本次批量启用只该影响有效级别为 high 的那些"
+        # §6.1 变异证伪：severity 过滤退回「库里那列声明值」⇒ 导入 POC 会被批量打开一片
+        _real_eff7wb = db.effective_poc_severity
+        db.effective_poc_severity = lambda p, m=None, declared=None: str(
+            declared or ((m or {}).get("info") or {}).get("severity") or "medium").lower()
+        try:
+            db.bulk_set_poc_enabled(True, severity="high", only_ok=True)
+            _mut_imp7w = {r["id"] for r in db.list_pocs() if r["enabled"]} & _imp_ids7w
+            assert len(_mut_imp7w - (_before_on7w & _imp_ids7w)) > 200, \
+                "变异（按声明值过滤）后导入 POC 应被批量打开 200+ 条 → 否则这条断言没有区分度"
+        finally:
+            db.effective_poc_severity = _real_eff7wb
+    finally:
+        for _pid7wb, _en7wb in _snap7w:
+            db._exec("UPDATE pocs SET enabled=? WHERE id=?", (_en7wb, _pid7wb))
+
+    # ⑤ 展示与入库：/pocs 的级别列与统计走有效级别，且**库里仍存模板声明值**（原始数据不篡改）；
+    #    命中入库那一处（engine._vuln_of）同口径
+    _fid7w = db.upsert_poc("config/pocs-imported/calib-fixture.yaml",
+                           {"id": "calib-fixture",
+                            "info": {"name": "校准夹具", "severity": "high",
+                                     "tags": ["imported"]}, "_status": "ok"})
+    try:
+        _row7w = [r for r in db.list_pocs() if r["id"] == _fid7w][0]
+        assert _row7w["severity"] == "high", "库里应保留模板的**声明值**（展示层再降级，不改原始数据）"
+        _html7w = _c7o.get("/pocs?q=calib-fixture").get_data(as_text=True)
+        assert "sev-low" in _html7w and "模板声明 high" in _html7w, \
+            "/pocs 必须展示**有效级别**，并给出声明值对照（否则用户看不懂级别为什么是 low）"
+        assert "sev-high" not in _html7w, "/pocs 不得把声明级别当级别展示"
+        _v7w = engine._vuln_of({"id": "ref-dashboard-blast", "_path": _imp7w},
+                               {"name": "x", "severity": "high", "tags": []},
+                               {"text": "t"}, "GET", "http://x/", "http://x", None)
+        assert _v7w["severity"] == "low", \
+            "导入 POC 命中入库的级别也必须是有效级别（否则伪造的 high 会直接刷进报告）"
+    finally:
+        db._exec("DELETE FROM pocs WHERE id=?", (_fid7w,))
+
+    # ⑥ 本地负样本校准（可重复回归）：合成靶场不是任何 OA/CMS/设备 ⇒ **命中即误报**。
+    #    内置 7 条已实测 0 命中（对应"内置零误报"的既有口径），导入的 305 条命中 3 条。
+    _spec7w = _ilu7w.spec_from_file_location("_smoke_calibrate",
+                                             ROOT / "tools" / "calibrate_pocs.py")
+    _cal7w = _ilu7w.module_from_spec(_spec7w)
+    _spec7w.loader.exec_module(_cal7w)
+    assert b'"code": 0' in _cal7w.LAB_BODY and b'"data"' in _cal7w.LAB_BODY, \
+        "负样本页必须铺上通用 JSON 键名 —— 那是「通用词误报」这一类的触发条件"
+    # 变异证伪：把负样本页换成纯文本 ⇒ 已知误报模板必须不再命中（证明命中来自页面内容，
+    # 而不是"凡是请求都算命中"的橡皮图章）
+    _st7w = copy.deepcopy(load_settings())
+    _st7w["limits"]["http_timeout"] = 3
+    _dash7w = engine.load_poc_file(ROOT / "config" / "pocs-imported" / "Dashboard__blast.yaml")
+    _lab_url7w, _lab_down7w = _cal7w.start_lab()
+    assert engine.run_poc_on_target(_dash7w, _lab_url7w, _st7w, site={}), \
+        "已知误报模板（words 含通用 JSON 键名）在通用词页上必须命中 —— 否则负样本页没铺到位"
+    _real_body7w = _cal7w.LAB_BODY
+    _cal7w.LAB_BODY = b"<!DOCTYPE html><html><body>plain page</body></html>"
+    try:
+        assert not engine.run_poc_on_target(_dash7w, _lab_url7w, _st7w, site={}), \
+            "换成纯文本页后仍命中 → 说明命中与页面内容无关（判据无效）"
+    finally:
+        _cal7w.LAB_BODY = _real_body7w
+        _lab_down7w()
+    _rep7w = _cal7w.calibrate(timeout=3)
+    _hit_ids7w = {h["id"] for h in _rep7w["hits"]}
+    assert _rep7w["total"] == _rep7w["run"] >= 300, (_rep7w["total"], _rep7w["run"])
+    assert _hit_ids7w == {"ref-dashboard-blast", "ref-unidoc-unauth_uploadfile", "ref-v10-blast"}, \
+        ("负样本校准基线与实测不一致（当前 " + str(sorted(_hit_ids7w)) +
+         "）—— 若确因模板/靶场变更，请核对后同步更新 [7w] 的基线并在 CHANGELOG_AI.md 记录")
+    assert all(h["effective_severity"] == "low" for h in _rep7w["hits"]), \
+        "命中的导入 POC 有效级别必须是 low —— 这正是它们该被挡在默认闸外的实测依据"
+    print(f"[7w] 续60 POC 有效级别 ok: 导入 {len(_imp_ok7w)} 条中声明 high {len(_dec_high7w)} 条"
+          f"全部降为有效 low；默认闸下导入 POC 进 0 条（清空 skip 才进）｜"
+          f"按 high 批量启用只影响有效 high 的 {len(_eff_high7w)} 条、导入的一条不动｜"
+          f"/pocs 展示有效级别并保留声明值对照｜负样本校准：305 条命中 3 条"
+          f"（{', '.join(sorted(_hit_ids7w))} 全是通用 JSON 键名误报）"
+          "（三处变异证伪：打桩回声明值 ⇒ 闸/批量两处即红；负样本页换纯文本 ⇒ 那 3 条即不命中）")
+
+    # ---------------- [7x] 续60：真浏览器端到端（无头 Chrome/Edge，可降级） ----------------
+    # 为什么值得单列一组：`test_client` 只能看服务端吐出的 HTML 文本，下面三类它一律测不出 ——
+    #   ① 点完之后 **DOM 真的变了没**（分页「下一页」、页签切换、面板折叠时的行数变化）；
+    #   ② **表单到底提交去了哪**（POC 表里的裸 `<button class="toggle">` 会不会误提交外层筛选表单）；
+    #   ③ **浏览器侧状态**（`window.open` 被调了几次、`localStorage` 有没有持久化）。
+    # 落地方式：子进程跑 `tests/browser_e2e.py`（它自己起真 Flask 服务 + 真无头浏览器，
+    # 用标准库手写 CDP 真点真读），退出码 0=全过 / 1=断言失败 / 2=跳过。
+    # 分开进程是**必须**的：该脚本要求"设好 CTFSCANNER_DB / CTFSCANNER_LOGS 之后再 import
+    # scanner.*"，而本文件在 import 期就已把 DB 路径定死，同进程内改环境变量无效。
+    print("[7x] 续60 真浏览器端到端（无头 Chrome/Edge + 手写 CDP，可降级）…")
+    import subprocess as _sp7x
+    _e2e7x = ROOT / "tests" / "browser_e2e.py"
+    assert _e2e7x.is_file(), "缺 tests/browser_e2e.py"
+    try:
+        _pr7x = _sp7x.run([sys.executable, str(_e2e7x)], cwd=str(ROOT),
+                          stdout=_sp7x.PIPE, stderr=_sp7x.STDOUT,
+                          text=True, encoding="utf-8", errors="replace", timeout=900)
+        _out7x = _pr7x.stdout or ""
+    except _sp7x.TimeoutExpired as _e7x:
+        raise AssertionError(f"真浏览器端到端超时（900s）：{_e7x}")
+    print(_out7x.rstrip())
+    _why7x = next((ln.strip() for ln in _out7x.splitlines() if ln.strip().startswith("[跳过]")), "")
+    if _pr7x.returncode == 0:
+        print("[7x] 续60 真浏览器端到端 ok: 真 Flask 进程 + 真无头浏览器，35 条交互断言全绿"
+              "（登录 / 分页 / 服务端筛选 / 批量打开上限 / POC 开关不误提交 / 页签 / 面板持久化）")
+    elif _pr7x.returncode == 2:
+        # 降级**不等于**通过：只允许「本机没有浏览器」这一种原因，且必须把原因原样打出来。
+        assert "未找到可用的无头" in _why7x, \
+            f"退出码 2 只允许『本机没有浏览器』这一种原因，实际：{_why7x or _out7x[-300:]}"
+        print(f"[7x] 续60 真浏览器端到端 **跳过（不是通过）**：{_why7x}")
+    else:
+        raise AssertionError(f"真浏览器端到端失败（退出码 {_pr7x.returncode}）：{_out7x[-1200:]}")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

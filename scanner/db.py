@@ -1460,11 +1460,46 @@ def poc_confidence(path, meta=None):
     return base
 
 
+# 「有效级别」（续60）：`pocs.severity` 存的是**模板自己声明的**级别，对批量导入的第三方 POC
+# 来说那个值**不可采信** —— `tools/import_ref_pocs.py:205` 把参考项目的 `bug_level` 原样抄成
+# nuclei `severity`，而参考项目把这些脚本一律标 HIGH（实测 305 条：high 290 / medium 14 /
+# low 1），可它们绝大多数是"这页像不像某某 OA"的**指纹**规则，不是漏洞证明。
+# 声明级别再怎么喊，也不该越过该模板的置信度上限：**一条规则的可信度，就是它能声明的最高级别**。
+_CONF_SEV_CAP = {"high": "critical", "medium": "medium", "low": "low"}
+
+
+def effective_poc_severity(path, meta=None, declared=None):
+    """POC 的**有效级别**：声明级别可信度不够时，压到该置信度能声明的上限。
+
+    - 非 `imported` 来源（内置精选 / 用户上传 / 官方 nuclei 模板）：**原样返回**声明级别
+      —— 它们的 severity 由人工或上游维护，本框架没有理由替它们打折扣；
+    - `imported`（`tools/import_ref_pocs.py` 产物）：声明级别一律**不采信**，按
+      `poc_confidence()` 派生。导入的指纹型规则置信度恒为 `low` ⇒ 有效级别恒为 `low`，
+      于是 `checks.skip_severities`（默认 info+low）的**执行闸**、`min_severity` 的
+      **结果闸**、POC 管理页的**展示**与**按级别批量开关**四处口径一致 ——
+      此前 290/305 条正是靠伪造的 `high` 越过这道闸的（见 docs/roadmap.md「POC 置信度分层」）。
+
+    `declared` 显式传入时优先（调用方手里已有库里的值，免得再解一遍 meta）。
+    缺失级别按 `medium` 计、非法值按 `info` 计，与 `engine._norm_severity` 同口径。
+    """
+    sev = str(declared or ((meta or {}).get("info") or {}).get("severity") or "medium")
+    sev = sev.strip().lower()
+    if sev not in SEV_LEVELS:
+        sev = "info"
+    if poc_source(path) != "imported":
+        return sev
+    cap = _CONF_SEV_CAP.get(poc_confidence(path, meta), "low")
+    # SEV_LEVELS 由高到低（下标越大级别越低）→ 取两者中更低的那个
+    return SEV_LEVELS[max(SEV_LEVELS.index(sev), SEV_LEVELS.index(cap))]
+
+
 def bulk_set_poc_enabled(enabled, severity=None, source=None, kind=None, only_ok=True,
                          confidence=None):
     """按分类批量开关 POC（POC 管理页的"按分类开关"，避免 312 个逐个点）。
 
-    - severity：critical/high/medium/low/info
+    - severity：critical/high/medium/low/info —— 按**有效级别**（`effective_poc_severity`）筛选，
+      不是库里那列声明值。否则"按 high 启用"会把 290 条声明 high 的导入指纹型规则一起放开
+      （它们的有效级别是 low），正是社区版最常见的"批量打开后误报刷屏"来源。
     - source：builtin/imported/nuclei/user/other
     - confidence：high/medium/low（P1-2 分层；库里为空的老记录按路径即时补算）
     - kind：全部 / 变更（当前状态与目标状态不同的，便于"只改需要改的"）
@@ -1476,7 +1511,7 @@ def bulk_set_poc_enabled(enabled, severity=None, source=None, kind=None, only_ok
     for r in rows:
         if only_ok and r["status"] != "ok":
             continue
-        if severity and (r["severity"] or "") != severity:
+        if severity and effective_poc_severity(r["path"], declared=r["severity"]) != severity:
             continue
         if source and poc_source(r["path"]) != source:
             continue

@@ -1606,3 +1606,48 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        Linux/macOS 产物、无 Windows 包也无 checksums）冲突，已按代码/实测事实改掉。
        仍未做：真机照着 README「手工安装」重装一遍（本机 nmap 已装、dirmap 用目录联接、fscan
        已自编译 2.2.1，故未重装；与续54 的"下载链路未在真实网络完整跑一遍"同一类残留未验）。
+[完成] 21、续60（2026-09-27，Trae · DeepSeek-V4.1-Flash）：**不采信导入器 severity**（POC「有效级别」）
+       + 本地可重复校准 + 真浏览器端到端。收掉两笔长期挂账（用户点名"先解决这两个"）。
+       ① 起因一：`github_leak` / `intel` 的 POC 置信度校准是**唯一还挂着"安全前提未满足"**的功能点
+       （项目记忆：「自动灌 POC 需先逐条实测校准 + 白名单启用，且**不能采信导入器的 severity**」）。
+       经核：`github.py` / `intel.py` **只写 leads 表、无任何自动灌 POC 路径**（续59 已核实），
+       所以修的是"人去执行这些 POC 时，级别判据谁说了算"。
+       ② 根因：`tools/import_ref_pocs.py:205` 把参考项目 `bug_level` **原样抄**成 nuclei `severity`
+       （一律 HIGH；实测 305 条 = high 290 / medium 14 / low 1），而它们大多是"像不像某某 OA"的
+       指纹规则；落库后**四处消费点**全拿这个伪造值当判据 —— 执行闸（`engine.load_enabled_pocs`，
+       默认 skip 只挡得住 1/305）、按级别批量开关（`db.bulk_set_poc_enabled`）、`/pocs` 级别列与统计、
+       命中入库级别（`engine._vuln_of`，漏改会让假 high 落 vulns 表并越过 `min_severity` 结果闸）。
+       ③ 改法：新增 `db.effective_poc_severity(path, meta=None, declared=None)` —— **只对 imported
+       来源生效**，声明级别按本条 `poc_confidence()` 上限压级（`_CONF_SEV_CAP` high→critical /
+       medium→medium / low→low），**只降不升**；非 imported 原样返回；缺失 medium / 非法 info
+       （同 `engine._norm_severity`）。四处统一改用。`pocs.severity` 列**仍存模板声明值**（不篡改），
+       页面另存 `declared_severity` 并在 title 里写"模板声明 X → 有效 Y"。
+       ④ 效果：305 条导入 POC 有效级别 **100% low** ⇒ 注册表全开 + 默认 `skip_severities` 时
+       **进 0 条**（清 skip 也过不了结果闸），即"自动灌 POC"默认**完全惰性**；**唯一逃生口** =
+       人工复核后把模板整理进 `config/pocs-user/`（user 来源 → confidence medium）。
+       ⑤ 新增 `tools/calibrate_pocs.py`：起**合成靶场**（通用后台样板页 + 软 404 最坏形态、
+       **刻意不含厂商特征串**），**零外网请求**逐条跑全部 POC 出报告（`--json logs/poc_calibration.json`）。
+       实测：305 条导入 **8.0 秒**跑完、命中 **3** 条（ref-dashboard-blast / ref-unidoc-unauth_uploadfile /
+       ref-v10-blast，全是通用 JSON 键名误报、有效级别全 low）；内置 `scanner/pocs/pocs` 7 条 0 命中。
+       ⚠️ 与 roadmap 续44 旧数字的口径差异：旧记"同构高风险模板 14/305"是**静态计数**，
+       不是合成靶场**实测命中**数（3 条），本轮不硬套旧数字。
+       ⑥ 起因二：续56~59 攒下的"点下一页 / 点查询 / 点批量打开"**从未在真浏览器跑过**。
+       新增 `tests/browser_e2e.py`：**真实 Flask 服务进程 + 真无头 Chrome/Edge**，用手写 CDP
+       （`socket` 写 RFC6455，**只用标准库**，不新增依赖）真点真读 —— 35 条真交互断言
+       （翻页真跳页 + 锚点回页签 / POC 开关按钮**不**误提交筛选表单 / `window.open` 真被调 20 次 /
+       `localStorage` 真持久化），含 2 处证伪自检。退出码 0=全过 / 1=失败 / 2=跳过。
+       **⚠️ 更正一处长期错话**：docs/roadmap.md 续56~59 四处写"本机无头环境限制" —— 实测本机
+       Chrome / Edge 都在且都能被 CDP 驱动，已逐处改为「真浏览器验证见续60 的 [7x]」。
+       **历史日志不改**（CHANGELOG / todo 里的旧话保持原样，由此条与 CHANGELOG 续60 记下更正）。
+       ⑦ 验证：`tests/smoke.py` 新增 `[7w]`（6 组断言 + **3 处 §6.1 变异证伪**：打桩退回声明值 →
+       导入涌入执行闸 / 批量开关 / 展示三处分别即红；通用词页命中、换纯文本页必须不命中；全量基线 3 条）
+       与 `[7x]`（真浏览器 E2E，**可降级**：rc=2 且跳过原因不含"未找到可用的无头"时按失败算，
+       rc=1 直接红，**绝不静默当通过**）。全量 smoke → SMOKE PASS；§9 行尾两口径逐文件一致。
+       ⑧ 文档：CHANGELOG_AI（续60）、docs/roadmap.md（POC 分层条目 + 新增续60 条目 + 更正四处错话）、
+       AGENTS.md §7（有效级别口径 + 真浏览器三类行为）+ §6 命令区（calibrate_pocs / browser_e2e）、
+       docs/architecture.md（关键设计决策新增一行 + pocs 表行补有效级别）、docs/usage.md
+       （POC 管理条目 + 两条 FAQ）、docs/poc-guide.md（新增「有效级别」与「本地可重复校准」两节）、
+       tools/import_ref_pocs.py docstring（两处已知陷阱：severity 原样抄、STOPWORDS 挡不住带引号键名）。
+       仍未做：① `import_ref_pocs.py` 本身**未改**（读取侧已兜住；要不要"导入即标 low"是另一笔口径，
+       需先定导入器该不该保留原始级别以备查）；② 校准报告**未接 CI 门禁**（此刻是人工基线，不是自动判分）；
+       ③ 真浏览器 E2E 只在 Windows 本机跑过，**Linux 实机未跑**（与续57 起的同类残留一致）。

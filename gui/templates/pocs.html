@@ -31,7 +31,7 @@
         <option value="other">其他</option>
       </select>
     </label>
-    <label>级别
+    <label>有效级别
       <select id="poc-bulk-severity">
         <option value="">全部级别</option>
         {% for sev in ['critical', 'high', 'medium', 'low', 'info'] %}
@@ -59,7 +59,7 @@
       {% set on = stats.source.get(src ~ ':on', 0) %}{% set off = stats.source.get(src ~ ':off', 0) %}
       {% if on or off %}［{{ src }} 开{{ on }}/关{{ off }}］{% endif %}
     {% endfor %}
-    ｜级别
+    ｜有效级别
     {% for sev, n in stats.severity.items() %}［{{ sev }} {{ n }}］{% endfor %}
     ｜置信度
     {% for c in ['high', 'medium', 'low'] %}［{{ c }} {{ stats.confidence.get(c, 0) }}］{% endfor %}
@@ -68,6 +68,13 @@
     用户上传 / 官方 nuclei 模板 = 中；参考项目静态导入的指纹型规则 = 低，
     且<b>只判状态码、不判响应内容</b>的规则再降一级（`status: [200]` 这类在真实站点上几乎必中）。
     它影响的是"额度先给谁"：站点 POC 额度用尽时，高置信规则优先执行。</p>
+  <p class="muted small"><b>有效级别</b>=模板声明的级别，但受上面那层置信度的<b>上限</b>约束
+    （一条规则的可信度，就是它能声明的最高级别）。列表里「级别」列与「按级别批量开关」用的都是
+    有效级别；鼠标停在级别上可看到模板原本声明了什么 —— 对<b>导入</b>的第三方 POC，那个声明值
+    一律不采信（导入器照抄参考项目的 `bug_level`，305 条里 290 条写 high，而它们多是"像不像某某
+    OA"的指纹规则、不是漏洞证明），按置信度派生后有效级别为 low，因此默认被
+    <span class="mono">skip_severities</span> 挡在扫描之外。要用其中某条，正确做法是人工复核后
+    把模板整理进 config/pocs-user/（来源不再算"导入"），而不是清空 skip_severities。</p>
 </section>
 
 <section class="panel">
@@ -95,7 +102,10 @@
         <td>{{ p.id }}</td>
         <td class="mono">{{ p.poc_id }}</td>
         <td>{{ p.name }}</td>
-        <td><span class="sev sev-{{ p.severity }}">{{ p.severity }}</span></td>
+        <td><span class="sev sev-{{ p.severity }}"
+          {%- if p.declared_severity and p.declared_severity != p.severity %}
+          title="模板声明 {{ p.declared_severity }}；本来源的声明级别不采信，按置信度降为 {{ p.severity }}"
+          {%- endif %}>{{ p.severity }}</span></td>
         <td>{{ p.confidence }}</td>
         <td class="muted">{{ p.tags }}</td>
         <td>{{ p.status }}</td>

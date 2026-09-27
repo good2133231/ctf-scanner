@@ -305,6 +305,39 @@ http:
 所以高置信先跑、低置信后跑，预算不足时先跑的是更可能准的规则。扫不扫仍由 `skip_severities`
 与 `enabled` 决定。POC 管理页可按置信度层**批量启停**。
 
+### 「有效级别」：导入 POC 自己写的 `severity` 不可采信（续60）
+
+**模板里那句 `severity: high` 对导入 POC 不作数。** 原因：`tools/import_ref_pocs.py` 是把参考项目的
+`bug_level` **原样抄**过来的（参考项目对这些脚本**一律标 HIGH**；本仓导入的 305 条里
+`high 290 / medium 14 / low 1`），而它们绝大多数是"这页像不像某某 OA"的**指纹**规则，
+不是漏洞证明 —— 与 `confidence`（那批**全 low**）直接自相矛盾。
+
+所以判据一律用**有效级别** `db.effective_poc_severity(path, meta, declared=None)`：
+
+| 来源 | 有效级别 |
+|---|---|
+| `imported` | 声明级别**不采信** → 按本条 `confidence` 的上限压级（`high`→`critical`/`medium`→`medium`/`low`→`low`），**只降不升** |
+| 其它（builtin / user / nuclei / other） | **原样返回**声明级别（这些来源的级别照信） |
+
+缺失级别按 `medium`、非法值按 `info`（与 `engine._norm_severity` 同口径）。
+**执行闸（`skip_severities`）、按级别批量开关、POC 管理页的级别列与统计、命中结果入库级别，
+四处用的是同一份有效级别** —— 所以不存在"闸门按 A 判、结果按 B 记"的缝。
+`pocs.severity` 列里存的**仍是模板声明值**（原始数据不篡改，页面悬停可看"模板声明 X → 有效 Y"）。
+
+**后果与正确用法**：那 305 条导入 POC 的有效级别**恒为 low**，在默认 `skip_severities=["info","low"]`
+下**一条都不会执行**（清了 `skip_severities` 也过不了 `min_severity` 结果闸）。
+真要用其中某条，**正确做法是人工复核后把模板整理进 `config/pocs-user/`**
+（那算 `user` 来源 → `confidence` medium → 上限 medium）；**不要去清 `skip_severities`**。
+
+### 本地可重复校准：`tools/calibrate_pocs.py`（续60）
+
+`py -3 tools/calibrate_pocs.py` 起一个**合成靶场**（通用后台样板页 + 软 404 最坏形态，
+**刻意不含厂商特征串**），**零外网请求**逐条跑完全部 POC 并出报告（`--json logs/poc_calibration.json`）。
+它给的是**可重复的负样本基线**（本仓实测：305 条导入命中 3 条、内置 7 条 0 命中），
+`--src scanner/pocs/pocs` 可换跑内置那批。
+**它只报告不判分**：命中 ≠ 误报（靶场页可能恰好含该词），要人工看 `hits[].matched`；
+它也**不会**自动改 `severity`、不会自动启用 POC —— 自动判分就是"采信机器判分"，正是本轮在修的东西。
+
 > **"实测校准"仍是开放项**：`confidence` 只是**结构上的先验**，不等于"这条规则真的准"。
 > 要放开那 305 个导入 POC，仍需在真实授权目标上把误报率跑出来 —— 这也是情报订阅（P3-2）
 > 只到「线索」层、不自动灌 POC 的原因（详见 `docs/roadmap.md`）。

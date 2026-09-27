@@ -16,6 +16,19 @@
 
 产物落在 config/pocs-imported/，且在 `db.default_poc_enabled()` 中**默认关闭**：
 导入 POC 以关键字命中为主，误报率明显高于手写 POC，需要人工在 POC 管理页挑选后启用。
+
+两处**已知陷阱**（2026-09-27 续60 复核后写明，改本脚本前先读）：
+1. **`severity` 是原样抄来的，不可采信** —— 下面 `build_yaml()` 把参考项目的 `bug_level`
+   （`LEVEL_MAP` 只做大小写映射）直接写成 nuclei `severity`，而参考项目对这些脚本**一律标 HIGH**
+   （本仓 305 条实测：high 290 / medium 14 / low 1），可它们绝大多数是"这页像不像某某 OA"的
+   **指纹**规则。因此引擎侧**不采信**这个值：判据一律走 `db.effective_poc_severity()`
+   （按本条 `poc_confidence()` 上限压级，只降不升），详见 docs/poc-guide.md「有效级别」。
+   **不要**用"调低这里的 level 映射"来修级别问题 —— 那只改未来新导入的，库里已有的不会变。
+2. **`STOPWORDS` 挡不住带引号的通用键名** —— 黑名单里写的是裸词 `data` / `code` / `msg`，
+   但参考项目里参与判定的字面量常是 `'"data"'`（含引号，用于 `in text` 比较），
+   字符串本身带引号 ⇒ **不等价**，于是通用键名照样进 `words`，成为
+   `matchers: word + condition: or` 里的万能命中项（这就是 Dashboard 类模板误报的机制）。
+   要修得先想清"带引号的字面量在什么条件下是有效特征"，别只往黑名单里加 `'"data"'`（治标）。
 """
 import argparse
 import ast

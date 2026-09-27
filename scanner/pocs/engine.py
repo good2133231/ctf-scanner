@@ -1195,8 +1195,12 @@ def load_enabled_pocs(settings=None):
 
     `skip_severities`（默认 info + low）与内置检查同一套规则：这些 POC 的结论同样会被
     `min_severity` 丢掉，不执行只省请求（导入的 300+ 个 POC 里此类模板不少）。
-    未知/缺失 severity 由 `_norm_severity` 归为 info，同样会被跳过 —— 想让某条 info 级
-    POC 生效，把它自己写 severity 改成 medium 以上，或在策略配置里清空 skip_severities。
+
+    ⚠️ 判据取的是 **`db.effective_poc_severity()`（有效级别）**，不是模板里写的那个数（续60）：
+    导入的第三方 POC 声明级别是导入器抄来的（290/305 条写 high），有效级别则由置信度派生为
+    low —— 拿声明值当闸门等于**用伪造的数字把 290 条指纹型规则放进扫描**。要放开它们，
+    得走"把模板整理进 `config/pocs-user/` 人工复核后启用"这条路（那时来源不再是 imported），
+    而不是清空 `skip_severities`：清了也过不了 `min_severity` 结果闸，只会白花请求。
     """
     try:
         enabled = set(db.enabled_poc_paths())
@@ -1209,7 +1213,7 @@ def load_enabled_pocs(settings=None):
             continue
         if enabled is not None and m.get("_path") not in enabled:
             continue
-        if _norm_severity((m.get("info") or {}).get("severity")) in skip:
+        if db.effective_poc_severity(m.get("_path") or "", m) in skip:
             continue
         # 置信度分层（P1-2）：在内存里按同一套规则现算，供 vulnscan 排序用
         # （库里也存了一份，那份是给 GUI 展示/筛选用的，两者算法同源 `db.poc_confidence`）。
@@ -1550,7 +1554,11 @@ def _vuln_of(poc, info, resp, method, url, base_url, extractors):
     return {
         "poc_id": poc.get("id"),
         "name": info.get("name") or poc.get("id"),
-        "severity": _norm_severity(info.get("severity")),
+        # 入库级别取**有效级别**（续60）：导入 POC 的声明级别不可采信。这一处不跟着改的话，
+        # 即便它靠"清空 skip_severities"挤进了扫描，命中结果仍会带着伪造的 high 落进 vulns 表、
+        # 越过 `min_severity` 结果闸、直接刷进报告 —— 闸就白加了。非 imported 来源原样返回。
+        "severity": db.effective_poc_severity(
+            poc.get("_path") or "", poc, info.get("severity")),
         "owasp": _owasp_tags(info),
         "target": base_url,
         "detail": (f"POC 命中：{info.get('name') or poc.get('id')}"

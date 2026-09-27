@@ -489,6 +489,12 @@ py -3 cli/client.py --update-tools            # 续54：联网装/更新 subfind
                                               #   GUI 等价入口＝管理员侧栏「外部工具」页；两条路都**只在这时联网**
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
+py -3 tools/calibrate_pocs.py  # 续60：本地负样本校准（起合成靶场，**零外网请求**逐条跑 POC 出报告）
+                               #   默认 --src config/pocs-imported --json logs/poc_calibration.json --timeout 3
+                               #   换 `--src scanner/pocs/pocs` 可跑内置那批；只报告，不自动改级别/不自动启用
+py -3 tests/browser_e2e.py     # 续60：真浏览器 E2E（无头 Chrome/Edge + 手写 CDP 真点真读）
+                               #   退出码 0=全过 / 1=有断言失败 / 2=找不到浏览器（跳过，不是通过）
+                               #   已接进 smoke 的 `[7x]`（可降级组；`[7w]` 是有效级别口径 + 校准基线）
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
 py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanner
 # Linux 实机验收（**2026-09-23 续12 已达成**：Ubuntu 22.04.5 / Python 3.10.12）
@@ -696,6 +702,20 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   两个不能改的点：① 按钮**必须** `type="button"`（它落在补扫 `POST /api/rescan` 表单内，
   默认 `type=submit` 会误触发真扫描）；② 拿到句柄后立刻 `w.opener = null`（反向标签劫持）。
   回归钉在 `tests/smoke.py` 的 `[7r]`（检测器先变异证伪：喂 `<button type="submit" id="btn-open-sites">` 必须报错）。
+- **GUI 的三类行为只能靠真浏览器验，`test_client` 看不出来**（续60 定口径）：
+  ① 点击后 **DOM 真的变了没**（翻页/页签切换/面板折叠）；② **表单提交去了哪**（表里那些
+  `type` 缺省的 `<button class="toggle">` 会不会误提交外层筛选表单）；③ **浏览器侧状态**
+  （`window.open` 被调了几次、`localStorage` 有没有持久化）。这三类正是续56~59 一路攒下的
+  "未验"项。落点是 `tests/browser_e2e.py`：**真实 Flask 服务进程**（不是 `test_client`）+
+  真无头 Chrome/Edge，用**手写 CDP**（`socket` 写 RFC6455，**只用标准库**，不新增依赖）真点真读。
+  **两条硬约束**：① 找不到浏览器 → **跳过**（退出码 2 + 打印原因，**绝不假绿**、绝不抛异常）；
+  ② 临时库 / 日志 / user-data-dir / 引导脚本全落 `%TEMP%`，`try/finally` 回收，端口用系统分配。
+  它接在 `tests/smoke.py [7x]` 里是**可降级**组：rc=0 记过、rc=2 记跳过（但**跳过原因不含
+  "未找到可用的无头"时按失败算** —— 防止"因为别的原因垮掉却被当成跳过"），rc=1 直接红。
+  ⚠️ **不要**再写"本机无头环境限制"这类话：实测本机 Chrome / Edge 都在、都能被 CDP 驱动
+  （`--headless=old`；`--headless=new` 在 Windows 上拿不到 stdout，早期探针踩过）。
+  ⚠️ 候选路径**不许写死盘符**（`tests/` 也在 smoke 的源码红线扫描范围内），从
+  `ProgramFiles`/`ProgramFiles(x86)`/`LOCALAPPDATA` 环境变量拼装 + POSIX 常见路径。
 - **报告资产小节的上限走 `CAP_*` 常量 + `report._cap_title()`**（续56 定口径）：
   这些上限（站点/目录 100，端口/C 段/证书/子域名 200）是**有意的可读性护栏**，不是丢数据；
   但**必须**在真的被截断时把总数写进小节标题（`存活站点（共 120 条，此处仅列前 100 条）`），
@@ -929,6 +949,34 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
     （`word`/`words`/`regex`/`size`/`length`）是否存在 → 存在则**降一级**，且**只降级不升级**。
     与 `enabled` 不同（那是用户意图，`upsert_poc` **不覆盖**），`confidence` 每次同步都重算。
     `vulnscan` 只把它当**同批候选内的排序键**（指纹命中仍绝对优先），不做过滤。
+  - **POC 的「有效级别」才是判据，模板里写的 `severity` 对导入 POC 不可采信**（续60 定口径）：
+    根因在导入器 —— `tools/import_ref_pocs.py` 把参考项目的 `bug_level` **原样抄**成 nuclei
+    `severity`（参考项目一律标 HIGH；实测 305 条 = high 290 / medium 14 / low 1），而它们绝大多数
+    是"这页像不像某某 OA"的**指纹**规则、不是漏洞证明。判据一律走
+    `db.effective_poc_severity(path, meta=None, declared=None)`：**只对 `imported` 来源生效** —
+    声明级别按本条 `poc_confidence()` 的上限压级（`_CONF_SEV_CAP`：high→critical / medium→medium /
+    low→low），**只降不升**；非 `imported` **原样返回**（内置/用户 POC 的声明级别照信）。
+    这是一条**边界**：连 `other`（路径不在 `POC_DIRS` 的四个目录里）也不压 —— 不是"放过未知来源"，
+    而是 `iter_poc_files()` 只遍历 `POC_DIRS`，`other` 在**实际扫描路径上不可达**；
+    要连它一起压，得同时改口径与本节 / `CHANGELOG_AI.md` / `docs/poc-guide.md` 的说明
+    （`tests/smoke.py [7w]` ① 已把这条边界钉住）。
+    缺失级别按 `medium`、非法值按 `info`（与 `engine._norm_severity` 同口径）。
+    **四处消费点必须统一用它**：① `engine.load_enabled_pocs()` 的执行闸；
+    ② `db.bulk_set_poc_enabled()` 的按级别批量开关；③ `/pocs` 的级别列与级别分布统计
+    （页面额外用 `declared_severity` 显示"模板声明 X"，`title` 里写清压级原因）；
+    ④ `engine._vuln_of()` 的**入库级别** —— 漏改这一处，伪造的 high 仍会落 `vulns` 表并越过
+    `min_severity` 结果闸（等于"闸门拦住了不执行、一执行就带假级别"）。
+    `pocs.severity` 列**存的仍是模板声明值**（原始数据不篡改，只做展示/判据的换算）。
+    实测效果：305 个导入 POC 有效级别 **100% low** ⇒ 注册表全开 + 默认 `skip_severities` 时
+    **进 0 条**（清了 skip 也过不了结果闸），「自动灌 POC」因此**默认完全惰性**；
+    **要放开必须人工复核后把模板整理进 `config/pocs-user/`**（那算 `user` 来源、置信度 medium），
+    而不是去清 `skip_severities`。回归钉在 `tests/smoke.py [7w]`（含打桩退回声明值即红的变异证伪）。
+  - **本地负样本校准：`tools/calibrate_pocs.py`**（续60）：起一个**合成靶场**（通用后台样板页、
+    软 404 最坏形态、**刻意不含**厂商特征串），零外网请求逐条跑完 POC 并出可重复报告
+    （`--json logs/poc_calibration.json`）。默认跑 `config/pocs-imported`；
+    `--src scanner/pocs/pocs` 可跑内置那批。它**只报告不判分** —— 命中数不等于误报数，
+    要人工看 `hits[]` 里的 `matched` 是不是通用词（实测 305 条导入命中 3 条、内置 7 条命中 0）。
+    **不要**用它去自动改 `pocs.severity` 或自动启用 POC：那是"采信机器判分"，本轮恰恰在修这个。
 - **`dirscan` 的默认值于第十八轮（续9）反转为「开 + 只浅扫」**（第十五轮曾按用户要求默认关，
   现在用户要求"先用偏敏感信息的通用路径浅浅过一遍，看清结果再手动决定深度扫"）：
   `dirscan.enabled=true` + `dirscan.mode=quick`，只吃 `config/dicts/dirs_shallow.txt`
