@@ -3,6 +3,132 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-28 —— 续62：全流程自检**补齐到「功能向量」**（用户第三条指令收口）
+
+> 实施者：**Trae · DeepSeek-V4.1-Flash**。续61 用户第三条指令「我之前提到过测试扫描的功能你还记得吗
+> 就是**每个功能向量打一些** 确保流程正确就行」，经 AskUserQuestion 确认 = **不新建功能**，而是把
+> 已有的「全流程自检」（续50/续52 的 `scanner/devflow.py`）从"逐**阶段**"补齐到"逐**子能力**"。
+
+### 0. 问题与根因（先读完再改）
+
+| # | 缺陷 | 根因 | 影响 |
+|---|---|---|---|
+| ① | 阶段判 OK 掩盖子能力没跑到 | `classify()` 只问"这个阶段**有没有**网络活动"（`net_by_stage>0`）。可一个阶段内部往往有多个分支（dirscan 的「内置字典扫描 / dirmap / 框架字典 / 后缀派生 / 目录递归」、portscan 的「fscan / nmap / 内置」引擎选择…），**只跑了其中一个就报整阶段 OK** | 自检"看起来全绿"，实则一半子能力是死代码 / 已被改坏，**看不出来** |
+| ② | 无法区分"没跑到"与"不该跑" | 阶段级只有 OK/SKIP/FAIL 三态，SKIP 原因还取自日志首行（`takeover` 明明解析了 CNAME 却因走 `dnsq` 自建报文、不经 `getaddrinfo` 而被记 `SKIP(无输入)`） | 真缺口与"本次条件不满足"混在一起，报告不可信 |
+
+**为什么不"多发点请求就完事"**：用户要的是"**每个功能向量打一些**"，而自检的铁律是**零外网** +
+**最小压量**（`devmode` 已把 `rate_per_sec` 压到 1、`quick_max_paths` 压到 1）。所以正确做法是
+**换判据**——用**本次运行的原生证据**（该阶段日志 / 外部命令 argv[0] / 请求 URL）逐条判定，
+**不做"跑过就默认全绿"**；同时把"本次不该跑"如实记 `N-A` 并**写明原因**，只有"阶段跑了却没点到**主路径**"
+才叫 `MISS`（覆盖缺口）。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/devflow.py` | 新增 `VECTORS`（**35 条**功能向量）+ `split_log_by_stage()` + `_Evidence` + `_vector_hit()` + `classify_vectors()` + `summarize_vectors()`；`instrument()` 增 `urls_by_stage` / `cmds_by_stage` 两个按阶段收集器；`run_selfcheck()` 自检 options 增 `auto_expand: True`、把 `settings=eff` 传进 `_Evidence` |
+| `run_devflow.py` | 报告增「功能向量覆盖」段（按阶段分组打印 + 汇总句 + 覆盖缺口单列） |
+| `tests/smoke.py` | `[7n]` 增 **③b** 组（状态合法 / N-A 必带原因 / OK 不带原因 / 10 条核心主路径向量真点到 / 覆盖缺口为 0 / 证据可复算）+ **3 条 §6.1 变异证伪**（M6~M8） |
+| `AGENTS.md` / `docs/architecture.md` / `CHANGELOG_AI.md` / `todo.txt` | 本轮记录 |
+
+**向量结构**（`VECTORS` 每条 `dict`）：
+```python
+stage / key / desc          # 所属阶段 / 向量键 / 人读描述
+kind + kw (+ not_kw)        # 判据：log=该阶段日志含 kw；regex=日志匹配正则；
+                            #       cmd=跑过含 kw 的 argv[0]；url=请求过含 kw 的 URL；nonet=有网络活动
+tool                        # 依赖的外部工具；**未安装**→ 整条记 N-A（按 tools.<名> 配置路径解析，与阶段同口径）
+na                          # 静态不可达（自检刻意关：offline / 第三方关闭 / fw_max_paths=0…）
+na_log = (kw, 原因)          # 命中 kw 说明本次无此情形（如"截图失败"）→ N-A 带原因
+optional                    # 条件分支（只有特定资产/数据才触发）→ 未点到记 N-A，不算缺口
+```
+
+**判定优先级**（`classify_vectors`）：静态 `na` → 工具缺失 → 阶段 FAIL → **判据命中 = OK** →
+`na_log` N-A → `optional` N-A → 阶段跳过 N-A → 否则 **MISS**。**主路径**向量**不设** `optional`
+——那才是真缺口。
+
+**`_Evidence.has_tool()` 的坑（自测踩过）**：不能用裸名查 PATH。`settings.yaml` 配的是
+`tools/fscan/fscan.exe`，裸名 `utils.which("fscan")` 得出"未安装"，于是**阶段明明跑了 fscan、
+向量却记 N-A**。改为按 `settings["tools"][name]` 解析（`run_selfcheck` 必须把 `eff` 传进来）。
+
+### 2. 验证
+
+- `py -3 run_devflow.py` → **35 个功能向量：18 个点到、0 个覆盖缺口、17 个本次不可达**
+  （13 阶段 11 真跑 / 2 跳过 / 0 FAIL，323 次网络活动，160.4s，零外网）。
+  18 条 OK 覆盖 subdomain 自动拓展 / 泛解析 / 内置爆破 / 回填、takeover CNAME、portscan fscan 引擎、
+  probe 内置探测 / 端口候选 / favicon、cert TLS、jsmine 挖掘、dirscan 模式 + 内置扫描、
+  vulnscan 内置检查 + POC 引擎、intel 拉取 + 匹配、heuristic 聚合。
+- `tests/smoke.py [7n] ③b`（不重跑、用返回里的原始证据复算）+ `§6.1` M6~M8 变异证伪。
+- 全量 `py -3 tests/smoke.py` → `SMOKE PASS`；§9 行尾两口径逐文件一致。
+- **未做 / 仍未验**：① Linux 实机跑自检（本机 Windows，如实登记）；② 向量判据的 `kw` 与阶段日志文案
+  **强耦合**——改文案要一起看（已在 `AGENTS.md` §6 登记）；③ 本机无头浏览器截图失败，`screenshot/shot`
+  记为 N-A（环境问题，非覆盖缺口）。
+
+## 2026-09-28 —— 续61：**Web 界面禁绝对路径（新硬规矩）** + **外部工具跨平台**
+
+> 实施者：**Trae · DeepSeek-V4.1-Flash**。用户新指令三条，本轮做前两条（第三条"测试扫描"另批）：
+> ① 「我的 web 界面不要再显示绝对路径 而是相对路径」；② 「外部工具要自动兼容 windows 和 linux」。
+> 两条**同一个病根**：路径在"本机形态"与"展示形态"之间没有分层。
+
+### 0. 问题与根因（先读完再改）
+
+| # | 缺陷 | 根因 | 影响 |
+|---|---|---|---|
+| ① | `/tools` 页把 `which()` 解出的**本机绝对路径**直接渲染给浏览器 | `rel_display()` 对**项目外**路径**原样返回**，而工具常装在项目外（nmap 在 `Program Files`、`tools/fscan/` 是指向仓库外的目录联接） | 页面暴露本机目录结构，违反用户新硬规矩 |
+| ② | `toolmgr.status()` 的 `note`（`OK（<绝对路径>）`）**又嵌了一份** | 只转 `path` 字段挡不住；`note` 是拼好的字符串 | 同上（双通道泄露） |
+| ③ | 日志 tail / 自检 stdout / 任务 `error` 里的路径 | 这些是**自由文本**（Python traceback、`errno` 消息），逐字段转换无效 | 同上 |
+| ④ | `settings.yaml` 写死 `tools/fscan/fscan.exe`，Linux 产物名是无后缀的 `fscan` | `which()` 只按配置原值找 | Linux 上**静默降级**到内置实现（慢一个量级且无报错） |
+
+**为什么不能只加一个正则**：`rel_display()` 的"项目外原样返回"是 **CLI 的既有契约**（用户要拿这个路径去命令行复现，
+`tests/smoke.py [5d]` 正钉着它）—— 所以 Web 需要**更严的一档**，而不是改掉默认档。
+同理，`scrub_paths()` **不能**顺手把裸的 `/xxx` 也抹掉：`https://h/a/b` 里的路径段会被一起毁掉
+（`tests/smoke.py [7y] ②` 专门钉了这条）。
+
+**续61 自测中发现并修掉的两个真缺陷**（都不是"顺手重构"）：
+- `_ABS_WIN_RE` 少了**前置否定环视** `(?<!\w)` → `http://` 里的 `p:/` 被当成盘符路径压成 `…/x/y`，
+  **每条带 URL 的日志行都会被毁**。而 `scrub_paths` 的正是"带 URL 的日志行"这个场景。
+- `_mask_path()` 用 `Path.parts` 切段 → 在 Linux 上 `C:\a\b\c.txt` 整条只算一个名字（反斜杠在 POSIX 不是分隔符），
+  跨平台结果不一致。改为手工按 `[\\/]+` 切。
+
+### 1. 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/utils.py` | 新增 `_mask_path()`（压成 `…/父/名`，手工切分隔符）、`scrub_paths()`（自由文本清洗）、`_probe()`、`_ext_variants()`；`rel_display()` 新增 `mask_outside=False` 参数；`which()` 重写为"原值 → 后缀变体 → `_probe()` 直探" |
+| `gui/app.py` | `task_detail`（`log_file` 走 `mask_outside` + `error` 走 `scrub_paths`）、`pocs`、`settings`（黑名单路径 ×2）、`devmode`（自检 stdout）、`tools_page`（**`path` + `note` 双通道**，见下）、`_tail()`（逐行清洗） |
+| `tests/smoke.py` | 新增 `[7y]`（5 组断言 + **2 处 §6.1 变异证伪**），插在 `[7x]` 之后、`SMOKE PASS` 之前 |
+| `AGENTS.md` | §0 第 3 条**修订**（新增"Web 更严一档"）+ §7 第 2 条补后缀容错 + §6 smoke 列表补 `[7y]` |
+| `docs/architecture.md` | `rel_display` 段补两档口径 / `scrub_paths` / `which()` 后缀容错 |
+| `docs/usage.md` | 新增 FAQ（"为什么页面里看到的是 `…/xxx`"） |
+| `CHANGELOG_AI.md`（本文件）/ `todo.txt` | 本轮记录 |
+
+**`tools_page` 的 `_mask_pair(raw, text, tkey)`** —— 这里**不能只靠 `scrub_paths`**：
+那条正则刻意不碰**裸的** POSIX 绝对路径（否则毁掉 URL），于是 Linux 上 `OK（/usr/bin/nmap）` 会原样漏出去。
+改为"**精确替换**这条已知路径"，两端都稳：
+```python
+masked = rel_display(raw, mask_outside=True)
+out = scrub_paths(text).replace(raw, masked)   # scrub 兜其他形态，replace 精确命中已知路径
+```
+
+**`which()` 的后缀容错**：`shutil.which` **在 Windows 上只要路径里带目录就退化成"精确探这一个名字"**
+（不补 `.exe`），所以"配置写 `.exe`、产物无后缀"在 Windows 上救不回、在 Linux 上却能救 —— 必须直探文件系统：
+```python
+found = shutil.which(t)                        # 裸名（nmap 那种）仍交给它按 PATHEXT 找
+if not found and <带路径>:  for alt in _ext_variants(t): _probe(alt)   # POSIX 上 _probe 另判 X_OK
+```
+
+### 2. 验证
+
+- `tests/smoke.py [7y]`：① `rel_display` 两档口径；② `scrub_paths`（抹盘符 / 抹引号内绝对路径 /
+  抹项目根前缀 / **不误伤 URL**）；③ **页面级扫 HTML**（登录后遍历 `/`、`/tasks?size=5`、`/pocs`、
+  `/settings`、`/tools`、`/devmode`、`/tasks/<id>`、`/audit`、`/dirs`、`/sites`、`/subdomains`，
+  断言无盘符绝对路径、无项目根绝对路径）；④ 合成 `toolmgr.status` 行钉 `/tools` 双泄露点
+  （**变异证伪**：把 `rel_display` 打回项目外原样返回 → 断言必红）；⑤ `which()` 跨平台后缀容错
+  （相对 + 绝对两种形态，**变异证伪**：`_ext_variants` 打桩成只试原值 → 必红）。
+- 全量 `py -3 tests/smoke.py` → `SMOKE PASS`；§9 行尾两口径逐文件一致。
+- **未做 / 仍未验**：① Linux 实机上跑 `[7y]` ⑤（`0o755` 可执行位那一支）**本机无法验证**，本轮只在
+  Windows 上跑通（逻辑上按 `os.name` 分流，如实登记）；② 第三条用户指令（"测试扫描：每个功能向量打一些"）
+  按用户选择并入**已有的「全流程自检」补齐覆盖**，另批实施。
+
 ## 2026-09-27 —— 续60：**不采信导入器 severity**（POC 有效级别）+ 本地可重复校准 + 真浏览器 E2E
 
 > 实施者：**Trae · DeepSeek-V4.1-Flash**。用户点名收掉两笔长期挂账：

@@ -67,6 +67,18 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 `utils.rel_display(path)` 是**展示层**的相对化工具：把项目内绝对路径转成相对项目根的 POSIX 形式
 （`logs/task_1_x/task.log`），项目外路径与空值原样返回；CLI / GUI / 报告对外显示路径都走它，
 不向外暴露本机绝对目录。
+**两档口径（续61）**：`mask_outside=True` 是更严的一档，**Web 界面必须用它** —— 项目外的绝对路径
+也压成 `…/父/名`（工具可能装在项目外：nmap 在 `Program Files`、`tools/fscan/` 是指向仓库外的
+目录联接）。默认档保持"原样返回"是为了 CLI：用户要拿这个路径去命令行复现，不能被替着压缩。
+整段展示的**自由文本**（`/devmode` 自检 stdout、任务日志 tail、任务 `error`、工具 `note`/`reason`）
+走 `utils.scrub_paths()`：抹盘符路径、引号内的绝对路径、项目根前缀，**但刻意不碰裸的 `/xxx`**
+（否则会把带 URL 的日志行里的请求路径一起毁掉）。手里已有那条已知绝对路径时，用精确替换比正则更稳
+（见 `gui/app.py::tools_page` 的 `_mask_pair`）。验收是**页面级**的：`tests/smoke.py [7y]` 登录后扫
+渲染出的 HTML，断言既无盘符绝对路径、也无项目根绝对路径。
+`utils.which(tool)` 的**后缀容错**（续61）：`config/settings.yaml` 写死 `tools/fscan/fscan.exe`，
+而 Linux 产物名是无后缀的 `fscan`，故先按原值找、再试"去掉/补上 `.exe`"的变体，**一份配置两端通用**；
+探测走 `_probe()` 直探文件系统（Windows 上 `shutil.which` 遇到**带目录**的路径不补 `.exe`，
+POSIX 上另判可执行位），回归见 `tests/smoke.py [7y] ⑤`。
 
 `scanner/auth.py` 是**任务级登录态请求头**（Cookie / Authorization / 自定义头），用于扫"登录后才存在"
 的资产（`/admin`、业务接口、需要会话的 POC）。设计上是 **fail-closed**：`utils.http_request(auth=False)`
@@ -225,6 +237,29 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
      run_devflow.py])`（固定命令、无用户输入、超时 600s）跑自检并把 stdout 渲染到页面 ——
      DNS 覆盖是**进程级全局钩子**，装进长驻 web 进程很危险，放进子进程后随它退出一起消失。
      页内「启动/停止内置靶场」两按钮保留但**与自检夹具无关**（仅手动查看、不装 DNS 覆盖）。
+11. **自检补齐到「功能向量」**（续62，用户指令「每个功能向量打一些，确保流程正确」）：续52 的判定只到
+   **阶段**粒度 —— 阶段"有网络活动"就记 OK，可阶段内部往往有多个分支（dirscan 的「内置字典扫描 /
+   dirmap / 框架补充 / 后缀派生 / 目录递归」、portscan 的「fscan / nmap / 内置」引擎选择…），
+   只跑了其中一个就报 OK，其余没跑到看不出来。故把覆盖**下沉到子能力**：
+   - **`VECTORS`**（`scanner/devflow.py`，**35 条**）：每条 `stage / key / desc` + 判据
+     `kind`（`log` 该阶段日志含 `kw`（可加 `not_kw`）/ `regex` 日志匹配正则 / `cmd` 跑过含 `kw`
+     的 `argv[0]` / `url` 请求过含 `kw` 的 URL / `nonet` 有网络活动）+ `tool`（依赖的外部工具，
+     **未安装**记 N-A）+ `na`（静态不可达：`offline` / 第三方关闭 / `fw_max_paths=0`…）+
+     `na_log`（命中该关键词说明本次无此情形）+ `optional`（条件分支，未点到记 N-A，**主路径不设**）。
+   - **证据取自运行期**：`instrument()` 除按阶段计数外，另收 `urls_by_stage` / `cmds_by_stage`
+     （`http_request` 的 URL、`run_cmd` 的 `argv[0]`），`split_log_by_stage()` 按
+     `===== 阶段 N/13：<name> =====` 分隔行把任务日志**切给阶段**（不按 `[stage]` 前缀，免得漏掉
+     不带前缀的行）。`_Evidence` 把这些封成**只读快照**（判据绝不自己发请求/读库）。
+   - **三态**（`classify_vectors()`）：`OK` 判据命中 / `MISS` 阶段跑了但**主路径**子能力没点到
+     （覆盖缺口）/ `N-A` 本次不该跑（附原因）。优先级：静态 `na` → 工具缺失 → 阶段 FAIL →
+     判据命中 → `na_log` → `optional` → 阶段跳过 → 否则 MISS。
+   - **`_Evidence.has_tool()` 按 `settings["tools"][<名>]` 解析**（与阶段同口径）—— 裸名查 PATH 会把
+     "装了 fscan（配在 `tools/fscan/fscan.exe`）"误判成未安装（`run_selfcheck` 必须把生效配置 `eff` 传进来）。
+   - **自检 options 增 `auto_expand: True`**：`subdomain` 的"自动拓展"是**任务级**选项、默认关，
+     不开的话这条子能力永远 MISS。
+   - 出口：`run_devflow.py` 打印按阶段分组的向量表 + `summarize_vectors()` 汇总 + 覆盖缺口单列；
+     回归 `tests/smoke.py [7n] ③b`（状态合法 / N-A 必带原因 / 10 条核心主路径 OK / 缺口为 0 /
+     证据可复算）+ M6~M8 变异证伪。
 
 ## 数据库表
 

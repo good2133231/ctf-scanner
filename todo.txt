@@ -1651,3 +1651,37 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        仍未做：① `import_ref_pocs.py` 本身**未改**（读取侧已兜住；要不要"导入即标 low"是另一笔口径，
        需先定导入器该不该保留原始级别以备查）；② 校准报告**未接 CI 门禁**（此刻是人工基线，不是自动判分）；
        ③ 真浏览器 E2E 只在 Windows 本机跑过，**Linux 实机未跑**（与续57 起的同类残留一致）。
+2026-09-28 续61（用户新硬规矩）：**Web 界面禁绝对路径** + **外部工具自动兼容 Windows/Linux**
+       ① 根因：路径没有"本机形态 / 展示形态"分层 —— `rel_display()` 对**项目外**路径原样返回，
+       而 `/tools` 页正是把 `which()` 解出的绝对路径（nmap 在 `Program Files`、`tools/fscan/` 是
+       指向仓库外的目录联接）直接渲染给浏览器；`toolmgr.status()` 的 `note`（`OK（<绝对路径>）`）
+       **又嵌了一份**；日志 tail / 自检 stdout / 任务 `error` 是**自由文本**，逐字段转换挡不住。
+       ② 改法：`rel_display(path, mask_outside=True)`（项目外压成 `…/父/名`）+ `scrub_paths()`（自由
+       文本清洗）+ `tools_page` 的**精确替换**（`_mask_pair`，兜住 POSIX 裸绝对路径）+ `_tail()` 逐行清洗；
+       CLI 输出**保持原样**（用户要照抄去命令行，`[5d]` 钉着）。
+       ③ 跨平台：`which()` 加**后缀容错**（`fscan.exe` ↔ `fscan`），探测走新增 `_probe()` 直探文件系统
+       —— Windows 上 `shutil.which` 遇到**带目录**的路径不补 `.exe`，POSIX 上另判可执行位。
+       ④ 自测中发现并修掉两个真缺陷：`_ABS_WIN_RE` 缺前置否定环视 → `http://` 的 `p:/` 被误压（毁日志行）；
+       `_mask_path()` 用 `Path.parts` → Linux 上切不开 Windows 反斜杠（跨平台结果不一致）。
+       ⑤ 验证：`tests/smoke.py` 新增 `[7y]`（5 组断言 + **2 处变异证伪**）——含**页面级扫 HTML**
+       （登录后遍历 11 个页面，断言无盘符/无项目根绝对路径）+ 合成 `toolmgr.status` 行钉 `/tools` 双泄露点。
+       ⑥ 仍未验：Linux 实机跑 `[7y]` ⑤ 的 `0o755` 可执行位那一支（本机为 Windows，如实登记）。
+       ⑦ 同一批用户指令的第三条「测试扫描：每个功能向量打一些」按用户选择并入**已有的全流程自检
+       补齐覆盖**（`scanner/devflow.py` 的粒度目前只到"阶段"），**另批实施** → 见下条续62。
+2026-09-28 续62（用户第三条指令收口）：**全流程自检补齐到「功能向量」**
+       ① 根因：`classify()` 只问"阶段**有没有**网络活动"，可阶段内往往有多个分支（dirscan 的
+       内置扫描/dirmap/框架/派生/递归、portscan 的 fscan/nmap/内置引擎…），只跑一个就报整阶段 OK
+       —— 自检"看起来全绿"，实则子能力没跑到或已被改坏，看不出来；且无法区分"没跑到"与"不该跑"。
+       ② 改法：`scanner/devflow.py::VECTORS` 列 **35 条**子能力向量，判据取自**本次运行的原生证据**
+       （该阶段日志 / 外部命令 `argv[0]` / 请求 URL），**不做"跑过就默认全绿"**；三态 OK / MISS
+       （覆盖缺口）/ N-A（本次不该跑，**必带原因**）。`instrument()` 增按阶段收 URL/命令；
+       `split_log_by_stage()` 按阶段分隔行切日志；`_Evidence` 封只读快照。
+       ③ 自测踩的坑：`has_tool()` 用裸名查 PATH 会把"装了 fscan（配在 `tools/fscan/fscan.exe`）"
+       误判为未安装 → 改为按 `settings["tools"][<名>]` 解析（`run_selfcheck` 传 `eff`）。
+       ④ 自检 options 增 `auto_expand: True`：subdomain 的"自动拓展"是任务级选项、默认关，不开永远 MISS。
+       ⑤ 验证：`py -3 run_devflow.py` → **35 向量 18 OK / 0 MISS / 17 N-A**（13 阶段 11 真跑 / 2 跳过 /
+       0 FAIL，零外网）；`tests/smoke.py [7n] ③b` 钉状态合法 + N-A 带原因 + 10 条核心主路径 OK +
+       缺口为 0 + 证据可复算，M6~M8 变异证伪。
+       ⑥ 仍未做 / 仍未验：① 向量 `kw` 与阶段日志文案**强耦合**（改文案要同步改 `VECTORS`，已在
+       `AGENTS.md` §6 登记）；② Linux 实机跑自检未验（本机 Windows）；③ 本机无头浏览器截图失败，
+       `screenshot/shot` 记 N-A（环境问题，非覆盖缺口）。

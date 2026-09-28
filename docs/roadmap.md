@@ -218,6 +218,15 @@
       `scanner/devflow.py`（CLI 与 `tests/smoke.py [7n]` 共用）。**仍未做**：自检仍只跑本地夹具、无阶段级
       耗时基线；`dnsq`（自建 DNS 报文）**不认** Python 的 DNS 覆盖，对夹具域名只能拿到 NXDOMAIN（这正是
       `.test` 的意义）；
+- [x] **自检补齐到「功能向量」**（续62，用户指令「每个功能向量打一些，确保流程正确」）：在续52 的
+      **阶段**粒度之下再下沉一层 —— `scanner/devflow.py::VECTORS` 列 **35 条**阶段内**子能力**
+      （自动拓展/泛解析/内置爆破/回填、CNAME、fscan 引擎、内置探测/端口候选/favicon、TLS、截图、
+      JS 挖掘、目录 模式/内置扫描/dirmap/框架/派生/递归、内置检查/POC 引擎、情报 拉取/匹配、
+      启发式聚合、osint 3 项、github 检索）。判据取自**本次运行的原生证据**（阶段日志 / 外部命令
+      `argv[0]` / 请求 URL），**不做"跑过就默认全绿"**；三态 OK / MISS（覆盖缺口）/ N-A（本次不该跑，
+      必带原因）。`run_devflow.py` 打印向量表 + 汇总 + 缺口单列；实测 **18 OK / 0 MISS / 17 N-A**。
+      回归 `tests/smoke.py [7n] ③b` + M6~M8 变异证伪。**仍未做**：向量判据 `kw` 与阶段日志文案
+      **强耦合**（改文案要同步改 `VECTORS`，已在 `AGENTS.md` §6 登记）；Linux 实机未验；
 - [~] 鉴权加固：多用户、CSRF、HTTPS 部署指引：
       **「本机守卫」已落地**（续32：`gui/app.py` 的 `_local_guard` —— Host 白名单挡 DNS rebinding，
       写方法的 Origin/Referer 校验比 netloc **含端口**（Cookie 不按端口隔离），会话 Cookie 显式

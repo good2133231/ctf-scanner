@@ -8218,11 +8218,13 @@ http:
 
     # [7n] 续52 **自检夹具补域名 + HTTPS + SKIP 分类**（P0）。背景：续50 的自检报
     #      "13 个阶段均无异常"，但其中 5 个阶段**空转**（零网络活动）—— 结论名不副实。
-    #      本组钉"该跑的真的跑、跑不了的如实说清为什么"，**不**硬凑全绿。5 组语义（末尾 §6.1）：
+    #      本组钉"该跑的真的跑、跑不了的如实说清为什么"，**不**硬凑全绿。6 组语义（末尾 §6.1）：
     #      ① 夹具 HTTPS：起/停、GET index、HTTP 与 HTTPS **都只绑 127.0.0.1**、stop 后两端口都释放、
     #         stop 幂等；夹具证书自签且 CN=devfixture.test（可被 cert 阶段取证）；
     #      ② DNS 覆盖：白名单（devfixture.test 及子域）→ 127.0.0.1；**非白名单一律放行**；退出**必还原**；
     #      ③ 全流程自检：cert 与 subdomain 由 SKIP 变 **OK**（有网络活动）、**零外网**；
+    #      ③b 功能向量（续62）：覆盖下沉到**子能力**（35 条）—— 状态合法 / N-A 必带原因 /
+    #         核心主路径向量真点到 / 覆盖缺口为 0 / 证据可复算（不重跑）；
     #      ④ SKIP 分类：每行都有**非空真实原因**（取自任务日志），token 缺失的 github 归 `未配置`；
     #      ⑤ GUI 自检走 **subprocess**（DNS 覆盖不进长驻 web 进程），输出渲染到页面。
     import copy as _copy7n
@@ -8326,6 +8328,48 @@ http:
             f"没配 token 的 github 应归 SKIP(未配置)：{_by7n['github']}"
         assert "token" in _by7n["github"][1], \
             f"github 的 SKIP 原因应取自日志（含 token）：{_by7n['github'][1]!r}"
+
+        # ③b 功能向量（续62）：覆盖从「**阶段**」下沉到「**子能力**」。背景：阶段级判定
+        #     "有网络活动就算 OK"，可一个阶段内部往往有多个分支（内置扫描 / dirmap / 框架字典 /
+        #     后缀派生 / 目录递归 / 引擎选择 …），只跑了其中一个就报 OK，其余没跑到看不出来。
+        #     故逐条列向量，用**运行期证据**（该阶段日志 / 外部命令 / URL）判定点到没有 ——
+        #     不做"跑过就默认全绿"。本组钉：① 状态 ∈ {OK, MISS, N-A}；② **N-A 必带非空原因**；
+        #     ③ OK 不带 N-A 原因；④ 核心**主路径**向量（不依赖任何外部工具/第三方）必须真点到；
+        #     ⑤ 覆盖缺口（MISS）必须为 0。判据证据全在 `run_selfcheck` 的返回里，**无需重跑**。
+        _vec7n = _res7n["vectors"]
+        assert _vec7n, "自检必须产出功能向量，实测为空"
+        assert len(_vec7n) == len(_dv7n.VECTORS), \
+            f"向量条数应等于 VECTORS 定义：{len(_vec7n)} != {len(_dv7n.VECTORS)}"
+        _byk7n = {(s, k): (d, st, x) for s, k, d, st, x in _vec7n}
+        for _s7n, _k7n, _desc7n, _sv7n, _x7n in _vec7n:
+            assert _sv7n in ("OK", "MISS", "N-A"), f"{_s7n}/{_k7n} 状态非法：{_sv7n!r}"
+            assert _desc7n and _desc7n.strip(), f"{_s7n}/{_k7n} 缺人读描述"
+            if _sv7n == "N-A":
+                assert _x7n and _x7n.strip(), \
+                    (f"{_s7n}/{_k7n} 记 N-A 必须写明**原因**"
+                     f"（工具没装 / 条件未出现 / 自检刻意关）：{_x7n!r}")
+            if _sv7n == "OK":
+                assert not _x7n, f"{_s7n}/{_k7n} 记 OK 不该带 N-A 原因：{_x7n!r}"
+        assert _res7n["vec_ok"] + _res7n["vec_miss"] + _res7n["vec_na"] == len(_vec7n), \
+            "三态计数之和应等于向量总数"
+        # 核心主路径向量：离线自检（零外网）下**必须**真点到 —— 它们不依赖任何外部工具/第三方
+        for _s7n, _k7n in (("subdomain", "auto-expand"), ("subdomain", "brute-builtin"),
+                           ("probe", "builtin"), ("cert", "tls"), ("jsmine", "mine"),
+                           ("dirscan", "builtin"), ("vulnscan", "builtin-checks"),
+                           ("intel", "fetch"), ("intel", "match"), ("heuristic", "aggregate")):
+            assert _byk7n[(_s7n, _k7n)][1] == "OK", \
+                f"核心向量 {_s7n}/{_k7n} 应真点到（OK）：{_byk7n[(_s7n, _k7n)]}"
+        assert _res7n["vec_miss"] == 0, \
+            ("覆盖缺口必须为 0（阶段跑了但主路径子能力没点到）："
+             + ", ".join(f"{s}/{k}" for s, k, _d, st, _x in _vec7n if st == "MISS"))
+        # 证据可复算：用返回里的**原始证据**重建 `_Evidence` 再判一遍，结果必须一致
+        # （证明判据只依赖已抓到的证据、`settings=eff` 确实传进去了 —— 否则 `has_tool`
+        # 拿不到 `tools.<名>` 配置路径，会把装了 fscan 的机器误判成"未安装"记 N-A）。
+        _ev7n = _dv7n._Evidence(_res7n["_results"], _res7n["_net"], _res7n["_urls"],
+                                _res7n["_cmds"], _res7n["_log_by_stage"],
+                                settings=_res7n["settings"])
+        assert _dv7n.classify_vectors(_res7n["rows"], _ev7n) == _vec7n, \
+            "用返回的原始证据复算向量应得到**同一份**结果（判据不得依赖运行外的隐藏状态）"
     finally:
         if _res7n.get("task_id"):
             db.delete_task(_res7n["task_id"], backup=False)
@@ -8426,11 +8470,49 @@ http:
     assert {n: s for n, s, d, c in _rows_m5_7n}.get("subdomain") != "OK", \
         "变异（抹掉 subdomain 活动）后仍判 OK → 证明 ③ 的 OK 测的是**真实网络活动**"
 
+    # (M6) `_vector_hit` 恒 False（判据永不命中）→ ③b 的核心向量不再 OK
+    #      → 证明"点到"是**逐条求值**出来的，不是写死的常量。
+    _real_hit7n2 = _dv7n._vector_hit
+    _dv7n._vector_hit = lambda _v, _ev: False
+    try:
+        _vec_m6_7n = _dv7n.classify_vectors(_res7n["rows"], _ev7n)
+    finally:
+        _dv7n._vector_hit = _real_hit7n2
+    assert {(s, k): st for s, k, _d, st, _x in _vec_m6_7n}[("dirscan", "builtin")] != "OK", \
+        "变异（判据恒不命中）后 dirscan/builtin 仍 OK → 证明 ③b 的 OK 是真判定"
+
+    # (M7) 抹掉 subdomain 的**阶段日志** → 该阶段的日志型向量由 OK 变 MISS
+    #      → 证明判据读的是**该阶段的真实日志**，且"阶段 OK 掩盖子能力没跑到"正是本组要抓的。
+    _log_m7_7n = dict(_res7n["_log_by_stage"])
+    _log_m7_7n["subdomain"] = ""
+    _ev_m7_7n = _dv7n._Evidence(_res7n["_results"], _res7n["_net"], _res7n["_urls"],
+                                _res7n["_cmds"], _log_m7_7n, settings=_res7n["settings"])
+    _m7_7n = {(s, k): st for s, k, _d, st, _x
+              in _dv7n.classify_vectors(_res7n["rows"], _ev_m7_7n)}
+    assert _m7_7n[("subdomain", "brute-builtin")] == "MISS", \
+        (f"变异（抹掉 subdomain 日志）后应变 MISS，实测 {_m7_7n[('subdomain', 'brute-builtin')]}"
+         " → 证明判据读的是该阶段真实日志，而**阶段仍 OK**")
+
+    # (M8) 抹掉 `subdomain/passive` 的**静态 N-A 原因** → 该条由 N-A 变 MISS
+    #      → 证明"N-A（本次不该跑）"与"MISS（覆盖缺口）"的分界是真判定，不是随手记的。
+    _passive_v7n = next(v for v in _dv7n.VECTORS
+                        if v["stage"] == "subdomain" and v["key"] == "passive")
+    _saved_na7n = _passive_v7n.pop("na")
+    try:
+        _m8_7n = {(s, k): st for s, k, _d, st, _x
+                  in _dv7n.classify_vectors(_res7n["rows"], _ev7n)}
+    finally:
+        _passive_v7n["na"] = _saved_na7n
+    assert _m8_7n[("subdomain", "passive")] == "MISS", \
+        (f"变异（去掉静态 N-A 原因）后应变 MISS，实测 {_m8_7n[('subdomain', 'passive')]}"
+         " → 证明 N-A 与 MISS 的分界是真判定")
+
     print("[7n] 续52 自检夹具补域名 + HTTPS + SKIP 分类 ok: 夹具 HTTPS 起/停（HTTP·HTTPS 都只绑 "
           "127.0.0.1，stop 后两端口都释放，证书自签 CN=devfixture.test）/ DNS 覆盖只重定向白名单"
           "（非白名单放行，退出必还原）/ 全流程自检 **cert·subdomain 由 SKIP 变 OK** 且零外网 / "
           "SKIP 分类带**日志真实原因**（token 缺失的 github 归 未配置）/ GUI 自检走 subprocess / "
-          "5 条变异证伪全部按预期变红")
+          "续62 功能向量：35 条子能力状态合法、N-A 必带原因、10 条核心主路径向量真点到、"
+          "覆盖缺口为 0、证据可复算 / 8 条变异证伪全部按预期变红")
 
     # [7o] 续53 **任务列表页 + 任务详情页漏洞列表** 分页（P0 数据正确性）。背景：续51 修了
     #      跨任务 `/vulns` 的 500 截断，但**同源**的另两处仍静默丢：`/tasks` 固定
@@ -9930,6 +10012,129 @@ http:
         print(f"[7x] 续60 真浏览器端到端 **跳过（不是通过）**：{_why7x}")
     else:
         raise AssertionError(f"真浏览器端到端失败（退出码 {_pr7x.returncode}）：{_out7x[-1200:]}")
+
+    # ---------------- [7y] 续61：Web 界面禁绝对路径 + 外部工具跨平台 ----------------
+    # 用户新硬规矩（原话）：「web 界面不要再显示绝对路径 而是相对路径」＋「外部工具要自动兼容
+    # windows 和 linux」。两者是**同一个病根**：路径在"本机形态"与"展示形态"之间没分层 ——
+    #   ① `rel_display()` 对**项目外**路径原样返回绝对路径，而 `/tools` 页正是把 `which()` 解出的
+    #      绝对路径（nmap 常在 `Program Files`、`tools/fscan/` 是指向仓库外的目录联接）直接打给浏览器；
+    #   ② `toolmgr.status()` 的 `note` 里**又嵌了一份**绝对路径（`OK（<绝对路径>）`）—— 只转 `path`
+    #      字段挡不住；日志 tail / 自检 stdout / 任务错误消息更是**自由文本**，逐字段转换无效；
+    #   ③ `settings.yaml` 写死 `tools/fscan/fscan.exe`，Linux 产物名是无后缀的 `fscan`，只会**静默降级**。
+    # 断言分三组：两档 `rel_display` 口径 / `scrub_paths` 自由文本清洗 / **页面级扫 HTML**（真登录真取页）。
+    import re as _re7y
+    import gui.app as _gui7y
+    from scanner import toolmgr as _tm7y
+    from scanner import utils as _u7y
+
+    print("[7y] 续61 Web 禁绝对路径 + 外部工具跨平台（同一份配置 Windows/Linux 都能解析）…")
+
+    _bs7y = chr(92)               # 反斜杠：字面量拼出来，绕开源码级红线（[2] 禁止写死带引号的盘符路径）
+    _OUT7y = "C" + ":" + _bs7y + "Users" + _bs7y + "someone" + _bs7y + "deep" + _bs7y + "secret.txt"
+    _POSIX7y = "/opt" + "/ctf" + "/deep" + "/secret.txt"
+    _WANT7y = "…/deep/secret.txt"
+    # 页面断言用**本平台形态**的项目外路径：`rel_display(mask_outside=True)` 只在 `is_absolute()`
+    # 为真时才压缩，而 `C:\…` 在 POSIX 上不算绝对路径、`/opt/…` 在 Windows 上也不算。
+    _WEB7y = _OUT7y if os.name == "nt" else _POSIX7y
+
+    # ① `rel_display` 两档口径：默认档保住 CLI 原样契约（[5d] 已钉），Web 档必须压掉
+    assert _u7y.rel_display(ROOT / "scanner" / "db.py") == "scanner/db.py"
+    assert _u7y.rel_display(ROOT / "scanner" / "db.py", mask_outside=True) == "scanner/db.py", \
+        "项目内路径：两档都该是相对形（mask_outside 只影响项目外）"
+    assert _u7y.rel_display("") == "" and _u7y.rel_display(_WEB7y) == _WEB7y, \
+        "默认档：项目外原样返回（CLI 要照抄去命令行，不能替它压缩）"
+    assert _u7y.rel_display(_WEB7y, mask_outside=True) == _WANT7y, \
+        "Web 档：项目外绝对路径必须压成 …/父/名"
+
+    # ② `scrub_paths`：自由文本清洗（/devmode 自检 stdout、任务日志 tail、task.error 三条通道）
+    _url7y = "GET http://127.0.0.1:8765/api/pocs/1/toggle 200"
+    assert _u7y.scrub_paths(_url7y) == _url7y, \
+        "URL 不得被误伤：盘符正则漏了否定环视时，`http://` 的 `p:/` 会被压成 …/x/y（实测踩过）"
+    assert _u7y.scrub_paths("at " + _OUT7y + " ok") == "at " + _WANT7y + " ok", \
+        "裸盘符路径（带 URL 的日志行里最常见）必须压掉"
+    assert _u7y.scrub_paths('File "' + _POSIX7y + '"') == 'File "' + _WANT7y + '"', \
+        "traceback 的引号内绝对路径必须压掉（自由文本里 traceback 是主要来源）"
+    _root7y = _u7y.scrub_paths("source " + str(ROOT / "scanner" / "db.py") + " end")
+    assert str(ROOT) not in _root7y and "db.py" in _root7y, f"项目根前缀要整段删掉：{_root7y!r}"
+
+    # ③ 页面级：登录后逐页取 HTML，**盘符绝对路径与项目根绝对路径都不得出现**
+    #    为什么非要有这一组：前两组只能验"工具函数对"，挡不住"某个模板/路由漏调了它" ——
+    #    续61 的真实缺陷正是 `tools.html` 把 `which()` 的绝对路径原样渲染出去（工具函数本身没错）。
+    _app7y = _app_with7i()
+    _c7y = _app7y.test_client()
+    assert _c7y.post("/login", data={"token": settings["gui"]["token"]},
+                     environ_base={"REMOTE_ADDR": "203.0.113.241"}).status_code == 302
+
+    _tid7y = db.create_task("smoke61-abs-path", "127.0.0.1", ["osint"], {})
+    db.update_task(_tid7y, log_file=_WEB7y,
+                   error="OSError: [Errno 2] No such file or directory: '" + _WEB7y + "'")
+
+    _DRIVE_RE7y = _re7y.compile(r"(?<![\w:/\\.])[A-Za-z]:[\\/]")
+    _ROOTP7y = (str(ROOT), ROOT.as_posix())
+
+    def _scan7y(url):
+        _r = _c7y.get(url)
+        assert _r.status_code == 200, f"{url} → {_r.status_code}"
+        _h = _r.get_data(as_text=True)
+        for _rp in _ROOTP7y:
+            assert _rp not in _h, f"{url}：出现项目根绝对路径 {_rp}"
+        _m = _DRIVE_RE7y.search(_h)
+        assert not _m, f"{url}：出现盘符绝对路径 {_m.group(0) if _m else ''}"
+        return _h
+
+    # 注意：循环变量**不能**叫 `_u7y` —— 那会覆盖上面 `from scanner import utils as _u7y`
+    # 的模块别名，导致 ⑤ 的 `_u7y.which(...)` 变成"str 没有 which"（续61 自测真踩过）。
+    for _p7y in ("/", "/tasks?size=5", "/pocs", "/settings", "/tools", "/devmode",
+                 f"/tasks/{_tid7y}", "/audit", "/dirs", "/sites", "/subdomains"):
+        _scan7y(_p7y)
+    _h_t7y = _scan7y(f"/tasks/{_tid7y}")
+    assert _WEB7y not in _h_t7y, "任务详情页：日志文件 / 错误消息里的项目外绝对路径必须被压缩"
+
+    # ④ `/tools` 页的绝对路径泄露点（`path` 字段 + `note` 里嵌的那份）：用合成状态行钉死
+    _FAKE7y = ("D" + ":" + _bs7y + "tools" + _bs7y + "deep" + _bs7y + "nmap.exe"
+               if os.name == "nt" else "/opt" + "/tools" + "/deep" + "/nmap.exe")
+    _orig_status7y, _orig_rel7y = _tm7y.status, _gui7y.rel_display
+    _tm7y.status = lambda _s: [{"tool": "nmap", "configured": "nmap", "path": _FAKE7y,
+                                "version": "9.9", "asset": "", "reason": "",
+                                "note": f"OK（{_FAKE7y}）"}]   # note 里嵌一份（真实的 toolmgr 就是这么写的）
+    try:
+        _h7y = _scan7y("/tools")
+        assert _FAKE7y not in _h7y, "工具页把 which() 解出的本机绝对路径（path 或 note）打给了浏览器"
+        # 变异证伪：把 `rel_display` 打回"项目外原样返回" → 上面那条必红（§6.1：先证明断言有区分度）
+        _gui7y.rel_display = lambda p, base=None, mask_outside=False: str(p or "")
+        _hm7y = _c7y.get("/tools").get_data(as_text=True)
+        assert _FAKE7y in _hm7y, "变异后仍不见绝对路径 → 说明这条断言测的不是 rel_display 这条通道"
+    finally:
+        _tm7y.status, _gui7y.rel_display = _orig_status7y, _orig_rel7y
+
+    # ⑤ 外部工具跨平台：同一份配置在 `.exe` 与无后缀两端都能解析到（用户：「自动兼容 windows 和 linux」）
+    _dir7y = Path(_TMPDIR) / "t7y"
+    _dir7y.mkdir(parents=True, exist_ok=True)
+    _exe7y, _noext7y = _dir7y / "toolA.exe", _dir7y / "toolB"
+    _exe7y.write_text("x", encoding="utf-8")
+    _noext7y.write_text("x", encoding="utf-8")
+    if os.name == "posix":
+        os.chmod(str(_exe7y), 0o755)     # `_probe` 在 POSIX 上要可执行位（与 shutil.which 同语义）
+        os.chmod(str(_noext7y), 0o755)
+    _rel7y = _dir7y.relative_to(ROOT).as_posix()   # 相对项目根 —— settings.yaml 里 tools.<名> 的真实写法
+    assert _u7y.which(_rel7y + "/toolA") == str(_exe7y), \
+        f"配置写无后缀、产物是 .exe → 必须找到（实测 {_u7y.which(_rel7y + '/toolA')}）"
+    assert _u7y.which(_rel7y + "/toolB.exe") == str(_noext7y), \
+        "配置写 .exe、产物无后缀 → 必须找到（这正是 settings.yaml 的 fscan.exe 在 Linux 的情形）"
+    assert _u7y.which(str(_dir7y / "toolA")) == str(_exe7y), "绝对路径形态也要吃后缀容错"
+    # 变异证伪：把后缀变体打回"只试原值" → 上面这两条必须真的红
+    _orig_variants7y = _u7y._ext_variants
+    _u7y._ext_variants = lambda s: [s]
+    try:
+        assert _u7y.which(_rel7y + "/toolA") is None, "变异后不该还能靠后缀容错找到无后缀配置"
+        assert _u7y.which(_rel7y + "/toolB.exe") is None, "变异后不该还能靠后缀容错找到 .exe 配置"
+    finally:
+        _u7y._ext_variants = _orig_variants7y
+
+    print("[7y] 续61 Web 禁绝对路径 + 外部工具跨平台 ok: rel_display 两档口径（项目内两档同为相对形 / "
+          "项目外默认原样·Web 档压成 …/父/名）｜scrub_paths 抹盘符·抹引号内绝对路径·**不误伤 URL**｜"
+          "11 个页面级扫 HTML 无盘符/无项目根绝对路径（含合成 toolmgr 行的 path+note 双泄露点，含变异证伪）｜"
+          "同一份工具配置在 `.exe`/无后缀两端均可解析（相对与绝对两种形态，含变异证伪）")
 
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），

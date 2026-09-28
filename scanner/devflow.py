@@ -23,6 +23,7 @@
 """
 import contextlib
 import os
+import re
 import socket
 import sys
 
@@ -203,7 +204,8 @@ class _RecStage:
 _CURRENT = {"stage": None}
 
 
-def instrument(results, net_by_stage, domains=None, sent=None):
+def instrument(results, net_by_stage, domains=None, sent=None,
+               urls_by_stage=None, cmds_by_stage=None):
     """挂"按阶段计数"：包 `http_request` / `run_cmd`，装 DNS 覆盖（同时按解析计数），
     并把 `STAGE_REGISTRY` 换成代理。返回 `restore()`（务必在 finally 里调）。
 
@@ -211,6 +213,8 @@ def instrument(results, net_by_stage, domains=None, sent=None):
     （把函数对象绑进自己的命名空间），只改 `utils` 对它们无效，必须逐模块替换。
 
     `sent` 非空时把每次 `http_request` 的 URL 追加进去（供"零外网"断言用）。
+    `urls_by_stage` / `cmds_by_stage`（续62）非空时**另按阶段**记下 HTTP URL 与外部命令
+    argv[0] —— 供"功能向量"判定（阶段内子能力靠日志/命令/URL 三种证据区分，见 `VECTORS`）。
     """
     orig_http, orig_cmd = utils.http_request, utils.run_cmd
     http_mods = [m for m in list(sys.modules.values())
@@ -225,14 +229,29 @@ def instrument(results, net_by_stage, domains=None, sent=None):
         if name:
             net_by_stage[name] = net_by_stage.get(name, 0) + 1
 
+    def _stage_key():
+        return _CURRENT["stage"]
+
     def counting_http(url, *a, **k):
         _bump()
         if sent is not None:
             sent.append(str(url))
+        if urls_by_stage is not None:
+            name = _stage_key()
+            if name:
+                urls_by_stage.setdefault(name, []).append(str(url))
         return orig_http(url, *a, **k)
 
     def counting_cmd(argv, *a, **k):
         _bump()
+        if cmds_by_stage is not None:
+            name = _stage_key()
+            if name:
+                try:
+                    a0 = argv[0] if isinstance(argv, (list, tuple)) and argv else str(argv)
+                except (TypeError, IndexError):
+                    a0 = ""
+                cmds_by_stage.setdefault(name, []).append(str(a0))
         return orig_cmd(argv, *a, **k)
 
     for m in http_mods:
@@ -317,6 +336,255 @@ def summarize(rows):
             f"{fail} 个 FAIL")
 
 
+# ---------- 功能向量（续62）：把覆盖从「阶段」下沉到「子能力」 ----------
+#
+# 背景：续52 的自检只判到**阶段**粒度 —— 阶段"有网络活动"就算 OK，可阶段内部往往有多个
+# 子能力分支（如 dirscan 的"内置字典扫描 / dirmap / 框架补充 / 后缀派生 / 目录递归"），
+# 只跑了其中一个就报 OK，其余没跑到也看不出来。用户要求"每个功能向量打一些，确保流程正确"，
+# 故这里逐条列出**阶段内的子能力**，自检跑完后用**运行期真实证据**判定点到了没有。
+#
+# 字段：
+#   stage/key/desc —— 所属阶段 / 向量键 / 人读描述
+#   kind + kw      —— 判据：`log`=该阶段日志含 kw（可再加 `not_kw` 排除）；
+#                     `regex`=该阶段日志匹配正则；`cmd`=该阶段跑过含 kw 的外部命令 argv[0]；
+#                     `url`=该阶段请求过含 kw 的 URL；`nonet`=该阶段有网络活动（DNS/HTTP/子进程）。
+#   tool           —— 判据依赖的外部工具；**未安装**则整条记 N-A（环境缺失，不算覆盖缺口）。
+#                     `has_tool` 按**配置里的路径**（`tools.<名>`）解析，与阶段同口径。
+#   na             —— 静态不可达原因（自检配置下**刻意**不跑，如 offline / 第三方关闭）。
+#   na_log         —— `(关键词, 原因)`：命中该关键词说明**本次无此情形**（如浏览器截图失败、
+#                     单次只跑一个引擎），记 N-A 并给出原因（**数据/环境条件**，不是覆盖缺口）。
+#   optional       —— 该向量是**条件分支**（只有特定资产/数据下才触发）；未点到记 N-A，
+#                     不与 `MISS` 混为一谈。**主路径**向量不设它 —— 那才是真缺口。
+#
+# 状态（`classify_vectors`）：OK=本次真点到；MISS=阶段跑了但这条**主路径**子能力没点到
+# （**覆盖缺口**）；N-A=本次不该跑/工具没装/条件未出现（附原因，不是缺口）。
+# 判据全部取自证据，不做"跑过就默认全绿"。
+VECTORS = (
+    # ---- subdomain ----
+    # `auto_expand` 有**两个分支**都打 `自动拓展` 前缀：①目标是子域时补收主域名；
+    # ②目标自带的子域按子域资产入库。自检目标里主域与子域同时给了，走的是 ②，
+    # 故判据用前缀 `自动拓展`（两个分支都算这条子能力被点到），desc 写全两支。
+    dict(stage="subdomain", key="auto-expand", desc="自动拓展（子域入库 / 补收主域名）",
+         kind="log", kw="自动拓展"),
+    dict(stage="subdomain", key="wildcard", desc="泛解析识别/过滤",
+         kind="log", kw="泛解析"),
+    dict(stage="subdomain", key="brute-builtin", desc="内置 DNS 爆破（系统解析器）",
+         kind="log", kw="内置 DNS 爆破"),
+    dict(stage="subdomain", key="resolve-backfill", desc="解析结果回填（IP/CDN）",
+         kind="log", kw="回填解析结果",
+         optional="本次新增子域名为 0（泛解析过滤），无可回填项"),
+    dict(stage="subdomain", key="passive", desc="被动多来源收集（内置）",
+         na="自检 offline=True 刻意跳过被动源（零外网铁律）"),
+    dict(stage="subdomain", key="subfinder", desc="外部 subfinder 被动收集",
+         na="自检 offline=True 刻意跳过被动源（零外网铁律）"),
+    dict(stage="subdomain", key="puredns", desc="外部 puredns 爆破",
+         na="自检 offline=True（puredns 与被动源一并跳过）"),
+    # ---- takeover（需要带 CNAME 的子域，夹具无 CNAME → 条件分支）----
+    dict(stage="takeover", key="cname", desc="CNAME 链解析",
+         kind="log", kw="CNAME 解析", optional="本次无子域名资产（夹具无 CNAME）"),
+    dict(stage="takeover", key="fingerprint", desc="子域接管指纹判定",
+         kind="log", kw="接管指纹判定", optional="本次无带 CNAME 的子域名"),
+    # ---- portscan（单次只跑**一个**引擎：优先级 fscan > nmap > 内置）----
+    dict(stage="portscan", key="engine-fscan", desc="fscan 引擎",
+         kind="cmd", kw="fscan", tool="fscan"),
+    dict(stage="portscan", key="engine-nmap", desc="nmap 引擎",
+         kind="cmd", kw="nmap", tool="nmap",
+         optional="本次未选中 nmap（单次只跑一个引擎，优先级 fscan>nmap>内置）"),
+    dict(stage="portscan", key="engine-builtin", desc="内置 TCP connect 引擎",
+         kind="log", kw="扫描：内置 TCP connect",
+         optional="本次未选中内置引擎（单次只跑一个引擎，优先级 fscan>nmap>内置）"),
+    dict(stage="portscan", key="real-ip", desc="CDN 后取已解析真实 IP",
+         kind="log", kw="已解析的真实 IP",
+         optional="本次无已解析 IP 映射（前置阶段未产出）"),
+    # ---- probe ----
+    dict(stage="probe", key="builtin", desc="内置探测（https 优先、逐个回退 http）",
+         kind="log", kw="内置探测"),
+    dict(stage="probe", key="httpx", desc="httpx 子进程探测",
+         na="自检 offline=True 刻意跳过 httpx 子进程"),
+    dict(stage="probe", key="extra-ports", desc="纳入 portscan 开放端口候选",
+         kind="log", kw="额外纳入", optional="本次 portscan 未产出开放端口候选"),
+    dict(stage="probe", key="favicon", desc="favicon 指纹获取",
+         kind="log", kw="favicon 指纹"),
+    # ---- cert ----
+    dict(stage="cert", key="tls", desc="TLS 证书取证（标准库握手）",
+         kind="log", kw="→ CN="),
+    # ---- screenshot ----
+    dict(stage="screenshot", key="shot", desc="无头浏览器截图",
+         kind="log", kw="→ shots/",
+         na_log=("截图失败", "本机无头浏览器截图失败（环境问题，见阶段日志）")),
+    # ---- jsmine ----
+    dict(stage="jsmine", key="mine", desc="JS 域名/接口/凭据挖掘",
+         kind="log", kw="挖掘 JS 资产"),
+    # ---- dirscan ----
+    dict(stage="dirscan", key="mode", desc="浅扫/深扫模式与技术栈分组",
+         kind="log", kw="模式；技术栈分组"),
+    dict(stage="dirscan", key="builtin", desc="内置字典扫描",
+         kind="log", kw="内置扫描："),
+    dict(stage="dirscan", key="dirmap", desc="dirmap 深扫",
+         na="自检为浅扫 + offline（dirmap 只在深扫且非 offline 时跑）"),
+    dict(stage="dirscan", key="fw-dict", desc="框架字典补充扫描",
+         na="自检 fw_max_paths=0（框架补充扫描关闭）"),
+    dict(stage="dirscan", key="suffix-derive", desc="后缀派生补扫",
+         na="自检为浅扫（后缀派生只在深扫内置路径时触发）"),
+    dict(stage="dirscan", key="recursive", desc="目录递归",
+         na="自检 recursive_depth=0（递归关闭）"),
+    # ---- vulnscan ----
+    dict(stage="vulnscan", key="builtin-checks", desc="内置 OWASP 检查（有启用项）",
+         kind="regex", kw=r"内置检查 [1-9]\d*/"),
+    dict(stage="vulnscan", key="poc-engine", desc="POC 引擎（未关闭）",
+         kind="log", kw="启用 POC", not_kw="POC 引擎已关闭"),
+    # ---- intel ----
+    dict(stage="intel", key="fetch", desc="情报源拉取（自检指向本地夹具 KEV）",
+         kind="url", kw="/intel/kev.json"),
+    dict(stage="intel", key="match", desc="情报 × 资产指纹匹配",
+         kind="log", kw="命中"),
+    # ---- heuristic ----
+    dict(stage="heuristic", key="aggregate", desc="零请求本地聚合（产线索）",
+         kind="log", kw="数据源：站点"),
+    # ---- osint（第三方能力在自检副本里整体关闭）----
+    dict(stage="osint", key="cseg", desc="C 段反查（iprecon）",
+         na="自检关闭第三方能力（fofa/shodan/quake/ctlog）"),
+    dict(stage="osint", key="fofa", desc="FOFA favicon/证书/标题反查",
+         na="自检关闭第三方能力（fofa/shodan/quake/ctlog）"),
+    dict(stage="osint", key="ctlog", desc="CT 日志（crt.sh）",
+         na="自检关闭第三方能力（fofa/shodan/quake/ctlog）"),
+    # ---- github ----
+    dict(stage="github", key="search", desc="GitHub 公开代码泄露检索",
+         na="自检清空第三方凭据 → 无 token，按设计零请求"),
+)
+
+_VECTOR_STATUSES = ("OK", "MISS", "N-A")
+
+# 任务日志里的阶段分隔行（`===== 阶段 3/13：portscan =====`）—— 用来把日志**切给阶段**。
+_STAGE_LINE_RE = re.compile(r"阶段\s+\d+/\d+：([a-z_]+)")
+
+
+def split_log_by_stage(log_lines):
+    """把任务日志按阶段切开：`{stage: 该阶段全部文本}`。
+
+    为什么不"找 `[stage]` 前缀行"：阶段里有些行不带该前缀（阶段分隔行本身、子模块打的
+    非阶段前缀日志），按分隔行切换归属才不会漏（漏了会把"没跑到"误报成覆盖缺口）。
+    """
+    out, cur = {}, None
+    for ln in log_lines or []:
+        m = _STAGE_LINE_RE.search(str(ln))
+        if m:
+            cur = m.group(1)
+        if cur:
+            out.setdefault(cur, []).append(str(ln))
+    return {k: "\n".join(v) for k, v in out.items()}
+
+
+class _Evidence:
+    """自检一次运行的**只读证据快照**（供向量判据使用；判据绝不自己发请求/读库）。"""
+
+    def __init__(self, results, net, urls, cmds, log_by_stage, settings=None):
+        self.results = results or {}
+        self.net = net or {}
+        self.urls = urls or {}
+        self.cmds = cmds or {}
+        self.log = log_by_stage or {}
+        self.settings = settings if isinstance(settings, dict) else {}
+        self._tools = {}
+
+    def stage_log(self, stage):
+        return self.log.get(stage, "")
+
+    def stage_urls(self, stage):
+        return list(self.urls.get(stage) or [])
+
+    def stage_cmds(self, stage):
+        return [str(a) for a in (self.cmds.get(stage) or [])]
+
+    def net_of(self, stage):
+        return int(self.net.get(stage, 0) or 0)
+
+    def has_tool(self, name):
+        """外部工具在不在 —— 按**配置里的路径**（`tools.<名>`）解析，与阶段同口径。
+
+        ⚠️ 不能用裸名查 PATH：`fscan` 在 `settings.yaml` 里配的是 `tools/fscan/fscan.exe`，
+        裸名查 PATH 会得出"未安装"（阶段却明明跑了 fscan）—— 续62 自测踩过。
+        解析走 `utils.which`（跨平台后缀容错）。结果缓存，避免重复探测。
+        """
+        if name not in self._tools:
+            conf = (self.settings.get("tools") or {}).get(name) or name
+            try:
+                self._tools[name] = bool(utils.which(conf))
+            except Exception:      # noqa: BLE001 - 探测异常按"没有"处理，绝不因它炸自检
+                self._tools[name] = False
+        return self._tools[name]
+
+
+def _vector_hit(v, ev):
+    """单条向量的判据求值（证据不足一律 False，由调用方决定记 MISS 还是 N-A）。"""
+    kind, kw, stage = v.get("kind"), v.get("kw"), v["stage"]
+    if kind == "log":
+        text = ev.stage_log(stage)
+        if kw not in text:
+            return False
+        not_kw = v.get("not_kw")
+        return not (not_kw and not_kw in text)
+    if kind == "regex":
+        return re.search(kw, ev.stage_log(stage)) is not None
+    if kind == "cmd":
+        return any(kw in c for c in ev.stage_cmds(stage))
+    if kind == "url":
+        return any(kw in u for u in ev.stage_urls(stage))
+    if kind == "nonet":
+        return ev.net_of(stage) > 0
+    return False
+
+
+def classify_vectors(stage_rows, ev):
+    """逐条判定功能向量，返回 `[(stage, key, desc, status, detail), ...]`。
+
+    status ∈ {OK, MISS, N-A}（见 `VECTORS` 上方说明）。优先级：静态 N-A > 工具缺失 N-A >
+    阶段 FAIL > 判据命中 OK > 环境/条件 N-A（`na_log` / `optional`）> 阶段跳过 N-A >
+    否则 MISS（阶段跑了却连**主路径**都没点到 = 覆盖缺口）。
+    """
+    stage_status = {n: s for n, s, _d, _c in stage_rows}
+    rows = []
+    for v in VECTORS:
+        stage = v["stage"]
+        st = stage_status.get(stage, "")
+        if v.get("na"):
+            rows.append((stage, v["key"], v["desc"], "N-A", v["na"]))
+            continue
+        if v.get("tool") and not ev.has_tool(v["tool"]):
+            rows.append((stage, v["key"], v["desc"], "N-A",
+                         f"外部工具未安装：{v['tool']}"))
+            continue
+        if st == "FAIL":
+            rows.append((stage, v["key"], v["desc"], "N-A", "阶段 FAIL，未判定"))
+            continue
+        if _vector_hit(v, ev):
+            rows.append((stage, v["key"], v["desc"], "OK", ""))
+            continue
+        na_log = v.get("na_log")
+        if na_log and na_log[0] in ev.stage_log(stage):
+            rows.append((stage, v["key"], v["desc"], "N-A", na_log[1]))
+            continue
+        if v.get("optional"):
+            rows.append((stage, v["key"], v["desc"], "N-A", v["optional"]))
+            continue
+        if st in ("", "SKIP"):
+            rows.append((stage, v["key"], v["desc"], "N-A",
+                         "阶段本次跳过（见阶段判定）"))
+        else:
+            rows.append((stage, v["key"], v["desc"], "MISS",
+                         "阶段已跑，但该子能力未被点到"))
+    return rows
+
+
+def summarize_vectors(rows):
+    """向量总结句：真点到 / 覆盖缺口 / 不可达各几条。"""
+    ok = sum(1 for _s, _k, _d, st, _x in rows if st == "OK")
+    miss = sum(1 for _s, _k, _d, st, _x in rows if st == "MISS")
+    na = sum(1 for _s, _k, _d, st, _x in rows if st == "N-A")
+    return (f"{len(rows)} 个功能向量：{ok} 个点到、{miss} 个覆盖缺口、"
+            f"{na} 个本次不可达（原因见上）")
+
+
 def external_urls(sent):
     """从记录下来的 URL 里挑出**站外**的（主机名不在回环 / 夹具域名白名单内）。"""
     from urllib.parse import urlparse
@@ -352,6 +620,8 @@ def run_selfcheck(settings, name="devflow-all13"):
     返回 dict：rows / total_net / elapsed / task_status / task_id / log_file / error /
     external / ok / skip / fail / exit_code（另有 `_results` / `_net` / `_log_lines` 三个
     "原始输入"，供 §6.1 变异证伪在**不重跑**的前提下对 `classify` 做反证）。
+    续62 另加：vectors（功能向量判定）/ vec_ok / vec_miss / vec_na，以及 `_urls` /
+    `_cmds` / `_log_by_stage`（向量判据的原始证据，同样供变异证伪复算）。
     """
     import time
     import warnings
@@ -369,9 +639,11 @@ def run_selfcheck(settings, name="devflow-all13"):
     result = {"rows": [], "total_net": 0, "elapsed": 0.0, "task_status": "",
               "task_id": None, "log_file": "", "error": "", "external": [],
               "ok": 0, "skip": 0, "fail": 0, "exit_code": 0,
+              "vectors": [], "vec_ok": 0, "vec_miss": 0, "vec_na": 0,
               "http_base": http_base, "https_base": https_base,
               "settings": None, "compressed": [],
-              "_results": {}, "_net": {}, "_log_lines": []}
+              "_results": {}, "_net": {}, "_log_lines": [],
+              "_urls": {}, "_cmds": {}, "_log_by_stage": {}}
     try:
         with no_proxy_env(), warnings.catch_warnings():
             # 夹具是**自签**证书，probe/screenshot/dirscan/vulnscan 每次 HTTPS 都会触发
@@ -387,14 +659,20 @@ def run_selfcheck(settings, name="devflow-all13"):
             stages = list(runner.STAGE_ORDER)
             # `offline=True`：跳过 subdomain / probe 里会发**外部**请求的被动源与 httpx 子进程
             # （自检铁律：零外网）。内置 DNS 爆破 / 内置探测仍照跑。
-            options = {"offline": True}
+            # `auto_expand=True`：目标是 `aaa.devfixture.test` 这种子域时**自动补收主域名**
+            # （subdomain 阶段 0 号分支）。不开的话这条子能力在自检里永远是 MISS ——
+            # 它是**任务级**选项、默认关，只有显式打开才走。
+            options = {"offline": True, "auto_expand": True}
 
             db.init_db()
             runner.sync_pocs(eff)
             tid = db.create_task(name, targets, stages, options)
             result["task_id"] = tid
             results, net_by_stage, sent = {}, {}, []
-            restore = instrument(results, net_by_stage, sent=sent)
+            urls_by_stage, cmds_by_stage = {}, {}
+            restore = instrument(results, net_by_stage, sent=sent,
+                                 urls_by_stage=urls_by_stage,
+                                 cmds_by_stage=cmds_by_stage)
             t0 = time.time()
             try:
                 runner.run_task(tid, name, targets, stages, options, eff)
@@ -407,7 +685,10 @@ def run_selfcheck(settings, name="devflow-all13"):
             result["log_file"] = str(task["log_file"] or "")
             result["error"] = str(task["error"] or "").strip()
             log_lines = read_log_lines(result["log_file"])
+            log_by_stage = split_log_by_stage(log_lines)
             result["_results"], result["_net"], result["_log_lines"] = results, net_by_stage, log_lines
+            result["_urls"], result["_cmds"], result["_log_by_stage"] = (
+                urls_by_stage, cmds_by_stage, log_by_stage)
             result["rows"] = classify(results, net_by_stage, log_lines)
             result["total_net"] = sum(net_by_stage.values())
             result["external"] = external_urls(sent)
@@ -415,6 +696,15 @@ def run_selfcheck(settings, name="devflow-all13"):
             result["skip"] = sum(1 for _n, s, _d, _c in result["rows"] if s == "SKIP")
             result["fail"] = sum(1 for _n, s, _d, _c in result["rows"] if s == "FAIL")
             result["exit_code"] = 1 if result["fail"] else 0
+            # 功能向量（续62）：判据只用上面已抓到的证据，**不再发任何请求**。
+            # `settings=eff` 必须传：`has_tool` 要按**配置里的路径**（`tools.<名>`）解析工具，
+            # 否则裸名查 PATH 会把"装了 fscan（配在 tools/fscan/fscan.exe）"误判成未安装。
+            ev = _Evidence(results, net_by_stage, urls_by_stage, cmds_by_stage, log_by_stage,
+                           settings=eff)
+            result["vectors"] = classify_vectors(result["rows"], ev)
+            result["vec_ok"] = sum(1 for _s, _k, _d, st, _x in result["vectors"] if st == "OK")
+            result["vec_miss"] = sum(1 for _s, _k, _d, st, _x in result["vectors"] if st == "MISS")
+            result["vec_na"] = sum(1 for _s, _k, _d, st, _x in result["vectors"] if st == "N-A")
     finally:
         devfixture.stop(fx)
     return result

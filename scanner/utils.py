@@ -1,5 +1,6 @@
 """通用工具：外部命令调用、HTTP 请求（requests 优先、urllib 兜底）、线程池、DNS、文件读写。"""
 import ipaddress
+import os
 import re
 import shutil
 import socket
@@ -16,6 +17,33 @@ from . import throttle as _throttle_mod
 _BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _ext_variants(name):
+    """同一个工具在 Windows / Linux 上的文件名变体：`fscan.exe` ↔ `fscan`（续61）。"""
+    s = str(name)
+    return [s, s[:-4]] if s.lower().endswith(".exe") else [s, s + ".exe"]
+
+
+def _probe(path):
+    """按文件系统**直接**判定"这个可执行文件在不在"（不依赖 `shutil.which` 的 PATHEXT 语义）。
+
+    ⚠️ 续61 踩到的坑：Windows 上**只要路径里带目录**（`tools/fscan/fscan.exe` 就带），
+    `shutil.which` 就退化成"精确探这一个名字"、**不会**替我们补 `.exe`；于是
+    "配置写 `fscan.exe`、Linux 产物是无后缀的 `fscan`"（或反过来）在**两端各断一半** ——
+    表现为工具明明在、却被判成未安装然后**静默降级**。这里直探文件系统即可两端通吃。
+    POSIX 上再补一个可执行位判断（与 `shutil.which` 的原语义一致，避免把"存在但没 `+x`
+    的普通文件"当成可用工具）；Windows 上没有可执行位概念，只看是不是文件。
+    """
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return None
+    except OSError:
+        return None
+    if os.name == "posix" and not os.access(str(p), os.X_OK):
+        return None
+    return str(p)
+
+
 def which(tool):
     """解析外部工具：裸名走 PATH；带路径分隔符的**相对路径按项目根**解析。
 
@@ -23,16 +51,32 @@ def which(tool):
     从仓库外启动 GUI/CLI（或任何换了工作目录的调用方）就会找不到 —— 表现是"工具明明在，
     却被判成未安装"然后**静默降级**到内置实现。`config.py` 的 `tools` 段一直写着"可以填
     `tools/scanner/httpx.exe`"这类相对路径，这条折算才让那句话成立。
+
+    **后缀容错（续61，跨平台）**：`config/settings.yaml` 里写的是 `tools/fscan/fscan.exe`
+    —— 那是"本机是 Windows"的事实。同一个工具在 Linux 上的产物名是 `fscan`（没有 `.exe`），
+    照配置值直找必然失败并**静默降级**。故：先按原值找，找不到再试"去掉/补上 `.exe`"的那个变体，
+    于是**同一份配置在两端都能找到**（`nmap` 那种裸名不动 —— `shutil.which` 自己会按 PATHEXT 找）。
+    带目录的路径一律走 `_probe()` 直探（`shutil.which` 在这些位置不补后缀，见 `_probe` 说明）。
     """
     t = str(tool or "").strip()
     if not t:
         return None
     found = shutil.which(t)
-    if found or t.startswith(("/", "\\")) or (":" in t[:3]):
+    if found:
         return found
+    if t.startswith(("/", "\\")) or (":" in t[:3]):
+        for alt in _ext_variants(t):          # 绝对路径：不折算项目根，只补后缀变体
+            found = _probe(alt)
+            if found:
+                return found
+        return None
     if "/" not in t and "\\" not in t:
-        return found                      # 裸名：只在 PATH 里找，不做任何臆造
-    return shutil.which(str(_BASE_DIR / t))
+        return None                            # 裸名：只在 PATH 里找，不做任何臆造
+    for alt in _ext_variants(t):
+        found = _probe(str(_BASE_DIR / alt))
+        if found:
+            return found
+    return None
 
 
 def verify_tool(bin_path, flag="-version", timeout=60):
@@ -147,11 +191,34 @@ def is_domain(text):
 
 # ---------- 路径 ----------
 
-def rel_display(path, base=None):
+def _mask_path(text):
+    """把绝对路径压成「…/父目录/文件名」（只保留末尾两段）。
+
+    **Web 展示层专用**：盘符、用户目录、整条目录树都不回显 ——
+    只留"这是哪个目录下的哪个文件"这一条信息量。
+
+    切段**同时按 `/` 与 `\\`**（而不是 `Path.parts`）：`Path.parts` 按运行平台选分隔符，
+    在 Linux 上会把 `C:\\Users\\me\\x.txt` 整条当成一个名字（反斜杠在 POSIX 不是分隔符），
+    于是"跨平台同一份代码"在两端给出不同结果。这里手工切，两端一致。
+    """
+    parts = [p for p in re.split(r"[\\/]+", str(text or "").strip())
+             if p and not p.endswith(":")]
+    if not parts:
+        return "…"
+    return "…/" + "/".join(parts[-2:])
+
+
+def rel_display(path, base=None, mask_outside=False):
     """把路径显示成"相对项目根"的形式（POSIX 分隔符）；项目外/空值原样返回。
 
     所有面向用户的位置（CLI 输出、GUI 表格、日志）都应该走它 ——
     绝对路径会暴露本机目录结构，且 Windows 反斜杠在跨平台日志里也会割裂。
+
+    `mask_outside=True` 是**更严的一档，Web 界面必须用它**（续61）：
+    项目外的绝对路径不再原样返回，而是压成 `…/父/名`（见 `_mask_path`）。
+    为什么要有这一档：项目里的工具可能装在项目外（`tools/fscan/` 是指向仓库外的目录联接、
+    nmap 常装在 `Program Files`），`/tools` 页原来会把这些**本机绝对路径**直接打给浏览器；
+    而 CLI 要保持原样（用户要拿这个路径去命令行复现），所以两者不能共用一个口径。
     """
     text = str(path or "")
     if not text:
@@ -162,7 +229,49 @@ def rel_display(path, base=None):
     try:
         return Path(text).resolve().relative_to(Path(base).resolve()).as_posix()
     except (ValueError, OSError):
+        # 非绝对路径（例如配置里的 `tools/fscan/fscan.exe`）本来就是相对形，不该被压缩
+        if mask_outside and Path(text).is_absolute():
+            return _mask_path(text)
         return text
+
+
+# 自由文本里的本机绝对路径（Web 展示层要抹掉的形态）：
+# ① 盘符开头：`C:\Program Files\...` / `D:/data/x`；② 引号里的绝对路径：
+#    Python traceback 的 `File "/usr/lib/python3.10/x.py"`、errno 消息的 `'/home/u/x'`。
+# ① 的**前置否定环视** `(?<!\w)` 不可省：没有它，`http://…` 里的 `p:/`、`https://…` 里的
+#    `s:/` 会被当成盘符路径压成 `…/x/y` —— 而 scrub_paths 正是要处理**带 URL 的日志行**，
+#    结果会把每条请求 URL 都毁掉（续61 实测出来的）。刻意**不**匹配裸的 `/xxx`：
+#    那会把 URL 路径（`/api/pocs/1/toggle`）也一起毁掉。
+_ABS_WIN_RE = re.compile(r"(?<!\w)[A-Za-z]:[\\/][^\s\"'<>|,;]*")
+_QUOTED_ABS_RE = re.compile(r"([\"'])((?:[A-Za-z]:[\\/]|/)[^\"'\n]*)\1")
+
+
+def scrub_paths(text, base=None):
+    """把**自由文本**（子进程输出 / 日志行 / 异常消息）里的本机绝对路径抹掉（续61）。
+
+    与 `rel_display` 的分工：那是"一个路径值 → 一个展示值"，这是"一段文本 → 一段文本"。
+    Web 界面有三处会整段展示外部文本（`/devmode` 的自检 stdout、任务日志 tail、任务错误消息），
+    里面的 Python traceback / 系统错误消息会带**本机绝对路径**，逐字段转换挡不住，必须在展示前过一遍。
+
+    处理顺序（先项目根，再盘符，最后引号内的绝对路径）：
+    ① 项目根前缀整体删掉 —— 仓库内的路径因此显示成 `scanner/db.py` 这种相对形；
+    ② 剩下的盘符绝对路径压成 `…/父/名`；
+    ③ 引号内的绝对路径（traceback 的 `File "…"`）同样压缩，**不改** URL 路径（它不带引号）。
+    """
+    s = str(text or "")
+    if not s:
+        return ""
+    if base is None:
+        from .config import BASE_DIR
+        base = BASE_DIR
+    for cand in {str(base), Path(base).as_posix()}:
+        if cand:
+            # 前缀 + 紧跟的一个分隔符一起吃掉，避免留下 `\scanner\db.py` 这种残缺形；
+            # 大小写不敏感只为 Windows（盘符/目录名大小写不一致时也能对上），Linux 上无副作用
+            s = re.sub(re.escape(cand) + r"[\\/]?", "", s, flags=re.IGNORECASE)
+    s = _ABS_WIN_RE.sub(lambda m: _mask_path(m.group(0)), s)
+    s = _QUOTED_ABS_RE.sub(lambda m: m.group(1) + _mask_path(m.group(2)) + m.group(1), s)
+    return s
 
 
 def format_duration(seconds):

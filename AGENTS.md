@@ -25,7 +25,15 @@
    - *注：联网检索公开文档不算"读项目外代码"，但也不要把外部仓库整份拉进来。*
 3. **代码、配置、模板、日志里一律只出现相对路径**，禁止出现本机绝对路径
    （`C:\Users\...` / `/home/...` 等）。展示给用户的路径统一走
-   `utils.rel_display()`（项目内相对项目根，项目外原样返回）。
+   `utils.rel_display()`（项目内相对项目根）。
+   **Web 界面（GUI）是更严的一档（续61，用户新硬规矩）**：项目外的绝对路径
+   **也不许回显**，一律 `rel_display(..., mask_outside=True)`（压成 `…/父/名`）——
+   工具可能装在项目外（nmap 在 `Program Files`、`tools/fscan/` 是指向仓库外的目录联接）。
+   整段展示的**自由文本**（日志 tail、自检 stdout、任务 `error`、工具 `note`/`reason`）
+   逐字段转换挡不住，须过 `utils.scrub_paths()`；若手里已有那条**已知绝对路径**，
+   用"精确替换"更稳（见 `gui/app.py::tools_page` 的 `_mask_pair`）。
+   验收口径是**页面级**：登录后扫渲染出的 HTML，不得出现盘符绝对路径与项目根绝对路径（`tests/smoke.py [7y]`）。
+   CLI 输出**保持原样**（用户要照抄去命令行）——故 `rel_display` 默认档 / `scrub_paths` 缺省都不压缩项目外路径。
    文档里不可避免的操作性路径（如 git 便携版位置）集中在 §2 说明，不要散落到各处。
 
 ## 1. 这是什么
@@ -272,6 +280,12 @@ ctf-scanner/
    "指定主机"而不是 help，也没有 `-version`；套默认探针会把**装好的** fscan 误报成"未通过版本
    校验"，`portscan` 随即**静默**降级到内置扫描（慢一个量级且无任何报错）。见
    `cli/client.py::check_tools()` 与 `tests/smoke.py` 的 `[7f]`。
+   **后缀容错（续61，跨平台硬要求）**：`config/settings.yaml` 写死 `tools/fscan/fscan.exe`，
+   而 Linux 产物名是无后缀的 `fscan` —— 照配置值直找必然失败并**静默降级**。故 `which()` 先按原值找、
+   找不到再试 `_ext_variants()` 的"去掉/补上 `.exe`"变体，**一份配置两端通用**。
+   ⚠️ 探测**必须走 `_probe()` 直探文件系统**，不能只靠 `shutil.which`：Windows 上**路径里带目录**时
+   `shutil.which` 退化成"精确探这一个名字"、不补 `.exe`（`nmap` 那种**裸名**才由它按 PATHEXT 找）；
+   POSIX 上 `_probe()` 另判可执行位（与 `shutil.which` 同语义）。回归钉在 `tests/smoke.py [7y]` ⑤。
 3. **非破坏性**：新增检查/POC 只允许探测类请求；POC 规范见 docs/poc-guide.md。免杀（evasion）只改变
    payload 的**编码形态**与请求伪装，不改变语义，不越过"无爆破/无 DoS/无写操作"红线。
 4. **SQLite 线程安全靠"每次调用独立连接"**（db.get_conn 用完即关）——不要改成共享长连接。
@@ -482,6 +496,29 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   顺序错了会把 `http(1) && http(2)` 当脚本跑成一命中就报（语义漂移）；
                             #   ⑨ 布尔子集**零回归**：`_flow_script` 不得出现在布尔 flow 上、`||` 仍短路、
                             #   纯否定仍不报。
+# 2026-09-28 续61 新增 `[7y]`：**Web 禁绝对路径（用户新硬规矩）+ 外部工具跨平台** ——
+                            #   ① `rel_display` 两档口径（项目内两档同为相对形 / 项目外默认原样、
+                            #   `mask_outside=True` 压成 `…/父/名`）；② `scrub_paths`（抹盘符路径·抹引号内
+                            #   绝对路径·抹项目根前缀·**不误伤 URL** —— 漏掉否定环视时 `http://` 的 `p:/`
+                            #   会被压掉，实测踩过）；③ **页面级扫 HTML**：登录后遍历 11 个页面，断言
+                            #   **无盘符绝对路径、无项目根绝对路径**（前两组只能验"工具函数对"，挡不住
+                            #   "某个模板/路由漏调了它" —— 续61 的真实缺陷正出在 `tools_page`）；
+                            #   ④ 合成 `toolmgr.status` 行钉 `/tools` 的**双泄露点**（`path` 字段 +
+                            #   `note` 里嵌的那份），并把 `rel_display` 打回旧口径证明断言有区分度；
+                            #   ⑤ `which()` 后缀容错：同一份配置在 `.exe` / 无后缀两端都能解析
+                            #   （相对与绝对两种形态），打桩 `_ext_variants` 为"只试原值"即红。
+# 2026-09-28 续62 `[7n]` 增 **③b 功能向量覆盖**：全流程自检从「逐阶段」下沉到「逐子能力」——
+                            #   ① `scanner/devflow.py::VECTORS` 列 **35 条**向量（阶段内分支：自动拓展/泛解析/
+                            #   内置爆破/回填、CNAME、fscan 引擎、内置探测/端口候选/favicon、TLS、截图、
+                            #   JS 挖掘、目录 模式/内置扫描/dirmap/框架/派生/递归、内置检查/POC 引擎、
+                            #   情报 拉取/匹配、启发式聚合、osint 3 项、github 检索）；
+                            #   ② 判据取自**本次运行的原生证据**（该阶段日志 / 外部命令 argv[0] / 请求 URL），
+                            #   **不做"跑过就默认全绿"**；OK=真点到 / MISS=覆盖缺口 / **N-A=本次不该跑（必带原因）**；
+                            #   ③ 自检 options 增 `auto_expand: True`（否则 subdomain 自动拓展永远 MISS）；
+                            #   ⚠️ **改阶段日志文案时必须同步向量 `kw`** —— 判据与文案强耦合（判据命中不了就变 MISS）。
+                            #   ④ 回归：`run_devflow.py` 报 35 向量 18 OK / **0 MISS** / 17 N-A；smoke 钉
+                            #   状态合法 + N-A 必带原因 + 10 条核心主路径 OK + 缺口为 0 + 证据可复算，
+                            #   并用 M6~M8 变异证明（判据恒不命中 / 抹掉阶段日志 / 去掉静态 N-A 原因）。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
                             #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）
 py -3 cli/client.py --update-tools            # 续54：联网装/更新 subfinder/httpx/puredns 并回写 tools.<名>

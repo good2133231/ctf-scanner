@@ -140,6 +140,13 @@ Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错�
     13 阶段（`runner.run_task` 前台执行）→ 打印**每阶段 `真跑 / 跳过（带原因）/ FAIL` + 网络活动数 + 耗时**，
     无 `FAIL` 退出码 0，否则 1。**这是本功能的验收证据**。核心逻辑在 `scanner/devflow.py`
     （CLI 与 `tests/smoke.py [7n]` **共用**，避免两处判定漂移）。
+  - **功能向量**（续62，用户指令「每个功能向量打一些，确保流程正确」）：阶段级判定之上再往下沉一层 ——
+    `devflow.VECTORS` 列 **35 条阶段内子能力**（自动拓展/泛解析/内置爆破/回填、CNAME、fscan 引擎、
+    内置探测/端口候选/favicon、TLS、截图、JS 挖掘、目录 模式/内置扫描/dirmap/框架/派生/递归、
+    内置检查/POC 引擎、情报 拉取/匹配、启发式聚合、osint 3 项、github 检索），判据取自**本次运行的
+    原生证据**（该阶段日志 / 外部命令 `argv[0]` / 请求 URL），**不做"跑过就默认全绿"**；三态
+    `OK`（真点到）/ `MISS`（覆盖缺口）/ `N-A`（本次不该跑，**必带原因**）。CLI 会打印向量表 +
+    `18 个点到、0 个覆盖缺口、17 个本次不可达` 汇总句与覆盖缺口清单。
 - **内置靶场**（`scanner/devfixture.py`）：标准库 `ThreadingHTTPServer`，**HTTP 与 HTTPS 都只绑 `127.0.0.1`
   （绝不 `0.0.0.0`）**、**临时端口**（不占 80/443）。即时生成 `index.html` / `admin/index.html` /
   `robots.txt` / `app.js` / `.env`（`.env` 是**明显假的样例值** `devfixture-not-a-real-secret`）+

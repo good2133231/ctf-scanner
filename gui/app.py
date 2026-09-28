@@ -51,7 +51,7 @@ from scanner.pocs import engine
 from scanner import runner
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
-from scanner.utils import format_duration, pool_run, rel_display
+from scanner.utils import format_duration, pool_run, rel_display, scrub_paths
 
 logger = get_logger("gui")
 
@@ -1065,7 +1065,9 @@ def create_app():
             abort(404)
         # 页面只展示相对路径（日志文件路径在库里存的是绝对路径，因为要真的去读它）
         task = dict(task)
-        task["log_file"] = rel_display(task.get("log_file") or "")
+        task["log_file"] = rel_display(task.get("log_file") or "", mask_outside=True)
+        # 错误消息是**自由文本**（异常原文里常带本机的盘符/绝对路径），展示前过一遍清洗
+        task["error"] = scrub_paths(task.get("error") or "")
         # ---------- 资产页签的服务端分页（续57） ----------
         #
         # 原先 7 个资产页签（站点/子域名/拓展域名/端口/C 段/证书/目录）一律 `db.list_*` **全量**返回、
@@ -1552,7 +1554,7 @@ def create_app():
             # （db.bulk_set_poc_enabled）同一份逻辑。`declared_severity` 只留给页面做对照提示。
             r["declared_severity"] = r["severity"]
             r["severity"] = db.effective_poc_severity(r["path"], declared=r["severity"])
-            r["path"] = rel_display(r["path"])  # 页面只展示相对路径
+            r["path"] = rel_display(r["path"], mask_outside=True)  # 页面只展示相对路径
             stats["source"][f"{src}:on" if r["enabled"] else f"{src}:off"] = \
                 stats["source"].get(f"{src}:on" if r["enabled"] else f"{src}:off", 0) + 1
             stats["severity"][r["severity"] or "-"] = stats["severity"].get(r["severity"] or "-", 0) + 1
@@ -2654,7 +2656,7 @@ def create_app():
             except ValueError:
                 return render_template("settings.html", s=load_settings(), checks=owasp_checks,
                                        bl=blacklist.load(settings),
-                                       bl_path=rel_display(blacklist.path(settings)),
+                                       bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                        error="参数必须是整数")
             # 续48：审计只记"改了哪几个区块"，**绝不记值**（键名也省掉 —— 见 `_changed_sections`）。
             _changed = _changed_sections(settings, data)
@@ -2664,7 +2666,7 @@ def create_app():
             return redirect(url_for("settings_page"))
         return render_template("settings.html", s=settings, checks=owasp_checks,
                                bl=blacklist.load(settings),
-                               bl_path=rel_display(blacklist.path(settings)))
+                               bl_path=rel_display(blacklist.path(settings), mask_outside=True))
 
     # ---------- 访问审计（续48） ----------
 
@@ -2737,7 +2739,7 @@ def create_app():
             kept=devmode.DEV_KEEP,
             fixture_port=(settings.get("dev") or {}).get("fixture_port", 0),
             last=last, stages=list(STAGE_ORDER),
-            selfcheck_out=_DEV_SELFCHECK.get("out") or "",
+            selfcheck_out=scrub_paths(_DEV_SELFCHECK.get("out") or ""),
             selfcheck_code=_DEV_SELFCHECK.get("code"),
             selfcheck_at=_DEV_SELFCHECK.get("at") or "",
             msg=(request.args.get("msg") or "").strip(),
@@ -2813,6 +2815,25 @@ def create_app():
     def tools_page():
         """外部工具页：列出三个可自动安装工具的现状 + 一键下载/更新，并**如实列出**需手工安装的三个。"""
         rows = toolmgr.status(settings)
+        # 续61 硬规矩：Web 界面不显示本机绝对路径。工具可能装在**项目外**
+        # （`tools/fscan/` 是指向仓库外的目录联接、nmap 常装在 `Program Files`），
+        # 而 `toolmgr.status()` 给的是 `which()` 解析出的绝对路径（`note` 里还嵌了一份），
+        # 故这里统一压缩后再交给模板 —— CLI `--check` 拿到的仍是原样（用户要照抄去命令行）。
+        #
+        # `note`（`OK（<绝对路径>）`）**不能只靠 `scrub_paths`**：那条正则刻意不碰**裸的** POSIX
+        # 绝对路径（否则会把带 URL 的日志行毁掉），于是 Linux 上 `/usr/bin/nmap` 会原样漏出去。
+        # 这里改为"精确替换那条已知路径"，两端都稳（`scrub_paths` 留作其他形态的兜底）。
+        def _mask_pair(raw, text, tkey):
+            """把已知绝对路径 `raw` 与它所在的自由文本一并压掉，返回待覆盖的两个字段（续61）。"""
+            masked = rel_display(raw or "", mask_outside=True)
+            out = scrub_paths(text or "")
+            if raw:
+                out = out.replace(str(raw), masked)
+            return {"path": masked, tkey: out}
+
+        rows = [dict(r, **_mask_pair(r.get("path"), r.get("note"), "note")) for r in rows]
+        last_results = [dict(r, **_mask_pair(r.get("path"), r.get("reason"), "reason"))
+                        for r in (_TOOLS_LAST.get("results") or [])]
         os_label, arch = toolmgr.host_arch()
         return render_template("tools.html", rows=rows,
                                platform=f"{os_label}/{arch}",
@@ -2823,7 +2844,7 @@ def create_app():
                                last_at=_TOOLS_LAST.get("at") or "",
                                last_os=_TOOLS_LAST.get("os") or "",
                                last_error=_TOOLS_LAST.get("error") or "",
-                               last_results=_TOOLS_LAST.get("results") or [],
+                               last_results=last_results,
                                max_mb=toolmgr._MAX_BYTES // (1024 * 1024),
                                hosts=sorted(toolmgr._ALLOWED_HOSTS),
                                dest=toolmgr.DEFAULT_DEST,
@@ -2864,7 +2885,10 @@ def create_app():
 
     def _tail(path, n=150):
         try:
-            return Path(path).read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
+            # 续61 硬规矩：日志是**自由文本**，里面的 traceback / 系统错误消息会带本机绝对路径，
+            # 逐字段相对化挡不住，整段过一遍 scrub_paths（口径见 scanner/utils.py）。
+            return [scrub_paths(ln) for ln in
+                    Path(path).read_text(encoding="utf-8", errors="replace").splitlines()[-n:]]
         except OSError:
             return []
 

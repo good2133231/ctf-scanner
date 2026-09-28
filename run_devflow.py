@@ -62,6 +62,21 @@ def main():
     print(f"\n[*] 网络活动总数：{res['total_net']}    总耗时：{res['elapsed']:.1f}s    "
           f"任务终态：{res['task_status']}")
     print(f"[*] 任务日志：{res['log_file']}")
+
+    # 功能向量（续62）：阶段内部的**子能力**覆盖 —— 比"阶段级 OK"更细一层。
+    print("\n[*] 功能向量覆盖（阶段内的子能力，判定取自本次运行的日志/命令/URL）：")
+    cur_stage = None
+    for sname, key, desc, status, detail in res["vectors"]:
+        if sname != cur_stage:
+            cur_stage = sname
+            print(f"    ---- {sname} ----")
+        tip = f"  ← {detail}" if detail else ""
+        print(f"      {status:<5} {key:<16} {desc}{tip}")
+    print(f"[*] {devflow.summarize_vectors(res['vectors'])}")
+    if res["vec_miss"]:
+        _miss = [f"{s}/{k}" for s, k, _d, st, _x in res["vectors"] if st == "MISS"]
+        print(f"[!] 覆盖缺口（阶段已跑但子能力未点到）：{', '.join(_miss)}")
+
     if res["error"]:
         print(f"[*] 任务 error（非空说明有阶段抛了异常）：\n    {res['error']}")
     if res["external"]:
