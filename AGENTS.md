@@ -558,8 +558,15 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 # Linux 实机验收（**2026-09-23 续12 已达成**：Ubuntu 22.04.5 / Python 3.10.12）
 #   python3 tests/smoke.py   → SMOKE PASS（`[5o]` 会按运行平台自报状态）
 #   搬运：整树拷贝（含 config/dicts/），远端 `python3 -m pip install --user -r requirements.txt`
-#   注意 `scp` 整树时别用 `tar --exclude=.git` —— libarchive 按 basename 匹配，会把
-#   `smoke_root/.git/config` 一起排掉，导致 `[3] pipeline` 少一条 exposure-git-config 而假失败。
+#   ⚠️ `smoke_root/.git/config` 是 `[3] pipeline` 必需的「泄露样本」，但 **git 拒绝跟踪任何
+#   名为 `.git` 的目录下的文件** —— 它**永远不在仓库里**（此前只存在于作者本机）。
+#   2026-09-28 续66 实测：用 `git archive HEAD` 出来的「干净树」跑 smoke 必然在 `[3]` 挂
+#   （`AssertionError: [a01-sensitive-files, exposure-env-file]`），说明 **CI 一直是红的**。
+#   现在由 `tests/smoke.py::ensure_fixture_git_config()` **运行时物化**（幂等、字节级一致），
+#   于是推荐用 `git archive --format=tar HEAD | ssh … 'tar -x -C /tmp/xxx'`（约 4.5 MB，只传跟踪文件）。
+#   ⚠️ 另一个坑：`[6u]` 开着 `portscan`，`probe` 会把**宿主机**上任何开放端口都当候选
+#   （`https://host:port` 先试）—— 宿主若恰好有应答 TLS 的服务（实测 Ubuntu 的 CUPS 在 631），
+#   就会多出站点与证书。相关断言已按「只钉靶场」改写（续66）；换机器跑前先看一眼本机开放端口。
 #   Windows 侧非交互 SSH：设 `SSH_ASKPASS`（**必须放在纯 ASCII 路径**，含中文会
 #   `CreateProcessW failed error:2`）+ `SSH_ASKPASS_REQUIRE=force`；凭据由用户提供、不入库。
 ```

@@ -169,8 +169,43 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         pass
 
 
+# 靶场里的 `/.git/config`「泄露样本」**不能靠 git 分发** —— git 拒绝跟踪任何名为 `.git`
+# 的目录下的文件（`git add smoke_root/.git/config` 直接报错），所以它**永远不在仓库里**。
+# 此前它只存在于作者那台机器上，后果是：**干净 clone（含 CI）跑 smoke 必然在 `[3]` 挂**
+# （缺 `exposure-git-config`）。2026-09-28 在 Linux 的干净树上实测复现（`git archive` 出来的树）。
+# 故改为**运行时物化**；幂等：已存在就不动，免得覆盖掉别人本地的样本。
+_FIXTURE_GIT_CONFIG = (
+    b"[core]\n"
+    b"\trepositoryformatversion = 0\n"
+    b"\tfilemode = true\n"
+    b"\tbare = false\n"
+    b"\tlogallrefupdates = true\n"
+    b'[remote "origin"]\n'
+    b"\turl = https://example.com/git/smoke.git\n"
+)
+
+
+def ensure_fixture_git_config():
+    """确保靶场里存在 `/.git/config` 这个「泄露」样本（**幂等**，已存在则不覆盖）。
+
+    为什么必须运行时物化：git 不跟踪 `.git` 目录下的路径，所以它进不了仓库 ——
+    不这么做，干净 clone 上 `[3] pipeline` 会因缺 `exposure-git-config` 而失败。
+    写不进去时不静默吞掉（打印一行），让 `[3]` 的断言去报出真实错误。
+    """
+    p = ROOT / "smoke_root" / ".git" / "config"
+    if p.exists():
+        return p
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(_FIXTURE_GIT_CONFIG)
+    except OSError as e:
+        print(f"[!] 无法物化靶场样本 {p}：{e}")
+    return p
+
+
 def start_fixture(port=FIXTURE_PORT):
     """在后台线程启动内置靶场；端口被占用时返回 None（复用外部服务）。"""
+    ensure_fixture_git_config()      # 必须在起服务**之前**（复用到外部服务时同样需要）
     handler = functools.partial(_QuietHandler, directory=str(ROOT / "smoke_root"))
     try:
         httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
@@ -5143,13 +5178,19 @@ workflows:
     _u_dirs = [dict(r) for r in db.list_dirs(_u_tid)]
     _u_vulns = [dict(r) for r in db.list_vulns(task_id=_u_tid, limit=200)]
     _u_leads = [dict(r) for r in db.list_leads(_u_tid)]
-    assert len(_u_sites) >= 1 and _u_sites[0]["url"].startswith("http://127.0.0.1:8765"), _u_sites
+    # 靶场站点**存在即可**，不能断言它是第 0 条：本用例开着 `portscan`，`probe` 会把宿主机上
+    # 任何开放端口都当候选，站点顺序是**环境相关**的（实测 Linux 上先记到 `127.0.0.1:631`）。
+    assert any(str(s["url"]).startswith("http://127.0.0.1:8765") for s in _u_sites), _u_sites
     assert len(_u_dirs) >= 2, f"浅扫应至少命中 .env 与 .git/config 两条：{_u_dirs}"
     assert any(str(d.get("path") or "").endswith("/.env") for d in _u_dirs), _u_dirs
     assert any(str(d.get("path") or "").endswith("/.git/config") for d in _u_dirs), _u_dirs
     assert len(_u_vulns) >= 1, _u_vulns
-    assert all(v.get("severity") in ("high", "critical") for v in _u_vulns), \
-        f"默认门槛 medium 下剩下的应是 high 级（exposure-git-config 等）：{_u_vulns}"
+    # 只钉**靶场站点**的漏洞级别：`portscan` 带出来的宿主其它端口可能命中 medium，那是
+    # 环境相关的，不该让本用例挂（级别门控本身已由 `[2b]`/`[3]` 钉住）。
+    _u_v8765 = [v for v in _u_vulns if "127.0.0.1:8765" in str(v.get("target") or "")]
+    assert _u_v8765, f"靶场站点应至少一条漏洞：{_u_vulns}"
+    assert all(v.get("severity") in ("high", "critical") for v in _u_v8765), \
+        f"默认门槛 medium 下靶场剩下的应是 high 级（exposure-git-config 等）：{_u_v8765}"
 
     # (6) 三个外部依赖阶段必须**被跳过而非报错**：intel / github / osint 都不该产出任何东西，
     #     且任务 error 依然为空（"跳过"和"跑挂了"必须分得开 —— 后者会被上面 (5) 抓住）。
@@ -5157,7 +5198,16 @@ workflows:
     assert not [x for x in _u_leads if x["kind"] in ("intel", "github")], \
         f"intel / github 已显式关闭，不该有任何线索（有的话说明默认行为在偷偷发外部请求）：{_u_leads}"
     assert db.list_csegs(_u_tid) == [], "osint 的 C 段产物必须为空（iprecon 已关）"
-    assert db.list_certs(_u_tid) == [], "靶场没有 https，cert 阶段应跳过而非报错（ctlog 也已关）"
+    # 靶场是 http（8765），`cert` 阶段**不该给它出证书**；ctlog 已关，也不该有 source='ct' 的行。
+    # ⚠️ 不能断言"一条证书都没有"：本用例**开着 portscan**，`probe` 会把宿主机上任何开放端口
+    #   都当候选（`https://host:port` 先试），宿主若恰好有应答 TLS 的服务，`cert` 就会正常取证
+    #   —— 实测 Ubuntu 的 CUPS 在 631 上应答 TLS → probe 记出 `https://127.0.0.1:631/` 站点 →
+    #   cert 取到 1 条证书，"无证书" 就成了**假失败**（2026-09-28 在 Linux 实机踩到）。
+    _u_certs = [dict(c) for c in db.list_certs(_u_tid)]
+    assert not [c for c in _u_certs if int(c["port"] or 0) == 8765], \
+        f"靶场是 http，不该有它的证书：{_u_certs}"
+    assert not [c for c in _u_certs if str(c["source"] or "") == "ct"], \
+        f"ctlog 已关，不该有 source='ct' 的证书行：{_u_certs}"
     assert not [s for s in db.list_subdomains(_u_tid)
                 if "osint" in str(s["source"] or "")], "osint 阶段的域名产物必须为空"
 
@@ -5182,7 +5232,12 @@ workflows:
     #     （给『本机装了 nmap / fscan、指纹命中更多 POC』的浮动留空间）。
     #     这份逐阶段数据来自续33 为标定临时加的阶段包装 —— 主理人 2026-09-26 派单清理时已删除；
     #     结论留在注释里，要重新标定就用本用例的 `_u_sent` 自己套一层计数。
-    _U_MAX_REQ = 400
+    #     2026-09-28 续66：上面这份标定是**单站点**（只有靶场）下的数，而本用例**开着 portscan**
+    #     —— `probe` 会把宿主机上任何开放端口都当候选，dirscan / vulnscan 会给**每个**额外站点
+    #     再来一遍（实测 Linux：CUPS 631 / MySQL 3306 等被扫 → 站点 4 个、请求 925 > 400 假失败）。
+    #     故按**站点数缩放**：每站点 400 的预算不变（仍然抓得住某一阶段预算失控）。
+    _U_MAX_REQ_PER_SITE = 400
+    _U_MAX_REQ = _U_MAX_REQ_PER_SITE * max(1, len(_u_sites))
     assert len(_u_sent) <= _U_MAX_REQ, \
         f"全 13 阶段请求量 {len(_u_sent)} 超过上界 {_U_MAX_REQ}（阶段预算失控？）：" \
         f"{sorted(set(u.split('?')[0] for u in _u_sent))[:10]}"

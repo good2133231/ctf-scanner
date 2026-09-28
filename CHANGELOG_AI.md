@@ -3,6 +3,64 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-28 —— 续66：**修「干净 clone 跑不了 smoke」**（P0：CI 一直是红的）+ Linux 实机复验
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。
+
+### 0. 问题与根因（P0）
+
+`tests/smoke.py` 的 `[3] pipeline` 断言靶场能取到 `/.git/config`（`exposure-git-config`），
+而那个"泄露样本"是 `smoke_root/.git/config` —— **git 拒绝跟踪任何名为 `.git` 的目录下的文件**
+（`git add smoke_root/.git/config` 直接报错），所以它**从来不在仓库里**，只存在于作者机器上。
+
+后果：**从干净 clone（含 `.github/workflows/smoke.yml` 的 ubuntu-latest）跑 smoke 必然在 `[3]` 挂**，
+即 **CI 每次 push / PR 都是红的**；而本地因为那个未跟踪文件一直在，所以从没暴露。
+
+实测复现（用户提供的 Linux 机，用 `git archive HEAD` 出来的"干净树"）：
+
+```
+[3] pipeline ok: sites=1 tech=python ... vulns=2 ['a01-sensitive-files', 'exposure-env-file']
+AssertionError: ['a01-sensitive-files', 'exposure-env-file']     ← 缺 exposure-git-config
+```
+
+顺带修正一处旧认知：上一轮"整树 `scp` 别用 `tar --exclude=.git`"被当成**搬运问题**，
+其实真根因是"这个文件根本进不了仓库"。
+
+### 1. 改法
+
+`tests/smoke.py` 新增 `_FIXTURE_GIT_CONFIG` + `ensure_fixture_git_config()`，在 `start_fixture()`
+**起服务之前**调用：文件缺失就按**字节级一致**（151 字节 / LF / tab 缩进）的内容物化，
+**幂等**（已存在就不覆盖，免得盖掉别人本地的样本）；写不进去时打印一行、不静默。于是"靶场自包含"，
+干净 clone / CI 也能跑。推荐搬运改为 `git archive --format=tar HEAD | ssh … 'tar -x -C <dir>'`
+（约 4.5 MB，只传跟踪文件）。
+
+### 2. 顺带修掉的三处「宿主环境相关」假失败（`[6u]`）
+
+`[6u]` 会**打开 `portscan`**，而 `probe` 会把宿主机上任何开放端口都当候选（`https://host:port` 先试）
+—— 于是站点数 / 证书数 / 请求量都随"这台机器开了什么"浮动。本机 Windows 干净，
+用户那台 Ubuntu 开着 sshd(22) / MySQL(3306) / Redis(6379) / 8081 / **CUPS(631，应答 TLS)**，
+于是 3 条断言连续假失败（**都是测试脆弱性，不是产品缺陷**）：
+
+| # | 原断言 | 那台机器上的实测 | 改法 |
+|---|---|---|---|
+| a | `_u_sites[0]["url"]` 以 `http://127.0.0.1:8765` 开头 | 站点顺序环境相关（先记到 `127.0.0.1:631`） | 改为"靶场站点**存在即可**"（`any(...)`） |
+| b | `db.list_certs(_u_tid) == []` | CUPS 631 应答 TLS → `probe` 记出 `https://127.0.0.1:631/` → `cert` 正常取证 1 条 | 改为"靶场(8765)无证书 + 无 `source='ct'` 行" |
+| c | 请求量 `<= 400` | 4 个站点 ×(dirscan 153 + vulnscan ≈90) ≈ **925** | 改为**按站点数缩放**（每站点 400 的预算不变） |
+
+另：snap 版 chromium 有**私有 `/tmp` 沙箱**，代码树放在 `/tmp` 下时 `[7z]` 的截图产物写不进去
+（`Failed to write file … No such file or directory`，2026-09-23 已记录）—— 把树放到 home 目录即可，
+**不是代码缺陷**；已写进 `AGENTS.md §6`。
+
+### 3. 验证
+
+- **本机 Windows**：`py -3 tests/smoke.py` → **SMOKE PASS**（8m28s，并复跑过）。
+- **Linux 实机**（用户提供的 Ubuntu 22.04.5 / Python 3.10.12）：`python3 tests/smoke.py`
+  → **SMOKE PASS，EXIT=0**（5m56s）。`[6u]`：耗时 49.4s / sites=4 / ports=5 / certs=1 / dirs=7 /
+  vulns=3 / 请求 925（上界 1600，站外 0）/ 终态 done·error 空·断点已清；
+  `[7x]` 真浏览器 35 条交互断言全绿；`[7z]` 自签 HTTPS 截图端到端通过；`[8]` IDN 全绿。
+- 夹具物化的**字节一致性 + 幂等**单独验过（挪走本机文件 → 物化 → 与原文件逐字节相同，151 字节）。
+- EOL：`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致（`tests/smoke.py` 裸 LF 仍 1494）。
+
 ## 2026-09-28 —— 续65：**支持 IDN / 中文域名**（punycode 主链路 + 展示回解）+ smoke `[8]`
 
 > 实施者：**WorkBuddy · Claude**。**本轮动代码**（T01~T04）。
