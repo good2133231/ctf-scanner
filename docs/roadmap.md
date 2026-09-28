@@ -121,7 +121,7 @@
       权威实现 `db.queued_position()`（分页后旧的"对本页数位次"会偏小）。顺带删掉
       `db.list_all_subdomains/sites/dirs/ports`（**零调用方**的误导性 API，见同轮另一提交）。
       **仍未做**：任务详情页其它资产页签（站点/子域/端口/C段/证书/目录）仍是**全量返回、不分页**
-      （本轮按派单只修 vulns）；`/tasks` 排序固定 `id DESC`（未提供列排序）。
+      （本轮按派单只修 vulns）—— **2026-09-27 续57 已收掉**（7 个资产页签全部服务端分页）；`/tasks` 排序固定 `id DESC`（未提供列排序）。
 - [x] **固定上限收口（收尾）**（**P0 数据正确性**，2026-09-27 续55）：承续51/续53 同一根因，收掉最后
       四处**不走分页**的固定上限 —— `report.collect()` 的 `list_vulns(limit=1000)`（报告是**交付物**，
       >1000 条漏洞静默丢、且报告顶部计数也跟着少）、`heuristic` 阶段的 `list_vulns(limit=1000)`
@@ -131,7 +131,7 @@
       改法：`db.list_tasks/list_vulns` 支持显式 **`limit=None` ＝ 不加上限**（`limit=0` 仍是"一条都不要"，
       刻意不反转）；新增 `db.tasks_with_vulns()`（`IN (SELECT DISTINCT task_id …)`，与 `/vulns` 页面语义
       严格对齐）与 `db.find_task_by_name(name)`。**仍未做/刻意不改**：任务详情页其余资产页签不分页
-      （经排查是性能/UX 而非丢数据，且依赖跨行汇总与整表语义，改造面大 → 留单独一轮）；
+      （经排查是性能/UX 而非丢数据，且依赖跨行汇总与整表语义，改造面大 → 留单独一轮）—— **2026-09-27 续57 已收掉**（7 个资产页签全部服务端分页）；
       `/dirs?agg=1` 的 5000 与报告资产小节的 `[:100]/[:200]` 展示上限（**有意护栏**，非 bug）。
 - [x] **POC 置信度分层**（P1-2，2026-09-23 续12）：`pocs.confidence` 由 `db.poc_confidence(path, meta)`
       按来源分（builtin=high / user·nuclei=medium / imported·other=low）× 内容型匹配器降级得出，

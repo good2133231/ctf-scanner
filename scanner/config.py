@@ -302,9 +302,9 @@ DEFAULTS = {
     },
     "fofa": {
         # favicon 反查同源资产（P3-1）：需 config/keys.yaml 填 fofa.email / fofa.key
-        # 代码默认值是 False（保证"没填 key 就不该发请求"），但本机 config/settings.yaml
-        # 已由用户显式设为 true 以启用 FOFA 反查 —— 二者不一致**是预期内的**：
-        # settings.yaml 是用户覆盖层，以它为准，不要把这里改回 true 去"对齐"。
+        # 代码默认值是 False（保证"没填 key 就不该发请求"）。
+        # 历史：2026-09-22 用户为校准阈值曾在 config/settings.yaml 里显式设为 true；2026-09-26 已改回
+        # false，与这里一致。settings.yaml 是用户覆盖层、以它为准 —— 改这一项不会影响代码默认值。
         "enabled": False,
         "max_sites": 30,           # 每任务最多对多少个站点算 favicon 并反查
         "max_assets": 100,         # 单个 favicon 最多取回多少条资产

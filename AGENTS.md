@@ -1089,14 +1089,13 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   新增主题或新增颜色时：**在 `:root` 声明默认值**，只在确实要变的三套主题里覆盖，
   然后跑门禁。纯装饰的分隔线 `--line` 刻意不参与 3:1 判定（理由见该脚本模块 docstring）。
 
-- **`config/settings.yaml` 里 `fofa.enabled` 当前为 `true`，与 `scanner/config.py` 的 `DEFAULTS`
-  （`False`）及 README / roadmap / 本文件「osint 默认全关」的口径不一致**（2026-09-25 接管盘点发现）：
-  ① `settings.yaml` 被 **git 跟踪**，所以新克隆会继承这个开启态；② 默认阶段集是**全 13 阶段**
+- **`config/settings.yaml` 的 `fofa.enabled` 已于 2026-09-26 由用户改为 `false`**（与
+  `scanner/config.py` 的 `DEFAULTS` 对齐）—— 2026-09-25 接管盘点时它曾是 `true`（用户为校准阈值
+  主动开的），当时的结论是「默认就开、会花配额」；现在**默认不再碰 FOFA**。背景仍然成立：
+  ① `settings.yaml` 被 **git 跟踪**，所以新克隆会继承它写的开关态；② 默认阶段集是**全 13 阶段**
   （CLI `-p` 缺省、GUI 未勾选时 `or list(STAGE_ORDER)`），`osint` 在其中；③ `config/keys.yaml`
-  里有**真实 FOFA 凭据** + GitHub token → **每次默认任务都会真查 FOFA 并花配额**（这是用户为校准
-  阈值主动开的，2026-09-22 续15/18「FOFA 三种反查已真实跑过，key 已配」）。结论是「默认就开、会花配额」，
-  不是「默认关」——已把文档口径改过来（`docs/roadmap.md` 已登记续23~27 与 github 阶段）。
-  不动用户的开关；要改回零开销默认行为，把 `fofa.enabled` 改 `false` 即可（与 DEFAULTS 对齐）。
+  里有**真实 FOFA 凭据** + GitHub token。所以**要评估外部开销就看这一项**：改回 `true` 即恢复
+  「每次默认任务都真查 FOFA 并花配额」（`docs/roadmap.md` 已登记续23~27 与 github 阶段）。
 
 - **`auth=` 按"URL 主机发往谁"判，不是按"URL 从哪来"判**（2026-09-25 续43）：`http_request(auth=True)`
   的语义是"该请求发往**目标侧**，要带任务登录态"。jsmine 是**唯一的混合出口**模块 —— 页面请求

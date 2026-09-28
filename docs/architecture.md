@@ -287,7 +287,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 
 ## GUI 路由与分栏
 
-侧边栏 **9 栏 + 管理员第 10 栏**（以 `gui/templates/base.html` 的 `nav_items` 为准，
+侧边栏 **12 项**（以 `gui/templates/base.html` 的 `nav_items` 为准，
 每项的**第 5 个字段** `admin_only` 决定"是否只对管理员显示"）：
 `/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
 `/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/ips`（IP 资产：按解析 IP 聚合域名，**先全量聚合、
@@ -295,9 +295,10 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 **按「任务 × 主机」分组，服务端分页 + 关键字（主机 / IP / 任务名）**，续59-2）/
 `/vulns`（级别筛选 + `review=` 复核状态筛选 + `?task_id=` 按任务筛选，页内三态下拉与批量打标走
 `POST /api/vulns/review`）/ `/pocs`（含置信度列与按层批量启停，**列表服务端分页 + `q` / `on=1` 筛选**
-（续59-2，分类统计仍按全量算），`admin_only`）/ `/settings`（`admin_only`）
-/ `/users`（账号管理，`admin_only`）。
-**续50**：`dev.enabled=true` 时另追加**第 11 栏**「开发模式」`/devmode`（`admin_only`，
+（续59-2，分类统计仍按全量算），`admin_only`）/ `/tools`（外部工具：一键装/更新 subfinder ·
+httpx · puredns，并如实列出需手工安装的 nmap / fscan / dirmap，`admin_only`）/ `/settings`
+（`admin_only`）/ `/users`（账号管理，`admin_only`）/ `/audit`（访问审计流水，`admin_only`）。
+**续50**：`dev.enabled=true` 时另追加**第 13 栏**「开发模式」`/devmode`（`admin_only`，
 由 `create_app()` 注入 `app.jinja_env.globals["dev_enabled"]` 决定**是否渲染**，未打开时该栏根本不出现、
 直接敲 URL 也被 `admin_required` 挡回）；页内按钮走 `/api/devmode/fixture/start` / `.../stop` /
 `/api/devmode/selfcheck`。
