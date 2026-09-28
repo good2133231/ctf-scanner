@@ -528,6 +528,18 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   ① 行为级：打桩 `shot_mod.run_cmd` 捕获 argv 断言开关在里头 + 变异证伪
                             #   （过滤 `_FLAGS` 即红）；② 端到端：真夹具自签 HTTPS 口（127.0.0.1）调
                             #   生产函数 `capture()` 断言 True + png 非空（无浏览器按 `[7x]` 口径跳过）。
+# 2026-09-28 续65 新增 `[8]`：**IDN / 中文域名**（punycode 主链路 + 展示回解）——
+                            #   缺陷：`例子.中国` 被判 `unknown` 静默丢弃（四处同口径的重复编码都只认纯
+                            #   ASCII 字母 TLD；PSL `tlds.txt` 又把非 ASCII 后缀整批滤掉、`xn--` 一条都没有）。
+                            #   ① 归一化收敛到 `utils.to_ascii()` 一处（ASCII 快路径/幂等/失败返回 None）+ 
+                            #   `to_unicode()` 展示回解（失败原样、绝不抛）；`is_domain` TLD 段放宽为
+                            #   `[a-z]{2,24}|xn--[a-z0-9-]{1,59}`；`targets.parse_line` / `iprecon.normalize_domain`
+                            #   / `blacklist._norm` / `jsmine._add` 全部改走它；
+                            #   ② `config/dicts/tlds.txt` 补 `xn--` 后缀（6423 → 6870，447 条）；
+                            #   ③ 展示层 `idn_display`（= `to_unicode`）在 4 个模板的域名列回中文，
+                            #   `value`/`href` 的真实值仍是 punycode；报告 MD/HTML 回中文、JSONL 保持 punycode；
+                            #   ④ **端到端真链路**：目标 `例子.中国` 跑 `-p subdomain`（桩解析器）→ 解析目标/
+                            #   产物/DB 全 punycode、任务详情页回中文。**每组都做 §6.1 变异证伪。**
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
                             #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）
 py -3 cli/client.py --update-tools            # 续54：联网装/更新 subfinder/httpx/puredns 并回写 tools.<名>
@@ -957,9 +969,14 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
     **离线**从 **tldextract 5.1.3 打包的 PSL 快照**生成（包约 2024-11 安装；快照的确切日期未标注）。
     快照之后新委派的 gTLD **不在其中**，且未收录的后缀按 **fail-closed 处理（会被丢弃）**。
     清单缺失/为空时 **fail-open**（回退宽松判断 + 告警一次）—— **宁可留噪音，也不静默丢资产**。
-  - **IDN / 中文域名整体不被识别**（**既有**能力缺失，非续22 引入）：`utils.is_domain()` 的
-    `_DOMAIN_RE` 要求末位 label 是**纯 ASCII 字母** `^[a-z]{2,24}$`，所以 `例子.中国`、
-    `foo.xn--fiqs8s` 全部被挡。**要支持 IDN 需另开一轮。**
+  - **IDN / 中文域名**（续65 已支持主链路）：`utils.to_ascii()` 在边界把 Unicode/punycode 归一为
+    ASCII，`is_domain`/`parse_line` 接受 punycode 形态，`config/dicts/tlds.txt` 已补 `xn--` 后缀
+    （约 6870 条）。**已知限制（仍未做）**：`utils.base_domain()` 的多段后缀表 `MULTI_TLD` 只列
+    ASCII（com.cn/co.uk …），**多段 IDN 公共后缀会切错**——实测
+    `base_domain('a.教育.香港') == base_domain('b.教育.香港') == '教育.香港'`，方向是
+    **多留（fail-open，偏保守）**而非漏资产：`*.教育.香港` 被判成同一注册域。单段 IDN TLD 不受
+    影响（`例子.中国`→`例子.中国`、`a.b.中国`→`b.中国` 均正确）。影响面仅
+    `extdom.promote_owned`/`is_owned` 的归属判定（偏保守，不误杀真实子域）。
   - **`.zip` 域名不被识别**（**既有**）：`jsmine._valid_host()` 的 `_FILE_EXT` 把 `zip`
     当文件后缀挡掉（`foo.zip` → False）。要支持需调整 `_FILE_EXT`。
   - **FOFA 标题归属过滤（`fofa.title_match`）的边界**：默认 `label` 档要求"标题某个 token

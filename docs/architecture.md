@@ -79,6 +79,15 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 而 Linux 产物名是无后缀的 `fscan`，故先按原值找、再试"去掉/补上 `.exe`"的变体，**一份配置两端通用**；
 探测走 `_probe()` 直探文件系统（Windows 上 `shutil.which` 遇到**带目录**的路径不补 `.exe`，
 POSIX 上另判可执行位），回归见 `tests/smoke.py [7y] ⑤`。
+`utils.to_ascii(text)` / `utils.to_unicode(host)` 是 **IDN / 中文域名（续65）** 的对称双入口：
+前者是**归一化的唯一入口** —— 纯 ASCII 走快路径（只 `lower`、**不调 idna**，保证既有 ASCII 主机
+逐字节不变、也不对已是 punycode 的串二次编码），含非 ASCII 时才 `encode('idna')`（标准库
+IDNA2003，零新依赖）；**失败语义是显式的**：空串 / 非法 IDNA / label>63B 一律返回 **None**
+（绝不"失败就返回原串"），故 `is_domain` / `targets.parse_line` / `iprecon.normalize_domain` /
+`blacklist._norm` / `jsmine._add` 都在边界调它，入库的主机名**全程是 punycode**。后者是
+**展示层专用**，best-effort：punycode → Unicode，**任何失败原样返回、绝不抛**（URL / 已是
+Unicode / 非法 punycode 都只是原样），页面与报告的域名列走它、`value`/`href` 的真实值仍是
+punycode（机读的 JSONL 段也保持 punycode）。
 
 `scanner/auth.py` 是**任务级登录态请求头**（Cookie / Authorization / 自定义头），用于扫"登录后才存在"
 的资产（`/admin`、业务接口、需要会话的 POC）。设计上是 **fail-closed**：`utils.http_request(auth=False)`
@@ -138,7 +147,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 | 用户黑名单**入库前过滤**（`scanner/blacklist.py`）而非入库打标 | 命中即不进资产库，后续阶段自然不扫；不必在每个阶段重复判"要不要跳过"，也不会被历史数据干扰 | 已入库的历史资产不受影响（需手动删任务）；`config/blacklist.txt` 为纯文本、需人工维护 |
 | 重叠资产**默认隐藏**（拓展域名域名级全局 / 站点 URL 级跨任务） | 反复扫同一目标时列表不被撑成 N 倍；默认视图是"新发现"，全量用 `?all=1` 显式打开 | 判重是"保留最早一条"，后扫到的新信息（如状态码变化）不会覆盖旧行 |
 | 批量跑子域名**新建任务**而非挂子任务 | 现有任务模型（一任务一线程 / 独立状态 / 独立停止删除）可直接复用 | 任务列表会多出一行；无法在一个树里聚合查看（收益不抵改表结构 + 任务树渲染的成本） |
-| **拓展域名的自动化走任务级选项 `auto_expand`**（续40：建任务页勾选「自动拓展扫描」/ CLI `--auto-expand`） | 自动补 `osint`/`jsmine` 阶段、拓展结束后自动做 DNS 存在性判定、把注册域属于本项目的拓展域名追加成子域名、目标是子域时补收其主域名 —— 这些都是**扩大扫描面**的行为，必须用户点名才做，不能让既有任务悄悄变样（与 `portscan_full` / `dirscan_full` 同一套语义） | 归属判定用 `utils.base_domain()` 的粗切注册域（不引公共后缀库，离线约束），双段后缀会切错但**偏保守**（少归不误归）；不勾时行为与续40 之前逐字一致 |
+| **拓展域名的自动化走任务级选项 `auto_expand`**（续40：建任务页勾选「自动拓展扫描」/ CLI `--auto-expand`） | 自动补 `osint`/`jsmine` 阶段、拓展结束后自动做 DNS 存在性判定、把注册域属于本项目的拓展域名追加成子域名、目标是子域时补收其主域名 —— 这些都是**扩大扫描面**的行为，必须用户点名才做，不能让既有任务悄悄变样（与 `portscan_full` / `dirscan_full` 同一套语义） | 归属判定用 `utils.base_domain()` 的粗切注册域（不引公共后缀库，离线约束），双段后缀会切错但**偏保守**（少归不误归）；多段 **IDN** 公共后缀（如 `教育.香港`，`MULTI_TLD` 只列 ASCII）同样适用（同样偏保守）；不勾时行为与续40 之前逐字一致 |
 | 拓展域名按**主域名分组折叠**（`/extdomains`，`?group=0` 回平铺） | 拓展出来的域名常几十上百个同属一个注册域，摊平看不出「这批是从哪个域来的」；分组只能在 Python 里做（SQL 侧没有注册域函数），故分组模式下**分页单位是主域名**（每页 20 个），否则同一主域名会被切到两页 | 分组上限 `extdom.GROUP_ROW_CAP=4000`，超了页面如实提示并建议切平铺；平铺模式仍是按行分页（走 `?size=`） |
 
 ## 数据流

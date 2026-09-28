@@ -12,9 +12,10 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from . import db
-from .utils import run_cmd
+from .utils import run_cmd, to_unicode
 
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
@@ -94,6 +95,52 @@ def _h(value):
     """HTML 转义。**必须**用它而不是裸拼接：标题 / URL / banner / evidence 都来自被测目标，
     不转义等于把对方控制的内容当我们的页面渲染（反射型 XSS）。"""
     return html.escape(str("" if value is None else value), quote=True)
+
+
+# ---------- IDN 展示回解（人类可读段专用）----------
+
+def _idn(value):
+    """ASCII(punycode) 主机名 → Unicode（人类可读段专用；失败原样返回，绝不抛）。
+
+    入库的主机名全程是 punycode（见 `utils.to_ascii`），**JSONL 段保持 punycode**
+    （机读稳定），只有 MD / HTML 这些给人看的段才回解成中文域名。
+    """
+    return to_unicode(value)
+
+
+def _idn_list(value):
+    """逗号分隔的域名串 → 逐个回解成 Unicode（人类可读段专用）；无 `xn--` 原样返回。"""
+    s = str("" if value is None else value)
+    if "xn--" not in s.lower():
+        return s
+    return ", ".join(to_unicode(x.strip()) for x in s.split(","))
+
+
+def _idn_url(url):
+    """URL 的主机名 → Unicode（人类可读段专用）；无主机 / 非 punycode / 失败 → 原样。
+
+    只碰含 `xn--` 的 URL：其余原样返回，避免对普通 URL 做无谓的解析与重建。
+    """
+    s = str("" if url is None else url)
+    if "xn--" not in s.lower():
+        return s
+    try:
+        p = urlsplit(s)
+        host = p.hostname
+        if not host:
+            return s
+        host_u = to_unicode(host)
+        if host_u == host:
+            return s
+        netloc = host_u
+        if p.port:
+            netloc += f":{p.port}"
+        if p.username:                                  # userinfo 极罕见，但保留不丢
+            userinfo = p.username + (f":{p.password}" if p.password else "")
+            netloc = f"{userinfo}@{netloc}"
+        return urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
+    except (ValueError, TypeError):
+        return s
 
 
 def _append_count(task):
@@ -195,7 +242,7 @@ def generate(task_id, full=False):
         lines.append("| URL | 状态 | 标题 | 技术栈 | Server |")
         lines.append("|---|---|---|---|---|")
         for s in sites[:CAP_SITES]:
-            lines.append(f"| {_c(s['url'])} | {_c(s['status'])} | {_c(s['title'] or '-')} | "
+            lines.append(f"| {_c(_idn_url(s['url']))} | {_c(s['status'])} | {_c(s['title'] or '-')} | "
                          f"{_c(s['tech'] or '-')} | {_c(s['server'] or '-')} |")
         lines.append("")
     if ports:
@@ -204,7 +251,7 @@ def generate(task_id, full=False):
         lines.append("| 主机 | IP | 端口 | 服务 | banner |")
         lines.append("|---|---|---|---|---|")
         for p in ports[:CAP_PORTS]:
-            lines.append(f"| {_c(p['host'] or '-')} | {_c(p['ip'] or '-')} | {_c(p['port'])} | "
+            lines.append(f"| {_c(_idn(p['host']) or '-')} | {_c(p['ip'] or '-')} | {_c(p['port'])} | "
                          f"{_c(p['service'] or '-')} | {_c((p['banner'] or '-')[:80])} |")
         lines.append("")
     if csegs:
@@ -214,7 +261,7 @@ def generate(task_id, full=False):
         lines.append("|---|---|---|---|")
         for c in csegs[:CAP_CSEGS]:
             lines.append(f"| {_c(c['segment'] or '-')} | {_c(c['ip'] or '-')} | {_c(c['count'])} | "
-                         f"{_c((c['domains'] or '-')[:120])} |")
+                         f"{_c(_idn_list(c['domains'] or '-')[:120])} |")
         lines.append("")
     if certs:
         # TLS 证书取证（默认关闭的 cert 阶段产物）。措辞刻意说清"取证 ≠ 漏洞"，
@@ -236,7 +283,7 @@ def generate(task_id, full=False):
         for c in certs[:CAP_CERTS]:
             left = ("已过期" if c["expired"] else
                     (f"{c['days_left']} 天" if c["days_left"] is not None else "-"))
-            lines.append(f"| {_c(_cert_source(c))} | {_c(c['host'])} | {_c(c['port'])} | "
+            lines.append(f"| {_c(_cert_source(c))} | {_c(_idn(c['host']))} | {_c(c['port'])} | "
                          f"{_c(c['cn'] or '-')} | "
                          f"{_c(c['issuer'] or '-')} | "
                          f"{_c((c['not_before'] or '-') + ' → ' + (c['not_after'] or '-'))} | "
@@ -247,7 +294,7 @@ def generate(task_id, full=False):
         lines.append("## " + _cap_title("子域名", len(subs), CAP_SUBS))
         lines.append("")
         lines.append("```")
-        lines.extend(r["domain"] for r in subs[:CAP_SUBS])
+        lines.extend(_idn(r["domain"]) for r in subs[:CAP_SUBS])
         lines.append("```")
         lines.append("")
     if dirs:
@@ -388,20 +435,20 @@ def generate_html(task_id, full=False):
         p.append("<h2>" + _cap_title("存活站点", len(sites), CAP_SITES) + "</h2>")
         p.append(_html_table(
             ["URL", "状态", "标题", "技术栈", "Server"],
-            [[_h(s["url"]), _h(s["status"]), _h(s["title"] or "-"),
+            [[_h(_idn_url(s["url"])), _h(s["status"]), _h(s["title"] or "-"),
               _h(s["tech"] or "-"), _h(s["server"] or "-")] for s in sites[:CAP_SITES]]))
     if ports:
         p.append("<h2>" + _cap_title("开放端口与服务", len(ports), CAP_PORTS) + "</h2>")
         p.append(_html_table(
             ["主机", "IP", "端口", "服务", "banner"],
-            [[_h(x["host"] or "-"), _h(x["ip"] or "-"), _h(x["port"]),
+            [[_h(_idn(x["host"]) or "-"), _h(x["ip"] or "-"), _h(x["port"]),
               _h(x["service"] or "-"), _h((x["banner"] or "-")[:80])] for x in ports[:CAP_PORTS]]))
     if csegs:
         p.append("<h2>" + _cap_title("C 段视野", len(csegs), CAP_CSEGS) + "</h2>")
         p.append(_html_table(
             ["C 段", "IP", "域名数", "反查到的域名"],
             [[_h(x["segment"] or "-"), _h(x["ip"] or "-"), _h(x["count"]),
-              _h((x["domains"] or "-")[:120])] for x in csegs[:CAP_CSEGS]]))
+              _h(_idn_list(x["domains"] or "-")[:120])] for x in csegs[:CAP_CSEGS]]))
     if certs:
         p.append("<h2>" + _cap_title("TLS 证书（取证，非漏洞结论）",
                                     len(certs), CAP_CERTS) + "</h2>")
@@ -414,7 +461,7 @@ def generate_html(task_id, full=False):
         p.append(_html_table(
             ["来源", "主机", "端口", "CN", "颁发者", "有效期", "剩余", "自签", "签名算法",
              "指纹(SHA256)"],
-            [[_h(_cert_source(c)), _h(c["host"]), _h(c["port"]), _h(c["cn"] or "-"),
+            [[_h(_cert_source(c)), _h(_idn(c["host"])), _h(c["port"]), _h(c["cn"] or "-"),
               _h(c["issuer"] or "-"),
               _h((c["not_before"] or "-") + " → " + (c["not_after"] or "-")),
               _h("已过期" if c["expired"] else
@@ -423,7 +470,7 @@ def generate_html(task_id, full=False):
               _h(c["sha256"] or "-")] for c in certs[:CAP_CERTS]]))
     if subs:
         p.append("<h2>" + _cap_title("子域名", len(subs), CAP_SUBS) + "</h2>")
-        p.append("<pre>" + _h("\n".join(r["domain"] for r in subs[:CAP_SUBS])) + "</pre>")
+        p.append("<pre>" + _h("\n".join(_idn(r["domain"]) for r in subs[:CAP_SUBS])) + "</pre>")
     if dirs:
         p.append("<h2>" + _cap_title("目录发现", len(dirs), CAP_DIRS) + "</h2>")
         p.append(_html_table(["状态", "路径"],

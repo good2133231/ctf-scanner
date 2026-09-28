@@ -34,7 +34,7 @@ import re
 import time
 import urllib.parse
 
-from .utils import http_request, is_domain
+from .utils import http_request, is_domain, to_ascii
 
 API = "https://crt.sh/"
 
@@ -224,7 +224,9 @@ def domains_of(records, limit=0):
     out, seen = [], set()
     for rec in records or []:
         for name in (rec.get("san") or []):
-            name = str(name or "").strip().lower().strip(".")
+            # IDN / 中文域名先归一成 ASCII(punycode)：与 osint 的收口同口径，保证写进
+            # `subdomains` 的域名全程 punycode（否则 Unicode 直落库、与 JSONL 口径矛盾）。
+            name = to_ascii(str(name or "").strip().lower().strip(".")) or ""
             if not name or name in seen or not is_domain(name):
                 continue
             seen.add(name)

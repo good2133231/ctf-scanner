@@ -38,7 +38,7 @@ from .. import shodan as shodan_mod
 from .. import quake as quake_mod
 from .. import ctlog as ctlog_mod
 from ..fingerprint import favicon_hash
-from ..utils import base_domain, is_domain, pool_run, resolve_host
+from ..utils import base_domain, is_domain, pool_run, resolve_host, to_ascii
 
 # ---------- FOFA 标题反查的相关性过滤 ----------
 
@@ -571,9 +571,11 @@ def _domain_of(asset):
     raw = str(asset.get("domain") or "").strip().lower().strip(".")
     if not raw:
         raw = (urlparse(str(asset.get("host") or "")).hostname or "").strip(".")
-    # 统一走 `utils.is_domain()`：它已经把"裸 IP / 带端口 / 带路径 / 通配符"全部挡掉，
+    # 统一走 `utils.to_ascii()` + `utils.is_domain()`：前者把 IDN/中文域名归一成 ASCII(punycode)，后者把"裸 IP / 带端口 / 带路径 / 通配符"全部挡掉，
     # 比这里各写一份判断更可靠（用户要求"简单判断是不是域名"）。
-    return raw if is_domain(raw) else ""
+    # 归一失败（None）按空串丢弃（显式不静默），保证"全程 punycode 入库"的不变量。
+    a = to_ascii(raw)
+    return a if (a and is_domain(a)) else ""
 
 
 def _tally(items):

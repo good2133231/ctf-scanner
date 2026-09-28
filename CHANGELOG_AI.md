@@ -3,6 +3,88 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-28 —— 续65：**支持 IDN / 中文域名**（punycode 主链路 + 展示回解）+ smoke `[8]`
+
+> 实施者：**WorkBuddy · Claude**。**本轮动代码**（T01~T04）。
+
+### 缺陷与根因（实测）
+
+`例子.中国` 这类目标被判 `unknown` **静默丢弃**（`parse_line('例子.中国') == ('unknown', '例子.中国')`）。
+根因是**四处同口径的重复编码**，都只认纯 ASCII 字母 TLD：
+
+| # | 位置 | 症状 |
+|---|---|---|
+| 1 | `scanner/utils.py` `_DOMAIN_RE` | TLD 段要求 `[a-z]{2,24}` → `例子.中国` / `xn--fsqu00a.xn--fiqs8s` 全 False |
+| 2 | `scanner/targets.py` `DOMAIN_RE` | 另一份（带 `re.I`、`{2,}`），口径已与 1 不一致 |
+| 3 | `scanner/iprecon.py` `_DOMAIN_OK` + `normalize_domain()` 末行 `d.split(".")[-1].isalpha()` | 逐字符白名单 + 纯字母 TLD → 丢掉 `xn--fiqs8s` |
+| 4 | `scanner/utils.py` `MULTI_TLD` | 硬编码 14 条 ASCII 多段后缀（本轮**不动**，登记为已知限制） |
+
+PSL：`config/dicts/tlds.txt` 6423 条里 `xn--` 条目 = **0** —— `tools/import_tlds.py` 把非 ASCII
+后缀整批过滤掉了（原注释"IDN 后缀永远不会命中"的推理是**错的**：tldextract 把 IDN 后缀存成
+**Unicode** 形态，`xn--fiqs8s` 本来能过那条 ASCII 正则）。
+
+### 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/utils.py` | 新增 `to_ascii()`（归一化**唯一入口**：纯 ASCII 快路径/幂等/**失败返回 None**）与 `to_unicode()`（展示回解，**失败原样、绝不抛**）；`_DOMAIN_RE` 的 TLD 段放宽为 `[a-z]{2,24}\|xn--[a-z0-9-]{1,59}`；`is_domain` 先 `to_ascii` 再匹配 |
+| `scanner/targets.py` | 删本地 `DOMAIN_RE`，域名口径收敛到 `utils.to_ascii` + `is_domain` |
+| `scanner/blacklist.py` | `_norm()` 末尾补 `to_ascii`（比较边界归一，否则 Unicode↔punycode **永不匹配 = 用户加黑名单却静默失效**） |
+| `scanner/iprecon.py` | 删 `_DOMAIN_OK`，`normalize_domain()` 改走 `to_ascii` + `is_domain`（两条**收紧**：中段 `*` 拒绝、长度上限 ≤253/label≤63） |
+| `tools/import_tlds.py` | `collect()` 在 ASCII 过滤前把非 ASCII 后缀 `encode('idna')` 转 punycode；更正 docstring |
+| `config/dicts/tlds.txt` | 重新生成：**6423 → 6870 条**（`xn--` 447 条），CRLF 保持 |
+| `scanner/jsmine.py` | `_extract._add()` 在 `_valid_host` 前先 `to_ascii`；**语义闸门（PSL）不动** |
+| `gui/app.py` | 注册 `idn_display = utils.to_unicode` 全局 |
+| `gui/templates/{subdomains,extdomains,ips,task_detail}.html` | 域名列改 `idn_display(...)`；`value`/`href` 的真实值**仍是 punycode** |
+| `scanner/report.py` | MD/HTML **人类可读**段的域名走 `to_unicode`；**JSONL 保持 punycode**（机读稳定） |
+| `tests/smoke.py` | 新增 `[8]`（见下） |
+| 文档 | 本文件 + `AGENTS.md §6/§7` + `docs/roadmap.md` + `docs/architecture.md` + `todo.txt` |
+
+### 契约（两个方向的失败语义）
+
+- `to_ascii`：**失败必须返回 None**（空串 / 非法 IDNA / label>63B），**绝不静默返回原串**；
+  纯 ASCII 走快路径（只 `lower`、**不调 idna**，保证既有 ASCII 主机逐字节不变、也不二次编码）。
+- `to_unicode`：**任何失败原样返回、绝不抛**（展示层专用；URL / 已是 Unicode / 非法 punycode 都只是原样）。
+
+### 验证
+
+- `py -3 -m py_compile`（13 个改动 .py，含 smoke）→ rc=0。
+- `py -3 tools/import_tlds.py --force` → **6870 条**（`grep -c 'xn--'` = 447，含 `xn--fiqs8s`）。
+- `tests/smoke.py [8]`：to_ascii / to_unicode / is_domain 三态 + 既有行为 / parse_line / blacklist
+  双向命中 / normalize_domain 两条收紧 / 页面级回中文（`value` 仍 punycode）/ **端到端真链路**（目标
+  `例子.中国` → 解析目标·产物·DB 全 punycode、详情页回中文），**每组含 §6.1 变异证伪**。
+- 全量 `py -3 tests/smoke.py` → **SMOKE PASS**。
+### QA 独立复核收口（同日）
+
+QA 独立复核发现**两条输入路径未达成"全程 punycode"**（本轮目标未完全达成），已一并收掉 —— 并把同型路径扫了一遍：
+
+- `scanner/stages/osint.py::_domain_of()`：Unicode 直落 `subdomains`（实测 DB 里就是 `['例子.中国']`，与"JSONL 保持 punycode"矛盾、同域两种形态并存）→ 返回前先 `to_ascii` 归一。
+- `scanner/ctlog.py::domains_of()`：**同型**（SAN 里的 Unicode 域名直返）→ 同样先 `to_ascii` 再判定。
+- `scanner/targets.py::parse_line()` URL 分支：`parse_line('https://例子.中国/x')` 直返 Unicode URL → 仅当主机含非 ASCII 时用 `urlsplit/urlunsplit` 重建（保留端口/路径/query/fragment）；**ASCII URL 逐字节不变**。
+- `scanner/stages/subdomain.py::add_many()`：同类（被动来源若回传 Unicode 名字未归一）→ 名字先 `to_ascii`（ASCII 逐字节不变）。
+- `scanner/jsmine.py::_valid_host()`：契约不自洽（靠调用方先归一）→ 入口补一次 `to_ascii`（幂等、无副作用）。
+- `scanner/utils.py::to_ascii()` docstring：与实现不符（纯 ASCII 超长 label 走快路径**原样返回、非 None**）→ 改 docstring 划清"只归一、不校验；None 仅空串 / IDNA 失败"。
+
+smoke `[8]` 新增 `(i)` 组覆盖 F1 / F2 / F4 + `add_many`，再增 `(j)` 组覆盖 **F1b 咽喉点**（**每组含 §6.1 变异证伪**）。
+
+**F1b 咽喉点（结构性保证）**：`scanner/db.py::insert_subdomains()` 入口统一 `to_ascii` 归一 ——
+"库里只可能有 punycode 形态"从"N 处调用点各自约定"升级为**写库边界的结构性保证**（归一失败的行
+跳过 + warning，绝不静默入库）；同源的 `set_subdomain_cnames()`（UPDATE 路径，key 若 Unicode
+会静默不匹配 → CNAME 悄悄丢失）一并入口归一。
+
+**G1（失败语义自洽）**：`utils.to_ascii()` 对**非主机输入（含 `:` / `/`）显式返回 None** ——
+此前 `to_ascii("例子.中国:8080")` 会返回**乱码 punycode**（`xn--fsqu00a.xn--:8080-4n1hm04c`），
+是**静默的错误值**；守卫（`if not host or ":" in host or "/" in host: return None`）与空串 /
+IDNA 失败同口径，docstring 同步改为实话（`:` / `/` 在合法主机名里不可能出现，不误伤）。
+
+
+### 明确不做（登记为已知限制）
+
+- `utils.base_domain()` 的 `MULTI_TLD` 仅 ASCII → **多段 IDN 公共后缀会切错**（实测
+  `base_domain('a.教育.香港') == base_domain('b.教育.香港') == '教育.香港'`，方向是**多留/fail-open**、
+  偏保守）；影响面仅 `extdom.promote_owned`/`is_owned` 的归属判定。单段 IDN TLD 不受影响。
+- `.zip` 域名（`jsmine._FILE_EXT`）与 `jsmine._QUOTED_HOST_RE`（ASCII-only）**未动**。
+
 ## 2026-09-28 —— 续64：**修截图缺陷**（自签/过期 HTTPS 永远截不到图）+ smoke `[7z]` + 勘误续62
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。**本轮动代码**（区别于续63 的纯文档轮）。
@@ -3692,6 +3774,9 @@ QA 判定续25 整体**通过**（10 项重点全成立、3 条证伪都真失�
   清单缺失/为空时 **fail-open**（宁可留噪音，也不静默丢资产）；
   ② **IDN / 中文域名整体不被识别**（**既有**能力缺失：`is_domain` 的 `_DOMAIN_RE` 要求末位
   label 是纯 ASCII 字母）；③ **`.zip` 域名不被识别**（**既有**：`_FILE_EXT` 把 `zip` 当文件后缀）；
+  ——【2026-09-28 续65 勘误】上面 ② 已**不再成立**：续65 已支持 IDN / 中文域名主链路
+  （`utils.to_ascii()` 边界归一 + `is_domain`/`parse_line` 接受 punycode 形态 + `tlds.txt` 补
+  `xn--` 后缀）。**③ 仍成立**（`.zip` 域名本轮未动）。
   ④ **FOFA 标题 `label` 档连字符域名永不命中**（`pengo-wallet.com` 会被丢弃，需 `substring` 档）。
 
 ### 验证
@@ -3705,6 +3790,8 @@ QA 判定续25 整体**通过**（10 项重点全成立、3 条证伪都真失�
 
 ### 明确不做
 - **不修** IDN / `.zip` 的既有识别缺失（需另开一轮，不是本轮范围）。
+  ——【2026-09-28 续65 勘误】"不修 IDN"已**不再成立**：续65 已支持 IDN / 中文域名主链路
+  （见本文件顶部续65 条目）；`.zip` 仍**不修**（`_FILE_EXT` 未动，仍属另开一轮）。
 - **不改** `label` 档规则：连字符边界已写进文档，需要时用 `substring` 档放宽。
 
 ## 2026-09-24 —— 续25：同任务「追加式执行」（补扫/复查结果累积进同一任务）

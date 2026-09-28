@@ -1733,3 +1733,24 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ④ §7 与 roadmap 登记"自检不覆盖截图"（端到端覆盖在 smoke [7z]；要让自检也跑到需把截图目标
        改 IP 形态，属独立一轮）；⑤ §9 的绝对路径（myscan_20250825）移到 §2 末集中说明；
        ⑥ 主理人预期 devflow 变 19/16 被实测证伪（仍 18 OK / 0 MISS / 17 N-A）。
+2026-09-28 续65：**支持 IDN / 中文域名**（punycode 主链路 + 展示回解）+ smoke `[8]`
+       ① 根因：`例子.中国` 被判 `unknown` 静默丢弃 —— 四处同口径的重复编码都只认纯 ASCII 字母
+       TLD（`utils._DOMAIN_RE` / `targets.DOMAIN_RE` / `iprecon._DOMAIN_OK`+`.isalpha()` /
+       `jsmine` 的 host 判定），且 PSL `tlds.txt`（6423 条）里 `xn--` 条目 = 0（`import_tlds`
+       把非 ASCII 后缀整批滤掉；tldextract 把 IDN 后缀存成 Unicode 形态，原注释的推理是错的）。
+       ② 改法：归一化收敛到 `utils.to_ascii()` 一处（ASCII 快路径/幂等/**失败返回 None**，绝不
+       静默返回原串）+ `utils.to_unicode()` 展示回解（失败原样、绝不抛）；`_DOMAIN_RE` TLD 段放宽为
+       `[a-z]{2,24}|xn--[a-z0-9-]{1,59}`；`targets.parse_line` / `iprecon.normalize_domain` /
+       `blacklist._norm` / `jsmine._add` 全改走它；`tlds.txt` 重新生成 6423 → **6870**（xn-- 447）；
+       展示层 `idn_display` 在 4 个模板回中文（`value`/`href` 真实值仍 punycode），报告 MD/HTML
+       回中文、JSONL 保持 punycode。
+       ③ 回归：`tests/smoke.py [8]`（续65）—— to_ascii / to_unicode / is_domain 三态 + 既有行为 /
+       parse_line / blacklist 双向命中 / normalize_domain 两条收紧 / 页面级回中文 /
+       **端到端真链路**（目标 `例子.中国` → 解析目标·产物·DB 全 punycode、详情页回中文），
+       **每组含 §6.1 变异证伪**。
+       ④ 独立遗留（登记为已知限制，未擅改）：`utils.base_domain()` 的 `MULTI_TLD` 仅 ASCII →
+       **多段 IDN 公共后缀会切错**（实测 `a.教育.香港` 与 `b.教育.香港` 都切成 `教育.香港`，方向是
+       **多留/fail-open**、偏保守）；影响面仅 `extdom.promote_owned`/`is_owned` 的归属判定。
+       另：`.zip` 域名（`_FILE_EXT`）与 `jsmine._QUOTED_HOST_RE`（ASCII-only）本轮未动。
+       ⑤ 验证：`py_compile` 8 文件 rc=0；`import_tlds.py --force` → 6870 条；全量 `tests/smoke.py`
+       → SMOKE PASS；`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件一致（EOL 未漂移）。

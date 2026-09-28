@@ -255,7 +255,7 @@
       <thead><tr><th>子域名</th><th>解析 IP</th><th>CDN</th><th>CNAME</th><th>来源</th></tr></thead>
       <tbody>
       {% for s in subs %}
-        <tr><td class="mono">{{ s.domain }}</td>
+        <tr><td class="mono">{{ idn_display(s.domain) }}</td>
           <td class="muted small mono">{{ s.ip or '-' }}
             {%- if not s.ip and s.ip_note %}<br><span class="muted small"
               title="为什么没有解析结果">{{ ip_note_label(s.ip_note) }}</span>{% endif %}</td>
@@ -340,7 +340,7 @@
         {% for s in ext_subs %}
           <tr><td class="pick"><input type="checkbox" class="pick pick-row"
                 name="domain" value="{{ s.domain }}"></td>
-            <td class="mono">{{ s.domain }}</td>
+            <td class="mono">{{ idn_display(s.domain) }}</td>
             <td class="muted small mono">{{ s.ip or '-' }}
               {%- if not s.ip and s.ip_note %}<br><span class="muted small"
                 title="为什么没有解析结果">{{ ip_note_label(s.ip_note) }}</span>{% endif %}</td>

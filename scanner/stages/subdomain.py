@@ -20,7 +20,7 @@
 from .base import Stage
 from .. import blacklist, cdn, db, dnsq, passive, wildcard
 from ..config import resolve
-from ..utils import (base_domain, is_domain, which, verify_tool, run_cmd, read_lines,
+from ..utils import (base_domain, is_domain, to_ascii, which, verify_tool, run_cmd, read_lines,
                      write_lines, pool_run)
 
 # 需要做泛解析复核的来源（爆破类来源已自带通配过滤，不重复查询）
@@ -77,7 +77,9 @@ class SubdomainStage(Stage):
             """items: (name, source) 可迭代；同名只记首个来源。返回新增条数。"""
             n = 0
             for name, src in items:
-                name = (name or "").strip().lower().rstrip(".")
+                # IDN / 中文域名 → punycode（被动来源/外部工具理论上可能回传 Unicode）；
+                # 归一失败按空串丢弃（显式不静默）。ASCII 名字逐字节不变。
+                name = to_ascii((name or "").strip().lower().rstrip(".")) or ""
                 if not name or name in found:
                     continue
                 found.add(name)

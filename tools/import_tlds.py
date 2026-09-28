@@ -17,8 +17,9 @@
 `scanner/jsmine.py` 只读本脚本产出的 txt）。
 
 产出：一行一个后缀（小写；含多段后缀如 `co.uk` / `com.cn` / `ac.uk`）；
-去掉 PSL 的通配 `*.` 与例外 `!` 前缀；只保留 **ASCII** 后缀（运行时 host 判定是 ASCII 的，
-IDN 后缀永远不会命中，留着徒增体积）。
+去掉 PSL 的通配 `*.` 与例外 `!` 前缀；非 ASCII（IDN）后缀先转 **punycode**（`xn--…`）
+再保留 —— tldextract 的 PSL 快照把 IDN 后缀存成 **Unicode** 形（如 `中国`），直接按
+"只留 ASCII"过滤会把它们**整批滤掉**，运行时的 IDN 域名判定随之 fail-closed 丢资产。
 """
 import argparse
 import re
@@ -28,7 +29,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "config" / "dicts" / "tlds.txt"
 
-# 只保留 ASCII 后缀：运行时 host 由 utils.is_domain() 判定，其 TLD 是纯字母的 ASCII。
+# 只保留 ASCII 后缀：运行时 host 由 utils.is_domain() 判定，其 TLD 段是 ASCII 的
+# （纯字母或 `xn--…` punycode 形）。IDN 后缀在 collect() 里已先转 punycode。
 _ASCII_SUFFIX_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$")
 
@@ -40,7 +42,7 @@ HEADER = (
 
 
 def collect():
-    """返回排序去重后的 ASCII 后缀列表；tldextract 不可用返回 None。"""
+    """返回排序去重后的 ASCII 后缀列表（IDN 后缀先转 punycode）；tldextract 不可用返回 None。"""
     try:
         import tldextract
     except ImportError:
@@ -52,7 +54,17 @@ def collect():
     for raw in ext.tlds:
         s = str(raw or "").strip().lower()
         s = s.lstrip("*").lstrip("!").strip(".")   # 去通配 *. 与例外 ! 前缀
-        if not s or s in seen or not _ASCII_SUFFIX_RE.match(s):
+        if not s:
+            continue
+        # IDN 后缀（PSL 快照里存成 **Unicode** 形，如 `中国`）先转 ASCII punycode
+        # （`xn--fiqs8s`）再走过滤 —— 否则 `_ASCII_SUFFIX_RE` 会把它们整批滤掉，
+        # `xn--` 后缀一条都进不了清单，运行时的 IDN 域名判定随之 fail-closed 丢资产。
+        if not s.isascii():
+            try:
+                s = s.encode("idna").decode("ascii")
+            except (UnicodeError, ValueError):
+                continue
+        if s in seen or not _ASCII_SUFFIX_RE.match(s):
             continue
         seen.add(s)
         out.append(s)

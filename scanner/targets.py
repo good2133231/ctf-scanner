@@ -1,8 +1,10 @@
 """目标解析与归一化：每行一个目标，支持域名 / URL / IP / CIDR，# 开头为注释。"""
 import ipaddress
 import re
+from urllib.parse import urlsplit, urlunsplit
 
-DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$", re.I)
+from .utils import is_domain, to_ascii
+
 IP_RE = re.compile(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$")
 CIDR_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}$")
 
@@ -34,18 +36,36 @@ def parse_line(line):
         return None
     low = s.lower()
     if low.startswith(("http://", "https://")):
+        # URL 形态的 IDN 目标：只在**主机含非 ASCII** 时才重建 URL（ASCII URL 必须逐字节
+        # 不变）。用 urlsplit/urlunsplit 保留 scheme/端口/路径/query/fragment；归一失败
+        # （to_ascii 返回 None）就退回原串，交给下游的形态判断兜（显式不静默）。
+        sp = urlsplit(s)
+        hostname = sp.hostname
+        if hostname and any(ord(c) > 127 for c in hostname):
+            try:
+                port = sp.port
+            except ValueError:
+                port = None
+            host = to_ascii(hostname)
+            if host:
+                netloc = host + (f":{port}" if port else "")
+                s = urlunsplit((sp.scheme, netloc, sp.path, sp.query, sp.fragment))
         return ("url", s)
     if CIDR_RE.match(s):
         return ("cidr", s)
     m = IP_RE.match(s)
     if m and all(0 <= int(g) <= 255 for g in m.groups()):
         return ("ip", s)
-    if DOMAIN_RE.match(s):
-        return ("domain", low)
+    # 域名口径**收敛到一处**（`utils.to_ascii` + `utils.is_domain`）：IDN / 中文域名在此
+    # 归一为 punycode 形入库（下游 DNS/HTTP/DB 全程用 ASCII），界面再回解成 Unicode。
+    a = to_ascii(s)
+    if a and is_domain(a):
+        return ("domain", a)
     # 容错：host:port 或带路径的裸域名
     host = s.split("/")[0].split(":")[0]
-    if DOMAIN_RE.match(host):
-        return ("domain", host.lower())
+    a = to_ascii(host)
+    if a and is_domain(a):
+        return ("domain", a)
     return ("unknown", s)
 
 

@@ -51,7 +51,8 @@ from scanner.pocs import engine
 from scanner import runner
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
-from scanner.utils import format_duration, pool_run, rel_display, scrub_paths
+from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths,
+                           to_unicode)
 
 logger = get_logger("gui")
 
@@ -385,6 +386,10 @@ def create_app():
     # 模板里可直接调用 `source_label('osint:fofa')` → 「ICO 反查」（来源列的可读标签）
     app.jinja_env.globals["source_label"] = source_label
     app.jinja_env.globals["ip_note_label"] = ip_note_label
+    # 展示层：把入库的 ASCII(punycode) 主机名回解成 Unicode（中文域名）—— 与
+    # `source_label` / `ip_note_label` 同款全局；只改显示，`value`/`href` 里的真实值
+    # 仍是 punycode（见 `gui/templates/*.html` 的域名列）。
+    app.jinja_env.globals["idn_display"] = to_unicode
     # 续50：开发模式开关 —— 供 base.html 决定是否渲染「开发模式」侧栏入口。
     # 与 gui.host / allowed_hosts 同口径：改 config/settings.yaml 后需**重启控制台**才生效。
     app.jinja_env.globals["dev_enabled"] = devmode.enabled(settings)

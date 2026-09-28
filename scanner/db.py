@@ -13,6 +13,10 @@ import time
 from pathlib import Path
 
 from .config import BASE_DIR, env_path
+from .log import get_logger
+from .utils import to_ascii
+
+logger = get_logger("db")
 
 # 库路径可用环境变量 CTFSCANNER_DB 覆盖 —— **测试必须走独立库**：
 # 回归测试（tests/smoke.py）会创建任务、写资产、改 POC 开关，若直接落在 data/scanner.db，
@@ -786,21 +790,46 @@ def task_counts(task_id):
 # ---------- 资产 ----------
 
 def insert_subdomains(task_id, items):
-    """items: [(domain, source[, cname]), ...]"""
+    """items: [(domain, source[, cname]), ...]
+
+    ⚠️ **punycode 归一化的唯一咽喉点**（续65）：`domain` 一律先过 `utils.to_ascii()` 再入库，
+    于是"库里只可能有 punycode 形态"是**结构性保证**，新增写库路径不必再各自归一
+    （但**读取 / 比较侧仍要归一** —— 见 `blacklist._norm`）。
+    归一失败（`to_ascii` 返回 None）的行**跳过并记 warning**，绝不把原串静默塞进库。
+    """
     if not items:
         return
     rows = []
     for it in items:
         domain, source = it[0], it[1]
         cname = it[2] if len(it) > 2 else ""
-        rows.append((task_id, domain, source, cname or ""))
+        a = to_ascii(domain)
+        if not a:
+            logger.warning(f"[db] insert_subdomains 跳过归一失败的域名：{domain!r}（source={source!r}）")
+            continue
+        rows.append((task_id, a, source, cname or ""))
+    if not rows:
+        return
     _exec("INSERT INTO subdomains(task_id, domain, source, cname) VALUES(?,?,?,?)",
           rows, many=True)
 
 
 def set_subdomain_cnames(task_id, mapping):
-    """回填子域名的 CNAME（客户端接管/泛解析分析用）。mapping: {domain: cname}"""
-    rows = [(c, task_id, d) for d, c in (mapping or {}).items() if c]
+    """回填子域名的 CNAME（客户端接管/泛解析分析用）。mapping: {domain: cname}
+
+    `domain` 先过 `utils.to_ascii()` 归一：UPDATE 按 `domain=?` 匹配，若 key 是 Unicode 而库里
+    是 punycode，会**静默不匹配**（CNAME 悄悄丢失）—— 与 `insert_subdomains` 同源的咽喉点
+    思路，入口归一（幂等，对已是 punycode 的 key 零影响）。归一失败的行跳过并记 warning。
+    """
+    rows = []
+    for d, c in (mapping or {}).items():
+        if not c:
+            continue
+        a = to_ascii(d)
+        if not a:
+            logger.warning(f"[db] set_subdomain_cnames 跳过归一失败的域名：{d!r}")
+            continue
+        rows.append((c, task_id, a))
     if not rows:
         return
     _exec("UPDATE subdomains SET cname=? WHERE task_id=? AND domain=?", rows, many=True)

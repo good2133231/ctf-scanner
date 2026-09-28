@@ -10,7 +10,7 @@
 from pathlib import Path
 
 from .config import BASE_DIR
-from .utils import read_lines
+from .utils import read_lines, to_ascii
 
 
 def path(settings=None):
@@ -138,7 +138,14 @@ def remove(domains, settings=None):
 
 
 def _norm(value):
-    """归一化：小写、去空白与前后点、把 `*.example.com` 视作 `example.com`。"""
+    """归一化：小写、去空白与前后点、把 `*.example.com` 视作 `example.com`，
+    再把主机名统一成 **ASCII(punycode) 形**（IDN 比较边界）。
+
+    末尾补 `to_ascii` 的理由：文件里写 `例子.中国`、而查询是 punycode（或反过来）时，
+    不归一就**永不匹配** = 用户加了黑名单却没生效（静默失效）。黑名单文件本身不动，
+    存量条目靠比较侧归一兜住；`to_ascii` 失败（非法 IDNA）时退回已小写/去点的原串，
+    保持"只是没匹配上"的降级语义，绝不因此丢条目。
+    """
     text = str(value or "").strip().lower()
     if not text or text.startswith("#"):
         return ""
@@ -147,4 +154,4 @@ def _norm(value):
     text = text.strip(".")
     if not text or " " in text or "/" in text:
         return ""
-    return text
+    return to_ascii(text) or text

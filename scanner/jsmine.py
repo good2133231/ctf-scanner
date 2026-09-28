@@ -17,7 +17,7 @@
 import re
 from urllib.parse import urljoin, urlparse
 
-from .utils import base_domain, http_request, is_domain, pool_run
+from .utils import base_domain, http_request, is_domain, pool_run, to_ascii
 
 # ---------- 第三方域名黑名单（噪声源）----------
 
@@ -219,10 +219,14 @@ _MEMBER_RE = re.compile(r"""[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+""")
 # ---------- 主机名判定 ----------
 
 def _valid_host(host):
-    """是否为"像域名的"主机（先走统一的 `utils.is_domain()` 形态判断，再排 JS 特有的噪声）。"""
+    """是否为"像域名的"主机（先走统一的 `utils.is_domain()` 形态判断，再排 JS 特有的噪声）。
+
+    **入口自带 IDN 归一**（`to_ascii`，幂等无副作用）：即便调用方没先归一，直接喂 Unicode
+    主机（`例子.中国`）也能得到自洽结论 —— 下面的 PSL / label 判断只认 ASCII(punycode) host。
+    """
+    host = to_ascii(host) or ""
     if not is_domain(host):
         return False
-    host = host.lower().strip(".")
     labels = host.split(".")
     if labels[0] in _CODE_LABELS:                       # process.env.token 类成员访问链
         return False
@@ -281,6 +285,9 @@ def _extract(text, scheme, protect, blacklist):
 
     def _add(host, raw_url=None):
         host = (host or "").lower().strip(".")
+        # 绝对 URL 里可能是 **Unicode 主机**（IDN）：先归一成 ASCII(punycode) 再走
+        # `_valid_host` 的 PSL 语义闸门（`_valid_host` 只认 ASCII host）；失败按空串丢弃。
+        host = to_ascii(host) or ""
         if not _valid_host(host) or _is_noise(host, protect, blacklist):
             return
         hosts.add(host)

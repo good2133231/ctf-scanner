@@ -1486,7 +1486,8 @@ def main():
     finally:
         utils_mod.http_request = _orig_http
     # 5) 反查域名不再接受 `_`（与 utils.is_domain 口径一致）
-    assert "_" not in iprecon_mod._DOMAIN_OK
+    assert iprecon_mod.normalize_domain("a_b.com") == "" \
+        and iprecon_mod.normalize_domain("foo.bar") == "foo.bar"
     # 6) FOFA 查询串要清掉引号与反斜杠（会提前闭合/转义掉闭合引号）
     assert fofa.build_cert_query('a"b\\c.com') == 'cert="abc.com"', fofa.build_cert_query('a"b\\c.com')
     assert fofa.build_title_query('x"y') == 'title="xy"'
@@ -10225,6 +10226,399 @@ http:
           "（变异证伪：过滤 `_FLAGS` 即红）｜相对产物路径被绝对化（`--screenshot=` 为绝对路径，"
           "变异证伪：`_abs_out` 打回恒等即红）｜端到端对**真夹具自签 HTTPS 口**调生产函数 "
           "`capture()` 返回 True 且 png 非空（无浏览器则按 [7x] 口径跳过，不误判为通过）")
+
+    # ---------------- [8] 续65：IDN / 中文域名（punycode 主链路 + 展示回解） ----------------
+    # 缺陷：`例子.中国` 这类目标被判 `unknown` **静默丢弃**。根因是**四处同口径的重复编码**
+    # （`utils._DOMAIN_RE` / `targets.DOMAIN_RE` / `iprecon._DOMAIN_OK`+`.isalpha()` / jsmine 的
+    # host 判定）都只认纯 ASCII 字母 TLD；PSL `tlds.txt` 又因 `import_tlds` 把非 ASCII 后缀整批
+    # 滤掉而**一条 `xn--` 都没有**。本轮把归一化收敛到 `utils.to_ascii()` 一处，`tlds.txt` 补
+    # `xn--` 后缀（6423 → 6870），展示层再回解成中文（`utils.to_unicode` / `idn_display`）。
+    from scanner import utils as _u8
+    from scanner import blacklist as _bl8
+    from scanner import iprecon as _ip8
+    from scanner.targets import parse_line as _pl8
+
+    print("[8] 续65 IDN/中文域名（punycode 主链路 + 展示回解；含变异证伪）…")
+
+    # (a) to_ascii：ASCII 快路径（逐字节不变）+ 幂等 + 失败返回 None（**绝不静默返回原串**）
+    assert _u8.to_ascii("example.com") == "example.com", "ASCII 快路径不该改动主机名"
+    assert _u8.to_ascii("EXAMPLE.COM") == "example.com", "ASCII 快路径只做 lower"
+    assert _u8.to_ascii("例子.中国") == "xn--fsqu00a.xn--fiqs8s", _u8.to_ascii("例子.中国")
+    assert _u8.to_ascii("他.说") == "xn--8mq.xn--9e3a", _u8.to_ascii("他.说")
+    assert _u8.to_ascii(_u8.to_ascii("例子.中国")) == _u8.to_ascii("例子.中国"), "to_ascii 必须幂等"
+    assert _u8.to_ascii("") is None and _u8.to_ascii(None) is None, "空 / None 必须返回 None"
+    assert _u8.to_ascii("例子..中国") is None, "非法 IDNA（空 label）必须返回 None"
+    assert _u8.to_ascii("x" * 64 + ".中国") is None, "label>63B 必须返回 None"
+    # G1/G2：非主机输入（带端口 / 路径）**显式返回 None**，不留静默乱码 punycode
+    assert _u8.to_ascii("例子.中国:8080") is None, _u8.to_ascii("例子.中国:8080")
+    assert _u8.to_ascii("例子.中国/path") is None, _u8.to_ascii("例子.中国/path")
+    assert _u8.to_ascii("example.com:80") is None, _u8.to_ascii("example.com:80")
+    # §6.1 变异证伪：去掉 `:` / `/` 守卫（只留 `if not host`）⇒ 上面第一条必红
+    _orig_toascii8b = _u8.to_ascii
+
+    def _no_guard_ta8(t):
+        host = str(t or "").strip().lower().rstrip(".")
+        if not host:
+            return None
+        try:
+            if host.isascii():
+                return host
+            return host.encode("idna").decode("ascii")
+        except (UnicodeError, ValueError):
+            return None
+
+    _u8.to_ascii = _no_guard_ta8
+    try:
+        assert _u8.to_ascii("例子.中国:8080") is not None, \
+            "变异（去掉 :// 守卫）后非主机输入不该是 None → 证明上面的断言盯的是守卫"
+    finally:
+        _u8.to_ascii = _orig_toascii8b
+
+    # §6.1 变异证伪：把 to_ascii 打回"失败就返回原串"（旧的静默降级）⇒ 上面的 None 断言必红
+    _orig_toascii8 = _u8.to_ascii
+    _u8.to_ascii = (lambda t: _orig_toascii8(t) if _orig_toascii8(t) is not None
+                    else str(t or "").strip().lower().rstrip("."))
+    try:
+        assert _u8.to_ascii("例子..中国") is not None, \
+            "变异（失败回退原串）后不该是 None → 证明上面的断言真的盯住了 None"
+    finally:
+        _u8.to_ascii = _orig_toascii8
+
+    # (b) to_unicode：punycode → Unicode；**任何失败原样返回、绝不抛**（展示层专用）
+    assert _u8.to_unicode("xn--fsqu00a.xn--fiqs8s") == "例子.中国"
+    assert _u8.to_unicode("example.com") == "example.com"
+    assert _u8.to_unicode("http://xn--fsqu00a.xn--fiqs8s/") == "http://xn--fsqu00a.xn--fiqs8s/", \
+        "URL 回解失败必须原样返回（不抛）"
+    assert _u8.to_unicode("例子.中国") == "例子.中国", "已是 Unicode 的串原样返回"
+    assert _u8.to_unicode("") == "" and _u8.to_unicode(None) == "", "空 / None → 空串，不抛"
+    _orig_touni8 = _u8.to_unicode
+    _u8.to_unicode = lambda h: str(h or "")
+    try:
+        assert _u8.to_unicode("xn--fsqu00a.xn--fiqs8s") != "例子.中国", \
+            "变异为恒等后应不再回解 → 证明断言有区分度"
+    finally:
+        _u8.to_unicode = _orig_touni8
+
+    # (c) is_domain 三态（ASCII / punycode / Unicode）+ 必须保住的既有行为
+    assert _u8.is_domain("例子.中国") is True
+    assert _u8.is_domain("xn--fsqu00a.xn--fiqs8s") is True
+    assert _u8.is_domain("example.com") is True
+    assert _u8.is_domain("1.2.3.4") is False, "裸 IP 不是域名"
+    assert _u8.is_domain("a.b") is False
+    assert _u8.is_domain("foo.bar") is True, "形态宽松（有意为之）"
+    assert _u8.is_domain("他.说") is True, "形态宽松（语义闸门在 jsmine 的 PSL 校验）"
+    assert _u8.is_domain("example.com:80") is False
+    assert _u8.is_domain("http://example.com") is False
+    assert _u8.is_domain("a.*.com") is False
+    assert _u8.is_domain("exa mple.com") is False
+    _orig_re8 = _u8._DOMAIN_RE
+    _u8._DOMAIN_RE = _re7q.compile(
+        r"^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$")
+    try:
+        assert _u8.is_domain("xn--fsqu00a.xn--fiqs8s") is False, \
+            "变异回旧 TLD 正则后 punycode 应被拒 → 证明断言盯的是正则放宽"
+    finally:
+        _u8._DOMAIN_RE = _orig_re8
+
+    # (d) parse_line：中文 → punycode 形入库；既有 ASCII 行为不变
+    assert _pl8("例子.中国") == ("domain", "xn--fsqu00a.xn--fiqs8s"), _pl8("例子.中国")
+    assert _pl8("xn--fsqu00a.xn--fiqs8s") == ("domain", "xn--fsqu00a.xn--fiqs8s")
+    assert _pl8("example.com") == ("domain", "example.com")
+    assert _pl8("他.说") == ("domain", "xn--8mq.xn--9e3a")
+    assert _pl8("a.b") == ("unknown", "a.b")
+
+    # (e) 黑名单比较边界归一：Unicode↔punycode **双向命中**（否则用户加黑名单却静默失效）
+    assert _bl8.matches("xn--fsqu00a.xn--fiqs8s", [_bl8._norm("例子.中国")]) == "xn--fsqu00a.xn--fiqs8s"
+    assert _bl8.matches("例子.中国", [_bl8._norm("xn--fsqu00a.xn--fiqs8s")]) == "xn--fsqu00a.xn--fiqs8s"
+    assert _bl8.matches("a.xn--fsqu00a.xn--fiqs8s", [_bl8._norm("例子.中国")]) == "xn--fsqu00a.xn--fiqs8s"
+    _orig_norm8 = _bl8._norm
+
+    def _old_norm8(value):
+        text = str(value or "").strip().lower()
+        if not text or text.startswith("#"):
+            return ""
+        if text.startswith("*."):
+            text = text[2:]
+        text = text.strip(".")
+        if not text or " " in text or "/" in text:
+            return ""
+        return text
+
+    _bl8._norm = _old_norm8
+    try:
+        assert _bl8.matches("xn--fsqu00a.xn--fiqs8s", [_old_norm8("例子.中国")]) == "", \
+            "变异回旧 _norm 后双向命中应失效 → 证明断言盯的是比较侧归一"
+    finally:
+        _bl8._norm = _orig_norm8
+
+    # (f) normalize_domain：收掉本地白名单 → IDN 可返回；两条**收紧**（中段 `*` / 长度上限）
+    assert _ip8.normalize_domain("例子.中国") == "xn--fsqu00a.xn--fiqs8s"
+    assert _ip8.normalize_domain("xn--fsqu00a.xn--fiqs8s") == "xn--fsqu00a.xn--fiqs8s"
+    assert _ip8.normalize_domain("a.*.com") == "", "收紧：中段 * 由接受变拒绝"
+    assert _ip8.normalize_domain("x" * 64 + ".com") == "", "收紧：label>63 由无上限变拒绝"
+    assert _ip8.normalize_domain("*.example.com") == "example.com", "前导 *. 仍在检查前剥掉"
+    assert _ip8.normalize_domain("1.2.3.4") == "" and _ip8.normalize_domain("example.com:8080") == "example.com"
+    _orig_nd8 = _ip8.normalize_domain
+
+    def _old_nd8(raw):
+        d = str(raw or "").strip().lower()
+        if not d or " " in d:
+            return ""
+        d = d.split(":")[0].lstrip("*.")
+        _ok = set("abcdefghijklmnopqrstuvwxyz0123456789.-*")
+        if "." not in d or set(d) - _ok:
+            return ""
+        if not d.split(".")[-1].isalpha() or len(d.split(".")[-1]) < 2:
+            return ""
+        return d
+
+    _ip8.normalize_domain = _old_nd8
+    try:
+        assert _ip8.normalize_domain("a.*.com") == "a.*.com", \
+            "变异回旧逻辑后中段 * 应被接受 → 证明断言盯的是收紧"
+    finally:
+        _ip8.normalize_domain = _orig_nd8
+
+    # (g) 页面级：punycode 子域名行渲染成**中文**，但 `value` 仍是 punycode（真实值不动）
+    _c8 = app.test_client()
+    assert _c8.post("/login", data={"token": settings["gui"]["token"]},
+                    environ_base={"REMOTE_ADDR": "203.0.113.242"}).status_code == 302
+    _ptid8 = db.create_task("smoke65-idn-page", "例子.中国", ["subdomain"], {})
+    db.insert_subdomains(_ptid8, [("xn--fsqu00a.xn--fiqs8s", "passive:stub")])
+    _gpage8 = _c8.get("/subdomains?q=xn--fsqu00a.xn--fiqs8s").get_data(as_text=True)
+    assert "例子.中国" in _gpage8, "全局子域名页应把 punycode 回解成中文"
+    assert 'value="xn--fsqu00a.xn--fiqs8s"' in _gpage8, "真实值（checkbox value）必须仍是 punycode"
+    _dpage8 = _c8.get(f"/tasks/{_ptid8}").get_data(as_text=True)
+    assert '<td class="mono">例子.中国</td>' in _dpage8, "任务详情页子域名单元格应渲染中文"
+    _orig_idn8 = app.jinja_env.globals["idn_display"]
+    app.jinja_env.globals["idn_display"] = lambda v: str(v or "")
+    try:
+        assert "例子.中国" not in _c8.get("/subdomains?q=xn--fsqu00a.xn--fiqs8s").get_data(as_text=True), \
+            "变异 idn_display 为恒等后不该再出现中文 → 证明页面断言盯的是模板调用"
+    finally:
+        app.jinja_env.globals["idn_display"] = _orig_idn8
+
+    # (h) **端到端真链路**（本轮验收核心）：目标 `例子.中国` → punycode 走 DNS/入库 → 页面回中文
+    from scanner.stages import subdomain as _sub8
+    from scanner import dnsq as _dnsq8
+
+    _e2e8 = db.create_task("smoke65-idn-e2e", "例子.中国", ["subdomain"], {})
+    _st8 = copy.deepcopy(settings)
+    _st8["limits"] = dict(_st8.get("limits") or {}, wildcard_filter=False)
+    _st8["dicts"] = dict(_st8.get("dicts") or {})
+    _st8["dicts"]["subdomains"] = "config/dicts/does-not-exist.txt"   # 跳过字典爆破（离线）
+    _wd8 = Path(_TMPDIR) / "idn8"
+    _wd8.mkdir(parents=True, exist_ok=True)
+    _calls8 = []
+    _orig_res8 = _dnsq8.resolve_detail
+    _orig_pc8 = _sub8.passive.collect
+    _orig_which8 = _sub8.which
+    _sub8.passive.collect = lambda d, s, logger=None, workers=6: {d: "passive:stub"}
+    _sub8.which = lambda name: None                                   # 不调 subfinder/puredns
+    _dnsq8.resolve_detail = lambda name, **kw: (_calls8.append(name),
+                                               ([name], ["1.2.3.4"], ""))[1]
+    try:
+        _ctx8 = StageContext(_e2e8, "smoke65-idn-e2e", parse_lines(["例子.中国"]),
+                             ["subdomain"], {}, _st8, _wd8, rec)
+        PipelineRunner(_ctx8).run()
+    finally:
+        _dnsq8.resolve_detail = _orig_res8
+        _sub8.passive.collect = _orig_pc8
+        _sub8.which = _orig_which8
+
+    # ① 解析目标是 punycode（不是中文、也不是 unknown）
+    assert _calls8 == ["xn--fsqu00a.xn--fiqs8s"], f"解析目标必须是 punycode：{_calls8}"
+    assert "例子" not in "".join(_calls8), "解析目标里不该出现中文"
+    assert _ctx8.results["subdomains"] == ["xn--fsqu00a.xn--fiqs8s"], _ctx8.results["subdomains"]
+    _art8 = (_wd8 / "subdomains.txt").read_text(encoding="utf-8")
+    assert "xn--fsqu00a.xn--fiqs8s" in _art8 and "例子" not in _art8, _art8
+    # ② 以 punycode 落进 subdomains 表
+    assert [r["domain"] for r in db.list_subdomains(_e2e8)] == ["xn--fsqu00a.xn--fiqs8s"], \
+        [r["domain"] for r in db.list_subdomains(_e2e8)]
+    # ③ 任务详情页渲染成**中文**（真实值仍是 punycode）
+    _e2epage8 = _c8.get(f"/tasks/{_e2e8}").get_data(as_text=True)
+    assert '<td class="mono">例子.中国</td>' in _e2epage8, "端到端：任务详情页应渲染中文"
+    _e2eglob8 = _c8.get("/subdomains?q=xn--fsqu00a.xn--fiqs8s").get_data(as_text=True)
+    assert "例子.中国" in _e2eglob8, "端到端：全局子域名页应渲染中文"
+    assert 'value="xn--fsqu00a.xn--fiqs8s"' in _e2eglob8, "端到端：真实值必须仍是 punycode"
+    _orig_idn8b = app.jinja_env.globals["idn_display"]
+    app.jinja_env.globals["idn_display"] = lambda v: str(v or "")
+    try:
+        assert '<td class="mono">例子.中国</td>' not in _c8.get(f"/tasks/{_e2e8}").get_data(as_text=True), \
+            "变异 idn_display 后端到端任务详情页不该出现中文 td → 证明断言有区分度"
+    finally:
+        app.jinja_env.globals["idn_display"] = _orig_idn8b
+
+    # (i) 续65 收口：QA 独立复核发现两条路径未达成"全程 punycode"，此处补断言 + 变异证伪。
+    #   F1 osint 反查落库 `_domain_of()`（Unicode 直落库）+ 同型 `ctlog.domains_of()`
+    #   F2 URL 形态目标 `parse_line()`（非 ASCII 主机归一；ASCII URL 逐字节不变）
+    #   F4 `jsmine._valid_host()` 入口自带归一（直接喂 Unicode 也自洽）
+    from scanner import targets as _t8
+    from scanner import ctlog as _ct8
+    from scanner.stages import osint as _os8
+    from scanner import jsmine as _js8
+
+    # F1：osint 收口 _domain_of —— Unicode → punycode（旧实现直返 Unicode ⇒ 下面必红）
+    assert _os8._domain_of({"domain": "例子.中国"}) == "xn--fsqu00a.xn--fiqs8s", _os8._domain_of({"domain": "例子.中国"})
+    assert _os8._domain_of({"host": "https://例子.中国/x"}) == "xn--fsqu00a.xn--fiqs8s", _os8._domain_of({"host": "https://例子.中国/x"})
+    assert _os8._domain_of({"domain": "example.com"}) == "example.com"
+    assert _os8._domain_of({"domain": "1.2.3.4"}) == "", "裸 IP 仍必须挡掉"
+    _orig_dof8 = _os8._domain_of
+
+    def _old_dof8(asset):
+        raw = str(asset.get("domain") or "").strip().lower().strip(".")
+        return raw if _u8.is_domain(raw) else ""
+
+    _os8._domain_of = _old_dof8
+    try:
+        assert _os8._domain_of({"domain": "例子.中国"}) == "例子.中国", "变异回旧 _domain_of（不归一）后应直返 Unicode → 证明断言盯的是归一"
+    finally:
+        _os8._domain_of = _orig_dof8
+
+    # F1 同型：ctlog.domains_of —— Unicode SAN → punycode（旧实现直返 Unicode ⇒ 必红）
+    assert _ct8.domains_of([{"san": ["例子.中国"]}]) == ["xn--fsqu00a.xn--fiqs8s"], _ct8.domains_of([{"san": ["例子.中国"]}])
+    assert _ct8.domains_of([{"san": ["1.2.3.4"]}]) == []
+    _orig_dom8 = _ct8.domains_of
+
+    def _old_dom8(records, limit=0):
+        out, seen = [], set()
+        for rec in records or []:
+            for name in (rec.get("san") or []):
+                name = str(name or "").strip().lower().strip(".")
+                if not name or name in seen or not _u8.is_domain(name):
+                    continue
+                seen.add(name)
+                out.append(name)
+                if limit and len(out) >= limit:
+                    return out
+        return out
+
+    _ct8.domains_of = _old_dom8
+    try:
+        assert _ct8.domains_of([{"san": ["例子.中国"]}]) == ["例子.中国"], "变异回旧 domains_of 后应直返 Unicode → 证明断言盯的是归一"
+    finally:
+        _ct8.domains_of = _orig_dom8
+
+    # F2：URL 形态目标 —— 非 ASCII 主机归一为 punycode，且保留端口/路径/query/fragment
+    assert _pl8("https://例子.中国/x") == ("url", "https://xn--fsqu00a.xn--fiqs8s/x"), _pl8("https://例子.中国/x")
+    assert _pl8("http://例子.中国:8443/p?q=1#f") == ("url", "http://xn--fsqu00a.xn--fiqs8s:8443/p?q=1#f"), _pl8("http://例子.中国:8443/p?q=1#f")
+    # ASCII URL **逐字节不变**（快路径不许改动任何字节）
+    for _au8 in ("http://a.com", "https://a.com:8443/p?q=1#f", "http://a.com:80", "https://user:pw@a.com/x"):
+        assert _pl8(_au8) == ("url", _au8), (_au8, _pl8(_au8))
+    # §6.1 变异证伪：把 targets.to_ascii 打成恒等（= 旧的无归一分支）⇒ 归一断言必红
+    _orig_ta8t = _t8.to_ascii
+    _t8.to_ascii = lambda x: str(x or "").strip().lower().rstrip(".")
+    try:
+        assert _pl8("https://例子.中国/x") != ("url", "https://xn--fsqu00a.xn--fiqs8s/x"), "变异（targets.to_ascii 恒等）后 URL 主机不该被归一 → 证明断言盯的是归一"
+    finally:
+        _t8.to_ascii = _orig_ta8t
+
+    # F4：jsmine._valid_host 入口自带归一 —— 直接喂 Unicode 也自洽
+    assert _js8._valid_host("例子.中国") is True, "入口归一后 Unicode 主机应自洽"
+    assert _js8._valid_host("xn--fsqu00a.xn--fiqs8s") is True
+    assert _js8._valid_host("他.说") is False, "PSL 语义闸门仍挡非公共后缀"
+    assert _js8._valid_host("wallet.filter.withdraw") is False
+    _orig_ta8j = _js8.to_ascii
+    _js8.to_ascii = lambda x: str(x or "").strip().lower().rstrip(".")
+    try:
+        assert _js8._valid_host("例子.中国") is not True, "变异（jsmine.to_ascii 恒等）后入口不再归一 → Unicode 主机被 PSL 闸门拒 → 证明断言盯的是入口归一"
+    finally:
+        _js8.to_ascii = _orig_ta8j
+
+    # F1 补充：subdomain 阶段 add_many 也归一（被动来源理论上可能回传 Unicode 名字）
+    _uni_child8 = "子.例子.中国"
+    _want_child8 = _u8.to_ascii(_uni_child8)
+    _orig_pc8b = _sub8.passive.collect
+    _orig_which8b = _sub8.which
+    _orig_res8b = _dnsq8.resolve_detail
+    _orig_ta8s = _sub8.to_ascii
+    _add8 = db.create_task("smoke65-idn-add", "例子.中国", ["subdomain"], {})
+    _wd8b = Path(_TMPDIR) / "idn8b"
+    _wd8b.mkdir(parents=True, exist_ok=True)
+    _sub8.passive.collect = lambda d, s, logger=None, workers=6: {d: "passive:stub", _uni_child8: "passive:stub"}
+    _sub8.which = lambda name: None
+    _dnsq8.resolve_detail = lambda name, **kw: ([name], ["1.2.3.4"], "")
+    try:
+        _ctx8b = StageContext(_add8, "smoke65-idn-add", parse_lines(["例子.中国"]), ["subdomain"], {}, _st8, _wd8b, rec)
+        PipelineRunner(_ctx8b).run()
+    finally:
+        _sub8.passive.collect = _orig_pc8b
+        _sub8.which = _orig_which8b
+        _dnsq8.resolve_detail = _orig_res8b
+    _doms8b = [r["domain"] for r in db.list_subdomains(_add8)]
+    assert _want_child8 in _doms8b, f"Unicode 被动名字应归一为 punycode 入库：{_doms8b}"
+    _pos_art8 = (_wd8b / "subdomains.txt").read_text(encoding="utf-8")
+    assert _want_child8 in _pos_art8 and _uni_child8 not in _pos_art8, f"add_many 归一：产物应是 punycode：{_pos_art8!r}"
+    assert _uni_child8 not in _doms8b, f"不该有 Unicode 形态入库：{_doms8b}"
+    # §6.1 变异证伪：把 subdomain.to_ascii 打成恒等 ⇒ 阶段产物 subdomains.txt 出现 Unicode 原形（必红）
+    _add8b = db.create_task("smoke65-idn-add-mut", "例子.中国", ["subdomain"], {})
+    _wd8c = Path(_TMPDIR) / "idn8c"
+    _wd8c.mkdir(parents=True, exist_ok=True)
+    _sub8.to_ascii = lambda x: str(x or "").strip().lower().rstrip(".")
+    _sub8.passive.collect = lambda d, s, logger=None, workers=6: {d: "passive:stub", _uni_child8: "passive:stub"}
+    _sub8.which = lambda name: None
+    _dnsq8.resolve_detail = lambda name, **kw: ([name], ["1.2.3.4"], "")
+    try:
+        _ctx8c = StageContext(_add8b, "smoke65-idn-add-mut", parse_lines(["例子.中国"]), ["subdomain"], {}, _st8, _wd8c, rec)
+        PipelineRunner(_ctx8c).run()
+    finally:
+        _sub8.to_ascii = _orig_ta8s
+        _sub8.passive.collect = _orig_pc8b
+        _sub8.which = _orig_which8b
+        _dnsq8.resolve_detail = _orig_res8b
+    _mut_art8 = (_wd8c / "subdomains.txt").read_text(encoding="utf-8")
+    assert _uni_child8 in _mut_art8, "变异（subdomain.to_ascii 恒等）后 Unicode 名字应出现在 subdomains.txt → 证明断言盯的是 add_many 归一"
+    # 顺带证明 F1b 咽喉点的**防御纵深**：即便 add_many 被变异，库里仍是 punycode
+    _doms8c = [r["domain"] for r in db.list_subdomains(_add8b)]
+    assert _uni_child8 not in _doms8c and _want_child8 in _doms8c, f"DB 咽喉点应兜底为 punycode：{_doms8c}"
+
+    # (j) 续65 F1b 咽喉点：`db.insert_subdomains()` 入口归一（结构性保证"库里只有 punycode"，
+    #   不再依赖 N 处调用点各自约定）；`set_subdomain_cnames()` 的 UPDATE 路径同源归一。
+    _tid_db8 = db.create_task("smoke65-idn-db", "例子.中国", ["subdomain"], {})
+    _orig_dblog8 = db.logger
+    _n0db8 = len(rec.lines)
+    db.logger = rec
+    try:
+        db.insert_subdomains(_tid_db8, [("例子.中国", "passive:stub"), ("例子..中国", "passive:stub")])
+    finally:
+        db.logger = _orig_dblog8
+    _dbdoms8 = [r["domain"] for r in db.list_subdomains(_tid_db8)]
+    assert _dbdoms8 == ["xn--fsqu00a.xn--fiqs8s"], f"咽喉点：Unicode 应归一为 punycode、失败行不入库：{_dbdoms8}"
+    assert any("例子..中国" in ln for ln in rec.lines[_n0db8:]), "归一失败的行必须记 warning（不静默）"
+    # §6.1 变异证伪：把咽喉点的 to_ascii 打回恒等 ⇒ Unicode 直落库、上面必红
+    _orig_dbta8 = db.to_ascii
+    db.to_ascii = lambda x: str(x or "").strip().lower().rstrip(".")
+    try:
+        _tid_db8m = db.create_task("smoke65-idn-db-mut", "例子.中国", ["subdomain"], {})
+        db.insert_subdomains(_tid_db8m, [("例子.中国", "passive:stub")])
+        assert [r["domain"] for r in db.list_subdomains(_tid_db8m)] == ["例子.中国"], \
+            "变异后 Unicode 应直落库 → 证明断言盯的是咽喉点归一"
+    finally:
+        db.to_ascii = _orig_dbta8
+
+    # set_subdomain_cnames：UPDATE 路径也归一 —— Unicode key 能命中库里的 punycode 行
+    _tid_cn8 = db.create_task("smoke65-idn-cname", "例子.中国", ["subdomain"], {})
+    db.insert_subdomains(_tid_cn8, [("xn--fsqu00a.xn--fiqs8s", "passive:stub")])
+    db.set_subdomain_cnames(_tid_cn8, {"例子.中国": "cn.example"})
+    assert [r["cname"] for r in db.list_subdomains(_tid_cn8)] == ["cn.example"], \
+        [dict(r) for r in db.list_subdomains(_tid_cn8)]
+    # §6.1 变异证伪：恒等 to_ascii 后 Unicode key 不再命中 punycode 行 ⇒ CNAME 静默丢失
+    _orig_dbta8c = db.to_ascii
+    db.to_ascii = lambda x: str(x or "").strip().lower().rstrip(".")
+    try:
+        _tid_cn8m = db.create_task("smoke65-idn-cname-mut", "例子.中国", ["subdomain"], {})
+        db.insert_subdomains(_tid_cn8m, [("xn--fsqu00a.xn--fiqs8s", "passive:stub")])
+        db.set_subdomain_cnames(_tid_cn8m, {"例子.中国": "cn.example"})
+        assert [r["cname"] for r in db.list_subdomains(_tid_cn8m)] == [""], \
+            "变异后 Unicode key 不该命中 punycode 行 → 证明断言盯的是 cnames 入口归一"
+    finally:
+        db.to_ascii = _orig_dbta8c
+
+    print("[8] 续65 IDN/中文域名 ok: to_ascii（ASCII 快路径/幂等/失败 None，含变异）｜to_unicode"
+          "（失败原样不抛，含变异）｜is_domain 三态 + 既有行为（含变异回旧正则即红）｜parse_line "
+          "中文→punycode｜黑名单 Unicode↔punycode 双向命中（含变异回旧 _norm 即红）｜normalize_domain "
+          "IDN 可返回 + 两条收紧（含变异回旧逻辑即红）｜页面级回中文·value 仍 punycode（含变异 "
+          "idn_display 即红）｜**端到端真链路**：目标 例子.中国 → 解析/产物/DB 全 punycode、详情页回中文（含变异）｜QA 收口 F1/F2/F4：osint 反查落库 / URL 形态目标 / _valid_host 入口 均已归一（含变异）｜F1b 咽喉点：db.insert_subdomains / set_subdomain_cnames 入口归一（含变异）")
 
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），

@@ -18,14 +18,11 @@ import ipaddress
 import json
 import re
 
-from .utils import http_request, pool_run
+from .utils import http_request, is_domain, pool_run, to_ascii
 
 DEFAULT_API = "https://api.webscan.cc/?action=query&ip={ip}"
 # 默认反查源顺序；可在 settings["iprecon"]["sources"] 覆盖（名字须在 _SOURCES 注册）
 DEFAULT_SOURCES = ["webscan", "hackertarget", "ip138"]
-
-# 反查回来的域名做基本合法性过滤（公共接口的返回里偶尔混入 IP 或空值）
-_DOMAIN_OK = set("abcdefghijklmnopqrstuvwxyz0123456789.-*")  # 不含 `_`：与 utils.is_domain 口径一致
 
 
 def is_public_ip(ip):
@@ -64,16 +61,20 @@ def group_segments(ips):
 
 
 def normalize_domain(raw):
-    """归一化反查结果：去端口/去通配前缀/去空白/转小写；不合格返回 ""。"""
+    """归一化反查结果：去端口/去通配前缀/去空白/转小写，再统一成 ASCII(punycode) 形；不合格返回 ""。
+
+    口径**收敛到 `utils.is_domain`**（不再维护本地逐字符白名单 `_DOMAIN_OK`）：IDN 反查结果
+    （`例子.中国` 或 `xn--fsqu00a.xn--fiqs8s`）现在能返回，代价是两条**收紧**——
+    ① 中段 `*`（`a.*.com`）由"接受"变"拒绝"（反向查询不会返回中段 `*`；前导 `*.` 仍在检查前
+    `lstrip`）；② 总长 ≤253 / 单 label ≤63 现在被 `is_domain` 强制（原先无上限）。
+    不变项：拆端口、去前导 `*.`、小写、拒空格、≥2 段、拒 IP。
+    """
     d = str(raw or "").strip().lower()
     if not d or " " in d:
         return ""
     d = d.split(":")[0].lstrip("*.")
-    if "." not in d or set(d) - _DOMAIN_OK:
-        return ""
-    if not d.split(".")[-1].isalpha() or len(d.split(".")[-1]) < 2:
-        return ""
-    return d
+    d = to_ascii(d) or ""
+    return d if is_domain(d) else ""
 
 
 def parse_domains(text):

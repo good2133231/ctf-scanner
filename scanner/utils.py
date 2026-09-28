@@ -162,23 +162,74 @@ def base_domain(host):
 
 # ---------- 域名形态 ----------
 
-# 至少两段、TLD 纯字母 2-24 位、标签 1-63 位且不以 - 开头/结尾（不查 DNS，只看形态）
+def to_ascii(text):
+    """主机名 → ASCII(punycode) 小写形（IDN 归一化的**唯一入口**）。
+
+    - **纯 ASCII 走快路径**（只 lower、**不调 idna**）：保证现有 ASCII 主机逐字节不变，
+      也避免对已是 punycode 的串做二次编码。
+    - 含非 ASCII 时才 `encode('idna')`（标准库 IDNA2003，零新依赖）。
+    - 末尾的点先剥掉；空串 → 返回 **None**。
+    - **本函数只做「归一化」，不做「合法性校验」**：长度 / 形态（≥2 段、label 合法、TLD 形态）
+      一律由 `is_domain()` 负责。
+    - 返回 None 的情形：**空串** / **非主机输入（含 `:` 或 `/`）** / **IDNA 编码失败**（非 ASCII 路径上 label>63B /
+      非法 Unicode 会触发）；**纯 ASCII 输入只做小写、不做任何校验**，因此超长 ASCII label
+      会原样返回 —— 这是**有意为之**（快路径保证 ASCII 行为逐字节不变），由 `is_domain` 兜住。
+    - **只管主机名，不管端口/路径**：传入带端口 / 路径的串**返回 None**（不返回乱码 punycode）——
+      冒号与斜杠会让 IDNA 把整串编成一个无效 label，那是**静默的错误值**，比显式失败更糟。
+      调用方要端口/路径时自己先剥（`split(":")[0]` / `split("/")[0]`）。
+    幂等：`to_ascii(to_ascii(x)) == to_ascii(x)`。
+    """
+    host = str(text or "").strip().lower().rstrip(".")
+    if not host or ":" in host or "/" in host:
+        return None
+    try:
+        if host.isascii():
+            return host
+        return host.encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        return None
+
+
+def to_unicode(host):
+    """ASCII(punycode) → Unicode 展示形。**展示层专用**，best-effort：任何失败原样返回、绝不抛。
+
+    与 `to_ascii` 对称：那是"入库/比对前的归一"（失败必须返回 None），这是"给人看的回解"
+    （失败退回原串）。因此 `to_unicode("http://…")` / 已是 Unicode 的串 / 非法 punycode
+    都只是**原样返回**，绝不抛异常 —— 展示层不该因为一条脏数据整页崩掉。
+    """
+    text = str(host or "")
+    if not text:
+        return text
+    try:
+        return text.encode("ascii").decode("idna")
+    except (UnicodeError, ValueError):
+        return text
+
+
+# 至少两段、TLD 为纯字母 2-24 位或 IDN 的 `xn--` punycode 形、
+# 标签 1-63 位且不以 - 开头/结尾（不查 DNS，只看形态）
 _DOMAIN_RE = re.compile(r"^(?=.{4,253}$)"
-                        r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$")
+                        r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+                        r"(?:[a-z]{2,24}|xn--[a-z0-9-]{1,59})$")
 
 
 def is_domain(text):
     """粗略判断"这串是不是域名"（**只看形态，不查 DNS**）。
 
     用于把 JS 里挖到的一堆字符串、外部情报返回的 host 字段收敛成真正的域名资产：
-    - 至少两段（`localhost` 不算）；TLD 必须纯字母 2-24 位（挡掉 `1.2.3.4`、`a.b` 这类）；
+    - 至少两段（`localhost` 不算）；TLD 必须纯字母 2-24 位、或 IDN 的 `xn--` punycode 形
+      （挡掉 `1.2.3.4`、`a.b` 这类）；
     - 标签 1-63 位、不以 `-` 开头/结尾；总长 ≤253；
     - **IPv4 / IPv6 / 带端口 / 带路径 / 带通配符 / 含空格 一律 False**。
 
+    IDN 归一化：先 `to_ascii()` 把 Unicode/punycode 统一成 ASCII 形，再走形态正则 ——
+    因此 `is_domain('例子.中国')` 与 `is_domain('xn--fsqu00a.xn--fiqs8s')` 都为 True。
+
     注意：这是"形态判断"，`is_domain("foo.bar")` 会是 True —— 它不保证域名真实存在，
-    真实存在与否由 DNS 解析（`dnsq.resolve_detail`）负责。
+    真实存在与否由 DNS 解析（`dnsq.resolve_detail`）负责。同样地 `is_domain('他.说')`
+    也为 True（形态宽松是**有意为之**，语义闸门在 `jsmine._valid_host` 的 PSL 校验）。
     """
-    text = str(text or "").strip().lower().strip(".")
+    text = str(text or "").strip()
     if not text or " " in text or "/" in text or ":" in text or "*" in text:
         return False
     try:
@@ -186,7 +237,10 @@ def is_domain(text):
         return False
     except ValueError:
         pass
-    return bool(_DOMAIN_RE.match(text))
+    a = to_ascii(text)
+    if a is None:
+        return False
+    return bool(_DOMAIN_RE.match(a))
 
 
 # ---------- 路径 ----------

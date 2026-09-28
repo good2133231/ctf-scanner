@@ -47,7 +47,7 @@
           <td class="mono">{{ row.ip }}</td>
           <td>{{ row.domains|length }}</td>
           <td>{% if row.reverse %}{{ row.reverse }}{% else %}-{% endif %}</td>
-          <td class="muted small mono">{{ row.domains[:8]|join(', ') }}{% if row.domains|length > 8 %} …{% endif %}</td>
+          <td class="muted small mono">{% for d in row.domains[:8] %}{{ idn_display(d) }}{{ ', ' if not loop.last }}{% endfor %}{% if row.domains|length > 8 %} …{% endif %}</td>
           <td>{% if row.cdn %}<span class="tech-tag">{{ row.cdn }}</span>
               {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
         </tr>
