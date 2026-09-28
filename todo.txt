@@ -1685,6 +1685,9 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ⑥ 仍未做 / 仍未验：① 向量 `kw` 与阶段日志文案**强耦合**（改文案要同步改 `VECTORS`，已在
        `AGENTS.md` §6 登记）；② Linux 实机跑自检未验（本机 Windows）；③ 本机无头浏览器截图失败，
        `screenshot/shot` 记 N-A（环境问题，非覆盖缺口）。
+       ——【2026-09-28 续64 勘误】上句"环境问题"**归因错了**：真因是 `scanner/screenshot.py`
+       的 argv 缺 `--ignore-certificate-errors`（自签/过期 HTTPS 必被浏览器拒载、png 0 字节），
+       续64 已修（`127.0.0.1` 夹具可正常截图）。
 2026-09-28 续63（新任负责人接管盘点）：**文档与代码冲突收口（6 组，零代码改动）**
        ① 侧边栏栏数：README/docs 写的「9 栏 + 管理员第 10 栏」早已过时 —— `base.html` 的
        `nav_items` 现为 **12 项**（后 5 项 admin_only），`dev.enabled` 时第 13 项；已按代码改正。
@@ -1701,3 +1704,32 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ⑦ 同一批接管动作：工作区遗留的续61/续62 改动经**独立复核**后提交（`ee2a5d7`）；
        实测 `py -3 tests/smoke.py` → SMOKE PASS（8m57s）、`py -3 run_devflow.py` → 35 向量
        18 OK / 0 MISS / 17 N-A、13 阶段 11 真跑 / 2 跳过 / 0 FAIL。
+2026-09-28 续64（负责人实测确认的功能缺陷）：**修截图缺陷 —— 自签/过期 HTTPS 永远截不到图**
+       ① 根因：`scanner/screenshot.py::capture()` 的 argv 缺 `--ignore-certificate-errors`
+       （全仓 grep 从未出现）→ 浏览器遇不可信证书直接 `ERR_CERT_AUTHORITY_INVALID` 拒载、
+       `--screenshot` 一个字节都不产出；CTF/内网授权目标以自签/过期/私有 CA 为常态，故这类站点
+       **永远截不到图**。五组对照（Edge + 夹具自签口，走生产函数）：现状 False/0 字节；HTTP
+       True/13512；自签 + 该开关 True/13512；`--headless=old` 加/不加 = True/False → 根因就是缺
+       这一个开关，与 `--headless=new` 无关。
+       ② 改法：`screenshot.py` 加模块级 `_FLAGS`（含该开关 + "为什么不能省"注释），argv 改用它；
+       返回语义不变；不加配置开关（先例：`certs.py` 的 `CERT_NONE` 即硬编码）。
+       ③ 回归：`tests/smoke.py [7z]`（续64）—— (a) 打桩 `shot_mod.run_cmd` 捕获 argv 断言开关在
+       里头 + 变异证伪（过滤 `_FLAGS` 即红）；(b) 真夹具自签 HTTPS 口（127.0.0.1）调生产函数
+       `capture()` 断言 True + png 非空（无浏览器按 `[7x]` 口径跳过，其余失败一律红）。
+       ④ 勘误：续62 把此缺陷记成「环境问题，非覆盖缺口」—— 归因错了（见本文件 1687 行后的勘误）；
+       `devflow.py` 的 `screenshot/shot` 向量 N-A 理由同步去掉「环境问题」三字。
+       ⑤ 独立遗留（未擅改）：`run_devflow.py` 的 `screenshot/shot` 仍 N-A —— devflow 截图目标是
+       夹具**主机名** `https://www.devfixture.test:<port>/`，而 devflow 的 DNS 覆盖是**进程级
+       `getaddrinfo` 打桩**、对浏览器子进程不可见 → 浏览器自解析得 NXDOMAIN（与证书开关无关）。
+       真正覆盖该修复的是 smoke `[7z]`（用 127.0.0.1）。是否让 devflow 也覆盖截图待负责人定。
+       ⑥ 验证：`py_compile` 三文件 rc=0；`run_devflow.py` → 13 阶段 0 FAIL（screenshot/shot N-A）；
+       全量 `tests/smoke.py` → SMOKE PASS。
+       ——【2026-09-28 续64 收尾批次】① devflow 的 screenshot/shot N-A 理由改成**真实原因**（自检
+       截图目标是夹具主机名、DNS 覆盖只在本进程生效、浏览器子进程解析不了），并加注释说明这是
+       **恒为 N-A 的自检限制**；② QA 抓到 `capture()` 传**相对** out_path 时浏览器写到自己的 CWD
+       → **静默 0 字节**，加 `_abs_out()` 兜底 + `[7z] (c)` 断言 `--screenshot=` 为绝对路径（变异
+       证伪：`_abs_out` 打回恒等即红）；③ `AGENTS.md §9` 换行符规矩按实测改写（463 个被跟踪文本
+       文件里 69 个含 LF-only 行 → 规矩改为"不改变文件原有 EOL 形态"，判据两口径逐文件一致）；
+       ④ §7 与 roadmap 登记"自检不覆盖截图"（端到端覆盖在 smoke [7z]；要让自检也跑到需把截图目标
+       改 IP 形态，属独立一轮）；⑤ §9 的绝对路径（myscan_20250825）移到 §2 末集中说明；
+       ⑥ 主理人预期 devflow 变 19/16 被实测证伪（仍 18 OK / 0 MISS / 17 N-A）。

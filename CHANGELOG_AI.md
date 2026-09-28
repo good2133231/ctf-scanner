@@ -3,6 +3,79 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-28 —— 续64：**修截图缺陷**（自签/过期 HTTPS 永远截不到图）+ smoke `[7z]` + 勘误续62
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。**本轮动代码**（区别于续63 的纯文档轮）。
+> 根因由负责人用**生产函数** `screenshot.capture()` 复现确认。
+
+### 缺陷与根因
+
+`screenshot.capture()` 的 argv 里**没有** `--ignore-certificate-errors`（全仓 grep 从未出现），
+于是浏览器遇到不可信证书直接 `net::ERR_CERT_AUTHORITY_INVALID` 拒绝加载、`--screenshot` 一个字节
+都不产出 —— **任何自签 / 过期 / 私有 CA 的 HTTPS 站点永远截不到图**，而这正是 CTF 与内网授权
+目标的常态（`scanner/certs.py` 取证就是刻意 `verify_mode=CERT_NONE`，README 亦写"CTF 目标多为
+自签/过期"）。
+
+### 五组对照实验（Edge + `devfixture.start_both()` 自签 HTTPS 口，均走生产函数 `capture()`）
+
+| 组 | 目标 | 参数 | 结果 |
+|---|---|---|---|
+| 1 | 自签 HTTPS | **现状** | **False**，`ERR_CERT_AUTHORITY_INVALID`，png **0 字节** |
+| 2 | HTTP | 现状 | True，13512 字节 |
+| 3 | 自签 HTTPS | 现状 **+ `--ignore-certificate-errors`** | **True**，13512 字节 |
+| 4 | 自签 HTTPS | `--headless=old` + 该参数 | True |
+| 5 | 自签 HTTPS | `--headless=old` 无该参数 | False |
+
+→ 根因**就是缺这一个开关**；第 4/5 组证明**与 `--headless=new` 无关**（那是 `tests/browser_e2e.py`
+里另一回事）。本轮复测：修复后「HTTPS 127.0.0.1」由 0 → 13512 字节。
+
+### 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `scanner/screenshot.py` | 新增模块级常量 `_FLAGS`（含 `--ignore-certificate-errors`，附"为什么不能省"注释），`capture()` 的 argv 改用它；**返回语义不变**。不加配置开关（先例：`certs.py` 的 `CERT_NONE` 就是硬编码） |
+| `tests/smoke.py` | 新增 `[7z]`（续64）：(a) 打桩 `shot_mod.run_cmd` 捕获 argv 断言开关在里头 + **变异证伪**（过滤 `_FLAGS` 即红）；(b) 真夹具自签 HTTPS 口（`127.0.0.1`）调**生产函数** `capture()` 断言 True + png 非空（无浏览器按 `[7x]` 口径跳过，其余失败一律红） |
+| `scanner/devflow.py` | `screenshot/shot` 向量的 N-A 理由去掉「环境问题」三字（它根本不是环境问题） |
+| 文档 | 本文件（勘误续62）+ `todo.txt` + `AGENTS.md §6/§7` + `docs/pipeline.md` + `docs/roadmap.md` |
+
+### 为什么值得单列一轮
+
+这不只是功能缺陷：续62 把它记成「**环境问题**」并据此得出"**0 覆盖缺口**"—— 那句"全绿"是
+**把真缺陷解释掉了**才得到的。正是 `AGENTS.md §6.1` 警告的「观测到异常 ≠ 归因正确」。
+
+### 自检不覆盖截图（已定论）
+
+`run_devflow.py` 的 `screenshot/shot` **恒为 N-A**（汇总 **18 OK / 0 MISS / 17 N-A**）：devflow 的
+截图目标是夹具**主机名** `https://www.devfixture.test:<port>/`，而 devflow 的 DNS 覆盖是**进程级
+`socket.getaddrinfo` 打桩**、**对浏览器子进程不可见** —— 浏览器自己解析该主机名得 NXDOMAIN、加载
+失败（与证书开关无关；实测同一夹具的 `https://127.0.0.1:<port>/` 能截、主机名形态不能）。这与
+`scanner/devflow.py` 顶部已登记的"subfinder/httpx/nmap 不认 DNS 覆盖"是同一类限制。**结论**：
+截图功能的**端到端覆盖在 `tests/smoke.py [7z]`**（用 `127.0.0.1` 形态的夹具 URL 调生产函数
+`capture()`）；要让自检也真跑到，得让自检截图目标对浏览器可达（改成 IP 形态）—— 会牵动
+probe/dirscan/vulnscan 的站点数，**属独立一轮，未做**（已在 `AGENTS.md §7` 与 `docs/roadmap.md`
+登记）。
+
+### 收尾批次（同日，负责人派单）
+
+- **① 主理人的预期被证伪**：负责人曾预期本轮修完 `run_devflow.py` 会变成 19 OK / 16 N-A；实测仍是
+  **18 OK / 0 MISS / 17 N-A**（原因见上「自检不覆盖截图」）。事实核对以实测为准。
+- **② `AGENTS.md §9` 换行符规矩按实测改写**：原写"仓库文本一律 CRLF、禁止 LF-only"**不成立** ——
+  实测（口径 = `git ls-files` 里的文本文件、含 2 个空文件）**466 个里 71 个含 LF-only 行**（有的整体
+  LF、有的混合、有的整体 CRLF）—— **这个数会随编辑漂移**（本轮就从 69 涨到 71，Edit 类工具新增的
+  行是 LF），**别当精确指标**；**466/71 是 QA 独立复核纠正的**（主理人先前误记为 463/69）—— 正好
+  印证"不采信自述"。规矩改为**"不要改变文件原有的 EOL 形态"**，判据是 `git diff --numstat` 与
+  `git diff --ignore-cr-at-eol --numstat` 逐文件一致。
+- **③ QA 抓到的静默失败已修**：`capture()` 传**相对** `out_path` 时，浏览器把 `--screenshot=<相对>`
+  写到**它自己的 CWD** → 我们这边永远 0 字节、**静默**返回 `(False, …)`（生产调用点传绝对路径，
+  故非现网 bug，但属"静默丢结果"隐患）。新增 `_abs_out()` 在 `capture()` 里兜底，并由
+  `tests/smoke.py [7z] (c)` 钉住（断言 `--screenshot=` 为绝对路径 + 变异证伪：`_abs_out` 打回恒等即红）。
+
+### 验证
+
+- `py -3 -m py_compile scanner/screenshot.py tests/smoke.py scanner/devflow.py` → rc=0。
+- `py -3 run_devflow.py` → 13 阶段 0 FAIL；`screenshot/shot` N-A（原因见上）。
+- 全量 `py -3 tests/smoke.py` → `SMOKE PASS`（含 `[7z]`）。
+
 ## 2026-09-28 —— 续63：**文档与代码冲突收口**（新任负责人接管盘点，6 组）
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。**本轮零代码改动**，只把「文档说 A、代码是 B」
@@ -90,7 +163,9 @@ optional                    # 条件分支（只有特定资产/数据才触发�
 - 全量 `py -3 tests/smoke.py` → `SMOKE PASS`；§9 行尾两口径逐文件一致。
 - **未做 / 仍未验**：① Linux 实机跑自检（本机 Windows，如实登记）；② 向量判据的 `kw` 与阶段日志文案
   **强耦合**——改文案要一起看（已在 `AGENTS.md` §6 登记）；③ 本机无头浏览器截图失败，`screenshot/shot`
-  记为 N-A（环境问题，非覆盖缺口）。
+  记为 N-A（环境问题，非覆盖缺口）。——【2026-09-28 续64 勘误】这一条**归因错了**：不是环境
+  问题，而是 `scanner/screenshot.py` 的 argv 缺 `--ignore-certificate-errors`（自签/过期 HTTPS
+  必被浏览器拒绝加载、png 0 字节）。修好后用 `127.0.0.1` 夹具可正常截图，详见续64 条目。
 
 ## 2026-09-28 —— 续61：**Web 界面禁绝对路径（新硬规矩）** + **外部工具跨平台**
 
@@ -4846,7 +4921,12 @@ libarchive 按 basename 匹配，会把 `smoke_root/.git/config` 一起排掉，
 
 仓库内文本文件以 CRLF 存储（`core.autocrlf=false`）。上次一次 LF-only 提交让
 `tests/smoke.py` 出现 2811 行纯 EOL"假变更"，真实内容改动被淹没。本轮把"提交前自查 EOL"
-写进 `AGENTS.md §9`（含按字节核对的命令）。**刻意不采用** `.gitattributes text=auto eol=crlf`：它会把
+写进 `AGENTS.md §9`（含按字节核对的命令）。
+  ——【2026-09-28 续64 勘误】「**以 CRLF 存储**」这个前提**不成立**：实测（`git ls-files` 的文本文件、
+  含 2 个空文件）466 个里 **71 个含 LF-only 行**，其中 54 个**整份就是 LF**。本轮的"固化"因此固错了方向
+  —— 正确规矩是「**不要改变文件原有的 EOL 形态**」，判据为 `git diff --numstat` 与
+  `git diff --ignore-cr-at-eol --numstat` 逐文件一致；`AGENTS.md §9` 已按事实改写。
+  **刻意不采用** `.gitattributes text=auto eol=crlf`：它会把
 索引侧 EOL 全量改写，需要一次覆盖全仓库的迁移提交，`git blame` 的归因随之失效 ——
 与 `AGENTS.md §0.1`「事后分辨谁改了什么」的硬规矩冲突。
 

@@ -10136,6 +10136,96 @@ http:
           "11 个页面级扫 HTML 无盘符/无项目根绝对路径（含合成 toolmgr 行的 path+note 双泄露点，含变异证伪）｜"
           "同一份工具配置在 `.exe`/无后缀两端均可解析（相对与绝对两种形态，含变异证伪）")
 
+    # ---------------- [7z] 续64：截图必须无视不可信证书（自签/过期 HTTPS 也能截） ----------------
+    # 缺陷（2026-09-28 实测复现）：`screenshot.capture()` 的 argv 里**没有**
+    # `--ignore-certificate-errors`，浏览器遇到自签/过期/私有 CA 证书会以
+    # `net::ERR_CERT_AUTHORITY_INVALID` 拒绝加载、`--screenshot` 一个字节都不产出 ——
+    # 而 CTF 与内网授权目标恰恰以这类证书为常态（`certs.py` 取证就是刻意 `CERT_NONE`）。
+    # 严重性不只在功能：续62 把它记成「环境问题」并据此得出"0 覆盖缺口"，是把真缺陷解释掉了
+    # —— 正是 §6.1 警告的「观测到异常 ≠ 归因正确」。
+    from scanner import screenshot as _shot7z
+    from scanner import devfixture as _dfx7z
+
+    print("[7z] 续64 截图无视不可信证书（自签/过期 HTTPS 也能截；含变异证伪）…")
+
+    # (a) 行为级（不需要浏览器，任何机器都能跑）：打桩 run_cmd 捕获 argv，断言开关在里头。
+    #     ⚠️ `screenshot.py` 是 `from .utils import run_cmd`，故必须打桩 `_shot7z.run_cmd`
+    #     （打 `utils.run_cmd` 无效 —— 模块早已把函数对象绑进了自己的命名空间）。
+    _cap7z = {}
+    _fake_bin7z = Path(_TMPDIR) / "t7z" / "fake-browser.exe"
+    _fake_bin7z.parent.mkdir(parents=True, exist_ok=True)
+    _fake_bin7z.write_text("x", encoding="utf-8")
+    _s7z = copy.deepcopy(settings)
+    _s7z["screenshot"] = dict(_s7z.get("screenshot") or {})
+    _s7z["screenshot"]["browser"] = str(_fake_bin7z)   # 让 browser_path() 必中，与机器无关
+    _orig_run7z = _shot7z.run_cmd
+
+    def _fake_run7z(argv, *a, **k):
+        _cap7z["argv"] = list(argv)
+        return 0, "", ""
+
+    _shot7z.run_cmd = _fake_run7z
+    try:
+        _shot7z.capture("https://127.0.0.1:1/", Path(_TMPDIR) / "t7z" / "a.png", _s7z)
+        assert "--ignore-certificate-errors" in _cap7z["argv"], \
+            f"截图 argv 缺 `--ignore-certificate-errors`（自签 HTTPS 会一个字节都不出）：{_cap7z['argv']}"
+        # 变异证伪（§6.1）：把该开关从 `_FLAGS` 过滤掉 → 上面那条必须真的红，
+        # 证明这条断言盯的是**真实的开关来源**，不是写死的字符串。
+        _orig_flags7z = _shot7z._FLAGS
+        _shot7z._FLAGS = tuple(f for f in _orig_flags7z if f != "--ignore-certificate-errors")
+        try:
+            _shot7z.capture("https://127.0.0.1:1/", Path(_TMPDIR) / "t7z" / "b.png", _s7z)
+            assert "--ignore-certificate-errors" not in _cap7z["argv"], \
+                "变异后 argv 仍含该开关 → 断言没盯住真实来源（测的是写死的字符串）"
+        finally:
+            _shot7z._FLAGS = _orig_flags7z
+
+        # (c) 相对产物路径必须被**绝对化**：浏览器把 `--screenshot=<相对路径>` 写到**它自己的
+        #     CWD**，我们这边的 out_path 永远不存在 → 静默返回 (False, …)、0 字节（续64 QA 实测）。
+        #     生产调用点都传绝对路径，这条钉的是"将来有人传相对路径"的静默失败模式。
+        _cap7z.clear()
+        _shot7z.capture("http://127.0.0.1:1/", Path("rel-shot.png"), _s7z)
+        _shot_arg7z = next(a for a in _cap7z["argv"] if str(a).startswith("--screenshot="))
+        _shot_p7z = str(_shot_arg7z).split("=", 1)[1]
+        assert os.path.isabs(_shot_p7z), \
+            f"`--screenshot=` 必须是绝对路径（相对路径会被浏览器写到它自己的 CWD → 静默 0 字节）：{_shot_p7z}"
+        # 变异证伪：把 `_abs_out` 打回恒等 → 上面那条必红
+        _orig_abs7z = _shot7z._abs_out
+        _shot7z._abs_out = lambda p: Path(p)
+        try:
+            _cap7z.clear()
+            _shot7z.capture("http://127.0.0.1:1/", Path("rel-shot.png"), _s7z)
+            _shot_arg7z2 = next(a for a in _cap7z["argv"] if str(a).startswith("--screenshot="))
+            assert not os.path.isabs(str(_shot_arg7z2).split("=", 1)[1]), \
+                "变异后仍得到绝对路径 → 断言没盯住真实来源（_abs_out）"
+        finally:
+            _shot7z._abs_out = _orig_abs7z
+    finally:
+        _shot7z.run_cmd = _orig_run7z
+
+    # (b) 端到端（可降级）：真夹具自签 HTTPS 口 + **生产函数** `capture()`。
+    #     降级**不等于**通过：只认「未找到可用的无头浏览器」这一种原因（同 [7x] 口径），
+    #     其它任何失败（截图 False / png 空 / 抛异常）一律红 —— 旧代码下正是 False / 0 字节。
+    _fx7z = _hb7z = _sb7z = None
+    _png7z = Path(_TMPDIR) / "t7z" / "https.png"
+    try:
+        _fx7z, _hb7z, _sb7z = _dfx7z.start_both()
+        _ok7z, _err7z = _shot7z.capture(_sb7z, _png7z, settings)
+        if not _ok7z and "未找到可用的无头浏览器" in str(_err7z):
+            print(f"[7z] 续64 端到端 **跳过（不是通过）**：{_err7z}")
+        else:
+            assert _ok7z, f"自签 HTTPS 截图失败（应无视证书错误）：{_err7z}"
+            assert _png7z.exists() and _png7z.stat().st_size > 0, \
+                "截图返回 True 但 png 为空 —— 证书错误仍拦住了渲染"
+    finally:
+        if _fx7z is not None:
+            _dfx7z.stop(_fx7z)
+
+    print("[7z] 续64 截图无视不可信证书 ok: 行为级钉 `--ignore-certificate-errors` 在 argv 里"
+          "（变异证伪：过滤 `_FLAGS` 即红）｜相对产物路径被绝对化（`--screenshot=` 为绝对路径，"
+          "变异证伪：`_abs_out` 打回恒等即红）｜端到端对**真夹具自签 HTTPS 口**调生产函数 "
+          "`capture()` 返回 True 且 png 非空（无浏览器则按 [7x] 口径跳过，不误判为通过）")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

@@ -409,9 +409,14 @@ VECTORS = (
     dict(stage="cert", key="tls", desc="TLS 证书取证（标准库握手）",
          kind="log", kw="→ CN="),
     # ---- screenshot ----
+    # 恒为 N-A 的自检限制（非功能缺陷）：自检的截图目标是夹具**主机名**
+    # （`https://www.devfixture.test:<port>/`），而自检的 DNS 覆盖只打桩**本进程**的
+    # `socket.getaddrinfo`、**浏览器子进程看不见** → 浏览器自己解析得 NXDOMAIN。同类先例见本文件
+    # 顶部对 subfinder/httpx/nmap「不认 DNS 覆盖」的登记。端到端覆盖在 `tests/smoke.py [7z]`。
     dict(stage="screenshot", key="shot", desc="无头浏览器截图",
          kind="log", kw="→ shots/",
-         na_log=("截图失败", "本机无头浏览器截图失败（环境问题，见阶段日志）")),
+         na_log=("截图失败", "自检截图目标用的是夹具主机名，浏览器子进程拿不到本进程的 DNS 覆盖 → "
+                            "解析失败（非功能缺陷；端到端覆盖在 smoke [7z]）")),
     # ---- jsmine ----
     dict(stage="jsmine", key="mine", desc="JS 域名/接口/凭据挖掘",
          kind="log", kw="挖掘 JS 资产"),

@@ -41,9 +41,12 @@
       （**绝不把 `*` 写进资产库**）。它与 `passive.py` 的 crt.sh（只取主机名做子域收集）、
       `certs.py`（真握手取线上证书）、FOFA 的 `cert=`（拿证书反查共用资产）是**四件不同的事**，
       区别写在 `scanner/ctlog.py` 文件头；
-- [x] **截图取证**（第十五轮）：无头浏览器（本机 Edge/Chrome，`--headless=new`）对存活站点截图，
+- [x] **截图取证**（第十五轮）：无头浏览器（本机 Edge/Chrome，`--headless=new` + `--ignore-certificate-errors`）对存活站点截图（**不校验证书**，自签/过期/私有 CA 也能截，续64），
       **默认关闭**（`screenshot.enabled`），截图落在任务目录并在站点页 URL 旁显示缩略图；
       浏览器路径探测见 `scanner/screenshot.py`（配置 → PATH → 注册表 → 标准安装位置，无硬编码绝对路径）；
+      **仍未做**：自检的 `screenshot/shot` 向量恒为 N-A（自检截图目标是夹具**主机名**，
+      DNS 覆盖只在本进程生效、浏览器子进程解析不了）—— 截图端到端覆盖在 `tests/smoke.py [7z]`；
+      要让自检也真跑到得把截图目标改成 IP 形态（牵动 probe/dirscan/vulnscan 站点数），属独立一轮。
 - [x] **登录态扫描**（第十七轮）：任务级 Cookie/Token 配置（GUI 文本框 / CLI `-H` 与 `--cookie`），
       只发往目标侧（第三方接口 fail-closed 不带），非法行拒绝建任务并列出原因，日志/页面/报告全部掩码；
       补扫与拓展域名探测**自动继承**来源任务的登录态。

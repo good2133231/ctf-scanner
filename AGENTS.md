@@ -84,6 +84,8 @@ Flask Web 控制台（仿 ARL）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`
   是占位身份，个人使用请自行改。
+- **本机参考项目（操作性路径，集中在此）**：`C:\Users\材料\Desktop\tools\scan\myscan_20250825`
+  —— `TODO.md` 末尾「参考项目借鉴清单」的对标对象（**非本项目依赖**，仅登记位置；§9 只做描述性引用）。
 
 ## 3. 目录地图
 
@@ -519,6 +521,13 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   ④ 回归：`run_devflow.py` 报 35 向量 18 OK / **0 MISS** / 17 N-A；smoke 钉
                             #   状态合法 + N-A 必带原因 + 10 条核心主路径 OK + 缺口为 0 + 证据可复算，
                             #   并用 M6~M8 变异证明（判据恒不命中 / 抹掉阶段日志 / 去掉静态 N-A 原因）。
+# 2026-09-28 续64 新增 `[7z]`：**截图必须无视不可信证书**（自签/过期 HTTPS 也能截）——
+                            #   缺陷：`screenshot.capture()` 的 argv 缺 `--ignore-certificate-errors`，
+                            #   浏览器遇自签/过期/私有 CA 直接 `ERR_CERT_AUTHORITY_INVALID` 拒载、
+                            #   `--screenshot` 0 字节（CTF/内网常态）→ 实测同一站点加/不加 = 13512 vs 0。
+                            #   ① 行为级：打桩 `shot_mod.run_cmd` 捕获 argv 断言开关在里头 + 变异证伪
+                            #   （过滤 `_FLAGS` 即红）；② 端到端：真夹具自签 HTTPS 口（127.0.0.1）调
+                            #   生产函数 `capture()` 断言 True + png 非空（无浏览器按 `[7x]` 口径跳过）。
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
                             #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）
 py -3 cli/client.py --update-tools            # 续54：联网装/更新 subfinder/httpx/puredns 并回写 tools.<名>
@@ -591,6 +600,20 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
+
+- **站点截图的 `--ignore-certificate-errors` 不能省（2026-09-28 续64）**：CTF / 内网授权目标多为
+  自签 / 过期 / 私有 CA 证书（与 `certs.py` 刻意 `CERT_NONE` 同一现实），无头浏览器不加这个开关
+  会以 `net::ERR_CERT_AUTHORITY_INVALID` 拒绝加载、`--screenshot` 一个字节都不产出 —— 即**自签
+  HTTPS 站点永远截不到图**。开关集中写在 `scanner/screenshot.py` 的模块级 `_FLAGS`（附"为什么
+  不能省"注释）。它只影响**本机渲染**，不改变对目标的请求语义（仍是只读 GET），不越"非破坏性"
+  红线。回归钉在 `tests/smoke.py [7z]`（含变异证伪 + 真夹具自签 HTTPS 端到端）。
+
+- **自检的 `screenshot/shot` 向量恒为 N-A（2026-09-28 续64）**：自检截图目标是夹具**主机名**
+  `https://www.devfixture.test:<port>/`，而自检的 DNS 覆盖只在**本进程**生效（`socket.getaddrinfo`
+  打桩），**浏览器子进程解析不了** → NXDOMAIN（与"subfinder/httpx/nmap 不认 DNS 覆盖"同类，见
+  `scanner/devflow.py` 顶部）。**截图功能的端到端覆盖在 `tests/smoke.py [7z]`**（用 `127.0.0.1`
+  形态的夹具 URL 调生产函数 `capture()`）。要让自检也真跑到，得让自检的截图目标对浏览器可达
+  （改成 IP 形态）—— 会牵动 probe/dirscan/vulnscan 的站点数，**属独立一轮，未做**。
 
 - **XSS 上下文分析（2026-09-23 续18）把"反射回显"拆成 8 种上下文并分级**：
   `<script>` 内 JS 字符串 / JS 代码、无引号属性、标签名位置 → **high**（可直接逃逸或执行）；
@@ -1136,14 +1159,24 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   `[部分完成：说明]`，未开始写 `[待办]`。首行已写明该约定。
 - `TODO.md` 是本项目**待用户确认**的排期清单（P0 = 子域名扫描）。用户确认后再实施，
   不要自行把 P1/P3 拉上来做；P3 项依赖外部 API 或检测层成熟度，现阶段做只会产生噪声。
-  文件末尾另有 **「参考项目借鉴清单」**（对标 `C:\Users\材料\Desktop\tools\scan\myscan_20250825`），
+  文件末尾另有 **「参考项目借鉴清单」**（对标本机一个外部参考项目，其路径见 §2 末「本机参考项目」一条），
   含 A 采纳 / B 批判不采纳（8 条带理由）/ C 保留与间接处理标注——动手前先读，**避免重复调研或照搬有害设计**。
 - 跨平台（Linux + Windows）是硬要求：路径用 `pathlib`、命令用列表 argv + `shell=False`、
   解释器用 `utils.pick_python`、文件读写显式 `encoding="utf-8"`、工具探测用 `shutil.which`。
-- **换行符：仓库内文本文件以 CRLF 存储**（仓库级 `core.autocrlf=false`），**禁止提交 LF-only 的文件**。
+- **换行符：仓库里的 EOL 是「混合」的，没有统一约定**（`core.autocrlf=false`，按文件原样提交）。
+  实测（2026-09-28，口径 = `git ls-files` 里的文本文件、含 2 个空文件）：**466 个里 71 个含 LF-only 行**
+  （其中 54 个整份就是 LF，如 `scanner/extdom.py` / `scanner/intel.py` / `config/dicts/cdn_cname.txt`；
+  混合的如 `tests/smoke.py` / `cli/client.py` / `gui/app.py`；整体 CRLF 的如 `scanner/db.py` / `scanner/utils.py`）。
+  ⚠️ **这个数字会随编辑漂移**（本轮就从 69 涨到 71 —— Edit 类工具新增的行是 LF），
+  **别拿它当精确指标**；规矩**不是"一律 CRLF"**，而是 **"不要改变文件原有的 EOL 形态"** ——
+  判据永远是 `git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` **逐文件一致**
+  （对全 LF 文件同样成立）。
   代价是实测过的：有一次用工具批量改写后文件变成 LF-only，提交时 `tests/smoke.py` 出现
-  **2811 行纯 EOL"假变更"**（`git show --stat` 里 1490+/1321-），真正的内容改动被淹没、
-  review 完全失效。**改完文件先自查再 `git add`**：
+  **2811 行纯 EOL"假变更"**（`git show --stat` 里 1490+/1321-），真正的内容改动被淹没、review 完全失效。
+  ⚠️ **具体陷阱（2026-09-28 续64 又踩一次）**：Edit/Write 这类工具会把**整个文件**归一成 LF，
+  对**混合 EOL** 的文件尤其致命。归位办法**不是**无脑全文件 `\r\n`，而是**从 `git show HEAD:<file>`
+  取原始字节、只替换目标文本、其余行的原 EOL 保留**。
+  **改完文件先自查再 `git add`**：
 
   ```powershell
   git diff --stat                      # 行数远超实际改动 → 大概率 EOL 被改写

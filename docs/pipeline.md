@@ -51,7 +51,7 @@
 | `httpx -l httpx_url -mc 200,301,302,403,404` | probe | httpx 适配器（另加 `-title -tech-detect -json` 提取信息）；`-mc` 白名单一致 |
 | `python dirmap.py -iF dir_out -e all` | dirscan | dirmap 适配器（`-iF` 批量 URL），并解析其 `output/` 产物；**仅 `mode=deep` 时调用**（浅扫不碰外部工具） |
 | （手工没有的部分） | vulnscan | POC 引擎 + OWASP Top10 启发式检查（分级/分类门控 + WAF 探测） |
-| （手工没有的部分） | screenshot | 本机无头 Edge/Chrome（`--headless=new`）截图，产物 `shots/*.png` 并回填 `sites.shot`；默认关 |
+| （手工没有的部分） | screenshot | 本机无头 Edge/Chrome（`--headless=new` + `--ignore-certificate-errors`）截图，产物 `shots/*.png` 并回填 `sites.shot`；默认关。**不校验证书**（自签/过期/私有 CA 也能截，续64） |
 | `openssl s_client -connect host:443 -showcerts` | cert | 一次只读 TLS 握手取 DER → 纯标准库 ASN.1 解析（CN/SAN/有效期/自签/指纹）→ `certs` 表；**不校验证书**（自签/过期是常态）；默认关 |
 | （手工没有的部分） | intel | 拉 CISA KEV 公开 JSON → 与本地指纹**白名单式**匹配 → 「线索」（`leads` 表）；单向下行、默认关 |
 | （手工没有的部分） | heuristic | 对已采集数据做**零请求**差分/异常聚合（软 404 / 高价值入口 / 同标题 / 目录离群 / 同 C 段）→ 「线索」；默认关 |
@@ -322,10 +322,13 @@
 - 位置：**`probe` 之后、`osint` 之前**（必须先有存活站点才能截图；旧编号里没有它，故排在 ①~⑧ 之后书写）；
 - 门控：`screenshot.enabled` 默认关；即便打开，`screenshot.available()` 探测不到可用浏览器时**只告警跳过、不抛错**；
 - 输入：`ctx.results["sites"]`（为空回退 `db.list_sites`），上限 `screenshot.max_sites`（默认 20，超出只截前 N 个）；
-- 处理：调用本机已装的 Edge/Chrome 无头模式（`--headless=new`）截整页，视口 `screenshot.window`
+- 处理：调用本机已装的 Edge/Chrome 无头模式（`--headless=new` **+ `--ignore-certificate-errors`**）
+  截整页，视口 `screenshot.window`
   （默认 `1280x900`）、单站点超时 `screenshot.timeout`（默认 30s）；浏览器路径 `screenshot.browser`
   留空则自动探测（配置值 → PATH → 注册表 → 标准安装位置，**无硬编码绝对路径**）；
   **不引入任何新依赖**（不装 selenium/playwright）；
+  **不校验证书** —— 自签 / 过期 / 私有 CA 的 HTTPS 站点也能截（CTF / 内网常态；不加
+  `--ignore-certificate-errors` 时浏览器会 `ERR_CERT_AUTHORITY_INVALID` 拒载、png 0 字节，见续64）；
 - 产物：`shots/<md5>.png` + `shots.txt`；`sites.shot` 只存**相对任务工作目录**的路径（`shots/xxx.png`），
   GUI 站点页 / 任务详情「站点」页签显示缩略图（点击看大图）；
 - 为什么默认关：拉起无头浏览器单站点通常 1~3 秒、内存占用明显高于纯 HTTP 探测，

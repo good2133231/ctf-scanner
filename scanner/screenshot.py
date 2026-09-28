@@ -46,6 +46,22 @@ _REG_KEYS = (
 )
 
 
+# 无头浏览器的公共开关。`--ignore-certificate-errors` **不能省**：CTF 与内网授权目标多为
+# 自签 / 过期 / 私有 CA 证书（`certs.py` 取证就是刻意 `CERT_NONE`），不加它浏览器会以
+# `net::ERR_CERT_AUTHORITY_INVALID` 拒绝加载、`--screenshot` 一个字节都不产出
+# （2026-09-28 实测：同一站点加/不加 = 13512 字节 vs 0 字节；且与 `--headless=new` 无关）。
+# 它只影响**本机渲染**，不改变对目标的请求语义（仍是只读 GET），不越"非破坏性"红线。
+_FLAGS = (
+    "--headless=new",
+    "--ignore-certificate-errors",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-extensions",
+)
+
+
 def _from_registry():
     try:
         import winreg  # noqa: WPS433 （仅 Windows 有）
@@ -90,6 +106,18 @@ def available(settings=None):
     return bool(browser_path(settings))
 
 
+def _abs_out(p):
+    """产物路径**绝对化**：浏览器把 `--screenshot=<相对路径>` 写到**它自己的 CWD**，
+    于是我们这边的 out_path 永远不存在 → 静默 0 字节（续64 QA 实测踩到）。
+    调用方本来都传绝对路径，这里兜住"将来有人传相对路径"的那种静默失败。
+
+    ⚠️ 用 `Path.absolute()` 而**不是** `Path.resolve()`：本机 Python 3.9.0 上 `resolve()`
+    对**不存在**的相对路径会原样返回相对路径（2026-09-28 实测，`resolve()` 返 `rel-shot.png`），
+    达不到"绝对化"目的；`absolute()` 稳定返回绝对路径。
+    """
+    return Path(p).absolute()
+
+
 def capture(url, out_path, settings=None, timeout=30, throttle=None):
     """给单个 URL 截图，写入 `out_path`。返回 `(ok, err)`。
 
@@ -100,23 +128,12 @@ def capture(url, out_path, settings=None, timeout=30, throttle=None):
         return False, "未找到可用的无头浏览器（Edge/Chrome）；可在策略配置里填 screenshot.browser"
     cfg = (settings or {}).get("screenshot", {}) or {}
     size = str(cfg.get("window") or "1280x900").replace(" ", "")
-    out_path = Path(out_path)
+    out_path = _abs_out(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_profile = tempfile.mkdtemp(prefix="ctfscan-shot-")
     try:
-        argv = [
-            binary,
-            "--headless=new",
-            "--disable-gpu",
-            "--hide-scrollbars",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-extensions",
-            f"--user-data-dir={tmp_profile}",     # 隔离：不碰用户真实浏览器配置
-            f"--window-size={size}",
-            f"--screenshot={out_path}",
-            str(url),
-        ]
+        argv = [binary, *_FLAGS, f"--user-data-dir={tmp_profile}",   # 隔离：不碰用户真实浏览器配置
+                f"--window-size={size}", f"--screenshot={out_path}", str(url)]
         rc, _out, err = run_cmd(argv, timeout=int(timeout or 30), throttle=throttle)
         if out_path.exists() and out_path.stat().st_size > 0:
             return True, ""
