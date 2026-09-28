@@ -45,7 +45,13 @@ _BASE_DIR = Path(__file__).resolve().parent.parent
 # 下载落点（与 tools/scanner/README.md 的说明一致）。仓库内 → 回写成**相对路径**（项目硬规矩）。
 DEFAULT_DEST = "tools/scanner"
 _MAX_BYTES = 120 * 1024 * 1024
-_ALLOWED_HOSTS = frozenset({"api.github.com", "github.com", "objects.githubusercontent.com"})
+# `release-assets.githubusercontent.com` 是 GitHub release 资产**实际的跳转目标**
+# （2026-09-28 实测：`/releases/download/…` 302 到它；没有它 `--update-tools` 一个
+#  字节都下载不了，续54 的功能从未真正工作过）。`objects.githubusercontent.com` 保留
+#  —— 旧跳转目标，防 GitHub 改回。
+_ALLOWED_HOSTS = frozenset({"api.github.com", "github.com",
+                            "objects.githubusercontent.com",
+                            "release-assets.githubusercontent.com"})
 _UA = "CTFScanner-toolmgr/0.1 (+authorized-testing-only)"
 
 TOOLS = {

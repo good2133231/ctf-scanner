@@ -10758,6 +10758,26 @@ http:
     finally:
         _j8b._QUOTED_HOST_RE, _j8b._PROTO_REL_RE = _orig_q8b, _orig_p8b
 
+    # ④ `--update-tools` 的下载白名单：GitHub release 资产**实际**跳转到
+    #    `release-assets.githubusercontent.com`（2026-09-28 实测 302），缺了它**一个字节都
+    #    下载不了**（续54 的功能从未真正工作过 —— Linux 实测踩到）。
+    from scanner import toolmgr as _tm8b
+    _h8b = "https://release-assets.githubusercontent.com/github-production-release-asset/x"
+    assert _tm8b._check_url(_h8b) == "release-assets.githubusercontent.com", \
+        "release 资产主机必须在白名单内（否则 --update-tools 什么都装不了）"
+    # 变异证伪：白名单打回旧口径（没有 release-assets）→ 必须抛 ValueError
+    _old_hosts8b = {"api.github.com", "github.com", "objects.githubusercontent.com"}
+    _orig_h8b = _tm8b._ALLOWED_HOSTS
+    _tm8b._ALLOWED_HOSTS = frozenset(_old_hosts8b)
+    try:
+        try:
+            _tm8b._check_url(_h8b)
+            raise AssertionError("变异（旧白名单）后仍放行 → 断言没区分度")
+        except ValueError:
+            pass
+    finally:
+        _tm8b._ALLOWED_HOSTS = _orig_h8b
+
     print("[8b] 续68 IDN 第二批 ok: base_domain 多段 IDN 后缀（a.教育.香港 / b.教育.香港 各自成立，"
           "ASCII 回归不变，变异打回 ASCII-only 口径即红）｜.zip/.sh/.do 是真实 TLD 不再被 _FILE_EXT 误杀"
           "（文件形态噪声仍拒；变异退回旧实现即红）｜jsmine 引号内与协议相对形态的 Unicode host 挖得到"

@@ -1786,3 +1786,12 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ③ jsmine _QUOTED_HOST_RE/_PROTO_REL_RE Unicode 感知（引号内/协议相对的中文 host 能挖到；
        无路径两段仍要求 ≥3 段，防 backup.zip 文件名误判，对 ASCII/IDN 一致）。
        ④ smoke 新增 [8b]（3 组断言 + §6.1 变异证伪）；**本机 Windows 与 Linux 实机均 SMOKE PASS**。
+2026-09-28 续69：**修 --update-tools 白名单缺 GitHub release 资产主机（P1：一键装工具从未真正工作过）**
+       ① 根因：GitHub release 下载 302 跳转到 release-assets.githubusercontent.com，而
+       toolmgr._ALLOWED_HOSTS 只有 api.github.com/github.com/objects.githubusercontent.com，
+       跳转后二次校验必拒 → 一个字节都下载不了（任何平台）。实测 curl -I 确认 Location。
+       ② 改法：白名单补 release-assets.githubusercontent.com（objects 保留防改回）；
+       smoke [8b]④ 加断言 + 变异证伪（打回旧白名单必须抛 ValueError）。
+       ③ Linux 实测：subfinder v2.16.0 / httpx v1.12.0 安装成功（SHA256 校验）；
+       --check 显示 subfinder OK / httpx OK / nmap OK —— 适配分支首次在 Linux 实测通过；
+       puredns 正确拒绝（官方无校验和文件）；**PDF 导出 58432 字节成功**（snap chromium）。

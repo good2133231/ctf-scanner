@@ -3,6 +3,35 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-28 —— 续69：**修 `--update-tools` 白名单缺 GitHub release 资产主机**（P1：一键装工具从未真正工作过）+ Linux 工具实测
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。
+
+### 0. 问题与根因（Linux 实测踩到）
+
+`toolmgr._ALLOWED_HOSTS` 只有 `api.github.com` / `github.com` / `objects.githubusercontent.com`，
+但 GitHub 的 release 资产下载会 **302 跳转到 `release-assets.githubusercontent.com`**
+（2026-09-28 实测 `curl -I` 确认 Location）。`toolmgr` 对**跳转后的真实 URL 会再校验一次白名单**
+（防 302 绕过），于是**一个字节都下载不了** —— `--update-tools` 在任何平台都装不了任何工具，
+续54 的功能从未真正工作过。本地没暴露是因为本地从来没跑过 `--update-tools`（工具都是手工放的）。
+
+### 1. 改法
+
+`_ALLOWED_HOSTS` 补 `release-assets.githubusercontent.com`（`objects.githubusercontent.com`
+保留 —— 旧跳转目标，防 GitHub 改回）。**测试**：`[8b]` 第 ④ 组 —— `_check_url()` 对该主机放行 +
+**变异证伪**（白名单打回旧口径 → 必须抛 `ValueError`）。
+
+### 2. Linux 实测（用户提供的 `10.10.3.121`，Ubuntu 22.04.5）
+
+- `python3 cli/client.py --update-tools` → **subfinder v2.16.0 / httpx v1.12.0 安装成功
+  （SHA256 已校验）**；puredns 正确拒绝（官方 v2.1.1 **未发布校验和文件**，与续59-3 的记录一致）。
+- `python3 cli/client.py --check` → subfinder OK / httpx OK / nmap OK —— **适配分支首次在
+  Linux 实测通过**（此前登记"未实测"的三条里，前两条就此闭环；puredns 仍走内置兜底）。
+- **PDF 导出**：snap chromium `--print-to-pdf` → **58432 字节 PDF 成功**（该机长期登记
+  "Linux PDF 未实测"就此闭环）。
+- 仍未测：puredns 适配分支（官方不发校验和文件、本机也未装）。
+
+
 ## 2026-09-28 —— 续68：**IDN 第二批**（base_domain 多段后缀 / .zip·.sh TLD / jsmine Unicode 形态）+ smoke `[8b]`
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。把续65 登记的三条「已知限制」全部收掉

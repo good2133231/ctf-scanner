@@ -528,6 +528,9 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   ① 行为级：打桩 `shot_mod.run_cmd` 捕获 argv 断言开关在里头 + 变异证伪
                             #   （过滤 `_FLAGS` 即红）；② 端到端：真夹具自签 HTTPS 口（127.0.0.1）调
                             #   生产函数 `capture()` 断言 True + png 非空（无浏览器按 `[7x]` 口径跳过）。
+# 2026-09-28 续69：`toolmgr._ALLOWED_HOSTS` 补 `release-assets.githubusercontent.com`
+#   —— GitHub release 资产 302 跳转的实际目标（实测），缺它 `--update-tools` 什么都
+#   下载不了（跳转后的真实 URL 会再校验一次白名单，防 302 绕过）。回归 `smoke [8b]④`。
 # 2026-09-28 续68 新增 `[8b]`：**IDN 第二批**（base_domain 多段后缀 / .zip·.sh TLD / jsmine Unicode 形态）——
 #   ① `base_domain` 走**最长匹配** `tlds.txt` 含点号后缀（含 punycode）→ 多段 IDN 注册域
 #   各自成立（变异：`_multi_part_suffixes` 打回 ASCII-only 旧口径即红）；
