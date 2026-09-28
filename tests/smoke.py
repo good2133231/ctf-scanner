@@ -10675,6 +10675,94 @@ http:
           "IDN 可返回 + 两条收紧（含变异回旧逻辑即红）｜页面级回中文·value 仍 punycode（含变异 "
           "idn_display 即红）｜**端到端真链路**：目标 例子.中国 → 解析/产物/DB 全 punycode、详情页回中文（含变异）｜QA 收口 F1/F2/F4：osint 反查落库 / URL 形态目标 / _valid_host 入口 均已归一（含变异）｜F1b 咽喉点：db.insert_subdomains / set_subdomain_cnames 入口归一（含变异）")
 
+    # ---------------- [8b] 续68：IDN 第二批（base_domain 多段后缀 / .zip·.sh TLD / jsmine Unicode 形态） ----------------
+    # 续65 只修了 "punycode 主链路"；这一批把三处**登记为已知限制**的尾巴收掉：
+    #   ① `base_domain` 的多段 IDN 公共后缀（`MULTI_TLD` 只列 ASCII → `a.教育.香港` 与
+    #      `b.教育.香港` 被切成同一个 `教育.香港`，`*.教育.香港` 全判成同一注册域）；
+    #   ② `.zip`（以及 `.sh` / `.do`）是**真实 TLD**，却因末位 label 在 `_FILE_EXT` 里被当
+    #      "文件后缀"挡掉（`foo.zip` → False）；
+    #   ③ jsmine 的两条 host 正则（`_QUOTED_HOST_RE` / `_PROTO_REL_RE`）只认纯 ASCII 字母，
+    #      引号内与协议相对形态的 **Unicode host** 挖不到（绝对 URL 形态续65 起已支持）。
+    # 数据源：`tlds.txt` 已含 `xn--` 后缀（续65），其中**多段**的有 5415 条 / 287 条 punycode。
+    from scanner.utils import base_domain as _bd8b, to_ascii as _ta8b, is_domain as _id8b
+    from scanner import utils as _u8b
+    from scanner import jsmine as _j8b
+    import re as _re8b
+
+    print("[8b] 续68 IDN 第二批：base_domain 多段后缀 / .zip·.sh 真实 TLD / jsmine Unicode 形态（含变异证伪）…")
+
+    # ① base_domain：多段 IDN 后缀的注册域应各自成立（此前都被切成后缀本身）
+    _a8b = _ta8b("a.教育.香港")          # a.xn--wcvs22d.xn--j6w193g
+    _b8b = _ta8b("b.教育.香港")          # b.xn--wcvs22d.xn--j6w193g
+    assert _a8b and _b8b and _a8b != _b8b, (_a8b, _b8b)
+    assert _bd8b(_a8b) == _a8b, f"多段 IDN 后缀：a.教育.香港 的注册域应是它本身，实测 {_bd8b(_a8b)!r}"
+    assert _bd8b(_b8b) == _b8b, f"多段 IDN 后缀：b.教育.香港 的注册域应是它本身，实测 {_bd8b(_b8b)!r}"
+    # 回归：ASCII 的多段后缀与普通两段/三段行为不变（既有断言 `[5d]` 的等价重述）
+    assert _bd8b("www.example.co.uk") == "example.co.uk", _bd8b("www.example.co.uk")
+    assert _bd8b("www.example.com.cn") == "example.com.cn", _bd8b("www.example.com.cn")
+    assert _bd8b("a.b.example.com") == "example.com", _bd8b("a.b.example.com")
+    assert _bd8b("example.com") == "example.com"
+    # 两段 IDN：注册域就是它本身。⚠️ base_domain **不做 IDN 归一**（只 lower/strip；两段主机
+    # 原样返回），所以这里喂的是**已归一**的形态 —— 与它的所有调用方一致（extdom / subdomain /
+    # jsmine 都先过 to_ascii）。
+    assert _bd8b(_ta8b("例子.中国")) == _ta8b("例子.中国"), _bd8b(_ta8b("例子.中国"))
+    # 变异证伪（§6.1）：把多段后缀集合打回"只有 ASCII 的旧口径"（= 旧行为的 MULTI_TLD）
+    # → `a.教育.香港` 的注册域会被切回 `xn--j6w193g`，上面那条必红
+    _orig_mps8b = _u8b._multi_part_suffixes
+    _u8b._multi_part_suffixes = lambda: {"com.cn", "co.uk"}
+    try:
+        assert _bd8b(_a8b) != _a8b, "变异后仍正确 → 这条断言没区分度（没盯住多段后缀来源）"
+    finally:
+        _u8b._multi_part_suffixes = _orig_mps8b
+
+    # ② `.zip` / `.sh` / `.do` 是真实 TLD，不该被 `_FILE_EXT` 挡掉（文件形态噪声仍要拒）
+    assert _j8b._valid_host("foo.zip") is True, "`.zip` 是真实 TLD（Google），不该被当文件后缀"
+    assert _j8b._valid_host("foo.sh") is True, "`.sh`（圣赫勒拿）是真实 TLD"
+    assert _j8b._valid_host("foo.do") is True, "`.do`（多米尼加）是真实 TLD"
+    assert _j8b._valid_host("app.js") is False and _j8b._valid_host("index.php") is False \
+        and _j8b._valid_host("login.aspx") is False, "文件形态的噪声仍要被 PSL 拒掉"
+    # 变异证伪：把修复**退回旧实现**（PSL 之后再用 _FILE_EXT 拦一次）→ 旧代码对 foo.zip 是 False
+    def _old_valid8b(host):
+        h = _ta8b(host) or ""
+        if not _id8b(h):
+            return False
+        labels = h.split(".")
+        tlds = _j8b._public_suffixes()
+        if tlds is None or _j8b._has_public_suffix(h, tlds):
+            if labels[-1] in _j8b._FILE_EXT:
+                return False
+        return all(_re8b.fullmatch(r"[a-z0-9\-_]{1,63}", lb) for lb in labels)
+    assert _old_valid8b("foo.zip") is False and _j8b._valid_host("foo.zip") is True, \
+        "旧实现应对 foo.zip 返回 False（否则这条断言没区分度）"
+
+    # ③ jsmine 两条 host 正则 Unicode 感知：引号内 / 协议相对形态的中文主机挖得到
+    _d8b_q, _u8b_q = _j8b._extract('var h = "api.例子.中国/v1";', "https", set(), set())
+    assert "api.xn--fsqu00a.xn--fiqs8s" in _d8b_q, f"引号内 Unicode host 应被挖到：{sorted(_d8b_q)}"
+    _d8b_p, _u8b_p = _j8b._extract('fetch("//例子.中国/track");', "https", set(), set())
+    assert "xn--fsqu00a.xn--fiqs8s" in _d8b_p, f"协议相对 Unicode host 应被挖到：{sorted(_d8b_p)}"
+    # 回归：ASCII 两种形态照常；JS 成员访问链仍被 PSL 拒
+    _d8b_a, _u8b_a = _j8b._extract('var c = "api.realcorp.net/v1";', "https", set(), set())
+    assert "api.realcorp.net" in _d8b_a, _d8b_a
+    assert not _j8b._extract("var x = wallet.filter.withdraw;", "https", set(), set())[0], \
+        "JS 成员访问链仍要被 PSL 拒掉"
+    # 变异证伪：把两条正则打回 ASCII-only 旧版 → 上面两条必红
+    _old_q8b = _re8b.compile(r"""["'`]((?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,24})((?::\d+)?(?:/[A-Za-z0-9\-._~%/?#&=+@!$*]*)?)["'`]""")
+    _old_p8b = _re8b.compile(r"""//((?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,24})((?::\d+)?(?:/[^\s'"<>()\\`]*)?)""")
+    _orig_q8b, _orig_p8b = _j8b._QUOTED_HOST_RE, _j8b._PROTO_REL_RE
+    _j8b._QUOTED_HOST_RE, _j8b._PROTO_REL_RE = _old_q8b, _old_p8b
+    try:
+        assert not _j8b._extract('var h = "api.例子.中国/v1";', "https", set(), set())[0], \
+            "变异（ASCII-only 正则）后仍挖得到 → 断言没区分度"
+        assert not _j8b._extract('fetch("//例子.中国/track");', "https", set(), set())[0], \
+            "变异（ASCII-only 正则）后协议相对仍挖得到 → 断言没区分度"
+    finally:
+        _j8b._QUOTED_HOST_RE, _j8b._PROTO_REL_RE = _orig_q8b, _orig_p8b
+
+    print("[8b] 续68 IDN 第二批 ok: base_domain 多段 IDN 后缀（a.教育.香港 / b.教育.香港 各自成立，"
+          "ASCII 回归不变，变异打回 ASCII-only 口径即红）｜.zip/.sh/.do 是真实 TLD 不再被 _FILE_EXT 误杀"
+          "（文件形态噪声仍拒；变异退回旧实现即红）｜jsmine 引号内与协议相对形态的 Unicode host 挖得到"
+          "（ASCII 回归不变；变异打回 ASCII-only 正则即红）")
+
     # 「SMOKE PASS」必须是 main() 的最后一句 —— 只有全部断言都过了才会执行到这里。
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。

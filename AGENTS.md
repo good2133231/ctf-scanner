@@ -528,6 +528,11 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   ① 行为级：打桩 `shot_mod.run_cmd` 捕获 argv 断言开关在里头 + 变异证伪
                             #   （过滤 `_FLAGS` 即红）；② 端到端：真夹具自签 HTTPS 口（127.0.0.1）调
                             #   生产函数 `capture()` 断言 True + png 非空（无浏览器按 `[7x]` 口径跳过）。
+# 2026-09-28 续68 新增 `[8b]`：**IDN 第二批**（base_domain 多段后缀 / .zip·.sh TLD / jsmine Unicode 形态）——
+#   ① `base_domain` 走**最长匹配** `tlds.txt` 含点号后缀（含 punycode）→ 多段 IDN 注册域
+#   各自成立（变异：`_multi_part_suffixes` 打回 ASCII-only 旧口径即红）；
+#   ② `.zip`/`.sh`/`.do` 不再被 `_FILE_EXT` 误杀（变异：退回旧实现"PSL 后再拦 _FILE_EXT"即红）；
+#   ③ jsmine 引号内 / 协议相对形态的 Unicode host 挖得到（变异：两条正则打回 ASCII-only 即红）。
 # 2026-09-28 续65 新增 `[8]`：**IDN / 中文域名**（punycode 主链路 + 展示回解）——
                             #   缺陷：`例子.中国` 被判 `unknown` 静默丢弃（四处同口径的重复编码都只认纯
                             #   ASCII 字母 TLD；PSL `tlds.txt` 又把非 ASCII 后缀整批滤掉、`xn--` 一条都没有）。
@@ -978,14 +983,20 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
     清单缺失/为空时 **fail-open**（回退宽松判断 + 告警一次）—— **宁可留噪音，也不静默丢资产**。
   - **IDN / 中文域名**（续65 已支持主链路）：`utils.to_ascii()` 在边界把 Unicode/punycode 归一为
     ASCII，`is_domain`/`parse_line` 接受 punycode 形态，`config/dicts/tlds.txt` 已补 `xn--` 后缀
-    （约 6870 条）。**已知限制（仍未做）**：`utils.base_domain()` 的多段后缀表 `MULTI_TLD` 只列
-    ASCII（com.cn/co.uk …），**多段 IDN 公共后缀会切错**——实测
-    `base_domain('a.教育.香港') == base_domain('b.教育.香港') == '教育.香港'`，方向是
-    **多留（fail-open，偏保守）**而非漏资产：`*.教育.香港` 被判成同一注册域。单段 IDN TLD 不受
-    影响（`例子.中国`→`例子.中国`、`a.b.中国`→`b.中国` 均正确）。影响面仅
-    `extdom.promote_owned`/`is_owned` 的归属判定（偏保守，不误杀真实子域）。
-  - **`.zip` 域名不被识别**（**既有**）：`jsmine._valid_host()` 的 `_FILE_EXT` 把 `zip`
-    当文件后缀挡掉（`foo.zip` → False）。要支持需调整 `_FILE_EXT`。
+    （约 6870 条）。**多段 IDN 公共后缀已修（续68）**：`base_domain()` 的注册域折算改为
+    **最长匹配** `tlds.txt` 里含点号的后缀（**含 punycode**，5415 条多段 / 287 条 punycode 多段）——
+    此前 `MULTI_TLD` 只列 ASCII，`base_domain('a.教育.香港')` 会返回后缀本身 `教育.香港`，
+    导致 `*.教育.香港` 全判成同一注册域；现在 `a.教育.香港` 与 `b.教育.香港` 各自成立。
+    `MULTI_TLD` 仅作为 tlds.txt 缺失/为空时的兜底。单段 IDN TLD 不受影响
+    （`例子.中国`→`例子.中国`、`a.b.中国`→`b.中国` 均正确）。
+  - **`.zip` / `.sh` / `.do` 域名**（续68 已支持）：`_valid_host()` 的 `_FILE_EXT` 过滤只在
+    PSL 缺失（fail-open）时生效 —— 能通过 PSL 校验的末位 label 是**真实公共后缀**
+    （`zip` / `sh` / `do` 都是正经 TLD），不再被当"文件后缀"误杀
+    （`foo.zip`/`foo.sh`/`foo.do` → True；`app.js`/`index.php` 仍 False）。
+  - **jsmine 的 Unicode host**（续68 已支持）：`_QUOTED_HOST_RE` / `_PROTO_REL_RE` 的 label
+    改为 Unicode 感知（`[^\W_]`），引号内与协议相对形态的中文主机能挖到（绝对 URL 续65 起已支持）。
+    ⚠️ 无路径的**两段**引号内域名仍要求 ≥3 段（既有防 `backup.zip` 文件名误判的规则，对
+    ASCII/IDN 一致）—— `例子.中国` 挖不到、`api.例子.中国` 能挖到。
   - **FOFA 标题归属过滤（`fofa.title_match`）的边界**：默认 `label` 档要求"标题某个 token
     与域名某个 label **完全相等**"，因此**连字符域名永不命中** —— `pengo-wallet.com` 的 label
     是整段 `pengo-wallet`，标题 token 被切成 `pengo`/`wallet`，永不相等 → **会被丢弃**。

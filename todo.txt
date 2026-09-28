@@ -1779,3 +1779,10 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ③ 任务 55 秒 / 子域名 4 / 站点 6 / 目录 265 / 潜在漏洞 0 / status=done。
        ④ 顺带：工作区出现 9 文件 +1735/−1735 的纯 EOL 漂移（并发会话/工具所致，内容零改动），
        已按字节还原 —— 再提醒：改混合 EOL 文件必须走「HEAD 字节 + 只换目标文本」。
+2026-09-28 续68：**IDN 第二批** —— 续65 登记的三条已知限制全部收掉（用户指令：这几个都解决）
+       ① base_domain 走**最长匹配** tlds.txt 含点号后缀（含 punycode，5415 多段/287 punycode 多段）
+       → 多段 IDN 注册域各自成立（a.教育.香港 / b.教育.香港 不再被判成同一个；MULTI_TLD 降为兜底）；
+       ② .zip/.sh/.do 是真实 TLD，_FILE_EXT 只在 PSL fail-open 分支生效（不再误杀真域名）；
+       ③ jsmine _QUOTED_HOST_RE/_PROTO_REL_RE Unicode 感知（引号内/协议相对的中文 host 能挖到；
+       无路径两段仍要求 ≥3 段，防 backup.zip 文件名误判，对 ASCII/IDN 一致）。
+       ④ smoke 新增 [8b]（3 组断言 + §6.1 变异证伪）；**本机 Windows 与 Linux 实机均 SMOKE PASS**。

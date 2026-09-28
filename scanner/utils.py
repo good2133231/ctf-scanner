@@ -138,25 +138,63 @@ def _do_run_cmd(argv, cwd, timeout):
 
 # ---------- 域名 ----------
 
-# 多段公共后缀：取"注册域"时避免切错（如 a.b.com.cn 的注册域是 b.com.cn 而非 com.cn）
+# 多段公共后缀的**兜底**（`config/dicts/tlds.txt` 缺失/为空时才用）：取"注册域"时避免切错
+# （如 a.b.com.cn 的注册域是 b.com.cn 而非 com.cn）。正常运行走 `_multi_part_suffixes()` ——
+# 它从 tlds.txt 取**含点号的后缀**（含 punycode 形态），比这份硬编码全得多（实测 5415 条
+# 多段，其中 287 条 punycode 多段，如 `xn--wcvs22d.xn--j6w193g` = 教育.香港）。
 MULTI_TLD = frozenset({
     "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "co.uk", "org.uk", "ac.uk",
     "com.hk", "com.tw", "com.au", "com.sg", "co.jp", "co.kr",
 })
 
+_MULTI_PSL_CACHE = None
+
+
+def _multi_part_suffixes():
+    """多段公共后缀集合（**含 punycode 形态**）：`config/dicts/tlds.txt` 里含点号的后缀。
+
+    模块级缓存（该文件只在 `tools/import_tlds.py --force` 重新生成时才变）；
+    缺失/为空 → 返回 None，`base_domain` 回退到硬编码 `MULTI_TLD`。
+    续68：`base_domain` 靠它修掉"多段 IDN 后缀切错"—— `base_domain('a.教育.香港')`
+    曾返回后缀本身 `教育.香港`，导致 `*.教育.香港` 全被判成同一个注册域。
+    """
+    global _MULTI_PSL_CACHE
+    if _MULTI_PSL_CACHE is not None:
+        return _MULTI_PSL_CACHE or None
+    items = set()
+    try:
+        from .config import resolve            # 函数内导入：不与 config 的加载顺序纠缠
+        for line in read_lines(resolve("config/dicts/tlds.txt")):
+            line = line.strip().lower().strip(".")
+            if line and not line.startswith("#") and "." in line:
+                items.add(line)
+    except Exception:
+        items = set()
+    _MULTI_PSL_CACHE = items
+    return items or None
+
 
 def base_domain(host):
-    """取注册域（粗略版，不查公共后缀列表）：example.com / example.com.cn。
+    """取注册域：**最长匹配**的多段公共后缀 + 1 段 label（example.com / example.com.cn /
+    `a.xn--wcvs22d.xn--j6w193g`）。
 
-    粗略版会在 `foo.bar.co` 这类双段后缀上切错，但只用它做"同源判断/保护目标自身域"，
-    切错只会偏保守，不会误杀；需要精确判定时请引入真正的公共后缀库。
+    数据源是 `config/dicts/tlds.txt` 里含点号的后缀（**含 punycode**，续68）；清单缺失/为空
+    时回退到硬编码 `MULTI_TLD`，再不行退回"末两段"的粗略版。只用于"同源判断/保护目标自身域"。
+    续68 修掉：多段 **IDN** 后缀原先会切错 —— `base_domain('a.教育.香港')` 曾返回后缀本身
+    `教育.香港`，导致 `*.教育.香港` 全被判成同一个注册域（方向是多留/fail-open，不误杀）。
     """
     host = (host or "").lower().strip(".")
     parts = host.split(".")
     if len(parts) <= 2:
         return host
-    if ".".join(parts[-2:]) in MULTI_TLD:
-        return ".".join(parts[-3:])
+    multi = _multi_part_suffixes() or MULTI_TLD
+    best = ""
+    for k in range(1, len(parts)):
+        cand = ".".join(parts[k:])
+        if cand in multi and len(cand) > len(best):
+            best = cand
+    if best:
+        return ".".join(parts[-(len(best.split(".")) + 1):])
     return ".".join(parts[-2:])
 
 

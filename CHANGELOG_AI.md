@@ -3,6 +3,46 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-28 —— 续68：**IDN 第二批**（base_domain 多段后缀 / .zip·.sh TLD / jsmine Unicode 形态）+ smoke `[8b]`
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。把续65 登记的三条「已知限制」全部收掉
+> （用户指令：这几个都解决）。
+
+### 1. `base_domain()` 的注册域折算走**最长匹配** PSL 多段后缀（修"多段 IDN 切错"）
+
+- 原状：`MULTI_TLD` 硬编码 14 条 ASCII 多段后缀 → `base_domain('a.教育.香港')` 返回**后缀本身**
+  `教育.香港`（应为整个三段），`*.教育.香港` 全被判成同一注册域（方向是多留/fail-open）。
+- 改法：新增 `_multi_part_suffixes()` —— 从 `config/dicts/tlds.txt` 取**含点号的后缀**
+  （**含 punycode 形态**，5415 条多段 / 287 条 punycode 多段），模块级缓存；`base_domain` 改为
+  **最长匹配**该集合 → 注册域 = 后缀 + 1 段 label。`MULTI_TLD` 降级为清单缺失时的兜底。
+- 回归：`www.example.co.uk`→`example.co.uk` / `www.example.com.cn`→`example.com.cn` /
+  `a.b.example.com`→`example.com` 全部不变。
+
+### 2. `.zip` / `.sh` / `.do` 是真实 TLD，不再被 `_FILE_EXT` 误杀
+
+- 原状：`_valid_host()` 在 PSL 校验**之后**还用 `_FILE_EXT`（js/css/php/zip/sh/…）拦一次，
+  而 `zip`/`sh`/`do` 都是正经 TLD → `foo.zip`/`foo.sh`/`foo.do` 被误杀。
+- 改法：`_FILE_EXT` 只在 **PSL 缺失（fail-open）**分支生效 —— PSL 能过的末位 label 是真实
+  公共后缀，不算文件后缀；文件形态噪声（`app.js`/`index.php`）本来就过不了 PSL。
+
+### 3. jsmine 两条 host 正则 Unicode 感知
+
+- `_QUOTED_HOST_RE` / `_PROTO_REL_RE` 的 label 从 `[A-Za-z0-9\-]` 改为 `[^\W_]`（Unicode
+  字母/数字，能吃 CJK），末段不再限定 `[A-Za-z]{2,24}` —— 形态宽松、**语义交给下游 PSL 闸门**。
+  实测：`"api.例子.中国/v1"`、`//例子.中国/track` 都能挖到（归一成 punycode）；
+  `wallet.filter.withdraw` 仍被 PSL 拒。
+- ⚠️ 无路径的**两段**引号内域名仍要求 ≥3 段（既有防 `backup.zip` 文件名误判的规则，对
+  ASCII/IDN 一致，未改）。
+
+### 4. 测试
+
+smoke 新增 `[8b]`（3 组断言，**每组含 §6.1 变异证伪**）：
+① base_domain 多段 IDN（变异：`_multi_part_suffixes` 打回 ASCII-only 旧口径即红）；
+② `.zip`/`.sh`/`.do`（变异：退回旧实现"PSL 后再拦 `_FILE_EXT`"即红）；
+③ jsmine 引号内 / 协议相对 Unicode（变异：两条正则打回 ASCII-only 即红）。
+**本机 Windows 与 Linux 实机（Ubuntu 22.04.5 / Python 3.10.12）均 SMOKE PASS。**
+
+
 ## 2026-09-28 —— 续67：README「安装与运行」全流程化 + osint 阈值第二次真实校准（xstable.ai）
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。授权目标由用户提供：**`xstable.ai`**（授权轻扫，

@@ -172,12 +172,19 @@ _SCRIPT_SRC_RE = re.compile(
 _ABS_URL_RE = re.compile(r"""https?://[^\s'"<>()\\`]+""", re.I)
 
 # 协议相对：//host[:port][/path]
-_PROTO_REL_RE = re.compile(
-    r"""//((?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,24})((?::\d+)?(?:/[^\s'"<>()\\`]*)?)""")
+# label 用 `[^\W_]`（**Unicode 感知**的字母/数字，能吃 CJK 与西文变音字符），末段不再限定
+# `[A-Za-z]{2,24}` —— 形态宽松、**语义交给 `_add` → to_ascii → _valid_host 的 PSL 闸门**；
+# 续68：否则 `//例子.中国/track` 这类协议相对形态的中文主机挖不到（`_PROTO_REL_RE` 与
+# `_QUOTED_HOST_RE` 原先都只认纯 ASCII 字母）。
+_LABEL = r"[^\W_](?:[\w\-]*[^\W_])?"
+_DOMAIN = rf"(?:{_LABEL}\.)+{_LABEL}"
 
-# 引号内的主机名/接口路径：`api.example.com/v1`
+_PROTO_REL_RE = re.compile(
+    rf"""//({_DOMAIN})((?::\d+)?(?:/[^\s'"<>()\\`]*)?)""")
+
+# 引号内的主机名/接口路径：`api.example.com/v1`（**Unicode 感知**，理由同上 —— 续68）
 _QUOTED_HOST_RE = re.compile(
-    r"""["'`]((?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,24})((?::\d+)?(?:/[A-Za-z0-9\-._~%/?#&=+@!$*]*)?)["'`]""")
+    rf"""["'`]({_DOMAIN})((?::\d+)?(?:/[^\s'"<>()\\`]*)?)["'`]""")
 
 # ---------- 敏感凭据规则 ----------
 
@@ -232,14 +239,20 @@ def _valid_host(host):
         return False
     tlds = _public_suffixes()
     if tlds is None:
-        # fail-open：清单缺失 → 退回旧的宽松判断（末位纯字母 2–24 位，排除 IP/端口残留）
+        # fail-open：清单缺失 → 退回旧的宽松判断（末位纯字母 2–24 位，排除 IP/端口残留）；
+        # 此时没有 PSL 兜底，`_FILE_EXT` 才真正参与过滤（zip/sh/do 既是后缀又是真实 TLD）。
         if not re.fullmatch(r"[a-z]{2,24}", labels[-1]):
+            return False
+        if labels[-1] in _FILE_EXT:
             return False
     elif not _has_public_suffix(host, tlds):
         # 末位若干 label 拼起来都不是合法公共后缀 → 不是域名（withdraw / element / test …）
         return False
-    if labels[-1] in _FILE_EXT:
-        return False
+    # ⚠️ `_FILE_EXT`（js/css/php/zip/sh…）**不能**在这里再拦一次：能走到这一步的 host，末位
+    #    label 已被 `_has_public_suffix` 认定为**真实公共后缀** —— `zip`/`sh`/`do` 都是正经 TLD
+    #    （`.zip` / `.sh` / `.do`），拿"文件后缀"挡它们是**误杀真域名**（续68 修掉：`foo.zip`
+    #    曾被判 False）。文件形态的噪声（`app.js` / `index.php`）在上面的 PSL 分支就已拒掉
+    #    （`js` / `php` 不是公共后缀）。
     return all(re.fullmatch(r"[a-z0-9\-_]{1,63}", lb) for lb in labels)
 
 
