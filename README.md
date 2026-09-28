@@ -60,33 +60,106 @@
 
 设计原则：**外部工具优先、内置实现兜底**。subfinder / puredns / httpx / dirmap 存在时直接调用（与你的手工流水线一致），不存在时自动降级到内置实现，保证框架在任何机器上都能跑通。
 
-## 快速开始
+## 安装与运行
 
-跨平台：Windows 与 Linux 均可运行（Python 3.8+），代码无平台专属依赖。
-**Linux 实机已验收**（2026-09-23：Ubuntu 22.04.5 / Python 3.10.12 上 `python3 tests/smoke.py` → SMOKE PASS；
-无头截图与 fscan/nmap 真实调用也已在该机器上验证）。
+### 0. 环境要求
+
+- **Python 3.8+**（已在 **3.9.0 / 3.10.12** 上实测；代码无平台专属依赖，Windows / Linux / macOS 均可）
+- 运行时依赖只有三个：`flask` / `requests` / `PyYAML`（见 `requirements.txt`）
+- 可选外部工具：`fscan` / `nmap` / `dirmap` / `subfinder` / `httpx` / `puredns` —— **没有也能跑通**，
+  会自动降级到内置实现（只是覆盖面和速度不如外部工具）
+- 可选本机浏览器：Edge / Chrome / Chromium（仅"站点截图"与 PDF 报告需要）
+
+> Windows 上如果 `python` 命令不可用，请试 **`py -3`**（AI 工具启动的 shell 里尤其常见 ——
+> 详见 `AGENTS.md §2`：根因是 PATH 条目编码损坏，不是没装）。
+
+### 1. 安装依赖
 
 ```bash
-# ---- Windows（PowerShell/cmd）----
-pip install -r requirements.txt
-python cli\client.py --check
-python cli\client.py -f examples\targets.txt -n my-first-task
-python run_gui.py
-
-# ---- Linux / macOS ----
+# ---- Linux / macOS（推荐虚拟环境）----
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python3 cli/client.py --check
-python3 cli/client.py -f examples/targets.txt -n my-first-task
-python3 run_gui.py
+python3 -m pip install -r requirements.txt
+
+# ---- Windows（PowerShell / cmd）----
+py -3 -m venv venv
+venv\Scripts\activate
+py -3 -m pip install -r requirements.txt
 ```
 
-> 2. （可选）外部工具走**一键安装**（续54）：`python cli/client.py --update-tools`，或控制台管理员侧栏的
->    「外部工具」页点按钮。装完会自动把 `config/settings.yaml` 的 `tools.<名>` 改成刚装好的相对路径。
->    两条路都**只在显式触发时联网**（扫描期任何阶段都不会自动下载），只允许 https + 官方主机，
->    默认必须通过 release 自带的 SHA256 校验和才落盘。也可手工放置到 PATH 或 `tools/scanner/`，
->    详见 `tools/scanner/README.md`（注意 `puredns` 官方无 Windows 产物）。
+不想用虚拟环境也可以直接 `pip install -r requirements.txt`（全局）。
 
+### 2. 配置（**可跳过** —— 不配任何 key 也能完成子域名 / 端口 / 探测 / 目录 / 漏洞初筛）
+
+只有「外部情报拓展」（FOFA / Shodan / Quake / GitHub 检索）需要 key：
+
+```bash
+cp config/keys.yaml.example config/keys.yaml    # 然后填真实值；该文件已被 .gitignore 忽略，切勿提交
+```
+
+其余策略（阶段开关、并发限速、目录浅/深档、截图等）写在 `config/settings.yaml`，
+也可以起服务后在「策略配置」页图形化修改（仅管理员）。详见下方 [配置说明](#配置说明部署前必看)。
+
+### 3. 自检（第一次跑之前建议先做）
+
+```bash
+py -3 cli/client.py --check        # 检查外部工具可用性；没装的会如实列出，不会假装能用
+```
+
+### 4. 跑第一个任务（CLI）
+
+```bash
+# 从文件导入目标（每行一个：域名 / URL / IP / CIDR，# 开头为注释）
+py -3 cli/client.py -f examples/targets.txt -n my-first-task
+
+# 或直接给单目标；-p 是逗号分隔的阶段列表（缺省 = 全部 13 个阶段）
+py -3 cli/client.py -t example.com -p subdomain,probe,dirscan,vulnscan -n quick-look
+```
+
+**轻扫建议**：默认就是轻档（端口扫 TOP 表、目录只打 `dirs_shallow.txt` 约 150 条精选路径）。
+别一上来就 `--full-ports`（1-65535）或 `--full-dir`（深扫大字典）—— 那是投放/深度排查时才用的。
+结束后可加 `--report out.md --report-html out.html --report-jsonl out.jsonl` 一并导出报告。
+
+### 5. 起 Web 控制台
+
+```bash
+py -3 run_gui.py                   # 默认 http://127.0.0.1:5000，只绑本机
+```
+
+- 首次登录用 `config/settings.yaml` 里的 `gui.token`（默认 `ctfscanner`）作**引导口令**，
+  登录后**请立刻到「账号管理」建管理员与子用户账号** —— 建号后引导口令立即失效。
+- ⚠️ 改了任何会被控制台调用的代码后**必须重启进程**（`debug=False` 不重载代码也不重载模板），
+  否则会误判成"代码没生效"。
+- 要部署到服务器给队友用，**必须走 HTTPS**（反向代理终止 TLS）—— 见
+  [docs/deploy-https.md](docs/deploy-https.md) 与下方 [配置说明](#配置说明部署前必看)。
+
+### 6.（可选）一键装外部工具 / 全流程自检
+
+```bash
+py -3 cli/client.py --update-tools    # 一键装 subfinder / httpx / puredns（只在显式触发时联网）
+py -3 run_devflow.py                  # 全流程自检：起内置靶场 → 压量到最小 → 真跑全 13 阶段
+```
+
+开发模式开关在 `config/settings.yaml` 的 `dev.enabled`，打开后控制台侧栏才出现「开发模式」页。
+
+### 7. 跑测试（改完代码必须做）
+
+```bash
+py -3 tests/smoke.py               # 唯一回归门禁：自包含起靶场，**约 9 分钟**
+py -3 tests/browser_e2e.py         # 真浏览器端到端（可选；找不到浏览器会跳过而不是假绿）
+```
+
+smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`），**不会污染**
+`data/scanner.db` 与真实任务数据；跑完自动清理。
+
+### 8. 常见坑（都已实测过）
+
+| 现象 | 原因 / 办法 |
+|---|---|
+| Windows 上 `python` 找不到 | AI 工具启动的 shell 里 PATH 条目编码损坏 → 用 `py -3` |
+| 改了代码页面没变 | 控制台进程没重启（不热重载）→ 重启 `run_gui.py` |
+| 端口 5000 被占用 | 旧进程还在 → 结束它或改 `gui.port`；请求仍打到旧进程是新路由 404 的常见原因 |
+| 目录扫出 0 条 | 看看是不是浅扫档（默认 150 条/站）；深扫要 `--full-dir` 或结果页「补扫」 |
+| FOFA 没查询 | `fofa.enabled` 默认关；`config/keys.yaml` 也要填真实凭据 |
 
 ## 配置说明（部署前必看）
 
