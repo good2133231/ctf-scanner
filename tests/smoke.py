@@ -1139,7 +1139,10 @@ def main():
     def _fake_which(name):
         # 相对形式的假二进制路径：run_cmd 也被桩掉，这里只是"有个非空路径"而已；
         # 刻意不写盘符（[5o] 的跨平台审计会拒绝源码里出现写死的盘符路径）。
-        return "fake-bin/subfinder" if name == "subfinder" else None
+        # ⚠️ 用 **endswith** 而不是 ==：`tools.subfinder` 的配置值在装过工具的机器上会被
+        # `--update-tools` 写回成 `tools/scanner/subfinder`（续69 在 Linux 实测）——
+        # 写死 == "subfinder" 会让装了工具的机器上这条用例假失败。
+        return "fake-bin/subfinder" if str(name).endswith("subfinder") else None
 
     def _fake_run_cmd(argv, cwd=None, timeout=None, throttle=None):
         calls["subfinder"].append(list(argv))
@@ -10227,10 +10230,12 @@ http:
             f"截图 argv 缺 `--ignore-certificate-errors`（自签 HTTPS 会一个字节都不出）：{_cap7z['argv']}"
         assert "--no-sandbox" in _cap7z["argv"], \
             f"截图 argv 缺 `--no-sandbox`（CI/容器里用户命名空间被禁，chromium 起不来）：{_cap7z['argv']}"
+        assert "--headless=old" in _cap7z["argv"], \
+            f"截图 argv 缺 `--headless=old`（new 在 CI runner 上挂死，见续71）：{_cap7z['argv']}"
         # 变异证伪（§6.1）：把该开关从 `_FLAGS` 过滤掉 → 上面那条必须真的红，
         # 证明这条断言盯的是**真实的开关来源**，不是写死的字符串。
         _orig_flags7z = _shot7z._FLAGS
-        for _drop7z in ("--ignore-certificate-errors", "--no-sandbox"):
+        for _drop7z in ("--ignore-certificate-errors", "--no-sandbox", "--headless=old"):
             _shot7z._FLAGS = tuple(f for f in _orig_flags7z if f != _drop7z)
             try:
                 _shot7z.capture("https://127.0.0.1:1/", Path(_TMPDIR) / "t7z" / "b.png", _s7z)

@@ -579,10 +579,12 @@ def export_pdf(task_id, out_path, settings=None, timeout=90, full=False):
         html_path = tmp_dir / "report.html"
         # 必须显式 encoding（AGENTS.md §0）：报告里有中文，读默认编码在 Windows 上会炸。
         html_path.write_text(html_text, encoding="utf-8")
-        # ⚠️ `--no-sandbox` 与截图（screenshot._FLAGS）同源：CI / 容器（如 GitHub 的
-        #    ubuntu runner）禁用非特权用户命名空间，chromium 起不来（FATAL: No usable
-        #    sandbox!）—— PDF 导出会静默失败。只影响本机浏览器进程隔离。
-        argv = [binary, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
+        # ⚠️ `--no-sandbox` 与 `--headless=old` 均与截图（screenshot._FLAGS）同源：
+        #    CI / 容器（如 GitHub 的 ubuntu runner）禁用非特权用户命名空间，chromium 起不来
+        #    （FATAL: No usable sandbox!）—— PDF 导出会静默失败；且 `--headless=new` 在该
+        #    runner 上会**挂死**（30 秒超时无产物），`old` 被 browser_e2e 实证可用（续70）。
+        #    只影响本机浏览器进程隔离。
+        argv = [binary, "--headless=old", "--no-sandbox", "--disable-gpu", "--no-first-run",
                 "--no-default-browser-check", "--disable-extensions",
                 f"--user-data-dir={tmp_profile}",
                 "--no-pdf-header-footer",       # 别把浏览器的页眉页脚（URL/日期）印进去

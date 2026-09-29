@@ -3,6 +3,58 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-28 —— 续72：**修 smoke `[5f]` 假 which 的名字脆弱性**（装了工具的机器上假失败）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。Linux 实测踩到（装上 subfinder 之后）。
+
+- 根因：`[5f]` 的假 `_fake_which` 写死 `name == "subfinder"`，而 `--update-tools` 会把
+  `config/settings.yaml` 的 `tools.subfinder` **写回成 `tools/scanner/subfinder`** —— 于是
+  `which("tools/scanner/subfinder")` 返回 None → subfinder "不可用" → 用例假失败。
+  （`settings.yaml` 是**用户覆盖层**，工具装好后值会变 —— 测试桩不能写死默认值。）
+- 改法：`_fake_which` 改用 **`endswith("subfinder")`**（对默认值与写回值都成立）。
+- 同类检查：smoke 里其它假 which 桩无此问题（`smoke-v2` 那处与工具无关）。
+
+### 顺带记录：Linux + 已装 httpx 的环境伪象（非缺陷，如实登记）
+
+`[6u]` 在装了 httpx 的 Linux 机上**探测阶段挂死**（25 分钟超时被杀）：`[6u]` 开着
+`portscan`，`probe` 会把宿主机上任何开放端口当候选（22/631(CUPS)/3306/6379/8081），
+`--headless=new` 时代的 httpx 对**非 HTTP 服务**（MySQL/Redis/SSH 的协议握手）按超时等待，
+11 个候选叠出来远超单机可容忍时间。**CI 的干净 runner 无此问题**（无这些服务）。
+→ 属"脏宿主 + 装了 httpx"的环境伪象；probe 自身的超时机制按候选生效，不在本轮改。
+
+
+## 2026-09-28 —— 续72：**修 smoke `[5f]` 假 which 的名字脆弱性**（装了工具的机器上假失败）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。Linux 实测踩到（装上 subfinder 之后）。
+
+- 根因：`[5f]` 的假 `_fake_which` 写死 `name == "subfinder"`，而 `--update-tools` 会把
+  `config/settings.yaml` 的 `tools.subfinder` **写回成 `tools/scanner/subfinder`** —— 于是
+  `which("tools/scanner/subfinder")` 返回 None → subfinder "不可用" → 用例假失败。
+  （`settings.yaml` 是**用户覆盖层**，工具装好后值会变 —— 测试桩不能写死默认值。）
+- 改法：`_fake_which` 改用 **`endswith("subfinder")`**（对默认值与写回值都成立）。
+- 同类检查：smoke 里其它假 which 桩无此问题（`smoke-v2` 那处与工具无关）。
+
+### 顺带记录：Linux + 已装 httpx 的环境伪象（非缺陷，如实登记）
+
+`[6u]` 在装了 httpx 的 Linux 机上**探测阶段挂死**（25 分钟超时被杀）：`[6u]` 开着
+`portscan`，`probe` 会把宿主机上任何开放端口当候选（22/631(CUPS)/3306/6379/8081），
+`--headless=new` 时代的 httpx 对**非 HTTP 服务**（MySQL/Redis/SSH 的协议握手）按超时等待，
+11 个候选叠出来远超单机可容忍时间。**CI 的干净 runner 无此问题**（无这些服务）。
+→ 属"脏宿主 + 装了 httpx"的环境伪象；probe 自身的超时机制按候选生效，不在本轮改。
+
+
+## 2026-09-28 —— 续71：**截图/PDF 的 headless 统一切 old**（修 CI 第三个红灯：`new` 在 runner 上挂死）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。
+
+- CI 实测（run 1ce731f）：`[7z]` 截图 **timeout** —— chromium 起来了（`--no-sandbox` 生效，
+  不再报 No usable sandbox）但 `--headless=new` 30 秒无产物被杀；而**同一台 runner** 上
+  `tests/browser_e2e.py` 用 `--headless=old` **完整跑通 35 条交互断言**。
+- 改法：`screenshot._FLAGS` 与 `report.export_pdf` 的 `--headless=new` → **`--headless=old`**
+  （本机 Windows 实测两种模式产物完全一致：截图 13512 字节 / PDF 9429 字节）。
+- 测试：`[7z](a)` 断言 argv 含 `--headless=old`；变异（`_FLAGS` 逐个摘开关，现含三个）必红。
+
+
 ## 2026-09-28 —— 续70：**Linux CI / 容器上 chromium 要 `--no-sandbox`**（修 CI 第二个红灯）
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。

@@ -1002,11 +1002,13 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
     改为 Unicode 感知（`[^\W_]`），引号内与协议相对形态的中文主机能挖到（绝对 URL 续65 起已支持）。
     ⚠️ 无路径的**两段**引号内域名仍要求 ≥3 段（既有防 `backup.zip` 文件名误判的规则，对
     ASCII/IDN 一致）—— `例子.中国` 挖不到、`api.例子.中国` 能挖到。
-  - **Linux CI / 容器上 chromium 要 `--no-sandbox`**（续70）：GitHub 的 ubuntu runner
+  - **Linux CI / 容器上 chromium 要 `--no-sandbox` 且 headless 用 **old**（续70/71）**：GitHub 的 ubuntu runner
     **禁用了非特权用户命名空间**，chromium 起不来（`FATAL: No usable sandbox!`）→
     截图与 PDF 导出全失败。已在 `screenshot._FLAGS` 与 `report.export_pdf` 的 argv 里加上
     （只影响**本机浏览器的进程隔离**，不改变对目标的请求语义，不越非破坏性红线）。
     ⚠️ 换容器/受限机器跑之前若浏览器仍起不来，先看是不是这条。
+    ⚠️ headless 模式：`--headless=new` 在该 runner 上会**挂死**（30 秒超时无产物，即使有
+    --no-sandbox），`old` 被 `browser_e2e` 实证可用 —— 截图与 PDF 均已统一切 old（续71）。
   - **FOFA 标题归属过滤（`fofa.title_match`）的边界**：默认 `label` 档要求"标题某个 token
     与域名某个 label **完全相等**"，因此**连字符域名永不命中** —— `pengo-wallet.com` 的 label
     是整段 `pengo-wallet`，标题 token 被切成 `pengo`/`wallet`，永不相等 → **会被丢弃**。
