@@ -3,6 +3,26 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-29 —— 续74：**修正续73 的浏览器参数结论**（续73 让 CI 第五个红灯，本回合并修复）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 根因（CI 第五个红灯，`fcd7c77`/续73 的 CI 立即 `failure`）：续73 去掉 `--no-sandbox` 后，
+  `screenshot._FLAGS` 在 GitHub `ubuntu-latest` runner 上直接 `FATAL: No usable sandbox!`
+  （runner 禁用非特权用户命名空间，不加 chromium 起不来）。而续72（带 `--no-sandbox`）的 30s 超时真因
+  是 runner 的 `/dev/shm` 过小（~64MB），需要 `--disable-dev-shm-usage`——两个开关**缺一不可**。
+- 续73 的前提交叉验证无效：`tests/browser_e2e.py` 走 CDP、且**只在本地 Windows 跑、不在 CI 里跑**，
+  其“old 无 `--no-sandbox` 跑通 35 条断言”不能代表 CI Linux runner。
+- 改法：两处 flags **加回** `--no-sandbox` 与 `--disable-dev-shm-usage`（保留 `--headless=old` +
+  `--ignore-certificate-errors` + `--disable-background-networking`）。
+- 回归（`smoke [7z](a)`，续74 改成**正向钉死**）：
+  - 断言 `--headless=old` + `--no-sandbox` + `--disable-dev-shm-usage` + `--disable-background-networking` **在** argv；
+  - 删掉续73 的“反向断言 `--no-sandbox` 不在 argv”（否则与新结论矛盾）；
+  - 变异证伪：把上述四个有效开关逐一从 `_FLAGS` 过滤掉 → 对应断言必须真的红。
+- 文件：`scanner/screenshot.py`（`_FLAGS` 与上方长注释）、`scanner/report.py`（`export_pdf` argv）、
+  `tests/smoke.py`（`[7z](a)`）、本文件（本条目 + 续73 勘误）+ `AGENTS.md §7` + 续68 行内注释。
+- 验证：push 后查 Actions 跑 `fcd7c77` 之后的 run，确认 `No usable sandbox` 与 `timeout` 均消失且 `SMOKE PASS`。
+
 ## 2026-09-28 —— 续73：**截图 / PDF 的浏览器参数定案**（推翻续70/71 的“CI 必须加 `--no-sandbox`”，修 CI 第四个红灯）
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。
@@ -20,6 +40,9 @@
   - 变异证伪：把上述两个有效开关从 `_FLAGS` 过滤掉 → 对应断言必须真的红（证明盯的是真实开关来源）。
 - 文件：`scanner/screenshot.py`（`_FLAGS` 与上方长注释）、`scanner/report.py`（`export_pdf` argv）、
   `tests/smoke.py`（`[7z](a)`）、本文件 + `AGENTS.md §7` + 续68 行内注释（勘误续70/71）。
+> ⚠️ **勘误（续74）**：续73 的“推翻续70/71 必须加 `--no-sandbox`”结论**错**。真实情况是 CI runner 既需
+> `--no-sandbox`（否则 FATAL）也需 `--disable-dev-shm-usage`（/dev/shm 过小→30s 超时，这才是续72 超时真因）。
+> 见上方续74 条目；`AGENTS.md §7` 与本文件均已同步修正。
 
 ## 2026-09-28 —— 续72：**修 smoke `[5f]` 假 which 的名字脆弱性**（装了工具的机器上假失败）
 

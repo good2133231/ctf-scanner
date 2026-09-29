@@ -51,18 +51,22 @@ _REG_KEYS = (
 # `net::ERR_CERT_AUTHORITY_INVALID` 拒绝加载、`--screenshot` 一个字节都不产出
 # （2026-09-28 实测：同一站点加/不加 = 13512 字节 vs 0 字节；且与 `--headless=new` 无关）。
 # 它只影响**本机渲染**，不改变对目标的请求语义（仍是只读 GET），不越"非破坏性"红线。
-# ⚠️ 浏览器参数以 `tests/browser_e2e.py` 的实证可用集合为准（续73，CI 实测三轮后的结论）：
-#    - **`--headless=old`**：`--headless=new` 在 GitHub 的 ubuntu runner
-#      **禁用非特权用户命名空间** 的环境里会 FATAL / 挂死。
-#    - **刻意不加 `--no-sandbox`**：旧认识以为"CI/容器必须加它（否则 No usable sandbox）只在
-#      new 模式下成立 —— old 模式下加了反而**挂满 30 秒无产物**（CI 实测两轮：new+--no-sandbox、
-#      old+--no-sandbox 都 timeout；browser_e2e（old，无 --no-sandbox）在同一 runner 却跑通
-#      35 条断言。若将来遇到 root/Docker 场景（"Running as root without --no-sandbox"）再按场景加。
+# ⚠️ 浏览器参数（续74 修正续73 的结论，CI 实测；browser_e2e.py 走 CDP 且不在 CI 跑，
+#   其“老无 --no-sandbox”只在本地 Windows 成立，不能代表 CI Linux runner）：
+#    - **`--headless=old`**：`--headless=new` 在 GitHub 的 ubuntu runner 上会**挂死**（续71），保持 old。
+#    - **必须加 `--no-sandbox`**：runner 禁用非特权用户命名空间，不加 chromium 起不来
+#     （`FATAL: No usable sandbox!`）—— 续73 误以为“old 不必加”把它去掉，CI 立刻红
+#      （同一 runner 直接 FATAL）；它只影响本机浏览器进程隔离，不越非破坏性红线。
+#    - **必须加 `--disable-dev-shm-usage`**：runner 的 `/dev/shm` 过小（~64MB），chromium 渲染会
+#      **30s 超时无产物** —— 这才是续72（带 --no-sandbox）超时的真正根因，不是 `--no-sandbox` 本身。
+#      该开关让 chromium 改用 `/tmp`，跨平台无害（Windows 上被忽略）。
 #    - `--disable-background-networking`：与 browser_e2e 一致，避免无头进程等后台网络初始化。
 
 #    `--ignore-certificate-errors` 的理由见下方。
 _FLAGS = (
     "--headless=old",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
     "--ignore-certificate-errors",
     "--disable-gpu",
     "--hide-scrollbars",

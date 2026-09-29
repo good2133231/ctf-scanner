@@ -579,9 +579,9 @@ def export_pdf(task_id, out_path, settings=None, timeout=90, full=False):
         html_path = tmp_dir / "report.html"
         # 必须显式 encoding（AGENTS.md §0）：报告里有中文，读默认编码在 Windows 上会炸。
         html_path.write_text(html_text, encoding="utf-8")
-        # 参数与截图（`screenshot._FLAGS`）同一套实证依据：headless 用 old、**不加**
-        # --no-sandbox（理由见 screenshot.py 上方注释，续73）。
-        argv = [binary, "--headless=old", "--disable-gpu", "--no-first-run",
+        # 参数与截图（`screenshot._FLAGS`）同源：headless 用 old、**必须加** `--no-sandbox`
+        # + `--disable-dev-shm-usage`（runner 禁用用户命名空间且 /dev/shm 过小；见 screenshot.py 注释，续74）。
+        argv = [binary, "--headless=old", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run",
                 "--no-default-browser-check", "--disable-extensions",
                 "--disable-background-networking",
                 f"--user-data-dir={tmp_profile}",
