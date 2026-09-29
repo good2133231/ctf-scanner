@@ -54,6 +54,10 @@ _REG_KEYS = (
 _FLAGS = (
     "--headless=new",
     "--ignore-certificate-errors",
+    # ⚠️ `--no-sandbox` 不能省（Linux CI / 容器）：GitHub 的 ubuntu runner **禁用了非特权
+    #    用户命名空间**，chromium 起不来（FATAL: No usable sandbox!）→ 截图全失败
+    #    （2026-09-29 CI 实测）。它只影响**本机浏览器的进程隔离**，不改变对目标的请求语义。
+    "--no-sandbox",
     "--disable-gpu",
     "--hide-scrollbars",
     "--no-first-run",

@@ -3,6 +3,22 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-28 —— 续70：**Linux CI / 容器上 chromium 要 `--no-sandbox`**（修 CI 第二个红灯）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。
+
+- 现象（CI 实测，run 36510085934 / `6ec0f46`）：`[7z]` 截图断言失败 ——
+  `FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc:129] No usable sandbox!
+  If you are running on Ubuntu 23.10+ or another Linux distro that has disabled
+  unprivileged user namespaces...`。GitHub 的 ubuntu runner **禁用了非特权用户命名空间**，
+  chromium 进程起不来 → 截图与 PDF 导出全失败。
+- 改法：`screenshot._FLAGS` 与 `report.export_pdf` 的 argv 都加 **`--no-sandbox`**
+  （只影响**本机浏览器的进程隔离**，不改变对目标的请求语义，不越非破坏性红线）。
+- 测试：`[7z](a)` 断言 argv 含 `--no-sandbox`，且变异（`_FLAGS` 逐个摘开关）必红。
+- **注意**：修完后 CI 需要再推一次才能验证 —— push 仍需用户在自己终端执行
+  （`keys.yaml` 的 GitHub token 是只读的，403）。
+
+
 ## 2026-09-28 —— 续69：**修 `--update-tools` 白名单缺 GitHub release 资产主机**（P1：一键装工具从未真正工作过）+ Linux 工具实测
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。

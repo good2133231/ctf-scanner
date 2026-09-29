@@ -10225,16 +10225,19 @@ http:
         _shot7z.capture("https://127.0.0.1:1/", Path(_TMPDIR) / "t7z" / "a.png", _s7z)
         assert "--ignore-certificate-errors" in _cap7z["argv"], \
             f"截图 argv 缺 `--ignore-certificate-errors`（自签 HTTPS 会一个字节都不出）：{_cap7z['argv']}"
+        assert "--no-sandbox" in _cap7z["argv"], \
+            f"截图 argv 缺 `--no-sandbox`（CI/容器里用户命名空间被禁，chromium 起不来）：{_cap7z['argv']}"
         # 变异证伪（§6.1）：把该开关从 `_FLAGS` 过滤掉 → 上面那条必须真的红，
         # 证明这条断言盯的是**真实的开关来源**，不是写死的字符串。
         _orig_flags7z = _shot7z._FLAGS
-        _shot7z._FLAGS = tuple(f for f in _orig_flags7z if f != "--ignore-certificate-errors")
-        try:
-            _shot7z.capture("https://127.0.0.1:1/", Path(_TMPDIR) / "t7z" / "b.png", _s7z)
-            assert "--ignore-certificate-errors" not in _cap7z["argv"], \
-                "变异后 argv 仍含该开关 → 断言没盯住真实来源（测的是写死的字符串）"
-        finally:
-            _shot7z._FLAGS = _orig_flags7z
+        for _drop7z in ("--ignore-certificate-errors", "--no-sandbox"):
+            _shot7z._FLAGS = tuple(f for f in _orig_flags7z if f != _drop7z)
+            try:
+                _shot7z.capture("https://127.0.0.1:1/", Path(_TMPDIR) / "t7z" / "b.png", _s7z)
+                assert _drop7z not in _cap7z["argv"], \
+                    f"变异后 argv 仍含 {_drop7z} → 断言没盯住真实来源（测的是写死的字符串）"
+            finally:
+                _shot7z._FLAGS = _orig_flags7z
 
         # (c) 相对产物路径必须被**绝对化**：浏览器把 `--screenshot=<相对路径>` 写到**它自己的
         #     CWD**，我们这边的 out_path 永远不存在 → 静默返回 (False, …)、0 字节（续64 QA 实测）。

@@ -1795,3 +1795,10 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ③ Linux 实测：subfinder v2.16.0 / httpx v1.12.0 安装成功（SHA256 校验）；
        --check 显示 subfinder OK / httpx OK / nmap OK —— 适配分支首次在 Linux 实测通过；
        puredns 正确拒绝（官方无校验和文件）；**PDF 导出 58432 字节成功**（snap chromium）。
+2026-09-28 续70：**Linux CI / 容器上 chromium 要 --no-sandbox**（修 CI 第二个红灯，CI 实测 18+1 次全红）
+       ① 现象：CI（ubuntu runner）[7z] 截图断言失败 —— FATAL: No usable sandbox!（该镜像
+       禁用非特权用户命名空间，chromium 起不来）→ 截图与 PDF 导出全失败。
+       ② 改法：screenshot._FLAGS 与 report.export_pdf 的 argv 都加 --no-sandbox（只影响本机
+       浏览器进程隔离，不改变对目标的请求语义，不越非破坏性红线）。
+       ③ 测试：[7z](a) 断言 argv 含 --no-sandbox，变异（_FLAGS 逐个摘开关）必红。
+       ④ 注意：修完需再推一次才能在 CI 验证 —— push 仍需用户在自己终端执行（token 只读 403）。
