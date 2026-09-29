@@ -3,6 +3,24 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-09-28 —— 续73：**截图 / PDF 的浏览器参数定案**（推翻续70/71 的“CI 必须加 `--no-sandbox`”，修 CI 第四个红灯）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。
+
+- 根因（CI 第四个红灯，`d338378`/续72 的 CI 仍 `failure`）：续70/71 给 `screenshot._FLAGS` 与
+  `report.export_pdf` 加了 `--no-sandbox` 并切 `--headless=old`，但 CI runner 上 `[7z]` 截图**两轮都
+  30 秒超时无产物**。同一台 ubuntu runner 上 `tests/browser_e2e.py`（`--headless=old`、**无**
+  `--no-sandbox`）却完整跑通 35 条交互断言 —— 说明：**`--no-sandbox` 在 `old` 模式下在该 runner 上
+  反而挂死**，续70/71 的“必须加”结论错了。
+- 改法：两处 flags 去掉 `--no-sandbox`，改加 `--disable-background-networking`（与 browser_e2e 一致），
+  保留 `--headless=old` + `--ignore-certificate-errors`。
+- 回归（`smoke [7z](a)`，续73 **反向钉死**防后人把 `--no-sandbox` 加回来）：
+  - 断言 `--headless=old` + `--disable-background-networking` **在** argv；
+  - 断言 `--no-sandbox` **不在** argv（反向）；
+  - 变异证伪：把上述两个有效开关从 `_FLAGS` 过滤掉 → 对应断言必须真的红（证明盯的是真实开关来源）。
+- 文件：`scanner/screenshot.py`（`_FLAGS` 与上方长注释）、`scanner/report.py`（`export_pdf` argv）、
+  `tests/smoke.py`（`[7z](a)`）、本文件 + `AGENTS.md §7` + 续68 行内注释（勘误续70/71）。
+
 ## 2026-09-28 —— 续72：**修 smoke `[5f]` 假 which 的名字脆弱性**（装了工具的机器上假失败）
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。Linux 实测踩到（装上 subfinder 之后）。

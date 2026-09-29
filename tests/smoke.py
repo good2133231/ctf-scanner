@@ -10228,14 +10228,19 @@ http:
         _shot7z.capture("https://127.0.0.1:1/", Path(_TMPDIR) / "t7z" / "a.png", _s7z)
         assert "--ignore-certificate-errors" in _cap7z["argv"], \
             f"截图 argv 缺 `--ignore-certificate-errors`（自签 HTTPS 会一个字节都不出）：{_cap7z['argv']}"
-        assert "--no-sandbox" in _cap7z["argv"], \
-            f"截图 argv 缺 `--no-sandbox`（CI/容器里用户命名空间被禁，chromium 起不来）：{_cap7z['argv']}"
         assert "--headless=old" in _cap7z["argv"], \
             f"截图 argv 缺 `--headless=old`（new 在 CI runner 上挂死，见续71）：{_cap7z['argv']}"
+        assert "--disable-background-networking" in _cap7z["argv"], \
+            f"截图 argv 缺 `--disable-background-networking`（与 browser_e2e 实证可用配置一致，续73）"
+        # ⚠️ **刻意不**断言 `--no-sandbox`：old 模式下加了在 CI runner 上会挂满超时（续73 实测），
+        # 这里用反向断言把它钉住 —— 免得后人按"CI 必须加 --no-sandbox 的旧认识再加回来。
+        assert "--no-sandbox" not in _cap7z["argv"], \
+            f"截图 argv 不该有 `--no-sandbox`（old 模式下在 CI runner 上会挂死，续73）：{_cap7z['argv']}"
         # 变异证伪（§6.1）：把该开关从 `_FLAGS` 过滤掉 → 上面那条必须真的红，
         # 证明这条断言盯的是**真实的开关来源**，不是写死的字符串。
         _orig_flags7z = _shot7z._FLAGS
-        for _drop7z in ("--ignore-certificate-errors", "--no-sandbox", "--headless=old"):
+        for _drop7z in ("--ignore-certificate-errors", "--headless=old",
+                       "--disable-background-networking"):
             _shot7z._FLAGS = tuple(f for f in _orig_flags7z if f != _drop7z)
             try:
                 _shot7z.capture("https://127.0.0.1:1/", Path(_TMPDIR) / "t7z" / "b.png", _s7z)

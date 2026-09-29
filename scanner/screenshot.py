@@ -51,23 +51,25 @@ _REG_KEYS = (
 # `net::ERR_CERT_AUTHORITY_INVALID` 拒绝加载、`--screenshot` 一个字节都不产出
 # （2026-09-28 实测：同一站点加/不加 = 13512 字节 vs 0 字节；且与 `--headless=new` 无关）。
 # 它只影响**本机渲染**，不改变对目标的请求语义（仍是只读 GET），不越"非破坏性"红线。
-# ⚠️ headless 模式用 **old** 而不是 new（续70，CI 实测）：GitHub 的 ubuntu runner
-#    **禁用了非特权用户命名空间**，`--headless=new` 在那里会**挂死**（即使加 --no-sandbox，
-#    30 秒超时无产物）；而 `--headless=old` 在同一台 runner 上被 `tests/browser_e2e.py`
-#    实证**完整跑通 35 条交互断言**。本机 Windows 两种模式产物完全一致（13512 字节）。
-#    `--no-sandbox` / `--ignore-certificate-errors` 的理由见各自注释。
+# ⚠️ 浏览器参数以 `tests/browser_e2e.py` 的实证可用集合为准（续73，CI 实测三轮后的结论）：
+#    - **`--headless=old`**：`--headless=new` 在 GitHub 的 ubuntu runner
+#      **禁用非特权用户命名空间** 的环境里会 FATAL / 挂死。
+#    - **刻意不加 `--no-sandbox`**：旧认识以为"CI/容器必须加它（否则 No usable sandbox）只在
+#      new 模式下成立 —— old 模式下加了反而**挂满 30 秒无产物**（CI 实测两轮：new+--no-sandbox、
+#      old+--no-sandbox 都 timeout；browser_e2e（old，无 --no-sandbox）在同一 runner 却跑通
+#      35 条断言。若将来遇到 root/Docker 场景（"Running as root without --no-sandbox"）再按场景加。
+#    - `--disable-background-networking`：与 browser_e2e 一致，避免无头进程等后台网络初始化。
+
+#    `--ignore-certificate-errors` 的理由见下方。
 _FLAGS = (
     "--headless=old",
     "--ignore-certificate-errors",
-    # ⚠️ `--no-sandbox` 不能省（Linux CI / 容器）：GitHub 的 ubuntu runner **禁用了非特权
-    #    用户命名空间**，chromium 起不来（FATAL: No usable sandbox!）→ 截图全失败
-    #    （2026-09-29 CI 实测）。它只影响**本机浏览器的进程隔离**，不改变对目标的请求语义。
-    "--no-sandbox",
     "--disable-gpu",
     "--hide-scrollbars",
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-extensions",
+    "--disable-background-networking",
 )
 
 

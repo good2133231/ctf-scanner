@@ -535,8 +535,9 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
 #   ① `base_domain` 走**最长匹配** `tlds.txt` 含点号后缀（含 punycode）→ 多段 IDN 注册域
 #   各自成立（变异：`_multi_part_suffixes` 打回 ASCII-only 旧口径即红）；
 #   ② `.zip`/`.sh`/`.do` 不再被 `_FILE_EXT` 误杀（变异：退回旧实现"PSL 后再拦 _FILE_EXT"即红）；
-#   ②b 浏览器 argv 加 `--no-sandbox`（CI/容器禁用用户命名空间，chromium 起不来 —— 续70；
-#   变异：`_FLAGS` 逐个摘开关即红）；PDF 导出（report.export_pdf）同源补上。
+#   ②b 浏览器 argv —— **续73 已推翻续70 的“必须加 `--no-sandbox`”**：old 模式下加它反而在
+#   CI runner 挂满超时，已移除；变异证伪改为“反向断言 `--no-sandbox` 不得出现 +
+#   `--disable-background-networking` 必须在”（smoke `[7z](a)`）；PDF 导出（report.export_pdf）同源。
 #   ③ jsmine 引号内 / 协议相对形态的 Unicode host 挖得到（变异：两条正则打回 ASCII-only 即红）。
 # 2026-09-28 续65 新增 `[8]`：**IDN / 中文域名**（punycode 主链路 + 展示回解）——
                             #   缺陷：`例子.中国` 被判 `unknown` 静默丢弃（四处同口径的重复编码都只认纯
@@ -1002,13 +1003,15 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
     改为 Unicode 感知（`[^\W_]`），引号内与协议相对形态的中文主机能挖到（绝对 URL 续65 起已支持）。
     ⚠️ 无路径的**两段**引号内域名仍要求 ≥3 段（既有防 `backup.zip` 文件名误判的规则，对
     ASCII/IDN 一致）—— `例子.中国` 挖不到、`api.例子.中国` 能挖到。
-  - **Linux CI / 容器上 chromium 要 `--no-sandbox` 且 headless 用 **old**（续70/71）**：GitHub 的 ubuntu runner
-    **禁用了非特权用户命名空间**，chromium 起不来（`FATAL: No usable sandbox!`）→
-    截图与 PDF 导出全失败。已在 `screenshot._FLAGS` 与 `report.export_pdf` 的 argv 里加上
-    （只影响**本机浏览器的进程隔离**，不改变对目标的请求语义，不越非破坏性红线）。
-    ⚠️ 换容器/受限机器跑之前若浏览器仍起不来，先看是不是这条。
-    ⚠️ headless 模式：`--headless=new` 在该 runner 上会**挂死**（30 秒超时无产物，即使有
-    --no-sandbox），`old` 被 `browser_e2e` 实证可用 —— 截图与 PDF 均已统一切 old（续71）。
+  - **截图 / PDF 的浏览器参数以 `tests/browser_e2e.py` 实证可用集合为准（续73 收口）**：
+    GitHub 的 ubuntu runner **禁用非特权用户命名空间**。续70/71 据此加了 `--no-sandbox` 并切
+    `--headless=old`，但实测**两轮都 30 秒超时无产物**——`--no-sandbox` 在 `old` 模式下在该
+    runner 上反而**挂死**（续73 推翻了续70/71 的“必须加 --no-sandbox”结论）。最终配置
+    （与 browser_e2e 一致，同 runner 跑通 35 条断言）：`--headless=old` + `--ignore-certificate-errors`
+    + `--disable-background-networking`，**不加** `--no-sandbox`。见 `screenshot._FLAGS` 与
+    `report.export_pdf` 的 argv（均只影响本机浏览器进程隔离，不改变对目标请求语义，不越非破坏性红线）。
+    ⚠️ 换**真·root / Docker** 跑若见 “Running as root without --no-sandbox”，再按场景单独加。
+    ⚠️ `--headless=new` 在该 runner 会**挂死**（续71 已排除），务必保持 `old`。
   - **FOFA 标题归属过滤（`fofa.title_match`）的边界**：默认 `label` 档要求"标题某个 token
     与域名某个 label **完全相等**"，因此**连字符域名永不命中** —— `pengo-wallet.com` 的 label
     是整段 `pengo-wallet`，标题 token 被切成 `pengo`/`wallet`，永不相等 → **会被丢弃**。
