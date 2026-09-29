@@ -182,7 +182,7 @@ def _lockout_message(retry_after):
             "或联系管理员。")
 
 
-def _source_auth(from_task):
+def _source_auth(from_task, owner_id=None):
     """从**来源任务**的 options 里取出登录态请求头，供补扫/拓展探测继承。
 
     为什么补扫要继承（而不是每次重填）：用户点「深度目录补扫 / 漏洞复查」时心里想的是
@@ -196,6 +196,9 @@ def _source_auth(from_task):
         return {}
     row = db.get_task(tid)
     if not row:
+        return {}
+    # 续79 多租户：不能继承**别的账号**任务的登录态（owner_id=None 表示管理员，不限制）。
+    if owner_id is not None and int(row["owner_id"] or 0) != int(owner_id):
         return {}
     try:
         top = json.loads(row["options"] or "{}")
@@ -520,6 +523,67 @@ def create_app():
         return {"id": 0, "username": str(session.get("user") or "admin"),
                 "role": role if role in users.ROLES else users.ROLE_ADMIN,
                 "must_change": False}
+
+    # ---------- 续79：多租户（子用户只看自己的任务与资产；管理员看全部） ----------
+
+    def _owner_scope():
+        """当前账号的可见范围：管理员 → `None`（不限制）；子用户 → 自己的 id（只看自己的）。"""
+        me = _session_user()
+        if not me or me["role"] == users.ROLE_ADMIN:
+            return None
+        return int(me["id"])
+
+    def _task_owner():
+        """新建任务的归属账号 id（引导会话 id=0）。"""
+        me = _session_user()
+        return int(me["id"]) if me else 0
+
+    def _owned_task(task_id):
+        """取任务并做多租户校验：取不到 / 无权访问都返回 None（调用方统一按 404 处理）。"""
+        task = db.get_task(task_id)
+        if not task:
+            return None
+        me = _session_user()
+        if me and me["role"] == users.ROLE_ADMIN:
+            return task
+        if me and int(task["owner_id"] or 0) == int(me["id"]):
+            return task
+        return None
+
+    # 多租户收口：所有跨任务查询都经这几个包装注入 `owner_id`，避免逐个调用点漏改。
+    def _scoped(kw):
+        kw["owner_id"] = _owner_scope()
+        return kw
+
+    def _page_tasks(**kw):
+        return db.page_tasks(**_scoped(kw))
+
+    def _page_assets(table, **kw):
+        return db.page_assets(table, **_scoped(kw))
+
+    def _page_vulns(**kw):
+        return db.page_vulns(**_scoped(kw))
+
+    def _list_subdomain_net(**kw):
+        return db.list_subdomain_net(**_scoped(kw))
+
+    def _list_tasks(**kw):
+        return db.list_tasks(**_scoped(kw))
+
+    def _list_vulns(**kw):
+        return db.list_vulns(**_scoped(kw))
+
+    def _dashboard_stats(**kw):
+        return db.dashboard_stats(**_scoped(kw))
+
+    def _vuln_trend(**kw):
+        return db.vuln_trend(**_scoped(kw))
+
+    def _tasks_with_vulns(**kw):
+        return db.tasks_with_vulns(**_scoped(kw))
+
+    def _create_task(name, targets, stages, options=None, **kw):
+        return db.create_task(name, targets, stages, options, owner_id=_task_owner(), **kw)
 
     @app.context_processor
     def _inject_me():
@@ -874,8 +938,8 @@ def create_app():
     @login_required
     def dashboard():
         return render_template(
-            "dashboard.html", stats=db.dashboard_stats(), trend=db.vuln_trend(),
-            tasks=db.list_tasks(limit=8), vulns=db.list_vulns(limit=8))
+            "dashboard.html", stats=_dashboard_stats(), trend=_vuln_trend(),
+            tasks=_list_tasks(limit=8), vulns=_list_vulns(limit=8))
 
     # ---------- 任务 ----------
 
@@ -906,7 +970,7 @@ def create_app():
         所以只要该任务在 `running_task_ids()` 里、或库状态是 `running` / `queued`，一律拒绝
         （`queued` = 已入队还没轮到跑，同样不能被追加顶掉它的入队入参）。
         """
-        task = db.get_task(src_id)
+        task = _owned_task(src_id)
         if not task:
             return False, "源任务不存在"
         if src_id in runner.running_task_ids() or task["status"] in ("running", "queued"):
@@ -934,7 +998,7 @@ def create_app():
         ok, err = _append_guard(src_id)
         if not ok:
             return _append_err(err, fallback)
-        task = db.get_task(src_id)
+        task = _owned_task(src_id)
         try:
             base = json.loads(task["options"] or "{}")
         except (TypeError, ValueError):
@@ -970,12 +1034,12 @@ def create_app():
         stages_f = (request.args.get("stages") or "").strip()
         if stages_f not in STAGE_ORDER:
             stages_f = ""    # 阶段白名单：非法一律按"全部"
-        rows, total = db.page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
+        rows, total = _page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
                                     status=status or None, stages=stages_f or None)
         pages = max(1, (total + size - 1) // size)
         if page > pages:     # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
             page = pages
-            rows, total = db.page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
+            rows, total = _page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
                                         status=status or None, stages=stages_f or None)
         # 翻页必须带上**全部**筛选状态；`q` 要 URL 编码 —— 关键字里带 `&` / `#` / 空格时
         # 不编码会让翻页**丢掉条件**（见 `/vulns`、`_asset_page` 的同一处理）。
@@ -1076,7 +1140,7 @@ def create_app():
             return jsonify({"error": "登录态请求头有误：" + "；".join(auth_errors)}), 400
         if auth_headers:
             options["auth"] = auth_headers
-        task_id = db.create_task(name, targets, stages, options)
+        task_id = _create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
         _audit(audit.KIND_TASK, target=name, detail=f"创建任务 #{task_id}（阶段 {'/'.join(stages)}）")
         return jsonify({"id": task_id, "auto_stages": auto_stages})
@@ -1084,7 +1148,7 @@ def create_app():
     @app.route("/tasks/<int:task_id>")
     @login_required
     def task_detail(task_id):
-        task = db.get_task(task_id)
+        task = _owned_task(task_id)
         if not task:
             abort(404)
         # 页面只展示相对路径（日志文件路径在库里存的是绝对路径，因为要真的去读它）
@@ -1148,7 +1212,7 @@ def create_app():
             params = (task_id,) + tuple(extra_params)
 
             def _run(_page):
-                return db.page_assets(table, limit=size, offset=(_page - 1) * size,
+                return _page_assets(table, limit=size, offset=(_page - 1) * size,
                                       q=q or None, extra_where=where,
                                       extra_params=params, order=order)
 
@@ -1290,13 +1354,13 @@ def create_app():
         vsev = (request.args.get("vsev") or "").strip().lower()
         if vsev not in ("critical", "high", "medium", "low", "info"):
             vsev = ""    # 级别白名单：非法一律按"全部"
-        vuln_rows, vuln_total = db.page_vulns(limit=vsize, offset=(vpage - 1) * vsize,
+        vuln_rows, vuln_total = _page_vulns(limit=vsize, offset=(vpage - 1) * vsize,
                                               q=vq or None, severity=vsev or None,
                                               task_id=task_id, sort="id", desc=True)
         _vpages = max(1, (vuln_total + vsize - 1) // vsize)
         if vpage > _vpages:  # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
             vpage = _vpages
-            vuln_rows, vuln_total = db.page_vulns(limit=vsize, offset=(vpage - 1) * vsize,
+            vuln_rows, vuln_total = _page_vulns(limit=vsize, offset=(vpage - 1) * vsize,
                                                   q=vq or None, severity=vsev or None,
                                                   task_id=task_id, sort="id", desc=True)
         # 翻页必须带上全部筛选；`vq` 要 URL 编码（含 `&` / `#` / 空格时不编码会**丢掉条件**）
@@ -1366,7 +1430,7 @@ def create_app():
         PDF 走本机无头浏览器的 `--print-to-pdf`（见 `report.export_pdf`）：找不到浏览器时
         **把原因显示出来**（而不是 500 或一个空文件），并提示可改导出 HTML。
         """
-        task = db.get_task(task_id)
+        task = _owned_task(task_id)
         if not task:
             abort(404)
         from scanner.report import (export_pdf, generate, generate_html,
@@ -1409,7 +1473,7 @@ def create_app():
     @app.route("/api/tasks/<int:task_id>/stop", methods=["POST"])
     @login_required
     def api_task_stop(task_id):
-        task = db.get_task(task_id)
+        task = _owned_task(task_id)
         if not task:
             return jsonify({"error": "not found"}), 404
         if task["status"] == "queued":
@@ -1429,7 +1493,7 @@ def create_app():
     @app.route("/api/tasks/<int:task_id>/delete", methods=["POST"])
     @login_required
     def api_task_delete(task_id):
-        if not db.get_task(task_id):
+        if not _owned_task(task_id):
             return jsonify({"error": "not found"}), 404
         runner.request_stop(task_id)   # 先停线程，避免它继续往已删除的任务里写数据
         db.delete_task(task_id)
@@ -1440,7 +1504,7 @@ def create_app():
     @login_required
     def api_task_restart(task_id):
         """原地重启：清空该任务已有资产后按原参数重跑（历史任务保持单一结果集，不产生重复行）。"""
-        task = db.get_task(task_id)
+        task = _owned_task(task_id)
         if not task:
             return jsonify({"error": "not found"}), 404
         if task["status"] == "running":
@@ -1466,7 +1530,7 @@ def create_app():
         拒绝的两种情况都返回 `ok=False` + 可读原因（页面直接显示，不静默）：
         任务正在运行；没有可用断点（`current_stage` 为空或已不在阶段列表里）。
         """
-        task = db.get_task(task_id)
+        task = _owned_task(task_id)
         if not task:
             return jsonify({"error": "not found"}), 404
         if task_id in runner.running_task_ids() or task["status"] in ("running", "queued"):
@@ -1510,7 +1574,7 @@ def create_app():
             return jsonify({"error": "action 必须是 stop / delete / restart"}), 400
         affected, skipped = 0, []
         for tid in ids:
-            task = db.get_task(tid)
+            task = _owned_task(tid)
             if not task:
                 skipped.append(tid)
                 continue
@@ -1541,7 +1605,7 @@ def create_app():
     @app.route("/api/tasks/<int:task_id>/status")
     @login_required
     def api_task_status(task_id):
-        t = db.get_task(task_id)
+        t = _owned_task(task_id)
         if not t:
             return jsonify({"error": "not found"}), 404
         return jsonify({
@@ -1681,12 +1745,12 @@ def create_app():
         # 现在过滤（含关键字 q）与排序全走 SQL（`db.page_vulns`），q 从**前端过滤**移到服务端。
         page, size, q = _page_args()
         sort, desc = _vuln_sort_args()
-        rows, total = db.page_vulns(limit=size, offset=(page - 1) * size, q=q or None,
+        rows, total = _page_vulns(limit=size, offset=(page - 1) * size, q=q or None,
                                     severity=sev, review=rev, task_id=tid, sort=sort, desc=desc)
         pages = max(1, (total + size - 1) // size)
         if page > pages:  # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
             page = pages
-            rows, total = db.page_vulns(limit=size, offset=(page - 1) * size, q=q or None,
+            rows, total = _page_vulns(limit=size, offset=(page - 1) * size, q=q or None,
                                         severity=sev, review=rev, task_id=tid,
                                         sort=sort, desc=desc)
         # 翻页必须带上**全部**筛选 + 排序状态；`q` / `severity` 要 URL 编码 ——
@@ -1710,7 +1774,7 @@ def create_app():
         # 任务时，老任务在下拉里**根本选不到**（筛不了），且它出现在表格里时「任务」列取不到名字、
         # 退化成 `#123`（`vulns.html` 的兜底）。`tasks_with_vulns()` 恰好等于"页面上可能出现的行"
         # 的任务全集，且规模不随任务总数膨胀。
-        tasks = db.tasks_with_vulns()
+        tasks = _tasks_with_vulns()
         return render_template("vulns.html", vulns=rows, sev=sev or "",
                                review=rev or "", counts=db.review_counts(tid),
                                task_id=tid or "", tasks=tasks,
@@ -1766,13 +1830,13 @@ def create_app():
 
     def _asset_page(table, base, extra_where=None, extra_params=(), order=None):
         page, size, q = _page_args()
-        rows, total = db.page_assets(table, limit=size, offset=(page - 1) * size, q=q or None,
+        rows, total = _page_assets(table, limit=size, offset=(page - 1) * size, q=q or None,
                                      extra_where=extra_where, extra_params=extra_params,
                                      order=order)
         pages = max(1, (total + size - 1) // size)
         if page > pages:  # 页码越界（例如过滤后总页数变少）→ 回落到最后一页重查
             page = pages
-            rows, total = db.page_assets(table, limit=size, offset=(page - 1) * size,
+            rows, total = _page_assets(table, limit=size, offset=(page - 1) * size,
                                          q=q or None, extra_where=extra_where,
                                          extra_params=extra_params, order=order)
         # q 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页、切标签**丢掉筛选条件**
@@ -1877,7 +1941,7 @@ def create_app():
         安全要点：只允许读**该任务工作目录下 `shots/` 里**的文件 ——
         文件名里出现路径分隔符、或解析后不在 shots 目录内，一律 404（防目录穿越）。
         """
-        task = db.get_task(task_id)
+        task = _owned_task(task_id)
         if not task:
             abort(404)
         if "/" in name or "\\" in name or not name.lower().endswith(".png"):
@@ -1909,7 +1973,7 @@ def create_app():
         include_cdn = request.args.get("cdn") == "1"
         page, size, q = _page_args()
         agg = {}
-        for r in db.list_subdomain_net():
+        for r in _list_subdomain_net():
             ip_text, cdn_label = (r["ip"] or ""), (r["cdn"] or "")
             if not ip_text:
                 continue
@@ -2129,7 +2193,7 @@ def create_app():
         # 续55：名称表要**全量**任务 —— 上面是对 `ports` 的 GROUP BY（不按任务切），本页行可能
         # 属于**任意**老任务，名称表只取最新 N 个的话更老的任务会显示成 `#id`。
         # 没有行时不必查（省一次全表读）。
-        names = {t["id"]: t["name"] for t in db.list_tasks(limit=None)} if raw_rows else {}
+        names = {t["id"]: t["name"] for t in _list_tasks(limit=None)} if raw_rows else {}
         rows = []
         for r in raw_rows:
             item = dict(r)      # sqlite3.Row 不支持赋值，先转成 dict 再加工
@@ -2175,7 +2239,7 @@ def create_app():
         targets = "\n".join(hosts)
         stages = ["portscan"]
         options = {"portscan_full": True}
-        task_id = db.create_task(name, targets, stages, options)
+        task_id = _create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
         logger.info(f"[gui] 全端口扫描任务 #{task_id} 已创建（{len(hosts)} 个主机）")
         return redirect(url_for("task_detail", task_id=task_id))
@@ -2231,7 +2295,7 @@ def create_app():
             # 续59-2 去掉 `limit=5000`：它把聚合建在**截断集合**上 —— 第 5001 行起的数据所属的组
             # 在任何一页都看不到（静默丢资产）。旧文案写的"（上限 5000 条）"只披露了"上限存在"，
             # 没说"超出的部分会消失"；而"防页面被拖死"的正解是**分页**，不是**截断**。
-            all_rows, _ = db.page_assets("dirs", limit=None, offset=0, q=q or None)
+            all_rows, _ = _page_assets("dirs", limit=None, offset=0, q=q or None)
             folded, hidden = _fold_dirs(all_rows, show_all)
             groups = _agg_dirs(folded)
             total = len(groups)
@@ -2305,7 +2369,7 @@ def create_app():
         else:
             name = time.strftime("批量子域-%m%d-%H%M%S")
         targets = "\n".join(domains)
-        task_id = db.create_task(name, targets, stages, {})
+        task_id = _create_task(name, targets, stages, {})
         _spawn(task_id, name, targets, stages, {})
         logger.info(f"[gui] 批量子域名任务 #{task_id} 已创建（{len(domains)} 个域名，仅 subdomain 阶段）")
         return redirect(url_for("task_detail", task_id=task_id))
@@ -2329,7 +2393,7 @@ def create_app():
         if not task_id.isdigit() or not domains:
             return redirect(back)
         tid = int(task_id)
-        if not db.get_task(tid):
+        if not _owned_task(tid):
             return redirect(back)
         subs_cfg = settings.get("subdomain", {}) or {}
         timeout = float(subs_cfg.get("dns_timeout", 3) or 3)
@@ -2383,7 +2447,7 @@ def create_app():
         if from_task.isdigit():          # 只收任务号，避免把任意文本写进任务选项
             options["rescan_of"] = int(from_task)
         # 登录态继承：新挖出的域名同样要用原来的会话去探（否则探到的是未登录视角）
-        inherit = _source_auth(from_task)
+        inherit = _source_auth(from_task, _owner_scope())
         if inherit:
             options["auth"] = inherit
         name = (request.form.get("name") or "").strip() or \
@@ -2391,7 +2455,7 @@ def create_app():
         targets = "\n".join(domains)
         if str(request.form.get("append", "")).lower() in ("1", "true", "on"):
             return _do_append(from_task, stages, targets, domains, options, fallback)
-        task_id = db.create_task(name, targets, stages, options)
+        task_id = _create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
         logger.info(f"[gui] 拓展域名探测任务 #{task_id} 已创建"
                     f"（{len(domains)} 个域名，subdomain→probe→dirscan→vulnscan）")
@@ -2419,6 +2483,8 @@ def create_app():
         if not domains:
             return redirect(back)
         task_id = (request.form.get("task_id") or "").strip()
+        if task_id.isdigit() and not _owned_task(int(task_id)):
+            return redirect(back)          # 续79：不能往别的账号的任务里追加资产
         res = extdom.promote_domains(domains, settings, logger=logger,
                                      task_id=int(task_id) if task_id.isdigit() else None)
         logger.info(f"[gui] 归属追加：勾选 {len(domains)} 个 → 追加 {len(res['promoted'])} 个"
@@ -2472,14 +2538,14 @@ def create_app():
             options["rescan_of"] = int(from_task)
         # 登录态继承（同 api_scan_ext）：补扫必须沿用原任务的会话，否则"复查"变成
         # 换一个未登录身份重看一遍，与用户点「复查」的预期不符。
-        inherit = _source_auth(from_task)
+        inherit = _source_auth(from_task, _owner_scope())
         if inherit:
             options["auth"] = inherit
         text = "\n".join(targets)
         stages = [stage]
         if str(request.form.get("append", "")).lower() in ("1", "true", "on"):
             return _do_append(from_task, stages, text, targets, options, fallback)
-        task_id = db.create_task(name, text, stages, options)
+        task_id = _create_task(name, text, stages, options)
         _spawn(task_id, name, text, stages, options)
         logger.info(f"[gui] 补扫任务 #{task_id} 已创建（{stage} 全量档，"
                     f"{len(targets)} 个目标，来源任务 #{from_task or '-'}）")

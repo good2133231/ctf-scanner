@@ -7,6 +7,31 @@
 
 
 
+
+## 2026-09-29 —— 续79：**多租户隔离**（鉴权加固收尾 ②）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 背景：此前所有账号看到**同一批任务与资产**（隔离的只是配置页）—— 共享服务器上多人用时，
+  子用户能看到别人的任务 / 资产 / 漏洞。
+- 数据层（`scanner/db.py`）：
+  - `tasks` 加 `owner_id`（SCHEMA + 老库 `_COLUMN_PATCHES` 补列；`0` = 无归属 / 老库行，**仅管理员可见**）；
+  - `create_task(..., owner_id=0)`；
+  - 新增 `_owner_task_clause()` / `_owner_asset_clause()`：`None` = 不限制（管理员），否则
+    `owner_id=?` / `task_id IN (SELECT id FROM tasks WHERE owner_id=?)`；
+  - 跨任务查询全部支持 `owner_id`：`page_tasks` / `page_assets` / `page_vulns` / `list_tasks` /
+    `list_vulns` / `list_subdomain_net` / `dashboard_stats` / `tasks_with_vulns` / `vuln_trend` / `review_counts`。
+- GUI（`gui/app.py`）：新增 `_owner_scope()`（管理员 None / 子用户自己 id）、`_task_owner()`、
+  `_owned_task()`（任务归属校验）与一组 `_page_*` / `_list_*` / `_create_task` 包装（**一处收口注入
+  `owner_id`**，避免逐个调用点漏改）；任务详情 / 导出 / 停止 / 重启 / 续跑 / 截图 / 状态、
+  `/api/domains/resolve|promote` 等取任务的入口统一改走 `_owned_task()`（越权一律 404）；
+  `_source_auth` 加 owner 校验（子用户不能继承别的账号任务的登录态）。
+- 回归 `tests/smoke.py [7h+]`：子用户只见自己名下任务（列表不含别人的）、详情 / 导出 / 停止对别人的
+  任务均 404；管理员见全部且能打开子用户的任务。
+- 文件：`scanner/db.py`、`gui/app.py`、`tests/smoke.py`、本文件。
+- 已知边界（如实标注）：① 用户黑名单（`config/blacklist.txt`）仍是**全局**的（命中即不入库），
+  未按账号隔离；② `/api/domains/promote` 不显式给 `task_id` 时由域名反查所属任务，未额外按 owner
+  收窄（显式给 `task_id` 时**已校验**）。
 ## 2026-09-29 —— 续78：**登录验证码**（鉴权加固收尾 ①，纯标准库）
 
 > 实施者：**WorkBuddy · Claude**。

@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   run_mode TEXT DEFAULT '',
   queued_at TEXT DEFAULT '',
   run_payload TEXT DEFAULT '',
+  -- 续79 多租户：任务归属账号（0 = 无归属/老库行，仅管理员可见）。
+  owner_id INTEGER DEFAULT 0,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS subdomains (
@@ -253,7 +255,9 @@ _COLUMN_PATCHES = {
               # 续49「持久化任务队列」：老库补三列（新库由 SCHEMA 直接建出）。
               # 老行的 `run_mode=''` → 重启对账按"非队列任务"处理（仍标 failed，见 `reconcile`）。
               "run_mode": "TEXT DEFAULT ''", "queued_at": "TEXT DEFAULT ''",
-              "run_payload": "TEXT DEFAULT ''"},
+              "run_payload": "TEXT DEFAULT ''",
+              # 续79 多租户：老库补 owner_id（0 = 无归属/老库行，仅管理员可见）。
+              "owner_id": "INTEGER DEFAULT 0"},
 }
 
 
@@ -290,11 +294,32 @@ def _query(sql, params=(), one=False):
 
 # ---------- 任务 ----------
 
-def create_task(name, targets, stages, options=None):
+def _owner_task_clause(owner_id):
+    """多租户（续79）：`owner_id=None` ＝ 不限制（管理员）；否则只放行**归属该账号**的任务。
+
+    只给 `tasks` 表本身用；资产/漏洞表走 `_owner_asset_clause()`（它们靠 `task_id` 关联）。
+    """
+    if owner_id is None:
+        return "", []
+    return "owner_id = ?", [int(owner_id)]
+
+
+def _owner_asset_clause(owner_id):
+    """多租户（续79）：资产/漏洞表（都有 `task_id`）按**任务归属**过滤；`None` ＝ 不限制。
+
+    子查询而非 JOIN：不改动既有各页的列/排序口径，只在 WHERE 里加一个"任务属于我"的约束。
+    """
+    if owner_id is None:
+        return "", []
+    return "task_id IN (SELECT id FROM tasks WHERE owner_id = ?)", [int(owner_id)]
+
+
+def create_task(name, targets, stages, options=None, owner_id=0):
     return _exec(
-        "INSERT INTO tasks(name, targets, stages, options, pid, created_at, updated_at) "
-        "VALUES(?,?,?,?,?,?,?)",
-        (name, targets, ",".join(stages), json.dumps(options or {}), os.getpid(), _now(), _now()))
+        "INSERT INTO tasks(name, targets, stages, options, pid, owner_id, created_at, updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (name, targets, ",".join(stages), json.dumps(options or {}), os.getpid(),
+         int(owner_id or 0), _now(), _now()))
 
 
 def update_task(task_id, **fields):
@@ -589,7 +614,7 @@ def get_task(task_id):
     return _query("SELECT * FROM tasks WHERE id=?", (task_id,), one=True)
 
 
-def list_tasks(limit=200):
+def list_tasks(limit=200, owner_id=None):
     """任务列表（`id DESC`）。
 
     `limit=None` ＝ **不加上限**（续55）：给"确实要全量"的调用方用（如全端口页的
@@ -597,9 +622,12 @@ def list_tasks(limit=200):
     结果老任务的名字显示为空）。**`limit=0` 仍然是"一条都不要"**，与 `None` 语义刻意区分，
     避免老调用方被静默反转成"全部"。要分页请用 `page_tasks()`。
     """
+    clause, params = _owner_task_clause(owner_id)
+    where = (" WHERE " + clause) if clause else ""
     if limit is None:
-        return _query("SELECT * FROM tasks ORDER BY id DESC")
-    return _query("SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (int(limit),))
+        return _query(f"SELECT * FROM tasks{where} ORDER BY id DESC", tuple(params))
+    return _query(f"SELECT * FROM tasks{where} ORDER BY id DESC LIMIT ?",
+                  tuple(params) + (int(limit),))
 
 
 def find_task_by_name(name):
@@ -613,7 +641,7 @@ def find_task_by_name(name):
                   (str(name),), one=True)
 
 
-def page_tasks(limit=100, offset=0, q=None, status=None, stages=None):
+def page_tasks(limit=100, offset=0, q=None, status=None, stages=None, owner_id=None):
     """任务列表分页查询（续53），返回 `(rows, total)`。
 
     **为什么要它**：`/tasks` 页原先固定 `list_tasks(limit=200)` —— 任务超过 200 个就**静默丢**、
@@ -630,6 +658,10 @@ def page_tasks(limit=100, offset=0, q=None, status=None, stages=None):
     保证"共 N 条"与页内行数一致（不重不漏）。
     """
     clauses, params = [], []
+    _oc, _op = _owner_task_clause(owner_id)
+    if _oc:
+        clauses.append(_oc)
+        params.extend(_op)
     if q:
         clauses.append("(name LIKE ? OR targets LIKE ?)")
         params.extend([f"%{q}%", f"%{q}%"])
@@ -943,7 +975,7 @@ def list_subdomains(task_id):
     return _query("SELECT * FROM subdomains WHERE task_id=? ORDER BY domain", (task_id,))
 
 
-def list_subdomain_net(limit=None):
+def list_subdomain_net(limit=None, owner_id=None):
     """跨任务返回解析过的子域名（domain/ip/cdn）——「IP 资产」页用。
 
     只取 `ip <> ''` 的行（没解析出来的行对"按 IP 聚合"没有意义）。
@@ -957,7 +989,10 @@ def list_subdomain_net(limit=None):
     下推成 SQL 的 `LIMIT` 只会把"截断"从一处挪到另一处。
     """
     cap = -1 if limit is None else int(limit)
-    return _query("SELECT domain, ip, cdn FROM subdomains WHERE ip <> '' LIMIT ?", (cap,))
+    _oc, _op = _owner_asset_clause(owner_id)
+    extra = (" AND " + _oc) if _oc else ""
+    return _query(f"SELECT domain, ip, cdn FROM subdomains WHERE ip <> ''{extra} LIMIT ?",
+                  tuple(_op) + (cap,))
 
 
 def list_sites(task_id):
@@ -1067,7 +1102,7 @@ OVERLAP_SITE_WHERE = "id IN (SELECT MAX(id) FROM sites GROUP BY url)"
 
 
 def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_params=(),
-                order=None, columns=None):
+                order=None, columns=None, owner_id=None):
     """资产分页查询，返回 (rows, total)。
 
     跨任务的资产页（`/subdomains`、`/sites` …）与**任务详情页的资产页签**（续57）共用这一个
@@ -1090,6 +1125,10 @@ def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_para
     """
     default_order, cols = _ASSET_PAGES[table]
     clauses, params = [], []
+    _oc, _op = _owner_asset_clause(owner_id)
+    if _oc:
+        clauses.append(_oc)
+        params.extend(_op)
     if extra_where:
         clauses.append(f"({extra_where})")
         params.extend(extra_params)
@@ -1168,13 +1207,18 @@ def bulk_set_vuln_review(ids, state, note=None):
             conn.close()
 
 
-def review_counts(task_id=None):
+def review_counts(task_id=None, owner_id=None):
     """复核台账：{'pending': n, 'confirmed': n, 'false_positive': n}（供 GUI 概览与报告）。"""
     sql = "SELECT review r, COUNT(*) c FROM vulns"
     params = ()
     if task_id:
         sql += " WHERE task_id=?"
         params = (task_id,)
+    else:
+        _oc, _op = _owner_asset_clause(owner_id)
+        if _oc:
+            sql += " WHERE " + _oc
+            params = tuple(_op)
     out = {"pending": 0, "confirmed": 0, "false_positive": 0}
     for row in _query(sql + " GROUP BY review", params):
         out["pending" if not row["r"] else row["r"]] = row["c"]
@@ -1185,7 +1229,7 @@ def review_counts(task_id=None):
 SEV_LEVELS = ("critical", "high", "medium", "low", "info")
 
 
-def vuln_trend(limit_tasks=15):
+def vuln_trend(limit_tasks=15, owner_id=None):
     """漏洞趋势统计：**级别分布** + **最近 N 个任务的逐任务计数**。
 
     口径与报告一致：**已判误报（`review='false_positive'`）不计入**（否则复核过的噪声
@@ -1194,11 +1238,16 @@ def vuln_trend(limit_tasks=15):
     """
     by_sev = {k: 0 for k in SEV_LEVELS}
     by_sev["other"] = 0
-    for row in _query("SELECT severity s, COUNT(*) c FROM vulns "
-                      "WHERE COALESCE(review,'') <> 'false_positive' GROUP BY severity"):
+    _ac, _ap = _owner_asset_clause(owner_id)
+    _aw = (" AND " + _ac) if _ac else ""
+    for row in _query(f"SELECT severity s, COUNT(*) c FROM vulns "
+                      f"WHERE COALESCE(review,'') <> 'false_positive'{_aw} GROUP BY severity",
+                      tuple(_ap)):
         by_sev[row["s"] if row["s"] in by_sev else "other"] += row["c"]
-    tasks = list(_query("SELECT id, name, created_at FROM tasks ORDER BY id DESC LIMIT ?",
-                        (int(limit_tasks),)))
+    _tc, _tp = _owner_task_clause(owner_id)
+    _tw = (" WHERE " + _tc) if _tc else ""
+    tasks = list(_query(f"SELECT id, name, created_at FROM tasks{_tw} ORDER BY id DESC LIMIT ?",
+                        tuple(_tp) + (int(limit_tasks),)))
     counts = {}
     ids = [t["id"] for t in tasks]
     if ids:
@@ -1216,10 +1265,10 @@ def vuln_trend(limit_tasks=15):
                      "total": sum(sev.values())})
         recent.append(item)
     return {"by_severity": by_sev, "total": sum(by_sev.values()),
-            "review": review_counts(), "recent": recent}
+            "review": review_counts(owner_id=owner_id), "recent": recent}
 
 
-def list_vulns(task_id=None, severity=None, limit=200, review=None):
+def list_vulns(task_id=None, severity=None, limit=200, review=None, owner_id=None):
     """列出漏洞（`id DESC`）。`review` 三态：None=全部 / "pending"=待复核 / confirmed / false_positive。
 
     `limit=None` ＝ **不加上限**（续55）：给"要全量、不能漏"的调用方用 —— 报告导出
@@ -1228,6 +1277,10 @@ def list_vulns(task_id=None, severity=None, limit=200, review=None):
     **`limit=0` 仍然是"一条都不要"**，与 `None` 语义刻意区分。要分页请用 `page_vulns()`。
     """
     sql, params = "SELECT * FROM vulns WHERE 1=1", []
+    _oc, _op = _owner_asset_clause(owner_id)
+    if _oc:
+        sql += " AND " + _oc
+        params.extend(_op)
     if task_id:
         sql += " AND task_id=?"
         params.append(task_id)
@@ -1245,7 +1298,7 @@ def list_vulns(task_id=None, severity=None, limit=200, review=None):
     return _query(sql, tuple(params))
 
 
-def tasks_with_vulns():
+def tasks_with_vulns(owner_id=None):
     """**有漏洞的任务**（`id DESC`），「漏洞风险」页的任务下拉与「任务」列名用它（续55）。
 
     为什么不用 `list_tasks()`：那个下拉原先取 `list_tasks(limit=1000)`（最新 1000 个任务），
@@ -1254,8 +1307,10 @@ def tasks_with_vulns():
     这里的口径是"页面上可能出现的行，其任务一定在内"：漏洞表里出现过的 `task_id`
     恰好就是全集，而且规模只跟"有多少任务出过漏洞"相关，不会随任务总数膨胀成几千项的下拉框。
     """
-    return _query("SELECT t.* FROM tasks t WHERE t.id IN (SELECT DISTINCT task_id FROM vulns) "
-                  "ORDER BY t.id DESC")
+    _oc, _op = _owner_task_clause(owner_id)
+    extra = (" AND " + _oc) if _oc else ""
+    return _query(f"SELECT t.* FROM tasks t WHERE t.id IN (SELECT DISTINCT task_id FROM vulns) "
+                  f"{extra} ORDER BY t.id DESC", tuple(_op))
 
 
 # ---------- 漏洞页分页 + 排序（P0，续51） ----------
@@ -1285,7 +1340,7 @@ def norm_vuln_sort(sort):
 
 
 def page_vulns(limit=100, offset=0, q=None, severity=None, review=None, task_id=None,
-               sort=None, desc=True):
+               sort=None, desc=True, owner_id=None):
     """漏洞分页查询（P0，续51），返回 `(rows, total)`。
 
     **为什么要它**：漏洞页原先固定 `list_vulns(..., limit=500)`，既无分页也无排序 ——
@@ -1299,6 +1354,10 @@ def page_vulns(limit=100, offset=0, q=None, severity=None, review=None, task_id=
     `desc` 兼容布尔与字符串（`"0"/"false"/"no"/"off"` 视为升序，其余视为降序）。
     """
     clauses, params = [], []
+    _oc, _op = _owner_asset_clause(owner_id)
+    if _oc:
+        clauses.append(_oc)
+        params.extend(_op)
     if task_id:
         clauses.append("task_id = ?")
         params.append(int(task_id))
@@ -1323,15 +1382,20 @@ def page_vulns(limit=100, offset=0, q=None, severity=None, review=None, task_id=
     return rows, total
 
 
-def dashboard_stats():
-    def count(sql):
-        row = _query(sql, one=True)
+def dashboard_stats(owner_id=None):
+    def count(sql, params=()):
+        row = _query(sql, tuple(params), one=True)
         return row["c"] if row else 0
+
+    tc, tp = _owner_task_clause(owner_id)
+    ac, ap = _owner_asset_clause(owner_id)
+    tw = (" WHERE " + tc) if tc else ""
+    aw = (" WHERE " + ac) if ac else ""
     return {
-        "tasks": count("SELECT COUNT(*) c FROM tasks"),
-        "sites": count("SELECT COUNT(*) c FROM sites"),
-        "subdomains": count("SELECT COUNT(*) c FROM subdomains"),
-        "vulns": count("SELECT COUNT(*) c FROM vulns"),
+        "tasks": count(f"SELECT COUNT(*) c FROM tasks{tw}", tp),
+        "sites": count(f"SELECT COUNT(*) c FROM sites{aw}", ap),
+        "subdomains": count(f"SELECT COUNT(*) c FROM subdomains{aw}", ap),
+        "vulns": count(f"SELECT COUNT(*) c FROM vulns{aw}", ap),
         "pocs": count("SELECT COUNT(*) c FROM pocs WHERE status='ok'"),
     }
 

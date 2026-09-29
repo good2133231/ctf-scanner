@@ -7002,13 +7002,30 @@ http:
     assert "无权限" in _cs.get("/settings").get_data(as_text=True)
 
     # 6) 子用户**能**用的：扫描 + 看结果（"只有使用扫描功能"的另一半，别一禁就禁过头）
-    _tid_mu = db.create_task("smoke-multiauth", targets, ["probe"], {"offline": True})
+    # 续79 多租户：任务要归到**子用户名下**，子用户才看得到 / 打得开（管理员建的任务子用户不可见）
+    _tid_mu = db.create_task("smoke-multiauth", targets, ["probe"], {"offline": True},
+                             owner_id=_sub7h["id"])
     for _p7h in ("/", "/tasks", "/subdomains", "/sites", "/ips", "/vulns", "/fullports",
                  "/dirs", "/ports", "/csegs", "/extdomains", f"/tasks/{_tid_mu}",
                  f"/api/tasks/{_tid_mu}/status"):
         assert _cs.get(_p7h).status_code == 200, (_p7h, _cs.get(_p7h).status_code)
     # 扫描类的 POST 也对子用户开放（空勾选只会重定向，不会真发请求）——证明不是"见 POST 就拦"
     assert _cs.post("/api/domains/resolve", data={"task_id": str(_tid_mu)}).status_code == 302
+    # 续79 多租户：子用户只看得到**自己名下**的任务；别人的（管理员的）既看不到、也打不开
+    _tid_other = db.create_task("smoke-other-owner", targets, ["probe"], {"offline": True},
+                                owner_id=_admin7h["id"])
+    _mt_html = _cs.get("/tasks").get_data(as_text=True)
+    assert "smoke-multiauth" in _mt_html, "子用户应看得到自己名下的任务"
+    assert "smoke-other-owner" not in _mt_html, "子用户不得看到别人（管理员）的任务"
+    assert _cs.get(f"/tasks/{_tid_other}").status_code == 404, "子用户不得直接打开别人的任务"
+    assert _cs.get(f"/tasks/{_tid_other}/export").status_code == 404, "子用户不得导出别人的任务"
+    assert _cs.post(f"/api/tasks/{_tid_other}/stop").status_code == 404, "子用户不得停别人的任务"
+    assert _ca.get(f"/tasks/{_tid_mu}").status_code == 200, "管理员应能打开子用户的任务"
+    _mt_admin = _ca.get("/tasks").get_data(as_text=True)
+    assert "smoke-multiauth" in _mt_admin and "smoke-other-owner" in _mt_admin, \
+        "管理员应看到全部任务"
+    print("[7h+] 续79 多租户 ok: 子用户只见自己名下任务（列表 + 详情/导出/停止均 404 别人的）；"
+          "管理员见全部；跨任务资产页按 owner 过滤")
 
     # 7) 侧边栏：子用户看不到管理入口，管理员看得到（UI 与路由两层都要有）
     _sub7h_html = _cs.get("/tasks").get_data(as_text=True)
@@ -8269,9 +8286,10 @@ http:
 
     # (M2) 服务端忽略 `q`（退回"关键字只在前端过滤"）→ ③ 的服务端过滤断言必红
     def _noq7m(limit=100, offset=0, q=None, severity=None, review=None, task_id=None,
-               sort=None, desc=True):
+               sort=None, desc=True, owner_id=None):
         return _real_page7m(limit=limit, offset=offset, q=None, severity=severity,
-                            review=review, task_id=task_id, sort=sort, desc=desc)
+                            review=review, task_id=task_id, sort=sort, desc=desc,
+                            owner_id=owner_id)
     db.page_vulns = _noq7m
     try:
         _mq7m, _mqt7m = db.page_vulns(task_id=_tid7m, q=_MARKER7M)
@@ -9258,7 +9276,7 @@ http:
     _q_real_twv, _q_real_ftn = db.tasks_with_vulns, db.find_task_by_name
     try:
         # (M1) 模拟**旧写法**：下拉只取"最新 N 个任务"（N=1，等价于 limit=1000 在任务数超 1000 时失效）
-        db.tasks_with_vulns = lambda: db.list_tasks(limit=1)
+        db.tasks_with_vulns = lambda **_k: db.list_tasks(limit=1)
         _q_vh_m = _q_c.get("/vulns", query_string={"task_id": str(_tidB7o)}).get_data(as_text=True)
         assert _oldest_name7o not in _q_vh_m, \
             "变异（只取最新 1 个任务）后名字应消失 → 证明 ④ 测的是**完整性**而不是巧合"
@@ -9571,7 +9589,7 @@ http:
     #    一路在修的"固定上限 + 静默丢"同源（CHANGELOG_AI 里旧审计只写了"阈值很高，实际难触发"，
     #    那是对概率的判断，不是设计取舍）。
     _db59 = (ROOT / "scanner" / "db.py").read_text(encoding="utf-8")
-    assert _re7q.search(r"def list_subdomain_net\(limit=None\)", _db59), \
+    assert _re7q.search(r"def list_subdomain_net\(limit=None, owner_id=None\)", _db59), \
         "list_subdomain_net 必须用 limit=None（不加上限）作默认，三态口径同 list_tasks/list_vulns"
     assert not _re7q.search(r"def list_subdomain_net\(limit=\d", _db59), \
         "list_subdomain_net 的参数默认值不得是**固定行数上限**（超限的行会被静默丢掉 = 丢 IP）"
@@ -9628,7 +9646,7 @@ http:
 
     # §6.1 变异证伪：把"不加上限"偷偷当成旧行为（聚合前截成 20 行）⇒ 总数必红
     _real_net59 = db.list_subdomain_net
-    db.list_subdomain_net = lambda limit=None: _real_net59(limit=20)
+    db.list_subdomain_net = lambda limit=None, **_kw: _real_net59(limit=20)
     try:
         _mut59 = _c7o.get("/ips?q=z59.test").get_data(as_text=True)
         assert "共 205 个 IP" not in _mut59, \
