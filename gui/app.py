@@ -41,7 +41,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import (audit, auth as taskauth, blacklist, cdn, certs as certs_mod, db,
+from scanner import (audit, auth as taskauth, blacklist, captcha, cdn, certs as certs_mod, db,
                      devfixture, devmode, dnsq,
                      extdom, login_guard, queue, screenshot, toolmgr, users)
 from scanner.config import BASE_DIR, load_settings, save_settings
@@ -612,6 +612,16 @@ def create_app():
             return fn(*a, **k)
         return wrapper
 
+    @app.route("/captcha.png")
+    def captcha_png():
+        """登录验证码图片（续78）。**无鉴权**（登录前就要用）—— 只发一张随机图，不泄露任何状态。"""
+        token, code = captcha.issue(4)
+        session["captcha_id"] = token
+        resp = app.make_response(captcha.render_png(code))
+        resp.headers["Content-Type"] = "image/png"
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        return resp
+
     @app.route("/login", methods=["GET", "POST"])
     def login():
         error = ""
@@ -645,6 +655,15 @@ def create_app():
             # （若管理员把 `gui.login_lockout.enabled` 关掉、或把阈值设为 0，失败审计就不再被限 —— 那是
             #   管理员显式选择"不限速"，此时审计量随请求量增长属预期行为。）
             if username:
+                # 续78 登录验证码：**账号登录**必须过验证码（引导口令分支不走这里 —— 那是首次建号前的
+                #   迁移路径，仅当库里没有任何账号时可达，且同样受限速约束）。码一次性，成败都作废。
+                if not captcha.check(session.pop("captcha_id", ""), request.form.get("captcha") or ""):
+                    error = "验证码错误（已刷新，请重试）"
+                    logger.info(f"[gui] 登录失败：{username}（验证码错误）")
+                    _guard_fail(ip, username)
+                    _audit(audit.KIND_LOGIN_FAIL, actor=username, target=username, ok=False,
+                           actor_role="", detail="验证码错误")
+                    return render_template("login.html", error=error, bootstrap=bootstrap)
                 row = users.check_login(username, password)
                 if row is None:
                     error = "用户名或口令错误"

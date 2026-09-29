@@ -6,6 +6,25 @@
 
 
 
+
+## 2026-09-29 —— 续78：**登录验证码**（鉴权加固收尾 ①，纯标准库）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 新增 `scanner/captcha.py`：**零第三方依赖**（不引 PIL）—— 手写 5×7 点阵字体 + 手写 PNG
+  （`zlib`+`struct`）。答案只存**服务端内存**（`_STORE`），会话里只放不透明 token ——
+  Flask 默认 session 是**签名未加密**的 cookie，塞答案进去客户端一解就读到，等于没验证码。
+  一次性 + 常量时间比较（`secrets.compare_digest`）+ 5 分钟过期 + 易混字符归一（O/0、I/1…）。
+- 接入 `gui/app.py`：新增 `GET /captcha.png`（无鉴权，登录前用）；登录 POST 在**账号登录分支**
+  （`if username:`）里、校验口令**之前**校验验证码 —— 码错直接拒且**不校验口令**（避免反推）。
+  **引导口令分支不用码**（那是首次建号前的迁移路径，仅无账号时可达，且同样受限速约束）——
+  因此 `smoke` 与 `browser_e2e` 的 token 登录不受影响。
+- 前端：`login.html` 加验证码输入 + 图片（点图换一张）；`style.css` 加 `.captcha-row`（flex）。
+- 回归 `tests/smoke.py [7h+]`：账号登录**无码/错码必拒、对码放行、一次性防重放**；模块级纯函数
+  （长度 / 大小写不敏感 / 空码判否 / PNG 签名）；**变异证伪**：`captcha.check` 恒真 →「不带码必拒」必红。
+  该节之后把 `check` 打桩成恒真（后续用例测权限/审计，与验证码无关）。
+- 文件：`scanner/captcha.py`（新）、`gui/app.py`、`gui/templates/login.html`、`gui/static/style.css`、
+  `tests/smoke.py`、本文件。
 ## 2026-09-29 —— 续77：**待办盘点：`todo.txt` 补记续73~76 + `TODO.md` 顶部列出「当前未解决」**
 
 > 实施者：**WorkBuddy · Claude**。

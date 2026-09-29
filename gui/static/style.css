@@ -178,6 +178,11 @@ details pre { margin:8px 0; }
 .login-box h1 span { color:var(--accent); }
 .login-box input { width:100%; margin:12px 0; text-align:center; }
 .login-box button { width:100%; }
+/* ---------- 登录页验证码（续78） ---------- */
+.login-box .captcha-row { display:flex; gap:8px; align-items:center; margin:12px 0; }
+.login-box .captcha-row input { flex:1; margin:0; }
+.login-box .captcha-row img { height:38px; border:1px solid var(--border); border-radius:6px;
+                              cursor:pointer; background:var(--input-bg); }
 
 @media (max-width:900px) {
   .grid2 { grid-template-columns:1fr; }

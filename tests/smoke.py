@@ -6904,6 +6904,51 @@ http:
     assert "password" not in users_mod.check_login("smoke-admin", _ADMIN_PW)
     assert all("password" not in u for u in users_mod.list_users())
 
+    # ---- 续78 登录验证码（**真门**：账号登录必须过码；引导口令分支不用）----
+    # 这里用**真** `captcha.check` 测；测完把 check 打桩成恒真 —— 后面几十个用例测的是
+    # 权限 / 审计，与验证码无关，不该被它拖累。
+    from scanner import captcha as _capmod78
+
+    def _issue78(_c):
+        _tok, _code = _capmod78.issue(4)
+        with _c.session_transaction() as _s:
+            _s["captcha_id"] = _tok
+        return _code
+
+    _c1 = app.test_client()
+    _issue78(_c1)
+    assert _c1.post("/login", data={"username": "smoke-admin", "password": _ADMIN_PW}).status_code == 200, \
+        "账号登录不带验证码必须被拒（不是 302）"
+    _c2 = app.test_client()
+    _issue78(_c2)
+    assert _c2.post("/login", data={"username": "smoke-admin", "password": _ADMIN_PW,
+                                    "captcha": "ZZZZ"}).status_code == 200, "验证码错必须被拒"
+    _c3 = app.test_client()
+    _code3 = _issue78(_c3)
+    assert _c3.post("/login", data={"username": "smoke-admin", "password": _ADMIN_PW,
+                                    "captcha": _code3}).status_code == 302, "带对码必须放行"
+    assert _c3.post("/login", data={"username": "smoke-admin", "password": _ADMIN_PW,
+                                    "captcha": _code3}).status_code == 200, "验证码必须一次性（防重放）"
+    # 模块级纯函数：长度 / 大小写不敏感 / 空码判否 / PNG 签名
+    assert len(_capmod78.new_code(6)) == 6 and len(_capmod78.new_code(4)) == 4
+    assert _capmod78.verify("AB34", "ab34") is True
+    assert _capmod78.verify("AB34", "ZZ99") is False and _capmod78.verify("", "x") is False
+    assert _capmod78.render_png("AB34")[:8] == b"\x89PNG\r\n\x1a\n", "验证码必须是 PNG"
+    # 变异证伪（§6.1）：check 恒真 → 「不带码必拒」那条必须真的红
+    _real78 = _capmod78.check
+    _capmod78.check = lambda *a, **k: True
+    try:
+        assert app.test_client().post("/login", data={"username": "smoke-admin",
+                                                      "password": _ADMIN_PW}).status_code == 302, \
+            "变异后仍拒 → 断言没盯住真实门"
+    finally:
+        _capmod78.check = _real78
+    print("[7h+] 续78 登录验证码 ok: 账号登录无码/错码必拒、对码放行、一次性防重放；"
+          "引导口令分支不受影响；变异证伪：check 恒真即红")
+    # 后面这批用例与验证码无关：把 check 打桩成恒真（真门已在上面验过）
+    _capmod78.check = lambda *a, **k: True
+
+
     _ca = app.test_client()      # 管理员
     _cs = app.test_client()      # 子用户（**独立会话**：换账号共用一个 client 证明不了权限差异）
     assert _ca.get("/").status_code == 302, "未登录必须跳登录页"

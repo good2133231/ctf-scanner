@@ -13,6 +13,14 @@
   <form method="post">
     <input type="text" name="username" placeholder="用户名" autocomplete="username" autofocus>
     <input type="password" name="password" placeholder="口令" autocomplete="current-password">
+    {% if not bootstrap %}
+    {# 续78 登录验证码：仅**账号登录**需要（引导口令分支不用，见 gui/app.py::login） #}
+    <div class="captcha-row">
+      <input type="text" name="captcha" placeholder="验证码" autocomplete="off" spellcheck="false">
+      <img src="{{ url_for('captcha_png') }}" alt="验证码" title="看不清？点一下换一张"
+           onclick="this.src='{{ url_for('captcha_png') }}?t='+Date.now()">
+    </div>
+    {% endif %}
     <button type="submit">登录</button>
     {% if error %}<p class="error">{{ error }}</p>{% endif %}
   </form>
