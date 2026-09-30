@@ -1,0 +1,243 @@
+"""分布式执行节点（续80）—— **中心控制 API + 节点轮询**。
+
+## 为什么是这个形态（而不是"把 SQLite 换成网络数据库"）
+
+roadmap 那条原文写的是"多个执行节点认领任务（需要先替换 SQLite）"。真要换 Postgres/MySQL：
+① 要引入数据库驱动（**违背本项目"零第三方依赖"的一贯取舍**）；② 要重写整个 `db.py` 的
+连接/事务/迁移；③ 还要处理"多写者"—— 而现在全框架只有一个 `db._WRITE_LOCK`（**进程内**），
+跨进程写同一份 SQLite 是不安全的。
+
+换个角度就简单了：**控制端（GUI 进程）本来就是唯一的库写入者**。那就让控制端**继续独占库**，
+把"共享存储"这件事交给控制端自己 —— 节点通过 HTTP **领任务 / 报心跳 / 回传结果**，
+它自己那台机器上跑扫描（写它**本地**的库），跑完把**资产快照**回传，控制端并回自己的库。
+于是节点是**无状态执行器**，不需要碰控制端的数据库。
+
+## 职责边界
+
+- **控制端**用：`create/list_all/verify/revoke/touch/claim/finish`（`gui/app.py` 的 `/api/node/*` 调）；
+- **节点端**用：`NodeClient`（HTTP 客户端，`run_node.py` 调）。
+- 真正的执行循环在 `run_node.py`；本模块不跑流水线。
+
+## 安全口径
+
+- 节点令牌**只存 sha256**（明文只在创建时返回一次），与账号口令同一套思路；
+- 每个 `/api/node/*` 请求都要带 `X-Node-Token`，校验失败一律 401；
+- 令牌可**吊销**（`revoke` → `enabled=0`），吊销后立刻失效；
+- 节点拿到的只有**任务入参**（目标/阶段/选项），**拿不到控制端的库、也拿不到别的任务**。
+"""
+import hashlib
+import json
+import secrets
+import time
+
+from . import db
+from .log import get_logger
+
+logger = get_logger("nodes")
+
+# 在线判定窗口（秒）：心跳间隔（默认 20s）的 4 倍多一点，容忍一次丢包
+ONLINE_WINDOW = 90
+# 令牌前缀：便于在配置/日志里一眼认出，也方便泄漏时全仓搜索
+TOKEN_PREFIX = "ctfsn_"
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS nodes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  enabled INTEGER DEFAULT 1,
+  last_seen TEXT DEFAULT '',
+  status TEXT DEFAULT '',
+  current_task INTEGER DEFAULT 0,
+  note TEXT DEFAULT '',
+  created_at TEXT
+);
+"""
+
+
+def ensure():
+    """建 `nodes` 表（幂等）。控制端启动与 CLI 管理入口都会调。"""
+    with db._WRITE_LOCK:
+        conn = db.get_conn()
+        try:
+            conn.executescript(_SCHEMA)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _hash(token):
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def create(name):
+    """新建节点，返回 `(id, token)`；重名 / 空名返回 `(None, 原因)`。
+
+    **token 明文只在这里返回一次**（库里只存 sha256，之后再也拿不回来）。
+    """
+    ensure()
+    name = str(name or "").strip()
+    if not name:
+        return None, "节点名不能为空"
+    if db._query("SELECT id FROM nodes WHERE name=?", (name,), one=True):
+        return None, f"节点名已存在：{name}"
+    token = TOKEN_PREFIX + secrets.token_urlsafe(24)
+    nid = db._exec(
+        "INSERT INTO nodes(name, token_hash, enabled, last_seen, status, current_task, note, created_at) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (name, _hash(token), 1, "", "offline", 0, "", db._now()))
+    logger.info(f"[nodes] 新建节点 #{nid}：{name}（令牌只显示一次）")
+    return int(nid), token
+
+
+def list_all():
+    ensure()
+    return db._query("SELECT * FROM nodes ORDER BY id")
+
+
+def get(node_id):
+    ensure()
+    return db._query("SELECT * FROM nodes WHERE id=?", (int(node_id),), one=True)
+
+
+def verify(token):
+    """按令牌找**启用中**的节点；找不到 / 空令牌返回 None（调用方一律 401）。"""
+    ensure()
+    t = str(token or "").strip()
+    if not t:
+        return None
+    return db._query("SELECT * FROM nodes WHERE token_hash=? AND enabled=1",
+                     (_hash(t),), one=True)
+
+
+def revoke(node_id):
+    ensure()
+    db._exec("UPDATE nodes SET enabled=0 WHERE id=?", (int(node_id),))
+    logger.info(f"[nodes] 吊销节点 #{int(node_id)}")
+
+
+def touch(node_id, status=None, current_task=None, note=None):
+    """更新心跳（`last_seen=now`）；只改传进来的字段。节点掉线后仍保留最后一次状态。"""
+    ensure()
+    fields = {"last_seen": db._now()}
+    if status is not None:
+        fields["status"] = str(status)[:32]
+    if current_task is not None:
+        fields["current_task"] = int(current_task)
+    if note is not None:
+        fields["note"] = str(note)[:200]
+    sets = ", ".join(f"{k}=?" for k in fields)
+    db._exec(f"UPDATE nodes SET {sets} WHERE id=?", (*fields.values(), int(node_id)))
+
+
+def is_online(row, now=None):
+    """按 `last_seen` 判定在线（空 = 从未连过 → 离线）。"""
+    ts = str((row["last_seen"] if row else "") or "")
+    if not ts:
+        return False
+    t = db._parse_ts(ts)
+    if t is None:
+        return False
+    return (now if now is not None else time.time()) - t <= ONLINE_WINDOW
+
+
+def spec_of(row):
+    """把认领到的任务行拼成节点要的执行规格（口径与 `queue._load_run_spec` 一致）。"""
+    keys = row.keys()
+    payload = {}
+    try:
+        payload = json.loads((row["run_payload"] if "run_payload" in keys else "") or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    stages = payload.get("stages")
+    if not isinstance(stages, list) or not stages:
+        stages = [s for s in (row["stages"] or "").split(",") if s]
+    options = payload.get("options")
+    if not isinstance(options, dict):
+        try:
+            options = json.loads(row["options"] or "{}")
+        except (TypeError, ValueError):
+            options = {}
+        if not isinstance(options, dict):
+            options = {}
+    mode = str(row["run_mode"] or "fresh").strip().lower() or "fresh"
+    return {"task_id": int(row["id"]), "name": row["name"], "targets": row["targets"],
+            "stages": [str(s) for s in stages], "options": options, "mode": mode}
+
+
+def claim(node_id):
+    """节点认领下一个排队任务；没有就返回 `None`。
+
+    **原子性复用 `db.claim_next_queued()`**（`WHERE status='queued'` 的原子 UPDATE）——
+    多个节点同时来领，只有一个拿得到同一条任务。
+    """
+    ensure()
+    row = db.claim_next_queued()
+    if row is None:
+        touch(node_id, status="idle", current_task=0)
+        return None
+    touch(node_id, status="busy", current_task=int(row["id"]))
+    return spec_of(row)
+
+
+def finish(node_id, task_id, status="done", note="", counts=None, assets=None):
+    """节点回传结果：把任务收成终态、合并资产快照，并把节点置回空闲。
+
+    `status` 只认 `done` / `failed`（其余一律当 `failed`，避免节点乱传状态把任务挂半空）。
+    """
+    st = "done" if str(status or "").strip().lower() == "done" else "failed"
+    task = db.get_task(int(task_id))
+    if not task:
+        return {"ok": False, "reason": "任务不存在"}
+    imported = {}
+    if isinstance(assets, dict) and assets:
+        imported = db.import_task_assets(int(task_id), assets)
+    db.finish_task_run(int(task_id), status=st)
+    if st == "failed" and note:
+        db.append_task_error(int(task_id), f"[node] {note}")
+    touch(node_id, status="idle", current_task=0, note=note)
+    logger.info(f"[nodes] 节点 #{int(node_id)} 回传任务 #{int(task_id)}：{st}"
+                f"（导入 {sum(imported.values()) if imported else 0} 行资产）")
+    return {"ok": True, "status": st, "imported": imported, "counts": counts or {}}
+
+
+# ---------------- 节点端：HTTP 客户端（只用 requests，不碰控制端的库） ----------------
+
+class NodeClient:
+    """节点侧客户端：把控制端当"任务源 + 结果汇"。
+
+    `insecure=True` 才跳过 TLS 校验（控制端常用自签证书；默认**校验**，避免中间人）。
+    """
+
+    def __init__(self, base, token, name="", timeout=30, insecure=False):
+        self.base = str(base or "").rstrip("/")
+        self.token = str(token or "")
+        self.name = str(name or "")
+        self.timeout = int(timeout or 30)
+        self.insecure = bool(insecure)
+
+    def _post(self, path, payload):
+        import requests
+        resp = requests.post(self.base + path, json=payload, timeout=self.timeout,
+                             verify=not self.insecure,
+                             headers={"X-Node-Token": self.token, "Content-Type": "application/json"})
+        resp.raise_for_status()
+        return resp.json()
+
+    def heartbeat(self, task_id=0, status="idle", note=""):
+        return self._post("/api/node/heartbeat",
+                          {"name": self.name, "task_id": int(task_id or 0),
+                           "status": status, "note": note})
+
+    def claim(self):
+        """领一个任务；没有返回 None。"""
+        data = self._post("/api/node/claim", {"name": self.name})
+        task = (data or {}).get("task")
+        return task if isinstance(task, dict) else None
+
+    def result(self, task_id, status, note="", counts=None, assets=None):
+        return self._post("/api/node/result",
+                          {"name": self.name, "task_id": int(task_id), "status": status,
+                           "note": note, "counts": counts or {}, "assets": assets or {}})

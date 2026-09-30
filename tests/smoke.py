@@ -10866,6 +10866,56 @@ http:
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。
     # 这是本项目第四次踩"假绿"（前三次见 `AGENTS.md §6.1`），故显式搬进 main() 末尾。
+    # ---------------- [8c] 续80：分布式执行节点（中心控制 API + 节点回传） ----------------
+    # 需求（roadmap）：「多个执行节点认领任务」。原设计写的是"先替换 SQLite"，但真换网络库
+    # 要引驱动、改整个 db 层；本项目改为**控制端独占库 + 节点 HTTP 领任务/回传**（见 scanner/nodes.py）。
+    from scanner import nodes as _nodes80
+    _nodes80.ensure()
+    _nid80, _tok80 = _nodes80.create("smoke-node")
+    assert _nid80 and _tok80.startswith("ctfsn_"), (_nid80, _tok80)
+    assert _nodes80.verify(_tok80) is not None, "令牌应能验过"
+    assert _nodes80.verify("bad") is None and _nodes80.verify("") is None
+    _cn80 = app.test_client()
+    _h80 = {"X-Node-Token": _tok80}
+    # ① 无 / 错令牌一律 401
+    assert _cn80.post("/api/node/claim", json={}).status_code == 401
+    assert _cn80.post("/api/node/claim", json={}, headers={"X-Node-Token": "x"}).status_code == 401
+    # 先把可能残留的 queued 排空（[7k] 队列组可能留），保证下面认领到的就是本组排的那个
+    while True:
+        _d80 = _cn80.post("/api/node/claim", json={}, headers=_h80).get_json()["task"]
+        if not _d80:
+            break
+        _cn80.post("/api/node/result", json={"task_id": _d80["task_id"], "status": "done"}, headers=_h80)
+    # ② 认领：排一个任务 → 领到规格、任务转 running、节点转 busy
+    _t80 = db.create_task("smoke-node-task", "example.test", ["probe"], {"offline": True})
+    db.enqueue_task(_t80, mode="fresh", stages=["probe"], options={"offline": True})
+    _r80 = _cn80.post("/api/node/claim", json={}, headers=_h80)
+    _spec80 = _r80.get_json()["task"]
+    assert _r80.status_code == 200 and _spec80 and _spec80["task_id"] == _t80, _r80.get_json()
+    assert db.get_task(_t80)["status"] == "running"
+    assert _nodes80.get(_nid80)["status"] == "busy"
+    assert _cn80.post("/api/node/claim", json={}, headers=_h80).get_json()["task"] is None, "空队列应返回 None"
+    # ③ 心跳
+    assert _cn80.post("/api/node/heartbeat", json={"task_id": _t80, "status": "busy"}, headers=_h80).status_code == 200
+    assert _nodes80.is_online(_nodes80.get(_nid80)) is True
+    # ④ 回传：任务收终态 + 资产按**控制端 task_id** 合并（节点本地号 999 必须被改写）
+    _snap80 = {"subdomains": [{"task_id": 999, "domain": "n.example.test", "source": "node",
+                               "cname": "", "ip": "1.2.3.4", "cdn": "", "ip_note": ""}]}
+    _rr80 = _cn80.post("/api/node/result",
+                       json={"task_id": _t80, "status": "done", "assets": _snap80}, headers=_h80)
+    assert _rr80.status_code == 200 and _rr80.get_json()["ok"] is True, _rr80.get_json()
+    assert db.get_task(_t80)["status"] == "done"
+    _subs80 = db.list_subdomains(_t80)
+    assert len(_subs80) == 1 and _subs80[0]["task_id"] == _t80, _subs80
+    assert _nodes80.get(_nid80)["status"] == "idle"
+    # 变异证伪（§6.1）：若 `verify` 不看 `enabled`，吊销后仍能领 → 下面这条必红
+    _nodes80.revoke(_nid80)
+    assert _cn80.post("/api/node/claim", json={}, headers=_h80).status_code == 401, \
+        "吊销后令牌必须立刻失效"
+    print("[8c] 续80 分布式节点 ok: 令牌鉴权（无/错/吊销后一律 401）｜原子认领（任务转 running、节点 busy、空队列 None）｜"
+          "回传收终态 + 资产快照按控制端 task_id 合并（节点本地号被改写）｜节点回 idle；"
+          "变异证伪：verify 不看 enabled 即红")
+
     print("SMOKE PASS")
 
 

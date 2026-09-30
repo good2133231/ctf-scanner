@@ -8,6 +8,34 @@
 
 
 
+
+## 2026-09-30 —— 续80：**分布式执行节点**（中心控制 API + 节点回传）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 背景（roadmap）：「多个执行节点认领任务」，原设计写的是"先替换 SQLite"。真换 Postgres/MySQL
+  要引数据库驱动（违背"零第三方依赖"）、重写整个 `db.py`，还要处理多写者（现在全框架只有一个
+  **进程内** `db._WRITE_LOCK`，跨进程写同一份 SQLite 不安全）。
+- **换思路**：控制端（GUI 进程）本来就是唯一库写入者 → 让它**继续独占库**，把"共享存储"交给
+  控制端自己；节点通过 HTTP 领任务 / 报心跳 / 回传结果，在**自己机器**上跑扫描（写它**本地**库），
+  跑完把**资产快照**回传，控制端并回自己的库。于是节点是**无状态执行器**，不碰控制端的数据库。
+- 新增 `scanner/nodes.py`：节点注册表（`nodes` 表，令牌**只存 sha256**、可吊销）+ `claim`（复用
+  `db.claim_next_queued` 的原子认领）+ `NodeClient`（节点侧 HTTP 客户端，只用 requests）。
+- `scanner/db.py`：新增 `dump_task_assets()` / `import_task_assets()` —— 资产快照按**列名**合并
+  （`id` 丢弃、`task_id` 改写为控制端的），每表一次 `executemany`。
+- `gui/app.py`：新增 `POST /api/node/claim|heartbeat|result`（**令牌鉴权、不走会话**；
+  无 / 错 / 已吊销一律 401）。
+- `run_node.py`（新）：节点入口（与 `run_gui.py`/`run_devflow.py` 对称）—— **先设
+  `CTFSCANNER_DB` 再 import**（否则 db 会指到控制端的库），循环：领任务 → 本地跑 `runner.run_task`
+  → 回传资产快照 + 状态。
+- `cli/client.py`：新增 `--node-add` / `--node-list` / `--node-revoke`（令牌只在新建时打印一次）。
+- 回归 `tests/smoke.py [8c]`：令牌鉴权（无/错/吊销后 401）｜原子认领（任务转 running、节点 busy、
+  空队列 None）｜回传收终态 + 资产按控制端 `task_id` 合并（节点本地号被改写）｜变异证伪。
+- 文件：`scanner/nodes.py`（新）、`scanner/db.py`、`gui/app.py`、`run_node.py`（新）、
+  `cli/client.py`、`tests/smoke.py`、本文件。
+- 已知边界（如实标注）：① 节点用**自己本机**的 `config/settings.yaml`（控制端只下发任务入参，
+  不下发全局策略）；② 节点本地库随任务累积，**未做自动清理**；③ 节点→控制端的连通性受
+  `gui.allowed_hosts` 约束（远程节点需把控制端地址加进白名单）；④ 未做节点侧断点续跑 / 抢占回收。
 ## 2026-09-29 —— 续79：**多租户隔离**（鉴权加固收尾 ②）
 
 > 实施者：**WorkBuddy · Claude**。

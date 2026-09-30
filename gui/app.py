@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import (audit, auth as taskauth, blacklist, captcha, cdn, certs as certs_mod, db,
                      devfixture, devmode, dnsq,
-                     extdom, login_guard, queue, screenshot, toolmgr, users)
+                     extdom, login_guard, nodes, queue, screenshot, toolmgr, users)
 from scanner.config import BASE_DIR, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
@@ -685,6 +685,49 @@ def create_app():
         resp.headers["Content-Type"] = "image/png"
         resp.headers["Cache-Control"] = "no-store, max-age=0"
         return resp
+
+    # ---------- 续80：分布式节点 API（**令牌鉴权，不走会话**） ----------
+    # 节点在**别的机器**上跑，没有浏览器会话；认证靠 `X-Node-Token`（库里只存 sha256）。
+    # 这些端点**刻意不挂 `login_required`**（否则节点永远 401）；越权面由令牌 + 可吊销兜住。
+    nodes.ensure()
+
+    def _node_of_request():
+        """按 `X-Node-Token` 取节点；无 / 错 / 已吊销一律 None（调用方 401）。"""
+        return nodes.verify(request.headers.get("X-Node-Token"))
+
+    @app.route("/api/node/claim", methods=["POST"])
+    def api_node_claim():
+        """节点领任务：原子认领队首 `queued` 任务，返回执行规格（无任务则 `task=null`）。"""
+        node = _node_of_request()
+        if not node:
+            abort(401, description="节点令牌无效或已吊销")
+        return jsonify({"task": nodes.claim(int(node["id"]))})
+
+    @app.route("/api/node/heartbeat", methods=["POST"])
+    def api_node_heartbeat():
+        """节点心跳：更新 `last_seen` 与当前任务（GUI「节点」页据此判在线）。"""
+        node = _node_of_request()
+        if not node:
+            abort(401, description="节点令牌无效或已吊销")
+        body = request.get_json(silent=True) or {}
+        nodes.touch(int(node["id"]), status=str(body.get("status") or "idle")[:32],
+                    current_task=int(body.get("task_id") or 0),
+                    note=str(body.get("note") or ""))
+        return jsonify({"ok": True})
+
+    @app.route("/api/node/result", methods=["POST"])
+    def api_node_result():
+        """节点回传结果：任务收终态 + **合并资产快照**（同一个 task_id），节点置回空闲。"""
+        node = _node_of_request()
+        if not node:
+            abort(401, description="节点令牌无效或已吊销")
+        body = request.get_json(silent=True) or {}
+        counts = body.get("counts") if isinstance(body.get("counts"), dict) else {}
+        assets = body.get("assets") if isinstance(body.get("assets"), dict) else {}
+        res = nodes.finish(int(node["id"]), int(body.get("task_id") or 0),
+                           status=body.get("status") or "failed",
+                           note=str(body.get("note") or ""), counts=counts, assets=assets)
+        return jsonify(res)
 
     @app.route("/login", methods=["GET", "POST"])
     def login():

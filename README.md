@@ -141,6 +141,24 @@ py -3 run_devflow.py                  # 全流程自检：起内置靶场 → �
 
 开发模式开关在 `config/settings.yaml` 的 `dev.enabled`，打开后控制台侧栏才出现「开发模式」页。
 
+### 6.5 分布式执行节点（可选）
+
+控制端（上面起的 GUI）**继续独占数据库**；其它机器可以作为**执行节点**来领任务跑：
+
+```bash
+# ① 在控制端生成一个节点令牌（**只显示一次**，请保存）
+py -3 cli/client.py --node-add node-1
+
+# ② 在**节点机器**上（同一份代码）跑：
+py -3 run_node.py --controller http://<控制端>:5000 --token ctfsn_xxx --name node-1
+```
+
+- 节点在**自己机器**上跑扫描（写它自己的本地库 `logs/node-<名>/`），跑完把**资产快照**回传给
+  控制端合并 —— 节点拿不到控制端的库，也看不到别的任务（令牌鉴权，可随时吊销）。
+- 控制端建任务**不用**额外操作：任务照常入队，哪个节点先领到就哪个跑。
+- 远程节点要求控制端的 `gui.allowed_hosts` 含控制端地址（见 [docs/deploy-https.md](docs/deploy-https.md)）。
+- `py -3 cli/client.py --node-list` 看节点在线 / 占用；`--node-revoke <id>` 吊销令牌（立刻失效）。
+
 ### 7. 跑测试（改完代码必须做）
 
 ```bash

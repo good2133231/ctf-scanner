@@ -1101,6 +1101,56 @@ OVERLAP_EXT_WHERE = f"domain NOT IN (SELECT domain FROM subdomains WHERE {OWN_SU
 OVERLAP_SITE_WHERE = "id IN (SELECT MAX(id) FROM sites GROUP BY url)"
 
 
+# ---------- 分布式节点（续80）：任务资产快照的导出 / 导入 ----------
+# 为什么需要：节点在**自己的机器**上跑完流水线（写它自己的本地库），要把结果并回控制端的库。
+# 两端是**同一份代码、同一套 schema**，所以按**列名**匹配即可，不写死列序。
+ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "certs", "dirs", "leads", "vulns")
+
+
+def dump_task_assets(task_id):
+    """把某任务的全部资产行导出成 `{表名: [行 dict, ...]}`（节点回传用）。"""
+    out = {}
+    for t in ASSET_TABLES:
+        rows = _query(f"SELECT * FROM {t} WHERE task_id=?", (int(task_id),))
+        out[t] = [dict(r) for r in rows]
+    return out
+
+
+def import_task_assets(task_id, snapshot):
+    """把节点回传的资产快照合并进本库（同一个 `task_id`），返回 `{表名: 导入行数}`。
+
+    - 只按**列名**匹配（节点与控制端同一套 schema）；`id` 一律丢弃（本库自增）；
+      `task_id` 一律改写成控制端的 `task_id`（节点本地那个号没意义）。
+    - 每张表**一次 executemany**（单事务），避免逐行抢 `_WRITE_LOCK`。
+    - 快照里没见过的列忽略、缺的列走默认值 —— 节点版本比控制端新时也不会写坏。
+    """
+    counts = {}
+    if not isinstance(snapshot, dict):
+        return counts
+    for t in ASSET_TABLES:
+        rows = snapshot.get(t) or []
+        if not isinstance(rows, list) or not rows:
+            counts[t] = 0
+            continue
+        cols = [r["name"] for r in _query(f"PRAGMA table_info({t})") if r["name"] != "id"]
+        if "task_id" not in cols:
+            counts[t] = 0
+            continue
+        params = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            params.append(tuple(int(task_id) if c == "task_id" else row.get(c) for c in cols))
+        if not params:
+            counts[t] = 0
+            continue
+        ph = ",".join("?" for _ in cols)
+        colsql = ",".join(cols)
+        _exec(f"INSERT INTO {t} ({colsql}) VALUES ({ph})", params, many=True)
+        counts[t] = len(params)
+    return counts
+
+
 def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_params=(),
                 order=None, columns=None, owner_id=None):
     """资产分页查询，返回 (rows, total)。

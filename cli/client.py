@@ -13,6 +13,7 @@
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -206,6 +207,40 @@ def do_update_tools(args):
         sys.exit(1)
 
 
+def do_nodes(args):
+    """节点管理（续80）：新建 / 列出 / 吊销执行节点。
+
+    令牌**只在新建时显示一次**（库里只存 sha256）；丢了就吊销重建。
+    """
+    from scanner import nodes
+    if args.node_add:
+        nid, token = nodes.create(args.node_add)
+        if nid is None:
+            print(f"[!] {token}")
+            sys.exit(1)
+        print(f"[*] 已新建节点 #{nid}：{args.node_add}")
+        print("    令牌（**只显示这一次**，请立刻保存）：")
+        print(f"    {token}")
+        print("    节点端启动（在**节点机器**上跑）：")
+        print(f"      py -3 run_node.py --controller http://<控制端>:5000 "
+              f"--token {token} --name {args.node_add}")
+        return
+    if args.node_revoke:
+        nodes.revoke(args.node_revoke)
+        print(f"[*] 已吊销节点 #{args.node_revoke}（该令牌立刻失效）")
+        return
+    rows = nodes.list_all()
+    if not rows:
+        print("（还没有任何节点；用 --node-add <名> 新建）")
+        return
+    now = time.time()
+    print("ID   名称                 状态       在线  当前任务  最后心跳")
+    for r in rows:
+        on = "是" if nodes.is_online(r, now=now) else "否"
+        print(f"{r['id']:<4} {r['name']:<20} {(r['status'] or '-'):<10} "
+              f"{on}    #{r['current_task'] or 0:<8} {r['last_seen'] or '-'}")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="CTFScanner CLI —— 仅用于授权测试与 CTF 场景")
@@ -263,6 +298,13 @@ def main():
                     help="续跑**指定任务的断点**：沿用该任务已有的目标/阶段/选项与库中资产，"
                          "只重跑断点及其之后的阶段（等价 GUI 任务详情页的「续跑」按钮）。"
                          "与 -f/-t/-n/-p/--offline/--full-*/--recursive-dir/-H/--cookie 互斥")
+    # ---- 分布式节点（续80）：节点管理入口 ----
+    ap.add_argument("--node-add", metavar="NAME",
+                    help="新建一个执行节点并打印**一次性令牌**（节点端 run_node.py 用它连控制端）")
+    ap.add_argument("--node-list", action="store_true",
+                    help="列出所有节点及其在线 / 占用状态")
+    ap.add_argument("--node-revoke", type=int, metavar="ID",
+                    help="吊销节点（令牌立刻失效）")
     args = ap.parse_args()
 
     # 不给 `--update-tools` 却给了它的附属参数 → **直接报错**，不静默忽略
@@ -293,6 +335,9 @@ def main():
         return
     if args.update_tools:
         do_update_tools(args)
+        return
+    if args.node_add or args.node_list or args.node_revoke:
+        do_nodes(args)
         return
     # 续跑走独立入口：它不需要 `-f/-t`（输入来自库），也不该被下面"未提供目标"的判断拦掉。
     if args.resume_task is not None:
