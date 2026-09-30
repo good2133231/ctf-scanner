@@ -231,7 +231,13 @@ def claim(node_id):
         touch(node_id, status="idle", current_task=0)
         return None
     touch(node_id, status="busy", current_task=int(row["id"]))
-    return spec_of(row)
+    spec = spec_of(row)
+    # 续83：续跑 / 追加要把**控制端已有的资产**一起下发 —— 节点本地库是空的，
+    #   不灌进去的话 `resume` 找不到断点（会全量重跑）、`append` 会丢掉已采资产。
+    if spec["mode"] in ("resume", "append"):
+        spec["current_stage"] = str(row["current_stage"] or "")
+        spec["assets"] = db.dump_task_assets(int(row["id"]))
+    return spec
 
 
 def finish(node_id, task_id, status="done", note="", counts=None, assets=None):
@@ -253,6 +259,32 @@ def finish(node_id, task_id, status="done", note="", counts=None, assets=None):
     logger.info(f"[nodes] 节点 #{int(node_id)} 回传任务 #{int(task_id)}：{st}"
                 f"（导入 {sum(imported.values()) if imported else 0} 行资产）")
     return {"ok": True, "status": st, "imported": imported, "counts": counts or {}}
+
+
+def report_progress(task_id, stage=None, progress=None):
+    """节点心跳带上来的进度 → 更新控制端任务的 `current_stage` / `progress`（续83）。
+
+    为什么需要：节点跑任务时**写的是它自己的本地库**，控制端那条任务行的 `current_stage` /
+    `progress` 一直是认领时的样子（进度条不动、断点也不准）。节点把本地进度报回来，
+    控制台的进度条才反映真实进展。
+
+    只对**确实在跑**的任务写（`running` / `queued`）—— 避免节点迟到的心跳把已完成的任务改回去。
+    """
+    if not task_id:
+        return
+    task = db.get_task(int(task_id))
+    if not task or task["status"] not in ("running", "queued"):
+        return
+    fields = {}
+    if stage is not None:
+        fields["current_stage"] = str(stage)[:64]
+    if progress is not None:
+        try:
+            fields["progress"] = max(0, min(100, int(progress)))
+        except (TypeError, ValueError):
+            pass
+    if fields:
+        db.update_task(int(task_id), **fields)
 
 
 # ---------------- 节点端：HTTP 客户端（只用 requests，不碰控制端的库） ----------------
@@ -278,10 +310,14 @@ class NodeClient:
         resp.raise_for_status()
         return resp.json()
 
-    def heartbeat(self, task_id=0, status="idle", note=""):
-        return self._post("/api/node/heartbeat",
-                          {"name": self.name, "task_id": int(task_id or 0),
-                           "status": status, "note": note})
+    def heartbeat(self, task_id=0, status="idle", note="", stage=None, progress=None):
+        body = {"name": self.name, "task_id": int(task_id or 0),
+                "status": status, "note": note}
+        if stage is not None:
+            body["stage"] = stage
+        if progress is not None:
+            body["progress"] = progress
+        return self._post("/api/node/heartbeat", body)
 
     def claim(self):
         """领一个任务；没有返回 None。"""

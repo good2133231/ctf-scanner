@@ -1107,11 +1107,32 @@ OVERLAP_SITE_WHERE = "id IN (SELECT MAX(id) FROM sites GROUP BY url)"
 ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "certs", "dirs", "leads", "vulns")
 
 
-def dump_task_assets(task_id):
-    """把某任务的全部资产行导出成 `{表名: [行 dict, ...]}`（节点回传用）。"""
+def asset_max_ids(task_id):
+    """每张资产表的当前最大 `id`（续83）：节点"续跑/追加"前记一份，跑完**只回传增量**。
+
+    为什么要它：续跑 / 追加会**先把控制端已有的资产灌进节点本地库**再跑，若跑完把整份快照
+    回传，控制端会把同一批资产**再插一遍**（`import_task_assets` 是纯 INSERT）。
+    """
     out = {}
     for t in ASSET_TABLES:
-        rows = _query(f"SELECT * FROM {t} WHERE task_id=?", (int(task_id),))
+        row = _query(f"SELECT MAX(id) m FROM {t} WHERE task_id=?", (int(task_id),), one=True)
+        out[t] = int(row["m"] or 0) if row else 0
+    return out
+
+
+def dump_task_assets(task_id, after=None):
+    """把某任务的资产行导出成 `{表名: [行 dict, ...]}`（节点回传用）。
+
+    `after` = `{表名: id}`（来自 `asset_max_ids()`）→ 只导出 `id > after[表名]` 的行，
+    即"本次运行**新产出**的增量"（续83 续跑/追加场景，避免重复灌库）。
+    """
+    out = {}
+    for t in ASSET_TABLES:
+        sql, params = f"SELECT * FROM {t} WHERE task_id=?", [int(task_id)]
+        if isinstance(after, dict) and after.get(t):
+            sql += " AND id > ?"
+            params.append(int(after[t]))
+        rows = _query(sql, tuple(params))
         out[t] = [dict(r) for r in rows]
     return out
 

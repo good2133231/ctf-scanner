@@ -713,6 +713,9 @@ def create_app():
         nodes.touch(int(node["id"]), status=str(body.get("status") or "idle")[:32],
                     current_task=int(body.get("task_id") or 0),
                     note=str(body.get("note") or ""))
+        # 续83：节点把本地进度报回来 → 控制台进度条 / 断点才反映真实进展
+        nodes.report_progress(int(body.get("task_id") or 0),
+                              stage=body.get("stage"), progress=body.get("progress"))
         return jsonify({"ok": True})
 
     @app.route("/api/node/result", methods=["POST"])

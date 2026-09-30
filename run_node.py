@@ -52,13 +52,25 @@ def _run_one(client, task, settings, hb_interval=20.0):
     print(f"[*] 领到任务 #{tid}：{name}（阶段 {','.join(stages)}，模式 {mode}）", flush=True)
     # 在**本机库**里建一条同名任务：本地 id 无所谓，回传时按控制端的 task_id 合并
     local_tid = db.create_task(name, targets, stages, options)
+    # 续83：续跑 / 追加 —— 先把控制端下发的资产灌进**本地库**、补上断点；
+    #   否则 `resume` 在本地找不到断点（会全量重跑）、`append` 会丢掉已采资产。
+    after_ids = None
+    _seed = task.get("assets")
+    if isinstance(_seed, dict) and _seed:
+        db.import_task_assets(local_tid, _seed)
+        if task.get("current_stage"):
+            db.update_task(local_tid, current_stage=str(task["current_stage"]))
+        after_ids = db.asset_max_ids(local_tid)
     status, note, counts, assets = "done", "", {}, {}
     stop_hb = threading.Event()
 
     def _beat():
         while not stop_hb.wait(hb_interval):
             try:
-                client.heartbeat(tid, "busy")
+                _cur = db.get_task(local_tid)
+                client.heartbeat(tid, "busy",
+                                 stage=(_cur["current_stage"] if _cur else ""),
+                                 progress=(int(_cur["progress"] or 0) if _cur else 0))
             except Exception:                     # noqa: BLE001 - 心跳失败不致命
                 pass
 
@@ -68,7 +80,7 @@ def _run_one(client, task, settings, hb_interval=20.0):
                               append=(mode == "append"), resume=(mode == "resume"))
         results = getattr(ctx, "results", None) or {}
         counts = {k: len(v) for k, v in results.items() if isinstance(v, list)}
-        assets = db.dump_task_assets(local_tid)
+        assets = db.dump_task_assets(local_tid, after=after_ids)
     except Exception as exc:                      # noqa: BLE001 - 节点绝不能被单个任务拖死
         status, note = "failed", str(exc)[:200]
         print(f"[!] 任务 #{tid} 执行异常：{exc}", flush=True)

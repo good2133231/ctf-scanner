@@ -10935,6 +10935,35 @@ http:
     _ngid82 = [n["id"] for n in _nodes80.list_all() if n["name"] == "smoke-node-gui"][0]
     assert c.post(f"/api/nodes/{_ngid82}/revoke").status_code == 302
     assert int(_nodes80.get(_ngid82)["enabled"] or 0) == 0, "吊销后 enabled 必须为 0"
+    # ⑦ 断点续跑（续83）：认领 resume 时**下发资产 + 断点**；心跳把进度报回控制端
+    while True:                       # 先排空（⑤ 回收回来的任务还在队列里）
+        _d83 = _cn80.post("/api/node/claim", json={}, headers=_h80).get_json()["task"]
+        if not _d83:
+            break
+        _cn80.post("/api/node/result", json={"task_id": _d83["task_id"], "status": "done"}, headers=_h80)
+    _t83 = db.create_task("smoke-node-resume", "example.test", ["probe", "dirscan"], {"offline": True})
+    db.import_task_assets(_t83, {"subdomains": [
+        {"task_id": _t83, "domain": "seed.example.test", "source": "seed", "cname": "",
+         "ip": "1.2.3.4", "cdn": "", "ip_note": ""}]})
+    db.update_task(_t83, current_stage="probe")
+    db.enqueue_task(_t83, mode="resume", stages=["probe", "dirscan"], options={"offline": True})
+    _sp83 = _cn80.post("/api/node/claim", json={}, headers=_h80).get_json()["task"]
+    assert _sp83["mode"] == "resume" and _sp83.get("current_stage") == "probe", _sp83
+    assert [s["domain"] for s in (_sp83.get("assets") or {}).get("subdomains", [])] == \
+        ["seed.example.test"], "续跑必须把控制端已有资产一起下发（否则节点本地是空的）"
+    # 心跳带进度 → 控制端任务的 current_stage / progress 更新
+    _cn80.post("/api/node/heartbeat", json={"task_id": _t83, "status": "busy",
+                                            "stage": "dirscan", "progress": 66}, headers=_h80)
+    assert db.get_task(_t83)["current_stage"] == "dirscan"
+    assert int(db.get_task(_t83)["progress"] or 0) == 66
+    # 增量回传：只导 `id > after` 的行（否则续跑会把已有资产重复插一遍）
+    _after83 = db.asset_max_ids(_t83)
+    db.import_task_assets(_t83, {"subdomains": [
+        {"task_id": _t83, "domain": "new83.example.test", "source": "run", "cname": "",
+         "ip": "5.6.7.8", "cdn": "", "ip_note": ""}]})
+    _d83 = db.dump_task_assets(_t83, after=_after83)
+    assert [s["domain"] for s in _d83["subdomains"]] == ["new83.example.test"], _d83["subdomains"]
+    _cn80.post("/api/node/result", json={"task_id": _t83, "status": "done"}, headers=_h80)
     _nodes80.revoke(_nid80)
     assert _cn80.post("/api/node/claim", json={}, headers=_h80).status_code == 401, \
         "吊销后令牌必须立刻失效"

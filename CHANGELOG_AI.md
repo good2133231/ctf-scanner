@@ -11,6 +11,27 @@
 
 
 
+
+## 2026-09-30 —— 续83：**节点侧断点续跑**（认领下发资产 + 进度回传）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 缺陷：续80 的节点只会"从头跑"。`resume` / `append` 任务被节点领走时，节点本地库是**空的** ——
+  `resume` 找不到断点（会**全量重跑**）、`append` 会**丢掉已采资产**；而且节点跑任务写的是它
+  自己的本地库，**控制端那条任务行的进度 / 断点一直不动**（进度条是死的）。
+- 改法：
+  ① **认领 `resume` / `append` 时下发资产快照 + 断点**（`nodes.claim` → `spec["assets"]` /
+     `spec["current_stage"]`，来自 `db.dump_task_assets`）；节点侧 `run_node._run_one` 先把快照
+     `db.import_task_assets` 灌进本地库、补上 `current_stage`，再跑 `resume=True` / `append=True`。
+  ② **只回传增量**：`db.asset_max_ids()` 记跑之前每表的最大 id，跑完 `db.dump_task_assets(after=...)`
+     只导 `id > after` 的行 —— 否则续跑会把刚灌进去的资产**再插一遍**（`import_task_assets` 是纯 INSERT）。
+  ③ **进度回传**：节点心跳带上本地任务的 `current_stage` / `progress`，控制端 `nodes.report_progress()`
+     写回任务行（只对 `running` / `queued` 写）—— 控制台进度条这才反映真实进展。
+- 回归 `tests/smoke.py [8c]⑦`：`resume` 认领带 `assets` + `current_stage`｜心跳带进度 → 任务行更新｜
+  增量导出只含新行。
+- 文件：`scanner/db.py`、`scanner/nodes.py`、`gui/app.py`、`run_node.py`、`tests/smoke.py`、本文件。
+- 已知边界：**掉线节点丢失的部分资产找不回来**（节点只在跑完时整体回传一次）—— 跨节点续跑只能从
+  "控制端最后一次快照"接着跑，**不是**从节点死前的最后一秒。
 ## 2026-09-30 —— 续82：**执行节点 GUI 页**（管理员）
 
 > 实施者：**WorkBuddy · Claude**。
