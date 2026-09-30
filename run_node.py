@@ -24,6 +24,7 @@ import os
 import re
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -37,8 +38,12 @@ def _safe(name):
     return s or "node"
 
 
-def _run_one(client, task, settings):
-    """跑一个领到的任务并回传（异常一律收成 failed 回传，不让节点挂掉）。"""
+def _run_one(client, task, settings, hb_interval=20.0):
+    """跑一个领到的任务并回传（异常一律收成 failed 回传，不让节点挂掉）。
+
+    跑之前起一个**运行期心跳**线程（续81）：节点跑任务时不走空闲循环、不发心跳，控制端会按
+    `nodes.ONLINE_WINDOW` 把它当掉线并**误回收**这条任务（见 `nodes.reclaim_stale`）。
+    """
     from scanner import db, runner
     tid = int(task["task_id"])
     name, targets = task["name"], task["targets"]
@@ -48,6 +53,16 @@ def _run_one(client, task, settings):
     # 在**本机库**里建一条同名任务：本地 id 无所谓，回传时按控制端的 task_id 合并
     local_tid = db.create_task(name, targets, stages, options)
     status, note, counts, assets = "done", "", {}, {}
+    stop_hb = threading.Event()
+
+    def _beat():
+        while not stop_hb.wait(hb_interval):
+            try:
+                client.heartbeat(tid, "busy")
+            except Exception:                     # noqa: BLE001 - 心跳失败不致命
+                pass
+
+    threading.Thread(target=_beat, daemon=True).start()
     try:
         ctx = runner.run_task(local_tid, name, targets, stages, options, settings,
                               append=(mode == "append"), resume=(mode == "resume"))
@@ -57,6 +72,8 @@ def _run_one(client, task, settings):
     except Exception as exc:                      # noqa: BLE001 - 节点绝不能被单个任务拖死
         status, note = "failed", str(exc)[:200]
         print(f"[!] 任务 #{tid} 执行异常：{exc}", flush=True)
+    finally:
+        stop_hb.set()
     try:
         res = client.result(tid, status, note=note, counts=counts, assets=assets)
         n = sum((res.get("imported") or {}).values()) if isinstance(res, dict) else 0

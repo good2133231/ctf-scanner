@@ -9,6 +9,24 @@
 
 
 
+
+## 2026-09-30 —— 续81：**节点离线任务回收**（掉线节点的任务重新入队）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 缺陷：续80 的节点认领后任务转 `running`；节点要是死了（掉电 / 被杀 / 断网），那条任务就
+  **永远停在 `running`**，谁也领不到（本地进程有 `db.reconcile_orphan_tasks` 兜底，节点没有）。
+- 改法：`scanner/nodes.py` 新增 `reclaim_stale()` —— 心跳超时（`last_seen` 超出 `ONLINE_WINDOW`）
+  且 `current_task` 还挂着的节点，把它名下的 `running` 任务**重新入队**（模式规则同
+  `db.reconcile_orphan_tasks`：原 resume→resume、append→append、fresh 有断点→resume、否则 fresh），
+  并把该节点标 `offline` + 清 `current_task`；`claim()` **每次认领前**先跑一遍
+  （回收失败绝不挡住认领）。**从未连过**的节点（`last_seen` 空）不算掉线。
+- ⚠️ **配套前提**：节点跑任务期间**必须发心跳**，否则一条跑很久的任务会被当掉线而**误回收** ——
+  所以 `run_node.py` 的 `_run_one()` 起了**运行期心跳线程**（默认 20s 一次，任务结束即停）。
+- 回归 `tests/smoke.py [8c]⑤`：在线节点不回收｜掉线节点回收（任务回 `queued`、节点 `offline`、
+  `current_task` 清零）｜从未连过的节点不回收。
+- 文件：`scanner/nodes.py`、`run_node.py`、`tests/smoke.py`、本文件。
+- 仍未做：**节点侧断点续跑**（需要控制端把已有资产下发到节点，属独立一轮）。
 ## 2026-09-30 —— 续80：**分布式执行节点**（中心控制 API + 节点回传）
 
 > 实施者：**WorkBuddy · Claude**。

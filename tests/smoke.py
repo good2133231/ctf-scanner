@@ -10909,6 +10909,21 @@ http:
     assert len(_subs80) == 1 and _subs80[0]["task_id"] == _t80, _subs80
     assert _nodes80.get(_nid80)["status"] == "idle"
     # 变异证伪（§6.1）：若 `verify` 不看 `enabled`，吊销后仍能领 → 下面这条必红
+    # ⑤ 离线回收（续81）：节点掉线后，它名下的 running 任务必须**重新入队**（否则永远卡 running）
+    _t81 = db.create_task("smoke-node-stale", "example.test", ["probe"], {"offline": True})
+    db.enqueue_task(_t81, mode="fresh", stages=["probe"], options={"offline": True})
+    assert _cn80.post("/api/node/claim", json={}, headers=_h80).get_json()["task"]["task_id"] == _t81
+    assert db.get_task(_t81)["status"] == "running"
+    # 还"在线"（当前时间）→ 不回收
+    assert _nodes80.reclaim_stale(now=time.time()) == [], "在线节点的任务不该被回收"
+    assert db.get_task(_t81)["status"] == "running"
+    # 心跳超时（远期 now）→ 回收：任务回 queued、节点转 offline、current_task 清零
+    assert _nodes80.reclaim_stale(now=time.time() + 1000) == [_t81], "掉线节点的任务必须被回收"
+    assert db.get_task(_t81)["status"] == "queued"
+    _n81 = _nodes80.get(_nid80)
+    assert _n81["status"] == "offline" and int(_n81["current_task"] or 0) == 0
+    # 从未连过的节点（last_seen 空）不该被回收
+    assert _nodes80.reclaim_stale(now=time.time() + 1000) == []
     _nodes80.revoke(_nid80)
     assert _cn80.post("/api/node/claim", json={}, headers=_h80).status_code == 401, \
         "吊销后令牌必须立刻失效"

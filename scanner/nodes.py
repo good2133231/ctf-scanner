@@ -39,6 +39,8 @@ logger = get_logger("nodes")
 ONLINE_WINDOW = 90
 # 令牌前缀：便于在配置/日志里一眼认出，也方便泄漏时全仓搜索
 TOKEN_PREFIX = "ctfsn_"
+# 队列运行模式（与 db._QUEUE_MODES 同口径；这里复制一份避免 nodes→db 的反向依赖细节）
+_QUEUE_MODES = ("fresh", "append", "resume")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes (
@@ -167,6 +169,52 @@ def spec_of(row):
             "stages": [str(s) for s in stages], "options": options, "mode": mode}
 
 
+def _mark_offline(node_id, note=""):
+    """把节点标成离线并**清掉它的 current_task**（不碰 `last_seen` —— 那会把它又算成在线）。"""
+    db._exec("UPDATE nodes SET status='offline', current_task=0, note=? WHERE id=?",
+             (str(note)[:200], int(node_id)))
+
+
+def reclaim_stale(now=None):
+    """把**掉线节点**正在跑的任务重新入队，返回被回收的任务号列表（续81）。
+
+    为什么要它：节点认领后任务转 `running`；节点要是死了（掉电 / 被杀 / 断网），那条任务
+    就**永远停在 running**，谁也领不到。本函数在**每次认领前**跑一遍（`claim()` 调），
+    把"心跳超时 + 还挂着任务"的节点名下的任务重新入队。
+
+    ⚠️ **前提是节点在跑任务期间也发心跳**（`run_node.py` 有运行期心跳线程）——
+    否则一条跑很久的任务会被当成掉线而**误回收**。
+
+    重新入队的模式规则与 `db.reconcile_orphan_tasks` 一致：
+    原 `resume`→`resume`、原 `append`→`append`、原 `fresh` 且有断点→`resume`、否则 `fresh`。
+    """
+    now = now if now is not None else time.time()
+    out = []
+    for row in list_all():
+        if not int(row["enabled"] or 0):
+            continue
+        if not str(row["last_seen"] or ""):
+            continue                       # 从未连过 → 没有"它正在跑"这回事
+        if is_online(row, now=now):
+            continue
+        tid = int(row["current_task"] or 0)
+        if not tid:
+            _mark_offline(int(row["id"]), "心跳超时")
+            continue
+        task = db.get_task(tid)
+        if task and task["status"] == "running":
+            mode = str(task["run_mode"] or "fresh").strip().lower()
+            if mode not in _QUEUE_MODES:
+                mode = "fresh"
+            if mode == "fresh" and str(task["current_stage"] or "").strip():
+                mode = "resume"
+            db.enqueue_task(tid, mode=mode)
+            out.append(tid)
+            logger.warning(f"[nodes] 节点 #{row['id']} 掉线，任务 #{tid} 已重新入队（{mode}）")
+        _mark_offline(int(row["id"]), f"心跳超时，已回收任务 #{tid}")
+    return out
+
+
 def claim(node_id):
     """节点认领下一个排队任务；没有就返回 `None`。
 
@@ -174,6 +222,10 @@ def claim(node_id):
     多个节点同时来领，只有一个拿得到同一条任务。
     """
     ensure()
+    try:
+        reclaim_stale()                # 认领前先收掉掉线节点的任务（续81）
+    except Exception as exc:           # noqa: BLE001 - 回收失败绝不能挡住认领
+        logger.warning(f"[nodes] 回收掉线任务失败（不影响认领）：{exc}")
     row = db.claim_next_queued()
     if row is None:
         touch(node_id, status="idle", current_task=0)
