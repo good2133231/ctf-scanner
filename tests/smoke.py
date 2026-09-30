@@ -6988,7 +6988,7 @@ http:
     assert _cs.get("/tasks").status_code == 200, "改完密就能正常用"
 
     # 5) **核心断言**：子用户看不到配置 —— 路由层硬挡（不是只藏侧边栏）
-    for _p7h in ("/settings", "/pocs", "/users"):
+    for _p7h in ("/settings", "/pocs", "/users", "/nodes"):
         assert _cs.get(_p7h).status_code == 403, (_p7h, _cs.get(_p7h).status_code)
     # 写操作同样挡：改策略 / 启停 POC / 建账号 —— 这些比只读更要命
     assert _cs.post("/settings", data={"host": "127.0.0.1", "port": 5000}).status_code == 403
@@ -10924,6 +10924,17 @@ http:
     assert _n81["status"] == "offline" and int(_n81["current_task"] or 0) == 0
     # 从未连过的节点（last_seen 空）不该被回收
     assert _nodes80.reclaim_stale(now=time.time() + 1000) == []
+    # ⑥ GUI「节点」页（续82）：管理员可见 + 建 / 吊销；新建必须回显**一次性令牌**
+    _np82 = c.get("/nodes")
+    assert _np82.status_code == 200, _np82.status_code
+    _nphtml82 = _np82.get_data(as_text=True)
+    assert 'href="/nodes"' in _nphtml82 and "api/nodes/create" in _nphtml82
+    _nc82 = c.post("/api/nodes/create", data={"name": "smoke-node-gui"})
+    assert _nc82.status_code == 200 and "ctfsn_" in _nc82.get_data(as_text=True), \
+        "新建节点必须回显一次性令牌（库里只有 sha256）"
+    _ngid82 = [n["id"] for n in _nodes80.list_all() if n["name"] == "smoke-node-gui"][0]
+    assert c.post(f"/api/nodes/{_ngid82}/revoke").status_code == 302
+    assert int(_nodes80.get(_ngid82)["enabled"] or 0) == 0, "吊销后 enabled 必须为 0"
     _nodes80.revoke(_nid80)
     assert _cn80.post("/api/node/claim", json={}, headers=_h80).status_code == 401, \
         "吊销后令牌必须立刻失效"

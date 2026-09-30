@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}执行节点{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+{% if new_token %}
+<section class="panel">
+  <h2>节点令牌（<b>只显示这一次</b>）</h2>
+  <p class="muted">请立刻复制保存 —— 库里只存它的 <b>sha256</b>，之后<b>再也拿不回来</b>
+    （丢了就吊销重建）。</p>
+  <p><code>{{ new_token }}</code></p>
+  <p class="muted small">节点端启动（在<b>节点机器</b>上跑同一份代码）：
+    <code>py -3 run_node.py --controller {{ request.host_url }} --token {{ new_token }} --name {{ new_name }}</code></p>
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>执行节点（{{ rows|length }} 个）</h2>
+  <p class="muted">
+    控制端<b>独占数据库</b>；节点在<b>别的机器</b>上通过 HTTP 领任务，跑完把资产快照回传合并 ——
+    节点拿不到本机的库，也看不到别的任务。心跳超时的节点，它名下的任务会被<b>自动重新入队</b>。
+  </p>
+  <table id="tbl-nodes">
+    <thead><tr><th>#</th><th>名称</th><th>状态</th><th>在线</th><th>当前任务</th>
+      <th>最后心跳</th><th>备注</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for n in rows %}
+      <tr>
+        <td>{{ n.id }}</td>
+        <td>{{ n.name }}</td>
+        <td>{% if not n.enabled %}<span class="muted">已吊销</span>
+            {% else %}{{ n.status or '空闲' }}{% endif %}</td>
+        <td>{% if n.online %}<span class="sev sev-low">在线</span>
+            {% else %}<span class="muted">离线</span>{% endif %}</td>
+        <td>{% if n.current_task %}
+              <a href="{{ url_for('task_detail', task_id=n.current_task) }}">#{{ n.current_task }}</a>
+            {% else %}-{% endif %}</td>
+        <td class="muted">{{ n.last_seen or '-' }}</td>
+        <td class="muted small">{{ n.note or '-' }}</td>
+        <td>
+          {% if n.enabled %}
+          <form method="post" style="display:inline;margin:0"
+                action="{{ url_for('api_node_revoke', node_id=n.id) }}">
+            <button type="submit" class="btn-mini danger"
+                    onclick="return confirm('吊销节点 {{ n.name }}？该令牌立刻失效。')">吊销</button>
+          </form>
+          {% else %}<span class="muted">-</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if not rows %}<p class="muted">（还没有节点：在下面新建一个，把令牌填到节点端的
+    <code>run_node.py</code>）</p>{% endif %}
+</section>
+
+<section class="panel">
+  <h2>新建节点</h2>
+  <form method="post" class="row" action="{{ url_for('api_node_create') }}">
+    <label>节点名 <input name="name" placeholder="如 node-1（不含空白与斜杠）" required></label>
+    <button type="submit">新建并生成令牌</button>
+  </form>
+  <p class="muted small">
+    令牌只在创建时显示一次；节点端用 <code>--controller</code> 指向本控制台地址即可领任务。
+    远程节点要求 <code>gui.allowed_hosts</code> 里含控制端地址（见 docs/deploy-https.md）。
+  </p>
+</section>
+{% endblock %}

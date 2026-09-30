@@ -10,6 +10,20 @@
 
 
 
+
+## 2026-09-30 —— 续82：**执行节点 GUI 页**（管理员）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 背景：续80/81 的节点管理只有 CLI（`--node-add` / `--node-list` / `--node-revoke`），控制台上看不到。
+- 新增 `gui/templates/nodes.html` + 三个路由（`/nodes`、`/api/nodes/create`、
+  `/api/nodes/<id>/revoke`，均 `login_required + admin_required`）：列出节点（状态 / 在线 /
+  当前任务 / 最后心跳 / 备注）+ 新建 + 吊销；侧栏新增「执行节点」入口（`admin_only`）。
+  **令牌只显示一次** → 新建后**直接渲染回显**、不重定向（重定向一次令牌就永久丢了，只能吊销重建）。
+- 回归 `tests/smoke.py [8c]⑥`：管理员 `/nodes` 200 且含入口与建表单｜新建回显 `ctfsn_` 令牌｜
+  吊销后 `enabled=0`。子用户 `/nodes` 403（并入 `[7h]` 的 403 列表）。
+- 文件：`gui/templates/nodes.html`（新）、`gui/app.py`、`gui/templates/base.html`、
+  `tests/smoke.py`、本文件。
 ## 2026-09-30 —— 续81：**节点离线任务回收**（掉线节点的任务重新入队）
 
 > 实施者：**WorkBuddy · Claude**。

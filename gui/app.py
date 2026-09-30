@@ -975,6 +975,44 @@ def create_app():
         return render_template("profile.html", me=me, error=error, ok=ok,
                                must_change=bool(me and me["must_change"]))
 
+    # ---------- 续82：执行节点页（管理员） ----------
+
+    def _nodes_page(error="", new_token="", new_name=""):
+        rows = []
+        for r in nodes.list_all():
+            d = dict(r)
+            d["online"] = bool(int(r["enabled"] or 0)) and nodes.is_online(r)
+            rows.append(d)
+        return render_template("nodes.html", rows=rows, error=error,
+                               new_token=new_token, new_name=new_name)
+
+    @app.route("/nodes")
+    @login_required
+    @admin_required
+    def nodes_page():
+        return _nodes_page()
+
+    @app.route("/api/nodes/create", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_node_create():
+        """新建节点。令牌**只在这里显示一次**（库里只存 sha256）→ 直接渲染、不重定向，
+        否则刷新/跳转一次令牌就永久丢了（只能吊销重建）。"""
+        name = (request.form.get("name") or "").strip()
+        nid, token = nodes.create(name)
+        if nid is None:
+            return _nodes_page(error=token)
+        _audit(audit.KIND_ACCOUNT, target=name, detail=f"新建执行节点 #{nid}")
+        return _nodes_page(new_token=token, new_name=name)
+
+    @app.route("/api/nodes/<int:node_id>/revoke", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_node_revoke(node_id):
+        nodes.revoke(node_id)
+        _audit(audit.KIND_ACCOUNT, target=str(node_id), detail=f"吊销执行节点 #{node_id}")
+        return redirect(url_for("nodes_page"))
+
     # ---------- 仪表盘 ----------
 
     @app.route("/")
