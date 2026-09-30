@@ -1395,8 +1395,12 @@ _VULN_SORT = {
     "task": "task_id",
     "severity": ("CASE severity WHEN 'critical' THEN 5 WHEN 'high' THEN 4 "
                  "WHEN 'medium' THEN 3 WHEN 'low' THEN 2 WHEN 'info' THEN 1 ELSE 0 END"),
+    # 续85 补齐：名称 / 目标 / 发现时间（此前只有上面 3 列，名称与目标列点了没反应）
+    "name": "name",
+    "target": "target",
+    "time": "created_at",       # 文本时间戳 `YYYY-MM-DD HH:MM:SS`，字典序 = 时间序
 }
-VULN_SORT_KEYS = ("id", "task", "severity")   # 供 GUI 校验 / 模板高亮（顺序 = 页面列序）
+VULN_SORT_KEYS = ("id", "task", "severity", "name", "target", "time")   # 供 GUI 校验 / 模板高亮
 VULN_SORT_DEFAULT = "id"
 
 # 关键字 `q` 参与匹配的文本列（按 `vulns` 表实际列名：name=名称/标题、target=目标 URL、

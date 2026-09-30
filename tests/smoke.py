@@ -8229,6 +8229,25 @@ http:
     assert db.norm_vuln_sort("; DROP TABLE vulns") == "id" and db.norm_vuln_sort(None) == "id", \
         "非法 / 空 sort 必须回落白名单默认（id）"
 
+    # ④b 续85：名称 / 目标 / 时间 也可排序（此前白名单只有 id/task/severity，名称与目标点了没反应）
+    assert db.VULN_SORT_KEYS == ("id", "task", "severity", "name", "target", "time"), db.VULN_SORT_KEYS
+    assert (db.norm_vuln_sort("name") == "name" and db.norm_vuln_sort("target") == "target"
+            and db.norm_vuln_sort("time") == "time"), "新白名单键必须被承认"
+    _nrows7m, _ = db.page_vulns(limit=600, offset=0, task_id=_tid7m, sort="name", desc=False)
+    _names7m = [str(r["name"] or "") for r in _nrows7m]
+    assert _names7m == sorted(_names7m), "按名称升序必须真的有序"
+    _trows7m, _ = db.page_vulns(limit=600, offset=0, task_id=_tid7m, sort="time", desc=True)
+    _ts7m = [str(r["created_at"] or "") for r in _trows7m]
+    assert _ts7m == sorted(_ts7m, reverse=True), "按时间降序必须真的有序"
+    # 变异证伪（§6.1）：把 name 从白名单摘掉 → `norm_vuln_sort("name")` 必须回落 id
+    _real_sort7m_b = dict(db._VULN_SORT)
+    db._VULN_SORT.pop("name")
+    try:
+        assert db.norm_vuln_sort("name") == "id", "摘掉白名单键后应回落 id（证明排序真的走白名单）"
+    finally:
+        db._VULN_SORT.clear()
+        db._VULN_SORT.update(_real_sort7m_b)
+
     # ⑤ 非法输入不炸 / 不注入（db 层）
     _before5_7m = db._query("SELECT COUNT(*) c FROM vulns", one=True)["c"]
     for _kw5_7m in ({"sort": "; DROP TABLE vulns"}, {"sort": "bogus"}, {"desc": "abc"},

@@ -22,7 +22,7 @@
       逐表单 **CSRF token 为刻意不做**（`Origin`/`Referer` 中间件已一次性覆盖）。
 - [~] **nuclei / POC 引擎**：缺 oob 反连、flow 超脚本子集的真 JS 语义、块级/顶层 `dsl`、
       workflow `args:`（一律标 `unsupported`，不静默失效）。
-- [x] 但含残留：漏洞页排序只 3 列；工具版本管理无回滚/多版本/新版本提示；devmode 只跑本地靶场、
+- [x] 但含残留：工具版本管理无回滚/多版本/新版本提示；devmode 只跑本地靶场、
       无耗时基线；CLI 无队列；Linux 未验 subfinder/puredns/httpx 与 PDF；自检截图向量恒 N-A；
       osint 黑 ico 与「单 IP 域名数 30」两阈值未用真实数据校准。
 

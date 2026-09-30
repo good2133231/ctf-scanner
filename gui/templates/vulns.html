@@ -75,8 +75,12 @@
       <th><a href="{{ url_for('vulns', **dict(col_args, sort='severity', desc=('0' if (sort == 'severity' and desc) else '1'))) }}"
              title="按级别排序（critical → info）">级别
         {%- if sort == 'severity' %} {{ '▼' if desc else '▲' }}{% endif %}</a></th>
-      <th>名称</th><th>检查/POC</th>
-      <th>目标</th><th>复核</th><th>详情</th></tr></thead>
+      <th><a href="{{ url_for('vulns', **dict(col_args, sort='name', desc=('0' if (sort == 'name' and desc) else '1'))) }}"
+             title="按名称排序">名称{% if sort == 'name' %} {{ '▼' if desc else '▲' }}{% endif %}</a></th>
+      <th>检查/POC</th>
+      <th><a href="{{ url_for('vulns', **dict(col_args, sort='target', desc=('0' if (sort == 'target' and desc) else '1'))) }}"
+             title="按目标排序">目标{% if sort == 'target' %} {{ '▼' if desc else '▲' }}{% endif %}</a></th>
+      <th>复核</th><th>详情</th></tr></thead>
     <tbody>
     {% for v in vulns %}
       <tr data-review="{{ v.review or 'pending' }}">

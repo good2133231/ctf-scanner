@@ -13,6 +13,21 @@
 
 
 
+
+## 2026-09-30 —— 续85：**漏洞页排序补齐名称 / 目标 / 时间**
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 缺陷（**实测确认**）：`db._VULN_SORT` 白名单只有 **3 列**（ID / 任务 / 级别）—— `/vulns` 页上
+  「名称」「目标」两列**点了没反应**（它们是纯 `<th>`），而 `?sort=name` 会被 `norm_vuln_sort`
+  **静默回落成 `id`**（看着像"排了"，其实按 ID 排）—— 比报错更误导。
+- 改法：`_VULN_SORT` 补 `name` / `target` / `time`（`time` → `created_at`，文本时间戳字典序＝时间序），
+  `VULN_SORT_KEYS` 同步扩到 6 列；`vulns.html` 的「名称」「目标」表头改成**可点击排序**（带 ▲/▼）。
+- 回归 `tests/smoke.py [7m]④b`：白名单键集合断言｜按名称升序 / 按时间降序**真的有序**｜
+  **变异证伪**：把 `name` 从白名单摘掉 → `norm_vuln_sort("name")` 必须回落 `id`。
+- 顺带更正过期记录：`docs/roadmap.md` 该条「仍未做：只 3 列」→ 已完成；`TODO.md` 同步。
+- 文件：`scanner/db.py`、`gui/templates/vulns.html`、`tests/smoke.py`、`docs/roadmap.md`、
+  `TODO.md`、本文件。
 ## 2026-09-30 —— 续84：**`base_domain` 入参先归一**（补 IDN 多段后缀的 Unicode 缺口）
 
 > 实施者：**WorkBuddy · Claude**。
