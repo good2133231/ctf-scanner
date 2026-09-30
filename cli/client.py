@@ -207,6 +207,32 @@ def do_update_tools(args):
         sys.exit(1)
 
 
+def do_rollback(args):
+    """`--rollback <工具>`：把工具回滚到**上一次安装前**的版本（续86）。
+
+    备份是 `install()` 在原子替换前写的 `<可执行名>.bak`；回滚是**对调**（可逆）。
+    """
+    from scanner import toolmgr
+    names = [t.strip() for t in (args.rollback or []) if t.strip()]
+    unknown = [t for t in names if t not in toolmgr.TOOLS]
+    if unknown:
+        print(f"[!] 不支持的工具：{','.join(unknown)}（可选：{'、'.join(toolmgr.TOOLS)}）")
+        sys.exit(1)
+    bad = 0
+    for name in names:
+        r = toolmgr.rollback(name)
+        if not r.get("ok"):
+            bad += 1
+            print(f"  {name:<10} 回滚失败：{r.get('reason') or '未知原因'}")
+            continue
+        print(f"  {name:<10} 已回滚 → {r['path']}")
+        if r.get("reason"):
+            print(f"     注意：{r['reason']}")
+    if bad:
+        print(f"[!] {bad} 个工具未能回滚（原因见上）")
+        sys.exit(1)
+
+
 def do_nodes(args):
     """节点管理（续80）：新建 / 列出 / 吊销执行节点。
 
@@ -305,6 +331,9 @@ def main():
                     help="列出所有节点及其在线 / 占用状态")
     ap.add_argument("--node-revoke", type=int, metavar="ID",
                     help="吊销节点（令牌立刻失效）")
+    # ---- 工具版本回滚（续86）----
+    ap.add_argument("--rollback", action="append", default=None, metavar="NAME",
+                    help="把工具回滚到上一次安装前的版本（可重复；备份是 install 时写的 .bak）")
     args = ap.parse_args()
 
     # 不给 `--update-tools` 却给了它的附属参数 → **直接报错**，不静默忽略
@@ -338,6 +367,9 @@ def main():
         return
     if args.node_add or args.node_list or args.node_revoke:
         do_nodes(args)
+        return
+    if args.rollback:
+        do_rollback(args)
         return
     # 续跑走独立入口：它不需要 `-f/-t`（输入来自库），也不该被下面"未提供目标"的判断拦掉。
     if args.resume_task is not None:

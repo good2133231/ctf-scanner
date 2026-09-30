@@ -348,12 +348,21 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
         return out
     dest = Path(dest_dir) if dest_dir else (_BASE_DIR / DEFAULT_DEST)
     tmp = dest / (binary + ".part")
+    target = dest / binary
     try:
         dest.mkdir(parents=True, exist_ok=True)
+        # 续86：装新的之前把**当前版本**留一份备份（`<名>.bak`），供 `rollback()` 回滚。
+        # 备份失败**不阻断安装**（安装是主诉求），但如实记进结果（页面可据此说明"不可回滚"）。
+        if target.exists():
+            try:
+                (dest / (binary + ".bak")).write_bytes(target.read_bytes())
+                out["backed_up"] = True
+            except Exception:
+                out["backed_up"] = False
         tmp.write_bytes(payload)
         if os.name != "nt":
             os.chmod(tmp, 0o755)
-        os.replace(tmp, dest / binary)          # 原子替换：要么旧的、要么完整的新的
+        os.replace(tmp, target)                 # 原子替换：要么旧的、要么完整的新的
     except Exception as e:
         try:
             tmp.unlink()
@@ -369,6 +378,59 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
         if not ok:
             out["reason"] = (f"已安装到 {out['path']}，但写回 config/settings.yaml 失败：{note}"
                              "（请手动把 tools.%s 填成该路径）" % tool)
+    return out
+
+
+def backup_path(tool, dest_dir=None):
+    """工具备份文件路径（`<可执行名>.bak`）；`install()` 替换前会写它（续86）。"""
+    dest = Path(dest_dir) if dest_dir else (_BASE_DIR / DEFAULT_DEST)
+    return dest / (binary_name(tool) + ".bak")
+
+
+def can_rollback(tool, dest_dir=None):
+    """该工具是否有可回滚的备份（GUI 据此决定要不要显示「回滚」按钮）。"""
+    return tool in TOOLS and backup_path(tool, dest_dir).exists()
+
+
+def rollback(tool, dest_dir=None, wire=True, settings_path=None):
+    """把工具回滚到**上一次安装前**的版本（续86），返回结果字典（**永不抛异常**）。
+
+    `install()` 在原子替换前会把旧二进制另存为 `<名>.bak`；本函数把当前版与备份**对调** ——
+    所以再点一次就换回去（回滚是**可逆**的，不是"一次性的撤销"）。
+    没有备份（从未装过 / 首次安装 / 备份时失败）→ `ok=False` + 原因。
+    """
+    out = {"tool": tool, "ok": False, "path": "", "reason": ""}
+    if tool not in TOOLS:
+        out["reason"] = f"不支持的工具（可选：{'、'.join(TOOLS)}）"
+        return out
+    binary = binary_name(tool)
+    dest = Path(dest_dir) if dest_dir else (_BASE_DIR / DEFAULT_DEST)
+    target = dest / binary
+    bak = backup_path(tool, dest_dir)          # 单一来源：与 can_rollback 同一处
+    if not bak.exists():
+        out["reason"] = "没有可回滚的备份（只保留**上一次**安装前的版本）"
+        return out
+    if not target.exists():
+        out["reason"] = "当前没有已安装的可执行文件（只有备份）"
+        return out
+    try:
+        # 三步对调（每步都是同目录内的原子 rename）：cur → .swap、bak → cur、.swap → bak
+        swap = dest / (binary + ".swap")
+        os.replace(target, swap)
+        os.replace(bak, target)
+        os.replace(swap, bak)
+        if os.name != "nt":
+            os.chmod(target, 0o755)
+    except Exception as e:
+        out["reason"] = f"回滚失败：{e}"
+        return out
+    out["ok"] = True
+    out["path"] = _setting_value(target)
+    if wire:
+        ok, note = patch_settings_tool(tool, out["path"], path=settings_path)
+        out["wired"] = ok
+        if not ok:
+            out["reason"] = f"已回滚到 {out['path']}，但写回 config/settings.yaml 失败：{note}"
     return out
 
 

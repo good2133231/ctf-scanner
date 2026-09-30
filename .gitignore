@@ -35,3 +35,7 @@ tools/fscan/
 # 以为"换个 token 放进去就能推"）。扫描器查询 GitHub 用的**只读** token 在
 # config/keys.yaml 的 github.token。保留这条忽略规则，只为万一有 token 落进项目根也不被提交。
 github.txt
+# 一键安装的外部工具落点（subfinder / httpx / puredns）：二进制、`.bak` 回滚备份、`.part` 临时件
+# 一律不入库（`tools/scanner/README.md` 是仓库自带说明，用 `!` 放行）。
+tools/scanner/*
+!tools/scanner/README.md

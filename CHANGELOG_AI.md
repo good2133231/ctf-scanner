@@ -14,6 +14,27 @@
 
 
 
+
+## 2026-09-30 —— 续86：**工具版本回滚**（装新版前留备份，可一键换回）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 缺陷（**实测确认**）：`toolmgr.install()` 用 `os.replace(tmp, dest/binary)` **原子替换** ——
+  旧的二进制**当场没了**，装到一个有问题的版本就只能重新联网装回去（或手改配置）。
+  `toolmgr` 里 `rollback` / `versions` / `previous` **一个都没有**。
+- 改法：
+  - `install()` 替换前把**当前版本**另存为 `<可执行名>.bak`（备份失败**不阻断安装**，
+    但记进结果 `backed_up`）；
+  - 新增 `rollback()` —— 把当前版与备份**对调**（三步同目录 rename），所以**可逆**（再点一次换回去）；
+  - 新增 `backup_path()` / `can_rollback()`（GUI 据此决定要不要显示「回滚」按钮）；
+  - CLI 新增 `--rollback <工具>`（可重复）。
+- 顺带：`.gitignore` 补 `tools/scanner/*`（`!tools/scanner/README.md` 放行）—— 一键装的**二进制**
+  与 `.bak` 此前**不在忽略列表**里，误提交一个 20MB 二进制进仓库是迟早的事。
+- 回归 `tests/smoke.py [7p]⑧`：装第 2 版 → `.bak` 里是第 1 版｜回滚换回第 1 版且备份变第 2 版｜
+  再回滚又换回去（可逆）｜无备份时 `ok=False` 不抛｜**变异证伪**：把备份路径指到别处 →
+  `can_rollback` 必须为 False。
+- 文件：`scanner/toolmgr.py`、`cli/client.py`、`.gitignore`、`tests/smoke.py`、本文件。
+- 仍未做：**「有新版本」提示**（需联网查 release 再与本地 `-version` 比对，属显式触发的联网操作）。
 ## 2026-09-30 —— 续85：**漏洞页排序补齐名称 / 目标 / 时间**
 
 > 实施者：**WorkBuddy · Claude**。

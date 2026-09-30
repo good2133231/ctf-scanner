@@ -9023,6 +9023,41 @@ http:
     assert _r7p4["ok"] and _r7p4["verified"] is False, _r7p4
     assert (_dest7p / "n2" / _bin7p).read_bytes() == _pay7p
 
+    # ⑧ 版本回滚（续86）：install 前留 `.bak`；rollback 与当前版**对调**（可逆）
+    _bak7p = _dest7p / (_bin7p + ".bak")
+    _zip7p_v2 = _mkzip7p({_bin7p: b"FAKE-SUBFINDER-V2"})
+    _csum7p_v2 = f"{_hl7p.sha256(_zip7p_v2).hexdigest()}  {_asset7p}\n".encode()
+    _r7p_v2 = tm7p.install("subfinder", dest_dir=str(_dest7p), settings_path=str(_set7p),
+                           release=_rel7p, blob={_base_asset7p: _csum7p_v2, _asset7p: _zip7p_v2})
+    assert _r7p_v2["ok"] and _r7p_v2.get("backed_up") is True, _r7p_v2
+    assert (_dest7p / _bin7p).read_bytes() == b"FAKE-SUBFINDER-V2"
+    assert _bak7p.read_bytes() == _pay7p, "备份里应是**上一次**装的那份"
+    assert tm7p.can_rollback("subfinder", dest_dir=str(_dest7p)) is True
+    # ① 回滚 → 换回上一版；备份里变成刚才那版（对调）
+    _rb7p = tm7p.rollback("subfinder", dest_dir=str(_dest7p), settings_path=str(_set7p))
+    assert _rb7p["ok"], _rb7p
+    assert (_dest7p / _bin7p).read_bytes() == _pay7p, "回滚后应是上一版"
+    assert _bak7p.read_bytes() == b"FAKE-SUBFINDER-V2", "回滚是**对调**：备份里现在是刚才那版"
+    # ② 再回滚 → 又换回去（可逆，不是"一次性撤销"）
+    assert tm7p.rollback("subfinder", dest_dir=str(_dest7p),
+                         settings_path=str(_set7p))["ok"]
+    assert (_dest7p / _bin7p).read_bytes() == b"FAKE-SUBFINDER-V2"
+    # ③ 没有备份 → ok=False（不抛），can_rollback=False
+    _nobak7p = _dest7p / "nobak"
+    _nobak7p.mkdir(parents=True, exist_ok=True)
+    (_nobak7p / _bin7p).write_bytes(b"only-current")
+    assert tm7p.can_rollback("subfinder", dest_dir=str(_nobak7p)) is False
+    _rb7p2 = tm7p.rollback("subfinder", dest_dir=str(_nobak7p))
+    assert not _rb7p2["ok"] and "备份" in _rb7p2["reason"], _rb7p2
+    # 变异证伪（§6.1）：把备份路径指到别处（= 没写备份）→ can_rollback 必须变 False
+    _real_bp7p = tm7p.backup_path
+    tm7p.backup_path = lambda *a, **k: _dest7p / "nope.bak"
+    try:
+        assert tm7p.can_rollback("subfinder", dest_dir=str(_dest7p)) is False, \
+            "变异后仍说有备份 → 断言没盯住真实备份文件"
+    finally:
+        tm7p.backup_path = _real_bp7p
+
     # 校验和文件里**没有**本产物的条目 → 同样拒绝（不许"找不到就跳过校验"）
     _a_httpx7p = tm7p.asset_name("httpx", "v1.12.0")
     assert _a_httpx7p
