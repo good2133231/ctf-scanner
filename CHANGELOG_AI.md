@@ -12,6 +12,27 @@
 
 
 
+
+## 2026-09-30 —— 续84：**`base_domain` 入参先归一**（补 IDN 多段后缀的 Unicode 缺口）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 盘点发现（续68 的记录与实际**不一致** —— 先实测再动手）：
+  - 续68 **已经**把多段 IDN 后缀修好了：`base_domain` 改用 `config/dicts/tlds.txt` 里**含点号**的
+    后缀（实测 5415 条，含 287 条 punycode 多段）做**最长匹配**，`MULTI_TLD` 降为兜底；
+    `base_domain(to_ascii("a.教育.香港"))` 早已返回 `a.xn--wcvs22d.xn--j6w193g`。
+  - **但** `docs/roadmap.md` 仍写着"仍未做"，`TODO.md`（我续77 写的「当前未解决」）也照抄了这条
+    —— **两处都是过期的**。
+  - **真正的缺口**：`base_domain` 只做 `lower/strip`、**不做 IDN 归一**，于是**原始 Unicode 入参**
+    仍会切错（`base_domain("a.教育.香港")` → `教育.香港`）；而调用方**并不都先归一**
+    （`github_leak` 直接喂 `urlparse().hostname`、`extdom._root` 直接喂 host）。
+- 改法：`scanner/utils.py::base_domain()` 入参**先过 `to_ascii()`**（本函数是"咽喉点"之一，
+  与续65 的边界归一同一口径）；非主机输入（含 `:` / `/`）与空值 → 返回 `""`（比返回
+  `http://x.com/` 这类垃圾更安全）。ASCII 入参走 `to_ascii` 的**快路径**（只 lower）→ **行为不变**。
+- 回归 `tests/smoke.py [8b]`：Unicode 入参 == punycode 入参｜`a.` 与 `b.` 各自成立｜非主机 / 空值 → `""`｜
+  **变异证伪**：把 `to_ascii` 打成恒等 → 断言必红。
+- 顺带更正两处**过期记录**：`docs/roadmap.md` 该条 `[~]` → `[x]`；`TODO.md`「当前未解决」删掉该条。
+- 文件：`scanner/utils.py`、`tests/smoke.py`、`docs/roadmap.md`、`TODO.md`、本文件。
 ## 2026-09-30 —— 续83：**节点侧断点续跑**（认领下发资产 + 进度回传）
 
 > 实施者：**WorkBuddy · Claude**。

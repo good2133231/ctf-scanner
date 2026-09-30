@@ -182,8 +182,15 @@ def base_domain(host):
     时回退到硬编码 `MULTI_TLD`，再不行退回"末两段"的粗略版。只用于"同源判断/保护目标自身域"。
     续68 修掉：多段 **IDN** 后缀原先会切错 —— `base_domain('a.教育.香港')` 曾返回后缀本身
     `教育.香港`，导致 `*.教育.香港` 全被判成同一个注册域（方向是多留/fail-open，不误杀）。
+    续84 补：入参**先过 `to_ascii()` 归一** —— 本函数是"咽喉点"之一，调用方五花八门
+    （`urlparse().hostname` / 目标行 / 子域名表），都可能给**原始 Unicode**；而后缀表里存的是
+    **punycode** 形态，不归一就仍会切错。归一后 Unicode 与 punycode 两种写法**结果一致**；
+    非主机输入（含 `:` 或 `/`）→ 返回 `""`（比返回"http://x.com/"这类垃圾更安全）。
     """
-    host = (host or "").lower().strip(".")
+    host = to_ascii(str(host or "").strip())      # 续84：Unicode → punycode（咽喉点归一）
+    host = (host or "").strip(".")
+    if not host:
+        return ""
     parts = host.split(".")
     if len(parts) <= 2:
         return host

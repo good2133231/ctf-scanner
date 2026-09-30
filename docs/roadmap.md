@@ -10,10 +10,10 @@
       **全端口扫描（1-65535）**（第十五轮）：侧栏「全端口扫描」页按任务分布展示，可对单个 IP 发起
       一次性全端口任务（自动跳过已扫端口，不污染全局策略）；
 - [x] **CIDR 目标支持**：`targets.expand_cidr` 展开为多条 IP，上限 `MAX_CIDR_ADDRESSES = 256`，超限整体丢弃；
-- [~] **IDN / 中文域名支持**（续65）：边界归一 `utils.to_ascii()` + punycode 形态判定 + PSL 补 `xn--`；
-      **仍未做**：`base_domain` 的多段 IDN 公共后缀（`MULTI_TLD` 仅 ASCII）—— 实测
-      `a.教育.香港` 与 `b.教育.香港` 都切成 `教育.香港`（**多留/fail-open**，偏保守）；
-      需要精确归属判定时再引入公共后缀库或补 `MULTI_TLD`。
+- [x] **IDN / 中文域名支持**（续65 + 续68 + 续84）：边界归一 `utils.to_ascii()` + punycode 形态判定 +
+      PSL 补 `xn--`；`base_domain` 用 `config/dicts/tlds.txt` 里**含点号的后缀**（实测 5415 条，
+      含 287 条 punycode 多段）做**最长匹配**，`MULTI_TLD` 降为清单缺失时的兜底；
+      **续84** 又补上"入参先 `to_ascii` 归一"—— 此前 **Unicode 入参会切错**（调用方并不都先归一）。
 - [~] **nuclei 兼容**：引擎已兼容 nuclei 模板核心子集（官方模板可直接投放 `config/nuclei-templates/`，
       与本引擎不冲突，无需二进制）；参考项目的 305 个 Python POC 已静态转换为 YAML 放 `config/pocs-imported/`（默认关闭）；
       仍需 nuclei 二进制完整能力时，再于 vulnscan 阶段加适配器调用并解析其 JSONL 结果入 vulns 表；

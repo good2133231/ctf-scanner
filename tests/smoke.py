@@ -10781,10 +10781,22 @@ http:
     assert _bd8b("www.example.com.cn") == "example.com.cn", _bd8b("www.example.com.cn")
     assert _bd8b("a.b.example.com") == "example.com", _bd8b("a.b.example.com")
     assert _bd8b("example.com") == "example.com"
-    # 两段 IDN：注册域就是它本身。⚠️ base_domain **不做 IDN 归一**（只 lower/strip；两段主机
-    # 原样返回），所以这里喂的是**已归一**的形态 —— 与它的所有调用方一致（extdom / subdomain /
-    # jsmine 都先过 to_ascii）。
+    # 两段 IDN：注册域就是它本身。
+    # 续84：`base_domain` **自己先过 `to_ascii`** —— 此前只 lower/strip，**Unicode 入参会切错**
+    #   （`base_domain("a.教育.香港")` 曾返回 `教育.香港`），而调用方**并不都先归一**
+    #   （如 `github_leak` 直接喂 `urlparse().hostname`）。归一后 Unicode 与 punycode 结果一致。
     assert _bd8b(_ta8b("例子.中国")) == _ta8b("例子.中国"), _bd8b(_ta8b("例子.中国"))
+    assert _bd8b("a.教育.香港") == _ta8b("a.教育.香港") == _a8b, _bd8b("a.教育.香港")
+    assert _bd8b("a.教育.香港") != _bd8b("b.教育.香港"), "Unicode 入参也必须各自成立"
+    assert _bd8b("http://x.com/") == "" and _bd8b("") == "" and _bd8b(None) == "", \
+        "非主机输入（含 : 或 /）与空值都返回空串"
+    # 变异证伪（§6.1）：把 base_domain 里的归一化摘掉（`to_ascii` 打成恒等）→ 上面那条必红
+    _orig_ta8b = _u8b.to_ascii
+    _u8b.to_ascii = lambda s: (s or "").lower().strip(".")
+    try:
+        assert _bd8b("a.教育.香港") != _a8b, "变异后应切错（等于没归一化）"
+    finally:
+        _u8b.to_ascii = _orig_ta8b
     # 变异证伪（§6.1）：把多段后缀集合打回"只有 ASCII 的旧口径"（= 旧行为的 MULTI_TLD）
     # → `a.教育.香港` 的注册域会被切回 `xn--j6w193g`，上面那条必红
     _orig_mps8b = _u8b._multi_part_suffixes
