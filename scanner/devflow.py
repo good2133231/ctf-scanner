@@ -615,6 +615,70 @@ def read_log_lines(log_file):
         return []
 
 
+# ---------- 阶段级耗时基线（续88） ----------
+# 为什么需要：自检原来只报**总耗时** —— 总耗时涨了也看不出"是哪一步变慢"（可能是夹具抖动、
+# 也可能是某个阶段真的退化了）。这里把每阶段耗时存一份，下次跑**逐阶段对比**。
+# 基线是**本机产物**（不同机器/不同外部工具装没装，耗时不可比），所以落在 `logs/` 下、
+# 不进仓库（`.gitignore` 已忽略 `logs/`）。
+BASELINE_PATH = "logs/devflow_baseline.json"
+# 超过基线的倍数才算"明显变慢"（自检本身有抖动：夹具端口分配、DNS、磁盘缓存都会影响）
+BASELINE_RATIO = 2.0
+
+
+def load_baseline(path=None):
+    """读耗时基线；没有 / 读不动 / 格式不对一律返回 `{}`（**不抛** —— 基线是锦上添花）。"""
+    import json
+    try:
+        from .config import resolve
+        p = resolve(path or BASELINE_PATH)
+        if not p.exists():
+            return {}
+        obj = json.loads(p.read_text(encoding="utf-8"))
+        return obj if isinstance(obj, dict) else {}
+    except Exception:                              # noqa: BLE001
+        return {}
+
+
+def save_baseline(stage_seconds, elapsed=None, path=None):
+    """把本次阶段耗时写成基线（**失败不抛**）；返回写出的相对路径或 ""。"""
+    import json
+    import time
+    try:
+        from .config import resolve
+        p = resolve(path or BASELINE_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({
+            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "elapsed": round(float(elapsed or 0), 3),
+            "stage_seconds": {k: round(float(v), 3) for k, v in (stage_seconds or {}).items()},
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path or BASELINE_PATH
+    except Exception:                              # noqa: BLE001
+        return ""
+
+
+def compare_baseline(baseline, stage_seconds, ratio=None):
+    """找出**明显变慢**的阶段，返回 `[{stage, now, base, x}]`（按倍数降序）。
+
+    基线里没有的阶段 / 本次耗时非正的 → 跳过（没有可比对象就**不猜**）。
+    `ratio` 默认在**调用期**取模块级 `BASELINE_RATIO`（写成默认参数会在定义期定死，
+    变异证伪就改不动它了）。
+    """
+    ratio = BASELINE_RATIO if ratio is None else ratio
+    base = (baseline or {}).get("stage_seconds") or {}
+    out = []
+    for stage, now in (stage_seconds or {}).items():
+        b = base.get(stage)
+        try:
+            b, now = float(b), float(now)
+        except (TypeError, ValueError):
+            continue
+        if b > 0 and now > b * float(ratio):
+            out.append({"stage": stage, "now": round(now, 3), "base": round(b, 3),
+                        "x": round(now / b, 1)})
+    return sorted(out, key=lambda d: -d["x"])
+
+
 def run_selfcheck(settings, name="devflow-all13"):
     """跑一次全流程自检，返回结果字典（**不起/不读真实库，只写调用方已隔离的库**）。
 
@@ -645,6 +709,7 @@ def run_selfcheck(settings, name="devflow-all13"):
               "task_id": None, "log_file": "", "error": "", "external": [],
               "ok": 0, "skip": 0, "fail": 0, "exit_code": 0,
               "vectors": [], "vec_ok": 0, "vec_miss": 0, "vec_na": 0,
+              "stage_seconds": {},        # 续88：阶段级耗时（自检基线用）
               "http_base": http_base, "https_base": https_base,
               "settings": None, "compressed": [],
               "_results": {}, "_net": {}, "_log_lines": [],
@@ -679,11 +744,14 @@ def run_selfcheck(settings, name="devflow-all13"):
                                  urls_by_stage=urls_by_stage,
                                  cmds_by_stage=cmds_by_stage)
             t0 = time.time()
+            _ctx = None
             try:
-                runner.run_task(tid, name, targets, stages, options, eff)
+                _ctx = runner.run_task(tid, name, targets, stages, options, eff)
             finally:
                 restore()
             result["elapsed"] = time.time() - t0
+            # 续88：runner 把每阶段耗时记在 ctx.stage_seconds 上（诊断量，不进 DB/报告）
+            result["stage_seconds"] = dict(getattr(_ctx, "stage_seconds", None) or {})
 
             task = db.get_task(tid)
             result["task_status"] = str(task["status"] or "")

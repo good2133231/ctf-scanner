@@ -16,6 +16,26 @@
 
 
 
+
+## 2026-10-01 —— 续88：**自检阶段级耗时基线**（devmode 收尾）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 缺陷（**实测确认**）：自检只报**总耗时** —— 总耗时涨了也看不出"是哪一步变慢"（可能是夹具抖动，
+  也可能是某个阶段真的退化了）。`devflow` 里 `baseline` 不存在。
+- 改法：
+  - `scanner/runner.py`：阶段循环里给每个阶段**记耗时**（`ctx.stage_seconds`；**失败也记** ——
+    才能看出"卡在哪一步"）。它是**诊断量**，不进 DB / 报告；
+  - `scanner/devflow.py`：`run_selfcheck` 把 `stage_seconds` 带回来；新增 `load_baseline()` /
+    `save_baseline()` / `compare_baseline()`（基线落 `logs/devflow_baseline.json`，**本机产物、
+    不进仓库**；超过基线 `BASELINE_RATIO=2.0` 倍才算"明显变慢"；基线里没有的阶段 / 基线为 0 →
+    **跳过不猜**）；
+  - `run_devflow.py`：打印**阶段级耗时表**（带基线对照）+ 明显变慢清单，并把本次存为新基线。
+- 回归 `tests/smoke.py [7n]`：`compare_baseline` 三种情形（只有超阈值的入选 / 无基线不猜 /
+  基线 0 不猜）｜`save_baseline`→`load_baseline` 往返｜读不到返回 `{}` 不抛｜自检带回 13 个阶段耗时｜
+  **变异证伪**：门槛打到 0 → "只有 a 变慢"必红。
+- 实测：本机一次自检 `elapsed=160.5s`，最重的是 `vulnscan 98.1s` / `probe 31.8s` / `portscan 14.0s`。
+- 文件：`scanner/runner.py`、`scanner/devflow.py`、`run_devflow.py`、`tests/smoke.py`、本文件。
 ## 2026-09-30 —— 续87：**「有新版本」提示**（工具版本管理收尾）
 
 > 实施者：**WorkBuddy · Claude**。

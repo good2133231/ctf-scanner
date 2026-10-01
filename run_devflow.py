@@ -59,6 +59,30 @@ def main():
         tag = f"{status}({category})" if category else status
         print(f"    {tag:<12} {sname:<11} {detail}")
 
+    # 续88：阶段级耗时 + 与**基线**的对比 —— 总耗时涨了也能一眼看出"是哪一步变慢"。
+    # 基线是本机产物（落在 logs/ 下、不进仓库）；不同机器 / 装没装外部工具，耗时本来就不可比。
+    _ss = res.get("stage_seconds") or {}
+    if _ss:
+        _base = devflow.load_baseline()
+        _bmap = (_base.get("stage_seconds") or {}) if _base else {}
+        print("\n[*] 阶段级耗时（秒，降序）：")
+        for _n, _v in sorted(_ss.items(), key=lambda kv: -kv[1]):
+            _b = _bmap.get(_n)
+            _tag = f"基线 {float(_b):.2f}s" if isinstance(_b, (int, float)) else "无基线"
+            print(f"    {_n:<11} {float(_v):>7.2f}s   （{_tag}）")
+        if _base:
+            _slower = devflow.compare_baseline(_base, _ss)
+            if _slower:
+                _txt = "、".join(
+                    f"{d['stage']} {d['now']:.1f}s（基线 {d['base']:.1f}s，{d['x']}x）"
+                    for d in _slower)
+                print("[!] 明显变慢（超过基线 %.1f 倍）：%s" % (devflow.BASELINE_RATIO, _txt))
+            else:
+                print("[*] 与基线相比，没有阶段明显变慢")
+        _saved = devflow.save_baseline(_ss, elapsed=res["elapsed"])
+        if _saved:
+            print(f"[*] 本次耗时已存为基线：{_saved}（下次自检逐阶段对比）")
+
     print(f"\n[*] 网络活动总数：{res['total_net']}    总耗时：{res['elapsed']:.1f}s    "
           f"任务终态：{res['task_status']}")
     print(f"[*] 任务日志：{res['log_file']}")

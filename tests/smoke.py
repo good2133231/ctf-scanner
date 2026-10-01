@@ -8444,7 +8444,29 @@ http:
     assert _g_after7n[0][0] == "AFTER", "退出后夹具域名仍被重定向 → 覆盖没还原干净"
 
     # ③ 全流程自检（隔离库/日志已在文件顶部设好）：cert / subdomain 由 SKIP 变 OK，且**零外网**
+    # 续88：阶段级耗时 + 基线对比（纯函数部分，不依赖自检真跑）
+    _ss88 = {"a": 10.0, "b": 1.0}
+    _base88 = {"stage_seconds": {"a": 4.0, "b": 1.0}}
+    _cmp88 = _dv7n.compare_baseline(_base88, _ss88)
+    assert [d["stage"] for d in _cmp88] == ["a"] and _cmp88[0]["x"] == 2.5, _cmp88
+    assert _dv7n.compare_baseline({"stage_seconds": {}}, {"a": 999}) == [], "基线里没有的阶段不猜"
+    assert _dv7n.compare_baseline({"stage_seconds": {"a": 0}}, {"a": 999}) == [], "基线为 0 不猜"
+    _bp88 = str(_TMPDIR / "base88.json")
+    assert _dv7n.save_baseline({"x": 1.234}, elapsed=9.9, path=_bp88)
+    _lb88 = _dv7n.load_baseline(_bp88)
+    assert _lb88["stage_seconds"]["x"] == 1.234 and _lb88["elapsed"] == 9.9, _lb88
+    assert _dv7n.load_baseline(str(_TMPDIR / "nope88.json")) == {}, "读不到就返回 {}，不抛"
+    # 变异证伪（§6.1）：把比值门槛打到 0 → b 也会被判"变慢"，上面"只有 a"那条必红
+    _real_ratio88 = _dv7n.BASELINE_RATIO
+    _dv7n.BASELINE_RATIO = 0.0
+    try:
+        assert len(_dv7n.compare_baseline(_base88, _ss88)) == 2, \
+            "变异（门槛=0）后 b 也应被判变慢 → 证明上面那条真的盯住了门槛"
+    finally:
+        _dv7n.BASELINE_RATIO = _real_ratio88
     _res7n = _dv7n.run_selfcheck(settings, name="smoke-devflow-52")
+    assert len(_res7n.get("stage_seconds") or {}) == 13, \
+        f"自检必须带回 13 个阶段的耗时（续88）：实测 {len(_res7n.get('stage_seconds') or {})}"
     try:
         assert _res7n["exit_code"] == 0 and _res7n["fail"] == 0, \
             f"自检不得有 FAIL：{_res7n['fail']} 个 —— {_res7n['error']}"

@@ -141,6 +141,9 @@ class StageContext:
         self.logger = logger
         self.results = {"subdomains": [], "sites": [], "dirs": [], "vulns": [],
                         "ports": [], "takeovers": [], "csegs": [], "osint_domains": []}
+        # 续88：**阶段级耗时**（秒）。自检据此出"耗时基线"、跨次对比找"哪一步突然变慢"。
+        # 记在 ctx 上而不是库里：它是**诊断量**，不是任务产物，不该进 DB/报告。
+        self.stage_seconds = {}
 
     @property
     def throttle(self):
@@ -219,6 +222,7 @@ class PipelineRunner:
                 break
             db.update_task(ctx.task_id, current_stage=sname, progress=int(i * 100 / total))
             ctx.logger.info(f"===== 阶段 {i + 1}/{total}：{sname} =====")
+            _t_stage = time.time()          # 续88：阶段级耗时（失败也记，才能看出"卡在哪一步"）
             try:
                 STAGE_REGISTRY[sname](ctx).run()
             except Exception as e:  # 阶段级容错
@@ -227,6 +231,8 @@ class PipelineRunner:
                 # **追加**而不是覆盖：一条任务可能有多个阶段失败，覆盖式写法会让前面的错误丢失
                 db.append_task_error(ctx.task_id, f"{sname}: {e}")
                 failed.append(sname)
+            finally:
+                ctx.stage_seconds[sname] = round(time.time() - _t_stage, 3)
             if i == last_ext:
                 # 拓展域名的存在性判定 + 归属追加（纯 DNS 只读 + 本地写库）。
                 # 单独 try：这是**附加动作**，它挂了不该把 osint/jsmine 已经入库的产物牵连掉。
