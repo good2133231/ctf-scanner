@@ -63,6 +63,23 @@ def _run_one(client, task, settings, hb_interval=20.0):
         after_ids = db.asset_max_ids(local_tid)
     status, note, counts, assets = "done", "", {}, {}
     stop_hb = threading.Event()
+    # 续90：**增量游标**（每表已回传到的最大 id）。只有上传**成功**才推进 ——
+    #   失败的下一个周期会连它一起重传，不会漏。
+    _cursor = {"ids": after_ids if after_ids is not None else db.asset_max_ids(local_tid)}
+
+    def _upload_partial():
+        """把**新增**的资产增量传回控制端（`status="running"` → 只并资产、不动终态）。
+
+        这是"掉线不丢资产"的关键：原来只在跑完整体传一次，节点一死这次采的全丢。
+        """
+        try:
+            delta = db.dump_task_assets(local_tid, after=_cursor["ids"])
+            if not any(delta.values()):
+                return
+            client.result(tid, "running", assets=delta)
+            _cursor["ids"] = db.asset_max_ids(local_tid)
+        except Exception:                     # noqa: BLE001 - 增量失败不致命（终态会兜底）
+            pass
 
     def _beat():
         while not stop_hb.wait(hb_interval):
@@ -73,6 +90,7 @@ def _run_one(client, task, settings, hb_interval=20.0):
                                  progress=(int(_cur["progress"] or 0) if _cur else 0))
             except Exception:                     # noqa: BLE001 - 心跳失败不致命
                 pass
+            _upload_partial()
 
     threading.Thread(target=_beat, daemon=True).start()
     try:
@@ -80,7 +98,8 @@ def _run_one(client, task, settings, hb_interval=20.0):
                               append=(mode == "append"), resume=(mode == "resume"))
         results = getattr(ctx, "results", None) or {}
         counts = {k: len(v) for k, v in results.items() if isinstance(v, list)}
-        assets = db.dump_task_assets(local_tid, after=after_ids)
+        # 只回传**还没传过的**那部分（增量周期已传过的已在控制端，别重复插）
+        assets = db.dump_task_assets(local_tid, after=_cursor["ids"])
     except Exception as exc:                      # noqa: BLE001 - 节点绝不能被单个任务拖死
         status, note = "failed", str(exc)[:200]
         print(f"[!] 任务 #{tid} 执行异常：{exc}", flush=True)

@@ -243,15 +243,25 @@ def claim(node_id):
 def finish(node_id, task_id, status="done", note="", counts=None, assets=None):
     """节点回传结果：把任务收成终态、合并资产快照，并把节点置回空闲。
 
-    `status` 只认 `done` / `failed`（其余一律当 `failed`，避免节点乱传状态把任务挂半空）。
+    `status` 三种取值（续90）：
+    - `running` → **增量上传**：只并资产、**不动终态、不把节点置空闲**（节点还在跑）；
+    - `done` / `failed` → 终态（其余一律当 `failed`，避免节点乱传状态把任务挂半空）。
+
+    为什么要增量：节点原来**只在跑完时整体回传一次** —— 掉线（掉电/被杀/断网）就意味着
+    它这次已经采到的资产**全丢**（控制端只有上一次快照）。边跑边传把损失压到"最后一个周期"。
     """
-    st = "done" if str(status or "").strip().lower() == "done" else "failed"
+    raw = str(status or "").strip().lower()
     task = db.get_task(int(task_id))
     if not task:
         return {"ok": False, "reason": "任务不存在"}
     imported = {}
     if isinstance(assets, dict) and assets:
         imported = db.import_task_assets(int(task_id), assets)
+    if raw == "running":
+        # 增量上传：只并资产 + 刷新心跳，**不碰终态**
+        touch(node_id, status="busy", current_task=int(task_id))
+        return {"ok": True, "status": "running", "imported": imported}
+    st = "done" if raw == "done" else "failed"
     db.finish_task_run(int(task_id), status=st)
     if st == "failed" and note:
         db.append_task_error(int(task_id), f"[node] {note}")

@@ -11096,6 +11096,30 @@ http:
     _d83 = db.dump_task_assets(_t83, after=_after83)
     assert [s["domain"] for s in _d83["subdomains"]] == ["new83.example.test"], _d83["subdomains"]
     _cn80.post("/api/node/result", json={"task_id": _t83, "status": "done"}, headers=_h80)
+    # ⑧ 增量回传（续90）：`status="running"` 只并资产、**不动终态、不把节点置空闲**
+    #   （掉线节点的已采资产靠它保住 —— 原来只在跑完整体传一次，一死就全丢）
+    _t90 = db.create_task("smoke-node-incr", "example.test", ["probe"], {"offline": True})
+    db.enqueue_task(_t90, mode="fresh", stages=["probe"], options={"offline": True})
+    assert _cn80.post("/api/node/claim", json={}, headers=_h80).get_json()["task"]["task_id"] == _t90
+
+    def _mk90(_d):
+        return {"subdomains": [{"task_id": 999, "domain": _d, "source": "node", "cname": "",
+                                "ip": "1.2.3.4", "cdn": "", "ip_note": ""}]}
+
+    _r90 = _cn80.post("/api/node/result",
+                      json={"task_id": _t90, "status": "running",
+                            "assets": _mk90("i1.example.test")}, headers=_h80)
+    assert _r90.status_code == 200 and _r90.get_json()["status"] == "running", _r90.get_json()
+    assert db.get_task(_t90)["status"] == "running", "增量上传**不得**改终态"
+    assert _nodes80.get(_nid80)["status"] == "busy", "增量上传**不得**把节点置空闲"
+    assert len(db.list_subdomains(_t90)) == 1
+    _cn80.post("/api/node/result", json={"task_id": _t90, "status": "running",
+                                         "assets": _mk90("i2.example.test")}, headers=_h80)
+    assert len(db.list_subdomains(_t90)) == 2, "第二次增量应继续并入"
+    _cn80.post("/api/node/result", json={"task_id": _t90, "status": "done",
+                                         "assets": _mk90("i3.example.test")}, headers=_h80)
+    assert db.get_task(_t90)["status"] == "done" and len(db.list_subdomains(_t90)) == 3
+    assert _nodes80.get(_nid80)["status"] == "idle", "终态才把节点置空闲"
     _nodes80.revoke(_nid80)
     assert _cn80.post("/api/node/claim", json={}, headers=_h80).status_code == 401, \
         "吊销后令牌必须立刻失效"
