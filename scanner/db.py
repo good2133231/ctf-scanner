@@ -644,6 +644,29 @@ def task_names(task_ids):
             _query(f"SELECT id, name FROM tasks WHERE id IN ({marks})", tuple(ids))}
 
 
+def task_status_bulk(task_ids):
+    """按 id **批量**取任务运行状态，返回 `{id: {status, progress, current_stage, owner_id}}`（续93）。
+
+    给任务列表页的轮询用。原先前端对**每一行**各发一次 `/api/tasks/<id>/status`：
+    页大小 100 时每 2.5 秒 100 个请求，而每个响应里后端都要 `_tail()` **整份读一遍日志**
+    （列表页根本不显示日志，纯属白读）—— 是典型的"前端驱动的 N+1"。
+    这里一次 `IN (...)` 拿齐状态，并且**不带 `log_tail`**（省掉 100 次读盘）。
+
+    `owner_id` 一并返回，供调用方做多租户过滤（口径见 gui/app.py 的 `_owned_task`）。
+    与 `task_names`（续92）同构：只取本页用到的 id，代价与页大小成正比、不随任务总数膨胀。
+    """
+    ids = [int(t) for t in (task_ids or [])]
+    if not ids:
+        return {}
+    marks = ",".join("?" for _ in ids)
+    return {int(r["id"]): {"status": r["status"], "progress": r["progress"],
+                           "current_stage": r["current_stage"],
+                           "owner_id": int(r["owner_id"] or 0)}
+            for r in _query(
+                "SELECT id, status, progress, current_stage, owner_id "
+                "FROM tasks WHERE id IN (%s)" % marks, tuple(ids))}
+
+
 def find_task_by_name(name):
     """按名字取**最新**的一个任务（无则 None）。`devmode` 用它找 `dev-selfcheck`（续55）。
 

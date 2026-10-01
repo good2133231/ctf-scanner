@@ -1704,6 +1704,35 @@ def create_app():
             "log_tail": _tail(t["log_file"]) if t["log_file"] else [],
         })
 
+    @app.route("/api/tasks/status")
+    @login_required
+    def api_tasks_status():
+        """**批量**任务状态（续93）：任务列表页轮询用。
+
+        原先列表页对**每一行**各发一次 `/api/tasks/<id>/status` —— 页大小 100 时
+        每 2.5 秒 100 个请求，且每个响应都要 `_tail()` **整份读日志**（列表页并不显示日志），
+        是典型的"前端驱动的 N+1"。这里一次拿齐，且**不回 `log_tail`**。
+        逐条做多租户过滤（与 `_owned_task` 同口径）：越权的 id 直接不出现在结果里，
+        与单个接口的 404 等价 —— 既不泄露"存在性"，也不泄露状态。
+        """
+        raw = (request.args.get("ids") or "").strip()
+        if not raw:
+            return jsonify({"ok": True, "tasks": {}})
+        try:
+            ids = [int(x) for x in raw.split(",") if x.strip()]
+        except ValueError:
+            return jsonify({"error": "ids 必须是逗号分隔的整数"}), 400
+        ids = ids[:200]        # 防手滑：一次最多问 200 个（与任务列表页大小上限同量级）
+        rows = db.task_status_bulk(ids)
+        scope = _owner_scope()
+        tasks = {}
+        for tid, r in rows.items():
+            if scope is not None and int(r["owner_id"] or 0) != int(scope):
+                continue
+            tasks[str(tid)] = {"status": r["status"], "progress": r["progress"],
+                               "current_stage": r["current_stage"]}
+        return jsonify({"ok": True, "tasks": tasks})
+
     # ---------- POC 管理 ----------
 
     # POC 管理与策略配置**同为管理员门内**（续46）：它决定"扫什么、报什么"，且上传会往

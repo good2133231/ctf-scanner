@@ -163,27 +163,52 @@ function initTaskTable() {
   bindTaskOps("#task-rows", bulkMsg);
 
   // 5) 轮询未完成任务的状态
+  //
+  // 续93：改成**一次批量**请求。原先对每一行各发一次 `/api/tasks/<id>/status` —— 页大小 100
+  // 时每 2.5 秒就是 100 个请求，而且每个响应里后端都要 `_tail()` **整份读一遍日志**
+  // （列表页根本不显示日志，纯属白读）。现在一次问完，且**只问还没结束的行**；
+  // 全页都跑完就停表，不再空转（原先是无限轮询，连 done/stopped 的行也一直问）。
+  const TERMINAL = new Set(["done", "failed", "stopped"]);
+  const ST_LABEL = { queued: "排队中" };   // 与模板首屏同口径（否则首轮轮询会把「排队中」冲成 queued）
+  const liveRows = () => rows.filter(tr => !TERMINAL.has(tr.dataset.status));
   const tick = async () => {
-    await Promise.all(rows.map(async tr => {
-      const id = tr.dataset.id;
-      try {
-        const r = await fetch(`/api/tasks/${id}/status`);
-        if (!r.ok) return;
-        const j = await r.json();
-        tr.dataset.status = j.status;
-        const badge = tr.querySelector(".badge");
-        if (badge) { badge.textContent = j.status; badge.className = "badge st-" + j.status; }
-        const prog = tr.querySelector(".progress");
-        if (prog) {
-          prog.innerHTML =
-            `<div class="bar"><i style="width:${j.progress}%"></i></div>${j.progress}%`;
-        }
-        const stopBtn = tr.querySelector('button[data-op="stop"]');
-        const restartBtn = tr.querySelector('button[data-op="restart"]');
-        if (stopBtn) stopBtn.disabled = j.status !== "running";
-        if (restartBtn) restartBtn.disabled = j.status === "running";
-      } catch (e) { /* 忽略瞬时错误 */ }
-    }));
+    const live = liveRows();
+    if (!live.length) return;                 // 本页没有在跑的任务：不轮询、也不刷新
+    try {
+      const ids = live.map(tr => tr.dataset.id).join(",");
+      const r = await fetch(`/api/tasks/status?ids=${ids}`);
+      if (r.ok) {
+        const map = (await r.json()).tasks || {};
+        live.forEach(tr => {
+          const st = map[tr.dataset.id];
+          if (!st) return;
+          tr.dataset.status = st.status;
+          const badge = tr.querySelector(".badge");
+          if (badge) {
+            badge.textContent = ST_LABEL[st.status] || st.status;
+            badge.className = "badge st-" + st.status;
+          }
+          const prog = tr.querySelector(".progress");
+          if (prog) {
+            prog.innerHTML =
+              `<div class="bar"><i style="width:${st.progress}%"></i></div>${st.progress}%`;
+          }
+          const stopBtn = tr.querySelector('button[data-op="stop"]');
+          const restartBtn = tr.querySelector('button[data-op="restart"]');
+          if (stopBtn) stopBtn.disabled = st.status !== "running";
+          if (restartBtn) restartBtn.disabled = st.status === "running";
+        });
+      }
+    } catch (e) { /* 忽略瞬时错误 */ }
+    if (!liveRows().length) {
+      // 全跑完了：刷新一次，把「统计 / 运行时长」这些服务端渲染的静态列带出来
+      // （与详情页 pollTask 收尾同口径）。但用户此刻若正把光标放在筛选框里，
+      // 就别抢他的输入 —— 留给他手动刷新。
+      if (!document.querySelector("input:focus, select:focus, textarea:focus")) {
+        setTimeout(() => location.reload(), 1500);
+      }
+      return;
+    }
     setTimeout(tick, 2500);
   };
   tick();

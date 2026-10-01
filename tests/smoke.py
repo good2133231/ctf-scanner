@@ -7037,6 +7037,19 @@ http:
     assert _cs.get(f"/tasks/{_tid_other}").status_code == 404, "子用户不得直接打开别人的任务"
     assert _cs.get(f"/tasks/{_tid_other}/export").status_code == 404, "子用户不得导出别人的任务"
     assert _cs.post(f"/api/tasks/{_tid_other}/stop").status_code == 404, "子用户不得停别人的任务"
+    # 续93：**批量**状态接口（任务列表页轮询用）必须与单个接口**同口径**做多租户过滤。
+    # 这是"新开一个批量出口忘了加 owner 过滤"的典型漏点，所以放在**真实子用户会话**下钉死。
+    # （旧代码没有这个路由 → 404 → 下面的 .get_json()["ok"] 直接炸，故本条天然"退回旧实现必红"。）
+    _bulk93 = _cs.get(f"/api/tasks/status?ids={_tid_other},{_tid_mu}").get_json()
+    assert _bulk93 and _bulk93["ok"] is True, _bulk93
+    assert str(_tid_other) not in _bulk93["tasks"], \
+        "子用户不得从批量状态里看到别人的任务（越权 id 必须整条不出现，不是返回空值）"
+    assert str(_tid_mu) in _bulk93["tasks"], "子用户自己名下的任务必须能看到"
+    _bulk93a = _ca.get(f"/api/tasks/status?ids={_tid_other},{_tid_mu}").get_json()
+    assert set(_bulk93a["tasks"]) == {str(_tid_other), str(_tid_mu)}, \
+        "管理员应能一次拿到全部（含子用户的任务）"
+    assert _cs.get("/api/tasks/status?ids=abc").status_code == 400, "非整数 id 必须 400，不能 500"
+    assert _cs.get("/api/tasks/status?ids=").get_json()["tasks"] == {}, "空 ids → 空结果（不报错）"
     assert _ca.get(f"/tasks/{_tid_mu}").status_code == 200, "管理员应能打开子用户的任务"
     _mt_admin = _ca.get("/tasks").get_data(as_text=True)
     assert "smoke-multiauth" in _mt_admin and "smoke-other-owner" in _mt_admin, \
@@ -8852,11 +8865,50 @@ http:
         "批量取名必须与全表版一致"
     assert db.task_names([]) == {} and db.task_names([999999]) == {}, "空 / 不存在的 id → 空字典"
 
+    # 续93：`task_status_bulk(ids)` —— 任务列表页的轮询从"每行一个请求"改成"一次批量"。
+    # 背景：页大小 100 时原写法每 2.5 秒发 **100 个**请求，而且每个响应里后端都要 `_tail()`
+    # **整份读一遍日志**（列表页根本不显示日志，纯属白读）—— 典型的"前端驱动的 N+1"。
+    # 钉死三点：① 与逐个版**逐字一致**（优化不能改口径）；② **不带 log_tail**；③ 空入参不报错。
+    _st93 = db.task_status_bulk(_ids91)
+    assert set(_st93) == set(_ids91), "本页每个 id 都要有状态"
+    for _i93 in _ids91:
+        _t93 = db.get_task(_i93)
+        assert _st93[_i93]["status"] == _t93["status"], "状态必须与单条版一致"
+        assert _st93[_i93]["progress"] == _t93["progress"], "进度必须与单条版一致"
+        assert _st93[_i93]["current_stage"] == _t93["current_stage"], "阶段必须与单条版一致"
+        assert _st93[_i93]["owner_id"] == int(_t93["owner_id"] or 0), \
+            "owner_id 必须带出来（批量接口的多租户过滤要靠它）"
+        assert "log_tail" not in _st93[_i93], \
+            "批量接口**不得**回 log_tail —— 那正是原写法每次白读一遍日志的地方"
+    assert db.task_status_bulk([]) == {} and db.task_status_bulk([999999]) == {}, \
+        "空 / 不存在的 id → 空字典（不报错）"
+
+    # 前端接线：任务列表页的轮询必须走批量接口，且**不得**退回"每行一个请求"的旧写法。
+    # 判据只看 `initTaskTable` 的函数体 —— `pollTask`（**详情页**单任务）用 `/api/tasks/${id}/status`
+    # 是正当的，不能一棍子打死（全文件级子串检查会误报）。
+    _js93 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    _it93 = _js93.split("function initTaskTable()", 1)[1].split("\nfunction ", 1)[0]
+
+    def _batch_poll_ok(src):
+        """判据：initTaskTable 里走批量接口、且没有按行请求的旧写法。"""
+        return ("/api/tasks/status?ids=" in src) and ("/api/tasks/${id}/status" not in src)
+
+    assert _batch_poll_ok(_it93) is True, \
+        "任务列表页轮询必须走 /api/tasks/status?ids= 批量接口，且不得残留按行请求"
+    assert "TERMINAL" in _it93 and "liveRows" in _it93, \
+        "必须只轮询**未结束**的行（done/failed/stopped 不该再问，全跑完要停表）"
+    # §6.1 变异证伪：把前端退回旧写法，判据必须变红（否则这条断言测了个寂寞）
+    _mut93 = _it93.replace("/api/tasks/status?ids=${ids}", "/api/tasks/${id}/status")
+    assert _mut93 != _it93, "变异必须真的改到东西（否则下面那条等于没测）"
+    assert _batch_poll_ok(_mut93) is False, \
+        "变异（退回'每行一个请求'）后判据必须变红 → 证明这条断言真的有牙"
+
     print("[7o] 续53 任务列表页 + 任务详情页漏洞列表分页 ok: /tasks 造 250 任务→total 250·第 1 页 50 行·"
           "最老末页可见（旧 limit=200 永久不可达，已证伪）/ q·status 服务端筛选生效 + q 含空格 URL 编码 / "
           "详情页造 1200 漏洞→页签 1200·第 1 页 100 行·id 最小末页可见（旧 limit=1000 静默丢，已证伪）/ "
           "vsev·vq 服务端筛选生效 / page·vpage=9999 不 500 / GET 与 POST 表单无嵌套 / "
-          "2 条变异证伪全部按预期变红（另有 logs/ 下 2 个真·路由变异脚本产出报错原文）")
+          "2 条变异证伪全部按预期变红（另有 logs/ 下 2 个真·路由变异脚本产出报错原文）/ "
+          "续93 批量状态与单条版逐字一致·不带 log_tail·前端已走批量（变异证伪）")
 
     # [7p] 续54 **外部工具版本管理**（roadmap「工程化 → 工具版本管理」；实现 scanner/toolmgr.py）。
     #      这是**新模块**，没有"旧实现"可比，故 §6.1 的"退回旧实现必红"改用**变异注入**表达：
