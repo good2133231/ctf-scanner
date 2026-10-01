@@ -630,6 +630,20 @@ def list_tasks(limit=200, owner_id=None):
                   tuple(params) + (int(limit),))
 
 
+def task_names(task_ids):
+    """按 id **批量**取任务名，返回 `{id: name}`（续92）。
+
+    给"行里只有 `task_id`、要显示名字"的页面用（如全端口页的任务名映射）——
+    比 `list_tasks(limit=None)`（**全表读**、含十几个列）省得多，且与页大小成正比、不随任务总数膨胀。
+    """
+    ids = [int(t) for t in (task_ids or [])]
+    if not ids:
+        return {}
+    marks = ",".join("?" for _ in ids)
+    return {int(r["id"]): r["name"] for r in
+            _query(f"SELECT id, name FROM tasks WHERE id IN ({marks})", tuple(ids))}
+
+
 def find_task_by_name(name):
     """按名字取**最新**的一个任务（无则 None）。`devmode` 用它找 `dev-selfcheck`（续55）。
 

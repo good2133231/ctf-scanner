@@ -2283,7 +2283,10 @@ def create_app():
         # 续55：名称表要**全量**任务 —— 上面是对 `ports` 的 GROUP BY（不按任务切），本页行可能
         # 属于**任意**老任务，名称表只取最新 N 个的话更老的任务会显示成 `#id`。
         # 没有行时不必查（省一次全表读）。
-        names = {t["id"]: t["name"] for t in _list_tasks(limit=None)} if raw_rows else {}
+        # 续92：只取**本页用到**的任务名（原来 `_list_tasks(limit=None)` 是全表读，
+        # 任务一多就是几十 MB 的白读；这里与页大小成正比）。
+        _page_ids92 = {r["task_id"] for r in raw_rows}
+        names = db.task_names(_page_ids92) if _page_ids92 else {}
         rows = []
         for r in raw_rows:
             item = dict(r)      # sqlite3.Row 不支持赋值，先转成 dict 再加工

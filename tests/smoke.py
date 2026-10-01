@@ -8844,6 +8844,13 @@ http:
     _one91 = db.task_counts_bulk([999999])
     assert _one91[999999]["sites"] == 0 and _one91[999999]["vulns"] == 0, \
         "不存在的任务也要给出**全 0 占位**（调用方不必再兜空）"
+    # 续92：`task_names(ids)` —— 全端口页的任务名映射改成"只取本页用到的 id"
+    # （原来 `list_tasks(limit=None)` 是**全表读**，任务一多就是白读几十 MB）。
+    _tn92 = db.task_names(_ids91)
+    assert set(_tn92) == set(_ids91), "本页每个 id 都要有名字"
+    assert _tn92 == {t["id"]: t["name"] for t in db.list_tasks(limit=None) if t["id"] in set(_ids91)}, \
+        "批量取名必须与全表版一致"
+    assert db.task_names([]) == {} and db.task_names([999999]) == {}, "空 / 不存在的 id → 空字典"
 
     print("[7o] 续53 任务列表页 + 任务详情页漏洞列表分页 ok: /tasks 造 250 任务→total 250·第 1 页 50 行·"
           "最老末页可见（旧 limit=200 永久不可达，已证伪）/ q·status 服务端筛选生效 + q 含空格 URL 编码 / "

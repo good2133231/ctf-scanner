@@ -20,6 +20,20 @@
 
 
 
+
+## 2026-10-01 —— 续92：**全端口页的任务名映射不再全表读**（后端优化收尾）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 缺陷（**实测确认**）：`/fullports` 为"任务名映射"调 `_list_tasks(limit=None)` —— **全表读 tasks**
+  （十几个列），任务一多就是几十 MB 的白读；而本页其实只用**本页那几十个** `task_id` 的名字。
+- 改法：新增 `db.task_names(ids)`（`WHERE id IN (...)`，只取 `id/name` 两列）；`/fullports` 改用它。
+- **实测（300 个任务 / 900 域名 / 300 站点 / 300 漏洞 / 600 端口）——各页面加载耗时**：
+  `/` 22.9ms｜`/tasks` 20.6ms｜`/subdomains` 8.9ms｜`/sites` 9.6ms｜`/vulns` 18.6ms｜`/ips` 9.6ms｜
+  `/fullports` 7.4ms｜`/dirs` 7.7ms｜`/csegs` 6.8ms｜`/pocs` 39.6ms（最慢，312 个 POC 全列表）。
+  ⇒ **没有别的页面级 N+1 了**（逐页审计 + 实测）。
+- 回归 `tests/smoke.py [7o]`：批量取名 == 全表版｜空 / 不存在的 id → `{}`。
+- 文件：`scanner/db.py`、`gui/app.py`、`tests/smoke.py`、本文件。
 ## 2026-10-01 —— 续91：**任务列表页 N+1 收口**（后端优化，实测提速 ~50×）
 
 > 实施者：**WorkBuddy · Claude**。
