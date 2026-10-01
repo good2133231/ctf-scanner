@@ -10315,8 +10315,8 @@ http:
     print(_out7x.rstrip())
     _why7x = next((ln.strip() for ln in _out7x.splitlines() if ln.strip().startswith("[跳过]")), "")
     if _pr7x.returncode == 0:
-        print("[7x] 续60 真浏览器端到端 ok: 真 Flask 进程 + 真无头浏览器，35 条交互断言全绿"
-              "（登录 / 分页 / 服务端筛选 / 批量打开上限 / POC 开关不误提交 / 页签 / 面板持久化）")
+        print("[7x] 续60 真浏览器端到端 ok: 真 Flask 进程 + 真无头浏览器，39 条交互断言全绿"
+              "（登录 / 分页 / 服务端筛选 / 批量打开上限 / POC 开关不误提交 / 页签 / 面板持久化 / 列表页轮询只发批量）")
     elif _pr7x.returncode == 2:
         # 降级**不等于**通过：只允许「本机没有浏览器」这一种原因，且必须把原因原样打出来。
         assert "未找到可用的无头" in _why7x, \

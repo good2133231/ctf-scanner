@@ -339,7 +339,11 @@ def _seed_db():
                            "port": "80", "status": 200, "title": f"站点{i}",
                            "length": 500 + i, "server": "nginx", "tech": "nginx",
                            "source": "probe"} for i in range(_SITES_TOTAL)])
-    return tid
+    # 续93：再建一个**运行中**的任务 —— 任务列表页的轮询只该问"未结束"的行，这条就是 [8] 的探针；
+    # 上面那个 done 的任务**必须不被**轮询（否则又回到"终态行也一直问"的旧写法）。
+    tid_run = db.create_task("E2E-轮询中", "http://e2e-run.local", ["probe"])
+    db.update_task(tid_run, status="running", progress=37, current_stage="probe")
+    return tid, tid_run
 
 
 def _start_gui(env, work):
@@ -443,8 +447,8 @@ def _login(page, base, token):
     return href
 
 
-def _run_checks(page, base, rep, token, tid, port):
-    """登录前提 + 6 条交互的断言（每条都是"点完之后 DOM/URL/钩子真的变了"，不是页面里有某字符串）。"""
+def _run_checks(page, base, rep, token, tid, port, tid_run):
+    """登录前提 + 8 条交互的断言（每条都是"点完之后 DOM/URL/钩子真的变了"，不是页面里有某字符串）。"""
 
     # ---------- [1] 登录（后续所有页面的前提；也是"302 墙"是否被真正推开的证据） ----------
     href = _login(page, base, token)
@@ -573,6 +577,36 @@ def _run_checks(page, base, rep, token, tid, port):
               page.ev("document.querySelector('[data-panel=\"osint\"]').classList.contains('open')")
               is False)
 
+    # ---------- [8] 任务列表页轮询：**一次批量**、只问未结束的行（续93） ----------
+    # 旧写法是"每行一个 `/api/tasks/<id>/status`"（页大小 100 → 每 2.5 秒 100 个请求，且每个响应
+    # 都让后端 `_tail()` 整份读一遍日志）。这里在**真浏览器**里钩住 fetch 数请求，而不是只看源码文本：
+    # ① 不得出现任何按行请求；② 批量请求的 `ids` 只含**运行中**那个任务（done 的必须不在）。
+    # 再让钩子回一个合成的 progress=99，验证"回写真的改到了 DOM"（不是发了请求但没渲染）。
+    page.navigate(f"{base}/tasks")
+    rep.check("[8] /tasks 上确实有一个运行中的行（否则本项无从验起）",
+              page.ev(f"document.querySelector('#task-rows tr[data-id=\"{tid_run}\"]') !== null") is True)
+    page.ev("window.__calls=[];"
+            "window.fetch=function(u,o){var url=String(u); window.__calls.push(url);"
+            "if(url.indexOf('/api/tasks/status?ids=')===0){"
+            "return Promise.resolve({ok:true,json:function(){return Promise.resolve("
+            "{ok:true,tasks:{%d:{status:'running',progress:99,current_stage:'probe'}}});}});}"
+            "return Promise.resolve({ok:false,json:function(){return Promise.resolve({});}});};"
+            % tid_run)
+    time.sleep(4.0)                       # 轮询间隔 2.5s —— 睡够一轮，又不到两轮
+    calls = json.loads(page.ev("JSON.stringify(window.__calls)") or "[]")
+    batch = [u for u in calls if u.startswith("/api/tasks/status?ids=")]
+    perrow = [u for u in calls if u.startswith("/api/tasks/") and u.endswith("/status")]
+    rep.check("[8] 列表页轮询只发**批量**请求，没有任何按行请求",
+              len(perrow) == 0 and len(batch) >= 1,
+              f"批量={len(batch)} 按行={len(perrow)} calls={calls}")
+    ids_arg = batch[0].split("ids=", 1)[1] if batch else ""
+    rep.check("[8] 批量请求只带**未结束**的任务 id（done 的不在其中）",
+              ids_arg.split(",") == [str(tid_run)], f"ids={ids_arg!r} 期望 {tid_run}")
+    rep.eq("[8] 轮询回写真的改到了 DOM（合成 progress=99 已渲染）",
+           page.ev(f"document.querySelector('#task-rows tr[data-id=\"{tid_run}\"] .progress')"
+                   f".textContent"),
+           "99%")
+
 
 def run(settings=None):
     """跑完整套 E2E。返回 `(ok, note)`：跳过与失败都是 `ok=False`（**绝不假绿**）。"""
@@ -603,18 +637,18 @@ def run(settings=None):
             return False, note
 
         print(f"[*] 浏览器: {os.path.basename(browser)}；临时目录: {work.name}")
-        tid = _seed_db()
-        print(f"[*] 已造数：目录 {_DIRS_TOTAL} 行 / 站点 {_SITES_TOTAL} 行，任务 #{tid}")
+        tid, tid_run = _seed_db()
+        print(f"[*] 已造数：目录 {_DIRS_TOTAL} 行 / 站点 {_SITES_TOTAL} 行，任务 #{tid}（另有运行中的 #{tid_run}）")
         port, gui = _start_gui(env, work)
         print(f"[*] Flask GUI 已在 127.0.0.1:{port} 就绪（临时库 {_rel(work / 'scanner.db')}）")
         cdp, chrome = _start_chrome(browser, work / "profile", work)
         print("[*] 无头浏览器已连上 CDP，开始交互断言")
         page = Page(cdp)
         rep = _Report()
-        _run_checks(page, f"http://127.0.0.1:{port}", rep, token, tid, port)
+        _run_checks(page, f"http://127.0.0.1:{port}", rep, token, tid, port, tid_run)
         ok = not rep.fails
         if ok:
-            note = f"通过：登录 + 6 项交互共 {rep.n} 条断言全绿（真浏览器 / 真 Flask 进程）"
+            note = f"通过：登录 + 8 项交互共 {rep.n} 条断言全绿（真浏览器 / 真 Flask 进程）"
         else:
             note = f"失败 {len(rep.fails)}/{rep.n} 条：" + "；".join(rep.fails[:4])
         print(("[通过] " if ok else "[失败] ") + note)

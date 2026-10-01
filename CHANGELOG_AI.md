@@ -46,8 +46,11 @@
     管理员看全部 / 非整数 400 / 空 ids 空结果）；旧代码没有这个路由 → 404 → 断言天然变红。
   - `[7o]` 钉死 `task_status_bulk` 与单条版**逐字一致**、**不含 `log_tail`**、空入参不报错，
     以及 `initTaskTable` 必须走批量（**变异证伪**：退回"每行一个请求"判据必须变红）。
-  - 另做**变异注入实测**：摘掉路由里的多租户过滤 → 子用户越权断言按预期变红（已还原）。
-- 文件：`scanner/db.py`、`gui/app.py`、`gui/static/app.js`、`tests/smoke.py`、本文件。
+  - `tests/browser_e2e.py [8]`（**真无头浏览器**，钩住 `fetch` 数请求，不看源码文本）：
+    列表页轮询只发**批量**请求、**没有任何按行请求**，且 `ids` 只含**运行中**那个任务
+    （done 的不在其中）；再让钩子回一个合成的 `progress=99`，验证"回写真的改到了 DOM"
+    （不是发了请求但没渲染）。实测输出：`批量=1 按行=0 calls=['/api/tasks/status?ids=2']`。
+- 文件：`scanner/db.py`、`gui/app.py`、`gui/static/app.js`、`tests/smoke.py`、`tests/browser_e2e.py`、本文件。
 ## 2026-10-01 —— 续92：**全端口页的任务名映射不再全表读**（后端优化收尾）
 
 > 实施者：**WorkBuddy · Claude**。
