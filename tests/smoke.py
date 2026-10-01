@@ -9058,6 +9058,33 @@ http:
     finally:
         tm7p.backup_path = _real_bp7p
 
+    # ⑨ 「有新版本」提示（续87）：版本比对 + 联网检查（桩），且**绝不误报**
+    assert tm7p.newer_version("v2.0.0", "v1.9.9") is True
+    assert tm7p.newer_version("v1.10.0", "v1.9.0") is True, "按数值比大小，不是字典序"
+    assert tm7p.newer_version("v1.9.9", "v2.0.0") is False
+    assert (tm7p.newer_version("", "v1.0.0") is False
+            and tm7p.newer_version("v1.0.0", "garbage") is False), \
+        "抠不到版本号一律不报「有新版本」（宁可漏报也不误报）"
+    import scanner.utils as _u7p
+    _ow7p, _or7p = _u7p.which, _u7p.run_cmd
+    _u7p.which = lambda name: "/fake/" + str(name)
+    _u7p.run_cmd = lambda argv, **kw: (0, "subfinder version v1.9.9", "")
+    try:
+        _up7p = tm7p.check_updates({}, fetch=lambda repo, timeout=0: {"tag": "v2.0.0", "assets": {}})
+    finally:
+        _u7p.which, _u7p.run_cmd = _ow7p, _or7p
+    _sf7p = next(r for r in _up7p if r["tool"] == "subfinder")
+    assert _sf7p["has_update"] is True and _sf7p["latest"] == "v2.0.0", _sf7p
+    # 变异证伪（§6.1）：把 newer_version 打成"latest 非空即算新" → 它会**误报**有新版本
+    # （断言的是"变异后的坏行为"，与本节其它变异块同一写法；上面那几条才是真实断言）
+    _real_nv7p = tm7p.newer_version
+    tm7p.newer_version = lambda a, b: bool(a)
+    try:
+        assert tm7p.newer_version("v1.0.0", "v9.9.9") is True, \
+            "变异（latest 非空即算新）后应**误报**有新版本 → 证明上面那几条真的盯住了版本比对"
+    finally:
+        tm7p.newer_version = _real_nv7p
+
     # 校验和文件里**没有**本产物的条目 → 同样拒绝（不许"找不到就跳过校验"）
     _a_httpx7p = tm7p.asset_name("httpx", "v1.12.0")
     assert _a_httpx7p

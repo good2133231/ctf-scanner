@@ -15,6 +15,26 @@
 
 
 
+
+## 2026-09-30 —— 续87：**「有新版本」提示**（工具版本管理收尾）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 缺陷（**实测确认**）：`toolmgr` 只会"装最新版"，**没有任何"我装的这个是不是旧的"的入口** ——
+  用户只能自己记版本号，或者干脆再点一次「更新」（多下一遍）。
+- 改法：
+  - `toolmgr.newer_version(latest, installed)` —— 按 `major.minor.patch` **数值**比大小
+    （`v1.10.0 > v1.9.0`，不是字典序）；任一侧抠不到版本号 → **一律 False**
+    （宁可漏报"有新版本"，也**不误报** —— 误报会让人白跑一次下载）；
+  - `toolmgr.check_updates(settings)` —— 查各工具最新 tag 与本机 `-version` 比对，
+    未装 / 查不到都如实写进 `reason`；
+  - CLI `--check-updates`（只查不装）；GUI「外部工具」页新增「检查新版本」按钮 +
+    「版本检查结果」面板（沿用 `_TOOLS_LAST` 进程内单槽）。
+- **红线不变**：`check_updates` 与 `install`/`update` 一样，**只在显式入口联网**，扫描期绝不调用。
+- 回归 `tests/smoke.py [7p]⑨`：`newer_version` 六种情形（含 `v1.10.0 > v1.9.0`、空 / garbage → False）｜
+  `check_updates` 走桩不联网、结果正确｜**变异证伪**：把 `newer_version` 打成"latest 非空即算新" → 必红。
+- 文件：`scanner/toolmgr.py`、`gui/app.py`、`gui/templates/tools.html`、`cli/client.py`、
+  `tests/smoke.py`、本文件。
 ## 2026-09-30 —— 续86：**工具版本回滚**（装新版前留备份，可一键换回）
 
 > 实施者：**WorkBuddy · Claude**。

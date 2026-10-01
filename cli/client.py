@@ -207,6 +207,26 @@ def do_update_tools(args):
         sys.exit(1)
 
 
+def do_check_updates(args):
+    """`--check-updates`：查各外部工具**是否有新版本**（续87，**显式触发才联网**）。"""
+    from scanner import toolmgr
+    rows = toolmgr.check_updates(load_settings())
+    print("外部工具版本检查（联网查 GitHub release 的最新 tag，与本机 `-version` 比对）：")
+    n = 0
+    for r in rows:
+        if not r["installed"]:
+            print(f"  {r['tool']:<10} {r['reason']}")
+            continue
+        if r["has_update"]:
+            n += 1
+            print(f"  {r['tool']:<10} **有新版本 {r['latest']}**（本机 {r['installed']}）")
+        elif r["reason"]:
+            print(f"  {r['tool']:<10} {r['reason']}（本机 {r['installed']}）")
+        else:
+            print(f"  {r['tool']:<10} 已是最新（{r['installed']}）")
+    print(f"  → {n} 个有新版本" + ("；用 `--update-tools` 更新" if n else ""))
+
+
 def do_rollback(args):
     """`--rollback <工具>`：把工具回滚到**上一次安装前**的版本（续86）。
 
@@ -331,6 +351,8 @@ def main():
                     help="列出所有节点及其在线 / 占用状态")
     ap.add_argument("--node-revoke", type=int, metavar="ID",
                     help="吊销节点（令牌立刻失效）")
+    ap.add_argument("--check-updates", action="store_true",
+                    help="联网查各外部工具是否有新版本（只查不装；显式触发才联网）")
     # ---- 工具版本回滚（续86）----
     ap.add_argument("--rollback", action="append", default=None, metavar="NAME",
                     help="把工具回滚到上一次安装前的版本（可重复；备份是 install 时写的 .bak）")
@@ -364,6 +386,9 @@ def main():
         return
     if args.update_tools:
         do_update_tools(args)
+        return
+    if args.check_updates:
+        do_check_updates(args)
         return
     if args.node_add or args.node_list or args.node_revoke:
         do_nodes(args)

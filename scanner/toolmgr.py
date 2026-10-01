@@ -537,3 +537,63 @@ def status(settings):
                      "reason": pre["reason"],
                      "note": f"OK（{path}）" if path else "未找到（自动使用内置兜底）"})
     return rows
+
+
+# ---------- 「有新版本」提示（续87） ----------
+
+_VER_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
+
+
+def _ver_tuple(text):
+    """从任意文本里抠出 `(major, minor, patch)`（抠不到返回 None —— **不猜**）。"""
+    m = _VER_RE.search(str(text or ""))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def newer_version(latest, installed):
+    """`latest` 是否比 `installed` **新**（按 major.minor.patch 比大小）。
+
+    任一侧抠不到版本号 → 一律 `False`：**宁可漏报"有新版本"，也不误报**（误报会让人白跑一次下载）。
+    """
+    a, b = _ver_tuple(latest), _ver_tuple(installed)
+    return bool(a and b and a > b)
+
+
+def check_updates(settings, fetch=fetch_release, timeout=30):
+    """检查已装工具**是否有新版本**（续87）：联网查 release 最新 tag，与本地 `-version` 比对。
+
+    ⚠️ **只在显式入口调用**（CLI `--check-updates` / GUI「外部工具」页的按钮）—— 与 `--update-tools`
+    同一条红线：**扫描期绝不联网**（`tests/smoke.py [7p]` 的变异检测器把这条钉住）。
+
+    返回 `[{tool, installed, latest, has_update, reason}]`；未装 / 查不到都如实写进 `reason`。
+    `fetch` 是给测试的注入口（不传就真联网）。
+    """
+    from .utils import which, run_cmd
+    tools_cfg = (settings or {}).get("tools", {}) or {}
+    rows = []
+    for name, cfg in TOOLS.items():
+        row = {"tool": name, "installed": "", "latest": "", "has_update": False, "reason": ""}
+        path = which(str(tools_cfg.get(name, name) or name))
+        if not path:
+            row["reason"] = "未安装（可一键安装）"
+            rows.append(row)
+            continue
+        if cfg.get("verify"):
+            _rc, out, err = run_cmd([path, cfg["verify"]], timeout=30)
+            first = ((out or "") + (err or "")).strip().splitlines()
+            row["installed"] = first[0][:80] if first else ""
+        try:
+            rel = fetch(TOOLS[name]["repo"], timeout=timeout)
+        except Exception as e:                       # noqa: BLE001 - 网络失败如实报，不猜
+            row["reason"] = f"查询最新版本失败：{e}"
+            rows.append(row)
+            continue
+        row["latest"] = str((rel or {}).get("tag") or "")
+        if not row["latest"]:
+            row["reason"] = "release 里没有版本号"
+        elif not _ver_tuple(row["installed"]):
+            row["reason"] = "本机版本号抠不出来，无法比对"
+        else:
+            row["has_update"] = newer_version(row["latest"], row["installed"])
+        rows.append(row)
+    return rows

@@ -354,7 +354,9 @@ _DEV_SELFCHECK = {"out": "", "code": None, "at": ""}
 
 # 续54：最近一次「外部工具下载/更新」的结果（POST → redirect 带不了结构化结果，故存进程内）。
 # 更新是**串行的管理操作**（单人点一次按钮），用单槽缓存即可，不需要并发安全。
-_TOOLS_LAST = {"results": [], "at": "", "os": "", "error": ""}
+_TOOLS_LAST = {"results": [], "at": "", "os": "", "error": "",
+               # 续87：「检查新版本」的结果（同样是 POST → redirect 带不回来的结构化数据）
+               "updates": [], "updates_at": ""}
 
 
 def _dev_fixture_start(port=0):
@@ -3019,6 +3021,8 @@ def create_app():
                                last_os=_TOOLS_LAST.get("os") or "",
                                last_error=_TOOLS_LAST.get("error") or "",
                                last_results=last_results,
+                               last_updates=_TOOLS_LAST.get("updates") or [],
+                               last_updates_at=_TOOLS_LAST.get("updates_at") or "",
                                max_mb=toolmgr._MAX_BYTES // (1024 * 1024),
                                hosts=sorted(toolmgr._ALLOWED_HOSTS),
                                dest=toolmgr.DEFAULT_DEST,
@@ -3056,6 +3060,28 @@ def create_app():
                        f"写回配置={'否' if not wire else '是'}"),
                ok=(not error) and len(results) > 0 and okn == len(results))
         return redirect(url_for("tools_page", msg=f"更新完成：成功 {okn}/{len(results)}"))
+
+    @app.route("/api/tools/check-updates", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_tools_check_updates():
+        """检查外部工具**是否有新版本**（续87）。
+
+        ⚠️ 联网只在这里发生（与「更新」按钮同一取舍）：**扫描期任何阶段都不会调它**。
+        同步阻塞（逐个工具查 release），失败一律如实展示、不让页面崩。
+        """
+        try:
+            rows = toolmgr.check_updates(settings)
+            error = ""
+        except Exception as e:      # noqa: BLE001 - 不让页面崩；失败如实展示
+            rows, error = [], f"{type(e).__name__}: {e}"
+        _TOOLS_LAST["updates"] = rows
+        _TOOLS_LAST["updates_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        n_up = sum(1 for r in rows if r.get("has_update"))
+        _audit(audit.KIND_TASK, target="external-tools",
+               detail=f"检查外部工具新版本：{n_up} 个有新版本",
+               ok=(not error))
+        return redirect(url_for("tools_page", msg=f"版本检查完成：{n_up} 个有新版本"))
 
     def _tail(path, n=150):
         try:

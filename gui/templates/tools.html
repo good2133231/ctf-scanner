@@ -78,6 +78,11 @@
       只下载，<b>不</b>写回 config/settings.yaml</label></p>
     <p><button type="submit">开始下载 / 更新</button></p>
   </form>
+  <form method="post" action="{{ url_for('api_tools_check_updates') }}" style="margin-top:10px"
+        onsubmit="return confirm('联网检查各工具是否有新版本？（只查不装，访问 GitHub 官方 release）')">
+    <button type="submit" class="ghost">检查新版本</button>
+    <span class="muted small">只把最新 tag 与本机 <code>-version</code> 比对，<b>不下载、不安装</b>。</span>
+  </form>
   <p class="muted small">
     装好后会把 <code>tools.&lt;名&gt;</code> 改成刚装好的<b>相对路径</b>（逐行文本替换，保住文件里的中文注释）——
     不改的话 <code>which()</code> 找不到，等于白装。改完到
@@ -121,6 +126,28 @@
   {% endif %}
   {% else %}
   <p class="muted">还没跑过更新。结果会保留在进程内，供你回来核对（重启控制台即清空）。</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>版本检查结果</h2>
+  {% if last_updates_at %}
+  <p class="muted small">运行于 {{ last_updates_at }}</p>
+  <table>
+    <tr><th>工具</th><th>本机版本</th><th>最新版本</th><th>结论</th></tr>
+    {% for r in last_updates %}
+    <tr>
+      <td><code>{{ r.tool }}</code></td>
+      <td class="muted">{{ r.installed or '—' }}</td>
+      <td class="muted">{{ r.latest or '—' }}</td>
+      <td>{% if r.has_update %}<span class="sev sev-medium">有新版本</span>
+          {% elif r.reason %}<span class="muted">{{ r.reason }}</span>
+          {% else %}<span class="sev sev-low">已是最新</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">还没检查过。点上面的「检查新版本」（联网查 GitHub release，只查不装）。</p>
   {% endif %}
 </section>
 {% endblock %}
