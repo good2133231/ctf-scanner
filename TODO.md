@@ -680,16 +680,22 @@
       `flow` 布尔子集（`&&`/`||`/`!`/括号 + `id()`/`http(N)` 引用，装载期校验引用可解析性，
       `||` 短路，纯否定式成立**不报**）、`workflows` 子模板编排（深度上限 3 + 自环去重；
       `subtemplates`/`args` 写进 `_note`）。回归见 `tests/smoke.py [5x]`。
-- [ ] **仍未做（2026-09-25 按代码复核，权威清单见 `docs/roadmap.md`）**：
-      ① **任务队列**（替代后台线程、支持并发任务；**同项的「断点续扫」已在续29 落地** ——
-         详情页「续跑」按钮 + `POST /api/tasks/<id>/resume`，见 `docs/roadmap.md` 该条的 `[~]`）；
-      ② **鉴权加固**（多用户 / CSRF / HTTPS 部署指引）—— **2026-09-25 续32 部分落地**：
-         `gui/app.py` 的 `_local_guard` 两道本机守卫（Host 白名单挡 DNS rebinding；写方法
-         Origin/Referer 校验比 netloc **含端口**，因 Cookie 不按端口隔离）+ 会话 Cookie 显式
-         `HttpOnly`/`SameSite=Lax` + 绑非回环地址时 `serve()` 显式告警（回归见 `tests/smoke.py [6t]`）。
-         **多用户与 HTTPS 部署指引仍未做**，理由是二者与"单用户本机工具"的定位冲突（见 roadmap 该条）；
-      ③ **分布式节点**（**前置条件：先替换 SQLite**，依赖最重）；
-      ④ **工具版本管理**（一键下载 / 更新 subfinder · httpx · puredns）；
+- [~] **仍未做（2026-10-02 按代码复核，权威清单见 `docs/roadmap.md`）**：
+      ① **任务队列**（替代后台线程、支持并发任务）—— **仍未做**（刻意：队列是控制台的事，
+         CLI 保持前台阻塞）。**同项的「断点续扫」已在续29 落地** —— 详情页「续跑」按钮 +
+         `POST /api/tasks/<id>/resume`，见 `docs/roadmap.md` 该条的 `[~]`；
+      ② **鉴权加固** —— **已基本补齐**：续32 的两道本机守卫（Host 白名单挡 DNS rebinding；
+         写方法 Origin/Referer 校验比 netloc **含端口**）+ 会话 Cookie `HttpOnly`/`SameSite=Lax`
+         + 绑非回环地址时 `serve()` 显式告警（`tests/smoke.py [6t]`）；续78 登录验证码；
+         续79 **多用户 + 多租户隔离**（含续89 按账号隔离的黑名单）。
+         仍缺：SSO / 找回口令、HSTS/TLS 套件（交反代）；逐表单 CSRF token **刻意不做**
+         （`Origin`/`Referer` 中间件已一次性覆盖）；
+      ③ **分布式节点** —— **已落地（续80~续90）**：**没有**替换 SQLite，改走"控制端独占 DB +
+         节点 HTTP 轮询认领/回传"（`scanner/nodes.py` / `run_node.py`）；令牌只存 sha256、
+         掉线任务自动重新入队、边跑边增量回传；回归 `tests/smoke.py [8c]`；
+      ④ **工具版本管理** —— **已落地（续54 / 86 / 87 / 94）**：一键下载·更新（默认过官方 SHA256）、
+         版本回滚（`.bak` 对调、可逆）、"有新版本"提示、**多版本共存**（版本库
+         `.versions/<工具>/<版本>/`，可在任意存过的版本间可逆切换）；
       ⑤ ~~目录递归爬取~~ → **2026-09-25 续30 已落地**：没有打开 dirmap 的 `conf.recursive_scan`，
       而是自研内置递归（三重闸：层数 / 每站跨层累计目录数 / 每目录路径数，**默认关**；
       任务级勾「目录递归（一层）」或 CLI `--recursive-dir` 单次开）—— 请求量控制与深度上限这两件
