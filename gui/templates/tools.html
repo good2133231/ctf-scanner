@@ -95,6 +95,48 @@
 </section>
 
 <section class="panel">
+  <h2>版本库（多版本共存）</h2>
+  <p class="muted">
+    通过本页装过的版本都会留在 <code>{{ dest }}/{{ versions_dirname }}/&lt;工具&gt;/&lt;版本&gt;/</code>，
+    可以在任意版本之间来回切（<b>切换不联网</b>）。旁边的「回滚」只能退<b>一步</b>（靠 <code>.bak</code>），
+    这里能退到<b>任意一个存过的版本</b>；切换前会把当前这一份先归档，所以是<b>可逆</b>的。
+    每个工具最多留 {{ versions_keep }} 个版本，超出会按版本号从旧到新删掉（删了什么会在结果里说明）。
+  </p>
+  {% for name, vrows in versions.items() %}
+  <h3><code>{{ name }}</code>{% if not vrows %}<span class="muted small"> —— 版本库为空（还没通过本页装过）</span>{% endif %}</h3>
+  {% if vrows %}
+  <table>
+    <tr><th>版本</th><th>大小</th><th>状态</th><th>操作</th></tr>
+    {% for v in vrows %}
+    <tr>
+      <td class="muted">{{ v.version }}</td>
+      <td class="muted">{{ (v.size / 1048576) | round(1) }} MB</td>
+      <td>{% if v.active %}<span class="sev sev-low">当前在用</span>
+          {% else %}<span class="muted">已存</span>{% endif %}</td>
+      <td>
+        {% if v.active %}<span class="muted small">—</span>
+        {% else %}
+        <form method="post" action="{{ url_for('api_tools_use_version') }}" style="display:inline"
+              onsubmit="return confirm('把 {{ name }} 切到版本 {{ v.version }}？（不联网；当前版本会先存进版本库，可再切回来）')">
+          <input type="hidden" name="tool" value="{{ name }}">
+          <input type="hidden" name="version" value="{{ v.version }}">
+          <button type="submit" class="btn-mini ghost">切到此版本</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% endfor %}
+  <p class="muted small">
+    版本号读的是二进制自己报的 <code>-version</code>；<b>读不出来就不归档</b>
+    （不会凭空造一个 <code>unknown</code> 目录出来攒垃圾）。「当前在用」按<b>文件内容哈希</b>判 ——
+    不是比版本号：切过去之后版本号会变，只有哈希能证明"库里这一份就是现在在用的那一份"。
+  </p>
+</section>
+
+<section class="panel">
   <h2>最近一次更新结果</h2>
   {% if last_at %}
   <p class="muted small">运行于 {{ last_at }}（平台 {{ last_os }}）</p>

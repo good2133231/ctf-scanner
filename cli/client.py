@@ -253,6 +253,67 @@ def do_rollback(args):
         sys.exit(1)
 
 
+def do_tool_versions(args):
+    """`--tool-versions <工具>`：列出该工具**版本库里存过的版本**（续94，**不联网**）。
+
+    版本库是 `install()` / `use_version()` 在替换前留下的历史副本；`*` 标出"当前在用的那一份"
+    （按文件内容哈希判，不是比版本号）。
+    """
+    from scanner import toolmgr
+    names = [t.strip() for t in (args.tool_versions or []) if t.strip()] or list(toolmgr.TOOLS)
+    unknown = [t for t in names if t not in toolmgr.TOOLS]
+    if unknown:
+        print(f"[!] 不支持的工具：{','.join(unknown)}（可选：{'、'.join(toolmgr.TOOLS)}）")
+        sys.exit(1)
+    print(f"外部工具版本库（{toolmgr.DEFAULT_DEST}/{toolmgr.VERSIONS_DIRNAME}/，不联网）：")
+    for name in names:
+        rows = toolmgr.list_versions(name)
+        if not rows:
+            print(f"  {name:<10} （空 —— 还没通过 --update-tools 装过，或问不出版本号未归档）")
+            continue
+        print(f"  {name:<10} " + "  ".join(
+            ("*" + r["version"]) if r["active"] else r["version"] for r in rows))
+    print(f"  → 切版本用 `--tool-use <工具>=<版本>`（同样不联网；切换可逆）")
+
+
+def do_tool_use(args):
+    """`--tool-use <工具>=<版本>`：切到版本库里已有的版本（续94，**不联网**）。
+
+    与 `--rollback` 的区别：回滚只能退**一步**（`.bak`），这里能在任意存过的版本之间来回切。
+    切换前会把当前这一份先归档 + 写 `.bak`，所以**可逆**。
+    """
+    from scanner import toolmgr
+    bad = 0
+    for spec in (args.tool_use or []):
+        if "=" not in spec:
+            print(f"[!] 格式应为 <工具>=<版本>，实到：{spec}")
+            bad += 1
+            continue
+        name, _, ver = spec.partition("=")
+        name, ver = name.strip(), ver.strip()
+        if name not in toolmgr.TOOLS:
+            print(f"[!] 不支持的工具：{name}（可选：{'、'.join(toolmgr.TOOLS)}）")
+            bad += 1
+            continue
+        if not ver:
+            print(f"[!] {name}：版本号不能为空")
+            bad += 1
+            continue
+        r = toolmgr.use_version(name, ver)
+        if not r.get("ok"):
+            bad += 1
+            print(f"  {name:<10} 切换失败：{r.get('reason') or '未知原因'}")
+            continue
+        print(f"  {name:<10} 已切到 {ver} → {r['path']}")
+        if r.get("pruned"):
+            print(f"     版本库超出上限，已删除更旧的：{'、'.join(r['pruned'])}")
+        if r.get("reason"):
+            print(f"     注意：{r['reason']}")
+    if bad:
+        print(f"[!] {bad} 项未能切换（原因见上）")
+        sys.exit(1)
+
+
 def do_nodes(args):
     """节点管理（续80）：新建 / 列出 / 吊销执行节点。
 
@@ -356,6 +417,12 @@ def main():
     # ---- 工具版本回滚（续86）----
     ap.add_argument("--rollback", action="append", default=None, metavar="NAME",
                     help="把工具回滚到上一次安装前的版本（可重复；备份是 install 时写的 .bak）")
+    # ---- 多版本共存（续94，**不联网**：版本库是本机的）----
+    ap.add_argument("--tool-versions", action="append", nargs="?", const="", default=None,
+                    metavar="NAME",
+                    help="列出该工具版本库里存过的版本（可重复；裸用＝三个都列）")
+    ap.add_argument("--tool-use", action="append", default=None, metavar="NAME=VER",
+                    help="切到版本库里已有的版本（可重复；不联网、可逆）")
     args = ap.parse_args()
 
     # 不给 `--update-tools` 却给了它的附属参数 → **直接报错**，不静默忽略
@@ -395,6 +462,12 @@ def main():
         return
     if args.rollback:
         do_rollback(args)
+        return
+    if args.tool_versions:
+        do_tool_versions(args)
+        return
+    if args.tool_use:
+        do_tool_use(args)
         return
     # 续跑走独立入口：它不需要 `-f/-t`（输入来自库），也不该被下面"未提供目标"的判断拦掉。
     if args.resume_task is not None:

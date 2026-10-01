@@ -6453,6 +6453,34 @@ http:
                                                 "next": "/extdomains"})
     assert _r7p.status_code == 302 and _r7p.headers["Location"] == "/extdomains", _r7p.headers
 
+    # ④b 续94：**跨任务分支的 owner 收口**。跨任务视图的勾选框里只有域名，而同一个域名可能
+    #     同时躺在**别人的**任务里 —— 不过滤就会把 `promote:*` 行**写进别人的任务**
+    #     （越权**写**，比越权读更严重）。旧代码那条 SQL 完全没有 owner 条件 → 下面必红。
+    def _prom94(tid):
+        return {r["domain"] for r in db.list_subdomains(tid)
+                if (r["source"] or "").startswith("promote:")}
+
+    _o94a = db.create_task("smoke-promote-owner-a", "pengo.pro", ["probe"], {}, owner_id=91)
+    _o94b = db.create_task("smoke-promote-owner-b", "pengo.pro", ["probe"], {}, owner_id=92)
+    db.insert_subdomains(_o94a, [("aaa.pengo.pro", "js:mine")])
+    db.insert_subdomains(_o94b, [("aaa.pengo.pro", "js:mine")])
+    _r94 = _exd7.promote_domains(["aaa.pengo.pro"], settings, owner_id=91)
+    assert _r94["tasks"] == [_o94a], f"owner=91 只能碰自己的任务：{_r94}"
+    assert _prom94(_o94a) == {"aaa.pengo.pro"}, "自己的任务该被追加"
+    assert _prom94(_o94b) == set(), f"**不得写进别人的任务**（实到 {_prom94(_o94b)}）"
+    # 显式 task_id 那条路再加一道纵深防御：给了越权的任务号必须空手而归
+    _r94b = _exd7.promote_domains(["aaa.pengo.pro"], settings, task_id=_o94b, owner_id=91)
+    assert _r94b["promoted"] == [] and _r94b["tasks"] == [], f"越权 task_id 必须空手而归：{_r94b}"
+    assert _prom94(_o94b) == set(), "越权 task_id 不得写进别人的任务"
+    # 管理员（owner_id=None）**不受限** —— 行为与改动前逐字一致（另起两个干净任务来验）
+    _o94c = db.create_task("smoke-promote-owner-c", "pengo.pro", ["probe"], {}, owner_id=91)
+    _o94d = db.create_task("smoke-promote-owner-d", "pengo.pro", ["probe"], {}, owner_id=92)
+    db.insert_subdomains(_o94c, [("aaa.pengo.pro", "js:mine")])
+    db.insert_subdomains(_o94d, [("aaa.pengo.pro", "js:mine")])
+    _r94c = _exd7.promote_domains(["aaa.pengo.pro"], settings, owner_id=None)
+    assert {_o94c, _o94d} <= set(_r94c["tasks"]), f"管理员不受限：{_r94c}"
+    assert _prom94(_o94d) == {"aaa.pengo.pro"}, "管理员路径行为不变"
+
     # ⑤ 拓展域名页按主域名分组折叠（?group=0 回平铺）
     _t7g = db.create_task("smoke-ext-group", "zzgrp7.test", ["probe"], {})
     db.insert_subdomains(_t7g, [("g1a.zzgrp7.test", "js:mine"),
@@ -6503,7 +6531,8 @@ http:
     print("[7a] 续40 拓展域名六条 ok: 存在性判定(幂等·失败落原因)/目标是子域→补收主域名+"
           "当子域入库/归属本项目→追加 promote:<原来源>（原行保留·第三方不误加·子域页显示·"
           "拓展页默认隐藏）/按主域名分组折叠(?group=0 平铺)/建任务 auto_expand 补 osint·jsmine/"
-          "流水线在最后拓展阶段后自动后处理（不勾则不动）")
+          "流水线在最后拓展阶段后自动后处理（不勾则不动）/ 续94 跨任务追加按 owner 收口"
+          "（只碰自己的任务·越权 task_id 空手而归·管理员不受限）")
 
     # [7b] 续42：`internal: true` 命名提取器的值**回填模板上下文**（A1）—— nuclei 的
     # `{{csrf_token}}` 跨请求取值就靠这条链。语义照 nuclei 源码钉（一手核对，非二手转述）：
@@ -7050,12 +7079,30 @@ http:
         "管理员应能一次拿到全部（含子用户的任务）"
     assert _cs.get("/api/tasks/status?ids=abc").status_code == 400, "非整数 id 必须 400，不能 500"
     assert _cs.get("/api/tasks/status?ids=").get_json()["tasks"] == {}, "空 ids → 空结果（不报错）"
+    # 续94：跨任务「归属追加」在 **HTTP 层**同样要按 owner 收口。同一个域名同时躺在两个
+    # 账号的任务里时，子用户不带 task_id 提交**不得**把 promote 行写进别人的任务（越权写）。
+    def _prom94h(tid):
+        return {r["domain"] for r in db.list_subdomains(tid)
+                if (r["source"] or "").startswith("promote:")}
+
+    _p94_mine = db.create_task("smoke-promote-mine", "pengo.pro", ["probe"], {},
+                               owner_id=_sub7h["id"])
+    _p94_other = db.create_task("smoke-promote-other", "pengo.pro", ["probe"], {},
+                                owner_id=_admin7h["id"])
+    db.insert_subdomains(_p94_mine, [("aaa.pengo.pro", "js:mine")])
+    db.insert_subdomains(_p94_other, [("aaa.pengo.pro", "js:mine")])
+    assert _cs.post("/api/domains/promote", data={"domain": ["aaa.pengo.pro"],
+                                                  "next": "/extdomains"}).status_code == 302
+    assert _prom94h(_p94_mine) == {"aaa.pengo.pro"}, "子用户经 HTTP 能追加**自己**的任务"
+    assert _prom94h(_p94_other) == set(), \
+        f"子用户经 HTTP **不得**往别人的任务里写 promote 行（实到 {_prom94h(_p94_other)}）"
     assert _ca.get(f"/tasks/{_tid_mu}").status_code == 200, "管理员应能打开子用户的任务"
     _mt_admin = _ca.get("/tasks").get_data(as_text=True)
     assert "smoke-multiauth" in _mt_admin and "smoke-other-owner" in _mt_admin, \
         "管理员应看到全部任务"
     print("[7h+] 续79 多租户 ok: 子用户只见自己名下任务（列表 + 详情/导出/停止均 404 别人的）；"
-          "管理员见全部；跨任务资产页按 owner 过滤")
+          "管理员见全部；跨任务资产页按 owner 过滤；续93 批量状态接口同样按 owner 过滤；"
+          "续94 跨任务「归属追加」不往别人的任务里写（HTTP 层实测）")
 
     # 7) 侧边栏：子用户看不到管理入口，管理员看得到（UI 与路由两层都要有）
     _sub7h_html = _cs.get("/tasks").get_data(as_text=True)
@@ -9182,6 +9229,55 @@ http:
         _up7p = tm7p.check_updates({}, fetch=lambda repo, timeout=0: {"tag": "v2.0.0", "assets": {}})
     finally:
         _u7p.which, _u7p.run_cmd = _ow7p, _or7p
+
+    # ⑩ 多版本共存（续94）：装/切换时把"将被替换掉的那一份"存进版本库，于是能在**任意**存过的
+    #    版本之间来回切（`rollback` 只能退一步）。上面 ⑧ 的 install 已把 tag 9.9.9 归档进
+    #    `<dest>/.versions/subfinder/9.9.9/`。
+    _lv7p = tm7p.list_versions("subfinder", str(_dest7p))
+    assert [r["version"] for r in _lv7p] == ["9.9.9"], f"install 后应已归档 9.9.9：{_lv7p}"
+    assert _lv7p[0]["active"] is True, "版本库里那一份就是当前在用的（按**内容哈希**判）"
+    # 再造一个"历史版本"，然后在两版之间来回切
+    _vdir7p = tm7p.versions_dir("subfinder", str(_dest7p))
+    (_vdir7p / "1.0.0").mkdir(parents=True, exist_ok=True)
+    (_vdir7p / "1.0.0" / _bin7p).write_bytes(b"FAKE-SUBFINDER-V1")
+    _u7p1 = tm7p.use_version("subfinder", "1.0.0", dest_dir=str(_dest7p),
+                             settings_path=str(_set7p))
+    assert _u7p1["ok"], _u7p1
+    assert (_dest7p / _bin7p).read_bytes() == b"FAKE-SUBFINDER-V1", "切换后磁盘上是 1.0.0 的字节"
+    assert [r["version"] for r in tm7p.list_versions("subfinder", str(_dest7p)) if r["active"]] \
+        == ["1.0.0"], "active 跟着切过去"
+    assert _u7p1["path"].endswith(_bin7p), f"返回的应是相对/可用的路径：{_u7p1['path']!r}"
+    _u7p2 = tm7p.use_version("subfinder", "9.9.9", dest_dir=str(_dest7p),
+                             settings_path=str(_set7p))
+    assert _u7p2["ok"] and (_dest7p / _bin7p).read_bytes() == b"FAKE-SUBFINDER-V2", \
+        "能切回去 → 切换是**可逆**的（rollback 只能退一步，这里能退到任意存过的版本）"
+    # 不存在的版本 → ok=False 且**列出可用版本**（不猜、不静默）
+    _u7p3 = tm7p.use_version("subfinder", "9.9.8", dest_dir=str(_dest7p))
+    assert not _u7p3["ok"] and "9.9.8" in _u7p3["reason"], _u7p3
+    assert "1.0.0" in _u7p3["reason"] and "9.9.9" in _u7p3["reason"], \
+        f"错误信息要列出可用版本：{_u7p3['reason']}"
+    # 问不出版本号 → **不归档**（不编造 unknown 目录出来攒垃圾）
+    _real_dv7p = tm7p.detect_version
+    tm7p.detect_version = lambda tool, path: ""
+    try:
+        _na7p = tm7p.archive_version("subfinder", dest_dir=str(_dest7p), src=(_dest7p / _bin7p))
+        assert not _na7p["ok"] and "版本号" in _na7p["reason"], _na7p
+        assert not (_vdir7p / "unknown").exists(), "不得凭空造出 unknown 目录"
+    finally:
+        tm7p.detect_version = _real_dv7p
+    # 上限：超出 keep 的按版本号从旧到新删，**删了什么如实返回**（不静默删）；protect 的绝不删
+    for _v7p in ("1.1.0", "1.2.0"):
+        _d7p = _vdir7p / _v7p
+        _d7p.mkdir(parents=True, exist_ok=True)
+        (_d7p / _bin7p).write_bytes(b"x-" + _v7p.encode())
+    _pr7p = tm7p.prune_versions("subfinder", keep=1, dest_dir=str(_dest7p), protect={"1.0.0"})
+    assert _pr7p == ["1.1.0", "1.2.0"], f"删掉最旧的两个并如实报出：{_pr7p}"
+    assert "1.0.0" in [r["version"] for r in tm7p.list_versions("subfinder", str(_dest7p))], \
+        "protect 里的版本不得被删"
+    # 未知工具一律 ok=False（不抛）
+    assert tm7p.archive_version("nope", dest_dir=str(_dest7p))["ok"] is False
+    assert tm7p.use_version("nope", "1.0.0", dest_dir=str(_dest7p))["ok"] is False
+    assert tm7p.list_versions("nope", str(_dest7p)) == []
     _sf7p = next(r for r in _up7p if r["tool"] == "subfinder")
     assert _sf7p["has_update"] is True and _sf7p["latest"] == "v2.0.0", _sf7p
     # 变异证伪（§6.1）：把 newer_version 打成"latest 非空即算新" → 它会**误报**有新版本
@@ -9392,7 +9488,9 @@ http:
           "CLI --no-wire 生效·失败退出码 1·未知工具名中止｜"
           "续59-3 需手工安装三项（nmap/fscan/dirmap）TOOLS∩MANUAL=∅（M6 证伪·塞进 TOOLS 即红）、"
           "GUI 面板展示原因原文且无下载框（M7 证伪·MANUAL 清空即消失）、"
-          "`--check` 同源列出三项（M8 证伪·清空 MANUAL 即不再出现）")
+          "`--check` 同源列出三项（M8 证伪·清空 MANUAL 即不再出现）｜"
+          "续94 多版本共存（版本库按 tag 归档·内容哈希判 active·任意版本可逆来回切·"
+          "问不出版本号不归档·prune 如实报出删了什么·protect 不删·未知工具 ok=False）")
 
     # ---- [7q] 续55：收掉报告 / 阶段 / GUI 里剩余的固定上限（静默丢结果 · 静默失效） ----
     # 续51 修了 `/vulns` 的 500、续53 修了 `/tasks` 的 200 与详情页的 1000，但**同源**的固定上限

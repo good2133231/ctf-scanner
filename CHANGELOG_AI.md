@@ -21,6 +21,49 @@
 
 
 
+## 2026-10-01 —— 续94：**跨任务归属追加的 owner 收口 + 外部工具多版本共存**
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。
+
+### ① `/api/domains/promote` 跨任务分支的 **owner 收口**（多租户越权**写**）
+
+- 缺陷（**实测确认**）：显式带 `task_id` 的那条路续79 已用 `_owned_task()` 校验，但**跨任务视图**
+  （勾选框里只有域名、不带 `task_id`）走的是 `promote_domains(task_id=None)` —— 那条 SQL
+  `SELECT task_id, domain FROM subdomains WHERE (拓展域名条件) AND domain IN (…)`
+  **完全没有 owner 条件**。同一个域名若同时躺在**别人的**任务里，子用户点一次「归属追加」就会把
+  `source=promote:*` 行**写进别人的任务** —— 是越权**写**，比越权读更严重。
+- 改法：`extdom.promote_domains()` 新增 `owner_id`；跨任务分支用 `db._owner_asset_clause(owner_id)`
+  的"任务属于我"子查询收口；显式 `task_id` 那条路也补一道**纵深防御**（`owner_of(tid)` 比对）。
+  GUI 侧把 `_owner_scope()` 一路传下去（`None` ＝ 管理员不限制，行为与改动前逐字一致）。
+- 回归 `tests/smoke.py`：`[7a]` 纯函数层（owner=91 只碰自己的任务 / 别人的任务一行都不被写 /
+  越权 `task_id` 空手而归 / 管理员不受限）；`[7h+]` **HTTP 层**用真子用户会话提交，
+  确认不往别人的任务里写。旧代码那条 SQL 没有 owner 条件 → 断言天然变红。
+- **变异注入实测**：把 owner 过滤摘掉 → `bob 的任务必须一行都没被写` 与 HTTP 路径两条按预期变红
+  （已还原，diff 仍 16/5）。
+
+### ② 外部工具**多版本共存**（roadmap「工具版本管理」最后一块）
+
+- 背景：`rollback()` 只有**一个** `<名>.bak` 槽位，只能退**一步**。
+- 改法：新增**版本库** `<安装目录>/.versions/<工具>/<版本>/<可执行名>`（已被 `.gitignore`
+  的 `tools/scanner/*` 覆盖，不入仓）：
+  - `install()` 装前把**将被替换掉的那一份**归档（问不出版本号就不归档）、装后按 **release tag**
+    归档新版 —— tag 是确切知道的，不必去问二进制；
+  - `list_versions()`：按版本号降序，`active` 用**内容哈希**与当前二进制比对
+    （不是比版本号 —— 切过去之后版本号会变，只有哈希能证明"库里这一份就是现在在用的那一份"）；
+  - `use_version()`：切前先把当前这一份归档 + 写 `.bak`，所以**可逆**（能退到**任意**存过的版本）；
+  - `prune_versions()`：每个工具最多留 `VERSIONS_KEEP=5` 个，超出按版本号从旧到新删，
+    **删了什么原样返回**（不静默删）；`protect` 里的版本永不删。
+- **口径**：版本号只从二进制自己报的 `-version` 里读；**读不出来就不归档**，绝不编造 `unknown`
+  目录出来攒垃圾。切换**不联网**（版本库是本机的），与 `--update-tools` 那条红线不冲突。
+- 入口：CLI `--tool-versions [NAME]`（裸用＝三个都列）/ `--tool-use NAME=VER`；
+  GUI「外部工具」页新增「版本库（多版本共存）」面板（列出各版本 + 「切到此版本」按钮，
+  仅管理员；子用户 403）。
+- 回归 `tests/smoke.py [7p] ⑩`：按 tag 归档 / 内容哈希判 active / 任意版本可逆来回切 /
+  问不出版本号不归档 / prune 如实报出删了什么 / protect 不删 / 未知工具一律 `ok=False`。
+  **变异注入实测**：① 版本号缺失时退化成 `unknown` → "不归档"与"没有 unknown 目录"两条变红；
+  ② `prune` 不再保护 `protect` → "protect 的版本没被删"变红（均已还原）。
+- 文件：`scanner/toolmgr.py`、`cli/client.py`、`gui/app.py`、`gui/templates/tools.html`、
+  `tests/smoke.py`、本文件。
 ## 2026-10-01 —— 续93：**任务列表页轮询改批量**（前端优化）
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。

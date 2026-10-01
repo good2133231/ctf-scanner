@@ -216,12 +216,16 @@ def promote_owned(task_id, settings=None, logger=None, bases=None):
     return {"promoted": promoted, "bases": bases, "blocked": len(blocked)}
 
 
-def promote_domains(domains, settings=None, logger=None, task_id=None):
+def promote_domains(domains, settings=None, logger=None, task_id=None, owner_id=None):
     """跨任务视图里勾选的域名 → 在**它所属的任务**下追加为自身子域名。
 
     拓展域名页是跨任务的，勾选框里只有域名；这里按域名反查它出现在哪些任务的拓展域名里，
     再逐个任务用 `promote_owned()` 判定归属（同一个域名在两个任务里归属结论可以不同）。
     `task_id` 给了就只在该任务下处理（任务详情页签用）。
+
+    `owner_id`（续94）：多租户收口。`None` ＝ 管理员不限制；否则**只处理归属该账号的任务**。
+    这是必须的：跨任务视图的勾选框里只有域名，同一个域名可能同时出现在**别人的**任务里 ——
+    不过滤就会把 `source=promote:*` 行**写进别人的任务**（越权**写**，比越权读更严重）。
     """
     settings = settings or {}
     wanted = {_norm(d) for d in (domains or []) if _norm(d)}
@@ -231,15 +235,22 @@ def promote_domains(domains, settings=None, logger=None, task_id=None):
     pairs = set()
     if task_id is not None:
         tid = int(task_id)
-        for r in ext_rows(tid):
-            if _norm(r.get("domain")) in wanted:
-                pairs.add((tid, r["domain"]))
+        # 显式指定任务时也校验归属：GUI 调用方通常已校验，这里是**纵深防御** ——
+        # 少依赖一处调用方，就少一个"将来新加的调用点忘了校验"的口子。
+        if owner_id is None or owner_of(tid) == int(owner_id):
+            for r in ext_rows(tid):
+                if _norm(r.get("domain")) in wanted:
+                    pairs.add((tid, r["domain"]))
     else:
+        # `subdomains` 没有 owner 列，用 `_owner_asset_clause()` 的"任务属于我"子查询收口
+        owner_sql, owner_params = db._owner_asset_clause(owner_id)
+        extra = (" AND " + owner_sql) if owner_sql else ""
         for chunk in _chunks(sorted(wanted)):
             marks = ",".join("?" for _ in chunk)
             for r in db._query(
                     "SELECT task_id, domain FROM subdomains WHERE (" + db.EXT_SUBDOMAIN_WHERE
-                    + f") AND domain IN ({marks})", tuple(chunk)):
+                    + f") AND domain IN ({marks})" + extra,
+                    tuple(chunk) + tuple(owner_params)):
                 pairs.add((r["task_id"], r["domain"]))
 
     by_task = {}

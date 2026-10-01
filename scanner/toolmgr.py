@@ -33,6 +33,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import sys
 import tarfile
 import urllib.parse
@@ -359,10 +360,27 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
                 out["backed_up"] = True
             except Exception:
                 out["backed_up"] = False
+            # 续94：把**将被替换掉的这一份**也存进版本库（多版本共存）。
+            # 问不出它的版本号就**不归档**（不编造 unknown 目录）；失败一律不阻断安装。
+            try:
+                _a = archive_version(tool, dest_dir=dest_dir, src=target)
+                out["archived_previous"] = _a.get("version") or ""
+            except Exception:                                # noqa: BLE001
+                out["archived_previous"] = ""
         tmp.write_bytes(payload)
         if os.name != "nt":
             os.chmod(tmp, 0o755)
         os.replace(tmp, target)                 # 原子替换：要么旧的、要么完整的新的
+        # 续94：把**刚装好的这一份**按 release tag 存进版本库 —— tag 是确切知道的，
+        # 不必去问二进制（问不出来也不影响这一步）。失败同样不阻断安装。
+        try:
+            _a2 = archive_version(tool, dest_dir=dest_dir, version=tag, src=target,
+                                  protect={_version_key(tag)})
+            out["archived"] = _a2.get("version") or ""
+            if _a2.get("pruned"):
+                out["versions_pruned"] = _a2["pruned"]
+        except Exception:                                    # noqa: BLE001
+            out["archived"] = ""
     except Exception as e:
         try:
             tmp.unlink()
@@ -557,6 +575,196 @@ def newer_version(latest, installed):
     """
     a, b = _ver_tuple(latest), _ver_tuple(installed)
     return bool(a and b and a > b)
+
+
+# ---------------- 多版本共存（续94） ----------------
+#
+# `rollback()` 只能退**一步**（单个 `<名>.bak` 槽位）。这里再加一层**版本库**：
+# `<安装目录>/.versions/<工具>/<版本>/<可执行名>` —— 装/切换时把**将要被替换掉的那一份**
+# 存进去，于是可以在多个版本之间来回切（`use_version()`），而不是只有"上一版"。
+#
+# 口径（与 rollback 同源，"宁可少做也不乱做"）：
+# - 版本号**只从二进制自己嘴里问**（`<binary> -version`）；问不出来就**不归档** ——
+#   绝不编一个 `unknown` 目录出来攒垃圾。
+# - 目录名用归一后的 `major.minor.patch`，同版本重复归档＝覆盖（幂等）。
+# - 切版本前先把**当前**这一份归档 + 写 `<名>.bak`，所以 `use_version()` 也是**可逆**的。
+# - 版本库有上限（`VERSIONS_KEEP`），超出的**删掉并在返回值里如实上报** —— 不静默删。
+
+VERSIONS_DIRNAME = ".versions"
+VERSIONS_KEEP = 5      # 每个工具最多留几个历史版本（按版本号从旧到新删，删了什么会如实报出）
+
+
+def versions_dir(tool, dest_dir=None):
+    """版本库根目录：`<安装目录>/.versions/<工具>/`。"""
+    dest = Path(dest_dir) if dest_dir else (_BASE_DIR / DEFAULT_DEST)
+    return dest / VERSIONS_DIRNAME / str(tool)
+
+
+def _version_key(text):
+    """任意版本文本 → `major.minor.patch`；抠不到 → `""`（**不猜**）。"""
+    t = _ver_tuple(text)
+    return ".".join(str(x) for x in t) if t else ""
+
+
+def detect_version(tool, path):
+    """跑一次 `<binary> -version` 问版本，返回归一后的版本键（问不出来 → `""`）。"""
+    flag = (TOOLS.get(tool) or {}).get("verify")
+    if not flag or not path:
+        return ""
+    try:
+        from .utils import run_cmd
+        _rc, out, err = run_cmd([str(path), str(flag)], timeout=30)
+    except Exception:                                        # noqa: BLE001 - 探测失败不是错误
+        return ""
+    for line in ((out or "") + "\n" + (err or "")).splitlines():
+        key = _version_key(line)
+        if key:
+            return key
+    return ""
+
+
+def _sha256_file(path):
+    """整份文件的 sha256（读不到 → `""`）。用于判定"版本库里哪一份＝当前在用的那一份"。"""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return ""
+
+
+def prune_versions(tool, keep=VERSIONS_KEEP, dest_dir=None, protect=()):
+    """版本库只保留**版本号最大的 `keep` 个**（外加 `protect` 里的），返回被删掉的版本键。
+
+    **不静默删**：删了什么原样返回，调用方负责报给用户。
+    """
+    root = versions_dir(tool, dest_dir)
+    if not root.is_dir():
+        return []
+    keepset = {str(x) for x in (protect or ())}
+    entries = [( _ver_tuple(d.name), d.name) for d in root.iterdir() if d.is_dir()]
+    parseable = sorted([e for e in entries if e[0]], key=lambda x: x[0])
+    keep_names = {n for _t, n in parseable[-int(keep):]} | keepset
+    removed = []
+    for _t, name in entries:
+        if name in keep_names:
+            continue
+        try:
+            shutil.rmtree(root / name)
+        except OSError:
+            continue
+        removed.append(name)
+    return sorted(removed)
+
+
+def archive_version(tool, dest_dir=None, version=None, src=None, protect=()):
+    """把一份二进制存进版本库，返回 `{ok, version, path, pruned, reason}`。
+
+    `version` 显式给了就用它（安装路径知道确切 tag），否则跑 `<binary> -version` 问。
+    `src` 默认是安装目录里的**当前**二进制。问不出版本号 → `ok=False`（不归档）。
+    """
+    out = {"ok": False, "version": "", "path": "", "pruned": [], "reason": ""}
+    if tool not in TOOLS:
+        out["reason"] = f"不支持的工具（可选：{'、'.join(TOOLS)}）"
+        return out
+    dest = Path(dest_dir) if dest_dir else (_BASE_DIR / DEFAULT_DEST)
+    binary = binary_name(tool)
+    source = Path(src) if src else (dest / binary)
+    if not source.exists():
+        out["reason"] = "当前没有已安装的可执行文件（无可归档）"
+        return out
+    key = _version_key(version) or detect_version(tool, source)
+    if not key:
+        out["reason"] = "问不出该二进制的版本号（不归档 —— 不编造 unknown 目录）"
+        return out
+    vdir = versions_dir(tool, dest_dir) / key
+    try:
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / binary).write_bytes(source.read_bytes())
+    except OSError as e:
+        out["reason"] = f"归档失败：{e}"
+        return out
+    out.update(ok=True, version=key, path=_setting_value(vdir / binary))
+    out["pruned"] = prune_versions(tool, dest_dir=dest_dir, protect=set(protect) | {key})
+    return out
+
+
+def list_versions(tool, dest_dir=None):
+    """版本库里的版本列表（版本号**降序**），每项 `{version, path, size, active}`。
+
+    `active` 用**内容哈希**与当前安装的二进制比对 —— 不是比版本号：切过去之后版本号会变，
+    只有哈希能证明"版本库里这一份就是现在在用的那一份"。
+    """
+    dest = Path(dest_dir) if dest_dir else (_BASE_DIR / DEFAULT_DEST)
+    binary = binary_name(tool)
+    live = dest / binary
+    live_hash = _sha256_file(live) if live.exists() else ""
+    root = versions_dir(tool, dest_dir)
+    rows = []
+    if not root.is_dir():
+        return rows
+    for d in root.iterdir():
+        f = d / binary
+        if not d.is_dir() or not f.exists():
+            continue
+        rows.append({"version": d.name, "path": _setting_value(f),
+                     "size": f.stat().st_size,
+                     "active": bool(live_hash) and _sha256_file(f) == live_hash})
+    rows.sort(key=lambda r: (_ver_tuple(r["version"]) or (0, 0, 0)), reverse=True)
+    return rows
+
+
+def use_version(tool, version, dest_dir=None, wire=True, settings_path=None):
+    """把版本库里某个版本切回**当前使用**（续94）；返回结果字典（**永不抛异常**）。
+
+    切换前会把**当前**这一份归档进版本库 + 写 `<名>.bak` —— 所以切过去再切回来是可行的，
+    不会把手上这一份弄丢。`version` 必须在版本库里存在，否则如实报出可用版本。
+    """
+    out = {"tool": tool, "ok": False, "version": "", "path": "", "reason": ""}
+    if tool not in TOOLS:
+        out["reason"] = f"不支持的工具（可选：{'、'.join(TOOLS)}）"
+        return out
+    dest = Path(dest_dir) if dest_dir else (_BASE_DIR / DEFAULT_DEST)
+    binary = binary_name(tool)
+    target = dest / binary
+    want = str(version)
+    src = versions_dir(tool, dest_dir) / want / binary
+    if not src.exists():
+        have = "、".join(r["version"] for r in list_versions(tool, dest_dir)) or "无"
+        out["reason"] = f"版本库里没有 {want}（可用版本：{have}）"
+        return out
+    if target.exists():
+        # 先把手上这份存好（归档 + .bak），切换才是可逆的。protect 必须带上**目标版本** ——
+        # 否则下面那次 prune 可能把"正要切过去的那一份"删掉。
+        try:
+            (dest / (binary + ".bak")).write_bytes(target.read_bytes())
+        except OSError:
+            pass
+        archive_version(tool, dest_dir=dest_dir, src=target, protect={want})
+    tmp = dest / (binary + ".part")
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(src.read_bytes())
+        if os.name != "nt":
+            os.chmod(tmp, 0o755)
+        os.replace(tmp, target)
+    except Exception as e:                                   # noqa: BLE001
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        out["reason"] = f"切换失败：{e}"
+        return out
+    out.update(ok=True, version=want, path=_setting_value(target))
+    out["pruned"] = prune_versions(tool, dest_dir=dest_dir, protect={want})
+    if wire:
+        ok, note = patch_settings_tool(tool, out["path"], path=settings_path)
+        out["wired"] = ok
+        if not ok:
+            out["reason"] = f"已切到 {out['path']}，但写回 config/settings.yaml 失败：{note}"
+    return out
 
 
 def check_updates(settings, fetch=fetch_release, timeout=30):

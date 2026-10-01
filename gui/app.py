@@ -2607,8 +2607,12 @@ def create_app():
         task_id = (request.form.get("task_id") or "").strip()
         if task_id.isdigit() and not _owned_task(int(task_id)):
             return redirect(back)          # 续79：不能往别的账号的任务里追加资产
+        # 续94：**跨任务视图**（勾选框里只有域名、不带 task_id）同样要收口 ——
+        # 同一个域名可能同时躺在**别人**的任务里，不过滤就会往别人的任务里写 `promote:*` 行。
+        # 显式给了 task_id 的那条路上面已按 `_owned_task` 校验过；这里把 owner 一路传下去。
         res = extdom.promote_domains(domains, settings, logger=logger,
-                                     task_id=int(task_id) if task_id.isdigit() else None)
+                                     task_id=int(task_id) if task_id.isdigit() else None,
+                                     owner_id=_owner_scope())
         logger.info(f"[gui] 归属追加：勾选 {len(domains)} 个 → 追加 {len(res['promoted'])} 个"
                     f"（任务 {res['tasks'] or '无'}）")
         return redirect(back)
@@ -3044,6 +3048,8 @@ def create_app():
             return {"path": masked, tkey: out}
 
         rows = [dict(r, **_mask_pair(r.get("path"), r.get("note"), "note")) for r in rows]
+        # 续94：多版本共存 —— 每个工具版本库里存过的版本（`active` 按内容哈希判，不是比版本号）
+        versions = {name: toolmgr.list_versions(name) for name in toolmgr.TOOLS}
         last_results = [dict(r, **_mask_pair(r.get("path"), r.get("reason"), "reason"))
                         for r in (_TOOLS_LAST.get("results") or [])]
         os_label, arch = toolmgr.host_arch()
@@ -3059,11 +3065,43 @@ def create_app():
                                last_results=last_results,
                                last_updates=_TOOLS_LAST.get("updates") or [],
                                last_updates_at=_TOOLS_LAST.get("updates_at") or "",
+                               versions=versions,
+                               versions_keep=toolmgr.VERSIONS_KEEP,
+                               versions_dirname=toolmgr.VERSIONS_DIRNAME,
                                max_mb=toolmgr._MAX_BYTES // (1024 * 1024),
                                hosts=sorted(toolmgr._ALLOWED_HOSTS),
                                dest=toolmgr.DEFAULT_DEST,
                                msg=(request.args.get("msg") or "").strip(),
                                error=(request.args.get("error") or "").strip())
+
+    @app.route("/api/tools/use-version", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_tools_use_version():
+        """把某个工具切到**版本库里已有的**另一个版本（续94）。
+
+        与「回滚」的区别：回滚只能退**一步**（靠 `.bak`），这里能在版本库里的任意版本间来回切。
+        ⚠️ 切换本身**不联网**（版本库是本机的）—— 与 `--update-tools` 那条红线不冲突。
+        切之前会把当前这一份归档 + 写 `.bak`，所以**可逆**。
+        """
+        tool = (request.form.get("tool") or "").strip()
+        version = (request.form.get("version") or "").strip()
+        if tool not in toolmgr.TOOLS:
+            return redirect(url_for("tools_page", error=f"不支持的工具：{tool or '（空）'}"))
+        if not version:
+            return redirect(url_for("tools_page", error=f"{tool}：版本号不能为空"))
+        r = toolmgr.use_version(tool, version)
+        _audit(audit.KIND_TASK, target="external-tools",
+               detail=f"切换外部工具版本：{tool} → {version}", ok=bool(r.get("ok")))
+        if not r.get("ok"):
+            return redirect(url_for("tools_page",
+                                    error=f"{tool} 切换失败：{r.get('reason') or '未知原因'}"))
+        note = f"{tool} 已切到 {version}"
+        if r.get("pruned"):
+            note += f"；版本库超出上限，已删除更旧的：{'、'.join(r['pruned'])}"
+        if r.get("reason"):
+            note += f"（{r['reason']}）"
+        return redirect(url_for("tools_page", msg=note))
 
     @app.route("/api/tools/update", methods=["POST"])
     @login_required
