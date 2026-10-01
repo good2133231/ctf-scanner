@@ -597,6 +597,22 @@ def main():
     off_bl["blacklist"]["enabled"] = False
     assert blk.load(off_bl) == [] and blk.filter_domains(["y.tracker.test"], off_bl)[1] == 0
     assert blk.load(bl_settings) == ["tracker.test"], "开关关闭不该改动文件"
+
+    # 续89：**按账号隔离** —— 生效集合 = 全局文件 ∪ 本账号文件；别人看不到我的条目
+    _bl_dir = Path(_TMPDIR) / "bl.d"
+    bl_settings["blacklist"]["dir"] = str(_bl_dir)
+    assert blk.add(["mine.test"], bl_settings, owner_id=5) == 1
+    assert blk.add(["mine.test"], bl_settings, owner_id=5) == 0, "同账号重复加不重复写"
+    assert blk.load(bl_settings, owner_id=5) == ["tracker.test", "mine.test"], "本账号 = 全局 + 自己"
+    assert blk.load(bl_settings, owner_id=6) == ["tracker.test"], "别人看不到我的条目"
+    assert blk.load(bl_settings) == ["tracker.test"], "无归属（CLI / 老任务）只看全局"
+    assert blk.filter_domains(["a.mine.test"], bl_settings, owner_id=5) == ([], 1)
+    assert blk.filter_domains(["a.mine.test"], bl_settings, owner_id=6) == (["a.mine.test"], 0)
+    assert blk.account_path(0, bl_settings) is None, "无归属没有账号文件"
+    assert (Path(_bl_dir) / "5.txt").exists(), "条目必须落在账号文件里"
+    assert "mine.test" not in bl_file.read_text(encoding="utf-8"), "不得污染全局文件"
+    assert blk.remove(["mine.test"], bl_settings, owner_id=5) == 1
+    assert blk.load(bl_settings, owner_id=5) == ["tracker.test"], "移除只动本账号文件"
     # 回归：手工编辑过的名单**末尾常常没有换行**，直接 append 会把新条目粘到最后一条上
     # （实测 `example.com` + `a.test` → `example.coma.test`，原条目丢失且黑名单静默失效）
     bl_file.write_text("# 手写\nhand.test", encoding="utf-8")      # 故意不给末尾换行
@@ -666,7 +682,7 @@ def main():
     # (8) 黑名单批量加入接口：改成桩函数，避免往真实 config/blacklist.txt 里写测试域名
     picked = []
 
-    def _fake_bl_add(domains, st=None):
+    def _fake_bl_add(domains, st=None, **_k):      # 续89：GUI 会多传 owner_id
         picked.extend(domains)
         return len(domains)
 
@@ -2245,7 +2261,8 @@ def main():
         from scanner import blacklist as _bl_mod
         _bl_calls = []
         _orig_bl_add = _bl_mod.add
-        _bl_mod.add = lambda domains, st=None: (_bl_calls.append(list(domains)), len(domains))[1]
+        _bl_mod.add = lambda domains, st=None, **_k: \
+            (_bl_calls.append(list(domains)), len(domains))[1]   # 续89：接受 owner_id
         try:
             _r4 = c.post("/api/blacklist/add", data={
                 "domain": ["noise-ext.test"], "next": f"/tasks/{_et}"})

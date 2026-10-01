@@ -17,6 +17,30 @@
 
 
 
+
+## 2026-10-01 —— 续89：**黑名单按账号隔离**（续79 已知边界收尾）
+
+> 实施者：**WorkBuddy · Claude**。
+
+- 缺陷（续79 写下的已知边界）：`config/blacklist.txt` 是**一份全局**名单 —— 共享服务器上，
+  子用户加一个域名会**影响所有人**的扫描（命中即不入资产库）。
+- 改法（仍是纯文本，与模块原有取舍一致）：
+  - 生效集合 = **全局文件**（`config/blacklist.txt`，管理员维护）∪ **本账号文件**
+    （`config/blacklist.d/<账号 id>.txt`，只对该账号的任务生效）；
+  - `blacklist.load/add/remove/filter_*` 都加 `owner_id`：**有账号 → 动本账号文件**；
+    没有（CLI 直跑 / 老任务 / 无归属）→ 动全局文件；
+  - `StageContext.owner_id`（`run_task` 从任务行填）+ 三个阶段（subdomain / jsmine / osint）与
+    `extdom` 的黑名单过滤都按它收窄；
+  - GUI：黑名单增删 / 展示走 `_owner_scope()` —— **管理员 → 全局文件**（行为不变），
+    **子用户 → 自己的文件**；
+  - `.gitignore` 补 `config/blacklist.d/`（本机用户数据；全局文件仍在版本控制里）。
+- 回归 `tests/smoke.py`（黑名单用例追加）：本账号 = 全局 + 自己｜**别人的账号看不到我的条目**｜
+  无归属只看全局｜过滤按 owner 生效｜移除只动本账号文件、**不污染全局文件**。同步修了 2 处
+  `blacklist.add` 测试桩（要能吃下 `owner_id`）。
+- 文件：`scanner/blacklist.py`、`scanner/runner.py`、`scanner/stages/{subdomain,jsmine,osint}.py`、
+  `scanner/extdom.py`、`gui/app.py`、`.gitignore`、`tests/smoke.py`、本文件。
+- 已知边界：GUI 上子用户会**看到**全局条目（但删不掉 —— 删除只动自己的文件）；管理员**看不到**
+  子用户的条目。
 ## 2026-10-01 —— 续88：**自检阶段级耗时基线**（devmode 收尾）
 
 > 实施者：**WorkBuddy · Claude**。

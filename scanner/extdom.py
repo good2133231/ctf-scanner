@@ -79,6 +79,15 @@ def task_bases(task_id, targets_text=None):
     return {b for b in out if b}
 
 
+def owner_of(task_id):
+    """任务归属账号（续89）；取不到 / 老库无该列 → 0（= 只看全局黑名单）。"""
+    try:
+        row = db.get_task(int(task_id))
+    except (TypeError, ValueError):
+        return 0
+    return int(row["owner_id"] or 0) if (row and "owner_id" in row.keys()) else 0
+
+
 def ext_rows(task_id):
     """任务下的全部拓展域名行（`js:*` / `osint:*`）。"""
     return [dict(r) for r in db._query(
@@ -124,7 +133,7 @@ def resolve_extended(task_id, settings=None, logger=None, only_missing=True,
             continue
         if r.get("domain"):
             todo.append(r["domain"])
-    todo, blocked = blacklist.filter_domains(todo, settings)
+    todo, blocked = blacklist.filter_domains(todo, settings, owner_id=owner_of(task_id))
     skipped = 0
     over = []
     if len(todo) > cap:
@@ -186,7 +195,7 @@ def promote_owned(task_id, settings=None, logger=None, bases=None):
             continue
         cands.append(r)
     pairs = [(r["domain"], r.get("source") or "") for r in cands]
-    kept, blocked = blacklist.filter_pairs(pairs, settings)
+    kept, blocked = blacklist.filter_pairs(pairs, settings, owner_id=owner_of(task_id))
     kept_rows = {r["domain"]: r for r in cands}
     if not kept:
         return {"promoted": [], "bases": bases, "blocked": len(blocked)}

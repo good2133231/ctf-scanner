@@ -102,7 +102,8 @@ class OsintStage(Stage):
             seen.add(domain)
             new.append((domain, source))
         # 用户黑名单：命中的域名**不入库**，因此后面的 dirscan/vulnscan 也不会去扫它
-        new, blocked = blacklist.filter_pairs(new, ctx.settings)
+        new, blocked = blacklist.filter_pairs(new, ctx.settings,
+                                             owner_id=getattr(ctx, "owner_id", 0))
         if new:
             db.insert_subdomains(ctx.task_id, new)
         if blocked:

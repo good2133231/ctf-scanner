@@ -2423,14 +2423,14 @@ def create_app():
     @login_required
     def api_blacklist_add():
         domains = _picked_domains()
-        n = blacklist.add(domains, settings)
+        n = blacklist.add(domains, settings, owner_id=_owner_scope())
         logger.info(f"[gui] 黑名单新增 {n} 条（提交 {len(domains)} 个）")
         return redirect(_safe_next(request.form.get("next"), url_for("subdomains")))
 
     @app.route("/api/blacklist/remove", methods=["POST"])
     @login_required
     def api_blacklist_remove():
-        n = blacklist.remove(_picked_domains(), settings)
+        n = blacklist.remove(_picked_domains(), settings, owner_id=_owner_scope())
         logger.info(f"[gui] 黑名单移除 {n} 条")
         return redirect(url_for("settings_page"))
 
@@ -2831,7 +2831,7 @@ def create_app():
                 }
             except ValueError:
                 return render_template("settings.html", s=load_settings(), checks=owasp_checks,
-                                       bl=blacklist.load(settings),
+                                       bl=blacklist.load(settings, owner_id=_owner_scope()),
                                        bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                        error="参数必须是整数")
             # 续48：审计只记"改了哪几个区块"，**绝不记值**（键名也省掉 —— 见 `_changed_sections`）。
@@ -2841,7 +2841,7 @@ def create_app():
                    detail=f"保存策略配置（变更区块：{','.join(_changed) or '无'}）")
             return redirect(url_for("settings_page"))
         return render_template("settings.html", s=settings, checks=owasp_checks,
-                               bl=blacklist.load(settings),
+                               bl=blacklist.load(settings, owner_id=_owner_scope()),
                                bl_path=rel_display(blacklist.path(settings), mask_outside=True))
 
     # ---------- 访问审计（续48） ----------

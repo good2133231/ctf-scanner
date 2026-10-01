@@ -144,6 +144,8 @@ class StageContext:
         # 续88：**阶段级耗时**（秒）。自检据此出"耗时基线"、跨次对比找"哪一步突然变慢"。
         # 记在 ctx 上而不是库里：它是**诊断量**，不是任务产物，不该进 DB/报告。
         self.stage_seconds = {}
+        # 续89：本任务**归属账号**（0 = 无归属）—— 黑名单等"按账号"的能力据此收窄。
+        self.owner_id = 0
 
     @property
     def throttle(self):
@@ -343,6 +345,10 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
     stop_event = _register_stop(task_id)
     ctx = StageContext(task_id, name, targets, stages, options, settings or load_settings(),
                        workdir, logger, stop_event=stop_event)
+    # 续89：从任务行取归属账号（`get_task` 是廉价读；老库没有该列时按 0 处理）。
+    _orow = db.get_task(task_id)
+    ctx.owner_id = int(_orow["owner_id"] or 0) \
+        if (_orow and "owner_id" in _orow.keys()) else 0
     _auth = taskauth.from_task_options(options)
     if _auth:
         # 只记名字与掩码值：日志文件会被打包/分享，凭据不进日志

@@ -69,7 +69,8 @@ class JsmineStage(Stage):
         existing = {r["domain"] for r in db.list_subdomains(ctx.task_id)}
         new_domains = sorted(d for d in domains if d not in existing)
         # 用户黑名单：命中的域名不入库，后续阶段也就不会扫它
-        new_domains, blocked = blacklist.filter_domains(new_domains, ctx.settings)
+        new_domains, blocked = blacklist.filter_domains(new_domains, ctx.settings,
+                                                        owner_id=getattr(ctx, "owner_id", 0))
         if blocked:
             ctx.logger.info(f"[jsmine] 黑名单拦截 {blocked} 个域名（config/blacklist.txt）")
         ctx.results["js_domains"] = new_domains

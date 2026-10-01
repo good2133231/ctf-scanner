@@ -39,3 +39,6 @@ github.txt
 # 一律不入库（`tools/scanner/README.md` 是仓库自带说明，用 `!` 放行）。
 tools/scanner/*
 !tools/scanner/README.md
+# 按账号黑名单（续89）：`config/blacklist.d/<账号 id>.txt` 是**本机用户数据**，不进仓库
+# （全局黑名单 `config/blacklist.txt` 仍在版本控制里 —— 它是管理员维护的共享配置）。
+config/blacklist.d/

@@ -6,11 +6,21 @@
 - **命中即整条丢弃**（而不是"入库但标记"）：资产面越小、dirscan/vulnscan 的预算越集中，
   这也正是用户要黑名单的目的（例如把第三方域、上级单位域、无关的姊妹业务域排除掉）；
 - 每次调用都重新读文件、不做缓存：用户就在 GUI 里随时增删，缓存只会带来"改了不生效"的困惑。
+
+续89「按账号隔离」：原来只有**一份全局**文件 —— 共享服务器上，子用户加一个域名会**影响所有人**。
+现在生效集合 = **全局文件**（`config/blacklist.txt`，管理员维护）∪ **本账号文件**
+（`config/blacklist.d/<账号 id>.txt`，只对该账号的任务生效）。仍是纯文本、可手工编辑。
 """
 from pathlib import Path
 
 from .config import BASE_DIR
 from .utils import read_lines, to_ascii
+
+
+_HEADER = ("# 用户黑名单：一行一个域名（含其所有子域），命中的域名不入资产库、也不会被扫。\n"
+           "# 可直接手工编辑本文件；GUI 的「子域名 / 拓展域名」页也支持批量加入。\n")
+_HEADER_ACCOUNT = ("# 本账号专属黑名单（续89）：只影响**本账号**的任务，不影响别人的扫描。\n"
+                   "# 一行一个域名（含其所有子域）；全局黑名单在 config/blacklist.txt。\n")
 
 
 def path(settings=None):
@@ -20,18 +30,44 @@ def path(settings=None):
     return p if p.is_absolute() else (BASE_DIR / p)
 
 
+def dir_path(settings=None):
+    """按账号黑名单的目录（`blacklist.dir` 可覆盖，相对路径按项目根解析）。"""
+    raw = ((settings or {}).get("blacklist") or {}).get("dir") or "config/blacklist.d"
+    p = Path(str(raw))
+    return p if p.is_absolute() else (BASE_DIR / p)
+
+
+def account_path(owner_id, settings=None):
+    """某账号的黑名单文件（续89）；`owner_id` 为 0 / None（= 无归属）→ 返回 None。"""
+    try:
+        oid = int(owner_id or 0)
+    except (TypeError, ValueError):
+        oid = 0
+    return (dir_path(settings) / f"{oid}.txt") if oid > 0 else None
+
+
 def enabled(settings=None):
     return ((settings or {}).get("blacklist") or {}).get("enabled") is not False
 
 
-def load(settings=None):
-    """读取全部条目（已归一化：小写、去前后点、去掉 `*.` 前缀），保持文件顺序去重。
+def load(settings=None, owner_id=None):
+    """读取**全部生效条目** = 全局文件 ∪ 本账号文件（续89），保持顺序去重。
 
+    条目已归一化（小写、去前后点、去掉 `*.` 前缀、IDN → punycode）。
     开关关闭时返回空列表 —— 调用方据此判断"当前不拦任何域名"。
+    `owner_id` 为空 / 0 时只看全局文件（老任务、CLI 直跑都是这一档）。
     """
     if not enabled(settings):
         return []
-    return _read(path(settings))
+    out = _read(path(settings))
+    ap = account_path(owner_id, settings)
+    if ap is not None and ap.exists():
+        seen = set(out)
+        for entry in _read(ap):
+            if entry not in seen:
+                seen.add(entry)
+                out.append(entry)
+    return out
 
 
 def _read(p):
@@ -61,13 +97,13 @@ def matches(domain, entries):
     return ""
 
 
-def filter_pairs(pairs, settings=None):
+def filter_pairs(pairs, settings=None, owner_id=None):
     """过滤 `[(domain, source), ...]`，返回 `(保留, 被拦)`。被拦项形如 `(domain, entry)`。
 
     阶段层在 `insert_subdomains()` **之前**调用它 —— 这样被拦的域名既不入资产库，
     也不会出现在后续阶段的输入里。
     """
-    entries = load(settings)
+    entries = load(settings, owner_id=owner_id)
     if not entries:
         return list(pairs), []
     kept, blocked = [], []
@@ -80,18 +116,21 @@ def filter_pairs(pairs, settings=None):
     return kept, blocked
 
 
-def filter_domains(domains, settings=None):
+def filter_domains(domains, settings=None, owner_id=None):
     """过滤纯域名列表，返回 `(保留, 被拦条数)`（子域名阶段用：列表里没有来源信息）。"""
-    entries = load(settings)
+    entries = load(settings, owner_id=owner_id)
     if not entries:
         return list(domains), 0
     kept = [d for d in domains if not matches(d, entries)]
     return kept, len(domains) - len(kept)
 
 
-def add(domains, settings=None):
-    """把域名批量写入黑名单，返回**新增**条数（已存在的不重复写）。"""
-    p = path(settings)
+def add(domains, settings=None, owner_id=None):
+    """把域名批量写入黑名单，返回**新增**条数（已存在的不重复写）。
+
+    续89：有 `owner_id` → 写**本账号文件**（只影响自己的任务）；没有 → 写**全局文件**。
+    """
+    p = account_path(owner_id, settings) or path(settings)
     existing = _read(p)
     have = set(existing)
     fresh = []
@@ -104,8 +143,7 @@ def add(domains, settings=None):
         return 0
     p.parent.mkdir(parents=True, exist_ok=True)
     if not p.exists():
-        p.write_text("# 用户黑名单：一行一个域名（含其所有子域），命中的域名不入资产库、也不会被扫。\n"
-                     "# 可直接手工编辑本文件；GUI 的「子域名 / 拓展域名」页也支持批量加入。\n",
+        p.write_text(_HEADER_ACCOUNT if account_path(owner_id, settings) else _HEADER,
                      encoding="utf-8")
     # 手工编辑过的文件**末尾常常没有换行**（编辑器保存习惯）。直接 append 会把新条目粘到
     # 最后一条上：`example.com` + `a.test` → `example.coma.test`，既丢了原条目又多出一条
@@ -118,9 +156,12 @@ def add(domains, settings=None):
     return len(fresh)
 
 
-def remove(domains, settings=None):
-    """从黑名单移除若干条目，返回**实际删除**条数。"""
-    p = path(settings)
+def remove(domains, settings=None, owner_id=None):
+    """从黑名单移除若干条目，返回**实际删除**条数。
+
+    续89：有 `owner_id` → 只动**本账号文件**；没有 → 动**全局文件**（与 `add` 对称）。
+    """
+    p = account_path(owner_id, settings) or path(settings)
     drop = {_norm(d) for d in domains}
     drop.discard("")
     if not drop or not p.exists():
