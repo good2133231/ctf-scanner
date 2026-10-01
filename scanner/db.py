@@ -819,6 +819,29 @@ def task_counts(task_id):
     }
 
 
+def task_counts_bulk(task_ids):
+    """**一次**算出多个任务的资产计数，返回 `{task_id: {表: 计数}}`（续91）。
+
+    为什么需要：任务列表页原来是 `{t["id"]: task_counts(t["id"]) for t in rows}` ——
+    而 `task_counts()` 内部跑 **7 条 COUNT**，于是**一页 100 个任务 = 700 次查询**（典型 N+1）。
+    这里改成"每张表一条 `GROUP BY task_id`"，共 **7 条**，与页大小无关。
+    返回的字典**预置全部 key 为 0**（没有资产的任务也在里面），调用方不必再兜空。
+    """
+    ids = [int(t) for t in (task_ids or [])]
+    blank = {"sites": 0, "subdomains": 0, "ports": 0, "csegs": 0,
+             "certs": 0, "dirs": 0, "vulns": 0}
+    out = {i: dict(blank) for i in ids}
+    if not ids:
+        return out
+    marks = ",".join("?" for _ in ids)
+    for key in blank:
+        for row in _query(f"SELECT task_id t, COUNT(*) c FROM {key} "
+                          f"WHERE task_id IN ({marks}) GROUP BY task_id", tuple(ids)):
+            if row["t"] in out:
+                out[row["t"]][key] = int(row["c"] or 0)
+    return out
+
+
 # ---------- 资产 ----------
 
 def insert_subdomains(task_id, items):

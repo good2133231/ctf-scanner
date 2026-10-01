@@ -1140,7 +1140,9 @@ def create_app():
         pager = {"page": page, "size": size, "total": total, "pages": pages,
                  "base": "/tasks", "qs": "&" + "&".join(parts)}
         # 「统计」列：站点/域名数量（对齐参考图的 站点: N / 域名: N 展示）
-        counts = {t["id"]: db.task_counts(t["id"]) for t in rows}
+        # 续91：一次算完整页的计数（原来 `{t["id"]: task_counts(t["id"])}` 是 N+1 ——
+        # 每任务 7 条 COUNT，一页 100 个任务 = 700 次查询）。
+        counts = db.task_counts_bulk([t["id"] for t in rows])
         # 续36「运行时长」列：与详情页「目标与配置」**同一口径**（`run_duration_text`）。
         # 注意 `list_tasks` 返回的是 `sqlite3.Row`，必须先 `dict(...)` 再传 —— `run_duration_text`
         # 内部走 `task.get(...)`，而 `sqlite3.Row` **没有** `.get()`（`_site_titles()` 踩过同一个坑）。
@@ -1149,7 +1151,9 @@ def create_app():
         # 续53 修正：分页后本页 rows 只含**一页**，旧的"对本页 rows 按 id 数位次"会漏算
         # 排在前面但不在本页的 queued 任务（页面显示的"第 N 位"偏小）→ 改用权威实现
         # `db.queued_position()`（详情页 `task_detail` 用的就是它）。队列规模小，逐行调用可接受。
-        qpos = {t["id"]: db.queued_position(t["id"]) for t in rows}
+        # 续91：只有 `queued` 才有"第几位"（其余状态位置无意义）—— 顺带省掉每页 ~100 条 COUNT。
+        qpos = {t["id"]: db.queued_position(t["id"])
+                for t in rows if t["status"] == "queued"}
         return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER,
                                counts=counts, durations=durations,
                                running=set(runner.running_task_ids()), qpos=qpos,

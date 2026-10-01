@@ -8834,6 +8834,17 @@ http:
     finally:
         db.page_vulns = _real_page_vulns7o
 
+    # 续91：任务列表页的「统计」列改成**批量计数**（一次 7 条 GROUP BY，而不是每任务 7 条 COUNT ——
+    # 一页 100 个任务原来是 700 次查询）。结果必须与逐个版**逐字一致**，否则就是优化出 bug。
+    _ids91 = [r["id"] for r in db.page_tasks(limit=5, offset=0)[0]]
+    _bulk91 = db.task_counts_bulk(_ids91)
+    assert _bulk91 == {i: db.task_counts(i) for i in _ids91}, \
+        "批量版必须与逐个版逐字一致（优化不能改口径）"
+    assert db.task_counts_bulk([]) == {}, "空入参 → 空字典（不报错）"
+    _one91 = db.task_counts_bulk([999999])
+    assert _one91[999999]["sites"] == 0 and _one91[999999]["vulns"] == 0, \
+        "不存在的任务也要给出**全 0 占位**（调用方不必再兜空）"
+
     print("[7o] 续53 任务列表页 + 任务详情页漏洞列表分页 ok: /tasks 造 250 任务→total 250·第 1 页 50 行·"
           "最老末页可见（旧 limit=200 永久不可达，已证伪）/ q·status 服务端筛选生效 + q 含空格 URL 编码 / "
           "详情页造 1200 漏洞→页签 1200·第 1 页 100 行·id 最小末页可见（旧 limit=1000 静默丢，已证伪）/ "
