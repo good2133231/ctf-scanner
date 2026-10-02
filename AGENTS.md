@@ -120,6 +120,20 @@ Flask Web 控制台（仿 ARL）。
    - 推之前**必须** `git fetch origin main` + `git pull --rebase`；落后就先变基再推。
    - **禁止 `git push --force`** —— 多机同时写同一分支时，强推会**静默盖掉别人的提交**。
   ③ 两个会话都在改**同一批文件**时，各自推到自己的分支（如 `linux/*`）再合并，别抢 `main`。
+  ④ **SSH 钥匙的两个实操坑**（本轮真踩过）：
+   - 钥匙**不是标准文件名**（如 `id_ed25519_ctf`）时，`ssh` **不会自动去试它** ——
+     `ssh -T git@github.com` 会直接 `Permission denied (publickey)`。要写 `~/.ssh/config`：
+     ```
+     Host github.com
+       HostName github.com
+       User git
+       IdentityFile ~/.ssh/id_ed25519_ctf
+       IdentitiesOnly yes
+     ```
+     （`chmod 600 ~/.ssh/config`）这样 **git 和 ssh 都会用对钥匙**，不必再设 `core.sshCommand`。
+   - `git config core.sshCommand` **只对 git 命令生效，对裸 `ssh -T` 无效**；
+     而且不带 `--global` 时必须先 `cd` 进仓库，否则报 `fatal: not in a git directory`。
+   - 排错：`ssh -Tv git@github.com` 能看清**实际拿哪把钥匙去试了**。
 - **本机参考项目（操作性路径，集中在此）**：`C:\Users\材料\Desktop\tools\scan\myscan_20250825`
   —— `TODO.md` 末尾「参考项目借鉴清单」的对标对象（**非本项目依赖**，仅登记位置；§9 只做描述性引用）。
 
