@@ -143,6 +143,7 @@ Flask Web 控制台（仿 ARL）。
 ctf-scanner/
 ├── cli/client.py          # CLI 入口：导入目标 → run_task（阻塞）
 ├── run_gui.py             # Web 控制台入口
+├── run_bootstrap.py      # 迁移自举（续96）：按平台点清环境缺口，只自动补 pip 依赖与 `toolmgr.TOOLS`；nmap/fscan/dirmap **只打印命令、不代跑**。放仓库根、刻意不进 `scanner/` 包（免得给 [7p] 的扫描期零下载红线开豁免）
 ├── gui/
 │   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
 │   ├── templates/ static/ # 页面与原生 JS（app.js：轮询状态/日志、建任务、POC 管理、页签、表格筛选、任务批量操作）
@@ -604,6 +605,8 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   产物/DB 全 punycode、任务详情页回中文。**每组都做 §6.1 变异证伪。**
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
                             #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）
+py -3 cli/client.py --bootstrap                           # 续96：迁移自举——按平台点清缺口（解释器/pip 依赖/外部工具/浏览器），**不联网**
+py -3 cli/client.py --bootstrap --install                   # 自动层＝pip 依赖 + toolmgr 的 TOOLS；「需手工」那三类只打印命令，一条都不代跑
 py -3 cli/client.py --update-tools            # 续54：联网装/更新 subfinder/httpx/puredns 并回写 tools.<名>
                                               #   可选 --tool <名>（可重复）/ --allow-unverified / --no-wire / --tools-dest
                                               #   GUI 等价入口＝管理员侧栏「外部工具」页；两条路都**只在这时联网**
@@ -682,6 +685,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
 
+- **`utils.pool_run()` 把子任务异常吞成 `None`（续96 登记，**未改**）**：它的语义是「单个任务异常不影响整体」，于是阶段里一个真故障（例：`fingerprint.identify()` 在 Python 3.14 上抛 `PatternError`）只表现为「存活站点 0 个」这种**静默降级**，日志里一个字都不留。本轮只修了触发它的正则写法，并给「静默降级会藏住硬故障」这条加了可复算断言（`[8d] ⑩`）；把 `pool_run` 改成上报/计数会影响**所有阶段**的降级判定，属独立一轮，未做。排查同类问题的最短路径：在**当前解释器**上直接调那个被吞掉的函数，别只看阶段日志。
 - **站点截图的 `--ignore-certificate-errors` 不能省（2026-09-28 续64）**：CTF / 内网授权目标多为
   自签 / 过期 / 私有 CA 证书（与 `certs.py` 刻意 `CERT_NONE` 同一现实），无头浏览器不加这个开关
   会以 `net::ERR_CERT_AUTHORITY_INVALID` 拒绝加载、`--screenshot` 一个字节都不产出 —— 即**自签
@@ -1272,7 +1276,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   文件末尾另有 **「参考项目借鉴清单」**（对标本机一个外部参考项目，其路径见 §2 末「本机参考项目」一条），
   含 A 采纳 / B 批判不采纳（8 条带理由）/ C 保留与间接处理标注——动手前先读，**避免重复调研或照搬有害设计**。
 - 跨平台（Linux + Windows）是硬要求：路径用 `pathlib`、命令用列表 argv + `shell=False`、
-  解释器用 `utils.pick_python`、文件读写显式 `encoding="utf-8"`、工具探测用 `shutil.which`。
+  解释器用 `utils.pick_python`、文件读写显式 `encoding="utf-8"`、工具探测用 `shutil.which`。 **跨 Python 版本红线（续96）**：内联全局标志（`(?i)` / `(?im)`）只能写在正则**串首** —— 写在别处 3.11 起是弃用写法、3.14 起直接抛 PatternError（本轮在远端 3.14 上就是它让 probe 静默报「存活站点 0 个」，因为 `pool_run` 把异常吞成 None）；回归＝`tests/smoke.py [8d] ⑩`（AST 扫全仓 + `SIGNATURES` 在当前解释器逐条编译）。
 - **换行符：仓库里的 EOL 是「混合」的，没有统一约定**（`core.autocrlf=false`，按文件原样提交）。
   实测（2026-09-28，口径 = `git ls-files` 里的文本文件、含 2 个空文件）：**466 个里 71 个含 LF-only 行**
   （其中 54 个整份就是 LF，如 `scanner/extdom.py` / `scanner/intel.py` / `config/dicts/cdn_cname.txt`；

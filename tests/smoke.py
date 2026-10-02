@@ -2170,9 +2170,10 @@ def main():
     #    排除 tools/dirmap/：那是**第三方** Python2 项目（目录联接，不随仓库分发），
     #    它的语法本来就不能用 Python3 compile（print 语句），不是本项目的问题。
     _SKIP_DIRS = (ROOT / "tools" / "dirmap",)
-    _py = sorted(p for _d in ("scanner", "gui", "cli", "tools", "tests")
-                 for p in (ROOT / _d).rglob("*.py")
-                 if not any(str(p).startswith(str(s)) for s in _SKIP_DIRS))
+    _py = sorted({p for _d in ("scanner", "gui", "cli", "tools", "tests")
+                  for p in (ROOT / _d).rglob("*.py")
+                  if not any(str(p).startswith(str(s)) for s in _SKIP_DIRS)}
+                 | set(ROOT.glob("run_*.py")))   # 仓库根的入口脚本此前不在审计范围内
     assert len(_py) > 30, f"源码文件数异常：{len(_py)}"
     for _p in _py:
         compile(_p.read_text(encoding="utf-8", errors="replace"), str(_p), "exec")
@@ -11349,6 +11350,196 @@ http:
           "回传收终态 + 资产快照按控制端 task_id 合并（节点本地号被改写）｜节点回 idle；"
           "变异证伪：verify 不看 enabled 即红")
 
+    # ---------------- [8d] 续96：迁移自举（run_bootstrap.py，跨 Windows / Linux 换机器一次点清） ----------------
+    print("[8d] 续96 迁移自举：probe 零网络 / 自动层边界＝toolmgr.TOOLS / 按平台出命令 / 绝不代跑（含变异证伪）…")
+    import ast as _ast8d
+    import re as _re8d
+    import contextlib as _ctx8d
+    import importlib.util as _ilu8d
+    import io as _io8d
+    import socket as _sock8d
+    import urllib.request as _ur8d
+    import run_bootstrap as _rb8d
+    from scanner import toolmgr as _tm8d
+    from scanner import utils as _ut8d
+    from scanner import fingerprint as _fp10
+    from scanner.config import resolve as _res8d
+
+    _src8d = (ROOT / "run_bootstrap.py").read_text(encoding="utf-8", errors="replace")
+
+    # ① 归属红线：自举在**仓库根**，不得进 `scanner/` 包 —— 否则 [7p] 那条"scanner 包内不得
+    #    引用 toolmgr（扫描期零下载）"就得为它开豁免，等于把红线削弱一次。
+    assert (ROOT / "run_bootstrap.py").exists(), "run_bootstrap.py 必须在仓库根"
+    assert not (ROOT / "scanner" / "run_bootstrap.py").exists() \
+        and not (ROOT / "scanner" / "bootstrap.py").exists(), \
+        "自举不得搬进 scanner/ 包（那要给 [7p] 的扫描期零下载红线开豁免）"
+
+    # ② 检测器：`subprocess.run` 全文件只许 1 处，且只能是"装 pip 依赖"；**绝不代跑**包管理器/
+    #    编译/clone 命令（nmap 要 root、fscan 要自编译 —— 代跑就是越系统级的界）。
+    def _det8d(_s8d):
+        _bad = []
+        for _seg in _s8d.split("subprocess.run(")[1:]:
+            _head = _seg.split("\n")[0]
+            if "pip" not in _head or any(_k in _head for _k in
+                                         ("apt-get", "sudo", "dnf", "pacman", "brew", "winget",
+                                          "choco", "scoop", "go build", "git clone")):
+                _bad.append(_head.strip()[:70])
+        return _bad
+
+    assert _src8d.count("subprocess.run(") == 1, \
+        f"自动层只该有一处 subprocess.run（pip 依赖），实得 {_src8d.count('subprocess.run(')}"
+    assert _det8d(_src8d) == [], f"自举不得代跑系统级命令：{_det8d(_src8d)}"
+    # 变异证伪：真去 apt 装 nmap 必须让 ② 红；pip 安装必须让 ② 绿（检测器不许过宽）
+    assert _det8d('subprocess.run(["sudo", "apt-get", "install", "-y", "nmap"])') != [], \
+        "② 对『代跑 apt』不敏感 → 假绿"
+    assert _det8d('subprocess.run([sys.executable, "-m", "pip", "install", "-r", x])') == [], \
+        "② 把 pip 安装也判成违规 → 过宽"
+
+    # ③ probe() 零网络：三个网络出口打桩成"一动就炸"，清单必须照样出全（探测可离线是这条功能的底线）
+    def _boom8d(*_a, **_k):
+        raise AssertionError("probe() 不得联网")
+
+    _old8d = (_ur8d.urlopen, _sock8d.getaddrinfo, _sock8d.socket)
+    _ur8d.urlopen = _sock8d.getaddrinfo = _sock8d.socket = _boom8d
+    try:
+        _rows8d = _rb8d.probe()
+    finally:
+        _ur8d.urlopen, _sock8d.getaddrinfo, _sock8d.socket = _old8d
+    _names8d = {r["name"] for r in _rows8d}
+    _need8d = {"python", "pip", "venv", "browser"} | set(_tm8d.TOOLS) | set(_tm8d.MANUAL)
+    assert _need8d - _names8d == set(), f"清单缺项：{sorted(_need8d - _names8d)}"
+    assert all(r["status"] in ("ok", "missing", "warn") for r in _rows8d), "status 必须只有三态"
+    assert all(r["detail"] for r in _rows8d), "每行都要有如实的 detail（空串＝把未知当已就绪）"
+
+    # ④ 分层不变式：`auto=True` 与 MANUAL **必须不相交**（[7p] ⑨ 那条 TOOLS∩MANUAL=∅ 的运行期另一半）
+    def _vio8d(_rs):
+        return sorted({r["name"] for r in _rs if r["auto"]} & set(_tm8d.MANUAL))
+
+    assert _vio8d(_rows8d) == [], f"MANUAL 工具混进了自动层：{_vio8d(_rows8d)}"
+    assert all(r["auto"] for r in _rows8d if r["kind"] == "auto"), "TOOLS 成员必须标成可自动"
+    assert all(not r["auto"] for r in _rows8d if r["kind"] in ("manual", "browser")), \
+        "manual/browser 行不得标 auto"
+    # 变异证伪：把三件套都标成 auto，④ 必须报出这三个名字
+    assert _vio8d([{**r, "auto": True} for r in _rows8d]) == sorted(_tm8d.MANUAL), \
+        "④ 对『MANUAL 混进自动层』不敏感 → 假绿"
+
+    # ⑤ 按平台出命令，且**没有包管理器就不猜**（传 bogus 工具名，保证不受本机装没装影响）
+    assert _rb8d.pkg_cmd("nmap", ["apt-get"]) == ["sudo apt-get install -y nmap"]
+    assert _rb8d.pkg_cmd("nmap", ["brew"]) == ["brew install nmap"]
+    assert _rb8d.pkg_cmd("nmap", ["winget"]) == ["winget install -e --id Insecure.Nmap"], "winget 要包 ID"
+    assert _rb8d.pkg_cmd("golang", ["apt-get"]) == ["sudo apt-get install -y golang"]
+    assert _rb8d.pkg_cmd("golang", ["brew"]) == ["brew install go"], "同一个包名在 brew 下是 go"
+    assert _rb8d.pkg_cmd("chromium", ["winget"]) == ["winget install -e --id Google.Chrome"]
+    assert _rb8d.pkg_cmd("nmap", []) == [], "没有可用包管理器时不得凭空造命令"
+    _fw8d = _rb8d._manual_row("fscan", "windows", [], {"fscan": "nope-8d"}, _res8d)["cmds"]
+    _fl8d = _rb8d._manual_row("fscan", "linux", [], {"fscan": "nope-8d"}, _res8d)["cmds"]
+    assert any(c.endswith("-o tools/scanner/fscan.exe") for c in _fw8d), _fw8d
+    assert any(c.endswith("-o tools/scanner/fscan") for c in _fl8d), _fl8d
+    assert any("v2.2.1" in c for c in _fl8d), "fscan 必须钉本仓既定 tag，不漂到 master"
+    _nm8d = _rb8d._manual_row("nmap", "macOS", ["brew"], {"nmap": "nope-8d"}, _res8d)["cmds"]
+    assert "brew install nmap" in _nm8d, _nm8d
+    _nn8d = _rb8d._manual_row("nmap", "windows", [], {"nmap": "nope-8d"}, _res8d)["cmds"]
+    assert any("nmap.org/dist" in c for c in _nn8d), "包管理器不可用时要指到官方发布页（不猜包名）"
+    _dm8d = _rb8d._manual_row("dirmap", "linux", [],
+                              {"dirmap": {"script": "nope-8d/dirmap.py"}}, _res8d)["cmds"]
+    assert any("H4ckForJob/dirmap tools/scanner/dirmap-master" in c for c in _dm8d), _dm8d
+    assert any("tools.dirmap" in c for c in _dm8d), "dirmap 是两段式配置，指引里必须写明"
+
+    # ⑥ 平台口径只有一处：复用 toolmgr.host_arch()，不另写平台分支
+    _os8d, _ar8d, _mg8d = _rb8d.platform_info()
+    assert (_os8d, _ar8d) == _tm8d.host_arch(), "自举不得自己另写一套平台判定"
+    assert "sys.platform" not in _src8d and "platform.machine()" not in _src8d, \
+        "run_bootstrap.py 里不该出现平台分支的原语（口径只有 host_arch()）"
+
+    # ⑦ 输出只出现相对路径（§0 硬规矩 3）：不含项目根、不含家目录，且过 scrub_paths 不变
+    _home8d = os.path.expanduser("~")
+    for _r8d in _rows8d:
+        _txt8d = _r8d["detail"] + " " + " ".join(_r8d["cmds"])
+        assert str(ROOT) not in _txt8d, f"{_r8d['name']} 输出了项目根绝对路径"
+        assert _home8d not in _txt8d, f"{_r8d['name']} 输出了家目录"
+        assert _ut8d.scrub_paths(_txt8d) == _txt8d, \
+            f"{_r8d['name']} 的输出里有可被抹掉的绝对路径：{_txt8d}"
+
+    # ⑧ 依赖行集＝requirements.txt；PyYAML 走别名（分发名≠模块名，别名表失效就会永远报缺）
+    _py8d = {r["name"]: r for r in _rows8d if r["name"].startswith("py:")}
+    _wants8d = {"py:" + _n for _n in _rb8d.requirement_names()}
+    assert set(_py8d) == _wants8d, f"依赖行与 requirements.txt 不一致：{sorted(set(_py8d) ^ _wants8d)}"
+    assert len(_py8d) >= 3, "requirements.txt 至少要覆盖 flask/requests/PyYAML"
+    assert _py8d["py:PyYAML"]["status"] == ("ok" if _ilu8d.find_spec("yaml") else "missing"), \
+        "PyYAML 必须按模块名 yaml 判定"
+
+    # ⑨ 退出码与两栏标题：探测态永不失败；自动层有失败必须非 0；标题不许把"没装"说成"没补上"
+    def _cap8d(_argv):
+        _b = _io8d.StringIO()
+        with _ctx8d.redirect_stdout(_b):
+            _rc = _rb8d.main(_argv)
+        return _rc, _b.getvalue()
+
+    _fn8d = _rb8d.install_auto
+    try:
+        _rb8d.install_auto = lambda *_a, **_k: ([{"tool": "httpx", "path": "tools/scanner/httpx"}], [])
+        _rc8d, _out8d = _cap8d([])
+        assert _rc8d == 0 and "可自动补齐" in _out8d and "自动层没补上" not in _out8d, \
+            "探测态标题应是『可自动补齐（加 --install 就会装）』"
+        _rc8d, _out8d = _cap8d(["--install"])
+        assert _rc8d == 0 and "本轮已装 1" in _out8d, (_rc8d, _out8d)
+        _rb8d.install_auto = lambda *_a, **_k: ([], [{"name": "subfinder", "reason": "stub"}])
+        _rc8d2, _out8d2 = _cap8d(["--install"])
+        assert _rc8d2 == 1, "自动层有失败却回 0 → 退出码不可信（复探也救不了它）"
+        assert "自动层失败 1" in _out8d2 and "subfinder" in _out8d2, _out8d2
+        assert "需要手工安装" in _out8d2, "失败时手工栏不能被吞掉"
+    finally:
+        _rb8d.install_auto = _fn8d
+    # ⑩ 跨 Python 版本的正则红线（本轮真踩的坑）：`(?i)` 这类**内联全局标志写在非串首位置**，
+    #    3.9（CI/Dockerfile 的口径）只是 DeprecationWarning，3.14 起直接抛 PatternError；而
+    #    `utils.pool_run()` 把异常吞成 `None`，于是 probe 静默报「存活站点 0 个」——兼容缺陷就是这样
+    #    藏住的。这里钉三层：源码扫描 / 指纹表在当前解释器全编译 / 指纹真的出标签。
+    _flag10 = _re8d.compile(r"\(\?[aiLmsux]+\)")
+
+    def _scan10(_files):
+        _out = []
+        for _f in _files:
+            if ".venv" in _f.parts:
+                continue
+            _tree = _ast8d.parse(_f.read_text(encoding="utf-8", errors="replace"))
+            for _n in _ast8d.walk(_tree):
+                if isinstance(_n, _ast8d.Constant) and isinstance(_n.value, str) \
+                        and any(_m.start() > 0 for _m in _flag10.finditer(_n.value)):
+                    _out.append(f"{_f.relative_to(ROOT)}:{_n.lineno}")
+        return _out
+
+    _files10 = sorted(set((ROOT / "scanner").rglob("*.py")) | set((ROOT / "cli").rglob("*.py"))
+                      | set((ROOT / "gui").rglob("*.py")) | set((ROOT / "tools").rglob("*.py"))
+                      | set((ROOT / "tests").rglob("*.py"))
+                      | {ROOT / "run_bootstrap.py", ROOT / "run_gui.py", ROOT / "run_node.py",
+                         ROOT / "run_devflow.py"})
+    assert _scan10(_files10) == [], \
+        f"内联全局标志写在非串首位置（3.11 弃用 / 3.14 起抛错）：{_scan10(_files10)}"
+    # 变异证伪：把标志挪到 `|` 之后（本轮修掉的那三条就是这个写法），扫描必须报出来
+    _mut10 = LOGS_DIR / "_smoke_regex_mut.py"
+    _mut10.parent.mkdir(parents=True, exist_ok=True)
+    _mid10 = "(?i)"          # 丢在自己这行的串首，扫描器不拦（写进样本文件后才落地中）
+    _mut10.write_text('P = "' + '(?im)^server:\\s*cloudflare|' + _mid10 + 'cf-ray:"\n',
+                      encoding="utf-8")
+    try:
+        _hit10 = _scan10([_mut10])
+        assert _hit10 and _mut10.name in _hit10[0], \
+            f"⑩ 的源码扫描对『标志挪到中间』不敏感 → 假绿（实得 {_hit10}）"
+    finally:
+        _mut10.unlink(missing_ok=True)
+
+    for _tag10, _rules10 in _fp10.SIGNATURES.items():
+        for _part10, _pat10 in _rules10:
+            _re8d.compile(_pat10)          # 表里每条都要能在**当前解释器**上编译
+    assert _fp10.identify({"headers": {"Server": "Cloudflare"}, "text": ""}) == ["cloudflare"], \
+        "identify 必须真的出标签（出空表＝PatternError 被 pool_run 静默吞掉的旧症状）"
+
+    print("[8d] 续96 迁移自举 ok: probe 零网络（urlopen/getaddrinfo/socket 三处打桩仍出全清单）｜"
+          "自动层＝pip 依赖 + toolmgr.TOOLS，与 MANUAL 不相交｜nmap/fscan/dirmap 按平台只打印命令"
+          "（windows→fscan.exe / linux→无后缀 / 无包管理器→指官方发布页，绝不凭空造命令）｜"
+          "subprocess.run 全文件仅 1 处且只给 pip｜平台口径复用 host_arch()｜输出无项目根/家目录绝对路径｜"
+          "退出码 0/1 与两栏标题各归其位；变异证伪：代跑 apt / MANUAL 混进 auto / 失败仍回 0 "
+          "三种改法都会让上面某条红；另钉住『内联全局标志只能在串首』（3.11 弃用 / 3.14 抛 PatternError，本轮就是它让 probe 静默报 0 站点）")
     print("SMOKE PASS")
 
 

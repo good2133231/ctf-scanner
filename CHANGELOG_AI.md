@@ -21,6 +21,56 @@
 
 
 
+## 2026-10-02 —— 续96：**迁移自举**（按平台点清并补齐环境依赖）+ **修 Python 3.14 的正则红线**（probe 不再静默 0 站点）
+
+> 实施者：**WorkBuddy · Qoder-Agent**（本轮在远端 Linux / Python 3.14.4 实跑；Windows 侧未复跑）。
+
+- **为什么做**：换机器（Windows ↔ Linux）时"还要不要手动装东西"的答案散在三处 —— `cli --check`
+  只看外部工具在不在 PATH、`scanner/toolmgr.py` 只管 subfinder/httpx/puredns、`requirements.txt`
+  得自己记得 pip install；而"这台机器该用 apt 还是 winget、fscan 要 Go 自编译、截图必须有浏览器"
+  这些平台差异**没有任何一处汇总过**。用户点单："迁移时候自动帮我下载好对应的需求工具，根据平台"。
+- **新增 `run_bootstrap.py`**（仓库根，与 `run_gui.py` / `run_node.py` / `run_devflow.py` 对称）：
+  `probe()` 出一份**零网络**清单（解释器 / pip / venv / requirements 各项、`toolmgr.TOOLS` 三件套、
+  `toolmgr.MANUAL` 三件套、截图用的浏览器），按"已就绪 / 可自动补齐 / 需手工"三堆打印；
+  只有 `--install` 才联网，且自动层**只有两样**：`pip install -r requirements.txt` 与
+  `toolmgr.update()`（沿用续54 那条红线 —— 官方产物 + release 自带 SHA256 才落盘）。
+  nmap / fscan / dirmap **一条请求都不发、一条命令都不代跑**：它们要么要装进系统目录
+  （apt / 安装器 / dmg 需要 root），要么要 Go 自编译。这里只按探测到的包管理器
+  （linux：apt-get/dnf/yum/pacman/zypper/apk；macOS：brew/port；windows：winget/choco/scoop）
+  **打印**该执行的命令；探测不到包管理器就指到官方发布页，**绝不凭空造命令**。
+- **入口**：CLI 新增 `--bootstrap` / `--bootstrap-install`，复用既有 `--tool` / `--allow-unverified`
+  / `--no-wire` / `--tools-dest` 透传给 toolmgr，不另立一套开关。模块**刻意放仓库根、不进
+  `scanner/` 包** —— `smoke [7p]` 钉的是"scanner 包内不得引用 toolmgr（扫描期零下载）"，
+  放进去就得给那条红线开豁免。
+- **顺带抓到的真缺陷**（不是新功能）：远端 Linux / Python 3.14 上 `smoke [3] pipeline` 红在
+  `AssertionError: []`，probe 报"存活站点 0 个"。根因＝`scanner/fingerprint.py` 三条指纹把内联
+  全局标志写在 `|` 之后（`(?im)^server:\s*cloudflare|(?i)cf-ray:|cf-cache-status`，另两条同型：
+  `cloudfront` / `php`）：Python 3.11 起这是**弃用**写法、**3.14 起直接抛 `re.PatternError`**；
+  而 `utils.pool_run()` 把异常吞成 `None`，于是硬故障表现成"静默降级 0 站点"、日志一个字不留。
+  CI 与 Dockerfile 都是 3.9，所以这条一直没被看见。修法＝标志只留串首那个（串首那个本就作用于
+  整条表达式，分支再写一次纯属冗余），**语义不变**。
+- **回归（`tests/smoke.py [8d]`）**：① 把 `urlopen` / `getaddrinfo` / `socket` 三处都打桩成"一动就炸"
+  后 `probe()` 仍必须出全清单（钉"探测零网络"）；② `auto=True` 的行与 `toolmgr.MANUAL` **不相交**
+  （[7p] ⑨ 那条不变式的运行期另一半）；③ 按平台命令逐条钉死（winget 要包 ID、brew 下 golang 叫
+  `go`、fscan 产物名按平台带/不带 `.exe`、无包管理器时不猜命令）；④ 全文件 `subprocess.run` 只许
+  1 处且只给 pip —— 变异证伪：喂"真去 `sudo apt-get install nmap`"的源码必须红、喂 pip 那行必须绿；
+  ⑤ 两栏标题与退出码（探测态说"可自动补齐"而不是"没补上"；自动层失败必须回 1，变异＝"恒回 0"）；
+  ⑥ 输出里不得出现项目根/家目录绝对路径（§0 硬规矩 3）；⑦ **正则红线**：AST 扫全仓 `.py`，
+  内联全局标志不得出现在非串首位置，外加"故意把标志挪到 `|` 之后"的变异样本必须被扫出、
+  `SIGNATURES` 每条都要能在**当前解释器**编译、`identify()` 必须真出标签。
+- **补一个审计缺口**：`smoke [5o]`（跨平台源码审计）此前只扫 `scanner/gui/cli/tools/tests`，
+  **仓库根的 `run_*.py` 入口脚本一直在范围外**；现纳入 `ROOT.glob("run_*.py")`
+  （四个文件实测全绿，含新增的 `run_bootstrap.py`）。
+- **同步文档**：`AGENTS.md` §3 地图 / §6 验证命令 / §7 登记 `pool_run` 吞异常这条现存坑 /
+  §9 跨平台条目补"跨 Python 版本红线"；`tools/scanner/README.md` 的"方式 0"补 `--bootstrap`。
+- **验证**：`python run_bootstrap.py`（探测）→ `python cli/client.py --bootstrap --install`（自动层）
+  → `python tests/smoke.py` 全量 SMOKE PASS（本轮在 3.14.4 上跑通；修 [3] 前它是红的）。
+- **未做（如实登记）**：`utils.pool_run()` 的吞异常语义**没改** —— 它是所有阶段的并发出口，
+  改成上报/计数会牵动每一处降级判定，属独立一轮；本轮只把"静默降级会藏住硬故障"用可复算断言钉住。
+  GUI「外部工具」页也**没有**加自举按钮（本轮只做 CLI + 模块；页面改动要连模板与真浏览器断言一起过，
+  另开一轮）。
+
+
 ## 2026-10-01 —— 续95：**Docker 部署**（一键起控制台 + 交付给队友）
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。

@@ -19,6 +19,9 @@ favicon 指纹（P1-1 / P3-1，参考项目 `_get_favicon_md5` 的启发）：
 import hashlib
 import re
 
+# 内联全局标志（`(?i)` / `(?im)`）**只能写在串首**：Python 3.11 起这是弃用写法、3.14 起直接
+# 抛 PatternError（本项目 CI 用 3.9，故此前无人发现）。同一条规则里多余的那个一律删掉——
+# 串首那个本来就作用于整条表达式，分支再写一次是冗余。回归见 `tests/smoke.py [8d]`。
 # 标签 -> [(part, 正则)]；part: headers | body；任一规则命中即打该标签
 SIGNATURES = {
     # ---------- 服务器 / 反向代理 ----------
@@ -40,8 +43,8 @@ SIGNATURES = {
     "websphere": [("headers", r"(?i)websphere")],
     "resin": [("headers", r"(?i)\bresin\b")],
     # ---------- CDN / WAF / 网关（这些是"是不是真实 IP"的关键线索）----------
-    "cloudflare": [("headers", r"(?im)^server:\s*cloudflare|(?i)cf-ray:|cf-cache-status")],
-    "cloudfront": [("headers", r"(?i)x-amz-cf-id|(?i)^via:.*cloudfront")],
+    "cloudflare": [("headers", r"(?im)^server:\s*cloudflare|cf-ray:|cf-cache-status")],
+    "cloudfront": [("headers", r"(?i)x-amz-cf-id|^via:.*cloudfront")],
     "akamai": [("headers", r"(?i)akamaighost|x-akamai-|akamai-grn")],
     "fastly": [("headers", r"(?i)x-served-by:.*fastly|x-fastly-|fastly-io-info")],
     "varnish": [("headers", r"(?i)^x-varnish:|via:.*varnish")],
@@ -56,7 +59,7 @@ SIGNATURES = {
     "yundun": [("headers", r"(?i)yundun|aliyungf")],
     "360waf": [("headers", r"(?i)360wzws|x-safe-")],
     # ---------- 语言 / 运行时 ----------
-    "php": [("headers", r"(?im)^x-powered-by:\s*php|(?i)php/[\d.]+"),
+    "php": [("headers", r"(?im)^x-powered-by:\s*php|php/[\d.]+"),
             ("cookies", r"(?i)PHPSESSID|php[\w]*session")],
     "aspnet": [("headers", r"(?i)asp\.net|x-aspnet-version|x-powered-by:\s*asp\.net"),
                ("cookies", r"(?i)ASP\.NET_SessionId|\.AspNetCore")],

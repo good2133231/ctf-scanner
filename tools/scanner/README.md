@@ -14,6 +14,8 @@ python cli/client.py --update-tools              # subfinder / httpx / puredns�
 GUI 里是管理员侧栏的「外部工具」页。两条路都**只在显式触发时联网**（扫描期任何阶段都不会自动下载），
 只允许 https + 官方主机，默认**必须通过 release 自带的 SHA256 校验和**才落盘。
 
+迁移到**新机器**时用 `python cli/client.py --bootstrap`（续96）：它按平台一次点清「解释器 / pip 依赖 / 外部工具 / 截图用的浏览器」还缺什么；加 `--install` 才联网，且自动层只装 `requirements.txt` 与下表标「自动」的那三个。nmap / fscan / dirmap **仍然只打印命令、一条都不代跑**（逐条原因见下表与 `scanner/toolmgr.py` 的 `MANUAL`）。
+
 否则可以手工放置，两种方式任选：
 
 1. 放入系统 PATH：`subfinder`、`httpx`、`puredns` 等可执行文件直接加入 PATH；

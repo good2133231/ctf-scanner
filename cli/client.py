@@ -8,6 +8,7 @@
   python cli/client.py -f targets.txt --report logs/report.md   # 结束后出 Markdown 报告
   python cli/client.py --check                                  # 检查外部工具可用性
   python cli/client.py --update-tools                           # 联网下载/更新 subfinder/httpx/puredns
+  python cli/client.py --bootstrap                            # 迁移自举：按平台点清/补齐环境依赖（加 --bootstrap-install 才联网）
   python cli/client.py --resume-task 12                         # 续跑任务 #12 的断点
 """
 import argparse
@@ -401,6 +402,11 @@ def main():
                     help="只下载不写回 config/settings.yaml（默认写回 tools.<名> 为相对路径）")
     ap.add_argument("--tools-dest", metavar="DIR",
                     help="安装目录（默认 tools/scanner/）")
+    # ---- 迁移自举（跨 Windows / Linux 换机器时用；联网只在 --bootstrap-install 时发生）----
+    ap.add_argument("--bootstrap", action="store_true",
+                    help="按平台点清环境缺口（解释器/pip 依赖/外部工具/浏览器）后退出；**不联网**")
+    ap.add_argument("--bootstrap-install", action="store_true",
+                    help="探测后执行「自动层」：pip 依赖 + toolmgr 的 TOOLS；nmap/fscan/dirmap 只打印命令、绝不代跑（见 run_bootstrap.py 文件头）")
     ap.add_argument("--resume-task", type=int, metavar="ID",
                     help="续跑**指定任务的断点**：沿用该任务已有的目标/阶段/选项与库中资产，"
                          "只重跑断点及其之后的阶段（等价 GUI 任务详情页的「续跑」按钮）。"
@@ -453,6 +459,19 @@ def main():
         return
     if args.update_tools:
         do_update_tools(args)
+    if args.bootstrap or args.bootstrap_install:
+        # 复用既有开关（--tool/--allow-unverified/--no-wire/--tools-dest），不另立一套
+        import run_bootstrap
+        _bs = ["--install"] if args.bootstrap_install else []
+        for _t in (args.tool or []):
+            _bs += ["--only", _t]
+        if args.allow_unverified:
+            _bs.append("--allow-unverified")
+        if args.no_wire:
+            _bs.append("--no-wire")
+        if args.tools_dest:
+            _bs += ["--tools-dest", args.tools_dest]
+        sys.exit(run_bootstrap.main(_bs))
         return
     if args.check_updates:
         do_check_updates(args)
