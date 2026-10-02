@@ -10,7 +10,8 @@
 ## 1. 快速开始
 
 ```bash
-git clone <你的仓库地址> ctf-scanner && cd ctf-scanner
+# 仓库是**公开的**，所以拉代码**不需要任何认证**（第 9 节有从 Linux 推回去的办法）
+git clone https://github.com/good2133231/ctf-scanner.git ctf-scanner && cd ctf-scanner
 
 docker compose up -d --build     # 首次会构建镜像（装 3 个 Python 依赖 + 拷贝代码）
 docker compose logs -f           # 看启动日志：会打印初始登录方式与监听地址
@@ -192,3 +193,48 @@ ssh -N -L 127.0.0.1:5000:127.0.0.1:5000 你的机器
 
 **Q：镜像多大？**
 基于 `python:3.9-slim`，加三个纯 Python 依赖，量级在 150 MB 左右（不含后装的外部工具）。
+## 9. 在 Linux 上获取代码 / 推送（认证办法）
+
+仓库是**公开的**（不带凭据访问 GitHub API 就是 200），所以「部署」和「推代码」是两件事：
+
+### 只部署（拉代码）—— **完全不需要认证**
+
+```bash
+git clone https://github.com/good2133231/ctf-scanner.git ctf-scanner && cd ctf-scanner
+docker compose up -d --build
+```
+
+### 要从这台 Linux 推代码回去 —— 三条路，按推荐顺序
+
+**① SSH 密钥（推荐）**：一次配好，之后 `git push` 不再问，也不在任何文件里留明文口令。
+
+```bash
+ssh-keygen -t ed25519 -C "ctfscanner-deploy"    # 一路回车
+cat ~/.ssh/id_ed25519.pub                        # 复制这一整行
+```
+
+- 要**能推**：GitHub → Settings → SSH and GPG keys → New SSH key → 粘贴
+- 只**要拉**（服务器 / 共享机器上更安全）：仓库 → Settings → Deploy keys → Add deploy key ——
+  勾 **Allow write access** 才允许推；不勾就是只读
+
+```bash
+git remote set-url origin git@github.com:good2133231/ctf-scanner.git
+ssh -T git@github.com      # 出现 Hi good2133231! 即成功
+```
+
+**② 个人访问令牌 PAT**：`Settings → Developer settings → Personal access tokens → Tokens (classic)`，
+勾 `repo`；生成后**只显示一次**。别把它拼进 remote URL（那样会明文写进 `.git/config`），用凭据助手：
+
+```bash
+git config --global credential.helper store      # 存到 ~/.git-credentials；务必 chmod 600
+# 或者只在内存里留一会儿：git config --global credential.helper 'cache --timeout=3600'
+git push                                          # 用户名填 good2133231，口令填那个 PAT
+```
+
+**③ CI / 自动化**：用仓库 Secrets 里的 `GITHUB_TOKEN`（或自己的 PAT）当环境变量，
+走 `https://x-access-token:${TOKEN}@github.com/...` 的一次性认证头 —— 与 Windows 本机那套同理。
+
+> 无论哪条：**不要把令牌写进 `.git/config`、更别提交进仓库**。
+> Windows 本机靠的是「凭据管理器缓存 + 一次性请求头」；Linux 上没有那个存储，
+> 所以换成 SSH 密钥或 PAT —— 思路完全一致：**凭据只放助手/环境变量里，绝不落进仓库文件**。
+> 完整口径（含 bash 里 `git credential fill` 会被 SIGTERM 这类坑）见 `AGENTS.md` §2。
