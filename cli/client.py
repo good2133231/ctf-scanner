@@ -147,15 +147,15 @@ def check_tools(settings):
         if not bin_path:
             rows.append((name, "未找到（自动使用内置兜底）"))
         elif verified:
-            rows.append((name, f"OK（{bin_path}）"))
+            rows.append((name, f"OK（{rel_display(bin_path)}）"))
         else:
-            rows.append((name, f"找到 {bin_path} 但未通过版本校验（自动使用内置兜底）"))
+            rows.append((name, f"找到 {rel_display(bin_path)} 但未通过版本校验（自动使用内置兜底）"))
 
     for t in ("subfinder", "httpx"):
         p = which(settings.get("tools", {}).get(t, t))
         _row(t, p, verify_tool(p) if p else False)
     pd = which(settings.get("tools", {}).get("puredns", "puredns"))
-    rows.append(("puredns", f"OK（{pd}）" if pd else "未找到（自动使用内置兜底）"))
+    rows.append(("puredns", f"OK（{rel_display(pd)}）" if pd else "未找到（自动使用内置兜底）"))
     # 端口扫描的两个外部引擎（portscan 阶段）。
     # nmap 可以走版本握手：实测 `nmap -version` → rc=0（7.98）。
     # fscan **必须跳过握手**：它的 `-h` 是"指定主机"而非 help，也没有 `-version`，
@@ -164,11 +164,13 @@ def check_tools(settings):
     nm = which(settings.get("tools", {}).get("nmap", "nmap"))
     _row("nmap", nm, verify_tool(nm) if nm else False)
     fs = which(settings.get("tools", {}).get("fscan", "fscan"))
-    rows.append(("fscan", f"OK（{fs}；调用带 -np -nobr -nopoc）" if fs
+    rows.append(("fscan", f"OK（{rel_display(fs)}；调用带 -np -nobr -nopoc）" if fs
                  else "未找到（自动回退 nmap / 内置 TCP connect）"))
     dm = settings.get("tools", {}).get("dirmap", {}) or {}
-    dm_script = resolve(dm.get("script", "tools/scanner/dirmap-master/dirmap.py"))
-    rows.append(("dirmap", "OK" if dm_script.exists() else f"缺少 {dm_script}（自动使用内置兜底）"))
+    # 缺省值必须与 `scanner/config.py` 的 DEFAULTS 同一处口径（本仓既定 `tools/dirmap/`）：
+    # 写死第三方项目的历史目录名 `dirmap-master`，就等于"用户照文档装完，这一行仍然说缺少"。
+    dm_script = resolve(dm.get("script", "") or "tools/dirmap/dirmap.py")
+    rows.append(("dirmap", "OK" if dm_script.exists() else f"缺少 {rel_display(dm_script)}（自动使用内置兜底）"))
     return rows
 
 

@@ -721,6 +721,14 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
 
+- **`utils.which()` 的返回值形状**随进程 CWD 变**（续101，会咬到"输出只出现相对路径"这条红线）**：
+  配置写 `tools/scanner/httpx` 这类相对值时，它先 `shutil.which(相对值)`（按**进程 CWD** 找，命中就
+  原样返回那个相对串），找不到才折算项目根走 `_probe(str(_BASE_DIR / alt))` —— 而后者返回的是
+  `<项目根>/tools/scanner/httpx`。于是"在仓库里跑"与"从仓库外跑"给出两种形状。凡把工具路径印给用户
+  的地方（CLI `--check`、`run_bootstrap.py` 的清单、GUI「外部工具」页）都必须再过一次
+  `utils.rel_display()`：否则 §0 硬规矩 3「只出现相对路径」会随 CWD 漂，`smoke [8d] ⑦`
+  （"自举输出不得含项目根"）也会在装了 dirmap / fscan 的 Windows 机器上莫名其妙地红。
+
 - **snap 版浏览器在本项目里等于没装（续100 实测 Ubuntu 26.04）**：apt 源里已经没有 deb 版
   chromium，`chromium-browser` 只是指向 snap 的过渡壳。而 snap 的 confinement + 私有 /tmp 让
   它**写不到项目路径、也写不到我们看得见的 /tmp**：`--screenshot` 会汇报"已写 N 字节"但文件

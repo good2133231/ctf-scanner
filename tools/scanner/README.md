@@ -19,7 +19,9 @@ GUI 里是管理员侧栏的「外部工具」页。两条路都**只在显式�
 否则可以手工放置，两种方式任选：
 
 1. 放入系统 PATH：`subfinder`、`httpx`、`puredns` 等可执行文件直接加入 PATH；
-2. 放到本目录，并在 `config/settings.yaml` 的 `tools` 段写明路径，Windows 示例：
+2. 放到仓库内某处，并在 `config/settings.yaml` 的 `tools` 段写明路径。**装的位置必须和配置写的那一个
+   一致** —— 本仓既定 `tools/fscan/` 与 `tools/dirmap/`（两个目录联接，指向仓库外的第三方产物，
+   见 `.gitignore`），所以下例与 `settings.yaml` 逐字相同；换成别的路径也行，但改配置才算数：
 
 ```yaml
 tools:
@@ -27,11 +29,14 @@ tools:
   httpx: "tools/scanner/httpx.exe"
   puredns: "tools/scanner/puredns.exe"
   nmap: "nmap"                      # 已装进 PATH 时保持裸名即可
-  fscan: "tools/scanner/fscan.exe"  # 自编译产物放这里
+  fscan: "tools/fscan/fscan.exe"    # 自编译产物（Linux 上是 tools/fscan/fscan，无 .exe）
   dirmap:
     python: "python"
-    script: "tools/scanner/dirmap-master/dirmap.py"
+    script: "tools/dirmap/dirmap.py"
 ```
+
+> 三条路径口径都由 `cli/client.py --check` 与 `--bootstrap` 直接读配置，**不写死**：填错的地方不会
+> 报错，只会一直显示"未找到 / 缺少"并静默回退内置实现。
 
 ## 工具清单与获取
 
@@ -84,7 +89,8 @@ git checkout v2.2.1
 go build -ldflags="-s -w" -trimpath -o fscan
 ```
 
-装好后把 `tools.fscan` 填成该二进制路径（或放进 PATH）。框架调用时会强制带
+装好后把 `tools.fscan` 填成该二进制路径（本仓既定 `tools/fscan/fscan.exe`，Linux 上是同目录的
+`fscan`；也可以只放进 PATH 保持裸名）。框架调用时会强制带
 `-np -nobr -nopoc`，老版本会自动去掉 `-nopoc` 重试。
 
 ### dirmap
@@ -92,8 +98,8 @@ go build -ldflags="-s -w" -trimpath -o fscan
 纯 Python 项目，**release 页没有二进制产物**（`assets` 为空数组），只能取源码：
 
 ```bash
-git clone https://github.com/H4ckForJob/dirmap tools/scanner/dirmap-master
-cd tools/scanner/dirmap-master && pip install -r requirements.txt
+git clone https://github.com/H4ckForJob/dirmap tools/dirmap
+cd tools/dirmap && python -m pip install -r requirements.txt
 ```
 
 `tools.dirmap` 是**两段式**配置（不是单个路径）：
@@ -102,8 +108,12 @@ cd tools/scanner/dirmap-master && pip install -r requirements.txt
 tools:
   dirmap:
     python: "python"
-    script: "tools/scanner/dirmap-master/dirmap.py"
+    script: "tools/dirmap/dirmap.py"
 ```
+
+> 这段配置 GUI 改不了（「策略配置」页不暴露 `tools` 段），只能手改 `config/settings.yaml`。
+> 历史上这里写过 `tools/scanner/dirmap-master/`，本仓已统一成 `tools/dirmap/` —— 两处不一致的
+> 表现是"clone 完了 `--check` 仍说缺少"，因为框架只认配置里那一条。
 
 > 目录扫描的主路径是本框架内置的「分层字典 + 12 个框架桶 + 暴露面」，dirmap 只作补充
 > （见 `docs/roadmap.md`）。

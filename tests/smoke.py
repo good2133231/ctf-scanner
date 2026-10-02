@@ -11507,14 +11507,37 @@ http:
     assert any(c.endswith("-o tools/scanner/fscan.exe") for c in _fw8d), _fw8d
     assert any(c.endswith("-o tools/scanner/fscan") for c in _fl8d), _fl8d
     assert any("v2.2.1" in c for c in _fl8d), "fscan 必须钉本仓既定 tag，不漂到 master"
+    # ⑤b 落点必须跟着**配置写的目录**走（本轮修的真问题：原来写死 `tools/scanner/`，而本仓
+    #     配置是 `tools/fscan/` —— 照自举输出装完，`--check` 仍然说缺）。产物名仍按平台取：
+    #     配置里那半截 `.exe` 是"本机是 Windows"的事实，不能带到 Linux 的指引里。
+    _fwp8d = _rb8d._manual_row("fscan", "windows", [],
+                               {"fscan": "tools\\fscan\\fscan.exe"}, _res8d)["cmds"]
+    _flp8d = _rb8d._manual_row("fscan", "linux", [],
+                               {"fscan": "tools\\fscan\\fscan.exe"}, _res8d)["cmds"]
+    assert any(c.endswith("-o tools/fscan/fscan.exe") for c in _fwp8d), _fwp8d
+    assert any(c.endswith("-o tools/fscan/fscan") for c in _flp8d), _flp8d
     _nm8d = _rb8d._manual_row("nmap", "macOS", ["brew"], {"nmap": "nope-8d"}, _res8d)["cmds"]
     assert "brew install nmap" in _nm8d, _nm8d
     _nn8d = _rb8d._manual_row("nmap", "windows", [], {"nmap": "nope-8d"}, _res8d)["cmds"]
     assert any("nmap.org/dist" in c for c in _nn8d), "包管理器不可用时要指到官方发布页（不猜包名）"
     _dm8d = _rb8d._manual_row("dirmap", "linux", [],
                               {"dirmap": {"script": "nope-8d/dirmap.py"}}, _res8d)["cmds"]
-    assert any("H4ckForJob/dirmap tools/scanner/dirmap-master" in c for c in _dm8d), _dm8d
+    assert any("H4ckForJob/dirmap nope-8d" in c for c in _dm8d), \
+        f"dirmap 克隆落点必须跟着配置的 script 走：{_dm8d}"
+    assert not any("dirmap-master" in c for c in _dm8d), \
+        "不得写死第三方项目的历史目录名（配置一改就指错地方）"
+    assert any("nope-8d/requirements.txt" in c for c in _dm8d), "依赖安装也得跟着同一个落点"
     assert any("tools.dirmap" in c for c in _dm8d), "dirmap 是两段式配置，指引里必须写明"
+    _dmd8d = _rb8d._manual_row("dirmap", "linux", [], {}, _res8d)["cmds"]
+    assert any("H4ckForJob/dirmap tools/dirmap" in c for c in _dmd8d), \
+        f"配置缺省时必须回落到本仓既定 tools/dirmap/：{_dmd8d}"
+    # ⑤c 输出只许相对路径（§0 硬规矩 3）：就算用户在配置里写了**项目内绝对路径**，
+    #     也不能把项目根印进指引（Windows 上 `tools/dirmap/` 是目录联接，最容易踩）。
+    _abs8d = _rb8d._manual_row("dirmap", "linux", [],
+                               {"dirmap": {"script": str(_rb8d.ROOT / "tools/dirmap/dirmap.py")}},
+                               _res8d)["cmds"]
+    assert not leaked_root(" ".join(_abs8d)), f"项目内绝对路径被原样印出：{_abs8d}"
+    assert any("H4ckForJob/dirmap tools/dirmap" in c for c in _abs8d), _abs8d
 
     # ⑥ 平台口径只有一处：复用 toolmgr.host_arch()，不另写平台分支
     _os8d, _ar8d, _mg8d = _rb8d.platform_info()

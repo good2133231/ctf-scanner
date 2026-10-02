@@ -387,7 +387,7 @@ def probe(settings=None):
                          [] if found else ["python -m pip install -r requirements.txt"]))
 
     for name in toolmgr.TOOLS:
-        cur = which(tools_cfg.get(name, name))
+        cur = _rel(which(tools_cfg.get(name, name)))
         insp = toolmgr.inspect(name)
         rows.append(_row(name, "auto", True,
                          "ok" if cur else ("missing" if insp["asset"] else "warn"),
@@ -423,6 +423,18 @@ def _dot(ver):
     return ".".join(str(x) for x in ver)
 
 
+def _rel(path):
+    """配置里的路径统一显示成**相对项目根**形态（§0 硬规矩 3），反斜杠也顺手归一。
+
+    为什么要它：`tools.fscan` / `tools.dirmap.script` 的值是用户写的，可能是 `tools\\fscan\\fscan.exe`
+    这种 Windows 形态，也可能有人填了项目内的绝对路径 —— 直接印出去就同时违反"相对路径"和
+    "Windows 反斜杠在跨平台日志里会割裂"两条。项目外的绝对路径 `rel_display` 会原样返回，
+    这正是 CLI 口径要的（用户要拿去命令行复现）。
+    """
+    from scanner.utils import rel_display
+    return rel_display(str(path or "").replace("\\", "/"))
+
+
 def _manual_row(name, os_label, mgrs, tools_cfg, resolve):
     """nmap / fscan / dirmap：按平台**只打印**命令，本脚本不执行、也不发请求。"""
     from scanner import toolmgr
@@ -432,27 +444,35 @@ def _manual_row(name, os_label, mgrs, tools_cfg, resolve):
         cmds = pkg_cmd("nmap", mgrs) or [
             "打开 https://nmap.org/dist/ 取本平台官方产物（Windows 只有安装器、Linux 只有源码包、"
             "macOS 只有 dmg）；摘要在 sigs/<文件名>.digest.txt"]
-        found = which(tools_cfg.get("nmap", "nmap"))
+        found = _rel(which(tools_cfg.get("nmap", "nmap")))
         why = toolmgr.MANUAL["nmap"]
     elif name == "fscan":
-        dest = "tools/scanner/fscan.exe" if os_label == "windows" else "tools/scanner/fscan"
+        binary = "fscan.exe" if os_label == "windows" else "fscan"
+        cfg = _rel(tools_cfg.get("fscan", ""))
+        # 编译落点跟着**配置写的目录**走（本项目既定 `tools/fscan/`）—— 只填了裸名（走 PATH）
+        # 时才回落到 toolmgr 的自动层落点 `tools/scanner/`。指错地方等于"照着自举输出装完，
+        # `--check` 仍然说缺"。产物名仍按平台取（配置里那半截 `.exe` 不能带到 Linux 上）。
+        dest = (f"{Path(cfg).parent.as_posix()}/{binary}" if "/" in cfg
+                else f"tools/scanner/{binary}")
         cmds = ["git clone https://github.com/shadow1ng/fscan",
                 "cd fscan && git checkout v2.2.1",
                 'go build -ldflags="-s -w" -trimpath -o ' + dest]
-        found = which(tools_cfg.get("fscan", "fscan"))
+        found = _rel(which(tools_cfg.get("fscan", "fscan")))
         why = toolmgr.MANUAL["fscan"]
         if not found:
             for prereq, pkg in (("go", "golang"), ("git", "git")):
                 if not shutil.which(prereq):
                     cmds += pkg_cmd(pkg, mgrs) or [f"本机没有 {prereq}：fscan 自编译需要它"]
     else:
-        script = (tools_cfg.get("dirmap", {}) or {}).get("script",
-                                                        "tools/scanner/dirmap-master/dirmap.py")
-        cmds = ["git clone https://github.com/H4ckForJob/dirmap tools/scanner/dirmap-master",
-                "python -m pip install -r tools/scanner/dirmap-master/requirements.txt",
+        script = _rel((tools_cfg.get("dirmap", {}) or {}).get("script", "")
+                      or "tools/dirmap/dirmap.py")
+        # 克隆落点同样取**配置里写的路径**（本项目既定 `tools/dirmap/`），不另写一套。
+        target = Path(script).parent.as_posix() or "tools/dirmap"
+        cmds = [f"git clone https://github.com/H4ckForJob/dirmap {target}",
+                f"python -m pip install -r {target}/requirements.txt",
                 "再把 config/settings.yaml 的 tools.dirmap 两段填好（python / script）"
                 "—— GUI「策略配置」页改不了 tools 段"]
-        found = str(resolve(script)) if resolve(script).exists() else ""
+        found = _rel(resolve(script)) if resolve(script).exists() else ""
         why = toolmgr.MANUAL["dirmap"]
     return _row(name, "manual", False, "ok" if found else "missing",
                 (f"已装 {found}" if found else why), [] if found else cmds)

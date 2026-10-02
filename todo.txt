@@ -1994,3 +1994,21 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ⑦ P2-3：Linux 侧截图与真浏览器 E2E 已补绿（3.9 容器内仍按"无浏览器→跳过"口径）。
           剩余未覆盖 = fscan 自编译与 dirmap（刻意不代跑）+ Windows 侧复跑 + 3.9 上的浏览器组。
        ⑧ 本地 main 领先 origin/main 7 个 commit；推送仍等凭据（上一条消息里那串是脱敏占位符）。
+
+2026-10-02 · 续101（远端 Linux，Qoder-Agent）
+  ① 修「指引指错地方」三处同根：run_bootstrap 的 fscan / dirmap 落点、cli --check 里 dirmap 的缺省值、
+     tools/scanner/README.md 的「手工安装」段 —— 全部改成跟着 config/settings.yaml 走
+     （tools/fscan/、tools/dirmap/），产物名仍按平台取（Linux 侧不带上那半截 .exe）。
+     危害写在这儿记住：指错**不报错**，只会让用户照抄完仍然 "--check 说缺"、框架静默回退内置。
+  ② 提前堵一起假红（§6.2 第四起，这次没等它红）：utils.which() 对相对配置值先按**进程 CWD** 找，
+     命中返回相对串；找不到才折算项目根，而那一条返回**绝对路径**。实测从 /tmp 启动
+     which('tools/scanner/subfinder') → <项目根>/tools/scanner/subfinder。于是装了 dirmap 的
+     Windows 机器上 [8d]⑦（输出不得含项目根）迟早必红 → 自举四行 + --check 六行统一过 rel_display。
+  ③ 复验：主机 3.14.4 全量 smoke PASS；3.9 容器 A–E 全绿（RC_C=0 / devflow 13 阶段 0 FAIL /
+     compileall 0）；新增 [8d] ⑤b（落点跟配置 + dirmap-master 再现即红）与 ⑤c（绝对路径配置
+     也不外泄项目根）；AGENTS §7 记 which() 这条坑。
+  ④ 待你决定/待办（不变）：推送（本地已领先 8 个 commit，凭据文件仍未落盘）/ config/keys.yaml
+     同步到这台 Linux 后启用 run_keys.py --encrypt --shred / fscan 自编译 + dirmap clone
+     （Linux 上最后一块真实覆盖空白，脚本只打印命令不代跑）/ docker builder prune 19.98GB（要你点头）/
+     utils.pool_run() 吞异常改成可见 / GUI 加自举与解锁入口 / Windows 侧复跑续96–101。
+

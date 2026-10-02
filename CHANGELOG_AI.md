@@ -21,6 +21,56 @@
 
 
 
+## 2026-10-02 —— 续101：**指引跟着配置走**（自举 / `--check` / README 三处第三方工具落点纠偏）+ 堵掉一起**随 CWD 漂的假红**
+
+> 实施者：**Qoder-Agent**（远端 Linux；主机 Python 3.14.4 与 `python:3.9-slim` 容器双口径复验）。
+
+- **为什么做**：回答"还有什么工作"之前先复核上一轮的自举输出，抓出**同一个根子的三处错** ——
+  框架把"第三方工具装在哪"写死在自己的代码/文档里，而项目配置里既定的是另一处：
+  ① `run_bootstrap.py::_manual_row()` 给 dirmap 的指引写 `tools/scanner/dirmap-master/`、给 fscan
+     写 `tools/scanner/fscan[.exe]`，而本仓 `config/settings.yaml` 是 `tools/dirmap/dirmap.py` 与
+     `tools/fscan/fscan.exe`（两个指向仓库外的目录联接）。**用户照着自举打印的命令装完，
+     `--check` 仍然说"缺少"** —— 自举交付的就是一份"照抄就能就绪"的清单，这条一破等于白做。
+  ② `cli/client.py::check_tools()` 里 dirmap 的缺省值同样写着那个历史目录名，与
+     `scanner/config.py` 的 DEFAULTS 不一致（配置缺键时就会指错）。
+  ③ `tools/scanner/README.md`「手工安装」整段还停在 `dirmap-master` —— 本仓把路径统一成
+     `tools/dirmap/` 那次只改了配置与 `TODO.md`，文档没跟上（CHANGELOG 里那条历史记录是唯一的线索）。
+- **改动**：
+  - `run_bootstrap.py`：新增 `_rel()`（`utils.rel_display` + 顺手把反斜杠归一成 `/`）；
+    `_manual_row()` 的**克隆/编译落点改为从配置推导** —— 取 `tools.fscan` / `tools.dirmap.script`
+    的父目录，**产物名仍按平台取**（配置里那半截 `.exe` 是"本机是 Windows"的事实，不能带进 Linux
+    的指引）；配置只填裸名（意味着走 PATH）时才回落到 `toolmgr` 自动层的落点 `tools/scanner/`。
+  - 顺带堵掉**一起还没红但迟早会红的假红**（§6.2 那一族的第四起，这次提前掐）：
+    `utils.which()` 处理相对值时先 `shutil.which(相对值)` —— 按**进程 CWD** 找，命中就原样返回那个
+    相对串；找不到才折算项目根走 `_probe(str(_BASE_DIR / alt))`，而它**返回绝对路径**。实测从
+    `/tmp` 启动：`which('tools/scanner/subfinder')` → `/opt/tools/ctf/ctf-scanner/tools/scanner/subfinder`。
+    也就是同一份配置在"仓库里跑 / 仓库外跑"给出两种形状，`--check` 与自举清单会把项目根印到终端上；
+    而 `smoke [8d] ⑦`（自举输出不得含项目根）在装了 dirmap / fscan 的 Windows 机器上必红。
+    现在自举的 TOOLS / nmap / fscan / dirmap 四行与 `check_tools()` 的六行**全部过 `rel_display`**，
+    项目外路径（`/usr/bin/nmap`、`Program Files` 里的 nmap）仍按 CLI 口径原样印 —— 用户要拿去复现。
+  - `tools/scanner/README.md`：示例 `tools` 段与「手工安装」步骤改成 `tools/fscan/` /
+    `tools/dirmap/`（与 `settings.yaml` 逐字相同），并写明"装的位置必须与配置一致；指错**不报错**，
+    只会静默回退内置实现"，以及 `tools.dirmap` 两段 GUI 改不了。
+- **新增回归**（`tests/smoke.py [8d] ⑤b / ⑤c`）：⑤b 钉"落点跟配置"—— 配置写
+  `tools\fscan\fscan.exe` 时 windows 指引出 `tools/fscan/fscan.exe`、linux 出 `tools/fscan/fscan`，
+  dirmap 出 `git clone … nope-8d` + `pip install -r nope-8d/requirements.txt`，配置缺省时回落到
+  `tools/dirmap/`；另加**红向证伪**一条：指引里再出现 `dirmap-master` 就红。⑤c 钉"就算用户在配置里
+  写了项目内**绝对**路径，自举输出也不许把项目根印出来"（Windows 上 `tools/dirmap/` 是目录联接，
+  最容易踩）。
+- **验证**：
+  ```text
+  ./.venv/bin/python tests/smoke.py        # 主机 3.14.4 → SMOKE PASS
+  bash /opt/tools/ctf/_verify.sh           # A–E：RC_A=0 RC_B=0 RC_C=0 RC_D=0 RC_E=0
+                                           # C＝3.9 全量 smoke SMOKE PASS；D＝13 阶段 0 FAIL；E＝compileall 全仓
+  cd /tmp && <仓库>/.venv/bin/python <仓库>/cli/client.py --check
+      # subfinder OK（tools/scanner/subfinder） / dirmap 缺少 tools/dirmap/dirmap.py（全相对，CWD 在仓库外）
+  cd /tmp && <仓库>/.venv/bin/python <仓库>/run_bootstrap.py
+      # fscan 指引 → go build … -o tools/fscan/fscan（跟配置 + 按平台），dirmap 指引 → tools/dirmap/
+  ```
+- **本轮未做**（避免误以为已解决）：`run_devflow.py` / `browser_e2e.py` 未重跑（改动只在展示层与
+  指引文本，不涉及阶段逻辑；3.9 全量 smoke 已覆盖 `--check` 那六行）；Windows 侧仍待复跑。
+
+
 ## 2026-10-02 —— 续96：**迁移自举**（按平台点清并补齐环境依赖）+ **修 Python 3.14 的正则红线**（probe 不再静默 0 站点）
 
 > 实施者：**WorkBuddy · Qoder-Agent**（本轮在远端 Linux / Python 3.14.4 实跑；Windows 侧未复跑）。
