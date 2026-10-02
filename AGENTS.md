@@ -143,7 +143,7 @@ Flask Web 控制台（仿 ARL）。
 ctf-scanner/
 ├── cli/client.py          # CLI 入口：导入目标 → run_task（阻塞）
 ├── run_gui.py             # Web 控制台入口
-├── run_bootstrap.py      # 迁移自举（续96）：按平台点清环境缺口，只自动补 pip 依赖与 `toolmgr.TOOLS`；nmap/fscan/dirmap **只打印命令、不代跑**。放仓库根、刻意不进 `scanner/` 包（免得给 [7p] 的扫描期零下载红线开豁免）
+├── run_bootstrap.py      # 迁移自举（续96）：按平台点清环境缺口，自动补 `.venv`(含 pip 引导) + pip 依赖 + `toolmgr.TOOLS` + 可选系统包层 `--with-system`；nmap/fscan/dirmap **只打印命令、不代跑**。放仓库根、刻意不进 `scanner/` 包（免得给 [7p] 的扫描期零下载红线开豁免）
 ├── run_keys.py          # 凭据口令加密的管理入口（续98）：--status / --encrypt / --change / --verify；任何输出都不出现 key 值或口令
 ├── gui/
 │   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
@@ -718,11 +718,16 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 **写断言前的两句自检**：① 这条判据吃的是**桩/参数**，还是**这台机器恰好是什么**？
 ② 如果用户照 README 正常装一遍、或把仓库放进 `/w` 这种短路径里跑，它还绿吗？
 
-
-
-
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
+
+- **snap 版浏览器在本项目里等于没装（续100 实测 Ubuntu 26.04）**：apt 源里已经没有 deb 版
+  chromium，`chromium-browser` 只是指向 snap 的过渡壳。而 snap 的 confinement + 私有 /tmp 让
+  它**写不到项目路径、也写不到我们看得见的 /tmp**：`--screenshot` 会汇报"已写 N 字节"但文件
+  在 snap 命名空间里（外面看不见），输出到 `logs/task_*/` 直接 `No such file or directory`，
+  `browser_e2e` 的 CDP 启动即退出 —— 只有 `$HOME` 下非隐藏路径可写。**装上了却不干活，比没装
+  更难查**。`run_bootstrap.py::snap_confined()` 因此把这种浏览器报成 warn 并给出换非沙箱版的
+  命令；本机改用 Google Chrome .deb 后 `[7x]`/`[7z]` 才第一次在 Linux 上真跑通。
 
 - **`utils.pool_run()` 把子任务异常吞成 `None`（续96 登记，**未改**）**：它的语义是「单个任务异常不影响整体」，于是阶段里一个真故障（例：`fingerprint.identify()` 在 Python 3.14 上抛 `PatternError`）只表现为「存活站点 0 个」这种**静默降级**，日志里一个字都不留。本轮只修了触发它的正则写法，并给「静默降级会藏住硬故障」这条加了可复算断言（`[8d] ⑩`）；把 `pool_run` 改成上报/计数会影响**所有阶段**的降级判定，属独立一轮，未做。排查同类问题的最短路径：在**当前解释器**上直接调那个被吞掉的函数，别只看阶段日志。
 - **凭据加密的边界：口令绝不允许存在机器上**（续98，`scanner/keystore.py`）：

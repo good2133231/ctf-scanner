@@ -11402,7 +11402,7 @@ http:
     # 而且绕过 toolmgr 那条"官方校验和才落盘"的红线。
     _BANNED8d = ("apt-get", "sudo", "dnf", "yum", "pacman", "zypper", "brew", "winget",
                  "choco", "scoop", "go build", "git clone", "nmap")
-    _ALLOWED8d = ("pip", "venv", "get-pip", "run_bootstrap.py")
+    _ALLOWED8d = ("pip", "venv", "get-pip", "run_bootstrap.py", "install_system_package")
 
     def _det8d(_s8d):
         # 返回越界的 subprocess 调用片段。取 **3 行窗口**：真实调用常常跨行，只看首行会把
@@ -11473,6 +11473,34 @@ http:
     assert _rb8d.pkg_cmd("golang", ["apt-get"]) == ["sudo apt-get install -y golang"]
     assert _rb8d.pkg_cmd("golang", ["brew"]) == ["brew install go"], "同一个包名在 brew 下是 go"
     assert _rb8d.pkg_cmd("chromium", ["winget"]) == ["winget install -e --id Google.Chrome"]
+    # Ubuntu ≥24 的 chromium 只在 snap 里（apt 那边是 2:1snap1 过渡壳）：探测到 snap 必须优先选它
+    assert _rb8d.pkg_cmd("chromium", ["apt-get", "snap"]) == ["sudo snap install chromium"], \
+        "apt 与 snap 同时可用时 chromium 必须走 snap（Ubuntu 26.04 实测 apt 无候选）"
+    assert _rb8d.pkg_cmd("chromium", ["apt-get"]) == ["sudo apt-get install -y chromium"], \
+        "没有 snap 的 Debian / 老 Ubuntu 仍要走 apt —— 优先规则不许把退路砍掉"
+    assert _rb8d.pkg_argv("chromium", ["apt-get", "snap"]) == ["sudo", "snap", "install", "chromium"], \
+        "执行用的 argv 必须是列表（永不是拼好的字符串 —— 那等于给「走 shell」开门）"
+    assert _rb8d.pkg_argv("chromium", []) == [], "没有包管理器时 argv 也必须空（不猜命令）"
+    # snap 版浏览器是"装上了却不干活"（实测 Ubuntu 26.04：私有 /tmp + 写不到项目路径 →
+    # `--screenshot` 永远 0 产物），所以自举必须单独点名，不能把它当"浏览器已就绪"。
+    assert _rb8d.snap_confined("/snap/bin/chromium") is True
+    assert _rb8d.snap_confined("/usr/bin/google-chrome") is False
+    assert _rb8d.snap_confined("") is False and _rb8d.snap_confined(None) is False
+    from scanner import screenshot as _shot8d
+    _bp_old8d = _shot8d.browser_path
+    try:
+        _shot8d.browser_path = lambda settings=None: "/snap/bin/chromium"
+        _br8d = [_r8d for _r8d in _rb8d.probe(settings) if _r8d["name"] == "browser"][0]
+        assert _br8d["status"] == "warn" and "snap" in _br8d["detail"] and _br8d["cmds"], _br8d
+        _btxt8d = " ".join(_br8d["cmds"])
+        assert _ut8d.scrub_paths(_btxt8d) == _btxt8d, "snap 指引里的 URL 被 scrub_paths 误伤"
+        assert str(ROOT) not in _btxt8d, "指引里不许出现项目根绝对路径"
+        _shot8d.browser_path = lambda settings=None: "/usr/bin/google-chrome"
+        assert [_r8d for _r8d in _rb8d.probe(settings) if _r8d["name"] == "browser"][0]["status"] == "ok", \
+            "非沙箱版浏览器必须算就绪（否则 Chrome / Edge 用户会被误警告）"
+    finally:
+        _shot8d.browser_path = _bp_old8d
+
     assert _rb8d.pkg_cmd("nmap", []) == [], "没有可用包管理器时不得凭空造命令"
     _fw8d = _rb8d._manual_row("fscan", "windows", [], {"fscan": "nope-8d"}, _res8d)["cmds"]
     _fl8d = _rb8d._manual_row("fscan", "linux", [], {"fscan": "nope-8d"}, _res8d)["cmds"]
@@ -11641,11 +11669,43 @@ http:
     finally:
         shutil.rmtree(_root11, ignore_errors=True)
 
+    # ⑫ 系统包层（`--with-system`）：默认**什么都不执行**；执行也只走白名单里的 argv 列表。
+    _plan12 = [{"name": "golang", "present": False,
+                "argv": ["sudo", "apt-get", "install", "-y", "golang"],
+                "cmd": "sudo apt-get install -y golang"},
+               {"name": "git", "present": True, "argv": [], "cmd": ""}]
+    _calls12 = []
+    _run12 = lambda argv: (_calls12.append(argv), 0)[1]
+    _g12 = _rb8d.install_system_packages(_plan12, with_system=False, runner=_run12)
+    assert _calls12 == [] and _g12[1] == ["golang"], f"不带 --with-system 却准备执行：{_g12}"
+    _g12 = _rb8d.install_system_packages(_plan12, True, False, runner=_run12)
+    assert _calls12 == [] and any("--yes" in _f12["reason"] for _f12 in _g12[2]), \
+        f"非交互且没 --yes 必须拒绝执行而不是挂住等输入：{_g12}"
+    _g12 = _rb8d.install_system_packages(_plan12, True, True, runner=_run12)
+    assert _g12[0] == ["golang"] and _calls12 == [["sudo", "apt-get", "install", "-y", "golang"]], _g12
+    assert all(isinstance(_a12, list) for _a12 in _calls12), "执行必须是列表 argv（shell=False 的前提）"
+    _g12 = _rb8d.install_system_packages(
+        [{"name": "evil", "present": False, "argv": "sudo apt-get install nmap", "cmd": "x"}],
+        True, True, runner=_run12)
+    assert _g12[2] and "拒绝执行" in _g12[2][0]["reason"], f"字符串命令必须被拒：{_g12}"
+    assert _rb8d.install_system_packages(_plan12, True, True,
+                                        runner=lambda a: (_ for _ in ()).throw(OSError("x")))[2], \
+        "执行抛异常必须落成失败项，不许把自举崩掉"
+    assert set(_rb8d.SYSTEM_PACKAGES) & set(_tm8d.MANUAL) == {"nmap"}, _rb8d.SYSTEM_PACKAGES
+    assert set(_rb8d.SYSTEM_PACKAGES) & set(_tm8d.TOOLS) == set(), "系统包层与 toolmgr 自动下载层不得重叠"
+    _old12 = (_ur8d.urlopen, _sock8d.getaddrinfo, _sock8d.socket)
+    _ur8d.urlopen = _sock8d.getaddrinfo = _sock8d.socket = _boom12 = (lambda *a, **k: (_ for _ in ()).throw(AssertionError("系统包计划不该联网")))
+    try:
+        _p12 = _rb8d.system_plan()
+        assert [_r12["name"] for _r12 in _p12] == list(_rb8d.SYSTEM_PACKAGES), _p12
+    finally:
+        _ur8d.urlopen, _sock8d.getaddrinfo, _sock8d.socket = _old12
+
     print("[8d] 续96 迁移自举 ok: probe 零网络（urlopen/getaddrinfo/socket 三处打桩仍出全清单）｜"
           "自动层＝pip 依赖 + toolmgr.TOOLS，与 MANUAL 不相交｜nmap/fscan/dirmap 按平台只打印命令"
           "（windows→fscan.exe / linux→无后缀 / 无包管理器→指官方发布页，绝不凭空造命令）｜"
           "subprocess.run 全文件仅 1 处且只给 pip｜平台口径复用 host_arch()｜输出无项目根/家目录绝对路径｜"
-          "退出码 0/1 与两栏标题各归其位；变异证伪：代跑 apt / MANUAL 混进 auto / 失败仍回 0 "
+          "退出码 0/1 与两栏标题各归其位；⑫ 系统包层默认不执行、非交互无 --yes 拒绝、执行只走白名单列表 argv 且与 TOOLS 不重叠；变异证伪：代跑 apt / MANUAL 混进 auto / 失败仍回 0 "
           "三种改法都会让上面某条红；⑪ venv 自举两端形状/幂等/失败不删用户目录/只认官方 https 取 get-pip；另钉住『内联全局标志只能在串首』（3.11 弃用 / 3.14 抛 PatternError，本轮就是它让 probe 静默报 0 站点）")
     # ---------------- [8e] 续97：开发模式硬闸（dev.enabled=true ⇒ 外部情报源一律不可用） ----------------
     print("[8e] 续97 开发模式硬闸：suppress_external 三态 / 不原地改 / StageContext 接线 / 日志如实（含变异证伪）…")

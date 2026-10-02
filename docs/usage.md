@@ -382,6 +382,14 @@ python3 run_gui.py
 ```
 
 - **工具版本**：subfinder/httpx/puredns 下载 `linux_amd64` 包；dirmap 是纯 Python，clone 即用；
+
+   **系统包层（续100）**：`python run_bootstrap.py --install --with-system [--yes]` 会把
+   `nmap` / 浏览器 / Go / git 交给发行版包管理器真装（执行前逐条打印；非交互没有 `--yes` 就
+   拒绝执行，只走列表 argv，绝不走 shell）。`fscan` / `dirmap` **不在这一层** —— 要 clone +
+   编译第三方源码，这个决定只能人来做。
+   ⚠️ Ubuntu ≥24 装 snap 版 chromium 是「装得上、用不了」：confinement + 私有 /tmp 让它
+   写不到项目路径与我们看得见的 /tmp，截图永远 0 产物。自举会把这种情况报成 warn 并给出
+   换非沙箱版（如 Google Chrome .deb）的命令。
 - **解释器名**：多数发行版只有 `python3` 没有 `python`。dirmap 配置项若不调整，框架会自动退回当前解释器（`utils.pick_python`），无需手动改；
 - **对外访问**：默认 `gui.host: 127.0.0.1` 仅本机可访问（续32 起另有 Host 白名单与写操作 Origin 校验两道本机守卫，详见 `docs/security-notice.md`）。**推荐做法是保持回环绑定 + 前面套反向代理**（反代层做 TLS 与强口令/访问日志），而不是把 host 改 `0.0.0.0`；确需绑非回环地址时 `serve()` 会打印显式告警，且 Host 白名单会自动放宽。控制台**没有**多用户、HTTPS 与访问审计，务必同时改掉默认口令（`gui.token` 也是 Flask 会话密钥的派生源）；
 - **权限**：不需要 root；工具放 `~/bin` 并加入 PATH 即可；

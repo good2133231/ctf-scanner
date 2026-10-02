@@ -1970,3 +1970,27 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
           **教训：改 CRLF / 混合 EOL 只有字节级替换这一条路，read_text/write_text 同样致命。**
        ⑧ P2-3 状态不变（仍 [部分完成]）：venv 自举让"换机器"这条路更短，但**浏览器相关**
           那两项（截图、browser_e2e 的 35 条）仍待装 chromium，等你授权 `sudo apt-get install -y chromium`。
+-----
+（2026-10-02 续100：系统包层 + 打通 Linux 截图/真浏览器 E2E）实施者：WorkBuddy · Qoder-Agent
+       ① 用户点单"装啊，而且脚本的安装就要有" → run_bootstrap 新增 `SYSTEM_PACKAGES`
+          (nmap/chromium/golang/git) + `system_plan()` + `install_system_packages()`：
+          `--with-system` 才执行，非交互还必须 `--yes`，执行只走列表 argv；默认仍是只打印。
+          fscan/dirmap 刻意不在层内（clone + 编译第三方源码的决定只能人下）。
+          新不变式：SYSTEM_PACKAGES ∩ TOOLS = ∅；与 MANUAL 只交 nmap。
+       ② snap 浏览器实测坑（Ubuntu 26.04 apt 已无 deb chromium）：私有 /tmp 让 --screenshot
+          "报了写 12630 字节但外面看不见"、写项目路径直接 No such file、CDP 启动即退，
+          只有 $HOME 可写 → 新增 snap_confined()，browser 行降为 warn 并给出
+          snap remove + Chrome .deb 的下一步；AGENTS §7 登记。
+       ③ 换 Google Chrome 154 .deb（非沙箱）+ 撤 snap 后：capture() → 11274 字节 / 0.5s；
+          tests/browser_e2e.py → 39 条断言全绿 RC=0（Linux 首跑，此前只在 Windows 跑过）。
+       ④ 包管理器优先级：加 snap 候选（排 apt 之后）+ _PKG_PREFERRED{"chromium":(snap,...)}；
+          两条断言分别钉"有 snap 走 snap"与"没 snap 仍走 apt"，防优先规则砍掉退路。
+       ⑤ 回归：[8d]⑤ 补 argv/snap 形状；[8d]⑫ 六组闸门行为 + 两不变式 + system_plan 零网络；
+          另加 stub browser_path 的双向断言（snap→warn 且指引 URL 不被 scrub_paths 误伤 /
+          普通路径→ok）。
+       ⑥ 我自己造的三次返工（记着别学）：注释里写了被禁字面量 shell=True 被 [5o] 扫到两处；
+          清理时误删验证用 _py39.Dockerfile 让下一轮 build 失败；一次替换写坏续行字符串，
+          25 分钟后才暴露。教训：改完先 py_compile 再启动长任务。
+       ⑦ P2-3：Linux 侧截图与真浏览器 E2E 已补绿（3.9 容器内仍按"无浏览器→跳过"口径）。
+          剩余未覆盖 = fscan 自编译与 dirmap（刻意不代跑）+ Windows 侧复跑 + 3.9 上的浏览器组。
+       ⑧ 本地 main 领先 origin/main 7 个 commit；推送仍等凭据（上一条消息里那串是脱敏占位符）。

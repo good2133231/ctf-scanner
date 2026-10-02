@@ -71,6 +71,50 @@
   另开一轮）。
 
 
+## 2026-10-02 —— 续100：**系统包层**（`--with-system`）+ **打通 Linux 截图/真浏览器 E2E**（snap 坑实测）
+
+> 实施者：**WorkBuddy · Qoder-Agent**（远端 Ubuntu 26.04；本机 3.14.4 + `python:3.9-slim` 双口径全量复验）。
+
+- **用户点单**："装啊，而且脚本的安装就要有" —— 自举此前只到"打印该执行的命令"为止，
+  浏览器/nmap/Go 这些**发行版包**要人手工敲。本轮加一层受约束的执行：
+  `SYSTEM_PACKAGES = (nmap, chromium, golang, git)`，`--with-system` 才执行，且非交互环境
+  还必须显式 `--yes`（没有就**拒绝执行**，绝不挂住等输入）。执行只用**列表 argv**（`shell` 永远关），
+  命令不是列表就直接拒。默认（不带 `--with-system`）行为与上一轮完全一致：只打印。
+- **为什么 `fscan` / `dirmap` 仍然不在这一层**：它们要 `git clone` + `go build` / pip 装依赖，
+  等于替用户决定"跑一份第三方源码"。这个决定只能人来下 —— 与 `toolmgr.MANUAL` 同一条理由。
+  新不变式：`SYSTEM_PACKAGES ∩ toolmgr.TOOLS = ∅`（系统包层与"官方产物+SHA256 自动下载层"
+  是两套信任模型，不许混），并且 `SYSTEM_PACKAGES ∩ toolmgr.MANUAL == {nmap}`
+  （nmap 属 MANUAL 是因为"官方没有带校验和的单二进制产物"，不禁止走发行版源）。
+- **snap 浏览器的实测坑**（Ubuntu 26.04 上 apt 已无 deb 版 chromium，只剩 `2:1snap1` 过渡壳）：
+  装完 `snap install chromium` 后 `--screenshot` 报"已写 12630 字节"，**文件却在 snap 的私有
+  `/tmp` 命名空间里，外面看不见**；输出到项目内任务目录 → `Failed to write file ... No such file
+  or directory`（confinement 看不到 `/opt/...`）；`browser_e2e` 走 CDP 也"启动即退出"。
+  只有 `$HOME` 下非隐藏路径可写。**装上了却不干活，比没装更难查**，所以：
+  ① `run_bootstrap.py` 新增 `snap_confined()`，`browser` 行从"ok"降级为 **warn** 并给出
+  `snap remove chromium` + Chrome .deb 的下一步命令；② 项目 §7 登记这条坑。
+- **换 Google Chrome 154（官方 .deb，非沙箱）+ 撤掉 snap 版之后**：
+  `screenshot.capture()` → True、11274 字节 PNG、0.5 秒；`tests/browser_e2e.py` →
+  **39 条真浏览器交互断言全绿（RC=0）** —— 这套件此前只在 Windows 上跑过，Linux 是第一次。
+- **包管理器优先级修正**：新增 `snap` 候选（排在 apt 系之后）+ `_PKG_PREFERRED`：
+  `chromium` 在探测到 snap 时**必须**走 snap（Ubuntu 26 的 apt 名根本没有候选），
+  没有 snap 的 Debian / 老 Ubuntu 仍回落到 apt —— 两条都写了断言，防止"优先规则砍掉退路"。
+- **回归**：`[8d] ⑤` 补 snap 优先与 argv 形状；`[8d] ⑫` 新增系统包层六组
+  （默认零执行 / 非交互无 `--yes` 拒绝 / `--yes` 才跑且必须是列表 argv / 字符串命令被拒 /
+  执行抛异常落成失败项不崩 / 白名单边界与两个不变式 / `system_plan()` 零网络）；
+  另加 stub `browser_path` 的双向断言（snap 路径→warn 且指引 URL 不被 `scrub_paths` 误伤，
+  普通路径→ok）。
+- **本轮我自己造成的三次返工（都记下来，别学）**：① 注释里写出被禁字面量 `shell=True`，
+  被 `[5o]` 源码红线扫到 —— 连 `run_bootstrap.py` 和 `tests/smoke.py` 各中招一次（这条
+  `[5o]` 早就提醒过"断言文本自己也会被扫到"）；② 清理临时文件时把验证用的 `_py39.Dockerfile`
+  一起删了，导致下一轮 build 直接失败；③ 一次替换把续行字符串的内嵌引号写坏，
+  语法错在 25 分钟后才暴露。教训：**改完先 `py_compile` 再启动长任务**。
+- **双口径复验（全绿）**：本机 3.14.4 `tests/smoke.py` **SMOKE PASS RC=0**，其中
+  `[7x]` 真浏览器 39 条断言、`[7z]` 截图端到端**都是本次真跑到的**；
+  `python:3.9-slim` 镜像 `SMOKE PASS RC=0`（镜像里没有浏览器 → 该组按跳过口径）、
+  `run_devflow` 0 FAIL（35 向量 17 OK / 0 MISS / 18 N-A）、全仓 `compileall` RC=0。
+- **未做**：fscan / dirmap 在 Linux 仍未装（要 Go 编译与 clone，刻意不代跑）；
+  GUI 无自举/解锁面板；`pool_run` 吞异常语义未改。
+
 ## 2026-10-02 —— 续99：**venv 自举**（迁移到任何机器一条命令就绪）+ 修第三起假红（我自己写的）
 
 > 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux；本机 3.14.4 + `python:3.9-slim` 镜像双口径复验）。

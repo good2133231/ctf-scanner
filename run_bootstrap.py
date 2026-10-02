@@ -63,7 +63,7 @@ _IMPORT_ALIAS = {"pyyaml": "yaml"}
 
 # 每平台候选包管理器，顺序＝推荐优先级；探测只 `shutil.which`，不发任何请求。
 _MANAGER_CANDIDATES = {
-    "linux": ("apt-get", "dnf", "yum", "pacman", "zypper", "apk"),
+    "linux": ("apt-get", "dnf", "yum", "pacman", "zypper", "apk", "snap"),
     "macOS": ("brew", "port"),
     "windows": ("winget", "choco", "scoop"),
 }
@@ -74,6 +74,7 @@ _MANAGER_INSTALL = {
     "pacman": "sudo pacman -S --noconfirm {pkg}",
     "zypper": "sudo zypper install -y {pkg}",
     "apk": "sudo apk add {pkg}",
+    "snap": "sudo snap install {pkg}",
     "brew": "brew install {pkg}",
     "port": "sudo port install {pkg}",
     "winget": "winget install -e --id {pkg}",
@@ -81,6 +82,9 @@ _MANAGER_INSTALL = {
     "scoop": "scoop install {pkg}",
 }
 # 同一个东西在各包管理器下的名字（不同才需要登记；nmap 只有 winget 要写包 ID）。
+# 某些包在特定平台上只有某个管理器有"真包"，探测到时优先选它。
+_PKG_PREFERRED = {"chromium": ("snap", "flatpak")}
+
 _PKG_NAME = {
     "nmap": {"winget": "Insecure.Nmap"},
     "chromium": {"winget": "Google.Chrome", "choco": "googlechrome"},
@@ -102,13 +106,26 @@ def platform_info():
     return os_label, arch, package_managers(os_label)
 
 
+def _order(managers, pkg):
+    """把该包"只有真包的那个管理器"提到最前（Ubuntu ≥24 的 chromium 只在 snap 里，apt 那边是
+    `2:1snap1` 过渡壳 —— 按 apt 的名字生成命令会装到一个没有候选的空壳）。"""
+    prio = [m for m in _PKG_PREFERRED.get(pkg, ()) if m in managers]
+    return prio + [m for m in managers if m not in prio]
+
+
 def pkg_cmd(pkg, managers):
-    """用第一个可用包管理器生成安装命令；一个都没有就返回 `[]`（**不猜命令**）。"""
-    for mgr in managers:
+    """用第一个可用包管理器生成安装命令；一个都没有时返回 `[]`（**不猜命令**）。"""
+    for mgr in _order(list(managers), pkg):
         tmpl = _MANAGER_INSTALL.get(mgr)
         if tmpl:
             return [tmpl.format(pkg=_PKG_NAME.get(pkg, {}).get(mgr, pkg))]
     return []
+
+
+def pkg_argv(pkg, managers):
+    """`pkg_cmd` 的**列表形态**：给 `--with-system` 真执行用（argv + `shell=False`，永不走 shell）。"""
+    cmds = pkg_cmd(pkg, managers)
+    return cmds[0].split() if cmds else []
 
 
 # ---------- 虚拟环境：让"一上来就能运行"成立 ----------
@@ -234,6 +251,85 @@ def requirement_names():
     return [n for n in out if n]
 
 
+# ---------- 系统包层（`--with-system` 才执行） ----------
+
+# 允许自动安装的系统包白名单。信任来自**发行版/snap 自己的包签名与源**，不是我们校验 ——
+# 所以这一层与 `toolmgr` 那条"官方 release + SHA256 我们自己验"是**两套信任模型**，
+# 也因此刻意**不含 fscan / dirmap**：那两个要 `git clone` + `go build` / pip 装依赖，
+# 等于替用户决定"跑一份第三方源码"，这种决定只能由人做（`toolmgr.MANUAL` 同一条理由）。
+SYSTEM_PACKAGES = ("nmap", "chromium", "golang", "git")
+
+# 每个包"装没装"的检测口径（只查 PATH / 文件系统，**零网络**）
+def snap_confined(path):
+    """浏览器是否 snap 版（confinement 让它写不到项目路径与真实 /tmp，截图必然 0 产物）。"""
+    norm = str(path or "").replace("\\\\", "/").lower()
+    return "/snap/" in norm or norm.startswith("/mnt/@snap/")
+
+
+def _pkg_present(pkg, settings=None):
+    from scanner.utils import which
+    if pkg == "chromium":
+        from scanner import screenshot
+        return bool(screenshot.browser_path(settings))
+    if pkg == "golang":
+        return bool(which("go"))
+    return bool(which(pkg))
+
+
+def system_plan(settings=None, os_label=None, managers=None):
+    """系统包层的计划：每项 `{name, present, argv, cmd}`；没有可用包管理器时 argv 为空。"""
+    if os_label is None or managers is None:
+        os_label, _arch, managers = platform_info()
+    out = []
+    for pkg in SYSTEM_PACKAGES:
+        out.append({"name": pkg, "present": _pkg_present(pkg, settings),
+                    "argv": pkg_argv(pkg, managers) if os_label in _MANAGER_CANDIDATES else [],
+                    "cmd": (pkg_cmd(pkg, managers) or [""])[0]})
+    return out
+
+
+def install_system_packages(plan, with_system=False, assume_yes=False, runner=None):
+    """**默认什么都不做**。只有 `with_system=True` 才执行；非交互还必须有 `assume_yes=True`。
+
+    返回 `(executed, refused, failed)`。三条硬约束（回归 `[8d] ⑫` 逐条钉）：
+    1. `with_system=False` → 一次 `runner` 都不许调（"脚本里有能力"≠"默认就替你装"）；
+    2. 要执行但没有 `assume_yes` 且 stdin 不是 tty → **拒绝并说明**，不挂住等输入；
+    3. 执行只用**列表 argv**（`runner` 收到的是 list，永不是字符串）—— 传字符串直接拒，
+       防将来有人图省事改成"走 shell"的形态（那是 `[5o]` 的源码红线：这里只许列表 argv）。
+    """
+    if not with_system:
+        return [], [r["name"] for r in plan if not r["present"]], []
+    todo = [r for r in plan if not r["present"] and r["argv"]]
+    if not todo:
+        return [], [], []
+    if not assume_yes and not sys.stdin.isatty():
+        return [], [r["name"] for r in todo], [
+            {"name": "system", "reason": "非交互环境必须显式 --yes 才会执行系统包安装"}]
+    if not assume_yes:
+        print("[?] 将执行以下系统包安装命令（需要管理员权限；发行版/包管理器自己验签）：")
+        for r in todo:
+            print(f"      $ {r['cmd']}")
+        if input("    确认执行？输入 y 继续，其它一律跳过：").strip().lower() != "y":
+            return [], [r["name"] for r in todo], []
+    run = runner or (lambda argv: subprocess.run(argv, check=False).returncode)  # install_system_package
+    executed, refused, failed = [], [], []
+    for r in todo:
+        argv = r["argv"]
+        if isinstance(argv, str) or not argv or argv != list(argv):
+            failed.append({"name": r["name"], "reason": "命令不是 argv 列表，拒绝执行（绝不走 shell）"})
+            continue
+        print(f"[+] 执行：{r['cmd']}")
+        try:
+            rc = run(argv)  # install_system_package
+        except Exception as e:
+            failed.append({"name": r["name"], "reason": f"执行失败：{e}"})
+            continue
+        if rc == 0:
+            executed.append(r["name"])
+        else:
+            failed.append({"name": r["name"], "reason": f"退出码 {rc}（权限不足？源里没这个包？）"})
+    return executed, refused, failed
+
 # ---------- 探测（零网络）----------
 
 def _row(name, kind, auto, status, detail, cmds=()):
@@ -303,11 +399,23 @@ def probe(settings=None):
         rows.append(_manual_row(name, os_label, mgrs, tools_cfg, resolve))
 
     path = screenshot.browser_path(st)
-    rows.append(_row("browser", "browser", False, "ok" if path else "missing",
-                     "已找到浏览器（截图阶段与 PDF 导出可用）" if path else
-                     "未找到 Edge/Chrome/Chromium：截图与 PDF 导出会如实跳过（不谎报）",
-                     [] if path else (pkg_cmd("chromium", mgrs)
-                                      or ["本平台没有已知包管理器：自行装 Chrome/Chromium/Edge"])))
+    if path and snap_confined(path):
+        # Ubuntu ≥24 的 apt chromium 只是 snap 过渡壳，而 snap 的 confinement 让它**写不到**
+        # 项目路径与真实 /tmp（实测：`--screenshot` 报"已写 12630 字节"，文件却在 snap 的私有
+        # 命名空间里，外面看不见）→ 截图与 PDF 永远 0 产物。装上了却不干活，比没装更难查。
+        rows.append(_row("browser", "browser", False, "warn",
+                         "只有 snap 版浏览器：confinement 让它写不到项目路径与真实 /tmp，"
+                         "截图与 PDF 导出会 0 产物 —— 换非沙箱版（Google Chrome .deb）",
+                         ["sudo snap remove chromium",
+                          "curl -fsSL -o /tmp/chrome.deb "
+                          "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb",
+                          "sudo apt install -y /tmp/chrome.deb"]))
+    else:
+        rows.append(_row("browser", "browser", False, "ok" if path else "missing",
+                         "已找到浏览器（截图阶段与 PDF 导出可用）" if path else
+                         "未找到 Edge/Chrome/Chromium：截图与 PDF 导出会如实跳过（不谎报）",
+                         [] if path else (pkg_cmd("chromium", mgrs)
+                                          or ["本平台没有已知包管理器：自行装 Chrome/Chromium/Edge"])))
     return rows
 
 
@@ -360,7 +468,7 @@ def summarize(rows):
             "todo_manual": [r for r in rows if not r["auto"] and r["status"] != "ok"]}
 
 
-def render(s, failed=(), installed=(), install=False):
+def render(s, failed=(), installed=(), install=False, sys_plan=()):
     """打印报告。CLI 口径：命令可直接复制，路径原样（不遮项目外路径）。"""
     os_label, arch, mgrs = platform_info()
     print(f"[*] 迁移自举｜平台 {os_label}/{arch}｜包管理器 {'、'.join(mgrs) or '无'}")
@@ -385,6 +493,12 @@ def render(s, failed=(), installed=(), install=False):
     if s["todo_manual"]:
         print("\n[i] 「需手工」那几类官方都没有\"可下载且带官方校验和的单二进制产物\"，"
               "所以框架不为它们发任何请求（逐条原因见 scanner/toolmgr.py 的 MANUAL）。")
+    miss_sys = [r for r in sys_plan if not r["present"] and r["argv"]]
+    if miss_sys:
+        print("\n—— 系统包层（默认**只打印**，加 --with-system 才真装；需管理员权限）——")
+        for r in miss_sys:
+            print(f"  {r['name']:<10} $ {r['cmd']}")
+        print("  （fscan / dirmap 不在这一层：要 clone + 编译第三方源码，那种决定只能人来下）")
     if not s["todo_auto"] and not s["todo_manual"]:
         print("\n[+] 环境齐了：可以直接 python cli/client.py --check 复核，再跑 tests/smoke.py。")
     print("\n[i] 装完外部工具请跑 `python tests/smoke.py` 复核（本项目的唯一回归门禁）。")
@@ -440,6 +554,11 @@ def main(argv=None):
     ap.add_argument("--no-wire", action="store_true", help="透传 toolmgr：装完不写回 settings.yaml")
     ap.add_argument("--no-venv", action="store_true",
                     help="不要自动建 .venv，就用当前解释器装依赖（容器/受控环境里常用）")
+    ap.add_argument("--with-system", action="store_true",
+                    help="系统包层：nmap / 浏览器 / Go / git 交给**发行版包管理器**真装"
+                         "（默认只打印命令不执行；fscan/dirmap 永不代跑）")
+    ap.add_argument("--yes", action="store_true",
+                    help="配合 --with-system：跳过交互确认（非交互环境没有它就**拒绝执行**）")
     args = ap.parse_args(argv)
 
     # 一键就绪：`--install` 时先保证有个带 pip 的 .venv，再用**它**重跑本脚本 ——
@@ -455,11 +574,20 @@ def main(argv=None):
 
     s = summarize(probe())
     installed, failed = ([], [])
+    sys_plan = system_plan()
     if args.install:
         installed, failed = install_auto(tuple(args.only), args.allow_unverified,
                                         args.tools_dest, not args.no_wire)
         s = summarize(probe())          # 复探：以"真的装上没有"为准，不按安装返回值吹
-    render(s, failed, installed, install=args.install)
+    if args.with_system:
+        got, refused, sfailed = install_system_packages(sys_plan, True, args.yes)
+        for name in got:
+            installed.append({"tool": name, "path": "(系统包管理器)"})
+        failed.extend(sfailed)
+        if refused:
+            print("[!] 系统包层被拒绝执行：" + "、".join(refused))
+        s = summarize(probe())          # 复探：装没装以文件系统为准
+    render(s, failed, installed, install=args.install, sys_plan=sys_plan)
     return 1 if failed else 0
 
 
