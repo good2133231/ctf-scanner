@@ -236,6 +236,11 @@ def render(s, failed=(), installed=(), install=False):
             print(f"  {r['name']:<12} [{r['status']}] {r['detail']}")
             for cmd in r["cmds"]:
                 print(f"      $ {cmd}")
+    if failed:
+        # 只有"失败 N"这个数字等于没说：哪一项、为什么失败必须逐条列出来。
+        print("\n—— 自动层失败（本脚本试过了，没成）——")
+        for f in failed:
+            print(f"  {f['name']:<12} {f.get('reason') or '未知原因'}")
     if s["todo_manual"]:
         print("\n[i] 「需手工」那几类官方都没有\"可下载且带官方校验和的单二进制产物\"，"
               "所以框架不为它们发任何请求（逐条原因见 scanner/toolmgr.py 的 MANUAL）。")

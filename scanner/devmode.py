@@ -154,6 +154,32 @@ def enabled(settings):
     if not isinstance(dev, dict):
         return False
     return bool(dev.get("enabled"))
+# 开发模式下必须压制的"会真出网"的段（续97）。口径与 `devflow._EXTERNAL_OFF` 同源但**更宽**：
+# `iprecon`（api.webscan.cc）/ `ctlog`（crt.sh）/ `github`（GitHub 检索）/ `intel`（CISA KEV）
+# 同样发真实外部请求，而开发模式的意义就是"随便点都不会打到外面、不烧第三方配额"。
+DEV_EXTERNAL_SECTIONS = ("iprecon", "fofa", "shodan", "quake", "ctlog", "github", "intel")
+
+
+def suppress_external(settings):
+    """`dev.enabled` 为真时，把 `DEV_EXTERNAL_SECTIONS` 里**当前开着**的段在副本上关掉。
+
+    返回 `(新 settings, 被压制的段名列表)`。三条边界：
+    1. 没开开发模式 → **原对象原样返回**、列表为空（零副作用，不改既有行为）；
+    2. 只改内存副本，**绝不写回 `config/settings.yaml`** —— 文件始终是用户自己的，
+       关掉 `dev.enabled` 即恢复原策略（与 `apply()` 同一条铁律）；
+    3. 只压真开着的段（本来关着的不进列表，否则就是虚报"我压住了")。返回值可以直接拿去
+       打日志 —— 静默降级是本仓反复踩过的坑（`AGENTS.md §7`），所以"压住了什么"必须说出来。
+    """
+    if not enabled(settings):
+        return settings, []
+    out = dict(settings or {})
+    killed = []
+    for seg in DEV_EXTERNAL_SECTIONS:
+        cur = out.get(seg)
+        if isinstance(cur, dict) and cur.get("enabled"):
+            out[seg] = dict(cur, enabled=False)
+            killed.append(seg)
+    return out, killed
 
 
 def _fmt(value):

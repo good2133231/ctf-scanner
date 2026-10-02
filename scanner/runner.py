@@ -22,6 +22,7 @@ from . import db, extdom
 from .config import LOGS_DIR, load_settings
 from . import auth as taskauth
 from . import throttle
+from . import devmode
 from .log import get_logger
 from .stages.subdomain import SubdomainStage
 from .stages.takeover import TakeoverStage
@@ -137,6 +138,16 @@ class StageContext:
         # 任务级限流器（F2，见 scanner/throttle.py）：同样是"任务专用副本、绝不原地改"。
         # 引用**进程级共享闸**，因此 N 个任务线程各自注入，但共享同一个全局并发上限。
         self.settings = throttle.inject(self.settings, task_id, self.stop_event, logger)
+        # 开发模式硬闸（续97）：`dev.enabled=true` 时，把"会真出网"的第三方段（FOFA / Shodan /
+        # Quake / crt.sh / GitHub 检索 / CISA KEV）在**本任务副本**上一律关掉 —— 开发模式的意义
+        # 就是"随便试都不会打到外面、不烧配额"，不指望用户记得先把策略页改回 false。
+        # 同样是"任务专用副本、绝不原地改"，也不写 config/settings.yaml（见 scanner/devmode.py）。
+        self.settings, self.dev_suppressed = devmode.suppress_external(self.settings)
+        if self.dev_suppressed:
+            # 必须说出来：这些段之后会以"未启用/已跳过"的面目出现在日志与页签里，
+            # 不写这一行就成了本仓反复出事的静默降级。
+            logger.info("[devmode] 开发模式已压制外部情报源：" + "、".join(self.dev_suppressed)
+                        + "（仅本次任务副本；关掉 dev.enabled 即恢复，config/settings.yaml 未被改动）")
         self.workdir = Path(workdir)
         self.logger = logger
         self.results = {"subdomains": [], "sites": [], "dirs": [], "vulns": [],

@@ -1891,3 +1891,22 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ⑦ 提交与推送：两条 commit 已在本地 main（29952c2 续96、d0d3d0d 续96-附 回写 tools 两行），
           相对 origin/main 纯快进 2 个。**推送暂缓** —— 远端这把 SSH key 被 GitHub 拒
           （publickey），config/keys.yaml 也没同步过来；CI 上的 Python 3.9 复验因此还欠着。
+-----
+（2026-10-02 续97：开发模式硬闸 + 两起假红修复 + 3.9/3.14 双口径复验）实施者：WorkBuddy · Qoder-Agent
+       ① 用户点单"fofa 在开发期间给限制" → `devmode.DEV_EXTERNAL_SECTIONS`(7 个真出网段) +
+          `suppress_external()`，接在 `StageContext` 副本层：dev 开着才压、不写配置文件、
+          压了必须在日志里点名。回归 `[8e]`（含 enabled() 恒假/恒真两向变异证伪）。
+       ② 修假红一：`[7p]`「不得动其它键」拿旧值当哨兵 → 改逐行 diff（只许 subfinder 那行变）。
+          触发场景就是项目自己推荐的 `--update-tools`，远端实跑当天撞红。
+       ③ 修假红二：`str(ROOT) not in html`（5 处）在短根容器里把 `raw/flow/workflows` 误判成
+          泄露 → 新增 `leaked_root()` 带路径边界；长根/短根/Windows 三形态 7 用例全对。
+       ④ `run_bootstrap.render()` 补「自动层失败」逐条列名称+原因；`[8d] ⑨` 判据改吃桩里的
+          reason，不再依赖本机装了哪个工具（同一毛病的第三次）。
+       ⑤ **双口径复验**：`python:3.9-slim` 镜像 smoke **PASS/RC=0**、devflow 0 FAIL
+          （35 向量 17 OK / 0 MISS / 18 N-A —— 少的 1 条是镜像里没装 httpx，probe 外部引擎向量
+          按 N-A 如实报）、全仓 compileall RC=0；本机 3.14.4 亦 PASS。
+       ⑥ P2-3 状态推进：[部分完成：Linux 实机验证已在 3.9 与 3.14 双口径复跑（smoke / devflow /
+          calibrate / CLI / GUI 全绿）；**仍未覆盖 = 浏览器相关的截图与 browser_e2e**
+          （需 `sudo apt-get install -y chromium`，系统级动作，等用户点头）]。历史 [待办] 行照旧
+          不改动（只追加）。
+       ⑦ 本轮还欠一次"3.9 侧由 CI 交叉验证"：三条 commit 只在本地 main，推送等你给凭据。

@@ -71,6 +71,44 @@
   另开一轮）。
 
 
+## 2026-10-02 —— 续97：**开发模式硬闸**（外部情报源压掉）+ 修两起**假红**断言 + **3.9 / 3.14 双口径复验**
+
+> 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux；3.14.4 本机 + `python:3.9-slim` 镜像各跑一遍全量）。
+
+- **新功能：开发模式硬闸**（用户点单"fofa 在开发期间给限制"）。`scanner/devmode.py` 新增
+  `DEV_EXTERNAL_SECTIONS = (iprecon, fofa, shodan, quake, ctlog, github, intel)` 与
+  `suppress_external(settings)`：`dev.enabled=true` 时把**当前开着**的这些段在**任务专用副本**上
+  一律关掉。接在 `runner.StageContext.__init__`（`auth.inject` / `throttle.inject` 同一层）。
+  比自检那份 `devflow._EXTERNAL_OFF` 宽：`api.webscan.cc` / GitHub 检索 / CISA KEV 也会真出网。
+  三条边界：dev 关着 → **原对象原样返回**（零副作用，不改既有行为）；**绝不写
+  `config/settings.yaml`**（关掉 dev.enabled 即恢复，文件始终是用户的）；压住了**必须在任务日志
+  点名**（`[devmode] 开发模式已压制外部情报源：…`）—— 本仓出事最多的就是静默降级。
+- **修假红一（`smoke [7p]`）**：「回写不得动其它键」原来用 `assert "  httpx: httpx" in 文本`
+  当哨兵，而 `_set7p` 是**真实 settings.yaml 的副本** —— 用户只要照项目推荐跑过 `--update-tools`
+  （续96 自举也会跑）那行就变成 `tools/scanner/httpx`，断言必红。远端实跑 `--bootstrap --install`
+  当天撞红。改成**逐行 diff**：只允许 `  subfinder:` 那一行变化（严格强于旧写法，且与当前值无关）。
+- **修假红二（`smoke [5]/[7y]/[8d]` 共 5 处）**：「页面不得出现项目根绝对路径」用
+  `assert str(ROOT) not in html`。容器里 `ROOT=/w`，正文 `raw/flow/workflows` 的巧合子串即被误判
+  —— 3.9 镜像里实测打红。收敛成新 helper `tests/smoke.py::leaked_root()`：判据带**路径边界**
+  （根串之后不是 `\w` 才算泄露），`str(ROOT)` 与 `as_posix()` 两种形态都查；长根/短根/Windows
+  根三种形态 7 个用例逐一验过（真泄露必红、巧合子串必绿）。
+- **`run_bootstrap.render()` 补"失败列成条目"**：原来只报`自动层失败 1`这个数字，不说**是谁、
+  为什么**。新增一段「—— 自动层失败（本脚本试过了，没成）——」逐条列 `名称 + reason`。
+  顺带把 `[8d] ⑨` 的判据从"工具名"改成**桩里带进来的 reason**（`"stub"`）—— 之前那条正是
+  拿机器状态当哨兵（装了 subfinder 就找不到字符串了），属于同一个毛病的第三次现身。
+- **回归**：新增 `tests/smoke.py [8e]`（六组：dev 关着零副作用 / dev 开着只压真开着的且入参不动 /
+  脏值不抛 / 外部源清单齐全且本机能力不误杀 / `enabled()` 恒假与恒真两向变异证伪 /
+  `StageContext` 真接线 + 日志如实 + 反向照旧）。
+- **双口径复验（本轮最重要的交付）**：`python:3.9-slim` 镜像里 —— `tests/smoke.py` **SMOKE PASS
+  RC=0**、`run_devflow.py` **0 FAIL**（35 向量 17 OK / 0 MISS / 18 N-A，少那条是镜像里没装 httpx
+  → `probe` 外部引擎向量按 N-A 如实报）、全仓 `compileall` RC=0。本机 3.14.4 同样
+  SMOKE PASS RC=0。→ **续96 那个正则修复与本轮改动在 3.9 与 3.14 上都立得住**。
+- **文档**：`AGENTS.md` §5 新增不变量 9（开发模式硬闸）、§6.1 计数指路、**新增 §6.2
+  「假红：断言拿环境值当哨兵」**（两起案例 + 两句自检）；`todo.txt` 追加本轮块；
+  P2-3 的"未覆盖"里划掉 Python 3.9 复跑，只剩浏览器相关。
+- **仍未做**：截图 / PDF 相关验证要装浏览器（`sudo apt-get install -y chromium`，系统级动作，
+  等用户点头）；`utils.pool_run()` 吞异常语义未改（§7 已登记）；GUI「外部工具」页无自举入口。
+
 ## 2026-10-01 —— 续95：**Docker 部署**（一键起控制台 + 交付给队友）
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。

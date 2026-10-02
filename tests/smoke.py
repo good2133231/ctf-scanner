@@ -8,6 +8,7 @@ import base64
 import copy
 import functools
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -18,6 +19,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+def leaked_root(text):
+    """页面/输出里是否泄露了**项目根绝对路径**（`str(ROOT)` 与 `as_posix()` 两种写法都查）。
+
+    判据必须带**路径边界**：裸 `str(ROOT) in text` 在根路径短的机器上是假红 ——
+    容器里 `ROOT=/w`，正文里 `raw/flow/workflows` 这种巧合子串就会被判成泄露
+    （2026-10-02 在 `python:3.9-slim` 镜像里实测把 [5] / [7y] 打红）。
+    真泄露一定是「根 + 分隔符」或整条根被引用，所以要求根串之后**不是单词字符**。
+    """
+    for _root in (str(ROOT), ROOT.as_posix()):
+        if re.search(re.escape(_root) + r"(?!\w)", text):
+            return True
+    return False
 
 # ---- 测试库/日志目录隔离（用户要求：跑测试不能污染真实工作区）----
 # 默认库 `data/scanner.db` 是**真实任务库**，直接跑冒烟测试会往里写任务/站点/漏洞/端口
@@ -552,7 +566,7 @@ def main():
     assert unfolded.count(dup_title) == 3, unfolded.count(dup_title)
     assert "（被折叠）" in unfolded
     # POC 页只展示相对路径（不出现本机绝对目录）
-    assert str(ROOT) not in poc_html, "POC 页不应出现绝对路径"
+    assert not leaked_root(poc_html), "POC 页不应出现绝对路径"
     # 漏洞页带任务名（而不是只有一个 #id）
     vulns_html = c.get("/vulns").get_data(as_text=True)
     assert db.get_task(tid)["name"] in vulns_html, "漏洞页应显示任务名"
@@ -721,8 +735,8 @@ def main():
                  "blacklist_enabled"):
         assert f'name="{name}"' in st_html, f"策略配置缺 {name}"
     assert "panel collapsible" in st_html and 'data-panels="expand"' in st_html
-    assert str(ROOT) not in st_html, "策略配置页不应出现绝对路径"
-    assert str(ROOT) not in detail_html, "任务详情页不应出现绝对路径"
+    assert not leaked_root(st_html), "策略配置页不应出现绝对路径"
+    assert not leaked_root(detail_html), "任务详情页不应出现绝对路径"
     assert str(LOGS_DIR) not in detail_html, "任务详情页的日志文件路径应已相对化"
     assert "logs/smoke-" in detail_html, "任务详情页应显示相对日志路径（logs/...）"
 
@@ -9211,8 +9225,16 @@ http:
     assert b"\r\n" in _after7p and b"\n" not in _after7p.replace(b"\r\n", b""), \
         "行尾必须沿用文件原有形态（本仓 settings.yaml 是 CRLF）"
     assert _after7p.endswith(b"\r\n"), "结尾换行必须保留"
-    assert "  httpx: httpx" in _after_txt7p and "  puredns: puredns" in _after_txt7p, "不得动其它键"
-    assert "  fscan: tools/fscan/fscan.exe" in _after_txt7p, "不得动其它键（含 fscan）"
+    # 「不得动其它键」的**正确口径是逐行比对，不是拿旧值当哨兵**：这里读的是真实
+    # `config/settings.yaml` 的临时副本，而只要用户按项目推荐跑过一次 `--update-tools`
+    # （续96 的自举就会这样），`httpx:` 那一行就变成 `tools/scanner/httpx` —— 用值当哨兵的
+    # 写法会必然变红（2026-10-02 远端实跑 `--bootstrap --install` 后就是这样撞红的）。
+    _pairs7p = list(zip(_set_txt7p.splitlines(), _after_txt7p.splitlines()))
+    _diff7p = [(b, a) for b, a in _pairs7p if b != a]
+    assert len(_diff7p) == 1 and _diff7p[0][0].startswith("  subfinder:"), \
+        f"回写只许改 tools.subfinder 那一行，实改 {len(_diff7p)} 行：{[d[0] for d in _diff7p][:3]}"
+    assert "  httpx:" in _after_txt7p and "  puredns:" in _after_txt7p \
+        and "  fscan:" in _after_txt7p, "其它键必须还在（只判键名，不判值）"
 
     # ⑥ 校验不过：拒绝落盘、**不覆盖已装好的**、不留 .part
     _tampered7p = dict(_blob7p)
@@ -10535,14 +10557,13 @@ http:
                    error="OSError: [Errno 2] No such file or directory: '" + _WEB7y + "'")
 
     _DRIVE_RE7y = _re7y.compile(r"(?<![\w:/\\.])[A-Za-z]:[\\/]")
-    _ROOTP7y = (str(ROOT), ROOT.as_posix())
+    # （项目根泄露判据收进 leaked_root()：带路径边界，短的根如容器里的 /w 不会误报）
 
     def _scan7y(url):
         _r = _c7y.get(url)
         assert _r.status_code == 200, f"{url} → {_r.status_code}"
         _h = _r.get_data(as_text=True)
-        for _rp in _ROOTP7y:
-            assert _rp not in _h, f"{url}：出现项目根绝对路径 {_rp}"
+        assert not leaked_root(_h), f"{url}：出现项目根绝对路径"
         _m = _DRIVE_RE7y.search(_h)
         assert not _m, f"{url}：出现盘符绝对路径 {_m.group(0) if _m else ''}"
         return _h
@@ -11455,7 +11476,7 @@ http:
     _home8d = os.path.expanduser("~")
     for _r8d in _rows8d:
         _txt8d = _r8d["detail"] + " " + " ".join(_r8d["cmds"])
-        assert str(ROOT) not in _txt8d, f"{_r8d['name']} 输出了项目根绝对路径"
+        assert not leaked_root(_txt8d), f"{_r8d['name']} 输出了项目根绝对路径"
         assert _home8d not in _txt8d, f"{_r8d['name']} 输出了家目录"
         assert _ut8d.scrub_paths(_txt8d) == _txt8d, \
             f"{_r8d['name']} 的输出里有可被抹掉的绝对路径：{_txt8d}"
@@ -11486,7 +11507,9 @@ http:
         _rb8d.install_auto = lambda *_a, **_k: ([], [{"name": "subfinder", "reason": "stub"}])
         _rc8d2, _out8d2 = _cap8d(["--install"])
         assert _rc8d2 == 1, "自动层有失败却回 0 → 退出码不可信（复探也救不了它）"
-        assert "自动层失败 1" in _out8d2 and "subfinder" in _out8d2, _out8d2
+        # 判据只能吃**桩里带来的东西**（reason="stub"），不能吃工具名：工具装没装取决于
+        # 这台机器，拿它当哨兵就是 [7p] 那条旧断言的同类毛病（值当哨兵 ≠ 口径）。
+        assert "自动层失败 1" in _out8d2 and "stub" in _out8d2, _out8d2
         assert "需要手工安装" in _out8d2, "失败时手工栏不能被吞掉"
     finally:
         _rb8d.install_auto = _fn8d
@@ -11540,6 +11563,91 @@ http:
           "subprocess.run 全文件仅 1 处且只给 pip｜平台口径复用 host_arch()｜输出无项目根/家目录绝对路径｜"
           "退出码 0/1 与两栏标题各归其位；变异证伪：代跑 apt / MANUAL 混进 auto / 失败仍回 0 "
           "三种改法都会让上面某条红；另钉住『内联全局标志只能在串首』（3.11 弃用 / 3.14 抛 PatternError，本轮就是它让 probe 静默报 0 站点）")
+    # ---------------- [8e] 续97：开发模式硬闸（dev.enabled=true ⇒ 外部情报源一律不可用） ----------------
+    print("[8e] 续97 开发模式硬闸：suppress_external 三态 / 不原地改 / StageContext 接线 / 日志如实（含变异证伪）…")
+    import copy as _copy8e
+    from scanner import devmode as _dm8e
+
+    _on8e = {"dev": {"enabled": True},
+             "iprecon": {"enabled": True}, "fofa": {"enabled": True}, "shodan": {"enabled": False},
+             "quake": {"enabled": True}, "ctlog": {"enabled": True},
+             "github": {"enabled": True}, "intel": {"enabled": True}}
+
+    # ① 没开开发模式 → 原对象原样返回、一个段都不压（不许改既有行为）
+    _off8e = {"dev": {"enabled": False}, "fofa": {"enabled": True}}
+    _out8e, _killed8e = _dm8e.suppress_external(_off8e)
+    assert _killed8e == [] and _out8e is _off8e and _out8e["fofa"]["enabled"] is True, \
+        "dev 关着却动了策略 → 越界"
+
+    # ② 开了开发模式 → 只压"真开着"的段，且**入参不许被原地改**（与 auth/throttle 同一铁律）
+    _snap8e = _copy8e.deepcopy(_on8e)
+    _out8e, _killed8e = _dm8e.suppress_external(_on8e)
+    assert _killed8e == [_s for _s in _dm8e.DEV_EXTERNAL_SECTIONS if _on8e[_s]["enabled"]], _killed8e
+    assert "shodan" not in _killed8e, "本来关着的段进了「被压制」名单＝虚报"
+    for _seg8e in _killed8e:
+        assert _out8e[_seg8e]["enabled"] is False, _seg8e
+    assert _on8e == _snap8e, "suppress_external 原地改了入参（CLI/测试复用同一个 dict 会串味）"
+
+    # ③ 脏值不抛（缺段 / 非 dict / 段不是 dict / 整个 settings 不是 dict）
+    for _dirty8e in (None, {}, 42, {"dev": "x"}, {"dev": {"enabled": 1}},
+                     {"dev": {"enabled": True}, "fofa": "脏", "github": None}):
+        _got8e, _k8e = _dm8e.suppress_external(_dirty8e)
+        assert isinstance(_k8e, list) and isinstance(_got8e, type(_dirty8e)), _dirty8e
+
+    # ④ 覆盖面：六个真会出网的源一个都不能漏；本机能力不许被当成外部源误杀
+    _need8e = {"iprecon", "fofa", "shodan", "quake", "ctlog", "github", "intel"}
+    assert _need8e - set(_dm8e.DEV_EXTERNAL_SECTIONS) == set(), f"外部源清单缺项：{_need8e - set(_dm8e.DEV_EXTERNAL_SECTIONS)}"
+    for _local8e in ("screenshot", "portscan", "dirscan", "vulnscan"):
+        assert _local8e not in _dm8e.DEV_EXTERNAL_SECTIONS, f"{_local8e} 是本机/目标侧能力，不该进外部源表"
+
+    # ⑤ 变异证伪：桩掉 enabled()（＝忘了接开发模式判定），①②的口径必须立刻失真
+    _orig8e = _dm8e.enabled
+    try:
+        _dm8e.enabled = lambda s: False
+        assert _dm8e.suppress_external(_copy8e.deepcopy(_on8e))[1] == [], \
+            "enabled() 恒假仍能压住 → ①②根本没验到开发模式判定"
+        _dm8e.enabled = lambda s: True
+        assert set(_dm8e.suppress_external(_copy8e.deepcopy(_on8e))[1]) == _need8e - {"shodan"}, \
+            "enabled() 恒真时压制集应当等于「真开着的段」"
+    finally:
+        _dm8e.enabled = _orig8e
+
+    # ⑥ 接线：StageContext 真的用上这道闸，并且**在日志里如实说明**（静默降级是本仓的老坑）
+    _logs8e = []
+
+    class _L8e:
+        def info(self, m, *a): _logs8e.append(str(m))
+        def warning(self, m, *a): _logs8e.append(str(m))
+        def error(self, m, *a): _logs8e.append(str(m))
+
+    _wd8e = Path(tempfile.mkdtemp(prefix="smoke-8e-"))
+    try:
+        _s_on8e = _copy8e.deepcopy(settings)
+        _s_on8e["dev"] = dict(_s_on8e.get("dev") or {}, enabled=True)
+        _s_on8e["fofa"] = dict(_s_on8e.get("fofa") or {}, enabled=True)
+        _s_on8e["iprecon"] = dict(_s_on8e.get("iprecon") or {}, enabled=True)
+        _c_on8e = StageContext(999001, "smoke-8e-on", [], [], {}, _s_on8e, _wd8e, _L8e())
+        assert _c_on8e.settings["fofa"]["enabled"] is False, "StageContext 没接上硬闸（闸只在 devmode 里自娱自乐）"
+        assert any("[devmode]" in _l8e and "fofa" in _l8e for _l8e in _logs8e), \
+            f"压住了却不打一行说明 → 静默降级（实得日志：{_logs8e}）"
+        assert _s_on8e["fofa"]["enabled"] is True, "StageContext 把调用方的 settings 改了（副本铁律）"
+
+        # 反向：开发模式关着时**必须一切照旧**（既不改策略也不打压制日志）
+        _logs8e.clear()
+        _s_off8e = _copy8e.deepcopy(settings)
+        _s_off8e["dev"] = dict(_s_off8e.get("dev") or {}, enabled=False)
+        _s_off8e["fofa"] = dict(_s_off8e.get("fofa") or {}, enabled=True)
+        _c_off8e = StageContext(999002, "smoke-8e-off", [], [], {}, _s_off8e, _wd8e, _L8e())
+        assert _c_off8e.settings["fofa"]["enabled"] is True, "dev 关着也被压 → 改了既有行为"
+        assert not any("[devmode]" in _l8e for _l8e in _logs8e), "没压任何东西却打了压制日志"
+    finally:
+        shutil.rmtree(_wd8e, ignore_errors=False)
+
+    print("[8e] 续97 开发模式硬闸 ok: dev 关着＝零副作用（原对象原样回、不打日志）｜dev 开着＝只压真开着的 "
+          "7 个外部源（iprecon/fofa/shodan/quake/ctlog/github/intel），副本改、入参不动｜脏值不抛｜"
+          "本机能力（screenshot/portscan/dirscan/vulnscan）不被误杀｜StageContext 真的接了这道闸且"
+          "在日志里点名压了谁；变异证伪：enabled() 恒假/恒真两种改法都会让上面某条红")
+
     print("SMOKE PASS")
 
 
