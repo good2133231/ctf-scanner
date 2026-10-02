@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import auth as taskauth
 from scanner import db
+from scanner import keystore
 from scanner.config import load_settings, resolve
 from scanner.report import export_pdf, generate, generate_html, generate_jsonl
 from scanner.runner import STAGE_ORDER, STAGE_REGISTRY, resume_stages, run_task
@@ -439,6 +440,11 @@ def main():
         print(f"[!] 这些参数只在 --update-tools 时有效：{', '.join(stray)}")
         sys.exit(1)
 
+    # 凭据解锁（续98）：口令**只在这里要一次** —— 紧接着的 load_settings() 会把 keys
+    # 读进配置，之后工作线程与 GUI 每个请求都会反复调它，绝不能再提示。没加密文件时静默通过。
+    _ks = keystore.unlock()
+    if not _ks["ok"] and keystore.status()["encrypted"]:
+        print(f"[!] 凭据保持锁定：{_ks['reason']}（外部情报源将按\"无 key\"如实降级）")
     settings = load_settings()
     if args.check:
         print("外部工具可用性：")

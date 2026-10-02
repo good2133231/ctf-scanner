@@ -11648,6 +11648,153 @@ http:
           "本机能力（screenshot/portscan/dirscan/vulnscan）不被误杀｜StageContext 真的接了这道闸且"
           "在日志里点名压了谁；变异证伪：enabled() 恒假/恒真两种改法都会让上面某条红")
 
+    # ---------------- [8f] 续98：凭据口令加密（keystore / run_keys / load_keys 口径） ----------------
+    print("[8f] 续98 凭据加密：round-trip / 篡改即拒 / 未解锁不回落到明文 / 不提示不挂住 / 输出不含敏感值…")
+    import getpass as _gp8f
+    import stat as _stat8f
+    from scanner import keystore as _ks8f
+
+    _dir8f = _TMPDIR / "keystore8f"
+    _dir8f.mkdir(parents=True, exist_ok=True)
+    _plain8f = _dir8f / "keys.yaml"
+    _enc8f = _dir8f / "keys.enc.yaml"
+    _secret8f = "FAKE-FOFA-KEY-8f"           # 全程是假值：smoke 不许碰任何真实凭据
+    _phrase8f = "correct horse battery"
+    _plain8f.write_text('fofa:\n  email: "a@example.invalid"\n  key: "' + _secret8f
+                        + '"\nshodan:\n  key: ""\n', encoding="utf-8")
+    _old_enc, _old_plain = _ks8f.ENC_KEYS_PATH, _ks8f.PLAIN_KEYS_PATH
+    _old_env = os.environ.pop(_ks8f.ENV_PASSPHRASE, None)
+    try:
+        # ① round-trip：密文里一个明文值都不许出现；解回来必须逐字节相同
+        _blob8f = _ks8f.encrypt_text(_plain8f.read_text(encoding="utf-8"), _phrase8f)
+        assert _blob8f.startswith(b"CTFSCANNER-KEYS-V1"), "必须带自己的魔数头（不然无法与明文区分）"
+        for _s8f in (_secret8f.encode(), b"a@example.invalid", b"fofa:"):
+            assert _s8f not in _blob8f, f"密文里泄露了明文片段：{_s8f!r}"
+        _got8f, _why8f = _ks8f.decrypt_blob(_blob8f, _phrase8f)
+        assert _why8f == "" and _got8f == _plain8f.read_text(encoding="utf-8"), _why8f
+
+        # ② 口令错 / 空口令：返回原因而不是抛，且**原因里不许回显口令**
+        _bad8f, _why8f = _ks8f.decrypt_blob(_blob8f, "wrong passphrase")
+        assert _bad8f is None and _why8f and _phrase8f not in _why8f and "wrong" not in _why8f, _why8f
+        assert _ks8f.decrypt_blob(_blob8f, "")[0] is None, "空口令必须被拒"
+        assert _ks8f.decrypt_blob(b"not-our-format", _phrase8f)[0] is None, "非本模块格式不得硬解"
+
+        # ③ 篡改一个 bit 也解不开（AESGCM 是认证加密）。变异证伪：换成"无认证的模式"这条就绿了
+        _tampered8f = bytearray(_blob8f)
+        _tampered8f[-1] ^= 0x01
+        assert _ks8f.decrypt_blob(bytes(_tampered8f), _phrase8f)[0] is None, "密文被改过却仍能解开＝没有认证"
+        _trunc8f = bytearray(_blob8f[:len(_blob8f) - 6])
+        assert _ks8f.decrypt_blob(bytes(_trunc8f), _phrase8f)[0] is None, "截断的密文不能当正常解"
+
+        # ④ 落盘：权限 600（POSIX）+ 原子替换（失败不留 .part）
+        _ks8f.write_encrypted(_enc8f, _blob8f)
+        if os.name != "nt":
+            _mode8f = _stat8f.S_IMODE(os.stat(_enc8f).st_mode)
+            assert _mode8f == 0o600, f"密文文件权限必须收到 600，实得 {oct(_mode8f)}"
+        _bad_dir8f = _dir8f / "no-such-dir-nested"
+        _real_replace = os.replace
+        os.replace = lambda *a, **k: (_ for _ in ()).throw(OSError("桩：替换失败"))
+        try:
+            try:
+                _ks8f.write_encrypted(_bad_dir8f / "keys.enc.yaml", _blob8f)
+                assert False, "替换失败时 write_encrypted 必须把异常透出来"
+            except OSError:
+                pass
+        finally:
+            os.replace = _real_replace
+        assert list(_dir8f.glob("**/.keys-enc-*")) == [], f"失败路径不许留半成品：{list(_dir8f.glob('**/.keys-enc-*'))}"
+
+        # ⑤ 三条解锁路径 + **非交互绝不提示**（挂住等输入会把 CI 与自动化直接打死）
+        _ks8f.ENC_KEYS_PATH, _ks8f.PLAIN_KEYS_PATH = _enc8f, _dir8f / "gone.yaml"
+        _r8f = _ks8f.unlock(passphrase=_phrase8f)
+        assert _r8f["ok"] and _r8f["source"] == "arg", _r8f
+        assert _ks8f.current().get("fofa", {}).get("key") == _secret8f, "解锁后 load_keys 应拿到值"
+        _ks8f.reset()
+        os.environ[_ks8f.ENV_PASSPHRASE] = _phrase8f
+        assert _ks8f.unlock()["source"] == "env" and _ks8f.current(), "环境变量路径没生效"
+        _ks8f.reset(); os.environ[_ks8f.ENV_PASSPHRASE] = "错的口令"
+        _r8f = _ks8f.unlock()
+        assert not _r8f["ok"] and _ks8f.current() == {}, _r8f
+        _ks8f.reset(); os.environ.pop(_ks8f.ENV_PASSPHRASE, None)
+        _real_gp, _real_stdin = _gp8f.getpass, sys.stdin
+
+        class _NoTTY8f:
+            def isatty(self):
+                return False
+
+        _gp8f.getpass = lambda *a, **k: (_ for _ in ()).throw(AssertionError("非交互环境不该提示口令"))
+        sys.stdin = _NoTTY8f()             # **强制**非交互：CI 上有没有 tty 都不该赌
+        try:
+            _r8f = _ks8f.unlock()
+            assert not _r8f["ok"] and "非交互" in _r8f["reason"], _r8f
+        finally:
+            _gp8f.getpass, sys.stdin = _real_gp, _real_stdin
+        # 变异证伪：把"未解锁"实现成"偷偷回落明文"，⑥ 那条必须红
+        assert _ks8f.current() == {}, "未解锁时 current() 不该有值"
+
+        # ⑥ load_keys 的口径：有密文且未解锁 → {}，**即使明文文件就在旁边也不回落**
+        _plain8f.write_text(_plain8f.read_text(encoding="utf-8"), encoding="utf-8")
+        _ks8f.PLAIN_KEYS_PATH = _plain8f
+        _cfg8f = load_settings()
+        assert _cfg8f.get("keys") == {}, f"密文存在却未解锁时不该读到明文：{_cfg8f.get('keys')}"
+        _ks8f.unlock(passphrase=_phrase8f)
+        assert load_settings()["keys"]["fofa"]["key"] == _secret8f, "解锁后 load_settings 必须带上 keys"
+        _ks8f.reset()
+
+        # ⑦ 诊断面不含敏感值：status()/mask() 里既没有口令也没有 key
+        _snap8f = {k: v for k, v in os.environ.items()}
+        os.environ[_ks8f.ENV_PASSPHRASE] = _phrase8f
+        _txt8f = repr(_ks8f.status()) + repr(_ks8f.mask(_phrase8f))
+        assert _phrase8f not in _txt8f, "status/mask 回显了口令"
+        assert _secret8f not in _txt8f, "status 里不该出现任何 key 值"
+        assert _ks8f.mask(_phrase8f).startswith(str(len(_phrase8f))) and _phrase8f not in _ks8f.mask(_phrase8f)
+        os.environ.clear(); os.environ.update(_snap8f)
+
+        # ⑧ 源码红线：管理入口与模块里**不许把口令插进 print**（getpass 的返回值只能用于比较/派生）
+        _srcs8f = {"run_keys.py": (ROOT / "run_keys.py").read_text(encoding="utf-8"),
+                   "scanner/keystore.py": (ROOT / "scanner" / "keystore.py").read_text(encoding="utf-8")}
+        for _fn8f, _sx8f in _srcs8f.items():
+            _leak8f = [l.strip()[:64] for l in _sx8f.splitlines()
+                       if "print(" in l and ("args.passphrase" in l or "getpass" in l
+                                             or "{first}" in l or "{again}" in l)]
+            assert _leak8f == [], f"{_fn8f} 里疑似打印口令：{_leak8f}"
+
+        # ⑨ 入库面红线：密文文件必须被 gitignore，且依赖必须写进 requirements（否则新机器解不开）
+        # `.gitignore` 会被 `.dockerignore` 排除在镜像之外 —— 文件不在树里时**明说是跳过**，
+        # 不悄悄放过（本仓口径：跳过 != 通过）。真仓库工作副本与 CI 上它一定在，照常校验。
+        _gi8f_path = ROOT / ".gitignore"
+        _gi8f_note = "未校验（.gitignore 不在树里：镜像/.dockerignore 场景）"
+        if _gi8f_path.exists():
+            assert "config/keys.enc.yaml" in _gi8f_path.read_text(encoding="utf-8"), \
+                "keys.enc.yaml 必须 gitignore —— 密文也不许进仓库"
+            _gi8f_note = ".gitignore 已含 keys.enc.yaml"
+        _rq8f = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        assert "cryptography" in _rq8f, "requirements.txt 必须含 cryptography，否则换机后解不开凭据"
+
+        # ⑩ 接线口径：三个入口都必须在 load_settings() **之前** unlock()
+        #    （晚一步就是"keys 永远是空"的静默失效 —— 而它看起来完全像"用户没配 key"）
+        for _rel8f, _call8f in (("cli/client.py", "    settings = load_settings()"),
+                                ("run_node.py", "    settings = load_settings()"),
+                                ("gui/app.py", "    _settings = load_settings()")):
+            _sx8f = (ROOT / _rel8f).read_text(encoding="utf-8")
+            assert "keystore" in _sx8f, f"{_rel8f} 没导入 keystore"
+            _u8f, _l8f = _sx8f.find("keystore.unlock()"), _sx8f.find(_call8f)
+            assert 0 <= _u8f < _l8f, f"{_rel8f}: unlock() 必须在 load_settings() 之前（实得 unlock={_u8f} load={_l8f}）"
+    finally:
+        _ks8f.ENC_KEYS_PATH, _ks8f.PLAIN_KEYS_PATH = _old_enc, _old_plain
+        _ks8f.reset()
+        os.environ.pop(_ks8f.ENV_PASSPHRASE, None)
+        if _old_env is not None:
+            os.environ[_ks8f.ENV_PASSPHRASE] = _old_env
+        shutil.rmtree(_dir8f, ignore_errors=True)
+
+    print("[8f] 续98 凭据加密 ok: AES-256-GCM + PBKDF2(60 万次) round-trip 一致且密文里零明文片段｜"
+          "口令错/空/非本模块格式一律回原因不回显口令｜改一个 bit 或截断都解不开（认证加密）｜"
+          "落盘 600 + 替换失败不留半成品｜三条解锁路径（参数/环境变量/交互）齐备且**非交互不提示不挂住**｜"
+          "load_keys 口径：未解锁＝{}，**绝不偷偷回落明文**；解锁后才给值｜status/mask 不含口令与 key｜"
+          f"源码层盯死'把口令 print 出来'｜{_gi8f_note}，cryptography 已进 requirements｜"
+          "三个入口都在 load_settings() 之前 unlock（顺序反了就是静默空 keys）")
+
     print("SMOKE PASS")
 
 

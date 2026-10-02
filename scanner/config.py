@@ -520,7 +520,7 @@ def skip_severities(settings):
 
 
 def load_keys():
-    """读取第三方 API key 专用文件 `config/keys.yaml`（P0-5）。
+    """读取第三方 API key（P0-5；续98 起支持口令加密的 `config/keys.enc.yaml`）。
 
     单独成文件而不是塞进 settings.yaml 的理由：GUI「策略配置」页会把 settings 整体写回，
     凭据混在里面容易被覆盖/回显；且 keys 属于"部署环境"而不是"扫描策略"。
@@ -529,7 +529,21 @@ def load_keys():
         shodan: {key: ""}
         quake: {key: ""}
     文件不存在或解析失败一律返回 {}，调用方按"无此来源"处理，不影响框架可用性。
+
+    三条口径（续98）：
+    1. 有 `keys.enc.yaml` 且**已解锁** → 用内存里的明文（`keystore.current()`）。
+    2. 有 `keys.enc.yaml` 但**未解锁** → 返回 `{}`，**不回落到明文文件** —— 用户既然选择了
+       加密，"绕过口令就能用凭据"就是把它的安全承诺作废。外部情报源会各自如实报"无 key"。
+    3. 没有密文文件 → 走原来的明文 `keys.yaml`（向后兼容，旧部署不受影响）。
+    本函数被 `load_settings()` 调用，而后者会被工作线程与 GUI 每个请求反复调，
+    所以这里**绝不提示口令、绝不抛异常** —— 解锁只在进程启动时由入口做一次。
     """
+    from . import keystore
+    data = keystore.current()
+    if data:
+        return data
+    if keystore.ENC_KEYS_PATH.exists():
+        return {}
     if not KEYS_PATH.exists():
         return {}
     try:

@@ -1910,3 +1910,37 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
           （需 `sudo apt-get install -y chromium`，系统级动作，等用户点头）]。历史 [待办] 行照旧
           不改动（只追加）。
        ⑦ 本轮还欠一次"3.9 侧由 CI 交叉验证"：三条 commit 只在本地 main，推送等你给凭据。
+-----
+（2026-10-02 续97-附：澄清一条过期的 [待办]）实施者：WorkBuddy · Qoder-Agent
+       `[待办] 补 fofa/osint 子开关最小形态单测；补"FOFA 真查命中→落拓展域名"` —— **这条已由
+       续36 的 `tests/smoke.py [6w]` 完成**（它覆盖的正是那两小条：三个子开关各管哪一路 /
+       真查命中→落「拓展域名」，并且带"必须同时断言确实查过"的防假绿写法）。本轮核对时才发现
+       标记一直没更新。按 §9 的先例**只追加、不改历史行**，故在此说明，上面那行原样保留。
+-----
+（2026-10-02 续98：凭据口令加密）实施者：WorkBuddy · Qoder-Agent
+       ① 用户点单"所有 token 在配置里加密、python 里解密" → 新增 `scanner/keystore.py`
+          （PBKDF2-HMAC-SHA256 60 万次 + AES-256-GCM，落 `config/keys.enc.yaml`，权限 600、
+          同目录临时文件 + os.replace 原子替换、非本模块格式不硬解）与 `run_keys.py`
+          （--status/--encrypt/--change/--verify）。依赖新增 cryptography>=41；
+          .gitignore 补 config/keys.enc.yaml。
+       ② 并发口径：load_settings() 被线程与 GUI 每请求反复调 → load_keys() 只读缓存、
+          **绝不提示、绝不抛**；解锁只在进程启动时由 gui.serve() / cli 扫描入口 / run_node.py
+          调一次。口令来源＝参数 > CTFSCANNER_KEYS_PASSPHRASE > 交互 getpass；非交互不提示、
+          不挂住，直接保持锁定。
+       ③ 三条语义：有密文已解锁→内存明文；有密文未解锁→{} 且**不回落到明文文件**；
+          无密文→原明文老路（向后兼容）。run_keys --encrypt 先解密回读自校验才落盘，
+          默认不删明文，删要显式 --shred 并如实提示"明文还在＝只防住拷走"。
+       ④ 边界写进 AGENTS §7：口令**绝不允许存在机器上**（写进仓库/settings/systemd/.env 就
+          退化成混淆）；解锁后明文在内存，不防内存 dump。不提供"记住口令"。
+       ⑤ 回归 [8f] 十组（round-trip/密文零明文片段/错与空口令不回显口令/篡改一个 bit 即拒/
+          600 权限+替换失败不留半成品/三条解锁路径+强制非 TTY 不挂住/未解锁不回落明文/
+          status 与 mask 不含敏感值/源码级不许 print 口令/gitignore+requirements/
+          三入口 unlock 必须早于 load_settings）。
+       ⑥ 又撞出自己写的第三条"假红"：[8f]⑨ 直接读 .gitignore，而 .dockerignore 把它排除在
+          镜像外 → 3.9 镜像里必然 FileNotFoundError。改成"在树里才校验、不在就明说是跳过"
+          （跳过 ≠ 通过，实际状态打进结论行）。AGENTS §6.2 那类毛病的第三次现身。
+       ⑦ 双口径复验：python:3.9-slim 镜像 SMOKE PASS RC=0（含 [8f]）+ devflow 0 FAIL +
+          compileall 0；本机 3.14.4 亦 SMOKE PASS RC=0。
+       ⑧ 未做：keyring（系统钥匙串）路线；GUI 无解锁/状态面板；pool_run 吞异常语义未改。
+       ⑨ 你贴进对话的那串 token 已被脱敏成占位符（ghp_ + 全 x），我无法用它测推送；
+          真 token 请写 /opt/tools/ctf/.push-token；进过对话记录的 token 建议轮换。

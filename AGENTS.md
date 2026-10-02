@@ -144,6 +144,7 @@ ctf-scanner/
 ├── cli/client.py          # CLI 入口：导入目标 → run_task（阻塞）
 ├── run_gui.py             # Web 控制台入口
 ├── run_bootstrap.py      # 迁移自举（续96）：按平台点清环境缺口，只自动补 pip 依赖与 `toolmgr.TOOLS`；nmap/fscan/dirmap **只打印命令、不代跑**。放仓库根、刻意不进 `scanner/` 包（免得给 [7p] 的扫描期零下载红线开豁免）
+├── run_keys.py          # 凭据口令加密的管理入口（续98）：--status / --encrypt / --change / --verify；任何输出都不出现 key 值或口令
 ├── gui/
 │   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
 │   ├── templates/ static/ # 页面与原生 JS（app.js：轮询状态/日志、建任务、POC 管理、页签、表格筛选、任务批量操作）
@@ -195,6 +196,7 @@ ctf-scanner/
 │   │                      #   复核（vulns.review/review_note/reviewed_at + set/bulk_set_vuln_review/review_counts）
 │   │                      #   与 POC 置信度（pocs.confidence + poc_confidence）见 §7
 │   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖
+│   ├── keystore.py        # 凭据口令加密（续98）：PBKDF2(60 万次)+AES-256-GCM 读写 config/keys.enc.yaml；解锁只在启动时由入口调一次并缓存，current() 只读缓存、绝不提示
 │   ├── utils.py           # run_cmd / http_request / pool_run / resolve_host / IO / base_domain() / rel_display()
 │   ├── throttle.py        # **统一并发 / 限速 / 全局预算门控（F2）**：两级闸（任务级 + 进程级共享）
 │   │                      #   + 令牌桶 + 任务预算；经 `settings["_throttle"]` 注入（沿用 auth.inject 的
@@ -613,6 +615,7 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   `value`/`href` 的真实值仍是 punycode；报告 MD/HTML 回中文、JSONL 保持 punycode；
                             #   ④ **端到端真链路**：目标 `例子.中国` 跑 `-p subdomain`（桩解析器）→ 解析目标/
                             #   产物/DB 全 punycode、任务详情页回中文。**每组都做 §6.1 变异证伪。**
+py -3 run_keys.py --status                            # 续98：凭据是明文还是密文、是否已解锁（只打摘要，不打值）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
                             #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）
 py -3 cli/client.py --bootstrap                           # 续96：迁移自举——按平台点清缺口（解释器/pip 依赖/外部工具/浏览器），**不联网**
@@ -716,10 +719,18 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 
 
 
+
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
 
 - **`utils.pool_run()` 把子任务异常吞成 `None`（续96 登记，**未改**）**：它的语义是「单个任务异常不影响整体」，于是阶段里一个真故障（例：`fingerprint.identify()` 在 Python 3.14 上抛 `PatternError`）只表现为「存活站点 0 个」这种**静默降级**，日志里一个字都不留。本轮只修了触发它的正则写法，并给「静默降级会藏住硬故障」这条加了可复算断言（`[8d] ⑩`）；把 `pool_run` 改成上报/计数会影响**所有阶段**的降级判定，属独立一轮，未做。排查同类问题的最短路径：在**当前解释器**上直接调那个被吞掉的函数，别只看阶段日志。
+- **凭据加密的边界：口令绝不允许存在机器上**（续98，`scanner/keystore.py`）：
+  `config/keys.enc.yaml` 用的是口令派生密钥（PBKDF2 + AES-256-GCM）。**为了"省事"把口令
+  写进仓库、`settings.yaml`、systemd unit、`.env` 或任何本机文件，这套加密就立刻退化成混淆**
+  —— 能读那个文件的人就能解密密文。所以本模块刻意**不提供**"记住口令/免输入"，无人值守只
+  接受进程环境变量 `CTFSCANNER_KEYS_PASSPHRASE`（进程环境 ≠ 磁盘）。另两条：解锁后明文在进程
+  内存里，**不防内存 dump**；有密文但未解锁时 `load_keys()` 返回 `{}` 且**绝不回落到明文文件**
+  （否则"绕过口令就能用凭据"，加密形同虚设）。回归 `tests/smoke.py [8f]`。
 - **站点截图的 `--ignore-certificate-errors` 不能省（2026-09-28 续64）**：CTF / 内网授权目标多为
   自签 / 过期 / 私有 CA 证书（与 `certs.py` 刻意 `CERT_NONE` 同一现实），无头浏览器不加这个开关
   会以 `net::ERR_CERT_AUTHORITY_INVALID` 拒绝加载、`--screenshot` 一个字节都不产出 —— 即**自签

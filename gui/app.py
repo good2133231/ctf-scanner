@@ -49,6 +49,7 @@ from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
+from scanner import keystore
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths,
@@ -3238,6 +3239,11 @@ def serve(start_queue=True):
     后台 worker**。回归 `[7i]` 会真调 `serve()` 校验启动提示，若在这里顺手起了 worker，
     测试库里残留的 `queued` 行会被真消费掉（污染其它用例）—— 故给它一个显式的关闭开关。
     """
+    # 凭据解锁（续98）：口令**只在这里要一次** —— 紧接着的 load_settings() 会把 keys
+    # 读进配置，之后工作线程与 GUI 每个请求都会反复调它，绝不能再提示。没加密文件时静默通过。
+    _ks = keystore.unlock()
+    if not _ks["ok"] and keystore.status()["encrypted"]:
+        print(f"[!] 凭据保持锁定：{_ks['reason']}（外部情报源将按\"无 key\"如实降级）")
     _settings = load_settings()
     # 环境变量（容器）优先；并把实际绑定值写回 `s` —— `_deploy_hints(s)` 与下面那句
     # "控制台: http://host:port" 都是照着 `s` 念的，不同步就会打印一个**没在监听**的地址。

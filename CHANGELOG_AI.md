@@ -71,6 +71,60 @@
   另开一轮）。
 
 
+## 2026-10-02 —— 续98：**凭据口令加密**（`config/keys.enc.yaml`，AES-256-GCM + PBKDF2）
+
+> 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux；3.14.4 本机 + `python:3.9-slim` 镜像各跑一遍全量）。
+
+- **用户点单**："我所有 token 你在配置里面都进行加密，然后 python 里面解密"。实现为
+  **口令派生密钥 + AES-256-GCM 认证加密落盘**，新增 `scanner/keystore.py`（模块）与
+  `run_keys.py`（管理入口，与 `run_gui/run_node/run_devflow/run_bootstrap` 对称）。
+- **先把边界写死（这段是交付的一部分，不是免责声明）**：
+  1. **口令不存盘**，本模块**刻意不提供**"把口令存起来免输入"。一旦口令落进仓库 /
+     `settings.yaml` / systemd unit / 任何本机文件，这套加密就**退化成混淆** —— 能读文件的人
+     也能读到密钥。AGENTS §7 已把这条登记进去，防止下一轮有人"顺手加个默认口令"。
+  2. 解锁后明文必然在进程内存里（`current()` 返回的就是明文 dict）。防的是
+     **"文件被拷走 / 被同步上云"**，不防内存 dump。
+  3. 算法与 KDF 全部走 `cryptography`（`requirements.txt` 新增 `cryptography>=41`），
+     **没有任何自研密码学原语**；PBKDF2-HMAC-SHA256 **60 万次**迭代 + 16 字节随机盐 +
+     12 字节随机 nonce，启动解一次约 0.3s。
+  4. AESGCM 的认证标签使"口令错"与"文件被改"不可区分 → 只报一条
+     `口令不对或文件已损坏`，不假装能分辨。
+- **与并发的那条硬约束**：`config.load_settings()` 会被工作线程、GUI 每个请求、分布式节点
+  反复调用，所以 `load_keys()` **绝不提示口令、绝不抛异常** —— 只读进程缓存。解锁只在**进程
+  启动时**由入口显式调一次 `keystore.unlock()`（`gui.serve()` / `cli/client.py` 扫描入口 /
+  `run_node.py`），口令来源优先级＝显式参数 > `CTFSCANNER_KEYS_PASSPHRASE` > 交互 `getpass`；
+  **非交互且没环境变量时直接保持锁定**（不挂住 —— CI 与被接管 stdin 的自动化必须能跑完）。
+- **`config.load_keys()` 的三条口径**（这是本轮最容易做错的点）：有密文且已解锁 → 用内存明文；
+  有密文但**未解锁 → 返回 `{}`，绝不回落到明文文件**（既然选了加密，"绕过口令就能用凭据"
+  等于把安全承诺作废）；没有密文 → 走原来的明文 `keys.yaml`（**向后兼容**，旧部署不受影响）。
+- **落盘与入库面**：密文写 `config/keys.enc.yaml`，同目录临时文件 + `os.replace` 原子替换，
+  POSIX 权限收到 **600**（Windows 无 POSIX 位，跳过）；`.gitignore` 新增
+  `config/keys.enc.yaml` —— 密文也不许进仓库。`run_keys.py --encrypt` **先解密回读自校验**
+  再落盘，默认**不删明文**，删明文要显式 `--shred`（并如实提示"明文还在＝只防住了拷走"）。
+- **不泄露是设计目标**：`--status` / `--verify` 只打"厂商(已填字段名)"摘要与 `mask()`
+  （长度 + sha256 前 8 位），永不打印 key 值或口令。
+- **回归（`tests/smoke.py [8f]`，全程只用假值）**：① round-trip 逐字节一致 + 密文里
+  零明文片段（含 `fofa:` 这种键名）；② 错口令 / 空口令 / 非本模块格式一律回原因，
+  且**原因里不回显口令**；③ 篡改一个 bit 或截断都解不开（认证加密的证明）；
+  ④ 600 权限 + `os.replace` 打桩失败不留 `.part`；⑤ 三条解锁路径齐备，且**强制**
+  非 TTY（`sys.stdin` 打桩 + `getpass` 一调就抛）证明"不提示不挂住"；⑥ 未解锁时
+  `load_settings()["keys"] == {}` 且旁边放着明文也不回落；⑦ `status()/mask()` 不含口令与 key；
+  ⑧ 源码级：`run_keys.py`/`keystore.py` 里任何 `print(` 行都不得插值口令变量；
+  ⑨ `.gitignore` 含 `keys.enc.yaml` + `requirements.txt` 含 `cryptography`；
+  ⑩ 三个入口的 `unlock()` 必须出现在 `load_settings()` **之前**（顺序反了＝静默空 keys，
+  看起来完全像"用户没配 key"）。
+- **撞出来的第三条"假红"（我自己写的）**：⑨ 原来直接读 `.gitignore`，而 `.dockerignore` 把它
+  排除在镜像之外 → 3.9 镜像里必然 `FileNotFoundError`。改成"文件在树里才校验，不在就
+  **明说是跳过**"，并把实际状态打进 `[8f]` 的结论行（本仓口径：跳过 ≠ 通过）。
+  这是 `AGENTS §6.2` 那一类毛病的第三次现身 —— 判据吃的是环境，不是桩。
+- **双口径复验**：`python:3.9-slim` 镜像内 `tests/smoke.py` **SMOKE PASS RC=0**（含 [8f]）、
+  `run_devflow.py` 0 FAIL、全仓 `compileall` RC=0；本机 **3.14.4** 同样 SMOKE PASS RC=0。
+- **文档**：`AGENTS.md` §3 地图（`run_keys.py` / `scanner/keystore.py`）、§6 验证命令、
+  §7 新增"口令不落盘否则退化成混淆"这条边界；`docs/usage.md` 增一节凭据加密的部署口径；
+  `todo.txt` 追加本轮块。
+- **未做**：系统钥匙串（keyring）路线（用户选了口令加密）；GUI「外部工具」页无解锁/状态面板；
+  `pool_run` 吞异常语义仍未改。
+
 ## 2026-10-02 —— 续97：**开发模式硬闸**（外部情报源压掉）+ 修两起**假红**断言 + **3.9 / 3.14 双口径复验**
 
 > 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux；3.14.4 本机 + `python:3.9-slim` 镜像各跑一遍全量）。

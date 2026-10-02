@@ -1,3 +1,5 @@
 flask>=2.0
 requests>=2.25
 PyYAML>=5.4
+# 续98：config/keys.enc.yaml 的 AES-GCM 解密（无此依赖时明文老路照走，只是读不了密文）
+cryptography>=41

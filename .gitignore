@@ -13,6 +13,8 @@ venv/
 # 第三方凭据（FOFA/Shodan 等，绝不入库）
 config/settings.json
 config/keys.yaml
+# 续98：口令加密后的凭据文件同样绝不入库（里面是密文，但形态本身就是敏感信息）
+config/keys.enc.yaml
 
 # 用户自建内容
 config/pocs-user/

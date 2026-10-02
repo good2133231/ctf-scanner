@@ -311,6 +311,14 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
    Cloudflare 这类" A 记录直连边缘 IP、CNAME 为空"的任播 CDN 误判成非 CDN）；
    **第三方 API key 写入 `config/keys.yaml`**（独立文件，控制台只读不改写）。
 
+   **（续98）想把凭据加密存放**：跑 `python run_keys.py --encrypt`，用你输入的口令把
+   `config/keys.yaml` 加密成 `config/keys.enc.yaml`（PBKDF2-HMAC-SHA256 60 万次 + AES-256-GCM，
+   POSIX 权限 600，已加进 `.gitignore`）。之后启动 GUI / CLI 扫描 / 节点会**要一次口令**；
+   无人值守（容器、分布式节点）设环境变量 `CTFSCANNER_KEYS_PASSPHRASE` —— **口令本身绝不允许
+   写进任何入库文件或本机文件**，那样加密就退化成混淆了。`--status` 看当前是明文还是密文、
+   是否已解锁；`--verify` 校验口令；`--change` 换口令。两条口径要知道：① 加密后**未解锁＝按
+   "无 key"如实降级**（不会偷偷去读明文）；② 非交互环境不会提示，直接保持锁定。
+
 ### 黑名单与批量操作
 
 - **黑名单语义是"命中即不入资产库"**：写入 `config/blacklist.txt`（一行一个域名，`#` 注释，
