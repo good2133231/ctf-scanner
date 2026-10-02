@@ -232,9 +232,9 @@ github:
   max_leads: 30
   timeout: 20
 tools:
-  subfinder: subfinder
+  subfinder: tools/scanner/subfinder
   puredns: puredns
-  httpx: httpx
+  httpx: tools/scanner/httpx
   nmap: nmap
   # fscan（可选）：二进制名或路径；找不到就跳过它（回退 nmap / 内置）。调用时强制 -np -nobr -nopoc。
   # 本机是自编译产物挂目录联接（tools/fscan/ → 仓库外，见 .gitignore）；相对路径按**项目根**解析。
