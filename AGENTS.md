@@ -103,6 +103,23 @@ Flask Web 控制台（仿 ARL）。
   `https://github.com/good2133231/ctf-scanner.git`）；④ **不要把 password 打印出来**。
   成功标志是 `旧sha..新sha  main -> main`。GitHub REST API（查 CI 结果等）用同一个 `$pw`，
   头换成 `Authorization: Bearer $pw`。
+  **多机 / 多 AI 并行时的同步纪律（2026-10-02 立，两边会话都要遵守）**：
+  仓库是**公开的**（`good2133231/ctf-scanner`；不带凭据访问 GitHub API 就是 200），
+  所以**拉代码一律不需要凭据** —— 另一台机器 `git clone` / `git pull` 直接就能跑。
+  那一台要**推**回来时，按这个顺序选：
+  ① **仓库级 Deploy key**（仓库 → Settings → Deploy keys → Add deploy key，
+     勾 **Allow write access**）：只作用于这一个仓库、不过期、不在任何文件里留明文；
+     缺点是**只能做 git 操作、不能调 GitHub API**（要看 CI 结果得另配）。
+  ② **fine-grained PAT**：只选 `good2133231/ctf-scanner` 这一个仓库，Permissions 只勾
+     `Contents: Read and write`（要看 CI 再加 `Actions: Read` + `Metadata: Read`），
+     过期时间设短。既能推也能查 API。
+  ⚠️ 三条红线：
+   - **绝不**把令牌写进 `.git/config`、remote URL 或**仓库目录内的任何文件**
+     （`git add -A` 会把它提交上去）。要落盘就放仓库外，且 `chmod 600`、用完即删；
+     更干净的做法是 `GIT_ASKPASS` 临时脚本或 `credential.helper cache`。
+   - 推之前**必须** `git fetch origin main` + `git pull --rebase`；落后就先变基再推。
+   - **禁止 `git push --force`** —— 多机同时写同一分支时，强推会**静默盖掉别人的提交**。
+  ③ 两个会话都在改**同一批文件**时，各自推到自己的分支（如 `linux/*`）再合并，别抢 `main`。
 - **本机参考项目（操作性路径，集中在此）**：`C:\Users\材料\Desktop\tools\scan\myscan_20250825`
   —— `TODO.md` 末尾「参考项目借鉴清单」的对标对象（**非本项目依赖**，仅登记位置；§9 只做描述性引用）。
 
