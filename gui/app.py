@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scanner import (audit, auth as taskauth, blacklist, captcha, cdn, certs as certs_mod, db,
                      devfixture, devmode, dnsq,
                      extdom, login_guard, nodes, queue, screenshot, toolmgr, users)
-from scanner.config import BASE_DIR, load_settings, save_settings
+from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
@@ -426,7 +426,11 @@ def create_app():
     # `Secure`（续47）默认**关**：走 HTTP 时带 `Secure` 的 Cookie 浏览器**根本不回传**，
     # 等于登录不上 —— 所以它是"上 HTTPS（反向代理终止 TLS）之后才开"的开关，
     # 由 `gui.secure_cookie` 控制，见 docs/deploy-https.md。
-    _gui_cfg = settings.get("gui") or {}
+    # 监听地址可用环境变量覆盖（容器里必须绑 0.0.0.0，见 scanner.config.gui_bind）。
+    # 这里必须**同步**改掉 `_gui_cfg["host"]`：下面的 `CS_GUARD_HOST`（Host 白名单是否强制）
+    # 就是按"绑的是不是回环地址"决定的，只看 settings 会让守卫与实际绑定脱节。
+    _gui_cfg = dict(settings.get("gui") or {})
+    _gui_cfg["host"] = gui_bind(settings)[0]
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=bool(_gui_cfg.get("secure_cookie")))
     # 信任反向代理转发的 `X-Forwarded-*`（续47）：**必须显式打开，默认关**。
@@ -3235,8 +3239,11 @@ def serve(start_queue=True):
     测试库里残留的 `queued` 行会被真消费掉（污染其它用例）—— 故给它一个显式的关闭开关。
     """
     _settings = load_settings()
-    s = _settings.get("gui", {})
-    host, port = s.get("host", "127.0.0.1"), int(s.get("port", 5000))
+    # 环境变量（容器）优先；并把实际绑定值写回 `s` —— `_deploy_hints(s)` 与下面那句
+    # "控制台: http://host:port" 都是照着 `s` 念的，不同步就会打印一个**没在监听**的地址。
+    s = dict(_settings.get("gui") or {})
+    host, port = gui_bind(_settings)
+    s["host"], s["port"] = host, port
     if not _port_free(host, port):
         print(f"[!] 启动失败：{host}:{port} 已被占用"
               "（上一次的控制台进程还在运行，或端口被其他服务占用）。")

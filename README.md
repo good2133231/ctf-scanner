@@ -132,6 +132,20 @@ py -3 run_gui.py                   # 默认 http://127.0.0.1:5000，只绑本机
 - 要部署到服务器给队友用，**必须走 HTTPS**（反向代理终止 TLS）—— 见
   [docs/deploy-https.md](docs/deploy-https.md) 与下方 [配置说明](#配置说明部署前必看)。
 
+### 5.5 用 Docker 跑（可选）
+
+```bash
+docker compose up -d --build     # 起控制台；数据/配置/日志都挂在宿主机上
+```
+
+- **只改配置或字典不用重新打包**（它们是挂载进去的）；**改了代码**才需要 `--build`，
+  或者用 `docker-compose.dev.yml` 把源码挂进容器（改完 `restart` 即可）。
+- 端口默认只发布到**宿主机回环**（`127.0.0.1:5000`），要让队友用必须先配
+  `gui.allowed_hosts` + 反向代理 —— 完整步骤与坑见 [docs/docker.md](docs/docker.md)。
+- ⚠️ **容器化 ≠ 源码保密**：镜像是 `COPY . /app` 打出来的，同机任何能执行 `docker` 的人
+  都能读走源码（而 `docker` 组 ≈ root）。真在乎就别把代码放上共享服务器 ——
+  做法见 [docs/docker.md](docs/docker.md) 第 7 节。
+
 ### 6.（可选）一键装外部工具 / 全流程自检
 
 ```bash
@@ -336,6 +350,7 @@ ctf-scanner/
 | [docs/owasp-mapping.md](docs/owasp-mapping.md) | OWASP Top 10 逐项映射：已实现检查、实现方式、局限 |
 | [docs/usage.md](docs/usage.md) | CLI 全参数、GUI 操作流程、常见问题 |
 | [docs/deploy-https.md](docs/deploy-https.md) | **部署到服务器**：反向代理终止 TLS（Caddy / Nginx 样例）、自签证书、三项 `gui` 配置对照、验证清单与排错 |
+| [docs/docker.md](docs/docker.md) | **Docker 部署**：一键起控制台、要不要重新打包、数据备份、外部工具、给队友用、**共享服务器上的源码保护**（含"容器化不等于保密"的实话） |
 | [docs/roadmap.md](docs/roadmap.md) | 实际完成度对照与后续计划（含刻意不做的项及理由） |
 | [docs/security-notice.md](docs/security-notice.md) | 授权与法律边界 |
 

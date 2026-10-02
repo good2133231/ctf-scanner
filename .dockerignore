@@ -1,0 +1,46 @@
+# 构建上下文里**不该进镜像**的东西。两条原则：
+#  ① 运行期产物与本机状态（数据库 / 日志 / 外部工具二进制）—— 挂载进来，不烤进去；
+#  ② 凭据（keys.yaml / settings.json）与 AI 会话笔记 —— 绝不进镜像层。
+
+# ---- 运行期产物与本机状态 ----
+data/
+logs/
+*.db
+*.log
+
+# ---- 凭据 / 私有配置（**最重要的一条**）----
+# config/settings.yaml 是仓库自带、可公开的（里面没有任何真实凭据），保留；
+# 下面这几个是本机私有的，运行时靠 compose 的挂载提供。
+config/keys.yaml
+config/settings.json
+config/blacklist.d/
+config/pocs-user/
+config/nuclei-templates/
+
+# ---- 外部工具落点（平台相关 + 体积大；本机在 Windows 上是目录联接）----
+tools/scanner/
+tools/dirmap/
+tools/fscan/
+tools/dirmap_fixes/
+
+# ---- 版本控制 / 编辑器 / AI 会话笔记 ----
+.git/
+.gitignore
+.github/
+.trae/
+.workbuddy-ai/
+.github.txt
+github.txt
+
+# ---- Python 缓存 ----
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ---- Docker 自身（不需要进镜像）----
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.dev.yml

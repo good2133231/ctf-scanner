@@ -61,6 +61,27 @@ def env_path(name, default):
     return pathlib.Path(_norm_drive_posix(raw))
 
 
+def gui_bind(settings):
+    """GUI 监听 `(host, port)`：**环境变量优先**，其次 `gui.host` / `gui.port`，最后默认值。
+
+    为什么需要它：容器 / 编排（Docker）里不方便改 `config/settings.yaml`，而容器内**必须**
+    绑 `0.0.0.0` 才能被端口映射访问到 —— 于是给出 `CTFSCANNER_GUI_HOST` / `CTFSCANNER_GUI_PORT`。
+    与 `CTFSCANNER_DB` / `CTFSCANNER_LOGS` 同一套"运行环境用环境变量覆盖"的口径。
+
+    **只覆盖这两项**（刻意）：`gui.allowed_hosts` / `behind_proxy` / `secure_cookie` 是**安全开关**，
+    必须显式写在配置里 —— 让一个"顺手设了"的环境变量把它们悄悄打开，比绑错地址危险得多。
+    """
+    cfg = (settings or {}).get("gui") or {}
+    host = str(os.environ.get("CTFSCANNER_GUI_HOST") or "").strip() \
+        or str(cfg.get("host") or "127.0.0.1").strip() or "127.0.0.1"
+    raw_port = str(os.environ.get("CTFSCANNER_GUI_PORT") or "").strip() or cfg.get("port", 5000)
+    try:
+        port = int(raw_port)
+    except (TypeError, ValueError):
+        port = 5000          # 端口写成非数字时退回默认，**不因此起不来**
+    return host, port
+
+
 # 运行期产物目录（每任务一个子目录）。与数据库一样支持环境变量覆盖：
 # 跑测试时指到临时目录，就不会在真实工作区里堆出几十个 `logs/task_*` 目录，
 # 也让"开发/生产共用一份代码、数据分开"变得可行（见 tests/smoke.py 顶部）。

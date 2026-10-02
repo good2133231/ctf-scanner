@@ -318,6 +318,15 @@
       （续87，`check_updates`）、**多版本共存**（续94，版本库 `.versions/<工具>/<版本>/`，
       `install` 按 tag 归档、`use_version` 可在任意存过的版本间可逆切换、`prune_versions`
       有上限且**如实报出删了什么**；版本号读不出来就不归档，绝不编造 `unknown` 目录）。
+- [x] **Docker 部署**（续95，2026-10-01）：`Dockerfile`（`python:3.9-slim`，只装
+      requirements.txt 那三个运行期依赖）+ `docker-compose.yml`（默认：端口只发布到宿主机回环、
+      config/data/logs 全挂宿主机、外部工具用命名卷持久化）+ `docker-compose.dev.yml`（挂源码，
+      改完 `restart` 即可）+ `.dockerignore`（凭据与运行期产物不进镜像）+ `docs/docker.md`。
+      为此新增 `scanner.config.gui_bind()` —— 监听地址/端口可用 `CTFSCANNER_GUI_HOST` /
+      `CTFSCANNER_GUI_PORT` 覆盖（容器里必须绑 `0.0.0.0`），但**只**允许覆盖这两项：
+      `allowed_hosts` / `behind_proxy` / `secure_cookie` 是安全开关，必须显式写在配置里。
+      回归 `tests/smoke.py [5q+]`（含变异证伪）。文档里如实写了**容器化 ≠ 源码保密**
+      （镜像里有源码、`docker` 组 ≈ root）与"要不要重新打包"的两种形态对照。
 - [x] **站点页签「批量打开」**（续56，2026-09-27）：勾选站点后一次把勾中的站点在**你自己的浏览器**里
       逐个开新标签页。纯客户端 `window.open`（`gui/static/app.js::initOpenSites()`），
       **不新增后端路由、不发任何扫描请求** —— 与同排的「深度目录补扫 / 补截图」性质不同（那两个会真扫）。

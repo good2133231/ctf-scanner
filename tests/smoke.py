@@ -1965,6 +1965,60 @@ def main():
     print(f"[5q] 环境变量路径归一化 ok: 空值/引号回落默认 / 盘符式 POSIX 路径 {_plat} / "
           f"普通路径不动 / LOGS_DIR 与 DB_PATH 仍在测试临时目录（os.name={os.name}）")
 
+    # (5q+) 续95：**监听地址/端口**也可用环境变量覆盖（`CTFSCANNER_GUI_HOST` / `_PORT`）——
+    #       容器里必须绑 0.0.0.0 才能被端口映射访问到，而容器里改 settings.yaml 很别扭。
+    from scanner.config import gui_bind as _gui_bind, load_settings as _load_settings
+    _keep_h = os.environ.pop("CTFSCANNER_GUI_HOST", None)
+    _keep_p = os.environ.pop("CTFSCANNER_GUI_PORT", None)
+    try:
+        assert _gui_bind({"gui": {"host": "127.0.0.1", "port": 5000}}) == ("127.0.0.1", 5000), \
+            "无环境变量时必须原样用配置"
+        os.environ["CTFSCANNER_GUI_HOST"] = "0.0.0.0"
+        os.environ["CTFSCANNER_GUI_PORT"] = "8123"
+        assert _gui_bind({"gui": {"host": "127.0.0.1", "port": 5000}}) == ("0.0.0.0", 8123), \
+            "环境变量必须**优先**于配置"
+        # 空 / 非数字 → 回落配置：容器里端口写错不该让整站起不来
+        os.environ["CTFSCANNER_GUI_HOST"] = "   "
+        os.environ["CTFSCANNER_GUI_PORT"] = "not-a-number"
+        assert _gui_bind({"gui": {"host": "127.0.0.1", "port": 5000}}) == ("127.0.0.1", 5000), \
+            "空/非数字一律回落配置，**不抛异常**"
+        os.environ["CTFSCANNER_GUI_HOST"] = "0.0.0.0"
+        os.environ.pop("CTFSCANNER_GUI_PORT", None)
+        assert _gui_bind({}) == ("0.0.0.0", 5000), "配置缺项 → 默认端口 5000"
+        assert isinstance(_gui_bind({})[1], int), \
+            "端口必须是 int —— 调用方直接喂给 app.run(port=…)"
+        # ⚠️ 安全口径：环境变量**只能**覆盖 host/port。`allowed_hosts` / `behind_proxy` /
+        #    `secure_cookie` 是安全开关，必须显式写在配置里 —— 让一个"顺手设了"的环境变量
+        #    把它们悄悄打开，比绑错地址危险得多。变异证伪：设了这几个环境变量，配置侧必须纹丝不动。
+        os.environ["CTFSCANNER_GUI_ALLOWED_HOSTS"] = "evil.example"
+        os.environ["CTFSCANNER_GUI_BEHIND_PROXY"] = "1"
+        os.environ["CTFSCANNER_GUI_SECURE_COOKIE"] = "1"
+        _g = _load_settings()["gui"]
+        assert "evil.example" not in (_g.get("allowed_hosts") or []), \
+            "环境变量不得改写 Host 白名单（那是安全开关）"
+        assert _g.get("behind_proxy") is not True, "环境变量不得打开 behind_proxy"
+        assert _g.get("secure_cookie") is not True, "环境变量不得打开 secure_cookie"
+    finally:
+        for _k in ("CTFSCANNER_GUI_ALLOWED_HOSTS", "CTFSCANNER_GUI_BEHIND_PROXY",
+                   "CTFSCANNER_GUI_SECURE_COOKIE"):
+            os.environ.pop(_k, None)
+        os.environ.pop("CTFSCANNER_GUI_HOST", None)
+        os.environ.pop("CTFSCANNER_GUI_PORT", None)
+        if _keep_h is not None:
+            os.environ["CTFSCANNER_GUI_HOST"] = _keep_h
+        if _keep_p is not None:
+            os.environ["CTFSCANNER_GUI_PORT"] = _keep_p
+    # 接线断言：光有 gui_bind 不够，两处调用点必须真的用它 —— 尤其 create_app 那处，
+    # Host 白名单（CS_GUARD_HOST）是照 `_gui_cfg["host"]` 判"绑的是不是回环"的，
+    # 不同步就会"守卫按 127.0.0.1 判、实际绑 0.0.0.0"，等于白配。
+    _appsrc95 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+    assert '_gui_cfg["host"] = gui_bind(settings)[0]' in _appsrc95, \
+        "create_app 必须让 Host 白名单看到**实际**绑定地址"
+    assert "host, port = gui_bind(_settings)" in _appsrc95, "serve() 必须用 gui_bind 取监听地址"
+    print("[5q+] 续95 监听地址环境变量覆盖 ok: 环境变量优先 / 空·非数字回落配置不抛 / "
+          "缺项用默认 / 端口恒为 int / **只**能覆盖 host·port（白名单与 behind_proxy·"
+          "secure_cookie 不受环境变量影响，变异证伪）/ create_app 与 serve 两处接线在位")
+
 
     # (5r) P1-1 误报复核工作流：状态归一 / 单条与批量打标 / 台账计数 / 列表筛选 /
     #      报告"误报移出结论、单独成节"。全部是纯数据层断言（GUI 只做透传，见 [7] 路由检查）。

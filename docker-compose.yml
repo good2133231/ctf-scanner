@@ -1,0 +1,53 @@
+# CTFScanner —— 一键起控制台（默认配置，适合"自己用 / 内网小队用"）
+#
+#   docker compose up -d --build     # 起（首次会构建镜像）
+#   docker compose logs -f           # 看启动日志（里面会打印初始登录方式）
+#   docker compose down              # 停（数据仍在宿主机上，见下）
+#
+# 完整说明（要不要重新打包 / 数据在哪 / 外部工具怎么装 / 共享服务器上的权限隔离）见 docs/docker.md。
+
+services:
+  ctfscanner:
+    build: .
+    image: ctf-scanner:latest
+    container_name: ctfscanner
+    restart: unless-stopped
+
+    # ⚠️ 只发布到**宿主机回环**：容器里虽然绑 0.0.0.0，但局域网/公网**访问不到**。
+    # 想让别人用，先读 docs/docker.md 的「给队友用」一节 —— 必须**同时**配好
+    # gui.allowed_hosts 与反向代理（否则要么整站 403，要么等于把扫描器裸奔在网上）。
+    ports:
+      - "127.0.0.1:5000:5000"
+
+    environment:
+      # 容器内必须绑 0.0.0.0（由 scanner.config.gui_bind() 读取，见 docs/docker.md）。
+      CTFSCANNER_GUI_HOST: "0.0.0.0"
+      CTFSCANNER_GUI_PORT: "5000"
+      CTFSCANNER_DB: "/app/data/scanner.db"
+      CTFSCANNER_LOGS: "/app/logs"
+      # 日志与审计的时间戳按本地时区（不设就是 UTC，看日志会差 8 小时）
+      TZ: "Asia/Shanghai"
+
+    volumes:
+      # 配置（含你的 keys.yaml）—— 挂出来才能在宿主机直接编辑，容器重建也不丢
+      - ./config:/app/config
+      # 数据库 / 报告 / 每任务的工作目录
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # 一键装的外部工具（subfinder/httpx/puredns）—— 用命名卷，重建镜像不必重装
+      - ctf-tools:/app/tools/scanner
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/login', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+
+    # 容器默认以 root 运行（扫描要起 nmap 等子进程，最省事）。介意的话取消下面这行的注释，
+    # 换成宿主机的普通用户 —— 但**先确认**它对 ./config ./data ./logs 有读写权限，
+    # 否则会出现"控制台能开、存不了配置"这种难查的问题。
+    # user: "1000:1000"
+
+volumes:
+  ctf-tools:

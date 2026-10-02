@@ -21,6 +21,46 @@
 
 
 
+## 2026-10-01 —— 续95：**Docker 部署**（一键起控制台 + 交付给队友）
+
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。
+
+- **新增交付物**：`Dockerfile`（`python:3.9-slim` + 只装 requirements.txt 那三个运行期依赖）、
+  `docker-compose.yml`（默认形态）、`docker-compose.dev.yml`（挂源码，改完 `restart` 即可）、
+  `.dockerignore`、`docs/docker.md`（部署文档）。
+- **代码改动（Docker 必需，且刻意收窄）**：新增 `scanner.config.gui_bind(settings)` ——
+  监听地址/端口可用 `CTFSCANNER_GUI_HOST` / `CTFSCANNER_GUI_PORT` 覆盖
+  （容器里必须绑 `0.0.0.0` 才能被端口映射访问到，而容器里改 `settings.yaml` 很别扭）。
+  **只覆盖这两项**：`gui.allowed_hosts` / `behind_proxy` / `secure_cookie` 是**安全开关**，
+  必须显式写在配置里 —— 让一个"顺手设了"的环境变量把它们悄悄打开，比绑错地址危险得多。
+  `create_app()` 里必须**同步**改掉 `_gui_cfg["host"]`：`CS_GUARD_HOST`（Host 白名单是否强制）
+  就是按"绑的是不是回环地址"判的，不同步会变成"守卫按 127.0.0.1 判、实际绑 0.0.0.0"。
+- **默认口径（全部偏保守）**：端口只发布到**宿主机回环**（`127.0.0.1:5000`）——
+  容器里虽绑 0.0.0.0，但局域网/公网访问不到；要放开必须**同时**配 `gui.allowed_hosts`
+  与反向代理（文档里按顺序写了三步，少一步就会整站 403 或等于裸奔）。
+  数据/配置/日志全部挂到宿主机（容器删了数据还在）；外部工具用命名卷持久化
+  （重建镜像不用重装）；不加特权、不挂 docker socket。
+- **镜像里不放凭据**：`.dockerignore` 排除 `config/keys.yaml`、`config/settings.json`、
+  `config/blacklist.d/`、`data/`、`logs/`、`tools/{scanner,dirmap,fscan}/`、`.git/`、`.workbuddy-ai/`；
+  `config/settings.yaml`（仓库自带、无真实凭据）保留，镜像开箱可用。
+- **文档里把话说清楚**（用户问过的两件事）：
+  - 「改了代码要不要重新打包」→ 给了两种形态对照表：默认形态（镜像即产物）改代码要
+    `--build`；挂源码形态（dev 覆盖文件）只要 `restart`。**只改配置或字典两种都不用重建**。
+  - 「共享服务器上别人会不会拿走源码」→ 明说**容器化 ≠ 源码保密**：镜像是 `COPY . /app`，
+    同机任何能执行 `docker` 的人一句 `docker run --rm -it <image> sh` 就能读走，
+    而 `docker` 组 ≈ root；`gui.token`/HTTPS/`allowed_hosts` 是"谁能用服务"、不是源码保护。
+    按防护强度给了 4 档，结论是"真在乎就别把代码放共享服务器，用 SSH 隧道把端口给出去"。
+- 回归 `tests/smoke.py [5q+]`：环境变量优先 / 空·非数字回落配置且不抛 / 缺项用默认 /
+  端口恒为 `int` / **只**能覆盖 host·port（设了 `CTFSCANNER_GUI_ALLOWED_HOSTS` /
+  `_BEHIND_PROXY` / `_SECURE_COOKIE` 后配置侧必须纹丝不动）/ `create_app` 与 `serve`
+  两处接线在位。**变异证伪**：摘掉 `create_app` 的接线 → 接线断言变红（已还原）。
+- **本地实测**（本机无 docker，故验到"容器那套环境变量下真能跑"为止）：
+  `gui_bind` 6 条语义；带容器环境变量真起 `run_gui.py` → 绑 `0.0.0.0`、`/login` 返回 **200**
+  （等同镜像 HEALTHCHECK）、从**非回环地址**（10.10.3.244）也能访问；
+  启动提示打印的是**实际**绑定地址且打了非回环告警；两份 compose 的 YAML 可解析。
+  镜像构建本身由 CI/用户侧验证（本机无 docker daemon）。
+- 文件：`Dockerfile`、`.dockerignore`、`docker-compose.yml`、`docker-compose.dev.yml`、
+  `docs/docker.md`、`scanner/config.py`、`gui/app.py`、`tests/smoke.py`、`README.md`、本文件。
 ## 2026-10-01 —— 续94-2：**文档一致性通扫**（把与代码不符的"未实现/仍未做"改掉）
 
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。
