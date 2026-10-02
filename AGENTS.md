@@ -621,6 +621,7 @@ py -3 tests/browser_e2e.py     # 续60：真浏览器 E2E（无头 Chrome/Edge +
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
 py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanner
 # Linux 实机验收（**2026-09-23 续12 已达成**：Ubuntu 22.04.5 / Python 3.10.12）
+# Linux 实机验收（2026-10-02 续96-附2 复跑：Ubuntu / Python 3.14.4）—— smoke 131 段 PASS、devflow 18 OK / 0 MISS / 17 N-A、calibrate RC=0、CLI 实走 httpx、GUI /login 无绝对路径；browser_e2e 因无浏览器 RC=2（跳过≠通过），故截图与 PDF 在该机仍未验
 #   python3 tests/smoke.py   → SMOKE PASS（`[5o]` 会按运行平台自报状态）
 #   搬运：整树拷贝（含 config/dicts/），远端 `python3 -m pip install --user -r requirements.txt`
 #   ⚠️ `smoke_root/.git/config` 是 `[3] pipeline` 必需的「泄露样本」，但 **git 拒绝跟踪任何

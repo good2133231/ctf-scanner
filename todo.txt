@@ -1854,3 +1854,40 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ② 改法：gui/static/style.css 的 .filters 一组规则 —— grid→flex 换行、标签改行内（文字与控件
        同一行）、输入/下拉 width:auto + padding 4px 8px、关键词输入 min-width:170px。一处改动全站生效。
        ③ 验证：tools/check_contrast.py 141 项 0 失败；本地无头浏览器渲染改前/改后对比确认。
+-----
+（2026-10-02 续96-附2：P2-3 Linux 实机验证复跑）实施者：WorkBuddy · Qoder-Agent
+       ① 背景：`[待办] P2-3 Linux 实机验证` 从第十七轮一路挂到现在（本机无 WSL/Docker），
+          用户配好远端 Linux 后终于能实跑。本轮把 §6 的验收组合在这台机器上整过一遍。
+       ② 环境：Ubuntu / **Python 3.14.4**（项目 CI 与 Dockerfile 的口径是 3.9 —— 见 ⑤ 的未覆盖项）。
+          依赖走项目内 `.venv`：`python3.14` 没有 pip/ensurepip（Ubuntu 把 ensurepip 拆进
+          python3.x-venv 包），用 `venv --without-pip` + 官方 get-pip.py 引导，
+          **不装系统包、不 sudo、不碰项目目录以外**。
+       ③ 结果（退出码如实记， SKIP 不当成通过）：
+          - `python tests/smoke.py` → **SMOKE PASS，131 段，RC=0**
+          - `python run_devflow.py` → RC=0：13 阶段 10 真跑 / 3 跳过 / **0 FAIL**；
+            35 个功能向量 **18 点到 / 0 覆盖缺口 / 17 本次不可达**（与 Windows 侧基线同数）
+          - `python tools/calibrate_pocs.py` → RC=0，报告落 logs/poc_calibration.json；
+            合成负样本上 2 条导入 POC 误报命中（Unidoc unauth_uploadfile / v10 blast）——
+            该工具**只报告不判分**，未据此改任何 POC 级别或启用状态
+          - `python cli/client.py -t http://127.0.0.1:8790/ -p probe,vulnscan` → status=done，
+            日志 `[probe] 使用 httpx 探测` → **续96 下载并回写的 httpx 在 Linux 上真的被选中**；
+            存活站点 1、潜在漏洞 3、5 秒完成（靶场是临时 `http.server`，只绑回环，用完即关）
+          - `python run_gui.py` → `/login` HTTP 200，渲染 HTML 里**无盘符 / 无项目根 / 无家目录
+            绝对路径**（§0 硬规矩 3 在 Linux 侧同样成立）；只读核对，未点任何写操作按钮
+          - `python tests/browser_e2e.py` → **RC=2 ＝ 没找到浏览器**（本机无 chromium/chrome/edge），
+            按 [7x] 口径是**跳过、不是通过** → 截图与 PDF 两项能力在这台机器上仍未验
+       ④ 顺带修掉的既有真缺陷（"兼容性"的实际缺口）：`scanner/fingerprint.py` 三条规则把内联
+          全局标志写在 `|` 之后，Python 3.14 直接抛 PatternError，又被 `pool_run` 吞成
+          "存活站点 0 个"的静默降级 → 修在 续96（commit 29952c2），回归钉在 smoke [8d] ⑩。
+       ⑤ **P2-3 状态：[部分完成]** —— Linux 实机验证已复跑（smoke / devflow / calibrate / CLI /
+          GUI 全绿；browser_e2e 因无浏览器 rc=2 跳过）。仍未覆盖：Python **3.9** 与 Windows 侧
+          复跑、Docker 镜像实跑（要拉镜像并动 /var/lib/docker，属系统级动作，需你授权）、
+          无浏览器环境下的截图 / PDF 导出。按"只追加、不改历史行"的规矩，历史那几条 [待办]
+          原样保留（见 2026-09-24 那条澄清的同一先例）。
+       ⑥ 待你定（我没自作主张动的）：`dev.enabled=true` 时强制禁用外部情报源的**硬闸**
+          （现状 fofa/shodan/quake/github/ctlog 全是 false，开发期本就零请求；加硬闸要动
+          config/devmode 的判定口径 + 回归）；`pool_run` 吞异常的语义（AGENTS §7 已登记）；
+          GUI「外部工具」页的自举入口。
+       ⑦ 提交与推送：两条 commit 已在本地 main（29952c2 续96、d0d3d0d 续96-附 回写 tools 两行），
+          相对 origin/main 纯快进 2 个。**推送暂缓** —— 远端这把 SSH key 被 GitHub 拒
+          （publickey），config/keys.yaml 也没同步过来；CI 上的 Python 3.9 复验因此还欠着。
