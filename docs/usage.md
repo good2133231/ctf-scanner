@@ -373,6 +373,8 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
 代码层无 Windows 专属逻辑：路径全部走 `pathlib`，外部命令走 `subprocess` 列表参数 + `shutil.which`，文件读写显式 UTF-8。Linux 上只需注意：
 
 ```bash
+一把就绪（续99）：`python3 run_bootstrap.py --install` —— 自动建 `.venv`、缺 pip 时用官方
+get-pip.py 引导、装依赖、按需下载带校验和的外部工具。下面这段是等价的手工步骤。
 # 依赖装在 venv 里，避免污染系统 Python
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt

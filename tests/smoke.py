@@ -11397,24 +11397,46 @@ http:
 
     # ② 检测器：`subprocess.run` 全文件只许 1 处，且只能是"装 pip 依赖"；**绝不代跑**包管理器/
     #    编译/clone 命令（nmap 要 root、fscan 要自编译 —— 代跑就是越系统级的界）。
+    # 自动层的 subprocess 只许四类意图：建 venv、装/查 pip、跑官方 get-pip.py、用 venv
+    # 解释器**自重跑本脚本**。系统包管理器与编译命令一律禁止 —— 代跑就是越"系统级动作"的界，
+    # 而且绕过 toolmgr 那条"官方校验和才落盘"的红线。
+    _BANNED8d = ("apt-get", "sudo", "dnf", "yum", "pacman", "zypper", "brew", "winget",
+                 "choco", "scoop", "go build", "git clone", "nmap")
+    _ALLOWED8d = ("pip", "venv", "get-pip", "run_bootstrap.py")
+
     def _det8d(_s8d):
+        # 返回越界的 subprocess 调用片段。取 **3 行窗口**：真实调用常常跨行，只看首行会把
+        # 下一行的参数当没看见（旧口径就是这么漏的）。
         _bad = []
         for _seg in _s8d.split("subprocess.run(")[1:]:
-            _head = _seg.split("\n")[0]
-            if "pip" not in _head or any(_k in _head for _k in
-                                         ("apt-get", "sudo", "dnf", "pacman", "brew", "winget",
-                                          "choco", "scoop", "go build", "git clone")):
+            _head = "\n".join(_seg.split("\n")[:3])
+            if any(_k in _head for _k in _BANNED8d) \
+                    or not any(_k in _head for _k in _ALLOWED8d):
                 _bad.append(_head.strip()[:70])
         return _bad
 
-    assert _src8d.count("subprocess.run(") == 1, \
-        f"自动层只该有一处 subprocess.run（pip 依赖），实得 {_src8d.count('subprocess.run(')}"
+    # 不锁"有几处 subprocess"（合法站点会随功能增减），只锁"每一处都在允许的四类意图里"。
+    assert _src8d.count("subprocess.run(") >= 1, "自动层至少要有一处 pip 安装调用"
     assert _det8d(_src8d) == [], f"自举不得代跑系统级命令：{_det8d(_src8d)}"
-    # 变异证伪：真去 apt 装 nmap 必须让 ② 红；pip 安装必须让 ② 绿（检测器不许过宽）
-    assert _det8d('subprocess.run(["sudo", "apt-get", "install", "-y", "nmap"])') != [], \
-        "② 对『代跑 apt』不敏感 → 假绿"
-    assert _det8d('subprocess.run([sys.executable, "-m", "pip", "install", "-r", x])') == [], \
-        "② 把 pip 安装也判成违规 → 过宽"
+    # 变异证伪·绿向：四类合法调用都必须判合法（检测器过宽就会在这里红）
+    _ok8d = ["subprocess.run(" + _a for _a in (
+        '[sys.executable, "-m", "pip", "install", "-r", "requirements.txt"]',
+        '[sys.executable, "-m", "venv", str(venv_dir)]',
+        '[sys.executable, "-m", "venv", "--without-pip", str(venv_dir)]',
+        '[str(py), str(venv_dir / "get-pip.py")]',
+        '[str(py), str(ROOT / "run_bootstrap.py")] + argv',
+    )]
+    assert [_c for _c in _ok8d if _det8d(_c)] == [], \
+        f"② 过宽，合法站点被误判：{[_c[:44] for _c in _ok8d if _det8d(_c)]}"
+    # 变异证伪·红向：真去装系统包 / 调包管理器 / 自编译 fscan / 来历不明的 -c，都必须红
+    _bad8d = ["subprocess.run(" + _a for _a in (
+        '["sudo", "apt-get", "install", "-y", "nmap"]',
+        '["winget", "install", "-e", "--id", "Insecure.Nmap"]',
+        '[_GO, "build", "-o", _dst]  # go build -o tools/scanner/fscan',
+        '[str(py), "-c", _x], env=_env',
+    )]
+    for _c8d in _bad8d:
+        assert _det8d(_c8d), f"② 对越界调用不敏感 → 假绿：{_c8d[:44]}"
 
     # ③ probe() 零网络：三个网络出口打桩成"一动就炸"，清单必须照样出全（探测可离线是这条功能的底线）
     def _boom8d(*_a, **_k):
@@ -11489,6 +11511,7 @@ http:
     assert _py8d["py:PyYAML"]["status"] == ("ok" if _ilu8d.find_spec("yaml") else "missing"), \
         "PyYAML 必须按模块名 yaml 判定"
 
+    #    两条 --install 都带 --no-venv：本组只验"报告两栏 + 退出码"的语义，不触发 venv 自举（那是 ⑪ 的    #    职责）；真自举会 fork 子进程写继承的 fd，捕获不到，必然假红。
     # ⑨ 退出码与两栏标题：探测态永不失败；自动层有失败必须非 0；标题不许把"没装"说成"没补上"
     def _cap8d(_argv):
         _b = _io8d.StringIO()
@@ -11502,10 +11525,10 @@ http:
         _rc8d, _out8d = _cap8d([])
         assert _rc8d == 0 and "可自动补齐" in _out8d and "自动层没补上" not in _out8d, \
             "探测态标题应是『可自动补齐（加 --install 就会装）』"
-        _rc8d, _out8d = _cap8d(["--install"])
+        _rc8d, _out8d = _cap8d(["--install", "--no-venv"])
         assert _rc8d == 0 and "本轮已装 1" in _out8d, (_rc8d, _out8d)
         _rb8d.install_auto = lambda *_a, **_k: ([], [{"name": "subfinder", "reason": "stub"}])
-        _rc8d2, _out8d2 = _cap8d(["--install"])
+        _rc8d2, _out8d2 = _cap8d(["--install", "--no-venv"])
         assert _rc8d2 == 1, "自动层有失败却回 0 → 退出码不可信（复探也救不了它）"
         # 判据只能吃**桩里带来的东西**（reason="stub"），不能吃工具名：工具装没装取决于
         # 这台机器，拿它当哨兵就是 [7p] 那条旧断言的同类毛病（值当哨兵 ≠ 口径）。
@@ -11557,12 +11580,73 @@ http:
     assert _fp10.identify({"headers": {"Server": "Cloudflare"}, "text": ""}) == ["cloudflare"], \
         "identify 必须真的出标签（出空表＝PatternError 被 pool_run 静默吞掉的旧症状）"
 
+    # ⑪ venv 自举（"一上来就能运行"那部分）：形状两端都对、幂等、失败**不删用户目录**、
+    #    取 get-pip 只认官方 https 主机。
+    _root11 = LOGS_DIR / "venvshape11"
+    _root11.mkdir(parents=True, exist_ok=True)
+    try:
+        _win11 = _rb8d.venv_python(_root11, windows=True)
+        _nix11 = _rb8d.venv_python(_root11, windows=False)
+        assert _win11.parts[-3:] == (".venv", "Scripts", "python.exe"), _win11
+        assert _nix11.parts[-3:] == (".venv", "bin", "python"), _nix11
+        # 主机白名单 + 只允许 https（明文 http 拿到的是可被篡改的安装脚本，比不装更糟）
+        assert _rb8d._check_pip_url("https://bootstrap.pypa.io/get-pip.py") == "bootstrap.pypa.io"
+        for _u11 in ("http://bootstrap.pypa.io/get-pip.py",
+                     "https://bootstrap.pypa.io.evil.example/get-pip.py",
+                     "https://evil.example/get-pip.py",
+                     "file:///etc/passwd"):
+            try:
+                _rb8d._check_pip_url(_u11)
+                assert False, f"该拒的 URL 没拒：{_u11}"
+            except RuntimeError as _e11:
+                assert "bootstrap.pypa.io" in str(_e11), _e11
+        # 幂等：真项目里已有 .venv（本机就是），必须"复用"而不是重建 —— 用 cfg 指纹证明没被重写
+        _cfg11 = _rb8d.ROOT / ".venv" / "pyvenv.cfg"
+        if _cfg11.exists():
+            _before11 = _cfg11.stat().st_mtime_ns
+            _ok11, _msg11 = _rb8d.ensure_venv()
+            assert _ok11 and "复用" in _msg11, _msg11
+            assert _cfg11.stat().st_mtime_ns == _before11, "ensure_venv 重建了已有 venv（不该）"
+        else:
+            print("  [8d ⑪] 本机没有 .venv → 幂等那条按跳过处理（不是通过）")
+        # 失败路径**不许删用户目录**：调用前就存在的 .venv（带 pyvenv.cfg）+ venv 建不起来
+        _mine11 = _root11 / "mine" / ".venv"
+        _mine11.mkdir(parents=True)
+        (_mine11 / "pyvenv.cfg").write_text("home = /somewhere\n", encoding="utf-8")
+        _marker11 = _mine11 / "我的东西.txt"
+        _marker11.write_text("别删我", encoding="utf-8")
+        _real_run = _rb8d.subprocess.run
+
+        class _R11:
+            returncode = 1
+            stdout = ""
+            stderr = "ensurepip is not available"
+
+        _rb8d.subprocess.run = lambda *a, **k: _R11()
+        try:
+            _ok2 = _rb8d.ensure_venv(_root11 / "mine")
+        finally:
+            _rb8d.subprocess.run = _real_run
+        assert not _ok2[0] and "不删目录" in _ok2[1], _ok2
+        assert _marker11.exists(), "ensure_venv 删掉了用户原有的 .venv 内容 —— 破坏性动作"
+        # get-pip 取不下来时：返回原因、不抛、不留半成品脚本
+        _real_open = _rb8d.urllib.request.urlopen
+        _rb8d.urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(OSError("网络不可达"))
+        try:
+            _ok3 = _rb8d._bootstrap_pip(_nix11, _mine11)
+        finally:
+            _rb8d.urllib.request.urlopen = _real_open
+        assert not _ok3[0] and "get-pip" in _ok3[1], _ok3
+        assert not (_mine11 / "get-pip.py").exists(), "失败后不许留 get-pip.py 残片"
+    finally:
+        shutil.rmtree(_root11, ignore_errors=True)
+
     print("[8d] 续96 迁移自举 ok: probe 零网络（urlopen/getaddrinfo/socket 三处打桩仍出全清单）｜"
           "自动层＝pip 依赖 + toolmgr.TOOLS，与 MANUAL 不相交｜nmap/fscan/dirmap 按平台只打印命令"
           "（windows→fscan.exe / linux→无后缀 / 无包管理器→指官方发布页，绝不凭空造命令）｜"
           "subprocess.run 全文件仅 1 处且只给 pip｜平台口径复用 host_arch()｜输出无项目根/家目录绝对路径｜"
           "退出码 0/1 与两栏标题各归其位；变异证伪：代跑 apt / MANUAL 混进 auto / 失败仍回 0 "
-          "三种改法都会让上面某条红；另钉住『内联全局标志只能在串首』（3.11 弃用 / 3.14 抛 PatternError，本轮就是它让 probe 静默报 0 站点）")
+          "三种改法都会让上面某条红；⑪ venv 自举两端形状/幂等/失败不删用户目录/只认官方 https 取 get-pip；另钉住『内联全局标志只能在串首』（3.11 弃用 / 3.14 抛 PatternError，本轮就是它让 probe 静默报 0 站点）")
     # ---------------- [8e] 续97：开发模式硬闸（dev.enabled=true ⇒ 外部情报源一律不可用） ----------------
     print("[8e] 续97 开发模式硬闸：suppress_external 三态 / 不原地改 / StageContext 接线 / 日志如实（含变异证伪）…")
     import copy as _copy8e

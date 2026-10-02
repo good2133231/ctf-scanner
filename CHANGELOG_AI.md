@@ -71,6 +71,49 @@
   另开一轮）。
 
 
+## 2026-10-02 —— 续99：**venv 自举**（迁移到任何机器一条命令就绪）+ 修第三起假红（我自己写的）
+
+> 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux；本机 3.14.4 + `python:3.9-slim` 镜像双口径复验）。
+
+- **用户点单**："我需要的安装应该列入安装脚本，一上来就能运行"。此前 `--install` 有个真洞：
+  这台远端机器的 `python3.14` **没有 pip / 没有 ensurepip**（Ubuntu 把 ensurepip 拆进
+  `python3.x-venv` 包），自动层只能报"装不了" —— 我当初是手工 `venv --without-pip` +
+  `get-pip.py` 救回来的，那条路径**根本没进脚本**。
+- **`run_bootstrap.py` 新增虚拟环境自举层**（自动层从两样变三样）：
+  `venv_python()`（两端形状：POSIX `.venv/bin/python`、Windows `.venv\Scripts\python.exe`）、
+  `_check_pip_url()` / `_fetch_get_pip()`（**独立**于 toolmgr 的主机白名单：只
+  `https://bootstrap.pypa.io` + 大小上限；不复用 `toolmgr.download_bytes` —— 为一个安装脚本
+  去放宽 GitHub 那条校验红线不值）、`ensure_venv()`（幂等：可用就复用；`-m venv` 失败才退
+  `--without-pip` + 引导 pip）、`rerun_in_venv()`（建好后用 venv 解释器**自重跑**，
+  `CTFSCANNER_BOOTSTRAP_REEXEC` 防递归）。新增 `--no-venv` 给容器/受控环境退回当前解释器。
+  **实测**：`.venv` 移走后，`python3.14 run_bootstrap.py --install` 一句命令 **5.5 秒**从零到
+  "venv + pip + 依赖就绪"。
+- **`ensure_venv()` 的一个破坏性漏洞（写完自查抓到的）**：`-m venv` 失败时原本"只要
+  `pyvenv.cfg` 在就 `rmtree`" —— 那会**删掉用户原有的坏 venv**。改成只清"本次新建的半成品"
+  （调用前目录不存在才删），已存在时**明确不删**并提示用户自己处置。回归钉在 `[8d] ⑪`
+  （造一个带 `pyvenv.cfg` + 标记文件的目录 + 桩 `subprocess.run` 恒失败 → 断言标记文件仍在）。
+- **修第三起假红（这次是我自己上一轮写的断言）**：`[8f] ⑨` 直接读 `.gitignore`，而项目
+  `.dockerignore` 把它排除在镜像之外 → `python:3.9-slim` 里必然 `FileNotFoundError`。改成
+  "文件在树里才校验，不在就**明说是跳过**"，并把实际状态打进 `[8f]` 结论行（跳过 ≠ 通过）。
+  这是 `AGENTS §6.2` 那类"判据吃环境不吃桩"的**第三次**现身。
+- **`[8d] ②` 的 subprocess 红线随之改口径**：旧写法是"全文件恰好 1 处 + 首行必须含 pip"，
+  venv 自举合法地新增了 5 处子进程调用，旧口径会误杀。改成**按意图白名单**
+  （`pip` / `venv` / `get-pip` / `run_bootstrap.py`）+ **禁系统级命令**
+  （apt-get/sudo/dnf/pacman/zypper/brew/winget/choco/scoop/go build/git clone/nmap），
+  并取 **3 行窗口**（只看首行会把跨行的参数当没看见）。变异证伪双向：五类合法调用必须全绿，
+  `sudo apt-get install nmap` / `winget install` / `go build` / 来历不明的 `-c` 必须全红。
+- **文档口径同步**：README「1. 安装依赖」首推 `run_bootstrap.py --install`（手工路线降为备选，
+  并说明"一把就绪"具体做什么）；`docs/usage.md` Linux 部署段同上；`AGENTS.md §6` 的"搬运"
+  一行改为一条命令就绪 + 保留手工等价步骤；新增 `run_bootstrap.py --install` 入口行。
+- **我自己踩了一次 §9 的 EOL 坑并当场修掉（记下来免得再踩）**：给 `AGENTS.md`（纯 CRLF）
+  补文档时用 `read_text/write_text` 写回，整份被归一成 LF —— `git diff --numstat` 立刻显示
+  **1318/1317**，而 `--ignore-cr-at-eol` 只有 **2/1**，正是 §9 描述的"真改动被假变更淹没"。
+  按 §9 的归位办法（纯 EOL 转换、不动内容）恢复成 1318/1318，两口径重新一致。
+  **教训**：改 CRLF/混合 EOL 文件**只有字节级替换这一条路**，`read_text/write_text` 同样致命。
+- **双口径复验**：本机 3.14.4 与 `python:3.9-slim` 镜像各跑 `tests/smoke.py` +
+  `run_devflow.py` + 全仓 `compileall`（结果见 todo.txt 本轮块与提交信息）。
+- **未做**：GUI 无解锁/自举面板；`pool_run` 吞异常语义；keyring 路线。
+
 ## 2026-10-02 —— 续98：**凭据口令加密**（`config/keys.enc.yaml`，AES-256-GCM + PBKDF2）
 
 > 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux；3.14.4 本机 + `python:3.9-slim` 镜像各跑一遍全量）。

@@ -75,6 +75,23 @@
 
 ### 1. 安装依赖
 
+**一把就绪（续99，推荐）**：在项目根跑一条命令就够了 —— 它会自己建 `.venv`、**在系统解释器
+没有 pip 时**用官方 `get-pip.py` 引导 pip（Ubuntu/Debian 把 ensurepip 拆进 `python3.x-venv`
+包，这是常态）、装 `requirements.txt`，再把**官方带 SHA256 校验和**的外部工具
+（subfinder / httpx / puredns）按平台装进 `tools/scanner/` 并回写 `tools.<名>`：
+
+```bash
+python3 run_bootstrap.py --install        # Linux / macOS
+py -3 run_bootstrap.py --install          # Windows
+python3 run_bootstrap.py                  # 只探测，**零网络**：先看这台机器还缺什么
+```
+
+之后请用虚拟环境里的解释器运行：`./venv/bin/python run_gui.py`（Windows 是
+`venv\Scripts\python.exe run_gui.py`）。`nmap / fscan / dirmap` **不会被自动下载也不会被代跑**
+（官方没有「可下载且带官方校验和的单二进制产物」），脚本会按平台打印该执行的命令。
+
+手工路线（想自己管环境时）：
+
 ```bash
 # ---- Linux / macOS（推荐虚拟环境）----
 python3 -m venv venv && source venv/bin/activate
@@ -86,7 +103,8 @@ venv\Scripts\activate
 py -3 -m pip install -r requirements.txt
 ```
 
-不想用虚拟环境也可以直接 `pip install -r requirements.txt`（全局）。
+不想用虚拟环境也可以 `python3 run_bootstrap.py --install --no-venv`（直接装到当前解释器），
+或手工 `pip install -r requirements.txt`（全局）。
 
 ### 2. 配置（**可跳过** —— 不配任何 key 也能完成子域名 / 端口 / 探测 / 目录 / 漏洞初筛）
 

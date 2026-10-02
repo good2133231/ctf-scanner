@@ -1944,3 +1944,29 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        ⑧ 未做：keyring（系统钥匙串）路线；GUI 无解锁/状态面板；pool_run 吞异常语义未改。
        ⑨ 你贴进对话的那串 token 已被脱敏成占位符（ghp_ + 全 x），我无法用它测推送；
           真 token 请写 /opt/tools/ctf/.push-token；进过对话记录的 token 建议轮换。
+-----
+（2026-10-02 续99：venv 自举 —— "迁移到任何机器一条命令就绪"）实施者：WorkBuddy · Qoder-Agent
+       ① 用户点单"我需要的安装应该列入安装脚本，一上来就能运行"。此前 `--install` 在
+          "系统解释器没 pip / 没 ensurepip"（Ubuntu 常态，本机就是这样）只能报装不了；
+          我当初手工救回来的那条路没进脚本。
+       ② run_bootstrap.py 新增 `venv_python` / `_check_pip_url` / `_fetch_get_pip` /
+          `_bootstrap_pip` / `ensure_venv` / `rerun_in_venv`，自动层从两样变三样
+          （建 venv+引导 pip → pip 依赖 → toolmgr.TOOLS）；新增 `--no-venv`。
+          get-pip 用**独立**白名单（只 https://bootstrap.pypa.io + 大小上限），
+          刻意不复用 toolmgr.download_bytes（不为一个安装脚本放宽 GitHub 那条校验红线）。
+       ③ 实测：把 .venv 移走，`python3.14 run_bootstrap.py --install` 一句命令 **5.5 秒**
+          到"venv + pip + 依赖就绪"；两端形状（Scripts/python.exe 与 bin/python）都验。
+       ④ 自查抓到自己写的破坏性漏洞：ensure_venv 原先"pyvenv.cfg 在就 rmtree"，会删用户
+          原有的坏 venv → 改成只清本次新建的半成品，已存在则不删并提示手工处置；
+          回归钉在 [8d] ⑪（标记文件必须仍在）。
+       ⑤ 修第三起假红（我上一轮写的）：[8f] ⑨ 读 .gitignore，而 .dockerignore 把它排除在
+          镜像外 → 3.9 镜像必然 FileNotFoundError。改成"在树里才校验、不在就明说是跳过"。
+          [8d] ② 的 subprocess 红线同时改为按意图白名单 + 禁系统级命令 + 取 3 行窗口，
+          双向变异证伪（五类合法必须绿、apt/winget/go build/裸 -c 必须红）。
+       ⑥ 文档口径：README「安装依赖」、docs/usage.md Linux 段、AGENTS §6「搬运」都改成
+          一条 `run_bootstrap.py --install` 就绪，手工步骤降为备选。
+       ⑦ 我自己踩了 §9 的 EOL 坑并当场修：给纯 CRLF 的 AGENTS.md 用 read_text/write_text
+          → 1318/1317 假变更（--ignore-cr-at-eol 只有 2/1）。按 §9 办法恢复 1318/1318。
+          **教训：改 CRLF / 混合 EOL 只有字节级替换这一条路，read_text/write_text 同样致命。**
+       ⑧ P2-3 状态不变（仍 [部分完成]）：venv 自举让"换机器"这条路更短，但**浏览器相关**
+          那两项（截图、browser_e2e 的 35 条）仍待装 chromium，等你授权 `sudo apt-get install -y chromium`。

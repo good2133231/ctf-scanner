@@ -11,11 +11,17 @@ subfinder/httpx/puredns、`requirements.txt` 得自己记得 `pip install`；至
 
 **四条红线（沿用 `scanner/toolmgr.py` 的纪律，改本文件前先读完）**：
 
-1. **只在显式触发时联网**：只有带 `--install` 才下载；`probe()` 本身零网络（只读文件系统 +
-   `shutil.which`）。扫描期任何阶段都不得调用本模块 —— 因此它**放在仓库根、刻意不进 `scanner/`
+1. **只在显式触发时联网**：只有带 `--install` 才下载（含 `.venv` 缺 pip 时取的官方
+   `get-pip.py`）；`probe()` 本身零网络（只读文件系统 + `shutil.which`）。扫描期任何阶段都不
+   得调用本模块 —— 因此它**放在仓库根、刻意不进 `scanner/`
    包**：`tests/smoke.py [7p]` 钉的是"scanner 包内不得引用 toolmgr"，把本模块塞进 `scanner/`
    就得给那条红线开豁免，等于把红线削弱一次。
-2. **自动层的边界＝`toolmgr.TOOLS`**（官方产物 + release 自带 SHA256 才落盘）与 pip 依赖。
+2. **自动层的边界＝三样**：① 建项目内 `.venv`（`python -m venv` 失败就退到 `--without-pip` +
+   官方 `get-pip.py` 引导 —— Ubuntu/Debian 把 ensurepip 拆进 `python3.x-venv` 包，这是常态）；
+   ② `pip install -r requirements.txt`；③ `toolmgr.update()`（官方产物 + release 自带 SHA256
+   才落盘）。取 get-pip 用的是**另一套同纪律但独立**的白名单（只 `https://bootstrap.pypa.io` +
+   大小上限）—— 刻意不复用 `toolmgr.download_bytes`，把该主机塞进 toolmgr 的白名单等于为了
+   一个安装脚本去放宽那条校验红线。
    `toolmgr.MANUAL` 的 nmap / fscan / dirmap **一条请求都不发、一条命令都不代跑**：它们要么
    要装进系统目录（apt / 安装器 / dmg，需要 root），要么要用 Go 自编译 —— 代跑就是越
    "系统级动作"的界，还会绕过那条校验和红线。这里只**按平台打印**命令，由用户复制执行。
@@ -26,10 +32,13 @@ subfinder/httpx/puredns、`requirements.txt` 得自己记得 `pip install`；至
 """
 import argparse
 import importlib.util
+import os
 import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -38,6 +47,16 @@ ROOT = Path(__file__).resolve().parent
 # 高于它只是"没在 CI 上验证过"（如实提示，不当错误）。
 PY_MIN = (3, 9)
 PY_CI = (3, 9)
+
+# 一键就绪用的虚拟环境（`.gitignore` 已排除，不会脏仓库）
+VENV_DIR = ".venv"
+# Ubuntu/Debian 把 ensurepip 拆进 python3.x-venv 包 → 系统解释器常常 `python -m venv` 直接失败，
+# 而用户的要求是"一上来就能运行"，所以这里自己引导 pip（官方 get-pip.py），不碰系统包。
+GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
+_GET_PIP_HOSTS = frozenset({"bootstrap.pypa.io"})
+_MAX_PIP_BYTES = 8 * 1024 * 1024
+_UA = "CTFScanner-bootstrap/0.1 (+authorized-testing-only)"
+REEXEC_ENV = "CTFSCANNER_BOOTSTRAP_REEXEC"
 
 # requirements.txt 里的分发名 → 可 import 的模块名（本项目只有 PyYAML 这一个不一致）
 _IMPORT_ALIAS = {"pyyaml": "yaml"}
@@ -92,6 +111,118 @@ def pkg_cmd(pkg, managers):
     return []
 
 
+# ---------- 虚拟环境：让"一上来就能运行"成立 ----------
+
+def venv_python(root=None, windows=None):
+    """venv 里的解释器路径。`windows=None` 按本机判；显式传 True/False 供测试两端都验。"""
+    root = Path(root) if root is not None else ROOT
+    if windows is None:
+        windows = os.name == "nt"
+    return root / VENV_DIR / ("Scripts" if windows else "bin") / ("python.exe" if windows else "python")
+
+
+def in_venv():
+    return sys.prefix != sys.base_prefix
+
+
+def _check_pip_url(url):
+    """get-pip 的下载纪律与 `toolmgr` 同源：只允许 https + 固定主机；大小有上限。
+
+    刻意不复用 `toolmgr.download_bytes` —— 它的主机白名单只有 GitHub，把 `bootstrap.pypa.io`
+    塞进去等于为了一个安装脚本去放宽那条校验红线。
+    """
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https" or host not in _GET_PIP_HOSTS:
+        raise RuntimeError(f"只允许从 {'、'.join(sorted(_GET_PIP_HOSTS))} 取 get-pip.py（https）")
+    return host
+
+
+def _bootstrap_pip(py, venv_dir):
+    """在给定解释器里引导 pip（官方 get-pip.py，用完即删）。返回 `(ok, 说明)`，不抛。"""
+    try:
+        got = _fetch_get_pip(venv_dir / "get-pip.py")
+        try:
+            run = subprocess.run([str(py), str(venv_dir / "get-pip.py")], capture_output=True, text=True)
+        finally:
+            (venv_dir / "get-pip.py").unlink(missing_ok=True)
+    except Exception as e:
+        return False, f"取 get-pip.py 失败：{e}"
+    if run.returncode != 0:
+        tail = ((run.stderr or run.stdout or "").strip().splitlines() or ["无输出"])[-1]
+        return False, f"get-pip 引导失败：{tail[:160]}"
+    return True, f"已用官方 get-pip.py 引导 pip（下载 {got} 字节）"
+
+
+def _fetch_get_pip(dst):
+    """取官方 get-pip.py 到 dst（边收边判上限）。返回写入的字节数。"""
+    _check_pip_url(GET_PIP_URL)
+    req = urllib.request.Request(GET_PIP_URL, headers={"User-Agent": _UA})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = resp.read(_MAX_PIP_BYTES + 1)
+    if len(data) > _MAX_PIP_BYTES:
+        raise RuntimeError(f"get-pip.py 超过 {_MAX_PIP_BYTES} 字节上限，拒绝使用")
+    Path(dst).write_bytes(data)
+    return len(data)
+
+
+def ensure_venv(root=None):
+    """把项目内 `.venv` 建起来并保证里面有 pip。**幂等**：已可用就复用，绝不重建覆盖。
+
+    返回 `(ok, 说明)`，**任何失败都不抛** —— 自动层要如实报"这步没成"，而不是把调用方崩掉。
+    `python -m venv` 失败时退到 `--without-pip` + 官方 `get-pip.py` 引导：这正是 Ubuntu/Debian
+    上系统解释器的常态（ensurepip 被拆进 `python3.x-venv` 包），而用户要的是一句命令就能跑，
+    不该先逼人去装系统包。
+    """
+    root = Path(root) if root is not None else ROOT
+    venv_dir = root / VENV_DIR
+    py = venv_python(root)
+    pre_existed = venv_dir.exists()          # 只有"本次新建的半成品"才敢删，见下面
+    if py.exists():
+        if subprocess.run([str(py), "-m", "pip", "--version"],
+                          capture_output=True, text=True).returncode == 0:
+            return True, f"复用 {VENV_DIR}（pip 可用）"
+        ok, msg = _bootstrap_pip(py, venv_dir)
+        return ok, (msg if not ok else f"{VENV_DIR} 已存在但缺 pip → {msg}")
+    created = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)],
+                             capture_output=True, text=True)
+    if created.returncode == 0:
+        return True, f"已创建 {VENV_DIR}"
+    # 建 venv 失败（ensurepip 缺失是常态）。**只清自己刚建的**：调用前目录就存在的话，
+    # 里面可能是用户自己的东西（哪怕坏掉），删它就是破坏用户数据 —— 改成如实报并让他决定。
+    if not pre_existed and (venv_dir / "pyvenv.cfg").exists():
+        shutil.rmtree(venv_dir, ignore_errors=True)
+    elif pre_existed:
+        return False, (f"{VENV_DIR} 已存在但没有可用解释器，且 `python -m venv` 失败 —— "
+                       f"不删目录（里面可能是你自己的东西），请手工检查或删掉 {VENV_DIR} 后重试")
+    again = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv_dir)],
+                           capture_output=True, text=True)
+    if again.returncode != 0:
+        tail = ((again.stderr or again.stdout or "").strip().splitlines() or ["无输出"])[-1]
+        return False, f"创建 {VENV_DIR} 失败：{tail[:160]}"
+    if not py.exists():
+        return False, f"{VENV_DIR} 建好了但找不到解释器（结构非预期，不猜测路径）"
+    ok, msg = _bootstrap_pip(py, venv_dir)
+    return ok, (msg if ok else f"{VENV_DIR} 已建但 pip 引导失败：{msg}")
+
+
+def rerun_in_venv(argv=None, root=None):
+    """用 `.venv` 的解释器把本脚本**重跑一遍**（依赖才会装进 venv 而不是系统解释器）。
+
+    返回子进程退出码；没建成 venv 或已在 venv 里 → 返回 `None` 让调用方继续就地执行。
+    `REEXEC_ENV` 防递归：子进程带着它，绝不会再套一层。
+    """
+    if in_venv() or os.environ.get(REEXEC_ENV):
+        return None
+    py = venv_python(root)
+    if not py.exists():
+        return None
+    env = dict(os.environ, **{REEXEC_ENV: "1"})
+    sys.stdout.flush()          # 不 flush 的话，管道里父进程的提示会排到子进程输出之后
+    run = subprocess.run([str(py), str(ROOT / "run_bootstrap.py")] + list(argv or sys.argv[1:]), env=env)
+    return run.returncode
+
+
 def requirement_names():
     """读 `requirements.txt` 的分发名（忽略注释/空行；只取名字，不比版本约束）。"""
     text = (ROOT / "requirements.txt").read_text(encoding="utf-8")
@@ -136,12 +267,22 @@ def probe(settings=None):
                                       else f"（CI 口径是 {_dot(PY_CI)}，本版本未在 CI 验证）")))
     has_pip = importlib.util.find_spec("pip") is not None
     rows.append(_row("pip", "runtime", False, "ok" if has_pip else "missing",
-                     "可用" if has_pip else "当前解释器没有 pip（Ubuntu 把 ensurepip 拆成单独的 "
-                                            "python3.x-venv 包），自动装依赖会跳过",
-                     [] if has_pip else ["sudo apt install python3-venv  # 或从 get-pip.py 引导"]))
-    in_venv = sys.prefix != sys.base_prefix
-    rows.append(_row("venv", "runtime", False, "ok" if in_venv else "warn",
-                     "在虚拟环境里" if in_venv else "装在系统解释器上（建议 venv，见 docs/usage.md）"))
+                     "可用" if has_pip else
+                     "当前解释器没有 pip（Ubuntu/Debian 把 ensurepip 拆进 python3.x-venv 包）"
+                     " —— 自动层会自己建 .venv 并用官方 get-pip.py 引导，不需要装系统包",
+                     [] if has_pip else ["python run_bootstrap.py --install"]))
+    _venv_hint = f"{VENV_DIR}/{('Scripts' if os.name == 'nt' else 'bin')}/" \
+                 f"{'python.exe' if os.name == 'nt' else 'python'}"
+    if in_venv():
+        rows.append(_row("venv", "runtime", False, "ok", "在虚拟环境里运行", []))
+    elif (ROOT / VENV_DIR).exists():
+        rows.append(_row("venv", "runtime", False, "warn",
+                         f"现在跑在系统解释器上，但 .venv 已就绪 —— 依赖应装进 venv 而不是系统",
+                         [f"{_venv_hint} run_gui.py"]))
+    else:
+        rows.append(_row("venv", "runtime", False, "warn",
+                         "系统解释器且没有 .venv —— 自动层会自动建（含 pip 引导）",
+                         ["python run_bootstrap.py --install"]))
     for dist in requirement_names():
         mod = _IMPORT_ALIAS.get(dist.lower(), dist.lower().replace("-", "_"))
         found = importlib.util.find_spec(mod) is not None
@@ -297,7 +438,20 @@ def main(argv=None):
                     help="透传 toolmgr：release 没校验和时也照装（默认拒绝）")
     ap.add_argument("--tools-dest", default=None, help="透传 toolmgr 的落点目录")
     ap.add_argument("--no-wire", action="store_true", help="透传 toolmgr：装完不写回 settings.yaml")
+    ap.add_argument("--no-venv", action="store_true",
+                    help="不要自动建 .venv，就用当前解释器装依赖（容器/受控环境里常用）")
     args = ap.parse_args(argv)
+
+    # 一键就绪：`--install` 时先保证有个带 pip 的 .venv，再用**它**重跑本脚本 ——
+    # 否则在 Ubuntu 那种"系统解释器没 pip/ensurepip"的机器上，自动层只能报"装不了"。
+    if args.install and not args.no_venv and not in_venv():
+        ok, msg = ensure_venv()
+        print(f"[{'+' if ok else '!'}] 虚拟环境：{msg}")
+        code = rerun_in_venv(sys.argv[1:])
+        if code is not None:
+            return code
+        if not ok:
+            print("[!] 退回当前解释器继续（依赖会装到系统解释器上）")
 
     s = summarize(probe())
     installed, failed = ([], [])

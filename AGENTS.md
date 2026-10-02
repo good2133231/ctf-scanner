@@ -619,6 +619,7 @@ py -3 run_keys.py --status                            # 续98：凭据是明文�
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
                             #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）
 py -3 cli/client.py --bootstrap                           # 续96：迁移自举——按平台点清缺口（解释器/pip 依赖/外部工具/浏览器），**不联网**
+py -3 run_bootstrap.py --install                            # 续99：等价入口（会先建 .venv 再用它自重跑；--no-venv 可退回当前解释器）
 py -3 cli/client.py --bootstrap --install                   # 自动层＝pip 依赖 + toolmgr 的 TOOLS；「需手工」那三类只打印命令，一条都不代跑
 py -3 cli/client.py --update-tools            # 续54：联网装/更新 subfinder/httpx/puredns 并回写 tools.<名>
                                               #   可选 --tool <名>（可重复）/ --allow-unverified / --no-wire / --tools-dest
@@ -636,7 +637,7 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 # Linux 实机验收（**2026-09-23 续12 已达成**：Ubuntu 22.04.5 / Python 3.10.12）
 # Linux 实机验收（2026-10-02 续96-附2 复跑：Ubuntu / Python 3.14.4）—— smoke 131 段 PASS、devflow 18 OK / 0 MISS / 17 N-A、calibrate RC=0、CLI 实走 httpx、GUI /login 无绝对路径；browser_e2e 因无浏览器 RC=2（跳过≠通过），故截图与 PDF 在该机仍未验
 #   python3 tests/smoke.py   → SMOKE PASS（`[5o]` 会按运行平台自报状态）
-#   搬运：整树拷贝（含 config/dicts/），远端 `python3 -m pip install --user -r requirements.txt`
+#   搬运：整树拷贝（含 config/dicts/），远端一条 `python3 run_bootstrap.py --install` 就绪（续99：自动建 .venv + 缺 pip 时引导 + 装依赖 + 下载带校验和的外部工具）；手工等价步骤仍是 `python3 -m venv venv && venv/bin/python -m pip install -r requirements.txt`
 #   ⚠️ `smoke_root/.git/config` 是 `[3] pipeline` 必需的「泄露样本」，但 **git 拒绝跟踪任何
 #   名为 `.git` 的目录下的文件** —— 它**永远不在仓库里**（此前只存在于作者本机）。
 #   2026-09-28 续66 实测：用 `git archive HEAD` 出来的「干净树」跑 smoke 必然在 `[3]` 挂
