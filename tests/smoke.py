@@ -4467,6 +4467,29 @@ workflows:
           "主题块外 0 处颜色字面量（tr:hover td / input / pre / .badge / .st-* / .sev-* 均已走变量）"
           % _pairs6n)
 
+    # 续103：守卫必须也盯**函数式颜色**。旧守卫只查 #hex，`.lb-overlay{background:rgba(0,0,0,.82)}`
+    # 就是这么在「主题块外 0 处裸值」的绿灯下躺过去的 —— 绿灯不等于有判据。
+    _synth6n = (":root { --bg:#111111; --fg:#eeeeee; }\n"
+                ".a { background:rgba(0,0,0,.5); }\n"
+                ".b { color:rgb(1 2 3); }\n"
+                ".c { background:hsla(200, 50%, 50%, .4); }\n"
+                ".d { background:var(--bg); }\n"
+                ".e { background:transparent; }\n")
+    _stray6n = [x[2] for x in _cc6n.find_stray_literals(_synth6n)]
+    assert _stray6n == ["rgba(0,0,0,.5)", "rgb(1 2 3)", "hsla(200, 50%, 50%, .4)"], \
+        f"函数式颜色必须逐条报出、且 var()/transparent 不许误报：{_stray6n}"
+    _keep6n = _cc6n._COLOR_FN_RE
+    try:
+        _cc6n._COLOR_FN_RE = _cc6n.re.compile(r"(?!x)x")       # 打回「只查 hex」的旧守卫
+        assert _cc6n.find_stray_literals(_synth6n) == [], \
+            "退回旧守卫这三条仍然报 = 上面的断言没有区分度（§6.1）"
+    finally:
+        _cc6n._COLOR_FN_RE = _keep6n
+    assert all("rgb(" not in x[2] and "hsl" not in x[2] for x in _cc6n.find_stray_literals(_css6n)), \
+        "style.css 的函数式颜色必须收进主题块（灯箱 --lb-bg / --lb-shadow）"
+    print("[6n-附] 续103 守卫补洞 ok: 合成 CSS 里 rgba()/rgb()/hsla() 三条逐条报出、var() 与 "
+          "transparent 不误报；把守卫打回只查 hex 则三条全不报（§6.1 证伪）；真实 style.css 块外函数式颜色 0 处")
+
     # [6o] 续27 沙箱残留自愈清扫：只删「够旧的 smoke-* 目录」，别的都不许碰。
     #      用真目录 + 显式 mtime（不 sleep），四条边界一起验：旧的删、新的留、
     #      非 smoke- 前缀留、作为「当前沙箱」传入的即便很旧也留。
@@ -11758,6 +11781,26 @@ http:
         assert [_r12["name"] for _r12 in _p12] == list(_rb8d.SYSTEM_PACKAGES), _p12
     finally:
         _ur8d.urlopen, _sock8d.getaddrinfo, _sock8d.socket = _old12
+
+    # 续103：**扫描依赖必须进安装**。缺中文字体时浏览器不报错、照样出合法 PNG，
+    # 但图里每个汉字都是豆腐块 —— 截图取证与中文报告就此静默作废（本机实测 `fc-list :lang=zh` 命中 0，
+    # 而 `[7z]` 一直是绿的：它只验"有没有出图"）。所以它和 snap 版 chromium 是同一类坑。
+    assert "fonts-noto-cjk" in _rb8d.SYSTEM_PACKAGES, _rb8d.SYSTEM_PACKAGES
+    assert _rb8d._pkg_present("fonts-noto-cjk") == _rb8d.has_cjk_font(), "检测口径只许有一处"
+    assert _rb8d.pkg_cmd("fonts-noto-cjk", ["apt-get"]) == \
+        ["sudo apt-get install -y fonts-noto-cjk"], _rb8d.pkg_cmd("fonts-noto-cjk", ["apt-get"])
+    # 没有对等包的管理器**不猜命令**；但白名单不得波及其它包（golang 在 brew 上照旧要能生成）
+    assert _rb8d.pkg_cmd("fonts-noto-cjk", ["snap"]) == [] and _rb8d.pkg_cmd("fonts-noto-cjk", ["brew"]) == []
+    assert _rb8d.pkg_cmd("golang", ["brew"]) == ["brew install go"], "_PKG_MANAGERS 越界波及其它包"
+    # 缺包 + 本机生成不出命令 → 清单必须**点名**。只打印"有命令的那些行"就等于把缺口整行吞掉。
+    _b13 = _io8d.StringIO()
+    _rows13 = [{"name": "fonts-noto-cjk", "present": False, "argv": [], "cmd": ""},
+               {"name": "nmap", "present": True, "argv": ["x"], "cmd": "x"}]
+    with _ctx8d.redirect_stdout(_b13):
+        _rb8d.render(_rb8d.summarize(_rb8d.probe()), sys_plan=_rows13)
+    assert "未登记该包" in _b13.getvalue(), _b13.getvalue()[-300:]
+    print("[8d] 续103 附 ok: 中文字体进系统包层（探测零网络、未登记的管理器不猜命令、"
+          "缺口无命令时清单仍点名）；变异证伪：从 SYSTEM_PACKAGES 摘掉它 / 让 render 只打印有 argv 的行 都会红")
 
     print("[8d] 续96 迁移自举 ok: probe 零网络（urlopen/getaddrinfo/socket 三处打桩仍出全清单）｜"
           "自动层＝pip 依赖 + toolmgr.TOOLS，与 MANUAL 不相交｜nmap/fscan/dirmap 按平台只打印命令"

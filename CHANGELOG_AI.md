@@ -21,7 +21,31 @@
 
 
 
-## 2026-10-03 —— 续103：**Linux 侧凭据落地**（PAT 进 `keys.enc.yaml`，推送走现场解密的 helper）
+## 2026-10-03 —— 续104：**样式体检抓出三处**（窄屏整页横向溢出 / 颜色守卫的 rgba 盲区 / 缺中文字体静默作废截图）
+
+- 起因：三道既有门禁**全绿**（`check_contrast` 141 项 0 失败、`smoke` PASS、`browser_e2e` 39/39）之后，
+  另跑了一轮真浏览器**布局巡检**（3 档视口 × 17 页 + 四主题截图）。门禁只算"颜色配对 / 路由渲染 / 8 项交互"，
+  没人验过"窄屏会不会撑出横向滚动条""截图里的中文能不能看"。
+- ① 窄屏溢出：判据 `main > section` 漏掉 `.grid2 > section`（dashboard 两张表）→ 430px 下 `scrollWidth` 438 > 430。
+  改成 `main section`。先试的 `.grid2 > * { min-width:0 }` 在真浏览器里**被证伪为改与不改同形**
+  （滚动容器的自动最小尺寸本就算 0），已删 —— 不留死代码。回归 `browser_e2e [9]`（三页无溢出 + 反向证伪 71px）。
+- ② 守卫盲区：`find_stray_literals()` 只查 `#hex`，`rgba()` 全漏。现在同时查 `rgb()/rgba()/hsl()/hsla()/hwb()`，
+  灯箱两处收进 `:root`（`--lb-bg` / `--lb-shadow`）。回归 `smoke [6n-附]`：合成 CSS 三条逐条报、
+  `var()`/`transparent` 不误报，且把守卫打回只查 hex 时三条**必须全不报**（§6.1 证伪）。
+- ③ **扫描依赖必须进安装**（用户明确要求"迁移后安装要能完整运行"）：本机 `fc-list :lang=zh` **命中 0**，
+  而无头浏览器缺 CJK 时不报错、照样出合法 PNG，`[7z]` 一直是绿的。`SYSTEM_PACKAGES` 加入 `fonts-noto-cjk`
+  + 零网络的 `has_cjk_font()`；未登记包名的管理器不猜命令，但 `render()` **仍打印这一行**
+  （旧代码只打印"有 argv 的行"，缺口整行被吞 —— 这才是本条真正的缺陷形态）。本机已装（30 个 CJK 字体命中）。
+- 假警报登记（省得下轮再查）：全站"裂图 1"是灯箱占位 `<img id="lb-img">` 没有 `src`，藏在 `.lb-overlay` 里，不是缺陷。
+- 自己踩到的一次（记着）：`has_cjk_font()` 第一版用 `subprocess.run([fc-list, ":lang=zh"])`，被本仓源码红线
+  「`run_bootstrap.py` 每一处 `subprocess.run` 必须落在允许的四类意图内」当场抓红（`[8d]` 实测红过一次）。
+  没有为探测开豁免，改成**零子进程**的字体目录文件名扫描。
+- 端到端证据：装完字体后用**生产函数** `screenshot.capture()` 截中文页 → 46551 字节、汉字清晰可读
+  （修复前同一张图全是豆腐块，而 `[7z]` 一直是绿的 —— 这就是"只验有没有出图"的判据盲区）。
+- 复验：`check_contrast` 141/0；`browser_e2e` **44 条全绿**（新增 [9] 组）；`smoke` 全量 PASS。
+- 文档同步：AGENTS §7 三条新局限、`docs/docker.md` §容器里用截图必须同时装字体。
+
+**Linux 侧凭据落地**（PAT 进 `keys.enc.yaml`，推送走现场解密的 helper）
 
 - 改了什么：`docs/docker.md` §9 新增「④ 令牌交给本项目的口令加密」，记下本机实际采用的那条路与三条边界。**代码零改动**。
 - 为什么：§9 原有三条（SSH / `credential.helper store` / CI 一次性头）都要求**在磁盘上再存一份明文令牌**，

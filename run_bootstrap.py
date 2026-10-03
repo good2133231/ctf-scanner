@@ -91,7 +91,16 @@ _PKG_NAME = {
     "golang": {"apt-get": "golang", "dnf": "golang", "yum": "golang", "brew": "go",
                "pacman": "go", "zypper": "go", "apk": "go", "winget": "GoLang.Go",
                "choco": "golang", "scoop": "go"},
+    # 中文字体各发行版命名不一。**只有 apt 那条在本机实测过**（续103，Ubuntu 26.04），
+    # 其余按各家既定命名登记、未逐一验证 —— 装不上时 `install_system_packages` 会如实落成失败项，
+    # 不会假装成功。snap/brew/winget 没有对等包，所以另用 _PKG_MANAGERS 把它们挡在门外。
+    "fonts-noto-cjk": {"apt-get": "fonts-noto-cjk", "dnf": "google-noto-sans-cjk-fonts",
+                       "yum": "google-noto-sans-cjk-fonts", "pacman": "noto-fonts-cjk",
+                       "zypper": "noto-fonts-cjk", "apk": "font-noto-cjk"},
 }
+
+# 某些包**只有部分**包管理器有对等包：登记过的才允许生成命令，其余一律返回空（不猜命令）。
+_PKG_MANAGERS = {"fonts-noto-cjk": ("apt-get", "dnf", "yum", "pacman", "zypper", "apk")}
 
 
 def package_managers(os_label):
@@ -114,8 +123,16 @@ def _order(managers, pkg):
 
 
 def pkg_cmd(pkg, managers):
-    """用第一个可用包管理器生成安装命令；一个都没有时返回 `[]`（**不猜命令**）。"""
+    """用第一个可用包管理器生成安装命令；一个都没有时返回 `[]`（**不猜命令**）。
+
+    `_PKG_MANAGERS` 里登记过的包，只允许对登记过的管理器生成命令 —— 没对等包的管理器
+    （snap 上没有 `fonts-noto-cjk`、brew 上没有 `git` 之外的同名包那类）生成出来就是**装不上**
+    的命令，宁可返回空让清单去说明"该平台未登记包名"。
+    """
+    allow = _PKG_MANAGERS.get(pkg)
     for mgr in _order(list(managers), pkg):
+        if allow is not None and mgr not in allow:
+            continue
         tmpl = _MANAGER_INSTALL.get(mgr)
         if tmpl:
             return [tmpl.format(pkg=_PKG_NAME.get(pkg, {}).get(mgr, pkg))]
@@ -257,13 +274,53 @@ def requirement_names():
 # 所以这一层与 `toolmgr` 那条"官方 release + SHA256 我们自己验"是**两套信任模型**，
 # 也因此刻意**不含 fscan / dirmap**：那两个要 `git clone` + `go build` / pip 装依赖，
 # 等于替用户决定"跑一份第三方源码"，这种决定只能由人做（`toolmgr.MANUAL` 同一条理由）。
-SYSTEM_PACKAGES = ("nmap", "chromium", "golang", "git")
+#
+# `fonts-noto-cjk` 在这份名单里的理由（续103）：它不是"锦上添花"，而是**截图取证与中文报告
+# 的硬依赖**。无头浏览器缺中文字体时**不报错、照样产出合法 PNG**，只是图里每个汉字都成豆腐块
+# —— 实测本机 `fc-list :lang=zh` 命中 0，而 `[7z]` 一直是绿的（它只验"有没有出图、字节数对不对"）。
+# 这类"装了工具却不干活、且没有任何失败信号"的形态，与 snap 版 chromium 是同一类坑（见 AGENTS §7），
+# 所以必须进自举清单，让迁移后的机器一次装齐。
+SYSTEM_PACKAGES = ("nmap", "chromium", "golang", "git", "fonts-noto-cjk")
 
 # 每个包"装没装"的检测口径（只查 PATH / 文件系统，**零网络**）
 def snap_confined(path):
     """浏览器是否 snap 版（confinement 让它写不到项目路径与真实 /tmp，截图必然 0 产物）。"""
     norm = str(path or "").replace("\\\\", "/").lower()
     return "/snap/" in norm or norm.startswith("/mnt/@snap/")
+
+
+# 常见中文字体文件名里的片段（大小写不敏感，比对前去掉 `-` 与 `_`）。
+# 为什么按**文件名**扫而不是问 fontconfig：本文件的源码红线是"除 pip 引导外不许起任何子进程"
+# （回归 `tests/smoke.py [8d]` 逐处锁 `subprocess.run` 的意图），而 `fc-list` 就是第二个子进程 ——
+# 为一条探测开豁免不值当。代价是这判据是**文件名启发式**：字体装了却被 fontconfig 认不出，
+# 这里仍会报"有"。所以它只用于"自举清单点不点名"，不参与任何扫描决策。
+_CJK_FONT_HINTS = ("notosanscjk", "notoserifcjk", "sourcehansans", "sourcehanserif",
+                   "wenquanyi", "wqy", "uming", "ukai", "droidsansfallback",
+                   "msyh", "simhei", "simsun", "pingfang", "hiragino", "cjk")
+
+# fontconfig 的默认目录 + 用户级目录（不递归搜全盘，那既不礼貌也慢）
+_FONT_DIRS = ("/usr/share/fonts", "/usr/local/share/fonts",
+              "/opt/fonts", "~/.fonts", "~/.local/share/fonts")
+
+
+def has_cjk_font():
+    """系统里有没有能渲染中文的字体（**零网络、零子进程**：只看字体目录里有没有对得上的文件）。
+
+    Windows 直接算"有" —— 微软雅黑/宋体随系统自带，那边既没有这些目录也没有 fontconfig，
+    报缺只会制造噪声。
+    """
+    if os.name == "nt":
+        return True
+    for root in _FONT_DIRS:
+        base = os.path.expanduser(root)
+        if not os.path.isdir(base):
+            continue
+        for _dirpath, _dirs, files in os.walk(base):
+            for fn in files:
+                low = fn.lower().replace("-", "").replace("_", "")
+                if any(h in low for h in _CJK_FONT_HINTS):
+                    return True
+    return False
 
 
 def _pkg_present(pkg, settings=None):
@@ -273,6 +330,8 @@ def _pkg_present(pkg, settings=None):
         return bool(screenshot.browser_path(settings))
     if pkg == "golang":
         return bool(which("go"))
+    if pkg == "fonts-noto-cjk":
+        return has_cjk_font()
     return bool(which(pkg))
 
 
@@ -518,11 +577,17 @@ def render(s, failed=(), installed=(), install=False, sys_plan=()):
     if s["todo_manual"]:
         print("\n[i] 「需手工」那几类官方都没有\"可下载且带官方校验和的单二进制产物\"，"
               "所以框架不为它们发任何请求（逐条原因见 scanner/toolmgr.py 的 MANUAL）。")
-    miss_sys = [r for r in sys_plan if not r["present"] and r["argv"]]
+    miss_sys = [r for r in sys_plan if not r["present"]]
     if miss_sys:
         print("\n—— 系统包层（默认**只打印**，加 --with-system 才真装；需管理员权限）——")
         for r in miss_sys:
-            print(f"  {r['name']:<10} $ {r['cmd']}")
+            if r["argv"]:
+                print(f"  {r['name']:<16} $ {r['cmd']}")
+            else:
+                # 缺但**没有登记过可用的包管理器** —— 也必须点名。
+                # 只打印"有命令的那些行"会让"这台机器缺中文字体、而清单上一个字都不提"，
+                # 正是本仓反复出事的那类静默降级（续103）。
+                print(f"  {r['name']:<16} 本机包管理器未登记该包（不猜命令）—— 请手工安装")
         print("  （fscan / dirmap 不在这一层：要 clone + 编译第三方源码，那种决定只能人来下）")
     if not s["todo_auto"] and not s["todo_manual"]:
         print("\n[+] 环境齐了：可以直接 python cli/client.py --check 复核，再跑 tests/smoke.py。")

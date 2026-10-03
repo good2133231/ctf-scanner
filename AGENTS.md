@@ -720,6 +720,33 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
+- **缺中文字体＝截图取证与中文报告静默作废（续103 本机实测）**：无头浏览器缺 CJK 字体时**不报错**、
+  照样产出合法 PNG，只是图里每个汉字都是豆腐块；而 `[7z]` 只验"有没有出图、字节数对不对"，所以它
+  **一直是绿的**。这台 Ubuntu 上 `fc-list :lang=zh` 命中 **0**（只有 DejaVu / Liberation）才发现。
+  已按"扫描依赖必须进安装"处理：`run_bootstrap.SYSTEM_PACKAGES` 加入 `fonts-noto-cjk`，探测走
+  `has_cjk_font()`（**零网络、零子进程** —— 只扫字体目录里的文件名，见下一条），`--bootstrap` 会点名。三条边界：
+  ① 没有对等包的管理器（snap / brew / winget）**不生成命令**，但 `render()` **仍必须打印这一行**
+  （旧代码只打印"有 argv 的行"，缺口会被整行吞掉 —— 已改，回归 `[8d]`）；
+  ② **Windows 直接算"有"**（微软雅黑/宋体随系统自带，那边既无这些目录也无 fontconfig，报缺只是噪声）；
+  ③ **不写进 Dockerfile**：镜像口径是"零多余依赖"，容器里本就没有浏览器（见 `docs/docker.md`）。
+  ④ 判据是**文件名启发式**，不是 fontconfig 查询 —— 原因是本文件的源码红线「`run_bootstrap.py` 里每一处
+     `subprocess.run` 都必须落在允许的四类意图内」（回归 `[8d]`）。第一版确实写的 `fc-list`，**就是被这条红线
+     当场抓红的**；为一条只读探测开豁免不值当，改成扫目录。代价：字体装了却被 fontconfig 认不出时仍报"有"，
+     所以它只用于清单点名，不参与任何扫描决策。
+- **`main > section` 这类「直接子元素」判据在嵌套布局里会整条失效（续103）**：`style.css` 的
+  「宽表在面板内滚动」原本写 `main > section{overflow-x:auto}`，而 dashboard 的两张表在
+  `.grid2 > section` 里 —— 不是 `main` 的直接子元素，规则**一条都没作用到**，430px 下表格直接撑大文档
+  （实测 `documentElement.scrollWidth` 438 > 430；探针里那两张表的"最近滚动容器祖先"是 `NONE`）。
+  判据改成 `main section`（后代）。顺带记一条 CSS 事实：**`overflow-x != visible` 的元素，
+  `min-width:auto` 的自动最小尺寸算 0** —— 所以先加的 `.grid2 > * { min-width:0 }` 在真浏览器里
+  "改与不改同形"，已删（不留死代码）。回归 `tests/browser_e2e.py [9]`：三页 430px 无溢出 +
+  反向证伪（把判据退回 `main > section` 必须重新溢出 71px）。
+- **颜色守卫曾只认 `#hex`，函数式颜色是盲区（续103）**：`.lb-overlay{background:rgba(0,0,0,.82)}`
+  就在"主题块外 0 处裸值"的绿灯下躺了很久 —— **绿灯不等于有判据**。现在守卫同时认
+  `rgb()/rgba()/hsl()/hsla()/hwb()`，灯箱两处收进 `:root` 的 `--lb-bg` / `--lb-shadow`。
+  **仍刻意不认**具名色与 `transparent`（误报面太大，要收那一档得先想清判据）。
+  回归 `tests/smoke.py [6n-附]`（含"把守卫打回只查 hex，三条合成样本必须全不报"的证伪）。
+
 
 - **dirmap 现在只兼容"带 `-e` 的那一支"，上游 master 装不上也用不了（续102 在 Linux 实测）**：
   ① `lib/core/option.py` 里 `import imp` —— Python **3.12 起标准库已删除 `imp`**，于是上游 master

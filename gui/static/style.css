@@ -21,7 +21,10 @@
         --st-queue-fg:#a5b4fc; --st-queue-bg:#312e81;
         --sev-crit-fg:#fecaca; --sev-crit-bg:#7f1d1d; --sev-high-fg:#fed7aa; --sev-high-bg:#7c2d12;
         --sev-med-fg:#fde68a; --sev-med-bg:#78350f; --sev-low-fg:#bfdbfe; --sev-low-bg:#1e3a5f;
-        --sev-info-fg:#cbd5e1; --sev-info-bg:#26313f; }
+        --sev-info-fg:#cbd5e1; --sev-info-bg:#26313f;
+        /* 灯箱遮罩与投影：也是"自包含色块"（不依赖主题底色），四套主题同一份，故只声明一次。
+           续103 起它必须待在主题块内 —— 守卫开始盯 rgba()/hsl() 了，规则体里出现就是裸值。 */
+        --lb-bg:rgba(0,0,0,.82); --lb-shadow:rgba(0,0,0,.5); }
 html[data-theme="light"] { --bg:#f4f6f9; --panel:#ffffff; --line:#d8dee7; --text:#1f2733;
         --muted:#5f6a7b; --accent:#0b6b52; --side:#ffffff; --hover:#eef2f7; --soft:#e6f5f0;
         --side-active:#dff2ea; --topbar-bg:#eef1f6; --chip-bg:#eef2f7; --bar-track:#e2e8f0;
@@ -134,9 +137,18 @@ button.danger { background:var(--danger-bg); border-color:var(--danger-border); 
 .card b { display:block; font-size:26px; color:var(--accent); }
 .card span { color:var(--muted); font-size:12px; }
 .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
-.panel, main > section { background:var(--panel); border:1px solid var(--line);
+/* 刻意**不**加 `.grid2 > * { min-width:0 }`：续103 先加了它，随后在真浏览器里被证伪 ——
+   `overflow-x != visible` 的元素，`min-width:auto` 的自动最小尺寸**算 0**（CSS Sizing 定义），
+   所以只要装表的那个 section 自己可滚动（见下面 `.panel, main section`），轨道就不可能被
+   min-content 顶开。改与不改同形 = 死代码，删。窄屏回归钉在 `tests/browser_e2e.py` 第 [9] 组。 */
+.panel, main section { background:var(--panel); border:1px solid var(--line);
         border-radius:10px; padding:14px 16px; margin-bottom:16px;
-        overflow-x:auto; }  /* 宽表（站点/漏洞）在面板内滚动，避免把整页撑出横向滚动条 */
+        overflow-x:auto; }
+/* 这里的判据是 `main section`（后代）而**不是** `main > section`（直接子元素）—— 续103 实测：
+   dashboard 的「最近任务 / 最近潜在漏洞」两张表在 `.grid2` 里，section 不是 main 的直接子元素，
+   于是这条规则一个都没作用到，430px 下表格直接撑大文档（`documentElement.scrollWidth` 438 > 430，
+   探针里那两张表的「最近滚动容器祖先」是 NONE）。只给 `.grid2 > *` 加 min-width:0 也治不好：
+   轨道宽度是收住了，但表还是照旧往外画 —— 必须让**装表的那个容器**自己可滚动。 */
 table { width:100%; border-collapse:collapse; font-size:13px; }
 th, td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
 th { color:var(--muted); font-weight:600; font-size:12px; white-space:nowrap; }
@@ -211,10 +223,10 @@ details pre { margin:8px 0; }
 /* 截图列表头也居中，否则「图居中、标题偏左」看着没对齐 */
 th.col-shot, td.col-shot { text-align:center; }
 /* 灯箱：点击缩略图放大查看，点遮罩/关闭钮/Esc 关闭（不再新开标签页） */
-.lb-overlay { position:fixed; inset:0; background:rgba(0,0,0,.82); z-index:50;
+.lb-overlay { position:fixed; inset:0; background:var(--lb-bg); z-index:50;
               display:none; align-items:center; justify-content:center; padding:24px; }
 .lb-overlay.open { display:flex; }
-.lb-img { max-width:94vw; max-height:90vh; border-radius:6px; box-shadow:0 8px 40px rgba(0,0,0,.5); }
+.lb-img { max-width:94vw; max-height:90vh; border-radius:6px; box-shadow:0 8px 40px var(--lb-shadow); }
 .lb-close { position:fixed; top:18px; right:22px; width:38px; height:38px; font-size:22px;
             line-height:1; border-radius:50%; background:var(--ghost-bg); color:var(--text);
             border:1px solid var(--border); cursor:pointer; }

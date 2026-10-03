@@ -607,6 +607,31 @@ def _run_checks(page, base, rep, token, tid, port, tid_run):
                    f".textContent"),
            "99%")
 
+    # ---------- [9] 窄屏不得把整页撑出横向滚动条（续103：.grid2 > * { min-width:0 }） ----------
+    # 元凶是网格子项默认的 `min-width:auto`：`1fr` 只约束**最大**宽度，于是带
+    # `th{white-space:nowrap}` 的表用 min-content 把轨道顶开，整页出现横向滚动条，
+    # 而 `main > section` 的 `overflow-x:auto` 因为轨道本身变宽根本不生效。
+    for _p9 in ("/", "/settings", "/tasks/%d" % tid):
+        page.cdp.call("Emulation.setDeviceMetricsOverride",
+                      {"width": 430, "height": 900, "deviceScaleFactor": 1, "mobile": False})
+        page.navigate(base + _p9)
+        _ov9 = int(page.ev("document.documentElement.scrollWidth - window.innerWidth") or 0)
+        rep.check("[9] %s 在 430px 下无横向溢出" % _p9, _ov9 <= 0, "溢出 %dpx" % _ov9)
+    # 反向证伪（§6.1）：把承重的规则（section 自滚动）退回 `main > section` 那一档 ——
+    # dashboard 的 section 嵌在 .grid2 里，直接子选择器一条都匹配不上，必须重新溢出。
+    # 注：这里刻意**不**用"打回 min-width:auto"做证伪 —— 它在真浏览器里实测不改变结果
+    # （滚动容器的自动最小尺寸本就是 0），拿它当证据就是假证伪。
+    page.navigate(base + "/")
+    page.ev("(()=>{const s=document.createElement('style');s.id='m9';"
+            "s.textContent='main section{overflow-x:visible}';document.head.appendChild(s);})()")
+    _ov9b = int(page.ev("document.documentElement.scrollWidth - window.innerWidth") or 0)
+    rep.check("[9] 证伪：section 退回不自滚动必须重新溢出", _ov9b > 0, "实测 %dpx（应 >0）" % _ov9b)
+    page.ev("document.getElementById('m9').remove()")
+    _ov9c = int(page.ev("document.documentElement.scrollWidth - window.innerWidth") or 0)
+    rep.check("[9] 撤掉注入后回到不溢出", _ov9c <= 0, "实测 %dpx" % _ov9c)
+    page.cdp.call("Emulation.setDeviceMetricsOverride",
+                  {"width": 1280, "height": 900, "deviceScaleFactor": 1, "mobile": False})
+
 
 def run(settings=None):
     """跑完整套 E2E。返回 `(ok, note)`：跳过与失败都是 `ok=False`（**绝不假绿**）。"""

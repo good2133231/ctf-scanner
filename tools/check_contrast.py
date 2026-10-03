@@ -138,6 +138,12 @@ def parse_themes(css_text: str) -> Dict[str, Dict[str, str]]:
 _COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
 _ANY_BLOCK_RE = re.compile(r"(?P<sel>[^{}]*)\{(?P<body>[^{}]*)\}", re.S)
 _HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+# 续103 补的洞：函数式颜色（rgb()/rgba()/hsl()/hsla()/hwb()）**不是** hex，旧的守卫一条都不报 ——
+# `.lb-overlay{background:rgba(0,0,0,.82)}` 就是这么在"0 处裸值"的绿灯下躺在主题块外的。
+# 今天这两处无害（灯箱遮罩本就该深色），但守卫有洞，将来一处 `rgba(255,255,255,.9)` 就能
+# 重演续23 那类"浅色主题下看不见"。**刻意不含** `transparent`/`currentColor`/具名色 ——
+# 那批误报面太大（`background:transparent` 是正当写法），要收那一档得先想清判据。
+_COLOR_FN_RE = re.compile(r"\b(?:rgba?|hsla?|hwb)\s*\([^)]*\)", re.I)
 
 
 def _theme_block_spans(css_text: str) -> List[Tuple[int, int]]:
@@ -149,6 +155,7 @@ def find_stray_literals(css_text: str) -> List[Tuple[int, str, str]]:
     """找出主题变量块**之外**的颜色字面量，返回 ``[(行号, 选择器, 色值)]``。
 
     * 只扫规则体（``{...}`` 内部）—— 选择器里的 ``#id`` 天然不参与，避免误报。
+    * 颜色字面量算两类：``#hex`` 与函数式 ``rgb()/rgba()/hsl()/hsla()/hwb()``（续103）。
     * 主题块按**字符区间**排除（不做选择器字符串比对），对 BOM / 注释 / 换行都不敏感。
     * 注释先被等长替换成空白（保留换行），注释里的 hex 不算问题。
     """
@@ -165,6 +172,9 @@ def find_stray_literals(css_text: str) -> List[Tuple[int, str, str]]:
         body = block.group("body")
         body_start_line = stripped[:body_start].count("\n") + 1
         for hit in _HEX_RE.finditer(body):
+            line = body_start_line + body[: hit.start()].count("\n")
+            found.append((line, selector or "(顶层规则)", hit.group(0)))
+        for hit in _COLOR_FN_RE.finditer(body):
             line = body_start_line + body[: hit.start()].count("\n")
             found.append((line, selector or "(顶层规则)", hit.group(0)))
     return found
