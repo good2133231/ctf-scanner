@@ -234,6 +234,29 @@ git push                                          # 用户名填 good2133231，�
 **③ CI / 自动化**：用仓库 Secrets 里的 `GITHUB_TOKEN`（或自己的 PAT）当环境变量，
 走 `https://x-access-token:${TOKEN}@github.com/...` 的一次性认证头 —— 与 Windows 本机那套同理。
 
+
+**④ 令牌交给本项目的口令加密（2026-10-03 本机实际采用的一条）**：不单独再存一份明文令牌，
+而是并进扫描器自己的加密存储，推送时由 helper 现场解密：
+
+```bash
+umask 077 && printf 'github:\n  token: "<PAT>"\n' > config/keys.yaml    # 明文只活一两分钟
+.venv/bin/python run_keys.py --encrypt --shred      # 口令不落盘；自校验通过后才删明文
+git config --local credential.helper <仓库外目录>/git-cred-helper.py    # .git/config 只出现路径
+git push origin main                                # 有终端时会提示一次口令
+```
+
+helper 的三条边界，少一条就会出事：只响应 `get`（`store` / `erase` 沉默退出，否则 git 会把凭据
+回写成磁盘文件）；只对 `github.com` 出凭据；口令**只**来自 `CTFSCANNER_KEYS_PASSPHRASE`
+（进程环境 ≠ 磁盘）或 `/dev/tty`。
+
+> ⚠️ 这里的"有没有终端"**不能用 `sys.stdin.isatty()` 判**：git 把 helper 的 stdin 换成了管道，
+> 恒为假，于是 `keystore._prompt` 直接走「非交互」分支、永远不问口令。而裸 `getpass` 在无 tty 时
+> 会**退回读 stdin** —— 吃掉的正是不该动的 git 查询串，表现是**推送挂住不动**。正确判据是
+> **试开 `/dev/tty`**，打不开就干净失败、绝不回落到 stdin。两条实测口径：无口令时 helper
+> `RC=1` 且 stdout **0 字节**（有密文也绝不回落明文）；`push --dry-run` 认证通过而远端**不产生**分支。
+
+换 PAT 不用动 git 配置：重写 `config/keys.yaml` 再跑一次 `--encrypt --shred`（同一口令）。
+
 > 无论哪条：**不要把令牌写进 `.git/config`、更别提交进仓库**。
 > Windows 本机靠的是「凭据管理器缓存 + 一次性请求头」；Linux 上没有那个存储，
 > 所以换成 SSH 密钥或 PAT —— 思路完全一致：**凭据只放助手/环境变量里，绝不落进仓库文件**。

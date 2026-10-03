@@ -21,6 +21,21 @@
 
 
 
+## 2026-10-03 —— 续103：**Linux 侧凭据落地**（PAT 进 `keys.enc.yaml`，推送走现场解密的 helper）
+
+- 改了什么：`docs/docker.md` §9 新增「④ 令牌交给本项目的口令加密」，记下本机实际采用的那条路与三条边界。**代码零改动**。
+- 为什么：§9 原有三条（SSH / `credential.helper store` / CI 一次性头）都要求**在磁盘上再存一份明文令牌**，
+  与续98 已有的 `config/keys.enc.yaml` 重复，还撞 §2 红线「要落盘就放仓库外、用完即删」。
+  现在扫描器侧与推送侧共用**同一份密文**，本机磁盘上明文为零。
+- 实测：PAT 校验（scopes `repo, workflow`、该仓库 `push=true`）→ `fetch` 抓到**远端多 4 个文档 commit**
+  （此前那句「本地领先 11」是按**过期的 `origin/main`** 算的，真相是分叉 4/11）→ `rebase` 无冲突 →
+  推送 `3cbcde1..391a7bd`；`--encrypt --shred` 后明文 shred、`--verify` 通过、错口令被 AEAD 拒绝；
+  helper 两个失败方向都验（无口令 → `RC=1` + stdout 0 字节 + 不挂住；dry-run → 远端不建分支）。
+- 坑（写下来省得再踩）：git 把 credential helper 的 stdin 换成管道 → `isatty()` 恒假、
+  裸 `getpass` 退回读 stdin 并**吃掉 git 的查询串**（表现成"推送挂住"）→ 判据改成**试开 `/dev/tty`**。
+- 无需复跑回归的理由：`tests/smoke.py [8f]` 把 `keystore.ENC_KEYS_PATH` 打桩到临时目录（已核对源码），
+  新增的真实密文文件进不了断言口径。
+
 ## 2026-10-02 —— 续102：**补上 Linux 最后一块真实覆盖（fscan 自编译真跑）**，顺手抓出 dirmap 的**上游兼容缺陷**与**三处 smoke 假红**
 
 > 实施者：**Qoder-Agent**（远端 Linux；主机 Python 3.14.4 全量 smoke 在"装了 fscan + dirmap"的更难配置下 PASS）。
