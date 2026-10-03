@@ -11502,8 +11502,15 @@ http:
         _shot8d.browser_path = _bp_old8d
 
     assert _rb8d.pkg_cmd("nmap", []) == [], "没有可用包管理器时不得凭空造命令"
-    _fw8d = _rb8d._manual_row("fscan", "windows", [], {"fscan": "nope-8d"}, _res8d)["cmds"]
-    _fl8d = _rb8d._manual_row("fscan", "linux", [], {"fscan": "nope-8d"}, _res8d)["cmds"]
+    # ⚠️ 这一组断言**不许吃"本机装没装"**（§6.2 那一族，本轮又踩一次：本机真装了
+    #     dirmap 之后，"配置缺省 → 回落 tools/dirmap/" 那条立刻变红，因为 found 命中、
+    #     指引整条不打印）。所以：dirmap 的 `found` 走注入的 `resolve`，这里给一个
+    #     **永不存在的根**；fscan 的 `found` 走真 `which()`（不可注入），配置里就用
+    #     `nope-8d/fscan.exe` 这种**两端都不可能存在**的路径 —— 既验到"落点跟配置"，
+    #     又不会因为用户照文档装完工具而红。
+    _nores8d = lambda _p: Path(str(_TMPDIR) + "/nope-8d-root") / str(_p)
+    _fw8d = _rb8d._manual_row("fscan", "windows", [], {"fscan": "nope-8d"}, _nores8d)["cmds"]
+    _fl8d = _rb8d._manual_row("fscan", "linux", [], {"fscan": "nope-8d"}, _nores8d)["cmds"]
     assert any(c.endswith("-o tools/scanner/fscan.exe") for c in _fw8d), _fw8d
     assert any(c.endswith("-o tools/scanner/fscan") for c in _fl8d), _fl8d
     assert any("v2.2.1" in c for c in _fl8d), "fscan 必须钉本仓既定 tag，不漂到 master"
@@ -11511,31 +11518,32 @@ http:
     #     配置是 `tools/fscan/` —— 照自举输出装完，`--check` 仍然说缺）。产物名仍按平台取：
     #     配置里那半截 `.exe` 是"本机是 Windows"的事实，不能带到 Linux 的指引里。
     _fwp8d = _rb8d._manual_row("fscan", "windows", [],
-                               {"fscan": "tools\\fscan\\fscan.exe"}, _res8d)["cmds"]
+                               {"fscan": "nope-8d/fscan.exe"}, _nores8d)["cmds"]
     _flp8d = _rb8d._manual_row("fscan", "linux", [],
-                               {"fscan": "tools\\fscan\\fscan.exe"}, _res8d)["cmds"]
-    assert any(c.endswith("-o tools/fscan/fscan.exe") for c in _fwp8d), _fwp8d
-    assert any(c.endswith("-o tools/fscan/fscan") for c in _flp8d), _flp8d
-    _nm8d = _rb8d._manual_row("nmap", "macOS", ["brew"], {"nmap": "nope-8d"}, _res8d)["cmds"]
+                               {"fscan": "nope-8d/fscan.exe"}, _nores8d)["cmds"]
+    assert any(c.endswith("-o nope-8d/fscan.exe") for c in _fwp8d), _fwp8d
+    assert any(c.endswith("-o nope-8d/fscan") for c in _flp8d), _flp8d
+    _nm8d = _rb8d._manual_row("nmap", "macOS", ["brew"], {"nmap": "nope-8d"}, _nores8d)["cmds"]
     assert "brew install nmap" in _nm8d, _nm8d
-    _nn8d = _rb8d._manual_row("nmap", "windows", [], {"nmap": "nope-8d"}, _res8d)["cmds"]
+    _nn8d = _rb8d._manual_row("nmap", "windows", [], {"nmap": "nope-8d"}, _nores8d)["cmds"]
     assert any("nmap.org/dist" in c for c in _nn8d), "包管理器不可用时要指到官方发布页（不猜包名）"
     _dm8d = _rb8d._manual_row("dirmap", "linux", [],
-                              {"dirmap": {"script": "nope-8d/dirmap.py"}}, _res8d)["cmds"]
+                              {"dirmap": {"script": "nope-8d/dirmap.py"}}, _nores8d)["cmds"]
     assert any("H4ckForJob/dirmap nope-8d" in c for c in _dm8d), \
         f"dirmap 克隆落点必须跟着配置的 script 走：{_dm8d}"
     assert not any("dirmap-master" in c for c in _dm8d), \
         "不得写死第三方项目的历史目录名（配置一改就指错地方）"
-    assert any("nope-8d/requirements.txt" in c for c in _dm8d), "依赖安装也得跟着同一个落点"
+    assert any("nope-8d/requirement.txt" in c for c in _dm8d), \
+        "依赖安装也得跟着同一个落点，且必须用它真实的清单名 requirement.txt（少一个 s）"
     assert any("tools.dirmap" in c for c in _dm8d), "dirmap 是两段式配置，指引里必须写明"
-    _dmd8d = _rb8d._manual_row("dirmap", "linux", [], {}, _res8d)["cmds"]
+    _dmd8d = _rb8d._manual_row("dirmap", "linux", [], {}, _nores8d)["cmds"]
     assert any("H4ckForJob/dirmap tools/dirmap" in c for c in _dmd8d), \
         f"配置缺省时必须回落到本仓既定 tools/dirmap/：{_dmd8d}"
     # ⑤c 输出只许相对路径（§0 硬规矩 3）：就算用户在配置里写了**项目内绝对路径**，
     #     也不能把项目根印进指引（Windows 上 `tools/dirmap/` 是目录联接，最容易踩）。
     _abs8d = _rb8d._manual_row("dirmap", "linux", [],
                                {"dirmap": {"script": str(_rb8d.ROOT / "tools/dirmap/dirmap.py")}},
-                               _res8d)["cmds"]
+                               _nores8d)["cmds"]
     assert not leaked_root(" ".join(_abs8d)), f"项目内绝对路径被原样印出：{_abs8d}"
     assert any("H4ckForJob/dirmap tools/dirmap" in c for c in _abs8d), _abs8d
 
@@ -11570,8 +11578,24 @@ http:
             _rc = _rb8d.main(_argv)
         return _rc, _b.getvalue()
 
-    _fn8d = _rb8d.install_auto
+    _fn8d, _pb8d = _rb8d.install_auto, _rb8d.probe
+    # ⚠️ 这一组同样**不许吃本机装了什么**（续101 在这条上真红过一次：本机把 fscan / dirmap
+    #     装上之后，"失败时手工栏不能被吞掉"必然红 —— 三项都就绪时那一栏本就不该打印。
+    #     "用户照 README 装完工具"就把回归门禁打红，是 §6.2 那一族的第五次，所以这里连
+    #     probe() 一起打桩，让退出码与两栏标题的语义只由桩决定。）
+    def _probe8d_stub(_settings=None):
+        _r = _rb8d._row
+        return [_r("__platform__", "runtime", False, "ok", "linux/amd64｜包管理器：apt-get"),
+                _r("python", "runtime", False, "ok", "3.11.0"),
+                _r("pip", "runtime", False, "ok", "可用"),
+                _r("venv", "runtime", False, "ok", "在虚拟环境里运行"),
+                _r("py:flask", "runtime", True, "ok", "已安装"),
+                _r("httpx", "auto", True, "missing", "未装（本平台产物：httpx）",
+                   ["python cli/client.py --update-tools --tool httpx"]),
+                _r("fscan", "manual", False, "missing", "官方不发二进制，需 Go 自编译",
+                   ["go build -ldflags=\"-s -w\" -trimpath -o tools/fscan/fscan"])]
     try:
+        _rb8d.probe = _probe8d_stub
         _rb8d.install_auto = lambda *_a, **_k: ([{"tool": "httpx", "path": "tools/scanner/httpx"}], [])
         _rc8d, _out8d = _cap8d([])
         assert _rc8d == 0 and "可自动补齐" in _out8d and "自动层没补上" not in _out8d, \
@@ -11585,8 +11609,12 @@ http:
         # 这台机器，拿它当哨兵就是 [7p] 那条旧断言的同类毛病（值当哨兵 ≠ 口径）。
         assert "自动层失败 1" in _out8d2 and "stub" in _out8d2, _out8d2
         assert "需要手工安装" in _out8d2, "失败时手工栏不能被吞掉"
+        # 红向证伪：桩里把唯一的手工缺项也标成就绪，那一栏就该整段消失 ——
+        # 证明上面那条不是"无论如何都为真"的装饰断言。
+        _rb8d.probe = lambda _s=None: [r for r in _probe8d_stub() if r["name"] != "fscan"]
+        assert "需要手工安装" not in _cap8d([])[1], "手工项全就绪时不该再打印那一栏"
     finally:
-        _rb8d.install_auto = _fn8d
+        _rb8d.install_auto, _rb8d.probe = _fn8d, _pb8d
     # ⑩ 跨 Python 版本的正则红线（本轮真踩的坑）：`(?i)` 这类**内联全局标志写在非串首位置**，
     #    3.9（CI/Dockerfile 的口径）只是 DeprecationWarning，3.14 起直接抛 PatternError；而
     #    `utils.pool_run()` 把异常吞成 `None`，于是 probe 静默报「存活站点 0 个」——兼容缺陷就是这样
@@ -11610,6 +11638,13 @@ http:
                       | set((ROOT / "tests").rglob("*.py"))
                       | {ROOT / "run_bootstrap.py", ROOT / "run_gui.py", ROOT / "run_node.py",
                          ROOT / "run_devflow.py"})
+    # 第三方落点不参与本仓红线：`tools/dirmap/` 是 GPL 上游源码（里面还有 **Python 2** 的
+    # example，`ast.parse` 直接 SyntaxError），`tools/fscan/` 是自编译产物目录 —— 两处都由
+    # .gitignore 排除、随机器而变。装了 dirmap 的机器上"全树扫正则"必然崩在第三方文件上
+    # （续101 在 Linux 实测到），口径与 [5b] 的 `_SKIP_DIRS` 一致。
+    _files10 = [_f for _f in _files10
+                if not any(_k in _f.relative_to(ROOT).as_posix()
+                           for _k in ("tools/dirmap/", "tools/fscan/"))]
     assert _scan10(_files10) == [], \
         f"内联全局标志写在非串首位置（3.11 弃用 / 3.14 起抛错）：{_scan10(_files10)}"
     # 变异证伪：把标志挪到 `|` 之后（本轮修掉的那三条就是这个写法），扫描必须报出来

@@ -721,6 +721,31 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
 
+- **dirmap 现在只兼容"带 `-e` 的那一支"，上游 master 装不上也用不了（续102 在 Linux 实测）**：
+  ① `lib/core/option.py` 里 `import imp` —— Python **3.12 起标准库已删除 `imp`**，于是上游 master
+  在 3.12+ 解释器上连启动都做不到（本机 3.14 直接 `ModuleNotFoundError`）；② 它的
+  `requirement.txt`（**文件名少一个 s**）钉 `gevent==20.12.1` / `lxml==4.5.0`，3.12+ 编不过，
+  放宽版本能装上但救不了 ①；③ 最要命的是**上游 master 删掉了 `-e` 参数**（v1.1 只认
+  `-t` / `-i` / `-iF` / `-lcf` / `--debug`，字典与后缀改由 `dirmap.conf` 配），而
+  `scanner/stages/dirscan.py::_run_dirmap` 固定按技术栈传 `-e php|jsp|asp|d|big|all`。
+  装了新版的表现：dirmap 退出码 2（argparse "unrecognized arguments"）→ 适配器返回空 →
+  `run()` 记一条 `dirmap 未解析到结果，回退内置扫描` 的 warning 再走内置字典 ——
+  **有日志、不静默**（这条本轮用真 dirmap 复核过）。用户本机那份 `dirmap-master` 快照认 `-e`，
+  所以 Windows 上一直是真的在调用它。要收编上游 master，得让适配器先探参数集、再改写
+  `dirmap.conf`（**独立一轮，未做**；口径见 `tools/scanner/README.md`「手工安装」）。
+- **任何"全树扫描"都必须排除第三方落点 `tools/dirmap/` 与 `tools/fscan/`（续102）**：那两处由
+  `.gitignore` 排除、内容随机器而变，且 dirmap 里**有 Python 2 的上游 example**
+  （`thirdlib/IPy/example/confbuilder.py` 的 `print "..."`）—— 拿 `ast.parse` / `compileall`
+  去扫全仓就会**崩在第三方文件上**（本轮 `[8d] ⑩` 正是在装了 dirmap 的机器上红的第一次）。
+  口径与 `[5b]` 的 `_SKIP_DIRS` 一致；`.dockerignore` 也排掉了这两处，所以容器里一直是绿的
+  （**"容器绿、本机红"就是这么来的**）。
+- **这台远端 Linux 的解释器事实（续102，写下来省得再查）**：`/usr/bin/python` →
+  `/usr/local/python3/bin/python3.10`（3.10.9，且 gevent / lxml / progressbar 已装），
+  `/usr/bin/python3` → 3.14；仓库依赖装在 `.venv`（3.14）。所以 `dirmap` 反倒能在 3.10 下启动，
+  而框架自己跑在 3.14 上 —— `pick_python("python")` 会选中 3.10 那个。fscan 则用 apt 的
+  Go 1.26 自编译成功（27.8 MB，产物名 `fscan` 无 `.exe`，靠 `which()` 的后缀容错命中配置里写的
+  `tools/fscan/fscan.exe`）。
+
 - **`utils.which()` 的返回值形状**随进程 CWD 变**（续101，会咬到"输出只出现相对路径"这条红线）**：
   配置写 `tools/scanner/httpx` 这类相对值时，它先 `shutil.which(相对值)`（按**进程 CWD** 找，命中就
   原样返回那个相对串），找不到才折算项目根走 `_probe(str(_BASE_DIR / alt))` —— 而后者返回的是

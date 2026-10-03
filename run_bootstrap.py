@@ -468,10 +468,15 @@ def _manual_row(name, os_label, mgrs, tools_cfg, resolve):
                       or "tools/dirmap/dirmap.py")
         # 克隆落点同样取**配置里写的路径**（本项目既定 `tools/dirmap/`），不另写一套。
         target = Path(script).parent.as_posix() or "tools/dirmap"
+        # ⚠️ 它的清单文件名是 `requirement.txt`（**少一个 s**），按 pip 惯例猜 `requirements.txt`
+        #    会报"No such file"，看起来像"源码不完整"。
         cmds = [f"git clone https://github.com/H4ckForJob/dirmap {target}",
-                f"python -m pip install -r {target}/requirements.txt",
+                f"python -m pip install -r {target}/requirement.txt",
                 "再把 config/settings.yaml 的 tools.dirmap 两段填好（python / script）"
-                "—— GUI「策略配置」页改不了 tools 段"]
+                "—— GUI「策略配置」页改不了 tools 段",
+                "注：它 `import imp`（Python 3.12 起标准库已删）→ 需要 ≤3.11 的解释器并把 "
+                "tools.dirmap.python 指过去；另外上游 master 已删掉本框架要传的 `-e` 参数，"
+                "逐条实测坑见 tools/scanner/README.md「手工安装」"]
         found = _rel(resolve(script)) if resolve(script).exists() else ""
         why = toolmgr.MANUAL["dirmap"]
     return _row(name, "manual", False, "ok" if found else "missing",

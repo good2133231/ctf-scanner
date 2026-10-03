@@ -99,8 +99,19 @@ go build -ldflags="-s -w" -trimpath -o fscan
 
 ```bash
 git clone https://github.com/H4ckForJob/dirmap tools/dirmap
-cd tools/dirmap && python -m pip install -r requirements.txt
+cd tools/dirmap && python -m pip install -r requirement.txt
 ```
+
+> ⚠️ 三条**实测**坑（2026-10-02 在 Linux 上装上游 master 撞出来的，不是猜的）：
+> ① 清单文件名是 `requirement.txt`（**少一个 s**），按 pip 惯例猜 `requirements.txt` 会报 `No such file`；
+> ② 它 `import imp`（Python 3.12 起标准库已删除）→ **上游 master 在 3.12+ 的解释器上根本起不来**，
+>    而 `requirement.txt` 钉的 2020 年 `gevent` / `lxml` 也编不过（放宽版本能装上，但救不了 `imp`）；
+>    需要一个 ≤3.11 的解释器，并把下面的 `tools.dirmap.python` 指过去。
+> ③ 框架调用时固定传 `-e <技术栈>`（`php` / `jsp` / `asp` / `d` / `big` / `all`），而**上游 master
+>    已经删掉了 `-e`**（v1.1 只认 `-t` / `-i` / `-iF` / `-lcf` / `--debug`，字典与后缀改由
+>    `dirmap.conf` 配）。装了新版的表现是：dirmap 退出码 2 → 框架日志写明原因 → **回退内置扫描**
+>    （不静默，但"装了却没用上"）。带 `-e` 的旧版（本仓适配审查所用的 `dirmap-master` 快照）才是
+>    框架现在兼容的那一支。
 
 `tools.dirmap` 是**两段式**配置（不是单个路径）：
 

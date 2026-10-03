@@ -21,6 +21,62 @@
 
 
 
+## 2026-10-02 —— 续102：**补上 Linux 最后一块真实覆盖（fscan 自编译真跑）**，顺手抓出 dirmap 的**上游兼容缺陷**与**三处 smoke 假红**
+
+> 实施者：**Qoder-Agent**（远端 Linux；主机 Python 3.14.4 全量 smoke 在"装了 fscan + dirmap"的更难配置下 PASS）。
+
+- **为什么做**：`TODO.md` 里 P2-3 的残留就剩一句"fscan 自编译与 dirmap 未覆盖"（框架刻意只打印
+  命令、不代跑）。本轮按用户"依次推"的授权，把自举打印出来的命令**真的**执行了一遍 —— 目的不是
+  装工具，而是让"照着自举输出装完"这条路在 Linux 上走到黑，看它会不会露出东西。结果露了四件。
+- **fscan（通过，且是第一次在 Linux 上真跑）**：`sudo apt-get install -y golang`（Go 1.26.0）→
+  clone `shadow1ng/fscan` tag `v2.2.1` → `go build -ldflags="-s -w" -trimpath -o tools/fscan/fscan`
+  （27.8 MB）。端到端复核：`--check` 报 `fscan OK（tools/fscan/fscan；调用带 -np -nobr -nopoc）`
+  （**相对路径**，靠 `which()` 的后缀容错命中配置里写的 `tools/fscan/fscan.exe`）；
+  `run_devflow.py` 的 `engine-fscan` 向量**首次为 OK**（35 向量 19 点到 / 0 MISS / 0 FAIL）；
+  阶段日志 `[portscan] 内置 TOP 端口扫描：fscan`，解析出 4 个开放端口 → **`_parse_fscan()` 与
+  Linux 上的 2.2.1 输出形态一致**（`[5e-0]` 那 8 组断言不是纸上功夫）；`result.txt` 落在
+  `logs/<任务>/` 里、**仓库根干净**（续45 的 workdir 修法在 Linux 同样成立）。
+- **dirmap（缺陷，已登记 `AGENTS.md` §7，未修）**：三层，全部实测：
+  ① 清单文件名是 `requirement.txt`（**少一个 s**），自举与 README 都按 pip 惯例写成了
+     `requirements.txt` → 照抄会 `No such file`；
+  ② 上游 master `lib/core/option.py` 里 `import imp`，而 **Python 3.12 起 `imp` 已从标准库删除**
+     → 本机 3.14 上连启动都做不到（`requirement.txt` 钉的 2020 年 gevent / lxml 也编不过，
+     放宽版本能装上但救不了 `imp`）；换 `/usr/bin/python`（这台机器上是 3.10.9，gevent/lxml 已装）
+     它就能跑；
+  ③ **最要紧**：上游 master 删掉了 `-e` 参数（v1.1 只认 `-t` / `-i` / `-iF` / `-lcf` / `--debug`，
+     字典与后缀改由 `dirmap.conf` 选），而 `stages/dirscan.py::_run_dirmap` 固定按技术栈传
+     `-e php|jsp|asp|d|big|all` → 装新版机器的真实表现是 **dirmap 退出码 2 → 适配器返回空 →
+     `run()` 记 warning「dirmap 未解析到结果，回退内置扫描」**。这条本轮用**真 dirmap** 复核过：
+     不静默、有原因、内置字典照扫（用 `-i …` 不带 `-e` 手测时它正常加载了 5715 条字典跑完）。
+     用户本机那份 `dirmap-master` 快照认 `-e`，所以 Windows 一直是"真在调用 dirmap"，这个缺口
+     **只在换上游新版时才出现** —— 属于待决策的独立一轮（适配器先探参数集，新版改写临时
+     `dirmap.conf`；本轮不做，理由：需要同时定"我们到底跟哪个版本"）。
+- **三处 smoke 假红（全在"装了工具的机器"上必红，也就是用户那台 Windows）**：
+  ① `[8d] ⑤` "配置缺省回落 `tools/dirmap/`" —— 判据吃的是**本机装没装**：dirmap 一装上，
+     `found` 命中、指引整段不打印，断言拿到 `[]` 就红。修法：`_manual_row` 的 `resolve` 本就是
+     注入点，给它一个**永不存在的根**（`_nores8d`）。
+  ② `[8d] ⑤b` fscan 落点用例同理 —— 它调的是真 `which()`（不可注入），所以配置值换成
+     `nope-8d/fscan.exe` 这种**两端都不可能存在**的路径；照样验到"目录跟配置、产物名按平台"。
+  ③ `[8d] ⑨` "失败时手工栏不能被吞掉" —— 三项手工都装上时那一栏**本就不该出现**，断言必红。
+     修法：把 `probe()` 一起打桩（桩里留一个手工缺项），并补一条**红向证伪**：桩里把唯一缺项
+     标成就绪，那一栏必须消失 —— 证明它不是"无论如何都为真"的装饰断言。
+  ④ `[8d] ⑩` 全树 `ast.parse` 扫内联正则标志，**崩在第三方源码上**：
+     `tools/dirmap/thirdlib/IPy/example/confbuilder.py` 是 **Python 2**（`print "..."`）。
+     修法：排除 `tools/dirmap/` 与 `tools/fscan/`（口径同 `[5b]` 的 `_SKIP_DIRS`）。
+     为什么容器里一直没红：`.dockerignore` 本就排掉了这两处 —— "**容器绿、本机红**"就是这么来的。
+- **顺带**：`--check` 的六行外部工具路径统一过 `rel_display`（`which()` 在 CWD≠项目根时返回的是
+  项目内**绝对**路径，会把本机目录结构印到终端上）；`check_tools()` 里 dirmap 的缺省值与
+  `scanner/config.py` 的 DEFAULTS 对齐（原来写着历史目录名 `tools/scanner/dirmap-master/`）。
+- **验证**：
+  ```text
+  ./.venv/bin/python tests/smoke.py     # 主机 3.14.4，且 fscan + dirmap 都已安装 → SMOKE PASS
+  ./.venv/bin/python run_devflow.py     # 13 阶段 11 真跑 / 2 跳过 / 0 FAIL；engine-fscan 首次 OK
+  ./.venv/bin/python cli/client.py --check   # 从 /tmp 启动：六行全是相对路径，fscan/dirmap 均 OK
+  # 3.9 容器（B–E）复跑：见下一行（跑完回填）
+  ```
+- **登记未修**：dirmap 上游 `-e` 缺失的适配（上面 ③）；`utils.pool_run()` 吞异常（续96 已登记）。
+
+
 ## 2026-10-02 —— 续101：**指引跟着配置走**（自举 / `--check` / README 三处第三方工具落点纠偏）+ 堵掉一起**随 CWD 漂的假红**
 
 > 实施者：**Qoder-Agent**（远端 Linux；主机 Python 3.14.4 与 `python:3.9-slim` 容器双口径复验）。
