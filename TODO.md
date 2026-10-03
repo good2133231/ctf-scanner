@@ -29,7 +29,9 @@
       puredns **按红线不装**（官方 release 无 checksums，自动层只收"产物+官方校验和"成对的）；
       PDF 导出**不是需求**（用户 2026-10-02 明确：要的是截图，`[7x]/[7z]/browser_e2e` 已在 Linux 真跑）；
       自检截图向量恒 N-A；osint 黑 ico 与「单 IP 域名数 30」两阈值未用真实数据校准。
-      Linux 上最后一块真实覆盖空白＝fscan 自编译 + dirmap（框架刻意只打印命令、不代跑）。
+      Linux 侧覆盖已补到只剩一项判断：fscan v2.2.1 已用 Go 1.26 自编译并端到端真跑（续102，
+      `engine-fscan` 向量首次 OK、`_parse_fscan` 在 Linux 真实输出上成立）；dirmap 的真实缺口
+      不是"没装"而是**上游 master 删掉了框架要传的 `-e`**（详见 AGENTS §7），要不要收编由用户定。
 
 **③ 刻意不做**（已决策，别再当待办）
 
