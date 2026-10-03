@@ -2013,6 +2013,24 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
      utils.pool_run() 吞异常改成可见 / GUI 加自举与解锁入口 / Windows 侧复跑续96–101。
 
 
+2026-10-03 · 续103~105（远端 Linux，Qoder-Agent）
+  ① 续103 凭据落地：PAT 校验（scopes repo,workflow / 该仓库 push=true）→ fetch 抓到**远端多 4 个文档
+     commit**（此前"领先 11"是按过期 origin/main 算的，真相是分叉 4/11）→ rebase 无冲突 → 推送；
+     PAT 并进 `config/keys.enc.yaml`（`run_keys.py --encrypt --shred`，明文 shred、错口令被 AEAD 拒），
+     推送走**仓库外** credential helper 现场解密密文（只响应 get、只对 github.com、口令只来自
+     进程环境或 /dev/tty；`.git/config` 里 `ghp_` 出现 0 次）。写进 `docs/docker.md` §9 ④。
+     坑：git 把 helper 的 stdin 换成管道 → `isatty()` 恒假、裸 getpass 会退回读 stdin 吃掉 git 的
+     查询串（表现成"推送挂住"）→ 判据改成试开 /dev/tty。
+  ② 续104 样式体检：三道门禁全绿之后另跑真浏览器布局巡检（3 档视口 × 17 页 + 四主题截图），抓出三处 ——
+     `main > section` 漏掉 `.grid2 > section`（430px 整页横向溢出）、颜色守卫只认 #hex（rgba 盲区）、
+     **本机 0 个中文字体**（缺 CJK 时浏览器不报错照样出合法 PNG，`[7z]` 一直是绿的）。
+     用户新规矩「扫描依赖都要同步进安装」→ `fonts-noto-cjk` 进 `SYSTEM_PACKAGES` + 零子进程探测 +
+     `render()` 缺口无命令也必须点名。先加的 `.grid2 > * {min-width:0}` 实测"改与不改同形"已删。
+  ③ 续105：dirmap 的 `-e` 收口（不收编上游，改探参数定义 + 写准回退原因，见 AGENTS §7 / TODO ③）。
+  ④ 主机侧：docker 构建缓存 20GB → 328MB（回收 19.67GB，镜像与 6 个容器一个没动）。
+  ⑤ 仍挂着：Windows 侧复跑 续96–105 / PAT 建议轮换（在对话里明文出现过，且是覆盖全部仓库的经典 PAT）/
+     config/keys.yaml 的 fofa·shodan·quake 三项仍未配（github.token 已配）。
+
 2026-10-02 · 续102（远端 Linux，Qoder-Agent）
   ① P2-3 最后一块真实覆盖补上：apt 装 Go 1.26 → fscan v2.2.1 自编译（27.8 MB，产物名 fscan）→
      `--check` 认出、devflow `engine-fscan` 首次 OK、解析出 4 个开放端口（证明 [5e-0] 的解析断言

@@ -758,8 +758,15 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   装了新版的表现：dirmap 退出码 2（argparse "unrecognized arguments"）→ 适配器返回空 →
   `run()` 记一条 `dirmap 未解析到结果，回退内置扫描` 的 warning 再走内置字典 ——
   **有日志、不静默**（这条本轮用真 dirmap 复核过）。用户本机那份 `dirmap-master` 快照认 `-e`，
-  所以 Windows 上一直是真的在调用它。要收编上游 master，得让适配器先探参数集、再改写
-  `dirmap.conf`（**独立一轮，未做**；口径见 `tools/scanner/README.md`「手工安装」）。
+  所以 Windows 上一直是真的在调用它。**续105 已决策：不收编上游 master**（改写 `dirmap.conf`
+  等于替一个我们刻意不依赖的外部工具维护第二套配置通道，而内置分层字典本来就是主力），
+  改为把表现修准：`DirscanStage._dirmap_accepts_lang_arg()` 读**它自己的参数定义源码**
+  （`rglob("*.py")` 里找 `add_argument('-e'`），不支持就**一个子进程都不起**，日志写
+  「装的 dirmap 不支持 -e …→ 直接用内置字典」而不是原来那句归因错的「未解析到结果」。
+  两条判据边界（都是实测）：① **不用 `-h` 探** —— 上游那份 `-h` 只打印 banner、连 argparse
+  帮助都没有，拿帮助当判据会把真认 `-e` 的快照误杀成不支持（= 静默关掉外部工具，比原来更糟）；
+  ② 读不到任何 `add_argument` 时**算支持**，探测只在确实证明没有 `-e` 时才降级。
+  回归 `tests/smoke.py [5p-附]`（四种样本 + 双向：不支持时 `_run_dirmap` 零调用、支持时照旧被点到）。
 - **任何"全树扫描"都必须排除第三方落点 `tools/dirmap/` 与 `tools/fscan/`（续102）**：那两处由
   `.gitignore` 排除、内容随机器而变，且 dirmap 里**有 Python 2 的上游 example**
   （`thirdlib/IPy/example/confbuilder.py` 的 `print "..."`）—— 拿 `ast.parse` / `compileall`

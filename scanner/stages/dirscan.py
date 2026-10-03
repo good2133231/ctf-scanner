@@ -269,13 +269,20 @@ class DirscanStage(Stage):
                             f"{int(cfg.get('quick_max_paths', 150) or 0)} 条/站）")
             entries = self._builtin_scan(sites, cfg, limits, shallow=True)
         elif script.exists() and not ctx.options.get("offline"):
-            ctx.logger.info(f"[dirscan] dirmap 处理 {len(sites)} 个站点 …")
-            entries = self._run_dirmap(script, groups, tool)
-            used_dirmap = bool(entries)
-            if used_dirmap:
-                ctx.logger.info(f"[dirscan] dirmap 输出 {len(entries)} 条")
+            if not self._dirmap_accepts_lang_arg(script):
+                # 原因必须写准：不是"没解析到结果"，是**这份 dirmap 压根没有 -e** ——
+                # 那就一个子进程都不该起（旧表现：每个技术栈分组都 rc=2 白跑一次，
+                # 最后只留一句归因错误的「dirmap 未解析到结果」）。
+                ctx.logger.warning("[dirscan] 装的 dirmap 不支持 -e（上游 master 已删该参数，"
+                                   "本框架适配的是认 -e 的那支快照）→ 本轮不逐组白跑，直接用内置字典")
             else:
-                ctx.logger.warning("[dirscan] dirmap 未解析到结果，回退内置扫描")
+                ctx.logger.info(f"[dirscan] dirmap 处理 {len(sites)} 个站点 …")
+                entries = self._run_dirmap(script, groups, tool)
+                used_dirmap = bool(entries)
+                if used_dirmap:
+                    ctx.logger.info(f"[dirscan] dirmap 输出 {len(entries)} 条")
+                else:
+                    ctx.logger.warning("[dirscan] dirmap 未解析到结果，回退内置扫描")
         else:
             ctx.logger.info("[dirscan] dirmap 不可用（或 --offline），使用内置字典扫描")
 
@@ -454,6 +461,45 @@ class DirscanStage(Stage):
         return paths
 
     # ---------- dirmap 适配 ----------
+
+    _DIRMAP_LANG_ARG_RE = re.compile(r"""add_argument\(\s*['"]-e['"]""")
+    _DIRMAP_LANG_CACHE = {}         # 按脚本路径缓存：一次深扫不该反复重读第三方源码
+
+    def _dirmap_accepts_lang_arg(self, script):
+        """装的这份 dirmap 认不认 `-e`（按技术栈选字典）—— 判据是**它自己的参数定义源码**。
+
+        上游 master 删了 `-e`（字典改由 `dirmap.conf` 配），而本框架的分技术栈调用必须靠它。
+        两条刻意的取舍：
+        - **不用 `-h` 探**：实测这份 v1.1 的 `-h` 只打印 banner、连 argparse 帮助都不输出，
+          拿"帮助里有没有 -e"当判据会把**真认 -e 的那支**误杀成不支持 —— 那等于静默关掉外部工具，
+          比现在更糟（本仓反复出事的就是这类"看起来在跑、实际没跑"）。
+        - **读不到任何 `add_argument` 时算"支持"**（布局变了 / 文件读不了）：探测只在
+          **确实证明**没有 `-e` 时才降级，宁可退回旧行为。
+        """
+        key = str(script)
+        if key in DirscanStage._DIRMAP_LANG_CACHE:
+            return DirscanStage._DIRMAP_LANG_CACHE[key]
+        root = script.parent
+        seen_args = False
+        try:
+            for py in sorted(root.rglob("*.py")):
+                if {"thirdlib", "__pycache__", "data", "output"} & set(py.parts):
+                    continue        # 第三方内嵌库与字典/产物目录里没有参数定义，读了只是浪费
+                try:
+                    body = py.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if "add_argument" not in body:
+                    continue
+                seen_args = True
+                if DirscanStage._DIRMAP_LANG_ARG_RE.search(body):
+                    DirscanStage._DIRMAP_LANG_CACHE[key] = True
+                    return True
+        except OSError:
+            return True             # 整个目录都读不了 = 没证据，按"支持"走旧行为
+        ok = not seen_args          # 见到过 add_argument 却没有 -e = 确实不支持
+        DirscanStage._DIRMAP_LANG_CACHE[key] = ok
+        return ok
 
     def _run_dirmap(self, script, groups, tool):
         """**按技术栈分组**调用 dirmap，并解析产出。

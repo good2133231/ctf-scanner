@@ -1758,7 +1758,73 @@ def main():
 
     assert _run_dirs({}) == [True], "全局 quick 档应走浅扫"
     assert _run_dirs({"dirscan_full": True}) == [False], "任务级 dirscan_full 应压过 quick 走深扫"
-    assert _run_dirs({"portscan_full": True}) == [True], "端口全量选项不该改目录档位"
+    assert _run_dirs({"portscan_full": True}) == [True], "端口全量选项不该改目录档位"
+
+    # 续105：dirmap 的 `-e` 探测 —— 判据必须是**它自己的参数定义源码**，不是 `-h`。
+    # 实测上游 master 那份 `-h` 只打印 banner、连 argparse 帮助都不输出：拿"帮助里有没有 -e"
+    # 当判据会把**真认 -e 的那支快照**误杀成不支持，等于静默关掉外部工具（比现状更糟）。
+    _d105 = DirscanStage.__new__(DirscanStage)
+
+    def _mk105(_tag, _files):
+        _root = Path(_TMPDIR) / ("dirmap105-" + _tag)
+        for _n, _body in _files.items():
+            _f = _root / _n
+            _f.parent.mkdir(parents=True, exist_ok=True)
+            _f.write_text(_body, encoding="utf-8")
+        return _root / "dirmap.py"
+
+    _has105 = _d105._dirmap_accepts_lang_arg(_mk105("has", {"lib/parse/cmdline.py": "o.add_argument('-e', dest='ext')"}))
+    _non105 = _d105._dirmap_accepts_lang_arg(_mk105("none", {"lib/parse/cmdline.py": "o.add_argument('-t', dest='threads')"}))
+    _unk105 = _d105._dirmap_accepts_lang_arg(_mk105("unk", {"README.md": "这里没有任何参数定义"}))
+    assert (_has105, _non105, _unk105) == (True, False, True), (_has105, _non105, _unk105)
+    # 没证据 = 按"支持"走旧行为（探测只在**确实证明**没有 -e 时才降级）
+    _hel105 = _d105._dirmap_accepts_lang_arg(
+        _mk105("helponly", {"lib/parse/cmdline.py": "o.add_argument('-t')\nprint('usage: -e all')"}))
+    assert _hel105 is False, "只有帮助文本里出现 -e 不算支持（这正是 -h 探法会犯的错）"
+    DirscanStage._DIRMAP_LANG_CACHE.clear()
+
+    # 不支持时 run() 的行为：一组都不白跑（`_run_dirmap` 一次都不调），且原因**不写成**"未解析到结果"
+    import scanner.stages.dirscan as _ds105
+
+    class _Log105:
+        def __init__(self):
+            self.lines = []
+
+        def info(self, m):
+            self.lines.append(str(m))
+
+        warning = error = info
+
+    _seen105 = []
+    _bs0, _dm0, _la0, _rs0 = (DirscanStage._builtin_scan, DirscanStage._run_dirmap,
+                              DirscanStage._dirmap_accepts_lang_arg, _ds105.resolve)
+    try:
+        DirscanStage._builtin_scan = lambda self, s, c, l, only_fw=False, shallow=False: []
+        DirscanStage._run_dirmap = lambda self, *a, **k: _seen105.append("called") or []
+        DirscanStage._dirmap_accepts_lang_arg = lambda self, script: False
+        _script105 = _mk105("script", {"dirmap.py": ""})
+        _ds105.resolve = lambda _p: _script105
+        _cx105 = StageContext(tid, "smoke-dir-lang", parse_lines([targets]), ["dirscan"],
+                              {"dirscan_full": True}, _q_settings, Path(_TMPDIR) / "dir-105", rec)
+        _cx105.results["sites"] = [{"url": targets, "tech": "", "title": "", "length": None}]
+        _lg105 = _Log105()
+        _cx105.logger = _lg105
+        DirscanStage(_cx105).run()
+        assert _seen105 == [], "不支持 -e 却仍然逐组白跑 dirmap"
+        _txt105 = " ".join(_lg105.lines)
+        assert "不支持 -e" in _txt105, _txt105[-200:]
+        assert "未解析到结果" not in _txt105, "归因又写回'没解析到结果'了 —— 那是误导"
+        # 支持时照旧要调用（反向：把探测打回"永远支持"，_run_dirmap 必须被点到）
+        _seen105.clear()
+        DirscanStage._dirmap_accepts_lang_arg = lambda self, script: True
+        DirscanStage(_cx105).run()
+        assert _seen105 == ["called"], "支持 -e 时不该跳过 dirmap（探测写反就会在这里红）"
+    finally:
+        DirscanStage._builtin_scan, DirscanStage._run_dirmap = _bs0, _dm0
+        DirscanStage._dirmap_accepts_lang_arg, _ds105.resolve = _la0, _rs0
+    print("[5p-附] 续105 dirmap -e 探测 ok: 参数定义里有 -e＝支持、没有＝不支持、读不到任何 add_argument＝"
+          "按支持走旧行为；只有帮助文本含 -e 不算支持。不支持时 run() 一个子进程都不起且归因写准，"
+          "支持时照旧调用（双向都钉）")
     # 只跑 dirscan 的补扫任务没有 probe 产物：必须能从目标兜底出站点，否则整阶段空跑
     _noactx = StageContext(tid, "smoke-dir-targets", parse_lines(["http://fallback.test/"]),
                            ["dirscan"], {}, _q_settings, Path(_TMPDIR) / "dir-fb", rec)
