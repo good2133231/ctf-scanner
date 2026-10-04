@@ -617,18 +617,50 @@ def _run_checks(page, base, rep, token, tid, port, tid_run):
         page.navigate(base + _p9)
         _ov9 = int(page.ev("document.documentElement.scrollWidth - window.innerWidth") or 0)
         rep.check("[9] %s 在 430px 下无横向溢出" % _p9, _ov9 <= 0, "溢出 %dpx" % _ov9)
-    # 反向证伪（§6.1）：把承重的规则（section 自滚动）退回 `main > section` 那一档 ——
-    # dashboard 的 section 嵌在 .grid2 里，直接子选择器一条都匹配不上，必须重新溢出。
-    # 注：这里刻意**不**用"打回 min-width:auto"做证伪 —— 它在真浏览器里实测不改变结果
-    # （滚动容器的自动最小尺寸本就是 0），拿它当证据就是假证伪。
-    page.navigate(base + "/")
+    # 反向证伪（§6.1）：把承重的规则整条废掉（`.panel` 与 `main section` 两个选择器都要 ——
+    # 只废一个会被另一个按特指度顶回去：`.panel`=0,1,0 高于 `main section`=0,0,2）。
+    # 注一：刻意**不**用"打回 min-width:auto"做证伪 —— 真浏览器里它不改变结果
+    #   （滚动容器的自动最小尺寸本就是 0），拿它当证据就是假证伪。
+    # 注二：这条原本打在仪表盘 @430 上，续107 的窄屏档把主区从 265px 放宽到 345px 之后，
+    #   那张表（min-content ~314px）本来就放得下、失去区分度 —— 承重关系随布局变了，
+    #   于是挪到 /tasks（列多、min-content 远超视口）上，判据仍然是"退回旧规则必须红"。
+    page.cdp.call("Emulation.setDeviceMetricsOverride",
+                  {"width": 360, "height": 860, "deviceScaleFactor": 1, "mobile": False})
+    page.navigate(base + "/tasks")
     page.ev("(()=>{const s=document.createElement('style');s.id='m9';"
-            "s.textContent='main section{overflow-x:visible}';document.head.appendChild(s);})()")
+            "s.textContent='.panel,main section{overflow-x:visible}';document.head.appendChild(s);})()")
     _ov9b = int(page.ev("document.documentElement.scrollWidth - window.innerWidth") or 0)
-    rep.check("[9] 证伪：section 退回不自滚动必须重新溢出", _ov9b > 0, "实测 %dpx（应 >0）" % _ov9b)
+    rep.check("[9] 证伪：section 退回不自滚动必须重新溢出（/tasks @360）",
+              _ov9b > 0, "实测 %dpx（应 >0）" % _ov9b)
     page.ev("document.getElementById('m9').remove()")
     _ov9c = int(page.ev("document.documentElement.scrollWidth - window.innerWidth") or 0)
     rep.check("[9] 撤掉注入后回到不溢出", _ov9c <= 0, "实测 %dpx" % _ov9c)
+    # 续107：≤640px 那一档必须**真的生效**（侧栏翻成顶部横条），且**只在窄屏生效**
+    # —— 两头都验，否则"把媒体查询写成全局规则"这种改法会一路绿灯。
+    page.cdp.call("Emulation.setDeviceMetricsOverride",
+                  {"width": 360, "height": 860, "deviceScaleFactor": 1, "mobile": False})
+    for _p9b in ("/", "/tasks"):
+        page.navigate(base + _p9b)
+        _ov9b2 = int(page.ev("document.documentElement.scrollWidth - window.innerWidth") or 0)
+        rep.check("[9] %s 在 360px 下无横向溢出" % _p9b, _ov9b2 <= 0, "溢出 %dpx" % _ov9b2)
+    _narrow = page.ev("JSON.stringify({dir:getComputedStyle(document.querySelector('.layout'))"
+                      ".flexDirection, pos:getComputedStyle(document.querySelector('.sidebar'))"
+                      ".position, sw:document.querySelector('.sidebar').getBoundingClientRect().width,"
+                      " vw:window.innerWidth})")
+    _narrow = json.loads(_narrow)
+    rep.check("[9] 360px 下侧栏已翻成顶部横条",
+              _narrow["dir"] == "column" and _narrow["pos"] == "static"
+              and _narrow["sw"] > _narrow["vw"] * 0.8,
+              str(_narrow))
+    page.cdp.call("Emulation.setDeviceMetricsOverride",
+                  {"width": 1000, "height": 860, "deviceScaleFactor": 1, "mobile": False})
+    page.navigate(base + "/")
+    _wide = page.ev("JSON.stringify({dir:getComputedStyle(document.querySelector('.layout'))"
+                    ".flexDirection, pos:getComputedStyle(document.querySelector('.sidebar'))"
+                    ".position})")
+    _wide = json.loads(_wide)
+    rep.check("[9] 1000px 下仍是左侧栏（证明那是断点而不是全局规则）",
+              _wide["dir"] == "row" and _wide["pos"] == "sticky", str(_wide))
     page.cdp.call("Emulation.setDeviceMetricsOverride",
                   {"width": 1280, "height": 900, "deviceScaleFactor": 1, "mobile": False})
 

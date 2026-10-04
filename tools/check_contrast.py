@@ -145,6 +145,60 @@ _HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 # 那批误报面太大（`background:transparent` 是正当写法），要收那一档得先想清判据。
 _COLOR_FN_RE = re.compile(r"\b(?:rgba?|hsla?|hwb)\s*\([^)]*\)", re.I)
 
+# 续107：再补一档 —— **颜色类属性里的裸词**（具名颜色，如 `color:white`）也算字面量。
+# 判据刻意反过来定：不列"已知颜色名"表（CSS 有 148 个具名色，漏一个就是**静默漏报**，
+# 而静默漏报正是本守卫存在的理由）；改成"颜色类属性的值里，剥掉函数调用 / 引号 / 数字之后
+# 剩下的裸词，除下面这份关键字外一律报"。
+# 两边失败代价不对称：误报 = 打印出**是哪条声明**、加一个关键字就过；漏报 = 绿灯 +
+# 浅色主题下那块字看不见（续23 的真实病灶）。所以宁可要前者。
+_COLOR_PROPS = frozenset({
+    "color", "background", "background-color", "border", "border-color",
+    "border-top", "border-right", "border-bottom", "border-left",
+    "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
+    "outline", "outline-color", "box-shadow", "text-shadow", "fill", "stroke",
+    "caret-color", "accent-color", "text-decoration-color", "column-rule-color",
+})
+#: 这些词出现在颜色类属性里**不携带色相/明度**，不随主题切换也不会出事。
+#: `transparent` 在列 —— 它是"没有底色"，不是"某种颜色"。
+_NON_COLOR_WORDS = frozenset({
+    "transparent", "currentcolor", "inherit", "initial", "unset", "revert", "none",
+    "solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset", "hidden",
+    "top", "bottom", "left", "right", "center", "no-repeat", "repeat", "repeat-x", "repeat-y",
+    "space", "round", "cover", "contain", "scroll", "fixed", "local",
+    "border-box", "padding-box", "content-box",
+})
+_FUNC_CALL_RE = re.compile(r"[A-Za-z-]+\s*\([^()]*\)")      # var()/rgb()/gradient()… 整体剥掉
+_QUOTED_RE = re.compile(r"[\x22][^\x22]*[\x22]|[\x27][^\x27]*[\x27]")   # 带引号的（字体名等）
+# 数字带单位必须**整体**剥掉：`1px` 里只去掉 `1` 会把 `px` 当裸词报出来（首版就是这么红的）。
+_NUM_UNIT_RE = re.compile(r"\d+(?:\.\d+)?(?:px|em|rem|vmin|vmax|vh|vw|ch|ex|pt|pc|in|cm|mm|deg|grad|rad|turn|ms|s|fr|%)?")
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
+_ONE_DECL_RE = re.compile(r"([A-Za-z-]+)\s*:\s*([^;{}]+)")
+
+
+def find_named_color_literals(css_text: str) -> List[Tuple[int, str, str]]:
+    """主题块**之外**、颜色类属性里的具名颜色。返回与 `find_stray_literals` 同形状的三元组。"""
+    stripped = _COMMENT_RE.sub(lambda m: "".join("\n" if c == "\n" else " " for c in m.group(0)), css_text)
+    spans = _theme_block_spans(css_text)
+    found: List[Tuple[int, str, str]] = []
+    for block in _ANY_BLOCK_RE.finditer(stripped):
+        body_start, body_end = block.start("body"), block.end("body")
+        if any(s <= body_start and body_end <= e for s, e in spans):
+            continue
+        selector = block.group("sel").strip().splitlines()[-1].strip()
+        body = block.group("body")
+        body_start_line = stripped[:body_start].count("\n") + 1
+        for decl in _ONE_DECL_RE.finditer(body):
+            prop = decl.group(1).lower()
+            if prop not in _COLOR_PROPS:
+                continue
+            value = _NUM_UNIT_RE.sub(" ", _QUOTED_RE.sub(" ", _FUNC_CALL_RE.sub(" ", decl.group(2))))
+            for word in _WORD_RE.findall(value):
+                if word.lower() in _NON_COLOR_WORDS:
+                    continue
+                found.append((body_start_line + body[: decl.start()].count("\n"),
+                              selector or "(顶层规则)", "%s: %s" % (prop, word)))
+    return found
+
 
 def _theme_block_spans(css_text: str) -> List[Tuple[int, int]]:
     """返回主题变量块（``:root`` 与 ``html[data-theme=...]``）的字符区间，用于排除。"""
@@ -330,6 +384,9 @@ def gate(css_text: str) -> List[str]:
             continue
         _checks, _failures, lines = check_theme(theme, themes[theme], False)
         problems += ["%s: %s" % (theme, ln.strip()) for ln in lines if "FAIL" in ln or "MISSING" in ln]
+    for ln, sel, val in find_named_color_literals(css_text):
+        problems.append("裸值 %s:%d %s %s（具名颜色，不随主题切换，请改用 var(--x)）"
+                        % (CSS_PATH.name, ln, sel, val))
     problems += ["裸值 %s:%d %s %s（不随主题切换，请改用 var(--x)）" % (CSS_PATH.name, ln, sel, val)
                  for ln, sel, val in find_stray_literals(css_text)]
     return problems

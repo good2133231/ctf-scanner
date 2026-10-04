@@ -4566,6 +4566,26 @@ workflows:
         _prob106 = _cc6n.gate(_mut106)
         assert any(_kw106 in _x for _x in _prob106), \
             f"{_tag106} 改成与前景同色后门禁仍全绿 = 这条配对没有区分度：{_prob106[:2]}"
+    # 续107：守卫再补一档 —— 颜色属性里的**裸词**（具名颜色）也算字面量。
+    # 判据反过来定：不列"已知颜色名"表（CSS 148 个具名色，漏一个就是静默漏报，而静默漏报
+    # 正是本守卫要防的东西），改成"颜色类属性里剥掉函数/引号/数字后剩下的裸词一律报，
+    # 除一份有限可审的结构关键字表"。误报会指出是哪条声明，漏报是绿灯 + 看不见。
+    _named_synth = (":root { --bg:#111111; }\n"
+                    ".a { color:white; }\n"
+                    ".b { background:solid; }\n"
+                    ".c { border:1px solid var(--bg); }\n"
+                    ".d { background:transparent; }\n"
+                    ".e { box-shadow:0 0 2px inset; }\n"
+                    ".f { color:red; }\n"
+                    '.g { font-family:"Noto Sans",sans-serif; }\n'
+                    ".h { background:url(a.png); }\n")
+    _named_hits = [x[2] for x in _cc6n.find_named_color_literals(_named_synth)]
+    assert _named_hits == ["color: white", "color: red"], \
+        f"具名颜色必须抓到、结构关键字与 var()/url()/引号字体名不许误报：{_named_hits}"
+    assert _cc6n.find_named_color_literals(_css6n) == [], \
+        "style.css 里不该有具名颜色（有的话就把它收进主题变量）"
+    print("[6n-附3] 续107 具名颜色守卫 ok: 合成样本里 color:white / color:red 两条被抓到，"
+          "solid·transparent·inset·var()·url()·引号字体名 6 条不误报；真实 style.css 0 命中")
     print("[6n-附2] 续106 新配对 ok: 主按钮悬停字×--btn-hover 与 进度条填充 --accent×--bar-track 四主题全达标，"
           "且各自把底色改成与前景同色时门禁**必须报出该配对**（变异证伪）；--bar-track×--panel 按 --line "
           "同一口径进豁免（实测 1.17~1.29，凹槽不是信号）")

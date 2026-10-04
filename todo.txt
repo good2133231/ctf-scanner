@@ -2013,6 +2013,21 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
      utils.pool_run() 吞异常改成可见 / GUI 加自举与解锁入口 / Windows 侧复跑续96–101。
 
 
+2026-10-03 · 续106~107（远端 Linux，Qoder-Agent）
+  ① 续106：按**变量**重算对比度门禁覆盖面（类名不可靠 —— 配对表用中文标签命名），补两条真配对
+     `--btn-fg×--btn-hover`（hover 态是续23 病灶的原始位置）与 `--accent×--bar-track`（进度条说话的是
+     填充）；`--bar-track×--panel` 实测 1.17~1.29 是凹槽不是信号，按 `--line` 同口径进豁免。141→149 项。
+  ② 续106：清死重 —— `dirmap-deps`(33MB)/`dirmap-venv` 从未被引用（gevent/lxml 实际来自
+     `~/.local/lib/python3.10/site-packages`，`sys.path` 里没有它）。先挪开→验证 dirmap 与 `--check`
+     仍正常→再删。`/opt/tools/ctf` 314MB→285MB。
+  ③ 续107 C：守卫补具名颜色，判据反着定（裸词 + 有限关键字表），首版误报 `px` 已修；真实 CSS 0 命中。
+  ④ 续107 D：先量后改 —— 360px 实测是"坏"（文档溢出 55px、顶栏溢出 70px）不是"挤"，
+     加 `@media (max-width:640px)`：侧栏翻顶部横条、顶栏换行、筛选框归 min-width。改后 345≤360 全干净。
+  ⑤ 方法论一条（写进 AGENTS §6.1 推论三）：**证伪也会过期** —— 续104 那条"注入必红"被本轮改布局
+     削弱（主区放宽后表本来就放得下），处理是挪到仍然承重的 /tasks @360（+361px）而不是删掉。
+  ⑥ 门禁：check_contrast 149/0、browser_e2e 48 条全绿、smoke 全量 PASS。
+  ⑦ 用户口径确认：Windows 复跑 / PAT 轮换 / 隔壁 dsh 进程 一律**不管**，只管项目内代码。
+
 2026-10-03 · 续103~105（远端 Linux，Qoder-Agent）
   ① 续103 凭据落地：PAT 校验（scopes repo,workflow / 该仓库 push=true）→ fetch 抓到**远端多 4 个文档
      commit**（此前"领先 11"是按过期 origin/main 算的，真相是分叉 4/11）→ rebase 无冲突 → 推送；

@@ -201,6 +201,30 @@ details pre { margin:8px 0; }
   .sidebar { width:150px; flex-basis:150px; }
 }
 
+/* ---------- 窄屏（≤640px）：侧栏从"左列"翻成"顶部横条" ---------- */
+/* 为什么必须单独一档（实测）：360px 下这份布局是**坏的**而不是"挤"—— 侧栏固定 150px 吃掉 42%
+   视口、主区只剩 195px，而顶栏内容要 265px 且 `.topbar` 原本不许换行 → 文档 scrollWidth 415 > 360，
+   整页横向溢出 55px。上面那档 900px 只改 grid 列数与侧栏宽度，够不到这个。
+   这里刻意**不隐藏导航文字**（只把它排成横条）：图标看不出"这是哪一栏"，而这一页的全部价值
+   就是让人一眼知道自己在哪个入口。 */
+@media (max-width:640px) {
+  .layout { flex-direction:column; }
+  .sidebar { width:auto; flex:0 0 auto; height:auto; position:static;
+             border-right:0; border-bottom:1px solid var(--line); }
+  .side-nav { flex-direction:row; flex-wrap:wrap; overflow-x:auto; padding:6px 8px; }
+  .side-item { padding:7px 10px; border-left:0; border-bottom:3px solid transparent;
+               white-space:nowrap; }
+  .side-item.active { border-left-color:transparent; border-bottom-color:var(--accent); }
+  .sidebar-foot { margin-top:0; border-top:0; padding:8px 12px; }
+  .topbar { flex-wrap:wrap; height:auto; min-height:52px; padding:8px 12px; }
+  main { padding:14px 12px 48px; }
+  /* 筛选框原本钉死 min-width:170px，窄屏下就是它把筛选条撑出去的 */
+  .filters input:not([type="checkbox"]) { min-width:0; flex:1 1 120px; }
+  .card { min-width:110px; flex:1 1 110px; padding:12px 14px; }
+  .evidence { max-width:100%; }
+  .login-box { width:auto; max-width:92vw; padding:26px 22px; }
+}
+
 /* ---------- 主题切换（右上角） ---------- */
 .theme-switch { display:inline-flex; align-items:center; gap:6px; }
 .theme-switch select { background:var(--panel); color:var(--text); border:1px solid var(--border);
