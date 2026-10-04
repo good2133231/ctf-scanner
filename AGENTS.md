@@ -779,6 +779,12 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   而框架自己跑在 3.14 上 —— `pick_python("python")` 会选中 3.10 那个。fscan 则用 apt 的
   Go 1.26 自编译成功（27.8 MB，产物名 `fscan` 无 `.exe`，靠 `which()` 的后缀容错命中配置里写的
   `tools/fscan/fscan.exe`）。
+- **dirmap 的依赖到底从哪加载（续106 实测，别再去找 `dirmap-deps`）**：`tools.dirmap.python` 配的是
+  `python` → `pick_python` 命中 `/usr/bin/python`（3.10.9），而 gevent / lxml / progressbar 实测来自
+  **`~/.local/lib/python3.10/site-packages`**（用户级 pip 装的），`sys.path` 里**没有** `dirmap-deps`。
+  续102 为装依赖造的 `/opt/tools/ctf/dirmap-deps`（33 MB）与 `dirmap-venv`（空壳 venv）因此**从未被引用**
+  —— 仓库内 grep 零命中，挪开后 dirmap 照旧 `-h` 正常、`cli --check` 仍报 `dirmap OK`，已删除。
+  要复现依赖来源：`/usr/bin/python -c "import gevent; print(gevent.__file__)"`。
 
 - **`utils.which()` 的返回值形状**随进程 CWD 变**（续101，会咬到"输出只出现相对路径"这条红线）**：
   配置写 `tools/scanner/httpx` 这类相对值时，它先 `shutil.which(相对值)`（按**进程 CWD** 找，命中就

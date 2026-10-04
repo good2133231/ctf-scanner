@@ -223,6 +223,9 @@ TEXT_PAIRS: Sequence[Pair] = (
     ("侧栏选中 accent / --side-active", "--accent", "--side-active", TH_TEXT),
     ("筛选框 次要字 / --input-bg",    "--muted",    "--input-bg",    TH_TEXT),
     ("技术栈标签 正文 / --soft",      "--text",     "--soft",        TH_TEXT),
+    # 续106：hover 态是续23 那类病灶的原始位置（"深底深字"就是先出现在悬停行上的），
+    # 而主按钮的悬停底此前只量了 ghost 那一支，`--btn-fg` × `--btn-hover` 一条都没测过。
+    ("★主按钮悬停字 / --btn-hover",   "--btn-fg",   "--btn-hover",   TH_TEXT),
 )
 
 #: 11 组徽章：任务状态 6 组（含续49 的 st-queued 排队中）+ 漏洞等级 5 组，
@@ -246,6 +249,9 @@ UI_PAIRS: Sequence[Pair] = (
     ("交互控件描边 --border / 面板底", "--border", "--panel",    TH_UI),
     ("交互控件描边 --border / 页面底", "--border", "--bg",       TH_UI),
     ("交互控件描边 --border / 输入框底", "--border", "--input-bg", TH_UI),
+    # 续106：进度条里**有信息量的是填充**，槽只是凹槽 —— 所以判 accent × bar-track，
+    # bar-track × panel 那一对按 --line 的同一口径进 EXEMPT（实测 1.17~1.29，见下）。
+    ("进度条填充 --accent / 槽 --bar-track", "--accent", "--bar-track", TH_UI),
 )
 
 #: 装饰性 / 由文字标签标识的配对：只留档不判定（理由见模块 docstring「判定口径」）。
@@ -255,6 +261,7 @@ EXEMPT_PAIRS: Sequence[ExemptPair] = (
     ("（装饰）侧栏底 --side / 页面底",        "--side",     "--bg"),
     ("（由文字标签标识）主按钮底 / 面板底",   "--btn-bg",   "--panel"),
     ("（由文字标签标识）ghost 底 / 面板底",   "--ghost-bg", "--panel"),
+    ("（装饰）进度条槽 --bar-track / 面板底", "--bar-track", "--panel"),
 )
 
 

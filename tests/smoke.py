@@ -4556,6 +4556,20 @@ workflows:
     print("[6n-附] 续103 守卫补洞 ok: 合成 CSS 里 rgba()/rgb()/hsla() 三条逐条报出、var() 与 "
           "transparent 不误报；把守卫打回只查 hex 则三条全不报（§6.1 证伪）；真实 style.css 块外函数式颜色 0 处")
 
+    # 续106：新补的两条配对必须**有区分度** —— 各自把底色改成与前景同色，门禁必须报出它。
+    # （hover 态是续23 那类病灶的原始位置；进度条里真正有信息量的是填充而不是凹槽。）
+    for _tag106, _from106, _to106, _kw106 in (
+            ("btn-hover", "--btn-hover:#1e463b", "--btn-hover:#7ef0cf", "悬停"),
+            ("bar-track", "--bar-track:#26313f", "--bar-track:#2dd4a7", "进度条")):
+        _mut106 = _css6n.replace(_from106, _to106, 1)
+        assert _mut106 != _css6n, f"变异没落地（{_tag106}：源串在 style.css 里找不到）"
+        _prob106 = _cc6n.gate(_mut106)
+        assert any(_kw106 in _x for _x in _prob106), \
+            f"{_tag106} 改成与前景同色后门禁仍全绿 = 这条配对没有区分度：{_prob106[:2]}"
+    print("[6n-附2] 续106 新配对 ok: 主按钮悬停字×--btn-hover 与 进度条填充 --accent×--bar-track 四主题全达标，"
+          "且各自把底色改成与前景同色时门禁**必须报出该配对**（变异证伪）；--bar-track×--panel 按 --line "
+          "同一口径进豁免（实测 1.17~1.29，凹槽不是信号）")
+
     # [6o] 续27 沙箱残留自愈清扫：只删「够旧的 smoke-* 目录」，别的都不许碰。
     #      用真目录 + 显式 mtime（不 sleep），四条边界一起验：旧的删、新的留、
     #      非 smoke- 前缀留、作为「当前沙箱」传入的即便很旧也留。
