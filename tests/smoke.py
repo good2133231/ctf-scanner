@@ -12228,6 +12228,100 @@ http:
           f"源码层盯死'把口令 print 出来'｜{_gi8f_note}，cryptography 已进 requirements｜"
           "三个入口都在 load_settings() 之前 unlock（顺序反了就是静默空 keys）")
 
+    # ---------------- [8g] 续109：会话签名密钥不可由 gui.token 推导（伪造管理员会话必须被拒） ----------------
+    #      旧写法 `app.secret_key = f"ctfscanner::{gui.token}"` 的要害不在"口令弱"，而在**密钥可推导**：
+    #      `settings.yaml` 被 git 跟踪、仓库公开、默认口令写在 README —— 任何人算得出这把签名钥匙，
+    #      自己签一张 `role=admin` 的会话 Cookie 贴上去就是管理员，登录页/验证码/限速全绕开。
+    #      Flask 默认只签名不加密，密钥就是"谁能伪造会话"的唯一门槛。
+    #      钉死：① 密钥纯函数行为 ② 真 app 的密钥不可推导 ③ **端到端伪造被拒** ④ 运行时变异证明断言有牙齿。
+    import stat as _stat109
+    from scanner.config import SECRET_FILE as _SF109, session_secret as _ss109
+
+    # 1) 纯函数：稳定复用 / 落盘 0600 / 截断即重建 / 写不了就**明说**降级（绝不退回可推导的串）
+    _d109 = Path(tempfile.mkdtemp(prefix="smoke-109-"))
+    _k1, _w1 = _ss109(_d109)
+    _k2, _w2 = _ss109(_d109)
+    assert _k1 == _k2 and not _w1 and len(_k1) >= 32, (_k1 == _k2, _w1, len(_k1))
+    assert _stat109.S_IMODE((_d109 / _SF109).stat().st_mode) == 0o600, "密钥文件必须 0600"
+    (_d109 / _SF109).write_text("abc", encoding="utf-8")            # 模拟被截断/写坏
+    _k3, _w3 = _ss109(_d109)
+    assert len(_k3) >= 32 and _k3 != _k1 and not _w3, "坏文件要重新生成，不能拿短串当密钥"
+    _ro109 = _d109 / "ro"
+    _ro109.mkdir()
+    _ro109.chmod(0o500)
+    _k4, _w4 = _ss109(_ro109)
+    assert _k4 and len(_k4) >= 32 and _w4, "落盘失败必须**明说**（静默降级是本仓反复出事的地方）"
+    _ro109.chmod(0o700)
+    shutil.rmtree(_d109, ignore_errors=True)
+
+    # 2) 真 app 的密钥：既不含 "ctfscanner::" 也不含引导口令，并且就落在**库同目录**（测试自动隔离）
+    _tok109 = str(((settings.get("gui") or {}).get("token")) or "")
+    _sk109 = str(app.secret_key or "")
+    assert "ctfscanner::" not in _sk109, "密钥又回到由公开默认口令推导 —— 会话可被伪造"
+    assert not _tok109 or _tok109 not in _sk109, "密钥里不得出现引导口令"
+    assert Path(db.DB_PATH.parent / _SF109).exists(), \
+        "密钥要与库同目录：CTFSCANNER_DB 一重定向就自动进沙箱，不会把密钥写进真实 data/"
+
+    # 3) **端到端伪造**：拿"旧那把公开钥匙"签一张真存在、真启用的管理员会话，塞进客户端
+    _u109, _pw109 = "smoke-forge", "Forge#2026pw"
+    assert users_mod.create_user(_u109, _pw109, role="admin", must_change=False)[0]
+    _uid109 = int(users_mod.get_by_name(_u109)["id"])
+
+    def _forge_cookie(_secret):
+        """用**给定密钥**签一张会话 Cookie —— 同 Flask 版本、同序列化器，只差密钥。
+
+        刻意不复用被攻击的 app 去签（那会连密钥一起换掉，测不出东西），也刻意不手搓格式
+        （格式搓错，"被拒"就是假绿：它拒的是格式，不是密钥）。
+        """
+        from flask import Flask as _Fl109, session as _fsess109
+
+        _f109 = _Fl109("smoke109forgery")
+        _f109.secret_key = _secret
+
+        @_f109.route("/mk")
+        def _mk109():
+            _fsess109["auth"] = True
+            _fsess109["uid"] = _uid109
+            _fsess109["user"] = _u109
+            _fsess109["role"] = "admin"
+            return "ok"
+
+        _raw109 = _f109.test_client().get("/mk").headers.get("Set-Cookie", "")
+        _kv = [x.strip() for x in _raw109.split(";") if x.strip().startswith("session=")]
+        return _kv[0].split("=", 1)[1] if _kv else ""
+
+    _forged109 = _forge_cookie(f"ctfscanner::{_tok109}")            # 旧代码那把谁都能算出来的钥匙
+    assert _forged109, "伪造 Cookie 没生成（Flask 的会话 Cookie 格式变了？这条回归要跟着改）"
+    _cf109 = app.test_client()
+    _cf109.set_cookie("session", _forged109)
+    assert _cf109.get("/").status_code == 302, "旧密钥签出的管理员会话仍被接受 → 会话可伪造"
+    assert _cf109.get("/settings").status_code == 302, "管理页同样不能被伪造会话打开"
+
+    # 4) §6.1 运行时变异 + 正向对照（两件缺一不可）：
+    #    ① 把密钥**打回旧推导式**，同一张伪造 Cookie 必须**立刻被接受** —— 否则上面那条 302
+    #       可能只是"格式不对/路由挂了"，测的根本不是密钥（假绿）；
+    #    ② 真登录拿到的 Cookie 必须仍然能用 —— 否则就是"整个会话机制坏了"也在通过。
+    _old_sk109 = app.secret_key
+    app.secret_key = f"ctfscanner::{_tok109}"
+    try:
+        _cm109 = app.test_client()
+        _cm109.set_cookie("session", _forged109)
+        assert _cm109.get("/").status_code == 200, \
+            "变异后仍 302 → 这条断言测的不是『密钥由引导口令推导』这件事"
+    finally:
+        app.secret_key = _old_sk109
+    _cg109 = app.test_client()
+    assert _login7(_cg109, {"username": _u109, "password": _pw109}).status_code == 302, \
+        "真登录应成功（[8g] 只该拒绝伪造的那张 Cookie）"
+    assert _cg109.get("/").status_code == 200
+    users_mod.delete_user(_uid109)
+
+    print("[8g] 续109 会话签名密钥 ok: 随机 32 字节 + 落盘 0600 + 与库同目录（CTFSCANNER_DB 一重定向即进沙箱）"
+          "｜已存在则复用（重启不打光会话）｜截断即重建｜写不了就**明说**降级且不退回可推导串"
+          "｜密钥不含 'ctfscanner::' 也不含引导口令｜用旧推导密钥伪造的管理员 Cookie 在 / 与 /settings 都被 302"
+          "｜运行时变异（密钥打回推导式）同一张 Cookie 立刻被接受 = 断言有牙齿｜真登录会话仍有效")
+
+
     print("SMOKE PASS")
 
 

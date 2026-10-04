@@ -2014,6 +2014,22 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 
 
 
+2026-10-04 · 续109（远端 Linux，Qoder-Agent）
+  ① 堵掉续108 登记的第一个高危项：`app.secret_key` 原来是 `f"ctfscanner::{gui.token}"` —— 要害不是"口令弱"
+     而是**密钥可推导**（settings.yaml 被 git 跟踪 + 仓库公开 + 默认口令写在 README），任何人都能自己签一张
+     role=admin 的会话 Cookie 当管理员，登录页/验证码/限速全绕开。Flask 默认只签名不加密，密钥是唯一门槛。
+  ② 新增 `config.session_secret(dir)`：随机 32 字节 + 落盘 session.secret(0600) + 已存在则复用（不打光会话）
+     + 截断即重建 + 写不了就**退回进程内随机并明说警告**（绝不静默降级，也绝不退回可推导串）。
+     落点取**库同目录**：`data/` 已在 .gitignore，且 `CTFSCANNER_DB` 一重定向就自动进测试沙箱，不必新增环境变量。
+  ③ 顺带：`serve()` 启动横幅不再打印引导口令的值。
+  ④ 回归 `[8g]` 四组：纯函数四形态 / 真 app 密钥不可推导且随库目录 / **端到端伪造被拒**（用旧推导密钥签一张
+     指向真存在已启用管理员的 Cookie，`/` 与 `/settings` 都 302）/ §6.1 **运行时变异**（密钥打回推导式 → 同一张
+     Cookie 立刻被接受）+ 正向对照（真登录 Cookie 仍有效）。伪造 Cookie 用同版本 Flask 签，不手搓格式。
+  ⑤ 文档：security-notice 与 usage 两处"gui.token 是会话密钥派生源"的旧口径按代码更正；AGENTS §3 补
+     session_secret、§7 改成"已修一条 + 仍剩一条"。
+  ⑥ 复验：smoke 全量 SMOKE PASS / RC=0；GUI 重启后 data/session.secret 已生成 0600、旧会话全部作废。
+  ⑦ 仍存并登记：`gui.token` 仍是明文共享口令、无账号时即管理员入口 → 收口靠**建第一个账号**（用户自行设口令）；
+     "只存散列"要动策略页/横幅/一批回归，属独立一轮。
 2026-10-04 · 续108（远端 Linux，Qoder-Agent）
   ① 用户报的两件事（「后台不显示验证码」+「要限制密码错误次数」）根因是**同一处判据分叉**：
      模板按 `{% if not bootstrap %}`（库里没账号）把验证码整块藏了，路由却「填了用户名就必须过码」

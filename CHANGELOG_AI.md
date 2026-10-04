@@ -21,6 +21,40 @@
 
 
 
+## 2026-10-04 —— 续109：**会话签名密钥不再由 `gui.token` 推导**（堵掉"离线伪造管理员 Cookie"）
+
+> 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux / Python 3.14.4 + Flask 3.1.3 / Werkzeug 3.1.9 实测）。
+
+- 起因：续108 收尾时登记的第一个高危项。旧写法 `app.secret_key = f"ctfscanner::{gui.token}"` 的要害**不在
+  "口令弱"**，而在**密钥可推导** —— `config/settings.yaml` 被 git 跟踪、仓库是公开的、默认口令又写在
+  README 里，于是任何人都能算出这把签名钥匙，自己签一张 `session["role"]="admin"` 的 Cookie 贴上去
+  就是管理员：登录页、验证码（续78）、限速锁定（续48）**全部绕开**。Flask 默认只签名不加密，
+  密钥就是"谁能伪造会话"的唯一门槛。
+- 实现：`scanner/config.py` 新增 `session_secret(directory)` —— 随机 32 字节（`secrets.token_hex(32)`）、
+  落盘 `session.secret`、`0600`；**已存在则复用**（否则每次重启把所有人踢下线）；太短视为写坏、重新生成；
+  目录建不了/写不了就**退回进程内随机密钥 + 带回一句必须打印的警告**（静默降级是本仓反复出事的地方，
+  而"拿不到文件"绝不能成为退回可推导串的理由）。`gui/app.py::create_app()` 改用
+  `session_secret(db.DB_PATH.parent)`，警告走 `logger.warning`。
+- **落点选在库同目录**而不是新增一个环境变量：那里已经在 `.gitignore` 里（`data/`），且
+  `CTFSCANNER_DB` 一重定向，密钥就自动跟着进测试沙箱 —— 回归测试不会往真实 `data/` 塞密钥，
+  也不必新学一个配置项。续用 `config.env_path()` 那套口径，不开第二个"路径型变量"。
+- 顺带：`serve()` 的启动横幅不再打印引导口令的值（改成"值见该文件，本机不打印"）。
+- 回归 `tests/smoke.py [8g]`（四组）：① 纯函数四形态（稳定复用 / 0600 / 截断即重建 / 只读目录**明说**降级）；
+  ② 真 app 的密钥不含 `ctfscanner::`、不含引导口令、且就在库同目录；③ **端到端伪造被拒** —— 用
+  **旧推导式密钥**（同 Flask 版本、同序列化器，只差密钥）签一张指向**真存在、已启用**管理员账号的 Cookie，
+  塞进 `test_client`，`/` 与 `/settings` 都必须 302；④ §6.1 **运行时变异**：把 `app.secret_key` 打回
+  `f"ctfscanner::{token}"`，**同一张** Cookie 必须立刻被接受 —— 少了这一步，"被拒"可能只是 Cookie
+  格式搓错了（假绿）。另配正向对照：真登录拿到的 Cookie 仍须 200（排除"整个会话机制坏了"）。
+  伪造 Cookie 刻意**不复用被攻击的 app** 去签（那会连密钥一起换掉，测不出东西），也刻意**不手搓格式**。
+- 文档：`docs/security-notice.md` / `docs/usage.md` 两处仍写着"`gui.token` 是 Flask 会话密钥的派生源"，
+  按代码更正；AGENTS §3 给 `config.py` 补上 `session_secret()`，§7 那条风险改成"已修一条 + 仍剩一条"。
+- 仍存并已登记（**本轮刻意不做**）：`gui.token` 本身仍是明文写在被跟踪的 `settings.yaml` 里的共享口令，
+  且库里没有账号时它就是管理员入口。最短收口是**建第一个账号**（建号即失效，用户已表示自己会在页面上设）；
+  要改成"只存散列"会牵动策略页 / 启动横幅 / 一批回归，属独立一轮。
+- 影响与复验：密钥换了 → **旧会话 Cookie 全部作废**（需重新登录一次）。`tests/smoke.py` 全量
+  **SMOKE PASS / RC=0**（含 `[8g]`），`[7x]` 真浏览器端到端照旧全绿；GUI 重启后实机确认
+  `data/session.secret` 已生成且权限 0600、`/login` 出码、真表单登录成功。
+
 ## 2026-10-04 —— 续108：**验证码发码与查码同源**（登录页两种模式都出码）+ 失败锁定 10 → 5
 
 > 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux / Python 3.14.4；真实 HTTP 复验，非 test_client）。

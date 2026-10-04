@@ -47,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scanner import (audit, auth as taskauth, blacklist, captcha, cdn, certs as certs_mod, db,
                      devfixture, devmode, dnsq,
                      extdom, login_guard, nodes, queue, screenshot, toolmgr, users)
-from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings
+from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
@@ -391,7 +391,13 @@ def _dev_fixture_stop():
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
-    app.secret_key = f"ctfscanner::{settings.get('gui', {}).get('token', '')}"
+    # 续109：会话签名密钥**绝不由 gui.token 推导**（旧写法 `f"ctfscanner::{token}"` 谁能读到
+    #   settings.yaml 里那个口令 —— 它被 git 跟踪、仓库公开 —— 谁就能自己签一张管理员 Cookie，
+    #   绕开口令、验证码、限速整条链）。密钥随机生成后落在**库同目录**的 0600 文件里，
+    #   于是 `CTFSCANNER_DB` 一重定向就自动进测试沙箱，不会把密钥写进真实 data/。
+    app.secret_key, _sk_warn109 = session_secret(db.DB_PATH.parent)
+    if _sk_warn109:                          # 落盘失败＝会话只活到本次重启，这事必须看得见
+        logger.warning(f"[gui] {_sk_warn109}")
     # 模板里可直接调用 `source_label('osint:fofa')` → 「ICO 反查」（来源列的可读标签）
     app.jinja_env.globals["source_label"] = source_label
     app.jinja_env.globals["ip_note_label"] = ip_note_label
@@ -3275,7 +3281,7 @@ def serve(start_queue=True):
     # （它此时已经失效了，还打印出来等于引导人去试一个不存在的入口）。
     if users.count_users() == 0:
         print(f"[*] 尚未创建账号：可用 config/settings.yaml 的 gui.token"
-              f"（{s.get('token', 'ctfscanner')}）以管理员身份登录，"
+              f"（值见该文件，本机不打印）以管理员身份登录，"
               f"随后到「账号」页创建账号 —— 建号后该口令立即失效。")
     else:
         print("[*] 多用户已启用：请用已创建的账号登录（管理员可在「账号」页建/停用子用户）。")

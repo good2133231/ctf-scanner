@@ -11,6 +11,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -610,3 +611,48 @@ def resolve(path):
     """相对路径基于项目根目录解析。"""
     p = pathlib.Path(str(path))
     return p if p.is_absolute() else (BASE_DIR / p)
+
+
+# 会话签名密钥的文件名（放在**库同目录**，见 `session_secret()` 的说明）。
+SECRET_FILE = "session.secret"
+_SECRET_MIN = 32          # 短于这个长度就当成"文件被截断/写坏"，重新生成
+
+
+def session_secret(directory):
+    """会话签名密钥（续109）：**随机 32 字节**、落盘 `<directory>/session.secret`（0600），
+    **绝不由 `gui.token` 推导**。
+
+    为什么要单独管这一件事：`app.secret_key` 原先是 `f"ctfscanner::{gui.token}"`，而
+    `config/settings.yaml` 是**被 git 跟踪**的、仓库还是公开的，默认口令又写在 README 里 ——
+    等于任何人都能算出这把"签名钥匙"，自己签一个 `session['role']='admin'` 的 Cookie 贴上去
+    就是管理员。Flask 默认只签名不加密，**密钥就是"谁能伪造会话"的唯一门槛**，它必须是
+    本机随机、不进仓库、不进任何被跟踪文件。验证码与限速（续78/续48）挡的是"在线试口令"，
+    对"离线伪造会话"一点用都没有 —— 所以这一处补的是那两道门**底下**的地板。
+
+    落点选在**库同目录**（调用方传 `db.DB_PATH.parent`）：那目录本来就在 `.gitignore` 里
+    （`data/`），且 `CTFSCANNER_DB` 一重定向，密钥就自动跟着进测试沙箱 —— 不必新增环境变量，
+    也不会让回归测试往真实 `data/` 里塞密钥。
+
+    返回 `(密钥, 警告)`：目录建不了/写不了/读失败时**退回进程内随机密钥**（重启即全员重新登录，
+    但依然不可伪造），并带回一句必须**明说**的警告 —— 静默降级是本仓反复出事的地方。
+    已存在且够长的文件一律复用（否则每次重启都把会话打光）；太短视为写坏，重新生成。
+    """
+    d = pathlib.Path(str(directory or "")) or BASE_DIR
+    f = d / SECRET_FILE
+    try:
+        if f.exists():
+            text = f.read_text(encoding="utf-8").strip()
+            if len(text) >= _SECRET_MIN:
+                return text, ""
+        d.mkdir(parents=True, exist_ok=True)
+        fresh = secrets.token_hex(32)
+        f.write_text(fresh + "\n", encoding="utf-8")
+        try:
+            os.chmod(f, 0o600)
+        except OSError:      # Windows 上 chmod 语义有限：不因此放弃落盘
+            pass
+        return fresh, ""
+    except OSError as e:      # noqa: BLE001 - 拿不到文件不等于可以不放密钥，更不能退回可推导的串
+        return (secrets.token_hex(32),
+                f"会话密钥没能落盘（{type(e).__name__}: {e}）：本次改用**进程内随机密钥** —— "
+                "重启后所有会话失效（需重新登录），但密钥不可推导、会话不可伪造。" f"请检查该目录可否写入：{d}")

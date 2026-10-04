@@ -195,7 +195,7 @@ ctf-scanner/
 │   │                      #   + OWN_SUBDOMAIN_WHERE/EXT_SUBDOMAIN_WHERE/OVERLAP_EXT_WHERE/OVERLAP_SITE_WHERE；DB_PATH 受 CTFSCANNER_DB 覆盖）
 │   │                      #   复核（vulns.review/review_note/reviewed_at + set/bulk_set_vuln_review/review_counts）
 │   │                      #   与 POC 置信度（pocs.confidence + poc_confidence）见 §7
-│   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖
+│   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖；续109 新增 `session_secret(dir)`：会话签名密钥随机 32 字节 + 落盘 0600（`session.secret`），**绝不由 gui.token 推导**
 │   ├── keystore.py        # 凭据口令加密（续98）：PBKDF2(60 万次)+AES-256-GCM 读写 config/keys.enc.yaml；解锁只在启动时由入口调一次并缓存，current() 只读缓存、绝不提示
 │   ├── users.py           # 多用户（续46）：PBKDF2 口令哈希 / check_login / validate_password / 防锁死（不能停用自己、至少留一个启用中的管理员）
 │   ├── audit.py           # 访问审计流水（续48）：谁·何时·哪 IP·做了什么·成败；`record()` 自带口令形状擦洗，**只记元数据**
@@ -975,9 +975,14 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   失败锁定 `max_fails_per_ip` 续108 由 10 收到 **5**，**三份默认值必须一起改**（`login_guard.DEFAULTS`
   / `config.DEFAULTS` / `config/settings.yaml`，`[7j]` ① 钉三方一致）；用例一律从 `_cfg48` 取阈值、
   不许把数字写进循环（§6.2）。这两段阈值**页面上改不了** —— `/settings` 的 gui 段只有 host/port/token。
-  ⚠️ 仍存的两个已知风险（续108 登记、未动，属独立一轮）：① `app.secret_key = f"ctfscanner::{gui.token}"`
-     是**由公开默认口令推导**的固定串 → 会签出伪造的管理员会话 Cookie（验证码与限速都拦不住伪造）；
-     ② `gui.token` 是**明文**写在 `config/settings.yaml` 里的共享口令，且无账号时 `serve()` 会把它的**值打印进启动横幅** —— 建第一个账号后该口令立即失效（这一条 docs/deploy-https.md 有部署口径）。
+  ✅ 续109 修掉其中第一条：会话签名密钥不再由 `gui.token` 推导 —— `config.session_secret()` 随机 32 字节、
+     落在**库同目录**的 `session.secret`（0600；`data/` 本就在 .gitignore，`CTFSCANNER_DB` 一重定向就自动进测试沙箱），
+     已存在则复用（重启不打光会话），写不了就**退回进程内随机并 warning**（绝不静默降级，更绝不退回可推导串）。
+     顺带：`serve()` 的启动横幅不再打印引导口令的值。回归 `[8g]` —— 用**旧推导式密钥**签一张真存在、真启用的
+     管理员 Cookie 塞进客户端，`/` 与 `/settings` 必须 302；同一条判据配**运行时变异**（把 `app.secret_key` 打回
+     `f"ctfscanner::{token}"` → 同一张 Cookie 立刻被接受），否则"被拒"可能只是 Cookie 格式搓错了（§6.1）。
+  ⚠️ 仍存的一条：`gui.token` 是**明文**写在 `config/settings.yaml`（被 git 跟踪）里的共享口令，且库里没账号时
+     它就是管理员入口。收口办法是**建第一个账号**（建号即失效）；要它只存散列属独立一轮（牵动设置页/横幅/回归）。
 - 「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
   takeover/portscan/jsmine/dirscan/vulnscan/screenshot/cert/iprecon/fofa/**ssrf/shodan/quake/ctlog**/
   blacklist/intel/heuristic/**github** **二十三段**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned）
