@@ -21,7 +21,7 @@ gui:
   login_lockout:
     enabled: true
     window_seconds: 300      # 失败计数时间窗（秒）
-    max_fails_per_ip: 10     # 同一 IP 在窗口内的失败上限
+    max_fails_per_ip: 5      # 同一 IP 在窗口内的失败上限（续108：10 → 5，控制台可能被绑到公网）
     max_fails_per_user: 20   # 同一用户名在窗口内的失败上限（兜底，更宽松）
     lockout_seconds: 900     # 触发后的锁定时长（秒）
   # ---- 访问审计流水（续48，见 scanner/audit.py）----

@@ -13,21 +13,22 @@
   <form method="post">
     <input type="text" name="username" placeholder="用户名" autocomplete="username" autofocus>
     <input type="password" name="password" placeholder="口令" autocomplete="current-password">
-    {% if not bootstrap %}
-    {# 续78 登录验证码：仅**账号登录**需要（引导口令分支不用，见 gui/app.py::login） #}
+    {# 续108：验证码**永远渲染**。续78 曾按 `{% if not bootstrap %}` 隐藏它，但路由
+       `login()` 是"只要填了用户名就必须过码"—— 库里还没账号时页面上一个码都看不见，
+       填 `admin` 提交必然吃「验证码错误」（audit_log 里就是这么攒出 login_fail 的）。
+       模板与路由的判据必须同源：要么两处都发码，要么两处都不发。 #}
     <div class="captcha-row">
       <input type="text" name="captcha" placeholder="验证码" autocomplete="off" spellcheck="false">
       <img src="{{ url_for('captcha_png') }}" alt="验证码" title="看不清？点一下换一张"
            onclick="this.src='{{ url_for('captcha_png') }}?t='+Date.now()">
     </div>
-    {% endif %}
     <button type="submit">登录</button>
     {% if error %}<p class="error">{{ error }}</p>{% endif %}
   </form>
   {% if bootstrap %}
   <p class="muted" style="margin-top:14px;font-size:12px;line-height:1.6">
     当前<b>还没有任何账号</b>：可把 <code>config/settings.yaml</code> 里的
-    <code>gui.token</code> 直接填进上面的「口令」登录（管理员身份），
+    <code>gui.token</code> 直接填进上面的「口令」登录（管理员身份，<b>验证码照样要填</b>），
     然后到「账号管理」页创建账号 —— <b>建好第一个账号后该口令立即失效</b>。
   </p>
   {% endif %}

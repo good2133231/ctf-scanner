@@ -2013,6 +2013,28 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
      utils.pool_run() 吞异常改成可见 / GUI 加自举与解锁入口 / Windows 侧复跑续96–101。
 
 
+
+2026-10-04 · 续108（远端 Linux，Qoder-Agent）
+  ① 用户报的两件事（「后台不显示验证码」+「要限制密码错误次数」）根因是**同一处判据分叉**：
+     模板按 `{% if not bootstrap %}`（库里没账号）把验证码整块藏了，路由却「填了用户名就必须过码」
+     → 零账号时页面上一个码都看不见、填 admin 提交永远「验证码错误」，还把 IP 往锁定计数里推
+     （`audit_log` 两条 login_fail + `login_fails` 两行为证）。改：模板无条件渲染 + 码门提到
+     **所有凭据分支之前**；引导口令 `gui.token` 那条**免码后门**一并堵掉（它是唯一能直接换来
+     管理员身份的入口，共享口令 + 免码 + 可绑非回环 = 可脚本爆破）。
+  ② 阈值 `max_fails_per_ip` 10 → 5（`login_guard.DEFAULTS` / `config.DEFAULTS` / `settings.yaml`
+     三份一起改，[7j]① 钉三方一致）；用户名兜底 20 与锁 900s 不变。
+  ③ 修准两处与代码不符的话（`gui/app.py` 头注释与 README 都写「阈值可在策略配置里调」，实测
+     `/settings` 的 gui 段只有 host/port/token）；AGENTS §3 目录地图补上从没登记过的
+     `users.py` / `audit.py` / `login_guard.py` / `captcha.py` 四个模块。
+  ④ 回归：[7h+] 两条新断言（判据取「check 被调用」而**不取状态码** —— 旧代码同样回 200）、
+     [7j] ⑬ 零账号那一档、8 处写死的阈值数字改成按 `_cfg48` 取值、故意失败的登录一律换独立
+     REMOTE_ADDR、browser_e2e 改为真填验证码（码由 E2E 专用引导脚本抄进临时 capfile，生产零后门）。
+     §6.1 证伪：两个文件退回 `git show HEAD:` 再跑同一条判据 → 旧代码必红，事后按 sha256 还原。
+  ⑤ 复验：smoke 全量 SMOKE PASS / RC=0；[7x] 真浏览器 39 条全绿；真 HTTP（5099 + 独立临时库）
+     实测两种模式都出码、同 IP 错满 5 次第 6 次 429 + Retry-After。
+  ⑥ 待你点头：5000 端口那个 GUI **还是改前的旧进程**（本项目规矩是改完 GUI 必须重启，否则页面照旧）；
+     `app.secret_key` 由默认口令推导 → 能伪造管理员会话 Cookie（本轮只登记、未动）；本机 users 表仍空
+     （还在引导口令模式）；要不要推送。
 2026-10-03 · 续106~107（远端 Linux，Qoder-Agent）
   ① 续106：按**变量**重算对比度门禁覆盖面（类名不可靠 —— 配对表用中文标签命名），补两条真配对
      `--btn-fg×--btn-hover`（hover 态是续23 病灶的原始位置）与 `--accent×--bar-track`（进度条说话的是

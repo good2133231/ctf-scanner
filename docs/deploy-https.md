@@ -172,13 +172,18 @@ curl -sS "https://$DOMAIN/login" | grep -i '<title>'
 
 ### 7.2 登录限速 / 失败锁定（`gui.login_lockout`）
 
-- **两级判据**：按 **IP 为主**（默认 5 分钟内 10 次失败）、按 **用户名兜底**（默认 5 分钟内 20 次，更宽松）；
+- **两级判据**：按 **IP 为主**（默认 5 分钟内 5 次失败）、按 **用户名兜底**（默认 5 分钟内 20 次，更宽松）；
   触发后**锁 15 分钟**。被锁时返回 **429 + `Retry-After`**（不是 403），且**即使口令正确也拒绝**。
 - **不泄漏账号是否存在**：被锁页面与"账号存在 / 不存在"无关，返回**逐字节相同**的内容（否则"被锁=存在"
   本身就是一条用户名枚举通道）。
 - **引导口令（`gui.token`）登录同样受 IP 限速** —— 无账号的迁移期也不例外。
-- 阈值刻意宽松（本机 / 小队共用：一次记错口令不该把队友挡在门外）；要更严/更松改 `config/settings.yaml`
-  的 `gui.login_lockout`（`window_seconds` / `max_fails_per_ip` / `max_fails_per_user` / `lockout_seconds`）。
+- 要更严/更松改 `config/settings.yaml` 的 `gui.login_lockout`（`window_seconds` / `max_fails_per_ip` /
+  `max_fails_per_user` / `lockout_seconds`）—— **只能在文件里改**，「策略配置」页的 gui 段只有
+  host/port/token 三项，页面保存也不会动这一段。
+- **登录验证码**（`scanner/captcha.py`，续78 / 续108）：`gui/app.py::login()` 的门在**所有凭据分支
+  之前** —— 用账号口令登录、还是用 `gui.token` 引导口令登录，**都要先过一次码**；答案只存服务端
+  内存（会话里只有一个不透明 token），一次性、成败都作废。限速阈值管的是"锁多久"，验证码管的是
+  "脚本能不能一直试"，两道缺一不可。
 
 **自救（被锁在门外时，按代价从低到高）**：
 

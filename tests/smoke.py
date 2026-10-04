@@ -453,8 +453,30 @@ def main():
     from gui.app import app
     c = app.test_client()
     assert c.get("/").status_code == 302
-    assert c.post("/login", data={"token": "wrong"}).status_code == 200
-    assert c.post("/login", data={"token": settings["gui"]["token"]}).status_code == 302
+    # 续108：验证码门现在挡在**所有**凭据分支之前，所以这里必须带一个**服务端真发过的码**
+    #   （`captcha.issue()` 的答案只留在本进程内存，会话里只有不透明 token —— 伪造不了）。
+    #   故意失败的登录一律用**独立 REMOTE_ADDR**：默认回环 IP 的计数要留给后面几十个用例，
+    #   阈值由 10 收到 5 之后，共用 127.0.0.1 会把后续登录全刷成 429（[7j] 早就是这一口径）。
+    def _login7(_cl, _data, **_kw):
+        """带**真验证码**提交登录。
+
+        先按**同一组请求头**取一张码，答案从服务端码库里"这次多出来的那一张"读 ——
+        不碰 client 的 session：Werkzeug 的 Cookie jar 是按「主机[:端口]」存的，
+        [6t] 那批用例逐条换 Host/Origin，`session_transaction()` 默认只读 `localhost`
+        那一份，换主机的用例自然读不到自己刚取的码（实测两条红都出在这里）。
+        码库与 GUI 同进程，测试读它是正当的 —— 生产路径上答案依然只出图、不出库。
+        """
+        from scanner import captcha as _cap7
+        _before78 = set(_cap7._STORE)
+        _cl.get("/captcha.png", **_kw)
+        _fresh78 = [k for k in _cap7._STORE if k not in _before78]
+        assert _fresh78, "取码失败：/captcha.png 没发出新码"
+        _code7 = _cap7._STORE[_fresh78[-1]][0]
+        return _cl.post("/login", data=dict(_data, captcha=_code7), **_kw)
+
+    assert _login7(c, {"token": "wrong"},
+                   environ_base={"REMOTE_ADDR": "198.51.100.201"}).status_code == 200
+    assert _login7(c, {"token": settings["gui"]["token"]}).status_code == 302
     for path in ("/", "/tasks", f"/tasks/{tid}", "/subdomains", "/sites", "/dirs",
                  "/ports", "/csegs", "/pocs", "/vulns", "/settings",
                  f"/api/tasks/{tid}/status", f"/tasks/{tid}/export"):
@@ -5278,14 +5300,14 @@ workflows:
                    {"Host": "127.0.0.1:5057", "Origin": "http://127.0.0.1:5057"},
                    {"Host": "127.0.0.1:5057", "Referer": "http://127.0.0.1:5057/tasks"},
                    {"Referer": "http://localhost/x"}):
-        assert c.post("/login", data={"token": _tok32}, headers=_hdr32).status_code == 302, _hdr32
+        assert _login7(c, {"token": _tok32}, headers=_hdr32).status_code == 302, _hdr32
     # 只拦写方法：带外站 Origin 的 GET 必须放行（否则正常导航会被误伤）
     assert c.get("/login", headers={"Origin": "http://evil.example"}).status_code == 200
     # 两个头都缺失时放行（curl / 脚本 / 老浏览器本就不带；本机工具必须能用）
-    assert c.post("/login", data={"token": _tok32}).status_code == 302
+    assert _login7(c, {"token": _tok32}).status_code == 302
 
     # 4) 会话 Cookie 显式收紧（不依赖浏览器默认值 —— 旧浏览器上"默认"等于没有）
-    _ck32 = c.post("/login", data={"token": _tok32}).headers.get("Set-Cookie", "")
+    _ck32 = _login7(c, {"token": _tok32}).headers.get("Set-Cookie", "")
     assert "HttpOnly" in _ck32, _ck32
     assert "SameSite=Lax" in _ck32, _ck32
     assert app.config["SESSION_COOKIE_HTTPONLY"] is True
@@ -7142,7 +7164,7 @@ http:
     assert "password" not in users_mod.check_login("smoke-admin", _ADMIN_PW)
     assert all("password" not in u for u in users_mod.list_users())
 
-    # ---- 续78 登录验证码（**真门**：账号登录必须过码；引导口令分支不用）----
+    # ---- 续78 登录验证码（**真门**：续108 起账号登录与引导口令登录**都**必须过码）----
     # 这里用**真** `captcha.check` 测；测完把 check 打桩成恒真 —— 后面几十个用例测的是
     # 权限 / 审计，与验证码无关，不该被它拖累。
     from scanner import captcha as _capmod78
@@ -7153,20 +7175,46 @@ http:
             _s["captcha_id"] = _tok
         return _code
 
+    # 续108 ① 有账号时登录页必须渲染验证码。旧模板按 `{% if not bootstrap %}` 把整块藏了，
+    #   而路由是「填了用户名就要码」—— 两套判据在"零账号 + 输了用户名"那一格同时踩空：
+    #   页面上一个码都看不见，提交却永远「验证码错误」（本机 audit_log 的两条 login_fail 就是这样攒出来的）。
+    #   零账号那一档在 [7j] ⑬ 里验 —— 那里 `count_users()==0` 才是真的 bootstrap。
+    _pg78b = app.test_client().get("/login").get_data(as_text=True)
+    assert 'name="captcha"' in _pg78b and "/captcha.png" in _pg78b, "有账号时登录页必须渲染验证码"
+    # 续108 ② 验证码门必须在**分支之前**：用户名留空的提交（旧实现压根不调用 `check`）也要被问到。
+    #   判据取"`check` 被调用过"而**不取状态码** —— 旧代码对空用户名同样回 200，只看状态码就是假绿（§6.1）。
+    _seen78 = []
+    _real_chk78 = _capmod78.check
+    _capmod78.check = lambda _t, _v: (_seen78.append(_t), False)[1]
+    try:
+        _rb78 = app.test_client().post("/login", data={"token": settings["gui"]["token"]},
+                                       environ_base={"REMOTE_ADDR": "198.51.100.202"})
+        assert _seen78 and _rb78.status_code == 200, \
+            "无用户名的提交也必须走验证码门（旧实现只在 if username: 里查码 → 引导口令整条路免码）"
+        assert "/captcha.png" in _rb78.get_data(as_text=True), \
+            "被验证码拒掉的页面仍须重发一张码（否则用户对着一个不存在的框反复提交）"
+    finally:
+        _capmod78.check = _real_chk78
+
     _c1 = app.test_client()
     _issue78(_c1)
-    assert _c1.post("/login", data={"username": "smoke-admin", "password": _ADMIN_PW}).status_code == 200, \
+    assert _c1.post("/login", data={"username": "smoke-admin", "password": _ADMIN_PW},
+                  environ_base={"REMOTE_ADDR": "198.51.100.203"}).status_code == 200, \
         "账号登录不带验证码必须被拒（不是 302）"
     _c2 = app.test_client()
     _issue78(_c2)
     assert _c2.post("/login", data={"username": "smoke-admin", "password": _ADMIN_PW,
-                                    "captcha": "ZZZZ"}).status_code == 200, "验证码错必须被拒"
+                                    "captcha": "ZZZZ",
+                                    }, environ_base={"REMOTE_ADDR": "198.51.100.204"}).status_code == 200, \
+        "验证码错必须被拒"
     _c3 = app.test_client()
     _code3 = _issue78(_c3)
     assert _c3.post("/login", data={"username": "smoke-admin", "password": _ADMIN_PW,
                                     "captcha": _code3}).status_code == 302, "带对码必须放行"
     assert _c3.post("/login", data={"username": "smoke-admin", "password": _ADMIN_PW,
-                                    "captcha": _code3}).status_code == 200, "验证码必须一次性（防重放）"
+                                    "captcha": _code3,
+                                    }, environ_base={"REMOTE_ADDR": "198.51.100.205"}).status_code == 200, \
+        "验证码必须一次性（防重放）"
     # 模块级纯函数：长度 / 大小写不敏感 / 空码判否 / PNG 签名
     assert len(_capmod78.new_code(6)) == 6 and len(_capmod78.new_code(4)) == 4
     assert _capmod78.verify("AB34", "ab34") is True
@@ -7181,8 +7229,9 @@ http:
             "变异后仍拒 → 断言没盯住真实门"
     finally:
         _capmod78.check = _real78
-    print("[7h+] 续78 登录验证码 ok: 账号登录无码/错码必拒、对码放行、一次性防重放；"
-          "引导口令分支不受影响；变异证伪：check 恒真即红")
+    print("[7h+] 续78+续108 登录验证码 ok: 账号登录与**无用户名的引导口令提交**都必须在分支之前被问到码"
+          "（判据是 check 被调用，不是状态码）；对码放行、一次性防重放；有账号时登录页必渲染验证码；"
+          "变异证伪：check 恒真 → 「不带码必拒」即红；把门搬回 `if username:` 里 → 「空用户名也过门」即红")
     # 后面这批用例与验证码无关：把 check 打桩成恒真（真门已在上面验过）
     _capmod78.check = lambda *a, **k: True
 
@@ -7190,7 +7239,8 @@ http:
     _ca = app.test_client()      # 管理员
     _cs = app.test_client()      # 子用户（**独立会话**：换账号共用一个 client 证明不了权限差异）
     assert _ca.get("/").status_code == 302, "未登录必须跳登录页"
-    assert _ca.post("/login", data={"username": "smoke-admin", "password": "wrong-pw"}).status_code == 200
+    assert _ca.post("/login", data={"username": "smoke-admin", "password": "wrong-pw"},
+                        environ_base={"REMOTE_ADDR": "198.51.100.206"}).status_code == 200
     assert _ca.post("/login", data={"username": "smoke-admin",
                                     "password": _ADMIN_PW}).status_code == 302
     assert _ca.get("/settings").status_code == 200, "管理员必须能进策略配置"
@@ -7319,7 +7369,9 @@ http:
     assert _cs.get("/tasks").status_code == 302, "已停用账号的会话必须当场失效"
     _cs3 = app.test_client()
     assert _cs3.post("/login", data={"username": "smoke-sub",
-                                     "password": _SUB_PW2}).status_code == 200, "停用后不能再登录"
+                                     "password": _SUB_PW2,
+                                     }, environ_base={"REMOTE_ADDR": "198.51.100.207"}).status_code == 200, \
+        "停用后不能再登录"
     assert _ca.post(f"/api/users/{_sub7h['id']}/toggle").status_code == 302     # 再启用（补救路径）
     assert users_mod.get_by_name("smoke-sub")["enabled"] == 1
 
@@ -7600,7 +7652,7 @@ http:
     #      ⑧ 审计**只记元数据**：明文口令 / 口令哈希 / 引导口令值都不得出现在审计表与 /audit 页面。
     #      与既有 [6u]/[7h]/[7i] 的关系：它们都用 `app.test_client()`（IP 恒为 127.0.0.1），
     #      且 [7h] 有**故意的失败登录** —— 所以本用例的"打满阈值"一律用**独立 REMOTE_ADDR**，
-    #      **绝不为迁就测试而调低默认阈值**（默认仍 10 次/5 分钟，见 scanner/config.py）。
+    #      **绝不为迁就测试而调低默认阈值**；用例一律从 `_cfg48` 取阈值、不硬写数字（§6.2 假红口径：把 10 写死在循环里，默认值一改就留下一批没有区分度的断言）。
     import scanner.audit as _audit48
     import scanner.login_guard as _lg48
 
@@ -7638,8 +7690,17 @@ http:
     _cfg48 = _lg48.config(settings)
     assert _cfg48["enabled"] is True
     assert (_cfg48["window_seconds"], _cfg48["max_fails_per_ip"],
-            _cfg48["max_fails_per_user"], _cfg48["lockout_seconds"]) == (300, 10, 20, 900), _cfg48
-    assert _lg48.norm_username("  smoke-audit  ") == "smoke-audit"
+            _cfg48["max_fails_per_user"], _cfg48["lockout_seconds"]) == (300, 5, 20, 900), _cfg48
+    # 续108（10 → 5）：**三份默认值必须一致** —— `login_guard.DEFAULTS` / `config.DEFAULTS` /
+    #   落盘的 `config/settings.yaml`。少钉一处就会出现"改了代码、老机器仍按 10 次放行"这种静默漂移
+    #   （本项目反复出这类事）。`gui.token` 是共享口令、控制台又能绑在非回环地址上，
+    #   阈值每放松一倍就等于给在线爆破多留一倍窗口。
+    from scanner import config as _cfgmod48
+    assert _lg48.DEFAULTS["max_fails_per_ip"] == 5, _lg48.DEFAULTS
+    assert _cfgmod48.DEFAULTS["gui"]["login_lockout"]["max_fails_per_ip"] == 5
+    _yaml108 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "max_fails_per_ip: 5" in _yaml108, "settings.yaml 也必须收到 5（三方一致）"
+    _cap_ip, _cap_user = _cfg48["max_fails_per_ip"], _cfg48["max_fails_per_user"]
     assert users_mod.get_by_name("  smoke-audit  ")["username"] == _lg48.norm_username("  smoke-audit "), \
         "guard 的用户名归一必须与 users.get_by_name 同口径（否则计数与查询会对不上）"
     # 关掉开关 → 永远不锁（纯函数，不依赖时间）
@@ -7647,23 +7708,24 @@ http:
     _off48["gui"]["login_lockout"] = dict(_off48["gui"]["login_lockout"], enabled=False)
     assert not _lg48.check("9.9.9.9", "x", _off48, now="2026-01-01 00:00:00").locked
 
-    # 2) 两级判据 + 锁定窗口（注入时间，不真 sleep）：9 次不锁、第 10 次锁、900s 后自动解锁
+    # 2) 两级判据 + 锁定窗口（注入时间，不真 sleep）：差一次不锁、踩到阈值即锁、900s 后自动解锁
     _IP_L, _U_L, _T0 = "198.51.100.77", "smoke-lock-target", "2026-01-01 00:00:00"
     assert not _lg48.check(_IP_L, _U_L, settings, now=_T0).locked
-    for _i in range(9):
+    for _i in range(_cap_ip - 1):
         _lg48.record_fail(_IP_L, _U_L, settings, now=_T0)
-    assert not _lg48.check(_IP_L, _U_L, settings, now=_T0).locked, "9 次（<10）不该锁"
-    _lg48.record_fail(_IP_L, _U_L, settings, now=_T0)          # 第 10 次 → 触发
+    assert not _lg48.check(_IP_L, _U_L, settings, now=_T0).locked, f"差一次（{_cap_ip - 1} < {_cap_ip}）不该锁"
+    _lg48.record_fail(_IP_L, _U_L, settings, now=_T0)          # 踩到阈值 → 触发
     _v48 = _lg48.check(_IP_L, _U_L, settings, now=_T0)
     assert _v48.locked and _v48.retry_after > 0, _v48
     _v48b = _lg48.check(_IP_L, _U_L, settings, now="2026-01-01 00:14:59")
     assert _v48b.locked and _v48b.retry_after == 1, _v48b
     assert not _lg48.check(_IP_L, _U_L, settings, now="2026-01-01 00:15:01").locked, "900s 后应解锁"
-    # 按用户名的**兜底**判据：换一批 IP、只打同一个用户名，到 20 次才锁（IP 各自都没满）
+    # 按用户名的**兜底**判据：换一批 IP、只打同一个用户名，到用户名阈值才锁（各 IP 都没满）
     _U_2 = "smoke-user-2nd"
-    for _i in range(20):
+    for _i in range(_cap_user):
         _lg48.record_fail(f"198.51.100.{100 + _i % 5}", _U_2, settings, now=_T0)
-    assert _lg48.check("10.0.0.1", _U_2, settings, now=_T0).locked, "同名失败满 20 次必须按用户名锁"
+    assert _lg48.check("10.0.0.1", _U_2, settings, now=_T0).locked, \
+        f"同名失败满 {_cap_user} 次必须按用户名锁（兜底判据）"
 
     # 3) 成功登录清**该用户名**计数、**不清 IP**（同一 IP 上"别人的失败"仍在）
     _IP_C = "198.51.100.88"
@@ -7678,7 +7740,7 @@ http:
 
     # 4) 计数**不无界增长**：锁定期间继续刷也不落行；过期行被 prune 清掉
     _IP_U = "198.51.100.99"
-    for _i in range(10):
+    for _i in range(_cap_ip):
         _lg48.record_fail(_IP_U, "", settings, now=_T0)
     assert _lg48.check(_IP_U, "", settings, now=_T0).locked
     _nf48 = _count_fails()
@@ -7696,8 +7758,9 @@ http:
     _envH = {"REMOTE_ADDR": _IP_H}
     _cl = app.test_client()
     _codes = [_cl.post("/login", data={"username": "smoke-audit", "password": "wrong-xx"},
-                       environ_base=_envH).status_code for _i in range(11)]
-    assert _codes[:10] == [200] * 10 and _codes[10] == 429, _codes
+                       environ_base=_envH).status_code for _i in range(_cap_ip + 1)]
+    assert _codes[:_cap_ip] == [200] * _cap_ip and _codes[_cap_ip] == 429, \
+        f"前 {_cap_ip} 次都该走到口令校验（200），第 {_cap_ip + 1} 次必须被锁（429）"
     _r429 = _cl.post("/login", data={"username": "smoke-audit", "password": "wrong-xx"},
                      environ_base=_envH)
     assert _r429.status_code == 429 and _r429.headers.get("Retry-After", "").isdigit(), _r429.headers
@@ -7728,7 +7791,7 @@ http:
     _PW_WHO = "SmokeWho#2026"
     assert users_mod.create_user(_U_WHO, _PW_WHO, role="user", must_change=False)[0]
     _IP_WHO = "203.0.113.61"
-    for _i in range(10):                        # 触发 IP 级锁（用户名非空；真实时间 → 锁真实有效）
+    for _i in range(_cap_ip):                        # 触发 IP 级锁（用户名非空；真实时间 → 锁真实有效）
         _lg48.record_fail(_IP_WHO, _U_WHO, settings)
     _blk = _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_WHO, limit=10)[0]
     _rip = [r for r in _blk if "IP 失败过多" in (r["detail"] or "")]
@@ -7772,7 +7835,8 @@ http:
     # 6) 审计：登录成功/失败/退出/账号操作/策略配置/POC/任务 都留下流水
     _ok_rows, _ok_total = _audit48.query(kind=_audit48.KIND_LOGIN_OK, limit=50)
     assert _ok_total >= 1 and any(r["actor"] == "smoke-audit" for r in _ok_rows), _ok_rows
-    assert _audit48.query(kind=_audit48.KIND_LOGIN_FAIL, ip=_IP_H)[1] >= 10, "失败登录必须有审计"
+    assert _audit48.query(kind=_audit48.KIND_LOGIN_FAIL, ip=_IP_H)[1] >= _cap_ip, \
+        f"失败登录必须有审计（至少 {_cap_ip} 次走到口令校验的失败都会留一行）"
     assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_H)[1] >= 1, "被拦截也要留痕"
     # 退出
     _cau.get("/logout")
@@ -7918,7 +7982,7 @@ http:
     _T_LK = "2026-03-01 00:00:00"
     _IP_LK = "203.0.113.31"
     assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_LK)[1] == 0, "前置：该 IP 不应有记录"
-    for _i in range(10):                                  # 第 10 次触发锁 → 写 1 条
+    for _i in range(_cap_ip):                             # 踩到阈值触发锁 → 写 1 条
         _lg48.record_fail(_IP_LK, "", settings, now=_T_LK)
     assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_LK)[1] == 1, \
         "锁被创建时必须留 1 条 login_blocked（信号不能为了'少写'而丢）"
@@ -7926,7 +7990,7 @@ http:
         _lg48.record_fail(_IP_LK, "", settings, now=_T_LK)
     assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_LK)[1] == 1, \
         "同一锁窗口内 40 次被拦截后 login_blocked 仍须只有 1 行（否则未认证者可无界放大）"
-    for _i in range(10):                                  # ② 锁窗口（900s）过期后再次打满
+    for _i in range(_cap_ip):                             # ② 锁窗口（900s）过期后再次打满
         _lg48.record_fail(_IP_LK, "", settings, now="2026-03-01 00:16:00")
     assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_LK)[1] == 2, \
         "锁窗口过期后再次被锁必须新增一行（不能因为'见过这个 IP'就永久不再记）"
@@ -7934,7 +7998,7 @@ http:
     _IP_HT = "203.0.113.32"
     _envHT = {"REMOTE_ADDR": _IP_HT}
     _cht = app.test_client()
-    for _i in range(10):
+    for _i in range(_cap_ip):
         _cht.post("/login", data={"username": "smoke-audit", "password": "wrong-yy"},
                   environ_base=_envHT)
     assert _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_HT)[1] == 1, "路由侧锁创建应留 1 条"
@@ -7948,7 +8012,7 @@ http:
     _lg48._active_locks = lambda *_a, **_k: []
     _IP_MUT = "203.0.113.33"
     try:
-        for _i in range(10):
+        for _i in range(_cap_ip):
             _lg48.record_fail(_IP_MUT, "", settings, now=_T_LK)
         _m1 = _audit48.query(kind=_audit48.KIND_LOGIN_BLOCKED, ip=_IP_MUT)[1]
         for _i in range(40):
@@ -7985,10 +8049,34 @@ http:
     for _u in users_mod.list_users():
         users_mod.delete_user(_u["id"])
     assert users_mod.count_users() == 0, "bootstrap 分支只在无账号时可达"
+    # 续108：**零账号（bootstrap）时登录页也必须发码、引导口令也必须过码**。
+    #   旧行为是两处判据各自为政：模板按 `{% if not bootstrap %}` 把整块藏了，路由只在
+    #   `if username:` 里查码。表现就是用户报的那两件事 ——「后台不显示验证码」+「填了用户名
+    #   永远验证码错误」（本机 audit_log 的两条 login_fail 就是这么攒出来的）；而唯一能直接
+    #   换来管理员身份的**引导口令**那条路反倒完全免码。
+    _pg13 = app.test_client().get("/login").get_data(as_text=True)
+    assert 'name="captcha"' in _pg13 and "/captcha.png" in _pg13, \
+        "bootstrap 时登录页也必须渲染验证码（模板与路由的判据必须同源）"
+    # 注意：此刻 `_capmod78.check` **已经是 [7h+] 末尾那张"恒真"桩**了 —— 拿它自己当"真门"存一份等于什么都没还原（实测就是这样假绿：不带码直接 302）。真门只能取 [7h+] 打桩前存下的 `_real78`。
+    _real13 = _real78
+    _capmod78.check = _real13
+    try:
+        _cn13 = app.test_client()
+        assert _cn13.post("/login", data={"token": settings["gui"]["token"]},
+                          environ_base={"REMOTE_ADDR": "198.51.100.208"}).status_code == 200, \
+            "引导口令不带码必须被拒（旧实现这条直接 302 —— 门在 if username: 里面）"
+        _tok13, _code13 = _capmod78.issue(4)
+        with _cn13.session_transaction() as _s13:
+            _s13["captcha_id"] = _tok13
+        assert _cn13.post("/login", data={"token": settings["gui"]["token"], "captcha": _code13},
+                          environ_base={"REMOTE_ADDR": "198.51.100.208"}).status_code == 302, \
+            "带对码的引导口令仍须登录成功（别把门做成死门）"
+    finally:
+        _capmod78.check = lambda *a, **k: True
     _IP_T = "203.0.113.13"
     _envT = {"REMOTE_ADDR": _IP_T}
     _ctok = app.test_client()
-    for _i in range(10):
+    for _i in range(_cap_ip + 2):    # 打满（留 2 次余量，以后调阈值不必回头改这里）
         _ctok.post("/login", data={"token": "wrong-token"}, environ_base=_envT)
     _rtok = _ctok.post("/login", data={"token": settings["gui"]["token"]}, environ_base=_envT)
     assert _rtok.status_code == 429, "引导口令登录也必须受 IP 限速"
@@ -7996,7 +8084,7 @@ http:
                       environ_base={"REMOTE_ADDR": "203.0.113.14"}).status_code == 302, \
         "干净 IP 上正确的引导口令仍须能登录（证明刚才的 429 是限速，不是口令坏了）"
 
-    print("[7j] 续48 登录限速 + 访问审计 ok: 两级限速（IP 10 次/5 分钟为主、用户名 20 次兜底，"
+    print(f"[7j] 续48+续108 登录限速 + 访问审计 ok: 两级限速（IP {_cap_ip} 次/5 分钟为主、用户名 {_cap_user} 次兜底，"
           "900s 后自动解锁）/ 锁定返回 429+Retry-After（非 403）· 正确口令也拒 · 存在性不泄漏"
           "（两页逐字节相同）/ 成功清用户名计数不清 IP / 计数不无界增长（锁定期不累加 + prune 清过期）/ "
           "被拦截审计只在锁创建时写一次（40 次被拦截仍只 1 行、过期再锁再记 1 行）/ "

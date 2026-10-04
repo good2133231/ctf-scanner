@@ -197,6 +197,12 @@ ctf-scanner/
 │   │                      #   与 POC 置信度（pocs.confidence + poc_confidence）见 §7
 │   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖
 │   ├── keystore.py        # 凭据口令加密（续98）：PBKDF2(60 万次)+AES-256-GCM 读写 config/keys.enc.yaml；解锁只在启动时由入口调一次并缓存，current() 只读缓存、绝不提示
+│   ├── users.py           # 多用户（续46）：PBKDF2 口令哈希 / check_login / validate_password / 防锁死（不能停用自己、至少留一个启用中的管理员）
+│   ├── audit.py           # 访问审计流水（续48）：谁·何时·哪 IP·做了什么·成败；`record()` 自带口令形状擦洗，**只记元数据**
+│   ├── login_guard.py     # 登录限速 / 失败锁定（续48）：独立表 `login_fails`（与审计分表）；按 IP 为主 + 按用户名兜底，
+│   │                      #   被锁返回 429 + Retry-After 且**正确口令也拒**、页面不泄漏账号存在性；自救 `-m scanner.login_guard`
+│   ├── captcha.py         # 登录验证码（续78）：**纯标准库**（手写 5×7 点阵字 + zlib/struct 编 PNG）；答案只存本进程内存，
+│   │                      #   会话里只放不透明 token；一次性 + 大小写/易混归一 + `compare_digest`
 │   ├── utils.py           # run_cmd / http_request / pool_run / resolve_host / IO / base_domain() / rel_display()
 │   ├── throttle.py        # **统一并发 / 限速 / 全局预算门控（F2）**：两级闸（任务级 + 进程级共享）
 │   │                      #   + 令牌桶 + 任务预算；经 `settings["_throttle"]` 注入（沿用 auth.inject 的
@@ -960,6 +966,18 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   漏一处就是"看起来有防护、实际有缺口"）。`serve()` 在绑非回环地址时打显式告警 —— 那种模式下
   Host 白名单自动放宽，暴露必须看得见。**注意 `_LOOPBACK_HOSTS` 刻意不含 `0.0.0.0`**（它是绑定
   地址、不是可访问的主机名）；`gui.host` 改了要**重启**才生效（守卫在 `create_app()` 算一次）。
+- **发码与查码必须同源（续108）**：`gui/templates/login.html` 的 `.captcha-row` **无条件渲染**，
+  `gui/app.py::login()` 的 `captcha.check(...)` 在**所有凭据分支之前** —— 账号口令与 `gui.token`
+  引导口令走同一条门。这里分叉过一次：模板按 `{% if not bootstrap %}`（库里无账号）隐藏整块，
+  路由却按"填了用户名才查码"，于是**零账号时输入 `admin` 永远「验证码错误」而页面上根本没有码可抄**
+  （用户报的"后台不显示验证码"就是这个）；而唯一能直接换来管理员身份的引导口令反倒**完全免码**。
+  改这一处**模板与路由要一起改**，回归 `[7h+]`（有账号档）与 `[7j]` ⑬（零账号档）两头都钉着。
+  失败锁定 `max_fails_per_ip` 续108 由 10 收到 **5**，**三份默认值必须一起改**（`login_guard.DEFAULTS`
+  / `config.DEFAULTS` / `config/settings.yaml`，`[7j]` ① 钉三方一致）；用例一律从 `_cfg48` 取阈值、
+  不许把数字写进循环（§6.2）。这两段阈值**页面上改不了** —— `/settings` 的 gui 段只有 host/port/token。
+  ⚠️ 仍存的两个已知风险（续108 登记、未动，属独立一轮）：① `app.secret_key = f"ctfscanner::{gui.token}"`
+     是**由公开默认口令推导**的固定串 → 会签出伪造的管理员会话 Cookie（验证码与限速都拦不住伪造）；
+     ② `gui.token` 是**明文**写在 `config/settings.yaml` 里的共享口令，且无账号时 `serve()` 会把它的**值打印进启动横幅** —— 建第一个账号后该口令立即失效（这一条 docs/deploy-https.md 有部署口径）。
 - 「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
   takeover/portscan/jsmine/dirscan/vulnscan/screenshot/cert/iprecon/fofa/**ssrf/shodan/quake/ctlog**/
   blacklist/intel/heuristic/**github** **二十三段**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned）

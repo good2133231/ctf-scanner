@@ -87,7 +87,8 @@ python cli/client.py -t http://target.local/ --cookie "SESSION=xxx" -H "X-Api-Ke
 python run_gui.py          # 默认 http://127.0.0.1:5000
 ```
 
-口令在 `config/settings.yaml` 的 `gui.token`（默认 `ctfscanner`）。
+口令在 `config/settings.yaml` 的 `gui.token`（默认 `ctfscanner`）。登录页**必须有验证码**（续108 起
+连引导口令也要过码）；页面上没出图通常是**旧进程还在跑** —— 改完 GUI 侧代码要重启控制台再看。
 
 ### 页面与操作流
 

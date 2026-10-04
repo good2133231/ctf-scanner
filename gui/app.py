@@ -17,7 +17,10 @@
 - 续48 起有**访问审计流水**（`scanner/audit.py`：谁/何时/从哪个 IP/做了什么/成败，只记元数据、
   绝不记口令凭据；管理员在「访问审计」页查看）与**登录限速/失败锁定**（`scanner/login_guard.py`：
   按 IP 为主、按用户名兜底，被锁返回 429 + Retry-After，文案与"账号是否存在"无关）；
-  两项都是**保护性开关、默认开但阈值宽松**，可在策略配置里调（见 `gui.login_lockout` / `gui.audit`）。
+  两项是**保护性开关、默认开**；阈值调只能手改 `config/settings.yaml` 的 `gui.login_lockout` /
+  `gui.audit` —— 「策略配置」页的 gui 段**只有 host/port/token 三项**（别在页面里找，找不到）。
+  续108：登录验证码门在**所有凭据分支之前**（账号登录与 `gui.token` 引导口令同一条门），
+  且模板无条件渲染 `.captcha-row` —— 发码与查码必须同源，分叉过一次，见 `login()` 里的注释。
   **故意暴露到局域网/公网前**，请读 docs/deploy-https.md 与 docs/security-notice.md。
 """
 import functools
@@ -768,19 +771,24 @@ def create_app():
                 return resp
             # `login_fail` 侧**无需额外限流**：失败分支只在"守卫未判锁"时才可达，而 `record_fail` 一旦把
             # 该 IP / 用户名推到阈值就会创建锁 → 之后请求都在上面那一支被 429 拦下，根本到不了这里。
-            # 因此每个键在一个窗口内最多留下 `max_fails_per_*` 条（默认 10 / 20），天然有界。
+            # 因此每个键在一个窗口内最多留下 `max_fails_per_*` 条（默认 5 / 20），天然有界。
             # （若管理员把 `gui.login_lockout.enabled` 关掉、或把阈值设为 0，失败审计就不再被限 —— 那是
             #   管理员显式选择"不限速"，此时审计量随请求量增长属预期行为。）
+            # 续108：验证码门前移到**所有校验凭据的分支之前**（续78 只把它挂在 `if username:` 里面）。
+            #   两处判据原先各自为政：路由「填了用户名才要码」、模板「库里没有账号就不发码」——
+            #   于是"零账号 + 输了用户名"这一格必然踩空：页面上一个码都看不见，提交却永远
+            #   「验证码错误」，还把 IP 往失败锁定计数里推（本机 audit_log 的两条 login_fail 就是这么来的）。
+            #   引导口令分支此前**完全免码**，而它恰恰是唯一能直接换来管理员身份的入口：
+            #   共享口令 + 无门槛 + 控制台可绑在非回环地址上，等于把最弱的门开在最不设防的路上。
+            #   码是一次性的（`check()` 成败都作废），所以每次失败后页面自己会重新取一张。
+            if not captcha.check(session.pop("captcha_id", ""), request.form.get("captcha") or ""):
+                error = "验证码错误（已刷新，请重试）"
+                logger.info(f"[gui] 登录失败：{username or '(引导口令)'}（验证码错误）")
+                _guard_fail(ip, username)
+                _audit(audit.KIND_LOGIN_FAIL, actor=username, target=username, ok=False,
+                       actor_role="", detail="验证码错误")
+                return render_template("login.html", error=error, bootstrap=bootstrap)
             if username:
-                # 续78 登录验证码：**账号登录**必须过验证码（引导口令分支不走这里 —— 那是首次建号前的
-                #   迁移路径，仅当库里没有任何账号时可达，且同样受限速约束）。码一次性，成败都作废。
-                if not captcha.check(session.pop("captcha_id", ""), request.form.get("captcha") or ""):
-                    error = "验证码错误（已刷新，请重试）"
-                    logger.info(f"[gui] 登录失败：{username}（验证码错误）")
-                    _guard_fail(ip, username)
-                    _audit(audit.KIND_LOGIN_FAIL, actor=username, target=username, ok=False,
-                           actor_role="", detail="验证码错误")
-                    return render_template("login.html", error=error, bootstrap=bootstrap)
                 row = users.check_login(username, password)
                 if row is None:
                     error = "用户名或口令错误"

@@ -80,6 +80,22 @@ from werkzeug.serving import make_server
 srv = make_server("127.0.0.1", 0, app, threaded=True)    # 0 = 系统分配空闲端口
 with open(os.environ["CTFSCANNER_E2E_PORTFILE"], "w", encoding="utf-8") as fh:
     fh.write(str(srv.server_port))
+# 续108：登录页现在在**所有凭据分支之前**都要过验证码（答案只存服务端内存，页面/cookie 读不到，
+#   这正是它存在的意义）。E2E 要验的是"真浏览器提交表单 → 真登录"，所以让这份**测试专用的引导
+#   脚本**把自己刚发出的码抄进一个临时文件 —— 生产代码里没有任何"免码/固定码"的口子。
+_capfile = os.environ.get("CTFSCANNER_E2E_CAPFILE") or ""
+if _capfile:
+    from scanner import captcha as _cap_boot
+    _issue_orig = _cap_boot.issue
+
+    def _issue_rec(_n=4, _ttl=None):
+        _tok, _code = _issue_orig(_n)
+        with open(_capfile, "a", encoding="utf-8") as _fh:
+            print(_code, file=_fh)                      # 一行一张码，绕开三层转义
+        return _tok, _code
+
+    _cap_boot.issue = _issue_rec
+
 srv.serve_forever()
 '''
 
@@ -351,8 +367,11 @@ def _start_gui(env, work):
     boot = work / "_gui_boot.py"
     portfile = work / "port.txt"
     boot.write_text(_GUI_BOOT, encoding="utf-8")
+    capfile = work / "cap.txt"                 # 服务端每发一张码追加一行（见 _GUI_BOOT 末尾）
+    _CAPFILE["path"] = capfile
     errlog = open(work / "gui.err", "wb")                   # 不用 PIPE：没人读会写满缓冲把服务卡死
-    child_env = dict(env, CTFSCANNER_E2E_REPO=str(ROOT), CTFSCANNER_E2E_PORTFILE=str(portfile))
+    child_env = dict(env, CTFSCANNER_E2E_REPO=str(ROOT), CTFSCANNER_E2E_PORTFILE=str(portfile),
+                     CTFSCANNER_E2E_CAPFILE=str(capfile))
     proc = subprocess.Popen([sys.executable, str(boot)], env=child_env, cwd=str(ROOT),
                             stdout=subprocess.DEVNULL, stderr=errlog)
     port = 0
@@ -431,17 +450,48 @@ def _kill_tree(proc):
         pass
 
 
+_CAPFILE = {"path": None}        # 单进程单 GUI，一个槽够了
+
+
+def _cap_code(want=1, deadline=10.0):
+    """取引导脚本抄录的第 `want` 张服务端验证码；超时返回空串（调用方据此**明确失败**，不假绿）。"""
+    p = _CAPFILE.get("path")
+    if not p:
+        return ""
+    end = time.time() + deadline
+    while time.time() < end:
+        try:
+            txt = Path(p).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            txt = ""
+        _codes = [x.strip() for x in txt.splitlines() if x.strip()]
+        if len(_codes) >= want:
+            return _codes[want - 1]
+        time.sleep(0.05)
+    return ""
+
+
 def _login(page, base, token):
     """走**真实登录表单**拿到会话（引导口令：库里无账号时 `gui.token` 即管理员）。
 
     刻意不伪造 Cookie / 不塞 session：要验的就是"浏览器提交表单 → 服务端下发会话 → 后续页面
     不再 302"这条链路；伪造会话等于把要测的东西绕过去。
+
+    续108：验证码门在所有凭据分支之前，库里无账号（引导口令）时**同样要填码** —— 旧版只填
+      口令就提交，从那一刻起这条链路必然停在登录页（表现为整组断言红）。码取自 capfile
+      （服务端自己抄录的那份）：页面仍然真读图、真填框、真提交，一点没绕。
     """
     page.navigate(base + "/login")
     has = page.ev("!!document.querySelector('input[name=password]')")
     if not has:
         raise RuntimeError("登录页没有口令输入框")
+    if not page.ev("!!document.querySelector('input[name=captcha]')"):
+        raise RuntimeError("登录页没有验证码输入框（续108 起两种模式都必须渲染）")
+    _code = _cap_code()
+    if not _code:
+        raise RuntimeError("没取到服务端下发的验证码（capfile 超时）")
     page.ev("document.querySelector('input[name=username]').value=''")
+    page.ev(f"document.querySelector('input[name=captcha]').value={json.dumps(_code)}")
     page.ev(f"document.querySelector('input[name=password]').value={json.dumps(token)}")
     href = page.click_nav("document.querySelector('.login-box form button[type=submit]')")
     return href
