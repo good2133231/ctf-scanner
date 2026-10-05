@@ -45,6 +45,7 @@
 - 踩到两处（记下来省得再来一次）：① 按行 splice 时把锚点行又写进新内容 → `def build_lead` 被复制成
   两行（SyntaxError）；② 正则跨行拼接时忘了每行都要闭合引号。两处都由 `py_compile` 当场抓到，
   与 §9「按行改文件要核对替换区间」是同一条教训的第三种形态。
+- 收尾（同轮）：① **历史 `csegs` 行按新口径追改一次** —— 今天交付给用户的两份报告里那 500 条 CF 段噪声就是这些行抄出来的；改前把 4 行原值整份备份到 `data/trash/csegs_shared_backfill_*.json`（与 `db.backup_task()` 同一思路：动手前先留唯一救命稻草），改后 `count>30` 的行 `domains` 全空 + `note` 写明原因与备份位置，并用 `report.generate/generate_html/generate_jsonl` 重生成 `logs/scan_dzmm.*` 与 `logs/scan_dzmm2.*`（复核：`workers.dev` 零残留）。阈值取 `iprecon.max_domains_per_ip` 的配置值，不是硬写 30。② GUI 按规矩重启（改完 GUI/模板必须重启，pid 226654），登录页出码、`/captcha.png` 真图、引导口令不带码仍被拒；本轮起 `users` 表已有 1 个启用管理员（用户自己建的 admin）→ **引导口令那条迁移后门已自然关闭**。会话因密钥轮换（续109）全部作废，需重新登录一次。
 - 复验：`tests/smoke.py` 全量 SMOKE PASS / RC=0。
 
 ## 2026-10-05 —— 续110：**两处"同一判据写在两个出口"**收口（CDN 覆盖裸目标 / C 段共享主机结论）
