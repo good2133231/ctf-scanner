@@ -8,7 +8,7 @@
 且 CTF 里经常只给一个 Web 入口。需要时在 GUI「策略配置 → 端口与服务」里打开。
 """
 from .base import Stage
-from .. import db, portscan
+from .. import cdn, db, dnsq, portscan
 from ..utils import pool_run, resolve_host, which
 
 
@@ -137,7 +137,23 @@ class PortscanStage(Stage):
                                     f"跳过端口扫描（扫到的不是源站）")
                     return []
                 else:
-                    ips = resolve_host(host)
+                    # 续110：这条兜底分支此前**完全不判 CDN**。`net` 里只有 subdomain 阶段回填过的
+                    #   域名，而"任务直接给的那个域名/URL"根本不在 `subdomains` 表里 → 于是拿着
+                    #   Cloudflare 边缘 IP 把 1-65535 全扫一遍（2026-10-05 dzmm.ai 实测：26 个
+                    #   "开放端口" = CF 支持的 13 个端口 × 2 个任播 IP，banner 全空，两轮集合逐字节
+                    #   相同；同一次扫描里 `studio/www.dzmm.ai` 因为在表里带 cdn 标记**被正确跳过**
+                    #   —— 同一个动作留了两套判据，就是这么来的）。
+                    #   现在复用 subdomain 阶段那一套：`resolve_detail`（CNAME 链 + A 记录）→
+                    #   `cdn.match`（CNAME 后缀与 IP 段**双判据**，后者专治"任播 CDN 直连 IP、CNAME 空"）。
+                    chain, got, _rsn = dnsq.resolve_detail(host, settings=ctx.settings)
+                    label = cdn.match(chain, ctx.settings, got)
+                    if label:
+                        ctx.logger.info(f"[portscan] {host} 走 CDN（{label}），"
+                                        f"跳过端口扫描（扫到的不是源站）")
+                        return []
+                    # dnsq 解不出来（timeout / servfail / 只靠 /etc/hosts 或内网 DNS 的机器）时
+                    #   **退回系统解析器**：加这道判定不能把原本扫得到的主机扫不到。
+                    ips = got or resolve_host(host)
             target_ports = ports
             if exclude_scanned and scanned.get(host):
                 skipped = scanned[host]

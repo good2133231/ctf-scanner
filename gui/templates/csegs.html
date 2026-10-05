@@ -22,7 +22,7 @@
         <td class="mono">{{ c.segment or '-' }}</td>
         <td class="mono">{{ c.ip or '-' }}</td>
         <td>{{ c.count }}</td>
-        <td class="muted small mono">{{ c.domains or '-' }}</td>
+        <td class="muted small mono">{{ c.domains or c.note or '-' }}</td>
       </tr>
     {% else %}
       <tr><td colspan="6" class="muted">没有匹配的 C 段数据（osint 阶段的 C 段反查默认关闭）。</td></tr>

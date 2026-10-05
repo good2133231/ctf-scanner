@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS csegs (
   segment TEXT DEFAULT '',
   ip TEXT DEFAULT '',
   domains TEXT DEFAULT '',
+  note TEXT DEFAULT '',
   count INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS certs (
@@ -246,6 +247,9 @@ _COLUMN_PATCHES = {
     "pocs": {"confidence": "TEXT DEFAULT ''"},
     # 目录命中页的 <title>：老库补列（新库由 SCHEMA 直接建出）
     "dirs": {"title": "TEXT DEFAULT ''"},
+    # 续110：C 段"共享主机"结论。老库补列（新库由 SCHEMA 直接建出）—— 命中过多时
+    #   `domains` 留空、由 `note` 说明为什么不入库（见 stages/osint.py 与 §7）。
+    "csegs": {"note": "TEXT DEFAULT ''"},
     # 孤儿任务对账用：老库补 pid 列（0 = 老库遗留行，一律视为进程已死）
     "tasks": {"pid": "INTEGER DEFAULT 0",
               # 续35「运行时长」：老库补三列（新库由 SCHEMA 直接建出）。
@@ -985,10 +989,10 @@ def insert_csegs(task_id, rows):
     """
     if not rows:
         return
-    _exec("INSERT INTO csegs(task_id,segment,ip,domains,count) VALUES(?,?,?,?,?)",
+    _exec("INSERT INTO csegs(task_id,segment,ip,domains,count,note) VALUES(?,?,?,?,?,?)",
           [(task_id, str(r.get("segment", "")), str(r.get("ip", "")),
-            ",".join(r.get("domains") or [])[:4000], int(r.get("count") or 0))
-           for r in rows], many=True)
+            ",".join(r.get("domains") or [])[:4000], int(r.get("count") or 0),
+            str(r.get("note", ""))[:200]) for r in rows], many=True)
 
 
 def insert_certs(task_id, rows):

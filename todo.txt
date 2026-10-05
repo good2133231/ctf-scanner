@@ -2014,6 +2014,29 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 
 
 
+2026-10-05 · 续110（远端 Linux，Qoder-Agent）
+  ① 用户让"对授权目标 dzmm.ai 跑全流程 + 功能全勾 + 校验结果"。校验出两处**框架自身的缺陷**
+     （同一判据写在两个出口），已修：`portscan` 的 CDN 跳过原先只认 `subdomains` 表回填的标记，
+     **裸目标（任务直接给的域名/URL）不判** → 把 Cloudflare 边缘节点当源站做全端口扫描
+     （26 个假"开放端口"、banner 全空、两轮集合逐字节相同）。改为兜底分支复用
+     `dnsq.resolve_detail` + `cdn.match` 双判据；`dnsq` 解不出时**退回系统解析器**。
+     线上复核：同一目标再跑 → 4 秒 / 0 端口（原 5.5 分钟 / 26 个）。
+  ② 共享主机 / CDN 段的反查清单：原先"判为噪声不纳入资产"却照样写进 `csegs.domains` 并被报告原样抄。
+     新增 `csegs.note`（老库靠 `_COLUMN_PATCHES` 补列，真实 data/scanner.db 升级现场验过）：
+     超阈值时清单留空 + note 写明"命中多少 / 为什么不列"；MD/HTML 共用 `report._cseg_cell()`，
+     模板统一 `c.domains or c.note`。刻意不回退成"展示层再过滤一次"。
+  ③ 回归 smoke `[8h]`：CDN 判据**不打桩**（真用 cdn_ips.txt 算）；两条变异（`cdn.match` 打回空 /
+     阈值放松到 1000）都验过"旧口径下必红"；另有非 CDN 照扫、dnsq 失败退回系统解析器、
+     未超阈值照常入库三条反向对照。
+  ④ 自己踩的一处：补丁把 SCHEMA 的按行替换范围写宽一行，`count` 列被顶掉 —— 靠"建库→写入→回读"
+     的最小验证当场抓到。记下来是因为它与 §9 的 EOL 坑同源：**按行改文件要核对替换区间**，
+     `git diff --numstat` 只给你行数，不会告诉你少了一列。
+  ⑤ 本轮扫描的事实结论：源站未暴露（6 个子域名 2 个走 CF、3 个 NXDOMAIN、mail 解析超时未定论）；
+     `wp-config.php(.bak)` 是 **403** 不是泄露；潜在漏洞 0，但执行面只有 7 个内置 POC + 7/14 项检查
+     （级别闸）；30 条 GitHub 线索绝大多数是别人的 gfwlist/路由名单 → 续111 加标注；
+     FOFA/Shodan/Quake 在这台 Linux **没有 key**，"功能全勾"实际没跑到，别再当已覆盖能力。
+  ⑥ 门禁与卫生：smoke 全量 SMOKE PASS / RC=0；为扫描临时打开的 11 个策略开关已按 sha256 还原
+     （73dfcb98…），工作区干净；GUI 进程（pid 153333）未被本轮改动波及。
 2026-10-04 · 续109（远端 Linux，Qoder-Agent）
   ① 堵掉续108 登记的第一个高危项：`app.secret_key` 原来是 `f"ctfscanner::{gui.token}"` —— 要害不是"口令弱"
      而是**密钥可推导**（settings.yaml 被 git 跟踪 + 仓库公开 + 默认口令写在 README），任何人都能自己签一张

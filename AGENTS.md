@@ -1398,12 +1398,29 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   后缀带 `.` 比、大小写归一，`notpengo.pro` 不算 `pengo.pro` 子域）命中才带。新增出口模块/调用点时，
   先想清"这条 URL 最终发往谁"，别被"它来自目标页面"骗了（见 §5、§7 凭据红线）。
 
+- **共享主机 / CDN 段的反查清单不入库，但结论必须入库入报告（续110）**：`osint` 早就算得出
+  "某 IP 挂了几百个域名 = 共享主机/任播段，不纳入域名资产"（阈值 `iprecon.max_domains_per_ip`，
+  默认 30），**却照样把这几百条写进 `csegs.domains`，报告「C 段视野」原样抄一遍** —— 读者会把
+  别人的 `*.workers.dev` 当成本项目标的资产面（dzmm.ai 实测：两个 CF 段各 500 条）。现在超阈值时
+  `domains` 留空、由新列 `csegs.note` 写明"命中多少 / 为什么没列"（老库靠 `_COLUMN_PATCHES` 补列）。
+  **判据只在 `_c_segments()` 一处**，MD 与 HTML 共用 `report._cseg_cell()`，模板用
+  `c.domains or c.note`。**不许**退回"展示层再过滤一次"：那等于把同一判据抄到第 N 个出口。
+  回归 `[8h]` ②（含"阈值放松到 1000 后必须照旧入库"的变异 —— 否则断言恒真）。
+
 - **CDN 判定不能只认 CNAME**（2026-09-25 续43）：Cloudflare 这类**任播** CDN 常常 A 记录直接解析到
   边缘 IP、**CNAME 链为空**（实测 pengo.pro / admin.pengo.pro / app.pengo.pro 都解析到
   `172.66.40.229` / `172.66.43.27`）。只按 `cdn_cname.txt` 判会一律标成"非 CDN"，既看不出走 CDN，
   又会让 `portscan` 去打 Cloudflare 边缘节点、得出与本项目标无关的"30 个端口开放"。故 `cdn.match()`
   现在两条判据：**CNAME 优先**（厂商特征明确）→ 未命中再看 `cdn_ips.txt` 的**任播 IP 段**
   （`match(cname_chain, settings, ips)`；subdomain / extdom / GUI 解析三处都把解析 IP 传进去）。
+  **续110 补上第四处、也是漏得最狠的一处：`portscan` 的兜底分支**。判据当时只认"`net` 里有没有
+  这条域名"（`net` 由 `subdomains` 表回填），而**任务直接给的那个域名/URL 压根不在 `subdomains`
+  表里** → 拿着 Cloudflare 边缘 IP 把 1-65535 全扫一遍。2026-10-05 对授权目标 dzmm.ai 实跑抓到：
+  26 个"开放端口" = CF 支持的 13 个端口 × 2 个任播 IP、banner 全空、两轮集合逐字节相同；
+  同一次扫描里 `studio/www.dzmm.ai`（在表里）却被正确跳过 —— **同一个动作在两处各写一遍判据**。
+  现在兜底分支复用 subdomain 那一套（`dnsq.resolve_detail` + `cdn.match` 双判据），命中就跳过并
+  点名；`dnsq` 解不出来时**退回系统解析器**（加判定不许把原本扫得到的主机挡掉）。
+  线上复核：修完对同一目标重跑 `portscan` → 4 秒、0 个端口（原来 5.5 分钟 / 26 个）。回归 `[8h]`。
 
 - **"能自动下载"的边界＝`toolmgr.TOOLS`；不能的进 `toolmgr.MANUAL`，两者必须不相交**（2026-09-27
   续59-3）：`TOOLS` 的语义是"**能自动下载、且默认必须过 release 自带 SHA256 才落盘**"，

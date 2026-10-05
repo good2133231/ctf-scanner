@@ -435,7 +435,7 @@
         <tr><td class="mono">{{ c.segment or '-' }}</td>
           <td class="mono">{{ c.ip or '-' }}</td>
           <td>{{ c.count }}</td>
-          <td class="muted small mono">{{ c.domains or '-' }}</td></tr>
+          <td class="muted small mono">{{ c.domains or c.note or '-' }}</td></tr>
       {% else %}
         <tr><td colspan="4" class="muted">暂无数据（osint 阶段的 C 段反查默认关闭，在「策略配置 → 外部情报拓展」打开）。</td></tr>
       {% endfor %}

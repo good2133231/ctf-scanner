@@ -177,8 +177,17 @@ class OsintStage(Stage):
         for seg, seg_ips in segs.items():
             for ip in seg_ips:
                 doms = mapping.get(ip, [])
+                # 续110：命中数超过阈值 = 共享主机 / CDN 段，**清单不入库**。
+                #   旧行为是"资产拓展不纳入它们"（这一步判对了），却照样把 500 个与目标无关的
+                #   域名写进 `csegs.domains`，报告「C 段视野」再原样抄一遍 —— 读者会把别人的
+                #   workers.dev 当成本项目标的资产面（2026-10-05 dzmm.ai 实测：两个 Cloudflare
+                #   任播段各存 500 条）。段与 IP 本身是事实，保留；只把"结论 + 为什么不列清单"
+                #   写进 note —— 让页面与报告说得出口，**不是假装没反查到**。
+                shared = len(doms) > cap
                 rows.append({"segment": seg, "ip": ip,
-                             "domains": doms[:cap], "count": len(doms)})
+                             "domains": [] if shared else doms[:cap], "count": len(doms),
+                             "note": (f"反查命中 {len(doms)} 个域名（>{cap}）：判为共享主机 / CDN 段，"
+                                      "与目标无关，清单不入库") if shared else ""})
         db.insert_csegs(ctx.task_id, rows)
         ctx.results["csegs"] = rows
 

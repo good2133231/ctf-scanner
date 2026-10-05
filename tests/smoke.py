@@ -12322,6 +12322,161 @@ http:
           "｜运行时变异（密钥打回推导式）同一张 Cookie 立刻被接受 = 断言有牙齿｜真登录会话仍有效")
 
 
+    # ---------------- [8h] 续110：CDN 判定覆盖"裸目标" + C 段共享主机结论必须上库上报告 ----------------
+    #      两处都是 2026-10-05 对授权目标 dzmm.ai 实跑全流程时校验出来的，根因同一类：
+    #      **同一个动作在两处各写一遍判据** —— 子域名走 CDN 判定、不在 `subdomains` 表里的裸目标
+    #      不走（于是把 Cloudflare 边缘节点当源站全端口扫）；资产拓展丢掉了共享主机的噪声域名，
+    #      `csegs` 表与报告却照抄 500 条（读者会把别人的 workers.dev 当成本项目标的资产面）。
+    from scanner import cdn as _cdn110, dnsq as _dns110, iprecon as _ipr110
+    from scanner.stages import portscan as _ps110, osint as _os110
+
+    _calls110, _logs110 = [], []
+    _tid110a = _tid110b = _tid110c = 0        # 清理时按非 0 判断，别让 finally 里的 NameError 盖住真错误
+
+    class _Rec110:
+        """只收日志 —— 断言要看的是"阶段说了什么"，而不是控制台安静不安静。"""
+        def info(self, m, *a): _logs110.append(str(m))
+        def warning(self, m, *a): _logs110.append(str(m))
+        def error(self, m, *a): _logs110.append(str(m))
+        def exception(self, m, *a): _logs110.append(str(m))
+        def debug(self, m, *a): pass
+
+    _s110 = copy.deepcopy(settings)
+    _s110["portscan"] = {"enabled": True, "max_hosts": 5, "ports": "80", "engine": "fscan",
+                         "banner": False, "exclude_scanned": False}
+    _orig_fs110, _orig_nm110 = _ps110.portscan.fscan_scan, _ps110.portscan.nmap_scan
+    _orig_detail110, _orig_which110 = _dns110.resolve_detail, _ps110.which
+
+    def _stub_scan110(*a, **k):
+        _calls110.append((a[0] if a else "", a[1] if len(a) > 1 else "",
+                         len(a[2]) if len(a) > 2 else 0))
+        return []          # [] = "确实没有开放端口"，据此不再回退 nmap / 内置（见 §7 fscan 条目）
+
+    try:
+        _tid110a = db.create_task("smoke-110-cdn", "cdn-front.example", ["portscan"], {})
+        _tid110b = db.create_task("smoke-110-plain", "plain.example", ["portscan"], {})
+        _ctx110a = StageContext(_tid110a, "smoke-110-cdn", parse_lines(["cdn-front.example"]),
+                                ["portscan"], {}, _s110, Path(_TMPDIR) / "cdn110", _Rec110())
+        _ctx110b = StageContext(_tid110b, "smoke-110-plain", parse_lines(["plain.example"]),
+                                ["portscan"], {}, _s110, Path(_TMPDIR) / "plain110", _Rec110())
+        _ps110.portscan.fscan_scan = _stub_scan110
+        _ps110.portscan.nmap_scan = _stub_scan110
+        _ps110.which = lambda name, *a: "fscan-stub"
+
+        # ① 边缘 IP：一个端口都不许扫。**CDN 判据不打桩** —— 用随仓库发布的 `config/dicts/cdn_ips.txt`
+        #    真算（104.21.68.96 落在 104.16.0.0/13 = cloudflare）；打桩它等于把要测的东西绕过去。
+        _dns110.resolve_detail = lambda name, **kw: ([], ["104.21.68.96", "172.67.192.192"], "")
+        _ps110.PortscanStage(_ctx110a).run()
+        assert _calls110 == [], f"扫了 CDN 边缘节点：{_calls110}"
+        assert any("走 CDN" in x and "cloudflare" in x for x in _logs110), _logs110[:8]
+
+        # ② 反向对照：非 CDN 的主机照扫（修 bug 不等于一律跳过）
+        _calls110.clear(); _logs110.clear()
+        _dns110.resolve_detail = lambda name, **kw: ([], ["8.8.8.8"], "")
+        _ps110.PortscanStage(_ctx110b).run()
+        assert _calls110, "非 CDN 主机也没扫 → 这道门被做成了一律跳过"
+
+        # ③ §6.1 变异证伪：把 CDN 判据打回"永不命中"（等价于旧代码在这条分支压根不判）→ ① 必须变红
+        _calls110.clear(); _logs110.clear()
+        _orig_match110 = _cdn110.match
+        _cdn110.match = lambda *a, **k: ""
+        try:
+            _ps110.PortscanStage(_ctx110a).run()
+            assert _calls110, "变异后仍然没扫 → 上面那条断言测的不是 CDN 判据"
+            assert not any("走 CDN" in x for x in _logs110), "变异后仍写「走 CDN」→ 断言没盯住真实门"
+        finally:
+            _cdn110.match = _orig_match110
+
+        # ④ DNS 兜底：内置客户端解不出来时必须退回系统解析器 —— 加这道判定不许把原本
+        #    扫得到的主机（只靠 /etc/hosts、内网 DNS、IPv6-only 的机器）挡掉。
+        _calls110.clear()
+        _dns110.resolve_detail = lambda name, **kw: ([], [], "timeout")
+        _orig_res110 = _ps110.resolve_host
+        _ps110.resolve_host = lambda host, *a, **k: ["9.9.9.9"]
+        try:
+            _ps110.PortscanStage(_ctx110b).run()
+            assert _calls110, "dnsq 解不出时没退回系统解析器 → 能扫的主机被新判定挡掉了"
+        finally:
+            _ps110.resolve_host = _orig_res110
+    finally:
+        _ps110.portscan.fscan_scan, _ps110.portscan.nmap_scan = _orig_fs110, _orig_nm110
+        _dns110.resolve_detail, _ps110.which = _orig_detail110, _orig_which110
+
+    # ---- 2) osint：共享主机 / CDN 段 —— 结论入库入报告，噪声清单不入库 ----
+    _junk110 = [f"other{i}.unrelated.example" for i in range(500)]
+    _orig_grp110, _orig_lkp110 = _ipr110.group_segments, _ipr110.lookup_many
+    _ipr110.group_segments = lambda ips: {"104.21.68.0/24": ["104.21.68.96"]}
+
+    def _lkp_junk110(ips, st, **kw):
+        return {"104.21.68.96": list(_junk110)}, {"domains": 500, "hit_ips": 1}
+
+    _ipr110.lookup_many = _lkp_junk110
+    try:
+        _tid110c = db.create_task("smoke-110-cseg", "104.21.68.96", ["osint"], {})
+        _ctx110c = StageContext(_tid110c, "smoke-110-cseg", parse_lines(["104.21.68.96"]),
+                                ["osint"], {}, settings, Path(_TMPDIR) / "cseg110", _Rec110())
+        _got110 = _os110.OsintStage(_ctx110c)._c_segments()
+        assert _got110 == [], "共享主机的域名仍被当资产拓展（旧行为的另一半）"
+        _cs110 = [dict(r) for r in db.list_csegs(_tid110c)]
+        assert len(_cs110) == 1, _cs110
+        assert _cs110[0]["domains"] == "", "500 条与目标无关的域名还写在库里"
+        assert int(_cs110[0]["count"]) == 500, "命中数不能丢（那是判共享主机的唯一依据）"
+        assert "共享主机" in (_cs110[0]["note"] or ""), _cs110[0]
+
+        # MD 与 HTML 两个出口都得说清"为什么不列"，且都不许出现噪声域名
+        _md110, _html110 = generate(_tid110c), generate_html(_tid110c)
+        assert "other0.unrelated.example" not in _md110, "MD 报告抄了噪声域名"
+        assert "other0.unrelated.example" not in _html110, "HTML 报告抄了噪声域名"
+        assert "共享主机" in _md110 and "共享主机" in _html110, \
+            "清单没了却没说原因 → 读者会以为这里没反查到东西"
+
+        # §6.1 变异：只把阈值放松到 1000（= 旧口径"从不判共享主机"）→ 上面那批断言必须全部不成立
+        db._exec("DELETE FROM csegs WHERE task_id=?", (_tid110c,))
+        _s110mut = copy.deepcopy(settings)
+        _s110mut["iprecon"] = dict((settings.get("iprecon") or {}), max_domains_per_ip=1000)
+        _ctx110m = StageContext(_tid110c, "smoke-110-mut", parse_lines(["104.21.68.96"]),
+                                ["osint"], {}, _s110mut, Path(_TMPDIR) / "mut110", _Rec110())
+        _got110m = _os110.OsintStage(_ctx110m)._c_segments()
+        _cs110m = [dict(r) for r in db.list_csegs(_tid110c)]
+        assert (_cs110m[0]["domains"] or "") != "" and not (_cs110m[0]["note"] or "") \
+            and len(_got110m) > 0, "阈值放松后仍然不入库 → 上面那批断言其实恒真（没有区分度）"
+        db._exec("DELETE FROM csegs WHERE task_id=?", (_tid110c,))
+
+        # 反向对照：没超过阈值的段，清单照旧入库、照旧作为拓展资产（修 bug 不等于一律不存）
+        _ipr110.lookup_many = lambda ips, st, **kw: ({"104.21.68.96": ["a.example", "b.example"]},
+                                                     {"domains": 2, "hit_ips": 1})
+        _got110b = _os110.OsintStage(_ctx110c)._c_segments()
+        _cs110b = [dict(r) for r in db.list_csegs(_tid110c)]
+        assert "a.example" in (_cs110b[0]["domains"] or "") and not (_cs110b[0]["note"] or ""), _cs110b
+        assert len(_got110b) == 2, "未超阈值的域名应照常作为拓展资产"
+
+        # 老库补列：没有 note 列的历史库必须被 `_ensure_columns` 加上（否则升级即崩）
+        import sqlite3 as _sql110
+        _conn110 = _sql110.connect(":memory:")
+        _conn110.row_factory = _sql110.Row
+        _conn110.execute("CREATE TABLE csegs (id INTEGER PRIMARY KEY, task_id INTEGER, "
+                         "segment TEXT DEFAULT '', ip TEXT DEFAULT '', domains TEXT DEFAULT '', "
+                         "count INTEGER DEFAULT 0)")
+        db._ensure_columns(_conn110)
+        assert "note" in [r[1] for r in _conn110.execute("PRAGMA table_info(csegs)")], \
+            "老库没补上 note → 升级后 insert_csegs 直接报错"
+        _conn110.close()
+    finally:
+        _ipr110.group_segments, _ipr110.lookup_many = _orig_grp110, _orig_lkp110
+        for _t110 in (_tid110a, _tid110b, _tid110c):
+            if not _t110:
+                continue
+            db._exec("DELETE FROM csegs WHERE task_id=?", (_t110,))
+            db._exec("DELETE FROM ports WHERE task_id=?", (_t110,))
+            db._exec("DELETE FROM subdomains WHERE task_id=?", (_t110,))
+            db._exec("DELETE FROM tasks WHERE id=?", (_t110,))
+
+    print("[8h] 续110 CDN/C 段 ok: 不在 subdomains 表里的裸目标也过 CDN 判据（真用 cdn_ips.txt 算，"
+          "命中则一个端口都不扫并点名 cloudflare）｜非 CDN 主机照扫（反向对照）｜cdn.match 打回空＝变异即红｜"
+          "dnsq 解不出退回系统解析器（不因加判定把能扫的主机挡掉）｜共享主机段：domains 空 + count 保留 + "
+          "note 说明原因｜MD/HTML 两出口都不出现噪声域名且都写明原因｜阈值放松到 1000 的变异证明断言有区分度｜"
+          "未超阈值照常入库｜老库 _ensure_columns 补 note")
+
     print("SMOKE PASS")
 
 

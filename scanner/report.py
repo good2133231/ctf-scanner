@@ -42,6 +42,17 @@ def _caps(full=False):
     return (CAP_SITES, CAP_PORTS, CAP_CSEGS, CAP_CERTS, CAP_SUBS, CAP_DIRS)
 
 
+def _cseg_cell(c):
+    """C 段"反查到的域名"那一格：有清单就列清单；被判共享主机就**说清为什么不列**。
+
+    MD 与 HTML 两条渲染路径共用它（一条判据不许在两个出口各写一遍）—— 否则会出现
+    "一边修好、一边还在把噪声抄进交付物"。空清单 + 有 note 时绝不能显示成一个光秃秃的
+    `-`：那会把"框架判为噪声"误导成"这里没有资产"。
+    """
+    text = _idn_list(c["domains"] or "")[:120]
+    return text or (c["note"] or "-")
+
+
 def _cap_title(name, total, cap):
     """小节标题：**只在本节真的被截断时**才带上总数（没截断就只留小节名，不给报告添噪声）。
 
@@ -261,7 +272,7 @@ def generate(task_id, full=False):
         lines.append("|---|---|---|---|")
         for c in csegs[:CAP_CSEGS]:
             lines.append(f"| {_c(c['segment'] or '-')} | {_c(c['ip'] or '-')} | {_c(c['count'])} | "
-                         f"{_c(_idn_list(c['domains'] or '-')[:120])} |")
+                         f"{_c(_cseg_cell(c))} |")
         lines.append("")
     if certs:
         # TLS 证书取证（默认关闭的 cert 阶段产物）。措辞刻意说清"取证 ≠ 漏洞"，
@@ -448,7 +459,7 @@ def generate_html(task_id, full=False):
         p.append(_html_table(
             ["C 段", "IP", "域名数", "反查到的域名"],
             [[_h(x["segment"] or "-"), _h(x["ip"] or "-"), _h(x["count"]),
-              _h(_idn_list(x["domains"] or "-")[:120])] for x in csegs[:CAP_CSEGS]]))
+              _h(_cseg_cell(x))] for x in csegs[:CAP_CSEGS]]))
     if certs:
         p.append("<h2>" + _cap_title("TLS 证书（取证，非漏洞结论）",
                                     len(certs), CAP_CERTS) + "</h2>")
