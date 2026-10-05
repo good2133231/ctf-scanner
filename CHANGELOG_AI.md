@@ -21,6 +21,32 @@
 
 
 
+## 2026-10-05 —— 续111：GitHub 线索里的"公共分流名单" —— 只标注 + 只降不升，绝不丢
+
+> 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux / Python 3.14.4；用 续110 那轮实跑抓到的真实路径当判据样本）。
+
+- 承 续110 登记的第三件：对 dzmm.ai 的 30 条 github 线索逐条看，绝大多数是**别人的分流名单**
+  （`GFWList/gfwrules.list`、`Loukky/gfwlist-by-loukky` 的 `list.txt`、`clash-gfw-list.txt`、
+  `smartdns/gfwlist.raw.txt`、`Rules/Proxy.list`、`pac.conf`）。`credential` 规则的含义是"域名与
+  password 关键字同文件"，而这类文件整批抄入几千个域名 —— 命中是常态，**不等于目标方泄露**。
+  真正值得人工看的只有 `Tomkk74/DZMM-yunduan-`（`lib/dzmm_studio.py` / `web/app.js`，命名与目标对得上）。
+- 做法（`scanner/github_leak.py`）：新增 `listy_public_list(path)` + `_LISTY_PATH_RE`；命中就把 level
+  降为 `info`（**只降不升**，同 §7 POC 置信度口径）并在 `detail` 追加一句理由。
+  **两条刻意的边界**：① **不丢线索** —— 丢了就是"静默"，人工想核对"这域名有没有被公开抄过"反而看不见；
+  ② **只认文件路径、不认仓库名** —— 仓库名靠不住（同名仓库可能是真业务代码）。
+  代价不对称决定了判据方向：**容忍漏标、拒绝误标**（漏标只是少一句提示；误标等于把真泄露降成 info）。
+- 判据样本用实测数据钉死，不是拍的：11 条名单类路径全部命中、11 条业务路径（含 `.env`、
+  `conf/app.yaml`、`lib/dzmm_studio.py`、`web/app.js`、`sites.txt`、`references/developer-guide.md`）
+  **零误标**。唯一漏标的是 `PrivaDB/.../domains2scan/chunk_0168`（一个"扫描别人域名"的工具仓库）——
+  按上面的取向，漏标可接受。
+- 回归：smoke 的 github 组新增一组断言 + **双向 §6.1 变异**（打回"从不判"→ 名单类断言与"降级写在
+  detail 里"必须失效；打回"一律算名单"→ 误标反向对照必须失效）。另钉"标注过的命中仍然是一条 lead"
+  （`_leads_from` 条数不变）—— 防止下一个 AI 把"降噪"实现成"丢弃"。
+- 踩到两处（记下来省得再来一次）：① 按行 splice 时把锚点行又写进新内容 → `def build_lead` 被复制成
+  两行（SyntaxError）；② 正则跨行拼接时忘了每行都要闭合引号。两处都由 `py_compile` 当场抓到，
+  与 §9「按行改文件要核对替换区间」是同一条教训的第三种形态。
+- 复验：`tests/smoke.py` 全量 SMOKE PASS / RC=0。
+
 ## 2026-10-05 —— 续110：**两处"同一判据写在两个出口"**收口（CDN 覆盖裸目标 / C 段共享主机结论）
 
 > 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux / Python 3.14.4；对授权目标 dzmm.ai 实跑全流程时校验出来的两处缺陷）。

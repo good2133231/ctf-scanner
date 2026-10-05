@@ -23,6 +23,7 @@
 而 `a.example.com` 与 `example.com` 的泄露命中高度重叠 —— 查注册域即可覆盖。
 """
 import json
+import re
 from urllib.parse import quote
 
 from .utils import base_domain, http_request, is_domain
@@ -154,6 +155,28 @@ def _status_reason(status):
             "等一分钟后重试，或调小 github.max_queries")
 
 
+# ---- 公共分流名单 / 路由规则表（续111）：只**标注 + 降级**，绝不丢线索 ----
+#   这类仓库把成千上万个域名整批抄进 gfwlist / clash / surge / smartdns / proxy rules 名单，
+#   "目标域名 + password/api_key 关键字在同一文件"是这类文件的**常态**，不等于目标方凭据泄露。
+#   实测（2026-10-05 授权目标 dzmm.ai）：30 条 github 线索里绝大多数是这一类
+#   （`GFWList/gfwrules.list`、`gfwlist.conf`、`clash-gfw-list.txt`、`list.txt`、`pac.conf`）。
+#   为什么不直接丢：丢了等于把判据藏起来 —— 人工想核对"这域名到底有没有被公开抄过"反而看不到；
+#   也与本仓一贯口径一致（宁标不删、unsupported 要写原因、fail-open 不静默丢资产）。
+#   刻意**只认文件路径**、不认仓库名：仓库名靠不住（同名仓库可能是真业务代码）。
+_LISTY_PATH_RE = re.compile(
+    r"(?:gfw[-_]?list|gfwrules|chnroute|chn[-_]?sites|smartdns|adguard|surge|clash|sing[-_]?box|"
+    r"(?:black|block|white|deny|allow|clean)[-_]?(?:list|rules)|domain[-_]?(?:list|rules)|"
+    r"ad[-_]?block|acl[-_]?list|proxy[-_.]?(?:list|rules|conf)|rules?/|/rules(?:[./]|$)|"
+    r"(?:^|/)(?:list|rules|domains?|browser|router)(?:[._](?:txt|list|conf))?$|"
+    r"(?:^|/)pac\.(?:conf|txt|dat)$|\.list$)",
+    re.I | re.X)
+
+
+def listy_public_list(path):
+    """这条命中的**文件路径**像不像公共分流名单/路由规则表（见 `_LISTY_PATH_RE` 上方的说明）。"""
+    return bool(_LISTY_PATH_RE.search(str(path or "")))
+
+
 def build_lead(domain, repo, path, rules, url=""):
     """组装一条 `leads` 行（kind=github）。
 
@@ -168,6 +191,13 @@ def build_lead(domain, repo, path, rules, url=""):
         if _LEVEL_RANK.get(r[2], 0) > _LEVEL_RANK.get(level, 0):
             level = r[2]
         notes.append(f"· {r[0]}：{r[3]}")
+    # 续111：命中"公共分流名单"形态 → 标注 + **只降不升**（同 §7 POC 置信度那条口径：
+    #   证据不足以撑起 medium，但也没有证据说它一定不是 —— 降级说明理由，而不是删掉）。
+    _listy = listy_public_list(path)
+    if _listy and level != "info":
+        level = "info"
+        notes.append("· 疑似公共分流名单/路由规则表：这类文件整批抄入几千个域名，"
+                     "「域名 + 关键字同文件」是常态，**不等于目标方凭据泄露**（已降为 info，仅作参考）")
     detail = (f"仓库：{repo}\n文件：{path}\n命中规则：{' / '.join(rules) or '-'}\n"
               + ("".join(n + "\n" for n in notes))
               + "\n说明：本线索**只记录仓库 / 文件路径 / 命中规则**，不保存文件内容 —— "

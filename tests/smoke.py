@@ -4809,6 +4809,55 @@ workflows:
         "normalize_hit 必须只回这 4 个元数据字段（多读 text_matches 会带出凭据明文）"
     assert gh_mod.normalize_hit(_gh_items[2], "mention") is None, "拿不到仓库的命中应丢弃"
     assert gh_mod.normalize_hit("not-a-dict", "mention") is None
+    # 续111：GitHub 命中里的**公共分流名单 / 路由规则表** —— 只标注 + 只降不升，**绝不丢线索**。
+    #   实测（2026-10-05 授权目标 dzmm.ai）30 条线索里绝大多数是别人的 gfwlist / clash /
+    #   smartdns / proxy rules 名单：这类文件整批抄入几千个域名，"目标域名 + password 关键字
+    #   在同一文件"是常态，**不等于目标方的凭据泄露**。为什么不干脆丢掉：丢了就是把判据藏起来
+    #   （本仓反复出事的地方正是"静默"），人工想核对"这域名有没有被公开抄过"反而看不见。
+    #   两侧代价不对称 → 判据刻意**容忍漏标、拒绝误标**：
+    #     漏标 = 少一句提示（线索与级别都还在）；误标 = 把真泄露降成 info（等于藏起结论）。
+    _listy111 = ("GFWList/gfwrules.list", "list.txt", "gfwlist.conf", "smartdns/gfwlist.raw.txt",
+                 "clash-gfw-list.txt", "clean-list.txt", "pac.conf", "Rules/Proxy.list",
+                 "fancyss_rules/gfwlist.txt", "browser.txt", "router.txt")
+    _keep111 = (".env", "conf/app.yaml", "lib/dzmm_studio.py", "web/app.js", "web/index.html",
+                "docs/character-card-local-api.md", "references/developer-guide.md",
+                "src/components/settings-dialog.tsx", "index.html", "sites.txt", "README.md")
+    _miss111 = [x for x in _listy111 if not gh_mod.listy_public_list(x)]
+    assert not _miss111, f"续111 名单类路径应被认出，漏了：{_miss111}"
+    _fp111 = [x for x in _keep111 if gh_mod.listy_public_list(x)]
+    assert not _fp111, f"续111 业务文件被误标（会把真泄露降成 info）：{_fp111}"
+
+    _l111 = gh_mod.build_lead("example.com", "someone/gfwlist-by-x", "list.txt", ["credential"])
+    assert _l111["level"] == "info", f"续111 名单类命中应降级，实得 {_l111['level']}"
+    assert "疑似公共分流名单" in _l111["detail"], "续111 降级必须写明理由，不许静默改级别"
+    _o111 = gh_mod.build_lead("example.com", "acme/infra", ".env", ["credential"])
+    assert _o111["level"] == "medium" and "疑似公共分流名单" not in _o111["detail"], \
+        f"续111 非名单文件被连带降级：{_o111['level']}"
+    # **不丢线索**：被标注的命中仍然是一条 lead（级别变了，条数不许变）
+    assert len(gh_mod._leads_from({("example.com", "someone/x", "gfwlist.conf"):
+                                   {"rules": {"credential"}, "url": "u"}})) == 1, \
+        "续111 名单类被丢弃 = 把判据藏起来；本仓不接受静默丢线索"
+
+    # §6.1 双向变异：两个方向都要能红，否则上面那批断言是恒真的。
+    _real111 = gh_mod.listy_public_list
+    # ① 打回"从不判"（＝旧代码压根没有这套标注）
+    gh_mod.listy_public_list = lambda path: False
+    try:
+        assert [x for x in _listy111 if not gh_mod.listy_public_list(x)], \
+            "变异①下名单类断言竟然没失效 → 那条断言测的不是这个判据"
+        assert gh_mod.build_lead("example.com", "someone/x", "list.txt",
+                                 ["credential"])["level"] == "medium", \
+            "变异①后仍然降级 → build_lead 走的不是这条判据（或降级是硬编码）"
+    finally:
+        gh_mod.listy_public_list = _real111
+    # ② 打回"一律算名单"（＝误标方向）
+    gh_mod.listy_public_list = lambda path: True
+    try:
+        assert [x for x in _keep111 if gh_mod.listy_public_list(x)], \
+            "变异②下误标断言竟然没失效 → 那条反向对照是空的"
+    finally:
+        gh_mod.listy_public_list = _real111
+    assert not [x for x in _keep111 if gh_mod.listy_public_list(x)], "还原后必须回到不误标"
 
     # 6) 入库：去重键 (kind, code, target)；只进 leads，**绝不进 vulns**；JSONL 仍保留 github 线索
     assert db.insert_leads(_gh_tid, _leads6p) == 2

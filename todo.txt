@@ -2014,6 +2014,21 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 
 
 
+2026-10-05 · 续111（远端 Linux，Qoder-Agent）
+  ① 承接续110 登记的第三件：dzmm.ai 那 30 条 GitHub 线索逐条看完，绝大多数是**别人的公共分流名单**
+     （GFWList/gfwrules.list、clash-gfw-list.txt、smartdns/gfwlist.raw.txt、Rules/Proxy.list、pac.conf…）。
+     `credential` 规则含义是"域名与 password 关键字同文件"，而这类文件整批抄入几千个域名 —— 命中是
+     常态，不等于目标方泄露。真正值得人工看的只有 `Tomkk74/DZMM-yunduan-`（lib/dzmm_studio.py、web/app.js）。
+  ② 做法：`github_leak.listy_public_list(path)` 命中 → level 降为 info（**只降不升**，同 POC 置信度口径）
+     + detail 写明理由。**不丢线索**（丢了就是静默，人工反而没法核对）；**只认文件路径不认仓库名**。
+     取向：容忍漏标、拒绝误标 —— 误标等于把真泄露藏起来，漏标只是少一句提示。
+  ③ 判据用实测样本钉：11 条名单路径全命中、11 条业务路径（.env / conf/app.yaml / lib/dzmm_studio.py /
+     web/app.js / sites.txt / developer-guide.md …）零误标；唯一漏标是 PrivaDB 的 domains2scan 分片，可接受。
+  ④ 回归：smoke github 组新增断言 + 双向 §6.1 变异（打回"从不判"/"一律算名单"各有一条必须失效），
+     并钉"标注过的命中仍是一条 lead"（条数不许变）—— 防下一个 AI 把降噪做成丢弃。
+  ⑤ 踩到两处：按行 splice 把锚点行重复写进新内容（`def build_lead` 变两行）；正则跨行忘了闭合引号。
+     都被 py_compile 当场抓到，属 §9「按行改文件要核对替换区间」的第三种形态。
+  ⑥ 门禁：smoke 全量 SMOKE PASS / RC=0；本轮没有再动 settings.yaml。
 2026-10-05 · 续110（远端 Linux，Qoder-Agent）
   ① 用户让"对授权目标 dzmm.ai 跑全流程 + 功能全勾 + 校验结果"。校验出两处**框架自身的缺陷**
      （同一判据写在两个出口），已修：`portscan` 的 CDN 跳过原先只认 `subdomains` 表回填的标记，
