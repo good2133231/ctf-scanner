@@ -111,6 +111,13 @@
 
 - 输入：目标里的 `ip` / `url` 主机名 / `domain` + `ctx.results["domains_for_probe"]`，
   上限 `portscan.max_hosts`（默认 100）；
+- **走 CDN 的主机一律跳过端口扫描（续110 起两条入口同一判据）**：判定复用子域名那一套
+  `dnsq.resolve_detail`（CNAME 链 + A 记录）→ `cdn.match`（CNAME 后缀与任播 IP 段双判据），
+  命中就在日志点名「走 CDN（cloudflare），跳过端口扫描（扫到的不是源站）」并**一个端口都不发**。
+  此前只有 `subdomains` 表里回填过标记的主机会被跳过，**任务直接给的裸域名/URL 不判**，
+  于是把 Cloudflare 边缘节点当源站全端口扫（2026-10-05 对授权目标实测：26 个"开放端口" =
+  CF 支持的 13 个端口 × 2 个任播 IP、banner 全空、重跑集合逐字节相同）。
+  `dnsq` 解不出时**退回系统解析器**再扫 —— 加判定不许把原本扫得到的主机挡掉；回归 `[8h]`。
 - 处理：**引擎顺序 `portscan.engine="auto"` = fscan → nmap → 内置 TCP connect**（也可钉死其中一个）。
   fscan 调用强制 `-np -nobr -nopoc`（不暴力破解、不跑 POC，只取端口发现），老版本不认 `-nopoc`
   时自动去掉重试；nmap 用 `-sT -Pn -n --open -p <ports> -oG -`（`-sT` 无需 root）；
@@ -167,7 +174,10 @@
   过滤掉私有/环回/保留地址（查公共接口对它们没意义，纯浪费配额）→ `max_ips` 截断 →
   `group_segments()` 归纳成 `/24` → 并发反查（`iprecon.workers`，默认 5，单 IP 只查一次、失败不重试）→
   落 `csegs` 表。**单 IP 反查到的域名数超过 `iprecon.max_domains_per_ip`（默认 30）判为共享主机/CDN**：
-  C 段数据照常入库（仍是有价值的视野），但**不纳入域名资产**，否则一次就能灌进几十个无关域名。
+  **段与 IP 照常入库**（仍是有价值的视野），但**不纳入域名资产**；续110 起这条判据也管到入库内容：
+  超阈值时 `csegs.domains` **留空**、由 `csegs.note` 写明"命中多少 / 为什么不列"（老库靠
+  `_COLUMN_PATCHES` 补列）。此前是"判为噪声却照样把 500 条写进 domains"，报告「C 段视野」
+  原样抄一遍 → 读者会把别人的 `*.workers.dev` 当成本项目标的资产面。
   响应解析走 `json.loads` + 逐项结构校验，**不用 `eval`**（见 `TODO.md` B-3）。
 - **favicon 反查**（`scanner/fofa.py` + `scanner/mmh3.py`）：对存活站点（受 `fofa.max_sites` 限制）
   并发算 favicon 的 **mmh3**（`fingerprint.favicon_hash`）→ 按哈希去重 → 逐个 `icon_hash="N"` 查询 FOFA →
@@ -410,6 +420,11 @@
 - 4 条检索规则（`SEARCH_RULES`，顺序即优先级，"外层按规则、内层按域名"遍历，
   于是最便宜的 `mention` 先覆盖到所有域名）：`mention`(info) / `credential`(medium，`password`) /
   `apikey`(medium，`api_key`) / `env-file`(medium，`filename:.env`)；级别只用于 `leads.level` 排序着色；
+- **命中文件像"公共分流名单"时：只标注 + 降为 `info`，绝不丢线索**（续111）。这类仓库
+  （gfwlist / clash / surge / smartdns / proxy rules…）整批抄入几千个域名，"目标域名 + password
+  关键字同文件"是常态，**不等于目标方的凭据泄露**；判据 `listy_public_list(path)` **只认文件路径、
+  不认仓库名**。取舍是不对称的：**容忍漏标、拒绝误标**（漏标只是少一句提示，误标等于把真泄露
+  降成 info）。为什么不直接过滤掉：线索表是给人看的，"静默"才是本仓反复出事的地方；
 - **三条硬边界**（改代码前先读 `scanner/github_leak.py` 文件头）：
   1. **只落元数据**：字段白名单只取 `repository.full_name` / `path` / `html_url` + 规则名。
      代码搜索若带上 `text-match` 类 Accept 头，响应里会出现 `text_matches`（**命中片段，可能含凭据明文**）——
