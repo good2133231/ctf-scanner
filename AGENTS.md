@@ -227,10 +227,11 @@ ctf-scanner/
 │                          #   2026-09-24（续26）按 config/settings.yaml 实测更正为 **23 段**（tools/dicts/http 不可从页面改）
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
-├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / cdn_cname(292) / cdn_ips(15)
+├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / cdn_cname(292) / cdn_ips(15) / waf_block_titles(11：WAF-CDN 拦截页标题文案，续112)
 │                          #   sensitive(9)：**A01 检查的数据源**（`路径|关键字|级别|说明`，见 §7）
 │                          #   dirs_shallow(206)：**浅扫专用**（dirscan.mode=quick 只用它），按价值排序、人工筛选
 │                          #   js_thirdparty(287：JS 第三方域名单 = 内置 + URLFinder jsFiler + 续22 补 20 条常用库/CDN/链上浏览器)
+│                          #   waf_block_titles(11：厂商拦截页的**标题文案**，小写子串匹配 —— 只收专属文案，不收 403 Forbidden 这类通用词，收了就是自吃真发现)
 │                          #   tlds(6423：公共后缀清单 = tldextract 内置快照，含多段后缀；tools/import_tlds.py 生成)
 │                          #   目录字典按技术栈拆分：dirs_big(11882 全量) / dirs_common(10671) /
 │                          #   dirs_php(933) / dirs_asp(162) / dirs_jsp(116)（tools/import_dir_dict.py 生成）
@@ -1439,6 +1440,59 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   现在兜底分支复用 subdomain 那一套（`dnsq.resolve_detail` + `cdn.match` 双判据），命中就跳过并
   点名；`dnsq` 解不出来时**退回系统解析器**（加判定不许把原本扫得到的主机挡掉）。
   线上复核：修完对同一目标重跑 `portscan` → 4 秒、0 个端口（原来 5.5 分钟 / 26 个）。回归 `[8h]`。
+
+- **资产列表的「同域名一行 / 默认只看解析成功」都是显示口径，入库一条不动（续112）**：
+  `dzmm.ai` 与 `www.dzmm.ai` 各出现两三行（来源 `js:mine` / `promote:js:mine` / `subfinder`），
+  看着像两三个资产；而二十几个解析不了的 JS 碎片占满整屏（用户 2026-10-06 的两条点名问题）。
+  判据集中在 **`scanner/db.py` 一处**：`SOURCE_RANK_CASE`（被动/爆破 > 目标自带 > 被动 > 归属追加 >
+  JS > 外部情报）+ `RESOLVED_WHERE` + `other_sources_by_domain()`；`page_assets(dedupe_domain=True)`
+  把去重下推成**与外层同一份 where/参数**的内层窗口函数子查询，所以「共 N 条」与列表、翻页同口径
+  （内层外层不同源＝本项目反复踩的「共 N 条却翻不出 N 条」）。
+  被去掉的来源**必须在页面上写出来**（「另见于 …」），被收起的条数**必须报出数字**（`显示未解析（N）`）
+  —— 不报就等于让人以为「没有这些域名」。
+  ⚠️ 这类「默认收起」的开关，翻页/切标签链接必须**延续当前视图**：第一版把条件写反了（默认收起时
+  翻页却带 `nores=1`，第 2 页突然把碎片全放出来，同一个视图两页口径不一致），现在链接片段由
+  `gui/app.py::_nores_state` 一处算好。第三方噪声走 `config/dicts/js_thirdparty.txt`（**写入侧**，
+  续22 那条「黑名单永远穷尽不了」仍然成立）。回归 `[8i]`（含 `RESOLVED_WHERE` 打回恒真的变异）。
+
+- **WAF/CDN 的整站拦截页不是「目录发现」：按厂商标题文案滤，且滤掉几条必须写进日志（续112-F）**：
+  实测 dzmm.ai 走 Cloudflare 时 `wp-config.php`、`wp-login.php`、`xmlrpc.php` 与它们的
+  `.bak/.zip/.old…` 派生名**各留一行** `403 / 4910 / Attention Required! | Cloudflare` —— 几十条假发现
+  铺满「目录」页签（用户：「这两个大小不也一样吗 为什么两个都显示了？」）。两条独立判据，各有适用面：
+  ① `is_block_page()`：标题命中 `config/dicts/waf_block_titles.txt` 里的**厂商专属文案**（CF 页面带
+     ray id，两次请求正文 md5 不同、长度相同 ⇒ 按文案判比按哈希可靠）。清单**刻意不收** `403 Forbidden`
+     / `Access Denied` 这类通用词：nginx 默认 403 页标题就是它，而「敏感文件存在但被 Web 服务器拒绝」
+     正是要报的发现，收了等于自吃结果。
+  ② `is_uniform_block()`：随机探测路径**自己也回 403 且同内容**（md5 或长度相同）时按基线滤；
+     基线里没有 403 样本 ⇒ 一律不滤（空签名返回 False —— 没有可比的东西就当没证据）。
+  两类条数分别攒进 `waf` / `blocked`，本轮结束按站点写一句日志：只写「目录发现 0 条」会让人以为
+  站点没东西，而事实是「整站被同一张页挡掉了」，下一步要做的完全不同。
+  ⚠️ 走过的弯路记下来：先试过「同站点 (状态,大小,标题) 重复 ≥N 条就整组丢掉」—— N=3 会漏掉 dzmm.ai
+  的两条一组，N=2 又会吃掉「/admin 与 /admin/ 回同一个后台登录页」这种真实重复。按**厂商文案**判是
+  有依据的，按计数判是在猜。回归 `[8j]`（⑦⑧ 两面都钉：CF 式拦截页收掉、nginx 式真 403 原样入库）。
+
+- **3xx 站点补「跳转后」取证：只新增列，绝不改写那一跳的实况（续112-B）**：满屏
+  `301 / 标题「301 Moved Permanently」`看不出落地页是什么（httpx 默认**不跟随**重定向）。现在
+  `probe.attach_redirect_info` 只对 3xx 条目**再发一次允许跟随的请求**，把最终 url/状态/标题写进
+  `sites` 的 `redirect_*` 三列；`status`/`title`/`length` 保持原样 —— 把 301 覆盖成落地页的 200
+  等于谎报「这个端口直接回 200」，而 301 与 200 的安全含义不同（跳转链本身是信息）。
+  落地页取不到 ⇒ 三列留空、页面原样显示那一跳（**不编数**）；落地页没有 `<title>`（图片/JSON）
+  ⇒ 保留原来那句并写明「落地页无 title」，不留空位。显示口径集中在 `utils.site_redirect`
+  （`301 → 200` + 标记「跳转后」），GUI 两处与报告 MD/HTML 共用同一个函数，四种出口不会各说一套话。
+  它同时吃 dict 与 `sqlite3.Row` —— **`Row` 没有 `.get()`**，这是本项目第五次栽在同一处。
+  回归 `[8k]`（含 `REDIRECT_STATUS` 清空后补列归零的变异）。
+
+- **资产页的「按任务筛选」与漏洞页同口径；下拉全集＝「这张表里有行的任务」（续112-E）**：
+  六个跨任务资产页（站点/端口/目录/C 段/子域名/拓展域名）共用 `_task_scope()`（`?task=<id>` →
+  `task_id=?`，并进调用点**已有的** where/参数链，不另开一份判据）与模板 `_taskpick.html` 一个文件；
+  数据源 `db.tasks_with_asset(table, owner_id)` 沿用续55 的结论（不用 `list_tasks(limit=1000)`，
+  否则老任务在下拉里根本选不到），且 `table` 只接受 `_ASSET_PAGES` 的白名单键 —— 表名要拼进 SQL，
+  传别的名字直接 ValueError。两条容易漏的口径都有断言：
+  ① 空值 / 非数字 / 0 一律当「不筛选」，**绝不能筛成空表**（地址栏留个空 `?task=` 就把整页资产清空，
+  看着像资产没了）；② 筛一个「这张表里没有行」的任务时，下拉仍要显示当前任务
+  （`#N（这张表里没有它的行）`），否则筛完看起来像回到了「全部任务」。
+  回归 `[8l]`。
+
 
 - **"能自动下载"的边界＝`toolmgr.TOOLS`；不能的进 `toolmgr.MANUAL`，两者必须不相交**（2026-09-27
   续59-3）：`TOOLS` 的语义是"**能自动下载、且默认必须过 release 自带 SHA256 才落盘**"，

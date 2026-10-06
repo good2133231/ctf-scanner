@@ -2021,6 +2021,30 @@ def create_app():
         hide = request.args.get("nores") != "1"
         return (db.RESOLVED_WHERE if hide else None), hide
 
+    def _task_scope():
+        """资产页的「按任务筛选」（续112-E）：`?task=<id>` → `(tid, "task_id=?", (tid,))`。
+
+        「漏洞风险」页早就有这个筛选（`task_id` 下拉），用户要求**其他资产页也要有**：
+        跨任务视图里"这个端口/这条目录是哪个任务扫出来的"是最常见的一跳，只有关键字框时
+        只能靠域名碰巧能被搜到。返回的三元组直接并进调用点**已有的** where/参数链，
+        判据不在每个页面各写一遍（本项目反复栽在"同一件事写两处"）。
+
+        空值 / 非整数 / 0 都当"不筛选"（`(None, None, ())`）—— 而不是"筛出空表"：
+        地址栏里留个 `?task=` 空值就把整页资产清空，看着像资产丢了。
+        """
+        raw = (request.args.get("task") or "").strip()
+        try:
+            tid = int(raw)
+        except (TypeError, ValueError):
+            return None, None, ()
+        if not tid:
+            return None, None, ()
+        return tid, "task_id=?", (tid,)
+
+    def _tasks_with_asset(table):
+        """某资产页的「按任务筛选」下拉数据（只列这张表里**真有行**的任务，续55 同口径）。"""
+        return db.tasks_with_asset(table, **_scoped({}))
+
     def _nores_state(pager, hide_res, hidden):
         """把「默认只看解析成功的域名」这套状态一次挂到 pager 上（四个调用点共用）。
 
@@ -2228,17 +2252,23 @@ def create_app():
         # 归到「拓展域名」页 —— 混在一起会让人误判资产归属。
         tag, where, params = _cdn_tag()
         res_where, hide_res = _resolved_arg()
+        tid, tw, tp = _task_scope()
         # 续112：① 同一域名只留最权威来源那一行（`dedupe_domain`，去重条件与这里的 where/参数
         # 完全同源，所以"共 N 条"与翻页是同一套口径）；② 默认只看解析成功的。
-        base_where = _and_where(db.OWN_SUBDOMAIN_WHERE, where)
+        # 续112-E：③「按任务筛选」与「漏洞风险」页同口径（`?task=<id>`），条件并进同一条链。
+        base_where = _and_where(db.OWN_SUBDOMAIN_WHERE, where, tw)
+        base_params = params + tp
         rows, pager, q = _asset_page("subdomains", "/subdomains",
                                      extra_where=_and_where(base_where, res_where),
-                                     extra_params=params, dedupe_domain=True)
+                                     extra_params=base_params, dedupe_domain=True)
         if tag:
             pager["qs"] += f"&tag={tag}"
-        rows, hidden = _sub_rows(rows, base_where, params, hide_res)
+        if tid:                     # 筛选状态必须活过翻页，也活过「显示未解析」的切换
+            pager["qs"] += f"&task={tid}"
+        rows, hidden = _sub_rows(rows, base_where, base_params, hide_res)
         _nores_state(pager, hide_res, hidden)
-        return render_template("subdomains.html", subs=rows, pager=pager, q=q, tag=tag)
+        return render_template("subdomains.html", subs=rows, pager=pager, q=q, tag=tag,
+                               task_id=tid or "", tasks=_tasks_with_asset("subdomains"))
 
     # 拓展域名页的"来源分类"标签：用户要求分类浏览 + 分类排序，不要把 JS / FOFA 标题 /
     # 证书 / ICO / C 段混在一起。顺序即展示顺序（也是排序优先级）。
@@ -2288,8 +2318,10 @@ def create_app():
         grouped = request.args.get("group", "1") != "0"
         # 续112：与「子域名」页同一套判据 —— 默认只看解析成功的，且同一域名只留最权威来源那一行。
         # 分组与平铺**共用同一个 ext_where**（两种视图不能各按一套口径，否则一切到分组噪声又回来了）。
+        tid, tw, tp = _task_scope()          # 续112-E：「按任务筛选」，与「漏洞风险」页同口径
+        params = params + tp
         base_where = _and_where(db.EXT_SUBDOMAIN_WHERE, where, src_where,
-                                None if show_all else db.OVERLAP_EXT_WHERE)
+                                None if show_all else db.OVERLAP_EXT_WHERE, tw)
         ext_where = _and_where(base_where, res_where)
         # 分组模式下 `size` 的含义变成"每页多少个主域名"：翻页链接与分页条必须同一个口径，
         # 否则链接里会出现两个 `size=`（Flask 取第一个，页面显示的却是第二个）。
@@ -2301,6 +2333,8 @@ def create_app():
                 qs += f"&{flag}={value}"
         if show_all:
             qs += "&all=1"
+        if tid:
+            qs += f"&task={tid}"
         if not grouped:
             qs += "&group=0"
         row_total, groups, hidden = 0, [], 0
@@ -2334,7 +2368,8 @@ def create_app():
             _nores_state(pager, hide_res, hidden)
         return render_template("extdomains.html", subs=subs, groups=groups, grouped=grouped,
                                row_total=row_total, pager=pager, q=q, tag=tag,
-                               show_all=show_all,
+                               show_all=show_all, task_id=tid or "",
+                               tasks=_tasks_with_asset("subdomains"),
                                secrets=_secret_counts(),
                                src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name)
 
@@ -2342,6 +2377,7 @@ def create_app():
     @login_required
     def sites():
         show_all = _overlap_args()
+        tid, tw, tp = _task_scope()          # 续112-E：「按任务筛选」
         # 两层"重复"处理，都由 `?all=1` 一起放开：
         # 1) 重叠资产（跨任务）：同一 URL 在多个任务里都探到过时，只保留**最新一次扫描**的那条
         #    （`MAX(id)`）—— 站点行带的是当次扫描的 status/title/length/tech，留最旧那条意味着
@@ -2354,7 +2390,8 @@ def create_app():
         # 注意：折叠只作用于**当前页**（分页条上的"共 N 条"是 SQL 的总数）。
         rows, pager, q = _asset_page(
             "sites", "/sites",
-            extra_where=None if show_all else db.OVERLAP_SITE_WHERE)
+            extra_where=_and_where(tw, None if show_all else db.OVERLAP_SITE_WHERE),
+            extra_params=tp)
         rows = [dict(r) for r in rows]
         seen, hidden = {}, 0
         for r in rows:
@@ -2374,17 +2411,26 @@ def create_app():
             rows = [r for r in rows if not r.get("hidden_dup")]
         else:
             pager["qs"] += "&all=1"
+        if tid:
+            pager["qs"] += f"&task={tid}"
         plain = request.args.get("plain") == "1"
         if plain:                     # 分页/筛选链接要带上，否则翻页会掉回完整模式
             pager["qs"] += "&plain=1"
         return render_template("sites.html", sites=rows, pager=pager, q=q,
-                               show_all=show_all, hidden=hidden, plain=plain)
+                               show_all=show_all, hidden=hidden, plain=plain,
+                               task_id=tid or "", tasks=_tasks_with_asset("sites"))
 
     @app.route("/ports")
     @login_required
     def ports():
-        rows, pager, q = _asset_page("ports", "/ports")
-        return render_template("ports.html", ports=rows, pager=pager, q=q)
+        # 续112-E：「按任务筛选」与「漏洞风险」页同口径（端口噪声最常问的就是"这堆端口
+        # 是哪个任务扫出来的"，只有关键字框时只能靠主机名碰巧搜得到）
+        tid, tw, tp = _task_scope()
+        rows, pager, q = _asset_page("ports", "/ports", extra_where=tw, extra_params=tp)
+        if tid:
+            pager["qs"] += f"&task={tid}"
+        return render_template("ports.html", ports=rows, pager=pager, q=q,
+                               task_id=tid or "", tasks=_tasks_with_asset("ports"))
 
     @app.route("/fullports")
     @login_required
@@ -2478,20 +2524,26 @@ def create_app():
     @app.route("/csegs")
     @login_required
     def csegs():
-        rows, pager, q = _asset_page("csegs", "/csegs")
-        return render_template("csegs.html", csegs=rows, pager=pager, q=q)
+        tid, tw, tp = _task_scope()          # 续112-E：同上，「按任务筛选」
+        rows, pager, q = _asset_page("csegs", "/csegs", extra_where=tw, extra_params=tp)
+        if tid:
+            pager["qs"] += f"&task={tid}"
+        return render_template("csegs.html", csegs=rows, pager=pager, q=q,
+                               task_id=tid or "", tasks=_tasks_with_asset("csegs"))
 
     @app.route("/dirs")
     @login_required
     def dirs():
         show_all = _overlap_args()
         agg = request.args.get("agg") == "1"
+        tid, tw, tp = _task_scope()          # 续112-E：「按任务筛选」
         page, size, q = _page_args()
 
         def _state(**over):
             """当前页的**全部**状态（`None` = 去掉该参数）—— 链接与翻页条都从这里派生。"""
             st = {"q": q or None, "size": size,
-                  "all": "1" if show_all else None, "agg": "1" if agg else None}
+                  "all": "1" if show_all else None, "agg": "1" if agg else None,
+                  "task": (str(tid) if tid else None)}
             st.update(over)
             return {k: v for k, v in st.items() if v}
 
@@ -2514,6 +2566,8 @@ def create_app():
                 parts.append("all=1")
             if "agg" in st:
                 parts.append("agg=1")
+            if "task" in st:
+                parts.append(f"task={st['task']}")
             return "&" + "&".join(parts)
 
         link_all = _link(all=None if show_all else "1")
@@ -2526,7 +2580,8 @@ def create_app():
             # 续59-2 去掉 `limit=5000`：它把聚合建在**截断集合**上 —— 第 5001 行起的数据所属的组
             # 在任何一页都看不到（静默丢资产）。旧文案写的"（上限 5000 条）"只披露了"上限存在"，
             # 没说"超出的部分会消失"；而"防页面被拖死"的正解是**分页**，不是**截断**。
-            all_rows, _ = _page_assets("dirs", limit=None, offset=0, q=q or None)
+            all_rows, _ = _page_assets("dirs", limit=None, offset=0, q=q or None,
+                                       extra_where=tw, extra_params=tp)
             folded, hidden = _fold_dirs(all_rows, show_all)
             groups = _agg_dirs(folded)
             total = len(groups)
@@ -2540,14 +2595,16 @@ def create_app():
                      "base": "/dirs", "qs": _qs(), "unit": "组"}
             return render_template("dirs.html", dirs=groups, pager=pager, q=q,
                                    show_all=show_all, hidden=hidden, agg=True,
-                                   link_all=link_all, link_agg=link_agg)
-        rows, pager, q = _asset_page("dirs", "/dirs")
+                                   link_all=link_all, link_agg=link_agg,
+                                   task_id=tid or "", tasks=_tasks_with_asset("dirs"))
+        rows, pager, q = _asset_page("dirs", "/dirs", extra_where=tw, extra_params=tp)
         # 重复长度默认隐藏：同一站点下状态码与响应大小都相同的多条只留首个，`?all=1` 放开
         rows, hidden = _fold_dirs(rows, show_all)
         pager["qs"] = _qs()
         return render_template("dirs.html", dirs=rows, pager=pager, q=q,
                                show_all=show_all, hidden=hidden,
-                               link_all=link_all, link_agg=link_agg)
+                               link_all=link_all, link_agg=link_agg,
+                               task_id=tid or "", tasks=_tasks_with_asset("dirs"))
 
     # ---------- 黑名单 / 批量子域名 ----------
     #

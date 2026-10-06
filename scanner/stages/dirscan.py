@@ -240,6 +240,50 @@ def is_uniform_block(digest, length, blk_md5s, blk_sizes):
     return bool(blk_sizes and (length or 0) in blk_sizes)
 
 
+_BLOCK_FILE = "config/dicts/waf_block_titles.txt"
+# 文件缺失/读不出来时回退这两条：都是 Cloudflare 的专属文案，绝不会撞 nginx 默认 403 页
+_BLOCK_FALLBACK = ("attention required! | cloudflare", "just a moment...")
+_BLOCK_CACHE = None
+
+
+def block_markers():
+    """WAF/CDN 拦截页的标题特征（`config/dicts/waf_block_titles.txt`，小写子串）。
+
+    与 `jsmine._noise_set()` 同一套"数据驱动 + 进程内缓存 + 文件缺失回退"的读法；
+    文件读不到时回退内置那两条最不会误伤的（Cloudflare 的两种文案）——
+    宁可不滤，也绝不把一个文件读失败变成"整站 403 全滤光"。
+    """
+    global _BLOCK_CACHE
+    if _BLOCK_CACHE is not None:
+        return _BLOCK_CACHE
+    items = set()
+    try:
+        from ..config import resolve
+        for line in read_lines(resolve(_BLOCK_FILE)):
+            s = str(line or "").strip().lower()
+            if s and not s.startswith("#"):
+                items.add(s)
+    except Exception:
+        items = set()
+    _BLOCK_CACHE = items or set(_BLOCK_FALLBACK)
+    return _BLOCK_CACHE
+
+
+def is_block_page(status, title):
+    """这条被拒响应是不是厂商的**统一拦截页**（与具体路径无关）。
+
+    只按标题子串判，且只对 403/429/503 生效；厂商专属文案（`Attention Required! | Cloudflare`）
+    不会撞上 nginx/Apache 的默认 `403 Forbidden` —— 后者"文件存在但被拒"正是要报的发现，
+    误滤等于自己吃掉结果（所以清单里刻意不收通用词，见 `config/dicts/waf_block_titles.txt`）。
+    """
+    if int(status or 0) not in (403, 429, 503):
+        return False
+    t = str(title or "").strip().lower()
+    if not t:
+        return False
+    return any(m in t for m in block_markers())
+
+
 class DirscanStage(Stage):
     name = "dirscan"
     description = "目录/路径爆破（dirmap 或内置字典扫描）"
@@ -751,9 +795,10 @@ class DirscanStage(Stage):
         timeout = int(limits.get("http_timeout", 10))
         baseline = {}
         baseline_lock = threading.Lock()
-        # 「整站统一拦截页」的计数（基址 → 被滤掉的路径数 / 那张页的响应长度）：
+        # 两类"整站统一响应"的计数（基址 → 被滤掉的路径数 / 那张页的特征）：
         # 复用 `baseline_lock` 同步（同一批线程、同一类一次性累加，没必要再多一把锁）
-        blocked, blocked_sig = {}, {}
+        blocked, blocked_sig = {}, {}          # 随机路径也被拦、正文同内容的 403
+        waf, waf_title = {}, {}                # 标题命中 WAF/CDN 拦截页文案（厂商专属）
 
         def _baseline(u):
             """多样本软 404 基线（借鉴 dirmap 的 auto_check_404_page）。
@@ -819,27 +864,42 @@ class DirscanStage(Stage):
             if st == 200:
                 if digest in md5s or (sizes and (r.get("length") or 0) in sizes):
                     return None
-            elif st == 403 and is_uniform_block(digest, r.get("length"), blk_md5s, blk_sizes):
-                # 「整站统一拦截页」（续112-F）：随机路径也被拦、且回的是**同一张** 403 页时，
-                # 这个 403 与路径无关，说的是"CDN/WAF 在拦我们"，不是"这个文件存在且被禁"。
-                # 留在库里就是把几十个同内容行铺满「目录」页签（用户：「这两个大小不也一样吗
-                # 为什么两个都显示了？」）。计数攒着，本轮结束按基址说一句总量 ——
-                # 滤掉了什么必须在日志里说清楚，不能静默少结果。
+            # 命中页的标题：响应体已经在手里（上面算 md5 用过），提取 <title> 是零额外请求。
+            # 为什么值得存：路径命中后光看 `/backup.tar.gz 200 1818` 判断不了这是真备份包
+            # 还是一个"统一跳转页"；标题能立刻分辨（用户 2026-09-23 明确要求）。
+            # 也正因为要靠标题判拦截页，**这条提取必须在过滤判定之前**（续112-F）。
+            t = TITLE_RE.search(r.get("text") or "")
+            title = (t.group(1).strip()[:200] if t else "")
+            if is_block_page(st, title):
+                # 标题就是 WAF/CDN 的统一拦截页（`Attention Required! | Cloudflare` 这类）：
+                # 这条 403 与路径无关，说的是"厂商在拦我们"，不是"这个文件存在且被禁"。
+                # 实测 dzmm.ai 的 `wp-config.php` / `wp-login.php` / `xmlrpc.php` 与它们的
+                # `.bak/.zip/.old…` 派生名各留一行 4910 字节的同一张页（用户：「这两个大小也不
+                # 一样吗 为什么两个都显示了？」）—— 几十个路径就是几十条假发现。
+                # 计数攒着，本轮结束按站点说一句总量：滤掉了什么必须可见，不能静默少结果。
+                with baseline_lock:
+                    waf[u] = waf.get(u, 0) + 1
+                    if u not in waf_title:
+                        waf_title[u] = title
+                return None
+            if st == 403 and is_uniform_block(digest, r.get("length"), blk_md5s, blk_sizes):
+                # 另一条独立的路：随机路径**也被拦**且回同一张页（正文 md5 或长度相同）——
+                # 没有厂商文案也能判（自建 `error_page 403 =...` 那种统一页）。
                 with baseline_lock:
                     blocked[u] = blocked.get(u, 0) + 1
                     if u not in blocked_sig:
                         blocked_sig[u] = r.get("length")
                 return None
-            # 命中页的标题：响应体已经在手里（上面算 md5 用过），提取 <title> 是零额外请求。
-            # 为什么值得存：路径命中后光看 `/backup.tar.gz 200 1818` 判断不了这是真备份包
-            # 还是一个"统一跳转页"；标题能立刻分辨（用户 2026-09-23 明确要求）。
-            t = TITLE_RE.search(r.get("text") or "")
             return {"site_url": root, "path": url, "status": st,
                     "length": r.get("length"), "method": "GET", "note": "builtin",
-                    "title": (t.group(1).strip()[:200] if t else "")}
+                    "title": title}
 
         entries = [e for e in pool_run(_hit, jobs, workers=workers) if e]
         # 滤掉了什么必须说：只写"目录发现 0 条"会让人以为这个站点没东西，
+        for u in sorted(waf):
+            ctx.logger.info(
+                f"[dirscan] {u} 的 {waf[u]} 个路径被 WAF/CDN 拦截（标题「{waf_title.get(u)}」）"
+                f"→ 与具体路径无关，不计入目录发现")
         # 而事实是"整站被同一张 403 拦掉了"（两者要做的下一步完全不同）。
         for u in sorted(blocked):
             ctx.logger.info(

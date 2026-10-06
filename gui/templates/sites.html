@@ -28,6 +28,7 @@
     {% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">
+    {% include "_taskpick.html" %}
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="URL / 标题 / 技术栈 / Server"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
     {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}

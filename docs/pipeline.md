@@ -155,7 +155,14 @@
   `额外纳入 N 个开放端口候选（来自 portscan）`）。因此想覆盖非标端口 Web 服务，需**同时打开
   `portscan` 阶段**（默认关）—— 只跑默认阶段时仍只探 80/443；
 - 处理：httpx 适配器（JSONL 输出解析 status/title/server/tech）；状态白名单 `200,301,302,403,404`；
-- 产物：`sites.txt`、SQLite `sites` 表；`ctx.results["sites"]` 供后续阶段使用；
+  **3xx 站点补一次「跳转后」取证**（续112-B，`probe.attach_redirect_info`）：httpx 默认**不跟随**
+  重定向，收回来的 301 行标题就是字面的「301 Moved Permanently」，看不出跳去了哪儿；于是对每条 3xx
+  **再发一次允许跟随的请求**，把最终 url / 状态 / 标题写进 `sites.redirect_*` 三列。
+  **原始那一跳一个字不改** —— 把 301 覆盖成落地页的 200 等于谎报"这个端口直接回 200"，
+  而跳转链本身是信息；落地页取不到就三列留空、页面原样显示那一跳（**不编数**）。
+  只对确实有 3xx 的条目发请求（限流预算按请求数计）。显示口径集中在 `utils.site_redirect`；
+- 产物：`sites.txt`、SQLite `sites` 表（含 `redirect_url` / `redirect_status` / `redirect_title`
+  三列，老库由 `_COLUMN_PATCHES` 补列）；`ctx.results["sites"]` 供后续阶段使用；
 - 降级：内置探测（requests/urllib），https 优先、失败回退 http，提取标题、Server 头与技术栈（技术栈由
   `scanner/fingerprint.py` 从响应头/正文识别，属信号级标签、不含版本）；
   **响应体解码**统一走 `scanner/utils.py::_decode_body`（响应头 charset → UTF-8 → GB18030 → 带替换 UTF-8），
@@ -299,6 +306,18 @@
 - 产物：`dirs.txt`（`状态 大小 路径`）、SQLite `dirs` 表（含 `length` 返回包大小）；
   `/dirs` 与任务详情「目录」页签**默认折叠"重复长度"**（同一站点下状态码 + 大小都相同的只留首个），
   `/dirs?all=1` 放开。
+
+- **整站统一拦截页不计为目录发现**（续112-F，两条独立判据，缺一条就漏一类）：
+  ① `is_block_page()` —— 标题命中 `config/dicts/waf_block_titles.txt` 里的**厂商专属文案**
+  （实测 dzmm.ai 走 Cloudflare 时 `wp-config.php` / `wp-login.php` / `xmlrpc.php` 与 `.bak/.zip/.old…`
+  派生名**各留一行** `403 / 4910 / Attention Required! | Cloudflare`，几十个路径就是几十条假发现；
+  CF 页面里带 ray id，两次请求正文 md5 不同、长度相同，所以按文案判比按正文哈希可靠）。
+  清单**刻意不收** `403 Forbidden` / `Access Denied` 这类通用词：nginx 默认 403 页标题就是它，
+  而"敏感文件存在但被 Web 服务器拒绝"正是要报的发现，收了等于自吃结果。
+  ② `is_uniform_block()` —— 软 404 基线现在按状态分开记账（四元组），随机探测路径**自己也回 403 且
+  同内容**（md5 或长度相同）时才有证据；基线里没有 403 样本 ⇒ 一律不滤。
+  两类滤掉的条数分别攒着，本轮结束**按站点各写一句日志**：只写"目录发现 0 条"会让人以为站点没东西，
+  而事实是"整站被同一张页挡掉了"，两者下一步完全不同。
 
 ### ⑧ vulnscan 漏洞初筛
 

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set kt = "&task=" + task_id|string if task_id else "" %}{# 续112-E：手拼链接统一带上的 task 片段 #}
 {% block title %}子域名资产{% endblock %}
 {% block content %}
 <p class="muted">目标自身的子域名（跨任务，服务端分页 + 关键字过滤）。来源列已翻译成可读标签：
@@ -10,9 +11,9 @@
     <span class="mono">config/dicts/cdn_cname.txt</span>、解析 IP 段与
     <span class="mono">config/dicts/cdn_ips.txt</span> 的比对（任一命中即算走 CDN）。
     <a class="btn-mini {{ 'ghost' if tag != 'cdn' else '' }}"
-       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=cdn">只看 CDN</a>
+       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=cdn{{ kt }}">只看 CDN</a>
     <a class="btn-mini {{ 'ghost' if tag != 'nocdn' else '' }}"
-       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=nocdn">只看非 CDN</a>
+       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=nocdn{{ kt }}">只看非 CDN</a>
     {# 续112：默认只列"解析成功"的域名（NXDOMAIN / 超时的 JS 碎片不该刷屏），但被藏起来的条数
        必须报出来 —— 不报就等于让人以为"没有这些域名"。点一下即全部展开（`?nores=1`）。
        两个切换链接的拼接（保留 q/size/tag 状态）由 `gui/app.py::_nores_state` 一次算好，
@@ -24,9 +25,10 @@
     {% else %}
       <span class="muted small">未解析的也一并列出了，<a href="{{ pager.base }}?{{ pager.off }}">只看解析成功的</a></span>
     {% endif %}
-    {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}">全部</a>{% endif %}
+    {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ kt }}">全部</a>{% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">
+    {% include "_taskpick.html" %}
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="域名 / 来源 / CNAME / IP"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
     {% if tag %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
@@ -36,7 +38,7 @@
   </form>
   <form method="post" action="{{ url_for('api_blacklist_add') }}">
     <input type="hidden" name="next"
-      value="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ '&tag=' + tag if tag }}">
+      value="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ '&tag=' + tag if tag }}{{ kt }}">
     <div class="bulkbar">
       <button type="submit" class="ghost">加入黑名单（勾选行）</button>
       <button type="submit" class="ghost"

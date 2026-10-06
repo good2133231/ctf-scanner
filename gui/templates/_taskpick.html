@@ -1,0 +1,20 @@
+{# 资产页共用的「按任务筛选」下拉（续112-E）—— 与「漏洞风险」页 `vulns.html` 那个下拉同口径：
+   只列**这张表里真有行**的任务（`db.tasks_with_asset()`），不取"最新 1000 个任务"
+   （续55 的教训：任务一多，老任务在下拉里根本选不到）。
+   但"按任务筛"和"下拉里有没有这个任务"是两件事：地址栏 `?task=7` 指向一个**在这张表里
+   没有行**的任务时，页面必须仍然显示"当前筛的是 #7"（下面那条兜底 option），
+   否则筛完变成"全部任务"，用户以为自己没筛上 —— 续55 那个坑的另一面。 #}
+{% set _ns = namespace(hit=false) %}
+<label class="muted">按任务筛选
+  <select name="task">
+    <option value="">全部任务</option>
+    {% for t in tasks %}
+      {% if task_id and t.id == task_id %}{% set _ns.hit = true %}{% endif %}
+      <option value="{{ t.id }}" {{ 'selected' if task_id and t.id == task_id else '' }}>
+        #{{ t.id }} {{ t.name }}（{{ t.asset_count }}）</option>
+    {% endfor %}
+    {% if task_id and not _ns.hit %}
+      <option value="{{ task_id }}" selected>#{{ task_id }}（这张表里没有它的行）</option>
+    {% endif %}
+  </select>
+</label>

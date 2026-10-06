@@ -1787,7 +1787,8 @@ def main():
 
     assert _run_dirs({}) == [True], "全局 quick 档应走浅扫"
     assert _run_dirs({"dirscan_full": True}) == [False], "任务级 dirscan_full 应压过 quick 走深扫"
-    assert _run_dirs({"portscan_full": True}) == [True], "端口全量选项不该改目录档位"
+    assert _run_dirs({"portscan_full": True}) == [True], "端口全量选项不该改目录档位"
+
 
     # 续105：dirmap 的 `-e` 探测 —— 判据必须是**它自己的参数定义源码**，不是 `-h`。
     # 实测上游 master 那份 `-h` 只打印 banner、连 argparse 帮助都不输出：拿"帮助里有没有 -e"
@@ -12759,11 +12760,74 @@ http:
     assert _ds112.is_uniform_block("其它正文", len(_BLOCK112), set(), {len(_BLOCK112)}) is True
     assert _ds112.is_uniform_block("其它正文", 123, {_dg112}, {len(_BLOCK112)}) is False
 
-    print("[8j] 续112-F 整站统一 403 拦截页 ok: 与随机路径**同内容**的 403 不再计为目录发现"
-          "（Cloudflare 那种逐字节相同的 4910 拦截页）｜正文不同的 403 与 200 命中照旧保留"
-          "（不是「见 403 就丢」）｜随机路径回 404 的站点一条都不滤（没有 403 基线=没有证据）｜"
-          "滤掉的条数写进日志（不静默少结果）｜判据打回恒 False 的变异让两条噪声回来｜"
-          "判据单条：空签名一律 False，md5 或长度任一命中即同内容")
+    # ⑦ dzmm.ai 的真实形态（本轮复扫抓到的）：随机路径**不被拦**（回 200 的 SPA 模板页），
+    #    于是"与随机路径同内容的 403"那条基线判据根本不命中；Cloudflare 的托管规则只拦
+    #    `wp-config.php` 这类特定路径，几十个路径各留一条 `403 / 4910 /
+    #    Attention Required! | Cloudflare`。这条只能靠**厂商专属标题文案**判
+    #    （`config/dicts/waf_block_titles.txt`）；CF 页面里带 ray id，正文 md5 逐次不同，
+    #    所以既不能按正文哈希、也不能按"重复几条"分组（两条真路径同页是常事）。
+    _SPA112 = "<html>dzmm ai spa shell</html>" + ("s" * 12349)
+
+    def _srv112c(url, timeout=10, headers=None, data=None, verify=None,
+                 allow_redirects=True, settings=None, want_bytes=False, auth=False):
+        u = str(url)
+        if "ctfscan-none" in u:                      # 随机路径：200 + 统一模板页
+            return {"status": 200, "text": _SPA112, "length": len(_SPA112), "url": u,
+                    "headers": {}}
+        if u.rsplit("/", 1)[-1] in ("wp-config.php", "wp-login.php", "xmlrpc.php", ".env"):
+            return {"status": 403, "text": "<title>Attention Required! | Cloudflare</title>",
+                    "length": 4910, "url": u, "headers": {}}   # CF 托管规则：同一张拦截页
+        return {"status": 404, "text": "nope", "length": 4, "url": u, "headers": {}}
+
+    _logs112.clear()
+    _ds112.http_request = _srv112c
+    try:
+        _ent112c = _ds112.DirscanStage(_ctx112d)._scan(
+            [("http://cf112.test", p, "http://cf112.test/")
+             for p in ("/wp-config.php", "/wp-login.php", "/xmlrpc.php", "/.env", "/nope")],
+            _lim112)
+    finally:
+        _ds112.http_request = _orig_dhr112
+    assert _ent112c == [], f"Cloudflare 式整站拦截页仍被当发现：{_ent112c}"
+    assert any("被 WAF/CDN 拦截" in x and "4 个路径" in x for x in _logs112), _logs112[-6:]
+
+    # ⑧ 反向对照（这条同时证伪"看到 403 就一律丢"的偷懒实现）：
+    #    标题是 Web 服务器默认 `403 Forbidden` 的"文件存在但被拒"必须**照旧入库**
+    def _srv112d(url, timeout=10, headers=None, data=None, verify=None,
+                 allow_redirects=True, settings=None, want_bytes=False, auth=False):
+        u = str(url)
+        if "ctfscan-none" in u:
+            return {"status": 404, "text": "not found", "length": 9, "url": u, "headers": {}}
+        return {"status": 403, "text": "<title>403 Forbidden</title>", "length": 177,
+                "url": u, "headers": {}}
+
+    _logs112.clear()
+    _ds112.http_request = _srv112d
+    try:
+        _ent112d = _ds112.DirscanStage(_ctx112d)._scan(
+            [("http://deny112.test", p, "http://deny112.test/")
+             for p in ("/wp-config.php", "/wp-login.php")], _lim112)
+    finally:
+        _ds112.http_request = _orig_dhr112
+    assert len(_ent112d) == 2, f"nginx 默认 403（真发现）被误杀了：{_ent112d}"
+    assert not any("拦截" in x for x in _logs112), _logs112
+
+    # ⑧b 文案表本身：清单读得到、通用词没被收进来（收进来就是自吃结果）
+    _mk112 = _ds112.block_markers()
+    assert "attention required! | cloudflare" in _mk112, _mk112
+    assert not any(m in ("403 forbidden", "access denied") for m in _mk112), \
+        f"清单里混进了通用标题文案，会把真发现滤掉：{sorted(_mk112)}"
+    assert _ds112.is_block_page(200, "Attention Required! | Cloudflare") is False, \
+        "只对 403/429/503 生效，200 不许被这道门管"
+    assert _ds112.is_block_page(429, "Just a moment...") is True
+
+    print("[8j] 续112-F 整站拦截页不再计为目录发现 ok: 与随机路径**同内容**的 403 滤掉｜"
+          "正文不同的 403 与 200 命中照旧保留（不是「见 403 就丢」）｜随机路径回 404 的站点一条"
+          "都不滤（没有 403 基线=没有证据）｜dzmm.ai 真实形态（随机路径回 200 的 SPA 页 + CF 只拦"
+          "特定路径）靠厂商标题文案表收掉 4 条、日志写明拦了几个｜nginx 默认「403 Forbidden」"
+          "（文件存在但被拒＝真发现）两条原样入库，通用文案刻意不收进表｜滤掉的条数写进日志"
+          "（不静默少结果）｜判据打回恒 False 的变异让两条噪声回来｜is_block_page 只管 "
+          "403/429/503，200 不受影响")
 
 
     # ---------------- [8k] 续112-B：3xx 站点的「跳转后」取证与显示 ----------------
@@ -12871,6 +12935,93 @@ http:
           "时保留原句并说明｜库里真落 redirect_* 三列（同轮守住 INSERT 占位符=列数）｜跨任务页 / "
           "任务页签 / MD / HTML 四处同口径且关键字搜得到落地标题｜probe 流水线真接上了这次取证｜"
           "REDIRECT_STATUS 清空的变异让补列归零（断言有牙）")
+
+
+    # ---------------- [8l] 续112-E：跨任务资产页的「按任务筛选」 ----------------
+    #      用户要求「漏洞风险标签是有资产筛选的 其他功能也要有资产筛选」——`/vulns` 早就能按任务
+    #      收窄，其他资产页只有关键字框，"这堆端口/目录是哪个任务扫出来的"只能靠碰巧搜得到域名。
+    #      接线点分散在六个页面 + 六种链接拼接，最容易出的错是"筛完之后点一下标签/翻一页就把
+    #      筛选丢了"，所以断言全部盯着**链接是否带 task**，而不只是"当前页有没有筛对"。
+    _tid112e = db.create_task("smoke-112-taskfilter", "tf112.example", ["probe"], {})
+    _other112e = db.create_task("smoke-112-taskfilter-b", "tf112b.example", ["probe"], {})
+    db.insert_sites(_tid112e, [{"url": "http://tf112.example/", "host": "tf112.example",
+                                "port": "80", "status": 200, "title": "TF-A-112", "length": 11,
+                                "source": "builtin"}])
+    db.insert_sites(_other112e, [{"url": "http://tf112b.example/", "host": "tf112b.example",
+                                  "port": "80", "status": 200, "title": "TF-B-112", "length": 12,
+                                  "source": "builtin"}])
+    db.insert_ports(_tid112e, [{"host": "tf112.example", "ip": "10.11.2.1", "port": 80,
+                                "service": "http", "banner": "TF-PORT-112"}])
+    db.insert_dirs(_tid112e, [{"site_url": "http://tf112.example/",
+                               "path": "http://tf112.example/secret", "status": 200,
+                               "length": 5, "note": "builtin", "title": "TF-DIR-112"}])
+    # `domains` 是**列表**（`insert_csegs` 内部才逗号连接）：传字符串会被逐字符 join 成
+    # "t,f,1,1,2..."，那关键字就搜不到了
+    db.insert_csegs(_tid112e, [{"segment": "10.11.2.0/24", "ip": "10.11.2.1",
+                                "domains": ["tf112.example"], "count": 1}])
+    db.insert_subdomains(_tid112e, [("tfa.tf112.example", "subfinder"),
+                                     ("exta.tf112.example", "js:mine")])
+    db.insert_subdomains(_other112e, [("tfb.tf112b.example", "subfinder"),
+                                       ("extb.tf112b.example", "js:mine")])
+    # 两个来源都要：`/subdomains` 只看 OWN（被动/爆破），`/extdomains` 只看拓展（js:/osint:）
+    db.set_subdomain_net(_tid112e, {"tfa.tf112.example": ("10.11.2.9", ""),
+                                   "exta.tf112.example": ("10.11.2.8", "")})
+    db.set_subdomain_net(_other112e, {"tfb.tf112b.example": ("10.11.3.9", ""),
+                                     "extb.tf112b.example": ("10.11.3.8", "")})
+
+    def _hrefs(html_text):
+        import re as _re112e
+        return _re112e.findall(r'href="([^"]*)"', html_text)
+
+    # ① 六个资产页都能按任务收窄，且**另一任务的行必须消失**
+    for _p112e, _mine, _theirs, _tbl in (
+            ("/sites", "TF-A-112", "TF-B-112", "sites"),
+            ("/ports", "TF-PORT-112", "tf112b", "ports"),
+            ("/dirs", "TF-DIR-112", "tf112b", "dirs"),
+            ("/csegs", "10.11.2.1", "tf112b", "csegs"),
+            ("/subdomains", "tfa.tf112.example", "tfb.tf112b.example", "subdomains"),
+            ("/extdomains", "exta.tf112.example", "extb.tf112b.example", "subdomains")):
+        _h_on = c.get(_p112e, query_string={"task": str(_tid112e)}).get_data(as_text=True)
+        assert _mine in _h_on, f"{_p112e}?task 筛完自己的行都没了"
+        assert _theirs not in _h_on, f"{_p112e} 未按任务收窄（别人的行还在）"
+        # 下拉里必须真的选中了当前任务（否则用户看不出自己在筛什么）
+        assert 'name="task"' in _h_on and "全部任务" in _h_on, f"{_p112e} 缺「按任务筛选」下拉"
+        assert 'selected' in _h_on, f"{_p112e} 下拉没把当前任务标成选中"
+        # ② 筛完再翻页 / 点标签 / 切换视图，筛选不能丢：
+        #    **任何**带状态的链接（分页、CDN 标签、重叠、聚合、分组、未解析）都必须带上 task
+        _st_links = [u for u in _hrefs(_h_on)
+                     if any(k in u for k in ("page=", "tag=", "all=1", "nores=1",
+                                             "src=", "agg=", "group="))]
+        for _u112e in _st_links:
+            assert "task=" in _u112e, f"{_p112e} 的这条链接会把任务筛选丢掉：{_u112e}"
+        assert _st_links or _p112e in ("/ports", "/csegs"), \
+            f"{_p112e} 一个状态链接都没有 = 这道断言在该页什么都没测到"
+            # ②b 筛一个**这张表里没有行**的任务：下拉必须仍然显示"当前筛的是它"
+        #     （否则筛完看起来像回到了"全部任务"，用户以为自己没筛上 —— 续55 那个坑的另一面）
+        _h_empty = c.get(_p112e, query_string={"task": "999999"}).get_data(as_text=True)
+        assert 'value="999999" selected' in _h_empty, \
+            f"{_p112e} 按一个没有行的任务筛，下拉丢了当前任务（看着像没筛）"
+
+    # ③ 空值 / 非数字 / 0 都当"不筛选"，绝不能筛成空表
+        # ⚠️ 这里必须带 `q`：不带的话 `/extdomains` 是**按主域名分组**的默认视图，
+        # 本用例的那一组可能落在第 2 页（"看不见"不等于"被清空"，断言要的是后者）
+        for _bad in ("", "abc", "0"):
+            _h_bad = c.get(_p112e, query_string={"task": _bad, "q": "tf112"}).get_data(as_text=True)
+            assert _mine in _h_bad, f"{_p112e}?task={_bad!r} 把整页资产清空了"
+
+    # ④ 判据只有一处：`db.tasks_with_asset()` 的白名单拒绝未知表名（表名要拼进 SQL）
+    try:
+        db.tasks_with_asset("vulns; DROP TABLE tasks")
+        raise AssertionError("tasks_with_asset 接受了非白名单表名（SQL 标识符注入面）")
+    except ValueError:
+        pass
+    _names = {t["id"]: t["asset_count"] for t in db.tasks_with_asset("sites")}
+    assert _names.get(_tid112e) == 1 and _names.get(_other112e) == 1, _names
+
+    print("[8l] 续112-E 资产页「按任务筛选」ok: 六个跨任务资产页都能按任务收窄（别人的行消失、"
+          "自己的行还在）｜下拉选中标当前任务｜翻页/切标签/切视图的链接都带 task（筛选不丢）｜"
+          "空值·非数字·0 一律当不筛选（不把整页清空）｜表名白名单拒绝任意标识符｜"
+          "asset_count 与实际行数一致")
 
 
     print("SMOKE PASS")

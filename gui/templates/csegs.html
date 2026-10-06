@@ -7,6 +7,7 @@
   在「策略配置 → 外部情报拓展」里打开后新任务才会产出。</p>
 <section class="panel">
   <form class="filters" method="get" action="{{ pager.base }}">
+    {% include "_taskpick.html" %}
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="C 段 / IP / 域名"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
     <button class="ghost" type="submit">查询</button>

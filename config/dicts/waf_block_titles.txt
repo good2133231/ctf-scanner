@@ -1,0 +1,23 @@
+# WAF/CDN「拦截页」的标题特征（小写子串匹配响应 <title>）。一行一个，`#` 开头是注释。
+#
+# 用途：目录发现（`scanner/stages/dirscan.py`）拿到 403/429/503 时，先看标题是否落在这张表里 ——
+# 命中就说明"这个 403 与路径无关，是厂商的统一拦截页"，不是"这个文件存在但被禁"，
+# 于是不计入目录发现（只在本轮结束时按站点写一句日志）。
+#
+# 为什么只收厂商专属文案、不收 `403 Forbidden` / `Access Denied` 这类通用词：
+# nginx/Apache 的默认 403 页标题就是 `403 Forbidden`，而"敏感文件存在但被 Web 服务器拒绝"
+# **正是我们要报的发现**，把它当拦截页滤掉等于自己吃掉结果。
+#
+# 判据来源都是各家公开的挑战/阻断页实测文案（本项目在授权目标上实测到的是第一条）。
+# 你自己的环境里有别的 WAF，把它的标题文案加进这张表就行 —— 这是数据，不用改代码。
+attention required! | cloudflare
+just a moment...
+cloudflare ray id
+cf-browser-verification
+request blocked
+blocked reference id
+suspected security threat
+security block detected
+403 forbidden - wordfence
+请求被阻断
+安全验证

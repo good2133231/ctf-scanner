@@ -1511,6 +1511,25 @@ def tasks_with_vulns(owner_id=None):
                   f"{extra} ORDER BY t.id DESC", tuple(_op))
 
 
+def tasks_with_asset(table, owner_id=None):
+    """某张资产表里**实际有行**的任务（含该表行数），给资产页的「按任务筛选」下拉用（续112-E）。
+
+    与上面 `tasks_with_vulns()` 同一口径、同一动机：下拉只覆盖"这张页面上可能出现的行"所属的
+    任务，不取 `list_tasks(limit=1000)` —— 老任务会在下拉里**根本选不到**。
+
+    ⚠️ `table` 要拼进 SQL，所以只收 `_ASSET_PAGES` 的白名单键（各资产页的表名本来就来自它），
+    别的名字一律 ValueError，绝不放任意标识符进来。
+    """
+    if table not in _ASSET_PAGES:
+        raise ValueError(f"未知的资产表：{table}")
+    _oc, _op = _owner_task_clause(owner_id)
+    extra = (" AND " + _oc) if _oc else ""
+    return _query(
+        f"SELECT t.*, (SELECT COUNT(*) FROM {table} a WHERE a.task_id = t.id) AS asset_count "
+        f"FROM tasks t WHERE t.id IN (SELECT DISTINCT task_id FROM {table}){extra} "
+        "ORDER BY t.id DESC", tuple(_op))
+
+
 # ---------- 漏洞页分页 + 排序（P0，续51） ----------
 
 # 排序白名单：键 = 前端 `sort` 参数，值 = 排序表达式。**只允许这里的常量进 SQL** ——

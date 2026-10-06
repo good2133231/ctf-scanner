@@ -20,6 +20,7 @@
     {% if agg %}<a class="btn-mini ghost" href="{{ link_agg }}">返回明细</a>{% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">
+    {% include "_taskpick.html" %}
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="路径 / 站点 / 标题 / 备注"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
     {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}

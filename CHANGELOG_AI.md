@@ -3,6 +3,66 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 2026-10-06（续112-B/C/D/E/F/G）资产视图与两处写入侧噪声
+
+用户 2026-10-06 对 dzmm.ai 结果提的四条 + 顺带查出的同源缺陷，一组做完：**同一域名一行、默认只列解析成功的域名、3xx 的「跳转后」、整站统一拦截页不再计为目录发现、资产页补「按任务筛选」**，并把三类"按现在的流水线根本不会写进来"的历史行按新口径清掉（先整库备份）。
+
+### C 同一域名只留一行，其余来源写成「另见于」
+
+`dzmm.ai` 与 `www.dzmm.ai` 在「子域名」里各两到三行（来源 `js:mine` / `promote:js:mine` / `subfinder`），看着像两三个资产。判据只在 `scanner/db.py` 一处：
+
+- `SOURCE_RANK_CASE`：被动/爆破(10) > 目标自带(20) > 被动(30) > 归属追加(40) > JS(50) > 外部情报(60) > 其他(99)；
+- `RESOLVED_WHERE = "ip <> ''"`；`other_sources_by_domain()` 一次查回"这个域名还被谁找到过"；
+- `db.page_assets(..., dedupe_domain=True)` 把去重下推成 `ROW_NUMBER() OVER (PARTITION BY domain ORDER BY <rank>, id DESC)` 的内层子查询，**内层 where 与参数与外层完全同源** —— 否则「共 N 条」与列表、翻页各算一套（本项目反复踩过）；SQLite < 3.25 时**跳过去重并 warning**（宁可多几行，绝不静默少几行）。
+
+去重只是显示口径：入库行一条不动，被去掉的来源在「来源」列下面写 `另见于 …`（不写就等于谎报资产面）。模板 `subdomains.html` / `extdomains.html` / `task_detail.html` 两个页签共用 `_sub_rows()` 的同一份装配。
+
+### D 默认只列解析成功的 + 第三方名单补 20 条
+
+JS 碎片里二十几个 `chat.floating.open` 这种"点号连接的成员访问链"全都解析不了，默认铺满整屏还看着像资产。现在两个域名视图与任务详情两个页签**默认只列解析成功的**，并把被收起的**域名数**显示成 `显示未解析（N）`，点一下 `?nores=1` 全展开。
+
+- ⚠️ 第一版把链接条件写反了：默认收起时翻页链接也带上 `nores=1`，于是第 2 页突然把碎片全放出来 —— 同一个视图两页口径不一致。现在片段由 `gui/app.py::_nores_state()` 一处算好（`pager.on` / `pager.off` / `pager.qs`），四个调用点不再各写 `if`。
+- `_asset_page()` 越界回落那一支原来手写第二遍 `_page_assets`，漏传了 `order` 与 `**kw`（`dedupe_domain`）→ 回落到末页时口径与前两页不一样；改成同一个 `_run(page)` 闭包。
+- `config/dicts/js_thirdparty.txt` 补 `web.telegram.org` / `telegram.me` / `posthog.com`(及 `us.`/`i.`/`app.` 子域) / `base-ui.com` / `socket.io` / `nuqs.dev` / `www.i18next.com` / `bam.nr-data.net` / `backblazeb2.com` / `your-server.com`(README 占位符) 等 20 条；`[8i] ⑧` 断言"文件里的条目真的进了 `_js112._noise_set()`"（续22 出过"加载了却没用"）。
+- 已入库的 16 行第三方拓展域名按新名单删掉（整库备份 `logs/scanner.db.bak-*-112d-thirdparty` + 明细 `logs/scanner.db.deleted-112d.json`）；其他资产表核对过零引用，没被牵连。
+
+### B 3xx 站点补「跳转后」取证
+
+满屏 `301 / 标题「301 Moved Permanently」`看不出落地页是什么（httpx 默认不跟随重定向）。
+
+- `sites` 新增三列 `redirect_url` / `redirect_status` / `redirect_title`（`_COLUMN_PATCHES` 给老库补列）。
+- `probe.attach_redirect_info(sites, fetch, workers, logger)`：只对 `REDIRECT_STATUS` 里的状态码再发一次允许跟随的请求；**就地改条目**（复制那份改了白改）；原始 `status`/`title`/`length` 一个字不动 —— 把 301 覆盖成 200 等于谎报"这端口直接回 200"，而跳转链本身是信息。
+- 显示口径 `scanner/utils.py::site_redirect(row)`：`301 → 200` + `跳转后` 标记 + 落地 URL/标题；**Row 与 dict 都吃**（`_field()` 兜掉 `sqlite3.Row` 没有 `.get()` 这个本项目第五次踩的坑）；取不到就不编数，落地页无 title 时保留原句并写明。
+- 四个出口共用：`sites.html`、`task_detail.html` 站点页签、报告 MD、报告 HTML；`_ASSET_PAGES["sites"]` 的 q 列加上 `redirect_url/redirect_title`（看得见就要搜得到）。
+
+### F 整站统一拦截页不再计为「目录发现」
+
+`wp-config.php` / `wp-login.php` / `xmlrpc.php` 与 `.bak/.zip/.old…` 派生名各留一行 `403 / 4910 / Attention Required! | Cloudflare`（几十个路径 = 几十条假发现）。dirscan 的软 404 基线**只对 200 生效**，403 一律照收，所以修在写入侧，两条独立判据：
+
+- `is_block_page(status, title)` + 新数据文件 `config/dicts/waf_block_titles.txt`（11 条厂商专属标题文案）。清单**刻意不收** `403 Forbidden` / `Access Denied`：nginx 默认 403 页标题就是它，而"敏感文件存在但被服务器拒绝"正是要报的发现。
+- `is_uniform_block(digest, length, blk_md5s, blk_sizes)`：软 404 基线现在按状态分开记账（四元组），随机路径**自己也回 403 且同内容**时才有证据；没样本一律不滤。
+- 两类计数分别攒进 `waf` / `blocked`，本轮结束按站点写一句"几个路径回同一张页 ⇒ 不计入目录发现"——不静默少结果。
+- 走过的弯路记下来：先做成"同站点 (状态,大小,标题) 重复 ≥N 条整组丢掉"，N=3 漏掉 dzmm.ai 的两条一组、N=2 会吃掉 `/admin` 与 `/admin/` 回同一页这种真实重复 —— 按计数判是在猜，按厂商文案判才有依据。`_scan` 结尾的日志按站点写，`[8j] ⑦⑧` 把两面都钉住。
+
+### E 资产页「按任务筛选」（与漏洞页同口径）
+
+`db.tasks_with_asset(table, owner_id)`（表名只收 `_ASSET_PAGES` 白名单，别的 ValueError）+ `gui/app.py::_task_scope()` + 新模板 `_taskpick.html`，接到 `/sites` `/ports` `/dirs` `/csegs` `/subdomains` `/extdomains` 六页（含 `/dirs` 的聚合视图与 `/extdomains` 的分组/平铺两种视图）。
+
+- 筛选状态活过翻页与切标签：`/dirs` 走集中式 `_state()`（`_link()` 与 `_qs()` 都从它派生），其余页面把 `&task=` 拼进 `pager.qs`，`_nores_state()` 因此自动把它带进「显示未解析」链接。
+- 空值 / 非数字 / 0 一律当"不筛选"，绝不筛成空表；筛一个"这张表里没有行"的任务时下拉仍显示当前任务（`#N（这张表里没有它的行）`）。
+
+### G 历史噪声行按新口径清掉（先整库备份）
+
+`dirs` 31 行拦截页、`ports` 52 行（解析 IP 全在 Cloudflare 任播段，续110-A 起这类主机根本不再扫）删除；14 行 3xx 站点用同一套 `attach_redirect_info` **补**上 `redirect_*`（不是删）。备份与明细：`logs/scanner.db.bak-20261006-094633-112g-noise`、`logs/112g-deleted-20261006-094647.json`。清完：`dirs 34→3`、`ports 52→0`。
+
+### 真目标复验与门禁
+
+- 全流程复扫 dzmm.ai（任务 #5，进程内开全部开关、不改 `config/settings.yaml`）：`portscan` 三个主机全部识别为 CDN 并跳过 → **0 个端口**（原来 26 个）；`https://dzmm.ai` 的 301 行拿到 `redirect_status=200 / 标题「DZMM AI - 让幻想有回应 | AI角色聊天与角色卡」`；子域名/拓展域名视图按新口径一行一来源。
+- 拦截页判据的**现场验证**（16 次真实 GET）：`wp-config.php` → `403/4910/Attention Required! | Cloudflare` 判为拦截页 ✔；`robots.txt` 200、`/admin` 200「DZMM 管理后台访问授权」照旧入库 ✔。
+- 回归：新增 `[8i]`（去重与显示口径 5 条 + 两条变异）、`[8j] ⑦⑧`（拦截页两面）、`[8k]`（跳转后语义 + 库里落列 + 四出口同口径 + 接线 + 变异）、`[8l]`（六页筛选 + 链接带状态 + 空值 + 白名单）；既有用例补齐"解析结果"夹具并注明原因。
+- `tests/smoke.py` 全量 **SMOKE PASS / RC=0**（含 `browser_e2e` 真浏览器 52 条），`tools/check_contrast.py` 149 项 0 失败，`git diff --numstat` 与 `--ignore-cr-at-eol` 逐文件一致。
+
+
 
 
 
