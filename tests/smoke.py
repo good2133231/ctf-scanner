@@ -12821,13 +12821,35 @@ http:
         "只对 403/429/503 生效，200 不许被这道门管"
     assert _ds112.is_block_page(429, "Just a moment...") is True
 
+    # ⑨ dirmap 那一路**判不了**拦截页（产物没有标题），但必须把"没判过"说出来（不静默）
+    _blind = _ds112.dirmap_blind_rows
+    _rows113 = [{"path": "/a", "status": 403},                       # dirmap 形态：无 title
+                {"path": "/b", "status": 429, "title": ""},
+                {"path": "/c", "status": 403, "title": "Attention Required! | Cloudflare"},
+                {"path": "/d", "status": 200, "length": 1818},
+                {"path": "/e", "status": 404}]
+    assert [r["path"] for r in _blind(_rows113)] == ["/a", "/b"], _blind(_rows113)
+    assert _blind([]) == [] and _blind(None) == [], "空产物不许报错也不许凭空报数"
+    # 变异（§6.1）：漏掉"有没有标题"这一半 = 把内置那一路也计进"未判定"，话就说反了
+    _bad113 = [r for r in _rows113 if int(r.get("status") or 0) in (403, 429, 503)]
+    assert [r["path"] for r in _bad113] != [r["path"] for r in _blind(_rows113)], \
+        "变异没生效：漏掉标题条件也应当数出不同的行"
+    # 接线：run() 里必须真的**调用**它并写日志。判据取"赋值形态"而不是简单数名字 ——
+    # 注释里也写着这个函数名，数名字的话把调用删掉、注释留着照样绿（本项目反复踩的弱断言）。
+    _src113 = (ROOT / "scanner" / "stages" / "dirscan.py").read_text(encoding="utf-8")
+    assert "def dirmap_blind_rows(" in _src113, "判据函数没了"
+    assert "= dirmap_blind_rows(" in _src113, "定义有了但 run() 没调用：日志永远不会出现"
+    assert "未做拦截页判定" in _src113, "接到了却没把话说出来（静默＝没登记）"
+
     print("[8j] 续112-F 整站拦截页不再计为目录发现 ok: 与随机路径**同内容**的 403 滤掉｜"
           "正文不同的 403 与 200 命中照旧保留（不是「见 403 就丢」）｜随机路径回 404 的站点一条"
           "都不滤（没有 403 基线=没有证据）｜dzmm.ai 真实形态（随机路径回 200 的 SPA 页 + CF 只拦"
           "特定路径）靠厂商标题文案表收掉 4 条、日志写明拦了几个｜nginx 默认「403 Forbidden」"
           "（文件存在但被拒＝真发现）两条原样入库，通用文案刻意不收进表｜滤掉的条数写进日志"
           "（不静默少结果）｜判据打回恒 False 的变异让两条噪声回来｜is_block_page 只管 "
-          "403/429/503，200 不受影响")
+          "403/429/503，200 不受影响｜dirmap 那一路产物没有标题 ⇒ **不滤但明说没滤**"
+          "（`dirmap_blind_rows` 只数「无标题的拒答」，漏掉标题条件的变异会数出不同的行；"
+          "run() 里没接上这条也判红）")
 
 
     # ---------------- [8k] 续112-B：3xx 站点的「跳转后」取证与显示 ----------------
@@ -13285,13 +13307,23 @@ http:
     finally:
         _dq113.zone_state = _orig_zs113b
 
+    # ⑥ 接线：页面上的「解析」按钮（`POST /api/domains/resolve`）必须走**同一处**判据。
+    #    ④ 只证明函数本身对，路由不调它 = 流水线里清得掉、用户在页面上点了清不掉
+    #    （本仓反复栽在"同一件事只接了一条路"，所以这条单独钉）。取的是**那个视图函数**的源码，
+    #    不是整份 gui/app.py —— 全文件里出现函数名而路由没调用，也算它接上了（弱断言）。
+    import inspect as _ins113
+    _vsrc113 = _ins113.getsource(app.view_functions["api_resolve_domains"])
+    assert "drop_absent_zones" in _vsrc113, \
+        "GUI 的「解析」路由没接续113 的注册域判据：两条路两种结果"
+    assert "判掉" in _vsrc113, "接了却没把清掉几条说出来（静默少行）"
+
     print("[8m] 续113 注册域判据 ok: zone_state 只看 rcode（3=absent、0=exists、2/5/超时=unknown、"
           "查询抛异常=unknown，NS 的 rdata 不解析所以不能看记录是否非空）｜filter_absent_zones 只剔 "
-          "absent、按注册域缓存（三个碎片两个注册域只查两次）、日志报出条数与原因｜开关关掉一次查询"
+          "absent、按注册域缓存（两个同注册域的宿主只查一次）、日志报出条数与原因｜开关关掉一次查询"
           "都不发｜真资产（注册域存在）一条不误杀｜jsmine 阶段端到端：碎片根本不进库、统计行写明"
           "拒收几个｜库里已有历史行按同判据清掉且只清 js:* / promote:js:*（osint:* 不动），"
           "ip_note 不是 nxdomain 的（over-limit 等）一律不动｜把 unknown 也判成不存在的变异"
-          "立刻让断言变红")
+          "立刻让断言变红｜GUI「解析」路由与流水线共用同一处判据（视图函数源码里必须有它）")
 
 
     print("SMOKE PASS")

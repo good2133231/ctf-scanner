@@ -2735,7 +2735,13 @@ def create_app():
         db.set_subdomain_net(tid, net)
         db.set_subdomain_cnames(tid, cnames)
         ok = sum(1 for v in net.values() if v[0])
-        logger.info(f"[gui] 任务 #{tid} 解析回填 {len(net)} 个域名（成功 {ok} 个）")
+        # 续113：解析回填之后立刻按**注册域是否存在**判掉「压根不是域名」的 JS 碎片 ——
+        # 判据只有 `extdom.drop_absent_zones` 一处，流水线（`extdom.process` → `resolve_extended`）
+        # 用的就是它。这一条路由不接上的话，用户在页面上点「解析」清不掉、流水线里却清得掉，
+        # 等于同一件事两套结果（本仓反复出在这类"只在一处接线"上）。
+        drop113 = extdom.drop_absent_zones(tid, settings, logger=logger, timeout=timeout)
+        logger.info(f"[gui] 任务 #{tid} 解析回填 {len(net)} 个域名（成功 {ok} 个）"
+                    + (f"；另按注册域判掉 {drop113} 条「不是域名」的 JS 碎片" if drop113 else ""))
         return redirect(back)
 
     @app.route("/api/domains/scan-ext", methods=["POST"])

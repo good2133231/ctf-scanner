@@ -284,6 +284,18 @@ def is_block_page(status, title):
     return any(m in t for m in block_markers())
 
 
+def dirmap_blind_rows(entries):
+    """dirmap 产物里**判不出拦截页**的行：状态 403/429/503、但条目没有标题。
+
+    `is_block_page()` 吃的是厂商专属**标题文案**，而 dirmap 只落 `[状态码][类型][大小] URL` ——
+    那条路上没有可比的东西，就当没证据（宁可原样入库让人工看，也不按计数猜着滤）。
+    本函数**只用于说一句"有多少条没判过"**，不参与任何过滤决定（改了它不影响结果，只影响日志）。
+    """
+    return [e for e in (entries or [])
+            if int(e.get("status") or 0) in (403, 429, 503)
+            and not str(e.get("title") or "").strip()]
+
+
 class DirscanStage(Stage):
     name = "dirscan"
     description = "目录/路径爆破（dirmap 或内置字典扫描）"
@@ -346,6 +358,16 @@ class DirscanStage(Stage):
                 used_dirmap = bool(entries)
                 if used_dirmap:
                     ctx.logger.info(f"[dirscan] dirmap 输出 {len(entries)} 条")
+                    # dirmap 的产物行只有 `[状态码][content-type][大小] URL`，**没有标题**，
+                    # 所以续112-F 那条"按厂商专属文案滤拦截页"的判据在这条路上根本下不了手。
+                    # 这里不改行为、只把话说出来：静默让人以为过滤生效，比"这一路没过滤"更糟
+                    # （内置那一路确实滤了）。计数交给 `dirmap_blind_rows()`（纯函数，可复算）。
+                    blind113 = dirmap_blind_rows(entries)
+                    if blind113:
+                        ctx.logger.info(
+                            f"[dirscan] dirmap 产物不含标题，这 {len(blind113)} 条 403/429/503"
+                            f"**未做拦截页判定**（内置字典那一路按 waf_block_titles.txt 的厂商文案滤）"
+                            f"—— 走 dirmap 时请把这批 403 当作待人工确认，别当作已过滤")
                 else:
                     ctx.logger.warning("[dirscan] dirmap 未解析到结果，回退内置扫描")
         else:

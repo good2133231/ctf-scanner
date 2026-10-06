@@ -38,6 +38,24 @@ PSL 形态闸门，只因末位 label 恰好是合法公共后缀；纯语法判
 - 判据方向：`absent` 才删，`unknown`（SERVFAIL/超时/没有解析器）一律放行；
   真实 `api.internal.example.com` 这类"没 A 记录但注册域存在"的行必须留下。
 
+### 顺手收掉的三处（回测时抓到的）
+
+- **「解析」按钮不接续113 的判据**（真缺陷，同"同一件事两处各写一遍"这一类）：`extdom.drop_absent_zones`
+  原先只在流水线那条路（`extdom.process` → `resolve_extended`）上被调，而用户在「拓展域名」页勾选后
+  点的 `POST /api/domains/resolve` 是**另一套内联解析** —— 于是"流水线里清得掉、页面上点却清不掉"。
+  现在路由解析回填后调**同一个函数**并把条数写进日志（不新写第二处判据）。
+  回归 `[8m] ⑥`：取的是**那个视图函数**的源码（`inspect.getsource(app.view_functions[...])`），
+  而不是整份 `gui/app.py` —— 全文件里出现过函数名、路由却没调用，那种弱断言挡不住。
+- **dirmap 那一路的拦截页盲区登记 + 不静默**：续112-F 的判据吃的是**标题**，而 dirmap 的产物行只有
+  `[状态码][content-type][大小] URL` —— 装了 dirmap 的机器（用户的 Windows 本机）走深扫时，
+  CF/沃行拦截页会照样从 `403.txt` 里落进「目录发现」。刻意**不**为它补一次请求取标题、也**不**按
+  "同大小重复 N 次"猜（那是 §7 已记过一次的老路），改为由纯函数 `dirmap_blind_rows()` 数出
+  「无标题的拒答」并在日志写明「这 N 条**未做拦截页判定**、请人工确认」—— **登记缺口 + 说出来**，
+  不假装过滤生效。回归 `[8j] ⑨`（漏掉"有没有标题"这个条件、或 run() 里没接线，两种变异都会红）。
+- **`CHANGELOG` 里 `browser_e2e` 的条数是错的**：续112 两处写"真浏览器 52 条"，实际脚本自报
+  **39 条**（`[7x]` 打印的就是计数器 `Report.n`）。已按实测更正 —— 凭印象抄数字属于"绿灯记录本身
+  不可复算"，与 §6.1 推论二同一类问题。
+
 ### 现场与门禁
 
 - 真目标验证：`chat.floating.open` 的注册域 `floating.open` → `zone_state=absent` ✔ 被拦在库外；
@@ -50,8 +68,19 @@ PSL 形态闸门，只因末位 label 恰好是合法公共后缀；纯语法判
 - 回归：新增 `[8n]`（哈希派生 / 端到端登录 / 落盘不含明文 / 模板不回显 / 存明文的变异让断言变红）；
   新增 `[8m]`（rcode→状态三向映射 + "NS 的 rdata 不解码、不能看记录是否非空" + 按注册域缓存的
   查询次数 + 开关关掉零查询 + jsmine 端到端根本不进库 + `drop_absent_zones` 只清 `js:*`/`promote:js:*`
-  且只清 `ip_note='nxdomain'`（`over-limit` 不动）+ 把 `unknown` 也算不存在的变异必须让断言变红）；
-  全量 `SMOKE PASS / RC=0`（含真浏览器）、`check_contrast` 149/0、EOL 逐文件一致。
+  且只清 `ip_note='nxdomain'`（`over-limit` 不动）+ 把 `unknown` 也算不存在的变异必须让断言变红
+  + **⑥ GUI「解析」路由的接线**）；`[8j]` 补 **⑨**（dirmap 没标题 ⇒ 不滤但明说，两种变异都会红）；
+  全量 `SMOKE PASS / RC=0`（含真浏览器 **39 条**交互断言全绿）**跑了两遍** —— 改完
+  `dirscan`/`gui` 之后复跑了一遍，提交的就是被验过的那棵树；`check_contrast` 149/0、
+  EOL 逐文件与 `--ignore-cr-at-eol` 一致。
+- GUI **已在新代码上重启**（口令从运行中进程的环境里取、全程不回显），并用**库副本 + 一次性管理员**
+  登录后逐页复核：`url_map` 里全部 GET 页面 200、无绝对路径外泄、`跳转后` / `另见于` /
+  `显示未解析（3）` / 六页 `name="task"` 俱在，`/settings` 的口令框是
+  `name="token" type="password" value=""` 且页面里没有那份明文。
+  （遍历里刻意**排掉 `/logout`** —— 它是 GET 且真清会话，第一版把自己后面的页签全登出了，
+  于是"每页都 302"看起来像全站坏了。）
+- POC 校准复跑（零外网，合成负样本靶场）：`tools/calibrate_pocs.py` **RC=0**，305 条导入 POC
+  仍命中 **3 条**（与续60 记录的基线一致，本轮改动没有影响 POC 引擎），报告落 `logs/poc_calibration.json`。
 
 
 ## 2026-10-06（续112-B/C/D/E/F/G）资产视图与两处写入侧噪声
@@ -111,7 +140,7 @@ JS 碎片里二十几个 `chat.floating.open` 这种"点号连接的成员访问
 - 全流程复扫 dzmm.ai（任务 #5，进程内开全部开关、不改 `config/settings.yaml`）：`portscan` 三个主机全部识别为 CDN 并跳过 → **0 个端口**（原来 26 个）；`https://dzmm.ai` 的 301 行拿到 `redirect_status=200 / 标题「DZMM AI - 让幻想有回应 | AI角色聊天与角色卡」`；子域名/拓展域名视图按新口径一行一来源。
 - 拦截页判据的**现场验证**（16 次真实 GET）：`wp-config.php` → `403/4910/Attention Required! | Cloudflare` 判为拦截页 ✔；`robots.txt` 200、`/admin` 200「DZMM 管理后台访问授权」照旧入库 ✔。
 - 回归：新增 `[8i]`（去重与显示口径 5 条 + 两条变异）、`[8j] ⑦⑧`（拦截页两面）、`[8k]`（跳转后语义 + 库里落列 + 四出口同口径 + 接线 + 变异）、`[8l]`（六页筛选 + 链接带状态 + 空值 + 白名单）；既有用例补齐"解析结果"夹具并注明原因。
-- `tests/smoke.py` 全量 **SMOKE PASS / RC=0**（含 `browser_e2e` 真浏览器 52 条），`tools/check_contrast.py` 149 项 0 失败，`git diff --numstat` 与 `--ignore-cr-at-eol` 逐文件一致。
+- `tests/smoke.py` 全量 **SMOKE PASS / RC=0**（含 `browser_e2e` 真浏览器 **39 条**交互断言，续113 按脚本自报数更正 —— 这里原先写的「52 条」是凭印象抄的，与 `[7x]` 打印的实际条数不符），`tools/check_contrast.py` 149 项 0 失败，`git diff --numstat` 与 `--ignore-cr-at-eol` 逐文件一致。
 
 
 
@@ -151,7 +180,7 @@ JS 碎片里二十几个 `chat.floating.open` 这种"点号连接的成员访问
   `target=_blank && rel~noopener` + 第 2 个勾选值就是第 1 条链接 + 上限外 40 个不出现 +
   提示语含浏览器限制"，**退回"循环 open"就会红**；`smoke [7r]` 新增"模板必须有 `#op-list`"与
   "app.js 不许再出现『已打开 N / N 个』那句"两条源码级红线（按钮 `type=button` 的旧检测器保留）。
-- 复验：`tests/browser_e2e.py` 真浏览器 52 条全绿；`tools/check_contrast.py` 149/0（本轮不新增配对）；
+- 复验：`tests/browser_e2e.py` 真浏览器 39 条全绿（条数以脚本自报为准，续113 更正）；`tools/check_contrast.py` 149/0（本轮不新增配对）；
   `tests/smoke.py` 全量 SMOKE PASS / RC=0。
 
 ## 2026-10-05 —— 续111：GitHub 线索里的"公共分流名单" —— 只标注 + 只降不升，绝不丢
