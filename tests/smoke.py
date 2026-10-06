@@ -13024,6 +13024,276 @@ http:
           "asset_count 与实际行数一致")
 
 
+    # ---------------- [8n] 续113：引导口令改为 PBKDF2 哈希存储（不再落明文、不再回显） ----------------
+    from scanner import users as _usr113   # 本组要直接派生 / 校验口令
+    #      上一轮把会话密钥从 `gui.token` 上摘掉了（续109），但**口令本身仍是明文**躺在
+    #      `config/settings.yaml` 里，而这个文件**被 git 跟踪**；更糟的是「策略配置」页
+    #      用 `value="{{ s.gui.token }}"` 把它**印回页面源码** —— 任何人能看到那一页（或
+    #      查看源代码）就读到了管理员入口。这一组盯三件事：存的是派生值、明文不再外流、
+    #      以及"留空不改口令"（否则改一次别的配置就把口令清了 = 把人锁在门外）。
+    import copy as _cp113
+
+    _pl113 = "旧明文口令-113"
+    _new113 = "新哨口令-113"
+
+    _real113 = _cp113.deepcopy(gui_app.load_settings())      # 打桩之前先取一份**完整**配置
+
+    def _patch_with(cfg_gui, typed):
+        """把 `gui_app._gui_token_patch` 摆到一份指定的 gui 配置上跑（不碰真实 settings.yaml）。
+
+        桩必须返回整份配置（只在上面覆盖 gui 那一段）：`load_settings()` 的消费方不止一个
+        （`blacklist.enabled` 等会直接 `settings.get("blacklist")`），只回 `{"gui": ...}`
+        会让 /settings 页 500，而 500 页面里当然不含口令明文 —— 断言就假绿了。
+        """
+        _orig_load113 = gui_app.load_settings
+        _stub = _cp113.deepcopy(_real113)
+        _stub["gui"] = dict(cfg_gui)
+        gui_app.load_settings = lambda: _cp113.deepcopy(_stub)
+        try:
+            return gui_app._gui_token_patch(typed)
+        finally:
+            gui_app.load_settings = _orig_load113
+
+    # ① 填了新口令 → 只存派生值，明文列清空，且派生值真能验回新口令、验不出旧口令
+    _p113 = _patch_with({"token": _pl113, "token_hash": ""}, _new113)
+    assert _p113["token"] == "", _p113
+    assert _p113["token_hash"].startswith("pbkdf2_sha256$"), _p113
+    assert _usr113.verify_password(_p113["token_hash"], _new113) is True
+    assert _usr113.verify_password(_p113["token_hash"], _pl113) is False, "旧口令还能用 = 根本没换"
+    assert _new113 not in str(_p113) and _pl113 not in str(_p113), "提交结果里出现了明文字符串"
+
+    # ② 留空 + 已有哈希 → 保持哈希、清掉残留明文（"没填"不等于"把口令清了"）
+    _keep113 = "pbkdf2_sha256$200000$cwM=$cQ8x"
+    _p2 = _patch_with({"token": _pl113, "token_hash": _keep113}, "")
+    assert _p2 == {"token": ""}, _p2
+    # ③ 留空 + 从来没有哈希（老配置直接点保存）→ 只能原样留着，否则这一按就把自己锁在门外
+    _p3 = _patch_with({"token": _pl113, "token_hash": ""}, "")
+    assert _p3 == {"token": _pl113}, _p3
+
+    # ④ 端到端：哈希存好后，登录只认新口令；旧明文口令进不了门（同样受验证码门与 IP 限速约束）
+    _saved113 = _cp113.deepcopy(_real113)
+    _saved113["gui"] = dict(_saved113.get("gui") or {}, token="",
+                            token_hash=_p113["token_hash"])
+    _orig_load113b, _orig_save113 = gui_app.load_settings, gui_app.save_settings
+    _post113 = {}
+
+    def _fake_save113(data):
+        """`save_settings` 的替身：**照真的语义返回合并后的整份配置**（真的就返回 dict）。
+
+        图省事 `return True` 会让 `settings = save_settings(data)` 把闭包里的配置换成布尔值，
+        下一次 GET /settings 直接崩在 `blacklist.load(True)` 上 —— 而崩溃页里"当然不含明文"，
+        下一条断言就白测了（AGENTS §6.1 说的假绿）。
+        """
+        _post113.clear()
+        _post113.update(_cp113.deepcopy(data))
+        merged = _cp113.deepcopy(_real113)
+        for _k, _v in (data or {}).items():
+            if isinstance(_v, dict) and isinstance(merged.get(_k), dict):
+                merged[_k].update(_v)
+            else:
+                merged[_k] = _v
+        return merged
+
+    gui_app.load_settings = lambda: _cp113.deepcopy(_saved113)
+    gui_app.save_settings = _fake_save113
+    try:
+        _cap113 = ("198.51.100.231", "198.51.100.232", "198.51.100.233")
+        _ok113 = _login7(c, {"token": _new113}, environ_base={"REMOTE_ADDR": _cap113[0]})
+        assert _ok113.status_code == 302, ("哈希口令登录失败", _ok113.status_code)
+        _bad113 = _login7(c, {"token": _pl113}, environ_base={"REMOTE_ADDR": _cap113[1]})
+        assert _bad113.status_code == 200 and "口令错误" in _bad113.get_data(as_text=True), \
+            "旧明文口令仍然进得来 = 哈希分支没接上"
+        _wrong113 = _login7(c, {"token": "完全不对的口令-113"},
+                            environ_base={"REMOTE_ADDR": _cap113[2]})
+        assert _wrong113.status_code == 200, _wrong113.status_code
+        # 「策略配置」页保存新口令：落盘的字典里只有派生值，没有任何明文
+        r113 = _login7(c, {"token": _new113}, environ_base={"REMOTE_ADDR": _cap113[0]})
+        assert r113.status_code == 302, r113.status_code
+        _s113 = c.post("/settings", data={"host": "127.0.0.1", "port": "5000",
+                                          "token": _new113, "max_workers": "20",
+                                          "http_timeout": "10", "dirscan_max_urls": "20",
+                                          "vulnscan_max_urls": "100"})
+        assert _s113.status_code == 302, (_s113.status_code, _s113.get_data(as_text=True)[-400:])
+        assert _post113.get("gui", {}).get("token") == "", _post113.get("gui")
+        assert str(_post113.get("gui", {}).get("token_hash", "")).startswith("pbkdf2_sha256$"), \
+            _post113.get("gui")
+        _pg113 = c.get("/settings")
+        assert _pg113.status_code == 200, (_pg113.status_code, _pg113.get_data(as_text=True)[-400:])
+        _pg113 = _pg113.get_data(as_text=True)
+        assert _new113 not in _pg113 and _pl113 not in _pg113, "页面源码里出现了口令明文"
+        assert 'name="token" type="password" value=""' in _pg113, "口令输入框又带上 value 了"
+    finally:
+        gui_app.load_settings, gui_app.save_settings = _orig_load113b, _orig_save113
+
+    # ⑤ 模板红线：不再 `value="{{ s.gui.token }}"`（这条一旦被人改回去，④ 的"页面源码不含明文"
+    #    就会重新变绿 —— 因为那时页面根本没渲染口令，所以还要直接盯住写法本身）
+    _tpl113 = (Path(__file__).resolve().parent.parent / "gui" / "templates" / "settings.html")
+    _tsrc113 = _tpl113.read_text(encoding="utf-8")
+    assert 'value="{{ s.gui.token' not in _tsrc113, "设置页又把口令回显了"
+    assert 'name="token"' in _tsrc113 and 'type="password"' in _tsrc113, "口令输入框不见了"
+
+    # ⑥ §6.1 变异：把 `_gui_token_patch` 打回"直接存明文"，① 的两条断言必须立刻变红
+    _orig_patch113 = gui_app._gui_token_patch
+    gui_app._gui_token_patch = lambda typed: {"token": str(typed or _pl113)}
+    try:
+        _m113 = _patch_with({"token": _pl113, "token_hash": ""}, _new113)
+        assert _m113.get("token") == _new113 and "token_hash" not in _m113
+        raised113 = False
+        try:
+            assert _m113["token"] == "" and _m113["token_hash"].startswith("pbkdf2_sha256$")
+        except (AssertionError, KeyError):
+            raised113 = True
+        assert raised113, "变异后上面的断言仍然通过 = ① 什么都没测到"
+    finally:
+        gui_app._gui_token_patch = _orig_patch113
+
+    print("[8n] 续113 引导口令哈希化 ok: 保存后只落 pbkdf2 派生值、明文列清空｜派生值验得出新口令、"
+          "验不出旧口令｜留空且已有哈希＝保持哈希并清残留明文｜留空且从未有哈希＝原样保留"
+          "（不把自己锁在门外）｜端到端：哈希口令能登录、旧明文与乱口令都被拒｜设置页保存时"
+          "落盘字典里没有任何明文｜模板不再回显口令（`value=s.gui.token` 红线 + 页面源码不含明文）｜"
+          "把补丁打回存明文的变异让断言变红")
+
+
+    # ---------------- [8m] 续113：「不是域名」的 JS 碎片按注册域判掉（DNS 无结论一律放行） ----------------
+    #      续112-D 靠"默认收起未解析"把 `chat.floating.open` / `network.protocol.name` /
+    #      那串欧盟国家码压出视线，但它们**仍在库里**。用户要的是根治。这些串能活过 PSL 形态
+    #      闸门，只因为末位 label 恰好是合法公共后缀 —— 纯语法判据到此无能为力；真证据在 DNS：
+    #      宿主自己解析不到（nxdomain）且它的**注册域**查 NS 也是 NXDOMAIN ⇒ 从没被注册过。
+    #      方向必须偏"保留"：SERVFAIL / 超时 / 没解析器 都是"没问到"，不能当"不存在"。
+    from scanner import dnsq as _dq113, extdom as _xd113
+    from scanner.stages.jsmine import JsmineStage as _JZ113
+    from scanner import jsmine as _jm113
+
+    _logs113 = []
+
+    class _Rec113:
+        def info(self, m, *a): _logs113.append(str(m))
+        def warning(self, m, *a): _logs113.append(str(m))
+        def error(self, m, *a): _logs113.append(str(m))
+        def exception(self, m, *a): _logs113.append(str(m))
+        def debug(self, m, *a): pass
+
+    # ① `zone_state` 只看 rcode：3=absent、0=exists、其余一律 unknown
+    _orig_ex113 = _dq113._exchange
+    try:
+        for _rc, _want in ((3, "absent"), (0, "exists"), (2, "unknown"),
+                           (5, "unknown"), (-1, "unknown")):
+            _dq113._exchange = lambda *a, _r=_rc, **k: ([], _r, False)
+            assert _dq113.zone_state("anything113.test") == _want, (_rc, _want)
+        # NS 的 rdata 在 `_parse_message` 里**不解码**（存的是空串）⇒ 不能靠"记录非空"判存在
+        _dq113._exchange = lambda *a, **k: ([("anything113.test", 2, "")], 0, False)
+        assert _dq113.zone_state("anything113.test") == "exists", "只解 A/CNAME，NS 文本恒空"
+        _dq113._exchange = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("炸"))
+        assert _dq113.zone_state("anything113.test") == "unknown", "查询抛异常必须落到 unknown"
+    finally:
+        _dq113._exchange = _orig_ex113
+
+    # ② `filter_absent_zones`：只有 absent 才剔，按注册域缓存（同 base 只查一次），开关能关掉
+    _q113 = []
+
+    def _fake_zone(base, timeout=3, resolver=None, settings=None):
+        _q113.append(base)
+        # 三个碎片的**真实**注册域（`extdom.base_of` 实测）：chat.floating.open→floating.open、
+        # voice.room.open→room.open、at.be…dk.gb→dk.gb。写断言前先算一遍，别拿"看上去像"的
+        # 后缀当注册域（`open`/`gb` 是公共后缀，前一个 label 也归进后缀）。
+        if base in ("floating.open", "room.open", "dk.gb"):
+            return "absent"
+        if base == "mystery113.test":
+            return "unknown"           # 问不到 ⇒ 放行
+        return "exists"
+
+    _orig_zs113 = _dq113.zone_state
+    _dq113.zone_state = _fake_zone
+    try:
+        _hosts113 = ["chat.floating.open", "voice.room.open", "at.be.bg.hr.cy.cz.dk.gb",
+                     "api.zone113.test", "sub.mystery113.test", "admin.zone113.test"]
+        _kept113, _junk113 = _xd113.filter_absent_zones(_hosts113, settings, logger=_Rec113())
+        assert _junk113 == ["chat.floating.open", "voice.room.open", "at.be.bg.hr.cy.cz.dk.gb"], \
+            _junk113
+        assert set(_kept113) == {"api.zone113.test", "sub.mystery113.test", "admin.zone113.test"}, \
+            _kept113
+        # 缓存按**注册域**：`api.zone113.test` 与 `admin.zone113.test` 同一个注册域 ⇒ 只查一次
+        # （少了这条，实现退化成"每个宿主查一次"也能过其它断言）
+        assert _q113.count("zone113.test") == 1, _q113
+        assert _q113.count("floating.open") == 1 and _q113.count("room.open") == 1, _q113
+        assert any("去掉 3 个" in x and "不是域名" in x for x in _logs113), _logs113[-4:]
+        # 开关关着：原样返回、一次查询都不发
+        _q113.clear()
+        _st_off = copy.deepcopy(settings)
+        _st_off["jsmine"] = dict(_st_off.get("jsmine") or {}, drop_absent_zone=False)
+        _kept_off, _junk_off = _xd113.filter_absent_zones(_hosts113, _st_off)
+        assert _junk_off == [] and _kept_off == _hosts113 and _q113 == [], (_junk_off, _q113)
+        # 反向对照：真资产的注册域存在 ⇒ 一条都不能被剔（哪怕它自己暂时解析不到）
+        _kept2, _junk2 = _xd113.filter_absent_zones(["api.zone113.test"], settings)
+        assert _junk2 == [] and _kept2 == ["api.zone113.test"], (_kept2, _junk2)
+
+        # ③ jsmine 阶段端到端：碎片根本进不了库
+        _tid113j = db.create_task("smoke-113-jsmine", "zone113.test", ["jsmine"], {})
+        db.insert_sites(_tid113j, [{"url": "http://zone113.test/", "host": "zone113.test",
+                                   "port": "80", "status": 200, "title": "T", "length": 1}])
+        _st113j = copy.deepcopy(settings)
+        _st113j["jsmine"] = dict(_st113j.get("jsmine") or {}, enabled=True,
+                                 drop_absent_zone=True)
+        _orig_mine113 = _jm113.mine
+        _jm113.mine = lambda url, st=None, logger=None: {
+            "domains": ["api.zone113.test", "chat.floating.open", "sub.mystery113.test"],
+            "urls": set(), "secrets": [], "js_count": 1}
+        try:
+            _JZ113(StageContext(_tid113j, "smoke-113-jsmine", parse_lines(["zone113.test"]),
+                                ["jsmine"], {}, _st113j, Path(_TMPDIR) / "z113j", _Rec113())).run()
+        finally:
+            _jm113.mine = _orig_mine113
+        _in_db113 = {r["domain"] for r in db.list_subdomains(_tid113j)}
+        assert _in_db113 == {"api.zone113.test", "sub.mystery113.test"}, \
+            f"碎片进库了 / 或真资产被误杀：{_in_db113}"
+        assert any("另拒收 1 个" in x for x in _logs113), _logs113[-4:]
+
+        # ④ 库里已有的历史行：解析回填后按同一判据清掉，且**只清 JS 来源**
+        _tid113d = db.create_task("smoke-113-cleanup", "zone113.test", ["jsmine"], {})
+        db.insert_subdomains(_tid113d, [("old.floating.open", "js:mine"),
+                                         ("other.room.open", "promote:js:mine"),
+                                         ("keep.mystery113.test", "js:mine"),
+                                         ("cseg.floating.open", "osint:cseg")])
+        db._exec("UPDATE subdomains SET ip='', ip_note='nxdomain' WHERE task_id=?", (_tid113d,))
+        _n113d = _xd113.drop_absent_zones(_tid113d, settings, logger=_Rec113())
+        _left113 = sorted(r["domain"] for r in db.list_subdomains(_tid113d))
+        assert _n113d == 2, _n113d
+        assert _left113 == ["cseg.floating.open", "keep.mystery113.test"], _left113
+        # `over-limit` / `timeout` 不算"不存在"：原因不是 nxdomain 的行一律不动
+        db.insert_subdomains(_tid113d, [("late.floating.open", "js:mine")])
+        db._exec("UPDATE subdomains SET ip='', ip_note='over-limit' WHERE domain='late.floating.open'")
+        assert _xd113.drop_absent_zones(_tid113d, settings) == 0, "非 nxdomain 的行被当成了不存在"
+        assert "late.floating.open" in {r["domain"] for r in db.list_subdomains(_tid113d)}
+    finally:
+        _dq113.zone_state = _orig_zs113
+
+    # ⑤ §6.1 变异：把"问不到"也算成不存在（等价于用 `dnsq.query()` 的空列表当证据）
+    #    ⇒ ②③④ 里"unknown 一律放行"的断言必须立刻变红（这条方向错了就是内网环境丢资产）
+    _orig_zs113b = _dq113.zone_state
+    try:
+        _dq113.zone_state = lambda base, **k: "absent" if base in ("floating.open", "room.open",
+                                                                   "dk.gb",
+                                                                   "mystery113.test") else "exists"
+        _k5, _j5 = _xd113.filter_absent_zones(["sub.mystery113.test"], settings)
+        assert _j5 == ["sub.mystery113.test"], "变异没生效（本该把 unknown 也判掉）"
+        raised113 = False
+        try:
+            assert "sub.mystery113.test" in _k5
+        except AssertionError:
+            raised113 = True
+        assert raised113, "unknown 被剔掉时断言不报错 = 这条断言什么都没测到"
+    finally:
+        _dq113.zone_state = _orig_zs113b
+
+    print("[8m] 续113 注册域判据 ok: zone_state 只看 rcode（3=absent、0=exists、2/5/超时=unknown、"
+          "查询抛异常=unknown，NS 的 rdata 不解析所以不能看记录是否非空）｜filter_absent_zones 只剔 "
+          "absent、按注册域缓存（三个碎片两个注册域只查两次）、日志报出条数与原因｜开关关掉一次查询"
+          "都不发｜真资产（注册域存在）一条不误杀｜jsmine 阶段端到端：碎片根本不进库、统计行写明"
+          "拒收几个｜库里已有历史行按同判据清掉且只清 js:* / promote:js:*（osint:* 不动），"
+          "ip_note 不是 nxdomain 的（over-limit 等）一律不动｜把 unknown 也判成不存在的变异"
+          "立刻让断言变红")
+
+
     print("SMOKE PASS")
 
 

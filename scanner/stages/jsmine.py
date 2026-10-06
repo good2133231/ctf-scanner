@@ -13,7 +13,7 @@
 from urllib.parse import urlparse
 
 from .base import Stage
-from .. import blacklist, db, jsmine
+from .. import blacklist, db, extdom, jsmine
 from ..utils import write_lines
 
 
@@ -73,6 +73,15 @@ class JsmineStage(Stage):
                                                         owner_id=getattr(ctx, "owner_id", 0))
         if blocked:
             ctx.logger.info(f"[jsmine] 黑名单拦截 {blocked} 个域名（config/blacklist.txt）")
+        # 续113：再拦一道**根本不是域名**的东西 —— JS 里点号连接的成员访问链
+        # （`chat.floating.open`、`network.protocol.name`、那串欧盟国家码）。它们的末位 label
+        # 恰好是合法公共后缀，所以 PSL 形态闸门放行；但它们的**注册域**压根没被注册。
+        # 判据只有一处（`extdom.filter_absent_zones`），放在**入库前** —— 库里从此不会有这类行，
+        # 而不是靠展示层"默认收起未解析"去遮（续112-D 那道门仍然留着，遮的是真没解析出来的域名）。
+        new_domains, junk113 = extdom.filter_absent_zones(new_domains, ctx.settings,
+                                                          logger=ctx.logger)
+        if junk113 and not (ctx.settings.get("jsmine") or {}).get("drop_absent_zone", True):
+            junk113 = []          # 开关关着时 filter 不会返回东西，这里只是把话说明白
         ctx.results["js_domains"] = new_domains
         if new_domains:
             db.insert_subdomains(ctx.task_id, [(d, "js:mine") for d in new_domains])
@@ -104,4 +113,5 @@ class JsmineStage(Stage):
             })
 
         ctx.logger.info(f"[jsmine] JS 文件 {js_count} 个 / 新域名 {len(new_domains)} 个 / "
-                        f"接口 URL {len(url_list)} 条 / 疑似凭据 {len(secrets)} 条")
+                        f"接口 URL {len(url_list)} 条 / 疑似凭据 {len(secrets)} 条"
+                        + (f" / 另拒收 {len(junk113)} 个「不是域名」的碎片" if junk113 else ""))

@@ -982,8 +982,9 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
      顺带：`serve()` 的启动横幅不再打印引导口令的值。回归 `[8g]` —— 用**旧推导式密钥**签一张真存在、真启用的
      管理员 Cookie 塞进客户端，`/` 与 `/settings` 必须 302；同一条判据配**运行时变异**（把 `app.secret_key` 打回
      `f"ctfscanner::{token}"` → 同一张 Cookie 立刻被接受），否则"被拒"可能只是 Cookie 格式搓错了（§6.1）。
-  ⚠️ 仍存的一条：`gui.token` 是**明文**写在 `config/settings.yaml`（被 git 跟踪）里的共享口令，且库里没账号时
-     它就是管理员入口。收口办法是**建第一个账号**（建号即失效）；要它只存散列属独立一轮（牵动设置页/横幅/回归）。
+  ✅ 续113 收掉第二条：`gui.token` 不再必须存明文 —— 「策略配置」页保存口令只写 `gui.token_hash`
+     （pbkdf2 派生值），页面上也不回显。**仍留的一条**：老配置里"只有明文、还没有哈希"时登录仍认明文
+     （否则一升级就把人锁在门外），每次启动打 warning 催迁移。详见下面「引导口令只存派生值」一条。
 - 「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
   takeover/portscan/jsmine/dirscan/vulnscan/screenshot/cert/iprecon/fofa/**ssrf/shodan/quake/ctlog**/
   blacklist/intel/heuristic/**github** **二十三段**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned）
@@ -1480,7 +1481,43 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   ⇒ 保留原来那句并写明「落地页无 title」，不留空位。显示口径集中在 `utils.site_redirect`
   （`301 → 200` + 标记「跳转后」），GUI 两处与报告 MD/HTML 共用同一个函数，四种出口不会各说一套话。
   它同时吃 dict 与 `sqlite3.Row` —— **`Row` 没有 `.get()`**，这是本项目第五次栽在同一处。
-  回归 `[8k]`（含 `REDIRECT_STATUS` 清空后补列归零的变异）。
+- **引导口令只存派生值：不落盘、不回显、留空不改（续113）**：`config/settings.yaml` 被 git 跟踪，
+  原先 `gui.token` 是明文，而「策略配置」页又把同一个字段 `value=` 回显到输入框里 —— 口令于是
+  同时存在于**仓库**与**页面源码**两处。现在保存口令只写 `gui.token_hash`（`users.hash_password`
+  的 pbkdf2 派生值）并把明文列清空；输入框改成 `type="password"` 且**永远不回显**；
+  **留空＝不修改口令**（"清空输入框"绝不该把管理员锁在门外），此时若已有哈希就顺手清掉残留明文。
+  唯一保留的兼容分支：老配置里只有明文、还没有哈希时，登录**仍然认明文**（常量时间比较）
+  —— 不做"启动时自动改写用户配置文件"这种静默写盘，改为每次启动打一条催迁移的 warning。
+  回归 `[8n]`：派生值验得出新口令、验不出旧口令；端到端（哈希配置下旧明文被拒）；
+  落盘字典里不含任何明文；模板不再回显（源码红线：不许再把口令绑到 `value` 上）；
+  以及把补丁打回"直接存明文"的变异必须让断言变红。
+  ⚠️ 这条与续109 是两件事：109 切断了"会话密钥由口令推导"（伪造 Cookie），113 切断的是
+  "口令本身外流"。两条都要在，缺一条另一条就白做。
+
+- **"不是域名"的 JS 碎片按**注册域是否存在**判掉，DNS 无结论一律放行（续113）**：
+  `chat.floating.open` / `network.protocol.name` / 那串欧盟国家码 `at.be.bg.hr…gb` 是 JS 里
+  **点号连接的成员访问链**，不是域名。它们能活过形态闸门，是因为末位 label
+  (`open` / `name` / `gb`) 恰好是合法公共后缀 —— 纯语法判据到此已经无能为力（PSL 判据本身没错，
+  再放宽就会吃真资产）。真正的证据在 DNS：**宿主自己解析不到（`nxdomain`）且它的注册域查 NS
+  也返回 NXDOMAIN** ⇒ 这个"域名"从没被注册过，压根不是资产。
+  - 判据只此一处：`extdom.zone_is_absent()` / `filter_absent_zones()`，两个调用点共用 ——
+    jsmine 入库前拦（根本不进库）与 `resolve_extended()` 解析回填后清已有行；
+  - **只有 `absent` 算数**：`dnsq.zone_state()` 只看 rcode（3=absent、0=exists、其余=unknown），
+    因为现成的 `dnsq.query("NS")` 把"确实没有"和"问不到"都返回空列表，拿它当证据会在
+    DNS 抖动 / 内网无外网解析器时**把真资产判掉**；`unknown` 一律放行（丢资产比留噪声严重）；
+  - 不用"子域名解析不到"当依据：真实的 `api.internal.example.com` 常常也没有 A 记录，
+    但 `example.com` 有 NS ⇒ 必须留。所以判据落在**注册域**这一层；
+  - 只清 `js:*` / `promote:js:*` 来源：`osint:*`（C 段 / FOFA / 证书反查）的域名是第三方
+    数据库里的实际观测，"现在解析不到"不是"它不是资产"的证据。
+  - 开关 `jsmine.drop_absent_zone`（默认开）；关掉只是让这些碎片回到库里，页面仍会默认收起
+    未解析的行（续112-D 那道显示门）。
+  - ⚠️ **判不掉的残余（实测，别当成漏修）**：`network.protocol.name` 与 `ui.action.click` 仍在库里 ——
+    `name` / `click` 是**真注册的 gTLD**（有 NS、rcode=0），按"注册域不存在"这条判据必须放行。
+    要在这一层拦住，就得允许"末位 label 是 gTLD 但整串不像主机名"的语法猜测 —— 那会连带吃掉
+    `shop.zip` / `app.click` 这类真域名。**宁可留两条噪声，也不丢一条资产**（与 fail-open 同方向）。
+  回归 `[8m]`（rcode→状态三向映射 + "NS 的 rdata 恒空、不能看记录是否非空" + 按注册域缓存的
+  查询次数 + 开关关掉零查询 + jsmine 端到端不入库 + 只清 `js:*`/`promote:js:*` 且只清 `nxdomain` +
+  把 `unknown` 也判成不存在的变异必须让断言变红）。
 
 - **资产页的「按任务筛选」与漏洞页同口径；下拉全集＝「这张表里有行的任务」（续112-E）**：
   六个跨任务资产页（站点/端口/目录/C 段/子域名/拓展域名）共用 `_task_scope()`（`?task=<id>` →

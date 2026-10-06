@@ -94,6 +94,12 @@ DEFAULTS = {
         "host": "127.0.0.1",
         "port": 5000,
         "token": "ctfscanner",  # 仅本地实验用途，请勿将控制台暴露公网
+        # 引导口令的**派生存储**（续113）：`pbkdf2_sha256$迭代$盐$哈希`，由 `users.hash_password`
+        # 生成。为什么要有这一列：`config/settings.yaml` 是**被 git 跟踪**的，明文口令一旦提交，
+        # 仓库的每个读者（以及任何一份 clone）都拿到了控制台的管理员入口。
+        # 现在「策略配置」页保存口令时**只写这一列**，并把 `token` 清空；
+        # 老配置里还留着明文的，登录仍然认（升级前不把人在门外），但启动日志会点名要求迁移。
+        "token_hash": "",
         # ---- 部署到服务器（续47，见 docs/deploy-https.md）----
         # 三项默认值都是**最保守**的：不开任何"图省事"的口子，要用必须显式配。
         # allowed_hosts：Host 白名单的**显式**扩展（空 = 只认回环名，与续32 行为逐字节一致）。
@@ -243,6 +249,13 @@ DEFAULTS = {
         "max_js": 40,              # 每任务最多抓取多少个 JS 文件
         "secrets": True,           # 开启 AK/SK 等敏感密钥提取（带前后文过滤降噪）
         "blacklist": [],           # 额外排除的第三方域名后缀，如 ["cdn.example.com"]
+        # 把"根本不是域名"的 JS 碎片挡在资产库外（续113）：`chat.floating.open`、
+        # `network.protocol.name`、`at.be.bg.hr…gb` 这类**点号连接的成员访问链**，末位 label
+        # 恰好是合法公共后缀，PSL 形态闸门放行；但它们的**注册域**压根没被注册
+        # （`floating.open` / `protocol.name` / `no.gb` 查 NS 返回 NXDOMAIN）。
+        # 判据与"只在明确 NXDOMAIN 才动手、SERVFAIL/超时无条件放行"的方向见 `extdom.zone_is_absent`；
+        # 关掉它只是让这些碎片回到库里（页面仍会默认收起未解析的行），不影响任何真资产。
+        "drop_absent_zone": True,
     },
     "dirscan": {
         # 目录/路径发现阶段总开关（与 takeover/portscan/jsmine 同一类"资产面拓展"）。

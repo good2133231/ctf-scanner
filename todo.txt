@@ -2206,3 +2206,38 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
    （PSL 判据放它通过，因为末位 label 确实是合法后缀），现在靠默认收起未解析 + 第三方名单压住可见度；
    要根治得加"注册域必须存在"这一层，属独立设计决定。
 
+2026-10-06 续113：把续112 收尾时明说"留着"的 ③④ 两条收掉
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）
+
+③ `gui.token` 明文 → 只存派生值 [完成]
+- `config.DEFAULTS.gui.token_hash`（`users.hash_password` 的 pbkdf2 串，与账号口令同一套参数）；
+  登录**优先比哈希**，只有还没迁移的老配置才退回比明文（常量时间比较）。
+- 「策略配置」页：填了新口令 → 只写哈希并清空明文；**留空＝不修改口令**（绝不清空把自己锁在门外），
+  此时若已有哈希就顺手清掉残留明文。输入框改 `type="password"` + `value=""`，占位符说明当前是
+  哈希存储还是仍是明文。
+- 不做"启动时静默改写用户配置文件"，改为每次启动一条催迁移 warning（不代用户写文件）。
+- 与续109 是两件事：109 切断"会话密钥由口令推导"（伪造 Cookie），这一条切断"口令本身外流"。
+  回归 `[8n]`（含"把补丁打回直接存明文"的变异必须让断言变红）。
+
+④ 「不是域名」的 JS 碎片 → 按**注册域是否存在**判掉（写入侧）[完成]
+- `dnsq.zone_state(name)`：只问 NS、只看 rcode（3=absent / 0=exists / 其余=unknown）。
+  刻意不复用 `dnsq.query("NS")` —— 它把"确实没有"和"问不到"都返回空列表，当证据会在
+  DNS 抖动 / 内网无外网解析器时把真资产判掉。`unknown` 一律放行。
+- `extdom.zone_is_absent()` / `filter_absent_zones()` 判据**只此一处**，两个调用点共用：
+  `stages/jsmine.py` **入库前**拦（库里从此不会有这类行）、`resolve_extended()` 解析回填后清已有行；
+  只动 `js:*` / `promote:js:*` 且 `ip=''` + `ip_note='nxdomain'` 的行（`osint:*` 是第三方库里的
+  实际观测、`over-limit`/`timeout` 不是"不存在"的证据）。开关 `jsmine.drop_absent_zone`（默认开）。
+- 历史数据：整库备份后逐任务跑生产函数清掉 18 条（22 条候选中），**保留 4 条**
+  `network.protocol.name` / `ui.action.click` —— `name`/`click` 是真注册 gTLD、有 NS，
+  按这条判据必须放行；拦住它们要付出的代价是吃掉 `shop.zip`/`app.click` 这类真域名，
+  所以这一条残余是**刻意的**（AGENTS §7 已写明"别当成漏修"）。
+- 回归 `[8m]`（rcode 三向映射 + "NS 的 rdata 不解码所以不能看记录是否非空" + 按注册域缓存的
+  查询次数 + 开关关掉零查询 + jsmine 端到端不进库 + 只清 nxdomain 的 js 来源 +
+  把 `unknown` 也算不存在的变异必须让断言变红）。
+
+**仍然留着的事**（本轮动不了的）：
+① 305 个导入 POC 的人工校准（要逐条看靶场反应，再整理进 `config/pocs-user/`）；
+② 这台 Linux 没有 FOFA / Shodan / Quake / GitHub 的 key（`config/keys.yaml` 未同步），
+   那几路情报"全开"也只能如实降级为 0 结果；
+③ 老配置里"只有明文、还没有哈希"的兼容分支：等到确认没有用户停留在明文时才该摘掉
+   （摘早了会把人锁在门外），目前的做法是启动时打 warning 催迁移。

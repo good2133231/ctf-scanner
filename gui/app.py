@@ -163,6 +163,23 @@ def _changed_sections(old, new):
     return sorted(out)
 
 
+def _gui_token_patch(new_token):
+    """把「策略配置」页提交的引导口令变成要落盘的那两列（续113）。
+
+    - 填了口令 → 只存 `token_hash`（`users.hash_password` 的 pbkdf2 派生值），**明文清空**；
+    - 留空但已有哈希 → 保持哈希、清掉残留明文（"没填"不等于"把口令清了"）；
+    - 留空且从来没有哈希（老配置直接点保存）→ 只能把原明文留着，否则这一按就把管理员
+      永久关在门外；这种配置会在启动日志里被点名催迁移。
+    """
+    cfg = (load_settings().get("gui") or {})
+    text = str(new_token or "")
+    if text.strip():
+        return {"token": "", "token_hash": users.hash_password(text)}
+    if str(cfg.get("token_hash") or ""):
+        return {"token": ""}
+    return {"token": str(cfg.get("token") or "")}
+
+
 def _safe_next(target, fallback):
     """只放行**站内相对路径**的 `next` 跳转目标，其余一律回退（防开放重定向）。
 
@@ -398,6 +415,13 @@ def create_app():
     app.secret_key, _sk_warn109 = session_secret(db.DB_PATH.parent)
     if _sk_warn109:                          # 落盘失败＝会话只活到本次重启，这事必须看得见
         logger.warning(f"[gui] {_sk_warn109}")
+    # 引导口令还是明文（老配置）就**每次启动都提醒一次**：不自动改写 `config/settings.yaml`
+    # ——那是用户的文件，静默改它比留明文更糟；但也绝不假装没看见（这文件被 git 跟踪）。
+    _gui113 = (settings.get("gui") or {})
+    if str(_gui113.get("token") or "") and not str(_gui113.get("token_hash") or ""):
+        logger.warning("[gui] 引导口令目前**明文**存在 config/settings.yaml（被 git 跟踪）——"
+                       "到「策略配置」页把口令重新填一次并保存，就会转成 PBKDF2 哈希存储"
+                       "（口令本身可以不变，登录方式也不变）；只读挂载/无法写文件时这条会一直提示")
     # 模板里可直接调用 `source_label('osint:fofa')` → 「ICO 反查」（来源列的可读标签）
     app.jinja_env.globals["source_label"] = source_label
     app.jinja_env.globals["ip_note_label"] = ip_note_label
@@ -824,8 +848,18 @@ def create_app():
                     logger.info(f"[gui] 登录成功：{row['username']}（{row['role']}）")
                     return redirect(target)
             elif bootstrap:
-                real = str((load_settings().get("gui") or {}).get("token", "") or "")
-                if real and (users.const_eq(token, real) or users.const_eq(password, real)):
+                # 引导口令（续113）：**优先比 `gui.token_hash`（pbkdf2 派生值）**，只有还没迁移的
+                # 老配置才退回比明文 `gui.token`。`config/settings.yaml` 是被 git 跟踪的，
+                # 明文提交一次就等于把管理员入口交给每个读到仓库的人。
+                gui_cfg = load_settings().get("gui") or {}
+                stored_hash = str(gui_cfg.get("token_hash") or "")
+                plain = str(gui_cfg.get("token") or "")
+                tried = [token, password]        # 老表单/脚本用的是 `token` 字段，两个字段都收
+                if stored_hash:
+                    _ok113 = any(users.verify_password(stored_hash, v) for v in tried)
+                else:
+                    _ok113 = bool(plain) and any(users.const_eq(v, plain) for v in tried)
+                if _ok113:
                     session.clear()
                     session["auth"] = True
                     session["user"] = "admin"
@@ -2858,7 +2892,8 @@ def create_app():
                 data = {
                     "gui": {"host": f.get("host", "127.0.0.1"),
                             "port": int(f.get("port", 5000) or 5000),
-                            "token": f.get("token", "") or "ctfscanner"},
+                            # 续113：这一页**不再把引导口令写成明文**（见 `_gui_token_patch`）
+                            **_gui_token_patch(f.get("token", ""))},
                     "limits": {"max_workers": int(f.get("max_workers", 20) or 20),
                                "http_timeout": int(f.get("http_timeout", 10) or 10),
                                "verify_tls": f.get("verify_tls") == "1",

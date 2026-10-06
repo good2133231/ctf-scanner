@@ -345,6 +345,35 @@ def resolve_detail(name, timeout=3, resolver=None, settings=None):
         return [], [], "error"
 
 
+def zone_state(name, timeout=3, resolver=None, settings=None):
+    """一个**注册域**到底存在不存在：返回 `"exists"` / `"absent"` / `"unknown"`。
+
+    只问 NS、只看 **rcode**（不看应答里有没有记录）：
+    - `rcode 3`（NXDOMAIN）⇒ `"absent"` —— 这个注册域压根没被注册，是唯一可以放心下结论的情形；
+    - `rcode 0` ⇒ `"exists"`（哪怕这次没拿到 NS 文本也算存在：已注册的域不会突然没有 NS）；
+    - 其余（SERVFAIL / REFUSED / 超时 / 全部解析器都没答 `-1`）⇒ `"unknown"`。
+
+    ⚠️ 为什么要单独区分 `"unknown"` 而不用现成的 `query()`：`query()` 失败与"确实没有"都返回
+    空列表，拿它当"域名不存在"的依据，就会在 DNS 抖动 / 内网无外网解析器时**把真实资产判没了**。
+    本函数的调用方只在拿到 `"absent"` 时动手，其余一律放行（丢资产比留噪声严重）。
+    另外 `_parse_message` 对 NS/SOA 这类 rdata **并不解码**（存的是空串），所以这里也**不能**
+    靠"记录非空"判存在 —— 只能用 rcode。
+    """
+    host = str(name or "").strip().rstrip(".")
+    if not host:
+        return "unknown"
+    try:
+        _records, rcode, _tc = _exchange(host, _TYPES["NS"], timeout=timeout or _TTL_WAIT,
+                                        resolver=resolver, settings=settings)
+    except Exception:
+        return "unknown"
+    if rcode == 3:
+        return "absent"
+    if rcode == 0:
+        return "exists"
+    return "unknown"
+
+
 def cname_chain(name, timeout=3, resolver=None, settings=None):
     """返回 (cname_chain, ips)。
 

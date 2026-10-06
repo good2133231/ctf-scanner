@@ -2,6 +2,57 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 2026-10-06（续113）把续112 留下的两条尾巴收掉：口令不落明文 + 「不是域名」的 JS 碎片
+
+续112 收尾时明确记了四条"不属于本轮"的事，这轮把其中**能靠代码收口的两条**做掉。
+
+### 引导口令改为 PBKDF2 哈希存储（`gui.token_hash`）
+
+`config/settings.yaml` 是被 git 跟踪的，而 `gui.token` 一直明文躺在里面；更糟的是「策略配置」页
+把同一个字段 `value=` 回显进输入框 —— 口令同时存在于仓库和页面源码两处（谁打开这一页、
+按一次"查看源代码"就拿到管理员入口）。会话密钥在续109 已经和口令解耦，但口令本身外流这条还在。
+
+- `scanner/config.py`：DEFAULTS 新增 `gui.token_hash`（`pbkdf2_sha256$迭代$盐$哈希`，
+  由 `users.hash_password` 派生 —— 复用账号口令那套参数，不另起一种格式）。
+- `gui/app.py::_gui_token_patch`：策略配置页保存时，填了新口令就**只写哈希、清空明文**；
+  留空且已有哈希 → 保持哈希并清残留明文（"没填"不等于"把口令清了"）；留空且从来没有哈希 →
+  原样保留（否则点一次保存就把自己锁在门外）。
+- 登录分支：**优先比哈希**，只有还没迁移的老配置才退回比明文（常量时间比较）。
+- 不做"启动时静默改写用户配置文件"，改为每次启动一条催迁移 warning（写得清清楚楚、不代你改文件）。
+- 模板：口令输入框改 `type="password"`、`value=""`，占位符提示当前是哈希存储还是仍是明文。
+
+### 「不是域名」的 JS 碎片按注册域判掉（写入库之前）
+
+续112-D 靠"默认收起未解析"把 `chat.floating.open`、`network.protocol.name`、
+`at.be.bg.hr…gb` 这类碎片压出视线，但它们**仍在库里** —— 用户要的是根治。这些串能活过
+PSL 形态闸门，只因末位 label 恰好是合法公共后缀；纯语法判据到此无能为力，真证据在 DNS。
+
+- `scanner/dnsq.py::zone_state(name)`：查 NS、**只看 rcode**（3=absent / 0=exists / 其余=unknown）。
+  刻意不复用 `dnsq.query("NS")`：它把"确实没有"和"问不到"都返回空列表，当证据用会在
+  DNS 抖动或内网环境里把真资产判掉。
+- `scanner/extdom.py`：`zone_is_absent(host, cache)`（按注册域缓存）+ `filter_absent_zones(hosts)`
+  判据**只此一处**，两个调用点共用 —— `stages/jsmine.py` 入库前拦、`resolve_extended()` 回填后
+  清已有行；只动 `js:*` / `promote:js:*` 且 `ip=''` + `ip_note='nxdomain'` 的行
+  （`osint:*` 来自第三方数据库的实际观测，不在清理范围）。
+- 开关 `jsmine.drop_absent_zone`（默认开）；关掉只是碎片回库，页面仍默认收起未解析行。
+- 判据方向：`absent` 才删，`unknown`（SERVFAIL/超时/没有解析器）一律放行；
+  真实 `api.internal.example.com` 这类"没 A 记录但注册域存在"的行必须留下。
+
+### 现场与门禁
+
+- 真目标验证：`chat.floating.open` 的注册域 `floating.open` → `zone_state=absent` ✔ 被拦在库外；
+  `mgw.dzmm.io` / `beta.dzmm.io` 的注册域 `dzmm.io` → `exists` ✔ 照旧入库。
+- 历史数据：`logs/_clean113.py` 先整库备份（`logs/scanner.db.bak-<时间>-113-fragments`，用 sqlite
+  backup API 而不是 copy —— WAL 下 copy 可能漏掉 -wal 里未合并的页），再逐任务调**生产函数**
+  `extdom.drop_absent_zones`。结果：22 条候选 → **清掉 18 条**，**保留 4 条**
+  （`network.protocol.name` / `ui.action.click`，注册域 `name`/`click` 是真 gTLD、rcode=0 ⇒ 判不掉，
+  这一条残余写进 AGENTS §7 并标明"别当成漏修"）。subdomains 62 → 44 条。
+- 回归：新增 `[8n]`（哈希派生 / 端到端登录 / 落盘不含明文 / 模板不回显 / 存明文的变异让断言变红）；
+  新增 `[8m]`（rcode→状态三向映射 + "NS 的 rdata 不解码、不能看记录是否非空" + 按注册域缓存的
+  查询次数 + 开关关掉零查询 + jsmine 端到端根本不进库 + `drop_absent_zones` 只清 `js:*`/`promote:js:*`
+  且只清 `ip_note='nxdomain'`（`over-limit` 不动）+ 把 `unknown` 也算不存在的变异必须让断言变红）；
+  全量 `SMOKE PASS / RC=0`（含真浏览器）、`check_contrast` 149/0、EOL 逐文件一致。
+
 
 ## 2026-10-06（续112-B/C/D/E/F/G）资产视图与两处写入侧噪声
 

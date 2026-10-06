@@ -232,6 +232,14 @@
   `AIza` / `gh[pousr]_` / `xox[baprs]-` / Slack webhook / Telegram bot / SendGrid / Stripe /
   **JWT** / **私钥 PEM 头** / 数据库连接串 `mysql://user:pass@host` / 通用 `api_key=...` 等），
   经两级降噪（厂商前缀/赋值语境 → 占位符/变量引用/成员访问过滤）；
+  **入库前还有第二道门（续113）**：`extdom.filter_absent_zones()` 把「注册域压根没被注册」的串剔掉 ——
+  PSL 只保证末位 label 是合法公共后缀，挡不住 `chat.floating.open` / `at.be.bg.hr…gb` 这类
+  成员访问链（`open`/`gb` 确实是公共后缀）。判据 = 宿主自己解析不到（`nxdomain`）**且**它的注册域
+  查 NS 得到 NXDOMAIN（`dnsq.zone_state()` 只看 rcode：SERVFAIL / 超时 / 没解析器都算"没问到"、
+  一律放行，绝不当成"不存在"）；开关 `jsmine.drop_absent_zone`（默认开，在 `config/settings.yaml` 的
+  `jsmine` 段改，「策略配置」页没有这个字段 —— 与 `jsmine.blacklist` 同一档）。
+  残余：`network.protocol.name` / `ui.action.click` 判不掉 —— `name`/`click` 是真 gTLD、有 NS，
+  拦住它们的代价是连带吃掉 `shop.zip` 这类真域名，**宁可留噪声也不丢资产**；
 - 产物：新域名补入 `subdomains`（`source="js:mine"`，只补任务里还没有的；在「拓展域名」页展示）、
   接口 URL 落 `js_urls.txt` 并进 `ctx.results["js_urls"]`、疑似凭据落 `js_secrets.txt`（`类型<TAB>掩码值<TAB>来源`）
   并以 **high** 级进 `vulns`（`poc_id=js-secret-*`，值掩码脱敏，`target` 用**主机名**而不是完整 JS URL
@@ -545,7 +553,7 @@ logs/task_1_mytask/
 | checks.poc_max_per_site | 80 | 每站点最多执行多少个 POC（联动命中项不计入） |
 | takeover.enabled / max_hosts / http_check | true / 300 / true | 子域接管检测：开关、主机上限、是否补一次 HTTP 特征比对降误报 |
 | portscan.enabled / max_hosts / ports / timeout / workers / banner | **false** / 100 / 空(TOP 表) / 1.0s / 64 / true | 端口与服务扫描（默认关）；端口支持 `"80,443"` 或 `"1-1024"` |
-| jsmine.enabled / max_pages / max_js / secrets / blacklist | true / 20 / 40 / true / [] | JS 资产挖掘：开关、页面/JS 上限、是否提取凭据、额外排除的第三方域后缀 |
+| jsmine.enabled / max_pages / max_js / secrets / blacklist / drop_absent_zone | true / 20 / 40 / true / [] / true | JS 资产挖掘：开关、页面/JS 上限、是否提取凭据、额外排除的第三方域后缀、**是否剔掉「注册域不存在」的成员访问链碎片**（续113，关掉只是碎片回库，页面仍默认收起未解析行） |
 | iprecon.enabled / api / max_ips / max_hosts / max_domains_per_ip / workers / timeout | **false** / api.webscan.cc / 500 / 200 / 30 / 5 / 10s | C 段反查（默认关）：接口地址（留空回落默认）、待查 IP/主机上限、单 IP 域名上限（超过判共享主机，不纳入资产）、并发与超时 |
 | fofa.enabled / max_sites / max_assets / workers / black_ico_threshold | **false** / 30 / 100 / 5 / 200 | favicon（mmh3）反查同源资产（默认关）：算 favicon 的站点上限、单次查询资产上限、并发、黑 ico 阈值（命中数超过即放弃拓展） |
 | fofa.cert_enabled / cert_threshold / max_cert_queries | true / 200 / 10 | 证书反查（`cert="domain"`，跟随 favicon 开关）：通用证书阈值（命中数超过即放弃拓展）、每任务最多查几个注册域 |

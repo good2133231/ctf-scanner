@@ -160,16 +160,93 @@ def resolve_extended(task_id, settings=None, logger=None, only_missing=True,
 
     alive = sum(1 for v in net.values() if v[0])
     dead = sum(1 for v in net.values() if v[2])
+    # 解析回填之后立刻做一次"注册域是否存在"的清理（判据与理由见 `drop_absent_zones`）：
+    # 这一步只用**已经有结论**的行，不额外发解析请求（注册域查询是按 base 去重后的少量查询）。
+    dropped = drop_absent_zones(task_id, settings, logger=logger, timeout=timeout)
     # `blacklist.filter_domains` 返回 `(保留列表, 被拦条数)` —— 被拦的是**条数**不是列表，
     # 别按 `filter_pairs` 的口径去 len()。
     summary = {"total": len(rows), "scanned": len(todo), "alive": alive, "dead": dead,
-               "skipped": skipped, "blocked": int(blocked)}
+               "skipped": skipped, "blocked": int(blocked), "dropped": dropped}
     if logger:
         logger.info(f"[extdom] 存在性判定：拓展域名 {summary['total']} 条，"
                     f"本次解析 {summary['scanned']} 个 → 可解析 {alive} / 无结论 {dead}"
                     + (f"，超出上限 {skipped} 个" if skipped else "")
-                    + (f"，黑名单拦截 {blocked} 个" if blocked else ""))
+                    + (f"，黑名单拦截 {blocked} 个" if blocked else "")
+                    + (f"，其中 {dropped} 条判为「不是域名」已删除" if dropped else ""))
     return summary
+
+
+def zone_is_absent(host, settings=None, cache=None, timeout=3.0):
+    """这个宿主的**注册域**是否明确未被注册（唯一判据：查 NS 得到 NXDOMAIN）。
+
+    `cache` 是调用方给的 `{注册域: 状态}` 字典 —— 一批宿主常常共享同一个注册域
+    （`chat.floating.open` / `voice.room.open` …），按注册域缓存才不会一个查询一次。
+
+    三种结果里**只有 `absent` 算数**：`exists` 放行、`unknown`（SERVFAIL / REFUSED / 超时 /
+    没配到解析器）也放行 —— "没问到"绝不能当成"不存在"，否则内网或 DNS 抖动时会把真资产判掉
+    （丢资产比留噪声严重，与 `jsmine` 的 PSL 清单 fail-open 同一条方向）。
+    """
+    base = base_of(host)
+    if not base or not is_domain(base):
+        return False                       # 连"像个域名"都不像的输入不由这里判（见 _valid_host）
+    if cache is not None and base in cache:
+        return cache[base] == "absent"
+    state = dnsq.zone_state(base, timeout=timeout, settings=settings)
+    if cache is not None:
+        cache[base] = state
+    return state == "absent"
+
+
+def filter_absent_zones(hosts, settings=None, logger=None, timeout=3.0):
+    """把「注册域不存在」的宿主从一批域名里挑出去，返回 `(保留, 被去掉的列表)`（续113）。
+
+    开关 `jsmine.drop_absent_zone`（默认开）关着时原样返回、一次查询都不发。
+    调用点有两处，共用**同一个**判据：`stages/jsmine.py` 入库前拦（根本不进库），以及
+    `resolve_extended()` 解析回填后清历史行（库里已有的碎片）。
+    """
+    cfg = (settings or {}).get("jsmine") or {}
+    if not cfg.get("drop_absent_zone", True):
+        return list(hosts or []), []
+    cache = {}
+    kept, dropped = [], []
+    for h in (hosts or []):
+        if zone_is_absent(h, settings=settings, cache=cache, timeout=timeout):
+            dropped.append(h)
+        else:
+            kept.append(h)
+    if dropped and logger:
+        bases = sorted({base_of(h) for h in dropped})
+        logger.info(f"[extdom] 去掉 {len(dropped)} 个「不是域名」的 JS 碎片（点号连接的成员访问链，"
+                    f"注册域查询返回 NXDOMAIN；涉及注册域 {len(bases)} 个，样例 "
+                    f"{', '.join(bases[:3])}）；判据只在明确 NXDOMAIN 时动手，DNS 无结论一律放行")
+    return kept, dropped
+
+
+def drop_absent_zones(task_id, settings=None, logger=None, timeout=3.0):
+    """删掉库里「注册域压根不存在」的 JS 碎片行（判据同上，只多一条来源限制）。
+
+    只动 `js:*` / `promote:js:*` 且**自己解析不到地址、原因还是 `nxdomain`** 的行：
+    - `over-limit` / `timeout` / `servfail` 不算"不存在"，一律保留；
+    - `osint:*`（C 段 / FOFA / 证书反查）来的域名是第三方数据库里的实际观测，
+      "现在解析不到"不是"它不是资产"的证据，所以不在清理范围内。
+    """
+    rows = db._query(
+        "SELECT id, domain, source FROM subdomains WHERE task_id=? AND ip='' "
+        "AND ip_note='nxdomain' AND (source LIKE 'js:%' OR source LIKE ?)",
+        (task_id, f"{PROMOTE_PREFIX}js:%"))
+    if not rows:
+        return 0
+    cache = {}
+    dead = [r["id"] for r in rows
+            if zone_is_absent(r["domain"], settings=settings, cache=cache, timeout=timeout)]
+    if not dead:
+        return 0
+    marks = ",".join("?" * len(dead))
+    db._exec(f"DELETE FROM subdomains WHERE id IN ({marks})", tuple(dead))
+    if logger:
+        logger.info(f"[extdom] 清掉 {len(dead)} 条库里已有的 JS 碎片行（注册域不存在）；"
+                    f"另 {len(rows) - len(dead)} 条 nxdomain 行保留（注册域存在或 DNS 无结论）")
+    return len(dead)
 
 
 def promote_owned(task_id, settings=None, logger=None, bases=None):
