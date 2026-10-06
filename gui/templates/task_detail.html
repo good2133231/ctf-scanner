@@ -207,6 +207,9 @@
           <input name="name" placeholder="留空则用 补扫全目录-<月日>-<时分秒>"></label>
         <span class="muted small">补扫是<b>真实扫描</b>：请先确认对目标有授权。</span>
       </div>
+      {# 续112：「批量打开」的链接面板 —— 浏览器只允许一次手势开一个标签页，其余站点必须交给用户逐个点击才真能开 #}
+      <div id="op-list" class="op-list" aria-live="polite"></div>
+      <table id="tbl-detail-sites">
       <table id="tbl-detail-sites">
         <thead><tr>
           <th class="pick"><input type="checkbox" class="pick-all-page"

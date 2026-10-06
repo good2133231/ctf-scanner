@@ -21,6 +21,28 @@
 
 
 
+## 2026-10-05 —— 续112-A：站点「批量打开」修好（一次手势只放行一个 window.open，其余给真链接）
+
+> 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux；真无头 Chrome 复核，不是 test_client）。
+
+- 用户报"批量打开只能打开一个网页"。**根因不是循环写错**：Chrome 对单次用户手势只放行**一个**
+  弹窗，后续同步 `window.open()` 一律返回 `null` —— 旧代码把它们算成"被弹窗拦截，请允许本站
+  弹出窗口后重试"，但**允许了也还是只开一个**，所以提示本身就是误导。旧实现唯一的"验证"是
+  `browser_e2e [4]` 断言 `window.open` 被调用 20 次 —— 那是把 `window.open` 换成永远返回真值的
+  假函数之后测出来的，**在真浏览器里是不可能出现的场景**（假绿：断言一直绿，功能一直坏）。
+- 修法（`gui/static/app.js` + `task_detail.html` + `style.css`）：第 1 个直接 `window.open`（拿到的
+  句柄照旧断 `opener = null`）；其余渲染进新容器 `#op-list` 成真 `<a target="_blank"
+  rel="noopener noreferrer">` —— 用户点每条链接各自是一次手势，浏览器就放行；另加「复制链接清单」
+  （非安全上下文里 `navigator.clipboard` 会抛 → 退回 `execCommand` 选中复制，两条路径都报成功/失败）。
+  文案如实写"已打开第 1 个，其余 N 个见下方链接"并保留单次上限 20 与"另有 M 个未列出"的如实计数。
+  样式只用已有变量（`--panel`/`--border`/`.mono`/全局 `a{color:var(--accent)}`），不新增颜色配对。
+- 门禁同步换血：`browser_e2e [4]` 改为断言"1 次 window.open + 19 条真链接 + 每条
+  `target=_blank && rel~noopener` + 第 2 个勾选值就是第 1 条链接 + 上限外 40 个不出现 +
+  提示语含浏览器限制"，**退回"循环 open"就会红**；`smoke [7r]` 新增"模板必须有 `#op-list`"与
+  "app.js 不许再出现『已打开 N / N 个』那句"两条源码级红线（按钮 `type=button` 的旧检测器保留）。
+- 复验：`tests/browser_e2e.py` 真浏览器 52 条全绿；`tools/check_contrast.py` 149/0（本轮不新增配对）；
+  `tests/smoke.py` 全量 SMOKE PASS / RC=0。
+
 ## 2026-10-05 —— 续111：GitHub 线索里的"公共分流名单" —— 只标注 + 只降不升，绝不丢
 
 > 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux / Python 3.14.4；用 续110 那轮实跑抓到的真实路径当判据样本）。

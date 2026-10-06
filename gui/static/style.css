@@ -94,6 +94,17 @@ a { color:var(--accent); }
 .bulkbar { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
 button.ghost { background:var(--ghost-bg); border-color:var(--border); color:var(--ghost-fg); }
 button.ghost:hover { color:var(--text); background:var(--ghost-hover); }
+
+/* 续112：「批量打开」的链接面板（浏览器一次手势只开一个标签页，其余靠逐个点击）。
+   刻意**不新增颜色配对** —— 链接色沿用全局 `a{color:var(--accent)}`、等宽沿用 `.mono`，
+   这里只排布局；面板底色用 --panel、描边用 --border，都是四套主题已定义的变量。 */
+.op-list { margin:6px 0 10px; padding:8px 10px; border:1px solid var(--border);
+  border-radius:8px; background:var(--panel); max-height:220px; overflow:auto; }
+.op-list:empty { display:none; }
+.op-list a { display:block; font-size:12px; text-decoration:none;
+  padding:2px 0; word-break:break-all; }
+.op-list a:hover { text-decoration:underline; }
+.op-list button { margin-top:6px; }
 button.danger { background:var(--danger-bg); border-color:var(--danger-border); color:var(--danger); }
 /* 行内小按钮（任务列表 / 任务详情的操作列） */
 .btn-mini { padding:3px 9px; font-size:12px; border-radius:5px; }

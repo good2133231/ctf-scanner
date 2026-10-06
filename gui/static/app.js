@@ -283,23 +283,56 @@ function initOpenSites() {
   btn.dataset.bound = "1";
   btn.addEventListener("click", () => {
     const msg = document.getElementById("op-msg");
+    const box = document.getElementById("op-list");
     const urls = [...document.querySelectorAll("#tbl-detail-sites .pick-row:checked")]
       .map(c => c.value).filter(Boolean);
+    if (box) box.innerHTML = "";
     if (!urls.length) { if (msg) msg.textContent = "请先勾选要打开的站点"; return; }
     const list = urls.slice(0, OPEN_SITES_MAX);
-    let blocked = 0;
-    list.forEach(u => {
-      let w = null;
-      try { w = window.open(u, "_blank"); } catch (e) { w = null; }
-      // 反向标签劫持：新页面能通过 window.opener 改写本页；拿到句柄就立刻断开
-      if (w) { try { w.opener = null; } catch (e) { /* 跨域句柄，忽略 */ } }
-      else blocked++;
-    });
-    let text = `已打开 ${list.length - blocked} / ${list.length} 个站点`;
-    if (urls.length > list.length) {
-      text += `（另有 ${urls.length - list.length} 个未开，单次上限 ${OPEN_SITES_MAX}）`;
+    const rest = list.slice(1);
+    // 浏览器的硬策略：**一次用户手势只放行一个 window.open**，后面的同步调用直接拿到 null。
+    // 旧实现把这一律记成"被弹窗拦截，请允许本站弹出窗口后重试"—— 但即便允许，第二个照样开不出来，
+    // 用户看到的就是"批量打开只能开一个"。这里不跟策略硬碰：第一个直接开，**其余渲染成真实链接**
+    //（点每个链接各自是一次手势，浏览器允许），并给一个"复制链接清单"给要批量粘进别处的人。
+    let first = null;
+    try { first = window.open(list[0], "_blank"); } catch (e) { first = null; }
+    if (first) { try { first.opener = null; } catch (e) { /* 跨域句柄，忽略 */ } }
+    if (box && rest.length) {
+      const tip = document.createElement("div");
+      tip.className = "muted small";
+      tip.textContent = `剩下 ${rest.length} 个逐个点即可各开一个标签页（浏览器只允许一次点击开一个）：`;
+      box.appendChild(tip);
+      rest.forEach(u => {
+        const a = document.createElement("a");
+        a.href = u; a.target = "_blank"; a.rel = "noopener noreferrer";
+        a.className = "op-link mono"; a.textContent = u;
+        box.appendChild(a);
+      });
+      const cp = document.createElement("button");
+      cp.type = "button"; cp.className = "ghost"; cp.textContent = "复制链接清单";
+      cp.addEventListener("click", async () => {
+        const text = list.join("\n");
+        try {
+          await navigator.clipboard.writeText(text);
+          cp.textContent = "已复制 " + list.length + " 条";
+        } catch (e) {
+          // 非安全上下文（http://127.0.0.1 之外的裸 IP）里 clipboard 不可用 → 退回选中文本
+          const ta = document.createElement("textarea");
+          ta.value = text; document.body.appendChild(ta); ta.select();
+          let ok = false;
+          try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+          document.body.removeChild(ta);
+          cp.textContent = ok ? "已复制 " + list.length + " 条" : "复制失败，请手动选取";
+        }
+      });
+      box.appendChild(cp);
     }
-    if (blocked) text += `；${blocked} 个被浏览器弹窗拦截，请允许本站弹出窗口后重试`;
+    let text = first
+      ? `已打开第 1 个${rest.length ? `，其余 ${rest.length} 个见下方链接` : ""}`
+      : `第 1 个被弹窗拦截（请允许本站弹出窗口），${rest.length ? `其余 ${rest.length} 个见下方链接` : ""}`;
+    if (urls.length > list.length) {
+      text += `；另有 ${urls.length - list.length} 个未列出（单次上限 ${OPEN_SITES_MAX}）`;
+    }
     if (msg) msg.textContent = text;
   });
 }

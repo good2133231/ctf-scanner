@@ -1006,9 +1006,15 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   同理，按名字找一个已知任务用 `db.find_task_by_name()`，**不要在 `list_tasks(limit=N)` 里线性找**
   —— 那个 N 一被超出就是**静默失效**（续55 修的 `devmode` 页就是这么坏的）。
   回归钉在 `tests/smoke.py` 的 `[7q]`（含"报告数据源不得再出现 `limit=1000`"的源码红线 + 2 条变异）。
-- **站点页签的「批量打开」是客户端行为，不是扫描**（续56 定口径）：`gui/static/app.js::initOpenSites()`
-  在 click 处理器里**同步**逐个 `window.open()`（浏览器的弹窗拦截只认"用户手势"，放进 `setTimeout`/
-  `await` 之后就只会开第一个），`OPEN_SITES_MAX = 20` 是防手滑上限，超出/被拦的条数**如实显示**。
+- **站点页签的「批量打开」：第 1 个直接开、其余必须给真链接**（续56 定性质，续112 改形态）：
+  `gui/static/app.js::initOpenSites()` 里 `window.open()` **一次手势只能开出一个** —— Chrome 对
+  单次用户手势只放行一个弹窗，后面的同步调用一律返回 `null`（放进 `setTimeout`/`await` 之后
+  连第一个都保不住）。旧实现据此提示"允许本站弹窗后重试"，但**允许了也还是只开一个**，用户的
+  结论就是"批量打开有 bug"。现在的形态：第 1 个 `window.open`，其余渲染进 `#op-list`
+  （模板里必须有这个容器）成真 `<a target="_blank" rel="noopener noreferrer">` —— 用户点每条
+  链接各自是一次手势，浏览器就放行；另给「复制链接清单」（非安全上下文里 `navigator.clipboard`
+  不可用 → 退回 `execCommand`，两条路径都要报成功/失败）。`OPEN_SITES_MAX = 20` 是防手滑上限，
+  未列出/被拦的条数**如实显示**。
   **不发任何请求** —— 与同排的「深度目录补扫 / 补截图」是两个性质（那两个会真扫）。
   两个不能改的点：① 按钮**必须** `type="button"`（它落在补扫 `POST /api/rescan` 表单内，
   默认 `type=submit` 会误触发真扫描）；② 拿到句柄后立刻 `w.opener = null`（反向标签劫持）。

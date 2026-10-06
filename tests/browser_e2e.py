@@ -533,9 +533,10 @@ def _run_checks(page, base, rep, token, tid, port, tid_run):
     rep.check("[3] 命中行就是 /e2e-42", "e2e-42" in body3, f"tbody={body3.strip()[:80]!r}")
     rep.check("[3] 未命中的 /e2e-07 已不在结果里", "/e2e-07" not in body3)
 
-    # ---------- [4] 「批量打开」用 window.open 逐个开标签页（且受 OPEN_SITES_MAX 限流） ----------
-    # 钩子必须返回**真值句柄**：app.js 拿到假句柄才走 "成功" 分支，返回 null 会被算成"被弹窗拦截"
-    # （那样测出来的是拦截计数，不是"真的逐个开了"）。
+    # ---------- [4]「批量打开」：一次手势只放行一个 window.open，其余必须给真链接 ----------
+    #   续112：旧断言"window.open 恰好 20 次"测的其实是一个在真浏览器里**根本不可能发生**的场景
+    #   （钩子把 window.open 换成永远返回真值的假函数），所以它一直在绿，而用户实际只能开一个。
+    #   现在验的是修复后的真实形态：1 个直接开 + 其余 N-1 个渲染成带 rel=noopener 的真链接。
     page.navigate(f"{base}/tasks/{tid}#sites")
     page.ev("window.__opened=[]; window.open=function(u){window.__opened.push(String(u));"
             "return {};};")
@@ -543,16 +544,30 @@ def _run_checks(page, base, rep, token, tid, port, tid_run):
             ".forEach(function(c){c.checked=true;});")
     page.click_js("document.getElementById('btn-open-sites')", settle=0.5)
     first = page.ev("document.querySelector('#tbl-detail-sites .pick-row').value")
-    rep.eq("[4] 勾选 60 个站点后 window.open 恰好被调用 20 次（单次上限）",
-           page.ev("window.__opened.length"), _OPEN_CAP)
-    rep.check("[4] 第 1 个打开的就是表格里第 1 个勾选值",
-              (page.ev("JSON.stringify(window.__opened)") or "[]").startswith(
-                  "[" + json.dumps(first)),
-              f"opened[0] 期望 {first!r}，实到 {(page.ev('window.__opened[0]') or '')!r}")
+    second = page.ev("document.querySelectorAll('#tbl-detail-sites .pick-row')[1].value")
+    rep.eq("[4] window.open 只被调用 1 次（浏览器单次手势只放行一个标签页）",
+           page.ev("window.__opened.length"), 1)
+    rep.check("[4] 开出去的就是表格里第 1 个勾选值",
+              (page.ev("window.__opened[0]") or "") == first,
+              f"期望 {first!r}，实到 {(page.ev('window.__opened[0]') or '')!r}")
+    rep.eq("[4] 其余 19 个渲染成可点击链接（退回『循环 window.open』这条就会红）",
+           page.ev("document.querySelectorAll('#op-list a').length"), _OPEN_CAP - 1)
+    rep.check("[4] 每条链接都是新标签 + rel 含 noopener（反向标签劫持）",
+              page.ev("[...document.querySelectorAll('#op-list a')].every(function(a){"
+                      "return a.target==='_blank' && /noopener/.test(a.rel);})") is True)
+    rep.check("[4] 面板第一个链接就是第 2 个勾选值",
+              second in (page.ev("document.querySelector('#op-list a').href") or ""),
+              f"期望含 {second!r}")
+    rep.eq("[4] 超过单次上限的 40 个不进列表（1 个开出去 + 19 个链接 = 20）",
+           page.ev("window.__opened.length + document.querySelectorAll('#op-list a').length"),
+           _OPEN_CAP)
     op_msg = page.ev("document.getElementById('op-msg').textContent") or ""
-    rep.check("[4] 提示如实报出「已开 20 / 共 60，另有 40 个未开」",
-              f"已打开 {_OPEN_CAP} / {_OPEN_CAP}" in op_msg
-              and f"另有 {_SITES_TOTAL - _OPEN_CAP} 个未开" in op_msg, f"msg={op_msg!r}")
+    tip = page.ev("document.querySelector('#op-list .muted') ? "
+                  "document.querySelector('#op-list .muted').textContent : ''") or ""
+    rep.check("[4] 提示如实说明浏览器限制与单次上限",
+              "已打开第 1 个" in op_msg and f"另有 {_SITES_TOTAL - _OPEN_CAP} 个未列出" in op_msg
+              and "一次点击开一个" in tip, f"msg={op_msg!r} tip={tip!r}")
+
 
     # ---------- [5] POC 表的 <button class="toggle"> 不会误提交外层筛选表单 ----------
     page.navigate(f"{base}/pocs?size={_PAGE_SIZE}")

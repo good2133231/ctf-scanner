@@ -2014,6 +2014,18 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 
 
 
+2026-10-05 · 续112-A（远端 Linux，Qoder-Agent）—— 用户点名的一批问题之①（其余 B/C/D/E/F/G/H 在同日后续提交）
+  ① 「批量打开只能开一个网页」：根因不是循环写错，是 Chrome 单次手势只放行一个 window.open，
+     后面的同步调用拿到 null；旧代码把它算成"被弹窗拦截，允许后重试"—— 允许了也没用，提示本身是错的。
+     更糟的是旧回归 `browser_e2e [4]` 把 window.open 换成"永远返回真值"的假函数，断言"恰好开 20 次"，
+     那是真浏览器里不可能出现的场景 —— 断言一直绿、功能一直坏（假绿的第六个实例）。
+  ② 修法：第 1 个直接开（句柄仍断 opener），其余渲染进新容器 #op-list 成真链接
+     （target=_blank + rel=noopener noreferrer，点每条各自是一次手势）；再加"复制链接清单"
+     （clipboard 不可用时退回 execCommand，两条路径都报成功/失败）；上限 20 与"另有 M 个未列出"照旧如实报。
+  ③ 门禁换血：e2e [4] 改断"1 次 open + 19 条链接 + 每条 rel/target 正确 + 第 2 个勾选值=第 1 条链接 +
+     上限外 40 个不出现 + 提示语含浏览器限制"，退回循环 open 即红；smoke [7r] 加"模板必须有 #op-list"
+     与"app.js 不得再出现『已打开 N / N 个』"两条源码红线。
+  ④ 复验：真浏览器 52 条全绿、check_contrast 149/0（不新增颜色配对）、smoke 全量 PASS。
 2026-10-05 · 续111（远端 Linux，Qoder-Agent）
   ① 承接续110 登记的第三件：dzmm.ai 那 30 条 GitHub 线索逐条看完，绝大多数是**别人的公共分流名单**
      （GFWList/gfwrules.list、clash-gfw-list.txt、smartdns/gfwlist.raw.txt、Rules/Proxy.list、pac.conf…）。

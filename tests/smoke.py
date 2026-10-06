@@ -9942,6 +9942,16 @@ http:
         "站点页签的「批量打开」必须存在且为 type=button（否则点一下就会误触发真实补扫）"
     assert 'id="btn-open-sites"' in _q_det7r.split('id="pane-sites"', 1)[1].split(
         'id="pane-subs"', 1)[0], "「批量打开」必须落在站点页签内（放错页签等于按钮消失）"
+    # 续112：批量打开的**链接面板**必须存在，且 JS 不许退回"循环 window.open"。
+    #   浏览器单次手势只放行一个 window.open —— 少了 #op-list，其余站点就打不开；
+    #   而旧断言只盯 window.open 的调用次数，测的是一个真浏览器里不可能出现的场景（一直假绿）。
+    assert 'id="op-list"' in _q_det7r, \
+        "task_detail.html 缺 #op-list 容器（批量打开只会开出一个标签页）"
+    _js112 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+    assert 'getElementById("op-list")' in _js112 and "noopener" in _js112, \
+        "app.js 必须把其余站点渲染成 rel=noopener 的真链接（每个链接各自是一次手势）"
+    assert "已打开 ${list.length - blocked} / ${list.length}" not in _js112, \
+        "退回旧的「循环 window.open 并声称开了 N 个」—— 真浏览器只会开出一个"
 
     # ② 前端接线：函数存在 **且** 在 DOMContentLoaded 里注册（只写函数不注册 = 点了没反应）
     _q_js7r = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
