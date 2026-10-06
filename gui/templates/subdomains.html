@@ -13,12 +13,24 @@
        href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=cdn">只看 CDN</a>
     <a class="btn-mini {{ 'ghost' if tag != 'nocdn' else '' }}"
        href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&tag=nocdn">只看非 CDN</a>
+    {# 续112：默认只列"解析成功"的域名（NXDOMAIN / 超时的 JS 碎片不该刷屏），但被藏起来的条数
+       必须报出来 —— 不报就等于让人以为"没有这些域名"。点一下即全部展开（`?nores=1`）。
+       两个切换链接的拼接（保留 q/size/tag 状态）由 `gui/app.py::_nores_state` 一次算好，
+       模板只管用 —— 这里再拼一遍迟早和翻页链接口径不一致。 #}
+    {% if pager.nores %}
+      <a class="btn-mini ghost" title="展开 nxdomain / 解析超时 / DNS 故障 等未解析结果"
+         href="{{ pager.base }}?{{ pager.on }}">
+        显示未解析{% if pager.hidden %}（{{ pager.hidden }}）{% endif %}</a>
+    {% else %}
+      <span class="muted small">未解析的也一并列出了，<a href="{{ pager.base }}?{{ pager.off }}">只看解析成功的</a></span>
+    {% endif %}
     {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}">全部</a>{% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">
     <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="域名 / 来源 / CNAME / IP"></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
     {% if tag %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
+    {% if not pager.nores %}<input type="hidden" name="nores" value="1">{% endif %}
     <button class="ghost" type="submit">查询</button>
     {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
   </form>
@@ -50,7 +62,9 @@
           <td>{% if s.cdn %}<span class="sev sev-medium">{{ s.cdn }}</span>
               {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
           <td class="muted small mono">{{ s.cname or '-' }}</td>
-          <td class="muted">{{ source_label(s.source) }}</td>
+          {# 续112：去重后一行只显示一个来源，其余来源并到「另见于」—— 不藏"它还被谁找到过" #}
+          <td class="muted">{{ source_label(s.source) }}{% if s.also_from %}<br>
+            <span class="muted small" title="同一域名还被这些来源找到过（入库行仍在，只是默认不重复列）">另见于 {{ s.also_from }}</span>{% endif %}</td>
         </tr>
       {% else %}
         <tr><td colspan="8" class="muted">没有匹配的子域名资产。</td></tr>

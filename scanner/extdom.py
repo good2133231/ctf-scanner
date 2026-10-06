@@ -288,7 +288,8 @@ def group_by_base(rows):
     return groups
 
 
-def group_page(q=None, extra_where=None, extra_params=(), page=1, per_page=20, order=None):
+def group_page(q=None, extra_where=None, extra_params=(), page=1, per_page=20, order=None,
+               dedupe_domain=False):
     """分组视图的分页：返回 `{groups, page, pages, group_total, row_total}`。
 
     - `groups` 是**当前页**的主域名组，每组的 `rows` 是**完整资产行**（模板要渲染 IP/CDN/CNAME/来源）；
@@ -305,7 +306,8 @@ def group_page(q=None, extra_where=None, extra_params=(), page=1, per_page=20, o
     """
     light, row_total = db.page_assets(
         "subdomains", limit=None, offset=0, q=q or None, extra_where=extra_where,
-        extra_params=extra_params, order=order, columns=GROUP_LIGHT_COLS)
+        extra_params=extra_params, order=order, columns=GROUP_LIGHT_COLS,
+        dedupe_domain=dedupe_domain)
     all_groups = group_by_base([dict(r) for r in light])
     group_total = len(all_groups)
     per_page = max(1, int(per_page))

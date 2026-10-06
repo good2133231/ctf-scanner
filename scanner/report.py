@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from . import db
-from .utils import run_cmd, to_unicode
+from .utils import run_cmd, site_redirect, to_unicode
 
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
@@ -154,6 +154,19 @@ def _idn_url(url):
         return s
 
 
+
+
+def _site_cells(s):
+    """站点行要显示的「状态」与「标题」两格（续112-B「跳转后」）。
+
+    口径全部来自 `scanner/utils.py::site_redirect` —— 与 GUI 的站点页签/站点资产页**同一个函数**：
+    报告与页面若各拼一遍，两份结论会互相"纠错"（同一行在页面里显示 301 → 200、报告里只显示 301）。
+    """
+    rd = site_redirect(s)
+    jump = ("（跳转后 → %s）" % _idn_url(rd["final_url"])
+            if rd["jumped"] and rd["final_url"] else "")
+    return rd["status"], ((rd["title"] or "-") + jump)
+
 def _append_count(task):
     """续25：任务被"追加执行"的次数（0 = 从未追加）。`options` 是 JSON 文本。"""
     try:
@@ -253,7 +266,10 @@ def generate(task_id, full=False):
         lines.append("| URL | 状态 | 标题 | 技术栈 | Server |")
         lines.append("|---|---|---|---|---|")
         for s in sites[:CAP_SITES]:
-            lines.append(f"| {_c(_idn_url(s['url']))} | {_c(s['status'])} | {_c(s['title'] or '-')} | "
+            # 「跳转后」（续112-B）：3xx 那一跳本身的标题就是字面的「301 Moved Permanently」，
+            # 看不出落地页是什么；两格文本由 `_site_cells` 统一拼（与 GUI 同一口径）。
+            _st_txt, _ti_txt = _site_cells(s)
+            lines.append(f"| {_c(_idn_url(s['url']))} | {_c(_st_txt)} | {_c(_ti_txt)} | "
                          f"{_c(s['tech'] or '-')} | {_c(s['server'] or '-')} |")
         lines.append("")
     if ports:
@@ -446,7 +462,7 @@ def generate_html(task_id, full=False):
         p.append("<h2>" + _cap_title("存活站点", len(sites), CAP_SITES) + "</h2>")
         p.append(_html_table(
             ["URL", "状态", "标题", "技术栈", "Server"],
-            [[_h(_idn_url(s["url"])), _h(s["status"]), _h(s["title"] or "-"),
+            [[_h(_idn_url(s["url"])), _h(_site_cells(s)[0]), _h(_site_cells(s)[1]),
               _h(s["tech"] or "-"), _h(s["server"] or "-")] for s in sites[:CAP_SITES]]))
     if ports:
         p.append("<h2>" + _cap_title("开放端口与服务", len(ports), CAP_PORTS) + "</h2>")
@@ -608,3 +624,4 @@ def export_pdf(task_id, out_path, settings=None, timeout=90, full=False):
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         shutil.rmtree(tmp_profile, ignore_errors=True)
+

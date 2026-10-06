@@ -75,8 +75,11 @@
         <td><a href="{{ url_for('task_detail', task_id=s.task_id) }}">#{{ s.task_id }}</a></td>
         <td class="mono url-cell"><a class="url-link" href="{{ s.url }}" target="_blank"
                rel="noopener noreferrer">{{ s.url }}</a></td>
-        <td>{{ s.status }}</td>
-        <td>{{ s.title or '-' }}</td>
+        {% set rd = site_redirect(s) %}
+        <td>{{ rd.status }}{% if rd.jumped %}
+              <span class="tech-tag" title="{{ rd.note }}">跳转后</span>{% endif %}</td>
+        <td>{{ rd.title or '-' }}{% if rd.jumped and rd.final_url %}<br>
+              <span class="muted small" title="{{ rd.note }}">→ {{ idn_display(rd.final_url) }}</span>{% endif %}</td>
         <td>{% for t in (s.tech or '').split(',') if t.strip() %}
               <span class="tech-tag">{{ t.strip() }}</span>{% else %}<span class="muted">-</span>{% endfor %}</td>
         <td class="muted small">{{ s.server or '-' }}</td>

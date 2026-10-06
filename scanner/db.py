@@ -87,7 +87,9 @@ CREATE TABLE IF NOT EXISTS sites (
   task_id INTEGER NOT NULL,
   url TEXT NOT NULL, host TEXT, port TEXT,
   status INTEGER, title TEXT, length INTEGER, server TEXT, tech TEXT, source TEXT,
-  favicon TEXT DEFAULT ''
+  favicon TEXT DEFAULT '',
+  redirect_url TEXT DEFAULT '', redirect_status INTEGER DEFAULT 0,
+  redirect_title TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS ports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -240,7 +242,12 @@ _COLUMN_PATCHES = {
                    "ip_note": "TEXT DEFAULT ''"},
     "sites": {"favicon": "TEXT DEFAULT ''",
               # 站点截图的**相对项目根**路径（logs/task_x/shots/xxx.png）
-              "shot": "TEXT DEFAULT ''"},
+              "shot": "TEXT DEFAULT ''",
+              # 续112-B「跳转后」：3xx 站点跟随重定向后的最终 url / 状态 / 标题。
+              # **原始那一跳不动**（`status`/`title` 仍是 301 本身），这里只是补证据。
+              "redirect_url": "TEXT DEFAULT ''",
+              "redirect_status": "INTEGER DEFAULT 0",
+              "redirect_title": "TEXT DEFAULT ''"},
     # P1-1 误报复核 / P1-2 置信度分层：老库补列（新库由 SCHEMA 直接建出）
     "vulns": {"review": "TEXT DEFAULT ''", "review_note": "TEXT DEFAULT ''",
               "reviewed_at": "TEXT DEFAULT ''"},
@@ -965,10 +972,13 @@ def insert_sites(task_id, sites):
     if not sites:
         return
     _exec("INSERT INTO sites(task_id,url,host,port,status,title,length,server,tech,source,"
-          "favicon) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+          "favicon,redirect_url,redirect_status,redirect_title) "
+          "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
           [(task_id, s.get("url", ""), s.get("host", ""), str(s.get("port", "") or ""),
             s.get("status"), s.get("title", ""), s.get("length"), s.get("server", ""),
-            s.get("tech", ""), s.get("source", ""), s.get("favicon", "")) for s in sites],
+            s.get("tech", ""), s.get("source", ""), s.get("favicon", ""),
+            s.get("redirect_url", ""), int(s.get("redirect_status") or 0),
+            s.get("redirect_title", "")) for s in sites],
           many=True)
 
 
@@ -1136,7 +1146,10 @@ CERT_ORDER = ("expired DESC, self_signed DESC, "
 _ASSET_PAGES = {
     "subdomains": ("task_id DESC, domain",
                    ("domain", "source", "cname", "ip", "cdn", "ip_note")),
-    "sites": ("task_id DESC, id DESC", ("url", "host", "title", "server", "tech")),
+    # 关键字要能搜到「跳转后」的标题与落地 URL（续112-B）：页面上显示的就是这些，
+    # 搜不到等于"看得见、找不到"。
+    "sites": ("task_id DESC, id DESC",
+              ("url", "host", "title", "server", "tech", "redirect_url", "redirect_title")),
     "ports": ("task_id DESC, port", ("host", "ip", "service", "banner")),
     "csegs": ("task_id DESC, segment, ip", ("segment", "ip", "domains")),
     "dirs": ("task_id DESC, id DESC", ("site_url", "path", "note", "title")),
@@ -1163,6 +1176,40 @@ EXT_SUBDOMAIN_WHERE = "(source LIKE 'js:%' OR source LIKE 'osint:%')"
 #   而重扫的目的恰恰是刷新这些字段。去重效果不变，展示的却是最新的资产状态。
 OVERLAP_EXT_WHERE = f"domain NOT IN (SELECT domain FROM subdomains WHERE {OWN_SUBDOMAIN_WHERE})"
 OVERLAP_SITE_WHERE = "id IN (SELECT MAX(id) FROM sites GROUP BY url)"
+# ---- 续112：子域名/拓展域名「同一域名一行」+「默认只看解析成功」 ----
+# 来源权威度（数字越小越权威）：主动收集 > 归属追加 > JS 挖掘 > 被动反查。理由：前者意味着
+# "我们已经在把它当目标资产扫"，后者只是"某个来源说它存在"。同一域名被多来源找到是**事实**，
+# 所以只改**展示**（其余来源并进「另见于」），不合并、不删除入库行。
+SOURCE_RANK_CASE = ("CASE "
+                    " WHEN source='subfinder' OR source='puredns' OR source='dns-brute' THEN 10 "
+                    " WHEN source='target' OR source LIKE 'target:%' THEN 20 "
+                    " WHEN source LIKE 'passive:%' THEN 30 "
+                    " WHEN source LIKE 'promote:%' THEN 40 "
+                    " WHEN source LIKE 'js:%' THEN 50 "
+                    " WHEN source LIKE 'osint:%' THEN 60 "
+                    " ELSE 99 END")
+# `ip` 为空 = 没解析出地址（nxdomain / timeout / servfail / over-limit，原因码在 `ip_note`）。
+# 这类行默认不刷进列表：实测一个目标的 JS 碎片里二十几个 `chat.floating.open` 这种
+# "点号连接的成员访问链"全都解析不了，占满一整屏还看着像资产。隐藏的条数必须显示出来，
+# **不能让人以为"没有这些域名"**。
+RESOLVED_WHERE = "ip <> ''"
+
+
+def other_sources_by_domain(domains):
+    """{域名: [该域名出现过的全部来源]}（一次查询；展示层据此把次要来源并到「另见于」）。
+
+    按**全库该域名**取，不按当前页/当前筛选 —— 同一域名在别的任务里被 JS 挖到过，这一页
+    也该说清楚，否则「来源」列会被误读成"这个域名只有这一条来历"。
+    """
+    out = {}
+    ds = sorted({str(x or "") for x in (domains or []) if x})
+    if not ds:
+        return out
+    marks = ",".join("?" * len(ds))
+    for r in _query(f"SELECT DISTINCT domain, source FROM subdomains "
+                    f"WHERE domain IN ({marks})", tuple(ds)):
+        out.setdefault(r["domain"], []).append(r["source"])
+    return out
 
 
 # ---------- 分布式节点（续80）：任务资产快照的导出 / 导入 ----------
@@ -1237,7 +1284,7 @@ def import_task_assets(task_id, snapshot):
 
 
 def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_params=(),
-                order=None, columns=None, owner_id=None):
+                order=None, columns=None, owner_id=None, dedupe_domain=False):
     """资产分页查询，返回 (rows, total)。
 
     跨任务的资产页（`/subdomains`、`/sites` …）与**任务详情页的资产页签**（续57）共用这一个
@@ -1270,6 +1317,22 @@ def page_assets(table, limit=200, offset=0, q=None, extra_where=None, extra_para
     if q:
         clauses.append("(" + " OR ".join(f"{c} LIKE ?" for c in cols) + ")")
         params.extend([f"%{q}%"] * len(cols))
+    if dedupe_domain:
+        # 续112：一个域名只留"最权威来源"那一行。**内层的 where 与参数必须与外层完全同源**
+        # （同一批 clauses + 同一份参数的副本、顺序一致），否则总数与列表各按一套口径算 ——
+        # "共 N 条却翻不出 N 条"这类缺陷本项目反复踩过。占位符出现次序：外层 clauses →
+        # 内层同一份 clauses 的副本 → LIMIT/OFFSET，正好与 params 的拼接顺序一致。
+        # 窗口函数需要 SQLite >= 3.25；不满足就跳过去重（宁可多几行，也绝不静默少几行）。
+        if sqlite3.sqlite_version_info >= (3, 25):
+            _base = list(params)
+            _inner = " AND ".join(clauses) if clauses else "1=1"
+            clauses.append("id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER "
+                           f"(PARTITION BY domain ORDER BY {SOURCE_RANK_CASE}, id DESC) rn "
+                           "FROM " + table + " WHERE " + _inner + ") WHERE rn = 1)")
+            params.extend(_base)
+        else:
+            logger.warning(f"[db] SQLite {sqlite3.sqlite_version} 无窗口函数，"
+                           f"{table} 本次不做同域名去重（同一域名可能出现多来源行）")
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     total = _query(f"SELECT COUNT(*) c FROM {table}{where}", tuple(params), one=True)
     if limit is None:

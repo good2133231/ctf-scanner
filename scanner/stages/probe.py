@@ -14,9 +14,57 @@ from urllib.parse import urlparse
 from .base import Stage
 from .. import db
 from ..fingerprint import identify, favicon_md5
-from ..utils import which, verify_tool, run_cmd, read_lines, write_lines, pool_run, http_request
+from ..utils import (REDIRECT_STATUS, which, verify_tool, run_cmd, read_lines, write_lines,
+                     pool_run, http_request)
 
 ALLOW_STATUS = {200, 301, 302, 403, 404}
+# 「哪些状态算需要跟随的跳转」由 `scanner/utils.py` 单独定义（取证这里与显示侧
+# `site_redirect` 必须用同一份，写两遍迟早一边算 304 一边不算）；`REDIRECT_STATUS` 只是
+# 被上面的 import 带进本模块命名空间 —— [8k] 的变异打桩的就是这个名字。
+
+
+def attach_redirect_info(sites, fetch, workers=8, logger=None):
+    """给 3xx 站点补 `redirect_url` / `redirect_status` / `redirect_title`，返回补到的条数。
+
+    `fetch(url)` 由调用方提供（probe 里就是带节流与登录态的 `http_request`），返回
+    `dict(status, url, text)` 或 None。**就地改传入的条目**，不复制一份 —— 站点条目随后要进
+    任务快照、进 `db.insert_sites`，复制那份改了也白改（`[8k]` 的断言就看库里读回来的值）。
+
+    三条底线：
+    - **原始那一跳不动**：`status` / `title` / `length` 仍是那次响应的实况。把 301 覆盖成落地页
+      的 200 等于谎报"这个端口直接回 200"，而跳转链本身是信息（301 与 200 的安全含义不同）。
+    - **拿不到就不编数**：落地页打不开 / 请求失败 → 三个字段留空，页面按原样显示那一跳
+      （显示口径在 `scanner/utils.py::site_redirect`：没有 `redirect_status` 就不打「跳转后」标记）。
+    - **只在确实有 3xx 时才发请求**：一个都不多打（限流预算是按请求数计的）。
+    """
+    red = [s for s in (sites or []) if int(s.get("status") or 0) in REDIRECT_STATUS]
+    if not red:
+        return 0
+
+    def _one(s):
+        r = fetch(s.get("url"))
+        if not r or not r.get("status"):
+            return None
+        t = TITLE_RE.search(r.get("text") or "")
+        return {"url": s.get("url"), "redirect_url": str(r.get("url") or ""),
+                "redirect_status": int(r.get("status") or 0),
+                "redirect_title": (t.group(1).strip()[:200] if t else "")}
+
+    got = {x["url"]: x for x in pool_run(_one, red, workers=workers) if x}
+    n = 0
+    for s in sites:
+        k = got.get(s.get("url"))
+        if not k:
+            continue
+        s["redirect_url"] = k["redirect_url"]
+        s["redirect_status"] = k["redirect_status"]
+        s["redirect_title"] = k["redirect_title"]
+        n += 1
+    if logger:
+        logger.info(f"[probe] 3xx 站点 {len(red)} 个，补到「跳转后」信息 {n} 个"
+                    + ("" if n == len(red)
+                       else "（落地页取不到的那些不编数，页面仍显示原始那一跳）"))
+    return n
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 
 
@@ -161,6 +209,15 @@ class ProbeStage(Stage):
                 s["favicon"] = favs.get(s["url"], "")
             hits = sum(1 for s in uniq if s["favicon"])
             ctx.logger.info(f"[probe] favicon 指纹 {hits}/{len(uniq)} 个站点已获取")
+
+        # 3xx 站点补一次「跳转后」取证（续112-B，用户 2026-10-06：「301 的状态码我希望给跳转
+        # 之后的标题，标记一个跳转后」）：httpx 默认**不跟随**重定向，收上来的 301 行标题就是
+        # 字面的「301 Moved Permanently」，完全看不出这跳去了哪儿、落地页是什么。
+        attach_redirect_info(
+            uniq,
+            lambda u: None if ctx.stopped() else http_request(
+                u, timeout=timeout, settings=ctx.settings, auth=True, allow_redirects=True),
+            workers=workers, logger=ctx.logger)
 
         ctx.results["sites"] = uniq
         write_lines(ctx.workdir / "sites.txt", [s["url"] for s in uniq])

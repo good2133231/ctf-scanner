@@ -562,7 +562,10 @@ def main():
                                ("js-smoke.example.com", "js:mine"),
                                ("osint-smoke.example.com", "osint:cseg")])
     db.set_subdomain_net(tid, {"own-smoke.example.com": ("1.2.3.4", ""),
-                               "js-smoke.example.com": ("5.6.7.8", "cloudflare")})
+                               "js-smoke.example.com": ("5.6.7.8", "cloudflare"),
+                               # 续112 起默认只列解析成功的（那道门由 [8i] 守）：本用例测
+                               # **分流**，所以 osint 行也得有解析结果，否则它被默认收起
+                               "osint-smoke.example.com": ("9.8.7.6", "")})
     own_html = c.get("/subdomains").get_data(as_text=True)
     assert "own-smoke.example.com" in own_html and "js-smoke.example.com" not in own_html
     assert "非 CDN" in own_html, "非 CDN 标记应渲染"
@@ -673,6 +676,9 @@ def main():
     db.insert_subdomains(tid, [("overlap-smoke.example.com", "js:mine"),
                                ("overlap-smoke.example.com", "subfinder"),
                                ("pure-ext-smoke.example.com", "osint:fofa-cert")])
+    # 续112 起默认只列解析成功的：本用例测**重叠判重**与**来源标签**，先填上解析结果
+    db.set_subdomain_net(tid, {"overlap-smoke.example.com": ("7.7.7.1", ""),
+                               "pure-ext-smoke.example.com": ("7.7.7.2", "")})
     ext_default = c.get("/extdomains").get_data(as_text=True)
     assert "pure-ext-smoke.example.com" in ext_default and "FOFA·证书反查" in ext_default
     assert "overlap-smoke.example.com" not in ext_default, "与自身子域名重叠的拓展域名应默认隐藏"
@@ -682,6 +688,7 @@ def main():
 
     # (6b) 拓展域名**按来源分类排序 + 分类标签**（用户要求不要把 JS / FOFA 标题 / 证书混在一起）
     db.insert_subdomains(tid, [("src-title.example.com", "osint:fofa-title")])
+    db.set_subdomain_net(tid, {"src-title.example.com": ("7.7.7.3", "")})   # 同上
     ext_all = c.get("/extdomains?all=1").get_data(as_text=True)
     for label in ("JS 挖掘", "FOFA·标题反查", "FOFA·证书反查", "FOFA·ICO 反查", "C 段反查"):
         assert label in ext_all, f"拓展域名页缺来源分类标签 {label}"
@@ -2368,7 +2375,14 @@ def main():
         ("bb-js.test", "js:mine"), ("cc-title.test", "osint:fofa-title"),
         ("own.test", "subfinder"),
     ])
+    # 续112 起任务详情「拓展域名」页签默认只列解析成功的（那道门由 [8i] 守）：本用例测
+    # **按来源分类排序**，先把解析结果填上 —— 否则行被收起，下面的 `.index()` 直接抛
+    db.set_subdomain_net(_et, {d: (f"10.66.0.{i}", "") for i, d in enumerate(
+        ("zz-js.test", "aa-title.test", "bb-js.test", "cc-title.test", "own.test"))})
     _ehtml = c.get(f"/tasks/{_et}").get_data(as_text=True)
+    assert all(d in _ehtml for d in ("bb-js.test", "zz-js.test",
+                                 "cc-title.test", "aa-title.test")), \
+        "任务详情「拓展域名」页签没渲染出这些域名，页面开头：" + _ehtml[:500]
     # 同类内"新的在前"（id 倒序），整体顺序 JS 挖掘 → FOFA·标题
     _pos = {d: _ehtml.index(d) for d in ("bb-js.test", "zz-js.test",
                                          "cc-title.test", "aa-title.test")}
@@ -6697,6 +6711,9 @@ http:
     _t7d = db.create_task("smoke-promote", "pengo.pro", ["probe"], {})
     db.insert_subdomains(_t7d, [("aaa.pengo.pro", "js:mine"),
                                 ("third.example.com", "js:mine")])
+    # 续112 起默认只列解析成功的：本用例测**归属追加**的标签与重叠隐藏，先填解析结果
+    db.set_subdomain_net(_t7d, {"aaa.pengo.pro": ("8.8.4.4", ""),
+                                "third.example.com": ("8.8.4.5", "")})
     _p7 = _exd7.promote_owned(_t7d, settings, logger=rec)
     assert _p7["promoted"] == ["aaa.pengo.pro"], _p7
     _rows7d = {(r["domain"], r["source"]) for r in db.list_subdomains(_t7d)}
@@ -6749,6 +6766,9 @@ http:
     db.insert_subdomains(_t7g, [("g1a.zzgrp7.test", "js:mine"),
                                 ("g1b.zzgrp7.test", "js:mine"),
                                 ("g2a.yygrp7.test", "osint:cseg")])
+    # 续112 起默认只列解析成功的：本用例测**分组/平铺两种视图**，先填解析结果
+    db.set_subdomain_net(_t7g, {d: (f"10.7.7.{i}", "") for i, d in enumerate(
+        ("g1a.zzgrp7.test", "g1b.zzgrp7.test", "g2a.yygrp7.test"))})
     _gh = c.get("/extdomains?q=zzgrp7").get_data(as_text=True)
     assert 'class="ext-group"' in _gh and "zzgrp7.test" in _gh, "分组视图缺主域名分组块"
     assert "g1a.zzgrp7.test" in _gh and "g1b.zzgrp7.test" in _gh, "分组里的行没渲染"
@@ -10180,6 +10200,9 @@ http:
     _t58 = db.create_task("smoke-ext-group-page", "zz58.test", ["probe"], {})
     db.insert_subdomains(_t58, [(f"a{i}.t{i}z58.test", "js:mine") for i in range(45)]
                          + [(f"x{i}.t{i}z58.test", "js:mine") for i in range(45)])
+    # 续112 起默认只列解析成功的：本用例测**分组分页**（45 个主域名 / 3 页），全填上解析结果
+    db.set_subdomain_net(_t58, {d: (f"10.58.{i // 250}.{i % 250}", "") for i, d in enumerate(
+        [f"{p}{n}.t{n}z58.test" for p in ("a", "x") for n in range(45)])})
     _grp58 = r'class="ext-group"[^>]*>\s*<summary>\s*<span class="mono">([^<]+)</span>'
 
     def _page58(_n):
@@ -11153,6 +11176,8 @@ http:
                     environ_base={"REMOTE_ADDR": "203.0.113.242"}).status_code == 302
     _ptid8 = db.create_task("smoke65-idn-page", "例子.中国", ["subdomain"], {})
     db.insert_subdomains(_ptid8, [("xn--fsqu00a.xn--fiqs8s", "passive:stub")])
+    # 续112 起默认只列解析成功的：本用例测 **IDN 渲染**，先填解析结果
+    db.set_subdomain_net(_ptid8, {"xn--fsqu00a.xn--fiqs8s": ("8.8.6.5", "")})
     _gpage8 = _c8.get("/subdomains?q=xn--fsqu00a.xn--fiqs8s").get_data(as_text=True)
     assert "例子.中国" in _gpage8, "全局子域名页应把 punycode 回解成中文"
     assert 'value="xn--fsqu00a.xn--fiqs8s"' in _gpage8, "真实值（checkbox value）必须仍是 punycode"
@@ -12535,6 +12560,318 @@ http:
           "dnsq 解不出退回系统解析器（不因加判定把能扫的主机挡掉）｜共享主机段：domains 空 + count 保留 + "
           "note 说明原因｜MD/HTML 两出口都不出现噪声域名且都写明原因｜阈值放松到 1000 的变异证明断言有区分度｜"
           "未超阈值照常入库｜老库 _ensure_columns 补 note")
+
+    # ---------------- [8i] 续112：同一域名一行（按来源权威性）+ 默认只看解析成功 ----------------
+    #      用户在 dzmm.ai 实跑后提的两条同源问题：`dzmm.ai` / `www.dzmm.ai` 在子域名页各出现两行
+    #      （一行来源 js:mine、一行 subfinder，看着像两个资产），而二十几个解析不了的 JS 碎片
+    #      把整屏刷满。修法都在**展示层口径**（入库一条都不动），所以断言也只盯口径：
+    #      ① 去重必须留"最权威来源"那一行，且 `total` 与列表同口径；② 被去掉的来源要并到
+    #      「另见于」里说清楚（藏起来等于谎报资产面）；③ 默认收起未解析**必须报出被收起的条数**；
+    #      ④ 翻页链接必须延续当前视图 —— 第一版把这条写反了（默认收起时翻页却带 `nores=1`，
+    #      于是第 2 页突然把碎片全放出来，同一视图两页口径不一致），所以这里正反都断言；
+    #      ⑤ 第三方名单是数据驱动的，改了文件就得真的生效。
+    import re as _re112
+    from scanner import jsmine as _js112
+
+    def _and112(a, b):
+        return f"({a}) AND ({b})" if b else a
+
+    _tid112 = db.create_task("smoke-112-dedupe", "dedupe112.example", ["subdomain"], {})
+    db.insert_subdomains(_tid112, [
+        ("a112.dedupe112.example", "js:mine"),
+        ("a112.dedupe112.example", "subfinder"),        # 同一域名的权威来源
+        ("a112.dedupe112.example", "promote:js:mine"),
+        ("b112.dedupe112.example", "brute:builtin"),          # 未解析（ip 空）→ 默认收起
+    ] + [(f"p{n:02d}112.dedupe112.example", "subfinder") for n in range(52)])
+    db._exec("UPDATE subdomains SET ip='93.184.216.34' WHERE domain <> 'b112.dedupe112.example'")
+    _w112 = f"task_id=? AND {db.OWN_SUBDOMAIN_WHERE}"
+
+    # ① 去重：三行 `a112` 只留 subfinder 那一行；total 与列表同口径（都是去重后的）
+    _rows112, _tot112 = db.page_assets("subdomains", limit=100, offset=0, extra_where=_w112,
+                                       extra_params=(_tid112,), dedupe_domain=True)
+    _got112 = {r["domain"]: r["source"] for r in _rows112}
+    assert _got112.get("a112.dedupe112.example") == "subfinder", _got112
+    assert "b112.dedupe112.example" in _got112, _got112   # 去重不管解析，未解析行仍在（那是下一页的事）
+    assert _tot112 == len(_rows112) == 54, (_tot112, len(_rows112))
+    # ② 变异对照：不开去重就是原来的 15 行（断言的区分度来自这里，不是靠写死的常量）
+    _raw112, _raw_tot112 = db.page_assets("subdomains", limit=100, offset=0,
+                                          extra_where=_w112, extra_params=(_tid112,))
+    assert len(_raw112) == 55 and _raw_tot112 == 55, (len(_raw112), _raw_tot112)
+    # ③ 被去掉的来源仍查得到（展示层要拿它写「另见于」）
+    _oth112 = db.other_sources_by_domain(["a112.dedupe112.example"])
+    assert set(_oth112.get("a112.dedupe112.example") or ()) == \
+        {"js:mine", "subfinder", "promote:js:mine"}, _oth112
+    # ④ SQL 侧"只看解析成功"与页面同一份常量
+    _res112, _res_tot112 = db.page_assets("subdomains", limit=100, offset=0,
+                                          extra_where=_and112(_w112, db.RESOLVED_WHERE),
+                                          extra_params=(_tid112,), dedupe_domain=True)
+    assert _res_tot112 == 53 and "b112.dedupe112.example" not in {r["domain"] for r in _res112}, \
+        (_res_tot112, [r["domain"] for r in _res112])
+
+    # ⑤ GUI 跨任务页：默认收起 + 报出条数 + 「另见于」，且**翻页链接不带 nores=1**
+    def _page_links(html):
+        return [u for u in _re112.findall(r'href="([^"]+)"', html) if "page=" in u]
+
+    _d112 = c.get("/subdomains", query_string={"q": "dedupe112", "size": "50"}).get_data(as_text=True)
+    _cell112 = '<td class="mono">a112.dedupe112.example</td>'
+    assert _d112.count(_cell112) == 1, "同一域名在页面上出现多行（勾选框 value 也会命中域名字符串，所以数的是显示单元格）"
+    assert "显示未解析（1）" in _d112, "被收起的条数必须报出来，不能让人以为没有这些域名"
+    assert "另见于" in _d112
+    _pl112 = _page_links(_d112)
+    assert len(_pl112) >= 2, f"53 条 / 每页 50 条必须出现翻页链接，实际 {_pl112}"
+    assert all("nores=1" not in u for u in _pl112), f"默认收起时翻页链接不该展开未解析：{_pl112}"
+    # ⑥ 展开态：碎片放出来、链接文案变回收，且翻页链接**保持**展开状态
+    _o112 = c.get("/subdomains", query_string={"q": "dedupe112", "size": "50",
+                                               "nores": "1"}).get_data(as_text=True)
+    assert "b112.dedupe112.example" in _o112 and "只看解析成功的" in _o112
+    _pl112b = _page_links(_o112)
+    assert _pl112b and all("nores=1" in u for u in _pl112b), f"展开态翻页丢了状态：{_pl112b}"
+
+    # ⑦ 任务详情页签（第一版这里直接 500：base_where 写了 `task_id=?` 却没绑参数）
+    _t112 = c.get(f"/tasks/{_tid112}", query_string={"sdq": "dedupe112"}).get_data(as_text=True)
+    # 计数只在**子域名页签那张表**里数：`a112` 同时也有一条 `js:mine` 的拓展域名行，
+    # 它本来就该出现在「拓展域名」页签里 —— 整页计数会把两个页签加起来，判据就错了
+    _tab112 = _t112[_t112.index('id="tbl-subs"'):_t112.index("</table>", _t112.index('id="tbl-subs"'))]
+    assert _tab112.count('<td class="mono">a112.dedupe112.example</td>') == 1 and \
+        "另见于" in _tab112, _tab112[:400]
+    assert "显示未解析（1）" in c.get(f"/tasks/{_tid112}").get_data(as_text=True), \
+        "页签同样要报出被收起的那一条"
+
+    # ⑧ 第三方名单真的生效（改文件 ≠ 生效：本项目出过"加载了却没用"的事故）
+    assert "web.telegram.org" in _js112._noise_set(), "config/dicts/js_thirdparty.txt 没被加载"
+    assert _js112._is_noise("web.telegram.org", {"dedupe112.example"}, set()) is True
+    assert _js112._is_noise("a112.dedupe112.example", {"dedupe112.example"}, set()) is False, \
+        "目标自身域名必须被 protect 放行"
+
+    # ⑨ §6.1 变异：把"只看解析成功"打回恒真 → 未解析那条就该出现在默认页（证明 ④⑤ 真的接在 SQL 上）
+    _orig_res112 = db.RESOLVED_WHERE
+    try:
+        db.RESOLVED_WHERE = "1=1"
+        assert "b112.dedupe112.example" in c.get("/subdomains",
+                                                 query_string={"q": "dedupe112"}).get_data(as_text=True), \
+            "变异未生效：这道默认门其实没接上查询"
+    finally:
+        db.RESOLVED_WHERE = _orig_res112
+    assert "b112.dedupe112.example" not in c.get("/subdomains",
+                                                 query_string={"q": "dedupe112"}).get_data(as_text=True)
+
+    print("[8i] 续112 域名去重 + 默认只看解析成功 ok: 同域名只留最权威来源一行（subfinder 压过 "
+          "js:mine/promote）｜total 与列表同口径｜不开去重回到 15 行（变异对照）｜其余来源并进「另见于」"
+          "｜未解析默认收起且报出条数｜默认态翻页不携带 nores=1、展开态翻页保持 nores=1"
+          "（第一版正好写反）｜任务页签 task_id 绑定不再 500｜第三方名单真生效｜"
+          "RESOLVED_WHERE 打回恒真的变异能把断言变红")
+
+    # ---------------- [8j] 续112-F：目录发现的「整站统一 403 拦截页」 ----------------
+    #      用户在 dzmm.ai 的「目录」页签点名的问题：「这两个大小不也一样吗 为什么两个都显示了？」
+    #      实况是 Cloudflare 对**任何**路径都回同一张 403 拦截页（正文逐字节相同、4910 字节），
+    #      而 dirscan 的软 404 基线**只对 200 生效**（`if st == 200`），于是每个敏感路径都留下
+    #      一条"403 + 同一张页"的假发现。修在写入侧：把"与随机路径同内容的 403"也当成基线滤掉，
+    #      并且**必须在日志里说清滤掉了什么**（静默少结果比噪声更难查）。
+    from scanner.stages import dirscan as _ds112
+
+    _BLOCK112 = "<html>Attention Required! | Cloudflare</html>" + ("p" * 4866)
+    _REAL112 = "<html>Real deny, a different body</html>"
+
+    def _srv112(uniform_block):
+        """造一个假站：随机基线路径按 `uniform_block` 决定回 403 拦截页还是 404。"""
+        def _hr(url, timeout=10, headers=None, data=None, verify=None,
+                allow_redirects=True, settings=None, want_bytes=False, auth=False):
+            u = str(url)
+            name = u.rsplit("/", 1)[-1]
+            if "ctfscan-none" in u:                     # 随机基线（根本不存在的文件）
+                if uniform_block:
+                    return {"status": 403, "text": _BLOCK112, "length": len(_BLOCK112),
+                            "url": u, "headers": {}}
+                return {"status": 404, "text": "not found", "length": 9, "url": u, "headers": {}}
+            if name in ("wp-config.php", "wp-login.php"):
+                return {"status": 403, "text": _BLOCK112, "length": len(_BLOCK112),
+                        "url": u, "headers": {}}
+            if name == ".env":                          # 正文**不同**的 403：真发现，必须留
+                return {"status": 403, "text": _REAL112, "length": len(_REAL112),
+                        "url": u, "headers": {}}
+            if name == "admin":
+                return {"status": 200, "text": "<title>Admin</title>", "length": 40,
+                        "url": u, "headers": {}}
+            return {"status": 404, "text": "nope", "length": 4, "url": u, "headers": {}}
+        return _hr
+
+    _logs112 = []
+
+    class _Rec112:
+        def info(self, m, *a): _logs112.append(str(m))
+        def warning(self, m, *a): _logs112.append(str(m))
+        def error(self, m, *a): _logs112.append(str(m))
+        def exception(self, m, *a): _logs112.append(str(m))
+        def debug(self, m, *a): pass
+
+    _tid112d = db.create_task("smoke-112-block", "lab112.test", ["dirscan"], {})
+    _ctx112d = StageContext(_tid112d, "smoke-112-block", parse_lines(["lab112.test"]),
+                            ["dirscan"], {}, copy.deepcopy(settings),
+                            Path(_TMPDIR) / "d112", _Rec112())
+    _jobs112 = [("http://lab112.test", p, "http://lab112.test/")
+                for p in ("/wp-config.php", "/wp-login.php", "/.env", "/admin")]
+    _lim112 = {"max_workers": 4, "http_timeout": 5}
+    _orig_dhr112, _orig_UB112 = _ds112.http_request, _ds112.is_uniform_block
+    try:
+        # ① 整站被拦：与随机路径同内容的 403 不再计为发现，内容不同的 403 与 200 照旧保留
+        _ds112.http_request = _srv112(True)
+        _ent112 = _ds112.DirscanStage(_ctx112d)._scan(_jobs112, _lim112)
+    finally:
+        _ds112.http_request = _orig_dhr112
+    _by112 = {e["path"].rsplit("/", 1)[-1]: e["status"] for e in _ent112}
+    assert "wp-config.php" not in _by112 and "wp-login.php" not in _by112, \
+        f"与随机路径同内容的 403 拦截页仍被当发现：{_by112}"
+    assert _by112.get(".env") == 403, f"正文不同的 403 被误杀（等于「见 403 就丢」）：{_by112}"
+    assert _by112.get("admin") == 200, _by112
+    _lg112 = [x for x in _logs112 if "拦截页" in x]
+    assert len(_lg112) == 1 and "2 个路径" in _lg112[0], \
+        f"滤掉了几条必须在日志里说清（静默少结果查无可查）：{_lg112}"
+
+    # ② 反向对照：随机路径回 404 的站点（基线里没有 403 样本）⇒ 一条都不许滤
+    _logs112.clear()
+    _ds112.http_request = _srv112(False)
+    try:
+        _ent112b = _ds112.DirscanStage(_ctx112d)._scan(_jobs112, _lim112)
+    finally:
+        _ds112.http_request = _orig_dhr112
+    _by112b = {e["path"].rsplit("/", 1)[-1]: e["status"] for e in _ent112b}
+    assert _by112b.get("wp-config.php") == 403 and _by112b.get(".env") == 403, \
+        f"没有 403 基线时把真 403 也滤掉了：{_by112b}"
+    assert not any("拦截页" in x for x in _logs112), _logs112
+
+    # ③ §6.1 变异：把判据打回恒 False ⇒ ①那两条必须回来（证明"少掉的 2 条"正是这道门滤的）
+    _ds112.http_request = _srv112(True)
+    _ds112.is_uniform_block = lambda *a, **k: False
+    try:
+        _ent112m = _ds112.DirscanStage(_ctx112d)._scan(_jobs112, _lim112)
+    finally:
+        _ds112.http_request, _ds112.is_uniform_block = _orig_dhr112, _orig_UB112
+    _by112m = {e["path"].rsplit("/", 1)[-1] for e in _ent112m}
+    assert {"wp-config.php", "wp-login.php"} <= _by112m, \
+        f"变异后仍没出现拦截页 = 上面那两条不是被这道门滤掉的：{_by112m}"
+
+    # ④ 判据本身：没证据就当没证据（空签名一律 False），md5 或长度任一命中即同内容
+    import hashlib as _hl112
+    _dg112 = _hl112.md5(_BLOCK112.encode("utf-8")).hexdigest()
+    assert _ds112.is_uniform_block(_dg112, len(_BLOCK112), set(), set()) is False, \
+        "基线里没有 403 样本时绝不能滤"
+    assert _ds112.is_uniform_block(_dg112, len(_BLOCK112), {_dg112}, set()) is True
+    assert _ds112.is_uniform_block("其它正文", len(_BLOCK112), set(), {len(_BLOCK112)}) is True
+    assert _ds112.is_uniform_block("其它正文", 123, {_dg112}, {len(_BLOCK112)}) is False
+
+    print("[8j] 续112-F 整站统一 403 拦截页 ok: 与随机路径**同内容**的 403 不再计为目录发现"
+          "（Cloudflare 那种逐字节相同的 4910 拦截页）｜正文不同的 403 与 200 命中照旧保留"
+          "（不是「见 403 就丢」）｜随机路径回 404 的站点一条都不滤（没有 403 基线=没有证据）｜"
+          "滤掉的条数写进日志（不静默少结果）｜判据打回恒 False 的变异让两条噪声回来｜"
+          "判据单条：空签名一律 False，md5 或长度任一命中即同内容")
+
+
+    # ---------------- [8k] 续112-B：3xx 站点的「跳转后」取证与显示 ----------------
+    #      用户点名：「301 的状态码 我希望给跳转之后的标题 标记一个跳转后」。实况是 dzmm.ai 的
+    #      15 个站点全是 `301 / 标题「301 Moved Permanently」`（httpx 默认**不跟随**重定向），
+    #      看不出跳去了哪儿、落地页是什么。修在写入侧：新增 `redirect_*` 三列存"跟随之后的
+    #      最终 url / 状态 / 标题"，**原始那一跳一个字都不动**（把 301 覆盖成 200 等于谎报）。
+    from scanner import utils as _u112
+    from scanner.stages import probe as _pb112
+
+    # ① 单元语义：只该对 3xx 发请求；原始字段不动；取不到就不编数
+    _calls112b, _sites112b = [], [
+        {"url": "http://lab112b.test/", "status": 301, "title": "301 Moved Permanently",
+         "length": 534},
+        {"url": "http://lab112b.test/ok", "status": 200, "title": "already fine", "length": 9}]
+
+    def _fetch112b(u):
+        _calls112b.append(u)
+        if u.endswith("/"):
+            return {"status": 200, "url": "http://lab112b.test/landed",
+                    "text": "<title>落地页标题-112</title>"}
+        return None
+
+    assert _pb112.attach_redirect_info(_sites112b, _fetch112b) == 1
+    assert _calls112b == ["http://lab112b.test/"], f"200 那条不该再发一次请求：{_calls112b}"
+    assert _sites112b[0]["redirect_status"] == 200 and \
+        _sites112b[0]["redirect_title"] == "落地页标题-112", _sites112b[0]
+    assert _sites112b[0]["redirect_url"] == "http://lab112b.test/landed", _sites112b[0]
+    assert _sites112b[0]["status"] == 301 and \
+        _sites112b[0]["title"] == "301 Moved Permanently", "3xx 那一跳的实况被改写了"
+    assert "redirect_status" not in _sites112b[1], "200 的站点不该被安上跳转后字段"
+
+    # ② 显示口径（页面与报告共用同一个函数）
+    _rd112 = _u112.site_redirect(_sites112b[0])
+    assert _rd112["jumped"] and _rd112["status"] == "301 → 200", _rd112
+    assert _rd112["title"] == "落地页标题-112" and "lab112b.test/landed" in _rd112["note"], _rd112
+    _rdNone = _u112.site_redirect({"status": 301, "title": "301 Moved Permanently",
+                                   "redirect_status": 0})
+    assert not _rdNone["jumped"] and _rdNone["status"] == "301" and \
+        _rdNone["title"] == "301 Moved Permanently", "没跟到就不许假装有跳转后"
+    assert _u112.site_redirect({"status": 200, "title": "T"})["status"] == "200"
+    # 落地页没有 <title>（图片 / JSON）→ 保留原来那句并说明原因，**不留空位**
+    _rdImg = _u112.site_redirect({"status": 301, "title": "301 Moved Permanently",
+                                  "redirect_status": 200, "redirect_title": "",
+                                  "redirect_url": "http://x.test/img.png"})
+    assert _rdImg["jumped"] and _rdImg["title"] == "301 Moved Permanently", _rdImg
+    assert "无 title" in _rdImg["note"], _rdImg
+    assert set(_u112.REDIRECT_STATUS) == {301, 302, 303, 307, 308}, "304 不算需要跟随的跳转"
+
+    # ③ 库里真的落了三列（顺带守住"占位符与列数一致"——本轮真踩过 12 值对 14 列）
+    _tid112s = db.create_task("smoke-112-jump", "lab112s.test", ["probe"], {})
+    db.insert_sites(_tid112s, [{"url": "http://lab112s.test/", "host": "lab112s.test",
+                                "port": "80", "status": 301,
+                                "title": "301 Moved Permanently", "length": 534,
+                                "server": "cloudflare", "source": "httpx",
+                                "redirect_url": "https://lab112s.test/landed",
+                                "redirect_status": 200, "redirect_title": "落地页标题-112S"}])
+    _row112s = db._query("SELECT status, title, redirect_url, redirect_status, redirect_title "
+                         "FROM sites WHERE task_id=?", (_tid112s,), one=True)
+    assert _row112s["status"] == 301 and _row112s["title"] == "301 Moved Permanently", dict(_row112s)
+    assert _row112s["redirect_status"] == 200 and \
+        _row112s["redirect_title"] == "落地页标题-112S", dict(_row112s)
+
+    # ④ 四处显示同口径：跨任务站点页 / 任务详情站点页签 / MD 报告 / HTML 报告
+    _sh112 = c.get("/sites", query_string={"q": "lab112s"}).get_data(as_text=True)
+    assert "跳转后" in _sh112 and "落地页标题-112S" in _sh112 and "301 → 200" in _sh112, _sh112[:500]
+    _th112 = c.get(f"/tasks/{_tid112s}").get_data(as_text=True)
+    assert "跳转后" in _th112 and "301 → 200" in _th112
+    _md112 = generate(_tid112s)
+    assert "301 → 200" in _md112 and "落地页标题-112S" in _md112 and "跳转后" in _md112, _md112[:700]
+    _hh112 = generate_html(_tid112s)
+    assert "301 → 200" in _hh112 and "落地页标题-112S" in _hh112, "HTML 与 Markdown 必须同口径"
+    # 关键字要能搜到「跳转后」的标题（页面上显示的东西搜不到 = 看得见找不到）
+    assert "落地页标题-112S" in c.get("/sites", query_string={"q": "112S"}).get_data(as_text=True)
+
+    # ⑤ 接线：probe 阶段必须真的调用这次取证（不是只写了个函数没接上流水线）
+    _seen112w = []
+    _orig_att112 = _pb112.attach_redirect_info
+    try:
+        _pb112.attach_redirect_info = lambda sites, fetch, **kw: (
+            _seen112w.append([dict(s) for s in sites]), 0)[1]
+        _st112p = copy.deepcopy(settings)
+        _st112p["limits"] = dict(_st112p.get("limits") or {}, favicon_md5=False)
+        _tid112p = db.create_task("smoke-112-wire", targets, ["probe"], {})
+        _ctx112p = StageContext(_tid112p, "smoke-112-wire", parse_lines([targets]),
+                                ["probe"], {}, _st112p, Path(_TMPDIR) / "w112", _Rec112())
+        _pb112.ProbeStage(_ctx112p).run()
+    finally:
+        _pb112.attach_redirect_info = _orig_att112
+    assert len(_seen112w) == 1 and _seen112w[0], \
+        f"probe 没接上「跳转后」取证（调用次数={len(_seen112w)}，站点数={len(_seen112w[0]) if _seen112w else 0}）"
+
+    # ⑥ §6.1 变异：把「需要跟随」的状态码清空 ⇒ 同一条 301 不再补列（证明 ①②③ 真的接在这道门上）
+    _orig_rs112 = _pb112.REDIRECT_STATUS
+    try:
+        _pb112.REDIRECT_STATUS = frozenset()
+        assert _pb112.attach_redirect_info(
+            [{"url": "http://lab112b.test/", "status": 301, "title": "301"}], _fetch112b) == 0, \
+            "清空状态码后仍在补列 = 这道门是摆设"
+    finally:
+        _pb112.REDIRECT_STATUS = _orig_rs112
+
+    print("[8k] 续112-B「跳转后」ok: 只对 3xx 发那一次请求（200 的一条都不许多打）｜3xx 那一跳的"
+          "实况（状态/标题）不被覆盖｜落地页取不到就不编数、页面仍显示原始那一跳｜落地页无 title "
+          "时保留原句并说明｜库里真落 redirect_* 三列（同轮守住 INSERT 占位符=列数）｜跨任务页 / "
+          "任务页签 / MD / HTML 四处同口径且关键字搜得到落地标题｜probe 流水线真接上了这次取证｜"
+          "REDIRECT_STATUS 清空的变异让补列归零（断言有牙）")
+
 
     print("SMOKE PASS")
 

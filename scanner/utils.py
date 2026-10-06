@@ -288,6 +288,62 @@ def is_domain(text):
     return bool(_DOMAIN_RE.match(a))
 
 
+# ---------- 站点显示（3xx 的「跳转后」） ----------
+
+# 需要显示「跳转后」的状态码。放在这里而不是 probe 里：取证（probe）与显示（GUI 三处模板 +
+# 报告两种格式）必须用**同一份**判断，写两遍迟早一边算 304 一边不算。
+REDIRECT_STATUS = frozenset({301, 302, 303, 307, 308})
+
+
+def _field(row, key, default=""):
+    """从 **dict 或 `sqlite3.Row`** 里取一个字段（取不到 / 为 None 都回 `default`）。
+
+    为什么不写 `row.get(...)`：本项目的"行"有两种 —— 阶段里构造的 `dict`，和从库里读出来的
+    `sqlite3.Row`，而 **`sqlite3.Row` 没有 `.get()`**（本项目反复踩过，`gui/app.py` 里就有
+    "必须先 `dict(...)` 再传"的注释）。`site_redirect` 同时服务 GUI（模板里的 Row）与报告
+    （`db.list_sites` 的 Row），所以在这里把两种形态一次兜掉，调用点不必各自记得转 dict。
+    """
+    try:
+        value = row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return default if value is None else value
+
+
+def site_redirect(row):
+    """3xx 站点在页面 / 报告里该怎么显示（续112-B，用户 2026-10-06 的要求）。
+
+    返回 `dict(status, title, jumped, final_url, note)`：
+    - 不是 3xx，或跟随之后的取证没拿到（老库行 / 落地页不可达）→ 原样显示那一跳的
+      状态与标题，**不编数**（绝不用"看起来像"的东西凑一个跳转后标题）；
+    - 跟到了 → `status` = `301 → 200`，`title` = 落地页标题，`final_url` = 落地 URL，
+      `note` = 给 title 提示用的整句话。
+
+    ⚠️ 这里**只拼显示**：库里 `status` / `title` / `length` 仍是那一跳的事实本身，
+    覆盖原始状态码等于谎报"这个端口直接回 200" —— 301 与 200 的安全含义不同。
+    `row` 传 dict 或 `sqlite3.Row` 都行（见 `_field`）。
+    """
+    r = row if row is not None else {}
+    st = int(_field(r, "status", 0) or 0)
+    rs = int(_field(r, "redirect_status", 0) or 0)
+    title = str(_field(r, "title") or "")
+    if st not in REDIRECT_STATUS or not rs:
+        return {"status": str(st), "title": title,
+                "jumped": False, "final_url": "", "note": ""}
+    final_title = str(_field(r, "redirect_title") or "").strip()
+    final_url = str(_field(r, "redirect_url") or "")
+    return {
+        "status": f"{st} → {rs}",
+        # 落地页没有 <title>（图片 / JSON / 空页）时保留原来那句（如「301 Moved Permanently」），
+        # 并靠 `note` 说明"跟到了但落地页没标题"，而不是留个空位让人以为漏扫了。
+        "title": final_title or title,
+        "jumped": True,
+        "final_url": final_url,
+        "note": f"跟随 {st} 到达 {rs}：{final_url or '-'}"
+                + ("" if final_title else "（落地页无 title）"),
+    }
+
+
 # ---------- 路径 ----------
 
 def _mask_path(text):

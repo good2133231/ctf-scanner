@@ -56,7 +56,7 @@ from scanner import keystore
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths,
-                           to_unicode)
+                           site_redirect, to_unicode)
 
 logger = get_logger("gui")
 
@@ -405,6 +405,9 @@ def create_app():
     # `source_label` / `ip_note_label` 同款全局；只改显示，`value`/`href` 里的真实值
     # 仍是 punycode（见 `gui/templates/*.html` 的域名列）。
     app.jinja_env.globals["idn_display"] = to_unicode
+    # 续112-B：3xx 站点的「跳转后」显示（状态 `301 → 200`、落地页标题、跳转标记）。
+    # 与报告共用 `scanner/utils.py::site_redirect` —— 页面与报告对同一行的说法必须一致。
+    app.jinja_env.globals["site_redirect"] = site_redirect
     # 续50：开发模式开关 —— 供 base.html 决定是否渲染「开发模式」侧栏入口。
     # 与 gui.host / allowed_hosts 同口径：改 config/settings.yaml 后需**重启控制台**才生效。
     app.jinja_env.globals["dev_enabled"] = devmode.enabled(settings)
@@ -1307,7 +1310,7 @@ def create_app():
                     "pname": prefix + "page", "anchor": anchor}
 
         def _tab_page(table, prefix, anchor, extra_where=None, extra_params=(), order=None,
-                      extra_qs=""):
+                      extra_qs="", **kw):
             """任务详情页某个资产页签的分页（SQL 侧）。
 
             返回 `(rows, pager, q)`。`extra_where` 是**服务端**附加条件（来源分流等），
@@ -1323,7 +1326,7 @@ def create_app():
             def _run(_page):
                 return _page_assets(table, limit=size, offset=(_page - 1) * size,
                                       q=q or None, extra_where=where,
-                                      extra_params=params, order=order)
+                                      extra_params=params, order=order, **kw)
 
             rows, total = _run(page)
             pages = max(1, (total + size - 1) // size)
@@ -1335,8 +1338,14 @@ def create_app():
         # 子域名页签只列目标**自身**的子域名；JS/情报拓展出来的走「拓展域名」页签。
         # 两个页签的分流口径取自 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`
         # —— 与跨任务的 `/subdomains`、`/extdomains` 页是**同一份 SQL 条件**（三处各写一遍必然漂移）。
+        res_where, hide_res = _resolved_arg()
         subs, subs_pager, subs_q = _tab_page("subdomains", "sd", "#subs",
-                                             extra_where=db.OWN_SUBDOMAIN_WHERE)
+                                             extra_where=_and_where(db.OWN_SUBDOMAIN_WHERE,
+                                                                    res_where),
+                                             dedupe_domain=True)
+        subs, _hid = _sub_rows(
+            subs, f"task_id=? AND ({db.OWN_SUBDOMAIN_WHERE})", (task_id,), hide_res)
+        _nores_state(subs_pager, hide_res, _hid)
         # 拓展域名（JS 挖掘 / C 段 / FOFA）在任务详情里单列一个页签 ——
         # 用户要求它不再单独占侧栏，但任务维度仍要能看到（这些域名未必属于目标）。
         # 来源分类的数字（"全部（N）"与五个分类按钮）按**全任务**统计：它是导航数字，不是当前页行数。
@@ -1357,14 +1366,20 @@ def create_app():
         # 这里再拼一遍必然漂移（第一版就是这么写错的：`WHEN` 子句用 `", "` 拼成
         # `CASE source WHEN 'a' THEN 0, WHEN 'b' THEN 1 …`，SQLite 直接 `near ",": syntax error`，
         # 任务详情页 500）。
+        ext_base = (f"{db.EXT_SUBDOMAIN_WHERE} AND source=?" if ext_pick
+                    else db.EXT_SUBDOMAIN_WHERE)
         ext_subs, ext_pager, ext_q = _tab_page(
             "subdomains", "ex", "#ext",
-            extra_where=(f"{db.EXT_SUBDOMAIN_WHERE} AND source=?" if ext_pick
-                         else db.EXT_SUBDOMAIN_WHERE),
+            extra_where=_and_where(ext_base, res_where),
             extra_params=((ext_pick[2],) if ext_pick else ()),
             order=EXT_SRC_ORDER,
+            dedupe_domain=True,
             # 分类也是筛选状态：翻页时必须带上，否则点了「JS 挖掘」再翻页就变回"全部"
             extra_qs=(f"&esrc={quote(ext_src)}" if ext_src else ""))
+        ext_subs, _hid = _sub_rows(
+            ext_subs, f"task_id=? AND ({ext_base})",
+            (task_id,) + ((ext_pick[2],) if ext_pick else ()), hide_res)
+        _nores_state(ext_pager, hide_res, _hid)
         # 目录页签：折叠是**整表语义**（同一 站点 + 状态码 + 大小 只留首个），`_fold_dirs` 是这条
         # 规则的**唯一实现** —— 所以顺序只能是「取全量 → 折叠 → 过滤 → 切片」，**只有渲染**变成一页。
         # 把折叠/过滤下推到 SQL 等于把同一规则写两遍（必然漂移），而且同一模板行会跨页重复、
@@ -1966,17 +1981,21 @@ def create_app():
         desc = raw not in ("0", "false", "no", "off")
         return sort, desc
 
-    def _asset_page(table, base, extra_where=None, extra_params=(), order=None):
+    def _asset_page(table, base, extra_where=None, extra_params=(), order=None, **kw):
         page, size, q = _page_args()
-        rows, total = _page_assets(table, limit=size, offset=(page - 1) * size, q=q or None,
-                                     extra_where=extra_where, extra_params=extra_params,
-                                     order=order)
+
+        def _run(_page):
+            # 越界重查必须走**同一个闭包**：第一版这里手写第二遍 `_page_assets` 并漏掉了 `order`
+            # 与 `**kw`（`dedupe_domain`），结果"第 3 页越界回落到末页"时口径与前两页不一样。
+            return _page_assets(table, limit=size, offset=(_page - 1) * size, q=q or None,
+                                extra_where=extra_where, extra_params=extra_params,
+                                order=order, **kw)
+
+        rows, total = _run(page)
         pages = max(1, (total + size - 1) // size)
         if page > pages:  # 页码越界（例如过滤后总页数变少）→ 回落到最后一页重查
             page = pages
-            rows, total = _page_assets(table, limit=size, offset=(page - 1) * size,
-                                         q=q or None, extra_where=extra_where,
-                                         extra_params=extra_params, order=order)
+            rows, total = _run(page)
         # q 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页、切标签**丢掉筛选条件**
         qs = f"&q={quote(q)}&size={size}" if q else f"&size={size}"
         pager = {"page": page, "size": size, "total": total, "pages": pages,
@@ -1991,6 +2010,58 @@ def create_app():
         if tag == "nocdn":
             return tag, "cdn = ''", ()
         return "", None, ()
+
+    def _resolved_arg():
+        """「只看解析成功的域名」开关（续112）：默认开启，`?nores=1` 把未解析的行也放出来。
+
+        真实目标上 JS 碎片里二十几个 `chat.floating.open` 这种"点号连接的成员访问链"全都解析
+        不了（nxdomain / timeout / over-limit），默认铺满一整屏还看着像资产。但它们**是事实**，
+        所以只在展示层默认收起、并把被隐藏的条数报在页面上 —— 入库与统计一条都不动。
+        """
+        hide = request.args.get("nores") != "1"
+        return (db.RESOLVED_WHERE if hide else None), hide
+
+    def _nores_state(pager, hide_res, hidden):
+        """把「默认只看解析成功的域名」这套状态一次挂到 pager 上（四个调用点共用）。
+
+        规则只此一处，**默认态（收起）的翻页链接不带参数**，只有展开后才用 `&nores=1` 延续状态
+        （第一版写反了：默认收起时翻页也带上 `nores=1`，第 2 页突然把 JS 碎片全放出来 ——
+        同一个视图两页口径不一致）。模板要用的两个切换链接一并算好：
+
+        - `pager.on` —— 当前收起 → 展开（带 `&nores=1`）；
+        - `pager.off` —— 当前展开 → 收起（不带）。
+
+        `hidden` 是被收起的**域名数**（不是行数）：页面必须报出这个数，不报就等于让人以为
+        "没有这些域名"。
+        """
+        base = pager["qs"]
+        pager["nores"] = hide_res
+        pager["hidden"] = hidden
+        pager["qs"] = base if hide_res else base + "&nores=1"
+        pager["on"] = base + "&nores=1"
+        pager["off"] = base
+        return pager
+
+    def _sub_rows(rows, base_where, base_params, hide_unresolved):
+        """子域名/拓展域名结果的展示层整形（续112）。
+
+        ① 同一域名的其余来源并到「另见于」—— 去重只显示一个来源，但"它还被谁找到过"不能藏，
+          否则「来源」列会被误读成唯一来历；
+        ② 顺手算出"因默认只看解析成功而被隐藏"的**域名数**（与列表口径一致，不是行数），
+          给页面上那句「另有 N 个未解析」用。
+        """
+        out = [dict(r) for r in rows]
+        if out:
+            others = db.other_sources_by_domain([r["domain"] for r in out])
+            for r in out:
+                extra = sorted({s for s in others.get(r["domain"], []) if s != r["source"]})
+                r["also_from"] = " / ".join(source_label(s) for s in extra)
+        hidden = 0
+        if hide_unresolved and base_where:
+            rr = db._query("SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE "
+                           + base_where + " AND ip = ''", tuple(base_params), one=True)
+            hidden = int(rr["c"] or 0) if rr else 0
+        return out, hidden
 
     def _overlap_args():
         """「是否显示重叠资产」开关：默认隐藏，`?all=1` 显示全部（两个资产页口径一致）。"""
@@ -2156,11 +2227,17 @@ def create_app():
         # 只显示目标自身的子域名（被动收集 + 字典爆破）；JS/情报拓展出来的域名
         # 归到「拓展域名」页 —— 混在一起会让人误判资产归属。
         tag, where, params = _cdn_tag()
+        res_where, hide_res = _resolved_arg()
+        # 续112：① 同一域名只留最权威来源那一行（`dedupe_domain`，去重条件与这里的 where/参数
+        # 完全同源，所以"共 N 条"与翻页是同一套口径）；② 默认只看解析成功的。
+        base_where = _and_where(db.OWN_SUBDOMAIN_WHERE, where)
         rows, pager, q = _asset_page("subdomains", "/subdomains",
-                                     extra_where=_and_where(db.OWN_SUBDOMAIN_WHERE, where),
-                                     extra_params=params)
+                                     extra_where=_and_where(base_where, res_where),
+                                     extra_params=params, dedupe_domain=True)
         if tag:
             pager["qs"] += f"&tag={tag}"
+        rows, hidden = _sub_rows(rows, base_where, params, hide_res)
+        _nores_state(pager, hide_res, hidden)
         return render_template("subdomains.html", subs=rows, pager=pager, q=q, tag=tag)
 
     # 拓展域名页的"来源分类"标签：用户要求分类浏览 + 分类排序，不要把 JS / FOFA 标题 /
@@ -2205,11 +2282,15 @@ def create_app():
         src_where = f"source = '{picked[2]}'" if picked else None
         scan_name = picked[3] if picked else "拓展域名"
         tag, where, params = _cdn_tag()
+        res_where, hide_res = _resolved_arg()
         show_all = _overlap_args()
         page, size, q = _page_args()
         grouped = request.args.get("group", "1") != "0"
-        ext_where = _and_where(db.EXT_SUBDOMAIN_WHERE, where, src_where,
-                               None if show_all else db.OVERLAP_EXT_WHERE)
+        # 续112：与「子域名」页同一套判据 —— 默认只看解析成功的，且同一域名只留最权威来源那一行。
+        # 分组与平铺**共用同一个 ext_where**（两种视图不能各按一套口径，否则一切到分组噪声又回来了）。
+        base_where = _and_where(db.EXT_SUBDOMAIN_WHERE, where, src_where,
+                                None if show_all else db.OVERLAP_EXT_WHERE)
+        ext_where = _and_where(base_where, res_where)
         # 分组模式下 `size` 的含义变成"每页多少个主域名"：翻页链接与分页条必须同一个口径，
         # 否则链接里会出现两个 `size=`（Flask 取第一个，页面显示的却是第二个）。
         if grouped:
@@ -2222,14 +2303,14 @@ def create_app():
             qs += "&all=1"
         if not grouped:
             qs += "&group=0"
-        row_total, groups = 0, []
+        row_total, groups, hidden = 0, [], 0
         if grouped:
             # 分组必须在 Python 里做（SQLite 没有"注册域"函数），但**不设行数上限** ——
             # 旧实现的 `GROUP_ROW_CAP=4000` 会让第 4001 行起的主域名组在任何一页都看不到
             # （静默丢资产），理由与取舍见 `extdom.group_page()`。
             gp = extdom.group_page(q=q, extra_where=ext_where, extra_params=params,
                                    page=page, per_page=EXT_GROUPS_PER_PAGE,
-                                   order=EXT_SRC_ORDER)
+                                   order=EXT_SRC_ORDER, dedupe_domain=True)
             groups, page = gp["groups"], gp["page"]
             row_total = gp["row_total"]
             pager = {"page": page, "size": EXT_GROUPS_PER_PAGE, "total": gp["group_total"],
@@ -2237,15 +2318,24 @@ def create_app():
                      # 分页条默认写"共 N 条"，而这里 N 是**主域名个数**（行数在下方单独一句）。
                      "unit": "个主域名"}
             subs = []
+            # 「另见于」与"被隐藏的未解析条数"在两种视图里都要有 —— 分组模式逐组贴，
+            # 平铺模式整表贴（同一份 `_sub_rows`，不分两套逻辑）。
+            for g in groups:
+                g["rows"], _ = _sub_rows(g["rows"], base_where, params, False)
+            _, hidden = _sub_rows([], base_where, params, hide_res)
+            _nores_state(pager, hide_res, hidden)
         else:
             subs, pager, q = _asset_page(
                 "subdomains", "/extdomains", extra_where=ext_where,
-                extra_params=params, order=EXT_SRC_ORDER)
+                extra_params=params, order=EXT_SRC_ORDER, dedupe_domain=True)
             pager["qs"] = qs
             row_total = pager["total"]
+            subs, hidden = _sub_rows(subs, base_where, params, hide_res)
+            _nores_state(pager, hide_res, hidden)
         return render_template("extdomains.html", subs=subs, groups=groups, grouped=grouped,
                                row_total=row_total, pager=pager, q=q, tag=tag,
-                               show_all=show_all, secrets=_secret_counts(),
+                               show_all=show_all,
+                               secrets=_secret_counts(),
                                src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name)
 
     @app.route("/sites")

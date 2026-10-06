@@ -288,3 +288,25 @@ api.qrserver.com
 cloudflareinsights.com
 capacitorjs.com
 debox.pro
+
+# ---- 续112：对授权目标实跑时刷屏的常见第三方（SaaS 埋点 / 错误上报 / 镜像站 / 文档站 / JS 示例里的占位域名）----
+posthog.com
+app.posthog.com
+us.posthog.com
+i.posthog.com
+us.i.posthog.com
+web.telegram.org
+telegram.me
+yandex.com
+base-ui.com
+socket.io
+nuqs.dev
+your-server.com
+www.i18next.com
+nr-data.net
+bam.nr-data.net
+browser-intake.sentry.io
+registry.npmjs.org
+ga.jspm.io
+backblazeb2.com
+www.gitbook.io

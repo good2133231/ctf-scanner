@@ -219,6 +219,27 @@ def _origin_of(url):
     return f"{p.scheme}://{p.netloc}/"
 
 
+def is_uniform_block(digest, length, blk_md5s, blk_sizes):
+    """这条 403 是不是「整站统一拦截页」（续112-F）。
+
+    判据 = **与随机路径的 403 逐字节相同**（md5 命中）**或长度相同**。为什么这样算安全：
+    随机路径（`/1234567/ctfscan-none`）根本不存在的文件，如果它也回 403 且回的是同一张页，
+    说明这个站点的 403 与"路径存不存在"无关，说的是"CDN/WAF 在拦我们"。实测 dzmm.ai 走
+    Cloudflare 时 `wp-config.php` 与 `wp-config.php.bak` 的正文逐字节一致、都是 4910 字节 ——
+    留在库里就是几十个同内容行铺满「目录」页签（用户：「这两个大小不也一样吗为什么两个都显示了？」）。
+
+    ⚠️ 两个反向保证（`[8j]` ⑤⑥ 就是盯这两条）：
+    - **基线里没有 403 样本 ⇒ 一律不滤**（`blk_md5s`/`blk_sizes` 皆空时返回 False）。
+      随机路径回 404、只有真路径回 403 的站点（"这个文件确实存在但被禁"）一条都不会被误杀；
+    - 长度集合为空时**不用长度兜底**（`blk_sizes and ...`）—— 没有可比的东西就当没证据。
+    """
+    if not blk_md5s and not blk_sizes:
+        return False
+    if digest and digest in blk_md5s:
+        return True
+    return bool(blk_sizes and (length or 0) in blk_sizes)
+
+
 class DirscanStage(Stage):
     name = "dirscan"
     description = "目录/路径爆破（dirmap 或内置字典扫描）"
@@ -730,6 +751,9 @@ class DirscanStage(Stage):
         timeout = int(limits.get("http_timeout", 10))
         baseline = {}
         baseline_lock = threading.Lock()
+        # 「整站统一拦截页」的计数（基址 → 被滤掉的路径数 / 那张页的响应长度）：
+        # 复用 `baseline_lock` 同步（同一批线程、同一类一次性累加，没必要再多一把锁）
+        blocked, blocked_sig = {}, {}
 
         def _baseline(u):
             """多样本软 404 基线（借鉴 dirmap 的 auto_check_404_page）。
@@ -747,30 +771,42 @@ class DirscanStage(Stage):
             `u` 既是缓存键也是请求基址：第一轮是站点根，目录递归轮是命中的子目录前缀，
             两者天然各算一份 —— 子目录常有**自己的**统一跳转页，复用站点根的基线会把
             子目录下的真实命中整片滤掉。
+
+            返回值是四元组 `(md5s, sizes, blk_md5s, blk_sizes)`：后两个只收**随机路径自己也
+            回 403** 的样本（续112-F）。CDN/WAF 站在拦截时对所有路径回同一张 403 页（实测
+            dzmm.ai 的 `wp-config.php` 与 `wp-config.php.bak` 正文逐字节相同、都是 4910 字节），
+            这种"整站统一拦截页"不是发现，把它当基线滤掉才不会一屏重复；而**随机路径回 404、
+            只有这个路径回 403** 的站点，`blk_*` 是空的，真实命中一条都不会被误杀。
             """
             with baseline_lock:
                 cached = baseline.get(u)
                 if cached is not None:
                     return cached
                 md5s, sizes = set(), set()
+                blk_md5s, blk_sizes = set(), set()
                 for _ in range(3):
                     marker = f"/{random.randint(10 ** 6, 10 ** 7 - 1)}/ctfscan-none"
                     r = http_request(u.rstrip("/") + marker, timeout=timeout,
                                      settings=ctx.settings, auth=True)
                     if not r:
                         continue
-                    md5s.add(hashlib.md5((r.get("text") or "").encode(
-                        "utf-8", "replace")).hexdigest())
+                    digest = hashlib.md5((r.get("text") or "").encode(
+                        "utf-8", "replace")).hexdigest()
+                    md5s.add(digest)
                     if r.get("length"):
                         sizes.add(int(r["length"]))
-                baseline[u] = (md5s, sizes)
+                    if r.get("status") == 403:
+                        blk_md5s.add(digest)
+                        if r.get("length"):
+                            blk_sizes.add(int(r["length"]))
+                baseline[u] = (md5s, sizes, blk_md5s, blk_sizes)
                 return baseline[u]
 
         def _hit(item):
             if ctx.stopped():
                 return None
             u, p, root = item
-            md5s, sizes = _baseline(u)
+            md5s, sizes, blk_md5s, blk_sizes = _baseline(u)
             url = u.rstrip("/") + "/" + p.lstrip("/")
             r = http_request(url, timeout=timeout, settings=ctx.settings, auth=True)
             if not r:
@@ -779,10 +815,21 @@ class DirscanStage(Stage):
             if st not in (200, 301, 302, 403):
                 return None
             # 软 404 过滤：与随机路径基线的 md5 或长度一致 → 视为"不存在"的模板页
+            digest = hashlib.md5((r.get("text") or "").encode("utf-8", "replace")).hexdigest()
             if st == 200:
-                digest = hashlib.md5((r.get("text") or "").encode("utf-8", "replace")).hexdigest()
                 if digest in md5s or (sizes and (r.get("length") or 0) in sizes):
                     return None
+            elif st == 403 and is_uniform_block(digest, r.get("length"), blk_md5s, blk_sizes):
+                # 「整站统一拦截页」（续112-F）：随机路径也被拦、且回的是**同一张** 403 页时，
+                # 这个 403 与路径无关，说的是"CDN/WAF 在拦我们"，不是"这个文件存在且被禁"。
+                # 留在库里就是把几十个同内容行铺满「目录」页签（用户：「这两个大小不也一样吗
+                # 为什么两个都显示了？」）。计数攒着，本轮结束按基址说一句总量 ——
+                # 滤掉了什么必须在日志里说清楚，不能静默少结果。
+                with baseline_lock:
+                    blocked[u] = blocked.get(u, 0) + 1
+                    if u not in blocked_sig:
+                        blocked_sig[u] = r.get("length")
+                return None
             # 命中页的标题：响应体已经在手里（上面算 md5 用过），提取 <title> 是零额外请求。
             # 为什么值得存：路径命中后光看 `/backup.tar.gz 200 1818` 判断不了这是真备份包
             # 还是一个"统一跳转页"；标题能立刻分辨（用户 2026-09-23 明确要求）。
@@ -791,7 +838,14 @@ class DirscanStage(Stage):
                     "length": r.get("length"), "method": "GET", "note": "builtin",
                     "title": (t.group(1).strip()[:200] if t else "")}
 
-        return [e for e in pool_run(_hit, jobs, workers=workers) if e]
+        entries = [e for e in pool_run(_hit, jobs, workers=workers) if e]
+        # 滤掉了什么必须说：只写"目录发现 0 条"会让人以为这个站点没东西，
+        # 而事实是"整站被同一张 403 拦掉了"（两者要做的下一步完全不同）。
+        for u in sorted(blocked):
+            ctx.logger.info(
+                f"[dirscan] {u} 的 {blocked[u]} 个路径返回与随机路径**完全相同**的 403 拦截页"
+                f"（长度 {blocked_sig.get(u)}），判为整站被拦、不计入目录发现")
+        return entries
 
     @staticmethod
     def _suffix_jobs(entries, cap):
