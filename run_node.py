@@ -142,7 +142,7 @@ def main():
     # 读进配置，之后工作线程与 GUI 每个请求都会反复调它，绝不能再提示。没加密文件时静默通过。
     _ks = keystore.unlock()
     if not _ks["ok"] and keystore.status()["encrypted"]:
-        print(f"[!] 凭据保持锁定：{_ks['reason']}（外部情报源将按\"无 key\"如实降级）")
+        print(f"[!] {keystore.lock_notice(_ks['reason'])}")
     settings = load_settings()
     client = nodes.NodeClient(args.controller, args.token, name=name, insecure=args.insecure)
     print(f"[*] 节点 {name} 启动：控制端 {args.controller}；本地库 {workdir}", flush=True)

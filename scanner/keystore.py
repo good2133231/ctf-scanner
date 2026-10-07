@@ -131,17 +131,28 @@ def _parse(text):
 
 
 def _prompt(src):
-    """只有**真有 TTY** 才提示。非交互（CI / 管道 / 自动化）一律直接返回未解锁 —— 绝不允许挂住。"""
+    """只有**真有 TTY** 才提示。非交互（CI / 管道 / 自动化）一律直接返回未解锁 —— 绝不允许挂住。
+
+    reason 只写**原因**，结论交给 `lock_notice()` 组一次。原因里再夹一句结论会出什么事：
+    三个启动入口（GUI / CLI / 节点）各自又拼了一遍前缀与后缀，实测 GUI 启动日志长这样 ——
+    `凭据保持锁定：非交互环境且未设置 …—— 凭据保持锁定（外部情报源按"无 key"…）（外部情报源将按"无 key"…）`
+    同一句说了两遍，还带两种措辞（"按"与"将按"），提示文本自己变成噪音源。
+    """
     if not sys.stdin.isatty():
-        return None, ("非交互环境且未设置 " + ENV_PASSPHRASE + " —— 凭据保持锁定"
-                      "（外部情报源按\"无 key\"如实降级，不影响其余阶段）")
+        return None, "非交互环境且未设置 " + ENV_PASSPHRASE
     try:
         got = getpass.getpass("CTFScanner 凭据口令（config/keys.enc.yaml 解锁）：")
     except (EOFError, KeyboardInterrupt):
-        return None, "已取消输入，凭据保持锁定"
+        return None, "输入被取消"
     if not got:
-        return None, "空口令，凭据保持锁定"
+        return None, "空口令"
     return got, ""
+
+
+def lock_notice(reason=None):
+    """把"锁定"组成**一句**完整的话；三个启动入口共用，别再各自拼前缀后缀。"""
+    r = (_STATE["reason"] if reason is None else reason) or "未输入口令"
+    return f"凭据保持锁定：{r}（外部情报源按\"无 key\"如实降级，其余阶段不受影响）"
 
 
 def unlock(passphrase=None, path=None):

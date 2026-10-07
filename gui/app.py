@@ -3457,7 +3457,7 @@ def serve(start_queue=True):
     # 读进配置，之后工作线程与 GUI 每个请求都会反复调它，绝不能再提示。没加密文件时静默通过。
     _ks = keystore.unlock()
     if not _ks["ok"] and keystore.status()["encrypted"]:
-        print(f"[!] 凭据保持锁定：{_ks['reason']}（外部情报源将按\"无 key\"如实降级）")
+        print(f"[!] {keystore.lock_notice(_ks['reason'])}")
     _settings = load_settings()
     # 环境变量（容器）优先；并把实际绑定值写回 `s` —— `_deploy_hints(s)` 与下面那句
     # "控制台: http://host:port" 都是照着 `s` 念的，不同步就会打印一个**没在监听**的地址。

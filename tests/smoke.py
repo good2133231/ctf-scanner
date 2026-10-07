@@ -15501,6 +15501,64 @@ expression: r0()
           "且放行名单（GET/HEAD、severity 空或 info、非 tcp、无 brute）与 classify_poc 逐项等价｜"
           "client.py 里'目前没有任何阶段调用它'那句过期注释已清")
 
+    # ---------------- [8ac] 续124：提示文本自己不能是噪音源 —— "凭据保持锁定"收成一句 ----------------
+    #      起因很偶然：本轮重启开发用的 GUI 时看启动日志，发现那句话长这样 ——
+    #      `凭据保持锁定：非交互环境且未设置 CTFSCANNER_KEYS_PASSPHRASE —— 凭据保持锁定`
+    #      `（外部情报源按"无 key"如实降级，不影响其余阶段）（外部情报源将按"无 key"如实降级）`
+    #      原因是 `keystore._prompt()` 把**结论**写进了 reason 里，而 GUI / CLI / 节点三个入口
+    #      又各自拼了一遍前缀与后缀（两处后缀措辞还不一样："按" vs "将按"）。
+    #      这类问题没有功能后果，但有真实的代价：用户读提示时会在两句话之间找差别，
+    #      而差别是不存在的 —— 提示文本从此不可信。所以修法是"原因只写原因，结论组一次"。
+    from scanner import keystore as _ks124
+
+    # ① `lock_notice()` 组出来必须是**一句**：结论 1 次、降级说明 1 次
+    _one124 = _ks124.lock_notice("非交互环境且未设置 CTFSCANNER_KEYS_PASSPHRASE")
+    assert _one124.startswith("凭据保持锁定：") and _one124.count("凭据保持锁定") == 1, _one124
+    assert _one124.count("无 key") == 1, f"降级说明重复了：{_one124}"
+    assert "不影响其余阶段" not in _one124 or "其余阶段不受影响" not in _one124, \
+        f"同一件事被说了两种措辞：{_one124}"
+    assert _ks124.lock_notice("").count("凭据保持锁定") == 1, _ks124.lock_notice("")
+    assert "未输入口令" in _ks124.lock_notice(""), "空原因要有兜底，不许印成『凭据保持锁定：（…）』"
+
+    # ② `_prompt()` 的三条失败路径：**只许写原因**
+    _real_isatty, _real_gp = _ks124.sys.stdin.isatty, _ks124.getpass.getpass
+    try:
+        _ks124.sys.stdin.isatty = lambda: False
+        _got, _why_a = _ks124._prompt("env")
+        assert _got is None and "凭据保持锁定" not in _why_a and "无 key" not in _why_a, _why_a
+        assert _why_a == "非交互环境且未设置 CTFSCANNER_KEYS_PASSPHRASE", _why_a
+        _ks124.sys.stdin.isatty = lambda: True
+        _ks124.getpass.getpass = lambda *a, **k: (_ for _ in ()).throw(EOFError())
+        _got, _why_b = _ks124._prompt("tty")
+        assert _why_b == "输入被取消", _why_b
+        _ks124.getpass.getpass = lambda *a, **k: ""
+        _got, _why_c = _ks124._prompt("tty")
+        assert _why_c == "空口令", _why_c
+        for _w in (_why_a, _why_b, _why_c):
+            assert "凭据保持锁定" not in _w, f"原因里夹了结论 ⇒ 任何消费者拼一句就重复一次：{_w}"
+        # 变异：把旧写法（结论写在原因里）打回来 ⇒ 与 lock_notice 组合后必然出现两遍结论
+        _mut124 = _ks124.lock_notice(_why_a + " —— 凭据保持锁定（外部情报源按\"无 key\"如实降级）")
+        assert _mut124.count("凭据保持锁定") == 2, "变异没生效：旧写法本该出现两遍结论"
+    finally:
+        _ks124.sys.stdin.isatty, _ks124.getpass.getpass = _real_isatty, _real_gp
+
+    # ③ 结构性不变式：**结论只许有一个产地**。新入口若手拼前缀后缀，这条立刻变红
+    _py124 = [f for d in ("scanner", "gui", "cli", "") for f in (ROOT / d).glob("*.py")]
+    _hand = sorted({f.relative_to(ROOT).as_posix() for f in _py124
+                    if ".venv" not in f.parts and "dirmap" not in f.parts
+                    and "凭据保持锁定" in f.read_text(encoding="utf-8", errors="replace")})
+    assert _hand == ["scanner/keystore.py"], f"结论被抄到了别处（每个抄写点都是一次重复表述的机会）：{_hand}"
+    for _f in ("cli/client.py", "gui/app.py", "run_node.py"):
+        _t124 = (ROOT / _f).read_text(encoding="utf-8", errors="replace")
+        assert "keystore.lock_notice(" in _t124, f"{_f} 没走统一的那一句"
+        # 三个入口的前提都还是"没有加密文件就静默通过"，这句条件不许被顺手删掉
+        assert 'keystore.status()["encrypted"]' in _t124, f"{_f} 的锁定提示前提没了"
+
+    print("[8ac] 续124 锁定提示收成一句 ok: lock_notice 组出的句子里结论与降级说明各只出现 1 次、"
+          "空原因有兜底｜_prompt 三条失败路径只写原因（把旧写法打回来的变异会印出两遍结论）｜"
+          "结构性不变式：\"凭据保持锁定\"这个产地只有 scanner/keystore.py 一处，三个启动入口"
+          "（GUI / CLI / 节点）都调同一句，新入口手拼就会红｜\"没加密文件就静默通过\"的前提没被动到")
+
     print("SMOKE PASS")
 
 
