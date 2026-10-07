@@ -57,8 +57,8 @@ from scanner import runner
 from scanner import keystore
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
-from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths,
-                           site_redirect, to_unicode)
+from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
+                           tail_lines, to_unicode)
 
 logger = get_logger("gui")
 
@@ -3414,13 +3414,12 @@ def create_app():
         return redirect(url_for("tools_page", msg=f"版本检查完成：{n_up} 个有新版本"))
 
     def _tail(path, n=150):
-        try:
-            # 续61 硬规矩：日志是**自由文本**，里面的 traceback / 系统错误消息会带本机绝对路径，
-            # 逐字段相对化挡不住，整段过一遍 scrub_paths（口径见 scanner/utils.py）。
-            return [scrub_paths(ln) for ln in
-                    Path(path).read_text(encoding="utf-8", errors="replace").splitlines()[-n:]]
-        except OSError:
-            return []
+        """任务日志的尾部 n 行（有界读的本体在 `scanner/utils.tail_lines`，续116）。
+
+        续61 硬规矩不变：日志是**自由文本**，里面的 traceback / 系统错误消息会带本机绝对路径，
+        逐字段相对化挡不住，整段过一遍 scrub_paths（口径见 scanner/utils.py）。
+        """
+        return [scrub_paths(ln) for ln in tail_lines(path, n)]
 
     return app
 

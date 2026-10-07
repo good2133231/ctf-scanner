@@ -13674,6 +13674,406 @@ http:
           "AST 逐个调用点检查必须传 logger/label（新增出口忘了接就判红）｜把改动打回旧「全吞不吭声」的"
           "变异让断言立刻变红")
 
+    # ---------------- [8r] 续116-A：HTTP 出口复用连接（提速，语义一处不改） ----------------
+    #      原先每条请求走模块级 `requests.request()` —— 它内部**每次新建一个 Session、用完即关**，
+    #      于是每个请求都要重做 TCP 三次握手（HTTPS 再叠一次 TLS 握手）。实测本机环回：
+    #      明文 HTTP 每请求 0.98 → 0.58 ms（1.7x）；**自签 TLS（RSA2048）每请求 50.0 → 1.03 ms
+    #      （48.6x）** —— 一次 15348 条路径的 HTTPS 深扫光握手就要 12 分钟。远端目标还要再乘 RTT。
+    #      这组的重点是：**快了，但扫描语义必须一字不动**（cookie 不外渗 / 重定向链照旧 /
+    #      连接错误仍返回 None / 陈旧连接不把活站报成不可达）。
+    import builtins as _bi116
+    import io as _io116
+    import socket as _socket116
+    import sqlite3 as _sq116
+    from scanner import utils as _utils116
+
+    class _Mini116:
+        """自己 accept 的极小 HTTP 靶子 —— **连接数**正是要量的那个数，
+        `ThreadingHTTPServer` 把它藏在内部的 accept 循环里拿不到。
+
+        `idle>0` 时**空闲即掐**（服务端先关掉 keep-alive），用来验陈旧连接怎么处理。
+        """
+
+        def __init__(self, idle=0.0):
+            self.conns, self.reqs, self.idle = [], [], idle
+            self.s = _socket116.socket()
+            self.s.setsockopt(_socket116.SOL_SOCKET, _socket116.SO_REUSEADDR, 1)
+            self.s.bind(("127.0.0.1", 0))
+            self.s.listen(64)
+            self.url = f"http://127.0.0.1:{self.s.getsockname()[1]}/"
+            threading.Thread(target=self._loop, daemon=True).start()
+
+        def _loop(self):
+            while True:
+                try:
+                    c, _ = self.s.accept()
+                except OSError:
+                    return
+                self.conns.append(c)
+                threading.Thread(target=self._handle, args=(c,), daemon=True).start()
+
+        def _handle(self, c):
+            # `finally: close()` 是**必须**的：连接被 self.conns 引用着，不显式关就不会随引用消失
+            # 而关 —— 「空闲即掐」会退化成「空闲只停止读」，客户端表现为 ReadTimeout 而不是 FIN
+            # （本轮实测踩过，故留在注释里）。
+            c.settimeout(self.idle or 30)
+            try:
+                while True:
+                    try:
+                        d = c.recv(4096)
+                    except OSError:
+                        return
+                    if not d:
+                        return
+                    head = d.split(b"\r\n\r\n")[0]
+                    self.reqs.append(head)
+                    if b"X-Seed" in head:
+                        c.sendall(b"HTTP/1.1 200 OK\r\nSet-Cookie: sid=leak; Path=/\r\n"
+                                  b"Content-Length: 2\r\nConnection: keep-alive\r\n\r\nok")
+                    elif head.startswith(b"GET /redir"):
+                        c.sendall(b"HTTP/1.1 302 Found\r\nLocation: final\r\n"
+                                  b"Set-Cookie: chain=yes; Path=/\r\nContent-Length: 0\r\n"
+                                  b"Connection: keep-alive\r\n\r\n")
+                    else:
+                        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"
+                                  b"Connection: keep-alive\r\n\r\nok")
+            finally:
+                c.close()
+
+        def close(self):
+            try:
+                self.s.close()
+            except OSError:
+                pass
+
+    _srv116 = _Mini116()
+    try:
+        # ① 同一主机 25 次请求 ⇒ 服务端只该看到 **1** 条连接（旧实现是 25 条）
+        for _ in range(25):
+            assert _utils116.http_request(_srv116.url, timeout=5), "复用连接后请求必须照常成功"
+        assert len(_srv116.conns) == 1, \
+            f"同一主机 25 次请求建了 {len(_srv116.conns)} 条 TCP 连接 —— 连接复用没生效"
+
+        # ② cookie 隔离：上一条响应种的 cookie 不许渗到下一条探测
+        #    （目录扫描里「这条 200、下一条 302」的判定不该被上一条的会话状态影响）
+        _utils116.http_request(_srv116.url + "a?X-Seed", timeout=5)
+        assert _utils116.http_request(_srv116.url + "b", timeout=5), "种过 cookie 之后的请求仍要正常"
+        assert not any(b"Cookie:" in h for h in _srv116.reqs[-1:]), \
+            "上一条响应的 Set-Cookie 渗到了下一条请求 —— 复用后必须每次从空 jar 出发"
+
+        # ③ 单次请求**内部**的重定向链照旧带 cookie（防「隔离过头」把续112-B 的「跳转后」口径改掉）
+        _utils116.http_request(_srv116.url + "redir", timeout=5)
+        _fin116 = [h for h in _srv116.reqs if h.startswith(b"GET /final")]
+        assert _fin116 and b"chain=yes" in _fin116[-1], \
+            "302 → 落地那一跳必须仍带上 302 自己种的 cookie（与改动前逐字一致）"
+
+        # ④ 按 `verify` 分档 + 按线程隔离（requests 里真正会互相改写状态的就是这两处）
+        _sV116, _sF116 = _utils116._http_session(True), _utils116._http_session(False)
+        assert _sV116 is not _sF116, \
+            "verify=True/False 共用一个 Session = 同一主机连接池的 cert_reqs 被互相改写（续42 的出口分流会被并回来）"
+        assert _utils116._http_session(True) is _sV116, "同线程同档位必须复用同一个对象，否则白复用"
+        _other116 = {}
+        _t116 = threading.Thread(target=lambda: _other116.update(s=_utils116._http_session(True)))
+        _t116.start()
+        _t116.join()
+        assert _other116["s"] is not _sV116, "Session 不得跨线程共享（requests 不保证 Session 并发安全）"
+
+        # ⑤ 陈旧 keep-alive：服务端 0.3 秒就掐掉空闲连接，隔 0.9 秒再请求**不许**把活站报成不可达
+        _idle116 = _Mini116(idle=0.3)
+        try:
+            assert _utils116.http_request(_idle116.url, timeout=5), "首请求应 200"
+            time.sleep(0.9)
+            assert _utils116.http_request(_idle116.url, timeout=5) is not None, \
+                "复用了一根已被服务端关掉的连接 ⇒ 活站被报成不可达（复用连接的头号误判）"
+        finally:
+            _idle116.close()
+
+        # ⑥ 连不上仍然是 None（提速没把失败语义改成「猜一个」）
+        _dead116 = _socket116.socket()
+        _dead116.bind(("127.0.0.1", 0))
+        _dead_port = _dead116.getsockname()[1]
+        _dead116.close()
+        assert _utils116.http_request(f"http://127.0.0.1:{_dead_port}/", timeout=2) is None, \
+            "无人监听的端口必须返回 None（与改动前一致）"
+
+        # ⑦ §6.1 变异：把 `_do_http` 打回「每请求新建 Session」的旧实现，① 那条判据必须变红
+        _orig116 = _utils116._do_http
+
+        def _old116(url, method, headers, data, timeout, verify, allow_redirects,
+                    settings, want_bytes, auth):
+            import requests as _rq116
+            try:
+                r = _rq116.request(method, url,
+                                   headers=_utils116._headers(settings, headers, auth=auth),
+                                   data=data, timeout=timeout, verify=verify,
+                                   allow_redirects=allow_redirects)
+                return {"status": r.status_code, "headers": dict(r.headers),
+                        "text": r.text, "length": len(r.content or b""), "url": r.url}
+            except _rq116.RequestException:
+                return None
+
+        _srv116b = _Mini116()
+        try:
+            _utils116._do_http = _old116
+            for _ in range(6):
+                assert _utils116.http_request(_srv116b.url, timeout=5)
+            assert len(_srv116b.conns) > 1, \
+                "变异没生效：旧实现本该为 6 条请求建 6 条连接（① 的判据也就抓不住回归）"
+        finally:
+            _utils116._do_http = _orig116
+            _srv116b.close()
+    finally:
+        _srv116.close()
+
+    print("[8r] 续116 HTTP 连接复用 ok: 同主机 25 次请求 = 1 条 TCP 连接（旧=25；TLS 实测 48.6x）｜"
+          "上一条响应的 cookie 不渗到下一条｜单次请求内部的重定向链照旧带 cookie｜"
+          "verify 分档 + 线程隔离（并回续42 的出口分流即判红）｜服务端掐掉空闲连接后仍 200"
+          "（不把活站报成不可达）｜连不上仍是 None｜打回旧「每请求新建 Session」的变异让 ① 变红")
+
+    # ---------------- [8s] 续116-B：resolve_host 不再改全进程的 socket 默认超时 ----------------
+    #      旧实现每次解析都 `socket.setdefaulttimeout(timeout)` 且**从不还原**：那是**进程级**状态，
+    #      同一进程里别的任务线程新建的裸 socket（portscan 探测、certs 的 TLS 握手）会莫名其妙
+    #      继承这里最后一次的 3 秒。而它连自己想管的事都管不住 —— `getaddrinfo` 是阻塞系统调用，
+    #      根本不看这个默认值（下面 ③ 用一条 0.25 秒的桩解析把这件事钉成断言）。
+    _dt0 = _socket116.getdefaulttimeout()
+    try:
+        _socket116.setdefaulttimeout(None)
+        # ① 解析成功且**不碰**全局默认值
+        assert _utils116.resolve_host("localhost"), "本机应能解析 localhost（否则本组在测一个坏函数）"
+        assert _socket116.getdefaulttimeout() is None, \
+            "resolve_host 改掉了全进程 socket 默认超时（旧实现 setdefaulttimeout(3) 且从不还原）"
+
+        # ② §6.1 变异：把旧行为原样打回来 ⇒ 先确认「旧写法确实会改」，再确认生产实现不改
+        def _old_resolve116(host, timeout=3):
+            _socket116.setdefaulttimeout(timeout)
+            try:
+                return sorted({i[4][0] for i in _socket116.getaddrinfo(host, None)})
+            except Exception:
+                return []
+
+        _socket116.setdefaulttimeout(None)
+        assert _old_resolve116("localhost"), "变异实现本身要能解析"
+        assert _socket116.getdefaulttimeout() == 3, "变异没生效：旧实现本该把默认超时改成 3"
+        _socket116.setdefaulttimeout(None)
+        assert _utils116.resolve_host("localhost", timeout=1) and \
+            _socket116.getdefaulttimeout() is None, "生产实现不得留下全局状态"
+
+        # ③ 那句超时本来也管不住 getaddrinfo：0.25 秒的解析，传 timeout=0.01 依然等满
+        #    （docstring 说这个参数「保留只为调用点签名稳定」，这条断言就是那句话的凭据）
+        _orig_gai116 = _socket116.getaddrinfo
+
+        def _slow_gai116(*a, **k):
+            time.sleep(0.25)
+            return _orig_gai116(*a, **k)
+
+        _socket116.getaddrinfo = _slow_gai116
+        try:
+            _t0_116 = time.perf_counter()
+            _utils116.resolve_host("localhost", timeout=0.01)
+            assert time.perf_counter() - _t0_116 >= 0.2, \
+                "timeout 若真能限时，这条断言就该反过来（它管不住 getaddrinfo，别当成能限）"
+        finally:
+            _socket116.getaddrinfo = _orig_gai116
+
+        # ④ 失败仍是空表（异常不外抛，这条不变）
+        _socket116.getaddrinfo = lambda *a, **k: (_ for _ in ()).throw(OSError("dns 坏了"))
+        try:
+            assert _utils116.resolve_host("nope.invalid") == [], "解析失败应返回空表而不是抛出"
+        finally:
+            _socket116.getaddrinfo = _orig_gai116
+    finally:
+        _socket116.setdefaulttimeout(_dt0)
+
+    print("[8s] 续116 resolve_host 不再改全局超时 ok: 解析后 getdefaulttimeout() 一字不动｜"
+          "把 setdefaulttimeout 加回来的变异立刻变红｜timeout 参数管不住 getaddrinfo（0.25s 的桩"
+          "解析传 0.01 仍等满，docstring 里那句话有断言兜着）｜解析失败仍返回空表")
+
+    # ---------------- [8t] 续116-C：任务日志尾部**有界读** ----------------
+    #      旧实现 `read_text().splitlines()[-150:]` 把整份日志读进内存只为留最后 150 行，
+    #      而详情页**每 2 秒**轮询一次 `/api/tasks/<id>/status`。一次深扫的日志能长到几 MB ——
+    #      实测 6.1 MB 日志：整份读 16.9 ms/次 → 有界读 0.2 ms/次（只读 64 KB）。
+    #      判据只看**读了多少字节**（结构判据），不看毫秒 —— §6.2「别拿环境值当哨兵」。
+    _d116 = _TMPDIR / "tail116"
+    _d116.mkdir(parents=True, exist_ok=True)
+
+    def _old_tail116(p, n=150):
+        return p.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
+
+    _big116 = _d116 / "big.log"
+    _big116.write_text("".join(f"line-{i}-{'x' * 90}\n" for i in range(20000)), encoding="utf-8")
+    _size116 = _big116.stat().st_size
+
+    # ① 与「整份读再切尾」逐行一致（四种边界：常规 / 无尾换行 / n 大于总行数 / 文件不存在）
+    assert _utils116.tail_lines(_big116, 150) == _old_tail116(_big116, 150)
+    _nonl116 = _d116 / "no-nl.log"
+    _nonl116.write_text("a\nb\nc", encoding="utf-8")
+    assert _utils116.tail_lines(_nonl116, 2) == ["b", "c"] == _old_tail116(_nonl116, 2)
+    assert _utils116.tail_lines(_nonl116, 99) == ["a", "b", "c"], "n 大于总行数应给全部（不是报错）"
+    assert _utils116.tail_lines(_d116 / "missing.log", 5) == [], \
+        "文件不存在 → 空表（旧实现同样吞 OSError，不能改成抛）"
+
+    # ② 块边界卡在多字节字符中间也必须还原整行（把 chunk 压到 64 字节逼它跨块）
+    _cn116 = _d116 / "cn.log"
+    _cn116.write_text("".join(f"中文😀{i}\n" for i in range(3000)), encoding="utf-8")
+    assert _utils116.tail_lines(_cn116, 5, chunk=64) == _old_tail116(_cn116, 5)[-5:], \
+        "跨块的 UTF-8 被切坏了（首行不在读取范围内，该丢就丢，绝不能吐半个字符）"
+    assert _utils116.tail_lines(_cn116, 3000, chunk=64) == _old_tail116(_cn116, 3000)
+
+    # ③ n<=0 必须是空表：`lines[-0:]` 会把**整份**吐出来（旧写法在这里连"读"都还没省）
+    assert _utils116.tail_lines(_big116, 0) == [], "n=0 时 lines[-0:] 会返回全部行"
+    assert _utils116.tail_lines(_big116, -1) == []
+
+    # ④ **有界**：数一数到底读了多少字节。`open` 与 `io.open` 都要拦 ——
+    #    `Path.read_text` 内部走的是 `io.open`，只包 `builtins.open` 会把旧实现测成"读了 0 字节"（假绿）。
+    _read116 = []
+    _real_open116, _real_io_open116 = _bi116.open, _io116.open
+
+    class _Counting116:
+        def __init__(self, fh):
+            self.fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.fh.close()
+
+        def read(self, k=-1):
+            d = self.fh.read(k)
+            _read116.append(len(d))
+            return d
+
+        def seek(self, *a):
+            return self.fh.seek(*a)
+
+    def _spy_open116(f, mode="r", *a, **k):
+        fh = _real_open116(f, mode, *a, **k)
+        return _Counting116(fh) if str(f) == str(_big116) else fh
+
+    _bi116.open = _io116.open = _spy_open116
+    try:
+        _got116 = _utils116.tail_lines(_big116, 150)
+        _new_bytes = sum(_read116)
+        _read116.clear()
+        _old_out116 = _old_tail116(_big116, 150)
+        _old_bytes = sum(_read116)
+    finally:
+        _bi116.open, _io116.open = _real_open116, _real_io_open116
+
+    assert _got116 == _old_tail116(_big116, 150) and _old_out116 == _got116, \
+        "两种实现的结果必须一字不差（这次改的只是「读多少」）"
+    assert _new_bytes <= 64 * 1024, \
+        f"尾读读了 {_new_bytes} 字节（文件 {_size116}）—— 不再是「有界」了"
+    # ⑤ §6.1 变异：旧写法（整份读）在**同一把尺子**下必须超标
+    assert _old_bytes >= _size116, \
+        f"变异没生效：旧写法只读了 {_old_bytes} 字节（文件 {_size116}）—— 计数窗口没罩住 read_text"
+
+    # ⑥ GUI 那条路真的接在这里：/api/tasks/<id>/status 的 log_tail 也走有界读
+    _ok116, _msg116 = users_mod.create_user("smoke116-admin", "smoke116-pw",
+                                            users_mod.ROLE_ADMIN, must_change=False)
+    assert _ok116, _msg116
+    _tid116 = db.create_task("smoke-tail116", "127.0.0.1", ["probe"], {"offline": True})
+    db.update_task(_tid116, status="running", log_file=str(_big116))
+    _c116 = _app_with7i().test_client()
+    try:
+        assert _c116.post("/login", data={"username": "smoke116-admin",
+                                          "password": "smoke116-pw"},
+                          environ_base={"REMOTE_ADDR": "203.0.113.236"}).status_code == 302
+        _read116.clear()
+        _bi116.open = _io116.open = _spy_open116
+        try:
+            _j116 = _c116.get(f"/api/tasks/{_tid116}/status").get_json()
+            _gui_bytes = sum(_read116)
+        finally:
+            _bi116.open, _io116.open = _real_open116, _real_io_open116
+        assert _j116 and len(_j116["log_tail"]) == 150, _j116
+        assert _j116["log_tail"][-1] == f"line-19999-{'x' * 90}", _j116["log_tail"][-1][:24]
+        assert _gui_bytes <= 64 * 1024, \
+            f"GUI 状态接口拉了 {_gui_bytes} 字节日志（文件 {_size116}）—— 路由没接上有界读"
+    finally:
+        db.delete_task(_tid116, backup=False)
+        users_mod.delete_user(users_mod.get_by_name("smoke116-admin")["id"])
+
+    print("[8t] 续116 日志尾部有界读 ok: 与整份读逐行一致（常规/无尾换行/n 超行数/文件缺失）｜"
+          "64 字节小块跨 UTF-8 边界不吐半个字符｜n<=0 返回空表（旧写法 lines[-0:] 会吐整份）｜"
+          "2 MB 日志只读 ≤64 KB｜同一把尺子下旧写法必然超标（变异）｜GUI 状态接口真的接在这里")
+
+    # ---------------- [8u] 续116-D：资产表按 task_id 走索引 ----------------
+    #      此前全库只有 audit_log / login_fails 两张表有索引，而「按任务过滤」是**每一条**读取路径
+    #      的公共条件（详情页 10 个页签、跨任务资产页、`task_counts_bulk` 的 7 条 GROUP BY、
+    #      `delete_task`、去重用的 `drop_existing`）。实测 30000 行的 dirs：COUNT 20 次
+    #      71 ms → 5 ms，分页 20 次 34 ms → 9 ms。判据用 **EXPLAIN QUERY PLAN**（结构判据），
+    #      不用毫秒 —— §6.2「别拿环境值当哨兵」。
+    _IDX116 = {"subdomains": "idx_subdomains_task", "sites": "idx_sites_task",
+               "ports": "idx_ports_task", "csegs": "idx_csegs_task",
+               "certs": "idx_certs_task", "dirs": "idx_dirs_task",
+               "vulns": "idx_vulns_task", "leads": "idx_leads_task"}
+    _conn116 = db.get_conn()
+    try:
+        # ① 八张资产表都有 task_id 索引（`init_db` 建表之后补，老库原地生效）
+        for _tb116, _ix116 in _IDX116.items():
+            _have116 = {r[1] for r in _conn116.execute(f"PRAGMA index_list({_tb116})")}
+            assert _ix116 in _have116, f"{_tb116} 缺 {_ix116}（实有索引：{sorted(_have116)}）"
+
+        def _plan116(q, _cn=None):
+            # 查询计划缓存是**按连接**的：同一条连接上先前 EXPLAIN 过的语句会直接回旧计划 ——
+            # 所以变异之后必须换一条新连接取计划（本轮实测：索引已 DROP，旧连接仍报 USING INDEX）。
+            return " ".join(str(r[3]) for r in (_cn or _conn116).execute("EXPLAIN QUERY PLAN " + q))
+
+        # ② 两条热形状：`task_counts_bulk` 的 COUNT / 任务详情页签的分页
+        _p_cnt116 = _plan116("SELECT task_id t, COUNT(*) c FROM sites "
+                             "WHERE task_id IN (1,2,3) GROUP BY task_id")
+        _p_page116 = _plan116("SELECT * FROM dirs WHERE task_id=1 "
+                              "ORDER BY task_id DESC, id DESC LIMIT 50 OFFSET 0")
+        assert "SCAN" not in _p_cnt116, f"计数查询仍在全表扫描：{_p_cnt116}"
+        assert "SCAN" not in _p_page116, f"分页查询仍在全表扫描：{_p_page116}"
+
+        # ③ §6.1 变异：把索引打掉 ⇒ ② 必须变红（"没有索引时的真实计划"就是 SCAN）
+        _conn116.execute("DROP INDEX idx_sites_task")
+        _conn116.execute("DROP INDEX idx_dirs_task")
+        _conn116.commit()
+        _mx116 = db.get_conn()
+        try:
+            assert "SCAN" in _plan116("SELECT task_id t, COUNT(*) c FROM sites "
+                                      "WHERE task_id IN (1,2,3) GROUP BY task_id", _mx116), \
+                "变异没生效：没有索引时本该 SCAN（说明 ② 抓不住回归）"
+        finally:
+            _mx116.close()
+            _conn116.execute("CREATE INDEX IF NOT EXISTS idx_sites_task ON sites(task_id)")
+            _conn116.execute("CREATE INDEX IF NOT EXISTS idx_dirs_task ON dirs(task_id)")
+            _conn116.commit()
+
+        # ④ **老库**启动时原地补：复制一份库、把索引全打掉，再跑一次 `init_db()`，必须一个不少地回来
+        #    （这是"用户不必删库重建"那条承诺的凭据 —— 只加 SCHEMA 不验证等于没加）
+        _old_db116 = _TMPDIR / "old116.db"
+        shutil.copyfile(str(db.DB_PATH), str(_old_db116))
+        _oc116 = _sq116.connect(str(_old_db116))
+        for _ix116 in _IDX116.values():
+            _oc116.execute(f"DROP INDEX IF EXISTS {_ix116}")
+        _oc116.commit()
+        _oc116.close()
+        assert not [r[1] for r in _sq116.connect(str(_old_db116)).execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%_task'")], \
+            "复制出来的「老库」还有索引，④ 就什么都没测到"
+        _orig_dbpath116 = db.DB_PATH
+        db.DB_PATH = _old_db116
+        try:
+            db.init_db()
+            _cn2 = db.get_conn()
+            try:
+                for _tb116, _ix116 in _IDX116.items():
+                    assert _ix116 in {r[1] for r in _cn2.execute(f"PRAGMA index_list({_tb116})")}, \
+                        f"老库跑过 init_db 后 {_tb116} 仍缺 {_ix116}"
+            finally:
+                _cn2.close()
+        finally:
+            db.DB_PATH = _orig_dbpath116
+    finally:
+        _conn116.close()
+
+    print("[8u] 续116 资产表 task_id 索引 ok: 八张资产表全部有索引｜COUNT 与分页两种形状的计划都不再"
+          "SCAN｜把索引打掉的变异让判据变红｜老库跑一次 init_db 原地补齐（不要求删库重建）")
+
     print("SMOKE PASS")
 
 

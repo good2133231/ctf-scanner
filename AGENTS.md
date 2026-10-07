@@ -203,7 +203,8 @@ ctf-scanner/
 │   │                      #   被锁返回 429 + Retry-After 且**正确口令也拒**、页面不泄漏账号存在性；自救 `-m scanner.login_guard`
 │   ├── captcha.py         # 登录验证码（续78）：**纯标准库**（手写 5×7 点阵字 + zlib/struct 编 PNG）；答案只存本进程内存，
 │   │                      #   会话里只放不透明 token；一次性 + 大小写/易混归一 + `compare_digest`
-│   ├── utils.py           # run_cmd / http_request / pool_run / resolve_host / IO / base_domain() / rel_display()
+│   ├── utils.py           # run_cmd / http_request（**线程本地复用连接**，续116）/ pool_run / resolve_host /
+│   │                      #   IO（read_lines + **tail_lines 有界尾读**）/ base_domain() / rel_display()
 │   ├── throttle.py        # **统一并发 / 限速 / 全局预算门控（F2）**：两级闸（任务级 + 进程级共享）
 │   │                      #   + 令牌桶 + 任务预算；经 `settings["_throttle"]` 注入（沿用 auth.inject 的
 │   │                      #   "任务专用副本、绝不原地改"）。三条出口都过它：`http_request` / `run_cmd` /
@@ -308,8 +309,14 @@ ctf-scanner/
   （那里 `/d/tmp` 就是普通目录）。新增"路径型"环境变量请复用 `env_path()`，不要各写一套。
 - 每个阶段结果**三写**：任务目录文本产物（如 sites.txt）、SQLite、`ctx.results`（供下一阶段直接用）。
 - 阶段级容错：单阶段异常不中断流水线，错误写入 `tasks.error`，任务最终仍置 `done`（docs 已声明此语义）。
-- GUI：Flask 请求线程 + 每任务一个 daemon 线程；无任务队列，进程重启则运行中任务中断
-  （续29 起可用详情页「续跑」从断点接着跑，无需从头重扫；见下面「断点续扫的语义边界」）。
+- GUI：**请求线程与执行线程是分开的** —— `_spawn()` 不再直接起线程，只把本次运行的精确入参写进库
+  （`tasks.run_payload` + `status='queued'`），由 `scanner/queue.py` 的**常驻 worker**认领执行
+  （默认 `queue.workers=1` 串行；认领走 `db.claim_next_queued` 的原子 UPDATE，保证同一任务只有一个
+  消费者 —— `runner._register_stop` 是覆盖式注册，重复消费会让「停止」失效）。
+  进程重启后 `db.reconcile_orphan_tasks` 把"pid 已死且带运行规格"的 `running` **重新入队**接着跑，
+  任务不丢；不带运行规格的行（CLI 直跑 / 老库遗留）仍标 `failed`（CLI 是前台阻塞、没有 worker 可接）。
+  续49 起的事实，本行此前还写着"无任务队列"（续116 按代码更正）。
+  另：续29 的详情页「续跑」是**用户手工**从断点接跑的入口，与上面这条自动对账并存、不互相替代。
 - **同任务「追加式执行」**（续25）：任务详情页的「补扫 / 复查 / 送去探测」可勾「追加到本任务」，
   把该阶段**追加进源任务**（不新建），结果累积、**跨运行去重**（同名站点/目录/端口/漏洞/子域名/
   证书不重复入库），续写同一 `log_file`、**不清 `error`**、进度重置。硬约束：**同任务并发追加必须
@@ -337,6 +344,12 @@ ctf-scanner/
    **登录态（任务级 Cookie/Token）同理只在这一处生效**：`http_request(..., auth=True)` 才附带
    `settings["_auth_headers"]`（由 `runner.StageContext` 注入的任务专用副本）。**默认 `auth=False`** ——
    新增调用点时先问一句"这个 URL 是目标侧还是第三方接口"，第三方**永远不加 `auth=True`**（见 §7 凭据红线）。
+   **连接复用（续116）**：`_do_http` 用的是**线程本地**、**按 `verify` 分档**缓存的 `requests.Session`
+   （`utils._http_session`），不是模块级 `requests.request()`（那等于每条请求重做一次 TCP/TLS 握手，
+   自签 TLS 实测 50 ms/请求）。两条由此而来的约束：① **每次请求都从空 cookie jar 出发**是刻意的语义
+   （"上一条路径的 Set-Cookie 不许影响下一条"），新增"要同一会话连续多跳"的用法必须显式实现，
+   不能指望 Session 替你存；② 别把它改成**跨线程共享**的一个 Session —— requests 不保证 Session
+   并发安全，且 `cert_reqs` 写在连接池对象上，会重演续42 修掉的出口分流。
    **`jsmine` 是唯一的"混合出口"模块**（续43）：页面自身请求按定义发往目标侧（`auth=True`），但同一页
    `<script src>` 绝对化后可能指向第三方，必须**按 URL 主机逐个判** `auth=`（`_is_self_host` 命中自家
    注册域才带），不能因为"URL 来自目标页面"就把整批脚本请求都带上登录态。

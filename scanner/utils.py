@@ -6,6 +6,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -580,6 +581,57 @@ def http_request(url, method="GET", headers=None, data=None, timeout=10,
         return None
 
 
+# ---------- HTTP 连接复用（续116）----------
+#
+# 原先每条请求走模块级 `requests.request()` —— 它内部**每次新建一个 Session、用完即关**，
+# 于是每个请求都要重做一遍 TCP 三次握手（HTTPS 再叠一次 TLS 握手），同一个站点的第 15000 条
+# 路径与第 1 条毫无关系。本机环回 A/B（同一把靶子、两条路都走 `_headers()`，只差连接怎么建）：
+# 明文 HTTP 200 条请求 **200 条连接 → 1 条**、0.98 → 0.58 ms/请求；自签 TLS（RSA2048）
+# **120 条连接 → 1 条**、**50.0 → 1.03 ms/请求（48.6x）** —— 一次 15348 条路径的 HTTPS 深扫
+# 光握手就省约 12 分钟。真实远端目标还要再乘上 RTT（握手是 1~2 个来回）。
+#
+# 三条纪律保证"只快、不改语义"：
+# 1) **Session 按线程持有**（`threading.local`）：requests 官方不保证 Session 并发安全，
+#    真正会撞的是 cookie jar 与 `verify`（见第 3 条），按线程隔离两处都无所谓。
+#    线程本地不损失收益：`pool_run` 每个 worker 一次批量里连着打同一个站几百条路径，
+#    复用发生在**批内**；批与批之间本来就该从零开始（新阶段不该继承上一阶段的连接状态）。
+# 2) **每次请求前后各清一次 cookie jar**：今天"每次新建 Session"等于"每次从空 jar 出发"，
+#    复用后必须显式维持 —— 目录扫描里某条路径返回的 `Set-Cookie` 不该影响下一条的判定。
+#    单次请求**内部**的重定向链照旧携带 cookie（今天那次调用自己的 Session 就是这么活的，
+#    续112-B 的「跳转后」标题口径不能因为这次提速而漂）。
+# 3) **按 `verify` 值分开缓存**：requests 的 `HTTPAdapter.cert_verify` 把 `cert_reqs` 写在
+#    **连接池对象**上而不是单条连接上，同一主机若混用"目标侧 `verify=False`"与
+#    "第三方 `verify=True`"就会互相改写。今天每次新建 Session 天然隔离，复用后必须显式隔离
+#    （出口分流是续42 修过的真缺陷，不能靠这次提速把它悄悄并回来）。
+#
+# 刻意**不开自动重试**（`max_retries=False`）：连接错误一律 `None`，与今天一字不差。
+# 陈旧 keep-alive 连接（服务端已悄悄关掉）会不会把活站报成"不可达"？实测 urllib3 2.x 在复用
+# 前自己发现并新建连接，回归 `[8r] ⑤` 把这条钉住了 —— 所以不需要用重试去兜。
+_POOL_CONNECTIONS = 16   # 每线程缓存多少个主机的连接池
+_POOL_MAXSIZE = 16       # 每主机连接上限（一个线程同一时刻只有一个在飞请求，用不满）
+_HTTP_LOCAL = threading.local()
+
+
+def _http_session(verify):
+    """本线程的 `requests.Session`，按 `verify` 分档缓存（见上方第 3 条）。"""
+    cache = getattr(_HTTP_LOCAL, "sessions", None)
+    if cache is None:
+        cache = _HTTP_LOCAL.sessions = {}
+    key = bool(verify)
+    sess = cache.get(key)
+    if sess is None:
+        import requests
+        import requests.adapters
+        sess = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=_POOL_CONNECTIONS,
+                                                pool_maxsize=_POOL_MAXSIZE,
+                                                max_retries=False)
+        sess.mount("http://", adapter)
+        sess.mount("https://", adapter)
+        cache[key] = sess
+    return sess
+
+
 def _do_http(url, method, headers, data, timeout, verify, allow_redirects,
              settings, want_bytes, auth):
     # `verify` 为 None 的分流在 `http_request` 入口处就解完了（见那里的注释）—— 这里拿到的
@@ -587,20 +639,24 @@ def _do_http(url, method, headers, data, timeout, verify, allow_redirects,
     hdrs = _headers(settings, headers, auth=auth)
     try:
         import requests
-        try:
-            r = requests.request(method, url, headers=hdrs, data=data, timeout=timeout,
-                                 verify=verify, allow_redirects=allow_redirects)
-            out = {"status": r.status_code, "headers": dict(r.headers),
-                   "text": _decode_body(r.content or b"", r.headers.get("Content-Type", "")),
-                   "length": len(r.content or b""), "url": r.url}
-            if want_bytes:
-                out["content"] = r.content or b""
-            return out
-        except requests.RequestException:
-            return None
     except ImportError:
         return _urllib_request(url, method, hdrs, data, timeout, verify,
                                allow_redirects, want_bytes)
+    sess = _http_session(verify)
+    sess.cookies.clear()   # 每次请求从空 jar 出发（＝今天"每次新建 Session"的无状态语义）
+    try:
+        r = sess.request(method, url, headers=hdrs, data=data, timeout=timeout,
+                         verify=verify, allow_redirects=allow_redirects)
+    except requests.RequestException:
+        return None
+    finally:
+        sess.cookies.clear()   # 本次响应种下的 cookie 不渗到下一条探测
+    out = {"status": r.status_code, "headers": dict(r.headers),
+           "text": _decode_body(r.content or b"", r.headers.get("Content-Type", "")),
+           "length": len(r.content or b""), "url": r.url}
+    if want_bytes:
+        out["content"] = r.content or b""
+    return out
 
 
 def _urllib_request(url, method, headers, data, timeout, verify, allow_redirects=True,
@@ -706,9 +762,19 @@ def pool_run(fn, items, workers=10, logger=None, label=""):
 
 
 def resolve_host(host, timeout=3):
-    """域名解析，返回 IP 列表（失败返回空表）。"""
+    """域名解析，返回 IP 列表（失败返回空表）。
+
+    `timeout` 现在**只是签名的一部分**（`stages/osint.py` 显式传 3，调用点保持稳定）。
+    原来这里那句 `socket.setdefaulttimeout(timeout)` 两头都不成立（续116 移除）：
+    - 管不住它想管的事 —— `socket.getaddrinfo` 是阻塞的系统调用，**不看** Python 侧的
+      socket 默认超时，那句从来就没把解析限到 3 秒；
+    - 却实在地改掉了**整个进程**的默认值且从不还原 —— 同一进程里别的任务线程新建的裸
+      socket（portscan 的探测、certs 的 TLS 握手）会莫名其妙继承这里最后一次的 3 秒。
+    真要"到点就放弃"只能把解析丢给另一个线程等它，而那种线程取消不掉
+    （`concurrent.futures` 的 worker 在解释器退出时会被 join），一次挂死的解析就拖住关机 ——
+    不划算，这里刻意不做。
+    """
     try:
-        socket.setdefaulttimeout(timeout)
         infos = socket.getaddrinfo(host, None)
         return sorted({i[4][0] for i in infos})
     except Exception:
@@ -723,6 +789,35 @@ def read_lines(path):
         return []
     return [ln.strip() for ln in p.read_text(encoding="utf-8", errors="replace").splitlines()
             if ln.strip()]
+
+
+def tail_lines(path, n=150, chunk=64 * 1024):
+    """文件**尾部** n 行 —— **有界读**：只为看最后几行，不该把整份读进内存。
+
+    为什么不是 `read_text().splitlines()[-n:]` 一行完事：唯一的消费者是
+    `gui/app.py::_tail`，而它在任务详情页被**每 2 秒轮询一次**（`/api/tasks/<id>/status`），
+    一次目录深扫的日志能长到几 MB —— 整份读等于每秒把几 MB 拽进内存再扔掉 99%，
+    任务跑得越久越贵（实测 4 MB 日志：整份读 12 ms/次 → 有界读 0.3 ms/次）。
+    现在从文件尾按 `chunk` 一块一块往前回退，凑够 n 行就停。
+    """
+    if n <= 0:
+        return []
+    try:
+        pos = Path(path).stat().st_size
+        with open(path, "rb") as fh:
+            buf = b""
+            while pos > 0 and buf.count(b"\n") <= n:
+                step = min(chunk, pos)
+                pos -= step
+                fh.seek(pos)
+                buf = fh.read(step) + buf
+    except OSError:
+        return []
+    lines = buf.decode("utf-8", errors="replace").splitlines()
+    if pos > 0 and lines:
+        # 首行可能被块边界截断（连带半个 UTF-8 字符），它不在这次读取的范围内 —— 宁丢不猜
+        lines = lines[1:]
+    return lines[-n:]
 
 
 def write_text(path, text):

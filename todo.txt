@@ -2287,3 +2287,38 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 - 至此代码侧待办清零；只剩需要你动手的两件：① 到「策略配置」页重设一次引导口令（明文兼容分支
   会自动退出判定，我不看也不猜口令）② 真要放开某族 POC 时在 `tools/poc_review.py` 的工作表上写 `ok`。
 
+
+2026-10-07 续116：按题目「前后端 速度 / 线程」实测四条，全部先量后改
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）
+
+① HTTP 出口每条请求新建 Session（零连接复用）[完成]
+- `scanner/utils.py::_http_session`：**线程本地** + **按 verify 分档**的 `requests.Session`，
+  连接池 16×16、`max_retries=False`；每次请求前后各清一次 cookie jar。
+- 实测（本机环回 A/B，两条路都走 `_headers()`）：明文 HTTP 200 请求 200 条连接 → 1 条，
+  0.98 → 0.58 ms/请求；**自签 TLS 50.0 → 1.03 ms/请求（48.6x）**，15348 条路径的深扫省约 752 秒。
+- 语义三条钉子：cookie 不外渗 / 单次请求内部重定向链照旧带 cookie（续112-B 的「跳转后」不漂）/
+  verify 分档（否则续42 的出口分流被并回来）。回归 `[8r]`，含"打回旧实现连接数判据必须变红"。
+② `resolve_host` 改掉全进程 socket 默认超时且从不还原 [完成]
+- 移除 `socket.setdefaulttimeout`：`getaddrinfo` 是阻塞系统调用**不看**这个默认值（想管的管不住），
+  却实在改掉了别的线程新建裸 socket 的超时（portscan / certs）。
+- `timeout` 参数保留只为调用点签名稳定（`stages/osint.py` 传 3），docstring 写明它不管事，
+  回归 `[8s] ③` 用 0.25 秒的桩解析把"传 0.01 依然等满"钉成断言。刻意不做"另起线程限时 join"——
+  那种线程取消不掉，一次挂死就拖住进程关机。
+③ GUI 日志尾部整份读（详情页每 2 秒轮询）[完成]
+- 新增 `scanner/utils.py::tail_lines()`：从文件尾按 64 KB 往前回退，凑够 n 行就停；
+  `gui/app.py::_tail` 只保留 scrub_paths 那一层（口径不变）。
+- 实测 6.1 MB 日志：整份读 16.9 ms/次 → 有界读 0.2 ms/次。**如实说**现有真实日志只有 8~10 KB，
+  这一条在当前量级是预防性的（深扫 + dirmap 才会长到 MB）。
+- 顺带堵掉 `lines[-0:]` 会吐整份的坑（`n<=0` 返回空表）。回归 `[8t]`（含 GUI 路由真的接在这里）。
+④ 资产表没有 task_id 索引（全库只有 audit_log / login_fails 两张表有）[完成]
+- `db.SCHEMA` 补 8 条 `CREATE INDEX IF NOT EXISTS ... (task_id)`，老库启动原地补。
+- 实测 30000 行 dirs：COUNT×20 71 → 5 ms，分页×20 34 → 9 ms。回归 `[8u]` 用
+  **EXPLAIN QUERY PLAN**（结构判据，不用毫秒 —— §6.2），并验证"老库跑 init_db 后索引补齐"。
+
+本轮踩到的两条流程教训（都写进 CHANGELOG 了）：自建靶子的"空闲即掐"必须显式 `close()`（否则表现为
+ReadTimeout 而不是 FIN）；**查询计划缓存是按连接**的，`DROP INDEX` 后要换新连接取计划，否则变异证伪
+会"看起来没生效"。另被自家红线抓一次：注释里不该把被禁字面量 `Path.read_text()` 原样抄进去。
+
+**仍然留着的事**：① 305 条导入 POC 里某族真要放开时仍需在 `tools/poc_review.py` 的工作表上人工写 `ok`
+（本轮无变化）；② 引导口令的明文兼容分支仍需用户在「策略配置」页重设一次口令才自动退出判定；
+③ `pool_run` 每次新建线程池的成本**没量出数量级**，不凭感觉改。
