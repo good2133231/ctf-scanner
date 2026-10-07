@@ -5,6 +5,17 @@
   owasp 检查（a06-legacy-banner）与 POC 库承担；
 - 规则表刻意保持精简、可扩展：新增一行即可支持新组件，无需改动调用方。
 
+判定成本（续122）：一条 900 KB 的响应原先要把 131 条内置规则 + 51 条外置规则各扫一遍全文
+（实测中位 560 ms/次，约 1 ms/KB —— probe 每个站点都要跑一次，多线程下等于抢 GIL）。
+现在给每条规则算一个**必现字面量**前置过滤：正则要命中，那个字面量就一定在文本里，
+所以"字面量不在"⇒ 这条规则一定不命中，可以直接跳过 `re.search`。实测 900 KB 降到 125 ms
+（4.5x）、1 KB 降到 0.34 ms（3.2x），标签集合与旧实现**逐字符相同**（差分验证见 `[8aa]`）。
+"一定必现"有三个前提，破坏其中任何一条就**放弃该规则的过滤**（宁可不提速，也不能漏报）：
+① 该字面量段处在必填位置上（`X{0,}`/`X?` 里的内容不算）；② 大小写折叠与 `str.lower()` 一致
+（实测枚举 BMP 后，`re.I` 与 `lower()` 只在 `U+0130/U+0131/U+017F` 三个码点上不一致 ——
+文本里有这三个字符就不折叠）；③ 没有组内局部 `(?i...)` 这类"编译期标志看不出但匹配期不区分大小写"
+的写法。
+
 favicon 指纹（P1-1 / P3-1，参考项目 `_get_favicon_md5` 的启发）：
 同一套源码部署的系统 favicon 完全一致，因此它是**零请求前置指纹** —— POC 里声明
 `favicon_md5_list` 后，目标 favicon 不匹配就不必再发任何探测请求（见 `pocs/engine.py`）。
@@ -20,9 +31,91 @@ import hashlib
 import re
 from pathlib import Path
 
+try:                                    # 3.11+ 把 sre_parse 挪进 re._parser；3.9/3.10 还是顶层模块
+    from re import _parser as _sre      # noqa
+except ImportError:
+    import sre_parse as _sre            # noqa
+
 # 内联全局标志（`(?i)` / `(?im)`）**只能写在串首**：Python 3.11 起这是弃用写法、3.14 起直接
 # 抛 PatternError（本项目 CI 用 3.9，故此前无人发现）。同一条规则里多余的那个一律删掉——
 # 串首那个本来就作用于整条表达式，分支再写一次是冗余。回归见 `tests/smoke.py [8d]`。
+# --------------------------------------------------------------------------
+# 必现字面量前置过滤（续122）
+# --------------------------------------------------------------------------
+# 三个"宁可不提速也不能漏报"的口径都写在 identify 的文档串里，这里只是实现。
+_FOLD_EXOTIC = ("\u0130", "\u0131", "\u017f")   # re.I 与 str.lower() 不一致的**全部**码点
+_MIN_LIT = 2                                       # 短于此长度的字面量过滤不掉任何东西，白算
+_REPEAT_OPS = tuple(getattr(_sre, n) for n in ("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT")
+                    if hasattr(_sre, n))
+_LOCAL_I_RE = re.compile(r"\(\?[a-zA-Z]*i")       # 组内局部 (?i) / (?i:…)/(?i-…)
+_lit_cache = {}
+
+
+def _literal_runs(seq):
+    """必填位置上的"极大连续字面量段"；返回 None = 结构认不出（调用方放弃过滤）。"""
+    out, cur = [], []
+    for item in seq:
+        op, arg = item[0], item[1]
+        if op == _sre.LITERAL:
+            cur.append(chr(arg))
+            continue
+        if cur:
+            out.append("".join(cur))
+            cur = []
+        if op in _REPEAT_OPS and int(arg[0]) >= 1:
+            # 只有"至少重复一次"的部分才是必现的；`X?` / `X{0,}` 里的内容不算（arg[0] 是最小次数）
+            sub = _literal_runs(arg[2])
+            if sub is None:
+                return None
+            out.extend(sub)
+        # 其余操作符（AT/IN/ANY/断言/未知）只当作"字面量被截断"，不影响剩下这些段的必现性
+    if cur:
+        out.append("".join(cur))
+    return out
+
+
+def required_literals(pattern):
+    """正则 -> `(忽略大小写?, [必须至少出现一个的字面量])`，或 None（不过滤）。
+
+    取的是**每个分支的最长必现段**：分支之间是"或"，所以过滤条件是"这些字面量里至少有一个在文本里"；
+    只要有**一个分支**挑不出够长的必现段，整条规则就不能过滤（命中可能正好走那条分支）。
+    """
+    try:
+        top = list(_sre.parse(pattern))
+    except Exception:
+        return None
+    alts = top[0][1][1] if (len(top) == 1 and top[0][0] == _sre.BRANCH) else [top]
+    lits = []
+    for alt in alts:
+        runs = _literal_runs(list(alt))
+        if runs is None:
+            return None
+        best = max(runs, key=len) if runs else ""
+        if len(best) < _MIN_LIT:
+            return None
+        lits.append(best)
+    return lits
+
+
+def _lit_filter(pattern):
+    """按**正则原文**缓存过滤条件（内置表是字符串、外置表是编译后的对象，都取 `.pattern`）。"""
+    rx = pattern if hasattr(pattern, "pattern") else re.compile(pattern)
+    key = rx.pattern
+    hit = _lit_cache.get(key, False)
+    if hit is not False:
+        return hit
+    ci = bool(rx.flags & re.IGNORECASE)
+    val = None
+    if _LOCAL_I_RE.search(key) and not ci:
+        val = None                      # 局部 (?i) 让"编译期看不出、匹配期却不分大小写" ⇒ 放弃过滤
+    else:
+        lits = required_literals(key)
+        if lits:
+            val = (ci, [l.lower() for l in lits] if ci else lits)
+    _lit_cache[key] = val
+    return val
+
+
 # 标签 -> [(part, 正则[, 状态码])]；part: headers | body | cookies；任一规则命中即打该标签。
 # 第三元组（续120）是 `frozenset` 状态码集合，缺省 = 不分状态。内置规则**一律不分状态**
 # （它们看的本来就是"响应头/正文里有没有这个特征"）；那一段是给外置表用的形状。
@@ -248,6 +341,11 @@ def identify(resp):
                               if k.lower() in ("set-cookie", "cookie")),
     }
     status = resp.get("status")
+    # 折叠文本按需算：`isascii()` 是 O(1)（CPython 在对象上存了紧凑 ASCII 标记），
+    # 只有非 ASCII 文本才需要再扫那三个例外码点
+    folded = {}
+    for key, val in parts.items():
+        folded[key] = val.lower() if (val.isascii() or not any(c in val for c in _FOLD_EXOTIC)) else None
     tags = []
     for source in (SIGNATURES, load_extra()[0]):
         for tag, rules in source.items():
@@ -255,7 +353,19 @@ def identify(resp):
                 codes = rule[2] if len(rule) > 2 else None
                 if codes is not None and status not in codes:
                     continue
-                if re.search(rule[1], parts.get(rule[0], "")):
+                part, pattern = rule[0], rule[1]
+                flt = _lit_filter(pattern)
+                if flt:
+                    ci, lits = flt
+                    if ci:
+                        hay = folded.get(part)
+                        if hay is None:
+                            pass                 # 折叠不安全 ⇒ 不跳过，交给正则
+                        elif not any(l in hay for l in lits):
+                            continue
+                    elif not any(l in parts.get(part, "") for l in lits):
+                        continue
+                if re.search(pattern, parts.get(part, "")):
                     tags.append(tag)
                     break
     return sorted(set(tags))

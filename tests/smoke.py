@@ -15235,6 +15235,165 @@ expression: r0()
           "「换 cwd 起进程 = 127 = 工具明明在却被判未装」的真缺陷（同一把尺子量两端）｜"
           "策略配置 8 个字段与 app.py 读的键一一对上，POST 回环保守默认值，外部工具页文案改了口径")
 
+    # ---------------- [8aa] 续122：指纹判定的必现字面量前置过滤（提速，但漏报才是风险） ----------------
+    #      续120 给自己添了 51 条判据，量完发现真正的成本在老表上：一条 900 KB 的响应要把
+    #      182 条规则各扫一遍全文（实测中位 590 ms ≈ 1 ms/KB），而 probe 每个站点都跑一次，
+    #      多线程下等于抢同一把 GIL。思路：给每条正则找一个"必现字面量"—— 正则要命中，
+    #      那段字面量就一定在文本里 ⇒ 字面量不在 ⇒ 这条一定不命中 ⇒ 可以跳过 re.search。
+    #      但这正是最容易造出**静默漏报**的地方（§5.2 那一类），所以本组的主角不是"快"，
+    #      而是"与旧实现逐字符等价"的差分证据，外加每个"宁可不提速"的放弃条件各有正向判据。
+    import random as _rnd122
+    from scanner import fingerprint as _fp122
+    _real_re122 = re
+
+    def _ref_identify(resp):
+        """本轮改动**之前**的实现（逐字照搬），当差分对照组 —— 不是"预期值"，是"另一份代码"。"""
+        if not resp:
+            return []
+        hdrs = resp.get("headers") or {}
+        parts = {"headers": "\n".join(f"{k}: {v}" for k, v in hdrs.items()),
+                 "body": resp.get("text") or "",
+                 "cookies": "\n".join(f"{k}: {v}" for k, v in hdrs.items()
+                                      if k.lower() in ("set-cookie", "cookie"))}
+        status = resp.get("status")
+        tags = []
+        for source in (_fp122.SIGNATURES, _fp122.load_extra()[0]):
+            for tag, rules in source.items():
+                for rule in rules:
+                    codes = rule[2] if len(rule) > 2 else None
+                    if codes is not None and status not in codes:
+                        continue
+                    if re.search(rule[1], parts.get(rule[0], "")):
+                        tags.append(tag)
+                        break
+        return sorted(set(tags))
+
+    # ① 差分：同一批文本上新旧实现的**标签集合必须完全相同**。语料刻意包含：空文本、
+    #    三个大小写折叠例外码点（U+0130/U+0131/U+017F —— 实测枚举 BMP 得到的全部不一致点）、
+    #    非 ASCII 正文、135 KB 大页面、以及 2200 条固定种子的随机串（含这些字符）。
+    _corpus122 = [
+        "", "x", "<html></html>",
+        "<html><head><title>管理中心 - Powered By chaosZ</title></head><body>ok</body></html>",
+        "Server: nginx/1.18.0\r\nSet-Cookie: PHPSESSID=abc\r\n",
+        "whitelabel error page " + "org.springframework.beans " * 3,
+        "ſerver: apACHE-coyote/1.1 ſet-cookie: jſessionid=1",
+        "İ server: nginx ı K",
+        "中远麒麟堡垒机登录页面 <title>若依系统登录</title> jquery.min.js",
+        "<script src=/_next/static/chunks/a.js></script>react.production.min.js",
+        ("Lorem ipsum dolor sit amet consectetur " * 3000),
+    ]
+    _alpha122 = "abcdexyz<>/. \r\n:;-_0189fnmgitlspwarjcuſıİK若依"
+    _seed122 = _rnd122.Random(20261007)
+    for _ in range(2200):
+        _corpus122.append("".join(_seed122.choice(_alpha122) for _ in range(_seed122.randint(0, 70))))
+    _diff_bad = []
+    for _txt in _corpus122:
+        for _st in (200, 404, 500):
+            _r = {"status": _st, "text": _txt, "headers": {"Server": _txt[:60], "Set-Cookie": _txt[:40]}}
+            _a, _b = _ref_identify(_r), _fp122.identify(_r)
+            if _a != _b:
+                _diff_bad.append((_st, _txt[:40], _a, _b))
+    assert not _diff_bad, f"前置过滤造成了漏报/多报（{len(_diff_bad)} 处）：{_diff_bad[:3]}"
+
+    # ② 覆盖率：机制不许是装饰。没覆盖到的规则必须**说得出为什么放弃**（全是"公共前缀被提出到
+    #    BRANCH 外面"这一类：`(?i)eoffice|e-mobile` 解析成 LITERAL('e') + BRANCH(...)，
+    #    必填位置只剩一个 1 字符的 "e"，短到没有过滤价值 ⇒ 宁可不提速）
+    _all_rules122 = [r[1] for src in (_fp122.SIGNATURES, _fp122.load_extra()[0])
+                     for rs in src.values() for r in rs]
+    _src122 = [p.pattern if hasattr(p, "pattern") else p for p in _all_rules122]
+    _cov122 = sum(1 for p in _src122 if _fp122._lit_filter(p))
+    assert _cov122 * 100 >= len(_src122) * 90, f"只有 {_cov122}/{len(_src122)} 条能过滤 ⇒ 机制是装饰"
+    _skip122 = sorted({p for p in _src122 if not _fp122._lit_filter(p)})
+    for _p122 in _skip122:
+        assert "|" in _p122 and len(_p122) > _fp122._MIN_LIT, \
+            f"这条本该能过滤却没过滤，提取器漏了形态：{_p122}"
+
+    # ③ 计数判据（不吃机器快慢）：同一份大文本上，过滤版真正调用 re.search 的次数必须显著更少
+    class _CountRe:
+        def __init__(self):
+            self.n = 0
+
+        def search(self, pat, txt):
+            self.n += 1
+            return _real_re122.search(pat, txt)
+
+        def __getattr__(self, name):
+            return getattr(_real_re122, name)
+
+    _big122 = {"status": 200, "text": "<html><body>" + ("nothing to see here " * 20000)
+               + "</body></html>", "headers": {"Server": "Tomcat"}}
+    _real_flit = _fp122._lit_filter
+    _shim122 = _CountRe()
+    _fp122.re = _shim122
+    try:
+        _tags_new = _fp122.identify(_big122)
+        _n_filtered = _shim122.n
+        _fp122._lit_filter = lambda p: None          # 变异：把过滤整个拆掉
+        _shim122.n = 0
+        _tags_mut = _fp122.identify(_big122)
+        _n_unfiltered = _shim122.n
+        assert _tags_new == _tags_mut, f"拆掉过滤标签就变了？说明过滤不只做减法：{_tags_mut} vs {_tags_new}"
+        assert _n_unfiltered > 120, f"对照不成立：不过滤时应当几乎每条规则都跑一次正则（{_n_unfiltered}）"
+        assert _n_filtered * 3 <= _n_unfiltered, \
+            f"只省了 {_n_filtered}/{_n_unfiltered}，收益不到 3 倍 ⇒ 机制没起到该有的作用"
+    finally:
+        _fp122._lit_filter = _real_flit
+        _fp122.re = _real_re122
+
+    # ④ 每个"宁可不提速"的放弃条件都要有正向证据
+    # (a) 可选重复里的内容**不是**必现的：`(?:grafana)?panel` 只认 "panel"
+    assert _fp122.required_literals("(?:grafana)?panel") == ["panel"], \
+        _fp122.required_literals("(?:grafana)?panel")
+    # (b) 只要有一条分支挑不出够长的必现字面量，整条规则就不过滤（命中可能正好走那条分支）
+    assert _fp122.required_literals("nginx|\\bw\\w") is None
+    assert _fp122.required_literals("(?i)<title>a</title>|x") is None
+    # (c) 组内局部 `(?i:…)`：编译期 flags 看不出、匹配期却不分大小写 ⇒ 必须放弃过滤
+    assert _fp122._lit_filter("(?P<x>gr)(?i:afana)") is None, "局部 (?i:) 还在过滤 ⇒ 会漏报"
+    assert _fp122._lit_filter("(?i)nginx") is not None, "正常写法（i 标志写在串首）应当能过滤，别把守卫写反"
+    # (d) 折叠例外码点：文本里有 U+0130/U+0131/U+017F 时**不许**拿 lower() 的比较当"必不命中"
+    assert _fp122._FOLD_EXOTIC == ("\u0130", "\u0131", "\u017f")
+    _dx122 = _TMPDIR / "fold122.tsv"
+    _dx122.write_text("folds\tbody\t" + "(?i)srv-apache" + "\t*\n", encoding="utf-8")
+    _real_ep122 = _fp122._extra_path
+    _real_fold122 = _fp122._FOLD_EXOTIC
+    try:
+        _fp122._extra_path = lambda: _dx122
+        _fp122._extra_cache.update(key=None)
+        _fx = {"status": 200, "text": "\u017frv-apache", "headers": {}}   # ſ 在 re.I 下等于 s
+        assert "folds" in _fp122.identify(_fx), "折叠例外没挡住 ⇒ 前置过滤把这条漏掉了"
+        assert _fp122.identify(_fx) == _ref_identify(_fx)
+        # 变异：把折叠守卫拆掉（当成永远可折叠）⇒ 同一输入立刻漏报（证明 (d) 那条判据有区分度）
+        _fp122._FOLD_EXOTIC = ()
+        _fp122._extra_cache.update(key=None)
+        assert "folds" not in _fp122.identify(_fx), \
+            "变异没生效：拆掉折叠守卫后仍然命中 ⇒ ④(d) 抓不住这种改法，判据是假的"
+    finally:
+        _fp122._FOLD_EXOTIC = _real_fold122
+        _fp122._extra_path = _real_ep122
+        _fp122._extra_cache.update(key=None)
+
+    # ⑤ 续120 的状态码门控与本轮的缓存都没被改坏
+    _gt122 = "<title>Grafana</title>"
+    # （续120 把 grafana-detect 这条判据**并进了内置标签 grafana**，所以这里查的是 grafana）
+    assert "grafana" in _fp122.identify({"status": 200, "text": _gt122, "headers": {}}), \
+        "外置判据（并进内置标签的那条）在 200 上应当命中"
+    assert "grafana" not in _fp122.identify({"status": 404, "text": _gt122, "headers": {}}), \
+        "状态码门控被本轮改坏了：404 上也打上了标签"
+    _f1 = _fp122._lit_filter("(?i)nginx")
+    assert _f1 is _fp122._lit_filter("(?i)nginx"), "过滤条件没按正则原文缓存（每条响应重算正则结构）"
+    assert _f1[0] is True and "nginx" in _f1[1], _f1
+    assert _fp122.identify(None) == [] and _ref_identify(None) == []
+
+    print(f"[8aa] 续122 指纹前置过滤 ok: 与旧实现**逐字符差分**（{len(_corpus122)} 段文本 × 3 个状态码，"
+          f"含折叠例外码点/非 ASCII/空文本/135KB 大页面/固定种子随机串）零不一致｜覆盖率 "
+          f"{_cov122}/{len(_src122)}（没覆盖的 6 条全是『公共前缀被提到 BRANCH 外』这一类，逐条验过）｜"
+          f"同一大页面上 re.search 调用 {_n_filtered} 次 vs 拆掉过滤 {_n_unfiltered} 次（同一把尺子，"
+          f"不吃机器快慢），且拆掉过滤标签集合不变 ⇒ 过滤只做减法｜四个放弃条件各有正向证据："
+          f"可选重复只认必填段、分支里有短字面量整条不过滤、组内局部 (?i:) 不过滤、文本含 "
+          f"U+0130/U+0131/U+017F 时不做 lower() 折叠（拆掉该守卫的变异立刻漏报）｜状态码门控与缓存都还在。"
+          f"实测（同机）：1KB 1.13→0.27ms、40KB 37.4→3.09ms、900KB ASCII 590→44.5ms（13.3x）、"
+          f"500KB 中文 281→20.6ms（13.6x）")
+
     print("SMOKE PASS")
 
 
