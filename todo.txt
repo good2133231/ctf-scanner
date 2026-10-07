@@ -2364,3 +2364,28 @@ ReadTimeout 而不是 FIN）；**查询计划缓存是按连接**的，`DROP IND
 **仍然留着的事**：① 那个口令**以前提交并推送过**，GitHub 历史里仍读得到 —— 要不要重写历史/换仓库
 由你决定，本轮只保证当前与往后的文件里没有它；② 真要放开某族导入 POC 仍需在 `tools/poc_review.py`
 的工作表上人工写 `ok`（无变化）。
+
+2026-10-07 续118：建任务表单加「一键批量勾选」（用户提的界面诉求）
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）
+
+用户原话：「这个界面应该有一个一键勾选，让我全部都可以选择来运行」—— 13 阶段 + 3 深度 + 拓展 + 离线，
+手工点十几下确实劝退。 [完成]
+- `tasks.html`：三组勾选打上 `data-ck-group`（stages / deep / expand / mode），阶段框带 `data-ck-default`；
+  加三颗按钮 ——「全部勾上（最重档位）」scope=stages,deep,expand（17 项）、「全部清掉」「恢复默认」含 mode（18 项）。
+- `app.js::initTaskCheckAll()`：分组与默认值**全读模板的 data 属性**，JS 里一个阶段名都没有
+  （阶段清单只有一份 = `runner.STAGE_ORDER`，抄第二份迟早漂移 —— CDN / C 段判据都修过同形状的错）。
+  按钮只改勾选：不提交、不清目标、不碰登录态。
+- 「全部勾上」**刻意不含离线模式**：勾它=禁用外部工具，与"把东西跑全"相反，两者是不同的轴，合并只会给出自相矛盾的档位。
+- 测试：smoke `[8w]`（结构判据 + 两条变异：改错分组名 / 翻掉 cert 的默认值）；browser_e2e `[10]`
+  真点击（18 项里勾上 17、离线未带动、清掉=0、恢复默认=11）。
+- 门禁：SMOKE PASS / RC=0、check_contrast 149/0、browser_e2e **57 条断言全绿**（改前 52）。
+
+顺带答的问题：afrog（zan8in/afrog）对我们有帮助吗 [已给结论，未动手]
+- 引擎不接：自家 PoC 方言（不是 nuclei 兼容子集）、与现有 POC 引擎/资产库/复核流程重叠。
+- `afrog-pocs`（MIT，公开树实测 1698 条：vulnerability 888 / CVE 448 / fingerprinting 130 /
+  default-pwd 109 / CNVD 51 / unauthorized 37 / disclosure 35）：只值得**按需搬**，不批量导 ——
+  本仓 305 条导入 POC 已经证明"批量导=噪声+按族复核成本"（续114）。
+- **`default-pwd` 那 109 条建议明确不做**：默认口令检测本质是拿已知凭据去登录，跨过本项目
+  "只探测、无爆破、无写操作"的法律边界；它文档还拿 RCE 当示例 → 搬任何漏洞类 PoC 前必须逐条读请求语义。
+- 唯一零风险、有增量的一步（等你点头）：把 130 条 `fingerprinting` 与 `scanner/fingerprint.py` 比对，
+  列出我们缺的中文产品标签供人工挑 —— 不发任何新请求、不改检测语义。

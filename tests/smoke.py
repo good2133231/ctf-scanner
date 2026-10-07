@@ -14158,6 +14158,81 @@ http:
     print("[8u] 续116 资产表 task_id 索引 ok: 八张资产表全部有索引｜COUNT 与分页两种形状的计划都不再"
           "SCAN｜把索引打掉的变异让判据变红｜老库跑一次 init_db 原地补齐（不要求删库重建）")
 
+    # ---------------- [8w] 续118：建任务表单的「一键批量勾选」 ----------------
+    #      用户提的："这个界面应该有一个一键勾选，让我全部都可以选择来运行"。13 个阶段 + 三项深度
+    #      + 拓展 + 离线，手工点十几下确实劝退。本组盯四件事：按钮指向的分组**真的都存在**、
+    #      「全部勾上」**不含**离线模式（勾了它反而禁用外部工具，与"跑全"相反）、默认勾选口径
+    #      没漂（策略级默认关的阶段仍不勾）、以及 JS **不许再抄一份阶段清单**（抄第二份迟早与
+    #      `runner.STAGE_ORDER` 漂移 —— 本仓在 CDN / C 段判据上修过同形状的错）。
+    from scanner.runner import STAGE_ORDER as _SO118
+    _app118 = _app_with7i()
+    _c118 = _app118.test_client()
+    _f118 = _admin_form117()
+    assert _c118.post("/login", data=_f118,
+                      environ_base={"REMOTE_ADDR": "203.0.113.241"}).status_code == 302
+    _th118 = _c118.get("/tasks").get_data(as_text=True)
+
+    # ① 每个按钮 scope 里点名的分组，页面上必须真有对应的 [data-ck-group]
+    import re as _re118
+    _btns118 = _re118.findall(r'data-ck-mode="(\w+)" data-ck-scope="([\w,]+)"', _th118)
+    assert [b[0] for b in _btns118] == ["all", "none", "default"], _btns118
+    _groups118 = set(_re118.findall(r'data-ck-group="(\w+)"', _th118))
+    for _m118, _sc118 in _btns118:
+        for _g118 in _sc118.split(","):
+            assert _g118 in _groups118, f"{_m118} 按钮指向分组 {_g118}，但页面上没有它"
+
+    # ② 「全部勾上」的 scope 里**不许**有 mode（离线模式），而「全部清掉 / 恢复默认」要有
+    _scope_all118 = dict(_btns118)["all"]
+    assert "mode" not in _scope_all118.split(","), \
+        "「全部勾上」把离线模式也带上了 —— 勾离线等于禁用外部工具，与「把东西跑全」正好相反"
+    for _m118 in ("none", "default"):
+        assert "mode" in dict(_btns118)[_m118].split(","), f"{_m118} 按钮该管离线模式那一组"
+
+    # ③ 阶段分组：数量与默认口径都按后端渲染出的 HTML 判（不许 JS 兜底）
+    _st118 = _re118.findall(r'name="stages" value="(\w+)"\s+data-ck-default="(\d)"', _th118)
+    assert [s for s, _d in _st118] == list(_SO118), \
+        f"页面上的阶段清单与 STAGE_ORDER 不一致：{[s for s, _ in _st118]} vs {list(_SO118)}"
+    assert all(_d in ("0", "1") for _s, _d in _st118), "每个阶段都要带 data-ck-default"
+    _off118 = sorted(s for s, d in _st118 if d == "0")
+    assert _off118 == sorted(["cert", "screenshot"]), f"默认不勾的应当只有策略级默认关那两个：{_off118}"
+    assert sum(1 for s, d in _st118 if d == "1") == len(_SO118) - 2
+    for _g118, _n118 in (("deep", 3), ("expand", 1), ("mode", 1)):
+        _seg = _th118.split(f'data-ck-group="{_g118}"', 1)[1]
+        _seg = _seg.split("</div>", 1)[0] if _g118 != "mode" else _seg.split("</span>", 1)[0]
+        assert _seg.count('type="checkbox"') == _n118, \
+            f"分组 {_g118} 里 checkbox 数是 {_seg.count(chr(34) + 'type' + chr(34))}，应为 {_n118}"
+
+    # ④ JS 侧：函数存在、被 DOMContentLoaded 调用、认 data-ck-default、**不写阶段名**
+    _js118 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    _fn118 = _js118.split("function initTaskCheckAll()", 1)
+    assert len(_fn118) == 2, "app.js 里没有 initTaskCheckAll"
+    _body118 = _fn118[1].split("\nfunction ", 1)[0]
+    assert "ckDefault" in _body118 and "data-ck-group" in _body118, \
+        "按钮逻辑没读模板给的分组/默认值（那就是自己另写了一套判据）"
+    _stolen = [s for s in _SO118 if s in _body118]
+    assert not _stolen, f"JS 里抄了阶段名 {_stolen} —— 第二份清单迟早与 STAGE_ORDER 漂移"
+    assert "initTaskCheckAll();" in _js118.split('DOMContentLoaded', 1)[1], \
+        "函数没挂进 DOMContentLoaded（写了等于没接）"
+
+    # ⑤ §6.1 变异：把 deep 分组的钩子抹掉（＝按钮指向一个不存在的分组），① 必须变红
+    _mut118 = _th118.replace('data-ck-group="deep"', 'data-ck-group="dXep"', 1)
+    _g_mut = set(_re118.findall(r'data-ck-group="(\w+)"', _mut118))
+    _caught = [(_m, _g) for _m, _sc in _btns118 for _g in _sc.split(",")
+               if _g not in _g_mut]
+    assert ("all", "deep") in _caught, "变异没生效：改错分组名后判据抓不到（① 没有区分度）"
+    # 变异二：把 cert 的默认值翻成"默认勾上"，③ 那条默认口径判据必须立刻跟着变红
+    _mut2 = _re118.sub(r'(name="stages" value="cert"\s+data-ck-default=")0(")',
+                                          r"\g<1>1\g<2>", _th118)
+    assert _mut2 != _th118, "变异没生效：改不动 cert 的默认值（说明页面形态和预想不同）"
+    _st_mut = _re118.findall(r'name="stages" value="(\w+)"\s+data-ck-default="(\d)"', _mut2)
+    assert sorted(s for s, d in _st_mut if d == "0") == ["screenshot"], \
+        "默认口径断言对『cert 变成默认勾上』不敏感 = ③ 是假绿"
+
+    print("[8w] 续118 建任务一键勾选 ok: 三个按钮 scope 点名的分组页面上都真实存在｜「全部勾上」不含"
+          "离线模式（勾它=禁用外部工具，与跑全相反），「全部清掉/恢复默认」含｜阶段清单与 STAGE_ORDER "
+          "逐一对齐且默认不勾的恰是 cert/screenshot｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
+          "读 data-ck-default、挂在 DOMContentLoaded｜变异：抹掉 deep 钩子 / 把 cert 翻成默认勾 都变红")
+
     print("SMOKE PASS")
 
 

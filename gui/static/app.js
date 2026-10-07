@@ -258,6 +258,37 @@ function initCollapsiblePanels() {
 
 /* ---------- 资产页：表头复选框全选本页行 ---------- */
 
+/* 新建任务表单的"一键批量勾选"（续118）。
+
+   判据只有一份，来自模板：`[data-ck-group]` 划定分组，`data-ck-default` 说明"页面刚打开时
+   该不该勾"。JS **不认识任何阶段名** —— 阶段清单是 `runner.STAGE_ORDER` 在后端渲染出来的，
+   在这里再抄一份就迟早和它漂移（本仓在 C 段判据、CDN 判据上都修过"同一规则写两处"的错）。
+   按钮只做"改勾选状态"这一件事：不提交、不清目标、不碰登录态。 */
+function initTaskCheckAll() {
+  const tf = document.getElementById("task-form");
+  if (!tf) return;
+  tf.querySelectorAll("button[data-ck-mode]").forEach(btn => {
+    if (btn.dataset.bound) return;      // 与 initFilters 同款防重复绑定
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.ckMode;
+      const scope = (btn.dataset.ckScope || "").split(",").filter(Boolean);
+      let n = 0;
+      scope.forEach(g => {
+        tf.querySelectorAll(`[data-ck-group="${g}"] input[type=checkbox]`).forEach(c => {
+          c.checked = mode === "all" ? true
+            : mode === "none" ? false : c.dataset.ckDefault === "1";
+          n++;
+        });
+      });
+      const msg = document.getElementById("task-msg");
+      const label = mode === "all" ? "全部勾上" : mode === "none" ? "全部清掉" : "恢复默认";
+      if (msg) msg.textContent = n ? `已${label}（${n} 个选项）` : "没有找到可勾选的选项";
+    });
+  });
+}
+
+
 function initPickAll() {
   document.querySelectorAll("input[data-pick-all]").forEach(master => {
     if (master.dataset.bound) return;
@@ -444,6 +475,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initFilters();
   initCollapsiblePanels();
   initPickAll();
+  initTaskCheckAll();
   initOpenSites();
   initVulnReview();
   initLightbox();

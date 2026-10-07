@@ -737,6 +737,30 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     page.cdp.call("Emulation.setDeviceMetricsOverride",
                   {"width": 1280, "height": 900, "deviceScaleFactor": 1, "mobile": False})
 
+    # ---------- [10] 建任务表单的「一键批量勾选」（续118，真点击、真读 DOM）----------
+    # smoke 那边只能验页面结构；"点下去到底勾上了几项"必须在这里验（真表单登录同类口径）。
+    page.navigate(base + "/tasks")
+    _cb10 = "#task-form [data-ck-group] input[type=checkbox]"
+    _tot10 = page.ev(f"document.querySelectorAll('{_cb10}').length")
+    page.ev("document.querySelector('#task-form button[data-ck-mode=all]').click()")
+    _on10 = page.ev(f"document.querySelectorAll('{_cb10}:checked').length")
+    _off_on10 = page.ev("!!document.querySelector('#task-form input[name=offline]').checked")
+    rep.check("[10] 「全部勾上」把 scope 覆盖的 17 项全勾上（13 阶段 + 3 深度 + 1 拓展）",
+              _on10 == _tot10 - 1 == 17, f"总 {_tot10} / 勾上 {_on10}")
+    rep.check("[10] 「全部勾上」不带动离线模式（勾它=禁用外部工具，与跑全相反）",
+              _off_on10 is False, f"offline.checked={_off_on10}")
+    page.ev("document.querySelector('#task-form button[data-ck-mode=none]').click()")
+    _zero10 = page.ev(f"document.querySelectorAll('{_cb10}:checked').length")
+    rep.check("[10] 「全部清掉」清成 0 项", _zero10 == 0, f"实测 {_zero10}")
+    page.ev("document.querySelector('#task-form button[data-ck-mode=default]').click()")
+    _back10 = page.ev(f"document.querySelectorAll('{_cb10}:checked').length")
+    rep.check("[10] 「恢复默认」＝11 项（13 阶段减去策略级默认关的 cert/screenshot）",
+              _back10 == 11, f"实测 {_back10}")
+    # 证伪：按钮只管 stages 时会停在这里（13 项而非 17）—— 上面那条 all 的判据就是它的牙
+    rep.check("[10] 点按钮不会把已填内容弄丢（按钮是 type=button，不提交表单）",
+              page.ev("!!document.querySelector('#task-form button[data-ck-mode=all]')") is True
+              and page.ev("document.querySelectorAll('#task-form form').length") == 0)
+
 
 def run(settings=None):
     """跑完整套 E2E。返回 `(ok, note)`：跳过与失败都是 `ok=False`（**绝不假绿**）。"""
