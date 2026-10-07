@@ -149,7 +149,8 @@ def resolve_extended(task_id, settings=None, logger=None, only_missing=True,
             (chain[-1] if chain else "")
 
     net, cnames = {}, {}
-    for host, ips, cdn_label, reason, last in pool_run(_one, todo, workers=workers):
+    for host, ips, cdn_label, reason, last in pool_run(_one, todo, workers=workers,
+                                                     logger=logger, label="拓展域名解析"):
         net[host] = (ips, cdn_label, reason)
         if last:
             cnames[host] = last

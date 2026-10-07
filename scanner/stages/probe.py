@@ -50,7 +50,8 @@ def attach_redirect_info(sites, fetch, workers=8, logger=None):
                 "redirect_status": int(r.get("status") or 0),
                 "redirect_title": (t.group(1).strip()[:200] if t else "")}
 
-    got = {x["url"]: x for x in pool_run(_one, red, workers=workers) if x}
+    got = {x["url"]: x for x in pool_run(_one, red, workers=workers, logger=logger,
+                                       label="跳转后取证") if x}
     n = 0
     for s in sites:
         k = got.get(s.get("url"))
@@ -189,7 +190,8 @@ class ProbeStage(Stage):
                         break
                 return None
 
-            sites = pool_run(_probe, candidates, workers=workers)
+            sites = pool_run(_probe, candidates, workers=workers, logger=ctx.logger,
+                             label="存活探测")
 
         # 去重入库
         uniq, seen = [], set()
@@ -204,7 +206,8 @@ class ProbeStage(Stage):
             def _fav(s):
                 return {"url": s["url"],
                         "md5": favicon_md5(s["url"], ctx.settings, timeout=timeout)}
-            favs = {r["url"]: r["md5"] for r in pool_run(_fav, uniq, workers=workers)}
+            favs = {r["url"]: r["md5"] for r in pool_run(_fav, uniq, workers=workers,
+                                          logger=ctx.logger, label="favicon 指纹")}
             for s in uniq:
                 s["favicon"] = favs.get(s["url"], "")
             hits = sum(1 for s in uniq if s["favicon"])

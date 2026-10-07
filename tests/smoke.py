@@ -13552,6 +13552,128 @@ http:
           "七个段都在、HTML 里搜不到那五个哨兵值（路由漏传 esp 会 500，状态码本身就是接线判据）｜"
           "模板红线：面板段内不许出现取凭据值的写法")
 
+    # ---------------- [8q] 续115：pool_run 不再把子任务异常吞成静默 ----------------
+    #      登记了很久的一条"未改"：单个任务异常不影响整体是对的，但**一句日志都不留**就不对了 ——
+    #      实测过 `fingerprint.identify()` 在 Python 3.14 抛 PatternError，整条 probe 只表现成
+    #      「存活站点 0 个」，排查方向被整个带偏。这轮补的就是"说出来"，返回值契约一个字节没变。
+    from scanner.throttle import StopRequested as _SR115
+    import ast as _ast115
+    import io as _io115
+    import logging as _lg115
+
+    class _PL115:
+        def __init__(self):
+            self.w, self.i = [], []
+
+        def warning(self, m, *a):
+            self.w.append(str(m))
+
+        def info(self, m, *a):
+            self.i.append(str(m))
+
+        def error(self, m, *a):
+            self.w.append(str(m))
+
+        def exception(self, m, *a):
+            self.w.append(str(m))
+
+        def debug(self, m, *a):
+            pass
+
+    def _f115(x):
+        if x == "boom":
+            raise ValueError("当场坏了")
+        if x == "stop":
+            raise _SR115("用户点了停止")
+        return x
+
+    # ① **返回值契约不变**（各阶段的"0 条按降级处理"判定逻辑一处都不该被这次改动影响）
+    _r115 = _utils.pool_run(_f115, ["a", "b", "boom", 0, "", [], None], workers=6, logger=_PL115())
+    assert sorted(str(x) for x in _r115) == sorted(str(x) for x in ["a", "b", 0, "", []]), _r115
+    assert None not in _r115, "None 不该混进结果"
+
+    # ② 有异常被吞 ⇒ 必须有一行 WARNING，且带齐"几个/总共、首个类型与消息、这是哪一批"
+    _lp115 = _PL115()
+    assert len(_utils.pool_run(_f115, ["a", "boom", "boom"], workers=3, logger=_lp115,
+                               label="存活探测")) == 1
+    assert len(_lp115.w) == 1, _lp115.w
+    assert "2/3" in _lp115.w[0] and "ValueError" in _lp115.w[0] and "存活探测" in _lp115.w[0], _lp115.w
+    assert "别把「0 条」当成「确实没有」" in _lp115.w[0], "没把该说的下一步说出来"
+
+    # ③ 取消是**设计内**的：只有取消时不许报故障（否则每次点停止都刷一片 warning）
+    _lc115 = _PL115()
+    _utils.pool_run(_f115, ["stop", "stop", "a"], workers=3, logger=_lc115, label="目录探测")
+    assert _lc115.w == [], f"取消被报成了故障：{_lc115.w}"
+    assert len(_lc115.i) == 1 and "2/3" in _lc115.i[0], _lc115.i
+    # 两种同时发生 ⇒ warning 里要把取消数也带上（漏掉就等于"少了一半结果"没人知道原因）
+    _lm115 = _PL115()
+    _utils.pool_run(_f115, ["boom", "stop", "a"], workers=3, logger=_lm115, label="端口扫描主机")
+    assert len(_lm115.w) == 1 and "1/3" in _lm115.w[0] and "另有 1/3" in _lm115.w[0], _lm115.w
+
+    # ④ 没给 logger 也**绝不静默**：走进程级兜底 logger（本仓的规矩是"压住了必须看得见"）
+    _buf115 = _io115.StringIO()
+    _h115 = _lg115.StreamHandler(_buf115)
+    _plg115 = _utils._pool_logger(None)
+    _plg115.addHandler(_h115)
+    try:
+        _utils.pool_run(_f115, ["a", "boom"], workers=2)
+        assert "1/2" in _buf115.getvalue() and "ValueError" in _buf115.getvalue(), _buf115.getvalue()
+    finally:
+        _plg115.removeHandler(_h115)
+
+    # ⑤ 接线红线（这条才是本组真正的价值）：**新增调用点忘了传 logger/label 就判红**。
+    #    "判据写在函数里、调用点没接"是本仓反复出事的地方（续110 的 portscan、续113 的解析路由都是），
+    #    所以这里用 AST 把 scanner/ 与 gui/ 里每一个 pool_run(...) 调用点都数一遍。
+    _n115 = _miss115 = 0
+    for _d115 in ("scanner", "gui"):
+        for _p115 in sorted((ROOT / _d115).rglob("*.py")):
+            if any(str(_p115).startswith(str(s)) for s in _SKIP_DIRS):
+                continue
+            _tree115 = _ast115.parse(_p115.read_text(encoding="utf-8"), filename=str(_p115))
+            for _node115 in _ast115.walk(_tree115):
+                if not (isinstance(_node115, _ast115.Call)
+                        and getattr(_node115.func, "id", "") == "pool_run"):
+                    continue
+                _n115 += 1
+                _kw115 = {k.arg for k in _node115.keywords}
+                if not ({"logger", "label"} & _kw115):
+                    _miss115 += 1
+                    print(f"    [!!] {_p115.name}:{_node115.lineno} 的 pool_run 没传 logger/label")
+    assert _n115 >= 15, f"调用点数对不上（数到 {_n115}），扫描逻辑本身可能坏了"
+    assert _miss115 == 0, f"{_miss115} 个调用点没接上"
+
+    # ⑥ §6.1 变异：把"说出来"打回静默（旧行为），② 的断言必须立刻变红
+    _orig115 = _utils.pool_run
+    try:
+        def _silent115(fn, items, workers=10, logger=None, label=""):
+            return [r for r in (_safe_call115(fn, it) for it in list(items)) if r is not None]
+
+        def _safe_call115(fn, it):
+            try:
+                return fn(it)
+            except Exception:
+                return None
+
+        _utils.pool_run = _silent115
+        _lv115 = _PL115()
+        assert len(_utils.pool_run(_f115, ["a", "boom"], workers=2, logger=_lv115,
+                                   label="存活探测")) == 1
+        assert _lv115.w == [], "变异没生效（旧实现本该静默）"
+        raised115 = False
+        try:
+            assert len(_lv115.w) == 1 and "1/2" in _lv115.w[0] and "存活探测" in _lv115.w[0]
+        except AssertionError:
+            raised115 = True
+        assert raised115, "退回静默时断言不报错 = ② 什么都没测到"
+    finally:
+        _utils.pool_run = _orig115
+
+    print("[8q] 续115 pool_run 不再静默 ok: 返回值契约一字未改（None 丢、0/空串/空表这类有效 falsy 仍留）｜"
+          "有异常被吞就一行 WARNING（几个/总共 + 首个类型与消息 + 是哪一批 + 下一步提醒）｜取消单独计数、"
+          "只有取消不报故障，与异常并存时把取消数一起带上｜没给 logger 走进程兜底 logger（绝不静默）｜"
+          "AST 逐个调用点检查必须传 logger/label（新增出口忘了接就判红）｜把改动打回旧「全吞不吭声」的"
+          "变异让断言立刻变红")
+
     print("SMOKE PASS")
 
 

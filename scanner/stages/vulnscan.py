@@ -115,7 +115,8 @@ class VulnscanStage(Stage):
             return found
 
         all_v = []
-        for batch in pool_run(_scan_site, sites, workers=workers):
+        for batch in pool_run(_scan_site, sites, workers=workers,
+                            logger=ctx.logger, label="站点漏洞初筛"):
             all_v.extend(batch)
         if ctx.stopped():
             # 这里是"协作式取消"：已完成批次的结果是有效的，**照常入账**

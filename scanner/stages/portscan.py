@@ -183,7 +183,8 @@ class PortscanStage(Stage):
             return out
 
         results = []
-        for batch in pool_run(_one, hosts, workers=min(8, max(1, len(hosts)))):
+        for batch in pool_run(_one, hosts, workers=min(8, max(1, len(hosts))),
+                            logger=ctx.logger, label="端口扫描主机"):
             results.extend(batch)
         if ctx.stopped():
             ctx.logger.warning("[portscan] 任务已请求停止，结果不再入账")

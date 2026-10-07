@@ -157,7 +157,7 @@ def scan_host(host, ip, ports, timeout=1.0, workers=64, banner=True, stopped=Non
         cap = throttle.effective_cap(workers)
         if cap > 0:
             workers = cap
-    found = pool_run(_probe_port, jobs, workers=min(workers, len(jobs)))
+    found = pool_run(_probe_port, jobs, workers=min(workers, len(jobs)), label="端口探测")
     return sorted(found, key=lambda r: r["port"])
 
 

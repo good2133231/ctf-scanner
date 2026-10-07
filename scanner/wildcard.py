@@ -41,7 +41,8 @@ def resolve_all(names, workers=20, resolve=None):
     """并发解析，返回 {name: [ip, ...]}（只保留解析成功的项）。"""
     resolve = resolve or resolve_host
     out = {}
-    for item in pool_run(lambda n: (n, resolve(n)), names, workers=workers):
+    for item in pool_run(lambda n: (n, resolve(n)), names, workers=workers,
+                       label="泛解析探测"):
         name, ips = item
         if ips:
             out[name] = ips

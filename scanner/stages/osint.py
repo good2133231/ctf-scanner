@@ -143,7 +143,8 @@ class OsintStage(Stage):
                 return None
             return resolve_host(host, timeout=3)
 
-        for got in pool_run(_resolve, hosts, workers=max(1, int(cfg.get("workers", 5)) * 2)):
+        for got in pool_run(_resolve, hosts, workers=max(1, int(cfg.get("workers", 5)) * 2),
+                          logger=ctx.logger, label="osint IP 反查"):
             for ip in got or []:
                 ips.add(ip)
         return sorted(ips)
@@ -228,7 +229,8 @@ class OsintStage(Stage):
             return {"url": s["url"], "hash": favicon_hash(s["url"], ctx.settings)}
 
         hashes = {}
-        for r in pool_run(_fav, sites, workers=max(1, int(cfg.get("workers", 5)))):
+        for r in pool_run(_fav, sites, workers=max(1, int(cfg.get("workers", 5))),
+                        logger=ctx.logger, label="osint favicon 采集"):
             if r and r["hash"]:
                 hashes.setdefault(r["hash"], r["url"])
         ctx.logger.info(f"[osint] favicon 指纹 {len(hashes)}/{len(sites)} 个站点可算（mmh3）")
@@ -438,7 +440,8 @@ class OsintStage(Stage):
             return {"url": s["url"], "hash": favicon_hash(s["url"], ctx.settings)}
 
         hashes = {}
-        for r in pool_run(_fav, sites, workers=max(1, workers)):
+        for r in pool_run(_fav, sites, workers=max(1, workers),
+                        logger=ctx.logger, label="osint 三方 favicon 采集"):
             if r and r["hash"]:
                 hashes.setdefault(r["hash"], r["url"])
         ctx.logger.info(f"[osint] favicon 指纹 {len(hashes)}/{len(sites)} 个站点可算（mmh3）")

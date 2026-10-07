@@ -2773,7 +2773,8 @@ def create_app():
                 (chain[-1] if chain else "")
 
         net, cnames = {}, {}
-        for host, ips, cdn_label, reason, last_cname in pool_run(_one, domains, workers=workers):
+        for host, ips, cdn_label, reason, last_cname in pool_run(
+                _one, domains, workers=workers, logger=logger, label="手动解析域名"):
             net[host] = (ips, cdn_label, reason)
             if last_cname:
                 cnames[host] = last_cname

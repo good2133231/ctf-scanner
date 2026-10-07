@@ -60,7 +60,8 @@ class TakeoverStage(Stage):
                                            settings=ctx.settings)
             return (host, chain) if chain else None
 
-        pairs = pool_run(_chain, hosts, workers=workers)
+        pairs = pool_run(_chain, hosts, workers=workers, logger=ctx.logger,
+                        label="接管 CNAME 链解析")
         mapping = {h: " -> ".join(c) for h, c in pairs}
         write_lines(ctx.workdir / "cnames.txt",
                     [f"{h}\t{c}" for h, c in sorted(mapping.items())])
@@ -87,7 +88,8 @@ class TakeoverStage(Stage):
                 ctx.logger.warning(f"[takeover] {host} 判定失败：{e}")
                 return None
 
-        found = pool_run(_detect, candidates, workers=workers)
+        found = pool_run(_detect, candidates, workers=workers, logger=ctx.logger,
+                        label="子域接管检测")
         if ctx.stopped():
             ctx.logger.warning("[takeover] 任务已请求停止，结果不再入账")
             return

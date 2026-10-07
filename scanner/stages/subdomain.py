@@ -256,7 +256,8 @@ class SubdomainStage(Stage):
             return host, ",".join(ips), cdn.match(chain, ctx.settings, ips), reason
 
         mapping = {}
-        for item in pool_run(_one, subs, workers=workers):
+        for item in pool_run(_one, subs, workers=workers,
+                           logger=ctx.logger, label="子域名解析"):
             host, ips, cdn_label, reason = item
             mapping[host] = (ips, cdn_label, reason)
         for host in cap_skipped:

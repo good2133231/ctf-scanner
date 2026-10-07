@@ -469,7 +469,7 @@ def mine(url, settings, logger=None):
                 return None
             return {"url": r.get("url") or u, "text": r.get("text") or ""}
 
-        bodies = pool_run(_get, scripts, workers=workers)
+        bodies = pool_run(_get, scripts, workers=workers, logger=logger, label="JS 脚本抓取")
         js_count = len(bodies)
         for b in bodies:
             h2, u2 = _extract(b["text"], scheme, protect, blacklist)

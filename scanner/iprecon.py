@@ -273,7 +273,7 @@ def lookup_many(ips, settings, logger=None, stop=None):
             return None
         return (ip, reverse_lookup(ip, settings, logger=logger, timeout=timeout))
 
-    results = pool_run(_one, candidates, workers=workers)
+    results = pool_run(_one, candidates, workers=workers, logger=logger, label="ip 反查")
     mapping = {ip: doms for ip, doms in results if doms}
     stats["hit_ips"] = len(mapping)
     stats["domains"] = sum(len(v) for v in mapping.values())

@@ -72,7 +72,8 @@ def collect(domain, settings, logger=None, workers=6):
     out, hit_sources = {}, 0
     for source, found in pool_run(
             lambda j: _probe(j[0], j[1], domain, settings, timeout),
-            jobs, workers=min(workers, len(jobs))):
+            jobs, workers=min(workers, len(jobs)),
+            logger=logger, label="被动来源"):
         if not found:
             if logger:
                 logger.info(f"[passive] {source} 无结果或不可达（{domain}）")

@@ -642,22 +642,66 @@ def _urllib_request(url, method, headers, data, timeout, verify, allow_redirects
 
 # ---------- 并发 / DNS ----------
 
-def pool_run(fn, items, workers=10):
-    """线程池执行；单个任务异常不影响整体，结果为 None 的丢弃。"""
+_POOL_LOG = None          # 兜底 logger（只在调用方没传时惰性创建，见 `_pool_logger`）
+
+
+def _pool_logger(logger):
+    """调用方没给 logger 时的兜底：**绝不因为"没人传 logger"就退回静默**（续115）。
+
+    进程级 logger 会写到控制台（GUI 启动时是 `logs/gui.out`），所以最坏情况是"日志不在任务文件里"，
+    而不是"什么都不留"。这一层的存在理由就是本仓反复出事的那个形状：阶段里一个硬故障
+    （实测：`fingerprint.identify()` 在 Python 3.14 抛 `PatternError`）被 `pool_run` 吞成 `None`，
+    表现成「存活站点 0 个」，任务日志一个字都不写 —— 于是排查方向整个跑偏。
+    """
+    if logger is not None:
+        return logger
+    global _POOL_LOG
+    if _POOL_LOG is None:
+        from .log import get_logger
+        _POOL_LOG = get_logger("scanner.pool")
+    return _POOL_LOG
+
+
+def pool_run(fn, items, workers=10, logger=None, label=""):
+    """线程池执行；单个任务异常不影响整体，结果为 None 的丢弃。
+
+    **返回值契约与历史完全一致**（只返回非 `None` 的结果，顺序为完成顺序）—— 各阶段的
+    "0 条就按降级处理"的判定逻辑一处都不该被这次改动影响。新增的只有**说出来**这一件事：
+    有异常被吞掉时写一行 WARNING（`N/M 个子任务异常：首个=<类型> <消息>`），
+    否则"什么都没扫到"与"扫描器当场坏了"在日志里长得一模一样。
+
+    `StopRequested`（用户点停止 / 预算耗尽）单独计数、按 info 说：那是**设计内的取消**，
+    报成错误会把每次正常停止都刷成故障。
+    """
     results = []
     items = list(items)
     if not items:
         return results
     workers = max(1, min(int(workers), len(items)))
+    errs, stops = [], 0
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(fn, it): it for it in items}
         for fut in as_completed(futs):
             try:
                 r = fut.result()
-            except Exception:
+            except BaseException as e:       # noqa: BLE001 —— 旧行为就是"全吞"，这里只加"说出来"
+                if isinstance(e, _throttle_mod.StopRequested):
+                    stops += 1
+                else:
+                    errs.append(e)
                 r = None
             if r is not None:   # 只丢"无结果"（None）；falsy 但有效的结果（0/""/[]）不该被吞
                 results.append(r)
+    _stop_note = (f"；另有 {stops}/{len(items)} 个因停止或预算耗尽未执行（设计内取消，不是故障）"
+                  if stops else "")
+    if errs:
+        first = errs[0]
+        _pool_logger(logger).warning(
+            f"[pool] {label or '子任务'}：{len(errs)}/{len(items)} 个异常被跳过"
+            f"（首个 {type(first).__name__}: {str(first)[:160]}）{_stop_note}"
+            f"—— 结果可能不完整，别把「0 条」当成「确实没有」")
+    elif stops and logger is not None:
+        logger.info(f"[pool] {label or '子任务'}：{stops}/{len(items)} 个因停止或预算耗尽未执行")
     return results
 
 

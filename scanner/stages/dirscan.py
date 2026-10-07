@@ -916,7 +916,8 @@ class DirscanStage(Stage):
                     "length": r.get("length"), "method": "GET", "note": "builtin",
                     "title": title}
 
-        entries = [e for e in pool_run(_hit, jobs, workers=workers) if e]
+        entries = [e for e in pool_run(_hit, jobs, workers=workers,
+                              logger=ctx.logger, label="目录探测") if e]
         # 滤掉了什么必须说：只写"目录发现 0 条"会让人以为这个站点没东西，
         for u in sorted(waf):
             ctx.logger.info(
