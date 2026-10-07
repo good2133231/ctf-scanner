@@ -141,7 +141,10 @@ Flask Web 控制台（仿 ARL）。
 
 ```
 ctf-scanner/
-├── cli/client.py          # CLI 入口：导入目标 → run_task（阻塞）
+├── cli/client.py          # CLI 入口：导入目标 → run_task（阻塞）；`--check` 看外部工具，
+│                          #   `--check-afrog-pocs [目录]`（续123）**只读**自查 afrog PoC 目录：
+│                          #   多少条属于"只读 + info 级"会被喂给外部引擎、每条被拒的原因；
+│                          #   不发请求、不写配置，退出码 0=查到结果（含一个可喂的都没有）/ 1=无从可查
 ├── run_gui.py             # Web 控制台入口（库里 0 个账号时**先跑首启动向导**建第一个管理员，续117）
 ├── run_users.py           # 管理员账号的命令行入口（续117）：--status / --create-admin / --reset-password
 │                          #   / --purge-legacy-token；口令只从 getpass 或 CTFSCANNER_ADMIN_PASSWORD 来，
@@ -718,6 +721,7 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   产物/DB 全 punycode、任务详情页回中文。**每组都做 §6.1 变异证伪。**
 py -3 run_keys.py --status                            # 续98：凭据是明文还是密文、是否已解锁（只打摘要，不打值）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
+py -3 cli/client.py --check-afrog-pocs <目录>   # 只读自查 afrog PoC 目录：能喂几条、为什么拒（续123）
                             #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）
 py -3 cli/client.py --bootstrap                           # 续96：迁移自举——按平台点清缺口（解释器/pip 依赖/外部工具/浏览器），**不联网**
 py -3 run_bootstrap.py --install                            # 续99：等价入口（会先建 .venv 再用它自重跑；--no-venv 可退回当前解释器）

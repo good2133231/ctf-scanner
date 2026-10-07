@@ -151,9 +151,11 @@ def check_tools(settings):
         else:
             rows.append((name, f"找到 {rel_display(bin_path)} 但未通过版本校验（自动使用内置兜底）"))
 
-    # 只列**扫描路径真的会调用**的那些：afrog 虽然在 toolmgr.TOOLS 里（能下载/校验/更新），
-    # 但目前没有任何阶段调用它，把它印成"未找到（自动使用内置兜底）"是假话 —— 它没有兜底这回事。
-    # 它的状态在 GUI「外部工具」页与 `run_bootstrap` 清单里如实展示（带"尚未调用"标注）。
+    # 只列**默认就会用**的那些。afrog 也在 toolmgr.TOOLS 里（能下载/校验/更新），续121 起
+    # vulnscan 也**会**调它 —— 但那是"用户在策略里显式勾了、且备好了 PoC 目录"之后的事，
+    # 而且它没有内置兜底这回事（缺它就是这一轮外部检测不做），所以印成
+    # "未找到（自动使用内置兜底）"仍然是假话。它的状态在 GUI「外部工具」页与 `run_bootstrap`
+    # 清单里如实展示；这一列不给它，改由 `--check-afrog-pocs` 自查（见下面那个函数）。
     for t in ("subfinder", "httpx"):
         p = which(settings.get("tools", {}).get(t, t))
         _row(t, p, verify_tool(p) if p else False)
@@ -355,6 +357,42 @@ def do_nodes(args):
               f"{on}    #{r['current_task'] or 0:<8} {r['last_seen'] or '-'}")
 
 
+def check_afrog_pocs(settings, poc_dir=None):
+    """自查某个 afrog PoC 目录里**有多少条模板真会被喂给外部引擎**，以及每条被拒的原因。
+
+    为什么要这个入口：策略页那个开关背后是"外部引擎 + 只读闸门"，闸门在 `scanner/afrog.py`
+    里逐份 YAML 判请求语义。没有自查入口的话，用户只能看到"命中 0 条"，分不清
+    「我的目录里根本没有只读模板」与「模板都对，但目标确实没这些东西」—— 这两件事差得很远。
+    本函数**只读本地文件**：不发任何请求，也不改任何配置。
+    """
+    import os.path as _ospath
+    from collections import Counter
+    from pathlib import Path as _Path
+    from scanner import afrog as afrog_mod
+    d = (poc_dir or afrog_mod.cfg(settings)["poc_dir"] or "").strip()
+    if not d:
+        print("[!] 没有 PoC 目录：`python cli/client.py --check-afrog-pocs <目录>`，"
+              "或在策略配置里填 afrog.poc_dir")
+        return 1
+    from scanner.config import resolve as _resolve
+    if not _Path(d if _ospath.isabs(d) else str(_resolve(d))).is_dir():
+        # 目录不存在**不能记成"拒收 1 个"** —— 那是"没东西可查"，与"有模板但都不只读"是两回事
+        print(f"[!] 目录不存在或不是目录：{rel_display(d)}")
+        return 1
+    allow, refuse = afrog_mod.plan(d)
+    print(f"afrog PoC 目录自查：{rel_display(d)}")
+    print(f"  可喂给外部引擎 {len(allow)} 个（只读 + info 级）｜拒收 {len(refuse)} 个")
+    if not allow:
+        print("  [!] 可喂的一个都没有 —— 就算把开关打开，vulnscan 这一轮也不会跑 afrog")
+    for why, n in Counter(w for _f, w in refuse).most_common():
+        print(f"    {n:4d} × {why}")
+    print('  注：拒因只回答"这条模板会不会动目标"，不评价判据写得好不好；'
+          "站点数/级别/限速仍由策略里的 afrog 段决定（填再大也有内置封顶）。")
+    if not afrog_mod.cfg(settings)["enabled"]:
+        print("  当前策略里 afrog 是**关闭**的（本命令不改配置，只如实报）。")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="CTFScanner CLI —— 仅用于授权测试与 CTF 场景")
@@ -396,6 +434,9 @@ def main():
     ap.add_argument("--cookie", default="", metavar="COOKIE",
                     help="本次任务的 Cookie（等价 -H \"Cookie: ...\"），用于扫登录后才存在的资产")
     ap.add_argument("--check", action="store_true", help="检查外部工具可用性后退出")
+    ap.add_argument("--check-afrog-pocs", nargs="?", const="", default=None, metavar="DIR",
+                    help='只读自查 afrog 的 PoC 目录：多少条属于"只读 + info 级"会被喂给外部引擎、'
+                         "每条被拒的原因（不发任何请求、不改配置，然后退出；目录省略则用策略里的值）")
     # ---- 外部工具版本管理（roadmap「工具版本管理」；实现见 scanner/toolmgr.py）----
     # **只有敲了 `--update-tools` 才会联网** —— 扫描期任何阶段都不会自动下载（红线见该模块文件头）。
     ap.add_argument("--update-tools", action="store_true",
@@ -468,6 +509,11 @@ def main():
         for _mn, _mwhy in toolmgr.MANUAL.items():
             print(f"    {_mn:<10} {_mwhy}（步骤见 tools/scanner/README.md「手工安装」）")
         return
+
+    if args.check_afrog_pocs is not None:
+        # 只读诊断：不建任务、不发请求、不写配置。退出码要透出去（脚本据此判断"有没有可喂的模板"），
+        # 所以这里用 sys.exit(...) 而不是 return —— return 会把码丢掉
+        sys.exit(check_afrog_pocs(settings, args.check_afrog_pocs))
     if args.update_tools:
         do_update_tools(args)
     if args.bootstrap or args.bootstrap_install:

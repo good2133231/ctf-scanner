@@ -28,6 +28,7 @@ python cli/client.py -t <单目标> [选项]
 | `--report-jsonl PATH` | 结束后生成 **JSONL** 报告（每行一个 JSON 对象、带 `type` 判别字段，**机器可读**；漏洞含全部行与 `review`/`review_note` 复核状态） |
 | `--full-report` | **「完整版」报告**：资产小节**不截断**（默认各节限 100/200 条，被截断时小节标题会写明总数与出口）。只影响 `--report` / `--report-html` / `--report-pdf`；`--report-jsonl` 本来就是全量 |
 | `--check` | 打印外部工具可用性并退出（`subfinder` / `httpx` / `puredns` / `nmap` / `fscan` / `dirmap`）。末尾另列一段**「需手工安装（本框架不自动下载）」**（`nmap` / `fscan` / `dirmap` + 各自原因）：这三个**不在** `--update-tools` 的覆盖范围内，官方没有"可校验的单二进制产物" |
+| `--check-afrog-pocs [目录]` | **只读**自查 afrog 的 PoC 目录：多少条模板属于「只读 + info 级」（才会被喂给外部引擎）、以及每条被拒的原因（按原因分组计数）。不发任何请求、不改配置、然后退出；目录省略时用策略里的 `afrog.poc_dir`。退出码：`0` 查到结果（含"可喂的一个都没有"这一种，仍然算查到了结果），`1` 没给目录也无处可取 |
 
 ### 示例
 

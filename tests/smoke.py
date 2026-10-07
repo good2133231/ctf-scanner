@@ -15394,6 +15394,113 @@ expression: r0()
           f"实测（同机）：1KB 1.13→0.27ms、40KB 37.4→3.09ms、900KB ASCII 590→44.5ms（13.3x）、"
           f"500KB 中文 281→20.6ms（13.6x）")
 
+    # ---------------- [8ab] 续123：afrog 的"能不能跑起来"必须用户自己查得出（CLI + 文档） ----------------
+    #      续121 交付了一个默认关的外部引擎，但它有个 usability 缺口：用户勾了开关、备了目录，
+    #      跑完只看到"命中 0 条"—— 分不清"我的目录里根本没有只读模板"和"模板都对但目标确实没这些东西"。
+    #      这轮补 `cli/client.py --check-afrog-pocs`（只读、不发请求、不改配置）+ 把该说明写进
+    #      用户真会看的那两份文档。顺带钉住"文档说的和代码做的是同一件事"。
+    import contextlib as _ctx123
+    import io as _io123
+    import importlib.util as _ilu123
+    _spec123 = _ilu123.spec_from_file_location("client123", str(ROOT / "cli" / "client.py"))
+    _cl123 = _ilu123.module_from_spec(_spec123)
+    _spec123.loader.exec_module(_cl123)
+    from scanner import afrog as _af123
+
+    # ① 旗标存在、可带值也可不带；这个入口**没有任何出网路径**（只读本地 YAML）
+    _src123 = (ROOT / "cli" / "client.py").read_text(encoding="utf-8")
+    assert 'add_argument("--check-afrog-pocs"' in _src123, "CLI 少了自查入口"
+    assert "nargs=\"?\"" in _src123.split('add_argument("--check-afrog-pocs"', 1)[1][:200], \
+        "该入口必须能省略目录（省略时回落到策略里的 afrog.poc_dir）"
+    _fn123 = _src123.split("def check_afrog_pocs", 1)[1].split("\ndef main", 1)[0]
+    for _ban in ("http_request", "run_cmd", "subprocess", "requests", "socket", "save_settings"):
+        assert _ban not in _fn123, f"自查函数里出现了 {_ban} —— 它承诺只读、不改配置"
+
+    # ② 数字必须与 `scanner.afrog.plan()` 同源（不是另算一份），拒因按原因分组
+    _pd123 = _TMPDIR / "pocs123"
+    _pd123.mkdir(parents=True, exist_ok=True)
+    (_pd123 / "ok.yaml").write_text(
+        "id: ok\ninfo:\n  name: Ok\n  severity: info\nrules:\n  r0:\n"
+        "    request:\n      method: GET\n      path: /\n    expression: |-\n"
+        "      response.body.bcontains(b'AAA')\nexpression: r0()\n", encoding="utf-8")
+    (_pd123 / "post.yaml").write_text(
+        "id: post\ninfo:\n  name: Post\n  severity: info\nrules:\n  r0:\n"
+        "    request:\n      method: POST\n      path: /\n    expression: |-\n"
+        "      response.body.bcontains(b'AAA')\nexpression: r0()\n", encoding="utf-8")
+    (_pd123 / "broken.yaml").write_text("id: broken\nrules: [\n", encoding="utf-8")
+    _out123 = _io123.StringIO()
+    with _ctx123.redirect_stdout(_out123):
+        _rc123 = _cl123.check_afrog_pocs({"afrog": {"enabled": False, "poc_dir": str(_pd123)}})
+    _txt123 = _out123.getvalue()
+    _allow123, _refuse123 = _af123.plan(_pd123)
+    assert len(_allow123) == 1 and len(_refuse123) == 2, (_allow123, _refuse123)
+    assert _rc123 == 0, _rc123
+    assert f"可喂给外部引擎 {len(_allow123)} 个" in _txt123, _txt123
+    assert f"拒收 {len(_refuse123)} 个" in _txt123, _txt123
+    assert "当前策略里 afrog 是**关闭**的" in _txt123, "开着关着都得如实报，这句不能少"
+    for _f, _why in _refuse123:
+        assert _why.split("（")[0] in _txt123 or _why in _txt123, (_f, _why, _txt123)
+
+    # ③ 目录不存在 ⇒ 报"目录不存在"并给非零码，**不许**记成"拒收 1 个"
+    #    （这正是本轮实测里先写错、后改掉的假信号：plan() 把"没这个目录"塞进拒收列表，
+    #     输出看着像"有 1 份模板但被闸门拒了"，而真相是一份都没有）
+    _out123b = _io123.StringIO()
+    with _ctx123.redirect_stdout(_out123b):
+        _rc123b = _cl123.check_afrog_pocs({}, str(_TMPDIR / "no-such-dir-123"))
+    _txt123b = _out123b.getvalue()
+    assert _rc123b == 1 and "目录不存在或不是目录" in _txt123b, (_rc123b, _txt123b)
+    assert "拒收" not in _txt123b, f"缺目录被说成'拒收'了：{_txt123b}"
+    # 这条分支凭什么必须存在：plan() 自己把"没这个目录"记成**1 条拒收**（上面那行断言的就是它），
+    # 少了这层拦截，缺目录就会被印成"有 1 份模板但被闸门拒了"—— 一个会误导人去改 PoC 的假信号
+    _a123, _r123 = _af123.plan(str(_TMPDIR / "no-such-dir-123"))
+    assert _a123 == [] and len(_r123) == 1 and _r123[0][1] == "不是一个目录", (_a123, _r123)
+
+    # ④ 没给目录、策略里也空 ⇒ 非零码 + 两条出路都指出来
+    _out123d = _io123.StringIO()
+    with _ctx123.redirect_stdout(_out123d):
+        _rc123d = _cl123.check_afrog_pocs({"afrog": {"poc_dir": ""}})
+    assert _rc123d == 1 and "--check-afrog-pocs" in _out123d.getvalue() \
+        and "afrog.poc_dir" in _out123d.getvalue(), _out123d.getvalue()
+
+    # ⑤ "查到了结果 = 一个可喂的都没有" ⇒ 退出码仍是 0，但必须明说开了也不会跑
+    _empty123 = _TMPDIR / "empty-pocs123"
+    _empty123.mkdir(parents=True, exist_ok=True)
+    (_empty123 / "rce.yaml").write_text(
+        "id: rce\ninfo:\n  name: RCE\n  severity: critical\nrules:\n  r0:\n"
+        "    request:\n      method: GET\n      path: /\n    expression: |-\n"
+        "      response.body.bcontains(b'AAA')\nexpression: r0()\n", encoding="utf-8")
+    _out123e = _io123.StringIO()
+    with _ctx123.redirect_stdout(_out123e):
+        _rc123e = _cl123.check_afrog_pocs({}, str(_empty123))
+    assert _rc123e == 0, _rc123e
+    assert "可喂的一个都没有" in _out123e.getvalue(), _out123e.getvalue()
+
+    # ⑥ 文档不许漂：README 里那三个条件、"不经预算"、"info 不入报告" 都得在，
+    #    且与代码同源（改封顶值/改放行名单而不改文档 ⇒ 这里变红）
+    _rd123 = (ROOT / "tools" / "scanner" / "README.md").read_text(encoding="utf-8")
+    _pg123 = (ROOT / "docs" / "usage.md").read_text(encoding="utf-8")
+    assert "--check-afrog-pocs" in _pg123, "docs/usage.md 的参数表里没有这个入口"
+    for _need in ("afrog.enabled", "afrog.poc_dir", "只读 + info 级", "不经过本任务的请求预算",
+                  "不会出现在报告里"):
+        assert _need in _rd123, f"README 缺 {_need}"
+    assert "GET/HEAD" in _rd123 and "brute" in _rd123 and "tcp" in _rd123, \
+        "README 写的放行条件要和 classify_poc 一致，不能只写一句『只读』"
+    _methods = sorted(_af123.READ_ONLY_METHODS)
+    _sev = sorted(_af123.OK_SEVERITIES)
+    assert _methods == ["GET", "HEAD"], _methods
+    assert _sev == ["", "info"], _sev
+    assert f"severity ∈ (\"\", info\")" in _rd123, "README 里的放行名单与代码不等价了"
+    # 过期文案：续121 之后 afrog 已有调用点，注释再写"目前没有任何阶段调用它"就是假话
+    assert "目前没有任何阶段调用它" not in _src123, "client.py 里那句过期注释还在"
+
+    print("[8ab] 续123 afrog 自查入口 ok: 数字与 plan() 同源（可喂/拒收/逐条拒因都对得上）｜"
+          "目录不存在报『目录不存在』+ 非零码，**不记成『拒收 1 个』**（本轮实测先写错后改掉的假信号，"
+          "plan() 确实会把缺目录记成 1 条拒收 ⇒ 那条分支必须有）｜没给目录 ⇒ 非零码并指出两条出路｜"
+          "『一个可喂的都没有』退出码仍是 0 且明开着也不跑｜自查函数里没有任何出网/写配置的调用｜"
+          "README 与 usage.md 把三个启用条件、'不经过本任务请求预算'、'info 不入报告'都写全，"
+          "且放行名单（GET/HEAD、severity 空或 info、非 tcp、无 brute）与 classify_poc 逐项等价｜"
+          "client.py 里'目前没有任何阶段调用它'那句过期注释已清")
+
     print("SMOKE PASS")
 
 

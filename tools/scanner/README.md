@@ -38,6 +38,31 @@ tools:
 > 三条路径口径都由 `cli/client.py --check` 与 `--bootstrap` 直接读配置，**不写死**：填错的地方不会
 > 报错，只会一直显示"未找到 / 缺少"并静默回退内置实现。
 
+## afrog（外部引擎，默认关 —— 这一条不是"装上就算数"）
+
+装它只需要一条命令（只有这时才联网，且默认必须过官方 SHA256）：
+
+```bash
+python cli/client.py --update-tools --tool afrog
+```
+
+但它**不会被自动扫描使用**，三个条件都要满足才会跑：① 策略配置里勾上 `afrog.enabled`（默认关）；
+② 你自己准备一个 PoC 目录并填进 `afrog.poc_dir`（框架不代为下载第三方 PoC 树）；
+③ 目录里**真的有只读模板** —— 本框架逐份 YAML 判请求语义，只把
+`GET/HEAD + 无请求体 + 非 tcp + 无 brute 清单 + severity ∈ ("", info")` 的模板复制进任务目录喂给它，
+其余一律拒收（实测官方 `fingerprinting/` 130 个文件里放行 94、拒收 36，其中就有一条会触发目标执行
+命令的 HFS RCE —— 拒掉它的判据是 severity 那一行）。
+
+想知道自己的目录能喂进去多少条、剩下的为什么被拒：
+
+```bash
+python cli/client.py --check-afrog-pocs <你的 PoC 目录>     # 只读，不发请求、不改配置
+```
+
+两条要知道的边界：**它的请求由那个外部进程自己发，不经过本任务的请求预算**（所以站点数、并发、
+全局限速都有内置封顶，填再大也超不过）；它的命中按 info/low 级入账，`min_severity` 是 medium 时
+**不会出现在报告里**，只在任务日志与库里。实现见 `scanner/afrog.py`，回归见 `tests/smoke.py [8z]`。
+
 ## 工具清单与获取
 
 「自动」＝续54 起可由 `--update-tools` / GUI「外部工具」页一键下载（**默认必须过 release 自带的
@@ -52,6 +77,7 @@ SHA256 校验和**才落盘）；「手工」＝官方没有"可下载且带官�
 | nmap | 端口扫描（第二引擎，见下） | **手工** | 官方发布在 nmap.org/dist（**非** GitHub release）：Windows 只有安装器、Linux 只有源码包、macOS 只有 dmg |
 | fscan | 端口扫描（第一引擎，见下） | **手工** | 官方不发二进制，需用 Go 从源码自编译（本仓为避免 Defender 拦截的既定做法） |
 | dirmap | 目录扫描（补充） | **手工** | 纯 Python 项目，release 的 `assets` 为空数组（零二进制、零 checksums） |
+| afrog | 漏洞检测（**外部引擎，默认关**） | 自动（但不进 `--install` 的默认层） | 官方产物七件（linux/macOS/windows × amd64/arm64 + `checksums.txt`），命名与 projectdiscovery 同规律 ⇒ `--update-tools --tool afrog` 装它、装完必须过 SHA256。**装了≠会用**：只有策略配置里勾上 `afrog.enabled` **且**备好 PoC 目录才会被调用，且只喂"只读 + info 级"的模板（详见下） |
 
 > 端口扫描的引擎优先级是 **fscan → nmap → 内置 TCP connect**；两者都没有时会**如实回退**，
 > 不会因为"想用 fscan"就把阶段挂掉。
