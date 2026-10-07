@@ -220,6 +220,11 @@ ctf-scanner/
 ├── tools/import_tlds.py    # 从 tldextract **内置快照**（`suffix_list_urls=()`，离线、绝不联网）导出公共后缀清单
 │                          #   → config/dicts/tlds.txt（含 `co.uk`/`com.cn` 等多段后缀）；用法：py -3 tools/import_tlds.py --force
 │                          #   tldextract 是**生成期可选依赖**，不进 requirements.txt；运行时只读生成好的 tlds.txt
+├── tools/poc_review.py    # 导入 POC 的**按族复核**闭环（续114）：`--families` 看族分布 / `--dupes` 看
+│                          #   「同指纹被抄成多种漏洞」的分组 / `--family wordpress` 出复核工作表（含每条
+│                          #   实际在找什么的匹配器摘要 + 同指纹组大小 + 负样本校准命中）/ `--import <表>`
+│                          #   **只搬人工写了 `ok` 的行**进 config/pocs-user/（文件头追加出处，不改模板内容、
+│                          #   不覆盖同名、路径越界拒绝）。红线：机器不判定、没有"整批放开"旗标
 ├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
 ├── tools/fscan/           # fscan 落点（同上：**目录联接**指向仓库外的自编译二进制；.gitignore 排除）
 ├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/**ssrf/shodan/quake/ctlog**/blacklist/**intel/heuristic/github** 二十三段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
@@ -1529,6 +1534,33 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   回归 `[8m]`（rcode→状态三向映射 + "NS 的 rdata 恒空、不能看记录是否非空" + 按注册域缓存的
   查询次数 + 开关关掉零查询 + jsmine 端到端不入库 + 只清 `js:*`/`promote:js:*` 且只清 `nxdomain` +
   把 `unknown` 也判成不存在的变异必须让断言变红 + **GUI「解析」路由的接线**）。
+
+- **导入 POC 的放开只能走「人工逐行复核」这条道（续114）**：305 条导入项的有效级别被压到 `low`
+  （§7「POC 置信度」那条），要放开某族就得把它们移进 `config/pocs-user/` —— 这句话此前**没有落点**，
+  实际结果只会是"要么一直全关，要么有人手改文件全开"。现在由 `tools/poc_review.py` 承重：
+  `--families` 看族分布 → `--family <关键字>` 出工作表 → 人工在「复核」栏写 `ok` → `--import` 只搬这些行。
+  三条红线（回归 `[8o]` 逐条钉住，含"把只认 ok 放宽成连 no 也认"的变异）：
+  ① **机器不判定**：复核栏空着 / 写 `no` / 写别的 ⇒ 一条都不动，也没有 `--all-ok` 这种旗标；
+  ② **不改原始数据**：`config/pocs-imported/` 里的文件一字不动，搬进去的副本只在**文件头**追加出处
+     （`# 人工复核后启用（…日期）`），且**不覆盖**同名目标（人工改过的不能被重跑盖掉）；
+  ③ **不越界**：工作表的「文件」列被改成导入目录外的路径就拒绝 —— 那等于绕过全部判据往 `pocs-user/` 塞东西。
+  工作表最该先看的是 **「同指纹」** 列：本轮实测 **305 条导入 POC 的匹配器只有 251 种**，
+  **79 条与别人共用一字不差的判据** —— 14 条泛微 e-cology（声明成 deserialize / RCE / SQL 注入 /
+  任意用户登录等**不同类型**）、7 条致远、5 条用友、**4 个 Confluence CVE** 全都只匹配
+  "这是不是这个产品"。这类条目的真实含义是**产品识别**，不是漏洞证明：复核一条=复核整组，
+  放开一条也不会带来额外信号。（`tools/poc_review.py --dupes` 随时可复算这个数。）
+
+- **「外部情报源实际可用性」面板：把"跑不了"从任务日志提到配置页（续114）**：
+  `gui/app.py::external_source_panel(settings)` 逐段给出「策略开关 / 需要凭据 / 凭据已配 / 现在能跑」+
+  `keystore.status()`（密文与否、本进程解没解锁）。起因是本轮**真出过一次误判**：我把
+  「这台 Linux 没有 GitHub 的 key」当事实报过，而 key 一直配在 `keys.enc.yaml` 里，真因是
+  **发起任务那个进程环境里没有口令**（续98 只在启动时解锁一次）—— 「有密文但没解锁」与"没配 key"
+  在日志里长一个样，处置动作却完全不同（补环境变量 vs 补凭据）。三条纪律：
+  ① 只报**有/无**，值一律不出现在返回结构与 HTML 里（回归 `[8p]` 往配置里塞五个哨兵值再搜页面）；
+  ② 取凭据必须走**各家自己的** accessor（`fofa.credentials` / `shodan.credentials` /
+  `quake.credentials` / `github_leak.load_token`），不在面板里重抄一遍 `keys.<段>.字段` 路径
+  （打桩成"恒有值"时断言必须变红，否则面板其实是硬编码）；
+  ③ 免 key 的段（IP 反查 / crt.sh / KEV）照样列出并写明"还要能出网" —— 「有 key」≠「跑得动」。
 
 - **资产页的「按任务筛选」与漏洞页同口径；下拉全集＝「这张表里有行的任务」（续112-E）**：
   六个跨任务资产页（站点/端口/目录/C 段/子域名/拓展域名）共用 `_task_scope()`（`?task=<id>` →

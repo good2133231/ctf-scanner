@@ -8,6 +8,41 @@
   <span class="muted">面板默认折叠（一屏几百个勾选框实在难找），点标题栏即可展开/收起，
     展开状态记在本机浏览器里。</span>
 </div>
+{# 续114-B：外部情报源「现在到底跑不跑得动」= 策略开关 × 凭据是否就位。刻意放在 <form> 之外： #}
+{# 这一栏只读，混进表单里就会被"保存策略配置"一起提交，而它一个字段都不该提交。 #}
+<section class="panel collapsible" data-panel="extsrc">
+  <h2>外部情报源实际可用性</h2>
+  <p class="muted">这一栏回答的是「这一段现在<b>真跑得了吗</b>」= 策略开关 × 凭据是否就位。
+    两者缺一个就是零结果，而日志里那句「未配置」通常要等任务跑完才看得见 —— 把结论前置到这里，
+    免得"查了个空"被当成"目标没有东西"。</p>
+  <table>
+    <thead>
+      <tr><th>能力</th><th>策略开关</th><th>需要凭据</th><th>凭据已配</th><th>键写在哪</th><th>现在能跑</th></tr>
+    </thead>
+    <tbody>
+      {% for r in esp.rows %}
+      <tr>
+        <td>{{ r.label }}</td>
+        <td>{{ '已开' if r.enabled else '已关' }}</td>
+        <td>{{ '需要' if r.needs_key else '免' }}</td>
+        <td>{{ ('已配' if r.key_ready else '未配') if r.needs_key else '—' }}</td>
+        <td class="mono small">{{ r.how }}</td>
+        <td><span class="badge {{ 'st-done' if r.runnable else 'st-failed' }}">
+          {{ '能跑' if r.runnable else '跑不了' }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">凭据文件：
+    {{ '密文 config/keys.enc.yaml' if esp.vault.encrypted else '明文 config/keys.yaml' }}｜
+    本次进程{{ '已解锁' if esp.vault.unlocked else '未解锁' }}。
+    本页<b>只显示有 / 无，从不显示值</b>；未解锁时所有需要凭据的源一律按「无 key」如实降级
+    （<span class="mono">CTFSCANNER_KEYS_PASSPHRASE</span> 只放进程环境，写进任何文件都等于把加密退化成混淆）。</p>
+  {% if esp.vault.encrypted and not esp.vault.unlocked %}
+  <p class="error">凭据当前未解锁：上面所有「需要凭据」的能力都跑不了 —— 这与"有没有配 key"无关，
+    补的是启动控制台时的环境变量，不是再配一遍 key。</p>
+  {% endif %}
+</section>
 <form method="post">
   <section class="panel collapsible" data-panel="detect">
     <h2>检测策略（分级门控 · 决定"哪些洞值得报"）</h2>

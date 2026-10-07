@@ -46,7 +46,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import (audit, auth as taskauth, blacklist, captcha, cdn, certs as certs_mod, db,
                      devfixture, devmode, dnsq,
-                     extdom, login_guard, nodes, queue, screenshot, toolmgr, users)
+                     # 这三家反查与 GitHub 检索的**取键函数**归它们自己所有，面板只调用不复制路径
+                     extdom, fofa, github_leak, login_guard, nodes, queue, quake, screenshot,
+                     shodan, toolmgr, users)
 from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
@@ -161,6 +163,49 @@ def _changed_sections(old, new):
         elif nv != ov:
             out.append(k)
     return sorted(out)
+
+
+def external_source_panel(settings):
+    """「外部情报源**实际**能不能跑」的一览数据（续114-B，只读）。
+
+    为什么要专门列出来：这些能力此前只在"任务跑完去看日志"时才看得见，于是真出过一次误判 ——
+    我把「这台机器没有 GitHub 的 key」当成事实报告过，而 key 其实配在 `config/keys.enc.yaml`
+    里，**真正的原因**是发起任务那个进程的环境里没有口令（续98 的解锁只在启动时做一次，
+    解不开就按"无 key"如实降级）。一句话就能避免的错，值得占一块版面。
+
+    三条纪律：
+    ① **只报有/无，绝不出现值** —— 这一页同会话的人都能看，展示凭据值等于多开一个泄漏口；
+    ② 取凭据一律走**各家自己的** accessor（`fofa.credentials` / `shodan.credentials` /
+       `quake.credentials` / `github_leak.load_token`），不在这里重新拼 `keys.<段>.字段` 路径 ——
+       键名结构变了面板要跟着变，同一判据不许写两遍；
+    ③ 免 key 的段（IP 反查 / CT 日志 / 情报订阅）也照样列出并写明"还要能出网"：
+       "没 key 所以肯定跑不了"和"有 key 所以肯定跑得动"都是错的结论。
+    """
+    def _filled(*vals):
+        return all(str(v or "").strip() for v in vals)
+
+    rows = []
+    for sec, label, ready, needs_key, how in (
+            ("iprecon", "IP 反查 / C 段归纳（api.webscan.cc）", True, False, "免 key，需能出网"),
+            ("fofa", "FOFA 反查（favicon / 证书 / 标题三路）",
+             _filled(*fofa.credentials(settings)), True, "keys: fofa.email + fofa.key"),
+            ("shodan", "Shodan 反查（http.favicon.hash）",
+             _filled(shodan.credentials(settings)), True, "keys: shodan.key"),
+            ("quake", "360 Quake 反查（favicon）",
+             _filled(quake.credentials(settings)), True, "keys: quake.key"),
+            ("ctlog", "证书透明度日志（crt.sh）", True, False, "免 key，需能出网"),
+            ("github", "GitHub 公开代码泄露检索",
+             _filled(github_leak.load_token(settings)), True, "keys: github.token"),
+            ("intel", "漏洞情报订阅（CISA KEV）", True, False, "免 key，需能出网")):
+        cfg = (settings or {}).get(sec) or {}
+        en = cfg.get("enabled") is True
+        rows.append({"section": sec, "label": label, "enabled": en,
+                     "needs_key": needs_key, "key_ready": bool(ready), "how": how,
+                     # 「能不能跑」在这里算完，模板只管显示：判据写进 Jinja 就没法被回归测到了
+                     "runnable": bool(en and (ready or not needs_key))})
+    # 保险箱本身的状态也要说清：`有密文但没解锁` 看起来与`没配 key`一模一样，
+    # 而两者的处置动作完全不同（补环境变量 vs 补凭据）—— 这正是上面那次误判的成因。
+    return {"rows": rows, "vault": keystore.status()}
 
 
 def _gui_token_patch(new_token):
@@ -3077,9 +3122,11 @@ def create_app():
                                "timeout": int(f.get("github_timeout", 20) or 20)},
                 }
             except ValueError:
-                return render_template("settings.html", s=load_settings(), checks=owasp_checks,
+                _s114 = load_settings()
+                return render_template("settings.html", s=_s114, checks=owasp_checks,
                                        bl=blacklist.load(settings, owner_id=_owner_scope()),
                                        bl_path=rel_display(blacklist.path(settings), mask_outside=True),
+                                       esp=external_source_panel(_s114),
                                        error="参数必须是整数")
             # 续48：审计只记"改了哪几个区块"，**绝不记值**（键名也省掉 —— 见 `_changed_sections`）。
             _changed = _changed_sections(settings, data)
@@ -3089,7 +3136,8 @@ def create_app():
             return redirect(url_for("settings_page"))
         return render_template("settings.html", s=settings, checks=owasp_checks,
                                bl=blacklist.load(settings, owner_id=_owner_scope()),
-                               bl_path=rel_display(blacklist.path(settings), mask_outside=True))
+                               bl_path=rel_display(blacklist.path(settings), mask_outside=True),
+                               esp=external_source_panel(settings))
 
     # ---------- 访问审计（续48） ----------
 

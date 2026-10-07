@@ -13326,6 +13326,232 @@ http:
           "立刻让断言变红｜GUI「解析」路由与流水线共用同一处判据（视图函数源码里必须有它）")
 
 
+    # ---------------- [8o] 续114-A：导入 POC「按族复核」工具（机器不判定，逐行 ok 才搬） ----------------
+    #      已确认的推荐是「不做全量复核、按需族复核」，但那句话此前**没有落点**：没工作表、没搬运入口、
+    #      也没"这条是谁按什么依据放开的"的痕迹 —— 实际结果只会是"要么一直全关，要么有人手改文件全开"。
+    #      本组钉的是三条红线（不判定 / 不覆盖 / 不越界），不是它输出好不好看。
+    import importlib.util as _ilu114
+    _spec114 = _ilu114.spec_from_file_location("poc_review114", str(ROOT / "tools" / "poc_review.py"))
+    _pr114 = _ilu114.module_from_spec(_spec114)
+    _spec114.loader.exec_module(_pr114)
+
+    # ① 「这条到底在找什么」摘要 —— 人工复核吃的就是这一列，四类匹配器都要有别（都长得一样就没法判）
+    _m114 = {"http": [{"method": "GET", "matchers": [
+        {"type": "status", "status": [200]},
+        {"type": "word", "words": ["<title>某 OA</title>", "x" * 60]},
+        {"type": "regex", "regex": ["banner-[0-9]+"]},
+        {"type": "size", "size": [1234]}]}]}
+    _dgt114 = _pr114._matcher_digest(_m114)
+    assert "status:200" in _dgt114 and "<title>某 OA</title>" in _dgt114, _dgt114
+    assert "regex:banner-[0-9]+" in _dgt114 and "size:1234" in _dgt114, _dgt114
+    assert "x" * 41 not in _dgt114, "word 没截断：一条超长串能把整张 Markdown 表撑坏"
+    assert _pr114._matcher_digest({"http": [{"matchers": []}]}) == "（无匹配器 —— 只看请求是否成功）"
+
+    # ② 同指纹统计必须**可复算**；且匹配器解析塌成恒定时要立刻看出来（那是最像"绿"的坏形状）
+    _rows114 = _pr114.candidates()
+    assert len(_rows114) >= 100, f"导入 POC 读少了：{len(_rows114)}"
+    _grp114 = {}
+    for _r in _rows114:
+        _grp114.setdefault(_r["matchers"], []).append(_r["id"])
+    assert sum(len(v) for v in _grp114.values()) == len(_rows114)
+    assert all(_r["dup"] == len(_grp114[_r["matchers"]]) for _r in _rows114), "dup 列与分组不自洽"
+    assert max(len(v) for v in _grp114.values()) < len(_rows114), \
+        "所有条目算成同一份判据 = _matcher_digest 坏了（或匹配器没读出来）"
+    assert len(_grp114) < len(_rows114), \
+        "本轮实测「305 条其实只有 251 份判据」是这条推荐的主要依据；若变成全不重复，说明匹配器读法变了"
+
+    # ③ 三条红线：空表不动 / 逐行 ok 才搬 / 不覆盖 / 不越界；列序被人挪过也要取对列
+    _R114 = Path(_TMPDIR) / "review114"
+    _R114.mkdir(parents=True, exist_ok=True)
+    _src114 = sorted((ROOT / "config" / "pocs-imported").glob("*.y*ml"))[0]
+    _rel114 = "config/pocs-imported/" + _src114.name
+    _body114 = _src114.read_text(encoding="utf-8")
+    _LBL114 = {"rev": "复核", "id": "id", "name": "名称", "declared": "声明", "effective": "有效",
+               "confidence": "置信", "tags": "tags", "matchers": "匹配器", "calib": "负样本校准",
+               "dup": "同指纹", "file": "文件"}
+    _STD114 = ["rev", "id", "name", "declared", "effective", "confidence", "tags",
+               "matchers", "calib", "dup", "file"]
+    _ODD114 = ["file"] + [k for k in _STD114 if k != "file"]     # 人真的会把「文件」挪到第一列
+
+    def _mk114(mark, path_cell=_rel114, order=_STD114):
+        """造一张工作表。**表头与数据行必须按同一个列序生成** —— 上一版只挪表头不挪格子，
+        等于造了一张自相矛盾的表，把"按表头取列"这个正确行为测成了红（假红也是红，§6.2）。"""
+        vals = {"rev": mark, "file": "`" + path_cell + "`", "id": "`x`", "name": "n",
+                "declared": "high", "effective": "low", "confidence": "low", "tags": "a",
+                "matchers": "`m`", "calib": "-", "dup": "1"}
+        txt = ("# t\n\n| " + " | ".join(_LBL114[k] for k in order) + " |\n"
+               + "|" + "---|" * len(order) + "\n"
+               + "| " + " | ".join(str(vals[k]) for k in order) + " |\n")
+        f = _R114 / "s.md"
+        f.write_text(txt, encoding="utf-8")
+        return f
+
+    _orig_dest114, _orig_sync114 = _pr114.DEST_DIR, _pr114.runner.sync_pocs
+    _synced114 = []
+    _pr114.DEST_DIR = _R114 / "pocs-user"
+    _pr114.runner.sync_pocs = lambda settings=None: _synced114.append(1)
+    try:
+        def _moved114():
+            return list(_pr114.DEST_DIR.iterdir()) if _pr114.DEST_DIR.exists() else []
+
+        _pr114.import_ok(str(_mk114("")))
+        assert _moved114() == [] and _synced114 == [], "复核栏空着就搬了 = 机器在替人判定"
+        for _mark in ("no", "?", "TODO", "maybe"):
+            _pr114.import_ok(str(_mk114(_mark)))
+        assert _moved114() == [], f"非 ok 的标记被当成了授权：{_mark}"
+
+        assert _pr114.import_ok(str(_mk114("ok"))) == 0
+        _dst114 = _pr114.DEST_DIR / _src114.name
+        assert _dst114.exists(), "标了 ok 却没搬"
+        _got114 = _dst114.read_text(encoding="utf-8")
+        assert _got114.endswith(_body114), "搬过去时改了模板内容（原始数据不许动）"
+        assert _got114.splitlines()[0].startswith("# 人工复核后启用"), "没写出处：事后查不到谁放的"
+        assert _synced114 == [1], "搬完没同步注册表：页面与扫描还是旧状态"
+
+        _dst114.write_text("# 人工加过的一行\n" + _body114, encoding="utf-8")
+        _pr114.import_ok(str(_mk114("ok")))
+        assert "人工加过的一行" in _dst114.read_text(encoding="utf-8"), "重跑把人工改过的模板盖掉了"
+
+        _pr114.import_ok(str(_mk114("ok", path_cell="scanner/pocs/pocs/exposure-backup-sql.yaml")))
+        assert not (_pr114.DEST_DIR / "exposure-backup-sql.yaml").exists(), \
+            "工作表路径被改到导入目录外也照搬 = 绕过全部判据往 user 目录塞文件"
+
+        assert _pr114._parse_sheet(_mk114("ok", order=_ODD114).read_text(encoding="utf-8")) == [_rel114], \
+            "列被挪动就读错列：按固定下标解析迟早搬错文件"
+        try:
+            _pr114._parse_sheet("| a | b | c | d | e | f | g | h | i | j | k |\n")
+            raise AssertionError("没有表头却在猜列")
+        except SystemExit:
+            pass
+
+        # §6.1 变异：把「只认 ok」放宽成「连 no 也认」—— 上面那条 `no` 不动的断言必须因此变红
+        _keep114 = _pr114.OK_TOKENS
+        try:
+            _pr114.OK_TOKENS = {"ok", "pass", "no"}
+            assert _pr114._parse_sheet(_mk114("no").read_text(encoding="utf-8")) == [_rel114], \
+                "变异没生效（改宽了却没被读到）"
+        finally:
+            _pr114.OK_TOKENS = _keep114
+        assert _pr114._parse_sheet(_mk114("no").read_text(encoding="utf-8")) == []
+
+        # ④ 不给默认全表：305 条一张表没人看得完，看不完的表等于没判据
+        assert _pr114.main([]) == 2, "缺 --family/--all 时应当拒绝出表"
+    finally:
+        _pr114.DEST_DIR, _pr114.runner.sync_pocs = _orig_dest114, _orig_sync114
+
+    print("[8o] 续114 导入 POC 复核工具 ok: 匹配器摘要四类各有形状（status/word/regex/size，"
+          "word 截断防撑坏表）｜同指纹统计可复算（组大小之和=条数、没有全表塌成一组）｜"
+          "复核栏空或非 ok 一律零动作（机器不替人判定）｜写 ok 才搬且模板逐字节不动、只加出处头、"
+          "搬完同步注册表｜重跑不覆盖人工改过的文件｜工作表路径越界拒绝｜列被挪动仍按表头取列、"
+          "没表头就报错不猜｜把「只认 ok」改宽成「连 no 也认」的变异让断言变红｜不给默认全表")
+
+    # ---------------- [8p] 续114-B：外部情报源「实际能不能跑」面板（只报有无，绝不显值） ----------------
+    #      起因是本会话真出过一次错判：我把「这台 Linux 没有 GitHub 的 key」当成事实报告过，
+    #      而 key 一直配在 keys.enc.yaml 里 —— 真因是**发起任务那个进程没解锁凭据**。这类结论
+    #      此前只写在任务日志里，跑完才看得见；面板把它前置到配置页。本组盯三点：判据取自各家自己的
+    #      取键函数（不是抄一份路径）、免 key 的段也照样列、以及**页面上永远不出现凭据值**。
+    _S115 = {"github": "SENTINEL-GH-115", "fofa_email": "sentinel-115@example.test",
+             "fofa_key": "SENTINEL-FOFA-115", "shodan": "SENTINEL-SH-115",
+             "quake": "SENTINEL-QK-115"}
+    _base115 = copy.deepcopy(gui_app.load_settings())
+
+    def _cfg115(with_keys=None, enabled=()):
+        s = copy.deepcopy(_base115)
+        s["keys"] = with_keys or {}
+        for sec in ("iprecon", "fofa", "shodan", "quake", "ctlog", "github", "intel"):
+            s[sec] = dict(s.get(sec) or {}, enabled=sec in enabled)
+        return s
+
+    def _row115(p, sec):
+        return next(r for r in p["rows"] if r["section"] == sec)
+
+    # ① 空 keys ⇒ 需要凭据的段一律「未配」；填上 ⇒ 翻成「已配」，而**值不在返回结构里**
+    _p115 = gui_app.external_source_panel(_cfg115())
+    assert _row115(_p115, "github")["key_ready"] is False
+    assert _row115(_p115, "fofa")["key_ready"] is False and _row115(_p115, "shodan")["key_ready"] is False
+    # 免 key 的段不吃"有没有凭据"这一格（显示成 —），否则用户会以为缺了什么东西
+    assert _row115(_p115, "iprecon")["needs_key"] is False and _row115(_p115, "ctlog")["needs_key"] is False
+    _p2 = gui_app.external_source_panel(_cfg115(with_keys={
+        "github": {"token": _S115["github"]},
+        "fofa": {"email": _S115["fofa_email"], "key": _S115["fofa_key"]},
+        "shodan": {"key": _S115["shodan"]}, "quake": {"key": _S115["quake"]}}))
+    for sec in ("github", "fofa", "shodan", "quake"):
+        assert _row115(_p2, sec)["key_ready"] is True, sec
+    for v in _S115.values():
+        assert v not in str(_p2), "返回结构里带了凭据值"
+        assert v not in str(_p2["vault"]), "keystore.status() 泄漏了值"
+
+    # ② 「能跑」= 开关 × 凭据，两个因子都要单独钉（少一个就是"配了却没开"或"开了但跑不通"）
+    assert _row115(_p2, "github")["runnable"] is False, "策略关着却报能跑"
+    assert _row115(gui_app.external_source_panel(
+        _cfg115(with_keys={"github": {"token": _S115["github"]}}, enabled=("github",))),
+        "github")["runnable"] is True
+    assert _row115(gui_app.external_source_panel(
+        _cfg115(enabled=("iprecon",))), "iprecon")["runnable"] is True, "免 key 段开了开关就该能跑"
+    assert _row115(gui_app.external_source_panel(_cfg115()), "iprecon")["runnable"] is False
+
+    # ③ §6.1 变异：把取键函数打桩成"恒有值" —— ① 里"空 keys ⇒ 未配"那条必须因此变红，
+    #    否则等于面板根本没吃 accessor（抄一份 keys.<段>.字段 路径就是这么坏掉的）
+    _orig_cred115 = gui_app.fofa.credentials
+    gui_app.fofa.credentials = lambda s: ("a", "b")
+    try:
+        assert gui_app.external_source_panel(_cfg115()) and \
+            _row115(gui_app.external_source_panel(_cfg115()), "fofa")["key_ready"] is True, "变异没生效"
+    finally:
+        gui_app.fofa.credentials = _orig_cred115
+    assert _row115(gui_app.external_source_panel(_cfg115()), "fofa")["key_ready"] is False, \
+        "还原后仍报已配 = 桩没退干净或判据是硬编码"
+
+    # ④ 页面级：这一栏真的渲染在 /settings 上，且凭据值**不进 HTML**
+    #    （路由没传 esp → Jinja 迭代 Undefined 直接 500，所以"状态 200"本身就是接线判据）
+    _orig_save115, _orig_load115 = gui_app.save_settings, gui_app.load_settings
+    _cl115 = copy.deepcopy(_base115)
+
+    def _save115(data):
+        merged = copy.deepcopy(_base115)
+        for k, v in (data or {}).items():
+            if isinstance(v, dict) and isinstance(merged.get(k), dict):
+                merged[k].update(v)
+            else:
+                merged[k] = v
+        merged["keys"] = {"github": {"token": _S115["github"]},
+                          "fofa": {"email": _S115["fofa_email"], "key": _S115["fofa_key"]}}
+        merged["github"] = dict(merged.get("github") or {}, enabled=True)
+        return merged
+
+    try:
+        gui_app.save_settings = _save115
+        assert c.post("/settings", data={"host": "127.0.0.1", "port": "5000",
+                                        "token": "", "max_workers": "20"}).status_code == 302
+        _h115 = c.get("/settings")
+        assert _h115.status_code == 200, (_h115.status_code, _h115.get_data(as_text=True)[-400:])
+        _h115 = _h115.get_data(as_text=True)
+        assert "外部情报源实际可用性" in _h115, "面板没渲染到页面上"
+        assert _h115.count("<tr>") >= 8 and "GitHub 公开代码泄露检索" in _h115
+        assert "跑不了" in _h115 and "已配" in _h115, "有没有凭据没写在页面上"
+        for v in _S115.values():
+            assert v not in _h115, f"页面源码里出现凭据值：{v[:8]}…"
+    finally:
+        # 闭包里的 settings 已被 POST 换掉 —— 用一份"干净配置 + 无 keys"再存一次，别把哨兵留给后续组
+        gui_app.save_settings = lambda data: copy.deepcopy(_base115)
+        c.post("/settings", data={"host": "127.0.0.1", "port": "5000", "token": ""})
+        gui_app.save_settings, gui_app.load_settings = _orig_save115, _orig_load115
+
+    # ⑤ 模板红线：面板段子里不许出现"取凭据值"的写法（④ 的哨兵检查已经证明当前不泄漏，
+    #    这条防的是以后有人往这一栏加 `{{ s.keys.github.token }}` 之类 —— 那时 ④ 也未必会红，
+    #    因为他测的是另一段配置）
+    _tpl115 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
+    _seg115 = _tpl115.split("外部情报源实际可用性", 1)[1].split("</section>", 1)[0]
+    assert "esp.rows" in _seg115 and "esp.vault" in _seg115, "面板改成自己算判据了（判据只准在函数里）"
+    for _bad in ("s.keys", "keys.github", "keys.fofa", "r.key_value"):
+        assert _bad not in _seg115, f"模板里又去取凭据值了：{_bad}"
+
+    print("[8p] 续114 外部源可用性面板 ok: 需要凭据的段按各家**自己的** accessor 判有/无（打桩成恒有值时"
+          "「空 keys 也未配」那条立刻变红）｜免 key 的段不吃凭据格、开关一开就算能跑｜「能跑」= 开关 × 凭据"
+          "两个因子各自钉住｜返回结构与 keystore.status() 都不带值｜页面级：面板确实渲染在 /settings、"
+          "七个段都在、HTML 里搜不到那五个哨兵值（路由漏传 esp 会 500，状态码本身就是接线判据）｜"
+          "模板红线：面板段内不许出现取凭据值的写法")
+
     print("SMOKE PASS")
 
 
