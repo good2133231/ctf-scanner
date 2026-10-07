@@ -151,6 +151,9 @@ def check_tools(settings):
         else:
             rows.append((name, f"找到 {rel_display(bin_path)} 但未通过版本校验（自动使用内置兜底）"))
 
+    # 只列**扫描路径真的会调用**的那些：afrog 虽然在 toolmgr.TOOLS 里（能下载/校验/更新），
+    # 但目前没有任何阶段调用它，把它印成"未找到（自动使用内置兜底）"是假话 —— 它没有兜底这回事。
+    # 它的状态在 GUI「外部工具」页与 `run_bootstrap` 清单里如实展示（带"尚未调用"标注）。
     for t in ("subfinder", "httpx"):
         p = which(settings.get("tools", {}).get(t, t))
         _row(t, p, verify_tool(p) if p else False)

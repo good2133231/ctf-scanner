@@ -14233,6 +14233,117 @@ http:
           "逐一对齐且默认不勾的恰是 cert/screenshot｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
           "读 data-ck-default、挂在 DOMContentLoaded｜变异：抹掉 deep 钩子 / 把 cert 翻成默认勾 都变红")
 
+    # ---------------- [8x] 续119：afrog 进 toolmgr，但"能装"与"会被用"分成两档 ----------------
+    #      用户问"afrog 能不能加自动更新"。查官方 latest release（v3.5.7）实测：7 个产物
+    #      = linux / macOS / windows × amd64 / arm64 的 zip + `afrog_3.5.7_checksums.txt`，
+    #      命名与 projectdiscovery 同一规律 ⇒ 复用现成的 "pd" 挑法与 SHA256 校验，不新增 style。
+    #      但它**当前没有任何阶段调用它**（vulnscan 适配器是下一轮），所以 `TOOLS` 里加一档
+    #      `wired`：能下载 ≠ 会被用。混为一谈的代价就是页面写"未找到（自动使用内置兜底）"
+    #      而根本没有任何东西在兜底 —— 那是假话，也是这仓反复出事的地方（静默误导）。
+    from scanner import toolmgr as _tm119
+
+    # ① 成员与分档
+    assert "afrog" in _tm119.TOOLS, sorted(_tm119.TOOLS)
+    _a119 = _tm119.TOOLS["afrog"]
+    assert (_a119["repo"], _a119["style"]) == ("zan8in/afrog", "pd"), _a119
+    # `verify` 必须是 None：实测 `afrog -version` 在**管道**下永不退出（shell 里正常），
+    # 给它配握手 = 每次开页白等一个超时 + 把装好的它报成"未通过校验"（§5.2 那类静默降级）。
+    assert _a119["verify"] is None, _a119
+
+    assert _tm119.wired("afrog") is False, "afrog 现在还没接进扫描路径，标成 wired 就是撒谎"
+    assert all(_tm119.wired(t) for t in ("subfinder", "httpx", "puredns")), \
+        "既有三个是扫描真的在用的，必须仍标 wired"
+    assert _tm119.wired("nmap") is True, "未知名字默认 True（新工具默认按『会被用』处理）"
+    assert sorted(set(_tm119.TOOLS) & set(_tm119.MANUAL)) == [], "TOOLS∩MANUAL 必须仍为空（[7p] ⑨）"
+
+    # ② 产物名必须与官方 release 的**真实命名**一字不差（对不上就是下载不到 / 下错包）
+    _want119 = {("linux", "amd64"): "afrog_3.5.7_linux_amd64.zip",
+                ("macOS", "arm64"): "afrog_3.5.7_macOS_arm64.zip",
+                ("windows", "amd64"): "afrog_3.5.7_windows_amd64.zip"}
+    for (_o119, _r119), _n119 in _want119.items():
+        assert _tm119.asset_name("afrog", "v3.5.7", _o119, _r119) == _n119, (_o119, _r119)
+    assert _tm119.asset_name("afrog", "v3.5.7", "linux", "mips") is None, \
+        "没有这个平台的产物时必须返回 None（宁可报『本平台没有』，也不拿别的平台的包覆盖现有二进制）"
+    # 校验和文件名也认（没有它就不许落盘 —— 那条红线不因新工具而松）
+    assert _tm119.checksum_asset(
+        ["afrog_3.5.7_checksums.txt", "afrog_3.5.7_linux_amd64.zip"], "v3.5.7") \
+        == "afrog_3.5.7_checksums.txt"
+    assert _tm119.checksum_asset(["afrog_3.5.7_linux_amd64.zip"], "v3.5.7") is None, \
+        "只有 zip、没有 checksums ⇒ 必须拿不到校验文件（下游据此拒绝安装）"
+
+    # ③ status 的文案分档（**两个分支都测**，且不吃本机装没装 —— §6.2 的"环境值哨兵"）
+    from scanner import utils as _u119
+    _probe_calls119 = []
+    _real_which119, _real_run119 = _u119.which, _u119.run_cmd
+
+    def _which_none119(name):
+        return "" if "afrog" not in str(name) else ""
+
+    def _which_both119(name):
+        n = str(name)
+        return "" if "puredns" in n else f"/fake/{n.rsplit('/', 1)[-1]}"
+
+    def _run_probe119(argv, cwd=None, timeout=900, throttle=None):
+        _probe_calls119.append((argv[0], timeout))
+        return 0, "banner-line", ""
+
+    _u119.which, _u119.run_cmd = _which_none119, _run_probe119
+    try:
+        _st119 = {r["tool"]: r for r in _tm119.status(load_settings())}
+        assert _st119["afrog"]["wired"] is False and _st119["afrog"]["note"].startswith("未装")
+        assert "尚未调用" in _st119["afrog"]["note"], _st119["afrog"]["note"]
+        assert "内置兜底" not in _st119["afrog"]["note"], \
+            f"afrog 的文案又写上了『自动使用内置兜底』—— 没有任何阶段调用它，那是假话：{_st119['afrog']['note']}"
+        assert "内置兜底" in _st119["puredns"]["note"], \
+            "wired 的工具仍该说兜底（分档不许把老文案一起削掉）"
+        # 都没装 ⇒ 一次探测子进程都不该起
+        assert _probe_calls119 == [], _probe_calls119
+        # 都"装着"：afrog 无 verify ⇒ 仍不起进程；httpx 有 verify ⇒ 起一次，且超时是 8 秒
+        _u119.which = _which_both119
+        _probe_calls119.clear()
+        _st2 = {r["tool"]: r for r in _tm119.status(load_settings())}
+        # 配了 verify 的才起探测；subfinder / httpx 起，afrog（verify=None）与 puredns（未装）不起
+        assert sorted(c[0] for c in _probe_calls119) == ["/fake/httpx", "/fake/subfinder"], _probe_calls119
+        assert not any("afrog" in c[0] for c in _probe_calls119), \
+            "afrog 又被人去摸手了 —— 它在管道下不退出，探一次就是一次超时"
+        assert _probe_calls119[0][1] == 8, \
+            f"握手超时不再是 8 秒（开一页要同步等 {_probe_calls119[0][1]} 秒；实测有工具会挂着不退）"
+        assert _st2["afrog"]["note"].startswith("OK") and "尚未调用" in _st2["afrog"]["note"], \
+            _st2["afrog"]["note"]
+        assert _st2["httpx"]["note"] == "OK（/fake/httpx）" and _st2["httpx"]["version"] == "banner-line"
+    finally:
+        _u119.which, _u119.run_cmd = _real_which119, _real_run119
+
+    # ④ 自动安装层不含它（`--install` 不该顺手拉 25 MB 的无用二进制）
+    import run_bootstrap as _rb119
+    _rows119 = _rb119.probe(load_settings())
+    _af119 = [r for r in _rows119 if r["name"] == "afrog"]
+    assert len(_af119) == 1 and _af119[0]["kind"] == "pending" and _af119[0]["auto"] is False, _af119
+    assert "--tool afrog" in " ".join(_af119[0]["cmds"]), \
+        "pending 行仍要给出一条**显式**命令（看得见、但要用户主动才装）"
+    assert [r["name"] for r in _rows119 if r["kind"] == "auto"] == \
+        [t for t in _tm119.TOOLS if _tm119.wired(t)], "自动层成员必须恰是 wired 的那些"
+    assert not ({r["name"] for r in _rows119 if r["auto"]} & set(_tm119.MANUAL)), \
+        "MANUAL 混进自动层（[8d] ④ 同一不变式）"
+
+    # ⑤ §6.1 变异：把 `wired()` 打回恒真 ⇒ ③ 的"不许说兜底"与 ④ 的"不在自动层"都必须变红
+    _real_w119 = _tm119.wired
+    try:
+        _tm119.wired = lambda name: True
+        _st_mut = {r["tool"]: r for r in _tm119.status(load_settings())}
+        assert "内置兜底" in _st_mut["afrog"]["note"], "变异没生效：afrog 仍被说成有兜底"
+        _rows_mut = _rb119.probe(load_settings())
+        assert all(r["name"] != "afrog" or r["kind"] == "auto" for r in _rows_mut), \
+            "变异没生效：afrog 仍在 pending（说明 ④ 抓不住 wired 被改坏）"
+    finally:
+        _tm119.wired = _real_w119
+
+    print("[8x] 续119 afrog 进 toolmgr ok: 复用现成 pd 命名与 SHA256 校验（官方 v3.5.7 的 7 个产物"
+          "逐一核对）｜没有本平台产物→None（不猜、不拿别的平台覆盖）｜只有 zip 没有 checksums→"
+          "拿不到校验文件（拒绝安装的链路照旧）｜新增 `wired` 一档：文案不再谎报『自动使用内置兜底』、"
+          "自动安装层不含它、但清单与页面看得见并给出一条显式命令｜TOOLS∩MANUAL=∅ 与 [8d]④ 不变式"
+          "都还成立｜变异：wired 恒真 ⇒ 文案与自动层两条判据同时变红")
+
     print("SMOKE PASS")
 
 

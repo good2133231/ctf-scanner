@@ -2389,3 +2389,30 @@ ReadTimeout 而不是 FIN）；**查询计划缓存是按连接**的，`DROP IND
   "只探测、无爆破、无写操作"的法律边界；它文档还拿 RCE 当示例 → 搬任何漏洞类 PoC 前必须逐条读请求语义。
 - 唯一零风险、有增量的一步（等你点头）：把 130 条 `fingerprinting` 与 `scanner/fingerprint.py` 比对，
   列出我们缺的中文产品标签供人工挑 —— 不发任何新请求、不改检测语义。
+
+2026-10-07 续119：afrog 纳入外部工具管理（B 步1），并记下两处被实测推翻的说法
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）
+
+① 事实核对：官方 v3.5.7 有 7 个产物（linux/macOS/windows × amd64/arm64 的 zip）+ checksums.txt，
+  命名与 projectdiscovery 同规律 ⇒ 复用现成 "pd" style，不新增挑法；两仓库都是 MIT。 [完成]
+② 本机真装成功：`--update-tools --tool afrog` → SHA256 已校验 → tools/scanner/afrog（gitignored）。 [完成]
+③ ⚠️ 真装后才发现：`afrog -version` 在 shell 秒回，但 stdout 是**管道**时永不退出、零字节
+  （6s 超时；stdin=/dev/null 也一样）⇒ 配版本握手等于"每次开页白等一个超时 + 把装好的报成未通过
+  校验"（§5.2 的 fscan 那类静默降级）。处理：afrog 的 verify 给 None，`status()` 握手超时 30s→8s。 [完成]
+④ 新增 `wired` 一档（能装 ≠ 会被用）：status 文案分档、bootstrap 记 kind=pending/auto=False
+  （--install 不顺手拉 25 MB，但清单可见并给出显式命令）、cli --check 不列它、页面"三个"改按实际数量。 [完成]
+⑤ 回归 `[8x]`：产物名逐字核对 / 无本平台产物→None / 无 checksums→拿不到校验文件 /
+  status 两个分支都测且**不吃本机装没装**（桩 which+run_cmd：配 verify 的才起进程、afrog 零起、
+  超时恰 8s）/ 自动层成员 == wired 集合 / 变异 wired 恒真 ⇒ 两条判据同时变红。 [完成]
+⑥ 门禁：SMOKE PASS / RC=0、check_contrast 149/0。 [完成]
+
+被实测推翻的两条（我先前说错过的，记下来免得下一轮照错的做）：
+- afrog 的 fingerprinting 目录**没有任何 favicon / mmh3 匹配**（130 文件零命中、无一条请求 /favicon.ico）；
+  icon_hash 只作为文字出现在 3 个文件的 description 里。我之前"它的指纹含 favicon 哈希"是想当然。
+- fingerprinting 目录里**混着一条真 RCE**（hfs-rce-cmd-exec：GET 触发目标执行 ipconfig）⇒
+  "这个目录都是只读识别"这个前提不成立，导入必须逐条读请求语义。另有 21 条 type:tcp（我们引擎
+  只有 http，不可移植）、4 个聚合文件含 108 个命名条目（要拆不是转换）、9 条带 brute 路径清单。
+
+待做（用户已点头，按序自动推进）：A = `tools/import_afrog_fp.py` 候选表 + `fingerprint.py` 补状态码门控；
+B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固定 -P 本地 PoC 目录 + -curated off +
+输出落文件），默认关，握手实验不通过就不接。

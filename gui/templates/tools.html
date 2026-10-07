@@ -7,8 +7,10 @@
 <section class="panel">
   <h2>外部工具（版本管理）</h2>
   <p class="muted">
-    上表这三个工具决定 subdomain / probe / 目录扫描三阶段的"上限"：没装时一律退到内置兜底
-    （<code>cli --check</code> 只会打印"未找到"），覆盖面与速度差一个量级。
+    上表里<b>被扫描路径调用的那些</b>决定 subdomain / probe / 目录扫描三阶段的"上限"：没装时一律
+    退到内置兜底（<code>cli --check</code> 只会打印"未找到"），覆盖面与速度差一个量级。
+    标注「已装，但框架尚未调用它」的那些（如 <code>afrog</code>）只表示"能下载、能校验、能更新"，
+    装上<b>不会</b>改变任何一次扫描的结果 —— 别让"装了"被误读成"用上了"。
     另有 <b>nmap / fscan / dirmap 三个需手工安装</b>（见下方），本页不提供它们的下载入口。
   </p>
   <p class="muted small">
@@ -66,7 +68,8 @@
   <h2>下载 / 更新</h2>
   <form method="post" action="{{ url_for('api_tools_update') }}"
         onsubmit="return confirm('联网下载/更新选中的外部工具？（访问 GitHub 官方 release，默认校验 SHA256；可能耗时较久）')">
-    <p class="muted">要更新的工具（<b>一个都不勾＝三个都更新</b>）：</p>
+    <p class="muted">要更新的工具（<b>一个都不勾＝表里 {{ defaults|length }} 个全部更新</b>；
+      勾了谁就只动谁）：</p>
     <p>
       {% for name in defaults %}
       <label style="margin-right:1rem"><input type="checkbox" name="tool" value="{{ name }}"> {{ name }}</label>

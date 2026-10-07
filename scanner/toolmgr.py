@@ -59,7 +59,33 @@ TOOLS = {
     "subfinder": {"repo": "projectdiscovery/subfinder", "style": "pd", "verify": "-version"},
     "httpx": {"repo": "projectdiscovery/httpx", "style": "pd", "verify": "-version"},
     "puredns": {"repo": "d3mondev/puredns", "style": "puredns", "verify": None},
+    # afrog（续119，用户点单"能不能给它加自动更新"）。2026-10-07 查官方 latest release（v3.5.7）实测：
+    #   7 个产物 = linux / macOS / windows × amd64 / arm64 的 zip，外加 `afrog_3.5.7_checksums.txt`；
+    #   命名与 projectdiscovery 同一规律（`{tool}_{ver}_{os}_{arch}.zip`，连 darwin 的官方标签都同样
+    #   写作 `macOS`）⇒ 直接复用 "pd" 这套挑法与 SHA256 校验，**不需要新增 style**。
+    #   ⚠️ `verify: None` —— **本轮真装真试出来的**：`afrog -version` 在 shell 里瞬间返回
+    #   `Afrog 3.5.7`，但一旦 stdout 是**管道**（我们的 `run_cmd` / `verify_tool` 就是这么调的）
+    #   它就**永不退出**、且不吐一个字节（6 秒超时，加 `stdin=/dev/null` 也一样）。所以它和
+    #   fscan 落进同一档：§5.2 讲的"套默认探针会把**装好的**工具误报成未通过版本校验，
+    #   随即静默降级"—— 这里更糟，是每次探测白等一个超时。做法：不给握手参数，
+    #   并在 `status()` 里跳过探测（下一处改动），页面上只报"已装 / 未装"。
+    # ⚠️ `wired: False` 是本轮特意加的诚实标记：**能装 ≠ 会被用**。vulnscan 的适配器还没写，
+    #   在它接进来之前，扫描路径一次都不会调用这个二进制 —— 所以它也不进 `run_bootstrap --install`
+    #   的自动层（不然每台新机器都白拉 25 MB），只接受显式 `--update-tools --tool afrog`。
+    #   页面与 `status()` 的文案必须把"框架尚未调用它"说出来：旧文案一律写"未找到（自动使用
+    #   内置兜底）"，对 afrog 是**假的**（没有任何东西在兜底），而静默误导正是这仓反复出事的地方。
+    "afrog": {"repo": "zan8in/afrog", "style": "pd", "verify": None, "wired": False},
 }
+
+
+def wired(name):
+    """这个工具**是否真的被扫描路径调用**（没标 = 是）。
+
+    `TOOLS` 的含义一直是"能自动下载、且默认必须过官方 SHA256"，那只回答"能不能装"；
+    "装好之后有没有代码去用它"是第二个问题 —— 混成一个，就会出现"表里列着、页面说会自动
+    兜底、实际谁都不调用"。分档之后：自动安装层与 GUI 文案都按这一档走，`[8x]` 钉住。
+    """
+    return bool(TOOLS.get(name, {}).get("wired", True))
 
 #  「需手工安装」的工具 —— **刻意不进 `TOOLS`**：`TOOLS` 的语义是"能自动下载、且默认必须过
 #  release 自带的 SHA256 校验才落盘"。这三个都不满足（2026-09-27 实测，不是推测）：
@@ -536,7 +562,11 @@ def patch_settings_tool(name, value, path=None):
 # ---------- 状态展示 ----------
 
 def status(settings):
-    """列出三个工具的当前状态（供 GUI/CLI 展示）：配置值 / 解析到的路径 / 版本 / 平台可用性。"""
+    """逐个列出 `TOOLS` 成员的当前状态（供 GUI/CLI 展示）：配置值 / 解析路径 / 版本 / 平台可用性。
+
+    文案按 `wired()` 分档 —— "会用的"才说"未找到（自动使用内置兜底）"，
+    "装上待接入"的必须写明框架尚未调用它（不谎报有兜底）。
+    """
     from .utils import which, run_cmd
     tools_cfg = (settings or {}).get("tools", {}) or {}
     rows = []
@@ -545,15 +575,22 @@ def status(settings):
         path = which(configured)
         version = ""
         if path and cfg.get("verify"):
-            rc, out, err = run_cmd([path, cfg["verify"]], timeout=30)
+            # 8 秒（原先 30）：这是**打开「外部工具」页时同步等的**，一次版本横幅不需要半分钟；
+            # 而"工具存在但一被管道捕获就不退出"这类情况实测有（afrog），30 秒会把整页钉住。
+            rc, out, err = run_cmd([path, cfg["verify"]], timeout=8)
             if rc == 0:
                 first = ((out or "") + (err or "")).strip().splitlines()
                 version = first[0][:80] if first else "OK"
         pre = inspect(name)
+        _wired = wired(name)
+        if path:
+            note = f"OK（{path}）" + ("" if _wired else "｜已装，但框架尚未调用它")
+        else:
+            note = ("未找到（自动使用内置兜底）" if _wired
+                    else "未装（框架尚未调用它，只纳入可下载/可校验管理）")
         rows.append({"tool": name, "configured": configured, "path": path or "",
                      "version": version, "asset": pre["asset"] or "",
-                     "reason": pre["reason"],
-                     "note": f"OK（{path}）" if path else "未找到（自动使用内置兜底）"})
+                     "reason": pre["reason"], "wired": _wired, "note": note})
     return rows
 
 

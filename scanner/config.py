@@ -455,6 +455,10 @@ DEFAULTS = {
         "puredns": "puredns",
         "httpx": "httpx",
         "nmap": "nmap",
+        # afrog（续119）：能被 `--update-tools` 下载/校验/更新，但**当前没有任何阶段调用它**
+        # （vulnscan 的适配器还没写，见外部工具清单 TOOLS 里的 wired 标记）。列在这里是为了让
+        # 「外部工具」页与清单显示的是同一个事实，而不是"没列出来＝框架不管"。
+        "afrog": "afrog",
         # fscan（可选）：填二进制名或路径（Windows 下如 tools/fscan/fscan.exe）。
         # 缺省只会在 PATH 里找；找不到就跳过它。**调用时强制 `-np -nobr -nopoc`**
         # —— 不要给它开暴力破解/POC，我们只用它的端口发现能力（见 scanner/portscan.py）。

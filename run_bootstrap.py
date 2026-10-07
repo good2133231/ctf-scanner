@@ -399,8 +399,9 @@ def _row(name, kind, auto, status, detail, cmds=()):
 def probe(settings=None):
     """本机环境清单（**一条请求都不发**）。
 
-    每行 `{name, kind, auto, status, detail, cmds}`：`kind` ∈ `runtime` / `auto` / `manual` /
-    `browser`；`status` ∈ `ok` / `missing` / `warn`；`auto` ＝ "本脚本 `--install` 会不会动它"。
+    每行 `{name, kind, auto, status, detail, cmds}`：`kind` ∈ `runtime` / `auto` / `pending` /
+    `manual` / `browser`；`status` ∈ `ok` / `missing` / `warn`；`auto` ＝ "本脚本 `--install` 会不会动它"。
+    （`pending` ＝ 在 `toolmgr.TOOLS` 里、能下载能校验，但**扫描路径还没调用它**，见 `toolmgr.wired`。）
     """
     from scanner import screenshot, toolmgr
     from scanner.config import load_settings, resolve
@@ -446,12 +447,19 @@ def probe(settings=None):
                          [] if found else ["python -m pip install -r requirements.txt"]))
 
     for name in toolmgr.TOOLS:
+        # 续119：`TOOLS` 里的成员按 `wired()` 再分一档 —— "能自动下载"与"扫描会用到它"是两件事。
+        # 没接入扫描路径的（目前是 afrog）标 kind="pending" / auto=False：`--install` 因此**不会**
+        # 顺手拉它（那是 25 MB 的无用二进制），但清单里仍然看得见、并给出一条显式命令。
+        _wired = toolmgr.wired(name)
         cur = _rel(which(tools_cfg.get(name, name)))
         insp = toolmgr.inspect(name)
-        rows.append(_row(name, "auto", True,
-                         "ok" if cur else ("missing" if insp["asset"] else "warn"),
-                         f"已装 {cur}" if cur else
-                         (insp["reason"] or f"未装（本平台产物：{insp['binary']}）"),
+        detail = f"已装 {cur}" if cur else \
+            (insp["reason"] or f"未装（本平台产物：{insp['binary']}）")
+        if not cur and not _wired:
+            detail += "；框架尚未调用它"
+        rows.append(_row(name, "auto" if _wired else "pending", _wired,
+                         "ok" if cur else ("missing" if (insp["asset"] and _wired) else "warn"),
+                         detail,
                          [] if cur else [f"python cli/client.py --update-tools --tool {name}"]))
 
     for name in toolmgr.MANUAL:
