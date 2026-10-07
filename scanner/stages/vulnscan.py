@@ -10,6 +10,7 @@
 方便判断"扫不出来"到底是没漏洞还是被拦了。
 """
 from .base import Stage
+from .. import afrog as afrog_mod
 from .. import config, db
 from ..evasion import detect as detect_waf
 from ..owasp import checks as owasp_checks
@@ -118,6 +119,19 @@ class VulnscanStage(Stage):
         for batch in pool_run(_scan_site, sites, workers=workers,
                             logger=ctx.logger, label="站点漏洞初筛"):
             all_v.extend(batch)
+        # afrog（续121）：**默认关**。开着时它是"另起一个自管请求的外部进程"，所以
+        # ① 只喂它逐条判过的只读 + info 级模板（scanner/afrog.py::plan），② 结果按我们的
+        # 级别门槛再筛一遍（它自己那套 -S 口径不作数），③ 日志里说清请求不经本任务预算。
+        if afrog_mod.enabled(ctx.settings):
+            af_v, af_note = afrog_mod.run(sites, ctx.settings, ctx.logger,
+                                         workdir=ctx.workdir, throttle=ctx.throttle)
+            if af_note.startswith("!"):
+                ctx.logger.warning(f"[afrog] {af_note[1:]}（**不是**「没扫出东西」，是没跑成）")
+            else:
+                kept = [v for v in af_v
+                        if owasp_checks.severity_ok(v.get("severity", "medium"), floor)]
+                ctx.logger.info(f"[afrog] {af_note}；过级别门槛 {floor} 的 {len(kept)} 条入账")
+                all_v.extend(kept)
         if ctx.stopped():
             # 这里是"协作式取消"：已完成批次的结果是有效的，**照常入账**
             # （此前文案写"结果不再入账"却仍入库，与行为矛盾，改成如实描述）。

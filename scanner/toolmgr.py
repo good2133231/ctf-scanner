@@ -584,10 +584,10 @@ def status(settings):
         pre = inspect(name)
         _wired = wired(name)
         if path:
-            note = f"OK（{path}）" + ("" if _wired else "｜已装，但框架尚未调用它")
+            note = f"OK（{path}）" + ("" if _wired else "｜已装，但只在显式启用后被调用")
         else:
             note = ("未找到（自动使用内置兜底）" if _wired
-                    else "未装（框架尚未调用它，只纳入可下载/可校验管理）")
+                    else "未装（默认不调用它；需在策略配置里显式启用，只纳入可下载/可校验管理）")
         rows.append({"tool": name, "configured": configured, "path": path or "",
                      "version": version, "asset": pre["asset"] or "",
                      "reason": pre["reason"], "wired": _wired, "note": note})

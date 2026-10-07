@@ -167,6 +167,11 @@ ctf-scanner/
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
 │   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic/**github**（13 个）
+│   ├── afrog.py           # 外部引擎 afrog 的适配器（续121，**默认关**）：只读闸门 classify_poc →
+│                          #   把放行的 YAML 复制进任务目录（-P 指它，不指用户原目录）→ 固定 argv
+│                          #   （-duc 省掉实测每次 30 秒的更新检查 / -doh 不往 CWD 落 108KB 报告 /
+│                          #   -nc 洗 ANSI / -ja 才有证据；禁 -ps -default-pwd -brute*）→ 解析结果
+│                          #   （**缺文件＝零命中**，rc=0 也可能是没干活）→ 级别只降不升
 │   ├── pocs/engine.py     # YAML POC 引擎（nuclei 兼容子集）
 │   ├── pocs/pocs/*.yaml   # 内置 7 个示例 POC
 │   ├── owasp/checks.py    # 14 项启发式检查（装饰器 @check 注册进 CHECKS）+ 分级/分类门控
@@ -449,6 +454,20 @@ ctf-scanner/
     （`docs/afrog-fp-review.tsv` 那种），工具侧不许提供 `--all-ok`；`severity != info` 一律拒
     （实测 afrog 的 fingerprinting/ 目录里混着一条 HFS RCE，它的判据和普通指纹一模一样）。
     回归见 `tests/smoke.py [8y]`（含 severity 白名单与门控两向变异）。
+
+12. **外部引擎适配器不许把"没跑成"报成"没结果"**（续121，afrog）：它的退出码与文件都存在
+    反例 —— `-P` 指错目录 **rc 仍是 0**（只有 `[ERR]` 那行），零命中时**结果文件根本不写**。
+    所以判"跑成功"要同时看：硬错文本（洗过 ANSI 再判）＋结果文件是否存在＋内容能不能解析；
+    任何一条不满足都必须让调用方拿到带 `!` 的说明，并把它打成 warning（"不是没扫出东西，是没跑成"）。
+    另外三条要一起保持：① **默认关**（外部进程自管请求，绕过本任务的请求预算 —— 日志必须说明这一句）；
+    ② 只喂逐条判过的**只读 + info** 模板，且 `-P` 指着**任务目录里那份复制**，不是用户原目录；
+    ③ 结果级别**只降不升**，并再过一遍我们自己的 `min_severity`。回归 `tests/smoke.py [8z]`。
+
+13. **`utils.which()` 对带目录的配置值必须返回绝对路径**（续121 实测的坑）：
+    `shutil.which("tools/scanner/httpx")` 是按**进程 CWD** 解析并**原样返回相对串**的，
+    而外部工具一律要显式换 `cwd` 起子进程（不把 `result.txt` / `reports/` 落在仓库根 —— 续45、续121）。
+    相对串进了新 cwd 就是"起不来 rc=127 → 被判未安装 → 静默降级到内置实现"。
+    裸名（只走 PATH）不受这条约束，别顺手一起改。
 
 ## 6. 如何验证改动
 
@@ -1678,6 +1697,13 @@ py -3 run_users.py --status   # 续117：账号数 + 配置里有无历史残留
   且是纯 Python 项目需 pip 依赖）。这三个由 `MANUAL` 如实展示在 GUI「外部工具」页与 `cli --check`
   末尾（含原因 + 指向 `tools/scanner/README.md`「手工安装」），**本框架不为它们发任何请求**。
   新增"要不要纳入自动安装"时，先问一句"官方有没有带校验和的单二进制产物"，没有就写进 `MANUAL`。
+
+- **afrog 适配器不覆盖请求预算**（续121，客观边界）：`throttle` 管的是"我们起几个子进程 /
+  发几次 HTTP"，**管不到外部进程自己发多少请求**（fscan 同理）。所以 afrog 默认关、站点数与
+  `-rl/-rlt/-c` 全部封顶（策略里填再大也超不过 `scanner/afrog.py::CEIL`），且日志里明写这一句。
+  要真正纳入预算，得让它的流量走我们的出口（如本地转发），目前**没做，也不假装做了**。
+- **afrog 的命中只进 `vulns` 表**（info/low 级），不反查成 `sites.tech` 标签：那需要一张
+  PoC→标签 的映射表，没有表就不猜（组件识别的正路是续120 那份复核过的外置指纹表）。
 
 ## 8. 不要做的事
 

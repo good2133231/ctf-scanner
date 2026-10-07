@@ -64,6 +64,14 @@ def which(tool):
         return None
     found = shutil.which(t)
     if found:
+        if "/" in t or "\\" in t:
+            # 带目录的配置值（`tools/scanner/afrog`）会被 `shutil.which` 按**进程 CWD** 解析，
+            # 并且**原样**返回相对串。而"显式换 cwd 起子进程"是外部工具的必需动作（portscan 续45
+            # 为了不把 fscan 的 `result.txt` 落在仓库根、afrog 续121 为了不把 `reports/*.html`
+            # 落在仓库根，都必须给 cwd）—— 那时这条相对路径指向的是**别处**：
+            # 实测（从仓库根启动、配置 `tools/scanner/afrog`）不折算就是 rc=127，
+            # 表现正是本函数注释里那句话："工具明明在，却被判成未安装"然后静默降级。
+            return str(Path(found).resolve())
         return found
     if t.startswith(("/", "\\")) or (":" in t[:3]):
         for alt in _ext_variants(t):          # 绝对路径：不折算项目根，只补后缀变体

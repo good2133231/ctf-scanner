@@ -14291,7 +14291,7 @@ http:
     try:
         _st119 = {r["tool"]: r for r in _tm119.status(load_settings())}
         assert _st119["afrog"]["wired"] is False and _st119["afrog"]["note"].startswith("未装")
-        assert "尚未调用" in _st119["afrog"]["note"], _st119["afrog"]["note"]
+        assert "默认不调用它" in _st119["afrog"]["note"], _st119["afrog"]["note"]
         assert "内置兜底" not in _st119["afrog"]["note"], \
             f"afrog 的文案又写上了『自动使用内置兜底』—— 没有任何阶段调用它，那是假话：{_st119['afrog']['note']}"
         assert "内置兜底" in _st119["puredns"]["note"], \
@@ -14308,7 +14308,7 @@ http:
             "afrog 又被人去摸手了 —— 它在管道下不退出，探一次就是一次超时"
         assert _probe_calls119[0][1] == 8, \
             f"握手超时不再是 8 秒（开一页要同步等 {_probe_calls119[0][1]} 秒；实测有工具会挂着不退）"
-        assert _st2["afrog"]["note"].startswith("OK") and "尚未调用" in _st2["afrog"]["note"], \
+        assert _st2["afrog"]["note"].startswith("OK") and "只在显式启用后被调用" in _st2["afrog"]["note"], \
             _st2["afrog"]["note"]
         assert _st2["httpx"]["note"] == "OK（/fake/httpx）" and _st2["httpx"]["version"] == "banner-line"
     finally:
@@ -14826,6 +14826,414 @@ expression: r0() || r1()
           "同标签可再加一条判据、CRLF 按字节核过）｜坏行不静默（5 类逐条报）｜缓存按 (路径,mtime,size)"
           "：改字典不用重启｜真实字典 51 条/49 标签全部带门控与出处、7 个标签并入内置同名产品、"
           "RCE 判据与通用标题都不在表里、每条都能在复核表里回溯、NOTICE.md 已登记")
+
+    # ---------------- [8z] 续121：afrog 外部引擎适配（默认关 + 只读闸门 + 四个实测坑） ----------------
+    #      B 步 2。用户说"A 和 B 都做"。A（指纹）在续120；这里的 B 是"把 afrog 当**外部引擎**跑
+    #      一批用户自己准备的只读 PoC"。适配器不是包一层 shell 那么轻 —— 本机 v3.5.7 真跑出来
+    #      四个坑，每一个都能把"没跑成"伪装成"扫过了没结果"（§5.2 那一类静默降级）：
+    #      ① 自动更新检查**每次**固定 +30 秒（同一 PoC 集：不带 `-duc` 30332ms，带上 309ms）；
+    #      ② 默认往**进程 CWD** 的 `reports/*.html` 落一份 108 KB 的报告，`-silent` 挡不住
+    #         （fscan 的 `result.txt` 踩过同一坑，见 portscan 续45 注释）；
+    #      ③ stdout 里**真有 ANSI 转义**（`-silent` 也一样），不加 `-nc` 连 `[ERR]` 都判不干净；
+    #      ④ 最坏的一个：`-P` 指向不存在的目录，**退出码仍是 0**，只在输出里写
+    #         `Unable to locate a valid afrog PoC YAML file.`；而**零命中时它根本不写结果文件**
+    #         （不可达目标 / 0 个 PoC 两种情况实测都没有 JSON）。只看 rc ⇒ "一个 PoC 都没加载"
+    #         会被报成"扫过了，没有漏洞"。
+    from scanner import afrog as _af121
+
+    # ① 默认与封顶：afrog 自己的默认是 `-c 25 / -rl 150 / -timeout 50`（实测 `afrog -h`），
+    #    比本框架的只读+限速红线松得多 ⇒ 策略里的值一律压进 CEIL，乱填落回默认。
+    _d121 = _af121.cfg({})
+    assert _d121["enabled"] is False and _d121["poc_dir"] == "", _d121
+    assert _af121.enabled(load_settings()) is False, "afrog 绝不允许默认开（外部引擎自管请求）"
+    _big = {"rate": 99999, "concurrency": 9999, "timeout": 9999, "per_target_rate": 9999,
+            "max_targets": 99999, "proc_timeout": 999999}
+    _capped = _af121.cfg({"afrog": dict(_big, enabled=True)})
+    for _k121, _v121 in _big.items():
+        assert _capped[_k121] == _af121.CEIL[_k121], (_k121, _capped[_k121], _v121)
+    _junk = _af121.cfg({"afrog": {"rate": 0, "timeout": -5, "concurrency": "abc",
+                                  "max_targets": None, "poc_dir": "  config/x  "}})
+    for _k121 in ("rate", "timeout", "concurrency", "max_targets"):
+        assert _junk[_k121] == _af121.DEFAULTS[_k121], (_k121, _junk[_k121])
+    assert _junk["poc_dir"] == "config/x", _junk["poc_dir"]
+
+    # ② 只读闸门：**只看请求语义**（不看判据），拒掉的一律不进 afrog 的目录
+    _P121 = {
+        "ok-get": """
+id: ok-get
+info:
+  name: OkGet
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'AAA')
+expression: r0()
+""",
+        "ok-head-no-method": """
+id: ok-head
+info:
+  name: OkHead
+rules:
+  r0:
+    request:
+      path: /
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'AAA')
+expression: r0()
+""",
+        "post": """
+id: post-one
+info:
+  name: Post
+  severity: info
+rules:
+  r0:
+    request:
+      method: POST
+      path: /api
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'AAA')
+expression: r0()
+""",
+        "body": """
+id: with-body
+info:
+  name: Body
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+      body: 'a=1'
+    expression: |-
+      response.body.bcontains(b'AAA')
+expression: r0()
+""",
+        "rce": """
+id: writes-file
+info:
+  name: WriteRCE
+  severity: critical
+rules:
+  r0:
+    request:
+      method: PUT
+      path: /put shell.aspx
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'done')
+expression: r0()
+""",
+        "tcp": """
+id: ftp-one
+info:
+  name: Ftp
+  severity: info
+rules:
+  r0:
+    request:
+      type: tcp
+    expression: |-
+      banner.bcontains(b"220")
+expression: r0()
+""",
+        "brute": """
+id: brute-one
+info:
+  name: Brute
+  severity: info
+rules:
+  r0:
+    brute:
+      - /a
+    request:
+      method: GET
+    expression: |-
+      response.body.bcontains(b'AAA')
+expression: r0()
+""",
+        "broken": "id: broken\nrules: [\n",
+    }
+    _pd121 = _TMPDIR / "pocs121"
+    _pd121.mkdir(parents=True, exist_ok=True)
+    for _k121, _y121 in _P121.items():
+        (_pd121 / f"{_k121}.yaml").write_text(_y121.lstrip("\n"), encoding="utf-8")
+    _allow121, _refuse121 = _af121.plan(_pd121)
+    assert sorted(p.name for p in _allow121) == ["ok-get.yaml", "ok-head-no-method.yaml"], _allow121
+    _why121 = dict(_refuse121)
+    assert _why121["post.yaml"].startswith("非只读方法 POST"), _why121
+    assert _why121["body.yaml"].endswith("带请求体"), _why121
+    assert _why121["rce.yaml"].startswith("severity=critical"), _why121
+    assert _why121["tcp.yaml"].startswith("type:tcp"), _why121
+    assert _why121["brute.yaml"].startswith("带 brute"), _why121
+    assert _why121["broken.yaml"].startswith("YAML 解析失败"), _why121
+    # `severity` 没填也算只读（afrog 的指纹模板普遍写 info，少数留空）
+    assert _af121.classify_poc(_yaml120.safe_load(_P121["ok-head-no-method"]))[0] is True
+
+    # ③ argv 的每一条旗标都必须显式存在（去掉任何一条就打开上面某个坑），且**禁止**越界旗标
+    _argv121 = _af121.build_argv("/bin/afrog", "/t/targets.txt", "/t/pocs", "/t/out.json", _d121)
+    _flat121 = " ".join(_argv121)
+    for _need in ("-duc", "-doh", "-nc", "-silent", "-curated off", "-ja /t/out.json",
+                  "-T /t/targets.txt", "-P /t/pocs"):
+        assert _need in _flat121, f"argv 少了 {_need}（见 scanner/afrog.py 顶上那条实测理由）"
+    for _i121, _v121 in (("-timeout", _d121["timeout"]), ("-c", _d121["concurrency"]),
+                         ("-rl", _d121["rate"]), ("-rlt", _d121["per_target_rate"])):
+        assert _argv121[_argv121.index(_i121) + 1] == str(_v121), (_i121, _argv121)
+    for _ban in ("-ps", "-default-pwd", "-brute", "-auto-req-limit", "-cs", "-query", "-o"):
+        assert _ban not in _argv121, f"argv 里出现了越界旗标 {_ban}"
+    # 变异：把 `-doh` 摘掉 ⇒ 上一行那条"禁止报告落 CWD"的判据必须抓不到才叫假绿（这里应立刻发现它没了）
+    _mut_argv = [a for a in _argv121 if a != "-doh"]
+    assert "-doh" not in _mut_argv and "报告" in _af121.__doc__, "③ 的判据本身没区分度"
+
+    # ④ 真样本（本机 v3.5.7 逐字）：`-j` 不含请求响应，`-ja` 含 ⇒ 我们用 `-ja`
+    _J121 = r'''[{"isvul":true,"target":"http://127.0.0.1:8931/","fulltarget":"http://127.0.0.1:8931/login","pocinfo":{"id":"grafana-panel","infoname":"Grafana Panel","infoauthor":"organiccrap","infoseg":"info","infodescription":"Grafana panel was detected.\nfofa: app=\"Grafana\""}},{"isvul":true,"target":"http://127.0.0.1:8931/","fulltarget":"http://127.0.0.1:8931/","pocinfo":{"id":"acemanager-login","infoname":"ACEmanager Detection","infoauthor":"pussycat0x","infoseg":"info","infodescription":"ACEManager was detected."}}]'''
+    _JA121 = r'''[{"isvul":true,"target":"http://127.0.0.1:8931/","fulltarget":"http://127.0.0.1:8931/login","pocinfo":{"id":"grafana-panel","infoname":"Grafana Panel","infoauthor":"organiccrap","infoseg":"info","infodescription":"Grafana panel was detected.\nfofa: app=\"Grafana\""},"pocresult":[{"request":"GET /login HTTP/1.1\nHost: 127.0.0.1:8931\nAccept: */*\n\n","response":"HTTP/1.0 200 OK\nServer: SimpleHTTP/0.6 Python/3.14.4\nContent-Type: application/octet-stream\n\n<html><head><title>Grafana</title></head><body>grafana fake</body></html>"}]}]'''
+    _f121 = _TMPDIR / "res121.json"
+    _f121.write_text(_J121, encoding="utf-8")
+    _rows121 = _af121.parse_result(_f121)
+    assert len(_rows121) == 2, _rows121
+    # 零命中 ⇒ 它不写文件 ⇒ 缺文件是"没有命中"，**不是**失败（实测）
+    assert _af121.parse_result(_TMPDIR / "no-such-121.json") == []
+    _v121 = _af121.to_vulns(_rows121)
+    assert _v121[0]["poc_id"] == "afrog:grafana-panel" and _v121[0]["severity"] == "info"
+    assert _v121[0]["target"] == "http://127.0.0.1:8931/login", "要用真正命中的 fulltarget，不是输入 URL"
+    assert "organiccrap" in _v121[0]["detail"] and "afrog 只读检测命中" in _v121[0]["detail"]
+    assert _v121[1]["poc_id"] == "afrog:acemanager-login"
+    # `-ja` 才有证据；`-j` 那种（无 pocresult）也要能出货，只是证据为空
+    _f121.write_text(_JA121, encoding="utf-8")
+    _vja = _af121.to_vulns(_af121.parse_result(_f121))
+    assert _vja[0]["evidence"].startswith("请求：GET /login HTTP/1.1") and "200 OK" in _vja[0]["evidence"]
+    _f121.write_text(_J121.replace('"isvul":true', '"isvul":false'), encoding="utf-8")
+    assert _af121.parse_result(_f121) == [], "isvul=false 的行不许当命中收进来"
+    # 级别**只降不升**：模板作者把 infoseg 写成 critical 也不许抬高（我们只喂只读 info 模板）
+    _vcap = _af121.to_vulns([{"isvul": True, "target": "http://t/", "fulltarget": "http://t/x",
+                              "pocinfo": {"id": "liar", "infoseg": "critical", "infoname": "Liar"}}])
+    assert _vcap[0]["severity"] == "info", _vcap[0]
+    _vcap2 = _af121.to_vulns([{"isvul": True, "target": "http://t/", "fulltarget": "http://t/x",
+                               "pocinfo": {"id": "low-one", "infoseg": "low", "infoname": "Low"}}])
+    assert _vcap2[0]["severity"] == "low", _vcap2[0]
+
+    # ⑤ `run()` 的四种失败形态（桩 run_cmd，hermetic；**不依赖本机装没装 afrog**）
+    _wd121 = _TMPDIR / "wd121"
+    _st_ok = {"tools": {"afrog": "fake-afrog"},
+              "afrog": {"enabled": True, "poc_dir": str(_pd121), "proc_timeout": 77}}
+    _calls121 = []
+    _real_rc121, _real_which121 = _af121.run_cmd, _af121.which
+
+    def _which_fake(_t):
+        return "/fake/afrog"
+
+    def _rc_harderr(argv, cwd=None, timeout=900, throttle=None):
+        _calls121.append((argv, cwd, timeout, throttle))
+        return 0, "\x1b[31m[ERR]\x1b[0m Unable to locate a valid afrog PoC YAML file.", ""
+
+    def _rc_zero_hits(argv, cwd=None, timeout=900, throttle=None):
+        _calls121.append((argv, cwd, timeout, throttle))
+        return 0, "", ""                            # 实测：零命中时结果文件压根不存在
+
+    def _rc_good(argv, cwd=None, timeout=900, throttle=None):
+        _calls121.append((argv, cwd, timeout, throttle))
+        Path(argv[argv.index("-ja") + 1]).write_text(_JA121, encoding="utf-8")
+        return 0, "[INF] VULN-SCAN | completed | found=1", ""
+
+    def _rc_timeout(argv, cwd=None, timeout=900, throttle=None):
+        _calls121.append((argv, cwd, timeout, throttle))
+        return 124, "", "timeout"
+
+    _af121.which = _which_fake
+    try:
+        _af121.run_cmd = _rc_harderr
+        _o, _n = _af121.run([{"url": "http://127.0.0.1:1/"}], _st_ok, workdir=_wd121)
+        assert _o == [] and _n.startswith("!afrog 没干活"), f"rc=0 的硬错被当成了正常：{_n}"
+        assert "Unable to locate" in _n, _n
+        # 变异：把硬错检测拆掉 ⇒ 同一条输出会被当成"命中 0 条"的正常空结果
+        _real_err_re = _af121._HARD_ERR_RE
+
+        _af121._HARD_ERR_RE = re.compile(r"(?!x)x")   # 永不匹配 = "把硬错检测拆掉"
+        try:
+            _o2, _n2 = _af121.run([{"url": "http://127.0.0.1:1/"}], _st_ok, workdir=_wd121)
+            assert not _n2.startswith("!"), f"变异没生效：拆掉检测后仍被判成失败 ⇒ ⑤ 抓不住这种改法（{_n2}）"
+            assert "命中 0 条" in _n2, _n2
+        finally:
+            _af121._HARD_ERR_RE = _real_err_re
+
+        _af121.run_cmd = _rc_zero_hits
+        _o, _n = _af121.run([{"url": "http://127.0.0.1:1/"}], _st_ok, workdir=_wd121)
+        assert _o == [] and _n.startswith("afrog：") and "命中 0 条" in _n, _n
+        _af121.run_cmd = _rc_timeout
+        _o, _n = _af121.run([{"url": "http://127.0.0.1:1/"}], _st_ok, workdir=_wd121)
+        assert _n.startswith("!afrog 超时"), _n
+        _af121.run_cmd = lambda *a, **k: (127, "", "executable not found")
+        _o, _n = _af121.run([{"url": "http://127.0.0.1:1/"}], _st_ok, workdir=_wd121)
+        assert _n.startswith("!afrog 起不来"), _n
+
+        # 正常路径：结果文件由**适配器指定的路径**写，进程 cwd 必须是任务目录（不继承进程 CWD）
+        _af121.run_cmd = _rc_good
+        _calls121.clear()
+        _o, _n = _af121.run([{"url": "http://127.0.0.1:8931/"}], _st_ok, workdir=_wd121)
+        assert len(_o) == 1 and _o[0]["poc_id"] == "afrog:grafana-panel", _o
+        _argv_run, _cwd_run, _to_run, _th_run = _calls121[-1]
+        assert Path(_cwd_run) == _wd121, f"进程 cwd 不是任务目录（报告/临时文件会落进仓库根）：{_cwd_run}"
+        assert _to_run == 77, _to_run
+        assert "-doh" in _argv_run and "-duc" in _argv_run and "-nc" in _argv_run
+        assert Path(_argv_run[_argv_run.index("-P") + 1]).parent == _wd121, \
+            "-P 必须指着**任务目录里那份只读子集**，不是用户的原目录"
+        _staged121 = sorted(p.name for p in Path(_argv_run[_argv_run.index("-P") + 1]).glob("*.yaml"))
+        assert _staged121 == ["ok-get.yaml", "ok-head-no-method.yaml"], _staged121
+        # 站点数上限：max_targets 起作用（不是"全交出去"）
+        _af121.run_cmd = _rc_zero_hits
+        _o, _n = _af121.run([{"url": f"http://127.0.0.1:1/{i}"} for i in range(50)],
+                            {"afrog": dict(_st_ok["afrog"], max_targets=3), "tools": {"afrog": "x"}},
+                            workdir=_wd121)
+        _tf = Path(_calls121[-1][0][_calls121[-1][0].index("-T") + 1])
+        assert len(_tf.read_text(encoding="utf-8").splitlines()) == 3, _tf.read_text(encoding="utf-8")
+        # 默认关 ⇒ 连 PoC 目录都不碰、不起进程
+        _calls121.clear()
+        _o, _n = _af121.run([{"url": "http://127.0.0.1:1/"}],
+                            {"afrog": {"enabled": False, "poc_dir": str(_pd121)},
+                             "tools": {"afrog": "x"}}, workdir=_wd121)
+        assert _o == [] and _n.startswith("!afrog 未启用") and _calls121 == []
+    finally:
+        _af121.run_cmd, _af121.which = _real_rc121, _real_which121
+
+    # ⑥ 阶段接线：默认关不起进程；开着才起一次；结果**再过一遍我们的级别门槛**
+    import scanner.stages.vulnscan as _vs121
+    # 刻意起别名：`StageContext` 是 smoke.py 的模块级导入，函数内再 import 同名会把它变成
+    # "整个 main() 的局部名"，于是 main() 前半段那些 `StageContext(...)` 全部 UnboundLocalError
+    # （本轮门禁真的这样红过一次 —— 不是断言失败，是作用域把老代码打挂）
+    from scanner.runner import StageContext as _StageCtx121
+
+    class _Rec121:
+        """只收日志行的假 logger（阶段接线要有 logger，断言要看它说了什么）。"""
+
+        def __init__(self):
+            self.lines = []
+
+        def _add(self, lvl, msg, *a, **k):
+            self.lines.append(f"{lvl}:{msg}")
+
+        def info(self, msg, *a, **k):
+            self._add("info", msg, *a, **k)
+
+        def warning(self, msg, *a, **k):
+            self._add("warn", msg, *a, **k)
+
+        def error(self, msg, *a, **k):
+            self._add("err", msg, *a, **k)
+
+        def debug(self, msg, *a, **k):
+            self._add("dbg", msg, *a, **k)
+
+    _tid121 = db.create_task("smoke-afrog121", "http://127.0.0.1:8931/", ["vulnscan"], {})
+
+    def _mk_ctx121(settings, logger):
+        ctx = _StageCtx121(_tid121, "smoke-afrog121", [("url", "http://127.0.0.1:8931/")],
+                           ["vulnscan"], {}, settings, _TMPDIR / "wd121b", logger)
+        ctx.results["sites"] = [{"url": "http://127.0.0.1:8931/", "tech": ""}]
+        return ctx
+
+    _rec = _Rec121()
+    _af_rows = [{"poc_id": "afrog:grafana-panel", "name": "Grafana Panel", "severity": "info",
+                 "owasp": "", "target": "http://127.0.0.1:8931/login", "detail": "d", "evidence": "e"}]
+    _run_calls121 = []
+    _real_af_run = _vs121.afrog_mod.run
+    _real_runall, _real_load = owasp_checks.run_all, engine.load_enabled_pocs
+    _real_waf = _vs121.detect_waf
+    owasp_checks.run_all = lambda *a, **k: []
+    engine.load_enabled_pocs = lambda *a, **k: []
+    _vs121.detect_waf = lambda *a, **k: None
+    _vs121.afrog_mod.run = lambda sites, s, logger=None, **kw: (
+        _run_calls121.append(s.get("afrog", {}).get("enabled")) or (_af_rows, "afrog：命中 1 条"))
+    try:
+        _base121 = copy.deepcopy(load_settings())
+        _base121["afrog"] = dict(_base121.get("afrog") or {}, enabled=False, poc_dir=str(_pd121))
+        _vs121.VulnscanStage(_mk_ctx121(_base121, _rec)).run()
+        assert _run_calls121 == [], f"关着也去调 afrog（默认关这条红线破了）：{_run_calls121}"
+        _base121["afrog"]["enabled"] = True
+        _base121["checks"] = dict(_base121.get("checks") or {}, min_severity="medium")
+        _c2 = _mk_ctx121(_base121, _rec)
+        _vs121.VulnscanStage(_c2).run()
+        assert _run_calls121 == [True], _run_calls121
+        assert not any(str(v.get("poc_id", "")).startswith("afrog:") for v in _c2.results["vulns"]), \
+            "info 级 afrog 结果在 medium 门槛下**不该**入账（默认口径下用户看不到它，日志会说清）"
+        assert any("afrog" in x for x in _rec.lines), _rec.lines[-6:]
+        _base121["checks"]["min_severity"] = "info"
+        _c3 = _mk_ctx121(_base121, _rec)
+        _vs121.VulnscanStage(_c3).run()
+        assert any(v.get("poc_id") == "afrog:grafana-panel" for v in _c3.results["vulns"]), \
+            "门槛降到 info 后 afrog 结果必须入账（否则那条日志在骗人）"
+    finally:
+        _vs121.afrog_mod.run = _real_af_run
+        owasp_checks.run_all, engine.load_enabled_pocs = _real_runall, _real_load
+        _vs121.detect_waf = _real_waf
+
+    # ⑦ 顺带修掉的一个真缺陷：`which()` 对带目录的配置值会**按进程 CWD 原样返回相对路径**，
+    #    而外部工具一律要显式换 cwd 起进程（portscan 续45 / afrog 续121）⇒ 相对路径指向别处，
+    #    表现正是那句"工具明明在，却被判成未安装"的静默降级。同一把尺子量两端：
+    from scanner.utils import which as _which121, run_cmd as _runcmd121
+    _fake_bin = _TMPDIR / "fakebin121"
+    _fake_bin.mkdir(parents=True, exist_ok=True)
+    _script = _fake_bin / ("fake121.exe" if os.name == "nt" else "fake121")
+    _script.write_text("#!/bin/sh\necho ok\n" if os.name != "nt" else "@echo off\r\necho ok\r\n",
+                       encoding="utf-8")
+    _script.chmod(0o755)
+    _rel121 = _script.relative_to(ROOT).as_posix()
+    _got121 = _which121(_rel121)
+    assert _got121 is None or os.path.isabs(str(_got121)), \
+        f"which() 又返回了相对路径（换 cwd 起进程就必然 127）：{_got121}"
+    _other = _TMPDIR / "other-cwd121"
+    _other.mkdir(parents=True, exist_ok=True)
+    assert _runcmd121([str(_script)], cwd=str(_other))[0] == 0, "绝对路径应当起得来"
+    assert _runcmd121([_rel121], cwd=str(_other))[0] == 127, \
+        "同一把尺子：相对路径 + 换 cwd 应当起不来（⑦ 的存在理由）"
+
+    # ⑧ 页面：策略配置里必须有 afrog 的字段，且**表单名与 app.py 读的键一一对上**
+    #    （名字对不上最隐蔽：页面照样 200，开关永远不生效）
+    _login7(c, _admin_form117())        # 补一次登录（前面的组清过账号/会话，共享 client 会没 session）
+    _sh121 = c.get("/settings").get_data(as_text=True)
+    for _name in ("afrog_enabled", "afrog_poc_dir", "afrog_max_targets", "afrog_rate",
+                  "afrog_per_target_rate", "afrog_concurrency", "afrog_proc_timeout",
+                  "afrog_timeout"):
+        assert f'name="{_name}"' in _sh121, f"策略配置缺字段 {_name}"
+    _captured121 = {}
+    _real_save121 = gui_app.save_settings
+
+    def _fake_save121(d):
+        _captured121.clear()
+        _captured121.update(d)
+        return load_settings()
+
+    gui_app.save_settings = _fake_save121
+    try:
+        c.post("/settings", data={"afrog_enabled": "1", "afrog_poc_dir": " config/afrog-pocs ",
+                                  "afrog_rate": "9", "afrog_max_targets": "5"})
+        _a121 = _captured121["afrog"]
+        assert _a121 == {"enabled": True, "poc_dir": "config/afrog-pocs", "max_targets": 5,
+                         "timeout": 8, "concurrency": 4, "rate": 9, "per_target_rate": 5,
+                         "proc_timeout": 600}, _a121
+        c.post("/settings", data={})
+        assert _captured121["afrog"]["enabled"] is False, "不勾选必须落回关闭，不能保持旧值"
+    finally:
+        gui_app.save_settings = _real_save121
+    # 「外部工具」页的文案：afrog 不再是"永远没人调用"，但也不许被读成"装上就用上了"
+    _th121 = c.get("/tools").get_data(as_text=True)
+    assert "只在显式启用后被调用" in _th121 and "默认也不会" in _th121, "外部工具页文案没跟着改口径"
+    assert "尚未调用" not in _th121, "页面还在说『框架尚未调用它』—— 续121 已经有调用点了"
+
+    print("[8z] 续121 afrog 外部引擎适配 ok: 默认关（load_settings 里也是关）｜策略值一律压进内置封顶"
+          "（它自己的 -rl 150/-c 25/-timeout 50 进不来，乱填落回默认）｜只读闸门只看请求语义"
+          "（POST/带体/tcp/brute/severity≠info/坏 YAML 各有拒因，-P 指的是任务目录里那份子集）｜"
+          "argv 逐条钉 -duc/-doh/-nc/-ja，并禁 -ps/-default-pwd/-brute/-cs｜四个实测坑都有判据："
+          "rc=0 的 [ERR] 不能当正常（拆掉检测的变异会把它报成『命中 0 条』）、零命中根本不写结果文件、"
+          "ANSI 要洗、cwd 必须是任务目录否则报告落进仓库根｜真样本 v3.5.7 逐字（-j/-ja）解析出 "
+          "afrog:<id>、用 fulltarget、级别只降不升（作者自称 critical 也记 info）｜阶段接线：关着不起"
+          "进程、开着才调一次、结果再过一遍我们的级别门槛｜顺带修掉 which() 返回相对路径导致"
+          "「换 cwd 起进程 = 127 = 工具明明在却被判未装」的真缺陷（同一把尺子量两端）｜"
+          "策略配置 8 个字段与 app.py 读的键一一对上，POST 回环保守默认值，外部工具页文案改了口径")
 
     print("SMOKE PASS")
 

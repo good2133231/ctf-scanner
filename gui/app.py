@@ -2965,6 +2965,15 @@ def create_app():
                                 "recursive_max_paths": int(
                                     f.get("dirscan_recursive_max_paths", 40) or 0)},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
+                    # 外部引擎 afrog（续121）：默认关；限速值由 scanner/afrog.py 的封顶再压一道
+                    "afrog": {"enabled": f.get("afrog_enabled") == "1",
+                              "poc_dir": (f.get("afrog_poc_dir") or "").strip(),
+                              "max_targets": int(f.get("afrog_max_targets", 20) or 20),
+                              "timeout": int(f.get("afrog_timeout", 8) or 8),
+                              "concurrency": int(f.get("afrog_concurrency", 4) or 4),
+                              "rate": int(f.get("afrog_rate", 10) or 10),
+                              "per_target_rate": int(f.get("afrog_per_target_rate", 5) or 5),
+                              "proc_timeout": int(f.get("afrog_proc_timeout", 600) or 600)},
                     # 站点截图（可选，默认关）：无头 Edge/Chrome
                     "screenshot": {"enabled": f.get("screenshot_enabled") == "1",
                                    "max_sites": int(f.get("screenshot_max_sites", 20) or 20),

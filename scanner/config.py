@@ -299,6 +299,22 @@ DEFAULTS = {
         # （min_severity / skip_severities / poc_engine / disabled_*）。
         "enabled": True,
     },
+    "afrog": {
+        # 外部引擎 afrog（续121，**默认关**）：让用户自己准备的 afrog PoC 目录跑一轮只读检测。
+        # 关着的原因写在 scanner/afrog.py 顶上：它自管请求（绕过本任务的请求预算）、
+        # 而它的社区 PoC 里就有会往目标写文件/执行命令的那类。
+        # 我们的引擎不依赖它 —— 它的"组件识别"那部分已按条复核进
+        # config/dicts/fingerprints_extra.txt（续120）。
+        "enabled": False,
+        # PoC 目录：相对路径按**项目根**解析（同 tools.* 那一段的口径），框架不代为下载。
+        "poc_dir": "",
+        "max_targets": 20,       # 一次最多交多少个站点（封顶 200）
+        "timeout": 8,            # 单请求超时（秒，封顶 30）
+        "concurrency": 4,        # 它的 -c（封顶 25）
+        "rate": 10,              # 全局 -rl 请求/秒（它默认 150！封顶 50）
+        "per_target_rate": 5,    # 单目标 -rlt（封顶 25）
+        "proc_timeout": 600,     # 整个子进程的超时（封顶 1800）
+    },
     "screenshot": {
         # 站点截图（可选，**默认关闭**）：调用本机已装的 Edge/Chrome 无头模式截图，
         # 产物 logs/task_*/shots/*.png，GUI 站点页显示缩略图。不引入任何新依赖。

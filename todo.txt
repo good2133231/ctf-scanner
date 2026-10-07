@@ -2430,3 +2430,18 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [ ] B 步 2：afrog 当外部引擎跑 PoC —— 先真跑靶场拿**真实 JSON 输出**（注意 stdout 是管道时会不会挂），
       再写 scanner/afrog.py 适配器；默认关、不静默降级、结果按 (target, poc_id) 去重
 - [ ] afrog-pocs 的更新通道（指纹与 PoC 都可按需再跑一次 --scan/--table；本仓库不整树拉第三方仓库）
+
+== 续121（B 步 2：afrog 当外部引擎，默认关 + 只读闸门）==
+- [x] scanner/afrog.py：classify_poc 只读闸门 / plan+stage（-P 指任务目录里的子集）/ build_argv
+      （-duc -doh -nc -ja -curated off，禁 -ps -default-pwd -brute*）/ parse_result（缺文件＝零命中）/
+      to_vulns（用 fulltarget、poc_id 加 afrog: 前缀、级别只降不升）/ run（rc=0 的 [ERR] 也算失败）
+- [x] 实测九条写进模块 docstring：+30s 更新检查、CWD 落 108KB 报告、输出含 ANSI、rc 不可信、
+      零命中不写文件、默认 -rl 150/-c 25/-timeout 50、默认不端口扫描、自签 TLS 可命中、性能数据
+- [x] vulnscan 接线：默认关；开着才调一次；结果再过一遍我们自己的 min_severity
+- [x] 策略配置页 8 个字段 + app.py 保存回环；外部工具页与 status 文案改口径（"只在显式启用后被调用"）
+- [x] 修掉 which() 返回相对路径的真缺陷（换 cwd 起子进程 ⇒ rc=127 ⇒ "工具在却判未装"的静默降级）
+- [x] 回归 [8z]（hermetic：桩 run_cmd + 真样本逐字嵌入 + 三向变异），门禁 SMOKE PASS / check_contrast 149/0
+- [ ] afrog 结果与 `sites.tech` 的联动：现在只进 vulns 表（info 级），要不要把 info 级命中的
+      PoC id 反查成指纹标签，得先有一张 PoC→标签 的表（不做无表的猜测）
+- [ ] 把 afrog 的请求计入预算：需要它自己走我们的出口（-proxy 指到本地转发？）——目前是**如实声明**不覆盖
+- [ ] 外置指纹表的**路径门控**（续120 遗留）：afrog 判据里 52 条带特定路径，现在按"内容像不像"打标签

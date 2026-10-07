@@ -650,6 +650,20 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
               page.ev("document.querySelector('[data-panel=\"osint\"]').classList.contains('open')")
               is False)
 
+    # ---------- [7b] 外部引擎 afrog 的字段（续121）：真浏览器里存在、默认为关、点得动 ----------
+    #      只验"HTML 里有这个 name"是不够的（[8z] 已经在 test_client 层验过渲染与 POST 回环）；
+    #      这里要的是"用户看得见这个开关、点下去真的变勾选"，以及**默认必须是未勾选**
+    #      （afrog 是外部进程、自管请求，默认开着就等于替用户决定要跑第三个引擎）。
+    rep.eq("[7b] /settings 渲染出 8 个 afrog 字段（开关 + 目录 + 6 个限速/上限）",
+           page.ev("document.querySelectorAll('input[name^=\"afrog_\"]').length"), 8)
+    rep.eq("[7b] afrog 开关默认未勾选（外部引擎绝不默认开）",
+           page.ev("document.querySelector('input[name=\"afrog_enabled\"]').checked"), False)
+    rep.eq("[7b] PoC 目录默认为空（框架不替用户准备第三方 PoC）",
+           page.ev("document.querySelector('input[name=\"afrog_poc_dir\"]').value"), "")
+    page.click_js("document.querySelector('input[name=\"afrog_enabled\"]')")
+    rep.eq("[7b] 点一下这个复选框真的变成勾选（不是画了个死控件）",
+           page.ev("document.querySelector('input[name=\"afrog_enabled\"]').checked"), True)
+
     # ---------- [8] 任务列表页轮询：**一次批量**、只问未结束的行（续93） ----------
     # 旧写法是"每行一个 `/api/tasks/<id>/status`"（页大小 100 → 每 2.5 秒 100 个请求，且每个响应
     # 都让后端 `_tail()` 整份读一遍日志）。这里在**真浏览器**里钩住 fetch 数请求，而不是只看源码文本：

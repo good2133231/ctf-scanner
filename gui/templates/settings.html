@@ -68,6 +68,29 @@
       <label class="chk"><input type="checkbox" name="favicon_md5" value="1"
         {{ 'checked' if s.limits.favicon_md5 }}> 采集 favicon MD5（POC 可用它做零请求前置判定）</label>
     </div>
+    <h2>外部引擎 afrog（默认关）</h2>
+    <p class="muted small">
+      勾选后，vulnscan 阶段会**额外**跑一次外部 afrog：只喂它逐条判过"只读 + info 级"的模板
+      （非 GET / 带请求体 / tcp / brute 清单 / severity≠info 的一律不进它的目录，被拒条数写进任务日志）。
+      <b>三件事要知道</b>：① 它的 PoC 目录由你自己准备并填在下面，框架不代为下载；
+      ② 请求由那个外部进程自管，<b>不经过本任务的请求预算</b>（所以下面几个限速值请保守填，
+      填再大也有内置封顶）；③ 命中结果按 info/low 级入账，"最低报告级别"是 medium 时它们
+      <b>不会出现在报告里</b>，只在任务日志与库里（想看到就把门槛降到 info）。
+    </p>
+    <div class="row">
+      <label class="chk"><input type="checkbox" name="afrog_enabled" value="1"
+        {{ 'checked' if s.afrog.enabled }}> 启用 afrog 外部引擎（只在填了 PoC 目录后才会有动作）</label>
+      <label>PoC 目录 <input name="afrog_poc_dir" size="28" placeholder="config/afrog-pocs/"
+        value="{{ s.afrog.poc_dir }}"></label>
+      <label>站点上限 <input name="afrog_max_targets" size="4" value="{{ s.afrog.max_targets }}"></label>
+      <label>单请求超时 <input name="afrog_timeout" size="4" value="{{ s.afrog.timeout }}"></label>
+    </div>
+    <div class="row">
+      <label>全局限速  req/s <input name="afrog_rate" size="4" value="{{ s.afrog.rate }}"></label>
+      <label>单目标限速 req/s <input name="afrog_per_target_rate" size="4" value="{{ s.afrog.per_target_rate }}"></label>
+      <label>并发 <input name="afrog_concurrency" size="4" value="{{ s.afrog.concurrency }}"></label>
+      <label>整进程超时 s <input name="afrog_proc_timeout" size="5" value="{{ s.afrog.proc_timeout }}"></label>
+    </div>
     <h2>按级别分类批量开关（连请求都不发）</h2>
     <p class="muted">勾上＝该级别的检测**根本不执行**。默认勾掉 info 与 low：CTF 实战里
       明文 HTTP / 版本泄露 / 响应头缺失这类项拿不到 flag，即使跑了也会被"最低报告级别"丢掉，
