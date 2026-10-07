@@ -143,8 +143,9 @@ py -3 cli/client.py -t example.com -p subdomain,probe,dirscan,vulnscan -n quick-
 py -3 run_gui.py                   # 默认 http://127.0.0.1:5000，只绑本机
 ```
 
-- 首次登录用 `config/settings.yaml` 里的 `gui.token`（默认 `ctfscanner`）作**引导口令**，
-  登录后**请立刻到「账号管理」建管理员与子用户账号** —— 建号后引导口令立即失效。
+- **首次启动会直接向导问你要设什么管理员口令**（库里还没有账号时）。非交互环境（容器 / CI）
+  跑 `python run_users.py --create-admin`。`config/settings.yaml` 里**没有任何登录凭据** ——
+  那文件被 git 跟踪，能换管理员身份的串写在里面就等于公开（续117 摘掉了旧的 `gui.token`）。
 - ⚠️ 改了任何会被控制台调用的代码后**必须重启进程**（`debug=False` 不重载代码也不重载模板），
   否则会误判成"代码没生效"。
 - 要部署到服务器给队友用，**必须走 HTTPS**（反向代理终止 TLS）—— 见
@@ -242,8 +243,8 @@ Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错�
 放到服务器后，**访问审计流水**（`gui.audit`：谁/何时/从哪 IP/做了什么/成败，只记元数据、绝不记口令凭据；
 管理员在「访问审计」页查看）与**登录限速/失败锁定**（`gui.login_lockout`：按 IP 为主、按用户名兜底，
 被锁返回 429 + `Retry-After` 且不泄漏账号存在性）**默认就开**（续108 把 IP 阈值由 10 收到 **5**）；
-两段阈值都**只能手改 `config/settings.yaml`** ——「策略配置」页的 gui 段只有 host/port/token 三项。
-登录页另有一道**验证码**门（续108 起口令与引导口令**都要**先过码，答案只存服务端内存、一次性）。
+两段阈值都**只能手改 `config/settings.yaml`** ——「策略配置」页的 gui 段只有 host/port 两项（续117 起没有口令那一栏）。
+登录页另有一道**验证码**门（续108 起任何登录提交都**要**先过码，答案只存服务端内存、一次性）。
 被锁在门外时用 `py -3 -m scanner.login_guard --clear` 自救（详见 docs/deploy-https.md §7）。
 
 ## 开发模式 + 全流程自检

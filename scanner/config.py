@@ -93,13 +93,12 @@ DEFAULTS = {
     "gui": {
         "host": "127.0.0.1",
         "port": 5000,
-        "token": "ctfscanner",  # 仅本地实验用途，请勿将控制台暴露公网
-        # 引导口令的**派生存储**（续113）：`pbkdf2_sha256$迭代$盐$哈希`，由 `users.hash_password`
-        # 生成。为什么要有这一列：`config/settings.yaml` 是**被 git 跟踪**的，明文口令一旦提交，
-        # 仓库的每个读者（以及任何一份 clone）都拿到了控制台的管理员入口。
-        # 现在「策略配置」页保存口令时**只写这一列**，并把 `token` 清空；
-        # 老配置里还留着明文的，登录仍然认（升级前不把人在门外），但启动日志会点名要求迁移。
-        "token_hash": "",
+        # 续117：**这一段里不再有登录凭据**。原先的 `token`（明文引导口令）与续113 补的
+        # `token_hash` 整支摘掉 —— 本文件**被 git 跟踪**，"口令类的值"写进来就等于公开；
+        # 而这条门只在"库里一个账号都没有"时才必要，那件事用一次交互式建号就能覆盖。
+        # 现在的路径：首次启动（0 账号 + 可交互终端）→ `gui/app.py::serve()` 的向导建管理员；
+        # 容器 / 只读挂载 / 忘了口令 / 被锁定 → `python run_users.py --create-admin | --reset-password`。
+        # 老配置里残留的值不再被任何代码读取；清除是**显式动作**：`run_users.py --purge-legacy-token`。
         # ---- 部署到服务器（续47，见 docs/deploy-https.md）----
         # 三项默认值都是**最保守**的：不开任何"图省事"的口子，要用必须显式配。
         # allowed_hosts：Host 白名单的**显式**扩展（空 = 只认回环名，与续32 行为逐字节一致）。
@@ -601,14 +600,12 @@ def load_settings():
     return settings
 
 
-def save_settings(data):
-    """合并写入配置。有 PyYAML 时写 yaml，否则退回 json。
+def _dump(settings):
+    """落盘的**唯一出口**（有 PyYAML 写 yaml，否则退回 json）。
 
     `keys` 段来自独立的 keys.yaml，**必须剔除**后再落盘 —— 否则 GUI 存一次策略
     就把第三方凭据复制进了 settings.yaml（正是本项目明确要避免的做法）。
     """
-    settings = load_settings()
-    _deep_merge(settings, data or {})
     settings.pop("keys", None)
     try:
         import yaml
@@ -618,6 +615,65 @@ def save_settings(data):
         (BASE_DIR / "config" / "settings.json").write_text(
             json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
     return settings
+
+
+def save_settings(data):
+    """合并写入配置（`data` 里没出现的键保持原样 —— 合并语义，不是整份覆盖）。"""
+    settings = load_settings()
+    _deep_merge(settings, data or {})
+    return _dump(settings)
+
+
+def remove_settings_keys(*paths):
+    """从配置文件里**删键**（按行删）；返回真正删掉的键名列表，如 `["gui.token"]`。
+
+    为什么不走 `save_settings`：① 它是"合并写" —— 从传入字典里去掉一个键，合并时那份从文件
+    重读出来的字典里**键还在**，等于删不掉；② 更要紧的是它用 `yaml.safe_dump` 整份重写，
+    而 `config/settings.yaml` 里全是解释性注释（每个默认值为什么这么定、踩过什么坑），
+    一次重写**全部蒸发**。所以这里是**逐行文本删除** —— 与外部工具安装器回写 `tools.<名>`
+    用同一手法：只碰目标那一行，其余字节原样。
+    只支持 `("段", "键")` 两层（续117 摘掉的两个登录键是唯一需要它的地方）；键不存在就什么也不做。
+    刻意**不顺手删目标键上方的注释** —— 那些注释常常同时服务相邻的键，删错了才是真破坏。
+    """
+    text_path = BASE_DIR / "config" / "settings.yaml"
+    removed = []
+    if text_path.exists():
+        # `newline=""` 是**必须**的：默认的通用换行会把整份 CRLF 文件读成 LF 再写回去，
+        # 于是一行删除换来 275 行纯 EOL"假变更"（本轮实测踩过 —— 与 §9 的 EOL 纪律同一件事）。
+        with open(text_path, "r", encoding="utf-8", newline="") as fh:
+            lines = fh.read().splitlines(keepends=True)
+        for section, key in paths:
+            head, i = f"{section}:", 0
+            while i < len(lines) and lines[i].rstrip("\r\n") != head:
+                i += 1
+            if i >= len(lines):
+                continue                       # 没有这一段
+            j = i + 1
+            target = None
+            while j < len(lines):
+                ln = lines[j].rstrip("\r\n")
+                if ln.strip() and not ln.startswith((" ", "\t")):
+                    break                      # 回到顶层 = 本段结束
+                if ln.strip().startswith(f"{key}:"):
+                    target = j
+                    break
+                j += 1
+            if target is not None:
+                lines.pop(target)
+                removed.append(f"{section}.{key}")
+        if removed:
+            with open(text_path, "w", encoding="utf-8", newline="") as fh:
+                fh.write("".join(lines))
+        return removed
+    settings = load_settings()               # 没有 yaml 文件（只有 settings.json）的那一档
+    for section, key in paths:
+        node = settings.get(section)
+        if isinstance(node, dict) and key in node:
+            node.pop(key)
+            removed.append(f"{section}.{key}")
+    if removed:
+        _dump(settings)
+    return removed
 
 
 def resolve(path):

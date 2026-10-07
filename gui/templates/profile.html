@@ -19,9 +19,5 @@
     <label>再输一次 <input type="password" name="password2" autocomplete="new-password" required></label>
     <button type="submit">修改</button>
   </form>
-  {% if not me or not me.id %}
-  <p class="muted">当前是<b>引导登录</b>（用 <code>gui.token</code> 进来的），没有可改的账号：
-    请到「账号管理」页创建管理员账号，然后用那个账号登录。</p>
-  {% endif %}
 </section>
 {% endblock %}

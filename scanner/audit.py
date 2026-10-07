@@ -23,7 +23,7 @@ logger = get_logger("audit")
 
 # ---- 事件类型（kind）----
 KIND_LOGIN_OK = "login_ok"           # 登录成功
-KIND_LOGIN_FAIL = "login_fail"       # 登录失败（用户名/口令错、账号停用、引导口令错）
+KIND_LOGIN_FAIL = "login_fail"       # 登录失败（用户名/口令错、账号停用、缺用户名）
 KIND_LOGIN_BLOCKED = "login_blocked"  # 被限速拦截（未走到校验口令那一步）
 KIND_LOGOUT = "logout"               # 退出登录
 KIND_ACCOUNT = "account"             # 账号操作（建/改口令/停用/改角色/删除/清审计）

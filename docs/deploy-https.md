@@ -21,7 +21,7 @@
 gui:
   host: 127.0.0.1            # 保持回环：外网入口只有反代
   port: 5000
-  token: ctfscanner          # 引导口令（建了第一个账号后自动失效，见续46）
+  # （续117）这一段没有任何登录凭据：首个管理员由首启动向导或 `python run_users.py --create-admin` 建
   allowed_hosts: ["scanner.example.com"]   # ← 放行你的部署域名（必填，否则整站 403）
   behind_proxy: true                       # ← 信任反代转发的 X-Forwarded-*
   secure_cookie: true                      # ← 会话 Cookie 加 Secure（TLS 就绪后打开）
@@ -176,12 +176,12 @@ curl -sS "https://$DOMAIN/login" | grep -i '<title>'
   触发后**锁 15 分钟**。被锁时返回 **429 + `Retry-After`**（不是 403），且**即使口令正确也拒绝**。
 - **不泄漏账号是否存在**：被锁页面与"账号存在 / 不存在"无关，返回**逐字节相同**的内容（否则"被锁=存在"
   本身就是一条用户名枚举通道）。
-- **引导口令（`gui.token`）登录同样受 IP 限速** —— 无账号的迁移期也不例外。
+- **登录一律受 IP 限速**（续117 摘掉引导口令后只剩账号这一条凭据分支，不再有"迁移期例外"）。
 - 要更严/更松改 `config/settings.yaml` 的 `gui.login_lockout`（`window_seconds` / `max_fails_per_ip` /
   `max_fails_per_user` / `lockout_seconds`）—— **只能在文件里改**，「策略配置」页的 gui 段只有
-  host/port/token 三项，页面保存也不会动这一段。
+  host/port 两项，页面保存也不会动这一段。
 - **登录验证码**（`scanner/captcha.py`，续78 / 续108）：`gui/app.py::login()` 的门在**所有凭据分支
-  之前** —— 用账号口令登录、还是用 `gui.token` 引导口令登录，**都要先过一次码**；答案只存服务端
+  之前** —— 任何登录提交**都要先过一次码**（续117 后只剩账号一条凭据分支，这条纪律更要守住）；答案只存服务端
   内存（会话里只有一个不透明 token），一次性、成败都作废。限速阈值管的是"锁多久"，验证码管的是
   "脚本能不能一直试"，两道缺一不可。
 

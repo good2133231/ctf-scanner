@@ -13,7 +13,7 @@
   <form method="post">
     <input type="text" name="username" placeholder="用户名" autocomplete="username" autofocus>
     <input type="password" name="password" placeholder="口令" autocomplete="current-password">
-    {# 续108：验证码**永远渲染**。续78 曾按 `{% if not bootstrap %}` 隐藏它，但路由
+    {# 续108：验证码**永远渲染**。续78 曾按"库里有没有账号"隐藏它，但路由
        `login()` 是"只要填了用户名就必须过码"—— 库里还没账号时页面上一个码都看不见，
        填 `admin` 提交必然吃「验证码错误」（audit_log 里就是这么攒出 login_fail 的）。
        模板与路由的判据必须同源：要么两处都发码，要么两处都不发。 #}
@@ -25,11 +25,14 @@
     <button type="submit">登录</button>
     {% if error %}<p class="error">{{ error }}</p>{% endif %}
   </form>
-  {% if bootstrap %}
+  {# 续117：原先这里教用户"把 settings.yaml 的 gui.token 填进口令框" —— 那条门已整支摘除
+     （配置文件被 git 跟踪、仓库公开，不该放能换管理员身份的串）。`empty_account` **只决定这句
+     文案**，不是第二条登录分支：库里 0 个账号时页面上照样没有任何能提交的口令。 #}
+  {% if empty_account %}
   <p class="muted" style="margin-top:14px;font-size:12px;line-height:1.6">
-    当前<b>还没有任何账号</b>：可把 <code>config/settings.yaml</code> 里的
-    <code>gui.token</code> 直接填进上面的「口令」登录（管理员身份，<b>验证码照样要填</b>），
-    然后到「账号管理」页创建账号 —— <b>建好第一个账号后该口令立即失效</b>。
+    这台机器上<b>还没有任何账号</b>，所以谁都登不进去 —— 这不是登录页坏了。
+    在服务器终端上跑 <code>python run_users.py --create-admin</code> 建第一个管理员
+    （首次启动控制台时也会直接向导问你要设什么口令）。
   </p>
   {% endif %}
 </div>

@@ -116,6 +116,24 @@ atexit.register(_cleanup_sandbox)
 
 FIXTURE_PORT = 8765
 
+# ---- 续117：登录只剩"账号"一条路 ----
+# 以前这 20 多处统一提交 `settings["gui"]["token"]`（配置文件里的共享引导口令）换管理员会话；
+# 那条门整支摘掉（那文件被 git 跟踪、仓库公开）后它什么都换不到。逐个用例自己写一遍建号
+# 更容易漂，所以收在这一个函数里：**幂等**（账号在就直接用，不在就建），因此插在任何一个
+# 用例前面都成立 —— 包括那些先把库里账号清空的用例。
+_ADMIN_NAME117 = "smoke-owner117"
+_ADMIN_PW117 = "smoke-owner-pw-117"
+
+
+def _admin_form117():
+    """返回一份能真登录的管理员表单 `{username, password}`（必要时建号）。"""
+    from scanner import users as _u117
+    if not _u117.get_by_name(_ADMIN_NAME117):
+        ok, msg = _u117.create_user(_ADMIN_NAME117, _ADMIN_PW117, _u117.ROLE_ADMIN,
+                                    must_change=False)
+        assert ok, f"建测试管理员失败：{msg}"
+    return {"username": _ADMIN_NAME117, "password": _ADMIN_PW117}
+
 # [5v] 用的固定自签证书与配套私钥（一次性生成的**测试夹具**，不是任何生产凭据）。
 # 内联而不是放文件：证书解析的断言要"零外部依赖、可离线跑"，且这类夹具一旦落盘就容易被
 # 误当成真凭据管理；内联后整段测试自包含。
@@ -474,9 +492,9 @@ def main():
         _code7 = _cap7._STORE[_fresh78[-1]][0]
         return _cl.post("/login", data=dict(_data, captcha=_code7), **_kw)
 
-    assert _login7(c, {"token": "wrong"},
+    assert _login7(c, {"username": _ADMIN_NAME117, "password": "wrong"},
                    environ_base={"REMOTE_ADDR": "198.51.100.201"}).status_code == 200
-    assert _login7(c, {"token": settings["gui"]["token"]}).status_code == 302
+    assert _login7(c, _admin_form117()).status_code == 302
     for path in ("/", "/tasks", f"/tasks/{tid}", "/subdomains", "/sites", "/dirs",
                  "/ports", "/csegs", "/pocs", "/vulns", "/settings",
                  f"/api/tasks/{tid}/status", f"/tasks/{tid}/export"):
@@ -5339,14 +5357,14 @@ workflows:
     # 2) Host 白名单：绑定回环地址时，非回环 Host 一律 403。
     #    test client 默认 Host 就是 `localhost`（在白名单内），所以这里必须**显式**换成外站域名
     assert c.get("/login", headers={"Host": "evil.example"}).status_code == 403
-    assert c.post("/login", data={"token": settings["gui"]["token"]},
+    assert c.post("/login", data=_admin_form117(),
                   headers={"Host": "evil.example"}).status_code == 403
     assert c.get("/login", headers={"Host": "127.0.0.1"}).status_code == 200
     assert c.get("/login", headers={"Host": "localhost:5000"}).status_code == 200, \
         "回环 + 端口仍应放行（白名单比的是主机名）"
 
     # 3) 写方法的 Origin/Referer 校验（比**权威段**：Cookie 不按端口隔离，端口必须参与）
-    _tok32 = settings["gui"]["token"]
+    _tok32 = _admin_form117()
     for _hdr32 in ({"Origin": "http://evil.example"},
                    # 同机另一个服务：**主机名相同、只有端口不同** —— 这条断言是续32-fix 的核心。
                    # 首版用 `_host_of` 比，两边都把端口剥掉就相等了，整类请求被静默放行；
@@ -5357,21 +5375,21 @@ workflows:
                    {"Host": "127.0.0.1:5057", "Referer": "http://127.0.0.1:9999/x"},
                    {"Origin": "null"},                      # file:// 页面 / 沙箱 iframe
                    {"Referer": "http://evil.example/x"}):   # 无 Origin 时退回 Referer
-        assert c.post("/login", data={"token": _tok32}, headers=_hdr32).status_code == 403, _hdr32
+        assert c.post("/login", data=_tok32, headers=_hdr32).status_code == 403, _hdr32
     for _hdr32 in ({"Origin": "http://localhost"},                              # 两边都无端口
                    {"Host": "localhost:5000", "Origin": "http://localhost:5000"},  # 真实浏览器形态
                    {"Origin": "http://localhost:80"},                           # 默认端口归一
                    {"Host": "127.0.0.1:5057", "Origin": "http://127.0.0.1:5057"},
                    {"Host": "127.0.0.1:5057", "Referer": "http://127.0.0.1:5057/tasks"},
                    {"Referer": "http://localhost/x"}):
-        assert _login7(c, {"token": _tok32}, headers=_hdr32).status_code == 302, _hdr32
+        assert _login7(c, _tok32, headers=_hdr32).status_code == 302, _hdr32
     # 只拦写方法：带外站 Origin 的 GET 必须放行（否则正常导航会被误伤）
     assert c.get("/login", headers={"Origin": "http://evil.example"}).status_code == 200
     # 两个头都缺失时放行（curl / 脚本 / 老浏览器本就不带；本机工具必须能用）
-    assert _login7(c, {"token": _tok32}).status_code == 302
+    assert _login7(c, _tok32).status_code == 302
 
     # 4) 会话 Cookie 显式收紧（不依赖浏览器默认值 —— 旧浏览器上"默认"等于没有）
-    _ck32 = _login7(c, {"token": _tok32}).headers.get("Set-Cookie", "")
+    _ck32 = _login7(c, _tok32).headers.get("Set-Cookie", "")
     assert "HttpOnly" in _ck32, _ck32
     assert "SameSite=Lax" in _ck32, _ck32
     assert app.config["SESSION_COOKIE_HTTPONLY"] is True
@@ -7224,8 +7242,14 @@ http:
     assert users_mod.validate_username("a b")[0] is False, "用户名不能含空白"
     assert users_mod.validate_username("smoke-admin")[0] is True
 
-    # 2) 管理员登录（本轮沙箱库里**还没有账号**，先建一个管理员）
-    assert users_mod.count_users() == 0, "本轮沙箱库应为无账号状态"
+    # 2) 管理员登录：本组要当"建第一个管理员"那一步，所以先把前面用例建出来的号清掉
+    #    （续117 起登录只有账号一条路，前面那批需要登录态的用例各自建了号 —— 清库才是本组原意）
+    for _u0_7h in users_mod.list_users():
+        users_mod.delete_user(_u0_7h["id"])
+    assert users_mod.count_users() == 0, "本组应从无账号状态起步（清库没生效）"
+    # 清库把**共享 client `c`** 的会话一起踢掉了（续117 后会话必须对应真账号）——
+    # 后面几十个用例还要用 `c` 拿页面，这里补一次登录。
+    assert _login7(c, _admin_form117()).status_code == 302, "补登录失败：共享 client 拿不到会话"
     _ADMIN_PW, _SUB_PW, _SUB_PW2 = "SmokeAdmin#2026", "SmokeSub#2026", "SmokeSub#2026-new"
     assert users_mod.create_user("smoke-admin", _ADMIN_PW, role="admin", must_change=False)[0]
     _admin7h = users_mod.get_by_name("smoke-admin")
@@ -7234,7 +7258,9 @@ http:
     assert "password" not in users_mod.check_login("smoke-admin", _ADMIN_PW)
     assert all("password" not in u for u in users_mod.list_users())
 
-    # ---- 续78 登录验证码（**真门**：续108 起账号登录与引导口令登录**都**必须过码）----
+    # ---- 续78 登录验证码（**真门**：续108 起任何提交都必须在验凭据之前先过码）----
+    #      续117 摘掉引导口令后只剩账号这一条凭据分支，"门放在所有分支之前"这件事更重要了 ——
+    #      否则将来再加任何一条登录分支，又会重演"最弱的那条免码"。
     # 这里用**真** `captcha.check` 测；测完把 check 打桩成恒真 —— 后面几十个用例测的是
     # 权限 / 审计，与验证码无关，不该被它拖累。
     from scanner import captcha as _capmod78
@@ -7248,7 +7274,7 @@ http:
     # 续108 ① 有账号时登录页必须渲染验证码。旧模板按 `{% if not bootstrap %}` 把整块藏了，
     #   而路由是「填了用户名就要码」—— 两套判据在"零账号 + 输了用户名"那一格同时踩空：
     #   页面上一个码都看不见，提交却永远「验证码错误」（本机 audit_log 的两条 login_fail 就是这样攒出来的）。
-    #   零账号那一档在 [7j] ⑬ 里验 —— 那里 `count_users()==0` 才是真的 bootstrap。
+    #   零账号那一档在 [7j] ⑬ 里验（续117 起那里测的是"0 账号时谁都登不上 + 向导能建号"）。
     _pg78b = app.test_client().get("/login").get_data(as_text=True)
     assert 'name="captcha"' in _pg78b and "/captcha.png" in _pg78b, "有账号时登录页必须渲染验证码"
     # 续108 ② 验证码门必须在**分支之前**：用户名留空的提交（旧实现压根不调用 `check`）也要被问到。
@@ -7257,7 +7283,7 @@ http:
     _real_chk78 = _capmod78.check
     _capmod78.check = lambda _t, _v: (_seen78.append(_t), False)[1]
     try:
-        _rb78 = app.test_client().post("/login", data={"token": settings["gui"]["token"]},
+        _rb78 = app.test_client().post("/login", data=_admin_form117(),
                                        environ_base={"REMOTE_ADDR": "198.51.100.202"})
         assert _seen78 and _rb78.status_code == 200, \
             "无用户名的提交也必须走验证码门（旧实现只在 if username: 里查码 → 引导口令整条路免码）"
@@ -7299,7 +7325,7 @@ http:
             "变异后仍拒 → 断言没盯住真实门"
     finally:
         _capmod78.check = _real78
-    print("[7h+] 续78+续108 登录验证码 ok: 账号登录与**无用户名的引导口令提交**都必须在分支之前被问到码"
+    print("[7h+] 续78+续108 登录验证码 ok: 账号登录与**无用户名的提交**都必须在分支之前被问到码"
           "（判据是 check 被调用，不是状态码）；对码放行、一次性防重放；有账号时登录页必渲染验证码；"
           "变异证伪：check 恒真 → 「不带码必拒」即红；把门搬回 `if username:` 里 → 「空用户名也过门」即红")
     # 后面这批用例与验证码无关：把 check 打桩成恒真（真门已在上面验过）
@@ -7455,29 +7481,50 @@ http:
                                                "password": "another-pw-1234"}).status_code == 302
     assert users_mod.count_users() == _n7h, "同名账号不能重复创建"
 
-    # 10) 迁移口径：`gui.token` 只在"还没有任何账号"时是引导口令 —— 建了号就**不再是后门**
+    # 10) 续117 的新口径：**没有任何"绕过账号"的登录路**，0 账号时页面上也没有第二条提交入口。
+    #     （旧版这一段测的是"gui.token 在无账号时能换管理员、建号后失效"；门摘掉后语义平移。）
     _cb = app.test_client()
-    assert _cb.post("/login", data={"token": settings["gui"]["token"]}).status_code == 200, \
-        "已有账号后，旧共享口令必须失效"
-    assert _cb.post("/login", data={"username": "", "password": settings["gui"]["token"]}).status_code == 200
-    users_mod.delete_user(_sub7h["id"])
-    users_mod.delete_user(_admin7h["id"])
-    assert users_mod.count_users() == 0
-    assert _cb.post("/login", data={"token": settings["gui"]["token"]}).status_code == 302, \
-        "老部署升级后不能一上来就被锁在门外：无账号时 gui.token 仍可登录（管理员身份）"
-    assert _cb.get("/settings").status_code == 200, "引导会话即管理员"
-    # 第一个账号被**强制**成管理员：否则"先建了个子用户"就是单行道，从此没人能再建号
+    assert _cb.post("/login", data={"token": "ctfscanner"},
+                    environ_base={"REMOTE_ADDR": "198.51.100.221"}).status_code == 200, \
+        "配置文件里那种共享串（旧引导口令）绝不该再换到任何会话"
+    assert _cb.post("/login", data={"username": "", "password": "whatever"},
+                    environ_base={"REMOTE_ADDR": "198.51.100.222"}).status_code == 200
+    # 清库要**全清**：本组前面的验证码用例已经通过 `_admin_form117()` 建过号，
+    # 只删 smoke-sub / smoke-admin 两条会留下一个能登录的账号，"0 账号时没人能登"就测不到了。
+    for _u10_7h in users_mod.list_users():
+        users_mod.delete_user(_u10_7h["id"])
+    assert users_mod.count_users() == 0, "本项要从「库里 0 个账号」起步"
+    # 0 账号：登录页要**指路**（否则用户以为页面坏了），但没有任何提交能登进去
+    _pg_empty = _cb.get("/login").get_data(as_text=True)
+    assert "run_users.py --create-admin" in _pg_empty, "0 账号时登录页必须给出建号指引"
+    assert 'name="token"' not in _pg_empty, "登录页不该再有任何引导口令字段"
+    assert _cb.post("/login", data={"username": "", "password": "x"},
+                    environ_base={"REMOTE_ADDR": "198.51.100.223"}).status_code == 200, \
+        "0 账号时也该没有任何能登进去的提交"
+    assert _cb.get("/settings").status_code == 302, "没登进去就不该停在策略页"
+    # 第一个管理员由**账号体系**建（CLI / 向导同一口径），建完才谈得上用网页管账号
+    _f117 = _admin_form117()
+    assert _cb.post("/login", data=_f117,
+                    environ_base={"REMOTE_ADDR": "198.51.100.224"}).status_code == 302, \
+        "向导/CLI 建的第一个管理员必须真能登录"
+    assert _cb.get("/settings").status_code == 200, "首个账号是管理员 → 策略页应可进"
+    # 库里已有管理员时，第二个账号**可以**是子用户（旧版"第一个账号强制管理员"那一档随引导门
+    # 一起摘除：到得了这一页的人必然已有一个账号在库里，那一档根本不可达 —— 见 api_user_create）
     assert _cb.post("/api/users/create", data={"username": "smoke-first",
                                                "password": "first-pw-1234",
                                                "role": "user"}).status_code == 302
-    assert users_mod.get_by_name("smoke-first")["role"] == "admin", "第一个账号必须是管理员"
-    assert _cb.get("/settings").status_code == 302, "建号后引导会话必须立即作废"
-
+    assert users_mod.get_by_name("smoke-first")["role"] == "user", \
+        "已有管理员时第二个账号应按提交的角色建（不该被悄悄升成管理员）"
+    assert _cb.get("/settings").status_code == 200, "会话身份不受建号影响"
+    # 清库把**共享 client `c`** 的会话一起踢掉了（续117 后会话必须对应真账号）——
+    # 后面几十个用例还要用 `c` 拿页面，这里补一次登录。
+    assert _login7(c, _admin_form117()).status_code == 302, "补登录失败：共享 client 拿不到会话"
     print("[7h] 续46 多用户 ok: 口令只存 pbkdf2 派生值（同口令不同盐/坏串不抛）/ 账号密码登录 / "
           "管理员建子用户（默认待改密→强制改密后才可用）/ 子用户 403 挡在 策略配置·POC 管理·账号 "
           "（GET+POST 都挡，键策略/启停 POC/建号全拒）/ 子用户仍可扫描与看结果（含扫描类 POST）/ "
           "侧边栏对子用户隐藏管理入口 / 停用即时踢下线 / 防锁死（不动自己·至少一管理员）/ "
-          "gui.token 仅作无账号时的引导口令（建号即失效）")
+          "续117：0 账号时**没有任何登录路**（登录页只指路 `run_users.py --create-admin`），"
+          "首个管理员由向导/CLI 建且写死 role=admin；已有管理员时第二个账号按提交的角色建")
 
     # [7i] 续47 HTTPS 部署（反向代理终止 TLS）：控制台要能在服务器上用域名 + HTTPS 访问，
     #      且**不许削弱**续32 的 Host 白名单与续46 的 Cookie 收紧。四件事各钉一组断言：
@@ -7717,9 +7764,9 @@ http:
     #      ② **不泄漏账号是否存在**："存在但被锁"与"不存在但被锁"返回**逐字节相同**的页面；
     #      ③ 锁定期内**即使口令正确也拒绝**；④ 成功登录清该用户名计数（IP 计数不清）；
     #      ⑤ 计数**不无界增长**（锁定期间不再累加、过期行被 prune）；
-    #      ⑥ `gui.token` 引导口令登录**同样受 IP 限速**；
+    #      ⑥ 向导建出来的首个账号**同样受 IP 限速**（续117：不存在第二条免限速的门）；
     #      ⑦ guard/audit 出错**绝不阻断登录**；
-    #      ⑧ 审计**只记元数据**：明文口令 / 口令哈希 / 引导口令值都不得出现在审计表与 /audit 页面。
+    #      ⑧ 审计**只记元数据**：明文口令 / 口令哈希 / 账号口令值都不得出现在审计表与 /audit 页面。
     #      与既有 [6u]/[7h]/[7i] 的关系：它们都用 `app.test_client()`（IP 恒为 127.0.0.1），
     #      且 [7h] 有**故意的失败登录** —— 所以本用例的"打满阈值"一律用**独立 REMOTE_ADDR**，
     #      **绝不为迁就测试而调低默认阈值**；用例一律从 `_cfg48` 取阈值、不硬写数字（§6.2 假红口径：把 10 写死在循环里，默认值一改就留下一批没有区分度的断言）。
@@ -7973,7 +8020,7 @@ http:
                         for r in db._query("SELECT * FROM audit_log"))
     _html48 = _cau.get("/audit").get_data(as_text=True)
     for _needle, _what in ((_AUD_PW, "明文口令"), (_hash48, "口令哈希"),
-                           (settings["gui"]["token"], "引导口令值"), (_SEC48, "提交的新口令值")):
+                           (_admin_form117()["password"], "账号口令值"), (_SEC48, "提交的新口令值")):
         assert _needle not in _dump48, f"{_what} 泄漏进了审计表"
         assert _needle not in _html48, f"{_what} 泄漏进了 /audit 页面"
     assert "smoke-audit-sub" in _html48, "/audit 页面应能看到账号操作流水（否则上面几条是空断言）"
@@ -8114,45 +8161,58 @@ http:
         _audit48._scrub = _real_scrub48b
     db._exec("DELETE FROM audit_log WHERE actor IN ('probe-tgt','probe-tgt2')")
 
-    # 13) ⑥ `gui.token` 引导口令登录**同样受 IP 限速**：清空账号（bootstrap 分支才可达），
-    #     先从一个 IP 打满，再验证"即使引导口令正确也 429"；换干净 IP 仍能登录（反向对照）。
+    # 13) ⑥ **零账号时谁都登不上，首启动向导建出来的号受同一套限速**（续117 改写本组）。
+    #     旧版这里测的是 `gui.token` 那条引导门；门摘掉后语义平移成两件事，一条都不能丢：
+    #     ① 库里 0 个账号 → 登录页**照样发码**，但提交任何东西（包括以前那个 `token` 字段）
+    #        都换不到会话 —— 否则"从配置文件里读出一个能登录的串"会换个形式回来；
+    #     ② `admin_setup.wizard()` 建出来的首个管理员是真账号：验证码门、IP 限速、干净 IP
+    #        反向对照，与其余用例同一口径。
     for _u in users_mod.list_users():
         users_mod.delete_user(_u["id"])
-    assert users_mod.count_users() == 0, "bootstrap 分支只在无账号时可达"
-    # 续108：**零账号（bootstrap）时登录页也必须发码、引导口令也必须过码**。
-    #   旧行为是两处判据各自为政：模板按 `{% if not bootstrap %}` 把整块藏了，路由只在
-    #   `if username:` 里查码。表现就是用户报的那两件事 ——「后台不显示验证码」+「填了用户名
-    #   永远验证码错误」（本机 audit_log 的两条 login_fail 就是这么攒出来的）；而唯一能直接
-    #   换来管理员身份的**引导口令**那条路反倒完全免码。
+    assert users_mod.count_users() == 0, "本组从「库里 0 个账号」起步"
     _pg13 = app.test_client().get("/login").get_data(as_text=True)
     assert 'name="captcha"' in _pg13 and "/captcha.png" in _pg13, \
-        "bootstrap 时登录页也必须渲染验证码（模板与路由的判据必须同源）"
-    # 注意：此刻 `_capmod78.check` **已经是 [7h+] 末尾那张"恒真"桩**了 —— 拿它自己当"真门"存一份等于什么都没还原（实测就是这样假绿：不带码直接 302）。真门只能取 [7h+] 打桩前存下的 `_real78`。
+        "0 账号时登录页也必须渲染验证码（续108 就是模板与路由判据分叉才出的事）"
+    assert 'name="token"' not in _pg13, "登录页不该再有『引导口令』那个输入框"
+    # 注意：此刻 `_capmod78.check` **已经是 [7h+] 末尾那张"恒真"桩**了 —— 拿它自己当"真门"
+    # 存一份等于什么都没还原（实测就是这样假绿：不带码直接 302）。真门只能取打桩前的 `_real78`。
+    from scanner import admin_setup as _adm117
     _real13 = _real78
     _capmod78.check = _real13
     try:
         _cn13 = app.test_client()
-        assert _cn13.post("/login", data={"token": settings["gui"]["token"]},
+        assert _cn13.post("/login", data={"token": "ctfscanner"},
                           environ_base={"REMOTE_ADDR": "198.51.100.208"}).status_code == 200, \
-            "引导口令不带码必须被拒（旧实现这条直接 302 —— 门在 if username: 里面）"
-        _tok13, _code13 = _capmod78.issue(4)
-        with _cn13.session_transaction() as _s13:
-            _s13["captcha_id"] = _tok13
-        assert _cn13.post("/login", data={"token": settings["gui"]["token"], "captcha": _code13},
-                          environ_base={"REMOTE_ADDR": "198.51.100.208"}).status_code == 302, \
-            "带对码的引导口令仍须登录成功（别把门做成死门）"
+            "0 账号时提交旧的 token 字段也必须被拒（那条门已摘，它换不到任何会话）"
+        _w_st, _w_msg = _adm117.wizard(ask_name=lambda: "smoke-wizard117",
+                                       ask_password=lambda _who: "wizard-pw-117", isatty=True)
+        assert _w_st == _adm117.ST_CREATED, _w_msg
+        _w_row = users_mod.get_by_name("smoke-wizard117")
+        assert _w_row and users_mod.count_users() == 1, f"向导应恰好建出 1 个账号：{_w_msg}"
+        assert _w_row["role"] == users_mod.ROLE_ADMIN, "向导建的首个账号必须是管理员"
+        assert 'name="token"' not in app.test_client().get("/login").get_data(as_text=True)
+        assert _login7(app.test_client(), {"username": "smoke-wizard117",
+                                           "password": "wizard-pw-117"},
+                       environ_base={"REMOTE_ADDR": "198.51.100.209"}).status_code == 302, \
+            "向导建出来的账号必须真能登录（否则向导只是写了行库、门还是死的）"
     finally:
         _capmod78.check = lambda *a, **k: True
     _IP_T = "203.0.113.13"
     _envT = {"REMOTE_ADDR": _IP_T}
     _ctok = app.test_client()
     for _i in range(_cap_ip + 2):    # 打满（留 2 次余量，以后调阈值不必回头改这里）
-        _ctok.post("/login", data={"token": "wrong-token"}, environ_base=_envT)
-    _rtok = _ctok.post("/login", data={"token": settings["gui"]["token"]}, environ_base=_envT)
-    assert _rtok.status_code == 429, "引导口令登录也必须受 IP 限速"
-    assert _ctok.post("/login", data={"token": settings["gui"]["token"]},
+        _ctok.post("/login", data={"username": "smoke-wizard117", "password": "wrong"},
+                   environ_base=_envT)
+    _rtok = _ctok.post("/login", data={"username": "smoke-wizard117",
+                                       "password": "wizard-pw-117"}, environ_base=_envT)
+    assert _rtok.status_code == 429, "向导建出来的号同样受 IP 限速（不该有第二条免限速的门）"
+    assert _ctok.post("/login", data={"username": "smoke-wizard117", "password": "wizard-pw-117"},
                       environ_base={"REMOTE_ADDR": "203.0.113.14"}).status_code == 302, \
-        "干净 IP 上正确的引导口令仍须能登录（证明刚才的 429 是限速，不是口令坏了）"
+        "干净 IP 上正确口令仍须能登录（证明刚才的 429 是限速，不是口令坏了）"
+    users_mod.delete_user(_w_row["id"])
+    # 清库把**共享 client `c`** 的会话一起踢掉了（续117 后会话必须对应真账号）——
+    # 后面几十个用例还要用 `c` 拿页面，这里补一次登录。
+    assert _login7(c, _admin_form117()).status_code == 302, "补登录失败：共享 client 拿不到会话"
 
     print(f"[7j] 续48+续108 登录限速 + 访问审计 ok: 两级限速（IP {_cap_ip} 次/5 分钟为主、用户名 {_cap_user} 次兜底，"
           "900s 后自动解锁）/ 锁定返回 429+Retry-After（非 403）· 正确口令也拒 · 存在性不泄漏"
@@ -8283,7 +8343,7 @@ http:
         _t4 = db.create_task("smoke-q4-route", targets, ["probe"], {"offline": True})
         db.enqueue_task(_t4, "fresh", ["probe"], {"offline": True})
         _cq49 = app.test_client()
-        assert _cq49.post("/login", data={"token": settings["gui"]["token"]},
+        assert _cq49.post("/login", data=_admin_form117(),
                           environ_base={"REMOTE_ADDR": "203.0.113.91"}).status_code == 302, \
             "前置：无账号时引导口令可登录（[7j] 末尾已清空账号）"
         _rs49 = _cq49.post(f"/api/tasks/{_t4}/stop")
@@ -8496,17 +8556,20 @@ http:
 
     for _u7l2 in users_mod.list_users():
         users_mod.delete_user(_u7l2["id"])
-    assert users_mod.count_users() == 0, "无账号时引导口令即管理员（[7j]/[7k] 已清空账号）"
+    assert users_mod.count_users() == 0, "本组从「库里 0 个账号」起步（[7j]/[7k] 已清空账号）"
+    # 清库把**共享 client `c`** 的会话一起踢掉了（续117 后会话必须对应真账号）——
+    # 后面几十个用例还要用 `c` 拿页面，这里补一次登录。
+    assert _login7(c, _admin_form117()).status_code == 302, "补登录失败：共享 client 拿不到会话"
     _app_off7l = _app7l(False)
     _c_off7l = _app_off7l.test_client()
-    assert _c_off7l.post("/login", data={"token": settings["gui"]["token"]},
+    assert _c_off7l.post("/login", data=_admin_form117(),
                          environ_base={"REMOTE_ADDR": "203.0.113.211"}).status_code == 302
     _html_off7l = _c_off7l.get("/").get_data(as_text=True)
     assert 'href="/devmode"' not in _html_off7l, \
         "dev.enabled=false 时**不得**渲染「开发模式」入口（默认完全不出现）"
     _app_on7l = _app7l(True)
     _c_on7l = _app_on7l.test_client()
-    assert _c_on7l.post("/login", data={"token": settings["gui"]["token"]},
+    assert _c_on7l.post("/login", data=_admin_form117(),
                         environ_base={"REMOTE_ADDR": "203.0.113.212"}).status_code == 302
     _html_on7l = _c_on7l.get("/").get_data(as_text=True)
     assert 'href="/devmode"' in _html_on7l, "dev.enabled=true 时**必须**渲染「开发模式」入口"
@@ -8556,7 +8619,7 @@ http:
     try:
         _appm7l = _app7l(False)
         _cm7l = _appm7l.test_client()
-        _cm7l.post("/login", data={"token": settings["gui"]["token"]},
+        _cm7l.post("/login", data=_admin_form117(),
                    environ_base={"REMOTE_ADDR": "203.0.113.213"})
         _htmlm7l = _cm7l.get("/").get_data(as_text=True)
         assert 'href="/devmode"' in _htmlm7l, \
@@ -8695,7 +8758,7 @@ http:
     finally:
         gui_app.load_settings, gui_app.sync_pocs = _orig_load7m, _orig_sync7m
     _c7m = _app7m.test_client()
-    assert _c7m.post("/login", data={"token": settings["gui"]["token"]},
+    assert _c7m.post("/login", data=_admin_form117(),
                      environ_base={"REMOTE_ADDR": "203.0.113.220"}).status_code == 302
     # 合法查询：high 级 + 待复核 + q="smoke vuln"（含空格→测编码）+ 按 severity 降序 + 每页 50
     _url7m = (f"/vulns?size=50&q=smoke%20vuln&sort=severity&desc=1&severity=high"
@@ -8984,8 +9047,10 @@ http:
     _c7n = _app7n.test_client()
     for _u7n in users_mod.list_users():
         users_mod.delete_user(_u7n["id"])
-    assert _c7n.post("/login", data={"token": settings["gui"]["token"]},
+    assert _c7n.post("/login", data=_admin_form117(),
                      environ_base={"REMOTE_ADDR": "203.0.113.221"}).status_code == 302
+    assert _login7(c, _admin_form117()).status_code == 302, \
+        "本组清过账号库，共享 client `c` 的会话要补回来（后面还有用例用它）"
     gui_app.subprocess.run = lambda *_a, **_k: _FakeProc7n()
     try:
         _resp7n = _c7n.post("/api/devmode/selfcheck")
@@ -9139,7 +9204,7 @@ http:
 
     _app7o = _app_with7i()
     _c7o = _app7o.test_client()
-    assert _c7o.post("/login", data={"token": settings["gui"]["token"]},
+    assert _c7o.post("/login", data=_admin_form117(),
                      environ_base={"REMOTE_ADDR": "203.0.113.221"}).status_code == 302
 
     # ① /tasks 分页
@@ -9700,7 +9765,7 @@ http:
 
     # ⑧ GUI：管理员可进可点；子用户 403（路由层，不只是藏侧栏）
     _c7p = _app_with7i().test_client()
-    assert _c7p.post("/login", data={"token": settings["gui"]["token"]}).status_code == 302
+    assert _c7p.post("/login", data=_admin_form117()).status_code == 302
     _h7p = _c7p.get("/tools")
     assert _h7p.status_code == 200, _h7p.status_code
     _ht7p = _h7p.get_data(as_text=True)
@@ -9741,7 +9806,10 @@ http:
     assert 'href="/tools"' not in _cs7p.get("/tasks").get_data(as_text=True), \
         "子用户侧栏不该看到外部工具入口"
     users_mod.delete_user(users_mod.get_by_name("smoke-sub7p")["id"])
-    assert users_mod.count_users() == 0, "本组结束应恢复无账号状态"
+    # 续117：这里**不再**断言"库里应无账号"。登录只能靠账号，而本组 ⑨ 还要用 `_c7p` 那份会话
+    # 渲染外部工具页 —— 把库清空会把它一起踢掉。真需要"0 账号"起步的组（[7h] / [7j]⑬ / [8v]）
+    # 各自在开头清库，比在这里"恢复现场"更可靠。
+    assert users_mod.get_by_name("smoke-sub7p") is None, "本组建的子用户应被清掉"
 
     # ⑧ CLI：`--update-tools` 的附属参数脱离主开关 → 直接报错（不静默忽略）；
     #    有工具没装上 → 退出码非 0；`--no-wire` 真的传成 wire=False
@@ -9904,7 +9972,7 @@ http:
     assert _tidB7o in _q_tids_all, "装漏洞的任务必须在集合里"
     _q_app = _app_with7i()
     _q_c = _q_app.test_client()
-    assert _q_c.post("/login", data={"token": settings["gui"]["token"]},
+    assert _q_c.post("/login", data=_admin_form117(),
                      environ_base={"REMOTE_ADDR": "203.0.113.231"}).status_code == 302
     _q_vh = _q_c.get("/vulns", query_string={"task_id": str(_tidB7o)}).get_data(as_text=True)
     assert _oldest_name7o in _q_vh, \
@@ -10843,7 +10911,7 @@ http:
     #    续61 的真实缺陷正是 `tools.html` 把 `which()` 的绝对路径原样渲染出去（工具函数本身没错）。
     _app7y = _app_with7i()
     _c7y = _app7y.test_client()
-    assert _c7y.post("/login", data={"token": settings["gui"]["token"]},
+    assert _c7y.post("/login", data=_admin_form117(),
                      environ_base={"REMOTE_ADDR": "203.0.113.241"}).status_code == 302
 
     _tid7y = db.create_task("smoke61-abs-path", "127.0.0.1", ["osint"], {})
@@ -11173,7 +11241,7 @@ http:
 
     # (g) 页面级：punycode 子域名行渲染成**中文**，但 `value` 仍是 punycode（真实值不动）
     _c8 = app.test_client()
-    assert _c8.post("/login", data={"token": settings["gui"]["token"]},
+    assert _c8.post("/login", data=_admin_form117(),
                     environ_base={"REMOTE_ADDR": "203.0.113.242"}).status_code == 302
     _ptid8 = db.create_task("smoke65-idn-page", "例子.中国", ["subdomain"], {})
     db.insert_subdomains(_ptid8, [("xn--fsqu00a.xn--fiqs8s", "passive:stub")])
@@ -13046,134 +13114,150 @@ http:
           "asset_count 与实际行数一致")
 
 
-    # ---------------- [8n] 续113：引导口令改为 PBKDF2 哈希存储（不再落明文、不再回显） ----------------
-    from scanner import users as _usr113   # 本组要直接派生 / 校验口令
-    #      上一轮把会话密钥从 `gui.token` 上摘掉了（续109），但**口令本身仍是明文**躺在
-    #      `config/settings.yaml` 里，而这个文件**被 git 跟踪**；更糟的是「策略配置」页
-    #      用 `value="{{ s.gui.token }}"` 把它**印回页面源码** —— 任何人能看到那一页（或
-    #      查看源代码）就读到了管理员入口。这一组盯三件事：存的是派生值、明文不再外流、
-    #      以及"留空不改口令"（否则改一次别的配置就把口令清了 = 把人锁在门外）。
-    import copy as _cp113
+    # ---------------- [8v] 续117：登录凭据不再住在配置文件里（首启动向导 + run_users.py） ----------------
+    #      旧版有一条 `gui.token` 引导口令：库里 0 个账号时那个串能换到管理员身份。而
+    #      `config/settings.yaml` **被 git 跟踪、仓库是公开的** —— 等于"谁能读仓库谁就能进控制台"，
+    #      这台机器上它甚至还是出厂默认值。本轮把那条门整支摘掉，改成
+    #      ① 首启动向导（0 账号 + 可交互终端）② `run_users.py`（非交互 / 忘口令 / 被锁定）。
+    #      本组盯五件事：向导的每种状态都说实话、口令只进账号表、旧 Cookie 与伪造 Cookie 都不认、
+    #      页面上不再有口令输入框、以及"删键"到底删不删得掉。
+    from scanner import admin_setup as _as117
+    from scanner import config as _cfg117
 
-    _pl113 = "旧明文口令-113"
-    _new113 = "新哨口令-113"
+    _SENT117 = "SENTINEL-BOOTSTRAP-PW-117"       # 哨兵：任何地方都不许出现它的值
 
-    _real113 = _cp113.deepcopy(gui_app.load_settings())      # 打桩之前先取一份**完整**配置
+    # ① 向导的六种状态（用注入的 ask，不去造假终端；每条都必须有明确说法，不许静默）
+    for _u in users_mod.list_users():
+        users_mod.delete_user(_u["id"])
+    assert users_mod.count_users() == 0
+    _st, _msg = _as117.wizard(ask_name=lambda: "", ask_password=lambda _w: None, isatty=False)
+    assert _st == _as117.ST_NO_TTY and "--create-admin" in _msg, (_st, _msg)
+    assert users_mod.count_users() == 0, "非交互环境绝不能'顺手'替用户建号"
+    _st, _msg = _as117.wizard(ask_name=lambda: "smoke-wiz-a", ask_password=lambda _w: _SENT117,
+                              isatty=True)
+    assert _st == _as117.ST_CREATED, (_st, _msg)
+    assert users_mod.count_users() == 1, "向导应恰好建出 1 个账号"
+    _row117 = users_mod.get_by_name("smoke-wiz-a")
+    assert _row117["role"] == users_mod.ROLE_ADMIN, "首个账号必须是管理员，否则策略页永远进不去"
+    # 已有账号时再启动**不动手**（否则每次重启都可能多一个号）
+    _st, _msg = _as117.wizard(ask_name=lambda: "smoke-wiz-b", ask_password=lambda _w: _SENT117,
+                              isatty=True)
+    assert _st == _as117.ST_HAS_USERS and users_mod.count_users() == 1, (_st, _msg)
+    # 用户放弃输入 / 口令为空 → cancelled 且**不建号**（"按 Ctrl-C 结果建了个号"是不能接受的）
+    users_mod.delete_user(_row117["id"])
+    _st, _msg = _as117.wizard(ask_name=lambda: "smoke-wiz-c", ask_password=lambda _w: None,
+                              isatty=True)
+    assert _st == _as117.ST_CANCELLED and users_mod.count_users() == 0, (_st, _msg)
+    # 用户名不合法 → invalid（而不是"悄悄建了个别的名字"）
+    _st, _msg = _as117.wizard(ask_name=lambda: "bad name!!", ask_password=lambda _w: _SENT117,
+                              isatty=True)
+    assert _st == _as117.ST_INVALID and users_mod.count_users() == 0, (_st, _msg)
 
-    def _patch_with(cfg_gui, typed):
-        """把 `gui_app._gui_token_patch` 摆到一份指定的 gui 配置上跑（不碰真实 settings.yaml）。
+    # ② 口令只进 `users` 表（pbkdf2 派生值），**配置文件里一个字都没有**
+    _as117.wizard(ask_name=lambda: "smoke-wiz-d", ask_password=lambda _w: _SENT117, isatty=True)
+    _cfg_text = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+    assert _SENT117 not in _cfg_text, "向导把口令写进了配置文件"
+    assert _SENT117 not in str(_cfg117.load_settings()), "load_settings() 的结果里出现了口令"
+    _col117 = db._query("SELECT password FROM users WHERE username='smoke-wiz-d'", one=True)
+    assert str(_col117["password"]).startswith("pbkdf2_sha256$"), "库里存的应当是派生值"
+    assert _SENT117 not in str(_col117["password"]), "库里出现了明文口令"
+    _cl117 = app.test_client()
+    assert _login7(_cl117, {"username": "smoke-wiz-d", "password": _SENT117},
+                   environ_base={"REMOTE_ADDR": "203.0.113.237"}).status_code == 302
+    assert _cl117.get("/settings").status_code == 200, "向导建的号确实拿到了管理员身份"
 
-        桩必须返回整份配置（只在上面覆盖 gui 那一段）：`load_settings()` 的消费方不止一个
-        （`blacklist.enabled` 等会直接 `settings.get("blacklist")`），只回 `{"gui": ...}`
-        会让 /settings 页 500，而 500 页面里当然不含口令明文 —— 断言就假绿了。
+    # ③ 无 uid 的会话**一律不认**，哪怕库里 0 个账号 —— 这条就是新旧代码的分水岭：
+    #    旧实现里"0 账号 + 无 uid"恰好是引导会话的合法形态（能直接换到管理员）。
+    for _u in users_mod.list_users():
+        users_mod.delete_user(_u["id"])
+    _cf117 = app.test_client()
+    with _cf117.session_transaction() as _s117:
+        _s117["auth"] = True
+        _s117["user"] = "admin"
+        _s117["role"] = users_mod.ROLE_ADMIN
+    assert _cf117.get("/").status_code == 302 and _cf117.get("/settings").status_code == 302, \
+        "伪造/历史遗留的无 uid Cookie 换到了管理员页面（旧引导门等于没摘干净）"
+
+    # ④ 页面级红线：策略页/登录页都**不再有口令输入框**，渲染出的 HTML 里也不提 gui.token
+    _f117 = _admin_form117()          # ③ 把库清空了，这里建回一个管理员再取页面
+    _cc117 = app.test_client()
+    assert _login7(_cc117, _f117, environ_base={"REMOTE_ADDR": "203.0.113.238"}).status_code == 302
+    _sh117 = _cc117.get("/settings").get_data(as_text=True)
+    assert 'type="password"' not in _sh117, "策略页又长出口令输入框了"
+    assert 'name="token"' not in _sh117 and "gui.token" not in _sh117, \
+        "策略页仍把引导口令这一栏渲染给用户（那个键已经没人读了）"
+    _lh117 = app.test_client().get("/login").get_data(as_text=True)
+    assert 'name="token"' not in _lh117, "登录页仍有引导口令字段"
+    assert "gui.token" not in _lh117, "登录页还在教用户去配置文件里找口令"
+
+    # ⑤ 「删键」是真删，而且是**逐行**删。只在临时副本上做（把 `config.BASE_DIR` 指过去），
+    #    两条反证 + 一条正解：
+    #      反证一 `save_settings` 是合并写 → 传一份"没有 token 的字典"进去，键**还在**；
+    #      反证二 它还会整份 `yaml.safe_dump` 重写 → 注释全丢（这就是删键必须走逐行文本的理由）；
+    #      正解   `remove_settings_keys` 只碰目标那一行，其余行**一字不动**、注释一条不损。
+    _tmp117 = _TMPDIR / "cfg117"
+    (_tmp117 / "config").mkdir(parents=True, exist_ok=True)
+    _p117 = _tmp117 / "config" / "settings.yaml"
+
+    def _fresh_copy117():
+        """把真实 settings.yaml 拷进临时目录，并**确保里面有 gui.token 残留**。
+
+        真实文件可能已经被 `--purge-legacy-token` 清干净了 —— 本组测的是"删键"这个动作，
+        不该依赖某台机器此刻还剩不还剩那个键，所以缺就在副本里造一条（只在副本，不碰真实文件）。
         """
-        _orig_load113 = gui_app.load_settings
-        _stub = _cp113.deepcopy(_real113)
-        _stub["gui"] = dict(cfg_gui)
-        gui_app.load_settings = lambda: _cp113.deepcopy(_stub)
-        try:
-            return gui_app._gui_token_patch(typed)
-        finally:
-            gui_app.load_settings = _orig_load113
+        shutil.copyfile(str(ROOT / "config" / "settings.yaml"), str(_p117))
+        _t = _p117.read_text(encoding="utf-8")
+        if "\n  token:" not in _t and not _t.startswith("  token:"):
+            _t = _t.replace("  host: 127.0.0.1", "  host: 127.0.0.1\r\n  token: " + _SENT117, 1)
+            _p117.write_text(_t, encoding="utf-8")
+        assert "token:" in _p117.read_text(encoding="utf-8"), "副本里应留着那条残留"
+        return _p117.read_text(encoding="utf-8").splitlines()
 
-    # ① 填了新口令 → 只存派生值，明文列清空，且派生值真能验回新口令、验不出旧口令
-    _p113 = _patch_with({"token": _pl113, "token_hash": ""}, _new113)
-    assert _p113["token"] == "", _p113
-    assert _p113["token_hash"].startswith("pbkdf2_sha256$"), _p113
-    assert _usr113.verify_password(_p113["token_hash"], _new113) is True
-    assert _usr113.verify_password(_p113["token_hash"], _pl113) is False, "旧口令还能用 = 根本没换"
-    assert _new113 not in str(_p113) and _pl113 not in str(_p113), "提交结果里出现了明文字符串"
-
-    # ② 留空 + 已有哈希 → 保持哈希、清掉残留明文（"没填"不等于"把口令清了"）
-    _keep113 = "pbkdf2_sha256$200000$cwM=$cQ8x"
-    _p2 = _patch_with({"token": _pl113, "token_hash": _keep113}, "")
-    assert _p2 == {"token": ""}, _p2
-    # ③ 留空 + 从来没有哈希（老配置直接点保存）→ 只能原样留着，否则这一按就把自己锁在门外
-    _p3 = _patch_with({"token": _pl113, "token_hash": ""}, "")
-    assert _p3 == {"token": _pl113}, _p3
-
-    # ④ 端到端：哈希存好后，登录只认新口令；旧明文口令进不了门（同样受验证码门与 IP 限速约束）
-    _saved113 = _cp113.deepcopy(_real113)
-    _saved113["gui"] = dict(_saved113.get("gui") or {}, token="",
-                            token_hash=_p113["token_hash"])
-    _orig_load113b, _orig_save113 = gui_app.load_settings, gui_app.save_settings
-    _post113 = {}
-
-    def _fake_save113(data):
-        """`save_settings` 的替身：**照真的语义返回合并后的整份配置**（真的就返回 dict）。
-
-        图省事 `return True` 会让 `settings = save_settings(data)` 把闭包里的配置换成布尔值，
-        下一次 GET /settings 直接崩在 `blacklist.load(True)` 上 —— 而崩溃页里"当然不含明文"，
-        下一条断言就白测了（AGENTS §6.1 说的假绿）。
-        """
-        _post113.clear()
-        _post113.update(_cp113.deepcopy(data))
-        merged = _cp113.deepcopy(_real113)
-        for _k, _v in (data or {}).items():
-            if isinstance(_v, dict) and isinstance(merged.get(_k), dict):
-                merged[_k].update(_v)
-            else:
-                merged[_k] = _v
-        return merged
-
-    gui_app.load_settings = lambda: _cp113.deepcopy(_saved113)
-    gui_app.save_settings = _fake_save113
+    _cmt_of = lambda _ls: sum(1 for _l in _ls if _l.lstrip().startswith("#"))
+    _orig_base117 = _cfg117.BASE_DIR
+    _cfg117.BASE_DIR = _tmp117
     try:
-        _cap113 = ("198.51.100.231", "198.51.100.232", "198.51.100.233")
-        _ok113 = _login7(c, {"token": _new113}, environ_base={"REMOTE_ADDR": _cap113[0]})
-        assert _ok113.status_code == 302, ("哈希口令登录失败", _ok113.status_code)
-        _bad113 = _login7(c, {"token": _pl113}, environ_base={"REMOTE_ADDR": _cap113[1]})
-        assert _bad113.status_code == 200 and "口令错误" in _bad113.get_data(as_text=True), \
-            "旧明文口令仍然进得来 = 哈希分支没接上"
-        _wrong113 = _login7(c, {"token": "完全不对的口令-113"},
-                            environ_base={"REMOTE_ADDR": _cap113[2]})
-        assert _wrong113.status_code == 200, _wrong113.status_code
-        # 「策略配置」页保存新口令：落盘的字典里只有派生值，没有任何明文
-        r113 = _login7(c, {"token": _new113}, environ_base={"REMOTE_ADDR": _cap113[0]})
-        assert r113.status_code == 302, r113.status_code
-        _s113 = c.post("/settings", data={"host": "127.0.0.1", "port": "5000",
-                                          "token": _new113, "max_workers": "20",
-                                          "http_timeout": "10", "dirscan_max_urls": "20",
-                                          "vulnscan_max_urls": "100"})
-        assert _s113.status_code == 302, (_s113.status_code, _s113.get_data(as_text=True)[-400:])
-        assert _post113.get("gui", {}).get("token") == "", _post113.get("gui")
-        assert str(_post113.get("gui", {}).get("token_hash", "")).startswith("pbkdf2_sha256$"), \
-            _post113.get("gui")
-        _pg113 = c.get("/settings")
-        assert _pg113.status_code == 200, (_pg113.status_code, _pg113.get_data(as_text=True)[-400:])
-        _pg113 = _pg113.get_data(as_text=True)
-        assert _new113 not in _pg113 and _pl113 not in _pg113, "页面源码里出现了口令明文"
-        assert 'name="token" type="password" value=""' in _pg113, "口令输入框又带上 value 了"
+        _fresh_copy117()
+        _cfg117.save_settings({"gui": {"host": "127.0.0.1"}})
+        assert _cfg117.load_settings()["gui"].get("token"), \
+            "反证一没生效：合并写本该**删不掉**那个键（这正是本轮先踩到、才补 remove_settings_keys 的坑）"
+        _cmt_after_dump = _cmt_of(_p117.read_text(encoding="utf-8").splitlines())
+        assert _cmt_after_dump == 0, \
+            f"反证二没生效：整份重写后还剩 {_cmt_after_dump} 行注释（本该全丢）"
+
+        _before117 = _fresh_copy117()                    # 基线要在这里重新取（上一步把文件重写了）
+        assert _cmt_of(_before117) > 0, "副本里应带着注释，否则「注释不损」这条测了个空"
+        _rm = _cfg117.remove_settings_keys(("gui", "token"), ("gui", "token_hash"))
+        assert _rm == ["gui.token"], _rm                 # token_hash 没值 → 不该被算成"删过"
+        assert "token" not in _cfg117.load_settings()["gui"], "键没真被删掉"
+        _after117 = _p117.read_text(encoding="utf-8").splitlines()
+        assert _after117 == [l for l in _before117 if not l.lstrip().startswith("token:")], \
+            f"逐行删多动了东西（{len(_before117)} 行 → {len(_after117)} 行）"
+        assert _cmt_of(_after117) == _cmt_of(_before117), "删键顺手删掉了注释"
     finally:
-        gui_app.load_settings, gui_app.save_settings = _orig_load113b, _orig_save113
+        _cfg117.BASE_DIR = _orig_base117
 
-    # ⑤ 模板红线：不再 `value="{{ s.gui.token }}"`（这条一旦被人改回去，④ 的"页面源码不含明文"
-    #    就会重新变绿 —— 因为那时页面根本没渲染口令，所以还要直接盯住写法本身）
-    _tpl113 = (Path(__file__).resolve().parent.parent / "gui" / "templates" / "settings.html")
-    _tsrc113 = _tpl113.read_text(encoding="utf-8")
-    assert 'value="{{ s.gui.token' not in _tsrc113, "设置页又把口令回显了"
-    assert 'name="token"' in _tsrc113 and 'type="password"' in _tsrc113, "口令输入框不见了"
+    # ⑥ 命令行入口在子进程里真跑得动，且**任何输出都不出现口令值**
+    import subprocess as _sp117
+    _r117 = _sp117.run([sys.executable, "run_users.py", "--status"], cwd=str(ROOT),
+                       capture_output=True, text=True, timeout=120)
+    assert _r117.returncode == 0, (_r117.returncode, _r117.stderr[-300:])
+    assert _SENT117 not in _r117.stdout + _r117.stderr, "--status 把口令值打印出来了"
+    assert "账号" in _r117.stdout, _r117.stdout[:200]
+    # `gui.token` 的键名在 DEFAULTS 里已经不存在（新装环境根本不会带上它）
+    assert "token" not in _cfg117.DEFAULTS["gui"] and "token_hash" not in _cfg117.DEFAULTS["gui"], \
+        "DEFAULTS 里还留着登录凭据键 —— 那等于每个新部署都自带一个共享口令"
 
-    # ⑥ §6.1 变异：把 `_gui_token_patch` 打回"直接存明文"，① 的两条断言必须立刻变红
-    _orig_patch113 = gui_app._gui_token_patch
-    gui_app._gui_token_patch = lambda typed: {"token": str(typed or _pl113)}
-    try:
-        _m113 = _patch_with({"token": _pl113, "token_hash": ""}, _new113)
-        assert _m113.get("token") == _new113 and "token_hash" not in _m113
-        raised113 = False
-        try:
-            assert _m113["token"] == "" and _m113["token_hash"].startswith("pbkdf2_sha256$")
-        except (AssertionError, KeyError):
-            raised113 = True
-        assert raised113, "变异后上面的断言仍然通过 = ① 什么都没测到"
-    finally:
-        gui_app._gui_token_patch = _orig_patch113
+    assert _login7(c, _admin_form117()).status_code == 302, \
+        "本组清过账号库，共享 client 的会话要补回来（后面还有用例用它）"
+    print("[8v] 续117 登录凭据离开配置文件 ok: 向导六种状态各有明确说法（非交互不代建号 / 放弃输入不建号 / "
+          "用户名不合法不建号 / 已有账号不动手）｜哨兵口令只在账号表的 pbkdf2 派生值里、配置文件与 "
+          "load_settings() 都没有它｜无 uid 的 Cookie 一律不认（0 账号那一档也不认 —— 旧实现正是在这里 "
+          "给管理员）｜策略页与登录页再无口令输入框、HTML 里不再出现 gui.token｜删键只动那一行、注释一字"
+          "不损（并反证 save_settings 的合并写**删不掉**）｜run_users.py --status 子进程可跑且不出口令值｜"
+          "DEFAULTS 的 gui 段不再有 token/token_hash")
 
-    print("[8n] 续113 引导口令哈希化 ok: 保存后只落 pbkdf2 派生值、明文列清空｜派生值验得出新口令、"
-          "验不出旧口令｜留空且已有哈希＝保持哈希并清残留明文｜留空且从未有哈希＝原样保留"
-          "（不把自己锁在门外）｜端到端：哈希口令能登录、旧明文与乱口令都被拒｜设置页保存时"
-          "落盘字典里没有任何明文｜模板不再回显口令（`value=s.gui.token` 红线 + 页面源码不含明文）｜"
-          "把补丁打回存明文的变异让断言变红")
+
 
 
     # ---------------- [8m] 续113：「不是域名」的 JS 碎片按注册域判掉（DNS 无结论一律放行） ----------------

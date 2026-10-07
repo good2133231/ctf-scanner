@@ -6,8 +6,9 @@
 - 默认仅监听 127.0.0.1。续46 起是**多用户**：账号 + 口令登录（`scanner/users.py`，口令只存
   pbkdf2 派生值），分「管理员 / 子用户」两级角色 —— 子用户能建任务跑扫描、看结果，但**进不去**
   策略配置 / POC 管理 / 账号管理（路由层 + 侧边栏两层都挡，见 `admin_required`）；
-  `config/settings.yaml` 的 `gui.token` 只作**迁移期的引导口令**：库里还没有任何账号时它仍可
-  登录（管理员身份），一旦建了第一个账号就立即失效（防"旧口令长期是后门"）；
+  **配置文件里没有任何登录凭据**（续117 摘掉 `gui.token` 引导口令 —— 那文件被 git 跟踪、
+  仓库是公开的，能换管理员身份的串写进去就等于公开）：库里 0 个账号时由 `serve()` 的**首启动
+  向导**交互式建第一个管理员，非交互环境 / 忘了口令 / 被锁定走 `python run_users.py`；
 - 续32 起有两道**本机守卫**（Host 白名单防 DNS rebinding + 写操作的 Origin/Referer 校验，
   见 `create_app` 的 `_local_guard`），它们是**网络侧**兜底，与"你是谁、能看什么"是两件事；
 - 续47 起**有 HTTPS 落地路径**：由反向代理终止 TLS（Caddy/Nginx 样例 + 自签路径见
@@ -18,8 +19,8 @@
   绝不记口令凭据；管理员在「访问审计」页查看）与**登录限速/失败锁定**（`scanner/login_guard.py`：
   按 IP 为主、按用户名兜底，被锁返回 429 + Retry-After，文案与"账号是否存在"无关）；
   两项是**保护性开关、默认开**；阈值调只能手改 `config/settings.yaml` 的 `gui.login_lockout` /
-  `gui.audit` —— 「策略配置」页的 gui 段**只有 host/port/token 三项**（别在页面里找，找不到）。
-  续108：登录验证码门在**所有凭据分支之前**（账号登录与 `gui.token` 引导口令同一条门），
+  `gui.audit` —— 「策略配置」页的 gui 段**只有 host/port 两项**（续117 起没有口令那一栏了）。
+  续108：登录验证码门在**所有凭据分支之前**（当年正是"引导口令那条门免码"才把判据前置的），
   且模板无条件渲染 `.captcha-row` —— 发码与查码必须同源，分叉过一次，见 `login()` 里的注释。
   **故意暴露到局域网/公网前**，请读 docs/deploy-https.md 与 docs/security-notice.md。
 """
@@ -44,8 +45,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import (audit, auth as taskauth, blacklist, captcha, cdn, certs as certs_mod, db,
-                     devfixture, devmode, dnsq,
+from scanner import (admin_setup, audit, auth as taskauth, blacklist, captcha, cdn,
+                     certs as certs_mod, db, devfixture, devmode, dnsq,
                      # 这三家反查与 GitHub 检索的**取键函数**归它们自己所有，面板只调用不复制路径
                      extdom, fofa, github_leak, login_guard, nodes, queue, quake, screenshot,
                      shodan, toolmgr, users)
@@ -148,7 +149,7 @@ def _changed_sections(old, new):
     """比较"提交上来的配置"与"当前配置"，返回**顶层区块名**列表（续48 审计用）。
 
     只回**区块名**（`gui` / `limits` / `dirscan` …），不回叶子键名 —— 续48 的红线是
-    "审计里不得出现口令/凭据值"；把键名也省掉，等于连 `gui.token` 这种**键名**都不落库，
+    "审计里不得出现口令/凭据值"；把键名也省掉，等于连**键名**都不落库，
     彻底断掉"键名 + 值"一起泄漏的可能。比较只针对 `new` 里出现的键：表单只提交它管的那些
     字段，未提交的（如 `gui.allowed_hosts`）不该被判成"变更"。
     """
@@ -206,25 +207,6 @@ def external_source_panel(settings):
     # 保险箱本身的状态也要说清：`有密文但没解锁` 看起来与`没配 key`一模一样，
     # 而两者的处置动作完全不同（补环境变量 vs 补凭据）—— 这正是上面那次误判的成因。
     return {"rows": rows, "vault": keystore.status()}
-
-
-def _gui_token_patch(new_token):
-    """把「策略配置」页提交的引导口令变成要落盘的那两列（续113）。
-
-    - 填了口令 → 只存 `token_hash`（`users.hash_password` 的 pbkdf2 派生值），**明文清空**；
-    - 留空但已有哈希 → 保持哈希、清掉残留明文（"没填"不等于"把口令清了"）；
-    - 留空且从来没有哈希（老配置直接点保存）→ 只能把原明文留着，否则这一按就把管理员
-      永久关在门外；这种配置会在启动日志里被点名催迁移。
-    """
-    cfg = (load_settings().get("gui") or {})
-    text = str(new_token or "")
-    if text.strip():
-        return {"token": "", "token_hash": users.hash_password(text)}
-    if str(cfg.get("token_hash") or ""):
-        return {"token": ""}
-    return {"token": str(cfg.get("token") or "")}
-
-
 def _safe_next(target, fallback):
     """只放行**站内相对路径**的 `next` 跳转目标，其余一律回退（防开放重定向）。
 
@@ -460,13 +442,14 @@ def create_app():
     app.secret_key, _sk_warn109 = session_secret(db.DB_PATH.parent)
     if _sk_warn109:                          # 落盘失败＝会话只活到本次重启，这事必须看得见
         logger.warning(f"[gui] {_sk_warn109}")
-    # 引导口令还是明文（老配置）就**每次启动都提醒一次**：不自动改写 `config/settings.yaml`
-    # ——那是用户的文件，静默改它比留明文更糟；但也绝不假装没看见（这文件被 git 跟踪）。
-    _gui113 = (settings.get("gui") or {})
-    if str(_gui113.get("token") or "") and not str(_gui113.get("token_hash") or ""):
-        logger.warning("[gui] 引导口令目前**明文**存在 config/settings.yaml（被 git 跟踪）——"
-                       "到「策略配置」页把口令重新填一次并保存，就会转成 PBKDF2 哈希存储"
-                       "（口令本身可以不变，登录方式也不变）；只读挂载/无法写文件时这条会一直提示")
+    # 老配置里若还留着 `gui.token` / `gui.token_hash`（续117 已摘除的功能）就每次启动**点名一次**：
+    # 代码不再读它们，可它们仍在**被 git 跟踪**的文件里。不自动改写（那是用户的文件，续113 的
+    # 口径仍然成立），清除是一条显式命令；这里只看**键名有无**，绝不打印值。
+    _legacy117 = [k for k in ("token", "token_hash")
+                  if str((settings.get("gui") or {}).get(k) or "").strip()]
+    if _legacy117:
+        logger.warning(f"[gui] config/settings.yaml 里还留着已废弃的登录键 {_legacy117}"
+                       "（不再被任何代码读取；值从未打印）—— 清除：python run_users.py --purge-legacy-token")
     # 模板里可直接调用 `source_label('osint:fofa')` → 「ICO 反查」（来源列的可读标签）
     app.jinja_env.globals["source_label"] = source_label
     app.jinja_env.globals["ip_note_label"] = ip_note_label
@@ -590,8 +573,9 @@ def create_app():
         ② 有 `uid` 的会话**每次回库核一遍**：管理员刚把某账号停用或降级时，那人的浏览器里
            还留着旧会话 —— 不回库就等于"停用要等他下次登录才生效"，口令已经可疑的场景里
            这个延迟不可接受（核查时直接清会话，等于当场踢下线）；
-        ③ 没有 `uid` 的是**引导会话**（用 `gui.token` 登进来的），只在"库里还没有任何账号"
-           的迁移期有效；建了第一个账号后立刻作废 —— 旧口令不该长期是后门。
+        ③ **没有 `uid` 的会话一律作废**（续117）：那原本是 `gui.token` 引导登录留下的 Cookie，
+           只在"库里 0 个账号"的迁移期有效。那条门整支摘掉之后，"不带 uid 的合法会话"已经不存在
+           —— 继续认它等于给升级前签出的旧 Cookie 留一条管理员通道。
         """
         if not session.get("auth"):
             return None
@@ -604,13 +588,8 @@ def create_app():
             role = row["role"] if row["role"] in users.ROLES else users.ROLE_USER
             return {"id": int(row["id"]), "username": row["username"], "role": role,
                     "must_change": int(row["must_change"] or 0) == 1}
-        if users.count_users() > 0:      # 已经有真账号了 → 引导会话作废
-            session.clear()
-            return None
-        role = session.get("role")
-        return {"id": 0, "username": str(session.get("user") or "admin"),
-                "role": role if role in users.ROLES else users.ROLE_ADMIN,
-                "must_change": False}
+        session.clear()        # 升级前留下的引导 Cookie / 手工拼的无 uid 会话：当场作废
+        return None
 
     # ---------- 续79：多租户（子用户只看自己的任务与资产；管理员看全部） ----------
 
@@ -622,7 +601,7 @@ def create_app():
         return int(me["id"])
 
     def _task_owner():
-        """新建任务的归属账号 id（引导会话 id=0）。"""
+        """新建任务的归属账号 id（未登录为 0 —— 那时 `_owned_task` 一律按 404 处理）。"""
         me = _session_user()
         return int(me["id"]) if me else 0
 
@@ -823,27 +802,24 @@ def create_app():
     @app.route("/login", methods=["GET", "POST"])
     def login():
         error = ""
-        # 迁移期引导的开关：**库里还没有账号**时旧的共享口令仍可登录（见下）
-        bootstrap = users.count_users() == 0
         if request.method == "POST":
             ip = _client_ip()
             username = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
-            # `token` 是续32 时代老表单/脚本用的字段名，迁移期继续收（不收会让老脚本 401）
-            token = request.form.get("token") or ""
             target = _safe_next(request.form.get("next"), url_for("dashboard"))
             # 续48 ① **先问限速守卫**（只读）：被锁就直接 429 + Retry-After，既不校验口令、
             #   也不累加计数。守卫只看"提交的用户名 + IP"、**不查库** → 账号是否存在不影响响应文案。
-            #   这一步在**所有分支之前**，因此 `gui.token` 引导口令登录同样受 IP 限速。
+            #   这一步在**所有分支之前**（续108 立这条就是因为当年的引导口令门免码）。
             verdict = _guard_check(ip, username)
             if verdict.locked:
                 # 续48 复核返工：**这里刻意不写审计**。被拦截的请求每次都会走到这一支，若在此写审计，
                 # 未认证者可按请求速率持续往 audit_log 追加（磁盘增长 + 抢全库唯一的写锁 → 与扫描主流程
                 # 的批量写入争锁、拖慢甚至搞挂）。"被拦截"的落库点已收口到 login_guard 里"锁刚被创建"
                 # 那一刻（一个锁窗口内最多一条），见 scanner/login_guard.py::_audit_lock。
-                logger.info(f"[gui] 登录被限速拦截：{username or '(引导口令)'}（{verdict.reason}）")
+                logger.info(f"[gui] 登录被限速拦截：{username or '(空用户名)'}（{verdict.reason}）")
                 resp = app.make_response(render_template(
-                    "login.html", error=_lockout_message(verdict.retry_after), bootstrap=bootstrap))
+                    "login.html", error=_lockout_message(verdict.retry_after),
+                    empty_account=users.count_users() == 0))
                 resp.status_code = 429
                 resp.headers["Retry-After"] = str(int(verdict.retry_after))
                 return resp
@@ -861,11 +837,12 @@ def create_app():
             #   码是一次性的（`check()` 成败都作废），所以每次失败后页面自己会重新取一张。
             if not captcha.check(session.pop("captcha_id", ""), request.form.get("captcha") or ""):
                 error = "验证码错误（已刷新，请重试）"
-                logger.info(f"[gui] 登录失败：{username or '(引导口令)'}（验证码错误）")
+                logger.info(f"[gui] 登录失败：{username or '(空用户名)'}（验证码错误）")
                 _guard_fail(ip, username)
                 _audit(audit.KIND_LOGIN_FAIL, actor=username, target=username, ok=False,
                        actor_role="", detail="验证码错误")
-                return render_template("login.html", error=error, bootstrap=bootstrap)
+                return render_template("login.html", error=error,
+                                       empty_account=users.count_users() == 0)
             if username:
                 row = users.check_login(username, password)
                 if row is None:
@@ -892,35 +869,10 @@ def create_app():
                            actor_role=row["role"], detail=f"登录成功（{row['role']}）")
                     logger.info(f"[gui] 登录成功：{row['username']}（{row['role']}）")
                     return redirect(target)
-            elif bootstrap:
-                # 引导口令（续113）：**优先比 `gui.token_hash`（pbkdf2 派生值）**，只有还没迁移的
-                # 老配置才退回比明文 `gui.token`。`config/settings.yaml` 是被 git 跟踪的，
-                # 明文提交一次就等于把管理员入口交给每个读到仓库的人。
-                gui_cfg = load_settings().get("gui") or {}
-                stored_hash = str(gui_cfg.get("token_hash") or "")
-                plain = str(gui_cfg.get("token") or "")
-                tried = [token, password]        # 老表单/脚本用的是 `token` 字段，两个字段都收
-                if stored_hash:
-                    _ok113 = any(users.verify_password(stored_hash, v) for v in tried)
-                else:
-                    _ok113 = bool(plain) and any(users.const_eq(v, plain) for v in tried)
-                if _ok113:
-                    session.clear()
-                    session["auth"] = True
-                    session["user"] = "admin"
-                    session["role"] = users.ROLE_ADMIN
-                    _guard_ok(ip, "")     # 引导登录无用户名：只记成功（IP 计数刻意不清）
-                    _audit(audit.KIND_LOGIN_OK, actor="admin", ok=True,
-                           actor_role=users.ROLE_ADMIN, detail="引导口令登录成功（迁移期，管理员身份）")
-                    logger.info("[gui] 登录成功：引导口令（迁移期，管理员身份）")
-                    return redirect(target)
-                error = "口令错误"
-                logger.info("[gui] 登录失败：引导口令错误")
-                _guard_fail(ip, "")
-                _audit(audit.KIND_LOGIN_FAIL, actor="", ok=False, detail="引导口令错误")
             else:
                 error = "请输入用户名与口令"
-        return render_template("login.html", error=error, bootstrap=bootstrap)
+        return render_template("login.html", error=error,
+                               empty_account=users.count_users() == 0)
 
     @app.route("/logout")
     def logout():
@@ -949,14 +901,17 @@ def create_app():
     @login_required
     @admin_required
     def api_user_create():
-        """建账号。**防锁死**：库里还没有账号时，建出来的**必须是管理员** ——
-        否则"第一个账号是子用户"就是一条单行道：子用户进不了本页，从此没人能再建号。
+        """建账号（角色照提交值走）。
+
+        续46 这里还有一条"库里没账号时强制建成管理员"的防锁死分支 —— 那是给**引导口令**兜底的：
+        旧版空库时谁都能用配置里那个串进来，一不留神就把第一个号建成子用户，从此没人进得了本页。
+        续117 把那条门摘掉之后，"空库却已登录"这个前提不可能成立（登录必然要求库里有一个账号），
+        那一档就成了走不到的代码；首个管理员改由 `serve()` 的向导 / `run_users.py --create-admin`
+        建，两条路都写死 `role=admin`，防锁死的那件事仍然有人管。
         """
         username = (request.form.get("username") or "").strip()
         password = request.form.get("password") or ""
         role = users.ROLE_ADMIN if request.form.get("role") == "admin" else users.ROLE_USER
-        if users.count_users() == 0:
-            role = users.ROLE_ADMIN
         ok, msg = users.create_user(username, password, role=role, must_change=True)
         if not ok:
             return _users_back(msg)
@@ -1062,8 +1017,8 @@ def create_app():
             old = request.form.get("old_password") or ""
             new = request.form.get("password") or ""
             again = request.form.get("password2") or ""
-            if not me or not me["id"]:
-                error = "引导登录没有账号可改，请先在「账号」页创建管理员账号"
+            if not me:
+                error = "会话已失效，请重新登录"
             elif not users.get_user(me["id"]):
                 error = "账号不存在（可能已被删除）"
             elif not users.check_login(me["username"], old):
@@ -2942,10 +2897,10 @@ def create_app():
             f = request.form
             try:
                 data = {
+                    # 续117：gui 段只有 host/port —— 口令类的值不再往**被 git 跟踪**的
+                    # settings.yaml 里写（登录一律走 users 表的 PBKDF2 派生值）
                     "gui": {"host": f.get("host", "127.0.0.1"),
-                            "port": int(f.get("port", 5000) or 5000),
-                            # 续113：这一页**不再把引导口令写成明文**（见 `_gui_token_patch`）
-                            **_gui_token_patch(f.get("token", ""))},
+                            "port": int(f.get("port", 5000) or 5000)},
                     "limits": {"max_workers": int(f.get("max_workers", 20) or 20),
                                "http_timeout": int(f.get("http_timeout", 10) or 10),
                                "verify_tls": f.get("verify_tls") == "1",
@@ -3513,12 +3468,19 @@ def serve(start_queue=True):
         print(f"[*] 任务队列已启动：{queue.config(_settings)['workers']} 个 worker"
               "（queue.workers；进程重启后未完成任务会自动重新入队）")
     print(f"[*] CTFScanner 控制台: http://{host}:{port}")
-    # 续46：多用户之后，启动提示必须**分清两种状态** —— 有账号就别再宣扬那个共享口令
-    # （它此时已经失效了，还打印出来等于引导人去试一个不存在的入口）。
-    if users.count_users() == 0:
-        print(f"[*] 尚未创建账号：可用 config/settings.yaml 的 gui.token"
-              f"（值见该文件，本机不打印）以管理员身份登录，"
-              f"随后到「账号」页创建账号 —— 建号后该口令立即失效。")
+    # 续117：库里还没有账号 → **在启动前**把第一个管理员建出来。
+    # 以前这里印的是"去 settings.yaml 里找那个共享口令"，而那文件被 git 跟踪、仓库公开；
+    # 现在配置文件里没有任何可登录的凭据，首启动就只能交互式建号（口令只进 users 表的派生值）。
+    # 每种状态都要**说出来**：非交互环境 / 用户放弃输入 / 规则不合法 —— 静默跳过会让人以为
+    # 登录页坏了，而真相是"这台机器上还没有任何一个能登录的账号"。
+    _w_state, _w_msg = admin_setup.wizard()
+    if _w_state == admin_setup.ST_CREATED:
+        print(f"[+] 首启动向导：{_w_msg}")
+    elif _w_state in (admin_setup.ST_NO_TTY, admin_setup.ST_CANCELLED):
+        print(f"[!] {_w_msg}")
+    elif _w_state == admin_setup.ST_INVALID:
+        print(f"[!] 首启动向导没能建号：{_w_msg}")
+        print("    控制台仍会继续启动，此时无人能登录；补建：python run_users.py --create-admin")
     else:
         print("[*] 多用户已启用：请用已创建的账号登录（管理员可在「账号」页建/停用子用户）。")
     # 续47：HTTPS 与 Host 白名单的现状**在启动时就说明白**（部署排错时最先看的就是这几行）。

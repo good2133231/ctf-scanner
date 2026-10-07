@@ -337,6 +337,10 @@ class _Report:
         return self.check(name, got == want, f"期望 {want!r}，实到 {got!r}")
 
 
+_E2E_USER = "e2e-admin"
+_E2E_PW = "E2e#smoke-only-117"
+
+
 def _seed_db():
     """先造好数据再起 GUI 进程 —— 避免"测试进程与 GUI 进程同时写库"的并发窗口。
 
@@ -344,8 +348,12 @@ def _seed_db():
     批量打开上限 20）。目录的 `length` 逐行不同 —— 否则会被 `/dirs` 的"同站点+状态+大小"
     折叠规则合并，分页行数就不是 50/10 了（断言必须建立在"不会被折叠"的数据上）。
     """
-    from scanner import db                                  # 在 env 设好之后再导入，锁定临时库
+    from scanner import db, users as _eu                    # 在 env 设好之后再导入，锁定临时库
     db.init_db()
+    # 造一个管理员账号：e2e 走的是**真表单登录**，没有账号就连登录页都过不去
+    if not _eu.get_by_name(_E2E_USER):
+        ok, msg = _eu.create_user(_E2E_USER, _E2E_PW, _eu.ROLE_ADMIN, must_change=False)
+        assert ok, f"e2e 造管理员失败：{msg}"
     tid = db.create_task("E2E-浏览器端到端", "http://e2e.local", ["dirscan"])
     db.update_task(tid, status="done", progress=100, current_stage="dirscan")
     db.insert_dirs(tid, [{"site_url": "http://e2e.local", "path": f"/e2e-{i:02d}",
@@ -471,13 +479,13 @@ def _cap_code(want=1, deadline=10.0):
     return ""
 
 
-def _login(page, base, token):
-    """走**真实登录表单**拿到会话（引导口令：库里无账号时 `gui.token` 即管理员）。
+def _login(page, base, user, password):
+    """走**真实登录表单**拿到会话（续117：登录只有账号一条路，配置文件里没有任何凭据）。
 
     刻意不伪造 Cookie / 不塞 session：要验的就是"浏览器提交表单 → 服务端下发会话 → 后续页面
     不再 302"这条链路；伪造会话等于把要测的东西绕过去。
 
-    续108：验证码门在所有凭据分支之前，库里无账号（引导口令）时**同样要填码** —— 旧版只填
+    续108：验证码门在所有凭据分支之前，任何形态的提交都**要填码** —— 旧版只填
       口令就提交，从那一刻起这条链路必然停在登录页（表现为整组断言红）。码取自 capfile
       （服务端自己抄录的那份）：页面仍然真读图、真填框、真提交，一点没绕。
     """
@@ -490,18 +498,18 @@ def _login(page, base, token):
     _code = _cap_code()
     if not _code:
         raise RuntimeError("没取到服务端下发的验证码（capfile 超时）")
-    page.ev("document.querySelector('input[name=username]').value=''")
+    page.ev(f"document.querySelector('input[name=username]').value={json.dumps(user)}")
     page.ev(f"document.querySelector('input[name=captcha]').value={json.dumps(_code)}")
-    page.ev(f"document.querySelector('input[name=password]').value={json.dumps(token)}")
+    page.ev(f"document.querySelector('input[name=password]').value={json.dumps(password)}")
     href = page.click_nav("document.querySelector('.login-box form button[type=submit]')")
     return href
 
 
-def _run_checks(page, base, rep, token, tid, port, tid_run):
+def _run_checks(page, base, rep, cred, tid, port, tid_run):
     """登录前提 + 8 条交互的断言（每条都是"点完之后 DOM/URL/钩子真的变了"，不是页面里有某字符串）。"""
 
     # ---------- [1] 登录（后续所有页面的前提；也是"302 墙"是否被真正推开的证据） ----------
-    href = _login(page, base, token)
+    href = _login(page, base, cred[0], cred[1])
     rep.check("[1] 真表单登录后被重定向到仪表盘", (href or "").rstrip("/").endswith(f":{port}"),
               f"登录后 href={href!r}")
     rep.check("[1] 仪表盘侧边栏已渲染（非登录页/非 302）",
@@ -750,13 +758,10 @@ def run(settings=None):
         env = dict(os.environ)
         (work / "profile").mkdir()
 
-        from scanner.config import load_settings
-        st = settings if isinstance(settings, dict) else load_settings()
-        token = str((st.get("gui") or {}).get("token") or "")
-        if not token:
-            note = "跳过：config 里没配 gui.token，登录流程走不通"
-            print("[跳过] " + note)
-            return False, note
+        # 续117：登录只有账号一条路 —— e2e 用**临时库里造的账号**登录（口令是本文件的常量、
+        # 只在一次性沙箱里有效，不是任何真实凭据）。以前这里是"读 config 里的 gui.token，
+        # 没配就整组跳过"，那种"跳过"在 CI 上等于把浏览器这条链路悄悄关掉。
+        cred = (_E2E_USER, _E2E_PW)
 
         print(f"[*] 浏览器: {os.path.basename(browser)}；临时目录: {work.name}")
         tid, tid_run = _seed_db()
@@ -767,7 +772,7 @@ def run(settings=None):
         print("[*] 无头浏览器已连上 CDP，开始交互断言")
         page = Page(cdp)
         rep = _Report()
-        _run_checks(page, f"http://127.0.0.1:{port}", rep, token, tid, port, tid_run)
+        _run_checks(page, f"http://127.0.0.1:{port}", rep, cred, tid, port, tid_run)
         ok = not rep.fails
         if ok:
             note = f"通过：登录 + 8 项交互共 {rep.n} 条断言全绿（真浏览器 / 真 Flask 进程）"

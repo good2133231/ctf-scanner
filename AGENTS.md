@@ -142,7 +142,10 @@ Flask Web 控制台（仿 ARL）。
 ```
 ctf-scanner/
 ├── cli/client.py          # CLI 入口：导入目标 → run_task（阻塞）
-├── run_gui.py             # Web 控制台入口
+├── run_gui.py             # Web 控制台入口（库里 0 个账号时**先跑首启动向导**建第一个管理员，续117）
+├── run_users.py           # 管理员账号的命令行入口（续117）：--status / --create-admin / --reset-password
+│                          #   / --purge-legacy-token；口令只从 getpass 或 CTFSCANNER_ADMIN_PASSWORD 来，
+│                          #   **任何输出都不出现口令值**，落库的只有 PBKDF2 派生值
 ├── run_bootstrap.py      # 迁移自举（续96）：按平台点清环境缺口，自动补 `.venv`(含 pip 引导) + pip 依赖 + `toolmgr.TOOLS` + 可选系统包层 `--with-system`；nmap/fscan/dirmap **只打印命令、不代跑**。放仓库根、刻意不进 `scanner/` 包（免得给 [7p] 的扫描期零下载红线开豁免）
 ├── run_keys.py          # 凭据口令加密的管理入口（续98）：--status / --encrypt / --change / --verify；任何输出都不出现 key 值或口令
 ├── gui/
@@ -198,6 +201,8 @@ ctf-scanner/
 │   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖；续109 新增 `session_secret(dir)`：会话签名密钥随机 32 字节 + 落盘 0600（`session.secret`），**绝不由 gui.token 推导**
 │   ├── keystore.py        # 凭据口令加密（续98）：PBKDF2(60 万次)+AES-256-GCM 读写 config/keys.enc.yaml；解锁只在启动时由入口调一次并缓存，current() 只读缓存、绝不提示
 │   ├── users.py           # 多用户（续46）：PBKDF2 口令哈希 / check_login / validate_password / 防锁死（不能停用自己、至少留一个启用中的管理员）
+│   ├── admin_setup.py      # 建"能登录控制台的人"（续117）：向导 + 命令行**共用**的判据（0 账号才动作 /
+│   │                      #   非交互不代填 / 口令只进 users 表），两个入口一份规则，别各写一遍
 │   ├── audit.py           # 访问审计流水（续48）：谁·何时·哪 IP·做了什么·成败；`record()` 自带口令形状擦洗，**只记元数据**
 │   ├── login_guard.py     # 登录限速 / 失败锁定（续48）：独立表 `login_fails`（与审计分表）；按 IP 为主 + 按用户名兜底，
 │   │                      #   被锁返回 429 + Retry-After 且**正确口令也拒**、页面不泄漏账号存在性；自救 `-m scanner.login_guard`
@@ -405,6 +410,14 @@ ctf-scanner/
    自检另有更窄的一份 `devflow._EXTERNAL_OFF`（不含 `iprecon`/`github`/`intel`，它们各有处置），
    两者口径不同**是刻意的**，别合并。回归见 `tests/smoke.py [8e]`（含 `enabled()` 恒假/恒真两向变异）。
 
+
+10. **登录凭据只在 `users` 表里，配置文件里一个都不许有**（续117）：旧的 `gui.token` 引导口令
+   （库里 0 个账号时能直接换管理员身份）已整支摘除 —— `config/settings.yaml` **被 git 跟踪、仓库公开**，
+   "能换管理员身份的串"写在里面就等于交给每个读者。现在的路径：0 账号 → `serve()` 的首启动向导
+   （`scanner/admin_setup.py::wizard()`）或 `python run_users.py --create-admin`；`_session_user()` 对
+   **不带 `uid` 的会话一律作废**（升级前留下的引导 Cookie 也不再认，回归 `[8v] ③` 钉的就是这一档）。
+   新增任何"绕过账号的登录路"都算违反本条；页面侧也不许再出现口令输入框（`[8v] ④` 按渲染出的
+   HTML 判，注释里写不写键名都不影响判据）。
 
 ## 6. 如何验证改动
 
@@ -658,7 +671,10 @@ py -3 tests/browser_e2e.py     # 续60：真浏览器 E2E（无头 Chrome/Edge +
                                #   退出码 0=全过 / 1=有断言失败 / 2=找不到浏览器（跳过，不是通过）
                                #   已接进 smoke 的 `[7x]`（可降级组；`[7w]` 是有效级别口径 + 校准基线）
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
-py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanner
+py -3 run_gui.py            # 控制台 http://127.0.0.1:5000；库里没账号时**当场向导**问你要设什么口令
+py -3 run_users.py --status   # 续117：账号数 + 配置里有无历史残留（只报有无，不报任何值）
+                            #   建号 / 改口令：--create-admin [用户名]、--reset-password 用户名
+                            #   非交互环境用 CTFSCANNER_ADMIN_PASSWORD 提供；口令只落 users 表
 # Linux 实机验收（**2026-09-23 续12 已达成**：Ubuntu 22.04.5 / Python 3.10.12）
 # Linux 实机验收（2026-10-02 续96-附2 复跑：Ubuntu / Python 3.14.4）—— smoke 131 段 PASS、devflow 18 OK / 0 MISS / 17 N-A、calibrate RC=0、CLI 实走 httpx、GUI /login 无绝对路径；browser_e2e 因无浏览器 RC=2（跳过≠通过），故截图与 PDF 在该机仍未验
 #   python3 tests/smoke.py   → SMOKE PASS（`[5o]` 会按运行平台自报状态）
@@ -997,20 +1013,26 @@ py -3 run_gui.py            # 控制台 http://127.0.0.1:5000，口令 ctfscanne
   Host 白名单自动放宽，暴露必须看得见。**注意 `_LOOPBACK_HOSTS` 刻意不含 `0.0.0.0`**（它是绑定
   地址、不是可访问的主机名）；`gui.host` 改了要**重启**才生效（守卫在 `create_app()` 算一次）。
 - **发码与查码必须同源（续108）**：`gui/templates/login.html` 的 `.captcha-row` **无条件渲染**，
-  `gui/app.py::login()` 的 `captcha.check(...)` 在**所有凭据分支之前** —— 账号口令与 `gui.token`
-  引导口令走同一条门。这里分叉过一次：模板按 `{% if not bootstrap %}`（库里无账号）隐藏整块，
+  `gui/app.py::login()` 的 `captcha.check(...)` 在**所有凭据分支之前** —— 当年账号口令与
+  `gui.token` 引导口令走同一条门（续117 摘掉引导口令后只剩账号一条分支，这条纪律更要守住：
+  将来再加任何登录方式，门必须在它之前）。这里分叉过一次：模板按"库里有没有账号"隐藏整块，
   路由却按"填了用户名才查码"，于是**零账号时输入 `admin` 永远「验证码错误」而页面上根本没有码可抄**
   （用户报的"后台不显示验证码"就是这个）；而唯一能直接换来管理员身份的引导口令反倒**完全免码**。
   改这一处**模板与路由要一起改**，回归 `[7h+]`（有账号档）与 `[7j]` ⑬（零账号档）两头都钉着。
   失败锁定 `max_fails_per_ip` 续108 由 10 收到 **5**，**三份默认值必须一起改**（`login_guard.DEFAULTS`
   / `config.DEFAULTS` / `config/settings.yaml`，`[7j]` ① 钉三方一致）；用例一律从 `_cfg48` 取阈值、
-  不许把数字写进循环（§6.2）。这两段阈值**页面上改不了** —— `/settings` 的 gui 段只有 host/port/token。
+  不许把数字写进循环（§6.2）。这两段阈值**页面上改不了** —— `/settings` 的 gui 段只有 host/port
+  两项（续117 起连口令那一栏也没有了）。
   ✅ 续109 修掉其中第一条：会话签名密钥不再由 `gui.token` 推导 —— `config.session_secret()` 随机 32 字节、
      落在**库同目录**的 `session.secret`（0600；`data/` 本就在 .gitignore，`CTFSCANNER_DB` 一重定向就自动进测试沙箱），
      已存在则复用（重启不打光会话），写不了就**退回进程内随机并 warning**（绝不静默降级，更绝不退回可推导串）。
      顺带：`serve()` 的启动横幅不再打印引导口令的值。回归 `[8g]` —— 用**旧推导式密钥**签一张真存在、真启用的
      管理员 Cookie 塞进客户端，`/` 与 `/settings` 必须 302；同一条判据配**运行时变异**（把 `app.secret_key` 打回
      `f"ctfscanner::{token}"` → 同一张 Cookie 立刻被接受），否则"被拒"可能只是 Cookie 格式搓错了（§6.1）。
+  ✅ 续117 把这一整支**摘掉**（比续113 的"只存派生值"更彻底）：`gui.token` / `gui.token_hash`
+     都不再被任何代码读取，配置文件里没有任何登录凭据；残留键由 `run_users.py --purge-legacy-token`
+     显式清除（走 `config.remove_settings_keys` —— **逐行删**，`save_settings` 是合并写删不掉键，
+     且它整份 `yaml.safe_dump` 会把 settings.yaml 的注释全洗掉，本轮真踩过）。下面这条留作历史。
   ✅ 续113 收掉第二条：`gui.token` 不再必须存明文 —— 「策略配置」页保存口令只写 `gui.token_hash`
      （pbkdf2 派生值），页面上也不回显。**仍留的一条**：老配置里"只有明文、还没有哈希"时登录仍认明文
      （否则一升级就把人锁在门外），每次启动打 warning 催迁移。详见下面「引导口令只存派生值」一条。

@@ -1,7 +1,6 @@
 gui:
   host: 127.0.0.1
   port: 5000
-  token: ctfscanner
   # ---- 部署到服务器（续47，见 docs/deploy-https.md）----
   # 三项默认都是最保守值，要用必须显式改；改完需重启控制台才生效。
   # allowed_hosts：Host 白名单的显式扩展（空 = 只认 127.0.0.1/localhost/::1）。

@@ -87,10 +87,15 @@ python cli/client.py -t http://target.local/ --cookie "SESSION=xxx" -H "X-Api-Ke
 python run_gui.py          # 默认 http://127.0.0.1:5000
 ```
 
-口令在 `config/settings.yaml` 的 `gui.token`（默认 `ctfscanner`）。登录页**必须有验证码**（续108 起
-连引导口令也要过码）；页面上没出图通常是**旧进程还在跑** —— 改完 GUI 侧代码要重启控制台再看。
-续113 起，在「策略配置」页重设口令后**仓库里只留 PBKDF2 派生值**（`gui.token_hash`，明文那一列被清空），
-输入框也不再回显；留空保存＝不改口令，老配置（只有明文、没迁移过）仍然可以照旧登录。
+登录**只有账号 + 口令一条路**（续117）：配置文件里没有任何凭据，第一个管理员由**首启动向导**
+当场建（`run_gui.py` 在库里 0 个账号时会直接向导），或跑 `python run_users.py --create-admin`；
+改自己的口令去「修改口令」页，管理员给别人改口令去「账号管理」。
+非交互环境（容器 / 只读挂载 / CI）也可以用环境变量 `CTFSCANNER_ADMIN_PASSWORD` 提供口令 ——
+临时变量，**别写进任何入库文件**。`python run_users.py --status` 能看账号数量与有无历史残留（不打印任何值）。
+登录页**必须有验证码**（续108 起任何提交都先过码）；页面上没出图通常是**旧进程还在跑** ——
+改完 GUI 侧代码要重启控制台再看。
+（续117 把上面那段作废了：`gui.token` / `gui.token_hash` 两个键都不再被读取，
+「策略配置」页也没有口令输入框；老配置里若还残留那两个键，用 `run_users.py --purge-legacy-token` 清掉。）
 
 ### 页面与操作流
 

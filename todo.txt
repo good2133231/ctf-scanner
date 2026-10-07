@@ -2322,3 +2322,45 @@ ReadTimeout 而不是 FIN）；**查询计划缓存是按连接**的，`DROP IND
 **仍然留着的事**：① 305 条导入 POC 里某族真要放开时仍需在 `tools/poc_review.py` 的工作表上人工写 `ok`
 （本轮无变化）；② 引导口令的明文兼容分支仍需用户在「策略配置」页重设一次口令才自动退出判定；
 ③ `pool_run` 每次新建线程池的成本**没量出数量级**，不凭感觉改。
+
+2026-10-07 续117：登录凭据离开配置文件（摘掉 `gui.token` 引导口令 → 首启动向导 + `run_users.py`）
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）
+
+起因：我把"到「策略配置」页重设一次引导口令"列为剩留给用户做的事，用户回
+「换个环境启动时让我自己设管理员账号密码不就行了吗，好复杂」—— 这句问得对，
+那条门本来就不该存在。查了本机实际状态才动手：`gui.token` 还是**出厂默认值**、
+`gui.token_hash` 为空 → 续113 的明文兼容分支仍在参与判定；而门本身要 `count_users()==0`
+才可达，本机有账号 ⇒ 当前暴露面小，真正有风险的是"新环境 clone 起来、库里还没账号"那一刻。
+
+① 新增 `scanner/admin_setup.py`：建号规则**只此一份**（向导与命令行共用）[完成]
+- 0 账号才动作 / 非交互**不代填**只打印命令 / 口令只进 `users` 表的 PBKDF2 派生值；
+  状态各有说法：created / has-users / no-tty / cancelled / invalid（静默跳过是本仓反复出事的地方）。
+② `serve()` 首启动向导 + 新入口 `run_users.py` [完成]
+- 0 账号 + 可交互终端 → 当场问用户名与口令建第一个管理员（`role=admin` 写死）；
+- `run_users.py --status | --create-admin | --reset-password | --purge-legacy-token`，
+  口令只从 getpass 或 `CTFSCANNER_ADMIN_PASSWORD`（临时变量）来，**任何输出都不出现值**。
+③ 摘掉引导口令整支 [完成]
+- `login()` 的 bootstrap 分支、`_gui_token_patch`、策略页的口令输入框、
+  `_session_user()` 的"无 uid = 引导会话"那一档（现在一律作废 —— 旧 Cookie 也不再认）、
+  `config.DEFAULTS` 的 `token` / `token_hash`。
+- 顺带清掉一处**死代码**：`api_user_create` 的"库里没账号时强制建成管理员"—— 那是给引导门兜底的，
+  摘门后"空库却已登录"这个前提不成立，走不到；防锁死由向导/CLI 写死 role=admin 继续管。
+- 0 账号时登录页把命令显示给用户（`empty_account` 只决定文案，不是第二条登录分支）。
+④ `config.remove_settings_keys()`：逐行删配置里的键 [完成]
+- 不能用 `save_settings`：它是**合并写**，删不掉键；而且它整份 `yaml.safe_dump` 会把
+  settings.yaml 的注释全洗掉。第一版我又用错 `write_text`（把 CRLF 文件写成 LF，275 行假变更），
+  已改 `open(..., newline="")` —— §9 的 EOL 纪律这次砸在配置文件上。
+⑤ 本机已执行 `--purge-legacy-token` [完成]
+- `config/settings.yaml` 现在只剩 0/1 行差异（就是那条 `token:`），`--status` 报"没有任何登录凭据"。
+⑥ 测试 [完成]
+- 删 `[8n]`（功能没了，留着就是"测一个不存在的功能"）；新增 `[8v]` 六档（含"无 uid 会话在 0 账号时
+  也不认"这条新旧分水岭、页面级无口令框红线、逐行删键的两条反证、`--status` 子进程可跑且不出口令值）；
+- smoke 里 20 多处"提交配置里的共享口令"改成"提交账号"，5 处清库后补重新登录；
+- `tests/browser_e2e.py` 从"读 gui.token，没配就整组跳过"改成**临时库造账号 + 真表单登录**
+  （以前那个"跳过"在 CI 上等于把浏览器链路悄悄关掉）。
+- 门禁：SMOKE PASS / RC=0（173 段）、check_contrast 149/0、devflow 0 FAIL、
+  **browser_e2e 真浏览器 52 条断言全绿**。
+
+**仍然留着的事**：① 那个口令**以前提交并推送过**，GitHub 历史里仍读得到 —— 要不要重写历史/换仓库
+由你决定，本轮只保证当前与往后的文件里没有它；② 真要放开某族导入 POC 仍需在 `tools/poc_review.py`
+的工作表上人工写 `ok`（无变化）。

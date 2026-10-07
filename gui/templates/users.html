@@ -14,7 +14,8 @@
   </p>
   {% if total == 0 %}
   <p class="error">还没有任何账号：下面创建的<b>第一个账号会被强制设为管理员</b>
-    （否则子用户进不了本页，从此没人能再建号）。创建后旧的 <code>gui.token</code> 立即失效。</p>
+    （否则子用户进不了本页，从此没人能再建号）。也可以在命令行建：
+    <code>python run_users.py --create-admin</code>。</p>
   {% endif %}
   <table id="tbl-users">
     <thead><tr><th>#</th><th>用户名</th><th>角色</th><th>状态</th><th>最近登录</th>

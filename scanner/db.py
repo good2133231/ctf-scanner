@@ -188,7 +188,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   at TEXT NOT NULL,                -- 'YYYY-MM-DD HH:MM:SS'（与全库 _now() 同格式，可直接字符串比大小）
   kind TEXT DEFAULT '',            -- login_ok/login_fail/login_blocked/logout/account/settings/poc/task/denied
   actor TEXT DEFAULT '',           -- 操作者用户名（登录类事件里是"被尝试的用户名"）
-  actor_role TEXT DEFAULT '',      -- admin/user/''（引导口令登录时为空）
+  actor_role TEXT DEFAULT '',      -- admin/user/''（登录失败这类无身份事件为空）
   ip TEXT DEFAULT '',              -- 客户端 IP（request.remote_addr；见 docs/deploy-https.md 的 behind_proxy 说明）
   target TEXT DEFAULT '',          -- 被操作对象（任务名 / 账号名 / 资源…）
   detail TEXT DEFAULT '',          -- 补充说明（**已擦洗**，不得含口令/凭据）
