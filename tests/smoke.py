@@ -14344,6 +14344,489 @@ http:
           "自动安装层不含它、但清单与页面看得见并给出一条显式命令｜TOOLS∩MANUAL=∅ 与 [8d]④ 不变式"
           "都还成立｜变异：wired 恒真 ⇒ 文案与自动层两条判据同时变红")
 
+    # ---------------- [8y] 续120：afrog 指纹按需导入 + 状态码门控 ----------------
+    #      用户点的是"A（指纹）也做"。这一组要钉的不是"搬进来多少条"，而是**搬进来的每一条
+    #      还在按 afrog 原本的强度说话**。三条都被真语料教过：
+    #      ① afrog 判据几乎都带 `status == 200`，我们原先的 `(part, 正则)` 没有门控位 ——
+    #         照搬关键字 = 404 页面只要标题里有产品名就会被打上该产品标签（自制误报）；
+    #      ② fingerprinting/ 目录里**混着一条真 RCE**（hfs-rce，判据 `body 含 Windows IP`
+    #         长得和指纹一模一样），拦住它的只有 severity 白名单这一行；
+    #      ③ 表达式是一门 DSL：早期版本用正则去抽关键字，字符类不排除引号 ⇒ 贪婪匹配把
+    #         `|| response.body.ibcontains(b"…` 整段吞进关键字；`path: /login` 是字符串不是
+    #         列表 ⇒ `for p in path` 逐字符拆开。所以现在**先分词再递归下降**，翻不动就拒。
+    import importlib.util as _ilu120
+    _spec120 = _ilu120.spec_from_file_location("import_afrog_fp120", str(ROOT / "tools" / "import_afrog_fp.py"))
+    _iaf120 = _ilu120.module_from_spec(_spec120)
+    _spec120.loader.exec_module(_iaf120)
+    import yaml as _yaml120
+
+    _FIX120 = {
+        "okpanel": """
+id: ok-panel
+info:
+  name: OkApp Panel
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /login
+    expression: |-
+      response.status == 200 && (response.body.ibcontains(b'<title>OkApp</title>') || response.body.bcontains(b'OkApp/v2'))
+expression: r0()
+""",
+        "hdr": """
+id: hdr-panel
+info:
+  name: HdrApp
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.status == 200 && response.raw_header.bcontains(b'X-HdrApp: 1')
+expression: r0()
+""",
+        "nostatus": """
+id: no-status
+info:
+  name: NoStatusApp
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.body.bcontains(b'NoStatus-Only-Marker')
+expression: r0()
+""",
+        "rce": """
+id: hfs-like
+info:
+  name: Some RCE
+  severity: critical
+rules:
+  r0:
+    request:
+      method: GET
+      path: /~hfs
+    expression: |-
+      response.status == 200 && response.body.bcontains(b"Windows IP")
+expression: r0()
+""",
+        "tcp": """
+id: ftp-like
+info:
+  name: FTP
+  severity: info
+rules:
+  r0:
+    request:
+      type: tcp
+    expression: |-
+      banner.bcontains(b"220")
+expression: r0()
+""",
+        "postbody": """
+id: post-body
+info:
+  name: PostBody
+  severity: info
+rules:
+  r0:
+    request:
+      method: POST
+      path: /api
+      body: 'q=1'
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'OkMarker')
+expression: r0()
+""",
+        "brute": """
+id: brute-list
+info:
+  name: Brute
+  severity: info
+rules:
+  r0:
+    brute:
+      - /a
+      - /b
+    request:
+      method: GET
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'OkMarker')
+expression: r0()
+""",
+        "conj": """
+id: conjunctive
+info:
+  name: Conj
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'AAA') && response.body.bcontains(b'BBB')
+expression: r0()
+""",
+        "nested": """
+id: nested-conj
+info:
+  name: Nested
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.status == 200 && (response.body.bcontains(b'AAA') || (response.body.bcontains(b'BBB') && response.body.bcontains(b'CCC')))
+expression: r0()
+""",
+        "bmatches": """
+id: regex-shape
+info:
+  name: Regex
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.status == 200 && "<title>Foo (.*)</title>".bmatches(response.body)
+expression: r0()
+""",
+        "varpw": """
+id: var-placeholder
+info:
+  name: VarApp
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'{{hosturl}}/login')
+expression: r0()
+""",
+        "named": """
+id: aggregate
+info:
+  name: Aggregate
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expressions:
+      - |-
+        "某某产品" != "" && response.body.bcontains(b'OkMarker')
+expression: r0()
+""",
+        "alias": """
+id: alias-prefix
+info:
+  name: AliasApp
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.status == 200 && resp.body.bcontains(b'<title>Alias</title>')
+expression: r0()
+""",
+        "topand": """
+id: top-conj
+info:
+  name: TwoRules
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'AAA')
+  r1:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'BBB')
+expression: r0() && r1()
+""",
+        "orrules": """
+id: two-rule-or
+info:
+  name: TwoRulesOr
+  severity: info
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |-
+      response.status == 200 && response.body.bcontains(b'AAA')
+  r1:
+    request:
+      method: GET
+      path: /x
+    expression: |-
+      response.status == 404 && response.body.bcontains(b'BBB')
+expression: r0() || r1()
+""",
+    }
+
+    def _entry120(key):
+        return _iaf120.build_entries(_yaml120.safe_load(_FIX120[key]))
+
+    # ① 可映射的形状：翻出来的判据必须**一字不差**是 afrog 那几个关键字
+    _e120, _w120 = _entry120("okpanel")
+    assert _w120 == "" and _e120 is not None, _w120
+    assert len(_e120) == 2, f"大小写两档判据该分成两行（一行一个强度）：{_e120}"
+    assert {e["statuses"] for e in _e120} == {"200"}, _e120
+    _ci120 = [e for e in _e120 if e["pattern"].startswith("(?i)")][0]
+    _cs120 = [e for e in _e120 if not e["pattern"].startswith("(?i)")][0]
+    assert _ci120["pattern"] == "(?i)<title>OkApp</title>", _ci120
+    assert _cs120["pattern"] == re.escape("OkApp/v2"), _cs120
+    # `path: /login` 是**字符串**：第一版 `for p in path` 会把它拆成 l,o,g,i,n 五个"路径"
+    assert _ci120["path"] == "/login" and _cs120["path"] == "/login", _e120
+    # raw_header 原子 -> 我们的 headers 位置
+    _e120h, _ = _entry120("hdr")
+    assert [e["part"] for e in _e120h] == ["headers"], _e120h
+    # 顶层 `r0() || r1()`：两条 rule 的判据都收下，且各自的状态码**不合并**
+    _e120o, _w120o = _entry120("orrules")
+    assert _w120o == "" and len(_e120o) == 2, (_e120o, _w120o)
+    assert sorted(e["statuses"] for e in _e120o) == ["200", "404"], _e120o
+
+    # ② 该拒的一律拒，并且给出**具体**原因（"不支持"三个字不算原因）
+    _refuse120 = {
+        "rce": "severity=critical",
+        "tcp": "type:tcp",
+        "postbody": "POST 带请求体",
+        "brute": "brute 路径清单",
+        "conj": "合取判据",
+        "nested": "合取嵌在析取里",
+        "bmatches": "字符串常量为接收者",
+        "varpw": "变量占位符",
+        "named": "命名条目前缀",
+        "alias": "resp. 简写",
+        "topand": "纯 rule 引用",
+    }
+    for _k120, _frag in _refuse120.items():
+        _e, _why = _entry120(_k120)
+        assert _e is None and _frag in _why, f"{_k120} 本该拒搬：{_e} / {_why}"
+    # 那条 RCE 的**表达式本身是完全可以映射的** —— 拦住它的只有 severity 白名单那一行
+    _st120, _at120 = _iaf120.shape('response.status == 200 && response.body.bcontains(b"Windows IP")')
+    assert _st120 == [200] and _at120 == [("body", False, "Windows IP")], (_st120, _at120)
+    _real_sev120 = _iaf120.OK_SEVERITIES
+    try:
+        _iaf120.OK_SEVERITIES = ("", "info", "critical")
+        _e_mut, _ = _entry120("rce")
+        assert _e_mut is not None, "变异没生效：白名单加了 critical 之后这条 RCE 仍被拦住 ⇒ ② 拦它靠的不是白名单，断言是假绿"
+    finally:
+        _iaf120.OK_SEVERITIES = _real_sev120
+
+    # ③ `--apply`：机器不判定 —— 复核列空着 ⇒ 零动作；且**只往那一个文件追加**
+    _tz120 = _TMPDIR / "afrogfp120"
+    (_tz120 / "config" / "dicts").mkdir(parents=True, exist_ok=True)
+    _out120 = _tz120 / "config" / "dicts" / "fingerprints_extra.txt"
+    _real_root120 = _iaf120.ROOT
+    _iaf120.ROOT = _tz120
+
+    def _tsv120(verdict, tag="t1", part="body", pat="AcmeMarker", sts="200", path="/"):
+        return "\t".join([tag, part, pat, sts, path, "x.yaml", verdict, "备注"])
+
+    try:
+        _n120, _notes120 = _iaf120.apply_table(_tsv120(""))
+        assert _n120 == 0 and not _out120.exists() and "复核列不是 ok" in _notes120[0], (_n120, _notes120)
+        # 红旗：表里有没有"全部放行"这种旗标 —— 复核必须由人逐行做
+        _src120 = (ROOT / "tools" / "import_afrog_fp.py").read_text(encoding="utf-8")
+        assert 'add_argument("--all' not in _src120 and 'add_argument("--yes' not in _src120 \
+            and 'add_argument("--force' not in _src120, "导入器被人加了『全部放行』旗标 —— 复核必须由人逐行做"
+        # 它**只读本地 YAML**：整份源码里不该出现任何能连目标的出口
+        assert "http_request" not in _src120 and "socket" not in _src120, \
+            "导入器又能发请求了 —— A 步的红线是『全程不发一个请求』"
+
+        _real_verdict120 = _iaf120.VERDICT_OK
+        try:
+            _iaf120.VERDICT_OK = ""          # 变异：把"空值也算放行"写进去
+            _n_mut, _ = _iaf120.apply_table(_tsv120(""))
+            assert _n_mut == 1, "变异没生效：空复核列本该被当成放行 ⇒ ③ 抓不住这种改法"
+        finally:
+            _iaf120.VERDICT_OK = _real_verdict120
+            _out120.unlink(missing_ok=True)   # 把变异写出来的那份丢掉，后面从干净状态开始
+
+        # 正常放行一条：表头注释一起落地、行尾是 CRLF（与 config/dicts/ 下其它字典同口径）
+        _n1, _nt1 = _iaf120.apply_table(_tsv120("ok"))
+        assert _n1 == 1, _nt1
+        _lines1 = _out120.read_text(encoding="utf-8").splitlines()
+        assert len(_lines1) == len(_iaf120.HEADER_LINES) + 1, len(_lines1)
+        # 行尾要按**字节**看：`read_text()` 会把 \r\n 译成 \n，用解码后的文本数行尾数是假绿
+        _raw1 = _out120.read_bytes().decode("utf-8")
+        assert _raw1.count("\r\n") == len(_lines1) and _raw1.count("\r") == _raw1.count("\n"), \
+            "字典行尾写坏了（`newline='\\r\\n'` 会把数据里的 \\n 再翻一遍 ⇒ \\r\\r\\n）"
+        assert _lines1[-1].startswith("t1\tbody\t"), _lines1[-1]
+
+        # 再搬一次 ⇒ 一条都不加（只追加、不重复），且已有行一字没动
+        _head_before = _out120.read_bytes()
+        _n2, _nt2 = _iaf120.apply_table(_tsv120("ok"))
+        assert _n2 == 0 and "不重复追加" in _nt2[0], (_n2, _nt2)
+        _txt2 = _out120.read_text(encoding="utf-8")
+        assert _txt2.splitlines() == _head_before.decode("utf-8").splitlines(), "重复 apply 改了已有行"
+        # 同一个标签**再加一条别的判据**是允许的（内置 SIGNATURES 一个标签本来就多条判据；
+        # 给 jenkins 另起一个 `jenkins-login` 标签才是白打 —— dirscan 的框架桶只认前者）
+        _n3, _ = _iaf120.apply_table(_tsv120("ok", pat="OtherMarker"))
+        assert _n3 == 1, _n3
+        # 状态码留空 ⇒ 拒：不分状态必须由复核人**显式**写 `*`
+        _n4, _nt4 = _iaf120.apply_table(_tsv120("ok", tag="t9", sts=""))
+        assert _n4 == 0 and "显式写 *" in _nt4[0], (_n4, _nt4)
+        # 位置不在引擎支持的三档里 ⇒ 拒
+        _n5, _nt5 = _iaf120.apply_table(_tsv120("ok", tag="t8", part="raw"))
+        assert _n5 == 0 and "判据位置" in _nt5[0], (_n5, _nt5)
+        # 判据编译不过 ⇒ 拒（不能让坏正则进字典后被 identify 吞掉）
+        _n6, _nt6 = _iaf120.apply_table(_tsv120("ok", tag="t7", pat="("))
+        assert _n6 == 0 and "编译失败" in _nt6[0], (_n6, _nt6)
+        # 写盘只发生在 ROOT/config/dicts/ 这一处，ROOT 之外没多文件
+        assert sorted(p.relative_to(_tz120).as_posix() for p in _tz120.rglob("*") if p.is_file()) \
+            == ["config/dicts/fingerprints_extra.txt"], list(_tz120.rglob("*"))
+    finally:
+        _iaf120.ROOT = _real_root120
+
+    # ③b CLI 通路：拿**真目录**跑 `--table`（含一个坏 YAML），全程只读文件
+    _fx120 = _TMPDIR / "pocs120"
+    _fx120.mkdir(parents=True, exist_ok=True)
+    for _k120, _y120 in _FIX120.items():
+        (_fx120 / f"{_k120}.yaml").write_text(_y120.lstrip("\n"), encoding="utf-8")
+    (_fx120 / "broken.yaml").write_text("id: broken\nrules: [\n", encoding="utf-8")
+    _tz120b = _TMPDIR / "cliroot120"
+    (_tz120b / "logs").mkdir(parents=True, exist_ok=True)
+    _real_root120b = _iaf120.ROOT
+    _iaf120.ROOT = _tz120b
+    try:
+        assert _iaf120.main(["--table", "--src", str(_fx120), "--out", "logs/t.tsv"]) == 0
+        _cand120 = (_tz120b / "logs" / "t.tsv").read_text(encoding="utf-8").splitlines()
+        assert _cand120[0] == "\t".join(_iaf120.TABLE_COLS), _cand120[0]
+        # 14 个 fixture 里只有 4 个是可映射形状；其余的走拒搬分支
+        assert sorted({ln.split("\t")[0] for ln in _cand120[1:]}) \
+            == ["hdr-panel", "no-status", "ok-panel", "two-rule-or"], _cand120
+        # 候选表的复核列**恒为空** —— 工具不替人打勾
+        assert all(ln.split("\t")[6] == "" for ln in _cand120[1:]), "候选表的复核列被预填了"
+        _rows120 = _iaf120.build_rows(_fx120)
+        _bad120 = [r for r in _rows120 if r.get("why", "").startswith("YAML 解析失败")]
+        assert len(_bad120) == 1 and _bad120[0]["file"] == "broken.yaml", _bad120
+    finally:
+        _iaf120.ROOT = _real_root120b
+
+    # ④ 引擎侧：外置表的状态码门控 + 坏行不静默 + 编译只一次
+    from scanner import fingerprint as _fp120
+    _dx120 = _TMPDIR / "extra120.tsv"
+    _dx120.write_text("\n".join([
+        "# 注释行",
+        # `(?i)` 必须**单独成为一个串首常量**再拼接：整行写成一个字面量会撞上 [8d]⑩ 那条跨版本
+        # 红线（内联全局标志出现在串中间，3.14 起抛 PatternError）
+        "gated\tbody\t" + "(?i)<title>Zed</title>" + "\t200",
+        "multi\tbody\tAAA\t200,404",
+        "plain\tcookies\tZZZ=",
+        "onlycols",
+        "badpart\tnosuch\tXXX\t200",
+        "badstatus\tbody\tYYY\t999",
+        "badstatus2\tbody\tYYY\t1",
+        "badre\tbody\t(\t*",
+        "",
+    ]), encoding="utf-8")
+    _r120, _i120 = _fp120.load_extra(str(_dx120))
+    assert sorted(_r120) == ["gated", "multi", "plain"], _r120
+    assert len(_i120) == 5, f"坏行必须逐条报出来（{len(_i120)}）：{_i120}"
+    assert sum(1 for x in _i120 if "不足 3 列" in x) == 1, _i120
+    assert sum(1 for x in _i120 if "不属于" in x) == 1, _i120
+    assert sum(1 for x in _i120 if "非法状态码" in x) == 2, _i120
+    assert sum(1 for x in _i120 if "编译失败" in x) == 1, _i120
+    assert _fp120._parse_statuses("200,404") == frozenset({200, 404})
+    assert _fp120._parse_statuses("*") is None and _fp120._parse_statuses("") is None
+
+    _real_ep120 = _fp120._extra_path
+    try:
+        _fp120._extra_path = lambda: _dx120
+        _fp120._extra_cache.update(key=None)
+        _hit120 = lambda status, body="", hdrs=None: _fp120.identify(
+            {"status": status, "text": body, "headers": hdrs or {}})
+        assert "gated" in _hit120(200, "<TITLE>zed</TITLE>")
+        assert "gated" not in _hit120(404, "<TITLE>zed</TITLE>"), "状态码门控没生效：404 也被打上了标签"
+        assert "multi" in _hit120(404, "AAA") and "multi" in _hit120(200, "AAA")
+        assert "multi" not in _hit120(500, "AAA")
+        assert "plain" in _hit120(500, "", {"Set-Cookie": "ZZZ=1"}), "不带状态码的行应不分状态"
+        # 缓存：同一个 (路径, mtime, size) 第二次不重新编译（identify 每个响应都跑一次）
+        _a120 = _fp120.load_extra()[0]
+        assert _fp120.load_extra()[0] is _a120, "字典被重复读取/重编正则"
+        # 改文件（size 变）⇒ 必须看到新内容，不用重启进程
+        _dx120.write_text(_dx120.read_text(encoding="utf-8") + "late\tbody\tLATEMARK\t201\n",
+                          encoding="utf-8")
+        assert "late" in _fp120.load_extra()[0], "字典改了但引擎还在用旧缓存"
+        # 变异：把门控拆掉（状态码一律解析成"不分状态"）⇒ 404 也会被打标签
+        _real_ps120 = _fp120._parse_statuses
+        try:
+            _fp120._parse_statuses = lambda t: None
+            _fp120._extra_cache.update(key=None)
+            assert "gated" in _hit120(404, "<TITLE>zed</TITLE>"), \
+                "变异没生效：门控被拆掉后 404 仍不打标签 ⇒ ④ 那条判据抓不住回归"
+        finally:
+            _fp120._parse_statuses = _real_ps120
+    finally:
+        _fp120._extra_path = _real_ep120
+        _fp120._extra_cache.update(key=None)
+
+    # ⑤ 仓库里真实那份字典与复核表：读得干净、全部门控、来源可追溯、RCE 不在表里
+    _dr120, _ir120 = _fp120.load_extra()
+    assert _ir120 == [], f"仓库里的外置字典引擎读不干净：{_ir120}"
+    _raw_real = _fp120._extra_path().read_text(encoding="utf-8")
+    _data_lines = [ln for ln in _raw_real.splitlines() if ln.strip() and not ln.startswith("#")]
+    assert len(_data_lines) == sum(len(v) for v in _dr120.values()) == 51, len(_data_lines)
+    assert len(_dr120) == 49
+    assert all(r[2] is not None for v in _dr120.values() for r in v), \
+        "有条目不分状态 ⇒ 复核判据①（外置表存在的意义就是门控）被破坏"
+    assert all("afrog-pocs(MIT)" in ln for ln in _data_lines), "有条目没写出处（MIT 派生，见 NOTICE.md）"
+    assert "Windows IP" not in _raw_real and "hfs" not in _raw_real.lower(), \
+        "目录里那条 RCE 的判据混进指纹表了"
+    assert "<title>Administration" not in _raw_real.lower() and "Virtual Office" not in _raw_real, \
+        "复核列标 no 的通用判据混进了字典"
+    # 并入内置标签的那几个：同一个标签在内置表与外置表**并存**（新增判据，不是近似名）
+    for _tg120 in ("jenkins", "minio", "spring", "druid", "grafana", "seeyon", "shiro"):
+        assert _tg120 in _fp120.SIGNATURES and _tg120 in _dr120, _tg120
+    _rv120 = [ln for ln in (ROOT / "docs" / "afrog-fp-review.tsv")
+              .read_text(encoding="utf-8").splitlines() if ln.strip()]
+    _rv_ok = [ln for ln in _rv120[1:] if ln.split("\t")[6] == "ok"]
+    _rv_no = [ln for ln in _rv120[1:] if ln.split("\t")[6] != "ok"]
+    assert (len(_rv_ok), len(_rv_no)) == (51, 7), (len(_rv_ok), len(_rv_no))
+    # 每个进字典的 (标签, 位置, 判据) 都能在复核表里找到对应的那一行（字典不是凭空长出来的）
+    _rv_key = {(ln.split("\t")[0], ln.split("\t")[1], ln.split("\t")[2]) for ln in _rv_ok}
+    _dc_key = {(t, r[0], r[1].pattern) for t, v in _dr120.items() for r in v}
+    assert _dc_key <= _rv_key, _dc_key - _rv_key
+    _notice120 = (ROOT / "NOTICE.md").read_text(encoding="utf-8")
+    assert "fingerprints_extra" in _notice120, "MIT 派生的这份字典没在 NOTICE.md 登记"
+
+    print("[8y] 续120 afrog 指纹按需导入 ok: 15 个 hermetic fixture 覆盖全部分支 —— 可映射的 4 个"
+          "一字不差翻出关键字（`path` 是字符串时不再被逐字符拆开）｜11 类不可移植形态各有具体拒因"
+          "（tcp/brute/POST 带体/合取/嵌套合取/正则接收者/变量占位符/命名条目/resp. 简写/顶层合取）｜"
+          "混在指纹目录里的那条真 RCE 靠 severity 白名单拦住（表达式本身完全可映射；把 critical 放进"
+          "白名单的变异立刻让它被收下）｜状态码门控：404 不打标签、`200,404` 两档都打、不分状态须显式"
+          "写 `*`、把 `_parse_statuses` 打坏的变异让 404 变脏｜复核列空着 ⇒ 零动作且没有『全部放行』"
+          "旗标、候选表复核列恒空、源码里没有任何连目标的出口｜apply 只追加（重复 apply 一字不改、"
+          "同标签可再加一条判据、CRLF 按字节核过）｜坏行不静默（5 类逐条报）｜缓存按 (路径,mtime,size)"
+          "：改字典不用重启｜真实字典 51 条/49 标签全部带门控与出处、7 个标签并入内置同名产品、"
+          "RCE 判据与通用标题都不在表里、每条都能在复核表里回溯、NOTICE.md 已登记")
+
     print("SMOKE PASS")
 
 

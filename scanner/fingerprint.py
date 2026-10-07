@@ -18,11 +18,14 @@ favicon 指纹（P1-1 / P3-1，参考项目 `_get_favicon_md5` 的启发）：
 """
 import hashlib
 import re
+from pathlib import Path
 
 # 内联全局标志（`(?i)` / `(?im)`）**只能写在串首**：Python 3.11 起这是弃用写法、3.14 起直接
 # 抛 PatternError（本项目 CI 用 3.9，故此前无人发现）。同一条规则里多余的那个一律删掉——
 # 串首那个本来就作用于整条表达式，分支再写一次是冗余。回归见 `tests/smoke.py [8d]`。
-# 标签 -> [(part, 正则)]；part: headers | body；任一规则命中即打该标签
+# 标签 -> [(part, 正则[, 状态码])]；part: headers | body | cookies；任一规则命中即打该标签。
+# 第三元组（续120）是 `frozenset` 状态码集合，缺省 = 不分状态。内置规则**一律不分状态**
+# （它们看的本来就是"响应头/正文里有没有这个特征"）；那一段是给外置表用的形状。
 SIGNATURES = {
     # ---------- 服务器 / 反向代理 ----------
     "nginx": [("headers", r"(?im)^server:\s*nginx(?![\w-])")],
@@ -145,12 +148,94 @@ SIGNATURES = {
     "websocket": [("headers", r"(?i)^upgrade:\s*websocket")],
 }
 
+# --------------------------------------------------------------------------
+# 外置指纹表（续120）：加标签不用改代码，且带**状态码门控**
+# --------------------------------------------------------------------------
+# 为什么非要有状态码这一列：afrog-pocs 的判据几乎全写成 `response.status == 200 && 正文含 X`，
+# 而原先的 `(part, 正则)` 表达不了"只在 200 时才算"。照搬关键字的后果是实测推出来的：
+# 一个回了 404 却把产品名写进 `<title>` 的目标会被打上该产品的标签 —— 自己制造误报。
+# 所以外置表按行带状态码，内置 SIGNATURES 保持两元组不动。
+EXTRA_FILE = "config/dicts/fingerprints_extra.txt"
+_WHERE = ("headers", "body", "cookies")
+_extra_cache = {"key": None, "rules": {}, "issues": []}
+
+
+def _extra_path():
+    from .config import resolve      # 函数内导入：不与 config 的加载顺序纠缠（同 utils 里的写法）
+    return resolve(EXTRA_FILE)
+
+
+def _parse_statuses(text):
+    """`"200,404"` -> frozenset；`"*"`/空 -> None（不分状态）；非法 -> 错误说明串。"""
+    t = (text or "").strip()
+    if t in ("", "*"):
+        return None
+    codes = []
+    for piece in t.split(","):
+        if not piece.strip().isdigit() or not 100 <= int(piece.strip()) <= 599:
+            return f"非法状态码 {text!r}"
+        codes.append(int(piece.strip()))
+    return frozenset(codes)
+
+
+def load_extra(path=None):
+    """读外置指纹表 -> `({标签: [(位置, 编译后的正则, 状态码集合|None)]}, [问题, …])`。
+
+    三件事值得写明：
+    - **分隔符是 TAB**。判据本身就是正则，`|` 在正则里是"或"，拿 `|` 切列会把判据腰斩
+      （`tools/import_afrog_fp.py` 用 `|` 的第一版就是这么坏的）；
+    - 缓存键是 `(路径, mtime_ns, 大小)`：`identify()` 每个响应都要跑一次，不能每次重读文件、
+      重编正则；改完字典下一次响应即生效，不用重启；
+    - 坏行**不静默**：进问题清单交给 `--lint` 与回归；命中逻辑只跳过这一条，不牵连别的行。
+    """
+    p = Path(path) if path else _extra_path()
+    try:
+        st = p.stat()
+    except OSError:
+        _extra_cache.update(key=None, rules={}, issues=[])
+        return {}, []
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    if _extra_cache["key"] == key:
+        return _extra_cache["rules"], _extra_cache["issues"]
+    rules, issues = {}, []
+    text = p.read_text(encoding="utf-8", errors="replace")
+    for no, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        cols = line.split("\t")
+        if len(cols) < 3:
+            issues.append(f"第 {no} 行不足 3 列（标签<TAB>位置<TAB>判据）：{line[:40]!r}")
+            continue
+        tag, where, pattern = cols[0].strip(), cols[1].strip(), cols[2]
+        if not tag:
+            issues.append(f"第 {no} 行标签为空")
+            continue
+        if where not in _WHERE:
+            issues.append(f"第 {no} 行位置 {where!r} 不属于 {'/'.join(_WHERE)}")
+            continue
+        codes = _parse_statuses(cols[3] if len(cols) > 3 else "")
+        if isinstance(codes, str):
+            issues.append(f"第 {no} 行 {codes}")
+            continue
+        try:
+            rx = re.compile(pattern)
+        except re.error as e:
+            issues.append(f"第 {no} 行判据编译失败（{e}）")
+            continue
+        rules.setdefault(tag, []).append((where, rx, codes))
+    _extra_cache.update(key=key, rules=rules, issues=issues)
+    return rules, issues
+
 # favicon 体积上限：有些站点会用 404 页面或超大文件冒充 favicon，直接跳过
 MAX_FAVICON = 512 * 1024
 
 
 def identify(resp):
-    """从 http_request 的响应 dict 中提取组件标签，返回排序去重后的列表。"""
+    """从 http_request 的响应 dict 中提取组件标签，返回排序去重后的列表。
+
+    规则有两个来源：内置 `SIGNATURES` 与外置 `EXTRA_FILE`（`load_extra`，带状态码门控）。
+    带第三元组的规则只在响应状态落在那个集合里时才参与判定。
+    """
     if not resp:
         return []
     hdrs = resp.get("headers") or {}
@@ -162,12 +247,17 @@ def identify(resp):
         "cookies": "\n".join(f"{k}: {v}" for k, v in hdrs.items()
                               if k.lower() in ("set-cookie", "cookie")),
     }
+    status = resp.get("status")
     tags = []
-    for tag, rules in SIGNATURES.items():
-        for part, pattern in rules:
-            if re.search(pattern, parts.get(part, "")):
-                tags.append(tag)
-                break
+    for source in (SIGNATURES, load_extra()[0]):
+        for tag, rules in source.items():
+            for rule in rules:
+                codes = rule[2] if len(rule) > 2 else None
+                if codes is not None and status not in codes:
+                    continue
+                if re.search(rule[1], parts.get(rule[0], "")):
+                    tags.append(tag)
+                    break
     return sorted(set(tags))
 
 

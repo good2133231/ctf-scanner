@@ -1,0 +1,65 @@
+# 外置指纹表（引擎按行读取：scanner/fingerprint.py）
+#
+# 格式（TAB 分隔，后两段可省）：
+#     标签 <TAB> 位置 <TAB> 正则 <TAB> 状态码 <TAB> 来源 <TAB> 说明
+#   - 位置：headers | body（见 fingerprint.identify 的 parts）；
+#   - 状态码：逗号分隔，`*` 或留空 = 不分状态；只有响应状态在清单里时才打标签；
+#   - 同一标签可以多行，**任一行命中即打标签**（析取，与内置 SIGNATURES 一致）；
+#   - 以 `#` 开头的行与空行忽略。
+#
+#   - 同一个标签可以有多行（新增判据），但已有行**不会被改写也不会被删**；
+#
+# 来源：条目由 tools/import_afrog_fp.py 从 afrog-pocs（MIT）的 fingerprinting/ 目录里
+# 逐条人工复核后追加（`--apply` 只搬复核列写了 ok 的行），许可与出处见 NOTICE.md；
+# 复核结论与全部拒搬理由见 docs/afrog-fp-review.tsv。
+acemanager-login	body	(?i)<title>:::\ ACEmanager\ :::</title>	200	acemanager-login.yaml	afrog-pocs(MIT): ACEmanager Detection；大小写不敏感｜复核 ok
+acrolinx-dashboard	body	(?i)<title>Acrolinx\ Dashboard</title>|Acrolinx</title>	200	acrolinx-dashboard.yaml	afrog-pocs(MIT): Acrolinx Dashboard；请求路径 /dashboard.html 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+adminset-panel	body	(?i)<title>AdminSet\ Login</title>	200	adminset-panel.yaml	afrog-pocs(MIT): Adminset Login Panel；大小写不敏感｜复核 ok
+apisix-panel	body	<title>Apache\ APISIX\ Dashboard</title>	200	apisix-panel.yaml	afrog-pocs(MIT): Apache APISIX Login Panel；请求路径 /user/login?redirect=%2F 未表达（我们按响应内容打标签）｜复核 ok
+arcgis-datastore-detect	body	(?i)<title>ArcGIS\ Data\ Store</title>	200	arcgis-datastore-detect.yaml	afrog-pocs(MIT): ArcGIS Datastore Detect；请求路径 /arcgis/datastore 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+azure-kubernetes-service	body	<title>Welcome\ to\ Azure\ Kubernetes\ Service\ \(AKS\)</title>	200	azure-kubernetes-service.yaml	afrog-pocs(MIT): Detect Azure Kubernetes Service；请求路径 /version 未表达（我们按响应内容打标签）｜复核 ok
+cas-login	body	Central\ Authentication\ Service	200	cas-login.yaml	afrog-pocs(MIT): CAS Login Panel；请求路径 /cas/login 未表达（我们按响应内容打标签）｜复核 ok
+casemanager-panel	body	(?i)<title>CaseManager</title>	200	casemanager-panel.yaml	afrog-pocs(MIT): CaseManager Login Panel - Detect；请求路径 /login 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+shiro	body	(?i)<title>Apache\ Shiro\ Quickstart</title>	200	default-apache-shiro.yaml	afrog-pocs(MIT): Apache Shiro Default Page；大小写不敏感｜复核 ok；标签并入内置 shiro（afrog 源 id=default-apache-shiro）
+django-admin-panel	body	<a\ href="/admin/">Django\ administration</a>	200	django-admin-panel.yaml	afrog-pocs(MIT): Python Django Admin Panel；请求路径 /admin/login/?next=/admin/ 未表达（我们按响应内容打标签）｜复核 ok
+druid	body	(?i)<title>druid\ monitor</title>	200	druid-panel.yaml	afrog-pocs(MIT): Druid Panel；请求路径 /druid/login.html 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok；标签并入内置 druid（afrog 源 id=druid-panel）
+geoserver-login-panel	body	(?i)<title>GeoServer:\ Welcome</title>	200	geoserver-login-panel.yaml	afrog-pocs(MIT): GeoServer Login Panel - Detect；请求路径 /geoserver/web/,/web 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+grafana	body	<title>Grafana</title>	200	grafana-detect.yaml	afrog-pocs(MIT): Grafana Panel；请求路径 /login 未表达（我们按响应内容打标签）｜复核 ok；标签并入内置 grafana（afrog 源 id=grafana-panel）
+h3c-hci-management	body	'/uis/spring_check\?'	200	h3c-hci-management.yaml	afrog-pocs(MIT): H3C 超融合管理平台；请求路径 /uis/login 未表达（我们按响应内容打标签）｜复核 ok
+h3c-imc-panel	body	POPUP_WINDOW_SESSION_ID	200	h3c-imc-panel.yaml	afrog-pocs(MIT): H3C Intelligent Management Center Panel；请求路径 /imc/login.jsf 未表达（我们按响应内容打标签）｜复核 ok
+hanwang-detect	body	汉王人脸考勤管理系统	200	hanwang-detect.yaml	afrog-pocs(MIT): hanwang-detect；非 ASCII 关键字，需确认响应编码｜复核 ok
+huawei-esight-detect	body	src="/sso/themes/default/images/esight_frontground\.png"	200	huawei-esight-detect.yaml	afrog-pocs(MIT): Huawei ESight Detect；请求路径 /sso/login.action 未表达（我们按响应内容打标签）｜复核 ok
+hue-login-panel	body	(?i)welcome\ to\ hue	200	hue-login-panel.yaml	afrog-pocs(MIT): Cloudera Hue Login Panel；请求路径 /hue/accounts/login?next=/ 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+jenkins	body	hudson\.model\.Hudson	200	jenkins-api-panel.yaml	afrog-pocs(MIT): Jenkins API Instance Detection Template；请求路径 /api/xml 未表达（我们按响应内容打标签）｜复核 ok；标签并入内置 jenkins（afrog 源 id=jenkins-api-panel）
+jenkins	body	(?i)Sign\ in\ \[Jenkins\]|<title>登录\ \[Jenkins\]</title>	200	jenkins-login.yaml	afrog-pocs(MIT): Jenkins Login Detected；请求路径 /login 未表达（我们按响应内容打标签）；大小写不敏感；非 ASCII 关键字，需确认响应编码｜复核 ok；标签并入内置 jenkins（afrog 源 id=jenkins-login）
+kkfileview-panel	body	(?i)<title>kkFileView演示首页</title>	200	kkfileview-panel.yaml	afrog-pocs(MIT): kkFileView Panel - Detect；请求路径 /index 未表达（我们按响应内容打标签）；大小写不敏感；非 ASCII 关键字，需确认响应编码｜复核 ok
+kubernetes-enterprise-manager	body	Kubernetes\ Enterprise\ Manager	200	kubernetes-enterprise-manager.yaml	afrog-pocs(MIT): Kubernetes Enterprise Manager Detect；请求路径 /metrics 未表达（我们按响应内容打标签）｜复核 ok
+manageengine-analytics	body	(?i)<title>ManageEngine\ Analytics\ Plus</title>	200	manageengine-analytics.yaml	afrog-pocs(MIT): ZOHO ManageEngine Analytics Plus Panel - Detect；请求路径 /iam/login 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+mapgis-cloud-manager-panel	body	(?i)<title>MapGIS\ Cloud\ Manager</title>	200	mapgis-cloud-manager-panel.yaml	afrog-pocs(MIT): MapGIS云运维管理系统；请求路径 /manager/ 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+microsoft-exchange-panel	body	Exchange\ Admin\ Center	200	microsoft-exchange-panel.yaml	afrog-pocs(MIT): Microsoft Exchange Control Panel；请求路径 /owa/auth/logon.aspx?replaceCurrent=1&url={{hostUrl}}/ecp 未表达（我们按响应内容打标签）｜复核 ok
+minio	body	(?i)<title>minio\ browser</title>	200	minio-browser.yaml	afrog-pocs(MIT): MinIO Browser；请求路径 /minio/login 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok；标签并入内置 minio（afrog 源 id=minio-browser）
+minio	body	(?i)<title>minio\ console</title>	200	minio-console.yaml	afrog-pocs(MIT): MinIO Console；请求路径 /login 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok；标签并入内置 minio（afrog 源 id=minio-console）
+mongodb-ops-manager	body	MongoDB\ Ops\ Manager</title>	200	mongodb-ops-manager.yaml	afrog-pocs(MIT): MongoDB Ops Manager；请求路径 /account/login 未表达（我们按响应内容打标签）｜复核 ok
+n8n-panel	body	(?i)<title>n8n\.io	200	n8n-panel.yaml	afrog-pocs(MIT): n8n Panel - Detect；请求路径 /signin 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+neo4j-browser	body	(?i)<title>Neo4j\ Browser</title>	200	neo4j-browser.yaml	afrog-pocs(MIT): Neo4j Browser - Detect；请求路径 /browser 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+newcapec-detect	body	(?i)<title>掌上校园服务管理平台</title>	200	newcapec-detect.yaml	afrog-pocs(MIT): 掌上校园服务管理平台；请求路径 /login.action 未表达（我们按响应内容打标签）；大小写不敏感；非 ASCII 关键字，需确认响应编码｜复核 ok
+novnc-login-panel	body	(?i)<title>noVNC</title>	200	novnc-login-panel.yaml	afrog-pocs(MIT): noVNC Login Panel - Detect；请求路径 /vnc.html 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+o2oa-detect	body	(?i)<title>O2OA</title>	200	o2oa-detect.yaml	afrog-pocs(MIT): O2OA 企业及团队办公平台；请求路径 /x_desktop/index.html 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+openemr-detect	body	"title":"OpenEMR\ Product\ Registration"	200	openemr-detect.yaml	afrog-pocs(MIT): OpenEMR Product Registration Panel - Detect；请求路径 /interface/login/login.php?site=default 未表达（我们按响应内容打标签）｜复核 ok
+openstack-dashboard-login	body	(?i)<title>Login\ \-\ OpenStack\ Dashboard</title>	200	openstack-dashboard-login.yaml	afrog-pocs(MIT): OpenStack Dashboard Login Panel - Detect；请求路径 /dashboard/auth/login/,/horizon/auth/login/?next=/horizon/ 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+openvpn-admin	body	<title>OpenVPN\-Admin	200	openvpn-admin.yaml	afrog-pocs(MIT): OpenVPN Admin Login Panel - Detect；请求路径 /index.php,/login 未表达（我们按响应内容打标签）｜复核 ok
+realor-panel	body	(?i)<title>欢迎使用瑞友应用虚拟化系统_管理后台</title>	200	realor-panel.yaml	afrog-pocs(MIT): 瑞友应用虚拟化系统；请求路径 /index.php?s=/Admin/userlist 未表达（我们按响应内容打标签）；大小写不敏感；非 ASCII 关键字，需确认响应编码｜复核 ok
+sap-netweaver-portal	body	<title>SAP\&\#x20;NetWeaver\&\#x20;Portal</title>	200	sap-netweaver-portal.yaml	afrog-pocs(MIT): SAP NetWeaver Portal - Detect；请求路径 /irj/portal 未表达（我们按响应内容打标签）｜复核 ok
+sap-web-dispatcher-administration	body	(?i)<TITLE>Web\ Dispatcher\ Administration</TITLE>	200	sap-web-dispatcher-administration.yaml	afrog-pocs(MIT): SAP Web Dispatcher Administration；请求路径 /sap/wdisp/admin/public/session_logon.html 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok
+secvpn-detect	body	url="admin\.php\?controller=admin_index\&action=get_user_login_fristauth\&username=	200	secvpn-detect.yaml	afrog-pocs(MIT): 中远麒麟堡垒机；请求路径 /admin.php?controller=admin_index&action=login 未表达（我们按响应内容打标签）｜复核 ok
+seeyon	body	(?i)<title>A8\ Management\ Monitor</title>	200	seeyon-a8-management-detect.yaml	afrog-pocs(MIT): Seeyon A8 Management Monitor Detect；请求路径 /seeyon/management/index.jsp 未表达（我们按响应内容打标签）；大小写不敏感｜复核 ok；标签并入内置 seeyon（afrog 源 id=seeyon-a8-management-detect）
+solarwinds-orion	body	SolarWinds\ Orion	200	solarwinds-orion-panel.yaml	afrog-pocs(MIT): SolarWinds Orion Panel；请求路径 /Orion/Login.aspx 未表达（我们按响应内容打标签）｜复核 ok
+sonicwall-management-panel	body	<title>SonicWall\ \-\ Authentication</title>	200	sonicwall-management-panel.yaml	afrog-pocs(MIT): SonicWall Management Panel；请求路径 /auth.html 未表达（我们按响应内容打标签）｜复核 ok
+spring	body	"status":999	500	spring-detect.yaml	afrog-pocs(MIT): Spring detected；请求路径 /error 未表达（我们按响应内容打标签）｜复核 ok；标签并入内置 spring（afrog 源 id=spring-detect）
+taihe-panel	body	(?i)<title>泰合信息安全运营中心系统\-日志审计\ \-\ 登录</title>	200	taihe-panel.yaml	afrog-pocs(MIT): 泰合信息安全运营中心系统-日志审计；请求路径 /sa/login.jsp 未表达（我们按响应内容打标签）；大小写不敏感；非 ASCII 关键字，需确认响应编码｜复核 ok
+tenda-panel	body	<title>Tenda\ 11N\ Wireless\ Router\ Login\ Screen</title>|<title>Tenda\ \|\ LOGIN</title>|<title>Tenda\ \|\ Login</title>|<title>Tenda\ Wireless\ Router</title>|<title>Tenda\ Wi\-Fi</title>|<title>腾达无线路由器</title>|<title>Tenda\|登录</title>|<title>Tenda\ Web\ Master</title>	200	tenda-panel.yaml	afrog-pocs(MIT): Tenda Panel；请求路径 /login.html 未表达（我们按响应内容打标签）；非 ASCII 关键字，需确认响应编码｜复核 ok
+tianjing-panel	body	(?i)<title>天镜脆弱性扫描与管理系统</title>	200	tianjing-panel.yaml	afrog-pocs(MIT): 天镜脆弱性扫描与管理系统；请求路径 /login/loginIndex.action 未表达（我们按响应内容打标签）；大小写不敏感；非 ASCII 关键字，需确认响应编码｜复核 ok
+tianyue-panel	body	(?i)<title>天玥运维安全网关V	200	tianyue-panel.yaml	afrog-pocs(MIT): 天玥运维安全网关；请求路径 /client/login/index 未表达（我们按响应内容打标签）；大小写不敏感；非 ASCII 关键字，需确认响应编码｜复核 ok
+xiruanyun-xms-detect	body	(?i)<title>西软云XMS</title>	200	xiruanyun-xms-detect.yaml	afrog-pocs(MIT): 西软云XMS；请求路径 /WebXMS 未表达（我们按响应内容打标签）；大小写不敏感；非 ASCII 关键字，需确认响应编码｜复核 ok
+xxljob-panel	body	<a><b>XXL</b>JOB</a>	200	xxljob-panel.yaml	afrog-pocs(MIT): XXLJOB Admin Login Panel - Detect；请求路径 /toLogin,/xxl-job-admin/toLogin 未表达（我们按响应内容打标签）｜复核 ok
+yunlian-pos-erp-detect	body	(?i)<title>管理中心\ \-\ Powered\ By\ chaosZ</title>	200	yunlian-pos-erp-detect.yaml	afrog-pocs(MIT): 云连 POS-ERP 管理系统；请求路径 /admin/index.jsp 未表达（我们按响应内容打标签）；大小写不敏感；非 ASCII 关键字，需确认响应编码｜复核 ok

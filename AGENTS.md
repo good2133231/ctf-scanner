@@ -193,7 +193,10 @@ ctf-scanner/
 │   ├── mmh3.py            # 纯标准库 MurmurHash3 x86_32（平台 favicon 指纹用；含 SELF_TEST 向量）
 │   ├── intel.py           # 漏洞情报订阅（P3-2）：CISA KEV 拉取+本地缓存+白名单式匹配 → **只产线索**（不写 vulns）
 │   ├── heuristics.py      # 启发式候选发现（P3-3）：对已有数据做差分/异常聚合（**零请求**）→ 线索；阈值与规则表在此
-│   ├── fingerprint.py     # 内置指纹规则表 → identify(resp) -> [tag] + fetch_favicon/favicon_md5/favicon_hash
+│   ├── fingerprint.py     # 指纹规则表 → identify(resp) -> [tag] + fetch_favicon/favicon_md5/favicon_hash
+│                          #   规则是 `(part, 正则[, 状态码集合])`；**两个来源**：内置 SIGNATURES（103 个标签，
+│                          #   一律不分状态）+ 外置 `config/dicts/fingerprints_extra.txt`（续120，带状态码门控，
+│                          #   TAB 分隔，坏行进问题清单不静默；缓存按 (路径,mtime,size)，改字典不用重启）
 │   ├── certs.py           # TLS 证书取证（**纯标准库** DER/ASN.1 解析，不引 cryptography）：parse_der/parse_pem/fetch/tls_ports
 │   ├── toolmgr.py         # 外部工具版本管理（续54）：查 GitHub release → 按平台挑产物 → SHA256 校验 →
 │   │                      #   单文件解包落盘 → 逐行回写 tools.<名>。**只在显式入口调用**（CLI/GUI），
@@ -241,8 +244,13 @@ ctf-scanner/
 │                          #   注：原文写「十八段」且漏列 ssrf/shodan/quake/ctlog，与 GUI 实际覆盖的段数不符，
 │                          #   2026-09-24（续26）按 config/settings.yaml 实测更正为 **23 段**（tools/dicts/http 不可从页面改）
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
+├── tools/import_afrog_fp.py # afrog-pocs(MIT) 的 fingerprinting/ → **候选表 + 人工复核 → 追加**进
+│                          #   config/dicts/fingerprints_extra.txt；`--scan`/`--table`/`--apply`/`--lint`，
+│                          #   全程不发请求、不覆盖已有行、**没有"全部放行"旗标**（复核列空着＝零动作）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
 ├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / cdn_cname(292) / cdn_ips(15) / waf_block_titles(11：WAF-CDN 拦截页标题文案，续112)
+│                          #   fingerprints_extra(51 条/49 标签，续120)：**外置组件指纹**，TAB 分隔、
+│                          #   每条带状态码与 `afrog-pocs(MIT)` 出处；复核结论与拒因见 docs/afrog-fp-review.tsv、许可见 NOTICE.md §3.2
 │                          #   sensitive(9)：**A01 检查的数据源**（`路径|关键字|级别|说明`，见 §7）
 │                          #   dirs_shallow(206)：**浅扫专用**（dirscan.mode=quick 只用它），按价值排序、人工筛选
 │                          #   js_thirdparty(287：JS 第三方域名单 = 内置 + URLFinder jsFiler + 续22 补 20 条常用库/CDN/链上浏览器)
@@ -429,6 +437,18 @@ ctf-scanner/
    **不带 `uid` 的会话一律作废**（升级前留下的引导 Cookie 也不再认，回归 `[8v] ③` 钉的就是这一档）。
    新增任何"绕过账号的登录路"都算违反本条；页面侧也不许再出现口令输入框（`[8v] ④` 按渲染出的
    HTML 判，注释里写不写键名都不影响判据）。
+
+11. **指纹判据只有一条形状，且第三方内容必须"复核后才落地"**（续120）：
+    `(part, 正则[, 状态码集合])` —— `part ∈ headers|body|cookies`，第三元素缺省＝不分状态。
+    ① 内置 `SIGNATURES` 不许因为外部字典的存在被改写；同名标签**允许**在外置表再加一条判据
+    （析取语义，与内置表一致），但**不许**为已有产品另造近似标签 —— `sites.tech` 里同时出现
+    `jenkins` 与 `jenkins-login`，dirscan 的框架桶只认前者，后者等于白打。
+    ② 外置表 `config/dicts/fingerprints_extra.txt` 的分隔符**只能是 TAB**：判据本身是正则，
+    `|` 是它的选择运算符，用 `|` 切列会把判据腰斩。
+    ③ 任何"把第三方 PoC/指纹/字典搬进检测路径"的活儿，落地件必须是**人工复核过的表**
+    （`docs/afrog-fp-review.tsv` 那种），工具侧不许提供 `--all-ok`；`severity != info` 一律拒
+    （实测 afrog 的 fingerprinting/ 目录里混着一条 HFS RCE，它的判据和普通指纹一模一样）。
+    回归见 `tests/smoke.py [8y]`（含 severity 白名单与门控两向变异）。
 
 ## 6. 如何验证改动
 

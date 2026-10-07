@@ -53,6 +53,21 @@ Web3 域名）。URLFinder 的许可状态本项目未做核实。**这是黑名
 > 打包进 wheel 的快照，不联网取 publicsuffix.org）。MPL-2.0 与本仓库 MIT 的兼容性**本项目不作
 > 法律结论**：若你要再分发本仓库、或用于商业用途，请自行厘清这部分数据的许可义务。
 
+## 3.2 `config/dicts/fingerprints_extra.txt` —— 条目派生自 afrog-pocs（MIT）
+
+51 条组件指纹，由 `tools/import_afrog_fp.py` 从 **[afrog-pocs](https://github.com/zan8in/afrog-pocs)**
+的 `fingerprinting/` 目录（130 个 YAML）逐条**人工复核**后追加；每条判据的原文、状态码、复核结论
+与拒搬理由都留在 [`docs/afrog-fp-review.tsv`](docs/afrog-fp-review.tsv) 里，可逐行回溯。
+
+- afrog 与 afrog-pocs 均以 **MIT** 授权（与本仓库自有代码同一许可），所以这部分派生数据可以随仓库
+  分发；字典每行末尾的说明列都写着 `afrog-pocs(MIT): <模板名>`。
+- **只搬判据，不搬动作**：afrog 模板里的请求（method / path / body）不进入我们的扫描流程，翻过来的
+  只有"响应长什么样"= `(位置, 正则, 状态码)`。`type: tcp`、带 brute 路径清单、POST 带请求体、
+  以及 `severity != info` 的模板**一律拒搬** —— 实测那个目录里混着一条 HFS RCE（GET 触发目标执行
+  `ipconfig`），它的判据长得和指纹一模一样，拦住它的就是 severity 这一行。
+- 内置的 `scanner/fingerprint.py::SIGNATURES`（103 个标签）仍是本项目自行编写，与本文件无关；
+  本文件只是**追加**判据，同名标签允许再加一条（不改写、不删除已有行）。
+
 ## 4. 其他数据文件（本项目自建，无第三方来源）
 
 - `config/dicts/dirs_shallow.txt` —— 自建"浅扫精选字典"（`dirscan.mode = quick` 专用）。
@@ -64,8 +79,9 @@ Web3 域名）。URLFinder 的许可状态本项目未做核实。**这是黑名
   数据来源：**Cloudflare 官方** `https://www.cloudflare.com/ips-v4`（**2026-09-25** 取回），
   厂商自行发布并声明以其为准；属公开**事实性数据**，本项目只做只读加载与匹配，不发请求。
 - `config/dicts/subdomains.txt` —— 自建子域名字典。
-- `scanner/pocs/pocs/*.yaml`（7 个内置 POC）、`scanner/fingerprint.py`、
-  `scanner/owasp/checks.py`、`scanner/takeover.py` 指纹库 —— 本项目自行编写。
+- `scanner/pocs/pocs/*.yaml`（7 个内置 POC）、`scanner/fingerprint.py` 的**内置** SIGNATURES 表、
+  `scanner/owasp/checks.py`、`scanner/takeover.py` 指纹库 —— 本项目自行编写
+  （外置的 `config/dicts/fingerprints_extra.txt` 另见 §3.2）。
 
 ## 5. 本仓库自身的许可
 

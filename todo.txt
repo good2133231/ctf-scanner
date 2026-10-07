@@ -2416,3 +2416,17 @@ ReadTimeout 而不是 FIN）；**查询计划缓存是按连接**的，`DROP IND
 待做（用户已点头，按序自动推进）：A = `tools/import_afrog_fp.py` 候选表 + `fingerprint.py` 补状态码门控；
 B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固定 -P 本地 PoC 目录 + -curated off +
 输出落文件），默认关，握手实验不通过就不接。
+
+== 续120（A 步：afrog 指纹按需导入 + 状态码门控）==
+- [x] tools/import_afrog_fp.py：分词 + 递归下降解析 afrog 表达式；--scan/--table/--apply/--lint
+- [x] 130 个真文件分类：57 可映射 / 73 拒搬（23 合取、21 tcp、8 brute、7 正则接收者、4 命名条目、
+      4 severity≠info、2 嵌套合取、2 POST 带体、1 resp. 简写、1 变量占位符）
+- [x] scanner/fingerprint.py：规则可选第三元素 = 状态码集合；外置表 fingerprints_extra.txt（TAB 分隔、
+      (路径,mtime,size) 缓存、坏行进问题清单）；内置 SIGNATURES 一字未动
+- [x] 逐行复核 58 条候选 → 51 ok / 7 no，落在 docs/afrog-fp-review.tsv；9 行并入 7 个内置标签
+- [x] NOTICE.md §3.2 登记（afrog-pocs，MIT）；回归 [8y]（14 fixture + 双向变异）
+- [ ] 外置表的**路径门控**：34 条候选判据只在特定路径成立（现在靠"内容像不像"打标签，说明列已注明）。
+      要做得给 rules 再加一维（path 前缀），并决定 probe 之外的响应（dirscan/jsmine）是否参与判定
+- [ ] B 步 2：afrog 当外部引擎跑 PoC —— 先真跑靶场拿**真实 JSON 输出**（注意 stdout 是管道时会不会挂），
+      再写 scanner/afrog.py 适配器；默认关、不静默降级、结果按 (target, poc_id) 去重
+- [ ] afrog-pocs 的更新通道（指纹与 PoC 都可按需再跑一次 --scan/--table；本仓库不整树拉第三方仓库）
