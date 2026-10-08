@@ -359,6 +359,78 @@ def do_nodes(args):
               f"{on}    #{r['current_task'] or 0:<8} {r['last_seen'] or '-'}")
 
 
+def do_migrate(args):
+    """扫描数据导出 / 导入（续136）的实现入口：拼参数、打摘要，返回退出码。
+
+    口径不在这里写第二遍 —— 默认带什么、不带什么、为什么，全部见 `scanner/migrate.py` 文件头。
+    """
+    from scanner import migrate
+
+    if args.export_scan is not None:
+        ids = [int(x) for x in str(args.only_tasks or "").replace("，", ",").split(",")
+               if x.strip().isdigit()]
+        try:
+            info = migrate.export_bundle(dst=(args.export_scan or None), task_ids=ids or None,
+                                         with_users=args.with_users,
+                                         with_task_auth=args.with_task_auth)
+        except OSError as e:
+            print(f"[!] 导出失败：{e}")
+            return 1
+        inc = info["includes"]
+        assets = " | ".join(f"{t} {n}" for t, n in inc["assets"].items() if n) or "（无资产）"
+        print(f"[*] 迁移包已写出：{rel_display(Path(info['path']))}"
+              f"（{info['bytes'] / 1024:.1f} KB，权限 0600）")
+        print(f"    任务 {inc['tasks']} 条｜{assets}")
+        print(f"    账号表（口令/令牌哈希）与 config 凭据文件："
+              + ("**已打进包**" if inc["accounts"] else "不带")
+              + (f"（实际带上：{', '.join(inc['credential_files_present'])}）"
+                 if inc.get("credential_files_present") else ""))
+        if inc.get("accounts_absent"):
+            print(f"    [!] 本机库里没有这些表，这一档没数据可带：{', '.join(inc['accounts_absent'])}")
+        print(f"    任务登录态请求头：" + ("保留" if inc["task_auth"]
+                                    else f"已剥掉 {inc['task_auth_stripped']} 条"))
+        if inc.get("log_paths_dropped"):
+            print(f"    任务日志路径：{inc['log_paths_dropped']} 条落在本项目根之外，"
+                  "包里已置空（不把本机目录结构带出去）")
+        print("    另：`logs/` 下的任务日志、报告、截图**不在包里**（包只装库里的行）——"
+              "要一起迁请把 `logs/` 整目录拷过去")
+        if inc["accounts"]:
+            print("    [!] 这份文件现在**能登录被迁走的那套系统**（含口令哈希与第三方接口凭据）。"
+                  "别把它发进群里 / 传网盘 / 提交进仓库；用完请删，两台机器都归你时才这样导。")
+        else:
+            print("    提示：账号与凭据**不在包里** —— 新机器请自己 `run_users.py` 建账号、"
+                  "`run_keys.py` 配第三方接口 key，迁移包不该替你做这件事。")
+        return 0
+
+    try:
+        res = migrate.import_bundle(args.import_scan, dry_run=args.dry_run)
+    except ValueError as e:
+        print(f"[!] 导入中止：{e}")
+        snap = getattr(e, "snapshot", None)
+        if snap:
+            print(f"    整库快照：{rel_display(Path(snap))}｜要退回就把它复制回 "
+                  f"{rel_display(db.DB_PATH)}（GUI/CLI 得先停，别在被退回的库上继续写）")
+        return 1
+    tag = "试算（dry-run，不写任何数据行）" if res["dry_run"] else "完成"
+    print(f"[*] 导入{tag}：任务 {len(res['tasks'])} 条｜资产 "
+          f"{sum(res['assets'].values())} 行（{', '.join(f'{t} {n}' for t, n in res['assets'].items()) or '无'}）")
+    if res["tasks"] and not res["dry_run"]:
+        print("    任务 id 映射（包里的旧号 → 本机新号，**旧号一概不覆盖**）："
+              + "，".join(f"#{o}→#{n}" for o, n in sorted(res["tasks"].items(),
+                                                        key=lambda kv: int(kv[0]))))
+        print(f"    整库快照：{rel_display(Path(res['snapshot']))}（出过事就退回这里）")
+    if res["users"]["added"] or res["users"]["skipped"]:
+        print(f"    账号：新增 {res['users']['added']}，跳过 {res['users']['skipped']}"
+              "（本机已有同名 = 不覆盖它的口令哈希）")
+    if res["nodes"]["added"] or res["nodes"]["skipped"]:
+        print(f"    节点：新增 {res['nodes']['added']}，跳过 {res['nodes']['skipped']}")
+    for c in res["credentials"]:
+        print(f"    凭据文件 {c['file']}：{c['status']}（{c['reason']}）")
+    for w in res["warnings"]:
+        print(f"    [!] {w}")
+    return 0
+
+
 def check_afrog_pocs(settings, poc_dir=None):
     """自查某个 afrog PoC 目录里**有多少条模板真会被喂给外部引擎**，以及每条被拒的原因。
 
@@ -484,6 +556,24 @@ def main():
                     help="列出该工具版本库里存过的版本（可重复；裸用＝三个都列）")
     ap.add_argument("--tool-use", action="append", default=None, metavar="NAME=VER",
                     help="切到版本库里已有的版本（可重复；不联网、可逆）")
+    # ---- 扫描数据迁移（续136）：默认**不带**任何凭据，红线口径见 scanner/migrate.py 文件头 ----
+    ap.add_argument("--export-scan", nargs="?", const="", default=None, metavar="FILE",
+                    help="导出任务与资产成一份迁移包后退出（默认落 data/export/migration_<时间>.json，0600）。"
+                         "默认不含账号表、不含 config 凭据文件、任务登录态请求头会被剥掉")
+    ap.add_argument("--import-scan", metavar="FILE",
+                    help="导入迁移包：任务一律给**新 id**、running/queued 归一为 stopped、"
+                         "本机已有的同名账号与凭据文件**不覆盖**")
+    ap.add_argument("--only-tasks", default="", metavar="IDS",
+                    help="配合 --export-scan：只导这些任务 id（逗号分隔）")
+    ap.add_argument("--with-users", action="store_true",
+                    help="配合 --export-scan：把 users/nodes 的口令与令牌哈希 + config/keys*.yaml + "
+                         "edge_auth.yaml 一起打进包。**这会让迁移包变成能登录的凭据包**，"
+                         "只在两台机器都归你时用")
+    ap.add_argument("--with-task-auth", action="store_true",
+                    help="配合 --export-scan：保留任务里的登录态请求头（Cookie/Authorization）。"
+                         "默认剥掉并打印剥了几条")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="配合 --import-scan：只报「会导入什么」，不写任何数据行（幂等建表仍会做）")
     args = ap.parse_args()
 
     # 不给 `--update-tools` 却给了它的附属参数 → **直接报错**，不静默忽略
@@ -493,6 +583,25 @@ def main():
     if stray and not args.update_tools:
         print(f"[!] 这些参数只在 --update-tools 时有效：{', '.join(stray)}")
         sys.exit(1)
+
+    # 同上口径：迁移的附属参数不许"给了却没生效"。
+    _mig_stray = [(n, v) for n, v in (
+        ("--only-tasks", args.only_tasks), ("--with-users", args.with_users),
+        ("--with-task-auth", args.with_task_auth)) if v]
+    if _mig_stray and args.export_scan is None:
+        print(f"[!] 这些参数只在 --export-scan 时有效：{', '.join(n for n, _ in _mig_stray)}")
+        sys.exit(1)
+    if args.dry_run and not args.import_scan:
+        print("[!] --dry-run 只在 --import-scan 时有效（导出不写库，本来就是只读的）")
+        sys.exit(1)
+    if args.export_scan is not None and args.import_scan:
+        print("[!] --export-scan 与 --import-scan 不能同时给")
+        sys.exit(1)
+
+    # 迁移入口排在**凭据解锁之前**：导出不需要解开 `keys.enc.yaml`（带 --with-users 时是连密文
+    # 文件本体一起搬，不解密）。拦在这儿，用户就不会在"我只是想导一份数据走"之前被问一次口令。
+    if args.export_scan is not None or args.import_scan:
+        sys.exit(do_migrate(args))
 
     # 凭据解锁（续98）：口令**只在这里要一次** —— 紧接着的 load_settings() 会把 keys
     # 读进配置，之后工作线程与 GUI 每个请求都会反复调它，绝不能再提示。没加密文件时静默通过。

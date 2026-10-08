@@ -174,6 +174,14 @@ ctf-scanner/
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
 │   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic/**github**（13 个）
+│   ├── migrate.py         # 扫描数据的导出/导入（续136，跨机迁移）。**默认零凭据**：包里只有
+│   │                      #   tasks + 九张资产表；账号表/凭据文件/任务登录态各要一个显式旗标
+│   │                      #   （`--with-users` / `--with-task-auth`，见 §7 那条）。导入侧任务一律给
+│   │                      #   **新 id**、running/queued→stopped 且 pid 归零、同名账号与凭据文件
+│   │                      #   **一律不覆盖**；写之前先查表是否存在、写完前拍一份**不重名**的整库
+│   │                      #   快照（WAL 下必须用 backup API）。`dry_run` 与真跑**共用同一条判据**
+│   │                      #   （两份实现必漂，漂了比没有试算更糟）。
+│   ├── diffview.py        # 跨任务差分（续129，复测视图）：target_set/comparable/pick_base/
 │   │                      #   snapshot/diff/summary。三条不对齐就会骗人的口径：
 │   │                      #   ①缺覆盖≠变化（按类别看两边 stages，三档各有说法，缺对照的数字
 │   │                      #   不许进摘要）；②漏洞只把 false_positive 排除（与报告同口径），
@@ -969,6 +977,13 @@ py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（
 
 **写断言前的两句自检**：① 这条判据吃的是**桩/参数**，还是**这台机器恰好是什么**？
 ② 如果用户照 README 正常装一遍、或把仓库放进 `/w` 这种短路径里跑，它还绿吗？
+
+**第三起（续136，本轮真踩）：两个 `tests/smoke.py` 并发跑必然假红。** 一个全量跑到 130+ 组、
+十几分钟，另起一个（或让子代理也去"跑一遍门禁"）就会共用同一个本地靶场端口（8765）与同一批
+进程内状态 —— 先结束的那个会把靶场服务关掉，另一个就报成"探测调用 1 次、站点 0 个"这种
+**看起来像产品缺陷**的形状（本轮 `[8k]` 就是这么红的，单跑复验立刻绿）。规矩：**门禁只由一个
+执行者跑**；要并行验证就做互不相干的静态检查，或者干脆排队。同理，证伪/变异实验也别和正式
+门禁同时在一份工作区里跑。
 
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
@@ -1881,6 +1896,21 @@ py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（
   要真正纳入预算，得让它的流量走我们的出口（如本地转发），目前**没做，也不假装做了**。
 - **afrog 的命中只进 `vulns` 表**（info/low 级），不反查成 `sites.tech` 标签：那需要一张
   PoC→标签 的映射表，没有表就不猜（组件识别的正路是续120 那份复核过的外置指纹表）。
+
+- **迁移包默认零凭据，但"带不带"是三个独立开关、不是一句提示**（续136，`scanner/migrate.py`）：
+  导出默认只有 `tasks` + 九张资产表。`users`/`nodes` 的口令与令牌哈希、`config/keys*.yaml`、
+  `edge_auth.yaml` 要 `--with-users`；`tasks.options["auth"]`（扫目标时带的 Cookie/Authorization，
+  `cli/client.py` 存进去的）要 `--with-task-auth`。**第三条是本轮实测找出来的**：只把账号表挡在
+  门外，"只导任务表"照样会泄密。包默认落 `data/export/`（`.gitignore` 覆盖的唯一目录）且 `0600`
+  —— 权限位不由"这次恰好没带口令"决定。`session.secret` **连 --with-users 也不带**（带了＝旧会话
+  在新机器上继续有效）；`audit_log`/`login_fails` **永不进包**（审计是"那台机器上发生过的事"，
+  跨机合并会把来源搅混）。新增"能带走数据"的出口时先问一句：**这份文件在别人手里等于什么**。
+- **`db.import_task_assets()` 只服务"一份快照属于同一个任务"**（续136 实测的坑）：它会把每行的
+  `task_id` 一律改写成传入的号、`id` 一律丢弃。多任务场景直接传整份资产的结果是 **44 条变 308 条**
+  （每个任务都拿到别人的资产，页面上一条都分不出）—— 复用它必须**先按原 `task_id` 切好**。
+- **`tasks.log_file` 存的是绝对路径**（`runner.py` 写 `str(log_file)`）：进任何要外发的东西都必须
+  转相对形；而还原要按**本机 BASE_DIR** 做成绝对形、不能留相对 —— 消费方是 `Path(...).parent` 这类
+  用法，相对路径会按**进程 CWD** 解析（从仓库外启动 GUI 就跑偏，与 §2 那条 `which()` 形状问题同源）。
 
 ## 8. 不要做的事
 

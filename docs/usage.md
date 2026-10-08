@@ -408,6 +408,13 @@ pip install -r requirements.txt
 python3 run_gui.py
 ```
 
+> **换机器请照 `requirements.lock` 装**（`pip install -r requirements.lock`，
+> Windows 是 `py -3 -m pip install -r requirements.lock`）：`requirements.txt` 是
+> **我要什么**（直接依赖 + 允许区间，CI 与 Dockerfile 吃的仍是它），`requirements.lock` 是
+> **这次实测装出来的是哪些版本**（含全部传递依赖的精确版本，Python 3.9 与 3.14 两头都验过）。
+> 自动层 `run_bootstrap.py --install` 优先吃 lock、装不动就回落 `requirements.txt`，
+> **并把这次用的是哪一份打在输出里**；重新生成的命令与逐条版本取舍写在 `requirements.lock` 的文件头。
+
 - **工具版本**：subfinder/httpx/puredns 下载 `linux_amd64` 包；dirmap 是纯 Python，clone 即用；
 
    **系统包层（续100）**：`python run_bootstrap.py --install --with-system [--yes]` 会把

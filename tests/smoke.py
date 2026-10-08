@@ -17049,6 +17049,255 @@ expression: r0()
           "可以被接受的前提）｜非回环未配口令必须点名｜变异：fail-open / 去掉空口令前置判断 /"
           "挪到 Host 白名单之后 / 不校验用户名 / 写审计 都会红")
 
+    # ---------------- [8aj] 续136：扫描数据的导出/导入（跨机迁移） ----------------
+    # 这条红线的本体是用户点名的：**"迁移文件"不许顺手变成"能登录别人系统的凭据包"**。
+    # 所以本组的主力断言不是"能不能搬数据"，而是**默认包里不许有任何凭据形态的东西**，
+    # 而且要带就只认 `--with-users` / `--with-task-auth` 这两个显式旗标。
+    # 另外钉三条本轮**实测抓到的真缺陷**（每条都有变异证伪）：
+    #   ① 资产必须按 `task_id` 切回各自任务（直接传整份快照会让每个任务拿到别人的资产）；
+    #   ② `tasks.log_file` 存的是绝对路径，进包必须转相对（否则本机目录结构随包外流）；
+    #   ③ 新装库里没有 `nodes` 表，带 `--with-users` 不许崩栈、要如实点名。
+    import json as _json
+    import sqlite3 as _sq134
+    import stat as _stat134
+    from scanner import db as _db134
+    from scanner import migrate as _mg134
+    from scanner import nodes as _nodes134
+
+    _tmp134 = _TMPDIR / "mig134"
+    (_tmp134 / "base" / "config").mkdir(parents=True, exist_ok=True)
+    _PWH134 = "smoke-mig-pwhash-A"        # 冒充 users.password 的哈希串
+    _TOK134 = "smoke-mig-node-token-B"    # 冒充 nodes.token_hash
+    _KEY134 = "smoke-mig-key-C: 1"        # 冒充 config/keys.yaml 里的第三方 key
+    _CKI134 = "smoke-mig-cookie-D"        # 冒充任务登录态 Cookie
+    (_tmp134 / "base" / "config" / "keys.yaml").write_text(_KEY134 + "\n", encoding="utf-8")
+    _orig_dbpath134 = _db134.DB_PATH
+    _orig_base134 = _mg134.BASE_DIR
+    _mg134.BASE_DIR = _tmp134 / "base"
+
+    def _mig_conn134(name):
+        return _sq134.connect(str(_tmp134 / name))
+
+    def _mig_build134(name, with_nodes=True):
+        """造一个源库：2 个任务（各带自己的子域名/站点）+ 1 条 running + 账号/凭据。"""
+        p = _tmp134 / name
+        if p.exists():
+            for extra in (".db-wal", ".db-shm"):
+                if Path(str(p) + extra).exists():
+                    Path(str(p) + extra).unlink()
+            p.unlink()
+        _db134.DB_PATH = p
+        _db134.init_db()
+        t1 = _db134.create_task("mig-src-1", "a.example.com", ["probe"],
+                                options={"auth": {"Cookie": _CKI134}, "portscan_full": True},
+                                owner_id=7)
+        t2 = _db134.create_task("mig-src-2", "b.example.com", ["probe"], options={})
+        _db134.insert_subdomains(t1, [("a1.example.com", "smoke"), ("a2.example.com", "smoke")])
+        _db134.insert_subdomains(t2, [("b1.example.com", "smoke")])
+        _db134.insert_sites(t1, [{"url": "http://a.example.com/", "host": "a.example.com"}])
+        _db134.update_task(t2, status="running", pid=424242,
+                           log_file=str(_tmp134 / "base" / "logs" / "task_2" / "task.log"))
+        _db134._exec("INSERT INTO users (username,password,role,enabled,created_at) "
+                     "VALUES (?,?,?,?,?)", ("migsu", _PWH134, "admin", 1, _db134._now()))
+        _db134._exec("INSERT INTO audit_log (at,kind,actor,ip,target,ok) "
+                     "VALUES (?,?,?,?,?,?)", (_db134._now(), "login", "migsu", "1.2.3.4", "/", 1))
+        if with_nodes:
+            # `nodes` 不在 `db.SCHEMA` 里（由 `scanner/nodes.py::ensure()` 建）—— 这里要它就得自己建出来。
+            # 反过来 ③b 正是拿"没建过它的库"当被测对象，两处不冲突。
+            _nodes134.ensure()
+            _db134._exec("INSERT INTO nodes (name,token_hash,enabled,created_at) VALUES (?,?,?,?)",
+                         ("mignode", _TOK134, 1, _db134._now()))
+        return t1, t2
+
+    def _count134(name, sql):
+        conn = _mig_conn134(name)
+        try:
+            return int(conn.execute(sql).fetchone()[0])
+        finally:
+            conn.close()
+
+    try:
+        _mig_build134("src.db")
+        # ---- ① 默认包：任务与资产有，四类凭据一个都不许有 ----
+        _info134 = _mg134.export_bundle(dst=_tmp134 / "d.json")
+        _raw134 = (_tmp134 / "d.json").read_text(encoding="utf-8")
+        _bd134 = _json.loads(_raw134)
+        assert _bd134["magic"] == _mg134.MAGIC and _bd134["format"] == _mg134.FORMAT
+        assert {t["name"] for t in _bd134["data"]["tasks"]} == {"mig-src-1", "mig-src-2"}
+        assert "users" not in _bd134["data"] and "nodes" not in _bd134["data"]
+        assert "credentials" not in _bd134["data"]
+        for _s134 in (_PWH134, _TOK134, _CKI134, _KEY134):
+            assert _s134 not in _raw134, f"默认包里泄了：{_s134}"
+        assert "audit_log" not in _bd134["data"] and "login_fails" not in _bd134["data"], \
+            "审计流水不属于资产，跨机合并会把「谁在何时登录失败」的来源搅混"
+        assert _stat134.S_IMODE((_tmp134 / "d.json").stat().st_mode) == 0o600, "包必须是 0600"
+        assert _bd134["includes"]["task_auth_stripped"] == 1, "Cookie 一条都没剥掉？"
+        # ---- ② log_file：包里相对、库里绝对 ----
+        _logs134 = [t["log_file"] for t in _bd134["data"]["tasks"] if t["log_file"]]
+        assert _logs134 and all(not Path(x).is_absolute() for x in _logs134), _logs134
+        assert str(_TMPDIR) not in _raw134 and str(ROOT) not in _raw134, "包体带出本机绝对路径"
+
+        # ---- ③ 变异证伪 A：redact_auth 打回恒等 ⇒ Cookie 必然进包 ----
+        _real_redact134 = _mg134.redact_auth
+        try:
+            _mg134.redact_auth = lambda obj: (obj, 0)
+            _mg134.export_bundle(dst=_tmp134 / "mA.json")
+            assert _CKI134 in (_tmp134 / "mA.json").read_text(encoding="utf-8"), \
+                "摘掉剥离后包里居然还是没有 Cookie ⇒ ①那条断言是假的"
+        finally:
+            _mg134.redact_auth = _real_redact134
+
+        # ---- ④ 变异证伪 B：log_file 不做相对化 ⇒ 绝对路径进包 ----
+        _real_rel134 = _mg134.to_rel_path
+        try:
+            _mg134.to_rel_path = lambda v: str(v or "")
+            _mg134.export_bundle(dst=_tmp134 / "mB.json")
+            assert str(_TMPDIR) in (_tmp134 / "mB.json").read_text(encoding="utf-8"), \
+                "打回原样后包里还是没有绝对路径 ⇒ ②那条断言是假的"
+        finally:
+            _mg134.to_rel_path = _real_rel134
+
+        # ---- ⑤ --with-users：账号表与凭据文件都在，且默认包与它内容差异可指认 ----
+        _infoU = _mg134.export_bundle(dst=_tmp134 / "u.json", with_users=True)
+        _bdU = _json.loads((_tmp134 / "u.json").read_text(encoding="utf-8"))
+        assert _bdU["data"]["users"][0]["password"] == _PWH134
+        assert _bdU["data"]["nodes"][0]["token_hash"] == _TOK134
+        assert base64.b64decode(
+            _bdU["data"]["credentials"]["config/keys.yaml"]
+        ).decode("utf-8").strip() == _KEY134, "点名要带却没带（包里是 base64，要先解码再比）"
+        assert _infoU["includes"]["credential_files_present"] == ["config/keys.yaml"]
+        # ③b 新装库没有 nodes 表 ⇒ 不崩，并如实点名缺了哪档
+        _db134.DB_PATH = _tmp134 / "bare.db"
+        _db134.init_db()
+        _conn_bare = _mig_conn134("bare.db")
+        _has_nodes_bare = _conn_bare.execute(
+            "select 1 from sqlite_master where type='table' and name='nodes'").fetchone()
+        _conn_bare.close()
+        assert _has_nodes_bare is None, "init_db() 居然会建 nodes（那 ③b 就没区分度了）"
+        _infoBare = _mg134.export_bundle(dst=_tmp134 / "bare.json", with_users=True)
+        assert "nodes" not in _infoBare["data"], "缺的表不许被当成有数据"
+        assert _infoBare["includes"]["accounts_absent"] == ["nodes"], _infoBare["includes"]
+        assert "users" in _infoBare["data"], "users 表 init_db 会建，不该被算缺"
+
+        # ---- ⑥ 导入：新 id / 资产按任务隔离 / running→stopped / pid 归零 ----
+        _db134.DB_PATH = _tmp134 / "dst.db"
+        _db134.init_db()
+        _res134 = _mg134.import_bundle(_tmp134 / "d.json")
+        assert _res134["snapshot"] and Path(_res134["snapshot"]).is_file(), "导入前没拍整库快照"
+        assert len(_res134["tasks"]) == 2 and sorted(_res134["tasks"].values()) == [1, 2]
+        # 每个任务只拿到**自己**的资产（本轮实测的真缺陷：整份快照直传 → 每个任务都是全量）
+        _sd = {}
+        _conn = _mig_conn134("dst.db")
+        for tid, n in _conn.execute("SELECT task_id, COUNT(*) FROM subdomains GROUP BY task_id"):
+            _sd[int(tid)] = int(n)
+        _run = _conn.execute("SELECT COUNT(*) FROM tasks WHERE status='running'").fetchone()[0]
+        _pid = _conn.execute("SELECT COUNT(*) FROM tasks WHERE pid<>0").fetchone()[0]
+        _u = _conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        _lf = [r[0] for r in _conn.execute("SELECT log_file FROM tasks WHERE log_file<>''")]
+        _ow = _conn.execute("SELECT COUNT(*) FROM tasks WHERE owner_id<>0").fetchone()[0]
+        _conn.close()
+        assert _sd == {1: 2, 2: 1}, f"资产没按任务隔离（导入结果 {_sd}）"
+        assert _res134["assets"].get("subdomains") == 3 and _res134["assets"].get("sites") == 1
+        assert _run == 0 and _pid == 0, "running/pid 没归一（换机器后那个进程必然不存在）"
+        assert any("stopped" in w for w in _res134["warnings"]), "归一必须说出来"
+        assert _u == 0, "默认包不含账号表，导入后库里却多出了账号"
+        assert _ow == 0, "账号没带过来时 owner_id 必须归零（否则指到一个不存在的人）"
+        assert _lf and all(Path(x).is_absolute() and str(_tmp134) in x for x in _lf), _lf
+
+        # ---- ⑦ 变异证伪 C：不按 task_id 切分 ⇒ 条数必然虚高 ----
+        _conn = _mig_conn134("dst.db")
+        _all_sd = [dict(zip(("id", "task_id", "domain", "source"), r)) for r in
+                   _conn.execute("SELECT id, task_id, domain, source FROM subdomains").fetchall()]
+        _conn.close()
+        _inflated = {t: len(r) for t, r in
+                     _db134.dump_task_assets(1).items() if r}   # 单任务的快照本身应当只有 2 条
+        assert _inflated.get("subdomains") == 2, _inflated
+        _db134.import_task_assets(99, {"subdomains": _all_sd})   # 直传整份 = 旧缺陷的形状
+        assert _count134("dst.db", "SELECT COUNT(*) FROM subdomains WHERE task_id=99") == 3, \
+            "直传整份快照却没把全部行都算进这个任务 ⇒ ⑥的隔离断言是假的"
+        _conn = _mig_conn134("dst.db")
+        _conn.execute("DELETE FROM subdomains WHERE task_id=99")
+        _conn.commit()
+        _conn.close()
+
+        # ---- ⑧ dry-run 与真跑同判据（不是另写一遍试算） ----
+        _db134.DB_PATH = _tmp134 / "dry.db"
+        _db134.init_db()
+        _dry = _mg134.import_bundle(_tmp134 / "d.json", dry_run=True)
+        assert _count134("dry.db", "SELECT COUNT(*) FROM tasks") == 0, "dry-run 写了库"
+        assert _count134("dry.db", "SELECT COUNT(*) FROM subdomains") == 0
+        assert len(_dry["tasks"]) == 2 and _dry["assets"].get("subdomains") == 3
+        # 账号与凭据在 dry-run 里也必须给出同样的判定（含"本机已有同名 = 不覆盖"）
+        _snaps0 = len(list((_tmp134 / "trash").glob("preflight_import_*")))
+        (_tmp134 / "base" / "config" / "keys.yaml").unlink()      # 本机没有这个文件
+        _dryU = _mg134.import_bundle(_tmp134 / "u.json", dry_run=True)
+        assert _dryU["users"]["added"] == 1 and _dryU["credentials"][0]["status"] == "would-write"
+        assert not (_tmp134 / "base" / "config" / "keys.yaml").exists(), "dry-run 把凭据文件写出来了"
+        assert len(list((_tmp134 / "trash").glob("preflight_import_*"))) == _snaps0, \
+            "dry-run 什么都不写，不该先拍一份整库快照"
+        (_tmp134 / "base" / "config" / "keys.yaml").write_text("本机已有内容\n", encoding="utf-8")
+        assert _mg134.import_bundle(_tmp134 / "u.json", dry_run=True)["credentials"][0][
+            "status"] == "skipped", "本机已有 keys.yaml 时 dry-run 说要写 = 两份实现漂了"
+        (_tmp134 / "base" / "config" / "keys.yaml").write_text(_KEY134 + "\n", encoding="utf-8")
+
+        # ---- ⑨ 坏包一律拒，且库一行都不动 ----
+        _snaps_bad = len(list((_tmp134 / "trash").glob("preflight_import_*")))
+        _bad = _tmp134 / "bad.json"
+        _bad.write_text(_json.dumps({"magic": "OTHER", "data": {}}), encoding="utf-8")
+        try:
+            _mg134.import_bundle(_bad)
+            raise AssertionError("magic 不符的包被接受了")
+        except ValueError as e:
+            assert "CTFSCANNER-MIGRATION-V1" in str(e)
+        _newer = _json.loads((_tmp134 / "d.json").read_text(encoding="utf-8"))
+        _newer["format"] = 99
+        _bad2 = _tmp134 / "bad2.json"
+        _bad2.write_text(_json.dumps(_newer), encoding="utf-8")
+        try:
+            _mg134.import_bundle(_bad2)
+            raise AssertionError("比本程序新的包格式被接受了")
+        except ValueError as e:
+            assert "比本程序" in str(e)
+        assert _count134("dry.db", "SELECT COUNT(*) FROM tasks") == 0, "被拒的包动了库"
+        assert len(list((_tmp134 / "trash").glob("preflight_import_*"))) == _snaps_bad, \
+            "校验没过就先拍快照 = 白写一份"
+
+        # ---- ⑩ 快照重名会互相盖：`backup()` 是覆盖目标库的 ----
+        _db134.DB_PATH = _tmp134 / "dst.db"
+        _r1 = _mg134.import_bundle(_tmp134 / "d.json")
+        _r2 = _mg134.import_bundle(_tmp134 / "d.json")
+        _snaps = sorted(p.name for p in (_tmp134 / "trash").glob("preflight_import_*"))
+        assert len(set(_snaps)) == len(_snaps) >= 2, _snaps
+        assert _r1["snapshot"] != _r2["snapshot"], f"两份快照同名会互相盖掉：{_r1['snapshot']}"
+        assert _count134("dst.db", "SELECT COUNT(*) FROM tasks") == 6, "第二次导入必须给一批新 id"
+
+        # ---- ⑪ 带账号的包导入：同名不覆盖，缺 nodes 表时不误伤 ----
+        _db134.DB_PATH = _tmp134 / "dst.db"
+        _rU = _mg134.import_bundle(_tmp134 / "u.json")
+        # dst.db 原本没有 nodes 表 —— 这一条同时钉住"导入前把缺的表建出来"，而不是把人挡在门外
+        assert _rU["users"]["added"] == 1 and _rU["nodes"]["added"] == 1, _rU
+        assert _rU["credentials"][0]["status"] == "skipped", "本机已有 keys.yaml 却被盖掉了"
+        assert (_tmp134 / "base" / "config" / "keys.yaml").read_text(
+            encoding="utf-8").strip() == _KEY134, "凭据文件内容被动过"
+        assert _count134("dst.db", "SELECT COUNT(*) FROM users") == 1
+        _rU2 = _mg134.import_bundle(_tmp134 / "u.json")
+        assert _rU2["users"]["added"] == 0 and _rU2["users"]["skipped"] == 1, \
+            "第二次导入同一账号必须跳过（覆盖=用包里的旧哈希顶掉本机口令）"
+        assert any("口令哈希" in w for w in _rU["warnings"]), "含账号的包必须点名警告"
+    finally:
+        _db134.DB_PATH = _orig_dbpath134
+        _mg134.BASE_DIR = _orig_base134
+        shutil.rmtree(_tmp134, ignore_errors=True)
+
+    print("[8aj] 续136 扫描数据导出/导入 ok: 默认包**零凭据**（口令哈希/节点令牌/Cookie/keys.yaml "
+          "四个哨兵都不在包里）+ 0600｜审计流水与 login_fails 永不进包｜log_file 包里相对、库里绝对"
+          "（两条形状各自有断言）｜--with-users 才带账号表与凭据文件、--with-task-auth 才带登录态｜"
+          "新装库缺 nodes 不崩且点名缺哪档｜导入给新 id 不覆盖、running/queued→stopped 且 pid 归零、"
+          "无账号表时 owner_id 归零、账号与凭据文件同名一律不覆盖｜资产按 task_id 切回各自任务｜"
+          "dry-run 与真跑共用同一串判据（含凭据「would-write/skipped」同判）｜坏包（magic 不符、"
+          "format 比本程序新）拒绝且库一行不动、连快照都不拍｜导入前整库快照且**不许重名**｜"
+          "变异三条都会红：摘掉 redact_auth（Cookie 进包）/ log_file 不相对化（绝对路径进包）/ "
+          "不按 task_id 切分（每个任务拿到别人的资产）")
     print("SMOKE PASS")
 
 
