@@ -32,7 +32,7 @@
 <section class="panel">
   <h2>操作</h2>
   <form method="post" action="{{ url_for('api_devmode_selfcheck') }}" style="display:inline"
-        onsubmit="return confirm('跑一次全流程自检？（全 13 阶段、配额压到最小，仅打本机夹具，可能耗时几分钟）')">
+        onsubmit="return confirm('跑一次全流程自检？（全 13 阶段、配额压到最小（限速节奏为自检放宽，见 scanner/devflow.py），仅打本机夹具，约半分钟到几分钟）')">
     <button type="submit">跑一次全流程自检</button>
   </form>
   <p class="muted small">

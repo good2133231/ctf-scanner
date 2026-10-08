@@ -494,6 +494,13 @@ ctf-scanner/
 
 ## 6. 如何验证改动
 
+> **门禁提速的既定口径（续125）**：全流程自检**只**放宽限速节奏
+> （`scanner/devflow.SELFCHECK_PACING` = rate 50/s、burst 20），其余压量一项不动；
+> 开发模式对真实目标仍是 1 请求/秒。耗时基线 `logs/devflow_baseline.json` 里带 `pacing`，
+> **口径不同就不与基线对比**（不可比的两次数比出来的结论是假的）。
+> 要按组看耗时用 `python3 tests/smoke.py --timing`（默认关，开启时也不许改变 stdout 内容）。
+> **刻意不做 `--only <组>`**：130+ 个组共享进程内状态，跳组会在依赖它的后续组里造成假绿。
+
 ```powershell
 py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言覆盖 目标解析+CIDR/阶段注册(13 个)/POC 级别执行门/
                             # 免杀变形/mmh3 公开向量+iprecon/fofa 纯函数/响应体解码/流水线+指纹/三层门控/阶段门控(含 osint)/

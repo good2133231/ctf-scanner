@@ -20,6 +20,60 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# ---- 每组耗时记录（续125，**默认关**）：`--timing` 或 CTFSCANNER_SMOKE_TIMING=1 才开 ----
+# 为什么不做 `--only <组>`：这 130 个组共享进程内状态（DB / 任务 / settings / 本地靶场 / GUI app），
+# 跳过任何一组都可能在"依赖它留下状态的后续组"里造成**假绿** —— 门禁一旦可能假绿就不配当门禁。
+# 所以这里只做"量准"这一件事：每组耗时打表，慢组该拆就拆，判定仍以全量为准。
+_TIMING = bool(os.environ.get("CTFSCANNER_SMOKE_TIMING")) or "--timing" in sys.argv
+_TSTATE = {"last": time.time(), "rows": []}
+_TFILE = None
+_real_print = print
+
+
+def _grp_time(line):
+    """按"组结束那行 print"归因：它前面的那段间隔≈这一组（含它前面的准备）的耗时。"""
+    if not _TIMING:
+        return
+    now = time.time()
+    gap = now - _TSTATE["last"]
+    _TSTATE["last"] = now
+    _TSTATE["rows"].append((gap, line[:80]))
+    if _TFILE is not None:
+        try:
+            _TFILE.write("%.2f\t%s\n" % (gap, line[:80].replace("\n", " ")))
+        except Exception:
+            pass
+
+
+def _print_timed(*a, **k):
+    # 只记账 + 原样转发：**绝不动 stdout 的内容**（第一版探针改了 stdout，把
+    # `[7i]`"启动提示逐行恰好一次"的计数打成 0 —— 测量工具不许改变被测系统）
+    txt = " ".join(str(x) for x in a)
+    if txt.startswith("[") and "] " in txt:
+        _grp_time(txt)
+    _real_print(*a, **k)
+
+
+def _dump_timing():
+    if not _TIMING:
+        return
+    _real_print("\n===== 每组耗时（print 间隔归因；降序前 20）=====")
+    rows = sorted(_TSTATE["rows"], reverse=True)
+    for gap, line in rows[:20]:
+        _real_print("  %7.2fs  %s" % (gap, line))
+    _real_print("  —— 可归因合计 %.1fs，%d 条组行（其余时间在第一段的导入/建库与未打表的输出之间）"
+                % (sum(g for g, _ in rows), len(rows)))
+
+
+if _TIMING:
+    try:
+        (ROOT / "logs").mkdir(exist_ok=True)
+        _TFILE = open(ROOT / "logs" / "smoke-timing.jsonl", "w", encoding="utf-8")
+    except OSError:
+        _TFILE = None
+    atexit.register(_dump_timing)
+    print = _print_timed          # 只有开了 --timing 才接管；默认与今天逐字节相同
+
 def leaked_root(text):
     """页面/输出里是否泄露了**项目根绝对路径**（`str(ROOT)` 与 `as_posix()` 两种写法都查）。
 
@@ -8497,7 +8551,11 @@ http:
     from urllib.parse import urlparse as _up7l
     _fx7l2, _base7l2 = _df7l.start()
     try:
-        _cfg7l = _dm7l.apply(_copy7l.deepcopy(settings))
+        # 压量照旧（本组就是来测"配额压到最小能不能跑通"的），但**限速节奏**放宽 ——
+        # 节奏不是本组的被测对象（那是 [6g] 令牌桶与 [8e] 硬闸的事），而且它与 devflow 自检
+        # 走的是同一个入口 `devflow.relax_pacing`，两处共用一份口径才不会各说各话。
+        from scanner import devflow as _dv7lp
+        _cfg7l = _dv7lp.relax_pacing(_dm7l.apply(_copy7l.deepcopy(settings)))
         # 冒烟必须**零外网**（同 [6u]）：关掉一切会发外部请求的阶段 / 子能力。
         for _k7l in ("iprecon", "fofa", "shodan", "quake", "ctlog", "intel", "github"):
             _cfg7l[_k7l] = dict(_cfg7l.get(_k7l) or {}, enabled=False)
@@ -8935,12 +8993,18 @@ http:
 
     # ③ 全流程自检（隔离库/日志已在文件顶部设好）：cert / subdomain 由 SKIP 变 OK，且**零外网**
     # 续88：阶段级耗时 + 基线对比（纯函数部分，不依赖自检真跑）
+    # 续125 起基线要带"限速节奏"口径才可比（不可比的两次数比出来是废话），所以夹具也带上
+    _pace88 = dict(_dv7n.SELFCHECK_PACING)
     _ss88 = {"a": 10.0, "b": 1.0}
-    _base88 = {"stage_seconds": {"a": 4.0, "b": 1.0}}
+    _base88 = {"stage_seconds": {"a": 4.0, "b": 1.0}, "pacing": _pace88}
     _cmp88 = _dv7n.compare_baseline(_base88, _ss88)
     assert [d["stage"] for d in _cmp88] == ["a"] and _cmp88[0]["x"] == 2.5, _cmp88
-    assert _dv7n.compare_baseline({"stage_seconds": {}}, {"a": 999}) == [], "基线里没有的阶段不猜"
-    assert _dv7n.compare_baseline({"stage_seconds": {"a": 0}}, {"a": 999}) == [], "基线为 0 不猜"
+    assert _dv7n.compare_baseline({"stage_seconds": {}, "pacing": _pace88}, {"a": 999}) == [], \
+        "基线里没有的阶段不猜"
+    assert _dv7n.compare_baseline({"stage_seconds": {"a": 0}, "pacing": _pace88}, {"a": 999}) == [], \
+        "基线为 0 不猜"
+    assert _dv7n.compare_baseline({"stage_seconds": {"a": 4.0}}, {"a": 999}) == [], \
+        "没有节奏字段的基线（续125 之前的老基线）必须判不可比 —— 宁可不说，也不能说错"
     _bp88 = str(_TMPDIR / "base88.json")
     assert _dv7n.save_baseline({"x": 1.234}, elapsed=9.9, path=_bp88)
     _lb88 = _dv7n.load_baseline(_bp88)
@@ -15558,6 +15622,152 @@ expression: r0()
           "空原因有兜底｜_prompt 三条失败路径只写原因（把旧写法打回来的变异会印出两遍结论）｜"
           "结构性不变式：\"凭据保持锁定\"这个产地只有 scanner/keystore.py 一处，三个启动入口"
           "（GUI / CLI / 节点）都调同一句，新入口手拼就会红｜\"没加密文件就静默通过\"的前提没被动到")
+
+    _grp_time("SMOKE PASS")     # 把"最后一组 → 结束"这段也算进账里
+    # ---------------- [8ad] 续125：全流程自检的限速节奏 + 计时探针 + CI 分层 ----------------
+    #      先量再动：给 smoke 装了"每组耗时"探针（默认关）之后才知道，8.6 分钟里有 284 秒花在
+    #      **两个全流程自检**上；再单跑一次 devflow 看内部：总 146.2s，其中 vulnscan 103.0s、
+    #      probe 23.0s，而网络活动总数只有 239 —— 239 次 ÷ `devmode` 压出来的 1 请求/秒 ≈ 239 秒，
+    #      时间几乎全花在**等令牌**上，不是花在代码上。开发模式对真实目标必须继续 1/s（那是它
+    #      存在的理由），但自检测的是"13 个阶段在配额压到最小时能不能跑通"，不是"限速节奏准不准"
+    #      （节奏有 [6g]/[8e] 专门测）。⇒ 只放宽节奏这一项，其余一项不动。
+    #      改完实测：同一次自检 146.2s → 26.2s（5.6x），239 次网络活动与 13 阶段覆盖不变。
+    import contextlib as _ctx125
+    import io as _io125
+    from scanner import devflow as _dv125
+    _rv125 = (ROOT / "run_devflow.py").read_text(encoding="utf-8")
+    from scanner import devmode as _dm125
+
+    # ① 放宽的**只有节奏**：开发模式本体（用户拿去跑真实目标的那份）仍是 1 请求/秒
+    assert _dm125.DEV_LIMITS["limits.rate_per_sec"] == 1, "devmode 本体被改了 —— 开发模式必须仍 1/s"
+    assert _dm125.DEV_LIMITS["limits.rate_burst"] == 1, _dm125.DEV_LIMITS["limits.rate_burst"]
+    assert set(_dv125.SELFCHECK_PACING) == {"limits.rate_per_sec", "limits.rate_burst"}, \
+        "自检放宽的项必须是这两键、且只有这两键"
+    _self125 = _dv125.selfcheck_settings(load_settings())
+    assert _dm125._get(_self125, "limits.rate_per_sec") == 50, "自检副本没拿到放宽后的节奏"
+    # 其余压量一项没动（这些才是"配额压到最小还能跑通"这条自检命题真正在测的东西）
+    for _p125 in ("limits.max_workers", "limits.max_inflight_global", "limits.max_inflight_per_task",
+                  "queue.workers", "dirscan.quick_max_paths", "checks.poc_max_per_site",
+                  "portscan.full_workers", "jsmine.max_js"):
+        assert _dm125._get(_self125, _p125) == 1, f"自检副本把 {_p125} 也放宽了 —— 只准放宽节奏两键"
+    assert _dm125._get(_self125, "limits.budget_total") == 0, \
+        "预算必须仍不压（压成 1 会让第 2 个请求即被拒，全流程根本测不完）"
+    # 自检副本依然零外网：第三方段全关 + 不带任何凭据（放宽节奏不许顺手放开这些）
+    for _seg in _dv125._EXTERNAL_OFF:
+        assert (_self125.get(_seg) or {}).get("enabled") is False, _seg
+    assert _self125["keys"] == {}, "自检副本必须清空第三方凭据（不然一次自检会真花掉用户配额）"
+
+    # ①b 两条路径共用同一个入口（各自实现一遍必然漂；本轮第一版就只改了自检那条，
+    #      [7l] 那次进程内流水线照旧 1 请求/秒，白多等两分半钟）
+    _src125 = (ROOT / "scanner" / "devflow.py").read_text(encoding="utf-8")
+    assert "relax_pacing(devmode.enable_all_stages" in _src125, "selfcheck_settings 不再走共享入口"
+    assert "relax_pacing" in (ROOT / "tests" / "smoke.py").read_text(encoding="utf-8"), \
+        "[7l] 那次进程内流水线没接共享入口"
+    _in125 = {"limits": {"rate_per_sec": 1, "rate_burst": 1, "max_workers": 3}}
+    _out125 = _dv125.relax_pacing(_in125)
+    assert _in125["limits"]["rate_per_sec"] == 1, "relax_pacing 必须返回副本、不许原地改入参"
+    assert _out125["limits"]["rate_per_sec"] == 50 and _out125["limits"]["max_workers"] == 3, _out125
+    assert "只放宽**限速节奏**" not in _src125 or "for _p, _v in SELFCHECK_PACING" in _src125, "放宽逻辑散落两处"
+    assert "_eff_pace" in _rv125 and 'res["settings"]' in _rv125, \
+        "run_devflow 该把**实际生效**的节奏写进基线，而不是抄常量（常量改了基线就骗人）"
+
+    # ② 基线要带节奏口径；口径不同就**不出结论**（拿 1/s 的 103s 比 50/s 的 2s 是废话）
+    _bp125 = _TMPDIR / "base125.json"
+    assert _dv125.save_baseline({"probe": 10.4, "vulnscan": 2.1}, elapsed=26.2, path=_bp125)
+    _lb125 = _dv125.load_baseline(_bp125)
+    assert _lb125.get("pacing") == _dv125.SELFCHECK_PACING, _lb125
+    assert _dv125.pacing_comparable(_lb125) == (True, ""), "同口径应判可比"
+    _old125 = {"stage_seconds": {"vulnscan": 103.0}}          # 续125 之前的老基线：没有节奏字段
+    _cmp_old = _dv125.pacing_comparable(_old125)
+    assert _cmp_old[0] is False and "老基线" in _cmp_old[1], _cmp_old
+    assert _dv125.pacing_comparable({"stage_seconds": {},
+                                     "pacing": {"limits.rate_per_sec": 1}})[0] is False
+    assert _dv125.compare_baseline(_old125, {"vulnscan": 2.1}) == [], \
+        "口径不同的两次测量不许产出结论（哪怕结论是『没有变慢』—— 那也是一条假绿）"
+    # 同口径下"确实变慢"仍要抓得出来（否则 ② 就成了"永远不说话"的装饰）
+    assert [d["stage"] for d in _dv125.compare_baseline(_lb125, {"probe": 99.0, "vulnscan": 2.2})] \
+        == ["probe"], "同口径的变慢判据失效"
+    # 变异：把节奏守卫拆掉 ⇒ 一个"低基线 + 不同口径"的样本会被拿去比并产出结论（这就是守卫在挡的东西）
+    _incomparable = {"stage_seconds": {"probe": 1.0}, "pacing": {"limits.rate_per_sec": 1}}
+    assert _dv125.compare_baseline(_incomparable, {"probe": 99.0}) == [], "守卫本身没生效"
+    _real_pc = _dv125.pacing_comparable
+    try:
+        _dv125.pacing_comparable = lambda b, pacing=None: (True, "")
+        assert _dv125.compare_baseline(_incomparable, {"probe": 99.0}), \
+            "变异没生效：拆掉守卫后仍不比 ⇒ ② 的判据抓不住这种改法"
+    finally:
+        _dv125.pacing_comparable = _real_pc
+    # "说出来"也是要求：自检报告必须印出放宽了节奏（否则读者以为自检跑的就是 1/s —— 静默改口径）
+    assert "限速节奏为自检放宽" in _rv125 and "开发模式对真实目标仍是 1 请求/秒" in _rv125, \
+        "放宽了却没说出来"
+    assert "本轮不与基线对比" in _rv125 and "pacing_comparable" in _rv125, \
+        "run_devflow 不再判口径 ⇒ 它会拿不可比的两次数比出『没有变慢』"
+
+    # ③ 计时探针：默认关；打开时**绝不允许改变 stdout**（第一版就是改了 stdout 把 [7i] 打红的）
+    _g125 = globals()
+    # 开关口径 + **默认关**。默认关这条必须在"没带开关的子进程"里验 ——
+    # 本轮门禁自己可能就是开着 --timing 跑的（本轮就是这么红的：在自己的组里断言"应该是关"）
+    assert _g125["_TIMING"] == (bool(os.environ.get("CTFSCANNER_SMOKE_TIMING"))
+                                or "--timing" in sys.argv), "开关口径不是『环境变量或 --timing』"
+    import subprocess as _sp125
+    _env125 = {k: v for k, v in os.environ.items() if k != "CTFSCANNER_SMOKE_TIMING"}
+    _kid125 = _sp125.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, %r);"
+         "import tests.smoke as m;"
+         "assert m._TIMING is False, ('默认竟是开着的', m._TIMING);"
+         "assert 'print' not in vars(m), '默认关时也重绑了 print'" % str(ROOT)],
+        cwd=str(ROOT), env=_env125, capture_output=True, text=True, timeout=180)
+    assert _kid125.returncode == 0, (
+        "默认关这条不成立：门禁的默认路径必须与历史逐字节相同 —— "
+        + (_kid125.stderr or "")[-500:])
+    _a125, _b125 = _io125.StringIO(), _io125.StringIO()
+    with _ctx125.redirect_stdout(_a125):
+        _g125["_real_print"]("[9z] 探针不许改写输出 ok: 原样一行")
+    with _ctx125.redirect_stdout(_b125):
+        _g125["_print_timed"]("[9z] 探针不许改写输出 ok: 原样一行")
+    assert _a125.getvalue() == _b125.getvalue(), \
+        "计时钩子改变了 stdout 内容 —— 数行数/数字符的断言都会被它打红（本轮真的这样红过一次）"
+    _before125 = len(_g125["_TSTATE"]["rows"])
+    _g125["_TIMING"] = True
+    try:
+        # 这两次调用会真的打印，吞进内存里 —— 门禁日志不许被测试自己的动作污染
+        with _ctx125.redirect_stdout(_io125.StringIO()):
+            _g125["_print_timed"]("[9z] 归因测试 ok")          # 组行：该记一笔
+            _g125["_print_timed"]("这不是组行的普通输出")        # 普通行：不该记
+        assert len(_g125["_TSTATE"]["rows"]) == _before125 + 1, "归因判据不认组行或多认了"
+        assert _g125["_TSTATE"]["rows"][-1][1].startswith("[9z]"), _g125["_TSTATE"]["rows"][-1]
+    finally:
+        _g125["_TIMING"] = False
+    _g125["_TSTATE"]["rows"] = _g125["_TSTATE"]["rows"][:_before125]     # 别把测试行留在总账里
+
+    # ④ CI 分层：smoke.yml 仍是权威（3.9 全量），新文件必须覆盖另外三条门禁口径
+    _wf = ROOT / ".github" / "workflows"
+    _auth125 = (_wf / "smoke.yml").read_text(encoding="utf-8")
+    assert "tests/smoke.py" in _auth125 and '"3.9"' in _auth125, "权威门禁（3.9 全量 smoke）不许被动"
+    _q125 = _wf / "quality.yml"
+    assert _q125.exists(), "quality.yml 没了 —— check_contrast / devflow / e2e 就又回到『靠人记得跑』"
+    import yaml as _y125
+    _jobs = _y125.safe_load(_q125.read_text(encoding="utf-8"))["jobs"]
+    assert {"contrast", "devflow", "e2e", "probe-3-14"} <= set(_jobs), sorted(_jobs)
+    assert "tools/check_contrast.py" in str(_jobs["contrast"])
+    assert "run_devflow.py" in str(_jobs["devflow"])
+    assert "browser_e2e.py" in str(_jobs["e2e"])
+    assert _jobs["probe-3-14"].get("continue-on-error") is True, \
+        "新版本解释器是**探针**：允许红（还没证明它稳定），但既不阻塞合并，也不许假装成必过项"
+    assert "tests/smoke.py" in str(_jobs["probe-3-14"]), "探针不跑全量就没有意义"
+    # e2e 在 CI 上最容易因"runner 没有浏览器"而红 —— 那不是代码红，必须先探一次环境再跑
+    assert "chrome" in str(_jobs["e2e"]["steps"]).lower(), "e2e 缺环境前置检查：浏览器缺失会被误读成代码红"
+
+    print("[8ad] 续125 自检节奏 + 计时探针 + CI 分层 ok: 只放宽限速两键（devmode 本体仍 1/s；并发/在飞/"
+          "各阶段配额仍压到 1；预算仍不压；第三方仍全关且不带凭据）｜基线带上节奏口径，口径不同就明说"
+          "'不对比'（同口径下变慢仍抓得出来，拆掉守卫的变异立刻产出假结论）｜放宽必须印在报告里，"
+          "不然就是静默改变被测口径｜计时探针默认关（不重绑 print）、打开时 stdout 逐字节不变"
+          "（第一版改了 stdout 把 [7i] 打红，这条就是那次的学费）+ 归因只认组行｜CI 三份口径齐全："
+          "smoke.yml 仍是 3.9 全量权威，quality.yml 补 check_contrast / run_devflow / browser_e2e，"
+          "新版本解释器标成允许红的探针且带浏览器环境前置检查｜放宽逻辑只有 relax_pacing 一个入口，"
+          "两条自检路径（run_selfcheck 与 [7l] 的进程内流水线）共用，基线写的是**实际生效**的节奏而非抄常量。"
+          "实测：单跑自检 146.2s→26.2s（5.6x），全量门禁里 [7l] 那 146.7s 是同一条路省下来的")
 
     print("SMOKE PASS")
 

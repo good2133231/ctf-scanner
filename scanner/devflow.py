@@ -149,7 +149,7 @@ def selfcheck_settings(settings, intel_url=None):
       清空后 github 按"未配置 token"如实跳过（`SKIP(未配置)`），与铁律一致。
     - 入参 `settings` **绝不原地改**（`apply` / `enable_all_stages` 都是深拷贝）。
     """
-    out = devmode.enable_all_stages(devmode.apply(settings))
+    out = relax_pacing(devmode.enable_all_stages(devmode.apply(settings)))
     for key in _EXTERNAL_OFF:
         out[key] = dict(out.get(key) or {}, enabled=False)
     out["keys"] = {}          # 自检不携带任何第三方凭据（见 docstring）
@@ -620,9 +620,55 @@ def read_log_lines(log_file):
 # 也可能是某个阶段真的退化了）。这里把每阶段耗时存一份，下次跑**逐阶段对比**。
 # 基线是**本机产物**（不同机器/不同外部工具装没装，耗时不可比），所以落在 `logs/` 下、
 # 不进仓库（`.gitignore` 已忽略 `logs/`）。
+# --------------------------------------------------------------------------
+# 自检的限速节奏（续125）
+# --------------------------------------------------------------------------
+# 实测：单跑一次全流程自检 146.2s，其中 vulnscan 103.0s、probe 23.0s，网络活动 239 次。
+# 239 次 ÷ `devmode` 压出来的 1 请求/秒 ≈ 239 秒 —— 时间几乎全花在**等令牌**上，不是花在代码上。
+# 开发模式对**真实目标**必须继续 1/s（那就是它存在的理由），但自检的对象是
+# "13 个阶段在配额压到最小时还能不能跑通"，不是"限速节奏准不准"（限速有 [6g]/[8e] 专门测）。
+# 所以这里**只**放宽节奏，其余压量（并发/在飞/各阶段配额/预算）一项都不动。
+SELFCHECK_PACING = {"limits.rate_per_sec": 50, "limits.rate_burst": 20}
+
+def relax_pacing(settings):
+    """把 `SELFCHECK_PACING` 那两键写进**给自检用的**配置副本（返回新 dict，不改入参）。
+
+    为什么单独做成一个函数：有两条路径都要"跑通 13 个阶段"——本模块的 `run_selfcheck`，以及
+    `tests/smoke.py [7l]` 里那次进程内 `run_task`。两边都得用同一个放宽口径，否则"只放宽节奏
+    这一项"这句话就要在两个地方各自维护一遍（而它会漂移：第一版我只改了自检那条路，
+    [7l] 那条照旧 1 请求/秒，白多等两分半钟）。
+    """
+    from copy import deepcopy
+    out = deepcopy(settings)
+    for _p, _v in SELFCHECK_PACING.items():
+        devmode._set(out, _p, _v)
+    return out
+
+
 BASELINE_PATH = "logs/devflow_baseline.json"
 # 超过基线的倍数才算"明显变慢"（自检本身有抖动：夹具端口分配、DNS、磁盘缓存都会影响）
 BASELINE_RATIO = 2.0
+
+
+def baseline_pacing(baseline):
+    """基线是在什么限速节奏下测的（老基线没有这个字段 ⇒ None）。"""
+    p = (baseline or {}).get("pacing")
+    return p if isinstance(p, dict) else None
+
+
+def pacing_comparable(baseline, pacing=None):
+    """本轮节奏与基线口径是否一致 -> `(可比, 说明)`。
+
+    不一致就**不对比**：拿 1/s 下测的 103s 去比 50/s 下测的 6s，"变快 17 倍"是废话，
+    反过来也一样 —— 口径不同的两次测量之间没有可比性，硬比只会产出一条假结论。
+    """
+    b = baseline_pacing(baseline)
+    cur = pacing if pacing is not None else SELFCHECK_PACING
+    if not b:
+        return False, "基线没有记录限速节奏（续125 之前的老基线），本轮重新建立基线后再对比"
+    if b != cur:
+        return False, f"基线节奏 {b} ≠ 本轮节奏 {cur}，重新建立基线后才有可比性"
+    return True, ""
 
 
 def load_baseline(path=None):
@@ -639,8 +685,12 @@ def load_baseline(path=None):
         return {}
 
 
-def save_baseline(stage_seconds, elapsed=None, path=None):
-    """把本次阶段耗时写成基线（**失败不抛**）；返回写出的相对路径或 ""。"""
+def save_baseline(stage_seconds, elapsed=None, path=None, pacing=None):
+    """把本次阶段耗时写成基线（**失败不抛**）；返回写出的相对路径或 ""。
+
+    必须连**限速节奏**一起写：不然改了节奏之后，旧基线会以"某个阶段快了 17 倍"或
+    "慢了 3 倍"的名义产出毫无意义的结论（口径不同的两次测量不可比）。
+    """
     import json
     import time
     try:
@@ -651,19 +701,25 @@ def save_baseline(stage_seconds, elapsed=None, path=None):
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "elapsed": round(float(elapsed or 0), 3),
             "stage_seconds": {k: round(float(v), 3) for k, v in (stage_seconds or {}).items()},
+            "pacing": dict(pacing or SELFCHECK_PACING),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         return path or BASELINE_PATH
     except Exception:                              # noqa: BLE001
         return ""
 
 
-def compare_baseline(baseline, stage_seconds, ratio=None):
+def compare_baseline(baseline, stage_seconds, ratio=None, pacing=None):
     """找出**明显变慢**的阶段，返回 `[{stage, now, base, x}]`（按倍数降序）。
 
     基线里没有的阶段 / 本次耗时非正的 → 跳过（没有可比对象就**不猜**）。
     `ratio` 默认在**调用期**取模块级 `BASELINE_RATIO`（写成默认参数会在定义期定死，
     变异证伪就改不动它了）。
+    `pacing` 不匹配时直接返回 `[]` —— 见 `pacing_comparable`：**口径不同的测量不可比**，
+    与其给一条假的"没变慢"，不如明说"本轮不对比"（老基线没有节奏字段也是同理）。
     """
+    ok, _why = pacing_comparable(baseline, pacing)
+    if not ok:
+        return []
     ratio = BASELINE_RATIO if ratio is None else ratio
     base = (baseline or {}).get("stage_seconds") or {}
     out = []

@@ -1,0 +1,101 @@
+# 质量门禁（与 smoke.yml 并排跑，不替换它）
+#
+# 为什么要有这个文件：`smoke.yml` 只跑一条 `python3 tests/smoke.py`（15 分钟超时），
+# 而本项目的门禁口径一直是"**smoke + check_contrast +（相关时）run_devflow / browser_e2e**"
+# —— 后三条以前只存在于"我记得跑一下"，机器上没人替我记得。
+#
+# 分工：
+# - `smoke.yml`（既有）＝**权威判定**，口径仍是 Python 3.9 全量；
+# - 本文件的 `contrast`＝秒级快查（改颜色/改模板就会红，没必要等十分钟）；
+# - `devflow`＝13 阶段功能向量自检（每阶段真跑或如实 SKIP）；
+# - `e2e`＝真浏览器（headless Chrome + CDP）跑页面交互，含"点了按钮 DOM 真的变"；
+# - `probe-3.14`＝**探针，允许红**：换个新解释器跑全量，专治 `(?i)` 位置、`sre_parse` 搬家这类
+#   "在 CI 口径的 3.9 上永远看不见"的版本漂移。它 `continue-on-error`，红不阻塞合并，
+#   但必须有人看；等它在 CI 里连续绿过几轮再考虑升成必过。
+name: Quality gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  contrast:
+    name: 配色对比度（WCAG AA）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Run contrast check
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python3 tools/check_contrast.py
+
+  devflow:
+    name: 阶段自检（13 阶段功能向量）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+      - name: Run devflow self-check
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python3 run_devflow.py
+
+  e2e:
+    name: 真浏览器端到端（headless Chrome + CDP）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+      - name: Locate Chrome
+        run: |
+          set -e
+          for c in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$c" >/dev/null; then echo "找到 $c -> $(command -v $c)"; exit 0; fi
+          done
+          echo "::error::runner 上没有 Chrome/Chromium —— e2e 会红不是代码红，先修环境"
+          exit 1
+      - name: Run browser end-to-end
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python3 tests/browser_e2e.py
+
+  probe-3-14:
+    name: 探针 · Python 3.14 全量 smoke（允许红）
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+      - name: Run smoke test on a newer interpreter
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python3 tests/smoke.py

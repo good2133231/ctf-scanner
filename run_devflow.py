@@ -45,6 +45,11 @@ def main():
           "→ DNS 覆盖到 127.0.0.1；夹具只绑 127.0.0.1、临时端口")
     print("[*] 零外网：第三方能力（FOFA / Shodan / Quake / crt.sh）在自检副本里关掉；"
           "intel 改指本地夹具源；github 无 token 时零请求")
+    # 必须说出来（不然读者会以为自检跑的就是开发模式的真实节奏）：
+    # 只放宽**限速节奏**，其余压量一项不动；理由见 scanner/devflow.SELFCHECK_PACING 的注释。
+    print("[*] 限速节奏为自检放宽到 %s（**只这一项**；其余并发/在飞/配额仍压到 1，"
+          "开发模式对真实目标仍是 1 请求/秒）" % (
+              ", ".join(f"{k}={v}" for k, v in sorted(devflow.SELFCHECK_PACING.items())),))
 
     res = devflow.run_selfcheck(raw)
     if res["compressed"]:
@@ -65,21 +70,30 @@ def main():
     if _ss:
         _base = devflow.load_baseline()
         _bmap = (_base.get("stage_seconds") or {}) if _base else {}
+        # 本轮的真实节奏（从**生效配置**里取，不是抄常量：常量改了这里也得跟着对）
+        _eff_pace = {"limits.rate_per_sec": (res["settings"].get("limits") or {}).get("rate_per_sec"),
+                     "limits.rate_burst": (res["settings"].get("limits") or {}).get("rate_burst")}
         print("\n[*] 阶段级耗时（秒，降序）：")
         for _n, _v in sorted(_ss.items(), key=lambda kv: -kv[1]):
             _b = _bmap.get(_n)
             _tag = f"基线 {float(_b):.2f}s" if isinstance(_b, (int, float)) else "无基线"
             print(f"    {_n:<11} {float(_v):>7.2f}s   （{_tag}）")
         if _base:
-            _slower = devflow.compare_baseline(_base, _ss)
-            if _slower:
-                _txt = "、".join(
-                    f"{d['stage']} {d['now']:.1f}s（基线 {d['base']:.1f}s，{d['x']}x）"
-                    for d in _slower)
-                print("[!] 明显变慢（超过基线 %.1f 倍）：%s" % (devflow.BASELINE_RATIO, _txt))
+            _cmp_ok, _cmp_why = devflow.pacing_comparable(_base, _eff_pace)
+            if not _cmp_ok:
+                # 口径不同就不给结论 —— 一句"没有阶段明显变慢"如果是拿不可比的两次数拼出来的，
+                # 那就是假绿；明说"本轮不对比"比给一个好看的结论有用。
+                print(f"[*] 本轮不与基线对比：{_cmp_why}")
             else:
-                print("[*] 与基线相比，没有阶段明显变慢")
-        _saved = devflow.save_baseline(_ss, elapsed=res["elapsed"])
+                _slower = devflow.compare_baseline(_base, _ss)
+                if _slower:
+                    _txt = "、".join(
+                        f"{d['stage']} {d['now']:.1f}s（基线 {d['base']:.1f}s，{d['x']}x）"
+                        for d in _slower)
+                    print("[!] 明显变慢（超过基线 %.1f 倍）：%s" % (devflow.BASELINE_RATIO, _txt))
+                else:
+                    print("[*] 与基线相比，没有阶段明显变慢")
+        _saved = devflow.save_baseline(_ss, elapsed=res["elapsed"], pacing=_eff_pace)
         if _saved:
             print(f"[*] 本次耗时已存为基线：{_saved}（下次自检逐阶段对比）")
 
