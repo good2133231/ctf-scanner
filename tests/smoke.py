@@ -16766,7 +16766,14 @@ expression: r0()
     from scanner import config as _cfg8ai, db as _db8ai
     from scanner import edgeauth as _ea8ai
 
-    _PW8AI = "Sm0ke-Edge-Pw!"          # 哨兵口令：只进内存与本组，出现在任何被跟踪文件里都算泄露
+    _PW8AI = "Sm0ke-Edge-Pw!"          # 哨兵口令：只进本组；出现在任何被跟踪文件里都算泄露
+    # ⚠ 必须把 `config.BASE_DIR` 指到临时目录：本组会真的 `set_password`/`clear_password` 写文件，
+    #    不隔离就是往**本机真实的 config/** 造一个凭据文件（改的是用户的机器，不是沙箱）。
+    #    手法与 `[8v]` 一致（那个组也是靠改 BASE_DIR 在副本上做删键实验的）。
+    _tmp8ai = _TMPDIR / "edge8ai"
+    (_tmp8ai / "config").mkdir(parents=True, exist_ok=True)
+    _orig_base8ai = _cfg8ai.BASE_DIR
+    _cfg8ai.BASE_DIR = _tmp8ai
 
     def _audit_n8ai():
         _conn = _db8ai.get_conn()
@@ -16838,15 +16845,30 @@ expression: r0()
             _app8ai.test_client().get("/login", headers=_hdr)
         assert _audit_n8ai() == _n_before, "401 失败被写进了审计流水"
 
-        # ⑨ 派生值文件：只存 PBKDF2 串、不含明文；落点必须在**库同目录**（= `CTFSCANNER_DB`
-        #    一重定向就自动进沙箱，回归不会往真实 data/ 塞东西）
-        _f8ai = _ea8ai.secret_path()
-        assert _f8ai.parent == _db8ai.DB_PATH.parent, "派生值落点没跟着库走 → 测试隔离会漏"
-        _disk8ai = _f8ai.read_text(encoding="utf-8")
-        assert _disk8ai.startswith("pbkdf2_sha256$"), _disk8ai[:24]
-        assert _PW8AI not in _disk8ai, "派生值文件里有明文"
+        # ⑨ 凭据文件：明文（用户定的口径）、0600、落点必须在 `<BASE_DIR>/config/` ——
+        #    最后一条是「测试不碰本机真实 config/」的结构性保证：改 BASE_DIR 它就跟着走。
+        _f8ai = _ea8ai.password_path()
+        assert _f8ai.parent == (_tmp8ai / "config"), _f8ai
+        assert _f8ai.name == "edge_auth.yaml", _f8ai.name
+        assert _PW8AI in _f8ai.read_text(encoding="utf-8"), "口令文件读不回口令 = 门永远打不开"
         if _os_8ai.name == "posix":
             assert _f8ai.stat().st_mode & 0o777 == 0o600, oct(_f8ai.stat().st_mode & 0o777)
+
+        # ⑨b **哨兵口令不得出现在任何被跟踪文件里** —— 这一条才是「明文存储」可以被接受的前提。
+        #    本文件自己不算：哨兵串就是在这儿定义的，把它列进判据等于自己判自己红。
+        for _tr8ai in ("config/settings.yaml", "scanner/config.py", "gui/app.py",
+                        "scanner/edgeauth.py", "README.md", "AGENTS.md", "CHANGELOG_AI.md"):
+            assert _PW8AI not in (ROOT / _tr8ai).read_text(encoding="utf-8", errors="replace"), _tr8ai
+
+        # ⑨c **空口令必须仍然被拒**：`const_eq` 比两个空串会为真，所以校验前必须先看 stored 空不空。
+        #    少了这道前置判断，「没配口令」就退化成「任何人用空口令都能进」= fail-open。
+        _ea8ai.set_password("")
+        assert _ea8ai.state({"gui": {"edge_auth": {"enabled": True}}})[0] == "no_password"
+        _empty_h8ai = "Basic " + _b64_8ai.b64encode(b"edge:").decode()
+        assert _app8ai.test_client().get("/login",
+                                      headers={"Authorization": _empty_h8ai}).status_code == 401, \
+            "空口令被放行 = fail-open"
+        _ea8ai.set_password(_PW8AI)
 
         # ⑩ 启动文案：非回环 + 门开但未设口令时**必须点名**（本仓"绝不静默降级"），门关时保持安静
         _ea8ai.clear_password()
@@ -16858,14 +16880,18 @@ expression: r0()
         assert _gui8ai_mod._deploy_hints({"host": "127.0.0.1"}) == [], "回环地址必须一个字都不多说"
     finally:
         _ea8ai.clear_password()
+        _cfg8ai.BASE_DIR = _orig_base8ai   # 归位！带着临时 BASE_DIR 往下跑会波及之后所有组
+        shutil.rmtree(_tmp8ai, ignore_errors=True)
         _edgeauth.enabled = lambda settings: False      # 归位：后续/既有口径仍是"门不存在"
 
-    print("[8ai] 续131 401 边缘认证门 ok: DEFAULTS 关（新克隆不锁死）｜门开无口令 = 401（fail-closed，"
-          "且响应体不含口令）｜错口令/错用户名都拒，对口令放行｜同会话第二个请求靠标记免算 pbkdf2 而"
-          "新客户端仍被拒｜**门排在 Host 白名单之前**（非法 Host + 无凭据 = 401 不是 403）｜门关 = 与"
-          "升级前一致｜401 失败**不进审计流水**｜派生值只在库同目录、只存 pbkdf2 串、0600、不含明文｜"
-          "非回环未设口令必须点名｜变异：fail-open / 挪到 Host 白名单之后 / 不校验用户名 / 写审计 "
-          "都会红")
+    print("[8ai] 续132 401 边缘认证门 ok: DEFAULTS 关（没打开开关的人不受影响）｜门开而无口令、"
+          "口令为空 = 401（fail-closed：空 stored 必须在比较前先挡掉，否则空口令可进）｜"
+          "错口令与错用户名都拒，对口令放行｜同会话第二个请求靠标记免重读、新客户端仍被拒｜"
+          "**门排在 Host 白名单之前**（非法 Host + 无凭据 = 401 而不是 403）｜门关 = 与升级前一致｜"
+          "401 失败**不进审计流水**｜凭据文件明文、0600、落点在 BASE_DIR/config/（本组靠改"
+          "BASE_DIR 隔离，手法同 [8v]）｜**哨兵口令不出现在任何被跟踪文件里**（这才是明文存储"
+          "可以被接受的前提）｜非回环未配口令必须点名｜变异：fail-open / 去掉空口令前置判断 /"
+          "挪到 Host 白名单之后 / 不校验用户名 / 写审计 都会红")
     print("SMOKE PASS")
 
 

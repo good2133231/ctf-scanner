@@ -16,6 +16,10 @@ config/keys.yaml
 # 续98：口令加密后的凭据文件同样绝不入库（里面是密文，但形态本身就是敏感信息）
 config/keys.enc.yaml
 
+# 续132：401 边缘门的明文口令（config/edge_auth.yaml）。红线与 keys.yaml 同一条 ——
+# `config/settings.yaml` 被 git 跟踪、仓库是公开的，口令写进那儿就等于交给全世界，
+# 而且 git 历史不会忘（事后删掉那一行没用）。
+config/edge_auth.yaml
 # 用户自建内容
 config/pocs-user/
 config/nuclei-templates/

@@ -17,10 +17,11 @@ gui:
   #   默认 false —— 走 HTTP 时开了会直接登录不上；上了 TLS 反代后请改 true。
   secure_cookie: false
   # ---- 401 边缘认证门（scanner/edgeauth.py）：无 Basic 凭据的请求进不到任何路由 ----
-  # 口令**不写在这里**（本文件被 git 跟踪、仓库是公开的）。设置命令（getpass 交互输入，
-  # 不回显、不进 argv、不落任何文件，只把派生值写进 data/edge_auth.secret 并 chmod 0600）：
-  #     python -m scanner.edgeauth --set
-  # 用户名固定为 edge，只有口令是秘密。enabled=true 但没设过口令 → 所有请求 401（fail-closed）。
+  # 这里**只有开关**。口令写在 config/edge_auth.yaml —— 明文、一行 password: <口令>；该文件与
+  # config/keys.yaml 同类、在 .gitignore 里。本文件被 git 跟踪而仓库是公开的，口令写进这里就等于
+  # 交给全世界，且 git 历史不会忘（事后删行没用）。
+  # 也可以用命令写（顺带把权限设成 0600）：python -m scanner.edgeauth --set
+  # 用户名固定为 edge，只有口令是秘密。enabled=true 而口令文件缺失**或为空** → 一律 401（fail-closed）。
   # ⚠ 明文 HTTP 下 Basic 会把口令随每个请求带出去；跨不可信链路请上 TLS 反代（docs/deploy-https.md）。
   # 注：AGENTS.md §5.10「不许有绕过账号的登录路」由用户 2026-10-08 明确豁免，见该文件。
   edge_auth:

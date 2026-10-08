@@ -114,9 +114,10 @@ DEFAULTS = {
         #   上了 TLS 反代之后再打开，否则口令 Cookie 可能被明文带出去。
         "secure_cookie": False,
         # ---- 401 边缘认证门（用户 2026-10-08 点名，见 scanner/edgeauth.py）----
-        # **默认关**：这里只写"要不要挂这道门"，口令本身只落 `<库同目录>/edge_auth.secret`
-        # （0600、`data/` 在 .gitignore、只存 PBKDF2 派生值）—— 本文件被 git 跟踪、仓库公开，
-        # 配置文件不许漂成凭据仓库。设成 true 但没设过口令时**所有请求都 401**（fail-closed）。
+        # **默认关**：这里只写"要不要挂这道门"。口令在 `config/edge_auth.yaml` —— 明文，但该文件
+        # 与 `config/keys.yaml` 同一条红线（在 .gitignore 里）：**本文件被 git 跟踪、仓库公开**，
+        # 口令写进任何被跟踪文件都等于交给全世界，而且 git 历史不会忘。开关与凭据分两个文件
+        # 正是为此。设成 true 而口令文件缺失**或为空** → 一律 401（fail-closed）。
         "edge_auth": {"enabled": False},
         # ---- 登录限速 / 失败锁定（续48，见 scanner/login_guard.py）----
         # 保护性开关**默认开**，但阈值刻意宽松：本机/小队共用场景里，"一次记错口令"不该把
