@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>{% block title %}仪表盘{% endblock %} - CTFScanner</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="ctf-base" content="{{ request.script_root }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -14,6 +15,11 @@
       {# 续46：第 5 项是 `admin_only` —— 管理员专属入口（策略配置 / POC 管理 / 账号管理）。
          隐藏只是 UI 纪律（别让子用户看到点不开的入口），**真正的控制是路由上的
          `admin_required`**：直接敲 URL 也会被 403 挡回来。 #}
+      {# 续138 多一栏「数据迁移」，`admin_only` —— 它能把别人的数据写进本机库，也能把本机全部
+         任务打包成一个可下载的附件，两头都是"管理员级"动作。
+         ⚠ 这个清单是**在 `{%% set %%}` 标签里**展开的，中间不能塞注释（Jinja 会报
+         `unexpected char '#'`，而且炸的是**每一个**用 base.html 的页面 —— 真浏览器端到端 [7x]
+         就是这么红的）。要写说明就写在标签外面。 #}
       {% set nav_items = [
         ('dashboard',   '/',           '仪表盘',   'M3 3h6v6H3zM11 3h4v4h-4zM3 11h6v4H3zM11 9h4v6h-4z', False),
         ('tasks',       '/tasks',      '任务管理', 'M4 5h12M4 9h12M4 13h8', False),
@@ -28,6 +34,7 @@
         ('users_page',  '/users',      '账号管理', 'M9 8.5a3 3 0 100 6 3 3 0 000-6zM3 16c0-3 3-4.5 6-4.5s6 1.5 6 4.5M13 5h4M15 3v4', True),
         ('nodes_page',  '/nodes',      '执行节点', 'M9 2v6M9 8l4 3M9 15a6 6 0 100-12 6 6 0 000 12z', True),
         ('audit_page',  '/audit',      '访问审计', 'M4 4h10M4 9h10M4 14h7M2 2v14', True),
+        ('migrate_page', '/migrate',   '数据迁移', 'M8 2v8M8 10l3 3M8 10l-3 3M2 13h3M11 13h4M14 11l2 2-2 2', True),
       ] %}
       {# 续50：开发模式入口**只在 dev.enabled=true 时**才追加进导航（默认完全不渲染）。 #}
       {% if dev_enabled %}

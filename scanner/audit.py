@@ -31,9 +31,10 @@ KIND_SETTINGS = "settings"           # 保存策略配置（只记改了哪一�
 KIND_POC = "poc"                     # POC 管理（上传/启停/批量/刷新）
 KIND_TASK = "task"                   # 任务操作（建/停/删/重启/续跑/追加/批量）
 KIND_DENIED = "denied"               # 越权访问被拒（子用户敲管理页 URL）
+KIND_MIGRATE = "migrate"              # 数据迁移（续138）：导出包 / 预检 / 确认导入 / 被拒的包
 
 KINDS = (KIND_LOGIN_OK, KIND_LOGIN_FAIL, KIND_LOGIN_BLOCKED, KIND_LOGOUT,
-         KIND_ACCOUNT, KIND_SETTINGS, KIND_POC, KIND_TASK, KIND_DENIED)
+         KIND_ACCOUNT, KIND_SETTINGS, KIND_POC, KIND_TASK, KIND_DENIED, KIND_MIGRATE)
 
 # 页面展示用的中文标签
 KIND_LABELS = {
@@ -46,6 +47,7 @@ KIND_LABELS = {
     KIND_POC: "POC 管理",
     KIND_TASK: "任务操作",
     KIND_DENIED: "越权访问",
+    KIND_MIGRATE: "数据迁移",
 }
 
 DEFAULT_RETENTION_DAYS = 30

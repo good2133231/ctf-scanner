@@ -369,10 +369,23 @@ def do_migrate(args):
     if args.export_scan is not None:
         ids = [int(x) for x in str(args.only_tasks or "").replace("，", ",").split(",")
                if x.strip().isdigit()]
+        pw = ""
+        if args.encrypt_bundle:
+            pw = migrate.bundle_passphrase()
+            if not pw:
+                # 不做"没给口令就默默导一份明文包"：那样用户以为包里是加密的，实际发出去的是明文。
+                print(f"[!] --encrypt-bundle 需要口令，但环境变量 "
+                      f"{migrate.ENV_BUNDLE_PASSPHRASE} 没设 —— 已停止，没写出任何文件。")
+                print(f"    做法：{migrate.ENV_BUNDLE_PASSPHRASE}='一句口令' "
+                      "python cli/client.py --export-scan --encrypt-bundle")
+                print("    （口令不要写进命令行参数本身：argv 会留在 ps / history / "
+                      "/proc/<pid>/cmdline 里）")
+                return 1
         try:
             info = migrate.export_bundle(dst=(args.export_scan or None), task_ids=ids or None,
                                          with_users=args.with_users,
-                                         with_task_auth=args.with_task_auth)
+                                         with_task_auth=args.with_task_auth,
+                                         passphrase=pw or None, with_logs=args.with_logs)
         except OSError as e:
             print(f"[!] 导出失败：{e}")
             return 1
@@ -392,8 +405,19 @@ def do_migrate(args):
         if inc.get("log_paths_dropped"):
             print(f"    任务日志路径：{inc['log_paths_dropped']} 条落在本项目根之外，"
                   "包里已置空（不把本机目录结构带出去）")
-        print("    另：`logs/` 下的任务日志、报告、截图**不在包里**（包只装库里的行）——"
-              "要一起迁请把 `logs/` 整目录拷过去")
+        if inc.get("encrypted"):
+            print("    整包已**加密**（CTFSCANNER-BUNDLE-V1）：解包要同一个口令，"
+                  "没口令时这个文件与一堆随机字节无异。")
+        if inc.get("logs"):
+            print(f"    任务日志：带上 {inc.get('logs_included', 0)} 个"
+                  f"（{inc.get('logs_bytes', 0) / 1048576:.1f} MB）"
+                  + (f"，跳过 {inc['logs_skipped']} 个（越出 logs/、超上限或读不到）"
+                     if inc.get("logs_skipped") else ""))
+        elif inc.get("logs_skipped"):
+            print(f"    任务日志：没带（--with-logs 没开）")
+        else:
+            print("    另：`logs/` 下的任务日志、报告、截图**不在包里**（包只装库里的行）—— "
+                  "要带日志加 --with-logs，要连报告截图就整目录拷 `logs/`")
         if inc["accounts"]:
             print("    [!] 这份文件现在**能登录被迁走的那套系统**（含口令哈希与第三方接口凭据）。"
                   "别把它发进群里 / 传网盘 / 提交进仓库；用完请删，两台机器都归你时才这样导。")
@@ -403,7 +427,8 @@ def do_migrate(args):
         return 0
 
     try:
-        res = migrate.import_bundle(args.import_scan, dry_run=args.dry_run)
+        res = migrate.import_bundle(args.import_scan, dry_run=args.dry_run,
+                                    passphrase=migrate.bundle_passphrase() or None)
     except ValueError as e:
         print(f"[!] 导入中止：{e}")
         snap = getattr(e, "snapshot", None)
@@ -426,6 +451,12 @@ def do_migrate(args):
         print(f"    节点：新增 {res['nodes']['added']}，跳过 {res['nodes']['skipped']}")
     for c in res["credentials"]:
         print(f"    凭据文件 {c['file']}：{c['status']}（{c['reason']}）")
+    lg = res.get("logs") or {}
+    if lg:
+        _key = "打算写" if res["dry_run"] else "已写到"
+        print(f"    任务日志：{_key} {lg.get('would_write' if res['dry_run'] else 'written', 0)} 个"
+              f" → {rel_display(Path(lg['dir']))}（同名不覆盖、0600；"
+              f"跳过 {lg.get('skipped', 0)}、越界拒绝 {lg.get('refused', 0)}）")
     for w in res["warnings"]:
         print(f"    [!] {w}")
     return 0
@@ -572,6 +603,16 @@ def main():
     ap.add_argument("--with-task-auth", action="store_true",
                     help="配合 --export-scan：保留任务里的登录态请求头（Cookie/Authorization）。"
                          "默认剥掉并打印剥了几条")
+    ap.add_argument("--encrypt-bundle", action="store_true",
+                    help="配合 --export-scan：整包加密成 .enc（AES-256-GCM，PBKDF2 60 万次）。"
+                         "口令**只**从环境变量 CTFSCANNER_BUNDLE_PASSPHRASE 读 —— 不给"
+                         "「命令行传口令」这条路：argv 会留在 ps / shell history / 别的进程可读的 "
+                         "/proc/<pid>/cmdline 里（与凭据同一条口径）。导入侧同样只读该变量，"
+                         "并按文件头自动识别要不要解密")
+    ap.add_argument("--with-logs", action="store_true",
+                    help="配合 --export-scan：把任务日志一起带走。默认不带 —— 日志里有第三方接口的"
+                         "返回原文、目标响应体，甚至偶发的口令痕迹，比表里的行更适合留在本机。"
+                         "只带落在 logs/ 之内的文件，单文件 5 MB / 总量 25 MB 封顶（超的计入跳过）")
     ap.add_argument("--dry-run", action="store_true",
                     help="配合 --import-scan：只报「会导入什么」，不写任何数据行（幂等建表仍会做）")
     args = ap.parse_args()
@@ -587,7 +628,8 @@ def main():
     # 同上口径：迁移的附属参数不许"给了却没生效"。
     _mig_stray = [(n, v) for n, v in (
         ("--only-tasks", args.only_tasks), ("--with-users", args.with_users),
-        ("--with-task-auth", args.with_task_auth)) if v]
+        ("--with-task-auth", args.with_task_auth), ("--with-logs", args.with_logs),
+        ("--encrypt-bundle", args.encrypt_bundle)) if v]
     if _mig_stray and args.export_scan is None:
         print(f"[!] 这些参数只在 --export-scan 时有效：{', '.join(n for n, _ in _mig_stray)}")
         sys.exit(1)

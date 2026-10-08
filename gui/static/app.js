@@ -1,5 +1,12 @@
 /* CTFScanner 前端脚本：任务状态轮询、日志尾部加载、POC 管理、任务创建。 */
 
+// 后台路径随机化（续138）：控制台挂在每次启动随机生成的两段前缀下。
+// 模板里的链接走 url_for() 会自动带前缀，JS 里的**不会** —— 所以所有绝对 URL 都必须过 u()。
+// 基路径由 base.html 的 <meta name="ctf-base"> 给出（值就是 Flask 的 request.script_root；
+// 挂在根路径时它是空串 ⇒ 不启用随机路径时行为与改动前一字不差）。
+const CTF_BASE = ((document.querySelector('meta[name="ctf-base"]') || {}).content || "").replace(/\/+$/, "");
+function absUrl(p) { return CTF_BASE + p; }
+
 async function pollTask(id) {
   const box = document.getElementById("log-box");
   const badge = document.getElementById("st-badge");
@@ -7,7 +14,7 @@ async function pollTask(id) {
   const prog = document.getElementById("st-progress");
   for (;;) {
     try {
-      const r = await fetch(`/api/tasks/${id}/status`);
+      const r = await fetch(absUrl(`/api/tasks/${id}/status`));
       if (r.ok) {
         const j = await r.json();
         if (badge) badge.textContent = j.status;
@@ -28,7 +35,7 @@ async function loadLog(id) {
   const box = document.getElementById("log-box");
   if (!box) return;
   try {
-    const r = await fetch(`/api/tasks/${id}/status`);
+    const r = await fetch(absUrl(`/api/tasks/${id}/status`));
     if (r.ok) {
       const j = await r.json();
       box.textContent = (j.log_tail || []).join("\n") || "（空）";
@@ -95,7 +102,7 @@ async function taskOp(action, id, btn, msgEl) {
   if (action === "delete" && !confirm(`确认删除任务 #${id} 及其全部资产？`)) return;
   if (btn) btn.disabled = true;
   try {
-    const r = await fetch(`/api/tasks/${id}/${action}`, { method: "POST" });
+    const r = await fetch(absUrl(`/api/tasks/${id}/${action}`), { method: "POST" });
     const j = await r.json();
     if (j.msg) say(j.msg);
     if (j.error && !j.ok) {
@@ -146,7 +153,7 @@ function initTaskTable() {
     if (action === "delete" && !confirm(`确认删除选中的 ${ids.length} 个任务及其全部资产？`)) return;
     bulkMsg.textContent = "提交中…";
     try {
-      const r = await fetch("/api/tasks/bulk", {
+      const r = await fetch(absUrl("/api/tasks/bulk"), {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, ids }),
       });
@@ -176,7 +183,7 @@ function initTaskTable() {
     if (!live.length) return;                 // 本页没有在跑的任务：不轮询、也不刷新
     try {
       const ids = live.map(tr => tr.dataset.id).join(",");
-      const r = await fetch(`/api/tasks/status?ids=${ids}`);
+      const r = await fetch(absUrl(`/api/tasks/status?ids=${ids}`));
       if (r.ok) {
         const map = (await r.json()).tasks || {};
         live.forEach(tr => {
@@ -407,7 +414,7 @@ function initTheme() {
 /* ---------- 漏洞人工复核（P1-1）：行内打标 + 勾选批量打标 ---------- */
 
 async function postReview(ids, state, note) {
-  const r = await fetch("/api/vulns/review", {
+  const r = await fetch(absUrl("/api/vulns/review"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids, state, note: note || "" }),
@@ -491,7 +498,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const msg = document.getElementById("task-msg");
       msg.textContent = "提交中…";
       try {
-        const r = await fetch("/api/tasks", { method: "POST", body: new FormData(tf) });
+        const r = await fetch(absUrl("/api/tasks"), { method: "POST", body: new FormData(tf) });
         const j = await r.json();
         if (j.id) {
           // 勾了「全端口 / 全目录」却没勾对应阶段时，后端会自动补上并回传 auto_stages
@@ -513,20 +520,20 @@ document.addEventListener("DOMContentLoaded", () => {
       ev.preventDefault();
       const msg = document.getElementById("poc-msg");
       try {
-        const r = await fetch("/api/pocs/upload", { method: "POST", body: new FormData(pf) });
+        const r = await fetch(absUrl("/api/pocs/upload"), { method: "POST", body: new FormData(pf) });
         const j = await r.json();
         msg.textContent = j.ok ? ("已导入：" + j.id) : ("失败：" + (j.error || "未知"));
         if (j.ok) setTimeout(() => location.reload(), 800);
       } catch (e) { msg.textContent = "网络错误"; }
     });
     document.getElementById("poc-refresh").addEventListener("click", async () => {
-      await fetch("/api/pocs/refresh", { method: "POST" });
+      await fetch(absUrl("/api/pocs/refresh"), { method: "POST" });
       location.reload();
     });
   }
   document.querySelectorAll("button.toggle").forEach(b => {
     b.addEventListener("click", async () => {
-      await fetch(`/api/pocs/${b.dataset.id}/toggle`, { method: "POST" });
+      await fetch(absUrl(`/api/pocs/${b.dataset.id}/toggle`), { method: "POST" });
       location.reload();
     });
   });
@@ -547,7 +554,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!confirm(`确认按当前筛选条件批量${tip} POC？`)) return;
       msg.textContent = "处理中…";
       try {
-        const r = await fetch("/api/pocs/bulk", {
+        const r = await fetch(absUrl("/api/pocs/bulk"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),

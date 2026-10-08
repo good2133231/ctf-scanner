@@ -33,6 +33,7 @@ PLAIN_KEYS_PATH = BASE_DIR / "config" / "keys.yaml"
 ENV_PASSPHRASE = "CTFSCANNER_KEYS_PASSPHRASE"
 
 _MAGIC = b"CTFSCANNER-KEYS-V1\x00"
+MAGIC_KEYS = _MAGIC      # 公开别名：别的模块（`migrate`）拿它做"这不是凭据文件"的判据
 _SALT_LEN = 16
 _NONCE_LEN = 12
 _KDF_ITERS = 600_000      # PBKDF2-HMAC-SHA256；启动解一次，成本 ~0.3s 换"拷走文件解不开"
@@ -55,20 +56,26 @@ def _derive(passphrase, salt):
     return hashlib.pbkdf2_hmac("sha256", passphrase.encode("utf-8"), salt, _KDF_ITERS, _KEY_LEN)
 
 
-def is_encrypted(path=None):
-    """文件存在且带我们的魔数头 —— 只按头部判，不猜、不解密。"""
+def is_encrypted(path=None, magic=None):
+    """文件存在且带**指定**魔数头（默认凭据文件那个）—— 只按头部判，不猜、不解密。"""
+    magic = magic or _MAGIC
     p = Path(path if path is not None else ENC_KEYS_PATH)
     if not p.exists():
         return False
     try:
         with p.open("rb") as fh:
-            return fh.read(len(_MAGIC)) == _MAGIC
+            return fh.read(len(magic)) == magic
     except OSError:
         return False
 
 
-def encrypt_text(text, passphrase):
-    """明文 YAML 文本 + 口令 → 完整密文 blob（含魔数/盐/nonce）。失败抛异常（调用方是 CLI，可以抛）。"""
+def encrypt_text(text, passphrase, magic=None):
+    """明文文本 + 口令 → 完整密文 blob（含魔数/盐/nonce）。失败抛异常（调用方是 CLI，可以抛）。
+
+    `magic` 可以换：迁移包用 `CTFSCANNER-BUNDLE-V1`（见 `scanner/migrate.py`）。分成两个魔数是为了
+    **互相冒充不了** —— 默认值与升级前逐字节相同（`[8f]` 钉着那条）。
+    """
+    magic = magic or _MAGIC
     aesgcm_cls = _crypto()
     if aesgcm_cls is None:
         raise RuntimeError("未安装 cryptography，无法加密凭据文件：python -m pip install cryptography")
@@ -76,23 +83,30 @@ def encrypt_text(text, passphrase):
         raise ValueError("口令不能为空")
     salt = os.urandom(_SALT_LEN)
     nonce = os.urandom(_NONCE_LEN)
-    ct = aesgcm_cls(_derive(passphrase, salt)).encrypt(nonce, text.encode("utf-8"), _MAGIC)
-    return _MAGIC + salt + nonce + ct
+    ct = aesgcm_cls(_derive(passphrase, salt)).encrypt(nonce, text.encode("utf-8"), magic)
+    return magic + salt + nonce + ct
 
 
-def decrypt_blob(blob, passphrase):
-    """密文 blob + 口令 → 明文字符串；任何失败都**返回 (None, 原因)**，不抛（解锁路径不许炸）。"""
+def decrypt_blob(blob, passphrase, magic=None):
+    """密文 blob + 口令 → 明文字符串；任何失败都**返回 (None, 原因)**，不抛（解锁路径不许炸）。
+
+    `magic` 默认还是凭据文件那个（`[8f]` 钉着的行为一字未改）；迁移包会显式传自己的魔数，
+    于是"把 keys.enc.yaml 当迁移包解"这种拿错文件会在头部比对就被拒 —— 而不是解出一团乱码再报
+    "不是合法 JSON"（那种报错会把人引向"是不是口令错了"这个错方向）。
+    """
+    magic = magic or _MAGIC
     aesgcm_cls = _crypto()
     if aesgcm_cls is None:
         return None, "未安装 cryptography（pip install cryptography），无法读取加密凭据文件"
-    if not isinstance(blob, (bytes, bytearray)) or len(blob) <= len(_MAGIC) + _SALT_LEN + _NONCE_LEN:
+    if not isinstance(blob, (bytes, bytearray)) or len(blob) <= len(magic) + _SALT_LEN + _NONCE_LEN:
         return None, "密文文件太短或形态不对（不是本模块写的 V1 格式）"
-    if bytes(blob[:len(_MAGIC)]) != _MAGIC:
-        return None, "文件头不是 CTFSCANNER-KEYS-V1（不是本模块生成的密文）"
-    body = bytes(blob[len(_MAGIC):])
+    if bytes(blob[:len(magic)]) != magic:
+        return None, "文件头不是 CTFSCANNER-KEYS-V1（不是本模块生成的密文）" + (
+            "" if magic == _MAGIC else "，也不是本次要的迁移包魔数")
+    body = bytes(blob[len(magic):])
     salt, nonce, ct = body[:_SALT_LEN], body[_SALT_LEN:_SALT_LEN + _NONCE_LEN], body[_SALT_LEN + _NONCE_LEN:]
     try:
-        plain = aesgcm_cls(_derive(passphrase, salt)).decrypt(nonce, ct, _MAGIC)
+        plain = aesgcm_cls(_derive(passphrase, salt)).decrypt(nonce, ct, magic)
     except Exception:
         # 不区分"口令错"与"文件被改"：AESGCM 的认证标签两者都拒。报成一条，不猜。
         return None, "口令不对或文件已损坏（认证加密校验未通过）"

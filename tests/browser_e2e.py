@@ -83,9 +83,16 @@ _edge_boot.enabled = lambda settings: False
 from gui.app import app                                  # import 期 create_app() 建表 / 同步 POC 注册表
 from werkzeug.serving import make_server
 
+# 续138：**真浏览器 + 真随机前缀**。刻意不关掉这个特性来"让测试好过" ——
+# 前端 11 处 fetch 都改成过 absUrl() 拼基路径，只有真跑在前缀下才验得出接线对不对
+# （关掉它，e2e 会对一个"链接全指根路径"的坏实现照样全绿，那是假绿）。
+from scanner import webpath as _wp_boot
+_wp = _wp_boot.new_base()
+app.wsgi_app = _wp_boot.PrefixMiddleware(app.wsgi_app, _wp)
+
 srv = make_server("127.0.0.1", 0, app, threaded=True)    # 0 = 系统分配空闲端口
 with open(os.environ["CTFSCANNER_E2E_PORTFILE"], "w", encoding="utf-8") as fh:
-    fh.write(str(srv.server_port))
+    fh.write(str(srv.server_port) + chr(10) + _wp)     # 换行用 chr(10)：本模板是普通字符串，写反斜杠要躲两层转义
 # 续108：登录页现在在**所有凭据分支之前**都要过验证码（答案只存服务端内存，页面/cookie 读不到，
 #   这正是它存在的意义）。E2E 要验的是"真浏览器提交表单 → 真登录"，所以让这份**测试专用的引导
 #   脚本**把自己刚发出的码抄进一个临时文件 —— 生产代码里没有任何"免码/固定码"的口子。
@@ -385,7 +392,7 @@ def _seed_db():
 
 
 def _start_gui(env, work):
-    """起真实 Flask 服务进程，返回 `(port, proc)`；就绪判据 = 端口文件 + `/login` 可访问。"""
+    """起真实 Flask 服务进程，返回 `(port, proc, 前缀)`；就绪判据 = 端口文件 + `/login` 可访问。"""
     boot = work / "_gui_boot.py"
     portfile = work / "port.txt"
     boot.write_text(_GUI_BOOT, encoding="utf-8")
@@ -396,13 +403,15 @@ def _start_gui(env, work):
                      CTFSCANNER_E2E_CAPFILE=str(capfile))
     proc = subprocess.Popen([sys.executable, str(boot)], env=child_env, cwd=str(ROOT),
                             stdout=subprocess.DEVNULL, stderr=errlog)
-    port = 0
+    port, prefix = 0, ""
     deadline = time.time() + 60                             # import 期要同步 300+ 个 POC，给足时间
     while time.time() < deadline:
         if portfile.exists():
             txt = portfile.read_text(encoding="utf-8").strip()
-            if txt.isdigit():
-                port = int(txt)
+            lines = txt.splitlines()
+            if lines and lines[0].isdigit():
+                port = int(lines[0])
+                prefix = lines[1].strip() if len(lines) > 1 else ""
                 break
         if proc.poll() is not None:
             break
@@ -414,14 +423,14 @@ def _start_gui(env, work):
         except OSError:
             pass
         raise RuntimeError(f"GUI 进程没能在 60s 内就绪（{err.strip() or '无 stderr 输出'}）")
-    base = f"http://127.0.0.1:{port}"
+    base = f"http://127.0.0.1:{port}{prefix}"
     for _ in range(80):
         try:
             urllib.request.urlopen(base + "/login", timeout=2).read()
-            return port, proc
+            return port, proc, prefix
         except Exception:                                   # noqa: BLE001
             time.sleep(0.25)
-    raise RuntimeError("GUI 端口起来了但 /login 打不开")
+    raise RuntimeError("GUI 端口起来了但 /login 打不开（续138 起还要对：前缀有没有写进握手文件）")
 
 
 def _start_chrome(browser, profile, work):
@@ -524,8 +533,11 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
 
     # ---------- [1] 登录（后续所有页面的前提；也是"302 墙"是否被真正推开的证据） ----------
     href = _login(page, base, cred[0], cred[1])
-    rep.check("[1] 真表单登录后被重定向到仪表盘", (href or "").rstrip("/").endswith(f":{port}"),
-              f"登录后 href={href!r}")
+    # 续138：登录后应当停在**本次前缀下的首页**（`<base>/`）。旧判据 `endswith(f":{port}")`
+    # 认的是"根路径"，挂上前缀后必然红 —— 换成"在 base 之下且不是登录页"，两种挂载方式都成立。
+    rep.check("[1] 真表单登录后被重定向到仪表盘",
+              (href or "").startswith(base + "/") and "/login" not in (href or ""),
+              f"登录后 href={href!r}（期望以 {base}/ 开头）")
     rep.check("[1] 仪表盘侧边栏已渲染（非登录页/非 302）",
               page.ev("!!document.querySelector('nav.side-nav')") is True)
 
@@ -611,8 +623,8 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
               f"/api/pocs/{poc_id}/toggle" in calls, f"calls={calls}")
     rep.check("[5] fetch 用 POST", '"POST"' in calls, f"calls={calls}")
     rep.eq("[5] 没有触发表单 submit 事件", page.ev("window.__submits"), 0)
-    rep.check("[5] 页面没有整页跳走", (page.href() or "").find(f":{port}/pocs") > 0,
-              f"href={page.href()!r}")
+    rep.check("[5] 页面没有整页跳走", (page.href() or "").startswith(base + "/pocs"),
+              f"href={page.href()!r}（期望以 {base}/pocs 开头）")
 
     # ---------- [6] 任务详情页页签切换 + 锚点/参数恢复 ----------
     page.navigate(f"{base}/tasks/{tid}#sites")
@@ -701,8 +713,17 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     page.navigate(f"{base}/tasks")
     rep.check("[8] /tasks 上确实有一个运行中的行（否则本项无从验起）",
               page.ev(f"document.querySelector('#task-rows tr[data-id=\"{tid_run}\"]') !== null") is True)
-    page.ev("window.__calls=[];"
-            "window.fetch=function(u,o){var url=String(u); window.__calls.push(url);"
+    # 续138：钩子里把**原始 URL** 另存一份 `__raw`，再把本次挂载前缀剥掉存进 `__calls` ——
+    # 这样下面"只发批量 / ids 只含未结束 / 合成 progress=99 进 DOM"这些判据仍按根路径的形状写，
+    # 不必到处拼前缀；而 `__raw` 用来证明**请求真的带了前缀**（absUrl 在真浏览器里生效）。
+    # 少了这一步会有两种坏结果：要么断言直接红（假红），要么改成"匹配任意前缀"（假绿 ——
+    # 那连"根本没加前缀的坏实现"也会过）。
+    page.ev("window.__calls=[];window.__raw=[];"
+            "window.__base=(document.querySelector('meta[name=\"ctf-base\"]')||{}).content||'';"
+            "window.fetch=function(u,o){var raw=String(u);var url=raw;"
+            "window.__raw.push(raw);"
+            "if(window.__base&&url.indexOf(window.__base)===0){url=url.slice(window.__base.length);}"
+            "window.__calls.push(url);"
             "if(url.indexOf('/api/tasks/status?ids=')===0){"
             "return Promise.resolve({ok:true,json:function(){return Promise.resolve("
             "{ok:true,tasks:{%d:{status:'running',progress:99,current_stage:'probe'}}});}});}"
@@ -712,6 +733,12 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     calls = json.loads(page.ev("JSON.stringify(window.__calls)") or "[]")
     batch = [u for u in calls if u.startswith("/api/tasks/status?ids=")]
     perrow = [u for u in calls if u.startswith("/api/tasks/") and u.endswith("/status")]
+    _raw8 = json.loads(page.ev("JSON.stringify(window.__raw)") or "[]")
+    _pfx8 = base.split(f":{port}", 1)[1] if (port and f":{port}" in base) else ""
+    rep.check("[8] 轮询请求真的带上了本次挂载前缀（absUrl 接线在真浏览器里生效）",
+              bool(_raw8) and _pfx8.strip("/").count("/") >= 1
+              and all(u.startswith(_pfx8) for u in _raw8),
+              f"前缀={_pfx8!r} raw={_raw8}")
     rep.check("[8] 列表页轮询只发**批量**请求，没有任何按行请求",
               len(perrow) == 0 and len(batch) >= 1,
               f"批量={len(batch)} 按行={len(perrow)} calls={calls}")
@@ -835,13 +862,13 @@ def run(settings=None):
         print(f"[*] 浏览器: {os.path.basename(browser)}；临时目录: {work.name}")
         tid, tid_run = _seed_db()
         print(f"[*] 已造数：目录 {_DIRS_TOTAL} 行 / 站点 {_SITES_TOTAL} 行，任务 #{tid}（另有运行中的 #{tid_run}）")
-        port, gui = _start_gui(env, work)
-        print(f"[*] Flask GUI 已在 127.0.0.1:{port} 就绪（临时库 {_rel(work / 'scanner.db')}）")
+        port, gui, wprefix = _start_gui(env, work)
+        print(f"[*] Flask GUI 已在 127.0.0.1:{port}{wprefix} 就绪（临时库 {_rel(work / 'scanner.db')}）")
         cdp, chrome = _start_chrome(browser, work / "profile", work)
         print("[*] 无头浏览器已连上 CDP，开始交互断言")
         page = Page(cdp)
         rep = _Report()
-        _run_checks(page, f"http://127.0.0.1:{port}", rep, cred, tid, port, tid_run)
+        _run_checks(page, f"http://127.0.0.1:{port}{wprefix}", rep, cred, tid, port, tid_run)
         ok = not rep.fails
         if ok:
             note = f"通过：登录 + 8 项交互共 {rep.n} 条断言全绿（真浏览器 / 真 Flask 进程）"

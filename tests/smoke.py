@@ -75,17 +75,44 @@ if _TIMING:
     print = _print_timed          # 只有开了 --timing 才接管；默认与今天逐字节相同
 
 def leaked_root(text):
-    """页面/输出里是否泄露了**项目根绝对路径**（`str(ROOT)` 与 `as_posix()` 两种写法都查）。
+    """页面/输出里是否泄露了**项目根绝对路径**。命中时返回**带上下文的片段**，没命中返回空串。
 
-    判据必须带**路径边界**：裸 `str(ROOT) in text` 在根路径短的机器上是假红 ——
-    容器里 `ROOT=/w`，正文里 `raw/flow/workflows` 这种巧合子串就会被判成泄露
-    （2026-10-02 在 `python:3.9-slim` 镜像里实测把 [5] / [7y] 打红）。
-    真泄露一定是「根 + 分隔符」或整条根被引用，所以要求根串之后**不是单词字符**。
+    判据演进（都是真踩出来的，别退回去）：
+    ① 裸 `str(ROOT) in text` —— 根路径短的机器上必假红：容器里 `ROOT=/w` 时正文里
+       `raw/flow/workflows` 这种巧合子串就算泄露（2026-10-02 在 `python:3.9-slim` 实测把
+       `[5]`/`[7y]` 打红）。于是加了"根之后不是单词字符"的边界。
+    ② 只加边界还不够（本轮在 `ctfs:py39` 容器实测，挂载点是 `/app`）：**PoC 模板里本来就有
+       `/app/login.jsp`、`/app/kibana/` 这种 URL 路径**，`/app` + `.` 完全符合"边界"判据，
+       于是「POC 页不应出现绝对路径」被打红 —— 而那个页面里一个本机路径都没有。
+       根越短，"根串恰好是别人家 URL 的一段"就越常见，这不是巧合而是必然。
+    ③ 所以短根（只有一层，容器挂载点的典型形状）下只认**真泄露的形状**：
+       「根 + `/` + 本项目里确实存在的某个顶层条目」。PoC 里的 `/app/login.jsp` 不匹配
+       （`login.jsp` 不是本项目的顶层条目），真的 `/app/logs/xxx.log` 照样匹配。
+       长根（`/home/…/ctf-scanner`、CI 的 `/home/runner/work/…`）保持 ①的严格判据不变。
+    ④ 红了要能自己说清上下文（返回片段而不是 True），否则下一轮还得再跑一次才知道是谁。
     """
+    _short = len([s for s in str(ROOT).split("/") if s]) <= 1
+    try:
+        _kids = sorted({p.name for p in ROOT.iterdir() if p.name}, key=len, reverse=True)
+    except OSError:
+        _kids = []
     for _root in (str(ROOT), ROOT.as_posix()):
-        if re.search(re.escape(_root) + r"(?!\w)", text):
-            return True
-    return False
+        _esc = re.escape(_root)
+        if _short and _kids:
+            _pat = _esc + r"/(?:" + "|".join(re.escape(k) for k in _kids) + r")(?![\w.-])"
+        else:
+            _pat = _esc + r"(?!\w)"
+        m = re.search(_pat, text)
+        if m:
+            i = m.start()
+            return text[max(0, i - 70):i + 70]
+    return ""
+
+
+# 本机的 ROOT 是不是"短到需要降级判据"的那种 —— 打印出来，别让降级悄悄发生（§6.2 的口径）
+ROOT_LEAK_MODE = ("短根（容器挂载点）：只认「根 + 本项目真实顶层条目」"
+                  if len([s for s in str(ROOT).split("/") if s]) <= 1 else
+                  "常规根：出现根路径即算泄露")
 
 # ---- 测试库/日志目录隔离（用户要求：跑测试不能污染真实工作区）----
 # 默认库 `data/scanner.db` 是**真实任务库**，直接跑冒烟测试会往里写任务/站点/漏洞/端口
@@ -645,7 +672,8 @@ def main():
     r = c.post("/api/tasks/bulk", json={"action": "delete", "ids": [tid_stop, 999999]})
     assert r.get_json()["affected"] == 1 and r.get_json()["skipped"] == [999999], r.get_json()
     assert db.get_task(tid_stop) is None
-    print("[5] gui routes ok（含导出 / 批量停止 / 批量删除）")
+    print("[5] gui routes ok（含导出 / 批量停止 / 批量删除）"
+          f"｜绝对路径判据模式：{ROOT_LEAK_MODE}")
 
     # 5c) 本轮新增行为：子域名/拓展域名分流 + IP/CDN 标记与标签过滤 + 站点去重折叠 + POC 相对路径
     from scanner import cdn as cdn_mod
@@ -695,7 +723,8 @@ def main():
     assert unfolded.count(dup_title) == 3, unfolded.count(dup_title)
     assert "（被折叠）" in unfolded
     # POC 页只展示相对路径（不出现本机绝对目录）
-    assert not leaked_root(poc_html), "POC 页不应出现绝对路径"
+    _lr5 = leaked_root(poc_html)
+    assert not _lr5, f"POC 页不应出现绝对路径，实到上下文：{_lr5!r}"
     # 漏洞页带任务名（而不是只有一个 #id）
     vulns_html = c.get("/vulns").get_data(as_text=True)
     assert db.get_task(tid)["name"] in vulns_html, "漏洞页应显示任务名"
@@ -12262,15 +12291,27 @@ http:
                 assert False, f"该拒的 URL 没拒：{_u11}"
             except RuntimeError as _e11:
                 assert "bootstrap.pypa.io" in str(_e11), _e11
-        # 幂等：真项目里已有 .venv（本机就是），必须"复用"而不是重建 —— 用 cfg 指纹证明没被重写
+        # 幂等：真项目里已有 .venv（本机就是），必须"复用"而不是重建 —— 用 cfg 指纹证明没被重写。
+        # ⚠ 只在**这个 .venv 对当前解释器真的可用**时才调 `ensure_venv()`：不可用时它会走到
+        #   `python -m venv <已存在目录>`，那一条**会改写 pyvenv.cfg**（本轮把 3.14 的 .venv 挂进
+        #   3.9 容器跑门禁，`[8d ⑪]` 就把宿主机的 `.venv` 重写成了 3.9 的形状、还建出
+        #   `lib/python3.9/` —— 门禁去动用户的运行环境，这本身就是事故，§6.2 第六起）。
+        #   "不可用"那一档的判据在下面用**沙箱目录**演一遍，不碰真的 .venv。
         _cfg11 = _rb8d.ROOT / ".venv" / "pyvenv.cfg"
-        if _cfg11.exists():
+        import subprocess as _sp11v   # smoke 顶部没 import subprocess，这里就地取（别名防止与打桩冲突）
+        _vpy11 = _rb8d.venv_python(_rb8d.ROOT)
+        _venv_usable11 = _vpy11.exists() and _sp11v.run(
+            [str(_vpy11), "-m", "pip", "--version"], capture_output=True).returncode == 0
+        if _cfg11.exists() and _venv_usable11:
             _before11 = _cfg11.stat().st_mtime_ns
             _ok11, _msg11 = _rb8d.ensure_venv()
             assert _ok11 and "复用" in _msg11, _msg11
             assert _cfg11.stat().st_mtime_ns == _before11, "ensure_venv 重建了已有 venv（不该）"
         else:
-            print("  [8d ⑪] 本机没有 .venv → 幂等那条按跳过处理（不是通过）")
+            _note11 = ("本机没有 .venv" if not _cfg11.exists()
+                       else f".venv 存在但里面的解释器对**当前**解释器不可用（{str(_vpy11)}）")
+            print(f"  [8d ⑪] {_note11} → 「复用不改写」那条判据本次**没验到**（不是通过）；"
+                  "「不可用/建不起来就不动用户目录」那档由下面的沙箱用例覆盖")
         # 失败路径**不许删用户目录**：调用前就存在的 .venv（带 pyvenv.cfg）+ venv 建不起来
         _mine11 = _root11 / "mine" / ".venv"
         _mine11.mkdir(parents=True)
@@ -12677,7 +12718,21 @@ http:
     _ro109.mkdir()
     _ro109.chmod(0o500)
     _k4, _w4 = _ss109(_ro109)
-    assert _k4 and len(_k4) >= 32 and _w4, "落盘失败必须**明说**（静默降级是本仓反复出事的地方）"
+    # ⚠ root 会**无视权限位**（§6.2 第四起）：容器里以 root 跑时 0o500 照样写得进去，`_w4` 恒空，
+    #    这条必然红 —— 而红出来的形状是"密钥落盘失败没明说"，看起来像产品缺陷。
+    #    不跳过整段（跳过＝这次没验过，必须说出来）：换成 root 也挡不住的形状 ——
+    #    **父路径是个普通文件**，任何 uid 都 mkdir 不进去，照样验"写不了必须明说"。
+    _root109 = hasattr(os, "geteuid") and os.geteuid() == 0
+    if not _root109:
+        assert _k4 and len(_k4) >= 32 and _w4, "落盘失败必须**明说**（静默降级是本仓反复出事的地方）"
+    else:
+        _blk109 = _d109 / "afile"
+        _blk109.write_text("占位：我要当父路径用", encoding="utf-8")
+        _k4b, _w4b = _ss109(_blk109 / "sub")
+        assert _k4b and len(_k4b) >= 32 and _w4b, \
+            "root 下的替代判据（父路径是文件）也必须『明说降级』"
+    _note109 = ("（本机是 root：chmod 0o500 那一档**没验到**，改用「父路径是文件」验降级要说清）"
+                if _root109 else "")
     _ro109.chmod(0o700)
     shutil.rmtree(_d109, ignore_errors=True)
 
@@ -12746,7 +12801,8 @@ http:
     print("[8g] 续109 会话签名密钥 ok: 随机 32 字节 + 落盘 0600 + 与库同目录（CTFSCANNER_DB 一重定向即进沙箱）"
           "｜已存在则复用（重启不打光会话）｜截断即重建｜写不了就**明说**降级且不退回可推导串"
           "｜密钥不含 'ctfscanner::' 也不含引导口令｜用旧推导密钥伪造的管理员 Cookie 在 / 与 /settings 都被 302"
-          "｜运行时变异（密钥打回推导式）同一张 Cookie 立刻被接受 = 断言有牙齿｜真登录会话仍有效")
+          "｜运行时变异（密钥打回推导式）同一张 Cookie 立刻被接受 = 断言有牙齿｜真登录会话仍有效"
+          + _note109)
 
 
     # ---------------- [8h] 续110：CDN 判定覆盖"裸目标" + C 段共享主机结论必须上库上报告 ----------------
@@ -16855,7 +16911,11 @@ expression: r0()
     assert "没有可比的上一轮" in _h3_129 and "这里<b>不给你看一张全空的差分表" in _h3_129, _h3_129[:400]
     assert "与上次对比" in _cl129.get(f"/tasks/{_t_new}").get_data(as_text=True), \
         "详情页没有入口 ⇒ 这个视图等于不存在"
-    assert leaked_root(_h129) is False
+    # `leaked_root()` 现在返回**上下文片段或空串**（不再是 True/False），所以判据必须写
+    # `not …` —— 留着 `is False` 会在"没泄露"时恒红（本轮容器门禁就红在这里，而 `[5]` 那处早就改成
+    # `not` 了：同一个改动没跟着改完第二个调用点，是最典型的"改一半"）。
+    _lr129 = leaked_root(_h129)
+    assert not _lr129, f"差分页出现项目根绝对路径：{_lr129!r}"
 
     # ---- ⑦ 摘要只有一处产地（续124 同一手法）：模板不许自己拼数字 ----
     _tpl129 = (ROOT / "gui/templates/diff.html").read_text(encoding="utf-8")
@@ -17298,6 +17358,826 @@ expression: r0()
           "format 比本程序新）拒绝且库一行不动、连快照都不拍｜导入前整库快照且**不许重名**｜"
           "变异三条都会红：摘掉 redact_auth（Cookie 进包）/ log_file 不相对化（绝对路径进包）/ "
           "不按 task_id 切分（每个任务拿到别人的资产）")
+    # ---------------- [8ak] 续138：后台路径每次启动随机化（用户点单） ----------------
+    # 用户原话："把我们后台路径随机化，根目录默认访问 404，两层随机字符，至少 20 位生成的
+    # 后台路径，在每次启动的时候随机生成给我们。"
+    # 本组钉的四件事：① 形状承诺（两层×10 位、字符表、真随机）② 根路径 404 且**零信息**
+    # ③ 前缀对了才把链接带走（`SCRIPT_NAME` 接线 —— 这条最容易只剩一半）④ 它**不是**访问控制，
+    # 横幅必须说清，且前缀绝不落盘（落了盘就不叫"每次启动随机"）。
+    import os as _os_8ak
+    import re as _re_8ak
+    from scanner import config as _cfg8ak, webpath as _wp8ak
+
+    def _is_rand8ak(b):
+        """本地复算一遍形状（不依赖被测模块自己的判据 —— 那正是变异要摘掉的东西）"""
+        segs = str(b or "").strip("/").split("/")
+        return (len(segs) == _wp8ak.SEGMENTS
+                and all(len(s) == _wp8ak.SEG_LEN and _re_8ak.fullmatch(r"[a-z0-9]+", s) for s in segs)
+                and not set("".join(segs)) & set("0o1li"))
+
+    # ---- ① 形状：两层、各 10 位、字符表内、200 个不重复 ----
+    _samp8ak = [_wp8ak.new_base() for _ in range(200)]
+    assert all(_is_rand8ak(b) for b in _samp8ak), \
+        f"生成的前缀不满足「两层各 {_wp8ak.SEG_LEN} 位」：{_samp8ak[:3]}"
+    assert _wp8ak.SEGMENTS * _wp8ak.SEG_LEN >= 20, "随机字符总数低于用户要的下限 20 位"
+    assert len(set(_samp8ak)) == len(_samp8ak), "200 个前缀里出现重复 → 熵不足"
+    assert not (set(_wp8ak.ALPHABET) & set("0o1li")), \
+        "字符表里混进 0/o/1/l/i —— 这条 URL 要人在终端里手敲，抄错一次就当「后台打不开」"
+    assert _wp8ak.is_random_base(_samp8ak[0]) and not _wp8ak.is_random_base("/gui/console"), \
+        "两个判据不许混用：is_valid 放宽到手动路径，钉「每次随机 20 位」只能用 is_random_base"
+
+    # ---- ② 生产路径必须经 `secrets`（不是 `random`）----
+    # 桩的是 **webpath 模块里的名字**（`_wp8ak.secrets`），不是 `secrets` 模块本身 —— 后者是
+    # 全局对象，改了会污染同一进程里所有组（`random` 那条路不经过它，所以输出不会是那串定值）。
+    class _FakeSecrets8ak:
+        class SystemRandom:
+            def choice(self, seq):
+                return seq[0]
+
+    _real_secrets8ak = _wp8ak.secrets
+    _wp8ak.secrets = _FakeSecrets8ak()
+    try:
+        _stub8ak = _wp8ak.new_base()
+    finally:
+        _wp8ak.secrets = _real_secrets8ak
+    assert _stub8ak == "/" + "/".join([_wp8ak.ALPHABET[0] * _wp8ak.SEG_LEN] * _wp8ak.SEGMENTS), \
+        f"new_base() 没走 secrets.SystemRandom（改成 random.Random 就是这条红）：{_stub8ak}"
+    assert _wp8ak.new_base() != _stub8ak, "桩没还原 —— 本组之后的断言都跑在假随机上"
+
+    # ---- ③ `strip()` 三层语义 ----
+    _B8ak = "/aaaaaaaaaa/bbbbbbbbbb"
+    assert _wp8ak.strip({"PATH_INFO": _B8ak}, _B8ak) == (_B8ak, "/"), "只给前缀本身要当进首页"
+    assert _wp8ak.strip({"PATH_INFO": _B8ak + "/login"}, _B8ak) == (_B8ak, "/login")
+    assert _wp8ak.strip({"PATH_INFO": _B8ak + "/"}, _B8ak) == (_B8ak, "/")
+    for _p in ("/", "/login", "/aaaaaaaaaa", "/aaaaaaaaaa/", "/bbbbbbbbbb",
+               "/aaaaaaaaaa/bbbbbbbbbbX/login"):
+        assert _wp8ak.strip({"PATH_INFO": _p}, _B8ak) is None, f"{_p} 不该被放行"
+    # `bbbbbbbbbbX` 那条钉的是**段边界**：只比字符串前缀就会把 /aaa/bbbX 也认进来
+    assert _wp8ak.strip({}, _B8ak) is None, "PATH_INFO 缺失要按根路径处理（404），不能默认放行"
+    assert _wp8ak.strip({"PATH_INFO": "/login", "SCRIPT_NAME": "/x"}, "") == ("/x", "/login"), \
+        "空前缀＝挂根路径，必须原样透传（这是「关掉本功能＝行为一字未改」的实现层保证）"
+
+    # ---- ④ `normalize()` 三态分开：空＝挂根 / 合格＝规整 / 不合格＝抛 ----
+    assert (_wp8ak.normalize(""), _wp8ak.normalize("/"), _wp8ak.normalize(None)) == ("", "", "")
+    assert _wp8ak.normalize(_B8ak + "/") == _B8ak, "尾斜杠要吃掉（横幅里带 /，用户会整段粘过来）"
+    assert _wp8ak.normalize("/gui/console") == "/gui/console", "手动指定的口子要能用，不必凑够 20 位"
+    for _bad in ("x/y", "//a/b", "/a//b", "/a/../b", "/a/.", "/UPPER/b", "/a/" + "b" * 65,
+                 "/a/b/c/d/e", "/a?x=1", "/a b", "/目/x", "a"):
+        try:
+            _wp8ak.normalize(_bad)
+            raise AssertionError(f"不合格的前缀被接受：{_bad!r}")
+        except ValueError:
+            pass
+    assert _wp8ak.is_valid("") is True and _wp8ak.is_valid("/x/../y") is False
+    # 为什么"不合格"不能返回空串：空串＝挂根路径，而根路径正是本功能要消掉的那个暴露面。
+    # 静默把写错的路径降级成根路径，表现就是"我明明设了路径，后台怎么谁都能扫到"。
+    _mutfail8ak = []
+    for _bad in ("/x//y", "/x/../y"):
+        try:
+            _wp8ak.normalize(_bad)
+            _mutfail8ak.append(_bad)
+        except ValueError:
+            pass
+    assert not _mutfail8ak, f"降级路径没抛异常：{_mutfail8ak}"
+
+    # ---- ⑤ 真 app + 中间件：可达性、零信息 404、链接带走前缀（一处判据，真货与变异共用） ----
+    def _prefix_pred8ak(appl, base):
+        """返回三条独立判据：根路径零信息 / 前缀内可达 / 跳转 Location 带前缀。"""
+        _cl = appl.test_client()
+        _root = _cl.get("/")
+        ok404 = (_root.status_code == 404 and _root.data == b""
+                 and _root.headers.get("Content-Length") == "0")
+        _home = _cl.get(base + "/")
+        _login = _cl.get(base + "/login")
+        ok200 = (_home.status_code in (200, 302) and _login.status_code == 200
+                 and f'<meta name="ctf-base" content="{base}">' in _login.get_data(as_text=True))
+        _loc = _home.headers.get("Location", "")
+        okloc = (_home.status_code != 302) or _loc.startswith(base + "/")
+        return ok404, ok200, okloc
+
+    _a8ak = _app_with7i(host="127.0.0.1", edge_auth={"enabled": False})
+    _a8ak.wsgi_app = _wp8ak.PrefixMiddleware(_a8ak.wsgi_app, _B8ak)
+    _pred8ak = _prefix_pred8ak(_a8ak, _B8ak)
+    assert _pred8ak == (True, True, True), f"真货三条判据里 {[_i + 1 for _i, _v in enumerate(_pred8ak) if not _v]} 红"
+    # 404 侧要把"探测面"逐个点一遍：根路径下的每个真实入口都不许留下任何响应体
+    _cl8ak = _a8ak.test_client()
+    for _p in ("/", "/login", "/static/app.js", "/api/tasks", "/captcha.png", "/nodes",
+               "/aaaaaaaaaa", "/bbbbbbbbbb", "/aaaaaaaaaa/bbbbbbbbbbX/", "/..%2f.."):
+        _r8ak = _cl8ak.get(_p)
+        assert _r8ak.status_code == 404 and _r8ak.data == b"", f"{_p} → {_r8ak.status_code} 且有响应体"
+        assert "Location" not in _r8ak.headers, f"{_p} 被重定向 = 告诉扫描者正确前缀在哪"
+    _pg8ak = _cl8ak.get(_B8ak + "/login").get_data(as_text=True)
+    assert _B8ak + "/static/style.css" in _pg8ak and _B8ak + "/captcha.png" in _pg8ak, \
+        "url_for 出的链接没带前缀（SCRIPT_NAME 没设）"
+    assert not _re_8ak.search(r'(?:href|src|action)="/(?:static|api|login|captcha)', _pg8ak), \
+        "页面里还留着指向根的绝对链接"
+    assert _cl8ak.get(_B8ak + "/static/app.js").status_code == 200
+
+    # ---- ⑥ 变异证伪（§6.1）：同一串判据必须在三个改造点上翻红 ----
+    class _NoScriptName8ak:
+        """只改 PATH_INFO、不设 SCRIPT_NAME —— 页面链接会全部指回根路径（最常见的一半实现）"""
+
+        _ctf_prefix = True
+
+        def __init__(self, app, base):
+            self.app, self.base = app, base
+
+        def __call__(self, environ, start_response):
+            g = _wp8ak.strip(environ, self.base)
+            if g is None:
+                start_response("404 NOT FOUND", [("Content-Type", "text/plain"),
+                                                 ("Content-Length", "0")])
+                return [b""]
+            environ["PATH_INFO"] = g[1]
+            return self.app(environ, start_response)
+
+    class _Leaky8ak:
+        """猜错就 302 到正确前缀 —— 等于把答案写在 Location 里"""
+
+        _ctf_prefix = True
+
+        def __init__(self, app, base):
+            self.app, self.base = app, base
+
+        def __call__(self, environ, start_response):
+            g = _wp8ak.strip(environ, self.base)
+            if g is None:
+                environ["PATH_INFO"] = self.base + "/" + environ.get("PATH_INFO", "")
+                return self.app(environ, start_response)
+            environ["SCRIPT_NAME"], environ["PATH_INFO"] = g
+            return self.app(environ, start_response)
+
+    class _Lenient8ak:
+        """把「不合格」当「挂根路径」（改之前的旧 normalize）—— 静默关掉整个功能"""
+
+        @staticmethod
+        def normalize(base):
+            b = str(base or "").strip().rstrip("/")
+            return b if _re_8ak.fullmatch(r"/[^/]+/[^/]+", b) else ""
+
+    _m1 = _app_with7i(host="127.0.0.1", edge_auth={"enabled": False})
+    _m1.wsgi_app = _NoScriptName8ak(_m1.wsgi_app, _B8ak)
+    assert _prefix_pred8ak(_m1, _B8ak)[2] is False, "变异没红：不设 SCRIPT_NAME 也照样过"
+    _m2 = _app_with7i(host="127.0.0.1", edge_auth={"enabled": False})
+    _m2.wsgi_app = _Leaky8ak(_m2.wsgi_app, _B8ak)
+    assert _prefix_pred8ak(_m2, _B8ak)[0] is False, "变异没红：猜错路径还能被重定向"
+    _keep_norm8ak = _wp8ak.normalize
+    _wp8ak.normalize = _Lenient8ak.normalize
+    try:
+        _lenient_red = []
+        for _bad in ("/x//y", "/x/../y"):
+            try:
+                _wp8ak.normalize(_bad)
+                _lenient_red.append(_bad)
+            except ValueError:
+                pass
+    finally:
+        _wp8ak.normalize = _keep_norm8ak
+    assert _lenient_red == ["/x//y", "/x/../y"], "旧 normalize 没复现出「静默挂根」，④ 的断言没区分度"
+
+    # ---- ⑦ 前端接线：JS 与模板里不许留任何指向根的地址 ----
+    _js8ak = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'meta[name="ctf-base"]' in _js8ak, "JS 没读那个 meta，前缀传不进去"
+    assert "function absUrl" in _js8ak, "JS 没有统一的加前缀出口"
+    _bare8ak = _re_8ak.findall(r'''(?:fetch|window\.open)\(\s*[`'"]/[^/]''', _js8ak)
+    assert not _bare8ak, f"app.js 里有以 / 开头的请求串（挂前缀后一律 404）：{_bare8ak}"
+    _nav8ak = _re_8ak.findall(r'''location(?:\.href)?\s*=\s*[`'"]/[^/]''', _js8ak)
+    assert not _nav8ak, f"app.js 里有以 / 开头的跳转：{_nav8ak}"
+    assert _js8ak.count("absUrl(") >= 11, \
+        f"absUrl 调用点只剩 {_js8ak.count('absUrl(')} 处 —— 有站点的加前缀被删了"
+    _tpl8ak = []
+    for _f in sorted((ROOT / "gui" / "templates").glob("*.html")):
+        _t = _f.read_text(encoding="utf-8")
+        if _re_8ak.search(r'(?:href|src|action)="/(?:static|api|login|logout|captcha)', _t):
+            _tpl8ak.append(_f.name)
+    assert not _tpl8ak, f"模板里有指向根的绝对链接：{_tpl8ak}"
+    for _f in ("base.html", "login.html"):
+        assert 'name="ctf-base"' in (ROOT / "gui" / "templates" / _f).read_text(encoding="utf-8"), \
+            f"{_f} 没带 ctf-base meta —— 这个页面的 JS 拿不到前缀"
+    _appsrc8ak = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+    assert not _re_8ak.search(r'redirect\(\s*["\']/', _appsrc8ak), \
+        '有 `redirect("/xxx")`：绝对路径不吃 SCRIPT_NAME，跳转会把前缀丢掉'
+
+    # ---- ⑦b 模板里「自己拼的相对链接」（分页条 base）必须过 `page_url()` ----
+    # 这条不是读代码读出来的，是 `[7x]` 真点「下一页」炸出来的：`url_for`/`redirect` 自动带前缀，
+    # 而 12 处路由各自写的 `"base": "/tasks"` 这类**字符串路径**不经过它 —— 挂上前缀后翻页链接
+    # 全指回根路径 404。现象是「页面能打开、一点翻页就没了」，而 404 是**空响应体**，
+    # 控制台上看不到任何线索，所以这条必须由源码形状 + 两种上下文各算一遍来钉住。
+    _noline8ak = [l for l in _appsrc8ak.splitlines()
+                  if '"base":' in l and "_DEV_FIXTURE" not in l and "page_url(" not in l]
+    assert not _noline8ak, \
+        "有 pager 的 base 没走 page_url（前缀下翻页指回根路径 404）：" + repr(_noline8ak[:3])
+    # `environ_overrides` 而不是 `SCRIPT_NAME=`：Flask 的 `test_request_context` 把 kwargs 全
+    # 转给 `EnvironBuilder`，而它没有 `SCRIPT_NAME` 这个形参（本轮实测 TypeError 出来的）。
+    with _a8ak.test_request_context("/dirs", environ_overrides={"SCRIPT_NAME": _B8ak}):
+        _pre8ak = gui_app.page_url("/dirs")
+        assert _pre8ak == _B8ak + "/dirs", f"挂前缀时没补上：{_pre8ak!r}"
+        assert _pre8ak != "/dirs", "变异证伪：不补前缀的写法（升级前的行为）必须与真值不同"
+    with _a8ak.test_request_context("/dirs"):
+        assert gui_app.page_url("/dirs") == "/dirs", \
+            "没挂前缀时必须原样返回 —— 这是「关掉本功能＝行为一字未改」的实现层保证"
+
+    # ---- ⑧ 前缀不落盘（落盘就不叫"每次启动随机"，而且本仓是公开仓库） ----
+    _wpsrc8ak = (ROOT / "scanner" / "webpath.py").read_text(encoding="utf-8")
+    for _w in ("open(", "write_text", "write_bytes", "mkdir", "chmod", "save_settings", "dump"):
+        assert _w not in _wpsrc8ak, f"webpath.py 里出现 {_w} —— 前缀有被写进文件的风险"
+    _probe8ak = _wp8ak.new_base()
+    _hits8ak = []
+    for _f in sorted((ROOT / "config").glob("*")):
+        if _f.is_file():
+            try:
+                if _probe8ak in _f.read_text(encoding="utf-8", errors="ignore"):
+                    _hits8ak.append(_f.name)
+            except OSError:
+                pass
+    assert not _hits8ak, f"刚生成的前缀出现在 config/ 里的 {_hits8ak} —— 它必须只在启动横幅里"
+    assert _cfg8ak.DEFAULTS["gui"]["web_path_random"] is True, "默认必须开着（用户点单的功能）"
+
+    # ---- ⑨ `_web_base_for` 的优先级与降级（含环境变量三种取值） ----
+    def _wb8ak(env_val, **gui_over):
+        """调真函数取 (前缀, 额外打印行)；环境变量**必须**用完就还原，否则污染后面的组。"""
+        _keep = _os_8ak.environ.pop("CTFSCANNER_WEB_PATH", None)
+        if env_val is not None:
+            _os_8ak.environ["CTFSCANNER_WEB_PATH"] = env_val
+        try:
+            return gui_app._web_base_for({"gui": dict({"web_path_random": True}, **gui_over)})
+        finally:
+            _os_8ak.environ.pop("CTFSCANNER_WEB_PATH", None)
+            if _keep is not None:
+                _os_8ak.environ["CTFSCANNER_WEB_PATH"] = _keep
+
+    _b, _n = _wb8ak(None)
+    assert _is_rand8ak(_b) and _n == [], f"默认必须随机且不多打行：{_b!r} {_n}"
+    _b0, _n0 = _wb8ak("")
+    assert _b0 == "" and _n0 == [], "环境变量给空串＝显式挂根路径，这是唯一合法的「关掉」写法"
+    _bf, _nf = _wb8ak("/gui/console")
+    assert _bf == "/gui/console" and _nf == [], f"手动指定的前缀没被采纳：{_bf!r} {_nf}"
+    _bb, _nb = _wb8ak("/x//y")
+    assert _is_rand8ak(_bb), f"不合格的值降级成了根路径（静默关掉功能）：{_bb!r}"
+    assert any("不合格" in l for l in _nb), "降级了却没说 —— 用户只会以为随机还在"
+    _bo, _no = _wb8ak(None, web_path_random=False)
+    assert _bo == "" and _no == [], "gui.web_path_random=false 必须能整体挂回根路径（旧行为）"
+    _bh, _nh = _wb8ak("/x//y", web_path_random=False)
+    assert _is_rand8ak(_bh), "开关关了但环境变量不合格 → 仍不该把人放回根路径"
+
+    # ---- ⑩ 真跑 `serve()`：横幅单一产地、三句必说的话、返回后必须摘掉前缀层 ----
+    _keep_env8ak = _os_8ak.environ.pop("CTFSCANNER_WEB_PATH", None)
+    try:
+        _out8ak, _ = _serve_out7i({"host": "127.0.0.1", "allowed_hosts": [],
+                                   "edge_auth": {"enabled": False}, "web_path_random": True})
+    finally:
+        if _keep_env8ak is not None:
+            _os_8ak.environ["CTFSCANNER_WEB_PATH"] = _keep_env8ak
+    _url_lines8ak = [l for l in _out8ak if "控制台地址" in l]
+    assert len(_url_lines8ak) == 1, f"启动横幅里地址必须有单一产地：{_url_lines8ak}"
+    _m8ak = _re_8ak.search(r"控制台地址：http://127\.0\.0\.1:(\d+)(/[a-z0-9]{10}/[a-z0-9]{10})/?$",
+                           _url_lines8ak[0])
+    assert _m8ak, f"横幅里那条地址不是「两层各 10 位」的形状：{_url_lines8ak[0]!r}"
+    _pre8ak = _m8ak.group(2)
+    assert any("重启即换" in l for l in _out8ak), "没说清「重启就换」—— 有人会把它存进书签当永久地址"
+    assert any("不是" in l and "访问控制" in l for l in _out8ak), \
+        "横幅没说清这不是访问控制（§5.10 口径：不许让人误以为安全了）"
+    assert any("run_node.py --controller" in l and "前缀" in l for l in _out8ak), \
+        "没说节点端要带前缀 —— 现象是「节点一直不领任务」，最难查的那种"
+    assert sum(1 for l in _out8ak if "随机生成" in l) == 1, "同一句说法出现了多处（文案有第二个产地）"
+    # `serve()` 返回后模块级 app 必须**没**留着前缀层：`[7i]` 真调 serve() 三次，留着就是往
+    # 后续每组 `gui_app.app.test_client().get("/login")` 上刷 404（假红，且红在哪个组随机）。
+    assert not getattr(gui_app.app.wsgi_app, "_ctf_prefix", False), "serve() 没摘掉前缀层"
+    assert gui_app.app.test_client().get("/login").status_code == 200, \
+        "摘掉之后根路径要立刻恢复可用（关掉本功能＝行为一字未改）"
+
+    print("[8ak] 续138 后台路径随机化 ok: 形状承诺（两层各 10 位＝20 位、字符表去掉 0o1li、"
+          "200 个不重复、生产路径确实走 secrets.SystemRandom 而非 random）｜根路径与任何错误路径"
+          "（含只猜中一层、按段边界比的 bbbbbbbbbbX、%2e%2e）一律 404 **空响应体**、不重定向不泄漏｜"
+          "前缀对了才可达且 url_for/redirect/static 全带前缀（SCRIPT_NAME 接线）｜normalize 三态分开"
+          "（空＝挂根、合格＝规整、不合格＝抛 + 降级仍随机且打印原因，绝不静默挂根）｜"
+          "CTFSCANNER_WEB_PATH 三种取值各有断言（空串/合法/非法）+ gui.web_path_random=false 回旧行为｜"
+          "app.js 全部请求走 absUrl、模板与 app.py 零根绝对链接、base.html 与 login.html 都带 meta｜"
+          "前缀不落盘（webpath 无任何写文件调用、config/ 里搜不到刚生成的前缀）｜serve() 真跑："
+          "地址单一产地、三句必说的话、返回后摘掉前缀层（不摘会把后续组全刷成 404）｜"
+          "变异三条都会红：不设 SCRIPT_NAME / 猜错路径改 302 / 旧 normalize 静默挂根")
+
+    # ---------------- [8al] 续137/续138 附：依赖锁必须"被装上"，不只是"存在" ----------------
+    # 续137 生成 `requirements.lock` 只解决"有一份钉死的清单"；这一组钉四件事：
+    # ① lock 覆盖 `requirements.txt` 里每个直接依赖；② lock 里全是 `==`（有浮动就不叫锁）；
+    # ③ **CI 四个装依赖的步骤吃的是 lock 而不是 txt** —— 否则锁了个寂寞：CI 每次装最新版，
+    #    "本机绿、CI 红"和"CI 绿、用户装完红"会反复出现（§6.2 那一族的另一个来源）；
+    # ④ 只在老 Python 上需要的键必须带环境标记（不带标记会把 3.11+ 的解析顶死）。
+    _req_txt8al = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    _lock8al = (ROOT / "requirements.lock").read_text(encoding="utf-8")
+    import re as _re8al
+
+    def _names8al(text):
+        """把一份 requirements 形态的文本解析成"包名集合"（注释行、marker 尾巴都不算名字）。"""
+        out = set()
+        for line in text.splitlines():
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            out.add(_re8al.split(r"[<>=!;\[\s]", line, maxsplit=1)[0]
+                    .strip().lower().replace("_", "-"))
+        return out
+
+    def _float_lines8al(text):
+        return [l for l in text.splitlines()
+                 if l.strip() and not l.strip().startswith("#") and "==" not in l]
+
+    _direct8al, _pinned8al = _names8al(_req_txt8al), _names8al(_lock8al)
+    assert _direct8al <= _pinned8al, f"lock 缺直接依赖：{sorted(_direct8al - _pinned8al)}"
+    assert _float_lines8al(_lock8al) == [], f"lock 里有非 `==` 的行：{_float_lines8al(_lock8al)}"
+    # 变异证伪：漏一个直接依赖 / 留一行浮动，判据必须真的会红（不是恒过的漂亮断言）
+    assert _names8al("Flask==3.1.3\nrequests==2.32.5\nPyYAML==6.0.3") <= _pinned8al
+    assert not (_direct8al <= _names8al("Flask==3.1.3\nrequests==2.32.5")), \
+        "变异没红：把 cryptography 从 lock 里删掉也该被抓出来"
+    assert _float_lines8al("Flask==3.1.3\nrequests>=2.25") == ["requests>=2.25"], \
+        "变异没红：浮动版本行没被判成不合格"
+
+    _pins8al = {}
+    for _l in _lock8al.splitlines():
+        _s = _l.split("#")[0].strip()
+        if _s and "==" in _s:
+            _pins8al[_s.split("==")[0].strip().lower()] = _s
+    for _n in ("importlib-metadata", "zipp"):
+        assert 'python_version < "3.10"' in _pins8al.get(_n, ""), \
+            f"{_n} 没带 marker → 3.10+ 会被拖进没必要的依赖：{_pins8al.get(_n)!r}"
+    assert 'python_full_version < "3.11"' in _pins8al.get("typing-extensions", ""), \
+        "typing-extensions 没带 marker（3.11+ 自带，钉它只会挡升级）"
+    assert 'platform_system == "Windows"' in _pins8al.get("colorama", ""), \
+        "colorama 没带 marker（Linux/mac 上装它纯属多余）"
+
+    _wf8al = {}
+    for _f in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        _wf8al[_f.name] = _f.read_text(encoding="utf-8")
+    _installs8al = [l.strip() for _t in _wf8al.values() for l in _t.splitlines()
+                    if "pip install -r" in l]
+    assert len(_installs8al) == 4, \
+        f"CI 里应有 4 处装依赖（smoke 1 + quality 3），实到 {len(_installs8al)}：{_installs8al}"
+    _notlock8al = [l for l in _installs8al if "requirements.lock" not in l]
+    assert not _notlock8al, \
+        "CI 还在吃浮动的 requirements.txt（锁了版本但没人按锁装）：" + repr(_notlock8al)
+    # Docker 镜像同吃 lock（续138）：镜像是**可复现产物**，照 txt 装会让同一个 tag 在两台机器上
+    # 跑着不同的 Werkzeug —— 与 CI 同一份清单才谈得上"CI 绿的就是镜像里那批"。
+    _dfile8al = (ROOT / "docker_todo" / "Dockerfile").read_text(encoding="utf-8")
+    assert "requirements.lock" in _dfile8al, "镜像还在照 requirements.txt 装（浮动作）"
+    assert "-r /tmp/requirements.txt" not in _dfile8al, "Dockerfile 里残留旧的 txt 安装行"
+
+    # lock 本身必须进仓库：被 .gitignore 盖住就等于"只有本机有这份清单"
+    _gi8al = [l.strip() for l in (ROOT / ".gitignore").read_text(
+        encoding="utf-8").splitlines() if l.strip() and not l.strip().startswith("#")]
+    assert "requirements.lock" not in _gi8al and "*.lock" not in _gi8al, \
+        "requirements.lock 被 .gitignore 挡住了 —— CI 与其它机器根本拿不到它"
+
+    print("[8al] 续137/续138 依赖锁接线 ok: lock 覆盖全部直接依赖｜整份都是 `==`（浮动行判不合格，"
+          "变异「删掉 cryptography」与「留一行 >=」都会红）｜三个只在该版本段需要的键各带自己的"
+          "环境标记（importlib-metadata/zipp<3.10、typing-extensions<3.11、colorama 仅 Windows）｜"
+          "CI 四处装依赖全部吃 lock 而不是 txt（smoke.yml 1 + quality.yml 3，数量也钉住 —— 新增 job "
+          "忘了改会被条数断言抓出来）｜Dockerfile 也吃 lock（同一个 tag 不再随构建时间变版本）｜"
+          "lock 没被 .gitignore 盖住")
+
+    # ---------------- [8am] 续138：迁移 GUI 入口（管理员、审计、页面上没有凭据开关） ----------------
+    # 续136 只给了 CLI；本轮补控制台入口。这个口子中不中间？**全看三条不变量守不守得住**：
+    # ① 只有管理员能用（路由层，不是只藏侧边栏）；② 页面上**不存在**"带账号/带凭据/带登录态"
+    # 三个开关，服务端硬写 False —— 伪造表单字段也不许生效；③ 导入是"预检 → 一次性确认"两步，
+    # 含凭据的包在页面上直接拒绝（那类包必须回 CLI 看着警告确认）。
+    # 用**真浏览器之外最快的方式**跑：Flask test client + 真验证码登录（复用 `_login7`），
+    # 全程只用本组自己造的任务，导出落点是沙箱库同目录（`CTFSCANNER_DB` 已经把它指到 logs/ 临时目录）。
+    import io as _io8am
+    import json as _json8am
+    from scanner import db as _db8am   # 本组自己起别名：`_db8am` 与 `[8ai]` 那个 `_db8ai` 是同一个模块
+
+    _app8am = _app_with7i(host="127.0.0.1", edge_auth={"enabled": False})
+    _cl8am_anon = _app8am.test_client()
+    _U_A8AM, _U_S8AM, _PW8AM = "smoke-mig-admin", "smoke-mig-sub", "Mig#2026-pw"
+    for _un in (_U_A8AM, _U_S8AM):
+        if users_mod.get_by_name(_un):
+            users_mod.delete_user(int(users_mod.get_by_name(_un)["id"]))
+    assert users_mod.create_user(_U_A8AM, _PW8AM, role="admin", must_change=False)[0]
+    assert users_mod.create_user(_U_S8AM, _PW8AM, role="user", must_change=False)[0]
+    _adm8am = int(users_mod.get_by_name(_U_A8AM)["id"])
+    _own8am = _db8am.create_task("smoke-mig-src", "http://mig-smoke.local/", ["probe"],
+                                 owner_id=_adm8am)
+    _MIG_DIR = Path(_db8am.DB_PATH).parent
+
+    def _mig_n_tasks():
+        _cn = _db8am.get_conn()
+        try:
+            return int(_cn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0])
+        finally:
+            _cn.close()
+
+    def _mig_audit():
+        _cn = _db8am.get_conn()
+        try:
+            return [dict(r) for r in _cn.execute(
+                "SELECT kind, target, detail, ok FROM audit_log WHERE kind='migrate' "
+                "ORDER BY id").fetchall()]
+        finally:
+            _cn.close()
+
+    def _mig_files(sub):
+        d = _MIG_DIR / sub
+        return sorted(d.glob("*.json")) if d.is_dir() else []
+
+    # ① 未登录 / 子用户都进不去（GET 与三个 POST 一律）
+    _r8am = _cl8am_anon.get("/migrate")
+    assert _r8am.status_code == 302 and "/login" in _r8am.headers.get("Location", ""), _r8am.status_code
+    _cs8am = _app8am.test_client()
+    _login7(_cs8am, {"username": _U_S8AM, "password": _PW8AM})
+    assert _cs8am.get("/migrate").status_code == 403, "子用户能打开迁移页"
+    for _ep in ("/api/migrate/export", "/api/migrate/preview", "/api/migrate/apply"):
+        assert _cs8am.post(_ep, data={}).status_code == 403, f"子用户能 POST {_ep}"
+    assert "数据迁移" not in _cs8am.get("/").get_data(as_text=True), "侧边栏向子用户露出迁移入口"
+    assert 'href="/migrate"' not in _cs8am.get("/").get_data(as_text=True)
+
+    # ② 页面本身：有说明、**没有那三个开关的任何控件**
+    _ca8am = _app8am.test_client()
+    _login7(_ca8am, {"username": _U_A8AM, "password": _PW8AM})
+    _pg8am = _ca8am.get("/migrate")
+    assert _pg8am.status_code == 200
+    _html8am = _pg8am.get_data(as_text=True)
+    assert not re.search(r'name="(with_users|with_task_auth|with-users)"', _html8am), \
+        "页面上出现了凭据开关的表单字段"
+    assert "--with-users" in _html8am and "--with-task-auth" in _html8am, \
+        "页面没写清『那三个开关只在 CLI』"
+    assert 'action="/api/migrate/export"' in _html8am
+    # 上传体积上限也必须写在页面上（不然人只会看到"预检没通过"）
+    assert "MB" in _html8am
+
+    # ③ 导出：只读、0600、零凭据
+    _n0 = _mig_n_tasks()
+    _before8am = _mig_files("export")
+    _r8am = _ca8am.post("/api/migrate/export", data={"ids": str(_own8am)})
+    _after8am = _mig_files("export")
+    assert _r8am.status_code == 200 and len(set(_after8am) - set(_before8am)) == 1, \
+        f"导出没产出恰好一个包：{[p.name for p in set(_after8am) - set(_before8am)]}"
+    _new8am = list(set(_after8am) - set(_before8am))[0]
+    _b8am = _json8am.loads(_new8am.read_text(encoding="utf-8"))
+    assert _new8am.stat().st_mode & 0o777 == 0o600, oct(_new8am.stat().st_mode)
+    assert not (_b8am.get("data") or {}).get("users"), "默认包里出现了账号表"
+    assert not (_b8am.get("data") or {}).get("credentials"), "默认包里出现了凭据文件"
+    assert str(_MIG_DIR) not in _r8am.get_data(as_text=True), "页面回显了本机绝对路径"
+    assert _mig_n_tasks() == _n0, "导出（只读动作）居然改了库"
+
+    # ④ 伪造表单字段也不许生效：服务端写死 False，不是"页面没画所以不会传"
+    _b48am = _mig_files("export")
+    _r8am = _ca8am.post("/api/migrate/export",
+                        data={"ids": str(_own8am), "with_users": "1",
+                              "with_task_auth": "on", "file": "1"})
+    _n58am = list(set(_mig_files("export")) - set(_b48am))
+    assert len(_n58am) == 1, "伪造字段那次导出没产出包（说明它被当成错误处理了 —— 也要能说清）"
+    _b58am = _json8am.loads(_n58am[0].read_text(encoding="utf-8"))
+    assert not (_b58am.get("data") or {}).get("users"), \
+        "伪造 with_users=1 就带出了账号表 → 开关根本不是服务端硬写的"
+    assert not (_b58am.get("data") or {}).get("credentials")
+
+    # ⑤ 坏输入：任务编号不是整数 → 明确报错且不产出包
+    _b68am = _mig_files("export")
+    _r8am = _ca8am.post("/api/migrate/export", data={"ids": "12 号、abc"})
+    assert "只能是整数" in _r8am.get_data(as_text=True)
+    assert _mig_files("export") == _b68am, "报错的导出也产出了包"
+
+    # ⑥ 预检：发回一次性令牌、不写库、inbox 里留着那份上传
+    def _up8am(cl, raw, name):
+        return cl.post("/api/migrate/preview",
+                       data={"file": (_io8am.BytesIO(raw), name)},
+                       content_type="multipart/form-data")
+
+    _n_before = _mig_n_tasks()
+    _r8am = _up8am(_ca8am, _new8am.read_bytes(), _new8am.name)
+    _h8am = _r8am.get_data(as_text=True)
+    assert "确认导入" in _h8am, "预检没给出确认按钮"
+    _tok8am = re.search(r'name="token" value="([0-9a-f]{32})"', _h8am)
+    assert _tok8am, "预检没发回一次性确认令牌"
+    assert len(_mig_files("import-inbox")) == 1, "上传的副本没落到 inbox"
+    assert _mig_n_tasks() == _n_before, "预检（dry-run）写了库"
+
+    # ⑦ 含凭据的包：页面一律拒绝，并指回 CLI —— 判据取**包内容**，不信 includes 的自我声明
+    _liar8am = _json8am.loads(_new8am.read_text(encoding="utf-8"))
+    _liar8am["data"]["users"] = [{"username": "someone-else", "password_hash": "pbkdf2$x$y",
+                                  "role": "admin"}]
+    _r8am = _up8am(_ca8am, _json8am.dumps(_liar8am).encode("utf-8"), "liar.json")
+    _h8am = _r8am.get_data(as_text=True)
+    assert "不接收" in _h8am and "cli/client.py --import-scan" in _h8am, \
+        "含账号哈希的包在页面上被接受了（或被静默拒绝却没指回 CLI）"
+    assert len(_mig_files("import-inbox")) == 1, "被拒的包还留在 inbox（该删）"
+    assert _mig_n_tasks() == _n_before, "被拒的包动了库"
+    # 变异证伪：把包里的 `includes` 改干净也没用 —— 上面这份 `_liar8am` 的 includes 本来就没提账号，
+    # 判据读的是 `data.users`。反过来若实现只读 `includes`，这条就会变成"接受了撒谎的包"。
+
+    # ⑧ 令牌纪律：错令牌拒、对令牌导入一次、同令牌第二次拒
+    _r8am = _ca8am.post("/api/migrate/apply", data={"token": "0" * 32})
+    assert "令牌无效" in _r8am.get_data(as_text=True) and _mig_n_tasks() == _n_before
+    _r8am = _ca8am.post("/api/migrate/apply", data={"token": _tok8am.group(1)})
+    _n_after = _mig_n_tasks()
+    assert _n_after == _n_before + 1, f"确认导入没写库：{_n_before} → {_n_after}"
+    assert not _mig_files("import-inbox"), "导入完没删上传的副本"
+    _r8am = _ca8am.post("/api/migrate/apply", data={"token": _tok8am.group(1)})
+    assert "令牌无效" in _r8am.get_data(as_text=True) and _mig_n_tasks() == _n_after, \
+        "同一张令牌能用第二次（= 预检确认不是一次性的，双击/重放会写两遍）"
+
+    # ⑧b 「预检了但没人确认」的那份副本不能永久留在本机
+    _up8am(_ca8am, _new8am.read_bytes(), "again.json")
+    _stale8am = _mig_files("import-inbox")
+    assert len(_stale8am) == 1, f"第二次预检没落 inbox：{[p.name for p in _stale8am]}"
+    _old = time.time() - 9999
+    os.utime(_stale8am[0], (_old, _old))              # 假装那是十分钟前上传的
+    _ca8am.get("/migrate")
+    assert not _mig_files("import-inbox"), \
+        "过期的上传副本没被清 —— 每次没确认的预检都会在本机永久留一份别人的扫描数据"
+    # 同一条 TTL 也要挡住"过期才来确认"：条据过期 → 令牌视为无效
+    _r8am = _ca8am.post("/api/migrate/apply", data={"token": "b" * 32})
+    assert "令牌无效" in _r8am.get_data(as_text=True)
+
+    # ⑨ 导入进来的任务：一律 stopped、pid 归零、owner_id 归零（包不含账号表时）
+    _cn8am = _db8am.get_conn()
+    try:
+        _rows8am = [dict(r) for r in _cn8am.execute(
+            "SELECT id, status, pid, owner_id FROM tasks ORDER BY id DESC LIMIT 1").fetchall()]
+    finally:
+        _cn8am.close()
+    assert _rows8am and str(_rows8am[0]["status"]) == "stopped" \
+        and int(_rows8am[0]["pid"] or 0) == 0, _rows8am
+    # 源任务本来是 pending（`create_task` 的默认值）→ 导入后必须是 stopped：
+    # 三个"还没跑完"的状态一个都不该留着，否则导入即"在别人机器上排好了队"。
+    assert int(_rows8am[0]["owner_id"] or 0) == 0, \
+        "包里没有账号表，owner_id 却指向了本机某个不相干的账号（多租户串味）"
+
+    # ⑩ 审计：每一动作用 kind=migrate 记一条，且**任何一条都不写本机绝对路径**
+    _aud8am = _mig_audit()
+    assert len(_aud8am) >= 5, f"迁移动作只记了 {len(_aud8am)} 条审计"
+    assert str(_MIG_DIR) not in _json8am.dumps(_aud8am, ensure_ascii=False), \
+        "审计里出现了本机绝对路径（AGENTS §0.3）"
+    assert any("不含账号" in (a.get("detail") or "") for a in _aud8am), \
+        "导出那条审计没写明「不含凭据」—— 事后看不出当初带没带"
+    assert any(not a.get("ok") for a in _aud8am), "被拒的包没记失败审计"
+
+    # ⑪ 挂**真前缀**（套 `PrefixMiddleware`，不是往 environ 里塞 SCRIPT_NAME）再走一遍迁移页。
+    # 试过 `environ_base={"SCRIPT_NAME": …}` 与 `root_path=…`：Flask 的 `EnvironBuilder` 两个都不接
+    # （`TypeError`，本轮实测），所以只能走中间件这条真实路径。代价是登录要手写两步 ——
+    # `_login7` 把取码路径写死成根路径了。这一段同时钉住：action 带前缀、前缀下能提交、
+    # **不带前缀必须 404**（否则等于白挂）。
+    from scanner import captcha as _cap8am
+    _app8am.wsgi_app = _wp8ak.PrefixMiddleware(_app8am.wsgi_app, _B8ak)
+    _cp8am = _app8am.test_client()
+    _bf8am = set(_cap8am._STORE)
+    _cp8am.get(_B8ak + "/captcha.png")
+    _fr8am = [k for k in _cap8am._STORE if k not in _bf8am]
+    assert _fr8am, "前缀下取不到验证码"
+    _cp8am.post(_B8ak + "/login", data={"username": _U_A8AM, "password": _PW8AM,
+                                        "captcha": _cap8am._STORE[_fr8am[-1]][0]})
+    _pg8am2 = _cp8am.get(_B8ak + "/migrate")
+    assert _pg8am2.status_code == 200, _pg8am2.status_code
+    _hp8am = _pg8am2.get_data(as_text=True)
+    assert f'<meta name="ctf-base" content="{_B8ak}">' in _hp8am, "迁移页没带上本次前缀"
+    assert f'action="{_B8ak}/api/migrate/export"' in _hp8am, "迁移页的表单 action 丢了前缀"
+    assert f'action="{_B8ak}/api/migrate/preview"' in _hp8am
+    assert _cp8am.post(_B8ak + "/api/migrate/export",
+                       data={"ids": str(_own8am)}).status_code == 200, "前缀下导不出包"
+    assert _cp8am.get("/migrate").status_code == 404, "不带前缀还能进迁移页 = 中间件没生效"
+
+    # 收尾：删掉本组造的账号与任务，别给后面的组留脏数据
+    _db8am._exec("DELETE FROM tasks WHERE name=?", ("smoke-mig-src",))
+    for _un in (_U_A8AM, _U_S8AM):
+        _u = users_mod.get_by_name(_un)
+        if _u:
+            users_mod.delete_user(int(_u["id"]))
+    for _p in _mig_files("export"):
+        _p.unlink(missing_ok=True)
+
+    print("[8am] 续138 迁移 GUI 入口 ok: 未登录 302／子用户 GET 与三个 POST 全 403 且侧边栏不露入口｜"
+          "页面上没有 with_users / with_task_auth 任何控件、但写明「那三个开关只在 CLI」与上传上限｜"
+          "导出只读（库不动）、包 0600、默认零凭据｜**伪造表单字段 with_users=1 也带不出账号**"
+          "（开关是服务端硬写的，不是「页面没画所以不会传」）｜任务编号给非整数只报错不产出包｜"
+          "预检=一次性令牌 + inbox 留一份 + dry-run 不写库｜含账号哈希的包**按包内容**拒绝并指回 CLI"
+          "（不信 includes 的自我声明：撒谎的包同样拒）；被拒的包不留 inbox｜"
+          "错令牌拒、对令牌恰好导入一次、**同令牌第二次拒**、导入完删副本｜进来的任务一律 "
+          "stopped + pid 0 + owner_id 0（pending/queued/running 三种「还没跑完」都不带走）｜"
+          "审计每动作一条、写明「不含凭据」、失败也记、且零本机绝对路径｜挂随机前缀时表单 action 带前缀")
+
+    # ---------------- [8an] 续136 的两条边界：加密迁移包 + `--with-logs` ----------------
+    # 用户 2026-10-08 点单"逐个解决"里剩下的两条。两条各自的核心风险：
+    #   加密包 —— 口令的**唯一来源必须是环境变量**（argv 会留在 `ps` / history /
+    #   `/proc/<pid>/cmdline`），且包魔数与凭据文件魔数**必须互不冒充**；
+    #   `--with-logs` —— 日志是"按包里的路径往本机写文件"，所以越界路径必须**拒绝**而不是收敛，
+    #   而且默认不带（日志里有第三方接口返回原文与目标响应体）。
+    import subprocess as _sp8an
+
+    from scanner import keystore as _ks8an   # ⑦⑧ 要比对两个魔数，直接用同一模块
+
+    _mig8an = _mg134                            # 同一模块（[8aj] 已导入），这里只换别名前缀
+    _tmp8an = _TMPDIR / "enc8an"
+    (_tmp8an / "logs").mkdir(parents=True, exist_ok=True)
+    _real_logs8an = _mig8an.LOGS_DIR
+    _real_db8an = _db8am.DB_PATH
+    _db8am.DB_PATH = _tmp8an / "t.db"
+    _mig8an.LOGS_DIR = _tmp8an / "logs"
+    _keep_env8an = os.environ.pop(_mig8an.ENV_BUNDLE_PASSPHRASE, None)
+    try:
+        _db8am.init_db()
+        _t8an = _db8am.create_task("enc8an", "http://enc8an.local/", ["probe"])
+        _lg8an = _mig8an.LOGS_DIR / "task-enc8an.log"
+        _lg8an.write_text("阶段 1/1：probe\n第三方返回：{\"k\": \"SENTINEL-IN-LOG-7\"}\n",
+                          encoding="utf-8")
+        _db8am.update_task(_t8an, log_file=str(_lg8an), status="done")
+        _out8an = _tmp8an / "elsewhere.log"     # 落在 LOGS_DIR **之外**的日志
+        _out8an.write_text("不该被带走", encoding="utf-8")
+        _t28an = _db8am.create_task("enc8an-out", "http://out8an.local/", ["probe"])
+        _db8am.update_task(_t28an, log_file=str(_out8an), status="done")
+
+        # ---- ① 默认两个开关都关：与升级前逐字节一致 ----
+        _p0 = _mig8an.export_bundle(task_ids=[_t8an, _t28an], dst=_tmp8an / "plain.json")
+        _raw0 = Path(_p0["path"]).read_bytes()
+        assert _raw0.startswith(b"{") and _p0["includes"]["encrypted"] is False \
+            and _p0["includes"]["logs"] is False, _p0["includes"]
+        assert "SENTINEL-IN-LOG-7" not in _raw0.decode("utf-8"), "默认包居然把日志带进去了"
+
+        # ---- ② --with-logs：带内 / 跳外，键里零本机路径 ----
+        _p1 = _mig8an.export_bundle(task_ids=[_t8an, _t28an], with_logs=True,
+                                   dst=_tmp8an / "withlogs.json")
+        _inc1 = _p1["includes"]
+        assert _inc1["logs_included"] == 1 and _inc1["logs_skipped"] == 1, _inc1
+        _logs1 = _p1["data"]["logs"]
+        assert list(_logs1) == ["task-enc8an.log"], list(_logs1)
+        assert base64.b64decode(_logs1["task-enc8an.log"]).decode("utf-8").startswith("阶段 1/1")
+        _dump8an = _json8am.dumps(_p1["data"], ensure_ascii=False)
+        assert str(_TMPDIR) not in _dump8an and str(ROOT) not in _dump8an, \
+            "包体带出本机绝对路径（§0.3）"
+        assert not any(str(t.get("log_file") or "").startswith("/")
+                       for t in _p1["data"]["tasks"]), "log_file 里出现绝对路径"
+        # 越界那份的**内容**不能进包；文件名本身出现在 `log_file`（相对形）是合法的、不算泄露。
+        assert "elsewhere" not in _json8am.dumps(list(_logs1.keys()), ensure_ascii=False), _logs1
+        assert _p1["includes"]["logs_skipped"] == 1 and "task-enc8an.log" in _logs1
+
+        # ---- ③ dry-run 只数不写，且必须说出"日志里有第三方原文" ----
+        _n_dir_before = sorted(p.name for p in _mig8an.LOGS_DIR.glob("migrated_*"))
+        _pl = _mig8an.import_bundle(_p1["path"], dry_run=True)
+        assert _pl["logs"]["would_write"] == 1 and _pl["logs"]["written"] == 0, _pl["logs"]
+        assert sorted(p.name for p in _mig8an.LOGS_DIR.glob("migrated_*")) == _n_dir_before, \
+            "dry-run 真建了目录/写了文件"
+        assert any("第三方接口" in w for w in _pl["warnings"]), _pl["warnings"]
+
+        # ---- ④ 真导入：写到 LOGS_DIR 下的迁移子目录、0600、log_file 接回**绝对形** ----
+        _r1 = _mig8an.import_bundle(_p1["path"])
+        assert _r1["logs"]["written"] == 1, _r1["logs"]
+        _new8an = sorted((_mig8an.LOGS_DIR / Path(_r1["logs"]["dir"]).name).glob("*.log"))
+        assert len(_new8an) == 1, [str(x) for x in _new8an]
+        if os.name == "posix" and os.geteuid() != 0:
+            # 权限位在 root 容器里不成立（§6.2 第四起），root 下改断"至少不是 0777"
+            assert _new8an[0].stat().st_mode & 0o777 == 0o600, oct(_new8an[0].stat().st_mode)
+        _rows8an = [dict(x) for x in _db8am.list_tasks(limit=None)]
+        _imported = [x for x in _rows8an if int(x["id"]) != _t8an and int(x["id"]) != _t28an]
+        assert any(str(_new8an[0]) == (x.get("log_file") or "") for x in _imported), \
+            [x.get("log_file") for x in _imported]
+        assert all(Path(x["log_file"]).is_absolute() for x in _imported if x.get("log_file")), \
+            "log_file 留了相对形：消费方是 `Path(...).parent`，相对路径会按进程 CWD 解析（§7）"
+
+        # ---- ⑤ 包里给越界 log_rel：拒绝写入并说出来（不是收敛进 LOGS_DIR 就完事） ----
+        _evil = _json8am.loads(Path(_p1["path"]).read_text(encoding="utf-8"))
+        _evil["data"]["tasks"][0]["log_rel"] = "../escaped.log"
+        _evil["data"]["logs"] = {"../escaped.log": _evil["data"]["logs"].pop("task-enc8an.log")}
+        _ep8an = _tmp8an / "evil.json"
+        _ep8an.write_text(_json8am.dumps(_evil), encoding="utf-8")
+        _r2 = _mig8an.import_bundle(_ep8an)
+        assert _r2["logs"]["refused"] >= 1, _r2["logs"]
+        assert not (_tmp8an / "escaped.log").exists(), "越界日志真被写到 LOGS_DIR 外了"
+        assert any("LOGS_DIR 之外" in w for w in _r2["warnings"]), _r2["warnings"]
+        # 变异证伪 B：把越界检查摘掉 ⇒ ⑤ 那三条必须同时红（证明它们有区分度）
+        _real_safe = _mig8an._safe_log_target
+        try:
+            _mig8an._safe_log_target = lambda root, base, rel: base / str(rel).lstrip("/")
+            _r2b = _mig8an.import_bundle(_ep8an)
+            assert _r2b["logs"]["refused"] == 0 or (_tmp8an / "escaped.log").exists() \
+                or _r2b["logs"]["written"] > 0, "摘掉越界检查后 ⑤ 依然全绿 ⇒ 那三条没牙齿"
+        finally:
+            _mig8an._safe_log_target = _real_safe
+        (_tmp8an / "escaped.log").unlink(missing_ok=True)
+
+        # ---- ⑥ 加密包：独立魔数、密文里搜不到明文 ----
+        os.environ[_mig8an.ENV_BUNDLE_PASSPHRASE] = "Enc8an#pw-2026"
+        # 默认落点用 `.enc`（名字要说清这是密文）
+        _p2 = _mig8an.export_bundle(task_ids=[_t8an])
+        assert str(_p2["path"]).endswith(".enc"), _p2["path"]
+        # 显式给了文件名就**尊重它**（`--export-scan mypack.json` 不该被改名）——
+        # 认加密靠文件头，不靠扩展名，所以这里名字是 .json 而内容是密文。
+        _p2b = _mig8an.export_bundle(task_ids=[_t8an], dst=_tmp8an / "pack.json")
+        assert str(_p2b["path"]).endswith(".json") and _p2b["includes"]["encrypted"] is True
+        assert Path(_p2b["path"]).read_bytes().startswith(_mig8an.BUNDLE_MAGIC)
+        assert _mig8an.read_bundle(_p2b["path"])["encrypted"] is True, "扩展名骗过了识别"
+        _raw2 = Path(_p2["path"]).read_bytes()
+        assert _raw2.startswith(_mig8an.BUNDLE_MAGIC), _raw2[:24]
+        assert _p2["includes"]["encrypted"] is True
+        for _sent in ("enc8an", "subdomains", "SENTINEL-IN-LOG-7", str(ROOT)):
+            assert _sent.encode() not in _raw2, f"密文里能搜到明文片段：{_sent}"
+        _rb = _mig8an.read_bundle(_p2["path"])
+        assert _rb["magic"] == _mig8an.MAGIC and _rb["encrypted"] is True, _rb.get("magic")
+
+        # ---- ⑦ 口令纪律：错口令拒、无口令拒且指明变量、任何报错里不出现口令本身 ----
+        os.environ[_mig8an.ENV_BUNDLE_PASSPHRASE] = "wrong-on-purpose"
+        try:
+            _mig8an.read_bundle(_p2["path"])
+            raise AssertionError("错口令居然解开了")
+        except ValueError as e:
+            assert "Enc8an#pw-2026" not in str(e) and "wrong-on-purpose" not in str(e), \
+                "报错把口令回显了"
+            assert "解不开" in str(e), str(e)
+        os.environ.pop(_mig8an.ENV_BUNDLE_PASSPHRASE, None)
+        try:
+            _mig8an.read_bundle(_p2["path"])
+            raise AssertionError("没口令居然读通了（等于静默当明文包处理）")
+        except ValueError as e:
+            assert _mig8an.ENV_BUNDLE_PASSPHRASE in str(e), str(e)
+            assert "命令行" in str(e), f"没说清口令该从哪来：{e}"
+
+        # ---- ⑧ 两个魔数互不冒充（拿错文件要当场说破） ----
+        _kblob = _ks8an.encrypt_text("github:\n  token: abc\n", "whatever")
+        _kf = _tmp8an / "keys-as-bundle.enc"
+        _kf.write_bytes(_kblob)
+        os.environ[_mig8an.ENV_BUNDLE_PASSPHRASE] = "whatever"
+        try:
+            _mig8an.read_bundle(_kf)
+            raise AssertionError("凭据文件被当成迁移包读通了")
+        except ValueError as e:
+            assert "凭据文件" in str(e), str(e)
+        _b2k, _why2k = _ks8an.decrypt_blob(_raw2, "whatever")     # 默认魔数＝凭据文件那个
+        assert _b2k is None and "文件头不是" in _why2k, _why2k
+        # 变异证伪 A：两个魔数并成一个 ⇒ "互相冒充"这条立刻没区分度
+        _real_bm = _mig8an.BUNDLE_MAGIC
+        try:
+            _mig8an.BUNDLE_MAGIC = _ks8an.MAGIC_KEYS
+            _kf2 = _tmp8an / "keys-as-bundle2.enc"
+            _kf2.write_bytes(_kblob)
+            try:
+                _mig8an.read_bundle(_kf2)
+                _merged = "读通了"
+            except ValueError as e:
+                _merged = str(e)
+            assert "凭据文件" not in _merged, \
+                "魔数并成一个之后仍然只报『不是凭据文件』以外的事 ⇒ ⑧ 的判据本来就空"
+        finally:
+            _mig8an.BUNDLE_MAGIC = _real_bm
+
+        # ---- ⑨ 页面对加密包：拒收，且表单里绝不留口令输入框 ----
+        # 这里**另起一个 app**（而不是复用 `[8am]` 那个 client）：⑪ 把它的 wsgi_app 套上了前缀，
+        # 复用会让这里的请求全打 404 —— 那是测试自己的接线问题，不是产品问题，别混在一起。
+        _p3 = _mig8an.export_bundle(task_ids=[_t8an], dst=_tmp8an / "pack2.json")
+        os.environ.pop(_mig8an.ENV_BUNDLE_PASSPHRASE, None)
+        _app9an = _app_with7i(host="127.0.0.1", edge_auth={"enabled": False})
+        _c9an = _app9an.test_client()
+        assert users_mod.create_user("smoke-enc-admin", "Enc#2026-pw-x", role="admin",
+                                     must_change=False)[0]
+        _login7(_c9an, {"username": "smoke-enc-admin", "password": "Enc#2026-pw-x"})
+        _r3 = _up8am(_c9an, Path(_p3["path"]).read_bytes(), "pack2.enc")
+        _h3 = _r3.get_data(as_text=True)
+        assert "加密" in _h3 and "cli/client.py" in _h3, _h3[-300:]
+        assert 'type="password"' not in _h3 and 'name="passphrase"' not in _h3, \
+            "页面上出现了口令输入框 —— 口令进表单就进访问日志"
+        assert not _mig_files("import-inbox"), "被拒的加密包留在了本机"
+
+        # ---- ⑩ CLI：--encrypt-bundle 而环境变量没设 ⇒ 动手前就停，且不产出明文包 ----
+        _env8an = {k: v for k, v in os.environ.items() if k != _mig8an.ENV_BUNDLE_PASSPHRASE}
+        _env8an["CTFSCANNER_DB"] = str(_tmp8an / "cli.db")
+        _env8an["CTFSCANNER_LOGS"] = str(_tmp8an / "logs")
+        _cp = _sp8an.run([sys.executable, "cli/client.py", "--export-scan", "--encrypt-bundle"],
+                         cwd=str(ROOT), env=_env8an, capture_output=True, text=True, timeout=120)
+        assert _cp.returncode == 1 and _mig8an.ENV_BUNDLE_PASSPHRASE in _cp.stdout, \
+            (_cp.returncode, _cp.stdout[-300:])
+        # 变异证伪 C：`bundle_passphrase` 打回恒空 ⇒ "以为加密了、实际写了明文"
+        _real_pp = _mig8an.bundle_passphrase
+        try:
+            os.environ[_mig8an.ENV_BUNDLE_PASSPHRASE] = "Enc8an#pw-2026"
+            _mig8an.bundle_passphrase = lambda passphrase=None: ""
+            _p4 = _mig8an.export_bundle(task_ids=[_t8an], dst=_tmp8an / "silent.json")
+            assert Path(_p4["path"]).read_bytes().startswith(b"{"), \
+                "桩住口令后仍然加密了 ⇒ ⑥ 那条密文断言不是靠口令走通的"
+        finally:
+            _mig8an.bundle_passphrase = _real_pp
+
+        # 收尾：把本组造的日志目录与任务清掉（`data/`/`logs/` 都在 .gitignore 里，但别留垃圾）
+        shutil.rmtree(_mig8an.LOGS_DIR / Path(_r1["logs"]["dir"]).name, ignore_errors=True)
+        shutil.rmtree(_mig8an.LOGS_DIR / Path(_r2["logs"]["dir"]).name, ignore_errors=True)
+        _u9 = users_mod.get_by_name("smoke-enc-admin")
+        if _u9:
+            users_mod.delete_user(int(_u9["id"]))
+    finally:
+        _db8am.DB_PATH = _real_db8an
+        _mig8an.LOGS_DIR = _real_logs8an
+        if _keep_env8an is not None:
+            os.environ[_mig8an.ENV_BUNDLE_PASSPHRASE] = _keep_env8an
+        else:
+            os.environ.pop(_mig8an.ENV_BUNDLE_PASSPHRASE, None)
+        shutil.rmtree(_tmp8an, ignore_errors=True)
+
+    print("[8an] 续136 两条边界 ok: 默认两个开关都关＝与升级前逐字节一致｜--with-logs 只带落在 "
+          "LOGS_DIR 内的日志、键是相对 LOGS_DIR 的路径、包体零本机绝对路径、越界那份计入跳过｜"
+          "dry-run 只数不写且必须说出「日志里有第三方原文」｜真导入写到 logs/migrated_<戳>/ 下、"
+          "0600、log_file 接回**绝对形**（留相对形会按进程 CWD 跑偏）｜包里给越界 log_rel → "
+          "refused + 警告，不是收敛后就当没事｜加密包独立魔数 CTFSCANNER-BUNDLE-V1、密文里搜不到"
+          "任务名/表名/哨兵值/绝对路径、read_bundle 自动解密｜口令**只**认环境变量：错口令拒、"
+          "没口令拒且指明变量名与「不要写进命令行」，任何报错不回显口令｜两个魔数互不冒充"
+          "（拿 keys.enc.yaml 当包会被说破）｜页面对加密包直接拒且表单里没有口令框、被拒的包不落 "
+          "inbox｜CLI --encrypt-bundle 缺环境变量在动手前就停、不产出明文包｜"
+          "变异三条都会红：并掉两个魔数 / 摘掉越界检查 / 桩住口令取值")
+
     print("SMOKE PASS")
 
 

@@ -27,6 +27,9 @@
 import functools
 import html
 import json
+import os
+import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -48,14 +51,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scanner import (admin_setup, audit, auth as taskauth, blacklist, captcha, cdn,
                      certs as certs_mod, db, devfixture, devmode, dnsq,
                      # 这三家反查与 GitHub 检索的**取键函数**归它们自己所有，面板只调用不复制路径
-                     extdom, fofa, github_leak, login_guard, nodes, queue, quake, screenshot,
+                     extdom, fofa, github_leak, login_guard, migrate, nodes, queue, quake,
+                     screenshot,
                      shodan, toolmgr, users)
 from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
 from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
-from scanner import diffview, edgeauth, keystore
+from scanner import diffview, edgeauth, keystore, webpath
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
@@ -436,6 +440,18 @@ _DEV_FIXTURE = {"httpd": None, "base": ""}
 # 续52：最近一次「全流程自检」的子进程输出（POST → redirect 跨请求带不了大文本，故存进程内）。
 # 自检是**串行**的开发工具，用单槽缓存即可（不需要并发安全）。
 _DEV_SELFCHECK = {"out": "", "code": None, "at": ""}
+
+
+def page_url(path):
+    """给"模板里自己拼出来的相对链接"补上本次挂载前缀（续138，`scanner/webpath.py`）。
+
+    `url_for()` 与 `redirect()` 会读 `SCRIPT_NAME` 自动带上前缀，但分页条的 `pager["base"]`
+    这类是**字符串路径**（12 处路由各自写的 `/tasks`、`/dirs`、`/pocs`……），不经过 url_for。
+    挂到随机前缀下后它们全指回根路径 404 —— 发现方式不是读代码，是真浏览器点「下一页」炸的
+    （`[7x]`：`document.querySelector('.pager')` 变 null）。
+    前缀为空（挂根路径 / `gui.web_path_random: false`）时**原样返回**，行为与升级前一字不差。
+    """
+    return (request.script_root or "") + str(path)
 
 # 续54：最近一次「外部工具下载/更新」的结果（POST → redirect 带不了结构化结果，故存进程内）。
 # 更新是**串行的管理操作**（单人点一次按钮），用单槽缓存即可，不需要并发安全。
@@ -1253,7 +1269,7 @@ def create_app():
             parts.append(f"stages={quote(stages_f)}")
         parts.append(f"size={size}")
         pager = {"page": page, "size": size, "total": total, "pages": pages,
-                 "base": "/tasks", "qs": "&" + "&".join(parts)}
+                 "base": page_url("/tasks"), "qs": "&" + "&".join(parts)}
         # 「统计」列：站点/域名数量（对齐参考图的 站点: N / 域名: N 展示）
         # 续91：一次算完整页的计数（原来 `{t["id"]: task_counts(t["id"])}` 是 N+1 ——
         # 每任务 7 条 COUNT，一页 100 个任务 = 700 次查询）。
@@ -1397,7 +1413,7 @@ def create_app():
             """
             return {"page": page, "size": size, "total": total,
                     "pages": max(1, (total + size - 1) // size),
-                    "base": f"/tasks/{task_id}",
+                    "base": page_url(f"/tasks/{task_id}"),
                     "qs": "&" + "&".join(([f"{prefix}q={quote(q)}"] if q else [])
                                          + [f"{prefix}size={size}"]) + extra,
                     "pname": prefix + "page", "anchor": anchor}
@@ -1594,7 +1610,7 @@ def create_app():
         # `vpage` —— 于是「下一页 / 末页」点了只是原样回到第 1 页（静默失效，页面上的页码数字
         # 还照常显示）。续57 给 `_pager.html` 加了 `pname` 才把这条修好。
         vuln_pager = {"page": vpage, "size": vsize, "total": vuln_total, "pages": _vpages,
-                      "base": f"/tasks/{task_id}", "qs": "&" + "&".join(_vparts),
+                      "base": page_url(f"/tasks/{task_id}"), "qs": "&" + "&".join(_vparts),
                       "pname": "vpage", "anchor": "#vulns"}
         return render_template(
             "task_detail.html", task=task,
@@ -1918,7 +1934,7 @@ def create_app():
         # `q` 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页**丢掉筛选条件**
         qs = (f"&q={quote(q)}&size={size}" if q else f"&size={size}") + ("&on=1" if only_on else "")
         pager = {"page": page, "size": size, "total": total, "pages": pages,
-                 "base": "/pocs", "qs": qs, "unit": "个 POC"}
+                 "base": page_url("/pocs"), "qs": qs, "unit": "个 POC"}
         return render_template("pocs.html", pocs=rows, stats=stats, pager=pager, q=q,
                                only_on=only_on)
 
@@ -2018,7 +2034,7 @@ def create_app():
         parts.append(f"desc={'1' if desc else '0'}")
         parts.append(f"size={size}")
         pager = {"page": page, "size": size, "total": total, "pages": pages,
-                 "base": "/vulns", "qs": "&" + "&".join(parts)}
+                 "base": page_url("/vulns"), "qs": "&" + "&".join(parts)}
         # 跨任务视图里只有 `任务 #12` 没法辨认，这里带上任务名，并支持按任务筛选。
         # 续55：改用"**有漏洞的任务**"（而不是 `list_tasks(limit=1000)`）—— 下拉只覆盖最新 1000 个
         # 任务时，老任务在下拉里**根本选不到**（筛不了），且它出现在表格里时「任务」列取不到名字、
@@ -2099,7 +2115,7 @@ def create_app():
         # q 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页、切标签**丢掉筛选条件**
         qs = f"&q={quote(q)}&size={size}" if q else f"&size={size}"
         pager = {"page": page, "size": size, "total": total, "pages": pages,
-                 "base": base, "qs": qs}
+                 "base": page_url(base), "qs": qs}
         return rows, pager, q
 
     def _cdn_tag():
@@ -2341,7 +2357,7 @@ def create_app():
         qs = f"&size={size}" + ("&cdn=1" if include_cdn else "") \
             + (f"&q={quote(q)}" if q else "")
         pager = {"page": page, "size": size, "total": total, "pages": pages,
-                 "base": "/ips", "qs": qs, "unit": "个 IP"}
+                 "base": page_url("/ips"), "qs": qs, "unit": "个 IP"}
         return render_template("ips.html", ips=rows, include_cdn=include_cdn,
                                pager=pager, q=q)
 
@@ -2448,7 +2464,7 @@ def create_app():
             groups, page = gp["groups"], gp["page"]
             row_total = gp["row_total"]
             pager = {"page": page, "size": EXT_GROUPS_PER_PAGE, "total": gp["group_total"],
-                     "pages": gp["pages"], "base": "/extdomains", "qs": qs,
+                     "pages": gp["pages"], "base": page_url("/extdomains"), "qs": qs,
                      # 分页条默认写"共 N 条"，而这里 N 是**主域名个数**（行数在下方单独一句）。
                      "unit": "个主域名"}
             subs = []
@@ -2639,7 +2655,7 @@ def create_app():
         # `q` 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页**丢掉筛选条件**
         qs = (f"&q={quote(q)}&size={size}" if q else f"&size={size}")
         pager = {"page": page, "size": size, "total": total, "pages": pages,
-                 "base": "/fullports", "qs": qs}
+                 "base": page_url("/fullports"), "qs": qs}
         return render_template("fullports.html", hosts=rows, pager=pager, q=q)
 
     @app.route("/api/ports/full-scan", methods=["POST"])
@@ -2749,7 +2765,7 @@ def create_app():
             # 分页单位是**组**（`total` 是组数、不是行数）→ 传 `unit`，否则与「命中数」列
             # 撞成两个含义不同的"条"（`_pager.html` 的 `unit`，同 `/extdomains` 分组视图）。
             pager = {"page": page, "size": size, "total": total, "pages": pages,
-                     "base": "/dirs", "qs": _qs(), "unit": "组"}
+                     "base": page_url("/dirs"), "qs": _qs(), "unit": "组"}
             return render_template("dirs.html", dirs=groups, pager=pager, q=q,
                                    show_all=show_all, hidden=hidden, agg=True,
                                    link_all=link_all, link_agg=link_agg,
@@ -3275,7 +3291,7 @@ def create_app():
             if _v:
                 parts.append(f"{_k}={quote(_v)}")
         pager = {"page": page, "size": size, "total": total, "pages": pages,
-                 "base": "/audit", "qs": "&" + "&".join(parts)}
+                 "base": page_url("/audit"), "qs": "&" + "&".join(parts)}
         return render_template("audit.html", rows=rows, pager=pager, kinds=audit.KINDS,
                                labels=audit.KIND_LABELS, kind=kind, actor=actor, ip=ip,
                                okarg=okarg, q=q, summary=audit.summary(settings=settings),
@@ -3524,6 +3540,214 @@ def create_app():
         """
         return [scrub_paths(ln) for ln in tail_lines(path, n)]
 
+    # ================= 续138：数据迁移（导出 / 导入）在控制台里的入口 =================
+    # 为什么值得给 GUI 开这个口子：`--export-scan` / `--import-scan` 是"换机器接着用"的日常动作，
+    # 而 CLI 要求人先知道自己那几个任务 id。
+    # **页面刻意比 CLI 少三个开关**：账号口令哈希（`--with-users`）、任务登录态请求头
+    # （`--with-task-auth`）、凭据文件（`config/keys*.yaml` / `edge_auth.yaml`）—— 服务端硬写
+    # `False`，页面上连复选框都不画。理由：浏览器点一下就"把能登录别人系统的东西"变成一个可下载
+    # 的附件，而这一页可能开在任何人的笔记本上；那三个开关留在 CLI，至少每次都是人在命令行手敲。
+    # 导入侧同理：**含账号/凭据/登录态的包在本页一律拒绝**，让人回 CLI 看着警告确认。
+    MIGRATE_MAX_UPLOAD = 64 * 1024 * 1024          # 64 MB：迁移包是 JSON，正常远小于此
+    MIGRATE_PREVIEW_TTL = 600                      # 「预检 → 确认」之间最多隔 10 分钟
+
+    def _inbox_dir():
+        """上传的包先落在这里（`data/import-inbox/`，0600，确认导入后删除）。
+
+        为什么落盘而不是内存：预检要拍一份**导入前整库快照**、确认又是另一个请求，
+        一份几十 MB 的包重复上传两次既慢又要把身体塞进 session。放 `data/` 是因为
+        `.gitignore` 只覆盖 `data/`（AGENTS §2：绝不往被跟踪的目录里写带数据的东西）。
+        """
+        d = Path(db.DB_PATH.parent) / "import-inbox"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _mig_pending():
+        """本次会话里那张"已预检、待确认"的条据；过期或没有就返回 None。"""
+        st = session.get("mig_pending") or {}
+        if not st or time.time() > float(st.get("exp") or 0):
+            return None
+        return st
+
+    def _mig_prune():
+        """清掉 inbox 里**过期**的上传副本（超过 `MIGRATE_PREVIEW_TTL` 还没人确认）。
+
+        不做的后果：每一次"预检了但没点确认"（换页、关标签页、预检后改主意）都会在本机留一份
+        别人的扫描数据，永远没人清 —— 而那份东西的敏感度和迁移包一样。
+        判据用 mtime（文件就是预检那一刻创建的），与 `_mig_pending()` 的过期时间是同一个值，
+        所以"还能确认"与"还被留着"不会分叉。
+        """
+        cut = time.time() - MIGRATE_PREVIEW_TTL
+        for p in _inbox_dir().glob("*.json"):
+            try:
+                if p.stat().st_mtime < cut:
+                    p.unlink(missing_ok=True)
+            except OSError:
+                pass        # 删不动就多留一次，绝不因此把页面带崩
+
+    def _migrate_page(msg="", error="", plan=None, token="", done=None):
+        _mig_prune()
+        return render_template(
+            "migrate.html", msg=msg, error=error, plan=plan, token=token, done=done,
+            export_dir=rel_display(str(migrate.default_dst()), mask_outside=True),
+            max_mb=MIGRATE_MAX_UPLOAD // 1048576, ttl_min=MIGRATE_PREVIEW_TTL // 60,
+            pending=bool(_mig_pending()))
+
+    @app.route("/migrate")
+    @login_required
+    @admin_required
+    def migrate_page():
+        return _migrate_page()
+
+    @app.route("/api/migrate/export", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_migrate_export():
+        me = _session_user()
+        raw_ids = (request.form.get("ids") or "").strip()
+        ids, bad = [], []
+        for part in re.split(r"[,\s]+", raw_ids):
+            if not part:
+                continue
+            try:
+                ids.append(int(part))
+            except (TypeError, ValueError):
+                bad.append(part)
+        if bad:
+            _audit(audit.KIND_MIGRATE, target="export", ok=False,
+                   detail=f"任务 id 不是整数：{bad[:5]}")
+            return _migrate_page(error="任务编号只能是整数，无法理解的那几个："
+                                      + "、".join(str(b) for b in bad[:5]))
+        mine = (request.form.get("mine") or "") in ("1", "on", "true", "yes")
+        owner = int(me["id"]) if mine and me else None
+        try:
+            res = migrate.export_bundle(dst=None, task_ids=(ids or None), owner_id=owner,
+                                        with_users=False, with_task_auth=False)
+        except Exception as e:                                  # noqa: BLE001 - 如实回报
+            _audit(audit.KIND_MIGRATE, target="export", ok=False,
+                   detail=f"导出失败：{type(e).__name__}: {e}")
+            return _migrate_page(error=f"导出失败：{type(e).__name__}: {e}")
+        rel = rel_display(str(res.get("path") or ""), mask_outside=True)
+        inc = res.get("includes") or {}
+        n_assets = sum(int(v or 0) for v in (inc.get("assets") or {}).values())
+        _audit(audit.KIND_MIGRATE, target=rel,
+               detail=f"导出迁移包：任务 {inc.get('tasks') or 0} 个 / 资产 {n_assets} 条；"
+                      "不含账号、不含凭据文件、不含任务登录态（页面上没有这三个开关）")
+        return _migrate_page(
+            msg=(f"已导出：{rel}（{(int(res.get('bytes') or 0) / 1024):.0f} KB，0600）"
+                 f"｜任务 {inc.get('tasks') or 0} 个 / 资产 {n_assets} 条"
+                 + (f"｜按来源 {inc.get('sources')}" if inc.get("sources") else "")))
+
+    @app.route("/api/migrate/preview", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_migrate_preview():
+        f = request.files.get("file")
+        if not f:
+            return _migrate_page(error="没收到文件 —— 请先「选择文件」再点预检")
+        name = Path(str(f.filename or "")).name[:120] or "(未命名)"
+        body = f.read()
+        if len(body) > MIGRATE_MAX_UPLOAD:
+            _audit(audit.KIND_MIGRATE, target=name, ok=False,
+                   detail=f"上传包超限：{len(body)} 字节")
+            return _migrate_page(error=f"迁移包超过 {MIGRATE_MAX_UPLOAD // 1048576} MB，"
+                                       f"已拒绝（实到 {len(body)} 字节）。本机库未做任何改动。")
+        dest = _inbox_dir() / (secrets.token_hex(8) + ".json")
+        if body[:len(migrate.BUNDLE_MAGIC)] == migrate.BUNDLE_MAGIC:
+            # 加密包在本页**直接拒**，不是"先收下再说"：要解它就得把口令交进浏览器 ——
+            # 口令进表单字段就等于进 access log / CSRF 中间件 / 别人肩上的屏幕。
+            # 解包这件事属于 CLI：`CTFSCANNER_BUNDLE_PASSPHRASE=… python cli/client.py --import-scan …`。
+            _audit(audit.KIND_MIGRATE, target=name, ok=False, detail="加密包在页面上被拒（不在浏览器里口令入库）")
+            return _migrate_page(
+                error="这是**加密**迁移包（CTFSCANNER-BUNDLE-V1）。本页面不接收它 —— 解它要把口令"
+                      "交进浏览器，而表单字段会进访问日志与任何看着屏幕的人。请走命令行："
+                      f"{migrate.ENV_BUNDLE_PASSPHRASE}='口令' python cli/client.py "
+                      "--import-scan 该包.enc（口令不要写在命令里，用环境变量）")
+        try:
+            dest.write_bytes(body)
+            os.chmod(dest, 0o600)
+        except OSError as e:
+            return _migrate_page(error=f"临时存放失败：{e}（本机库未做任何改动）")
+        # 先按**包内容**判性质，而不是信 `includes` 那段自我声明：这个文件是别人产出的，
+        # 声明与内容不符才是需要防的那种包。
+        try:
+            bundle = migrate.read_bundle(dest)
+        except Exception as e:                                  # noqa: BLE001
+            dest.unlink(missing_ok=True)
+            _audit(audit.KIND_MIGRATE, target=name, ok=False, detail=f"预检失败：{e}")
+            return _migrate_page(error=f"这个包读不懂，已退回：{e}（本机库未做任何改动）")
+        data = bundle.get("data") or {}
+        carry = [k for k, label in (("users", "账号口令哈希"), ("nodes", "节点令牌哈希"),
+                                    ("credentials", "凭据文件")) if data.get(k)]
+        if (bundle.get("includes") or {}).get("task_auth"):
+            carry.append("任务登录态请求头")
+        if carry:
+            dest.unlink(missing_ok=True)
+            _audit(audit.KIND_MIGRATE, target=name, ok=False,
+                   detail=f"含 {('、'.join(carry))} 的包在页面上被拒绝")
+            return _migrate_page(
+                error=("这个包里带着 " + "、".join(carry) +
+                       " —— 本页面**不接收**这类包（导入即成为本机登录凭据）。"
+                       "确实要迁账号请用命令行：`python cli/client.py --import-scan 该包.json`，"
+                       "它会逐条列出警告再让你确认。本机库未做任何改动。"))
+        try:
+            plan = migrate.import_bundle(dest, dry_run=True)
+        except Exception as e:                                  # noqa: BLE001
+            dest.unlink(missing_ok=True)
+            _audit(audit.KIND_MIGRATE, target=name, ok=False, detail=f"预检没通过：{e}")
+            return _migrate_page(error=f"预检没通过：{e}（本机库未做任何改动）")
+        token = secrets.token_hex(16)
+        session["mig_pending"] = {"token": token, "path": str(dest), "name": name,
+                                  "exp": time.time() + MIGRATE_PREVIEW_TTL}
+        _audit(audit.KIND_MIGRATE, target=name,
+               detail=f"预检迁移包：任务 {len(plan.get('tasks') or {})} 个 / "
+                      f"资产 {sum(int(v or 0) for v in (plan.get('assets') or {}).values())} 条 / "
+                      f"警告 {len(plan.get('warnings') or [])} 条（未写库）")
+        return _migrate_page(plan=plan, token=token,
+                             msg="预检完成 —— **还没写任何数据**。核对无误后点「确认导入」。"
+                                 f"这张条据 {MIGRATE_PREVIEW_TTL // 60} 分钟内有效，且只能用一次。")
+
+    @app.route("/api/migrate/apply", methods=["POST"])
+    @login_required
+    @admin_required
+    def api_migrate_apply():
+        st = _mig_pending()
+        tok = (request.form.get("token") or "").strip()
+        if not st or not tok or not secrets.compare_digest(str(st.get("token")), tok):
+            _audit(audit.KIND_MIGRATE, target="apply", ok=False, detail="确认令牌无效或已过期")
+            return _migrate_page(error="确认令牌无效或已过期 —— 请重新上传并预检。"
+                                       "本机库未做任何改动。")
+        session.pop("mig_pending", None)          # 一次性：同一张包不能被点两次
+        src = Path(str(st.get("path") or ""))
+        if not src.is_file():
+            return _migrate_page(error="那份待确认的包已经不在了，请重新上传。"
+                                       "本机库未做任何改动。")
+        try:
+            res = migrate.import_bundle(src, dry_run=False)
+        except Exception as e:                    # noqa: BLE001 - ImportAborted 也走这里
+            snap = getattr(e, "snapshot", "")
+            _audit(audit.KIND_MIGRATE, target=src.name, ok=False,
+                   detail=f"导入中止：{type(e).__name__}: {e}")
+            return _migrate_page(
+                error=(f"导入中止：{e}"
+                       + (f"（导入前的整库快照：{rel_display(str(snap), mask_outside=True)}，"
+                          f"库已按原样保留）" if snap else "")))
+        n_tasks = len(res.get("tasks") or {})
+        n_assets = sum(int(v or 0) for v in (res.get("assets") or {}).values())
+        u = res.get("users") or {}
+        nd = res.get("nodes") or {}
+        src.unlink(missing_ok=True)               # 上传的副本用完就删（快照才是回滚点）
+        _audit(audit.KIND_MIGRATE, target=rel_display(str(src), mask_outside=True),
+               detail=f"导入完成：新任务 {n_tasks} 个 / 资产 {n_assets} 条 / "
+                      f"账号 新增 {u.get('added', 0)} 跳过 {u.get('skipped', 0)} / "
+                      f"节点 新增 {nd.get('added', 0)} 跳过 {nd.get('skipped', 0)}")
+        res = dict(res)
+        # 快照路径给**相对形**（AGENTS §0.3：页面里绝不出现本机绝对路径），回滚命令才拼得出来
+        res["snapshot_display"] = rel_display(str(res.get("snapshot") or ""), mask_outside=True)
+        return _migrate_page(
+            done=res, msg=f"导入完成：新任务 {n_tasks} 个 / 资产 {n_assets} 条。"
+                          "上传的那份副本已删除；导入前的整库快照保留（下面有路径）。")
+
     return app
 
 
@@ -3585,6 +3809,50 @@ def _deploy_hints(gui_cfg):
     return lines
 
 
+def _web_base_for(settings):
+    """本次启动的挂载前缀，返回 `(前缀, 要额外打印的行)`（续138）。
+
+    优先级：环境变量 `CTFSCANNER_WEB_PATH`（**空串＝挂根路径**，给 browser_e2e / 嵌入用法 /
+    就想固定路径的人留的显式口子）> `gui.web_path_random=false` 时的根路径 > 随机生成。
+    那个环境变量写了个不合格的值（连续斜杠、`..`、不以 `/` 开头、大写……）时**不静默挂根**：
+    根路径正是本功能要消掉的暴露面，静默降级会让人以为开关还开着。改成照旧随机 + 打印原因。
+    刻意**不读任何文件**：这条 URL 一旦落盘，"重启后还能找回来"的收益就远小于泄露面，
+    而用户原话就是"每次启动的时候随机生成"；`config/settings.yaml` 更是被 git 跟踪的公开仓库文件。
+    """
+    import os
+    env = os.environ.get("CTFSCANNER_WEB_PATH")
+    if env is not None:
+        try:
+            return webpath.normalize(env), []
+        except ValueError as e:
+            # 不合格**不降级成根路径**（那正是本功能要消掉的暴露面），而是照旧随机 + 说清原因
+            return webpath.new_base(), [
+                f"[!] CTFSCANNER_WEB_PATH 不合格：{e}",
+                '    本次仍用随机前缀（要固定挂根请显式给空串：CTFSCANNER_WEB_PATH=""）',
+            ]
+    gui = settings.get("gui") or {}
+    if not gui.get("web_path_random", True):
+        return "", []
+    return webpath.new_base(), []
+
+
+def webpath_hints(base, host, port):
+    """启动横幅那几行：完整地址 + "它不是认证" + 节点端要改什么。
+
+    单一产地：`serve()` 只调它拿行，别处不再拼第二遍（续124 那条）。
+    """
+    url = f"http://{host}:{port}{base}/"
+    out = [f"[*] 控制台地址：{url}"]
+    if base:
+        out.append("    后台路径为**本次启动随机生成**（两层各 10 位），重启即换；"
+                   "根路径与错误路径一律 404 空响应，不给扫描者任何提示。")
+        out.append("    ⚠ 这**不是**访问控制 —— 拿到这个地址的人照样到得了登录页，"
+                   "真门槛仍是 401 边缘门与 `users` 表账号这两道。")
+        out.append("    执行节点要连的话，`run_node.py --controller` 必须指到上面这个**含前缀的完整地址**"
+                   "（前缀变了节点就 404，表现成「节点一直不领任务」）。")
+    return out
+
+
 def serve(start_queue=True):
     """控制台统一启动入口（run_gui.py 与 `python gui/app.py` 共用）。
 
@@ -3620,7 +3888,6 @@ def serve(start_queue=True):
         queue.start(_settings)
         print(f"[*] 任务队列已启动：{queue.config(_settings)['workers']} 个 worker"
               "（queue.workers；进程重启后未完成任务会自动重新入队）")
-    print(f"[*] CTFScanner 控制台: http://{host}:{port}")
     # 续117：库里还没有账号 → **在启动前**把第一个管理员建出来。
     # 以前这里印的是"去 settings.yaml 里找那个共享口令"，而那文件被 git 跟踪、仓库公开；
     # 现在配置文件里没有任何可登录的凭据，首启动就只能交互式建号（口令只进 users 表的派生值）。
@@ -3636,6 +3903,20 @@ def serve(start_queue=True):
         print("    控制台仍会继续启动，此时无人能登录；补建：python run_users.py --create-admin")
     else:
         print("[*] 多用户已启用：请用已创建的账号登录（管理员可在「账号」页建/停用子用户）。")
+    # ---- 续138：把控制台挂到**本次启动随机生成**的两段路径下（用户点单）----
+    # 只换 `app.wsgi_app`（不动 `app.run` 的调用形式）：`[7i]` 靠打桩 `app.run` 验启动提示，
+    # 换成 `run_simple(wrapped)` 会让那条回归失效；挂在 wsgi_app 上则 Flask 自己跑同一条路。
+    _wp, _wn = _web_base_for(_settings)
+    # 记一下"没挂前缀的原样"，`serve()` 返回时要摘掉（见下面的 finally）—— 不摘就是往模块级
+    # `app` 上永久留了一层随机前缀：同进程后续任何 `app.test_client().get("/login")` 都会 404。
+    _inner138 = getattr(app.wsgi_app, "_ctf_inner", app.wsgi_app)
+    if getattr(app.wsgi_app, "_ctf_prefix", False):
+        app.wsgi_app.base = _wp                 # 同进程二次 serve（嵌套）：换值，不套第二层
+    else:
+        app.wsgi_app = webpath.PrefixMiddleware(app.wsgi_app, _wp)
+        app.wsgi_app._ctf_inner = _inner138
+    for _line in webpath_hints(_wp, host, port) + _wn:
+        print(_line)
     # 续47：HTTPS 与 Host 白名单的现状**在启动时就说明白**（部署排错时最先看的就是这几行）。
     # 文案由 `_deploy_hints()` 生成 —— 抽成纯函数是为了让回归门禁能**真跑**这些告警
     # （`serve()` 会起真实服务器，测试不能调它；而"只 grep 源码里有这个字符串"证明不了运行期行为）。
@@ -3657,7 +3938,15 @@ def serve(start_queue=True):
     # ST_DISABLED：门没开 → 一个字都不多说（默认配置必须保持安静）
     for _line in _deploy_hints(s):
         print(_line)
-    app.run(host=host, port=port, debug=False)
+    try:
+        app.run(host=host, port=port, debug=False)
+    finally:
+        # 续138：`app.run()` 一返回就把 `app.wsgi_app` 还原成没挂前缀的原样。两个理由：
+        # ① 回归 `[7i]` 会**真调 `serve()`**（`app.run` 打桩成立刻返回），不还原就等于把模块级
+        #    `app` 挂在一个随机前缀下 —— 后面每组用 `gui_app.app.test_client()` 的断言全变 404，
+        #    报成"路径随机化把别的用例搞红了"（假红，且每次红的组不一样，最难查那种）。
+        # ② 程序化调 `serve()` 的嵌入用法同样期望拿到一个还能用的 app，而不是一次性的。
+        app.wsgi_app = _inner138
 
 
 if __name__ == "__main__":

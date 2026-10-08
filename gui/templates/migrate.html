@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}数据迁移{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+
+<section class="panel">
+  <h2>这一步在做什么</h2>
+  <p class="muted">
+    把<b>扫描数据</b>（任务 + 九张资产表）打包成一份 JSON 带走，或把别人给的包装进本机库。
+    导出落点：<code>{{ export_dir }}</code>（在 <code>data/</code> 里，被 <code>.gitignore</code>
+    覆盖，权限 <code>0600</code>）。
+  </p>
+  <p class="muted">
+    ⚠ <b>迁移包里默认没有任何凭据</b>：账号口令哈希、节点令牌哈希、<code>config/keys*.yaml</code>、
+    <code>edge_auth.yaml</code>、任务里带的 Cookie/Authorization —— 一个都不带。
+    <b>本页面也没有打开它们的开关</b>（刻意不画）：要带那些东西请走命令行
+    <code>python cli/client.py --export-scan --with-users --with-task-auth</code>，
+    警告会逐条列在你眼前、每一条都写明「带出去等于什么」。
+  </p>
+  <p class="muted">
+    反过来也一样：上传的包里<b>如果含账号 / 凭据 / 登录态，本页面直接拒绝</b>，
+    让你回 CLI 看着警告确认。
+  </p>
+</section>
+
+<section class="panel">
+  <h2>① 导出</h2>
+  <form method="post" action="{{ url_for('api_migrate_export') }}">
+    <p>
+      <label>任务编号（留空＝<b>全部</b>任务；多个用逗号或空格隔开）</label><br>
+      <input type="text" name="ids" placeholder="例如 12 13，或 12,13" style="min-width:22rem">
+    </p>
+    <p>
+      <label><input type="checkbox" name="mine" value="1"> 只导<b>我自己名下</b>的任务</label>
+      <span class="muted small">（勾上后就算填了编号，也只保留属于当前账号的那些）</span>
+    </p>
+    <p><button type="submit">导出迁移包</button></p>
+    <p class="muted small">导出是<b>只读</b>动作：不改库里任何一行。日志文件<b>不</b>进包
+      （里面可能有第三方接口原文）。</p>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>② 导入：先预检，再确认</h2>
+  <form method="post" action="{{ url_for('api_migrate_preview') }}" enctype="multipart/form-data">
+    <p><input type="file" name="file" accept=".json,application/json"></p>
+    <p><button type="submit">只做预检（不写库）</button>
+      <span class="muted small">上限 {{ max_mb }} MB。预检会拍一份<b>导入前整库快照</b>再算清单。</span></p>
+  </form>
+
+  {% if plan %}
+  <h3>预检结果（<b>还没写任何数据</b>）</h3>
+  <table>
+    <tr><th>包里的任务</th><td>{{ plan.tasks|length }} 个 —— 导入时<b>一律给新编号</b>，
+      不会覆盖本机同 id 的任务</td></tr>
+    <tr><th>资产</th><td>
+      {% for t, n in plan.assets.items() %}<code>{{ t }}</code> {{ n }} 条　{% endfor %}
+      {% if not plan.assets %}（无）{% endif %}</td></tr>
+    <tr><th>账号 / 节点</th><td>新增 {{ plan.users.added }} / 跳过 {{ plan.users.skipped }}　·
+      节点 新增 {{ plan.nodes.added }} / 跳过 {{ plan.nodes.skipped }}
+      <span class="muted small">（同名一律跳过 —— 覆盖等于用包里的旧哈希顶掉本机口令）</span></td></tr>
+    <tr><th>任务登录态</th><td>{{ plan.task_auth_in_bundle }} 条
+      <span class="muted small">（默认剥掉，包里不该有）</span></td></tr>
+  </table>
+  {% if plan.warnings %}
+  <h4>警告 {{ plan.warnings|length }} 条</h4>
+  <ul class="muted">
+    {% for w in plan.warnings %}<li>{{ w }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  <form method="post" action="{{ url_for('api_migrate_apply') }}">
+    <input type="hidden" name="token" value="{{ token }}">
+    <p><button type="submit">确认导入（会写库）</button>
+      <span class="muted small">这条确认只用一次、{{ ttl_min }} 分钟内有效。导入完成后
+      上传的那份副本会被删掉，快照保留作为回滚点。</span></p>
+  </form>
+  {% endif %}
+
+  {% if done %}
+  <h3>导入完成</h3>
+  <table>
+    <tr><th>编号映射</th><td class="mono small">
+      {% for old, new in done.tasks.items() %}#{{ old }}→#{{ new }}　{% endfor %}</td></tr>
+    <tr><th>资产</th><td>
+      {% for t, n in done.assets.items() %}<code>{{ t }}</code> {{ n }} 条　{% endfor %}</td></tr>
+    {% if done.snapshot %}
+    <tr><th>导入前快照</th><td><code>{{ done.snapshot_display }}</code></td></tr>
+    {% endif %}
+  </table>
+  <p class="muted small">新任务的状态是 <b>stopped</b>（包里的 running/queued 与 pid 到这台机器上
+    必然是假的）；要接着跑请手动「续跑 / 重启」—— 框架<b>不会</b>因为导入了包就自己发起扫描。</p>
+  {% endif %}
+</section>
+{% endblock %}

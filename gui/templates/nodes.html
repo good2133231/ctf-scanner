@@ -10,7 +10,9 @@
     （丢了就吊销重建）。</p>
   <p><code>{{ new_token }}</code></p>
   <p class="muted small">节点端启动（在<b>节点机器</b>上跑同一份代码）：
-    <code>py -3 run_node.py --controller {{ request.host_url }} --token {{ new_token }} --name {{ new_name }}</code></p>
+    <code>py -3 run_node.py --controller {{ request.url_root }} --token {{ new_token }} --name {{ new_name }}</code>
+    {# 续138：这里必须用 `url_root` 而不是 `host_url` —— 后者不含 SCRIPT_NAME，
+       后台路径随机化（默认开）时照这句敲的节点会一路 404，现象只是「节点一直不领任务」。 #}</p>
 </section>
 {% endif %}
 

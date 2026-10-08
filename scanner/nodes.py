@@ -317,6 +317,15 @@ class NodeClient:
         resp = requests.post(self.base + path, json=payload, timeout=self.timeout,
                              verify=not self.insecure,
                              headers={"X-Node-Token": self.token, "Content-Type": "application/json"})
+        if resp.status_code == 404:
+            # 续138：控制台默认挂在**每次启动随机生成**的两段路径下。`--controller` 只写到
+            # `http://host:5000` 就会一路 404，而那个 404 是**空响应体**（刻意的：不给探测者任何
+            # 信息）—— 于是现象只是"节点安静地不领任务"。这句话必须进异常，否则没人往这上面想。
+            raise RuntimeError(
+                f"控制端对 {path} 回了 404 且响应体为空。控制端开着后台路径随机化时（默认开，续138），"
+                "--controller 必须填启动横幅里那行**含前缀的完整地址**"
+                "（形如 http://10.0.0.5:5000/xxxxxxxxxx/yyyyyyyyyy）；前缀每次启动都换，"
+                "重启过控制端就要同步改这里。")
         resp.raise_for_status()
         return resp.json()
 

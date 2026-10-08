@@ -13,6 +13,12 @@
 
 控制台**仍然只绑 `127.0.0.1:5000`**（`gui.host` / `gui.port` 不用改），反代与本机应用同机通信。
 
+它还挂在**每次启动随机生成**的两段路径下（续138，`scanner/webpath.py`）：反代按路径透传就行，
+`proxy_pass` / `reverse_proxy` **一行都不用改**；但**健康检查与排错 curl 必须带上那个前缀**，
+否则会拿到 404 空响应而误判成"反代没通"。要固定入口（写监控探针、给同事发书签）就设环境变量
+`CTFSCANNER_WEB_PATH=/console`（空串＝挂回根路径），或在 `config/settings.yaml` 写
+`gui.web_path_random: false` —— 后者是把暴露面放回原样，取舍自己知道就行。
+
 ## 1. 三步落地
 
 **① 改 `config/settings.yaml` 的 `gui` 段**（改完**重启控制台**才生效）：
@@ -119,22 +125,26 @@ Nginx 里把 `ssl_certificate` / `ssl_certificate_key` 指到这两个文件，`
 ```bash
 DOMAIN=scanner.example.com
 
-# ① 能通、且被跳去登录页（未登录访问 / 应 302 到 /login）
-curl -sSI "https://$DOMAIN/" | head -5
+# ① 能通、且被跳去登录页（未登录访问 <前缀>/ 应 302 到 <前缀>/login）
+#    $PFX ＝ 启动横幅「[*] 控制台地址：」里端口后面那两段路径（续138：每次启动随机）
+PFX=/k7m2q8x3pd/5w9yt4hrcb          # ← 换成你这次看到的那段；不带前缀一律 404 空响应
+curl -sSI "https://$DOMAIN$PFX/" | head -5
 
 # ② 登录响应里的会话 Cookie 必须带 Secure（说明 secure_cookie 生效）
 curl -sSi -X POST "https://$DOMAIN/login" \
   -d "username=<你的账号>&password=<你的口令>" | grep -i '^set-cookie'
 
 # ③ 换一个**不在白名单**的 Host 必须 403（DNS rebinding 防护仍在）
-curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: evil.example' "http://127.0.0.1:5000/login"
+curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: evil.example' "http://127.0.0.1:5000$PFX/login"
 
 # ④ 反代有没有把真实域名传进来（behind_proxy 生效时，页面里的自跳转会带上域名）
 curl -sS "https://$DOMAIN/login" | grep -i '<title>'
 ```
 
-期望：① 302 到 `/login`；② 出现 `Set-Cookie: session=...; Secure; HttpOnly; SameSite=Lax`；
-③ 输出 `403`；④ 正常返回登录页（不是 403）。
+期望：① 302 到 `<前缀>/login`（`Location` 里必须带着前缀，没带就是反代吞了路径）；② 出现
+`Set-Cookie: session=...; Secure; HttpOnly; SameSite=Lax`；③ 输出 `403`；④ 正常返回登录页（不是 403）。
+**忘了带前缀 → 一律 404 空响应**，那不是反代坏了，也不是 Host 白名单在拦（③ 拿到 404 同理，
+先回去检查 `$PFX`）。
 
 **排错对照**：
 

@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <title>登录 - CTFScanner</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{# 续138：后台路径每次启动随机 —— 每个页面都要能告诉 JS「我挂在哪个前缀下」，
+   登录页是独立模板（不 extends base.html），所以这行必须单独也有一份。 #}
+<meta name="ctf-base" content="{{ request.script_root }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="login-page">

@@ -29,6 +29,8 @@ python cli/client.py -t <单目标> [选项]
 | `--full-report` | **「完整版」报告**：资产小节**不截断**（默认各节限 100/200 条，被截断时小节标题会写明总数与出口）。只影响 `--report` / `--report-html` / `--report-pdf`；`--report-jsonl` 本来就是全量 |
 | `--check` | 打印外部工具可用性并退出（`subfinder` / `httpx` / `puredns` / `nmap` / `fscan` / `dirmap`）。末尾另列一段**「需手工安装（本框架不自动下载）」**（`nmap` / `fscan` / `dirmap` + 各自原因）：这三个**不在** `--update-tools` 的覆盖范围内，官方没有"可校验的单二进制产物" |
 | `--check-afrog-pocs [目录]` | **只读**自查 afrog 的 PoC 目录：多少条模板属于「只读 + info 级」（才会被喂给外部引擎）、以及每条被拒的原因（按原因分组计数）。不发任何请求、不改配置、然后退出；目录省略时用策略里的 `afrog.poc_dir`。退出码：`0` 查到结果（含"可喂的一个都没有"这一种，仍然算查到了结果），`1` 没给目录也无处可取 |
+| `--encrypt-bundle` | 配合 `--export-scan`：**整包加密**（AES-256-GCM + PBKDF2 60 万次，文件头 `CTFSCANNER-BUNDLE-V1`）。口令**只**从环境变量 `CTFSCANNER_BUNDLE_PASSPHRASE` 读，没设就在动手前停住、不产出任何文件（不提供"口令写在命令行里"这条路：argv 会留在 `ps` / shell history / 别的进程可读的 `/proc/<pid>/cmdline`）。默认落点因此叫 `.enc`；你显式给了文件名就照你的名字写（识别靠文件头，不靠扩展名）。导入侧同样只读该变量并自动识别 |
+| `--with-logs` | 配合 `--export-scan`：把**任务日志**一起带走。默认不带 —— 日志里有第三方接口的返回原文、目标响应体，偶发还有口令痕迹。只带落在 `logs/` 之内的文件（越界的一律跳过并计数），单文件 5 MB / 总量 25 MB 封顶，**超限就整个跳过、不静默截断**。导入时写到 `logs/migrated_<时间戳>/` 下、`0600`、同名不覆盖，并把 `tasks.log_file` 接回本机绝对路径 |
 | `--export-scan [FILE]` | **导出扫描数据成一份迁移包**（续136，跨机搬家/交给同事复看）：默认只有 `tasks` + 九张资产表，**账号表、`config/keys*.yaml`、`edge_auth.yaml`、任务里的登录态请求头一律不带**。落点默认 `data/export/migration_<时间>.json`（在 `.gitignore` 覆盖的 `data/` 底下），写出即 `0600`；然后退出。附属旗标不给主旗标会**直接报错**（不静默忽略）：`--only-tasks 1,2` 只导指定任务、`--with-users` 才把口令哈希与凭据文件一起打包（**这一步会让迁移包变成能登录的凭据包**，只在两台机器都归你时用）、`--with-task-auth` 才保留任务登录态请求头。`logs/` 下的任务日志/报告/截图不在包里（导出时会明说）
 | `--import-scan FILE` | **导入迁移包**（续136）：任务一律给**新 id**（旧号一概不覆盖，映射会打印出来）、`running/queued` 归一为 `stopped` 且 `pid` 归零（换机器后那个进程必然不存在；也**不会自动续跑** —— 导入完就自己开扫等于用一份文件在别人机器上发起对外请求）、同名账号与已存在的凭据文件**只跳过不覆盖**；写之前先拍一份**整库快照**（`sqlite3` 的 backup API，WAL 下不能 copy 文件）落在 `data/trash/preflight_import_*.db`。坏包（magic 不符 / `format` 比本程序新）**拒绝导入且库一行不动**。`--dry-run` 与真跑**共用同一条判据**（不写数据行，只报会导入什么）
 
@@ -87,8 +89,19 @@ python cli/client.py -t http://target.local/ --cookie "SESSION=xxx" -H "X-Api-Ke
 ## Web 控制台（GUI）
 
 ```bash
-python run_gui.py          # 默认 http://127.0.0.1:5000
+python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（路径每次随机）
 ```
+
+**后台地址每次启动随机生成**（续138，`scanner/webpath.py`）：控制台挂在
+`http://127.0.0.1:5000/<10 位>/<10 位>/` 下，入口就是启动横幅里那行 `[*] 控制台地址：…`。
+直接开 `http://127.0.0.1:5000` 会得到 **404 空响应** —— 根路径与任何错误路径都是这个形状，
+故意的：不给扫端口的人留下"这里有个后台"的任何信号（不重定向、不回 401）。重启即换、
+**不写进任何文件**（`config/settings.yaml` 被 git 跟踪、仓库公开）。
+⚠ 这**不是访问控制**：拿到那条 URL 的人照样到得了登录页，真门槛是 401 边缘门 + 账号口令。
+`gui.web_path_random: false` 挂回根路径；要固定前缀用环境变量 `CTFSCANNER_WEB_PATH=/console`
+（空串＝根路径；写得不合法不会静默降级，而是照旧随机并打印原因）。
+执行节点要连的话，`run_node.py --controller` 必须填**含前缀的完整地址**，否则一路 404、
+现象只是「节点一直不领任务」。
 
 登录**只有账号 + 口令一条路**（续117）：配置文件里没有任何凭据，第一个管理员由**首启动向导**
 当场建（`run_gui.py` 在库里 0 个账号时会直接向导），或跑 `python run_users.py --create-admin`；
@@ -102,18 +115,29 @@ python run_gui.py          # 默认 http://127.0.0.1:5000
 
 ### 页面与操作流
 
-界面外壳为**左侧固定侧边栏（12 栏导航）+ 顶栏（当前页名 + 退出）**；任务详情页内部为**横向页签**，
+界面外壳为**左侧固定侧边栏（14 栏导航）+ 顶栏（当前页名 + 退出）**；任务详情页内部为**横向页签**，
 页签内的筛选是**服务端**的（GET 表单，提交后整页刷新并保持其它条件；续57 撤掉了资产页签的前端
 `data-filter` —— 分页之后它只能筛当前页，比原来更误导）。
 
-> 侧边栏 12 栏＝**仪表盘 / 任务管理 / 子域名资产 / 站点资产 / IP 资产 / 全端口扫描 / 漏洞风险 /
-> POC 管理 / 外部工具 / 策略配置 / 账号管理 / 访问审计**（以 `gui/templates/base.html` 的
-> `nav_items` 为准）；其中**后 5 栏 `admin_only`**（子用户不渲染，路由层同样 403），
-> `dev.enabled=true` 时管理员另有第 13 栏「开发模式」。
+> 侧边栏 14 栏＝**仪表盘 / 任务管理 / 子域名资产 / 站点资产 / IP 资产 / 全端口扫描 / 漏洞风险 /
+> POC 管理 / 外部工具 / 策略配置 / 账号管理 / 执行节点 / 访问审计 / 数据迁移**（以
+> `gui/templates/base.html` 的 `nav_items` 为准）；其中**后 7 栏 `admin_only`**（子用户不渲染，
+> 路由层同样 403），`dev.enabled=true` 时管理员另有第 15 栏「开发模式」。
 > 原「端口服务」「C 段视野」「目录发现」「拓展域名」四栏已移除 —— 前三个是**任务维度**的数据，
 > 在任务详情页签里本来就能看到；「拓展域名」与「子域名资产」是同一份 `subdomains` 表的不同视图，
 > 单列一栏反而让人分不清资产归属。数据与路由都还在（`/ports`、`/csegs`、`/dirs`、`/extdomains`
 > 可直接访问 URL），只是不再占侧边栏。
+
+> **数据迁移页（续138，`/migrate`，仅管理员）**把 续136 的 CLI 能力搬到控制台：导出打一个 JSON 包
+> 落 `data/export/`（0600），导入走**先预检再确认**两步。三条必须知道的边界：
+> ① 页面上**没有**「带账号口令哈希 / 带凭据文件 / 带任务登录态」这三个开关（CLI 的
+> `--with-users` / `--with-task-auth` 才有），服务端写死不带，伪造表单字段也没用；
+> ② 反方向也一样 —— **包里真含**账号 / 凭据 / 登录态的，本页一律拒收，
+> 让你回命令行 `python cli/client.py --import-scan 那个包.json` 看着警告确认
+> （判据读包里的 `data`，不读包自己的 `includes` 声明）；
+> ③ 导进来的任务状态一律 `stopped`、`pid` 归零 —— 框架**不会**因为导入就自己发起扫描，
+> 「要不要接着跑」这个决定留在人手里。确认令牌 10 分钟内有效且只能用一次；
+> 导入前的整库快照保留（页面给相对路径），上传的那份副本在导入成功后删除。
 
 > 「**flag 候选**」页签（续126）把 CTF 要的结论单独列出来：`scanner/flagfind.py` 在
 > **本任务已经抓到的正文**（页面 / JS / 目录命中 / POC 证据）里按 `策略配置 → flag 候选抽取`
@@ -412,10 +436,13 @@ python3 run_gui.py
 
 > **换机器请照 `requirements.lock` 装**（`pip install -r requirements.lock`，
 > Windows 是 `py -3 -m pip install -r requirements.lock`）：`requirements.txt` 是
-> **我要什么**（直接依赖 + 允许区间，CI 与 Dockerfile 吃的仍是它），`requirements.lock` 是
+> **我要什么**（直接依赖 + 允许区间），`requirements.lock` 是
 > **这次实测装出来的是哪些版本**（含全部传递依赖的精确版本，Python 3.9 与 3.14 两头都验过）。
 > 自动层 `run_bootstrap.py --install` 优先吃 lock、装不动就回落 `requirements.txt`，
 > **并把这次用的是哪一份打在输出里**；重新生成的命令与逐条版本取舍写在 `requirements.lock` 的文件头。
+> 续138 起 **CI 与 Dockerfile 也都吃 lock**（`smoke.yml`/`quality.yml` 共四处安装步骤、
+> `docker_todo/Dockerfile` 的 `COPY`+`pip install`）—— 这样「CI 绿的版本」「镜像里的版本」「你照锁装出来的版本」
+> 才是同一批；照 `requirements.txt` 手工装依然合法，只是别奇怪版本对不上。
 
 - **工具版本**：subfinder/httpx/puredns 下载 `linux_amd64` 包；dirmap 是纯 Python，clone 即用；
 

@@ -48,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt
+          python3 -m pip install -r requirements.lock   # 锁定的版本闭包（续137 生成）
       - name: Run devflow self-check
         env:
           PYTHONUNBUFFERED: "1"
@@ -66,7 +66,7 @@ jobs:
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt
+          python3 -m pip install -r requirements.lock   # 锁定的版本闭包（续137 生成）
       - name: Locate Chrome
         run: |
           set -e
@@ -94,7 +94,7 @@ jobs:
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt
+          python3 -m pip install -r requirements.lock   # 锁定的版本闭包（续137 生成）
       - name: Run smoke test on a newer interpreter
         env:
           PYTHONUNBUFFERED: "1"

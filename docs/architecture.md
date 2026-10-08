@@ -296,7 +296,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 
 ## GUI 路由与分栏
 
-侧边栏 **12 项**（以 `gui/templates/base.html` 的 `nav_items` 为准，
+侧边栏 **14 项**（以 `gui/templates/base.html` 的 `nav_items` 为准，续138 加了「数据迁移」；
 每项的**第 5 个字段** `admin_only` 决定"是否只对管理员显示"）：
 `/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
 `/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/ips`（IP 资产：按解析 IP 聚合域名，**先全量聚合、

@@ -109,6 +109,14 @@ DEFAULTS = {
         # 存在的理由就是不许再往这个被跟踪的文件里写任何机器特定的 IP。默认关：
         # 当前部署口径是"不要 Host 拦截"（`allowed_hosts: []` ⇒ 守卫放宽），不替他做这个决定。
         "allowed_hosts_auto_local": False,
+        # ---- 后台路径随机化（续138，用户点单）----
+        # true（默认）= 每次启动把整个控制台挂到新生成的两段随机路径下（共 20 位字符），
+        # 根路径与错误路径一律 404 空响应。它**不是访问控制** —— 拿到 URL 的人照样到得了登录页，
+        # 真门槛是 401 边缘门 + users 表；这里买的是"扫端口/爬根目录找不到入口"。
+        # 设 false 就挂回根路径（旧行为）。页面上改不了这一项，只能手改本文件
+        # （先例 = login_lockout / audit / keys_ask_passphrase）。
+        # 临时指定固定前缀走环境变量 CTFSCANNER_WEB_PATH（空串＝根路径），不写进任何文件。
+        "web_path_random": True,
         # behind_proxy：是否信任反向代理转发的 `X-Forwarded-Proto/Host/For`。
         #   默认关 —— 它是**请求头**，任何客户端都能伪造，无条件信任会让 Host 白名单
         #   与 Origin 校验一起失效。只有"应用只被自己的反代访问"时才该打开。

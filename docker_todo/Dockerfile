@@ -3,7 +3,8 @@
 # 用法、要不要重新打包、数据在哪、共享服务器上的权限隔离 —— 全部见 docs/docker.md。
 # 一句话：`docker compose up -d --build`，然后浏览器开 http://127.0.0.1:5000
 #
-# 镜像只装 requirements.txt 里那 4 个运行期依赖（flask / requests / PyYAML / cryptography）——
+# 镜像只装 requirements.lock 里钉死的那批运行期依赖（直接依赖只有 flask / requests / PyYAML /
+# cryptography 四个，其余是传递依赖，逐条 `==` —— 续138 起与 CI 吃同一份清单）——
 # 第 4 个是续98 加的：少了它 `config/keys.enc.yaml` 在新机器上根本解不开（AES-GCM 用得上它）。
 # 这是本项目的**零多余依赖**口径：截图用系统浏览器、证书解析用标准库、
 # 验证码自己画 PNG，都不引入新包。需要的外部工具（subfinder/httpx/puredns）
@@ -11,11 +12,13 @@
 
 FROM python:3.9-slim
 
-# 运行期依赖。先只 COPY requirements.txt 再装 —— 改代码不会让这一层缓存失效，
+# 运行期依赖。先只 COPY 清单再装 —— 改代码不会让这一层缓存失效，
 # 重建镜像时不必重新下载依赖。
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt \
- && rm -f /tmp/requirements.txt
+# 吃 lock 而不是 txt（续138）：镜像是可复现产物，装出"当时最新版"会让同一个 tag 在两台机器上
+# 跑着不同的 Werkzeug；与 CI 同一份清单也才谈得上"CI 绿的就是镜像里那批"。
+COPY requirements.lock /tmp/requirements.lock
+RUN pip install --no-cache-dir -r /tmp/requirements.lock \
+ && rm -f /tmp/requirements.lock
 
 WORKDIR /app
 COPY . /app
