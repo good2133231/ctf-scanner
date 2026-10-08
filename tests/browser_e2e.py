@@ -721,7 +721,9 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     # 元凶是网格子项默认的 `min-width:auto`：`1fr` 只约束**最大**宽度，于是带
     # `th{white-space:nowrap}` 的表用 min-content 把轨道顶开，整页出现横向滚动条，
     # 而 `main > section` 的 `overflow-x:auto` 因为轨道本身变宽根本不生效。
-    for _p9 in ("/", "/settings", "/tasks/%d" % tid):
+    # 续129：`/diff`（复测视图）也是一张宽表（6 列），新页面必须一起过这道关 ——
+    # 否则"新页面上线时没人知道它在窄屏会不会撑出横向滚动条"就是续103 那条教训重演。
+    for _p9 in ("/", "/settings", "/tasks/%d" % tid, "/diff?task=%d" % tid):
         page.cdp.call("Emulation.setDeviceMetricsOverride",
                       {"width": 430, "height": 900, "deviceScaleFactor": 1, "mobile": False})
         page.navigate(base + _p9)

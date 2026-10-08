@@ -55,7 +55,7 @@ from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
-from scanner import keystore
+from scanner import diffview, keystore
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
@@ -1998,6 +1998,9 @@ def create_app():
     # 现在过滤与分页都走 SQL（`db.page_assets`），关键字用 `q`、页码用 `page`、每页 `size`。
 
     PAGE_SIZES = (50, 100, 200, 500)
+    # 下拉候选的上限（续129）：GUI 列表一律走分页（续55），任务选择框也不例外 ——
+    # 但**被选中的那两个必须出现**（哪怕在 N 条之外），否则"选了个老任务，下拉把它弄丢了"。
+    PICKER_CAP = 200
 
     def _page_args():
         def _int(name, default):
@@ -2469,6 +2472,63 @@ def create_app():
             pager["qs"] += f"&task={tid}"
         return render_template("ports.html", ports=rows, pager=pager, q=q,
                                task_id=tid or "", tasks=_tasks_with_asset("ports"))
+
+    @app.route("/diff")
+    @login_required
+    def diff_view():
+        """跨任务差分（续129，复测视图）：这次 vs 上次，各类别的新增与消失。
+
+        三条口径与既有页面一致，不是新发明：
+        - **不可比就不比**：没有"更早、已收场、目标有交集"的任务时，页面给原因，
+          不给一张全空的差分表 —— "各类别都是 0"会被读成"什么都没变"，而事实是"没得比"。
+        - **下拉只列最近 `PICKER_CAP` 个任务**（GUI 列表一律走分页，续55），但**被选中的
+          那两个必须出现在下拉里**（哪怕在 N 条之外）—— 同 [8l] 那条"筛一个没有行的任务"口径。
+        - **归属收窄**（续89 多租户）：子用户的候选任务与基准都限定在自己的 `owner_id` 内；
+          直接 `?task=` 指到别人的任务一律当"不存在"，不泄漏它存在。
+        """
+        scope = _owner_scope()
+        # `page_tasks` 返回的是 `(rows, total)` 二元组 —— 忘了拆包就会去迭代 tuple 本身
+        # （第一轮就是这样：`[dict(t) for t in page_tasks(...)]` 拿到的是"行列表 + 一个整数"）
+        rows_task, _total_tasks = db.page_tasks(limit=PICKER_CAP, offset=0, owner_id=scope)
+        tasks = [dict(r) for r in rows_task]
+        ids_in_page = {str(t["id"]) for t in tasks}
+
+        def _as_int(v):
+            try:
+                return int(str(v).strip())
+            except (TypeError, ValueError):
+                return 0
+
+        tid = _as_int(request.args.get("task"))
+        base_id = _as_int(request.args.get("base")) or None
+        for want in (tid, base_id):
+            if want and str(want) not in ids_in_page:
+                row = db.get_task(want)
+                if row is not None and (scope is None or int(row["owner_id"] or 0) == int(scope)):
+                    tasks.append(dict(row))
+                    ids_in_page.add(str(want))
+        if not tid and tasks:
+            tid = int(tasks[0]["id"])
+        cur = db.get_task(tid) if tid else None
+        res, why = (None, "没有这个任务（或它不属于当前账号）")
+        bases = []
+        if cur is not None:
+            res, why = diffview.diff(tid, base_id=base_id, owner_id=scope)
+            if res:
+                bases = [t for t in tasks
+                         if str(t["id"]) != str(tid)
+                         and diffview.comparable(cur, t)[0]]
+                if base_id and res.get("base") and not any(
+                        str(b["id"]) == str(base_id) for b in bases):
+                    b_row = db.get_task(base_id)
+                    if b_row is not None:
+                        bases.append(dict(b_row))
+        return render_template(
+            "diff.html", tasks=tasks, bases=bases, tid=tid, base_id=base_id,
+            res=res, rows=diffview.for_template(res) if res else [],
+            head=diffview.summary(res) if res else "",
+            comparable=bool(res and res.get("comparable")), why=why,
+            picker_cap=PICKER_CAP)
 
     @app.route("/fullports")
     @login_required

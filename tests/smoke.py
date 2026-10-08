@@ -10941,8 +10941,15 @@ http:
     print(_out7x.rstrip())
     _why7x = next((ln.strip() for ln in _out7x.splitlines() if ln.strip().startswith("[跳过]")), "")
     if _pr7x.returncode == 0:
-        print("[7x] 续60 真浏览器端到端 ok: 真 Flask 进程 + 真无头浏览器，39 条交互断言全绿"
-              "（登录 / 分页 / 服务端筛选 / 批量打开上限 / POC 开关不误提交 / 页签 / 面板持久化 / 列表页轮询只发批量）")
+        # 条数从**子进程自己的输出**里取：原先硬写"39 条"，而 e2e 一路加断言加到 66 条，
+        # 打印一个过期数字会让人对覆盖面形成错误的稳定印象（§6.1 推论二：绿信号本身
+        # 也要能被证伪，数量也一样）。取不到就判红 —— 那是 e2e 的收尾行改了格式的信号。
+        _m7x = re.search(r"共 (\d+) 条断言全绿", _out7x)
+        assert _m7x, f"e2e 收尾行没报条数（格式变了？）：{_out7x[-200:]}"
+        print(f"[7x] 续60 真浏览器端到端 ok: 真 Flask 进程 + 真无头浏览器，"
+              f"{_m7x.group(1)} 条交互断言全绿"
+              "（登录 / 分页 / 服务端筛选 / 批量打开上限 / POC 开关不误提交 / 页签 / 面板持久化 / "
+              "列表页轮询只发批量 / 窄屏无横向溢出（含 /diff））")
     elif _pr7x.returncode == 2:
         # 降级**不等于**通过：只允许「本机没有浏览器」这一种原因，且必须把原因原样打出来。
         assert "未找到可用的无头" in _why7x, \
@@ -16493,6 +16500,200 @@ expression: r0()
           "（run_cmd 调用记录为空）且说明带 !｜portscan 超限**降级到内置**而不是硬失败"
           "（内置那条真的受本任务门控）｜预估数字无论设不设都进日志｜CLI --check-afrog-pocs 也报预估"
           "｜三方一致 + stub save_settings｜变异：恒不超限 / 读错键 / 降级写成不跑 都会让对应断言变红")
+
+
+    # ---------------- [8ah] 续129：跨任务差分（复测视图） ----------------
+    #      用户点单第 5 件："这次 vs 上次：新增/消失的站点、端口、漏洞、指纹"这个复测最需要的
+    #      视图还没有，而 db 里的 review 字段已经存了原料。
+    #      这一组的重点不是"算得对不对"（那几行集合差一眼看得懂），而是**三个会骗人的口径**：
+    #      ①「上次没跑这个阶段的」被算成"全新增/全消失"；②「上次人工判掉的误报」被算成"漏洞消失了"；
+    #      ③「别人的任务」被当成你的上一轮。三个都各配一条判据 + 一个变异。
+    from scanner import diffview as _dv129
+
+    # ---- ① 可比性：按目标判，不按任务名 ----
+    _ts = _dv129.target_set
+    assert _ts({"targets": "http://Api.Example.com/x\nexample.com\n"}) == {"example.com"}, _ts
+    assert _ts({"targets": "例子.中国"}) == {"xn--fsqu00a.xn--fiqs8s"}, _ts({"targets": "例子.中国"})
+    assert "10.0.0.1" in _ts({"targets": "10.0.0.1"})
+    assert _ts({"targets": "192.0.2.0/30"}) == {"192.0.2.1", "192.0.2.2"}, _ts({"targets": "192.0.2.0/30"})
+    # 取的是 `expand_cidr` 的**可用主机**口径（/30 去掉网络位与广播位），不是 4 个全算；
+    # 这里钉的是"CIDR 会被摊成逐条 ip 参与可比性判断"，具体数量归 [3] 的 expand_cidr 用例
+    assert _ts({"targets": "192.0.2.0/30\n192.0.2.9"}) == {"192.0.2.1", "192.0.2.2", "192.0.2.9" if False else "192.0.2.1", "192.0.2.9"}
+    assert _ts(None) == set() and _ts({}) == set()
+    _a = {"id": 1, "targets": "example.com", "status": "done"}
+    assert _dv129.comparable(_a, None)[0] is False
+    assert _dv129.comparable(_a, {"id": 1, "targets": "example.com", "status": "done"})[1] == "基准就是本任务自己"
+    assert _dv129.comparable(_a, {"id": 2, "targets": "other.test", "status": "done"})[0] is False
+    assert _dv129.comparable(_a, {"id": 2, "targets": "example.com", "status": "running"})[0] is False, \
+        "运行中的任务资产还在长，拿它当基准会得到一堆假「消失」"
+    assert _dv129.comparable(_a, {"id": 2, "targets": "sub.example.com", "status": "stopped"})[0] is True, \
+        "同一注册域即算可比（子域名形态不同是常事）；stopped 也是已收场"
+
+    # ---- ② 缺覆盖 ≠ 变化：三档都要有各自的说法 ----
+    _t_old = db.create_task("smoke129-old", "diff129.test", ["probe", "portscan", "vulnscan"], {})
+    _t_new = db.create_task("smoke129-new", "diff129.test", ["probe"], {})
+    _t_jsn = db.create_task("smoke129-jsn", "diff129.test", ["subdomain"], {})
+    for _x in (_t_old, _t_new, _t_jsn):
+        db.update_task(_x, status="done", progress=100)
+    db.insert_sites(_t_old, [{"url": "http://a.diff129.test/", "host": "a.diff129.test", "port": "80",
+                              "status": 200, "title": "", "length": 1, "server": "",
+                              "tech": "nginx", "source": "builtin"}])
+    db.insert_sites(_t_new, [{"url": "http://b.diff129.test/", "host": "b.diff129.test", "port": "80",
+                              "status": 200, "title": "", "length": 1, "server": "",
+                              "tech": "php", "source": "builtin"}])
+    db.insert_ports(_t_old, [{"host": "a.diff129.test", "ip": "1.2.3.4", "port": 3306,
+                              "service": "mysql", "banner": ""}])
+    db.insert_subdomains(_t_jsn, [("only.jsn.diff129.test", "subfinder")])
+    _r2, _ = _dv129.diff(_t_new, base_id=_t_old)
+    _c2 = {c["key"]: c for c in _r2["categories"]}
+    assert _c2["sites"]["added"] and _c2["sites"]["removed"], _c2["sites"]
+    assert _c2["ports"]["added"] == [] and _c2["ports"]["removed"] == [] \
+        and "这一轮没去看" in _c2["ports"]["note"], _c2["ports"]
+    assert "这一轮没去看" in _c2["vulns"]["note"] and _c2["vulns"]["removed"] == [], _c2["vulns"]
+    # 反方向也必须各有说法：**基准**没跑这一步时，本次的东西是"缺对照"，不是"全是新增"
+    _r2b, _ = _dv129.diff(_t_old, base_id=_t_new)
+    _c2b = {c["key"]: c for c in _r2b["categories"]}
+    assert "缺对照" in _c2b["vulns"]["note"] and _c2b["vulns"]["added"] == [], _c2b["vulns"]
+    assert "缺对照" in _c2b["ports"]["note"], _c2b["ports"]
+    assert _c2["subdomains"]["note"] and "两轮都没跑" in _c2["subdomains"]["note"], _c2["subdomains"]
+    # 「缺对照」的档位必须**按类别**给，不是整页一句"这次只跑了 probe"：
+    # 复测的人关心的是"端口那一栏的数字能不能信"
+    assert "+1/-1" in _dv129.summary(_r2), _dv129.summary(_r2)
+    assert "portscan" not in _dv129.summary(_r2) and "vulnscan" not in _dv129.summary(_r2), \
+        "缺对照的类别不许进摘要数字（否则摘要在谎报）"
+
+    # ---- ③ 漏洞口径与报告一致：上次判掉的误报不算"消失" ----
+    _t_fp = db.create_task("smoke129-fp", "diff129.test", ["probe", "vulnscan"], {})
+    db.update_task(_t_fp, status="done", progress=100)
+    for _tid_x, _tag in ((_t_old, "上次有"), (_t_fp, "这次有")):
+        db.insert_vuln(_tid_x, {"target": "http://a.diff129.test/", "poc_id": "same-poc",
+                               "name": _tag, "severity": "high", "owasp": "A01"})
+    _row_fp = [v for v in db.list_vulns(task_id=_t_old, limit=None) if v["poc_id"] == "same-poc"][0]
+    db.set_vuln_review(_row_fp["id"], "false_positive", "统一 200 的软 404")
+    _r3, _ = _dv129.diff(_t_fp, base_id=_t_old)
+    _c3 = {c["key"]: c for c in _r3["categories"]}
+    assert _c3["vulns"]["removed"] == [], _c3["vulns"]          # 判误报的不算"消失"
+    assert _c3["vulns"]["prev"] == 0 and _c3["vulns"]["cur"] == 1, _c3["vulns"]
+    # 同一条它**这次没被复核**，所以按口径算"存在" ⇒ 记为新增。这不是自相矛盾，而是
+    # 两边同用一条规则的结果；关键是页面必须把这句话说明白（否则人以为冒出新漏洞）。
+    assert _c3["vulns"]["added"] == ["http://a.diff129.test/|same-poc"], _c3["vulns"]
+    assert "复核口径" in _c3["vulns"]["note"] and "复核结论过期" in _c3["vulns"]["note"], _c3["vulns"]
+    _row_ok = [v for v in db.list_vulns(task_id=_t_fp, limit=None) if v["poc_id"] == "same-poc"][0]
+    db.set_vuln_review(_row_ok["id"], "confirmed", "人工验证过")
+    _r3b, _ = _dv129.diff(_t_fp, base_id=_t_old)
+    _c3b = {c["key"]: c for c in _r3b["categories"]}
+    assert _c3b["vulns"]["added"] == _c3["vulns"]["added"] and _c3b["vulns"]["removed"] == [], \
+        _c3b["vulns"]
+    # 钉的是"**只有 false_positive 参与口径**"：confirmed 与待复核都算"存在"，所以把这次这条
+    # 改成已确认不会改变差分。写成"确认了就不算新增"才是错的（那等于把复核结论当成存在性）。
+    db.set_vuln_review(_row_fp["id"], "false_positive", "复判一次（保持误报态）")
+    _r3c, _ = _dv129.diff(_t_fp, base_id=_t_old)
+    _c3c = {c["key"]: c for c in _r3c["categories"]}
+    assert _c3c["vulns"]["removed"] == [], _c3c["vulns"]
+
+    # ---- ④ 多租户：别人的任务不是你的上一轮 ----
+    from scanner import users as _us129
+    _ok_sub, _msg_sub = _us129.create_user("smoke129-sub", "Passw0rd!123", _us129.ROLE_USER,
+                                           must_change=False)
+    assert _ok_sub, _msg_sub
+    _uid129 = int(_us129.get_by_name("smoke129-sub")["id"])
+    _t_mine = db.create_task("smoke129-mine", "diff129.test", ["probe"], {}, owner_id=_uid129)
+    db.update_task(_t_mine, status="done", progress=100)
+    _r4, _w4 = _dv129.diff(_t_mine, owner_id=_uid129)
+    assert not _r4["comparable"] and "更早" in _w4, (_w4, _r4)
+    _r4b, _ = _dv129.diff(_t_mine)                    # 管理员不限制，能比到公共任务
+    assert _r4b["comparable"] and int(_r4b["base"]["id"]) in (_t_old, _t_new, _t_jsn, _t_fp), _r4b["base"]
+    _r4c, _w4c = _dv129.diff(_t_new, owner_id=_uid129)
+    assert _r4c is None and "不属于当前账号" in _w4c, _w4c   # 指到别人的任务=当不存在，不泄漏它存在
+
+    # ---- ⑤ 取基准走全量而不是"前 200 条"（续55 的口径：limit 一超就静默"找不到上一轮"） ----
+    assert "list_tasks(limit=None" in (ROOT / "scanner/diffview.py").read_text(encoding="utf-8"), \
+        "pick_base 必须走 limit=None：用分页找基准，老任务会被静默当成「没有上一轮」"
+    _t_deep = db.create_task("smoke129-deep", "deep129.test", ["probe"], {})
+    db.update_task(_t_deep, status="done", progress=100)
+    db.insert_sites(_t_deep, [{"url": "http://d.deep129.test/", "host": "d.deep129.test",
+                               "port": "80", "status": 200, "title": "", "length": 1,
+                               "server": "", "tech": "", "source": "builtin"}])
+    for _i129 in range(205):        # 205 个"目标不相干"的中间任务，把基准顶出任何 200 条窗口
+        _tx = db.create_task(f"smoke129-filler-{_i129}", f"fill{_i129}.test", ["probe"], {})
+        db.update_task(_tx, status="done", progress=100)
+    _t_top = db.create_task("smoke129-top", "deep129.test", ["probe"], {})
+    db.update_task(_t_top, status="done", progress=100)
+    _b129, _ = _dv129.pick_base(_t_top)
+    assert _b129 and int(_b129["id"]) == _t_deep, (_b129 or {}).get("id")
+
+    # ---- ⑥ 页面：三个档（可比 / 不可比 / 缺对照）都得有各自的文案，且入口在详情页 ----
+    from gui import app as _app129
+    _cl129 = _app129.app.test_client() if False else None
+    from scanner import captcha as _cap129
+    try:
+        _us129.create_user("smoke129-admin", "Passw0rd!123", role="admin")
+    except Exception:
+        pass
+    db._exec("UPDATE users SET must_change=0 WHERE username='smoke129-admin'")
+    _cl129 = _app129.app.test_client()
+    assert _login7(_cl129, {"username": "smoke129-admin", "password": "Passw0rd!123"},
+                   environ_base={"REMOTE_ADDR": "198.51.100.214"}).status_code == 302
+    _h129 = _cl129.get(f"/diff?task={_t_new}").get_data(as_text=True)
+    assert "对比基准" in _h129 and "这一轮没去看" in _h129 and "缺对照" in _h129, _h129[:300]
+    assert "3306" not in _h129 or "开放端口" in _h129   # 端口那一栏必须是"没比"而不是"少了 3306"
+    assert "口径提醒" in _h129 and "误报" in _h129, "漏洞口径必须写在页面上，否则人会把 +0/-0 读成没变化"
+    # 不可比那一档必须用**目标独一无二**的任务验（`_t_jsn` 的 diff129.test 有可比对象，
+    # 拿它验"不可比"会得到一张正常差分表，判据就成了装饰）
+    _t_alone = db.create_task("smoke129-alone", "alone129.test", ["probe"], {})
+    db.update_task(_t_alone, status="done", progress=100)
+    _h3_129 = _cl129.get(f"/diff?task={_t_alone}").get_data(as_text=True)
+    assert "没有可比的上一轮" in _h3_129 and "这里<b>不给你看一张全空的差分表" in _h3_129, _h3_129[:400]
+    assert "与上次对比" in _cl129.get(f"/tasks/{_t_new}").get_data(as_text=True), \
+        "详情页没有入口 ⇒ 这个视图等于不存在"
+    assert leaked_root(_h129) is False
+
+    # ---- ⑦ 摘要只有一处产地（续124 同一手法）：模板不许自己拼数字 ----
+    _tpl129 = (ROOT / "gui/templates/diff.html").read_text(encoding="utf-8")
+    assert "对比基准：" not in _tpl129, \
+        "「对比基准：#N（时间，状态）」这句只能由 diffview.summary() 组一次（模板里再拼一遍迟早漂，" \
+        "续124）。表单里那个「对比基准」<label> 是控件名，不算第二处产地 —— 判据要盯的是那句话"
+    assert "head" in _tpl129, "页面必须显示 summary() 那句，否则口径又成了两套"
+
+    # ---- ⑧ §6.1 变异 ----
+    # a) 把 false_positive 过滤摘掉 ⇒ ③ 的"不算消失"立刻红
+    _real_snap = _dv129.snapshot
+    def _snap_no_review_filter(task_id):
+        from scanner import db as _d
+        s = _real_snap(task_id)
+        s["vulns"] = {f"{r['target']}|{r['poc_id']}": f"{r['name']}"
+                      for r in _d.list_vulns(task_id=task_id, limit=None)}
+        return s
+    _dv129.snapshot = _snap_no_review_filter
+    try:
+        _rm, _ = _dv129.diff(_t_fp, base_id=_t_old)
+        _cm = {c["key"]: c for c in _rm["categories"]}
+        # 变异下的**期望**是"结果与正确口径不一致"：一致就说明这条判据双向都不敏感（等于没加）
+        assert _cm["vulns"]["added"] != _c3["vulns"]["added"], \
+            "变异没生效：不判复核状态时差分仍与正确口径相同 ⇒ ③ 那条判据其实没承重"
+    finally:
+        _dv129.snapshot = _real_snap
+    # b) 「缺对照」三档改成照常比 ⇒ ② 的三处 note/空清单红
+    _src129 = (ROOT / "scanner/diffview.py").read_text(encoding="utf-8")
+    assert 'elif not ran_prev:' in _src129 and 'elif not ran_cur:' in _src129 and \
+        'if not ran_cur and not ran_prev:' in _src129, "三档缺一档都会把缺覆盖算成变化"
+    # c) `.get()` 回退（dict/Row 通吃的那条老坑，本项目第五次）⇒ 遍历候选基准时 AttributeError
+    assert "def _g(obj, key" in _src129 and "_g(task," in _src129 and "_g(base," in _src129
+    assert 'task.get(' not in _src129 and 'base.get(' not in _src129, \
+        "diffview 里只能走 _g()：list_tasks 给的是 sqlite3.Row，没有 .get()"
+    # d) `page_tasks` 返回 (rows, total) —— 路由忘了拆包就是第一轮真实报错的形状
+    _app_src129 = (ROOT / "gui/app.py").read_text(encoding="utf-8")
+    assert "rows_task, _total_tasks = db.page_tasks" in _app_src129, \
+        "page_tasks 是二元组；直接 [dict(t) for t in 它] 会拿到「行列表 + 一个整数」"
+
+    print("[8ah] 续129 跨任务差分 ok: 可比性按**注册域**判（IDN/CIDR/URL 都归一，running 的资产比不得，"
+          "子域名形态不同仍算可比）｜缺覆盖三档各有说法（两轮都没跑/基准没跑=缺对照不算新增/"
+          "本次没跑=不是消失），且摘要里不许出现缺对照类别的数字｜漏洞与报告同口径："
+          "上次判误报的不算消失，而它这次又出现且未复核时算新增并写明「复核结论过期」｜多租户：别人的任务不是你的上一轮，"
+          "直接指到别人的任务当「不存在」｜取基准走 list_tasks(limit=None)（造 205 个不相干任务把它"
+          "顶出任何 200 条窗口，仍能选中真正那一轮）｜页面三档文案 + 详情页入口 + 无绝对路径｜"
+          "摘要一处产地｜变异：摘掉复核过滤 / 三档缺一档 / .get() 回退（Row 那第五坑）/ "
+          "page_tasks 忘拆包 都会红")
 
     print("SMOKE PASS")
 

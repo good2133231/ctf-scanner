@@ -154,6 +154,9 @@ ctf-scanner/
 ├── gui/
 │   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
 │   ├── templates/ static/ # 页面与原生 JS（app.js：轮询状态/日志、建任务、POC 管理、页签、表格筛选、任务批量操作）
+│   │                      #   `diff.html`＝续129 的复测视图「这次 vs 上次」：入口在任务详情页
+│   │                      #   头部「与上次对比」，也可直接访问 `/diff?task=&base=`（三档文案：
+│   │                      #   可比 / 不可比（给原因，不给全空表）/ 某类缺对照）
 │   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（12 栏，以 base.html 的 nav_items 为准：
 │   │                      #     仪表盘/任务管理/子域名资产/站点资产/IP 资产/全端口扫描/漏洞风险/POC 管理/外部工具/策略配置/账号管理/访问审计；
 │   │                      #     其中后 5 栏 admin_only＝只对管理员渲染；dev.enabled=true 时再追加第 13 栏「开发模式」）
@@ -171,6 +174,15 @@ ctf-scanner/
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
 │   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic/**github**（13 个）
+│   ├── diffview.py        # 跨任务差分（续129，复测视图）：target_set/comparable/pick_base/
+│   │                      #   snapshot/diff/summary。三条不对齐就会骗人的口径：
+│   │                      #   ①缺覆盖≠变化（按类别看两边 stages，三档各有说法，缺对照的数字
+│   │                      #   不许进摘要）；②漏洞只把 false_positive 排除（与报告同口径），
+│   │                      #   上次判误报这次又扫到且未复核 ⇒ 算新增并写明「复核结论过期」；
+│   │                      #   ③owner 守卫在 diff() 里（不只放路由），别人的任务不是你的上一轮。
+│   │                      #   取基准走 list_tasks(limit=None)：拿分页窗口找"上一轮"得到的
+│   │                      #   "没有可比的"不是事实，是分页。`_g(obj, key)` 是因为
+│   │                      #   `sqlite3.Row` 没有 .get()（本项目第五次栽在同一处）
 │   ├── extcost.py         # 外部引擎的**流量口径**（续128）：预估（afrog=站点×只读PoC、
 │   │                      #   fscan/nmap=主机×端口，两个单位**不合并**）+ 硬上限。
 │   │                      #   `throttle` 只能管"我们发多少 / 起几个子进程"，管不到子进程
@@ -1306,7 +1318,10 @@ py -3 run_users.py --status   # 续117：账号数 + 配置里有无历史残留
   关键字筛选走服务端（同续53/续57 的口径），`q` 为空时不能显示"还没有解析数据"（那会把
   "筛选没匹配"误导成"没有资产"）；分页条要传 `unit="个 IP"`（`pager.total` 是 IP 个数，不是行数）。
 - `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。
-- **任务详情为 11 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/**flag 候选**/目标与配置/运行日志）：参考 ARL 界面的
+- **任务详情为 11 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/**flag 候选**/目标与配置/运行日志）；
+  跨任务对比**刻意不做成第 12 个页签**（续129）：页签是"本任务的数据"，而对比需要两个任务，
+  塞进页签会让人以为"没数据"是自己这个任务的问题 —— 它是任务详情页头部的一个链接 + 独立 `/diff` 页。
+  参考 ARL 界面的
   IP/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源
   还不存在（分别依赖爬虫数据模型、nuclei 二进制等）。理由与依赖关系见 `TODO.md` B-7。
   「SSL 证书」页签是续15 的落点（只读 TLS 握手 + 纯标准库 DER 解析，**握手不校验证书**）：
@@ -1861,11 +1876,13 @@ py -3 run_users.py --status   # 续117：账号数 + 配置里有无历史残留
   （对全 LF 文件同样成立）。
   代价是实测过的：有一次用工具批量改写后文件变成 LF-only，提交时 `tests/smoke.py` 出现
   **2811 行纯 EOL"假变更"**（`git show --stat` 里 1490+/1321-），真正的内容改动被淹没、review 完全失效。
-  ⚠️ **另一个具体陷阱（2026-10-08 续126 踩的，比 Edit 更隐蔽）**：在自己的补丁脚本里用
-  `Path(p).read_text()` + `write_text(..., newline="")` —— `read_text()` 的**通用换行**会把
-  `\r\n` 读成 `\n`，而 `newline=""` 写出时**不会**再加回 `\r`，于是一次"只改一条断言消息"
-  的小脚本把 `tests/smoke.py` 的 12547 行 CRLF 全洗成 LF，`git diff --numstat` 变成
-  **14060/13759**（真实改动是 306/5）。补丁脚本请一律 `read_bytes()/write_bytes()`，
+  ⚠️ **另一个具体陷阱（2026-10-08 续126 踩、续129 又踩一次；比 Edit 更隐蔽）**：
+  补丁脚本里用 `Path(p).read_text()` —— **`read_text()` 的通用换行单独一步就把 `\r\n` 读成
+  `\n`**，之后哪怕你用 `write_bytes` 也救不回来（续129 就是这样把 `gui/app.py` 洗成
+  3454/3394 的假变更，当时写的还是 `write_bytes`）。续126 那次是
+  `read_text()` + `write_text(newline="")`，`git diff --numstat` 变成 **14060/13759**
+  （真实改动 306/5）。**规矩：碰混合 EOL 的文件，从头到尾只用 `read_bytes()/write_bytes()`**，
+  需要字符串处理就先 `read_bytes().decode("utf-8")` 再 `encode("utf-8")` 写回（不改行尾）。
   锚点用 `(old_crlf, old)` 两试的写法（本仓 `logs/_docs*.py` 都是这个形状）。
   ⚠️ 同一个脚本里的**第二个坑**：锚是**单行**时那次"两试"退化成同一条（锚里没有内部换行），
   但**替换文本**内部的换行会被无条件加上 `\r` —— 落在 LF 区里就多出一条纯 EOL 的假变更（本轮 `cli/client.py` 就这样差一行）。写完补丁脚本**必须**逐文件核两式 numstat 相等。

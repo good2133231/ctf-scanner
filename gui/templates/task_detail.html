@@ -13,6 +13,8 @@
   <button class="btn-mini ghost" data-op="resume" data-id="{{ task.id }}"
     {{ 'disabled' if task.status in ('running', 'queued') or not resume_rest }}
     title="{{ '从断点续跑：' + resume_rest|join(' / ') if resume_rest else '没有可用断点（任务未停在某个阶段上）' }}">续跑</button>
+  <a class="btn-mini ghost" href="{{ url_for('diff_view') }}?task={{ task.id }}"
+     title="与最近一个可比的上一轮对比（子域名/站点/指纹/端口/漏洞/flag 各算新增与消失）">与上次对比</a>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">导出 MD</a>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">导出 HTML</a>
   <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='pdf') }}">导出 PDF</a>

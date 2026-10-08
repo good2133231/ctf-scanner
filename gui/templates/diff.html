@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}复测对比{% endblock %}
+{% block content %}
+{# 跨任务差分（续129）：复测时最该回答的是"这次 vs 上次变了什么"，而不是"这次有什么"。
+   筛选走 **GET + 服务端**（与续53/57 的资产页签同口径）；两个下拉的候选都在服务端算好，
+   前端不抄判据 —— 否则"页面能选而判据说不可比"会变成两套口径。 #}
+
+<form class="filters" method="get" action="{{ url_for('diff_view') }}">
+  <label class="muted">本次任务
+    <select name="task">
+      {% for t in tasks %}
+      <option value="{{ t.id }}" {{ 'selected' if t.id == tid else '' }}>
+        #{{ t.id }} {{ t.name }}（{{ t.created_at }} · {{ t.status }}）</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="muted">对比基准
+    <select name="base">
+      <option value="">自动（最近一个可比的）</option>
+      {% for t in bases %}
+      <option value="{{ t.id }}" {{ 'selected' if base_id == t.id else '' }}>
+        #{{ t.id }} {{ t.name }}（{{ t.created_at }} · {{ t.status }}）</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button class="ghost" type="submit">对比</button>
+</form>
+
+{% if not tasks %}
+  <p class="muted">还没有任务，自然也没有"上一轮"可比。</p>
+{% elif not comparable %}
+  <section class="panel">
+    <h2>没有可比的上一轮</h2>
+    <p class="muted">原因：<b>{{ why or '未知' }}</b></p>
+    <p class="muted small">这里<b>不给你看一张全空的差分表</b> —— "各类别都是 0"会被读成
+      "什么都没变"，而事实是"没有可以比的对象"，两者的处置动作完全不同。
+      可比 = 存在一个<b>更早、已收场、目标有交集</b>的任务（跨账号的任务不算你的上一轮）。</p>
+  </section>
+{% else %}
+  <p class="muted small">{{ head }}</p>
+  <table>
+    <thead><tr><th>类别</th><th>本次</th><th>上次</th><th>新增</th><th>消失</th><th>说明</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.label }}</td>
+        <td class="mono">{{ r.cur }}</td>
+        <td class="mono">{{ r.prev }}</td>
+        <td class="mono">{{ '+ ' ~ r.added|length if r.added else '—' }}</td>
+        <td class="mono">{{ '- ' ~ r.removed|length if r.removed else '—' }}</td>
+        <td class="muted small">{{ r.note }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  {% for r in rows %}
+    {% if r.added or r.removed %}
+    <section class="panel">
+      <h2>{{ r.label }}的明细</h2>
+      {% if r.note %}<p class="muted small">{{ r.note }}</p>{% endif %}
+      {% if r.added_show %}
+        <p class="muted small">新增 {{ r.added|length }} 条{% if r.added_hidden %}
+          （此处列前 {{ r.added_show|length }} 条，另有 {{ r.added_hidden }} 条未显示）{% endif %}：</p>
+        <ul class="mono small">{% for x in r.added_show %}<li>{{ x }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if r.removed_show %}
+        <p class="muted small">消失 {{ r.removed|length }} 条{% if r.removed_hidden %}
+          （此处列前 {{ r.removed_show|length }} 条，另有 {{ r.removed_hidden }} 条未显示）{% endif %}：</p>
+        <ul class="mono small">{% for x in r.removed_show %}<li>{{ x }}</li>{% endfor %}</ul>
+      {% endif %}
+    </section>
+    {% endif %}
+  {% endfor %}
+
+  <p class="muted small">口径提醒：<b>「潜在漏洞」不含上次已被人工判为误报的行</b>（与报告同口径，续12）——
+    复核掉的项今天不在清单里，是复核结论生效，不是漏洞消失。
+    某一类如果<b>只有一轮跑过对应阶段</b>，它会被标成"缺对照"而不是"全新增/全消失"；
+    「组件指纹」按 主机 → 标签 逐条比，所以同一站上新识别出的标签会以新增出现
+    （续127 的补标就是为了让这一行有意义）。</p>
+{% endif %}
+{% endblock %}
