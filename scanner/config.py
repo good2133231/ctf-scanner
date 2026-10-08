@@ -173,6 +173,15 @@ DEFAULTS = {
         "rate_burst": 0,                # 令牌桶突发容量；0 → 取 max(rate_per_sec, 1)
         "budget_total": 0,              # 单任务请求总预算（HTTP/裸 socket/子进程共用）；0=不设预算
         "budget_subprocess_weight": 1,  # 每次外部工具调用消耗的预算单位
+        # 外部引擎自管流量的**预估与硬上限**（续128，`scanner/extcost.py`）。上面那条预算只管
+        # "我们起几个子进程"，管不到子进程自己发多少 —— afrog 一轮是 `站点 × 只读 PoC` 次 HTTP
+        # 请求，fscan/nmap 一次是 `主机 × 端口` 次探测。这两个数字单位不同，刻意**不合并**成
+        # 一个"总数"（把端口探测当 HTTP 请求数是假等价），所以各配一个上限。
+        # 默认 0 = 不限（与 `budget_total`/`rate_per_sec` 同一条 F2 规矩：默认路径永不触发拒绝；
+        # 本机默认 engine=auto + fscan 可用，任何非零默认值都会顺手改变既有行为）。
+        # **预估数字无论有没有设上限都会打进日志** —— "如实声明"是这一处的下限。
+        "external_max_requests": 0,      # afrog 一轮预估的 HTTP 请求数上限；0=不限
+        "external_max_port_probes": 0,   # fscan/nmap 一轮预估的端口探测次数上限；0=不限
     },
     "checks": {
         # 检测分级门控：只保留 severity >= min_severity 的结果。

@@ -370,7 +370,7 @@ def check_afrog_pocs(settings, poc_dir=None):
     import os.path as _ospath
     from collections import Counter
     from pathlib import Path as _Path
-    from scanner import afrog as afrog_mod
+    from scanner import afrog as afrog_mod, extcost
     d = (poc_dir or afrog_mod.cfg(settings)["poc_dir"] or "").strip()
     if not d:
         print("[!] 没有 PoC 目录：`python cli/client.py --check-afrog-pocs <目录>`，"
@@ -390,6 +390,12 @@ def check_afrog_pocs(settings, poc_dir=None):
         print(f"    {n:4d} × {why}")
     print('  注：拒因只回答"这条模板会不会动目标"，不评价判据写得好不好；'
           "站点数/级别/限速仍由策略里的 afrog 段决定（填再大也有内置封顶）。")
+    # 续128：把"这个引擎自己会发多少请求"换算成一个数字。此前闸门与日志都只说"不经本任务
+    # 预算"，却没有量 —— 没有量就没法判断该把上限设在哪里，于是上限永远没人设。
+    _c128 = afrog_mod.cfg(settings)
+    _est128 = extcost.afrog(_c128["max_targets"], len(allow), settings)
+    print(f"  {_est128['line']}（站点数按策略里的 afrog.max_targets="
+          f"{_c128['max_targets']} 计）")
     if not afrog_mod.cfg(settings)["enabled"]:
         print("  当前策略里 afrog 是**关闭**的（本命令不改配置，只如实报）。")
     return 0

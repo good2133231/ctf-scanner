@@ -16272,6 +16272,228 @@ expression: r0()
           "（命中全部来自内置表且都是真识别）⇒ 据此**不加**路径门控并把依据钉成断言（字典仍是 6 列）"
           "｜变异：把一条外置判据改成通用词『login』⇒ 必须被 3 份以上语料抓到，否则那条 0 命中是假的")
 
+
+    # ---------------- [8ag] 续128：外部引擎的请求量口径（预估 + 硬上限） ----------------
+    #      用户点单第 4 件："外部引擎绕过预算：afrog/fscan 的请求由子进程自管，目前只在日志
+    #      如实声明，没有硬上限与预估展示。" —— 两个都得有，且**默认不改既有行为**（0=不限，
+    #      与 budget_total 同一条 F2 规矩），否则"加了个上限"就顺手把全端口扫描废了。
+    from scanner import extcost as _xc128
+
+    # ---- ① 预估数学（纯函数，坏值不抛） ----
+    assert _xc128.afrog(20, 150, {})["requests"] == 3000
+    assert _xc128.afrog(0, 150)["requests"] == 0 and _xc128.afrog(3, 0)["requests"] == 0
+    assert _xc128.afrog(20, 150, {"limits": {"external_max_requests": 0}})["over"] is False, \
+        "0 = 不限是默认档：任何非零默认值都会顺手改变既有行为（全端口扫描就是这么被砍的）"
+    _lim = {"limits": {"external_max_requests": 2999}}
+    _over = _xc128.afrog(20, 150, _lim)
+    assert _over["over"] is True and "上限" in _over["block"] and "external_max_requests" in _over["block"]
+    assert _xc128.afrog(20, 149, _lim)["over"] is False, "刚好等于上限不算超（> 而非 >=）"
+    assert _xc128.afrog(1, 1, {"limits": {"external_max_requests": "abc"}})["cap"] == 0, \
+        "策略页填错值必须落回「不限」，绝不让扫描起不来"
+    assert _xc128.afrog(1, 1, {"limits": {"external_max_requests": -5}})["cap"] == 0
+    # 两个单位**不合并**：各读各的键，互不影响（把端口探测当 HTTP 请求数是假等价）
+    _cross = {"limits": {"external_max_requests": 10, "external_max_port_probes": 999999}}
+    assert _xc128.ports(1, 65535, "fscan", _cross)["over"] is False
+    assert _xc128.afrog(5, 5, _cross)["over"] is True
+    _p = _xc128.ports(2, 100, "nmap", {"limits": {"external_max_port_probes": 150}})
+    assert _p["probes"] == 200 and _p["over"] and "nmap" in _p["block"] and "内置 TCP connect" in _p["block"], _p
+    _pl128 = _xc128.ports(2, 100)["line"]
+    assert "主机" in _pl128 and "端口" in _pl128 and "不经本任务预算" in _pl128 \
+        and "2" in _pl128 and "100" in _pl128, \
+        "预估那一行必须自带单位（主机×端口）与「不经本任务预算」的说明，" \
+        "否则读日志的人会以为本任务的预算管得住外部引擎"
+
+    # ---- ② afrog：超上限就**不起进程**（run_cmd 零调用），且预估必须打进日志 ----
+    from scanner import afrog as _af128
+    from scanner import utils as _u128
+    _wd128 = Path(_TMPDIR) / "afrog128"
+    (_wd128 / "pocs").mkdir(parents=True, exist_ok=True)
+    # afrog 的模板是它**自己**的结构：`rules:` 是**命名条目的映射**（`r0:`）+ 顶层
+    # `expression: r0()`，不是 nuclei 的 `http:` 列表。夹具形状写错会让 classify_poc
+    # 整批拒收、`run()` 在"没有只读模板"处就返回 —— 那测的是夹具而不是闸（本轮真踩过两次：
+    # 先是 nuclei 形状，再是 YAML 列表形状）。形状取自本文件既有的 `_FIX120` 真实夹具。
+    (_wd128 / "pocs" / "a.yaml").write_text(
+        "id: a\ninfo:\n  name: demo\n  severity: info\n"
+        "rules:\n  r0:\n    request:\n      method: GET\n      path: /\n"
+        "    expression: |-\n      response.status == 200\nexpression: r0()\n",
+        encoding="utf-8")
+    (_wd128 / "pocs" / "b.yaml").write_text(
+        "id: b\ninfo:\n  name: demo-b\n  severity: critical\n"
+        "rules:\n  r0:\n    request:\n      method: POST\n      path: /\n"
+        "    expression: |-\n      response.status == 200\nexpression: r0()\n",
+        encoding="utf-8")
+    _st128 = dict(_af128.DEFAULTS)
+    _st128.update({"enabled": True, "poc_dir": str(_wd128 / "pocs"), "max_targets": 2})
+
+    def _s128(**extra):
+        _x = copy.deepcopy(settings)
+        _x["afrog"] = dict(_st128, **extra)
+        _x.setdefault("limits", {}).update(extra.pop("limits", {}))
+        return _x
+
+    _calls128, _logged128 = [], []
+
+    class _Lz128:
+        def info(self, m):
+            _logged128.append(str(m))
+
+        def warning(self, m):
+            _logged128.append(str(m))
+
+        def debug(self, m):
+            pass
+
+    _real_cmd = _u128.run_cmd
+    _af_mod_cmd = _af128.run_cmd
+
+    def _fake_cmd(argv, cwd=None, timeout=900, throttle=None):
+        _calls128.append(list(argv))
+        return 0, "ok", ""
+
+    try:
+        _af128.run_cmd = _fake_cmd
+        _sites128 = [{"url": "http://127.0.0.1:8765/"}, {"url": "http://127.0.0.1:8765/x"}]
+        _v, _note = _af128.run(_sites128, _s128(), logger=_Lz128(), workdir=_wd128,
+                               binary="/fake/afrog")
+        assert len(_calls128) == 1, _calls128
+        assert "预估" in " ".join(_logged128), _logged128
+        assert "2 站点 × 1 只读 PoC" in _note, _note      # 只有 a.yaml 可喂（b 是 POST+critical）
+        _t = _xc128.parse_afrog_note(_note)
+        assert _t == (2, 1), _t
+        _calls128.clear(); _logged128.clear()
+        # 设一个必然超限的上限 ⇒ 一次进程都不许起，且说明必须带 `!`（§5.12 外部引擎的口径）
+        _v2, _note2 = _af128.run(_sites128, _s128(limits={"external_max_requests": 1}),
+                                 logger=_Lz128(), workdir=_wd128, binary="/fake/afrog")
+        assert _calls128 == [], f"超上限还起了进程，上限就是装饰：{_calls128}"
+        assert _note2.startswith("!") and "上限" in _note2 and _v2 == [], _note2
+        assert "external_max_requests" in _note2, \
+            "拦下来必须给出**怎么放开**（键名），否则人只知道被拦、不知道调哪里"
+        # 被拦下时 afrog **不自己再喊一遍**：`!` 说明交给调用方（vulnscan）打成 warning ——
+        # 这是续124「一句提示只有一个产地」的形状，所以这里断言"日志里没有第二份"。
+        assert _logged128 == [], f"afrog 自己又打了一遍拒绝原因（两个产地）：{_logged128}"
+    finally:
+        _af128.run_cmd = _af_mod_cmd      # 模块属性只有一份，还原一次就够
+
+    # ---- ③ portscan：超上限就退回内置（内置那条**真的**受门控），并写明原因 ----
+    from scanner import portscan as _ps128
+    from scanner.stages.portscan import PortscanStage as _PSt128
+    _hits128 = {"fscan": 0, "nmap": 0, "builtin": 0}
+    _real_f, _real_n, _real_b = _ps128.fscan_scan, _ps128.nmap_scan, _ps128.scan_host
+    _ps128.fscan_scan = lambda *a, **k: (_hits128.__setitem__("fscan", _hits128["fscan"] + 1), [])[1]
+    _ps128.nmap_scan = lambda *a, **k: (_hits128.__setitem__("nmap", _hits128["nmap"] + 1), [])[1]
+
+    def _fake_builtin(host, ip, ports, **k):
+        _hits128["builtin"] += 1
+        # 形状照生产：阶段拿 (host, ip, port) 当去重键，桩少一个键就是 KeyError
+        return [{"host": host, "ip": ip, "port": p, "service": "", "banner": ""}
+                for p in ports[:1]]
+
+    _logged128.clear()
+    try:
+        _ps128.scan_host = _fake_builtin
+        _st128p = copy.deepcopy(settings)
+        _st128p["portscan"] = dict(_st128p.get("portscan") or {}, enabled=True,
+                                   mode="top", engine="fscan")
+        _st128p["limits"] = dict(_st128p.get("limits") or {}, external_max_port_probes=10)
+        _tid128p = db.create_task("smoke128-port", "127.0.0.1", ["portscan"], {})
+        _w128p = Path(_TMPDIR) / "p128"
+        _w128p.mkdir(parents=True, exist_ok=True)
+        _ctxp = StageContext(_tid128p, "smoke128-port", parse_lines(["127.0.0.1"]),
+                             ["portscan"], {}, _st128p, _w128p, _Lz128())
+        _real_which128 = _PSt128.__module__ and sys.modules["scanner.stages.portscan"].which
+        sys.modules["scanner.stages.portscan"].which = lambda n: "/fake/fscan" if "fscan" in str(n) else None
+        _PSt128(_ctxp).run()
+        assert _hits128["fscan"] == 0, f"预估超限还调了 fscan（上限就是装饰）：{_hits128}"
+        assert _hits128["builtin"] > 0, _hits128
+        assert any("降级" in m or "改用内置" in m for m in _logged128), _logged128[-6:]
+        assert any("预估" in m for m in _logged128), _logged128[-6:]
+        # 不设上限 ⇒ 必须照旧用 fscan（默认路径永不触发拒绝，这条是"不改既有行为"的证明）
+        _hits128.update(fscan=0, nmap=0, builtin=0)
+        _logged128.clear()
+        _st128q = copy.deepcopy(_st128p)
+        _st128q["limits"] = dict(_st128q["limits"], external_max_port_probes=0)
+        _tid128q = db.create_task("smoke128-port2", "127.0.0.1", ["portscan"], {})
+        _ctxq = StageContext(_tid128q, "smoke128-port2", parse_lines(["127.0.0.1"]),
+                             ["portscan"], {}, _st128q, _w128p, _Lz128())
+        _PSt128(_ctxq).run()
+        assert _hits128["fscan"] > 0, f"没设上限却不肯用 fscan = 悄悄改变了既有行为：{_hits128}"
+        assert _hits128["builtin"] == 0, _hits128
+    finally:
+        _ps128.fscan_scan, _ps128.nmap_scan, _ps128.scan_host = _real_f, _real_n, _real_b
+        sys.modules["scanner.stages.portscan"].which = _real_which128
+
+    # ---- ④ 三方一致：DEFAULTS ↔ settings.yaml ↔ GUI 表单/POST ----
+    from scanner.config import DEFAULTS as _D128
+    from gui import app as _gui128
+    from scanner import users as _us128
+    _yaml128 = (ROOT / "config/settings.yaml").read_text(encoding="utf-8")
+    for _k in ("external_max_requests", "external_max_port_probes"):
+        assert _k in _D128["limits"] and _D128["limits"][_k] == 0, _k
+        assert f"{_k}: 0" in _yaml128, f"settings.yaml 缺 {_k}（三方一致）"
+    # 自带一个登录会话（不复用 [8ae] 的局部名 —— 那会把"组的顺序"变成隐式契约）
+    try:
+        _us128.create_user("smoke128-admin", "Passw0rd!123", role="admin")
+    except Exception:
+        pass
+    db._exec("UPDATE users SET must_change=0 WHERE username='smoke128-admin'")
+    _cl128 = _gui128.app.test_client()
+    assert _login7(_cl128, {"username": "smoke128-admin", "password": "Passw0rd!123"},
+                   environ_base={"REMOTE_ADDR": "198.51.100.213"}).status_code == 302
+    _sh128 = _cl128.get("/settings").get_data(as_text=True)
+    for _k in ("external_max_requests", "external_max_port_probes"):
+        assert f'name="{_k}"' in _sh128, f"策略配置缺 {_k} 的输入框"
+    _cap128 = {}
+
+    def _fake_save128(d):
+        _cap128.clear()
+        _cap128.update(d)
+        return load_settings()
+
+    _orig128 = _gui128.save_settings
+    _gui128.save_settings = _fake_save128
+    try:
+        assert _cl128.post("/settings", data={"min_severity": "medium",
+                                             "external_max_requests": "1200",
+                                             "external_max_port_probes": "0"}).status_code == 302
+        assert _cap128["limits"]["external_max_requests"] == 1200, _cap128["limits"]
+        assert _cap128["limits"]["external_max_port_probes"] == 0, _cap128["limits"]
+        # 表单没带这两项时必须落回 0（不限），不能留着上一次的数字 —— 那会让人以为闸还在
+        assert _cl128.post("/settings", data={"min_severity": "medium"}).status_code == 302
+        assert _cap128["limits"]["external_max_requests"] == 0, _cap128["limits"]
+        assert (ROOT / "config/settings.yaml").read_text(encoding="utf-8") == _yaml128, \
+            "校准与预检都**不许真写 config/settings.yaml**（整份重写会洗掉注释）"
+    finally:
+        _gui128.save_settings = _orig128
+
+    # ---- ⑤ §6.1 变异 ----
+    # a) 上限判定打回恒假 ⇒ ② 的"run_cmd 零调用"必须变红（这里正向复算一次）
+    _real_afrog_est = _xc128.afrog
+    _xc128.afrog = lambda n, p, s=None: {**_real_afrog_est(n, p, s), "over": False}
+    try:
+        _calls128.clear()
+        _af128.run_cmd = _fake_cmd        # ② 的 finally 已还原成真 run_cmd；这里必须再打桩，
+                                          # 否则这一步会**真去起** /fake/afrog 子进程
+        _v3, _n3 = _af128.run([{"url": "http://127.0.0.1:8765/"}],
+                              _s128(limits={"external_max_requests": 1}),
+                              logger=_Lz128(), workdir=_wd128, binary="/fake/afrog")
+        assert len(_calls128) == 1, f"变异没生效：afrog 的闸不是靠 over 判定的（calls={_calls128}）"
+    finally:
+        _xc128.afrog = _real_afrog_est
+        _af128.run_cmd = _af_mod_cmd      # 必须还原成真的 run_cmd（留桩会污染后面的组）
+    # b) 键名读错（把上限读成站点数）⇒ ① 的 over 断言红；这里做一次直接对照
+    assert _xc128.afrog(20, 150, {"limits": {"external_max_requests": 20}})["over"] is True, \
+        "上限读的是自己的键，不是 max_targets"
+    # c) portscan 的降级若写成"硬失败"（不跑内置）⇒ ③ 的 builtin>0 断言红
+    assert "内置 TCP connect" in _xc128.ports(9, 9, "fscan", {"limits":
+                                                              {"external_max_port_probes": 1}})["block"]
+
+    print("[8ag] 续128 外部引擎请求量口径 ok: 预估数学（afrog=站点×只读PoC / 端口=主机×端口，"
+          "两个单位**刻意不合并**）｜坏值与负数都落回「不限」，绝不让扫描起不来｜默认 0=不限 ⇒ "
+          "既有行为一字不变（全端口 fscan 照样跑），设了上限才咬｜afrog 超限**一次进程都不起**"
+          "（run_cmd 调用记录为空）且说明带 !｜portscan 超限**降级到内置**而不是硬失败"
+          "（内置那条真的受本任务门控）｜预估数字无论设不设都进日志｜CLI --check-afrog-pocs 也报预估"
+          "｜三方一致 + stub save_settings｜变异：恒不超限 / 读错键 / 降级写成不跑 都会让对应断言变红")
+
     print("SMOKE PASS")
 
 

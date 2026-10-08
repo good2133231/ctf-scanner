@@ -2924,7 +2924,12 @@ def create_app():
                                "rate_burst": float(f.get("rate_burst", 0) or 0),
                                "budget_total": int(f.get("budget_total", 0) or 0),
                                "budget_subprocess_weight": int(
-                                   f.get("budget_subprocess_weight", 1) or 1)},
+                                   f.get("budget_subprocess_weight", 1) or 1),
+                               # 外部引擎自管流量（续128）：留空/填 0 都是"不限"，与 DEFAULTS 同口径
+                               "external_max_requests": int(
+                                   f.get("external_max_requests", 0) or 0),
+                               "external_max_port_probes": int(
+                                   f.get("external_max_port_probes", 0) or 0)},
                     # 检测策略：级别门槛 + POC 引擎总开关 + 按 OWASP 分类/检查项/级别关闭
                     "checks": {"min_severity": f.get("min_severity", "medium"),
                                "skip_severities": f.getlist("skip_severities"),

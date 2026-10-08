@@ -497,8 +497,16 @@
         <input name="budget_total" value="{{ s.limits.budget_total }}"></label>
       <label>子进程计费权重（一次外部工具调用抵几次请求）
         <input name="budget_subprocess_weight" value="{{ s.limits.budget_subprocess_weight }}"></label>
+      <label>afrog 预估请求上限（0=不限）
+        <input name="external_max_requests" value="{{ s.limits.external_max_requests }}"></label>
+      <label>端口探测引擎预估上限（0=不限）
+        <input name="external_max_port_probes" value="{{ s.limits.external_max_port_probes }}"></label>
       <p class="hint">注意：<span class="mono">budget_total</span> 只约束"我们起几个外部子进程"，
-        <b>不约束外部工具内部发多少连接</b> —— 设了预算 ≠ 外部工具也被限住了。</p>
+        <b>不约束外部工具内部发多少连接</b> —— 设了预算 ≠ 外部工具也被限住了。
+        上面两项就是为这条缺口加的<b>硬闸</b>（续128）：afrog 按 <span class="mono">站点 × 只读 PoC</span>
+        预估 HTTP 请求数，fscan/nmap 按 <span class="mono">主机 × 端口</span> 预估探测次数，
+        两者单位不同所以<b>分开设</b>。超限时 afrog 直接不起、端口扫描退回内置实现
+        （那条真的走本任务的并发/限速/预算）。<b>预估数字无论设不设上限都会写进任务日志</b>。</p>
     </details>
   </section>
 

@@ -8,7 +8,7 @@
 且 CTF 里经常只给一个 Web 入口。需要时在 GUI「策略配置 → 端口与服务」里打开。
 """
 from .base import Stage
-from .. import cdn, db, dnsq, portscan
+from .. import cdn, db, dnsq, extcost, portscan
 from ..utils import pool_run, resolve_host, which
 
 
@@ -111,9 +111,19 @@ class PortscanStage(Stage):
         elif engine == "nmap" and not nmap_bin:
             ctx.logger.warning("[portscan] 指定引擎 nmap 不可用"
                                "（tools.nmap 未配置且不在 PATH），回退内置实现")
+        # 续128：先把**预估**说清楚（fscan/nmap 的探测由子进程自己发，不经本任务预算），
+        # 再在设了上限时真的降级 —— 降级而不是硬失败，是因为内置那条**真的**受门控约束。
+        _cost128 = extcost.ports(len(hosts), len(ports), picked[0], ctx.settings)
+        if _cost128["over"] and picked[0] != "内置 TCP connect":
+            ctx.logger.warning(f"[portscan] {_cost128['block']}")
+            fscan_bin = nmap_bin = None
+            picked = ["内置 TCP connect"]
         ctx.logger.info(f"[portscan] {scope}扫描：{picked[0]}，"
                         f"{len(hosts)} 个主机 x {len(ports)} 端口"
-                        + ("（自动排除本任务已扫过的端口）" if exclude_scanned else ""))
+                        + ("（自动排除本任务已扫过的端口）" if exclude_scanned else "")
+                        + f"｜{_cost128['line']}"
+                        + ("" if picked[0] != "内置 TCP connect" or not _cost128["over"]
+                           else "（本轮已降级，改走的探测由本任务门控）"))
         if full:
             # 给个量级预期：远端主机上"关闭的端口"要等满 timeout 才判定，所以最坏耗时
             # ≈ 端口数 / 并发 × 单端口超时。实测本机回环 65535 端口 @workers=256/timeout=0.3 约 82 秒；

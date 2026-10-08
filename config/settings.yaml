@@ -64,7 +64,11 @@ limits:
   rate_per_sec: 0                # 令牌桶速率（次/秒）；0=不限速
   rate_burst: 0                  # 令牌桶突发容量；0 → 取 max(rate_per_sec, 1)
   budget_total: 0                # 单任务请求总预算（HTTP/裸 socket/子进程共用）；0=不设预算
-  budget_subprocess_weight: 1    # 每次外部工具调用消耗的预算单位
+  budget_subprocess_weight: 1
+  # 外部引擎自管流量的预估与硬上限（续128）：0 = 不限（默认）。预估无论设不设都会打进日志。
+  # 单位不同故分两项：afrog 是 HTTP 请求数，fscan/nmap 是端口探测次数。
+  external_max_requests: 0
+  external_max_port_probes: 0    # 每次外部工具调用消耗的预算单位
 checks:
   min_severity: medium
   skip_severities:

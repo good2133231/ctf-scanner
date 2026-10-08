@@ -43,6 +43,7 @@ import tempfile
 from pathlib import Path
 
 from .config import resolve
+from . import extcost
 from .utils import run_cmd, which
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -249,6 +250,12 @@ def run(sites, settings, logger=None, workdir=None, throttle=None, binary=None):
     ok_files, refused = plan(poc_dir)
     if not ok_files:
         return [], f"!PoC 目录里没有只读模板（拒掉 {len(refused)} 个）"
+    # 续128：**请求由 afrog 自己发，本任务的预算与限速拦不住它** —— 所以这里既把预估打出来，
+    # 也在设了上限时真的不起进程。上限默认 0（不限），不改既有行为；但一旦设了就必须咬得住，
+    # 否则"上限"只是一个装饰数字。
+    cost = extcost.afrog(len(urls), len(ok_files), settings)
+    if cost["over"]:
+        return [], "!" + cost["block"]
     wd = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="afrog-"))
     wd.mkdir(parents=True, exist_ok=True)
     staged, n_staged = stage(ok_files, wd / "afrog-pocs")
@@ -272,6 +279,9 @@ def run(sites, settings, logger=None, workdir=None, throttle=None, binary=None):
     except (json.JSONDecodeError, ValueError) as e:
         return [], f"!afrog 结果文件不是合法 JSON（{type(e).__name__}）"
     vulns = to_vulns(rows)
+    # 实际下发用的是 `n_staged`（复制进任务目录的那份子集），预估必须用**同一个数**
+    # —— 用 `len(ok_files)` 会在复制失败时让日志里的数字比真实的小，而数字是给人的判断依据。
+    cost2 = extcost.afrog(len(urls), n_staged, settings)
     note = (f"afrog：{len(urls)} 站点 × {n_staged} 只读 PoC（拒收 {len(refused)} 个非只读/非 info），"
             f"命中 {len(vulns)} 条"
             + (f"；rc={rc}（它的退出码不可信，判定看结果文件）" if rc != 0 else ""))
@@ -279,6 +289,9 @@ def run(sites, settings, logger=None, workdir=None, throttle=None, binary=None):
         logger.info(f"[afrog] {note}")
         logger.info("[afrog] 请求由外部进程自管，**不经过本任务的请求预算**"
                     f"（全局 -rl {c['rate']}/s、单目标 -rlt {c['per_target_rate']}/s、并发 -c {c['concurrency']}）")
+        # 预估数字**无论有没有设上限都要打**（续128）：这一处的下限是"如实声明"，
+        # 有闸没数字是装饰，有数字没闸是唠叨。
+        logger.info(f"[afrog] {cost2['line']}")
         for name, why in refused[:10]:
             logger.debug(f"[afrog] 拒收 {name}：{why}")
         if len(refused) > 10:
