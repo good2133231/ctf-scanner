@@ -106,6 +106,13 @@ py -3 -m pip install -r requirements.txt
 不想用虚拟环境也可以 `python3 run_bootstrap.py --install --no-venv`（直接装到当前解释器），
 或手工 `pip install -r requirements.txt`（全局）。
 
+> **换机器请照 `requirements.lock` 装**：`python3 -m pip install -r requirements.lock`
+> （Windows 是 `py -3 -m pip install -r requirements.lock`）。两份清单的分工是——
+> `requirements.txt` ＝ **我要什么**（直接依赖 + 允许区间，CI 吃的那一份），
+> `requirements.lock` ＝ **这次实测装出来的是哪些版本**（把传递闭包逐条钉成 `==`，
+> Python 3.9 与 3.14 两边都实测装得动）。`run_bootstrap.py --install` 会优先用 lock、
+> 当前解释器装不动就回落 `requirements.txt`，并在输出里明说这次用的是哪一份。
+
 ### 2. 配置（**可跳过** —— 不配任何 key 也能完成子域名 / 端口 / 探测 / 目录 / 漏洞初筛）
 
 只有「外部情报拓展」（FOFA / Shodan / Quake / GitHub 检索）需要 key：

@@ -6,6 +6,53 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续137 锁一份 Python 依赖版本 —— `requirements.lock`，两头解释器各实测一次才算锁上
+
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）。用户点单的第 ② 条（与 续136 同一次点单）。
+
+### 问题
+
+`requirements.txt` 四条全是开区间（`flask>=2.0` / `requests>=2.25` / `PyYAML>=5.4` /
+`cryptography>=41`）。同一份清单在不同机器、不同时间点会装出**不同的版本组合**（Flask 会顺带拉走
+当时最新的 Werkzeug/click/…），换机器装上新版崩掉时，"我照 README 装的"这句话根本查不下去。
+
+### 做法：两层，别为了省事并成一层
+
+| 文件 | 语义 | 谁吃它 |
+|---|---|---|
+| `requirements.txt` | **我要什么**（人写的直接依赖 + 允许区间） | CI（`.github/workflows/*.yml`）、`docker_todo/Dockerfile` —— **口径一字未改** |
+| `requirements.lock` | **这次实测装出来的是哪些版本**（含全部传递依赖的 `==`） | `run_bootstrap.py --install` 优先吃它；换机器手工装也用它 |
+
+CI 保持吃 `requirements.txt` 是刻意的：让 CI 也换成 lock 是**单独一轮的决定**（它会把"CI 一直是绿的"
+那个基线一起改掉），本轮只在 `docs/usage.md` 写明以后要怎么改。
+
+`run_bootstrap.py::pick_requirements_file()` 选 lock 要同时满足三条：文件在、覆盖得住
+`requirements.txt` 的**每一个直接依赖**、且**当前解释器真的装得动**（`pip install --dry-run` 预检，
+只解析不落盘）。不满足就回落声明层并把**回落原因**原样打印 —— "这次吃了哪一份"必须是输出里的一行，
+不是让人猜（静默降级是本仓反复出事的地方）。**预检过了却装失败时不自动退回** `requirements.txt`：
+那会装出一套没人验过的版本组合，还把这次的真实故障（网络/磁盘）藏起来。
+
+### 要紧的取舍：3.9 是较紧的一侧，钉版以它为准
+
+本机 `.venv` 是 3.14，CI 与项目声明口径是 3.9。照抄 `pip freeze` 会得到一份 **3.9 装不动**的 lock
+（`click 8.2+` / `requests 2.33+` / `urllib3 2.7+` / `cffi 2.1+` / `pycparser 3.0` 都把
+`requires-python` 抬到了 `>=3.10`）。所以这 5 条钉的是**两头都能装的最近共同版本**，
+本机因此退回旧版 —— 宁可如此换"两头同一份可复现组合"，也不放宽成 `>=`（那等于没有锁定）。
+逐条理由写在 `requirements.lock` 文件头。另有三条只在某一侧/某一平台存在，带 environment marker：
+`importlib-metadata`/`zipp`（Flask 3.1.3 只在 `<3.10` 上要）、`typing-extensions`（cryptography
+只在 `<3.11` 要）、`colorama`（click 8.1.8 只在 Windows 要 —— 因为把 click 钉在 8.1.8，
+这一条就**必须**在 lock 里，否则 Windows 上会去解析一个没被锁定的 colorama 版本，"可复现"当场破功）。
+
+### 验证（两头各一次，这才是 lock 的验收口径）
+
+```
+docker run --rm -v "$PWD":/w -w /w python:3.9-slim pip install --no-cache-dir --dry-run -r requirements.lock
+python -m pip install --dry-run -r requirements.lock
+```
+两条本轮都实跑过：3.9 容器解析出 19 个包（`Would install Flask-3.1.3 … zipp-3.23.1`）、
+本机 3.14 退出码 0。`cryptography 50.0.2` 的 `requires-python` 是 `!=3.9.0,!=3.9.1,>=3.9` 且自带
+`cp39-abi3` 的 Linux/macOS/Windows 轮子（本项目跨 Windows/Linux，这点必须实测、不能猜）。
+
 ## 续136 导出/导入扫描数据（迁移能力）—— 默认零凭据，因为"迁移文件"最容易变成"凭据包"
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。用户点单两条：① 导出/导入扫描数据（要的其实是**跨机迁移**）

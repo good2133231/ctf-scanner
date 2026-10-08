@@ -18,7 +18,9 @@ subfinder/httpx/puredns、`requirements.txt` 得自己记得 `pip install`；至
    就得给那条红线开豁免，等于把红线削弱一次。
 2. **自动层的边界＝三样**：① 建项目内 `.venv`（`python -m venv` 失败就退到 `--without-pip` +
    官方 `get-pip.py` 引导 —— Ubuntu/Debian 把 ensurepip 拆进 `python3.x-venv` 包，这是常态）；
-   ② `pip install -r requirements.txt`；③ `toolmgr.update()`（官方产物 + release 自带 SHA256
+   ② pip 装依赖：有 `requirements.lock` 且当前解释器预检装得动就吃 lock，否则回落
+     `requirements.txt` —— **两种情况都会把"这次吃了哪一份"打进输出**（见 `pick_requirements_file()`）；
+   ③ `toolmgr.update()`（官方产物 + release 自带 SHA256
    才落盘）。取 get-pip 用的是**另一套同纪律但独立**的白名单（只 `https://bootstrap.pypa.io` +
    大小上限）—— 刻意不复用 `toolmgr.download_bytes`，把该主机塞进 toolmgr 的白名单等于为了
    一个安装脚本去放宽那条校验红线。
@@ -57,6 +59,12 @@ _GET_PIP_HOSTS = frozenset({"bootstrap.pypa.io"})
 _MAX_PIP_BYTES = 8 * 1024 * 1024
 _UA = "CTFScanner-bootstrap/0.1 (+authorized-testing-only)"
 REEXEC_ENV = "CTFSCANNER_BOOTSTRAP_REEXEC"
+
+# 依赖清单分两层（各自的分工写在文件头里）：`requirements.txt` ＝ 声明"我要什么"（开区间），
+# `requirements.lock` ＝ 钉"这次实测装出来的是哪些版本"（含全部传递依赖的 `==`）。
+# 自动层优先吃 lock，装不动就回落 txt —— 但**这次到底吃了哪一份一定要印出来**。
+REQ_TXT = "requirements.txt"
+REQ_LOCK = "requirements.lock"
 
 # requirements.txt 里的分发名 → 可 import 的模块名（本项目只有 PyYAML 这一个不一致）
 _IMPORT_ALIAS = {"pyyaml": "yaml"}
@@ -257,15 +265,66 @@ def rerun_in_venv(argv=None, root=None):
     return run.returncode
 
 
-def requirement_names():
-    """读 `requirements.txt` 的分发名（忽略注释/空行；只取名字，不比版本约束）。"""
-    text = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+def _dist_names(text):
+    """从一份 requirements 风格的**文本**里取分发名（忽略注释/空行与 marker；不比版本约束）。"""
     out = []
     for line in text.splitlines():
         line = line.split("#", 1)[0].strip()
         if line:
             out.append(re.split(r"[<>=!~\[\s;]", line, maxsplit=1)[0].strip())
     return [n for n in out if n]
+
+
+def _norm_dist(name):
+    """分发名归一（`importlib-metadata` 与 `importlib_metadata` 是同一个包）。"""
+    return (name or "").lower().replace("-", "_")
+
+
+def requirement_names():
+    """读 `requirements.txt` 的分发名（忽略注释/空行；只取名字，不比版本约束）。"""
+    return _dist_names((ROOT / REQ_TXT).read_text(encoding="utf-8"))
+
+
+def locked_names():
+    """读 `requirements.lock` 的分发名；文件不存在时返回 `[]`（声明层缺席≠报错）。"""
+    lock = ROOT / REQ_LOCK
+    if not lock.exists():
+        return []
+    return _dist_names(lock.read_text(encoding="utf-8", errors="replace"))
+
+
+def pick_requirements_file():
+    """自动层这次吃哪一份清单：`requirements.lock`（可复现）或 `requirements.txt`（声明层）。
+
+    选 lock 要同时满足三条：文件在、覆盖得住 `requirements.txt` 的**每一个直接依赖**、
+    且**当前解释器真的装得动**（用 `pip install --dry-run` 预检，只解析不落盘）。
+    任何一条不满足就回落 `requirements.txt`，并把**回落原因**原样交给调用方打印 ——
+    静默换清单与静默降级是同一类毛病，所以"用了哪一份"必须是输出里的一行，不是猜的。
+    返回 `(相对路径, 说明)`；路径一律相对项目根（§0 硬规矩 3）。
+    """
+    want = {_norm_dist(x) for x in requirement_names()}
+    have = {_norm_dist(x) for x in locked_names()}
+    if not have:
+        return REQ_TXT, f"没有 {REQ_LOCK}（只有声明层 {REQ_TXT}）"
+    miss = sorted(want - have)
+    if miss:
+        return REQ_TXT, f"{REQ_LOCK} 里没有这些直接依赖：{'、'.join(miss)}"
+    if importlib.util.find_spec("pip") is None:
+        return REQ_TXT, "当前解释器没有 pip，无从预检 lock"
+    try:
+        chk = subprocess.run([sys.executable, "-m", "pip", "install", "--dry-run",
+                              "--disable-pip-version-check", "-r", REQ_LOCK],
+                             cwd=str(ROOT), capture_output=True, text=True)
+    except OSError as exc:
+        # 预检本身起不来＝"没验证过"，不能当成"验证通过"，回落声明层并说清是哪一步炸的
+        return REQ_TXT, f"{REQ_LOCK} 无法预检（{exc}）"
+    if chk.returncode != 0:
+        tail = (chk.stderr or chk.stdout or "").strip().splitlines()
+        return REQ_TXT, (f"当前解释器装不动 {REQ_LOCK}（预检失败）："
+                         f"{(tail[-1] if tail else f'rc={chk.returncode}')[:200]}")
+    return REQ_LOCK, f"预检通过：当前解释器装得动这 {len(have)} 条精确版本"
+
+
 
 
 # ---------- 系统包层（`--with-system` 才执行） ----------
@@ -614,16 +673,23 @@ def install_auto(only=(), allow_unverified=False, dest_dir=None, wire=True):
             failed.append({"name": "requirements", "reason": "当前解释器没有 pip"})
             print("[!] 跳过 pip 依赖：当前解释器没有 pip（自动层装不了，见清单里的命令）")
         else:
-            p = subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
+            req_file, req_why = pick_requirements_file()
+            print(f"[i] Python 依赖清单：本次用 {req_file} —— {req_why}")
+            p = subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file],
                                cwd=str(ROOT), capture_output=True, text=True)
             tail = (p.stderr or p.stdout or "").strip().splitlines()
             if p.returncode == 0:
-                installed.append({"tool": "requirements", "path": "requirements.txt"})
-                print("[+] Python 依赖已装好（requirements.txt）")
+                installed.append({"tool": "requirements", "path": req_file})
+                print(f"[+] Python 依赖已装好（{req_file}）")
             else:
                 reason = tail[-1] if tail else f"rc={p.returncode}"
-                failed.append({"name": "requirements", "reason": reason})
-                print(f"[!] Python 依赖安装失败：{reason}")
+                failed.append({"name": "requirements", "reason": f"{req_file}: {reason}"})
+                print(f"[!] Python 依赖安装失败（{req_file}）：{reason}")
+                if req_file == REQ_LOCK:
+                    # 预检过了却装失败＝多半是网络/磁盘，不是版本不可解。此时**不自动**退回
+                    # requirements.txt：那会装出一套没人验过的版本组合，还把真故障藏起来。
+                    print(f"[!] 没有自动退回 {REQ_TXT} —— 退回去装的是**另一套版本组合**，"
+                          f"会把这次的真实故障藏掉；确认是版本不可解请把 {REQ_LOCK} 临时改名再重跑")
     tool_names = [r["name"] for r in rows if r["kind"] == "auto"]
     if wanted:
         tool_names = [n for n in tool_names if n in wanted]

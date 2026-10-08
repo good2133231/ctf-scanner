@@ -1,0 +1,84 @@
+# ============================================================================
+# requirements.lock —— Python 依赖的精确版本锁定（可复现安装用）
+# ============================================================================
+#
+# 这是什么：`requirements.txt` 只有 4 条开区间（`>=`），于是同一份清单在不同机器、不同
+# 时间点会装出**不同的版本组合**（Flask 会顺带拉走当时最新的 Werkzeug/click/…）。本文件把
+# 那一次实测组合的**完整传递闭包**逐条钉成 `==`：换机器时
+# `pip install -r requirements.lock` 装到的就是下面这二十来条，一版不差。
+# 复现的是"版本组合"，不是"最新可用" —— 想升级请看下面"怎么重新生成"。
+#
+# 谁是权威（两个解释器都必须装得动，否则这条就不许锁进来）：
+#   ① **Python 3.9** ＝ CI 与项目声明口径（`.github/workflows/smoke.yml`、
+#      `.github/workflows/quality.yml` 都在 3.9 上 `pip install -r requirements.txt`，
+#      Docker 镜像口径同样是 `python:3.9-slim`）—— 这一侧是**较紧的一侧**，钉版以它为准；
+#   ② **Python 3.14** ＝ 本机开发/实机验证口径（`.venv`）。
+#   下面每一条都在 3.9 容器与 3.14 虚拟环境里各跑过一次安装校验，不是照抄 `pip freeze`。
+#
+# 怎么重新生成（一条命令，在仓库根执行；不引 pip-tools 等新依赖）：
+#   docker run --rm -v "$PWD":/w -w /w python:3.9-slim bash -c "pip install -r requirements.txt && pip freeze"
+#   拿它的输出与本机 3.14 的 `python -m pip freeze` 对一遍，按三条规则写回本文件：
+#   两边都有的条目 → 钉 3.9 能装的那一版（较紧的一侧）；只在某一侧出现的条目 → 必须带
+#   environment marker；两边版本不同的条目 → 在下面的"版本取舍"里写明为什么是这一个版本。
+#   改完**两头各验一次**（必须都成功，这才是 lock 的验收口径）：
+#     docker run --rm -v "$PWD":/w -w /w python:3.9-slim pip install --no-cache-dir --dry-run -r requirements.lock
+#     python -m pip install --dry-run -r requirements.lock
+#
+# 分工（别为了省事把两件事并成一件）：
+#   `requirements.txt` ＝ **我要什么**：人写的直接依赖 + 允许区间，CI 与 Dockerfile 吃的就是它；
+#   本文件 ＝ **这次实测装出来的是哪些版本**：机器核对过的快照，只负责可复现。
+#   新增/删除依赖**只改 requirements.txt**，再按上面的命令重新生成本文件；在本文件里加一条
+#   requirements.txt 没有的包＝绕过声明层。CI 口径保持不变（不改 `.github/workflows/*`）——
+#   要让 CI 也吃 lock 是单独一轮决定（改 `.github/workflows/` 会让 3.9 基线整体漂移）。
+#   面向使用者的同一句说明写在 README.md「安装依赖」与 docs/usage.md「跨平台（Linux 部署要点）」两处。
+#   `run_bootstrap.py --install` 会**优先**用本文件，当前解释器装不动时回落 requirements.txt，
+#   并在输出里明说这次用的是哪一份（本项目不许静默降级）。
+#
+# 版本取舍 —— 这 5 条钉的**不是**本机 3.14 装的那一版，而是"3.9 与 3.14 都能装的最近共同版本"：
+#   根因是上游从某个版本起把 `requires-python` 抬到 `>=3.10`，于是 3.9（CI 口径）装不上更新的。
+#   宁可让本机也退回这一版换"两头同一份可复现组合"，也不放宽成 `>=`（那等于没有锁定）：
+#     click     8.1.8   （8.2.0 起要 >=3.10；本机 3.14 本可装 8.5.0）
+#     requests  2.32.5  （2.33.0 起要 >=3.10；本机本可装 2.34.2）
+#     urllib3   2.6.3   （2.7.0 起要 >=3.10；本机本可装 2.8.0）
+#     cffi      2.0.0   （2.1.0 起要 >=3.10；本机本可装 2.1.1，cp39 与 cp314 两档 wheel 都有）
+#     pycparser 2.23    （3.0 起要 >=3.10；本机本可装 3.0）
+#   另：`cryptography 50.0.2` 的 `requires-python` 是 `!=3.9.0,!=3.9.1,>=3.9` —— 3.9.2 及以上都能装，
+#   且它自带 `cp39-abi3` 的 Linux/macOS/Windows 轮子（本项目跨 Windows/Linux，这点必须实测，不能猜）。
+#
+# 三条带 marker 的条目＝它们**只在某一侧/某一平台存在**（不是"版本不同"，所以无共同版本可钉）：
+#   importlib-metadata / zipp ＝ Flask 3.1.3 只在 `python_version < "3.10"` 上要（3.10+ 用标准库）；
+#   typing-extensions ＝ cryptography 50.0.2 只在 `python_full_version < "3.11"` 上要；
+#   colorama ＝ click 8.1.8 只在 Windows 上要。因为上面把 click 钉在了 8.1.8（而不是已弃用
+#   colorama 的 8.2+），这一条就**必须**在 lock 里：否则 Windows 上装 click 时会去解析一个
+#   没被锁定的 colorama 版本，"可复现"当场破功。
+# ============================================================================
+
+# ---- 直接依赖（声明层＝requirements.txt，这里只是把区间钉成实测快照） ----
+Flask==3.1.3
+requests==2.32.5
+PyYAML==6.0.3
+cryptography==50.0.2
+
+# ---- Flask 的传递闭包 ----
+Werkzeug==3.1.9
+Jinja2==3.1.6
+click==8.1.8
+itsdangerous==2.2.0
+blinker==1.9.0
+MarkupSafe==3.0.4
+importlib-metadata==8.7.1; python_version < "3.10"
+zipp==3.23.1; python_version < "3.10"
+colorama==0.4.6; platform_system == "Windows"
+
+# ---- requests 的传递闭包 ----
+urllib3==2.6.3
+certifi==2026.7.22
+idna==3.20
+charset-normalizer==3.5.2
+
+# ---- cryptography 的传递闭包（config/keys.enc.yaml 的 AES-GCM 解密用） ----
+cffi==2.0.0
+pycparser==2.23
+typing-extensions==4.16.0; python_full_version < "3.11"
+
+# ---- PyYAML 的传递闭包：无（纯 CPython + 可选 libyaml，装不上就退回纯 Python 解析） ----
