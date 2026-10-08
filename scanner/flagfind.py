@@ -12,7 +12,9 @@
    模块源码里不许出现 `http_request` / `urlopen` / `socket` / `run_cmd`。
    新增"这页没取到正文，我再抓一次"的写法会立刻判红 —— 那等于把「目录发现 + JS 挖掘」
    的请求量翻倍，而预算与限速都不是为它准备的。
-2. **成本必须封顶**。默认判据是"字面前缀 + 定界闭括号"，用 `str.find` 扫一份**小写副本**：
+2. **成本必须封顶**。默认判据是"字面前缀 + 定界闭括号"，用 `str.find` 扫一份**小写副本**
+   （封顶键 `flags.max_chars` 的单位是**字符**不是字节 —— 成本按字符走，而中文一个字符
+   在 UTF-8 里是 3 字节，写成"字节"会让人以为放行量比实际小三倍）：
    实测 1.56 MB 正文：本实现 1.2 ms；同样两个前缀写成一趟全局忽略大小写的交替正则要
    40.3 ms，把各家比赛的前缀都塞进去（21 路）要 332.3 ms。而这些正文在 dirscan 里是
    **按路径逐条**过一遍的（几百到上万条），量级差就是整轮的耗时差。
@@ -273,7 +275,7 @@ def harvest(ctx, url, text, where):
     if not cfg.get("enabled", True) or not text:
         return 0
     st = stats(ctx)
-    max_bytes = _ints(cfg, "max_bytes", 2000000, 1)
+    max_chars = _ints(cfg, "max_chars", 2000000, 1)
     per_source = _ints(cfg, "max_per_source", 20, 1)
     cap = _ints(cfg, "max_per_task", 200, 1)
     lock = getattr(ctx, "_flag_lock", None) or _FALLBACK_LOCK
@@ -283,7 +285,7 @@ def harvest(ctx, url, text, where):
     with lock:
         st["texts"] += 1
         st["bytes"] += len(text)
-        oversize = len(text) > max_bytes
+        oversize = len(text) > max_chars
         if oversize:
             # 必须说出来：跳过 N 份正文而不说，页面就成了"扫过了、没有 flag"。
             st["oversize"] += 1
@@ -351,7 +353,7 @@ def note(ctx, since):
     if d["dedup"]:
         bits.append(f"库里已有同值 {d['dedup']} 条未重复入库")
     if d["oversize"]:
-        bits.append(f"跳过 {d['oversize']} 份超大正文（>{_cfg(ctx.settings)['max_bytes']} 字节，"
+        bits.append(f"跳过 {d['oversize']} 份超大正文（>{_cfg(ctx.settings)['max_chars']} 字符，"
                     f"是「没扫」不是「没找到」）")
     if d["full"]:
         bits.append(f"已达 max_per_task 上限，另有 {d['full']} 条未收")

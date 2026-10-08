@@ -3043,7 +3043,7 @@ def create_app():
                               "patterns": [x.strip() for x in
                                            (f.get("flags_patterns") or "").split(",") if x.strip()],
                               "max_len": int(f.get("flags_max_len", 200) or 200),
-                              "max_bytes": int(f.get("flags_max_bytes", 2000000) or 2000000),
+                              "max_chars": int(f.get("flags_max_chars", 2000000) or 2000000),
                               "max_per_source": int(f.get("flags_max_per_source", 20) or 20),
                               "max_per_task": int(f.get("flags_max_per_task", 200) or 200)},
                     "afrog": {"enabled": f.get("afrog_enabled") == "1",

@@ -244,7 +244,7 @@ flags:
   patterns: []
   min_len: 1
   max_len: 200
-  max_bytes: 2000000
+  max_chars: 2000000
   max_per_source: 20
   max_per_task: 200
 tools:

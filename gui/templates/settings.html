@@ -82,7 +82,8 @@
       <label>每任务最多入库 <input name="flags_max_per_task" size="5" value="{{ s.flags.max_per_task }}"></label>
       <label>每份正文最多收 <input name="flags_max_per_source" size="5" value="{{ s.flags.max_per_source }}"></label>
       <label>值体最长 <input name="flags_max_len" size="5" value="{{ s.flags.max_len }}"></label>
-      <label>单份正文最大字节 <input name="flags_max_bytes" size="10" value="{{ s.flags.max_bytes }}"></label>
+      <label>单份正文最多字符（非字节）
+        <input name="flags_max_chars" size="10" value="{{ s.flags.max_chars }}"></label>
       <label>自定义正则（逗号分隔，可留空）
         <input name="flags_patterns" size="46" value="{{ s.flags.patterns|join(',') }}"
           placeholder="flag\s*[:=]\s*[A-Za-z0-9_]+"></label>

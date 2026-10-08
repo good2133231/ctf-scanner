@@ -15886,6 +15886,14 @@ expression: r0()
     _idx126 = {r["name"] for r in _db126._query(
         "SELECT name FROM sqlite_master WHERE type='index'")}
     assert "idx_flags_task" in _idx126, "flags 也归「每条读取路径都按 task_id 过滤」的资产表"
+    # 两个**撞名不同义**的键 must not be confused（本轮批量改名真的误伤过一次）：
+    # 两个**撞名不同义**的键不能混：`toolmgr.download_bytes` 的 `max_bytes` 是真的字节
+    # （下载体积），与 flags 段的 `max_chars` 毫无关系 —— 本轮批量改名就误伤过它一次。
+    # 参数名即接口，钉住它：下一次批量替换会立刻红。
+    import inspect as _insp130
+    from scanner import toolmgr as _tm130
+    _prm130 = list(_insp130.signature(_tm130.download_bytes).parameters)
+    assert "max_bytes" in _prm130 and "max_chars" not in _prm130, _prm130
     _tid126 = _db126.create_task("smoke126", "http://127.0.0.1:8765/", ["probe"], {})
     _db126.insert_flag(_tid126, {"value": "Keep_Case_ABC", "kind": "flag", "source": "probe",
                                  "url": "http://127.0.0.1:8765/", "context": "…flag{Keep_Case_ABC}…"})
@@ -15917,7 +15925,7 @@ expression: r0()
         _db126.insert_flag = lambda t, f: _cap126.append((t, dict(f)))
         _db126.list_flags = lambda t, limit=None: []
         _c1 = _Ctx126(_S(enabled=True, prefixes=["flag"], max_per_source=20, max_per_task=2,
-                         max_bytes=1000, min_len=1, max_len=200))
+                         max_chars=1000, min_len=1, max_len=200))
         assert _ff126.harvest(_c1, "http://x/", "flag{one} 与 flag{one} 再 flag{two}", "probe") == 2
         assert _ff126.harvest(_c1, "http://x/", "flag{one}", "probe") == 0, "同值必须去重"
         assert _ff126.harvest(_c1, "http://x/", "flag{three}", "probe") == 0, "max_per_task 必须封顶"
@@ -15937,10 +15945,22 @@ expression: r0()
         assert _ff126.harvest(_c3, "http://x/", "flag{nope}", "probe") == 0
         assert _ff126.stats(_c3)["texts"] == 0 and _ff126.note(_c3, {}) == ""
         # 超大正文：跳过**必须说出来**
-        _c4 = _Ctx126(_S(enabled=True, prefixes=["flag"], max_bytes=10, max_len=200, min_len=1))
+        _c4 = _Ctx126(_S(enabled=True, prefixes=["flag"], max_chars=10, max_len=200, min_len=1))
         assert _ff126.harvest(_c4, "http://x/", "flag{too_big_here}", "probe") == 0
         _n4 = _ff126.note(_c4, {})
         assert _ff126.stats(_c4)["oversize"] == 1 and "没扫" in _n4, _n4
+        assert "字符" in _n4 and "字节" not in _n4, f"封顶单位必须说清是字符（续130 改名）：{_n4}"
+        # 续130 把 `max_bytes` 改名成 `max_chars`（它比的从来就是 `len(text)`，不是字节）。
+        # 改名后旧配置里残留的那个 `max_bytes` 必须**惰性**：既不生效，也不报错。
+        _c7 = _Ctx126(_S(enabled=True, prefixes=["flag"], max_chars=10, max_bytes=1,
+                          max_len=200, min_len=1))
+        assert _ff126.harvest(_c7, "http://x/", "flag{too_big_here}", "probe") == 0, \
+            "新键 max_chars 得真的生效（10 字符上限，这段 18 字符）"
+        assert _ff126.stats(_c7)["oversize"] == 1
+        _c8 = _Ctx126(_S(enabled=True, prefixes=["flag"], max_chars=999, max_bytes=1,
+                          max_len=200, min_len=1))
+        assert _ff126.harvest(_c8, "http://x/", "flag{too_big_here}", "probe") == 1, \
+            "残留的 max_bytes 不再是惰性键 ⇒ 用户文件里一个没人读的键悄悄改了行为"
         # 上下文：必须带得上原文（人工判占位符靠它）
         _c6 = _Ctx126(_cfg126)
         _cap126.clear()
@@ -15990,7 +16010,7 @@ expression: r0()
     from gui import app as _gui126
     from scanner import users as _us126
     _fkeys = ("enabled", "prefixes", "patterns", "min_len", "max_len",
-              "max_bytes", "max_per_source", "max_per_task")
+              "max_chars", "max_per_source", "max_per_task")
     assert set(_D126["flags"]) == set(_fkeys), sorted(_D126["flags"])
     _yaml126 = (ROOT / "config/settings.yaml").read_text(encoding="utf-8")
     _seg126 = _yaml126.split("flags:", 1)[1].split("\ntools:", 1)[0]
@@ -16006,7 +16026,7 @@ expression: r0()
                    environ_base={"REMOTE_ADDR": "198.51.100.212"}).status_code == 302
     _sh126 = _cl126.get("/settings").get_data(as_text=True)
     for _k in ("enabled", "prefixes", "patterns", "max_len",
-               "max_bytes", "max_per_source", "max_per_task"):
+               "max_chars", "max_per_source", "max_per_task"):
         assert f'name="flags_{_k}"' in _sh126, f"策略配置缺 flags.{_k} 的输入框"
     # `min_len` 刻意不在页面上：它只为挡 `flag{}` 这种空壳，给个能填 0 的框等于请人来
     # 造一条"什么形状都匹配"的判据。这条豁免写在这里，不是漏做。
@@ -16071,7 +16091,7 @@ expression: r0()
 
     _ff126.harvest = _harvest_hide
     try:
-        _c5 = _Ctx126(_S(prefixes=["flag"], max_bytes=10, max_len=200, min_len=1))
+        _c5 = _Ctx126(_S(prefixes=["flag"], max_chars=10, max_len=200, min_len=1))
         _ff126.harvest(_c5, "http://x/", "flag{too_big_here}", "probe")
         assert "没扫" not in _ff126.note(_c5, {}), "变异没生效：note 仍说得出跳过几份"
     finally:
@@ -16395,6 +16415,10 @@ expression: r0()
         return [{"host": host, "ip": ip, "port": p, "service": "", "banner": ""}
                 for p in ports[:1]]
 
+    _ps_mod128 = sys.modules["scanner.stages.portscan"]
+    # 原值必须在 try **之前**取：放里面一旦前面某步先抛，finally 就会去还原一个
+    # 还没赋值的名字 —— 报出来的是 NameError，真正的失败原因被整个盖掉。
+    _real_which128 = _ps_mod128.which
     _logged128.clear()
     try:
         _ps128.scan_host = _fake_builtin
@@ -16407,8 +16431,7 @@ expression: r0()
         _w128p.mkdir(parents=True, exist_ok=True)
         _ctxp = StageContext(_tid128p, "smoke128-port", parse_lines(["127.0.0.1"]),
                              ["portscan"], {}, _st128p, _w128p, _Lz128())
-        _real_which128 = _PSt128.__module__ and sys.modules["scanner.stages.portscan"].which
-        sys.modules["scanner.stages.portscan"].which = lambda n: "/fake/fscan" if "fscan" in str(n) else None
+        _ps_mod128.which = (lambda n: "/fake/fscan" if "fscan" in str(n) else None)
         _PSt128(_ctxp).run()
         assert _hits128["fscan"] == 0, f"预估超限还调了 fscan（上限就是装饰）：{_hits128}"
         assert _hits128["builtin"] > 0, _hits128
@@ -16427,7 +16450,7 @@ expression: r0()
         assert _hits128["builtin"] == 0, _hits128
     finally:
         _ps128.fscan_scan, _ps128.nmap_scan, _ps128.scan_host = _real_f, _real_n, _real_b
-        sys.modules["scanner.stages.portscan"].which = _real_which128
+        _ps_mod128.which = _real_which128
 
     # ---- ④ 三方一致：DEFAULTS ↔ settings.yaml ↔ GUI 表单/POST ----
     from scanner.config import DEFAULTS as _D128
