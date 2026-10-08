@@ -105,20 +105,23 @@ Flask Web 控制台（仿 ARL）。
   头换成 `Authorization: Bearer $pw`。
   **Linux 侧（这台远端机）推送的实操事实（2026-10-08 续136 实测）**：
   `credential.helper` 指向**仓库外**的 `/opt/tools/ctf/git-cred-helper.py`，它只从
-  `config/keys.enc.yaml` 现场解出 `github.token`，口令来源**只有** `CTFSCANNER_KEYS_PASSPHRASE`
+  `config/keys.enc.yaml` 现场解出 GitHub 令牌，改之前口令来源**只有** `CTFSCANNER_KEYS_PASSPHRASE`
   或真 TTY —— 而 `config/settings.yaml` 把 `gui.keys_ask_passphrase` 设成了 `false`（续134），
   于是在 AI 的 shell（无 `/dev/tty`）里 `git push` **必然失败**，表现是
   `[!] 凭据未解锁…` + `could not read Username`。这不是网络问题，也不是 helper 坏了。
-  本轮实测可用的一条（不改任何持久配置）：token 放**仓库外** 600 文件（`~/.secrets/gh-push-token`）
-  ＋一个只读该文件的 `GIT_ASKPASS` 脚本 ＋ `git -c credential.helper= push origin main`
-  （临时空掉 helper，只在这一条命令里生效）。token 不进 argv、不进 `ps`、不进 history、不落 `.git/config`。
-  三条"不要"：① **不要**把 PAT/口令写进仓库目录内的任何文件（本轮就真的出现过
-  `ctf-scanner/test` 里躺着一个 `ghp_` PAT —— 离被 `git add -A` 提交进公开仓库只差一次手滑，
-  已移到 `~/.secrets/` 并 `chmod 600`）；② **不要**再做一层"只有本脚本能解"的加密存放 ——
-  解密器在同一台机器上等于把加密降级成混淆（§7 续98 那条原话）；③ **不要**用
-  `git credential approve`，本仓 helper 对 `store`/`erase` 刻意沉默正是为了拦这一手。
-  想彻底免打扰：把这个 PAT 写进 `keys.enc.yaml` 的 `github.token`（那本来就是这个文件的用途），
-  推送时给一次口令即可。
+  本轮最终落定的形态（2026-10-08，用户选定"值不落明文"即可，接受同机兜底口令这一档）：
+  推送令牌作为**新键 `github.push_token`** 存进 `config/keys.enc.yaml`（PBKDF2+AES-256-GCM），
+  **不覆盖** `github.token` —— 后者是 `github_leak` 阶段做代码搜索用的**只读**令牌，把可写令牌
+  交给扫描器等于白送权限；反过来用只读令牌去推则只会得到一个归因错的 403。磁盘上因此
+  **不再存在任何明文 PAT**（本轮就发生过：仓库根 `test` 文件里躺着一个 `ghp_` 令牌 ——
+  离被 `git add -A` 提交进公开仓库只差一次手滑；已核从未进过任何提交，值现已只存在于密文里）。
+  口令兜底：`~/.secrets/keys-pass`（**600、属主必须是自己**，否则助手拒绝读、退回当场问一次），
+  优先级＝环境变量 > 该文件 > `/dev/tty`。`git-cred-helper.py` 取令牌的顺序＝
+  `push_token` > `token`。改完 `git push` 不再需要任何环境变量或 askpass。
+  ⚠️ 诚实的边界：解密器与密文同机 ⇒ 这**不是**更强的加密，能读 `~/.secrets/keys-pass` 的人
+  就能解开 `keys.enc.yaml`（§7 续98 那条原话照旧成立）。这一档买到的只有三件事：明文不落盘、
+  值不进 argv/`ps`/history/`.git/config`、以及权限一被改坏就自动失效。要真正收回这一点，
+  就把 `~/.secrets/keys-pass` 删掉，回到"每次推送给一次口令"。
 
   **多机 / 多 AI 并行时的同步纪律（2026-10-02 立，两边会话都要遵守）**：
   仓库是**公开的**（`good2133231/ctf-scanner`；不带凭据访问 GitHub API 就是 200），
