@@ -13439,7 +13439,8 @@ http:
             「挖掘失败」warning + 域名全丢，判据只剩"库里 0 条"这种看不出根因的红。
             """
             if text_sink:
-                text_sink(url, "<html>桩正文 flag{Stub_Sink}</html>")
+                text_sink({"url": url, "text": "<html>桩正文 flag{Stub_Sink}</html>",
+                           "status": 200, "headers": {"Server": "nginx"}})
             return {"domains": ["api.zone113.test", "chat.floating.open", "sub.mystery113.test"],
                     "urls": set(), "secrets": [], "js_count": 1}
 
@@ -15952,7 +15953,9 @@ expression: r0()
     from scanner import jsmine as _js126
     _sink126 = []
     _js126.mine("http://127.0.0.1:8765/", load_settings(), logger=None,
-                text_sink=lambda u, t: _sink126.append((u, len(t))))
+                text_sink=lambda _r: _sink126.append((_r.get("url"), len(_r.get("text") or ""),
+                                                      _r.get("status"),
+                                                      sorted(_r.get("headers") or {}))))
     assert _sink126 and _sink126[0][1] > 0, "text_sink 没被点到 ⇒ flag 抽取在 jsmine 这路是死的"
     assert str(_sink126[0][0]).startswith("http://127.0.0.1:8765"), _sink126[0][0]
 
@@ -16084,6 +16087,190 @@ expression: r0()
           "｜四个出口 AST + jsmine text_sink 真跑｜报告三格式 + JSONL｜三方一致（stub save_settings，"
           "绝不写真配置——本轮手测真洗掉过一次注释）｜变异：值取小写副本 / 锚不小写化 / 抹掉超限计数 /"
           " 收下无锚正则 / 第二处 ASSET_TABLES 都变红")
+
+
+    # ---------------- [8af] 续127：把已在手的响应喂回指纹判定 + 外置表误报校准 ----------------
+    #      用户点单第 3 件的前半："外置表 58 条候选里 52 条的判据原本是『打了 /login、
+    #      /druid/login.html 这类路径之后长这样』，而 identify() 全仓只有 stages/probe.py:186
+    #      调它（根响应）⇒ 这批规则基本永不触发，白占判定成本；且这 51 条从没验过误报率
+    #      （POC 侧有 tools/calibrate_pocs.py 的负样本机制，指纹侧没有对应物）。
+    #      要么把 dirscan/jsmine 已经在发的响应喂给 identify()，要么加路径门控并承认它们仍是死的。"
+    #      **先量再改**：负样本语料测出来的是「外置 51 条在 12 份通用页上 0 命中」
+    #      ⇒ "路径门控"买不到任何东西（它挡的是 FP，而 FP 实测为 0），真正缺的是覆盖。
+    #      所以这一轮做的是"喂响应"，并把"不做路径门控"这个决定的**依据**钉成断言（⑤）。
+    from scanner import fingerprint as _fp127
+    import ast as _ast127
+
+    # ---- ① collect / flush 的语义（全桩 db，不吃本机有没有库 —— §6.2） ----
+    class _Ctx127:
+        def __init__(self, sites=None, task_id=7001):
+            import threading as _th127
+            self.task_id, self.settings = task_id, settings
+            self.results = {"sites": sites if sites is not None else []}
+            self._tech_lock = _th127.Lock()
+            self._tech_pending = {}
+
+    _R127 = lambda txt, st=200, hdr=None, url="http://t/": {
+        "text": txt, "status": st, "headers": hdr or {}, "url": url}
+    _c1 = _Ctx127()
+    assert _fp127.collect(_c1, "http://t/", _R127("<title>Index of /</title>",
+                                                  hdr={"Server": "nginx"})) == 1, \
+        "Server 头那条内置规则必须打上 nginx（Index of / 本身不是任何产品的判据）"
+    assert _c1._tech_pending["http://t/"] == {"nginx"}, _c1._tech_pending
+    assert _fp127.collect(_c1, "http://t/", _R127("", hdr={"Server": "nginx"})) == 0, \
+        "同一标签重复攒必须算 0（否则 flush 的行数与日志都会虚高）"
+    assert _fp127.collect(_c1, "http://t/", _R127("<script src=\"/a/jquery.min.js\"></script>")) \
+        == 1 and _c1._tech_pending["http://t/"] == {"nginx", "jquery"}
+    assert _fp127.collect(None, "http://t/", _R127("", hdr={"Server": "nginx"})) == 0, \
+        "ctx 为 None 必须当没发生（不许抛）"
+
+    from scanner import db as _db127
+    _upd, _ret = [], (1, ["ghost.test"])
+    _real_merge = _db127.merge_sites_tech      # flush 里是 `from . import db` → 打桩要打在 db 模块上
+    _logged127 = []
+
+    class _L127:
+        def info(self, msg):
+            _logged127.append(msg)
+
+    try:
+        _db127.merge_sites_tech = lambda tid, up: (_upd.append((tid, dict(up))), _ret)[1]
+        _c2 = _Ctx127(sites=[{"url": "http://t/", "tech": "python"},
+                             {"url": "http://other/", "tech": ""}])
+        _fp127.collect(_c2, "http://t/", _R127("", hdr={"Server": "nginx"}))
+        _n, _tags = _fp127.flush(_c2, _L127(), "dirscan")
+        assert _upd and _upd[0][0] == 7001, _upd
+        assert _upd[0][1] == {"http://t/": ["nginx", "python"]}, \
+            f"flush 必须**并集**而不是覆盖（probe 打上的 python 不能没）：{_upd[0][1]}"
+        assert _c2.results["sites"][0]["tech"] == "nginx,python", \
+            "内存快照要同步改 —— vulnscan/dirscan 的下游读的是 ctx.results，页面读的是库"
+        assert _c2._tech_pending == {}, "flush 之后必须清空（否则同一批标签会被写第二遍）"
+        assert any("零额外请求" in m for m in _logged127), _logged127
+        assert any("不在本任务站点表里" in m for m in _logged127), \
+            f"标签无处可挂必须说出来（否则就成了『扫过了、页面上却没有』）：{_logged127}"
+        _logged127.clear()
+        _upd.clear()
+        _db127.merge_sites_tech = lambda tid, up: (_upd.append(dict(up)), (0, []))[1]
+        _c3 = _Ctx127(sites=[{"url": "http://t/", "tech": "nginx"}])
+        _fp127.collect(_c3, "http://t/", _R127("", hdr={"Server": "nginx"}))
+        _n3, _t3 = _fp127.flush(_c3, _L127(), "dirscan")
+        assert _upd == [] and _n3 == 0 and _logged127 == [], \
+            f"没有新增就不该写库、也不该打日志（不刷噪声）：{_upd} {_logged127}"
+    finally:
+        _db127.merge_sites_tech = _real_merge
+
+    # ---- ② db.merge_sites_tech 用**真库**：并集 / 幂等 / 跨任务隔离 / 只写有新增的行 ----
+    _t127a = _db127.create_task("smoke127-a", "http://t/", ["dirscan"], {})
+    _t127b = _db127.create_task("smoke127-b", "http://t/", ["dirscan"], {})
+    _db127.insert_sites(_t127a, [{"url": "http://t/", "host": "t", "port": "80", "status": 200,
+                                  "title": "", "length": 1, "server": "nginx",
+                                  "tech": "nginx", "source": "builtin"}])
+    _db127.insert_sites(_t127b, [{"url": "http://t/", "host": "t", "port": "80", "status": 200,
+                                  "title": "", "length": 1, "server": "nginx",
+                                  "tech": "iis", "source": "builtin"}])
+    _w127 = _db127.merge_sites_tech(_t127a, {"http://t/": ["druid", "nginx"]})
+    assert _w127[0] == 1, _w127
+    _tech_a = [r["tech"] for r in _db127.list_sites(_t127a)][0]
+    assert set(_tech_a.split(",")) == {"nginx", "druid"}, _tech_a
+    assert [r["tech"] for r in _db127.list_sites(_t127b)][0] == "iis", \
+        "task_id 不参与 WHERE 的话就会串任务改别人的行（续25 之后按任务过滤是每条读写的前提）"
+    assert _db127.merge_sites_tech(_t127a, {"http://t/": ["druid"]})[0] == 0, \
+        "同样的标签再来一次必须**不写**（幂等；否则追加执行会把 tech 反复重写）"
+    _m127 = _db127.merge_sites_tech(_t127a, {"http://nope.test/": ["x"]})
+    assert _m127 == (0, ["http://nope.test/"]), _m127
+    _db127.delete_task(_t127a, backup=False)
+    _db127.delete_task(_t127b, backup=False)
+
+    # ---- ③ 零额外请求：拿**计数器**当证据，不是拿"没联网"当证据 ----
+    from scanner import jsmine as _js127
+    # jsmine 是 `from .utils import http_request`（名字绑在自己命名空间里），所以桩必须打在
+    # `_js127.http_request` 上 —— 打在 utils 上会**一次都数不到**，然后断言"0 == 0"假绿。
+    _real_hr = _js127.http_request
+    _calls127 = []
+
+    def _hr127(*a, **k):          # 必须是真的 def：lambda 里 `(append(...), 调用)` 会返回**元组**
+        _calls127.append(a[0] if a else k.get("url"))
+        return _real_hr(*a, **k)
+
+    _js127.http_request = _hr127
+    try:
+        _c4 = _Ctx127(sites=[{"url": "http://127.0.0.1:8765/", "tech": ""}])
+        _js127.mine("http://127.0.0.1:8765/", settings, logger=None,
+                    text_sink=lambda _r: (_fp127.collect(_c4, "http://127.0.0.1:8765/", _r, "js"),
+                                          0))
+        _n_req_a = len(_calls127)
+        _calls127.clear()
+        _js127.mine("http://127.0.0.1:8765/", settings, logger=None)   # 不接回调的同一次挖掘
+        _n_req_b = len(_calls127)
+        assert _n_req_a == _n_req_b and _n_req_a > 0, \
+            f"接了 text_sink 的请求数必须与不接时**一字不差**（补标只是消费已有响应）：{_n_req_a} vs {_n_req_b}"
+    finally:
+        _js127.http_request = _real_hr
+
+    # ---- ④ 接线：两个阶段的源码里必须真的在 collect + flush（纯函数全绿而阶段没接是本仓老坑） ----
+    _src_js127 = (ROOT / "scanner/stages/jsmine.py").read_text(encoding="utf-8")
+    _src_dr127 = (ROOT / "scanner/stages/dirscan.py").read_text(encoding="utf-8")
+    for _nm, _src in (("jsmine", _src_js127), ("dirscan", _src_dr127)):
+        assert "fingerprint.collect(" in _src, f"{_nm} 没接指纹补标"
+        assert "fingerprint.flush(" in _src, f"{_nm} 只攒不写 = 标签永远停在内存"
+    # collect/flush 自己不许出网（AST：函数体内不出现 http_request / run_cmd / socket）
+    _tree127 = _ast127.parse((ROOT / "scanner/fingerprint.py").read_text(encoding="utf-8"))
+    for _nd in _ast127.walk(_tree127):
+        if isinstance(_nd, _ast127.FunctionDef) and _nd.name in ("collect", "flush"):
+            _names127 = {x.attr for x in _ast127.walk(_nd) if isinstance(x, _ast127.Attribute)}
+            _names127 |= {x.id for x in _ast127.walk(_nd) if isinstance(x, _ast127.Name)}
+            assert not (_names127 & {"http_request", "run_cmd", "socket", "urlopen"}), \
+                f"fingerprint.{_nd.name} 里出现了出网引用"
+
+    # ---- ⑤ 外置表的负样本校准（tools/calibrate_fingerprints.py）----
+    import importlib.util as _ilu127
+    _spec127 = _ilu127.spec_from_file_location(
+        "calib_fp127", str(ROOT / "tools" / "calibrate_fingerprints.py"))
+    _cf127 = _ilu127.module_from_spec(_spec127)
+    _spec127.loader.exec_module(_cf127)
+    assert len(_cf127.NEGATIVES) >= 10, "语料太少就等于没测"
+    _samples, _hits, _ext_rules, _issues = _cf127.run()
+    assert _issues == [], f"外置字典本身有坏行，先修它再谈误报：{_issues[:3]}"
+    _ext_tags = set(_ext_rules)
+    assert len(_ext_tags) >= 40, f"外置表标签数不对：{len(_ext_tags)}"
+    assert not (_hits.keys() & _ext_tags), \
+        f"外置判据被通用页命中了（这正是要拦的事）：{ {k: v for k, v in _hits.items() if k in _ext_tags} }"
+    assert _hits, "内置表一个都没命中 ⇒ 语料太干净了（jQuery/nginx 这类特征必须能认出来）"
+    assert not (_hits.keys() - _ext_tags - set(_fp127.SIGNATURES)), \
+        f"命中里出现了既不在外置也不在内置的标签：{sorted(_hits.keys() - set(_fp127.SIGNATURES))}"
+    # 这条把**本轮的决定**钉住：外置表刻意不加路径门控，依据就是这句实测。
+    _dict_lines127 = [l for l in (ROOT / "config/dicts/fingerprints_extra.txt")
+                      .read_text(encoding="utf-8").splitlines()
+                      if l.strip() and not l.startswith("#")]
+    assert all(len(l.split("\t")) == 6 for l in _dict_lines127), \
+        "外置表仍是 6 列（无 path 列）：加门控的前提是『通用页会命中它』，实测为 0（见上一条断言）"
+    # 变异：把一条外置判据临时改成通用词 ⇒ 语料必须抓到它（否则"0 命中"可能只是语料没用）
+    _tag_mut = sorted(_ext_tags)[0]
+    _bak_le = _fp127.load_extra
+    _mut_rules = dict(_bak_le()[0])
+    _mut_rules[_tag_mut] = [("body", re.compile("(?i)login"), None)]
+    try:
+        _fp127.load_extra = lambda path=None: (_mut_rules, [])   # 直接打桩，绕开缓存重载
+        _hits2 = {}
+        for neg in _cf127.NEGATIVES:
+            _resp = {"status": neg["status"], "headers": neg["headers"],
+                     "text": neg["body"], "url": "http://neg.local" + neg["path"]}
+            for _t in _fp127.identify(_resp):
+                _hits2.setdefault(_t, []).append(neg["name"])
+        assert _tag_mut in _hits2 and len(_hits2[_tag_mut]) >= 3, \
+            f"改成通用词都没被抓出来 ⇒ ⑤ 那条『0 命中』是假的（语料太弱）：{_hits2.get(_tag_mut)}"
+    finally:
+        _fp127.load_extra = _bak_le
+    assert _tag_mut not in {t for t in _cf127.run()[1]}, "还原后必须回到 0 命中"
+
+    print("[8af] 续127 指纹补标 + 负样本校准 ok: collect 去重/None ctx 不抛/flush 并集不覆盖"
+          "（probe 打的 python 不能被抹）/内存与库两处同步/没新增就零 UPDATE 零日志/标签挂不上必须点名"
+          "｜db.merge_sites_tech 真库验幂等 + task_id 参与 WHERE（不串任务改行）+ missing 回传"
+          "｜零额外请求用**请求计数器**：接回调与不接回调的 http_request 次数一字不差"
+          "｜两阶段源码里 collect+flush 都在（只攒不写=标签停在内存）+ collect/flush 函数体内无出网引用"
+          f"｜外置 {len(_ext_tags)} 条判据在 {len(_cf127.NEGATIVES)} 份通用负样本上 **0 命中**"
+          "（命中全部来自内置表且都是真识别）⇒ 据此**不加**路径门控并把依据钉成断言（字典仍是 6 列）"
+          "｜变异：把一条外置判据改成通用词『login』⇒ 必须被 3 份以上语料抓到，否则那条 0 命中是假的")
 
     print("SMOKE PASS")
 

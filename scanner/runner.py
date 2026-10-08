@@ -162,6 +162,11 @@ class StageContext:
                             "full": 0}
         self._flag_seen = set()
         self._flag_db_seen = None
+        # 续127：指纹补标（`fingerprint.collect/flush`）攒的是 `{站点 URL: {标签}}`，
+        # 与 flag 候选同一形状：**阶段内多线程攒、阶段末尾一次写**。锁单独一把 ——
+        # 复用 flag 那把会把两件不相干的事串在一起（flush 里的写库不该挡住 harvest）。
+        self._tech_lock = threading.Lock()
+        self._tech_pending = {}
         # 续88：**阶段级耗时**（秒）。自检据此出"耗时基线"、跨次对比找"哪一步突然变慢"。
         # 记在 ctx 上而不是库里：它是**诊断量**，不是任务产物，不该进 DB/报告。
         self.stage_seconds = {}

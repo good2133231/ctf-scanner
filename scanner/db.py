@@ -1102,6 +1102,45 @@ def list_flags(task_id, limit=None):
                   (task_id, int(limit)))
 
 
+def merge_sites_tech(task_id, updates):
+    """把新识别出的组件标签**并集**进 `sites.tech`，返回 `(改动的站点数, 库里没这些 URL 的清单)`。
+
+    `updates` 是 `{站点 URL: [标签, …]}`。**并集而不是覆盖**：`sites.tech` 里已经有
+    probe 阶段从**根响应**打上的标签（nginx / python …），覆盖等于把实况抹掉。
+    只写真有新增的行（一条 UPDATE 都不许多发）。
+
+    ⚠️ 这是"读-改-写"三步，中间没有事务：同一任务里只有 dirscan / jsmine 两个阶段会调
+    `fingerprint.flush()`，而阶段是**串行**的，所以窗口不存在；**跨任务**更新的行必然不同
+    （`task_id` 参与 WHERE）。新增调用点时必须守住这两个前提之一，否则就要改成事务。
+    """
+    items = {str(u): [str(t) for t in (v or []) if str(t)] for u, v in (updates or {}).items()}
+    items = {u: v for u, v in items.items() if u and v}
+    if not items:
+        return 0, []
+    marks = ",".join("?" for _ in items)
+    rows = _query(f"SELECT id, url, tech FROM sites WHERE task_id=? AND url IN ({marks})",
+                  tuple([task_id]) + tuple(items))
+    found = {r["url"]: r for r in rows}
+    missing = [u for u in items if u not in found]
+    batch = []
+    for url, tags in items.items():
+        row = found.get(url)
+        if not row:
+            continue
+        cur = [t for t in str(row["tech"] or "").split(",") if t]
+        merged, seen = [], set()
+        for t in cur + sorted(tags):
+            if t not in seen:
+                seen.add(t)
+                merged.append(t)
+        if merged == cur:
+            continue                    # 没有新增 ⇒ 一行都不写
+        batch.append((",".join(merged), task_id, url))
+    if batch:
+        _exec("UPDATE sites SET tech=? WHERE task_id=? AND url=?", batch, many=True)
+    return len(batch), missing
+
+
 def list_subdomains(task_id):
     return _query("SELECT * FROM subdomains WHERE task_id=? ORDER BY domain", (task_id,))
 

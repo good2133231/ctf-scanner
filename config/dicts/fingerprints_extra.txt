@@ -8,6 +8,12 @@
 #   - 以 `#` 开头的行与空行忽略。
 #
 #   - 同一个标签可以有多行（新增判据），但已有行**不会被改写也不会被删**；
+#   - **刻意没有"请求路径"这一列**（续127 实测后的决定）：这批判据原本是"打了 /login、
+#     /druid/login.html 这类路径之后长这样"，看着像需要路径门控；但
+#     `tools/calibrate_fingerprints.py` 的 12 份通用负样本跑下来，外置表 **0 命中**
+#     —— 门控挡的是误报，而误报实测为 0，加列只会把"根响应上也写着产品标题"的真识别挡掉。
+#     真正的缺口是覆盖（没人把这些响应喂给 identify()），已由 `fingerprint.collect/flush`
+#     在 dirscan / jsmine 阶段补上（零额外请求）。判据变化了再回头加，依据写在回归里。
 #
 # 来源：条目由 tools/import_afrog_fp.py 从 afrog-pocs（MIT）的 fingerprinting/ 目录里
 # 逐条人工复核后追加（`--apply` 只搬复核列写了 ok 的行），许可与出处见 NOTICE.md；

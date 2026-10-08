@@ -50,7 +50,7 @@ from urllib.parse import urlparse
 
 from .base import Stage
 from .probe import TITLE_RE      # 命中页的 <title> 提取（与 probe 同一套正则，避免两处定义漂移）
-from .. import db, flagfind
+from .. import db, fingerprint, flagfind
 from ..config import resolve
 from ..utils import read_lines, write_lines, pool_run, http_request, pick_python, run_cmd
 
@@ -419,6 +419,7 @@ class DirscanStage(Stage):
         _dup = len(uniq) - len(new_dirs)
         ctx.logger.info(f"[dirscan] 目录发现 {len(uniq)} 条"
                         + (f"（跨运行去重跳过 {_dup} 条已入库）" if _dup else ""))
+        fingerprint.flush(ctx, ctx.logger, "dirscan")
         _fnote = flagfind.note(ctx, _flag0)
         if _fnote:
             # dirmap 那一路没有正文（产物行只有 `[状态码][类型][大小] URL`），所以这里的
@@ -918,9 +919,11 @@ class DirscanStage(Stage):
                     if u not in blocked_sig:
                         blocked_sig[u] = r.get("length")
                 return None
-            # flag 候选（续126）：放在**所有过滤之后** —— 软 404 模板页与统一拦截页会被打
-            # 几百次，它们是同一份正文，重复扫既费时间也只会在候选表里留同一个值。
+            # flag 候选（续126）与指纹补标（续127）：都放在**所有过滤之后** ——
+            # 软 404 模板页与统一拦截页会被打几百次，它们是同一份正文，重复扫既费时间
+            # 也只会在候选表里留同一个值 / 只会把同一批标签重复攒进同一个站点。
             flagfind.harvest(ctx, url, r.get("text") or "", "dir")
+            fingerprint.collect(ctx, root, r, "dir")
             return {"site_url": root, "path": url, "status": st,
                     "length": r.get("length"), "method": "GET", "note": "builtin",
                     "title": title}

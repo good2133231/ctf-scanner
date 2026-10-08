@@ -404,9 +404,11 @@ def _new_result():
 def mine(url, settings, logger=None, text_sink=None):
     """挖掘单个站点的 JS 资产。
 
-    `text_sink(url, text)`（续126）：把**已经抓到的**每份正文原样交给调用方。存在的唯一理由
-    是"文本已经在手里，不该再抓一遍"：flag 抽取需要页面与每个 JS 的正文，而这里本来就已经
-    为域名/凭据挖掘读过它们。只在真有文本时回调；回调里的异常由调用方负责。
+    `text_sink(resp)`（续126 引入、续127 改成整条响应）：把**已经抓到的**每份响应原样交给调用方。
+    存在的唯一理由是"这些响应已经在手里，不该再抓一遍"：flag 抽取要正文，而**组件指纹补标**
+    还要状态码与响应头（`fingerprint.identify` 判 headers 里的 Server/Set-Cookie）。
+    交整条 dict 而不是 `(url, text)` 就是为了少一次来回。只在真有响应时回调；回调里抛出的
+    异常由调用方负责（本函数不做兜底 —— 兜了就会把"抽取根本没跑"藏起来）。
 
     返回 {"domains": [...], "urls": [...], "secrets": [...], "js_count": N}
     （domains/urls 去重排序；secrets 按 (type, value) 排序去重，js_count 为成功抓取的
@@ -439,7 +441,7 @@ def mine(url, settings, logger=None, text_sink=None):
     page_url = resp.get("url") or url
     html = resp.get("text") or ""
     if text_sink and html:
-        text_sink(page_url, html)
+        text_sink(resp)                          # 页面这一份：状态码/头/正文都带过去的
 
     # 1) 页面自身文本
     hosts, urls = _extract(html, urlparse(page_url).scheme or scheme, protect, blacklist)
@@ -473,7 +475,8 @@ def mine(url, settings, logger=None, text_sink=None):
                              auth=_is_self_host(urlparse(u).hostname, protect))
             if not r:
                 return None
-            return {"url": r.get("url") or u, "text": r.get("text") or ""}
+            return {"url": r.get("url") or u, "text": r.get("text") or "",
+                    "headers": r.get("headers") or {}, "status": r.get("status")}
 
         bodies = pool_run(_get, scripts, workers=workers, logger=logger, label="JS 脚本抓取")
         js_count = len(bodies)
@@ -484,7 +487,7 @@ def mine(url, settings, logger=None, text_sink=None):
             if want_secrets:
                 secret_hits.extend(_find_secrets(b["text"], b["url"]))
             if text_sink and b["text"]:
-                text_sink(b["url"], b["text"])
+                text_sink(b)
 
     # 3) 去重（凭据同一 value 跨文件只保留一次）
     secrets, seen_raw = [], set()

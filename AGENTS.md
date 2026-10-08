@@ -213,6 +213,10 @@ ctf-scanner/
 │   │                      #   ③ 只报候选：值保留原文大小写 + 带上下文，判真假日的是人
 │   │                      #   （`flag{xxx}` 这类占位符同形状）—— 故刻意**不加**词边界规则
 │   ├── fingerprint.py     # 指纹规则表 → identify(resp) -> [tag] + fetch_favicon/favicon_md5/favicon_hash
+│   │                      #   `collect(ctx, site_url, resp)` + `flush(ctx, logger, where)`（续127）：
+│   │                      #   把**已经发过**的响应（dirscan 每条命中 / jsmine 页面与每个 JS）里的
+│   │                      #   组件标签攒起来、阶段末尾一次**并集**写进 `sites.tech`（内存与库同步），
+│   │                      #   零额外请求；没有新增就一行都不写、也不打日志
 │                          #   判定带**必现字面量前置过滤**（续122，`required_literals`/`_lit_filter`）：
 │                          #   字面量不在文本里 ⇒ 这条规则一定不命中 ⇒ 跳过 re.search（实测 900KB 13x）
 │                          #   规则是 `(part, 正则[, 状态码集合])`；**两个来源**：内置 SIGNATURES（103 个标签，
@@ -265,6 +269,12 @@ ctf-scanner/
 │                          #   注：原文写「十八段」且漏列 ssrf/shodan/quake/ctlog，与 GUI 实际覆盖的段数不符，
 │                          #   2026-09-24（续26）按 config/settings.yaml 实测更正为 **23 段**（tools/dicts/http 不可从页面改）
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
+├── tools/calibrate_fingerprints.py # 组件指纹的**负样本校准**（续127，与 calibrate_pocs 同性质）：
+│                          #   12 份内联合成响应（通用软 404 / 无厂商特征的登录页 / SPA 首页 /
+│                          #   IIS·Apache 默认页 / 请求路径就是 /druid/login.html 的 Tomcat 404 …），
+│                          #   逐条跑引擎自己的 identify()，报告"哪些标签被通用页打上"。
+│                          #   零请求、**只报告不判分**（不自动降级/删规则）；实测外置 51 条判据
+│                          #   0 命中 ⇒ 据此否掉了"给外置表加路径门控"（门控挡误报，而误报为 0）
 ├── tools/import_afrog_fp.py # afrog-pocs(MIT) 的 fingerprinting/ → **候选表 + 人工复核 → 追加**进
 │                          #   config/dicts/fingerprints_extra.txt；`--scan`/`--table`/`--apply`/`--lint`，
 │                          #   全程不发请求、不覆盖已有行、**没有"全部放行"旗标**（复核列空着＝零动作）
@@ -523,6 +533,22 @@ ctf-scanner/
     回归 `tests/smoke.py [8ae]`（五向变异：值取小写副本 / 不做小写副本定位 / 抹掉超限计数 /
     收下无锚正则 / 第二处 `ASSET_TABLES`）。
 
+17. **组件标签只能有一个产地，补标只做并集**（续127，`scanner/fingerprint.py::collect/flush`）：
+    ① `sites.tech` 的唯一写路径是 `db.merge_sites_tech()`（并集、`task_id` 参与 WHERE、幂等），
+    **不许**出现"用新识别的标签覆盖整列"的写法 —— probe 从根响应打上的标签是实况，
+    被后面阶段的补标抹掉等于把第一手证据改成第二手。
+    ② 补标的输入只能是**已经发过的响应**（dirscan 每条命中、jsmine 页面与每个 JS），
+    `collect/flush` 的函数体内不许出现 `http_request` / `run_cmd` / `socket`（AST 判据）。
+    想给"没正文的那两路"（httpx 档的 probe、dirmap 产物行）补数据就得真加请求 —— 那是
+    另一个决定，必须单独一轮，不许在这里顺手加。
+    ③ 内存与库**两处都要改**：下游（vulnscan 的 POC 优先、dirscan 的框架字典）读
+    `ctx.results["sites"]`，页面与报告读库，只改一边就是"页面上有了、下一阶段当没看见"。
+    ④ 判据的**收紧要有实测**。本轮实测（`tools/calibrate_fingerprints.py`，12 份通用负样本）
+    显示外置 51 条判据 0 命中 ⇒ **不加**路径门控（门控挡误报，而误报为 0，加了只会挡掉真识别）；
+    这个决定同时钉在三处：字典文件头注释、`[8af] ⑤` 的"仍是 6 列"断言、以及"把某条判据
+    改成通用词 `login` 必须被 ≥3 份语料抓到"的变异（否则"0 命中"可能只是语料太弱）。
+    ⑤ 没有新增 ⇒ 零 UPDATE、零日志；标签挂不上（站点不在本任务 sites 表里）⇒ **必须点名**。
+
 ## 6. 如何验证改动
 
 > **门禁提速的既定口径（续125）**：全流程自检**只**放宽限速节奏
@@ -776,6 +802,9 @@ py -3 cli/client.py --update-tools            # 续54：联网装/更新 subfind
                                               #   GUI 等价入口＝管理员侧栏「外部工具」页；两条路都**只在这时联网**
 py -3 tools/import_dir_dict.py  # 重新生成目录扫描大字典（源：tools/dirmap/data/dict_load/dict_mode_dict.txt）
 py -3 tools/import_fw_dicts.py --force  # 从大字典派生**按框架**细分的字典（12 桶 + exposure）
+py -3 tools/calibrate_fingerprints.py  # 续127：组件指纹的负样本校准（**内联语料、零请求**，
+                               #   默认 --json logs/fp_calibration.json）；只报告，不自动改判据。
+                               #   回归 [8af]⑤ 钉住"外置表 0 命中"，语料变弱会被变异证伪抓出来
 py -3 tools/calibrate_pocs.py  # 续60：本地负样本校准（起合成靶场，**零外网请求**逐条跑 POC 出报告）
                                #   默认 --src config/pocs-imported --json logs/poc_calibration.json --timeout 3
                                #   换 `--src scanner/pocs/pocs` 可跑内置那批；只报告，不自动改级别/不自动启用
@@ -1273,6 +1302,11 @@ py -3 run_users.py --status   # 续117：账号数 + 配置里有无历史残留
   **为什么必须手动**：`osint`/`jsmine` 排在 `probe` **之后**，它们新挖出的域名赶不上本轮存活探测，
   天然停在"有域名、无站点、无检测"；而拓展域名里大量是 CDN/开源库/JS 命名空间碎片，
   全自动跑既越权又浪费额度 —— 这是**设计边界，不是缺陷**。
+- **指纹补标与 flag 抽取共享同一处覆盖缺口（续127 登记）**：`sites.tech` 的补标只吃
+  **有正文的响应** —— 走 httpx 时 probe 只回 title/tech 的 JSONL、dirmap 的产物行也没有正文，
+  这两路的命中对补标与 flag 都没有输入。要补就得真加请求（与 §5.17② 冲突），属独立一轮。
+  另外补标只挂在**本任务 sites 表里存在的站点**上：补扫任务没跑 probe 时 `flush()` 会把
+  `missing` 点名出来（标签没挂上不是"没识别出来"），但这些标签目前确实无处落地。
 - **flag 候选抽取的两处覆盖缺口（续126，如实登记）**：① **走 httpx 时 probe 根本没有正文**
   （它的 JSONL 只有 title/tech/status），所以这一路只能由 jsmine / dirscan 内置档 / vulnscan 证据兜到
   —— probe 会明写「httpx 档不返回正文，本阶段无输入可扫」，不会看起来像"扫过了、没有"；

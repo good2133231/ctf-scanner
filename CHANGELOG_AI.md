@@ -2,6 +2,63 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续127 先量误报再动手：47 条"死指纹"接上触发路径，而路径门控被实测否掉了
+
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）。用户点单第 3 件的前半，原文里留了个二选一：
+「要么把 dirscan/jsmine 已经在发的响应喂给 `identify()`，要么加路径门控并承认它们仍是死的。」
+本轮**先做测量**，结果否掉了后半句。
+
+### 测量：给指纹建一套负样本（对标 `calibrate_pocs.py`，指纹侧此前没有对应物）
+
+新增 `tools/calibrate_fingerprints.py`：12 份内联的**合成响应**（通用软 404、无厂商特征的
+后台登录页、Next.js+antd 的 SPA 首页、JSON 错误页、IIS/Apache 默认页、302 到 /login、
+Tomcat 默认 404（**请求路径就是 `/druid/login.html`**）、nginx 目录列表、自研 Dashboard、
+写着「统一身份认证」的自研 SSO 页、nginx 通用 403（请求 `/admin/login/?next=/admin/`）），
+零请求、只报告、**绝不自动改判据**。跑出来的事实是：
+
+```
+外置表 49 个标签 / 51 条判据：在 12 份语料上 **0 命中**
+被语料打上的 10 个标签全部来自内置 SIGNATURES，而且都是**真识别**（Server: nginx、
+jquery.min.js、IIS 默认页…）—— 语料刻意保留服务器/框架层特征，那层命中是对的
+```
+
+推论直接改变了做法：**路径门控挡的是误报，而误报实测为 0**；加一列 `path` 只会把
+"根响应里也写着产品标题"这类真识别一起挡掉。所以这一轮做的是**覆盖**，并且把
+"不加门控"这个决定的**依据**钉成断言（`[8af] ⑤`：字典仍是 6 列 + 外置标签 0 命中 + 变异证伪）。
+字典文件头也写了这段理由，免得下一轮有人"顺手补个路径列"。
+
+### 覆盖：`fingerprint.collect / flush`，两个已有正文的阶段接线
+
+- `collect(ctx, site_url, resp, where)`：把已在手的响应里识别出的标签**攒进 ctx**
+  （不写库、不发请求）。同一标签重复攒算 0。
+- `flush(ctx, logger, where)`：阶段末尾一次合并，`sites.tech` 做**并集而不是覆盖** ——
+  probe 从根响应打上的 `nginx/python` 不能被抹掉；**内存快照 `ctx.results["sites"]` 与库
+  两处都改**（下游 vulnscan 的 POC 优先排序读 ctx，页面与报告读库，只改一边就是
+  "页面上有了、下一阶段当没看见"那种最难查的不对称）；没有新增 ⇒ 零 UPDATE、零日志。
+- `db.merge_sites_tech(task_id, updates)`：`task_id` 参与 WHERE（不串任务改别人的行）、
+  同样的标签再来一次**不写**（幂等，追加执行不会反复重写）、库里没有的 URL 原样回传
+  成 `missing` 并**在日志里点名**（"标签没挂上"不能被读成"扫过了、没有"）。
+- 接线：`stages/dirscan.py::_hit`（每条路径命中的响应）与 `stages/jsmine.py`
+  （页面 + 每个 JS）。后者的手段是把续126 的 `text_sink(url, text)` 改成
+  `text_sink(resp)` —— 指纹判定要**状态码与响应头**，交整条 dict 才不用再来一次；
+  一次回调同时喂 flag 抽取与指纹补标，两件事共享同一份已在手的响应。
+
+### 零额外请求这次是**拿计数器证明**的
+
+`[8af] ③` 打桩 `_js127.http_request` 计数（注意：jsmine 是 `from .utils import http_request`，
+名字绑在自己命名空间里，桩打在 `utils` 上会一次都数不到、然后"0 == 0"假绿 ——
+这个坑本轮差点踩过去），比较**接回调**与**不接回调**两种情况的请求数：必须一字不差。
+另外用 AST 检查 `collect/flush` 两个函数体内不出现 `http_request / run_cmd / socket`。
+
+### 变异与红线
+
+`[8af]` 五向变异：把一条外置判据临时改成通用词 `login`（打桩 `load_extra`，绕开缓存重载）
+⇒ 必须被 ≥3 份语料抓到，否则"0 命中"只是语料太弱；`flush` 若改成覆盖 ⇒ ① 的并集断言红；
+桩里把 `(append, 调用)` 写成 lambda ⇒ 返回元组、当场把端到端打红（这条已经真踩过一次）。
+`jsmine.mine` 的桩参数名继续由 `[8m]` 那条签名对齐判据盯着。
+
+门禁：`SMOKE PASS / RC=0`（含新组 `[8af]`），`check_contrast 149/0`（未改样式），
+`tools/calibrate_fingerprints.py` 退出码 0 并落 `logs/fp_calibration.json`。
 ## 续126 CTF flag 候选抽取：零额外请求，单独成表，成本压在 1/30 的量级
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。用户点单五件事里的第 2 件：

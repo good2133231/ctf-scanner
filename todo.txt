@@ -2513,3 +2513,21 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [ ] flag 真伪判定仍归人：没做"和已知 flag 库比对""按题号归并"这类事（没有可靠判据就不猜）
 - [ ] 覆盖缺口（如实登记）：走 httpx 时 probe 没有正文；dirmap 产物行也没有正文 ——
       这两路只能等 jsmine/dirscan 内置档或 vulnscan 证据兜到
+
+== 续127（指纹触发路径 + 外置表误报验证）==
+- [x] 先量：新增 tools/calibrate_fingerprints.py（12 份合成负样本、零请求、只报告不判分）
+      实测 **外置 51 条判据 0 命中**；被语料打上的 10 个标签全部来自内置表且都是真识别
+- [x] 据此**否掉路径门控**：门控挡的是误报而误报为 0，加 path 列只会挡掉真识别
+      决定与依据写进字典头注释 + [8af]⑤ 的"仍是 6 列"断言（防下一轮顺手加列）
+- [x] 补的是覆盖：fingerprint.collect/flush（攒标签 → 阶段末尾一次并集写 sites.tech）
+      内存 ctx.results 与库**两处同步**；没新增就零 UPDATE 零日志；标签挂不上必须点名
+- [x] db.merge_sites_tech：task_id 参与 WHERE / 并集不覆盖 / 幂等 / missing 原样回传
+- [x] 接线两个已在发请求的阶段：dirscan 每条命中、jsmine 页面与每个 JS
+      （text_sink 从 (url, text) 改成整条 resp —— 指纹要状态码与响应头）
+- [x] 零额外请求用**请求计数器**证明（接回调 vs 不接回调次数一字不差）+ AST 查函数体不出网
+      ⚠️ 桩必须打在 `_js127.http_request` 上：jsmine 用的是 `from .utils import`，打 utils 会 0 计数假绿
+- [x] 回归 [8af]（collect/flush 语义 / 真库幂等与跨任务隔离 / 计数器 / 接线 / 校准 + 五向变异）
+- [ ] 仍存的覆盖缺口（如实登记）：dirmap 产物行没有正文、走 httpx 时 probe 也没有正文 ⇒
+      这两路对补标与 flag 都没有输入；要补只能改"取正文"的策略，那会真增加请求，属独立一轮
+- [ ] 补标只挂在**本任务 sites 表里存在的站点**上；补扫任务没跑 probe 时 flush 会点名 missing
+      （已经不再静默），但那些标签目前无处落地 —— 要不要给它们开一张"孤儿标签"是产品决定

@@ -29,6 +29,7 @@ favicon 指纹（P1-1 / P3-1，参考项目 `_get_favicon_md5` 的启发）：
 """
 import hashlib
 import re
+import threading
 from pathlib import Path
 
 try:                                    # 3.11+ 把 sre_parse 挪进 re._parser；3.9/3.10 还是顶层模块
@@ -318,6 +319,82 @@ def load_extra(path=None):
         rules.setdefault(tag, []).append((where, rx, codes))
     _extra_cache.update(key=key, rules=rules, issues=issues)
     return rules, issues
+
+# --------------------------------------------------------------------------
+# 组件标签的"补标"通道（续127）：把**已经发过**的响应喂回 identify()
+# --------------------------------------------------------------------------
+# 为什么要有这一段（实测出来的洞）：外置表 51 条里 **47 条的判据原本是"打了 /login、
+# /druid/login.html 这类路径之后长这样"**，而全仓只有 probe 的内置探测会调 `identify()`
+# （根响应）⇒ 这批规则基本永不触发，只白占判定成本。用 `tools/calibrate_fingerprints.py`
+# 的负样本语料复测后得到的结论是：**它们的判据本身不宽**（12 份通用页 0 命中，命中的 10 个
+# 标签全来自内置表且都是真识别），所以缺的不是"路径门控收紧"，而是"没人把响应喂进来"。
+# dirscan / jsmine 本来就在发这些请求、也本来就在手里拿着正文 —— 补上这一段是**零额外请求**的。
+_TECH_LOCK = threading.Lock()    # 桩 ctx（回归里手搓的）没带锁时用它，宁可串行也不留静默并发
+
+
+def collect(ctx, site_url, resp, where=""):
+    """把一份已在手的响应里识别出的标签**攒进 ctx**（不写库、不发请求），返回新增标签数。
+
+    攒到阶段末尾由 `flush()` 一次合并：dirscan 一个站点要打几百条路径，逐条 UPDATE
+    会把写锁踩成瓶颈；而且同一条路径的标题往往和根响应重复。
+    """
+    if ctx is None or not resp or not site_url:
+        return 0
+    tags = identify(resp)
+    if not tags:
+        return 0
+    pend = getattr(ctx, "_tech_pending", None)
+    if pend is None:
+        pend = ctx._tech_pending = {}
+    lock = getattr(ctx, "_tech_lock", None) or _TECH_LOCK
+    with lock:
+        bucket = pend.setdefault(str(site_url), set())
+        n = len([t for t in tags if t not in bucket])
+        bucket.update(tags)
+    return n
+
+
+def flush(ctx, logger=None, where=""):
+    """把攒下的标签并进 `sites.tech`（**内存与库两处**），并说一句可见的话。
+
+    两处都要改的理由：`sites.tech` 的下游里，vulnscan 的 POC 优先排序与 dirscan 的框架字典
+    读的是 **ctx.results["sites"]**，而页面/报告读的是**库** —— 只改一边就会出现
+    "页面上标签有了、下一阶段却当没看见"这种最难查的不对称。
+    没有新增就一个字段都不写、也**不打日志**（不刷噪声）。
+    """
+    pend = getattr(ctx, "_tech_pending", None) or {}
+    if not pend:
+        return 0, set()
+    from . import db
+    new_tags = set()
+    for tags in pend.values():
+        new_tags |= set(tags)
+    sites = ctx.results.get("sites") or []
+    by_url = {str(s.get("url")): s for s in sites}
+    updates = {}
+    for url, tags in pend.items():
+        cur = [t for t in str((by_url.get(url) or {}).get("tech") or "").split(",") if t]
+        add = [t for t in sorted(tags) if t not in cur]
+        if not add:
+            continue
+        updates[url] = sorted(set(cur) | set(tags))
+        # 内存里同步：本阶段之后的下一阶段读的就是这份快照
+        if url in by_url:
+            by_url[url]["tech"] = ",".join(updates[url])
+    n, missing = db.merge_sites_tech(ctx.task_id, updates) if updates else (0, [])
+    if logger and (n or missing):
+        bits = [f"补标 {n} 个站点"] if n else ["没有新标签"]
+        if new_tags:
+            bits.append("新增标签：" + "、".join(sorted(new_tags)))
+        if missing:
+            # 必须说出来：标签无处可挂意味着这批识别结果**没进任何出口**，
+            # 不写就是"扫过了、页面上却没有"那种静默。
+            bits.append(f"另有 {len(missing)} 个目标不在本任务站点表里（补扫任务没跑 probe？"
+                        f"标签没挂上：{'、'.join(missing[:3])}{'…' if len(missing) > 3 else ''}）")
+        logger.info(f"[{where}] 指纹补标（吃的是本阶段已发的响应，零额外请求）：" + "，".join(bits))
+    ctx._tech_pending = {}
+    return n, new_tags
+
 
 # favicon 体积上限：有些站点会用 404 页面或超大文件冒充 favicon，直接跳过
 MAX_FAVICON = 512 * 1024
