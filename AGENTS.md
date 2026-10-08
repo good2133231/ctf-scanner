@@ -174,7 +174,6 @@ ctf-scanner/
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
 │   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic/**github**（13 个）
-│   ├── diffview.py        # 跨任务差分（续129，复测视图）：target_set/comparable/pick_base/
 │   │                      #   snapshot/diff/summary。三条不对齐就会骗人的口径：
 │   │                      #   ①缺覆盖≠变化（按类别看两边 stages，三档各有说法，缺对照的数字
 │   │                      #   不许进摘要）；②漏洞只把 false_positive 排除（与报告同口径），
@@ -1035,7 +1034,7 @@ py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（
 - **dirmap 的依赖到底从哪加载（续106 实测，别再去找 `dirmap-deps`）**：`tools.dirmap.python` 配的是
   `python` → `pick_python` 命中 `/usr/bin/python`（3.10.9），而 gevent / lxml / progressbar 实测来自
   **`~/.local/lib/python3.10/site-packages`**（用户级 pip 装的），`sys.path` 里**没有** `dirmap-deps`。
-  续102 为装依赖造的 `/opt/tools/ctf/dirmap-deps`（33 MB）与 `dirmap-venv`（空壳 venv）因此**从未被引用**
+  续102 为装依赖在**仓库同级目录**造的两个东西（33 MB 的依赖目录 + 一个空壳 venv）因此**从未被引用**
   —— 仓库内 grep 零命中，挪开后 dirmap 照旧 `-h` 正常、`cli --check` 仍报 `dirmap OK`，已删除。
   要复现依赖来源：`/usr/bin/python -c "import gevent; print(gevent.__file__)"`。
 
@@ -1954,6 +1953,6 @@ py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（
   例：`WorkBuddy · DeepSeek-V4.1-Flash`。
 - 每次改完代码的标准动作：跑 `tests/smoke.py` → 更新 `CHANGELOG_AI.md`（最新在最上面）
   → 必要时同步本文件与 `docs/` → **git 提交**
-  （`C:\Users\材料\MinGit\cmd\git.exe add -A && ... commit -m "<轮次>: <一句话>"`）。
+  （git 二进制位置见 §2；形如 `<git可执行文件> add -A && <git可执行文件> commit -m "<轮次>: <一句话>"`）。
   敏感文件靠 `.gitignore` 排除（keys.yaml / data / logs / pocs-user / nuclei-templates），
   提交前瞄一眼 `status --short` 确认无混入。

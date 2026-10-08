@@ -1,0 +1,61 @@
+# CTFScanner —— 一键起控制台（默认配置，适合"自己用 / 内网小队用"）
+#
+#   docker compose -f docker_todo/docker-compose.yml up -d --build     # 起（首次构建镜像）
+#   docker compose -f docker_todo/docker-compose.yml logs -f   # 看启动日志
+#   docker compose -f docker_todo/docker-compose.yml down      # 停（数据仍在宿主机上）
+#
+# 完整说明（要不要重新打包 / 数据在哪 / 外部工具怎么装 / 共享服务器上的权限隔离）见 docs/docker.md。
+
+services:
+  ctfscanner:
+    # 构建上下文仍是**仓库根**（所以 Dockerfile 里的 COPY 相对路径不用改），
+    # 只是 Dockerfile 换了位置。因此本文件必须从**仓库根**用 -f 调用，见 README.md。
+    build:
+      context: ..
+      dockerfile: docker_todo/Dockerfile
+    image: ctf-scanner:latest
+    container_name: ctfscanner
+    restart: unless-stopped
+
+    # ⚠️ 只发布到**宿主机回环**：容器里虽然绑 0.0.0.0，但局域网/公网**访问不到**。
+    # 想让别人用，先读 docs/docker.md 的「给队友用」一节 —— 必须**同时**配好
+    # gui.allowed_hosts 与反向代理（否则要么整站 403，要么等于把扫描器裸奔在网上）。
+    ports:
+      - "127.0.0.1:5000:5000"
+
+    environment:
+      # 容器内必须绑 0.0.0.0（由 scanner.config.gui_bind() 读取，见 docs/docker.md）。
+      CTFSCANNER_GUI_HOST: "0.0.0.0"
+      CTFSCANNER_GUI_PORT: "5000"
+      CTFSCANNER_DB: "/app/data/scanner.db"
+      CTFSCANNER_LOGS: "/app/logs"
+      # 日志与审计的时间戳按本地时区（不设就是 UTC，看日志会差 8 小时）
+      TZ: "Asia/Shanghai"
+
+    volumes:
+      # 配置（含你的 keys.yaml）—— 挂出来才能在宿主机直接编辑，容器重建也不丢
+      - ../config:/app/config
+      # 数据库 / 报告 / 每任务的工作目录
+      - ../data:/app/data
+      - ../logs:/app/logs
+      # 一键装的外部工具（subfinder/httpx/puredns）—— 用命名卷，重建镜像不必重装
+      - ctf-tools:/app/tools/scanner
+
+    healthcheck:
+      # 200 或 401 都算活着：401 边缘认证门（scanner/edgeauth.py）是 fail-closed 的，而
+      # `config/edge_auth.yaml` 被 gitignore —— 新克隆/新机器上它不存在，`/login` 直接 401。
+      # 旧写法只认 200，于是那台机器上容器会被判 unhealthy，配上 restart: unless-stopped
+      # 就成了"一直重启、看起来永远起不来"。
+      test: ["CMD", "python", "-c", "import urllib.request,sys;r=urllib.request.urlopen('http://127.0.0.1:5000/login', timeout=4);sys.exit(0 if r.status in (200, 401) else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+
+    # 容器默认以 root 运行（扫描要起 nmap 等子进程，最省事）。介意的话取消下面这行的注释，
+    # 换成宿主机的普通用户 —— 但**先确认**它对 ./config ./data ./logs 有读写权限，
+    # 否则会出现"控制台能开、存不了配置"这种难查的问题。
+    # user: "1000:1000"
+
+volumes:
+  ctf-tools:

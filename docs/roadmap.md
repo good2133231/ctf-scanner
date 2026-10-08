@@ -318,9 +318,10 @@
       （续87，`check_updates`）、**多版本共存**（续94，版本库 `.versions/<工具>/<版本>/`，
       `install` 按 tag 归档、`use_version` 可在任意存过的版本间可逆切换、`prune_versions`
       有上限且**如实报出删了什么**；版本号读不出来就不归档，绝不编造 `unknown` 目录）。
-- [x] **Docker 部署**（续95，2026-10-01）：`Dockerfile`（`python:3.9-slim`，只装
-      requirements.txt 那三个运行期依赖）+ `docker-compose.yml`（默认：端口只发布到宿主机回环、
-      config/data/logs 全挂宿主机、外部工具用命名卷持久化）+ `docker-compose.dev.yml`（挂源码，
+- [~] **Docker 部署**（续95，2026-10-01；**续135 挪进 `docker_todo/` 并降级为"未完善"**）：
+      `docker_todo/Dockerfile`（`python:3.9-slim`，只装
+      requirements.txt 那 4 个运行期依赖）+ `docker_todo/docker-compose.yml`（默认：端口只发布到宿主机回环、
+      config/data/logs 全挂宿主机、外部工具用命名卷持久化）+ `docker_todo/docker-compose.dev.yml`（挂源码，
       改完 `restart` 即可）+ `.dockerignore`（凭据与运行期产物不进镜像）+ `docs/docker.md`。
       为此新增 `scanner.config.gui_bind()` —— 监听地址/端口可用 `CTFSCANNER_GUI_HOST` /
       `CTFSCANNER_GUI_PORT` 覆盖（容器里必须绑 `0.0.0.0`），但**只**允许覆盖这两项：

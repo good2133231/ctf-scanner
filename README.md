@@ -155,10 +155,12 @@ py -3 run_gui.py                   # 默认 http://127.0.0.1:5000，只绑本机
 
 ```bash
 docker compose up -d --build     # 起控制台；数据/配置/日志都挂在宿主机上
+                                 # （仓库根那个 docker-compose.yml 只是指向 docker_todo/ 的包装）
 ```
 
 - **只改配置或字典不用重新打包**（它们是挂载进去的）；**改了代码**才需要 `--build`，
-  或者用 `docker-compose.dev.yml` 把源码挂进容器（改完 `restart` 即可）。
+  或者用 `docker_todo/docker-compose.dev.yml` 把源码挂进容器（改完 `restart` 即可；两个 `-f`
+  要一起给，写法见 `docker_todo/README.md` —— 拿根包装去拼 dev 覆盖会把仓库的**上一级目录**挂进去）。
 - 端口默认只发布到**宿主机回环**（`127.0.0.1:5000`），要让队友用必须先配
   `gui.allowed_hosts` + 反向代理 —— 完整步骤与坑见 [docs/docker.md](docs/docker.md)。
 - ⚠️ **容器化 ≠ 源码保密**：镜像是 `COPY . /app` 打出来的，同机任何能执行 `docker` 的人

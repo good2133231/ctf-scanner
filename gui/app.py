@@ -306,6 +306,38 @@ def _host_of(netloc):
     return text.rsplit(":", 1)[0] if ":" in text else text
 
 
+def _local_host_names():
+    """本机网卡上的地址（`gui.allowed_hosts_auto_local` 用）。**只用标准库、绝不发包**。
+
+    为什么要有它：续131/132 曾把本机 VPC 地址写死进 `config/settings.yaml` —— 既把这台机器的
+    身份放进了公开仓库，又让任何新克隆拿到一个不属于它的地址。让代码自己去问内核要名字，
+    换一台机器就是那一台机器的值。
+
+    两条约束：① UDP `connect` 只让内核挑一条出口路由，**不产生任何流量、也不监听**；
+    ② 任一步失败（无默认路由 / 容器里查不到本机名 / 内核禁了某地址族）都只跳过，不影响启动 ——
+    它买的是"顺手放行自己的地址"，不是启动前提。
+    """
+    names = set()
+    probes = ((socket.AF_INET, ("8.8.8.8", 80)),
+              (socket.AF_INET6, ("2001:4860:4860::8888", 80)))
+    for fam, sockaddr in probes:
+        try:
+            sk = socket.socket(fam, socket.SOCK_DGRAM)
+            try:
+                sk.connect(sockaddr)            # connect 要的是**元组**，不能 * 展开
+                names.add(sk.getsockname()[0])
+            finally:
+                sk.close()
+        except OSError:                      # 没有这条路由 / 该族被禁用：正常，跳过
+            continue
+    try:
+        _hn, _aliases, addrs = socket.gethostbyname_ex(socket.gethostname())
+        names.update(a for a in addrs if a)
+    except OSError:
+        pass
+    return {n for n in names if n and n not in _LOOPBACK_HOSTS}
+
+
 def _allowed_hosts(gui):
     """Host 白名单的放行集合 = 回环名 ∪ `gui.allowed_hosts` 里归一化后的主机名。
 
@@ -316,6 +348,8 @@ def _allowed_hosts(gui):
     —— 宁可让用户 403 之后去看 `docs/deploy-https.md`，也不提供"一键关掉 DNS rebinding 防护"
     的口子（那种口子一旦存在，就一定会被图省事地打开）。
 
+    还有一条**不用填地址**的路（续135）：`gui.allowed_hosts_auto_local=true` 时把本机网卡地址
+    自动并入 —— 换一台机器就是那一台机器的值，配置里不出现任何机器特定的地址。
     返回 `(allowed, bad)`：`allowed` 是放行集合（`frozenset` 语义），`bad` 是被忽略的非法值
     （给 `serve()` 打告警用）。
     """
@@ -337,6 +371,9 @@ def _allowed_hosts(gui):
         if not name or name in _LOOPBACK_HOSTS:
             continue                               # 空值 / 回环名：集合里本来就有
         allowed.add(name)
+    if isinstance(gui, dict) and gui.get("allowed_hosts_auto_local"):
+        # 续135：本机地址由代码自己探测，不写进任何被跟踪文件（见 _local_host_names）
+        allowed |= _local_host_names()
     return allowed, bad
 
 
@@ -3557,6 +3594,11 @@ def serve(start_queue=True):
     """
     # 凭据解锁（续98）：口令**只在这里要一次** —— 紧接着的 load_settings() 会把 keys
     # 读进配置，之后工作线程与 GUI 每个请求都会反复调它，绝不能再提示。没加密文件时静默通过。
+    # 凭据解锁（续98）：口令**只在这里要一次** —— 紧接着的 load_settings() 会把 keys
+    # 读进配置，之后工作线程与 GUI 每个请求都会反复调它，绝不能再提示。没加密文件时静默通过。
+    # 续134 的"启动不要提问"（`gui.keys_ask_passphrase=false`）由 **keystore 自己**去取那一个键，
+    # 不在这里先 `load_settings()` 一次：`[8f] ⑩` 是接线红线 —— 三个入口都必须"先 unlock 后 load"，
+    # 晚一步 keys 就永远是空 dict，而现象与"用户没配 key"完全一样（§7 续114 真误判过一次）。
     _ks = keystore.unlock()
     if not _ks["ok"] and keystore.status()["encrypted"]:
         print(f"[!] {keystore.lock_notice(_ks['reason'])}")

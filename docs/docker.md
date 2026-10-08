@@ -13,8 +13,8 @@
 # 仓库是**公开的**，所以拉代码**不需要任何认证**（第 9 节有从 Linux 推回去的办法）
 git clone https://github.com/good2133231/ctf-scanner.git ctf-scanner && cd ctf-scanner
 
-docker compose up -d --build     # 首次会构建镜像（装 3 个 Python 依赖 + 拷贝代码）
-docker compose logs -f           # 看启动日志：会打印初始登录方式与监听地址
+docker compose -f docker_todo/docker-compose.yml up -d --build   # 首次会构建镜像（装 4 个 Python 依赖 + 拷贝代码）
+docker compose -f docker_todo/docker-compose.yml logs -f   # 启动日志：登录方式、监听地址、各门的现状
 ```
 
 然后浏览器打开 **http://127.0.0.1:5000**。
@@ -23,11 +23,26 @@ docker compose logs -f           # 看启动日志：会打印初始登录方式
 在容器里跑一次即可建出第一个管理员：
 
 ```bash
-docker compose exec scanner python run_users.py --create-admin
+# 服务名是 ctfscanner（写 scanner 会直接 "no such service" —— 本文件此前就是错的，续135 改掉）
+docker compose -f docker_todo/docker-compose.yml exec ctfscanner python run_users.py --create-admin
 # 完全无 TTY 时也可以：CTFSCANNER_ADMIN_PASSWORD='…' python run_users.py --create-admin
 ```
 
 口令只进 `users` 表的 PBKDF2 派生值，**不写进任何配置文件**（续117 起 `settings.yaml` 里没有登录凭据）。
+
+## 1b. 401 边缘认证门与容器（续135 补，这条最容易咬人）
+
+`gui.edge_auth.enabled: true` 时，控制台在任何路由之前先要一个 Basic 口令（用户名固定 `edge`）。
+凭据文件 `config/edge_auth.yaml` 在 `.gitignore` 里 —— **新克隆的容器里没有它**，于是 `/login`
+一律 401。两处已按这个事实改过：
+
+- 健康检查认 `200 或 401`（旧写法只认 200 → 容器被判 unhealthy，配上 `restart: unless-stopped`
+  就是"一直重启、看起来永远起不来"）；
+- `config/` 是挂载进容器的，所以宿主机写好口令、`restart` 一下就生效，**不必重新构建镜像**。
+
+要么用前者（`printf 'password: …\n' > config/edge_auth.yaml && chmod 600 config/edge_auth.yaml`），
+要么把 `gui.edge_auth.enabled` 设回 `false`。容器里通常没有可读终端，所以启动向导**不会代填**，
+只会打印该跑的那条命令 —— 与上面首启动向导同一口径。
 
 > 端口只发布到**宿主机回环**（`127.0.0.1:5000`）：容器里虽然绑 `0.0.0.0`，
 > 但局域网/公网**访问不到**。要让别人用，先读第 6 节。
@@ -41,9 +56,11 @@ docker compose exec scanner python run_users.py --create-admin
 | 场景 | 命令 | 改了代码要做什么 |
 |---|---|---|
 | **交付 / 上服务器**（默认） | `docker compose up -d --build` | 要 **`--build` 重新构建**（代码是 `COPY` 进镜像的） |
-| **开发 / 调参**（挂源码） | `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d` | 只要 **`... restart`**，不用重建 |
+| **开发 / 调参**（挂源码） | `docker compose -f docker_todo/docker-compose.yml -f docker_todo/docker-compose.dev.yml up -d` | 只要 **`... restart`**，不用重建 |
 
-挂源码那种形态用的是 `docker-compose.dev.yml`：它把 `.:/app` 盖在镜像里的那份之上，
+挂源码那种形态用的是 `docker_todo/docker-compose.dev.yml`：它把仓库根挂到 `/app`，盖在镜像里那份之上。
+⚠ 两个 `-f` 必须**都在 `docker_todo/` 下**：相对路径按第一个 compose 文件的目录算项目根，
+拿仓库根那个薄包装去拼 dev 覆盖会把挂载源解析成 `/opt/…` 的上一级目录（实测，续135）。
 所以宿主机改完 `restart` 一下就是新代码（Python 是启动时读源码，不需要重装依赖）。
 
 **只改配置（`config/settings.yaml` / `config/keys.yaml`）两种形态都不用重建** ——

@@ -3,7 +3,8 @@
 # 用法、要不要重新打包、数据在哪、共享服务器上的权限隔离 —— 全部见 docs/docker.md。
 # 一句话：`docker compose up -d --build`，然后浏览器开 http://127.0.0.1:5000
 #
-# 镜像只装 requirements.txt 里那三个运行期依赖（flask / requests / PyYAML）——
+# 镜像只装 requirements.txt 里那 4 个运行期依赖（flask / requests / PyYAML / cryptography）——
+# 第 4 个是续98 加的：少了它 `config/keys.enc.yaml` 在新机器上根本解不开（AES-GCM 用得上它）。
 # 这是本项目的**零多余依赖**口径：截图用系统浏览器、证书解析用标准库、
 # 验证码自己画 PNG，都不引入新包。需要的外部工具（subfinder/httpx/puredns）
 # 在容器里用「外部工具」页或 `--update-tools` 现装，见 docs/docker.md。

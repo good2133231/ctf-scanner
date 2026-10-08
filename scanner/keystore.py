@@ -130,6 +130,34 @@ def _parse(text):
     return data if isinstance(data, dict) else {}
 
 
+def startup_ask_passphrase(default=True):
+    """只取 `gui.keys_ask_passphrase` 这一个开关，**不走 `load_settings()`**。
+
+    为什么不先读配置再说：`tests/smoke.py [8f] ⑩` 是一条接线红线 —— 三个入口都必须在
+    `load_settings()` **之前** `unlock()`，晚一步就是"keys 永远是空 dict"的静默失效，而它
+    看起来完全像"用户没配 key"（§7 续114 登记过这次误判）。`serve()` 若要先空读一次配置才能
+    决定问不问，就直接拧断那条红线。第二个理由更实在：此刻凭据还没解锁，`load_settings()`
+    合并进来的 keys 段必然是空的，完整读一遍是白读。
+
+    任何失败（config 段缺失 / 文件不在 / YAML 坏）一律回 `default`（= True，续98 的老行为）：
+    **"读不到开关"不许变成"悄悄不问了"**，那等于把加密凭据弄成静默不可用。
+    """
+    try:
+        from scanner import config as _cfg          # 延迟 import：config 会 import 本模块
+        base = Path(str(_cfg.BASE_DIR))
+    except Exception:                               # noqa: BLE001 兜到模块自己的 BASE_DIR
+        base = BASE_DIR
+    try:
+        import yaml
+        raw = yaml.safe_load((base / "config" / "settings.yaml").read_text(encoding="utf-8"))
+    except Exception:                               # noqa: BLE001 读不到就按默认
+        return default
+    gui = raw.get("gui") if isinstance(raw, dict) else None
+    if not isinstance(gui, dict) or "keys_ask_passphrase" not in gui:
+        return default
+    return bool(gui.get("keys_ask_passphrase"))
+
+
 def _prompt(src):
     """只有**真有 TTY** 才提示。非交互（CI / 管道 / 自动化）一律直接返回未解锁 —— 绝不允许挂住。
 
@@ -155,19 +183,29 @@ def lock_notice(reason=None):
     return f"凭据保持锁定：{r}（外部情报源按\"无 key\"如实降级，其余阶段不受影响）"
 
 
-def unlock(passphrase=None, path=None):
+def unlock(passphrase=None, path=None, allow_prompt=None):
     """启动时调一次：把密文解进进程缓存。返回 `{"ok", "reason", "source"}`，**永不抛**。
 
     口令来源优先级：显式参数 > `CTFSCANNER_KEYS_PASSPHRASE` > 交互提示。
+    `allow_prompt=False`（续133，来自 `gui.keys_ask_passphrase=false`）跳过"交互提示"这一级。
+    跳的是**提问**、不是加密：没有口令就是未解锁，照实返回并把原因写成"被配置关掉了"—— 既不
+    假装成功，也不静默当成"没配 key"（那种混淆正是 §7 续114 登记过的真实误判来源）。
     没有密文文件时：若还有明文 `keys.yaml`，保持锁定但让 `current()` 走明文老路（向后兼容），
     并在 reason 里如实写"未启用加密"。
     """
     path = Path(path if path is not None else ENC_KEYS_PATH)
+    if allow_prompt is None:
+        # 没显式指定就自己去配置里取那一个键（见 startup_ask_passphrase 的两条理由）
+        allow_prompt = startup_ask_passphrase()
     if not path.exists():
         _STATE.update(unlocked=False, data=None, source="absent",
                       reason="没有加密凭据文件（沿用明文 keys.yaml，如有）")
         return {"ok": False, "reason": _STATE["reason"], "source": "absent"}
     given = passphrase if passphrase else os.environ.get(ENV_PASSPHRASE, "")
+    if not given and not allow_prompt:
+        why = f"已配置为启动时不询问（gui.keys_ask_passphrase=false）；需要解锁请设 {ENV_PASSPHRASE}"
+        _STATE.update(unlocked=False, data=None, source="config-off", reason=why)
+        return {"ok": False, "reason": why, "source": "config-off"}
     source = "arg" if passphrase else ("env" if given else "prompt")
     if not given:
         given, why = _prompt(source)

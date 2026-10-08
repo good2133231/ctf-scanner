@@ -5444,13 +5444,39 @@ workflows:
     assert _authority("http://127.0.0.1:9999") != _authority("127.0.0.1:5057"), "端口必须参与比对"
 
     # 2) Host 白名单：绑定回环地址时，非回环 Host 一律 403。
-    #    test client 默认 Host 就是 `localhost`（在白名单内），所以这里必须**显式**换成外站域名
-    assert c.get("/login", headers={"Host": "evil.example"}).status_code == 403
-    assert c.post("/login", data=_admin_form117(),
-                  headers={"Host": "evil.example"}).status_code == 403
-    assert c.get("/login", headers={"Host": "127.0.0.1"}).status_code == 200
-    assert c.get("/login", headers={"Host": "localhost:5000"}).status_code == 200, \
+    #    ⚠ 前提必须**用例自己声明**：`c` 是模块级 app，吃本机 `config/settings.yaml`，而续133 起
+    #    本机是 `0.0.0.0` + `allowed_hosts: []` ⇒ `CS_GUARD_HOST` 为 False，"外站 Host 被 403"这条
+    #    根本不适用。拿部署值当隐含前提就是 §6.2 的假红根源 —— 改一个配置项会让几百条断言
+    #    报成"守卫坏了"。所以这里另建一个**绑回环 + 空白名单**的应用，把守卫开着写成前提。
+    _s32 = copy.deepcopy(settings)
+    _s32.setdefault("gui", {}).update({"host": "127.0.0.1", "allowed_hosts": []})
+    _orig_ls32, _orig_sync32 = gui_app.load_settings, gui_app.sync_pocs
+    gui_app.load_settings = lambda: _s32
+    gui_app.sync_pocs = lambda *_a, **_k: None      # 只验守卫，不必为这个 app 重扫 300+ 模板
+    try:
+        _app32 = gui_app.create_app()
+    finally:
+        gui_app.load_settings, gui_app.sync_pocs = _orig_ls32, _orig_sync32
+    _c32 = _app32.test_client()
+    assert _app32.config["CS_GUARD_HOST"] is True, "本用例要求 Host 校验是开着的"
+    assert _c32.get("/login", headers={"Host": "evil.example"}).status_code == 403
+    assert _c32.post("/login", data=_admin_form117(),
+                     headers={"Host": "evil.example"}).status_code == 403
+    assert _c32.get("/login", headers={"Host": "127.0.0.1"}).status_code == 200
+    assert _c32.get("/login", headers={"Host": "localhost:5000"}).status_code == 200, \
         "回环 + 端口仍应放行（白名单比的是主机名）"
+    #    反向半边：同一条判据在"0.0.0.0 + 空白名单"（本机部署形态）下必须**不**拦外站 Host。
+    #    少了这一半，上面那几条可能只是因为守卫压根没跑而通过 —— 两向都要有牙齿。
+    _s32b = copy.deepcopy(settings)
+    _s32b.setdefault("gui", {}).update({"host": "0.0.0.0", "allowed_hosts": []})
+    gui_app.load_settings = lambda: _s32b
+    try:
+        _app32b = gui_app.create_app()
+    finally:
+        gui_app.load_settings = _orig_ls32
+    assert _app32b.config["CS_GUARD_HOST"] is False, "0.0.0.0 + 空白名单时守卫必须放宽"
+    assert _app32b.test_client().get(
+        "/login", headers={"Host": "evil.example"}).status_code == 200
 
     # 3) 写方法的 Origin/Referer 校验（比**权威段**：Cookie 不按端口隔离，端口必须参与）
     _tok32 = _admin_form117()
@@ -7664,10 +7690,14 @@ http:
             gui_app.load_settings, gui_app.sync_pocs = _orig_load7i, _orig_sync7i
 
     # 2) 默认严格（DNS rebinding 防护没被削弱）：非回环 Host 一律 403，回环照常
-    assert app.config["CS_GUARD_HOST"] is True, "绑回环地址时必须做 Host 校验"
-    assert app.config["CS_BAD_ALLOWED_HOSTS"] == ()
-    assert app.test_client().get("/login", headers={"Host": "evil.example.com"}).status_code == 403
-    assert app.test_client().get("/login", headers={"Host": "127.0.0.1"}).status_code == 200
+    #    用 `_app_with7i()` 而不是模块级 `app`：后者继承本机 `gui.host` / `allowed_hosts`，
+    #    而本机部署（续133）是 0.0.0.0 + 空白名单 ⇒ 守卫放宽。helper 已把前提钉成回环+空白名单。
+    _app_loop7i = _app_with7i()
+    assert _app_loop7i.config["CS_GUARD_HOST"] is True, "绑回环地址时必须做 Host 校验"
+    assert _app_loop7i.config["CS_BAD_ALLOWED_HOSTS"] == ()
+    assert _app_loop7i.test_client().get(
+        "/login", headers={"Host": "evil.example.com"}).status_code == 403
+    assert _app_loop7i.test_client().get("/login", headers={"Host": "127.0.0.1"}).status_code == 200
 
     # 3) 显式放行才过：清单里的域名能过，别的仍 403；回环不受影响（端口不参与比对）
     _app_allow7i = _app_with7i(allowed_hosts=["scanner.example.test"])
@@ -7685,6 +7715,46 @@ http:
     assert _app_star7i.test_client().get(
         "/login", headers={"Host": "evil.example.com"}).status_code == 403
 
+    # ---- 4b) 续135：`allowed_hosts_auto_local`（本机地址自己探测，配置里不许写死 IP）----
+    # 为什么单独钉：`_local_host_names()` 默认关时一次都不会被调用，而 `sk.connect(*sockaddr)`
+    # 这种错（socket.connect 要元组）编译与导入全都过 —— 只有真跑才炸。属 §7 登记的
+    # "走不到的代码"：覆盖必须显式加，不能指望默认值把它带进路径。
+    from gui.app import _local_host_names as _lh7i
+    _auto7i = _lh7i()
+    assert isinstance(_auto7i, set), type(_auto7i)
+    assert all(isinstance(n, str) and n for n in _auto7i), _auto7i
+    assert not (_auto7i & _LOOPBACK7i), f"回环名不该由探测带进来：{_auto7i}"
+    _plain7i, _bad7i = _allowed_hosts({"allowed_hosts": ["scanner.example.test"]})
+    _wider7i, _bad7i2 = _allowed_hosts({"allowed_hosts": ["scanner.example.test"],
+                                         "allowed_hosts_auto_local": True})
+    # 只会更宽、不会更窄（超集关系，与本机有几个地址无关 ⇒ 不是环境值当哨兵）
+    assert _plain7i <= _wider7i, (_plain7i, _wider7i)
+    assert _bad7i2 == _bad7i == []
+    # "自动放行"绝不等于"放行一切"：外站域名与随机 IP 必须仍然不在集合里
+    assert "evil.example.com" not in _wider7i and "1.2.3.4" not in _wider7i
+    if _auto7i:
+        # 真点一次：用本机自己的地址当 Host 必须放行，而白名单外的域名必须 403
+        _app_auto7i = _app_with7i(host="0.0.0.0", allowed_hosts=[],
+                                  allowed_hosts_auto_local=True)
+        assert _app_auto7i.config["CS_GUARD_HOST"] is True, \
+            "有本机地址却没并入放行集合 = 探测没接上线"
+        _ca7i = _app_auto7i.test_client()
+        # 只用 IPv4 形态点 Host：IPv6 字面量要带方括号才合法（`[::1]:5000`），
+        # 而链路本地地址还带 `%区` —— 拼成 Host 是非法串，会把这条断言变成测 HTTP 头语法
+        _v47i = sorted(n for n in _auto7i if ":" not in n)
+        _hit7i = [n for n in _v47i
+                  if _ca7i.get("/login", headers={"Host": f"{n}:5000"}).status_code == 200]
+        assert _hit7i or not _v47i, f"本机 IPv4 地址一个都不被放行：{_v47i}"
+        assert _ca7i.get("/login", headers={"Host": "evil.example.com"}).status_code == 403
+        _auto7i_note = f"自动放行 {len(_hit7i)}/{len(_v47i)} 个本机 IPv4 地址"
+    else:
+        _auto7i_note = "未真点（本机查不到非回环地址：隔离网络/CI 场景）—— 跳过 != 通过"
+    # 反向半边（变异钉）：开关关掉时必须**不**并入 —— 否则"默认关"这句是假的
+    _app_off7i = _app_with7i(host="0.0.0.0", allowed_hosts=[])
+    assert _app_off7i.config["CS_GUARD_HOST"] is False, \
+        "0.0.0.0 + 空白名单 + 开关关 → 守卫本该放宽（当前部署口径）"
+    assert _app_off7i.test_client().get(
+        "/login", headers={"Host": "evil.example.com"}).status_code == 200
     def _env7i(app_obj, extra):
         """把 WSGI environ 直接喂给 `app.wsgi_app`，返回**被中间件改写后**的 environ。
 
@@ -7709,7 +7779,8 @@ http:
     assert _env7i_def["HTTP_HOST"] == "127.0.0.1:5000", "Host 不得被伪造头改掉"
     assert _env7i_def["REMOTE_ADDR"] == "127.0.0.1", "客户端 IP 不得被伪造头改掉"
     # 顺带证明"信了会怎样"：Host 是白名单外的域名时，用 X-Forwarded-Host 伪装成回环也必须 403
-    assert app.test_client().get("/login", headers={
+    # （用 `_app_loop7i` —— 守卫开着是本条的前提，不能继承本机 `allowed_hosts: []` 那个部署形态）
+    assert _app_loop7i.test_client().get("/login", headers={
         "Host": "evil.example.com", "X-Forwarded-Host": "127.0.0.1"}).status_code == 403, \
         "X-Forwarded-Host 不得成为绕过 Host 白名单的后门"
 
@@ -7868,7 +7939,10 @@ http:
           "behind_proxy=true 才生效（x_for/x_proto/x_host 各一跳）/ 会话 Cookie 在 HTTPS 下带 "
           "Secure 且 HttpOnly+SameSite=Lax 未被放宽 / 启动部署提示（指向 docs/deploy-https.md）/ "
           "4 条变异证伪全部按预期变红 / `serve()` 真跑：提示逐行恰好一次·无重复行·"
-          "回环下不出现「请走反向代理」的错误建议")
+          "回环下不出现「请走反向代理」的错误建议 / "
+          # 4b 的结论必须打印：本机查不到非回环地址时那一支是**跳过** —— 存进变量又不说，
+          # 就没人知道这次到底真点过没有（本仓口径：跳过 != 通过）。
+          f"4b 本机地址自动放行：{_auto7i_note}")
 
     # [7j] 续48 **登录限速/失败锁定 + 访问审计流水**。
     #      背景：控制台即将放到服务器给队友用 —— 口令会被在线爆破，操作需要可回溯。
@@ -12449,7 +12523,11 @@ http:
         _gp8f.getpass = lambda *a, **k: (_ for _ in ()).throw(AssertionError("非交互环境不该提示口令"))
         sys.stdin = _NoTTY8f()             # **强制**非交互：CI 上有没有 tty 都不该赌
         try:
-            _r8f = _ks8f.unlock()
+            # `allow_prompt=True` 必须**显式传**：本条验的是续98 的"非交互不提示、不挂住"那一支，
+            # 而续134 的 `gui.keys_ask_passphrase` 会在它之前就返回。让它继承本机配置 = §6.2 说的
+            # "拿环境值当哨兵"（本机设 false 时这条必红，报的却还是"非交互守卫坏了"）。
+            # 开关本身的行为由下面的 ⑪ 独立验，两者不互相顶替。
+            _r8f = _ks8f.unlock(allow_prompt=True)
             assert not _r8f["ok"] and "非交互" in _r8f["reason"], _r8f
         finally:
             _gp8f.getpass, sys.stdin = _real_gp, _real_stdin
@@ -12502,8 +12580,66 @@ http:
                                 ("gui/app.py", "    _settings = load_settings()")):
             _sx8f = (ROOT / _rel8f).read_text(encoding="utf-8")
             assert "keystore" in _sx8f, f"{_rel8f} 没导入 keystore"
-            _u8f, _l8f = _sx8f.find("keystore.unlock()"), _sx8f.find(_call8f)
+            # 找的是 `keystore.unlock(` 而不是 `keystore.unlock()`：后者会在**任何人给 unlock 加一个
+            # 参数**时让 find 静默返回 -1，于是这条红线变成"永远判红"或"找错东西"（续134 真踩过：
+            # 加了 allow_prompt 形参就 -1）。前缀匹配才既认参数、又确实要求这一处调用存在。
+            _u8f, _l8f = _sx8f.find("keystore.unlock("), _sx8f.find(_call8f)
             assert 0 <= _u8f < _l8f, f"{_rel8f}: unlock() 必须在 load_settings() 之前（实得 unlock={_u8f} load={_l8f}）"
+            assert 0 <= _u8f < _l8f, f"{_rel8f}: unlock() 必须在 load_settings() 之前（实得 unlock={_u8f} load={_l8f}）"
+
+        # ⑪ 续134：`gui.keys_ask_passphrase` 这个开关本身 —— 三档都要有牙齿，且缺省必须是"照旧问"。
+        #    读不到配置就回退成"不问"是不可接受的：那等于把加密凭据变成静默不可用。
+        from scanner import config as _cfgmod8f
+        _sp8f = Path(tempfile.mkdtemp(prefix="ks-askflag-"))
+        (_sp8f / "config").mkdir(parents=True, exist_ok=True)
+        _old_cfgbase8f = _cfgmod8f.BASE_DIR
+        _cfgmod8f.BASE_DIR = _sp8f
+        try:
+            # ① 文件不存在 → 默认 true（不许"读不到就不问"）
+            assert _ks8f.startup_ask_passphrase() is True, "配置读不到时必须回默认值 true"
+            # ② 文件在、但这个键没写 → 同样默认 true
+            (_sp8f / "config" / "settings.yaml").write_text(
+                "gui:\n  host: 127.0.0.1\n", encoding="utf-8")
+            assert _ks8f.startup_ask_passphrase() is True, "缺键必须回默认 true（续98 的老行为）"
+            # ③ 显式 false → 认
+            (_sp8f / "config" / "settings.yaml").write_text(
+                "gui:\n  keys_ask_passphrase: false\n", encoding="utf-8")
+            assert _ks8f.startup_ask_passphrase() is False
+            # ④ 这条开关唯一要买的东西：**有 tty 也不许提问**。把 _prompt 打桩成"被调用就判红"
+            #    —— 比断言返回值强：实现里哪怕只多走一次提示分支都会被抓到。
+            _old_prompt8f, _old_stdin8f = _ks8f._prompt, sys.stdin
+            class _Tty8f:
+                encoding = "utf-8"
+
+                @staticmethod
+                def isatty():
+                    return True
+
+            def _boom8f(_src):
+                raise AssertionError("开关关了却还是去提问了")
+
+            try:
+                _ks8f._prompt, sys.stdin = _boom8f, _Tty8f()
+                _r8f = _ks8f.unlock(passphrase=None)
+            finally:
+                _ks8f._prompt, sys.stdin = _old_prompt8f, _old_stdin8f
+            assert _r8f["source"] == "config-off", _r8f
+            assert "keys_ask_passphrase" in _r8f["reason"], _r8f
+            # 反向半边：把开关改回 true，同一个 unlock() 就必须去提问（否则 ④ 是恒真的）
+            _calls8f = []
+            _old_prompt8b = _ks8f._prompt
+            try:
+                _ks8f._prompt = lambda src: (_calls8f.append(src), (None, "非交互环境且未设置 x"))[1]
+                (_sp8f / "config" / "settings.yaml").write_text(
+                    "gui:\n  keys_ask_passphrase: true\n", encoding="utf-8")
+                _ks8f.unlock(passphrase=None)
+            finally:
+                _ks8f._prompt = _old_prompt8b
+            assert _calls8f == ["prompt"], f"开关开着却没走提问分支：{_calls8f}"
+        finally:
+            _cfgmod8f.BASE_DIR = _old_cfgbase8f      # 归位：带着临时 BASE_DIR 往下跑会波及之后所有组
+            shutil.rmtree(_sp8f, ignore_errors=True)
+            _ks8f.reset()
     finally:
         _ks8f.ENC_KEYS_PATH, _ks8f.PLAIN_KEYS_PATH = _old_enc, _old_plain
         _ks8f.reset()
@@ -16912,6 +17048,7 @@ expression: r0()
           "BASE_DIR 隔离，手法同 [8v]）｜**哨兵口令不出现在任何被跟踪文件里**（这才是明文存储"
           "可以被接受的前提）｜非回环未配口令必须点名｜变异：fail-open / 去掉空口令前置判断 /"
           "挪到 Host 白名单之后 / 不校验用户名 / 写审计 都会红")
+
     print("SMOKE PASS")
 
 
