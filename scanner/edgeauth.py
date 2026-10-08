@@ -115,13 +115,50 @@ def clear_password():
         return False
 
 
-def state(settings):
-    """三态 + 一句给人看的话。`no_password` 是**必须点名**的降级（本仓"绝不静默降级"的规矩）。"""
+def _read_or_none():
+    """`read_password()` 的别名位 —— 只为让 `wizard()` 的"有没有口令"与 `verify()` 走同一个函数。"""
+    return read_password()
+
+
+# ---- 启动时的补口令向导（形状照 `scanner/admin_setup.py::wizard()`，续117）----
+# 为什么要有它：这道门 fail-closed，而"开了开关、口令还没设"这件事以前只在
+# `_deploy_hints()` 的**非回环分支**里说 —— 于是绑 127.0.0.1 又开了门的人会被**静默锁死**，
+# 一句提示都没有（本仓的红线恰恰是"绝不静默降级"）。首启动向导的先例是：库里 0 个账号时
+# 当场问你要设什么口令，而不是让人去翻文档。
+ST_DISABLED = "disabled"         # 门没开 → 一个字都不多说（默认配置必须保持安静）
+ST_CONFIGURED = "configured"     # 口令已在，无事可做
+ST_NO_TTY = "no-tty"             # 无终端：只能提醒，不代填（与 admin_setup 同一取舍）
+ST_CANCELLED = "cancelled"       # 用户留空 / 两次输入不一致
+ST_INVALID = "invalid"           # 口令不合规则
+ST_SET = "set"                   # 本次交互写入成功
+
+
+def wizard(settings, ask_password=None, isatty=None):
+    """启动时的补口令向导。返回 `(状态, 一句话)`；**任何返回值与输出里都不含口令**。
+
+    `ask_password` / `isatty` 可注入 —— 与 `admin_setup.wizard()` 同一理由：`serve()` 会起真
+    服务器、回归调不动它，把输入口开成参数才能对每种状态做断言（含"非交互绝不代填"这条）。
+    """
     if not enabled(settings):
-        return "off", "未启用（`gui.edge_auth.enabled` 为假）"
-    if not read_password():
-        return "no_password", f"已启用但**没有口令** → 现在所有请求都会被 401 拒；{SET_HINT}"
-    return "ready", f"已启用，口令已配置（用户名 {EDGE_USER}，明文在 {PASSWORD_FILE}，该文件不进仓库）"
+        return ST_DISABLED, ""
+    if read_password():
+        return ST_CONFIGURED, ""
+    tty = sys.stdin.isatty() if isatty is None else bool(isatty)
+    if not tty:
+        return ST_NO_TTY, (f"已启用但**没有口令** → 现在所有请求都会被 401 拒；"
+                           f"非交互环境不代填口令，请补设：{SET_HINT}")
+    ask = ask_password or getpass.getpass
+    pw = ask(f"边缘口令（用户名 {EDGE_USER}；直接回车=这次不设，之后所有请求都会被 401 拒）：")
+    if not pw:
+        return ST_CANCELLED, f"本次未设置口令 → 所有请求都会被 401 拒；补设：{SET_HINT}"
+    ok, why = users.validate_password(pw, EDGE_USER)
+    if not ok:
+        return ST_INVALID, f"口令不合格：{why}（未做任何修改，仍会一律 401）"
+    if pw != ask("再输一次确认："):
+        return ST_CANCELLED, f"两次输入不一致，未做任何修改 —— 仍会一律 401；补设：{SET_HINT}"
+    set_password(pw)
+    return ST_SET, (f"已写入 {PASSWORD_FILE}（0600、不进仓库）；Basic 用户名固定 {EDGE_USER}。"
+                    "注意：明文 HTTP 下 Basic 会把口令随每个请求带出去。")
 
 
 def _split_basic(header):

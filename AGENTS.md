@@ -259,6 +259,8 @@ ctf-scanner/
 │   │                      #   里）；开关 `gui.edge_auth.enabled` 在 settings.yaml —— 分两个文件正是因为
 │   │                      #   settings.yaml 被 git 跟踪而仓库公开。用户名固定 `edge`；口令文件缺失**或
 │   │                      #   为空** = 一律 401（fail-closed；空 stored 必须在比较前挡掉）
+│   │                      #   （续133）`serve()` 启动时走 `wizard()` 自检：口令没设就**当众提醒**，
+│   │                      #   有终端则当场问着设（形状抄 admin_setup，输入与 isatty 可注入）
 │   ├── users.py           # 多用户（续46）：PBKDF2 口令哈希 / check_login / validate_password / 防锁死（不能停用自己、至少留一个启用中的管理员）
 │   ├── admin_setup.py      # 建"能登录控制台的人"（续117）：向导 + 命令行**共用**的判据（0 账号才动作 /
 │   │                      #   非交互不代填 / 口令只进 users 表），两个入口一份规则，别各写一遍

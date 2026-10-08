@@ -7807,12 +7807,24 @@ http:
         gui_app.load_settings = lambda: _base
         gui_app._port_free = lambda h, p: True        # 不真 bind（否则占用端口 / 依赖环境）
         gui_app.app.run = lambda *a, **k: None        # 不真起服务器（否则测试会挂在这里）
+        # 不等人：续133 起 serve() 里有边缘门向导，它按 isatty 决定要不要开口问口令。
+        # 不桩住就是「人在终端里跑 smoke 会卡在口令输入」——admin_setup 那个向导之所以
+        # 一直没咬人，是因为回归库里已有账号，直接返回 ST_HAS_USERS、压根不问。
+        import sys as _sys7i
+        class _NoTty7i:
+            encoding = "utf-8"
+
+            def isatty(self):
+                return False
+
+        _stdin_real7i, _sys7i.stdin = _sys7i.stdin, _NoTty7i()
         try:
             with _ctx7i.redirect_stdout(_buf):
                 # 续49：本用例只验启动**提示**文案，绝不能顺手起任务队列 worker
                 # （否则本测试库里残留的 queued 行会被真消费，污染其它用例）。
                 gui_app.serve(start_queue=False)
         finally:
+            _sys7i.stdin = _stdin_real7i
             gui_app.load_settings, gui_app._port_free = _orig_load7i, _orig_port_free
             if _had_run:
                 gui_app.app.run = _orig_run
@@ -16863,20 +16875,28 @@ expression: r0()
         # ⑨c **空口令必须仍然被拒**：`const_eq` 比两个空串会为真，所以校验前必须先看 stored 空不空。
         #    少了这道前置判断，「没配口令」就退化成「任何人用空口令都能进」= fail-open。
         _ea8ai.set_password("")
-        assert _ea8ai.state({"gui": {"edge_auth": {"enabled": True}}})[0] == "no_password"
+        assert _ea8ai.wizard({"gui": {"edge_auth": {"enabled": True}}}, isatty=False)[0] \
+            == _ea8ai.ST_NO_TTY, "非交互必须只提醒、绝不代填"
         _empty_h8ai = "Basic " + _b64_8ai.b64encode(b"edge:").decode()
         assert _app8ai.test_client().get("/login",
                                       headers={"Authorization": _empty_h8ai}).status_code == 401, \
             "空口令被放行 = fail-open"
         _ea8ai.set_password(_PW8AI)
 
-        # ⑩ 启动文案：非回环 + 门开但未设口令时**必须点名**（本仓"绝不静默降级"），门关时保持安静
+        # ⑩ 启动提醒**与绑定地址无关**（续133 修的正是这个洞：以前那句挂在 `_deploy_hints()` 的
+        #    非回环分支里，于是绑 127.0.0.1、开了门、又没设口令的人被**静默锁死**、一句提示都没有）。
+        #    判据取 `serve()` 的**真实输出**而不是纯函数返回值 —— 与 [7i] 补 10b 的理由同一件事：
+        #    "函数返回正确"与"调用点真打印了"是两件事。
         _ea8ai.clear_password()
-        _h_open = "\n".join(_gui8ai_mod._deploy_hints({"host": "0.0.0.0",
-                                                       "edge_auth": {"enabled": True}}))
-        assert "401 边缘认证门" in _h_open and "所有请求都会被 401 拒" in _h_open, _h_open
-        _h_off = "\n".join(_gui8ai_mod._deploy_hints({"host": "0.0.0.0"}))
-        assert "401 边缘认证门" not in _h_off, "没启用也要刷一行 = 默认配置不再安静"
+        _out_on, _ = _serve_out7i({"host": "127.0.0.1", "edge_auth": {"enabled": True}})
+        assert any("边缘认证门" in l and "401 拒" in l for l in _out_on), _out_on[-6:]
+        _out_off, _ = _serve_out7i({"host": "127.0.0.1", "edge_auth": {"enabled": False}})
+        assert not any("边缘认证门" in l for l in _out_off), \
+            "门没开也要刷一行 = 默认配置不再安静"
+        #    反证：同一句话不许在 `_deploy_hints()` 里再出现一次（AGENTS.md §5.14 单一产地）；
+        #    顺带它因此回到纯函数 —— 不读文件系统。
+        assert not any("边缘认证门" in l for l in _gui8ai_mod._deploy_hints(
+            {"host": "0.0.0.0", "edge_auth": {"enabled": True}})), "同一句提示出现两个产地"
         assert _gui8ai_mod._deploy_hints({"host": "127.0.0.1"}) == [], "回环地址必须一个字都不多说"
     finally:
         _ea8ai.clear_password()

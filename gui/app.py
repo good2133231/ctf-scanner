@@ -3543,9 +3543,6 @@ def _deploy_hints(gui_cfg):
             lines.append("    已配置 gui.allowed_hosts → Host 白名单仍然生效（只放行清单里的域名）。")
         else:
             lines.append("    未配置 gui.allowed_hosts → Host 白名单在本模式下已自动放宽。")
-        _edge_st, _edge_msg = edgeauth.state({"gui": cfg})
-        if _edge_st != "off":      # 没启用就一个字都不多说：默认配置要保持安静
-            lines.append(f"    401 边缘认证门：{_edge_msg}")
         lines.append("    HTTPS 需由反向代理终止（见 docs/deploy-https.md）；"
                      "**访问审计仍然没有**，请自行限制在可信网段。")
     return lines
@@ -3604,6 +3601,18 @@ def serve(start_queue=True):
     # 非回环分支的第 3 句（"确需远程使用时，请走反向代理…"），它按 hint 行数**重复打印**，
     # 而且在回环地址下也会冒出来（用户就在本机，那句建议是错的）。这句想表达的意思已由
     # `_deploy_hints()` 非回环分支的最后一行覆盖，故直接删除、不搬移。
+    # 401 边缘认证门的现状**必须在这里说**（续133）：以前那句话挂在 `_deploy_hints()` 的非回环
+    # 分支里，于是绑 127.0.0.1 又开了门、口令没设的人会被**静默锁死**、一句提示都没有 —— 而门是
+    # fail-closed 的，这种降级不该只在「恰好绑了公网」时才说出来。形状照首启动向导（续117）：
+    # 有终端就当场问，没终端只提醒、**绝不代填**；口令不进 argv，也不进任何返回值与输出。
+    _e_state, _e_msg = edgeauth.wizard(_settings)
+    if _e_state == edgeauth.ST_SET:
+        print(f"[+] 边缘认证门：{_e_msg}")
+    elif _e_state in (edgeauth.ST_NO_TTY, edgeauth.ST_CANCELLED, edgeauth.ST_INVALID):
+        print(f"[!] 边缘认证门：{_e_msg}")
+    elif _e_state == edgeauth.ST_CONFIGURED:
+        print(f"[*] 边缘认证门：已启用，口令已配置（Basic 用户名 {edgeauth.EDGE_USER}）")
+    # ST_DISABLED：门没开 → 一个字都不多说（默认配置必须保持安静）
     for _line in _deploy_hints(s):
         print(_line)
     app.run(host=host, port=port, debug=False)
