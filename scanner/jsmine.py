@@ -401,8 +401,12 @@ def _new_result():
     return {"domains": [], "urls": [], "secrets": [], "js_count": 0}
 
 
-def mine(url, settings, logger=None):
+def mine(url, settings, logger=None, text_sink=None):
     """挖掘单个站点的 JS 资产。
+
+    `text_sink(url, text)`（续126）：把**已经抓到的**每份正文原样交给调用方。存在的唯一理由
+    是"文本已经在手里，不该再抓一遍"：flag 抽取需要页面与每个 JS 的正文，而这里本来就已经
+    为域名/凭据挖掘读过它们。只在真有文本时回调；回调里的异常由调用方负责。
 
     返回 {"domains": [...], "urls": [...], "secrets": [...], "js_count": N}
     （domains/urls 去重排序；secrets 按 (type, value) 排序去重，js_count 为成功抓取的
@@ -434,6 +438,8 @@ def mine(url, settings, logger=None):
         return out
     page_url = resp.get("url") or url
     html = resp.get("text") or ""
+    if text_sink and html:
+        text_sink(page_url, html)
 
     # 1) 页面自身文本
     hosts, urls = _extract(html, urlparse(page_url).scheme or scheme, protect, blacklist)
@@ -477,6 +483,8 @@ def mine(url, settings, logger=None):
             urls |= u2
             if want_secrets:
                 secret_hits.extend(_find_secrets(b["text"], b["url"]))
+            if text_sink and b["text"]:
+                text_sink(b["url"], b["text"])
 
     # 3) 去重（凭据同一 value 跨文件只保留一次）
     secrets, seen_raw = [], set()

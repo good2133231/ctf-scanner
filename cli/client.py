@@ -39,6 +39,8 @@ def _print_summary(task_id, ctx):
           f"站点 {len(ctx.results.get('sites', []))} | "
           f"目录 {len(ctx.results.get('dirs', []))} | "
           f"潜在漏洞 {len(ctx.results.get('vulns', []))} | "
+          # 续126：flag 候选单独报数并注明**不是结论**（同形状大量是模板/JS 占位符）
+          f"flag 候选 {len(ctx.results.get('flags', []))}（按形状抽取，需人工判真）| "
           f"线索 {len(ctx.results.get('leads_intel', [])) + len(ctx.results.get('leads_heuristic', [])) + len(ctx.results.get('leads_github', []))}"
           f"（情报/启发式/GitHub，非漏洞结论）")
     print(f"    日志：{rel_display(ctx.workdir / 'task.log')}")

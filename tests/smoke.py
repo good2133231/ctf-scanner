@@ -313,6 +313,28 @@ from scanner.runner import (STAGE_ORDER, PipelineRunner, StageContext, run_task,
                             sync_pocs)
 
 
+
+def _ff126_ast_names(src):
+    """源码里**真实存在**的名字（import / 属性 / 调用名）；注释与文档字符串里的词不算。
+
+    [8ae] 用它判"flagfind 不许有任何会出网的引用"。第一版直接 `in src` 子串查，被
+    模块头那句"本模块不发任何请求"里的 `http_request` 绊红了一次 —— 结构判据要按 AST 取。
+    """
+    import ast as _a
+    names = set()
+    for node in _a.walk(_a.parse(src)):
+        if isinstance(node, _a.Import):
+            names.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, _a.ImportFrom):
+            names.add((node.module or "").split(".")[0])
+            names.update(a.asname or a.name for a in node.names)
+        elif isinstance(node, _a.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, _a.Call) and isinstance(node.func, _a.Name):
+            names.add(node.func.id)
+    return names
+
+
 def main():
     start_fixture()
     db.init_db()
@@ -2791,12 +2813,15 @@ def main():
     db.insert_leads(w_tid, [{"kind": "intel", "code": "CVE-2021-44228", "title": "Log4Shell",
                              "target": "w.test", "matched": "tech:log4j",
                              "level": "high", "source": "kev"}])
+    # 续126：这份夹具还要覆盖「flag 候选」小节 —— 三个格式共用 collect()，漏一节就是格式漂移
+    db.insert_flag(w_tid, {"value": "Wmd_flag", "kind": "flag", "source": "dir",
+                           "url": "http://w.test/.env", "context": "flag{Wmd_flag}"})
 
     _wmd = generate(w_tid)
     _whtml = generate_html(w_tid)
     # 三个格式必须**看到同一批数据**：MD 里有的小节 HTML 里也要有（避免格式间漂移）。
-    for _sec in ("潜在漏洞", "存活站点", "开放端口", "C 段视野", "TLS 证书", "目录发现",
-                 "已判误报"):
+    for _sec in ("潜在漏洞", "flag 候选", "存活站点", "开放端口", "C 段视野", "TLS 证书",
+                 "目录发现", "已判误报"):
         assert f"<h2>{_sec}" in _whtml, f"HTML 报告缺小节：{_sec}"
         assert _sec in _wmd, f"MD 报告缺小节：{_sec}"
     # 续24：这个任务**有**一条线索，但线索已从人读报告移除 —— 必须断言"有数据却不出现"，
@@ -13405,9 +13430,24 @@ http:
         _st113j["jsmine"] = dict(_st113j.get("jsmine") or {}, enabled=True,
                                  drop_absent_zone=True)
         _orig_mine113 = _jm113.mine
-        _jm113.mine = lambda url, st=None, logger=None: {
-            "domains": ["api.zone113.test", "chat.floating.open", "sub.mystery113.test"],
-            "urls": set(), "secrets": [], "js_count": 1}
+
+        def _stub_mine113(url, settings=None, logger=None, text_sink=None):
+            """桩：参数名必须与生产 `jsmine.mine` **一致**（下面那条判据盯着）。
+
+            参数名**逐字**对齐生产（第二参在生产叫 `settings`，桩里图省事写 `st` 就会让下面那条签名判据立刻变红——这正是它要抓的漂移）。本轮给 `mine()` 加了 `text_sink`（flag 抽取吃已在手的正文），这个三参数 lambda
+            接不到关键字参数 ⇒ TypeError，而阶段外层有 try/except ⇒ 表现成一行
+            「挖掘失败」warning + 域名全丢，判据只剩"库里 0 条"这种看不出根因的红。
+            """
+            if text_sink:
+                text_sink(url, "<html>桩正文 flag{Stub_Sink}</html>")
+            return {"domains": ["api.zone113.test", "chat.floating.open", "sub.mystery113.test"],
+                    "urls": set(), "secrets": [], "js_count": 1}
+
+        import inspect as _ins113
+        assert list(_ins113.signature(_stub_mine113).parameters) \
+            == list(_ins113.signature(_orig_mine113).parameters), \
+            "桩与生产签名漂了 —— 改 `jsmine.mine` 的参数必须同步这里"
+        _jm113.mine = _stub_mine113
         try:
             _JZ113(StageContext(_tid113j, "smoke-113-jsmine", parse_lines(["zone113.test"]),
                                 ["jsmine"], {}, _st113j, Path(_TMPDIR) / "z113j", _Rec113())).run()
@@ -14155,10 +14195,12 @@ http:
     _IDX116 = {"subdomains": "idx_subdomains_task", "sites": "idx_sites_task",
                "ports": "idx_ports_task", "csegs": "idx_csegs_task",
                "certs": "idx_certs_task", "dirs": "idx_dirs_task",
-               "vulns": "idx_vulns_task", "leads": "idx_leads_task"}
+               "vulns": "idx_vulns_task", "leads": "idx_leads_task",
+               "flags": "idx_flags_task"}
     _conn116 = db.get_conn()
     try:
-        # ① 八张资产表都有 task_id 索引（`init_db` 建表之后补，老库原地生效）
+        # ① 九张资产表都有 task_id 索引（`init_db` 建表之后补，老库原地生效；
+        #    `_IDX116` 是**逐表点名**的清单，新增资产表必须同时加一行 —— 否则这张表又回到全表扫）
         for _tb116, _ix116 in _IDX116.items():
             _have116 = {r[1] for r in _conn116.execute(f"PRAGMA index_list({_tb116})")}
             assert _ix116 in _have116, f"{_tb116} 缺 {_ix116}（实有索引：{sorted(_have116)}）"
@@ -14219,7 +14261,7 @@ http:
     finally:
         _conn116.close()
 
-    print("[8u] 续116 资产表 task_id 索引 ok: 八张资产表全部有索引｜COUNT 与分页两种形状的计划都不再"
+    print("[8u] 续116 资产表 task_id 索引 ok: 九张资产表全部有索引｜COUNT 与分页两种形状的计划都不再"
           "SCAN｜把索引打掉的变异让判据变红｜老库跑一次 init_db 原地补齐（不要求删库重建）")
 
     # ---------------- [8w] 续118：建任务表单的「一键批量勾选」 ----------------
@@ -15768,6 +15810,280 @@ expression: r0()
           "新版本解释器标成允许红的探针且带浏览器环境前置检查｜放宽逻辑只有 relax_pacing 一个入口，"
           "两条自检路径（run_selfcheck 与 [7l] 的进程内流水线）共用，基线写的是**实际生效**的节奏而非抄常量。"
           "实测：单跑自检 146.2s→26.2s（5.6x），全量门禁里 [7l] 那 146.7s 是同一条路省下来的")
+
+
+    # ---------------- [8ae] 续126：CTF flag 候选抽取（零额外请求，单独成表） ----------------
+    #      用户点单第 2 件："flag 抽取是空的：全仓搜 flag{ / CTF{ 零命中。
+    #      （零额外请求就能做：正文/JS/报错里按可配正则抽候选，单独成列）"
+    #      八小块各有所司：① 形状 ② 零请求（结构判据）③ 单独成表的代价 ④ harvest 语义（全桩，
+    #      不吃本机有没有库 —— §6.2）⑤ 四个出口真接线（续36 登记过"纯函数全绿、阶段没接上"）
+    #      ⑥ 报告三格式 ⑦ 三方一致 ⑧ 变异证伪。
+    from scanner import flagfind as _ff126
+    from scanner import db as _db126
+
+    # ---- ① 判据形状 ----
+    assert _ff126.normalize_prefixes(["flag", " DASCTF{ ", "flag[", "ctf{", "flag", "", None]) \
+        == [("flag", "flag{", "}"), ("DASCTF", "dasctf{", "}"), ("flag", "flag[", "]"),
+            ("ctf", "ctf{", "}")], \
+        "前缀归一：显示名保留用户写的大小写（给人看的标签）、搜索串一律小写、闭括号配对、保序去重"
+    _S = lambda **kw: {"flags": kw}
+    _cfg126 = _S(prefixes=["flag", "ctf"], min_len=1, max_len=200)
+    assert _ff126.scan("欢迎 flag{H4r_1s-th3_B3st} 收好", _cfg126) \
+        == [("flag", "H4r_1s-th3_B3st", 8)]
+    assert _ff126.scan("FLAG{CaSe_SeNsItIvE}", _cfg126)[0][1] == "CaSe_SeNsItIvE", \
+        "值必须**按原文**返回：flag 大小写敏感，被小写化的只能是用来定位的那份副本"
+    # 刻意偏宽（模块头第 3 条）：只配 `ctf` 也收 DASCTF{ —— 漏报丢一道题，误报只多看一眼。
+    # 这条不是"没做词边界"的借口，而是**明说不做**：加边界会把 `.ctf{` 挡掉的同时把真变体也挡掉。
+    assert [v for _k, v, _o in _ff126.scan("dasctf{abc}", _cfg126)] == ["abc"], "不该有词边界规则"
+    assert _ff126.scan("flag{}", _cfg126) == [], "空壳值不收（min_len）"
+    assert _ff126.scan("flag{a{b}}", _cfg126) == [], "嵌套不收：值体里任何括号都截断"
+    assert _ff126.scan("flag{" + "x" * 300 + "}", _cfg126) == [], "超过 max_len 不收"
+    assert [v for _k, v, _o in _ff126.scan("flag[square]", _S(prefixes=["flag["]))] == ["square"]
+    assert _ff126.scan("nothing here", _cfg126) == []
+    assert len(_ff126.scan(" ".join(f"flag{{v{i}}}" for i in range(50)), _cfg126, max_hits=7)) == 7, \
+        "单次调用的条数上限（一页刷爆候选表的兜底）"
+    # 自定义正则：有锚才收；无锚**必须给原因**（不静默丢）；坏正则也给原因
+    assert _ff126.scan("配置 KEY : S3cr3t_VALUE",
+                       _S(prefixes=[""], patterns=[r"KEY\s*:\s*[A-Za-z0-9_]+"], max_len=60)) \
+        == [("regex", "KEY : S3cr3t_VALUE", 3)]
+    _p_no = _S(prefixes=[], patterns=[r"[a-z]+_\d{4}", r"(["], max_len=60)
+    _r126, _pt126, _rej126, _c126 = _ff126.rules(_p_no)
+    assert not _r126 and not _pt126, (_r126, _pt126)
+    assert len(_rej126) == 2 and "取不出必现字面量" in _rej126[0] and "编译失败" in _rej126[1], _rej126
+    assert _ff126.scan("anything_1234", _p_no) == [], "无锚正则被拒 ⇒ 绝不退化成整份正文扫"
+    # `prefixes: []` 是"我只要自己的正则"，不是"没配"——不许悄悄回落成默认前缀
+    assert _ff126.rules(_S(prefixes=[], patterns=[r"KEY:AB"]))[0] == []
+    assert _ff126.rules({"flags": {}})[0], "缺段必须落回默认前缀（策略页之外还有 CLI/老库这条路）"
+    # 大小写折叠会**改变长度**的那几个码点：偏移必须仍对得上原文（逐条回切验证）
+    for _txt in ("pre\u0130flag{uni_case}", "\u017FL_flag{long_s}", "a\u0131{nope}",
+                 "\u0130\u0131\u017F" * 3 + " flag{tail}"):
+        for _k, _v, _o in _ff126.scan(_txt, _cfg126):
+            assert _txt[_o:_o + len(_v)] == _v, f"偏移错位：{_txt!r} → {_o}/{_v!r}"
+
+    # ---- ② 零额外请求：结构判据（跑一次不打网 ≠ 代码里没有出网口） ----
+    _ff_src126 = (ROOT / "scanner/flagfind.py").read_text(encoding="utf-8")
+    _names126 = _ff126_ast_names(_ff_src126)
+    _banned126 = ("http_request", "urlopen", "socket", "run_cmd", "requests", "urllib",
+                  "urlretrieve")
+    _hit126 = sorted(w for w in _banned126 if w in _names126)
+    assert not _hit126, f"flagfind 里出现了会出网的引用：{_hit126}"
+    assert "def harvest(" in _ff_src126 and "def scan(" in _ff_src126
+
+    # ---- ③ 单独成表的代价：清空 / 备份 / 索引 / 三态 limit 都要覆盖到 ----
+    assert "flags" in _db126.ASSET_TABLES, _db126.ASSET_TABLES
+    _src_db126 = (ROOT / "scanner/db.py").read_text(encoding="utf-8")
+    assert _src_db126.count("ASSET_TABLES = (") == 1, \
+        "ASSET_TABLES 只许一处定义：本轮实测抓到 780 行与 1232 行各一份、后一份静默盖前一份 —— " \
+        "新增表只改一处就会坏在「清空带 flags、节点回传不带」这种查不出来的不对称上"
+    _idx126 = {r["name"] for r in _db126._query(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_flags_task" in _idx126, "flags 也归「每条读取路径都按 task_id 过滤」的资产表"
+    _tid126 = _db126.create_task("smoke126", "http://127.0.0.1:8765/", ["probe"], {})
+    _db126.insert_flag(_tid126, {"value": "Keep_Case_ABC", "kind": "flag", "source": "probe",
+                                 "url": "http://127.0.0.1:8765/", "context": "…flag{Keep_Case_ABC}…"})
+    _rows126 = _db126.list_flags(_tid126)
+    assert len(_rows126) == 1 and _rows126[0]["kind"] == "flag" and _rows126[0]["source"] == "probe"
+    assert _db126.list_flags(_tid126, limit=0) == [], "limit=0＝一条都不要（续55 三态口径）"
+    _bk126 = _db126.backup_task(_tid126)
+    import json as _json126
+    assert len(_json126.loads(Path(_bk126).read_text(encoding="utf-8"))["assets"]["flags"]) == 1, \
+        "删除前备份必须含 flags —— 「data/trash 是误删后唯一救命稻草」这张网不能漏一张表"
+    _db126.clear_task_assets(_tid126)
+    assert _db126.list_flags(_tid126) == []
+
+    # ---- ④ harvest 的语义（桩掉 db：不吃本机有没有库，§6.2 的环境值哨兵） ----
+    class _Ctx126:
+        def __init__(self, settings, task_id=1):
+            import threading as _th126
+            self.settings, self.task_id = settings, task_id
+            self.results, self.options = {}, task_id
+            self._flag_stats = {"texts": 0, "bytes": 0, "oversize": 0, "new": 0,
+                                "dedup": 0, "full": 0}
+            self._flag_lock = _th126.Lock()
+            self._flag_seen = set()
+            self._flag_db_seen = None
+
+    _ins126, _lst126 = _db126.insert_flag, _db126.list_flags
+    _cap126 = []
+    try:
+        _db126.insert_flag = lambda t, f: _cap126.append((t, dict(f)))
+        _db126.list_flags = lambda t, limit=None: []
+        _c1 = _Ctx126(_S(enabled=True, prefixes=["flag"], max_per_source=20, max_per_task=2,
+                         max_bytes=1000, min_len=1, max_len=200))
+        assert _ff126.harvest(_c1, "http://x/", "flag{one} 与 flag{one} 再 flag{two}", "probe") == 2
+        assert _ff126.harvest(_c1, "http://x/", "flag{one}", "probe") == 0, "同值必须去重"
+        assert _ff126.harvest(_c1, "http://x/", "flag{three}", "probe") == 0, "max_per_task 必须封顶"
+        _st1 = _ff126.stats(_c1)
+        assert (_st1["new"], _st1["full"]) == (2, 1), _st1
+        assert "已达 max_per_task" in _ff126.note(_c1, {}), _ff126.note(_c1, {})
+        assert [f["value"] for _t, f in _cap126] == ["one", "two"], _cap126
+        assert _cap126[0][1]["source"] == "probe" and _cap126[0][1]["url"] == "http://x/"
+        # 库里已有同值 ⇒ 追加执行不重复入库，但要说"库里已有"
+        _c2 = _Ctx126(_cfg126)
+        _db126.list_flags = lambda t, limit=None: [{"value": "one"}]
+        assert _ff126.harvest(_c2, "http://x/", "flag{one} flag{four}", "dir") == 1
+        assert (_ff126.stats(_c2)["dedup"], _ff126.stats(_c2)["new"]) == (1, 1)
+        assert "库里已有同值" in _ff126.note(_c2, {}), _ff126.note(_c2, {})
+        # 关掉 ⇒ 连"看过一份正文"都不记，否则 note 会说谎
+        _c3 = _Ctx126(_S(enabled=False, prefixes=["flag"]))
+        assert _ff126.harvest(_c3, "http://x/", "flag{nope}", "probe") == 0
+        assert _ff126.stats(_c3)["texts"] == 0 and _ff126.note(_c3, {}) == ""
+        # 超大正文：跳过**必须说出来**
+        _c4 = _Ctx126(_S(enabled=True, prefixes=["flag"], max_bytes=10, max_len=200, min_len=1))
+        assert _ff126.harvest(_c4, "http://x/", "flag{too_big_here}", "probe") == 0
+        _n4 = _ff126.note(_c4, {})
+        assert _ff126.stats(_c4)["oversize"] == 1 and "没扫" in _n4, _n4
+        # 上下文：必须带得上原文（人工判占位符靠它）
+        _c6 = _Ctx126(_cfg126)
+        _cap126.clear()
+        _ff126.harvest(_c6, "http://x/", "<p>模板占位 flag{xxx}</p>", "js")
+        _cx126 = _cap126[0][1]["context"]
+        assert ("flag{xxx}" in _cx126 and _cx126.startswith("<p>")
+                and _cx126.endswith("</p>")), "上下文必须前后两头都带（第一版漏了后半段）"
+    finally:
+        _db126.insert_flag, _db126.list_flags = _ins126, _lst126
+
+    # ---- ⑤ 四个出口必须真的接线 ----
+    for _f126 in ("scanner/stages/probe.py", "scanner/stages/jsmine.py",
+                  "scanner/stages/dirscan.py", "scanner/stages/vulnscan.py"):
+        assert "flagfind.harvest(" in (ROOT / _f126).read_text(encoding="utf-8"), \
+            f"{_f126} 没接 flag 抽取 ⇒ 四个已有正文的出口少一个就静默少一路覆盖"
+    # jsmine 的正文在库里（scanner/jsmine.py），出口靠 text_sink 回调：页面至少交一次、且给的是文本
+    from scanner import jsmine as _js126
+    _sink126 = []
+    _js126.mine("http://127.0.0.1:8765/", load_settings(), logger=None,
+                text_sink=lambda u, t: _sink126.append((u, len(t))))
+    assert _sink126 and _sink126[0][1] > 0, "text_sink 没被点到 ⇒ flag 抽取在 jsmine 这路是死的"
+    assert str(_sink126[0][0]).startswith("http://127.0.0.1:8765"), _sink126[0][0]
+
+    # ---- ⑥ 报告三格式 + JSONL 机器出口 ----
+    from scanner import report as _rp126
+    _tid2 = _db126.create_task("smoke126b", "http://127.0.0.1:8765/", ["probe"], {})
+    _db126.insert_flag(_tid2, {"value": "Md_Html_One", "kind": "flag", "source": "dir",
+                               "url": "http://127.0.0.1:8765/.env",
+                               "context": "a flag{Md_Html_One} b"})
+    _db126.insert_flag(_tid2, {"value": "<script>alert(1)</script>", "kind": "regex",
+                               "source": "probe", "url": "http://127.0.0.1:8765/",
+                               "context": "flag{<script>alert(1)</script>}"})
+    _md126 = _rp126.generate(_tid2)
+    _html126 = _rp126.generate_html(_tid2)
+    _jl126 = _rp126.generate_jsonl(_tid2)
+    assert "## flag 候选" in _md126 and "Md_Html_One" in _md126, _md126[:200]
+    assert "<h2>flag 候选" in _html126, "MD 有节而 HTML 没有 = 三格式口径漂移"
+    assert "<script>alert(1)</script>" not in _html126, "flag 值来自目标，HTML 报告必须转义"
+    assert '"type": "flag"' in _jl126 and '"flags": 2' in _jl126, _jl126[:400]
+
+    # ---- ⑦ 三方一致：DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射 ----
+    #      stub save_settings：**绝不真写 config/settings.yaml**（整份重写会洗掉全部中文注释，
+    #      本轮手测就踩过一次），与 [6l]/[7p] 同一口径。
+    from scanner.config import DEFAULTS as _D126
+    from gui import app as _gui126
+    from scanner import users as _us126
+    _fkeys = ("enabled", "prefixes", "patterns", "min_len", "max_len",
+              "max_bytes", "max_per_source", "max_per_task")
+    assert set(_D126["flags"]) == set(_fkeys), sorted(_D126["flags"])
+    _yaml126 = (ROOT / "config/settings.yaml").read_text(encoding="utf-8")
+    _seg126 = _yaml126.split("flags:", 1)[1].split("\ntools:", 1)[0]
+    for _k in _fkeys:
+        assert f"{_k}:" in _seg126, f"settings.yaml 的 flags 段缺 {_k}（三方一致）"
+    try:
+        _us126.create_user("smoke126-admin", "Passw0rd!123", role="admin")
+    except Exception:
+        pass
+    _db126._exec("UPDATE users SET must_change=0 WHERE username='smoke126-admin'")
+    _cl126 = _gui126.app.test_client()
+    assert _login7(_cl126, {"username": "smoke126-admin", "password": "Passw0rd!123"},
+                   environ_base={"REMOTE_ADDR": "198.51.100.212"}).status_code == 302
+    _sh126 = _cl126.get("/settings").get_data(as_text=True)
+    for _k in ("enabled", "prefixes", "patterns", "max_len",
+               "max_bytes", "max_per_source", "max_per_task"):
+        assert f'name="flags_{_k}"' in _sh126, f"策略配置缺 flags.{_k} 的输入框"
+    # `min_len` 刻意不在页面上：它只为挡 `flag{}` 这种空壳，给个能填 0 的框等于请人来
+    # 造一条"什么形状都匹配"的判据。这条豁免写在这里，不是漏做。
+    assert 'name="flags_min_len"' not in _sh126
+    assert "data-tab=\"flags\"" in _cl126.get(f"/tasks/{_tid2}").get_data(as_text=True), \
+        "详情页没有 flag 页签 ⇒ 抽到的东西只进库、人看不到（本项目反复出事的形态）"
+    _cap127 = {}
+
+    def _fake_save126(d):
+        _cap127.clear()
+        _cap127.update(d)
+        return load_settings()
+
+    _orig126 = _gui126.save_settings
+    _gui126.save_settings = _fake_save126
+    try:
+        assert _cl126.post("/settings", data={"min_severity": "medium", "flags_enabled": "1",
+                                             "flags_prefixes": "flag, ctf ,syc{",
+                                             "flags_max_len": "64"}).status_code == 302
+        _f127 = _cap127["flags"]
+        assert _f127["enabled"] is True and _f127["prefixes"] == ["flag", "ctf", "syc{"], _f127
+        assert _f127["max_len"] == 64 and _f127["patterns"] == [], _f127
+        # 未勾选 ⇒ 回落到"关"：不能因为表单没带就静默保留上一次的开（外发能力都按这口径）
+        assert _cl126.post("/settings", data={"min_severity": "medium"}).status_code == 302
+        assert _cap127["flags"]["enabled"] is False, _cap127["flags"]
+        # 空白清单不许写成 [""]：那会让 needle 退化成单字符 `{`，形状判据就废了
+        assert _cl126.post("/settings", data={"flags_prefixes": " , "}).status_code == 302
+        assert _cap127["flags"]["prefixes"] == [], _cap127["flags"]
+        assert (ROOT / "config/settings.yaml").read_text(encoding="utf-8") == _yaml126, \
+            "这一路的测试**绝不能写真配置**（save_settings 是整份重写，注释全没）"
+    finally:
+        _gui126.save_settings = _orig126
+
+    # ---- ⑧ §6.1 变异：把四处设计打回"另一种写法"，判据必须变红 ----
+    _real_scan126 = _ff126.scan
+    # a) 「值取原文」→「值取小写副本」：① 的大小写敏感断言必须不成立
+    _ff126.scan = lambda t, s=None, m=200: [(k, v.lower(), o) for k, v, o in _real_scan126(t, s, m)]
+    try:
+        assert _ff126.scan("FLAG{CaSe}", _cfg126)[0][1] != "CaSe", "变异没生效（①不承重）"
+    finally:
+        _ff126.scan = _real_scan126
+    # b) 「定位用小写副本」→「直接在原文上找小写锚」（就是没有 lower() 那一步的旧写法）：
+    #    大写正文立刻找不到 ⇒ 证明 ① 的「FLAG{...} 也收、值取原文」确实压在这条路上
+    _real_hays = _ff126._hays
+    _ff126._hays = lambda t: (t, True)
+    try:
+        assert _ff126.scan("FLAG{CaSe}", _S(prefixes=["flag"], max_len=50)) == [], \
+            "变异没生效：不做小写副本仍能找到 ⇒ 那条大写判据其实没承重"
+    finally:
+        _ff126._hays = _real_hays
+    # c) 抹掉「跳过 N 份超大正文」的计数：静默降级（本仓反复出事的地方）必须被 note 那条抓走
+    _real_harvest = _ff126.harvest
+
+    def _harvest_hide(ctx, url, text, where):
+        _before = dict(_ff126.stats(ctx))
+        _n = _real_harvest(ctx, url, text, where)
+        _st = _ff126.stats(ctx)
+        if _st["oversize"] != _before.get("oversize"):
+            _st["texts"] = _before["texts"]
+            _st["oversize"] = _before["oversize"]
+        return _n
+
+    _ff126.harvest = _harvest_hide
+    try:
+        _c5 = _Ctx126(_S(prefixes=["flag"], max_bytes=10, max_len=200, min_len=1))
+        _ff126.harvest(_c5, "http://x/", "flag{too_big_here}", "probe")
+        assert "没扫" not in _ff126.note(_c5, {}), "变异没生效：note 仍说得出跳过几份"
+    finally:
+        _ff126.harvest = _real_harvest
+    # d) 「无锚正则也收下」：① 的拒用断言 + 成本上限都不成立（这里正向钉住）
+    assert not _ff126.rules(_S(prefixes=[], patterns=[r"\w+\{[^}]{1,40}\}"]))[1] \
+        and len(_ff126.rules(_S(prefixes=[], patterns=[r"\w+\{[^}]{1,40}\}"]))[2]) == 1, \
+        "通用 word{} 形状必须被拒：实测 2 MB 正文能捞出 2 万条 CSS 规则"
+    # e) ASSET_TABLES 再加第二处定义 ⇒ ③ 的源码判据变红（本轮真实缺陷的形状）
+    assert _src_db126.count("ASSET_TABLES = (") == 1
+
+    print("[8ae] 续126 flag 候选抽取 ok: 形状判据（原文大小写/空壳/嵌套/超长/方括号/单次上限）"
+          "｜刻意偏宽：只配 ctf 也收 DASCTF{，明说不加词边界（漏报丢题、误报多看一眼）"
+          "｜自定义正则取不出必现字面量就**拒用并给原因**，绝不退回整份正文扫"
+          "（实测 1.56 MB 正文：本实现 1.2 ms vs 同配置写成全局忽略大小写的双分支 40 ms、21 路交替 332 ms）"
+          "｜零请求用 AST 结构判据（第一版拿子串查，被模块头那句「不发任何请求」绊红）"
+          "｜单独成表：清空/备份/索引/limit 三态全覆盖 + ASSET_TABLES 只许一处定义"
+          "（本轮实测抓到 780 与 1232 行各一份、后一份静默盖前一份）"
+          "｜harvest 六条语义全桩测（去重/封顶/库里已有同值/关掉连计数都不动/超限必须说出来/上下文）"
+          "｜四个出口 AST + jsmine text_sink 真跑｜报告三格式 + JSONL｜三方一致（stub save_settings，"
+          "绝不写真配置——本轮手测真洗掉过一次注释）｜变异：值取小写副本 / 锚不小写化 / 抹掉超限计数 /"
+          " 收下无锚正则 / 第二处 ASSET_TABLES 都变红")
 
     print("SMOKE PASS")
 

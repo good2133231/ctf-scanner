@@ -68,6 +68,25 @@
       <label class="chk"><input type="checkbox" name="favicon_md5" value="1"
         {{ 'checked' if s.limits.favicon_md5 }}> 采集 favicon MD5（POC 可用它做零请求前置判定）</label>
     </div>
+    <h2>flag 候选抽取（默认开，零额外请求）</h2>
+    <p class="muted small">从<b>本任务已经抓到的正文</b>（页面 / JS / 目录命中 / POC 证据）里按形状抽
+      CTF flag 候选，单独进「flag 候选」表与页签 —— <b>不写进漏洞、不计入漏洞数</b>。
+      本模块<b>不发任何请求</b>，也<b>不判定真伪</b>：同一形状大量是模板/JS 占位符，逐条判真是人的事。
+      自定义正则<b>取不出必现字面量的会被拒用</b>（那只能在整份正文上跑，成本不可控），
+      拒因会出现在扫描日志里。</p>
+    <div class="grid2">
+      <label class="chk"><input type="checkbox" name="flags_enabled" value="1"
+        {{ 'checked' if s.flags.enabled }}> 启用 flag 候选抽取</label>
+      <label>前缀清单（逗号分隔，不带括号自动按 <code>前缀{</code>）
+        <input name="flags_prefixes" size="30" value="{{ s.flags.prefixes|join(',') }}"></label>
+      <label>每任务最多入库 <input name="flags_max_per_task" size="5" value="{{ s.flags.max_per_task }}"></label>
+      <label>每份正文最多收 <input name="flags_max_per_source" size="5" value="{{ s.flags.max_per_source }}"></label>
+      <label>值体最长 <input name="flags_max_len" size="5" value="{{ s.flags.max_len }}"></label>
+      <label>单份正文最大字节 <input name="flags_max_bytes" size="10" value="{{ s.flags.max_bytes }}"></label>
+      <label>自定义正则（逗号分隔，可留空）
+        <input name="flags_patterns" size="46" value="{{ s.flags.patterns|join(',') }}"
+          placeholder="flag\s*[:=]\s*[A-Za-z0-9_]+"></label>
+    </div>
     <h2>外部引擎 afrog（默认关）</h2>
     <p class="muted small">
       勾选后，vulnscan 阶段会**额外**跑一次外部 afrog：只喂它逐条判过"只读 + info 级"的模板

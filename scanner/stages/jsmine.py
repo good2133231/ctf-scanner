@@ -13,7 +13,7 @@
 from urllib.parse import urlparse
 
 from .base import Stage
-from .. import blacklist, db, extdom, jsmine
+from .. import blacklist, db, extdom, flagfind, jsmine
 from ..utils import write_lines
 
 
@@ -23,6 +23,7 @@ class JsmineStage(Stage):
 
     def run(self):
         ctx = self.ctx
+        _flag0 = flagfind.begin(ctx)
         cfg = ctx.settings.get("jsmine", {}) or {}
         if not cfg.get("enabled"):
             ctx.logger.info("[jsmine] 未启用（策略配置可打开），跳过")
@@ -48,7 +49,9 @@ class JsmineStage(Stage):
                 ctx.logger.warning("[jsmine] 任务已请求停止，结果不再入账")
                 return
             try:
-                res = jsmine.mine(u, ctx.settings, logger=ctx.logger)
+                res = jsmine.mine(u, ctx.settings, logger=ctx.logger,
+                                 # flag 候选（续126）：页面与每个 JS 的正文都已在手，零额外请求
+                                 text_sink=lambda _u, _t: flagfind.harvest(ctx, _u, _t, "js"))
             except Exception as e:
                 ctx.logger.warning(f"[jsmine] {u} 挖掘失败：{e}")
                 continue
@@ -112,6 +115,9 @@ class JsmineStage(Stage):
                 "evidence": s.get("context", ""),
             })
 
+        _fnote = flagfind.note(ctx, _flag0)
+        if _fnote:
+            ctx.logger.info("[jsmine] flag 候选 " + _fnote)
         ctx.logger.info(f"[jsmine] JS 文件 {js_count} 个 / 新域名 {len(new_domains)} 个 / "
                         f"接口 URL {len(url_list)} 条 / 疑似凭据 {len(secrets)} 条"
                         + (f" / 另拒收 {len(junk113)} 个「不是域名」的碎片" if junk113 else ""))

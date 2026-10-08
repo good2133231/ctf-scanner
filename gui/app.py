@@ -1431,6 +1431,9 @@ def create_app():
             _dr_page = _dr_pages
         dirs = dirs_all[(_dr_page - 1) * _dr_size:_dr_page * _dr_size]
         dirs_pager = _mk_pager("dr", "#dirs", _dr_page, _dr_size, dir_total, dirs_q)
+        # flag 候选（续126）：整表读是有意的 —— 条数由 `flags.max_per_task`（默认 200）封顶，
+        # 且这张表**没有折叠/聚合语义**，分页只会把一个短清单切成几页，反而更难抄。
+        flag_rows = [dict(r) for r in db.list_flags(task_id)]
         # 「线索」页签按用户口径在续24 移除（线索只在 JSONL 导出里按 `type=lead` 保留），
         # 所以这里不再查 `leads` 表、也不再往模板传 `leads` / `leads_intel`。
         # 「补扫」相关提示条只在"本次没做全量"时出现，避免误导：
@@ -1544,6 +1547,7 @@ def create_app():
             cert_enabled=cert_enabled, cert_pick=cert_pick,
             cert_tls_ports=sorted(certs_mod.tls_ports(settings)),
             dirs=dirs, dirs_hidden=dirs_hidden,
+            flags=flag_rows, flag_total=len(flag_rows),
             # 续57：6 个资产页签的服务端分页条 / 关键字 / 总数。徽标与「共 N 条」都用 `*_total`
             # （`|length` 现在是"当前页行数"，拿它当总数会少报）。
             subs_pager=subs_pager, subs_q=subs_q,
@@ -2966,6 +2970,17 @@ def create_app():
                                     f.get("dirscan_recursive_max_paths", 40) or 0)},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
                     # 外部引擎 afrog（续121）：默认关；限速值由 scanner/afrog.py 的封顶再压一道
+                    # flag 候选抽取（续126）：零额外请求，所以默认开；清单是逗号分隔文本，
+                    # 空白项就地丢掉（用户粘贴时几乎一定带空格），正则原样进列表、由模块校验。
+                    "flags": {"enabled": f.get("flags_enabled") == "1",
+                              "prefixes": [x.strip() for x in
+                                           (f.get("flags_prefixes") or "").split(",") if x.strip()],
+                              "patterns": [x.strip() for x in
+                                           (f.get("flags_patterns") or "").split(",") if x.strip()],
+                              "max_len": int(f.get("flags_max_len", 200) or 200),
+                              "max_bytes": int(f.get("flags_max_bytes", 2000000) or 2000000),
+                              "max_per_source": int(f.get("flags_max_per_source", 20) or 20),
+                              "max_per_task": int(f.get("flags_max_per_task", 200) or 200)},
                     "afrog": {"enabled": f.get("afrog_enabled") == "1",
                               "poc_dir": (f.get("afrog_poc_dir") or "").strip(),
                               "max_targets": int(f.get("afrog_max_targets", 20) or 20),

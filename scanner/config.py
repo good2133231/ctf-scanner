@@ -465,6 +465,20 @@ DEFAULTS = {
         "max_leads": 30,           # 单任务最多入库多少条线索
         "timeout": 20,             # 单次请求超时（秒）
     },
+    "flags": {
+        # CTF flag 候选抽取（续126）：在**已经拿到**的响应正文里按可配前缀/正则找 flag 形态串，
+        # 单独进 `flags` 表 —— **不写 vulns、不计入漏洞数**（一个 `flag{...}` 不是漏洞结论）。
+        # 零额外请求是这块的立身之本：`scanner/flagfind.py` 自己不发任何请求，只在
+        # probe / jsmine / dirscan / vulnscan 手里已有的文本上跑（判据见其文件头与 [8ae]）。
+        "enabled": True,
+        "prefixes": ["flag", "ctf"],   # 不带括号自动按 `前缀{`；各家自定义前缀往这里加
+        "patterns": [],                # 额外正则；取不出必现字面量的**拒用并说明原因**（成本口子）
+        "min_len": 1,                  # 值体最短（挡 `flag{}` 这种空壳）
+        "max_len": 200,                # 值体最长（同时也是自定义正则的候选窗口尺度）
+        "max_bytes": 2000000,          # 单份正文超过就不扫，并在日志里写"跳过 N 份"
+        "max_per_source": 20,          # 单份正文最多收几条（一页刷爆候选表的兜底）
+        "max_per_task": 200,           # 单任务最多入库多少条候选
+    },
     "tools": {
         # 优先从 PATH 解析，也可以填绝对路径（Windows 下如 tools/scanner/httpx.exe）
         "subfinder": "subfinder",

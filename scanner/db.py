@@ -165,6 +165,23 @@ CREATE TABLE IF NOT EXISTS leads (
   url TEXT DEFAULT '',
   created_at TEXT
 );
+-- 续126 CTF flag 候选（scanner/flagfind.py）：**单独一张表**，不并进 vulns ——
+-- 一个 `flag{...}` 既不是漏洞结论（不该进「潜在漏洞」计数与复核台账），也不是线索
+-- （线索是"人再决定要不要看"的东西，而 flag 是要直接抄走的）。混进哪一边都会误导。
+-- `value` 保留**原文大小写**（flag 大小写敏感；被小写化的只是用于定位的那份副本）；
+-- `context` 带前后文，因为同一形状经常是模板/JS 里的占位符，判真假日的是人不是模块。
+-- 去重在**调用方**（scanner/flagfind.py::harvest），表上没有 UNIQUE 约束 —— 与 AGENTS §5.6
+-- 「漏洞去重是调用方约定」同一口径：新增写路径必须自己保证不重复。
+CREATE TABLE IF NOT EXISTS flags (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  value TEXT NOT NULL,
+  kind TEXT DEFAULT '',        -- 命中的前缀名（flag / ctf / …）；自定义正则记 "regex"
+  source TEXT DEFAULT '',      -- probe / js / dir / poc：**哪个阶段手里的那份正文**
+  url TEXT DEFAULT '',
+  context TEXT DEFAULT '',
+  created_at TEXT
+);
 -- 续46 多用户：账号密码登录 + 管理员/子用户两级角色（见 scanner/users.py）。
 -- 与上面各表同走 `CREATE TABLE IF NOT EXISTS` —— 老库**原地补表**，不需要删库重建；
 -- 新增列时按本文件 `_COLUMN_PATCHES` 的老办法 `ALTER TABLE ADD COLUMN` 追加。
@@ -221,6 +238,7 @@ CREATE INDEX IF NOT EXISTS idx_certs_task ON certs(task_id);
 CREATE INDEX IF NOT EXISTS idx_dirs_task ON dirs(task_id);
 CREATE INDEX IF NOT EXISTS idx_vulns_task ON vulns(task_id);
 CREATE INDEX IF NOT EXISTS idx_leads_task ON leads(task_id);
+CREATE INDEX IF NOT EXISTS idx_flags_task ON flags(task_id);
 """
 
 
@@ -774,11 +792,13 @@ def task_run_seconds(task, now=None):
     return acc if cur is None else acc + max(0, int(cur - started))
 
 
-ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "certs", "dirs", "vulns", "leads")
+ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "certs", "dirs", "vulns", "leads",
+                "flags")
 
 
 def clear_task_assets(task_id):
-    """清空某任务的全部资产（子域名/站点/端口/C段/证书/目录/漏洞/线索），用于"重启"前重置。"""
+    """清空某任务的全部资产（子域名/站点/端口/C段/证书/目录/漏洞/线索/flag 候选），
+    用于"重启"前重置。成员表名一律取 `ASSET_TABLES`（唯一清单，新增表只改那一处）。"""
     for t in ASSET_TABLES:
         _exec(f"DELETE FROM {t} WHERE task_id=?", (task_id,))
 
@@ -1059,6 +1079,29 @@ def insert_vuln(task_id, v):
            (v.get("evidence", "") or "")[:2000], _now()))
 
 
+def insert_flag(task_id, f):
+    """写入一条 flag 候选。**去重由调用方负责**（`scanner/flagfind.py::harvest`），
+    表上没有 UNIQUE 约束 —— 与 `insert_vuln` 同一口径（AGENTS §5.6：新增写 `vulns`/`flags`
+    的路径必须自己保证去重，不能指望数据库拦）。"""
+    _exec("INSERT INTO flags(task_id,value,kind,source,url,context,created_at) "
+          "VALUES(?,?,?,?,?,?,?)",
+          (task_id, f.get("value", ""), f.get("kind", ""), f.get("source", ""),
+           f.get("url", ""), (f.get("context", "") or "")[:1000], _now()))
+
+
+def list_flags(task_id, limit=None):
+    """本任务的 flag 候选，按入库顺序（id）返回。
+
+    `limit` 三态与 `list_tasks()/list_vulns()` 一致（续55 定口径）：数字＝最新 N 条、
+    `None`＝不加上限、`0`＝一条都不要。候选条数由 `flags.max_per_task` 封顶（默认 200），
+    所以页侧全量读这张表是**有意的**，不是"漏了分页"。
+    """
+    if limit is None:
+        return _query("SELECT * FROM flags WHERE task_id=? ORDER BY id", (task_id,))
+    return _query("SELECT * FROM flags WHERE task_id=? ORDER BY id DESC LIMIT ?",
+                  (task_id, int(limit)))
+
+
 def list_subdomains(task_id):
     return _query("SELECT * FROM subdomains WHERE task_id=? ORDER BY domain", (task_id,))
 
@@ -1229,7 +1272,10 @@ def other_sources_by_domain(domains):
 # ---------- 分布式节点（续80）：任务资产快照的导出 / 导入 ----------
 # 为什么需要：节点在**自己的机器**上跑完流水线（写它自己的本地库），要把结果并回控制端的库。
 # 两端是**同一份代码、同一套 schema**，所以按**列名**匹配即可，不写死列序。
-ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "certs", "dirs", "leads", "vulns")
+# ⚠️ 这里**刻意不再重复定义** `ASSET_TABLES`（续126）：原先本文件在 780 行与 1232 行各定义了
+# 一次同名元组，后一份**悄悄盖掉**前一份 —— 新增一张表时改错/只改一处，清空与备份会一致，
+# 而节点回传**静默少一张表**（flag 候选加进来时正好踩在这上面）。判据＝全文件只许出现一次
+# 赋值，`tests/smoke.py [8ae] ③` 按源码扫。
 
 
 def asset_max_ids(task_id):

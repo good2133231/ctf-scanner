@@ -151,7 +151,17 @@ class StageContext:
         self.workdir = Path(workdir)
         self.logger = logger
         self.results = {"subdomains": [], "sites": [], "dirs": [], "vulns": [],
-                        "ports": [], "takeovers": [], "csegs": [], "osint_domains": []}
+                        "ports": [], "takeovers": [], "csegs": [], "osint_domains": [],
+                        "flags": []}
+        # 续126 flag 候选抽取的并发原语：各阶段在 `pool_run` 的工作线程里**同时**调
+        # `flagfind.harvest`，锁必须在这里就备好 —— "用时才建"就有两个线程各建一把的窗口
+        # （那时去重与 max_per_task 都不成立）。`_flag_db_seen` 留 None：第一次要用的时候
+        # 在锁内从库里读（新任务/重启后表是空的，那次读几乎免费）。
+        self._flag_lock = threading.Lock()
+        self._flag_stats = {"texts": 0, "bytes": 0, "oversize": 0, "new": 0, "dedup": 0,
+                            "full": 0}
+        self._flag_seen = set()
+        self._flag_db_seen = None
         # 续88：**阶段级耗时**（秒）。自检据此出"耗时基线"、跨次对比找"哪一步突然变慢"。
         # 记在 ctx 上而不是库里：它是**诊断量**，不是任务产物，不该进 DB/报告。
         self.stage_seconds = {}

@@ -12,7 +12,7 @@ import re
 from urllib.parse import urlparse
 
 from .base import Stage
-from .. import db
+from .. import db, flagfind
 from ..fingerprint import identify, favicon_md5
 from ..utils import (REDIRECT_STATUS, which, verify_tool, run_cmd, read_lines, write_lines,
                      pool_run, http_request)
@@ -75,6 +75,7 @@ class ProbeStage(Stage):
 
     def run(self):
         ctx = self.ctx
+        _flag0 = flagfind.begin(ctx)
         th = ctx.throttle        # F2 统一门控：本任务的限流器（可能是 None）
         limits = ctx.settings.get("limits", {})
         workers = int(limits.get("max_workers", 20))
@@ -171,6 +172,8 @@ class ProbeStage(Stage):
                     resp = http_request(u, timeout=timeout, settings=ctx.settings, auth=True)
                     if resp and resp.get("status") in ALLOW_STATUS:
                         t = TITLE_RE.search(resp.get("text") or "")
+                        # flag 候选（续126）：正文已经在手（上面刚用它取过标题），**不多发一个请求**。
+                        flagfind.harvest(ctx, resp.get("url") or u, resp.get("text") or "", "probe")
                         p = urlparse(resp.get("url") or u)
                         try:
                             port = p.port
@@ -231,3 +234,11 @@ class ProbeStage(Stage):
         _dup = len(uniq) - len(new_sites)
         ctx.logger.info(f"[probe] 存活站点 {len(uniq)} 个"
                         + (f"（跨运行去重跳过 {_dup} 个已入库站点）" if _dup else ""))
+        # flag 候选：走 httpx 那一档时**根本没有正文**（它只回 title/tech 的 JSONL），
+        # 所以这一路的输入是 0 份 —— 必须说出来，否则"probe 没报 flag"会被读成"扫过了、没有"。
+        _fnote = flagfind.note(ctx, _flag0)
+        if _fnote:
+            ctx.logger.info("[probe] flag 候选 " + _fnote)
+        elif any(s.get("source") == "httpx" for s in uniq):
+            ctx.logger.info("[probe] flag 候选：httpx 档不返回正文，本阶段无输入可扫"
+                            "（jsmine / dirscan / vulnscan 三路仍会扫各自拿到的正文）")

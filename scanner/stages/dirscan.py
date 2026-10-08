@@ -50,7 +50,7 @@ from urllib.parse import urlparse
 
 from .base import Stage
 from .probe import TITLE_RE      # 命中页的 <title> 提取（与 probe 同一套正则，避免两处定义漂移）
-from .. import db
+from .. import db, flagfind
 from ..config import resolve
 from ..utils import read_lines, write_lines, pool_run, http_request, pick_python, run_cmd
 
@@ -302,6 +302,7 @@ class DirscanStage(Stage):
 
     def run(self):
         ctx = self.ctx
+        _flag0 = flagfind.begin(ctx)
         cfg = ctx.settings.get("dirscan", {}) or {}
         # 任务选项 `dirscan_full`（建任务勾「全目录」/结果页发起「深度目录补扫」）视为显式授权：
         # 即使全局 `dirscan.enabled` 关着，这种"用户点名要扫"的任务也要跑 —— 与 portscan 一致。
@@ -418,6 +419,11 @@ class DirscanStage(Stage):
         _dup = len(uniq) - len(new_dirs)
         ctx.logger.info(f"[dirscan] 目录发现 {len(uniq)} 条"
                         + (f"（跨运行去重跳过 {_dup} 条已入库）" if _dup else ""))
+        _fnote = flagfind.note(ctx, _flag0)
+        if _fnote:
+            # dirmap 那一路没有正文（产物行只有 `[状态码][类型][大小] URL`），所以这里的
+            # "看过 N 份"只统计内置扫描 —— 口径与续113 那条「没标题⇒不滤但明说」一致。
+            ctx.logger.info("[dirscan] flag 候选 " + _fnote)
 
     # ---------- 目标筛选 ----------
 
@@ -912,6 +918,9 @@ class DirscanStage(Stage):
                     if u not in blocked_sig:
                         blocked_sig[u] = r.get("length")
                 return None
+            # flag 候选（续126）：放在**所有过滤之后** —— 软 404 模板页与统一拦截页会被打
+            # 几百次，它们是同一份正文，重复扫既费时间也只会在候选表里留同一个值。
+            flagfind.harvest(ctx, url, r.get("text") or "", "dir")
             return {"site_url": root, "path": url, "status": st,
                     "length": r.get("length"), "method": "GET", "note": "builtin",
                     "title": title}

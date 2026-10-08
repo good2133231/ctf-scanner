@@ -205,9 +205,12 @@ def collect(task_id):
     # **数据层照旧**：`leads` 表、两个阶段都不变；**机器格式仍全量输出**（`generate_jsonl`
     # 的 `type=lead` 行与 `counts.leads`），沿用续20 的取舍「机器格式保留全部、筛选权交下游」。
     leads = list(db.list_leads(task_id))
+    # flag 候选（续126）：与 `leads` 同属"不是漏洞结论"的一类，但它**必须进人读报告** ——
+    # CTF 交付里"抽到了哪些 flag 形态串"就是给人抄的，而线索表按续24 的口径只走 JSONL。
+    flags = list(db.list_flags(task_id))
     return {"task": task, "subs": subs, "sites": sites, "dirs": dirs, "ports": ports,
             "csegs": csegs, "certs": certs, "all_vulns": all_vulns, "vulns": vulns,
-            "review": db.review_counts(task_id), "leads": leads}
+            "review": db.review_counts(task_id), "leads": leads, "flags": flags}
 
 
 def generate(task_id, full=False):
@@ -222,6 +225,7 @@ def generate(task_id, full=False):
     task, subs, sites, dirs = d["task"], d["subs"], d["sites"], d["dirs"]
     ports, csegs, certs = d["ports"], d["csegs"], d["certs"]
     all_vulns, vulns, review = d["all_vulns"], d["vulns"], d["review"]
+    flags = d["flags"]
 
     lines = [f"# 扫描报告：{task['name']}（任务 #{task_id}）", ""]
     lines.append(f"- 时间：{task['created_at']} ｜ 状态：{task['status']} ｜ 阶段：{task['stages']}")
@@ -259,6 +263,21 @@ def generate(task_id, full=False):
             lines.append(f"| {_c(v['severity'])} | {_c(v['name'])} | {_c(v['poc_id'])} | "
                          f"{_c(v['owasp'] or '-')} | {_c(v['target'])} | "
                          f"{_c(REVIEW_LABEL.get(v['review'] or '', '待复核'))} |")
+        lines.append("")
+    if flags:
+        # 排在「潜在漏洞」之后：CTF 里这是最该先看到的东西，但它**不是漏洞结论** ——
+        # 标题与尾注都写明"候选 / 需人工判真"，因为同形状的 `flag{xxx}` 大量是模板占位符。
+        lines.append("## flag 候选（按形状抽取，需人工判真）")
+        lines.append("")
+        lines.append("| 值 | 前缀 | 来源 | URL | 上下文 |")
+        lines.append("|---|---|---|---|---|")
+        for f in flags:
+            lines.append(f"| {_c(f['value'])} | {_c(f['kind'])} | {_c(f['source'])} | "
+                         f"{_c(f['url'])} | {_c(f['context'])} |")
+        lines.append("")
+        lines.append("> 候选由 `scanner/flagfind.py` 从**本任务已抓到的正文**里抽取（零额外请求），"
+                     "判据是 `flags.prefixes` / `flags.patterns`。是否真是 flag 由人判 —— "
+                     "误报的代价是多看一眼，漏报的代价是丢一道题，所以这里的清单是**故意偏宽**的。")
         lines.append("")
     if sites:
         lines.append("## " + _cap_title("存活站点", len(sites), CAP_SITES))
@@ -417,6 +436,7 @@ def generate_html(task_id, full=False):
     task, subs, sites, dirs = d["task"], d["subs"], d["sites"], d["dirs"]
     ports, csegs, certs = d["ports"], d["csegs"], d["certs"]
     all_vulns, vulns, review = d["all_vulns"], d["vulns"], d["review"]
+    flags = d["flags"]
     by_sev = {}
     for v in vulns:
         by_sev[v["severity"]] = by_sev.get(v["severity"], 0) + 1
@@ -458,6 +478,15 @@ def generate_html(task_id, full=False):
             [[f'<span class="sev sev-{_h(v["severity"])}">{_h(v["severity"])}</span>',
               _h(v["name"]), _h(v["poc_id"]), _h(v["owasp"] or "-"), _h(v["target"]),
               _h(REVIEW_LABEL.get(v["review"] or "", "待复核"))] for v in vulns]))
+    if flags:
+        p.append("<h2>flag 候选（按形状抽取，需人工判真）</h2>")
+        p.append(_html_table(
+            ["值", "前缀", "来源", "URL", "上下文"],
+            [[f'<code class="mono">{_h(f["value"])}</code>', _h(f["kind"]),
+              _h(f["source"]), _h(f["url"]), _h(f["context"])] for f in flags]))
+        p.append('<div class="note">候选由 <code>scanner/flagfind.py</code> 从<b>本任务已抓到的正文</b>'
+                 '里抽取（零额外请求），判据是 <code>flags.prefixes</code> / '
+                 '<code>flags.patterns</code>。是否真是 flag 由人判。</div>')
     if sites:
         p.append("<h2>" + _cap_title("存活站点", len(sites), CAP_SITES) + "</h2>")
         p.append(_html_table(
@@ -527,7 +556,7 @@ def generate_jsonl(task_id):
 
     每行带 `"type"` 判别字段：首行 `meta`（任务 id / name / status / stages / created_at /
     targets / 各资产计数 / review 台账），随后每条记录一行，`type` ∈ `vuln` / `site` /
-    `subdomain` / `dir` / `port` / `cseg` / `cert` / `lead`。`ensure_ascii=False` + UTF-8
+    `subdomain` / `dir` / `port` / `cseg` / `cert` / `lead` / `flag`。`ensure_ascii=False` + UTF-8
     （中文原样可读）；每行（**含最后一行**）都以 `\\n` 结尾，才是合法 JSON Lines。
     """
     d = collect(task_id)
@@ -558,7 +587,7 @@ def generate_jsonl(task_id):
         "counts": {
             "subdomains": len(subs), "sites": len(sites), "dirs": len(dirs),
             "ports": len(ports), "csegs": len(csegs), "certs": len(certs),
-            "vulns": len(all_vulns), "leads": len(leads),
+            "vulns": len(all_vulns), "leads": len(leads), "flags": len(d["flags"]),
         },
         "review": review,
     })
@@ -578,6 +607,8 @@ def generate_jsonl(task_id):
         emit_row("cert", c)
     for ld in leads:
         emit_row("lead", ld)
+    for f in d["flags"]:
+        emit_row("flag", f)
     return "\n".join(lines) + "\n"
 
 

@@ -230,6 +230,19 @@ github:
   per_page: 30
   max_leads: 30
   timeout: 20
+flags:
+  # CTF flag 候选抽取（续126）：只吃**已经拿到**的响应正文，零额外请求；结果单独进 flags 表
+  # （不写 vulns、不计入漏洞数）。判据与成本封顶见 scanner/flagfind.py 文件头。
+  enabled: true
+  prefixes:
+    - flag
+    - ctf
+  patterns: []
+  min_len: 1
+  max_len: 200
+  max_bytes: 2000000
+  max_per_source: 20
+  max_per_task: 200
 tools:
   subfinder: tools/scanner/subfinder
   puredns: puredns

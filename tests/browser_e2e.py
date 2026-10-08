@@ -363,6 +363,14 @@ def _seed_db():
                            "port": "80", "status": 200, "title": f"站点{i}",
                            "length": 500 + i, "server": "nginx", "tech": "nginx",
                            "source": "probe"} for i in range(_SITES_TOTAL)])
+    # 续126：详情页新加的第 11 个页签「flag 候选」要有**能被断言**的数据。
+    # 第二条刻意是 HTML 载荷 —— 页签必须把它当**文本**渲染（真浏览器里查"没有真的 img 元素"，
+    # 这比在 test_client 里搜转义字符串更接近用户实际看到的东西）。
+    db.insert_flag(tid, {"value": "E2e_Browser_Flag", "kind": "flag", "source": "dir",
+                         "url": "http://e2e.local/.env", "context": "flag{E2e_Browser_Flag}"})
+    db.insert_flag(tid, {"value": "<img src=x onerror=alert(1)>", "kind": "regex",
+                         "source": "probe", "url": "http://e2e.local/",
+                         "context": "flag{<img src=x onerror=alert(1)>}"})
     # 续93：再建一个**运行中**的任务 —— 任务列表页的轮询只该问"未结束"的行，这条就是 [8] 的探针；
     # 上面那个 done 的任务**必须不被**轮询（否则又回到"终态行也一直问"的旧写法）。
     tid_run = db.create_task("E2E-轮询中", "http://e2e-run.local", ["probe"])
@@ -614,6 +622,21 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     page.click_js("document.querySelector('.tab[data-tab=\"ports\"]')")
     rep.check("[6] 再点「端口服务」→ pane-ports 变 active",
               page.ev("document.getElementById('pane-ports').classList.contains('active')") is True)
+    page.click_js("document.querySelector('.tab[data-tab=\"flags\"]')")
+    rep.check("[6] 点「flag 候选」→ pane-flags 变 active",
+              page.ev("document.getElementById('pane-flags')"
+                      ".classList.contains('active')") is True)
+    _fx6 = page.ev("(()=>{const t=document.querySelector('#tbl-flags tbody');"
+                   "return t?t.textContent:'NO-TABLE'})()") or ""
+    rep.check("[6] 页签里真渲染出候选值（DOM 真的变了，不是只换了 class）",
+              "E2e_Browser_Flag" in _fx6, _fx6[:90])
+    _xss6 = page.ev("document.querySelectorAll('#tbl-flags img, #tbl-flags script').length")
+    rep.check("[6] HTML 载荷当**文本**渲染：页签里没有任何真的 img/script 元素",
+              _xss6 == 0 and "<img" in _fx6, f"元素数={_xss6} 文本={_fx6[:60]!r}")
+    # 徽标数字必须是总数（续57 口径：`|length` 是当前页行数，拿它当总数会少报）
+    rep.check("[6] 页签徽标显示候选总数 2",
+              (page.ev("document.querySelector('.tab[data-tab=\"flags\"] .cnt').textContent") or "")
+              .strip() == "2", page.ev("document.querySelector('.tab[data-tab=\"flags\"] .cnt')") )
     # 锚点 + 分页参数一起恢复：`?stsize=50#sites` 打开后站点页签 active，且自己的分页条带锚点
     page.navigate(f"{base}/tasks/{tid}?stsize={_PAGE_SIZE}#sites")
     rep.check("[6] 带参数+锚点打开时仍停在站点页签",

@@ -164,7 +164,8 @@ ctf-scanner/
 │   │                      #   （注：本节曾写「9 栏」且漏列账号管理/访问审计，2026-09-26 续54 按 base.html 实测更正）
 │   │                      #   （原「端口服务/C 段视野/目录发现/拓展域名」四栏已移除，路由 /ports /csegs /dirs /extdomains
 │   │                      #    仍在，只是不进侧栏；前三条是任务维度数据，/extdomains 与 /subdomains 是同一张表的不同视图）
-│   │                      #   任务详情＝横向 10 个页签（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/目标与配置/运行日志）+ 页签内筛选框
+│   │                      #   任务详情＝横向 11 个页签（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/**flag 候选**/目标与配置/运行日志）+ 页签内筛选框
+│   │                      #   （「flag 候选」＝续126 `scanner/flagfind.py` 的产物，单独成表，见 §5.16）
 │   │                      #   （「线索」页签 2026-09-24 续24 按用户口径**移除** —— 线索只从 JSONL 导出出，见 §已知局限；
 │   │                      #     「SSL 证书」＝cert 阶段产物；页签按数据源实有出现，没有产物时说明原因）
 ├── scanner/
@@ -201,6 +202,16 @@ ctf-scanner/
 │   ├── mmh3.py            # 纯标准库 MurmurHash3 x86_32（平台 favicon 指纹用；含 SELF_TEST 向量）
 │   ├── intel.py           # 漏洞情报订阅（P3-2）：CISA KEV 拉取+本地缓存+白名单式匹配 → **只产线索**（不写 vulns）
 │   ├── heuristics.py      # 启发式候选发现（P3-3）：对已有数据做差分/异常聚合（**零请求**）→ 线索；阈值与规则表在此
+│   ├── flagfind.py        # CTF flag 候选抽取（续126，**默认开、零额外请求**）：只在**已经拿到**的
+│   │                      #   正文（probe 根响应 / jsmine 页面与每个 JS / dirscan 每条命中 /
+│   │                      #   vulnscan 的 POC 证据）上按 `flags.prefixes` + 可配正则抽候选，
+│   │                      #   单独进 `flags` 表（**不写 vulns、不计入漏洞数**）。三条边界：
+│   │                      #   ① 模块内不许有任何出网引用（AST 判据）；② 成本封顶 —— 判据是
+│   │                      #   "字面锚 + str.find 在小写副本上定位 + 从原文取值"（1.56 MB 正文
+│   │                      #   1.2 ms vs 同配置 (?i) 双分支 40 ms）；用户正则**只在必现字面量
+│   │                      #   锚出的窗口上跑**，取不出锚就拒用并给原因（绝不整份正文扫）；
+│   │                      #   ③ 只报候选：值保留原文大小写 + 带上下文，判真假日的是人
+│   │                      #   （`flag{xxx}` 这类占位符同形状）—— 故刻意**不加**词边界规则
 │   ├── fingerprint.py     # 指纹规则表 → identify(resp) -> [tag] + fetch_favicon/favicon_md5/favicon_hash
 │                          #   判定带**必现字面量前置过滤**（续122，`required_literals`/`_lit_filter`）：
 │                          #   字面量不在文本里 ⇒ 这条规则一定不命中 ⇒ 跳过 re.search（实测 900KB 13x）
@@ -211,7 +222,7 @@ ctf-scanner/
 │   ├── toolmgr.py         # 外部工具版本管理（续54）：查 GitHub release → 按平台挑产物 → SHA256 校验 →
 │   │                      #   单文件解包落盘 → 逐行回写 tools.<名>。**只在显式入口调用**（CLI/GUI），
 │   │                      #   扫描期零下载；出口仅 https + 主机白名单；宁可报错也不猜（无校验和默认拒装）
-│   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs/**leads**/**certs** + page_assets/delete_task/task_counts
+│   ├── db.py              # SQLite 层（tasks/subdomains/sites/ports/csegs/dirs/vulns/pocs/**leads**/**certs**/**flags** + page_assets/delete_task/task_counts
 │   │                      #   + OWN_SUBDOMAIN_WHERE/EXT_SUBDOMAIN_WHERE/OVERLAP_EXT_WHERE/OVERLAP_SITE_WHERE；DB_PATH 受 CTFSCANNER_DB 覆盖）
 │   │                      #   复核（vulns.review/review_note/reviewed_at + set/bulk_set_vuln_review/review_counts）
 │   │                      #   与 POC 置信度（pocs.confidence + poc_confidence）见 §7
@@ -491,6 +502,26 @@ ctf-scanner/
     标签集合必须一字不差"（6633 次对比），计时只作量级说明；新增的放弃条件必须自带变异证伪
     （把折叠守卫拆掉 ⇒ `ſrv-apache` 立刻漏报）。
 
+
+16. **flag 候选必须"零额外请求 + 单独成表 + 只报候选"**（续126，`scanner/flagfind.py`）：
+    ① 它**只吃调用方手里已有的文本**（四个出口：probe 根响应 / jsmine 页面与 JS / dirscan 每条
+    命中 / vulnscan 的 POC 证据）。结构判据是 AST —— 模块里出现 `http_request` / `socket` /
+    `run_cmd` 一类真实引用即判红。新增"这页没取到正文，我再抓一次"会把目录+JS 的请求量翻倍，
+    而预算与限速都不是为它准备的。
+    ② 成本封顶：定位一律"字面锚 + 小写副本 `str.find`"，取值一律从**原文**切（flag 大小写敏感；
+    `lower()` 会改变长度的那几条例外码点走 `(?i)` 慢路，偏移仍必须回切原文验证）。
+    用户自定义正则**只在必现字面量锚出的窗口上跑**；`required_literals()` 取不出锚的正则
+    必须**拒用并给出原因** —— 退回"整份正文扫一遍"等于同时放开 ReDoS 与耗时（实测通用
+    `word{...}` 形状在 CSS 堆的正文里能捞 2 万条）。
+    ③ 写进**单独的 `flags` 表**：不并进 `vulns`（一个 flag 不是漏洞结论，进了就污染计数与
+    复核台账），也不并进 `leads`（续24 起线索不进人读报告/页签，等于把 CTF 的结论藏起来）。
+    新增资产表时**必须同时**进 `ASSET_TABLES`（本轮实测：该元组曾在 `db.py` 里定义两遍、
+    后一份静默盖前一份，现立"全文件只许出现一次"的源码判据）与 `[8u]` 的逐表索引清单。
+    ④ 跳过的量必须可见：`flags.max_bytes` 挡下的正文、`max_per_task` 挡下的候选、
+    库里已有同值，都要进 `flagfind.note()`，且各阶段只报**自己的增量**（`begin()`/`note(ctx, since)`）
+    —— 四行都报累计就分不清哪条是谁看的，与续124 那条"一句提示只有一个产地"同源。
+    回归 `tests/smoke.py [8ae]`（五向变异：值取小写副本 / 不做小写副本定位 / 抹掉超限计数 /
+    收下无锚正则 / 第二处 `ASSET_TABLES`）。
 
 ## 6. 如何验证改动
 
@@ -1224,7 +1255,7 @@ py -3 run_users.py --status   # 续117：账号数 + 配置里有无历史残留
   关键字筛选走服务端（同续53/续57 的口径），`q` 为空时不能显示"还没有解析数据"（那会把
   "筛选没匹配"误导成"没有资产"）；分页条要传 `unit="个 IP"`（`pager.total` 是 IP 个数，不是行数）。
 - `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。
-- **任务详情为 10 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/目标与配置/运行日志）：参考 ARL 界面的
+- **任务详情为 11 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/**flag 候选**/目标与配置/运行日志）：参考 ARL 界面的
   IP/文件泄露/URL信息/nuclei/指纹统计/WIH 这些页签**故意不做空占位**，因为对应的数据源
   还不存在（分别依赖爬虫数据模型、nuclei 二进制等）。理由与依赖关系见 `TODO.md` B-7。
   「SSL 证书」页签是续15 的落点（只读 TLS 握手 + 纯标准库 DER 解析，**握手不校验证书**）：
@@ -1242,6 +1273,13 @@ py -3 run_users.py --status   # 续117：账号数 + 配置里有无历史残留
   **为什么必须手动**：`osint`/`jsmine` 排在 `probe` **之后**，它们新挖出的域名赶不上本轮存活探测，
   天然停在"有域名、无站点、无检测"；而拓展域名里大量是 CDN/开源库/JS 命名空间碎片，
   全自动跑既越权又浪费额度 —— 这是**设计边界，不是缺陷**。
+- **flag 候选抽取的两处覆盖缺口（续126，如实登记）**：① **走 httpx 时 probe 根本没有正文**
+  （它的 JSONL 只有 title/tech/status），所以这一路只能由 jsmine / dirscan 内置档 / vulnscan 证据兜到
+  —— probe 会明写「httpx 档不返回正文，本阶段无输入可扫」，不会看起来像"扫过了、没有"；
+  ② **dirmap 的产物行也没有正文**（`[状态码][content-type][大小] URL`），装了 dirmap 的机器上
+  那一路的命中不会贡献 flag 候选（与续113 那条「没标题⇒不滤但明说」同源）。
+  还有第三类是**形状本身**的局限：非 `{}` 形态的 flag（`flag:` 后不带括号、或题目自定义前后缀）
+  要靠 `flags.prefixes` / `flags.patterns` 手工加，默认清单只有 `flag{` / `ctf{`。
 - **`osint` 的联网往返无法离线自测**：`tests/smoke.py` 只断言了 `iprecon`/`fofa`/`mmh3` 的纯函数、
   黑 ico 阈值边界与"两个子开关都关则无产出"的门控；`api.webscan.cc` 与 FOFA 的真实响应结构
   需要联网（FOFA 还需 key）才能验证 —— 首次实跑请打开开关并观察 `logs/task_*/task.log` 的 `[osint]` 行。
@@ -1762,6 +1800,18 @@ py -3 run_users.py --status   # 续117：账号数 + 配置里有无历史残留
   （对全 LF 文件同样成立）。
   代价是实测过的：有一次用工具批量改写后文件变成 LF-only，提交时 `tests/smoke.py` 出现
   **2811 行纯 EOL"假变更"**（`git show --stat` 里 1490+/1321-），真正的内容改动被淹没、review 完全失效。
+  ⚠️ **另一个具体陷阱（2026-10-08 续126 踩的，比 Edit 更隐蔽）**：在自己的补丁脚本里用
+  `Path(p).read_text()` + `write_text(..., newline="")` —— `read_text()` 的**通用换行**会把
+  `\r\n` 读成 `\n`，而 `newline=""` 写出时**不会**再加回 `\r`，于是一次"只改一条断言消息"
+  的小脚本把 `tests/smoke.py` 的 12547 行 CRLF 全洗成 LF，`git diff --numstat` 变成
+  **14060/13759**（真实改动是 306/5）。补丁脚本请一律 `read_bytes()/write_bytes()`，
+  锚点用 `(old_crlf, old)` 两试的写法（本仓 `logs/_docs*.py` 都是这个形状）。
+  ⚠️ 同一个脚本里的**第二个坑**：锚是**单行**时那次"两试"退化成同一条（锚里没有内部换行），
+  但**替换文本**内部的换行会被无条件加上 `\r` —— 落在 LF 区里就多出一条纯 EOL 的假变更（本轮 `cli/client.py` 就这样差一行）。写完补丁脚本**必须**逐文件核两式 numstat 相等。
+  已经洗坏了怎么救：**不是**全文件补 `\r\n`，而是**按行从 `HEAD` 还原原有 EOL**
+  （difflib 对齐内容、等价的行沿用 HEAD 那一行的 EOL，新增行取该区段主导形态；
+  可参考本轮用的 `logs/_eolfix.py`），然后核 `git diff --numstat` 与
+  `git diff --ignore-cr-at-eol --numstat` 是否重新相等。
   ⚠️ **具体陷阱（2026-09-28 续64 又踩一次）**：Edit/Write 这类工具会把**整个文件**归一成 LF，
   对**混合 EOL** 的文件尤其致命。归位办法**不是**无脑全文件 `\r\n`，而是**从 `git show HEAD:<file>`
   取原始字节、只替换目标文本、其余行的原 EOL 保留**。

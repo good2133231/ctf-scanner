@@ -11,7 +11,7 @@
 """
 from .base import Stage
 from .. import afrog as afrog_mod
-from .. import config, db
+from .. import config, db, flagfind
 from ..evasion import detect as detect_waf
 from ..owasp import checks as owasp_checks
 from ..pocs import engine
@@ -151,6 +151,16 @@ class VulnscanStage(Stage):
                                  lambda v: (v.get("target"), v.get("poc_id")))
         for v in new_v:
             db.insert_vuln(ctx.task_id, v)
+        # flag 候选（续126）：POC 的**证据与详情**里经常直接带着 flag（题目把 flag 放在
+        # 回显里，POC 把回显抄进 evidence）。这一步只读已经在手的字符串，零额外请求。
+        _flag0 = flagfind.begin(ctx)
+        for v in uniq:
+            for _txt in (v.get("evidence"), v.get("detail")):
+                if _txt:
+                    flagfind.harvest(ctx, v.get("target"), str(_txt), "poc")
+        _fnote = flagfind.note(ctx, _flag0)
+        if _fnote:
+            ctx.logger.info("[vulnscan] flag 候选 " + _fnote)
         ctx.results["vulns"] = uniq
         by_sev = {}
         for v in uniq:

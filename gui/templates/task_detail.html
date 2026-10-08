@@ -76,6 +76,7 @@
   <div class="tab" data-tab="csegs">C 段<span class="cnt">{{ csegs_pager.total }}</span></div>
   <div class="tab" data-tab="certs">SSL 证书<span class="cnt">{{ cert_total }}</span></div>
   <div class="tab" data-tab="dirs">目录<span class="cnt">{{ dir_total }}</span></div>
+  <div class="tab" data-tab="flags">flag 候选<span class="cnt">{{ flag_total }}</span></div>
   <div class="tab" data-tab="target">目标与配置</div>
   <div class="tab" data-tab="log">运行日志</div>
 </div>
@@ -590,6 +591,30 @@
       </tbody>
     </table>
     {% set pager = dirs_pager %}{% include "_pager.html" %}
+  </section>
+</div>
+
+<div class="tabpane" id="pane-flags">
+  <section class="panel">
+    <h2>flag 候选（{{ flag_total }} 条）</h2>
+    <p class="muted small">由 <code>scanner/flagfind.py</code> 从<b>本任务已经抓到的正文</b>里按形状抽取
+      （<b>零额外请求</b>：页面 / JS / 目录命中 / POC 证据），判据在「策略配置 → flag 候选抽取」。
+      <b>这是候选清单，不是结论</b>：同形状的 <code>flag{xxx}</code> 经常是模板或 JS 里的占位符，
+      逐条判真才是结论 —— 清单刻意偏宽，因为漏报的代价是丢一道题，误报的代价只是多看一眼。</p>
+    <table id="tbl-flags">
+      <thead><tr><th>值</th><th>前缀</th><th>来源</th><th>URL</th><th>上下文</th></tr></thead>
+      <tbody>
+      {% for f in flags %}
+        <tr><td class="mono">{{ f.value }}</td><td class="muted">{{ f.kind }}</td>
+          <td class="muted">{{ f.source }}</td>
+          <td class="mono small">{{ f.url }}</td>
+          <td class="muted small mono">{{ f.context }}</td></tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">还没有候选。抽取只吃已经抓到的正文，所以
+          「没跑过 probe / jsmine / dirscan / vulnscan 的任务」本来就是空的，不等于"目标没有 flag"。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
   </section>
 </div>
 
