@@ -254,6 +254,10 @@ ctf-scanner/
 │   │                      #   与 POC 置信度（pocs.confidence + poc_confidence）见 §7
 │   ├── config.py          # DEFAULTS + load/save_settings + load_keys()（config/keys.yaml）+ resolve()；LOGS_DIR 受 CTFSCANNER_LOGS 覆盖；续109 新增 `session_secret(dir)`：会话签名密钥随机 32 字节 + 落盘 0600（`session.secret`），**绝不由 gui.token 推导**
 │   ├── keystore.py        # 凭据口令加密（续98）：PBKDF2(60 万次)+AES-256-GCM 读写 config/keys.enc.yaml；解锁只在启动时由入口调一次并缓存，current() 只读缓存、绝不提示
+│   ├── edgeauth.py        # 401 边缘认证门（续131，§5.10 的**用户豁免项**）：口令只以 PBKDF2 派生值
+│   │                      #   落 `<库同目录>/edge_auth.secret`（0600、`data/` 在 gitignore），
+│   │                      #   **绝不进任何被跟踪文件**；用户名固定 `edge`；启用但没设口令 = 一律 401
+│   │                      #   （fail-closed）；口令唯一入口是 getpass 的 `-m scanner.edgeauth --set`
 │   ├── users.py           # 多用户（续46）：PBKDF2 口令哈希 / check_login / validate_password / 防锁死（不能停用自己、至少留一个启用中的管理员）
 │   ├── admin_setup.py      # 建"能登录控制台的人"（续117）：向导 + 命令行**共用**的判据（0 账号才动作 /
 │   │                      #   非交互不代填 / 口令只进 users 表），两个入口一份规则，别各写一遍
@@ -490,6 +494,18 @@ ctf-scanner/
    **不带 `uid` 的会话一律作废**（升级前留下的引导 Cookie 也不再认，回归 `[8v] ③` 钉的就是这一档）。
    新增任何"绕过账号的登录路"都算违反本条；页面侧也不许再出现口令输入框（`[8v] ④` 按渲染出的
    HTML 判，注释里写不写键名都不影响判据）。
+   ⚠️ **唯一豁免（续131，用户 2026-10-08 明确批准）**：`scanner/edgeauth.py` 的 401 边缘认证门
+   **就是一条独立于 `users` 表的登录路** —— 它存在的前提是 `config/settings.yaml` 把 `gui.host`
+   改成了 `0.0.0.0`（控制台不再只听回环，于是任何能路由到 5000 的人都打得到登录页）。豁免只开到
+   这一条，**本条的主体没有被削弱**，三条边界仍然成立：口令只以 PBKDF2 派生值落
+   `data/edge_auth.secret`（0600、gitignore），**配置文件里一个凭据都不许有**；`DEFAULTS` 里默认
+   **关**，但注意 `config/settings.yaml` **本身也被跟踪**、本轮往里写了 `host: 0.0.0.0` +
+   `edge_auth.enabled: true` —— `load_settings()` 是 `DEFAULTS + 该文件` 的合并，所以**直接 clone 的
+   人拿到的是文件里的值**（照样绑所有网卡、照样在跑 `--set` 之前全程 401）；DEFAULTS 的默认关只在
+   没有那份文件时兜底。门开而口令未设 = 一律 401（fail-closed）并在
+   启动横幅点名。另两条实操事实：明文 HTTP 下 Basic 会把口令随每个请求带出去（跨不可信链路仍需
+   TLS 反代）；这道门**不是** `0.0.0.0` 的替代品 —— `gui.allowed_hosts` 不填时 Host 白名单仍会被
+   放宽（`gui/app.py:520` 的 `CS_GUARD_HOST`），那一档要单独配。回归 `[8ai]` 钉住以上全部。
 
 11. **指纹判据只有一条形状，且第三方内容必须"复核后才落地"**（续120）：
     `(part, 正则[, 状态码集合])` —— `part ∈ headers|body|cookies`，第三元素缺省＝不分状态。
@@ -853,6 +869,8 @@ py -3 tests/browser_e2e.py     # 续60：真浏览器 E2E（无头 Chrome/Edge +
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
 py -3 run_gui.py            # 控制台 http://127.0.0.1:5000；库里没账号时**当场向导**问你要设什么口令
 py -3 run_users.py --status   # 续117：账号数 + 配置里有无历史残留（只报有无，不报任何值）
+py -3 -m scanner.edgeauth --status                # 续131：401 边缘门有没有设口令（只报有无，不报值）
+py -3 -m scanner.edgeauth --set                   # 口令只经 getpass：不进 argv、不落任何被跟踪文件
                             #   建号 / 改口令：--create-admin [用户名]、--reset-password 用户名
                             #   非交互环境用 CTFSCANNER_ADMIN_PASSWORD 提供；口令只落 users 表
 # Linux 实机验收（**2026-09-23 续12 已达成**：Ubuntu 22.04.5 / Python 3.10.12）

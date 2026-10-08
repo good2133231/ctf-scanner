@@ -55,7 +55,7 @@ from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
-from scanner import diffview, keystore
+from scanner import diffview, edgeauth, keystore
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
@@ -519,6 +519,27 @@ def create_app():
     app.config["CS_ALLOWED_HOSTS"] = frozenset(_allowed)
     app.config["CS_GUARD_HOST"] = bool(_allowed - _LOOPBACK_HOSTS) or _bound_loopback
     app.config["CS_BAD_ALLOWED_HOSTS"] = tuple(_bad_allowed)
+
+    # ---- 401 边缘认证门（用户 2026-10-08 点名：`gui.host` 绑 0.0.0.0 之后再加一道）----
+    # 注册在 `_local_guard` **之前** = 先于 Host 白名单与 Origin 校验执行：不带 Basic 凭据的
+    # 请求一个字节都进不到路由逻辑里，于是登录页、验证码、`login_guard` 的失败计数都不再被
+    # 陌生流量碰到（那道门挡的是 DNS rebinding，这道门挡的是"任何能路由到 5000 的人"）。
+    #
+    # 两条刻意的取舍：
+    # ① **通过后在会话里打标记**，不每个请求重算 —— `pbkdf2_sha256` 是 20 万次迭代（约 0.1 秒），
+    #    而 `app.js` 是轮询式的（状态/日志/页签），逐请求重算等于把 CPU 烧在同一个口令上。
+    # ② **失败不写 audit_log** —— 那等于给未认证的自动化流量开一个无上限的 SQLite 写入口，
+    #    而所有写路径都串行在 `db._WRITE_LOCK` 上。这里"不记录"是有意的，理由见模块 docstring。
+    if edgeauth.enabled(settings):
+        @app.before_request
+        def _edge_auth_gate():
+            if session.get(edgeauth.SESSION_KEY):
+                return None
+            if edgeauth.verify(request.headers.get("Authorization")):
+                session[edgeauth.SESSION_KEY] = True
+                return None
+            return Response(edgeauth.CHALLENGE_BODY, status=401,
+                            headers=edgeauth.challenge_headers())
 
     @app.before_request
     def _local_guard():
@@ -3521,6 +3542,9 @@ def _deploy_hints(gui_cfg):
             lines.append("    已配置 gui.allowed_hosts → Host 白名单仍然生效（只放行清单里的域名）。")
         else:
             lines.append("    未配置 gui.allowed_hosts → Host 白名单在本模式下已自动放宽。")
+        _edge_st, _edge_msg = edgeauth.state({"gui": cfg})
+        if _edge_st != "off":      # 没启用就一个字都不多说：默认配置要保持安静
+            lines.append(f"    401 边缘认证门：{_edge_msg}")
         lines.append("    HTTPS 需由反向代理终止（见 docs/deploy-https.md）；"
                      "**访问审计仍然没有**，请自行限制在可信网段。")
     return lines

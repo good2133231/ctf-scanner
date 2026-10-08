@@ -74,6 +74,12 @@ import os
 import sys
 
 sys.path.insert(0, os.environ["CTFSCANNER_E2E_REPO"])
+# 401 边缘认证门（续131）：对这份测试专用的引导脚本关掉。本端到端验的是真浏览器的 DOM/表单/
+# 弹窗行为，不是这道门（无头浏览器也应答不了 Basic 弹窗）；门自己由 `tests/smoke.py [8ai]` 用
+# **未打桩的** create_app() 真验。与下面验证码那段同一个口径：**生产代码里没有任何免凭据的口子**。
+from scanner import edgeauth as _edge_boot
+_edge_boot.enabled = lambda settings: False
+
 from gui.app import app                                  # import 期 create_app() 建表 / 同步 POC 注册表
 from werkzeug.serving import make_server
 

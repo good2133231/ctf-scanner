@@ -544,6 +544,16 @@ def main():
     print("[4b] stop ok: status=stopped 且未产生站点")
 
     # 5) GUI 路由（test client，不占端口）
+    # ---- 401 边缘认证门：先对既有 GUI 用例隔离（续131）----
+    # `gui/app.py` 在 import 期就 `app = create_app()`，吃的是**真实** `config/settings.yaml`；
+    # 那里现在写着 `gui.edge_auth.enabled: true`，而这道门 **fail-closed**（没设口令就一律 401）。
+    # 不隔离的话，从这里起几百条 `app.test_client()` 断言全部拿到 401，报出来的却是"路由坏了"。
+    # 口径与本文件桩掉外部情报源、桩掉真实下载一致：**被测对象之外的环境**先归一；门本身由
+    # `[8ai]` 用**未打桩的** `create_app()` 真验（那一组会把 enabled 换回真货，跑完再归位）。
+    from scanner import edgeauth as _edgeauth
+    _edgeauth_real = _edgeauth.enabled
+    _edgeauth.enabled = lambda settings: False
+
     from gui.app import app
     c = app.test_client()
     assert c.get("/").status_code == 302
@@ -7639,6 +7649,12 @@ http:
         没必要为每个 app 重扫一遍 300+ 模板（几十秒纯浪费，且与本用例无关）。
         """
         _base = _copy7i.deepcopy(settings)
+        # 默认把绑定地址钉成回环：建在这个 helper 上的组测的是**守卫逻辑**，不是"这台机器现在
+        # 绑哪"。继承部署值就是 AGENTS.md §6.2 说的"断言拿环境值当哨兵"—— `gui.host` 一旦是
+        # 0.0.0.0（续131 的本机部署），`allowed_hosts` 只写了被忽略的通配值时 `CS_GUARD_HOST`
+        # 会是 False，几百条断言一起报成"Host 白名单坏了"。要测非回环绑定请**显式**传 host=
+        # （`[8ai]` 就是显式传的，它验的正是"门排在 Host 白名单之前"这条顺序）。
+        _base.setdefault("gui", {}).update({"host": "127.0.0.1", "allowed_hosts": []})
         _base.setdefault("gui", {}).update(gui_over)
         gui_app.load_settings = lambda: _base
         gui_app.sync_pocs = lambda *_a, **_k: None
@@ -7805,13 +7821,18 @@ http:
         return _buf.getvalue().splitlines(), _base
 
     # 10a) 默认本机配置：`serve()` 不该打印任何部署提示（别给本机单人用户刷噪声）
-    _out7i_def, _ = _serve_out7i({})
+    # 两个环境值都要**显式写**（本机部署现在是 `gui.host: 0.0.0.0` + 一条显式白名单，续131）：
+    # ① 绑定地址；② `allowed_hosts` —— 那句 `[*] Host 白名单放行` 的条件是
+    # `allowed - _LOOPBACK_HOSTS` 非空，吃的是白名单而不是绑定地址，v6 只钉了 host 所以还红。
+    # 拿环境值当"默认"就是 §6.2 说的假红根源；真绑 0.0.0.0 时打印那些告警才是对的行为。
+    _out7i_def, _ = _serve_out7i({"host": "127.0.0.1", "allowed_hosts": []})
     assert not any(("deploy-https" in l or "Host 白名单放行" in l or "确需远程使用" in l)
                    for l in _out7i_def), "默认本机配置不该刷部署提示：" + repr(_out7i_def)
 
     # 10b) 反代部署配置：`_deploy_hints()` 的**每一行**在 serve() 输出里恰好出现 1 次，且整段输出无重复行
     _cfg7i = {"behind_proxy": True, "secure_cookie": True,
-              "allowed_hosts": ["scanner.example.test"]}
+              "allowed_hosts": ["scanner.example.test"],
+              "host": "0.0.0.0"}   # 显式非回环：这一支的告警必须真的被 serve() 打印过
     _out7i_proxy, _cfg7i_used = _serve_out7i(_cfg7i)
     _hints7i_used = _deploy_hints(_cfg7i_used["gui"])
     assert _hints7i_used, "反代部署配置下 `_deploy_hints` 不该为空（否则这条断言没有意义）"
@@ -7823,7 +7844,8 @@ http:
         f"{_out7i_proxy.count(l)}× {l!r}" for l in _dup7i)
 
     # 10c) **回环地址**下不得出现"请走反向代理"这类建议（用户就在本机，那是错误建议）
-    _out7i_loop, _ = _serve_out7i({"allowed_hosts": ["scanner.example.test"]})
+    _out7i_loop, _ = _serve_out7i({"host": "127.0.0.1",
+                                  "allowed_hosts": ["scanner.example.test"]})
     assert any("Host 白名单放行" in l for l in _out7i_loop), \
         "配了白名单就该打印放行清单（排错用）：" + repr(_out7i_loop)
     assert not any("确需远程使用" in l for l in _out7i_loop), \
@@ -7973,7 +7995,15 @@ http:
     _b2 = _cl.post("/login", data={"username": "smoke-no-such-user", "password": "x"},
                    environ_base=_envH)
     assert _b1.status_code == _b2.status_code == 429 and _b1.status_code != 403
-    assert _b1.get_data(as_text=True) == _b2.get_data(as_text=True), \
+    # ⚠ 这条比的是**先后两次独立 POST** 的正文，而 `gui/app.py:842` 把剩余秒数渲染进了文案
+    # （`_lockout_message(899)` 与 `(898)` 逐字节不同，`retry_after` 走 `int()` 截断）—— 两次请求
+    # 之间只要跨过一个整秒边界，正文就差一个数字。上一行注释防住了"两个不同 IP"，没防住
+    # "同一 IP 的两次请求之间时间照样在走"。真泄漏会每轮都挂，所以这是抖动、不是缺陷；
+    # 归一只针对**那一处**：用户名、状态码、其它任何文案差异仍然会被比出来。
+    _ra_1, _ra_2 = _b1.headers.get("Retry-After"), _b2.headers.get("Retry-After")
+    assert _ra_1 and _ra_2, "429 必须带 Retry-After"
+    _mask = lambda _t, _v: _t.replace("约 " + _v + " 秒", "约 N 秒")
+    assert _mask(_b1.get_data(as_text=True), _ra_1) == _mask(_b2.get_data(as_text=True), _ra_2), \
         "锁定文案必须与『账号是否存在』无关（否则可拿来枚举用户名）"
 
     # 5b) 审计行必须带全"谁打谁"（复核返工第二轮）：IP 级锁的审计曾丢 actor/target（都为空）——
@@ -13304,8 +13334,16 @@ http:
         shutil.copyfile(str(ROOT / "config" / "settings.yaml"), str(_p117))
         _t = _p117.read_text(encoding="utf-8")
         if "\n  token:" not in _t and not _t.startswith("  token:"):
-            _t = _t.replace("  host: 127.0.0.1", "  host: 127.0.0.1\r\n  token: " + _SENT117, 1)
-            _p117.write_text(_t, encoding="utf-8")
+            # 注入必须**按段**定位：真实文件里 `  host: 127.0.0.1` 至少出现两次（`gui:` 与 `ssrf:`）。
+            # 续131 把 `gui.host` 改成 0.0.0.0 之后，"全文第一个匹配"落到的是 **ssrf 段** —— token
+            # 被塞进错误的段，下面那句"副本里应留着残留"照样绿，而 `gui.token` 是空的
+            # （假绿与真失败同时发生，正是 §6.2 说的第二类）。所以锚点换成 `gui:` 那一行本身。
+            _ls117 = _t.splitlines(keepends=True)
+            _g117 = [i for i, l in enumerate(_ls117) if l.rstrip("\r\n") == "gui:"]
+            assert len(_g117) == 1, _g117
+            _e117 = "\r\n" if _ls117[_g117[0]].endswith("\r\n") else "\n"
+            _ls117.insert(_g117[0] + 1, "  token: " + _SENT117 + _e117)
+            _p117.write_text("".join(_ls117), encoding="utf-8")
         assert "token:" in _p117.read_text(encoding="utf-8"), "副本里应留着那条残留"
         return _p117.read_text(encoding="utf-8").splitlines()
 
@@ -16718,6 +16756,116 @@ expression: r0()
           "摘要一处产地｜变异：摘掉复核过滤 / 三档缺一档 / .get() 回退（Row 那第五坑）/ "
           "page_tasks 忘拆包 都会红")
 
+    # ---------------- [8ai] 续131：401 边缘认证门（用户点名的 §5.10 豁免项） ----------------
+    # 这道门**刻意独立于 `users` 表**（AGENTS.md §5.10 由用户 2026-10-08 明确豁免）。正因为豁免了，
+    # 它更需要回归钉住：默认不锁死人、fail-closed、排在 Host 白名单**之前**、口令绝不进被跟踪文件。
+    # 造 app 复用 [7i] 的 `_app_with7i`（它已管好 `load_settings` / `sync_pocs` 的打桩与还原）。
+    import base64 as _b64_8ai
+    import os as _os_8ai
+    import gui.app as _gui8ai_mod
+    from scanner import config as _cfg8ai, db as _db8ai
+    from scanner import edgeauth as _ea8ai
+
+    _PW8AI = "Sm0ke-Edge-Pw!"          # 哨兵口令：只进内存与本组，出现在任何被跟踪文件里都算泄露
+
+    def _audit_n8ai():
+        _conn = _db8ai.get_conn()
+        try:
+            return int(_conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0])
+        finally:
+            _conn.close()
+
+    # ① **DEFAULTS 必须是关**：开着提交的是 `config/settings.yaml`，而新克隆拿的是 DEFAULTS；
+    #    默认打开 = 任何没跑过 `--set` 的克隆一启动就被自己的控制台 401 到底。
+    assert _cfg8ai.DEFAULTS["gui"]["edge_auth"]["enabled"] is False, \
+        "DEFAULTS 里默认打开这道门 → 新克隆在跑 --set 之前全程 401"
+    # 纯函数断言一律走**存下来的真函数**：`_ea8ai.enabled` 此刻还是上面那个隔离桩（恒假），拿它做
+    # 断言会有两种坏结果 —— `is True` 必然挂（第 8 轮报的就是这个），而 `is False` **恒过**
+    # （§6.1 说的没有区分度的断言）。两种都是桩污染，只是方向不同。
+    assert _edgeauth_real({"gui": {"edge_auth": {"enabled": True}}}) is True
+    assert _edgeauth_real({"gui": {}}) is False and _edgeauth_real(None) is False
+    assert _edgeauth_real({"gui": {"edge_auth": True}}) is True, "手改简写形态得照样认"
+
+    # ② 纯函数层：冒号切分只在**第一个**冒号处切（口令里的冒号必须留在口令侧）
+    _split = _ea8ai._split_basic
+    assert _split("Basic " + _b64_8ai.b64encode(b"edge:a:b").decode()) == ("edge", "a:b")
+    assert _split("") == ("", "") and _split("Bearer xx") == ("", "")
+    assert _split("Basic !!!not-base64!!!") == ("", "")
+
+    _edgeauth.enabled = _edgeauth_real           # 换回真货：本组验的就是这道门
+    _app8ai = None
+    try:
+        _app8ai = _app_with7i(host="127.0.0.1", edge_auth={"enabled": True})
+        _off8ai = _app_with7i(host="127.0.0.1", edge_auth={"enabled": False})
+
+        # ③ 门开 + **没有口令** = fail-closed（这条是"看着有防护、实际有缺口"的反面）
+        _ea8ai.clear_password()
+        _r = _app8ai.test_client().get("/login")
+        assert _r.status_code == 401, f"没设口令却放行（{_r.status_code}）→ fail-open"
+        assert _r.headers.get("WWW-Authenticate", "").startswith("Basic realm="), _r.headers
+        assert _PW8AI not in _r.get_data(as_text=True), "401 正文里出现了口令"
+
+        # ④ 设口令：错口令拒、用户名错拒、对口令放行
+        _ea8ai.set_password(_PW8AI)
+        _bad = "Basic " + _b64_8ai.b64encode(b"edge:nope").decode()
+        _baduser = "Basic " + _b64_8ai.b64encode(b"admin:" + _PW8AI.encode()).decode()
+        _good = "Basic " + _b64_8ai.b64encode(("edge:" + _PW8AI).encode()).decode()
+        assert _app8ai.test_client().get("/login", headers={"Authorization": _bad}).status_code == 401
+        assert _app8ai.test_client().get("/login", headers={"Authorization": _baduser}).status_code == 401, \
+            "用户名不参与校验 → 只剩口令一道门"
+        assert _app8ai.test_client().get("/login", headers={"Authorization": _good}).status_code == 200
+
+        # ⑤ 会话标记（**不是**"少算一次哈希"那么无害：它决定轮询页面会不会把 CPU 烧在 pbkdf2 上）
+        _cl8ai = _app8ai.test_client()
+        assert _cl8ai.get("/login", headers={"Authorization": _good}).status_code == 200
+        assert _cl8ai.get("/login").status_code == 200, "会话标记没生效（同会话第二个请求又被要凭据）"
+        assert _app8ai.test_client().get("/login").status_code == 401, "新客户端不带凭据被放行了"
+
+        # ⑥ 门必须排在 `_local_guard` **之前**：非法 Host + 无凭据 → 401（不是 403）。
+        #    把注册顺序挪到 _local_guard 之后，这里就变 403 —— 这条断言正是那样变红的。
+        assert _app8ai.config["CS_GUARD_HOST"] is True, "本用例要求 Host 校验是开的"
+        assert _app8ai.test_client().get(
+            "/login", headers={"Host": "evil.example.com"}).status_code == 401, \
+            "拿到 403 说明 Host 白名单先执行，未认证流量仍然能探测到这道服务的存在"
+
+        # ⑦ 门关 = 与升级前逐字节一致（不许"加了开关就顺手改了默认路径的行为"）
+        assert _off8ai.test_client().get("/login").status_code == 200
+
+        # ⑧ 失败**不写 audit_log**（刻意的取舍：否则未认证流量就有了一个无上限的 SQLite 写入口，
+        #    而所有写路径都串行在 db._WRITE_LOCK 上）。把 audit.record 塞进门里，这条立刻红。
+        _n_before = _audit_n8ai()
+        for _hdr in ({"Authorization": _bad}, {}, {"Authorization": _baduser}):
+            _app8ai.test_client().get("/login", headers=_hdr)
+        assert _audit_n8ai() == _n_before, "401 失败被写进了审计流水"
+
+        # ⑨ 派生值文件：只存 PBKDF2 串、不含明文；落点必须在**库同目录**（= `CTFSCANNER_DB`
+        #    一重定向就自动进沙箱，回归不会往真实 data/ 塞东西）
+        _f8ai = _ea8ai.secret_path()
+        assert _f8ai.parent == _db8ai.DB_PATH.parent, "派生值落点没跟着库走 → 测试隔离会漏"
+        _disk8ai = _f8ai.read_text(encoding="utf-8")
+        assert _disk8ai.startswith("pbkdf2_sha256$"), _disk8ai[:24]
+        assert _PW8AI not in _disk8ai, "派生值文件里有明文"
+        if _os_8ai.name == "posix":
+            assert _f8ai.stat().st_mode & 0o777 == 0o600, oct(_f8ai.stat().st_mode & 0o777)
+
+        # ⑩ 启动文案：非回环 + 门开但未设口令时**必须点名**（本仓"绝不静默降级"），门关时保持安静
+        _ea8ai.clear_password()
+        _h_open = "\n".join(_gui8ai_mod._deploy_hints({"host": "0.0.0.0",
+                                                       "edge_auth": {"enabled": True}}))
+        assert "401 边缘认证门" in _h_open and "所有请求都会被 401 拒" in _h_open, _h_open
+        _h_off = "\n".join(_gui8ai_mod._deploy_hints({"host": "0.0.0.0"}))
+        assert "401 边缘认证门" not in _h_off, "没启用也要刷一行 = 默认配置不再安静"
+        assert _gui8ai_mod._deploy_hints({"host": "127.0.0.1"}) == [], "回环地址必须一个字都不多说"
+    finally:
+        _ea8ai.clear_password()
+        _edgeauth.enabled = lambda settings: False      # 归位：后续/既有口径仍是"门不存在"
+
+    print("[8ai] 续131 401 边缘认证门 ok: DEFAULTS 关（新克隆不锁死）｜门开无口令 = 401（fail-closed，"
+          "且响应体不含口令）｜错口令/错用户名都拒，对口令放行｜同会话第二个请求靠标记免算 pbkdf2 而"
+          "新客户端仍被拒｜**门排在 Host 白名单之前**（非法 Host + 无凭据 = 401 不是 403）｜门关 = 与"
+          "升级前一致｜401 失败**不进审计流水**｜派生值只在库同目录、只存 pbkdf2 串、0600、不含明文｜"
+          "非回环未设口令必须点名｜变异：fail-open / 挪到 Host 白名单之后 / 不校验用户名 / 写审计 "
+          "都会红")
     print("SMOKE PASS")
 
 
