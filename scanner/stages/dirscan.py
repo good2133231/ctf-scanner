@@ -49,10 +49,10 @@ import time
 from urllib.parse import urlparse
 
 from .base import Stage
-from .probe import TITLE_RE      # 命中页的 <title> 提取（与 probe 同一套正则，避免两处定义漂移）
 from .. import db, fingerprint, flagfind
 from ..config import resolve
-from ..utils import read_lines, write_lines, pool_run, http_request, pick_python, run_cmd
+from ..utils import (read_lines, write_lines, pool_run, http_request, pick_python, run_cmd,
+                     html_title)
 
 URL_RE = re.compile(r"https?://[^\s'\"<>()]+")
 # dirmap 的产出格式：[状态码][content-type][大小] URL（大小形如 `1.23kb` / `512.00b`）
@@ -897,8 +897,7 @@ class DirscanStage(Stage):
             # 为什么值得存：路径命中后光看 `/backup.tar.gz 200 1818` 判断不了这是真备份包
             # 还是一个"统一跳转页"；标题能立刻分辨（用户 2026-09-23 明确要求）。
             # 也正因为要靠标题判拦截页，**这条提取必须在过滤判定之前**（续112-F）。
-            t = TITLE_RE.search(r.get("text") or "")
-            title = (t.group(1).strip()[:200] if t else "")
+            title = html_title(r.get("text"))
             if is_block_page(st, title):
                 # 标题就是 WAF/CDN 的统一拦截页（`Attention Required! | Cloudflare` 这类）：
                 # 这条 403 与路径无关，说的是"厂商在拦我们"，不是"这个文件存在且被禁"。

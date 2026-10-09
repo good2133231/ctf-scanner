@@ -297,6 +297,26 @@ def is_domain(text):
     return bool(_DOMAIN_RE.match(a))
 
 
+# ---------- 网页标题（单一判据） ----------
+
+# `<title>` 的正则与提取函数**只定义这一处**：probe 的内置兜底、probe 的「跳转后」取证、
+# dirscan 的命中页标题、截图阶段的「渲染后标题」全部复用它 —— 本仓反复因为"同一判据写两遍、
+# 迟早一边一个"翻车（AGENTS §7）。`re.S` 是必需的：真实页面的 `<title>` 经常跨行
+# （Next.js / Vue 的 head 会换行），不带 re.S 就会把这些站统统判成"没有标题"。
+TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+def html_title(text, limit=200):
+    """从一段 HTML 里取 `<title>`；取不到返回**空串**（空串＝这份 HTML 真没有标题，不编一个）。
+
+    顺手剥掉内嵌标签（`<title><span>x</span></title>` 这类脏写法）与首尾空白，截到 `limit` 字符。
+    """
+    m = TITLE_RE.search(str(text or ""))
+    if not m:
+        return ""
+    return re.sub(r"<[^>]+>", "", m.group(1)).strip()[:limit]
+
+
 # ---------- 站点显示（3xx 的「跳转后」） ----------
 
 # 需要显示「跳转后」的状态码。放在这里而不是 probe 里：取证（probe）与显示（GUI 三处模板 +

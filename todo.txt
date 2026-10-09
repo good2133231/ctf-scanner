@@ -2599,14 +2599,14 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       `ctx.results["sites"]`；`jsmine` 末尾接线；`jsmine.recrawl` 三方一致（DEFAULTS/yaml/策略页）
 - [x] 字典**分两档**（精简档永远全量 + `subdomains_deep` 受抽样）+ `tools/import_subdomain_dict.py`
       （清洗/并集/来源行/四种拒绝，纯离线）+ 三道护栏（等距抽样、词数闸门、字典过小主动喊）
-- [x] 深档 177,892 条从用户自己的灯塔容器**只读**取出并导入，文件头写明来源；1.5MB 随本轮提交，
+- [x] 深档 177,875 条词（文件 177,876 行＝1 行头注释 + 177,875 条）从用户自己的灯塔容器**只读**取出并导入，文件头写明来源；1.5MB 随本轮提交，
       不想要就 `git rm config/dicts/subdomains_deep.txt`（配置里"文件不在＝没配"已写好，不会崩）
 - [x] 开发模式/自检压 `brute_max_words` / `brute_fallback_max` / `recrawl_max_hosts`
       —— 用户装完深字典，CI 不许跟着变慢
 - [x] 复测（同一份 1263 个名字）：站点 **134 行 / 68 台主机**，灯塔 66 行 / 64 台，
       **灯塔有而我们没有的主机 = 0**（多 4 台，其中 56 台带「跳转后」）
 - [ ] 剩余差距（如实）：本机没装 puredns ⇒ 深档只吃 3000 条抽样，要吃全量得
-      `python cli/client.py --update-tools --tool puredns`（要联网，本轮没代装）；
+      `python cli/client.py --update-tools --tool puredns --allow-unverified`（要联网，且不带 `--allow-unverified` 会被红线拒装 —— 见下面"下一轮的三条"第一条，本轮没代装）；
       灯塔另有 `alt_dns` 组合词与 `findvhost` 两条名字来源，我们没有对应阶段
 
 下一轮的三条（本轮**没**写成已解决，都量过）：
@@ -2622,3 +2622,54 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       把 `limits.brute_fallback_max` 提到 30000 = 7/14、60000 = **13/14**（代价：一个域名
       约 6 万次 DNS 查询）。也就是说"只多不少"在冷启动上真正的门槛是**预算**，不是代码 ——
       下一轮要么按长度分层抽样，要么直接装 puredns 吃全量。
+- [ ] 截图阶段用无头浏览器 `--dump-dom` 回填「渲染后标题」：有些站的原始 HTML 里**根本没有 `<title>`**
+      （实测 `agent.weex.com` 是 1298 字节的 Next.js 外壳、9 个 script 标签、无 `<title>` 无 `og:title`），
+      所以 httpx 拿不到标题**不是抓取失败**，而是那一页本来就没有标题；
+      而 `screenshot` 阶段本来就为每个站点起一次无头浏览器 —— 在**同一次调用**里加 `--dump-dom`
+      取渲染后的 `<title>` 回填，是**零额外启动**的做法（不必为取标题再多发一次请求）。
+      本轮已实现（写代码的人正在改 scanner），**实现细节以代码为准**，这里只登记待办与背景。
+- [ ] TODO.md 与 todo.txt 双清单要合一或明确分工：`TODO.md` 停在续117，而 AGENTS §9 仍把它当
+      「待用户确认的排期清单」在用 —— 两份清单各说一套、更新时间差了一百多轮，
+      新接手者会被骗（分不清该看哪一份）。要么合并成一份，要么写明分工
+      （例如 TODO.md＝待用户确认的排期、todo.txt＝逐轮实施流水）。
+## 续140（2026-10-09，WorkBuddy · Qoder-Agent 远端 Linux）：渲染后标题 + 记忆硬规矩 + 多 agent + CI 提速
+用户点单：「有些明明有标题为什么我们就是获取不到标题 我们能在等待时间把这个解决了吗」
++「我们的记忆你都要同步到todo，以及修改完同步是硬记录，让我们换对话框，换AI也能接着执行」
++「把多agent执行加入记忆…就算其他ai来了也会多agent执行」+「我觉得我们执行速度很慢」
+
+- [x] 先取证：`agent.weex.com` 响应 1298 字节 / 9 个 `<script>` / 无 `<title>` 无 og:title 无 h1
+      ⇒ **源头就没有**，不是抓取失败；补法只有渲染，而渲染要浏览器（这正是截图默认关的原因）
+- [x] `<title>` 判据收口到 `scanner/utils.py` 一处（`TITLE_RE` + `html_title`），
+      probe 两路（内置兜底 / 跳转后取证）、dirscan 命中页、截图阶段全部复用；
+      dirscan 不再 `from .probe import TITLE_RE`，probe 里那份旧定义与 `import re` 删掉
+- [x] `capture(..., want_title=True)` 用 `--dump-dom` **挤进同一次浏览器调用**（零额外启动）；
+      返回三元组、PNG 没写成也保留 DOM 标题、无浏览器降级成 `(False, 原因, "")` 不抛异常、
+      不传时 argv 与从前逐字节一致
+- [x] `db.set_site_titles`：守卫写在 SQL 的 WHERE（`AND (title IS NULL OR title='')`，NULL 也算空）、
+      计数口径＝站点(URL) 而不是行数、跨任务不串（先读空标题名单再 UPDATE，因为 `_exec` 没有 rowcount）
+- [x] 截图阶段补标题 + 说实话那句「M 个原始 HTML 没有 `<title>`」；probe 入库日志加"缺标题数 + 出路"
+- [x] 冒烟 `[8ar]`（391 行，含真·google-chrome 端到端补回 JS 注入的中文标题、四处变异证伪）
+      + `[8as]`（71 行，把 §0.4 的记忆同步变成机器判据）；`[7z]` 的二元组解包改三元组
+- [x] `AGENTS.md` §0.4（一轮四步完成判据 + `max续` 取号算法与三条边界）+ §10（多 agent 六段）；
+      `TODO.md` 改成「分工 + 稳定工程化 backlog」，不再当第二份逐轮流水账
+- [x] CI：4 个装依赖步骤 `cache: pip` + `cache-dependency-path: requirements.lock`
+      + 两个 workflow 的 `concurrency`/`cancel-in-progress`
+- [x] 更正过期结论：门禁不是"8~16 分钟"（续125 pacing 修复后推算 ~283s）；
+      `run_devflow.py:96` 写的是 `devflow_baseline.json`，`smoke-timing.jsonl` 由 `smoke.py:71` 以 `"w"` 打开；
+      这台 Linux 与 CI runner **都装了 google-chrome**（先前"本机没有浏览器"的判断是错的）
+
+下一轮（续141）：
+- [x] 把带 `--timing` 的实测套件耗时写进 `CHANGELOG_AI.md`：**宿主 3.14 墙钟 5m31.8s（可归因
+      330.8s / 164 组）、容器 3.9 墙钟 5m00.5s**；三次干净运行散布 330.8~337.1s（±1%）。
+      最大四组 `[7n]` 44.9s、`[7w]` 42.2s、`[6u]` 38.5s、`[7l]` 38.2s ⇒ 前 10 占 69%
+      —— 顺带修掉了"计时探针在 `[8ad]` 里把自己关掉"这个洞（0 字节 jsonl 的成因）
+- [ ] 按实测数字挑前几组下手：`[7n]` 44.3s / `[7w]` 42.1s / `[6u]` 38.2s / `[7l]` 38.1s
+      四组就占 53%。`[7w]`（POC 有效级别，导入 305 条）与 `[7n]`/`[7l]`（全流程自检体）是两类
+      不同的贵，动之前都要连 §5 的 pacing 与"全量实测不是举例"那条口径一起判
+- [ ] 决定"渲染后标题要不要默认开"：先量 screenshot 对 CI/自扫描的耗时（`max_sites=20` 约 20~60 秒）
+- [ ] `[8ar]` 里那条"只看 DOM 前 200K"如果真遇到标题在更深处的站点，改成分段读而不是直接放大窗口
+- [ ] 装 puredns 吃全量深字典（红线：`--allow-unverified` 需用户点头；差距见续139 那 14 个名字）
+- [ ] `logs/` 本轮一次性脚本（`_title_spec.py` `_title_snips.txt` `_apply_snips.py` `_8ar_block.py`
+      `_8as_block.py` `_ins8ar.py` `_ins8as.py` `_run140.py` `_dbdoc140.py` `_agents140*.py`
+      `_ci140.py`）：按 §6.2 清理纪律，**门禁跑完、提交推完**之后再逐名删，不许通配符删
+

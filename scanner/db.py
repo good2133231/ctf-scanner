@@ -972,6 +972,36 @@ def set_subdomain_cnames(task_id, mapping):
     _exec("UPDATE subdomains SET cname=? WHERE task_id=? AND domain=?", rows, many=True)
 
 
+def set_site_titles(task_id, pairs):
+    """回填「渲染后标题」：只补**当前标题为空**的站点，返回补到的**站点(URL)数**。
+
+    `pairs`: `[(url, title), ...]`。"不许覆盖已经拿到的标题"写在 SQL 里
+    （`AND (title IS NULL OR title='')`）而不是让调用方先查一遍：判据落在唯一动这张表的地方，
+    才防得住并发，也防得住下一个调用方忘记判断。
+    但 `_exec` 只回 `lastrowid`（拿不到 rowcount），所以"到底补了几个站"要先读一次空标题名单 ——
+    日志里那个数字必须是真补到的站数，不是"我们试了 N 次"。
+    口径钉在 **URL** 而不是行：同一个 URL 在库里可能占多行（历史遗留 / 跨运行去重之前），
+    UPDATE 会把它们一起补上，但用户按"几个站点拿到了标题"读这个数字（见 [8ar] ③b）。
+    """
+    want = {}
+    for url, title in (pairs or []):
+        t = str(title or "").strip()
+        if url and t:
+            want[str(url)] = t
+    if not want:
+        return 0
+    empty = {r["url"] for r in _query("SELECT url FROM sites WHERE task_id=? "
+                                      "AND (title IS NULL OR title='')", (task_id,))}
+    n = 0
+    for url, t in want.items():
+        if url not in empty:
+            continue
+        _exec("UPDATE sites SET title=? WHERE task_id=? AND url=?"
+              " AND (title IS NULL OR title='')", (t, task_id, url))
+        n += 1
+    return n
+
+
 def set_site_shots(task_id, pairs):
     """写入站点截图路径：`pairs` 是 `[(url, rel_path), ...]`。"""
     rows = [(rel or "", task_id, url) for url, rel in (pairs or []) if url]

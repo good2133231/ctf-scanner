@@ -21,6 +21,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# 与 smoke.yml 同一口径（理由写在那边）：`group` 带上 workflow 名，两条门禁互不取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   contrast:
     name: 配色对比度（WCAG AA）
@@ -44,7 +49,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.9"          # 续140 提速：四个装依赖的步骤每次都重装同一份 20 个包的闭包。`cache: pip` 缺省只
+          # glob `**/requirements*.txt`，看不见 requirements.lock ⇒ 下面那行是必需的，不是装饰（忘了它就是静默不缓存）。
+          cache: pip
+          cache-dependency-path: requirements.lock
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
@@ -62,7 +70,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.9"          # 续140 提速：四个装依赖的步骤每次都重装同一份 20 个包的闭包。`cache: pip` 缺省只
+          # glob `**/requirements*.txt`，看不见 requirements.lock ⇒ 下面那行是必需的，不是装饰（忘了它就是静默不缓存）。
+          cache: pip
+          cache-dependency-path: requirements.lock
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
@@ -91,6 +102,9 @@ jobs:
         with:
           python-version: "3.14"
           allow-prereleases: true
+          # 探针也要缓存（理由同上面那三处：`cache: pip` 看不见 .lock，必须指名依赖文件）
+          cache: pip
+          cache-dependency-path: requirements.lock
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip

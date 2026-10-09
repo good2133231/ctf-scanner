@@ -12,14 +12,13 @@
   （`-mc` 这一项**已有意偏离**，理由与实测数据见 `is_alive`；`-nfs` 是本轮补上的。）
 """
 import json
-import re
 from urllib.parse import urlparse
 
 from .base import Stage
 from .. import blacklist, db, extdom, flagfind, wildcard
 from ..fingerprint import identify, favicon_md5
-from ..utils import (REDIRECT_STATUS, which, verify_tool, run_cmd, read_lines, write_lines,
-                     pool_run, http_request)
+from ..utils import (REDIRECT_STATUS, html_title, which, verify_tool, run_cmd, read_lines,
+                     write_lines, pool_run, http_request)
 
 
 # 「哪些状态算需要跟随的跳转」由 `scanner/utils.py` 单独定义（取证这里与显示侧
@@ -70,10 +69,9 @@ def attach_redirect_info(sites, fetch, workers=8, logger=None):
         r = fetch(s.get("url"))
         if not r or not r.get("status"):
             return None
-        t = TITLE_RE.search(r.get("text") or "")
         return {"url": s.get("url"), "redirect_url": str(r.get("url") or ""),
                 "redirect_status": int(r.get("status") or 0),
-                "redirect_title": (t.group(1).strip()[:200] if t else "")}
+                "redirect_title": html_title(r.get("text"))}
 
     got = {x["url"]: x for x in pool_run(_one, red, workers=workers, logger=logger,
                                        label="跳转后取证") if x}
@@ -91,7 +89,6 @@ def attach_redirect_info(sites, fetch, workers=8, logger=None):
                     + ("" if n == len(red)
                        else "（落地页取不到的那些不编数，页面仍显示原始那一跳）"))
     return n
-TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 
 
 def probe_candidates(ctx, candidates):
@@ -176,7 +173,7 @@ def probe_candidates(ctx, candidates):
             for u in tries:
                 resp = http_request(u, timeout=timeout, settings=ctx.settings, auth=True)
                 if resp and is_alive(resp.get("status")):
-                    t = TITLE_RE.search(resp.get("text") or "")
+                    title = html_title(resp.get("text"))
                     # flag 候选（续126）：正文已经在手（上面刚用它取过标题），**不多发一个请求**。
                     flagfind.harvest(ctx, resp.get("url") or u, resp.get("text") or "", "probe")
                     p = urlparse(resp.get("url") or u)
@@ -188,7 +185,7 @@ def probe_candidates(ctx, candidates):
                         "url": resp.get("url") or u, "host": p.hostname,
                         "port": str(port or (443 if p.scheme == "https" else 80)),
                         "status": resp.get("status"),
-                        "title": (t.group(1).strip()[:200] if t else ""),
+                        "title": title,
                         "length": resp.get("length"),
                         "server": (resp.get("headers") or {}).get("Server", ""),
                         "tech": ",".join(identify(resp)), "source": "builtin",
@@ -271,10 +268,16 @@ def register_sites(ctx, sites, round2=False):
         except (TypeError, ValueError):
             k = 0
         _cls[k] = _cls.get(k, 0) + 1
+    # 「有站点却没有标题」是用户会盯着问的事（2026-10-09 实测 agent.weex.com 原始 HTML 无
+    # `<title>`，标题由 JS 注入）。在这里就说清"不是抓取失败"以及"在哪儿能补到"，
+    # 而不是留一排 `-` 让人以为漏扫了。
+    _nt = sum(1 for s in uniq if not str(s.get("title") or "").strip())
     ctx.logger.info(
         f"[probe] {'二层新增站点' if round2 else '存活站点'} {len(uniq)} 个（按状态码首位 "
         + " ".join(f"{k}xx={_cls[k]}" for k in sorted(_cls))
         + "；口径＝服务端回了真实状态码就算，4xx/5xx 多为 CDN 边缘活着、源站挂了，不等于站点可用"
+        + (f"；{_nt}/{len(uniq)} 个原始 HTML 里没有 <title>（SPA 外壳常见，**不是抓取失败**；"
+           f"勾选「截图」会用无头浏览器渲染后补标题）" if _nt else "")
         + (f"；跨运行去重跳过 {_dup} 个已入库站点" if _dup else "") + ")")
     return uniq
 

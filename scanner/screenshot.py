@@ -16,7 +16,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from .utils import run_cmd
+from .utils import html_title, run_cmd
 
 # 命令名（PATH 里能找到就用）
 _CMD_NAMES = ("msedge", "chrome", "chromium", "google-chrome", "chromium-browser",
@@ -133,14 +133,22 @@ def _abs_out(p):
     return Path(p).absolute()
 
 
-def capture(url, out_path, settings=None, timeout=30, throttle=None):
-    """给单个 URL 截图，写入 `out_path`。返回 `(ok, err)`。
+def capture(url, out_path, settings=None, timeout=30, throttle=None, want_title=False):
+    """给单个 URL 截图，写入 `out_path`。返回 `(ok, err, title)`。
 
     `throttle`（F2）：传入时这次子进程调用占一个 `"subprocess"` 名额（并消耗预算）。
+
+    `want_title=True`：在**同一次**浏览器调用里加 `--dump-dom`，把渲染完成后的 DOM 打到 stdout，
+    从中取 `<title>` 作为第三个返回值（拿不到就是空串）。为什么要挤进同一次调用：
+    有些站（Next.js / Vue 的 SPA 外壳）原始 HTML 里**根本没有** `<title>` —— 实测授权目标
+    `agent.weex.com` 的响应 1298 字节、9 个 `<script>`，无 `<title>` 也无 `og:title`，
+    标题由 JS 注入；httpx 与内置探测取不到标题**不是抓取失败**，是源头没有。
+    而再起一次浏览器是本模块最贵的动作（单站点 1~3 秒 + 明显内存），所以共用同一次进程、零额外启动。
+    不传 `want_title` 时 argv 与改动前逐字节一致（截图行为不受任何影响）。
     """
     binary = browser_path(settings)
     if not binary:
-        return False, "未找到可用的无头浏览器（Edge/Chrome）；可在策略配置里填 screenshot.browser"
+        return False, "未找到可用的无头浏览器（Edge/Chrome）；可在策略配置里填 screenshot.browser", ""
     cfg = (settings or {}).get("screenshot", {}) or {}
     size = str(cfg.get("window") or "1280x900").replace(" ", "")
     out_path = _abs_out(out_path)
@@ -148,13 +156,20 @@ def capture(url, out_path, settings=None, timeout=30, throttle=None):
     tmp_profile = tempfile.mkdtemp(prefix="ctfscan-shot-")
     try:
         argv = [binary, *_FLAGS, f"--user-data-dir={tmp_profile}",   # 隔离：不碰用户真实浏览器配置
-                f"--window-size={size}", f"--screenshot={out_path}", str(url)]
+                f"--window-size={size}", f"--screenshot={out_path}"]
+        if want_title:
+            argv.append("--dump-dom")             # 渲染后的 DOM 打到 stdout，顺带取标题
+        argv.append(str(url))
         rc, _out, err = run_cmd(argv, timeout=int(timeout or 30), throttle=throttle)
+        # 只看 DOM 开头：`<title>` 一定在 `<head>` 里，而 `--dump-dom` 能把整页吐成几 MB，
+        # 拿它跑正则纯属浪费（本阶段是给流水线"锦上添花"的，不许变成新的耗时大头）。
+        title = html_title(str(_out or "")[:200000]) if want_title else ""
         if out_path.exists() and out_path.stat().st_size > 0:
-            return True, ""
-        return False, (err or f"退出码 {rc}")[:200]
+            return True, "", title
+        # 截图没产物时标题仍可能已经拿到（DOM 出来了、PNG 没写成）—— 别把它一起丢掉
+        return False, (err or f"退出码 {rc}")[:200], title
     except Exception as e:                        # 兜底：截图失败绝不影响主流程
-        return False, str(e)[:200]
+        return False, str(e)[:200], ""
     finally:
         shutil.rmtree(tmp_profile, ignore_errors=True)
 

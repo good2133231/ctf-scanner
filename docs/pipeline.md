@@ -52,7 +52,8 @@
 | `httpx -l httpx_url -nfs -title -tech-detect -json` | probe | httpx 适配器；**不再传 `-mc` 状态码白名单**（服务端回了真实状态码就算存活，见 `probe.is_alive`），`-nfs` 锁住输入里的 scheme |
 | `python dirmap.py -iF dir_out -e all` | dirscan | dirmap 适配器（`-iF` 批量 URL），并解析其 `output/` 产物；**仅 `mode=deep` 时调用**（浅扫不碰外部工具） |
 | （手工没有的部分） | vulnscan | POC 引擎 + OWASP Top10 启发式检查（分级/分类门控 + WAF 探测） |
-| （手工没有的部分） | screenshot | 本机无头 Edge/Chrome（`--headless=new` + `--ignore-certificate-errors`）截图，产物 `shots/*.png` 并回填 `sites.shot`；默认关。**不校验证书**（自签/过期/私有 CA 也能截，续64） |
+| （手工没有的部分） | screenshot | 本机无头 Edge/Chrome（`--headless=new` + `--ignore-certificate-errors`）截图，产物 `shots/*.png` 并回填 `sites.shot`；**同一次调用顺带回填「渲染后标题」**（续140，
+  仅对原始 HTML 没有 `<title>` 的站点用 `--dump-dom` 取渲染后 DOM，只补空、不覆盖）；默认关。**不校验证书**（自签/过期/私有 CA 也能截，续64） |
 | `openssl s_client -connect host:443 -showcerts` | cert | 一次只读 TLS 握手取 DER → 纯标准库 ASN.1 解析（CN/SAN/有效期/自签/指纹）→ `certs` 表；**不校验证书**（自签/过期是常态）；默认关 |
 | （手工没有的部分） | intel | 拉 CISA KEV 公开 JSON → 与本地指纹**白名单式**匹配 → 「线索」（`leads` 表）；单向下行、默认关 |
 | （手工没有的部分） | heuristic | 对已采集数据做**零请求**差分/异常聚合（软 404 / 高价值入口 / 同标题 / 目录离群 / 同 C 段）→ 「线索」；默认关 |
@@ -397,6 +398,12 @@
 
 - 位置：**`probe` 之后、`osint` 之前**（必须先有存活站点才能截图；旧编号里没有它，故排在 ①~⑧ 之后书写）；
 - 门控：`screenshot.enabled` 默认关；即便打开，`screenshot.available()` 探测不到可用浏览器时**只告警跳过、不抛错**；
+- **渲染后标题**（续140）：`sites.title` 为空的站点才要 DOM（`--dump-dom` 挂在**同一次**浏览器调用上，
+  零额外启动），补到的标题同时写库（`db.set_site_titles`，SQL 里带 `AND (title IS NULL OR title='')`）
+  与写 `ctx.results["sites"]`（后面的 osint/jsmine/dirscan/vulnscan 读这批行）；
+  判据 `<title>` 只在 `scanner/utils.py::html_title` 定义一次，probe / dirscan / 这里全部复用；
+  拿不到就留空串并说一句实话（「M 个原始 HTML 没有 `<title>`，SPA 外壳常见，不是抓取失败」）——
+  **没开截图时仍然拿不到渲染后标题**，那是门控，不是漏扫（`probe` 的入库日志会把这件事说出来）；
 - 输入：`ctx.results["sites"]`（为空回退 `db.list_sites`），上限 `screenshot.max_sites`（默认 20，超出只截前 N 个）；
 - 处理：调用本机已装的 Edge/Chrome 无头模式（`--headless=new` **+ `--ignore-certificate-errors`**）
   截整页，视口 `screenshot.window`

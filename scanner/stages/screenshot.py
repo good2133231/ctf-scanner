@@ -52,6 +52,9 @@ class ScreenshotStage(Stage):
         timeout = int(cfg.get("timeout", 30) or 30)
         shot_dir = ctx.workdir / "shots"
         rows, ok = [], 0
+        # 只有"原始 HTML 里没有标题"的那些站点，才值得为渲染后标题多要一次 DOM
+        no_title = sum(1 for s in sites if not str(s.get("title") or "").strip())
+        title_rows = []
         ctx.logger.info(f"[screenshot] 开始截图 {len(sites)} 个站点 …")
         for s in sites:
             if ctx.stopped():
@@ -62,8 +65,13 @@ class ScreenshotStage(Stage):
                 continue
             name = screenshot.shot_name(url)
             out = shot_dir / name
-            good, err = screenshot.capture(url, out, ctx.settings, timeout=timeout,
-                                           throttle=ctx.throttle)
+            want_title = not str(s.get("title") or "").strip()
+            good, err, rtitle = screenshot.capture(url, out, ctx.settings, timeout=timeout,
+                                                   throttle=ctx.throttle, want_title=want_title)
+            if want_title and str(rtitle or "").strip():
+                # 内存里也补上：screenshot 之后还有 osint / jsmine / dirscan / vulnscan 读这批站点行
+                s["title"] = rtitle
+                title_rows.append((url, rtitle))
             if good:
                 ok += 1
                 # 库里只存**相对任务工作目录**的路径（shots/xxx.png）：
@@ -77,4 +85,11 @@ class ScreenshotStage(Stage):
         if rows:
             db.set_site_shots(ctx.task_id, rows)
         write_lines(ctx.workdir / "shots.txt", [f"{u}\t{r}" for u, r in rows])
+        filled = db.set_site_titles(ctx.task_id, title_rows) if title_rows else 0
+        if no_title:
+            # 必须说出来：否则页面上那排 `-` 会被读成"我们抓坏了"（用户 2026-10-09 的一问就是它）。
+            ctx.logger.info(
+                f"[screenshot] 本轮 {len(sites)} 个站点里 {no_title} 个**原始 HTML 没有 <title>**"
+                f"（SPA 外壳常见，不是抓取失败）；无头浏览器渲染后补到标题 {filled} 个"
+                + ("，其余连渲染后也没有标题" if filled < no_title else ""))
         ctx.logger.info(f"[screenshot] 完成 {ok}/{len(sites)} 个")

@@ -41,6 +41,7 @@ def _grp_time(line):
     if _TFILE is not None:
         try:
             _TFILE.write("%.2f\t%s\n" % (gap, line[:80].replace("\n", " ")))
+            _TFILE.flush()      # 写完就落盘：被强杀的那次也要留下已记的账（0 字节文件等于没测）
         except Exception:
             pass
 
@@ -11314,13 +11315,14 @@ http:
     _png7z = Path(_TMPDIR) / "t7z" / "https.png"
     try:
         _fx7z, _hb7z, _sb7z = _dfx7z.start_both()
-        _ok7z, _err7z = _shot7z.capture(_sb7z, _png7z, settings)
+        _ok7z, _err7z, _t7z = _shot7z.capture(_sb7z, _png7z, settings)
         if not _ok7z:
             # 环境限制（无浏览器 / 容器里一次性 --screenshot 超时）—— 同流水线与 [7x] 口径降级。
             print(f"[7z] 续64 端到端 **跳过（不是通过，环境限制：{_err7z}）**")
         else:
             assert _png7z.exists() and _png7z.stat().st_size > 0, \
                 "截图返回 True 但 png 为空 —— 渲染异常（证书错误仍可能拦住了渲染）"
+            assert _t7z == "", "没要标题（旧调用方式）就不该获得标题"
     finally:
         if _fx7z is not None:
             _dfx7z.stop(_fx7z)
@@ -16024,6 +16026,7 @@ expression: r0()
     assert _a125.getvalue() == _b125.getvalue(), \
         "计时钩子改变了 stdout 内容 —— 数行数/数字符的断言都会被它打红（本轮真的这样红过一次）"
     _before125 = len(_g125["_TSTATE"]["rows"])
+    _keep125 = _g125["_TIMING"]          # **进来时是什么就得还什么**（旧写法硬写 False）
     _g125["_TIMING"] = True
     try:
         # 这两次调用会真的打印，吞进内存里 —— 门禁日志不许被测试自己的动作污染
@@ -16033,7 +16036,15 @@ expression: r0()
         assert len(_g125["_TSTATE"]["rows"]) == _before125 + 1, "归因判据不认组行或多认了"
         assert _g125["_TSTATE"]["rows"][-1][1].startswith("[9z]"), _g125["_TSTATE"]["rows"][-1]
     finally:
-        _g125["_TIMING"] = False
+        _g125["_TIMING"] = _keep125
+    # 还完值还要**证明钩子真的接着记账**：门禁自己开着 timing 时，走模块级 `print`
+    # （它已被重绑成 `_print_timed`）必须再添一行账。这一条红就等于本轮实测到的那个症状
+    if _keep125:
+        _n125 = len(_g125["_TSTATE"]["rows"])
+        with _ctx125.redirect_stdout(_io125.StringIO()):
+            _g125["print"]("[9z] 恢复判据 ok")
+        assert len(_g125["_TSTATE"]["rows"]) == _n125 + 1, \
+            "计时探针把自己关掉了：后面的组一律不计账 ⇒ smoke-timing.jsonl 恒 0 字节"
     _g125["_TSTATE"]["rows"] = _g125["_TSTATE"]["rows"][:_before125]     # 别把测试行留在总账里
 
     # ④ CI 分层：smoke.yml 仍是权威（3.9 全量），新文件必须覆盖另外三条门禁口径
@@ -18796,17 +18807,41 @@ expression: r0()
     #     （CI 与容器门禁都跑 3.9）。主机 3.14 上门禁全绿、容器里才炸出 TypeError ——
     #     所以这条静态扫描钉在主机也会跑的那一组里，不让它再混进仓库。
     _bad39 = []
-    for _py in sorted(set((ROOT / "scanner").rglob("*.py")) | set((ROOT / "tools").rglob("*.py"))
-                      | set((ROOT / "cli").rglob("*.py")) | set((ROOT / "gui").rglob("*.py"))):
+    import re as _re39
+    _pat39 = r"\.(read|write)_text\s*\([^)]*\bnewline\s*="
+    # 续140 把范围补全：`tests/*.py` 与仓库根那几个入口脚本以前**不在扫描里**，而本轮那个 3.10+ 的
+    # `read_text(newline=)` 正是长在 `tests/smoke.py` 自己身上 —— 门禁跑的正是 3.9，它更该守口径。
+    _scan39 = (set((ROOT / "scanner").rglob("*.py")) | set((ROOT / "tools").rglob("*.py"))
+               | set((ROOT / "cli").rglob("*.py")) | set((ROOT / "gui").rglob("*.py"))
+               | set((ROOT / "tests").glob("*.py")) | {p for p in ROOT.glob("*.py")})
+    for _py in sorted(_scan39):
         if "dirmap" in _py.parts or "fscan" in _py.parts or "__pycache__" in _py.parts:
             continue          # 第三方落点不参与本仓红线（与 [5b]/[8d] 同一口径）
         for _ln, _t in enumerate(_py.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             # 只看真代码：那条"别用 write_text(newline=)"的注释本身两个词都在，会把扫描打红
             if _t.lstrip().startswith("#"):
                 continue
-            if "write_text(" in _t and "newline=" in _t:
+            # 只匹配**真实调用**。旧写法是两条子串（`"read_text(" in _t and "newline=" in _t`），
+            # 于是它把**自己写在 tests/smoke.py 里的管道行**全报成违规 —— 容器 3.9 门禁当场红。
+            # 剩下的豁免按变量名（`_bad39`/`_scan39`/`_pat39` 只出现在扫描本体里），注释行本来就被
+            # 上一条 `startswith("#")` 挡掉；判据本身**不许**为此放水（证伪②钉住这一点）。
+            if _re39.search(_pat39, _t):
+                if any(_k in _t for _k in ("_bad39", "_scan39", "_pat39", "_probe39")):
+                    continue
                 _bad39.append(f"{_py.relative_to(ROOT)}:{_ln}")
-    assert not _bad39, f"用了 3.10+ 才有的 write_text(newline=…)：{_bad39}"
+    assert not _bad39, f"用了 3.10+ 才有的 write_text/read_text(newline=…)：{_bad39}"
+    # §6.1 证伪（三个方向都要真红）：① 判据认不认 `read_text` 那一半；② 注释行的豁免来自
+    # `startswith("#")` 而不是判据变松；③ 范围真的覆盖到 tests/ 与仓库根（旧范围只有那四个目录，
+    # 本轮这个洞就是这么漏的，只改代码不改扫描等于下次再来一遍）。
+    _probe39 = '        return p.read_text(encoding="utf-8", newline="")'
+    assert _re39.search(_pat39, _probe39), \
+        "read_text 那半条判据写法漂了（造出来的违规调用没被同一个正则命中）"
+    _probe39b = '        # 别用 p.read_text(encoding="utf-8", newline="") 这种写法'
+    assert _re39.search(_pat39, _probe39b) and _probe39b.lstrip().startswith("#"), \
+        "注释行必须**仍然被正则命中**、靠 startswith(\"#\") 那条豁免 —— 判据本身不许放水"
+    assert (ROOT / "tests" / "smoke.py") in _scan39, \
+        "扫描没覆盖 tests/ —— 判据再对也抓不到本轮这种洞"
+    assert any(p.name == "run_devflow.py" for p in _scan39), "扫描没覆盖仓库根入口脚本"
 
     # ⑩ 新开关三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单/POST 映射 ↔ 开发模式压量）
     from scanner.config import DEFAULTS as _DEF8aq
@@ -18852,6 +18887,479 @@ expression: r0()
           "出路｜字典过小自己喊并指名那条导入命令｜每轮都报「域名 × 词 = 多少次 DNS 查询」｜"
           "`_spread` 换成恒等的变异立刻硬啃整份深字典（断言有牙）｜recrawl 与四个 limits 键三方一致，"
           "且开发模式/自检把词数与补探主机数压回个位数（用户装深字典不许把 CI 拖慢）")
+    # ---------------- [8ar] 续140：「渲染后标题」（SPA 站点的原始 HTML 里根本没有 <title>） ----------------
+    #      用户点单（2026-10-09）：「有些明明有标题为什么我们就是获取不到标题 我们能在等待时间把这个解决了吗」
+    #      附的那一行就是任务 14 站点 #279 `https://agent.weex.com/` 200 / tech=nextjs,react / 标题空。
+    #      本轮实测取证：该站响应体 1298 字节、9 个 `<script>`，**没有 `<title>`、没有 og:title、没有 h1**
+    #      —— 标题是 JS 注进来的。所以 httpx 的 `-title` 与内置探测取不到标题**不是抓取失败**，是源头没有；
+    #      唯一能补的是"渲染"，而渲染要浏览器（本仓最贵的动作，单站点 1~3 秒 + 明显内存）。
+    #      修法（零额外启动）：把 `--dump-dom` 挤进**截图那同一次**浏览器调用，只给"标题为空"的站点要 DOM，
+    #      回填 SQL 自带 `AND (title IS NULL OR title='')` —— 只补空、绝不覆盖已经拿到的标题。
+    import re as _re8ar
+    import tempfile as _tf8ar
+    from scanner import screenshot as _shot8ar
+    from scanner.stages import probe as _pb8ar
+    from scanner.stages import screenshot as _st8ar
+    from scanner.utils import TITLE_RE as _TRE8ar, html_title as _ht8ar
+
+    # ① 单一判据本身：剥内嵌标签、跨行、截断、取不到就是空串（空串＝真没有，不编一个）
+    assert _ht8ar("<title>简单</title>") == "简单"
+    assert _ht8ar("<title>  带空白  </title>") == "带空白"
+    assert _ht8ar("<title><span>A</span>B</title>") == "AB", "脏写法（标题里嵌标签）要剥掉而不是留尖括号"
+    assert _ht8ar("<title>&lt;占位&gt;</title>") == "&lt;占位&gt;", "实体原样保留（不是本函数的职责，别顺手改语义）"
+    assert _ht8ar("<title>" + "x" * 500 + "</title>") == "x" * 200, "截到 200 字符（库里那一列与页面都按这个口径）"
+    assert _ht8ar("<title>\n  跨行\n  标题\n</title>") != "", "re.S：Next.js/Vue 的 head 经常跨行"
+    assert _ht8ar("<titleitem>假标题</titleitem>") == "", \
+        "开标签允许 `<title ` 带属性的写法，但必须**成对**出现 `</title>` 才算标题"
+    # ⚠️ 已知边界（**沿用旧正则的口径**，不是本轮新挖的洞）：`<titleitem>x</title>` 会被当成标题，
+    #    因为 `[^>]*` 会吞掉 `item`。真实页面没有这种标签；真要收紧就连 httpx `-title` 的口径一起
+    #    对照着改，别只改一半（同一判据只许有一处，也意味着别处不许偷偷更严或更松）。
+    assert _ht8ar("<titleitem>x</title>") == "x", "把上面那条边界写死，改动它必须让这条红"
+    assert _ht8ar("<p>正文<title>第二个</title></p><title>第一个</title>") == "第二个", \
+        "只取**第一个** <title>（与 httpx -title 同口径：一份页面多个 title 时浏览器也认第一个）"
+    assert _ht8ar("<head></head><body><title>正文里的</title></body>") == "正文里的", \
+        "不要求在 head 内（有站点把标题写在别处，写死位置就会白丢标题）"
+    assert _ht8ar("") == "" and _ht8ar(None) == "" and _ht8ar("<html>无标题</html>") == ""
+    assert _TRE8ar.flags & _re8ar.S and _TRE8ar.flags & _re8ar.I, "re.S|re.I 是判据的一部分"
+    # §6.1 变异证伪：把 re.S 摘掉 ⇒ 跨行标题必须判成"没有标题"（否则上面那条断言是空写的）
+    _noS8ar = _re8ar.compile(r"<title[^>]*>(.*?)</title>", _re8ar.I)
+    assert _noS8ar.search("<title>\n  跨行\n</title>") is None, \
+        "变异没让事情变坏 = 上面那条 re.S 断言根本没挂在判据上"
+
+    # ② 单一判据真的"只此一处"（**整仓扫生产码**，点名式扫描拦不住下一个新加的文件）：
+    #      生产码 = scanner/ + gui/ + tools/；tests/ 里写 `<title>` 字面量是给夹具与断言用的，
+    #      logs/ 是历史补丁脚本（里面全是旧写法，扫它只会把自己钉死）。
+    _prod8ar = sorted([p for _d in ("scanner", "gui", "tools") for p in (ROOT / _d).rglob("*.py")])
+    _defs, _regexes, _hand, _importers = [], [], [], []
+    for _p8ar in _prod8ar:
+        _s8ar = _p8ar.read_text(encoding="utf-8", errors="replace")
+        _rel8ar = str(_p8ar.relative_to(ROOT)).replace("\\", "/")
+        if _re8ar.search(r"TITLE_RE\s*=\s*re\.compile", _s8ar):
+            _defs.append(_rel8ar)
+        if "<title[^>]*>" in _s8ar:
+            _regexes.append(_rel8ar)
+        if _re8ar.search(r"\.group\(1\)\s*\.\s*strip\(\)\s*\[\s*:?\s*200\s*\]", _s8ar):
+            _hand.append(_rel8ar)
+        if _re8ar.search(r"from\s+\.probe\s+import\s+[^#\n]*TITLE_RE", _s8ar):
+            _importers.append(_rel8ar)
+    assert _defs == ["scanner/utils.py"], f"`<title>` 正则在多处定义（迟早一边一个，AGENTS §7）：{_defs}"
+    assert _regexes == ["scanner/utils.py"], f"自己写 `<title>` 字面量的生产文件只该有 utils：{_regexes}"
+    assert _hand == [], f"这些文件还在手写 group(1).strip()[:200] 提取标题：{_hand}"
+    assert _importers == [], f"标题判据不该从阶段模块转手 import：{_importers}"
+    assert "html_title" in (ROOT / "scanner/stages/dirscan.py").read_text(encoding="utf-8"), \
+        "dirscan 命中页标题也要走同一判据"
+    assert "--dump-dom" in (ROOT / "scanner/screenshot.py").read_text(encoding="utf-8"), \
+        "`--dump-dom` 只该出现在真正的浏览器调用处"
+    _t8ar_stage = (ROOT / "scanner/stages/screenshot.py").read_text(encoding="utf-8")
+    for _k8ar in ("want_title", "set_site_titles", "原始 HTML 没有 <title>"):
+        assert _k8ar in _t8ar_stage, f"阶段里少了 {_k8ar}（回填链路断了就会静默退回\x22永远没标题\x22）"
+
+    # ③ db.set_site_titles：只补空、不覆盖，且返回的是**真填上的条数**
+    _tid8ar = db.create_task("smoke-8ar-db", "lab8ar.test", ["probe"], {})
+    db.insert_sites(_tid8ar, [
+        {"url": "https://empty.lab8ar.test/", "host": "empty.lab8ar.test", "status": 200, "title": ""},
+        {"url": "https://real.lab8ar.test/", "host": "real.lab8ar.test", "status": 200, "title": "已有标题"},
+        {"url": "https://null.lab8ar.test/", "host": "null.lab8ar.test", "status": 200, "title": None},
+    ])
+
+    def _title_of(tid, url):
+        return {r["url"]: (r["title"] or "") for r in db.list_sites(tid)}.get(url)
+
+    _n8ar = db.set_site_titles(_tid8ar, [("https://empty.lab8ar.test/", "渲染后 A"),
+                                         ("https://real.lab8ar.test/", "想覆盖它"),
+                                         ("https://null.lab8ar.test/", "渲染后 B"),
+                                         ("https://nosuch.lab8ar.test/", "库里没有这行"),
+                                         ("https://empty.lab8ar.test/", "   "),
+                                         ("", "没 URL")])
+    assert _n8ar == 2, f"只应补两条空标题，实际报 {_n8ar}（把「试了几次」当「填了几条」就是谎报）"
+    assert _title_of(_tid8ar, "https://empty.lab8ar.test/") == "渲染后 A"
+    assert _title_of(_tid8ar, "https://null.lab8ar.test/") == "渲染后 B", "NULL 也算空标题（老库行就是 NULL）"
+    assert _title_of(_tid8ar, "https://real.lab8ar.test/") == "已有标题", "已经拿到的标题不许被渲染值覆盖"
+    assert db.set_site_titles(_tid8ar, []) == 0 and db.set_site_titles(_tid8ar, None) == 0
+    # §6.1 变异证伪：去掉那句 `AND (title IS NULL ...)` 就会覆盖真标题 ⇒ 说明 ③ 的守卫不是空写
+    db._exec("UPDATE sites SET title=? WHERE task_id=? AND url=?",
+             ("粗暴覆盖", _tid8ar, "https://real.lab8ar.test/"))
+    assert _title_of(_tid8ar, "https://real.lab8ar.test/") == "粗暴覆盖", \
+        "数据本身对「无守卫 UPDATE」不敏感 = 上面那条守卫断言是假的"
+    db._exec("UPDATE sites SET title=? WHERE task_id=? AND url=?",
+             ("已有标题", _tid8ar, "https://real.lab8ar.test/"))
+    # 跨任务隔离：同名 URL 属于另一个任务时不能被这个任务改到
+    _tid8ar2 = db.create_task("smoke-8ar-db2", "lab8ar.test", ["probe"], {})
+    db.insert_sites(_tid8ar2, [{"url": "https://empty.lab8ar.test/", "host": "empty.lab8ar.test",
+                               "status": 200, "title": ""}])
+    assert db.set_site_titles(_tid8ar2, [("https://empty.lab8ar.test/", "本任务的标题")]) == 1
+    assert _title_of(_tid8ar2, "https://empty.lab8ar.test/") == "本任务的标题"
+    assert _title_of(_tid8ar, "https://empty.lab8ar.test/") == "渲染后 A", "回填串了任务 = SQL 漏了 task_id"
+
+    # ③b 同一 URL 在一个任务里占多行（老库/跨运行去重前会留下这种行）：
+    #      两行都要补到，但**计数口径是"站点(URL)"而不是"行数"** —— 日志那句"补到标题 K 个"
+    #      说的是"几个站"，用户按站读；把它写成行数就会报出比站点总数还大的数。
+    _tid8ar3 = db.create_task("smoke-8ar-dup", "lab8ar.test", ["probe"], {})
+    db.insert_sites(_tid8ar3, [{"url": "https://d.lab8ar.test:8443/", "host": "d.lab8ar.test",
+                               "port": "8443", "status": 200, "title": ""}])
+    db.insert_sites(_tid8ar3, [{"url": "https://d.lab8ar.test:8443/", "host": "d.lab8ar.test",
+                               "port": "8443", "status": 301, "title": ""}])
+    assert db.set_site_titles(_tid8ar3, [("https://d.lab8ar.test:8443/", "同一个标题")]) == 1, \
+        "计数口径＝站点(URL)；同一 URL 占两行也只报 1"
+    # ⚠️ 必须**重新查**：`sqlite3.Row` 是取那一刻的快照，拿更新前查出来的行去断言 = 永远读到旧值
+    _rows8ar3 = [r for r in db.list_sites(_tid8ar3) if r["url"] == "https://d.lab8ar.test:8443/"]
+    assert len(_rows8ar3) >= 1 and all((r["title"] or "") == "同一个标题" for r in _rows8ar3), \
+        [(r["status"], r["title"]) for r in _rows8ar3]
+
+    # ④ screenshot.capture(want_title)：argv 只在要标题时多一个 --dump-dom，其余逐字节不变
+    _calls8ar = []
+
+    def _shot_arg(path_argv):
+        return [a for a in path_argv if a.startswith("--screenshot=")][0].split("=", 1)[1]
+
+    def _rc8ar(argv, timeout=None, throttle=None, **_kw):
+        _calls8ar.append(list(argv))
+        Path(_shot_arg(argv)).parent.mkdir(parents=True, exist_ok=True)
+        Path(_shot_arg(argv)).write_bytes(b"\x89PNG fake")
+        return 0, "<html><head><title>渲染后的标题</title>" + ("x" * 1000) + "</head></html>", ""
+
+    _st8ar_cfg = copy.deepcopy(settings)
+    _st8ar_cfg["screenshot"] = dict(_st8ar_cfg.get("screenshot") or {},
+                                    enabled=True, browser=sys.executable, timeout=5)
+    assert _shot8ar.available(_st8ar_cfg), "browser 配成了本机存在的可执行文件，available 就该 True"
+    _keep8ar = (_shot8ar.run_cmd, _shot8ar.capture)
+    _png8ar = Path(_tf8ar.mkdtemp(prefix="smoke-8ar-shot-")) / "a.png"
+    try:
+        _shot8ar.run_cmd = _rc8ar
+        _ok_a, _err_a, _t_a = _shot8ar.capture("https://agent.lab8ar.test/", _png8ar, _st8ar_cfg)
+        assert _ok_a and _t_a == "", "没要标题就必须拿不到标题（并且不许因此失败）"
+        _argv_a = _calls8ar[-1]
+        assert "--dump-dom" not in _argv_a, "默认不许加 --dump-dom（截图路径的 argv 必须与改动前一致）"
+        assert _argv_a[-1] == "https://agent.lab8ar.test/" and \
+            _argv_a[-2].startswith("--screenshot="), \
+            f"不加 --dump-dom 时 URL 仍是最后一个参数（改动前就是这个形状）：{_argv_a[-2:]}"
+        _ok_b, _err_b, _t_b = _shot8ar.capture("https://agent.lab8ar.test/", _png8ar, _st8ar_cfg,
+                                               want_title=True)
+        assert _ok_b and _t_b == "渲染后的标题", f"同一次调用要顺带拿到标题：{_err_b!r}/{_t_b!r}"
+        _argv_b = _calls8ar[-1]
+        assert _argv_b.count("--dump-dom") == 1 and _argv_b[-1] == "https://agent.lab8ar.test/"
+        assert _argv_b[-2] == "--dump-dom", "--dump-dom 要紧贴 URL 之前（浏览器对参数顺序不敏感，但别夹在中间）"
+
+        def _norm(av):      # 每次调用的临时 user-data-dir 目录名必然不同，比的时候剔掉
+            return [a for a in av if a != "--dump-dom" and not a.startswith("--user-data-dir=")]
+        assert _norm(_argv_b) == _norm(_argv_a), \
+            "除了 --dump-dom，argv 必须与不要标题时逐字节一致（不许顺手改别的开关）"
+
+        # DOM 很大也要拿到：只搜前 200K（`<title>` 必在 head 里，拿几 MB 正文跑正则纯属浪费）
+        def _rc_big(argv, timeout=None, throttle=None, **_kw):
+            p = Path(_shot_arg(argv))
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"\x89PNG fake")
+            return 0, "<head><title>大海捞针</title>" + ("y" * 400000) + "</head>", ""
+        _shot8ar.run_cmd = _rc_big
+        assert _shot8ar.capture("https://x.lab8ar.test/", _png8ar, _st8ar_cfg,
+                                want_title=True)[2] == "大海捞针"
+
+        def _rc_late(argv, timeout=None, throttle=None, **_kw):
+            p = Path(_shot_arg(argv))
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"\x89PNG fake")
+            return 0, "<p>" + ("z" * 300000) + "<title>排在 300K 之后</title>", ""
+        _shot8ar.run_cmd = _rc_late
+        assert _shot8ar.capture("https://x.lab8ar.test/", _png8ar, _st8ar_cfg,
+                                want_title=True)[2] == "", \
+            "只看 DOM 开头是**有意**的窗口，不是漏判 —— 改动它必须让这条红"
+        # 截图失败（PNG 没写成）但 DOM 出来了：标题仍要留下，别一起丢掉
+        def _rc_nodraw(argv, timeout=None, throttle=None, **_kw):
+            return 1, "<head><title>产物没写成</title>", "渲染超时"
+        _shot8ar.run_cmd = _rc_nodraw
+        _ok_c, _err_c, _t_c = _shot8ar.capture("https://y.lab8ar.test/",
+                                               Path(_png8ar).parent / "nope.png",
+                                               _st8ar_cfg, want_title=True)
+        assert not _ok_c and "渲染超时" in _err_c and _t_c == "产物没写成"
+    finally:
+        _shot8ar.run_cmd = _keep8ar[0]
+    # 没有浏览器：第三个返回值必须是空串而不是抛异常（旧代码在这里返回**二元组**，
+    # 调用方一旦按三元组解包就会炸 —— 这条把"降级也要返回三元组"钉死。
+    # ⚠️ 判据必须打在 `browser_path` 上而不是"把 settings.browser 留空"：这台机器与 CI runner
+    #    都**真装了** google-chrome（实测 `/usr/bin/google-chrome`），留空只会走自动探测。
+    _keep8bp = _shot8ar.browser_path
+    try:
+        _shot8ar.browser_path = lambda st=None: ""
+        _r8ar = _shot8ar.capture("https://z.lab8ar.test/", _png8ar, _st8ar_cfg, want_title=True)
+        assert isinstance(_r8ar, tuple) and len(_r8ar) == 3 and _r8ar[0] is False \
+            and _r8ar[2] == "" and "未找到可用的无头浏览器" in _r8ar[1]
+    finally:
+        _shot8ar.browser_path = _keep8bp
+
+    # ④b 真·端到端（本机/CI 有浏览器时才钉，环境限制按 [7z]/[7x] 口径明说"跳过不是通过"）：
+    #      原始 HTML 里一个 `<title>` 都没有、标题由 JS 注入 —— 这正是用户那一问的场景。
+    #      实测教训（写下来免得下一个人重踩）：夹具页**必须带 `<meta charset>`**。第一次没带时
+    #      Chrome 按 windows-1252 猜编码、`--dump-dom` 把 `·` 吐成 `Â·`（不是本函数的解码 bug：
+    #      `run_cmd` 这边 preferred encoding 实测就是 UTF-8）。真实站点都在 head 里声明 charset。
+    import http.server as _hs8ar
+    import threading as _th8ar
+
+    _SPA8AR = (b'<html><head><meta charset="utf-8">'
+               b'<script>document.title="Agent Weex Console \xc2\xb7 \xe5\x90\x8e\xe5\x8f\xb0";'
+               b'</script></head><body><div id="root"></div></body></html>')
+    _WANT8AR = "Agent Weex Console · 后台"
+
+    class _H8ar(_hs8ar.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(_SPA8AR)
+
+        def log_message(self, *a):
+            pass
+
+    _cfg_real = copy.deepcopy(settings)
+    _cfg_real["screenshot"] = dict(_cfg_real.get("screenshot") or {}, browser="")
+    _srv8ar = _hs8ar.ThreadingHTTPServer(("127.0.0.1", 0), _H8ar)
+    _url8ar = f"http://127.0.0.1:{_srv8ar.server_address[1]}/"
+    _th8ar.Thread(target=_srv8ar.serve_forever, daemon=True).start()
+    try:
+        if not _shot8ar.available(_cfg_real):
+            print("[8ar] 续140 端到端 **跳过（不是通过，环境限制：本机没有无头浏览器）**")
+        else:
+            _ok_e, _err_e, _t_e = _shot8ar.capture(_url8ar, _png8ar, _cfg_real,
+                                                   timeout=45, want_title=True)
+            assert _t_e == _WANT8AR, \
+                f"有浏览器却补不到 JS 注入的标题：ok={_ok_e} err={_err_e!r} got={_t_e!r}"
+            # 顺带钉住"原始 HTML 确实没有标题" —— 端到端能拿到只可能是**渲染**的功劳
+            import urllib.request as _ur8ar
+            assert b"<title" not in _ur8ar.urlopen(_url8ar, timeout=5).read()
+            print(f"[8ar] 续140 端到端 ok：无头浏览器 --dump-dom 补到 JS 注入的标题 {_WANT8AR!r}")
+    finally:
+        _srv8ar.shutdown()
+        _srv8ar.server_close()
+
+    # ⑤ 阶段级：只给"标题为空"的站点要 DOM，补到的标题同时进库和进内存（后面的阶段还要读它）
+    _lg8ar, _seen_kw = [], []
+
+    class _Rec8ar:
+        def info(self, m, *a): _lg8ar.append(str(m))
+        def warning(self, m, *a): _lg8ar.append("W:" + str(m))
+        def error(self, m, *a): _lg8ar.append("E:" + str(m))
+        def exception(self, m, *a): _lg8ar.append("X:" + str(m))
+        def debug(self, m, *a): pass
+
+    def _ctx8ar(tag, stages=("probe", "screenshot")):
+        st = copy.deepcopy(settings)
+        st["limits"] = dict(st.get("limits") or {}, favicon_md5=False)
+        st["screenshot"] = dict(st.get("screenshot") or {}, enabled=True,
+                               browser=sys.executable, max_sites=10, timeout=5)
+        tid = db.create_task(f"smoke-8ar-{tag}", "lab8ar.test", list(stages), {})
+        _wd = Path(_tf8ar.mkdtemp(prefix="smoke-8ar-")) / tag
+        _wd.mkdir(parents=True, exist_ok=True)
+        return StageContext(tid, f"smoke-8ar-{tag}", parse_lines(["lab8ar.test"]),
+                            list(stages), {}, st, _wd, _Rec8ar())
+
+    def _cap8ar(url, out, st=None, timeout=30, throttle=None, want_title=False):
+        _seen_kw.append(want_title)
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_bytes(b"\x89PNG fake")
+        return True, "", ("SPA 渲染后标题" if want_title else "")
+
+    _c5 = _ctx8ar("stage")
+    _c5.results["sites"] = [
+        {"url": "https://spa.lab8ar.test/", "host": "spa.lab8ar.test", "port": "443",
+         "status": 200, "title": "", "tech": "nextjs,react", "source": "httpx"},
+        {"url": "https://has.lab8ar.test/", "host": "has.lab8ar.test", "port": "443",
+         "status": 200, "title": "已经有标题", "source": "httpx"},
+    ]
+    db.insert_sites(_c5.task_id, _c5.results["sites"])
+    try:
+        _shot8ar.capture = _cap8ar
+        _st8ar.ScreenshotStage(_c5).run()
+    finally:
+        _shot8ar.capture = _keep8ar[1]
+    assert _seen_kw == [True, False], \
+        f"只有「没标题」的那个站点该要 DOM：{list(zip([s['url'] for s in _c5.results['sites']], _seen_kw))}"
+    assert _title_of(_c5.task_id, "https://spa.lab8ar.test/") == "SPA 渲染后标题", "库里要补上"
+    assert _title_of(_c5.task_id, "https://has.lab8ar.test/") == "已经有标题", "有标题的不能被覆盖"
+    assert _c5.results["sites"][0]["title"] == "SPA 渲染后标题", \
+        "内存里也要补：screenshot 之后还有 osint/jsmine/dirscan/vulnscan 读这批站点行"
+    assert any("原始 HTML 没有 <title>" in x for x in _lg8ar), \
+        "必须说一句实话：那一排 `-` 会被读成「我们抓坏了」（用户这一问的根因）"
+    assert any("渲染后补到标题 1 个" in x for x in _lg8ar), _lg8ar[-4:]
+    assert all("截图失败" not in x for x in _lg8ar), _lg8ar[-3:]
+    # ⑤b 产物与库：标题真的**落库**了（内存补上不算数，页面与报告读的是库），截图路径也照旧
+    _rows8ar5 = {r["url"]: r for r in db.list_sites(_c5.task_id)}
+    assert (_rows8ar5["https://spa.lab8ar.test/"]["title"] or "") == "SPA 渲染后标题"
+    assert str(_rows8ar5["https://spa.lab8ar.test/"]["shot"] or "").startswith("shots/"), \
+        "shot 仍写**相对**任务工作目录的路径（AGENTS §0.3：不许出现绝对路径）"
+    assert "C:" not in str(_rows8ar5["https://spa.lab8ar.test/"]["shot"]) and \
+        str(ROOT / "logs") not in str(_rows8ar5["https://spa.lab8ar.test/"]["shot"])
+    _shots_txt = (_c5.workdir / "shots.txt")
+    assert _shots_txt.exists() and "https://spa.lab8ar.test/" in _shots_txt.read_text(encoding="utf-8")
+    assert (_c5.workdir / "shots").is_dir() and any((_c5.workdir / "shots").glob("*.png"))
+    # §6.1 变异证伪：把阶段里的 `want_title` 恒假 ⇒ 一个 DOM 都不该要、标题必须补不到
+    _c5b = _ctx8ar("stage-mut")
+    _c5b.results["sites"] = [{"url": "https://spa-lab.lab8ar.test/", "host": "spa-lab.lab8ar.test",
+                              "port": "443", "status": 200, "title": "", "source": "httpx"}]
+    db.insert_sites(_c5b.task_id, _c5b.results["sites"])
+    _seen_kw.clear()
+    _lg8ar.clear()
+    try:
+        _shot8ar.capture = lambda url, out, st=None, timeout=30, throttle=None, want_title=False: \
+            _cap8ar(url, out, st, timeout, throttle, False)   # 无视调用方，恒按 False 走
+        _st8ar.ScreenshotStage(_c5b).run()
+    finally:
+        _shot8ar.capture = _keep8ar[1]
+    assert _seen_kw and all(v is False for v in _seen_kw), \
+        f"want_title 被吃掉了：{list(_seen_kw)}（阶段必须把「没标题」翻译成 True）"
+    assert _title_of(_c5b.task_id, "https://spa-lab.lab8ar.test/") == "", "补不到就该留空，不许编"
+    assert any("渲染后补到标题 0 个" in x for x in _lg8ar), _lg8ar[-3:]
+
+    # §6.1 变异证伪：capture 拿不到标题（渲染也没标题）时**不许编数**，日志要说"补到 0 个"
+    def _cap_none(url, out, st=None, timeout=30, throttle=None, want_title=False):
+        _seen_kw.append(want_title)
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_bytes(b"\x89PNG fake")
+        return True, "", ""
+
+    _c6 = _ctx8ar("nohit")
+    _c6.results["sites"] = [{"url": "https://spa2.lab8ar.test/", "host": "spa2.lab8ar.test",
+                             "port": "443", "status": 200, "title": "", "source": "httpx"}]
+    db.insert_sites(_c6.task_id, _c6.results["sites"])
+    _seen_kw.clear()
+    _lg8ar.clear()
+    try:
+        _shot8ar.capture = _cap_none
+        _st8ar.ScreenshotStage(_c6).run()
+    finally:
+        _shot8ar.capture = _keep8ar[1]
+    assert _title_of(_c6.task_id, "https://spa2.lab8ar.test/") == "", "拿不到就是空串，不许编一个标题"
+    assert any("渲染后补到标题 0 个" in x and "其余连渲染后也没有标题" in x
+               for x in _lg8ar), _lg8ar[-3:]
+    assert _seen_kw == [True], "没标题的站点仍然要试 DOM（失败要说失败，不能因为怕失败就不试）"
+
+    # 门控不变：策略没开、任务也没勾"截图" ⇒ 一个字都不做（续139 那条"勾了却被静默跳过"的红线）
+    _lg8ar.clear()
+    _c7 = _ctx8ar("gate")
+    _c7.settings["screenshot"] = dict(_c7.settings.get("screenshot") or {}, enabled=False)
+    _c7.results["sites"] = [{"url": "https://g.lab8ar.test/", "host": "g.lab8ar.test",
+                             "status": 200, "title": ""}]
+    _seen_kw.clear()
+    try:
+        _shot8ar.capture = _cap8ar
+        _st8ar.ScreenshotStage(_c7).run()
+        assert _seen_kw == [] and any("未启用" in x for x in _lg8ar), "关闭时一条请求都不许发"
+        _lg8ar.clear()
+        _seen_kw.clear()
+        _c7.options["screenshot_on"] = True       # 任务级显式点名（页面复选框 / CLI -p screenshot）
+        _st8ar.ScreenshotStage(_c7).run()
+        assert _seen_kw == [True], "任务级勾选必须能压过策略默认关（否则勾了等于没勾）"
+    finally:
+        _shot8ar.capture = _keep8ar[1]
+
+    # ⑥ probe 的入库日志要把"没标题"讲明白（开不开截图都要讲）
+    _c8 = _ctx8ar("probe-log")
+    _lg8ar.clear()
+    _n8ar2 = _pb8ar.register_sites(_c8, [
+        {"url": "https://t1.lab8ar.test/", "host": "t1.lab8ar.test", "port": "443",
+         "status": 200, "title": "有标题", "length": 10, "server": "", "tech": "", "source": "httpx"},
+        {"url": "https://t2.lab8ar.test/", "host": "t2.lab8ar.test", "port": "443",
+         "status": 404, "title": "", "length": 0, "server": "", "tech": "nextjs", "source": "httpx"},
+    ])
+    assert len(_n8ar2) == 2
+    _logline8ar = [x for x in _lg8ar if "存活站点" in x]
+    assert _logline8ar and "1/2 个原始 HTML 里没有 <title>" in _logline8ar[0], _logline8ar
+    assert "勾选「截图」" in _logline8ar[0], "要给出一条能走的出路，而不是只报缺陷"
+    _c9 = _ctx8ar("probe-log2")
+    _lg8ar.clear()
+    _pb8ar.register_sites(_c9, [{"url": "https://t3.lab8ar.test/", "host": "t3.lab8ar.test",
+                                 "port": "443", "status": 200, "title": "都有标题",
+                                 "length": 1, "server": "", "tech": "", "source": "httpx"}])
+    assert not any("原始 HTML 里没有 <title>" in x for x in _lg8ar), "一个都没缺标题时不要凭空喊"
+
+    print("[8ar] 续140 渲染后标题 ok: html_title 单一判据（剥内嵌标签/跨行 re.S/200 截断/只取第一个/"
+          "不要求在 head 内/取不到即空串）｜整仓生产码扫：`<title>` 正则只在 utils 一处、"
+          "手写 group(1) 零处、转手 import TITLE_RE 零处｜db.set_site_titles 只补空标题、NULL 也算空、"
+          "跨任务不串、计数口径是**站点(URL)不是行数**（同一 URL 占两行也报 1，但两行都补到）、"
+          "去掉 SQL 守卫就会覆盖真标题（变异证伪过）｜capture 不要标题时 argv 与改动前逐字节一致、"
+          "要标题时只多一个 --dump-dom 且紧贴 URL 之前、PNG 没写成仍保留 DOM 标题、"
+          "无浏览器降级成三元组而不是抛异常、只看 DOM 前 200K 是钉死的有意窗口｜"
+          "真·端到端（本机 google-chrome --dump-dom）把 JS 注入的中文标题补回来了，"
+          "夹具页必须带 meta charset（不带时 Chrome 猜 windows-1252 会吐 mojibake）｜"
+          "阶段只对空标题站点要 DOM、补到就同时进库/进内存/进产物（shot 仍是相对路径）｜"
+          "拿不到标题不编数（「补到 0 个」+「其余连渲染后也没有标题」）、want_title 被吃掉就补不到（变异）｜"
+          "门控两条都在（策略关 ⇒ 零请求；任务级勾选能压过）｜probe 入库日志把缺标题数量与出路一起说清")
+    # ---------------- [8as] 续140：记忆同步是硬规矩（AGENTS §0.4 + §10 多 agent） ----------------
+    #      用户点单（2026-10-09）：「我们的记忆你都要同步到todo，以及修改完同步是硬记录，
+    #      让我们换对话框，换AI也能接着执行」+「把多agent执行加入记忆…就算其他ai来了也会多agent执行」。
+    #      规矩本体写在 `AGENTS.md` §0.4（一轮的四步完成判据）与 §10（哪些能并行、哪些必须独占）。
+    #      这里把它变成**跑得绿的判据**：只写进文档而没有机器判，下一个接手者（或下一个忘了的 AI）
+    #      照样会漏 —— §6.2 那八起假红每一起的成因都是"某条口径没人守着"。
+    import re as _re8as
+    from pathlib import Path as _P8as
+
+    import io as _io8as
+
+    def _mem_text(name):
+        # **不用 `read_text(newline=)`**：那个参数是 3.10+ 才有的，本仓下限是 3.9（CI 与容器门禁
+        # 都在 3.9 上跑）。本轮就是容器门禁当场 TypeError 抓出来的 —— 主机 3.14 一路全绿。
+        with _io8as.open(str(_P8as(ROOT) / name), encoding="utf-8", errors="replace",
+                         newline="") as _f8as:
+            return _f8as.read()
+
+    _CH8as = _mem_text("CHANGELOG_AI.md")
+    _TD8as = _mem_text("todo.txt")
+    _AG8as = _mem_text("AGENTS.md")
+    _TO8as = _mem_text("TODO.md")
+
+    # 权威轮次号**只从轮次标题行**取：正文里"下一轮＝续NN+1"是预告，把它当事实就会凭空领先一格
+    def _hdr(s):
+        return [int(x) for x in _re8as.findall(r"(?m)^#{2,}\s*={0,2}\s*续(\d+)", s)]
+
+    def _any(s):
+        return [int(x) for x in _re8as.findall(r"续(\d+)", s)]
+
+    assert _hdr(_CH8as), "CHANGELOG_AI.md 里一个轮次标题都没有（`## 续NN` 那一形被改了形状）"
+    _h_ch, _h_td = max(_hdr(_CH8as)), max(_hdr(_TD8as))
+    assert _h_ch == _h_td, \
+        (f"CHANGELOG_AI.md 最新一轮是 续{_h_ch}，todo.txt 最新一轮却是 续{_h_td} —— "
+         "有一轮的记忆没同步（AGENTS §0.4：代码做完而记忆没同步 ＝ 这一轮没做完）")
+    assert max(_any(_CH8as)) == _h_ch, \
+        "CHANGELOG 正文里出现了比最新**标题**更大的轮次号（写了没落地的号＝空头支票）"
+    assert max(_any(_TD8as)) >= _h_td, "todo.txt 的轮次标题号必须不落后于正文提到的号"
+    # §6.1 变异证伪：取号口径若分不清"已落地的轮"与"预告号"，上面两条 header 判据就是空写
+    _fake8as = "## 续139 本轮做了什么\n下一轮（续140）准备做 X\n"
+    assert max(_hdr(_fake8as)) == 139 and max(_any(_fake8as)) == 140, \
+        "header 口径没能排除预告号 ⇒ 等式会被自己的前瞻句打成假红"
+
+    # 本轮小节必须是**有内容的记忆**（不是标题党），且声称动了 AGENTS 就得真动了
+    _sec8as = _CH8as.split(f"## 续{_h_ch}", 1)[-1].split("\n## ", 1)[0]
+    assert len(_sec8as) > 400, \
+        f"续{_h_ch} 那一节只有 {len(_sec8as)} 字符 —— 换对话框的人读这一节接不上手" \
+        "（要写清：做了什么与**实测数字**、还没做什么、踩过的坑）"
+    if _re8as.search(r"AGENTS|§5|§6\.2|§7", _sec8as):
+        assert _h_ch in _any(_AG8as), \
+            f"CHANGELOG 续{_h_ch} 说要同步 AGENTS.md，但 AGENTS 里没有 续{_h_ch} 这个号（说了没做）"
+
+    # 规矩本体不许被"顺手重构文档"删掉（这四句是 §0.4 / §10 的骨头）
+    for _k8as in ("记忆同步是收尾的一部分", "多 agent 协作", "可以并行", "必须串行",
+                  "同一个文件的写", "FIXTURE_PORT"):
+        assert _k8as in _AG8as, f"AGENTS.md 里少了「{_k8as}」—— 记忆同步/多 agent 的规矩被删了"
+    # 只读 agent 禁跑那两个入口：AGENTS §10 里引用的**行号**必须还对得上
+    _rd8as = (ROOT / "run_devflow.py").read_text(encoding="utf-8", errors="replace").splitlines()
+    assert "save_baseline" in _rd8as[95], \
+        "AGENTS §10 指着 run_devflow.py 第 96 行写共享基线；那一行已经不是 save_baseline 了"
+
+    # 双清单不再竞争：TODO.md 已改成「分工说明 + 稳定工程化 backlog」，它**不参与**轮次号等式
+    assert "不再是逐轮待办的第二份抄本" in _TO8as, \
+        "TODO.md 又变回第二份逐轮流水账（两份清单各说一套，新人分不清该看哪一份）"
+    assert max(_any(_TO8as)) <= _h_ch, \
+        "TODO.md 里出现了比 CHANGELOG 最新的轮次更大的号（说明有人往它里面记轮次）"
+    # §10 的事实性引用不许漂：smoke.py 的 timing 文件确实是 `--timing` 下以 "w" 打开
+    _sm8as = (ROOT / "tests" / "smoke.py").read_text(encoding="utf-8", errors="replace")
+    assert 'open(ROOT / "logs" / "smoke-timing.jsonl", "w"' in _sm8as, \
+        "AGENTS §10 说只读 agent 会清掉 timing 历史；这条前提没了就要连着改文档"
+
+    print("[8as] 续140 记忆同步硬规矩 ok: 轮次号只从标题行取（预告号被排除，且这一区分本身证伪过）｜"
+          "max续(CHANGELOG)==max续(todo.txt) 恒等，空头支票与落后都报红｜"
+          "本轮小节必须有实质内容且声称同步 AGENTS 就得真带号｜"
+          "§0.4/§10 的骨头（记忆同步/多 agent/可并行/必须串行/同文件写/FIXTURE_PORT）不许被重构删掉｜"
+          "TODO.md 不再是第二份流水账、也不许领先 CHANGELOG｜"
+          "文档引用的行号与文件写法（run_devflow.py:96 / smoke-timing.jsonl 的 \"w\"）实时核对")
     print("SMOKE PASS")
 
 

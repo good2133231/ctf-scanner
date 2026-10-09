@@ -7,6 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# 同一 ref 上「上一轮还没跑完、这一次又推了」⇒ 取消旧的那一轮（本仓是多会话/多机推 main
+# 的常态，排队跑完两轮只是把反馈时间再翻一倍）。并行的是**同一轮里的 5 个 job**，
+# 串行的是**同一 ref 的两次跑**。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -18,7 +25,10 @@ jobs:
       - name: Set up Python 3.9
         uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.9"          # 续140 提速：四个装依赖的步骤每次都重装同一份 20 个包的闭包。`cache: pip` 缺省只
+          # glob `**/requirements*.txt`，看不见 requirements.lock ⇒ 下面那行是必需的，不是装饰（忘了它就是静默不缓存）。
+          cache: pip
+          cache-dependency-path: requirements.lock
 
       - name: Install dependencies
         run: |
