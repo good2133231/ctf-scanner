@@ -304,7 +304,7 @@ flags:
   max_per_task: 200
 tools:
   subfinder: tools/scanner/subfinder
-  puredns: puredns
+  puredns: tools/scanner/puredns
   httpx: tools/scanner/httpx
   nmap: nmap
   # fscan（可选）：二进制名或路径；找不到就跳过它（回退 nmap / 内置）。调用时强制 -np -nobr -nopoc。

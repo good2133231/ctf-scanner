@@ -61,7 +61,7 @@
    `py -3 -c "import re,pathlib as P;print(max(int(x) for x in re.findall(r'续(\d+)',P.Path('<文件>').read_text(encoding='utf-8',newline=''))))"`
    （bash / Git Bash 等价：`grep -oE '续[0-9]+' <文件> | grep -oE '[0-9]+' | sort -n | tail -1`）。
    判据：**`max续(CHANGELOG_AI.md) == max续(todo.txt)` 恒成立**；且**当那一轮的 CHANGELOG 小节里
-   声称同步过本文件时**，`max续(AGENTS.md)` 必须等于同一个数（今天三份都是 139）。
+   声称同步过本文件时**，`max续(AGENTS.md)` 必须等于同一个数（续142 之后三份都是 142）。
    写断言时三条边界要一起守住，否则造出来的就是 §6.2 那种"看着像代码坏了"的假红：
    - 只认**紧贴的** `续NNN`：早期轮次标题写作「第十八轮（续 11）」，中间有**空格**那一形必须排除
      （`TODO.md` 里有 9 处是那一形；把它们并进同一个数集，「最大号＝最新一轮」这个前提就不再成立）；
@@ -152,6 +152,12 @@ Flask Web 控制台（仿 ARL）。
   默认必须通过 release 自带的 SHA256 校验和才落盘；装完**逐行文本替换**回写 `tools.<名>`。
   平台事实（2026-09-26 查 GitHub API 实测）：subfinder、httpx 双平台产物 + checksums 齐；
   **puredns 官方只发 Linux / macOS 产物且无 checksums**，Windows 上会如实报"未提供当前平台产物"。
+  **续142 起本机 Linux 上 puredns 已装**（v2.1.1 → `tools/scanner/puredns`）—— 这是**用户显式批准**
+  破那条"官方无校验和就拒装"的红线（`--update-tools --tool puredns --allow-unverified`），
+  属于**本机的一次运维例外**，不是口径变更：新克隆/新机器仍然不会自动装它，`--check` 会如实报未安装。
+  装上的直接后果是 `limits.brute_max_words: 0` **从此真的等于"全量"**（深字典 177,875 条整份喂进去），
+  所以续139 记的"冷启动比对标少 16 台主机"那一段前提已经变了；开发模式仍把爆破四项压到 4/4/4/1
+  （`devmode.DEV_LIMITS`）⇒ CI 与全流程自检不受影响。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`
