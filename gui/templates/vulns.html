@@ -100,6 +100,8 @@
         </select></td>
         <td class="evidence"><details><summary class="muted">展开</summary>
           <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre>
+          {% if v.packets %}<p class="muted small">数据包（请求行 / 状态与长度 / 关键响应头 / 正文指纹；凭据值一律掩码）</p>
+              <pre>{{ v.packets }}</pre>{% endif %}
           {% if v.review_note %}<p class="muted small">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
       </tr>
     {% else %}

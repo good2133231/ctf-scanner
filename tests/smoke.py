@@ -3444,6 +3444,107 @@ workflows:
     for _pair in owasp_checks._SQLI_BLIND_PAIRS:
         assert not _re5.search(r"sleep|benchmark|waitfor|pg_sleep", _pair[0] + _pair[1], _re5.I)
 
+    # ---- ③b 续143：限流不可判定 + 双向复验 + 交换顺序 + 方向一致 + 数据包 ----
+    #     起因是用户报的那条 high：恒真 200/154647B、恒假 **429**/3205B、复验恒真 200 ——
+    #     那发 429 是我们自己连发三发打出来的，旧判据"状态码变了＝最强信号"把它读成了注入。
+    #     库里同一形状当时一共 7 条（含"两侧都 429"与"两侧都 404 软页"），全部按新判据重判过。
+    class _Rec143:
+        def __init__(self):
+            self.lines = []
+
+        def info(self, m, *a):
+            self.lines.append(str(m))
+
+        def warning(self, m, *a):
+            self.lines.append(str(m))
+
+    def _mk_resp143(st, n, headers=None):
+        return {"status": st, "headers": headers if headers is not None else {"Server": "nginx"},
+                "text": "z" * n, "length": n}
+
+    _FALSE143 = r"(1=2|'1'='2)"
+
+    # (i) 恒假那一发被限流 ⇒ **不可判定**，绝不报；而且跳过必须说出来（是哪一发、为什么）
+    _rec143 = _Rec143()
+    owasp_checks._get = lambda u, s, **kw: (_mk_resp143(429, 300) if _re5.search(_FALSE143, u)
+                                            else _mk_resp143(200, 1200))
+    try:
+        assert owasp_checks._sqli_blind(targets, settings, logger=_rec143) is None, \
+            "恒假 429（限流）不该被判成布尔盲注 —— 这正是用户报的那条误报的形状"
+    finally:
+        owasp_checks._get = _orig_get5
+    assert any("429" in _l and "未判定" in _l for _l in _rec143.lines), \
+        f"跳过必须说出来（哪一发、为什么）：{_rec143.lines}"
+
+    # (ii) 两侧都被限流（库里真有过这种：#5 恒真 429 / 恒假 429）⇒ 照样不报
+    owasp_checks._get = lambda u, s, **kw: _mk_resp143(429, 900 if _re5.search(_FALSE143, u) else 500)
+    try:
+        assert owasp_checks._sqli_blind(targets, settings) is None, "两侧都 429 不该判盲注"
+    finally:
+        owasp_checks._get = _orig_get5
+
+    # (iii) 差异只跟"这是第几发"有关 ⇒ 交换顺序采到的恒假与首次不一致，被第 ④ 道门挡下
+    _seq143 = {"i": 0}
+
+    def _pos_get143(u, s, **kw):
+        _seq143["i"] += 1
+        return _mk_resp143(200, 900 if _seq143["i"] == 2 else 1200)
+
+    owasp_checks._get = _pos_get143
+    try:
+        assert owasp_checks._sqli_blind(targets, settings) is None, \
+            "差异跟着请求次序走（而不是跟着 payload）不该判盲注"
+    finally:
+        owasp_checks._get = _orig_get5
+
+    # (iv) 长度差**方向翻转**（差异贴近阈值时两次采样一正一负）⇒ 不报
+    #     ⚠ 这条断言第一版写错了：夹具用**全局**计数，"翻转"只发生在第一个参数上，
+    #     从第二个参数起变成方向一致的真信号 ⇒ 检查**正确地**报了，红的是我的夹具。
+    #     改成按参数计数、五发长度固定取 [1000, 960, 970, 990, 970]：
+    #     ① 1000 vs 960 差 40（刚好过阈值）② 恒真 1000/970 差 30（在容差内＝稳）
+    #     ④ 恒假 960/990 差 30（稳）⑤ 但 +40 与 -20 **方向相反** ⇒ 只可能栽在方向门上。
+    _flip143 = {}
+    _flip_seq143 = [1000, 960, 970, 990, 970]      # T, F, T2, F2（交换顺序先发）, T3
+
+    def _flip_get143(u, s, **kw):
+        _p = u.rsplit("?", 1)[-1].rsplit("&", 1)[-1].split("=", 1)[0]
+        _k = _flip143.get(_p, 0)
+        _flip143[_p] = _k + 1
+        return _mk_resp143(200, _flip_seq143[min(_k, len(_flip_seq143) - 1)])
+
+    _rec143d = _Rec143()
+    owasp_checks._get = _flip_get143
+    try:
+        assert owasp_checks._sqli_blind(targets, settings, logger=_rec143d) is None, \
+            "长度差方向翻转不该判盲注"
+    finally:
+        owasp_checks._get = _orig_get5
+    assert any("方向翻转" in _l for _l in _rec143d.lines), \
+        f"栽的必须是方向门（否则这条断言没有区分度）：{_rec143d.lines}"
+
+    # (v) 五道门全过 ⇒ 报，且 **packets 必须是 5 发**、每发带请求行与正文指纹（用户：数据包都没有）
+    owasp_checks._get = lambda u, s, **kw: _mk_resp143(200, 900 if _re5.search(_FALSE143, u) else 1200)
+    try:
+        _v143 = owasp_checks._sqli_blind(targets, settings)
+    finally:
+        owasp_checks._get = _orig_get5
+    assert _v143 and _v143["poc_id"] == "a03-sqli-blind", _v143
+    _pk143 = _v143.get("packets") or ""
+    assert _pk143.count("] GET ") == 5, f"数据包应是 5 发，实际 {_pk143.count('] GET ')}"
+    assert "body md5=" in _pk143 and "HTTP 200 / 1200B" in _pk143, _pk143[:200]
+    assert "交换顺序" in _v143["evidence"], _v143["evidence"]
+
+    # (vi) 凭据红线（§7）：证据里只许写"有 Set-Cookie"，**绝不写它的值**
+    owasp_checks._get = lambda u, s, **kw: _mk_resp143(
+        200, 900 if _re5.search(_FALSE143, u) else 1200,
+        headers={"Server": "nginx", "Set-Cookie": "sid=SUPERSECRET143"})
+    try:
+        _v143b = owasp_checks._sqli_blind(targets, settings)
+    finally:
+        owasp_checks._get = _orig_get5
+    assert _v143b and "SUPERSECRET143" not in _v143b["packets"], "凭据值不得进证据（§7 红线）"
+    assert "set-cookie=有" in _v143b["packets"], _v143b["packets"][:200]
+
     # ---- ④ Shodan / Quake favicon 反查（无 key 不发请求 + 查询串 + 阈值 + 解析）----
     assert shodan_mod.build_query(-12345) == "http.favicon.hash:-12345"
     assert quake_mod.build_query(-12345) == 'favicon: "-12345"'
@@ -3735,7 +3836,8 @@ workflows:
     #        于是 5 个候选参数**只有 1 个真发过请求**；加上 `_ordered()` 打乱顺序，
     #        等于"每次随机只测 1/5"。这里让**非首位参数**（第 3 个）才有信号 ——
     #        旧实现下必然漏报，新实现（形态外层、参数内层、预算 30）必须命中。
-    assert owasp_checks._SQLI_BLIND_MAX_REQ == 30, owasp_checks._SQLI_BLIND_MAX_REQ
+    # 续143：30 发基础（2 形态 × 5 参数 × 3）+ 4 发复验余量（每形态最多一个候选 × 2）
+    assert owasp_checks._SQLI_BLIND_MAX_REQ == 34, owasp_checks._SQLI_BLIND_MAX_REQ
     assert len(owasp_checks._SQLI_BLIND_PAIRS) == 2, owasp_checks._SQLI_BLIND_PAIRS
 
     def _param_of6(u):
@@ -3753,8 +3855,16 @@ workflows:
         assert owasp_checks._sqli_blind(targets, settings) is None
     finally:
         owasp_checks._get = _orig_get5
-    assert len(_blind_urls6) == owasp_checks._SQLI_BLIND_MAX_REQ, \
-        f"预算应为 2 形态 × 5 参数 × 3 请求 = 30，实际 {len(_blind_urls6)}"
+    # 续143：上限从 30 抬到 34，多出来的 4 发是"候选出现后才付"的复验（每形态最多一个候选 × 2 发）。
+    # 所以**无信号时必须只付基础三发** —— 这条断言钉的就是"复验不是常态开销"。
+    # ⚠ 公式里别再手写那个 2：`len(_SQLI_BLIND_PAIRS)` 本身就是 2（第一版写成
+    # `2 * len(PAIRS) * …` 算出 60，而断言消息里硬写着 30，于是报"实际 30"却失败 —— 消息也在骗人）。
+    _want143 = (len(owasp_checks._SQLI_BLIND_PAIRS) * len(owasp_checks._SQLI_BLIND_PARAMS)
+                * owasp_checks._SQLI_BASE_REQ)
+    assert len(_blind_urls6) == _want143, \
+        f"无候选时应只付 {_want143} 发（形态 × 参数 × 基础三发），实际 {len(_blind_urls6)}"
+    assert len(_blind_urls6) < owasp_checks._SQLI_BLIND_MAX_REQ, \
+        "无候选时不该付复验那 2 发（上限是给候选留的余量，不是常态开销）"
     for _p6 in owasp_checks._SQLI_BLIND_PARAMS:
         assert any(_param_of6(u) == _p6 for u in _blind_urls6), f"参数 {_p6} 从没被测到"
     assert not _re5.search(r"sleep|benchmark|waitfor|pg_sleep", _blind_urls6[0], _re5.I), \

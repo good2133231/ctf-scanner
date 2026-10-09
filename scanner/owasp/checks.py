@@ -7,6 +7,7 @@
   黑盒自动化误报/漏报率极高，本模块仅做极少信号量极弱的探测或直接不做（详见 docs/owasp-mapping.md）；
 - 所有输出都是"初筛信号"，必须人工确认，不能等同于漏洞结论。
 """
+import hashlib
 import inspect
 import random
 import re
@@ -69,9 +70,12 @@ def check(cid, name, severity, owasp):
     return deco
 
 
-def _mk(cid, name, severity, owasp, target, detail, evidence=""):
+def _mk(cid, name, severity, owasp, target, detail, evidence="", packets=""):
+    # `packets`（续143）＝「凭什么这么说」的原始材料：请求行 + 状态/长度 + 关键响应头
+    # + 正文指纹，一条发现可以带多发。上限在 `db.insert_vuln` 里再收一次（那里是 8000）。
     return {"poc_id": cid, "name": name, "severity": severity, "owasp": owasp,
-            "target": target, "detail": detail, "evidence": (evidence or "")[:800]}
+            "target": target, "detail": detail, "evidence": (evidence or "")[:800],
+            "packets": (packets or "")[:8000]}
 
 
 def _get(url, settings, **kw):
@@ -346,18 +350,31 @@ _SQLI_BLIND_PAIRS = (
     ("1 AND 1=1", "1 AND 1=2"),
     ("1' AND '1'='1", "1' AND '1'='2"),
 )
-# 请求预算 = 2 形态 × 5 参数 × 3 请求（恒真 / 恒假 / 恒真复验）= 30。
-# 为什么取 30：与同文件的报错型检查 `_SQLI_MAX_REQ = 30` 内部一致，单站点注入类总开销可预期。
+# 请求预算 = 2 形态 × 5 参数 × 3 发（恒真 / 恒假 / 恒真复验）= 30，
+# **外加**候选命中后的复验 2 发 × 最多 2 个候选（每个形态各一个）= 4 ⇒ 上限 34。
+# 复验那 2 发只在"已经出现候选"时才付：绝大多数参数走不到那里，所以典型开销仍是 30。
 # 为什么循环是**形态外层、参数内层**（见 `_sqli_blind`）：预算必须先把 5 个候选参数**都覆盖一遍**。
 # 若反过来（参数外层），第一个参数就会吃掉 2 形态 × 3 = 6 个请求、第二个再吃 6 个……
 # 参数顺序又被 `_ordered()` 打乱，结果变成"每次随机只测到前几个参数"，覆盖率与可复现性都崩
 # —— 这正是本文件此前 12 预算下"5 个参数只测到 1 个"的成因。
 # 复验那一发不是浪费：页面自带随机数/时间戳时"恒真"自己都会抖动，不复验就会把抖动
 # 当成注入信号 —— 这是布尔盲注最主要的误报源。
-_SQLI_BLIND_MAX_REQ = 30
+# **续143 补的两条**（用户报的那条 high 就是这么来的）：① **恒假也要复验** —— 旧实现只复验
+# 恒真，于是"恒假那一发恰好被限流"这种一次性事件成了唯一证据；② 复验时**交换顺序**
+# （先发恒假、再发恒真），差异必须跟着 payload 走，不能跟着"这是本轮第几发"走。
+_SQLI_BLIND_MAX_REQ = 34
+_SQLI_BASE_REQ = 3          # 每个参数的基础三发
+_SQLI_VERIFY_REQ = 2        # 候选出现后的复验两发（恒假复验 + 交换顺序）
 # "差异显著"的双阈值：绝对字节差 OR 相对比例（小页面靠比例，大页面靠绝对值）
 _SQLI_BLIND_MIN_DELTA = 40
 _SQLI_BLIND_MIN_RATIO = 0.05
+# 限流 / 过载类状态码：**不可判定**，一律不作为布尔差分的证据（续143）。
+# 真踩到的形状（用户报的那条 high）：恒真 200/154647B → 恒假 **429**/3205B → 复验恒真
+# 200/154647B —— 而那发 429 是**我们自己连发三发打出来的**，旧判据"状态码变了＝最强信号"
+# 把它读成了注入。5xx 同理：一侧 500/502/503 属于**报错型或过载**，归到布尔盲注上就是把
+# 另一种结论冒充成这一条的证据（报错型有它自己的检查项）；408/598/599 是超时类。
+_SQLI_INCONCLUSIVE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 509,
+                                       520, 521, 522, 524, 598, 599})
 
 
 def _resp_sig(resp):
@@ -387,8 +404,69 @@ def _diff_significant(sig_a, sig_b):
                 or delta >= max(sig_a[1], sig_b[1], 1) * _SQLI_BLIND_MIN_RATIO)
 
 
+def _inconclusive(sigs):
+    """这批响应里有没有"限流/过载"类状态码；有就返回**那个状态码**，没有返回 0。
+
+    返回码而不是布尔，是为了让日志说得出"是哪一发不可判定"（判据要给理由，不能只说跳过了）。
+    """
+    for sig in sigs:
+        if sig and sig[0] in _SQLI_INCONCLUSIVE_STATUS:
+            return sig[0]
+    return 0
+
+
+def _len_sign(sig_true, sig_false):
+    """恒真相对恒假的长度差**方向**（+1 / -1 / 0）。
+
+    为什么看方向：真布尔盲注是"某一侧稳定地多出/少掉一块内容"，两次采样的方向必须一致；
+    限流、缓存命中、CDN 抖动这类原因会让方向翻转。
+    """
+    d = sig_true[1] - sig_false[1]
+    return (d > 0) - (d < 0)
+
+
+def _packet(label, url, resp):
+    """把一次请求/响应压成一段**可复核**的文本（有上限）。`resp` 为 None ⇒ 如实写请求失败。
+
+    只放判据用得上的东西：请求行、状态与长度、少数几个响应头、正文指纹（md5 + 前 160 字）。
+    两条刻意的取舍：① **不放整份正文** —— 一条 finding 动辄几十 KB，页面与报告都会被撑爆，
+    指纹 + 片段足够让人复现与比对；② **不放 Cookie / Authorization 的值** —— §7 凭据红线：
+    日志与页面只许掩码，证据里出现任务登录态等于把它抄进了库。
+    """
+    if not resp:
+        return "[%s] GET %s\n  → 请求失败（无响应，不作为证据）" % (label, url)
+    hs = _low_headers(resp)
+    keep = []
+    for k in ("server", "content-type", "location", "x-powered-by", "cf-ray", "x-cache"):
+        if hs.get(k):
+            keep.append("%s=%s" % (k, str(hs[k])[:80]))
+    if "set-cookie" in hs:
+        keep.append("set-cookie=有（值不记，见 §7 凭据红线）")
+    body = resp.get("text") or ""
+    flat = " ".join(body.split())[:160]
+    sig = _resp_sig(resp)
+    heads = "  ".join(keep) if keep else "（无可记录的响应头）"
+    md5 = hashlib.md5(body.encode("utf-8", "replace")).hexdigest()
+    return ("[%s] GET %s\n  → HTTP %s / %sB  %s\n  body md5=%s  前160字: %s"
+            % (label, url, sig[0], sig[1], heads, md5, flat))
+
+
+def _note_skips(logger, skips, tail=""):
+    """把"为什么没报"说出来（续143）。
+
+    判据收紧之后**必须**有这一句：否则"这站没洞"与"有候选但被判为不可判定"在日志里长得
+    一模一样，人只会读成前者。与续126「跳过的量必须可见」同一条口径。
+    """
+    if not skips or logger is None:
+        return
+    head = "[sqli-blind] 未判定 %d 个参数" % len(skips)
+    if tail:
+        head += "（%s）" % tail
+    logger.info(head + "：" + "；".join(skips[:6]) + ("…" if len(skips) > 6 else ""))
+
+
 @check("a03-sqli-blind", "SQL 注入布尔型盲注", "high", "A03")
-def _sqli_blind(url, settings):
+def _sqli_blind(url, settings, logger=None):
     """布尔型盲注探测（不做变形，理由见下）。
 
     为什么**不套 `evasion.mutate_sqli`**：差分判定的前提是"两次请求只差一个布尔条件"，
@@ -397,34 +475,87 @@ def _sqli_blind(url, settings):
 
     循环是**形态外层、参数内层**：预算优先保证 5 个候选参数**都被两种形态各试一次**
     （没测到的参数是必然盲区），参数顺序仍走 `_ordered()` 打乱以打散 WAF 的频率/序列特征。
+
+    **五道判据全过才报**（续143；旧实现只有前三道，缺的正是 ④⑤，那条 429 误报由此而来）：
+      ① 恒真与恒假差异显著；② 恒真自身可复现；③ 任何一发都不是限流/过载类状态码；
+      ④ **恒假也可复现**（这一发是**交换顺序**后采的：先恒假、再恒真）；
+      ⑤ 两次采样的**长度差方向一致**。
+    任何一道不过都**不报**，并把原因攒起来在末尾说一句（跳过几个、为什么）。
     """
     used = 0
+    skips = []
     sep = "&" if "?" in url else "?"
     for true_p, false_p in _SQLI_BLIND_PAIRS:
         for param in _ordered(_SQLI_BLIND_PARAMS):
-            if used + 3 > _SQLI_BLIND_MAX_REQ:
+            if used + _SQLI_BASE_REQ > _SQLI_BLIND_MAX_REQ:
+                _note_skips(logger, skips, "预算耗尽，已发 %d 发" % used)
                 return None
-            r_true = _get(f"{url}{sep}{param}={true_p}", settings)
-            r_false = _get(f"{url}{sep}{param}={false_p}", settings)
-            r_again = _get(f"{url}{sep}{param}={true_p}", settings)     # 复验稳定性
-            used += 3
-            s_t, s_f, s_a = _resp_sig(r_true), _resp_sig(r_false), _resp_sig(r_again)
-            if not (s_t and s_f and s_a):
+            u_t = "%s%s%s=%s" % (url, sep, param, true_p)
+            u_f = "%s%s%s=%s" % (url, sep, param, false_p)
+            r_t, r_f, r_t2 = _get(u_t, settings), _get(u_f, settings), _get(u_t, settings)
+            used += _SQLI_BASE_REQ
+            s_t, s_f, s_t2 = _resp_sig(r_t), _resp_sig(r_f), _resp_sig(r_t2)
+            if not (s_t and s_f and s_t2):
+                skips.append("%s：有一发没拿到响应" % param)
+                continue
+            hot = _inconclusive((s_t, s_f, s_t2))
+            if hot:
+                skips.append("%s：出现 HTTP %d（限流/过载，不可判定）" % (param, hot))
                 continue
             if not _diff_significant(s_t, s_f):
                 continue                             # 恒真与恒假没区别 → 这参数不受影响
-            if _diff_significant(s_t, s_a):
-                continue                             # 恒真自己都不稳定 → 页面抖动，不判
+            if _diff_significant(s_t, s_t2):
+                skips.append("%s：恒真自身抖动" % param)
+                continue
+            if used + _SQLI_VERIFY_REQ > _SQLI_BLIND_MAX_REQ:
+                skips.append("%s：预算不足，未能完成复验（宁可不报）" % param)
+                _note_skips(logger, skips, "预算耗尽")
+                return None
+            # 交换顺序：这一轮**先发恒假、再发恒真** —— 差异必须跟着 payload 走，
+            # 不能跟着"这是本轮第几发"走（限流正是按"第几发"来的）。
+            r_f2, r_t3 = _get(u_f, settings), _get(u_t, settings)
+            used += _SQLI_VERIFY_REQ
+            s_f2, s_t3 = _resp_sig(r_f2), _resp_sig(r_t3)
+            if not (s_f2 and s_t3):
+                skips.append("%s：复验有一发没拿到响应" % param)
+                continue
+            hot = _inconclusive((s_f2, s_t3))
+            if hot:
+                skips.append("%s：复验出现 HTTP %d（限流/过载，不可判定）" % (param, hot))
+                continue
+            if _diff_significant(s_f, s_f2):
+                skips.append("%s：恒假自身抖动" % param)
+                continue
+            if _diff_significant(s_t, s_t3):
+                skips.append("%s：恒真第三次采样不稳" % param)
+                continue
+            # 注：这里**刻意没有**"交换顺序后差异是否仍显著"那道门 —— 它在 ①（T≠F）
+            # ②（T≈T2）④（F≈F2）都成立时逻辑上恒真，写了就是死代码（§7：不留死代码）。
+            # 真正还有牙齿的是下面那道**方向**门：差异贴近阈值时两次采样可能一正一负。
+            if _len_sign(s_t, s_f) != _len_sign(s_t2, s_f2):
+                skips.append("%s：两次采样的长度差方向翻转" % param)
+                continue
             delta = abs(s_t[1] - s_f[1])
             ratio = delta * 100 // max(s_t[1], s_f[1], 1)
-            evidence = (f"恒真 {true_p} → HTTP {s_t[0]} / {s_t[1]}B；"
-                        f"恒假 {false_p} → HTTP {s_f[0]} / {s_f[1]}B；"
-                        f"长度差 {delta}B（约 {ratio}%）；"
-                        f"复验恒真 → HTTP {s_a[0]} / {s_a[1]}B（与首次一致）")
+            evidence = ("恒真 %s → HTTP %d / %dB；恒假 %s → HTTP %d / %dB；"
+                        "长度差 %dB（约 %d%%）；复验恒真 → HTTP %d / %dB；"
+                        "交换顺序复验 → 恒假 %d / %dB、恒真 %d / %dB；"
+                        "五道判据全过（含限流/过载排除、双向复现、方向一致）"
+                        % (true_p, s_t[0], s_t[1], false_p, s_f[0], s_f[1],
+                           delta, ratio, s_t2[0], s_t2[1],
+                           s_f2[0], s_f2[1], s_t3[0], s_t3[1]))
+            packets = "\n\n".join((
+                _packet("1/5 恒真", u_t, r_t),
+                _packet("2/5 恒假", u_f, r_f),
+                _packet("3/5 恒真复验", u_t, r_t2),
+                _packet("4/5 恒假复验（交换顺序，先发）", u_f, r_f2),
+                _packet("5/5 恒真（交换顺序，后发）", u_t, r_t3)))
             return _mk("a03-sqli-blind", "SQL 注入布尔型盲注", "high", "A03", url,
-                       f"参数 {param} 的恒真/恒假两个 payload 得到显著不同的响应，"
-                       f"且恒真结果可复现（排除页面自身抖动），疑似布尔型盲注，需人工确认。",
-                       evidence)
+                       "参数 %s 的恒真/恒假两个 payload 得到显著不同的响应，"
+                       "两侧各自可复现、交换顺序后差异仍在、长度差方向一致"
+                       "（已排除限流/过载类状态码），疑似布尔型盲注，需人工确认。" % param,
+                       evidence, packets=packets)
+    _note_skips(logger, skips)
     return None
 
 

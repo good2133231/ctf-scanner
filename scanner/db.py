@@ -140,7 +140,13 @@ CREATE TABLE IF NOT EXISTS vulns (
   owasp TEXT DEFAULT '', detail TEXT, evidence TEXT, created_at TEXT,
   review TEXT DEFAULT '',          -- 人工复核（P1-1）：'' 待复核 / confirmed 确认存在 / false_positive 误报
   review_note TEXT DEFAULT '',     -- 复核备注（判误报/确认的理由，进报告附录）
-  reviewed_at TEXT DEFAULT ''
+  reviewed_at TEXT DEFAULT '',
+  -- 续143：可复核的请求/响应摘要（请求行、状态与长度、关键响应头、正文指纹）。
+  -- 为什么单独一列而不塞进 evidence：evidence 是给人读的一句话结论，packets 是
+  -- 「凭什么这么说」的原始材料；挤在一列里页面就没法只展开后者（用户原话：数据包都没有）。
+  -- 位置刻意放在**最后一列**：老库靠 `_COLUMN_PATCHES` 的 ALTER TABLE ADD COLUMN 补，
+  -- 新建库与迁移库的列序必须一致，否则 `SELECT *` 两种库给出不同形状。
+  packets TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS pocs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -282,7 +288,7 @@ _COLUMN_PATCHES = {
               "redirect_title": "TEXT DEFAULT ''"},
     # P1-1 误报复核 / P1-2 置信度分层：老库补列（新库由 SCHEMA 直接建出）
     "vulns": {"review": "TEXT DEFAULT ''", "review_note": "TEXT DEFAULT ''",
-              "reviewed_at": "TEXT DEFAULT ''"},
+              "reviewed_at": "TEXT DEFAULT ''", "packets": "TEXT DEFAULT ''"},
     "pocs": {"confidence": "TEXT DEFAULT ''"},
     # 目录命中页的 <title>：老库补列（新库由 SCHEMA 直接建出）
     "dirs": {"title": "TEXT DEFAULT ''"},
@@ -1102,11 +1108,14 @@ def insert_dirs(task_id, dirs):
 
 
 def insert_vuln(task_id, v):
-    _exec("INSERT INTO vulns(task_id,target,poc_id,name,severity,owasp,detail,evidence,created_at) "
-          "VALUES(?,?,?,?,?,?,?,?,?)",
+    _exec("INSERT INTO vulns(task_id,target,poc_id,name,severity,owasp,detail,evidence,created_at,packets) "
+          "VALUES(?,?,?,?,?,?,?,?,?,?)",
           (task_id, v.get("target", ""), v.get("poc_id", ""), v.get("name", ""),
            v.get("severity", "medium"), v.get("owasp", ""), v.get("detail", ""),
-           (v.get("evidence", "") or "")[:2000], _now()))
+           (v.get("evidence", "") or "")[:2000], _now(),
+           # 上限比 evidence 大一个量级：它是「凭什么这么说」的原始材料，截太短等于
+           # 又让人看不到包（续143 用户原话：数据包都没有）。
+           (v.get("packets", "") or "")[:8000]))
 
 
 def insert_flag(task_id, f):

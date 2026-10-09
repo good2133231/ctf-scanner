@@ -390,6 +390,10 @@ def _find_secrets(text, source):
                 "value": _masked(raw),
                 "context": _context(text, m.start(), m.end()),
                 "source": source,
+                # 续143：行号与字节偏移 —— 用户要"详细链接"，而一个几百 KB 的打包 JS
+                # 只给前后文片段是找不到位置的（他原话：js 的也是给我详细链接）。
+                "line": text.count("\n", 0, m.start()) + 1,
+                "offset": m.start(),
                 "_raw": raw,
             })
     return out

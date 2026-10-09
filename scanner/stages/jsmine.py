@@ -123,7 +123,19 @@ class JsmineStage(Stage):
                 "severity": "high",
                 "owasp": "A08",
                 "detail": "JS 中发现疑似凭据，需人工确认其有效性与作用域",
-                "evidence": s.get("context", ""),
+                # 续143：证据里必须能**点开**——哪个 JS 文件、第几行、哪条规则、掩码后的值。
+                # 旧实现只放前后文片段，用户拿不到源文件位置（他原话：js 的也是给我详细链接）。
+                "evidence": "%s:%s 命中规则 %s，值 %s；前后文：%s" % (
+                    src or "(未知来源)", s.get("line", "?"), s.get("type", ""),
+                    s.get("value", ""), s.get("context", ""))[:800],
+                "packets": "\n".join((
+                    "来源 JS（点开即取原文）：%s" % (src or "(未知来源)"),
+                    "命中位置：第 %s 行 / 字节偏移 %s" % (s.get("line", "?"), s.get("offset", "?")),
+                    "命中规则：%s（`scanner/jsmine.py` 的凭据规则表）" % s.get("type", ""),
+                    "值（已掩码，原文不入库）：%s" % s.get("value", ""),
+                    "归属主机：%s" % (host or "(未知)"),
+                    "前后文（空白已折叠，≤160 字）：%s" % s.get("context", ""),
+                ))[:8000],
             })
 
         _fnote = flagfind.note(ctx, _flag0)
