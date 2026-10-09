@@ -2,7 +2,7 @@
 
 为什么要有这个模块：建"能登录控制台的人"这件事有**两个入口**——
 ① 首次启动的向导（`gui/app.py::serve()`，库里 0 个账号时）；
-② 命令行（`run_users.py --create-admin` / `--reset-password`，容器 / 只读挂载 / 忘了口令 /
+② 命令行（`cli/run_users.py --create-admin` / `--reset-password`，容器 / 只读挂载 / 忘了口令 /
 被登录锁定挡在门外时）。两处如果各写一份"怎么问口令、什么算合法、怎么落库"，
 迟早会漂移成本不同 —— 本仓在 `cdn.py` / `extdom.py` 上修过两次同形状的错。
 
@@ -28,7 +28,7 @@ ST_CREATED = "created"
 ST_INVALID = "invalid"          # 用户名或口令不合规则
 
 NO_TTY_HINT = (f"非交互环境（容器 / 无终端 / stdin 不可读）不代填口令："
-               f"请跑 `python run_users.py --create-admin`，"
+               f"请跑 `python cli/run_users.py --create-admin`，"
                f"或用环境变量 {ENV_PASSWORD} 提供口令（临时变量，别写进任何入库文件）")
 
 
@@ -103,6 +103,6 @@ def wizard(ask_name=None, ask_password=None, isatty=None):
     pw = ask_password(name)
     if pw is None:
         return ST_CANCELLED, ("没拿到口令（空输入 / 两次不一致 / 读不到），未建号 —— "
-                              "控制台照常启动，但**没人能登录**：补建用 `python run_users.py --create-admin`")
+                              "控制台照常启动，但**没人能登录**：补建用 `python cli/run_users.py --create-admin`")
     ok, msg = create_admin(name, pw)
     return (ST_CREATED if ok else ST_INVALID), msg

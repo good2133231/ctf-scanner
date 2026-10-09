@@ -1,4 +1,4 @@
-"""凭据文件加解密的管理入口（续98）：`python run_keys.py --status/--encrypt/--change/--verify`。
+"""凭据文件加解密的管理入口（续98）：`python cli/run_keys.py --status/--encrypt/--change/--verify`。
 
 为什么单独一个入口：加密是一次性的**部署动作**，不该混进扫描路径（扫描期绝不联网、也绝不要口令，
 见 `scanner/keystore.py` 文件头）。这个脚本只做三件事：把明文 `config/keys.yaml` 变成口令加密的
@@ -18,7 +18,7 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import keystore  # noqa: E402
 

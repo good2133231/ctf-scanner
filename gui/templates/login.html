@@ -34,7 +34,7 @@
   {% if empty_account %}
   <p class="muted" style="margin-top:14px;font-size:12px;line-height:1.6">
     这台机器上<b>还没有任何账号</b>，所以谁都登不进去 —— 这不是登录页坏了。
-    在服务器终端上跑 <code>python run_users.py --create-admin</code> 建第一个管理员
+    在服务器终端上跑 <code>python cli/run_users.py --create-admin</code> 建第一个管理员
     （首次启动控制台时也会直接向导问你要设什么口令）。
   </p>
   {% endif %}

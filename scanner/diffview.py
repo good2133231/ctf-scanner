@@ -15,11 +15,8 @@
 3. **可比性按目标判，不按任务名**。取"最近一个更早、且目标有交集、已收场"的任务作基准；
    跨归属（`owner_id`）不串（续89 多租户口径）—— 别人的任务不是你的上一轮。
 """
-from urllib.parse import urlparse
-
 from .db import get_task, list_tasks
-from .targets import parse_lines
-from .utils import base_domain, to_ascii
+from .targets import host_of, parse_lines, root_of
 
 # 类别 -> (键, 显示名, 需要的阶段)。阶段名以 `runner.STAGE_ORDER` 为准；这里写的是字面量清单，
 # 不 import runner（差分不该依赖编排层，而两边对不上时回归 `[8ah]` 会红）。
@@ -50,23 +47,25 @@ def _g(obj, key, default=""):
 
 
 def target_set(task):
-    """任务目标 -> 归一后的**注册域**集合（判可比性用，不比 URL 细节）。"""
+    """任务目标 -> 归一后的**注册域**集合（判可比性用，不比 URL 细节）。
+
+    续146：主机名提取与注册域折算改走 `targets.host_of` / `root_of`（唯一产地）。
+    **这里与其它调用方有一处刻意的不同**：IP 目标**也是身份** —— 判"两轮扫的是不是同一个
+    目标"时，`10.0.0.5` 与它自己当然可比，所以 `kind == "ip"` 原样收下（`host_of` 对 ip 返回
+    空串，正是把"要不要算 IP"这个业务决定留给调用方）。
+    """
     out = set()
     lines = str(_g(task, "targets")).splitlines()
     for kind, raw in parse_lines(lines):   # parse_lines 吃的是**行列表**，不是整串
-        host = str(raw or "")
-        if kind == "url":
-            host = urlparse(host).hostname or ""
-        host = host.strip().lstrip(".")
-        if not host or kind == "cidr":
-            continue
         if kind == "ip":
-            out.add(host)
+            out.add(str(raw or "").strip())
             continue
-        # 归一化只走 `utils.to_ascii()` 这一处（续65：IDN 的形状判断不许在各调用点各写一遍）；
-        # 它失败时**原样小写**继续用，不猜 —— 判可比性用得到就比，拿不到就说拿不到。
-        dom = to_ascii(host) or host.lower()
-        out.add(base_domain(dom) or dom)
+        host = host_of(kind, raw)
+        if not host:
+            continue
+        # 归一化只走 `targets.host_of`（内部是 `utils.to_ascii`）：它失败时**原样小写**继续用，
+        # 不猜也不丢 —— 判可比性用得到就比，拿不到就说拿不到。
+        out.add(root_of(host) or host)
     return {d for d in out if d}
 
 

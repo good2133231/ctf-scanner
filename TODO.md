@@ -51,7 +51,7 @@
 **① 真正未做**
 
 - 无。（原「分布式节点」已于 2026-10-01 续80~续90 落地，**没有**替换 SQLite —— 改走
-  "控制端独占 DB + 节点 HTTP 轮询认领/回传"这条更小的路：`scanner/nodes.py` / `run_node.py`，
+  "控制端独占 DB + 节点 HTTP 轮询认领/回传"这条更小的路：`scanner/nodes.py` / `cli/run_node.py`，
   令牌只存 sha256、心跳与在线判定、掉线任务自动重新入队、边跑边增量回传；
   管理员侧栏「执行节点」页 + CLI `--node-add/--node-list/--node-revoke`；回归 `tests/smoke.py [8c]`。）
 
@@ -756,7 +756,7 @@
          仍缺：SSO / 找回口令、HSTS/TLS 套件（交反代）；逐表单 CSRF token **刻意不做**
          （`Origin`/`Referer` 中间件已一次性覆盖）；
       ③ **分布式节点** —— **已落地（续80~续90）**：**没有**替换 SQLite，改走"控制端独占 DB +
-         节点 HTTP 轮询认领/回传"（`scanner/nodes.py` / `run_node.py`）；令牌只存 sha256、
+         节点 HTTP 轮询认领/回传"（`scanner/nodes.py` / `cli/run_node.py`）；令牌只存 sha256、
          掉线任务自动重新入队、边跑边增量回传；回归 `tests/smoke.py [8c]`；
       ④ **工具版本管理** —— **已落地（续54 / 86 / 87 / 94）**：一键下载·更新（默认过官方 SHA256）、
          版本回滚（`.bak` 对调、可逆）、"有新版本"提示、**多版本共存**（版本库
@@ -940,20 +940,20 @@
 
 - 现状：只有 `github.token`；FOFA 三路 / Shodan / Quake 都没配 → 阶段**如实**报"未配置"并零请求，
   不假装查过。
-- 推荐：保持现状。真要拓资产面时只配 **FOFA**，三条硬规矩：① 用 `py -3 run_keys.py --encrypt`
+- 推荐：保持现状。真要拓资产面时只配 **FOFA**，三条硬规矩：① 用 `py -3 cli/run_keys.py --encrypt`
   落**密文**，别留 `config/keys.yaml` 明文；② 口令只放进程环境 `CTFSCANNER_KEYS_PASSPHRASE`，
   **绝不**写进仓库 / systemd unit / `.env`（§7 红线：口令落盘＝加密退化成混淆，能读文件的人就能解密）；
   ③ `fofa.enabled` 保持默认关 —— 配了 key 也不该让每次默认任务都花配额。
 - 理由：Shodan / Quake 与 FOFA 是同构的三家，数据收益重叠、配额要花三次；而 targ3.ai 这轮的
   C 段反查证明"更多来源 = 更多要过滤的东西"（两个 CF 段各 500 条，最后判成不入库）。
-- **要你做的**：只有想接 FOFA 时才动手（给我 email+key，我用 `run_keys.py` 加密落盘；
+- **要你做的**：只有想接 FOFA 时才动手（给我 email+key，我用 `cli/run_keys.py` 加密落盘；
   口令你自己留着，我不落盘也不打印）。
 
 ### ③ ~~`gui.token` 的明文兼容分支什么时候摘 / 重设一次引导口令~~ —— **续117 把整条门摘了，这件事不再存在**
 
 - 做法换了：配置文件里**再也没有登录凭据**（`token` / `token_hash` 两个键都不被读取），
-  首个管理员由**首启动向导**交互式建，或 `python run_users.py --create-admin`（口令只进 `users` 表）。
-- 老配置里的残留键由 `python run_users.py --purge-legacy-token` 清（显式动作，不静默改用户文件）；
+  首个管理员由**首启动向导**交互式建，或 `python cli/run_users.py --create-admin`（口令只进 `users` 表）。
+- 老配置里的残留键由 `python cli/run_users.py --purge-legacy-token` 清（显式动作，不静默改用户文件）；
   **这台机器已经清过**，`--status` 现在报"gui 段里没有任何登录凭据"。
 - ⚠️ 仍留一件只能你做的事：那个口令**以前提交并推送过**，GitHub 历史里读得到；要不要重写历史 /
   换仓库是你的决定（本轮只保证"当前与往后的文件里没有它"）。
@@ -971,7 +971,7 @@
 
 **等你一句话就动的**：
 
-- (a) 上面 ② 的接 FOFA —— 只能你做（③ 已于续117 换成"首启动向导 + `run_users.py`"，不再需要你重设口令）；
+- (a) 上面 ② 的接 FOFA —— 只能你做（③ 已于续117 换成"首启动向导 + `cli/run_users.py`"，不再需要你重设口令）；
 - (c) **线索的可视出口**：〔2026-10-07 按默认选定案：**保持 JSONL 唯一出口**，不加「线索」页签〕续24 按你的口径把「线索」页签与 MD/HTML 小节撤了，线索现在**只在 JSONL 导出**里。
   本轮 github 真跑出 30 条，你会直接感到"没地方看"。推荐：**保持 JSONL 作为唯一出口**
   （机器格式全量、筛选权交给下游）；要可视化我只加一个**只读**的「线索」页 ——

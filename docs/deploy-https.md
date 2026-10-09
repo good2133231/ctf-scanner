@@ -27,7 +27,7 @@
 gui:
   host: 127.0.0.1            # 保持回环：外网入口只有反代
   port: 5000
-  # （续117）这一段没有任何登录凭据：首个管理员由首启动向导或 `python run_users.py --create-admin` 建
+  # （续117）这一段没有任何登录凭据：首个管理员由首启动向导或 `python cli/run_users.py --create-admin` 建
   allowed_hosts: ["scanner.example.com"]   # ← 放行你的部署域名（必填，否则整站 403）
   behind_proxy: true                       # ← 信任反代转发的 X-Forwarded-*
   secure_cookie: true                      # ← 会话 Cookie 加 Secure（TLS 就绪后打开）

@@ -6,6 +6,206 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续146 站点默认只看 200/404 + 批量打标收口 + 判据收敛成一份 + 四个入口搬进 cli/ + Linux 一键安装 + 项目须知打包成 skill
+
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）。本轮是**两批点单合起来做的**：续145 收尾时
+留在 `todo.txt`「下一轮（续146）」里的三件事（B/C/D），加上用户续146 当场新点的四件
+（清理、skill、可迁移、根目录归档）。原话：
+
+- 「这个你清理了把」（指 `logs/_gui141.out` 里那个已失效的后台前缀，与一个 10 月 8 日起、
+  并不在监听 5000 的旧 `run_gui.py`）；
+- 「请你把我们一些重要的项目须知打包成 skill，然后其他 ai 一进入项目就自动加载 skill
+  就了解我们项目并且不容易犯错」；
+- 「我们机子现在是通过文件夹底下的 python …… 现在模式我感觉不像可迁移 —— 自动化安装、
+  自动化配置环境，脚本运行一下就可以运行」（追问后明确：**只做 Linux 的 `.sh`**）；
+- 「目录上的那些日志是什么意思 …… 我们不能都集合在工作目录的 log 底下吗，这个目录不同步 git 就好了」；
+- 「根目录这些文件太乱了，能不能归档一下，主目录只留启动文件」（追问后选定：**把 4 个入口挪进 `cli/`**）；
+- 「把这些杂项也解决，并且给我开始之前就大概给我一个预估时间」。
+  开工前给的预估：B 40 分 / C 10 分 / D 20–45 分 / E 60 分 / F 25 分，不含 F 约 3 小时、含 F 约 4 小时。
+  另外三处由用户当场选定口径：D **全收敛成一份**、B **跨任务站点页 + 任务详情站点页签两处都做**。
+
+### B 站点默认只看 200/404（跨任务 `/sites` 与任务详情站点页签**同一口径**）
+
+- 判据只有**一个产地**：`scanner/db.py` 新增
+  `SITE_STATUS_WHERE = "(status IN (200, 404) OR (status >= 300 AND status < 400 AND redirect_status IN (200, 404)))"`
+  —— 3xx **跳转后**落在 200/404 的也算显示（续139「服务端回了真实状态码就算活」那条口径的延续：
+  跳转后是 200，那它就是个活站）。`gui/app.py` 里**一处内联都没有**，`[8au]③` 钉的是
+  `"status IN (200, 404)" not in gui/app.py 源码` + `return (db.SITE_STATUS_WHERE if hide else None), hide`
+  恰好一处。
+- 三个新助手与续112 的「只看解析成功的域名」**同构**（刻意照着抄，不是另创一套）：
+  `_site_status_arg()`（读 `?allst=1`）、`_allst_state()`（挂 `allst`/`st_hidden`/`st_on`/`st_off`/改 `qs`）、
+  `_site_status_extra()`（算被收起的条数）。同一条纪律：**默认态（收起）的翻页链接不带参数**，
+  只有展开后才带 `&allst=1` —— 续112 第一版写反过，症状是"第 2 页突然把收起的行全放出来"，
+  同一个视图两页口径不一致。
+- ⚠ `_allst_state()` **必须在其它视图状态（`all=1` / `task=` / `plain=1`）都拼进 `pager["qs"]` 之后**再调。
+  它把当时的 `qs` 存成 `st_off`、`qs + "&allst=1"` 存成 `st_on`；调早了，那两个切换链接就会把
+  别的筛选悄悄丢掉 —— 现象是"点一下『显示全部状态码』，任务筛选没了"。`[8au]①` 用
+  `?all=1&plain=1&task=N&allst=1` 真渲染一次，断言收起链接里 `all=1` / `task=` / `plain=1` 三个都在。
+- **被收起的条数与列表同源**：`_site_status_extra()` 走的是与列表**同一个** `_page_assets(limit=0)`
+  （只要 total），owner 可见范围、关键字、重叠折叠条件全部一致 ⇒ "共 N 条"与"另有 M 条被收起"
+  不可能各按一套口径算出来。多付一次 COUNT，换一个不会说谎的数字（本项目反复踩的就是"内层外层不同源"）。
+- 页面上三句话说清性质：默认收起多少条、`401 / 403 / 5xx / 521…` 是哪些、以及**「入库一条没动」**
+  —— 这是**展示层**过滤，不是删数据（续112 立的口径）。
+- **任务详情页签的徽标是未过滤总数**：`site_total` 不再取 `sites_pager["total"]`（那是过滤后的），
+  改取 `_site_status_extra()` 返回的第二个值。实测同一个任务：徽标 **68**、分页条「共 **64** 条」、
+  另有 **4** 条被收起。两个数字的关系**直接写在页面上**（「页签徽标 68 是**未过滤**的站点总数」）——
+  不写就是让人以为资产被吞了。
+
+### C 「批量打标」只读按钮所在面板（原先读整页）
+
+- 缺陷本体：`initVulnReview` 的批量分支是 `document.querySelectorAll(".pick-row:checked")` —— **整页**。
+  任务详情页勾了站点行、再切到漏洞页签点「批量确认存在」，会把**站点 URL 当漏洞 id** 发出去；
+  服务端按非法 id 忽略 ⇒ 用户看到的只是"点了没反应"，最难查的那种静默失灵。
+- 修法是收到 `const scope = btn.closest(".panel") || document;` 再 `scope.querySelectorAll(...)`。
+  **按容器收，不按表 id 收**：跨任务 `/vulns` 的表叫 `tbl-vulns-all`、任务详情页叫 `tbl-vulns`，
+  写死任何一个都会让另一页失灵 —— 与续145「批量打开」的 `data-pick-from` 是同一个教训。
+  `[8au]④` 把这条**理由**也钉住了（两个 id 都断言存在），否则下一个人会想改回按 id 收。
+
+### D 「目标 → 注册域」四份实现收敛成一份（`scanner/targets.py`）
+
+- 新增四个原语，从此这是**唯一产地**：`host_of(kind, value)`（url→`urlparse().hostname`、
+  domain→自身、ip/cidr/unknown→**空串不猜**；统一小写、剥尾点、IDN 转 punycode）、
+  `hosts_of(items)`（去重**保序**、滤掉非域名）、`root_of(host)`（**先 `is_domain` 守门再 `base_domain`**，
+  裸 IP 与单标签内网名一律空串）、`roots_of(items)`（`hosts_of` → `root_of`，去重保序）。
+- 六个调用点全改走它，**语义一处没变**（这是收敛的关键：改的是实现，不是判据）：
+  `stages/subdomain.py`（收集根 + 折叠两处 + `auto_expand` 的"目标是子域时补收主域"）、
+  `extdom.base_of` / `task_bases`、`diffview.target_set`、`github_leak.target_domains`、
+  `jsmine` 的自家域名保护集、`stages/osint.py`（`_collect_ips` + `_root_domains`）。
+  连带删掉的手写守门：osint 的 `import ipaddress` 与 `'.' in root`、github_leak 里两道
+  早已被 `root_of` 内含的判据、subdomain 的 `from urllib.parse import urlparse`。
+- 三处**刻意保留的差异**（都写进了注释与断言，免得下一个人"顺手统一"）：
+  ① `diffview.target_set` 仍把 **IP 当身份**并展开 CIDR（差分视图里 IP 目标就是目标）；
+  ② `extdom.base_of` 对怪值**退回 `base_domain` 粗切** —— `group_by_base` 需要一个**非空稳定键**，
+     返回空串会把所有怪值并成一组；③ `github_leak` 的 `max_domains` 上限与坏值回落照旧。
+- **真收益（不是"代码更漂亮"）**：`base_domain("127.0.0.1")` 给出 `"0.1"` 这种伪域名，
+  而 `jsmine` 拿保护集当"自家域名"用 ⇒ 目标里有一个裸 IP，就永远挖不到它名下的 JS 端点
+  （保护集把 `0.1` 当自家域，反而放过了真该保护的）。`root_of("127.0.0.1")` 是空串。
+  `[8au]⑤` 把这个**对照**写成了断言（两个值都钉），否则"收敛"看起来只是搬家。
+- 红线判据用 **AST 数 `ast.Call`**，不按文本搜：`scanner/` 下调用 `base_domain` 的只许是
+  `targets.py`（`root_of`）与 `extdom.py`（`base_of` 兜底）。按文本搜会**假红** ——
+  我自己在 `github_leak.py` 的 docstring 里解释了"为什么不再需要那道守门"，里面引用了
+  `base_domain("127.0.0.1")`。这是本项目第 3 次被"自己的说明文案绊红自己的断言"绊倒（见 §6.1 推论四）。
+
+### F 四个入口搬进 `cli/`（仓库根只留启动文件）
+
+- `git mv run_{keys,users,node,devflow}.py cli/`（用 `git mv` 而不是删+建，`git status` 认成 `R`，
+  历史与 blame 都跟着走）。仓库根从此只剩 `run_gui.py` 与 `run_bootstrap.py` 两个启动文件
+  （加上本轮新增的 `install.sh` / `start.sh`）。
+- 四个脚本的路径自举都加了 `.parent.parent`（`sys.path.insert` × 2、`ROOT =` × 2）。
+  漏改的症状是"从仓库根跑就 `ImportError: No module named scanner`"—— `[8au]⑥` 既钉源码形态，
+  也**真跑一次** `cli/run_keys.py --status`（rc=0）；顺带钉了跑完 `cli/logs/` 不会被建出来
+  （路径自举加了一层，日志落点也得跟着回仓库根）。
+- 全仓引用同步 **77 处 / 26 个文件**：一条 `(?<!cli/)\brun_(keys|users|node|devflow)\.py` 的
+  字节级替换（只作用于"会被执行的代码 + 用户会照抄的活文档"白名单，替换前后断言行数不变），
+  外加 9 处逐行修正（路径自举、`gui/app.py` 拼子进程命令那一行、"与 run_gui.py 对称/根目录"
+  这类搬完就变成假话的措辞）。
+- **历史文件刻意不动**：`CHANGELOG_AI.md` / `todo.txt` / `docs/roadmap.md` / `docs/takeover-*.md`
+  —— 改了等于篡改历史记录（那些句子描述的是当时的事实）。
+- `tests/smoke.py` 不做全量替换，10 处硬路径手工改；另外**收紧了 3 条"子串仍能蒙对"的断言**：
+  搬完之后 `"run_users.py --create-admin" in page` 照样命中（`cli/run_users.py …` 里含那个子串），
+  判据比事实松了一档 ⇒ 回退成根目录路径也测不出来。三条都加上 `cli/` 前缀。
+  **反向**断言（`[8at]④` 的 `"run_users.py" not in 缺口清单`）刻意保持裸子串：那样才同时挡住两种写法。
+- `.github/workflows/quality.yml` 的 devflow job 也跟着改成 `python3 cli/run_devflow.py`，
+  `[8au]` 与既有的 `[8ak]` 都钉了这一行（CI 里跑不了比本地跑不了更难查）。
+
+### E Linux 一键安装：`install.sh` + `start.sh`（**薄包装**，判据一份不抄）
+
+- `install.sh`：找 ≥3.9 的解释器（门槛与 CI/容器同口径，权威判据仍是 `run_bootstrap.PY_MIN`）→
+  `run_bootstrap.py --install` → **复验**（`.venv/bin/python -c 'import flask, requests, yaml'`，
+  以"能不能 import"为准，不按上一步的返回值吹）→ 印出"哪些没自动化 / 下一步敲什么"。
+  退出码**原样带出去**，与 `run_bootstrap.py` 同一个契约，不另立一套口径。
+- `start.sh`：优先 `.venv/bin/python`、没有就退回系统解释器，但**依赖必须真在**（缺了就直说
+  "先跑 ./install.sh"，不用半套环境把控制台起到一半再崩）→ `exec`（不再套一层 shell，
+  否则信号传不进 Flask，Ctrl-C 杀不干净）。**不透传 `"$@"`**：`run_gui.py` 不解析 argv，
+  透传＝静默忽略；改监听地址的正确做法是 `CTFSCANNER_GUI_HOST` / `CTFSCANNER_GUI_PORT`
+  （判据在 `scanner/config.py::gui_bind()`），脚本里指路了。
+- 两个脚本自己**都不实现安装逻辑**：`install.sh` 里不许出现 `pip install` / `-m venv`（`[8av]` 钉住）。
+  ⚠ 但**不禁提到这些词的说明文字** —— 脚本里那句"缺了 `python3-venv`，run_bootstrap 会退到用官方
+  `get-pip.py` 引导"是正当说明。我第一版把 `get-pip` 一起禁了，被自己的文案绊红：这是本项目
+  **第 5 次**踩同一类坑，已写进 §6.1 **推论四**。
+- 新增 `.gitattributes`，只有一条 `*.sh text eol=lf`（**刻意不做全局归一化**：仓库是 CRLF/LF 混排，
+  一加 `* text=auto` 就会让 git 想重写几百个文件，把真改动埋掉）。理由：CRLF 的 shebang 会让 bash 报
+  `bad interpreter: /usr/bin/env bash^M`，而从 Windows 检出后的症状看着像"这台机器没装 bash"。
+- **实测**（从"只有索引里那些文件"的空目录跑一遍，`/tmp` 沙箱，跑完删）：507 个文件拷进去 →
+  `.venv` 建出来 → 依赖复验通过 → `tools/scanner/` 下回 **subfinder + httpx**（puredns 那次没下下来 ⇒
+  退出码 1，并如实报"多半是可选的外部工具没下下来，框架本身仍能跑"）→ `./start.sh` 起得来：
+  根路径 **404 / 0 字节**（续138 的前缀纪律没被破坏）、带前缀的地址 **401**（见下面那条）、
+  启动横幅与 `_boot_gaps` 汇总如实点名 2 项配置没就位、**源仓库零污染**（`git status` 里没多出 `data/` `logs/`）。
+- **实测撞出来的一件事（只如实写进文档，没动配置）**：仓库出厂的 `config/settings.yaml` 是
+  **服务器形态**（`gui.host: 0.0.0.0` + `allowed_hosts: []` + `gui.edge_auth.enabled: true`，续131 的取舍），
+  而口令文件 `config/edge_auth.yaml` 在 `.gitignore` 里 ⇒ **刚 clone 出来的控制台对所有请求回 401**，
+  看着像装坏了。那是 fail-closed 生效，不是 bug（`python -m scanner.edgeauth --set` 即可）。
+  但代码默认值 `DEFAULTS` 是 `127.0.0.1` + `enabled: false`，**两份口径不一致**，而 README 原先那句
+  "控制台默认只绑 `127.0.0.1:5000`、只认回环 Host"与出厂文件**相反** —— 那不是措辞问题，
+  它让人误判自己的暴露面。本轮把 README 那段改成如实描述，并把这一项列进 `install.sh` 的收尾说明；
+  **要不要改 shipped 的那份是安全开关，留给主理人决定**（已进 `todo.txt` 的下一轮清单）。
+
+### 项目须知打包成 skill（`.qoder/skills/ctf-scanner/SKILL.md`）
+
+- **project 级**（放在仓库里而不是 `~/.qoder/`）⇒ 随仓库走，换机器 / 换 AI / 换对话框都拿得到，
+  这正是用户那句"其他 ai 一进入项目就自动加载"的要求。
+- 内容是 §0 / §6.1 / §6.2 / §9 / §10 的**摘要 + 索引**：先读哪三份文件、十条最容易犯的错
+  （唯一门禁命令、单执行者、bytes 改文件、断言要能证伪、判据一个产地、钉代码形态不钉裸词、
+  桩掉写路径＝假绿高发区、安全红线、别让自动化点 GUI 写按钮、展示层过滤 ≠ 删数据）、
+  目录与入口、收尾四步、去哪查全文。
+- **刻意不抄正文** —— 抄一份就多一个会漂的产地（§5.14，本项目反复栽在这上面）。
+  AGENTS.md 文件头加了指针，并写明"改了 §0/§6.1/§6.2/§9/§10 就要回头核 skill 里的摘要有没有变成假话"。
+- **本机另建了一个符号链接**（不在仓库里，换机器要自己补）：这台机器的工作区根是 `ctf-scanner/` 的
+  **上一级**，而 project 级 skill 是按「工作区根 /.qoder/skills/」发现的 ⇒ 在上一级建了
+  `.qoder/skills/ctf-scanner → ctf-scanner/.qoder/skills/ctf-scanner`。建完 `/skills list` 里
+  **当场就出现了**（实测）。权威副本在仓库里，链接只为让"把上一级当项目根打开"的会话也能自动加载。
+
+### 清理（用户批准的那两件 + 日志归拢）
+
+- 删掉 `logs/_gui141.out`（里面留着上一轮那个**已失效**的后台前缀 —— 前缀重启即换，
+  留在文件里只会让人照着抄一个死地址）。
+- 结束一个 10 月 8 日起、并不在监听 5000 的旧 `run_gui.py`（PID 1012611）。**结束前核过三件事**：
+  它监听的是 `0.0.0.0:14871`（不是当前控制台）；库里没有 `running` 任务；
+  `claim_next_queued` 只领 `queued`、`reconcile_orphan_tasks` 只重排 `running` ⇒
+  3 条 `pending` 不会在重启时被点着。
+- 目录上那 7 个安装/校验日志归拢到 `logs/setup/`（用户："我们不能都集合在工作目录的 log 底下吗，
+  这个目录不同步 git 就好了" —— `logs/` 本来就在 `.gitignore` 里）。
+
+### 实测数字
+
+| 项 | 数字 |
+|---|---|
+| 门禁（宿主 `./.venv/bin/python tests/smoke.py`） | **SMOKE PASS / RC=0 / 约 4m43s / 0 AssertionError**（`logs/_gate146g.log`，3989 行，151 条组打印） |
+| 全流程自检 `cli/run_devflow.py` | **13 阶段 11 真跑 / 2 跳过 / 0 FAIL**；**35 向量 19 OK / 0 MISS / 16 N-A**；网络活动 **247** 次 / **11.3s** |
+| F 的引用同步 | **77 处 / 26 个文件**；`tests/smoke.py` 另手工 10 处 + 收紧 3 条 |
+| F 之后的残留 | 活文件（116 个）里指着仓库根的**可抄命令 0 处**；历史文件里的裸引用**刻意保留** |
+| `cli/run_devflow.py` 的行数与第 96 行 | **132 行**（与 HEAD 逐字同数）、第 96 行仍是 `devflow.save_baseline(...)`（`[8as]` 按索引 95 钉着） |
+| B 的实测三数 | 徽标 **68**（未过滤）／分页条「共 **64** 条」／另有 **4** 条被收起 |
+| D | 新增 **4** 个原语、收敛 **6** 个调用点、删掉 **3** 处手写守门；`base_domain("127.0.0.1")=="0.1"` 对 `root_of(...)==""` |
+| E 的净拷贝安装 | 拷 **507** 个文件 → `.venv` OK、依赖复验 OK、subfinder+httpx 下回、puredns 失败（退出码 1，如实报）；`start.sh` 起得来（`/` → 404/0 字节，前缀地址 → 401） |
+| 新增回归 | `[8au]`（B/C/D/F，插入 **291** 行）+ `[8av]`（E 的结构红线，插入 **56** 行） |
+| 文档改动的 numstat | AGENTS.md **58/14**、README.md **47/23**、docs/usage.md **15/9**、tests/smoke.py **372/24**、todo.txt **108/23** |
+
+### 本轮自己犯的错（都记进 §6.1 推论四 / §6.2 的口径里，免得下一个人重踩）
+
+1. **一条续145 的断言被续146-D 改陈旧，门禁红在 `tests/smoke.py:19756`**：`[8at]③` 原先数
+   `subdomain.py` 里 `base_domain(d)` 恰好两处，D 把判据收敛进 `targets.root_of` 之后那个字符串是 0 处。
+   **修法不是把 2 改成 0**：那条断言想守的是"折叠判据只有一个产地"，产地搬了家，守它的地方也得搬家 ——
+   改由 `[8au]⑤` 的**全仓 AST 扫描**守（按调用点判，不吃注释），原地只留真正属于 `[8at]` 的那半条
+   （折叠日志仍带 devflow 认的「自动拓展」kw）。两处各数一次就是 §5.14 的第二个产地，
+   改了一处另一处立刻变假绿。
+2. **补丁脚本的行号取自改动前的文件**（同一个坑本轮踩了两次）：`gui/app.py` 那处逐行修正写着 3373，
+   实际是 3429（B/C 的改动把行推走了 56 行）；`tests/smoke.py:12855` 的缩进也写错（4 空格 vs 实际 8）。
+   两次都是**锚点核对**当场拦下的（对不上就 `SystemExit`，绝不"差不多就写"）—— 这正是续145
+   §6.2 第十二起那个"打偏 7 行"事故之后立的规矩在起作用。纪律：**每一批之后重新取行号**，
+   且锚点除了行号还要核首行前缀（多行区段逐行全等，单行才允许前缀匹配）。
+3. **`_wpatch` 在"CRLF 与 LF 在同一区段交错"的地方会静默返回 `[0, 0]`**：`gui/app.py` 的 `/sites`
+   路由是 25 CRLF + 6 LF 交错，靠"先试 CRLF 再试 LF"匹配整块锚点的 `_wpatch` 打不进去。
+   新写了 `logs/_lpatch.py`（按行号替换、逐行保留该行原有 EOL、新增行取区段主导形态），
+   已把两者的分工写进 AGENTS §10 末尾。
+4. **两条判据被我自己写的说明文案绊红**（第 4、5 次）：`querySelectorAll("#tbl-vulns` 撞上我在
+   app.js 里写的注释；`install.sh` 里禁 `get-pip` 撞上那句正当说明。两次都**收紧判据**而不是给文案开豁免
+   （豁免一加，判据就再也抓不到真违规）。
+5. **`todo.txt` 的两式 numstat 差 1**（`108/23` vs `107/22`）—— 不是 EOL 被洗。逐行比对（difflib，
+   按"内容相同的行"配对再比 EOL）证明：**只有 1 行的行尾变了，就是原文件最后一行**，
+   它原本**没有**结尾换行，追加前给它补了 CRLF。续145 在 `tests/smoke.py` 上撞过同一类
+   git 对齐假象（`338/60` vs `339/61`），口径一致：**两式不等 ⇒ 必须逐行证明，不能只看数字**。
+
 ## 续145 摘掉四个补扫入口 + 目标自动提取主域 + 启动日志落文件（一次点单三件事）
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。用户同一次点单三件事，原话：

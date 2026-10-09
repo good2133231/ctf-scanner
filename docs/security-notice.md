@@ -105,9 +105,9 @@ CTFScanner 只允许用于以下场景：
 - **续117：配置文件里再也没有登录凭据。** 旧版有一条 `gui.token` 引导口令（库里 0 个账号时
   能直接换管理员身份），而 `config/settings.yaml` **被 git 跟踪、仓库公开** —— 那份 clone 就带着
   管理员入口。这条门已**整支摘除**：登录只剩账号，首个管理员由首启动向导交互式建，
-  或跑 `python run_users.py --create-admin`（口令只进 `users` 表的 `pbkdf2_sha256$迭代$盐$哈希`）。
+  或跑 `python cli/run_users.py --create-admin`（口令只进 `users` 表的 `pbkdf2_sha256$迭代$盐$哈希`）。
   老部署里若还残留那两个键，控制台每次启动会点名（只看键名、绝不打印值），清除是一条显式命令：
-  `python run_users.py --purge-legacy-token`。
+  `python cli/run_users.py --purge-legacy-token`。
 - ⚠️ **删掉当前值不等于收回历史。** 那个口令以前提交并推送过，GitHub 的提交记录里仍然读得到；
   要真收口得重写历史或换仓库。续109 起它也**不是** Flask 会话密钥的派生源（密钥是本机随机、
   落在库同目录的 `session.secret`，0600、不进仓库），所以"口令公开 = 会话可被伪造"早就不成立。

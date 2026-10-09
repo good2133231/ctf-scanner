@@ -3,6 +3,12 @@
 > 本文件描述**实际代码状态**，不描述愿望。若与 docs/ 下其它文档冲突，以代码为准，并把冲突修掉。
 > 2026-09-23 新负责人接手后的复核报告见 [docs/takeover-2026-09-23.md](docs/takeover-2026-09-23.md)
 > —— 里面有"文档没记录的问题"与下一步排期建议，接手时先看它，能省一轮重复调研。
+>
+> **⚡ 有一个会自动加载的 skill**：`.qoder/skills/ctf-scanner/SKILL.md`（续146 应主理人要求打包：
+> 「把我们一些重要的项目须知打包成 skill，然后其他 ai 一进入项目就自动加载，就了解我们项目并且不容易犯错」）。
+> 里面是本文件 §0 / §6.1 / §6.2 / §9 / §10 的**摘要 + 索引**，给"刚进项目、还没读全文"的 AI 用。
+> 它**刻意不抄正文**（抄一份就多一个会漂的产地，§5.14）：与本文冲突时一律以本文为准；
+> 反过来，改了 §0 / §6.1 / §6.2 / §9 / §10 就要回头核一遍 skill 里对应的摘要有没有变成假话。
 
 ## 0. 硬规矩（最高优先级，违反即视为改坏项目）
 
@@ -239,16 +245,29 @@ Flask Web 控制台（仿 ARL）。
 
 ```
 ctf-scanner/
-├── cli/client.py          # CLI 入口：导入目标 → run_task（阻塞）；`--check` 看外部工具，
-│                          #   `--check-afrog-pocs [目录]`（续123）**只读**自查 afrog PoC 目录：
-│                          #   多少条属于"只读 + info 级"会被喂给外部引擎、每条被拒的原因；
-│                          #   不发请求、不写配置，退出码 0=查到结果（含一个可喂的都没有）/ 1=无从可查
+├── install.sh / start.sh  # Linux/macOS 的一键安装与启动（续146）：**薄包装** —— 找解释器 → 调
+│                          #   `run_bootstrap.py --install` → 复验 → 印出"哪些没自动化、下一步敲什么"；
+│                          #   start.sh 则 **exec** `run_gui.py`。判据一份都不抄（§5.14），[8av] 钉住。
+│                          #   ⚠ 必须 LF 行尾（`.gitattributes` 钉了 `*.sh text eol=lf`）：CRLF 的 shebang
+│                          #     会让 bash 报 `bad interpreter: /usr/bin/env bash^M`，而从 Windows 检出后
+│                          #     的症状看着像"这台机器没装 bash"，最难往行尾上想
 ├── run_gui.py             # Web 控制台入口（库里 0 个账号时**先跑首启动向导**建第一个管理员，续117）
-├── run_users.py           # 管理员账号的命令行入口（续117）：--status / --create-admin / --reset-password
-│                          #   / --purge-legacy-token；口令只从 getpass 或 CTFSCANNER_ADMIN_PASSWORD 来，
-│                          #   **任何输出都不出现口令值**，落库的只有 PBKDF2 派生值
 ├── run_bootstrap.py      # 迁移自举（续96）：按平台点清环境缺口，自动补 `.venv`(含 pip 引导) + pip 依赖 + `toolmgr.TOOLS` + 可选系统包层 `--with-system`；nmap/fscan/dirmap **只打印命令、不代跑**。放仓库根、刻意不进 `scanner/` 包（免得给 [7p] 的扫描期零下载红线开豁免）
-├── run_keys.py          # 凭据口令加密的管理入口（续98）：--status / --encrypt / --change / --verify；任何输出都不出现 key 值或口令
+│                          #   ⚠ 续146 起仓库根**只有上面这两个启动文件**（用户点单："根目录这些文件太乱了，
+│                          #     主目录只留启动文件"），其余入口全在 `cli/` 下
+├── cli/                   # 命令行入口（续146 从仓库根搬进来；搬完路径自举都要 `.parent.parent`，
+│                          #   少一层的症状是"从仓库根跑就 ImportError: No module named scanner"，[8au]⑥ 钉住）
+│   ├── client.py          # CLI 入口：导入目标 → run_task（阻塞）；`--check` 看外部工具，
+│   │                      #   `--check-afrog-pocs [目录]`（续123）**只读**自查 afrog PoC 目录：
+│   │                      #   多少条属于"只读 + info 级"会被喂给外部引擎、每条被拒的原因；
+│   │                      #   不发请求、不写配置，退出码 0=查到结果（含一个可喂的都没有）/ 1=无从可查
+│   ├── run_users.py       # 管理员账号的命令行入口（续117）：--status / --create-admin / --reset-password
+│   │                      #   / --purge-legacy-token；口令只从 getpass 或 CTFSCANNER_ADMIN_PASSWORD 来，
+│   │                      #   **任何输出都不出现口令值**，落库的只有 PBKDF2 派生值
+│   ├── run_keys.py        # 凭据口令加密的管理入口（续98）：--status / --encrypt / --change / --verify；任何输出都不出现 key 值或口令
+│   ├── run_node.py        # 分布式执行节点（续80）：连控制端领任务、跑完把资产增量回传
+│   └── run_devflow.py     # 全流程自检（续50）：起内置靶场 → 压量 → 真跑 13 阶段 → 逐阶段 OK/SKIP/FAIL
+│                          #   ⚠ 它会覆写 `logs/devflow_baseline.json`，只读 agent 不许跑（§10）
 ├── gui/
 │   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
 │   ├── templates/ static/ # 页面与原生 JS（app.js：轮询状态/日志、建任务、POC 管理、页签、表格筛选、任务批量操作）
@@ -615,7 +634,7 @@ ctf-scanner/
 10. **登录凭据只在 `users` 表里，配置文件里一个都不许有**（续117）：旧的 `gui.token` 引导口令
    （库里 0 个账号时能直接换管理员身份）已整支摘除 —— `config/settings.yaml` **被 git 跟踪、仓库公开**，
    "能换管理员身份的串"写在里面就等于交给每个读者。现在的路径：0 账号 → `serve()` 的首启动向导
-   （`scanner/admin_setup.py::wizard()`）或 `python run_users.py --create-admin`；`_session_user()` 对
+   （`scanner/admin_setup.py::wizard()`）或 `python cli/run_users.py --create-admin`；`_session_user()` 对
    **不带 `uid` 的会话一律作废**（升级前留下的引导 Cookie 也不再认，回归 `[8v] ③` 钉的就是这一档）。
    新增任何"绕过账号的登录路"都算违反本条；页面侧也不许再出现口令输入框（`[8v] ④` 按渲染出的
    HTML 判，注释里写不写键名都不影响判据）。
@@ -981,12 +1000,14 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   `value`/`href` 的真实值仍是 punycode；报告 MD/HTML 回中文、JSONL 保持 punycode；
                             #   ④ **端到端真链路**：目标 `例子.中国` 跑 `-p subdomain`（桩解析器）→ 解析目标/
                             #   产物/DB 全 punycode、任务详情页回中文。**每组都做 §6.1 变异证伪。**
-py -3 run_keys.py --status                            # 续98：凭据是明文还是密文、是否已解锁（只打摘要，不打值）
+py -3 cli/run_keys.py --status                        # 续98：凭据是明文还是密文、是否已解锁（只打摘要，不打值）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 cli/client.py --check-afrog-pocs <目录>   # 只读自查 afrog PoC 目录：能喂几条、为什么拒（续123）
                             #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）
 py -3 cli/client.py --bootstrap                           # 续96：迁移自举——按平台点清缺口（解释器/pip 依赖/外部工具/浏览器），**不联网**
 py -3 run_bootstrap.py --install                            # 续99：等价入口（会先建 .venv 再用它自重跑；--no-venv 可退回当前解释器）
+./install.sh                                        # 续146：Linux/macOS 一键安装（薄包装，判据全在 run_bootstrap.py）
+./start.sh                                          # 续146：起控制台（等价 ./.venv/bin/python run_gui.py；改监听地址走 CTFSCANNER_GUI_HOST/PORT，run_gui.py 不解析 argv）
 py -3 cli/client.py --bootstrap --install                   # 自动层＝pip 依赖 + toolmgr 的 TOOLS；「需手工」那三类只打印命令，一条都不代跑
 py -3 cli/client.py --update-tools            # 续54：联网装/更新 subfinder/httpx/puredns 并回写 tools.<名>
                                               #   可选 --tool <名>（可重复）/ --allow-unverified / --no-wire / --tools-dest
@@ -1005,7 +1026,7 @@ py -3 tests/browser_e2e.py     # 续60：真浏览器 E2E（无头 Chrome/Edge +
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
 py -3 run_gui.py            # 入口在**启动横幅那行**（http://127.0.0.1:5000/<本次随机 20 位>/，续138；
                             #   直接开根路径是 404 空响应）；库里没账号时**当场向导**问你要设什么口令
-py -3 run_users.py --status   # 续117：账号数 + 配置里有无历史残留（只报有无，不报任何值）
+py -3 cli/run_users.py --status # 续117：账号数 + 配置里有无历史残留（只报有无，不报任何值）
 py -3 -m scanner.edgeauth --status                # 续132：401 边缘门配过口令没有（只报有无，绝不报值）
 py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（明文、0600、gitignore）；口令只经 getpass
                             #   建号 / 改口令：--create-admin [用户名]、--reset-password 用户名
@@ -1088,6 +1109,22 @@ py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（
 都必须由"这一轮真的全部通过"这个事实产生；否则它只是装饰，还可能主动误导（第四次的 `SMOKE PASS` 就是
 装饰 —— 续41 把它搬进 `main()` 末尾，并做了"旧位置 + 坏断言 → 仍打印 PASS / 新位置 + 同一坏断言 → 不打印"
 这组双向证伪）。
+推论四（续146 新增，本轮**第五次**撞同一类）：**断言别钉裸词，钉代码形态**。
+已经有五次"自己写的说明文案把自己的断言绊红"：① 摘掉「深度目录补扫」入口后，断言
+`"深度目录补扫" not in page` 被我自己在 gui/app.py 里写的一句注释绊红；② 断言 `"site_urls" not in src`
+被同一轮的说明文字绊红；③ D 收敛折叠判据后，按**文本**搜 `base_domain(` 把 `github_leak.py` 的 docstring
+（那里正是在解释"为什么不再需要那道守门"）算成了第二份实现；④ 断言 app.js 里不许出现
+`querySelectorAll("#tbl-vulns`，被我自己写的注释绊红；⑤ `[8av]` 原先禁 install.sh 里出现 `get-pip`，
+而脚本里那句"缺了 python3-venv 就退到用官方 get-pip.py 引导"是**正当说明**，不是第二份实现。
+处理方式一律是**把判据收紧到代码形态**，而不是给文案开豁免（豁免一加，判据就再也抓不到真违规）：
+`site_urls` 改成认 `\bsite_urls\s*=`；"某函数不再被调用"改成用 **AST 数 `ast.Call` 节点**
+（`[8au]⑤` 就是这么判 `base_domain` 的）；容器判据改成认真实调用 `btn.closest(".panel")`；
+"禁第二份实现"只禁**动作**串（`pip install` / `-m venv`），不禁提到这些词的说明文字。
+写这类断言前先问一句：**"我即将写下的这段解释，会不会自己命中它？"**
+配套的一条：**"0 命中 / 空列表"型断言必须自带夹具**。`[8au]⑥` 判"活文件里没有指着仓库根的可抄命令"
+之前，先造三条该被抓住的命令确认判据抓得到、再造三条不该被抓住的确认它不误伤，
+并且断言扫描范围本身 > 100 个文件 —— 否则目录一改名，"0 命中"就成了空写（§6.1 的老规矩，
+只是这类断言特别容易忘）。
 
 ### 6.2 假红：断言拿"环境值"当哨兵（续97 新增，两起都是真撞出来的）
 
@@ -1509,7 +1546,7 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
      管理员 Cookie 塞进客户端，`/` 与 `/settings` 必须 302；同一条判据配**运行时变异**（把 `app.secret_key` 打回
      `f"ctfscanner::{token}"` → 同一张 Cookie 立刻被接受），否则"被拒"可能只是 Cookie 格式搓错了（§6.1）。
   ✅ 续117 把这一整支**摘掉**（比续113 的"只存派生值"更彻底）：`gui.token` / `gui.token_hash`
-     都不再被任何代码读取，配置文件里没有任何登录凭据；残留键由 `run_users.py --purge-legacy-token`
+     都不再被任何代码读取，配置文件里没有任何登录凭据；残留键由 `cli/run_users.py --purge-legacy-token`
      显式清除（走 `config.remove_settings_keys` —— **逐行删**，`save_settings` 是合并写删不掉键，
      且它整份 `yaml.safe_dump` 会把 settings.yaml 的注释全洗掉，本轮真踩过）。下面这条留作历史。
   ✅ 续113 收掉第二条：`gui.token` 不再必须存明文 —— 「策略配置」页保存口令只写 `gui.token_hash`
@@ -2255,7 +2292,7 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
   **真调 `serve()`**（`app.run` 打桩成立刻返回），不摘就把后面每组刷成红、且红在哪个组取决于
   随机前缀 —— 是 §6.2 那种"看着像代码坏了"的假红。程序化调 `serve()` 的嵌入用法同理要能拿到
   一个还能用的 app。
-- **前缀一变，执行节点就断**（续138）：`run_node.py --controller` 必须填启动横幅那行**含前缀的
+- **前缀一变，执行节点就断**（续138）：`cli/run_node.py --controller` 必须填启动横幅那行**含前缀的
   完整地址**，而那个 404 是空响应体，现象只是"节点安静地不领任务"。所以 `NodeClient._post` 对 404
   要**把这句话写进异常**，别让人对着 `raise_for_status()` 的裸 404 猜。
 - **站点存活口径是"回了真实状态码就算"，不许把 `-mc` 白名单加回去**（续139，`probe.is_alive`）：
@@ -2443,7 +2480,7 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
   同时在跑会让"并发数""请求数"这类判据谁都不准（§5.8 的进程级共享闸就是这个意思）。
 
 **只读 agent 一律不许跑那两个入口** —— 它们都会写共享基线文件，跑完就不是"只读"了：
-`run_devflow.py` **第 96 行**调 `devflow.save_baseline()`，覆盖 `logs/devflow_baseline.json`
+`cli/run_devflow.py` **第 96 行**调 `devflow.save_baseline()`，覆盖 `logs/devflow_baseline.json`
 （路径常量 `scanner/devflow.py::BASELINE_PATH`），而那份基线是"本轮比上一轮慢不慢"的唯一对照；
 `tests/smoke.py` **第 71 行**在 `--timing` 开启时以 `"w"` 打开 `logs/smoke-timing.jsonl`
 （每次跑都清掉历史，默认关 ⇒ 不开也不写）。只读 agent 的核验手段限于：读文件、
@@ -2468,3 +2505,10 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
 （spec 是 `[(file, old, new, count)]` 的 JSON；它先试 CRLF 再试 LF、锚点不唯一就不写、
 写完自己逐文件核两式 numstat 相等）。多个写型 agent 并行时这条要**逐 agent 在 brief 里写明**：
 A 洗了 EOL，B 的 diff 就再也读不出东西了，而且 B 会以为是自己改坏的。
+**`_wpatch` 搞不定的那一档：`logs/_lpatch.py`（续146 新增）**。它按**行号**替换，逐行保留该行原有的
+EOL（新增行取该区段的主导形态），所以能改"CRLF 与 LF 在同一区段里交错"的地方 ——
+`_wpatch` 靠"先试 CRLF 再试 LF"匹配整块锚点，遇到交错区段会静默返回 `[0, 0]`（本轮 `gui/app.py`
+的 `/sites` 路由就是 25 CRLF + 6 LF 交错，实测打不进去）。用它的两条纪律：
+① **每一批之后重新取行号**（前一批增删过行，旧行号就偏了 —— §6.2 第十二起那个"打偏 7 行"
+   把 `evasion` 四个键整段删掉的事故就是这么来的）；② 锚点除了行号还要**核对首行前缀**，
+   对不上就 `SystemExit`，绝不"差不多就写"。

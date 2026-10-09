@@ -100,18 +100,18 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
 ⚠ 这**不是访问控制**：拿到那条 URL 的人照样到得了登录页，真门槛是 401 边缘门 + 账号口令。
 `gui.web_path_random: false` 挂回根路径；要固定前缀用环境变量 `CTFSCANNER_WEB_PATH=/console`
 （空串＝根路径；写得不合法不会静默降级，而是照旧随机并打印原因）。
-执行节点要连的话，`run_node.py --controller` 必须填**含前缀的完整地址**，否则一路 404、
+执行节点要连的话，`cli/run_node.py --controller` 必须填**含前缀的完整地址**，否则一路 404、
 现象只是「节点一直不领任务」。
 
 登录**只有账号 + 口令一条路**（续117）：配置文件里没有任何凭据，第一个管理员由**首启动向导**
-当场建（`run_gui.py` 在库里 0 个账号时会直接向导），或跑 `python run_users.py --create-admin`；
+当场建（`run_gui.py` 在库里 0 个账号时会直接向导），或跑 `python cli/run_users.py --create-admin`；
 改自己的口令去「修改口令」页，管理员给别人改口令去「账号管理」。
 非交互环境（容器 / 只读挂载 / CI）也可以用环境变量 `CTFSCANNER_ADMIN_PASSWORD` 提供口令 ——
-临时变量，**别写进任何入库文件**。`python run_users.py --status` 能看账号数量与有无历史残留（不打印任何值）。
+临时变量，**别写进任何入库文件**。`python cli/run_users.py --status` 能看账号数量与有无历史残留（不打印任何值）。
 登录页**必须有验证码**（续108 起任何提交都先过码）；页面上没出图通常是**旧进程还在跑** ——
 改完 GUI 侧代码要重启控制台再看。
 （续117 把上面那段作废了：`gui.token` / `gui.token_hash` 两个键都不再被读取，
-「策略配置」页也没有口令输入框；老配置里若还残留那两个键，用 `run_users.py --purge-legacy-token` 清掉。）
+「策略配置」页也没有口令输入框；老配置里若还残留那两个键，用 `cli/run_users.py --purge-legacy-token` 清掉。）
 
 ### 页面与操作流
 
@@ -370,7 +370,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    Cloudflare 这类" A 记录直连边缘 IP、CNAME 为空"的任播 CDN 误判成非 CDN）；
    **第三方 API key 写入 `config/keys.yaml`**（独立文件，控制台只读不改写）。
 
-   **（续98）想把凭据加密存放**：跑 `python run_keys.py --encrypt`，用你输入的口令把
+   **（续98）想把凭据加密存放**：跑 `python cli/run_keys.py --encrypt`，用你输入的口令把
    `config/keys.yaml` 加密成 `config/keys.enc.yaml`（PBKDF2-HMAC-SHA256 60 万次 + AES-256-GCM，
    POSIX 权限 600，已加进 `.gitignore`）。之后启动 GUI / CLI 扫描 / 节点会**要一次口令**；
    无人值守（容器、分布式节点）设环境变量 `CTFSCANNER_KEYS_PASSPHRASE` —— **口令本身绝不允许
@@ -439,11 +439,17 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
 
 代码层无 Windows 专属逻辑：路径全部走 `pathlib`，外部命令走 `subprocess` 列表参数 + `shutil.which`，文件读写显式 UTF-8。Linux 上只需注意：
 
+一键安装（续146，Linux / macOS）：`./install.sh` —— `run_bootstrap.py --install` 的**薄包装**
+（找解释器 → 装 → 复验 → 印出"哪些没自动化、下一步敲什么"，自己不实现安装逻辑）；
+装完 `./start.sh` 起控制台。等价的直接调用与手工步骤：
+
 ```bash
-一把就绪（续99）：`python3 run_bootstrap.py --install` —— 自动建 `.venv`、缺 pip 时用官方
-get-pip.py 引导、装依赖、按需下载带校验和的外部工具。下面这段是等价的手工步骤。
-# 依赖装在 venv 里，避免污染系统 Python
-python3 -m venv venv && source venv/bin/activate
+# 一把就绪（续99）：自动建 `.venv`、缺 pip 时用官方 get-pip.py 引导、装依赖、
+# 按需下载带官方校验和的外部工具
+python3 run_bootstrap.py --install
+
+# 手工等价步骤（目录名请用 .venv —— start.sh 与 run_bootstrap.VENV_DIR 认的就是它）
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python3 run_gui.py
 ```

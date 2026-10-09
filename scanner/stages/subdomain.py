@@ -17,13 +17,11 @@
   ./tools/scanner/puredns bruteforce ./config/subdomains.txt -d url -r ./config/resolvers.txt -w logs/brute.txt
   cat passive.txt brute.txt | sort -u    ->  Python 端以 sorted(set(...)) 等价实现
 """
-from urllib.parse import urlparse
-
 from .base import Stage
-from .. import blacklist, cdn, db, dnsq, passive, wildcard
+from .. import blacklist, cdn, db, dnsq, passive, targets, wildcard
 from ..config import resolve
-from ..utils import (base_domain, is_domain, to_ascii, which, verify_tool, run_cmd, read_lines,
-                     write_lines, pool_run)
+from ..utils import (is_domain, to_ascii, which, verify_tool, run_cmd, read_lines,
+                    write_lines, pool_run)
 
 # 需要做泛解析复核的来源（爆破类来源已自带通配过滤，不重复查询）
 _PASSIVE_SRC = ("subfinder", "passive:")
@@ -67,20 +65,17 @@ class SubdomainStage(Stage):
         # 用户点单：「就算我扫描目标给你的是 url 地址，你也能自动提取出主域，就不需要我有时候
         # 自己手动提了」。此前这里只认 `kind == "domain"`，给一条 `https://www.a.com/x` 的结果是
         # **整阶段跳过**（日志只有一句"目标中无裸域名"）—— 用户得自己把主域抠出来再填一遍。
-        # URL 取 `urlparse().hostname`；ip / cidr 没有"收集根"这回事，跳过（它们的资产面归
-        # portscan / probe）。归一仍走 `to_ascii` + `is_domain`，与 `targets.parse_line`
-        # 同一套口径，不另立第二份判据。
+        # 主机名提取与注册域折算都走 `scanner/targets.py`（续146 收敛：此前这里、extdom、
+        # github_leak、diffview、osint ×2、jsmine 各写了一份"URL 就取 hostname"）。
+        # ip / cidr 没有"收集根"这回事 ⇒ `host_of` 直接给空串（它们的资产面归 portscan / probe）。
         domains, seen, from_url = [], set(), []
         for kind, raw in ctx.targets:
-            if kind == "domain":
-                host = raw
-            elif kind == "url":
-                host = to_ascii((urlparse(raw).hostname or "").strip().lower().rstrip(".")) or ""
-                if host:
-                    from_url.append((raw, host))
-            else:
+            host = targets.host_of(kind, raw)
+            if not host or not is_domain(host):
                 continue
-            if host and is_domain(host) and host not in seen:
+            if kind == "url":
+                from_url.append((raw, host))
+            if host not in seen:
                 seen.add(host)
                 domains.append(host)
         for _raw, _host in from_url:
@@ -115,14 +110,14 @@ class SubdomainStage(Stage):
         if auto_root or expand:
             why = "subdomain.auto_root" if auto_root else "任务选项 auto_expand"
             for d in list(domains):
-                b = base_domain(d)
+                b = targets.root_of(d)
                 if b and b != d and is_domain(b) and b not in seen:
                     seen.add(b)
                     domains.append(b)
                     ctx.logger.info(f"[subdomain] 自动拓展：目标 {d} 是子域，补收主域名 {b}（{why}）")
         if expand:
             for d in domains:
-                if base_domain(d) != d and d not in found:
+                if targets.root_of(d) != d and d not in found:
                     found.add(d)
                     sources[d] = "target"
             if sources:

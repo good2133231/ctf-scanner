@@ -215,7 +215,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
    靶场（标准库 `ThreadingHTTPServer` + `SimpleHTTPRequestHandler`，**只绑 `127.0.0.1`，绝不 `0.0.0.0`**），
    `start(port=0)` 即时生成 `index.html` / `admin/index.html` / `robots.txt` / `app.js` / `.env`
    （`.env` 为**明显假的样例值**），返回 `(httpd, base_url)`；`stop(httpd)` 幂等、清理临时目录。
-   **自检入口两条**：CLI `run_devflow.py`（根目录，对称 `run_gui.py`：起靶场 → `devmode.apply(load_settings())`
+   **自检入口两条**：CLI `cli/run_devflow.py`（续146 起在 `cli/` 下；起靶场 → `devmode.apply(load_settings())`
    → 全 13 阶段 `runner.run_task` 前台跑 → 打每阶段 OK/SKIP/FAIL + 请求数 + 耗时，无 FAIL 退出 0）与
    控制台 `/devmode` 页（`@login_required @admin_required`，仅 `dev.enabled=true` 时导航渲染）。
    **阶段归类**：包装 `http_request` / `run_cmd` 计数并打 `stage` 标记（用**模块级全局** `_CURRENT`，
@@ -224,7 +224,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
    （目标不匹配 / 未配 key / 无对应资产 / 命中缓存），`portscan`（裸 socket）/ `heuristic`（零请求）恒 `OK`。
 10. **自检夹具补域名 + HTTPS + SKIP 分类**（续52）：续50 的自检报「13 个阶段均无异常」，但其中
    **5 个阶段空转**（零网络活动）—— 结论名不副实。本轮把自检核心抽到 **`scanner/devflow.py`**
-   （`run_devflow.py` CLI 与 `tests/smoke.py [7n]` **共用**，避免两处判定漂移），并让"该跑的真的跑"：
+   （`cli/run_devflow.py` CLI 与 `tests/smoke.py [7n]` **共用**，避免两处判定漂移），并让"该跑的真的跑"：
    - **夹具** `scanner/devfixture.py` 增 **HTTPS**（`ssl.SSLContext(PROTOCOL_TLS_SERVER)` + `wrap_socket`，
      内联自签证书 `_CERT_PEM`/`_KEY_PEM`，CN=`devfixture.test`，**只绑 `127.0.0.1`**、**临时端口**）
      与 `/intel/kev.json` 情报源夹具；`start(port=0, https=False)` 单监听器、`start_both()` 双监听器
@@ -243,7 +243,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
      **清空 `keys`**（免得真花用户配额）、`intel.url` 改指本地夹具源且 `cache_hours=0`；`no_proxy_env()`
      把夹具域名加进 `NO_PROXY`（本机若配了代理，否则 `requests` 会把夹具请求塞给代理）；
    - **控制台自检改子进程**：`gui/app.py::api_devmode_selfcheck` 以 `subprocess.run([sys.executable,
-     run_devflow.py])`（固定命令、无用户输入、超时 600s）跑自检并把 stdout 渲染到页面 ——
+     cli/run_devflow.py])`（固定命令、无用户输入、超时 600s）跑自检并把 stdout 渲染到页面 ——
      DNS 覆盖是**进程级全局钩子**，装进长驻 web 进程很危险，放进子进程后随它退出一起消失。
      页内「启动/停止内置靶场」两按钮保留但**与自检夹具无关**（仅手动查看、不装 DNS 覆盖）。
 11. **自检补齐到「功能向量」**（续62，用户指令「每个功能向量打一些，确保流程正确」）：续52 的判定只到
@@ -266,7 +266,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
      "装了 fscan（配在 `tools/fscan/fscan.exe`）"误判成未安装（`run_selfcheck` 必须把生效配置 `eff` 传进来）。
    - **自检 options 增 `auto_expand: True`**：`subdomain` 的"自动拓展"是**任务级**选项、默认关，
      不开的话这条子能力永远 MISS。
-   - 出口：`run_devflow.py` 打印按阶段分组的向量表 + `summarize_vectors()` 汇总 + 覆盖缺口单列；
+   - 出口：`cli/run_devflow.py` 打印按阶段分组的向量表 + `summarize_vectors()` 汇总 + 覆盖缺口单列；
      回归 `tests/smoke.py [7n] ③b`（状态合法 / N-A 必带原因 / 10 条核心主路径 OK / 缺口为 0 /
      证据可复算）+ M6~M8 变异证伪。
 
@@ -311,7 +311,7 @@ httpx · puredns，并如实列出需手工安装的 nmap / fscan / dirmap，`ad
 由 `create_app()` 注入 `app.jinja_env.globals["dev_enabled"]` 决定**是否渲染**，未打开时该栏根本不出现、
 直接敲 URL 也被 `admin_required` 挡回）；页内按钮走 `/api/devmode/fixture/start` / `.../stop` /
 `/api/devmode/selfcheck`。
-**续52 起**：`/api/devmode/selfcheck` **不再入队**，改为 `subprocess.run([sys.executable, run_devflow.py])`
+**续52 起**：`/api/devmode/selfcheck` **不再入队**，改为 `subprocess.run([sys.executable, cli/run_devflow.py])`
 （固定命令、无用户输入、`cwd=BASE_DIR`、超时 600s）跑自检，stdout 存进模块级 `_DEV_SELFCHECK` 并渲染到
 页面「最近一次自检输出」—— 因为自检要装 **DNS 覆盖**（进程级全局钩子）与本地夹具，**不能**在长驻 web
 进程里跑。`fixture/start|stop` 两按钮保留，但起的夹具**与自检无关**（仅手动查看、不装 DNS 覆盖）。
@@ -328,7 +328,7 @@ httpx · puredns，并如实列出需手工安装的 nmap / fscan / dirmap，`ad
 **真正的控制是路由层**（直接敲 URL 也被 403 挡回，`tests/smoke.py [7h]` 有断言钉住）。
 首启动（续117）：库里 0 个账号时 `serve()` 会**交互式建第一个管理员**（口令只进 `users` 表的
 派生值；旧的 `gui.token` 引导口令已整支摘除，配置文件里没有任何登录凭据）。非交互环境打印
-`python run_users.py --create-admin` 让人补，**不静默跳过**；0 账号时登录页不给出任何可用口令，
+`python cli/run_users.py --create-admin` 让人补，**不静默跳过**；0 账号时登录页不给出任何可用口令，
 只把这条命令显示给用户。「策略配置」页也没有口令输入框。
 `/ports` / `/csegs` / `/dirs` / `/extdomains`（JS 与情报带出的拓展域名，**默认隐藏重叠**，`?all=1` 看全部）
 四条路由**仍在**（可直接访问 URL），但**已从侧边栏移除** ——

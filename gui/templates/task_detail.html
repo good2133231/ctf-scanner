@@ -178,6 +178,17 @@
       所以没有产物；可在「策略配置 → 资产面拓展」填 <span class="mono">screenshot.browser</span>。
       {% else %}本任务已开启截图但还没有产物（可能是截图失败），失败原因见运行日志。{% endif %}</p>
     {% endif %}
+    <p class="muted small">状态码：
+      {% if sites_pager.allst %}
+        当前<b>显示全部状态码</b>。
+        <a class="btn-mini ghost" href="{{ sites_pager.base }}?stpage={{ sites_pager.page }}{{ sites_pager.st_off }}{{ sites_pager.anchor }}">只看 200 / 404（含跳转后的）</a>
+      {% else %}
+        默认只显示 <b>200 与 404</b>（3xx <b>跳转后</b>落在 200/404 的也算显示），
+        另有 {{ sites_pager.st_hidden }} 条其它状态码被收起（401 / 403 / 5xx / 521…，<b>入库一条没动</b>）。
+        <a class="btn-mini ghost" href="{{ sites_pager.base }}?stpage={{ sites_pager.page }}{{ sites_pager.st_on }}{{ sites_pager.anchor }}">显示全部状态码</a>
+      {% endif %}
+      页签徽标 {{ site_total }} 是<b>未过滤</b>的站点总数（被收起的也是事实，不从徽标里消失）。
+    </p>
     {# 筛选 / 每页（续57）：资产页签改为**服务端分页**后，筛选也必须走服务端 ——
        前端 `data-filter` 只筛当前页，比原来更误导。
        `action` 尾部带 `#sites` 让提交后回到本页签（页签是纯前端切换，不带锚点会掉回第一个）。
@@ -196,6 +207,7 @@
       </label>
       <button class="ghost" type="submit">查询</button>
       {% if sites_q %}<a class="btn-mini ghost" href="{{ url_for('task_detail', task_id=task.id) }}#sites">清空</a>{% endif %}
+      {% if sites_pager.allst %}<input type="hidden" name="allst" value="1">{% endif %}
     </form>
     <div class="bulkbar">
       <button type="button" class="ghost" id="btn-open-sites" data-pick-from="#tbl-detail-sites"

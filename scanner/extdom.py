@@ -22,8 +22,6 @@
 
 所有写库路径都过 `blacklist` —— 被拦的域名既不解析也不追加。
 """
-from urllib.parse import urlparse
-
 from . import blacklist, cdn, db, dnsq, targets
 from .utils import base_domain, is_domain, pool_run
 
@@ -38,8 +36,16 @@ GROUP_LIGHT_COLS = ("id", "domain", "ip")
 
 
 def base_of(host):
-    """注册域（归一化后取 `utils.base_domain`）：`aaa.targ1.pro` → `targ1.pro`。"""
-    return base_domain(str(host or "").strip().lower().rstrip("."))
+    """注册域：`aaa.targ1.pro` → `targ1.pro`。
+
+    续146：判据本体收敛到 `targets.root_of()`（唯一产地，含 `is_domain` 守门）。这里保留一个
+    **薄壳**给三个"数据来自库里、形状可能怪"的调用点（`zone_is_absent` / `filter_absent_zones`
+    的日志 / `group_by_base`）：`root_of` 对不像域名的输入返回空串，而**分组需要一个非空且稳定
+    的键** —— 空串会把所有怪值并成同一组。所以守门失败时退回旧的"直接 `base_domain`"
+    （宁可给个粗切的键，也不并组）。对合法域名两者逐字相同。
+    """
+    h = str(host or "").strip().lower().rstrip(".")
+    return targets.root_of(h) or base_domain(h)
 
 
 def _norm(host):
@@ -63,20 +69,13 @@ def task_bases(task_id, targets_text=None):
 
     同时收下**目标本身**与它的注册域：目标是 `aaa.targ1.pro` 时，`targ1.pro` 与
     `aaa.targ1.pro` 都算本项目（`base_domain()` 粗切失手时前者也能兜住）。
+    续146：主机名提取改走 `targets.hosts_of()`（此前这里自己写了一份 URL→hostname）。
     """
     if targets_text is None:
         task = db.get_task(int(task_id))
         targets_text = "" if not task else (task["targets"] or "")
-    out = set()
-    for kind, value in targets.parse_lines(str(targets_text or "").splitlines()):
-        host = str(value or "").strip().lower().rstrip(".")
-        if kind == "url":
-            host = (urlparse(str(value)).hostname or "").strip().lower().rstrip(".")
-        if not host or not is_domain(host):
-            continue
-        out.add(host)
-        out.add(base_of(host))
-    return {b for b in out if b}
+    hosts = targets.hosts_of(targets.parse_lines(str(targets_text or "").splitlines()))
+    return {b for b in set(hosts) | {base_of(h) for h in hosts} if b}
 
 
 def owner_of(task_id):

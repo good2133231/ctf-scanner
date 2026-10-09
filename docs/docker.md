@@ -31,8 +31,8 @@ docker compose -f docker_todo/docker-compose.yml logs -f   # 启动日志：登�
 
 ```bash
 # 服务名是 ctfscanner（写 scanner 会直接 "no such service" —— 本文件此前就是错的，续135 改掉）
-docker compose -f docker_todo/docker-compose.yml exec ctfscanner python run_users.py --create-admin
-# 完全无 TTY 时也可以：CTFSCANNER_ADMIN_PASSWORD='…' python run_users.py --create-admin
+docker compose -f docker_todo/docker-compose.yml exec ctfscanner python cli/run_users.py --create-admin
+# 完全无 TTY 时也可以：CTFSCANNER_ADMIN_PASSWORD='…' python cli/run_users.py --create-admin
 ```
 
 口令只进 `users` 表的 PBKDF2 派生值，**不写进任何配置文件**（续117 起 `settings.yaml` 里没有登录凭据）。
@@ -276,7 +276,7 @@ git push                                          # 用户名填 good2133231，�
 
 ```bash
 umask 077 && printf 'github:\n  token: "<PAT>"\n' > config/keys.yaml    # 明文只活一两分钟
-.venv/bin/python run_keys.py --encrypt --shred      # 口令不落盘；自校验通过后才删明文
+.venv/bin/python cli/run_keys.py --encrypt --shred      # 口令不落盘；自校验通过后才删明文
 git config --local credential.helper <仓库外目录>/git-cred-helper.py    # .git/config 只出现路径
 git push origin main                                # 有终端时会提示一次口令
 ```

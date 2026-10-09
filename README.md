@@ -88,7 +88,7 @@
 
 ### 0. 环境要求
 
-- **Python 3.8+**（已在 **3.9.0 / 3.10.12** 上实测；代码无平台专属依赖，Windows / Linux / macOS 均可）
+- **Python 3.9+**（权威判据是 `run_bootstrap.PY_MIN`，CI 与容器门禁都跑 3.9；已在 **3.9.0 / 3.10.12** 上实测，3.14 在 CI 里是**探针**（允许红）；代码无平台专属依赖，Windows / Linux / macOS 均可）
 - 运行时依赖只有三个：`flask` / `requests` / `PyYAML`（见 `requirements.txt`）
 - 可选外部工具：`fscan` / `nmap` / `dirmap` / `subfinder` / `httpx` / `puredns` —— **没有也能跑通**，
   会自动降级到内置实现（只是覆盖面和速度不如外部工具）
@@ -99,31 +99,42 @@
 
 ### 1. 安装依赖
 
-**一把就绪（续99，推荐）**：在项目根跑一条命令就够了 —— 它会自己建 `.venv`、**在系统解释器
-没有 pip 时**用官方 `get-pip.py` 引导 pip（Ubuntu/Debian 把 ensurepip 拆进 `python3.x-venv`
-包，这是常态）、装 `requirements.txt`，再把**官方带 SHA256 校验和**的外部工具
+**一键安装（续146，Linux / macOS）**：`./install.sh`。它是 `run_bootstrap.py --install` 的**薄包装**
+（找解释器 → 装 → 复验 → 把"哪些没自动化、下一步敲什么"印出来），自己不实现任何安装逻辑 ——
+判据全在 `run_bootstrap.py` 里，在这儿再抄一份就是第二个产地。装完 `./start.sh` 起控制台。
+
+**一把就绪（续99，Windows 与想看清每一步的人）**：在项目根跑一条命令就够了 —— 它会自己建 `.venv`、
+**在系统解释器没有 pip 时**用官方 `get-pip.py` 引导 pip（Ubuntu/Debian 把 ensurepip 拆进
+`python3.x-venv` 包，这是常态）、装 `requirements.txt`，再把**官方带 SHA256 校验和**的外部工具
 （subfinder / httpx / puredns）按平台装进 `tools/scanner/` 并回写 `tools.<名>`：
 
 ```bash
-python3 run_bootstrap.py --install        # Linux / macOS
-py -3 run_bootstrap.py --install          # Windows
-python3 run_bootstrap.py                  # 只探测，**零网络**：先看这台机器还缺什么
+./install.sh                                # Linux / macOS：等价于下面第二条 + 复验 + 收尾说明
+python3 run_bootstrap.py --install          # Linux / macOS
+py -3 run_bootstrap.py --install            # Windows
+python3 run_bootstrap.py                    # 只探测，**零网络**：先看这台机器还缺什么
+./install.sh --with-system --yes            # 额外让发行版包管理器**真装** nmap / 浏览器 / Go / CJK 字体
 ```
 
-之后请用虚拟环境里的解释器运行：`./venv/bin/python run_gui.py`（Windows 是
-`venv\Scripts\python.exe run_gui.py`）。`nmap / fscan / dirmap` **不会被自动下载也不会被代跑**
+之后请用虚拟环境里的解释器运行：`./start.sh`（等价 `./.venv/bin/python run_gui.py`；Windows 是
+`.venv\Scripts\python.exe run_gui.py`）。`nmap / fscan / dirmap` **不会被自动下载也不会被代跑**
 （官方没有「可下载且带官方校验和的单二进制产物」），脚本会按平台打印该执行的命令。
 
-手工路线（想自己管环境时）：
+> ⚠ **换机器别拷 `.venv`**：venv 里写死了绝对路径（`pyvenv.cfg`、`bin/activate`、各 console
+> script 的 shebang），换个目录或换台机器就失效 —— 症状是"拷过去跑不起来，但源码一个字没改"。
+> 正确做法是拷**源码**（`.venv` 本来就在 `.gitignore` 里，`git clone` 天然不带它），
+> 到新机器上再跑一次 `./install.sh`；版本由 `requirements.lock` 钉住，装出来的是同一批。
+
+手工路线（想自己管环境时；目录名请用 `.venv`，`start.sh` 认的就是它）：
 
 ```bash
-# ---- Linux / macOS（推荐虚拟环境）----
-python3 -m venv venv && source venv/bin/activate
+# ---- Linux / macOS ----
+python3 -m venv .venv && source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 
 # ---- Windows（PowerShell / cmd）----
-py -3 -m venv venv
-venv\Scripts\activate
+py -3 -m venv .venv
+.venv\Scripts\activate
 py -3 -m pip install -r requirements.txt
 ```
 
@@ -177,7 +188,7 @@ py -3 run_gui.py                   # 只绑本机 5000；入口见启动横幅�
 ```
 
 - **首次启动会直接向导问你要设什么管理员口令**（库里还没有账号时）。非交互环境（容器 / CI）
-  跑 `python run_users.py --create-admin`。`config/settings.yaml` 里**没有任何登录凭据** ——
+  跑 `python cli/run_users.py --create-admin`。`config/settings.yaml` 里**没有任何登录凭据** ——
   那文件被 git 跟踪，能换管理员身份的串写在里面就等于公开（续117 摘掉了旧的 `gui.token`）。
 - **后台地址每次启动随机生成**（续138）：控制台挂在 `http://127.0.0.1:5000/<10 位>/<10 位>/` 下，
   入口就是启动横幅那行 `[*] 控制台地址：…` —— **重启即换、不写进任何文件**。直接开
@@ -210,7 +221,7 @@ docker compose up -d --build     # 起控制台；数据/配置/日志都挂在�
 
 ```bash
 py -3 cli/client.py --update-tools    # 一键装 subfinder / httpx / puredns（只在显式触发时联网）
-py -3 run_devflow.py                  # 全流程自检：起内置靶场 → 压量到最小 → 真跑全 13 阶段
+py -3 cli/run_devflow.py                  # 全流程自检：起内置靶场 → 压量到最小 → 真跑全 13 阶段
 ```
 
 开发模式开关在 `config/settings.yaml` 的 `dev.enabled`，打开后控制台侧栏才出现「开发模式」页。
@@ -224,7 +235,7 @@ py -3 run_devflow.py                  # 全流程自检：起内置靶场 → �
 py -3 cli/client.py --node-add node-1
 
 # ② 在**节点机器**上（同一份代码）跑：
-py -3 run_node.py --controller http://<控制端>:5000 --token ctfsn_xxx --name node-1
+py -3 cli/run_node.py --controller http://<控制端>:5000 --token ctfsn_xxx --name node-1
 ```
 
 - 节点在**自己机器**上跑扫描（写它自己的本地库 `logs/node-<名>/`），跑完把**资产快照**回传给
@@ -269,11 +280,17 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 - **`config/dicts/`**：子域名字典、`dirs_shallow.txt`（浅扫精选路径 ~150 条）、`dirs_big.txt`（深扫大字典 11882 条）、`cdn_cname.txt`（CDN 厂商后缀）、`cdn_ips.txt`（CDN 厂商任播 IP 段）、`sensitive.txt`（A01 敏感文件检查的数据源：`路径 | 关键字 | 级别 | 说明`）。
 - **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，默认必须通过 release 自带的 SHA256 校验和。
 
-> 部署 checklist：① 复制 `config/keys.yaml.example` → `config/keys.yaml` 并填 key（仅当要用 FOFA 等外部情报）；② 按需改 `config/settings.yaml`（或 GUI 策略配置页，**仅管理员可改**）；③ `pip install -r requirements.txt`；④ 跑 `python cli/client.py --check` 自检；⑤ 起控制台后用 `gui.token` 引导登录，**立即到「账号管理」建管理员与子用户账号**（建号后引导口令失效）。
+> 部署 checklist：① 复制 `config/keys.yaml.example` → `config/keys.yaml` 并填 key（仅当要用 FOFA 等外部情报）；② 按需改 `config/settings.yaml`（或 GUI 策略配置页，**仅管理员可改**）；③ `./install.sh`（Windows 或想看清每一步：`python3 run_bootstrap.py --install`）；④ 跑 `python cli/client.py --check` 自检；⑤ 设 401 边缘门口令 `python -m scanner.edgeauth --set`（出厂 `gui.edge_auth.enabled: true` 而口令文件不入库 ⇒ 不设就是全站 401）；⑥ 起控制台，按启动横幅建**第一个管理员**（非交互环境：`python cli/run_users.py --create-admin`），再登进「账号管理」建子用户账号。
 
 ### 部署到服务器（给队友用 → 必须走 HTTPS）
 
-控制台默认只绑 `127.0.0.1:5000`、只认回环 Host，入口路径每次启动随机（续138）—— **本机单人使用**的开箱形态。
+仓库里 `config/settings.yaml` 出厂就是**服务器形态**（续131 的取舍：仓库是公开的，宁可 fail-closed 也不裸奔）：
+`gui.host: 0.0.0.0`、`gui.allowed_hosts: []`（Host 校验整条不生效）、`gui.edge_auth.enabled: true`，
+入口路径每次启动随机（续138）。⇒ **刚 clone 出来的控制台会对所有请求回 401**：门是开的，
+但口令文件 `config/edge_auth.yaml` 在 `.gitignore` 里、不随仓库分发。那不是装坏了，
+`python -m scanner.edgeauth --set` 设上口令即可（启动横幅与 `_boot_gaps` 汇总也会点名这一项）。
+纯本机单人自用想省事，把 `gui.host` 改回 `127.0.0.1`、`gui.edge_auth.enabled` 改成 `false`
+（代码里的默认值 `scanner.config.DEFAULTS` 正是这两项 —— 仓库 shipped 的那份比代码默认值更保守）。
 要放到服务器上用域名访问，请**由反向代理终止 TLS**（应用侧不碰证书），并按需打开三项配置：
 `gui.allowed_hosts`（放行部署域名，**不填会整站 403**）、`gui.behind_proxy`（信任
 `X-Forwarded-*`，默认关）、`gui.secure_cookie`（会话 Cookie 加 `Secure`，TLS 就绪后再开）。
@@ -296,14 +313,14 @@ Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错�
 - **开发模式开关**：`config/settings.yaml` 的 `dev.enabled`（默认 `false`）。打开后控制台侧边栏**才出现**
   「开发模式」一栏（**仅管理员可见**，未打开时该栏**根本不渲染**，直接敲 `/devmode` 也进不去）。
 - **全流程自检**（本功能的验收手段，控制台与 CLI 双入口）：
-  - **控制台**：「开发模式」页「跑一次全流程自检」按钮 —— 它**以子进程**调 `py -3 run_devflow.py`
+  - **控制台**：「开发模式」页「跑一次全流程自检」按钮 —— 它**以子进程**调 `py -3 cli/run_devflow.py`
     （`gui/app.py::api_devmode_selfcheck`），把子进程 stdout 原文渲染到页面。**为什么必须是子进程**：
     自检要在进程内装 **DNS 覆盖**（`socket.getaddrinfo` 的进程级全局钩子）+ 起本地夹具 + 把配额压到最小；
     装在**长驻的 web 进程**里非常危险（全局钩子会影响控制台自身的每一次解析、夹具端口/线程也可能泄漏）。
     放进子进程后覆盖随它退出一起消失，**控制台进程一个字节都不受影响**。页内另有「启动 / 停止内置靶场」
     两个按钮 —— 它们起的夹具**与自检用的夹具无关**（自检在子进程里起自己的），仅供**手动打开看一眼**，
     **不装任何 DNS 覆盖**。
-  - **CLI**：`py -3 run_devflow.py`（与 `run_gui.py` 对称的独立入口）。它先起夹具 → 压量 → 依次跑全部
+  - **CLI**：`py -3 cli/run_devflow.py`（`cli/` 下的独立入口；续146 起仓库根只留 `run_gui.py` 与 `run_bootstrap.py`）。它先起夹具 → 压量 → 依次跑全部
     13 阶段（`runner.run_task` 前台执行）→ 打印**每阶段 `真跑 / 跳过（带原因）/ FAIL` + 网络活动数 + 耗时**，
     无 `FAIL` 退出码 0，否则 1。**这是本功能的验收证据**。核心逻辑在 `scanner/devflow.py`
     （CLI 与 `tests/smoke.py [7n]` **共用**，避免两处判定漂移）。
@@ -345,8 +362,15 @@ Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错�
 
 ```
 ctf-scanner/
-├── cli/client.py            # CLI 客户端（导入文件、全自动执行）
-├── run_devflow.py           # 全流程自检 CLI 入口（起内置靶场 → 压缩配置 → 跑全 13 阶段 → 打 OK/SKIP/FAIL）
+├── install.sh / start.sh    # Linux/macOS 的一键安装与启动（**薄包装**：判据全在 run_bootstrap.py / gui.serve()）
+├── run_gui.py               # 启动 Web 控制台
+├── run_bootstrap.py         # 环境自举：探测缺口 / `--install` 自动补齐（刻意不进 `scanner/` 包，见 [7p]）
+├── cli/                     # 其余命令行入口（续146 从仓库根搬进来：根只留上面两个启动文件）
+│   ├── client.py            #   CLI 客户端（导入文件、全自动执行）
+│   ├── run_devflow.py       #   全流程自检入口（起内置靶场 → 压缩配置 → 跑全 13 阶段 → 打 OK/SKIP/FAIL）
+│   ├── run_node.py          #   分布式执行节点（连控制端领任务，续80）
+│   ├── run_keys.py          #   凭据口令加密的管理入口（续98）
+│   └── run_users.py         #   管理员账号的命令行入口（续117）
 ├── gui/                     # Web 控制台（Flask + 原生 JS，仿 ARL）
 │   ├── app.py               #   路由与后台任务线程
 │   ├── templates/ static/   #   页面与样式

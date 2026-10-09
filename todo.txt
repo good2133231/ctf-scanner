@@ -2862,33 +2862,98 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       "5000 已被占用，去结束占用进程"并以 1 退出，而 `ss -tln` 里根本没有监听者（占着端口的是
       一个 FIN-WAIT-1 的残留连接）。加一行 `SO_REUSEADDR` 修好；回归 `[8at]⑤` 两面都钉
       （残留连接放行 + 真监听者仍报占用，且夹具先自证"裸 bind 必须失败"，否则那条是空写）
-下一轮（续146）：
+## 续146（2026-10-09，WorkBuddy · Qoder-Agent 远端 Linux）：站点默认只看 200/404 + 批量打标收口 + 判据收敛成一份 + 入口搬进 cli/ + Linux 一键安装 + 项目须知打包成 skill
 
-- [ ] 站点默认只显示 **200 与 404**（301 **跳转后**的 200/404 也算显示）+ 一个「显示全部」开关
-      + 表格**全选**。判据集中一处（参考续112 的 `RESOLVED_WHERE` / `_nores_state`：默认收起时
-      翻页链接不带参数，展开后才带）。⚠ 续145 之后**全选已经有用途了**（服务于「批量打开」），
-      所以这一条只剩"默认只看 200/404 + 显示全部开关"；全选仍不许触发外层表单提交（续56 那条
-      `type="button"` 红线）
-- [ ] `initVulnReview` 的批量打标读的是**整页** `.pick-row:checked`：任务详情页勾了站点行再去漏洞页签
-      点「批量确认存在」，会把站点 URL 当漏洞 id 发出去（服务端按非法 id 忽略 ⇒ 现象是"点了没反应"）。
-      修法：把选择器收到按钮所在的那个 panel（`btn.closest(".panel")`）内 —— 注意 `/vulns` 页的表 id
-      是 `tbl-vulns-all`、详情页是 `tbl-vulns`，所以**别**按表 id 收，按容器收才两页都对
-- [ ] "目标 → 注册域"现在有**四份**实现：续145 的 `stages/subdomain.py`（折叠）、`extdom.task_bases`、
-      `github_leak.target_domains`、`diffview.target_set`。本轮刻意没去重构后三处（各有额外判据、
-      都在跑着的断言底下），但这就是 §5.14 说的"同一规则写 N 处"。收敛成一份时记得：
-      `github_leak` 那份**先 `is_domain` 守门再 `base_domain`**（否则 `127.0.0.1` → `"0.1"`），
-      `extdom` 那份同时收 host 与 base（`base_domain()` 粗切失手时前者兜底）
+- [x] **B 站点默认只看 200/404**（用户点单；跨任务 `/sites` 与任务详情站点页签**同一口径**）：
+      判据只落在 `db.SITE_STATUS_WHERE` 一处 —— `status IN (200,404)` **或** `3xx 且 redirect_status
+      IN (200,404)`（跳转后落地的也算，续139 那条口径的延续）；`gui/app.py` 新增
+      `_site_status_arg()` / `_allst_state()` / `_site_status_extra()`，与续112 的
+      `_resolved_arg` / `_nores_state` 同构（默认态翻页链接**不带**参数，展开后才带 `allst=1`）。
+      ⚠ `_allst_state` 必须在 all/task/plain 都拼进 `qs` **之后**调，否则切换链接会悄悄丢别的筛选。
+      被收起的条数走**同一个** `_page_assets(limit=0)` 算（内层外层同源 ⇒ "共 N 条"与"另有 M 条被收起"
+      不可能各按一套口径），页面上写明「入库一条没动」；详情页签徽标是**未过滤**总数（实测 68）
+      而分页条是过滤后的 64，两个数字的关系直接写在页面上，不然看着像吞资产
+- [x] **C 批量打标只读按钮所在面板**：`initVulnReview` 的批量分支从整页
+      `document.querySelectorAll(".pick-row:checked")` 收成先 `btn.closest(".panel")` 再查 ——
+      按**容器**而不是按表 id（`/vulns` 是 `tbl-vulns-all`、详情页是 `tbl-vulns`，写死任一个
+      都会让另一页静默失灵）。原症状：勾了站点行再点「批量确认存在」，会把站点 URL 当漏洞 id
+      发出去，服务端按非法 id 忽略 ⇒ 用户只看到"点了没反应"
+- [x] **D "目标 → 注册域" 四份实现收敛成一份**：`scanner/targets.py` 新增四个原语
+      `host_of(kind, value)` / `hosts_of(items)`（去重**保序**）/ `root_of(host)`（先 `is_domain`
+      守门再 `base_domain`；裸 IP 与单标签内网名一律空串）/ `roots_of(items)`；六个调用点全改走它：
+      `stages/subdomain.py`（收集根 + 折叠两处 + auto_expand）、`extdom.base_of/task_bases`、
+      `diffview.target_set`、`github_leak.target_domains`、`jsmine` 的自家域名保护集、
+      `stages/osint.py`（`_collect_ips` + `_root_domains`，连带删掉 `ipaddress` 与 `'.' in root`
+      两道手写守门）。**语义一处没变**：diffview 仍把 IP 当身份并展开 CIDR、extdom 仍同时收 host
+      与 base（`base_of` 对怪值退回粗切，因为 `group_by_base` 需要一个非空稳定键）、github_leak 的
+      `max_domains` 上限与坏值回落照旧。真收益：`base_domain("127.0.0.1")` 会给出 `"0.1"` 这种伪域名，
+      jsmine 拿它当"自家域名"保护 ⇒ 目标里有个 IP 就永远挖不到它名下的 JS 端点；`root_of` 给空串
+- [x] **F 四个入口搬进 `cli/`**（用户点单："根目录这些文件太乱了，能不能归档一下，主目录只留启动文件"）：
+      `git mv run_{keys,users,node,devflow}.py cli/`，仓库根只剩 `run_gui.py` 与 `run_bootstrap.py`
+      （加上本轮新增的 `install.sh` / `start.sh`）。四个脚本的路径自举都加了 `.parent.parent`
+      （少一层的症状是"从仓库根跑就 ImportError: No module named scanner"）；全仓引用同步 **77 处**
+      （活文档 + 代码白名单，字节级替换 + 行数断言），`tests/smoke.py` 的 10 处硬路径手工改、
+      另有 3 处"子串仍能蒙对"的断言收紧成 `cli/…`（搬完后 `"run_users.py --create-admin" in page`
+      照样命中 ⇒ 判据比事实松，回退成根目录路径也测不出来）。**历史文件刻意不动**
+      （CHANGELOG_AI.md / todo.txt / docs/roadmap.md / docs/takeover-*.md：改了＝篡改历史）。
+      实测：全仓 compile RC=0；四个入口都能跑（`cli/run_devflow.py` → 13 阶段 **0 FAIL**、
+      35 向量 **19 OK / 0 MISS / 16 N-A**、11.6s，第 96 行仍是 `save_baseline`、行数 132 一字未变）；
+      `cli/logs/` 不会被建出来；活文件里"可抄命令"还指着仓库根的 **0 处**
+      （判据只认命令形态，不误伤 `ROOT / "cli" / "…"` 这种拼路径写法）
+- [x] **E Linux 一键安装**（用户点单："现在模式我感觉不像可迁移 —— 自动化安装、自动化配置环境，
+      脚本运行一下就可以运行"；并明确"只做 Linux 的 .sh"）：`install.sh`（找 ≥3.9 的解释器 →
+      `run_bootstrap.py --install` → 复验 import → 印出"哪些没自动化 / 下一步敲什么"，
+      退出码原样带出去）+ `start.sh`（挑对解释器 → **exec** `run_gui.py`；不透传 argv，
+      因为 run_gui.py 不解析参数，透传＝静默忽略）。两个都是**薄包装**：判据一份不抄，
+      留在 `run_bootstrap.py` / `gui.serve()` 里。`.gitattributes` 钉 `*.sh text eol=lf`
+      （CRLF 的 shebang 从 Windows 检出后报 `bad interpreter: /usr/bin/env bash^M`，
+      症状看着像"这台机器没装 bash"）。**实测**：从"只有索引里那些文件"的空目录跑一遍 ——
+      507 个文件拷进去、`.venv` 建出来、依赖复验通过、subfinder/httpx 下回来了（puredns 那次
+      没下下来 ⇒ 退出码 1 并如实报"可选项失败"），`./start.sh` 起得来：根路径 **404 空体**、
+      带前缀的地址 **401**，源仓库零污染
+- [x] **实测撞出来的一件事（只如实写进文档，没动配置）**：仓库出厂的 `config/settings.yaml`
+      是**服务器形态**（`gui.host: 0.0.0.0` + `allowed_hosts: []` + `gui.edge_auth.enabled: true`，
+      续131 的取舍），而口令文件 `config/edge_auth.yaml` 在 .gitignore 里 ⇒ **刚 clone 出来的
+      控制台对所有请求回 401**，看着像装坏了。那是 fail-closed 生效，不是 bug；
+      `python -m scanner.edgeauth --set` 设上口令即可。代码默认值 `DEFAULTS` 却是
+      `127.0.0.1` + `enabled: false` ⇒ 两份口径不一致，且 README 原先那句"默认只绑 127.0.0.1、
+      只认回环 Host"与出厂文件相反（本轮已把 README 那段改成如实描述）。**这是安全开关，
+      要动得先问主理人** —— 已列进下一轮清单
+- [x] **项目须知打包成 skill**（用户点单："把我们一些重要的项目须知打包成 skill，然后其他 ai
+      一进入项目就自动加载 skill 就了解我们项目并且不容易犯错"）：
+      `.qoder/skills/ctf-scanner/SKILL.md`（project 级 ⇒ 随仓库走，换机器 / 换 AI 都拿得到）。
+      内容是 §0 / §6.1 / §6.2 / §9 / §10 的**摘要 + 索引**：先读哪三份、十条最容易犯的错、
+      唯一门禁命令、目录与入口、收尾四步、去哪查全文。**刻意不抄正文** —— 抄一份就多一个会漂的
+      产地（§5.14）。AGENTS.md 文件头加了指针，并写明"改了那几节要回头核 skill 有没有变成假话"
+- [x] **清理**（用户批准："这个你清理了把"）：删掉 `logs/_gui141.out`（里面留着上一轮那个已失效的
+      后台前缀）；结束一个 10 月 8 日起、并不在监听 5000 的旧 `run_gui.py`（PID 1012611 ——
+      结束前先确认它监听的是 `0.0.0.0:14871`、库里没有 `running` 任务，且 `claim_next_queued`
+      只领 `queued`、`reconcile_orphan_tasks` 只重排 `running` ⇒ 3 条 `pending` 不会在重启时被点着）；
+      目录上那 7 个安装/校验日志归拢到 `logs/setup/`（`logs/` 本就 gitignore）
+- [x] 新增回归 `[8au]`（B/C/D/F，含 §6.1 证伪：把 `db.SITE_STATUS_WHERE` 换成 `1=1` 后默认视图
+      必须变；命令形态判据先自证"抓得到该抓的、不误伤不该抓的"；"0 命中"型断言先证明扫描范围
+      > 100 个文件，否则目录一改名就成了空写）+ `[8av]`（E 的结构红线：薄包装、可执行位、纯 LF、
+      `cd "$(dirname "$0")"`、exec 而非再套一层 shell、不透传 argv）。
+      `[8at]③` 那条数 `base_domain(d)` 的断言被 D 改陈旧（实测红在 smoke.py:19756），
+      **修法不是把 2 改成 0**：判据搬进 `[8au]⑤` 的全仓 **AST** 扫描（按调用点判，不吃注释），
+      原地只留真正属于它的那半条（折叠日志仍带 devflow 认的「自动拓展」kw）
+- [x] 门禁：宿主 `./.venv/bin/python tests/smoke.py` → **SMOKE PASS / RC=0**（`logs/_gate146g.log`）；
+      全仓逐文件两式 numstat 相等（EOL 没被洗）。中途红过一次，就是上面那条 `[8at]③`
+- [x] 记忆同步：AGENTS §3 目录树重画（cli/ 一层 + install.sh/start.sh）、§6 命令清单补
+      `./install.sh` / `./start.sh` 与 6 处路径、§6.1 新增**推论四**（断言别钉裸词，五次踩坑全录）、
+      §10 末尾补 `logs/_lpatch.py`（`_wpatch` 搞不定的"CRLF/LF 在同一区段交错"那一档）、
+      文件头加 skill 指针；README 五处校准（Python **3.8+ → 3.9+**、通篇 `venv` → `.venv`、
+      部署 checklist 里那条续117 就摘掉的 `gui.token` 引导口令、"默认只绑 127.0.0.1"与出厂配置相反、
+      目录树）；`docs/usage.md` 与 `.gitignore` 的 `venv` → `.venv`
+      （`start.sh` 与 `run_bootstrap.VENV_DIR` 认的都是 `.venv`，文档教人建 `venv` 就是第二个产地）
+
+下一轮（续147）：
+
 - [ ] 把脱敏做成**不依赖真名**的机器判据：新增 smoke 断言「被跟踪文件里出现的任何注册域，
       若同时是 `data/scanner.db` 资产表里的域名 ⇒ 判红」，CDN / 公开厂商走白名单例外
       （库本身 gitignore ⇒ 判据不需要别名表）。现成零件：`scanner/utils.base_domain()` 取注册域、
       资产表 `targets/sites/subdomains/dirs/csegs/leads/certs/flags`，白名单从
       `config/dicts/cdn_cname.txt` + `js_thirdparty.txt` 读 —— **别硬写名单**（§6.2 第一起那类毛病）。
-- [ ] 一次性脚本按**确切文件名**删（门禁跑完、提交推完之后）：续141 那批 `logs/_dean141.py`
-      `_141_build.py` `_141_spec.json` `_141_agents0.txt` `_141_agents6.txt` `_141_todo.txt`
-      `_141_changelog.txt` `_141_todo_md.txt` `_mem141_draft.md` `_gate141_host*.log`；
-      续140 那批 `_title_spec.py` `_title_snips.txt` `_apply_snips.py` `_8ar_block.py`
-      `_8as_block.py` `_ins8ar.py` `_ins8as.py` `_run140.py` `_dbdoc140.py` `_agents140*.py`
-      `_ci140.py` —— 不许通配符删（§6.2 清理纪律）
 - [ ] 按**实测**数字挑前几组下手：`[7n]` 44.9s / `[7w]` 42.2s / `[6u]` 38.5s / `[7l]` 38.2s
       四组就占 53%。`[7w]`（POC 有效级别，导入 305 条）与 `[7n]`/`[7l]`（全流程自检体）是两类
       不同的贵，动之前都要连 §5 的 pacing 与"全量实测不是举例"那条口径一起判
@@ -2901,3 +2966,24 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       要显式列出来 —— 别用"跳过没有输入框的段"这种自动豁免，那正是第十二起能藏住的原因
 - [ ] `CHANGELOG_AI.md` 开头那 4 行文件头**重复了两遍**（`# CHANGELOG_AI.md` + 三行说明，1-4 与 5-8 行
       逐字相同）。删掉一份即可；`[8as]` 的取号正则只认 `^#{2,}`，所以它一直没被发现，也不影响判据
+- [ ] **出厂 `config/settings.yaml` 与代码 `DEFAULTS` 不一致**（续146 实测撞出来的，见上一节）：
+      shipped 的是 `gui.host: 0.0.0.0` + `allowed_hosts: []` + `edge_auth.enabled: true`，
+      `DEFAULTS` 是 `127.0.0.1` + `false`。后果：刚 clone 出来的控制台**全站 401**
+      （fail-closed 生效，不是坏了），而"默认只绑 127.0.0.1"这句话在文档里写了很久。
+      要决定的是 **shipped 的那份该是哪一档**：保持服务器形态（更安全，但新机子第一次起必然 401，
+      得先 `python -m scanner.edgeauth --set`），还是改成与 `DEFAULTS` 一致的本机形态
+      （开箱能进，但谁 clone 了直接绑 0.0.0.0 就裸奔）。⚠ **这是安全开关，改之前必须问过主理人**；
+      续146 只把它如实写进了 `install.sh` 的收尾说明与 README/AGENTS
+- [ ] Windows 侧没有对等的一键脚本（续146 用户明确"只做 Linux 的 .sh"）。要补就是
+      `install.ps1` / `start.ps1`，判据同样只能留在 `run_bootstrap.py` 里（它本来就跨平台），
+      脚本自己一份都不许抄 —— 并且要同样钉住"薄包装"（`[8av]` 那组的 Windows 版）
+- [ ] `install.sh` / `start.sh` 只在**本机**实测过一次（Ubuntu、有网、`python3-venv` 已装）。
+      还没验的三档：① 没有 `python3-venv` 的机器（走官方 `get-pip.py` 引导那一档）；
+      ② 离线机器（应当如实报失败并退出非 0，而不是卡在下载超时上）；③ macOS
+      （`run_bootstrap._PKG_PREFERRED` / `_PKG_NAME` 里 brew/port 那几条是"按各家既定命名登记、
+      未逐一验证"，续103 的原话）
+- [ ] `scanner/targets.py` 现在是"目标 → 主机 → 注册域"的唯一产地（续146-D），但
+      `scanner/utils.base_domain()` 仍被 `extdom.base_of` 当**兜底**用（分组需要一个非空稳定键）。
+      这个兜底是刻意的、`[8au]⑤` 也钉住了它，但它意味着 `base_domain("127.0.0.1") == "0.1"`
+      这类粗切结果还会流进 `group_by_base` 的键里。要收干净就得给"怪值"一个显式的分组键
+      （比如 `"__invalid__"`），而不是借粗切的产物 —— 动之前先量一下报告里那一栏会变成什么样

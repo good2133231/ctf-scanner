@@ -60,7 +60,7 @@ jobs:
       - name: Run devflow self-check
         env:
           PYTHONUNBUFFERED: "1"
-        run: python3 run_devflow.py
+        run: python3 cli/run_devflow.py
 
   e2e:
     name: 真浏览器端到端（headless Chrome + CDP）

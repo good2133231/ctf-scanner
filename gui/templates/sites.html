@@ -20,6 +20,16 @@
       <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs }}&all=1">显示全部（含重叠）</a>
     {% endif %}
   </p>
+  <p class="muted small">状态码：
+    {% if pager.allst %}
+      当前<b>显示全部状态码</b>。
+      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.st_off }}">只看 200 / 404（含跳转后的）</a>
+    {% else %}
+      默认只显示 <b>200 与 404</b>（3xx <b>跳转后</b>落在 200/404 的也算显示），
+      已收起 {{ pager.st_hidden }} 条其它状态码（401 / 403 / 5xx / 521…，<b>入库一条没动</b>）。
+      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.st_on }}">显示全部状态码</a>
+    {% endif %}
+  </p>
   <p class="muted small">显示模式：
     {% if plain %}
       <b>纯净模式</b>（只显示 URL）
@@ -34,6 +44,7 @@
     <input type="hidden" name="size" value="{{ pager.size }}">
     {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
     {% if plain %}<input type="hidden" name="plain" value="1">{% endif %}
+    {% if pager.allst %}<input type="hidden" name="allst" value="1">{% endif %}
     <button class="ghost" type="submit">查询</button>
     {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
   </form>

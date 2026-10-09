@@ -97,8 +97,8 @@ DEFAULTS = {
         # `token_hash` 整支摘掉 —— 本文件**被 git 跟踪**，"口令类的值"写进来就等于公开；
         # 而这条门只在"库里一个账号都没有"时才必要，那件事用一次交互式建号就能覆盖。
         # 现在的路径：首次启动（0 账号 + 可交互终端）→ `gui/app.py::serve()` 的向导建管理员；
-        # 容器 / 只读挂载 / 忘了口令 / 被锁定 → `python run_users.py --create-admin | --reset-password`。
-        # 老配置里残留的值不再被任何代码读取；清除是**显式动作**：`run_users.py --purge-legacy-token`。
+        # 容器 / 只读挂载 / 忘了口令 / 被锁定 → `python cli/run_users.py --create-admin | --reset-password`。
+        # 老配置里残留的值不再被任何代码读取；清除是**显式动作**：`cli/run_users.py --purge-legacy-token`。
         # ---- 部署到服务器（续47，见 docs/deploy-https.md）----
         # 三项默认值都是**最保守**的：不开任何"图省事"的口子，要用必须显式配。
         # allowed_hosts：Host 白名单的**显式**扩展（空 = 只认回环名，与续32 行为逐字节一致）。

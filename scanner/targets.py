@@ -1,9 +1,9 @@
 """目标解析与归一化：每行一个目标，支持域名 / URL / IP / CIDR，# 开头为注释。"""
 import ipaddress
 import re
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
-from .utils import is_domain, to_ascii
+from .utils import base_domain, is_domain, to_ascii
 
 IP_RE = re.compile(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$")
 CIDR_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}$")
@@ -81,4 +81,77 @@ def parse_lines(lines):
             if it not in seen:
                 seen.add(it)
                 out.append(it)
+    return out
+
+
+# ---------- 续146：目标 → 主机名 → 注册域（**唯一产地**） ----------
+# 此前这六个地方各写了一份"URL 就取 hostname、域名就用自己"：subdomain 的收集根、
+# extdom.task_bases 的归属判定、github_leak.target_domains 的检索词、diffview.target_set 的
+# 可比性、osint 的证书反查与 C 段反查，另加 jsmine 的自家域名保护集。同一规则写 N 份必然漂
+# （AGENTS §5.14），而且漂的方向总是"某一处少一道守门"——`github_leak` 就单独为
+# `base_domain("127.0.0.1") → "0.1"` 加过一次注释与守门，而 `jsmine` 那处到今天都没有。
+
+
+def host_of(kind, value):
+    """一条**已解析**的目标（`parse_line` 的 `(kind, raw)`）→ 它的主机名；认不出就给空串。
+
+    - `url`    → `urlparse().hostname`（已小写、已去端口）
+    - `domain` → 它自己
+    - `ip` / `cidr` / `unknown` → **空串**：IP 没有"收集根 / 归属域"这回事，它们的资产面归
+      portscan / probe。**刻意不在这里替调用方决定"IP 要不要算"**：`diffview.target_set`
+      判的是"两轮扫的是不是同一个目标"，那里 IP 目标也是身份 —— 它自己判 `kind == "ip"`。
+
+    归一只做三件：小写、剥首尾点、能 punycode 就 punycode；**转不动就原样小写**（不猜也不丢 ——
+    "是不是合法域名"由 `is_domain` / `root_of` 判，不由这里判，否则 `diffview` 那种
+    "归一失败也要留着比"的调用方会被静默少一个目标）。
+    """
+    if kind == "url":
+        raw = urlparse(str(value or "")).hostname or ""
+    elif kind == "domain":
+        raw = str(value or "")
+    else:
+        return ""
+    raw = raw.strip().lower().strip(".")
+    return to_ascii(raw) or raw
+
+
+def hosts_of(items):
+    """`parse_lines()` 的结果 → 去重**保序**的**合法域名**主机列表（顺序＝用户填目标的顺序）。
+
+    保序不是洁癖：`subdomain` 的 `brute_max_domains`、`github_leak` 的 `max_domains`、
+    `osint` 的 `max_hosts` 都是"取前 N 个"—— 用 set 就等于每次跑截到的都不是同一批。
+    """
+    out, seen = [], set()
+    for kind, value in items or []:
+        h = host_of(kind, value)
+        if h and is_domain(h) and h not in seen:
+            seen.add(h)
+            out.append(h)
+    return out
+
+
+def root_of(host):
+    """主机名 → **注册域（主域）**；不像域名（含裸 IP、单标签）时返回空串。
+
+    判据只此一处，且**顺序不能反**：先 `is_domain` 守门、再 `base_domain`。反了会怎样：
+    `base_domain("127.0.0.1")` 粗切成 `"0.1"` —— 一个**长得像域名**的垃圾，拿它去 GitHub 搜代码 /
+    去 FOFA 反查证书纯属浪费额度。`base_domain` 自己读 `config/dicts/tlds.txt` 做最长匹配
+    （含 `co.uk` 这类多段后缀与 punycode），清单缺失/为空时 fail-open（见 `utils.base_domain`）。
+    `is_domain` 已经挡掉单标签（`intranet`）与 IP，所以本函数的非空返回值**必然带点** ——
+    调用方不需要再写一遍 `"." in root`（那正是收敛前 osint / github_leak 各自的第二道冗余守门）。
+    """
+    h = str(host or "").strip().lower().strip(".")
+    if not h or not is_domain(h):
+        return ""
+    return base_domain(h) or ""
+
+
+def roots_of(items):
+    """`parse_lines()` 的结果 → 去重保序的**注册域**列表（`root_of` 为空的丢掉）。"""
+    out, seen = [], set()
+    for h in hosts_of(items):
+        r = root_of(h)
+        if r and r not in seen:
+            seen.add(r)
+            out.append(r)
     return out

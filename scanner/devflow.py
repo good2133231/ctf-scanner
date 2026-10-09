@@ -1,12 +1,12 @@
 """全流程自检核心（续52）：夹具域名 + DNS 覆盖 + 压量 + 逐阶段真跑/跳过/失败分类。
 
-`run_devflow.py`（CLI）与 `tests/smoke.py [7n]` **共用本模块**，避免两处逻辑漂移 ——
+`cli/run_devflow.py`（CLI）与 `tests/smoke.py [7n]` **共用本模块**，避免两处逻辑漂移 ——
 本轮修的问题正是"CLI 报 13 阶段均无异常，其实 5 个阶段在空转"，如果测试另写一套判定，
 两边会再次各说各话。
 
 本模块**无 import 副作用**：不设环境变量、不起线程、不写库。调用方必须在 `import scanner.*`
 **之前**把 `CTFSCANNER_DB` / `CTFSCANNER_LOGS` 指到隔离位置（`scanner/db.py` 是模块级读它们）——
-`run_devflow.py` 在脚本顶部设；`tests/smoke.py` 早在文件顶部已设。
+`cli/run_devflow.py` 在脚本顶部设；`tests/smoke.py` 早在文件顶部已设。
 
 判据说明（**为什么 OK/SKIP 要分开、SKIP 还要分类**）：
 - ``FAIL``：该阶段**抛了异常**（由阶段代理记录后原样抛出，交给 runner 的阶段级容错）；

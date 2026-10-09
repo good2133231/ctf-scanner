@@ -524,11 +524,11 @@
     <label>端口 <input name="port" value="{{ s.gui.port }}"></label>
     {# 续117：这一页**不再有口令输入框**。原先那一栏写的是 `gui.token`（引导口令），
        而 `config/settings.yaml` 被 git 跟踪、仓库公开 —— 能换管理员身份的串不该出现在那里。
-       改口令 / 建第一个管理员都走账号体系：页面侧「账号管理」，命令行侧 `run_users.py`。
+       改口令 / 建第一个管理员都走账号体系：页面侧「账号管理」，命令行侧 `cli/run_users.py`。
        回归 `[8v]` 有一条红线盯着"这一页又长出 password 输入框"与"渲染出的 HTML 里出现
        gui.token"，所以这里也**不要**把那些写法原样抄进注释（注释里的字面量同样会被抓到）。 #}
     <p class="muted">gui 段只有监听地址与端口两项。登录凭据一律不写进本文件 ——
-      建第一个管理员：<code>python run_users.py --create-admin</code>（或首次启动的向导）。</p>
+      建第一个管理员：<code>python cli/run_users.py --create-admin</code>（或首次启动的向导）。</p>
     <p class="muted">外部工具路径、字典路径、被动收集来源清单（passive.sources）请直接编辑
       config/settings.yaml；<b>第三方 API key 请写入 config/keys.yaml</b>
       （独立文件，控制台只读不改写，便于单独管理凭据）。</p>

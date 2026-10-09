@@ -17,7 +17,8 @@
 import re
 from urllib.parse import urljoin, urlparse
 
-from .utils import base_domain, http_request, is_domain, pool_run, to_ascii
+from .targets import root_of
+from .utils import http_request, is_domain, pool_run, to_ascii
 
 # ---------- 第三方域名黑名单（噪声源）----------
 
@@ -435,7 +436,10 @@ def mine(url, settings, logger=None, text_sink=None):
     scheme = seed.scheme
 
     # 目标自身域名保护集：seed 主机 + 其注册域，避免被第三方黑名单误杀
-    protect = {seed.hostname.lower().strip("."), base_domain(seed.hostname)}
+    # 续146：折算走 `targets.root_of`（含 is_domain 守门）—— 裸 IP 的 seed（自检与内网目标
+    # 常态）此前会被 `base_domain` 粗切成 "0.1" 塞进保护集，等于把 `.0.1` 结尾的第三方域
+    # 当自家域名放行；现在返回空串，保护集里只有那个 IP 本身。
+    protect = {seed.hostname.lower().strip("."), root_of(seed.hostname)}
 
     resp = http_request(url, timeout=timeout, settings=settings, auth=True)
     if not resp:

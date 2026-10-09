@@ -16,7 +16,7 @@ AES-GCM 认证加密落盘**：`config/keys.enc.yaml`。
 
 **与并发的那条硬约束**：`config.load_settings()` 会被工作线程、GUI 每个请求、分布式节点反复调用，
 所以 `load_keys()` **绝不能在这里要口令** —— 它只读 `current()`（未解锁就返回 `{}`）。
-解锁只在**进程启动时**由入口显式调一次 `unlock()`（`gui.serve()` / `cli` 扫描入口 / `run_node.py`）。
+解锁只在**进程启动时**由入口显式调一次 `unlock()`（`gui.serve()` / `cli` 扫描入口 / `cli/run_node.py`）。
 非交互环境（CI、`python -c`、被强接管 stdin 的自动化）**不提示、不挂住**，直接回未解锁。
 """
 import base64

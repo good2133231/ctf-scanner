@@ -1,10 +1,10 @@
 """全流程自检入口（续50 起、续52 起复用 `scanner/devflow.py` 的核心）：
 起内置靶场 → 压量到最小 → 真跑全 13 阶段 → 逐阶段 真跑 / 跳过（带原因）/ FAIL。
 
-用法：``py -3 run_devflow.py``
+用法：``py -3 cli/run_devflow.py``
 退出码：全部阶段非 FAIL → 0；任一 FAIL → 1（便于自动化判定）。
 
-与 ``run_gui.py`` 对称。CLI **不需要队列**（队列是控制台的事，见 ``scanner/queue.py``），
+`cli/` 下的独立入口（续146 起仓库根只留 `run_gui.py` 与 `run_bootstrap.py`）。CLI **不需要队列**（队列是控制台的事，见 ``scanner/queue.py``），
 直接前台 ``runner.run_task``。
 
 流程与判定细节见 ``scanner/devflow.py`` 文件头。本脚本只负责：① 在 `import scanner.*` **之前**
@@ -18,7 +18,7 @@ import pathlib
 import sys
 import time
 
-ROOT = pathlib.Path(__file__).resolve().parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 # ⚠️ **必须在 `import scanner.*` 之前**把库与任务工作目录指到 logs/ 下的隔离位置 ——

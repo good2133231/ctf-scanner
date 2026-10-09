@@ -13,16 +13,16 @@
 **任何输出里都不出现口令值**，落库的只有 PBKDF2 派生值，配置文件一律不碰。
 
 用法：
-    python run_users.py --status                    # 账号数 + 配置里是否还有历史残留（不打印任何值）
-    python run_users.py --create-admin [用户名]      # 建一个管理员（默认用户名 admin）
-    python run_users.py --reset-password 用户名      # 重设已存在账号的口令
-    python run_users.py --purge-legacy-token         # 删掉 settings.yaml 里已废弃的 gui.token 残留
+    python cli/run_users.py --status                    # 账号数 + 配置里是否还有历史残留（不打印任何值）
+    python cli/run_users.py --create-admin [用户名]      # 建一个管理员（默认用户名 admin）
+    python cli/run_users.py --reset-password 用户名      # 重设已存在账号的口令
+    python cli/run_users.py --purge-legacy-token         # 删掉 settings.yaml 里已废弃的 gui.token 残留
 """
 import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import admin_setup, config as scfg, users  # noqa: E402
 
@@ -39,14 +39,14 @@ def do_status(_args):
     print(f"[*] 账号：共 {n} 个，其中启用中的管理员 {admins} 个")
     if n == 0:
         print("    库里还没有账号 —— 此时控制台**无人能登录**（旧版那条配置引导口令已在续117 摘掉）。")
-        print("    建第一个：python run_users.py --create-admin")
+        print("    建第一个：python cli/run_users.py --create-admin")
     elif admins == 0:
         print("[!] 没有启用中的管理员：策略配置 / POC 管理 / 账号管理都进不去。")
-        print("    补救：python run_users.py --create-admin，或 --reset-password <已有用户名>")
+        print("    补救：python cli/run_users.py --create-admin，或 --reset-password <已有用户名>")
     legacy = _legacy_keys()
     if legacy:
         print(f"[!] config/settings.yaml 里还留着**已不再被读取**的 gui 登录键：{legacy}（值不打印）。")
-        print("    它仍在被 git 跟踪的文件里 —— 清掉：python run_users.py --purge-legacy-token")
+        print("    它仍在被 git 跟踪的文件里 —— 清掉：python cli/run_users.py --purge-legacy-token")
     else:
         print("[+] settings.yaml 的 gui 段里没有任何登录凭据。")
     return 0

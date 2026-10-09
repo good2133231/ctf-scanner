@@ -340,7 +340,7 @@ def do_nodes(args):
         print("    令牌（**只显示这一次**，请立刻保存）：")
         print(f"    {token}")
         print("    节点端启动（在**节点机器**上跑）：")
-        print(f"      py -3 run_node.py --controller http://<控制端>:5000 "
+        print(f"      py -3 cli/run_node.py --controller http://<控制端>:5000 "
               f"--token {token} --name {args.node_add}")
         return
     if args.node_revoke:
@@ -422,8 +422,8 @@ def do_migrate(args):
             print("    [!] 这份文件现在**能登录被迁走的那套系统**（含口令哈希与第三方接口凭据）。"
                   "别把它发进群里 / 传网盘 / 提交进仓库；用完请删，两台机器都归你时才这样导。")
         else:
-            print("    提示：账号与凭据**不在包里** —— 新机器请自己 `run_users.py` 建账号、"
-                  "`run_keys.py` 配第三方接口 key，迁移包不该替你做这件事。")
+            print("    提示：账号与凭据**不在包里** —— 新机器请自己 `cli/run_users.py` 建账号、"
+                  "`cli/run_keys.py` 配第三方接口 key，迁移包不该替你做这件事。")
         return 0
 
     try:
@@ -571,7 +571,7 @@ def main():
                          "与 -f/-t/-n/-p/--offline/--full-*/--recursive-dir/-H/--cookie 互斥")
     # ---- 分布式节点（续80）：节点管理入口 ----
     ap.add_argument("--node-add", metavar="NAME",
-                    help="新建一个执行节点并打印**一次性令牌**（节点端 run_node.py 用它连控制端）")
+                    help="新建一个执行节点并打印**一次性令牌**（节点端 cli/run_node.py 用它连控制端）")
     ap.add_argument("--node-list", action="store_true",
                     help="列出所有节点及其在线 / 占用状态")
     ap.add_argument("--node-revoke", type=int, metavar="ID",

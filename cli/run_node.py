@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""CTFScanner **分布式执行节点**（续80）—— 与 `run_gui.py` / `run_devflow.py` 对称的独立入口。
+"""CTFScanner **分布式执行节点**（续80）—— `cli/` 下的独立入口（与控制台的 `run_gui.py` 并列；续146 起仓库根只留 `run_gui.py` 与 `run_bootstrap.py` 两个启动文件）。
 
 用法（在**节点机器**上跑，不是控制端）：
 
-    py -3 run_node.py --controller http://10.0.0.5:5000 --token ctfsn_xxx --name node-1
+    py -3 cli/run_node.py --controller http://10.0.0.5:5000 --token ctfsn_xxx --name node-1
 
 它会：
   ① 把**本机的** DB / 日志指到节点自己的工作目录（默认 `logs/node-<名>/`）——
@@ -13,7 +13,7 @@
 
 为什么必须单独一个入口（不能塞进 `cli/client.py`）：`scanner.db` 在 **import 期**就读
 `CTFSCANNER_DB` 定死库路径，而 `cli/client.py` 一开头就 import 了 db —— 在 `main()` 里再设
-环境变量已经太晚。本文件**先设环境变量、再 import**，与 `tests/smoke.py` / `run_devflow.py`
+环境变量已经太晚。本文件**先设环境变量、再 import**，与 `tests/smoke.py` / `cli/run_devflow.py`
 同一个套路。
 
 安全边界：节点拿到的只有**任务入参**（目标/阶段/选项），拿不到控制端的库、也拿不到别的任务；
@@ -28,7 +28,7 @@ import threading
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 

@@ -27,18 +27,17 @@
 **收口不变量**：所有外部来源产出的域名一律经 `_domain_of()` 过滤，
 裸 IP / 带端口 / 带路径 / 通配符**绝不写进 `subdomains`**（IP 类资产归 portscan / probe）。
 """
-import ipaddress
 import re
 from urllib.parse import urlparse
 
 from .base import Stage
-from .. import blacklist, db, iprecon
+from .. import blacklist, db, iprecon, targets
 from .. import fofa as fofa_mod
 from .. import shodan as shodan_mod
 from .. import quake as quake_mod
 from .. import ctlog as ctlog_mod
 from ..fingerprint import favicon_hash
-from ..utils import base_domain, is_domain, pool_run, resolve_host, to_ascii
+from ..utils import is_domain, pool_run, resolve_host, to_ascii
 
 # ---------- FOFA 标题反查的相关性过滤 ----------
 
@@ -124,7 +123,7 @@ class OsintStage(Stage):
             if kind == "ip":
                 ips.add(raw)
                 continue
-            host = urlparse(raw).hostname if kind == "url" else raw
+            host = targets.host_of(kind, raw)     # 续146：收敛到 targets（此前这里又写了一份）
             if host:
                 hosts.append(host)
         for r in db.list_subdomains(ctx.task_id):
@@ -268,34 +267,18 @@ class OsintStage(Stage):
         目标是域名/URL 时取它的注册域；站点与子域名同样折算到注册域。
         证书是按域名签的，同一个注册域下的 `a.example.com` / `b.example.com` 证书内容常重叠，
         折到注册域能把查询次数压下来（省配额）。IP 目标直接跳过 —— 证书反查要的是域名。
+        续146：判据收敛到 `targets.hosts_of` / `root_of`。**原来这里的两道手写守门都不用了**：
+        `ipaddress.ip_address(h)` 挡裸 IP、`"." in root` 挡单标签 —— `root_of` 的 `is_domain`
+        守门一次覆盖两件事（IP 与单标签都不是合法域名 ⇒ 返回空串）。
         """
         ctx = self.ctx
-        hosts = []
-        for kind, raw in ctx.targets:
-            if kind == "ip":
-                continue
-            host = urlparse(raw).hostname if kind == "url" else raw
-            if host:
-                hosts.append(host)
+        hosts = list(targets.hosts_of(ctx.targets))
         for r in db.list_sites(ctx.task_id):
             hosts.append(r["host"] or "")
         for r in db.list_subdomains(ctx.task_id):
             hosts.append(r["domain"])
-
-        roots = []
-        for h in hosts:
-            h = (h or "").strip().lower().strip(".")
-            if not h:
-                continue
-            try:
-                ipaddress.ip_address(h)      # 裸 IP 没有证书主体，跳过
-                continue
-            except ValueError:
-                pass
-            root = base_domain(h)
-            if root and "." in root:
-                roots.append(root)
-        return list(dict.fromkeys(roots))
+        roots = [targets.root_of(h) for h in hosts]
+        return list(dict.fromkeys(r for r in roots if r))
 
     def _fofa_cert(self):
         ctx = self.ctx

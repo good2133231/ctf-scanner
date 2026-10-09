@@ -6,7 +6,7 @@ __pycache__/
 data/
 logs/
 
-# 虚拟环境（Linux 部署文档建议 venv，见 docs/usage.md）
+# 虚拟环境（一键安装建的是 `.venv`；`venv/` 一并忽略，是早先文档用过那个名字）
 .venv/
 venv/
 

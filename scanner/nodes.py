@@ -15,8 +15,8 @@ roadmap 那条原文写的是"多个执行节点认领任务（需要先替换 S
 ## 职责边界
 
 - **控制端**用：`create/list_all/verify/revoke/touch/claim/finish`（`gui/app.py` 的 `/api/node/*` 调）；
-- **节点端**用：`NodeClient`（HTTP 客户端，`run_node.py` 调）。
-- 真正的执行循环在 `run_node.py`；本模块不跑流水线。
+- **节点端**用：`NodeClient`（HTTP 客户端，`cli/run_node.py` 调）。
+- 真正的执行循环在 `cli/run_node.py`；本模块不跑流水线。
 
 ## 安全口径
 
@@ -182,7 +182,7 @@ def reclaim_stale(now=None):
     就**永远停在 running**，谁也领不到。本函数在**每次认领前**跑一遍（`claim()` 调），
     把"心跳超时 + 还挂着任务"的节点名下的任务重新入队。
 
-    ⚠️ **前提是节点在跑任务期间也发心跳**（`run_node.py` 有运行期心跳线程）——
+    ⚠️ **前提是节点在跑任务期间也发心跳**（`cli/run_node.py` 有运行期心跳线程）——
     否则一条跑很久的任务会被当成掉线而**误回收**。
 
     重新入队的模式规则与 `db.reconcile_orphan_tasks` 一致：

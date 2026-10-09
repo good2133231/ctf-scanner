@@ -33,7 +33,7 @@ gui:
     enabled: true
   # ---- keys.enc.yaml 的启动解锁询问（续133）----
   # true（代码里的默认值）= 启动时问一次口令；false = 不打扰启动。
-  # 需要解锁时：设环境变量 CTFSCANNER_KEYS_PASSPHRASE，或用 python run_keys.py 显式操作。
+  # 需要解锁时：设环境变量 CTFSCANNER_KEYS_PASSPHRASE，或用 python cli/run_keys.py 显式操作。
   # 关掉的只是**提问**，不是加密：有密文而没解锁时仍会打一行 [!] 凭据保持锁定 —— 因为
   # "有密文但没解"与"没配 key"在日志里长得一模一样，静默掉会让人误判（AGENTS.md §7 续114）。
   # 这一项页面上改不了，只能手改本文件 —— 先例是下面的 login_lockout / audit。
@@ -73,7 +73,7 @@ queue:
 # ---- 开发模式 / 全流程自检（续50，见 scanner/devmode.py）----
 # 打开后各阶段的"量"（并发/在飞/速率/每阶段配额）被**运行时压到最小（1）**，
 # 目的是先验证流程本身能不能跑通，不被"量"的问题干扰；压量只作用于**本次运行的内存副本**，
-# **绝不写回本文件**（关掉 enabled 即恢复原策略）。默认关；自检入口见 run_devflow.py。
+# **绝不写回本文件**（关掉 enabled 即恢复原策略）。默认关；自检入口见 cli/run_devflow.py。
 dev:
   enabled: false
   fixture_port: 0        # 内置靶场端口，0 = 系统自动分配（避免与已占用端口冲突）

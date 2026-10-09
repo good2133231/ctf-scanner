@@ -8,7 +8,7 @@
   策略配置 / POC 管理 / 账号管理（路由层 + 侧边栏两层都挡，见 `admin_required`）；
   **配置文件里没有任何登录凭据**（续117 摘掉 `gui.token` 引导口令 —— 那文件被 git 跟踪、
   仓库是公开的，能换管理员身份的串写进去就等于公开）：库里 0 个账号时由 `serve()` 的**首启动
-  向导**交互式建第一个管理员，非交互环境 / 忘了口令 / 被锁定走 `python run_users.py`；
+  向导**交互式建第一个管理员，非交互环境 / 忘了口令 / 被锁定走 `python cli/run_users.py`；
 - 续32 起有两道**本机守卫**（Host 白名单防 DNS rebinding + 写操作的 Origin/Referer 校验，
   见 `create_app` 的 `_local_guard`），它们是**网络侧**兜底，与"你是谁、能看什么"是两件事；
 - 续47 起**有 HTTPS 落地路径**：由反向代理终止 TLS（Caddy/Nginx 样例 + 自签路径见
@@ -433,7 +433,7 @@ def _client_ip():
 # 生命周期刻意做成"显式按钮控制"，不做成"入队后自动起、跑完自动关" —— 队列里任务的收尾点
 # 不可靠（进程被杀 / 异常收场），自动关容易泄漏端口。见 scanner/devfixture.py。
 # ⚠️ 续52 澄清：**这两个按钮起的夹具与「全流程自检」用的夹具是两码事** ——
-# 自检在**子进程**（`run_devflow.py`）里起自己的夹具并装 DNS 覆盖，跟这里的进程内夹具无关，
+# 自检在**子进程**（`cli/run_devflow.py`）里起自己的夹具并装 DNS 覆盖，跟这里的进程内夹具无关，
 # 也**不会**给控制台进程装任何 DNS 覆盖。这里保留按钮只是为了"手动看一眼夹具长什么样"。
 _DEV_FIXTURE = {"httpd": None, "base": ""}
 
@@ -502,7 +502,7 @@ def create_app():
                   if str((settings.get("gui") or {}).get(k) or "").strip()]
     if _legacy117:
         logger.warning(f"[gui] config/settings.yaml 里还留着已废弃的登录键 {_legacy117}"
-                       "（不再被任何代码读取；值从未打印）—— 清除：python run_users.py --purge-legacy-token")
+                       "（不再被任何代码读取；值从未打印）—— 清除：python cli/run_users.py --purge-legacy-token")
     # 模板里可直接调用 `source_label('osint:fofa')` → 「ICO 反查」（来源列的可读标签）
     app.jinja_env.globals["source_label"] = source_label
     app.jinja_env.globals["ip_note_label"] = ip_note_label
@@ -981,7 +981,7 @@ def create_app():
         续46 这里还有一条"库里没账号时强制建成管理员"的防锁死分支 —— 那是给**引导口令**兜底的：
         旧版空库时谁都能用配置里那个串进来，一不留神就把第一个号建成子用户，从此没人进得了本页。
         续117 把那条门摘掉之后，"空库却已登录"这个前提不可能成立（登录必然要求库里有一个账号），
-        那一档就成了走不到的代码；首个管理员改由 `serve()` 的向导 / `run_users.py --create-admin`
+        那一档就成了走不到的代码；首个管理员改由 `serve()` 的向导 / `cli/run_users.py --create-admin`
         建，两条路都写死 `role=admin`，防锁死的那件事仍然有人管。
         """
         username = (request.form.get("username") or "").strip()
@@ -1533,7 +1533,18 @@ def create_app():
         # 站点页签。`order="id"` 是**显式**的：`_ASSET_PAGES["sites"]` 的表默认排序是 `id DESC`
         # （跨任务 /sites 页要"最新扫到的在前"），而本页沿用 `db.list_sites()` 的 `ORDER BY id`
         # —— 分页不该顺手把行序也翻过来。
-        sites, sites_pager, sites_q = _tab_page("sites", "st", "#sites", order="id")
+        # 续146：默认只显示 200/404（含 3xx **跳转后**落在 200/404 的），`?allst=1` 放开；
+        # 判据在 `db.SITE_STATUS_WHERE` 一处，与跨任务 /sites 页共用同一份。
+        st_where, hide_st = _site_status_arg()
+        sites, sites_pager, sites_q = _tab_page("sites", "st", "#sites", order="id",
+                                                extra_where=st_where)
+        # `site_total` 是**未过滤**的站点数：页签徽标、证书页签那句"本次扫到 N 个站点"、
+        # `shot_missing` 都吃它。徽标报的是"这个任务有多少站点"这个**事实**，被状态码收起的
+        # 那部分也是事实，不该从徽标里消失；分页条的「共 N 条」才是过滤后的口径，而它旁边
+        # 会写明"另有 M 条被收起" —— 两个数字对得上账，不会看着像丢了资产。
+        _st_hidden, site_total = _site_status_extra("sites", hide_st, sites_pager["total"],
+                                                    sites_q, "task_id=?", (task_id,), order="id")
+        _allst_state(sites_pager, hide_st, _st_hidden)
         # 站点页签的截图状态：有站点却一张截图都没有时，页面上要说清"为什么没有"并给补截图入口
         # （用户 2026-09-23：「站点的截图显示为什么还没有完成」—— 实际是策略开关默认关、
         #   且当时建任务勾的 screenshot 阶段不生效，页面上只留一片空白）。
@@ -1544,7 +1555,7 @@ def create_app():
         _shot_agg = db._query("SELECT COUNT(*) c, "
                               "SUM(CASE WHEN TRIM(COALESCE(shot,''))<>'' THEN 1 ELSE 0 END) s "
                               "FROM sites WHERE task_id=?", (task_id,), one=True)
-        site_total = sites_pager["total"]
+        # `site_total` 已在上面算好（**未过滤**总数，理由见那里）—— 这里不要再赋一次
         shot_missing = bool(site_total) and not ((_shot_agg["s"] or 0) if _shot_agg else 0)
         # 本机有没有可用的无头浏览器 —— 页面要区分"策略没开"和"没装浏览器"两种"没截图"
         shot_ready = screenshot.available(settings)
@@ -2130,6 +2141,15 @@ def create_app():
         hide = request.args.get("nores") != "1"
         return (db.RESOLVED_WHERE if hide else None), hide
 
+    def _site_status_arg():
+        """站点列表的「默认只看 200/404」开关（续146）：默认收起，`?allst=1` 放全部状态码。
+
+        与 `_resolved_arg()` 同一性质、同一条纪律：**只改展示**，入库一条不动，被收起的条数
+        必须报出来。判据本身在 `db.SITE_STATUS_WHERE`（跨任务页与任务详情页签共用一份）。
+        """
+        hide = request.args.get("allst") != "1"
+        return (db.SITE_STATUS_WHERE if hide else None), hide
+
     def _task_scope():
         """资产页的「按任务筛选」（续112-E）：`?task=<id>` → `(tid, "task_id=?", (tid,))`。
 
@@ -2174,6 +2194,36 @@ def create_app():
         pager["on"] = base + "&nores=1"
         pager["off"] = base
         return pager
+
+    def _allst_state(pager, hide_st, hidden):
+        """把「默认只看 200/404」这套状态挂到 pager 上（两个站点页共用，规则只此一处）。
+
+        与 `_nores_state` 同口径：**默认态（收起）的翻页链接不带参数**，只有展开后才用
+        `&allst=1` 延续状态 —— 写反了就是"第 2 页突然把 403/5xx 全放出来"，同一个视图
+        两页口径不一致（续112 第一版就栽在这）。
+        ⚠ 调用顺序有要求：必须在其它视图状态（`all=1` / `task=` / `plain=1`）都拼进
+        `pager["qs"]` **之后**再调，否则 `st_on` / `st_off` 两个切换链接会把那些筛选悄悄丢掉。
+        """
+        base = pager["qs"]
+        pager["allst"] = not hide_st
+        pager["st_hidden"] = hidden
+        pager["qs"] = base if hide_st else base + "&allst=1"
+        pager["st_on"] = base + "&allst=1"
+        pager["st_off"] = base
+        return pager
+
+    def _site_status_extra(table, hide, shown, q, base_where, base_params, order=None, **kw):
+        """返回 `(被状态码收起的条数, 未过滤的总条数)`；`hide=False` 时是 `(0, shown)`。
+
+        走的是与列表**同一个** `_page_assets`（`limit=0` 只要 total）：owner 可见范围、关键字、
+        重叠折叠条件全部同源 ⇒ "共 N 条"与"另有 M 条被收起"不可能各按一套口径算出来
+        （本项目反复踩的就是"内层外层不同源"）。多付一次 COUNT，换一个不会说谎的数字。
+        """
+        if not hide:
+            return 0, int(shown or 0)
+        total = _page_assets(table, limit=0, offset=0, q=q or None, extra_where=base_where,
+                             extra_params=base_params, order=order, **kw)[1]
+        return max(0, int(total) - int(shown or 0)), int(total)
 
     def _sub_rows(rows, base_where, base_params, hide_unresolved):
         """子域名/拓展域名结果的展示层整形（续112）。
@@ -2497,9 +2547,11 @@ def create_app():
         #    A 任务的站点会因为 B 任务有同名同长度的站点而被折叠掉（实测把同一个靶场的
         #    15 条记录折成了 1 条，资产归属直接丢失）；标题为空的不参与折叠。
         # 注意：折叠只作用于**当前页**（分页条上的"共 N 条"是 SQL 的总数）。
+        st_where, hide_st = _site_status_arg()
+        base_where = _and_where(tw, None if show_all else db.OVERLAP_SITE_WHERE)
         rows, pager, q = _asset_page(
             "sites", "/sites",
-            extra_where=_and_where(tw, None if show_all else db.OVERLAP_SITE_WHERE),
+            extra_where=_and_where(base_where, st_where),
             extra_params=tp)
         rows = [dict(r) for r in rows]
         seen, hidden = {}, 0
@@ -2525,6 +2577,10 @@ def create_app():
         plain = request.args.get("plain") == "1"
         if plain:                     # 分页/筛选链接要带上，否则翻页会掉回完整模式
             pager["qs"] += "&plain=1"
+        # 续146：状态码筛选的状态**最后**挂 —— `st_on` / `st_off` 要带上 all/task/plain 全部
+        # 视图状态，否则点一下「显示全部状态码」就把别的筛选悄悄丢了（见 `_allst_state`）。
+        _st_hidden, _ = _site_status_extra("sites", hide_st, pager["total"], q, base_where, tp)
+        _allst_state(pager, hide_st, _st_hidden)
         return render_template("sites.html", sites=rows, pager=pager, q=q,
                                show_all=show_all, hidden=hidden, plain=plain,
                                task_id=tid or "", tasks=_tasks_with_asset("sites"))
@@ -3357,7 +3413,7 @@ def create_app():
     @login_required
     @admin_required
     def api_devmode_selfcheck():
-        """跑一次全流程自检 —— **以子进程**调 `py -3 run_devflow.py`，把输出渲染到页面。
+        """跑一次全流程自检 —— **以子进程**调 `py -3 cli/run_devflow.py`，把输出渲染到页面。
 
         ⚠️ **这是续52 最重要的安全取舍**：自检要在进程内装 **DNS 覆盖**（`socket.getaddrinfo`
         的进程级全局钩子）+ 起本地夹具 + 把配额压到最小。这套东西装在**长驻的 web 进程**里
@@ -3365,12 +3421,12 @@ def create_app():
         放进**子进程**后，覆盖与夹具随子进程退出一起消失，**控制台进程一个字节都不受影响**。
         故这里**不再**走"入队 + `dev_selfcheck` 选项"那条老路（那条路是在 web 进程里跑的）。
 
-        安全：命令**不含任何用户输入**（固定 `sys.executable` + `run_devflow.py`），无注入面；
+        安全：命令**不含任何用户输入**（固定 `sys.executable` + `cli/run_devflow.py`），无注入面；
         脚本路径从**项目根**（`BASE_DIR`）解析，不依赖 cwd；子进程超时上限 600s。
         """
         if not devmode.enabled(settings):
             return redirect(url_for("devmode_page", error="开发模式未开启（dev.enabled=false）"))
-        script = Path(BASE_DIR) / "run_devflow.py"
+        script = Path(BASE_DIR) / "cli" / "run_devflow.py"
         if not script.is_file():
             return redirect(url_for("devmode_page", error=f"找不到自检脚本：{script}"))
         try:
@@ -3853,7 +3909,7 @@ def webpath_hints(base, host, port):
                    "根路径与错误路径一律 404 空响应，不给扫描者任何提示。")
         out.append("    ⚠ 这**不是**访问控制 —— 拿到这个地址的人照样到得了登录页，"
                    "真门槛仍是 401 边缘门与 `users` 表账号这两道。")
-        out.append("    执行节点要连的话，`run_node.py --controller` 必须指到上面这个**含前缀的完整地址**"
+        out.append("    执行节点要连的话，`cli/run_node.py --controller` 必须指到上面这个**含前缀的完整地址**"
                    "（前缀变了节点就 404，表现成「节点一直不领任务」）。")
     return out
 
@@ -3949,7 +4005,7 @@ def serve(start_queue=True):
         say(f"[!] {_w_msg}")
     elif _w_state == admin_setup.ST_INVALID:
         say(f"[!] 首启动向导没能建号：{_w_msg}")
-        say("    控制台仍会继续启动，此时无人能登录；补建：python run_users.py --create-admin")
+        say("    控制台仍会继续启动，此时无人能登录；补建：python cli/run_users.py --create-admin")
     else:
         say("[*] 多用户已启用：请用已创建的账号登录（管理员可在「账号」页建/停用子用户）。")
     # ---- 续138：把控制台挂到**本次启动随机生成**的两段路径下（用户点单）----

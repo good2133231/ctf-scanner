@@ -26,7 +26,8 @@ import json
 import re
 from urllib.parse import quote
 
-from .utils import base_domain, http_request, is_domain
+from .targets import roots_of
+from .utils import http_request
 
 API_URL = "https://api.github.com/search/code"
 
@@ -307,34 +308,19 @@ def collect(domains, settings, logger=None, stopped=None):
 def target_domains(targets, max_domains=DEFAULT_MAX_DOMAINS):
     """把任务目标压成待检索的**注册域**列表（去重、保序、最多 `max_domains` 个）。
 
-    - 只取目标的注册域（`utils.base_domain`）：子域名与主域的泄露命中高度重叠，
-      逐个子域名去查不会扩大覆盖面，只会把限流额度瞬间打满；
+    - 只取目标的注册域：子域名与主域的泄露命中高度重叠，逐个子域名去查不会扩大覆盖面，
+      只会把限流额度瞬间打满；
     - IP / CIDR 目标跳过：拿 IP 去搜会命中大量别人的日志与文档，价值低、噪声高；
     - 认不出主机的目标（`kind=unknown`）跳过 —— **不猜**。
+
+    续146：判据全部收敛到 `targets.roots_of()`（＝ `hosts_of` 的 `is_domain` 守门 +
+    `root_of` 的注册域折算）。**原来这里两道守门都不用自己写了**：
+    ① `is_domain` 挡裸 IP（`urlparse().hostname` 拿到的就是它，而 `base_domain("127.0.0.1")`
+    会切出 `"0.1"` 这种误判成域名的垃圾）；② `"." in d` 挡单标签 —— `is_domain` 本来就要求
+    至少两段，所以 `root_of` 的非空返回值必然带点，再判一遍是死代码。
     """
     try:
         cap = max(1, int(max_domains or DEFAULT_MAX_DOMAINS))
     except (TypeError, ValueError):
         cap = DEFAULT_MAX_DOMAINS
-    out, seen = [], set()
-    for item in (targets or []):
-        kind, raw = (item + ("", ""))[:2] if isinstance(item, (tuple, list)) else ("", "")
-        host = ""
-        if kind == "url":
-            from urllib.parse import urlparse
-            host = urlparse(str(raw)).hostname or ""
-        elif kind == "domain":
-            host = str(raw)
-        # `is_domain` 不只是查 "\." ——它是纯形态判断：`127.0.0.1`（**URL 目标里的裸 IP**，
-        # `urlparse().hostname` 拿到的就是它）会被它挡下，而 `base_domain("127.0.0.1")`
-        # 会切出 `"0.1"` 这种**误判成域名**的垃圾，拿它去搜 GitHub 纯属浪费额度。
-        if not host or not is_domain(host):
-            continue
-        d = base_domain(host)
-        if not d or "." not in d or d in seen:
-            continue
-        seen.add(d)
-        out.append(d)
-        if len(out) >= cap:
-            break
-    return out
+    return roots_of(targets)[:cap]

@@ -2430,7 +2430,7 @@ def main():
     _py = sorted({p for _d in ("scanner", "gui", "cli", "tools", "tests")
                   for p in (ROOT / _d).rglob("*.py")
                   if not any(str(p).startswith(str(s)) for s in _SKIP_DIRS)}
-                 | set(ROOT.glob("run_*.py")))   # 仓库根的入口脚本此前不在审计范围内
+                 | set(ROOT.glob("run_*.py")))   # 仓库根只剩两个启动文件；其余入口在 cli/，上一行 rglob 已覆盖
     assert len(_py) > 30, f"源码文件数异常：{len(_py)}"
     for _p in _py:
         compile(_p.read_text(encoding="utf-8", errors="replace"), str(_p), "exec")
@@ -7852,7 +7852,7 @@ http:
     assert users_mod.count_users() == 0, "本项要从「库里 0 个账号」起步"
     # 0 账号：登录页要**指路**（否则用户以为页面坏了），但没有任何提交能登进去
     _pg_empty = _cb.get("/login").get_data(as_text=True)
-    assert "run_users.py --create-admin" in _pg_empty, "0 账号时登录页必须给出建号指引"
+    assert "cli/run_users.py --create-admin" in _pg_empty, "0 账号时登录页必须给出建号指引"
     assert 'name="token"' not in _pg_empty, "登录页不该再有任何引导口令字段"
     assert _cb.post("/login", data={"username": "", "password": "x"},
                     environ_base={"REMOTE_ADDR": "198.51.100.223"}).status_code == 200, \
@@ -7879,7 +7879,7 @@ http:
           "管理员建子用户（默认待改密→强制改密后才可用）/ 子用户 403 挡在 策略配置·POC 管理·账号 "
           "（GET+POST 都挡，键策略/启停 POC/建号全拒）/ 子用户仍可扫描与看结果（含扫描类 POST）/ "
           "侧边栏对子用户隐藏管理入口 / 停用即时踢下线 / 防锁死（不动自己·至少一管理员）/ "
-          "续117：0 账号时**没有任何登录路**（登录页只指路 `run_users.py --create-admin`），"
+          "续117：0 账号时**没有任何登录路**（登录页只指路 `cli/run_users.py --create-admin`），"
           "首个管理员由向导/CLI 建且写死 role=admin；已有管理员时第二个账号按提交的角色建")
 
     # [7i] 续47 HTTPS 部署（反向代理终止 TLS）：控制台要能在服务器上用域名 + HTTPS 访问，
@@ -8853,7 +8853,7 @@ http:
           "3 条变异证伪全部按预期变红")
 
     # [7l] 续50 **开发模式 + 全流程自检**（`scanner/devmode.py` + `scanner/devfixture.py` +
-    #      `run_devflow.py`）。背景：项目还在开发期，用户要一个"开发模式"把各阶段的"量"
+    #      `cli/run_devflow.py`）。背景：项目还在开发期，用户要一个"开发模式"把各阶段的"量"
     #      （并发/在飞/速率/每阶段配额）压到最小（1），先验证**流程本身能不能跑通**；配套
     #      "全流程自检"：13 个阶段都跑一遍看哪一步断了（CLI `run_devflow.py` + 控制台「开发模式」页）。
     #      钉死 6 组语义（末尾 §6.1 变异证伪）：
@@ -12499,8 +12499,8 @@ http:
     _files10 = sorted(set((ROOT / "scanner").rglob("*.py")) | set((ROOT / "cli").rglob("*.py"))
                       | set((ROOT / "gui").rglob("*.py")) | set((ROOT / "tools").rglob("*.py"))
                       | set((ROOT / "tests").rglob("*.py"))
-                      | {ROOT / "run_bootstrap.py", ROOT / "run_gui.py", ROOT / "run_node.py",
-                         ROOT / "run_devflow.py"})
+                      | {ROOT / "run_bootstrap.py", ROOT / "run_gui.py",
+                         ROOT / "cli" / "run_node.py", ROOT / "cli" / "run_devflow.py"})
     # 第三方落点不参与本仓红线：`tools/dirmap/` 是 GPL 上游源码（里面还有 **Python 2** 的
     # example，`ast.parse` 直接 SyntaxError），`tools/fscan/` 是自编译产物目录 —— 两处都由
     # .gitignore 排除、随机器而变。装了 dirmap 的机器上"全树扫正则"必然崩在第三方文件上
@@ -12852,7 +12852,7 @@ http:
         os.environ.clear(); os.environ.update(_snap8f)
 
         # ⑧ 源码红线：管理入口与模块里**不许把口令插进 print**（getpass 的返回值只能用于比较/派生）
-        _srcs8f = {"run_keys.py": (ROOT / "run_keys.py").read_text(encoding="utf-8"),
+        _srcs8f = {"cli/run_keys.py": (ROOT / "cli" / "run_keys.py").read_text(encoding="utf-8"),
                    "scanner/keystore.py": (ROOT / "scanner" / "keystore.py").read_text(encoding="utf-8")}
         for _fn8f, _sx8f in _srcs8f.items():
             _leak8f = [l.strip()[:64] for l in _sx8f.splitlines()
@@ -12875,7 +12875,7 @@ http:
         # ⑩ 接线口径：三个入口都必须在 load_settings() **之前** unlock()
         #    （晚一步就是"keys 永远是空"的静默失效 —— 而它看起来完全像"用户没配 key"）
         for _rel8f, _call8f in (("cli/client.py", "    settings = load_settings()"),
-                                ("run_node.py", "    settings = load_settings()"),
+                                ("cli/run_node.py", "    settings = load_settings()"),
                                 ("gui/app.py", "    _settings = load_settings()")):
             _sx8f = (ROOT / _rel8f).read_text(encoding="utf-8")
             assert "keystore" in _sx8f, f"{_rel8f} 没导入 keystore"
@@ -13702,7 +13702,7 @@ http:
           "asset_count 与实际行数一致")
 
 
-    # ---------------- [8v] 续117：登录凭据不再住在配置文件里（首启动向导 + run_users.py） ----------------
+    # ---------------- [8v] 续117：登录凭据不再住在配置文件里（首启动向导 + cli/run_users.py） ----------------
     #      旧版有一条 `gui.token` 引导口令：库里 0 个账号时那个串能换到管理员身份。而
     #      `config/settings.yaml` **被 git 跟踪、仓库是公开的** —— 等于"谁能读仓库谁就能进控制台"，
     #      这台机器上它甚至还是出厂默认值。本轮把那条门整支摘掉，改成
@@ -13835,7 +13835,7 @@ http:
 
     # ⑥ 命令行入口在子进程里真跑得动，且**任何输出都不出现口令值**
     import subprocess as _sp117
-    _r117 = _sp117.run([sys.executable, "run_users.py", "--status"], cwd=str(ROOT),
+    _r117 = _sp117.run([sys.executable, "cli/run_users.py", "--status"], cwd=str(ROOT),
                        capture_output=True, text=True, timeout=120)
     assert _r117.returncode == 0, (_r117.returncode, _r117.stderr[-300:])
     assert _SENT117 not in _r117.stdout + _r117.stderr, "--status 把口令值打印出来了"
@@ -13850,7 +13850,7 @@ http:
           "用户名不合法不建号 / 已有账号不动手）｜哨兵口令只在账号表的 pbkdf2 派生值里、配置文件与 "
           "load_settings() 都没有它｜无 uid 的 Cookie 一律不认（0 账号那一档也不认 —— 旧实现正是在这里 "
           "给管理员）｜策略页与登录页再无口令输入框、HTML 里不再出现 gui.token｜删键只动那一行、注释一字"
-          "不损（并反证 save_settings 的合并写**删不掉**）｜run_users.py --status 子进程可跑且不出口令值｜"
+          "不损（并反证 save_settings 的合并写**删不掉**）｜cli/run_users.py --status 子进程可跑且不出口令值｜"
           "DEFAULTS 的 gui 段不再有 token/token_hash")
 
 
@@ -16162,7 +16162,7 @@ expression: r0()
                     if ".venv" not in f.parts and "dirmap" not in f.parts
                     and "凭据保持锁定" in f.read_text(encoding="utf-8", errors="replace")})
     assert _hand == ["scanner/keystore.py"], f"结论被抄到了别处（每个抄写点都是一次重复表述的机会）：{_hand}"
-    for _f in ("cli/client.py", "gui/app.py", "run_node.py"):
+    for _f in ("cli/client.py", "gui/app.py", "cli/run_node.py"):
         _t124 = (ROOT / _f).read_text(encoding="utf-8", errors="replace")
         assert "keystore.lock_notice(" in _t124, f"{_f} 没走统一的那一句"
         # 三个入口的前提都还是"没有加密文件就静默通过"，这句条件不许被顺手删掉
@@ -16185,7 +16185,7 @@ expression: r0()
     import contextlib as _ctx125
     import io as _io125
     from scanner import devflow as _dv125
-    _rv125 = (ROOT / "run_devflow.py").read_text(encoding="utf-8")
+    _rv125 = (ROOT / "cli" / "run_devflow.py").read_text(encoding="utf-8")
     from scanner import devmode as _dm125
 
     # ① 放宽的**只有节奏**：开发模式本体（用户拿去跑真实目标的那份）仍是 1 请求/秒
@@ -16310,7 +16310,7 @@ expression: r0()
     _jobs = _y125.safe_load(_q125.read_text(encoding="utf-8"))["jobs"]
     assert {"contrast", "devflow", "e2e", "probe-3-14"} <= set(_jobs), sorted(_jobs)
     assert "tools/check_contrast.py" in str(_jobs["contrast"])
-    assert "run_devflow.py" in str(_jobs["devflow"])
+    assert "cli/run_devflow.py" in str(_jobs["devflow"])
     assert "browser_e2e.py" in str(_jobs["e2e"])
     assert _jobs["probe-3-14"].get("continue-on-error") is True, \
         "新版本解释器是**探针**：允许红（还没证明它稳定），但既不阻塞合并，也不许假装成必过项"
@@ -17904,7 +17904,7 @@ expression: r0()
     assert any("重启即换" in l for l in _out8ak), "没说清「重启就换」—— 有人会把它存进书签当永久地址"
     assert any("不是" in l and "访问控制" in l for l in _out8ak), \
         "横幅没说清这不是访问控制（§5.10 口径：不许让人误以为安全了）"
-    assert any("run_node.py --controller" in l and "前缀" in l for l in _out8ak), \
+    assert any("cli/run_node.py --controller" in l and "前缀" in l for l in _out8ak), \
         "没说节点端要带前缀 —— 现象是「节点一直不领任务」，最难查的那种"
     assert sum(1 for l in _out8ak if "随机生成" in l) == 1, "同一句说法出现了多处（文案有第二个产地）"
     # `serve()` 返回后模块级 app 必须**没**留着前缀层：`[7i]` 真调 serve() 三次，留着就是往
@@ -19094,7 +19094,7 @@ expression: r0()
         "注释行必须**仍然被正则命中**、靠 startswith(\"#\") 那条豁免 —— 判据本身不许放水"
     assert (ROOT / "tests" / "smoke.py") in _scan39, \
         "扫描没覆盖 tests/ —— 判据再对也抓不到本轮这种洞"
-    assert any(p.name == "run_devflow.py" for p in _scan39), "扫描没覆盖仓库根入口脚本"
+    assert any(p.name == "run_devflow.py" for p in _scan39), "扫描没覆盖 cli/ 与仓库根的入口脚本"
 
     # ⑩ 新开关三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单/POST 映射 ↔ 开发模式压量）
     from scanner.config import DEFAULTS as _DEF8aq
@@ -19652,9 +19652,9 @@ expression: r0()
                   "同一个文件的写", "FIXTURE_PORT"):
         assert _k8as in _AG8as, f"AGENTS.md 里少了「{_k8as}」—— 记忆同步/多 agent 的规矩被删了"
     # 只读 agent 禁跑那两个入口：AGENTS §10 里引用的**行号**必须还对得上
-    _rd8as = (ROOT / "run_devflow.py").read_text(encoding="utf-8", errors="replace").splitlines()
+    _rd8as = (ROOT / "cli" / "run_devflow.py").read_text(encoding="utf-8", errors="replace").splitlines()
     assert "save_baseline" in _rd8as[95], \
-        "AGENTS §10 指着 run_devflow.py 第 96 行写共享基线；那一行已经不是 save_baseline 了"
+        "AGENTS §10 指着 cli/run_devflow.py 第 96 行写共享基线；那一行已经不是 save_baseline 了"
 
     # 双清单不再竞争：TODO.md 已改成「分工说明 + 稳定工程化 backlog」，它**不参与**轮次号等式
     assert "不再是逐轮待办的第二份抄本" in _TO8as, \
@@ -19671,7 +19671,7 @@ expression: r0()
           "本轮小节必须有实质内容且声称同步 AGENTS 就得真带号｜"
           "§0.4/§10 的骨头（记忆同步/多 agent/可并行/必须串行/同文件写/FIXTURE_PORT）不许被重构删掉｜"
           "TODO.md 不再是第二份流水账、也不许领先 CHANGELOG｜"
-          "文档引用的行号与文件写法（run_devflow.py:96 / smoke-timing.jsonl 的 \"w\"）实时核对")
+          "文档引用的行号与文件写法（cli/run_devflow.py:96 / smoke-timing.jsonl 的 \"w\"）实时核对")
     # ---------------- [8at] 续145：摘补扫入口 / 自动提取主域 / 启动日志落文件 ----------------
     #      用户点单三件事：① “彻底摘掉四个补扫入口”（「批量打开」要搬出来接到 /sites）；
     #      ② “就算我扫描目标给你的是 url 地址，你也能自动提取出主域”；
@@ -19750,11 +19750,12 @@ expression: r0()
     finally:
         gui_app.save_settings = _orig_save145
 
-    # ---- ③ 折叠判据只有一处实现（不许 auto_root 与 auto_expand 各写一份）----
+    # ---- ③ 折叠那行日志仍带 devflow 认的「自动拓展」kw ----
+    #      续146-D 把折叠判据收敛进了 `scanner/targets.py::root_of`（原先四份实现），
+    #      所以"只有一个产地"这条红线搬到 [8au]⑤ 用**全仓 AST 扫调用点**守 —— 按调用点判
+    #      才不会被 docstring 里解释性的 `base_domain(...)` 绊红（本轮真绊过一次）。
+    #      这里不再数一遍：两处各数一次就是 §5.14 的第二个产地，改了一处另一处立刻假绿。
     _sub145 = (ROOT / "scanner" / "stages" / "subdomain.py").read_text(encoding="utf-8")
-    _n_bd145 = _sub145.count("base_domain(d)")
-    assert _n_bd145 == 2, \
-        f"折叠判据（`base_domain(d)`）在 subdomain 阶段应恰好两处：一处判要不要折、一处判要不要入库；实测 {_n_bd145}"
     assert "补收主域名" in _sub145 and "自动拓展" in _sub145, \
         "折叠那行日志必须仍带「自动拓展」—— devflow 的 auto-expand 向量就按这个 kw 判（改了文案不改向量＝自检假 MISS）"
 
@@ -19905,13 +19906,360 @@ expression: r0()
     print("[8at] 续145 摘补扫入口 + 自动提取主域 + 启动日志落文件 ok: "
           "/api/rescan 接口保留而 GUI 只剩「复查」一个消费方（详情页 POST 表单恰好 2 个）｜"
           "subdomain.auto_root 三方一致 + 真 POST 两个方向都存得进去｜"
-          "折叠判据只有一处实现且日志仍带 devflow 认的「自动拓展」kw｜"
+          "折叠那行日志仍带 devflow 认的「自动拓展」kw（判据本体的红线搬到 [8au]⑤）｜"
           "_boot_gaps 五档纯函数（门关时一个字不提边缘门、清单里不许有第二处补法）｜"
           "启动横幅逐行进 logs/server.log、**随机前缀绝不落盘**（含“额外塞一行”的内容级证伪）、"
           "扣掉那行要说出来｜同进程二次 serve 不重复挂 handler｜"
           "落点不可写返回原因且不阻止启动（路径结构判据，不吃 root/权限位）｜"
           "运行期 [gui] 日志与横幅共用同一个文件｜"
           "端口预检与 Werkzeug 同样宽：残留连接放行（夹具先自证）、真监听者仍报占用")
+
+    # ---------------- [8au] 续146：站点默认只看 200/404 / 批量打标只读本面板 / 判据收敛 / 入口搬进 cli ----------------
+    #      用户点单四件事：① 站点默认只看 200/404 + 「显示全部」开关（跨任务 /sites 与任务详情
+    #      站点页签**同一口径**）；② 「批量打标」读整页勾选框，会串到站点行；③ "目标→注册域"
+    #      有四份实现没收敛；④ 根目录太乱，四个入口挪进 `cli/`（根只留两个启动文件）。
+    #      ①②③ 是**行为**（下面真渲染页面、真调函数）；④ 是**结构**（钉文件位置与 sys.path 层数）。
+    #      判据一律带 `?task=<tid>` 作用域：门禁库里已经躺着前面几十组灌进去的站点，
+    #      不收口时"已收起 N 条"会吃到别人的行 —— 那正是 §6.2 那种"沙箱绿、门禁红"的假绿。
+    import ast as _ast8au
+    import re as _re8au
+    import subprocess as _sp8au
+    from scanner import diffview as _dfv8au, extdom as _ex8au, github_leak as _gh8au
+    from scanner import targets as _tg8au
+    from scanner.utils import base_domain as _bd8au
+
+    # ---- ① B：默认只看 200/404（含 3xx **跳转后**落在 200/404 的），`?allst=1` 放全部 ----
+    #   八行刚好覆盖判据的每个分支：直给 200/404、3xx 落地 200/404、3xx 落地 500、
+    #   3xx 但**没取到**落地码、403、521。前四类默认显示，后四类默认收起。
+    _oth8au = db.create_task("smoke-8au-noise", "https://oth8au.test/", ["probe"], {})
+    db.insert_sites(_oth8au, [{"url": "http://noise.oth8au.test/", "host": "noise.oth8au.test",
+                               "port": "80", "status": 521, "title": "NOISE8AU-521", "length": 7}])
+    _tid8au = db.create_task("smoke-8au-st", "https://st8au.test/", ["probe"], {})
+    _rows8au = [("http://ok200.st8au.test/",  200, "S8AU-OK",  0),
+                ("http://nf404.st8au.test/",  404, "S8AU-NF",  0),
+                ("http://jump.st8au.test/",   301, "S8AU-J200",  200),
+                ("http://jmp404.st8au.test/", 302, "S8AU-J404",  404),
+                ("http://jmp500.st8au.test/", 301, "S8AU-J500", 500),
+                ("http://forbid.st8au.test/", 403, "S8AU-FB403",  0),
+                ("http://cdn521.st8au.test/", 521, "S8AU-CDN521",  0),
+                ("http://nojmp.st8au.test/",  301, "S8AU-JNONE", 0)]
+    db.insert_sites(_tid8au, [{"url": u, "host": u.split("/")[2], "port": "80", "status": st,
+                               "title": ti, "length": 100 + i, "redirect_status": rs,
+                               "redirect_url": ("https://land8au.test/" if rs else "")}
+                              for i, (u, st, ti, rs) in enumerate(_rows8au)])
+    _SHOW8au = ("S8AU-OK", "S8AU-J200", "S8AU-J404", "S8AU-NF")
+    _HIDE8au = ("S8AU-JNONE", "S8AU-J500", "S8AU-FB403", "S8AU-CDN521")
+    _q8au = f"?task={_tid8au}"
+    _h8au = c.get("/sites" + _q8au).get_data(as_text=True)
+    for _t in _SHOW8au:
+        assert _t in _h8au, f"默认视图应显示 {_t}（200/404 与**跳转后** 200/404）"
+    for _t in _HIDE8au:
+        assert _t not in _h8au, f"默认视图应收起 {_t} —— 判据在 db.SITE_STATUS_WHERE"
+    assert "NOISE8AU-521" not in _h8au, \
+        "?task= 没挡住别的任务的行 —— 那样下面每条计数都是捡来的绿"
+    assert "已收起 4 条其它状态码" in _h8au, "必须报出被收起的条数（不报＝让人以为资产丢了）"
+    assert "入库一条没动" in _h8au, "必须说清这是**展示层**收起、不是删数据（续112 同一口径）"
+    assert "显示全部状态码" in _h8au, "必须有「显示全部状态码」这个开关"
+
+    _h28au = c.get("/sites" + _q8au + "&allst=1").get_data(as_text=True)
+    for _t in _SHOW8au + _HIDE8au:
+        assert _t in _h28au, f"?allst=1 应放出 {_t}"
+    assert "当前<b>显示全部状态码</b>" in _h28au, "展开态要说清自己现在是全部"
+    assert "只看 200 / 404" in _h28au, "展开态要给出收回起的链接（否则回不去）"
+    assert 'name="allst" value="1"' in _h28au and 'name="allst"' not in _h8au, \
+        "筛选表单的 hidden allst 只该在展开态出现（默认态带上它＝点「查询」也回不到默认视图）"
+
+    # §6.1 证伪：判据放水 → 被收起的行必须立刻冒出来、隐藏数必须归零。
+    # 不钉这一条，上面那十几条断言可能全是"页面本来就长这样"的空写。
+    _sw8au = db.SITE_STATUS_WHERE
+    try:
+        db.SITE_STATUS_WHERE = "1=1"
+        _hm8au = c.get("/sites" + _q8au).get_data(as_text=True)
+        assert "S8AU-CDN521" in _hm8au and "已收起 0 条" in _hm8au, \
+            "把判据换成 1=1 后默认视图没变 ⇒ 上面那些断言是空写（判据没真接到页面上）"
+    finally:
+        db.SITE_STATUS_WHERE = _sw8au
+
+    def _pager8au(html):
+        """只取**分页条那一段**里的链接。
+
+        ⚠ 不能整页搜 `stpage=` / `page=`：状态码切换链接本身就带页号（它要停在当前页），
+        整页搜会把它当成分页链接 —— 本轮第一版就是这么假红一次的（判据取错了对象）。
+        """
+        _seg = html.split('class="pager"', 1)
+        return _re8au.findall(r'href="([^"]*)"', _seg[1].split("</div>", 1)[0]) if len(_seg) > 1 else []
+
+    db.insert_sites(_tid8au, [{"url": f"http://p{i}.st8au.test/", "host": f"p{i}.st8au.test",
+                               "port": "80", "status": 200, "title": f"P8AU-{i}",
+                               "length": 900 + i} for i in range(60)])
+    # 默认态翻页链接**不带** allst，展开态**必带** —— 写反了就是"第 2 页突然把 403/5xx 全放出来"
+    for _qs8au, _want in ((_q8au + "&size=50", False), (_q8au + "&allst=1&size=50", True),
+                          (_q8au + "&size=50&q=st8au", False)):
+        _lk = _pager8au(c.get("/sites" + _qs8au).get_data(as_text=True))
+        assert _lk, f"/sites{_qs8au} 没有翻页条 —— 那这条断言是空写（size 必须在 PAGE_SIZES 里）"
+        assert all(("allst=1" in _u) == _want for _u in _lk), \
+            f"/sites{_qs8au} 的翻页链接 allst 延续状态不对（应{'带' if _want else '不带'}）：{_lk[:2]}"
+
+    # 切换链接不许把别的视图状态丢掉（`all=1` / `task=` / `plain=1`）
+    _h38au = c.get(f"/sites?all=1&plain=1&task={_tid8au}&allst=1").get_data(as_text=True)
+    _m8au = _re8au.search(r'href="([^"]*)"[^>]*>只看 200 / 404', _h38au)
+    assert _m8au and "all=1" in _m8au.group(1) and f"task={_tid8au}" in _m8au.group(1) \
+        and "plain=1" in _m8au.group(1), \
+        f"「只看 200/404」那个链接丢了既有筛选（_allst_state 必须在其它状态拼完之后调）：{_m8au and _m8au.group(1)}"
+    _m28au = _re8au.search(r'href="([^"]*)"[^>]*>显示全部状态码', _h8au)
+    assert _m28au and "allst=1" in _m28au.group(1), \
+        f"默认态的展开链接必须带 allst=1：{_m28au and _m28au.group(1)}"
+
+    # ---- ② 任务详情站点页签：同一套口径，且徽标是**未过滤**总数 ----
+    _d8au = c.get(f"/tasks/{_tid8au}").get_data(as_text=True)
+    _p8au = _d8au.split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0]
+    for _t in _SHOW8au:
+        assert _t in _p8au, f"详情页站点页签默认应显示 {_t}"
+    for _t in _HIDE8au:
+        assert _t not in _p8au, f"详情页站点页签默认应收起 {_t}（两个页面必须同口径）"
+    assert "另有 4 条其它状态码被收起" in _p8au, "详情页也必须报出被收起的条数"
+    _d28au = c.get(f"/tasks/{_tid8au}?allst=1").get_data(as_text=True)
+    _p28au = _d28au.split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0]
+    for _t in _HIDE8au:
+        assert _t in _p28au, f"详情页 ?allst=1 应放出 {_t}"
+    assert 'name="allst" value="1"' in _p28au, "详情页展开态的筛选表单必须 hidden 带上 allst"
+    _mb8au = _re8au.search(r'站点<span class="cnt">([0-9]+)', _d8au)
+    assert _mb8au and _mb8au.group(1) == "68", \
+        f"页签徽标必须是**未过滤**总数 68（被收起的也是事实）：{_mb8au and _mb8au.group(1)}"
+    assert "页签徽标 68 是<b>未过滤</b>的站点总数" in _p8au, \
+        "页面上要把徽标 68 与「共 64 条」的关系说清 —— 不说就像资产被吞了"
+    assert "共 64 条" in _p8au, "分页条的「共 N 条」应是过滤后的 64"
+    _pl8au = _pager8au(c.get(f"/tasks/{_tid8au}?stsize=50").get_data(as_text=True)
+                       .split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0])
+    assert _pl8au and all("allst=1" not in _u for _u in _pl8au), \
+        f"详情页默认态翻页链接不该带 allst：{_pl8au[:2]}"
+    _pl28au = _pager8au(c.get(f"/tasks/{_tid8au}?allst=1&stsize=50").get_data(as_text=True)
+                        .split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0])
+    assert _pl28au and all("allst=1" in _u for _u in _pl28au), \
+        f"详情页展开态翻页链接必带 allst：{_pl28au[:2]}"
+
+    # ---- ③ 判据只有一处产地（B 的结构红线）----
+    _dbsrc8au = (ROOT / "scanner" / "db.py").read_text(encoding="utf-8")
+    _apasrc8au = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert _dbsrc8au.count("SITE_STATUS_WHERE = ") == 1, "SITE_STATUS_WHERE 只许在 db.py 定义一次"
+    assert "status IN (200, 404)" not in _apasrc8au, \
+        "gui/app.py 里不许内联第二份状态码判据（两个页面各写一遍＝迟早漂）"
+    # 判据钉**代码形态**而不是裸词：注释里写 `db.SITE_STATUS_WHERE` 是正当文档
+    #（本项目已经三次被"自己的说明文案绊红自己的断言"绊倒，见 §6.1 推论）
+    assert _apasrc8au.count("return (db.SITE_STATUS_WHERE if hide else None), hide") == 1, \
+        "gui/app.py 只许在一处把判据取出来（_site_status_arg），不许每个页面各写一遍"
+
+    # ---- ④ C：批量打标只读**按钮所在面板**的勾选 ----
+    _js8au = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    _body8au = _js8au.split("function initVulnReview(", 1)[1]
+    assert 'btn.closest(".panel")' in _body8au, \
+        "批量打标必须按**容器**收（写死表 id 会让另一页失灵：/vulns 是 #tbl-vulns-all、详情页是 #tbl-vulns）"
+    assert 'document.querySelectorAll(".pick-row:checked")' not in _body8au, \
+        "批量打标不许再整页捞勾选行 —— 那会把站点行的 URL 当漏洞 id 发出去（服务端静默忽略＝点了没反应）"
+    assert 'querySelectorAll("#tbl-vulns' not in _body8au, \
+        "按容器收之后就不该再有写死的漏洞表 id"
+    # 上面那句"两个页面表 id 不同"是这条改法的**理由**，理由本身也要钉住（否则下一个人会想改回按 id 收）
+    _vn8au = (ROOT / "gui" / "templates" / "vulns.html").read_text(encoding="utf-8")
+    assert 'id="tbl-vulns-all"' in _vn8au and 'id="tbl-vulns"' in _d8au, \
+        "跨任务漏洞页与详情页漏洞表的 id 本就不同 —— 这是「按容器收」成立的前提"
+
+    # ---- ⑤ D：四个原语的契约（"目标→注册域"从此只有一份实现）----
+    assert _tg8au.host_of("url", "HTTPS://WWW.Example.Test:8443/a?x=1#f") == "www.example.test", \
+        "url → hostname（小写、去端口、去路径）"
+    assert _tg8au.host_of("domain", "AAA.Example.Test.") == "aaa.example.test", "domain → 自身（小写、剥尾点）"
+    assert _tg8au.host_of("ip", "127.0.0.1") == "" and _tg8au.host_of("cidr", "10.0.0.0/30") == "" \
+        and _tg8au.host_of("unknown", "垃圾") == "", "ip / cidr / unknown → 空串（不猜）"
+    assert _tg8au.host_of("url", "http://127.0.0.1:8765/") == "127.0.0.1", \
+        "URL 里的裸 IP 也照实取出 —— **要不要算**由调用方判（diffview 算，其余不算）"
+    assert _tg8au.host_of("domain", "例子.中国") == "xn--fsqu00a.xn--fiqs8s", "IDN → punycode"
+    assert _tg8au.hosts_of([("url", "https://www.example.test/x"), ("domain", "www.example.test"),
+                            ("ip", "10.0.0.5"), ("domain", "a.example.test")]) \
+        == ["www.example.test", "a.example.test"], "hosts_of 去重**保序**、IP 不进"
+    assert _tg8au.root_of("www.example.test") == "example.test", "root_of 折到注册域"
+    assert _tg8au.root_of("www.a.example.co.uk") == "example.co.uk", \
+        f"多段公共后缀按最长匹配：{_tg8au.root_of('www.a.example.co.uk')}"
+    # 这两条是 D 的**理由**：旧判据 `base_domain` 对裸 IP 会切出 "0.1" 这种伪域名，
+    # jsmine 拿它当"自家域名"保护，于是目标里有个 IP 就永远挖不到它名下的 JS 端点。
+    assert _tg8au.root_of("127.0.0.1") == "" and _bd8au("127.0.0.1") == "0.1", \
+        f"对照：root_of('127.0.0.1')='' 而旧 base_domain 给出 {_bd8au('127.0.0.1')!r}"
+    assert _tg8au.root_of("intranet") == "", "单标签内网名 → 空串（is_domain 要求至少两段）"
+    assert all("." in _tg8au.root_of(_h) for _h in ("www.example.test", "a.b.c.example.com")), \
+        "root_of 的非空返回值必然带点 ⇒ 调用方不用再手写一遍 `'.' in root`"
+    assert _tg8au.roots_of([("url", "https://www.example.test/x"), ("domain", "aaa.example.test"),
+                            ("domain", "other.a.com"), ("ip", "10.0.0.1")]) \
+        == ["example.test", "a.com"], "roots_of 去重保序（两个子域折到同一注册域只留一次）"
+
+    # 六个调用点各自的口径没被改坏（收敛的是**实现**，不是**语义**）
+    _b8au = _ex8au.task_bases(0, "https://www.example.test/x\naaa.example.test\n10.0.0.1")
+    assert _b8au == {"www.example.test", "aaa.example.test", "example.test"}, \
+        f"extdom.task_bases 同时收主机与注册域、IP 不进：{sorted(_b8au)}"
+    assert _ex8au.base_of("aaa.example.test") == "example.test", "base_of 对合法域名与 root_of 逐字相同"
+    assert _ex8au.base_of("127.0.0.1") == _bd8au("127.0.0.1"), \
+        "base_of 对怪值仍退回粗切 —— group_by_base 需要一个**非空稳定键**，返回空串会把所有怪值并成一组"
+    assert _ex8au.is_owned("x.example.test", _b8au) and not _ex8au.is_owned("x.other.com", _b8au), \
+        "is_owned 的归属判定没被改坏"
+    assert _gh8au.target_domains([("url", "https://www.example.test/x"),
+                                  ("domain", "aaa.example.test"),
+                                  ("url", "http://127.0.0.1:8765/"),
+                                  ("unknown", "垃圾")]) == ["example.test"], \
+        "github_leak 只收注册域（IP 与 unknown 都跳过）"
+    _many8au = [("domain", f"h{i}.ex{i}.com") for i in range(10)]
+    assert len(_gh8au.target_domains(_many8au, max_domains=3)) == 3, "max_domains 上限仍生效"
+    assert _gh8au.target_domains(_many8au, max_domains="坏值") == _gh8au.target_domains(_many8au), \
+        "坏的上限值回落默认（不抛）"
+    _s8au = _dfv8au.target_set({"targets": "https://www.example.test/x\n10.0.0.5\n10.0.0.0/30\naaa.example.test"})
+    assert {"example.test", "10.0.0.5", "10.0.0.1", "10.0.0.2"} <= _s8au, \
+        f"diffview 里 **IP 也是身份**（与前三处刻意不同）、CIDR 要展开：{sorted(_s8au)}"
+    assert _dfv8au.target_set({"targets": "例子.中国"}) == {"xn--fsqu00a.xn--fiqs8s"}, "diffview 的 IDN 归一"
+
+    # 源码红线：折叠判据只许有一个产地。用 **AST** 找真正的调用点 —— 按文本搜会把
+    # docstring / 注释里解释"为什么不再需要那道守门"时提到的 `base_domain(...)` 也算成第二份实现
+    #（本轮就是这么假红过一次的）。
+    _ok8au = {"scanner/utils.py", "scanner/targets.py", "scanner/extdom.py"}
+    _bad8au = []
+    for _p8f in sorted((ROOT / "scanner").rglob("*.py")):
+        _rel8f = _p8f.relative_to(ROOT).as_posix()
+        if _rel8f in _ok8au or "__pycache__" in _p8f.parts:
+            continue
+        for _n8f in _ast8au.walk(_ast8au.parse(_p8f.read_text(encoding="utf-8", errors="replace"))):
+            if not isinstance(_n8f, _ast8au.Call):
+                continue
+            _f8f = _n8f.func
+            _nm8f = _f8f.id if isinstance(_f8f, _ast8au.Name) else \
+                (_f8f.attr if isinstance(_f8f, _ast8au.Attribute) else "")
+            if _nm8f == "base_domain":
+                _bad8au.append(f"{_rel8f}:{_n8f.lineno}")
+    assert not _bad8au, \
+        f"scanner/ 下调用 base_domain 的只许是 targets.root_of 与 extdom.base_of 的兜底：{_bad8au}"
+    _ssrc8au = (ROOT / "scanner" / "stages" / "subdomain.py").read_text(encoding="utf-8")
+    assert "targets.host_of(kind, raw)" in _ssrc8au and _ssrc8au.count("targets.root_of(d)") == 2, \
+        "subdomain 的收集根与折叠都改走 targets，且折叠恰好两处（一处判要不要折、一处判要不要入库）"
+    assert "from urllib.parse import urlparse" not in _ssrc8au, "subdomain 里 urlparse 已不再需要（未用 import 不留）"
+    _osrc8au = (ROOT / "scanner" / "stages" / "osint.py").read_text(encoding="utf-8")
+    assert "targets.hosts_of(ctx.targets)" in _osrc8au and "targets.root_of(h)" in _osrc8au, \
+        "osint 的证书反查改走 targets（`ipaddress` 与 `'.' in root` 两道手写守门已删）"
+    assert "targets.host_of(kind, raw)" in _osrc8au, "osint 的 C 段反查主机清单也改走 targets"
+    assert "import ipaddress" not in _osrc8au, "osint 里 ipaddress 已随之不再需要"
+    _jsrc8au = (ROOT / "scanner" / "jsmine.py").read_text(encoding="utf-8")
+    assert "root_of(seed.hostname)" in _jsrc8au and "base_domain(seed.hostname)" not in _jsrc8au, \
+        "jsmine 的自家域名保护集改走 root_of（裸 IP seed 不再塞进 '0.1' 这种伪域名）"
+
+    # ---- ⑥ F：四个入口搬进 cli/，仓库根只留两个启动文件 ----
+    assert sorted(_p.name for _p in ROOT.glob("run_*.py")) == ["run_bootstrap.py", "run_gui.py"], \
+        f"仓库根只该剩两个启动文件：{sorted(_p.name for _p in ROOT.glob('run_*.py'))}"
+    for _n8au in ("run_keys.py", "run_users.py", "run_node.py", "run_devflow.py"):
+        assert (ROOT / "cli" / _n8au).exists(), f"cli/{_n8au} 不见了"
+        _src8au = (ROOT / "cli" / _n8au).read_text(encoding="utf-8")
+        # 搬进 cli/ 之后少了一层：`sys.path` / `ROOT` 必须是 `.parent.parent`，
+        # 漏改的现象是"从仓库根跑就 ImportError: No module named scanner"
+        assert ".resolve().parent.parent" in _src8au, \
+            f"cli/{_n8au} 的路径自举没跟着加一层（从仓库根跑会 import 不到 scanner）"
+    # 真跑一个入口（只读的 --status）：`.parent.parent` 对不对，跑一次就知道
+    _cli_logs_before8au = (ROOT / "cli" / "logs").exists()
+    _r8au = _sp8au.run([sys.executable, "cli/run_keys.py", "--status"], cwd=str(ROOT),
+                       capture_output=True, text=True, timeout=120)
+    assert _r8au.returncode == 0, (_r8au.returncode, _r8au.stderr[-300:])
+    assert "凭据状态" in _r8au.stdout, _r8au.stdout[-200:]
+    assert (ROOT / "cli" / "logs").exists() == _cli_logs_before8au, \
+        "入口脚本在 cli/ 底下建了 logs/ —— 路径自举加了一层，日志落点也得跟着回仓库根"
+    # 文档里的**可抄命令**必须指到 cli/。判据只认命令形态（`python …` / `py -3 …`），
+    # 不认裸文件名：`ROOT / "cli" / "run_devflow.py"` 这种拼路径的写法是对的，别误伤。
+    _cmd8au = _re8au.compile(r"(?:py -3|python3|python|\./\.venv/bin/python)\s+"
+                             r"(run_(?:keys|users|node|devflow)\.py)")
+    # 判据先自证（否则下面那条"0 命中"是空写）：该抓的要抓到，不该抓的别误伤
+    assert _cmd8au.search("python3 run_keys.py --status") and _cmd8au.search("py -3 run_devflow.py") \
+        and _cmd8au.search("./.venv/bin/python run_node.py"), "命令形态判据抓不到该抓的写法"
+    assert not _cmd8au.search('ROOT / "cli" / "run_devflow.py"') \
+        and not _cmd8au.search("python3 cli/run_devflow.py") \
+        and not _cmd8au.search("python3 run_gui.py"), "拼路径 / 已指到 cli/ / 别的入口都不该被误伤"
+    _live8au = ([_p for _d in ("scanner", "gui", "cli") for _p in (ROOT / _d).rglob("*.py")]
+                + list((ROOT / "gui" / "templates").glob("*.html"))
+                + list((ROOT / ".github" / "workflows").glob("*.yml"))
+                + [ROOT / "config" / "settings.yaml", ROOT / "README.md", ROOT / "TODO.md"]
+                + [ROOT / "docs" / _d for _d in ("usage.md", "docker.md", "security-notice.md",
+                                                 "deploy-https.md", "architecture.md")])
+    _stale8au = [f"{_p.relative_to(ROOT)}:{_i + 1}"
+                 for _p in _live8au if _p.exists()
+                 for _i, _l in enumerate(_p.read_text(encoding="utf-8", errors="replace").splitlines())
+                 if _cmd8au.search(_l)]
+    assert sum(1 for _p in _live8au if _p.exists()) > 100, \
+        f"活文件清单只剩 {sum(1 for _p in _live8au if _p.exists())} 个 —— 扫描范围漏了，0 命中就是假绿"
+    assert not _stale8au, \
+        f"这些活文件里的命令还指着仓库根（搬完就跑不了了）：{_stale8au}"
+    assert 'Path(BASE_DIR) / "cli" / "run_devflow.py"' in _apasrc8au, \
+        "「开发模式」页的自检子进程要指到 cli/run_devflow.py（指错了＝按钮点了 404）"
+    _qy8au = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")
+    assert "python3 cli/run_devflow.py" in _qy8au, "CI 的 devflow job 也要指到 cli/ 下"
+
+    print("[8au] 续146 站点默认只看 200/404 + 批量打标只读本面板 + 判据收敛 + 入口搬进 cli ok: "
+          "默认视图收起 403/5xx/521 与「3xx 但没取到落地码」，放行 200/404 与**跳转后** 200/404｜"
+          "被收起的条数报在页面上、并写明「入库一条没动」｜?allst=1 放全部且筛选表单 hidden 带参｜"
+          "翻页链接默认态不带 allst、展开态必带（写反＝第 2 页突然放出 5xx）｜"
+          "切换链接不丢 all/task/plain｜跨任务页与详情页签同口径、徽标是**未过滤**总数 68 对「共 64 条」｜"
+          "判据换成 1=1 后视图立刻变（证伪，不是空写）｜SITE_STATUS_WHERE 只有一个产地｜"
+          "批量打标按 btn.closest('.panel') 收（两页漏洞表 id 不同，写死 id 会失灵）｜"
+          "host_of/hosts_of/root_of/roots_of 四原语契约 + root_of('127.0.0.1')='' 对照旧 base_domain 的 '0.1'｜"
+          "六个调用点语义不变、base_domain 的调用点只剩 targets 与 extdom 兜底（AST 判，不吃注释）｜"
+          "仓库根只剩两个启动文件、四个入口在 cli/ 且路径自举加了 `.parent.parent`、"
+          "`cli/run_keys.py --status` 真跑 rc=0 且不在 cli/ 下建 logs｜"
+          "活文件里的可抄命令一律指到 cli/（判据只认命令形态，不误伤拼路径的写法）")
+
+
+    # ---------------- [8av] 续146-E：一键安装脚本是**薄包装**，不是第二份安装逻辑 ----------------
+    #      用户点单：「现在模式我感觉不像可迁移 —— 自动化安装、自动化配置环境，脚本运行一下就可以运行」。
+    #      实测口径（本机，从"只有索引里那些文件"的空目录跑一遍）：`./install.sh` 建出 `.venv`、
+    #      装好依赖、下回 subfinder/httpx（puredns 那次没下下来 ⇒ 退出码 1，如实报"可选项失败"），
+    #      `./start.sh` 起得来：根路径 404 空体、带前缀的地址 401（出厂 `edge_auth.enabled: true`
+    #      而口令文件不入库 ⇒ fail-closed，横幅与 `_boot_gaps` 都点名了这一项），源仓库零污染。
+    #      这一组钉的是**结构**：脚本必须把判据留给 `run_bootstrap.py` / `gui.serve()`，
+    #      自己一份都不抄 —— 抄了就是 §5.14 的第二个产地，两边迟早漂。
+    _sh8av = {n: (ROOT / n) for n in ("install.sh", "start.sh")}
+    for _n8av, _p8av in _sh8av.items():
+        assert _p8av.exists(), f"{_n8av} 不见了 —— 用户要的「跑一个脚本就行」就没了入口"
+        assert _p8av.stat().st_mode & 0o111, f"{_n8av} 没有可执行位（`./{_n8av}` 会 Permission denied）"
+        _b8av = _p8av.read_bytes()
+        # CRLF 的 shebang 会让 bash 报 `bad interpreter: /usr/bin/env bash^M`，
+        # 而从 Windows 检出后症状看着像"这台机器没装 bash" —— 最难往行尾上想的那类故障。
+        assert b"\r" not in _b8av, f"{_n8av} 含 CR：从 Windows 检出后 bash 会直接起不来"
+        assert _b8av.startswith(b"#!/usr/bin/env bash\n"), f"{_n8av} 的 shebang 漂了"
+        assert 'cd "$(dirname "$0")"' in _b8av.decode("utf-8"), \
+            f"{_n8av} 没有先 cd 到自己所在目录 —— 用绝对路径调它就会在错误的 CWD 里找 run_*.py"
+    _ga8av = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "*.sh text eol=lf" in _ga8av, \
+        ".gitattributes 少了 `*.sh text eol=lf` —— 上面那条「不许含 CR」下次从 Windows 检出就会红"
+
+    _in8av = _sh8av["install.sh"].read_text(encoding="utf-8")
+    assert "run_bootstrap.py --install" in _in8av, "install.sh 必须把活交给 run_bootstrap.py --install"
+    # 只禁**动作**，不禁提到这些词的说明文字：install.sh 里有一句"缺了 python3-venv，
+    # run_bootstrap 会退到用官方 get-pip.py 引导" —— 那是在解释为什么要装那个系统包，
+    # 不是第二份实现。把它一起禁掉就是本项目第 5 次"自己的说明文案绊红自己的断言"
+    #（前四次：「深度目录补扫」/ `site_urls` / docstring 里的 `base_domain(...)` / JS 注释里的 `tbl-vulns`）。
+    for _bad in ("pip install", "pip3 install", "-m venv"):
+        assert _bad not in _in8av, \
+            f"install.sh 里出现了 {_bad!r} —— 建 venv / 装依赖是 run_bootstrap.py 的活，在这儿再做一遍就是第二个产地"
+    assert 'exit "$BOOT_RC"' in _in8av, \
+        "install.sh 必须把 run_bootstrap 的退出码带出去（0＝缺口为零或自动层全补齐；非 0＝有项失败）"
+    assert "换机器别拷" in _in8av, \
+        "install.sh 必须说清 .venv 不可搬移 —— 否则「拷过去跑不起来」会被当成源码坏了"
+
+    _st8av = _sh8av["start.sh"].read_text(encoding="utf-8")
+    assert "run_gui.py" in _st8av, "start.sh 必须 exec run_gui.py"
+    assert 'exec "$PY" run_gui.py' in _st8av, \
+        "start.sh 要 **exec**（不要多套一层 shell 进程：信号就传不进 Flask 了，Ctrl-C 杀不干净）"
+    # run_gui.py 不解析 argv（serve() 没有 argparse）：透传参数＝静默忽略，正是本项目最忌讳的那种失灵。
+    assert '"$@"' not in _st8av, "start.sh 不许透传参数给 run_gui.py（它不解析 argv，传了会被静默忽略）"
+    assert "CTFSCANNER_GUI_HOST" in _st8av and "CTFSCANNER_GUI_PORT" in _st8av, \
+        "start.sh 要指路环境变量改监听地址（判据在 scanner/config.py::gui_bind）"
+    assert "install.sh" in _st8av, "start.sh 缺依赖时要指回 ./install.sh，而不是抛一个 ImportError"
+    print("[8av] 续146 一键安装脚本 ok: install.sh / start.sh 在仓库根、有可执行位、纯 LF、"
+          "先 cd 到自己所在目录｜.gitattributes 钉住 `*.sh text eol=lf`（CRLF 的 shebang 会让 bash "
+          "报 bad interpreter，而从 Windows 检出的症状看着像没装 bash）｜install.sh 只调 "
+          "run_bootstrap.py --install，自己不做 pip install / -m venv（第二个产地；提到 get-pip 的"
+          "**说明文字**不禁 —— 那是第 5 次「自己的文案绊红自己的断言」的教训）｜"
+          "run_bootstrap 的退出码原样带出去｜说清 .venv 不可搬移｜start.sh **exec** run_gui.py、"
+          "不透传 argv（run_gui.py 不解析参数，透传＝静默忽略）、指路 gui_bind 认的两个环境变量、"
+          "缺依赖时指回 ./install.sh")
+
     print("SMOKE PASS")
 
 

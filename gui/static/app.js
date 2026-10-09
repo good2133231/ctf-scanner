@@ -459,13 +459,19 @@ function initVulnReview() {
     });
   });
 
-  // 批量：按钮 [data-review-bulk] 作用于本页所有勾选行（.pick-row:checked）
+  // 批量：按钮 [data-review-bulk] 只作用于**它所在那个面板**里的勾选行（续146，理由见下面那段）
   document.querySelectorAll("button[data-review-bulk]").forEach(btn => {
     if (btn.dataset.bound) return;
     btn.dataset.bound = "1";
     btn.addEventListener("click", async () => {
       const state = btn.dataset.reviewBulk;
-      const ids = [...document.querySelectorAll(".pick-row:checked")]
+      // 续146：只读**按钮所在那个面板**里的勾选。此前读的是整页 `.pick-row:checked`，
+      // 于是在任务详情页勾了站点行、再切到漏洞页签点「批量确认存在」，会把**站点 URL** 当漏洞 id
+      // 发出去（服务端按非法 id 忽略 ⇒ 现象只是"点了没反应"，最难查的那种静默失灵）。
+      // 按**容器**收而不是按表 id 收：跨任务 /vulns 页的表叫 `#tbl-vulns-all`、任务详情页叫
+      // `#tbl-vulns`，写死任何一个都会让另一页失灵 —— 与「批量打开」的 `data-pick-from` 同一个教训。
+      const scope = btn.closest(".panel") || document;
+      const ids = [...scope.querySelectorAll(".pick-row:checked")]
         .map(c => c.dataset.vid || c.value).filter(Boolean);
       const msg = document.querySelector("[data-review-msg]");
       if (!ids.length) { if (msg) msg.textContent = "请先勾选要打标的漏洞"; return; }
