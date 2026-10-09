@@ -11315,14 +11315,25 @@ http:
     _png7z = Path(_TMPDIR) / "t7z" / "https.png"
     try:
         _fx7z, _hb7z, _sb7z = _dfx7z.start_both()
-        _ok7z, _err7z, _t7z = _shot7z.capture(_sb7z, _png7z, settings)
+        # 续140-附2：这一次真截图**顺带把渲染后标题也取回来**（`want_title=True`）——
+        # 同一个进程里多一个 `--dump-dom` 而已，比"另起一次浏览器去验证标题"便宜一整条 timeout。
+        _ok7z, _err7z, _t7z = _shot7z.capture(_sb7z, _png7z, settings, want_title=True)
         if not _ok7z:
             # 环境限制（无浏览器 / 容器里一次性 --screenshot 超时）—— 同流水线与 [7x] 口径降级。
             print(f"[7z] 续64 端到端 **跳过（不是通过，环境限制：{_err7z}）**")
         else:
             assert _png7z.exists() and _png7z.stat().st_size > 0, \
                 "截图返回 True 但 png 为空 —— 渲染异常（证书错误仍可能拦住了渲染）"
-            assert _t7z == "", "没要标题（旧调用方式）就不该获得标题"
+            # 夹具首页的标题是**原始 HTML 就带着**的（`devfixture._INDEX_HTML` 里
+            # `<title>DevFixture Site</title>`），所以这里钉的是"`--dump-dom` 这条路通了"；
+            # "原始 HTML 没有标题、靠 JS 注入也补得到"那一半由 [8ar] ④b 的 SPA 夹具钉（同一次门禁里、
+            # 且只在真能截图的机器上跑）。
+            assert _t7z == "DevFixture Site", f"渲染后标题没从生产函数里出来：{_t7z!r}"
+            # 给 [8ar] ④b 看：这台机器的浏览器真能截，才值得再起一次。
+            # ⚠️ 必须写进 `globals()` —— 整个 smoke 都跑在 `main()` 里，普通赋值只是**函数局部变量**，
+            #    下一组用 `globals().get()` 读就会永远读到 None（本轮第一次就这么静默跳过了 SPA 那条，
+            #    全绿但少验了一条 —— 这是"假绿"，比假红更该防）。
+            globals()["_SHOT_OK7Z"] = True
     finally:
         if _fx7z is not None:
             _dfx7z.stop(_fx7z)
@@ -19143,6 +19154,11 @@ expression: r0()
         **CI 两个 smoke job 同时红**（runner 上 Chrome 在、但那条路截不出），
         把环境限制打成代码红。见 AGENTS §6.2 第九起。
         """
+        if not globals().get("_SHOT_OK7Z"):
+            # `[7z]` 已经在这同一次门禁里起过一次浏览器并失败了 ⇒ 这台机器现在截不出，
+            # **不要再起第二次**（续140 就是因此给 CI 加了 47 秒：那次 45 秒超时要等满才降级）。
+            return ("skip", "同一门禁里 [7z] 已经证明这台机器的浏览器截不出，不再起第二次进程"
+                            "（要标题的验证跟着降级）")
         if not _shot8ar.available(cfg):
             return ("skip", "本机没有无头浏览器")
         _ok, _err, _title = _shot8ar.capture(_url8ar, _png8ar, cfg, timeout=45, want_title=True)
@@ -19342,7 +19358,7 @@ expression: r0()
     #      让我们换对话框，换AI也能接着执行」+「把多agent执行加入记忆…就算其他ai来了也会多agent执行」。
     #      规矩本体写在 `AGENTS.md` §0.4（一轮的四步完成判据）与 §10（哪些能并行、哪些必须独占）。
     #      这里把它变成**跑得绿的判据**：只写进文档而没有机器判，下一个接手者（或下一个忘了的 AI）
-    #      照样会漏 —— §6.2 那九起假红每一起的成因都是"某条口径没人守着"。
+    #      照样会漏 —— §6.2 那十起假红每一起的成因都是"某条口径没人守着"。
     import re as _re8as
     from pathlib import Path as _P8as
 
