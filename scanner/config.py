@@ -244,6 +244,11 @@ DEFAULTS = {
         # **取并集**（默认开）。原实现是 elif —— 装了 subfinder 就不跑内置源，
         # 会白丢 crt.sh / certspotter / alienvault 这批证书与情报源。关掉可省时间。
         "union_passive": True,
+        # 目标是 URL / 子域时**自动提取注册域**当收集根（续145，用户点单："就算我扫描目标
+        # 给你的是 url 地址，你也能自动提取出主域"）。默认开：此前给一条
+        # `https://www.a.com/x`，subdomain 阶段会整段跳过，人只能自己把主域抠出来再填一遍。
+        # 关掉＝只用目标里写的那个名字（续145 之前的行为）。
+        "auto_root": True,
     },
     "passive": {
         # 多来源被动子域名收集（免 API key 的公开接口，见 scanner/passive.py）

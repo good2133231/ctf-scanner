@@ -17,6 +17,8 @@
   ./tools/scanner/puredns bruteforce ./config/subdomains.txt -d url -r ./config/resolvers.txt -w logs/brute.txt
   cat passive.txt brute.txt | sort -u    ->  Python 端以 sorted(set(...)) 等价实现
 """
+from urllib.parse import urlparse
+
 from .base import Stage
 from .. import blacklist, cdn, db, dnsq, passive, wildcard
 from ..config import resolve
@@ -61,13 +63,30 @@ class SubdomainStage(Stage):
         ctx = self.ctx
         th = ctx.throttle        # F2 统一门控：本任务的限流器（可能是 None）
         limits = ctx.settings.get("limits", {})
-        domains, seen = [], set()
+        # ---------- 目标 → 收集根（续145：URL 也能自动提取主域）----------
+        # 用户点单：「就算我扫描目标给你的是 url 地址，你也能自动提取出主域，就不需要我有时候
+        # 自己手动提了」。此前这里只认 `kind == "domain"`，给一条 `https://www.a.com/x` 的结果是
+        # **整阶段跳过**（日志只有一句"目标中无裸域名"）—— 用户得自己把主域抠出来再填一遍。
+        # URL 取 `urlparse().hostname`；ip / cidr 没有"收集根"这回事，跳过（它们的资产面归
+        # portscan / probe）。归一仍走 `to_ascii` + `is_domain`，与 `targets.parse_line`
+        # 同一套口径，不另立第二份判据。
+        domains, seen, from_url = [], set(), []
         for kind, raw in ctx.targets:
-            if kind == "domain" and raw not in seen:
-                seen.add(raw)
-                domains.append(raw)
+            if kind == "domain":
+                host = raw
+            elif kind == "url":
+                host = to_ascii((urlparse(raw).hostname or "").strip().lower().rstrip(".")) or ""
+                if host:
+                    from_url.append((raw, host))
+            else:
+                continue
+            if host and is_domain(host) and host not in seen:
+                seen.add(host)
+                domains.append(host)
+        for _raw, _host in from_url:
+            ctx.logger.info(f"[subdomain] 目标 {_raw} 是 URL，自动提取主机 {_host}")
         if not domains:
-            ctx.logger.info("[subdomain] 目标中无裸域名，跳过该阶段")
+            ctx.logger.info("[subdomain] 目标里既没有域名、也没有能提取出主机名的 URL，跳过该阶段")
             return
         if ctx.stopped():
             ctx.logger.warning("[subdomain] 任务已请求停止，跳过")
@@ -77,20 +96,31 @@ class SubdomainStage(Stage):
         workers = int(limits.get("max_workers", 20))
         found, sources = set(), {}
 
-        # ---------- 0) 自动拓展扫描（`auto_expand`）：目标是子域时补收主域名 ----------
-        # 用户 2026-09-25 的口径：目标是 `aaa.targ1.pro` 时，子域名收集要**连它的主域名
-        # `targ1.pro` 一起收**（否则只能收到 aaa 下面再往下的名字，targ1.pro 的其他子域全漏），
-        # 而 `aaa.targ1.pro` 本身也要**当作一条子域名资产**入库并解析 —— 此前它只进
-        # `hosts.txt` 参与探测，资产表里查不到（"扫过但没记账"，报告里也看不到）。
-        # 只在任务级选项 `auto_expand` 打开时做：这是**扩大扫描面**的行为，
-        # 不能让既有任务在用户不知情的情况下变样。
-        if ctx.options.get("auto_expand") is True:
+        # ---------- 0) 补收注册域（主域）+ 自动拓展扫描 ----------
+        # **折叠判据只有这一份**（续145 之前它是 `auto_expand` 分支里的私有实现，本轮改成
+        # "两个触发条件、一处实现"）：目标是子域时把它的注册域也加进收集根 —— 否则只能收到
+        # `aaa.a.com` 再往下的名字，`a.com` 的其它子域全漏（用户 2026-09-25 的原始口径）。
+        # 两个触发条件：
+        #   ① `subdomain.auto_root`（策略级，**默认开**）＝用户 2026-10-09 点单的"自动提取主域"；
+        #   ② 任务级选项 `auto_expand`（勾了还连带把目标自带的子域按子域资产入库并解析）。
+        #      即便 ① 被关掉，勾了 ② 也照折叠 —— 既有行为不许因为这个新开关而缩水。
+        # ⚠ 这是一次**默认值变更**：续145 之前"目标是子域"默认不折叠（那段注释写的正是
+        #   "这是扩大扫描面的行为，不能让既有任务在用户不知情的情况下变样"）。本轮按用户点单
+        #   把默认翻过来，代价是 DNS 爆破/被动收集的根从 `www.a.com` 变成 `a.com`（面更大）。
+        #   要回到旧行为：`subdomain.auto_root: false`（策略页有勾）。
+        # 折叠是**追加不是替换**：`www.a.com` 自己仍留在收集根里 —— 替换掉等于把用户真正
+        # 给的那个主机从探测清单里抹掉（那才是真的改坏行为）。
+        expand = ctx.options.get("auto_expand") is True
+        auto_root = (ctx.settings.get("subdomain", {}) or {}).get("auto_root") is not False
+        if auto_root or expand:
+            why = "subdomain.auto_root" if auto_root else "任务选项 auto_expand"
             for d in list(domains):
                 b = base_domain(d)
                 if b and b != d and is_domain(b) and b not in seen:
                     seen.add(b)
                     domains.append(b)
-                    ctx.logger.info(f"[subdomain] 自动拓展：目标 {d} 是子域，补收主域名 {b}")
+                    ctx.logger.info(f"[subdomain] 自动拓展：目标 {d} 是子域，补收主域名 {b}（{why}）")
+        if expand:
             for d in domains:
                 if base_domain(d) != d and d not in found:
                     found.add(d)

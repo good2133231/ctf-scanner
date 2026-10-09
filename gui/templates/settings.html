@@ -196,6 +196,11 @@
       {{ 'checked' if s.subdomain.union_passive }}> <b>与 subfinder 取并集</b>：装了 subfinder 时
       也跑内置免 key 被动源（crt.sh / certspotter / alienvault / hackertarget / rapiddns / sublist3r），
       做到"尽量全"；取消勾选＝只用 subfinder（省时间）</label>
+    <label class="chk"><input type="checkbox" name="subdomain_auto_root" value="1"
+      {{ 'checked' if s.subdomain.auto_root }}> <b>自动提取主域</b>：目标写的是 URL 或子域
+      （<code>https://www.a.com/x</code> / <code>www.a.com</code>）时，自动把注册域
+      <code>a.com</code> 也当成子域名收集的根，不必再手动把主域抠出来填一遍；
+      取消勾选＝只用目标里写的那个名字（收集面更小）</label>
     <p class="muted small">subfinder 调用恒带 <code>-all</code>（全部数据源，不加时只用默认源集合，覆盖明显更小）。</p>
   </section>
 

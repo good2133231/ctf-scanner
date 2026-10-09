@@ -55,7 +55,7 @@ from scanner import (admin_setup, audit, auth as taskauth, blacklist, captcha, c
                      screenshot,
                      shodan, toolmgr, users)
 from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
-from scanner.log import get_logger
+from scanner.log import attach_server_log, boot_logger, get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
@@ -1384,14 +1384,14 @@ def create_app():
         # 站点页还带缩略图 `<img>`，浏览器直接卡住。续51 / 续53 / 续55 已把「分页 + 服务端筛选」
         # 统一到 SQL 侧（`db.page_assets`），这里补齐最后这批调用点。
         #
-        # 三处**刻意的例外**（不是漏做）：
+        # 两处**刻意的例外**（不是漏做）：
         #  1. **目录页签**：折叠（同一站点 + 状态码 + 大小 只留首个，`_fold_dirs`）是**整表语义**，
         #     且那是该规则的唯一实现 —— 下推到 SQL 等于把同一规则写两遍（必然漂移），
         #     所以它仍是"取全量 → 折叠 → 过滤 → 切片"，**只有渲染**变成一页。
         #  2. **`shot_missing` / `cert_pick` / 证书页签提示**依赖"全任务的站点"：改为轻量查询
         #     （只取需要的列 / 一个聚合），不再为一句提示把整张 `sites` 表读进内存。
-        #  3. **目录页签「深度补扫」表单**把全部站点 URL 当 hidden 提交 → 单独取一份 URL 列表，
-        #     否则那个表单会跟着分页只提交**当前页**的站点（静默少扫）。
+        # （续145 摘掉的第三处：目录页签「深度补扫」表单曾把**全任务**站点 URL 当 hidden 提交，
+        #   所以要单独取一份 URL 列表；入口删了，那份 `site_urls` 查询也一并删掉 —— 不留死代码。）
         def _tab_args(prefix):
             """读某个资产页签的分页参数：`{prefix}page` / `{prefix}size` / `{prefix}q`。"""
             def _int(_name, _default):
@@ -1511,8 +1511,8 @@ def create_app():
         flag_rows = [dict(r) for r in db.list_flags(task_id)]
         # 「线索」页签按用户口径在续24 移除（线索只在 JSONL 导出里按 `type=lead` 保留），
         # 所以这里不再查 `leads` 表、也不再往模板传 `leads` / `leads_intel`。
-        # 「补扫」相关提示条只在"本次没做全量"时出现，避免误导：
-        # 本任务带了 `dirscan_full`/`portscan_full`，或全局策略本身就是全量档 → 不提示。
+        # 任务选项（`dirscan_full` / `portscan_full` / `screenshot_on` / `rescan_of` / `append_count`）：
+        # 详情页的横幅与页签提示都从这一份 `top` 里读。
         try:
             top = json.loads(task.get("options") or "{}")
         except (TypeError, ValueError):
@@ -1529,10 +1529,7 @@ def create_app():
             opts_display = dict(top)
             opts_display["auth"] = dict(auth_view)
             task["options"] = json.dumps(opts_display, ensure_ascii=False)
-        dir_full = (top.get("dirscan_full") is True
-                    or str((settings.get("dirscan") or {}).get("mode") or "quick") == "deep")
-        port_full = (top.get("portscan_full") is True
-                     or str((settings.get("portscan") or {}).get("mode") or "top") == "full")
+
         # 站点页签。`order="id"` 是**显式**的：`_ASSET_PAGES["sites"]` 的表默认排序是 `id DESC`
         # （跨任务 /sites 页要"最新扫到的在前"），而本页沿用 `db.list_sites()` 的 `ORDER BY id`
         # —— 分页不该顺手把行序也翻过来。
@@ -1561,10 +1558,7 @@ def create_app():
         certs_rows, certs_pager, certs_q = _tab_page("certs", "cr", "#certs")
         cert_enabled = ((settings.get("cert") or {}).get("enabled") is True
                         or top.get("cert_on") is True)
-        # 目录页签「深度补扫」表单把**全部**站点 URL 当 hidden 提交（不是勾选）→ 单独取一份
-        # URL 列表：否则那个表单会跟着分页只提交**当前页**的站点（静默少扫）。
-        site_urls = [r["url"] for r in db._query(
-            "SELECT url FROM sites WHERE task_id=? ORDER BY id", (task_id,))]
+
         # 端口 / C 段两个页签。端口的 `order="host, port"` 也是**显式**的：跨任务 `/ports` 页的表
         # 默认排序是 `task_id DESC, port`，而本页沿用 `db.list_ports()` 的 `ORDER BY host, port`。
         ports, ports_pager, ports_q = _tab_page("ports", "pt", "#ports", order="host, port")
@@ -1632,13 +1626,12 @@ def create_app():
             csegs_pager=csegs_pager, csegs_q=csegs_q,
             certs_pager=certs_pager, certs_q=certs_q, cert_total=certs_pager["total"],
             dirs_pager=dirs_pager, dirs_q=dirs_q, dir_total=dir_total,
-            # 目录页签「深度补扫」表单需要**全任务**的站点 URL（不是当前页）
-            site_urls=site_urls,
+
             page_sizes=PAGE_SIZES,
             vulns=vuln_rows, vuln_total=vuln_total, vuln_pager=vuln_pager,
             vuln_sev=vsev, vuln_q=vq, vuln_page_sizes=PAGE_SIZES,
             review=db.review_counts(task_id),
-            # 补扫入口：任务页对"本任务的站点/IP"直接发起新任务；rescan_of 用于反向回跳
+            # 「复查 / 拓展域名探测」发起的任务记 rescan_of，详情页据此反向回跳
             rescan_of=top.get("rescan_of"),
             # 续25：本任务是否被"追加执行"过（次数）—— 详情页据此显示标记与横幅
             append_count=int(top.get("append_count") or 0),
@@ -1647,9 +1640,9 @@ def create_app():
             # 续35「运行时长」：目标是"这个任务一共跑了多久" —— 续跑 / 追加会跑多段，
             # 故报的是累计值（`tasks.elapsed_seconds`）+ 正在跑的这一段，见 `db.task_run_seconds`。
             run_duration=run_duration_text(task),
-            dir_full=dir_full, port_full=port_full,
+
             shot_enabled=shot_enabled, shot_missing=shot_missing, shot_ready=shot_ready,
-            dir_cap=int((settings.get("limits") or {}).get("dirscan_max_urls", 20) or 20),
+
             running=set(runner.running_task_ids()),
             # 续49：排队位置（0=不在队列里）。页面据此显示「排队中（第 N 位）」。
             queue_pos=db.queued_position(task_id), queued_total=db.queued_count())
@@ -3075,12 +3068,14 @@ def create_app():
                                "poc_max_per_site": int(f.get("poc_max_per_site", 80) or 80)},
                     "passive": {"enabled": f.get("passive_enabled") == "1",
                                 "timeout": int(f.get("passive_timeout", 20) or 20)},
-                    # 子域名收集：subfinder(-all) 与内置免 key 被动源是否取并集
+                    # 子域名收集：并集开关 + 自动提取主域（续145）。max_resolve / dns_timeout
+                    # 页面上没有输入框，原样带回（save_settings 是整份重写，漏带就是把键删掉）。
                     "subdomain": {"max_resolve": int(
                                       (settings.get("subdomain") or {}).get("max_resolve", 500) or 500),
                                   "dns_timeout": float(
                                       (settings.get("subdomain") or {}).get("dns_timeout", 3) or 3),
-                                  "union_passive": f.get("union_passive") == "1"},
+                                  "union_passive": f.get("union_passive") == "1",
+                                  "auto_root": f.get("subdomain_auto_root") == "1"},
                     "evasion": {"random_ua": f.get("random_ua") == "1",
                                 "spoof_xff": f.get("spoof_xff") == "1",
                                 "waf_bypass": f.get("waf_bypass") == "1",
@@ -3854,23 +3849,67 @@ def webpath_hints(base, host, port):
     return out
 
 
+def _boot_gaps(keys_locked, admin_state, edge_state):
+    """本次启动**缺哪几项配置** —— 只返回短名字，不重抄各处的成句提示（§5.14 一句话一个产地）。
+
+    为什么还要多加这一行：三个向导各自都会打印自己的原因与补法，但它们**散在十几行横幅里**。
+    用户点单的原话是"如果完全后台执行我又怕在新机子上没有那些配置" —— 后台/nohup/容器里跑
+    没人盯着终端，事后能看的只有日志文件，所以必须有一句"总共缺 N 项、分别是什么"能被一眼扫到。
+    刻意**只给名字**：补法那几句话的产地在 `admin_setup.NO_TTY_HINT` / `edgeauth.SET_HINT` /
+    `keystore.lock_notice()`，在这里再抄一遍就是第二个产地（续124 修过的那类毛病）。
+    """
+    gaps = []
+    if admin_state in (admin_setup.ST_NO_TTY, admin_setup.ST_CANCELLED, admin_setup.ST_INVALID):
+        gaps.append("管理员账号")
+    if edge_state in (edgeauth.ST_NO_TTY, edgeauth.ST_CANCELLED, edgeauth.ST_INVALID):
+        gaps.append("401 边缘认证门口令")
+    if keys_locked:
+        gaps.append("凭据密文口令")
+    return gaps
+
+
 def serve(start_queue=True):
     """控制台统一启动入口（run_gui.py 与 `python gui/app.py` 共用）。
 
     `start_queue=False` 用于**嵌入 / 测试**：只做端口预检 + 打印提示 + `app.run()`，**不起
     后台 worker**。回归 `[7i]` 会真调 `serve()` 校验启动提示，若在这里顺手起了 worker，
     测试库里残留的 `queued` 行会被真消费掉（污染其它用例）—— 故给它一个显式的关闭开关。
+
+    续145（用户点单）：横幅与告警**同时**落进 `logs/server.log`，运行期的 `[gui]` 日志挂同一个
+    文件。两条口径 ——
+    ① 含**本次随机后台前缀**的那一行刻意不写进文件（续138：前缀绝不落盘，落了就不叫"每次启动随机"）；
+    ② 交互只留给"缺配置"那三件事（管理员账号 / 边缘门口令 / 凭据密文口令），无终端时一律**不代填**，
+      但缺哪几项必须有一句汇总（`_boot_gaps`），否则新机器上后台起一个"谁都登不进去"的控制台，
+      而日志里看不出来。
     """
-    # 凭据解锁（续98）：口令**只在这里要一次** —— 紧接着的 load_settings() 会把 keys
-    # 读进配置，之后工作线程与 GUI 每个请求都会反复调它，绝不能再提示。没加密文件时静默通过。
+    # 启动日志**先**挂上：下面每一行（含"凭据没解锁"那句）都要能落进文件。
+    _boot = boot_logger()
+    _log_path, _log_note = attach_server_log(logger)
+    _secret = []          # 本次启动**不许落盘**的子串（随机后台前缀算出来之后填进来）
+
+    def say(line):
+        """横幅的唯一出口：原样 `print`（既有回归按逐字比对 stdout）+ 落一份进启动日志。"""
+        print(line)
+        if any(s and s in line for s in _secret):
+            _boot.info("[!] 上一行含本次启动的随机后台前缀，刻意不写进本文件"
+                       "（续138：前缀绝不落盘）—— 地址只在启动横幅里")
+        else:
+            _boot.info(line)
+
+    if _log_path is not None:
+        say(f"[*] 启动日志：{rel_display(_log_path, mask_outside=True)}"
+            "（追加 + 自动滚动；本次横幅、告警与运行期 [gui] 日志都在里面）")
+    else:
+        say(f"[!] 启动日志写不出来（{_log_note}）—— 本次横幅只在终端里，终端一关就没了")
     # 凭据解锁（续98）：口令**只在这里要一次** —— 紧接着的 load_settings() 会把 keys
     # 读进配置，之后工作线程与 GUI 每个请求都会反复调它，绝不能再提示。没加密文件时静默通过。
     # 续134 的"启动不要提问"（`gui.keys_ask_passphrase=false`）由 **keystore 自己**去取那一个键，
     # 不在这里先 `load_settings()` 一次：`[8f] ⑩` 是接线红线 —— 三个入口都必须"先 unlock 后 load"，
     # 晚一步 keys 就永远是空 dict，而现象与"用户没配 key"完全一样（§7 续114 真误判过一次）。
     _ks = keystore.unlock()
-    if not _ks["ok"] and keystore.status()["encrypted"]:
-        print(f"[!] {keystore.lock_notice(_ks['reason'])}")
+    _ks_locked = bool(not _ks["ok"] and keystore.status()["encrypted"])
+    if _ks_locked:
+        say(f"[!] {keystore.lock_notice(_ks['reason'])}")
     _settings = load_settings()
     # 环境变量（容器）优先；并把实际绑定值写回 `s` —— `_deploy_hints(s)` 与下面那句
     # "控制台: http://host:port" 都是照着 `s` 念的，不同步就会打印一个**没在监听**的地址。
@@ -3878,17 +3917,17 @@ def serve(start_queue=True):
     host, port = gui_bind(_settings)
     s["host"], s["port"] = host, port
     if not _port_free(host, port):
-        print(f"[!] 启动失败：{host}:{port} 已被占用"
-              "（上一次的控制台进程还在运行，或端口被其他服务占用）。")
-        print("    处理：结束占用该端口的进程，或改 config/settings.yaml 的 gui.port 后重试。")
+        say(f"[!] 启动失败：{host}:{port} 已被占用"
+            "（上一次的控制台进程还在运行，或端口被其他服务占用）。")
+        say("    处理：结束占用该端口的进程，或改 config/settings.yaml 的 gui.port 后重试。")
         raise SystemExit(1)
     # 续49：启动持久化任务队列的 worker（默认单消费者，见 scanner/queue.py）。
     # 放在控制台进程入口而不是 create_app()：create_app 会被测试 / WSGI 在 import 期调用，
     # 在工厂里起后台线程会产生 import 副作用。worker 与**控制台进程同生共死**（daemon 线程）。
     if start_queue:
         queue.start(_settings)
-        print(f"[*] 任务队列已启动：{queue.config(_settings)['workers']} 个 worker"
-              "（queue.workers；进程重启后未完成任务会自动重新入队）")
+        say(f"[*] 任务队列已启动：{queue.config(_settings)['workers']} 个 worker"
+            "（queue.workers；进程重启后未完成任务会自动重新入队）")
     # 续117：库里还没有账号 → **在启动前**把第一个管理员建出来。
     # 以前这里印的是"去 settings.yaml 里找那个共享口令"，而那文件被 git 跟踪、仓库公开；
     # 现在配置文件里没有任何可登录的凭据，首启动就只能交互式建号（口令只进 users 表的派生值）。
@@ -3896,18 +3935,19 @@ def serve(start_queue=True):
     # 登录页坏了，而真相是"这台机器上还没有任何一个能登录的账号"。
     _w_state, _w_msg = admin_setup.wizard()
     if _w_state == admin_setup.ST_CREATED:
-        print(f"[+] 首启动向导：{_w_msg}")
+        say(f"[+] 首启动向导：{_w_msg}")
     elif _w_state in (admin_setup.ST_NO_TTY, admin_setup.ST_CANCELLED):
-        print(f"[!] {_w_msg}")
+        say(f"[!] {_w_msg}")
     elif _w_state == admin_setup.ST_INVALID:
-        print(f"[!] 首启动向导没能建号：{_w_msg}")
-        print("    控制台仍会继续启动，此时无人能登录；补建：python run_users.py --create-admin")
+        say(f"[!] 首启动向导没能建号：{_w_msg}")
+        say("    控制台仍会继续启动，此时无人能登录；补建：python run_users.py --create-admin")
     else:
-        print("[*] 多用户已启用：请用已创建的账号登录（管理员可在「账号」页建/停用子用户）。")
+        say("[*] 多用户已启用：请用已创建的账号登录（管理员可在「账号」页建/停用子用户）。")
     # ---- 续138：把控制台挂到**本次启动随机生成**的两段路径下（用户点单）----
     # 只换 `app.wsgi_app`（不动 `app.run` 的调用形式）：`[7i]` 靠打桩 `app.run` 验启动提示，
     # 换成 `run_simple(wrapped)` 会让那条回归失效；挂在 wsgi_app 上则 Flask 自己跑同一条路。
     _wp, _wn = _web_base_for(_settings)
+    _secret.append(_wp)        # 从这一行起，含前缀的行一律不进日志文件（见 say）
     # 记一下"没挂前缀的原样"，`serve()` 返回时要摘掉（见下面的 finally）—— 不摘就是往模块级
     # `app` 上永久留了一层随机前缀：同进程后续任何 `app.test_client().get("/login")` 都会 404。
     _inner138 = getattr(app.wsgi_app, "_ctf_inner", app.wsgi_app)
@@ -3917,7 +3957,7 @@ def serve(start_queue=True):
         app.wsgi_app = webpath.PrefixMiddleware(app.wsgi_app, _wp)
         app.wsgi_app._ctf_inner = _inner138
     for _line in webpath_hints(_wp, host, port) + _wn:
-        print(_line)
+        say(_line)
     # 续47：HTTPS 与 Host 白名单的现状**在启动时就说明白**（部署排错时最先看的就是这几行）。
     # 文案由 `_deploy_hints()` 生成 —— 抽成纯函数是为了让回归门禁能**真跑**这些告警
     # （`serve()` 会起真实服务器，测试不能调它；而"只 grep 源码里有这个字符串"证明不了运行期行为）。
@@ -3931,14 +3971,21 @@ def serve(start_queue=True):
     # 有终端就当场问，没终端只提醒、**绝不代填**；口令不进 argv，也不进任何返回值与输出。
     _e_state, _e_msg = edgeauth.wizard(_settings)
     if _e_state == edgeauth.ST_SET:
-        print(f"[+] 边缘认证门：{_e_msg}")
+        say(f"[+] 边缘认证门：{_e_msg}")
     elif _e_state in (edgeauth.ST_NO_TTY, edgeauth.ST_CANCELLED, edgeauth.ST_INVALID):
-        print(f"[!] 边缘认证门：{_e_msg}")
+        say(f"[!] 边缘认证门：{_e_msg}")
     elif _e_state == edgeauth.ST_CONFIGURED:
-        print(f"[*] 边缘认证门：已启用，口令已配置（Basic 用户名 {edgeauth.EDGE_USER}）")
+        say(f"[*] 边缘认证门：已启用，口令已配置（Basic 用户名 {edgeauth.EDGE_USER}）")
     # ST_DISABLED：门没开 → 一个字都不多说（默认配置必须保持安静）
     for _line in _deploy_hints(s):
-        print(_line)
+        say(_line)
+    # 缺配置汇总（续145）：放在**最后**，因为它的措辞是"逐条原因见上面对应的那几行"。
+    _gaps145 = _boot_gaps(_ks_locked, _w_state, _e_state)
+    if _gaps145:
+        say(f"[!] 本次启动有 {len(_gaps145)} 项配置没就位：" + "、".join(_gaps145))
+        say("    无终端时一律**不代填**；逐项原因与补法见上面对应的那几行，补完重启即可。")
+    else:
+        _boot.info("[*] 配置自检：管理员账号 / 边缘认证门 / 凭据密文 三项都没有缺口")
     try:
         app.run(host=host, port=port, debug=False)
     finally:

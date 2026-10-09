@@ -2145,18 +2145,30 @@ def main():
     assert len(_hits_deep) > len(_hits_shallow), "深扫应派生出备份后缀变体"
     assert len(_hits_deep) <= 1 + 5, "派生总量必须受 max_paths 约束"
 
-    # 7) GUI 可见性：建任务勾选、策略强度下拉/额度、任务详情与站点页的补扫入口
+    # 7) GUI 可见性：建任务勾选、策略强度下拉/额度；**补扫入口已摘掉**（续145，用户点单）
     _tasks_html = c.get("/tasks").get_data(as_text=True)
     assert 'name="portscan_full"' in _tasks_html and 'name="dirscan_full"' in _tasks_html
     _set_html = c.get("/settings").get_data(as_text=True)
     assert 'name="dirscan_mode"' in _set_html and 'name="dirscan_quick_max_paths"' in _set_html
     assert 'name="dirscan_suffix_aware"' in _set_html
     _det_html = c.get(f"/tasks/{tid}").get_data(as_text=True)
-    assert "/api/rescan" in _det_html and "深度目录补扫" in _det_html, "任务详情缺补扫入口"
-    assert "/api/rescan" in c.get("/sites").get_data(as_text=True), "站点页缺补扫入口"
-    print("[5p] 目录浅/深两档 + 全量勾选 + 补扫 ok: 默认浅扫 150 条/档位判定(portscan_full "
+    # 续145：四个补扫入口彻底摘掉（用户点单“这种东西先不搞了”）。`POST /api/rescan` **保留** ——
+    # 漏洞「复查」还在用它，本文件另有 8 处直接打这个接口；摘掉的只是 GUI 上的按钮。
+    # 判据是**页面级**的“整页不许再出现”（续144 给目录页签定的口径）：比“某个按钮不在”强
+    # （换一句解说词把它写回来照样红），也比 grep 模板强（Jinja 注释不渲染，页面级判据不吃那套）。
+    assert "/api/rescan" in _det_html, "漏洞「复查」仍在用 /api/rescan，接口不许被顺手删掉"
+    for _gone145 in ("深度目录补扫", "全端口补扫", "补截图", "深度补扫", "补扫全目录", "补扫全端口"):
+        assert _gone145 not in _det_html, f"续145 已摘掉补扫入口，任务详情页不该再出现「{_gone145}」"
+    _sites145 = c.get("/sites").get_data(as_text=True)
+    assert "/api/rescan" not in _sites145 and "深度目录补扫" not in _sites145, \
+        "跨任务站点页的补扫表单必须已经摘掉（续145）"
+    # 「批量打开」原本长在补扫表单里（`<form method=post>` 包着整张表）：摘表单时必须把它搬出来
+    # 并接到这张表，否则全选框就没有任何用途了（用户点单里专门点了这一条）。
+    assert 'id="btn-open-sites"' in _sites145 and 'data-pick-from="#tbl-all-sites"' in _sites145, \
+        "「批量打开」必须搬到 /sites 并接上 #tbl-all-sites（否则那张表的全选没用途）"
+    print("[5p] 目录浅/深两档 + 全量勾选 ok: 默认浅扫 150 条/档位判定(portscan_full "
           "互不影响)/目标兜底/自动补阶段/补扫任务命名与 rescan_of/next 防跳外站/"
-          "后缀派生去重限额/GUI 入口")
+          "后缀派生去重限额/GUI 补扫入口已摘（页面级判据）+ 批量打开搬到 /sites")
     print(f"[5p-3c] {_e2e_note}")
 
     # (5q) 续10：环境变量路径归一化（`scanner.config.env_path`）。
@@ -2609,18 +2621,24 @@ def main():
         assert _re.match(r"^补扫站点截图-\d{4}-\d{6}$", _shot_t["name"]), _shot_t["name"]
     finally:
         _gui.run_task = _orig_run5
-    # 站点页签：有站点却一张截图都没有时，必须说清原因 + 给「补截图」入口
-    # （用户反馈的正是"站点截图为什么还没有完成"—— 页面上只留一片空白）
+    # 站点页签：有站点却一张截图都没有时，必须说清**原因**。
+    # 续145：「补截图」按钮已摘掉（用户点单），判据因此翻面 —— 按钮必须**不在**，而
+    # “为什么没有截图”那段解说必须**还在**（那才是用户当初报的问题：页面上只留一片空白），
+    # 并且要指一条出路（建任务时勾 screenshot）。摘掉入口的既定后果已登记进 AGENTS §7：
+    # 渲染后标题只能在**建任务时**拿到，已跑完的任务从此没有补截图的入口。
     _nt = db.create_task("smoke-shot-none", targets, ["probe"], {})
     db.insert_sites(_nt, [{"url": "http://a.test/", "host": "a.test", "status": 200,
                            "title": "A", "length": 10}])
     _shtml = c.get(f"/tasks/{_nt}").get_data(as_text=True)
-    assert 'name="stage" value="screenshot"' in _shtml, "站点页签缺「补截图」按钮"
+    assert 'value="screenshot"' not in _shtml and "补截图" not in _shtml, \
+        "续145 已摘掉「补截图」入口，站点页签不该再出现它"
     assert "截图阶段策略级" in _shtml or "没找到可用的无头浏览器" in _shtml, \
         "没有截图产物时页面未说明原因"
+    assert "建任务时" in _shtml, "摘掉入口之后必须指一条出路（建任务时勾 screenshot 阶段）"
     print("[5t] 续13 GUI 反馈修复 ok: 拓展域名按来源分类排序(?esrc= 过滤)/解析·送去探测·加黑名单"
           "三个手动端点(含 next 防跳外站)/目录 title 列与 200 优先·大小降序/目录文案精简/"
-          "截图任务级 screenshot_on 生效 + 站点页补截图与原因提示")
+          "截图任务级 screenshot_on 生效 + 站点页「为什么没有截图」的原因与出路"
+          "（补截图入口已于续145 摘掉）")
 
     # 5u) 续14：sensitive.txt 签名列（A01 改为数据驱动）+ db 写操作串行化
     #     两条都是"静默失效"型收尾 —— 前者字典长期只当预留位、检查用硬编码清单；
@@ -6979,7 +6997,13 @@ http:
         _dq7.resolve_detail = _orig_res7
         _dq7.zone_state = _orig_zone7
 
-    # ③ 目标是子域 → 补收主域名 + 该子域入库解析（只在任务级 auto_expand 打开时）
+    # ③ 目标是子域 → 补收主域名；目标是 **URL** → 自动提取主机与主域（续145，用户点单：
+    #    “就算我扫描目标给你的是 url 地址，你也能自动提取出主域，就不需要我有时候自己手动提了”）。
+    #    续145 之前：折叠**只**在任务级 `auto_expand` 打开时做，而 URL 目标被**整条忽略**
+    #    （阶段只打一句“目标中无裸域名，跳过”）—— 人只能自己把主域抠出来再填一遍。
+    #    现在折叠判据是“两个触发条件、一处实现”：策略级 `subdomain.auto_root`（**默认开**）
+    #    与任务级 `auto_expand`（后者还连带把目标自带的子域按资产入库，两件事别混）。
+    #    四档都要钉：少了“两个都关”那一档，`auto_root` 这个新开关就没有牙齿（§6.1）。
     _seen7 = []
     _orig7 = (_sub7.which, _sub7.verify_tool, _sub7.run_cmd, _sub7.passive.collect)
     _s7 = copy.deepcopy(settings)
@@ -6991,26 +7015,70 @@ http:
     _sub7.verify_tool = lambda b: True
     _sub7.run_cmd = lambda *a, **k: (0, "", "")
     _sub7.passive.collect = lambda d, s, logger=None, workers=6: (_seen7.append(d), {})[1]
+
+    def _run7(label, target, opts=None, auto_root=None):
+        """真跑一次 subdomain 阶段（全离线：桩掉外部工具与被动源、字典指向不存在的文件）。
+
+        返回 `(收集根, 该任务的子域名资产来源表, 本次日志)`。
+        """
+        _seen7.clear()
+        rec.lines.clear()
+        _s7x = copy.deepcopy(_s7)
+        if auto_root is not None:
+            _s7x["subdomain"] = dict(_s7x["subdomain"], auto_root=auto_root)
+        _t7c = db.create_task(label, target, ["subdomain"], {})
+        _wd7 = Path(_TMPDIR) / f"expand7_{label}"
+        _wd7.mkdir(parents=True, exist_ok=True)
+        PipelineRunner(StageContext(_t7c, label, parse_lines([target]), ["subdomain"],
+                                    dict(opts or {}), _s7x, _wd7, rec)).run()
+        return (list(_seen7), {r["domain"]: r["source"] for r in db.list_subdomains(_t7c)},
+                list(rec.lines))
+
     try:
-        for _opt7, _want_base in (({"auto_expand": True}, True), ({}, False)):
-            _seen7.clear()
-            _t7c = db.create_task(f"smoke-expand-target-{bool(_opt7)}", "aaa.targ1.pro",
-                                  ["subdomain"], {})
-            _wd7 = Path(_TMPDIR) / f"expand7_{bool(_opt7)}"
-            _wd7.mkdir(parents=True, exist_ok=True)
-            PipelineRunner(StageContext(_t7c, "smoke-expand-target",
-                                        parse_lines(["aaa.targ1.pro"]), ["subdomain"],
-                                        dict(_opt7), _s7, _wd7, rec)).run()
-            _rows7 = {r["domain"]: r["source"] for r in db.list_subdomains(_t7c)}
-            assert "aaa.targ1.pro" in _seen7, "目标自身一定要进子域名收集"
-            if _want_base:
-                assert "targ1.pro" in _seen7, f"auto_expand 未补收主域名：{_seen7}"
-                assert _rows7.get("aaa.targ1.pro") == "target", \
-                    f"目标自带子域应按子域资产入库：{_rows7}"
-            else:
-                assert "targ1.pro" not in _seen7, f"没勾 auto_expand 不该改既有行为：{_seen7}"
-                assert "aaa.targ1.pro" not in _rows7, \
-                    f"没勾 auto_expand 不该把目标子域塞进资产表：{_rows7}"
+        # A) 默认档（`auto_root` 缺省＝开）：裸子域目标要补收主域，但**不**把目标子域塞进资产表
+        _got7, _rows7, _log7 = _run7("smoke-expand-target-default", "aaa.targ1.pro")
+        assert "aaa.targ1.pro" in _got7, "目标自身一定要进子域名收集"
+        assert "targ1.pro" in _got7, f"默认档就该自动提取主域：{_got7}"
+        assert "aaa.targ1.pro" not in _rows7, \
+            f"没勾 auto_expand 不该把目标子域塞进资产表（那一半仍只归 auto_expand 管）：{_rows7}"
+        assert any("补收主域名 targ1.pro" in l and "subdomain.auto_root" in l for l in _log7), \
+            f"折叠必须点名是哪个开关触发的（不许静默改收集根）：{_log7[-4:]}"
+
+        # B) 勾了 auto_expand：折叠照旧 + 目标子域按 source=target 入库
+        _got7, _rows7, _ = _run7("smoke-expand-target-on", "aaa.targ1.pro",
+                                 opts={"auto_expand": True})
+        assert "targ1.pro" in _got7, f"auto_expand 未补收主域名：{_got7}"
+        assert _rows7.get("aaa.targ1.pro") == "target", \
+            f"目标自带子域应按子域资产入库：{_rows7}"
+
+        # C) 开关关掉 = 回到续145 之前的行为（没有这一档，A/B 都是恒真断言）
+        _got7, _, _ = _run7("smoke-expand-target-off", "aaa.targ1.pro", auto_root=False)
+        assert _got7 == ["aaa.targ1.pro"], f"auto_root=false 时不许折叠：{_got7}"
+        # C2) 关掉 auto_root 但勾了 auto_expand：既有行为不许因为这个新开关而缩水
+        _got7, _, _ = _run7("smoke-expand-target-off-but-expand", "aaa.targ1.pro",
+                            opts={"auto_expand": True}, auto_root=False)
+        assert "targ1.pro" in _got7, f"auto_expand 单独也得能折叠：{_got7}"
+
+        # D) 目标是 **URL**：提取主机 + 自动提取主域（用户点单的那一条）
+        _got7, _, _log7 = _run7("smoke-url-root", "https://www.targ1.pro/login?x=1#f")
+        assert "www.targ1.pro" in _got7, f"URL 目标必须提取出主机名当收集根：{_got7}"
+        assert "targ1.pro" in _got7, f"URL 目标必须自动提取主域：{_got7}"
+        assert any("是 URL，自动提取主机 www.targ1.pro" in l for l in _log7), \
+            f"URL 提取这一步必须进日志：{_log7[-4:]}"
+        # D2) 折叠是**追加不是替换**：用户真正给的那个主机不许被注册域顶掉
+        assert _got7.index("www.targ1.pro") < _got7.index("targ1.pro"), \
+            f"原主机要留在收集根里、且排在派生出来的主域之前：{_got7}"
+        # D3) 大写 / 带端口 / 带路径照样归一（`urlparse().hostname` 已小写去端口，别自己再切一遍）
+        _got7, _, _ = _run7("smoke-url-root-norm", "HTTPS://WWW.Targ1.Pro:8443/a/")
+        assert "www.targ1.pro" in _got7 and "targ1.pro" in _got7, f"URL 归一失败：{_got7}"
+        # D4) 多段公共后缀按最长匹配折算（`co.uk` 那一类，不许切出个 `co.uk` 当主域）
+        _got7, _, _ = _run7("smoke-url-root-multitld", "https://www.a.test.co.uk/x")
+        assert "test.co.uk" in _got7 and "co.uk" not in _got7, f"多段后缀折算错了：{_got7}"
+        # D5) IP / CIDR 目标没有“收集根”这回事：阶段跳过，且**说清原因**
+        _got7, _, _log7 = _run7("smoke-url-root-ip", "127.0.0.1")
+        assert _got7 == [], f"IP 目标不该进收集根：{_got7}"
+        assert any("既没有域名、也没有能提取出主机名的 URL" in l for l in _log7), \
+            f"跳过时必须说清原因（旧文案「无裸域名」在给了 URL 时是误导）：{_log7[-3:]}"
     finally:
         (_sub7.which, _sub7.verify_tool, _sub7.run_cmd, _sub7.passive.collect) = _orig7
 
@@ -10395,8 +10463,9 @@ http:
     _q_tpl7r = (ROOT / "gui" / "templates" / "task_detail.html").read_text(encoding="utf-8")
     _q_det7r = _q_c.get(f"/tasks/{_tidB7o}").get_data(as_text=True)
 
-    # ① 「批量打开」按钮**必须是 type="button"** —— 它长在补扫表单（POST /api/rescan）里，
-    #    一旦退回默认的 submit，勾几个站点点一下就会**真的发起一次扫描**。这是安全属性，钉死。
+    # ① 「批量打开」按钮**必须是 type="button"**。续145 之前它长在补扫表单（POST /api/rescan）里，
+    #    退回默认 submit 就会**真的发起一次扫描**；现在补扫表单摘了，但这条属性照旧钉死 ——
+    #    它旁边就是 GET 筛选表单，误提交一样会把勾选甩成查询参数（还会整页刷新丢掉勾选）。
     def _q_open_btn_ok(_text):
         _m = _re7q.search(r'<button[^>]*id="btn-open-sites"[^>]*>', _text)
         return bool(_m) and 'type="button"' in _m.group(0)
@@ -10406,9 +10475,20 @@ http:
     assert _q_open_btn_ok('<button type="button" id="btn-open-sites">开</button>'), \
         "检测器必须认得正确形态"
     assert _q_open_btn_ok(_q_det7r), \
-        "站点页签的「批量打开」必须存在且为 type=button（否则点一下就会误触发真实补扫）"
+        "站点页签的「批量打开」必须存在且为 type=button（误提交会甩出一次真实请求）"
     assert 'id="btn-open-sites"' in _q_det7r.split('id="pane-sites"', 1)[1].split(
         'id="pane-subs"', 1)[0], "「批量打开」必须落在站点页签内（放错页签等于按钮消失）"
+    # 续145：按钮从补扫表单里搬出来之后，“读哪张表的勾选”必须由按钮自己的 `data-pick-from` 给出。
+    #   此前 app.js 把 `#tbl-detail-sites` 写死在 querySelectorAll 里 ⇒ 跨任务站点页即使把按钮
+    #   搬过去也**静默失灵**（勾选框有、全选有、点了没反应）。两个页面都要钉，缺一个就是没接上。
+    assert 'data-pick-from="#tbl-detail-sites"' in _q_det7r, \
+        "任务详情的按钮必须自带 data-pick-from（JS 不再认得任何写死的表 id）"
+    _q_sites7r = _q_c.get("/sites").get_data(as_text=True)
+    assert _q_open_btn_ok(_q_sites7r), "跨任务站点页也要有「批量打开」，且同样是 type=button"
+    assert 'data-pick-from="#tbl-all-sites"' in _q_sites7r, \
+        "/sites 的按钮必须指向 #tbl-all-sites（接错表＝全选没用途）"
+    assert 'id="op-list"' in _q_sites7r and 'id="op-msg"' in _q_sites7r, \
+        "/sites 缺链接面板 / 反馈位（浏览器一次手势只放行一个 window.open，其余靠 #op-list）"
     # 续112：批量打开的**链接面板**必须存在，且 JS 不许退回"循环 window.open"。
     #   浏览器单次手势只放行一个 window.open —— 少了 #op-list，其余站点就打不开；
     #   而旧断言只盯 window.open 的调用次数，测的是一个真浏览器里不可能出现的场景（一直假绿）。
@@ -10424,8 +10504,18 @@ http:
     _q_js7r = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
     assert "function initOpenSites(" in _q_js7r and "initOpenSites();" in _q_js7r, \
         "app.js 必须有 initOpenSites 且在 DOMContentLoaded 中注册"
-    # 勾选行的 value 必须就是站点 URL —— 这正是 JS 读去 window.open 的数据源
-    assert _re7q.search(r'class="pick pick-row"\s+name="target" value="\{\{\s*s\.url\s*\}\}"',
+    # 续145：JS 里**不许再写死任何一张表的 id** —— 写死就等于“只有那一页能用”，别的页面接上来
+    #   只会静默失灵（本轮之前它硬编码 `#tbl-detail-sites`，/sites 接不上）。判据钉**代码形态**
+    #   （querySelectorAll 里的字面量）：注释里提到表 id 是说明，不算硬编码。
+    assert 'querySelectorAll("#tbl-detail-sites' not in _q_js7r, \
+        "app.js 又把表 id 写死进 querySelectorAll 了（必须读按钮的 data-pick-from）"
+    assert "dataset.pickFrom" in _q_js7r, "app.js 必须从按钮的 data-pick-from 取表 id"
+    # 接线漏了要**说出来**，不许静默变成“勾了没反应”（本仓反复出事的地方就是静默降级）
+    assert "data-pick-from" in _q_js7r.split("function initOpenSites(", 1)[1], \
+        "缺 data-pick-from 时的兜底提示没了（那会退化成静默失灵）"
+    # 勾选行的 value 必须就是站点 URL —— 这正是 JS 读去 window.open 的数据源。
+    # 续145 起勾选框不再有 `name="target"`：它外面已经没有表单了，留着就是“看起来还能提交”。
+    assert _re7q.search(r'class="pick pick-row"\s+value="\{\{\s*s\.url\s*\}\}"',
                         _q_tpl7r), "站点勾选框的 value 必须是站点 URL（批量打开的数据来源）"
 
     # ③ 报告：资产小节被截断时必须写出总数（纯函数口径 + 注入 120 个站点走真渲染）
@@ -10562,38 +10652,48 @@ http:
         assert f'data-filter="#{_tid7s}"' not in _det7s, \
             f"{_tid7s} 已服务端分页，不得再挂前端 data-filter（只筛当前页 = 更误导）"
 
-    # ⑤ HTML 不允许 form 嵌套：3 个"GET 筛选表单 + POST 补扫表单"的页签，
-    #    GET 必须排在 POST **之前**且在其开始前闭合（否则浏览器把表单一拆，按钮就失灵）。
+    # ⑤ HTML 不允许 form 嵌套：凡是“GET 筛选表单 + POST 表单”同页签的，GET 必须排在 POST
+    #    **之前**且在其开始前闭合（否则浏览器把表单一拆，按钮就失灵）。
     #    ⚠️ POST 表单的实际 URL 必须照抄路由表（`api_scan_ext` 的规则是
     #    `/api/domains/scan-ext`，不是想当然的 `/api/scan_ext`）—— 写错的话 `find()` 返回 -1，
-    #    这条断言会以"顺序不对"的名义误红。
-    for _pane7s, _post7s in (("pane-sites", 'action="/api/rescan"'),
-                             ("pane-ext", 'action="/api/domains/scan-ext"'),
-                             ("pane-ports", 'action="/api/rescan"')):
+    #    这条断言会以“顺序不对”的名义误红。
+    #    续145：站点 / 端口 / 目录三个页签的 POST 补扫表单已摘掉，剩下**唯一**一处是拓展域名的
+    #    「送去探测」。那三个页签改成钉“一个 POST 表单都不许有”—— 那才是本轮真正要保证的事：
+    #    补扫入口一旦被加回来，就又会撞上“GET 排在 POST 后面 / 表单嵌套”这个老坑。
+    for _pane7s, _post7s in (("pane-ext", 'action="/api/domains/scan-ext"'),):
         _seg7s = _det7s.split(f'id="{_pane7s}"', 1)[1].split('class="tabpane"', 1)[0]
         _ig7s = _seg7s.find('<form class="filters" method="get"')
         _ip7s = _seg7s.find(_post7s)
         assert _ip7s >= 0, f"{_pane7s}: 段内找不到 POST 表单 {_post7s}（URL 照抄错了会让顺序断言误判）"
-        assert 0 <= _ig7s < _ip7s, f"{_pane7s}: GET 筛选表单必须排在 POST 补扫表单之前"
+        assert 0 <= _ig7s < _ip7s, f"{_pane7s}: GET 筛选表单必须排在 POST 表单之前"
         assert "</form>" in _seg7s[_ig7s:_ip7s], \
             f"{_pane7s}: GET 表单必须在 POST 表单开始前闭合（HTML 不允许 form 嵌套）"
+    for _pane7s in ("pane-sites", "pane-ports", "pane-dirs"):
+        _seg7s = _det7s.split(f'id="{_pane7s}"', 1)[1].split('class="tabpane"', 1)[0]
+        assert 'method="post"' not in _seg7s, \
+            f"{_pane7s}: 续145 已摘掉补扫入口，这个页签不该再有 POST 表单"
+        assert _seg7s.count("<form") == _seg7s.count("</form>"), \
+            f"{_pane7s}: form 标签不配平（摘表单时漏了闭合标签 → 后面的内容全被吞进表单）"
 
-    # ⑥ 目录页签「深度补扫」把站点 URL 当 hidden 提交 → 必须是**全任务**的 URL 列表。
-    #    若沿用当前页的 `sites`，站点一多就会"只补扫当前页那几个"（静默少扫，无任何报错）。
-    def _q_dir_targets_ok(_text):
-        return bool(_re7q.search(
-            r'\{%\s*for\s+\w+\s+in\s+site_urls\s*%\}\s*<input[^>]*name="target"', _text))
+    # ⑥ 目录页签的补扫表单**已整个删掉**（续145）：连同它那份“把全任务站点 URL 当 hidden 提交”
+    #    的 `site_urls` 查询一起删 —— 入口没了还留着查询就是死代码（每渲染一次白读一遍 sites 表）。
+    #    判据因此翻面：以前钉“必须遍历 site_urls 而不是当前页的 sites”（防静默少扫），
+    #    现在钉“这个表单与那份查询都不许再出现”。
+    assert 'name="target"' not in _det7s.split('id="pane-dirs"', 1)[1].split(
+        'class="tabpane"', 1)[0], "目录页签不该再有 hidden 的 target 列表（补扫表单已摘）"
+    #    判据钉**代码形态**（赋值 / 传参）而不是"文件里出现过这个词"：注释里说明"这份查询已经
+    #    删掉了"是正当的文档，按裸词判会把它误判成死代码（本轮第一次跑门禁就是这么红的）。
+    def _q_site_urls145(_text):
+        return bool(_re7q.search(r"\bsite_urls\s*=", _text)) or "site_urls=" in _text
 
-    assert _q_dir_targets_ok(
-        '{% for u in site_urls %}<input type="hidden" name="target" value="{{ u }}">'), \
-        "检测器必须认得正确形态"
-    assert not _q_dir_targets_ok(
-        '{% for s in sites %}<input type="hidden" name="target" value="{{ s.url }}">'), \
-        "检测器必须识破「拿当前页站点当补扫目标」的变异体（那会让补扫静默少扫）"
-    assert _q_dir_targets_ok(_tpl7s), \
-        "目录页签的补扫表单必须遍历 `site_urls`（全任务 URL），不是当前页的 `sites`"
-    assert _re7q.search(r'site_urls\s*=\s*\[r\["url"\]\s+for\s+r\s+in\s+db\._query\(', _apa7s), \
-        "`site_urls` 必须是 route 里单独取的**全量** URL 列表（不是某一页）"
+    assert _q_site_urls145('site_urls = [r["url"] for r in db._query("SELECT url FROM sites")]'), \
+        "检测器必须认得那份全量查询（变异体）"
+    assert _q_site_urls145("render_template('task_detail.html', site_urls=site_urls)"), \
+        "检测器必须认得「往模板传参」那一形（变异体）"
+    assert not _q_site_urls145(_apa7s), \
+        "gui/app.py 还在算/传 `site_urls`（死代码：每渲染一次白读一遍 sites 表）"
+    assert "site_urls" not in _tpl7s, \
+        "模板里还留着 `site_urls`（补扫表单已摘，这个变量没有消费方了）"
 
     # ⑦ 详情页不得再全量读资产表（否则分页只是装饰，大任务照样卡死）
     def _q_full_assets(_text):
@@ -10622,8 +10722,9 @@ http:
     print("[7s] 续57 资产页签服务端分页 ok: 8 个分页条各有独立页码参数名（检测器变异证伪）｜"
           "漏洞页签指名 vpage（续53 的静默失效已修）｜注入 1000 行真渲染：第 1 页恰好 100 行、"
           "第 2 页从第 101 行起（变异忽略 limit/offset 即红）｜徽标＝总数｜翻页带锚点｜"
-          "7 个页签的服务端筛选（含 esrc 保持）且已无 data-filter｜3 处 GET 表单排在 POST 之前且未嵌套｜"
-          "目录补扫走全量 site_urls（检测器变异证伪）｜不再全量读资产表（检测器变异证伪）")
+          "7 个页签的服务端筛选（含 esrc 保持）且已无 data-filter｜拓展域名页签 GET 排在 POST 之前"
+          "且未嵌套，站点/端口/目录三个页签已无 POST 表单且 form 配平（续145 摘补扫入口）｜"
+          "site_urls 连同它那份全量查询一起删净（死代码不留）｜不再全量读资产表（检测器变异证伪）")
 
     # ---- [7t] 续58：拓展域名「按主域名分组」的分页不再设行数上限 ----
     #   旧实现写死 `extdom.GROUP_ROW_CAP = 4000`：只把**前 4000 行**拿去分组，于是第 4001 行起
@@ -19571,6 +19672,196 @@ expression: r0()
           "§0.4/§10 的骨头（记忆同步/多 agent/可并行/必须串行/同文件写/FIXTURE_PORT）不许被重构删掉｜"
           "TODO.md 不再是第二份流水账、也不许领先 CHANGELOG｜"
           "文档引用的行号与文件写法（run_devflow.py:96 / smoke-timing.jsonl 的 \"w\"）实时核对")
+    # ---------------- [8at] 续145：摘补扫入口 / 自动提取主域 / 启动日志落文件 ----------------
+    #      用户点单三件事：① “彻底摘掉四个补扫入口”（「批量打开」要搬出来接到 /sites）；
+    #      ② “就算我扫描目标给你的是 url 地址，你也能自动提取出主域”；
+    #      ③ “服务器启动能不能日志输出在文件，以及只给交互那些配置 —— 完全后台执行时
+    #         怕新机器上没有那些配置”。
+    #      各自的**行为**已由 [5p]/[5t]/[7r]/[7s]/[7a]③ 钉住；这一组钉的是三件跨文件、
+    #      最容易被下一轮改回去的**结构事实**：接口保留、开关三方一致、前缀不落盘、缺配置有汇总。
+    import re as _re145
+    from scanner import admin_setup as _adm145, edgeauth as _ea145
+    from scanner import log as _log145
+    from scanner.config import DEFAULTS as _D145
+
+    _apa145 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    _td145 = (ROOT / "gui" / "templates" / "task_detail.html").read_text(encoding="utf-8")
+    _st145 = (ROOT / "gui" / "templates" / "sites.html").read_text(encoding="utf-8")
+
+    # ---- ① 入口摘了、接口留着：`/api/rescan` 在 GUI 上只剩漏洞「复查」一个消费方 ----
+    _n_rescan145 = _td145.count("url_for('api_rescan')")
+    assert _n_rescan145 == 1, \
+        f"任务详情页只该剩「复查」一个 /api/rescan 表单：实测 {_n_rescan145}"
+    assert 'value="vulnscan"' in _td145, "剩下那一个必须是漏洞「复查」（其它 stage 的入口都摘了）"
+    assert "api_rescan" not in _st145, "sites.html 里不该再有任何 /api/rescan 引用"
+    assert '"/api/rescan"' in _apa145, \
+        "路由本体不许被顺手删掉（本文件有 8 处直接打它，「复查」也在用）"
+    # 详情页剩下的 POST 表单只该是「复查」与拓展域名的「送去探测」两个 —— 数一遍，
+    # 多一个就是有人把补扫入口加回来了（比逐个搜按钮文案强：换个文案就绕过去了）
+    _n_post145 = _td145.count('method="post"')
+    assert _n_post145 == 2, \
+        f"任务详情页的 POST 表单应该恰好 2 个（复查 + 送去探测）：实测 {_n_post145}"
+
+    # ---- ② `subdomain.auto_root` 三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射）----
+    assert _D145["subdomain"]["auto_root"] is True, \
+        "默认必须是开 —— 用户点单要的就是“不用自己手动提主域”"
+    _seg145 = ((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+               .split("subdomain:", 1)[1].split("\npassive:", 1)[0])
+    assert "auto_root: true" in _seg145, "settings.yaml 的 subdomain 段缺 auto_root（三方一致）"
+    _sh145 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
+    _n_chk145 = _sh145.count('name="subdomain_auto_root"')
+    assert _n_chk145 == 1, f"策略页的「自动提取主域」复选框必须恰好一个：实测 {_n_chk145}"
+    assert '"auto_root": f.get("subdomain_auto_root") == "1"' in _apa145, \
+        "POST 映射缺 auto_root（页面上勾了也存不进去 = 静默失效）"
+    # 真 POST 一次（stub save_settings：**绝不真写 config/settings.yaml** —— 整份重写会洗掉中文注释）
+    _cap145 = {}
+
+    def _fake_save145(d):
+        _cap145.clear()
+        _cap145.update(d)
+        return load_settings()
+
+    _orig_save145 = gui_app.save_settings
+    gui_app.save_settings = _fake_save145
+    try:
+        assert c.post("/settings", data={"min_severity": "medium",
+                                         "subdomain_auto_root": "1"}).status_code == 302
+        assert _cap145["subdomain"]["auto_root"] is True, _cap145.get("subdomain")
+        # 反方向：没勾就是 False（只钉“勾了能存”会漏掉“取消勾选存不进去”这一半）
+        assert c.post("/settings", data={"min_severity": "medium"}).status_code == 302
+        assert _cap145["subdomain"]["auto_root"] is False, \
+            f"取消勾选必须存成 False：{_cap145.get('subdomain')}"
+        # 页面上没有输入框的两个键必须原样带回（save_settings 是整份重写，漏带＝把键删掉）
+        assert _cap145["subdomain"]["max_resolve"] == _D145["subdomain"]["max_resolve"]
+        assert _cap145["subdomain"]["dns_timeout"] == _D145["subdomain"]["dns_timeout"]
+        # 逐段点名"一个键都不许少"。这条是**本轮真踩出来的**：一个打偏 7 行的补丁把 `evasion` 的
+        # spoof_xff/waf_bypass/bypass_level/waf_detect 与 `takeover` 的 enabled/max_hosts 从 POST
+        # 映射里整段删掉、还留下一个重复的 `"subdomain"` 键（字典字面量重复键＝后者静默盖前者），
+        # 而 130+ 组门禁**一组都没红** —— save_settings 是被 stub 的，缺键只是"保存时少存几个开关"，
+        # 现象要等用户在策略页点一次保存、发现免杀/接管开关莫名回到默认值才会浮出来。
+        # 判据吃的是 DEFAULTS（桩），不是这台机器上的配置值（§6.2）。
+        for _sec145 in ("evasion", "takeover", "subdomain"):
+            _lost145 = sorted(set(_D145[_sec145]) - set(_cap145.get(_sec145) or {}))
+            assert not _lost145, \
+                f"POST /settings 之后 {_sec145} 段少了 {_lost145}（保存一次就把这些开关删掉）"
+        # 重复键是这类损坏的另一半：源码里同一段只许出现一次
+        _n_sub145 = _apa145.count('"subdomain": {"max_resolve"')
+        assert _n_sub145 == 1, f"POST 映射里 subdomain 段出现了 {_n_sub145} 次（重复键＝后者静默盖前者）"
+    finally:
+        gui_app.save_settings = _orig_save145
+
+    # ---- ③ 折叠判据只有一处实现（不许 auto_root 与 auto_expand 各写一份）----
+    _sub145 = (ROOT / "scanner" / "stages" / "subdomain.py").read_text(encoding="utf-8")
+    _n_bd145 = _sub145.count("base_domain(d)")
+    assert _n_bd145 == 2, \
+        f"折叠判据（`base_domain(d)`）在 subdomain 阶段应恰好两处：一处判要不要折、一处判要不要入库；实测 {_n_bd145}"
+    assert "补收主域名" in _sub145 and "自动拓展" in _sub145, \
+        "折叠那行日志必须仍带「自动拓展」—— devflow 的 auto-expand 向量就按这个 kw 判（改了文案不改向量＝自检假 MISS）"
+
+    # ---- ④ 启动日志落文件 + 随机后台前缀**绝不落盘** + 缺配置有汇总 ----
+    _g145 = gui_app._boot_gaps
+    assert _g145(False, _adm145.ST_HAS_USERS, _ea145.ST_CONFIGURED) == [], \
+        "什么都不缺 → 空清单（默认配置必须安静，续133 那条口径）"
+    assert _g145(False, _adm145.ST_NO_TTY, _ea145.ST_DISABLED) == ["管理员账号"], \
+        "无终端 + 零账号 → 只报管理员账号；门关着就一个字都不许提它（与 [8ai]⑩ 同口径）"
+    assert _g145(True, _adm145.ST_HAS_USERS, _ea145.ST_NO_TTY) == \
+        ["401 边缘认证门口令", "凭据密文口令"], "门开无口令 + 密文未解锁 → 两项都要点名"
+    assert _g145(False, _adm145.ST_CANCELLED, _ea145.ST_INVALID) == \
+        ["管理员账号", "401 边缘认证门口令"], "用户放弃输入 / 口令不合规也算缺口（不只「无终端」那一档）"
+    assert _g145(False, _adm145.ST_CREATED, _ea145.ST_SET) == [], "当场建成了就不算缺口"
+    # 汇总里只许有**短名字**：补法那几句话的产地在 admin_setup.NO_TTY_HINT / edgeauth.SET_HINT /
+    # keystore.lock_notice()，在这里再抄一遍就是第二个产地（§5.14，续124 修过的那类毛病）
+    for _gap145 in _g145(True, _adm145.ST_NO_TTY, _ea145.ST_NO_TTY):
+        assert "run_users.py" not in _gap145 and "--set" not in _gap145, \
+            f"缺口清单里出现了补法命令（第二个产地）：{_gap145}"
+
+    _keep145 = _os_8ak.environ.pop("CTFSCANNER_WEB_PATH", None)
+    try:
+        _out145, _ = _serve_out7i({"host": "127.0.0.1", "allowed_hosts": [],
+                                   "edge_auth": {"enabled": False}, "web_path_random": True})
+        _f145 = _log145.server_log_path()
+        assert _f145.exists() and _f145.stat().st_size > 0, \
+            f"启动日志文件必须真的写出来：{_f145.name}"
+        _txt145 = _f145.read_text(encoding="utf-8", errors="replace")
+        _url145 = [l for l in _out145 if "控制台地址" in l]
+        assert len(_url145) == 1, f"横幅里控制台地址恰好一行：{_url145}"
+        _m145 = _re145.search(r"(/[a-z0-9]{10}/[a-z0-9]{10})", _url145[0])
+        assert _m145, f"这次没挂上随机前缀，下面几条判据会是空写：{_url145[0]!r}"
+        assert _m145.group(1) not in _txt145, \
+            "随机后台前缀出现在了日志文件里 —— 续138 的口径是**前缀绝不落盘**（落了就不叫每次启动随机）"
+        assert "刻意不写进本文件" in _txt145, \
+            "扣掉那一行必须**说出来**（静默少一行会让人以为日志坏了）"
+        # 除地址那一行，横幅的每一行都要落盘 —— 这才是“启动日志输出在文件”的实质判据
+        _miss145 = [l for l in _out145
+                    if l.strip() and "控制台地址" not in l and l not in _txt145]
+        assert not _miss145, f"这些横幅行没进日志文件：{_miss145[:3]}"
+        assert not leaked_root(_txt145), f"日志文件里泄露了项目根绝对路径：{leaked_root(_txt145)}"
+        # 同进程第二次 serve()：handler 不许重复挂（重复挂＝每条日志写 N 遍 + 两个滚动判定互相覆盖）
+        # 比的是 logging 自己算出来的那个形状（`os.path.abspath`），不是 `Path.resolve()` ——
+        # 后者会解符号链接，换了机器/挂载点就可能与 `baseFilename` 对不上（§6.2 第一起那类假红）。
+        _abs145 = _os_8ak.path.abspath(str(_f145))
+
+        def _h145():
+            return [h for h in gui_app.logger.handlers
+                    if getattr(h, "baseFilename", "") == _abs145]
+
+        assert len(_h145()) == 1, f"第一次 serve() 后指向 server.log 的 handler 应恰好 1 个：{len(_h145())}"
+        _out145b, _ = _serve_out7i({"host": "127.0.0.1", "allowed_hosts": [],
+                                    "edge_auth": {"enabled": False}, "web_path_random": True})
+        assert len(_h145()) == 1, f"第二次 serve() 又挂了一个文件 handler：{len(_h145())}"
+        assert len(_out145b) > 5, "第二次 serve() 的横幅不该是空的（防止上面几条断言跑在空输出上）"
+        # §6.1 证伪：前缀过滤是按**内容**判的，不是按“第几行”判的 ——
+        # 往横幅里塞一条**额外的**含前缀行，它同样必须被扣住（只钉第一行就是位置假设）。
+        _orig_wh145 = gui_app.webpath_hints
+
+        def _wh145(b, h, p):
+            return _orig_wh145(b, h, p) + [f"[!] 变异探针：这一行也带了前缀 {b}"]
+
+        gui_app.webpath_hints = _wh145
+        try:
+            _out145c, _ = _serve_out7i({"host": "127.0.0.1", "allowed_hosts": [],
+                                        "edge_auth": {"enabled": False},
+                                        "web_path_random": True})
+        finally:
+            gui_app.webpath_hints = _orig_wh145
+        _mut145 = [l for l in _out145c if "变异探针" in l]
+        assert len(_mut145) == 1, f"变异探针必须真的被打印过（否则这条证伪是空写）：{_mut145}"
+        _mc145 = _re145.search(r"(/[a-z0-9]{10}/[a-z0-9]{10})", _mut145[0])
+        assert _mc145 and _mc145.group(1) not in _f145.read_text(encoding="utf-8",
+                                                                 errors="replace"), \
+            "变异探针证明：过滤是按内容判的，任何含前缀的行都进不了文件"
+        # 写不出日志时必须**说出来**且不阻止启动。判据用**路径结构**而不是权限位（§6.2 第四起：
+        # root 无视权限位）—— 父路径是一个普通文件，任何 uid 都 mkdir 不进去。
+        _blk145 = _f145.parent / "blocker145"
+        _blk145.write_text("x", encoding="utf-8")
+        try:
+            _p145, _n145 = _log145.attach_server_log(gui_app.logger, path=_blk145 / "server.log")
+        finally:
+            _blk145.unlink()
+        assert _p145 is None and _n145, f"落点不可写必须返回原因而不是抛异常：{_n145!r}"
+        assert not leaked_root(_n145 or ""), \
+            f"那句原因里不许带绝对路径（它会被 print 出去，§0.3）：{_n145!r}"
+        # 运行期的 [gui] 日志与启动横幅共用同一个文件
+        gui_app.logger.info("续145 运行期探针 AT145RUNTIME")
+        for _hh145 in gui_app.logger.handlers:
+            _hh145.flush()
+        assert "AT145RUNTIME" in _f145.read_text(encoding="utf-8", errors="replace"), \
+            "运行期 [gui] 日志没进 server.log（那就只落了一半）"
+        assert _log145.boot_logger().propagate is False, \
+            "boot logger 必须 propagate=False，否则横幅会在终端里出现两次（[7i]10b 钉的是“逐行恰好一次”）"
+    finally:
+        if _keep145 is not None:
+            _os_8ak.environ["CTFSCANNER_WEB_PATH"] = _keep145
+
+    print("[8at] 续145 摘补扫入口 + 自动提取主域 + 启动日志落文件 ok: "
+          "/api/rescan 接口保留而 GUI 只剩「复查」一个消费方（详情页 POST 表单恰好 2 个）｜"
+          "subdomain.auto_root 三方一致 + 真 POST 两个方向都存得进去｜"
+          "折叠判据只有一处实现且日志仍带 devflow 认的「自动拓展」kw｜"
+          "_boot_gaps 五档纯函数（门关时一个字不提边缘门、清单里不许有第二处补法）｜"
+          "启动横幅逐行进 logs/server.log、**随机前缀绝不落盘**（含“额外塞一行”的内容级证伪）、"
+          "扣掉那行要说出来｜同进程二次 serve 不重复挂 handler｜"
+          "落点不可写返回原因且不阻止启动（路径结构判据，不吃 root/权限位）｜"
+          "运行期 [gui] 日志与横幅共用同一个文件")
     print("SMOKE PASS")
 
 

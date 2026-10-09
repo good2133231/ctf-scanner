@@ -139,6 +139,8 @@ subdomain:
   dns_timeout: 3
   # subfinder(-all) 与内置免 key 被动源取并集，做到"尽量全"
   union_passive: true
+  # 目标是 URL 或子域时，自动把注册域也当成子域名收集的根（续145，用户点单）
+  auto_root: true
 passive:
   enabled: true
   sources: []

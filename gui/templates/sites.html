@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}站点资产{% endblock %}
 {% block content %}
-<p class="muted">全库存活站点（跨任务，服务端分页 + 关键字过滤）。URL 可直接点开；
+<p class="muted">全库存活站点（跨任务，服务端分页 + 关键字过滤）。URL 可直接点开，勾选后可
+  <b>批量打开</b>（在本机浏览器里逐个开标签页，单次最多 20 个，<b>不发任何请求</b>）；
   favicon MD5 是"零请求前置指纹"，POC 声明 favicon_md5_list 时会先与它比对（见 策略配置 → 检测策略）。
   <b>纯净模式</b>只显示 URL（适合对着列表逐个点开看），页顶可切换。</p>
 <section class="panel">
@@ -49,18 +50,16 @@
     </tbody>
   </table>
   {% else %}
-  <form method="post" action="{{ url_for('api_rescan') }}">
-    <input type="hidden" name="stage" value="dirscan">
-    <input type="hidden" name="next" value="{{ url_for('sites') }}">
-    <div class="bulkbar">
-      <button type="submit" class="ghost">深度目录补扫（勾选站点）</button>
-      <label class="muted">任务名
-        <input name="name" placeholder="留空则用 补扫全目录-<月日>-<时分秒>"></label>
-      <span class="muted small">新建一个只跑 dirscan 的任务，走全量分层字典 + dirmap +
-        后缀派生（任务选项 <span class="mono">dirscan_full</span>，不改全局策略）；
-        默认只跑浅扫（敏感路径精选字典）的站点，可以用它深挖。</span>
-      <span class="muted small">（此入口没有源任务，<b>无法追加</b>到已有任务 —— 要追加请到「任务详情页」勾选资产后操作。）</span>
-    </div>
+  {# 续145：「深度目录补扫」入口已摘掉 —— 默认档就是深扫 + 递归 1 层（AGENTS §8），
+     留着这个按钮只会让人以为"不点它就没深挖"。表格因此不再被 POST 表单包着：勾选只服务
+     「批量打开」，它只在用户自己的浏览器里开标签页，一个请求都不发。 #}
+  <div class="bulkbar">
+    <button type="button" class="ghost" id="btn-open-sites" data-pick-from="#tbl-all-sites"
+      title="把勾选的站点逐个在新标签页打开；只开标签页，不发送任何扫描请求">批量打开（勾选站点）</button>
+    <span id="op-msg" class="muted"></span>
+  </div>
+  {# 续112：浏览器一次手势只放行一个 window.open，其余站点必须渲染成真链接交给用户逐个点 #}
+  <div id="op-list" class="op-list" aria-live="polite"></div>
     <table id="tbl-all-sites">
       <thead><tr>
         <th class="pick"><input type="checkbox" class="pick-all-page"
@@ -71,7 +70,7 @@
       {% for s in sites %}
         <tr class="{{ 'muted' if s.hidden_dup else '' }}">
           <td class="pick"><input type="checkbox" class="pick pick-row"
-                name="target" value="{{ s.url }}"></td>
+                value="{{ s.url }}"></td>
           <td>{{ s.id }}</td>
         <td><a href="{{ url_for('task_detail', task_id=s.task_id) }}">#{{ s.task_id }}</a></td>
         <td class="mono url-cell"><a class="url-link" href="{{ s.url }}" target="_blank"
@@ -100,7 +99,6 @@
     {% endfor %}
     </tbody>
     </table>
-  </form>
   {% endif %}
   {% include "_pager.html" %}
 </section>

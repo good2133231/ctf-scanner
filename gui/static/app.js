@@ -308,11 +308,14 @@ function initPickAll() {
   });
 }
 
-/* ---------- 站点页签：批量在浏览器打开勾选站点 ---------- */
+/* ---------- 站点表：批量在浏览器打开勾选站点 ---------- */
 // 浏览器的弹窗拦截只认「用户手势」：必须在 click 处理器里**同步**逐个 window.open，
 // 一旦塞进 setTimeout / await 之后就会被拦成"只开第一个"。所以这里不 await、不延迟。
 // 上限 20 是防手滑（勾 200 个站点 = 200 个标签页，浏览器直接卡死），超出的部分如实报出来。
-// 只开标签页、不发任何请求 —— 与旁边的「深度目录补扫 / 补截图」是两个性质（那两个会真扫）。
+// 只开标签页、不发任何请求 —— 续145 起它是站点表上**唯一**的批量动作（四个补扫入口已摘掉）。
+// 勾选行从哪张表读，由按钮自己的 `data-pick-from` 给出（任务详情＝#tbl-detail-sites、
+// 跨任务站点页＝#tbl-all-sites）。这里**刻意不写死任何表 id**：写死就等于"只有那一页能用"，
+// 别的页面接上来只会静默失灵（续145 之前它硬编码 #tbl-detail-sites，/sites 的全选因此没有用途）。
 const OPEN_SITES_MAX = 20;
 
 function initOpenSites() {
@@ -322,9 +325,16 @@ function initOpenSites() {
   btn.addEventListener("click", () => {
     const msg = document.getElementById("op-msg");
     const box = document.getElementById("op-list");
-    const urls = [...document.querySelectorAll("#tbl-detail-sites .pick-row:checked")]
-      .map(c => c.value).filter(Boolean);
+    const scope = btn.dataset.pickFrom;
+    const urls = scope
+      ? [...document.querySelectorAll(`${scope} .pick-row:checked`)].map(c => c.value).filter(Boolean)
+      : [];
     if (box) box.innerHTML = "";
+    // 接线漏了（模板忘了给 data-pick-from）就**说出来**，别静默变成"勾了没反应"
+    if (!scope) {
+      if (msg) msg.textContent = "「批量打开」没接上表格：按钮缺 data-pick-from";
+      return;
+    }
     if (!urls.length) { if (msg) msg.textContent = "请先勾选要打开的站点"; return; }
     const list = urls.slice(0, OPEN_SITES_MAX);
     const rest = list.slice(1);
