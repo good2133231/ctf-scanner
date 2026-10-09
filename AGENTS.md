@@ -333,6 +333,9 @@ ctf-scanner/
 ├── tools/import_tlds.py    # 从 tldextract **内置快照**（`suffix_list_urls=()`，离线、绝不联网）导出公共后缀清单
 │                          #   → config/dicts/tlds.txt（含 `co.uk`/`com.cn` 等多段后缀）；用法：py -3 tools/import_tlds.py --force
 │                          #   tldextract 是**生成期可选依赖**，不进 requirements.txt；运行时只读生成好的 tlds.txt
+├── tools/import_subdomain_dict.py # 深档子域名字典导入器（续139）：清洗 + 去重 + 并集写回
+│                          #   config/dicts/subdomains_deep.txt（**默认写回目标**，精简档 subdomains.txt 一字不动）；
+│                          #   纯离线、`--dry-run` 只看数不写文件、四种拒绝（详见 docs/pipeline.md §①）
 ├── tools/poc_review.py    # 导入 POC 的**按族复核**闭环（续114）：`--families` 看族分布 / `--dupes` 看
 │                          #   「同指纹被抄成多种漏洞」的分组 / `--family wordpress` 出复核工作表（含每条
 │                          #   实际在找什么的匹配器摘要 + 同指纹组大小 + 负样本校准命中）/ `--import <表>`
@@ -354,7 +357,7 @@ ctf-scanner/
 │                          #   config/dicts/fingerprints_extra.txt；`--scan`/`--table`/`--apply`/`--lint`，
 │                          #   全程不发请求、不覆盖已有行、**没有"全部放行"旗标**（复核列空着＝零动作）
 ├── config/blacklist.txt   # 用户黑名单（纯文本，一行一个域名、# 注释；* 前缀与裸域等价；命中即不入资产库）
-├── config/dicts/          # subdomains(85) / resolvers(13) / dirs_small(55) / cdn_cname(292) / cdn_ips(15) / waf_block_titles(11：WAF-CDN 拦截页标题文案，续112)
+├── config/dicts/          # subdomains(84：精简档，永远全量参与) / subdomains_deep(177875：深档，续139 随仓库导入，来源写在文件头) / resolvers(13) / dirs_small(55) / cdn_cname(292) / cdn_ips(15) / waf_block_titles(11：WAF-CDN 拦截页标题文案，续112)
 │                          #   fingerprints_extra(51 条/49 标签，续120)：**外置组件指纹**，TAB 分隔、
 │                          #   每条带状态码与 `afrog-pocs(MIT)` 出处；复核结论与拒因见 docs/afrog-fp-review.tsv、许可见 NOTICE.md §3.2
 │                          #   sensitive(9)：**A01 检查的数据源**（`路径|关键字|级别|说明`，见 §7）
@@ -1062,6 +1065,17 @@ PoC 自己的 URL 路径打红。** `smoke [5]` 查 POC 页里有没有 `str(ROO
 **沙箱目录**里演（同组下面那个 `_root11/mine` 用例就是干这个的，它连"不许删用户目录"一起验）。
 跨版本容器跑门禁前，先确认测试不会写挂载进来的宿主文件。
 
+**第七起（续139，自己造的假红，而且成因很低级）：同一个容器里并发两个 `smoke` 一定出假红。**
+为了「赶紧重跑」，我在没确认前一个 `docker exec` 真的结束的情况下又起了一个 —— 而宿主机侧
+`TaskStop`/`kill` 只掐 `docker exec` 那个**客户端**，容器里的 python **照旧在跑**。两个进程
+写同一个日志文件、抢同一个 8765，先起的还在后面刷写，于是第二轮 RC=1、`grep Traceback` 却
+一无所获 —— 就是本节一直说的「看着像代码坏了」。**跑前先数进程**：
+`docker exec <c> sh -lc 'for d in /proc/[0-9]*; do tr "\0" " " < $d/cmdline 2>/dev/null | grep -q smoke.py && echo $d; done'`
+（`ctfs:py39` 里没有 `ps`，也别指望 `pgrep`）。有残留就**重建容器**：代码是 `tar` 进去的副本、
+镜像是现成的，重建 20 秒，比去猜哪个 PID 属于哪一轮便宜得多。同理，宿主机上也不许同时起
+两份门禁 —— 「一个门禁执行者」这条约定本来就是为 8765 立的。
+
+
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
 - **缺中文字体＝截图取证与中文报告静默作废（续103 本机实测）**：无头浏览器缺 CJK 字体时**不报错**、
@@ -1455,9 +1469,13 @@ PoC 自己的 URL 路径打红。** `smoke [5]` 查 POC 页里有没有 `str(ROO
   以及三个**手动**处置（2026-09-23 续13）：纯 DNS 解析 `POST /api/domains/resolve`、
   送去探测 `POST /api/domains/scan-ext`（新任务 `probe→dirscan→vulnscan`）、
   `POST /api/blacklist/add`（此前任务页签没有此入口）。
-  **为什么必须手动**：`osint`/`jsmine` 排在 `probe` **之后**，它们新挖出的域名赶不上本轮存活探测，
-  天然停在"有域名、无站点、无检测"；而拓展域名里大量是 CDN/开源库/JS 命名空间碎片，
-  全自动跑既越权又浪费额度 —— 这是**设计边界，不是缺陷**。
+  **同轮补探之后仍然留着手动的理由**：`osint`/`jsmine` 排在 `probe` **之后**，它们新挖出的域名
+  以前赶不上本轮存活探测、天然停在"有域名、无站点、无检测" —— 续139 的 `probe.second_pass`（二层
+  遍历，由 `jsmine` **无条件**调用）补的就是这一条：同一轮就把归属本任务、且第一轮没试过的名字
+  过一遍 DNS 预筛再补探成站点，**不必新建任务**（见 §7 续139 那条）。仍然留手动入口的理由换了但没消失：
+  跨任务视图里的历史拓展域名、不归属本任务目标的域名、以及"要不要深扫"由人判断 —— 拓展域名里
+  大量是 CDN/开源库/JS 命名空间碎片，全自动跑既越权又浪费额度；`POST /api/domains/scan-ext`
+  那个「送去探测」入口照旧可用。
 - **指纹补标与 flag 抽取共享同一处覆盖缺口（续127 登记）**：`sites.tech` 的补标只吃
   **有正文的响应** —— 走 httpx 时 probe 只回 title/tech 的 JSONL、dirmap 的产物行也没有正文，
   这两路的命中对补标与 flag 都没有输入。要补就得真加请求（与 §5.17② 冲突），属独立一轮。
@@ -2026,6 +2044,46 @@ PoC 自己的 URL 路径打红。** `smoke [5]` 查 POC 页里有没有 `str(ROO
 - **前缀一变，执行节点就断**（续138）：`run_node.py --controller` 必须填启动横幅那行**含前缀的
   完整地址**，而那个 404 是空响应体，现象只是"节点安静地不领任务"。所以 `NodeClient._post` 对 404
   要**把这句话写进异常**，别让人对着 `raise_for_status()` 的裸 404 猜。
+- **站点存活口径是"回了真实状态码就算"，不许把 `-mc` 白名单加回去**（续139，`probe.is_alive`）：
+  旧配置 `-mc 200,301,302,403,404` 会把 CDN 边缘活着、源站挂了的主机（`521`/`502`/`400`）**整行
+  抹掉** —— 不是标成死站，是根本不出现在 httpx 输出里。2026-10-08 对 weex.com 与灯塔逐条比实的数：
+  灯塔记为站点而我们零入库 49 台，其中 34 台我们本来就有子域名；挑 6 台复测「带 `-mc` 0 行 / 去掉
+  6 行」，98 候选全量复测「旧 argv 15 台 / 新 argv 49 台，且旧口径有的一个新口径都没丢」。
+  三条连带口径：① `-nfs` 必须留着（不锁 scheme 时 httpx 的 scheme 回退会把 `http://h` 的 301 换成
+  `https://h` 的落地状态，续112-B 的「跳转后」取证就没输入了）；② `-fr` 必须**不加**（跟随跳转＝用
+  落地页状态覆盖第一跳，正是要避免的谎报）；③ 日志必须摊开 `2xx/3xx/4xx/5xx` 组成，否则"存活站点
+  168 个"会被读成"168 个打得开的站"。回归 `[8ao]`（含"`is_alive` 换回白名单 ⇒ 521 消失"的变异）。
+- **第一轮与二层必须共用同一个探测函数**（续139，`probe_candidates` / `register_sites`）：
+  `jsmine` 之后新发现的域名（JS 挖的 + 库里其余没试过的）由 `probe.second_pass` 补探一轮 ——
+  由 `jsmine` **无条件**调用（不在 `if new_domains:` 里面，本轮没挖到新域名也照补）。四条纪律
+  缺一不可：只探 `extdom.task_bases` 归属（越界一个请求都不发）、**先过 DNS 预筛**（被动来源的
+  名字一大半早就不解析，逐条上 HTTP 是纯浪费）、**预筛自身还有上限 `max(10 × limits.recrawl_max_hosts, 50)`**
+  （深档上线后池子里可能躺着十万个不解析的历史噪声名字，一个都不解析时不许把整个池子查一遍）、
+  补探主机数受 `limits.recrawl_max_hosts`（默认 300）。
+  二轮结果**追加**进 `ctx.results["sites"]`（覆盖写法会让后面的 dirscan/vulnscan 读不到新站点：
+  库里有了、内存里没有）。跳过多少、为什么跳必须逐条写进日志 —— 这一类功能最容易变成
+  "看起来跑了、其实一个都没探"。回归 `[8ap]`（含"把 `is_owned` 换成恒真 ⇒ 立刻探到别人域名"的变异）。
+- **词数闸门一律等距抽样、且只冲深档**（续139，`subdomain._spread`）：排序好的深字典 `[:3000]`
+  拿到的全是 `0/00/000/aa…`，数字与叠字符前缀把额度占满，真正值钱的 `api`/`admin` 一条进不去；
+  `words[::step]` 也不行 —— `n % step != 0` 时会把字典**尾巴**丢掉（排序后尾部是 `zz*` 那批），
+  所以索引必须"两端保住"：`int(i*(n-1)/(cap-1))`，条数恰好取满 cap。更要紧的是**字典分两档**
+  （`dicts.subdomains` 精简档 **84 条永远全量参与、任何闸门都不冲它** + `dicts.subdomains_deep`
+  深档受抽样；深档续139 随仓库分发 **177,875 条**，不想要 `git rm config/dicts/subdomains_deep.txt`）：
+  并成一份再抽样，84/177,875 ≈ 0.05% 会把人工挑的那几十条几乎全冲掉 —— 那不叫收窄，叫倒退。
+  两道闸门分别管两路：`limits.brute_max_words`（puredns 那一路的深档上限，0=全量）/
+  `limits.brute_fallback_max`（内置那一路的深档上限，默认 3000）；内置那一路另有独立并发
+  `limits.brute_workers`（默认 64；纯 DNS 等待，实测 3000 条 @20 线程 ≈ 53 秒 ⇒ 全量 17.8 万条即使 128 线程也跑了 45 分钟仍未跑完，
+  128 线程跑 45 分钟仍未跑完（全量只有 puredns 现实可行））。收窄后的词表要落盘
+  （puredns 只吃一个文件）并把"放开办法"说出来；`limits.brute_dict_warn_min`（默认 1000）的语义是
+  **没导入深档时**才会喊（随包带深档 ⇒ 默认安装不触发，用户自己删掉深档才喊），喊的时候指名
+  组合爆破（`limits.brute_combo_max`，默认 4000 词/域名）是同一轮的另一半：逐条解剖显示灯塔独有而
+  我们没有的 24 个域名里，14 个的标签在深档里（抽样没爆到）、**10 个任何字典都没有**
+  （`api-contract`/`ws-spot`/`admin-oss`），只能把「精简档词 × 本任务已发现名字的首段」拼成 `a-b`
+  再爆一轮；种子只用本任务自己发现的名字，来源标记 `dns-brute(combo)`。
+  `tools/import_subdomain_dict.py`（默认写回目标就是深档）；开发模式/自检必须压 `brute_max_words`/
+  `brute_fallback_max`/`brute_workers`/`recrawl_max_hosts` 四项（`devmode.DEV_LIMITS` 各给 4/4/4/1），
+  否则用户带 17.8 万条深字典时，CI 跟着字典一起变慢。
+  回归 `[8aq]`（⑥⑦⑨⑩ 四条各盯一面）。
 
 ## 8. 不要做的事
 

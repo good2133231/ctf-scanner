@@ -34,6 +34,13 @@ DEV_LIMITS = {
     "limits.dirscan_max_urls": 1,
     "limits.vulnscan_max_urls": 1,
     "limits.brute_max_domains": 1,
+    # 字典词数与二层补探的主机数（续139）：用户装了 17.8 万条的深字典之后，
+    # 自检**绝不能**跟着字典变大而变慢 —— 这三项把 DNS 预筛与爆破量钉回个位数。
+    "limits.brute_max_words": 4,
+    "limits.brute_fallback_max": 4,
+    "limits.brute_workers": 4,
+    "limits.brute_combo_max": 4,
+    "limits.recrawl_max_hosts": 1,
     "subdomain.max_resolve": 1,
     # ---- 目录扫描 ----
     "dirscan.quick_max_paths": 1,

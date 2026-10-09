@@ -89,6 +89,26 @@ limits:
   dirscan_max_urls: 20
   vulnscan_max_urls: 100
   brute_max_domains: 50
+  # 字典爆破的词数闸门（续139，喂进深档之后必须有）：`brute_max_words` 管 puredns 那一路的
+  # **深档**上限、`brute_fallback_max` 管内置那一路的深档上限（内置是系统解析器逐条查，所以单独
+  # 更紧）；**两道都只冲深档 —— 精简档 84 条任何情况下全量在场**。超出即等距抽样（取前 N 条会把
+  # 排好序的字典开头那串 `0/00/000/aa` 全收进来、把 api/admin 全挤掉）；0 = 全量。
+  # 想吃下深档全量请装 puredns：python cli/client.py --update-tools --tool puredns。
+  brute_max_words: 0
+  # 内置 DNS 爆破的并发（纯 DNS 等待，和上面 max_workers 的 HTTP 并发刻意分开）：
+  # 实测 3000 条 @20 线程 ≈ 53 秒；闸门设 0 吃全量 17.8 万条时 128 线程跑了 45 分钟还没跑完
+  brute_workers: 64
+  # 组合爆破（把精简档词与已发现名字的首段两两拼成 `a-b`）每域名的词数上限；0=关。
+  # 与灯塔逐条比实时，它独有域名里有 10 个**任何字典都没有**（`api-contract`/`ws-spot`/`admin-oss`），
+  # 只能拼出来 —— 灯塔的 ALT_DNS_CONCURRENT 干的就是这件事。
+  brute_combo_max: 4000
+  brute_fallback_max: 3000
+  # 字典**条数合计**低于这个值就喊一声（精简档 84 + 深档）。不喊，用户会把"子域名比灯塔少"读成
+  # "收集器不行"，而真正差的是字典。深档见 dicts.subdomains_deep（仓库发的是 17.8 万条那份）。
+  # 再补更深的一样一条命令：python tools/import_subdomain_dict.py --src <你那份深字典>
+  brute_dict_warn_min: 1000
+  # 二层遍历每轮最多补探多少主机（攒够就停止 DNS 预筛，见 probe.second_pass）
+  recrawl_max_hosts: 300
   wildcard_filter: true
   favicon_md5: true
   # 统一并发/限速/全局预算门控（F2）。默认路径永不触发拒绝：256 恰等于现有单任务最大并发，
@@ -153,6 +173,7 @@ jsmine:
   max_js: 40
   secrets: true
   blacklist: []
+  recrawl: true          # 二层遍历：jsmine 挖出的新域名（含库里其余未探过的本任务域名）补探成站点
 dirscan:
   # 默认**开启，但只跑浅扫**（mode=quick）：只打精选敏感路径（约 150 条/站），请求量可控。
   # 这是对早期"默认关闭"决策的**有意反转**（用户要求"先浅浅过一遍，再手动决定深度扫"）。
@@ -295,6 +316,9 @@ tools:
     threads: 30
 dicts:
   subdomains: config/dicts/subdomains.txt
+  # 深档子域名字典（续139）：`python tools/import_subdomain_dict.py --src <你那份深字典>` 生成。
+  # 文件不存在＝没配，只用上面那份精简档（日志会指路）。精简档永远全量打底，深档才受抽样闸门。
+  subdomains_deep: config/dicts/subdomains_deep.txt
   resolvers: config/dicts/resolvers.txt
   dirs: config/dicts/dirs_small.txt
   # 浅扫精选字典（dirscan.mode=quick 时只用这一份）

@@ -1356,6 +1356,7 @@ def main():
             su_settings["subdomain"] = {"union_passive": union, "max_resolve": 0}
             su_settings["limits"] = dict(su_settings.get("limits") or {}, wildcard_filter=False)
             su_settings["dicts"]["subdomains"] = "config/dicts/does-not-exist.txt"  # 跳过爆破
+            su_settings["dicts"]["subdomains_deep"] = "config/dicts/does-not-exist.txt"
             su_tid = db.create_task(f"smoke-subs-{union}", "example.test", ["subdomain"], {})
             su_wd = Path(_TMPDIR) / f"subs_{union}"
             su_wd.mkdir(parents=True, exist_ok=True)
@@ -6843,6 +6844,7 @@ http:
     _s7["subdomain"] = {"max_resolve": 0, "dns_timeout": 1}   # 0 = 不做真实解析（离线可跑）
     _s7["limits"] = dict(_s7.get("limits") or {}, wildcard_filter=False)
     _s7["dicts"]["subdomains"] = "config/dicts/does-not-exist.txt"   # 跳过字典爆破
+    _s7["dicts"]["subdomains_deep"] = "config/dicts/does-not-exist.txt"   # 两档都得摘（续139）
     _sub7.which = lambda name: None
     _sub7.verify_tool = lambda b: True
     _sub7.run_cmd = lambda *a, **k: (0, "", "")
@@ -11510,6 +11512,7 @@ http:
     _st8["limits"] = dict(_st8.get("limits") or {}, wildcard_filter=False)
     _st8["dicts"] = dict(_st8.get("dicts") or {})
     _st8["dicts"]["subdomains"] = "config/dicts/does-not-exist.txt"   # 跳过字典爆破（离线）
+    _st8["dicts"]["subdomains_deep"] = "config/dicts/does-not-exist.txt"
     _wd8 = Path(_TMPDIR) / "idn8"
     _wd8.mkdir(parents=True, exist_ok=True)
     _calls8 = []
@@ -18178,6 +18181,677 @@ expression: r0()
           "inbox｜CLI --encrypt-bundle 缺环境变量在动手前就停、不产出明文包｜"
           "变异三条都会红：并掉两个魔数 / 摘掉越界检查 / 桩住口令取值")
 
+    # ---------------- [8ao] 续139：站点存活口径——"服务端回了真实状态码就算" ----------------
+    #      用户点单（2026-10-08）：「301 其实我们可以获取跳转呗 不就是200了吗 …… 达到比他只多
+    #      不少的情况 如果少 说出为什么」。根因不是"域名少扫了"，是**入库口径**：httpx 那档挂着
+    #      `-mc 200,301,302,403,404`，而 CDN 边缘活着、源站挂了的主机收回来的行是 521/502/400 ——
+    #      整行被过滤掉，那些主机连"死站"都算不上，是**根本不存在**。挑"灯塔记为站点、我们零入库"
+    #      的 6 台复测：带 `-mc` 收上来 **0 行**，去掉 `-mc` 收上来 **6 行**（301×6，落地 521/502/400）。
+    #      灯塔那 66 个站点里 301 占 36、403 占 15、真正 200 只有 6 个：它一直是"能回就记"，
+    #      我们之前是"回得好看才记"，两边没法比。修在写入侧：白名单换成 `is_alive`，两条探测路共用。
+    import json as _json8ao
+    from scanner.stages import probe as _pb8ao
+
+    # ① 口径本体：真实状态码一律算存活；"没有响应"一律不算（DNS 不可达 / 拒连 / 超时照旧丢）
+    assert all(_pb8ao.is_alive(c) for c in (200, 301, 302, 403, 404, 429, 500, 502, 521, 599)), \
+        "白名单没换干净：CDN 边缘活着的主机仍会被判死"
+    assert not any(_pb8ao.is_alive(c) for c in (None, 0, "", 99, 600, "abc", [200])), \
+        "把「没有响应」也算成了站点（那才是真的虚报）"
+    assert _pb8ao.is_alive("200"), "httpx JSON 里的状态码可能是字符串"
+
+    _logs8ao = []
+
+    class _Rec8ao:
+        def info(self, m, *a): _logs8ao.append(str(m))
+        def warning(self, m, *a): _logs8ao.append(str(m))
+        def error(self, m, *a): _logs8ao.append(str(m))
+        def exception(self, m, *a): _logs8ao.append(str(m))
+        def debug(self, m, *a): pass
+
+    def _run_httpx8ao(tag, wd):
+        """跑一遍 probe 的 httpx 档（工具与网络全部桩住），返回 (argv, task_id, 日志)。"""
+        argv = []
+
+        def _rc(cmd, *a, **kw):
+            argv.append([str(x) for x in cmd])
+            Path(str(cmd[cmd.index("-o") + 1])).write_text(
+                "\n".join(_json8ao.dumps(r) for r in _rows8ao) + "\n", encoding="utf-8")
+            return 0, "", ""
+
+        st = copy.deepcopy(settings)
+        st["limits"] = dict(st.get("limits") or {}, favicon_md5=False)
+        tid = db.create_task(f"smoke-8ao-{tag}", "lab8ao.test", ["probe"], {})
+        ctx = StageContext(tid, f"smoke-8ao-{tag}", parse_lines(["lab8ao.test"]),
+                           ["probe"], {}, st, Path(_TMPDIR) / wd, _Rec8ao())
+        n = len(_logs8ao)
+        keep = (_pb8ao.which, _pb8ao.verify_tool, _pb8ao.run_cmd, _pb8ao.http_request)
+        try:
+            _pb8ao.which = lambda *a, **kw: "/fake/httpx"
+            _pb8ao.verify_tool = lambda *a, **kw: True
+            _pb8ao.run_cmd = _rc
+            _pb8ao.http_request = lambda u, **kw: (
+                {"status": 200, "url": "https://lab8ao.test/landed",
+                 "text": "<title>落地-8AO</title>"} if kw.get("allow_redirects") else None)
+            _pb8ao.ProbeStage(ctx).run()
+        finally:
+            (_pb8ao.which, _pb8ao.verify_tool, _pb8ao.run_cmd, _pb8ao.http_request) = keep
+        return argv, tid, _logs8ao[n:]
+
+    # 五类行：真 200、301（要补「跳转后」）、**521（本轮要救回来的那类）**、failed、非 http
+    _rows8ao = [
+        {"url": "https://lab8ao.test", "status_code": 200, "title": "首页", "content_length": 100},
+        {"url": "http://lab8ao.test", "status_code": 301,
+         "title": "301 Moved Permanently", "content_length": 0},
+        {"url": "https://api.lab8ao.test", "status_code": 521, "title": "", "content_length": 0},
+        {"url": "http://dead.lab8ao.test", "status_code": 0, "failed": True},
+        {"url": "ftp://nope.lab8ao.test", "status_code": 200},
+    ]
+    _argv8ao, _tid8ao, _lg8ao = _run_httpx8ao("httpx", "a8ao")
+
+    # ② argv 形状：白名单不许回来；`-nfs` 必须在；`-fr` 不许有（跟随即用落地页覆盖第一跳）
+    _a8ao = _argv8ao[0]
+    assert "-mc" not in _a8ao and "200,301,302,403,404" not in _a8ao, f"状态码白名单又回来了：{_a8ao}"
+    assert "-nfs" in _a8ao, ("没锁 scheme：`http://h` 的 301 会被 httpx 的 scheme 回退换成 "
+                             "`https://h` 的落地状态，原始那一跳再也看不见（实测 ws-spot.weex.com）")
+    assert "-fr" not in _a8ao, "-fr 会跟随跳转，正是要避免的谎报（「跳转后」另有取证函数）"
+    _got8ao = {r["url"]: dict(r) for r in db.list_sites(_tid8ao)}
+    assert _got8ao.get("https://api.lab8ao.test", {}).get("status") == 521, \
+        f"521 那行没落库——这就是灯塔有、我们没有的那 34 台：{sorted(_got8ao)}"
+    assert set(_got8ao) == {"https://lab8ao.test", "http://lab8ao.test",
+                            "https://api.lab8ao.test"}, \
+        f"入库集合不对（failed / 非 http 的行必须挡掉）：{sorted(_got8ao)}"
+    # ③ 3xx 那条仍然走「跳转后」取证：去掉白名单之后这一路才有**稳定**输入
+    _r8ao = _got8ao["http://lab8ao.test"]
+    assert _r8ao["status"] == 301 and _r8ao["redirect_status"] == 200 and \
+        _r8ao["redirect_title"] == "落地-8AO", f"3xx 那一跳被改写了或没补到跳转后：{_r8ao}"
+    # ④ 口径变了，日志就必须把**组成**摊开（否则"存活站点 3 个"会被读成"3 个打得开的站"）
+    _t8ao = " | ".join(_lg8ao)
+    assert "存活站点 3 个" in _t8ao and "3xx=1" in _t8ao and "5xx=1" in _t8ao, \
+        f"日志没写组成：{_t8ao[:300]}"
+
+    # ⑤ 内置那一档（没装 httpx 时）共用同一个 `is_alive`，不许留第二份口径
+    _tidB = db.create_task("smoke-8ao-builtin", "lab8ao.test", ["probe"], {})
+    _stB = copy.deepcopy(settings)
+    _stB["limits"] = dict(_stB.get("limits") or {}, favicon_md5=False)
+    _ctxB = StageContext(_tidB, "smoke-8ao-builtin", parse_lines(["lab8ao.test"]),
+                         ["probe"], {}, _stB, Path(_TMPDIR) / "b8ao", _Rec8ao())
+    _keepB = (_pb8ao.which, _pb8ao.http_request)
+    try:
+        _pb8ao.which = lambda *a, **kw: None
+        _pb8ao.http_request = lambda u, **kw: (
+            {"status": 521, "url": u, "text": "<title>边缘活着源站挂了</title>",
+             "headers": {"Server": "cloudflare"}, "length": 16}
+            if str(u).startswith("https://") else None)
+        _pb8ao.ProbeStage(_ctxB).run()
+    finally:
+        _pb8ao.which, _pb8ao.http_request = _keepB
+    _gotB = {r["url"]: dict(r) for r in db.list_sites(_tidB)}
+    assert _gotB.get("https://lab8ao.test", {}).get("status") == 521, \
+        f"内置探测仍按旧白名单筛（第二份口径没并掉）：{sorted(_gotB)}"
+
+    # ⑥ §6.1 变异：把 `is_alive` 换回旧白名单 ⇒ 521 必须从库里消失（证明 ②③④⑤ 真接在这道门上）
+    _orig8ao = _pb8ao.is_alive
+    try:
+        _pb8ao.is_alive = lambda s: int(s or 0) in (200, 301, 302, 403, 404)
+        _argvM, _tidM, _ = _run_httpx8ao("mut", "c8ao")
+        _gotM = {r["url"] for r in db.list_sites(_tidM)}
+        assert "https://api.lab8ao.test" not in _gotM, \
+            "把口径换回白名单后 521 仍在入库 = 上面那些断言是假绿"
+    finally:
+        _pb8ao.is_alive = _orig8ao
+
+    # ⑦ 文档同口径：流水线文档不许还在宣传那条白名单（文档漂了没人喊，用户就会按旧口径比结果）
+    _doc8ao = (ROOT / "docs" / "pipeline.md").read_text(encoding="utf-8")
+    assert "状态白名单 `200,301,302,403,404`" not in _doc8ao, \
+        "docs/pipeline.md 仍写着旧白名单口径"
+    assert "is_alive" in _doc8ao, "docs/pipeline.md 没指到新口径的函数"
+
+    print("[8ao] 续139 存活口径 ok: is_alive 收 200/3xx/4xx/5xx 真实码、挡 None/0/99/600/非数字｜"
+          "httpx argv 无 -mc、有 -nfs、无 -fr（锁住 scheme 才看得到原始那一跳）｜521 主机真落库"
+          "（灯塔有我们没有的那 34 台就是这么丢的）｜failed 与非 http 行仍被挡｜3xx 仍补 redirect_* "
+          "三列且实况不被覆盖｜日志摊开 2xx/3xx/4xx/5xx 组成｜没 httpx 时内置那档共用同一个口径｜"
+          "变异把 is_alive 换回白名单 ⇒ 521 消失（断言有牙）｜docs/pipeline.md 同步改口径")
+
+    # ---------------- [8ap] 续139：二层遍历（新域名补探成站点） ----------------
+    #      用户点单：「以及我们也没有二层遍历功能 …… 综合发散实现 达到比他只多不少的情况」。
+    #      实况是：`subdomain` 之后 jsmine / cert / osint 还在长新域名，但它们**只进 subdomains
+    #      表，没有任何一条路把它们变成站点** —— 这是"子域名不比灯塔少、站点却比它少"的另一半。
+    #      修在 `probe.second_pass`（归属判定 + DNS 预筛 + 上限 + 如实报数），第一轮与二层共用
+    #      同一个 `probe_candidates`：两处各写一遍的话，"什么算存活"迟早一边一个口径。
+    import tempfile as _tf8ap
+    from scanner.stages import probe as _pb8ap
+    from scanner.stages import jsmine as _js8ap
+
+    _lg8ap, _hits8ap = [], []
+
+    class _Rec8ap:
+        def info(self, m, *a): _lg8ap.append(str(m))
+        def warning(self, m, *a): _lg8ap.append("W:" + str(m))
+        def error(self, m, *a): _lg8ap.append("E:" + str(m))
+        def exception(self, m, *a): _lg8ap.append("X:" + str(m))
+        def debug(self, m, *a): pass
+
+    def _ctx8ap(tag, target="lab8ap.test", cap=300):
+        st = copy.deepcopy(settings)
+        st["limits"] = dict(st.get("limits") or {}, favicon_md5=False, recrawl_max_hosts=cap)
+        tid = db.create_task(f"smoke-8ap-{tag}", target, ["probe", "jsmine"], {})
+        return StageContext(tid, f"smoke-8ap-{tag}", parse_lines([target]),
+                            ["probe", "jsmine"], {}, st,
+                            Path(_tf8ap.mkdtemp(prefix="smoke-8ap-")) / tag, _Rec8ap())
+
+    # 桩：不发一个真请求。DNS 只放行本任务域；HTTP 一律回 521（新口径下这也是站点）。
+    def _dns8ap(names, workers=20, resolve=None):
+        return {n: ["127.0.0.1"] for n in names if str(n).endswith("lab8ap.test")}
+
+    def _http8ap(u, **kw):
+        _hits8ap.append(u)
+        return {"status": 521, "url": u, "text": "<title>边缘活着源站挂了</title>",
+                "headers": {"Server": "cloudflare"}, "length": 12}
+
+    _keep8ap = (_pb8ap.wildcard.resolve_all, _pb8ap.which, _pb8ap.http_request)
+    try:
+        _pb8ap.wildcard.resolve_all = _dns8ap
+        _pb8ap.which = lambda *a, **kw: None      # 没有 httpx 也要能做二层（走内置那档）
+        _pb8ap.http_request = _http8ap
+
+        # ① 正常路径：库里两个 + js 交来一个，六个候选（两 scheme × 三主机）全部落成站点
+        _c1 = _ctx8ap("ok")
+        db.insert_subdomains(_c1.task_id, [("a.lab8ap.test", "subfinder"),
+                                           ("b.lab8ap.test", "js:mine"),
+                                           ("evil.other.test", "subfinder")])
+        _n1 = _pb8ap.second_pass(_c1, extra=["c.lab8ap.test"])
+        _urls1 = {r["url"] for r in db.list_sites(_c1.task_id)}
+        assert _n1 == 6 and {u.split("://")[1] for u in _urls1} == \
+            {"a.lab8ap.test", "b.lab8ap.test", "c.lab8ap.test"}, f"补探结果不对：{sorted(_urls1)}"
+        assert all(u.split("://")[1] in ("a.lab8ap.test", "b.lab8ap.test", "c.lab8ap.test")
+                   for u in _hits8ap), f"越界打了别人的域名：{_hits8ap}"
+        _t1 = " | ".join(_lg8ap)
+        assert "非归属 1" in _t1 and "可解析 3 个" in _t1 and "补探 3 个" in _t1, \
+            f"跳过多少 / 为什么跳没说清：{_t1[:400]}"
+
+        # ② 第一轮已经探过的不重复探（"已知"取自库里 sites，不是内存，续跑/追加执行才算得准）
+        _lg8ap.clear(); _hits8ap.clear()
+        _c2 = _ctx8ap("dedup")
+        db.insert_subdomains(_c2.task_id, [("a.lab8ap.test", "subfinder")])
+        db.insert_sites(_c2.task_id, [{"url": "https://a.lab8ap.test", "host": "a.lab8ap.test",
+                                       "port": "443", "status": 200, "source": "httpx"}])
+        assert _pb8ap.second_pass(_c2) == 0 and _hits8ap == [], \
+            f"第一轮探过的主机被重复探测：{_hits8ap}"
+        assert "已探过 1" in " | ".join(_lg8ap), "跳过原因没写「已探过」"
+
+        # ③ 上限真的收得住：攒够就停，不把全库重扫一遍，并且把"剩下多少没探"说出来
+        _lg8ap.clear(); _hits8ap.clear()
+        _c3 = _ctx8ap("cap", cap=2)
+        db.insert_subdomains(_c3.task_id, [(f"h{i}.lab8ap.test", "subfinder") for i in range(9)])
+        _pb8ap.second_pass(_c3)
+        assert len({u.split("://")[1].split(".lab8ap.test")[0] for u in _hits8ap}) == 2, \
+            f"上限 2 个主机却探了更多：{sorted(set(_hits8ap))}"
+        assert "另有 7 个候选没做预筛" in " | ".join(_lg8ap), _lg8ap[:6]
+
+        # ③b DNS 预筛**自己也有上限**：一个都不解析时，不许把整个池子查一遍
+        #     （装了 puredns + 17.8 万条深字典之后，池子里躺着十万个历史噪声名字）
+        _lg8ap.clear(); _tried9 = []
+        _c3b = _ctx8ap("dnscap", cap=1)
+        db.insert_subdomains(_c3b.task_id, [(f"n{i}.lab8ap.test", "subfinder")
+                                            for i in range(60)])
+        _keep3b = _pb8ap.wildcard.resolve_all
+        try:
+            def _dns_none(names, workers=20, resolve=None):
+                _tried9.append(len(names))
+                return {}
+            _pb8ap.wildcard.resolve_all = _dns_none
+            assert _pb8ap.second_pass(_c3b) == 0, "全都解析不了就不该补探"
+        finally:
+            _pb8ap.wildcard.resolve_all = _keep3b
+        assert sum(_tried9) == 50, f"预筛上限（max(10×cap,50)=50）没生效，查了 {sum(_tried9)} 个"
+        assert "预筛只扫了前 50 个" in " | ".join(_lg8ap), _lg8ap[:6]
+
+        # ④ 追加而不是覆盖：二层之后 `ctx.results["sites"]` 必须**同时**含第一轮与第二轮 ——
+        #    否则 jsmine 之后的 dirscan / vulnscan 读的是第一轮那份，新站点落库了却没人接着扫。
+        _lg8ap.clear(); _hits8ap.clear()
+        _c4 = _ctx8ap("append")
+        _pb8ap.ProbeStage(_c4).run()
+        _first4 = {s["url"] for s in (_c4.results["sites"] or [])}
+        assert _first4, "第一轮就该有站点（后面的断言才有意义）"
+        db.insert_subdomains(_c4.task_id, [("new.lab8ap.test", "subfinder")])
+        _pb8ap.second_pass(_c4)
+        _all4 = {s["url"] for s in (_c4.results["sites"] or [])}
+        assert _first4 <= _all4, "二层遍历把第一轮站点从内存里抹掉了（dirscan/vulnscan 会白跑）"
+        assert any(u.endswith("new.lab8ap.test") for u in _all4), \
+            f"二层的新域名没进 ctx.results：{sorted(_all4)}"
+        _txt4 = set(_pb8ap.read_lines(_c4.workdir / "sites.txt"))
+        assert _first4 <= _txt4 and any(u.endswith("new.lab8ap.test") for u in _txt4), \
+            f"sites.txt 被二层截断（任务产物只剩自己那几条）：{sorted(_txt4)}"
+
+        # ⑤ 开关关掉就一个请求都不发（jsmine.recrawl=false）
+        _lg8ap.clear(); _hits8ap.clear()
+        _c5 = _ctx8ap("off")
+        _c5.settings["jsmine"] = dict(_c5.settings.get("jsmine") or {}, recrawl=False)
+        db.insert_subdomains(_c5.task_id, [("a.lab8ap.test", "subfinder")])
+        assert _pb8ap.second_pass(_c5) == 0 and _hits8ap == [] and \
+            "关闭" in " | ".join(_lg8ap), "关掉开关仍在发请求"
+
+        # ⑥ 接线：jsmine 阶段真的调了这次补探，而且是**带着它新入库的那些域名**（不是空转）。
+        #    `mine` 与"续113 的注册域闸门"都桩掉：本条要验的是接线，不是实验室域名能不能解析。
+        _lg8ap.clear(); _hits8ap.clear()
+        _c6 = _ctx8ap("wire")
+        _c6.results["sites"] = [{"url": "http://lab8ap.test/"}]
+        _keep6 = (_js8ap.jsmine.mine, _js8ap.extdom.filter_absent_zones)
+        try:
+            _js8ap.jsmine.mine = lambda u, st=None, **kw: {
+                "js_count": 0, "domains": ["new.lab8ap.test"], "urls": [], "secrets": []}
+            _js8ap.extdom.filter_absent_zones = lambda *a, **kw: (list(a[0]), 0)
+            _js8ap.JsmineStage(_c6).run()
+        finally:
+            _js8ap.jsmine.mine, _js8ap.extdom.filter_absent_zones = _keep6
+        assert any(u.split("://")[1] == "new.lab8ap.test" for u in _hits8ap), \
+            f"jsmine 阶段没接上二层遍历（补探请求：{_hits8ap}）"
+        assert {r["url"] for r in db.list_sites(_c6.task_id)}, "二层站点没落库"
+
+        # ⑦ 一轮空转也要说实话：库里全是探过的 → 日志必须写"全部跳过 + 原因"，不许静默返回
+        _lg8ap.clear(); _hits8ap.clear()
+        _c7 = _ctx8ap("idle")
+        db.insert_subdomains(_c7.task_id, [("a.lab8ap.test", "subfinder")])
+        db.insert_sites(_c7.task_id, [{"url": "https://a.lab8ap.test", "host": "a.lab8ap.test",
+                                       "port": "443", "status": 200, "source": "httpx"}])
+        assert _pb8ap.second_pass(_c7) == 0 and "全部跳过" in " | ".join(_lg8ap), \
+            "空转时没说清跳过了多少、为什么跳"
+        # ⑦b 第一轮**探过但没回应**的主机也不该重探 —— 判据必须是"发过请求的候选清单"，
+        #     而不是库里的站点行。这里走**真的内置那一路**（`which`→None、HTTP 全无回应）：
+        #     早先这一条靠手搓 `httpx_url.txt` 蒙过去的，而那个文件只有 httpx 分支才写
+        #     （没装 httpx 的机器上等于没登记，二层会把超时主机整批重探）。
+        _lg8ap.clear(); _hits8ap.clear()
+        _c7b = _ctx8ap("deadfirst")
+        _keep7b = _pb8ap.http_request
+        try:
+            _pb8ap.http_request = lambda u, **kw: None      # 一个都不回（真·死主机）
+            _pb8ap.ProbeStage(_c7b).run()
+        finally:
+            _pb8ap.http_request = _keep7b
+        assert not (_c7b.results.get("sites") or []), "全无回应的第一轮不该产出站点"
+        assert Path(_c7b.workdir / "probe_tried.txt").is_file(), \
+            "内置那一路没登记发过的候选 ⇒ 二层的『已探过』判据在没装 httpx 的机器上是空的"
+        db.insert_subdomains(_c7b.task_id, [("lab8ap.test", "subfinder")])
+        _pb8ap.http_request = _http8ap
+        _hits8ap.clear()
+        assert _pb8ap.second_pass(_c7b) == 0 and _hits8ap == [], \
+            f"第一轮没回应的主机被重探：{_hits8ap}"
+        assert "已探过 1" in " | ".join(_lg8ap), _lg8ap
+        # ⑦c 本任务**根本没跑过第一轮**（probe 不在阶段列表、库里也没站点）时不许凭空开探
+        _lg8ap.clear(); _hits8ap.clear()
+        _c7c = _ctx8ap("noRound1")
+        _c7c.stages = ["jsmine"]
+        db.insert_subdomains(_c7c.task_id, [("a.lab8ap.test", "subfinder")])
+        assert _pb8ap.second_pass(_c7c) == 0 and _hits8ap == [], \
+            f"probe 没跑过却被二层首次探测：{_hits8ap}"
+        assert "没有第一轮探测记录" in " | ".join(_lg8ap), _lg8ap[:6]
+
+        # ⑦ 一轮空转也要说实话：库里全是探过的 → 日志必须写"全部跳过 + 原因"，不许静默返回
+        _lg8ap.clear(); _hits8ap.clear()
+        _c7 = _ctx8ap("idle")
+        db.insert_subdomains(_c7.task_id, [("a.lab8ap.test", "subfinder")])
+        db.insert_sites(_c7.task_id, [{"url": "https://a.lab8ap.test", "host": "a.lab8ap.test",
+                                       "port": "443", "status": 200, "source": "httpx"}])
+        assert _pb8ap.second_pass(_c7) == 0 and "全部跳过" in " | ".join(_lg8ap), \
+            "空转时没说清跳过了多少、为什么跳"
+        # ⑦b 第一轮**探过但没回应**的主机（库里没有 sites 行，只有 httpx_url.txt 记得它发过请求）
+        #     也不该重探 —— 光拿 `sites` 表当"已探过"的判据，会把超时的那几百台再探一遍。
+        _lg8ap.clear(); _hits8ap.clear()
+        _c7b = _ctx8ap("deadfirst")
+        _keep7b = (_pb8ap.which, _pb8ap.verify_tool, _pb8ap.run_cmd, _pb8ap.http_request)
+        try:
+            _pb8ap.which = lambda *a, **kw: "/fake/httpx"
+            _pb8ap.verify_tool = lambda *a, **kw: True
+            _pb8ap.http_request = lambda u, **kw: None      # 一个都不回（真·死主机）
+            _pb8ap.run_cmd = lambda cmd, *a, **kw: (
+                Path(str(cmd[cmd.index("-o") + 1])).write_text("", encoding="utf-8"),
+                0, "", "")[-3:]
+            _pb8ap.ProbeStage(_c7b).run()
+        finally:
+            (_pb8ap.which, _pb8ap.verify_tool, _pb8ap.run_cmd,
+             _pb8ap.http_request) = _keep7b
+        assert not (_c7b.results.get("sites") or []), "全无回应的第一轮不该产出站点"
+        db.insert_subdomains(_c7b.task_id, [("lab8ap.test", "subfinder")])
+        _pb8ap.http_request = _http8ap
+        _hits8ap.clear()
+        assert _pb8ap.second_pass(_c7b) == 0 and _hits8ap == [], \
+            f"第一轮没回应的主机被重探：{_hits8ap}"
+        assert "已探过 1" in " | ".join(_lg8ap), _lg8ap
+    finally:
+        (_pb8ap.wildcard.resolve_all, _pb8ap.which, _pb8ap.http_request) = _keep8ap
+
+    # ⑧ §6.1 变异：把归属判定换成"恒真" ⇒ 越界域名就会被探测（证明上面那些断言挂在它身上）
+    _hits8ap.clear()
+    _c8 = _ctx8ap("mut")
+    db.insert_subdomains(_c8.task_id, [("a.lab8ap.test", "sub"), ("evil.other.test", "sub")])
+    _keep8 = (_pb8ap.wildcard.resolve_all, _pb8ap.which, _pb8ap.http_request)
+    _orig_owned8 = _pb8ap.extdom.is_owned
+    try:
+        _pb8ap.extdom.is_owned = lambda h, bases: True
+        _pb8ap.wildcard.resolve_all = lambda names, workers=20, resolve=None: \
+            {n: ["127.0.0.1"] for n in names}
+        _pb8ap.which = lambda *a, **kw: None
+        _pb8ap.http_request = _http8ap
+        _pb8ap.second_pass(_c8)
+        assert any("evil.other.test" in u for u in _hits8ap), \
+            "把归属闸门换成恒真后仍未越界 = ①②③④⑤⑥⑦ 不挂在这道门上（假绿）"
+    finally:
+        _pb8ap.extdom.is_owned = _orig_owned8
+        (_pb8ap.wildcard.resolve_all, _pb8ap.which, _pb8ap.http_request) = _keep8
+    _hits8ap.clear()
+    _c9 = _ctx8ap("clean")
+    db.insert_subdomains(_c9.task_id, [("evil.other.test", "sub")])
+    _keep9 = (_pb8ap.wildcard.resolve_all, _pb8ap.which, _pb8ap.http_request)
+    try:
+        _pb8ap.wildcard.resolve_all = lambda names, workers=20, resolve=None: \
+            {n: ["127.0.0.1"] for n in names}
+        _pb8ap.which = lambda *a, **kw: None
+        _pb8ap.http_request = _http8ap
+        assert _pb8ap.second_pass(_c9) == 0 and _hits8ap == [], \
+            f"真判据下仍有越界请求：{_hits8ap}"
+    finally:
+        (_pb8ap.wildcard.resolve_all, _pb8ap.which, _pb8ap.http_request) = _keep9
+
+    print("[8ap] 续139 二层遍历 ok: 新域名（js 挖的 + 库里没探过的）真补探成站点｜只探本任务归属，"
+          "越界域名零请求（恒真变异一开就探到 evil.other.test，证明判据挂在 is_owned 上）｜"
+          "第一轮探过的不重探｜上限截断并说出剩余量｜二层结果**追加**进 ctx.results（dirscan/"
+          "vulnscan 才接得上）｜jsmine.recrawl=false 时一个请求都不发｜jsmine 阶段真接上了这次补探｜"
+          "空转也说实话（全部跳过 + 原因 + 条数）｜DNS 预筛把不解析的名字挡在 HTTP 之前")
+
+    # ---------------- [8aq] 续139：深字典（导入工具 + 词数闸门 + 字典过小告警） ----------------
+    #      用户点单：「我记得我提供了一个深的字典 你采用这个」。附件在 Windows 侧、这台机器上
+    #      取不到（本轮全盘搜过 `*subdomain*.txt`，只有我们自己那 85 行和各任务日志里的产物），
+    #      所以这一条能做的是**把"喂深字典"变成一条命令 + 让字典太小这件事自己喊出来**，
+    #      而不是把差距藏起来。实测差距：任务 8 日志原话「内置 DNS 爆破：1 域名 x 84 字典」，
+    #      灯塔同一项配置是 17.8 万条 —— 它记为站点而我们连域名都没生成的那 15 台主机，
+    #      差的就是这份字典（见 [8ap] 与本轮对比报告）。
+    import contextlib as _cl8aq
+    import importlib.util as _ilu8aq
+    import io as _io8aq
+    from scanner.stages import subdomain as _sd8aq
+
+    _spec8aq = _ilu8aq.spec_from_file_location("imp_subdict_8aq",
+                                               str(ROOT / "tools" / "import_subdomain_dict.py"))
+    _mod8aq = _ilu8aq.module_from_spec(_spec8aq)
+    _spec8aq.loader.exec_module(_mod8aq)
+
+    # ① 清洗判据：一条一行钉死（灯塔那份里真有 `#www`、`_domainkey`、`git `、`oˈclock`）
+    assert _mod8aq.classify("  API  ") == ("api", None)
+    assert _mod8aq.classify("www.mail") == ("www.mail", None), "多标签前缀是有效的爆破词"
+    assert _mod8aq.classify("api.")[0] == "api", "尾点要去掉（拼出来才是合法域名）"
+    assert _mod8aq.classify("#www")[1] == "注释", "注释行不能当词用"
+    assert _mod8aq.classify("")[1] == "空行"
+    assert _mod8aq.classify("_domainkey")[1] == "非法字符"
+    assert _mod8aq.classify("api_portal_dev")[1] == "非法字符", \
+        "中间的下划线也要判非法（那是 SRV 记录名，不是可爆破的主机名）"
+    assert _mod8aq.classify("a..b")[1] == "空标签"
+    assert _mod8aq.classify(".leading")[1] == "以点开头"
+    assert _mod8aq.classify("x" * 64)[1] == "标签过长"
+    assert _mod8aq.classify("oˈclock")[1] == "非法字符"
+    assert _mod8aq.classify("*")[1] == "非法字符"
+
+    def _cli8aq(*args):
+        buf = _io8aq.StringIO()
+        with _cl8aq.redirect_stdout(buf), _cl8aq.redirect_stderr(buf):
+            rc = _mod8aq.main(list(args))
+        return rc, buf.getvalue()
+
+    _d8aq = Path(_tf8ap.mkdtemp(prefix="smoke-8aq-"))
+    _src8aq = _d8aq / "deep.txt"
+    _src8aq.write_text("# 一份深字典\napi\nwww\nAPI\nmail\na..b\n_domainkey\n"
+                       + "\n".join(f"w{i}" for i in range(500)) + "\n", encoding="utf-8")
+    _dst8aq = _d8aq / "out.txt"
+    _dst8aq.write_text("# 头一行注释\nlegacy\napi\n", encoding="utf-8")
+
+    # ② --dry-run 一个字都不写，但必须把"读入多少 / 为什么丢"报出来
+    _rc2, _out2 = _cli8aq("--src", str(_src8aq), "--dest", str(_dst8aq), "--dry-run")
+    assert _rc2 == 0 and _dst8aq.read_text(encoding="utf-8") == "# 头一行注释\nlegacy\napi\n", \
+        f"--dry-run 改了文件：{_out2[:400]}"
+    assert "读入 507" in _out2 and "有效 503" in _out2 and "空标签 1" in _out2 \
+        and "非法字符 1" in _out2 and "重复 1" in _out2, _out2[:500]
+
+    # ③ 真导入＝取**并集**（不是覆盖）、排序、保留原注释、写明来源；重复导入不涨条数
+    _rc3, _out3 = _cli8aq("--src", str(_src8aq), "--dest", str(_dst8aq))
+    _lines3 = _dst8aq.read_text(encoding="utf-8").splitlines()
+    assert _rc3 == 0 and _lines3[0] == "# 头一行注释", _out3[:400]
+    _words3 = [x for x in _lines3 if x and not x.startswith("#")]
+    assert "legacy" in _words3 and "api" in _words3 and len(_words3) == 504, len(_words3)
+    assert _words3 == sorted(_words3), "写回的字典没排序（下次 diff 看不出改了哪几行）"
+    assert any(l.startswith("# 导入来源：") for l in _lines3), "没写明来源（17.8 万条是谁给的）"
+    _rc3b, _ = _cli8aq("--src", str(_src8aq), "--dest", str(_dst8aq))
+    _lines3b = _dst8aq.read_text(encoding="utf-8").splitlines()
+    assert len([x for x in _lines3b if x and not x.startswith("#")]) == 504, "重复导入把字典灌涨了"
+    assert sum(1 for l in _lines3b if l.startswith("# 导入来源：")) == 1, "来源行越导入越多"
+
+    # ④ 四种拒绝：没给 --src / 源不存在 / 源就是目标 / 全是垃圾（目标原样不动）
+    try:
+        _cli8aq("--dest", str(_dst8aq))
+        raise AssertionError("没给 --src 却跑下去了（那是空操作，必须报错）")
+    except SystemExit as _e8aq:
+        assert _e8aq.code == 2, f"--src 缺失该用法错误(2)，实得 {_e8aq.code}"
+    assert _cli8aq("--src", str(_d8aq / "nope.txt"), "--dest", str(_dst8aq))[0] == 2
+    assert _cli8aq("--src", str(_dst8aq), "--dest", str(_dst8aq))[0] == 2
+    # `--dest` 给**相对路径**（本仓运行时 CWD 就是仓库根）：早先 `_under()` 判真之后
+    # `relative_to` 当场抛 ValueError，连 `--dry-run` 都跑不完
+    assert _cli8aq("--src", str(_src8aq), "--dest", "logs/_8aq_reldest.txt",
+                   "--dry-run")[0] == 0, "相对 --dest 直接把工具打崩"
+    _junk = _d8aq / "junk.txt"
+    _junk.write_text("# c\n\n***\n", encoding="utf-8")
+    _rc4, _out4 = _cli8aq("--src", str(_junk), "--dest", str(_dst8aq))
+    assert _rc4 == 1 and len([x for x in _dst8aq.read_text(
+        encoding="utf-8").splitlines() if x and not x.startswith("#")]) == 504, \
+        f"清洗后为空却仍写了文件：{_out4[:300]}"
+
+    # ⑤ 词数闸门是**等距抽样**（不是取前 N 条），不需要收窄时返回原对象
+    _w8aq = [f"w{i}" for i in range(1000)]
+    assert _sd8aq._spread(_w8aq, 0) is _w8aq and _sd8aq._spread(_w8aq, 5000) is _w8aq
+    _s300 = _sd8aq._spread(_w8aq, 300)
+    assert len(_s300) == 300 and _s300[0] == "w0" and _s300[-1] == "w999", _s300[:3]
+    assert len(set(_s300)) == 300, "抽样出现重复（索引算错了）"
+    assert _sd8aq._spread(_w8aq, 1) == ["w0"], "cap=1 却照跑整份 1000 条（日志还喊已经收窄）"
+    assert _sd8aq._spread(_w8aq, -5) is _w8aq, "cap 是负数按不限理解，不许报错也不许悄悄截断"
+
+    # ⑥ 阶段接线：内置那路受 `brute_fallback_max`，puredns 那路受 `brute_max_words`（抽样要落盘）
+    _tiny8aq = _d8aq / "curated.txt"
+    _tiny8aq.write_text("# 精简档\nalpha\nbeta\n", encoding="utf-8")
+    _big8aq = _d8aq / "big_dict.txt"
+    _big8aq.write_text("\n".join(f"w{i}" for i in range(5000)) + "\n", encoding="utf-8")
+    _tried, _pd_dicts = [], []
+
+    def _dns_count(names, workers=20, resolve=None):
+        _tried.append(list(names))        # 记下**具体试了哪些**，两档分工那条断言要看内容不是个数
+        return {}
+
+    def _rc_pd(cmd, *a, **kw):
+        _pd_dicts.append(cmd[2])
+        _sd8aq.write_lines(Path(str(cmd[cmd.index("-w") + 1])), ["w9999.lab8aq.test"])
+        return 0, "", ""
+
+    def _run_sub(tag, fb=0, mw=0, warn=0, cur=None, deep="", opts=None, pd=False, combo=None):
+        """跑一遍 subdomain 阶段的爆破段。`cur`=精简档、`deep`=深档（默认**不配**深档，
+        否则本机/CI 上有没有那份 17.8 万条的文件会改变测试结果 —— 两档必须各自钉住）。"""
+        st = copy.deepcopy(settings)
+        st["limits"] = dict(st.get("limits") or {}, wildcard_filter=False,
+                            brute_fallback_max=fb, brute_max_words=mw,
+                            brute_dict_warn_min=warn,
+                            **({"brute_combo_max": combo} if combo is not None else {}))
+        st["dicts"] = dict(st.get("dicts") or {}, subdomains=str(cur or _big8aq),
+                           subdomains_deep=str(deep or ""))
+        n = len(_lg8ap)
+        tid = db.create_task(f"smoke-8aq-{tag}", "lab8aq.test", ["subdomain"], {})
+        ctx = StageContext(tid, "smoke-8aq", parse_lines(["lab8aq.test"]), ["subdomain"],
+                           opts or {}, st, _d8aq / tag, _Rec8ap())
+        _sd8aq.which = (lambda name=None, *a, **kw: "/fake/puredns" if (
+            pd and "puredns" in str(name or "")) else None)
+        _sd8aq.SubdomainStage(ctx).run()
+        return _lg8ap[n:]
+
+    _keep8aq = (_sd8aq.which, _sd8aq.passive.collect, _sd8aq.wildcard.resolve_all,
+                _sd8aq.run_cmd)
+    try:
+        _sd8aq.passive.collect = lambda *a, **kw: {}
+        _sd8aq.wildcard.resolve_all = _dns_count
+        _sd8aq.run_cmd = _rc_pd
+        # 内置兜底：深档 5000 条 + 上限 300 → 精简 2 条全留 + 深档抽 300 = 302 条
+        _lg8ap.clear(); _tried.clear()
+        _t6 = _run_sub("fb", fb=300, cur=_tiny8aq, deep=_big8aq, opts={"offline": True})
+        assert _tried and len(_tried[-1]) == 302, f"上限 300 却试了 {len(_tried[-1])} 条"
+        assert any("内置 DNS 爆破：1 域名 x 302 字典" in x for x in _t6), _t6[:6]
+        assert any("等距抽样" in x and "5000" in x for x in _t6), f"没报抽样：{_t6[:6]}"
+        assert any("puredns" in x for x in _t6), f"没给出吃全量的出路：{_t6[:6]}"
+        # 上限没配（0）时不许自作主张截断
+        _lg8ap.clear(); _tried.clear()
+        _t6b = _run_sub("fbfull", fb=0, cur=_tiny8aq, deep=_big8aq, opts={"offline": True})
+        assert _tried and len(_tried[-1]) == 5002, f"cap=0 仍被截断：{len(_tried[-1])}"
+        # 字典过小必须自己喊，并指名那条导入命令
+        _lg8ap.clear(); _tried.clear()
+        _t6c = _run_sub("small", fb=0, warn=1000, cur="config/dicts/subdomains.txt",
+                        opts={"offline": True})
+        assert any("字典只有" in x and "import_subdomain_dict.py" in x for x in _t6c), \
+            f"字典过小没喊（用户会把差距读成收集器不行）：{_t6c[:6]}"
+        # puredns 那路：`brute_max_words` 收窄后必须把抽样结果落盘再喂给它
+        _lg8ap.clear(); _tried.clear(); _pd_dicts.clear()
+        _t6d = _run_sub("pd", mw=100, cur=_tiny8aq, deep=_big8aq, pd=True)
+        assert _pd_dicts and Path(_pd_dicts[0]).name == "brute_words.txt", \
+            f"puredns 仍在吃整份深字典：{_pd_dicts}"
+        # 闸门**只冲深档**：精简档 2 条永远在场 ⇒ 100 条抽样 + 2 条精简 = 102
+        _n_pd6 = len(_sd8aq.read_lines(Path(_pd_dicts[0])))
+        assert _n_pd6 == 102, f"深档抽 100 + 精简 2 = 102，实得 {_n_pd6}"
+        assert sum(1 for x in _sd8aq.read_lines(Path(_pd_dicts[0]))
+                   if x in ("alpha", "beta")) == 2, "落盘的并集把精简档冲掉了"
+        assert any("等距抽样" in x for x in _t6d), _t6d[:6]
+        assert any("爆破规模预估" in x and "次 DNS 查询" in x for x in _t6d), \
+            f"没把查询量预估说出来：{_t6d[:6]}"
+        # ⑨ 两档分工（这是"深字典"能安全启用的前提）：抽样**只冲深档，精简档一条不丢**
+        _lg8ap.clear(); _tried.clear()
+        _t9 = _run_sub("tier", fb=300, cur=_tiny8aq, deep=_big8aq, opts={"offline": True})
+        _names9 = _tried[-1] if _tried else []
+        assert len(_names9) == 302, f"精简 2 条 + 深档抽样 300 条 = 302，实得 {len(_names9)}"
+        assert {"alpha.lab8aq.test", "beta.lab8aq.test"} <= set(_names9), \
+            "抽样把精简档冲掉了（那是倒退，不是收窄）"
+        assert any("内置兜底只跑 302 条" in x and "精简档 2 条全量保留" in x for x in _t9), \
+            f"没把「精简档全量保留」这件事说出来：{_t9[:6]}"
+        # 深档配了但文件不在：不许崩、不许静默 —— 要指路那条导入命令并照常用精简档
+        _lg8ap.clear(); _tried.clear()
+        _t9b = _run_sub("nodeep", fb=0, cur=_tiny8aq, deep=str(_d8aq / "not-here.txt"),
+                       opts={"offline": True})
+        assert any("没配深字典" in x and "import_subdomain_dict.py" in x for x in _t9b), _t9b[:6]
+        assert len(_tried[-1]) == 2, f"深档缺失时精简档照跑，实得 {len(_tried[-1])}"
+        # 没配深档时 puredns 仍该读**精简档原文件**，而不是凭空多写一份 workdir 副本
+        _lg8ap.clear(); _pd_dicts.clear()
+        _t6e = _run_sub("pdnodeep", mw=0, cur=_big8aq, deep="", pd=True)
+        assert _pd_dicts and Path(_pd_dicts[0]) == Path(_big8aq).resolve() or \
+            Path(_pd_dicts[0]).name == "big_dict.txt", f"没深档却另落了副本：{_pd_dicts}"
+
+        # puredns 那路吃**并集**：两档都要落进那一个文件（没抽样也得落盘，因为它只能读一个文件）
+        _lg8ap.clear(); _tried.clear(); _pd_dicts.clear()
+        _t9c = _run_sub("pdunion", mw=0, cur=_tiny8aq, deep=_big8aq, pd=True)
+        assert _pd_dicts and len(_sd8aq.read_lines(Path(_pd_dicts[0]))) == 5002, \
+            f"puredns 那路没吃到并集：{len(_sd8aq.read_lines(Path(_pd_dicts[0]))) if _pd_dicts else 0}"
+
+        # ⑫ 组合爆破（`limits.brute_combo_max`）：字典里根本没有的那批名字**只能拼出来**
+        #     （与灯塔逐条比实时，它独有的域名里有 10 个任何字典都拼不出：`api-contract`/`ws-spot`）
+        _lg8ap.clear(); _tried.clear()
+        _sd8aq.passive.collect = lambda *a, **kw: {"contract.lab8aq.test": "passive:stub"}
+        _t12 = _run_sub("combo", fb=0, cur=_tiny8aq, deep="", opts={})
+        _last12 = _tried[-1] if _tried else []
+        assert "alpha-beta.lab8aq.test" in _last12 and \
+            "beta-alpha.lab8aq.test" in _last12, \
+            f"两个方向都要拼（api-contract 与 contract-api 是两个都可能存在的主机名）：{_last12[:6]}"
+        assert any("组合爆破" in x and "`a-b`" in x for x in _t12), _t12[:8]
+        assert all("-" in n.split(".")[0] for n in _last12), \
+            f"组合这一批里混进了非拼接名：{_last12[:6]}"
+        # 闸门关掉时必须一个组合都不试（这是"发散"的刹车，也是自检压量的依据）
+        _lg8ap.clear(); _tried.clear()
+        _t12b = _run_sub("combooff", fb=0, cur=_tiny8aq, deep="", opts={}, combo=0)
+        assert all("-" not in n.split(".")[0] for batch in _tried for n in batch), \
+            f"combo=0 仍在试拼接名：{_tried}"
+        assert not any("组合爆破" in x for x in _t12b), _t12b[:8]
+
+    finally:
+        (_sd8aq.which, _sd8aq.passive.collect, _sd8aq.wildcard.resolve_all,
+         _sd8aq.run_cmd) = _keep8aq
+
+    # ⑦ §6.1 变异：把 `_spread` 换成恒等 ⇒ 内置兜底就会硬啃整份 5000 条（闸门成了摆设）
+    _orig_spread8aq = _sd8aq._spread
+    try:
+        _sd8aq._spread = lambda words, cap, *a, **kw: list(words)
+        _keep7 = (_sd8aq.which, _sd8aq.passive.collect, _sd8aq.wildcard.resolve_all)
+        try:
+            # 桩要**在这一组里重新打上**：⑥ 的 finally 已经把它们还原了，
+            # 忘了重打就会拿真解析器去查 5000 个域名（慢、且测的就不是闸门了）。
+            _sd8aq.passive.collect = lambda *a, **kw: {}
+            _sd8aq.wildcard.resolve_all = _dns_count
+            _lg8ap.clear(); _tried.clear()
+            _t7 = _run_sub("mut", fb=300, cur=_tiny8aq, deep=_big8aq, opts={"offline": True})
+        finally:
+            (_sd8aq.which, _sd8aq.passive.collect,
+             _sd8aq.wildcard.resolve_all) = _keep7
+        assert _tried and len(_tried[-1]) == 5002, "恒等变异后仍只试 300 条 = ⑥ 不挂在 _spread 上（闸门成了摆设）"
+        assert any("内置 DNS 爆破：1 域名 x 5002 字典" in x for x in _t7), _t7[:6]
+    finally:
+        _sd8aq._spread = _orig_spread8aq
+
+    # ⑨b 版本可移植性：`Path.write_text(newline=)` 是 **3.10+** 才有的参数，本仓下限 3.9
+    #     （CI 与容器门禁都跑 3.9）。主机 3.14 上门禁全绿、容器里才炸出 TypeError ——
+    #     所以这条静态扫描钉在主机也会跑的那一组里，不让它再混进仓库。
+    _bad39 = []
+    for _py in sorted(set((ROOT / "scanner").rglob("*.py")) | set((ROOT / "tools").rglob("*.py"))
+                      | set((ROOT / "cli").rglob("*.py")) | set((ROOT / "gui").rglob("*.py"))):
+        if "dirmap" in _py.parts or "fscan" in _py.parts or "__pycache__" in _py.parts:
+            continue          # 第三方落点不参与本仓红线（与 [5b]/[8d] 同一口径）
+        for _ln, _t in enumerate(_py.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            # 只看真代码：那条"别用 write_text(newline=)"的注释本身两个词都在，会把扫描打红
+            if _t.lstrip().startswith("#"):
+                continue
+            if "write_text(" in _t and "newline=" in _t:
+                _bad39.append(f"{_py.relative_to(ROOT)}:{_ln}")
+    assert not _bad39, f"用了 3.10+ 才有的 write_text(newline=…)：{_bad39}"
+
+    # ⑩ 新开关三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单/POST 映射 ↔ 开发模式压量）
+    from scanner.config import DEFAULTS as _DEF8aq
+    assert _DEF8aq["jsmine"]["recrawl"] is True and \
+        settings["jsmine"]["recrawl"] is True, "jsmine.recrawl 两边不一致"
+    for _k8aq in ("brute_max_words", "brute_fallback_max", "brute_dict_warn_min",
+                  "recrawl_max_hosts", "brute_workers", "brute_combo_max"):
+        assert _k8aq in _DEF8aq["limits"] and _k8aq in settings["limits"], _k8aq
+    from scanner.devmode import DEV_LIMITS as _DV8aq
+    for _k8aq in ("limits.brute_max_words", "limits.brute_fallback_max",
+                  "limits.recrawl_max_hosts", "limits.brute_workers",
+                  "limits.brute_combo_max"):
+        assert _k8aq in _DV8aq, f"{_k8aq} 没被开发模式/自检压量 —— 用户装了 17.8 万条深字典后" \
+            "自检与 CI 会跟着字典一起变慢"
+    assert _DEF8aq["dicts"].get("subdomains_deep") == \
+        settings["dicts"].get("subdomains_deep"), "深档路径两档不一致"
+    _appsrc8aq = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+    _form8aq = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
+    assert "jsmine_recrawl" in _appsrc8aq and "jsmine_recrawl" in _form8aq, \
+        "recrawl 开关只活在配置文件里（页面上关不掉）"
+    # 两档必须**成对摘掉**：冒烟里凡是"跳过字典爆破"的地方都只写了精简档，深档一上线
+    # 就等于把三组离线用例变成三千次真 DNS 查询（本轮实测到门禁因此变慢）。
+    _smokesrc8aq = (ROOT / "tests" / "smoke.py").read_text(encoding="utf-8")
+    # 判据字符串**拆着写**：整串写在源码里，这一段自己就会被数进去（本轮就数出 4≠3 过）
+    _nd = '"config/dicts/does-not-exist.txt"'
+    _off_cur = _smokesrc8aq.count('["dicts"]["sub' + 'domains"] = ' + _nd)
+    _off_deep = _smokesrc8aq.count('["dicts"]["sub' + 'domains_deep"] = ' + _nd)
+    assert _off_cur and _off_cur == _off_deep, \
+        f"冒烟里摘字典的地方精简档 {_off_cur} 处、深档 {_off_deep} 处 —— 必须成对，否则深档会偷偷上岗"
+
+    assert _DEF8aq["limits"]["brute_fallback_max"] == 3000 and \
+        _DEF8aq["limits"]["brute_max_words"] == 0, \
+        "默认值必须是「仓库精简字典照跑、装了 puredns 才吃全量」"
+    assert _DEF8aq["limits"]["brute_workers"] == 64, \
+        "内置爆破并发跟着 HTTP 的 20 走 ⇒ 深字典要跑一小时；这一档单独给 64"
+
+    print("[8aq] 续139 深字典 ok: classify 逐条钉死（注释/空行/尾点/`_`/`a..b`/64 字符标签/非 ASCII）｜"
+          "--dry-run 一个字不写却报出读入与丢弃｜真导入取并集、排序、保留原注释、写明来源、重复导入"
+          "不涨条数、来源行只留一条｜四种拒绝（没给 --src / 源不存在 / 源即目标 / 清洗后全垃圾且目标"
+          "原样不动）｜词数闸门是**端点保住的等距抽样**（取前 N 条只会拿到字母表开头，`[::step]` 又会"
+          "把字典尾巴丢掉）｜两档分工：抽样只冲深档、精简档 2 条一条不丢，深档文件不在就指路导入命令"
+          "并照常用精简档，puredns 那路吃的是**并集**落盘文件｜内置兜底给出「装 puredns 才吃全量」的"
+          "出路｜字典过小自己喊并指名那条导入命令｜每轮都报「域名 × 词 = 多少次 DNS 查询」｜"
+          "`_spread` 换成恒等的变异立刻硬啃整份深字典（断言有牙）｜recrawl 与四个 limits 键三方一致，"
+          "且开发模式/自检把词数与补探主机数压回个位数（用户装深字典不许把 CI 拖慢）")
     print("SMOKE PASS")
 
 

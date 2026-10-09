@@ -214,6 +214,8 @@
       {{ 'checked' if s.jsmine.secrets }}> JS 中提取 AK/SK 等疑似凭据（带前后文过滤降噪）</label>
     <label>JS 挖掘页面上限 <input name="jsmine_max_pages" value="{{ s.jsmine.max_pages }}"></label>
     <label>JS 文件上限 <input name="jsmine_max_js" value="{{ s.jsmine.max_js }}"></label>
+    <label class="chk"><input type="checkbox" name="jsmine_recrawl" value="1"
+      {{ 'checked' if s.jsmine.recrawl }}> 二层遍历：把新域名（JS 挖出的 + 库里本任务还没探过的）先过 DNS 再补做一轮存活探测，落成站点</label>
     <label class="chk"><input type="checkbox" name="portscan_enabled" value="1"
       {{ 'checked' if s.portscan.enabled }}> <b>端口与服务扫描</b>（默认关闭；引擎 auto = fscan → nmap → 内置 TCP connect）</label>
     <label>端口列表（空=内置 TOP 表，也支持 "80,443" 或 "1-1024"）

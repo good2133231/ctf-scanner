@@ -39,16 +39,17 @@
 | 你的命令 | 框架阶段 | 框架实现 |
 |---|---|---|
 | `subfinder -dL url -all -t 200 -o logs/passive.txt` | subdomain | subfinder 适配器，参数一致（`-dL`/`-all`/`-t 200`） |
-| `puredns bruteforce ./config/subdomains.txt -d url -r resolvers -w brute.txt` | subdomain | puredns 适配器，逐域名执行；字典/resolvers 用 `config/dicts/` |
+| `puredns bruteforce ./config/subdomains.txt -d url -r resolvers -w brute.txt` | subdomain | puredns 适配器，逐域名执行；字典/resolvers 用 `config/dicts/`；词数闸门 `limits.brute_max_words`（puredns 这一路的**深档**上限，0=全量）只做**等距抽样且只冲深档**（精简档 84 条永远全量在场，任何闸门都不冲它），超出则抽样后把并集另存 `brute_words.txt` 再喂，续139 |
 | `cat passive.txt brute.txt \| sort -u` | subdomain | Python 端 `sorted(set(...))` 等价合并去重 |
 | （无 subfinder 时的被动收集） | subdomain | 内置 `scanner/passive.py` 多来源免 key 接口（crt.sh / certspotter / alienvault / hackertarget / rapiddns / sublist3r） |
 | （字典爆破前先测通配） | subdomain | `scanner/wildcard.py` 泛解析识别与过滤（纯 DNS 查询） |
+| （喂深字典） | subdomain | `tools/import_subdomain_dict.py` 清洗 + 去重 + 并集写回**深档** `config/dicts/subdomains_deep.txt`（**这就是它的默认写回目标**；精简档 `config/dicts/subdomains.txt` 一字不动。纯离线，见 §① 与 AGENTS §7 续139） |
 | （手工常忘的 CNAME 检查） | takeover | `scanner/dnsq.py` 解析 CNAME 链 → `scanner/takeover.py` 比对 41 条第三方服务指纹 |
 | `fscan -np -nobr -nopoc -p <ports> <host>` | portscan | fscan 适配器（只取端口发现，不跑 POC/爆破）；解析其四种开放端口行 + 统计行交叉校验 |
 | `nmap -sT -Pn -n --open -p <ports> -oG -` | portscan | nmap 适配器（`-sT` 免 root）；未装则内置 TCP connect 兜底 + 被动 banner |
 | （手工没有的部分） | osint | IP 反查域名 + `/24` C 段归纳；favicon（mmh3）→ FOFA 反查同源资产，黑 ico 放弃拓展 |
 | （手工没有的部分） | jsmine | 抓站点 JS → 提取域名/接口 URL/疑似凭据，第三方域黑名单 + 前后文降噪 |
-| `httpx -l httpx_url -mc 200,301,302,403,404` | probe | httpx 适配器（另加 `-title -tech-detect -json` 提取信息）；`-mc` 白名单一致 |
+| `httpx -l httpx_url -nfs -title -tech-detect -json` | probe | httpx 适配器；**不再传 `-mc` 状态码白名单**（服务端回了真实状态码就算存活，见 `probe.is_alive`），`-nfs` 锁住输入里的 scheme |
 | `python dirmap.py -iF dir_out -e all` | dirscan | dirmap 适配器（`-iF` 批量 URL），并解析其 `output/` 产物；**仅 `mode=deep` 时调用**（浅扫不碰外部工具） |
 | （手工没有的部分） | vulnscan | POC 引擎 + OWASP Top10 启发式检查（分级/分类门控 + WAF 探测） |
 | （手工没有的部分） | screenshot | 本机无头 Edge/Chrome（`--headless=new` + `--ignore-certificate-errors`）截图，产物 `shots/*.png` 并回填 `sites.shot`；默认关。**不校验证书**（自签/过期/私有 CA 也能截，续64） |
@@ -79,8 +80,28 @@
      原实现是 `elif`，装了 subfinder 就完全不跑这批证书/情报源，等于白丢覆盖；
   3. **DNS 字典爆破**：`puredns` 优先（`puredns bruteforce <dicts.subdomains> -d <域> -r <dicts.resolvers> -w <out>`，
      来源标记 `puredns`），未安装则内置 `scanner/wildcard.py::resolve_all` 兜底（`socket.getaddrinfo`，
-     来源标记 `dns-brute(fallback)`）；字典 `config/dicts/subdomains.txt`（85 条），
-     域名上限 `limits.brute_max_domains`；
+     来源标记 `dns-brute(fallback)`）；字典**分两档**（续139）：`config/dicts/subdomains.txt` 是
+     精简档（84 条人工挑的高价值前缀，**永远全量参与，任何闸门都不冲它**），
+     `config/dicts/subdomains_deep.txt` 是深档（**续139 随本轮提交进仓库，177,875 条**，来源写在文件头；
+     不想要就 `git rm config/dicts/subdomains_deep.txt` —— 文件不在＝没配，日志指路但不报错，
+     其它阶段一律不受影响）。再深的一档一条命令追加：`tools/import_subdomain_dict.py --src <文件>`，
+     **默认写回目标就是这份深档**（精简档不动）。分两档的原因是没装 puredns 时深档只能抽样，
+     而 84/177,875 ≈ 0.05% —— 并成一份会把精简档几乎全冲掉，那是**倒退**而不是收窄；
+     域名上限 `limits.brute_max_domains`；词数闸门 `limits.brute_max_words`（puredns 那一路的深档上限，
+     0=全量）与 `limits.brute_fallback_max`（内置那一路的深档上限，默认 3000，因为它逐条 socket 解析）
+     —— **两道闸门都只冲深档，精简档永远全量在场**；收窄一律
+     **等距抽样**（排序字典取前 N 条会全是 `0/00/000/aa`，把 `api`/`admin` 全挤掉）并在日志报出条数
+     与放开办法；内置那一路另有独立并发 `limits.brute_workers`（默认 64）—— 它是**纯 DNS 等待**，
+     跟着 HTTP 的 `max_workers`(20) 走的话深档就是小时级（实测 3000 条 @20 线程 ≈ 53 秒 ⇒
+     全量 17.8 万条即使 128 线程也跑了 45 分钟仍未跑完（全量只有 puredns 现实可行））；`limits.brute_dict_warn_min`（默认 1000）的语义是
+     **没导入深档时会喊**（仓库随包带深档 ⇒ 默认安装不触发，用户自己删掉深档才喊，不做静默弱扫描）；
+  4b. **组合爆破（续139，对齐灯塔的 `ALT_DNS_CONCURRENT`）**：把「精简档词」与「本任务已经发现的
+     名字首段标签」两两拼成 `a-b` 再爆一轮。动机是逐条比实时的解剖结果 —— 灯塔独有而我们没生成的
+     24 个域名里 **14 个的标签确实躺在深档里**（受抽样闸门没爆到），另外 **10 个任何字典都拼不出来**
+     （`api-contract` / `ws-spot` / `admin-oss` / `aicoin-http-gateway` / `orig.images-cms` …），
+     只有组合这一条路。上限 `limits.brute_combo_max`（默认 4000 词/域名，0=关），超出等距抽样，
+     来源标记 `dns-brute(combo)`；种子只用**本任务自己发现的名字**，不往别人的域里拼。
+
   4. **被动来源的泛解析复核**：被动源里混进的通配产物，用第 3 步同一套判据清掉（`_PASSIVE_SRC`）。
 - 泛解析过滤：`limits.wildcard_filter` 开启时，先用 `scanner/wildcard.py` 探测 `*.domain` 通配 IP，
   丢弃"解析结果全部落在通配 IP 内"的字典/被动候选（纯 DNS 查询，零 HTTP）；
@@ -154,7 +175,7 @@
   为对应主机补出 `https://host:port` / `http://host:port` 两种候选（`probe` 日志会写
   `额外纳入 N 个开放端口候选（来自 portscan）`）。因此想覆盖非标端口 Web 服务，需**同时打开
   `portscan` 阶段**（默认关）—— 只跑默认阶段时仍只探 80/443；
-- 处理：httpx 适配器（JSONL 输出解析 status/title/server/tech）；状态白名单 `200,301,302,403,404`；
+- 处理：httpx 适配器（JSONL 输出解析 status/title/server/tech）；存活口径＝**回了真实状态码就算**（`probe.is_alive`，100–599），旧版 `-mc 200,301,302,403,404` 实测漏掉 **49 台**（＝与灯塔逐条比时「它记为站点而我们零入库」的主机数，其中 **34 台**我们本来就有子域名、探过却被整行丢掉；CDN 边缘回 521/502/400 也在这 49 台里），已去掉；另加 `-nfs`：不锁 scheme 时 httpx 的 scheme 回退会把 `http://h` 的 301 换成 `https://h` 的落地状态，原始那一跳再也看不到；
   **3xx 站点补一次「跳转后」取证**（续112-B，`probe.attach_redirect_info`）：httpx 默认**不跟随**
   重定向，收回来的 301 行标题就是字面的「301 Moved Permanently」，看不出跳去了哪儿；于是对每条 3xx
   **再发一次允许跟随的请求**，把最终 url / 状态 / 标题写进 `sites.redirect_*` 三列。
@@ -163,6 +184,17 @@
   只对确实有 3xx 的条目发请求（限流预算按请求数计）。显示口径集中在 `utils.site_redirect`；
 - 产物：`sites.txt`、SQLite `sites` 表（含 `redirect_url` / `redirect_status` / `redirect_title`
   三列，老库由 `_COLUMN_PATCHES` 补列）；`ctx.results["sites"]` 供后续阶段使用；
+- **二层遍历（续139，`probe.second_pass`）**：第一轮之后才长出来的域名（`jsmine` 挖的 + 库里其余
+  本任务还没试过的）以前**只进 `subdomains` 表、没有任何一条路变成站点**，现在补探一轮；调用点
+  在 `jsmine` 阶段**无条件**执行（本轮没挖到新域名也会把库里其余没试过的本任务域名补探掉）：
+  ① 只探 `extdom.task_bases` 归属的域名（越界一个请求都不发）；② 先过一遍 DNS 预筛（被动来源
+  带回来的名字一大半早就不解析，逐条上 HTTP 是纯浪费），**预筛自身还有一道上限
+  `max(10 × limits.recrawl_max_hosts, 50)`**：深档上线后池子里可能躺着十万个不解析的历史噪声名字，
+  一个都不解析时「查到攒够为止」等于把整个池子查一遍 —— 不是漏探，是不肯为一个二层把全库查一遍；
+  ③ 补探主机数受 `limits.recrawl_max_hosts`（默认 300），不把全库重扫；
+  ④ 开关 `jsmine.recrawl`（策略页有字段）；⑤ 结果**追加**进 `ctx.results["sites"]`
+  （覆盖写法会让后面的 dirscan/vulnscan 读不到新站点）；⑥ 跳过多少、为什么跳，日志逐条写清。
+  与第一轮共用同一个 `probe_candidates` / `register_sites` / `is_alive`，两处口径不许分叉。
 - 降级：内置探测（requests/urllib），https 优先、失败回退 http，提取标题、Server 头与技术栈（技术栈由
   `scanner/fingerprint.py` 从响应头/正文识别，属信号级标签、不含版本）；
   **响应体解码**统一走 `scanner/utils.py::_decode_body`（响应头 charset → UTF-8 → GB18030 → 带替换 UTF-8），
@@ -245,6 +277,9 @@
   并以 **high** 级进 `vulns`（`poc_id=js-secret-*`，值掩码脱敏，`target` 用**主机名**而不是完整 JS URL
   —— 同一站点多个 JS 命中同一个值不再重复入库，且「拓展域名」页能按域名显示"敏感 N"）；
   入库前同样过用户黑名单（`config/blacklist.txt`）；
+  入库之后**无条件调用一次二层遍历**（`probe_stage.second_pass(ctx, extra=new_domains)`，续139，
+  刻意放在 `if new_domains:` **外面**）—— JS 里挖出的域名以前只进表，现在会被补探成站点；
+  本轮一个都没挖到时也一样调用，把库里其余没试过的本任务域名一并补探（上限与 DNS 预筛见 ④）；
 - 局限：纯正则（不做 sourcemap 还原）；短 token 与含 `test/demo` 的真实值会被保守丢弃。
 
 ### ⑦ dirscan 目录发现（`dirscan.enabled`，**默认开，且默认只跑浅扫**）

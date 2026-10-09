@@ -15,7 +15,20 @@
 - **POC 管理**：YAML 格式 POC 引擎（**nuclei 语法兼容子集**：含 `raw` / `flow` / `workflows` 子集支持），可直接加载官方 nuclei 模板，支持上传、启停、目录扫描；
 - **检测分级门控（四层）**：阶段级总开关（`vulnscan.enabled`，关闭即"只测绘不探测"）+ 按级别整体跳过（`skip_severities`，默认 info/low **连请求都不发**）+ 按最低报告级别收敛结果（默认 medium）+ OWASP 分类 / 单项检查开关，默认屏蔽"太 low 的洞"；
 - **动态免杀**：UA 随机化、浏览器化请求头、WAF 指纹识别、注入 payload 变形（分级 0~3，变体与参数顺序每次随机）；
-- **信息收集增强**：免 key 多来源被动子域名收集（crt.sh / certspotter / alienvault 等）+ 泛解析过滤 + 子域接管指纹（41 条第三方服务）+ 子域名**解析 IP / CDN 标记**（`config/dicts/cdn_cname.txt` 292 条厂商 CNAME 后缀 + `config/dicts/cdn_ips.txt` 15 段厂商任播 IP 段，CNAME 优先、IP 段兜底，纯 DNS 只读判定）+ JS 资产挖掘（域名/接口/疑似凭据，JS 与情报带出的域名归入**拓展域名**页）+ **外部情报拓展**（`/24` C 段反查域名；favicon 的 mmh3 去 FOFA 反查同源资产，命中过多的"黑 ico"主动放弃拓展；**TLS 证书反查** `cert="domain"` 与**标题反查** `title="xxx"`，命中过多的"通用证书 / 公共标题"（如 404 默认页）同样放弃 —— 模板页标题连查询都不发）+ **用户黑名单**（`config/blacklist.txt`，入库前过滤，命中域名连子域都不入资产库）；**拓展域名**按来源分类排序（JS 挖掘 → FOFA·标题 / 证书 / ICO → C 段，不交错），并可对勾选域名手动**解析 DNS / 送去探测（新建 `subdomain→probe→dirscan→vulnscan` 任务）/ 归属本项目的追加为子域名 / 加入黑名单** —— 这类域名未必属于目标，不自动全跑）；拓展域名页**按主域名分组折叠**（`?group=0` 切回平铺）；建任务（或 CLI `--auto-expand`）勾「**自动拓展扫描**」后本次任务自动补 `osint`/`jsmine` 阶段、拓展结束后自动做 DNS **存在性判定**、把**注册域属于本项目**的拓展域名（如目标 `pengo.pro` 拓展出 `aaa.pengo.pro`）**追加成正常子域**（原拓展行保留、出处可查）、目标是子域时自动补收其主域名；
+- **信息收集增强**：免 key 多来源被动子域名收集（crt.sh / certspotter / alienvault 等）+ 泛解析过滤 + 子域接管指纹（41 条第三方服务）+ 子域名**解析 IP / CDN 标记**（`config/dicts/cdn_cname.txt` 292 条厂商 CNAME 后缀 + `config/dicts/cdn_ips.txt` 15 段厂商任播 IP 段，CNAME 优先、IP 段兜底，纯 DNS 只读判定）+ JS 资产挖掘（域名/接口/疑似凭据，JS 与情报带出的域名归入**拓展域名**页）+ **外部情报拓展**（`/24` C 段反查域名；favicon 的 mmh3 去 FOFA 反查同源资产，命中过多的"黑 ico"主动放弃拓展；**TLS 证书反查** `cert="domain"` 与**标题反查** `title="xxx"`，命中过多的"通用证书 / 公共标题"（如 404 默认页）同样放弃 —— 模板页标题连查询都不发）+ **用户黑名单**（`config/blacklist.txt`，入库前过滤，命中域名连子域都不入资产库）；**拓展域名**按来源分类排序（JS 挖掘 → FOFA·标题 / 证书 / ICO → C 段，不交错），并可对勾选域名手动**解析 DNS / 送去探测（新建 `subdomain→probe→dirscan→vulnscan` 任务）/ 归属本项目的追加为子域名 / 加入黑名单** —— 这类域名未必属于目标，不自动全跑）；拓展域名页**按主域名分组折叠**（`?group=0` 切回平铺）；
+- **站点存活口径与二层遍历（续139）**：`probe` 不再挂状态码白名单 —— **服务端回了一个真实 HTTP 状态码就记站点**（`probe.is_alive`，含 301/403/429/500/502/521），因为 CDN 边缘活着、源站挂了本身就是资产事实（旧口径 `-mc 200,301,302,403,404` 实测漏掉 **49 台**主机 —— 灯塔记为站点、我们连行都没有，其中 **34 台**我们本来就有子域名、探过却被整行丢掉）；httpx 加 `-nfs` 锁住 scheme，`http://h` 的 301 才会稳定成行，再配「跳转后」取证（库里存的仍是那一跳，落地 url/状态/标题另存 `redirect_*` 三列）；站点日志按状态码首位摊开组成（`2xx=… 3xx=… 5xx=…`），免得"存活站点 168 个"被读成"168 个打得开的站"；`jsmine` 之后触发**二层遍历**（`probe.second_pass`）：把第一轮之后才长出来的域名（JS 挖的 + 库里本任务还没探过的）先过 DNS 预筛再补探一轮，只探归属本任务的域名、有上限（`limits.recrawl_max_hosts`，预筛另有 `max(10×上限, 50)`）、跳过的每条都报原因；子域名那层字典**分两档**：`config/dicts/subdomains.txt` 精简档（永远全量参与）+
+  `config/dicts/subdomains_deep.txt` 深档（**续139 随仓库分发 177,875 条**，来源写在文件头；
+  `subfinder` 之外的爆破覆盖面就靠它，不想要就 `git rm config/dicts/subdomains_deep.txt`）；
+  再深的一档自己喂：`python tools/import_subdomain_dict.py --src <你那份深字典>`（清洗 + 去重 + 并集，
+  **默认写回目标就是上面那份深档**，精简档一字不动；纯离线，`--dry-run` 只看数不写文件）；
+  词数闸门 `limits.brute_max_words`（puredns 那一路的深档上限，0=全量）/ `limits.brute_fallback_max`
+  （内置那一路的深档上限，默认 3000）只做**等距抽样且只冲深档**（精简档任何闸门都不冲），
+  内置那一路另有独立并发 `limits.brute_workers`（默认 64：纯 DNS 等待，实测 3000 条 @20 线程
+  ≈ 53 秒 ⇒ 全量 17.8 万条即使 128 线程也跑了 45 分钟仍未跑完，128 线程跑 45 分钟仍未跑完（全量只有 puredns 现实可行）），
+  **没导入深档时**按 `limits.brute_dict_warn_min`（默认 1000）主动喊（随包带深档 ⇒ 默认安装不触发），每轮报「N 域名 × M 词 = X 次 DNS 查询」；没有 puredns 时深档按抽样跑（日志指路装它）；建任务（或 CLI `--auto-expand`）勾「**自动拓展扫描**」后本次任务自动补 `osint`/`jsmine` 阶段、拓展结束后自动做 DNS **存在性判定**、把**注册域属于本项目**的拓展域名（如目标 `pengo.pro` 拓展出 `aaa.pengo.pro`）**追加成正常子域**（原拓展行保留、出处可查）、目标是子域时自动补收其主域名；
+  另有**组合爆破**（`limits.brute_combo_max`，默认 4000）：把精简档词与本任务已发现名字的首段两两拼成
+  `a-b` 再爆一轮 —— 与灯塔逐条比实时，它独有的域名里有 10 个**任何字典里都没有**（`api-contract`、
+  `ws-spot`、`admin-oss`），只有拼得出来；这类结果的来源标记是 `dns-brute(combo)`。
 - **端口与目录**：内置 TOP 48 端口表 + **fscan / nmap 适配**（`portscan.engine`：`auto` = fscan → nmap → 内置 TCP connect；调用 fscan 时强制 `-np -nobr -nopoc`，只用它的端口发现能力，输出解析按 fscan 2.2.1 **真实形态校准**并用其"发现 N 个开放端口"统计行交叉校验，数目不符即回退、不静默漏报）+ 内置 TCP connect 兜底；**全端口扫描（1-65535）**可从侧栏「全端口扫描」页对单个 IP 发起（按任务分布展示，自动跳过已扫过的端口，不污染全局策略）；**目录发现走「浅 / 深两档」**——默认**开**但只跑**浅扫**（`dirscan.mode=quick`：`config/dicts/dirs_shallow.txt` 精选通用敏感路径约 150 条/站，如 `.git`、`.env`、备份与数据库转储、中间件控制台），适合"先浅浅过一遍"；**深度扫**（`mode=deep` / 建任务勾「全目录深扫」/ 结果页「补扫」）才启用 **11882 条大字典**、dirmap 优先调用与备份后缀派生，**只扫不重复站点**、**按技术栈与框架选字典**（Java/PHP/ASP 各自的语言字典 + WordPress/Spring/Weblogic 等 12 个框架字典 + 通用暴露面字典），结果按「**站点 + 状态码 + 响应大小**」折叠重复长度并展示包大小与**命中页标题**；**整站统一的 WAF/CDN 拦截页不计为目录发现**（`config/dicts/waf_block_titles.txt` 的厂商专属标题文案 + 随机路径同内容的 403 基线两条判据，滤掉几条按站点写进任务日志，不静默少结果）（内置扫描从已在手里的响应体提取，零额外请求），默认排序为 **200 优先 → 大小降序**；浅扫结果页可勾选站点**一键发起独立补扫任务**（`POST /api/rescan`，只跑 dirscan/portscan/screenshot 单阶段，不改全局策略）；
 - **TLS 证书取证**（策略级默认关，**建任务勾「SSL 证书」或 CLI `-p cert` 即对本次生效**）：对值得握手的站点（`https://` 或端口命中 `cert.tls_ports`）做**一次只读 TLS 握手**，用**纯标准库** ASN.1/DER 解析出 CN / 颁发者 / 有效期 / 剩余天数 / 是否自签 / 签名算法 / SAN / SHA256 指纹，进 `certs` 表 + 任务详情「SSL 证书」页签 + 报告小节，**不引入 `cryptography`**。握手**不校验证书**（CTF 目标多为自签/过期）—— **「自签 / 已过期」是证书属性、不是漏洞结论**，页签与报告都写明了这一点；页签按数据源实有出现，没有产物时说明原因；
 - **站点截图**（策略级默认关，**建任务勾「截图」即对本次生效**）：调用本机已装的 Edge/Chrome 无头模式截图，产物落在任务目录并在站点页 URL 旁显示缩略图，不引入任何新依赖；站点页签可对勾选站点**补截图**（`stage=screenshot`），没有产物时页面会说明原因（策略关 / 本机无可用浏览器 / 截图失败）；
@@ -39,7 +52,7 @@
    │     subfinder / puredns         dnsq CNAME 链 + 41 条第三方服务指纹      │
    │     内置 DNS 字典爆破兜底                                                │
    │                                                                        │
-   │  ③ portscan 端口服务（默认关） ④ probe 存活探测                          │
+   │  ③ portscan 端口服务（默认关） ④ probe 存活探测（含二层遍历）                          │
    │     nmap 适配器 / 内置 connect   httpx 适配器 / 内置 requests 兜底        │
    │                                                                        │
    │  ⑤ screenshot 站点截图（默认关） ⑥ osint 外部情报拓展（默认关）        │
@@ -369,12 +382,13 @@ ctf-scanner/
 ├── tools/import_ref_pocs.py #   参考项目 Python POC 静态导入器（产物默认关闭）
 ├── tools/import_dir_dict.py #   目录扫描大字典生成器（读 dirmap 字典 → config/dicts/dirs_big.txt）
 ├── tools/import_fw_dicts.py #   目录字典按框架细分生成器（从大字典派生 12 个框架字典 + 暴露面）
+├── tools/import_subdomain_dict.py # 深档子域名字典导入器（续139：清洗 + 去重 + 并集写 config/dicts/subdomains_deep.txt，纯离线）
 ├── tools/dirmap/            #   dirmap 落点（目录联接，第三方项目不随仓库分发）
 ├── config/
 │   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/screenshot/iprecon/fofa/blacklist/intel/heuristic/github；另有 queue/dev 两个非策略页配置）
 │   ├── keys.yaml            # 第三方 API key 专用文件（gitignore，GUI 不写回）
 │   ├── blacklist.txt        # 用户黑名单（一行一个域名，# 注释；命中即不入资产库）
-│   ├── dicts/               #   子域名字典、resolvers、目录字典（dirs_shallow 206 浅扫精选 / dirs_small 55 / dirs_big 11882 / 技术栈与框架细分 + 暴露面）、cdn_cname.txt（CDN 厂商后缀）、cdn_ips.txt（CDN 厂商任播 IP 段）、sensitive.txt（A01 敏感文件检查的数据源：路径 | 关键字 | 级别 | 说明）
+│   ├── dicts/               #   子域名两档字典（`subdomains.txt` 精简档 84 条，永远全量参与 + `subdomains_deep.txt` 深档 177,875 条，续139 随仓库导入）、resolvers、目录字典（dirs_shallow 206 浅扫精选 / dirs_small 55 / dirs_big 11882 / 技术栈与框架细分 + 暴露面）、cdn_cname.txt（CDN 厂商后缀）、cdn_ips.txt（CDN 厂商任播 IP 段）、sensitive.txt（A01 敏感文件检查的数据源：路径 | 关键字 | 级别 | 说明）
 │   ├── pocs-user/           # 用户上传的 POC（GUI 上传后落在这里）
 │   ├── pocs-imported/       # 批量导入的 POC（默认关闭，需在 POC 管理页挑选启用）
 │   └── nuclei-templates/    # 官方 nuclei 模板投放点（可被本引擎直接加载）

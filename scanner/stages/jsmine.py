@@ -13,6 +13,7 @@
 from urllib.parse import urlparse
 
 from .base import Stage
+from . import probe as probe_stage
 from .. import blacklist, db, extdom, fingerprint, flagfind, jsmine
 from ..utils import write_lines
 
@@ -92,6 +93,12 @@ class JsmineStage(Stage):
         ctx.results["js_domains"] = new_domains
         if new_domains:
             db.insert_subdomains(ctx.task_id, [(d, "js:mine") for d in new_domains])
+        # 二层遍历（续139）：JS 里挖出来的域名以前**只进表**，没有任何一条路把它们变成
+        # 站点 —— 灯塔的站点数就是这么比我们有货的。这一轮**不要求本轮真挖到新域名**：
+        # 补探的池子除了 js 新交的，还包括库里其余没试过的本任务域名（osint/cert 带回来的
+        # 那些也在里面）。归属判定、DNS 预筛、上限与"跳过了多少"的日志都在
+        # `probe.second_pass` 一处，口径不会分叉。
+        probe_stage.second_pass(ctx, extra=new_domains)
 
         # 2) 接口 URL：落盘 + 进内存结果（不入 sites/dirs 表）
         url_list = sorted(urls)

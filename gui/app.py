@@ -3160,7 +3160,8 @@ def create_app():
                     "jsmine": {"enabled": f.get("jsmine_enabled") == "1",
                                "max_pages": int(f.get("jsmine_max_pages", 20) or 20),
                                "max_js": int(f.get("jsmine_max_js", 40) or 40),
-                               "secrets": f.get("jsmine_secrets") == "1"},
+                               "secrets": f.get("jsmine_secrets") == "1",
+                               "recrawl": f.get("jsmine_recrawl") == "1"},
                     # 外部情报拓展（OSINT）：C 段反查 + favicon 反查，两项默认都关
                     "iprecon": {"enabled": f.get("iprecon_enabled") == "1",
                                 "api": f.get("iprecon_api", "") or

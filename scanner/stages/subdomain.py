@@ -27,6 +27,32 @@ from ..utils import (base_domain, is_domain, to_ascii, which, verify_tool, run_c
 _PASSIVE_SRC = ("subfinder", "passive:")
 
 
+def _spread(words, cap, logger=None, knob="limits.brute_max_words"):
+    """需要收窄词表时**等距抽样**并如实报出比例；`cap<=0` 或词表本就不长时原样返回。
+
+    为什么不取前 N 条：字典是排好序的，`words[:3000]` 拿到的全是 `0/00/000/0000/a/aa…` ——
+    数字前缀和叠字符前缀把额度占满，真正值钱的 `api`/`admin`/`shop` 一条都进不去。
+    等距抽样才是"整个字母表都过一遍"。
+    """
+    if not cap or cap <= 0 or len(words or []) <= cap:
+        return words            # **原对象**：调用方靠 `is not` 判断有没有真的收窄过
+    words = list(words)
+    if cap == 1:
+        if logger:
+            logger.info(f"[subdomain] 字典 {len(words)} 条且 {knob}=1，只取第 1 条")
+        return words[:1]
+    # 端点都保住的等距索引：`i*(n-1)/(cap-1)` 向下取整。`words[::step]` 那种切片在
+    # `n % step != 0` 时**会把字典尾巴丢掉**（排序字典的尾巴是 `zz*` 那批），
+    # 而步长 > 1 保证索引严格递增（无重复）并且恰好取满 `cap` 条（切片会少于 cap）。
+    last, span = len(words) - 1, cap - 1
+    got = [words[int(i * last / span)] for i in range(cap)]
+    if logger:
+        logger.info(f"[subdomain] 词表 {len(words)} 条超出 {knob}={cap}，等距抽样取 {len(got)} 条"
+                    f"（约每 {len(words) / cap:.1f} 条取 1 条，首尾都保住、覆盖整个字典而不是"
+                    f"字母表开头；要用全量把 {knob} 设 0）")
+    return got
+
+
 class SubdomainStage(Stage):
     name = "subdomain"
     description = "子域名收集（多来源被动收集 + DNS 字典爆破 + 泛解析过滤）"
@@ -146,15 +172,57 @@ class SubdomainStage(Stage):
         brute_domains = domains[: int(limits.get("brute_max_domains", 50))]
         # 字典路径为空时 `resolve("")` 会落到项目根目录，`read_text()` 抛 IsADirectoryError 并
         # 让整阶段挂掉；这里先确认"配了路径且确实是文件"，否则按"无字典"走（只做被动收集）。
+        # 字典分两档（续139）：`dicts.subdomains` 是**精简档**（人工挑的高价值前缀，84 条），
+        # `dicts.subdomains_deep` 是**深档**（可选文件，17.8 万条那一类）。为什么必须分两档：
+        # 深档在**没装 puredns** 的机器上跑不动（内置那路是系统解析器逐条查），只能抽样收窄，
+        # 而 84/177893 ≈ 0.05% —— 抽样会把精简档几乎全冲掉，那是**倒退**。所以精简档永远全量打底，
+        # 只有深档受抽样闸门。深档文件不在就是"没配"，不影响任何其它阶段。
         dict_raw = str(ctx.settings.get("dicts", {}).get("subdomains", "") or "")
         wl_path = resolve(dict_raw) if dict_raw else None
-        wordlist = ([w for w in read_lines(wl_path) if not w.startswith("#")]
-                    if (wl_path and wl_path.is_file()) else [])
+        cur = ([w for w in read_lines(wl_path) if not w.startswith("#")]
+               if (wl_path and wl_path.is_file()) else [])
+        deep_raw = str(ctx.settings.get("dicts", {}).get("subdomains_deep", "") or "")
+        deep_path = resolve(deep_raw) if deep_raw else None
+        deep_ok = bool(deep_path and deep_path.is_file())
+        _cur_set = set(cur)
+        deep = [w for w in ([x for x in read_lines(deep_path) if not x.startswith("#")]
+                            if deep_ok else []) if w not in _cur_set]
+        wordlist = cur + deep
         if dict_raw and not wordlist:
             ctx.logger.warning("[subdomain] 子域名字典不可用（路径不存在或为空文件），跳过字典爆破")
+        elif deep_raw and not deep_ok:
+            ctx.logger.info(f"[subdomain] 没配深字典（{deep_raw} 不存在），本次只用精简字典 "
+                            f"{len(cur)} 条；要补：python tools/import_subdomain_dict.py "
+                            "--src <你那份深字典>")
+        elif wordlist and len(wordlist) < int(limits.get("brute_dict_warn_min", 1000)):
+            # 与灯塔逐条比对时（2026-10-08，weex.com）有一类差距跟探测器无关：它记为站点、
+            # 我们**连域名都没生成**的主机 15 台，全在字典规模上 —— 仓库发的是精简版，
+            # 它发的是 17.8 万条。不喊这一句，用户就会把"子域名少"读成"收集器不行"。
+            ctx.logger.warning(
+                f"[subdomain] 字典只有 {len(wordlist)} 条（阈值 limits.brute_dict_warn_min="
+                f"{int(limits.get('brute_dict_warn_min', 1000))}），被动来源之外爆破不出多少名字；"
+                "把自己那份深的字典并进深档：python tools/import_subdomain_dict.py "
+                "--src <字典文件>（默认写 config/dicts/subdomains_deep.txt）")
+        # 词数闸门（续139）：深字典 × 多域名会把 DNS 查询量推到千万级，内置那路（系统解析器
+        # 逐条查）更是跑不完 —— 两路各自收窄，并把"怎么放开"写在日志里，不做静默截断。
+        # **闸门只冲深档**：精简档那几十条人工挑的前缀任何情况下都全量在场（把它一起抽样，
+        # 84/177893 ≈ 0.05% 会几乎全冲掉 —— 那不叫收窄，叫倒退）。
+        deep_sel = _spread(deep, int(limits.get("brute_max_words", 0) or 0), ctx.logger)
+        words = cur + deep_sel
+        dict_path = str(resolve(dict_raw)) if dict_raw else ""
         pd_bin = which(ctx.settings.get("tools", {}).get("puredns", "puredns"))
-        if pd_bin and not offline and wordlist:
-            dict_path = str(resolve(ctx.settings["dicts"]["subdomains"]))
+        # puredns 只吃**一个文件**，所以配了深档时要把并集落盘它才读得到。
+        # 没装 puredns（或离线）时**不落盘**：内置那路直接拿内存里的词表，写一份 1.5MB 的副本
+        # 只是把任务工作目录撑大，谁也不读它。
+        use_pd = bool(pd_bin) and not offline and bool(words)
+        if deep and use_pd:
+            dict_path = str(write_lines(ctx.workdir / "brute_words.txt", words))
+        if brute_domains and words and use_pd:
+            ctx.logger.info(
+                f"[subdomain] 爆破规模预估（puredns 这一路）：{len(brute_domains)} 域名 × "
+                f"{len(words)} 词 = {len(brute_domains) * len(words):,} 次 DNS 查询"
+                "（收紧：limits.brute_max_domains / limits.brute_max_words）")
+        if use_pd:
             resolvers = str(resolve(ctx.settings["dicts"]["resolvers"]))
             ctx.logger.info(f"[subdomain] puredns 爆破 {len(brute_domains)} 个域名 …")
             for d in brute_domains:
@@ -173,19 +241,69 @@ class SubdomainStage(Stage):
         else:
             if not offline:
                 ctx.logger.info("[subdomain] puredns 不可用，回退内置 DNS 爆破（系统解析器）")
-            if wordlist:
+            if words:
+                # 内置那路是逐条 socket 解析，深字典在这里会跑几个小时 —— 单独一道更紧的闸门，
+                # 而且**只抽深档**（精简档那几十条永远全量在场），并把"想吃全量就装 puredns"
+                # 这条出路写在同一行，而不是让人对着进度条猜。
+                fb = cur + _spread(deep, int(limits.get("brute_fallback_max", 3000) or 0),
+                                   ctx.logger, "limits.brute_fallback_max")
+                if len(fb) < len(wordlist):
+                    ctx.logger.info(f"[subdomain] 内置兜底只跑 {len(fb)} 条（并集共 "
+                                    f"{len(wordlist)} 条，其中精简档 {len(cur)} 条全量保留）；"
+                                    "要用全量字典请装 puredns：python cli/client.py --update-tools")
                 ctx.logger.info(
-                    f"[subdomain] 内置 DNS 爆破：{len(brute_domains)} 域名 x {len(wordlist)} 字典 …")
+                    f"[subdomain] 内置 DNS 爆破：{len(brute_domains)} 域名 x {len(fb)} 字典 …"
+                    f"（预估 {len(brute_domains) * len(fb):,} 次 DNS 查询，"
+                    f"并发 limits.brute_workers={int(limits.get('brute_workers', 64))}；"
+                    "收紧：limits.brute_max_domains / limits.brute_fallback_max）")
                 for d in brute_domains:
                     if ctx.stopped():
                         break
+                    # 爆破那一路单独给一档并发（`limits.brute_workers`，默认 64）：它是
+                    # **纯 DNS 等待**，跟着 HTTP 的 max_workers(20) 走的话深档要跑更久
+                    # （实测本机 3000 条 @20 线程 ≈ 53 秒；闸门设 0 吃全量 17.8 万条，
+                    # 即使 128 线程也 45 分钟没跑完 ⇒ 全量只能靠 puredns，它自带并发与限速）。
                     resolved = wildcard.resolve_all(
-                        [f"{s}.{d}" for s in wordlist], workers=workers)
+                        [f"{s}.{d}" for s in fb],
+                        workers=int(limits.get("brute_workers", 64)))
                     kept, dropped = wildcard.filter_hits(resolved, wild.get(d))
                     add_many((h, "dns-brute(fallback)") for h in kept)
                     if dropped:
                         ctx.logger.info(f"[subdomain] {d} 泛解析过滤丢弃 {len(dropped)} 个"
                                         f"（示例：{dropped[0][0]} → {dropped[0][1]}）")
+
+        # ---------- 4b) 组合爆破（续139，对齐灯塔的 alt_dns）----------
+        # 与灯塔逐条比实的 24 个"它有我没有"的域名里，**14 个的标签确实在深档里**（受抽样闸门
+        # 没爆到），另外 **10 个任何字典里都没有** —— `api-contract` / `ws-spot` / `admin-oss` /
+        # `aicoin-http-gateway` 这类是**拼出来**的，灯塔的 `ALT_DNS_CONCURRENT` 干的就是这件事。
+        # 种子＝精简档词 ∪ 本任务已经发现的那些名字的首段标签；只做 `a-b` 这一种形状，
+        # 不做笛卡尔积爆炸；超出 `limits.brute_combo_max` 一律等距抽样（0=关）。
+        combo_max = int(limits.get("brute_combo_max", 4000) or 0)
+        if combo_max and brute_domains and found:
+            seeds = sorted({n.split(".")[0] for n in found if "." in n} | set(cur))
+            seeds = [s for s in seeds if "-" not in s and len(s) <= 12]
+            # 种子夹到 200：两两拼接是 |seeds|² 级别（200 ⇒ 4 万对），不夹的话一个 1236 个名字
+            # 的任务会先在这里生成 150 万个字符串再抽样 —— 那是白烧内存。
+            seeds = seeds[:200]
+            pairs = _spread(list(dict.fromkeys(
+                f"{a}-{b}" for a in seeds for b in seeds if a != b)),
+                combo_max, ctx.logger, "limits.brute_combo_max")
+            if pairs:
+                ctx.logger.info(
+                    f"[subdomain] 组合爆破：{len(seeds)} 个种子两两拼出 {len(pairs)} 个 "
+                    f"`a-b` 前缀（上限 limits.brute_combo_max={combo_max}，0=关；"
+                    f"预估 {len(pairs) * len(brute_domains):,} 次 DNS 查询）…")
+                for d in brute_domains:
+                    if ctx.stopped():
+                        ctx.logger.warning("[subdomain] 任务已请求停止，中止组合爆破")
+                        break
+                    resolved = wildcard.resolve_all(
+                        [f"{p}.{d}" for p in pairs],
+                        workers=int(limits.get("brute_workers", 64)))
+                    kept, dropped = wildcard.filter_hits(resolved, wild.get(d))
+                    add_many((h, "dns-brute(combo)") for h in kept)
+                    if dropped:
+                        ctx.logger.info(f"[subdomain] {d} 组合爆破泛解析丢弃 {len(dropped)} 个")
 
         # ---------- 5) 被动来源的泛解析复核 ----------
         # 被动接口里混入的通配产物（如随机子域被证书签发过）用同一套判据清掉

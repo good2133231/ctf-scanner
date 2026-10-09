@@ -183,6 +183,23 @@ DEFAULTS = {
         "dirscan_max_urls": 20,   # 每任务最多参与目录扫描的站点数
         "vulnscan_max_urls": 100, # 每任务最多参与漏洞扫描的站点数
         "brute_max_domains": 50,  # 每任务最多参与 DNS 爆破的域名数
+        # 字典爆破的词数闸门（续139，喂进深档之后必须有）。`brute_max_words` 管 puredns 那一路的
+        # 深档上限、`brute_fallback_max` 管内置那一路的深档上限 —— **两道都只冲深档，
+        # 精简档（`dicts.subdomains`）任何情况下全量在场**。超出即等距抽样，0=全量。
+        # 想吃下深档全量请装 puredns（`cli/client.py --update-tools --tool puredns`）。
+        "brute_max_words": 0,
+        # 内置 DNS 爆破的并发（纯 DNS 等待，与 HTTP 的 max_workers 分开）。
+        # 实测这台机器：3000 条 @20 线程 ≈ 53 秒；把闸门放到 0（全量 17.8 万条）即便
+        # 128 线程也**跑了 45 分钟没跑完** ⇒ 内置那一路吃深档全量是小时级的，
+        # 真要全量就得装 puredns（它自带高并发与限速）。这一档只是把 3000 条压到几十秒。
+        "brute_workers": 64,
+        # 组合爆破（`a-b` 两两拼，对齐灯塔 alt_dns）每域名的词数上限；0=关。
+        # 深档里也没有的那批名字（`api-contract`/`ws-spot`…）只能靠拼 —— 见 `subdomain.py` 4b。
+        "brute_combo_max": 4000,
+        "brute_fallback_max": 3000,
+        "brute_dict_warn_min": 1000,
+        # 二层遍历每轮最多补探多少个主机（续139，`probe.second_pass`）；攒够就停止 DNS 预筛。
+        "recrawl_max_hosts": 300,
         "wildcard_filter": True,  # 泛解析过滤（关闭后字典爆破会保留通配命中，噪声极大）
         "favicon_md5": True,      # probe 阶段计算 favicon MD5（零请求前置指纹，见 P1-1）
         # 统一并发 / 限速 / 全局预算门控（F2，见 scanner/throttle.py）。
@@ -286,6 +303,9 @@ DEFAULTS = {
         # 判据与"只在明确 NXDOMAIN 才动手、SERVFAIL/超时无条件放行"的方向见 `extdom.zone_is_absent`；
         # 关掉它只是让这些碎片回到库里（页面仍会默认收起未解析的行），不影响任何真资产。
         "drop_absent_zone": True,
+        # 二层遍历总开关（续139）：jsmine 挖出的新域名 + 库里其余子域名，先过 DNS 再补探一轮，
+        # 把"只进表、没变成站点"的那批名字落成站点。关闭只影响站点数量，不影响子域名表。
+        "recrawl": True,
     },
     "dirscan": {
         # 目录/路径发现阶段总开关（与 takeover/portscan/jsmine 同一类"资产面拓展"）。
@@ -536,7 +556,10 @@ DEFAULTS = {
         },
     },
     "dicts": {
-        "subdomains": "config/dicts/subdomains.txt",
+        "subdomains": "config/dicts/subdomains.txt",   # 精简档：人工挑的高价值前缀，永远全量参与
+        # 深档（续139，`tools/import_subdomain_dict.py` 生成/合并）：文件不在就是"没配"，
+        # 阶段会打一行 info 指路；没装 puredns 时它受 `limits.brute_fallback_max` 抽样。
+        "subdomains_deep": "config/dicts/subdomains_deep.txt",
         "resolvers": "config/dicts/resolvers.txt",
         "dirs": "config/dicts/dirs_small.txt",       # 小字典（快，几十条）
         # 浅扫精选字典（dirscan.mode=quick 时**只用这一份**，约 150 条敏感路径，按价值排序）
