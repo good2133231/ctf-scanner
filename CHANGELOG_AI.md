@@ -165,13 +165,19 @@
   3 条 `pending` 不会在重启时被点着。
 - 目录上那 7 个安装/校验日志归拢到 `logs/setup/`（用户："我们不能都集合在工作目录的 log 底下吗，
   这个目录不同步 git 就好了" —— `logs/` 本来就在 `.gitignore` 里）。
+- 本轮的一次性脚本按**确切文件名**删（不用通配符，§6.2 的清理纪律）：`logs/_bc146.py`
+  `_d146.py` `_pre8au.py` `_run8au.py` `_8au_block.py` `_8av_block.py` `_inst146.sh`
+  `_spec146{a,d,f,g,h,i,j,k,l}.py` `_spec146{a,b,c}.json` `_todo146.txt` `_todo147.txt`
+  `_changelog146.txt` `_devflow146f.out`。**留下两样**：`logs/_lpatch.py` 与 `logs/_wpatch.py`
+  （AGENTS §10 末尾把它们当**常备工具**指路，不是一次性脚本），以及四份门禁日志
+  `_gate146{f,g,h,i}.log`（上面那张表引它们作证据，与前几轮的做法一致）。
 
 ### 实测数字
 
 | 项 | 数字 |
 |---|---|
-| 门禁（宿主 `./.venv/bin/python tests/smoke.py`） | **SMOKE PASS / RC=0 / 约 4m43s / 0 AssertionError**（`logs/_gate146g.log`，3989 行，151 条组打印） |
-| 全流程自检 `cli/run_devflow.py` | **13 阶段 11 真跑 / 2 跳过 / 0 FAIL**；**35 向量 19 OK / 0 MISS / 16 N-A**；网络活动 **247** 次 / **11.3s** |
+| 门禁（宿主 `./.venv/bin/python tests/smoke.py`） | **SMOKE PASS / RC=0 / 4m35s / 0 AssertionError**（`logs/_gate146i.log`，3990 行、152 条组打印 —— 与提交的那棵树对应的**最后一次**）。本轮共跑 4 次：第 1 次红在 `tests/smoke.py:19756`（`[8at]③` 被 D 改陈旧，见下面「本轮自己犯的错」①），修完连绿 3 次（`_gate146g/h/i.log`，每落一批改动就重跑一次） |
+| 全流程自检 `cli/run_devflow.py` | **13 阶段 11 真跑 / 2 跳过 / 0 FAIL**；**35 向量 19 OK / 0 MISS / 16 N-A**；网络活动 **247** 次 / **11.5s**（`logs/_devflow146.log`；提交之后又复跑一次，这四个数字逐字复现） |
 | F 的引用同步 | **77 处 / 26 个文件**；`tests/smoke.py` 另手工 10 处 + 收紧 3 条 |
 | F 之后的残留 | 活文件（116 个）里指着仓库根的**可抄命令 0 处**；历史文件里的裸引用**刻意保留** |
 | `cli/run_devflow.py` 的行数与第 96 行 | **132 行**（与 HEAD 逐字同数）、第 96 行仍是 `devflow.save_baseline(...)`（`[8as]` 按索引 95 钉着） |
