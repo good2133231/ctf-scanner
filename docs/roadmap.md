@@ -148,7 +148,7 @@
       **"实测校准"已做（2026-09-25 续44），结论是"暂时不要放开"**：305 个导入 POC 装载期
       `_status` 全 ok、confidence 全 low，但 severity 被导入器平铺成 **high 290 / medium 14 / low 1**
       —— 与 confidence 自相矛盾，且 `skip_severities=[info,low]` 只挡得住 1/305；对授权目标
-      `pengo.pro` 实测 305 个（阶段 1 miss 304 / hit 1，命中项在另 2 台主机上也全中），
+      `targ1.pro` 实测 305 个（阶段 1 miss 304 / hit 1，命中项在另 2 台主机上也全中），
       唯一命中 `Dashboard__blast.yaml` 经复核是**误报**（`word` 的 `condition: or` 分支含通用串
       `"data"` / `"token"`），同构高风险模板 14/305。
       **「不采信导入器 severity」已落地（2026-09-27 续60）**：上面那条"矛盾"的根因是

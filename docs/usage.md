@@ -588,7 +588,7 @@ py -3 tools/poc_review.py --import logs/poc_review.md
 `2`=**找不到浏览器**（跳过，会打印原因）。这一组也挂在 `tests/smoke.py [7x]` 上，
 属**可降级**组：没浏览器就记跳过，但"因别的原因垮掉"仍判失败，**绝不静默当通过**。
 
-**Q：为什么能扫出 `http://www.xiangce.com:9007` 这种非标端口站点？**
+**Q：为什么能扫出 `http://www.targ7.com:9007` 这种非标端口站点？**
 因为 `probe` 阶段现在会**消费 `portscan` 阶段的开放端口**：除 80/443 外，portscan 发现的其他开放端口
 会补出 `https://host:port`、`http://host:port` 两种候选再探测。所以想扫全非标端口，需要**同时打开
 `portscan` 阶段**（默认关，「策略配置 → 资产面拓展」）。只跑默认阶段时 probe 仍只探 80/443。

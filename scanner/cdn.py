@@ -18,9 +18,9 @@ CDN 节点上的端口/目录/漏洞扫描打的是边缘节点，既没结果�
 子串匹配会带来少量误判（`notcloudflare.example.com` 也会命中），但它只用于**展示标签**，
 不参与任何安全判定，宁可标得宽一点也不漏标。缓存：文件只在首次调用时读一次。
 
-**为什么要加 IP 判据**（2026-09-25 续43，实跑 pengo.pro 逮到）：`cdn_cname.txt` 只能认出
+**为什么要加 IP 判据**（2026-09-25 续43，实跑 targ1.pro 逮到）：`cdn_cname.txt` 只能认出
 "CNAME 指向厂商域名"的 CDN；Cloudflare 这类**任播** CDN 常常是 A 记录直接解析到边缘 IP、
-CNAME 链为空（实测 pengo.pro / admin.pengo.pro / app.pengo.pro 三个主机都解析到
+CNAME 链为空（实测 targ1.pro / admin.targ1.pro / app.targ1.pro 三个主机都解析到
 `172.66.40.229` / `172.66.43.27`，CNAME 链为空）。只按 CNAME 判会一律标成"非 CDN"，
 后果是 ① 资产页看不出走 CDN；② `portscan` 会去打 Cloudflare 边缘节点，得出"30 个端口开放"
 这种与本项目标无关的结论（同一时刻手工 TCP connect 22 端口是超时的）。IP 段取自厂商

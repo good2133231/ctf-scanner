@@ -78,9 +78,9 @@ class SubdomainStage(Stage):
         found, sources = set(), {}
 
         # ---------- 0) 自动拓展扫描（`auto_expand`）：目标是子域时补收主域名 ----------
-        # 用户 2026-09-25 的口径：目标是 `aaa.pengo.pro` 时，子域名收集要**连它的主域名
-        # `pengo.pro` 一起收**（否则只能收到 aaa 下面再往下的名字，pengo.pro 的其他子域全漏），
-        # 而 `aaa.pengo.pro` 本身也要**当作一条子域名资产**入库并解析 —— 此前它只进
+        # 用户 2026-09-25 的口径：目标是 `aaa.targ1.pro` 时，子域名收集要**连它的主域名
+        # `targ1.pro` 一起收**（否则只能收到 aaa 下面再往下的名字，targ1.pro 的其他子域全漏），
+        # 而 `aaa.targ1.pro` 本身也要**当作一条子域名资产**入库并解析 —— 此前它只进
         # `hosts.txt` 参与探测，资产表里查不到（"扫过但没记账"，报告里也看不到）。
         # 只在任务级选项 `auto_expand` 打开时做：这是**扩大扫描面**的行为，
         # 不能让既有任务在用户不知情的情况下变样。
@@ -195,7 +195,7 @@ class SubdomainStage(Stage):
                             f"{len(cur)} 条；要补：python tools/import_subdomain_dict.py "
                             "--src <你那份深字典>")
         elif wordlist and len(wordlist) < int(limits.get("brute_dict_warn_min", 1000)):
-            # 与灯塔逐条比对时（2026-10-08，weex.com）有一类差距跟探测器无关：它记为站点、
+            # 与灯塔逐条比对时（2026-10-08，targ2.com）有一类差距跟探测器无关：它记为站点、
             # 我们**连域名都没生成**的主机 15 台，全在字典规模上 —— 仓库发的是精简版，
             # 它发的是 17.8 万条。不喊这一句，用户就会把"子域名少"读成"收集器不行"。
             ctx.logger.warning(

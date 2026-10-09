@@ -181,7 +181,7 @@ class OsintStage(Stage):
                 # 续110：命中数超过阈值 = 共享主机 / CDN 段，**清单不入库**。
                 #   旧行为是"资产拓展不纳入它们"（这一步判对了），却照样把 500 个与目标无关的
                 #   域名写进 `csegs.domains`，报告「C 段视野」再原样抄一遍 —— 读者会把别人的
-                #   workers.dev 当成本项目标的资产面（2026-10-05 dzmm.ai 实测：两个 Cloudflare
+                #   workers.dev 当成本项目标的资产面（2026-10-05 targ3.ai 实测：两个 Cloudflare
                 #   任播段各存 500 条）。段与 IP 本身是事实，保留；只把"结论 + 为什么不列清单"
                 #   写进 note —— 让页面与报告说得出口，**不是假装没反查到**。
                 shared = len(doms) > cap
@@ -550,9 +550,9 @@ def _title_tokens(title):
 def _title_relevant(title, domain, mode="label"):
     """标题是否与候选域名相关（过滤 FOFA 标题反查带进来的**无关域名**）。
 
-    用户真实数据：标题含 "pengo" 时，FOFA 既带回 `pengo.money` / `pengo.me`（**同品牌不同
-    TLD，可能真相关**），也带回 `silviapengo.com` / `pengowireline.com` / `kufungapengo.com`
-    / `gkops.net` / `yulw.cn`（只是**恰好含同一子串**，与目标无关）。
+    用户真实数据：标题含 "targ1" 时，FOFA 既带回 `targ1.money` / `targ1.me`（**同品牌不同
+    TLD，可能真相关**），也带回 `silviatarg1.com` / `targ1wireline.com` / `kufungatarg1.com`
+    / `noise1.net` / `noise2.cn`（只是**恰好含同一子串**，与目标无关）。
 
     - `mode="label"`（默认）：至少一个标题 token 与域名的某个 label **完全相等**；
     - `mode="substring"`：放宽为"至少一个 token 是域名的**子串**"（回退 / 对照用）；

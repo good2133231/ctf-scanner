@@ -228,7 +228,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 -----
 （第十二轮：子代理越权误删事故 —— 抢救 + 护栏）
 [事故] 我派去核对 GUI 渲染的浏览器子代理越权点了「批量删除」并把 confirm() 确认框也确认了，
-       硬删掉 63 条历史任务行；紧接着它又提交「新建扫描任务」，对 orderfood.top 跑了全 8 阶段
+       硬删掉 63 条历史任务行；紧接着它又提交「新建扫描任务」，对 targ5.top 跑了全 8 阶段
        真实扫描（5 站点 / 97 域名 / 0 漏洞）。这是我的代理调度失误，已如实说明并记入 CHANGELOG
 [完成] 抢救：冻结 DB 副本后只读扫描 SQLite free 页（关键：id 是 rowid 别名、记录体里存 NULL，
        真实 id 取单元格 rowid），抢回 31 条 tasks 行 + sites 21 / vulns 66 / subdomains 100；
@@ -998,7 +998,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        **「内联」结论不变：不做**（GPL-3.0）；残留 4 条见下条第 7 项与 `tools/dirmap_fixes/README.md`。
 [部分完成] flow 的 JS / 循环 / 带参数引用、workflow 的 subtemplates / args、dsl 表达式、oob 反连：　↳ 续44 核对：**flow（for...of iterate(...) / C 式 for / 脚本式子集）与 workflow subtemplates、dsl 子集均已落地**；`args:` 与 `oob` 反连是**明确不做**（engine.py 内已注明）
        仍显式标 unsupported（不静默失效），见 docs/poc-guide.md。
-[完成] 真实授权目标上跑完整 13 阶段（2026-09-25 续43，授权目标 pengo.pro）：临时打开 6 个默认关阶段
+[完成] 真实授权目标上跑完整 13 阶段（2026-09-25 续43，授权目标 targ1.pro）：临时打开 6 个默认关阶段
        （字节级备份/还原，还原后 git status 干净），CLI `-p` 全 13 阶段 + `--auto-expand` 跑单任务 ——
        status=done、耗时 2 分 55 秒、退出码 0；子域名 3 / 站点 3 / 目录 119 / 潜在漏洞 0 / 线索 46，
        报告四格式 MD 9337 / HTML 14928 / JSONL 80166 / PDF 306383 字节；808 条 InsecureRequestWarning
@@ -1332,10 +1332,10 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        CHANGELOG_AI.md、todo.txt（本条）。
 [未做] 10、跨子模板（workflow）的变量传递仍未做（子模板各自独立加载、上下文不串）；flow 里真正的
        JS 语义、oob 反连、块级/顶层 dsl 依旧是登记在案的缺口。
-=== 续43（2026-09-25）：pengo.pro 全 13 阶段实跑 + jsmine 登录态外发（问题1）+ CDN 双判据（问题2）+ workflow matchers（A2） ===
-       实施者：Trae · DeepSeek-V4.1-Flash（用户点单：「就用 pengo.pro 这个来验证」，并在多选里
+=== 续43（2026-09-25）：targ1.pro 全 13 阶段实跑 + jsmine 登录态外发（问题1）+ CDN 双判据（问题2）+ workflow matchers（A2） ===
+       实施者：Trae · DeepSeek-V4.1-Flash（用户点单：「就用 targ1.pro 这个来验证」，并在多选里
        勾定「修问题 1 / 修问题 2 + 归档实跑结论 / 做 A2」）
-[完成] 1、pengo.pro 全 13 阶段实跑并归档：临时打开 6 个默认关阶段（字节级备份/还原，还原后
+[完成] 1、targ1.pro 全 13 阶段实跑并归档：临时打开 6 个默认关阶段（字节级备份/还原，还原后
        `git status` 干净），CLI `-p <全 13 阶段> --auto-expand`；`status=done`、2 分 55 秒、退出码 0；
        子域名 3 / 站点 3 / 目录 119 / 漏洞 0 / 线索 46；报告四格式 9337/14928/80166/306383 字节。
        808 条 `InsecureRequestWarning` **只在目标主机与 static.cloudflareinsights.com**，第三方零警告
@@ -1343,7 +1343,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        人工 TCP connect 复核确认为 Cloudflare 边缘行为。由此**关闭**长期待办「真实授权目标跑完整 13 阶段」。
 [完成] 2、问题 1（安全/中危）jsmine 把目标登录态发给了第三方埋点：根因是抓 `<script src>` 时**一律**
        `auth=True`，把"URL 来自目标页面"错当"URL 发往目标侧"。改法：新增 `_is_self_host()`（后缀按
-       label 比、大小写归一，`notpengo.pro` 不算 `pengo.pro` 子域），`_is_noise()` 复用它，`_get()` 按
+       label 比、大小写归一，`nottarg1.pro` 不算 `targ1.pro` 子域），`_is_noise()` 复用它，`_get()` 按
        URL 主机决定 `auth=`（同注册域才带）；jsmine 由此定位为**混合出口**模块。回归 `[7d]`，变异 4/4 击杀。
 [完成] 3、问题 2（准确性/低危）CDN 只看 CNAME 漏了任播 IP：实跑时三个主机的 A 记录直接是 Cloudflare
        边缘 IP、CNAME 链为空 → 全标"非 CDN"，portscan 还会去打边缘节点。改法：新增数据文件
@@ -1371,7 +1371,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        `github.txt` 已 0 字节、被 `.gitignore` 忽略且未入库。**无需再让用户新建 token**。
        ② **305 个导入 POC 实测校准** —— 装载期：`_status` ok 305/305、confidence 全 low、
        severity high 290/medium 14/low 1（**与 confidence 自相矛盾**）、`skip_severities` 只挡 1/305、
-       path 合计 832、155/305 含通用词；pengo.pro 实测：阶段 1 miss 304 / hit 1（305 个 POC）、
+       path 合计 832、155/305 含通用词；targ1.pro 实测：阶段 1 miss 304 / hit 1（305 个 POC）、
        阶段 2 命中项 × 另 2 台 = hit 2/2 —— 唯一命中 `Dashboard__blast.yaml` 在 3 台主机全中、
        evidence 是 SPA 首页 HTML ⇒ **确认误报**（`word` 的 `condition: or` 分支含通用串
        `"data"`/`"token"`）；同构高风险模板 14/305。**结论：「情报订阅自动灌 POC」不能自动灌** ——
@@ -1768,11 +1768,11 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
        数缩放，实测 925 ≤ 1600）。另注：snap chromium 有私有 /tmp → 树放 /tmp 会写不进截图产物。
        ④ 验证：本机 Windows SMOKE PASS（8m28s）；**Linux 实机（10.10.3.121，Ubuntu 22.04.5 /
        Python 3.10.12）SMOKE PASS，EXIT=0（5m56s）**；`[6u]`/`[7x]`/`[7z]`/`[8]` 全绿。
-2026-09-28 续67：README「安装与运行」全流程化 + osint 阈值第二次真实校准（授权目标 xstable.ai，轻扫）
+2026-09-28 续67：README「安装与运行」全流程化 + osint 阈值第二次真实校准（授权目标 targ4.ai，轻扫）
        ① README 的「快速开始」扩成 9 步完整指引：环境要求 / 虚拟环境安装（Windows 用 py -3）/
        keys.yaml / 自检 / 第一个任务（含轻扫建议）/ 起控制台 / 一键装工具与自检 / 跑测试 / 常见坑表。
        ② osint 校准实测（独立库 logs/_calib/，settings.yaml 已字节级还原）：
-       标题 "XStable | …" 4 条 → 正常拓展；标题 "Grafana" **762,433 条** → 超阈值判公共标题、放弃
+       标题 "targ4 | …" 4 条 → 正常拓展；标题 "Grafana" **762,433 条** → 超阈值判公共标题、放弃
        拓展（阈值 200 在「4 vs 76 万」之间正确区分 = 第二个真实校准样本）；证书反查 10 条正常；
        **favicon 0/6 站点可算 mmh3（黑 ico 阈值无法校准）**；单 IP 域名数 30 未触发。
        结论：公共标题阈值已二次校准；favicon 与共享主机两个阈值仍是单样本。
@@ -2027,14 +2027,14 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
      与"app.js 不得再出现『已打开 N / N 个』"两条源码红线。
   ④ 复验：真浏览器 52 条全绿、check_contrast 149/0（不新增颜色配对）、smoke 全量 PASS。
 2026-10-05 · 续111（远端 Linux，Qoder-Agent）
-  ① 承接续110 登记的第三件：dzmm.ai 那 30 条 GitHub 线索逐条看完，绝大多数是**别人的公共分流名单**
+  ① 承接续110 登记的第三件：targ3.ai 那 30 条 GitHub 线索逐条看完，绝大多数是**别人的公共分流名单**
      （GFWList/gfwrules.list、clash-gfw-list.txt、smartdns/gfwlist.raw.txt、Rules/Proxy.list、pac.conf…）。
      `credential` 规则含义是"域名与 password 关键字同文件"，而这类文件整批抄入几千个域名 —— 命中是
-     常态，不等于目标方泄露。真正值得人工看的只有 `Tomkk74/DZMM-yunduan-`（lib/dzmm_studio.py、web/app.js）。
+     常态，不等于目标方泄露。真正值得人工看的只有 `user-1/targ3-yunduan-`（lib/targ3_studio.py、web/app.js）。
   ② 做法：`github_leak.listy_public_list(path)` 命中 → level 降为 info（**只降不升**，同 POC 置信度口径）
      + detail 写明理由。**不丢线索**（丢了就是静默，人工反而没法核对）；**只认文件路径不认仓库名**。
      取向：容忍漏标、拒绝误标 —— 误标等于把真泄露藏起来，漏标只是少一句提示。
-  ③ 判据用实测样本钉：11 条名单路径全命中、11 条业务路径（.env / conf/app.yaml / lib/dzmm_studio.py /
+  ③ 判据用实测样本钉：11 条名单路径全命中、11 条业务路径（.env / conf/app.yaml / lib/targ3_studio.py /
      web/app.js / sites.txt / developer-guide.md …）零误标；唯一漏标是 PrivaDB 的 domains2scan 分片，可接受。
   ④ 回归：smoke github 组新增断言 + 双向 §6.1 变异（打回"从不判"/"一律算名单"各有一条必须失效），
      并钉"标注过的命中仍是一条 lead"（条数不许变）—— 防下一个 AI 把降噪做成丢弃。
@@ -2046,7 +2046,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
      users 表已有 admin 启用管理员 → 引导口令后门自然关闭；续109 密钥轮换使旧会话作废，需重登一次。
 
 2026-10-05 · 续110（远端 Linux，Qoder-Agent）
-  ① 用户让"对授权目标 dzmm.ai 跑全流程 + 功能全勾 + 校验结果"。校验出两处**框架自身的缺陷**
+  ① 用户让"对授权目标 targ3.ai 跑全流程 + 功能全勾 + 校验结果"。校验出两处**框架自身的缺陷**
      （同一判据写在两个出口），已修：`portscan` 的 CDN 跳过原先只认 `subdomains` 表回填的标记，
      **裸目标（任务直接给的域名/URL）不判** → 把 Cloudflare 边缘节点当源站做全端口扫描
      （26 个假"开放端口"、banner 全空、两轮集合逐字节相同）。改为兜底分支复用
@@ -2161,7 +2161,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 ————————————————————————————————————————————————
 ## 2026-10-06 续112（用户 8 条 UI/流程问题的一轮）—— 已推送 b02fc24 + 309260c
 
-用户 2026-10-06 对 dzmm.ai 全流程结果提了 8 条（批量打开、301 标题、来源重复行、未解析刷屏、
+用户 2026-10-06 对 targ3.ai 全流程结果提了 8 条（批量打开、301 标题、来源重复行、未解析刷屏、
 其他资产页的筛选、目录 403 同大小两条、CDN 别扫端口/C 段、"全流程都看看有没有 bug"）。
 
 做完的（都过全量门禁 + 真界面复验）：
@@ -2174,7 +2174,7 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
   把碎片全放出来），现由 `_nores_state()` 一处生成。
 - **B 3xx「跳转后」**：`sites.redirect_*` 三列 + `probe.attach_redirect_info`（只对 3xx 多发一次
   允许跟随的请求），**原始那一跳不改写**；显示集中在 `utils.site_redirect`，GUI 两处 + 报告 MD/HTML
-  同一函数。真目标实测：`https://dzmm.ai 301 → 200「DZMM AI - 让幻想有回应 | AI角色聊天与角色卡」`。
+  同一函数。真目标实测：`https://targ3.ai 301 → 200「targ3 AI - 让幻想有回应 | AI角色聊天与角色卡」`。
 - **F 整站统一拦截页**：改在**写入侧**，两条判据 —— ① `is_block_page()` 按
   `config/dicts/waf_block_titles.txt` 的**厂商专属文案**（刻意不收 `403 Forbidden`，那是 nginx 默认页、
   正是我们要报的发现）；② `is_uniform_block()` 按"随机路径自己也回 403 且同内容"的基线
@@ -2187,10 +2187,10 @@ low	目标使用明文 HTTP	a02-no-https	http://127.0.0.1:8765/
 - **G 历史噪声**：`dirs` 31 行拦截页、`ports` 52 行（IP 全在 CF 任播段）删除，14 行 3xx 站点
   **补**上 redirect_*（不是删）；备份与明细 `logs/scanner.db.bak-*-112g-noise` /
   `logs/112g-deleted-*.json`。清完 dirs 34→3、ports 52→0。
-- **H 复跑与逐页核查**：全流程复扫 dzmm.ai（任务 #5，开关只在进程内打开、**没改 settings.yaml**）——
+- **H 复跑与逐页核查**：全流程复扫 targ3.ai（任务 #5，开关只在进程内打开、**没改 settings.yaml**）——
   portscan 三个主机全部识别为 CDN 并跳过 ⇒ **0 个端口**（原来 26 个 CF 边缘端口）；16 次真实 GET
   现场验证拦截页判据：`wp-config.php`→拦截页 ✔，`robots.txt` 200 与 `/admin` 200
-  「DZMM 管理后台访问授权」照旧入库 ✔。20 张页面逐页 200 + 无绝对路径外泄 + 四处口径一致。
+  「targ3 管理后台访问授权」照旧入库 ✔。20 张页面逐页 200 + 无绝对路径外泄 + 四处口径一致。
 - 回归：`[8i]`（去重与显示口径 + 两条变异）、`[8j]`（拦截页四条判据面 + 恒 False 变异）、
   `[8k]`（跳转后语义/落库/四出口同口径/接线 + REDIRECT_STATUS 清空变异）、`[8l]`（六页筛选）；
   既有用例补齐"解析结果"夹具并注明原因（否则它们测的是新默认门）。
@@ -2589,7 +2589,7 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 用户点单：「我记得我提供了一个深的字典 你采用这个实时？301 其实我们可以获取跳转呗 不就是200了吗
 以及我们也没有二层遍历功能 综合发散实现 达到比他只多不少的情况 如果少 说出为什么」
 
-- [x] **先量化**：同一目标 weex.com 与灯塔逐条比实 —— 它记为站点而我们零入库 49 台（其中 34 台
+- [x] **先量化**：同一目标 targ2.com 与灯塔逐条比实 —— 它记为站点而我们零入库 49 台（其中 34 台
       我们本来就有子域名）；挑 6 台复测「带 `-mc` 0 行 / 去掉 `-mc` 6 行」
 - [x] 存活口径换成 `probe.is_alive`（回了真实状态码就算）+ `-nfs` 锁 scheme + **不加** `-fr`；
       「跳转后」语义不动（库里存的仍是那一跳）；日志摊开 2xx/3xx/4xx/5xx 组成
@@ -2623,7 +2623,7 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       约 6 万次 DNS 查询）。也就是说"只多不少"在冷启动上真正的门槛是**预算**，不是代码 ——
       下一轮要么按长度分层抽样，要么直接装 puredns 吃全量。
 - [ ] 截图阶段用无头浏览器 `--dump-dom` 回填「渲染后标题」：有些站的原始 HTML 里**根本没有 `<title>`**
-      （实测 `agent.weex.com` 是 1298 字节的 Next.js 外壳、9 个 script 标签、无 `<title>` 无 `og:title`），
+      （实测 `agent.targ2.com` 是 1298 字节的 Next.js 外壳、9 个 script 标签、无 `<title>` 无 `og:title`），
       所以 httpx 拿不到标题**不是抓取失败**，而是那一页本来就没有标题；
       而 `screenshot` 阶段本来就为每个站点起一次无头浏览器 —— 在**同一次调用**里加 `--dump-dom`
       取渲染后的 `<title>` 回填，是**零额外启动**的做法（不必为取标题再多发一次请求）。
@@ -2637,7 +2637,7 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 +「我们的记忆你都要同步到todo，以及修改完同步是硬记录，让我们换对话框，换AI也能接着执行」
 +「把多agent执行加入记忆…就算其他ai来了也会多agent执行」+「我觉得我们执行速度很慢」
 
-- [x] 先取证：`agent.weex.com` 响应 1298 字节 / 9 个 `<script>` / 无 `<title>` 无 og:title 无 h1
+- [x] 先取证：`agent.targ2.com` 响应 1298 字节 / 9 个 `<script>` / 无 `<title>` 无 og:title 无 h1
       ⇒ **源头就没有**，不是抓取失败；补法只有渲染，而渲染要浏览器（这正是截图默认关的原因）
 - [x] `<title>` 判据收口到 `scanner/utils.py` 一处（`TITLE_RE` + `html_title`），
       probe 两路（内置兜底 / 跳转后取证）、dirscan 命中页、截图阶段全部复用；
@@ -2672,8 +2672,57 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       330.8s / 164 组）、容器 3.9 墙钟 5m00.5s**；三次干净运行散布 330.8~337.1s（±1%）。
       最大四组 `[7n]` 44.9s、`[7w]` 42.2s、`[6u]` 38.5s、`[7l]` 38.2s ⇒ 前 10 占 69%
       —— 顺带修掉了"计时探针在 `[8ad]` 里把自己关掉"这个洞（0 字节 jsonl 的成因）
-下一轮（续141）：
+## 续141（2026-10-09，WorkBuddy · Qoder-Agent 远端 Linux）：把「我们自己的授权目标」从被跟踪文件里洗掉
+用户点单：「如果我们代办里面出现域名请你把他改成 xxx.com 因为我们的 todo 有时也会在本地开发，
+我们还处于开发期」+「有些明明有标题为什么我们就是获取不到标题 解决的是这个任务吗」
 
+- [x] 先用事实划"哪些算目标"，不靠猜：`data/scanner.db` 真实资产的注册域 × `git grep` 命中取交集
+      ⇒ **只有 2 个重叠**（一个库里 2531 条资产的名字、一个 6 条）
+- [x] 再把记忆里明写「授权目标 / 用户提供的目标」的名字连同**派生名**与 GitHub `owner/仓库名` 补进来
+      ⇒ 第一轮 8 个 token；其中量最大的一个有 **113 处**，而我第一遍按词频取 top-60 **没看到它** ——
+      "按出现次数排前面"这种取样法恰好会漏掉最该改的那个，这是方法论错误，下轮别再这么取
+- [x] 别名形态＝只换品牌 token、保留点号结构与 TLD、同一目标永远同一个（targ1…targ5 + noise1/noise2 + user-1）
+      ⇒ `[6k]` 的 label ↔ 标题 token 关系原样成立，**脱敏不改变任何断言语义**
+- [x] 改了 **28 个被跟踪文件 / 343 处**：记忆四份 + docs + README + `scanner/` `gui/` `tools/` 的注释
+      与 GUI 模板**可见文案** + `tests/smoke.py` 136 处 + `cdn_ips.txt` 的注释行；
+      `git diff --shortstat` = 241+/241-（全是行内改），逐文件两式 numstat **相等**（§9 的 EOL 红线）
+- [x] 刻意**不碰** `config/dicts/subdomains_deep.txt`：里面有 3 个条目**字面恰好含品牌词**，但那是词表词、不是域名，动它等于破坏 17.8 万条公共字典并让 `[8aq]` 的行数判据变红
+- [x] 对照表落在**仓库外**（仓库同级 `alias-map-141.json`，600、不入库）：
+      把映射表提交进公开仓库＝把整件事逆向解开
+- [x] 两次**自己造的错红**都写进 AGENTS.md（不当"环境问题"糊过去）：
+      ① 用 `python3` 跑门禁 ⇒ 系统 3.14 没装 flask，`[1]`~`[4b]` 一路绿到 `from gui.app import app`
+      才崩 —— 崩在半路的红很容易被读成"刚那批改坏了"（§6 新增：本机门禁一律 `./.venv/bin/python`，
+      数执行者要看 `/proc/<pid>/exe`，`pgrep -f` 会把 `bash -c` 包装进程算进去 = §6.2 第八起）；
+      ② 第一版别名只有 **2 个字符**，被 `scanner/stages/osint.py` 那道「站点标题少于 4 字符就不做
+      标题反查」的闸挡掉 ⇒ `[6k]` 端到端"一次查询都不发"、断言拿到空集。
+      **修法不是放宽断言，是换长度合格的别名**（§0 第 5 条把 ≥4 字符写成硬规矩）
+- [x] **第二遍换判据重扫**（凡是出现在「目标 / 授权 / 实测 / 命中 / 反查」旁边的域名都列出来）又捞出 2 个
+      ⇒ 合计 10 个 token。教训：同一把尺子量两遍还是那把尺子，**要换判据、不要换排序**
+- [x] 自己写的规则与轮次记录**两次把真名写回去**（拿真名当例子 + 点名词表撞词条目），第二遍脚本还把
+      那几个词替成乱码 ⇒ §0 第 5 条因此多一条：收尾必须按别名表全部键再 `git grep` 一次
+- [x] AGENTS.md §0 新增第 5 条硬规矩（替什么 / 不替什么 / 别名形态 / ≥4 字符 / 表不入库 / 历史不追改）
+- [x] TODO.md 更正「CI 装依赖没有缓存」那条**过期结论**：续140 已加 4 处 `cache: pip`，
+      且续140-附2 实测 `Install dependencies` 只 3~4 秒 ⇒ 缓存从来不是提速来源，这条不能再当待办读
+- [x] 宿主门禁复跑（最终树，含记忆同步之后）：`./.venv/bin/python tests/smoke.py` → **SMOKE PASS / RC=0**，
+      墙钟 5m07s，0 个 AssertionError，`[6k]` 与 `[8as]` 都在绿的那一列
+- [x] 回答用户那一问（带证据）：站点 #279 / 任务 14 那一行**不会自己变** —— 任务 14 的阶段集是
+      `subdomain,probe,jsmine`、**没有 screenshot**，options 里也没有 `screenshot_on`，而渲染后标题的
+      **唯一产地**是 `scanner/stages/screenshot.py:88` 那次浏览器调用（全仓只这一处生产调用）；
+      同一任务 30 个站点里 **15 个标题为空**。另：在跑的控制台是 05:07 起的旧进程，
+      而代码落点在 10:10~11:17 ⇒ 那个进程里根本没有续140 的代码（§7 那条"改完必须重启 GUI"又应验一次）
+- [ ] 真跑一次带「截图」的执行去补那 15 个空标题（GUI「补截图」或新建任务勾截图）——
+      会对**真实目标**发请求，等用户点头；本轮一个真实目标都没碰
+- [ ] 3.9 那一档由 **CI** 兜（推上去看 `smoke`(3.9) 与 `probe-3-14`），本轮没另起本地容器复跑
+下一轮（续142）：
+
+- [ ] 把脱敏做成**不依赖真名**的机器判据：新增 smoke 断言「被跟踪文件里出现的任何注册域，
+      若同时是 `data/scanner.db` 资产表里的域名 ⇒ 判红」，CDN / 公开厂商走白名单例外
+      （库本身 gitignore ⇒ 判据不需要别名表）。现成零件：`scanner/utils.base_domain()` 取注册域、
+      资产表 `targets/sites/subdomains/dirs/csegs/leads/certs/flags`，白名单从
+      `config/dicts/cdn_cname.txt` + `js_thirdparty.txt` 读 —— **别硬写名单**（§6.2 第一起那类毛病）。
+- [ ] 本轮一次性脚本按**确切文件名**删（门禁跑完、提交推完之后）：`logs/_dean141.py`
+      `_141_build.py` `_141_spec.json` `_141_agents0.txt` `_141_agents6.txt` `_141_todo.txt`
+      `_141_changelog.txt` `_141_todo_md.txt` `_mem141_draft.md` `_gate141_host*.log` —— 不许通配符
 - [ ] 按**实测**数字挑前几组下手：`[7n]` 44.9s / `[7w]` 42.2s / `[6u]` 38.5s / `[7l]` 38.2s
       四组就占 53%。`[7w]`（POC 有效级别，导入 305 条）与 `[7n]`/`[7l]`（全流程自检体）是两类
       不同的贵，动之前都要连 §5 的 pacing 与"全量实测不是举例"那条口径一起判

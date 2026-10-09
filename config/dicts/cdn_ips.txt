@@ -1,8 +1,8 @@
 # CDN 厂商**任播 IP 段**名单（`CIDR | 厂商`），与 `cdn_cname.txt`（CNAME 后缀）互补。
 #
-# 为什么需要它（2026-09-25 续43，实跑 pengo.pro 逮到）：`cdn_cname.txt` 只认"从 CNAME 指向
+# 为什么需要它（2026-09-25 续43，实跑 targ1.pro 逮到）：`cdn_cname.txt` 只认"从 CNAME 指向
 # 厂商域名"的那种 CDN；Cloudflare 这类**任播** CDN 常常是 A 记录直接解析到边缘 IP、CNAME 链
-# 为空 —— 实测 pengo.pro / admin.pengo.pro / app.pengo.pro 都解析到 172.66.40.229 /
+# 为空 —— 实测 targ1.pro / admin.targ1.pro / app.targ1.pro 都解析到 172.66.40.229 /
 # 172.66.43.27，只按 CNAME 判会一律标成"非 CDN"，后果是
 #   ① 资产页看不出走 CDN；② portscan 会去打 Cloudflare 边缘节点，得出"30 个端口开放"这种
 #      与本项目标毫无关系的结论（同一时刻手工 TCP connect 22 端口是超时的）。

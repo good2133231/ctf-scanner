@@ -9,7 +9,7 @@
    把 `ip / cname / cdn / ip_note` 回填到资产行上；`ip_note` 会记下"为什么没有 IP"
    （`nxdomain` 即域名不存在），页面上不必再靠人工点「解析」去猜。
 2. `promote_owned()` —— 拓展出来的域名若**归属本项目**（注册域命中任务目标的注册域，
-   例如目标 `pengo.pro` 拓展出 `aaa.pengo.pro`），就"追加"一条**自身子域名**行
+   例如目标 `targ1.pro` 拓展出 `aaa.targ1.pro`），就"追加"一条**自身子域名**行
    （source = `promote:<原来源>`）：
    - 该域名随即在「子域名资产」页按正常子域对待（参与 probe/dirscan 的候选资产口径一致）；
    - 拓展页里原来那一行因为"该域名已作为自身子域名存在"被 `db.OVERLAP_EXT_WHERE`
@@ -38,7 +38,7 @@ GROUP_LIGHT_COLS = ("id", "domain", "ip")
 
 
 def base_of(host):
-    """注册域（归一化后取 `utils.base_domain`）：`aaa.pengo.pro` → `pengo.pro`。"""
+    """注册域（归一化后取 `utils.base_domain`）：`aaa.targ1.pro` → `targ1.pro`。"""
     return base_domain(str(host or "").strip().lower().rstrip("."))
 
 
@@ -61,8 +61,8 @@ def is_owned(host, bases):
 def task_bases(task_id, targets_text=None):
     """任务目标 → 归属判定的"主域名集合"。
 
-    同时收下**目标本身**与它的注册域：目标是 `aaa.pengo.pro` 时，`pengo.pro` 与
-    `aaa.pengo.pro` 都算本项目（`base_domain()` 粗切失手时前者也能兜住）。
+    同时收下**目标本身**与它的注册域：目标是 `aaa.targ1.pro` 时，`targ1.pro` 与
+    `aaa.targ1.pro` 都算本项目（`base_domain()` 粗切失手时前者也能兜住）。
     """
     if targets_text is None:
         task = db.get_task(int(task_id))

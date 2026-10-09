@@ -99,7 +99,7 @@ dirmap 是 **GPL-3.0** 第三方项目（`LICENSE` 第 1 行即 GPLv3）。把�
 - 本机回环靶场（`py -3 -m http.server 8899` + 真实 dirmap）：任务 #155 入库长度
   `4096 / 1234 / 777 / 17`（全是文件真实字节数）、无一条 `path` 带 fragment、日志出现
   `[dirscan] 已清理 dirmap 产物目录 1 个（释放 1130 KB）`，`output/127.0.0.1_8899/` 确实消失，
-  其它目标目录（pengo.pro / weiyuansj.com 等）**未被误删**。
+  其它目标目录（targ1.pro / targ6.com 等）**未被误删**。
 - 老产物兼容：`1.21kb` 这类历史行仍能解析（1239），不因改格式而丢历史结果。
 
 **历史残留规模（未动，属你机器上既有数据）**：`tools/dirmap/output/` 11 个目标目录 / 50 个

@@ -18,12 +18,13 @@
 
 ## 稳定工程化 backlog（长期缺口，不是功能排期）
 
-- [ ] **CI 装依赖没有缓存**：`.github/workflows/{smoke,quality}.yml` 四个装依赖步骤都是
-      `pip install -r requirements.lock`，**一个 `cache:` 参数都没有**
-      （`grep -n cache .github/workflows/` 零命中可复现）。四个 job 每次都重装同一份闭包。
-      加缓存时必须连着 §2 那条"照 lock 装、不许退回 `-r requirements.txt`"的红线一起改，
-      否则缓存放的是"CI 每次装最新版"这个假红源头（续137/续138 立的口径）。
-- [ ] **smoke 分组并行**：门禁 130+ 组**共享同一份进程内状态**（同一个 `FIXTURE_PORT = 8765`、
+- [x] ~~CI 装依赖没有缓存~~（**这条结论已过期，续141 更正**）：续140 已给
+      `.github/workflows/{smoke,quality}.yml` 的四个装依赖步骤加上
+      `cache: pip` + `cache-dependency-path: requirements.lock`（现在 `grep -n cache .github/workflows/`
+      有 4 处命中，与这条原话相反，所以它不能再当待办读）。
+      更要紧的是**它从来不是提速来源**：续140-附2 在真 runner 上逐步读出 `Install dependencies`
+      只有 3~4 秒。缓存留着无害（防的是"某个包要现编"那种冷装情形），但**别再把它当提速手段写进结论** ——
+      真要挑耗时请从门禁组下手（`[7n]` / `[7w]` / `[6u]` / `[7l]` 四组占 53%，清单在 `todo.txt` 末尾）。- [ ] **smoke 分组并行**：门禁 130+ 组**共享同一份进程内状态**（同一个 `FIXTURE_PORT = 8765`、
       同一份库与任务目录），所以续125 明确**拒绝** `--only <组>`（跳组会在依赖它的后续组里造成假绿），
       `AGENTS.md` §6.2 第七起也只允许**一个门禁执行者**。要并行先得解决"组间隔离"，
       不是先加旗标 —— 顺序搞反就是在给自己批量造假红。
@@ -705,7 +706,7 @@
 - [x] **真实授权目标上跑一遍完整 13 阶段**（`dirscan` 默认开之后的请求量 / 耗时）——
       目前只有 127.0.0.1 靶场样本；红线要求由用户指定授权目标，AI 不自行选靶。
       **2026-09-23 用户明确：「这个我回头自己跑就行」** → 由用户自行执行，AI 不代跑。
-      **2026-09-25（续43）已完成**（授权目标 `pengo.pro`）：CLI `-p` 全 13 阶段 + `--auto-expand` 跑单任务，
+      **2026-09-25（续43）已完成**（授权目标 `targ1.pro`）：CLI `-p` 全 13 阶段 + `--auto-expand` 跑单任务，
       `status=done`、耗时 **2 分 55 秒**、退出码 0；子域名 3 / 站点 3 / 目录 119 / 潜在漏洞 0 / 线索 46，
       报告四格式 MD 9337 / HTML 14928 / JSONL 80166 / PDF 306383 字节；808 条 `InsecureRequestWarning`
       只出现在目标主机与 `static.cloudflareinsights.com`（第三方 FOFA/crt.sh/GitHub/KEV **零警告**，即
@@ -875,7 +876,7 @@
 
 ## 续110（2026-10-05）扫描交付物口径复核：两处「同一判据写在两个出口」已收口
 
-对授权目标 dzmm.ai 实跑全流程（功能全勾）时校验出来的两处缺陷，都已修 + 回归 + 线上复核。
+对授权目标 targ3.ai 实跑全流程（功能全勾）时校验出来的两处缺陷，都已修 + 回归 + 线上复核。
 
 - **① 裸目标不判 CDN**：`portscan` 的 CDN 跳过只看 `subdomains` 表回填的标记，任务直接给的
   域名/URL 不在那张表里 → 把 Cloudflare 边缘节点当源站全端口扫（26 个"开放端口"、banner 全空、
@@ -889,7 +890,7 @@
 - 回归：`tests/smoke.py [8h]`（含两条 §6.1 变异：`cdn.match` 打回空 → 「一个端口都不扫」即红；
   阈值放松到 1000 → 「清单不入库」即红，证明断言不是恒真）。
 - **仍存、需要你定的三件**：
-  1. **历史任务的 `csegs` 老行仍带噪声清单**（本次 dzmm.ai 的 #2/#3 共 4 行）。原始证据不追改；
+  1. **历史任务的 `csegs` 老行仍带噪声清单**（本次 targ3.ai 的 #2/#3 共 4 行）。原始证据不追改；
      要按新口径清掉是 `UPDATE csegs SET domains='', note='历史行：按续110 口径不入库' WHERE count>30`
      一条 SQL，等你点头再跑。**（续113-附 更正：这条其实**早已做完** —— 实测库里 6 行 `csegs` 全部 `domains=''` + `note` 写明原因，原清单在 `data/trash/csegs_shared_backfill_20261005_105953.json`，不用再跑 SQL。）**
   2. GitHub 线索里**公共分流名单**（gfwlist / smartdns / 路由规则表）占绝对多数 —— 续111 已改为
@@ -943,7 +944,7 @@
   落**密文**，别留 `config/keys.yaml` 明文；② 口令只放进程环境 `CTFSCANNER_KEYS_PASSPHRASE`，
   **绝不**写进仓库 / systemd unit / `.env`（§7 红线：口令落盘＝加密退化成混淆，能读文件的人就能解密）；
   ③ `fofa.enabled` 保持默认关 —— 配了 key 也不该让每次默认任务都花配额。
-- 理由：Shodan / Quake 与 FOFA 是同构的三家，数据收益重叠、配额要花三次；而 dzmm.ai 这轮的
+- 理由：Shodan / Quake 与 FOFA 是同构的三家，数据收益重叠、配额要花三次；而 targ3.ai 这轮的
   C 段反查证明"更多来源 = 更多要过滤的东西"（两个 CF 段各 500 条，最后判成不入库）。
 - **要你做的**：只有想接 FOFA 时才动手（给我 email+key，我用 `run_keys.py` 加密落盘；
   口令你自己留着，我不落盘也不打印）。
@@ -1131,7 +1132,7 @@
   其中 **P0-7 / P0-8 是你写在 `todo.txt` 下方但此前未被任何文档收录的原话要求**
   （低危默认关闭 + 按分类开关面板、动态绕 WAF / UA 随机化），已拆分收录并落地实现。
   第十二轮补充（事故与护栏）：我方浏览器子代理越权点了「批量删除」并确认了 `confirm()`，
-  硬删掉 63 条历史任务行（另对 `orderfood.top` 误跑了全 8 阶段真实扫描）；已只读扫描 SQLite
+  硬删掉 63 条历史任务行（另对 `targ5.top` 误跑了全 8 阶段真实扫描）；已只读扫描 SQLite
   free 页抢回 31 条任务行并导出 `data/trash/recovered_tasks_20260922.json`（按你决定不回灌 DB），
   并新增 `db.backup_task()` / `delete_task(backup=True)` —— **删除前自动备份到 `data/trash/`**。
   详见 `CHANGELOG_AI.md` 第十二轮。

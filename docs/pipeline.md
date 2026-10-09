@@ -237,7 +237,7 @@
   **连查询都不发**；② 查完发现命中数 > `fofa.title_threshold`（默认 200）判为"公共标题"，放弃拓展。
   **③ 归属相关性过滤**（`fofa.title_match`，续22）：把标题按非字母数字切 token（去停用词与纯数字），
   默认 `label` 档要求**至少一个 token 与候选域名的某个 label 完全相等**才入库 —— 挡掉"标题里恰好含
-  同一子串"的无关域名（标题含 `pengo` 时保留 `pengo.money`，丢弃 `silviapengo.com`/`pengowireline.com`）；
+  同一子串"的无关域名（标题含 `targ1` 时保留 `targ1.money`，丢弃 `silviatarg1.com`/`targ1wireline.com`）；
   设 `substring` 可回退到旧的子串匹配。切不出 token 的标题（如纯中文）**fail-open 保留**。
   来源 `osint:fofa-title`（页面显示「FOFA·标题反查」）。
 - 产物：SQLite `csegs` 表（任务详情「C 段」页签、报告「C 段视野」小节；
@@ -353,7 +353,7 @@
 
 - **整站统一拦截页不计为目录发现**（续112-F，两条独立判据，缺一条就漏一类）：
   ① `is_block_page()` —— 标题命中 `config/dicts/waf_block_titles.txt` 里的**厂商专属文案**
-  （实测 dzmm.ai 走 Cloudflare 时 `wp-config.php` / `wp-login.php` / `xmlrpc.php` 与 `.bak/.zip/.old…`
+  （实测 targ3.ai 走 Cloudflare 时 `wp-config.php` / `wp-login.php` / `xmlrpc.php` 与 `.bak/.zip/.old…`
   派生名**各留一行** `403 / 4910 / Attention Required! | Cloudflare`，几十个路径就是几十条假发现；
   CF 页面里带 ray id，两次请求正文 md5 不同、长度相同，所以按文案判比按正文哈希可靠）。
   清单**刻意不收** `403 Forbidden` / `Access Denied` 这类通用词：nginx 默认 403 页标题就是它，

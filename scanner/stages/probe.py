@@ -30,7 +30,7 @@ def is_alive(status):
     """这台主机算不算「存活站点」：**只要服务端回了一个真实 HTTP 状态码就算**。
 
     取代旧版白名单 `ALLOW_STATUS = {200, 301, 302, 403, 404}`。改动理由不是口径偏好，是实测：
-    2026-10-08 对 weex.com 与灯塔逐条比对，灯塔记为站点、我们一条都没入库的主机有 **49 台**
+    2026-10-08 对 targ2.com 与灯塔逐条比对，灯塔记为站点、我们一条都没入库的主机有 **49 台**
     （其中 **34 台**我们本来就有子域名、另外 15 台连域名都没生成，那部分差在字典），
     它们在 `-mc` 下**整行被过滤掉**（不是标成死站，是根本不出现在 httpx 输出里）。挑 6 台实测：
     带 `-mc` 收上来 0 行，去掉 `-mc` 收上来 6 行，状态码是 `301`/`521`/`502`/`400` ——
@@ -124,7 +124,7 @@ def probe_candidates(ctx, candidates):
         out_json = ctx.workdir / ("httpx_out_r2.json" if _r2 else "httpx_out.json")
         # `-mc` 去掉，存活口径统一到 `is_alive`（见那里的实测数据）。
         # `-nfs` 加上（= 只按输入里写明的 scheme 探，不替我们回退到另一个 scheme）：
-        # 默认行为下 `http://h` 那一行最终变成 `https://h` 的落地状态（实测 ws-spot.weex.com：
+        # 默认行为下 `http://h` 那一行最终变成 `https://h` 的落地状态（实测 ws-spot.targ2.com：
         # 默认 → `https` + 521，加 `-nfs` → `http` + 301），**原始那一跳就再也看不见**，
         # 而每个主机的 https/http 两条候选本来都在我们自己的候选列表里，回退是多余的。
         # 锁住 scheme 后 301 行才会稳定出现，续112-B 的「跳转后」取证才有输入。
@@ -268,7 +268,7 @@ def register_sites(ctx, sites, round2=False):
         except (TypeError, ValueError):
             k = 0
         _cls[k] = _cls.get(k, 0) + 1
-    # 「有站点却没有标题」是用户会盯着问的事（2026-10-09 实测 agent.weex.com 原始 HTML 无
+    # 「有站点却没有标题」是用户会盯着问的事（2026-10-09 实测 agent.targ2.com 原始 HTML 无
     # `<title>`，标题由 JS 注入）。在这里就说清"不是抓取失败"以及"在哪儿能补到"，
     # 而不是留一排 `-` 让人以为漏扫了。
     _nt = sum(1 for s in uniq if not str(s.get("title") or "").strip())

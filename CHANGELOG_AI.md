@@ -6,11 +6,85 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续141 真实目标域名脱敏：28 个文件 343 处，别名表刻意不入库
+
+实施者：WorkBuddy · Qoder-Agent（远端 Linux，宿主 `.venv` Python 3.14）。
+用户点单：「如果我们代办里面出现域名请你把他改成 xxx.com 因为我们的 todo 有时也会在本地开发，
+我们还处于开发期」。选定口径（同一次问答里定的）：**范围＝全部被跟踪文件**、**形态＝稳定别名**、
+**历史＝只往前洗不追改**。
+
+### 边界是用事实定的，不是"看见域名就改"
+1. 权威来源是**本机库**：把 `data/scanner.db` 里真实资产（tasks.targets + 九张资产表）的注册域取出来，
+   与 `git grep` 的命中取交集 ⇒ **只有 2 个注册域重叠**。这一步用 `scanner/utils.base_domain()`，
+   不自己写切分。
+2. 再把记忆里明写「授权目标 / 用户提供的目标」的名字补进来（这些不在本机库里，是另一台机/更早的任务），
+   连同派生名（子域、连字符变体、同名不同 TLD、标题里那个品牌词）与 GitHub 的 `owner/仓库名`
+   ⇒ 第一轮 **8 个 token**。
+4. **第二遍换了个扫法才捞出漏的两个**：第一遍是「按出现次数排 top-60」，第二遍改成
+   「凡是出现在『目标 / 授权 / 实测 / 命中 / 反查』这类词旁边的域名都列出来」—— 于是捞出 2 个
+   （登记为 `targ6` / `targ7`），合计 **10 个 token**。教训：**换判据扫，不要换个排序扫**
+   （同一把尺子量两遍还是那把尺子）。
+3. **一个方法论错误记下来**：我第一遍是按"出现次数排 top-60"列候选，结果**量最大的那个（113 处）
+   恰好掉在第 60 名之外**，差点整批漏掉。按词频取样会系统性漏掉"出现在少数文件里但每处很多遍"的名字 ——
+   改成按**文件分布**看一遍才算数。
+
+### 改了什么
+- **别名规则**：只换品牌 token，**保留点号结构与 TLD**，同一目标永远同一个别名、全文一致
+  （`targ1`…`targ5` + 反查噪声族 `noise1`/`noise2` + GitHub owner `user-1`）。
+  这样做的理由不是好看：`[6k]` 那组断言的语义就长在"label 与标题 token 是否**完全相等**"上 ——
+  `targ1.money` 的 label `targ1` == token `targ1` ⇒ 仍判"同品牌应保留"；
+  `silviatarg1.com` 的 label 是整段 `silviatarg1` ≠ `targ1` ⇒ 仍判"无关域名应丢弃"。
+  换成统一一个 `xxx.com` 就会把这些关系糊成一团（多个不同目标挤在同一名字下）。
+- **28 个被跟踪文件 / 343 处**：`AGENTS.md` `TODO.md` `todo.txt` `CHANGELOG_AI.md` `README.md`、
+  `docs/` 四份、`scanner/` 与 `gui/` 的注释与 docstring、**GUI 模板里用户看得见的文案**、
+  `tests/smoke.py` 136 处、`config/dicts/cdn_ips.txt` 的注释行、`tools/` 两份。
+  `git diff --shortstat` = **241 insertions / 241 deletions**（全是行内改），
+  逐文件 `git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` **相等**（§9 的 EOL 红线）。
+- **刻意跳过 `config/dicts/subdomains_deep.txt`**：那 17.8 万条公共词表里有 3 个条目**字面上恰好
+  含某些品牌词**，但它们是**词不是域名** —— 动它就是破坏字典 + 让 `[8aq]` 的行数判据变红。
+- **对照表不入库**：映射放在**仓库外**（仓库同级 `alias-map-141.json`，`chmod 600`）。
+  把映射表提交进公开仓库等于把整件事逆向解开；表丢了可以从库里资产域反查。
+- `AGENTS.md` §0 新增**第 5 条硬规矩**（替什么 / 不替什么 / 别名形态 / ≥4 字符 / 表不入库 / 历史不追改），
+  §6 加一条本机实操。
+- `TODO.md` 更正一条**过期结论**：它写着「CI 装依赖没有缓存…`grep -n cache .github/workflows/` 零命中可复现」，
+  而续140 已加 4 处 `cache: pip` + `cache-dependency-path: requirements.lock`；更要紧的是续140-附2
+  实测 `Install dependencies` 只 **3~4 秒** ⇒ 缓存从来不是提速来源，这条不能再当待办读。
+
+### 三次自己造的错红 / 错绿（都不是产品缺陷，但都长得像）
+1. **跑错解释器**：`python3` 是系统 3.14、**没装依赖**，于是 `[1]`~`[4b]` 一路绿到
+   `tests/smoke.py` 的 `from gui.app import app` 才 `ModuleNotFoundError: No module named 'flask'`。
+   崩在半路的红很容易被读成"刚那批改坏了"。本机门禁一律 `./.venv/bin/python`。
+   顺带把 §6.2 第八起那条数进程的办法用实了：`pgrep -f tests/smoke.py` 会把包着命令的 `bash -c`
+   一起算进来，要看 `/proc/<pid>/exe` 是不是真 python。
+2. **别名太短**：第一版取 2 个字符，被 `scanner/stages/osint.py` 那道「站点标题少于 4 个字符
+   就不做标题反查」的闸直接挡在门外 ⇒ `[6k]` 端到端**一次查询都不发**、断言拿到空集 `set()`，
+   看着像功能坏了。**放宽断言是错的修法**；换成 ≥4 字符的别名后 `[6k]` 原样通过。
+   这条已经写进 §0 第 5 条当硬规矩（另：`_title_tokens()` 还会丢 `isdigit()` 的 token）。
+
+3. **我自己的规则文本两次把真名写回去**：第一版 §0 第 5 条拿真名当「脱敏前」的例子；同一轮另一处
+   点名词表里恰好撞词的那几个条目，于是第二遍脚本把它们替成了乱码（`…lf1` 那种形状）。两次都不是
+   代码问题，是**记录这件事的那段话本身**泄的 —— 所以 §0 第 5 条多了一条：收尾必须按别名表全部键
+   再 `git grep` 一次，**只看 diff 不算数**。
+
+### 顺带答清用户那一问（站点 #279 那一行为什么还是空）
+不是"续140 没解决"，是**这一行没有输入**：任务 14 的阶段集是 `subdomain,probe,jsmine`、
+没有 `screenshot`，options 里也没有 `screenshot_on`，而渲染后标题的**唯一产地**是
+`scanner/stages/screenshot.py:88`（全仓只这一处生产调用 `db.set_site_titles`）。
+同一任务 30 个站点里 15 个标题为空。另：在跑的控制台进程是 05:07 起的，代码落点在 10:10~11:17
+—— 那个进程里根本没有续140 的代码（§7 那条"改完 GUI 必须重启"又应验一次）。
+本轮**没有**对真实目标发任何请求：补那 15 个空标题要真起浏览器，等用户点头。
+
+### 验收
+`./.venv/bin/python tests/smoke.py` → **SMOKE PASS / RC=0**，墙钟 **5m13s**（记忆同步之后再跑一次，`logs/_gate141_final.log`），0 个 AssertionError；
+`[6k]`（label↔token 相关性）与 `[8as]`（记忆同步机器判据，本轮号已落到 141）都在绿的那一列；
+`[8ar]` 端到端也真补到了 JS 注入的标题（夹具 `document.title` 与 `_WANT8AR` 两侧一起改，不是歪打正着）。
+3.9 与 3.14 两头由 CI 的 `smoke` / `probe-3-14` 复跑。
+
 ## 续140 「渲染后标题」：SPA 站点没标题不是抓取失败 + 记忆同步/多 agent 写成硬规矩 + CI 提速
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。用户点单（三条都在这一轮）：
 「有些明明有标题为什么我们就是获取不到标题 我们能在等待时间把这个解决了吗」（附任务 14 的站点
-#279 `https://agent.weex.com/` 200，`cloudfront nextjs react AmazonS3`，标题那一列是 `-`）；
+#279 `https://agent.targ2.com/` 200，`cloudfront nextjs react AmazonS3`，标题那一列是 `-`）；
 「我们的记忆你都要同步到todo，以及修改完同步是硬记录，让我们换对话框，换AI也能接着执行」；
 「我们能不能调用多agent执行，把多agent执行加入记忆…就算其他ai来了也会多agent执行」；
 「我觉得我们执行速度很慢」。
@@ -91,7 +165,7 @@
 
 ### 实测数字（可核对）
 - 端到端：本机 `/usr/bin/google-chrome` 对"原始 HTML 无 `<title>`、JS 注入标题"的本地夹具
-  **真补回** `Agent Weex Console · 后台`，单站点 ~1.0 秒。
+  **真补回** `Agent targ2 Console · 后台`，单站点 ~1.0 秒。
   ⚠️ 夹具必须带 `<meta charset>`：第一次没带时 Chrome 按 windows-1252 猜编码、`--dump-dom`
   把 `·` 吐成 `Â·`（**不是我们的解码 bug** —— 实测 `run_cmd` 这边 preferred encoding 就是 UTF-8；
   真实站点都在 head 里声明 charset）。这台 Linux 机器与 CI runner 都有 Chrome，
@@ -149,7 +223,7 @@
 ### 〇、先把"少"量出来（逐条比对，不是感觉）
 
 数据源：本机灯塔（`ARL-plus-docker` 容器）**只读**查 MongoDB ＋ 我们 `data/scanner.db` 任务 8
-（同一目标 `weex.com`）。灯塔 DOM 68 / SITE 66；我们 subdomains 1309 / sites 19。
+（同一目标 `targ2.com`）。灯塔 DOM 68 / SITE 66；我们 subdomains 1309 / sites 19。
 灯塔那 66 个站点里 **301 占 36、403 占 15，真 200 只有 6 个**（它自己还标了 55 个"无效"），
 我们却是"回得好看才记" —— 两边根本不是同一个口径，先说清这条，才谈得上"只多不少"。
 
@@ -166,7 +240,7 @@
    存活。`None`/`0`/非数字不算，所以 DNS 不可达、拒连、超时照旧丢掉（实测死主机在 httpx `-silent` 下
    就是 0 行，去掉白名单不会把垃圾放进来）。
 2. httpx argv：**删 `-mc`**；**加 `-nfs`**；**不加 `-fr`**。`-nfs` 不是风格问题：默认行为下
-   `http://ws-spot.weex.com` 那一行会变成 `https://… + 521`，**原始那一跳（301）再也看不见**，
+   `http://ws-spot.targ2.com` 那一行会变成 `https://… + 521`，**原始那一跳（301）再也看不见**，
    而 https/http 两条候选本来就在我们自己的候选列表里，httpx 替我们回退纯属多余。加 `-nfs` 后
    同一候选稳定回 `http://… + 301 + location`。不加 `-fr` 是因为跟随跳转＝用落地页状态覆盖第一跳，
    正是续112-B 刻意避免的谎报 ——「跳转后」仍走 `attach_redirect_info`（库里存的仍是那一跳，
@@ -248,7 +322,7 @@
 所以 4b 补的是组合爆破：种子＝精简档词 ∪ 本任务已经发现名字的首段标签，两两拼成 `a-b`，
 上限 `limits.brute_combo_max`（默认 4000 词/域名，0=关，超出等距抽样），来源标记
 `dns-brute(combo)`，泛解析仍走同一套 `wildcard.filter_hits` 过滤。种子只取**本任务自己发现的
-实测结论（任务 #15，同一目标 `weex.com`，默认闸门）：组合这一路真跑起来了 —— 200 个种子两两拼出
+实测结论（任务 #15，同一目标 `targ2.com`，默认闸门）：组合这一路真跑起来了 —— 200 个种子两两拼出
 4000 个 `a-b` 前缀、58 秒查完，但**新增 0 个域名**。解剖后原因说清：种子只能来自"已经发现的名字"，
 而灯塔独有的那批组合名里 `spot`/`oss`/`contract` 这些部件我们本来就没发现过（24 个缺失名里只有 6 个
 的部件凑得齐，其中 `api-contract` 还被 4000 的抽样上限冲掉了 —— 词对空间是 39,800，默认只覆盖 10%）。
@@ -303,9 +377,9 @@
 - 两处**外推**改成实测：① 深档全量在内置那一路 128 线程跑了 45 分钟没跑完（原先写的
   「64 线程 ≈ 16 分钟」是外推，文档/注释/回归文案都按实测改写）；② 组合爆破真跑一轮
   （任务 #15）：4000 词对 58 秒查完、新增 0 个域名，解剖结论见 §三b —— 不把它写成已解决。
-- 真目标复测（`weex.com`，`subdomain→probe→jsmine`）：见下一节的对照表。
+- 真目标复测（`targ2.com`，`subdomain→probe→jsmine`）：见下一节的对照表。
 
-### 七、本轮实测的对照结果（同一目标 `weex.com`）
+### 七、本轮实测的对照结果（同一目标 `targ2.com`）
 
 对 1263 个名字（我们任务 8 的 1309 条子域名 ∪ 灯塔的 68 条域名，交集去重）跑一次 `probe`：
 
@@ -318,7 +392,7 @@
 | 带「跳转后」取证 | 无此概念 | 56 台（`301 → 落地状态`） |
 
 状态组成：`2xx=4 3xx=69 4xx=30 5xx=31`（日志原样摊开，不当"134 个都能打开"）。
-**另一张表：冷启动**（只给一个 `weex.com`，跑 `subdomain→probe→jsmine`，任务 #12/#15）——
+**另一张表：冷启动**（只给一个 `targ2.com`，跑 `subdomain→probe→jsmine`，任务 #12/#15）——
 这张表才是用户实际会看到的样子，也因此更难看点：
 
 | | 灯塔 | 我们（冷启动） |
@@ -2172,7 +2246,7 @@ PSL 形态闸门，只因末位 label 恰好是合法公共后缀；纯语法判
 ### 现场与门禁
 
 - 真目标验证：`chat.floating.open` 的注册域 `floating.open` → `zone_state=absent` ✔ 被拦在库外；
-  `mgw.dzmm.io` / `beta.dzmm.io` 的注册域 `dzmm.io` → `exists` ✔ 照旧入库。
+  `mgw.targ3.io` / `beta.targ3.io` 的注册域 `targ3.io` → `exists` ✔ 照旧入库。
 - 历史数据：`logs/_clean113.py` 先整库备份（`logs/scanner.db.bak-<时间>-113-fragments`，用 sqlite
   backup API 而不是 copy —— WAL 下 copy 可能漏掉 -wal 里未合并的页），再逐任务调**生产函数**
   `extdom.drop_absent_zones`。结果：22 条候选 → **清掉 18 条**，**保留 4 条**
@@ -2198,11 +2272,11 @@ PSL 形态闸门，只因末位 label 恰好是合法公共后缀；纯语法判
 
 ## 2026-10-06（续112-B/C/D/E/F/G）资产视图与两处写入侧噪声
 
-用户 2026-10-06 对 dzmm.ai 结果提的四条 + 顺带查出的同源缺陷，一组做完：**同一域名一行、默认只列解析成功的域名、3xx 的「跳转后」、整站统一拦截页不再计为目录发现、资产页补「按任务筛选」**，并把三类"按现在的流水线根本不会写进来"的历史行按新口径清掉（先整库备份）。
+用户 2026-10-06 对 targ3.ai 结果提的四条 + 顺带查出的同源缺陷，一组做完：**同一域名一行、默认只列解析成功的域名、3xx 的「跳转后」、整站统一拦截页不再计为目录发现、资产页补「按任务筛选」**，并把三类"按现在的流水线根本不会写进来"的历史行按新口径清掉（先整库备份）。
 
 ### C 同一域名只留一行，其余来源写成「另见于」
 
-`dzmm.ai` 与 `www.dzmm.ai` 在「子域名」里各两到三行（来源 `js:mine` / `promote:js:mine` / `subfinder`），看着像两三个资产。判据只在 `scanner/db.py` 一处：
+`targ3.ai` 与 `www.targ3.ai` 在「子域名」里各两到三行（来源 `js:mine` / `promote:js:mine` / `subfinder`），看着像两三个资产。判据只在 `scanner/db.py` 一处：
 
 - `SOURCE_RANK_CASE`：被动/爆破(10) > 目标自带(20) > 被动(30) > 归属追加(40) > JS(50) > 外部情报(60) > 其他(99)；
 - `RESOLVED_WHERE = "ip <> ''"`；`other_sources_by_domain()` 一次查回"这个域名还被谁找到过"；
@@ -2235,7 +2309,7 @@ JS 碎片里二十几个 `chat.floating.open` 这种"点号连接的成员访问
 - `is_block_page(status, title)` + 新数据文件 `config/dicts/waf_block_titles.txt`（11 条厂商专属标题文案）。清单**刻意不收** `403 Forbidden` / `Access Denied`：nginx 默认 403 页标题就是它，而"敏感文件存在但被服务器拒绝"正是要报的发现。
 - `is_uniform_block(digest, length, blk_md5s, blk_sizes)`：软 404 基线现在按状态分开记账（四元组），随机路径**自己也回 403 且同内容**时才有证据；没样本一律不滤。
 - 两类计数分别攒进 `waf` / `blocked`，本轮结束按站点写一句"几个路径回同一张页 ⇒ 不计入目录发现"——不静默少结果。
-- 走过的弯路记下来：先做成"同站点 (状态,大小,标题) 重复 ≥N 条整组丢掉"，N=3 漏掉 dzmm.ai 的两条一组、N=2 会吃掉 `/admin` 与 `/admin/` 回同一页这种真实重复 —— 按计数判是在猜，按厂商文案判才有依据。`_scan` 结尾的日志按站点写，`[8j] ⑦⑧` 把两面都钉住。
+- 走过的弯路记下来：先做成"同站点 (状态,大小,标题) 重复 ≥N 条整组丢掉"，N=3 漏掉 targ3.ai 的两条一组、N=2 会吃掉 `/admin` 与 `/admin/` 回同一页这种真实重复 —— 按计数判是在猜，按厂商文案判才有依据。`_scan` 结尾的日志按站点写，`[8j] ⑦⑧` 把两面都钉住。
 
 ### E 资产页「按任务筛选」（与漏洞页同口径）
 
@@ -2250,8 +2324,8 @@ JS 碎片里二十几个 `chat.floating.open` 这种"点号连接的成员访问
 
 ### 真目标复验与门禁
 
-- 全流程复扫 dzmm.ai（任务 #5，进程内开全部开关、不改 `config/settings.yaml`）：`portscan` 三个主机全部识别为 CDN 并跳过 → **0 个端口**（原来 26 个）；`https://dzmm.ai` 的 301 行拿到 `redirect_status=200 / 标题「DZMM AI - 让幻想有回应 | AI角色聊天与角色卡」`；子域名/拓展域名视图按新口径一行一来源。
-- 拦截页判据的**现场验证**（16 次真实 GET）：`wp-config.php` → `403/4910/Attention Required! | Cloudflare` 判为拦截页 ✔；`robots.txt` 200、`/admin` 200「DZMM 管理后台访问授权」照旧入库 ✔。
+- 全流程复扫 targ3.ai（任务 #5，进程内开全部开关、不改 `config/settings.yaml`）：`portscan` 三个主机全部识别为 CDN 并跳过 → **0 个端口**（原来 26 个）；`https://targ3.ai` 的 301 行拿到 `redirect_status=200 / 标题「targ3 AI - 让幻想有回应 | AI角色聊天与角色卡」`；子域名/拓展域名视图按新口径一行一来源。
+- 拦截页判据的**现场验证**（16 次真实 GET）：`wp-config.php` → `403/4910/Attention Required! | Cloudflare` 判为拦截页 ✔；`robots.txt` 200、`/admin` 200「targ3 管理后台访问授权」照旧入库 ✔。
 - 回归：新增 `[8i]`（去重与显示口径 5 条 + 两条变异）、`[8j] ⑦⑧`（拦截页两面）、`[8k]`（跳转后语义 + 库里落列 + 四出口同口径 + 接线 + 变异）、`[8l]`（六页筛选 + 链接带状态 + 空值 + 白名单）；既有用例补齐"解析结果"夹具并注明原因。
 - `tests/smoke.py` 全量 **SMOKE PASS / RC=0**（含 `browser_e2e` 真浏览器 **39 条**交互断言，续113 按脚本自报数更正 —— 这里原先写的「52 条」是凭印象抄的，与 `[7x]` 打印的实际条数不符），`tools/check_contrast.py` 149 项 0 失败，`git diff --numstat` 与 `--ignore-cr-at-eol` 逐文件一致。
 
@@ -2300,18 +2374,18 @@ JS 碎片里二十几个 `chat.floating.open` 这种"点号连接的成员访问
 
 > 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux / Python 3.14.4；用 续110 那轮实跑抓到的真实路径当判据样本）。
 
-- 承 续110 登记的第三件：对 dzmm.ai 的 30 条 github 线索逐条看，绝大多数是**别人的分流名单**
+- 承 续110 登记的第三件：对 targ3.ai 的 30 条 github 线索逐条看，绝大多数是**别人的分流名单**
   （`GFWList/gfwrules.list`、`Loukky/gfwlist-by-loukky` 的 `list.txt`、`clash-gfw-list.txt`、
   `smartdns/gfwlist.raw.txt`、`Rules/Proxy.list`、`pac.conf`）。`credential` 规则的含义是"域名与
   password 关键字同文件"，而这类文件整批抄入几千个域名 —— 命中是常态，**不等于目标方泄露**。
-  真正值得人工看的只有 `Tomkk74/DZMM-yunduan-`（`lib/dzmm_studio.py` / `web/app.js`，命名与目标对得上）。
+  真正值得人工看的只有 `user-1/targ3-yunduan-`（`lib/targ3_studio.py` / `web/app.js`，命名与目标对得上）。
 - 做法（`scanner/github_leak.py`）：新增 `listy_public_list(path)` + `_LISTY_PATH_RE`；命中就把 level
   降为 `info`（**只降不升**，同 §7 POC 置信度口径）并在 `detail` 追加一句理由。
   **两条刻意的边界**：① **不丢线索** —— 丢了就是"静默"，人工想核对"这域名有没有被公开抄过"反而看不见；
   ② **只认文件路径、不认仓库名** —— 仓库名靠不住（同名仓库可能是真业务代码）。
   代价不对称决定了判据方向：**容忍漏标、拒绝误标**（漏标只是少一句提示；误标等于把真泄露降成 info）。
 - 判据样本用实测数据钉死，不是拍的：11 条名单类路径全部命中、11 条业务路径（含 `.env`、
-  `conf/app.yaml`、`lib/dzmm_studio.py`、`web/app.js`、`sites.txt`、`references/developer-guide.md`）
+  `conf/app.yaml`、`lib/targ3_studio.py`、`web/app.js`、`sites.txt`、`references/developer-guide.md`）
   **零误标**。唯一漏标的是 `PrivaDB/.../domains2scan/chunk_0168`（一个"扫描别人域名"的工具仓库）——
   按上面的取向，漏标可接受。
 - 回归：smoke 的 github 组新增一组断言 + **双向 §6.1 变异**（打回"从不判"→ 名单类断言与"降级写在
@@ -2320,12 +2394,12 @@ JS 碎片里二十几个 `chat.floating.open` 这种"点号连接的成员访问
 - 踩到两处（记下来省得再来一次）：① 按行 splice 时把锚点行又写进新内容 → `def build_lead` 被复制成
   两行（SyntaxError）；② 正则跨行拼接时忘了每行都要闭合引号。两处都由 `py_compile` 当场抓到，
   与 §9「按行改文件要核对替换区间」是同一条教训的第三种形态。
-- 收尾（同轮）：① **历史 `csegs` 行按新口径追改一次** —— 今天交付给用户的两份报告里那 500 条 CF 段噪声就是这些行抄出来的；改前把 4 行原值整份备份到 `data/trash/csegs_shared_backfill_*.json`（与 `db.backup_task()` 同一思路：动手前先留唯一救命稻草），改后 `count>30` 的行 `domains` 全空 + `note` 写明原因与备份位置，并用 `report.generate/generate_html/generate_jsonl` 重生成 `logs/scan_dzmm.*` 与 `logs/scan_dzmm2.*`（复核：`workers.dev` 零残留）。阈值取 `iprecon.max_domains_per_ip` 的配置值，不是硬写 30。② GUI 按规矩重启（改完 GUI/模板必须重启，pid 226654），登录页出码、`/captcha.png` 真图、引导口令不带码仍被拒；本轮起 `users` 表已有 1 个启用管理员（用户自己建的 admin）→ **引导口令那条迁移后门已自然关闭**。会话因密钥轮换（续109）全部作废，需重新登录一次。
+- 收尾（同轮）：① **历史 `csegs` 行按新口径追改一次** —— 今天交付给用户的两份报告里那 500 条 CF 段噪声就是这些行抄出来的；改前把 4 行原值整份备份到 `data/trash/csegs_shared_backfill_*.json`（与 `db.backup_task()` 同一思路：动手前先留唯一救命稻草），改后 `count>30` 的行 `domains` 全空 + `note` 写明原因与备份位置，并用 `report.generate/generate_html/generate_jsonl` 重生成 `logs/scan_targ3.*` 与 `logs/scan_targ32.*`（复核：`workers.dev` 零残留）。阈值取 `iprecon.max_domains_per_ip` 的配置值，不是硬写 30。② GUI 按规矩重启（改完 GUI/模板必须重启，pid 226654），登录页出码、`/captcha.png` 真图、引导口令不带码仍被拒；本轮起 `users` 表已有 1 个启用管理员（用户自己建的 admin）→ **引导口令那条迁移后门已自然关闭**。会话因密钥轮换（续109）全部作废，需重新登录一次。
 - 复验：`tests/smoke.py` 全量 SMOKE PASS / RC=0。
 
 ## 2026-10-05 —— 续110：**两处"同一判据写在两个出口"**收口（CDN 覆盖裸目标 / C 段共享主机结论）
 
-> 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux / Python 3.14.4；对授权目标 dzmm.ai 实跑全流程时校验出来的两处缺陷）。
+> 实施者：**WorkBuddy · Qoder-Agent**（远端 Linux / Python 3.14.4；对授权目标 targ3.ai 实跑全流程时校验出来的两处缺陷）。
 
 - 起因：用户要求"对授权目标跑全流程 + 功能全勾 + 校验结果"。跑完逐项校验，抓出两处**框架自己
   说过的话没做到**，都不是目标的问题而是判据写了两份：
@@ -2333,7 +2407,7 @@ JS 碎片里二十几个 `chat.floating.open` 这种"点号连接的成员访问
   （`net` 由 `subdomains` 表回填），而**任务直接给的那个域名/URL 压根不在 `subdomains` 表里**。
   后果实测：把 Cloudflare 边缘节点当源站做全端口扫描 —— 26 个"开放端口" = CF 支持的 13 个端口
   × 2 个任播 IP（104.21.68.96 / 172.67.192.192）、banner 全空、**两轮集合逐字节相同**（稳定地错）；
-  同一次扫描里 `studio/www.dzmm.ai` 因为在表里被正确跳过 —— 一份判据两条出口，漏的那条正好是最常用的入口。
+  同一次扫描里 `studio/www.targ3.ai` 因为在表里被正确跳过 —— 一份判据两条出口，漏的那条正好是最常用的入口。
   修法：兜底分支复用 subdomain 那一套 `dnsq.resolve_detail` + `cdn.match`（CNAME 后缀与 IP 段**双判据**），
   命中就跳过并在日志点名；**`dnsq` 解不出时退回系统解析器**（加判定不许把原本扫得到的主机挡掉 ——
   只靠 /etc/hosts、内网 DNS、IPv6-only 的机器是真实存在的）。
@@ -3514,9 +3588,9 @@ smoke 新增 `[8b]`（3 组断言，**每组含 §6.1 变异证伪**）：
 **本机 Windows 与 Linux 实机（Ubuntu 22.04.5 / Python 3.10.12）均 SMOKE PASS。**
 
 
-## 2026-09-28 —— 续67：README「安装与运行」全流程化 + osint 阈值第二次真实校准（xstable.ai）
+## 2026-09-28 —— 续67：README「安装与运行」全流程化 + osint 阈值第二次真实校准（targ4.ai）
 
-> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。授权目标由用户提供：**`xstable.ai`**（授权轻扫，
+> 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**。授权目标由用户提供：**`targ4.ai`**（授权轻扫，
 > 端口/目录只过一遍 —— 未到投放阶段）。
 
 ### 1. README「安装与运行」全流程化
@@ -3527,15 +3601,15 @@ smoke 新增 `[8b]`（3 组断言，**每组含 §6.1 变异证伪**）：
 一键装工具与全流程自检 / 跑测试（约 9 分钟、不污染真实库）/ **常见坑表**
 （`py -3` / 不热重载 / 端口占用 / 浅扫 vs 深扫 / FOFA 默认关）。
 
-### 2. osint 阈值第二次真实校准（授权目标 `xstable.ai`，轻扫）
+### 2. osint 阈值第二次真实校准（授权目标 `targ4.ai`，轻扫）
 
 实测（**独立库** `logs/_calib/`，跑完 `settings.yaml` 已**字节级还原**，仓库无任何开关变更）：
 
 | 路径 | 实测 | 对照阈值 200 |
 |---|---|---|
-| 标题反查 `title="XStable \| Online Precious Metals…"` | **4 条** | 正常拓展 ✓ |
+| 标题反查 `title="targ4 \| Online Precious Metals…"` | **4 条** | 正常拓展 ✓ |
 | 标题反查 `title="Grafana"` | **762,433 条** | **超阈值 → 判公共标题、放弃拓展** ✓ |
-| 证书反查 `cert="xstable.ai"` | **10 条** | 正常拓展 ✓ |
+| 证书反查 `cert="targ4.ai"` | **10 条** | 正常拓展 ✓ |
 | favicon（黑 ico） | **0/6 站点可算 mmh3** | ❌ 无法校准（目标站没有可算的 favicon） |
 | 单 IP 域名数 30 | C 段 6 个 /24、命中 7 个 IP | ❌ 未触发该场景 |
 
@@ -5807,7 +5881,7 @@ Origin/Referer 中间件，是**刻意**取舍）、无 SSO/找回口令、无�
   `config/index.html`=4096B / `index.html`=17B）+ 真实 dirmap → 任务 #155 `status=done`、dirmap
   真跑 58 秒、`dirmap 输出 4 条`、**无「回退内置」**；入库长度 `4096 / 1234 / 777 / 17`（全是文件
   真实字节数）、无一条 `path` 带 fragment；日志 `[dirscan] 已清理 dirmap 产物目录 1 个（释放 1130 KB）`，
-  `output/127.0.0.1_8899/` 确实消失，其它目标目录（pengo.pro / weiyuansj.com 等）**未被误删**。
+  `output/127.0.0.1_8899/` 确实消失，其它目标目录（targ1.pro / targ6.com 等）**未被误删**。
 - 向后兼容：历史 `1.21kb` 行仍解析出 1239，不因改格式丢老结果。
 
 **回归**：`tests/smoke.py` 新增 `[7g]`，钉住**适配器侧**两条（剥 fragment 且保留 query / 解析出精确
@@ -5890,7 +5964,7 @@ Windows 上带分隔符的相对路径是按**进程 CWD** 找的，从仓库外
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 
 **背景**：`todo.txt` 里挂着的 C 组三项，此前被记成"需用户输入"（305 个 POC 要真实授权目标、dirmap
-复核已交由其他 AI、GitHub token 待用户新建）。本轮把它们**全部落地**：用户指出 `pengo.pro`
+复核已交由其他 AI、GitHub token 待用户新建）。本轮把它们**全部落地**：用户指出 `targ1.pro`
 本来就可作授权目标，dirmap 复核收回自做，token 实探后确认**早已可用**。
 **本轮不改任何扫描逻辑** —— 唯一的代码改动是 `scanner/stages/dirscan.py` 里一段**注释**的事实纠错。
 
@@ -5916,11 +5990,11 @@ Windows 上带分隔符的相对路径是按**进程 CWD** 找的，从仓库外
 - 请求面：模板内 `path` 合计 **832** 条（1 个 path 43 / 2 个 158 / 3+ 个 104）。
 - 关键词特异性：**155/305 至少含一个 `≤8 字符 或 通用词`**（如 `"data"`、`"token"`、`"code":0`）。
 
-**第 2 步 · 对 pengo.pro 实测**（走引擎真身 `run_poc_on_target()`，与正式扫描同一条 HTTP 路径）
+**第 2 步 · 对 targ1.pro 实测**（走引擎真身 `run_poc_on_target()`，与正式扫描同一条 HTTP 路径）
 
-- 口径：绕过注册表开关，直接跑全部 305 个导入 POC。阶段 1 = 305 × `https://pengo.pro`；
-  阶段 2 = 命中项 × 另 2 台主机（`admin.pengo.pro` / `app.pengo.pro`）复验。原始 307 行结果留在
-  `%TEMP%\calib_pengo.jsonl`（**临时产物，未进仓库**）。
+- 口径：绕过注册表开关，直接跑全部 305 个导入 POC。阶段 1 = 305 × `https://targ1.pro`；
+  阶段 2 = 命中项 × 另 2 台主机（`admin.targ1.pro` / `app.targ1.pro`）复验。原始 307 行结果留在
+  `%TEMP%\calib_targ1.jsonl`（**临时产物，未进仓库**）。
 - 结果：**阶段 1 = miss 304 / hit 1**；**阶段 2 = hit 2/2**；各 POC 耗时合计 292 秒（并发执行，非墙钟）。
 - 唯一命中 = `config/pocs-imported/Dashboard__blast.yaml`，**在 3 台主机上全部命中** ⇒ **确认误报**。
   根因：它是 `matchers-condition: and`（status 200）**AND** `word` 的 `condition: or` 分支，
@@ -5977,11 +6051,11 @@ dirmap 行里的大小是 `intToSize()` 量化值（`_size_to_int` 反算有 ±0
 `output/` 无清理（`404.txt` 每目标约 1 MB、长期累积）。见 `todo.txt` 与
 `tools/dirmap_fixes/README.md`。
 
-## 2026-09-25 —— 续43：jsmine 按 URL 主机判 auth（混合出口）+ CDN 双判据（CNAME / 任播 IP 段）+ pengo.pro 全 13 阶段实跑
+## 2026-09-25 —— 续43：jsmine 按 URL 主机判 auth（混合出口）+ CDN 双判据（CNAME / 任播 IP 段）+ targ1.pro 全 13 阶段实跑
 > 实施者：**Trae · DeepSeek-V4.1-Flash**
 
 **背景**：为一处安全缺陷、一处准确性缺陷，以及把长期挂牌的「真实授权目标上跑一遍完整 13 阶段」
-真正跑掉。两处缺陷都是 2026-09-25 实跑 `pengo.pro` 时逮到的。
+真正跑掉。两处缺陷都是 2026-09-25 实跑 `targ1.pro` 时逮到的。
 
 ### 问题 1（安全 / 中危）jsmine 抓 JS 时把目标登录态发给了第三方
 
@@ -5994,14 +6068,14 @@ Cookie / Authorization，目标会话凭据会被发给 CDN / 埋点厂商 —�
 直接冲突。
 
 **改法**（`scanner/jsmine.py`）：新增 `_is_self_host(host, protect)`（主机是否属于目标自身注册域；
-后缀按 label 比、大小写归一，`notpengo.pro` 不算 `pengo.pro` 子域），`_is_noise()` 复用它
+后缀按 label 比、大小写归一，`nottarg1.pro` 不算 `targ1.pro` 子域），`_is_noise()` 复用它
 （同一概念不再两处各算一套）；`mine()` 里抓 `<script src>` 的 `_get(u)` 改为**按 URL 主机**决定
 `auth=`（同注册域才带）。页面自身那次请求仍是 `auth=True`（种子 URL 定义上就是目标侧）。
 jsmine 因此被定位为**混合出口**模块：页面请求发往目标侧、脚本请求可能发往第三方。
 
 ### 问题 2（准确性 / 低危）CDN 判定漏了「任播 IP 段」这条判据
 
-**现象**：实跑时 `pengo.pro` / `admin.pengo.pro` / `app.pengo.pro` 的 A 记录直接是
+**现象**：实跑时 `targ1.pro` / `admin.targ1.pro` / `app.targ1.pro` 的 A 记录直接是
 `172.66.40.229` / `172.66.43.27`，**CNAME 链为空**。原实现只按 CNAME 后缀判 CDN → 三个主机全被
 标成"非 CDN"：① 资产页看不出走 CDN；② `portscan` 照样去打 Cloudflare 边缘节点，得出"30 个端口
 开放"这种与目标无关的结论（同一时刻手工 TCP connect 22 端口是超时的）。
@@ -6017,7 +6091,7 @@ jsmine 因此被定位为**混合出口**模块：页面请求发往目标侧、
 `cdn_ips: config/dicts/cdn_ips.txt`。GUI 文案（`gui/templates/subdomains.html` / `extdomains.html`）
 的"CDN 标记来自…"说明已改为"CNAME 链与 `cdn_cname.txt`、解析 IP 段与 `cdn_ips.txt` 的比对"。
 
-### pengo.pro 全 13 阶段实跑（归档结论）
+### targ1.pro 全 13 阶段实跑（归档结论）
 
 - 方式：临时打开 6 个默认关阶段（字节级备份/还原，还原后 `git status` 干净），CLI `-p <全 13 阶段>
   --auto-expand` 跑单任务。
@@ -6210,12 +6284,12 @@ jsmine 因此被定位为**混合出口**模块：页面请求发往目标侧、
 
 **背景（用户原话）**：「拓展域名如果再去检测也需要去子域名扫描，以及我们有能力加一个自动判断这个
 域名存在不存在吗 如果选择的是带子域的 自动提取他的主域名，并且把这个子域也直接带着当子域解析，
-如果是归属本项目的子域名 比如说pengo.pro 拓展出来一个aaa.pengo.pro是我们没发现的 也要像正常
+如果是归属本项目的子域名 比如说targ1.pro 拓展出来一个aaa.targ1.pro是我们没发现的 也要像正常
 子域对待，可以实现追加功能吗？就是分域名而来，以及拓展扫描域名我希望是可以在主域名的分页下，
 就是可以折叠，并且任务管理功能也有选择自动拓展扫描，就会默认的拓展扫描」。
 
 拆成 6 条：① 拓展域名送去检测时**带上 subdomain 阶段**；② 自动**存在性判定**（DNS）；
-③ 目标是子域（如 `aaa.pengo.pro`）时自动补收主域名 `pengo.pro` + 该子域按子域资产解析；
+③ 目标是子域（如 `aaa.targ1.pro`）时自动补收主域名 `targ1.pro` + 该子域按子域资产解析；
 ④ 归属本项目的拓展域名**追加**成正常子域，且"分域名而来"（出处可查）；
 ⑤ 拓展域名页**按主域名分组折叠**；⑥ 建任务页新增「自动拓展扫描」勾选，勾了就默认把拓展做全。
 
@@ -6280,7 +6354,7 @@ jsmine 因此被定位为**混合出口**模块：页面请求发往目标侧、
 - ⑤ 分组模式下分页单位是"主域名"，`共 N 条` 显示的是主域数；域名总数另起一行标注。
 - **未做真实网络实测**（无授权目标、也不该拿别人的域名试）：DNS 解析、FOFA/Shodan 反查、
   subdomain 阶段在真实网络上跑通与否，本轮**没有任何实测证据**，只有桩测与静态审查。
-- ④ 的归属判定只看**注册域是否命中任务目标**：目标 `pengo.pro` 下拓展出 `aaa.bbb.pengo.pro`
+- ④ 的归属判定只看**注册域是否命中任务目标**：目标 `targ1.pro` 下拓展出 `aaa.bbb.targ1.pro`
   也会归进来（这是期望行为）；同项目多目标时按"命中任一目标"算。
 
 ## 2026-09-25 —— 续39：nuclei `flow:` 的**脚本子集**（循环 + `set()` + 请求）
@@ -7364,20 +7438,20 @@ QA 判定续25 整体**通过**（10 项重点全成立、3 条证伪都真失�
   QA 正在用；已按主理人要求"提交后报备、等放行再跑"。
 - 行尾自查：`git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` 逐文件一致。
 
-## 2026-09-24 —— 续22-fix：移除 `pong-pengo.de` + 登记拓展域名降噪的能力边界
+## 2026-09-24 —— 续22-fix：移除 `pong-targ1.de` + 登记拓展域名降噪的能力边界
 > 实施者：**WorkBuddy · Hy4-preview**（改动极小，主理人本轮直接实施：1 行数据 + 1 处测试断言 + 1 段文档）
 
 处理 QA 独立复验 `09044ee`（续22）报出的三项待办。**均非代码缺陷**，属"收紧之后要如实登记的边界"。
 
 ### 改动
-- `config/dicts/js_thirdparty.txt`：**移除 `pong-pengo.de`**（291 → 290 条）。
-  理由：它**含目标品牌词 `pengo`**，可能是"相关域名"而不是噪声 ——
+- `config/dicts/js_thirdparty.txt`：**移除 `pong-targ1.de`**（291 → 290 条）。
+  理由：它**含目标品牌词 `targ1`**，可能是"相关域名"而不是噪声 ——
   **黑名单漏一条的成本，远低于误杀一个相关域名**（QA 建议，主理人采纳）。
   其余 crypto 类（`etherscan` / `bscscan` / `solscan` / `tronscan` / `metamask` /
   `walletconnect` / `infura` / `debox.pro`）**保留**：项目有 `protect` 机制，
   **它本身就是目标时不会被误杀**（实测 `_is_noise("bscscan.com", protect={"bscscan.com"}) = False`）。
 - `tests/smoke.py [6k]`：同步改断言 —— 目标域名元组去掉该条（9 → 8），并**反向断言**
-  `"pong-pengo.de" not in _noise6k`，防止有人"顺手加回去"却不知道它为什么被删过。
+  `"pong-targ1.de" not in _noise6k`，防止有人"顺手加回去"却不知道它为什么被删过。
 - `AGENTS.md §7`：新增「拓展域名降噪（续22）的能力边界」一条，**如实登记**四类边界 ——
   ① `tlds.txt` 是 tldextract 5.1.3 的 **PSL 快照（非实时）**，未收录后缀按 **fail-closed 丢弃**，
   清单缺失/为空时 **fail-open**（宁可留噪音，也不静默丢资产）；
@@ -7386,7 +7460,7 @@ QA 判定续25 整体**通过**（10 项重点全成立、3 条证伪都真失�
   ——【2026-09-28 续65 勘误】上面 ② 已**不再成立**：续65 已支持 IDN / 中文域名主链路
   （`utils.to_ascii()` 边界归一 + `is_domain`/`parse_line` 接受 punycode 形态 + `tlds.txt` 补
   `xn--` 后缀）。**③ 仍成立**（`.zip` 域名本轮未动）。
-  ④ **FOFA 标题 `label` 档连字符域名永不命中**（`pengo-wallet.com` 会被丢弃，需 `substring` 档）。
+  ④ **FOFA 标题 `label` 档连字符域名永不命中**（`targ1-wallet.com` 会被丢弃，需 `substring` 档）。
 
 ### 验证
 - `py -3 tests/smoke.py` → **SMOKE PASS**（`[6k]` 绿）。
@@ -7394,7 +7468,7 @@ QA 判定续25 整体**通过**（10 项重点全成立、3 条证伪都真失�
   `--ignore-cr-at-eol --numstat` **完全一致**（无行尾-only 改动）。
 - **⚠️ 本轮踩坑（已修，记录下来以免再犯）**：先用 `sed -i` 删行，把 `js_thirdparty.txt`
   **整体转成了 LF**（`CRLF=0 / 裸LF=290`，`numstat` 立刻暴露成 290/291 整文件重写）。
-  已改为**字节级 `replace(b'pong-pengo.de\r\n', b'')`** 处理。
+  已改为**字节级 `replace(b'pong-targ1.de\r\n', b'')`** 处理。
   **结论：本项目禁止用 `sed` 动数据文件**（行尾敏感，且 numstat 会立刻出卖你）。
 
 ### 明确不做
@@ -7448,9 +7522,9 @@ QA 判定续25 整体**通过**（10 项重点全成立、3 条证伪都真失�
 （`wallet.filter.withdraw` / `wallet.filter.upgrade` / … / `react.transitional.element` /
 `react.client.reference` / `i.test`）、**第三方公共库/CDN**（`reactjs.org` / `react.dev` /
 `bscscan.com` / `solscan.io` / `api.qrserver.com` / `capacitorjs.com` / `debox.pro` /
-`cloudflareinsights.com` / `static.cloudflareinsights.com` / `pong-pengo.de`），以及 FOFA
-**标题反查**带回来的**无关域名**（`silviapengo.com` / `pengowireline.com` / `gkops.net` /
-`yulw.cn` 等 —— 只是标题里恰好含同一子串）。根因：整条链只有**形态判断**，没有**公共后缀校验**；
+`cloudflareinsights.com` / `static.cloudflareinsights.com` / `pong-targ1.de`），以及 FOFA
+**标题反查**带回来的**无关域名**（`silviatarg1.com` / `targ1wireline.com` / `noise1.net` /
+`noise2.cn` 等 —— 只是标题里恰好含同一子串）。根因：整条链只有**形态判断**，没有**公共后缀校验**；
 标题反查也没有**归属相关性**判定。三件事分别修：
 
 ### A) jsmine 加公共后缀（PSL）校验
@@ -7466,7 +7540,7 @@ QA 判定续25 整体**通过**（10 项重点全成立、3 条证伪都真失�
 ### B) `config/dicts/js_thirdparty.txt` 补第三方域名（纯数据，零代码）
 - 追加 20 条（含用户数据里的 9 条 + 常用库/CDN/链上浏览器）：`reactjs.org` / `react.dev` /
   `bscscan.com` / `solscan.io` / `cloudflareinsights.com` / `api.qrserver.com` / `capacitorjs.com` /
-  `debox.pro` / `pong-pengo.de` …；清单 **267 → 287** 条。
+  `debox.pro` / `pong-targ1.de` …；清单 **267 → 287** 条。
 - 匹配是"**相等或 `.suffix`**"（`jsmine._is_noise`），所以 `static.cloudflareinsights.com` 结尾是
   `.cloudflareinsights.com` —— `cloudflare.com` **拦不住**它，必须 `cloudflareinsights.com` 单独成行。
 - 证伪（旧清单）：9 条目标域名 **9/9 全缺**、`_is_noise("static.cloudflareinsights.com")` = **False**。
@@ -7479,7 +7553,7 @@ QA 判定续25 整体**通过**（10 项重点全成立、3 条证伪都真失�
 - **不动 `_domain_of()`**（favicon / 证书 / 标题 / C 段共用的收口）。
 - 新开关 `fofa.title_match`（默认 `label`）**三方一致**：`scanner/config.py` DEFAULTS /
   `config/settings.yaml` / GUI「策略配置 → 外部情报拓展」表单 + `gui/app.py` POST 映射。
-- 证伪（旧 osint，端到端）：9 条资产 **9/9 全入库**（`silviapengo.com` / `gkops.net` / `yulw.cn` 都在）。
+- 证伪（旧 osint，端到端）：9 条资产 **9/9 全入库**（`silviatarg1.com` / `noise1.net` / `noise2.cn` 都在）。
 
 ### 改动文件
 - 新增：`tools/import_tlds.py`、`config/dicts/tlds.txt`（生成物）。
@@ -8310,7 +8384,7 @@ QA（`software-qa-engineer-2`）独立复核批次 4 后报出 1 个真缺陷 + 
 ## 2026-09-23 —— 续13：拓展域名手动处置 + 目录可读性 + 截图"勾了就有用"
 > 实施者：**WorkBuddy · DeepSeek-V4.1-Flash**
 
-用户在任务详情页（任务 #149，pengo.pro 系列）逐条提出的四条 GUI 反馈。
+用户在任务详情页（任务 #149，targ1.pro 系列）逐条提出的四条 GUI 反馈。
 **根因都先在代码/数据里核实过再动手**（详见各节），不是按字面猜着改。
 
 ### 1. 拓展域名（JS 挖掘 / FOFA 反查）页签：分类排序 + 手动处置
@@ -9686,7 +9760,7 @@ py -3 tests/smoke.py
 
 后果一：**DB 里 63 条历史任务行被硬删除**。`db.delete_task` 当时是纯硬删除，`data/` 被 `.gitignore`
 排除、无任何备份。
-后果二：**任务 89 对 `orderfood.top`（外部真实域名）跑了全 8 阶段真实扫描**（14:01:52–14:03:05，
+后果二：**任务 89 对 `targ5.top`（外部真实域名）跑了全 8 阶段真实扫描**（14:01:52–14:03:05，
 5 站点 / 97 个新域名 / 54 条字典目录扫描 / 7 个 POC，0 漏洞）。`examples/targets.txt` 里全是注释行，
 该域名是子代理自行填的。**这是越界扫描，责任在我方的代理调度**，已向用户如实说明。
 

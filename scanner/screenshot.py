@@ -145,7 +145,7 @@ def capture(url, out_path, settings=None, timeout=30, throttle=None, want_title=
     `want_title=True`：在**同一次**浏览器调用里加 `--dump-dom`，把渲染完成后的 DOM 打到 stdout，
     从中取 `<title>` 作为第三个返回值（拿不到就是空串）。为什么要挤进同一次调用：
     有些站（Next.js / Vue 的 SPA 外壳）原始 HTML 里**根本没有** `<title>` —— 实测授权目标
-    `agent.weex.com` 的响应 1298 字节、9 个 `<script>`，无 `<title>` 也无 `og:title`，
+    `agent.targ2.com` 的响应 1298 字节、9 个 `<script>`，无 `<title>` 也无 `og:title`，
     标题由 JS 注入；httpx 与内置探测取不到标题**不是抓取失败**，是源头没有。
     而再起一次浏览器是本模块最贵的动作（单站点 1~3 秒 + 明显内存），所以共用同一次进程、零额外启动。
     不传 `want_title` 时 argv 与改动前逐字节一致（截图行为不受任何影响）。

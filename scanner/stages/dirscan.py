@@ -224,7 +224,7 @@ def is_uniform_block(digest, length, blk_md5s, blk_sizes):
 
     判据 = **与随机路径的 403 逐字节相同**（md5 命中）**或长度相同**。为什么这样算安全：
     随机路径（`/1234567/ctfscan-none`）根本不存在的文件，如果它也回 403 且回的是同一张页，
-    说明这个站点的 403 与"路径存不存在"无关，说的是"CDN/WAF 在拦我们"。实测 dzmm.ai 走
+    说明这个站点的 403 与"路径存不存在"无关，说的是"CDN/WAF 在拦我们"。实测 targ3.ai 走
     Cloudflare 时 `wp-config.php` 与 `wp-config.php.bak` 的正文逐字节一致、都是 4910 字节 ——
     留在库里就是几十个同内容行铺满「目录」页签（用户：「这两个大小不也一样吗为什么两个都显示了？」）。
 
@@ -848,7 +848,7 @@ class DirscanStage(Stage):
 
             返回值是四元组 `(md5s, sizes, blk_md5s, blk_sizes)`：后两个只收**随机路径自己也
             回 403** 的样本（续112-F）。CDN/WAF 站在拦截时对所有路径回同一张 403 页（实测
-            dzmm.ai 的 `wp-config.php` 与 `wp-config.php.bak` 正文逐字节相同、都是 4910 字节），
+            targ3.ai 的 `wp-config.php` 与 `wp-config.php.bak` 正文逐字节相同、都是 4910 字节），
             这种"整站统一拦截页"不是发现，把它当基线滤掉才不会一屏重复；而**随机路径回 404、
             只有这个路径回 403** 的站点，`blk_*` 是空的，真实命中一条都不会被误杀。
             """
@@ -901,7 +901,7 @@ class DirscanStage(Stage):
             if is_block_page(st, title):
                 # 标题就是 WAF/CDN 的统一拦截页（`Attention Required! | Cloudflare` 这类）：
                 # 这条 403 与路径无关，说的是"厂商在拦我们"，不是"这个文件存在且被禁"。
-                # 实测 dzmm.ai 的 `wp-config.php` / `wp-login.php` / `xmlrpc.php` 与它们的
+                # 实测 targ3.ai 的 `wp-config.php` / `wp-login.php` / `xmlrpc.php` 与它们的
                 # `.bak/.zip/.old…` 派生名各留一行 4910 字节的同一张页（用户：「这两个大小也不
                 # 一样吗 为什么两个都显示了？」）—— 几十个路径就是几十条假发现。
                 # 计数攒着，本轮结束按站点说一句总量：滤掉了什么必须可见，不能静默少结果。

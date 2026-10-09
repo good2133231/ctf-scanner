@@ -793,8 +793,8 @@ def main():
     assert blk.load(bl_settings) == ["hand.test", "appended.test"], blk.load(bl_settings)
 
     # (4) 证书查询语句与"通用证书"阈值
-    assert fofa.build_cert_query("orderfood.top") == 'cert="orderfood.top"'
-    assert fofa.build_cert_query("orderfood.top.") == 'cert="orderfood.top"'
+    assert fofa.build_cert_query("targ5.top") == 'cert="targ5.top"'
+    assert fofa.build_cert_query("targ5.top.") == 'cert="targ5.top"'
     assert fofa.is_common_cert(200, settings) is False and fofa.is_common_cert(201, settings) is True
     assert fofa.search_cert("", settings)[2], "空域名应显式报错"
 
@@ -4442,37 +4442,37 @@ workflows:
                  "cloudflareinsights.com", "api.qrserver.com", "capacitorjs.com",
                  "debox.pro"):
         assert _d6k in _noise6k, f"[6k] 第三方清单缺 {_d6k}"
-    # ✱ `pong-pengo.de` **已从清单移除**（续22-fix）：它含目标品牌词 `pengo`，可能是"相关域名"
+    # ✱ `pong-targ1.de` **已从清单移除**（续22-fix）：它含目标品牌词 `targ1`，可能是"相关域名"
     #    而不是噪声 —— **黑名单漏一条的成本远低于误杀一个相关域名**（QA 独立复验建议，
     #    主理人采纳）。这里**反向断言**它不在清单里：防止有人"顺手加回去"却不知道为什么被删过。
-    assert "pong-pengo.de" not in _noise6k, \
-        "[6k] pong-pengo.de 已按品牌误杀风险移除，不应再在清单里"
+    assert "pong-targ1.de" not in _noise6k, \
+        "[6k] pong-targ1.de 已按品牌误杀风险移除，不应再在清单里"
     # ✱ `static.cloudflareinsights.com` 结尾是 `.cloudflareinsights.com` —— `cloudflare.com` 拦不住它。
-    #    证伪实测（bbec7f0 旧清单 267 条）：上述 8 个目标域名全缺（`pong-pengo.de` 已于续22-fix
+    #    证伪实测（bbec7f0 旧清单 267 条）：上述 8 个目标域名全缺（`pong-targ1.de` 已于续22-fix
     #    移除，不再计入）、`_is_noise(static.cloudflareinsights.com)`
     #    为 False，故 `in _noise6k` / `is True` 断言在旧代码上真的失败。
     assert _jm6k._is_noise("static.cloudflareinsights.com", set(), []) is True, \
         "[6k] cloudflareinsights.com 必须单独成行"
 
     # ---- C) FOFA 标题归属相关性 ----
-    for _d6k in ("pengo.money", "pengo.me", "pengo.uk", "pengo.com.vn"):
-        assert _os6k._title_relevant("Pengo", _d6k, "label") is True, f"[6k] 同品牌应保留：{_d6k}"
-    for _d6k in ("silviapengo.com", "pengowireline.com", "kufungapengo.com",
-                 "gkops.net", "yulw.cn"):
+    for _d6k in ("targ1.money", "targ1.me", "targ1.uk", "targ1.com.vn"):
+        assert _os6k._title_relevant("targ1", _d6k, "label") is True, f"[6k] 同品牌应保留：{_d6k}"
+    for _d6k in ("silviatarg1.com", "targ1wireline.com", "kufungatarg1.com",
+                 "noise1.net", "noise2.cn"):
         # ✱ 修复前不做任何过滤 → 这些"恰好含同一子串"的无关域名全被当资产入库。
-        #    证伪实测（bbec7f0 旧 osint，端到端）：9/9 全入库（silviapengo.com / gkops.net /
-        #    yulw.cn 都在），故"默认档应丢弃"断言在旧代码上真的失败。
-        assert _os6k._title_relevant("Pengo", _d6k, "label") is False, f"[6k] 无关域名应丢弃：{_d6k}"
-    assert _os6k._title_relevant("Pengo", "silviapengo.com", "substring") is True, \
+        #    证伪实测（bbec7f0 旧 osint，端到端）：9/9 全入库（silviatarg1.com / noise1.net /
+        #    noise2.cn 都在），故"默认档应丢弃"断言在旧代码上真的失败。
+        assert _os6k._title_relevant("targ1", _d6k, "label") is False, f"[6k] 无关域名应丢弃：{_d6k}"
+    assert _os6k._title_relevant("targ1", "silviatarg1.com", "substring") is True, \
         "[6k] substring 档应放宽为子串匹配（回退/对照）"
     # fail-open：标题切不出 token（纯中文）时不丢 —— 否则会误杀非拉丁标题的真实资产
     assert _os6k._title_relevant("维保中心", "x.test", "label") is True
 
-    # C-端到端：真跑 osint 阶段，默认档丢 silviapengo.com、substring 档留下它（开关真的起作用）
+    # C-端到端：真跑 osint 阶段，默认档丢 silviatarg1.com、substring 档留下它（开关真的起作用）
     _ret6k = [{"host": "https://" + _d, "domain": _d, "ip": "1.2.3.4", "port": "443",
-               "title": "Pengo"} for _d in
-              ("pengo.money", "pengo.me", "pengo.uk", "pengo.com.vn", "silviapengo.com",
-               "pengowireline.com", "kufungapengo.com", "gkops.net", "yulw.cn")]
+               "title": "targ1"} for _d in
+              ("targ1.money", "targ1.me", "targ1.uk", "targ1.com.vn", "silviatarg1.com",
+               "targ1wireline.com", "kufungatarg1.com", "noise1.net", "noise2.cn")]
 
     def _stub6k(title, settings, logger=None, size=None):
         return ([dict(a) for a in _ret6k], len(_ret6k), "")
@@ -4489,7 +4489,7 @@ workflows:
             _s6k["keys"] = {"fofa": {"email": "stub@example.test", "key": "stub"}}
             _tid6k = db.create_task(f"smoke-6k-{match}", targets, ["osint"], {"offline": True})
             db.insert_sites(_tid6k, [{"url": targets, "host": "127.0.0.1", "port": "80",
-                                      "status": 200, "title": "Pengo", "length": 100,
+                                      "status": 200, "title": "targ1", "length": 100,
                                       "source": "builtin"}])
             run_task(_tid6k, f"smoke-6k-{match}", targets, ["osint"], {"offline": True}, _s6k)
             _dom = {r["domain"] for r in db.list_subdomains(_tid6k)}
@@ -4497,11 +4497,11 @@ workflows:
             return _dom
 
         _lab6k = _os_run6k("label")
-        assert "pengo.money" in _lab6k and "pengo.com.vn" in _lab6k, _lab6k
-        assert "silviapengo.com" not in _lab6k, f"[6k] 默认档应丢弃 silviapengo.com：{_lab6k}"
-        assert "gkops.net" not in _lab6k and "yulw.cn" not in _lab6k, _lab6k
+        assert "targ1.money" in _lab6k and "targ1.com.vn" in _lab6k, _lab6k
+        assert "silviatarg1.com" not in _lab6k, f"[6k] 默认档应丢弃 silviatarg1.com：{_lab6k}"
+        assert "noise1.net" not in _lab6k and "noise2.cn" not in _lab6k, _lab6k
         _sub6k = _os_run6k("substring")
-        assert "silviapengo.com" in _sub6k, f"[6k] substring 档应保留 silviapengo.com：{_sub6k}"
+        assert "silviatarg1.com" in _sub6k, f"[6k] substring 档应保留 silviatarg1.com：{_sub6k}"
     finally:
         _os6k.fofa_mod.search_title = _orig6k
 
@@ -4533,8 +4533,8 @@ workflows:
 
     print("[6k] 续22 拓展域名降噪 ok: jsmine PSL 校验（拒 withdraw/element/reference/test，"
           "多段后缀仍接受，清单缺失 fail-open+告警）/ 第三方清单补 9 条（含 "
-          "cloudflareinsights.com 拦 static.*）/ FOFA 标题归属相关性（label 挡 silviapengo.com·"
-          "gkops.net，pengo.* 保留；substring 档复现宽松；中文标题 fail-open）+ 开关三方一致")
+          "cloudflareinsights.com 拦 static.*）/ FOFA 标题归属相关性（label 挡 silviatarg1.com·"
+          "noise1.net，targ1.* 保留；substring 档复现宽松；中文标题 fail-open）+ 开关三方一致")
 
     # 6l) 续25：同任务「追加式执行」—— 内核（续写日志 / 不清 error / 进度重置）+ 跨运行去重 +
     #     并发硬拒绝 + 无源入口拒绝 + 仅勾选目标 + 导出横幅。此前"补扫/复查"一律**新建任务**，
@@ -4963,7 +4963,7 @@ workflows:
     assert gh_mod.normalize_hit(_gh_items[2], "mention") is None, "拿不到仓库的命中应丢弃"
     assert gh_mod.normalize_hit("not-a-dict", "mention") is None
     # 续111：GitHub 命中里的**公共分流名单 / 路由规则表** —— 只标注 + 只降不升，**绝不丢线索**。
-    #   实测（2026-10-05 授权目标 dzmm.ai）30 条线索里绝大多数是别人的 gfwlist / clash /
+    #   实测（2026-10-05 授权目标 targ3.ai）30 条线索里绝大多数是别人的 gfwlist / clash /
     #   smartdns / proxy rules 名单：这类文件整批抄入几千个域名，"目标域名 + password 关键字
     #   在同一文件"是常态，**不等于目标方的凭据泄露**。为什么不干脆丢掉：丢了就是把判据藏起来
     #   （本仓反复出事的地方正是"静默"），人工想核对"这域名有没有被公开抄过"反而看不见。
@@ -4972,7 +4972,7 @@ workflows:
     _listy111 = ("GFWList/gfwrules.list", "list.txt", "gfwlist.conf", "smartdns/gfwlist.raw.txt",
                  "clash-gfw-list.txt", "clean-list.txt", "pac.conf", "Rules/Proxy.list",
                  "fancyss_rules/gfwlist.txt", "browser.txt", "router.txt")
-    _keep111 = (".env", "conf/app.yaml", "lib/dzmm_studio.py", "web/app.js", "web/index.html",
+    _keep111 = (".env", "conf/app.yaml", "lib/targ3_studio.py", "web/app.js", "web/index.html",
                 "docs/character-card-local-api.md", "references/developer-guide.md",
                 "src/components/settings-dialog.tsx", "index.html", "sites.txt", "README.md")
     _miss111 = [x for x in _listy111 if not gh_mod.listy_public_list(x)]
@@ -6811,8 +6811,8 @@ http:
     # (7a) 续40：拓展域名"六条" ——
     #   ① 送去检测要带 subdomain 阶段（[5t]④ 的断言已同步改，这里不再重复）；
     #   ② 自动**存在性判定**（纯 DNS：这个域名到底存不存在）；
-    #   ③ 目标是子域（aaa.pengo.pro）→ 自动补收主域名 pengo.pro + 该子域当子域资产解析；
-    #   ④ 归属本项目的拓展域名（pengo.pro 拓展出 aaa.pengo.pro）→ **追加**成正常子域，
+    #   ③ 目标是子域（aaa.targ1.pro）→ 自动补收主域名 targ1.pro + 该子域当子域资产解析；
+    #   ④ 归属本项目的拓展域名（targ1.pro 拓展出 aaa.targ1.pro）→ **追加**成正常子域，
     #      来源记 `promote:<原来源>`（"分域名而来"，原拓展行保留不动）；
     #   ⑤ 拓展域名页**按主域名分组折叠**，`?group=0` 回平铺；
     #   ⑥ 建任务「自动拓展扫描」落成任务级选项 auto_expand，并自动补 osint / jsmine 阶段。
@@ -6820,9 +6820,9 @@ http:
     from scanner.stages import subdomain as _sub7
 
     # ② 存在性判定：桩掉解析器（断言的是"回填哪些字段、是否幂等"，不是真去查 DNS）
-    _et7 = db.create_task("smoke-ext-alive", "pengo.pro", ["probe"], {})
-    db.insert_subdomains(_et7, [("alive.pengo.pro", "js:mine"),
-                                ("gone.pengo.pro", "js:mine")])
+    _et7 = db.create_task("smoke-ext-alive", "targ1.pro", ["probe"], {})
+    db.insert_subdomains(_et7, [("alive.targ1.pro", "js:mine"),
+                                ("gone.targ1.pro", "js:mine")])
     _orig_res7 = _dq7.resolve_detail
     try:
         _dq7.resolve_detail = lambda host, **kw: \
@@ -6830,8 +6830,8 @@ http:
         _r7 = _exd7.resolve_extended(_et7, settings, logger=rec)
         assert (_r7["scanned"], _r7["alive"], _r7["dead"]) == (2, 1, 1), _r7
         _net7 = {r["domain"]: dict(r) for r in db.list_subdomains(_et7)}
-        assert _net7["alive.pengo.pro"]["ip"] == "1.2.3.4", _net7["alive.pengo.pro"]
-        assert _net7["gone.pengo.pro"]["ip_note"] == "nxdomain", \
+        assert _net7["alive.targ1.pro"]["ip"] == "1.2.3.4", _net7["alive.targ1.pro"]
+        assert _net7["gone.targ1.pro"]["ip_note"] == "nxdomain", \
             "解析失败必须落原因（页面上据此显示『域名不存在』）"
         # 幂等：已有结论的行不再重复解析（重复调用不会白白多一轮 DNS）
         assert _exd7.resolve_extended(_et7, settings, logger=rec)["scanned"] == 0
@@ -6853,49 +6853,49 @@ http:
     try:
         for _opt7, _want_base in (({"auto_expand": True}, True), ({}, False)):
             _seen7.clear()
-            _t7c = db.create_task(f"smoke-expand-target-{bool(_opt7)}", "aaa.pengo.pro",
+            _t7c = db.create_task(f"smoke-expand-target-{bool(_opt7)}", "aaa.targ1.pro",
                                   ["subdomain"], {})
             _wd7 = Path(_TMPDIR) / f"expand7_{bool(_opt7)}"
             _wd7.mkdir(parents=True, exist_ok=True)
             PipelineRunner(StageContext(_t7c, "smoke-expand-target",
-                                        parse_lines(["aaa.pengo.pro"]), ["subdomain"],
+                                        parse_lines(["aaa.targ1.pro"]), ["subdomain"],
                                         dict(_opt7), _s7, _wd7, rec)).run()
             _rows7 = {r["domain"]: r["source"] for r in db.list_subdomains(_t7c)}
-            assert "aaa.pengo.pro" in _seen7, "目标自身一定要进子域名收集"
+            assert "aaa.targ1.pro" in _seen7, "目标自身一定要进子域名收集"
             if _want_base:
-                assert "pengo.pro" in _seen7, f"auto_expand 未补收主域名：{_seen7}"
-                assert _rows7.get("aaa.pengo.pro") == "target", \
+                assert "targ1.pro" in _seen7, f"auto_expand 未补收主域名：{_seen7}"
+                assert _rows7.get("aaa.targ1.pro") == "target", \
                     f"目标自带子域应按子域资产入库：{_rows7}"
             else:
-                assert "pengo.pro" not in _seen7, f"没勾 auto_expand 不该改既有行为：{_seen7}"
-                assert "aaa.pengo.pro" not in _rows7, \
+                assert "targ1.pro" not in _seen7, f"没勾 auto_expand 不该改既有行为：{_seen7}"
+                assert "aaa.targ1.pro" not in _rows7, \
                     f"没勾 auto_expand 不该把目标子域塞进资产表：{_rows7}"
     finally:
         (_sub7.which, _sub7.verify_tool, _sub7.run_cmd, _sub7.passive.collect) = _orig7
 
     # ④ 归属追加：注册域命中任务目标的拓展域名 → 追加成自身子域（原拓展行保留）
-    _t7d = db.create_task("smoke-promote", "pengo.pro", ["probe"], {})
-    db.insert_subdomains(_t7d, [("aaa.pengo.pro", "js:mine"),
+    _t7d = db.create_task("smoke-promote", "targ1.pro", ["probe"], {})
+    db.insert_subdomains(_t7d, [("aaa.targ1.pro", "js:mine"),
                                 ("third.example.com", "js:mine")])
     # 续112 起默认只列解析成功的：本用例测**归属追加**的标签与重叠隐藏，先填解析结果
-    db.set_subdomain_net(_t7d, {"aaa.pengo.pro": ("8.8.4.4", ""),
+    db.set_subdomain_net(_t7d, {"aaa.targ1.pro": ("8.8.4.4", ""),
                                 "third.example.com": ("8.8.4.5", "")})
     _p7 = _exd7.promote_owned(_t7d, settings, logger=rec)
-    assert _p7["promoted"] == ["aaa.pengo.pro"], _p7
+    assert _p7["promoted"] == ["aaa.targ1.pro"], _p7
     _rows7d = {(r["domain"], r["source"]) for r in db.list_subdomains(_t7d)}
-    assert ("aaa.pengo.pro", "promote:js:mine") in _rows7d, _rows7d
-    assert ("aaa.pengo.pro", "js:mine") in _rows7d, "原拓展行必须保留（出处可查）"
+    assert ("aaa.targ1.pro", "promote:js:mine") in _rows7d, _rows7d
+    assert ("aaa.targ1.pro", "js:mine") in _rows7d, "原拓展行必须保留（出处可查）"
     assert not any(d == "third.example.com" and s.startswith("promote:") for d, s in _rows7d), \
         "非本项目的第三方域名不该被追加"
     assert _exd7.promote_owned(_t7d, settings, logger=rec)["promoted"] == [], "重复调用应幂等"
     # 页面上：子域名页按正常子域显示（带「归属追加」标签）；拓展页因"已作为自身子域"默认隐藏
     assert "归属追加(JS 挖掘)" in c.get("/subdomains").get_data(as_text=True)
-    assert "aaa.pengo.pro" in c.get("/subdomains").get_data(as_text=True)
-    assert "aaa.pengo.pro" not in c.get("/extdomains").get_data(as_text=True), \
+    assert "aaa.targ1.pro" in c.get("/subdomains").get_data(as_text=True)
+    assert "aaa.targ1.pro" not in c.get("/extdomains").get_data(as_text=True), \
         "已归属本项目的拓展域名不该再占拓展页"
-    assert "aaa.pengo.pro" in c.get("/extdomains?all=1").get_data(as_text=True)
+    assert "aaa.targ1.pro" in c.get("/extdomains?all=1").get_data(as_text=True)
     # 手动「追加」端点（跨任务视图按域名反查所属任务）
-    _r7p = c.post("/api/domains/promote", data={"domain": ["aaa.pengo.pro"],
+    _r7p = c.post("/api/domains/promote", data={"domain": ["aaa.targ1.pro"],
                                                 "next": "/extdomains"})
     assert _r7p.status_code == 302 and _r7p.headers["Location"] == "/extdomains", _r7p.headers
 
@@ -6906,26 +6906,26 @@ http:
         return {r["domain"] for r in db.list_subdomains(tid)
                 if (r["source"] or "").startswith("promote:")}
 
-    _o94a = db.create_task("smoke-promote-owner-a", "pengo.pro", ["probe"], {}, owner_id=91)
-    _o94b = db.create_task("smoke-promote-owner-b", "pengo.pro", ["probe"], {}, owner_id=92)
-    db.insert_subdomains(_o94a, [("aaa.pengo.pro", "js:mine")])
-    db.insert_subdomains(_o94b, [("aaa.pengo.pro", "js:mine")])
-    _r94 = _exd7.promote_domains(["aaa.pengo.pro"], settings, owner_id=91)
+    _o94a = db.create_task("smoke-promote-owner-a", "targ1.pro", ["probe"], {}, owner_id=91)
+    _o94b = db.create_task("smoke-promote-owner-b", "targ1.pro", ["probe"], {}, owner_id=92)
+    db.insert_subdomains(_o94a, [("aaa.targ1.pro", "js:mine")])
+    db.insert_subdomains(_o94b, [("aaa.targ1.pro", "js:mine")])
+    _r94 = _exd7.promote_domains(["aaa.targ1.pro"], settings, owner_id=91)
     assert _r94["tasks"] == [_o94a], f"owner=91 只能碰自己的任务：{_r94}"
-    assert _prom94(_o94a) == {"aaa.pengo.pro"}, "自己的任务该被追加"
+    assert _prom94(_o94a) == {"aaa.targ1.pro"}, "自己的任务该被追加"
     assert _prom94(_o94b) == set(), f"**不得写进别人的任务**（实到 {_prom94(_o94b)}）"
     # 显式 task_id 那条路再加一道纵深防御：给了越权的任务号必须空手而归
-    _r94b = _exd7.promote_domains(["aaa.pengo.pro"], settings, task_id=_o94b, owner_id=91)
+    _r94b = _exd7.promote_domains(["aaa.targ1.pro"], settings, task_id=_o94b, owner_id=91)
     assert _r94b["promoted"] == [] and _r94b["tasks"] == [], f"越权 task_id 必须空手而归：{_r94b}"
     assert _prom94(_o94b) == set(), "越权 task_id 不得写进别人的任务"
     # 管理员（owner_id=None）**不受限** —— 行为与改动前逐字一致（另起两个干净任务来验）
-    _o94c = db.create_task("smoke-promote-owner-c", "pengo.pro", ["probe"], {}, owner_id=91)
-    _o94d = db.create_task("smoke-promote-owner-d", "pengo.pro", ["probe"], {}, owner_id=92)
-    db.insert_subdomains(_o94c, [("aaa.pengo.pro", "js:mine")])
-    db.insert_subdomains(_o94d, [("aaa.pengo.pro", "js:mine")])
-    _r94c = _exd7.promote_domains(["aaa.pengo.pro"], settings, owner_id=None)
+    _o94c = db.create_task("smoke-promote-owner-c", "targ1.pro", ["probe"], {}, owner_id=91)
+    _o94d = db.create_task("smoke-promote-owner-d", "targ1.pro", ["probe"], {}, owner_id=92)
+    db.insert_subdomains(_o94c, [("aaa.targ1.pro", "js:mine")])
+    db.insert_subdomains(_o94d, [("aaa.targ1.pro", "js:mine")])
+    _r94c = _exd7.promote_domains(["aaa.targ1.pro"], settings, owner_id=None)
     assert {_o94c, _o94d} <= set(_r94c["tasks"]), f"管理员不受限：{_r94c}"
-    assert _prom94(_o94d) == {"aaa.pengo.pro"}, "管理员路径行为不变"
+    assert _prom94(_o94d) == {"aaa.targ1.pro"}, "管理员路径行为不变"
 
     # ⑤ 拓展域名页按主域名分组折叠（?group=0 回平铺）
     _t7g = db.create_task("smoke-ext-group", "zzgrp7.test", ["probe"], {})
@@ -6946,14 +6946,14 @@ http:
     _orig_run7 = _gui.run_task
     try:
         _gui.run_task = lambda *a, **kw: None
-        _j7 = c.post("/api/tasks", data={"name": "smoke-auto-expand", "targets": "pengo.pro",
+        _j7 = c.post("/api/tasks", data={"name": "smoke-auto-expand", "targets": "targ1.pro",
                                          "stages": ["subdomain", "probe"],
                                          "auto_expand": "1"}).get_json()
         assert '"auto_expand": true' in db.get_task(_j7["id"])["options"], "未落成任务级选项"
         _st7 = set(db.get_task(_j7["id"])["stages"].split(","))
         assert _st7 >= {"subdomain", "probe", "osint", "jsmine"}, _st7
         assert set(_j7["auto_stages"]) >= {"osint", "jsmine"}, _j7
-        _j7b = c.post("/api/tasks", data={"name": "smoke-no-expand", "targets": "pengo.pro",
+        _j7b = c.post("/api/tasks", data={"name": "smoke-no-expand", "targets": "targ1.pro",
                                           "stages": ["subdomain"]}).get_json()
         assert "auto_expand" not in (db.get_task(_j7b["id"])["options"] or ""), \
             "没勾就不该凭空多出选项（既有行为不变）"
@@ -6967,8 +6967,8 @@ http:
         _exd7.process = lambda *a, **kw: _calls7.append(a[0] if a else None)
         for _opt7b, _want in (({"auto_expand": True}, True), ({}, False)):
             _calls7.clear()
-            _t7e = db.create_task(f"smoke-hook-{bool(_opt7b)}", "pengo.pro", ["jsmine"], {})
-            PipelineRunner(StageContext(_t7e, "smoke-hook", parse_lines(["pengo.pro"]),
+            _t7e = db.create_task(f"smoke-hook-{bool(_opt7b)}", "targ1.pro", ["jsmine"], {})
+            PipelineRunner(StageContext(_t7e, "smoke-hook", parse_lines(["targ1.pro"]),
                                         ["jsmine"], dict(_opt7b), _s7,
                                         Path(_TMPDIR) / f"hook7_{bool(_opt7b)}", rec)).run()
             assert bool(_calls7) is _want, (_opt7b, _calls7)
@@ -7155,7 +7155,7 @@ http:
           "8 个第三方模块零 auth= / 8 个目标侧模块全覆盖 auth=True / "
           "jsmine 为混合出口（显式 auth，值由 [7d] 钉）")
 
-    # [7d] 续43：jsmine 抓 JS 时**第三方主机不得带登录态**（实跑 pengo.pro 逮到的缺陷）。
+    # [7d] 续43：jsmine 抓 JS 时**第三方主机不得带登录态**（实跑 targ1.pro 逮到的缺陷）。
     #     现象：日志里出现 `InsecureRequestWarning ... host 'static.cloudflareinsights.com'`
     #     —— 那是首页 `<script src>` 引的第三方埋点，不是目标主机，却也走了 auth=True。
     #     后果：任务一旦配了 Cookie/Authorization（-H / --cookie），目标会话凭据会被发到
@@ -7163,13 +7163,13 @@ http:
     #     所以没有真的外发，只是路径被证实）。修复：按 URL 主机是否属目标注册域决定 auth。
     from scanner import jsmine as _jm7d
     # ① 判定口径本身（与 `_is_noise` 的 protect 放行同一份，后缀必须按 label 比）
-    assert _jm7d._is_self_host("pengo.pro", {"pengo.pro"}) is True
-    assert _jm7d._is_self_host("a.b.pengo.pro", {"pengo.pro"}) is True
-    assert _jm7d._is_self_host("PENGO.PRO", {"pengo.pro"}) is True, "[7d] 主机大小写应归一"
-    assert _jm7d._is_self_host("static.cloudflareinsights.com", {"pengo.pro"}) is False
-    assert _jm7d._is_self_host("notpengo.pro", {"pengo.pro"}) is False, \
-        "[7d] 后缀匹配必须带点号：notpengo.pro 不是 pengo.pro 的子域"
-    assert _jm7d._is_self_host("", {"pengo.pro"}) is False
+    assert _jm7d._is_self_host("targ1.pro", {"targ1.pro"}) is True
+    assert _jm7d._is_self_host("a.b.targ1.pro", {"targ1.pro"}) is True
+    assert _jm7d._is_self_host("targ1.PRO", {"targ1.pro"}) is True, "[7d] 主机大小写应归一"
+    assert _jm7d._is_self_host("static.cloudflareinsights.com", {"targ1.pro"}) is False
+    assert _jm7d._is_self_host("nottarg1.pro", {"targ1.pro"}) is False, \
+        "[7d] 后缀匹配必须带点号：nottarg1.pro 不是 targ1.pro 的子域"
+    assert _jm7d._is_self_host("", {"targ1.pro"}) is False
     # ② 运行期：把 http_request 换成记录 auth 的桩，页面里放三条 `<script src>`
     _seen7d = {}
 
@@ -7180,32 +7180,32 @@ http:
                     "url": url}
         return {"status": 200, "headers": {}, "text":
                 '<script src="/same.js"></script>'
-                '<script src="https://cdn.pengo.pro/lib.js"></script>'
+                '<script src="https://cdn.targ1.pro/lib.js"></script>'
                 '<script src="https://static.cloudflareinsights.com/beacon.min.js"></script>',
                 "length": 64, "url": url}
 
     _real_jm7d = _jm7d.http_request
     try:
         _jm7d.http_request = _fake_jm7d
-        _jm7d.mine("http://pengo.pro/",
+        _jm7d.mine("http://targ1.pro/",
                    {"jsmine": {"secrets": False}, "limits": {"max_workers": 4}})
     finally:
         _jm7d.http_request = _real_jm7d
-    assert _seen7d.get("http://pengo.pro/") is True, \
+    assert _seen7d.get("http://targ1.pro/") is True, \
         f"[7d] 目标页面本身应带登录态：{_seen7d}"
-    assert _seen7d.get("http://pengo.pro/same.js") is True, \
+    assert _seen7d.get("http://targ1.pro/same.js") is True, \
         f"[7d] 同主机脚本应带登录态：{_seen7d}"
-    assert _seen7d.get("https://cdn.pengo.pro/lib.js") is True, \
+    assert _seen7d.get("https://cdn.targ1.pro/lib.js") is True, \
         f"[7d] 同注册域子域脚本应带登录态：{_seen7d}"
     assert _seen7d.get("https://static.cloudflareinsights.com/beacon.min.js") is False, \
         f"[7d] 第三方脚本**不得**带登录态（缺陷原形）：{_seen7d}"
     assert len(_seen7d) == 4, f"[7d] 抓取点数量不符（页面 1 + 脚本 3）：{_seen7d}"
 
     print("[7d] 续43 jsmine 出站凭据 ok: 同注册域（含子域、大小写归一）带登录态 / "
-          "第三方 CDN·埋点不带 / 后缀按 label 比（notpengo.pro 不误判）")
+          "第三方 CDN·埋点不带 / 后缀按 label 比（nottarg1.pro 不误判）")
 
-    # [7e] 续43：CDN 判定补**任播 IP 段**判据（实跑 pengo.pro 逮到的准确性缺陷）。
-    #     现象：pengo.pro / admin.pengo.pro / app.pengo.pro 的 A 记录直接指向 Cloudflare 边缘
+    # [7e] 续43：CDN 判定补**任播 IP 段**判据（实跑 targ1.pro 逮到的准确性缺陷）。
+    #     现象：targ1.pro / admin.targ1.pro / app.targ1.pro 的 A 记录直接指向 Cloudflare 边缘
     #     （`172.66.40.229` / `172.66.43.27`），**CNAME 链为空** —— 只按 CNAME 判会把三个主机
     #     全标成"非 CDN"：① 资产页看不出走 CDN；② portscan 照样去打边缘节点，得出"30 个端口
     #     开放"这种与目标无关的结论（同一时刻手工 TCP connect 22 是超时的）。
@@ -7570,15 +7570,15 @@ http:
         return {r["domain"] for r in db.list_subdomains(tid)
                 if (r["source"] or "").startswith("promote:")}
 
-    _p94_mine = db.create_task("smoke-promote-mine", "pengo.pro", ["probe"], {},
+    _p94_mine = db.create_task("smoke-promote-mine", "targ1.pro", ["probe"], {},
                                owner_id=_sub7h["id"])
-    _p94_other = db.create_task("smoke-promote-other", "pengo.pro", ["probe"], {},
+    _p94_other = db.create_task("smoke-promote-other", "targ1.pro", ["probe"], {},
                                 owner_id=_admin7h["id"])
-    db.insert_subdomains(_p94_mine, [("aaa.pengo.pro", "js:mine")])
-    db.insert_subdomains(_p94_other, [("aaa.pengo.pro", "js:mine")])
-    assert _cs.post("/api/domains/promote", data={"domain": ["aaa.pengo.pro"],
+    db.insert_subdomains(_p94_mine, [("aaa.targ1.pro", "js:mine")])
+    db.insert_subdomains(_p94_other, [("aaa.targ1.pro", "js:mine")])
+    assert _cs.post("/api/domains/promote", data={"domain": ["aaa.targ1.pro"],
                                                   "next": "/extdomains"}).status_code == 302
-    assert _prom94h(_p94_mine) == {"aaa.pengo.pro"}, "子用户经 HTTP 能追加**自己**的任务"
+    assert _prom94h(_p94_mine) == {"aaa.targ1.pro"}, "子用户经 HTTP 能追加**自己**的任务"
     assert _prom94h(_p94_other) == set(), \
         f"子用户经 HTTP **不得**往别人的任务里写 promote 行（实到 {_prom94h(_p94_other)}）"
     assert _ca.get(f"/tasks/{_tid_mu}").status_code == 200, "管理员应能打开子用户的任务"
@@ -12822,7 +12822,7 @@ http:
 
 
     # ---------------- [8h] 续110：CDN 判定覆盖"裸目标" + C 段共享主机结论必须上库上报告 ----------------
-    #      两处都是 2026-10-05 对授权目标 dzmm.ai 实跑全流程时校验出来的，根因同一类：
+    #      两处都是 2026-10-05 对授权目标 targ3.ai 实跑全流程时校验出来的，根因同一类：
     #      **同一个动作在两处各写一遍判据** —— 子域名走 CDN 判定、不在 `subdomains` 表里的裸目标
     #      不走（于是把 Cloudflare 边缘节点当源站全端口扫）；资产拓展丢掉了共享主机的噪声域名，
     #      `csegs` 表与报告却照抄 500 条（读者会把别人的 workers.dev 当成本项目标的资产面）。
@@ -12977,7 +12977,7 @@ http:
           "未超阈值照常入库｜老库 _ensure_columns 补 note")
 
     # ---------------- [8i] 续112：同一域名一行（按来源权威性）+ 默认只看解析成功 ----------------
-    #      用户在 dzmm.ai 实跑后提的两条同源问题：`dzmm.ai` / `www.dzmm.ai` 在子域名页各出现两行
+    #      用户在 targ3.ai 实跑后提的两条同源问题：`targ3.ai` / `www.targ3.ai` 在子域名页各出现两行
     #      （一行来源 js:mine、一行 subfinder，看着像两个资产），而二十几个解析不了的 JS 碎片
     #      把整屏刷满。修法都在**展示层口径**（入库一条都不动），所以断言也只盯口径：
     #      ① 去重必须留"最权威来源"那一行，且 `total` 与列表同口径；② 被去掉的来源要并到
@@ -13077,7 +13077,7 @@ http:
           "RESOLVED_WHERE 打回恒真的变异能把断言变红")
 
     # ---------------- [8j] 续112-F：目录发现的「整站统一 403 拦截页」 ----------------
-    #      用户在 dzmm.ai 的「目录」页签点名的问题：「这两个大小不也一样吗 为什么两个都显示了？」
+    #      用户在 targ3.ai 的「目录」页签点名的问题：「这两个大小不也一样吗 为什么两个都显示了？」
     #      实况是 Cloudflare 对**任何**路径都回同一张 403 拦截页（正文逐字节相同、4910 字节），
     #      而 dirscan 的软 404 基线**只对 200 生效**（`if st == 200`），于是每个敏感路径都留下
     #      一条"403 + 同一张页"的假发现。修在写入侧：把"与随机路径同内容的 403"也当成基线滤掉，
@@ -13174,13 +13174,13 @@ http:
     assert _ds112.is_uniform_block("其它正文", len(_BLOCK112), set(), {len(_BLOCK112)}) is True
     assert _ds112.is_uniform_block("其它正文", 123, {_dg112}, {len(_BLOCK112)}) is False
 
-    # ⑦ dzmm.ai 的真实形态（本轮复扫抓到的）：随机路径**不被拦**（回 200 的 SPA 模板页），
+    # ⑦ targ3.ai 的真实形态（本轮复扫抓到的）：随机路径**不被拦**（回 200 的 SPA 模板页），
     #    于是"与随机路径同内容的 403"那条基线判据根本不命中；Cloudflare 的托管规则只拦
     #    `wp-config.php` 这类特定路径，几十个路径各留一条 `403 / 4910 /
     #    Attention Required! | Cloudflare`。这条只能靠**厂商专属标题文案**判
     #    （`config/dicts/waf_block_titles.txt`）；CF 页面里带 ray id，正文 md5 逐次不同，
     #    所以既不能按正文哈希、也不能按"重复几条"分组（两条真路径同页是常事）。
-    _SPA112 = "<html>dzmm ai spa shell</html>" + ("s" * 12349)
+    _SPA112 = "<html>targ3 ai spa shell</html>" + ("s" * 12349)
 
     def _srv112c(url, timeout=10, headers=None, data=None, verify=None,
                  allow_redirects=True, settings=None, want_bytes=False, auth=False):
@@ -13257,7 +13257,7 @@ http:
 
     print("[8j] 续112-F 整站拦截页不再计为目录发现 ok: 与随机路径**同内容**的 403 滤掉｜"
           "正文不同的 403 与 200 命中照旧保留（不是「见 403 就丢」）｜随机路径回 404 的站点一条"
-          "都不滤（没有 403 基线=没有证据）｜dzmm.ai 真实形态（随机路径回 200 的 SPA 页 + CF 只拦"
+          "都不滤（没有 403 基线=没有证据）｜targ3.ai 真实形态（随机路径回 200 的 SPA 页 + CF 只拦"
           "特定路径）靠厂商标题文案表收掉 4 条、日志写明拦了几个｜nginx 默认「403 Forbidden」"
           "（文件存在但被拒＝真发现）两条原样入库，通用文案刻意不收进表｜滤掉的条数写进日志"
           "（不静默少结果）｜判据打回恒 False 的变异让两条噪声回来｜is_block_page 只管 "
@@ -13267,7 +13267,7 @@ http:
 
 
     # ---------------- [8k] 续112-B：3xx 站点的「跳转后」取证与显示 ----------------
-    #      用户点名：「301 的状态码 我希望给跳转之后的标题 标记一个跳转后」。实况是 dzmm.ai 的
+    #      用户点名：「301 的状态码 我希望给跳转之后的标题 标记一个跳转后」。实况是 targ3.ai 的
     #      15 个站点全是 `301 / 标题「301 Moved Permanently」`（httpx 默认**不跟随**重定向），
     #      看不出跳去了哪儿、落地页是什么。修在写入侧：新增 `redirect_*` 三列存"跟随之后的
     #      最终 url / 状态 / 标题"，**原始那一跳一个字都不动**（把 301 覆盖成 200 等于谎报）。
@@ -18274,7 +18274,7 @@ expression: r0()
     _a8ao = _argv8ao[0]
     assert "-mc" not in _a8ao and "200,301,302,403,404" not in _a8ao, f"状态码白名单又回来了：{_a8ao}"
     assert "-nfs" in _a8ao, ("没锁 scheme：`http://h` 的 301 会被 httpx 的 scheme 回退换成 "
-                             "`https://h` 的落地状态，原始那一跳再也看不见（实测 ws-spot.weex.com）")
+                             "`https://h` 的落地状态，原始那一跳再也看不见（实测 ws-spot.targ2.com）")
     assert "-fr" not in _a8ao, "-fr 会跟随跳转，正是要避免的谎报（「跳转后」另有取证函数）"
     _got8ao = {r["url"]: dict(r) for r in db.list_sites(_tid8ao)}
     assert _got8ao.get("https://api.lab8ao.test", {}).get("status") == 521, \
@@ -18900,7 +18900,7 @@ expression: r0()
           "且开发模式/自检把词数与补探主机数压回个位数（用户装深字典不许把 CI 拖慢）")
     # ---------------- [8ar] 续140：「渲染后标题」（SPA 站点的原始 HTML 里根本没有 <title>） ----------------
     #      用户点单（2026-10-09）：「有些明明有标题为什么我们就是获取不到标题 我们能在等待时间把这个解决了吗」
-    #      附的那一行就是任务 14 站点 #279 `https://agent.weex.com/` 200 / tech=nextjs,react / 标题空。
+    #      附的那一行就是任务 14 站点 #279 `https://agent.targ2.com/` 200 / tech=nextjs,react / 标题空。
     #      本轮实测取证：该站响应体 1298 字节、9 个 `<script>`，**没有 `<title>`、没有 og:title、没有 h1**
     #      —— 标题是 JS 注进来的。所以 httpx 的 `-title` 与内置探测取不到标题**不是抓取失败**，是源头没有；
     #      唯一能补的是"渲染"，而渲染要浏览器（本仓最贵的动作，单站点 1~3 秒 + 明显内存）。
@@ -19129,9 +19129,9 @@ expression: r0()
     import threading as _th8ar
 
     _SPA8AR = (b'<html><head><meta charset="utf-8">'
-               b'<script>document.title="Agent Weex Console \xc2\xb7 \xe5\x90\x8e\xe5\x8f\xb0";'
+               b'<script>document.title="Agent targ2 Console \xc2\xb7 \xe5\x90\x8e\xe5\x8f\xb0";'
                b'</script></head><body><div id="root"></div></body></html>')
-    _WANT8AR = "Agent Weex Console · 后台"
+    _WANT8AR = "Agent targ2 Console · 后台"
 
     class _H8ar(_hs8ar.BaseHTTPRequestHandler):
         def do_GET(self):

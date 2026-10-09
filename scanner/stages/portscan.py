@@ -149,9 +149,9 @@ class PortscanStage(Stage):
                 else:
                     # 续110：这条兜底分支此前**完全不判 CDN**。`net` 里只有 subdomain 阶段回填过的
                     #   域名，而"任务直接给的那个域名/URL"根本不在 `subdomains` 表里 → 于是拿着
-                    #   Cloudflare 边缘 IP 把 1-65535 全扫一遍（2026-10-05 dzmm.ai 实测：26 个
+                    #   Cloudflare 边缘 IP 把 1-65535 全扫一遍（2026-10-05 targ3.ai 实测：26 个
                     #   "开放端口" = CF 支持的 13 个端口 × 2 个任播 IP，banner 全空，两轮集合逐字节
-                    #   相同；同一次扫描里 `studio/www.dzmm.ai` 因为在表里带 cdn 标记**被正确跳过**
+                    #   相同；同一次扫描里 `studio/www.targ3.ai` 因为在表里带 cdn 标记**被正确跳过**
                     #   —— 同一个动作留了两套判据，就是这么来的）。
                     #   现在复用 subdomain 阶段那一套：`resolve_detail`（CNAME 链 + A 记录）→
                     #   `cdn.match`（CNAME 后缀与 IP 段**双判据**，后者专治"任播 CDN 直连 IP、CNAME 空"）。

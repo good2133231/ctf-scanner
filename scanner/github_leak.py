@@ -158,7 +158,7 @@ def _status_reason(status):
 # ---- 公共分流名单 / 路由规则表（续111）：只**标注 + 降级**，绝不丢线索 ----
 #   这类仓库把成千上万个域名整批抄进 gfwlist / clash / surge / smartdns / proxy rules 名单，
 #   "目标域名 + password/api_key 关键字在同一文件"是这类文件的**常态**，不等于目标方凭据泄露。
-#   实测（2026-10-05 授权目标 dzmm.ai）：30 条 github 线索里绝大多数是这一类
+#   实测（2026-10-05 授权目标 targ3.ai）：30 条 github 线索里绝大多数是这一类
 #   （`GFWList/gfwrules.list`、`gfwlist.conf`、`clash-gfw-list.txt`、`list.txt`、`pac.conf`）。
 #   为什么不直接丢：丢了等于把判据藏起来 —— 人工想核对"这域名到底有没有被公开抄过"反而看不到；
 #   也与本仓一贯口径一致（宁标不删、unsupported 要写原因、fail-open 不静默丢资产）。
