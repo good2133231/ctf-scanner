@@ -40,7 +40,9 @@
 - 宿主 `.venv/bin/python tests/smoke.py`：**SMOKE PASS / RC=0**，墙钟 **5m03s**，0 个 AssertionError
   （`logs/_gate142_puredns.log`）；与工具/爆破相关的四组 `[7p]` `[7f]` `[8al]` `[8aq]` 都照旧 ok
   ⇒ 这台机器多装一个外部引擎没把任何判据弄成假红（§6.2 第一起那种形状，本轮专门防过）
-- CI：推上去盯五个 job（`smoke` 3.9 是权威口径）。
+- CI（`7946af5`）：**五个 job 全 success** —— 含 `smoke`(3.9) 与 `probe-3-14`(3.14)。
+  注意 CI 那台**没有** puredns（`tools/scanner/puredns` 不在仓库里），所以它走的是内置兜底那条
+  形状 —— 也就是说这次安装只改变本机行为，CI 口径一字未动，两头都验过才算数。
 ## 续141-附 CI 红的根因：一条断言一直拿「域名在现实中注册着」当哨兵（§6.2 第十一起）
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。接 续141 那次推送（`9842d1b`）之后，CI 的
