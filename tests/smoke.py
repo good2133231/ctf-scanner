@@ -19074,6 +19074,28 @@ expression: r0()
         assert not _ok_c and "渲染超时" in _err_c and _t_c == "产物没写成"
     finally:
         _shot8ar.run_cmd = _keep8ar[0]
+    # ④d 「旧的 PNG 不许替新的失败背书」（续140 顺手修掉的一个真缺陷）：
+    #     成败判据本来是"`out_path` 存在且非空"，同一个 URL 的 `shots/<md5>.png` 在续跑/追加执行时
+    #     是**同一个路径** —— 上一轮留下的图会让这一轮"浏览器根本没渲染"也报成功。
+    #     现在 `capture()` 先删旧产物再跑，所以这条必须红在旧写法上。
+    _stale8ar = Path(_tf8ar.mkdtemp(prefix="smoke-8ar-stale-")) / "stale.png"
+    _stale8ar.write_bytes(b"\x89PNG stale-from-last-round")
+    import time as _tm8ar
+    _t0_8ar = _tm8ar.time()
+    os.utime(_stale8ar, (_t0_8ar - 3600, _t0_8ar - 3600))   # 明确"上一轮"的时间戳（时钟粒度不可靠）
+    _keep8rc = _shot8ar.run_cmd
+    try:
+        _shot8ar.run_cmd = lambda argv, timeout=None, throttle=None, **kw: (0, "", "浏览器起不来")
+        _ok_s, _err_s, _t_s = _shot8ar.capture("https://stale.lab8ar.test/", _stale8ar,
+                                               _st8ar_cfg, want_title=True)
+        assert not _ok_s, "旧 PNG 在场就被判成截图成功（那是上一轮的产物，不是这一轮的）"
+        assert _stale8ar.exists() and _stale8ar.stat().st_size > 0, \
+            "失败时动了已有产物：库里 sites.shot 还指着它，删掉就是 GUI 裂图（比报错误导得更远）"
+        assert _err_s, f"失败必须给出原因：{_err_s!r}"
+        # 截不出新图 ⇒ **不许**把旧图配着空标题读成"截到了、只是这个站没标题"
+        assert _t_s == "", f"截图失败时不该返回任何标题：{_t_s!r}"
+    finally:
+        _shot8ar.run_cmd = _keep8rc
     # 没有浏览器：第三个返回值必须是空串而不是抛异常（旧代码在这里返回**二元组**，
     # 调用方一旦按三元组解包就会炸 —— 这条把"降级也要返回三元组"钉死。
     # ⚠️ 判据必须打在 `browser_path` 上而不是"把 settings.browser 留空"：这台机器与 CI runner
@@ -19112,21 +19134,51 @@ expression: r0()
 
     _cfg_real = copy.deepcopy(settings)
     _cfg_real["screenshot"] = dict(_cfg_real.get("screenshot") or {}, browser="")
+
+    def _e2e8ar(cfg):
+        """跑一次**真**渲染取标题，返回 `(verdict, 值)`：能截才钉、截不出就指名跳过（`[7z]` 同口径）。
+
+        ⚠️ 判据必须是"这次截图真成功了"，不能是 `available()` —— 「找得到浏览器」不等于
+        「这台机器上的浏览器渲染得出来」。续140 就是拿 `available()` 当判据，本地宿主与容器都绿、
+        **CI 两个 smoke job 同时红**（runner 上 Chrome 在、但那条路截不出），
+        把环境限制打成代码红。见 AGENTS §6.2 第九起。
+        """
+        if not _shot8ar.available(cfg):
+            return ("skip", "本机没有无头浏览器")
+        _ok, _err, _title = _shot8ar.capture(_url8ar, _png8ar, cfg, timeout=45, want_title=True)
+        if not _ok:
+            return ("skip", f"浏览器在但截不出：{_err}")
+        return ("pass", _title)
+
     _srv8ar = _hs8ar.ThreadingHTTPServer(("127.0.0.1", 0), _H8ar)
     _url8ar = f"http://127.0.0.1:{_srv8ar.server_address[1]}/"
     _th8ar.Thread(target=_srv8ar.serve_forever, daemon=True).start()
+    import urllib.request as _ur8ar
     try:
-        if not _shot8ar.available(_cfg_real):
-            print("[8ar] 续140 端到端 **跳过（不是通过，环境限制：本机没有无头浏览器）**")
+        _v8ar, _val8ar = _e2e8ar(_cfg_real)
+        if _v8ar == "skip":
+            print(f"[8ar] 续140 端到端 **跳过（不是通过，环境限制：{_val8ar}）**")
         else:
-            _ok_e, _err_e, _t_e = _shot8ar.capture(_url8ar, _png8ar, _cfg_real,
-                                                   timeout=45, want_title=True)
-            assert _t_e == _WANT8AR, \
-                f"有浏览器却补不到 JS 注入的标题：ok={_ok_e} err={_err_e!r} got={_t_e!r}"
+            assert _val8ar == _WANT8AR, f"浏览器真截成功了却补不到 JS 注入的标题：{_val8ar!r}"
             # 顺带钉住"原始 HTML 确实没有标题" —— 端到端能拿到只可能是**渲染**的功劳
-            import urllib.request as _ur8ar
             assert b"<title" not in _ur8ar.urlopen(_url8ar, timeout=5).read()
             print(f"[8ar] 续140 端到端 ok：无头浏览器 --dump-dom 补到 JS 注入的标题 {_WANT8AR!r}")
+        # ④c 把"降级"那条路本身钉住（每台机器都跑得到）：拿一个**存在但不是浏览器**的可执行文件
+        #     当 browser ⇒ `available()` 为真、渲染必失败 ⇒ 判定必须是 skip，且原因要说出口。
+        #     ⚠️ 产物路径必须是**全新的**：`capture()` 的成败判据是"PNG 存在且非空"，
+        #     复用上面那个已经存在的 a.png 会让一个假浏览器也"成功"（本轮就撞过一次）。
+        _cfg_fake = copy.deepcopy(settings)
+        _cfg_fake["screenshot"] = dict(_cfg_fake.get("screenshot") or {}, browser=sys.executable)
+        assert _shot8ar.available(_cfg_fake), "browser 指到一个真实存在的文件，available 就该 True"
+        _png8ar2 = Path(_tf8ar.mkdtemp(prefix="smoke-8ar-fake-")) / "fresh.png"
+        _keep_bp = _shot8ar.browser_path
+        try:
+            _shot8ar.browser_path = lambda st=None: str(sys.executable)
+            _v8ar2, _val8ar2 = _e2e8ar(_cfg_fake)
+        finally:
+            _shot8ar.browser_path = _keep_bp
+        assert _v8ar2 == "skip" and "截不出" in _val8ar2, \
+            f"渲染失败却被当成可以钉标题（这正是 CI 那两个 job 红的形状）：{_v8ar2}/{_val8ar2!r}"
     finally:
         _srv8ar.shutdown()
         _srv8ar.server_close()
@@ -19279,7 +19331,9 @@ expression: r0()
           "要标题时只多一个 --dump-dom 且紧贴 URL 之前、PNG 没写成仍保留 DOM 标题、"
           "无浏览器降级成三元组而不是抛异常、只看 DOM 前 200K 是钉死的有意窗口｜"
           "真·端到端（本机 google-chrome --dump-dom）把 JS 注入的中文标题补回来了，"
-          "夹具页必须带 meta charset（不带时 Chrome 猜 windows-1252 会吐 mojibake）｜"
+          "夹具页必须带 meta charset（不带时 Chrome 猜 windows-1252 会吐 mojibake）；"
+          "端到端按 [7z] 同口径降级：能截才钉、截不出指名跳过（CI runner 就是"
+          "\u201c浏览器在但截不出\u201d那一类）｜"
           "阶段只对空标题站点要 DOM、补到就同时进库/进内存/进产物（shot 仍是相对路径）｜"
           "拿不到标题不编数（「补到 0 个」+「其余连渲染后也没有标题」）、want_title 被吃掉就补不到（变异）｜"
           "门控两条都在（策略关 ⇒ 零请求；任务级勾选能压过）｜probe 入库日志把缺标题数量与出路一起说清")
@@ -19288,7 +19342,7 @@ expression: r0()
     #      让我们换对话框，换AI也能接着执行」+「把多agent执行加入记忆…就算其他ai来了也会多agent执行」。
     #      规矩本体写在 `AGENTS.md` §0.4（一轮的四步完成判据）与 §10（哪些能并行、哪些必须独占）。
     #      这里把它变成**跑得绿的判据**：只写进文档而没有机器判，下一个接手者（或下一个忘了的 AI）
-    #      照样会漏 —— §6.2 那八起假红每一起的成因都是"某条口径没人守着"。
+    #      照样会漏 —— §6.2 那九起假红每一起的成因都是"某条口径没人守着"。
     import re as _re8as
     from pathlib import Path as _P8as
 

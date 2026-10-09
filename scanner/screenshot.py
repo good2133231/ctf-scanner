@@ -14,6 +14,7 @@
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from .utils import html_title, run_cmd
@@ -138,6 +139,9 @@ def capture(url, out_path, settings=None, timeout=30, throttle=None, want_title=
 
     `throttle`（F2）：传入时这次子进程调用占一个 `"subprocess"` 名额（并消耗预算）。
 
+    成功＝**这一次**真的产出了非空 PNG（用 mtime 认出"旧图还在"不算成功，续140）；
+    失败时不碰已有产物 —— 库里 `sites.shot` 可能还指着上一轮那张图，删了就是 GUI 裂图。
+
     `want_title=True`：在**同一次**浏览器调用里加 `--dump-dom`，把渲染完成后的 DOM 打到 stdout，
     从中取 `<title>` 作为第三个返回值（拿不到就是空串）。为什么要挤进同一次调用：
     有些站（Next.js / Vue 的 SPA 外壳）原始 HTML 里**根本没有** `<title>` —— 实测授权目标
@@ -154,6 +158,12 @@ def capture(url, out_path, settings=None, timeout=30, throttle=None, want_title=
     out_path = _abs_out(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_profile = tempfile.mkdtemp(prefix="ctfscan-shot-")
+    # 续140：成败判据从"文件存在且非空"改成"**这次调用之后**存在、非空、且 mtime 变新"。
+    # 为什么：同一个 URL 的 `shots/<md5>.png` 在续跑/追加执行时是同一个路径，旧写法会让
+    # "浏览器这次根本没渲染成功"也算成功（旧图替新失败背书 —— 本轮实测踩到）。
+    # ⚠️ 不是"先删再跑"：删掉的话，这一轮失败时库里那条 `sites.shot`（上一轮写的）就指向一个
+    # 已经不存在的文件 —— GUI 直接裂图，比"报错但旧图还在"更糟。**失败什么都不许动。**
+    _t0 = time.time()
     try:
         argv = [binary, *_FLAGS, f"--user-data-dir={tmp_profile}",   # 隔离：不碰用户真实浏览器配置
                 f"--window-size={size}", f"--screenshot={out_path}"]
@@ -161,13 +171,21 @@ def capture(url, out_path, settings=None, timeout=30, throttle=None, want_title=
             argv.append("--dump-dom")             # 渲染后的 DOM 打到 stdout，顺带取标题
         argv.append(str(url))
         rc, _out, err = run_cmd(argv, timeout=int(timeout or 30), throttle=throttle)
+        # mtime 必须**严格不早于**这次调用开始（同一次进程里时间戳只会往前走）
+        _fresh = False
+        try:
+            _st = out_path.stat()
+            _fresh = _st.st_size > 0 and _st.st_mtime >= _t0
+        except OSError:
+            _fresh = False
         # 只看 DOM 开头：`<title>` 一定在 `<head>` 里，而 `--dump-dom` 能把整页吐成几 MB，
         # 拿它跑正则纯属浪费（本阶段是给流水线"锦上添花"的，不许变成新的耗时大头）。
         title = html_title(str(_out or "")[:200000]) if want_title else ""
-        if out_path.exists() and out_path.stat().st_size > 0:
+        if _fresh:
             return True, "", title
-        # 截图没产物时标题仍可能已经拿到（DOM 出来了、PNG 没写成）—— 别把它一起丢掉
-        return False, (err or f"退出码 {rc}")[:200], title
+        # 截不出新图时标题仍可能已经拿到（DOM 出来了、PNG 没写成）—— 别把它一起丢掉；
+        # 但**旧 PNG 在场不算成功**（那条 mtime 判据），所以这里如实报失败
+        return False, (err or (f"退出码 {rc}" if rc else "没有产出新的截图文件"))[:200], title
     except Exception as e:                        # 兜底：截图失败绝不影响主流程
         return False, str(e)[:200], ""
     finally:
