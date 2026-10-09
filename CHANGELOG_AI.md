@@ -53,7 +53,9 @@ fail-open 保留。**所以这条断言吃的从来不是代码，是"外部世�
 - 容器 3.9（`ctfs:py39` / Python 3.9.25 / 干净树）：**SMOKE PASS / RC=0**，墙钟 **4m17s**；
   `[7x]` / `[7z]` / `[8ar]` 三组按口径打印「跳过（不是通过，环境限制：…）」（容器里没有浏览器）。
 - 宿主 3.14（`.venv`）：**SMOKE PASS / RC=0**，墙钟 **4m33s**，0 个 AssertionError（`logs/_gate141b_host.log`）
-- CI：推上去盯 `smoke` / `probe-3-14` 回到 success。
+- CI（`adaf477`）：**五个 job 全 success** —— 包括之前同时红的 `smoke`(3.9) 与 `probe-3-14`(3.14)。
+  这一条就是把上面的诊断放到「刚红过的那个环境」里再验一遍：容器与 CI 同形状，
+  宿主这台机器永远看不见这类依赖（§6.2 第十一起的原话就是这么来的）。
 ## 续141 真实目标域名脱敏：28 个文件 343 处，别名表刻意不入库
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux，宿主 `.venv` Python 3.14）。
