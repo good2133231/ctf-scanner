@@ -157,7 +157,7 @@ portscan:
   enabled: false
   max_hosts: 100
   ports: ''
-  mode: top
+  mode: full                  # 续144：默认全端口（用户点单）；top＝只打内置 TOP 端口表
   full_ports: 1-65535
   exclude_scanned: true
   full_workers: 256
@@ -179,7 +179,7 @@ dirscan:
   # 这是对早期"默认关闭"决策的**有意反转**（用户要求"先浅浅过一遍，再手动决定深度扫"）。
   # 深度扫 = mode 改 deep（或建任务时勾「全目录」/在结果页发起「补扫」）。
   enabled: true
-  mode: quick
+  mode: deep                  # 续144：默认深扫（全量分层字典 + dirmap + 后缀派生）
   # 浅扫单站点上限（dirs_shallow 共约 150 条，基本全吃）
   quick_max_paths: 150
   big_dict: true
@@ -191,7 +191,7 @@ dirscan:
   fw_max_paths: 150
   # 目录递归（深扫专用，**默认关**）：对目录型命中再往下打一层浅扫精选字典。
   # 三个键必须一起看 —— 单站浅扫约 153 请求，一层递归 = +目录数×(3 基线 + 每目录路径数)。
-  recursive_depth: 0        # 层数上限，0 = 关闭
+  recursive_depth: 1        # 续144：默认往下一层；层数上限，0 = 关闭
   recursive_max_dirs: 5     # 每站点**所有层合计**最多递归多少个目录
   recursive_max_paths: 40   # 每个递归目录再打多少条浅扫精选字典
 vulnscan:

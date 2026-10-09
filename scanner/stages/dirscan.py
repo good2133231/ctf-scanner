@@ -331,7 +331,7 @@ class DirscanStage(Stage):
         # 档位：浅扫（quick，默认）只打精选敏感路径；深扫（deep）走全量字典 + dirmap。
         # 任务级选项 `dirscan_full`（建任务勾「全目录」/结果页发起「补扫」）可把**单个任务**
         # 强制成深扫，不改全局策略 —— 与 portscan 的 `portscan_full` 同一套语义。
-        deep = (forced or str(cfg.get("mode") or "quick").strip().lower() == "deep")
+        deep = (forced or str(cfg.get("mode") or "deep").strip().lower() == "deep")
         # 按技术栈把站点分组：Java 站只吃 jsp 字典、PHP 站只吃 php 字典……判不出的走全量
         groups = self._group_by_kind(sites, tech_aware)
         ctx.logger.info(f"[dirscan] {'深扫' if deep else '浅扫'}模式；技术栈分组：" + " / ".join(

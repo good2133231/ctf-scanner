@@ -3093,7 +3093,7 @@ def create_app():
                     # 目录扫描：默认开但只跑浅扫（用户要求"先浅浅过一遍再决定要不要深挖"）；
                     # 深扫走全量分层字典 + dirmap + 后缀派生
                     "dirscan": {"enabled": f.get("dirscan_enabled") == "1",
-                                "mode": f.get("dirscan_mode", "quick"),
+                                "mode": f.get("dirscan_mode", "deep"),
                                 "quick_max_paths": int(
                                     f.get("dirscan_quick_max_paths", 150) or 150),
                                 "suffix_aware": f.get("dirscan_suffix_aware") == "1",
@@ -3103,7 +3103,7 @@ def create_app():
                                 "fw_max_paths": int(f.get("dirscan_fw_max_paths", 150) or 0),
                                 # 目录递归（续30，默认关）：0 = 关闭
                                 "recursive_depth": int(
-                                    f.get("dirscan_recursive_depth", 0) or 0),
+                                    f.get("dirscan_recursive_depth", 1) or 0),
                                 "recursive_max_dirs": int(
                                     f.get("dirscan_recursive_max_dirs", 5) or 0),
                                 "recursive_max_paths": int(

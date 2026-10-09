@@ -145,7 +145,7 @@ Flask Web 控制台（仿 ARL）。
   **目录联接**指向机器上的 dirmap 源码 —— 因此 dirscan 阶段在**深扫档**（`dirscan.mode=deep`、
   建任务勾「全目录深扫」或结果页「补扫」）会**优先真的调用 dirmap**（第十五轮实测
   15348 条字典跑完约 588 秒、解析正确）；找不到 `tools/dirmap/dirmap.py` 时自动回退内置扫描。
-  **默认档 `quick` 不调用任何外部工具**：只吃 `config/dicts/dirs_shallow.txt` 的精选敏感路径。
+  **`quick` 档不调用任何外部工具**（⚠ 续144 起默认档是 `deep`，`quick` 要显式选）：只吃 `config/dicts/dirs_shallow.txt` 的精选敏感路径。
   **续54 起有了"装它们"的入口**（此前只能手工放 PATH 或手改 `settings.yaml`）：
   `scanner/toolmgr.py` + CLI `--update-tools` + GUI 管理员侧栏「外部工具」页 —— 仍是
   **只在显式触发时才联网**（扫描期任何阶段都不会自动下载），只允许 https + 官方主机，
@@ -468,7 +468,7 @@ ctf-scanner/
   并把 CLI 的 `-p` 默认值改成 `None` —— 否则 `-p screenshot`/`-p cert` 会被策略门控静默吃掉）；
   `cert` 只做**一次只读 TLS 握手**（`verify_mode=CERT_NONE`）并解析证书（CN/SAN/有效期/自签/指纹），
   **是取证不是漏洞结论** —— 自签/过期是证书属性，不等于漏洞；解析用纯标准库 ASN.1/DER（`scanner/certs.py`）；
-  `dirscan` 默认开但**默认只跑浅扫**（`dirscan.mode=quick`，见 §8 的 dirscan 条目）；
+  `dirscan` 默认开且**续144 起默认深扫**（`dirscan.mode=deep` + `recursive_depth=1`；`quick` 档仍在，需显式选，见 §8）；
   末尾三个**线索阶段默认关**，且**只写 `leads` 表**（不写 `vulns`、不计入漏洞数、不自动导 POC）：
   `intel` = CISA KEV 情报 × 本地指纹白名单式匹配（`scanner/intel.py`），
   `heuristic` = 对已收集数据做零请求的差分/异常聚合（`scanner/heuristics.py`），
@@ -1853,7 +1853,8 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
     `--src scanner/pocs/pocs` 可跑内置那批。它**只报告不判分** —— 命中数不等于误报数，
     要人工看 `hits[]` 里的 `matched` 是不是通用词（实测 305 条导入命中 3 条、内置 7 条命中 0）。
     **不要**用它去自动改 `pocs.severity` 或自动启用 POC：那是"采信机器判分"，本轮恰恰在修这个。
-- **`dirscan` 的默认值于第十八轮（续9）反转为「开 + 只浅扫」**（第十五轮曾按用户要求默认关，
+- **⚠ 续144 更新：默认已是「开 + 深扫 + 递归 1 层」（`mode=deep`），下面这段是续9 当时的口径**
+  （`quick` 档的行为描述仍然有效，只是不再默认）。**`dirscan` 的默认值于第十八轮（续9）反转为「开 + 只浅扫」**（第十五轮曾按用户要求默认关，
   现在用户要求"先用偏敏感信息的通用路径浅浅过一遍，看清结果再手动决定深度扫"）：
   `dirscan.enabled=true` + `dirscan.mode=quick`，只吃 `config/dicts/dirs_shallow.txt`
   （206 条，人工筛选、按价值排序，截断额度 `dirscan.quick_max_paths` 默认 150）→ **不发外部工具调用**。

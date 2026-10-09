@@ -283,7 +283,7 @@
   本轮一个都没挖到时也一样调用，把库里其余没试过的本任务域名一并补探（上限与 DNS 预筛见 ④）；
 - 局限：纯正则（不做 sourcemap 还原）；短 token 与含 `test/demo` 的真实值会被保守丢弃。
 
-### ⑦ dirscan 目录发现（`dirscan.enabled`，**默认开，且默认只跑浅扫**）
+### ⑦ dirscan 目录发现（`dirscan.enabled`，**默认开；续144 起默认深扫 + 递归 1 层**）
 
 - 开关：`dirscan.enabled`（默认开）。**但默认档位是 `dirscan.mode="quick"`** —— 只打
   `config/dicts/dirs_shallow.txt` 里精选的通用敏感路径（**约 150 条/站**，见下），

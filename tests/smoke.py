@@ -1748,7 +1748,7 @@ def main():
     #    （takeover 默认开；dirscan 默认**开但只浅扫** —— 用户要求"先浅浅过一遍再决定深挖"）
     assert DEFAULTS["takeover"]["enabled"] is True
     assert DEFAULTS["dirscan"]["enabled"] is True
-    assert DEFAULTS["dirscan"]["mode"] == "quick"
+    assert DEFAULTS["dirscan"]["mode"] == "deep"      # 续144：默认改深扫（用户点单"全部默认开"）
     assert "screenshot" in STAGE_ORDER
     print("[5m] 低危清理 ok: 报告转义/pool_run保falsy/开放重定向/favicon HTML过滤/域名口径/"
           "FOFA转义/dnsq路径缓存/dirmap停止检查/默认开关一致")
@@ -1880,11 +1880,11 @@ def main():
     from scanner.stages.dirscan import _SHALLOW_LAYERS, _FULL_LAYERS, _SUFFIXES
 
     # 1) 默认值一致：DEFAULTS ↔ settings.yaml ↔ 文件真实存在（GUI 表单/POST 映射在第 4 条用真请求验）
-    assert _DEF["dirscan"]["enabled"] is True and _DEF["dirscan"]["mode"] == "quick"
+    assert _DEF["dirscan"]["enabled"] is True and _DEF["dirscan"]["mode"] == "deep"
     assert _DEF["dirscan"]["quick_max_paths"] == 150
     assert _DEF["dirscan"]["suffix_aware"] is True
     assert _DEF["dicts"]["dirs_shallow"] == "config/dicts/dirs_shallow.txt"
-    assert settings["dirscan"]["enabled"] is True and settings["dirscan"]["mode"] == "quick"
+    assert settings["dirscan"]["enabled"] is True and settings["dirscan"]["mode"] == "deep"
     assert settings["dicts"]["dirs_shallow"] == _DEF["dicts"]["dirs_shallow"]
     _shallow_file = _resolve(settings["dicts"]["dirs_shallow"])
     assert _shallow_file.exists(), "浅扫字典文件不存在（config/dicts/dirs_shallow.txt）"
@@ -2500,8 +2500,12 @@ def main():
     # 2) 目录页签：标题列表头 + 精简后的「深度补扫」入口；跨任务 /dirs 同步补上标题列
     _dhtml = c.get(f"/tasks/{_dt}").get_data(as_text=True)
     assert "<th>大小</th><th>标题</th>" in _dhtml, "任务详情目录页签缺「标题」列"
-    assert "深度补扫</button>" in _dhtml and "对本任务全部站点深度补扫" not in _dhtml, \
-        "深度补扫入口未按要求精简"
+    # 续144：默认档改成深扫之后，「深度补扫」这个入口本身就没意义了（用户点单"这种东西先不搞了"）。
+    # 判据因此**翻面**：从"必须有精简后的入口"变成"整页都不许再出现它"。
+    # 这条写法在下一步把按钮从模板里彻底删掉之后依然成立（模板现在是靠 `{% if not dir_full %}`
+    # 把它藏起来的 —— 把默认档改回 quick 就会让它重新出现，这条也就重新红）。
+    assert "深度补扫" not in _dhtml, \
+        "默认深扫之后，任务详情页不该再有「深度补扫」入口"
     assert "<th>标题</th>" in c.get("/dirs").get_data(as_text=True), "跨任务 /dirs 缺标题列"
 
     # 3) 拓展域名：按来源分类排序（JS 挖掘不再与 FOFA 交错）+ `?esrc=` 只看一类
@@ -5361,7 +5365,7 @@ workflows:
               "length": 10, "method": "GET", "note": "builtin", "title": ""}
     _ds_mod.http_request, DirscanStage._load_paths = _fake_http30, _fake_lp30
     try:
-        # 2) 默认关（recursive_depth=0）：连字典都不读、**一个请求都不发**
+        # 2) 显式关掉（recursive_depth=0；续144 起默认是 1 层）：连字典都不读、**一个请求都不发**
         _sent30.clear()
         assert _st30._recursive_scan(_sites30, [_dir30], {"recursive_depth": 0}, {}) == []
         assert _sent30 == [] and _layers30 == [], f"关闭时必须是零请求零读字典：{_sent30}"
@@ -5421,11 +5425,16 @@ workflows:
     finally:
         _ds_mod.http_request, DirscanStage._load_paths = _orig_http30, _orig_lp30
 
-    # 7) 接线：任务级「目录递归」勾选 = 本次强制开（策略关着也生效，且**不原地改全局策略**）；
-    #    没勾就按策略（默认关）。递归是深扫的附属能力，所以放在 `run()` 里对两种产物一视同仁
+    # 7) 接线：任务级「目录递归」勾选 = 本次强制开（**策略关着也生效**，且不原地改全局策略）；
+    #    没勾就按策略走。递归是深扫的附属能力，所以放在 `run()` 里对两种产物一视同仁
     #    （挂进 `_builtin_scan` 会让"装了 dirmap 的机器反而没有递归"）。
-    assert int((settings.get("dirscan") or {}).get("recursive_depth", -1)) == 0, \
-        "本用例前提：策略里目录递归是**默认关**的"
+    #    ⚠ 续144 起策略默认就是 1 层（用户点单"全部默认开"），所以"策略关着"这一档必须
+    #    **显式造出来**（拿一份副本把 `recursive_depth` 压成 0），不能再吃默认值 ——
+    #    否则这条断言会在默认值变动时静默失去意义（§6.2 第一起：判据不能吃环境/默认值）。
+    assert int((settings.get("dirscan") or {}).get("recursive_depth", -1)) == 1, \
+        "续144 起策略默认递归 1 层（要改这个默认值，必须连这条断言一起改）"
+    _off30 = copy.deepcopy(settings)
+    _off30["dirscan"] = dict(_off30.get("dirscan") or {}, recursive_depth=0)
     _orig_bs30, _orig_rs30 = DirscanStage._builtin_scan, DirscanStage._recursive_scan
     _cap30 = {}
     _fake_ent30 = [dict(_dir30)]
@@ -5437,15 +5446,23 @@ workflows:
     try:
         DirscanStage(StageContext(_run30, "smoke-rec-on", parse_lines([targets]), ["dirscan"],
                                   {"dirscan_full": True, "offline": True, "recursive_dir": True},
-                                  settings, Path(_TMPDIR) / "rec30", rec)).run()
+                                  _off30, Path(_TMPDIR) / "rec30", rec)).run()
         assert int(_cap30.get("recursive_depth", 0)) >= 1, \
             f"任务级勾了「目录递归」就必须至少一层（策略关着也得放行）：{_cap30}"
-        assert int(settings["dirscan"]["recursive_depth"]) == 0, "只本次生效，不得原地改全局策略"
+        assert int(_off30["dirscan"]["recursive_depth"]) == 0, "只本次生效，不得原地改全局策略"
         _cap30.clear()
         DirscanStage(StageContext(_run30, "smoke-rec-off", parse_lines([targets]), ["dirscan"],
-                                  {"dirscan_full": True, "offline": True}, settings,
+                                  {"dirscan_full": True, "offline": True}, _off30,
                                   Path(_TMPDIR) / "rec30b", rec)).run()
-        assert int(_cap30.get("recursive_depth", 0)) == 0, "没勾就该按策略走（默认关）"
+        assert int(_cap30.get("recursive_depth", 0)) == 0, "没勾就该按策略走（这份策略是关的）"
+        # 续144 新增：**真默认值**（不勾、不改策略）必须真的传到阶段里 —— 否则"默认改深扫"
+        # 只是配置文件上的字，扫描路径照旧不递归（这类"配置改了但没接线"是本仓反复出的事）。
+        _cap30.clear()
+        DirscanStage(StageContext(_run30, "smoke-rec-default", parse_lines([targets]), ["dirscan"],
+                                  {"dirscan_full": True, "offline": True}, settings,
+                                  Path(_TMPDIR) / "rec30c", rec)).run()
+        assert int(_cap30.get("recursive_depth", 0)) == 1, \
+            f"默认策略（recursive_depth=1）必须真的传到阶段：{_cap30}"
     finally:
         DirscanStage._builtin_scan, DirscanStage._recursive_scan = _orig_bs30, _orig_rs30
         db.delete_task(_run30, backup=False)
@@ -5807,8 +5824,10 @@ workflows:
     #     2026-09-28 续66：上面这份标定是**单站点**（只有靶场）下的数，而本用例**开着 portscan**
     #     —— `probe` 会把宿主机上任何开放端口都当候选，dirscan / vulnscan 会给**每个**额外站点
     #     再来一遍（实测 Linux：CUPS 631 / MySQL 3306 等被扫 → 站点 4 个、请求 925 > 400 假失败）。
-    #     故按**站点数缩放**：每站点 400 的预算不变（仍然抓得住某一阶段预算失控）。
-    _U_MAX_REQ_PER_SITE = 400
+    #     故按**站点数缩放**。续144 重标定：默认档从 quick 改成 deep + 递归 1 层之后，
+    #     每站点＝深扫 max_paths(400) + 软 404 基线 3 + 递归 5×(3+40)=215 + 漏洞检查
+    #     （盲注预算 34 + 报错型 30 + XSS 上下文探针）≈ 700，取 **900** 留余量但仍抓得住失控。
+    _U_MAX_REQ_PER_SITE = 900   # 续144：默认深扫后要重标定（算术见上一段注释）
     _U_MAX_REQ = _U_MAX_REQ_PER_SITE * max(1, len(_u_sites))
     assert len(_u_sent) <= _U_MAX_REQ, \
         f"全 13 阶段请求量 {len(_u_sent)} 超过上界 {_U_MAX_REQ}（阶段预算失控？）：" \

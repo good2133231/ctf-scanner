@@ -43,7 +43,7 @@ python cli/client.py -f targets.txt -n recon-0921 --report logs/report.md
 # 只做探测 + 漏洞初筛（URL 直达，跳过子域名）
 python cli/client.py -t http://target.local/ -p probe,vulnscan
 
-# 先浅浅过一遍（默认浅扫），回头对感兴趣的站点深扫目录 / 全端口
+# 续144 起默认就是深扫；要浅扫请显式设 dirscan.mode=quick，回头对感兴趣的站点深扫目录 / 全端口
 python cli/client.py -t http://target.local/ -p probe,dirscan --full-dir --full-ports
 
 # 裸机演示：完全离线
@@ -325,7 +325,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
      即任务级 `cert_on`，本次生效且不改全局策略。上限 `cert.max_sites`（30）、超时 `cert.timeout`（8s）、
      `cert.tls_ports`（默认 `443,8443,9443`，决定"非 https 但端口命中"的站点是否也握手）。
      注意它**只握手取证书、不校验证书**：自签/过期是证书属性而不是漏洞）、**目录/路径发现**
-     （`dirscan.enabled`，**默认开，但默认只跑浅扫**；
+     （`dirscan.enabled`，**默认开；续144 起默认深扫**；
      **探测强度 `dirscan.mode`**：`quick` = 只吃精选敏感路径字典 `dicts.dirs_shallow`（约 150 条/站，
      额度 `dirscan.quick_max_paths` 默认 150），`deep` = 全量分层字典 + dirmap + 后缀派生
      （`dirscan.suffix_aware` 默认开，对命中的文件名型路径派生 `.bak`/`.zip`/`.old` 等备份变体）；
@@ -395,7 +395,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
 - **全端口扫描**：入口在侧栏「全端口扫描」页（勾选主机 → 发起），它新建一个只跑 portscan 的任务，
   不动全局策略；想让它成为默认行为才去「策略配置 → 端口范围」改成 `full`。
   自动跳过该任务已扫过的端口（`portscan.exclude_scanned`）；
-- **默认浅扫**：`dirscan.enabled=true` + `dirscan.mode=quick`，只打 `config/dicts/dirs_shallow.txt`
+- **续144 起默认深扫**：`dirscan.enabled=true` + `dirscan.mode=deep` + `recursive_depth=1`（旧的默认浅扫＝`dirscan.mode=quick`，只打 `config/dicts/dirs_shallow.txt`
   里的**通用敏感路径**（约 150 条/站：VCS 泄露 / `.env` 等配置 / 备份与数据库转储 / 日志与调试 /
   中间件控制台 / 管理入口 / 目录泄露面 / 源码残留 / 健康检查）。请求量可控，适合"先浅浅过一遍"。
   字典是**本仓库自带、人工筛选并按价值排序**的（顺序即优先级，`quick_max_paths` 截断时靠前的先扫到）；

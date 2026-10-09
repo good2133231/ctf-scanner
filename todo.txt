@@ -2793,18 +2793,32 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [x] `AGENTS.md` §7 那段盲注说明同步（预算 34、五道门、`_note_skips`、packets 的两条取舍、
       "别再加那道恒真的门"）
 - [x] 门禁：**SMOKE PASS / RC=0**，墙钟 **4m59s**，0 个 AssertionError（`logs/_gate143c_host.log`）；新增的 ③b 六条全过，`[5y]` 那组照旧 ok
-下一轮（续144）：
+## 续144（2026-10-09，WorkBuddy · Qoder-Agent 远端 Linux）：默认档改深扫（第一批：默认值 + devmode + 断言 + 文档）
+用户点单：「我们现在默认就改成深度扫描吧」，追问后选**全部默认开**（目录深扫 + 递归 1 层 + 全端口）。
+同一次点单里还有三条（站点默认只看 200/404 + 显示全部 + 全选、摘掉四个补扫入口），
+**拆到本轮的后续提交**，理由：那两条会动模板与路由，与默认值这批混在一起红了分不清是谁。
+
+- [x] 三份默认值一起改：`DEFAULTS` / `settings.yaml` / GUI 表单兜底 + `stages/dirscan.py` 代码级兜底
+      （`dirscan.mode=deep`、`recursive_depth=1`、`portscan.mode=full`）；settings.html 的"默认"标注搬家
+- [x] **给 devmode 补 `portscan.full_ports: 1-1024`** —— 原先只压 workers/hosts，全端口默认开之后
+      自检会拿 1 个 worker 串行扫 65535 个端口（不是慢，是失控）
+- [x] **没动阶段开关**：`portscan.enabled` 仍 `false`（用户选的是**档位**全开）。要连端口扫描
+      变成每任务必跑是另一个决定 ⇒ 见下一轮清单
+- [x] 断言按新口径改：`[5m]`/`[5p]` 三处 quick→deep；`[6u]` 每站点上界 400→900（算术写进注释）；
+      目录页签「深度补扫」那条**翻面**成"整页不许再出现"
+- [x] `[6r]` 第 7) 段**重写而不是改数字**：原来靠"策略默认关"当前提，默认变 1 层后前提没了 ⇒
+      改成显式造一份 `recursive_depth=0` 的副本去测（判据不能吃默认值，§6.2 第一起那类），
+      并新增"真默认值必须真的传到阶段里"（防配置改了没接线）
+- [x] 7 处文档假话更正（AGENTS §2/§4/§8、docs/pipeline、docs/usage ×3、docs/architecture）
+- [x] 实测代价如实记：`[6u]` 37.5s→64.2s、站点 4→26、目录 2→318、请求 911→11921（上界 23400 守住）；
+      整套门禁墙钟 4m28s。**代价随宿主机开放端口数放大**，端口多的机器上请求量按站点数线性涨
+- [x] 门禁：宿主 `./.venv/bin/python tests/smoke.py` → **SMOKE PASS / RC=0**，墙钟 **4m28s**，0 个 AssertionError（`logs/_gate144b_host.log`）；`[6u]` 那组的新上界 900/站 守住（实测 11921 / 上界 23400）。CI 见推送后的五个 job。
+下一轮（续145）：
 
 - [ ] 站点默认只显示 **200 与 404**（301 **跳转后**的 200/404 也算显示）+ 一个「显示全部」开关
       + 表格**全选**。判据集中一处（参考续112 的 `RESOLVED_WHERE` / `_nores_state`：默认收起时
       翻页链接不带参数，展开后才带），全选要配合现有批量操作且**不许**触发外层表单提交（续56 那条
       `type="button"` 红线）
-- [ ] 默认改深扫：`dirscan.mode: quick → deep`、`dirscan.recursive_depth: 0 → 1`、
-      `portscan.mode: top → full`（**三份默认值一起改**：`config.DEFAULTS` / `settings.yaml` /
-      GUI 表单兜底 `gui/app.py:3096,3105,3149`）。**必须**同时给 devmode 压 `portscan.full_ports`
-      —— 现在只压了 `full_workers=1` / `max_hosts=1`，全端口默认开会让自检用 1 个 worker
-      串行扫 65535 个端口。再按新口径重写这批断言：`[5m]:1751`、`[5p]:1883/1887`、
-      `[6r]:5317/5333/5338`、`[6u]:5703` 的请求上界（并把门禁与 CI 的耗时变化量出来如实记）
 - [ ] 摘掉四个补扫入口（跨任务站点页「深度目录补扫」`sites.html:56`、任务页「深度目录补扫」
       `task_detail.html:203`、「补截图」`:204`、目录页签「深度补扫」`:555`）。
       `POST /api/rescan` **保留** —— 漏洞「复查」`task_detail.html:119` 还在用它，

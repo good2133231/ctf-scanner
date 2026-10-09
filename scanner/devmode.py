@@ -54,6 +54,10 @@ DEV_LIMITS = {
     "portscan.max_hosts": 1,
     "portscan.workers": 1,
     "portscan.full_workers": 1,
+    # 续144：`portscan.mode` 默认改成 full 之后，**只压 workers 不够** —— 1 个 worker
+    # 串行扫 65535 个端口会让自检与 CI 直接失控。范围也要压（1024 个端口足够走到
+    # "full 模式"那条代码路径，判据不看端口数）。
+    "portscan.full_ports": "1-1024",
     "jsmine.max_pages": 1,
     "jsmine.max_js": 1,
     "screenshot.max_sites": 1,

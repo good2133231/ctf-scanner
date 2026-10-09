@@ -273,7 +273,7 @@ DEFAULTS = {
         # 全端口扫描：`mode="full"` 时对 `full_ports`（默认 1-65535）逐端口 connect。
         # 6.5 万次连接耗时可观，所以全局默认仍是 top；GUI「全端口扫描」页对单个 IP
         # 发起的任务用**任务选项** `portscan_full` 单次触发，不改全局策略。
-        "mode": "top",             # top（内置 TOP 端口） / full（全端口）
+        "mode": "full",            # 续144：默认全端口（用户点单"全部默认开"）；top＝内置 TOP 端口
         "full_ports": "1-65535",
         "exclude_scanned": True,   # 跳过本任务已经扫过的端口（全端口扫描时尤其有用）
         # 全端口专用并发/超时（只在 full 模式生效，不动 TOP 模式的既有行为）。
@@ -319,7 +319,7 @@ DEFAULTS = {
         "enabled": True,
         # quick = 只吃 dirs_shallow（敏感路径精选）；deep = 全量分层字典 + dirmap。
         # 任务级选项 dirscan_full=true 可把单个任务强制成 deep（不改全局策略）。
-        "mode": "quick",
+        "mode": "deep",            # 续144：默认深扫（quick＝只吃 dirs_shallow 精选路径）
         "quick_max_paths": 150,    # 浅扫单站点上限（dirs_shallow 共约 150 条，基本全吃）
         "big_dict": True,      # 未知技术栈时用全量字典（config/dicts/dirs_big.txt）
         "tech_aware": True,    # 按 sites.tech 选字典：Java 站不吃 PHP/ASP 后缀（用户要求）
@@ -338,7 +338,7 @@ DEFAULTS = {
         # 一层递归 = +K×(3 基线 + M)（K=递归目录数、M=每目录路径数），K=5/M=40 时 +215 请求，
         # **比第一轮还多**；只限深度不限 K 会随"命中多少个目录"线性放大。
         # 只在**深扫**（mode=deep / 任务选项 dirscan_full）里生效，浅扫保持"快而少"不变。
-        "recursive_depth": 0,
+        "recursive_depth": 1,      # 续144：默认对目录型命中再往下一层（0＝关）
         # 每个站点在**所有递归层合计**最多递归多少个目录（不是每层各算一份）
         "recursive_max_dirs": 5,
         # 每个递归目录再打多少条浅扫精选字典（目录下只值当打高价值路径，不是再来一遍大字典）
