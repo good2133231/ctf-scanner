@@ -6824,11 +6824,22 @@ http:
     db.insert_subdomains(_et7, [("alive.targ1.pro", "js:mine"),
                                 ("gone.targ1.pro", "js:mine")])
     _orig_res7 = _dq7.resolve_detail
+    # 续141（脱敏顺带照出来的一处真缺陷）：`resolve_extended` 末尾会调 `drop_absent_zones`，
+    # 那一步**真查注册域的 NS**。这一组以前一直绿，只是因为当时的目标域名恰好在现实中注册着；
+    # 换成假别名后 NS 返回 NXDOMAIN ⇒ 行被删 ⇒ `KeyError`（3.9 容器与 CI 两个 job 都红，
+    # 宿主 3.14 绿 —— 宿主问不到 ⇒ unknown ⇒ fail-open 保留）。§6.2 第一起那一类毛病：
+    # 判据吃的是"这台机器/这一刻外部恰好是什么"，不是桩。
+    _zone_calls7 = []
+    _orig_zone7 = _dq7.zone_state
     try:
         _dq7.resolve_detail = lambda host, **kw: \
             ([host], ["1.2.3.4"], "") if host.startswith("alive.") else ([], [], "nxdomain")
+        _dq7.zone_state = lambda base, **kw: (_zone_calls7.append(base), "exists")[1]
         _r7 = _exd7.resolve_extended(_et7, settings, logger=rec)
         assert (_r7["scanned"], _r7["alive"], _r7["dead"]) == (2, 1, 1), _r7
+        assert _r7["dropped"] == 0, "这一组验的是解析回填与原因，不该有行被 zone 判据删掉"
+        # 桩必须**真的被点到**：否则"行还在"可能只是生产代码没接 zone 判据（假绿）
+        assert _zone_calls7 == ["targ1.pro"], f"zone_state 没被调用或调错对象：{_zone_calls7}"
         _net7 = {r["domain"]: dict(r) for r in db.list_subdomains(_et7)}
         assert _net7["alive.targ1.pro"]["ip"] == "1.2.3.4", _net7["alive.targ1.pro"]
         assert _net7["gone.targ1.pro"]["ip_note"] == "nxdomain", \
@@ -6837,6 +6848,7 @@ http:
         assert _exd7.resolve_extended(_et7, settings, logger=rec)["scanned"] == 0
     finally:
         _dq7.resolve_detail = _orig_res7
+        _dq7.zone_state = _orig_zone7
 
     # ③ 目标是子域 → 补收主域名 + 该子域入库解析（只在任务级 auto_expand 打开时）
     _seen7 = []
@@ -19358,7 +19370,7 @@ expression: r0()
     #      让我们换对话框，换AI也能接着执行」+「把多agent执行加入记忆…就算其他ai来了也会多agent执行」。
     #      规矩本体写在 `AGENTS.md` §0.4（一轮的四步完成判据）与 §10（哪些能并行、哪些必须独占）。
     #      这里把它变成**跑得绿的判据**：只写进文档而没有机器判，下一个接手者（或下一个忘了的 AI）
-    #      照样会漏 —— §6.2 那十起假红每一起的成因都是"某条口径没人守着"。
+    #      照样会漏 —— §6.2 那十一起假红/假绿每一起的成因都是"某条口径没人守着"。
     import re as _re8as
     from pathlib import Path as _P8as
 
