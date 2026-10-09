@@ -97,10 +97,24 @@
    （注释里提到一个已删变量是正当文档，判据要钉**代码形态** `\bsite_urls\s*=` 与 `site_urls=`，
    并配两个变异体证明检测器有牙）。
 
+### 补记：顺手修掉一个真 bug —— 端口预检比 Werkzeug 真实的 bind 更严
+重启控制台时当场咬到：结束旧进程后立刻重启，`serve()` 报「0.0.0.0:5000 已被占用
+（上一次的控制台进程还在运行…）请结束占用该端口的进程」并以退出码 1 结束，
+而 `ss -tln` 里**没有任何进程在监听** 5000。占着那个本地端口的是一个**还没关完的客户端连接**
+（实测 `FIN-WAIT-1 172.31.47.249:5000 → 5.226.140.13:25235`）。
+根因：`http.server.HTTPServer.allow_reuse_address = 1`（Werkzeug 的 `BaseWSGIServer` 继承它），
+而 `_port_free()` 是**裸 bind** ⇒ 预检比真实那次 bind 更严。它的判据本该是
+「有没有人在监听」，实际答成了「这个端口号上还有没有残留连接」—— 于是那句提示把人
+引向一个**不存在的占用者**（这正是 §7 那条"改完 GUI 必须重启服务"最常走的一条路）。
+修法一行：`s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)`。两个性质都保住了，
+本机实测：残留端口 裸 bind = errno 98 / 带 SO_REUSEADDR = OK；**真监听端口两者都 98**
+（SO_REUSEADDR 不放行两个监听者共存，那才是这个预检存在的理由）。
+回归 `[8at]⑤`：先用"裸 bind 必须失败"**自证夹具真造出了残留**（否则"必须放行"那条是空写，§6.1），
+再断言 `_port_free` 放行；反方向钉"真有监听者时必须报占用"。
 ### 实测数字
 - 门禁：宿主 `./.venv/bin/python tests/smoke.py` → **SMOKE PASS / RC=0 / 墙钟 4m51s / 0 个 AssertionError**
   （`logs/_gate145c_host.log`）。前两次是红的：第一次 3m25s 栽在 `site_urls` 那条被注释绊红，
-  第二次 4m53s 栽在 `KeyError: 'auto_root'`（就是上面那个打偏的补丁）。
+  第二次 4m53s 栽在 `KeyError: 'auto_root'`（就是上面那个打偏的补丁）。修完之后又跑了两轮全绿：记忆同步后 **4m51s**（`logs/_gate145d_host.log`）、加上上面这条端口预检补记后 **4m50s**（`logs/_gate145e_host.log`）—— 都是 RC=0 / 0 AssertionError。
 - 全流程自检 `run_devflow.py`：**35 个功能向量 19 OK / 0 MISS / 16 N-A**，13 个阶段 11 真跑 / 2 跳过 / **0 FAIL**，
   网络活动 247 次、总耗时 11.4s，「与基线相比没有阶段明显变慢」（`logs/_devflow145.log`）。
   `auto-expand` 向量仍 **OK**（折叠日志保留了「自动拓展」kw）。

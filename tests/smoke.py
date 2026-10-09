@@ -19853,6 +19853,55 @@ expression: r0()
         if _keep145 is not None:
             _os_8ak.environ["CTFSCANNER_WEB_PATH"] = _keep145
 
+    # ---- ⑤ 端口预检必须与 Werkzeug 真实那次 bind **同样宽**（续145-附，实测咬到）----
+    #   现象：结束旧控制台后立刻重启 ⇒ 报"5000 已被占用（去结束占用进程）"并退出码 1，
+    #   而 `ss -tln` 里**没有任何进程在监听** 5000 —— 占着那个本地端口的是一个还没关完的
+    #   客户端连接（实测 FIN-WAIT-1）。根因：`HTTPServer.allow_reuse_address = 1`（Werkzeug 继承它），
+    #   而 `_port_free` 原先是裸 bind ⇒ 预检比真实那次更严，判据答成了"端口上还有没有残留连接"。
+    import socket as _sk145
+
+    def _bare_bind145(host, port):
+        """变异体：不打 SO_REUSEADDR 的裸 bind —— 就是续145 之前的 `_port_free`。"""
+        with _sk145.socket(_sk145.AF_INET, _sk145.SOCK_STREAM) as _sb:
+            try:
+                _sb.bind((host, port))
+            except OSError:
+                return False
+            return True
+
+    def _linger_port145():
+        """造一个"监听者已关、连接残留"的端口（主动关的那一侧会停在 FIN-WAIT/TIME-WAIT）。"""
+        _l = _sk145.socket(_sk145.AF_INET, _sk145.SOCK_STREAM)
+        _l.setsockopt(_sk145.SOL_SOCKET, _sk145.SO_REUSEADDR, 1)
+        _l.bind(("127.0.0.1", 0))
+        _l.listen(1)
+        _p = _l.getsockname()[1]
+        _c = _sk145.socket()
+        _c.connect(("127.0.0.1", _p))
+        _a, _ = _l.accept()
+        _l.close()
+        _a.close()
+        _c.close()
+        return _p
+
+    _pl145 = _linger_port145()
+    # 夹具**必须先自证**造出了残留，否则下面那条"必须放行"是空写（§6.1：退不回失败的断言等于没加）
+    assert not _bare_bind145("127.0.0.1", _pl145), \
+        f"夹具没在 {_pl145} 上造出端口残留（那下一条断言就是空写）"
+    assert gui_app._port_free("127.0.0.1", _pl145), \
+        "只剩残留连接、没有监听者时预检必须放行 —— 否则重启控制台会被自己的预检挡住，" \
+        "而且那句提示会把人引向一个不存在的占用者"
+    # 反方向：真有人在监听 ⇒ 必须报占用（这条才是预检存在的理由：Werkzeug 会"绑定成功却打不开页面"）
+    _l2 = _sk145.socket(_sk145.AF_INET, _sk145.SOCK_STREAM)
+    _l2.setsockopt(_sk145.SOL_SOCKET, _sk145.SO_REUSEADDR, 1)
+    _l2.bind(("127.0.0.1", 0))
+    _l2.listen(1)
+    try:
+        assert not gui_app._port_free("127.0.0.1", _l2.getsockname()[1]), \
+            "真有监听者时预检必须报占用（SO_REUSEADDR 不许放宽到两个监听者共存）"
+    finally:
+        _l2.close()
+
     print("[8at] 续145 摘补扫入口 + 自动提取主域 + 启动日志落文件 ok: "
           "/api/rescan 接口保留而 GUI 只剩「复查」一个消费方（详情页 POST 表单恰好 2 个）｜"
           "subdomain.auto_root 三方一致 + 真 POST 两个方向都存得进去｜"
@@ -19861,7 +19910,8 @@ expression: r0()
           "启动横幅逐行进 logs/server.log、**随机前缀绝不落盘**（含“额外塞一行”的内容级证伪）、"
           "扣掉那行要说出来｜同进程二次 serve 不重复挂 handler｜"
           "落点不可写返回原因且不阻止启动（路径结构判据，不吃 root/权限位）｜"
-          "运行期 [gui] 日志与横幅共用同一个文件")
+          "运行期 [gui] 日志与横幅共用同一个文件｜"
+          "端口预检与 Werkzeug 同样宽：残留连接放行（夹具先自证）、真监听者仍报占用")
     print("SMOKE PASS")
 
 

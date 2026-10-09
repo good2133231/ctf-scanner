@@ -3751,13 +3751,22 @@ app = create_app()
 
 
 def _port_free(host, port):
-    """端口占用预检。
+    """端口占用预检：答的是"**有没有人在监听**这个端口"。
 
     必须自己做一次真实 bind：Windows 上 Werkzeug 对监听套接字设了 SO_REUSEADDR，
     第二个实例会**绑定成功**并照常打印 "Running on ..."，但页面其实打不开
     ——这正是之前诊断过的"控制台静默失败"（见 AGENTS.md 的经验教训）。
+
+    ⚠ 预检**必须与 Werkzeug 真实会做的那次 bind 同样宽**（续145 实测咬到）：
+    `http.server.HTTPServer.allow_reuse_address = 1`，而这里原先是裸 bind。于是"上一个控制台
+    刚被结束、还有客户端连接没关完（FIN-WAIT / TIME_WAIT 占着这个本地端口）"会让预检报
+    `EADDRINUSE` ⇒ `serve()` 打印"端口已被占用，去结束占用进程"并以 1 退出 —— 而实际上
+    **没有任何进程在监听**（`ss -tln` 是空的），真去 bind 是能成的，那句提示因此把人引向
+    一个不存在的占用者。加上 SO_REUSEADDR 之后两个性质都还在：真有监听者时**仍然**报占用
+    （SO_REUSEADDR 不放行两个监听者共存，那正是本函数存在的理由），只剩残留连接时放行。
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind((host, port))
         except OSError:
