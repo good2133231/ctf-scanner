@@ -82,6 +82,16 @@ kind 覆盖 `account / login_fail / login_ok / settings / task`，保留期 30 �
 `docs/usage.md` 1/1、`tests/smoke.py` 218/0，其余被改的文件同样相等：AGENTS.md 49/0、todo.txt 44/0、README.md 1/0、SKILL.md 17/5，
 `docs/security-notice.md` 5/0（就是下面那一节讲的那次洗行，回退重做后的数字）。
 
+另做了一次**真 HTTP 端到端**（`logs/_e2e146c3.py`，跑完即删；`CTFSCANNER_LOGS` / `CTFSCANNER_DB`
+都指到临时目录，不碰真实库与日志）：真 `make_server` + 真请求三条 —— 挂对前缀的未知路径、
+**只探单层**（`GET /第一层/`）、无前缀的 `/login`。结论三条：**管道里一条请求行都没有**
+（静音是对真服务器成立的，不是只对"模拟一次 logger 调用"成立），`access.log` 三条都在，
+两处前缀都变成 `<前缀已脱敏>` 而页面路径仍可读。
+跑到一半发现这台机器上常驻的控制台换了个进程（06:42 起，不是我起的），它加载的正是这批改动
+⇒ 顺带验到线上实况：`logs/access.log` 已积累 **571 行**真实公网探测（`/swagger.json`、
+`/v2/api-docs`、`/manager/html` 这类），文件里**没有 ANSI**、**没有任何两层随机前缀的形状**
+—— 打码在真实流量上同样成立，而不是只在回归的夹具里成立。
+
 ### 顺手修掉的一个工具缺陷（`logs/_lpatch.py`，未被 git 跟踪）
 
 它打印"新增行取的主导 EOL"时把 `dominant` 与 `b'\\r\\n'` 比 —— 那是"反斜杠+字母r"四个字节的
