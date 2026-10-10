@@ -144,6 +144,7 @@ $ dpkg -l python3-venv                 →  未安装
 并列出两条后果（把那两行**删掉**＝当场退回本机形态、正在给别人用的会失联；保持现状＝新 clone
 在 `--set` 之前全站 401）。之所以写在配置文件里而不是只写在文档里：**下一个会去改这两行的人，
 读的就是这个文件**（`[8ai]①` 那条注释写错理由导致全仓没人发现"新克隆必然 401"，就是同一个教训的前一例）。
+**验收**：门禁重跑 `./.venv/bin/python tests/smoke.py` → **SMOKE PASS / RC=0 / 4m39s / 0 AssertionError**（`logs/_gate146n.log`，3989 行、153 条组打印）—— 那一次跑的就是这一节落地后的树（`config/settings.yaml` 的注释、`todo.txt` 的补记与三条待办收口、本节的正文）。`config/settings.yaml` 另外单独复验：YAML 仍能解析、生效值仍是 `gui.host=0.0.0.0` 与 `gui.edge_auth={'enabled': True}`、29 个顶层键齐全（**只加注释，没动任何一个值**）。
 
 ## 续146 站点默认只看 200/404 + 批量打标收口 + 判据收敛成一份 + 四个入口搬进 cli/ + Linux 一键安装 + 项目须知打包成 skill
 
