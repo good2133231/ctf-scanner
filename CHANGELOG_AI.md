@@ -87,6 +87,19 @@
 | 三个非交互档 | `CTFSCANNER_EDGE_PASSWORD`（本轮新增）/ `CTFSCANNER_ADMIN_PASSWORD` / `CTFSCANNER_KEYS_PASSPHRASE`，`[8aw]①` 钉住互不重名 |
 | 文档 | AGENTS §5.10 补「补口令的三条路」+ §6 命令清单更正；README 两处；`install.sh` 收尾说明两条 |
 
+### 附2 自己犯的一个错（值得记，因为它会污染**共享仓库的提交历史**）
+
+补记忆那一行时用 `git commit -m "…"` 双引号包住正文，而正文里有反引号包的文件名 ——
+bash 把反引号当**命令替换**执行了：`` `_8aw_block.py` `` 变成「command not found」并展开成空串，
+提交信息里那一整串文件名**消失**，只留下括号和逗号。提交照样成功（`git commit` 不看消息内容），
+所以现场没有任何报警 —— 差一步就推到 origin 上了。拦下它的只有一个动作：提交完顺手再看一遍
+`git log --format=%B`，那行「（），」一看就不是人写的。
+
+两条规矩：① **提交信息一律走 heredoc**（`git commit -F -` 配 `<<'EOF'`），不要用 `-m "…"` ——
+本仓库的提交信息里到处是反引号、`$`、`!` 和中文引号，双引号包不住这些东西；
+② 已经推出去的糟糕提交信息**不 amend、不 force-push**（AGENTS §0 那条），只能追加一条更正；
+本次敢就地改写，是因为 `status -sb` 显示 `ahead 1` 且 `git branch -r --contains` 在远端查不到 ——
+先证明它还没共享，再动手。
 ## 续146 站点默认只看 200/404 + 批量打标收口 + 判据收敛成一份 + 四个入口搬进 cli/ + Linux 一键安装 + 项目须知打包成 skill
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。本轮是**两批点单合起来做的**：续145 收尾时
@@ -249,7 +262,9 @@
 - 本轮的一次性脚本按**确切文件名**删（不用通配符，§6.2 的清理纪律）：`logs/_bc146.py`
   `_d146.py` `_pre8au.py` `_run8au.py` `_8au_block.py` `_8av_block.py` `_inst146.sh`
   `_spec146{a,d,f,g,h,i,j,k,l}.py` `_spec146{a,b,c}.json` `_todo146.txt` `_todo147.txt`
-  `_changelog146.txt` `_devflow146f.out`。**留下两样**：`logs/_lpatch.py` 与 `logs/_wpatch.py`
+  `_changelog146.txt` `_devflow146f.out`；续146-附2 那批同样按名删 —— `_8aw_block.py` `_spec146m.py`
+  `_spec146n.py` `_onboard146.sh` `_todo146a2.txt` `_changelog146a2.txt` `_changelog146b.txt`
+  （最后那份是中途被取代的草稿，留着只会让人以为有两个版本的附2 正文）。**留下两样**：`logs/_lpatch.py` 与 `logs/_wpatch.py`
   （AGENTS §10 末尾把它们当**常备工具**指路，不是一次性脚本），以及四份门禁日志
   `_gate146{f,g,h,i}.log`（上面那张表引它们作证据，与前几轮的做法一致）。
 
