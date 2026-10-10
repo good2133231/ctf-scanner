@@ -74,13 +74,41 @@ def rule_of(rule_id):
     return None
 
 
+def label_of(domain):
+    """注册域的**主标签**（`targ1.pro` → `targ1`）；认不出 / 太短返回 ""（**不猜**）。
+
+    太短（<3 字符）不给：`a.io` 这种标签会把搜索变成"命中一切"的噪声源。
+    """
+    d = str(domain or "").strip().lower().rstrip(".")
+    if "." not in d:
+        return ""
+    label = d.split(".", 1)[0]
+    return label if len(label) >= 3 else ""
+
+
+def query_variants(domain):
+    """由注册域派生的检索短语（保序去重）：完整注册域优先，其次主标签。
+
+    续150（用户 2026-10-11 点单"targ1.pro / targ1 / target1 这样的都要搜"）：很多仓库只在
+    代码里写标签、不写完整域名，只搜全域会漏。**只扩查询、不改判据**（宁可多查几次）。
+    """
+    out = []
+    d = str(domain or "").strip()
+    if d:
+        out.append(d)
+    lab = label_of(d)
+    if lab and lab != d.lower():
+        out.append(lab)
+    return out
+
+
 def build_query(domain, keyword=""):
-    """构造一次 code search 的 `q` 值：`"<域名>"` + 可选关键词 / 限定符。
+    """构造一次 code search 的 `q` 值：`("<注册域>" OR "<主标签>")` + 可选关键词 / 限定符。
 
     域名**必须带引号**（phrase 查询），否则 `a.example.com` 会被拆成多个词，
     命中一堆恰好含 `a` / `example` / `com` 的无关仓库。
     """
-    q = f'"{str(domain or "").strip()}"'
+    q = " OR ".join(f'"{t}"' for t in query_variants(domain)) or f'"{str(domain or "").strip()}"'
     kw = str(keyword or "").strip()
     return f"{q} {kw}" if kw else q
 
@@ -178,10 +206,14 @@ def listy_public_list(path):
     return bool(_LISTY_PATH_RE.search(str(path or "")))
 
 
-def build_lead(domain, repo, path, rules, url=""):
+def build_lead(domain, repo, path, rules, url="", weak=False):
     """组装一条 `leads` 行（kind=github）。
 
     **只写元数据**：仓库 / 文件路径 / 命中规则名 —— 不写文件内容（见文件头边界 1）。
+
+    `weak=True`（续150，用户点单"智能判断结果是不是搜歪了"）：仓库名与文件路径里**都没有**
+    出现目标域名或其主标签 —— 命中只可能来自文件内容（同名字符串 / 无关项目）。
+    **只降级 + 标注，绝不丢线索**（与"公共分流名单"同一条口径：宁标不删）。
     """
     rules = [str(r) for r in (rules or [])]
     level, notes = "info", []
@@ -199,6 +231,11 @@ def build_lead(domain, repo, path, rules, url=""):
         level = "info"
         notes.append("· 疑似公共分流名单/路由规则表：这类文件整批抄入几千个域名，"
                      "「域名 + 关键字同文件」是常态，**不等于目标方凭据泄露**（已降为 info，仅作参考）")
+    # 续150：弱相关（仓库/路径都没出现域名或主标签）→ 同样降级 + 标注，不丢。
+    if weak and level != "info":
+        level = "info"
+        notes.append("· 弱相关：仓库名与文件路径里都没有出现目标域名或其主标签，命中只可能来自"
+                     "文件内容（同名字符串 / 无关项目）—— 已降为 info，请人工核对后再判断")
     detail = (f"仓库：{repo}\n文件：{path}\n命中规则：{' / '.join(rules) or '-'}\n"
               + ("".join(n + "\n" for n in notes))
               + "\n说明：本线索**只记录仓库 / 文件路径 / 命中规则**，不保存文件内容 —— "
@@ -211,8 +248,18 @@ def build_lead(domain, repo, path, rules, url=""):
 
 
 def _leads_from(bucket):
-    """把 `{(域名, 仓库, 路径): {rules, url}}` 摊平成按时序稳定的线索列表。"""
-    rows = [build_lead(domain, repo, path, sorted(slot["rules"]), slot.get("url") or "")
+    """把 `{(域名, 仓库, 路径): {rules, url}}` 摊平成按时序稳定的线索列表。
+
+    续150：这里顺手判**弱相关** —— 仓库名与文件路径里都没有出现目标域名或其主标签时，
+    这条命中很可能"搜歪了"（同名字符串/无关项目），交给 `build_lead` 降级 + 标注。
+    """
+    def _weak(domain, repo, path):
+        blob = f"{repo} {path}".lower()
+        nd = str(domain or "").strip().lower()
+        lab = label_of(nd)
+        return not ((nd and nd in blob) or (lab and lab in blob))
+    rows = [build_lead(domain, repo, path, sorted(slot["rules"]), slot.get("url") or "",
+                       weak=_weak(domain, repo, path))
             for (domain, repo, path), slot in bucket.items()]
     # 排序：级别高的在前（凭据类规则 > 纯提及），同级按 域名 → 仓库:路径，保证输出可复现
     rows.sort(key=lambda r: (-_LEVEL_RANK.get(r["level"], 0), r["target"], r["code"]))

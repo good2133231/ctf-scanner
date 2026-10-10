@@ -38,7 +38,7 @@ tools:
 > 三条路径口径都由 `cli/client.py --check` 与 `--bootstrap` 直接读配置，**不写死**：填错的地方不会
 > 报错，只会一直显示"未找到 / 缺少"并静默回退内置实现。
 
-## afrog（外部引擎，默认关 —— 这一条不是"装上就算数"）
+## afrog（外部引擎，续149 起默认开 —— 真跑要过三条闸门）
 
 装它只需要一条命令（只有这时才联网，且默认必须过官方 SHA256）：
 
@@ -46,10 +46,11 @@ tools:
 python cli/client.py --update-tools --tool afrog
 ```
 
-但它**不会被自动扫描使用**，三个条件都要满足才会跑：① 策略配置里勾上 `afrog.enabled`（默认关）；
-② 你自己准备一个 PoC 目录并填进 `afrog.poc_dir`（框架不代为下载第三方 PoC 树）；
-③ 目录里**真的有只读模板** —— 本框架逐份 YAML 判请求语义，只把
-`GET/HEAD + 无请求体 + 非 tcp + 无 brute 清单 + severity ∈ ("", info")` 的模板复制进任务目录喂给它，
+它**默认开**（策略配置里已勾选），但要真起进程，三条闸门要**同时**满足：① `afrog.enabled` 开着；
+② PoC 目录（默认 `config/afrog-pocs/`，随仓库带一份只读示例）里**真有只读模板**；
+③ 本机装好了 afrog 二进制。缺任何一条都只写一行日志、**零请求**（没装 afrog 的机器不会因此报错）。
+框架不代为下载第三方 PoC 树 —— 把模板放进 `afrog.poc_dir` 即可。放行口径是逐份 YAML 判**请求语义**，
+只把 `GET/HEAD + 无请求体 + 非 tcp + 无 brute 清单 + severity ∈ ("", info")` 的模板复制进任务目录喂给它，
 其余一律拒收（实测官方 `fingerprinting/` 130 个文件里放行 94、拒收 36，其中就有一条会触发目标执行
 命令的 HFS RCE —— 拒掉它的判据是 severity 那一行）。
 
@@ -77,15 +78,21 @@ SHA256 校验和**才落盘）；「手工」＝官方没有"可下载且带官�
 | nmap | 端口扫描（第二引擎，见下） | **手工** | 官方发布在 nmap.org/dist（**非** GitHub release）：Windows 只有安装器、Linux 只有源码包、macOS 只有 dmg |
 | fscan | 端口扫描（第一引擎，见下） | **手工** | 官方不发二进制，需用 Go 从源码自编译（本仓为避免 Defender 拦截的既定做法） |
 | dirmap | 目录扫描（补充） | **手工** | 纯 Python 项目，release 的 `assets` 为空数组（零二进制、零 checksums） |
-| afrog | 漏洞检测（**外部引擎，默认关**） | 自动（但不进 `--install` 的默认层） | 官方产物七件（linux/macOS/windows × amd64/arm64 + `checksums.txt`），命名与 projectdiscovery 同规律 ⇒ `--update-tools --tool afrog` 装它、装完必须过 SHA256。**装了≠会用**：只有策略配置里勾上 `afrog.enabled` **且**备好 PoC 目录才会被调用，且只喂"只读 + info 级"的模板（详见下） |
+| afrog | 漏洞检测（**外部引擎，续149 起默认开**） | 自动（并入 `--install` 默认层） | 官方产物七件（linux/macOS/windows × amd64/arm64 + `checksums.txt`），命名与 projectdiscovery 同规律 ⇒ `--update-tools --tool afrog` 装它、装完必须过 SHA256。装了会被 vulnscan 调用（续121 接线），但要真跑还要 PoC 目录里有只读模板；只喂"只读 + info 级"的模板（详见下） |
 
 > 端口扫描的引擎优先级是 **fscan → nmap → 内置 TCP connect**；两者都没有时会**如实回退**，
 > 不会因为"想用 fscan"就把阶段挂掉。
 
-## 手工安装（无法自动下载）
+## 手工安装（无法自动下载；但有自动化脚本）
 
-以下三个**不在** `--update-tools` / GUI「外部工具」页的覆盖范围内，也**不会**有任何自动下载
-（原因见上表与 `scanner/toolmgr.py` 的 `MANUAL`）：
+以下三个**不在** `--update-tools` / GUI「外部工具」页的覆盖范围内（它们没有"可下载且带官方
+校验和的单二进制产物"），但都能用**一键脚本**装上：
+
+- **nmap** → `./install.sh --with-system --yes`（交给发行版包管理器真装）；
+- **fscan** → `./install.sh --with-build`（用本机 Go 从源码自编译，见下）；
+- **dirmap** → 纯 Python、release 无产物；本仓已随附一份兼容快照在 `tools/dirmap/`，无需另装（见下）。
+
+细节与逐条原因见下文与 `scanner/toolmgr.py` 的 `MANUAL`：
 
 ### nmap
 
@@ -107,17 +114,25 @@ Get-FileHash .\nmap-7.991-setup.exe -Algorithm SHA256   # 与上面对比
 
 ### fscan
 
-官方不发二进制，**从源码自编译**（本仓为避免 Windows Defender 拦截的既定做法）：
+官方不发二进制，**从源码自编译**（本仓为避免 Windows Defender 拦截的既定做法）。两种方式：
 
 ```bash
+# ① 一键（需要本机有 Go；源码可从 CTFSCANNER_FSCAN_SRC / tools/fscan-src / --src 指定）
+./install.sh --with-build
+
+# ② 手动
 git clone https://github.com/shadow1ng/fscan && cd fscan
 git checkout v2.2.1
 go build -ldflags="-s -w" -trimpath -o fscan
 ```
 
+`./install.sh --with-build` 内部调 `python tools/build_fscan.py --wire`：用本机 Go 编译到
+`tools/scanner/`，并把 `tools.fscan` 自动写回配置（缺 Go / 缺源码会**如实报**，不静默跳过）。
+也可以自己指定源码目录：`python tools/build_fscan.py --src ./fscan --wire`。
+
 装好后把 `tools.fscan` 填成该二进制路径（本仓既定 `tools/fscan/fscan.exe`，Linux 上是同目录的
-`fscan`；也可以只放进 PATH 保持裸名）。框架调用时会强制带
-`-np -nobr -nopoc`，老版本会自动去掉 `-nopoc` 重试。
+`fscan`；`which()` 有 `.exe` 后缀容错，两端同一份配置都能找到；也可以只放进 PATH 保持裸名）。
+框架调用时会强制带 `-np -nobr -nopoc`，老版本会自动去掉 `-nopoc` 重试。
 
 ### dirmap
 

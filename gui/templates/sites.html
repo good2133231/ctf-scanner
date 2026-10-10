@@ -103,6 +103,7 @@
         <td class="shot-cell">{% if s.shot %}<img class="shot-thumb" loading="lazy" alt="站点截图"
               data-full="{{ url_for('shot_file', task_id=s.task_id, name=s.shot.rsplit('/', 1)[-1]) }}"
               src="{{ url_for('shot_file', task_id=s.task_id, name=s.shot.rsplit('/', 1)[-1]) }}">
+            {% elif s.shot_error %}<span class="muted small" title="截图失败原因">截图失败：{{ s.shot_error }}</span>
             {% else %}<span class="muted">-</span>{% endif %}</td>
       </tr>
     {% else %}

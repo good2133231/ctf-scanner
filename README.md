@@ -284,11 +284,13 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 
 ### 部署到服务器（给队友用 → 必须走 HTTPS）
 
-仓库里 `config/settings.yaml` 出厂就是**服务器形态**（续131 的取舍：仓库是公开的，宁可 fail-closed 也不裸奔）：
-`gui.host: 0.0.0.0`、`gui.allowed_hosts: []`（Host 校验整条不生效）、`gui.edge_auth.enabled: true`，
-入口路径每次启动随机（续138）。⇒ **刚 clone 出来的控制台会对所有请求回 401**：门是开的，
-但口令文件 `config/edge_auth.yaml` 在 `.gitignore` 里、不随仓库分发。那不是装坏了，
-`python -m scanner.edgeauth --set` 设上口令即可（启动横幅与 `_boot_gaps` 汇总也会点名这一项）。
+仓库里 `config/settings.yaml` 出厂是**服务器形态的 host + 关闭的 401 门**（续151 起：为满足
+"clone 下来直接打开控制台"的诉求，把 `gui.edge_auth.enabled` 落成 `false`；代码里
+`scanner.config.DEFAULTS` 本来就是关）：`gui.host: 0.0.0.0`、`gui.allowed_hosts: []`
+（Host 校验整条不生效），入口路径每次启动随机（续138）。
+⇒ **要放到公网 / 团队里用，请自己把门打开**：把 `gui.edge_auth.enabled` 改成 `true`，再
+`python -m scanner.edgeauth --set` 设口令（口令文件 `config/edge_auth.yaml` 在 `.gitignore` 里、
+不随仓库分发；**门开而口令缺失 ⇒ 一律 401**，fail-closed，启动横幅与 `_boot_gaps` 会点名这一项）。
 容器 / systemd / cloud-init 这种**没有终端**的场合用 `CTFSCANNER_EDGE_PASSWORD='<口令>' python -m scanner.edgeauth --set`
 （临时变量，别写进任何入库文件）—— 与建管理员的 `CTFSCANNER_ADMIN_PASSWORD`、解锁凭据密文的
 `CTFSCANNER_KEYS_PASSPHRASE` 同一套口径：**只有显式命令吃环境变量，启动向导一律不代填**。

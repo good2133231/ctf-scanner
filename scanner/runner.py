@@ -172,6 +172,9 @@ class StageContext:
         self.stage_seconds = {}
         # 续89：本任务**归属账号**（0 = 无归属）—— 黑名单等"按账号"的能力据此收窄。
         self.owner_id = 0
+        # 续151：本轮**新追加为自身子域名**的归属域名（`extdom.promote_owned` 的产出）。
+        # 「追加层数」据此决定要不要再排下一层；ext_depth=1（默认）时它始终为空。
+        self.owned_new = []
 
     @property
     def throttle(self):
@@ -226,6 +229,34 @@ class StageContext:
 # 所以流水线里没人给它们做过解析 —— 存在性判定与归属追加必须挂在**最后一个**这类阶段之后。
 _EXT_STAGES = ("osint", "jsmine")
 
+# 续151「追加层数」：`ext_depth` 是「送去探测」（api_scan_ext）时的任务级选项，含义是
+# **最多采集多少层**。1 层 = 只对当下这批域名做一轮；N 层 = 每层把新挖出的、**归属本项目**
+# （注册域命中任务目标）的拓展域名再作为 `append_targets` 追加成子域名、再采集一次，
+# 最多 N 层，且**折叠在同一任务里**（不新建任务）。上限写死 10 并每层递减 —— 必须咬住。
+EXT_DEPTH_MAX = 10
+
+
+def clamp_ext_depth(value, default=1):
+    """把 `ext_depth` 夹到 1..EXT_DEPTH_MAX（非法 / 缺省 → default，再夹）。"""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = default
+    return max(1, min(EXT_DEPTH_MAX, n))
+
+
+def depth_stages(stages):
+    """追加层数 > 1 时，把「产出拓展域名」的阶段补进本层阶段表（按 STAGE_ORDER 归位）。
+
+    多层采集的前提是**每一层都能重新挖出**拓展域名，否则就退化成「把同一批域名重复扫 N 遍」。
+    js:* / osint:* 的产地只有 osint 与 jsmine（`extdom.promote_owned` 只认这两类来源），
+    所以把这两个阶段补进来；已有则不重复加，probe / dirscan 等既有阶段保持不动。
+    """
+    keep = [s for s in (stages or []) if s in STAGE_REGISTRY]
+    union = list(keep) + [s for s in _EXT_STAGES if s not in keep]
+    order = {name: i for i, name in enumerate(STAGE_ORDER)}
+    return sorted(dict.fromkeys(union), key=lambda s: order.get(s, len(order)))
+
 
 class PipelineRunner:
     def __init__(self, ctx):
@@ -265,8 +296,11 @@ class PipelineRunner:
                 # 拓展域名的存在性判定 + 归属追加（纯 DNS 只读 + 本地写库）。
                 # 单独 try：这是**附加动作**，它挂了不该把 osint/jsmine 已经入库的产物牵连掉。
                 try:
-                    extdom.process(ctx.task_id, ctx.settings, logger=ctx.logger,
-                                   stopped=ctx.stopped)
+                    ext_res = extdom.process(ctx.task_id, ctx.settings, logger=ctx.logger,
+                                             stopped=ctx.stopped)
+                    # 续151：记下本轮**归属追加**产出的域名，供「追加层数」决定下一层目标。
+                    ctx.owned_new = list(
+                        (ext_res.get("promote") or {}).get("promoted") or [])
                 except Exception as e:  # 附加动作级容错
                     ctx.logger.error(f"[extdom] 拓展域名后处理异常：{e}")
                     ctx.logger.debug(traceback.format_exc())
@@ -309,6 +343,56 @@ def sync_pocs(settings=None):
     from .pocs import engine
     for m in engine.load_all_meta(settings):
         db.upsert_poc(m.get("_path") or m.get("id"), m)
+
+
+def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
+    """续151「追加层数」收尾：本层挖出**新的归属本项目域名**且还剩层数时，再排一次追加运行。
+
+    与既有 append 语义完全一致：**折叠在同一任务里**（`db.enqueue_task(task_id, "append")`，
+    不新建任务、沿用同一日志），只是 `append_targets` 换成这批新域名、`ext_depth` 减 1。
+    停止 / 未正常完成的收场一律不追加（不把一次没跑完的运行接下去）。
+    """
+    depth = clamp_ext_depth((options or {}).get("ext_depth"))
+    if depth <= 1:
+        return
+    if ctx.stopped():
+        logger.info("[extdom] 追加层数：任务已停止，不再排下一层")
+        return
+    cur = db.get_task(task_id)
+    if not cur or (cur["status"] or "") != "done":
+        logger.info("[extdom] 追加层数：本轮未正常完成，不再排下一层")
+        return
+    promoted = [d for d in (getattr(ctx, "owned_new", []) or []) if d]
+    # `extdom.process`（归属追加）只在 `auto_expand` 打开时随流水线跑；「送去探测」不一定带它，
+    # 这里补一次幂等、纯本地写库的归属追加 —— 保证「每层新挖出的归属域名」确实被算进来。
+    try:
+        res = extdom.promote_owned(task_id, ctx.settings, logger=logger)
+        for d in (res.get("promoted") or []):
+            if d and d not in promoted:
+                promoted.append(d)
+    except Exception as e:      # 归属追加失败不该影响上一层已完成的结果
+        logger.error(f"[extdom] 归属追加异常：{e}")
+    if not promoted:
+        logger.info(f"[extdom] 追加层数：本层未挖出新的归属本项目域名，追加到此为止"
+                    f"（还剩 {depth - 1} 层未用）")
+        return
+    try:
+        layer = max(1, int((options or {}).get("ext_layer") or 1))
+    except (TypeError, ValueError):
+        layer = 1
+    total = layer + depth - 1
+    remaining = depth - 1
+    next_opts = dict(options or {})
+    next_opts["append"] = True
+    next_opts["append_targets"] = promoted
+    next_opts["ext_depth"] = remaining
+    next_opts["ext_layer"] = layer + 1
+    from . import queue as _queue      # 延迟导入：queue 顶层 import 本模块，避免循环导入
+    db.enqueue_task(task_id, "append", depth_stages(stages), next_opts)
+    _queue.notify()
+    logger.info(f"[extdom] 追加层数：第 {layer}/{total} 层完成，新追加 {len(promoted)} 个归属域名"
+                f"（{', '.join(promoted[:5])}{' 等' if len(promoted) > 5 else ''}）"
+                f" → 已排入第 {layer + 1}/{total} 层追加运行，剩余 {remaining} 层")
 
 
 def run_task(task_id, name, targets_text, stages, options, settings, append=False,
@@ -368,6 +452,21 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
             logger.warning(f"[resume] 上次中断原因（转存到这里后，error 字段按本次运行清空）：{prev_err}")
     from .targets import parse_lines
     targets = parse_lines(targets_text.splitlines())
+    # 续151「追加层数」：第 2 层起的采集根就是本层的新域名（`append_targets`）——
+    # subdomain / probe 取的是 `ctx.targets`，不覆盖就会退回「重扫父任务原始目标」，
+    # 这一层就白跑了。**只对追加层（ext_layer>=2）生效**，不改既有 append / resume 的输入口径。
+    _depth = clamp_ext_depth((options or {}).get("ext_depth"))
+    try:
+        _layer = max(1, int((options or {}).get("ext_layer") or 1))
+    except (TypeError, ValueError):
+        _layer = 1
+    if _layer >= 2 and (options or {}).get("append_targets"):
+        _layer_hosts = [str(t).strip() for t in options["append_targets"] if str(t).strip()]
+        if _layer_hosts:
+            targets = parse_lines("\n".join(_layer_hosts))
+    if _depth > 1:
+        logger.info(f"[extdom] 追加层数：本轮为第 {_layer}/{_layer + _depth - 1} 层，"
+                    f"待采集目标 {len(targets)} 个，剩余 {_depth} 层")
     stop_event = _register_stop(task_id)
     ctx = StageContext(task_id, name, targets, stages, options, settings or load_settings(),
                        workdir, logger, stop_event=stop_event)
@@ -405,4 +504,7 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
         db.append_task_error(task_id, str(e))
     finally:
         _unregister_stop(task_id)
+    # 续151「追加层数」：正常完成后，本层若挖出新的归属域名且还剩层数，再排一次追加运行
+    # （折叠在同一任务里，不再新建任务）。停止 / 未正常完成的收场不追加。
+    _maybe_queue_next_layer(ctx, task_id, stages, options, logger)
     return ctx

@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS sites (
   status INTEGER, title TEXT, length INTEGER, server TEXT, tech TEXT, source TEXT,
   favicon TEXT DEFAULT '',
   redirect_url TEXT DEFAULT '', redirect_status INTEGER DEFAULT 0,
-  redirect_title TEXT DEFAULT ''
+  redirect_title TEXT DEFAULT '', shot_error TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS ports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,7 +146,12 @@ CREATE TABLE IF NOT EXISTS vulns (
   -- 「凭什么这么说」的原始材料；挤在一列里页面就没法只展开后者（用户原话：数据包都没有）。
   -- 位置刻意放在**最后一列**：老库靠 `_COLUMN_PATCHES` 的 ALTER TABLE ADD COLUMN 补，
   -- 新建库与迁移库的列序必须一致，否则 `SELECT *` 两种库给出不同形状。
-  packets TEXT DEFAULT ''
+  packets TEXT DEFAULT '',
+  -- 续150（用户点单「漏洞独立复测三态」）：'' 未复测 / reproduced 仍可复现 /
+  -- fixed 已修复 / unconfirmed 无法确认（本次没探到该目标）。放**最后一列**，
+  -- 与 `_COLUMN_PATCHES` 的列序一致，否则老库/新库 `SELECT *` 形状不同。
+  retest_state TEXT DEFAULT '',
+  retested_at TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS pocs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -286,10 +291,15 @@ _COLUMN_PATCHES = {
               # **原始那一跳不动**（`status`/`title` 仍是 301 本身），这里只是补证据。
               "redirect_url": "TEXT DEFAULT ''",
               "redirect_status": "INTEGER DEFAULT 0",
-              "redirect_title": "TEXT DEFAULT ''"},
+              "redirect_title": "TEXT DEFAULT ''",
+              # 续150（用户点单）：截图**失败原因**（301 未落地 / 超时 / 无浏览器 / DNS / 其他），
+              # 空串 = 没失败（或没跑截图）。让页面能回答"为什么这一格是空的"。
+              "shot_error": "TEXT DEFAULT ''"},
     # P1-1 误报复核 / P1-2 置信度分层：老库补列（新库由 SCHEMA 直接建出）
     "vulns": {"review": "TEXT DEFAULT ''", "review_note": "TEXT DEFAULT ''",
-              "reviewed_at": "TEXT DEFAULT ''", "packets": "TEXT DEFAULT ''"},
+              "reviewed_at": "TEXT DEFAULT ''", "packets": "TEXT DEFAULT ''",
+              # 续150：独立复测三态（老库补列）
+              "retest_state": "TEXT DEFAULT ''", "retested_at": "TEXT DEFAULT ''"},
     "pocs": {"confidence": "TEXT DEFAULT ''"},
     # 目录命中页的 <title>：老库补列（新库由 SCHEMA 直接建出）
     "dirs": {"title": "TEXT DEFAULT ''"},
@@ -1017,6 +1027,18 @@ def set_site_shots(task_id, pairs):
     _exec("UPDATE sites SET shot=? WHERE task_id=? AND url=?", rows, many=True)
 
 
+def set_site_shot_errors(task_id, pairs):
+    """写入站点**截图失败原因**（续150）：`pairs` 是 `[(url, reason), ...]`。
+
+    只写非空原因（成功的不写 —— 空串本身就是"没失败"）。页面据此回答"截图那一格为什么是空的"。
+    """
+    rows = [(str(reason or "").strip(), task_id, url)
+            for url, reason in (pairs or []) if url and str(reason or "").strip()]
+    if not rows:
+        return
+    _exec("UPDATE sites SET shot_error=? WHERE task_id=? AND url=?", rows, many=True)
+
+
 def set_subdomain_net(task_id, mapping):
     """回填子域名的解析 IP、CDN 标记与**未解析原因**。
 
@@ -1521,6 +1543,37 @@ def set_vuln_review(vuln_id, state, note=None):
             else:
                 cur.execute("UPDATE vulns SET review=?, review_note=?, reviewed_at=? WHERE id=?",
                             (st, str(note)[:500], now, int(vuln_id)))
+            conn.commit()
+            return cur.rowcount or 0
+        finally:
+            conn.close()
+
+
+# 续150（用户点单「漏洞独立复测三态」）：复测状态取值 —— '' 未复测 / reproduced 仍可复现 /
+# fixed 已修复 / unconfirmed 无法确认（本次没探到该目标）。非法值一律落回 ''（与 norm_review 同口径）。
+RETEST_STATES = ("", "reproduced", "fixed", "unconfirmed")
+
+
+def norm_retest(state):
+    """复测三态归一；非法值 -> ''（未复测），不把任意串写进库。"""
+    s = str(state or "").strip().lower()
+    return s if s in RETEST_STATES else ""
+
+
+def bulk_set_vuln_retest(ids, state):
+    """批量写**复测三态**，返回受影响行数（只更新真实存在的 id，不做全表兜底）。"""
+    ids = [int(i) for i in (ids or []) if str(i).strip().lstrip("-").isdigit()]
+    if not ids:
+        return 0
+    st = norm_retest(state)
+    now = _now()
+    marks = ",".join("?" for _ in ids)
+    with _WRITE_LOCK:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(f"UPDATE vulns SET retest_state=?, retested_at=? WHERE id IN ({marks})",
+                        tuple([st, now] + ids))
             conn.commit()
             return cur.rowcount or 0
         finally:

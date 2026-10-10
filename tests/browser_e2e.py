@@ -691,19 +691,19 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
               page.ev("document.querySelector('[data-panel=\"osint\"]').classList.contains('open')")
               is False)
 
-    # ---------- [7b] 外部引擎 afrog 的字段（续121）：真浏览器里存在、默认为关、点得动 ----------
+    # ---------- [7b] 外部引擎 afrog 的字段（续121）：真浏览器里存在、默认开、点得动 ----------
     #      只验"HTML 里有这个 name"是不够的（[8z] 已经在 test_client 层验过渲染与 POST 回环）；
-    #      这里要的是"用户看得见这个开关、点下去真的变勾选"，以及**默认必须是未勾选**
-    #      （afrog 是外部进程、自管请求，默认开着就等于替用户决定要跑第三个引擎）。
+    #      这里要的是"用户看得见这个开关、点下去真的变勾选"，以及**默认必须是勾选**（续149
+    #      用户点单默认开；但真起进程还要 PoC 目录有只读模板 + 本机装了二进制两道闸，见 scanner/afrog.py）。
     rep.eq("[7b] /settings 渲染出 8 个 afrog 字段（开关 + 目录 + 6 个限速/上限）",
            page.ev("document.querySelectorAll('input[name^=\"afrog_\"]').length"), 8)
-    rep.eq("[7b] afrog 开关默认未勾选（外部引擎绝不默认开）",
-           page.ev("document.querySelector('input[name=\"afrog_enabled\"]').checked"), False)
-    rep.eq("[7b] PoC 目录默认为空（框架不替用户准备第三方 PoC）",
-           page.ev("document.querySelector('input[name=\"afrog_poc_dir\"]').value"), "")
-    page.click_js("document.querySelector('input[name=\"afrog_enabled\"]')")
-    rep.eq("[7b] 点一下这个复选框真的变成勾选（不是画了个死控件）",
+    rep.eq("[7b] afrog 开关默认已勾选（续149 默认开）",
            page.ev("document.querySelector('input[name=\"afrog_enabled\"]').checked"), True)
+    rep.eq("[7b] PoC 目录默认指向预置的只读示例目录",
+           page.ev("document.querySelector('input[name=\"afrog_poc_dir\"]').value"), "config/afrog-pocs")
+    page.click_js("document.querySelector('input[name=\"afrog_enabled\"]')")
+    rep.eq("[7b] 点一下这个复选框真的变成未勾选（不是画了个死控件）",
+           page.ev("document.querySelector('input[name=\"afrog_enabled\"]').checked"), False)
 
     # ---------- [8] 任务列表页轮询：**一次批量**、只问未结束的行（续93） ----------
     # 旧写法是"每行一个 `/api/tasks/<id>/status`"（页大小 100 → 每 2.5 秒 100 个请求，且每个响应

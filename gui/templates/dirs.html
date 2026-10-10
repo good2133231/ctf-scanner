@@ -18,6 +18,9 @@
     {% if agg %}<b>按响应聚合</b>（同「状态码+大小+标题」的响应折叠成一行，如多个站点的同款 403 拦截页只显示一条；跨全库聚合后<b>按组分页</b>）
     {% else %}<a class="btn-mini ghost" href="{{ link_agg }}">按响应聚合</a>{% endif %}
     {% if agg %}<a class="btn-mini ghost" href="{{ link_agg }}">返回明细</a>{% endif %}
+    {# 续151（用户点单）：只显示能拼出可点开链接的行 #}
+    {% if link_only %}<a class="btn-mini ghost" href="{{ link_link }}">显示全部（含点不开的）</a>
+    {% else %}<a class="btn-mini ghost" href="{{ link_link }}">只看可点开的</a>{% endif %}
   </p>
   <form class="filters" method="get" action="{{ pager.base }}">
     {% include "_taskpick.html" %}
@@ -26,6 +29,7 @@
     {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
     {# `agg` 必须一起带上：漏了它，在聚合视图里点「查询」会**悄悄跳回明细视图** #}
     {% if agg %}<input type="hidden" name="agg" value="1">{% endif %}
+    {% if link_only %}<input type="hidden" name="link" value="1">{% endif %}
     <button class="ghost" type="submit">查询</button>
     {% if q %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
   </form>
@@ -64,7 +68,7 @@
         <td>{{ d.id }}</td>
         <td><a href="{{ url_for('task_detail', task_id=d.task_id) }}">#{{ d.task_id }}</a></td>
         <td>{{ d.status or '-' }}</td>
-        <td>{{ d.path }}</td>
+        <td>{% set _u = dir_url(d.site_url, d.path) %}{% if _u %}<a class="url-link" href="{{ _u }}" target="_blank" rel="noopener noreferrer" title="在新标签页打开 {{ _u }}">{{ d.path }}</a>{% else %}{{ d.path }}{% endif %}</td>
         <td class="muted small mono">{{ d.length if d.length is not none else '-' }}
           {% if d.dup %}<span class="muted small">（另有 {{ d.dup }} 条相同）</span>{% endif %}</td>
         <td class="muted small">{{ d.title or '-' }}</td>

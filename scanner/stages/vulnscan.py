@@ -10,12 +10,80 @@
 方便判断"扫不出来"到底是没漏洞还是被拦了。
 """
 from .base import Stage
+from .dirscan import TECH_LANG, _dict_kind
 from .. import afrog as afrog_mod
 from .. import config, db, flagfind
 from ..evasion import detect as detect_waf
 from ..owasp import checks as owasp_checks
 from ..pocs import engine
 from ..utils import pool_run
+
+
+def _lang_conflict(poc, site_lang):
+    """该 POC 是否与本站点已判出的语言**冲突**（冲突则应跳过）。
+
+    语言表直接复用 `dirscan.TECH_LANG`（**单一产地**，改一处两边都跟着变）；
+    判定"站点是什么语言"也复用 `dirscan._dict_kind`（URL 后缀优先、再看指纹标签）。
+
+    只有"站点语言已知"且"POC 标签点明了一种**不同**语言"才算冲突；通用 POC（标签里没有语言）
+    或站点语言未知时**一律不拦**（宁可多跑，也不误伤 —— 指纹判错时不能连带把 POC 也丢了）。
+    """
+    if not site_lang:
+        return False
+    tags = {str(t).lower() for t in ((poc.get("info") or {}).get("tags") or [])}
+    langs = {TECH_LANG[t] for t in tags if t in TECH_LANG}
+    return bool(langs) and site_lang not in langs
+
+
+def _retest_mark(ctx, new_vulns, sites):
+    """独立复测三态（续150，用户点单）：把本轮"复测"结果与库中旧结论做对比并落库。
+
+    判据（**不只是"没再报出来就算修好了"** —— 那会把"没探到"误报成"已修复"）：
+      · 旧结论 `(target, poc_id)` 在本轮结果里**再次出现** → `reproduced`（仍可复现）；
+      · 没出现，但它的 `target` 本轮**确实探过**（在 `sites` 里）→ `fixed`（已修复）；
+      · 没出现，且 `target` 本轮**没探到** → `unconfirmed`（无法确认，**不是**已修复）。
+    只写复测状态列，不改结论、不删行。
+    """
+    probed, probed_hosts = set(), set()
+    for s in (sites or []):
+        u = str((s.get("url") if isinstance(s, dict) else s) or "").strip()
+        if not u:
+            continue
+        probed.add(u)
+        try:
+            from urllib.parse import urlsplit
+            h = urlsplit(u).netloc.lower()
+            if h:
+                probed_hosts.add(h)
+        except Exception:                                    # noqa: BLE001 - 解析失败不算错
+            pass
+    newkeys = set()
+    for v in (new_vulns or []):
+        newkeys.add((str(v.get("target") or ""), str(v.get("poc_id") or "")))
+    rep, fixed, unc = [], [], []
+    for row in db.list_vulns(ctx.task_id, limit=None):
+        key = (str(row["target"] or ""), str(row["poc_id"] or ""))
+        if key in newkeys:
+            rep.append(row["id"])
+        else:
+            t = str(row["target"] or "").strip()
+            try:
+                from urllib.parse import urlsplit
+                th = urlsplit(t).netloc.lower()
+            except Exception:                                # noqa: BLE001 - 解析失败按未探到
+                th = ""
+            if t in probed or (th and th in probed_hosts):
+                fixed.append(row["id"])          # 目标本轮探过、但没再报出来 ⇒ 已修复
+            else:
+                unc.append(row["id"])            # 目标本轮没探到 ⇒ 无法确认（**不**当已修复）
+    if rep:
+        db.bulk_set_vuln_retest(rep, "reproduced")
+    if fixed:
+        db.bulk_set_vuln_retest(fixed, "fixed")
+    if unc:
+        db.bulk_set_vuln_retest(unc, "unconfirmed")
+    ctx.logger.info(f"[vulnscan] 复测三态：仍可复现 {len(rep)} / 已修复 {len(fixed)} / "
+                    f"无法确认 {len(unc)}（没探到的目标记「无法确认」，**不**误报「已修复」）")
 
 
 class VulnscanStage(Stage):
@@ -81,13 +149,22 @@ class VulnscanStage(Stage):
             批次内部再按置信度排序（P1-2）：注册表放开大批低置信规则时，
             额度先给高置信规则，避免"字母序的运气"决定谁被执行。
             """
-            if not link_tags or not pocs:
-                return _by_conf(pocs)[:poc_cap] if pocs else []
+            if not pocs:
+                return []
+            # 续150：站点语言已知时，剔掉**另一种语言**的 POC（与 dirscan 的字典分桶同一口径）。
+            # 未知语言的站点不拦（`_lang_conflict` 只在两边都明确时才算冲突）。
+            _slang = _dict_kind(str(site.get("tech") or ""), str(site.get("url") or ""))
+            pool = [p for p in pocs if not _lang_conflict(p, _slang)]
+            if _slang and len(pool) != len(pocs):
+                ctx.logger.debug(f"[vulnscan] {site.get('url')}：语言 {_slang}，"
+                                 f"按语言跳过 {len(pocs) - len(pool)} 个异构 POC")
+            if not link_tags or not pool:
+                return _by_conf(pool)[:poc_cap] if pool else []
             tech = {t.strip().lower() for t in str(site.get("tech") or "").split(",") if t.strip()}
             if not tech:
-                return _by_conf(pocs)[:poc_cap]
+                return _by_conf(pool)[:poc_cap]
             hit, rest = [], []
-            for p in pocs:
+            for p in pool:
                 tags = {str(t).lower() for t in ((p.get("info") or {}).get("tags") or [])}
                 (hit if tags & tech else rest).append(p)
             return _by_conf(hit) + _by_conf(rest)[:max(0, poc_cap - len(hit))]
@@ -119,7 +196,7 @@ class VulnscanStage(Stage):
         for batch in pool_run(_scan_site, sites, workers=workers,
                             logger=ctx.logger, label="站点漏洞初筛"):
             all_v.extend(batch)
-        # afrog（续121）：**默认关**。开着时它是"另起一个自管请求的外部进程"，所以
+        # afrog（续121 接入；续149 默认开）。它是"另起一个自管请求的外部进程"，所以
         # ① 只喂它逐条判过的只读 + info 级模板（scanner/afrog.py::plan），② 结果按我们的
         # 级别门槛再筛一遍（它自己那套 -S 口径不作数），③ 日志里说清请求不经本任务预算。
         if afrog_mod.enabled(ctx.settings):
@@ -127,6 +204,10 @@ class VulnscanStage(Stage):
                                          workdir=ctx.workdir, throttle=ctx.throttle)
             if af_note.startswith("!"):
                 ctx.logger.warning(f"[afrog] {af_note[1:]}（**不是**「没扫出东西」，是没跑成）")
+            elif af_note.startswith("~"):
+                # 续149：按设计跳过（未装 afrog / PoC 目录没有只读模板）—— 默认开后没装 afrog
+                # 的机器每次都会走到这里，用 info 级说清楚即可，**不得**刷成 warning。
+                ctx.logger.info(f"[afrog] {af_note[1:]}")
             else:
                 kept = [v for v in af_v
                         if owasp_checks.severity_ok(v.get("severity", "medium"), floor)]
@@ -171,3 +252,6 @@ class VulnscanStage(Stage):
             + (f"（{' / '.join(f'{k}:{n}' for k, n in sorted(by_sev.items()))}）" if uniq else "")
             + (f"（跨运行去重跳过 {_dup} 项已入库）" if _dup else "")
             + "，均为初筛结果，需人工确认")
+        # 续150：独立复测模式（任务级选项 retest=True）—— 跑完与旧结论做三态对比。
+        if ctx.options.get("retest") is True:
+            _retest_mark(ctx, uniq, sites)

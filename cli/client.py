@@ -41,8 +41,8 @@ def _print_summary(task_id, ctx):
           f"潜在漏洞 {len(ctx.results.get('vulns', []))} | "
           # 续148：敏感信息 / flag 候选单独报数并注明**不是结论**（同形状大量是模板/JS 占位符）
           f"敏感信息候选 {len(ctx.results.get('flags', []))}（按形状抽取，需人工判真）| "
-          f"线索 {len(ctx.results.get('leads_intel', [])) + len(ctx.results.get('leads_heuristic', [])) + len(ctx.results.get('leads_github', []))}"
-          f"（情报/启发式/GitHub，非漏洞结论）")
+          f"线索 {len(ctx.results.get('leads_intel', [])) + len(ctx.results.get('leads_heuristic', [])) + len(ctx.results.get('leads_github', [])) + len(ctx.results.get('leads_multileak', []))}"
+          f"（情报/启发式/GitHub/多平台，非漏洞结论）")
     print(f"    日志：{rel_display(ctx.workdir / 'task.log')}")
     print(f"    数据库：{rel_display(db.DB_PATH)}")
 
@@ -201,13 +201,18 @@ def do_update_tools(args):
           f"{'仅下载，不写回配置' if args.no_wire else '装好后写回 config/settings.yaml'}）")
     results = toolmgr.update(names or None, dest_dir=args.tools_dest,
                              allow_unverified=args.allow_unverified,
-                             wire=not args.no_wire)
+                             wire=not args.no_wire,
+                             only_if_newer=getattr(args, "only_newer", False),
+                             settings=load_settings())
     bad = 0
     for r in results:
         tag = r.get("version") or "-"
         if not r.get("ok"):
             bad += 1
             print(f"  {r['tool']:<10} 未安装：{r.get('reason') or '未知原因'}")
+            continue
+        if r.get("skipped"):
+            print(f"  {r['tool']:<10} 已是最新 {tag}，跳过（--only-newer）")
             continue
         mark = "SHA256 已校验" if r.get("verified") else "**未校验**，按你的显式要求"
         print(f"  {r['tool']:<10} OK  {tag}（{mark}）→ {r['path']}")
@@ -564,6 +569,8 @@ def main():
                     help="只下载不写回 config/settings.yaml（默认写回 tools.<名> 为相对路径）")
     ap.add_argument("--tools-dest", metavar="DIR",
                     help="安装目录（默认 tools/scanner/）")
+    ap.add_argument("--only-newer", action="store_true",
+                    help="先查最新版本，**已是最新的就跳过**（省一次无谓下载；没装的照装）")
     # ---- 迁移自举（跨 Windows / Linux 换机器时用；联网只在 --bootstrap-install 时发生）----
     ap.add_argument("--bootstrap", action="store_true",
                     help="按平台点清环境缺口（解释器/pip 依赖/外部工具/浏览器）后退出；**不联网**")
@@ -628,7 +635,8 @@ def main():
     # 不给 `--update-tools` 却给了它的附属参数 → **直接报错**，不静默忽略
     # （静默忽略会让人以为"已经按我说的装了某个工具"，实际没生效）。
     stray = [n for n, v in (("--tool", args.tool), ("--allow-unverified", args.allow_unverified),
-                            ("--no-wire", args.no_wire), ("--tools-dest", args.tools_dest)) if v]
+                            ("--no-wire", args.no_wire), ("--tools-dest", args.tools_dest),
+                            ("--only-newer", args.only_newer)) if v]
     if stray and not args.update_tools:
         print(f"[!] 这些参数只在 --update-tools 时有效：{', '.join(stray)}")
         sys.exit(1)

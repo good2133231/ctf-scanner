@@ -88,6 +88,9 @@ DEV_LIMITS = {
     "github.max_domains": 1,
     "github.max_queries": 1,
     "github.max_leads": 1,
+    "multileak.max_domains": 1,
+    "multileak.max_queries": 1,
+    "multileak.max_leads": 1,
     "heuristic.max_leads": 1,
     # ---- 检测层 ----
     "checks.poc_max_per_site": 1,
@@ -168,7 +171,7 @@ def enabled(settings):
 # 开发模式下必须压制的"会真出网"的段（续97）。口径与 `devflow._EXTERNAL_OFF` 同源但**更宽**：
 # `iprecon`（api.webscan.cc）/ `ctlog`（crt.sh）/ `github`（GitHub 检索）/ `intel`（CISA KEV）
 # 同样发真实外部请求，而开发模式的意义就是"随便点都不会打到外面、不烧第三方配额"。
-DEV_EXTERNAL_SECTIONS = ("iprecon", "fofa", "shodan", "quake", "ctlog", "github", "intel")
+DEV_EXTERNAL_SECTIONS = ("iprecon", "fofa", "shodan", "quake", "ctlog", "github", "intel", "multileak")
 
 
 def suppress_external(settings):

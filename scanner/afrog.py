@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""afrog 外部引擎适配（续121，B 步 2）：**默认关**，且只喂它"只读 + info 级"的 PoC。
+"""afrog 外部引擎适配（续121 接入；续149 起**默认开**）：只喂它"只读 + info 级"的 PoC。
+
+默认开的前提是三条闸门都满足才可能真起进程（开关 + `poc_dir` 有只读模板 + 本机装了 afrog），
+任何一条不满足都只写一行日志、**零请求**。用户口径："默认把这个启用 并且验证功能"。
 
 定位先说清楚：本框架的检测主力是自己那份 nuclei 兼容子集引擎（`scanner/pocs/engine.py`）。
 afrog 的价值是它社区里那批"组件识别"模板 —— 但**判据**已经在续120 按条复核后搬进
@@ -55,7 +58,7 @@ OK_SEVERITIES = ("", "info")
 # 封顶值（不是"推荐值"）：策略里填更大的数也超不过这里，见 §6 那条"别把上限交给字符串"
 CEIL = {"timeout": 30, "concurrency": 25, "rate": 50, "per_target_rate": 25,
         "max_targets": 200, "proc_timeout": 1800}
-DEFAULTS = {"enabled": False, "poc_dir": "", "max_targets": 20, "timeout": 8,
+DEFAULTS = {"enabled": True, "poc_dir": "config/afrog-pocs", "max_targets": 20, "timeout": 8,
             "concurrency": 4, "rate": 10, "per_target_rate": 5, "proc_timeout": 600}
 
 # 结果级别：**只降不升**。afrog 的 `infoseg` 是模板作者自己填的，我们不拿它当依据；
@@ -67,8 +70,11 @@ def cfg(settings):
     """把 `settings.afrog` 与默认值合并，并把每一项压进封顶（负数/空串/乱填都落回默认）。"""
     raw = (settings or {}).get("afrog") or {}
     out = dict(DEFAULTS)
-    out["enabled"] = raw.get("enabled") is True
-    out["poc_dir"] = str(raw.get("poc_dir") or "").strip()
+    # 缺键时落回默认（而不是"缺键=关"）：默认档就在 `DEFAULTS` 一处，`settings.yaml` 只写差异。
+    out["enabled"] = raw.get("enabled", DEFAULTS["enabled"]) is True
+    # 空串同样落回默认目录（续149）：默认预置 `config/afrog-pocs/`，用户清空它不该变成"关"，
+    # 而应由 `plan()` 如实报"目录里没有只读模板"——把语义分开，别让两个原因挤成一句话。
+    out["poc_dir"] = str(raw.get("poc_dir") or DEFAULTS["poc_dir"]).strip()
     for k in ("max_targets", "timeout", "concurrency", "rate", "per_target_rate", "proc_timeout"):
         try:
             n = int(raw.get(k, DEFAULTS[k]))
@@ -226,7 +232,11 @@ def to_vulns(rows):
 def run(sites, settings, logger=None, workdir=None, throttle=None, binary=None):
     """跑一轮 afrog（只读子集），返回 `(vulns, 说明)`；任何失败都不抛，只写日志。
 
-    `vulns` 为空且 `说明` 以 `!` 开头表示**没跑成**（调用方据此不许报"未发现"）。
+    `说明` 的前缀是**给调用方分档**用的（续149，三档别混成一个）：
+      · `!` 开头 = **没跑成**（二进制起不来 / 超时 / 硬错 / 结果不是 JSON / 预算拦下）→ 调用方报 warning；
+      · `~` 开头 = **按设计跳过**（未启用 / 没装二进制 / 没配或空的 PoC 目录 / 目录里没有只读模板）
+        → 调用方报 info，**不当错误**（默认开之后，没装 afrog 的机器每次扫描都会走到这条，别刷警告）；
+      · 其余 = 真跑了一轮（`命中 N 条` 等）。
     """
     c = cfg(settings)
     urls = []
@@ -237,19 +247,22 @@ def run(sites, settings, logger=None, workdir=None, throttle=None, binary=None):
             urls.append(u)
     urls = urls[: c["max_targets"]]
     if not urls:
-        return [], "没有可交给 afrog 的站点"
+        return [], "~没有可交给 afrog 的站点"
     if not c["enabled"]:
-        return [], "!afrog 未启用"
+        return [], "~afrog 未启用"
     poc_dir = c["poc_dir"]
     if not str(poc_dir).strip():
-        return [], "!策略里没有 afrog PoC 目录（afrog.poc_dir）"
+        return [], "~未配置 afrog PoC 目录（afrog.poc_dir），跳过外部引擎"
     bin_path = binary or which((settings.get("tools") or {}).get("afrog") or "afrog")
     if not bin_path:
-        return [], "!未找到 afrog 二进制（外部工具页装好后会把路径写回 tools.afrog）"
+        return [], "~未安装 afrog 二进制（外部工具页装好后会把路径写回 tools.afrog），跳过外部引擎"
 
     ok_files, refused = plan(poc_dir)
     if not ok_files:
-        return [], f"!PoC 目录里没有只读模板（拒掉 {len(refused)} 个）"
+        # 目录不存在＝配置错（`!`）；目录在但一条只读模板都没有＝按设计跳过（`~`）。两种原因分开报。
+        if len(refused) == 1 and refused[0][1] == "不是一个目录":
+            return [], f"!afrog 的 PoC 目录不存在：{poc_dir}"
+        return [], f"~PoC 目录里没有只读模板（拒掉 {len(refused)} 个），跳过外部引擎"
     # 续128：**请求由 afrog 自己发，本任务的预算与限速拦不住它** —— 所以这里既把预估打出来，
     # 也在设了上限时真的不起进程。上限默认 0（不限），不改既有行为；但一旦设了就必须咬得住，
     # 否则"上限"只是一个装饰数字。

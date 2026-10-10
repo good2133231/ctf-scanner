@@ -6,8 +6,9 @@
 # 在这儿再抄一份就是第二个产地，两边迟早漂（AGENTS §5.14，本项目反复栽在这上面）。
 #
 # 用法：
-#   ./install.sh                       标准安装（.venv + pip 依赖 + subfinder/httpx/puredns）
+#   ./install.sh                       标准安装（.venv + pip 依赖 + subfinder/httpx/puredns/afrog）
 #   ./install.sh --with-system --yes    额外让发行版包管理器**真装** nmap / 浏览器 / Go / CJK 字体
+#   ./install.sh --with-build           标准安装 + 用本机 Go 从源码编译 fscan（官方不发二进制）
 #   ./install.sh --no-venv             装到当前解释器（容器 / 受控环境里常用）
 # 其余参数原样透传给 run_bootstrap.py（--only / --allow-unverified / --tools-dest / --no-wire）。
 #
@@ -42,11 +43,18 @@ fi
 echo "[*] 用 $PY（$("$PY" -V 2>&1)）"
 
 # ---- ② 真正的安装：联网只发生在这一层，且只有显式 --install 才下载 ----
+# `--with-build` 是**本脚本自己**的开关（不是 run_bootstrap 的）：先把它剔出去，免得 run_bootstrap
+# 报"未知参数"（本项目最忌讳"传了被静默忽略"）。其余参数原样透传。
+WITH_BUILD=0
+ARGS=()
+for _a in "$@"; do
+  if [ "$_a" = "--with-build" ]; then WITH_BUILD=1; else ARGS+=("$_a"); fi
+done
 # 不用 `set -e` 直接吃掉它的退出码：run_bootstrap 对"pip 依赖装不上"与"可选的 subfinder 没下下来"
 # 一律返回 1，而后者**不影响框架跑通**（会自动降级到内置实现）。这里把码记下来、先做完复验与
 # 收尾说明，最后再如实带出去 —— 直接中断的话，用户连"接下来敲哪条命令"都看不到。
 BOOT_RC=0
-"$PY" run_bootstrap.py --install "$@" || BOOT_RC=$?
+"$PY" run_bootstrap.py --install ${ARGS[@]+"${ARGS[@]}"} || BOOT_RC=$?
 
 # ---- ③ 复验：装没装以"能不能 import"为准，不按上一步的退出码吹 ----
 # run_bootstrap 自己也会复探一遍（它的口径是"以文件系统为准"）；这里再问一次解释器，
@@ -63,6 +71,15 @@ if [ "$BOOT_RC" -ne 0 ]; then
   echo "    （GitHub release 不可达 / 校验和对不上就拒绝落盘）。框架本身仍能跑，只是覆盖面与速度不如本体。"
 fi
 
+# ---- ④ 可选：--with-build 时用本机 Go 从源码编译 fscan ----
+# fscan 官方不发二进制（本仓为避免 Defender 拦截的既定做法是自编译）。这一步**显式**才发生，
+# 逻辑在 tools/build_fscan.py（不塞进 run_bootstrap：那条自动层被测试钉死了"绝不代跑系统级命令"）。
+if [ "$WITH_BUILD" = "1" ]; then
+  echo "[*] --with-build：尝试用本机 Go 从源码编译 fscan（缺 Go / 缺源码会如实报，不静默跳过）"
+  "$RUNPY" tools/build_fscan.py --wire \
+    || echo "[!] fscan 编译未完成（原因见上）。框架仍能跑：端口扫描自动回退 nmap → 内置 TCP connect。"
+fi
+
 cat <<'EOF'
 
 =========================== 装完了，接下来 ===========================
@@ -77,10 +94,11 @@ cat <<'EOF'
   · 凭据密文口令（config/keys.enc.yaml，只在你配过第三方 key 时才有）
       只从 CTFSCANNER_KEYS_PASSPHRASE / ~/.secrets/keys-pass（0600）/ TTY 取，
       **绝不写进仓库里的任何文件**，也不会写进 .git/config 或远端地址。
-  · **401 边缘认证门的口令**：仓库里 config/settings.yaml 出厂就是 gui.host: 0.0.0.0 +
-      gui.edge_auth.enabled: true（续131 的取舍：仓库是公开的，宁可 fail-closed 也不裸奔），
-      而口令文件 config/edge_auth.yaml 在 .gitignore 里、**不随仓库分发**。
-      ⇒ 刚 clone 出来的控制台会对**所有**请求回 401，看着像"装坏了"，其实是门开着没钥匙。
+  · **401 边缘认证门（续151 起出厂默认关）**：仓库里 config/settings.yaml 是 gui.host: 0.0.0.0 +
+      gui.edge_auth.enabled: false —— 满足"clone 下来直接打开控制台"；**代价是同一网段谁都能访问**。
+      要开门：把 gui.edge_auth.enabled 改回 true 并设口令。口令文件 config/edge_auth.yaml 在
+      .gitignore 里、**不随仓库分发**；**门开而口令缺失 ⇒ 对所有请求回 401**，看着像"装坏了"，
+      其实是门开着没钥匙。
       有终端：./.venv/bin/python -m scanner.edgeauth --set      （顺带把文件权限设成 0600）
       没终端（容器 / systemd / cloud-init）：
         CTFSCANNER_EDGE_PASSWORD='<口令>' ./.venv/bin/python -m scanner.edgeauth --set

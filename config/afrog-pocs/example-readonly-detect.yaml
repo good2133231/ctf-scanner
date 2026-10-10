@@ -1,0 +1,25 @@
+# 只读检测模板示例（占位）
+#
+# 这是一份**能被框架的只读闸门放行**的最小 afrog 模板，用来演示写法与去噪口径：
+#   · 只发一个只读 GET（无请求体、非 tcp、无 brute）→ 过闸门；
+#   · severity 为 info → 过闸门（默认 medium 门槛下不进报告，只在日志与库里）；
+#   · 命中标记是一个**明确不会在真实站点出现**的占位串，避免默认就产生误报。
+#
+# 要用它，把下面的 CHANGE_ME_MARKER 改成你目标上的真实特征（例如某个 header 值或页面关键字），
+# 或直接删掉本文件、放进你自己的 afrog PoC。
+id: example-readonly-detect
+info:
+  name: 示例只读检测（占位，默认不会命中）
+  author: CTFScanner
+  severity: info
+  description: |
+    占位示例模板：只读 GET 检测响应体里是否包含给定标记。
+    本目录下的所有模板都会被 scanner/afrog.py 逐条审查，非只读/非 info 级的一律拒收。
+rules:
+  r0:
+    request:
+      method: GET
+      path: /
+    expression: |
+      response.status == 200 && response.body.bcontains(b"CHANGE_ME_MARKER")
+expression: r0()

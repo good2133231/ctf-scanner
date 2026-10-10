@@ -45,7 +45,7 @@ _NON_NET_STAGES = ("portscan", "heuristic")
 # 自检里**必须关掉**的第三方能力：它们指向真实外部服务（FOFA / Shodan / Quake / crt.sh），
 # 自检铁律是**零外网**，故在自检副本里关掉。关掉后 osint 会按"未启用/无输入"如实跳过。
 # （github / intel 有别的处置：github 清空 token 后零请求；intel 改指本地夹具源，见下。）
-_EXTERNAL_OFF = ("fofa", "shodan", "quake", "ctlog")
+_EXTERNAL_OFF = ("fofa", "shodan", "quake", "ctlog", "multileak")
 
 # 代理环境变量名（大小写都要管 —— `requests` 两者都认）。
 _PROXY_KEYS = ("NO_PROXY", "no_proxy")

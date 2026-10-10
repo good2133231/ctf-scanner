@@ -356,14 +356,17 @@ DEFAULTS = {
         "enabled": True,
     },
     "afrog": {
-        # 外部引擎 afrog（续121，**默认关**）：让用户自己准备的 afrog PoC 目录跑一轮只读检测。
-        # 关着的原因写在 scanner/afrog.py 顶上：它自管请求（绕过本任务的请求预算）、
-        # 而它的社区 PoC 里就有会往目标写文件/执行命令的那类。
-        # 我们的引擎不依赖它 —— 它的"组件识别"那部分已按条复核进
-        # config/dicts/fingerprints_extra.txt（续120）。
-        "enabled": False,
-        # PoC 目录：相对路径按**项目根**解析（同 tools.* 那一段的口径），框架不代为下载。
-        "poc_dir": "",
+        # 外部引擎 afrog（续121 接入；续149 **默认开**）：让 `config/afrog-pocs/` 里的
+        # "只读 + info 级" PoC 跑一轮组件识别。
+        # 为什么现在敢默认开：三条闸门同时成立才可能真的起进程 —— ① 开关打开；② `poc_dir`
+        # 指向一个真有只读模板的目录（默认预置 `config/afrog-pocs/`）；③ 本机装好了 afrog
+        # 二进制（`tools.afrog`）。任何一条不满足都只写一行说明、**一个请求都不发**。
+        # 它自管请求、绕过本任务请求预算，所以 `scanner/afrog.py` 里限速值一律封顶，
+        # 且只喂"GET/HEAD 无体 + severity∈{空,info}"的模板（POST/PUT/tcp/brute 全被拒收）。
+        # 分不清"没跑成"与"没扫出东西"是这仓反复栽的坑，故 afrog 跑不动时日志以 `!` 开头如实标注。
+        "enabled": True,
+        # PoC 目录：相对路径按**项目根**解析（同 tools.* 那一段的口径）。
+        "poc_dir": "config/afrog-pocs",
         "max_targets": 20,       # 一次最多交多少个站点（封顶 200）
         "timeout": 8,            # 单请求超时（秒，封顶 30）
         "concurrency": 4,        # 它的 -c（封顶 25）
@@ -518,6 +521,20 @@ DEFAULTS = {
         "max_domains": 3,          # 最多对几个**注册域**检索（子域名不单独查，见 stages/github.py）
         "max_queries": 4,          # 最多发几次搜索请求（代码搜索限流约 10 次/分钟）
         "per_page": 30,            # 单次请求最多取回多少条命中（GitHub 上限 100）
+        "max_leads": 30,           # 单任务最多入库多少条线索
+        "timeout": 20,             # 单次请求超时（秒）
+    },
+    "multileak": {
+        # 多平台公开代码检索（续150-附 11-多平台，**默认关**）：GitHub 之外的只读检索源，
+        # 默认 provider=`grepapp`（免 key 公开接口，实测可用）。产出**线索**（leads 表 kind=grepapp）。
+        # 边界与 github 同源（见 scanner/multileak.py 文件头）：
+        # ① **只落元数据**（仓库 / 文件路径 / 命中规则名），绝不落文件内容（命中片段可能含凭据明文）；
+        # ② 所有请求 `auth=False`（任务级登录态绝不外发）；③ **默认关 + 限额**；**不写 vulns**。
+        "enabled": False,
+        "provider": "grepapp",     # 当前只实现 grepapp（免 key）；gitlab 现已要求认证，未实现
+        "max_domains": 3,          # 最多对几个注册域检索
+        "max_queries": 4,          # 最多发几次检索请求（免 key 接口有速率限制）
+        "per_page": 10,            # 单次请求最多取回多少条命中
         "max_leads": 30,           # 单任务最多入库多少条线索
         "timeout": 20,             # 单次请求超时（秒）
     },

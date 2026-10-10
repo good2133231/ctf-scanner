@@ -574,7 +574,8 @@ def main():
     # 5) GUI 路由（test client，不占端口）
     # ---- 401 边缘认证门：先对既有 GUI 用例隔离（续131）----
     # `gui/app.py` 在 import 期就 `app = create_app()`，吃的是**真实** `config/settings.yaml`；
-    # 那里现在写着 `gui.edge_auth.enabled: true`，而这道门 **fail-closed**（没设口令就一律 401）。
+    # 那里出厂是 `gui.edge_auth.enabled: false`（续151 起，为满足"clone 下来直接打开控制台"），
+    # 但**本机/服务器上常被改成 true**；一旦是 true，这道门 **fail-closed**（没设口令就一律 401）。
     # 不隔离的话，从这里起几百条 `app.test_client()` 断言全部拿到 401，报出来的却是"路由坏了"。
     # 口径与本文件桩掉外部情报源、桩掉真实下载一致：**被测对象之外的环境**先归一；门本身由
     # `[8ai]` 用**未打桩的** `create_app()` 真验（那一组会把 enabled 换回真货，跑完再归位）。
@@ -4757,6 +4758,124 @@ workflows:
     print("[6l] 续25 同任务追加式执行 ok: 续写同一 log_file + 不清 error + 进度重置 / "
           "跨运行去重（同 站点+路径·站点 不重复）/ 并发 409 硬拒绝 / 无源入口 409 / "
           "仅勾选目标 / append_count 标记 + 导出横幅")
+    # 6lb) 续151：拓展域名「追加层数」（ext_depth 1..10）—— 多层采集内核 + 夹值 + 上限咬住 +
+    #      无新域名即停 + 停止不续 + 层>1 补 osint/jsmine。**不联网**：桩掉队列唤醒与归属追加。
+    import json as _json6c
+    from scanner import runner as _rn6c
+    from scanner import extdom as _ex6c
+    from scanner import queue as _q6c
+
+    _rec6c = []
+
+    class _L6c:
+        info = warning = error = debug = staticmethod(
+            lambda m, *a, **k: _rec6c.append(str(m)))
+
+    class _Ctx6c:
+        def __init__(self, opts, owned, stopped=False):
+            self.options = opts
+            self.owned_new = list(owned)
+            self.settings = {}
+            self._stopped = stopped
+
+        def stopped(self):
+            return self._stopped
+
+    # (a) 夹值 / 上限咬住：非正 / 非法 / 缺省 → 1；超过 10 一律夹到 10
+    assert [_rn6c.clamp_ext_depth(v) for v in (0, -3, "x", None, 1)] == [1, 1, 1, 1, 1], \
+        "非法 / 非正 / 缺省一律夹到 1"
+    assert _rn6c.clamp_ext_depth(5) == 5 and _rn6c.clamp_ext_depth("10") == 10
+    assert _rn6c.clamp_ext_depth(11) == 10 and _rn6c.clamp_ext_depth(99999) == 10, \
+        "上限必须咬在 10（不许无限递归）"
+
+    # (b) depth_stages：把 js:* / osint:* 的产地（osint / jsmine）补进来并按 STAGE_ORDER 归位
+    assert _rn6c.depth_stages(["subdomain", "probe", "dirscan", "vulnscan"]) == \
+        ["subdomain", "probe", "osint", "jsmine", "dirscan", "vulnscan"], \
+        _rn6c.depth_stages(["subdomain", "probe", "dirscan", "vulnscan"])
+
+    # (c) 多层循环内核：真 db 建任务 + 桩掉 queue.notify / extdom.promote_owned
+    _q_notify6c = []
+    _orig_notify6c, _orig_promote6c = _q6c.notify, _ex6c.promote_owned
+    _tids6c = []
+    try:
+        _q6c.notify = lambda: _q_notify6c.append(1)
+        _ex6c.promote_owned = lambda *a, **k: {"promoted": []}
+
+        def _mk6c(_name):
+            _t = db.create_task(_name, targets, ["subdomain"], {"offline": True})
+            db.update_task(_t, status="done")
+            _tids6c.append(_t)
+            return _t
+
+        def _pl6c(_t):
+            return _json6c.loads(db.get_task(_t)["run_payload"] or "{}")
+
+        # 场景1：ext_depth=3、本层有归属新增 → 排第 2 层，层数递减到 2，阶段补 osint/jsmine
+        _t1_6c = _mk6c("smoke-depth-a")
+        _rn6c._maybe_queue_next_layer(
+            _Ctx6c({"ext_depth": 3, "ext_layer": 1}, ["a.targ1.pro"]),
+            _t1_6c, ["subdomain"], {"ext_depth": 3, "ext_layer": 1}, _L6c())
+        _r1_6c = dict(db.get_task(_t1_6c))
+        _p1_6c = _pl6c(_t1_6c)
+        assert _r1_6c["status"] == "queued" and _r1_6c["run_mode"] == "append", _r1_6c
+        assert _p1_6c["options"]["append"] is True, _p1_6c
+        assert _p1_6c["options"]["append_targets"] == ["a.targ1.pro"], _p1_6c
+        assert _p1_6c["options"]["ext_depth"] == 2 and _p1_6c["options"]["ext_layer"] == 2, _p1_6c
+        assert "osint" in _p1_6c["stages"] and "jsmine" in _p1_6c["stages"], _p1_6c
+        assert _q_notify6c, "排下一层后必须唤醒队列 worker"
+
+        # 场景2：ext_depth=1（默认）→ 一层都不追加（既有 append / resume 行为不变）
+        _q_notify6c.clear()
+        _t2_6c = _mk6c("smoke-depth-b")
+        _rn6c._maybe_queue_next_layer(
+            _Ctx6c({"ext_depth": 1}, []), _t2_6c, ["subdomain"], {"ext_depth": 1}, _L6c())
+        assert dict(db.get_task(_t2_6c))["status"] == "done" and not _q_notify6c, \
+            "ext_depth=1 不该追加下一层"
+
+        # 场景3：还剩层数、但本层没有新归属域名 → 立即停（不许空跑）
+        _q_notify6c.clear()
+        _t3_6c = _mk6c("smoke-depth-c")
+        _rn6c._maybe_queue_next_layer(
+            _Ctx6c({"ext_depth": 2}, []), _t3_6c, ["subdomain"], {"ext_depth": 2}, _L6c())
+        assert dict(db.get_task(_t3_6c))["status"] == "done" and not _q_notify6c, \
+            "没有新归属域名就不该追加（哪怕还剩层数）"
+
+        # 场景4：promote_owned 的产出（auto_expand 关闭时的兜底）也能驱动下一层
+        _q_notify6c.clear()
+        _ex6c.promote_owned = lambda *a, **k: {"promoted": ["b.targ1.pro"]}
+        _t4_6c = _mk6c("smoke-depth-d")
+        _rn6c._maybe_queue_next_layer(
+            _Ctx6c({"ext_depth": 2, "ext_layer": 1}, []), _t4_6c, ["subdomain"],
+            {"ext_depth": 2, "ext_layer": 1}, _L6c())
+        _p4_6c = _pl6c(_t4_6c)
+        assert _p4_6c["options"]["append_targets"] == ["b.targ1.pro"], _p4_6c
+        assert _p4_6c["options"]["ext_depth"] == 1, "层数必须递减（2 → 1）"
+
+        # 场景5：上限咬住 —— 传入 999 被夹到 10，排下一层后 ext_depth=9
+        _q_notify6c.clear()
+        _ex6c.promote_owned = lambda *a, **k: {"promoted": []}
+        _t5_6c = _mk6c("smoke-depth-e")
+        _rn6c._maybe_queue_next_layer(
+            _Ctx6c({"ext_depth": 999}, ["x.targ1.pro"]), _t5_6c, ["subdomain"],
+            {"ext_depth": 999}, _L6c())
+        assert _pl6c(_t5_6c)["options"]["ext_depth"] == 9, _pl6c(_t5_6c)["options"]
+
+        # 场景6：被停止的收场不追加
+        _q_notify6c.clear()
+        _t6_6c = _mk6c("smoke-depth-f")
+        _rn6c._maybe_queue_next_layer(
+            _Ctx6c({"ext_depth": 3}, ["a.targ1.pro"], stopped=True), _t6_6c,
+            ["subdomain"], {"ext_depth": 3}, _L6c())
+        assert not _q_notify6c, "被停止的收场不得追加下一层"
+    finally:
+        _q6c.notify = _orig_notify6c
+        _ex6c.promote_owned = _orig_promote6c
+        for _t in _tids6c:
+            db.delete_task(_t, backup=False)
+
+    print("[6lb] 续151 拓展域名追加层数 ok: ext_depth 夹到 1..10 / 每层递减且上限咬住 / "
+          "无新归属域名即停 / 停止不续 / 层大于1补 osint·jsmine / 折叠同一任务(append+run_payload)")
+
 
     # 6m) 续25-fix：QA 复验 c8d51c4 报出的三项低风险缺陷回归
     #     A. db.drop_existing 自然键归一：0 / None / "" 不再被 `x or ""` 混为一谈
@@ -5023,8 +5142,8 @@ workflows:
 
     # 5) 正常路径：伪造一条**含 `text_matches` 明文**的 GitHub 响应，验硬边界 ①②。
     _gh_items = [
-        {"path": ".env", "html_url": "https://github.com/acme/infra/blob/main/.env",
-         "repository": {"full_name": "acme/infra", "owner": {"login": "acme"}},
+        {"path": ".env", "html_url": "https://github.com/acme/example.com/blob/main/.env",
+         "repository": {"full_name": "acme/example.com", "owner": {"login": "acme"}},
          "text_matches": [{"fragment": f"DB_PASSWORD={_SECRET}"}]},
         {"path": "conf/app.yaml",
          "html_url": "https://github.com/acme/app/blob/main/conf/app.yaml",
@@ -5074,14 +5193,23 @@ workflows:
     _req6p.clear()
     # 5a) 合并：(域名, 仓库, 路径) 唯一的命中只出一条 —— 四条规则都命中同一份文件时全靠这步收敛，
     #     否则 db.insert_leads 只认首条，后面的规则会被**静默丢掉**
-    assert [x["code"] for x in _leads6p] == ["acme/app:conf/app.yaml", "acme/infra:.env"], \
+    # 续150：弱相关的 `acme/app` 被降到 info，排序（级别优先）因此把它排到 medium 的 .env 之后
+    assert [x["code"] for x in _leads6p] == ["acme/example.com:.env", "acme/app:conf/app.yaml"], \
         [x["code"] for x in _leads6p]
-    _merged = [x for x in _leads6p if x["code"] == "acme/infra:.env"][0]
+    _merged = [x for x in _leads6p if x["code"] == "acme/example.com:.env"][0]
     assert all(r in _merged["matched"] for r in ("mention", "credential", "apikey", "env-file")), \
         _merged["matched"]
     assert _merged["level"] == "medium" and _merged["kind"] == "github", _merged
     assert _merged["source"] == "GitHub" and _merged["target"] == "example.com"
-    assert _merged["url"].startswith("https://github.com/acme/infra"), _merged["url"]
+    assert _merged["url"].startswith("https://github.com/acme/example.com"), _merged["url"]
+    # 续150（用户点单「智能判断结果是不是搜歪了」）：仓库与路径都不含域名/主标签 ⇒ 弱相关，
+    # 只降级到 info + 写明理由，**绝不丢线索**（与续111 名单类同一条口径）。
+    _weak6p = gh_mod.build_lead("example.com", "someone/other", "src/main.go", ["credential"],
+                                     weak=True)
+    assert _weak6p["level"] == "info" and "弱相关" in _weak6p["detail"], _weak6p
+    _weakrow6p = gh_mod._leads_from({("example.com", "someone/other", "src/main.go"):
+                                    {"rules": {"credential"}, "url": "u"}})
+    assert len(_weakrow6p) == 1 and _weakrow6p[0]["level"] == "info", _weakrow6p
     # ① 只落元数据：字段集合是白名单，`text_matches` 一个字都不读
     for _ld in _leads6p:
         assert set(_ld) == {"kind", "code", "title", "target", "matched", "level",
@@ -5153,7 +5281,7 @@ workflows:
     assert len(_gh_rows) == 2 and all(r["kind"] == "github" for r in _gh_rows)
     assert not db.list_vulns(task_id=_gh_tid, limit=50), "线索绝不能写进 vulns"
     _jl6p = generate_jsonl(_gh_tid)
-    assert '"type": "lead"' in _jl6p and "acme/infra:.env" in _jl6p, "JSONL 必须保留 GitHub 线索"
+    assert '"type": "lead"' in _jl6p and "acme/example.com:.env" in _jl6p, "JSONL 必须保留 GitHub 线索"
     assert _SECRET not in _jl6p, "JSONL 里也绝不能出现凭据明文"
 
     # 7) 失败路径必须**说出来**（不能让人以为"查过了、没泄露"）
@@ -5205,6 +5333,62 @@ workflows:
     assert gh_mod.rule_of("nope") is None and gh_mod.rule_of("mention")[2] == "info"
     assert gh_mod.build_query("a.example.com") == '"a.example.com"'
     assert gh_mod.build_query("a.example.com", "filename:.env") == '"a.example.com" filename:.env'
+    # 续150（用户 2026-10-11 点单"targ1.pro / targ1 都要搜"）：主标签也 OR 进查询；
+    # 但标签过短（<3）不加 —— 否则 `a.io` 会变成"命中一切"的噪声源。上面两条即短标签的对照。
+    assert gh_mod.build_query("targ1.pro") == '"targ1.pro" OR "targ1"'
+    assert gh_mod.build_query("targ1.pro", "filename:.env") == '"targ1.pro" OR "targ1" filename:.env'
+    assert gh_mod.label_of("targ1.pro") == "targ1" and gh_mod.label_of("a.io") == ""
+
+    # 续150-附（11-调度）：GitHub / 多平台检索在 subdomain 阶段**一开始**并发触发，
+    #   结果仍走 collect() → db.insert_leads()；github 阶段保持可用 —— 发现已跑过
+    #   （ctx.results 有标记）就**直接跳过、不重复发请求**。下面把"跳过"这条口径钉死：
+    #   先手动置标记，再跑 GithubStage，必须零请求。
+    _req6p.clear()
+    _early_ctx = StageContext(_gh_tid, "smoke-gh-early", parse_lines([targets]), ["github"],
+                              {}, copy.deepcopy(_gh_settings), Path(_TMPDIR) / "gh-early", rec)
+    _early_ctx.results["leads_github"] = []        # 假装"子域阶段已检索过"
+    GithubStage(_early_ctx).run()
+    assert _req6p == [], "github 阶段发现子域阶段已检索过时必须一次请求都不发（不重复发请求）"
+
+    # 续150-附（11-多平台）：grep.app 免 key 检索源 —— URL 构造 / 响应解析 /
+    #   **只落元数据（绝不读命中片段 content.snippet）** / provider 未实现即零请求且原因写明。
+    from scanner import multileak as ml_mod
+    assert _DEF6P["multileak"]["enabled"] is False, "多平台检索源必须默认关（续150-附）"
+    assert ml_mod.provider_of({}) == "grepapp", "默认 provider 应为免 key 的 grepapp"
+    _ml_url = ml_mod.search_url("targ1.pro", per_page=20)
+    assert _ml_url.startswith("https://grep.app/api/search?q=") \
+        and "targ1.pro" in _ml_url and "per_page=20" in _ml_url, _ml_url
+    _ML_SECRET = "ghp_MULTIsecretVALUE0123456789"
+    _ml_body = _json.dumps({"hits": {"total": 2, "hits": [
+        {"repo": "acme/infra", "path": ".env", "branch": "main",
+         "content": {"snippet": f"PASSWORD={_ML_SECRET}"}},
+        {"repo": "acme/app", "path": "conf/app.yaml", "branch": "main",
+         "content": {"snippet": "x"}},
+        {"repo": "", "path": "nope"}]}})
+    _ml_hits, _ml_total, _ml_err = ml_mod.parse_response(_ml_body, "mention", "targ1.pro")
+    assert (_ml_total, _ml_err, len(_ml_hits)) == (2, "", 2), (_ml_total, _ml_err, _ml_hits)
+    assert set(_ml_hits[0]) == {"repo", "path", "rule"}, "normalize_hit 必须只回元数据字段"
+    _ml_lead = ml_mod.build_lead("targ1.pro", "acme/infra", ".env", ["mention"])
+    assert _ml_lead["kind"] == "grepapp" and _ml_lead["source"] == "grep.app", _ml_lead
+    assert _ML_SECRET not in _json.dumps(_ml_lead, ensure_ascii=False), "凭据明文绝不许进线索"
+    _ml_req = []
+
+    def _ml_must_not_http(*a, **kw):
+        _ml_req.append((a, kw))
+        raise AssertionError("这一步不该发任何请求")
+
+    _orig_ml_http = ml_mod.http_request
+    ml_mod.http_request = _ml_must_not_http
+    try:
+        # provider 未实现（gitlab 现已要求认证）→ 零请求 + 如实写原因
+        _ml_l, _ml_m = ml_mod.collect(["targ1.pro"], {"multileak": {"provider": "gitlab"}})
+        assert _ml_l == [] and _ml_m["queries"] == 0 and _ml_req == [], _ml_m
+        assert "gitlab" in (_ml_m.get("error") or ""), _ml_m
+        # 无注册域 → 零请求
+        _ml_l2, _ml_m2 = ml_mod.collect([], {"multileak": {}})
+        assert _ml_l2 == [] and _ml_m2["queries"] == 0 and _ml_req == [], _ml_m2
+    finally:
+        ml_mod.http_request = _orig_ml_http
 
     print("[6p] 续26 GitHub 泄露检索 ok: 默认关/没 token 零请求（原因写明）/ auth=False（目标侧"
           "登录态不外发，GitHub token 走 Authorization）/ 只落仓库+路径+规则名（含 text_matches"
@@ -10227,7 +10411,7 @@ http:
     _seen7p = {}
 
     def _stub7p(tools=None, dest_dir=None, allow_unverified=False, wire=True, settings_path=None,
-                timeout=120, fetch=None, blobs=None):
+                timeout=120, fetch=None, blobs=None, only_if_newer=False, settings=None):
         _seen7p.update(tools=tools, allow=allow_unverified, wire=wire)
         return [{"tool": "httpx", "ok": False, "version": "v1.12.0", "path": "",
                  "verified": None, "reason": "桩：离线测试，未联网"}]
@@ -12670,7 +12854,8 @@ http:
     _on8e = {"dev": {"enabled": True},
              "iprecon": {"enabled": True}, "fofa": {"enabled": True}, "shodan": {"enabled": False},
              "quake": {"enabled": True}, "ctlog": {"enabled": True},
-             "github": {"enabled": True}, "intel": {"enabled": True}}
+             "github": {"enabled": True}, "intel": {"enabled": True},
+             "multileak": {"enabled": True}}
 
     # ① 没开开发模式 → 原对象原样返回、一个段都不压（不许改既有行为）
     _off8e = {"dev": {"enabled": False}, "fofa": {"enabled": True}}
@@ -12694,7 +12879,7 @@ http:
         assert isinstance(_k8e, list) and isinstance(_got8e, type(_dirty8e)), _dirty8e
 
     # ④ 覆盖面：六个真会出网的源一个都不能漏；本机能力不许被当成外部源误杀
-    _need8e = {"iprecon", "fofa", "shodan", "quake", "ctlog", "github", "intel"}
+    _need8e = {"iprecon", "fofa", "shodan", "quake", "ctlog", "github", "intel", "multileak"}
     assert _need8e - set(_dm8e.DEV_EXTERNAL_SECTIONS) == set(), f"外部源清单缺项：{_need8e - set(_dm8e.DEV_EXTERNAL_SECTIONS)}"
     for _local8e in ("screenshot", "portscan", "dirscan", "vulnscan"):
         assert _local8e not in _dm8e.DEV_EXTERNAL_SECTIONS, f"{_local8e} 是本机/目标侧能力，不该进外部源表"
@@ -12743,7 +12928,7 @@ http:
         shutil.rmtree(_wd8e, ignore_errors=False)
 
     print("[8e] 续97 开发模式硬闸 ok: dev 关着＝零副作用（原对象原样回、不打日志）｜dev 开着＝只压真开着的 "
-          "7 个外部源（iprecon/fofa/shodan/quake/ctlog/github/intel），副本改、入参不动｜脏值不抛｜"
+          "8 个外部源（iprecon/fofa/shodan/quake/ctlog/github/intel/multileak），副本改、入参不动｜脏值不抛｜"
           "本机能力（screenshot/portscan/dirscan/vulnscan）不被误杀｜StageContext 真的接了这道闸且"
           "在日志里点名压了谁；变异证伪：enabled() 恒假/恒真两种改法都会让上面某条红")
 
@@ -14853,9 +15038,10 @@ http:
     #      用户问"afrog 能不能加自动更新"。查官方 latest release（v3.5.7）实测：7 个产物
     #      = linux / macOS / windows × amd64 / arm64 的 zip + `afrog_3.5.7_checksums.txt`，
     #      命名与 projectdiscovery 同一规律 ⇒ 复用现成的 "pd" 挑法与 SHA256 校验，不新增 style。
-    #      但它**当前没有任何阶段调用它**（vulnscan 适配器是下一轮），所以 `TOOLS` 里加一档
-    #      `wired`：能下载 ≠ 会被用。混为一谈的代价就是页面写"未找到（自动使用内置兜底）"
-    #      而根本没有任何东西在兜底 —— 那是假话，也是这仓反复出事的地方（静默误导）。
+    #      续149：afrog 的 vulnscan 适配器**早已写好并接线**（续121），旧版"当前没有任何阶段调用它"
+    #      的说法与 `wired: False` 都已过期 —— 那面旗子会把它挡在 `--install` 自动层之外、还让页面
+    #      谎称"框架尚未调用它"。现在 `wired=True`（确实会被调用）+ `fallback=False`（没有内置兜底，
+    #      因此也不许写"自动使用内置兜底"）。两个语义分开，是本组真正要钉的东西。
     from scanner import toolmgr as _tm119
 
     # ① 成员与分档
@@ -14866,10 +15052,14 @@ http:
     # 给它配握手 = 每次开页白等一个超时 + 把装好的它报成"未通过校验"（§5.2 那类静默降级）。
     assert _a119["verify"] is None, _a119
 
-    assert _tm119.wired("afrog") is False, "afrog 现在还没接进扫描路径，标成 wired 就是撒谎"
+    assert _tm119.wired("afrog") is True, \
+        "续149：afrog 早已被 vulnscan 调用（续121），wired=False 是**过期标记**，会把它挡在自动层外"
+    assert _tm119.fallback("afrog") is False, \
+        "afrog 没有内置兜底：缺了就是本轮不跑它，不许说成'自动使用内置兜底'"
     assert all(_tm119.wired(t) for t in ("subfinder", "httpx", "puredns")), \
         "既有三个是扫描真的在用的，必须仍标 wired"
     assert _tm119.wired("nmap") is True, "未知名字默认 True（新工具默认按『会被用』处理）"
+    assert _tm119.fallback("nmap") is True, "未知名字默认按『有内置兜底』处理"
     assert sorted(set(_tm119.TOOLS) & set(_tm119.MANUAL)) == [], "TOOLS∩MANUAL 必须仍为空（[7p] ⑨）"
 
     # ② 产物名必须与官方 release 的**真实命名**一字不差（对不上就是下载不到 / 下错包）
@@ -14906,12 +15096,13 @@ http:
     _u119.which, _u119.run_cmd = _which_none119, _run_probe119
     try:
         _st119 = {r["tool"]: r for r in _tm119.status(load_settings())}
-        assert _st119["afrog"]["wired"] is False and _st119["afrog"]["note"].startswith("未装")
-        assert "默认不调用它" in _st119["afrog"]["note"], _st119["afrog"]["note"]
+        assert _st119["afrog"]["wired"] is True and _st119["afrog"]["note"].startswith("未找到"), \
+            _st119["afrog"]["note"]
         assert "内置兜底" not in _st119["afrog"]["note"], \
-            f"afrog 的文案又写上了『自动使用内置兜底』—— 没有任何阶段调用它，那是假话：{_st119['afrog']['note']}"
+            f"afrog 没有内置兜底，文案不许写『自动使用内置兜底』：{_st119['afrog']['note']}"
+        assert "不装则本轮不跑该外部引擎" in _st119["afrog"]["note"], _st119["afrog"]["note"]
         assert "内置兜底" in _st119["puredns"]["note"], \
-            "wired 的工具仍该说兜底（分档不许把老文案一起削掉）"
+            "有兜底的工具仍该说兜底（分档不许把老文案一起削掉）"
         # 都没装 ⇒ 一次探测子进程都不该起
         assert _probe_calls119 == [], _probe_calls119
         # 都"装着"：afrog 无 verify ⇒ 仍不起进程；httpx 有 verify ⇒ 起一次，且超时是 8 秒
@@ -14924,41 +15115,43 @@ http:
             "afrog 又被人去摸手了 —— 它在管道下不退出，探一次就是一次超时"
         assert _probe_calls119[0][1] == 8, \
             f"握手超时不再是 8 秒（开一页要同步等 {_probe_calls119[0][1]} 秒；实测有工具会挂着不退）"
-        assert _st2["afrog"]["note"].startswith("OK") and "只在显式启用后被调用" in _st2["afrog"]["note"], \
-            _st2["afrog"]["note"]
+        assert _st2["afrog"]["note"].startswith("OK"), _st2["afrog"]["note"]
         assert _st2["httpx"]["note"] == "OK（/fake/httpx）" and _st2["httpx"]["version"] == "banner-line"
     finally:
         _u119.which, _u119.run_cmd = _real_which119, _real_run119
 
-    # ④ 自动安装层不含它（`--install` 不该顺手拉 25 MB 的无用二进制）
+    # ④ 自动安装层**含**它（续149：默认开 ⇒ `--install` 该把它一起装好，别让新机器
+    #    "装了框架却没有外部引擎"）。清单里它必须是 kind=auto / auto=True。
     import run_bootstrap as _rb119
     _rows119 = _rb119.probe(load_settings())
     _af119 = [r for r in _rows119 if r["name"] == "afrog"]
-    assert len(_af119) == 1 and _af119[0]["kind"] == "pending" and _af119[0]["auto"] is False, _af119
-    assert "--tool afrog" in " ".join(_af119[0]["cmds"]), \
-        "pending 行仍要给出一条**显式**命令（看得见、但要用户主动才装）"
+    assert len(_af119) == 1 and _af119[0]["kind"] == "auto" and _af119[0]["auto"] is True, _af119
     assert [r["name"] for r in _rows119 if r["kind"] == "auto"] == \
         [t for t in _tm119.TOOLS if _tm119.wired(t)], "自动层成员必须恰是 wired 的那些"
     assert not ({r["name"] for r in _rows119 if r["auto"]} & set(_tm119.MANUAL)), \
         "MANUAL 混进自动层（[8d] ④ 同一不变式）"
 
-    # ⑤ §6.1 变异：把 `wired()` 打回恒真 ⇒ ③ 的"不许说兜底"与 ④ 的"不在自动层"都必须变红
+    # ⑤ §6.1 变异：把 `wired()` 打回恒假 ⇒ ③ 的文案分档与 ④ 的"在自动层"都必须变红
+    #    （断言与"本机装没装 afrog"无关：装与未装分别对应两种**未接线**文案，两者都不该出现
+    #     "会调用它"的口径 —— 这样在装了/没装的机器上都能抓出 wired 被改坏。）
     _real_w119 = _tm119.wired
     try:
-        _tm119.wired = lambda name: True
-        _st_mut = {r["tool"]: r for r in _tm119.status(load_settings())}
-        assert "内置兜底" in _st_mut["afrog"]["note"], "变异没生效：afrog 仍被说成有兜底"
+        _tm119.wired = lambda name: False
+        _note_mut = {r["tool"]: r for r in _tm119.status(load_settings())}["afrog"]["note"]
+        assert ("未装（需在策略配置里显式启用" in _note_mut
+                or "已装，但只在显式启用后被调用" in _note_mut), \
+            f"变异没生效：wired 恒假时 afrog 的文案没落到『未接线』那一档：{_note_mut}"
         _rows_mut = _rb119.probe(load_settings())
-        assert all(r["name"] != "afrog" or r["kind"] == "auto" for r in _rows_mut), \
-            "变异没生效：afrog 仍在 pending（说明 ④ 抓不住 wired 被改坏）"
+        assert all(r["name"] != "afrog" or r["kind"] == "pending" for r in _rows_mut), \
+            "变异没生效：wired 恒假时 afrog 仍在自动层（说明 ④ 抓不住 wired 被改坏）"
     finally:
         _tm119.wired = _real_w119
 
     print("[8x] 续119 afrog 进 toolmgr ok: 复用现成 pd 命名与 SHA256 校验（官方 v3.5.7 的 7 个产物"
           "逐一核对）｜没有本平台产物→None（不猜、不拿别的平台覆盖）｜只有 zip 没有 checksums→"
-          "拿不到校验文件（拒绝安装的链路照旧）｜新增 `wired` 一档：文案不再谎报『自动使用内置兜底』、"
-          "自动安装层不含它、但清单与页面看得见并给出一条显式命令｜TOOLS∩MANUAL=∅ 与 [8d]④ 不变式"
-          "都还成立｜变异：wired 恒真 ⇒ 文案与自动层两条判据同时变红")
+          "拿不到校验文件（拒绝安装的链路照旧）｜续149 修正过期标记：wired=True（确实被 vulnscan 调用）"
+          "+ fallback=False（没有内置兜底，文案不许谎称兜底）｜自动安装层**含**它、清单里是 auto｜"
+          "TOOLS∩MANUAL=∅ 与 [8d]④ 不变式都还成立｜变异：wired 恒假 ⇒ 文案与自动层两条判据同时变红")
 
     # ---------------- [8y] 续120：afrog 指纹按需导入 + 状态码门控 ----------------
     #      用户点的是"A（指纹）也做"。这一组要钉的不是"搬进来多少条"，而是**搬进来的每一条
@@ -15443,7 +15636,7 @@ expression: r0() || r1()
           "：改字典不用重启｜真实字典 51 条/49 标签全部带门控与出处、7 个标签并入内置同名产品、"
           "RCE 判据与通用标题都不在表里、每条都能在复核表里回溯、NOTICE.md 已登记")
 
-    # ---------------- [8z] 续121：afrog 外部引擎适配（默认关 + 只读闸门 + 四个实测坑） ----------------
+    # ---------------- [8z] 续121：afrog 外部引擎适配（续149 默认开 + 只读闸门 + 四个实测坑） ------------
     #      B 步 2。用户说"A 和 B 都做"。A（指纹）在续120；这里的 B 是"把 afrog 当**外部引擎**跑
     #      一批用户自己准备的只读 PoC"。适配器不是包一层 shell 那么轻 —— 本机 v3.5.7 真跑出来
     #      四个坑，每一个都能把"没跑成"伪装成"扫过了没结果"（§5.2 那一类静默降级）：
@@ -15459,9 +15652,11 @@ expression: r0() || r1()
 
     # ① 默认与封顶：afrog 自己的默认是 `-c 25 / -rl 150 / -timeout 50`（实测 `afrog -h`），
     #    比本框架的只读+限速红线松得多 ⇒ 策略里的值一律压进 CEIL，乱填落回默认。
+    #    续149：**默认开**（用户点单"默认把这个启用"）—— 但真起进程还要过"目录里有只读模板 +
+    #    本机装了二进制"两道闸，任何一道不过都只写一行日志、零请求（下面 [8z]⑥ 与 run() 分段钉住）。
     _d121 = _af121.cfg({})
-    assert _d121["enabled"] is False and _d121["poc_dir"] == "", _d121
-    assert _af121.enabled(load_settings()) is False, "afrog 绝不允许默认开（外部引擎自管请求）"
+    assert _d121["enabled"] is True and _d121["poc_dir"] == "config/afrog-pocs", _d121
+    assert _af121.enabled(load_settings()) is True, "续149：afrog 默认开（三条闸门仍各自把关）"
     _big = {"rate": 99999, "concurrency": 9999, "timeout": 9999, "per_target_rate": 9999,
             "max_targets": 99999, "proc_timeout": 999999}
     _capped = _af121.cfg({"afrog": dict(_big, enabled=True)})
@@ -15707,16 +15902,16 @@ expression: r0()
                             workdir=_wd121)
         _tf = Path(_calls121[-1][0][_calls121[-1][0].index("-T") + 1])
         assert len(_tf.read_text(encoding="utf-8").splitlines()) == 3, _tf.read_text(encoding="utf-8")
-        # 默认关 ⇒ 连 PoC 目录都不碰、不起进程
+        # 显式关 ⇒ 连 PoC 目录都不碰、不起进程（返回 `~` 前缀＝按设计跳过，不是失败）
         _calls121.clear()
         _o, _n = _af121.run([{"url": "http://127.0.0.1:1/"}],
                             {"afrog": {"enabled": False, "poc_dir": str(_pd121)},
                              "tools": {"afrog": "x"}}, workdir=_wd121)
-        assert _o == [] and _n.startswith("!afrog 未启用") and _calls121 == []
+        assert _o == [] and _n.startswith("~afrog 未启用") and _calls121 == []
     finally:
         _af121.run_cmd, _af121.which = _real_rc121, _real_which121
 
-    # ⑥ 阶段接线：默认关不起进程；开着才起一次；结果**再过一遍我们的级别门槛**
+    # ⑥ 阶段接线：显式关不起进程；开着才起一次；结果**再过一遍我们的级别门槛**
     import scanner.stages.vulnscan as _vs121
     # 刻意起别名：`StageContext` 是 smoke.py 的模块级导入，函数内再 import 同名会把它变成
     # "整个 main() 的局部名"，于是 main() 前半段那些 `StageContext(...)` 全部 UnboundLocalError
@@ -15768,7 +15963,7 @@ expression: r0()
         _base121 = copy.deepcopy(load_settings())
         _base121["afrog"] = dict(_base121.get("afrog") or {}, enabled=False, poc_dir=str(_pd121))
         _vs121.VulnscanStage(_mk_ctx121(_base121, _rec)).run()
-        assert _run_calls121 == [], f"关着也去调 afrog（默认关这条红线破了）：{_run_calls121}"
+        assert _run_calls121 == [], f"显式关着也去调 afrog（这条红线破了）：{_run_calls121}"
         _base121["afrog"]["enabled"] = True
         _base121["checks"] = dict(_base121.get("checks") or {}, min_severity="medium")
         _c2 = _mk_ctx121(_base121, _rec)
@@ -15837,10 +16032,12 @@ expression: r0()
         gui_app.save_settings = _real_save121
     # 「外部工具」页的文案：afrog 不再是"永远没人调用"，但也不许被读成"装上就用上了"
     _th121 = c.get("/tools").get_data(as_text=True)
-    assert "只在显式启用后被调用" in _th121 and "默认也不会" in _th121, "外部工具页文案没跟着改口径"
+    assert "默认开" in _th121 and "只读 + info 级" in _th121, \
+        "外部工具页文案没跟着改口径（续149 afrog 默认开）"
     assert "尚未调用" not in _th121, "页面还在说『框架尚未调用它』—— 续121 已经有调用点了"
 
-    print("[8z] 续121 afrog 外部引擎适配 ok: 默认关（load_settings 里也是关）｜策略值一律压进内置封顶"
+    print("[8z] 续121 afrog 外部引擎适配 ok: 续149 起**默认开**（三条闸门仍各自把关：开关/目录有只读"
+          "模板/本机装了二进制；不过就只写一行日志、零请求）｜策略值一律压进内置封顶"
           "（它自己的 -rl 150/-c 25/-timeout 50 进不来，乱填落回默认）｜只读闸门只看请求语义"
           "（POST/带体/tcp/brute/severity≠info/坏 YAML 各有拒因，-P 指的是任务目录里那份子集）｜"
           "argv 逐条钉 -duc/-doh/-nc/-ja，并禁 -ps/-default-pwd/-brute/-cs｜四个实测坑都有判据："
@@ -16071,12 +16268,24 @@ expression: r0()
     _a123, _r123 = _af123.plan(str(_TMPDIR / "no-such-dir-123"))
     assert _a123 == [] and len(_r123) == 1 and _r123[0][1] == "不是一个目录", (_a123, _r123)
 
-    # ④ 没给目录、策略里也空 ⇒ 非零码 + 两条出路都指出来
+    # ④ 没给目录、策略里也空 ⇒ 续149 起**落回内置默认目录**（config/afrog-pocs，随仓库带只读示例），
+    #    所以要查到结果（rc=0）而不是"没有目录"；"真的哪都没有目录"这一分支仍必须可达 —— 把默认
+    #    也清空来验它（非零码 + 两条出路都指出来）。
     _out123d = _io123.StringIO()
     with _ctx123.redirect_stdout(_out123d):
         _rc123d = _cl123.check_afrog_pocs({"afrog": {"poc_dir": ""}})
-    assert _rc123d == 1 and "--check-afrog-pocs" in _out123d.getvalue() \
-        and "afrog.poc_dir" in _out123d.getvalue(), _out123d.getvalue()
+    _txt123d = _out123d.getvalue()
+    assert _rc123d == 0 and "config/afrog-pocs" in _txt123d, (_rc123d, _txt123d)
+    _def123d = _af123.DEFAULTS["poc_dir"]
+    _af123.DEFAULTS["poc_dir"] = ""
+    try:
+        _out123d2 = _io123.StringIO()
+        with _ctx123.redirect_stdout(_out123d2):
+            _rc123d2 = _cl123.check_afrog_pocs({"afrog": {"poc_dir": ""}})
+        assert _rc123d2 == 1 and "--check-afrog-pocs" in _out123d2.getvalue() \
+            and "afrog.poc_dir" in _out123d2.getvalue(), _out123d2.getvalue()
+    finally:
+        _af123.DEFAULTS["poc_dir"] = _def123d
 
     # ⑤ "查到了结果 = 一个可喂的都没有" ⇒ 退出码仍是 0，但必须明说开了也不会跑
     _empty123 = _TMPDIR / "empty-pocs123"
@@ -17263,9 +17472,9 @@ expression: r0()
 
     # ① **DEFAULTS 必须是关**。⚠ 续146-附2 更正这两行原先的理由（"开着提交的是 settings.yaml，
     #    而新克隆拿的是 DEFAULTS"）—— **不对**：`config/settings.yaml` 是被 git 跟踪的，仓库里
-    #    出厂就写着 `gui.host: 0.0.0.0` + `gui.edge_auth.enabled: true`（续131 的取舍），而
-    #    `load_settings()` 是拿它**盖在** DEFAULTS 上 ⇒ 新克隆拿到的是 `true`，在跑 `--set` 之前
-    #    确实全程 401。那是 fail-closed（公开仓库 + 出厂就绑 0.0.0.0，宁可锁死也不裸奔），不是 bug；
+    #    出厂是 `gui.host: 0.0.0.0` + `gui.edge_auth.enabled: false`（续151 起；此前是 true），而
+    #    `load_settings()` 是拿它**盖在** DEFAULTS 上 ⇒ 新克隆拿到的是**文件里的值**；文件里是 true 时，
+    #    在跑 `--set` 之前确实全程 401 —— 那是 fail-closed（宁可锁死也不裸奔），不是 bug；
     #    但它意味着"新机子怎么把配置补齐"必须真能走通 —— 无终端那条路见 `[8aw]`。
     #    本条守的是另一半：**代码兜底**不许是开（settings.yaml 里缺这个键的人不该被突然锁死）。
     assert _cfg8ai.DEFAULTS["gui"]["edge_auth"]["enabled"] is False, \
@@ -20218,8 +20427,9 @@ expression: r0()
     #      用户点单：「现在模式我感觉不像可迁移 —— 自动化安装、自动化配置环境，脚本运行一下就可以运行」。
     #      实测口径（本机，从"只有索引里那些文件"的空目录跑一遍）：`./install.sh` 建出 `.venv`、
     #      装好依赖、下回 subfinder/httpx（puredns 那次没下下来 ⇒ 退出码 1，如实报"可选项失败"），
-    #      `./start.sh` 起得来：根路径 404 空体、带前缀的地址 401（出厂 `edge_auth.enabled: true`
-    #      而口令文件不入库 ⇒ fail-closed，横幅与 `_boot_gaps` 都点名了这一项），源仓库零污染。
+    #      `./start.sh` 起得来：根路径 404 空体；**当时**出厂 `edge_auth.enabled: true`，带前缀的地址
+    #      401（口令文件不入库 ⇒ fail-closed，横幅与 `_boot_gaps` 点名了这一项）—— 续151 起出厂改成
+    #      false（用户要"直接打开控制台"），故"401"这条结论只对**门开着**的情形成立。源仓库零污染。
     #      这一组钉的是**结构**：脚本必须把判据留给 `run_bootstrap.py` / `gui.serve()`，
     #      自己一份都不抄 —— 抄了就是 §5.14 的第二个产地，两边迟早漂。
     _sh8av = {n: (ROOT / n) for n in ("install.sh", "start.sh")}
@@ -20272,8 +20482,8 @@ expression: r0()
 
     # ---------------- [8aw] 续146-附2：401 边缘门口令要有**非交互**档（否则新机器根本配不齐） ----------------
     #      实测撞出来的，不是推演：从"只有索引里那些文件"的空目录跑一遍 `./install.sh` + `./start.sh`，
-    #      控制台起得来但**全站 401** —— 出厂 `config/settings.yaml` 写着 `edge_auth.enabled: true`，
-    #      而口令文件 `config/edge_auth.yaml` 在 `.gitignore` 里。想补口令才发现
+    #      控制台起得来但**全站 401** —— **当时**出厂 `config/settings.yaml` 写着 `edge_auth.enabled: true`
+    #      （续151 起出厂改成 false），而口令文件 `config/edge_auth.yaml` 在 `.gitignore` 里。想补口令才发现
     #      `python -m scanner.edgeauth --set` 在无终端时直接 `rc=1` 且不写文件 ⇒
     #      容器 / systemd / cloud-init 这种没有终端的新机器，唯一出路是**手写**那个 YAML
     #      （而且手写没人给它 chmod 0600，`set_password()` 才会）。
@@ -20763,7 +20973,7 @@ expression: r0()
     # `tests/browser_e2e.py [11]`；这里钉的是源码形状与页面结构。
     from gui.app import _site_fold_key as _fk147
 
-    # ---- ① 折叠键：只看标题，不看长度；两条守卫（task_id / 空标题）不许丢 ----
+    # ---- ① 折叠键：有标题按标题折（3xx 取跳转后标题）；无标题按**响应长度**折 ----
     _r147a = {"task_id": 7, "title": "  WEEX Help Center  ", "length": 635085}
     _r147b = {"task_id": 7, "title": "WEEX Help Center", "length": 1298}
     assert _fk147(_r147a) == _fk147(_r147b), "同标题不同长度仍不折 ⇒ 主理人要的那一折没生效"
@@ -20771,10 +20981,18 @@ expression: r0()
     assert (_r147a["task_id"], _r147a["title"], _r147a["length"]) \
         != (_r147b["task_id"], _r147b["title"], _r147b["length"]), \
         "夹具这两行长度一样 → 新旧键同结果，① 是空写"
+    # 续150：无标题 ⇒ 按长度折（>0）；长度 0 / 缺键 ⇒ 不折（宁留噪声不藏资产）
+    assert _fk147({"task_id": 7, "length": 1024}) \
+        == _fk147({"task_id": 7, "title": " ", "length": 1024}), \
+        "无标题但同长度应折成一条（用户 2026-10-11 点单）"
+    assert _fk147({"task_id": 7, "length": 0}) is None, "长度 0 无标题 ⇒ 不参与折叠"
+    assert _fk147({"task_id": 7, "title": "   "}) is None, "空标题且无长度必须不参与折叠"
+    # 3xx：没有 title 时取**跳转后**标题（`redirect_title`）参与折叠
+    assert _fk147({"task_id": 7, "status": 301, "redirect_title": "Landing"}) \
+        == _fk147({"task_id": 7, "title": "Landing", "length": 9}), "301 站点要按跳转后标题折"
     assert _fk147({"task_id": 8, "title": "WEEX Help Center", "length": 1298}) \
         != _fk147(_r147b), "跨任务也折 = 把别人任务的站点藏掉（实测过 15 条折成 1 条）"
-    assert _fk147({"task_id": 7, "title": "   "}) is None, "空标题必须不参与折叠（宁留噪声不藏资产）"
-    assert _fk147({"task_id": 7}) is None and _fk147({}) is None, "缺 title 键不许抛"
+    assert _fk147({"task_id": 7}) is None and _fk147({}) is None, "缺 title/length 键不许抛"
 
     # ---- ② 页面级：三行同标题不同长度，默认只剩一行；「显示全部站点」放开后三条都在 ----
     _t147 = db.create_task("smoke-8az-fold", "http://f147.test/", ["probe"], {})
@@ -20812,7 +21030,7 @@ expression: r0()
         "「完整版」要剩一个入口 —— 报告小节截断提示指的就是它，没了就是假出口"
 
     print("[8az] 续147 站点按标题折叠 + 主题首屏定档 + 导出一行 ok: "
-          "折叠键只看标题（长度不再参与），且**旧键在同一份夹具上判「不折」**——证明这条断言有牙｜"
+          "折叠键=有标题按标题折（3xx 取跳转后标题）/无标题按长度折（长度 0 不折），且**旧键在同一份夹具上判「不折」**——证明这条断言有牙｜"
           "task_id 仍留在键里（跨任务不折）、空标题不参与、缺键不抛｜页面级三条同标题不同长度默认"
           "只剩一条、放开后三条都在、被收起的条数照报、放开开关说清放开的是哪两层｜"
           "主题：键与默认档只有一份产地、app.js 不再藏 dark、赋值排在样式表之前、默认档是浅色｜"
@@ -21032,6 +21250,35 @@ expression: r0()
           "｜变异三处：放松锚点门槛 / 桩掉形状表 / 清空 SECRET_TABLES，判据全部变红")
 
 
+
+    # ---------------- [8bb] 续151：数据包 → curl/Python + 目录结果可点开 ----------------
+    from scanner import packetcodec as _pc8bb
+    from gui.app import _dir_url as _du8bb
+    _p8bb = "[xss] GET http://t/x?a=1\n  → HTTP 200 / 12B  server=nginx\n  body md5=ab  前160字: hi"
+    assert _pc8bb.parse(_p8bb)[:2] == ("GET", "http://t/x?a=1"), _pc8bb.parse(_p8bb)
+    _c8bb = _pc8bb.to_curl(_p8bb)
+    assert _c8bb.startswith("curl -i -sS -X GET 'http://t/x?a=1'") and "未保存请求头/请求体" in _c8bb, _c8bb
+    assert "requests.request('GET', 'http://t/x?a=1'" in _pc8bb.to_python(_p8bb), _pc8bb.to_python(_p8bb)
+    _raw8bb = 'POST /api HTTP/1.1\nHost: t.local\nContent-Type: application/json\n\n{"u":"a"}'
+    assert _pc8bb.parse(_raw8bb) == ("POST", "https://t.local/api", [("Host", "t.local"), ("Content-Type", "application/json")], '{"u":"a"}'), _pc8bb.parse(_raw8bb)
+    _mask8bb = "GET http://t/ HTTP/1.1\nSet-Cookie: 有（值不记，见 §7）\n"
+    assert "Set-Cookie" not in _pc8bb.to_curl(_mask8bb), _pc8bb.to_curl(_mask8bb)
+    assert _pc8bb.to_curl("（无请求行）") == "" and _pc8bb.to_python("（无请求行）") == ""
+    # 续151：证据只给了 URL 的形态（jsmine「来源 JS（点开即取原文）：<url>」、flags 只有 url 列）
+    # ⇒ 按 GET 复现该 URL（"取原文"就是要 curl 它）；两边都没有 URL 才返回空串。
+    _js8bb = "来源 JS（点开即取原文）：https://cdn.t/a.js?v=1\n命中位置：第 12 行"
+    assert _pc8bb.parse(_js8bb)[:2] == ("GET", "https://cdn.t/a.js?v=1"), _pc8bb.parse(_js8bb)
+    assert _pc8bb.to_curl("", "https://cdn.t/a.js").startswith("curl -i -sS -X GET https://cdn.t/a.js"), \
+        _pc8bb.to_curl("", "https://cdn.t/a.js")
+    assert _pc8bb.to_python("", "https://cdn.t/a.js").find("requests.request('GET', 'https://cdn.t/a.js'") > 0
+    assert _du8bb("http://s/", "/a/b") == "http://s/a/b"
+    assert _du8bb("http://s", "c") == "http://s/c"
+    assert _du8bb("http://s/", "https://x/y") == "https://x/y"
+    assert _du8bb("", "/a") == "" and _du8bb("http://s/", "") == ""
+    print("[8bb] 续151 数据包转 curl/Python + 目录结果可点开 ok: 摘要格式抽出方法+URL 并**明说"
+          "未存请求头/体**（不把响应头当请求头）｜原始请求行含 Host/头/体可原样转全｜掩码行不当请求头｜"
+          "抽不到请求行返回空串（不编命令）｜目录链接只放行 http/https、path 为完整 URL 时直接用、"
+          "拼不出退化为纯文本")
     print("SMOKE PASS")
 
 

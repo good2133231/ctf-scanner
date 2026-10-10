@@ -9,10 +9,11 @@
   <p class="muted">
     上表里<b>被扫描路径调用的那些</b>决定 subdomain / probe / 目录扫描三阶段的"上限"：没装时一律
     退到内置兜底（<code>cli --check</code> 只会打印"未找到"），覆盖面与速度差一个量级。
-    标注「只在显式启用后被调用」的那些（如 <code>afrog</code>）意思是：装上它<b>默认也不会</b>
-    改变任何一次扫描的结果 —— 得在「策略配置」里勾上开关并准备好 PoC 目录才算"用上"
-    （afrog 只会被喂"只读 + info 级"的模板，见 <code>scanner/afrog.py</code>）。别让"装了"被误读成"用上了"。
-    另有 <b>nmap / fscan / dirmap 三个需手工安装</b>（见下方），本页不提供它们的下载入口。
+    <code>afrog</code> 是<b>外部引擎</b>（续149 起<b>默认开</b>）：vulnscan 会额外让它跑一轮组件识别 ——
+    但它只会被喂"只读 + info 级"的模板，且要<b>同时</b>满足"策略开关打开 + PoC 目录里有只读模板 +
+    本机装了 afrog"三条闸门才真的起进程，任何一条不满足都只写一行日志、<b>零请求</b>
+    （见 <code>scanner/afrog.py</code>）。另有 <b>nmap / fscan / dirmap 需手工安装</b>（见下方），
+    本页不提供它们的下载入口。
   </p>
   <p class="muted small">
     本页是<b>两个联网入口之一</b>（另一个是 <code>python cli/client.py --update-tools</code>）：
@@ -80,6 +81,8 @@
       允许安装<b>没有官方校验和</b>的 release（默认拒绝；装了会如实标注"未校验"）</label></p>
     <p><label><input type="checkbox" name="no_wire">
       只下载，<b>不</b>写回 config/settings.yaml</label></p>
+    <p><label><input type="checkbox" name="only_newer" checked>
+      先自动检查最新版本，<b>已是最新的就跳过</b>（省一次无谓下载；没装的照装）</label></p>
     <p><button type="submit">开始下载 / 更新</button></p>
   </form>
   <form method="post" action="{{ url_for('api_tools_check_updates') }}" style="margin-top:10px"

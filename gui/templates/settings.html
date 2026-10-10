@@ -17,7 +17,7 @@
     免得"查了个空"被当成"目标没有东西"。</p>
   <table>
     <thead>
-      <tr><th>能力</th><th>策略开关</th><th>需要凭据</th><th>凭据已配</th><th>键写在哪</th><th>现在能跑</th></tr>
+      <tr><th>能力</th><th>策略开关</th><th>需要凭据</th><th>凭据已配</th><th>键写在哪</th><th>现在能跑 / 具体原因</th></tr>
     </thead>
     <tbody>
       {% for r in esp.rows %}
@@ -27,8 +27,12 @@
         <td>{{ '需要' if r.needs_key else '免' }}</td>
         <td>{{ ('已配' if r.key_ready else '未配') if r.needs_key else '—' }}</td>
         <td class="mono small">{{ r.how }}</td>
-        <td><span class="badge {{ 'st-done' if r.runnable else 'st-failed' }}">
-          {{ '能跑' if r.runnable else '跑不了' }}</span></td>
+        <td>
+          <span class="badge {{ 'st-done' if r.runnable else 'st-failed' }}">
+            {{ '能跑' if r.runnable else '跑不了' }}</span>
+          {# 续149：不只回一句"跑不了"，把卡点写出来（开关没开 / 缺 key / 凭据库未解锁） #}
+          {% if r.reason %}<span class="why">{{ r.reason }}</span>{% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -90,18 +94,21 @@
         <input name="flags_patterns" size="46" value="{{ s.flags.patterns|join(',') }}"
           placeholder="flag\s*[:=]\s*[A-Za-z0-9_]+"></label>
     </div>
-    <h2>外部引擎 afrog（默认关）</h2>
+    <h2>外部引擎 afrog（默认开）</h2>
     <p class="muted small">
-      勾选后，vulnscan 阶段会**额外**跑一次外部 afrog：只喂它逐条判过"只读 + info 级"的模板
+      勾选后，vulnscan 阶段会<b>额外</b>跑一次外部 afrog：只喂它逐条判过"只读 + info 级"的模板
       （非 GET / 带请求体 / tcp / brute 清单 / severity≠info 的一律不进它的目录，被拒条数写进任务日志）。
-      <b>三件事要知道</b>：① 它的 PoC 目录由你自己准备并填在下面，框架不代为下载；
-      ② 请求由那个外部进程自管，<b>不经过本任务的请求预算</b>（所以下面几个限速值请保守填，
-      填再大也有内置封顶）；③ 命中结果按 info/low 级入账，"最低报告级别"是 medium 时它们
-      <b>不会出现在报告里</b>，只在任务日志与库里（想看到就把门槛降到 info）。
+      <b>默认已勾选</b>，但真要起进程还要同时满足三条闸门：① 本开关打开；② PoC 目录里<b>有</b>通过
+      只读闸门的模板；③ 本机装好了 afrog 二进制（「外部工具」页下载）。缺任何一条都只写一行日志、
+      <b>零请求</b> —— 没装 afrog 的机器不会因此报错。
+      <b>另外三件事</b>：① PoC 目录由你自己准备（框架不代为下载，默认目录 <code>config/afrog-pocs/</code> 已带示例）；
+      ② 请求由那个外部进程自管，<b>不经过本任务的请求预算</b>（下面几个限速值请保守填，填再大也有内置封顶）；
+      ③ 命中结果按 info/low 级入账，"最低报告级别"是 medium 时它们<b>不会出现在报告里</b>，
+      只在任务日志与库里（想看到就把门槛降到 info）。
     </p>
     <div class="row">
       <label class="chk"><input type="checkbox" name="afrog_enabled" value="1"
-        {{ 'checked' if s.afrog.enabled }}> 启用 afrog 外部引擎（只在填了 PoC 目录后才会有动作）</label>
+        {{ 'checked' if s.afrog.enabled }}> 启用 afrog 外部引擎（还需 PoC 目录里有只读模板 + 本机装了 afrog）</label>
       <label>PoC 目录 <input name="afrog_poc_dir" size="28" placeholder="config/afrog-pocs/"
         value="{{ s.afrog.poc_dir }}"></label>
       <label>站点上限 <input name="afrog_max_targets" size="4" value="{{ s.afrog.max_targets }}"></label>

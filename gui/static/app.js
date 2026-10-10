@@ -473,6 +473,30 @@ function initVulnReview() {
   });
 }
 
+/* ---------- 续151（用户点单）：curl / Python 脚本一键复制 ---------- */
+// `[data-copy="#id"]` 指到要复制的那个元素（<pre>）；非安全上下文里 clipboard 不可用则退回选中文本。
+function initCopyButtons() {
+  document.querySelectorAll("button[data-copy]").forEach(b => {
+    if (b.dataset.copyBound) return;
+    b.dataset.copyBound = "1";
+    const label = b.textContent;
+    b.addEventListener("click", async () => {
+      const el = document.querySelector(b.dataset.copy);
+      if (!el) return;
+      const text = el.textContent || "";
+      let ok = false;
+      try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+        const ta = document.createElement("textarea");
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+        document.body.removeChild(ta);
+      }
+      b.textContent = ok ? "已复制" : "复制失败，请手动选取";
+      setTimeout(() => { b.textContent = label; }, 1200);
+    });
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   initTheme();
   initTabs();
@@ -483,6 +507,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initOpenSites();
   initVulnReview();
   initLightbox();
+  initCopyButtons();
   // 任务列表页的轮询/筛选/批量操作由 initTaskTable() 负责（模板内显式调用）
   // 任务详情页工具栏的操作按钮
   bindTaskOps(".toolbar");

@@ -59,33 +59,40 @@ TOOLS = {
     "subfinder": {"repo": "projectdiscovery/subfinder", "style": "pd", "verify": "-version"},
     "httpx": {"repo": "projectdiscovery/httpx", "style": "pd", "verify": "-version"},
     "puredns": {"repo": "d3mondev/puredns", "style": "puredns", "verify": None},
-    # afrog（续119，用户点单"能不能给它加自动更新"）。2026-10-07 查官方 latest release（v3.5.7）实测：
-    #   7 个产物 = linux / macOS / windows × amd64 / arm64 的 zip，外加 `afrog_3.5.7_checksums.txt`；
-    #   命名与 projectdiscovery 同一规律（`{tool}_{ver}_{os}_{arch}.zip`，连 darwin 的官方标签都同样
-    #   写作 `macOS`）⇒ 直接复用 "pd" 这套挑法与 SHA256 校验，**不需要新增 style**。
-    #   ⚠️ `verify: None` —— **本轮真装真试出来的**：`afrog -version` 在 shell 里瞬间返回
-    #   `Afrog 3.5.7`，但一旦 stdout 是**管道**（我们的 `run_cmd` / `verify_tool` 就是这么调的）
-    #   它就**永不退出**、且不吐一个字节（6 秒超时，加 `stdin=/dev/null` 也一样）。所以它和
-    #   fscan 落进同一档：§5.2 讲的"套默认探针会把**装好的**工具误报成未通过版本校验，
-    #   随即静默降级"—— 这里更糟，是每次探测白等一个超时。做法：不给握手参数，
-    #   并在 `status()` 里跳过探测（下一处改动），页面上只报"已装 / 未装"。
-    # ⚠️ `wired: False` 是本轮特意加的诚实标记：**能装 ≠ 会被用**。vulnscan 的适配器还没写，
-    #   在它接进来之前，扫描路径一次都不会调用这个二进制 —— 所以它也不进 `run_bootstrap --install`
-    #   的自动层（不然每台新机器都白拉 25 MB），只接受显式 `--update-tools --tool afrog`。
-    #   页面与 `status()` 的文案必须把"框架尚未调用它"说出来：旧文案一律写"未找到（自动使用
-    #   内置兜底）"，对 afrog 是**假的**（没有任何东西在兜底），而静默误导正是这仓反复出事的地方。
-    "afrog": {"repo": "zan8in/afrog", "style": "pd", "verify": None, "wired": False},
+    # afrog（续119 进本模块；续121 接入 vulnscan 适配器；续149 起**默认开**）。
+    #   2026-10-07 查官方 latest release（v3.5.7）实测：7 个产物 = linux / macOS / windows
+    #   × amd64 / arm64 的 zip，外加 `afrog_3.5.7_checksums.txt`；命名与 projectdiscovery 同一规律
+    #   （`{tool}_{ver}_{os}_{arch}.zip`，连 darwin 的官方标签都同样写作 `macOS`）⇒ 直接复用
+    #   "pd" 这套挑法与 SHA256 校验，**不需要新增 style**。
+    #   ⚠️ `verify: None` —— `afrog -version` 在 shell 里瞬间返回，但一旦 stdout 是**管道**
+    #   （我们的 `run_cmd` / `verify_tool` 就是这么调的）它就**永不退出**、且不吐一个字节。
+    #   所以不给握手参数，并在 `status()` 里跳过探测，页面上只报"已装 / 未装"。
+    #   ⚠️ `fallback: False`：**没有内置兜底**。它缺了就是"本轮不跑外部引擎"，本就如此。
+    #   续149 修正了一处**过期标记**：旧版写 `wired: False` + 一句"vulnscan 适配器还没写"，
+    #   但续121 已把适配器接进 `scanner/stages/vulnscan.py` ⇒ 那面旗子是错的（会谎称"框架尚未
+    #   调用它"、还会把它挡在 `--install` 自动层之外）。现在 `wired` 为真（确实会被调用），
+    #   同时用 `fallback: False` 把"没内置兜底"这件事**单独说清** —— 两个语义各归各位。
+    "afrog": {"repo": "zan8in/afrog", "style": "pd", "verify": None, "fallback": False},
 }
 
 
 def wired(name):
     """这个工具**是否真的被扫描路径调用**（没标 = 是）。
 
-    `TOOLS` 的含义一直是"能自动下载、且默认必须过官方 SHA256"，那只回答"能不能装"；
-    "装好之后有没有代码去用它"是第二个问题 —— 混成一个，就会出现"表里列着、页面说会自动
-    兜底、实际谁都不调用"。分档之后：自动安装层与 GUI 文案都按这一档走，`[8x]` 钉住。
+    与"能自动下载"是两件事：混成一个就会出现"表里列着、页面说会自动兜底、实际谁都不调用"。
+    自动安装层与 GUI 文案都按这一档走，`[8x]` 钉住。
     """
     return bool(TOOLS.get(name, {}).get("wired", True))
+
+
+def fallback(name):
+    """没装这个工具时，框架是否有**内置实现**兜底（默认有；afrog 这类外部引擎没有）。
+
+    与 `wired()` 正交：`wired=True` 只说"装了会被调用"，**不**蕴含"没装也照跑"。
+    afrog 缺了就是"本轮不跑外部引擎"（内置 POC 引擎照常，但那不是 afrog 的兜底）。
+    文案层据此分档，避免把"没有兜底"说成"自动使用内置兜底"（那正是 [8x] 当初要拦的假话）。
+    """
+    return bool(TOOLS.get(name, {}).get("fallback", True))
 
 #  「需手工安装」的工具 —— **刻意不进 `TOOLS`**：`TOOLS` 的语义是"能自动下载、且默认必须过
 #  release 自带的 SHA256 校验才落盘"。这三个都不满足（2026-09-27 实测，不是推测）：
@@ -100,8 +107,11 @@ def wired(name):
 #  "没列出来的框架不管"，而 `cli --check` 里它们又都是"未找到（自动使用内置兜底）"。
 #  这三条只做**如实展示 + 指向 README 的手工步骤**，本模块不会为它们发任何请求。
 MANUAL = {
-    "nmap": "官方只发安装器 / 源码包 / dmg（无便携 zip），自动装会变成系统级安装",
-    "fscan": "官方不发二进制，需用 Go 从源码自编译（本仓为避免 Defender 拦截的既定做法）",
+    "nmap": "官方只发安装器 / 源码包 / dmg（无便携 zip），自动装会变成系统级安装"
+            "（可交给包管理器：./install.sh --with-system --yes）",
+    "fscan": "官方不发二进制，需用 Go 从源码自编译（本仓为避免 Defender 拦截的既定做法）"
+             "（已提供自动化编译：./install.sh --with-build，或 python tools/build_fscan.py --src 源码目录；"
+             "页面按原文比对，故此处不写尖括号）",
     "dirmap": "release 零产物、无 checksums，且是纯 Python 项目（需 pip 依赖）",
 }
 
@@ -478,12 +488,38 @@ def rollback(tool, dest_dir=None, wire=True, settings_path=None):
     return out
 
 
+def _installed_banner(name, settings):
+    """问本机已装的这个工具报的版本横幅（没有握手参数 / 未装 / 问不出 → `""`）。
+
+    只给"先查最新、已最新就跳过"（`update(only_if_newer=True)`）用；afrog 没有握手参数（它在
+    管道下不退出）⇒ 一律返回空，于是它永远不会被这条判据跳过（照旧每次重装，宁可多下一次）。
+    """
+    from .utils import which, run_cmd
+    cfg = TOOLS.get(name) or {}
+    if not cfg.get("verify"):
+        return ""
+    configured = str(((settings or {}).get("tools", {}) or {}).get(name, name) or name)
+    path = which(configured)
+    if not path:
+        return ""
+    try:
+        _rc, out, err = run_cmd([path, cfg["verify"]], timeout=30)
+    except Exception:                                        # noqa: BLE001 - 探测失败不算错误
+        return ""
+    first = ((out or "") + (err or "")).strip().splitlines()
+    return first[0][:80] if first else ""
+
+
 def update(tools=None, dest_dir=None, allow_unverified=False, wire=True, settings_path=None,
-           timeout=120, fetch=fetch_release, blobs=None):
+           timeout=120, fetch=fetch_release, blobs=None, only_if_newer=False, settings=None):
     """按顺序装/更新若干工具，返回结果列表。**只由显式入口调用**（CLI / GUI 按钮）。
 
     `fetch` 与 `blobs` 是给测试的注入口：`fetch` 换掉"查最新版本"，
     `blobs` 是 `{工具名: {资产名: bytes}}` —— 传了就完全不联网（`install` 优先用 blob）。
+
+    `only_if_newer=True`（续149，GUI/CLI 显式开，默认关＝保持既有"总是重装"语义）：先用
+    `check_updates` 同一套办法问本机版本，**已是最新就跳过**（结果里 `skipped=True`、
+    `reason="已是最新（…）"`），省掉一次无谓的下载。装都没装的照常装。
     """
     names = [t for t in (tools or list(TOOLS)) if t]
     results = []
@@ -495,6 +531,14 @@ def update(tools=None, dest_dir=None, allow_unverified=False, wire=True, setting
             results.append({"tool": name, "ok": False, "version": "", "path": "",
                             "verified": None, "reason": f"查询最新版本失败：{e}"})
             continue
+        if only_if_newer and name in TOOLS and blobs is None:
+            tag = str((rel or {}).get("tag") or "")
+            inst = _installed_banner(name, settings or {})
+            if inst and tag and not newer_version(tag, inst):
+                results.append({"tool": name, "ok": True, "version": inst, "path": "",
+                                "verified": None, "skipped": True,
+                                "reason": f"已是最新（{inst}），无需更新"})
+                continue
         results.append(install(name, dest_dir=dest_dir, allow_unverified=allow_unverified,
                                timeout=timeout, wire=wire, settings_path=settings_path,
                                release=rel, blob=(blobs or {}).get(name)))
@@ -564,8 +608,9 @@ def patch_settings_tool(name, value, path=None):
 def status(settings):
     """逐个列出 `TOOLS` 成员的当前状态（供 GUI/CLI 展示）：配置值 / 解析路径 / 版本 / 平台可用性。
 
-    文案按 `wired()` 分档 —— "会用的"才说"未找到（自动使用内置兜底）"，
-    "装上待接入"的必须写明框架尚未调用它（不谎报有兜底）。
+    文案按**两个正交的档**组合（续149）：
+      · `wired()`  —— 装了会不会被扫描路径调用；没接线的说"只在显式启用后被调用"。
+      · `fallback()` —— 没装时框架有没有**内置实现**兜底；没有的（afrog）不许说"自动使用内置兜底"。
     """
     from .utils import which, run_cmd
     tools_cfg = (settings or {}).get("tools", {}) or {}
@@ -585,9 +630,13 @@ def status(settings):
         _wired = wired(name)
         if path:
             note = f"OK（{path}）" + ("" if _wired else "｜已装，但只在显式启用后被调用")
+        elif not _wired:
+            note = "未装（需在策略配置里显式启用；只纳入可下载/可校验管理）"
+        elif fallback(name):
+            note = "未找到（自动使用内置兜底）"
         else:
-            note = ("未找到（自动使用内置兜底）" if _wired
-                    else "未装（默认不调用它；需在策略配置里显式启用，只纳入可下载/可校验管理）")
+            # afrog 这类外部引擎**没有**内置替代：缺了就是"本轮不跑它"，不能说成有兜底。
+            note = "未找到（不装则本轮不跑该外部引擎；本框架内置引擎不受影响）"
         rows.append({"tool": name, "configured": configured, "path": path or "",
                      "version": version, "asset": pre["asset"] or "",
                      "reason": pre["reason"], "wired": _wired, "note": note})

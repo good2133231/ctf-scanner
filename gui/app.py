@@ -53,7 +53,7 @@ from scanner import (admin_setup, audit, auth as taskauth, blacklist, captcha, c
                      # 这三家反查与 GitHub 检索的**取键函数**归它们自己所有，面板只调用不复制路径
                      extdom, fofa, github_leak, login_guard, migrate, nodes, queue, quake,
                      screenshot,
-                     shodan, toolmgr, users)
+                     shodan, toolmgr, users, packetcodec)
 from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
 from scanner.log import (attach_access_log, attach_server_log, boot_logger,
                          get_logger)
@@ -184,6 +184,12 @@ def external_source_panel(settings):
     def _filled(*vals):
         return all(str(v or "").strip() for v in vals)
 
+    # 保险箱本身的状态要先拿到：`有密文但没解锁` 看起来与`没配 key`一模一样，而两者的处置动作
+    # 完全不同（补环境变量 vs 补凭据）—— 这正是上面那次误判的成因。续149 把它接进每行的**原因**
+    # 文案里：不再只回一句"跑不了"，而是说清"到底卡在开关、卡在 key、还是卡在解锁"。
+    vault = keystore.status()
+    locked = bool(vault.get("encrypted")) and not bool(vault.get("unlocked"))
+
     rows = []
     for sec, label, ready, needs_key, how in (
             ("iprecon", "IP 反查 / C 段归纳（api.webscan.cc）", True, False, "免 key，需能出网"),
@@ -199,13 +205,22 @@ def external_source_panel(settings):
             ("intel", "漏洞情报订阅（CISA KEV）", True, False, "免 key，需能出网")):
         cfg = (settings or {}).get(sec) or {}
         en = cfg.get("enabled") is True
+        ready = bool(ready)
+        runnable = bool(en and (ready or not needs_key))
+        # 续149：原因逐条说清，而不是一句"跑不了"。三档：开关没开 / 缺 key（并区分"未解锁"与"未配置"）
+        # / 两者都缺。能跑时不写原因。
+        why = []
+        if not en:
+            why.append("策略开关未开")
+        if needs_key and not ready:
+            why.append("凭据库未解锁（补 CTFSCANNER_KEYS_PASSPHRASE）" if locked
+                       else f"缺凭据（{how}）")
         rows.append({"section": sec, "label": label, "enabled": en,
-                     "needs_key": needs_key, "key_ready": bool(ready), "how": how,
+                     "needs_key": needs_key, "key_ready": ready, "how": how,
                      # 「能不能跑」在这里算完，模板只管显示：判据写进 Jinja 就没法被回归测到了
-                     "runnable": bool(en and (ready or not needs_key))})
-    # 保险箱本身的状态也要说清：`有密文但没解锁` 看起来与`没配 key`一模一样，
-    # 而两者的处置动作完全不同（补环境变量 vs 补凭据）—— 这正是上面那次误判的成因。
-    return {"rows": rows, "vault": keystore.status()}
+                     "runnable": runnable, "reason": "；".join(why)})
+    # 保险箱本身的状态也要说清（面板脚注用）。
+    return {"rows": rows, "vault": vault}
 def _safe_next(target, fallback):
     """只放行**站内相对路径**的 `next` 跳转目标，其余一律回退（防开放重定向）。
 
@@ -487,15 +502,40 @@ def _dev_fixture_stop():
 
 
 def _site_fold_key(row):
-    """站点列表「同标题折叠」的键 —— 只看标题，不看响应长度（续147）。
+    """站点列表「同标题 / 同响应长度」折叠的键（续150 扩写；续147 起原为只看标题）。
 
-    以前键里带 `length`，于是"几个主机同一个标题、长度各不相同"（真实 SPA/CDN 站点的常态）
-    一条都折不掉。`task_id` **必须留在键里**：这是跨任务视图，不带就会因为别的任务有同名标题
-    把本任务的站点折掉（实测把一个靶场的 15 条折成 1 条，资产归属丢失）。
-    空标题返回 None = 不参与折叠（宁留噪声不藏资产）。
+    判据（用户 2026-10-11 点单"返回长度亦或是标题一样的，都显示在一起"，并"包含 301 之后的"）：
+      ① 有标题 ⇒ 按**任务 + 标题**折；3xx 站点没有 `title` 时取**跳转后**的 `redirect_title`；
+      ② 无标题 ⇒ 退一步按**任务 + 响应长度**折（`length > 0` 才算；长度 0 不折）。
+    `task_id` 必须留在键里：这是跨任务视图，不带就会因为别的任务有同名标题把本任务的站点折掉
+    （实测把一个靶场的 15 条折成 1 条，资产归属丢失）。
+    **刻意不做"跨标题的同长度折叠"**：那会把"标题不同、长度碰巧相同"的无关站点并成一条，
+    藏掉真实资产 —— 用户要的是"一样的显示在一起"，不是"把不一样的并掉"。
+    空标题且长度为 0 ⇒ 返回 None，不参与折叠（宁留噪声不藏资产）。
     """
-    title = (row.get("title") or "").strip()
-    return (row.get("task_id"), title) if title else None
+    title = (row.get("title") or "").strip() or (row.get("redirect_title") or "").strip()
+    if title:
+        return (row.get("task_id"), "t", title)
+    try:
+        length = int(row.get("length") or 0)
+    except (TypeError, ValueError):
+        length = 0
+    return (row.get("task_id"), "l", length) if length > 0 else None
+
+
+def _dir_url(site_url, path):
+    """目录命中的**可点开链接**（续151，用户点单「目录结果要能像超链接一样点开」）。
+
+    只放行 http/https；`path` 有时本身就是完整 URL（dirmap 那一路），此时直接用。
+    拼不出来返回 ""（模板据此退化成纯文本，不渲染死链）。
+    """
+    p = str(path or "").strip()
+    if p.lower().startswith(("http://", "https://")):
+        return p
+    base = str(site_url or "").strip()
+    if not base.lower().startswith(("http://", "https://")) or not p:
+        return ""
+    return base.rstrip("/") + ("" if p.startswith("/") else "/") + p
 
 
 def _shape_note(cfg):
@@ -554,6 +594,10 @@ def create_app():
     # 产地**（§5.14），措辞按 §5.19 的口径：只说这一行数据里看得见的事实，不猜它是哪一版产出的。
     app.jinja_env.globals["no_packets_hint"] = NO_PACKETS_HINT
     app.jinja_env.globals["no_title_hint"] = NO_TITLE_HINT
+    # 续151（用户点单）：数据包 → curl / Python 脚本；目录命中 → 可点开链接
+    app.jinja_env.globals["packet_curl"] = packetcodec.to_curl
+    app.jinja_env.globals["packet_python"] = packetcodec.to_python
+    app.jinja_env.globals["dir_url"] = _dir_url
     db.init_db()
     # 启动时对账（续49 语义变更）：进程重启后，之前 status='running' 的孤儿任务没人推进 ——
     # 带队列运行规格的**重新入队**（等 worker 接着跑），无规格的（CLI 直跑 / 老库行）仍标 failed；
@@ -2270,6 +2314,18 @@ def create_app():
             for r in out:
                 extra = sorted({s for s in others.get(r["domain"], []) if s != r["source"]})
                 r["also_from"] = " / ".join(source_label(s) for s in extra)
+                # 续150（用户点单）：真实 IP 标签。真实=非 CDN 且只有 1 个 A 记录；
+                # 多 IP 多半是负载均衡/边缘节点（"一个域名几个解析 IP 多半也不是真实 IP"）。
+                _ip = str(r.get("ip") or "").strip()
+                _cdn = str(r.get("cdn") or "").strip()
+                if _cdn:
+                    r["ip_kind"] = "cdn"      # 走 CDN：解析到的是边缘节点，不是源站
+                elif "," in _ip:
+                    r["ip_kind"] = "multi"    # 多 A 记录：多半是负载均衡/边缘，疑非真实 IP
+                elif _ip:
+                    r["ip_kind"] = "real"     # 单 IP 且非 CDN：最可能是真实源站
+                else:
+                    r["ip_kind"] = ""
         hidden = 0
         if hide_unresolved and base_where:
             rr = db._query("SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE "
@@ -2441,9 +2497,16 @@ def create_app():
         # 续112-E：③「按任务筛选」与「漏洞风险」页同口径（`?task=<id>`），条件并进同一条链。
         base_where = _and_where(db.OWN_SUBDOMAIN_WHERE, where, tw)
         base_params = params + tp
-        rows, pager, q = _asset_page("subdomains", "/subdomains",
-                                     extra_where=_and_where(base_where, res_where),
-                                     extra_params=base_params, dedupe_domain=True)
+        # 续150（用户点单"真实 ip 最上方、非 cdn 在中间、cdn 在最下面"）：默认排序先按
+        # **真实IP（非 CDN 且只有 1 个 A 记录）→ 非 CDN（多 IP，疑非真实）→ CDN**，同档再按
+        # 任务与域名。`task_id DESC` 仍放在最前：这是跨任务视图，先分组再看档位才不乱。
+        # 判据与下面 `_sub_rows` 的 `ip_kind` **同源**（都只看 cdn 空否 + ip 里有没有逗号）。
+        rows, pager, q = _asset_page(
+            "subdomains", "/subdomains",
+            extra_where=_and_where(base_where, res_where),
+            extra_params=base_params, dedupe_domain=True,
+            order=("task_id DESC, CASE WHEN COALESCE(cdn,'')='' AND instr(COALESCE(ip,''), ',')=0 "
+                   "THEN 0 WHEN COALESCE(cdn,'')='' THEN 1 ELSE 2 END, domain"))
         if tag:
             pager["qs"] += f"&tag={tag}"
         if tid:                     # 筛选状态必须活过翻页，也活过「显示未解析」的切换
@@ -2782,14 +2845,20 @@ def create_app():
     def dirs():
         show_all = _overlap_args()
         agg = request.args.get("agg") == "1"
+        # 续151（用户点单「给目录链接加只显示可点开的筛选」）：只留**能拼出可点开链接**的行 ——
+        # `path` 非空且 `site_url` 是 http(s)。拼不出链接的行点不动，混在里头只会误导。
+        link_only = request.args.get("link") == "1"
         tid, tw, tp = _task_scope()          # 续112-E：「按任务筛选」
+        if link_only:
+            tw = _and_where(tw, "path <> '' AND site_url LIKE 'http%'")
         page, size, q = _page_args()
 
         def _state(**over):
             """当前页的**全部**状态（`None` = 去掉该参数）—— 链接与翻页条都从这里派生。"""
             st = {"q": q or None, "size": size,
                   "all": "1" if show_all else None, "agg": "1" if agg else None,
-                  "task": (str(tid) if tid else None)}
+                  "task": (str(tid) if tid else None),
+                  "link": "1" if link_only else None}
             st.update(over)
             return {k: v for k, v in st.items() if v}
 
@@ -2814,10 +2883,13 @@ def create_app():
                 parts.append("agg=1")
             if "task" in st:
                 parts.append(f"task={st['task']}")
+            if "link" in st:
+                parts.append("link=1")
             return "&" + "&".join(parts)
 
         link_all = _link(all=None if show_all else "1")
         link_agg = _link(agg=None if agg else "1")
+        link_link = _link(link=None if link_only else "1")
         if agg:
             # 聚合是**整库语义**（同一个「状态码 + 大小 + 标题」的响应可能落在任意任务/站点），
             # 与 `/ips`（续59）、`/extdomains` 分组视图是同一套口径：「全量取回 → 折叠 → 聚合 →
@@ -2842,6 +2914,7 @@ def create_app():
             return render_template("dirs.html", dirs=groups, pager=pager, q=q,
                                    show_all=show_all, hidden=hidden, agg=True,
                                    link_all=link_all, link_agg=link_agg,
+                                   link_link=link_link, link_only=link_only,
                                    task_id=tid or "", tasks=_tasks_with_asset("dirs"))
         rows, pager, q = _asset_page("dirs", "/dirs", extra_where=tw, extra_params=tp)
         # 重复长度默认隐藏：同一站点下状态码与响应大小都相同的多条只留首个，`?all=1` 放开
@@ -2850,6 +2923,7 @@ def create_app():
         return render_template("dirs.html", dirs=rows, pager=pager, q=q,
                                show_all=show_all, hidden=hidden,
                                link_all=link_all, link_agg=link_agg,
+                               link_link=link_link, link_only=link_only,
                                task_id=tid or "", tasks=_tasks_with_asset("dirs"))
 
     # ---------- 黑名单 / 批量子域名 ----------
@@ -2974,6 +3048,14 @@ def create_app():
             return redirect(fallback)
         stages = ["subdomain", "probe", "dirscan", "vulnscan"]
         options = {}
+        # 续151「追加层数」：1 = 只对当下这批域名做一轮（默认）；N>1 时每层把新挖出的、
+        # 归属本项目（注册域命中任务目标）的拓展域名再追加成子域名并**再采集一次**，最多 N 层。
+        # 夹到 1..10（上限咬住，绝不无限递归）；N>1 时把 osint / jsmine 补进阶段 ——
+        # 否则每层挖不出新的 js:* / osint:*，「多层」就退化成「把同一批重复扫 N 遍」。
+        depth = runner.clamp_ext_depth(request.form.get("depth"))
+        if depth > 1:
+            stages = runner.depth_stages(stages)
+        options["ext_depth"] = depth
         from_task = (request.form.get("task_id") or "").strip()
         if from_task.isdigit():          # 只收任务号，避免把任意文本写进任务选项
             options["rescan_of"] = int(from_task)
@@ -3064,6 +3146,9 @@ def create_app():
         # screenshot 同理：它要的不是"全量档"，而是"本次无视策略开关"（`screenshot_on`）。
         if stage == "vulnscan":
             options = {}
+            # 续150（用户点单）：复测模式 —— 跑完把库里旧结论标成三态（仍可复现/已修复/无法确认）。
+            if str(request.form.get("retest", "")).lower() in ("1", "true", "on"):
+                options["retest"] = True
         elif stage == "screenshot":
             options = {"screenshot_on": True}
         else:
@@ -3174,7 +3259,7 @@ def create_app():
                                 "recursive_max_paths": int(
                                     f.get("dirscan_recursive_max_paths", 40) or 0)},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
-                    # 外部引擎 afrog（续121）：默认关；限速值由 scanner/afrog.py 的封顶再压一道
+                    # 外部引擎 afrog（续121 接入；续149 默认开）；限速值由 scanner/afrog.py 的封顶再压一道
                     # 敏感信息 / flag 候选抽取（续148 由"flag 候选"改名）：零额外请求所以默认开；
                     # 清单是逗号分隔文本，空白项就地丢掉（用户粘贴时几乎一定带空格），正则原样进列表。
                     "flags": {"enabled": f.get("flags_enabled") == "1",
@@ -3561,9 +3646,11 @@ def create_app():
         picked = [t for t in request.form.getlist("tool") if t in toolmgr.TOOLS]
         allow = bool(request.form.get("allow_unverified"))
         wire = not bool(request.form.get("no_wire"))
+        only_newer = bool(request.form.get("only_newer"))
         os_label, arch = toolmgr.host_arch()
         try:
-            results = toolmgr.update(picked or None, allow_unverified=allow, wire=wire)
+            results = toolmgr.update(picked or None, allow_unverified=allow, wire=wire,
+                                     only_if_newer=only_newer, settings=load_settings())
             error = ""
         except Exception as e:      # noqa: BLE001 - 不让页面崩；失败如实展示
             results, error = [], f"{type(e).__name__}: {e}"
@@ -3575,7 +3662,8 @@ def create_app():
                detail=(f"外部工具更新（{'、'.join(picked) if picked else '全部'}）："
                        f"成功 {okn}/{len(results)}；"
                        f"校验={'可跳过' if allow else '必须'}；"
-                       f"写回配置={'否' if not wire else '是'}"),
+                       f"写回配置={'否' if not wire else '是'}；"
+                       f"仅更新有新版本的={'是' if only_newer else '否'}"),
                ok=(not error) and len(results) > 0 and okn == len(results))
         return redirect(url_for("tools_page", msg=f"更新完成：成功 {okn}/{len(results)}"))
 
@@ -3934,6 +4022,69 @@ def _web_base_for(settings):
     return webpath.new_base(), []
 
 
+def _pick_port(host, port, tries=10):
+    """端口重试（续150，用户点单"如果端口自己给我实现重试功能"）。
+
+    首选端口被占用时，往后顺延最多 `tries` 个端口挑一个空的；返回 `(port, note)`。
+    一个都挑不到就**原样**返回首选端口（调用方照旧报占用并退出），绝不静默换到一个看不见的地方。
+    判据仍走 `_port_free`（与 Werkzeug 那次真 bind 同宽），回归里它被打桩时这里也一并被覆盖。
+    """
+    if _port_free(host, port):
+        return port, ""
+    for _p in range(int(port) + 1, min(int(port) + 1 + int(tries), 65536)):
+        if _port_free(host, _p):
+            return _p, (f"[!] {host}:{port} 已被占用，已自动改用 {_p}"
+                        "（要固定就用 config/settings.yaml 的 gui.port，或设环境变量 CTFSCANNER_GUI_PORT）")
+    return port, ""
+
+
+# 外网出口 IP（续150，用户点单"控制台地址默认获取外网出口ip，这样可以直接打开"）。
+# 只用于**启动横幅多印一行**：拿不到就退回"本机主网卡地址"（UDP connect 技巧，不发任何数据包），
+# 再拿不到就**不印这一行** —— 绝不因此拖住启动（超时 1.5 秒）、更绝不让启动失败。进程内缓存。
+_EGRESS_CACHE = {}
+
+
+def _lan_ip():
+    """本机主网卡地址（UDP connect 技巧：不发数据包，只看内核为出站流量选的源地址）。"""
+    import socket as _socket
+    for _af, _dst in ((_socket.AF_INET, ("8.8.8.8", 80)),
+                      (_socket.AF_INET6, ("2001:4860:4860::8888", 80))):
+        try:
+            _s = _socket.socket(_af, _socket.SOCK_DGRAM)
+            try:
+                _s.connect(_dst)
+                return _s.getsockname()[0]
+            finally:
+                _s.close()
+        except OSError:
+            continue
+    return ""
+
+
+def _egress_ip(timeout=1.5):
+    """公网出口 IP：先问几个公开的 https "我的 IP" 接口，都失败就退回 `_lan_ip()`；结果缓存。
+
+    这是**启动横幅**用的，不在扫描路径上；失败/离线一律静默降级（返回空串 => 不印那一行）。
+    """
+    if "ip" in _EGRESS_CACHE:
+        return _EGRESS_CACHE["ip"]
+    ip = ""
+    import urllib.request as _ur
+    for _u in ("https://api.ipify.org", "https://ipv4.icanhazip.com", "https://ipinfo.io/ip"):
+        try:
+            with _ur.urlopen(_u, timeout=timeout) as _r:
+                _t = (_r.read(64) or b"").decode("utf-8", "replace").strip()
+            if _t and len(_t) <= 45 and not any(c.isspace() for c in _t):
+                ip = _t
+                break
+        except Exception:                                    # noqa: BLE001 - 拿不到就换下一个/降级
+            continue
+    if not ip:
+        ip = _lan_ip()
+    _EGRESS_CACHE["ip"] = ip
+    return ip
+
+
 def webpath_hints(base, host, port):
     """启动横幅那几行：完整地址 + "它不是认证" + 节点端要改什么。
 
@@ -4017,7 +4168,12 @@ def serve(start_queue=True):
     # "控制台: http://host:port" 都是照着 `s` 念的，不同步就会打印一个**没在监听**的地址。
     s = dict(_settings.get("gui") or {})
     host, port = gui_bind(_settings)
+    # 续150：端口被占用时自动顺延重试（用户点单"如果端口自己给我实现重试功能"）；
+    # 一个都挑不到才按原样报占用并退出（绝不静默换到看不见的地方）。
+    port, _port_note150 = _pick_port(host, port)
     s["host"], s["port"] = host, port
+    if _port_note150:
+        say(_port_note150)
     if not _port_free(host, port):
         say(f"[!] 启动失败：{host}:{port} 已被占用"
             "（上一次的控制台进程还在运行，或端口被其他服务占用）。")
@@ -4060,6 +4216,13 @@ def serve(start_queue=True):
         app.wsgi_app._ctf_inner = _inner138
     for _line in webpath_hints(_wp, host, port) + _wn:
         say(_line)
+    # 续150：外网出口 IP（用户点单"控制台地址默认获取外网出口ip，这样可以直接打开"）。
+    # 绑回环时不印（本机自用没有"外网地址"这回事）；拿不到 IP 也不印；**绝不因此拖住启动**。
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        _ext_ip = _egress_ip()
+        if _ext_ip and _ext_ip not in (host, "0.0.0.0", "::", ""):
+            say(f"[*] 外网地址（若这台机器有公网 IP / 端口映射，且安全组与防火墙已放行 {port} 端口）："
+                f"http://{_ext_ip}:{port}{_wp}/  ← 可直接打开（含本次随机前缀，重启即换）")
     # 续146-附3（用户点单「静音 console + 单独落一个 logs/access.log」）：接管逐请求访问日志。
     # 为什么在这儿而不是最上面：要把 `_wp`（本次前缀）交给它打码 —— 落盘的每一行里带着**客户端送来
     # 的原始路径**，而「前缀绝不落盘」是续138 的硬约束。这几行措辞本身不含前缀，所以能进 server.log。

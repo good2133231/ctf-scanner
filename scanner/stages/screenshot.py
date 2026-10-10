@@ -51,7 +51,7 @@ class ScreenshotStage(Stage):
 
         timeout = int(cfg.get("timeout", 30) or 30)
         shot_dir = ctx.workdir / "shots"
-        rows, ok = [], 0
+        rows, errs, ok = [], [], 0
         # 只有"原始 HTML 里没有标题"的那些站点，才值得为渲染后标题多要一次 DOM
         no_title = sum(1 for s in sites if not str(s.get("title") or "").strip())
         title_rows = []
@@ -81,9 +81,14 @@ class ScreenshotStage(Stage):
                 rows.append((url, rel))
                 ctx.logger.info(f"[screenshot] {url} → {rel}")
             else:
+                # 续150（用户点单）：失败**原因**要落库，不只写日志 —— 站点页那一格空着时，
+                # 用户要能一眼看出是 301 没落地 / 超时 / 无浏览器 / DNS 还是别的。
+                errs.append((url, err))
                 ctx.logger.info(f"[screenshot] {url} 截图失败：{err}")
         if rows:
             db.set_site_shots(ctx.task_id, rows)
+        if errs:
+            db.set_site_shot_errors(ctx.task_id, errs)
         write_lines(ctx.workdir / "shots.txt", [f"{u}\t{r}" for u, r in rows])
         filled = db.set_site_titles(ctx.task_id, title_rows) if title_rows else 0
         if no_title:

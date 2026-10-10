@@ -18,6 +18,7 @@
   cat passive.txt brute.txt | sort -u    ->  Python 端以 sorted(set(...)) 等价实现
 """
 from .base import Stage
+from . import github as github_stage
 from .. import blacklist, cdn, db, dnsq, passive, targets, wildcard
 from ..config import resolve
 from ..utils import (is_domain, to_ascii, which, verify_tool, run_cmd, read_lines,
@@ -86,6 +87,13 @@ class SubdomainStage(Stage):
         if ctx.stopped():
             ctx.logger.warning("[subdomain] 任务已请求停止，跳过")
             return
+
+        # ---------- 0a) 续150-附（11-调度）：并发触发 GitHub / 多平台泄露检索 ----------
+        # 检索只依赖**注册域**（ctx.targets），与下面的子域收集毫无数据依赖，串行放到流水线末端
+        # 纯属白等。这里在**子域收集开始之前**起一个 daemon 线程并发发起（不阻塞收集）；结果仍走
+        # github_leak / multileak.collect() → db.insert_leads()，只产出 leads。线程里的异常一律
+        # 吞掉并写日志，绝不拖垮子域阶段；github 阶段保持可用 —— 发现已跑过就跳过、不重复发请求。
+        github_stage.start_early_search(ctx)
 
         offline = ctx.options.get("offline")
         workers = int(limits.get("max_workers", 20))

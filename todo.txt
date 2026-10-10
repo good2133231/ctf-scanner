@@ -3214,3 +3214,42 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       这个兜底是刻意的、`[8au]⑤` 也钉住了它，但它意味着 `base_domain("127.0.0.1") == "0.1"`
       这类粗切结果还会流进 `group_by_base` 的键里。要收干净就得给"怪值"一个显式的分组键
       （比如 `"__invalid__"`），而不是借粗切的产物 —— 动之前先量一下报告里那一栏会变成什么样
+
+## 续151（2026-10-11，AI 远端 Linux）：界面收口 + 外部引擎/工具自动化 + 线索与复测 + 数据包复现
+
+- [x] **界面（续149）**：控件收紧一档（按钮/输入框内边距 7→5px、字号 13px）治「功能键太大」；
+      漏洞页「级别/复核」筛选改胶囊分段控件 + 「当前生效筛选」改摘要行（翻页/筛选状态一字未动）；
+      账号页重做（角色徽章/状态圆点/小口令框/横向建号表单）；能力矩阵末列由「跑不了」改成
+      **具体原因**（策略开关未开 / 缺凭据 keys:… / 凭据库未解锁），保留原判据 `runnable` 不动回归门禁
+- [x] **外部引擎与工具自动化（续150）**：`afrog` **默认启用**（`settings.yaml` enabled: true +
+      `poc_dir` 缺省 `config/afrog-pocs`）并入 `--install` 自动层，修正 `toolmgr` 里过期的
+      `wired=False`（此前把它挡在自动安装外）；`./install.sh --with-build` 走 `tools/build_fscan.py`
+      本机 Go 自编译；更新前**自动查最新、已最新则跳过**（`only_if_newer` / GUI 勾选 / CLI `--only-newer`）。
+      红线未动：`run_bootstrap.py` 仍**绝不代跑**系统级命令
+- [x] **资产与线索（续150）**：截图失败原因落库（`sites.shot_error`）并显示在站点页/任务详情；
+      站点折叠按标题**或**响应长度（3xx 取跳转后 `redirect_title`，长度 0 不折）；
+      `vulnscan` 指纹语言门控（复用 `dirscan.TECH_LANG` 单一产地，识别 PHP 就不跑 JSP 的 POC）；
+      子域名页真实IP/多IP 标签 + 默认排序 真实IP→非CDN→CDN；`iprecon`/`FOFA` 默认开（无 key 零请求）；
+      控制台横幅新增外网出口 IP、端口占用**自动顺延重试**、401 边缘门出厂改**默认关**（配置可开）
+- [x] **GitHub 检索**：主标签 OR 查询（`"targ1.pro" OR "targ1"`）+ **弱相关标注**（只降级不丢）+
+      **提前到 subdomain 阶段并行触发**（幂等）+ 新增 `scanner/multileak.py`（grep.app 免 key 源，默认关）
+- [x] **漏洞独立复测三态**（`vulns.retest_state`）：仍可复现 / 已修复 / 无法确认——**没探到的目标
+      记「无法确认」不误报「已修复」**；**拓展扫描追加层数 1–10**（`ext_depth` + runner 多层追加内核，
+      上限咬住、无新域即停）
+- [x] **数据包复现（续151）**：新增 `scanner/packetcodec.py`（数据包 → curl / Python，一键复制）；两条纪律：
+      **绝不把响应头当请求头**、证据里只有 URL 时按 GET 复现（jsmine 来源 JS / flags 只有 url 列），
+      两样都没有则返回空串、**不编命令**；漏洞页/任务详情页/敏感信息页接入「复现」列；
+      目录命中路径变**可点开链接**（只放行 http/https，拼不出退化为纯文本）+ `?link=1`「只看可点开的」
+- [x] **回归全绿**：全量 `tests/smoke.py` → `SMOKE PASS`；`tests/browser_e2e.py` → 72 条全绿；
+      改动文件 `py_compile` 全过；行尾全部字节级改动，`git diff --numstat` 无整文件级 churn
+- [x] **可迁移性实测**：全新目录（剥离 `.venv/.git/data/logs` + 删本地密钥模拟真 clone）跑 `./install.sh`
+      → exit 0；`cli/client.py --check` 工具全 OK；真起控制台 → 横幅打印地址、端口占用自动顺延到 5001、
+      未登录 302 → 登录页 200、**无 401**（新默认生效）；测完清理
+- [x] 顺手修掉本轮引入的**文档漂移**：`install.sh` / `README.md` / `AGENTS.md` / `tests/smoke.py` 注释
+      仍写「出厂 `edge_auth.enabled: true`」，已按新的 `false` 默认对齐（`config.py::DEFAULTS` 本就是关）
+
+下一轮（后续）留给接手者的口子：
+
+- [ ] GitLab 源码泄露源（`multileak` 目前只有 grep.app 免 key 源）；`multileak` 的 GUI 开关；
+      6-c 追加层数的真机验收；复测三态在任务详情页的徽章；报告写入复测结论与弱相关线索
+- [ ] 四条无依赖 ML 代办：模板页聚类 / POC 优先级 / 服务分类 / 离群检测（见 `待办清单.md`）

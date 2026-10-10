@@ -320,7 +320,7 @@ ctf-scanner/
 │   │                      #   行为），但**预估数字始终进日志**：没有数字人就不知道该设哪。
 │   │                      #   超限的处理是**降级**（afrog 不起进程、端口扫描退回内置那条
 │   │                      #   真的受门控的通道），不是硬失败
-│   ├── afrog.py           # 外部引擎 afrog 的适配器（续121，**默认关**）：只读闸门 classify_poc →
+│   ├── afrog.py           # 外部引擎 afrog 的适配器（续121；续149 起**默认开**）：只读闸门 classify_poc →
 │                          #   把放行的 YAML 复制进任务目录（-P 指它，不指用户原目录）→ 固定 argv
 │                          #   （-duc 省掉实测每次 30 秒的更新检查 / -doh 不往 CWD 落 108KB 报告 /
 │                          #   -nc 洗 ANSI / -ja 才有证据；禁 -ps -default-pwd -brute*）→ 解析结果
@@ -646,10 +646,10 @@ ctf-scanner/
    存储口径）：口令**明文**写在 `config/edge_auth.yaml`，该文件与 `config/keys.yaml` 同在
    `.gitignore` 里 —— 开关在 `settings.yaml`、凭据在 `edge_auth.yaml`，**分两个文件正是因为前者被
    git 跟踪而仓库是公开的**（回归 `[8ai] ⑨b` 钉住"哨兵口令不得出现在任何被跟踪文件里"）；
-   **关**，但注意 `config/settings.yaml` **本身也被跟踪**、本轮往里写了 `host: 0.0.0.0` +
-   `edge_auth.enabled: true` —— `load_settings()` 是 `DEFAULTS + 该文件` 的合并，所以**直接 clone 的
-   人拿到的是文件里的值**（照样绑所有网卡、照样在跑 `--set` 之前全程 401）；DEFAULTS 的默认关只在
-   没有那份文件时兜底。门开而口令未设 = 一律 401（fail-closed）并在
+   **关**；`config/settings.yaml` **本身也被跟踪**，续151 起它里面的 `gui.edge_auth.enabled`
+   与 `DEFAULTS` 一致都是 **false**（用户诉求"clone 下来直接打开控制台"），但 `host: 0.0.0.0`
+   仍写在文件里 —— `load_settings()` 是 `DEFAULTS + 该文件` 的合并，所以**直接 clone 的人拿到的是
+   文件里的值**：照样绑所有网卡、但**不再有 401 门**。要开门就把文件里那项改回 `true` 并跑 `--set`。门开而口令未设 = 一律 401（fail-closed）并在
    启动横幅点名。**补口令有三条路**（续146-附2 补齐了第二条 —— 在此之前无终端的机器只剩第三条）：
    ① 有终端跑 `python -m scanner.edgeauth --set`，getpass 两次确认；② **没有终端**（容器 / systemd /
    cloud-init）用 `CTFSCANNER_EDGE_PASSWORD` 喂同一条命令 —— 口令仍走 `validate_password`（环境变量
@@ -2279,8 +2279,10 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
   afrog 的 `-c/-rl/-rlt` 由 `scanner/afrog.py::CEIL` 夹住、fscan 的线程数由我们传入，
   但"它内部究竟逐条发了多少"要真记账就得让流量走我们自己的出口（本地转发），未做，也不假装做了。
 - **afrog 适配器不覆盖请求预算**（续121，客观边界）：`throttle` 管的是"我们起几个子进程 /
-  发几次 HTTP"，**管不到外部进程自己发多少请求**（fscan 同理）。所以 afrog 默认关、站点数与
-  `-rl/-rlt/-c` 全部封顶（策略里填再大也超不过 `scanner/afrog.py::CEIL`），且日志里明写这一句。
+  发几次 HTTP"，**管不到外部进程自己发多少请求**（fscan 同理）。续149 起 afrog **默认开**
+  （用户点单），但真起进程要过三条闸门（开关 + PoC 目录里有只读模板 + 本机装了二进制），
+  站点数与 `-rl/-rlt/-c` 全部封顶（策略里填再大也超不过 `scanner/afrog.py::CEIL`），
+  且日志里明写"不经本任务请求预算"。
   要真正纳入预算，得让它的流量走我们的出口（如本地转发），目前**没做，也不假装做了**。
 - **afrog 的命中只进 `vulns` 表**（info/low 级），不反查成 `sites.tech` 标签：那需要一张
   PoC→标签 的映射表，没有表就不猜（组件识别的正路是续120 那份复核过的外置指纹表）。

@@ -39,8 +39,11 @@ gui:
   # 用户名固定为 edge，只有口令是秘密。enabled=true 而口令文件缺失**或为空** → 一律 401（fail-closed）。
   # ⚠ 明文 HTTP 下 Basic 会把口令随每个请求带出去；跨不可信链路请上 TLS 反代（docs/deploy-https.md）。
   # 注：AGENTS.md §5.10「不许有绕过账号的登录路」由用户 2026-10-08 明确豁免，见该文件。
+  # 续150（用户 2026-10-11 点单"暂时取消401，可以让我在配置里面选择要不要开启"）：**出厂默认改成 false**
+  # —— 新 clone 直接打开就能到登录页；要开就把这里改回 true，并先配好口令
+  # （`python -m scanner.edgeauth --set` 或 config/edge_auth.yaml）。
   edge_auth:
-    enabled: true
+    enabled: false
   # ---- keys.enc.yaml 的启动解锁询问（续133）----
   # true（代码里的默认值）= 启动时问一次口令；false = 不打扰启动。
   # 需要解锁时：设环境变量 CTFSCANNER_KEYS_PASSPHRASE，或用 python cli/run_keys.py 显式操作。
@@ -208,6 +211,18 @@ dirscan:
   recursive_max_paths: 40   # 每个递归目录再打多少条浅扫精选字典
 vulnscan:
   enabled: true
+afrog:
+  # 外部引擎 afrog（续149 **默认开**）：让 config/afrog-pocs/ 里的"只读 + info 级" PoC 跑一轮。
+  # 三条闸门缺一不可（开关 / 目录里有只读模板 / 本机装了二进制），缺了只写一行日志、零请求。
+  # 它自管请求、绕过本任务预算 ⇒ 下面几个限速值是**保守值**，scanner/afrog.py 还会再封顶。
+  enabled: true
+  poc_dir: config/afrog-pocs   # 相对路径按项目根解析；框架不代为下载 PoC（放你自己的模板进去）
+  max_targets: 20              # 一次最多交多少个站点（封顶 200）
+  timeout: 8                   # 单请求超时（秒，封顶 30）
+  concurrency: 4               # 它的 -c（封顶 25）
+  rate: 10                     # 全局 -rl 请求/秒（它默认 150！封顶 50）
+  per_target_rate: 5           # 单目标 -rlt（封顶 25）
+  proc_timeout: 600            # 整进程超时（秒，封顶 1800）
 screenshot:
   # 站点截图（默认关；打开后会调用本机 Edge/Chrome 的无头模式）
   enabled: false
@@ -222,7 +237,10 @@ cert:
   timeout: 8
   tls_ports: [443, 8443, 9443]
 iprecon:
-  enabled: false
+  # 续150（用户 2026-10-11 点单"真实 ip 反查域名功能"）：默认打开。免 key（api.webscan.cc），
+  # 把已知 IP（目标 IP + 站点解析 IP + 子域名 A 记录）反查成域名：命中的域名进拓展域名页，
+  # 属于本项目注册域的会在「自动拓展扫描」时追加成正常子域。需能出网；出不去只写一行日志。
+  enabled: true
   api: https://api.webscan.cc/?action=query&ip={ip}
   max_ips: 500
   max_hosts: 200
@@ -232,7 +250,10 @@ iprecon:
 # FOFA 反查（默认关）：favicon(icon_hash) / cert="domain" / title 三种。需 config/keys.yaml 填 fofa.key。
 # 2026-09-26 用户决定**先关，投入生产时再开** —— 本机开发期少一个出网依赖，也避免误触额度。
 fofa:
-  enabled: false
+  # 续150（用户 2026-10-11 点单"fofa功能也可以启用了 方便我们核查"）：默认打开。
+  # 没配 key（config/keys*.yaml 的 fofa.email + fofa.key）时**一次请求都不发**，只写一行日志，
+  # 所以打开它是安全的 —— 配了 key 就会在 osint 阶段做 favicon/证书/标题三路反查。
+  enabled: true
   max_sites: 30
   max_assets: 100
   workers: 5
@@ -301,6 +322,16 @@ github:
   per_page: 30
   max_leads: 30
   timeout: 20
+multileak:
+  # 多平台公开代码检索（默认关）：GitHub 之外的只读检索源（默认 grepapp 免 key），只产出线索（leads 表）。
+  # 边界见 scanner/multileak.py 文件头：只落元数据（不保存文件内容）、auth=False、请求头不带任务登录态。
+  enabled: false
+  provider: grepapp
+  max_domains: 3
+  max_queries: 4
+  per_page: 10
+  max_leads: 30
+  timeout: 20
 flags:
   # 敏感信息 / CTF flag 候选抽取（续148 由"flag 候选"改名）：只吃**已经拿到**的响应正文，
   # 零额外请求；结果单独进 flags 表（不写 vulns、不计入漏洞数）。判据与成本封顶见
@@ -320,6 +351,9 @@ tools:
   subfinder: tools/scanner/subfinder
   puredns: tools/scanner/puredns
   httpx: tools/scanner/httpx
+  # afrog（续149）：外部引擎，**默认开**；装好后路径写回这里（相对路径按项目根解析）。
+  # 仓库自带一份 Linux 二进制；别的机器在「外部工具」页一键下载，或 `--update-tools --tool afrog`。
+  afrog: tools/scanner/afrog
   nmap: nmap
   # fscan（可选）：二进制名或路径；找不到就跳过它（回退 nmap / 内置）。调用时强制 -np -nobr -nopoc。
   # 本机是自编译产物挂目录联接（tools/fscan/ → 仓库外，见 .gitignore）；相对路径按**项目根**解析。

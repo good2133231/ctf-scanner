@@ -95,6 +95,38 @@ a { color:var(--accent); }
 button.ghost { background:var(--ghost-bg); border-color:var(--border); color:var(--ghost-fg); }
 button.ghost:hover { color:var(--text); background:var(--ghost-hover); }
 
+/* ---------- 分段筛选（胶囊按钮组） ---------- */
+/* 续149：级别 / 复核这类"多选一"的筛选，原先是一行裸文字链接（用户原话："很单薄很丑"）。
+   这里收成胶囊分段控件：选中态用 `--accent`/`--soft`（与侧栏选中同色对，对比度门禁已覆盖），
+   未选中态用 `--muted`/`--panel`。所有颜色都走变量，切主题自动跟随。 */
+.seg-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 10px; }
+.seg-row .seg-label { color:var(--muted); font-size:12px; flex:0 0 auto; }
+.seg { display:inline-flex; flex-wrap:wrap; gap:5px; align-items:center; }
+.seg a { display:inline-block; padding:2px 11px; border:1px solid var(--line);
+         border-radius:999px; font-size:12px; line-height:1.7; color:var(--muted);
+         text-decoration:none; background:var(--panel); }
+.seg a:hover { color:var(--text); border-color:var(--border); background:var(--hover); }
+.seg a.active { color:var(--accent); border-color:var(--accent); background:var(--soft);
+                font-weight:600; }
+.seg .cnt { opacity:.75; margin-left:4px; font-size:11px; }
+.seg-sep { width:1px; height:18px; background:var(--line); margin:0 4px; flex:0 0 auto; }
+/* 「当前生效筛选」摘要：不再是裸文字，改成小块提示 */
+.filter-summary { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center;
+                  font-size:12px; color:var(--muted); margin:0 0 10px; }
+.filter-summary b { color:var(--text); font-weight:600; }
+.filter-summary .empty { color:var(--muted); }
+/* 小号输入框（表格行内用，避免一个口令框把整行撑高） */
+.input-mini { padding:3px 8px; font-size:12px; line-height:1.6; }
+/* 能力矩阵「具体原因」：徽章下面一行小字，说明为什么跑不了（开关 / 缺 key / 未解锁） */
+.why { display:block; margin-top:3px; font-size:11px; line-height:1.5; color:var(--muted); }
+/* 账号表：角色列用徽章、状态列用小圆点，操作列收紧 */
+.role-admin { background:var(--sev-high-bg); color:var(--sev-high-fg); }
+.role-user { background:var(--chip-bg); color:var(--muted); }
+.dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:5px;
+       vertical-align:middle; background:var(--muted); }
+.dot.on { background:var(--accent); }
+.dot.off { background:var(--muted); }
+
 /* 续112：「批量打开」的链接面板（浏览器一次手势只开一个标签页，其余靠逐个点击）。
    刻意**不新增颜色配对** —— 链接色沿用全局 `a{color:var(--accent)}`、等宽沿用 `.mono`，
    这里只排布局；面板底色用 --panel、描边用 --border，都是四套主题已定义的变量。 */
@@ -108,9 +140,15 @@ button.ghost:hover { color:var(--text); background:var(--ghost-hover); }
 button.danger { background:var(--danger-bg); border-color:var(--danger-border); color:var(--danger); }
 /* 行内小按钮（任务列表 / 任务详情的操作列） */
 .btn-mini { padding:3px 9px; font-size:12px; border-radius:5px; }
-.ops { display:flex; gap:5px; flex-wrap:wrap; }
+.ops { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
 .ops button, .ops a { padding:3px 9px; font-size:12px; border-radius:5px; }
 .ops a { align-self:center; }
+/* 账号表操作列：每个动作各自一个 <form>，flex 化后按钮/输入框才能在同一行对齐 */
+.ops form { display:inline-flex; gap:5px; align-items:center; margin:0; }
+/* 创建账号：标签在上、控件在下，横向排布，按钮与输入框底对齐（不再是堆叠大块） */
+.create-user { display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap; margin:10px 0 0; }
+.create-user label { margin:0; display:flex; flex-direction:column; gap:4px;
+                     font-size:12px; color:var(--muted); }
 .pick { width:14px; height:14px; padding:0; vertical-align:middle; }
 /* 漏洞行内的 evidence 折叠区，避免长文本把表格撑爆 */
 .evidence { max-width:520px; }
@@ -182,10 +220,14 @@ tr:hover td { background:var(--hover); }
 .bar i { display:block; height:100%; background:var(--accent); border-radius:4px; }
 
 /* ---------- 表单 ---------- */
+/* 续149：控件整体收紧一档（用户反馈「功能键太大」）。垂直内边距 7px→5px、行高收到 1.4，
+   按钮字号跟随表格用 13px —— 默认按钮从约 36px 高降到约 30px，表单/表格都更紧凑；
+   颜色仍全部走变量，切主题不变。 */
 input, textarea, select, button { background:var(--input-bg); border:1px solid var(--border);
-       color:var(--text); border-radius:6px; padding:7px 10px; font:inherit; }
+       color:var(--text); border-radius:6px; padding:5px 10px; font:inherit; line-height:1.4; }
 textarea { width:100%; }
-button { background:var(--btn-bg); border-color:var(--btn-border); color:var(--btn-fg); cursor:pointer; }
+button { background:var(--btn-bg); border-color:var(--btn-border); color:var(--btn-fg);
+         cursor:pointer; font-size:13px; }
 button:hover { background:var(--btn-hover); }
 label { display:block; margin:8px 0; }
 label.chk { display:inline-flex; align-items:center; gap:5px; margin-right:14px; }

@@ -120,10 +120,8 @@
         <button type="submit" class="ghost">复查（勾选目标重跑漏洞初筛）</button>
         <label class="muted" title="勾选后不新建任务，把本次复查追加进本任务（同名 (target,poc_id) 不重复入库，保留你已打的复核状态）">
           <input type="checkbox" name="append" value="1"> 追加到本任务</label>
-        <button type="button" class="ghost" data-review-bulk="confirmed">批量确认存在</button>
-        <button type="button" class="danger" data-review-bulk="false_positive">批量判误报</button>
-        <button type="button" class="ghost" data-review-bulk="">退回待复核</button>
-        <span class="muted" data-review-msg></span>
+        <label class="muted" title="续150（用户点单）：复测模式 —— 跑完把库里的旧结论标成三态：仍可复现 / 已修复 / 无法确认（没探到的目标记「无法确认」，不误报「已修复」）">
+          <input type="checkbox" name="retest" value="1" checked> 复测模式（三态对比）</label>
       </div>
       <table id="tbl-vulns">
         <thead><tr><th><input type="checkbox" data-pick-all="#tbl-vulns"></th>
@@ -146,7 +144,17 @@
             <td class="evidence"><details><summary class="muted">展开</summary>
               <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre>
               {% if v.packets %}<p class="muted small">数据包（请求行 / 状态与长度 / 关键响应头 / 正文指纹；凭据值一律掩码）</p>
-              <pre>{{ v.packets }}</pre>{% else %}<p class="muted small">{{ no_packets_hint }}</p>{% endif %}
+              <pre>{{ v.packets }}</pre>
+              {# 续151（用户点单）：数据包 → 可复现的 curl / Python，一键复制 #}
+              {% set _curl = packet_curl(v.packets, v.target) %}
+              {% if _curl %}
+              <p class="muted small">复现：
+                <button type="button" class="btn-mini ghost" data-copy="#tvcurl-{{ v.id }}">复制 curl</button>
+                <button type="button" class="btn-mini ghost" data-copy="#tvpy-{{ v.id }}">复制 Python</button></p>
+              <pre id="tvcurl-{{ v.id }}">{{ _curl }}</pre>
+              <pre id="tvpy-{{ v.id }}">{{ packet_python(v.packets, v.target) }}</pre>
+              {% endif %}
+              {% else %}<p class="muted small">{{ no_packets_hint }}</p>{% endif %}
               {% if v.review_note %}<p class="muted small">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
           </tr>
         {% else %}
@@ -233,6 +241,7 @@
           <td class="shot-cell">{% if s.shot %}<img class="shot-thumb" loading="lazy" alt="站点截图"
               data-full="{{ url_for('shot_file', task_id=task.id, name=s.shot.rsplit('/', 1)[-1]) }}"
               src="{{ url_for('shot_file', task_id=task.id, name=s.shot.rsplit('/', 1)[-1]) }}">
+            {% elif s.shot_error %}<span class="muted small" title="截图失败原因">截图失败：{{ s.shot_error }}</span>
             {% else %}<span class="muted">-</span>{% endif %}</td></tr>
         {% else %}
           <tr><td colspan="7" class="muted">暂无数据。</td></tr>
@@ -339,10 +348,18 @@
       <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
       <div class="bulkbar">
         <button type="submit" class="ghost"
-          title="新建 subdomain→probe→dirscan→vulnscan 的任务：先把这些域名的子域再挖一遍，再探存活、扫目录、跑漏洞初筛">
-          送去探测（子域+存活+目录+漏洞，新建任务）</button>
-        <label class="muted" title="勾选后不新建任务，把探测结果追加进本任务（站点/目录/漏洞跨运行去重）">
-          <input type="checkbox" name="append" value="1"> 追加到本任务</label>
+          title="把这些域名的子域再挖一遍，再探存活、扫目录、跑漏洞初筛；默认**追加进本任务**（不新建任务）">
+          送去探测（子域+存活+目录+漏洞）</button>
+        <label class="muted" title="续150（用户点单）：默认勾选 —— 探测结果**追加进本任务**（折叠在父任务里，跨运行去重）；取消勾选才新建一个独立任务">
+          <input type="checkbox" name="append" value="1" checked> 追加到本任务（默认，折叠进父任务）</label>
+        <label class="muted" title="1 = 只对当下这批域名做一轮采集/探测；N&gt;1 时，每层把新挖出的、归属本项目（注册域命中任务目标）的拓展域名再追加成子域名并再采集一次，最多 N 层（折叠在父任务里）">
+          追加扫描层数（1=只扫当下这批）
+          <select name="depth">
+            {% for d in range(1, 11) %}
+            <option value="{{ d }}" {{ 'selected' if d == 1 else '' }}>{{ d }}</option>
+            {% endfor %}
+          </select>
+        </label>
         <button type="submit" class="ghost" formaction="{{ url_for('api_resolve_domains') }}"
           title="纯 DNS 查询（零 HTTP）：回填解析 IP / CNAME / CDN 与失败原因">
           解析选中域名（DNS）</button>
@@ -550,7 +567,7 @@
       <thead><tr><th>状态</th><th>路径</th><th>大小</th><th>标题</th><th>来源</th></tr></thead>
       <tbody>
       {% for d in dirs %}
-        <tr><td>{{ d.status }}</td><td class="mono">{{ d.path }}</td>
+        <tr><td>{{ d.status }}</td><td class="mono">{% set _u = dir_url(d.site_url, d.path) %}{% if _u %}<a class="url-link" href="{{ _u }}" target="_blank" rel="noopener noreferrer" title="在新标签页打开 {{ _u }}">{{ d.path }}</a>{% else %}{{ d.path }}{% endif %}</td>
           <td class="muted small mono">{{ d.length if d.length is not none else '-' }}
             {% if d.dup %}<span class="muted small">（另有 {{ d.dup }} 条相同）</span>{% endif %}</td>
           <td class="muted small">{{ d.title or '-' }}</td>
@@ -572,15 +589,23 @@
       <b>这是候选清单，不是结论</b>：同形状的 <code>flag{xxx}</code> 与 <code>AKIA…</code> 经常是模板或
       JS 里的占位符，逐条判真才是结论 —— 清单刻意偏宽，因为漏报的代价是丢一道题，误报的代价只是多看一眼。</p>
     <table id="tbl-flags">
-      <thead><tr><th>值</th><th>形状</th><th>来源</th><th>URL</th><th>上下文</th></tr></thead>
+      <thead><tr><th>值</th><th>形状</th><th>来源</th><th>URL</th><th>上下文</th><th>复现</th></tr></thead>
       <tbody>
       {% for f in flags %}
         <tr><td class="mono">{{ f.value }}</td><td class="muted">{{ f.kind }}</td>
           <td class="muted">{{ f.source }}</td>
           <td class="mono small">{{ f.url }}</td>
-          <td class="muted small mono">{{ f.context }}</td></tr>
+          <td class="muted small mono">{{ f.context }}</td>
+          {# 续151（用户点单）：敏感信息也接同一套 packetcodec —— 没有数据包就用 `url` 按 GET 复现
+             （拿回那份正文 / JS 原文，正是"点开即取原文"想要的东西）。 #}
+          <td>{% set _fc = packet_curl('', f.url) %}{% if _fc %}<details><summary class="muted small">复现</summary>
+            <p class="muted small"><button type="button" class="btn-mini ghost" data-copy="#fcurl-{{ f.id }}">复制 curl</button>
+            <button type="button" class="btn-mini ghost" data-copy="#fpy-{{ f.id }}">复制 Python</button></p>
+            <pre id="fcurl-{{ f.id }}">{{ _fc }}</pre>
+            <pre id="fpy-{{ f.id }}">{{ packet_python('', f.url) }}</pre></details>
+            {% else %}<span class="muted">-</span>{% endif %}</td></tr>
       {% else %}
-        <tr><td colspan="5" class="muted">还没有候选。抽取只吃已经抓到的正文，所以
+        <tr><td colspan="6" class="muted">还没有候选。抽取只吃已经抓到的正文，所以
           「没跑过 probe / jsmine / dirscan / vulnscan 的任务」本来就是空的，不等于"目标没有敏感信息"。</td></tr>
       {% endfor %}
       </tbody>

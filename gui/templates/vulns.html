@@ -8,25 +8,38 @@
                         sort=sort, desc=('1' if desc else '0')) %}
 {% set col_args = dict(base_args, severity=(sev or None), review=(review or None)) %}
 <p class="muted small">跨任务漏洞视图：<b>服务端分页 + 排序 + 关键字过滤</b>（共 {{ pager.total }} 条，过滤后）。
-  级别 / 复核 / 任务 / 关键字 / 排序状态在翻页时**全部保持**。</p>
-<p class="muted">级别筛选：
-  <a href="{{ url_for('vulns', **dict(base_args, severity=None, review=(review or None))) }}">全部</a>
-  {% for s in ['critical', 'high', 'medium', 'low', 'info'] %}
-  <a href="{{ url_for('vulns', **dict(base_args, severity=s, review=(review or None))) }}"
-     {% if sev == s %}style="font-weight:700"{% endif %}>{{ s }}</a>
-  {% endfor %}
-  ｜ 复核筛选：
-  <a href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review=None)) }}">全部</a>
-  <a href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review='pending')) }}">待复核 {{ counts.pending }}</a>
-  <a href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review='confirmed')) }}">已确认 {{ counts.confirmed }}</a>
-  <a href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review='false_positive')) }}">已判误报 {{ counts.false_positive }}</a>
-</p>
-<p class="muted small">
-  当前生效筛选：
-  级别 <b>{{ sev or '全部' }}</b> ·
-  复核 <b>{% if review == 'confirmed' %}已确认{% elif review == 'false_positive' %}已判误报{% elif review == 'pending' %}待复核{% else %}全部{% endif %}</b> ·
-  任务 <b>{% if task_id %}#{{ task_id }} {{ task_names.get(task_id) or '' }}{% else %}全部{% endif %}</b> ·
-  关键字 <b>{{ q or '（无）' }}</b>
+  级别 / 复核 / 任务 / 关键字 / 排序状态在翻页时<b>全部保持</b>。</p>
+{# 续149：级别 / 复核筛选从"一行裸文字链接"改成胶囊分段控件（用户反馈「很单薄很丑」）。
+   链接仍指向同一个 /vulns 路由，筛选状态照旧由服务端 URL 参数承载，翻页保持逻辑一个字节没变。 #}
+<div class="seg-row">
+  <span class="seg-label">级别</span>
+  <div class="seg">
+    <a class="{{ 'active' if not sev }}"
+       href="{{ url_for('vulns', **dict(base_args, severity=None, review=(review or None))) }}">全部</a>
+    {% for s in ['critical', 'high', 'medium', 'low', 'info'] %}
+    <a class="{{ 'active' if sev == s }}"
+       href="{{ url_for('vulns', **dict(base_args, severity=s, review=(review or None))) }}">{{ s }}</a>
+    {% endfor %}
+  </div>
+  <span class="seg-sep"></span>
+  <span class="seg-label">复核</span>
+  <div class="seg">
+    <a class="{{ 'active' if not review }}"
+       href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review=None)) }}">全部</a>
+    <a class="{{ 'active' if review == 'pending' }}"
+       href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review='pending')) }}">待复核<span class="cnt">{{ counts.pending }}</span></a>
+    <a class="{{ 'active' if review == 'confirmed' }}"
+       href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review='confirmed')) }}">已确认<span class="cnt">{{ counts.confirmed }}</span></a>
+    <a class="{{ 'active' if review == 'false_positive' }}"
+       href="{{ url_for('vulns', **dict(base_args, severity=(sev or None), review='false_positive')) }}">已判误报<span class="cnt">{{ counts.false_positive }}</span></a>
+  </div>
+</div>
+<p class="filter-summary">
+  <span>当前生效筛选</span>
+  <span>级别 <b>{{ sev or '全部' }}</b></span>
+  <span>复核 <b>{% if review == 'confirmed' %}已确认{% elif review == 'false_positive' %}已判误报{% elif review == 'pending' %}待复核{% else %}全部{% endif %}</b></span>
+  <span>任务 <b>{% if task_id %}#{{ task_id }} {{ task_names.get(task_id) or '' }}{% else %}全部{% endif %}</b></span>
+  <span>关键字 <b>{{ q or '（无）' }}</b></span>
 </p>
 <section class="panel">
   <form class="filters" method="get" action="{{ url_for('vulns') }}">
@@ -55,16 +68,9 @@
     <button class="ghost" type="submit">查询</button>
     {% if task_id or sev or review or q %}<a class="btn-mini ghost" href="{{ url_for('vulns') }}">清空</a>{% endif %}
   </form>
-  <p class="muted small">复核打标（P1-1）：勾选行后批量标记 —「确认存在」= 人工验证过确实存在；
-    「误报」= 人工排除。打标只作用于<b>记录本身</b>（不重扫、不改资产）；
-    需要新证据时到任务详情页用「复查」对同一目标重跑一次漏洞初筛。
-    批量操作作用于<b>本页已勾选</b>的行。</p>
-  <div class="bulkbar">
-    <button type="button" class="ghost" data-review-bulk="confirmed">批量确认存在</button>
-    <button type="button" class="danger" data-review-bulk="false_positive">批量判误报</button>
-    <button type="button" class="ghost" data-review-bulk="">退回待复核</button>
-    <span class="muted" data-review-msg></span>
-  </div>
+  <p class="muted small">复核筛选与「已确认 / 误报」计数仍可用（上方胶囊）。续150（用户 2026-10-11
+    点单）：页内「批量确认存在 / 批量判误报 / 退回待复核」与逐行复核下拉已移除 —— 这几个动作
+    用户判定暂不常用；后端接口与复核数据一并保留，需要时可再挂回来。</p>
   <table id="tbl-vulns-all">
     <thead><tr><th><input type="checkbox" data-pick-all="#tbl-vulns-all" title="全选本页"></th>
       <th><a href="{{ url_for('vulns', **dict(col_args, sort='id', desc=('0' if (sort == 'id' and desc) else '1'))) }}"
@@ -92,16 +98,28 @@
         <td>{{ v.name }}</td>
         <td class="muted">{{ v.poc_id }}</td>
         <td class="muted">{{ v.target }}</td>
-        <td><select class="rv" data-review-id="{{ v.id }}"
-              title="{{ v.review_note or '复核备注（判误报时会让填）' }}">
-          <option value="" {{ 'selected' if not v.review }}>待复核</option>
-          <option value="confirmed" {{ 'selected' if v.review == 'confirmed' }}>确认存在</option>
-          <option value="false_positive" {{ 'selected' if v.review == 'false_positive' }}>误报</option>
-        </select></td>
+        <td>{# 续150：逐行复核下拉已移除（用户判定不常用）；只读显示当前复核状态 #}
+          {% if v.review == 'confirmed' %}<span class="sev sev-low" title="{{ v.review_note or '' }}">已确认</span>
+          {% elif v.review == 'false_positive' %}<span class="sev sev-medium" title="{{ v.review_note or '' }}">误报</span>
+          {% else %}<span class="muted small">待复核</span>{% endif %}
+          {# 续150：独立复测三态（仅在跑过复测时显示） #}
+          {% if v.retest_state %}<span class="badge {{ 'st-done' if v.retest_state == 'reproduced' else ('st-failed' if v.retest_state == 'fixed' else 'st-pending') }}"
+              title="独立复测（{{ v.retested_at or '' }}）">{{ {'reproduced': '仍可复现', 'fixed': '已修复', 'unconfirmed': '无法确认'}.get(v.retest_state, v.retest_state) }}</span>{% endif %}</td>
         <td class="evidence"><details><summary class="muted">展开</summary>
           <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre>
           {% if v.packets %}<p class="muted small">数据包（请求行 / 状态与长度 / 关键响应头 / 正文指纹；凭据值一律掩码）</p>
-              <pre>{{ v.packets }}</pre>{% else %}<p class="muted small">{{ no_packets_hint }}</p>{% endif %}
+              <pre>{{ v.packets }}</pre>
+              {# 续151（用户点单）：把数据包转成**可复现**的 curl / Python 脚本，一键复制。
+                 抽不到请求行时不渲染（`packet_curl` 返回空串）。 #}
+              {% set _curl = packet_curl(v.packets, v.target) %}
+              {% if _curl %}
+              <p class="muted small">复现（点一下复制，粘贴到终端 / 编辑器即可）：
+                <button type="button" class="btn-mini ghost" data-copy="#vcurl-{{ v.id }}">复制 curl</button>
+                <button type="button" class="btn-mini ghost" data-copy="#vpy-{{ v.id }}">复制 Python</button></p>
+              <pre id="vcurl-{{ v.id }}">{{ _curl }}</pre>
+              <pre id="vpy-{{ v.id }}">{{ packet_python(v.packets, v.target) }}</pre>
+              {% endif %}
+          {% else %}<p class="muted small">{{ no_packets_hint }}</p>{% endif %}
           {% if v.review_note %}<p class="muted small">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
       </tr>
     {% else %}

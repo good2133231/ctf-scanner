@@ -25,40 +25,41 @@
       <tr>
         <td>{{ u.id }}</td>
         <td>{{ u.username }}{% if me and u.id == me.id %} <span class="muted">（我）</span>{% endif %}</td>
-        <td>{% if u.role == 'admin' %}<span class="sev sev-high">管理员</span>
-            {% else %}<span class="muted">子用户</span>{% endif %}</td>
-        <td>{% if u.enabled %}启用{% else %}<span class="muted">已停用</span>{% endif %}
-            {% if u.must_change %}<span class="muted"> · 待改密</span>{% endif %}</td>
+        <td>{% if u.role == 'admin' %}<span class="badge role-admin">管理员</span>
+            {% else %}<span class="badge role-user">子用户</span>{% endif %}</td>
+        <td>
+          {% if u.enabled %}<span class="dot on"></span>启用
+          {% else %}<span class="dot off"></span><span class="muted">已停用</span>{% endif %}
+          {% if u.must_change %}<span class="badge role-user">待改密</span>{% endif %}
+        </td>
         <td class="muted">{{ u.last_login_at or '-' }}</td>
         <td class="muted">{{ u.created_at or '-' }}</td>
         <td>
           {% if me and u.id == me.id %}
             <span class="muted">改自己的口令请走右上角「修改口令」</span>
           {% else %}
-          <form method="post" style="display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0"
-                action="{{ url_for('api_user_password', uid=u.id) }}">
-            <input type="password" name="password" placeholder="新口令（≥8 位）" required>
-            <button type="submit" class="btn-mini ghost"
-                    onclick="return confirm('重置 {{ u.username }} 的口令？对方下次登录必须修改。')">重置口令</button>
-          </form>
-          <form method="post" style="display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0"
-                action="{{ url_for('api_user_toggle', uid=u.id) }}">
-            <button type="submit" class="btn-mini ghost"
-                    onclick="return confirm('{{ '停用' if u.enabled else '启用' }}账号 {{ u.username }}？')">
-              {{ '停用' if u.enabled else '启用' }}</button>
-          </form>
-          <form method="post" style="display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0"
-                action="{{ url_for('api_user_role', uid=u.id) }}">
-            <input type="hidden" name="role" value="{{ 'user' if u.role == 'admin' else 'admin' }}">
-            <button type="submit" class="btn-mini ghost"
-                    onclick="return confirm('把 {{ u.username }} 改为{{ '子用户' if u.role == 'admin' else '管理员' }}？')">
-              {{ '降为子用户' if u.role == 'admin' else '升为管理员' }}</button>
-          </form>
-          <form method="post" style="display:inline-flex;gap:6px;align-items:center;margin:0 6px 0 0"
-                action="{{ url_for('api_user_delete', uid=u.id) }}">
-            <button type="submit" class="btn-mini danger"
-                    onclick="return confirm('确认删除账号 {{ u.username }}？删除后其会话立即失效。')">删除</button>
-          </form>
+          <div class="ops">
+            <form method="post" action="{{ url_for('api_user_password', uid=u.id) }}">
+              <input type="password" class="input-mini" name="password" placeholder="新口令（≥8 位）" required>
+              <button type="submit" class="btn-mini ghost"
+                      onclick="return confirm('重置 {{ u.username }} 的口令？对方下次登录必须修改。')">重置口令</button>
+            </form>
+            <form method="post" action="{{ url_for('api_user_toggle', uid=u.id) }}">
+              <button type="submit" class="btn-mini ghost"
+                      onclick="return confirm('{{ '停用' if u.enabled else '启用' }}账号 {{ u.username }}？')">
+                {{ '停用' if u.enabled else '启用' }}</button>
+            </form>
+            <form method="post" action="{{ url_for('api_user_role', uid=u.id) }}">
+              <input type="hidden" name="role" value="{{ 'user' if u.role == 'admin' else 'admin' }}">
+              <button type="submit" class="btn-mini ghost"
+                      onclick="return confirm('把 {{ u.username }} 改为{{ '子用户' if u.role == 'admin' else '管理员' }}？')">
+                {{ '降为子用户' if u.role == 'admin' else '升为管理员' }}</button>
+            </form>
+            <form method="post" action="{{ url_for('api_user_delete', uid=u.id) }}">
+              <button type="submit" class="btn-mini danger"
+                      onclick="return confirm('确认删除账号 {{ u.username }}？删除后其会话立即失效。')">删除</button>
+            </form>
+          </div>
           {% endif %}
         </td>
       </tr>
@@ -70,7 +71,7 @@
 
 <section class="panel">
   <h2>创建账号</h2>
-  <form method="post" class="row" action="{{ url_for('api_user_create') }}">
+  <form method="post" class="create-user" action="{{ url_for('api_user_create') }}">
     <label>用户名 <input name="username" placeholder="2-32 字符，不含空白与斜杠" required></label>
     <label>初始口令 <input type="password" name="password" placeholder="至少 8 位" required></label>
     <label>角色

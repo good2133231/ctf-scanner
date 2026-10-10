@@ -460,7 +460,8 @@ def probe(settings=None):
 
     每行 `{name, kind, auto, status, detail, cmds}`：`kind` ∈ `runtime` / `auto` / `pending` /
     `manual` / `browser`；`status` ∈ `ok` / `missing` / `warn`；`auto` ＝ "本脚本 `--install` 会不会动它"。
-    （`pending` ＝ 在 `toolmgr.TOOLS` 里、能下载能校验，但**扫描路径还没调用它**，见 `toolmgr.wired`。）
+    （`pending` ＝ 在 `toolmgr.TOOLS` 里、能下载能校验，但**扫描路径还没调用它**，见 `toolmgr.wired`。
+    续149 起 afrog 已接线 ⇒ `pending` 目前为空集；这一档保留是为了将来再进"能装但没接线"的工具。）
     """
     from scanner import screenshot, toolmgr
     from scanner.config import load_settings, resolve
@@ -506,9 +507,9 @@ def probe(settings=None):
                          [] if found else ["python -m pip install -r requirements.txt"]))
 
     for name in toolmgr.TOOLS:
-        # 续119：`TOOLS` 里的成员按 `wired()` 再分一档 —— "能自动下载"与"扫描会用到它"是两件事。
-        # 没接入扫描路径的（目前是 afrog）标 kind="pending" / auto=False：`--install` 因此**不会**
-        # 顺手拉它（那是 25 MB 的无用二进制），但清单里仍然看得见、并给出一条显式命令。
+        # 续119 起：`TOOLS` 里的成员按 `wired()` 再分一档 —— "能自动下载"与"扫描会用到它"是两件事。
+        # 没接入扫描路径的标 kind="pending" / auto=False：`--install` 因此**不会**顺手拉它，但清单里
+        # 仍然看得见、并给出一条显式命令。续149 起 afrog 已接线 ⇒ 这一档目前为空集。
         _wired = toolmgr.wired(name)
         cur = _rel(which(tools_cfg.get(name, name)))
         insp = toolmgr.inspect(name)
