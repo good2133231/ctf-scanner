@@ -583,6 +583,14 @@ def main():
     _edgeauth_real = _edgeauth.enabled
     _edgeauth.enabled = lambda settings: False
 
+    # 续151：依赖自检 —— smoke 要 flask/requests/yaml。用系统 python 跑（没装依赖）时，
+    # 原先会甩一个 ModuleNotFoundError 栈；这里换成一句**可照做**的指引（见 README/CI）。
+    try:
+        import flask, requests, yaml  # noqa: F401
+    except ImportError as _dep151:
+        raise SystemExit(
+            "缺依赖 (%s)：请用项目虚拟环境跑 ./.venv/bin/python tests/smoke.py"
+            "（先跑 ./install.sh 装好）；系统 python 通常没装 flask。" % (_dep151,))
     from gui.app import app
     c = app.test_client()
     assert c.get("/").status_code == 302
@@ -19958,10 +19966,25 @@ expression: r0()
         # 而 130+ 组门禁**一组都没红** —— save_settings 是被 stub 的，缺键只是"保存时少存几个开关"，
         # 现象要等用户在策略页点一次保存、发现免杀/接管开关莫名回到默认值才会浮出来。
         # 判据吃的是 DEFAULTS（桩），不是这台机器上的配置值（§6.2）。
-        for _sec145 in ("evasion", "takeover", "subdomain"):
-            _lost145 = sorted(set(_D145[_sec145]) - set(_cap145.get(_sec145) or {}))
-            assert not _lost145, \
-                f"POST /settings 之后 {_sec145} 段少了 {_lost145}（保存一次就把这些开关删掉）"
+        # 续151（用户点单）：这条判据原先只钉住 evasion/takeover/subdomain 三段 —— 推到
+        # **POST 映射覆盖的全部段**。覆盖段 = `_cap145` 里出现的段（映射声明了谁就是谁）；
+        # 例外段（策略页根本没有输入框、页面改不了）**显式列出**，刻意不用"自动跳过没有
+        # 输入框的段"那种豁免 —— 上一轮的缺键正是从"没人逐段点名"里藏住的。
+        _cov145 = sorted(_cap145)
+        _exc145 = {"tools", "dicts", "http", "queue", "dev"}   # 见 gui/templates/settings.html
+        _bad145 = []
+        for _sec145 in _cov145:
+            if _sec145 in _exc145:
+                continue
+            _lost145 = sorted(set(_D145.get(_sec145, {})) - set(_cap145.get(_sec145) or {}))
+            if _lost145:
+                _bad145.append(f"{_sec145}:{_lost145}")
+        assert not _bad145, \
+            f"POST /settings 映射缺键（保存一次就把这些开关重置）：{_bad145}"
+        # 例外段必须**真的**没被覆盖：哪天给它们加了输入框，这份名单就要跟着改，不许静默放过
+        assert not (set(_exc145) & set(_cov145)), \
+            f"例外段却被 POST 覆盖了（名单过期）：{sorted(set(_exc145) & set(_cov145))}"
+        assert len(_cov145) >= 20, f"覆盖段数异常偏少（判据可能是空写）：{len(_cov145)}"
         # 重复键是这类损坏的另一半：源码里同一段只许出现一次
         _n_sub145 = _apa145.count('"subdomain": {"max_resolve"')
         assert _n_sub145 == 1, f"POST 映射里 subdomain 段出现了 {_n_sub145} 次（重复键＝后者静默盖前者）"
@@ -21279,6 +21302,137 @@ expression: r0()
           "未存请求头/体**（不把响应头当请求头）｜原始请求行含 Host/头/体可原样转全｜掩码行不当请求头｜"
           "抽不到请求行返回空串（不编命令）｜目录链接只放行 http/https、path 为完整 URL 时直接用、"
           "拼不出退化为纯文本")
+    # ---------------- [8bc] 续151：复测三态/真实IP 进报告 + 详情页徽章 + multileak 开关 + relevance 可配 + 截图重试 ----
+    print("[8bc] 续151 报告复测/真实IP + 详情页复测徽章 + multileak GUI + relevance 可配 + 截图重试 …")
+    _t8bc = db.create_task("smoke-8bc", "t8bc.test", ["probe"], {"offline": True})
+    db.insert_subdomains(_t8bc, [("real.t8bc.test", "dns-brute"), ("cdn.t8bc.test", "passive:crt")])
+    db.set_subdomain_net(_t8bc, {"real.t8bc.test": ("203.0.113.9", ""),
+                                 "cdn.t8bc.test": ("198.51.100.7", "cloudflare")})
+    db.insert_vuln(_t8bc, {"target": "http://real.t8bc.test/", "poc_id": "p8bc",
+                           "name": "复测样例", "severity": "high"})
+    _vid8bc = [v["id"] for v in db.list_vulns(task_id=_t8bc, limit=50)
+               if v["poc_id"] == "p8bc"][0]
+    assert db.bulk_set_vuln_retest([_vid8bc], "reproduced") == 1
+    _md8bc = generate(_t8bc)
+    assert "复测" in _md8bc and "仍可复现" in _md8bc, _md8bc[:400]
+    # 真实IP / CDN 归属标注由 `_sub_note` 统一拼（与 GUI 子域名页同一口径）
+    assert "[真实IP 203.0.113.9]" in _md8bc and "[CDN cloudflare]" in _md8bc, _md8bc
+    _ht8bc = generate_html(_t8bc)
+    assert "复测" in _ht8bc and "[真实IP 203.0.113.9]" in _ht8bc, _ht8bc[:400]
+    _jl8bc = generate_jsonl(_t8bc)
+    assert '"retest"' in _jl8bc and '"reproduced": 1' in _jl8bc, _jl8bc[:400]
+    assert '"retest_state": "reproduced"' in _jl8bc, "JSONL 漏洞行必须带复测态"
+    db.delete_task(_t8bc, backup=False)
+    # 详情页漏洞页签的复测徽章（与「漏洞风险」页同一套口径）
+    _td8bc = (ROOT / "gui" / "templates" / "task_detail.html").read_text(
+        encoding="utf-8", errors="replace")
+    assert "v.retest_state" in _td8bc, "任务详情页漏洞页签缺复测三态徽章"
+    # multileak 的 GUI 开关（策略页勾选框 + POST 映射，否则勾了存不进去）
+    _sh8bc = (ROOT / "gui" / "templates" / "settings.html").read_text(
+        encoding="utf-8", errors="replace")
+    assert 'name="multileak_enabled"' in _sh8bc, "策略页缺 multileak 开关"
+    _apa8bc = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert '"multileak": {"enabled"' in _apa8bc, "POST 映射缺 multileak（勾了存不进去）"
+    assert '"weak_downgrade": f.get("github_weak_downgrade")' in _apa8bc, \
+        "POST 映射缺 github.weak_downgrade（relevance 开关存不进去）"
+    # relevance 阈值可配：弱相关三态（降级 / 关降级 / 白名单命中不判弱）
+    from scanner import github_leak as _gh8bc
+    _bk8bc = {("t8bc.test", "someone/notes", "a.txt"): {"rules": {"credential"}, "url": ""}}
+    _w1 = _gh8bc._leads_from(dict(_bk8bc), weak_downgrade=True)
+    assert _w1 and _w1[0]["level"] == "info", _w1          # 弱相关 → 降 info
+    _w2 = _gh8bc._leads_from(dict(_bk8bc), weak_downgrade=False)
+    assert _w2 and _w2[0]["level"] == "medium", _w2        # 关掉降级 → 按规则级别
+    _w3 = _gh8bc._leads_from(dict(_bk8bc), weak_downgrade=True,
+                             whitelist=["someone/notes"])
+    assert _w3 and _w3[0]["level"] == "medium", _w3        # 白名单命中 → 不判弱
+    # 截图失败自动重试（超时翻倍 / 3xx 落地页再截；静态判据——真跑要浏览器）
+    _ss8bc = (ROOT / "scanner" / "stages" / "screenshot.py").read_text(
+        encoding="utf-8", errors="replace")
+    assert "redirect_url" in _ss8bc and "重试" in _ss8bc, "截图阶段缺失败自动重试分支"
+    print("[8bc] 续151 ok: 复测三态与真实IP/CDN 归属进 MD/HTML、复测态进 JSONL｜详情页漏洞页签有复测徽章｜"
+          "multileak 策略开关 + POST 映射齐｜relevance 三态（降级/关降级/白名单）可配｜截图失败自动重试"
+          "（换落地页或翻倍超时，沿用原 URL 产物名）")
+
+    # ---------------- [8be] 续151：资产关系图 + 复测闭环建议 + smoke 依赖自检 ----------------
+    print("[8be] 续151 资产关系图 / 复测闭环建议 / smoke 依赖自检 …")
+    from gui.app import _asset_tree as _at8be
+    _t8be = db.create_task("smoke-8be", "a8be.test", ["probe"], {"offline": True})
+    db.insert_subdomains(_t8be, [("www.a8be.test", "dns-brute"), ("cdn.a8be.test", "passive:crt")])
+    db.set_subdomain_net(_t8be, {"www.a8be.test": ("203.0.113.10", ""),
+                                 "cdn.a8be.test": ("198.51.100.8", "cloudflare")})
+    db.insert_sites(_t8be, [{"url": "http://www.a8be.test/", "host": "www.a8be.test", "port": 80,
+                             "status": 200, "title": "t", "source": "probe"}])
+    db.insert_ports(_t8be, [{"host": "www.a8be.test", "ip": "203.0.113.10", "port": 80,
+                             "service": "http", "banner": ""}])
+    _tree8be = _at8be(_t8be)
+    _flat8be = {n["domain"]: n for g in _tree8be for n in g["subs"]}
+    assert "www.a8be.test" in _flat8be and "cdn.a8be.test" in _flat8be, _flat8be
+    assert _flat8be["www.a8be.test"]["tested"] is True, "已探到站点的主机要标「已测」"
+    assert _flat8be["cdn.a8be.test"]["tested"] is False
+    assert any(p["port"] == 80 for p in _flat8be["www.a8be.test"]["ports"]), _flat8be["www.a8be.test"]
+    assert _at8be(999999) == [], "不存在的任务返回空树（渲染绝不因此失败）"
+    db.delete_task(_t8be, backup=False)
+    # 模板接线：资产关系图在详情页、复测闭环建议在两个漏洞页
+    _vd8be = (ROOT / "gui" / "templates" / "vulns.html").read_text(encoding="utf-8", errors="replace")
+    assert "asset_tree" in _td8bc, "任务详情页未接资产关系图"
+    assert "retest_hint" in _vd8be and "retest_hint" in _td8bc, "复测闭环建议未接两个漏洞页"
+    assert 'app.jinja_env.globals["asset_tree"]' in _apa8bc \
+        and 'app.jinja_env.globals["retest_hint"]' in _apa8bc, "jinja 全局未注册（模板取不到）"
+    # smoke 依赖自检：用系统 python 跑时给的是可照做的指引，而不是裸栈
+    assert "./.venv/bin/python tests/smoke.py" in (ROOT / "tests" / "smoke.py").read_text(
+        encoding="utf-8", errors="replace"), "smoke 缺依赖自检指引"
+    print("[8be] 续151 ok: 资产关系图（主域→子域名→IP→端口/服务，已测标 ✓，空任务退回空树）｜"
+          "复测闭环建议（按三态给复核建议，单一产地 retest_hint）｜smoke 依赖自检给出可照做的指引")
+
+    # ---------------- [8bd] 续151：无依赖 ML（SimHash / n-gram Jaccard / 朴素贝叶斯 / MAD） ----------------
+    print("[8bd] 续151 无依赖 ML（近重复指纹 / 朴素贝叶斯 / MAD 离群）与门控 …")
+    from scanner import ml as _ml8bd
+    from scanner.config import DEFAULTS as _D8bd
+    # 近重复：同一模板换随机参数 → Jaccard 判近重复；不同页面不判。
+    _tpl1 = ("<html><head><title>404 Not Found</title></head><body><h1>Not Found</h1>"
+             "<p>The requested URL /a1b2c3 was not found on this server.</p>"
+             "<hr><address>Apache/2.4.41 Server at t Port 80</address></body></html>")
+    _tpl2 = _tpl1.replace("/a1b2c3", "/zz88yy")
+    _real8bd = "<html><body><h2>Admin Console</h2><form>user<input></form></body></html>"
+    assert _ml8bd.near_dup_text(_tpl1, _tpl2) and not _ml8bd.near_dup_text(_tpl1, _real8bd), \
+        (_ml8bd.jaccard(_tpl1, _tpl2), _ml8bd.jaccard(_tpl1, _real8bd))
+    # SimHash：同文本汉明距离为 0（确定性）
+    assert _ml8bd.hamming(_ml8bd.simhash(_tpl1), _ml8bd.simhash(_tpl1)) == 0
+    assert _ml8bd.near_dup(_ml8bd.simhash(_tpl1), _ml8bd.simhash(_tpl1))
+    # MAD：明显离群的那一个被点名；样本太少不判
+    _outs8bd, _med8bd, _m8bd = _ml8bd.mad_outliers([100, 101, 99, 100, 20000])
+    assert _outs8bd and 20000.0 in _outs8bd, (_outs8bd, _med8bd, _m8bd)
+    assert _ml8bd.mad_outliers([5])[0] == set(), "样本太少不许判离群"
+    # 朴素贝叶斯：训练 → 预测 → 存/读往返一致；缺模型返回 None（不抛）
+    _nb8bd = _ml8bd.NaiveBayes(n=3).fit([
+        ("php", "X-Powered-By: PHP/8.1.2 PHPSESSID=abc"),
+        ("java", "Server: Apache-Coyote/1.1 JSESSIONID=x"),
+        ("nginx", "Server: nginx/1.18.0"),
+    ])
+    assert _nb8bd.predict("X-Powered-By: PHP/7.4 PHPSESSID") == "php"
+    assert _ml8bd.NaiveBayes.from_dict(_nb8bd.to_dict()).predict("Server: nginx/1.20") == \
+        _nb8bd.predict("Server: nginx/1.20")
+    assert _ml8bd.NaiveBayes.load("/nonexistent/model.json") is None, "缺模型必须返回 None，不抛"
+    # 门控三处齐：DEFAULTS 有键、POST 映射有键；默认值不改变既有行为
+    assert _D8bd["dirscan"]["ml_template"] is True and _D8bd["dirscan"]["ml_outlier"] is True
+    assert _D8bd["checks"]["poc_priority"] is False, "POC 优先级 ML 必须默认关（无模型时零行为变化）"
+    assert _D8bd["portscan"]["ml_service"] is False, "服务识别 ML 必须默认关"
+    for _k8bd in ('"poc_priority": f.get("poc_priority")',
+                  '"ml_service": f.get("portscan_ml_service")',
+                  '"ml_template": f.get("dirscan_ml_template")',
+                  '"ml_outlier": f.get("dirscan_ml_outlier")'):
+        assert _k8bd in _apa8bc, f"POST 映射缺 {_k8bd}"
+    # 接线：三段各自真的用了 ml
+    _vs8bd = (ROOT / "scanner" / "stages" / "vulnscan.py").read_text(encoding="utf-8", errors="replace")
+    _ps8bd = (ROOT / "scanner" / "stages" / "portscan.py").read_text(encoding="utf-8", errors="replace")
+    _ds8bd = (ROOT / "scanner" / "stages" / "dirscan.py").read_text(encoding="utf-8", errors="replace")
+    assert "ml.NaiveBayes.load" in _vs8bd and "poc_priority" in _vs8bd, "vulnscan 未接 POC 优先级 ML"
+    assert "ml.NaiveBayes.load" in _ps8bd and "ml_service" in _ps8bd, "portscan 未接服务识别 ML"
+    assert "ml.near_dup_text" in _ds8bd and "ml.mad_outliers" in _ds8bd, "dirscan 未接近重复/离群 ML"
+    print("[8bd] 续151 无依赖 ML ok: n-gram Jaccard 近重复（同模板判近、不同页不判）｜SimHash 汉明"
+          "距离确定性｜MAD 点名离群、小样本不判｜朴素贝叶斯训练/预测/存读往返一致、缺模型返回 None｜"
+          "三处门控齐且默认不改变既有行为")
+
     print("SMOKE PASS")
 
 

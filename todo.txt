@@ -3253,3 +3253,28 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [ ] GitLab 源码泄露源（`multileak` 目前只有 grep.app 免 key 源）；`multileak` 的 GUI 开关；
       6-c 追加层数的真机验收；复测三态在任务详情页的徽章；报告写入复测结论与弱相关线索
 - [ ] 四条无依赖 ML 代办：模板页聚类 / POC 优先级 / 服务分类 / 离群检测（见 `待办清单.md`）
+
+## 续152（2026-10-11，AI 远端 Linux）：报告扩写 + 无依赖 ML + 资产关系图 + 策略覆盖收口
+
+- [x] **报告扩写**：MD/HTML 漏洞表加「复测」列 + 复测台账行；子域名每行加归属标注（真实IP/多IP/CDN/未解析）；
+      JSONL meta 加 retest 计数
+- [x] **无依赖 ML `scanner/ml.py`**（纯标准库、离线、可解释、可关）：n-gram Jaccard + SimHash/汉明（近重复），
+      NaiveBayes（字符 n-gram，拉普拉斯平滑，模型落 JSON，缺模型返回 None），MAD 离群
+- [x] **dirscan 接 ML**：软 404 在基线不稳定（≥2 种 md5）时用 Jaccard 兜底判模板页（`dirscan.ml_template` 默认开）；
+      长度离群点名到日志（`dirscan.ml_outlier` 默认开，**不动入库字段**）
+- [x] **vulnscan 接 ML**：POC 优先级 `checks.poc_priority`（默认关，读 data/ml/poc_model.json，只改"先跑谁"）
+- [x] **portscan 接 ML**：服务识别 `portscan.ml_service`（默认关，读 data/ml/service_model.json）
+- [x] **资产关系图**：任务详情页子域名页签顶部缩进树（主域→子域名→IP→端口/服务，已探到站点标 ✓已测；
+      只画归属本项目的子域名，拓展域名仍走自己页签）
+- [x] **复测闭环建议**：三态旁给复核建议（reproduced→建议确认存在 / fixed→建议判误报 / unconfirmed→需人工），
+      单一产地 `retest_hint`；详情页漏洞页签补复测徽章
+- [x] **策略页覆盖收口**：POST 映射把页面无输入框的键全部原样带回，判据从 3 段推到全部 26 段
+      （`set(DEFAULTS[段])-set(POST[段])==∅`，例外段 tools/dicts/http/queue/dev 显式列出）
+- [x] **截图失败自动重试**：超时翻倍 / 3xx 换落地页再截，沿用原 URL 产物名，两次原因都写进去
+- [x] **相关性阈值可配**：`github.weak_downgrade` + `github.relevance_whitelist`（模糊/白名单）
+- [x] **multileak GUI 开关**：策略页勾选框 + POST 映射（此前只在配置级，存一次会丢）
+- [x] **smoke 依赖自检**：系统 python 跑时给可照做的指引而非裸栈
+- [x] 回归：全量 `tests/smoke.py` → `SMOKE PASS`（5177 行 / AssertionError 0）；新增判据组 [8bc]/[8bd]/[8be]；
+      行尾全部字节级改动
+- [ ] 未做：GitLab 源（缺可用 token 与真样本）；ML 两处（POC 优先级/服务分类）默认关且不带模型，
+      需用你自己的历史样本训练后放 data/ml/

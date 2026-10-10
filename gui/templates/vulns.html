@@ -104,7 +104,8 @@
           {% else %}<span class="muted small">待复核</span>{% endif %}
           {# 续150：独立复测三态（仅在跑过复测时显示） #}
           {% if v.retest_state %}<span class="badge {{ 'st-done' if v.retest_state == 'reproduced' else ('st-failed' if v.retest_state == 'fixed' else 'st-pending') }}"
-              title="独立复测（{{ v.retested_at or '' }}）">{{ {'reproduced': '仍可复现', 'fixed': '已修复', 'unconfirmed': '无法确认'}.get(v.retest_state, v.retest_state) }}</span>{% endif %}</td>
+              title="独立复测（{{ v.retested_at or '' }}）">{{ {'reproduced': '仍可复现', 'fixed': '已修复', 'unconfirmed': '无法确认'}.get(v.retest_state, v.retest_state) }}</span>
+          {% set _rh = retest_hint(v.retest_state) %}{% if _rh %}<span class="muted small">（{{ _rh }}）</span>{% endif %}{% endif %}</td>
         <td class="evidence"><details><summary class="muted">展开</summary>
           <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre>
           {% if v.packets %}<p class="muted small">数据包（请求行 / 状态与长度 / 关键响应头 / 正文指纹；凭据值一律掩码）</p>

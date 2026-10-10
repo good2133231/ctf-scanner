@@ -22,6 +22,12 @@ SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 # 复核状态（P1-1）在报告里的展示名
 REVIEW_LABEL = {"": "待复核", "confirmed": "已确认", "false_positive": "误报"}
 
+# 复测三态（续150）在报告里的展示名。取值集合与 `db.RETEST_STATES` 一一对应：
+# ""（未复测）/ reproduced（仍可复现）/ fixed（已修复）/ unconfirmed（无法确认）。
+# **「无法确认」≠「已修复」**：没探到目标时记前者，绝不把"没打中"写成"已修好"。
+RETEST_LABEL = {"": "未复测", "reproduced": "仍可复现", "fixed": "已修复",
+                "unconfirmed": "无法确认"}
+
 # 报告里「资产小节」的展示上限：这是**可读性护栏**（续55 已确认为刻意设计，不是 bug），
 # 但"只列前 N 条、不说还有多少"会让读者**无法判断自己看到的是不是全部** —— 续56 起把总数
 # 写进小节标题（只在真的被截断时写）。
@@ -174,6 +180,40 @@ def _site_cells(s):
             if rd["jumped"] and rd["final_url"] else "")
     return rd["status"], ((rd["title"] or "-") + jump)
 
+def _sub_note(r):
+    """子域名行的「归属」标注（续150 真实IP 判定）：真实IP / 多IP / CDN / 未解析。
+
+    判据与 GUI 子域名页 `_sub_rows()` 的 `ip_kind` **同一口径**：CDN 优先（有 CNAME 厂商即
+    判 CDN）、其次看解析 IP 个数（含逗号=多IP）、再退到单 IP（真实IP）、最后空=未解析。
+    报告与页面各拼一遍会互相"纠错"，所以这里与页面共用一个判定思路。
+    """
+    try:
+        ip = str(r["ip"] or "")
+        cdn = str(r["cdn"] or "")
+    except (KeyError, IndexError, TypeError):
+        return ""
+    if cdn:
+        return f"[CDN {cdn}]"
+    if not ip:
+        return "[未解析]"
+    if "," in ip:
+        return f"[多IP {ip}]"
+    return f"[真实IP {ip}]"
+
+
+def _retest_counts(vulns):
+    """复测三态计数（报告台账用）：仍可复现 / 已修复 / 无法确认。"""
+    out = {"reproduced": 0, "fixed": 0, "unconfirmed": 0}
+    for v in vulns or []:
+        try:
+            st = str(v["retest_state"] or "")
+        except (KeyError, IndexError, TypeError):
+            continue
+        if st in out:
+            out[st] += 1
+    return out
+
+
 def _append_count(task):
     """续25：任务被"追加执行"的次数（0 = 从未追加）。`options` 是 JSON 文本。"""
     try:
@@ -260,16 +300,21 @@ def generate(task_id, full=False):
         if review["false_positive"]:
             line += "（误报不计入上表，见文末附录）"
         lines.append(line)
+    _rt = _retest_counts(all_vulns)
+    if _rt["reproduced"] or _rt["fixed"] or _rt["unconfirmed"]:
+        lines.append(f"> 人工复测：仍可复现 {_rt['reproduced']} ｜ 已修复 {_rt['fixed']} "
+                     f"｜ 无法确认 {_rt['unconfirmed']}（无法确认＝没探到，不等于已修复）")
     lines.append("")
     if vulns:
         lines.append("## 潜在漏洞")
         lines.append("")
-        lines.append("| 级别 | 名称 | 检查/POC | OWASP | 目标 | 复核 |")
-        lines.append("|---|---|---|---|---|---|")
+        lines.append("| 级别 | 名称 | 检查/POC | OWASP | 目标 | 复核 | 复测 |")
+        lines.append("|---|---|---|---|---|---|---|")
         for v in vulns:
             lines.append(f"| {_c(v['severity'])} | {_c(v['name'])} | {_c(v['poc_id'])} | "
                          f"{_c(v['owasp'] or '-')} | {_c(v['target'])} | "
-                         f"{_c(REVIEW_LABEL.get(v['review'] or '', '待复核'))} |")
+                         f"{_c(REVIEW_LABEL.get(v['review'] or '', '待复核'))} | "
+                         f"{_c(RETEST_LABEL.get(v['retest_state'] or '', '未复测'))} |")
         lines.append("")
     if flags:
         # 排在「潜在漏洞」之后：CTF 里这是最该先看到的东西，但它**不是漏洞结论** ——
@@ -345,7 +390,8 @@ def generate(task_id, full=False):
         lines.append("## " + _cap_title("子域名", len(subs), CAP_SUBS))
         lines.append("")
         lines.append("```")
-        lines.extend(_idn(r["domain"]) for r in subs[:CAP_SUBS])
+        lines.extend(f"{_idn(r['domain'])} {_sub_note(r)}".rstrip()
+                     for r in subs[:CAP_SUBS])
         lines.append("```")
         lines.append("")
     if dirs:
@@ -473,16 +519,22 @@ def generate_html(task_id, full=False):
         if review["false_positive"]:
             line += "（误报不计入概览，见文末附录）"
         p.append(line + "</div>")
+    _rt = _retest_counts(all_vulns)
+    if _rt["reproduced"] or _rt["fixed"] or _rt["unconfirmed"]:
+        p.append(f'<div class="note">人工复测：仍可复现 {_rt["reproduced"]} ｜ '
+                 f'已修复 {_rt["fixed"]} ｜ 无法确认 {_rt["unconfirmed"]}'
+                 "（无法确认＝没探到，不等于已修复）</div>")
     if vulns:
         p.append("<h2>漏洞趋势统计（本任务级别分布，已判误报不计入）</h2>")
         p.append('<table><thead><tr><th>级别</th><th>数量</th><th>占比</th></tr></thead><tbody>'
                  + _sev_bars(by_sev, len(vulns)) + "</tbody></table>")
         p.append("<h2>潜在漏洞</h2>")
         p.append(_html_table(
-            ["级别", "名称", "检查/POC", "OWASP", "目标", "复核"],
+            ["级别", "名称", "检查/POC", "OWASP", "目标", "复核", "复测"],
             [[f'<span class="sev sev-{_h(v["severity"])}">{_h(v["severity"])}</span>',
               _h(v["name"]), _h(v["poc_id"]), _h(v["owasp"] or "-"), _h(v["target"]),
-              _h(REVIEW_LABEL.get(v["review"] or "", "待复核"))] for v in vulns]))
+              _h(REVIEW_LABEL.get(v["review"] or "", "待复核")),
+              _h(RETEST_LABEL.get(v["retest_state"] or "", "未复测"))] for v in vulns]))
     if flags:
         p.append("<h2>" + _h(SECRETS_TITLE) + "</h2>")
         p.append(_html_table(
@@ -529,7 +581,8 @@ def generate_html(task_id, full=False):
               _h(c["sha256"] or "-")] for c in certs[:CAP_CERTS]]))
     if subs:
         p.append("<h2>" + _cap_title("子域名", len(subs), CAP_SUBS) + "</h2>")
-        p.append("<pre>" + _h("\n".join(_idn(r["domain"]) for r in subs[:CAP_SUBS])) + "</pre>")
+        p.append("<pre>" + _h("\n".join(
+            (f"{_idn(r['domain'])} {_sub_note(r)}").rstrip() for r in subs[:CAP_SUBS])) + "</pre>")
     if dirs:
         p.append("<h2>" + _cap_title("目录发现", len(dirs), CAP_DIRS) + "</h2>")
         p.append(_html_table(["状态", "路径"],
@@ -593,6 +646,7 @@ def generate_jsonl(task_id):
             "vulns": len(all_vulns), "leads": len(leads), "secrets": len(d["flags"]),
         },
         "review": review,
+        "retest": _retest_counts(all_vulns),
     })
     for v in all_vulns:
         emit_row("vuln", v)

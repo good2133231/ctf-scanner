@@ -146,6 +146,8 @@ checks:
   disabled_checks: []
   poc_link_tags: true
   poc_max_per_site: 80
+  # 续151 无依赖 ML：POC 按学习到的命中概率排序（需 data/ml/poc_model.json；默认关）
+  poc_priority: false
 subdomain:
   # 子域名资产的 IP/CNAME 回填与 CDN 标记（纯 DNS 只读查询，不发 HTTP）
   max_resolve: 500
@@ -182,6 +184,8 @@ portscan:
   banner: true
   # auto = fscan → nmap → 内置 TCP connect；也可钉住 fscan / nmap / builtin
   engine: auto
+  # 续151 无依赖 ML：banner 字符 n-gram 朴素贝叶斯补服务识别（需 data/ml/service_model.json；默认关）
+  ml_service: false
 jsmine:
   enabled: true
   max_pages: 20
@@ -209,6 +213,10 @@ dirscan:
   recursive_depth: 1        # 续144：默认往下一层；层数上限，0 = 关闭
   recursive_max_dirs: 5     # 每站点**所有层合计**最多递归多少个目录
   recursive_max_paths: 40   # 每个递归目录再打多少条浅扫精选字典
+  # 续151 无依赖 ML：软 404 模板页用 n-gram Jaccard 兜底（md5/长度对不上时）；默认开
+  ml_template: true
+  # 续151 无依赖 ML：把长度离群的 200 命中点名到日志（只提示、不改入库）；默认开
+  ml_outlier: true
 vulnscan:
   enabled: true
 afrog:
@@ -322,6 +330,9 @@ github:
   per_page: 30
   max_leads: 30
   timeout: 20
+  # 续151：弱相关降级（仓库/路径都不含域名或主标签时降为 info，只标不丢）与相关性白名单
+  weak_downgrade: true
+  relevance_whitelist: []
 multileak:
   # 多平台公开代码检索（默认关）：GitHub 之外的只读检索源（默认 grepapp 免 key），只产出线索（leads 表）。
   # 边界见 scanner/multileak.py 文件头：只落元数据（不保存文件内容）、auth=False、请求头不带任务登录态。

@@ -69,6 +69,8 @@
       <label class="chk"><input type="checkbox" name="vulnscan_enabled" value="1"
         {{ 'checked' if s.vulnscan.enabled }}> 启用漏洞初筛阶段（取消勾选＝整阶段跳过，只做资产测绘）</label>
       <label>每站点 POC 上限 <input name="poc_max_per_site" value="{{ s.checks.poc_max_per_site }}"></label>
+      <label class="chk"><input type="checkbox" name="poc_priority" value="1"
+        {{ 'checked' if s.checks.poc_priority }}> ML·POC 优先级（按 data/ml/poc_model.json 的命中概率排序；默认关）</label>
       <label class="chk"><input type="checkbox" name="favicon_md5" value="1"
         {{ 'checked' if s.limits.favicon_md5 }}> 采集 favicon MD5（POC 可用它做零请求前置判定）</label>
     </div>
@@ -256,6 +258,8 @@
         <option value="nmap" {{ 'selected' if s.portscan.engine == 'nmap' }}>只用 nmap</option>
         <option value="builtin" {{ 'selected' if s.portscan.engine == 'builtin' }}>只用内置 TCP connect</option>
       </select></label>
+    <label class="chk"><input type="checkbox" name="portscan_ml_service" value="1"
+      {{ 'checked' if s.portscan.ml_service }}> ML·服务识别（banner 字符 n-gram 补服务名，需 data/ml/service_model.json；默认关）</label>
     <p class="muted small">fscan 不是必需项：把它放进 PATH 或填 <code>tools.fscan</code> 才会用。
       调用时<b>强制带 <code>-np -nobr -nopoc</code></b>（跳过存活探测、关闭内置暴力破解与 Web POC），
       只用它的端口发现能力；老版本不认 <code>-nopoc</code> 时会去掉它重试，<code>-np -nobr</code> 始终保留。</p>
@@ -312,6 +316,10 @@
       <input name="dirscan_recursive_max_dirs" value="{{ s.dirscan.recursive_max_dirs }}"></label>
     <label>每个递归目录再打多少条浅扫精选字典
       <input name="dirscan_recursive_max_paths" value="{{ s.dirscan.recursive_max_paths }}"></label>
+    <label class="chk"><input type="checkbox" name="dirscan_ml_template" value="1"
+      {{ 'checked' if s.dirscan.ml_template }}> ML·软 404 近重复兜底（n-gram Jaccard，md5/长度对不上时判模板页）</label>
+    <label class="chk"><input type="checkbox" name="dirscan_ml_outlier" value="1"
+      {{ 'checked' if s.dirscan.ml_outlier }}> ML·长度离群提示（把明显离群的 200 命中点名到日志）</label>
     <p class="muted small">目录递归只在<b>深扫</b>（<code>mode=deep</code> 或建任务勾「全目录深扫」）
       里生效。请求量估算：一层递归 ≈ <code>+目录数 ×（3 个软 404 基线 + 每目录条数）</code>，
       默认 5 目录 × 40 条时约 <b>+215</b> 请求/站（单站浅扫本身约 153）——
@@ -475,6 +483,11 @@
       <label>单任务线索上限 <input name="github_max_leads" value="{{ s.github.max_leads }}"></label>
       <label>请求超时（秒） <input name="github_timeout" value="{{ s.github.timeout }}"></label>
     </div>
+    <label class="chk"><input type="checkbox" name="github_weak_downgrade" value="1"
+      {{ 'checked' if s.github.weak_downgrade }}> 弱相关降级（仓库/路径都不含域名或主标签时降为 info，只标不丢）</label>
+    <div class="row">
+      <label>相关性白名单（逗号分隔子串，命中即视为相关） <input name="github_relevance_whitelist" value="{{ s.github.relevance_whitelist|join(',') }}"></label>
+    </div>
     <p class="muted small">需先在本机 <code class="mono">config/keys.yaml</code> 填
       <code class="mono">github.token</code>（GitHub 代码搜索接口<b>要求认证</b>；
       未配置时<b>一次请求都不发</b>，日志里会写明原因，而不是报"没查到"）。
@@ -484,6 +497,21 @@
       <code class="mono">Authorization</code> 头发出，<b>任务级登录态（目标侧 Cookie / Token）
       绝不会发给 GitHub</b>。三项限额的理由：代码搜索限流约 <b>10 次/分钟</b>，
       所以只查目标的<b>注册域</b>（子域名与主域命中高度重叠），不逐个查子域名。</p>
+    <label class="chk"><input type="checkbox" name="multileak_enabled" value="1"
+      {{ 'checked' if s.multileak.enabled }}> 多平台公开代码检索（续150）：GitHub 之外的只读源（grep.app，免 key）</label>
+    <div class="row">
+      <label>提供方 provider <input name="multileak_provider" value="{{ s.multileak.provider }}"></label>
+      <label>最多注册域数 <input name="multileak_max_domains" value="{{ s.multileak.max_domains }}"></label>
+      <label>最多查询次数 <input name="multileak_max_queries" value="{{ s.multileak.max_queries }}"></label>
+      <label>单次取回条数 <input name="multileak_per_page" value="{{ s.multileak.per_page }}"></label>
+      <label>单任务线索上限 <input name="multileak_max_leads" value="{{ s.multileak.max_leads }}"></label>
+      <label>请求超时（秒） <input name="multileak_timeout" value="{{ s.multileak.timeout }}"></label>
+    </div>
+    <p class="muted small">当前只实现 <code class="mono">grepapp</code>（免 key 公开接口）；
+      GitLab 匿名检索已要求认证、无真样本，<b>未实现</b>（见 <code class="mono">scanner/multileak.py</code> 文件头）。
+      与 GitHub 检索同一条边界：<b>只落元数据</b>（仓库 / 文件路径 / 命中规则名），
+      <b>不保存文件内容</b>；请求一律 <code class="mono">auth=False</code>，
+      <b>任务级登录态绝不外发</b>；<b>不写 vulns、不计入漏洞数</b>。</p>
   </section>
 
   <section class="panel collapsible" data-panel="limits">

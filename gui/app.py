@@ -538,6 +538,60 @@ def _dir_url(site_url, path):
     return base.rstrip("/") + ("" if p.startswith("/") else "/") + p
 
 
+def _asset_tree(task_id):
+    """资产关系（续151，借鉴 ARTEX 的父子图**思路**，落地成服务端缩进树）：
+        root_domain → subdomain → ip → port(service)。
+
+    纯聚合库里已有数据（零请求）：子域名的解析 IP/CDN + 端口表。"已测"= 该主机出现了存活站点
+    （父子图上的"覆盖度"高亮）；`extdom.base_of` 取注册域作为树根（与拓展域名分组同口径）。
+    页面渲染**绝不因它失败**：任何异常都退回空树（模板据此整块不渲染）。
+    """
+    try:
+        subs = [dict(r) for r in db.list_subdomains(task_id)]
+        sites = [dict(r) for r in db.list_sites(task_id)]
+        ports = [dict(r) for r in db.list_ports(task_id)]
+    except Exception:                                       # noqa: BLE001 - 渲染不因它失败
+        return []
+    live_hosts = set()
+    for s in sites:
+        h = str(s.get("host") or "").strip().lower()
+        if not h and s.get("url"):
+            try:
+                from urllib.parse import urlsplit as _us
+                h = _us(str(s["url"])).netloc.lower()
+            except Exception:                               # noqa: BLE001
+                h = ""
+        if h:
+            live_hosts.add(h)
+    ports_by_host, ports_by_ip = {}, {}
+    for p in ports:
+        if p.get("host"):
+            ports_by_host.setdefault(str(p["host"]).strip().lower(), []).append(p)
+        if p.get("ip"):
+            ports_by_ip.setdefault(str(p["ip"]).strip(), []).append(p)
+    roots = {}
+    for r in subs:
+        d = str(r.get("domain") or "").strip()
+        if not d:
+            continue
+        # 只画**归属本项目的**子域名：`js:` / `osint:` 来源是拓展域名（它们有自己的页签，
+        # 混进子域名树会让"这个域名到底属不属于目标"变得含糊，见 db.OWN_SUBDOMAIN_WHERE）。
+        _src = str(r.get("source") or "")
+        if _src.startswith("js:") or _src.startswith("osint:"):
+            continue
+        try:
+            root = extdom.base_of(d) or d
+        except Exception:                                   # noqa: BLE001
+            root = d
+        ip = str(r.get("ip") or "").strip()
+        roots.setdefault(root, []).append({
+            "domain": d, "ip": ip, "cdn": str(r.get("cdn") or ""),
+            "tested": d.lower() in live_hosts,
+            "ports": ports_by_host.get(d.lower()) or ports_by_ip.get(ip) or [],
+        })
+    return [{"root": k, "subs": v} for k, v in sorted(roots.items())]
+
+
 def _shape_note(cfg):
     """策略页那句"现在到底在跑哪些形状"：数字与名单一律从配置 + 形状表现取（§5.19）。
 
@@ -595,9 +649,16 @@ def create_app():
     app.jinja_env.globals["no_packets_hint"] = NO_PACKETS_HINT
     app.jinja_env.globals["no_title_hint"] = NO_TITLE_HINT
     # 续151（用户点单）：数据包 → curl / Python 脚本；目录命中 → 可点开链接
+    # 续151（用户点单"复测闭环"）：按复测三态给一句**复核建议**（只提示，人工拍板）。
+    # 单一产地：vulns.html / task_detail.html 都调这个全局，不在模板里各抄一份。
+    def _retest_hint(state):
+        return {"reproduced": "建议复核：确认存在", "fixed": "建议复核：判误报",
+                "unconfirmed": "无从判断，需人工确认"}.get(str(state or ""), "")
+    app.jinja_env.globals["retest_hint"] = _retest_hint
     app.jinja_env.globals["packet_curl"] = packetcodec.to_curl
     app.jinja_env.globals["packet_python"] = packetcodec.to_python
     app.jinja_env.globals["dir_url"] = _dir_url
+    app.jinja_env.globals["asset_tree"] = _asset_tree   # 续151：资产关系图
     db.init_db()
     # 启动时对账（续49 语义变更）：进程重启后，之前 status='running' 的孤儿任务没人推进 ——
     # 带队列运行规格的**重新入队**（等 worker 接着跑），无规格的（CLI 直跑 / 老库行）仍标 failed；
@@ -3182,12 +3243,30 @@ def create_app():
         nonlocal settings
         if request.method == "POST":
             f = request.form
+            _g0 = settings.get("gui") or {}
+            _l0 = settings.get("limits") or {}
+            _j0 = settings.get("jsmine") or {}
+            _p0 = settings.get("passive") or {}
+            _fl0 = settings.get("flags") or {}
             try:
                 data = {
                     # 续117：gui 段只有 host/port —— 口令类的值不再往**被 git 跟踪**的
                     # settings.yaml 里写（登录一律走 users 表的 PBKDF2 派生值）
                     "gui": {"host": f.get("host", "127.0.0.1"),
-                            "port": int(f.get("port", 5000) or 5000)},
+                            "port": int(f.get("port", 5000) or 5000),
+                            # 以下键**页面上没有输入框**，原样带回（save_settings 是整份重写）
+                            "allowed_hosts": list(
+                                (_g0.get("allowed_hosts") or [])),
+                            "allowed_hosts_auto_local": bool(
+                                _g0.get("allowed_hosts_auto_local", False)),
+                            "behind_proxy": bool(_g0.get("behind_proxy", False)),
+                            "secure_cookie": bool(_g0.get("secure_cookie", False)),
+                            "web_path_random": bool(_g0.get("web_path_random", True)),
+                            "edge_auth": dict(_g0.get("edge_auth") or {"enabled": False}),
+                            "keys_ask_passphrase": bool(
+                                _g0.get("keys_ask_passphrase", True)),
+                            "login_lockout": dict(_g0.get("login_lockout") or {}),
+                            "audit": dict(_g0.get("audit") or {})},
                     "limits": {"max_workers": int(f.get("max_workers", 20) or 20),
                                "http_timeout": int(f.get("http_timeout", 10) or 10),
                                "verify_tls": f.get("verify_tls") == "1",
@@ -3212,7 +3291,15 @@ def create_app():
                                "external_max_requests": int(
                                    f.get("external_max_requests", 0) or 0),
                                "external_max_port_probes": int(
-                                   f.get("external_max_port_probes", 0) or 0)},
+                                   f.get("external_max_port_probes", 0) or 0),
+                               # 以下几项**页面无输入框**（爆破词数/并发/组合/二层遍历），原样带回
+                               "brute_max_words": int(_l0.get("brute_max_words", 0) or 0),
+                               "brute_fallback_max": int(_l0.get("brute_fallback_max", 3000) or 0),
+                               "brute_workers": int(_l0.get("brute_workers", 64) or 64),
+                               "brute_combo_max": int(_l0.get("brute_combo_max", 4000) or 0),
+                               "brute_dict_warn_min": int(_l0.get("brute_dict_warn_min", 1000) or 0),
+                               "brute_max_domains": int(_l0.get("brute_max_domains", 50) or 50),
+                               "recrawl_max_hosts": int(_l0.get("recrawl_max_hosts", 300) or 300)},
                     # 检测策略：级别门槛 + POC 引擎总开关 + 按 OWASP 分类/检查项/级别关闭
                     "checks": {"min_severity": f.get("min_severity", "medium"),
                                "skip_severities": f.getlist("skip_severities"),
@@ -3220,9 +3307,12 @@ def create_app():
                                "disabled_categories": f.getlist("disabled_categories"),
                                "disabled_checks": f.getlist("disabled_checks"),
                                "poc_link_tags": f.get("poc_link_tags") == "1",
-                               "poc_max_per_site": int(f.get("poc_max_per_site", 80) or 80)},
+                               "poc_max_per_site": int(f.get("poc_max_per_site", 80) or 80),
+                               "poc_priority": f.get("poc_priority") == "1"},
                     "passive": {"enabled": f.get("passive_enabled") == "1",
-                                "timeout": int(f.get("passive_timeout", 20) or 20)},
+                                "timeout": int(f.get("passive_timeout", 20) or 20),
+                                # sources（留空=内置源表）页面无输入框，原样带回
+                                "sources": list(_p0.get("sources") or [])},
                     # 子域名收集：并集开关 + 自动提取主域（续145）。max_resolve / dns_timeout
                     # 页面上没有输入框，原样带回（save_settings 是整份重写，漏带就是把键删掉）。
                     "subdomain": {"max_resolve": int(
@@ -3257,7 +3347,9 @@ def create_app():
                                 "recursive_max_dirs": int(
                                     f.get("dirscan_recursive_max_dirs", 5) or 0),
                                 "recursive_max_paths": int(
-                                    f.get("dirscan_recursive_max_paths", 40) or 0)},
+                                    f.get("dirscan_recursive_max_paths", 40) or 0),
+                                "ml_template": f.get("dirscan_ml_template") == "1",
+                                "ml_outlier": f.get("dirscan_ml_outlier") == "1"},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
                     # 外部引擎 afrog（续121 接入；续149 默认开）；限速值由 scanner/afrog.py 的封顶再压一道
                     # 敏感信息 / flag 候选抽取（续148 由"flag 候选"改名）：零额外请求所以默认开；
@@ -3269,6 +3361,8 @@ def create_app():
                               "patterns": [x.strip() for x in
                                            (f.get("flags_patterns") or "").split(",") if x.strip()],
                               "max_len": int(f.get("flags_max_len", 200) or 200),
+                              # min_len 页面无输入框，原样带回
+                              "min_len": int(_fl0.get("min_len", 1) or 1),
                               "max_chars": int(f.get("flags_max_chars", 2000000) or 2000000),
                               "max_per_source": int(f.get("flags_max_per_source", 20) or 20),
                               "max_per_task": int(f.get("flags_max_per_task", 200) or 200)},
@@ -3307,12 +3401,16 @@ def create_app():
                                  "workers": int(f.get("portscan_workers", 64) or 64),
                                  "banner": f.get("portscan_banner") == "1",
                                  # auto / fscan / nmap / builtin（见 scanner/stages/portscan.py）
-                                 "engine": (f.get("portscan_engine") or "auto").strip()},
+                                 "engine": (f.get("portscan_engine") or "auto").strip(),
+                                 "ml_service": f.get("portscan_ml_service") == "1"},
                     "jsmine": {"enabled": f.get("jsmine_enabled") == "1",
                                "max_pages": int(f.get("jsmine_max_pages", 20) or 20),
                                "max_js": int(f.get("jsmine_max_js", 40) or 40),
                                "secrets": f.get("jsmine_secrets") == "1",
-                               "recrawl": f.get("jsmine_recrawl") == "1"},
+                               "recrawl": f.get("jsmine_recrawl") == "1",
+                               # blacklist / drop_absent_zone 页面无输入框，原样带回
+                               "blacklist": list(_j0.get("blacklist") or []),
+                               "drop_absent_zone": bool(_j0.get("drop_absent_zone", True))},
                     # 外部情报拓展（OSINT）：C 段反查 + favicon 反查，两项默认都关
                     "iprecon": {"enabled": f.get("iprecon_enabled") == "1",
                                 "api": f.get("iprecon_api", "") or
@@ -3391,7 +3489,20 @@ def create_app():
                                "max_queries": int(f.get("github_max_queries", 4) or 4),
                                "per_page": int(f.get("github_per_page", 30) or 30),
                                "max_leads": int(f.get("github_max_leads", 30) or 30),
-                               "timeout": int(f.get("github_timeout", 20) or 20)},
+                               "timeout": int(f.get("github_timeout", 20) or 20),
+                               # 续151（用户点单"relevance 阈值可配"）
+                               "weak_downgrade": f.get("github_weak_downgrade") == "1",
+                               "relevance_whitelist": [x.strip() for x in
+                                   (f.get("github_relevance_whitelist") or "").split(",")
+                                   if x.strip()]},
+                    # 多平台公开代码检索（续150-附 11-多平台）：默认关；只落元数据、只写 leads 表
+                    "multileak": {"enabled": f.get("multileak_enabled") == "1",
+                                  "provider": (f.get("multileak_provider") or "grepapp").strip(),
+                                  "max_domains": int(f.get("multileak_max_domains", 3) or 3),
+                                  "max_queries": int(f.get("multileak_max_queries", 4) or 4),
+                                  "per_page": int(f.get("multileak_per_page", 10) or 10),
+                                  "max_leads": int(f.get("multileak_max_leads", 30) or 30),
+                                  "timeout": int(f.get("multileak_timeout", 20) or 20)},
                 }
             except ValueError:
                 _s114 = load_settings()

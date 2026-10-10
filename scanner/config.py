@@ -233,6 +233,10 @@ DEFAULTS = {
         "disabled_checks": [],     # 按检查项 id 精确关闭，如 ["a01-open-redirect"]
         "poc_link_tags": True,     # 指纹→POC 联动：站点技术栈命中的 POC 优先执行（P1-1）
         "poc_max_per_site": 80,    # 每站点最多执行多少个 POC（联动命中项不受此上限约束）
+        # 续151（用户点单「尝试添加机器学习扫描」）：POC 优先级排序 —— 用 `data/ml/poc_model.json`
+        # （朴素贝叶斯，训练自历史的 (站点,poc)→命中/未命中）给候选打分排序。**默认关**；
+        # 没模型时一行说明、维持原顺序，绝不改变"哪些 POC 会被执行"的集合。
+        "poc_priority": False,
     },
     "subdomain": {
         # 子域名资产回填：给每个子域名解析出 A 记录 IP 与 CNAME 链，并按
@@ -293,6 +297,9 @@ DEFAULTS = {
         # 也可钉住 "fscan" / "nmap" / "builtin"。fscan 快得多（默认 600 线程，适合全端口），
         # 但输出格式随版本浮动；钉住的那个不可用时会退回内置实现并在日志里说明。
         "engine": "auto",
+        # 续151 无依赖 ML（默认关）：内建服务表与关键词都没认出来时，用 banner 的字符 n-gram
+        # 朴素贝叶斯补一个服务名（模型 `data/ml/service_model.json`）。没模型不动。
+        "ml_service": False,
     },
     "jsmine": {
         # JS 资产挖掘（P0-3）：从站点 JS 中提取域名/接口 URL/密钥，扩展资产面
@@ -348,6 +355,11 @@ DEFAULTS = {
         "recursive_max_dirs": 5,
         # 每个递归目录再打多少条浅扫精选字典（目录下只值当打高价值路径，不是再来一遍大字典）
         "recursive_max_paths": 40,
+        # 续151 无依赖 ML（默认开，但对**稳定站点**完全不触发）：软 404 模板页常带随机串/
+        # 时间戳，md5 与长度都对不上；基线正文不稳定时用字符 n-gram Jaccard 兜底判重。
+        "ml_template": True,
+        # 续151 无依赖 ML（默认开）：把**长度明显离群**的 200 命中点名到日志（只提示，不改入库）
+        "ml_outlier": True,
     },
     "vulnscan": {
         # 漏洞初筛阶段总开关。默认开；关闭后整阶段跳过（连请求都不发），
@@ -523,6 +535,12 @@ DEFAULTS = {
         "per_page": 30,            # 单次请求最多取回多少条命中（GitHub 上限 100）
         "max_leads": 30,           # 单任务最多入库多少条线索
         "timeout": 20,             # 单次请求超时（秒）
+        # 续151（用户点单"relevance 阈值可配"）：
+        #   weak_downgrade=false → 不做弱相关降级（旧行为：弱相关也按规则级别计）；
+        #   relevance_whitelist → 仓库名/文件路径里命中任一子串即视为"相关"（不判弱），
+        #     给"我确知这个仓库跟我们有关"留一个人工兜底，避免被误降到 info。
+        "weak_downgrade": True,
+        "relevance_whitelist": [],
     },
     "multileak": {
         # 多平台公开代码检索（续150-附 11-多平台，**默认关**）：GitHub 之外的只读检索源，

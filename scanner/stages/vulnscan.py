@@ -12,7 +12,7 @@
 from .base import Stage
 from .dirscan import TECH_LANG, _dict_kind
 from .. import afrog as afrog_mod
-from .. import config, db, flagfind
+from .. import config, db, flagfind, ml
 from ..evasion import detect as detect_waf
 from ..owasp import checks as owasp_checks
 from ..pocs import engine
@@ -119,6 +119,16 @@ class VulnscanStage(Stage):
         link_tags = ccfg.get("poc_link_tags", True) is not False
         poc_cap = int(ccfg.get("poc_max_per_site", 80) or 80)
         skip_sev = sorted(config.skip_severities(ctx.settings))
+        # 续151 无依赖 ML（**默认关**）：POC 优先级 —— 用 data/ml/poc_model.json（朴素贝叶斯，
+        # 训练自历史 (站点,poc)→命中）给候选打分排序。**没模型就维持原顺序**，绝不改变
+        # "哪些 POC 会被执行"的集合（那仍由注册表开关、级别门控、语言门控决定）。
+        _ml_poc = None
+        if ccfg.get("poc_priority") is True:
+            from pathlib import Path as _P151
+            _ml_poc = ml.NaiveBayes.load(_P151(config.BASE_DIR) / "data" / "ml" / "poc_model.json")
+            ctx.logger.info("[vulnscan] POC 优先级 ML：" + (
+                "已加载 data/ml/poc_model.json" if _ml_poc else
+                "未找到 data/ml/poc_model.json，维持原顺序（哪些 POC 参与不受影响）"))
         ctx.logger.info(
             f"[vulnscan] 目标 {len(sites)} 个；级别门槛 {floor}；"
             f"启用 POC {len(pocs)} 个{'（POC 引擎已关闭）' if not use_pocs else ''}；"
@@ -131,14 +141,26 @@ class VulnscanStage(Stage):
         evcfg = ctx.settings.get("evasion", {}) or {}
         do_waf = evcfg.get("waf_detect", True)
 
-        def _by_conf(items):
+        def _by_conf(items, site=None):
             """按置信度高低排序（P1-2）：high → medium → low，同级保持注册表内原顺序。
 
             `list.sort` 是稳定排序，所以"同级保持原顺序"是免费的；这里只加一层排序键，
             不改变"哪些 POC 会被执行"的集合 —— 那仍由注册表开关与级别门控决定。
+
+            续151：开了 `checks.poc_priority` 且模型已加载时，再按**学习到的命中概率**稳定排序
+            （概率相同者保持上面那层顺序）—— 只改"先跑谁"，不改"跑不跑"。
             """
-            return sorted(items, key=lambda p: -db.CONF_ORDER.index(
+            ordered = sorted(items, key=lambda p: -db.CONF_ORDER.index(
                 p.get("_confidence") or "low"))
+            if _ml_poc is not None and ordered and site is not None:
+                _feat = str(site.get("url") or "") + " " + str(site.get("tech") or "")
+
+                def _mk(p):
+                    _tg = " ".join(str(t) for t in ((p.get("info") or {}).get("tags") or []))
+                    return (_feat + " " + str(p.get("id") or "") + " " + _tg)
+                ordered = sorted(ordered, key=lambda p: -max(
+                    _ml_poc.predict_proba(_mk(p)).values() or [0.0]))
+            return ordered
 
         def _pocs_for(site):
             """指纹→POC 联动（P1-1）：站点技术栈命中的 POC 先跑，其余按上限补在后面。
@@ -159,15 +181,15 @@ class VulnscanStage(Stage):
                 ctx.logger.debug(f"[vulnscan] {site.get('url')}：语言 {_slang}，"
                                  f"按语言跳过 {len(pocs) - len(pool)} 个异构 POC")
             if not link_tags or not pool:
-                return _by_conf(pool)[:poc_cap] if pool else []
+                return _by_conf(pool, site)[:poc_cap] if pool else []
             tech = {t.strip().lower() for t in str(site.get("tech") or "").split(",") if t.strip()}
             if not tech:
-                return _by_conf(pool)[:poc_cap]
+                return _by_conf(pool, site)[:poc_cap]
             hit, rest = [], []
             for p in pool:
                 tags = {str(t).lower() for t in ((p.get("info") or {}).get("tags") or [])}
                 (hit if tags & tech else rest).append(p)
-            return _by_conf(hit) + _by_conf(rest)[:max(0, poc_cap - len(hit))]
+            return _by_conf(hit, site) + _by_conf(rest, site)[:max(0, poc_cap - len(hit))]
 
         def _scan_site(site):
             if ctx.stopped():

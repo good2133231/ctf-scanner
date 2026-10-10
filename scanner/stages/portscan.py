@@ -8,7 +8,7 @@
 且 CTF 里经常只给一个 Web 入口。需要时在 GUI「策略配置 → 端口与服务」里打开。
 """
 from .base import Stage
-from .. import cdn, db, dnsq, extcost, portscan
+from .. import cdn, config, db, dnsq, extcost, ml, portscan
 from ..utils import pool_run, resolve_host, which
 
 
@@ -208,6 +208,21 @@ class PortscanStage(Stage):
             seen.add(key)
             uniq.append(r)
         uniq.sort(key=lambda r: (r["host"], r["port"]))
+        # 续151 无依赖 ML（**默认关**）：内建服务表与关键词都没认出来时，用 banner 的字符
+        # n-gram 朴素贝叶斯补一个服务名（模型 data/ml/service_model.json）。**没模型不动**。
+        if cfg.get("ml_service") is True:
+            _sm = ml.NaiveBayes.load(config.BASE_DIR / "data" / "ml" / "service_model.json")
+            if _sm is None:
+                ctx.logger.info("[portscan] 开了 ML 服务识别但没找到 data/ml/service_model.json，跳过")
+            else:
+                _n = 0
+                for _r in uniq:
+                    if (str(_r.get("service") or "") in ("", "unknown")) and _r.get("banner"):
+                        _lab = _sm.predict(str(_r.get("banner")))
+                        if _lab:
+                            _r["service"] = _lab
+                            _n += 1
+                ctx.logger.info(f"[portscan] ML 服务识别补了 {_n} 个服务名（data/ml/service_model.json）")
         ctx.results["ports"] = uniq
         # 跨运行去重（续25）：追加执行时同一 (主机, 端口) 不再重复入库
         new_ports = db.drop_existing(ctx.task_id, "ports", ("host", "port"), uniq,

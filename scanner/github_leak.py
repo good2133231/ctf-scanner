@@ -247,19 +247,28 @@ def build_lead(domain, repo, path, rules, url="", weak=False):
             "detail": detail, "source": "GitHub", "url": url}
 
 
-def _leads_from(bucket):
+def _leads_from(bucket, weak_downgrade=True, whitelist=()):
     """把 `{(域名, 仓库, 路径): {rules, url}}` 摊平成按时序稳定的线索列表。
 
     续150：这里顺手判**弱相关** —— 仓库名与文件路径里都没有出现目标域名或其主标签时，
     这条命中很可能"搜歪了"（同名字符串/无关项目），交给 `build_lead` 降级 + 标注。
+
+    续151（用户点单"relevance 阈值可配"）：
+      · `weak_downgrade=False` → 关掉弱相关降级（弱相关也按规则级别计，只标不做级别处理）；
+      · `whitelist` 里任一子串出现在 仓库名/文件路径 → 直接视为**相关**（不判弱），
+        给"我确知这个仓库跟我有关"留一个人工兜底。
     """
+    wl = tuple(str(x).strip().lower() for x in (whitelist or ()) if str(x).strip())
+
     def _weak(domain, repo, path):
         blob = f"{repo} {path}".lower()
         nd = str(domain or "").strip().lower()
         lab = label_of(nd)
+        if any(x in blob for x in wl):
+            return False                     # 白名单命中 = 人为判定相关
         return not ((nd and nd in blob) or (lab and lab in blob))
     rows = [build_lead(domain, repo, path, sorted(slot["rules"]), slot.get("url") or "",
-                       weak=_weak(domain, repo, path))
+                       weak=(weak_downgrade and _weak(domain, repo, path)))
             for (domain, repo, path), slot in bucket.items()]
     # 排序：级别高的在前（凭据类规则 > 纯提及），同级按 域名 → 仓库:路径，保证输出可复现
     rows.sort(key=lambda r: (-_LEVEL_RANK.get(r["level"], 0), r["target"], r["code"]))
@@ -301,6 +310,14 @@ def collect(domains, settings, logger=None, stopped=None):
     headers = {"Accept": "application/vnd.github+json",
                "Authorization": f"Bearer {token}",
                "X-GitHub-Api-Version": "2022-11-28"}
+
+    # 续151：相关性阈值可配（缺省 = 旧行为：降级开、无白名单）
+    _raw_wd = cfg.get("weak_downgrade", True)
+    weak_downgrade = not (_raw_wd is False
+                          or str(_raw_wd).strip().lower() in ("false", "0", "no", "off"))
+    _wl = cfg.get("relevance_whitelist") or []
+    if not isinstance(_wl, (list, tuple)):
+        _wl = [x for x in str(_wl).split(",") if x.strip()]
 
     bucket, hits_total, queries, err = {}, 0, 0, ""
     capped = False
@@ -348,8 +365,8 @@ def collect(domains, settings, logger=None, stopped=None):
                 err = ("GitHub 配额已用尽（X-RateLimit-Remaining=0），"
                        "等配额重置后再跑，或调小 github.max_queries")
                 break
-    return _leads_from(bucket), {"queries": queries, "hits": hits_total,
-                                 "error": err, "capped": capped}
+    return _leads_from(bucket, weak_downgrade=weak_downgrade, whitelist=_wl), \
+        {"queries": queries, "hits": hits_total, "error": err, "capped": capped}
 
 
 def target_domains(targets, max_domains=DEFAULT_MAX_DOMAINS):

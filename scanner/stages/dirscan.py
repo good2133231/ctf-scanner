@@ -49,7 +49,7 @@ import time
 from urllib.parse import urlparse
 
 from .base import Stage
-from .. import db, fingerprint, flagfind
+from .. import db, fingerprint, flagfind, ml
 from ..config import resolve
 from ..utils import (read_lines, write_lines, pool_run, http_request, pick_python, run_cmd,
                      html_title)
@@ -822,12 +822,14 @@ class DirscanStage(Stage):
         ctx = self.ctx
         workers = int(limits.get("max_workers", 20))
         timeout = int(limits.get("http_timeout", 10))
+        _dcfg = (ctx.settings.get("dirscan") or {})   # 续151：ML 开关
         baseline = {}
         baseline_lock = threading.Lock()
         # 两类"整站统一响应"的计数（基址 → 被滤掉的路径数 / 那张页的特征）：
         # 复用 `baseline_lock` 同步（同一批线程、同一类一次性累加，没必要再多一把锁）
         blocked, blocked_sig = {}, {}          # 随机路径也被拦、正文同内容的 403
         waf, waf_title = {}, {}                # 标题命中 WAF/CDN 拦截页文案（厂商专属）
+        soft = {}                              # 近重复模板页（ML n-gram 兜底）计数
 
         def _baseline(u):
             """多样本软 404 基线（借鉴 dirmap 的 auto_check_404_page）。
@@ -858,6 +860,7 @@ class DirscanStage(Stage):
                     return cached
                 md5s, sizes = set(), set()
                 blk_md5s, blk_sizes = set(), set()
+                texts = []                             # 续151：留正文给 n-gram 兜底
                 for _ in range(3):
                     marker = f"/{random.randint(10 ** 6, 10 ** 7 - 1)}/ctfscan-none"
                     r = http_request(u.rstrip("/") + marker, timeout=timeout,
@@ -867,20 +870,21 @@ class DirscanStage(Stage):
                     digest = hashlib.md5((r.get("text") or "").encode(
                         "utf-8", "replace")).hexdigest()
                     md5s.add(digest)
+                    texts.append(r.get("text") or "")
                     if r.get("length"):
                         sizes.add(int(r["length"]))
                     if r.get("status") == 403:
                         blk_md5s.add(digest)
                         if r.get("length"):
                             blk_sizes.add(int(r["length"]))
-                baseline[u] = (md5s, sizes, blk_md5s, blk_sizes)
+                baseline[u] = (md5s, sizes, blk_md5s, blk_sizes, texts)
                 return baseline[u]
 
         def _hit(item):
             if ctx.stopped():
                 return None
             u, p, root = item
-            md5s, sizes, blk_md5s, blk_sizes = _baseline(u)
+            md5s, sizes, blk_md5s, blk_sizes, btexts = _baseline(u)
             url = u.rstrip("/") + "/" + p.lstrip("/")
             r = http_request(url, timeout=timeout, settings=ctx.settings, auth=True)
             if not r:
@@ -893,6 +897,19 @@ class DirscanStage(Stage):
             if st == 200:
                 if digest in md5s or (sizes and (r.get("length") or 0) in sizes):
                     return None
+                # 续151 无依赖 ML：软 404 模板页常带随机串/时间戳 ⇒ md5 与长度都对不上。
+                # 仅当基线正文本身就**不稳定**（3 个随机路径回了 ≥2 种 md5）时才兜底；
+                # 只对够长的正文（≥128 字节）判 n-gram Jaccard，避开超短文本不稳的那一档。
+                # 稳定站点的 3 个基线 md5 相同 ⇒ 走不到这里，既有行为一字不变。
+                if (_dcfg.get("ml_template", True) is not False) \
+                        and len(md5s) >= 2 and len(btexts) >= 2:
+                    _body = r.get("text") or ""
+                    if len(_body) >= 128:
+                        for _bt in btexts:
+                            if len(_bt) >= 128 and ml.near_dup_text(_bt, _body):
+                                with baseline_lock:
+                                    soft[u] = soft.get(u, 0) + 1
+                                return None
             # 命中页的标题：响应体已经在手里（上面算 md5 用过），提取 <title> 是零额外请求。
             # 为什么值得存：路径命中后光看 `/backup.tar.gz 200 1818` 判断不了这是真备份包
             # 还是一个"统一跳转页"；标题能立刻分辨（用户 2026-09-23 明确要求）。
@@ -939,6 +956,24 @@ class DirscanStage(Stage):
             ctx.logger.info(
                 f"[dirscan] {u} 的 {blocked[u]} 个路径返回与随机路径**完全相同**的 403 拦截页"
                 f"（长度 {blocked_sig.get(u)}），判为整站被拦、不计入目录发现")
+        for u in sorted(soft):
+            ctx.logger.info(
+                f"[dirscan] {u} 的 {soft[u]} 个路径正文与随机路径基线**近重复**"
+                f"（n-gram Jaccard 兜底；md5/长度对不上），判为软 404 模板、不计入目录发现")
+        # 续151 无依赖 ML：把**长度明显离群**的 200 命中点名出来（供人工优先看）。
+        # 只写日志、**不动入库字段**（note 仍是 builtin/dirmap —— 别的判据在吃它）。
+        if _dcfg.get("ml_outlier", True) is not False:
+            _by_site = {}
+            for _e in entries:
+                if int(_e.get("status") or 0) == 200 and _e.get("length"):
+                    _by_site.setdefault(_e["site_url"], []).append(int(_e["length"]))
+            for _u, _lens in sorted(_by_site.items()):
+                _outs, _med, _m = ml.mad_outliers(_lens)
+                if _outs:
+                    ctx.logger.info(
+                        f"[dirscan] {_u} 有 {len(_outs)} 个**长度离群**的 200 命中"
+                        f"（中位数 {_med:.0f}）—— 离群往往才是真文件，建议优先看"
+                        f"（离群长度：{', '.join(str(int(x)) for x in sorted(_outs))[:160]}）")
         return entries
 
     @staticmethod

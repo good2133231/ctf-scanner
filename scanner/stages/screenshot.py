@@ -68,6 +68,33 @@ class ScreenshotStage(Stage):
             want_title = not str(s.get("title") or "").strip()
             good, err, rtitle = screenshot.capture(url, out, ctx.settings, timeout=timeout,
                                                    throttle=ctx.throttle, want_title=want_title)
+            # 续151（用户点单）：失败**自动重试一次** —— 超时就把超时翻倍、3xx 就落到最终
+            # URL 再截一次。只在"重试策略真的变了"时才重发（换 URL 或加超时），且**沿用原始
+            # URL 的产物名**：否则重试成功的图会落到另一个文件、`sites.shot` 就对不上了。
+            # 无浏览器这类"重试也没用"的原因不重试；两次都失败时**两条原因都写进去**。
+            if not good and not ctx.stopped():
+                _low = (err or "").lower()
+                _no_browser = ("browser" in _low or "浏览器" in (err or ""))
+                _final = str(s.get("redirect_url") or "").strip()
+                _r_url, _r_timeout = url, timeout
+                if "timeout" in _low or "timed out" in _low or "超时" in (err or ""):
+                    _r_timeout = timeout * 2
+                elif _final and _final.rstrip("/") != str(url).rstrip("/"):
+                    _r_url = _final
+                else:
+                    _r_timeout = timeout * 2
+                if not _no_browser and (_r_url != url or _r_timeout != timeout):
+                    _why = (f"换落地页 {_final}" if _r_url != url
+                            else f"超时 {timeout}→{_r_timeout}s")
+                    ctx.logger.info(f"[screenshot] {url} 首次失败（{err}）→ 重试（{_why}）")
+                    _g2, _e2, _r2 = screenshot.capture(
+                        _r_url, out, ctx.settings, timeout=_r_timeout,
+                        throttle=ctx.throttle, want_title=want_title)
+                    if _g2:
+                        good, err, rtitle = True, "", (_r2 or rtitle)
+                        ctx.logger.info(f"[screenshot] {url} 重试成功（{_why}）")
+                    else:
+                        err = f"{err}（重试仍失败：{_e2}）"
             if want_title and str(rtitle or "").strip():
                 # 内存里也补上：screenshot 之后还有 osint / jsmine / dirscan / vulnscan 读这批站点行
                 s["title"] = rtitle

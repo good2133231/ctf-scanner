@@ -140,7 +140,11 @@
               <option value="" {{ 'selected' if not v.review }}>待复核</option>
               <option value="confirmed" {{ 'selected' if v.review == 'confirmed' }}>确认存在</option>
               <option value="false_positive" {{ 'selected' if v.review == 'false_positive' }}>误报</option>
-            </select></td>
+            </select>
+            {# 续151：独立复测三态徽章（只在跑过复测时显示），与「漏洞风险」页同一套口径 #}
+            {% if v.retest_state %}<span class="badge {{ 'st-done' if v.retest_state == 'reproduced' else ('st-failed' if v.retest_state == 'fixed' else 'st-pending') }}"
+                title="独立复测（{{ v.retested_at or '' }}）">{{ {'reproduced': '仍可复现', 'fixed': '已修复', 'unconfirmed': '无法确认'}.get(v.retest_state, v.retest_state) }}</span>
+            {% set _rh = retest_hint(v.retest_state) %}{% if _rh %}<span class="muted small">（{{ _rh }}）</span>{% endif %}{% endif %}</td>
             <td class="evidence"><details><summary class="muted">展开</summary>
               <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre>
               {% if v.packets %}<p class="muted small">数据包（请求行 / 状态与长度 / 关键响应头 / 正文指纹；凭据值一律掩码）</p>
@@ -254,6 +258,26 @@
 
 <div class="tabpane" id="pane-subs">
   <section class="panel">
+    {# 续151（借鉴 ARTEX 父子图思路）：资产关系缩进树 —— 主域 → 子域名 → IP → 端口/服务 #}
+    {% set _tree = asset_tree(task.id) %}
+    {% if _tree %}
+    <details class="asset-tree">
+      <summary>资产关系图（父子：主域 → 子域名 → IP → 端口/服务；<b>✓已测</b>＝该主机探到存活站点）</summary>
+      {% for g in _tree %}
+      <div class="at-root">▸ {{ g.root }} <span class="muted small">（{{ g.subs|length }} 个子域名）</span></div>
+      <ul class="at-list">
+        {% for n in g.subs %}
+        <li><span class="mono">{{ n.domain }}</span>
+          {% if n.tested %}<span class="badge st-done">✓已测</span>{% else %}<span class="muted small">未探到站点</span>{% endif %}
+          {% if n.cdn %}<span class="muted small">CDN:{{ n.cdn }}</span>{% endif %}
+          {% if n.ip %}<div class="muted small mono">└ IP {{ n.ip }}</div>{% endif %}
+          {% if n.ports %}<div class="muted small mono">└ 端口 {% for p in n.ports %}{{ p.port }}{% if p.service %}/{{ p.service }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% endfor %}
+    </details>
+    {% endif %}
     <form class="filters" method="get" action="{{ url_for('task_detail', task_id=task.id) }}#subs">
       <label class="muted">关键词
         <input name="sdq" value="{{ subs_q }}" placeholder="域名 / 来源 / CNAME / IP"></label>
