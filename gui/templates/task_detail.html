@@ -15,17 +15,13 @@
     title="{{ '从断点续跑：' + resume_rest|join(' / ') if resume_rest else '没有可用断点（任务未停在某个阶段上）' }}">续跑</button>
   <a class="btn-mini ghost" href="{{ url_for('diff_view') }}?task={{ task.id }}"
      title="与最近一个可比的上一轮对比（子域名/站点/指纹/端口/漏洞/flag 各算新增与消失）">与上次对比</a>
-  <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">导出 MD</a>
-  <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">导出 HTML</a>
-  <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='pdf') }}">导出 PDF</a>
-  <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='jsonl') }}">导出 JSONL</a>
-  {# 续59-2「按需加载」的出口：默认版报告把资产小节截断在 100/200 条（**可读性**护栏，不是丢数据），
-     小节标题会写"共 N 条，此处仅列前 M 条 —— 完整清单请用「完整版」导出"，这里就是那个入口。
-     JSONL 本来就是全量（机器格式），不在这里重复列。 #}
-  <span class="muted small" title="资产小节不截断：需要按资产逐条核对时用（默认版每节限 100/200 条）"
-    >完整版：<a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, full=1) }}">MD</a>
-    <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html', full=1) }}">HTML</a>
-    <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='pdf', full=1) }}">PDF</a></span>
+  <span class="muted small">导出：<a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">报告 MD</a>
+    <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='jsonl') }}">JSONL</a>
+    <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">HTML</a>
+    <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='pdf') }}">PDF</a></span>
+  {# 续59-2：默认版报告每节截在 100/200 条（可读性护栏，不是丢数据），小节标题会指「完整版」——下面就是那个出口 #}
+  <a class="btn-mini ghost" href="{{ url_for('task_export', task_id=task.id, full=1) }}"
+     title="资产小节不截断的那一版（默认版每节限 100/200 条）">完整版报告</a>
   <button class="btn-mini danger" data-op="delete" data-id="{{ task.id }}">删除</button>
   <span id="op-msg" class="muted"></span>
   <span class="spacer"></span>

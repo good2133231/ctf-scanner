@@ -6,18 +6,18 @@
   favicon MD5 是"零请求前置指纹"，POC 声明 favicon_md5_list 时会先与它比对（见 策略配置 → 检测策略）。
   <b>纯净模式</b>只显示 URL（适合对着列表逐个点开看），页顶可切换。</p>
 <section class="panel">
-  <p class="muted small">重复站点<b>默认隐藏</b>，两层口径都由同一个开关控制：
+  <p class="muted small">重复站点<b>默认隐藏</b>，两层口径都由同一个开关（「显示全部站点」）控制：
     ① <b>重叠资产（跨任务）</b>：同一 URL 在多个任务里都探到过时，只保留<b>最新一次扫描</b>的那条
     （行内是当次扫描的状态码/标题/长度/技术栈，留最旧那条等于一直看陈旧数据）
     —— 反复扫同一个目标时，站点列表不会再被撑成 N 倍；
-    ② <b>同任务内重复</b>：「标题 + 响应长度」完全相同的站点视为同一虚拟主机的别名/泛解析产物。
+    ② <b>同任务内同标题</b>（续147 起不再比响应长度）：标题一样的站点视为同一虚拟主机的别名/泛解析产物 —— 不同主机只要标题一样就只留最新一条。
     折叠只作用于当前页，分页条的「共 N 条」仍是未折叠的总数。
     {% if show_all %}
-      当前<b>显示全部</b>（含 {{ hidden }} 条重复）。
-      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs|replace('&all=1', '') }}">只看去重</a>
+      当前<b>显示全部站点</b>（含 {{ hidden }} 条同标题/重叠）。
+      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs|replace('&all=1', '') }}">只看去重后的站点</a>
     {% else %}
-      已折叠隐藏 {{ hidden }} 条。
-      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs }}&all=1">显示全部（含重叠）</a>
+      已折叠隐藏 {{ hidden }} 条（同标题只留最新一条，<b>入库一条没动</b>）。
+      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs }}&all=1">显示全部站点（含同标题与重叠）</a>
     {% endif %}
   </p>
   <p class="muted small">状态码：

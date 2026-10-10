@@ -852,7 +852,8 @@ def main():
     sites_default = c.get("/sites").get_data(as_text=True)
     assert sites_default.count(ov_title) == 0, "默认视图不应再显示旧任务的同名站点"
     assert sites_default.count(ov_new_title) == 1, sites_default.count(ov_new_title)
-    assert "显示全部（含重叠）" in sites_default
+    assert "显示全部站点（含同标题与重叠）" in sites_default, \
+        "站点页的放开开关要说清它放开的是哪两层（续147：第二层改成只看标题）"
     sites_all = c.get("/sites?all=1").get_data(as_text=True)
     assert sites_all.count(ov_title) == 1 and sites_all.count(ov_new_title) == 1, "放开后两条都在"
 
@@ -20751,6 +20752,69 @@ expression: r0()
           "两句解释在 gui/app.py 只有一份产地、模板只引变量、页面真渲染得到，"
           "且换掉 jinja 全局页面立刻跟着变（防模板另抄一份）｜空标题一格一个 tooltip，"
           "有标题的那行不被塞猜测")
+
+    # ---------------- [8az] 续147：站点按标题折叠 + 主题首屏定档 + 导出一行收口 ----------------
+    # 主理人三句原话：「同样的站点底下 标题也要去重…加一个功能页就是显示全站点」、
+    # 「整体色调默认就是浅色，切换功能页他先显示深色再显示浅色 也是一个bug」、
+    # 「（导出 MD/HTML/PDF/JSONL/完整版）不用搞这么多导出花里胡哨的」。
+    # 主题那两条**只能在真浏览器里验**（"首屏"这件事 test_client 看不见），落在
+    # `tests/browser_e2e.py [11]`；这里钉的是源码形状与页面结构。
+    from gui.app import _site_fold_key as _fk147
+
+    # ---- ① 折叠键：只看标题，不看长度；两条守卫（task_id / 空标题）不许丢 ----
+    _r147a = {"task_id": 7, "title": "  WEEX Help Center  ", "length": 635085}
+    _r147b = {"task_id": 7, "title": "WEEX Help Center", "length": 1298}
+    assert _fk147(_r147a) == _fk147(_r147b), "同标题不同长度仍不折 ⇒ 主理人要的那一折没生效"
+    # 判据要有牙（§6.1）：**旧键**在这两行上必须判成"不折"，否则 ① 恒真、什么也没守住
+    assert (_r147a["task_id"], _r147a["title"], _r147a["length"]) \
+        != (_r147b["task_id"], _r147b["title"], _r147b["length"]), \
+        "夹具这两行长度一样 → 新旧键同结果，① 是空写"
+    assert _fk147({"task_id": 8, "title": "WEEX Help Center", "length": 1298}) \
+        != _fk147(_r147b), "跨任务也折 = 把别人任务的站点藏掉（实测过 15 条折成 1 条）"
+    assert _fk147({"task_id": 7, "title": "   "}) is None, "空标题必须不参与折叠（宁留噪声不藏资产）"
+    assert _fk147({"task_id": 7}) is None and _fk147({}) is None, "缺 title 键不许抛"
+
+    # ---- ② 页面级：三行同标题不同长度，默认只剩一行；「显示全部站点」放开后三条都在 ----
+    _t147 = db.create_task("smoke-8az-fold", "http://f147.test/", ["probe"], {})
+    _same147 = f"8AZ-SAME-TITLE-{_t147}"
+    db.insert_sites(_t147, [{"url": f"http://h{i}.f147.test/", "host": f"h{i}.f147.test",
+                             "port": "80", "status": 200, "title": _same147,
+                             "length": 1000 + i * 7} for i in range(3)])
+    _d147 = c.get(f"/sites?task={_t147}").get_data(as_text=True)
+    assert _d147.count(_same147) == 1, f"默认视图应把三条同标题折成一条（实到 {_d147.count(_same147)}）"
+    assert "已折叠隐藏 2 条" in _d147, "被收起的条数必须报出来，不报＝让人以为资产丢了"
+    assert "入库一条没动" in _d147, "「这是显示口径、不是删数据」这句话要在（续112 同一口径）"
+    assert "显示全部站点（含同标题与重叠）" in _d147, "放开入口要说清它放开哪两层"
+    _u147 = c.get(f"/sites?task={_t147}&all=1").get_data(as_text=True)
+    assert _u147.count(_same147) == 3, "?all=1 没放开同标题折叠"
+    assert "（被折叠）" in _u147 and "当前<b>显示全部站点</b>" in _u147
+
+    # ---- ③ 主题：默认档与存储键只有一份产地，且赋值排在样式表之前 ----
+    _base147 = (ROOT / "gui" / "templates" / "base.html").read_text(encoding="utf-8", errors="replace")
+    _js147 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+    assert _base147.count("ctfscanner.theme") == 1, "存储键出现在两处 = 第二个产地（§5.14）"
+    assert "window.CTF_THEME_KEY" in _js147 and "ctfscanner.theme" not in _js147, \
+        "app.js 还自带一份键名 ⇒ 它那份可能与首屏那份漂掉"
+    assert '"dark"' not in _js147, "app.js 里还留着 dark 默认档：首屏之后会再改一次颜色，就是那道闪"
+    assert 'CTF_THEME_DEFAULT = "light"' in _base147, "默认档不是浅色 = 「默认就是浅色」没落地"
+    assert _base147.index('setAttribute("data-theme"') < _base147.index('<link rel="stylesheet"'), \
+        "赋值必须排在样式表之前，否则浏览器先按 :root（深色）画一遍再改"
+
+    # ---- ④ 导出：收成一行，四个格式都还在，「完整版」只剩一个入口 ----
+    _det147 = c.get(f"/tasks/{_t147}").get_data(as_text=True)
+    for _w147 in ("报告 MD", "JSONL", "HTML", "PDF", "完整版报告"):
+        assert _w147 in _det147, f"导出收口后详情页少了「{_w147}」入口（收的是排版，不是砍能力）"
+    for _o147 in ("导出 MD", "导出 HTML", "导出 PDF", "导出 JSONL", "完整版："):
+        assert _o147 not in _det147, f"旧的四连按钮文案还在：{_o147}"
+    assert _det147.count("完整版报告") == 1 and "full=1" in _det147, \
+        "「完整版」要剩一个入口 —— 报告小节截断提示指的就是它，没了就是假出口"
+
+    print("[8az] 续147 站点按标题折叠 + 主题首屏定档 + 导出一行 ok: "
+          "折叠键只看标题（长度不再参与），且**旧键在同一份夹具上判「不折」**——证明这条断言有牙｜"
+          "task_id 仍留在键里（跨任务不折）、空标题不参与、缺键不抛｜页面级三条同标题不同长度默认"
+          "只剩一条、放开后三条都在、被收起的条数照报、放开开关说清放开的是哪两层｜"
+          "主题：键与默认档只有一份产地、app.js 不再藏 dark、赋值排在样式表之前、默认档是浅色｜"
+          "导出收成一行：四个格式一个不少、旧「导出 X」四连按钮文案全部消失、完整版只剩一个入口")
 
 
     print("SMOKE PASS")

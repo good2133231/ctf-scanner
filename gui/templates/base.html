@@ -5,6 +5,18 @@
 <title>{% block title %}仪表盘{% endblock %} - CTFScanner</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="ctf-base" content="{{ request.script_root }}">
+{# 续147：配色必须在**首次绘制前**落到 <html> 上。以前只有 app.js 在页面末尾设 data-theme，
+   于是切功能页会先按 :root（深色）画一遍再变浅 —— 主理人报的「先显示深色再显示浅色」就是它。
+   默认档（浅色）与存储键的**唯一产地**就是下面这两行，app.js 只负责切换与记忆。 #}
+<script>
+window.CTF_THEME_KEY = "ctfscanner.theme";
+window.CTF_THEME_DEFAULT = "light";
+(function () {
+  var t = window.CTF_THEME_DEFAULT;
+  try { t = localStorage.getItem(window.CTF_THEME_KEY) || t; } catch (e) { /* 隐私模式：按默认档画 */ }
+  document.documentElement.setAttribute("data-theme", t);
+})();
+</script>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>

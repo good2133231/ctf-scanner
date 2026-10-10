@@ -832,6 +832,32 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     rep.check("[10] 点按钮不会把已填内容弄丢（按钮是 type=button，不提交表单）",
               page.ev("!!document.querySelector('#task-form button[data-ck-mode=all]')") is True
               and page.ev("document.querySelectorAll('#task-form form').length") == 0)
+    # ---------- [11] 主题：默认浅色，且换页时首屏就得是它（续147）----------
+    # 主理人原话：「整体色调默认就是浅色，以及我刚刚手动调成浅色 切换功能页 他先显示深色
+    # 再显示浅色 也是一个bug」。修法是把 `data-theme` 挪进 <head> 的内联脚本、排在样式表**之前**；
+    # 这里验的是两件事：① 空 localStorage 的首屏真的是浅色，② 换了页也不靠 app.js 二次改色。
+    page.ev("localStorage.removeItem('ctfscanner.theme')")
+    page.navigate(base + "/")
+    rep.eq("[11] 没存过配色时首屏 data-theme 就是 light",
+           page.ev("document.documentElement.getAttribute('data-theme')"), "light")
+    _bg11 = page.ev("getComputedStyle(document.documentElement)"
+                    ".getPropertyValue('--bg').trim()")
+    # 这两个色值是从 style.css 的 :root（深色 #0f1419）与 light 档（#f4f6f9）抄来的对照物：
+    # 调色板若整体改值，改这两处常量，别把断言删掉 —— 它守的是"默认到底是哪一套"。
+    rep.eq("[11] 首屏生效的 --bg 是浅色那套（不是 :root 的深色）", _bg11.lower(), "#f4f6f9")
+    _head11 = page.ev("document.head.innerHTML.split('style.css')[0]")
+    rep.check("[11] data-theme 的赋值排在样式表链接之前（否则先画一遍深色=那道闪）",
+              "CTF_THEME_KEY" in _head11 and "setAttribute" in _head11,
+              f"head 前段={(_head11 or '')[-90:]!r}")
+    page.ev("localStorage.setItem('ctfscanner.theme','violet')")
+    page.navigate(base + "/tasks")
+    rep.eq("[11] 换页时按记忆设好，不依赖 app.js 补一刀",
+           page.ev("document.documentElement.getAttribute('data-theme')"), "violet")
+    rep.check("[11] 下拉框显示的就是当前生效档（切页后不回到默认项）",
+              page.ev("document.getElementById('theme-select').value") == "violet",
+              page.ev("document.getElementById('theme-select').value"))
+    page.ev("localStorage.removeItem('ctfscanner.theme')")
+
 
 
 def run(settings=None):

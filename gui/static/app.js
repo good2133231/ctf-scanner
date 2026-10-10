@@ -405,19 +405,17 @@ function initLightbox() {
   document.addEventListener("keydown", e => { if (e.key === "Escape") shut(); });
 }
 
-/* ---------- 主题切换：写 html[data-theme]，localStorage 记忆 ---------- */
+/* ---------- 主题：默认档与存储键在 base.html 的首屏脚本里（那里必须早于首次绘制），这里只接线 ---------- */
 
 function initTheme() {
   const sel = document.getElementById("theme-select");
-  const KEY = "ctfscanner.theme";
-  let saved = "dark";
-  try { saved = localStorage.getItem(KEY) || "dark"; } catch (e) { /* 隐私模式 */ }
+  const KEY = window.CTF_THEME_KEY;
   const apply = t => {
     document.documentElement.setAttribute("data-theme", t);
     if (sel) sel.value = t;
-    try { localStorage.setItem(KEY, t); } catch (e) { /* 忽略 */ }
+    try { localStorage.setItem(KEY, t); } catch (e) { /* 隐私模式：本次会话内仍然切得动 */ }
   };
-  apply(saved);
+  apply(document.documentElement.getAttribute("data-theme") || window.CTF_THEME_DEFAULT);
   if (sel) sel.addEventListener("change", () => apply(sel.value));
 }
 

@@ -497,6 +497,18 @@ def _dev_fixture_stop():
     return True
 
 
+def _site_fold_key(row):
+    """站点列表「同标题折叠」的键 —— 只看标题，不看响应长度（续147）。
+
+    以前键里带 `length`，于是"几个主机同一个标题、长度各不相同"（真实 SPA/CDN 站点的常态）
+    一条都折不掉。`task_id` **必须留在键里**：这是跨任务视图，不带就会因为别的任务有同名标题
+    把本任务的站点折掉（实测把一个靶场的 15 条折成 1 条，资产归属丢失）。
+    空标题返回 None = 不参与折叠（宁留噪声不藏资产）。
+    """
+    title = (row.get("title") or "").strip()
+    return (row.get("task_id"), title) if title else None
+
+
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
@@ -2558,10 +2570,11 @@ def create_app():
         #    （`MAX(id)`）—— 站点行带的是当次扫描的 status/title/length/tech，留最旧那条意味着
         #    默认视图一直展示陈旧数据（重扫的目的正是刷新这些字段）；
         #    反复扫同一个目标时，站点列表也不会再被撑成 N 倍；
-        # 2) 同任务内重复（标题 + 响应长度完全相同），多为同一台虚拟主机的别名/泛解析产物
-        #    （灯塔类工具也做这层去重）。key 必须带 task_id：这是跨任务视图，若不带，
-        #    A 任务的站点会因为 B 任务有同名同长度的站点而被折叠掉（实测把同一个靶场的
-        #    15 条记录折成了 1 条，资产归属直接丢失）；标题为空的不参与折叠。
+        # 2) 同任务内**标题相同**的重复（续147 起不再看响应长度：真实站点的常态就是几个主机
+        #    同一个标题、长度各不相同，按长度折等于没折），多为同一台虚拟主机的别名/泛解析产物
+        #    （灯塔类工具也做这层去重）。key 必须带 task_id（见 `_site_fold_key`）：这是跨任务
+        #    视图，不带就会因为别的任务有同名标题把本任务的站点折掉（实测把一个靶场的 15 条
+        #    折成 1 条，资产归属直接丢失）；标题为空的不参与。
         # 注意：折叠只作用于**当前页**（分页条上的"共 N 条"是 SQL 的总数）。
         st_where, hide_st = _site_status_arg()
         base_where = _and_where(tw, None if show_all else db.OVERLAP_SITE_WHERE)
@@ -2573,10 +2586,9 @@ def create_app():
         seen, hidden = {}, 0
         for r in rows:
             r["dup"] = 0
-            title = (r.get("title") or "").strip()
-            if not title:
+            key = _site_fold_key(r)
+            if key is None:
                 continue
-            key = (r.get("task_id"), title, r.get("length"))
             first = seen.get(key)
             if first is None:
                 seen[key] = r
