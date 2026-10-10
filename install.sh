@@ -89,6 +89,8 @@ cat <<'EOF'
       纯本机自用、不想多一道门：把 config/settings.yaml 的 gui.edge_auth.enabled 改成 false。
 启动横幅会逐行进 logs/server.log（2MB×3 轮转）；控制台地址里那段**随机后台前缀刻意不落盘**
 （重启即换，它不是访问控制，别存进书签）。
+每个 HTTP 请求一行另进 logs/access.log（同一套轮转）：终端不再一屏一行刷请求，而文件里那段
+随机前缀已打码成 <前缀已脱敏> —— 这份日志看得出谁打了哪个页面，看不出后台路径。
 
 **本脚本刻意没做**（是 run_bootstrap.py 的红线，不是漏了）：
   · nmap / fscan / dirmap：要么装进系统目录（要 root）、要么要用 Go 自编译 —— 代跑就是越

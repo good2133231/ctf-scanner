@@ -20389,6 +20389,224 @@ expression: r0()
           "`wizard()` 在环境变量就摆在那儿时仍 ST_NO_TTY 且**不代填**（命令行那一档没漏进启动流程）｜"
           "AST 判据钉住 wizard 函数体不读 os.environ，且判据先自证抓得到")
 
+    # ---------------- [8ax] 续146-附3 横幅那句「访问审计仍然没有」+ 逐请求访问日志 ----------------
+    # 两件事共用一条红线：**讲出去的话必须与运行期真相一致**。
+    #   A：`_deploy_hints()` 那句「访问审计仍然没有」从续32 一路活到今天，而 `audit_log` 里一直有
+    #      记录（续48 落的，`gui.audit.enabled` 默认 True）—— 横幅讲假话比不讲更糟，人会据此以为
+    #      "反正查不到痕迹"。
+    #   B：`logs/server.log` 里**一条逐请求行都没有**（Werkzeug 只往 stderr 喷），用户点单
+    #      「静音 console + 单独落一个 logs/access.log」；而落盘就必须先解决"每一行里都带着本次
+    #      随机后台前缀"这条续138 的硬约束。
+    import logging as _lg8ax
+    import re as _re8ax
+    import tempfile as _tf8ax
+    from scanner import audit as _aud8ax
+    from scanner import log as _log8ax
+    from scanner import webpath as _wp8ax
+
+    _tmp8ax = Path(_tf8ax.mkdtemp(prefix="smoke8ax_"))
+    _wl8ax = _lg8ax.getLogger(_log8ax.WERKZEUG_LOGGER)
+    # 组内会换掉 werkzeug logger 上的 handler / 级别 / propagate，出组必须原样还回去。
+    # **先把别人留下的摘干净**：`serve()` 在本轮之前已被别的组调过（每组把自己的
+    # `CTFSCANNER_LOGS` 指到独立子目录，续98 的隔离口径），于是 logger 上早就挂着一个指向
+    # **那个**目录的 access.log 的 handler。留着它，下面所有「只有一个 handler」的断言就在
+    # 拿环境值当哨兵（§6.2 那一类）—— 实测第一轮就是这么红的。
+    _oh8ax = list(_wl8ax.handlers)
+    _oprop8ax, _olvl8ax = _wl8ax.propagate, _wl8ax.level
+    for _h in _oh8ax:
+        _wl8ax.removeHandler(_h)
+
+    def _cnt8ax(target):
+        """指向**这个文件**的 handler 有几个。用 `abspath` 而不是 `resolve()`：
+        那是 logging 自己算 `baseFilename` 的口径，`resolve()` 会解符号链接、换了挂载点就对不上。"""
+        _t = os.path.abspath(str(target))
+        return len([h for h in _wl8ax.handlers if getattr(h, "baseFilename", "") == _t])
+
+    # 判据先自证：它抓不到旧句子就等于后面所有断言都是空写（§6.1）
+    _FALSE_CLAIM = _re8ax.compile(r"(?:没有|不存在|尚无|还没)[^。；]{0,8}审计"
+                                  r"|审计[^。；]{0,12}(?:没有|不存在|尚无)")
+    assert _FALSE_CLAIM.search("**访问审计仍然没有**，请自行限制在可信网段。"), \
+        "判据抓不到那句旧文案 → 后面每一条都是空写"
+    assert not _FALSE_CLAIM.search("动作审计已开（gui.audit.enabled）：登录成功、账号操作"), \
+        "判据把真话也判成了假话 → 它咬掉任何提到审计的行"
+    try:
+        # ---- ① 表里**有**记录时，横幅两态都不许宣称"没有审计" ----
+        _aud8ax.record(_aud8ax.KIND_SETTINGS, "smoke-8ax", "127.0.0.1", detail="续146-附3 回归哨兵")
+        _tot8ax = _aud8ax.summary()["total"]
+        assert _tot8ax >= 1, f"审计表里没记录，①就成了空写：{_tot8ax}"
+        for _st8ax in ({"host": "0.0.0.0"},
+                       {"host": "0.0.0.0", "audit": {"enabled": False}},
+                       {"host": "0.0.0.0", "audit": {"enabled": True, "retention_days": 7}}):
+            _t8ax = "\n".join(gui_app._deploy_hints(_st8ax))
+            assert not _FALSE_CLAIM.search(_t8ax), \
+                f"表里有 {_tot8ax} 条记录，横幅却宣称没有审计：{_t8ax}"
+
+        # ---- ② 文案跟着配置走，且"记哪几类/留几天"都是**现取**的 ----
+        _on8ax = "\n".join(gui_app._deploy_hints({"host": "0.0.0.0",
+                                                  "audit": {"enabled": True,
+                                                            "retention_days": 7}}))
+        _off8ax = "\n".join(gui_app._deploy_hints({"host": "0.0.0.0",
+                                                   "audit": {"enabled": False}}))
+        assert "动作审计已开" in _on8ax and "留 7 天" in _on8ax, _on8ax
+        assert "不留任何动作痕迹" in _off8ax, _off8ax
+        assert "动作审计已开" not in _off8ax and "留 7 天" not in _off8ax
+        # 两态都把"非回环地址"这条主告警留着：不许因为新增审计那句就把它挤掉
+        for _both in (_on8ax, _off8ax):
+            assert "正在监听 0.0.0.0" in _both and "deploy-https" in _both, _both
+        # 类别清单抄死就会在下一个版本变成假话 —— 往表里加一类，横幅必须跟着多一类
+        _rlab8ax = dict(_aud8ax.KIND_LABELS)
+        _rkind8ax = tuple(_aud8ax.KINDS)
+        _aud8ax.KIND_LABELS["smoke_kind_8ax"] = "哨兵类别SMOKEKIND8AX"
+        _aud8ax.KINDS = _rkind8ax + ("smoke_kind_8ax",)
+        try:
+            _der8ax = "\n".join(gui_app._deploy_hints({"host": "0.0.0.0"}))
+            assert "SMOKEKIND8AX" in _der8ax and "共 11 类" in _der8ax, \
+                f"清单是抄死的，不是从 audit 现取的：{_der8ax}"
+        finally:
+            _aud8ax.KIND_LABELS.clear()
+            _aud8ax.KIND_LABELS.update(_rlab8ax)
+            _aud8ax.KINDS = _rkind8ax
+
+        # ---- ③ 文档里同一句假话（「控制台没有多用户、HTTPS 与访问审计」）也已改掉 ----
+        _usage8ax = (ROOT / "docs" / "usage.md").read_text(encoding="utf-8", errors="replace")
+        assert "控制台**没有**多用户" not in _usage8ax, "usage.md 还在宣称没有多用户/审计"
+        assert "多用户与角色**（续46）" in _usage8ax and "**不记逐请求流量**" in _usage8ax, \
+            "usage.md 那条没换成按现状说的话"
+
+        # ---- ④ 逐请求日志：真落盘、行里没有前缀、终端那条被摘掉 ----
+        _ap8ax = _tmp8ax / "access.log"
+        _base8ax = _wp8ax.new_base()                  # 与真启动同形状：/10位/10位
+        _seg8ax = _base8ax.strip("/").split("/")
+        _p8ax, _n8ax = _log8ax.attach_access_log(_base8ax, path=_ap8ax)
+        assert _p8ax is not None and _n8ax == "" and _ap8ax.exists(), _n8ax
+        assert _wl8ax.propagate is False, \
+            "propagate 不关 → 任何给 root 挂过 handler 的库都会把访问行喷回终端"
+        assert _cnt8ax(_ap8ax) == 1, f"指向本文件的 handler 应恰好一个：{_wl8ax.handlers}"
+        assert len(_wl8ax.handlers) == 1, \
+            f"挂上访问日志后 logger 上不该再有别的 handler：{_wl8ax.handlers}"
+        assert not [h for h in _wl8ax.handlers if isinstance(h, _lg8ax.StreamHandler)
+                    and not isinstance(h, _lg8ax.FileHandler)], "终端 handler 还在 → console 没静音"
+        _wl8ax.info(f'1.2.3.4 - - [10/Oct/2026 00:00:00] "GET {_base8ax}/sites?task=1 HTTP/1.1" 200 -')
+        _wl8ax.info(f'1.2.3.4 - - [.] "GET /{_seg8ax[0]}/ HTTP/1.1" 404 -')       # 只探到单层
+        _wl8ax.info('\033[33mGET ' + _base8ax + '/login HTTP/1.1\033[0m 404 -')   # 非 200 带 ANSI
+        for _h in _wl8ax.handlers:
+            _h.flush()
+        _txt8ax = _ap8ax.read_text(encoding="utf-8")
+        assert _base8ax not in _txt8ax, "整串前缀落进了文件（续138：前缀绝不落盘）"
+        assert all(s not in _txt8ax for s in _seg8ax), "单层片段泄露 —— 只抹整串挡不住探单层的那行"
+        assert _log8ax.MASKED_PREFIX in _txt8ax, "扣掉了必须**说出来**，静默少一段会让人以为日志坏了"
+        assert "\033" not in _txt8ax, "Werkzeug 的 ANSI 颜色码落进了文件"
+        assert "/sites?task=1" in _txt8ax and "/login" in _txt8ax, \
+            "抹过头了：这份日志得能看出打的是哪个页面，否则留着没用"
+
+        # ---- ⑤ 反向对照（§6.1 证伪）：没给前缀时同样的行**必须原样落盘** ----
+        #   否则"文件里没有前缀"可能只是因为根本没记 path、或写去了别的文件，而不是那个 filter 干的。
+        _np8ax = _tmp8ax / "nomask" / "access.log"
+        _cur8ax = list(_wl8ax.handlers)
+        for _h in _cur8ax:
+            _wl8ax.removeHandler(_h)
+        try:
+            assert _log8ax.attach_access_log("", path=_np8ax)[0] is not None
+            assert len(_wl8ax.handlers) == 1
+            _wl8ax.info(f'5.6.7.8 - - [.] "GET {_base8ax}/no-mask-probe HTTP/1.1" 200 -')
+            _wl8ax.handlers[0].flush()
+            _ntxt8ax = _np8ax.read_text(encoding="utf-8")
+            assert _base8ax in _ntxt8ax and _log8ax.MASKED_PREFIX not in _ntxt8ax, \
+                "没给前缀也被抹掉了 → ④ 那条「文件里没有前缀」不是 filter 的功劳"
+            assert "/no-mask-probe" in _ntxt8ax
+        finally:
+            for _h in list(_wl8ax.handlers):
+                _h.close()
+                _wl8ax.removeHandler(_h)
+            for _h in _cur8ax:
+                _wl8ax.addHandler(_h)
+        assert len(_wl8ax.handlers) == 1, "上面那段拆装没回到一个 handler"
+
+        # ---- ⑥ 静音的**机制**也要实测：让 werkzeug 自己那条路重新走一遍 ----
+        #   `werkzeug._internal._log()` 只在本进程第一次记日志时判 `_has_level_handler`，判不过
+        #   就补一个往 stderr 喷的 `_ColorStreamHandler`。把它的缓存清空，让它重新走那个分支，
+        #   才证明"先挂文件 handler"真的挡得住它（只断言"我的 handler 在"证明不了这件事）。
+        import werkzeug._internal as _wi8ax
+        _cache8ax = _wi8ax._logger
+        _wi8ax._logger = None
+        try:
+            _wi8ax._log("info", f'9.9.9.9 - - [.] "GET {_base8ax}/gate-probe HTTP/1.1" 200 -\n')
+        finally:
+            _wi8ax._logger = _cache8ax
+        _wl8ax.handlers[0].flush()
+        _txt8ax = _ap8ax.read_text(encoding="utf-8")
+        assert "gate-probe" in _txt8ax, \
+            "werkzeug 自己那条 _log() 路没进文件 → ④ 的结论全靠模拟撑着"
+        assert _base8ax not in _txt8ax and "gate-probe" in _txt8ax
+        assert len(_wl8ax.handlers) == 1 and isinstance(_wl8ax.handlers[0], _lg8ax.FileHandler), \
+            "werkzeug 补上了自己的终端 handler → 「静音 console」没兑现"
+
+        # ---- ⑦ 同进程第二次启动：换了前缀，掩码集合必须跟着换，handler 不许叠加 ----
+        _base2_8ax = _wp8ax.new_base()
+        _p2_8ax, _n2_8ax = _log8ax.attach_access_log(_base2_8ax, path=_ap8ax)
+        assert _p2_8ax is not None and len(_wl8ax.handlers) == 1, \
+            f"第二次挂出了新 handler：{len(_wl8ax.handlers)}"
+        _wl8ax.info(f'8.8.8.8 - - [.] "GET {_base2_8ax}/after-second-serve HTTP/1.1" 200 -')
+        _wl8ax.handlers[0].flush()
+        _all8ax = _ap8ax.read_text(encoding="utf-8")
+        assert _base2_8ax not in _all8ax, "第二次启动的前缀原样落盘了（去重时没把新前缀补进掩码）"
+        assert _base8ax not in _all8ax and "after-second-serve" in _all8ax
+
+        # ---- ⑧ 落点写不出来：返回原因、不抛、不动已有 handler ----
+        _blk8ax = _tmp8ax / "blocker8ax"
+        _blk8ax.write_text("x", encoding="utf-8")     # 父路径是普通文件，任何 uid 都 mkdir 不进去
+        _p3_8ax, _n3_8ax = _log8ax.attach_access_log("", path=_blk8ax / "access.log")
+        _blk8ax.unlink()
+        assert _p3_8ax is None and _n3_8ax, f"必须返回原因而不是抛异常：{_p3_8ax!r}"
+        assert not leaked_root(_n3_8ax or ""), f"那句原因里不许带绝对路径（§0.3）：{_n3_8ax!r}"
+        assert len(_wl8ax.handlers) == 1, "失败路径不许往 logger 上加东西"
+
+        # ---- ⑨ `serve()` 真的接上了（不是"函数存在但没人调"）----
+        _keep8ax = os.environ.pop("CTFSCANNER_WEB_PATH", None)
+        try:
+            _out8ax, _ = _serve_out7i({"host": "127.0.0.1", "allowed_hosts": [],
+                                       "edge_auth": {"enabled": False}, "web_path_random": True})
+        finally:
+            if _keep8ax is not None:
+                os.environ["CTFSCANNER_WEB_PATH"] = _keep8ax
+        _say8ax = [l for l in _out8ax if "逐请求访问日志" in l]
+        assert len(_say8ax) == 1, f"横幅里指路那一行应恰好一次：{_say8ax}"
+        _url8ax = [l for l in _out8ax if "控制台地址" in l]
+        _mm8ax = _re8ax.search(r"(/[a-z0-9]{10}/[a-z0-9]{10})", _url8ax[0]) if _url8ax else None
+        assert _mm8ax, f"这次没挂上随机前缀，后面几条会是空写：{_url8ax}"
+        assert _mm8ax.group(1) not in _say8ax[0], "指路那一行自己就带着前缀"
+        _f8ax = _log8ax.access_log_path()
+        assert _f8ax.exists(), f"serve() 没把访问日志挂到默认落点：{_f8ax.name}"
+        _wl8ax.info(f'7.7.7.7 - - [.] "GET {_mm8ax.group(1)}/dashboard HTTP/1.1" 200 -')
+        for _h in _wl8ax.handlers:
+            _h.flush()
+        _acc8ax = _f8ax.read_text(encoding="utf-8")
+        assert _mm8ax.group(1) not in _acc8ax and _log8ax.MASKED_PREFIX in _acc8ax, \
+            "serve() 挂上的那个 handler 没把**本次**前缀抹掉"
+        assert "7.7.7.7" in _acc8ax and "/dashboard" in _acc8ax
+        assert _mm8ax.group(1) not in _log8ax.server_log_path().read_text(
+            encoding="utf-8", errors="replace"), "前缀从 server.log 侧泄露了"
+    finally:
+        for _h in list(_wl8ax.handlers):
+            _h.close()
+            _wl8ax.removeHandler(_h)
+        for _h in _oh8ax:
+            _wl8ax.addHandler(_h)
+        _wl8ax.propagate = _oprop8ax
+        _wl8ax.setLevel(_olvl8ax)
+        shutil.rmtree(_tmp8ax, ignore_errors=True)
+
+    print("[8ax] 续146-附3 横幅审计真话 + 逐请求访问日志 ok: "
+          "判据先自证再拿它断言（表里有记录时两态都不许宣称没有审计）｜文案跟着 `gui.audit` 走，"
+          "记哪几类/留几天全部现取（加一类进去横幅就跟着变，抄死的会被下一步证伪）｜"
+          "usage.md 里同一句假话一并改掉｜access.log 真落盘：整串前缀与单层片段都抹掉、ANSI 剥掉、"
+          "抹过的形状说出来、页面路径仍可读｜`prefix=\"\"` 反向对照证明打码来自那个 filter｜"
+          "清空 werkzeug 的 logger 缓存让它重走一遍补终端 handler 的分支：文件收到了、"
+          "终端 handler 一个都没补上｜第二次启动换前缀掩码跟着换且 handler 不叠加｜"
+          "落点被挡时返回 strerror 而不抛、原因里没有绝对路径、也不动已有 handler｜"
+          "serve() 那一头：指路一行恰好一次、本次前缀既不在 access.log 也不在 server.log")
+
+
     print("SMOKE PASS")
 
 

@@ -55,7 +55,8 @@ from scanner import (admin_setup, audit, auth as taskauth, blacklist, captcha, c
                      screenshot,
                      shodan, toolmgr, users)
 from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
-from scanner.log import attach_server_log, boot_logger, get_logger
+from scanner.log import (attach_access_log, attach_server_log, boot_logger,
+                         get_logger)
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
@@ -3830,6 +3831,24 @@ def _port_free(host, port):
     return True
 
 
+def _audit_hint(gui_cfg):
+    """横幅里那句「审计到底有没有」—— 跟着 `gui.audit` 的**实际状态**说（续146-附3）。
+
+    为什么单独成函数、而"记哪几类/留几天"都必须现取：这些都是**可配**的，写死的句子会在下一个
+    实例里变成假话 —— 被它替掉的那句「访问审计仍然没有」就是这么过期的（续48 起就有 `audit_log`，
+    而本机那个表里一直有记录）。缺项默认由 `audit.config()` 自己兜，所以这里不再抄一份 DEFAULTS
+    做二次回落（§5.14：同一个口径只许有一个产地）。
+    """
+    conf = audit.config({"gui": gui_cfg or {}})
+    if not conf["enabled"]:
+        return ["    [!] 警告：gui.audit.enabled=false → 本控制台**不留任何动作痕迹**："
+                "谁登录过、谁改过配置、谁动过任务全都查不到；绑在非回环地址上时这尤其危险，建议打开。"]
+    return [f"    [*] 动作审计已开（gui.audit.enabled）：{'、'.join(audit.KIND_LABELS.values())} "
+            f"—— 共 {len(audit.KINDS)} 类，留 {conf['retention_days']} 天，管理员在「访问审计」页可查。",
+            "        它记「谁在什么时候做了什么」，**不记逐请求流量** —— "
+            "谁一个一个请求打过来这里查不到，要那份得自己看访问日志。"]
+
+
 def _deploy_hints(gui_cfg):
     """启动时要说明白的**部署现状**（续47），返回待打印的行；`serve()` 只负责打印。
 
@@ -3856,8 +3875,10 @@ def _deploy_hints(gui_cfg):
         lines.append("[*] Host 白名单放行：" + ", ".join(sorted(allowed))
                      + "（可用 gui.allowed_hosts 扩展）")
     # 续32：绑到非回环地址 = **主动放弃了上面那道 Host 白名单**（我们无法预知你用哪个地址访问），
-    # 这里必须**显式告警**，不能让"暴露"悄无声息地发生。续47 起 HTTPS 有了落地路径（反代终止 TLS），
-    # 所以文案不再说"没有 HTTPS"，但**访问审计确实仍然没有**，这句要留着。
+    # 这里必须**显式告警**，不能让"暴露"悄无声息地发生。续47 起 HTTPS 有了落地路径（反代终止 TLS）。
+    # 紧跟其后的那句「访问审计仍然没有」从续32 一路活到今天，但它**早就假了**：续48 就落了 audit_log、
+    # `gui.audit.enabled` 默认 True。横幅上讲假话比不讲更糟 —— 人会据此认为"反正查不到痕迹"，
+    # 于是在暴露的机器上放心做不该放心的事。现在按 `gui.audit` 的**实际状态**说（见 `_audit_hint`）。
     if _host_of(cfg.get("host", "127.0.0.1")) not in _LOOPBACK_HOSTS:
         lines.append(f"[!] 警告：正在监听 {cfg.get('host')}（非回环地址），"
                      "局域网/公网上的任何人都能访问本控制台。")
@@ -3865,8 +3886,8 @@ def _deploy_hints(gui_cfg):
             lines.append("    已配置 gui.allowed_hosts → Host 白名单仍然生效（只放行清单里的域名）。")
         else:
             lines.append("    未配置 gui.allowed_hosts → Host 白名单在本模式下已自动放宽。")
-        lines.append("    HTTPS 需由反向代理终止（见 docs/deploy-https.md）；"
-                     "**访问审计仍然没有**，请自行限制在可信网段。")
+        lines.append("    HTTPS 需由反向代理终止（见 docs/deploy-https.md），请自行限制在可信网段。")
+        lines.extend(_audit_hint(cfg))
     return lines
 
 
@@ -4023,6 +4044,16 @@ def serve(start_queue=True):
         app.wsgi_app._ctf_inner = _inner138
     for _line in webpath_hints(_wp, host, port) + _wn:
         say(_line)
+    # 续146-附3（用户点单「静音 console + 单独落一个 logs/access.log」）：接管逐请求访问日志。
+    # 为什么在这儿而不是最上面：要把 `_wp`（本次前缀）交给它打码 —— 落盘的每一行里带着**客户端送来
+    # 的原始路径**，而「前缀绝不落盘」是续138 的硬约束。这几行措辞本身不含前缀，所以能进 server.log。
+    _ap, _an = attach_access_log(_wp)
+    if _ap is not None:
+        say(f"[*] 逐请求访问日志：{rel_display(_ap, mask_outside=True)}"
+            "（追加 + 自动滚动；本次随机后台前缀已脱敏，终端不再一屏一行刷请求）")
+    else:
+        say(f"[!] 逐请求访问日志写不出来（{_an}）—— 本次只有启动日志，"
+            "且 Werkzeug 仍会把每个请求刷在终端上")
     # 续47：HTTPS 与 Host 白名单的现状**在启动时就说明白**（部署排错时最先看的就是这几行）。
     # 文案由 `_deploy_hints()` 生成 —— 抽成纯函数是为了让回归门禁能**真跑**这些告警
     # （`serve()` 会起真实服务器，测试不能调它；而"只 grep 源码里有这个字符串"证明不了运行期行为）。

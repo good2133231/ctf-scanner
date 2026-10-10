@@ -6,6 +6,106 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+
+## 续146-附3 横幅那句关于审计的假话 + 逐请求访问日志单独落盘（用户点单两件事）
+
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）。主理人原话：「③ 我推荐 ③ = 静音 console +
+单独落一个 logs/access.log / A｜改那句假话（纯更正 + 加一条断言钉住"横幅不许宣称没有审计而
+表里却有记录"）。零风险，我直接做 / 这两个做了」。**两件都做了**，写在下面。
+
+### A｜`_deploy_hints()` 那句「访问审计仍然没有」是假的，已按运行期真相改掉
+
+`gui/app.py` 非回环分支的最后一句从续32 一路活到今天，而**续48 就落了 `audit_log`**、
+`gui.audit.enabled` 默认 True。本机实测：`data/scanner.db` 的 `audit_log` 有 **23 条**记录，
+kind 覆盖 `account / login_fail / login_ok / settings / task`，保留期 30 天。这不是"文案旧了一点"：
+横幅讲假话会**主动改变读者的行为** —— 人以为"反正查不到痕迹"，于是在绑了 `0.0.0.0` 的机器上
+放心做事。同一类毛病 `docs/security-notice.md` 续54 已经犯过一次（当年写"多用户/审计/HTTPS
+仍未提供"，与代码不符），**第二次出现说明第一次只改了实例、没立规矩** ⇒ 升成 §5 的第 19 条不变量。
+
+改法是把这句话变成**跟着配置走**的一句（新增 `gui/app.py::_audit_hint(gui_cfg)`）：开着 ⇒
+"动作审计已开 + 记哪几类（从 `audit.KIND_LABELS` 现取）+ 留几天（从 `audit.config()` 现取）+
+**不记逐请求流量**"；关着 ⇒ "**不留任何动作痕迹**：谁登录过、谁改过配置、谁动过任务全都查不到"，
+并明确这在不回环绑定下尤其危险。"记哪几类/留几天"一律现取不抄死；缺项默认由 `audit.config()`
+自己兜，所以**没有**再抄一份 `DEFAULTS` 做二次回落（§5.14 同一口径一个产地）。
+它上面那句注释（"访问审计确实仍然没有，这句要留着"）同样错，一并改成写清"为什么现在是分支"。
+
+同一条假话在 `docs/usage.md:477` 还有一份（「控制台**没有**多用户、HTTPS 与访问审计」——
+多用户续46、HTTPS 反代路径续47、审计续48 都已落地），一并按现状改掉；`README.md` 部署段补一句
+指向 access.log；`docs/security-notice.md` 那条"反代层做访问日志"补一句"应用侧现在自己也记，
+但不替代反代那份"。**`CHANGELOG_AI.md` 里当年那句"明确没做"留着不动** —— 那是那一轮的实话，
+历史条目不改写（本节就是"现在"那一份）。
+
+### B｜`logs/access.log`：静音 console 与单独落盘是同一个动作，且必须带前缀打码
+
+现场实测：`logs/server.log` 69 行**全是横幅，逐请求行 0 条** —— 因为
+`werkzeug._internal._log()` 自己往 logger 上补了一个往 stderr 喷的 `_ColorStreamHandler`，
+那份流量从没进过任何文件。
+
+新增 `scanner/log.py::attach_access_log(prefix="", path=None)`，`serve()` 在
+`_secret.append(_wp)` 之后、`_deploy_hints()` 之前调它并 `say()` 一行指路。四条口径：
+
+- **静音不是额外开关**：先挂上我们这个 INFO 级 `RotatingFileHandler(logs/access.log)`
+  （复用 `SERVER_LOG_BYTES/BACKUP`），werkzeug 那句 `if not has_level_handler(...)` 就不补了；
+  为兜住"已经先记过日志"的进程顺序，还会摘掉该 logger 上已有的**流式** handler —— 判据必须是
+  "`StreamHandler` 且**非** `FileHandler`"，`RotatingFileHandler` 本身就是 `StreamHandler` 的子类，
+  少写后半句会把自己的通道摘掉。
+- **`PrefixMask` 是硬约束不是整洁偏好**：werkzeug 记的是客户端送来的**原始请求行**
+  （`log_request` 用 `self.path`），头一段就是本次随机后台前缀，直接落盘违反续138。打码同时覆盖
+  整串与**单层片段**（只抹整串时，探 `/第一层/` 的那行会把第一段原样留在文件里），并剥掉
+  Werkzeug 给非 200 行加的 ANSI 码（Linux 上 `_log_add_style` 恒 True，否则文件里是
+  `^[[33m…^[[0m` 的垃圾字节）。抹过的位置留 `<前缀已脱敏>` 这个形状 —— 静默少一段会让人以为日志坏了。
+- **同进程第二次 `serve()` 换前缀时掩码要跟着换**：按 `baseFilename` 去重只挡"重复挂"，
+  挡不住"新前缀没进掩码集合"。`propagate=False` 与 `setLevel(INFO)` 也都显式做：后者不等
+  werkzeug 惰性设置，NOTSET 继承 root 的 WARNING ⇒ `info()` 整个丢掉，现象正是"文件是空的"。
+- 写不出来 ⇒ 返回 `(None, strerror)`、**不抛**、不动已有 handler，原因里不许带绝对路径（§0.3）。
+
+### 门禁与实测
+
+`[8ax]`（新增 **218 行**，9 段）里几条是冲着"自己会骗自己"去的：判据**先自证**抓得到旧句子
+（抓不到就等于后面每条都是空写）；往 `KIND_LABELS` 加一类 ⇒ 横幅必须跟着多一类（证明清单是现取的）；
+`prefix=""` 的**反向对照**（同样的行原样落盘 ⇒ 上一条"文件里没有前缀"确实来自那个 filter）；
+**清空 `werkzeug._internal._logger` 缓存让它重走一遍补终端 handler 的分支**（只断言"我的 handler
+在"证明不了静音）；第二次启动换前缀；落点被普通文件挡住。**第一轮当场红给自己看**：
+`assert len(_wl8ax.handlers) == 1` 挂在"组开始前 logger 上已经有别人留下的 handler"——
+那是前面某个组 `serve()` 指向它自己那个 `CTFSCANNER_LOGS` 子目录的通道，属于 §6.2 的
+"拿环境值当哨兵"，改成**先摘干净 + 按 `baseFilename` 计数**（`abspath` 口径，与 `[8an]` 同一理由）。
+
+另一件差点进提交：**`docs/security-notice.md` 被 Edit 类工具整文件洗了行尾** —— 只加 5 行，
+`git diff --numstat` 却报 **20/15**、`--ignore-cr-at-eol` 报 **5/0**（那 15 行是纯 EOL 变更：
+该文件原有 15 条 CRLF 行，被**整份归一化成 LF**，不是"新行写成 LF"这么轻）。`git checkout` 回退
+后改用逐字节补丁（沿用锚点行 EOL）重做，两种 numstat 一致（5/0）。教训写进 `AGENTS §9` 与 skill：
+**只要文件里有任何一条 CRLF 行就别用 Edit/Write**，动手前用 `Counter` 普查一次 —— 本轮同一批里
+`scanner/log.py` / `install.sh` / `SKILL.md` 都是 100% LF，Edit 无副作用，所以差别不在"哪个工具
+能用"，在**动手前有没有普查过这个文件**。
+全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS / RC=0**，**4m56s**，组打印 **152** 处
+（`logs/_gate146r.log`，3991 行 —— **与提交的那棵树对应的那一次**），`AssertionError` **0** 处。逐文件 EOL 两种 `numstat` 相同：`gui/app.py` 36/5、`scanner/log.py` 118/1、
+`docs/usage.md` 1/1、`tests/smoke.py` 218/0，其余被改的文件同样相等：AGENTS.md 49/0、todo.txt 44/0、README.md 1/0、SKILL.md 17/5，
+`docs/security-notice.md` 5/0（就是下面那一节讲的那次洗行，回退重做后的数字）。
+
+### 顺手修掉的一个工具缺陷（`logs/_lpatch.py`，未被 git 跟踪）
+
+它打印"新增行取的主导 EOL"时把 `dominant` 与 `b'\\r\\n'` 比 —— 那是"反斜杠+字母r"四个字节的
+字面量，**永远不相等**，于是在 CRLF 区里也照样印 "主导=LF"。读的人以为形态选错了，而实际写入
+是对的（`numstat` 两种形式一直相同就是证据）。同一段里 `tail = b"" if new_text.endswith("\n") else b""`
+是个恒等式：看着像"处理尾部换行"，其实什么都不做，而 spec 里真带尾部换行时
+`split("\n")` 会**多出一行空行**。两处都改掉了，改完立刻在 `gui/app.py` 那段 CRLF 区如实印出 CRLF。
+
+### 这一轮差点被自己提交进去的洗行（同一条 EOL 规矩的适用面被实测扩大了）
+
+`docs/security-notice.md` 只是加 5 行说明，我用 Edit 类工具改完，`git diff --numstat` 报 **20/15**、
+`--ignore-cr-at-eol` 报 **5/0** —— 那 15 行是**纯 EOL 变更**。原来该文件是 108 LF + 15 CRLF 的混排，
+而 Edit 把**整份文件的 CRLF 归一化成了 LF**，不是"只把新行写成 LF"这么轻。
+`git checkout` 回退后改用逐字节补丁（`read_bytes()` + 沿用锚点行 EOL）重做，两种 numstat 一致（5/0）。
+**这条已写进 `AGENTS.md §9` 与 skill 第 3 条**：判据从"文件里有没有 LF 行"改成"**只要有任何一条
+CRLF 行就别用 Edit/Write**"。同批里 `scanner/log.py` / `install.sh` / `SKILL.md` 都是 100% LF，
+Edit 无副作用 —— 差别只在**动手前做没做一次 EOL 普查**。
+
+### 留给主理人的两件事（本轮刻意没替您决定）
+
+- 「渲染后标题要不要默认开」：我仍建议**不改默认**，而是讨论"要不要把补标题的入口放回 GUI"
+  （续145 摘掉补扫入口之后，建任务时不勾 screenshot 就**永远**没有补标题的路）。
+- `output/` 这个空目录：已无人引用、也没被提交过，删不删等您一句话。
+
 ## 续146-附2 401 边缘门口令补一条**非交互**档（新机器"配不齐"的最后一个洞）
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。主提交推完之后按主理人那句

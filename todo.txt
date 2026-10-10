@@ -2998,6 +2998,50 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       并列出两条后果（删掉那两行＝当场退回本机形态、正在给别人用的会失联；保持现状＝新 clone
       在 `--set` 之前全站 401）。**没改任何值**，纯注释 —— 上一轮 `[8ai]①` 那句错注释犯的
       就是"没人把这件事写在读者会看的地方"，写进配置本身才是治处
+- [x] **补记（续146-附3）：横幅那句「访问审计仍然没有」是假的，已按运行期真相改掉** ——
+      主理人点单"改那句假话 + 加一条断言钉住'横幅不许宣称没有审计而表里却有记录'"。
+      实测：`data/scanner.db` 的 `audit_log` 有 **23 条**（account/login_fail/login_ok/settings/task），
+      `gui.audit.enabled` 默认 True，那句话从续32 活到续146。新增 `gui/app.py::_audit_hint()`：
+      开着就说清"记哪几类（现取 `KIND_LABELS`）+ 留几天（现取 `audit.config()`）+ **不记逐请求流量**"，
+      关着就警告"**不留任何动作痕迹**"；两态都保留非回环主告警。缺项默认由 `audit.config()` 兜，
+      不再抄一份 `DEFAULTS` 当二次回落（§5.14）
+- [x] 同一类毛病**第二次**出现 ⇒ 升成不变量：`AGENTS.md §5` 新增第 19 条「讲运行期能力的话必须
+      跟着配置走，不许写死"有没有"」（第一次是 `docs/security-notice.md` 续54 那次更正，
+      当时只改了实例没立规矩）。三条口径：现取 / 开关闭态分开写 / 回归要"改配置或改注册表
+      再断言文案跟着变"，光断言"现在有这句"挡不住下一版漂掉
+- [x] 同一条假话在 `docs/usage.md:477` 也有一份（「控制台**没有**多用户、HTTPS 与访问审计」）——
+      按现状改掉（多用户续46、HTTPS 反代续47、审计续48）；`README.md` 部署段补一句指向
+      `logs/access.log`；`docs/security-notice.md` 那条"反代层做访问日志"补一句"应用侧也记了，
+      但不替代反代那一份"。**`CHANGELOG_AI.md` 里当年那句"明确没做"留着不动**（历史条目不改写）
+- [x] **补记（续146-附3）：逐请求访问日志单独落 `logs/access.log` + 终端静音**（主理人点的 ③：
+      「静音 console + 单独落一个 logs/access.log」）—— 新增 `scanner/log.py::attach_access_log()`，
+      `serve()` 在 `_secret.append(_wp)` 之后调它并 `say()` 一行指路。静音与落盘是**同一个动作**：
+      先挂自己的文件 handler，werkzeug 那句 `if not has_level_handler(...)` 就不补
+      `_ColorStreamHandler`；兜顺序就再摘掉该 logger 上已有的流式 handler
+      （判据必须 `StreamHandler 且非 FileHandler` —— `RotatingFileHandler` 是它的子类）
+- [x] **前缀打码是硬约束不是整洁偏好**（续138「前缀绝不落盘」）：werkzeug 记的是客户端送来的
+      **原始请求行**（`log_request` 用 `self.path`），头一段就是本次随机前缀。`PrefixMask` 抹整串
+      **也抹单层片段**（只抹整串时探 `/第一层/` 的那行会把第一段原样留下），并剥掉非 200 行自带的
+      ANSI 码；抹过的位置留 `<前缀已脱敏>`，且抹完还得能看出打的是哪个页面，否则这份日志没用。
+      同进程第二次 `serve()` 换前缀时**掩码集合跟着换**（按 `baseFilename` 去重只挡重复挂）
+- [x] 新增回归 `[8ax]`（9 段 / 217 行）：判据**先自证**抓得到旧句子｜表里有记录时三组配置都不许
+      宣称没有审计｜类别清单与保留天数**现取**（往 `KIND_LABELS` 加一类 ⇒ 横幅必须多一类）｜
+      `usage.md` 那句假话已不在｜access.log 真落盘且整串+片段+ANSI 都不在｜`prefix=""` **反向对照**
+      证明打码来自 filter｜**清空 `werkzeug._internal._logger` 缓存让它重走补终端 handler 的分支**｜
+      第二次启动掩码跟着换且 handler 不叠加｜落点被挡时返回 strerror 不抛且不带绝对路径｜
+      `serve()` 那头指路行恰好一次、本次前缀既不在 access.log 也不在 server.log
+- [x] **`[8ax]` 第一轮当场红给自己看**（假绿未遂，已记进 CHANGELOG）：`len(handlers)==1` 挂在
+      "组开始前 logger 上已有别人留下的 handler" —— 前面某个组 `serve()` 指向它自己那个
+      `CTFSCANNER_LOGS` 子目录的通道还挂着，属 §6.2 的"拿环境值当哨兵"。改成**先摘干净 +
+      按 `baseFilename` 计数**（`abspath` 口径，与 `[8an]` 同一理由），不是把判据调松
+- [x] 顺手修 `logs/_lpatch.py` 两处（该文件不被 git 跟踪）：打印主导 EOL 时拿 `dominant` 跟
+      `b'\\r\\n'`（"反斜杠+r"四个字节的字面量）比 ⇒ **永远印 LF**，在 CRLF 区里也印 LF，读的人
+      以为形态选错；`tail = b"" if … else b""` 是恒等式，spec 真带尾部换行时会多插一行空行
+- [x] **差点提交进去的洗行**（同一条 EOL 规矩的适用面被实测扩大）：`docs/security-notice.md`
+      只是加 5 行，Edit 类工具把**整份文件 15 条 CRLF 行归一化成 LF** —— `--numstat` 20/15 而
+      `--ignore-cr-at-eol` 5/0。回退后逐字节重做（两种 numstat 一致 5/0）。规矩改写成"**只要有
+      任何一条 CRLF 行就别用 Edit/Write**"（`AGENTS §9` + skill 第 3 条）；本轮 `scanner/log.py` /
+      `install.sh` / `SKILL.md` 都是 100% LF，用 Edit 无副作用 ⇒ 差别不在工具，在**动手前普查过没有**
 下一轮（续147）：
 
 - [ ] 把脱敏做成**不依赖真名**的机器判据：新增 smoke 断言「被跟踪文件里出现的任何注册域，
