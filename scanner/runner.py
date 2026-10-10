@@ -153,7 +153,7 @@ class StageContext:
         self.results = {"subdomains": [], "sites": [], "dirs": [], "vulns": [],
                         "ports": [], "takeovers": [], "csegs": [], "osint_domains": [],
                         "flags": []}
-        # 续126 flag 候选抽取的并发原语：各阶段在 `pool_run` 的工作线程里**同时**调
+        # 续126 敏感信息 / flag 候选抽取的并发原语：各阶段在 `pool_run` 的工作线程里**同时**调
         # `flagfind.harvest`，锁必须在这里就备好 —— "用时才建"就有两个线程各建一把的窗口
         # （那时去重与 max_per_task 都不成立）。`_flag_db_seen` 留 None：第一次要用的时候
         # 在锁内从库里读（新任务/重启后表是空的，那次读几乎免费）。
@@ -163,7 +163,7 @@ class StageContext:
         self._flag_seen = set()
         self._flag_db_seen = None
         # 续127：指纹补标（`fingerprint.collect/flush`）攒的是 `{站点 URL: {标签}}`，
-        # 与 flag 候选同一形状：**阶段内多线程攒、阶段末尾一次写**。锁单独一把 ——
+        # 与敏感信息候选同一形状：**阶段内多线程攒、阶段末尾一次写**。锁单独一把 ——
         # 复用 flag 那把会把两件不相干的事串在一起（flush 里的写库不该挡住 harvest）。
         self._tech_lock = threading.Lock()
         self._tech_pending = {}

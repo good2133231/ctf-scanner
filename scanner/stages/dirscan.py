@@ -424,7 +424,7 @@ class DirscanStage(Stage):
         if _fnote:
             # dirmap 那一路没有正文（产物行只有 `[状态码][类型][大小] URL`），所以这里的
             # "看过 N 份"只统计内置扫描 —— 口径与续113 那条「没标题⇒不滤但明说」一致。
-            ctx.logger.info("[dirscan] flag 候选 " + _fnote)
+            ctx.logger.info("[dirscan] 敏感信息候选 " + _fnote)
 
     # ---------- 目标筛选 ----------
 
@@ -918,7 +918,7 @@ class DirscanStage(Stage):
                     if u not in blocked_sig:
                         blocked_sig[u] = r.get("length")
                 return None
-            # flag 候选（续126）与指纹补标（续127）：都放在**所有过滤之后** ——
+            # 敏感信息候选（续126）与指纹补标（续127）：都放在**所有过滤之后** ——
             # 软 404 模板页与统一拦截页会被打几百次，它们是同一份正文，重复扫既费时间
             # 也只会在候选表里留同一个值 / 只会把同一批标签重复攒进同一个站点。
             flagfind.harvest(ctx, url, r.get("text") or "", "dir")

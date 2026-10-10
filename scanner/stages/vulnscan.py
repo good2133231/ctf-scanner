@@ -151,7 +151,7 @@ class VulnscanStage(Stage):
                                  lambda v: (v.get("target"), v.get("poc_id")))
         for v in new_v:
             db.insert_vuln(ctx.task_id, v)
-        # flag 候选（续126）：POC 的**证据与详情**里经常直接带着 flag（题目把 flag 放在
+        # 敏感信息候选（续126）：POC 的**证据与详情**里经常直接带着 flag（题目把 flag 放在
         # 回显里，POC 把回显抄进 evidence）。这一步只读已经在手的字符串，零额外请求。
         _flag0 = flagfind.begin(ctx)
         for v in uniq:
@@ -160,7 +160,7 @@ class VulnscanStage(Stage):
                     flagfind.harvest(ctx, v.get("target"), str(_txt), "poc")
         _fnote = flagfind.note(ctx, _flag0)
         if _fnote:
-            ctx.logger.info("[vulnscan] flag 候选 " + _fnote)
+            ctx.logger.info("[vulnscan] 敏感信息候选 " + _fnote)
         ctx.results["vulns"] = uniq
         by_sev = {}
         for v in uniq:

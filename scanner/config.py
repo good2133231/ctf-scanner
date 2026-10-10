@@ -522,11 +522,13 @@ DEFAULTS = {
         "timeout": 20,             # 单次请求超时（秒）
     },
     "flags": {
-        # CTF flag 候选抽取（续126）：在**已经拿到**的响应正文里按可配前缀/正则找 flag 形态串，
-        # 单独进 `flags` 表 —— **不写 vulns、不计入漏洞数**（一个 `flag{...}` 不是漏洞结论）。
+        # 敏感信息 / CTF flag 候选抽取：在**已经拿到**的响应正文里按形状找值得抄走的串，
+        # 单独进 `flags` 表 —— **不写 vulns、不计入漏洞数**（一个 AK 或 `flag{...}` 不是漏洞结论）。
         # 零额外请求是这块的立身之本：`scanner/flagfind.py` 自己不发任何请求，只在
         # probe / jsmine / dirscan / vulnscan 手里已有的文本上跑（判据见其文件头与 [8ae]）。
+        # 表名与下面这些键仍叫 `flags`：改名会打断别人机器上已有的 settings.yaml 与库里数据。
         "enabled": True,
+        "secrets": True,               # 内置敏感信息形状（各家 AK/SK、API key、JWT、私钥头）
         "prefixes": ["flag", "ctf"],   # 不带括号自动按 `前缀{`；各家自定义前缀往这里加
         "patterns": [],                # 额外正则；取不出必现字面量的**拒用并说明原因**（成本口子）
         "min_len": 1,                  # 值体最短（挡 `flag{}` 这种空壳）

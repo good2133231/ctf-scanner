@@ -11,9 +11,13 @@
 3. `tasks.options["auth"]` 与 `run_payload` 里的同名键 —— 扫目标时带的登录态请求头
    （`cli/client.py` 把 `-H/--cookie` 存进任务选项，`auth.from_task_options()` 读出来用）。
    → `--with-task-auth`。
+4. `flags` 表（续148）：敏感信息与 flag 候选的**原文取值** —— 各家 AK/SK、token、私钥头、
+   连接串，以及 `flag{...}`。这一张表存的从来就是"拿去就能用"的值（不是打码样例），
+   而迁移包是要发给别人 / 放到另一台机器上的文件 ⇒ 默认不带，要带用 `--with-secrets`。
 
 第 3 条是本轮实测找出来的：任务表看着"只是配置"，实际里面可能躺着整串 Cookie 和 Bearer token。
 只把账号表挡在门外的话，"默认导出"照样会泄密 —— 于是一条开关不算守住红线。
+第 4 条同理，而且更直接：那张表整个就是取值清单。
 
 刻意**不带**的东西（连 `--with-users` 也不带）：
 - `data/session.secret`（Flask 会话签名密钥）：带了 = 迁移完旧机器的会话在新机器上**继续有效**，
@@ -42,6 +46,9 @@ ACCOUNT_TABLES = ("users", "nodes")
 CRED_FILES = ("config/keys.yaml", "config/keys.enc.yaml", "config/edge_auth.yaml")
 # 审计类表：永不进包（见文件头"刻意不带"）
 NEVER_TABLES = ("audit_log", "login_fails")
+# 存**原文取值**的表：默认不进包，`--with-secrets` 才带（见文件头红线 4）。
+# 表名仍叫 `flags` —— 续148 起它装的是敏感信息（AK/SK、token、私钥头、连接串）+ flag 候选两类形状。
+SECRET_TABLES = ("flags",)
 
 # 任务状态里"声称本机有个进程在跑/在排"的两档。换机器后这个声称必然是假的。
 # 三个"还没跑完"的状态：running/queued 谎称本机有进程在跑，pending 谎称"已经在排队等着自动开跑"。
@@ -206,7 +213,8 @@ def redact_auth(obj):
 
 
 def export_bundle(dst=None, task_ids=None, owner_id=None, with_users=False,
-                  with_task_auth=False, passphrase=None, with_logs=False):
+                  with_task_auth=False, passphrase=None, with_logs=False,
+                  with_secrets=False):
     """导出扫描数据成一份迁移包，返回摘要 dict（含落点路径与各项计数）。
 
     - `task_ids=None` = 全部任务；给了列表 = 只导那几个（导单个任务给别人复看时用）。
@@ -217,6 +225,9 @@ def export_bundle(dst=None, task_ids=None, owner_id=None, with_users=False,
       mypack.json` 被悄悄改名更难解释）—— 识别加密靠文件头那 21 个字节，不靠扩展名。
       默认**不**加密：加密与否是发包的人要显式决定的事。
     - `with_logs=True` → 把任务日志一起带走（默认不带，见文件头"刻意不带"）。
+    - `with_secrets=True` → 把 `flags` 表（敏感信息与 flag 候选的**原文取值**）一起带走；
+      默认不带，见文件头红线 4。没带时包里给的是空列表 + `includes.secrets_skipped` 里的条数，
+      这样"这一档没带"是一个数得出来的事实，而不是读包的人自己发现少了。
     """
     if task_ids:
         marks = ",".join("?" for _ in task_ids)
@@ -274,12 +285,19 @@ def export_bundle(dst=None, task_ids=None, owner_id=None, with_users=False,
         tasks_out.append(row)
 
     ids = [int(r["id"]) for r in tasks_out]
-    assets = {}
+    assets, secrets_skipped = {}, {}
     for t in db.ASSET_TABLES:
         if not ids:
             assets[t] = []
             continue
         marks = ",".join("?" for _ in ids)
+        if t in SECRET_TABLES and not with_secrets:
+            # 空列表 + 一个数出来的条数：只写空列表的话，读包的人分不清"目标本来没有"与
+            # "这一档被默认档挡在门外了"（同一个坑在 `probe` 的 httpx 档上登记过）
+            assets[t] = []
+            secrets_skipped[t] = int(db._query(
+                f"SELECT COUNT(*) AS n FROM {t} WHERE task_id IN ({marks})", tuple(ids))[0]["n"])
+            continue
         assets[t] = _rows(t, f" WHERE task_id IN ({marks})", tuple(ids))
 
     bundle = {
@@ -305,6 +323,8 @@ def export_bundle(dst=None, task_ids=None, owner_id=None, with_users=False,
             "logs_included": len(logs),
             "logs_skipped": logs_skipped,
             "logs_bytes": logs_bytes,
+            "secrets_included": bool(with_secrets),
+            "secrets_skipped": secrets_skipped,
             "encrypted": bool(pw),
         },
         "data": {"tasks": tasks_out, "assets": assets},
@@ -509,6 +529,13 @@ def import_bundle(src, dry_run=False, passphrase=None):
         out["warnings"].append("本包**含任务登录态请求头**（导出时带了 --with-task-auth）。")
     if bundle.get("encrypted"):
         out["warnings"].append("本包是**加密**迁移包，已按口令在内存里解开 —— 明文没有落过盘。")
+    _skipped = inc.get("secrets_skipped") or {}
+    if _skipped:
+        # 缺的这一档必须自己报出来：`flags` 是空列表，读包的人分不清"目标本来没有"与"被默认档挡了"
+        out["warnings"].append(
+            "本包**默认没带 " + "、".join(_skipped) + " 表的原文取值**（各家 AK/SK、token、私钥头、"
+            "连接串），本机另有 " + "、".join(f"{t} {n} 条" for t, n in _skipped.items())
+            + " —— 是**没带**，不是目标没有。要带过去请在导出那台机器上重新导一次并加 --with-secrets。")
     logs = data.get("logs") or {}
     if logs:
         out["warnings"].append(

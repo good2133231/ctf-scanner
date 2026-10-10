@@ -14,7 +14,7 @@
     {{ 'disabled' if task.status in ('running', 'queued') or not resume_rest }}
     title="{{ '从断点续跑：' + resume_rest|join(' / ') if resume_rest else '没有可用断点（任务未停在某个阶段上）' }}">续跑</button>
   <a class="btn-mini ghost" href="{{ url_for('diff_view') }}?task={{ task.id }}"
-     title="与最近一个可比的上一轮对比（子域名/站点/指纹/端口/漏洞/flag 各算新增与消失）">与上次对比</a>
+     title="与最近一个可比的上一轮对比（子域名/站点/指纹/端口/漏洞/敏感信息 各算新增与消失）">与上次对比</a>
   <span class="muted small">导出：<a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">报告 MD</a>
     <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='jsonl') }}">JSONL</a>
     <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">HTML</a>
@@ -74,7 +74,7 @@
   <div class="tab" data-tab="csegs">C 段<span class="cnt">{{ csegs_pager.total }}</span></div>
   <div class="tab" data-tab="certs">SSL 证书<span class="cnt">{{ cert_total }}</span></div>
   <div class="tab" data-tab="dirs">目录<span class="cnt">{{ dir_total }}</span></div>
-  <div class="tab" data-tab="flags">flag 候选<span class="cnt">{{ flag_total }}</span></div>
+  <div class="tab" data-tab="flags">敏感信息<span class="cnt">{{ flag_total }}</span></div>
   <div class="tab" data-tab="target">目标与配置</div>
   <div class="tab" data-tab="log">运行日志</div>
 </div>
@@ -566,13 +566,13 @@
 
 <div class="tabpane" id="pane-flags">
   <section class="panel">
-    <h2>flag 候选（{{ flag_total }} 条）</h2>
+    <h2>敏感信息（{{ flag_total }} 条）</h2>
     <p class="muted small">由 <code>scanner/flagfind.py</code> 从<b>本任务已经抓到的正文</b>里按形状抽取
-      （<b>零额外请求</b>：页面 / JS / 目录命中 / POC 证据），判据在「策略配置 → flag 候选抽取」。
-      <b>这是候选清单，不是结论</b>：同形状的 <code>flag{xxx}</code> 经常是模板或 JS 里的占位符，
-      逐条判真才是结论 —— 清单刻意偏宽，因为漏报的代价是丢一道题，误报的代价只是多看一眼。</p>
+      （<b>零额外请求</b>：页面 / JS / 目录命中 / POC 证据），判据在「策略配置 → 敏感信息 / flag 候选抽取」。
+      <b>这是候选清单，不是结论</b>：同形状的 <code>flag{xxx}</code> 与 <code>AKIA…</code> 经常是模板或
+      JS 里的占位符，逐条判真才是结论 —— 清单刻意偏宽，因为漏报的代价是丢一道题，误报的代价只是多看一眼。</p>
     <table id="tbl-flags">
-      <thead><tr><th>值</th><th>前缀</th><th>来源</th><th>URL</th><th>上下文</th></tr></thead>
+      <thead><tr><th>值</th><th>形状</th><th>来源</th><th>URL</th><th>上下文</th></tr></thead>
       <tbody>
       {% for f in flags %}
         <tr><td class="mono">{{ f.value }}</td><td class="muted">{{ f.kind }}</td>
@@ -581,7 +581,7 @@
           <td class="muted small mono">{{ f.context }}</td></tr>
       {% else %}
         <tr><td colspan="5" class="muted">还没有候选。抽取只吃已经抓到的正文，所以
-          「没跑过 probe / jsmine / dirscan / vulnscan 的任务」本来就是空的，不等于"目标没有 flag"。</td></tr>
+          「没跑过 probe / jsmine / dirscan / vulnscan 的任务」本来就是空的，不等于"目标没有敏感信息"。</td></tr>
       {% endfor %}
       </tbody>
     </table>

@@ -52,6 +52,11 @@ _LOCAL_I_RE = re.compile(r"\(\?[a-zA-Z]*i")       # 组内局部 (?i) / (?i:…)
 _lit_cache = {}
 
 
+def _is_seq(v):
+    """能不能当解析后的子序列展开。3.11 起 SubPattern 不再是 list 子类，只认 __getitem__。"""
+    return hasattr(v, "__getitem__") and not isinstance(v, (str, bytes, bytearray))
+
+
 def _literal_runs(seq):
     """必填位置上的"极大连续字面量段"；返回 None = 结构认不出（调用方放弃过滤）。"""
     out, cur = [], []
@@ -66,6 +71,13 @@ def _literal_runs(seq):
         if op in _REPEAT_OPS and int(arg[0]) >= 1:
             # 只有"至少重复一次"的部分才是必现的；`X?` / `X{0,}` 里的内容不算（arg[0] 是最小次数）
             sub = _literal_runs(arg[2])
+            if sub is None:
+                return None
+            out.extend(sub)
+        elif op == _sre.SUBPATTERN and _is_seq(arg[-1]):
+            # 组本身在必填位置上 ⇒ 组里的字面量整条表达式也必现（AKIA/LTAI 就躺在捕获组里）。
+            # 展开不了的那一档退回"截断"：只可能少提速，不可能漏报。
+            sub = _literal_runs(list(arg[-1]))
             if sub is None:
                 return None
             out.extend(sub)

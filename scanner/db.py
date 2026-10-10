@@ -171,10 +171,11 @@ CREATE TABLE IF NOT EXISTS leads (
   url TEXT DEFAULT '',
   created_at TEXT
 );
--- 续126 CTF flag 候选（scanner/flagfind.py）：**单独一张表**，不并进 vulns ——
--- 一个 `flag{...}` 既不是漏洞结论（不该进「潜在漏洞」计数与复核台账），也不是线索
--- （线索是"人再决定要不要看"的东西，而 flag 是要直接抄走的）。混进哪一边都会误导。
--- `value` 保留**原文大小写**（flag 大小写敏感；被小写化的只是用于定位的那份副本）；
+-- 续126 建表、续148 装的东西扩到敏感信息（scanner/flagfind.py）：**单独一张表**，不并进 vulns ——
+-- 一个 `flag{...}` 或一串 AK 既不是漏洞结论（不该进「潜在漏洞」计数与复核台账），也不是线索
+-- （线索是"人再决定要不要看"的东西，而这两类是要直接抄走的）。混进哪一边都会误导。
+-- `value` 保留**原文大小写**（取值大小写敏感；被小写化的只是用于定位的那份副本）；
+-- 存原文 ⇒ 这张表**默认不进迁移包**（`scanner/migrate.py::SECRET_TABLES`，要带得显式 `--with-secrets`）。
 -- `context` 带前后文，因为同一形状经常是模板/JS 里的占位符，判真假日的是人不是模块。
 -- 去重在**调用方**（scanner/flagfind.py::harvest），表上没有 UNIQUE 约束 —— 与 AGENTS §5.6
 -- 「漏洞去重是调用方约定」同一口径：新增写路径必须自己保证不重复。
@@ -182,7 +183,7 @@ CREATE TABLE IF NOT EXISTS flags (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
   value TEXT NOT NULL,
-  kind TEXT DEFAULT '',        -- 命中的前缀名（flag / ctf / …）；自定义正则记 "regex"
+  kind TEXT DEFAULT '',        -- 命中的形状名（aws-access-key / jwt / flag / ctf / …）；自定义正则记 "regex"
   source TEXT DEFAULT '',      -- probe / js / dir / poc：**哪个阶段手里的那份正文**
   url TEXT DEFAULT '',
   context TEXT DEFAULT '',
@@ -803,7 +804,7 @@ ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "certs", "dirs", "vulns
 
 
 def clear_task_assets(task_id):
-    """清空某任务的全部资产（子域名/站点/端口/C段/证书/目录/漏洞/线索/flag 候选），
+    """清空某任务的全部资产（子域名/站点/端口/C段/证书/目录/漏洞/线索/敏感信息候选），
     用于"重启"前重置。成员表名一律取 `ASSET_TABLES`（唯一清单，新增表只改那一处）。"""
     for t in ASSET_TABLES:
         _exec(f"DELETE FROM {t} WHERE task_id=?", (task_id,))
@@ -1119,7 +1120,7 @@ def insert_vuln(task_id, v):
 
 
 def insert_flag(task_id, f):
-    """写入一条 flag 候选。**去重由调用方负责**（`scanner/flagfind.py::harvest`），
+    """写入一条敏感信息 / flag 候选。**去重由调用方负责**（`scanner/flagfind.py::harvest`），
     表上没有 UNIQUE 约束 —— 与 `insert_vuln` 同一口径（AGENTS §5.6：新增写 `vulns`/`flags`
     的路径必须自己保证去重，不能指望数据库拦）。"""
     _exec("INSERT INTO flags(task_id,value,kind,source,url,context,created_at) "
@@ -1129,7 +1130,7 @@ def insert_flag(task_id, f):
 
 
 def list_flags(task_id, limit=None):
-    """本任务的 flag 候选，按入库顺序（id）返回。
+    """本任务收上来的敏感信息 / flag 候选，按入库顺序（id）返回。
 
     `limit` 三态与 `list_tasks()/list_vulns()` 一致（续55 定口径）：数字＝最新 N 条、
     `None`＝不加上限、`0`＝一条都不要。候选条数由 `flags.max_per_task` 封顶（默认 200），

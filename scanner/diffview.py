@@ -26,7 +26,7 @@ CATEGORIES = [
     ("tech", "组件指纹", ("probe",)),
     ("ports", "开放端口", ("portscan",)),
     ("vulns", "潜在漏洞", ("vulnscan", "takeover")),
-    ("flags", "flag 候选", ("probe", "jsmine", "dirscan", "vulnscan")),
+    ("flags", "敏感信息", ("probe", "jsmine", "dirscan", "vulnscan")),
 ]
 
 # 只有"已收场"的任务才有完整快照：running/queued 的资产还在长，比它会得到一堆假"消失"

@@ -13,9 +13,10 @@
   </p>
   <p class="muted">
     ⚠ <b>迁移包里默认没有任何凭据</b>：账号口令哈希、节点令牌哈希、<code>config/keys*.yaml</code>、
-    <code>edge_auth.yaml</code>、任务里带的 Cookie/Authorization —— 一个都不带。
+    <code>edge_auth.yaml</code>、任务里带的 Cookie/Authorization，以及「敏感信息」那张表里的
+    <b>原文取值</b>（各家 AK/SK、token、私钥头、连接串）—— 一个都不带。
     <b>本页面也没有打开它们的开关</b>（刻意不画）：要带那些东西请走命令行
-    <code>python cli/client.py --export-scan --with-users --with-task-auth</code>，
+    <code>python cli/client.py --export-scan --with-users --with-task-auth --with-secrets</code>，
     警告会逐条列在你眼前、每一条都写明「带出去等于什么」。
   </p>
   <p class="muted">

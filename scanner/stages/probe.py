@@ -174,7 +174,7 @@ def probe_candidates(ctx, candidates):
                 resp = http_request(u, timeout=timeout, settings=ctx.settings, auth=True)
                 if resp and is_alive(resp.get("status")):
                     title = html_title(resp.get("text"))
-                    # flag 候选（续126）：正文已经在手（上面刚用它取过标题），**不多发一个请求**。
+                    # 敏感信息候选（续126）：正文已经在手（上面刚用它取过标题），**不多发一个请求**。
                     flagfind.harvest(ctx, resp.get("url") or u, resp.get("text") or "", "probe")
                     p = urlparse(resp.get("url") or u)
                     try:
@@ -444,11 +444,11 @@ class ProbeStage(Stage):
 
         sites = probe_candidates(ctx, candidates)
         _reg = register_sites(ctx, sites)
-        # flag 候选：走 httpx 那一档时**根本没有正文**（它只回 title/tech 的 JSONL），
-        # 所以这一路的输入是 0 份 —— 必须说出来，否则"probe 没报 flag"会被读成"扫过了、没有"。
+        # 敏感信息候选：走 httpx 那一档时**根本没有正文**（它只回 title/tech 的 JSONL），
+        # 所以这一路的输入是 0 份 —— 必须说出来，否则"probe 没报候选"会被读成"扫过了、没有"。
         _fnote = flagfind.note(ctx, _flag0)
         if _fnote:
-            ctx.logger.info("[probe] flag 候选 " + _fnote)
+            ctx.logger.info("[probe] 敏感信息候选 " + _fnote)
         elif any(s.get("source") == "httpx" for s in _reg):
-            ctx.logger.info("[probe] flag 候选：httpx 档不返回正文，本阶段无输入可扫"
+            ctx.logger.info("[probe] 敏感信息候选：httpx 档不返回正文，本阶段无输入可扫"
                             "（jsmine / dirscan / vulnscan 三路仍会扫各自拿到的正文）")

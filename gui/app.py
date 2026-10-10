@@ -174,18 +174,12 @@ def _changed_sections(old, new):
 def external_source_panel(settings):
     """「外部情报源**实际**能不能跑」的一览数据（续114-B，只读）。
 
-    为什么要专门列出来：这些能力此前只在"任务跑完去看日志"时才看得见，于是真出过一次误判 ——
-    我把「这台机器没有 GitHub 的 key」当成事实报告过，而 key 其实配在 `config/keys.enc.yaml`
-    里，**真正的原因**是发起任务那个进程的环境里没有口令（续98 的解锁只在启动时做一次，
-    解不开就按"无 key"如实降级）。一句话就能避免的错，值得占一块版面。
-
-    三条纪律：
-    ① **只报有/无，绝不出现值** —— 这一页同会话的人都能看，展示凭据值等于多开一个泄漏口；
+    列出来是因为真误判过一次：把"这台机器没有 GitHub 的 key"当成事实报出去，而 key 就在
+    `config/keys.enc.yaml` 里 —— 真正原因是发起任务那个进程的环境里没有解锁口令（续98 只在
+    启动时解一次，解不开就按"无 key"如实降级）。三条纪律：① **只报有/无，绝不出现值**；
     ② 取凭据一律走**各家自己的** accessor（`fofa.credentials` / `shodan.credentials` /
-       `quake.credentials` / `github_leak.load_token`），不在这里重新拼 `keys.<段>.字段` 路径 ——
-       键名结构变了面板要跟着变，同一判据不许写两遍；
-    ③ 免 key 的段（IP 反查 / CT 日志 / 情报订阅）也照样列出并写明"还要能出网"：
-       "没 key 所以肯定跑不了"和"有 key 所以肯定跑得动"都是错的结论。
+    `quake.credentials` / `github_leak.load_token`），不在这里重拼 `keys.<段>.字段`；③ 免 key 的
+    段也照样列出并写明"还要能出网" —— "没 key 肯定跑不了"与"有 key 肯定跑得动"都是错结论。
     """
     def _filled(*vals):
         return all(str(v or "").strip() for v in vals)
@@ -357,17 +351,12 @@ def _local_host_names():
 def _allowed_hosts(gui):
     """Host 白名单的放行集合 = 回环名 ∪ `gui.allowed_hosts` 里归一化后的主机名。
 
-    为什么必须可配置（续47）：控制台放到服务器给队友用时，由**反向代理终止 TLS** 并转发，
-    浏览器发来的 `Host` 是**部署域名**（如 `scanner.example.com`）—— 续32 那道"只认回环名"
-    的白名单会把**每一个请求都 403**（控制台整站打不开，且现象很像"服务没起来"）。
-    所以放行集合要能显式扩；但**只允许显式枚举**：含 `*` / `?` 的值一律忽略并在启动时告警
-    —— 宁可让用户 403 之后去看 `docs/deploy-https.md`，也不提供"一键关掉 DNS rebinding 防护"
-    的口子（那种口子一旦存在，就一定会被图省事地打开）。
-
-    还有一条**不用填地址**的路（续135）：`gui.allowed_hosts_auto_local=true` 时把本机网卡地址
-    自动并入 —— 换一台机器就是那一台机器的值，配置里不出现任何机器特定的地址。
-    返回 `(allowed, bad)`：`allowed` 是放行集合（`frozenset` 语义），`bad` 是被忽略的非法值
-    （给 `serve()` 打告警用）。
+    必须可配置（续47）：控制台交给反代时，浏览器发来的 `Host` 是**部署域名**，续32 那道
+    "只认回环名"会把每个请求都 403（现象很像"服务没起来"）。但**只允许显式枚举**：含
+    `*` / `?` 的值一律忽略并在启动时告警 —— 宁可让人 403 之后去看 `docs/deploy-https.md`，
+    也不留"一键关掉 DNS rebinding 防护"的口子。另一条不用填地址的路（续135）：
+    `allowed_hosts_auto_local=true` 时自动并入本机网卡地址，配置里不出现机器特定的地址。
+    返回 `(allowed, bad)`，`bad` 给 `serve()` 打告警用。
     """
     allowed = set(_LOOPBACK_HOSTS)
     bad = []
@@ -509,6 +498,27 @@ def _site_fold_key(row):
     return (row.get("task_id"), title) if title else None
 
 
+def _shape_note(cfg):
+    """策略页那句"现在到底在跑哪些形状"：数字与名单一律从配置 + 形状表现取（§5.19）。
+
+    把形状总数写死进这句话，注册表加一条它就变成谎话 —— 数字只能现算。
+    """
+    from scanner import flagfind
+    pre, pat, rej, _c = flagfind.rules(cfg)
+    sec_on = [p[0] for p in pat if p[3] != "regex"]
+    ok, no = flagfind.secret_family()
+    total = len(ok) + len(no)
+    head = (f"内置敏感信息形状 {len(sec_on)}/{total} 条在跑"
+            if ((cfg or {}).get("flags") or {}).get("secrets", True)
+            else f"内置敏感信息形状已关（形状表共 {total} 条）")
+    line = "，".join([head, f"前缀 {len(pre)} 个",
+                      f"自定义正则 {len(pat) - len(sec_on)} 条"]) + "。"
+    if rej:
+        line += (f"另有 {len(rej)} 条被成本护栏拒用（被拒的内置形状仍能在「线索」里看到 —— "
+                 "那一档在 JS 正文上是整篇匹配的）：" + "；".join(rej))
+    return line
+
+
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
@@ -627,23 +637,16 @@ def create_app():
     def _local_guard():
         """续32「仅限本机使用」的两道**技术**落实（此前只有文档里一句"切勿部署到公网"）。
 
-        ① **Host 白名单**（挡 DNS rebinding）：攻击者页面把自己的域名解析到 `127.0.0.1` 后，
-           浏览器就认为它与本机控制台"同源"，于是能带着 Cookie 打进来；默认口令 `ctfscanner`
-           又是公开写在代码里的 —— 两件事一叠加，用户只要在开着控制台时访问了恶意页面，
-           扫描器就被整个接管（能拿它去打任意目标、并用上已配置的登录态）。校验 `Host`
-           必须是回环名即可挡住整类攻击。续47 起放行集合可用 `gui.allowed_hosts`
-           **显式枚举**扩展（部署到服务器时浏览器发来的 Host 是域名，不扩就整站 403），
-           但**不含通配**：`*` 这类值被忽略（见 `_allowed_hosts`）。
-        ② **跨站状态变更拦截**：只对写方法（POST/PUT/PATCH/DELETE）校验 `Origin`（无 `Origin`
-           时退回 `Referer`），要求其**权威段**与本请求的 `Host` 一致 —— 比的是 `_authority()`
-           归一后的 `主机[:端口]`，**端口参与比对**（Cookie 不按端口隔离，同机另一个服务
-           发起的请求同样危险），默认端口按 scheme 归一（浏览器在默认端口下不写端口）。
-           两者都缺失时放行（curl / 脚本 / 老浏览器本就不带这两个头，本机工具必须能用）；
-           `Origin: null`（沙箱 iframe、`file://` 页面）**不放行**。
+        ① **Host 白名单**（挡 DNS rebinding）：攻击者页面把自己解析到 `127.0.0.1` 后，浏览器就
+           认为它与本机控制台"同源"，能带着 Cookie 打进来；而默认口令 `ctfscanner` 公开写在代码
+           里 —— 两件事一叠加，开着控制台访问过一次恶意页面，扫描器就被整个接管。放行集合可
+           **显式枚举**扩展、不含通配（见 `_allowed_hosts`）。
+        ② **跨站状态变更拦截**：只对写方法（POST/PUT/PATCH/DELETE）校验 `Origin`（没有就退回
+           `Referer`），比的是 `_authority()` 归一后的 `主机[:端口]` —— **端口参与比对**（Cookie 不
+           按端口隔离）。两者都缺失时放行（curl / 脚本本就不带这俩头），`Origin: null` 不放行。
 
-        刻意**不**做"每个表单塞 CSRF token"：本控制台的表单与 fetch 调用点有几十处，逐处改造
-        与 ② 的防护面重叠，而漏掉任何一处就是"看起来有防护、实际有缺口"；`Origin` 校验在
-        中间件层**一次性覆盖所有写操作**，不存在漏一个表单的可能。
+        刻意**不**做"每个表单塞 CSRF token"：调用点有几十处，逐处改造与 ② 的防护面重叠，而漏掉
+        任何一处就是"看起来有防护、实际有缺口"；② 在中间件层一次性覆盖所有写操作。
         """
         # 放行集合**每次请求现读** `app.config`：测试里的"变异证伪"（把它改坏，看断言是否变红）
         # 才能落在同一条代码路径上；顺带避免把配置烤进闭包（`serve()` 之外没人会改它，代价是一次字典取值）。
@@ -1534,7 +1537,7 @@ def create_app():
             _dr_page = _dr_pages
         dirs = dirs_all[(_dr_page - 1) * _dr_size:_dr_page * _dr_size]
         dirs_pager = _mk_pager("dr", "#dirs", _dr_page, _dr_size, dir_total, dirs_q)
-        # flag 候选（续126）：整表读是有意的 —— 条数由 `flags.max_per_task`（默认 200）封顶，
+        # 敏感信息候选（续148）：整表读是有意的 —— 条数由 `flags.max_per_task`（默认 200）封顶，
         # 且这张表**没有折叠/聚合语义**，分页只会把一个短清单切成几页，反而更难抄。
         flag_rows = [dict(r) for r in db.list_flags(task_id)]
         # 「线索」页签按用户口径在续24 移除（线索只在 JSONL 导出里按 `type=lead` 保留），
@@ -2296,20 +2299,13 @@ def create_app():
     def _fold_dirs(rows, show_all):
         """目录结果按「站点 + 状态码 + 响应大小」折叠重复，返回 `(rows, hidden)`。
 
-        为什么按大小折叠：一个站点下动辄几百条同样长度的 `200`（软 404 模板、统一的
-        重定向页），它们不是真发现 —— 与 dirmap 把这类结果单独写进「重复长度.txt」
-        是同一口径。默认只留首个，`?all=1`（`/dirs`）放开。
-
-        **站点身份取 `dirs.site_url`，并把尾斜杠归一掉**（续24）：
-        * 归一的原因：同一个站点在库里既可能是 `http://a:8080`（目标直接给域名/IP 时
-          由 probe 拼出来）也可能是 `http://a:8080/`（httpx 回显的带斜杠形式），
-          同一个站点的两组结果不该因为一个斜杠就分成两桶；
-        * 折叠键能正确区分站点，**前提是 `site_url` 真的写了值** —— 早先 dirmap 解析行
-          一律写空串（见 `scanner/stages/dirscan.py::_origin_of` 的说明），导致两个方向都错：
-          同站点的 dirmap 行与内置行永不互折（"同样大小的没过滤"），
-          而不同站点的 dirmap 行会因 site_url 都为空被误折成一条（真丢结果）。
-          该缺陷已在解析侧修正；本函数只做归一，**不做"空值兜底估算"** ——
-          站点身份必须来自数据本身，不能靠展示层猜。
+        按大小折叠是因为一个站点下动辄几百条同长度的 `200`（软 404 模板、统一重定向页），
+        它们不是真发现（与 dirmap 把这类单独写进「重复长度.txt」同一口径）；默认只留首个，
+        `?all=1`（`/dirs`）放开。站点身份取 `dirs.site_url` 并**把尾斜杠归一**（续24）：库里同一
+        站点既可能是 `http://a:8080`（probe 拼的）也可能是带斜杠的 httpx 回显形。本函数只做归一、
+        **不做"空值兜底估算"** —— 早先 dirmap 行把 `site_url` 写成空串，结果同站点的行永不互折、
+        不同站点的行反被误折成一条（见 `scanner/stages/dirscan.py::_origin_of`）；
+        站点身份必须来自数据本身，不能靠展示层猜。
         """
         rows = [dict(r) for r in rows]
         seen, hidden = {}, 0
@@ -2966,21 +2962,11 @@ def create_app():
     def api_scan_ext():
         """把勾选的**拓展域名**送去真正检测：新建一个跑 `subdomain → probe → dirscan → vulnscan` 的任务。
 
-        为什么需要（用户 2026-09-23：「我根据你这些域名都没有检测」）：拓展域名只入
-        `subdomains` 表，而 probe / dirscan / vulnscan 的输入是**存活站点**（`sites`）——
-        偏偏 osint 与 jsmine 两个阶段排在 probe **之后**，同一任务里它们新挖出来的域名
-        赶不上本轮的存活探测，于是这些域名永远停在"有域名、无站点、无检测"的状态。
-
-        **`subdomain` 阶段为什么也在里面**（用户 2026-09-25：「拓展域名如果再去检测也
-        需要去子域名扫描」）：只探 `aaa.targ1.pro` 一个点是远远不够的，它下面往往还挂着
-        `api.aaa.targ1.pro` 一类的资产。放在最前面是因为后续阶段的输入来自它的产出
-        （`domains_for_probe` 含目标自身），这样子域也能一起进存活探测。
-        代价是**多一轮被动收集 + DNS 字典爆破**（两者都是只读的 DNS / 公开接口查询，
-        非破坏性），因此只对**用户明确勾选**的域名执行，不做全自动。
-
-        为什么必须手动勾选而不是自动全跑：拓展域名里大量是第三方噪声
-        （CDN、开源库站点、JS 命名空间碎片），全跑既越权又浪费请求额度。
-        与「批量跑子域名」「补扫」同一套做法（新建任务、一任务一线程、可独立停止/删除）。
+        需要它是因为 osint / jsmine 排在 probe **之后**，同一任务里新挖出的域名赶不上本轮存活
+        探测，永远停在"有域名、无站点、无检测"（用户 2026-09-23 点名）。`subdomain` 放最前面是
+        因为后续阶段的输入来自它的产出（`domains_for_probe` 含目标自身），子域也能一起进存活探测。
+        代价是多一轮被动收集 + DNS 字典爆破（都是只读查询），所以**只对明确勾选的域名**执行 ——
+        拓展域名里大量是 CDN / JS 碎片，自动全跑既越权又浪费请求额度。
         """
         domains = _picked_domains()
         fallback = _safe_next(request.form.get("next"), url_for("tasks"))
@@ -3189,9 +3175,10 @@ def create_app():
                                     f.get("dirscan_recursive_max_paths", 40) or 0)},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
                     # 外部引擎 afrog（续121）：默认关；限速值由 scanner/afrog.py 的封顶再压一道
-                    # flag 候选抽取（续126）：零额外请求，所以默认开；清单是逗号分隔文本，
-                    # 空白项就地丢掉（用户粘贴时几乎一定带空格），正则原样进列表、由模块校验。
+                    # 敏感信息 / flag 候选抽取（续148 由"flag 候选"改名）：零额外请求所以默认开；
+                    # 清单是逗号分隔文本，空白项就地丢掉（用户粘贴时几乎一定带空格），正则原样进列表。
                     "flags": {"enabled": f.get("flags_enabled") == "1",
+                              "secrets": f.get("flags_secrets") == "1",
                               "prefixes": [x.strip() for x in
                                            (f.get("flags_prefixes") or "").split(",") if x.strip()],
                               "patterns": [x.strip() for x in
@@ -3327,6 +3314,7 @@ def create_app():
                                        bl=blacklist.load(settings, owner_id=_owner_scope()),
                                        bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                        esp=external_source_panel(_s114),
+                                       shape_note=_shape_note(_s114),
                                        error="参数必须是整数")
             # 续48：审计只记"改了哪几个区块"，**绝不记值**（键名也省掉 —— 见 `_changed_sections`）。
             _changed = _changed_sections(settings, data)
@@ -3337,7 +3325,8 @@ def create_app():
         return render_template("settings.html", s=settings, checks=owasp_checks,
                                bl=blacklist.load(settings, owner_id=_owner_scope()),
                                bl_path=rel_display(blacklist.path(settings), mask_outside=True),
-                               esp=external_source_panel(settings))
+                               esp=external_source_panel(settings),
+                               shape_note=_shape_note(settings))
 
     # ---------- 访问审计（续48） ----------
 
@@ -3710,12 +3699,18 @@ def create_app():
         rel = rel_display(str(res.get("path") or ""), mask_outside=True)
         inc = res.get("includes") or {}
         n_assets = sum(int(v or 0) for v in (inc.get("assets") or {}).values())
+        # 这张页面上没有"带上原文取值"那个开关（刻意不留：一键导出是拿鼠标点的动作，
+        # 而把 AK/SK 原文打进一个要发给别人的文件，应当是敲命令行的人才做的决定）——
+        # 但"没带多少条"必须报出来，否则导出的人以为包里全都有。
+        n_sk = sum(int(v or 0) for v in (inc.get("secrets_skipped") or {}).values())
         _audit(audit.KIND_MIGRATE, target=rel,
                detail=f"导出迁移包：任务 {inc.get('tasks') or 0} 个 / 资产 {n_assets} 条；"
-                      "不含账号、不含凭据文件、不含任务登录态（页面上没有这三个开关）")
-        return _migrate_page(
-            msg=(f"已导出：{rel}（{(int(res.get('bytes') or 0) / 1024):.0f} KB，0600）"
+                      "不含账号、不含凭据文件、不含任务登录态（页面上没有这三个开关）"
+                      + (f"；敏感信息原文 {n_sk} 条未带" if n_sk else ""))
+        return _migrate_page(msg=(f"已导出：{rel}（{(int(res.get('bytes') or 0) / 1024):.0f} KB，0600）"
                  f"｜任务 {inc.get('tasks') or 0} 个 / 资产 {n_assets} 条"
+                 + (f"｜敏感信息原文 {n_sk} 条**没打进包**（要带请用命令行："
+                    f"`cli/client.py --export-scan --with-secrets`）" if n_sk else "")
                  + (f"｜按来源 {inc.get('sources')}" if inc.get("sources") else "")))
 
     @app.route("/api/migrate/preview", methods=["POST"])
@@ -3837,17 +3832,11 @@ app = create_app()
 def _port_free(host, port):
     """端口占用预检：答的是"**有没有人在监听**这个端口"。
 
-    必须自己做一次真实 bind：Windows 上 Werkzeug 对监听套接字设了 SO_REUSEADDR，
-    第二个实例会**绑定成功**并照常打印 "Running on ..."，但页面其实打不开
-    ——这正是之前诊断过的"控制台静默失败"（见 AGENTS.md 的经验教训）。
-
-    ⚠ 预检**必须与 Werkzeug 真实会做的那次 bind 同样宽**（续145 实测咬到）：
-    `http.server.HTTPServer.allow_reuse_address = 1`，而这里原先是裸 bind。于是"上一个控制台
-    刚被结束、还有客户端连接没关完（FIN-WAIT / TIME_WAIT 占着这个本地端口）"会让预检报
-    `EADDRINUSE` ⇒ `serve()` 打印"端口已被占用，去结束占用进程"并以 1 退出 —— 而实际上
-    **没有任何进程在监听**（`ss -tln` 是空的），真去 bind 是能成的，那句提示因此把人引向
-    一个不存在的占用者。加上 SO_REUSEADDR 之后两个性质都还在：真有监听者时**仍然**报占用
-    （SO_REUSEADDR 不放行两个监听者共存，那正是本函数存在的理由），只剩残留连接时放行。
+    必须真 bind 一次：Windows 上 Werkzeug 给监听套接字设了 SO_REUSEADDR，第二个实例会
+    **绑定成功**并照常打印 "Running on ..."，页面却打不开（就是那次"控制台静默失败"）。
+    预检还**必须与 Werkzeug 那次 bind 同样宽**（续145 实测咬到）：裸 bind 会在"上一个控制台
+    刚结束、还有 FIN-WAIT / TIME_WAIT 残留"时报 EADDRINUSE，把人去赶找一个不存在的占用者。
+    加上 SO_REUSEADDR 后真有监听者时**仍然**报占用 —— 两个性质都要在。
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

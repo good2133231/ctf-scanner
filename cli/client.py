@@ -39,8 +39,8 @@ def _print_summary(task_id, ctx):
           f"站点 {len(ctx.results.get('sites', []))} | "
           f"目录 {len(ctx.results.get('dirs', []))} | "
           f"潜在漏洞 {len(ctx.results.get('vulns', []))} | "
-          # 续126：flag 候选单独报数并注明**不是结论**（同形状大量是模板/JS 占位符）
-          f"flag 候选 {len(ctx.results.get('flags', []))}（按形状抽取，需人工判真）| "
+          # 续148：敏感信息 / flag 候选单独报数并注明**不是结论**（同形状大量是模板/JS 占位符）
+          f"敏感信息候选 {len(ctx.results.get('flags', []))}（按形状抽取，需人工判真）| "
           f"线索 {len(ctx.results.get('leads_intel', [])) + len(ctx.results.get('leads_heuristic', [])) + len(ctx.results.get('leads_github', []))}"
           f"（情报/启发式/GitHub，非漏洞结论）")
     print(f"    日志：{rel_display(ctx.workdir / 'task.log')}")
@@ -385,7 +385,8 @@ def do_migrate(args):
             info = migrate.export_bundle(dst=(args.export_scan or None), task_ids=ids or None,
                                          with_users=args.with_users,
                                          with_task_auth=args.with_task_auth,
-                                         passphrase=pw or None, with_logs=args.with_logs)
+                                         passphrase=pw or None, with_logs=args.with_logs,
+                                         with_secrets=args.with_secrets)
         except OSError as e:
             print(f"[!] 导出失败：{e}")
             return 1
@@ -402,6 +403,9 @@ def do_migrate(args):
             print(f"    [!] 本机库里没有这些表，这一档没数据可带：{', '.join(inc['accounts_absent'])}")
         print(f"    任务登录态请求头：" + ("保留" if inc["task_auth"]
                                     else f"已剥掉 {inc['task_auth_stripped']} 条"))
+        _sk = sum((inc.get("secrets_skipped") or {}).values())
+        print("    敏感信息 / flag 候选（原文取值）：" + ("**已打进包**" if inc.get("secrets_included")
+              else f"不带，本机另有 {_sk} 条（要带加 --with-secrets）"))
         if inc.get("log_paths_dropped"):
             print(f"    任务日志路径：{inc['log_paths_dropped']} 条落在本项目根之外，"
                   "包里已置空（不把本机目录结构带出去）")
@@ -613,6 +617,10 @@ def main():
                     help="配合 --export-scan：把任务日志一起带走。默认不带 —— 日志里有第三方接口的"
                          "返回原文、目标响应体，甚至偶发的口令痕迹，比表里的行更适合留在本机。"
                          "只带落在 logs/ 之内的文件，单文件 5 MB / 总量 25 MB 封顶（超的计入跳过）")
+    ap.add_argument("--with-secrets", action="store_true",
+                    help="配合 --export-scan：把 `flags` 表（敏感信息与 flag 候选的**原文取值** —— "
+                         "各家 AK/SK、token、私钥头、连接串）一起打进包。默认不带：这张表存的从来就是"
+                         "「拿去就能用」的值，而迁移包是要发给别人的文件。导入侧不需要它也能起")
     ap.add_argument("--dry-run", action="store_true",
                     help="配合 --import-scan：只报「会导入什么」，不写任何数据行（幂等建表仍会做）")
     args = ap.parse_args()
@@ -629,6 +637,7 @@ def main():
     _mig_stray = [(n, v) for n, v in (
         ("--only-tasks", args.only_tasks), ("--with-users", args.with_users),
         ("--with-task-auth", args.with_task_auth), ("--with-logs", args.with_logs),
+        ("--with-secrets", args.with_secrets),
         ("--encrypt-bundle", args.encrypt_bundle)) if v]
     if _mig_stray and args.export_scan is None:
         print(f"[!] 这些参数只在 --export-scan 时有效：{', '.join(n for n, _ in _mig_stray)}")

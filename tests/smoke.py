@@ -2877,14 +2877,14 @@ def main():
     db.insert_leads(w_tid, [{"kind": "intel", "code": "CVE-2021-44228", "title": "Log4Shell",
                              "target": "w.test", "matched": "tech:log4j",
                              "level": "high", "source": "kev"}])
-    # 续126：这份夹具还要覆盖「flag 候选」小节 —— 三个格式共用 collect()，漏一节就是格式漂移
+    # 续126：这份夹具还要覆盖「敏感信息」小节 —— 三个格式共用 collect()，漏一节就是格式漂移
     db.insert_flag(w_tid, {"value": "Wmd_flag", "kind": "flag", "source": "dir",
                            "url": "http://w.test/.env", "context": "flag{Wmd_flag}"})
 
     _wmd = generate(w_tid)
     _whtml = generate_html(w_tid)
     # 三个格式必须**看到同一批数据**：MD 里有的小节 HTML 里也要有（避免格式间漂移）。
-    for _sec in ("潜在漏洞", "flag 候选", "存活站点", "开放端口", "C 段视野", "TLS 证书",
+    for _sec in ("潜在漏洞", "敏感信息", "存活站点", "开放端口", "C 段视野", "TLS 证书",
                  "目录发现", "已判误报"):
         assert f"<h2>{_sec}" in _whtml, f"HTML 报告缺小节：{_sec}"
         assert _sec in _wmd, f"MD 报告缺小节：{_sec}"
@@ -16331,7 +16331,7 @@ expression: r0()
           "实测：单跑自检 146.2s→26.2s（5.6x），全量门禁里 [7l] 那 146.7s 是同一条路省下来的")
 
 
-    # ---------------- [8ae] 续126：CTF flag 候选抽取（零额外请求，单独成表） ----------------
+    # ---------------- [8ae] 续126 建、续148 改名：敏感信息 / flag 候选抽取（零额外请求，单独成表） ----------------
     #      用户点单第 2 件："flag 抽取是空的：全仓搜 flag{ / CTF{ 零命中。
     #      （零额外请求就能做：正文/JS/报错里按可配正则抽候选，单独成列）"
     #      八小块各有所司：① 形状 ② 零请求（结构判据）③ 单独成表的代价 ④ harvest 语义（全桩，
@@ -16365,7 +16365,7 @@ expression: r0()
     assert _ff126.scan("配置 KEY : S3cr3t_VALUE",
                        _S(prefixes=[""], patterns=[r"KEY\s*:\s*[A-Za-z0-9_]+"], max_len=60)) \
         == [("regex", "KEY : S3cr3t_VALUE", 3)]
-    _p_no = _S(prefixes=[], patterns=[r"[a-z]+_\d{4}", r"(["], max_len=60)
+    _p_no = _S(prefixes=[], patterns=[r"[a-z]+_\d{4}", r"(["], max_len=60, secrets=False)
     _r126, _pt126, _rej126, _c126 = _ff126.rules(_p_no)
     assert not _r126 and not _pt126, (_r126, _pt126)
     assert len(_rej126) == 2 and "取不出必现字面量" in _rej126[0] and "编译失败" in _rej126[1], _rej126
@@ -16509,10 +16509,10 @@ expression: r0()
     _md126 = _rp126.generate(_tid2)
     _html126 = _rp126.generate_html(_tid2)
     _jl126 = _rp126.generate_jsonl(_tid2)
-    assert "## flag 候选" in _md126 and "Md_Html_One" in _md126, _md126[:200]
-    assert "<h2>flag 候选" in _html126, "MD 有节而 HTML 没有 = 三格式口径漂移"
-    assert "<script>alert(1)</script>" not in _html126, "flag 值来自目标，HTML 报告必须转义"
-    assert '"type": "flag"' in _jl126 and '"flags": 2' in _jl126, _jl126[:400]
+    assert "## 敏感信息" in _md126 and "Md_Html_One" in _md126, _md126[:200]
+    assert "<h2>敏感信息" in _html126, "MD 有节而 HTML 没有 = 三格式口径漂移"
+    assert "<script>alert(1)</script>" not in _html126, "取值来自目标，HTML 报告必须转义"
+    assert '"type": "secret"' in _jl126 and '"secrets": 2' in _jl126, _jl126[:400]
 
     # ---- ⑦ 三方一致：DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射 ----
     #      stub save_settings：**绝不真写 config/settings.yaml**（整份重写会洗掉全部中文注释，
@@ -16520,7 +16520,7 @@ expression: r0()
     from scanner.config import DEFAULTS as _D126
     from gui import app as _gui126
     from scanner import users as _us126
-    _fkeys = ("enabled", "prefixes", "patterns", "min_len", "max_len",
+    _fkeys = ("enabled", "secrets", "prefixes", "patterns", "min_len", "max_len",
               "max_chars", "max_per_source", "max_per_task")
     assert set(_D126["flags"]) == set(_fkeys), sorted(_D126["flags"])
     _yaml126 = (ROOT / "config/settings.yaml").read_text(encoding="utf-8")
@@ -16536,7 +16536,7 @@ expression: r0()
     assert _login7(_cl126, {"username": "smoke126-admin", "password": "Passw0rd!123"},
                    environ_base={"REMOTE_ADDR": "198.51.100.212"}).status_code == 302
     _sh126 = _cl126.get("/settings").get_data(as_text=True)
-    for _k in ("enabled", "prefixes", "patterns", "max_len",
+    for _k in ("enabled", "secrets", "prefixes", "patterns", "max_len",
                "max_chars", "max_per_source", "max_per_task"):
         assert f'name="flags_{_k}"' in _sh126, f"策略配置缺 flags.{_k} 的输入框"
     # `min_len` 刻意不在页面上：它只为挡 `flag{}` 这种空壳，给个能填 0 的框等于请人来
@@ -16556,13 +16556,15 @@ expression: r0()
     try:
         assert _cl126.post("/settings", data={"min_severity": "medium", "flags_enabled": "1",
                                              "flags_prefixes": "flag, ctf ,syc{",
-                                             "flags_max_len": "64"}).status_code == 302
+                                             "flags_max_len": "64", "flags_secrets": "1"}).status_code == 302
         _f127 = _cap127["flags"]
         assert _f127["enabled"] is True and _f127["prefixes"] == ["flag", "ctf", "syc{"], _f127
         assert _f127["max_len"] == 64 and _f127["patterns"] == [], _f127
+        assert _f127["secrets"] is True, _f127
         # 未勾选 ⇒ 回落到"关"：不能因为表单没带就静默保留上一次的开（外发能力都按这口径）
         assert _cl126.post("/settings", data={"min_severity": "medium"}).status_code == 302
         assert _cap127["flags"]["enabled"] is False, _cap127["flags"]
+        assert _cap127["flags"]["secrets"] is False, _cap127["flags"]
         # 空白清单不许写成 [""]：那会让 needle 退化成单字符 `{`，形状判据就废了
         assert _cl126.post("/settings", data={"flags_prefixes": " , "}).status_code == 302
         assert _cap127["flags"]["prefixes"] == [], _cap127["flags"]
@@ -16608,13 +16610,13 @@ expression: r0()
     finally:
         _ff126.harvest = _real_harvest
     # d) 「无锚正则也收下」：① 的拒用断言 + 成本上限都不成立（这里正向钉住）
-    assert not _ff126.rules(_S(prefixes=[], patterns=[r"\w+\{[^}]{1,40}\}"]))[1] \
-        and len(_ff126.rules(_S(prefixes=[], patterns=[r"\w+\{[^}]{1,40}\}"]))[2]) == 1, \
+    assert not _ff126.rules(_S(prefixes=[], patterns=[r"\w+\{[^}]{1,40}\}"], secrets=False))[1] \
+        and len(_ff126.rules(_S(prefixes=[], patterns=[r"\w+\{[^}]{1,40}\}"], secrets=False))[2]) == 1, \
         "通用 word{} 形状必须被拒：实测 2 MB 正文能捞出 2 万条 CSS 规则"
     # e) ASSET_TABLES 再加第二处定义 ⇒ ③ 的源码判据变红（本轮真实缺陷的形状）
     assert _src_db126.count("ASSET_TABLES = (") == 1
 
-    print("[8ae] 续126 flag 候选抽取 ok: 形状判据（原文大小写/空壳/嵌套/超长/方括号/单次上限）"
+    print("[8ae] 续126 建、续148 改名（敏感信息）ok: 形状判据（原文大小写/空壳/嵌套/超长/方括号/单次上限）"
           "｜刻意偏宽：只配 ctf 也收 DASCTF{，明说不加词边界（漏报丢题、误报多看一眼）"
           "｜自定义正则取不出必现字面量就**拒用并给原因**，绝不退回整份正文扫"
           "（实测 1.56 MB 正文：本实现 1.2 ms vs 同配置写成全局忽略大小写的双分支 40 ms、21 路交替 332 ms）"
@@ -20815,6 +20817,219 @@ expression: r0()
           "只剩一条、放开后三条都在、被收起的条数照报、放开开关说清放开的是哪两层｜"
           "主题：键与默认档只有一份产地、app.js 不再藏 dark、赋值排在样式表之前、默认档是浅色｜"
           "导出收成一行：四个格式一个不少、旧「导出 X」四连按钮文案全部消失、完整版只剩一个入口")
+
+
+    # ---------------- [8ba] 续148：「flag 候选」改成敏感信息（形状表复用 jsmine，迁移包默认不带原文） ----
+    # 主理人原话：「flag候选修改成敏感信息获取 flag一般只会在服务器上 我们只去正则匹配敏感信息
+    # 比如aksk那些」+ 对我提问的回答「存原文，但迁移包默认不带这张表」。
+    # 七小块：① 形状表只有一个产地 ② 内置形状真的在跑 ③ 锚定位不住的**可见地**被拒 +
+    # 策略页那句跟着注册表变（§5.19）④ 成本护栏没被拆（AST）⑤ 迁移包默认不带、显式开关才带
+    # ⑥ 人读出口的口径 ⑦ §6.1 变异证伪。
+    import ast as _ast8ba
+    import inspect as _insp8ba
+    import json as _json8ba
+    from scanner import flagfind as _ff8ba
+    from scanner import jsmine as _jsm8ba
+    from scanner import migrate as _mg8ba
+    from scanner import report as _rp8ba
+    from gui import app as _gui8ba
+
+    _ff8ba_src = (ROOT / "scanner/flagfind.py").read_text(encoding="utf-8")
+
+    # ---- ① 凭据形状只有一份产地 ----
+    # 判据看的是**字符串常量**，不是"文件里不许出现这几个字"：注释里解释一句 `AKIA` 是正当的，
+    # 把一张正则表抄进模块才是问题（§6.1 推论四：钉代码形态，别钉裸词）。
+    _SHAPE_TOKENS = ("AKIA", "LTAI", "AKID", "AIza", "ghp_", "xox", "SG.", "eyJ", "hooks.slack")
+
+    def _copied_shapes(src):
+        _consts = [n.value for n in _ast8ba.walk(_ast8ba.parse(src))
+                   if isinstance(n, _ast8ba.Constant) and isinstance(n.value, str)]
+        return sorted({t for t in _SHAPE_TOKENS for s in _consts if t in s})
+
+    assert not _copied_shapes(_ff8ba_src), \
+        f"flagfind 里躺了一份凭据形状的字符串常量：{_copied_shapes(_ff8ba_src)}"
+    assert "from .jsmine import SECRET_RULES" in _ff8ba_src, \
+        "形状表不是从 jsmine 取的 ⇒ 现在有两份，改一处另一处立刻变假绿"
+    # 判据自证夹具：造一段"真的抄了表"的样本，确认它会被抓 —— 不然"0 命中"可能只是扫错了文件
+    assert _copied_shapes('X = "AKIA[0-9A-Z]{16}"'), "自证失败：这条判据其实抓不到任何样本"
+
+    # ---- ② 内置形状真的在跑（九类各一份取样正文：kind / 取值 / 偏移都要对） ----
+    _CASES = [
+        ("aws-access-key", 'k="AKIAIOSFODNN7EXAMPLE";'),
+        ("aliyun-access-key", "LTAI4FfeFakeKey12345678"),
+        ("tencent-access-key", "AKID" + "abcdefghijklmno1234"),
+        ("google-api-key", "AIza" + "a" * 35),
+        ("slack-token", "xoxb-123456789012-" + "a" * 20),
+        ("sendgrid-key", "SG." + "a" * 22 + "." + "b" * 22),
+        ("jwt", "eyJ" + "a" * 10 + "." + "b" * 10 + "." + "c" * 10),
+        ("slack-webhook", "https://hooks.slack.com/services/" + "A" * 24),
+        ("private-key", "-----BEGIN RSA PRIVATE KEY-----"),
+    ]
+    _cfg8ba = {"flags": {"prefixes": ["flag"], "patterns": [], "min_len": 1, "max_len": 200}}
+    for _name8ba, _body8ba in _CASES:
+        _got8ba = _ff8ba.scan(_body8ba, _cfg8ba)
+        _hit8ba = [g for g in _got8ba if g[0] == _name8ba]
+        assert _hit8ba, f"{_name8ba} 没抽到：{_body8ba!r} → {_got8ba}"
+        _v8ba, _o8ba = _hit8ba[0][1], _hit8ba[0][2]
+        assert _body8ba[_o8ba:_o8ba + len(_v8ba)] == _v8ba, \
+            f"{_name8ba} 的偏移对不上原文（「上下文」那一列会整体偏）：{_v8ba!r} @ {_o8ba}"
+        assert _v8ba == _v8ba.strip(), f"{_name8ba} 的取值带首尾空白：{_v8ba!r}"
+    # `kind` 存的是形状名，不是清一色 "regex"：页面「形状」列与报告同一口径，人靠它分类
+    assert {g[0] for g in _ff8ba.scan(_CASES[0][1] + " " + _CASES[6][1], _cfg8ba)} == \
+        {"aws-access-key", "jwt"}, "kind 没跟着形状名走 ⇒ 页面上分不出是哪一类"
+    # CTF 前缀那条路一个字没动（改名不等于把旧能力换掉）
+    assert _ff8ba.scan("flag{Still_Works_123}", _cfg8ba) == [("flag", "Still_Works_123", 5)]
+    # `flags.secrets` 开关正反都要验：只验"开着能抽到"挡不住"其实一直开着"
+    _on = [g[0] for g in _ff8ba.scan(_CASES[0][1], {"flags": {"prefixes": [], "secrets": True}})]
+    _off = [g[0] for g in _ff8ba.scan(_CASES[0][1], {"flags": {"prefixes": [], "secrets": False}})]
+    assert _on == ["aws-access-key"] and _off == [], (_on, _off)
+
+    # ---- ③ 锚定位不住的形状被**可见地**拒掉；策略页那句跟着注册表变 ----
+    _ok8ba, _no8ba = _ff8ba.secret_family()
+    assert {n.split("（")[0] for n in _no8ba} == {"cloud-access-id", "github-token",
+                                                 "telegram-bot-token", "stripe-key",
+                                                 "db-uri", "generic-credential"}, _no8ba
+    assert len(_ok8ba) + len(_no8ba) == len(_jsm8ba.SECRET_RULES), \
+        "形状表的条数对不上 ⇒ 有规则既没在跑也没被拒（最阴的那种：静默消失）"
+    for _r8ba in _no8ba:
+        assert "拒用" in _r8ba and ("取不出必现字面量" in _r8ba or "锚点" in _r8ba), _r8ba
+    assert _ff8ba.secret_family() is _ff8ba.secret_family(), "缓存没按形状表指纹复用"
+    # 「策略配置」页那句必须是**现算的**：改注册表 ⇒ 句子里的数字跟着变（§5.19 的回归口径）
+    _sh8ba = c.get("/settings").get_data(as_text=True)
+    assert "当前生效：" in _sh8ba and f"{len(_ok8ba)}/{len(_jsm8ba.SECRET_RULES)} 条在跑" in _sh8ba, \
+        "页面那句不是从形状表现取的 ⇒ 迟早漂成谎话"
+    assert "被成本护栏拒用" in _sh8ba and "github-token" in _sh8ba, \
+        "拒因只写在文档里、页面上看不见（文档那句「拒因会出现在扫描日志里」原先就是假的）"
+    _note_src8ba = _insp8ba.getsource(_gui8ba._shape_note)
+    assert "len(" in _note_src8ba and "15 条" not in _note_src8ba and "9 条" not in _note_src8ba, \
+        "那句话里抄了数字 ⇒ 它不会跟着形状表变"
+    _real_rules8ba = _jsm8ba.SECRET_RULES
+    try:
+        _jsm8ba.SECRET_RULES = _real_rules8ba + (
+            ("fake-shape-8ba", re.compile(r"\b(ZZZZFAKE[0-9]{6})\b"), 1),)
+        _ok2, _no2 = _ff8ba.secret_family()
+        assert any(x[3] == "fake-shape-8ba" for x in _ok2), "形状表加了一条却没被采纳 ⇒ 缓存没看内容"
+        # 生效规则表按配置指纹缓存（生产上形状表改一次必然重启一次），这里换表不重启 ⇒ 自己清一次
+        _ff8ba._RULES.clear()
+        assert f"{len(_ok2)}/{len(_jsm8ba.SECRET_RULES)} 条在跑" in c.get("/settings").get_data(as_text=True), \
+            "改了注册表、页面那句不动 ⇒ 它其实是写死的"
+    finally:
+        _jsm8ba.SECRET_RULES = _real_rules8ba
+        _ff8ba._SECRET_FAMILY.clear()
+        _ff8ba._RULES.clear()          # 上面那次渲染会把"带假形状"的规则表缓存下来
+    assert f"{len(_ff8ba.secret_family()[0])}/{len(_jsm8ba.SECRET_RULES)} 条在跑" in \
+        c.get("/settings").get_data(as_text=True), "恢复完的页面不回原样"
+    assert _ff8ba.scan(_CASES[0][1], _cfg8ba), "清缓存之后内置形状反而不跑了"
+
+    # ---- ④ 成本护栏：形状正则只许在带上下界的窗口上跑 ----
+    def _unbounded_search(src):
+        return [n.lineno for n in _ast8ba.walk(_ast8ba.parse(src))
+                if isinstance(n, _ast8ba.Call) and isinstance(n.func, _ast8ba.Attribute)
+                and n.func.attr == "search" and isinstance(n.func.value, _ast8ba.Name)
+                and n.func.value.id == "rx" and len(n.args) < 3]
+
+    assert not _unbounded_search(_ff8ba_src), \
+        "flagfind 里有不带上下界的 rx.search（那一条口子同时放开 ReDoS 与整篇耗时）"
+    assert _unbounded_search("def f(rx, text):\n    return rx.search(text)"), \
+        "自证失败：这条 AST 判据抓不到整篇扫"
+    # 窗口上限仍然封顶（内置形状与用户正则共用 `max_per_source` 那一档预算）。
+    # 取样正文把每个 AK 隔开 900 字符：窗口是 `锚 ±half`，挤在一起时同一处命中会被去重成一条，
+    # 那样"封顶"就没东西可封了（本轮实测：连排 40 个只出 1 条，看着像"上限没生效"）。
+    # 分隔符必须用**非单词字符**：`\b(AKIA[0-9A-Z]{16})\b` 后面紧跟 `xxx` 时那个尾边界根本不成立
+    # （本轮就踩过：用 x 填充 ⇒ 一条都不命中，判据瞬间变成假的"上限生效"）。
+    _many = " ".join(("AKIA" + "A" * 16) + ("-" * 900) for _ in range(40))
+    _capped8ba = _ff8ba.scan(_many, {"flags": {"prefixes": [], "max_len": 200}}, max_hits=5)
+    assert len(_capped8ba) == 5, f"max_per_source 封顶没作用于内置形状 ⇒ 一页就能刷爆候选表：{len(_capped8ba)}"
+    assert len({o for _k, _v, o in _capped8ba}) == 5, f"五条命中其实是同一处被重复计：{_capped8ba}"
+
+    # ---- ⑤ 迁移包：默认不带 `flags`，`--with-secrets` 才带，两侧都要数得出来 ----
+    assert _mg8ba.SECRET_TABLES and set(_mg8ba.SECRET_TABLES) <= set(db.ASSET_TABLES), _mg8ba.SECRET_TABLES
+    _t8ba = db.create_task("smoke-8ba-secrets", "http://s8ba.test/", ["probe"], {})
+    db.insert_flag(_t8ba, {"value": "AKIAIOSFODNN7EXAMPLE", "kind": "aws-access-key",
+                           "source": "dir", "url": "http://s8ba.test/.env",
+                           "context": 'k="AKIAIOSFODNN7EXAMPLE"'})
+    _tmp8ba = Path(tempfile.mkdtemp(prefix="mig8ba-"))
+    _p_def = _mg8ba.export_bundle(dst=_tmp8ba / "default.json", task_ids=[_t8ba])
+    _b_def = _json8ba.loads(Path(_p_def["path"]).read_text(encoding="utf-8"))
+    assert _b_def["data"]["assets"]["flags"] == [], "默认包里躺着原文取值 ⇒ 红线没守住"
+    assert _b_def["includes"]["secrets_included"] is False
+    assert _b_def["includes"]["secrets_skipped"] == {"flags": 1}, \
+        f"「没带」必须数得出来：{_b_def['includes']['secrets_skipped']}"
+    _p_yes = _mg8ba.export_bundle(dst=_tmp8ba / "with.json", task_ids=[_t8ba], with_secrets=True)
+    _b_yes = _json8ba.loads(Path(_p_yes["path"]).read_text(encoding="utf-8"))
+    assert len(_b_yes["data"]["assets"]["flags"]) == 1 and _b_yes["includes"]["secrets_skipped"] == {}, \
+        "显式开关带不出东西 ⇒ ⑤ 抓的其实只是「那张表本来就是空的」"
+    _w_def = _mg8ba.import_bundle(_tmp8ba / "default.json", dry_run=True)["warnings"]
+    assert any("默认没带" in w for w in _w_def), f"收包的人不会被告知这一档被挡了：{_w_def}"
+    assert not any("默认没带" in w for w in
+                   _mg8ba.import_bundle(_tmp8ba / "with.json", dry_run=True)["warnings"]), \
+        "带全了还警告 ⇒ 那句话已经是条件错判"
+    # CLI 那条路：旗标存在、真的传进去了、且不给主旗标会报错（不静默忽略）
+    _cli_src8ba = (ROOT / "cli/client.py").read_text(encoding="utf-8")
+    assert '"--with-secrets"' in _cli_src8ba and "with_secrets=args.with_secrets" in _cli_src8ba
+    assert '("--with-secrets", args.with_secrets)' in _cli_src8ba, \
+        "`--with-secrets` 没进那条「只在 --export-scan 时有效」的清单 ⇒ 给了也可能没生效"
+
+    # ---- ⑥ 人读出口：节标题只剩一份产地、JSONL 的 type 换到 secret ----
+    assert _insp8ba.getsource(_rp8ba.generate).count('"## 敏感信息') == 0 \
+        and _insp8ba.getsource(_rp8ba.generate_html).count('"敏感信息（') == 0, \
+        "MD/HTML 里又各抄了一份节标题（本轮动手前就是两份、措辞已经不一样）"
+    _md8ba = _rp8ba.generate(_t8ba)
+    _html8ba = _rp8ba.generate_html(_t8ba)
+    _jl8ba = _rp8ba.generate_jsonl(_t8ba)
+    assert "## " + _rp8ba.SECRETS_TITLE in _md8ba, _md8ba[:200]
+    assert "<h2>" + _rp8ba.SECRETS_TITLE in _html8ba, "MD 有节而 HTML 没有 = 三格式口径漂移"
+    assert _md8ba.count(_rp8ba.SECRETS_TITLE) == 1 and _html8ba.count(_rp8ba.SECRETS_TITLE) == 1
+    assert '"type": "secret"' in _jl8ba and '"type": "flag"' not in _jl8ba, _jl8ba[:400]
+    assert '"secrets": 1' in _jl8ba.splitlines()[0], _jl8ba.splitlines()[0][:400]
+
+    # ---- ⑦ §6.1 变异：三处设计各打回旧写法，判据必须变红 ----
+    # 门槛有两半：**太短**（`gh`）与**全是标点**（`://`）。放松第一半只能放进 `gh`，
+    # `db-uri` 必须仍然被拒 —— 两半各自承重，合成一句"锚点不够好"就验不出漏写了哪一半。
+    _min8ba = _ff8ba._SECRET_MIN_ANCHOR
+    _cache_backup = dict(_ff8ba._SECRET_FAMILY)
+    try:
+        _ff8ba._SECRET_MIN_ANCHOR = 1          # 回到"只要有锚就收下"
+        _ff8ba._SECRET_FAMILY.clear()
+        _loose = _ff8ba.secret_family()
+        assert len(_loose[0]) == len(_ok8ba) + 1 and len(_loose[1]) == len(_no8ba) - 1, \
+            f"放松锚点长度门槛后条数没动 ⇒ ③ 的门槛其实没承重：{len(_loose[0])}/{len(_loose[1])}"
+        assert any(x[3] == "github-token" for x in _loose[0]), \
+            "放松长度门槛后 `gh` 还是没进来 ⇒ ③ 里那条「太短」的理由是编的"
+        assert "db-uri" in {n.split("（")[0] for n in _loose[1]}, \
+            "放松长度门槛后 `://` 也进来了 ⇒ ③ 里那条「全是标点」没独立承重"
+    finally:
+        _ff8ba._SECRET_MIN_ANCHOR = _min8ba
+        _ff8ba._SECRET_FAMILY.clear()
+        _ff8ba._SECRET_FAMILY.update(_cache_backup)
+    _real_fam = _ff8ba.secret_family
+    try:
+        _ff8ba.secret_family = lambda: ([], ["桩"])     # 形状表没接进来
+        _ff8ba._RULES.clear()
+        assert _ff8ba.scan(_CASES[0][1], _cfg8ba) == [], \
+            "桩掉形状表还能抽到 AK ⇒ rules() 其实没走 secret_family()"
+    finally:
+        _ff8ba.secret_family = _real_fam
+        _ff8ba._RULES.clear()
+    _real_st = _mg8ba.SECRET_TABLES
+    try:
+        _mg8ba.SECRET_TABLES = ()               # 默认档不再挡这张表
+        _p_mut = _mg8ba.export_bundle(dst=_tmp8ba / "mut.json", task_ids=[_t8ba])
+        assert _json8ba.loads(Path(_p_mut["path"]).read_text(encoding="utf-8"))["data"]["assets"]["flags"], \
+            "挡表的判据没承重 ⇒ ⑤ 抓到的是「那张表本来就没数据」这种假绿"
+    finally:
+        _mg8ba.SECRET_TABLES = _real_st
+
+    print("[8ba] 续148 敏感信息抽取 ok: 凭据形状只有一份产地（AST 看字符串常量，注释里提一句不误伤，"
+          "另配自证夹具）｜九类内置形状各一份取样正文验 kind/取值/偏移逐字回切，CTF 前缀那条路一字未动，"
+          "flags.secrets 开关正反都验"
+          f"（形状表 {len(_jsm8ba.SECRET_RULES)} 条：{len(_ok8ba)} 条在跑、{len(_no8ba)} 条被成本护栏拒用并逐条写明原因）"
+          "｜策略页那句现算自注册表：改表 ⇒ 数字跟着变，恢复 ⇒ 回到原样"
+          "｜rx.search 必须带上下界（AST，附自证夹具）+ max_per_source 对内置形状同样封顶"
+          "｜迁移包默认不带 flags（包里是空列表 + includes 报「未带 N 条」）、--with-secrets 才带、"
+          "导入侧 dry-run 就警告「这一档是默认没带，不是目标没有」"
+          "｜MD/HTML 节标题只剩常量一份、JSONL 的 type 换成 secret"
+          "｜变异三处：放松锚点门槛 / 桩掉形状表 / 清空 SECRET_TABLES，判据全部变红")
 
 
     print("SMOKE PASS")

@@ -289,16 +289,17 @@ ctf-scanner/
 │   │                      #   （注：本节曾写「9 栏」且漏列账号管理/访问审计，2026-09-26 续54 按 base.html 实测更正）
 │   │                      #   （原「端口服务/C 段视野/目录发现/拓展域名」四栏已移除，路由 /ports /csegs /dirs /extdomains
 │   │                      #    仍在，只是不进侧栏；前三条是任务维度数据，/extdomains 与 /subdomains 是同一张表的不同视图）
-│   │                      #   任务详情＝横向 11 个页签（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/**flag 候选**/目标与配置/运行日志）+ 页签内筛选框
-│   │                      #   （「flag 候选」＝续126 `scanner/flagfind.py` 的产物，单独成表，见 §5.16）
+│   │                      #   任务详情＝横向 11 个页签（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/**敏感信息**/目标与配置/运行日志）+ 页签内筛选框
+│   │                      #   （「敏感信息」＝续126 `scanner/flagfind.py` 的产物、续148 由「flag 候选」改名，
+│   │                      #     单独成表 `flags`，见 §5.16；表名与 `flags.*` 配置键刻意不改）
 │   │                      #   （「线索」页签 2026-09-24 续24 按用户口径**移除** —— 线索只从 JSONL 导出出，见 §已知局限；
 │   │                      #     「SSL 证书」＝cert 阶段产物；页签按数据源实有出现，没有产物时说明原因）
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
 │   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic/**github**（13 个）
 │   ├── migrate.py         # 扫描数据的导出/导入（续136，跨机迁移）。**默认零凭据**：包里只有
-│   │                      #   tasks + 九张资产表；账号表/凭据文件/任务登录态各要一个显式旗标
-│   │                      #   （`--with-users` / `--with-task-auth`，见 §7 那条）。导入侧任务一律给
+│   │                      #   tasks + 八张资产表；账号表/凭据文件/任务登录态/`flags`（原文取值）
+│   │                      #   各要一个显式旗标（`--with-users` / `--with-task-auth` / `--with-secrets`）
 │   │                      #   **新 id**、running/queued→stopped 且 pid 归零、同名账号与凭据文件
 │   │                      #   **一律不覆盖**；写之前先查表是否存在、写完前拍一份**不重名**的整库
 │   │                      #   快照（WAL 下必须用 backup API）。`dry_run` 与真跑**共用同一条判据**
@@ -350,7 +351,7 @@ ctf-scanner/
 │   ├── mmh3.py            # 纯标准库 MurmurHash3 x86_32（平台 favicon 指纹用；含 SELF_TEST 向量）
 │   ├── intel.py           # 漏洞情报订阅（P3-2）：CISA KEV 拉取+本地缓存+白名单式匹配 → **只产线索**（不写 vulns）
 │   ├── heuristics.py      # 启发式候选发现（P3-3）：对已有数据做差分/异常聚合（**零请求**）→ 线索；阈值与规则表在此
-│   ├── flagfind.py        # CTF flag 候选抽取（续126，**默认开、零额外请求**）：只在**已经拿到**的
+│   ├── flagfind.py        # 敏感信息 / CTF flag 候选抽取（续126 建、续148 改名，**默认开、零额外请求**）：只在**已经拿到**的
 │   │                      #   正文（probe 根响应 / jsmine 页面与每个 JS / dirscan 每条命中 /
 │   │                      #   vulnscan 的 POC 证据）上按 `flags.prefixes` + 可配正则抽候选，
 │   │                      #   单独进 `flags` 表（**不写 vulns、不计入漏洞数**）。三条边界：
@@ -704,16 +705,18 @@ ctf-scanner/
     （把折叠守卫拆掉 ⇒ `ſrv-apache` 立刻漏报）。
 
 
-16. **flag 候选必须"零额外请求 + 单独成表 + 只报候选"**（续126，`scanner/flagfind.py`）：
+16. **敏感信息 / flag 候选必须"零额外请求 + 单独成表 + 只报候选 + 形状表只有一份"**（续126 建，续148 接进内置凭据形状，`scanner/flagfind.py`）：
     ① 它**只吃调用方手里已有的文本**（四个出口：probe 根响应 / jsmine 页面与 JS / dirscan 每条
     命中 / vulnscan 的 POC 证据）。结构判据是 AST —— 模块里出现 `http_request` / `socket` /
     `run_cmd` 一类真实引用即判红。新增"这页没取到正文，我再抓一次"会把目录+JS 的请求量翻倍，
     而预算与限速都不是为它准备的。
     ② 成本封顶：定位一律"字面锚 + 小写副本 `str.find`"，取值一律从**原文**切（flag 大小写敏感；
     `lower()` 会改变长度的那几条例外码点走 `(?i)` 慢路，偏移仍必须回切原文验证）。
-    用户自定义正则**只在必现字面量锚出的窗口上跑**；`required_literals()` 取不出锚的正则
-    必须**拒用并给出原因** —— 退回"整份正文扫一遍"等于同时放开 ReDoS 与耗时（实测通用
-    `word{...}` 形状在 CSS 堆的正文里能捞 2 万条）。
+    用户自定义正则与**内置敏感信息形状**都**只在必现字面量锚出的窗口上跑**；取不出锚、
+    或锚"定位不住"（短于 3 字符、或全是标点，如 `db-uri` 的 `://`）的一律**拒用并给出原因**
+    —— 退回"整份正文扫一遍"等于同时放开 ReDoS 与耗时（实测通用 `word{...}` 形状在 CSS 堆的
+    正文里能捞 2 万条）；而宽锚只看了前 `max_per_source` 个窗口，其余正文等于**静默没扫**。
+    实测 1.09 MB 正文：只跑前缀 3.2 ms，加内置形状 5.5 ms；同样这 15 条形状整篇跑要 381.8 ms。
     ③ 写进**单独的 `flags` 表**：不并进 `vulns`（一个 flag 不是漏洞结论，进了就污染计数与
     复核台账），也不并进 `leads`（续24 起线索不进人读报告/页签，等于把 CTF 的结论藏起来）。
     新增资产表时**必须同时**进 `ASSET_TABLES`（本轮实测：该元组曾在 `db.py` 里定义两遍、
@@ -723,8 +726,17 @@ ctf-scanner/
     `max_per_task` 挡下的候选、
     库里已有同值，都要进 `flagfind.note()`，且各阶段只报**自己的增量**（`begin()`/`note(ctx, since)`）
     —— 四行都报累计就分不清哪条是谁看的，与续124 那条"一句提示只有一个产地"同源。
+    ⑤ 内置敏感信息形状的**唯一产地是 `scanner/jsmine.py::SECRET_RULES`**（15 条），`flagfind`
+    只给它补成本护栏、不复制正则（`[8ba]①` 用 AST 查字符串常量：注释里提一句 `AKIA` 不误伤，
+    抄一张表进去才判红）。锚点提取得靠 `fingerprint._literal_runs` 展开**必填位置上的捕获组**
+    （`AKIA` 就躺在组里）—— 实测这一改动让 131 条内置指纹规则里**新拿到锚点的有 0 条**，
+    所以指纹快路逐字符不变，而"命中 ⇒ 锚点必现"另用 4000 组随机样本 + 真实语料验过。
+    ⑥ 表里存的是**原文取值** ⇒ 这张表**默认不进迁移包**（`migrate.SECRET_TABLES` + CLI
+    `--with-secrets`）。包里必须写"没带 N 条"（`includes.secrets_skipped`），只留一个空列表的话
+    读包的人分不清"目标本来没有"与"被默认档挡了"。
     回归 `tests/smoke.py [8ae]`（五向变异：值取小写副本 / 不做小写副本定位 / 抹掉超限计数 /
-    收下无锚正则 / 第二处 `ASSET_TABLES`）。
+    收下无锚正则 / 第二处 `ASSET_TABLES`）+ `[8ba]`（三向变异：放松锚点门槛 / 桩掉形状表 /
+    清空 `SECRET_TABLES`）。
 
 17. **组件标签只能有一个产地，补标只做并集**（续127，`scanner/fingerprint.py::collect/flush`）：
     ① `sites.tech` 的唯一写路径是 `db.merge_sites_tech()`（并集、`task_id` 参与 WHERE、幂等），
@@ -1719,7 +1731,7 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
   关键字筛选走服务端（同续53/续57 的口径），`q` 为空时不能显示"还没有解析数据"（那会把
   "筛选没匹配"误导成"没有资产"）；分页条要传 `unit="个 IP"`（`pager.total` 是 IP 个数，不是行数）。
 - `wildcard.py` 只用系统解析器（`socket.getaddrinfo`），**取不到 CNAME**，故无法用"通配 CNAME 黑名单"维度。
-- **任务详情为 11 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/**flag 候选**/目标与配置/运行日志）；
+- **任务详情为 11 个页签**（潜在漏洞(默认)/站点/子域名/拓展域名/端口服务/C 段/目录/**SSL 证书**/**敏感信息**/目标与配置/运行日志）；
   跨任务对比**刻意不做成第 12 个页签**（续129）：页签是"本任务的数据"，而对比需要两个任务，
   塞进页签会让人以为"没数据"是自己这个任务的问题 —— 它是任务详情页头部的一个链接 + 独立 `/diff` 页。
   参考 ARL 界面的
@@ -1756,6 +1768,11 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
   那一路的命中不会贡献 flag 候选（与续113 那条「没标题⇒不滤但明说」同源）。
   还有第三类是**形状本身**的局限：非 `{}` 形态的 flag（`flag:` 后不带括号、或题目自定义前后缀）
   要靠 `flags.prefixes` / `flags.patterns` 手工加，默认清单只有 `flag{` / `ctf{`。
+  第四类是**内置形状有 6 条提不出可用的锚**（续148 如实登记）：cloud-access-id / telegram-bot-token /
+  stripe-key / generic-credential 的字面量藏在**嵌套分支**里，`required_literals` 对嵌套分支返回
+  None；github-token（锚 `gh`）与 db-uri（锚 `://`）提得出锚但锚定位不住 —— 一页里几百处，
+  只看了前 `max_per_source` 个窗口就是静默漏报，所以宁可拒用。这六条**仍能在「线索」里看到**
+  （jsmine 那一路在 JS 正文上是整篇匹配的，取值打码），不是把能力删了。
 - **测试脚手架的 `finally` 自己会掩盖真错误（续130 实测）**：`[8ag] ③` 把 `which` 的
   原值捕获写在 `try` 里面，于是 try 内任何一步先抛时，`finally` 报的是
   `NameError: _real_which128`，真正的失败原因**整个看不见**。规矩：**要打桩就先取原值，
@@ -2645,6 +2662,12 @@ EOL（新增行取该区段的主导形态），所以能改"CRLF 与 LF 在同�
    `python -c "b=open('AGENTS.md','rb').read(); print(sum(1 for i,c in enumerate(b) if c==13 and (i==len(b)-1 or b[i+1]!=10)))"`
    本轮实测：`AGENTS.md` 曾有 1 处（已修），`gui/app.py` / `tests/smoke.py` / `scanner/owasp/checks.py` /
    三个模板都是 0 处 —— 所以之前那几批按行号打的补丁落点没错，但这个结论是**这次才第一次查**。
+   ⚠ **重写一个行区间＝逐字重打一遍，只许改自己真要改的那一行（续148 实测踩中）**：给
+   `[probe]` 那句日志换文案时，把同一区间里的 `elif any(s.get("source") == "httpx" for s in _reg):`
+   凭记忆写成 `elif not got_texts:` ⇒ 行尾形态全对（**两式 numstat 照样相等**），语义却坏了，
+   一直跑到流水线断言报 `name 'got_texts' is not defined` 才露出来。补丁脚本的 `expect` 只核
+   区间**首行**，救不了"区间里别的行被顺手改写"。唯一防线：先把 `sed -n 'A,Bp'` 的整段原样
+   抄进新文本，再只动要动的那一行；打完 `git diff` 逐行数这个区间多了哪行、少了哪行。
    ⚠ **写这类补丁脚本时一个当场就会炸的坑（续146-附2 连着踩了两次）**：`b"…"` 里**不能放非 ASCII**。
    本仓的锚点和替换文本几乎全是中文，所以写成 `b"中文锚点"` 必挂 —— `SyntaxError: bytes can only contain ASCII literal characters`。
    正确写法：`"中文锚点".encode()`，或先 `old = "…"` 再 `old.encode()` 去数/替换。

@@ -1,9 +1,14 @@
-"""CTF flag 候选抽取：在**已经拿到的**响应正文里按可配前缀/正则找 flag 形态串。
+"""敏感信息 / CTF flag 候选抽取：在**已经拿到的**响应正文里按形状找出值得直接抄走的串。
 
-为什么值得单独成一张表（而不是塞进 `vulns` 或 `leads`）：flag 是 CTF 的**结论**，
-既不是"漏洞"（一个 `flag{...}` 不代表目标有漏洞），也不是"线索"（它不需要人工再决定
-要不要看，就是要直接抄走的东西）。混进 `vulns` 会让人以为"这站有个高危漏洞"，
-混进 `leads` 又会被续24 的"页签移除"口径藏起来 —— 两边都误导，所以单独一表一条路。
+抽两类：① 云厂商 AK/SK、各家 API key、JWT、私钥头、连接串这一类**敏感信息** —— 形状表的产地是
+`scanner/jsmine.py::SECRET_RULES`（本仓唯一的凭据形状清单），这里不复制正则，只给它补成本护栏；
+② `flag{...}` / `ctf{...}` 这类 CTF 前缀形状，清单由用户在策略页加。
+
+为什么值得单独成一张表（而不是塞进 `vulns` 或 `leads`）：这两类都是**结论性的取值**，
+既不是"漏洞"（一个 AK 不代表目标有漏洞，也不该进「潜在漏洞」计数与复核台账），也不是"线索"
+（线索是"人再决定要不要看"的东西，而这两类就是要直接抄走的）。混进哪一边都会误导。
+表名 `flags` 与配置键 `flags.*` **刻意不改**：改名会打断已有的 `settings.yaml` 与库里已有数据，
+界面上这一档叫「敏感信息」。
 
 三条承重边界，改这个模块前请先读完：
 
@@ -12,20 +17,23 @@
    模块源码里不许出现 `http_request` / `urlopen` / `socket` / `run_cmd`。
    新增"这页没取到正文，我再抓一次"的写法会立刻判红 —— 那等于把「目录发现 + JS 挖掘」
    的请求量翻倍，而预算与限速都不是为它准备的。
-2. **成本必须封顶**。默认判据是"字面前缀 + 定界闭括号"，用 `str.find` 扫一份**小写副本**
+2. **成本必须封顶**。前缀判据是"字面前缀 + 定界闭括号"，用 `str.find` 扫一份**小写副本**
    （封顶键 `flags.max_chars` 的单位是**字符**不是字节 —— 成本按字符走，而中文一个字符
    在 UTF-8 里是 3 字节，写成"字节"会让人以为放行量比实际小三倍）：
    实测 1.56 MB 正文：本实现 1.2 ms；同样两个前缀写成一趟全局忽略大小写的交替正则要
    40.3 ms，把各家比赛的前缀都塞进去（21 路）要 332.3 ms。而这些正文在 dirscan 里是
    **按路径逐条**过一遍的（几百到上万条），量级差就是整轮的耗时差。
-   用户自定义正则**只在候选窗口上跑**（先取该正则的"必现字面量"当锚，见
+   用户自定义正则与内置敏感信息形状**只在候选窗口上跑**（先取该正则的"必现字面量"当锚，见
    `scanner/fingerprint.py::required_literals`），取不出字面量的正则**直接拒用并说明原因**，
-   绝不退回"在整份正文上扫" —— 那一条口子同时放开了 ReDoS 与耗时。
-3. **只报候选、大小写原样**。抽到的串按**原文**保留（flag 大小写敏感，被小写化的只是
+   绝不退回"在整份正文上扫" —— 那一条口子同时放开了 ReDoS 与耗时。锚太短或全是标点的
+   同样拒用：那种锚定位不住，只看前 `max_per_source` 个窗口就是静默漏报。
+3. **只报候选、大小写原样**。抽到的串按**原文**保留（AK 与 flag 都大小写敏感，被小写化的只是
    用于定位的那份副本），并在 `context` 里带上前后文，因为同一形状经常是**占位符**
-   （JS 里的 `flag{xxx}`、模板里的 `ctf{...}`）。判"是不是真 flag"是人做的事。
+   （JS 里的 `flag{xxx}`、`API_KEY = "your_key_here"`）。判"是不是真值"是人做的事。
    误报的代价是多看一眼，漏报的代价是丢一道题 —— 所以本模块**刻意不加**"前缀前面
    必须是词边界"这类看着更聪明的规则（`.ctf{` 这种 CSS 类名会进候选，是有意的）。
+   存原文的代价写在别处：这张表**默认不进迁移包**（`scanner/migrate.py::SECRET_TABLES`），
+   带它走必须是显式开关。
 """
 import re
 import threading
@@ -88,8 +96,12 @@ def normalize_prefixes(items):
     return out
 
 
+# 一句"为什么被拒"的话只写一处（§5.14）：用户正则与内置形状共用它，页面列的也是它。
+_NO_ANCHOR_WHY = "取不出必现字面量 ⇒ 只能在整份正文上跑，为控成本拒用"
+
 _VALUE_RE = {}    # (闭括号, min, max) -> 值体正则
 _RULES = {}       # 配置指纹 -> 规则表；"改一次策略重算一次"，不随文本增长
+_SECRET_FAMILY = {}   # 形状表指纹 -> (可跑的规则, 拒用说明)
 
 
 def _value_re(closer, min_len, max_len):
@@ -105,7 +117,7 @@ def _value_re(closer, min_len, max_len):
 
 
 def compile_patterns(items):
-    """用户正则 -> `(rules, rejects)`；`rules` 元素为 `(原文, 编译后, [小写锚])`。
+    """用户正则 -> `(rules, rejects)`；`rules` 元素为 `(原文, 编译后, [小写锚], kind, 取值组号)`。
 
     **取不出锚就不收**：`required_literals()` 返回 None 意味着"任何文本都可能命中"，
     只能在整份正文上跑 —— 一条手滑的「全局忽略大小写 + flag.*?}」就足以把 dirscan 的几万条响应
@@ -129,11 +141,47 @@ def compile_patterns(items):
             continue
         anchors = required_literals(s)
         if not anchors:
-            rejects.append(f"{s}（取不出必现字面量 ⇒ 只能在整份正文上跑，为控成本拒用；"
-                           f"请改成带字面量锚点的写法，或直接放进「前缀」清单）")
+            rejects.append(f"{s}（{_NO_ANCHOR_WHY}；请改成带字面量锚点的写法，或直接放进「前缀」清单）")
             continue
-        rules.append((s, rx, [str(a).lower() for a in anchors]))
+        rules.append((s, rx, [str(a).lower() for a in anchors], "regex", 0))
     return rules, rejects
+
+
+# 锚点必须"定位得住"才有窗口模式可言：太短、或全是标点（`db-uri` 的 `://`）的锚在一页正文里
+# 能出现几百处，而每条规则最多只看 `max_per_source` 个窗口 —— 收下它就是"扫过了、没找到"的
+# 假绿，所以直接拒用并把原因显示出来（被拒的形状仍能在「线索」表里看到：jsmine 那一路在
+# JS 正文上是整篇匹配的，取值打码）。
+_SECRET_MIN_ANCHOR = 3
+
+
+def secret_family():
+    """内置敏感信息形状 -> `(可跑的规则, 拒用说明)`；形状表的产地只有 `jsmine.SECRET_RULES`。
+
+    这里**不复制任何正则**，只给同一张表补上本模块的成本护栏（字面锚 + 窗口）：jsmine 只在
+    页面与 JS 正文上整篇跑一次，而这里要在**每一份**已抓到的正文上跑（dirscan 是逐路径几千次）。
+    返回形状与 `compile_patterns` 一致：`(标签, 编译后, [小写锚], kind, 取值组号)`。
+    """
+    from .fingerprint import required_literals
+    from .jsmine import SECRET_RULES
+    key = tuple((str(n), getattr(rx, "pattern", str(rx)), int(g)) for n, rx, g in SECRET_RULES)
+    hit = _SECRET_FAMILY.get(key)
+    if hit is None:
+        rules, rejects = [], []
+        for name, rx, group in SECRET_RULES:
+            anchors = required_literals(rx.pattern)
+            if not anchors:
+                rejects.append(f"{name}（{_NO_ANCHOR_WHY}）")
+                continue
+            good = [str(a) for a in anchors
+                    if len(str(a)) >= _SECRET_MIN_ANCHOR and any(c.isalpha() for c in str(a))]
+            if not good:
+                rejects.append(f"{name}（锚点「{anchors[0]}」太短或全是标点：一页里光锚点就几十处，"
+                               f"窗口之外的正文等于没看 ⇒ 为免静默漏报拒用）")
+                continue
+            rules.append((name, rx, [a.lower() for a in good], name, group))
+        hit = (rules, rejects)
+        _SECRET_FAMILY[key] = hit
+    return hit
 
 
 def rules(settings):
@@ -141,18 +189,24 @@ def rules(settings):
 
     `prefixes: []` 按字面理解成"我只要自己的正则"，**不回落**成默认前缀 —— 回落会让用户
     清空清单之后仍然被 `flag{`/`ctf{` 收一遍，而"缺段"（老配置 / CLI 没写）才落回默认。
+    拒用说明 = 用户正则的 + 内置形状的（`flags.secrets` 关掉时只剩前者），页面原样列出。
     """
     cfg = _cfg(settings)
     prefixes = cfg.get("prefixes")
     if prefixes is None:
         prefixes = DEFAULT_PREFIXES
     patterns = cfg.get("patterns")
+    secrets = bool(cfg.get("secrets", True))
     key = (tuple(prefixes or ()), tuple(patterns or ()),
-           _ints(cfg, "min_len", 1), _ints(cfg, "max_len", 200, 1))
+           _ints(cfg, "min_len", 1), _ints(cfg, "max_len", 200, 1), secrets)
     hit = _RULES.get(key)
     if hit is None:
         min_len, max_len = key[2], max(key[3], key[2])
         pat, rejects = compile_patterns(key[1])
+        if secrets:
+            sec, sec_rej = secret_family()
+            pat = pat + sec
+            rejects = rejects + sec_rej
         hit = ([(kind, needle, closer, _value_re(closer, min_len, max_len))
                 for kind, needle, closer in normalize_prefixes(key[0])],
                pat, rejects, cfg)
@@ -186,8 +240,10 @@ def _hays(text):
 
 
 def scan(text, settings=None, max_hits=200):
-    """在一份文本里找 flag 形态串，返回 `[(kind, value, offset)]`。
+    """在一份文本里找敏感信息 / flag 形态串，返回 `[(kind, value, offset)]`。
 
+    `kind` 是给人分类的那一列：前缀规则用前缀名（`flag` / `ctf` / 用户自定义），内置敏感信息
+    形状用形状名（`aws-access-key` / `jwt` / …），用户自定义正则统一是 `regex`。
     纯函数：不查库、不发请求、不写日志。`max_hits` 是**单次调用**的上限
     （策略页的 `max_per_source`）—— 一页里出现 200 个 `flag{` 只可能是模板或混淆产物，
     继续找只是把候选表灌满。
@@ -200,6 +256,7 @@ def scan(text, settings=None, max_hits=200):
     max_len = _ints(cfg, "max_len", 200)
     low, aligned = _hays(text)
     out = []
+    seen_at = set()   # 窗口路径按命中起点去重（见下面那条注）
 
     def _push(at, rx, kind):
         """从 `at` 起试匹配值体；命中则记 **(kind, 值, 值的起点)**。
@@ -223,7 +280,7 @@ def scan(text, settings=None, max_hits=200):
                 if _push(m.end(), rx, kind):
                     return out
     half = max(64, 2 * max_len)
-    for _src, rx, lows in pat:
+    for _label, rx, lows, kind, grp in pat:
         for anchor in lows:
             if aligned:
                 it = _finds(low, anchor, max_hits)
@@ -233,9 +290,21 @@ def scan(text, settings=None, max_hits=200):
                 a = max(0, i - half)
                 b = min(len(text), i + 2 * half)
                 m = rx.search(text, a, b)
-                if not m or not m.group():
+                if not m:
                     continue
-                out.append(("regex", m.group(), m.start()))
+                # 取值组：内置形状把值放在第 1/2 组（`AKIA…` 那种整条正则还包着 `\b`），
+                # 用户正则与 `private-key` 这类"整条就是值"的用 0 组。偏移一律跟着**取值组**走，
+                # 否则 `context()` 前后取的文会偏到锚点左边。
+                val = m.group(grp) if grp <= m.re.groups else ""
+                if not val:
+                    continue
+                # 同一处命中会被**几个锚点各逮到一次**（JWT 三段里两处都以 `eyJ` 开头），
+                # 按起点去重 —— 否则 `max_hits` 会被同一条吃光，后面的形状就挤不进来了。
+                at = m.start(grp)
+                if (kind, at) in seen_at:
+                    continue
+                seen_at.add((kind, at))
+                out.append((kind, val, at))
                 if len(out) >= max_hits:
                     return out
     return out

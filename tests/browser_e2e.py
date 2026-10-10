@@ -376,7 +376,7 @@ def _seed_db():
                            "port": "80", "status": 200, "title": f"站点{i}",
                            "length": 500 + i, "server": "nginx", "tech": "nginx",
                            "source": "probe"} for i in range(_SITES_TOTAL)])
-    # 续126：详情页新加的第 11 个页签「flag 候选」要有**能被断言**的数据。
+    # 续126：详情页新加的第 11 个页签「敏感信息」要有**能被断言**的数据。
     # 第二条刻意是 HTML 载荷 —— 页签必须把它当**文本**渲染（真浏览器里查"没有真的 img 元素"，
     # 这比在 test_client 里搜转义字符串更接近用户实际看到的东西）。
     db.insert_flag(tid, {"value": "E2e_Browser_Flag", "kind": "flag", "source": "dir",
@@ -641,7 +641,7 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     rep.check("[6] 再点「端口服务」→ pane-ports 变 active",
               page.ev("document.getElementById('pane-ports').classList.contains('active')") is True)
     page.click_js("document.querySelector('.tab[data-tab=\"flags\"]')")
-    rep.check("[6] 点「flag 候选」→ pane-flags 变 active",
+    rep.check("[6] 点「敏感信息」→ pane-flags 变 active",
               page.ev("document.getElementById('pane-flags')"
                       ".classList.contains('active')") is True)
     _fx6 = page.ev("(()=>{const t=document.querySelector('#tbl-flags tbody');"
