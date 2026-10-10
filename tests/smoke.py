@@ -3544,7 +3544,8 @@ workflows:
     assert any("方向翻转" in _l for _l in _rec143d.lines), \
         f"栽的必须是方向门（否则这条断言没有区分度）：{_rec143d.lines}"
 
-    # (v) 五道门全过 ⇒ 报，且 **packets 必须是 5 发**、每发带请求行与正文指纹（用户：数据包都没有）
+    # (v) 六道门全过 ⇒ 报（⑥ 是续146-附4 加的「两侧都必须是内容页」，本夹具两侧都是 200），
+    #     且 **packets 必须是 5 发**、每发带请求行与正文指纹（用户：数据包都没有）
     owasp_checks._get = lambda u, s, **kw: _mk_resp143(200, 900 if _re5.search(_FALSE143, u) else 1200)
     try:
         _v143 = owasp_checks._sqli_blind(targets, settings)
@@ -20605,6 +20606,151 @@ expression: r0()
           "终端 handler 一个都没补上｜第二次启动换前缀掩码跟着换且 handler 不叠加｜"
           "落点被挡时返回 strerror 而不抛、原因里没有绝对路径、也不动已有 handler｜"
           "serve() 那一头：指路一行恰好一次、本次前缀既不在 access.log 也不在 server.log")
+
+    # ---------------- [8ay] 续146-附4：布尔盲注第六道门 + 两句「为什么这一栏是空的」 ----------------
+    # 主理人拿库里两条结论问了三件事，其中两件本轮动手：
+    #   ①「这个返回包好像是 429？这是误报」—— 429 那一类续143 的门③已经挡了；但同批里
+    #     **另一类**（两侧都稳定回 404、长度差恒为 402B）门③管不到，本轮补成第六道门。
+    #   ②「像比如有漏洞 你要给出详情 数据包都没有」—— 数据包本身续143 已经在写，但
+    #     `{% if v.packets %}` 让**没有**的那些行整块静默消失，页面读起来像"这工具连包都不给"。
+    #   ③「有些明明有标题为什么获取不到」—— 同理：空标题那一格只有一个 `-`，不说是为什么。
+    # ②③ 都是 §5.19 那一类（页面上讲运行期事实的话必须说全），文案集中在 gui/app.py 两个常量里。
+    import re as _re8ay
+    from scanner.owasp import checks as _ck8ay
+
+    _URL8AY = "http://127.0.0.1:8765/news?page=1"
+
+    class _Log8ay:
+        def __init__(self):
+            self.lines = []
+
+        def info(self, msg):
+            self.lines.append(str(msg))
+
+        warning = debug = error = info
+
+    def _stub8ay(rules, default=(200, 1000)):
+        """按 URL 正则回**稳定**响应：同一 URL 永远同一状态码与长度（前几道门全给它放行）。"""
+        def _g(u, s, **kw):
+            for _pat, _st, _ln in rules:
+                if _re8ay.search(_pat, u):
+                    return {"status": _st, "length": _ln, "text": "", "headers": {}}
+            return {"status": default[0], "length": default[1], "text": "", "headers": {}}
+        return _g
+
+    _real_get8ay = _ck8ay._get
+    try:
+        # ① 库里那一批的形状：恒真 404/1486B、恒假 404/1084B，五台不同主机上长度差**恒为 402B**，
+        #    而两种 payload 本身等长（`1 AND 1=1` / `1 AND 1=2`）⇒ 那 402B 不可能是"多一块查询
+        #    结果"，它是同一张 CDN/软 404 模板把请求路径印回正文。
+        _r404 = [(r"1=1|'1'='1", 404, 1486), (r"1=2|'1'='2", 404, 1084)]
+        _ck8ay._get = _stub8ay(_r404)
+        _lg8ay = _Log8ay()
+        assert _ck8ay._sqli_blind(_URL8AY, {}, logger=_lg8ay) is None, \
+            "两侧都回 404 的模板页还在报布尔盲注 ⇒ 第六道门没接上（主理人原话：这是误报？）"
+        _j8ay = "\n".join(_lg8ay.lines)
+        assert "不是内容页" in _j8ay, \
+            f"挡下了必须说原因，否则与「这站没洞」在日志里长一个样：{_j8ay[:160]}"
+
+        # ② §6.1 变异证伪：把内容页集合打回「含 404」＝第六道门不存在，这条必须**重新报出来**。
+        #    不钉这一条，① 可能只是"这条路径压根没走到判定"的空写。
+        _keep8ay = _ck8ay._SQLI_CONTENT_STATUS
+        _ck8ay._SQLI_CONTENT_STATUS = frozenset(set(_keep8ay) | {404})
+        try:
+            _v8ay_mut = _ck8ay._sqli_blind(_URL8AY, {}, logger=_Log8ay())
+            assert _v8ay_mut and _v8ay_mut["poc_id"] == "a03-sqli-blind", \
+                "拆掉门⑥也不报 ⇒ ① 那条「挡下了」没有牙齿（判据根本没生效）"
+        finally:
+            _ck8ay._SQLI_CONTENT_STATUS = _keep8ay
+
+        # ③ 真形状（两侧 200、稳定差 300B）必须**照旧报** —— 收紧是为了少误报，不是为了少报
+        _ck8ay._get = _stub8ay([(r"1=1|'1'='1", 200, 1200), (r"1=2|'1'='2", 200, 900)])
+        _v8ay_ok = _ck8ay._sqli_blind(_URL8AY, {}, logger=_Log8ay())
+        assert _v8ay_ok and _v8ay_ok["poc_id"] == "a03-sqli-blind", \
+            "第六道门把真形状也挡掉了（收紧判据的反面证据必须一起写）"
+        assert "六道判据全过" in _v8ay_ok["evidence"], _v8ay_ok["evidence"]
+        assert "非内容页" in _v8ay_ok["detail"], _v8ay_ok["detail"]
+        assert _v8ay_ok["packets"].count("[") >= 5, \
+            "命中必须带五发请求/响应对照（主理人：数据包都没有）"
+
+        # ④ 第六道门是**纯计算**，一次请求都不许多花：全 404 时仍恰好 2 形态 × 5 参数 × 3 发
+        _n8ay = {"i": 0}
+
+        def _cnt8ay(u, s, **kw):
+            _n8ay["i"] += 1
+            return {"status": 404,
+                    "length": 1486 if _re8ay.search(r"1=1|'1'='1", u) else 1084,
+                    "text": "", "headers": {}}
+
+        _ck8ay._get = _cnt8ay
+        _ck8ay._sqli_blind(_URL8AY, {}, logger=_Log8ay())
+        _want8ay = (len(_ck8ay._SQLI_BLIND_PAIRS) * len(_ck8ay._SQLI_BLIND_PARAMS)
+                    * _ck8ay._SQLI_BASE_REQ)
+        assert _n8ay["i"] == _want8ay, f"请求量与判据数变了：{_n8ay['i']} ≠ {_want8ay}"
+    finally:
+        _ck8ay._get = _real_get8ay
+
+    # ---- ⑤ 两句解释：产地只有一份，模板只引变量（§5.14），源码级判据 ----
+    _lit_np, _lit_nt = gui_app.NO_PACKETS_HINT, gui_app.NO_TITLE_HINT
+    assert _lit_np.strip() and _lit_nt.strip(), "常量必须是成句的话，不能是空串"
+    for _tpl, _var, _lit in (("gui/templates/vulns.html", "no_packets_hint", _lit_np),
+                             ("gui/templates/task_detail.html", "no_packets_hint", _lit_np),
+                             ("gui/templates/sites.html", "no_title_hint", _lit_nt),
+                             ("gui/templates/task_detail.html", "no_title_hint", _lit_nt)):
+        _src8ay = (ROOT / _tpl).read_text(encoding="utf-8", errors="replace")
+        assert _var in _src8ay, f"{_tpl} 没引用 {_var}（文案八成被就地重抄了一份）"
+        assert _lit not in _src8ay, f"{_tpl} 里逐字抄了一份提示 ⇒ 出现第二个产地（§5.14）"
+
+    # ---- ⑥ 真页面：没有数据包的行必须看得见那句解释；空标题的格子必须带原因 ----
+    _vtid8ay = db.create_task("smoke-8ay-ev", "http://v8ay.test/", ["vulnscan"], {})
+    db.insert_vuln(_vtid8ay, {"target": "v8ay.test", "poc_id": "a03-sqli-blind",
+                              "name": "8AY 无数据包行", "severity": "high", "owasp": "A03",
+                              "detail": "8AYNOPKT", "evidence": "8AYEVID1"})
+    db.insert_vuln(_vtid8ay, {"target": "v8ay.test", "poc_id": "a05-x-pp",
+                              "name": "8AY 有数据包行", "severity": "high", "owasp": "A05",
+                              "detail": "8AYWITHPK", "evidence": "8AYEVID2",
+                              "packets": "8AYPACKETBODY"})
+    # /vulns 的任务筛选参数名是 `task_id`（几个资产页用的是 `task=`，两边不一致是既有事实）：
+    # 写错参数名不会报错，只会**安静地不做筛选** ⇒ 下面那句「恰好一处解释」会数到全库的行
+    # （本轮门禁就是这么红的，红得对）。
+    _qt8ay = f"?task_id={_vtid8ay}"
+    _hv8ay = c.get("/vulns" + _qt8ay).get_data(as_text=True)
+    assert "8AYNOPKT" in _hv8ay and "8AYWITHPK" in _hv8ay, "两行都得在这页上（否则下面的计数是空写）"
+    assert _hv8ay.count("8AYPACKETBODY") == 1, "有数据包的那行要把包渲出来"
+    _hv_np = _hv8ay.count(_lit_np[:24])
+    assert _hv_np == 1, f"没有数据包的那一行应当**恰好**给出一句解释（实际 {_hv_np} 处）"
+
+    # §6.1 变异：把 jinja 全局换成哨兵 ⇒ 页面必须跟着变，否则上面那句是模板里另抄的一份
+    _gname8ay, _env8ay = "no_packets_hint", gui_app.app.jinja_env
+    _keep8ayg = _env8ay.globals[_gname8ay]
+    _env8ay.globals[_gname8ay] = "8AY哨兵——这句只可能来自注册的全局"
+    try:
+        _hm8ay = c.get("/vulns" + _qt8ay).get_data(as_text=True)
+        assert "8AY哨兵——这句只可能来自注册的全局" in _hm8ay, \
+            "页面没吃这个全局 ⇒ ⑥ 那条绿来自别处（第二个产地）"
+        assert _lit_np[:24] not in _hm8ay, "换掉全局后旧文案还在 ⇒ 页面同时有两份（§5.14）"
+    finally:
+        _env8ay.globals[_gname8ay] = _keep8ayg
+
+    _stid8ay = db.create_task("smoke-8ay-site", "http://s8ay.test/", ["probe"], {})
+    db.insert_sites(_stid8ay, [
+        {"url": "http://shell.s8ay.test/", "host": "shell.s8ay.test", "port": "80",
+         "status": 200, "title": "", "length": 1298},
+        {"url": "http://named.s8ay.test/", "host": "named.s8ay.test", "port": "80",
+         "status": 200, "title": "8AYHAS_TITLE", "length": 900}])
+    _hs8ay = c.get("/sites" + f"?task={_stid8ay}").get_data(as_text=True)
+    assert "8AYHAS_TITLE" in _hs8ay, "有标题的那行要在（否则下面按计数断言是空写）"
+    assert _hs8ay.count('title="' + _lit_nt[:24]) == 1, \
+        "空标题的格子应当**恰好**一个带原因 tooltip：有标题的那行不该被塞一句猜测"
+
+    print("[8ay] 续146-附4 盲注第六道门 + 两句「为什么是空的」 ok: "
+          "两侧都回 404 的模板页不再报布尔盲注（库里那批恒 402B 而 payload 等长的形状）｜"
+          "挡下必须说原因（日志里有「不是内容页」）｜把内容页集合打回含 404 ⇒ 必须重新报出来"
+          "（证明判据有牙齿，不是空写）｜真形状（两侧 200、稳定差 300B）照旧报且 evidence 说六道、"
+          "带五发数据包｜第六道门一次请求都不许多花（仍恰好 2×5×3）｜"
+          "两句解释在 gui/app.py 只有一份产地、模板只引变量、页面真渲染得到，"
+          "且换掉 jinja 全局页面立刻跟着变（防模板另抄一份）｜空标题一格一个 tooltip，"
+          "有标题的那行不被塞猜测")
 
 
     print("SMOKE PASS")

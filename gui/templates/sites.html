@@ -89,7 +89,7 @@
         {% set rd = site_redirect(s) %}
         <td>{{ rd.status }}{% if rd.jumped %}
               <span class="tech-tag" title="{{ rd.note }}">跳转后</span>{% endif %}</td>
-        <td>{{ rd.title or '-' }}{% if rd.jumped and rd.final_url %}<br>
+        <td{% if not rd.title %} title="{{ no_title_hint }}"{% endif %}>{{ rd.title or '-' }}{% if rd.jumped and rd.final_url %}<br>
               <span class="muted small" title="{{ rd.note }}">→ {{ idn_display(rd.final_url) }}</span>{% endif %}</td>
         <td>{% for t in (s.tech or '').split(',') if t.strip() %}
               <span class="tech-tag">{{ t.strip() }}</span>{% else %}<span class="muted">-</span>{% endfor %}</td>

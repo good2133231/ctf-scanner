@@ -375,6 +375,13 @@ _SQLI_BLIND_MIN_RATIO = 0.05
 # 另一种结论冒充成这一条的证据（报错型有它自己的检查项）；408/598/599 是超时类。
 _SQLI_INCONCLUSIVE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 509,
                                        520, 521, 522, 524, 598, 599})
+# 门⑥（续146-附4）：「应用真的在渲染内容」的状态。为什么还要这一道 —— 门③ 挡的是"这一发不可信"
+# （限流/过载），挡不到**两侧都稳定回 4xx** 那一批：用户报的第二类形状正是它，恒真 404/1486B、
+# 恒假 404/1084B，五台不同主机上长度差**恒为 402B**，而两种 payload 本身**等长**（`1 AND 1=1` /
+# `1 AND 1=2`）⇒ 那 402B 不可能是"多出一块查询结果"，它是同一张 CDN/软 404 模板把请求路径印回
+# 正文造成的。404 页面上再稳定的差分也不是 SQL 语义；报错型与软 404 各有自己的检查项，
+# 别让它冒充布尔盲注。只放开 2xx/3xx：4xx（含 403 拦截页）与 5xx 一律不作数。
+_SQLI_CONTENT_STATUS = frozenset(range(200, 210)) | frozenset(range(300, 309))
 
 
 def _resp_sig(resp):
@@ -423,6 +430,18 @@ def _len_sign(sig_true, sig_false):
     """
     d = sig_true[1] - sig_false[1]
     return (d > 0) - (d < 0)
+
+
+def _off_content(sig_true, sig_false):
+    """两侧里第一发**不是内容页**的状态码；两侧都在应用渲染内容时返回 0（门⑥，续146-附4）。
+
+    与 `_inconclusive` 一样返回**状态码而不是布尔**：跳过理由必须指出是哪一发、什么状态，
+    只说"跳过了"等于让人去猜（`_note_skips` 那套"跳过的量必须可见"的口径）。
+    """
+    for sig in (sig_true, sig_false):
+        if sig and sig[0] not in _SQLI_CONTENT_STATUS:
+            return sig[0]
+    return 0
 
 
 def _packet(label, url, resp):
@@ -476,10 +495,12 @@ def _sqli_blind(url, settings, logger=None):
     循环是**形态外层、参数内层**：预算优先保证 5 个候选参数**都被两种形态各试一次**
     （没测到的参数是必然盲区），参数顺序仍走 `_ordered()` 打乱以打散 WAF 的频率/序列特征。
 
-    **五道判据全过才报**（续143；旧实现只有前三道，缺的正是 ④⑤，那条 429 误报由此而来）：
+    **六道判据全过才报**（④⑤ 是续143 补的，那条 429 误报缺的就是这两道；⑥ 是续146-附4 补的）：
       ① 恒真与恒假差异显著；② 恒真自身可复现；③ 任何一发都不是限流/过载类状态码；
       ④ **恒假也可复现**（这一发是**交换顺序**后采的：先恒假、再恒真）；
-      ⑤ 两次采样的**长度差方向一致**。
+      ⑤ 两次采样的**长度差方向一致**；
+      ⑥ **两侧都是内容页**（2xx/3xx）—— 404/403 这类模板页上再稳定的长度差也不构成 SQL 语义
+        （实测五台主机恒真 404/1486B、恒假 404/1084B，长度差**恒为 402B** 而两种 payload **等长**）。
     任何一道不过都**不报**，并把原因攒起来在末尾说一句（跳过几个、为什么）。
     """
     used = 0
@@ -501,6 +522,10 @@ def _sqli_blind(url, settings, logger=None):
             hot = _inconclusive((s_t, s_f, s_t2))
             if hot:
                 skips.append("%s：出现 HTTP %d（限流/过载，不可判定）" % (param, hot))
+                continue
+            off = _off_content(s_t, s_f)
+            if off:
+                skips.append("%s：HTTP %d 不是内容页（模板页上的长度差不作盲注证据）" % (param, off))
                 continue
             if not _diff_significant(s_t, s_f):
                 continue                             # 恒真与恒假没区别 → 这参数不受影响
@@ -540,7 +565,7 @@ def _sqli_blind(url, settings, logger=None):
             evidence = ("恒真 %s → HTTP %d / %dB；恒假 %s → HTTP %d / %dB；"
                         "长度差 %dB（约 %d%%）；复验恒真 → HTTP %d / %dB；"
                         "交换顺序复验 → 恒假 %d / %dB、恒真 %d / %dB；"
-                        "五道判据全过（含限流/过载排除、双向复现、方向一致）"
+                        "六道判据全过（限流/过载排除、两侧都是内容页、双向复现、方向一致）"
                         % (true_p, s_t[0], s_t[1], false_p, s_f[0], s_f[1],
                            delta, ratio, s_t2[0], s_t2[1],
                            s_f2[0], s_f2[1], s_t3[0], s_t3[1]))
@@ -553,7 +578,7 @@ def _sqli_blind(url, settings, logger=None):
             return _mk("a03-sqli-blind", "SQL 注入布尔型盲注", "high", "A03", url,
                        "参数 %s 的恒真/恒假两个 payload 得到显著不同的响应，"
                        "两侧各自可复现、交换顺序后差异仍在、长度差方向一致"
-                       "（已排除限流/过载类状态码），疑似布尔型盲注，需人工确认。" % param,
+                       "（已排除限流/过载类状态码与非内容页响应），疑似布尔型盲注，需人工确认。" % param,
                        evidence, packets=packets)
     _note_skips(logger, skips)
     return None

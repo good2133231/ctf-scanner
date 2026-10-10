@@ -293,6 +293,17 @@ def run_duration_text(task):
     return seconds + "（上次运行被中断，尾段未计入）"
 
 
+# 续146-附4：页面上那两句「为什么这一栏是空的」的唯一产地（模板只引常量，见 create_app 里
+# 注册的两个 jinja global）。两条都不许写成推测：本条是不是"旧版判据产的"从数据里看不出来，
+# 所以只说"这一类结论目前不记数据包"；标题为空同理只说"响应体里没有 title 标签"+ 常见原因。
+NO_PACKETS_HINT = ("本条没有随附数据包：目前只有布尔盲注（五发请求/响应对照）与 JS 疑似凭据"
+                   "（来源 JS 的链接与行号）这两类结论会记录数据包，其余内置检查只给判定数字。"
+                   "要复核这一条，按上面 evidence 里的状态码、长度与 payload 重放即可。")
+NO_TITLE_HINT = ("这一页抓到了（状态码见左列），但响应体里没有 title 标签 —— 常见于 SPA 外壳"
+                 "（标题要等脚本渲染后才出现）与纯文本 / 拦截页响应。"
+                 "要取渲染后的标题，请在建任务时勾 screenshot 阶段（该阶段默认关闭）。")
+
+
 # 本机访问的白名单口径（续32）：`127.0.0.1` / `localhost` / IPv6 回环。
 # 用于两道"仅限本机"的技术落实 —— Host 白名单（挡 DNS rebinding）与会话 Cookie 的 SameSite。
 # 注意：这里**不含** `0.0.0.0`（它是"监听所有网卡"的绑定地址，不是可访问的主机名）。
@@ -517,6 +528,10 @@ def create_app():
     # 续50：开发模式开关 —— 供 base.html 决定是否渲染「开发模式」侧栏入口。
     # 与 gui.host / allowed_hosts 同口径：改 config/settings.yaml 后需**重启控制台**才生效。
     app.jinja_env.globals["dev_enabled"] = devmode.enabled(settings)
+    # 续146-附4：两句「为什么这一栏是空的」。站点页与任务详情页、漏洞页与任务详情页**共用同一份
+    # 产地**（§5.14），措辞按 §5.19 的口径：只说这一行数据里看得见的事实，不猜它是哪一版产出的。
+    app.jinja_env.globals["no_packets_hint"] = NO_PACKETS_HINT
+    app.jinja_env.globals["no_title_hint"] = NO_TITLE_HINT
     db.init_db()
     # 启动时对账（续49 语义变更）：进程重启后，之前 status='running' 的孤儿任务没人推进 ——
     # 带队列运行规格的**重新入队**（等 worker 接着跑），无规格的（CLI 直跑 / 老库行）仍标 failed；
