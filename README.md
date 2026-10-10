@@ -280,7 +280,7 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 - **`config/dicts/`**：子域名字典、`dirs_shallow.txt`（浅扫精选路径 ~150 条）、`dirs_big.txt`（深扫大字典 11882 条）、`cdn_cname.txt`（CDN 厂商后缀）、`cdn_ips.txt`（CDN 厂商任播 IP 段）、`sensitive.txt`（A01 敏感文件检查的数据源：`路径 | 关键字 | 级别 | 说明`）。
 - **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，默认必须通过 release 自带的 SHA256 校验和。
 
-> 部署 checklist：① 复制 `config/keys.yaml.example` → `config/keys.yaml` 并填 key（仅当要用 FOFA 等外部情报）；② 按需改 `config/settings.yaml`（或 GUI 策略配置页，**仅管理员可改**）；③ `./install.sh`（Windows 或想看清每一步：`python3 run_bootstrap.py --install`）；④ 跑 `python cli/client.py --check` 自检；⑤ 设 401 边缘门口令 `python -m scanner.edgeauth --set`（出厂 `gui.edge_auth.enabled: true` 而口令文件不入库 ⇒ 不设就是全站 401）；⑥ 起控制台，按启动横幅建**第一个管理员**（非交互环境：`python cli/run_users.py --create-admin`），再登进「账号管理」建子用户账号。
+> 部署 checklist：① 复制 `config/keys.yaml.example` → `config/keys.yaml` 并填 key（仅当要用 FOFA 等外部情报）；② 按需改 `config/settings.yaml`（或 GUI 策略配置页，**仅管理员可改**）；③ `./install.sh`（Windows 或想看清每一步：`python3 run_bootstrap.py --install`）；④ 跑 `python cli/client.py --check` 自检；⑤ 设 401 边缘门口令 `python -m scanner.edgeauth --set`（出厂 `gui.edge_auth.enabled: true` 而口令文件不入库 ⇒ 不设就是全站 401；**没有终端**时走 `CTFSCANNER_EDGE_PASSWORD='<口令>' python -m scanner.edgeauth --set`，续146-附2）；⑥ 起控制台，按启动横幅建**第一个管理员**（非交互环境：`python cli/run_users.py --create-admin`），再登进「账号管理」建子用户账号。
 
 ### 部署到服务器（给队友用 → 必须走 HTTPS）
 
@@ -289,6 +289,9 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 入口路径每次启动随机（续138）。⇒ **刚 clone 出来的控制台会对所有请求回 401**：门是开的，
 但口令文件 `config/edge_auth.yaml` 在 `.gitignore` 里、不随仓库分发。那不是装坏了，
 `python -m scanner.edgeauth --set` 设上口令即可（启动横幅与 `_boot_gaps` 汇总也会点名这一项）。
+容器 / systemd / cloud-init 这种**没有终端**的场合用 `CTFSCANNER_EDGE_PASSWORD='<口令>' python -m scanner.edgeauth --set`
+（临时变量，别写进任何入库文件）—— 与建管理员的 `CTFSCANNER_ADMIN_PASSWORD`、解锁凭据密文的
+`CTFSCANNER_KEYS_PASSPHRASE` 同一套口径：**只有显式命令吃环境变量，启动向导一律不代填**。
 纯本机单人自用想省事，把 `gui.host` 改回 `127.0.0.1`、`gui.edge_auth.enabled` 改成 `false`
 （代码里的默认值 `scanner.config.DEFAULTS` 正是这两项 —— 仓库 shipped 的那份比代码默认值更保守）。
 要放到服务器上用域名访问，请**由反向代理终止 TLS**（应用侧不碰证书），并按需打开三项配置：

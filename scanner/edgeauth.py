@@ -26,6 +26,14 @@ GitHub API 就是 200」），明文口令写进那儿再 `git add -A` 一次就
    「用户名+口令」收窄到只剩口令 —— 与 `login_guard` 那条"被锁文案与账号是否存在无关"同取向）。
 ④ **通过后在会话里打标记**，不每个请求重读+重比：`app.js` 是轮询式的（状态/日志/页签），
    逐请求走一遍校验没意义。会话本身由 `session.secret`（0600、随机 32 字节）签名。
+⑤ **命令行有一条非交互档（续146-附），向导没有**：`--set` 在没有终端时认环境变量
+   `CTFSCANNER_EDGE_PASSWORD`，而 `wizard()` 在无终端时**仍然只提醒、绝不代填**（`[8ai]` 钉着
+   那条红线）。为什么只给命令行：另外两个秘密早就这么分了 —— 建管理员走
+   `admin_setup.ENV_PASSWORD` + `cli/run_users.py --create-admin`、解锁凭据密文走
+   `CTFSCANNER_KEYS_PASSPHRASE`，两者都是"启动时不代填、显式命令才吃环境变量"。
+   在此之前这道门是唯一没有非交互档的：而出厂 `config/settings.yaml` 就是
+   `edge_auth.enabled: true` ⇒ 容器 / systemd / cloud-init 这种没有终端的新机器，
+   唯一出路是**手写** `config/edge_auth.yaml`（还没人给它 chmod 0600），自动化供给链根本接不上。
 
 路径走 `config.BASE_DIR` 而不是 import 期烤死：`[8v]` 已有"把 `BASE_DIR` 指到临时目录"的
 测试隔离先例，沿用它可以为本模块做回归而完全不碰本机真实的 `config/`。
@@ -34,6 +42,7 @@ import argparse
 import base64
 import binascii
 import getpass
+import os
 import pathlib
 import sys
 
@@ -46,6 +55,9 @@ EDGE_USER = "edge"                 # Basic 的用户名固定，只有口令是�
 REALM = "CTFScanner"
 SESSION_KEY = "edge_ok"            # 通过后打在会话里，避免每个请求重算校验（见 ④）
 MIN_PASSWORD_LEN = 8               # 与 users.MIN_PASSWORD_LEN 同口径（那道门protects 的是一个真服务）
+# 非交互档的环境变量名（见 docstring ⑤）。与 `admin_setup.ENV_PASSWORD` 同一取舍：
+# **只有显式命令**（`--set`）吃它，启动向导一律不吃。
+ENV_PASSWORD = "CTFSCANNER_EDGE_PASSWORD"
 
 # 设置口令的那条命令 —— **全仓唯一产地**（AGENTS.md §5.14：面向用户的同一句提示只许有一个产地，
 # 三处手写同一句必然漂，续124 真踩过）。401 响应体、启动横幅、CLI 输出都引这一个常量。
@@ -145,8 +157,12 @@ def wizard(settings, ask_password=None, isatty=None):
         return ST_CONFIGURED, ""
     tty = sys.stdin.isatty() if isatty is None else bool(isatty)
     if not tty:
+        # 向导**绝不代填**（`[8ai]` 钉的红线），但必须把非交互那条路说出来 —— 否则容器里
+        # 起一个新控制台，操作者只看到"一律 401"，不知道除了手改 YAML 还能怎么办。
         return ST_NO_TTY, (f"已启用但**没有口令** → 现在所有请求都会被 401 拒；"
-                           f"非交互环境不代填口令，请补设：{SET_HINT}")
+                           f"非交互环境不代填口令，请补设：{SET_HINT}"
+                           f"（没有终端时用环境变量 {ENV_PASSWORD} 提供口令 —— 临时变量，"
+                           f"别写进任何入库文件）")
     ask = ask_password or getpass.getpass
     pw = ask(f"边缘口令（用户名 {EDGE_USER}；直接回车=这次不设，之后所有请求都会被 401 拒）：")
     if not pw:
@@ -213,7 +229,9 @@ def _main(argv=None):
         description="401 边缘认证门的口令（用户名固定为 `%s`；口令明文存 %s，该文件不进仓库）"
                     % (EDGE_USER, "config/" + PASSWORD_FILE))
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--set", action="store_true", help="写入口令（不回显、不进 argv、不进任何输出）")
+    g.add_argument("--set", action="store_true",
+                   help="写入口令：有终端走 getpass 两次确认；没终端认环境变量 " + ENV_PASSWORD +
+                        "（两条路都不回显、不进 argv、不进任何输出）")
     g.add_argument("--status", action="store_true", help="看有没有配置（只报有无，不报值）")
     g.add_argument("--clear", action="store_true", help="删除凭据文件")
     a = ap.parse_args(argv)
@@ -232,10 +250,25 @@ def _main(argv=None):
             print("删除失败（权限？），文件保持原样。")
         return 0
 
-    # --set：口令只从 getpass 来，两次输入不一致就放弃（不写文件）
+    # --set：口令只从 **getpass**（有终端，两次确认）或 **环境变量**（没终端）来 ——
+    # 两条路都不进 argv、不回显、不出现在任何输出里（docstring ⑤ 讲了为什么要有第二条）。
     if not sys.stdin.isatty():
-        print(f"[!] 非交互环境不做代填 —— 也可以直接编辑文件：{SET_HINT}")
-        return 1
+        pw = (os.environ.get(ENV_PASSWORD) or "").strip()
+        if not pw:
+            print(f"[!] 非交互环境不做代填 —— 用环境变量 {ENV_PASSWORD} 提供口令"
+                  f"（临时变量，别写进任何入库文件），也可以直接编辑文件：{SET_HINT}")
+            return 1
+        # 校验一律照走：环境变量不是"免检通道"，弱口令照样拒（与 TTY 档同一个 validate_password）
+        ok, why = users.validate_password(pw, EDGE_USER)
+        if not ok:
+            print(f"[!] {ENV_PASSWORD} 里的口令不合格：{why}（未做任何修改，仍会一律 401）")
+            return 1
+        set_password(pw)
+        print(f"已写入（0600）：{_display_path()}")
+        print(f"口令取自环境变量 {ENV_PASSWORD}：没有回显、没有进 argv、也没有印在这几行里。")
+        print("这个文件在 .gitignore 里；口令**不要**写进 config/settings.yaml —— 那文件被 git 跟踪、仓库公开。")
+        print("提示：明文 HTTP 下 Basic 会把口令随每个请求带出去，跨不可信链路请上 TLS 反代。")
+        return 0
     pw = getpass.getpass(f"边缘口令（用户名 {EDGE_USER}，至少 {MIN_PASSWORD_LEN} 位）：")
     ok, why = users.validate_password(pw, EDGE_USER)
     if not ok:

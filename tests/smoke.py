@@ -17257,10 +17257,15 @@ expression: r0()
         finally:
             _conn.close()
 
-    # ① **DEFAULTS 必须是关**：开着提交的是 `config/settings.yaml`，而新克隆拿的是 DEFAULTS；
-    #    默认打开 = 任何没跑过 `--set` 的克隆一启动就被自己的控制台 401 到底。
+    # ① **DEFAULTS 必须是关**。⚠ 续146-附2 更正这两行原先的理由（"开着提交的是 settings.yaml，
+    #    而新克隆拿的是 DEFAULTS"）—— **不对**：`config/settings.yaml` 是被 git 跟踪的，仓库里
+    #    出厂就写着 `gui.host: 0.0.0.0` + `gui.edge_auth.enabled: true`（续131 的取舍），而
+    #    `load_settings()` 是拿它**盖在** DEFAULTS 上 ⇒ 新克隆拿到的是 `true`，在跑 `--set` 之前
+    #    确实全程 401。那是 fail-closed（公开仓库 + 出厂就绑 0.0.0.0，宁可锁死也不裸奔），不是 bug；
+    #    但它意味着"新机子怎么把配置补齐"必须真能走通 —— 无终端那条路见 `[8aw]`。
+    #    本条守的是另一半：**代码兜底**不许是开（settings.yaml 里缺这个键的人不该被突然锁死）。
     assert _cfg8ai.DEFAULTS["gui"]["edge_auth"]["enabled"] is False, \
-        "DEFAULTS 里默认打开这道门 → 新克隆在跑 --set 之前全程 401"
+        "DEFAULTS 里默认打开这道门 → settings.yaml 缺这个键的人一启动就全程 401"
     # 纯函数断言一律走**存下来的真函数**：`_ea8ai.enabled` 此刻还是上面那个隔离桩（恒假），拿它做
     # 断言会有两种坏结果 —— `is True` 必然挂（第 8 轮报的就是这个），而 `is False` **恒过**
     # （§6.1 说的没有区分度的断言）。两种都是桩污染，只是方向不同。
@@ -20259,6 +20264,130 @@ expression: r0()
           "run_bootstrap 的退出码原样带出去｜说清 .venv 不可搬移｜start.sh **exec** run_gui.py、"
           "不透传 argv（run_gui.py 不解析参数，透传＝静默忽略）、指路 gui_bind 认的两个环境变量、"
           "缺依赖时指回 ./install.sh")
+
+
+    # ---------------- [8aw] 续146-附2：401 边缘门口令要有**非交互**档（否则新机器根本配不齐） ----------------
+    #      实测撞出来的，不是推演：从"只有索引里那些文件"的空目录跑一遍 `./install.sh` + `./start.sh`，
+    #      控制台起得来但**全站 401** —— 出厂 `config/settings.yaml` 写着 `edge_auth.enabled: true`，
+    #      而口令文件 `config/edge_auth.yaml` 在 `.gitignore` 里。想补口令才发现
+    #      `python -m scanner.edgeauth --set` 在无终端时直接 `rc=1` 且不写文件 ⇒
+    #      容器 / systemd / cloud-init 这种没有终端的新机器，唯一出路是**手写**那个 YAML
+    #      （而且手写没人给它 chmod 0600，`set_password()` 才会）。
+    #      而另外两个秘密早就有非交互档：建管理员走 `admin_setup.ENV_PASSWORD`、
+    #      解锁凭据密文走 `keystore.ENV_PASSPHRASE`。三处该同构（§5.14 的正面用法：
+    #      同一类事情的做法只该有一种）。
+    #      修法只动**命令行**这一条路：`--set` 无终端时认 `CTFSCANNER_EDGE_PASSWORD`；
+    #      `wizard()` 的"非交互只提醒、绝不代填"红线**一个字没动**（下面 ③ 就是钉这个的）。
+    import ast as _ast8aw
+    import io as _io8aw
+    from scanner import admin_setup as _as8aw, keystore as _ks8aw
+
+    _PW8AW = "Sm0ke-Edge-NonTty!7"      # 哨兵口令：只进本组；出现在任何被跟踪文件里都算泄露
+    _tmp8aw = _TMPDIR / "edge8aw"
+    (_tmp8aw / "config").mkdir(parents=True, exist_ok=True)
+    _ob8aw, _oe8aw = _cfg8ai.BASE_DIR, _edgeauth.enabled
+    _cfg8ai.BASE_DIR = _tmp8aw
+    # `[8ai]` 收尾把 `edgeauth.enabled` 换成了"门不存在"的桩；本组验的正是这道门 ⇒ 换回真货。
+    # 用第 582 行存下来的 `_edgeauth_real`，**不要**在这里重写一份判据（那就是第二个产地）。
+    _edgeauth.enabled = _edgeauth_real
+    try:
+        # ① 三个秘密的非交互档同构：都是"显式命令吃环境变量，启动向导一律不吃"
+        assert _ea8ai.ENV_PASSWORD == "CTFSCANNER_EDGE_PASSWORD", _ea8ai.ENV_PASSWORD
+        assert _as8aw.ENV_PASSWORD == "CTFSCANNER_ADMIN_PASSWORD", _as8aw.ENV_PASSWORD
+        assert _ks8aw.ENV_PASSPHRASE == "CTFSCANNER_KEYS_PASSPHRASE", _ks8aw.ENV_PASSPHRASE
+        assert len({_ea8ai.ENV_PASSWORD, _as8aw.ENV_PASSWORD, _ks8aw.ENV_PASSPHRASE}) == 3, \
+            "三个环境变量重名了 —— 设一个会同时改两道门"
+
+        class _NoTTY8aw:
+            def isatty(self):
+                return False
+
+        def _set8aw(env=None):
+            """在"没有终端"的条件下跑一次 `--set`，返回 `(退出码, 它打印的全部文本)`。
+
+            ⚠ 必须把 stdout 整个换掉再收：只断言"没写文件"抓不到"把口令回显出来了"这一半，
+            而那才是这条改动最该守的性质（口令一旦进输出，就会进日志、进 CI 存档、进终端回滚缓冲）。
+            """
+            os.environ.pop(_ea8ai.ENV_PASSWORD, None)
+            if env is not None:
+                os.environ[_ea8ai.ENV_PASSWORD] = env
+            _buf = _io8aw.StringIO()
+            _si, _so = sys.stdin, sys.stdout
+            sys.stdin, sys.stdout = _NoTTY8aw(), _buf
+            try:
+                return _ea8ai._main(["--set"]), _buf.getvalue()
+            finally:
+                sys.stdin, sys.stdout = _si, _so
+
+        # ② 无终端 + **没有**环境变量：仍然 rc=1、仍然不写文件（这一档的行为一个字没变）
+        _rc, _out = _set8aw()
+        assert _rc == 1 and not _ea8ai.password_path().exists(), (_rc, _out[-160:])
+        assert _ea8ai.ENV_PASSWORD in _out and _ea8ai.SET_HINT in _out, \
+            f"拒绝时必须同时指路环境变量与 SET_HINT（否则无终端的人只有一条死路）：{_out.strip()[:120]}"
+
+        # ③ 无终端 + 有环境变量：写文件、0600、值逐字相同，且**输出里不出现口令**
+        _rc, _out = _set8aw(_PW8AW)
+        assert _rc == 0, (_rc, _out[-200:])
+        _p8aw = _ea8ai.password_path()
+        assert _p8aw.exists() and _p8aw.name == "edge_auth.yaml", _p8aw
+        assert _p8aw.stat().st_mode & 0o777 == 0o600, oct(_p8aw.stat().st_mode & 0o777)
+        assert _ea8ai.read_password() == _PW8AW, "写进去的不是环境变量里那个值"
+        assert _PW8AW not in _out, "**命令行输出里出现了口令** —— 这条是全部改动的前提"
+        _h8aw = "Basic " + _b64_8ai.b64encode(f"edge:{_PW8AW}".encode()).decode()
+        assert _ea8ai.verify(_h8aw) is True, "写完之后 verify() 必须放行（不然写了也进不去）"
+        assert _ea8ai.verify("Basic " + _b64_8ai.b64encode(b"edge:wrong").decode()) is False, \
+            "错口令仍要拒"
+
+        # ④ 环境变量**不是免检通道**：弱口令照样拒、照样不写文件
+        _ea8ai.clear_password()
+        _rc, _out = _set8aw("abc")
+        assert _rc == 1 and not _ea8ai.password_path().exists(), (_rc, _out[-160:])
+        assert "不合格" in _out and _PW8AW not in _out, _out.strip()[:120]
+
+        # ⑤ 红线：`wizard()` 在**环境变量就摆在那儿**时仍然只提醒、绝不代填
+        #    （`[8ai]` 钉的是"无终端 → ST_NO_TTY"；这里补的是"有环境变量也不许填"，
+        #     否则给命令行开的那一档会从向导这条路悄悄漏进启动流程）
+        os.environ[_ea8ai.ENV_PASSWORD] = _PW8AW
+        _st8aw, _msg8aw = _ea8ai.wizard({"gui": {"edge_auth": {"enabled": True}}}, isatty=False)
+        assert _st8aw == _ea8ai.ST_NO_TTY, _st8aw
+        assert not _ea8ai.password_path().exists(), \
+            "wizard 代填了 —— 命令行那一档漏进了启动流程（`[8ai]` 的红线被绕过）"
+        assert "401 拒" in _msg8aw and _ea8ai.ENV_PASSWORD in _msg8aw and _ea8ai.SET_HINT in _msg8aw, \
+            f"提醒里要同时有「401 拒」（[8ai]⑩ 按这几个字判）、环境变量名与 SET_HINT：{_msg8aw[:140]}"
+        os.environ.pop(_ea8ai.ENV_PASSWORD, None)
+
+        # ⑥ 源码红线：`wizard()` 的函数体里不许读环境变量（判据钉**代码形态**，不钉裸词 ——
+        #    模块里正当出现 `os.environ` 的地方是 `_main`，按文本搜会把它一起算上）
+        _src8aw = (ROOT / "scanner" / "edgeauth.py").read_text(encoding="utf-8")
+        _tree8aw = _ast8aw.parse(_src8aw)
+        _wiz8aw = [n for n in _tree8aw.body
+                   if isinstance(n, _ast8aw.FunctionDef) and n.name == "wizard"]
+        assert len(_wiz8aw) == 1, f"wizard 定义应恰好一个：{len(_wiz8aw)}"
+        _reads8aw = [n.lineno for n in _ast8aw.walk(_wiz8aw[0])
+                     if isinstance(n, _ast8aw.Attribute) and n.attr == "environ"]
+        assert not _reads8aw, f"wizard() 里读了 os.environ（第 {_reads8aw} 行）—— 启动流程不许代填"
+        assert _src8aw.count('ENV_PASSWORD = "CTFSCANNER_EDGE_PASSWORD"') == 1, \
+            "环境变量名只许有一处定义（另两处秘密各自也只有一个常量）"
+        # 判据自证：上面那个 AST 判据得能抓到真违规，否则"0 命中"是空写（§6.1 推论四配套那条）
+        _probe8aw = _ast8aw.parse("def wizard(settings):\n"
+                                 "    import os\n"
+                                 "    return os.environ.get('X')\n")
+        assert [n.lineno for n in _ast8aw.walk(_probe8aw.body[0])
+                if isinstance(n, _ast8aw.Attribute) and n.attr == "environ"], \
+            "AST 判据抓不到 wizard 里读 os.environ 的写法 ⇒ 上面那条是空写"
+    finally:
+        os.environ.pop(_ea8ai.ENV_PASSWORD, None)
+        _ea8ai.clear_password()
+        _cfg8ai.BASE_DIR = _ob8aw          # 归位！带着临时 BASE_DIR 往下跑会波及之后所有组
+        _edgeauth.enabled = _oe8aw         # 归位回 `[8ai]` 那个"门不存在"的桩
+        shutil.rmtree(_tmp8aw, ignore_errors=True)
+
+    print("[8aw] 续146-附2 边缘门口令的非交互档 ok: 三个秘密同构（edge/admin/keys 各一个环境变量、"
+          "互不重名）｜无终端且没给环境变量时行为一字未变（rc=1、不写文件、同时指路环境变量与 "
+          "SET_HINT）｜给了环境变量则写出 edge_auth.yaml、权限 0600、值逐字相同、verify() 放行对口令、"
+          "错口令仍拒，且**命令行输出里不出现口令**｜环境变量不是免检通道（弱口令照样拒且不写文件）｜"
+          "`wizard()` 在环境变量就摆在那儿时仍 ST_NO_TTY 且**不代填**（命令行那一档没漏进启动流程）｜"
+          "AST 判据钉住 wizard 函数体不读 os.environ，且判据先自证抓得到")
 
     print("SMOKE PASS")
 

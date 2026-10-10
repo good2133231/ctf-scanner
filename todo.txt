@@ -2947,6 +2947,37 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       目录树）；`docs/usage.md` 与 `.gitignore` 的 `venv` → `.venv`
       （`start.sh` 与 `run_bootstrap.VENV_DIR` 认的都是 `.venv`，文档教人建 `venv` 就是第二个产地）
 
+- [x] **补记（续146-附2）：401 边缘门口令补上非交互档** —— 主提交推完之后按主理人
+      「如果还有交互式按推荐或者你建议限制性，我等会可能不在电脑旁边」继续做，
+      把上一轮**停在缺配置那一步**的实测走完。撞到的是：`python -m scanner.edgeauth --set`
+      在无终端时直接 `rc=1` 且不写文件，而出厂 `settings.yaml` 就是 `edge_auth.enabled: true`
+      ⇒ 容器 / systemd / cloud-init 的新机器唯一出路是**手写** `config/edge_auth.yaml`
+      （手写没人给它 chmod 0600）。另外两个秘密早就有这一档（`admin_setup.ENV_PASSWORD`、
+      `keystore.ENV_PASSPHRASE`），只有这道门漏了
+- [x] 改法只动**命令行**：新增 `edgeauth.ENV_PASSWORD = "CTFSCANNER_EDGE_PASSWORD"`，
+      `--set` 无终端时读它 → 仍走 `validate_password`（**环境变量不是免检通道**）→
+      `set_password()`（0600）；没有它时行为一字未变（`rc=1`、不写文件），但拒绝文案
+      同时指路环境变量与 `SET_HINT`。`wizard()` 的"无终端只提醒、绝不代填"**一个字没动**，
+      只在提醒里补上环境变量名（保留 `[8ai]⑩` 按「边缘认证门」+「401 拒」判的那几个字）
+- [x] **更正 `tests/smoke.py [8ai]①` 的注释**（它原先写"新克隆拿的是 DEFAULTS"，**事实相反**：
+      `load_settings()` 拿 settings.yaml **盖在** DEFAULTS 上 ⇒ 新克隆拿到的是 `true`）。
+      断言本身没错、错的是理由，而正是这个错理由让"新克隆必然 401"在门禁里看不见。
+      AGENTS §5.10 一直写对了，漂的只有 smoke 的注释
+- [x] 新增回归 `[8aw]`（6 段）：三个环境变量互不重名｜无终端无环境变量时 rc=1 且不写文件｜
+      给了环境变量则写出 0600 文件、`verify()` 放行、**stdout 整个换掉再收以证明输出里没有口令**｜
+      弱口令照样拒｜`wizard()` 在环境变量摆在那儿时仍 `ST_NO_TTY` 且不代填｜
+      AST 判据钉 `wizard` 函数体不读 `os.environ`（判据自带夹具）
+- [x] **端到端实测新机器从零到登录页**（`logs/_onboard146.sh`，跑完即删）：空目录 507 个文件 →
+      `./install.sh` → 证反面（不给环境变量 rc=1）→ `CTFSCANNER_EDGE_PASSWORD` 设口令（0600、
+      输出无口令）→ `CTFSCANNER_ADMIN_PASSWORD` 建管理员 → `./start.sh` **零缺口零提问**起来 →
+      `/` 404 / 无凭据 401 / 带凭据**登录页 200 且真有口令表单** / 错口令 401 →
+      `server.log` 有而**随机前缀不落盘** → 源仓库零污染。**结论 ONBOARD OK**
+- [x] 文档：AGENTS §5.10 补「补口令的三条路」、§6 命令清单更正那行；README 部署 checklist ⑤
+      与「部署到服务器」段各补一句；`install.sh` 收尾说明补两条（管理员那条也写上环境变量）
+- [x] **主理人不在场时刻意没做的事**：出厂 `settings.yaml`（`0.0.0.0` + `edge_auth` 开）与
+      `DEFAULTS`（`127.0.0.1` + 关）不一致 —— **只记录、没改**。改它等于把一台绑在所有网卡上的
+      控制台的 401 门关掉，那是**削弱线上防护**，而这台机器就是主理人自己在用的部署。
+      fail-closed 是公开仓库该有的默认；真缺的是"新机器怎么把配置补齐"，那一块本轮补完了
 下一轮（续147）：
 
 - [ ] 把脱敏做成**不依赖真名**的机器判据：新增 smoke 断言「被跟踪文件里出现的任何注册域，
@@ -2973,7 +3004,12 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       要决定的是 **shipped 的那份该是哪一档**：保持服务器形态（更安全，但新机子第一次起必然 401，
       得先 `python -m scanner.edgeauth --set`），还是改成与 `DEFAULTS` 一致的本机形态
       （开箱能进，但谁 clone 了直接绑 0.0.0.0 就裸奔）。⚠ **这是安全开关，改之前必须问过主理人**；
-      续146 只把它如实写进了 `install.sh` 的收尾说明与 README/AGENTS
+      续146-附2 的结论：**保持 fail-closed 不改**（改它＝关掉一台绑在所有网卡上的控制台的门，
+      而这台机器就是主理人自己在用的多人部署），改为把「**没有终端的新机器怎么补齐配置**」补上 ——
+      `CTFSCANNER_EDGE_PASSWORD` + `--set`，端到端实测 `ONBOARD OK`（三条命令之内进到登录页）。
+      ⇒ 这一条现在只剩「两份口径要不要统一」这个**表述**问题，不再是「新机器接不上」；
+      真要统一，方向是 shipped settings.yaml 保持服务器形态、把 `DEFAULTS` 那对值与它
+      的区别在注释里写明（而不是关掉那道门）
 - [ ] Windows 侧没有对等的一键脚本（续146 用户明确"只做 Linux 的 .sh"）。要补就是
       `install.ps1` / `start.ps1`，判据同样只能留在 `run_bootstrap.py` 里（它本来就跨平台），
       脚本自己一份都不许抄 —— 并且要同样钉住"薄包装"（`[8av]` 那组的 Windows 版）

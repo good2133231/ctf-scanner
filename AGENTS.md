@@ -649,7 +649,14 @@ ctf-scanner/
    `edge_auth.enabled: true` —— `load_settings()` 是 `DEFAULTS + 该文件` 的合并，所以**直接 clone 的
    人拿到的是文件里的值**（照样绑所有网卡、照样在跑 `--set` 之前全程 401）；DEFAULTS 的默认关只在
    没有那份文件时兜底。门开而口令未设 = 一律 401（fail-closed）并在
-   启动横幅点名。另两条实操事实：明文 HTTP 下 Basic 会把口令随每个请求带出去（跨不可信链路仍需
+   启动横幅点名。**补口令有三条路**（续146-附2 补齐了第二条 —— 在此之前无终端的机器只剩第三条）：
+   ① 有终端跑 `python -m scanner.edgeauth --set`，getpass 两次确认；② **没有终端**（容器 / systemd /
+   cloud-init）用 `CTFSCANNER_EDGE_PASSWORD` 喂同一条命令 —— 口令仍走 `validate_password`（环境变量
+   **不是免检通道**）、文件仍 0600、输出里不出现口令；③ 直接手写 `config/edge_auth.yaml`
+   （没人给它 chmod，所以不推荐）。启动向导 `wizard()` **三条都不代填**，无终端时只提醒
+   （`[8ai]` 的红线；`[8aw]⑤` 补钉了"环境变量就摆在那儿时也不填"）。这一档与另两个秘密同构：
+   `admin_setup.ENV_PASSWORD` 建管理员、`keystore.ENV_PASSPHRASE` 解锁凭据密文 ——
+   **只有显式命令吃环境变量，启动流程一律不吃**（`[8aw]①` 把三个常量名一起钉住，重名也算红）。另两条实操事实：明文 HTTP 下 Basic 会把口令随每个请求带出去（跨不可信链路仍需
    TLS 反代）；这道门**不是** `0.0.0.0` 的替代品 —— `gui.allowed_hosts` 不填时 Host 白名单仍会被
    放宽（`gui/app.py:520` 的 `CS_GUARD_HOST`），那一档要单独配。回归 `[8ai]` 钉住以上全部。
 
@@ -1028,7 +1035,7 @@ py -3 run_gui.py            # 入口在**启动横幅那行**（http://127.0.0.1
                             #   直接开根路径是 404 空响应）；库里没账号时**当场向导**问你要设什么口令
 py -3 cli/run_users.py --status # 续117：账号数 + 配置里有无历史残留（只报有无，不报任何值）
 py -3 -m scanner.edgeauth --status                # 续132：401 边缘门配过口令没有（只报有无，绝不报值）
-py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（明文、0600、gitignore）；口令只经 getpass
+py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（明文、0600、gitignore）；口令经 getpass，**无终端时认 `CTFSCANNER_EDGE_PASSWORD`**（续146-附2；启动向导仍绝不代填）
                             #   建号 / 改口令：--create-admin [用户名]、--reset-password 用户名
                             #   非交互环境用 CTFSCANNER_ADMIN_PASSWORD 提供；口令只落 users 表
 # Linux 实机验收（**2026-09-23 续12 已达成**：Ubuntu 22.04.5 / Python 3.10.12）

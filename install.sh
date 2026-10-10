@@ -72,7 +72,8 @@ cat <<'EOF'
 首次启动只在**缺配置时**才交互（配置齐了就直接起，适合后台/开机自启）；缺哪几项会有一句汇总。
 新机子上通常是这三项 —— 前两项启动时会问你，第三项**不会问**（它只从文件读），最容易被漏掉：
   · 第一个管理员账号与口令
-      非交互环境补建：./.venv/bin/python cli/run_users.py --create-admin
+      非交互环境补建：CTFSCANNER_ADMIN_PASSWORD='<口令>' ./.venv/bin/python cli/run_users.py --create-admin
+      （同样是临时变量、别写进任何入库文件；口令只落 users 表的 PBKDF2 派生值）
   · 凭据密文口令（config/keys.enc.yaml，只在你配过第三方 key 时才有）
       只从 CTFSCANNER_KEYS_PASSPHRASE / ~/.secrets/keys-pass（0600）/ TTY 取，
       **绝不写进仓库里的任何文件**，也不会写进 .git/config 或远端地址。
@@ -80,7 +81,11 @@ cat <<'EOF'
       gui.edge_auth.enabled: true（续131 的取舍：仓库是公开的，宁可 fail-closed 也不裸奔），
       而口令文件 config/edge_auth.yaml 在 .gitignore 里、**不随仓库分发**。
       ⇒ 刚 clone 出来的控制台会对**所有**请求回 401，看着像"装坏了"，其实是门开着没钥匙。
-      设口令：./.venv/bin/python -m scanner.edgeauth --set      （顺带把文件权限设成 0600）
+      有终端：./.venv/bin/python -m scanner.edgeauth --set      （顺带把文件权限设成 0600）
+      没终端（容器 / systemd / cloud-init）：
+        CTFSCANNER_EDGE_PASSWORD='<口令>' ./.venv/bin/python -m scanner.edgeauth --set
+        —— 临时变量，别写进任何入库文件。启动向导**仍然不会代填**（那是 [8ai] 的红线），
+           只有这条显式命令吃它；口令同样走 validate_password，弱口令照样拒。
       纯本机自用、不想多一道门：把 config/settings.yaml 的 gui.edge_auth.enabled 改成 false。
 启动横幅会逐行进 logs/server.log（2MB×3 轮转）；控制台地址里那段**随机后台前缀刻意不落盘**
 （重启即换，它不是访问控制，别存进书签）。
