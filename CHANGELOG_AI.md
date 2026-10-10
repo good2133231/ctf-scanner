@@ -110,6 +110,41 @@ skill 的收尾四步也加了一句。现在 `grep 'commit -m'` 在 AGENTS / RE
 规矩落地之后门禁重跑一次，确认没改坏东西：**SMOKE PASS / RC=0 / 4m40s / 0 AssertionError**
 （`logs/_gate146m.log`，3989 行、153 条组打印）。读 AGENTS 的只有 `[8as]` 那六条骨头判据，改动前后都全过 —— 但「顺手看一眼门禁有没有红」本来就是这条规矩的一部分，不拿推理替代实测。
 
+### 主理人 2026-10-10 的答复，以及我更正自己写的一条待办
+
+答复三条：macOS 不验、完全离线不验（"我们只用 linux 就行""我们本身就算有网环境运行"）。
+Windows 一键脚本我按同一句读成**不做** —— 这是我的读法、不是他的原话，所以写在这里让他一眼能看见并纠正。
+
+然后是一个我自己的错，性质和 §6.2 那一类相同：**我把"这台机器没装的东西"当成了"这台机器的样子"**。
+上一版待办里写 `install.sh` / `start.sh` 只在"本机（Ubuntu、有网、**`python3-venv` 已装**）"实测过，
+还把"缺 `python3-venv` 的机器"列成三档未验之一。刚才去核现场，结论完全相反：
+
+```
+$ python3 -c "import ensurepip"        →  ModuleNotFoundError: No module named 'ensurepip'
+$ python3 -m venv /tmp/vt              →  The virtual environment was not created successfully
+                                            because ensurepip is not available. … apt install
+                                            python3.14-venv          （退出码 1）
+$ dpkg -l python3-venv                 →  未安装
+```
+
+也就是说**这台机器本身就处在"缺 `python3-venv`"的状态**，那两次干净目录的 `./install.sh`
+实测一直跑的就是 fallback。直接复现确认：`ensure_venv()` 返回
+`True | 已用官方 get-pip.py 引导 pip（下载 2230488 字节）`，建出来的 `.venv/bin/` 里
+`pip` / `pip3` / `activate` 都在。
+
+两件事值得留下来：① **写"还没验 X"之前先去核 X 的现场**，别拿印象当清单 —— 这一条待办要是留着，
+下一个人会专门去找一台"没装 python3-venv 的机器"来验，而那恰恰就是他脚下这台；
+② 好消息是这一档**早就有回归**，不用我补：`[8d]⑪` 钉住了幂等（已有可用 venv 不许重建、连
+`pyvenv.cfg` 的 mtime 都不许变）、**不许删用户原有的 `.venv`**（塞一个 marker 进去，失败路径跑完
+它必须还在）、get-pip 取不下来时返回原因不抛不留残片、只认 `bootstrap.pypa.io` 官方 https。
+⇒ 那条待办整支消失，不是降级。
+
+顺带把"两份口径不一致"从待办变成正文：`config/settings.yaml` 的 `gui:` 段头补了一段注释，写明
+"这份是服务器形态、刻意比 `DEFAULTS` 保守，`load_settings()` 拿本文件**盖在** DEFAULTS 上"，
+并列出两条后果（把那两行**删掉**＝当场退回本机形态、正在给别人用的会失联；保持现状＝新 clone
+在 `--set` 之前全站 401）。之所以写在配置文件里而不是只写在文档里：**下一个会去改这两行的人，
+读的就是这个文件**（`[8ai]①` 那条注释写错理由导致全仓没人发现"新克隆必然 401"，就是同一个教训的前一例）。
+
 ## 续146 站点默认只看 200/404 + 批量打标收口 + 判据收敛成一份 + 四个入口搬进 cli/ + Linux 一键安装 + 项目须知打包成 skill
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。本轮是**两批点单合起来做的**：续145 收尾时

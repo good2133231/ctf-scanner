@@ -1,4 +1,14 @@
 gui:
+  # ⚠ 这一份是**服务器形态**，刻意比代码默认值 `scanner/config.DEFAULTS`（127.0.0.1 + 门关掉）更
+  #   保守，**两者不一致是有意的**。看这里的人反复踩同一个坑：`load_settings()` 是拿本文件**盖在**
+  #   DEFAULTS 上，而本文件被 git 跟踪 ⇒ 新 clone 拿到的是下面这些值，不是 DEFAULTS 里那对。
+  #   两条后果，动这两行之前先想清楚：
+  #   · **删掉** `host` / `edge_auth.enabled` 这两行 ＝ 立刻退回 DEFAULTS 的本机形态，
+  #     不是"恢复默认"那么无害 —— 正在给别人用的部署会当场失联（绑回回环 + 门开着没口令）。
+  #   · 保持现状 ＝ 新 clone 在跑 `python -m scanner.edgeauth --set` 之前**全站 401**（fail-closed：
+  #     公开仓库 + 出厂就绑 0.0.0.0，宁可锁死也不裸奔）。没有终端时用环境变量喂同一条命令：
+  #     `CTFSCANNER_EDGE_PASSWORD='<口令>' python -m scanner.edgeauth --set`（续146-附2；
+  #     启动向导仍绝不代填，三条状态口径与判据见 `scanner/edgeauth.py` 的 docstring ⑤ 与 `[8aw]`）。
   host: 0.0.0.0
   port: 5000
   # ---- 部署到服务器（续47，见 docs/deploy-https.md）----

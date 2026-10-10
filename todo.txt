@@ -2978,6 +2978,26 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       `DEFAULTS`（`127.0.0.1` + 关）不一致 —— **只记录、没改**。改它等于把一台绑在所有网卡上的
       控制台的 401 门关掉，那是**削弱线上防护**，而这台机器就是主理人自己在用的部署。
       fail-closed 是公开仓库该有的默认；真缺的是"新机器怎么把配置补齐"，那一块本轮补完了
+- [x] **主理人 2026-10-10 的答复落地**（三条划掉/收口）：① macOS 不验了、② 完全离线不验了
+      （原话"mac就不用了 我们只用linux就行""不用完全离线 我们本身就算有网环境 运行"）；
+      ③ Windows 侧的一键脚本我按"只用 linux"这句读成**不做** —— 这是我的读法不是他的原话，
+      写在这里就是为了让他一眼能看到并纠正
+- [x] **更正我自己写的一条待办**：上一版把"缺 `python3-venv` 的机器"列成"还没验的三档"之一，
+      **其实这台机器就是那种机器** —— `import ensurepip` 直接 `ModuleNotFoundError`、
+      `python3 -m venv` 报 "The virtual environment was not created successfully because
+      ensurepip is not available"（`dpkg -l python3-venv` 也没装）。所以那两次干净目录的
+      `./install.sh` 实测**本来就走的是 fallback**。刚直接复现确认：
+      `ensure_venv()` 返回 `True | 已用官方 get-pip.py 引导 pip（下载 2230488 字节）`，
+      建出来的 `.venv/bin/` 里 `pip` / `pip3` / `activate` 都在
+- [x] 而且这一档**早就有回归**，不用我补：`[8d]⑪` 钉住了幂等（已有可用 venv 不许重建、
+      连 `pyvenv.cfg` 的 mtime 都不许变）、**不许删用户原有的 `.venv`**（放一个 marker 文件进去，
+      失败路径跑完它必须还在）、get-pip 取不下来时返回原因不抛且不残片、
+      取 get-pip 只认 `bootstrap.pypa.io` 官方 https 主机。⇒ 待办那条整支消失，不是"降级"
+- [x] **把"两份口径不一致"从待办改成正文**：`config/settings.yaml` 的 `gui:` 段头补了一段注释，
+      写明"这份是服务器形态、刻意比 `DEFAULTS` 保守、`load_settings()` 拿本文件**盖在** DEFAULTS 上"，
+      并列出两条后果（删掉那两行＝当场退回本机形态、正在给别人用的会失联；保持现状＝新 clone
+      在 `--set` 之前全站 401）。**没改任何值**，纯注释 —— 上一轮 `[8ai]①` 那句错注释犯的
+      就是"没人把这件事写在读者会看的地方"，写进配置本身才是治处
 下一轮（续147）：
 
 - [ ] 把脱敏做成**不依赖真名**的机器判据：新增 smoke 断言「被跟踪文件里出现的任何注册域，
@@ -2997,27 +3017,6 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       要显式列出来 —— 别用"跳过没有输入框的段"这种自动豁免，那正是第十二起能藏住的原因
 - [ ] `CHANGELOG_AI.md` 开头那 4 行文件头**重复了两遍**（`# CHANGELOG_AI.md` + 三行说明，1-4 与 5-8 行
       逐字相同）。删掉一份即可；`[8as]` 的取号正则只认 `^#{2,}`，所以它一直没被发现，也不影响判据
-- [ ] **出厂 `config/settings.yaml` 与代码 `DEFAULTS` 不一致**（续146 实测撞出来的，见上一节）：
-      shipped 的是 `gui.host: 0.0.0.0` + `allowed_hosts: []` + `edge_auth.enabled: true`，
-      `DEFAULTS` 是 `127.0.0.1` + `false`。后果：刚 clone 出来的控制台**全站 401**
-      （fail-closed 生效，不是坏了），而"默认只绑 127.0.0.1"这句话在文档里写了很久。
-      要决定的是 **shipped 的那份该是哪一档**：保持服务器形态（更安全，但新机子第一次起必然 401，
-      得先 `python -m scanner.edgeauth --set`），还是改成与 `DEFAULTS` 一致的本机形态
-      （开箱能进，但谁 clone 了直接绑 0.0.0.0 就裸奔）。⚠ **这是安全开关，改之前必须问过主理人**；
-      续146-附2 的结论：**保持 fail-closed 不改**（改它＝关掉一台绑在所有网卡上的控制台的门，
-      而这台机器就是主理人自己在用的多人部署），改为把「**没有终端的新机器怎么补齐配置**」补上 ——
-      `CTFSCANNER_EDGE_PASSWORD` + `--set`，端到端实测 `ONBOARD OK`（三条命令之内进到登录页）。
-      ⇒ 这一条现在只剩「两份口径要不要统一」这个**表述**问题，不再是「新机器接不上」；
-      真要统一，方向是 shipped settings.yaml 保持服务器形态、把 `DEFAULTS` 那对值与它
-      的区别在注释里写明（而不是关掉那道门）
-- [ ] Windows 侧没有对等的一键脚本（续146 用户明确"只做 Linux 的 .sh"）。要补就是
-      `install.ps1` / `start.ps1`，判据同样只能留在 `run_bootstrap.py` 里（它本来就跨平台），
-      脚本自己一份都不许抄 —— 并且要同样钉住"薄包装"（`[8av]` 那组的 Windows 版）
-- [ ] `install.sh` / `start.sh` 只在**本机**实测过一次（Ubuntu、有网、`python3-venv` 已装）。
-      还没验的三档：① 没有 `python3-venv` 的机器（走官方 `get-pip.py` 引导那一档）；
-      ② 离线机器（应当如实报失败并退出非 0，而不是卡在下载超时上）；③ macOS
-      （`run_bootstrap._PKG_PREFERRED` / `_PKG_NAME` 里 brew/port 那几条是"按各家既定命名登记、
-      未逐一验证"，续103 的原话）
 - [ ] `scanner/targets.py` 现在是"目标 → 主机 → 注册域"的唯一产地（续146-D），但
       `scanner/utils.base_domain()` 仍被 `extdom.base_of` 当**兜底**用（分组需要一个非空稳定键）。
       这个兜底是刻意的、`[8au]⑤` 也钉住了它，但它意味着 `base_domain("127.0.0.1") == "0.1"`
