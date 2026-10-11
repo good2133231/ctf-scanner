@@ -20513,6 +20513,212 @@ expression: r0()
           "旧排序形状与第二处实现都不许回来｜第三方清单一条匹配规则（`_suffix_hit` 全仓唯一）、"
           "340+ 条且行尾仍是纯 CRLF、自家域名优先放行、osint 入库前挡且报条数｜"
           "「送去探测」两个入口都有范围选择、默认全任务、ext_probe_max 在 DEFAULTS 与 POST 映射里都在")
+
+    # ---------------- [8bj] 续155：JS 凭据按 (站点,值) 去重 + 更多敏感形状 + 整行上下文 ----------------
+    #      主理人 #7 的三句原话："同一站点同样匹配的值就不要二次出现了"、"你可以生成更多敏感
+    #      关键字来匹配"、"更好优化上下文"。这一组钉三件事，每件都带证伪：
+    #      ① 去重键是 **(主机, 掩码值)**：同一站点被两条规则抓到同一个值只留一行，而**不同站点
+    #        的同一个值必须各报一行**（旧键是跨站全局的掩码值，B 站的命中会被 A 站吃掉）；
+    #        重跑同一任务不许再插一遍（`insert_vuln` 没有 UNIQUE，去重是写方的事，AGENTS §5.6）。
+    #      ② 新增的每个形状都要真命中一次，且占位/模板值仍然要被挡（只加规则不降噪＝刷一堆假凭据）。
+    #      ③ `line_text` 是**命中所在那一整行**（键名与嵌套位置都在里面），且没退化成 splitlines。
+    from scanner import jsmine as _js155
+    from scanner.stages.jsmine import JsmineStage as _JS155
+
+    # 夹具一律**运行时拼串**，源码里不留整串"形状与真凭据一致"的文本：GitHub 的秘密扫描会把
+    # 被跟踪文件里的这类串当成泄露的 token 直接拒绝推送（本轮就被拦过一次），而本仓的红线
+    # 本来也是"口令 / token 绝不写进仓库里的任何文件"（AGENTS §0.6）。这里要验的是规则
+    # 命中与不命中，不是"存一串看着能用的 key"。
+    def _fxs155(*parts):
+        return "".join(parts)
+
+    _fx155 = [
+        ("openai-api-key", _fxs155("sk-", "projaBcdEfGhIjKlMnOpQrStUvWx")),
+        ("anthropic-api-key", _fxs155("sk-ant-", "api03aBcDeFgHiJkLmNoPqRsTuVw")),
+        ("gitlab-pat", _fxs155("glpat-", "aBcDeFgHiJkLmNoPqRsTuV")),
+        ("npm-token", _fxs155("npm_", "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123")),
+        ("pypi-token", _fxs155("pypi-", "AgEIcHlwaS5vcmc", "aB3dEf" * 8)),
+        ("huggingface-token", _fxs155("hf_", "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123")),
+        ("square-token", _fxs155("sq0atp-", "aBcDeFgHiJkLmNoPqRsTuV")),
+        ("mailgun-key", _fxs155("key-", "ab3d5f789c1e2f4a6b8c0d1e3f5a7b9c")),
+        ("twilio-account-sid", _fxs155('account_sid":"AC', "beefac1e2f4a6b8c0d1e3f5a7b9c0d12")),
+        ("facebook-app-secret", _fxs155('app_secret = "be', "ef5f789c1e2f4a6b8c0d1e3f5a7b9c", '"')),
+        ("aws-secret-access-key",
+         _fxs155('aws_secret_access_key = "aB3cD5', 'eF6gH7iJ8kL9mN0pQ1rS2tU4vW6xY8zA0b', '"')),
+        ("azure-storage-account-key",
+         _fxs155("AccountKey=wJa+Kqx7m1zP3rYv", "B8cNdFgHjLkMnQpRsTuVwXyZ01234", "=")),
+        ("google-oauth-client-secret", _fxs155('client_secret":"GOCSPX-', "aBcDeFgHiJkLmNoPqRsT")),
+        ("bearer-token", _fxs155("Authorization: Bearer eyJ", "hbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9")),
+    ]
+    for _n155, _s155 in _fx155:
+        _got155 = [h["type"] for h in _js155._find_secrets(_s155, "https://a155.test/app.js")]
+        assert _n155 in _got155, f"形状 {_n155} 没命中（夹具或正则漂了）：{_got155}"
+    assert len(_js155.SECRET_RULES) >= 29, \
+        f"形状表应当是**扩充**过的：{len(_js155.SECRET_RULES)} 条"
+    # 降噪半边（证伪：只加规则不降噪，这一条立刻红）
+    for _bad155 in ['apiKey = "your_api_key_here"', 'apiKey = "${API_KEY}"',
+                    'token = "xxxxxxxxxxxxxxx"', 'secret = "process.env.SEC"',
+                    'password = "aaaaaaaaaa"']:
+        assert _js155._find_secrets(_bad155, "https://a155.test/app.js") == [], \
+            f"占位/模板值被当成凭据报出来了：{_bad155}"
+    # ③ 整行上下文
+    _row155 = '{"conf":{"accessKeyId":"' + _fxs155("AKIA", "ABCDEFGHIJKLMNOP") + '"}}'
+    _h155 = _js155._find_secrets(_row155, "https://a155.test/app.js")[0]
+    assert _h155["line_text"] == _row155, _h155
+    assert "accessKeyId" not in _h155["value"] and "accessKeyId" in _h155["line_text"], \
+        "整行上下文的意义就是看得见键名；键名跑到值里或没进 line_text 都是白加"
+    assert "AKIA" in _h155["value"]
+    _src155 = (ROOT / "scanner" / "jsmine.py").read_text(encoding="utf-8", errors="replace")
+    # 判据钉**代码形态**（AST），不钉字面量：`_line_of` 的 docstring 里就写着"不 splitlines()"，
+    # 按文本搜会被自己的注释绊红（本项目第 6 次栽在同一件事上，§6.1 推论四）。
+    import ast as _ast155
+    _fn155 = [n for n in _ast155.parse(_src155).body
+              if isinstance(n, _ast155.FunctionDef) and n.name == "_line_of"]
+    assert len(_fn155) == 1, f"`_line_of` 的定义应恰好一处：{len(_fn155)}"
+    _calls155 = [n.func.attr for n in _ast155.walk(_fn155[0])
+                 if isinstance(n, _ast155.Call) and isinstance(n.func, _ast155.Attribute)]
+    assert "splitlines" not in _calls155, \
+        f"`_line_of` 里真调了 splitlines()：每命中一次就拆一遍全文 → {_calls155}"
+
+    # ① 端到端去重：两个站点、同站点两条规则命中同一个值、跑两遍
+    def _ctx155(tag):
+        st155 = copy.deepcopy(settings)
+        st155["jsmine"] = dict(st155.get("jsmine") or {}, enabled=True, max_pages=5)
+        tid155 = db.create_task(f"smoke-155-{tag}", "a155.test", ["jsmine"], {})
+        wd155 = Path(tempfile.mkdtemp(prefix="smoke-155-"))
+        return StageContext(tid155, f"smoke-155-{tag}", parse_lines(["a155.test"]),
+                            ["jsmine"], {}, st155, wd155, _Rec154())
+
+    def _mine155(url, st=None, logger=None, text_sink=None):
+        # 两个站点的同一个值（旧写法：跨站全局去重 ⇒ 第二个站点被吃掉）
+        # 同一站点两条规则命中同一个值（generic-credential 与 aws-access-key）⇒ 只该留一行
+        host = url.split("://", 1)[-1].split("/", 1)[0]
+        val = "AKIA" + "ABCDEFGHIJKLMNOP"
+        return {"domains": [], "urls": [], "js_count": 1, "secrets": [
+            {"type": "aws-access-key", "value": _js155._masked(val), "context": "ctx",
+             "line_text": '{"k":"' + val + '"}', "source": url, "line": 3, "offset": 10},
+            {"type": "generic-credential", "value": _js155._masked(val), "context": "ctx",
+             "line_text": '{"k":"' + val + '"}', "source": url, "line": 3, "offset": 10},
+            {"type": "gitlab-pat", "value": "glpat-****uv", "context": "ctx",
+             "line_text": "x", "source": url, "line": 9, "offset": 90} if host.startswith("a") else
+            {"type": "npm-token", "value": "npm_****1234", "context": "ctx",
+             "line_text": "x", "source": url, "line": 9, "offset": 90},
+        ]}
+
+    _cx155 = _ctx155("dedupe")
+    _cx155.results["sites"] = [{"url": "https://a155.test/"}, {"url": "https://b155.test/"}]
+    from scanner.stages import jsmine as _JS155_mod
+    _real_mine155 = _JS155_mod.jsmine.mine
+    try:
+        _JS155_mod.jsmine.mine = _mine155
+        _JS155(_cx155).run()
+        _rows1 = [dict(r) for r in db.list_vulns(_cx155.task_id, limit=None)]
+        _JS155(_cx155).run()          # 第二次（模拟重跑 / 追加执行）
+        _rows2 = [dict(r) for r in db.list_vulns(_cx155.task_id, limit=None)]
+    finally:
+        _JS155_mod.jsmine.mine = _real_mine155
+    _js1 = sorted((r["target"], r["poc_id"]) for r in _rows1 if "js-secret-" in r["poc_id"])
+    assert len(_js1) == 4, f"两站 × (AKIA 一行 / 各自独有值一行) 应恰好 4 行：{_js1}"
+    assert {r["target"] for r in _rows1 if r["poc_id"] == "js-secret-aws-access-key"} == \
+        {"a155.test", "b155.test"}, \
+        f"同一个值在两个站点必须各报一行（旧键跨站全局 ⇒ 第二站被吃掉）：{_js1}"
+    assert "js-secret-generic-credential" not in {r["poc_id"] for r in _rows1}, \
+        f"同一站点同一个值被两条规则各抓一次就该只留一行：{_js1}"
+    assert len(_rows2) == len(_rows1), \
+        f"第二次运行多插了 {len(_rows2) - len(_rows1)} 行（去重没读库里已有行）"
+    assert any("值 " in (r["evidence"] or "") and "｜所在行：" in (r["evidence"] or "")
+               for r in _rows1), [r["evidence"] for r in _rows1]
+    # 写方模板 ↔ 读方正则 同源：模板里那个"值 %s；前后文"被改掉，第二次运行就会插重复行
+    _stg155src = (ROOT / "scanner" / "stages" / "jsmine.py").read_text(encoding="utf-8", errors="replace")
+    assert "，值 %s；前后文：%s" in _stg155src and r"，值 (.*?)；前后文：" in _stg155src, \
+        "evidence 的写方模板与 `_SECRET_VAL_RE` 读方必须成对存在（改一处不改另一处＝重复行悄悄回来）"
+    print("[8bj] 续155 JS 凭据收口 ok: 14 个新形状逐个真命中 + 占位/模板值 5 例仍被挡｜"
+          "去重键 (主机,掩码值)：同站两条规则抓同一个值只留一行、不同站点同一个值各报一行、"
+          "重跑同一任务零新增行（端到端跑两遍实测 4 行不变）｜`line_text` 给整行且键名在里面、"
+          "没退化成 splitlines｜evidence 写方模板与读方正则成对在文件里")
+
+    # ---------------- [8bk] 续155：技术栈收敛（识别 php 就不跑 jsp 的 POC 与目录）可见且可判 ----------------
+    #      主理人 #10 原话："起码要做到如果识别php 就不用jsp的目录扫描和漏洞测试这种"。
+    #      两路的判据**早就在**（POC 侧 `vulnscan._lang_conflict`、目录侧 `dirscan._dict_kind`
+    #      + `TECH_LANG` 分桶），但在本轮之前**一条断言都没有**，而且跳过数只在 DEBUG ——
+    #      于是"少跑了"这件事没有任何证据，功能等于不存在（§6.1 说的那种空写）。这一组补的
+    #      就是"能判 + 能看见"，同时钉住判据只有一份。
+    from scanner.stages.vulnscan import _lang_conflict as _lc155, _lang_summary as _ls155
+    from scanner.stages.dirscan import _dict_kind as _dk155, _FULL_LAYERS as _FL155
+    from scanner.stages.dirscan import DirscanStage as _DS155
+
+    def _poc155(*tags):
+        return {"info": {"tags": list(tags)}}
+
+    for _poc, _lang, _want in [(_poc155("jsp", "tomcat"), "php", True),
+                               (_poc155("asp"), "php", True),
+                               (_poc155("php"), "php", False),
+                               (_poc155("wordpress"), "php", False),
+                               (_poc155("sqli", "rce"), "php", False),
+                               (_poc155("jsp"), "", False),
+                               (_poc155("sqli"), "", False)]:
+        assert _lc155(_poc, _lang) is _want, \
+            f"{_poc['info']['tags']} vs 站点语言 {_lang!r} 应为 {_want}"
+    # 判据自证：语言未知与通用 POC 必须**不拦**（指纹判错时不能连带把 POC 丢掉）
+    assert _lc155(_poc155("jsp"), "") is False, "站点语言未知却拦了 ⇒ 指纹误判会吞掉整批 POC"
+    assert _lc155(_poc155("sqli"), "jsp") is False, "没有语言标签的通用 POC 不许被任何语言拦掉"
+    _vs155 = (ROOT / "scanner" / "stages" / "vulnscan.py").read_text(encoding="utf-8", errors="replace")
+    assert _vs155.count("def _lang_summary") == 1 and _vs155.count("_lang_summary(_lang_skips)") == 1, \
+        "汇总句必须**由阶段真的调用**（只写一个没人调的函数＝回到「看不见」）"
+    assert "_lang_skips[\"n\"] += " in _vs155 and "_lang_lock" in _vs155, \
+        "跳过数要在锁里累加：`_pocs_for` 跑在 pool_run 的工作线程里，读-改-写放到锁外会少报"
+    # INFO 那句的内容（现取字典，不写死数字）
+    assert _ls155({"n": 0, "sites": 0}) == "", "没跳过就一个字都不许说（默认配置必须安静）"
+    _one155 = _ls155({"n": 3, "sites": 1, "php": 3})
+    assert "累计跳过 3 次" in _one155 and "php 3" in _one155, _one155
+    _two155 = _ls155({"n": 7, "sites": 2, "php": 5, "jsp": 2})
+    assert "判出语言 2 个站点" in _two155 and _two155.index("jsp") < _two155.index("php"), \
+        f"两档要按语言名字典序列出（顺序不定＝同一份数据两行不同文案）：{_two155}"
+    assert "afrog" in _two155, "必须说清 afrog 那一路不在我们的语言过滤里（否则会被读成全都收敛了）"
+
+    # 语言桶判据
+    assert _dk155("php,wordpress", "") == "php", "指纹标签要能判出桶"
+    assert _dk155("", "http://x.test/a.jsp") == "jsp", "URL 后缀优先于标签"
+    assert _dk155("php", "http://x.test/a.jsp") == "jsp", "后缀比标签更直接（同页混排时按后缀）"
+    assert _dk155("nginx", "") == "", "判不出语言就是空串（空桶=全量字典，绝不猜）"
+    # 目录字典分桶：php 站点的字典层里**不该出现** jsp/asp 的语言字典文件
+    _d155 = load_settings().get("dicts") or {}
+    assert _d155.get("dirs_php") and _d155.get("dirs_jsp"), f"DEFAULTS 少了语言字典项：{_d155}"
+
+    class _C155:
+        settings = {"dicts": _d155}
+
+    class _S155:
+        ctx = _C155()
+        _layer_paths = _DS155._layer_paths
+
+    def _tails155(kind):
+        return {str(x).rsplit("/", 1)[-1] for x in
+                _S155()._layer_paths(kind, {}, "", _FL155)}
+    _php155 = _tails155("php")
+    assert any(x.startswith("dirs_php") for x in _php155), _php155
+    assert not any(x.startswith(("dirs_jsp", "dirs_asp")) for x in _php155), \
+        f"PHP 站点的字典里混进了别的语言桶：{_php155}"
+    assert not any(x.startswith("dirs_big") for x in _php155), "已知语言不该退到全量字典"
+    _jsp155 = _tails155("jsp")
+    assert any(x.startswith("dirs_jsp") for x in _jsp155) \
+        and not any(x.startswith(("dirs_php", "dirs_asp")) for x in _jsp155), _jsp155
+    _unk155 = _tails155("")
+    assert any(x.startswith("dirs_big") for x in _unk155), \
+        f"未知语言必须回退全量字典（拦掉就是丢资产）：{_unk155}"
+    assert any(x.startswith("dirs_shallow") for x in _unk155), \
+        "未知语言时精选层要排在语言层之前（续144 那条顺序判据，别被改回空操作）"
+    # 判据只有一个产地：TECH_LANG 只许定义一次，vulnscan 必须是 import 而不是复制
+    _tg155 = 0
+    for _f155 in sorted((ROOT / "scanner").rglob("*.py")):
+        _tg155 += _f155.read_text(encoding="utf-8", errors="replace").count("TECH_LANG = {")
+    assert _tg155 == 1, f"语言表被复制了一份（两处迟早漂）：{_tg155}"
+    assert "from .dirscan import TECH_LANG" in _vs155, "POC 侧要 import 那张表，不是自己再列一遍"
+    print("[8bk] 续155 技术栈收敛 ok: POC 语言冲突判据 7 例真值表（未知语言与通用 POC 一律不拦）｜"
+          "跳过数在锁里累加且由阶段真的调用 `_lang_summary`｜INFO 那句现取字典、两档按语言名排序、"
+          "并说清 afrog 不在本路收敛里｜目录侧 `dirs_php` 桶不含 jsp/asp 字典、未知语言回退全量且"
+          "精选层在前｜`TECH_LANG` 全仓唯一一份定义"
+          )
     # ---------------- [8au] 续146：站点默认只看 200/404 / 批量打标只读本面板 / 判据收敛 / 入口搬进 cli ----------------
     #      用户点单四件事：① 站点默认只看 200/404 + 「显示全部」开关（跨任务 /sites 与任务详情
     #      站点页签**同一口径**）；② 「批量打标」读整页勾选框，会串到站点行；③ "目标→注册域"

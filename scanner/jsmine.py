@@ -250,6 +250,28 @@ SECRET_RULES = (
     ("generic-credential", re.compile(
         r"""(?i)(api[_-]?key|secret|token|access[_-]?key|password|passwd|pwd)"""
         r"""\s*[:=]\s*["']([^"']{8,64})["']"""), 2),
+    # 续155（主理人点单"生成更多敏感关键字"）：下面这批都刻意带**≥3 字符的字面量锚点**，
+    # 这样 `flagfind` 那条复用同一张表的窗口扫描才接得上（取不出锚的形状会被成本护栏
+    # 显式拒用并在策略页说明，不静默少扫）。命名一律"厂商-用途"，与既有 16 条同风格。
+    ("openai-api-key", re.compile(r"\b(sk-[A-Za-z0-9_\-]{20,})\b"), 1),
+    ("anthropic-api-key", re.compile(r"\b(sk-ant-[A-Za-z0-9_\-]{20,})\b"), 1),
+    ("gitlab-pat", re.compile(r"\b(glpat-[A-Za-z0-9_\-]{20,})\b"), 1),
+    ("npm-token", re.compile(r"\b(npm_[A-Za-z0-9]{30,})\b"), 1),
+    ("pypi-token", re.compile(r"\b(pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_\-]{20,})\b"), 1),
+    ("huggingface-token", re.compile(r"\b(hf_[A-Za-z0-9]{30,})\b"), 1),
+    ("square-token", re.compile(r"\b(sq0(?:atp|csp)-[A-Za-z0-9_\-]{20,})\b"), 1),
+    ("mailgun-key", re.compile(r"\b(key-[0-9a-f]{32})\b"), 1),
+    ("twilio-account-sid", re.compile(
+        r"""(?i)account_sid["'\s:=]{1,4}(AC[0-9a-f]{32})"""), 1),
+    ("facebook-app-secret", re.compile(
+        r"""(?i)app_secret["'\s:=]{1,4}([0-9a-f]{32})"""), 1),
+    ("aws-secret-access-key", re.compile(
+        r"""(?i)aws_secret_access_key["'\s:=]{1,4}([A-Za-z0-9/+=]{40})"""), 1),
+    ("azure-storage-account-key", re.compile(
+        r"""(?i)accountkey["'\s]{0,2}={1,2}([A-Za-z0-9+/=]{40,80})"""), 1),
+    ("google-oauth-client-secret", re.compile(
+        r"""(?i)client_secret["'\s:=]{1,4}([A-Za-z0-9_\-]{24,40})"""), 1),
+    ("bearer-token", re.compile(r"(?i)\bbearer[ \t]+([A-Za-z0-9_.\-=]{20,})"), 1),
 )
 
 # 占位/模板信号：命中即判为噪声（用户明确要求前后文动态过滤）
@@ -398,6 +420,13 @@ def _looks_placeholder(value):
         return True
     return False
 
+def _line_of(text, a, b, cap=240):
+    """命中所在那一**整行**（空白折叠、超长截断）。不 `splitlines()`：那是 O(全文)。"""
+    s = text.rfind("\n", 0, a) + 1
+    e = text.find("\n", b)
+    return re.sub(r"\s+", " ", text[s:e if e >= 0 else len(text)]).strip()[:cap]
+
+
 
 def _find_secrets(text, source):
     """匹配凭据规则并降噪，返回带内部去重键 `_raw` 的列表。"""
@@ -431,6 +460,11 @@ def _find_secrets(text, source):
                 # 续143：行号与字节偏移 —— 用户要"详细链接"，而一个几百 KB 的打包 JS
                 # 只给前后文片段是找不到位置的（他原话：js 的也是给我详细链接）。
                 "line": text.count("\n", 0, m.start()) + 1,
+                # 续155（主理人"更好优化上下文"）：除了 ±窗口的前后文，再给**命中所在那一整行**
+                # —— `{"accessKeyId":"AKIA..."}` 只有整行才看得出键名与它挂在哪个对象下。
+                "line_text": _line_of(text, m.start(), m.end()),
+                # 续155（主理人"更好优化上下文"）：除了 ±窗口的前后文，再给**命中所在那一整行**
+                # —— `{"accessKeyId":"AKIA..."}` 只有整行才看得出键名与它挂在哪个对象下。
                 "offset": m.start(),
                 "_raw": raw,
             })

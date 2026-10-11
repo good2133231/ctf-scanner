@@ -14,8 +14,30 @@ from urllib.parse import urlparse
 
 from .base import Stage
 from . import probe as probe_stage
+import re
+
 from .. import blacklist, db, extdom, fingerprint, flagfind, jsmine
 from ..utils import write_lines
+
+
+_SECRET_VAL_RE = re.compile(r"，值 (.*?)；前后文：")
+
+
+def _existing_js_secrets(task_id):
+    """库里本任务已入库的 JS 凭据行 → `{(主机, 掩码值)}`，重跑/追加执行时靠它不再插重复行。
+
+    掩码值是从 `evidence` 里回读的，而那句模板由**本文件**写（见下面 `db.insert_vuln` 那处）——
+    改模板必须同时改这里的正则，否则第二次运行会安静地把重复行插进去。`[8bj]` 有一条判据
+    专门盯"写方模板与读方正则同源"。
+    """
+    out = set()
+    for r in db.list_vulns(task_id, limit=None):
+        if not str(r["poc_id"] or "").startswith("js-secret-"):
+            continue
+        m = _SECRET_VAL_RE.search(str(r["evidence"] or ""))
+        if m:
+            out.add((str(r["target"] or "").lower(), m.group(1)))
+    return out
 
 
 class JsmineStage(Stage):
@@ -43,7 +65,14 @@ class JsmineStage(Stage):
             return
         ctx.logger.info(f"[jsmine] 从 {len(sites)} 个站点挖掘 JS 资产 …")
 
-        domains, urls, secrets, seen_value = set(), set(), [], set()
+        # 续155（主理人点单"同一站点同样匹配的值就不要二次出现了"）：去重键从"掩码值"
+        # （那是**跨站全局**的键 ⇒ B 站同一个值被 A 站吃掉）改成 **(站点, 掩码值)**：同站点
+        # 重复命中（多个 JS 文件、或两条规则抓到同一个值）只留一行，不同站点各报各的。
+        # "站点"取入库的 target（主机名）而不是完整 JS URL，否则同一站的 app.js 与 vendor.js
+        # 会各报一行 —— 那才是用户看到的"二次出现"。重跑/追加执行还要**先看库里已有什么**
+        # （`insert_vuln` 没有 UNIQUE 约束，去重是写方的责任，AGENTS §5.6）。
+        domains, urls, secrets = set(), set(), []
+        seen_value = _existing_js_secrets(ctx.task_id)
         js_count = 0
         for u in sites:
             if ctx.stopped():
@@ -64,9 +93,11 @@ class JsmineStage(Stage):
             domains.update(res.get("domains") or [])
             urls.update(res.get("urls") or [])
             for s in res.get("secrets") or []:
-                if s.get("value") in seen_value:
+                host155 = (urlparse(s.get("source", "") or "").hostname or "").lower()
+                key155 = (host155, str(s.get("value") or ""))
+                if key155 in seen_value:
                     continue
-                seen_value.add(s.get("value"))
+                seen_value.add(key155)
                 secrets.append(s)
 
         if ctx.stopped():
@@ -125,9 +156,10 @@ class JsmineStage(Stage):
                 "detail": "JS 中发现疑似凭据，需人工确认其有效性与作用域",
                 # 续143：证据里必须能**点开**——哪个 JS 文件、第几行、哪条规则、掩码后的值。
                 # 旧实现只放前后文片段，用户拿不到源文件位置（他原话：js 的也是给我详细链接）。
-                "evidence": "%s:%s 命中规则 %s，值 %s；前后文：%s" % (
+                "evidence": "%s:%s 命中规则 %s，值 %s；前后文：%s｜所在行：%s" % (
                     src or "(未知来源)", s.get("line", "?"), s.get("type", ""),
-                    s.get("value", ""), s.get("context", ""))[:800],
+                    s.get("value", ""), s.get("context", ""),
+                    s.get("line_text", ""))[:800],
                 "packets": "\n".join((
                     "来源 JS（点开即取原文）：%s" % (src or "(未知来源)"),
                     "命中位置：第 %s 行 / 字节偏移 %s" % (s.get("line", "?"), s.get("offset", "?")),
@@ -135,6 +167,7 @@ class JsmineStage(Stage):
                     "值（已掩码，原文不入库）：%s" % s.get("value", ""),
                     "归属主机：%s" % (host or "(未知)"),
                     "前后文（空白已折叠，≤160 字）：%s" % s.get("context", ""),
+                    "所在整行（键名与嵌套位置都在这行里，≤240 字）：%s" % s.get("line_text", ""),
                 ))[:8000],
             })
 

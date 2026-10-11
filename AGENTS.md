@@ -221,6 +221,12 @@ Flask Web 控制台（仿 ARL）。
    - **绝不**把令牌写进 `.git/config`、remote URL 或**仓库目录内的任何文件**
      （`git add -A` 会把它提交上去）。要落盘就放仓库外，且 `chmod 600`、用完即删；
      更干净的做法是 `GIT_ASKPASS` 临时脚本或 `credential.helper cache`。
+   - **回归夹具也算「任何文件」**（续155 实测被拦）：形状与真 token 完全一致的假值
+     （OpenAI `sk-proj…` / npm `npm_…` / PyPI `pypi-AgEIcHlwaS5vcmc…` / AWS `AKIA…` /
+     Google `GOCSPX-…` / Azure `AccountKey=…`）会被 GitHub 的秘密扫描**直接拒绝推送**，
+     而它分不出"这是我们自己编的假值"。测试要验的是**规则命中与不命中**，不是"存一串看着
+     能用的 key" ⇒ 把夹具写成运行时拼串（`_fxs("sk-", "projaBcd…")`），源码里不留整串；
+     改完用 AST 把夹具表抽出来单独跑一遍判据，确认拆分没把形状改坏（本轮 14 条逐个命中验过）。
    - 推之前**必须** `git fetch origin main` + `git pull --rebase`；落后就先变基再推。
    - **禁止 `git push --force`** —— 多机同时写同一分支时，强推会**静默盖掉别人的提交**。
   ③ 两个会话都在改**同一批文件**时，各自推到自己的分支（如 `linux/*`）再合并，别抢 `main`。

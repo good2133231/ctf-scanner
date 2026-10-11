@@ -9,6 +9,8 @@
 另外每站点会做一次 WAF 指纹识别（`evasion.waf_detect`），命中则在日志中提示，
 方便判断"扫不出来"到底是没漏洞还是被拦了。
 """
+import threading
+
 from .base import Stage
 from .dirscan import TECH_LANG, _dict_kind
 from .. import afrog as afrog_mod
@@ -84,6 +86,23 @@ def _retest_mark(ctx, new_vulns, sites):
         db.bulk_set_vuln_retest(unc, "unconfirmed")
     ctx.logger.info(f"[vulnscan] 复测三态：仍可复现 {len(rep)} / 已修复 {len(fixed)} / "
                     f"无法确认 {len(unc)}（没探到的目标记「无法确认」，**不**误报「已修复」）")
+
+
+def _lang_summary(skips):
+    """把"按语言少跑了多少"汇总成一句 INFO；没有跳过就返回空串（不打印）。
+
+    单独成函数是为了让回归能**直接喂字典**验这句话的内容 —— 逐站 DEBUG 看不见总量，
+    而"识别 php 就不跑 jsp 的 POC"这条功能的唯一证据就是那个总数（续155 主理人点单）。
+    `skips` 的形状：`{"n": 累计跳过, "sites": 判出语言的站点数, "<语言>": 该语言跳过数}`。
+    """
+    n = int(skips.get("n") or 0)
+    if not n:
+        return ""
+    by = {k: v for k, v in skips.items() if k not in ("n", "sites")}
+    return ("按语言收敛：判出语言 %s 个站点、累计跳过 %d 次异构 POC（%s）；"
+            "语言判不出的站点不拦，afrog 那一路由它自己的模板匹配决定"
+            % (skips.get("sites", 0), n,
+               "、".join("%s %s" % (k, v) for k, v in sorted(by.items()))))
 
 
 class VulnscanStage(Stage):
@@ -162,6 +181,10 @@ class VulnscanStage(Stage):
                     _ml_poc.predict_proba(_mk(p)).values() or [0.0]))
             return ordered
 
+        # 语言收敛的账：`{"n": 累计跳过, "sites": 判出语言的站点数, "<语言>": 该语言跳过数}`。
+        # DEBUG 逐站、INFO 汇总、回归断言三处都读这一个 dict（判据一处，§5.14）。
+        _lang_skips, _lang_lock = {"n": 0, "sites": 0}, threading.Lock()
+
         def _pocs_for(site):
             """指纹→POC 联动（P1-1）：站点技术栈命中的 POC 先跑，其余按上限补在后面。
 
@@ -178,8 +201,17 @@ class VulnscanStage(Stage):
             _slang = _dict_kind(str(site.get("tech") or ""), str(site.get("url") or ""))
             pool = [p for p in pocs if not _lang_conflict(p, _slang)]
             if _slang and len(pool) != len(pocs):
-                ctx.logger.debug(f"[vulnscan] {site.get('url')}：语言 {_slang}，"
-                                 f"按语言跳过 {len(pocs) - len(pool)} 个异构 POC")
+                if _slang and len(pool) != len(pocs):
+                    # 续155（主理人点单"识别 php 就不跑 jsp 的目录扫描和漏洞测试"）：跳过数要
+                    # **汇总后在 INFO 行说一次**。以前只有逐站 DEBUG ⇒ 用户在 task.log 里看到
+                    # "启用 POC 312 个"却看不出实际跑了多少，而"少跑了多少"恰恰是这条功能的证据。
+                    with _lang_lock:
+                        _sk155 = len(pocs) - len(pool)
+                        _lang_skips["n"] += _sk155
+                        _lang_skips["sites"] += 1
+                        _lang_skips[_slang] = _lang_skips.get(_slang, 0) + _sk155
+                    ctx.logger.debug(f"[vulnscan] {site.get('url')}：语言 {_slang}，"
+                                     f"按语言跳过 {_sk155} 个异构 POC")
             if not link_tags or not pool:
                 return _by_conf(pool, site)[:poc_cap] if pool else []
             tech = {t.strip().lower() for t in str(site.get("tech") or "").split(",") if t.strip()}
@@ -218,6 +250,11 @@ class VulnscanStage(Stage):
         for batch in pool_run(_scan_site, sites, workers=workers,
                             logger=ctx.logger, label="站点漏洞初筛"):
             all_v.extend(batch)
+        # 续155：把"按语言少跑了多少"提到 INFO（未知语言的站点**不拦**，所以这里只算
+        # 判出语言的；`dirscan` 那一侧的目录字典按同一张 `TECH_LANG` 分桶，两路口径一致）。
+        _lang_line = _lang_summary(_lang_skips)
+        if _lang_line:
+            ctx.logger.info("[vulnscan] " + _lang_line)
         # afrog（续121 接入；续149 默认开）。它是"另起一个自管请求的外部进程"，所以
         # ① 只喂它逐条判过的只读 + info 级模板（scanner/afrog.py::plan），② 结果按我们的
         # 级别门槛再筛一遍（它自己那套 -S 口径不作数），③ 日志里说清请求不经本任务预算。

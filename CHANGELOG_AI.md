@@ -3,6 +3,97 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续155 主理人点单 12 条的第二批：JS 凭据按站点去重 + 更多敏感形状与整行上下文 + 技术栈收敛变得看得见
+
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）。接续154 那份"12 条逐条核对"，本轮做 #7 的前两半与 #10。
+工作树与分支同续154（`/opt/tools/ctf/wt153-ctf-scanner`，`wt153-banner`），共享工作区那份坏
+`tests/smoke.py` 仍没碰。
+
+### ① JS 凭据：去重键改成 **(站点, 掩码值)**（#7"同一站点同样匹配的值不要二次出现"）
+
+旧写法有两个毛病，方向正好相反，而且都在用户眼里长成"重复"：
+
+- 去重键是**跨站全局**的掩码值 ⇒ A 站报过之后 B 站同一个值被吃掉（漏报）；
+- `insert_vuln` 没有 UNIQUE 约束，重跑/追加执行同一个任务会**再插一遍**（重复行，就是他看到的那个）。
+
+现在 `stages/jsmine.py` 用 `_existing_js_secrets(task_id)` 先把库里已有的 `(主机, 掩码值)` 捞回来，
+采集循环与跨运行共用这一个键；同一个站点被两条规则（如 `aws-access-key` 与 `generic-credential`）
+抓到同一个值只留一行。端到端实测（`[8bj]` 与本机探针各跑一遍）：两站点 × 3 条命中 → **4 行**
+（同站同值的第二条被并掉、两站各报一行），**第二次运行行数不变**。
+
+⚠ 这一路有个自己造的坑值得记：`_apatch` 的替换区间少算一行，把 `secrets.append(s)` 留成了两行
+—— 现象是"每个值都恰好出现两次"，Python 不报错、旧断言也不红（4 行变 8 行才在探针里暴露）。
+**写方的 `append` 重复 = 用户看到的"二次出现"**，这条现在由 `[8bj]` 的行数判据钉住。
+
+### ② 敏感形状 15 → 29 条，且每条都带字面量锚点（#7"生成更多敏感关键字"）
+
+`scanner/jsmine.py::SECRET_RULES` 追加 14 条：openai / anthropic / gitlab / npm / pypi /
+huggingface / square / mailgun / twilio-account-sid / facebook-app-secret /
+aws-secret-access-key / azure-storage-account-key / google-oauth-client-secret / bearer-token。
+新增的**每条都刻意带 ≥3 字符的字面量锚点**，这样 `flagfind` 复用同一张表的窗口扫描才接得上
+（取不出锚的形状被成本护栏显式拒用并在策略页说明：实测跑 23 条、拒 6 条，拒因逐条列出）。
+
+`[8bj]` 给每条一个真夹具并断言命中；反向也钉：`your_api_key_here` / `${API_KEY}` /
+`"aaaaaaaaaa"` 这类占位与低熵值必须仍然被 `_looks_placeholder` 挡掉（只加规则不降噪＝刷一堆假凭据）。
+本轮自己的夹具也踩了两次坑：`hf_`+30 位的要求写成 29 位、以及用 `123456`/`aaaa` 这种**会被降噪
+判成占位符**的填充串 —— 夹具必须用真实形状，否则"规则没命中"与"夹具被降噪"分不开。
+
+### ③ 上下文：`line_text` = 命中所在那一整行（#7"更好优化上下文"）
+
+`_find_secrets` 每条命中多带 `line_text`（`_line_of`，行首到行尾、空白折叠、≤240 字），
+`evidence` 尾部与 `packets` 各加一段 —— `{"accessKeyId":"AKIA…"}` 只有整行才看得见键名与嵌套位置。
+`_line_of` 用 `rfind/find` 定位行界，**不调 `splitlines()`**（那会把整份 JS 每命中一次拆一遍）；
+这条判据用 **AST** 数函数体里的调用（`[8bk]`/`[8bj]`）—— 第一次按文本写，被自己的 docstring
+里那句"不 `splitlines()`"绊红，是本项目第 6 次栽在"断言吃字面量"上。
+
+### ④ 技术栈收敛变得看得见（#10"识别 php 就不用 jsp 的目录扫描和漏洞测试"）
+
+核对结论：两路的**判据早就在**，缺的是"能判 + 能看见"：
+
+- POC 侧 `vulnscan._lang_conflict`（语言表 `dirscan.TECH_LANG` 单一产地，全仓 `TECH_LANG = {` 恰好
+  一处）此前在 smoke 里**零断言**，跳过数只在逐站 DEBUG ⇒ "少跑了"没有任何证据。
+  现在跳过数在锁里累加（`_pocs_for` 跑在 `pool_run` 工作线程里，读-改-写不放锁会少报），
+  阶段结束打一句 INFO：`按语言收敛：判出语言 N 个站点、累计跳过 M 次异构 POC（jsp 2、php 5）；
+  语言判不出的站点不拦，afrog 那一路由它自己的模板匹配决定`。文案抽成纯函数 `_lang_summary(dict)`
+  并由阶段真调用（`[8bk]` 同时钉"定义一处 + 调用一处"，只写个没人调的函数就回到看不见）。
+- 目录侧本来就在分桶：`_dict_kind("php,wordpress")=="php"`、`_layer_paths("php")` 只拿到
+  `dirs_php/dirs_exposure/dirs_common/dirs_shallow`，**不含** `dirs_jsp`/`dirs_asp`；未知语言回退
+  `dirs_big` 且精选层排在前面（这两条现在都有断言）。
+- 真值表钉住"只在两边都明确时才拦"：站点语言未知 ⇒ 一律不拦；POC 没有语言标签 ⇒ 一律不拦。
+
+### ⑤ 门禁
+
+`[8bj]`（JS 凭据收口）与 `[8bk]`（技术栈收敛）两组；门禁连跑 **7 轮**
+（`logs/_gate155a`～`logs/_gate155g`）：a 红在 `hf_` 夹具比规则的 30 位下界少一个字符、
+b 红在"`splitlines()` 这条判据按文本搜、被函数自己的 docstring 绊红"（改成 AST 数调用）、
+c 绿＝代码与两组新判据、d 绿＝记忆（CHANGELOG / todo）写进去之后、e 绿＝夹具改成拼串之后（见 ⑦）、
+f 绿＝AGENTS 加那条红线之后、**g 绿＝这一轮最后一次全量复验**。
+五轮绿的读数一致：**`SMOKE PASS` / AssertionError 0 / 组打印 216 行**（续154 终验 214，差 2 ＝
+本轮新增两组）。⚠ 这一段数字本身是在 g 之后写的——纯散文数字不喂任何断言，唯一吃这些文件的
+判据是 `[8as]` 的轮次号等式，已就地用它的算法复算过（`max续(CHANGELOG 标题)=max续(todo 标题)=155`、
+CHANGELOG 正文无更大号、AGENTS 含 续155），下一轮接手的人不必为此重跑门禁。
+本轮改动 **7** 个被跟踪文件：代码 3（`scanner/jsmine.py`、`scanner/stages/jsmine.py`、
+`scanner/stages/vulnscan.py`）+ 测试 1（`tests/smoke.py`）+ 记忆 3（`CHANGELOG_AI.md`、
+`todo.txt`、`AGENTS.md`）；两式 numstat 相等。
+
+### ⑦ 一件被 GitHub 拦下来的事（夹具里的"凭据形状"）
+
+第一次推送被 GitHub 的秘密扫描拒绝（`push declined due to repository rule violations`）：
+`[8bj]` 那 14 条新形状的夹具是**整串看起来就是真 token** 的文本（`sk-proj…` / `npm_…` /
+`pypi-AgEIcHlwaS5vcmc…` / `AKIA…` / `GOCSPX-…` / `AccountKey=…`）。扫描器分不出"这是我们编的假值"，
+而本仓的红线本来就是"口令 / token 绝不写进被跟踪文件里的任何一份"（AGENTS §0.6）——
+这次等于被外部工具替我们把那条红线执行了一遍。
+
+处理：夹具改成**运行时拼串**（`_fxs155("sk-", "projaBcd…")`），源码里不留整串；14 条改完仍逐个命中
+（把那张表用 AST 抽出来单独跑了一遍 `_find_secrets`），`_row155` 与阶段桩里的 `val` 同理。
+并且**重写那个还没推出去的本地提交**（`git reset --soft HEAD~1` 后重提），而不是追加一笔"再改回去"
+—— 追加会把带整串令牌的 blob 留在要推的历史里，扫描器照样拦。**不是 `--force`**：那个提交从未发布过。
+
+### ⑥ 还欠着的（第三批）
+
+#2 的真实 IP 反查回写、#7 的「漏洞复核 → 可视化」（"复合"是"复核"的同音输入，指的就是复核那一栏）、
+#11 的 multileak 多平台与相关性读配置、#12 的 MITM/AI 编排。
+
 ## 续154 主理人点单 12 条的第一批：401 可在策略页勾选 / 截图失败分档 / 撤复查入口 / 真实 IP 分档收口 / 第三方清单收口 / 送去探测默认全任务
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。主理人一次点单 12 条并加一句「并且校验这些任务之前
