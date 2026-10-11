@@ -3366,17 +3366,18 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 
 下一轮（续157）：
 
-- [ ] 页面上给 `gui.console_logs` 画一个勾选框（现在只能改文件），并像 401 门那样在
-      「控制台」段现取一句现状；顺手把 `limits.verify_tls` 的"关着会有哪些后果"也现取一句
+- [x] 页面上给 `gui.console_logs` 画一个勾选框（现在只能改文件），并像 401 门那样在
+      「控制台」段现取一句现状；顺手把 `limits.verify_tls` 的"关着会有哪些后果"也现取一句 —— 已落地（策略页勾选框 + `_console_note`，`[8bm]`）
 - [ ] 策略页勾不上第二项的，都按同一条规矩补输入框（现在仍有十几个键只能改文件）
 
-- [ ] #7 第三半：任务详情页漏洞页签里那栏**复核**（`复测模式` 已随续154 撤入口，逐行下拉打标仍在）
+- [x] #7 第三半：任务详情页漏洞页签里那栏**复核**（`复测模式` 已随续154 撤入口，逐行下拉打标仍在）
       换成**方便可视化**的东西 —— 主理人原话"漏洞复合我决定功能没用，你改成该方便可视化的功能"，
       其中"复合"是"复核"的同音输入。落点建议：级别 × 来源（内置检查 / POC / afrog / js-secret）
-      的计数矩阵 + 每目标命中数，纯展示层、零额外请求，数据全部来自已有的 `vulns` 行
-- [ ] #2 第三半：真实 IP 反查域名并回写（我们没有的子域名 → 子域名；注册域不同 → 拓展域名）
-- [ ] #11：multileak 只有 grepapp 一个平台；弱相关判定硬编码，不读 `weak_downgrade` /
+      的计数矩阵 + 每目标命中数，纯展示层、零额外请求，数据全部来自已有的 `vulns` 行 —— 已落地（`vuln_source`/`build_vuln_matrix` + 详情页总览，`[8bo]`）
+- [x] #2 第三半：真实 IP 反查域名并回写（我们没有的子域名 → 子域名；注册域不同 → 拓展域名）—— `extdom.reverse_writeback` + `/api/domains/reverse` + 子域名页入口，`[8bn]` 全绿
+- [x] #11：multileak 只有 grepapp 一个平台；弱相关判定硬编码，不读 `weak_downgrade` /
       `relevance_whitelist`；关键字表里没有凭据类（AccessKey / secret / token / .npmrc / id_rsa）
+      —— 已做：multileak 弱相关改读这两项（`[8bc]`/`[6p]`）+ github 关键字表补 secret/token/.npmrc/id_rsa/AKIA（`[6p]`）；**余：多平台源仍未接**（gitlab 需认证、免 key 源未实测，按纪律不凭记忆接）
 - [ ] #12：MITM 流量录制与 AI/Agent 编排 —— 新子系统，开工前先确认要不要做、零外发红线怎么套
 - [ ] 共享工作区 `/opt/tools/ctf/ctf-scanner/tests/smoke.py` 仍是别的会话未提交的坏文件
       （少 27 个回归组、语法不过）；他们提交后本分支需要 rebase（`gui/app.py`、`tests/smoke.py`、

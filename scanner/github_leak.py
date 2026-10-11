@@ -41,6 +41,13 @@ SEARCH_RULES = (
     ("credential", "password", "medium", "目标域名与口令关键字出现在同一份文件里"),
     ("apikey", "api_key", "medium", "目标域名与 API key 关键字出现在同一份文件里"),
     ("env-file", "filename:.env", "medium", "目标域名出现在 .env 配置文件里"),
+    # 续157 #11：补凭据类关键字（AccessKey / secret / token / .npmrc / id_rsa）。
+    # 顺序仍是优先级：默认 max_queries=4 时多半轮不到这几条，调大上限即可覆盖。
+    ("secret", "secret", "medium", "目标域名与 secret 关键字出现在同一份文件里"),
+    ("token", "token", "medium", "目标域名与 token 关键字出现在同一份文件里"),
+    ("npmrc", "filename:.npmrc", "high", "目标域名出现在 npm 配置（可能含 registry token）里"),
+    ("ssh-key", "filename:id_rsa", "high", "目标域名出现在 SSH 私钥文件名里"),
+    ("aws-key", "AKIA", "high", "目标域名与 AWS AccessKey 前缀（AKIA）出现在同一份文件里"),
 )
 
 _LEVEL_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}

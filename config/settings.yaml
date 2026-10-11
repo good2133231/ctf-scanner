@@ -349,6 +349,9 @@ multileak:
   per_page: 10
   max_leads: 30
   timeout: 20
+  # 续157 #11：弱相关降级（默认开）与相关性白名单（与上面 github 段同口径）
+  weak_downgrade: true
+  relevance_whitelist: []
 flags:
   # 敏感信息 / CTF flag 候选抽取（续148 由"flag 候选"改名）：只吃**已经拿到**的响应正文，
   # 零额外请求；结果单独进 flags 表（不写 vulns、不计入漏洞数）。判据与成本封顶见

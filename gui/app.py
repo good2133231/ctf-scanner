@@ -118,6 +118,8 @@ SOURCE_LABELS = {
     "js:mine": "JS 挖掘",
     # 两个 FOFA 来源都显式带上「FOFA」字样：用户要求一眼看出哪些资产是 FOFA 找出来的
     "osint:cseg": "C 段反查",
+    extdom.REVERSE_SOURCE: "IP 反查回写（自身）",
+    "osint:reverse": "IP 反查（第三方接口）",
     "osint:fofa": "FOFA·ICO 反查",
     "osint:fofa-cert": "FOFA·证书反查",
     "osint:fofa-title": "FOFA·标题反查",
@@ -607,6 +609,76 @@ def _edge_note(settings):
     return ("401 边缘认证门当前没开，能连到端口的人只剩后台账号这一道门；"
             f"勾选后需配好口令才生效（{edgeauth.SET_HINT}）。")
 
+
+def _console_note(settings):
+    """策略页「控制台」段现取的那句现状（§5.19）：逐条运行日志去向 + 关掉目标侧 TLS 校验的后果。
+
+    开关一律从**当下配置**读，写死就会在配置改了之后变成假话。
+    """
+    console = bool((settings.get("gui") or {}).get("console_logs", False))
+    verify = bool((settings.get("limits") or {}).get("verify_tls", False))
+    logs = ("逐条运行日志**终端与文件各一份**；实时进度看控制台页面的「任务日志」面板。"
+            if console else
+            "逐条运行日志只写文件（每个任务的 task.log + 启动日志），终端只留横幅与告警；"
+            "实时进度看控制台页面的「任务日志」面板。")
+    if verify:
+        tls = "目标侧 TLS 校验开着：自签名 / 过期证书的站点会连不上，CTF 靶场多半要关掉它。"
+    else:
+        tls = ("目标侧 TLS 校验关着：自签名 / 过期证书的站点都能扫，代价是**不校验握手真伪**；"
+               "关着时 urllib3 的逐请求 InsecureRequestWarning 已在启动时统一静音一次。")
+    return f"{logs} {tls}"
+
+
+_OWASP_ID_RE = re.compile(r"^a\d\d-")
+
+
+def vuln_source(poc_id):
+    """把一条漏洞按 `poc_id` 归到「来源」桶（纯展示口径，一览图共用一处判据）。
+
+    `afrog:<id>` → afrog；`js-secret-*` → js-secret；`aNN-*`（OWASP 内置检查）/
+    `takeover-*`（疑似接管）→ 内置检查；其余（POC 引擎签名 id）→ POC。
+    产地只有三处：`owasp/checks.py` / `afrog.py` / `stages/jsmine.py`。
+    """
+    p = str(poc_id or "").strip().lower()
+    if p.startswith("afrog:"):
+        return "afrog"
+    if p.startswith("js-secret-"):
+        return "js-secret"
+    if _OWASP_ID_RE.match(p) or p.startswith("takeover-"):
+        return "内置检查"
+    return "POC"
+
+
+def build_vuln_matrix(rows):
+    """按「级别 × 来源」汇总计数 + 每目标命中数（纯展示层；`rows` 是 SQL 聚合行）。
+
+    `rows` 每行形如 `{"severity","poc_id","target","c"}`（`GROUP BY severity,poc_id,target`）。
+    返回 `sevs/srcs/cells/col/rowsum/targets/total`，模板与报告共用。
+    """
+    srcs = ("内置检查", "POC", "afrog", "js-secret")
+    sevs = ("critical", "high", "medium", "low", "info")
+    cells = {s: {k: 0 for k in srcs} for s in sevs}
+    col = {k: 0 for k in srcs}
+    per_target, total = {}, 0
+    for r in rows or []:
+        sev = str(r["severity"] or "").lower()
+        if sev not in cells:
+            continue
+        try:
+            c = int(r["c"] or 0)
+        except (TypeError, ValueError):
+            c = 0
+        k = vuln_source(r["poc_id"])
+        cells[sev][k] += c
+        col[k] += c
+        total += c
+        t = str(r["target"] or "")
+        if t:
+            per_target[t] = per_target.get(t, 0) + c
+    targets = sorted(per_target.items(), key=lambda kv: (-kv[1], kv[0]))
+    return {"sevs": sevs, "srcs": srcs, "cells": cells, "col": col,
+            "rowsum": {s: sum(cells[s].values()) for s in sevs},
+            "targets": targets, "total": total}
 
 def _shape_note(cfg):
     """策略页那句"现在到底在跑哪些形状"：数字与名单一律从配置 + 形状表现取（§5.19）。
@@ -1769,6 +1841,11 @@ def create_app():
         vuln_pager = {"page": vpage, "size": vsize, "total": vuln_total, "pages": _vpages,
                       "base": page_url(f"/tasks/{task_id}"), "qs": "&" + "&".join(_vparts),
                       "pname": "vpage", "anchor": "#vulns"}
+        # 续157 #7（主理人点单）：把原先的「复核台账」那栏换成**可视化总览** —— 本任务全部
+        # 漏洞按「级别 × 来源」聚合，外加每目标命中数。一条 `GROUP BY` 查询、零额外请求。
+        vuln_overview = build_vuln_matrix(db._query(
+            "SELECT severity, poc_id, target, COUNT(*) c FROM vulns WHERE task_id=? "
+            "GROUP BY severity, poc_id, target", (task_id,)))
         return render_template(
             "task_detail.html", task=task,
             subs=subs, ext_subs=ext_subs,
@@ -1793,7 +1870,7 @@ def create_app():
             page_sizes=PAGE_SIZES,
             vulns=vuln_rows, vuln_total=vuln_total, vuln_pager=vuln_pager,
             vuln_sev=vsev, vuln_q=vq, vuln_page_sizes=PAGE_SIZES,
-            review=db.review_counts(task_id),
+            vuln_matrix=vuln_overview,
             # 「复查 / 拓展域名探测」发起的任务记 rescan_of，详情页据此反向回跳
             rescan_of=top.get("rescan_of"),
             # 续25：本任务是否被"追加执行"过（次数）—— 详情页据此显示标记与横幅
@@ -2595,6 +2672,7 @@ def create_app():
         ("quake", "Quake·ICO 反查", "osint:quake", "quake-ico拓展"),
         ("ctlog", "CT 日志(crt.sh)", "osint:ctlog", "ct日志拓展"),
         ("cseg", "C 段反查", "osint:cseg", "c段反查拓展"),
+        ("reverse", "IP 反查", extdom.EXT_REVERSE_SOURCE, "ip反查拓展"),
     )
     # 分类排序表达式：按 EXT_SRC_TAGS 的顺序，未知来源排最后，同类内按 id 倒序（新的在前）。
     # 先按来源分类（用户点单"分类浏览 + 分类排序"），**同一来源内**再按真实 IP 档位排
@@ -3145,6 +3223,69 @@ def create_app():
                     + (f"；另按注册域判掉 {drop113} 条「不是域名」的 JS 碎片" if drop113 else ""))
         return redirect(back)
 
+    @app.route("/api/domains/reverse", methods=["POST"])
+    @login_required
+    def api_ip_reverse():
+        """把勾选行的**真实 IP** 反查成域名并回写资产（续157 主理人点单）。
+
+        勾的是子域名行，反查的却是它们解析到的 IP，所以只有 `cdn.ip_kind == real` 的那些才查：
+        CDN 边缘 IP 反出来是"整片客户共享的域名"、多 A 记录大多是负载均衡 —— 那两类一律跳过，
+        而且**跳了多少必须说出来**（不然就是"点了没反应"，本仓反复出事的地方）。
+        跨任务视图里勾选框只有域名 ⇒ 按域名找到它所属的任务，逐个任务回写（同一个域名在两个
+        任务里的归属结论可以不同，判据是 `extdom.is_owned`，与「归属追加」同一处）。
+        """
+        back = _safe_next(request.form.get("next"), url_for("subdomains"))
+        domains = _picked_domains()
+        if not domains:
+            return redirect(back)
+        raw = (request.form.get("task_id") or "").strip()
+        only = int(raw) if raw.isdigit() else None
+        if only is not None and not _owned_task(only):
+            return redirect(back)
+        by_task, skipped = {}, {"cdn": 0, "multi": 0, "none": 0}
+        for d in domains:
+            for r in db.list_subdomains(only) if only else _query_domain_rows(d):
+                if str(r["domain"] or "") != d:
+                    continue
+                kind = cdn.ip_kind(r)
+                if kind == cdn.IP_CDN:
+                    skipped["cdn"] += 1
+                    continue
+                if kind == cdn.IP_MULTI:
+                    skipped["multi"] += 1
+                    continue
+                if kind == cdn.IP_NONE:
+                    skipped["none"] += 1
+                    continue
+                for ip in str(r["ip"] or "").split(","):
+                    ip = ip.strip()
+                    if ip:
+                        by_task.setdefault(int(r["task_id"]), []).append(ip)
+                        break
+        total = {"ips": 0, "domains": 0, "own": [], "ext": [], "blocked": 0,
+                 "thirdparty": 0, "zone": 0}
+        for task_id, ips in by_task.items():
+            if not _owned_task(task_id):
+                continue
+            res = extdom.reverse_writeback(ips, task_id, settings, logger=logger)
+            for key in ("ips", "domains", "blocked", "thirdparty", "zone"):
+                total[key] += res.get(key) or 0
+            total["own"] += res.get("own") or []
+            total["ext"] += res.get("ext") or []
+        logger.info(f"[gui] IP 反查回写：{len(by_task)} 个任务 / {total['ips']} 个真实 IP → "
+                    f"候选 {total['domains']} 个、新增子域名 {len(total['own'])} 个、"
+                    f"新增拓展域名 {len(total['ext'])} 个"
+                    + (f"，第三方清单挡掉 {total['thirdparty']} 个" if total["thirdparty"] else "")
+                    + (f"，zone 不存在挡掉 {total['zone']} 个" if total["zone"] else "")
+                    + (f"，黑名单拦截 {total['blocked']} 个" if total["blocked"] else "")
+                    + f"；勾选里跳过错档 {skipped['cdn']} 行 CDN、{skipped['multi']} 行多 IP、"
+                      f"{skipped['none']} 行未解析")
+        return redirect(back)
+
+    def _query_domain_rows(domain):
+        """跨任务视图里按域名取行（勾选框只有域名，没有 task_id）。"""
+        return db._query("SELECT * FROM subdomains WHERE domain=?", (domain,))
+
     @app.route("/api/domains/scan-ext", methods=["POST"])
     @login_required
     def api_scan_ext():
@@ -3321,8 +3462,8 @@ def create_app():
                             # 免得 `enabled` 之外的键被整段重写抹掉。
                             "edge_auth": {**(_g0.get("edge_auth") or {}),
                                           "enabled": f.get("edge_auth_enabled") == "1"},
-                            # 页面无输入框（续156：日志要不要刷终端），原样带回
-                            "console_logs": bool(_g0.get("console_logs", False)),
+                            # 续157：这一项页面上有勾选框了（用户点单「日志不要刷控制台」），取表单值。
+                            "console_logs": f.get("console_logs") == "1",
                             "keys_ask_passphrase": bool(
                                 _g0.get("keys_ask_passphrase", True)),
                             "login_lockout": dict(_g0.get("login_lockout") or {}),
@@ -3564,7 +3705,13 @@ def create_app():
                                   "max_queries": int(f.get("multileak_max_queries", 4) or 4),
                                   "per_page": int(f.get("multileak_per_page", 10) or 10),
                                   "max_leads": int(f.get("multileak_max_leads", 30) or 30),
-                                  "timeout": int(f.get("multileak_timeout", 20) or 20)},
+                                  "timeout": int(f.get("multileak_timeout", 20) or 20),
+                                  # 续157：#11 这两项页面上没有输入框，原样带回（漏带＝把键删掉）
+                                  "weak_downgrade": bool((settings.get("multileak") or {}).get(
+                                      "weak_downgrade", True)),
+                                  "relevance_whitelist": list(
+                                      (settings.get("multileak") or {}).get(
+                                          "relevance_whitelist") or [])},
                 }
             except ValueError:
                 _s114 = load_settings()
@@ -3574,6 +3721,7 @@ def create_app():
                                        esp=external_source_panel(_s114),
                                        shape_note=_shape_note(_s114),
                                        edge_note=_edge_note(_s114),
+                                       console_note=_console_note(_s114),
                                        error="参数必须是整数")
             # 续48：审计只记"改了哪几个区块"，**绝不记值**（键名也省掉 —— 见 `_changed_sections`）。
             _changed = _changed_sections(settings, data)
@@ -3586,7 +3734,8 @@ def create_app():
                                bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                esp=external_source_panel(settings),
                                shape_note=_shape_note(settings),
-                               edge_note=_edge_note(settings))
+                               edge_note=_edge_note(settings),
+                               console_note=_console_note(settings))
 
     # ---------- 访问审计（续48） ----------
 
@@ -4354,7 +4503,7 @@ def serve(start_queue=True):
     # 续156（主理人点单「日志也不要输出在控制台 不然我的控制台很容易崩」）：从这一行起，
     # 流水线与 `[gui]` 的**逐条 INFO 只进文件**，终端只留横幅与告警（那些走 `print`，
     # 不经 logger，所以不受影响）。CLI 不动这个开关 ⇒ 库默认"开"，终端照旧有进度。
-    # 想恢复：策略配置里 `gui.console_logs: true`（页面上没有输入框，改文件即可）。
+    # 想恢复：策略配置里 `gui.console_logs: true`（也可在策略页「控制台」段直接勾选）。
     _console156 = runlog.set_console_output(bool(
         (_settings.get("gui") or {}).get("console_logs", False)))
     # TLS 校验关着时 urllib3 **每次请求**都往 stderr 写一条 InsecureRequestWarning —— 它走

@@ -130,7 +130,7 @@ def _status_reason(status):
             "（**不等于「没查到」**）")
 
 
-def build_lead(domain, repo, path, rules, url=""):
+def build_lead(domain, repo, path, rules, url="", weak=False):
     """组装一条 `leads` 行（kind=`grepapp`）—— 字段口径与 `github_leak.build_lead` 一致。
 
     **只写元数据**：仓库 / 文件路径 / 命中规则名 —— 不写文件内容（见文件头边界 1）。
@@ -151,11 +151,9 @@ def build_lead(domain, repo, path, rules, url=""):
         notes.append("· 疑似公共分流名单/路由规则表：这类文件整批抄入几千个域名，"
                      "「域名 + 关键字同文件」是常态，**不等于目标方凭据泄露**"
                      "（已降为 info，仅作参考）")
-    # 弱相关（仓库名与文件路径里都没有出现域名或主标签）→ 同样降级 + 标注，不丢。
-    blob = f"{repo} {path}".lower()
-    nd = str(domain or "").strip().lower()
-    lab = github_leak.label_of(nd)
-    if not ((nd and nd in blob) or (lab and lab in blob)) and level != "info":
+    # 续157：#11 弱相关改由 `_leads_from` 按配置决定后传进来（与 github_leak.build_lead 同口径）；
+    # 此前**无条件降级**，配了 `multileak.weak_downgrade=false` 也不生效。
+    if weak and level != "info":
         level = "info"
         notes.append("· 弱相关：仓库名与文件路径里都没有出现目标域名或其主标签，命中只可能来自"
                      "文件内容（同名字符串 / 无关项目）—— 已降为 info，请人工核对后再判断")
@@ -170,9 +168,24 @@ def build_lead(domain, repo, path, rules, url=""):
             "detail": detail, "source": src["source"], "url": url}
 
 
-def _leads_from(bucket):
-    """把 `{(域名, 仓库, 路径): {rules, url}}` 摊平成按时序稳定的线索列表。"""
-    rows = [build_lead(domain, repo, path, sorted(slot["rules"]), slot.get("url") or "")
+def _leads_from(bucket, weak_downgrade=True, whitelist=()):
+    """把 `{(域名, 仓库, 路径): {rules, url}}` 摊平成按时序稳定的线索列表。
+
+    续157：#11 弱相关判定与 `github_leak._leads_from` **同一口径**（此前硬编码在 build_lead 里）。
+    `weak_downgrade=False` 关掉降级；`whitelist` 里任一子串出现在仓库名/文件路径即视为相关。
+    """
+    wl = tuple(str(x).strip().lower() for x in (whitelist or ()) if str(x).strip())
+
+    def _weak(domain, repo, path):
+        blob = f"{repo} {path}".lower()
+        nd = str(domain or "").strip().lower()
+        lab = github_leak.label_of(nd)
+        if any(x in blob for x in wl):
+            return False
+        return not ((nd and nd in blob) or (lab and lab in blob))
+
+    rows = [build_lead(domain, repo, path, sorted(slot["rules"]), slot.get("url") or "",
+                       weak=(weak_downgrade and _weak(domain, repo, path)))
             for (domain, repo, path), slot in bucket.items()]
     rows.sort(key=lambda r: (-_LEVEL_RANK.get(r["level"], 0), r["target"], r["code"]))
     return rows
@@ -253,5 +266,12 @@ def collect(domains, settings, logger=None, stopped=None):
                 if logger:
                     logger.info(f"[multileak] 注册域 {domain}（grep.app）× {variant} → "
                                 f"命中 {total} 条（本次取回 {len(hits)} 条）")
-    return _leads_from(bucket), {"queries": queries, "hits": hits_total,
-                                 "error": err, "capped": capped}
+    # 续157：#11 弱相关降级 / 白名单可配（缺省 = 旧行为：降级开、无白名单）
+    _raw_wd = cfg.get("weak_downgrade", True)
+    weak_downgrade = not (_raw_wd is False
+                          or str(_raw_wd).strip().lower() in ("false", "0", "no", "off"))
+    _wl = cfg.get("relevance_whitelist") or []
+    if not isinstance(_wl, (list, tuple)):
+        _wl = [x for x in str(_wl).split(",") if x.strip()]
+    return _leads_from(bucket, weak_downgrade=weak_downgrade, whitelist=_wl), \
+        {"queries": queries, "hits": hits_total, "error": err, "capped": capped}

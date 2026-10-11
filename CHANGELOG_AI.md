@@ -3,6 +3,46 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续157 控制台日志勾选框 + 漏洞页可视化总览 + 真实 IP 反查回写 + multileak 弱相关可配
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash。本轮把续157 清单里**可自包含**的四项做完（#12 MITM
+与「多平台源」见文末「还没做」）。
+
+### 做了什么
+
+- **#1 控制台段收口**：`gui/templates/settings.html`「控制台」段新增 `gui.console_logs` 勾选框；
+  `gui/app.py::_console_note()` 现取「逐条运行日志去向 + `limits.verify_tls` 关着的后果」两句
+  （写死会变成假话）；POST 映射由“原样带回”改成**读表单值**。消掉续156 留的“页面上没输入框”。
+- **#7 漏洞页可视化总览**：`gui/app.py::vuln_source()`（`poc_id` → 内置检查 / POC / afrog /
+  js-secret 四桶，判据取自 owasp/afrog/jsmine 三处产地）+ `build_vuln_matrix()`；任务详情页
+  路由一条 `GROUP BY severity,poc_id,target`（零额外请求）；`task_detail.html` 把原先的
+  「复核台账」那栏换成**级别 × 来源计数矩阵 + 每目标命中数**（逐行复核下拉保留）。
+- **#2 真实 IP 反查回写（上一会话遗留、本轮收口）**：`scanner/extdom.py::reverse_writeback()`
+  把真实 IP 反查到的域名按注册域回写（自家 → 子域名 `reverse`、主域不同 → 拓展域名
+  `osint:reverse`），只回写不扫描；`/api/domains/reverse` + 子域名页入口；三道过滤（黑名单 /
+  第三方清单 / zone 不存在）与跨运行幂等。修掉 `[8bn]` 里指向不存在键的坏断言。
+- **#11 multileak 弱相关可配 + 关键字表补凭据类**：`scanner/multileak.py` 弱相关判定从硬编码
+  改为读 `multileak.weak_downgrade` / `relevance_whitelist`（与 `github_leak` 同口径）；
+  `scanner/github_leak.py::SEARCH_RULES` 补 secret / token / `.npmrc` / `id_rsa` / AKIA 五条；
+  `scanner/config.py` + `config/settings.yaml` 补默认键，POST 保存原样带回（防整段重写抹掉）。
+
+### 验证
+
+- 全量 `tests/smoke.py` → **`SMOKE PASS` / AssertionError 0 / exit 0**，门禁日志
+  `logs/_gate157c.log`（#1）、`logs/_gate157f.log`（#7+#11）。
+- 新增/改写回归：`[8bm]`（#1 勾选框 + 三处一致）、`[8bn]`（#2 反查回写）、`[8bo]`（#7 四桶 +
+  矩阵 + 详情页渲染、旧「复核台账」已移除）、`[6p]`/`[8bc]`（#11 规则表 + 弱相关三态）。
+- 行尾：改动文件 `git diff --numstat` 无整文件级 churn（过程中 `tests/smoke.py` 曾被整体
+  LF→CRLF，按内容对齐还原）。
+
+### 还没做（下一轮）
+
+- **#11 多平台源**：`multileak` 仍只有 grepapp。`config/keys.yaml.example` 的凭据 schema 只有
+  fofa/shodan/quake/github，**没有 gitlab** 段；gitlab 匿名 401、无 token 无法核实响应形态，
+  按“不凭记忆写”未接。
+- 其余见 `todo.txt` 末尾「下一轮（续157）」。
+
+
 ## 续156 控制台不再被日志刷爆：逐条运行日志只进文件，TLS 警告只在启动说一次
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。主理人贴了一屏实跑输出后说：

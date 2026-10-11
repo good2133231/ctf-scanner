@@ -22,7 +22,7 @@
 
 所有写库路径都过 `blacklist` —— 被拦的域名既不解析也不追加。
 """
-from . import blacklist, cdn, db, dnsq, targets
+from . import blacklist, cdn, db, dnsq, iprecon, targets
 from .utils import base_domain, is_domain, pool_run
 
 # 追加来源前缀：以它开头的 source **不属于** `js:` / `osint:`，因此按"自身子域名"对待；
@@ -247,6 +247,96 @@ def drop_absent_zones(task_id, settings=None, logger=None, timeout=3.0):
         logger.info(f"[extdom] 清掉 {len(dead)} 条库里已有的 JS 碎片行（注册域不存在）；"
                     f"另 {len(rows) - len(dead)} 条 nxdomain 行保留（注册域存在或 DNS 无结论）")
     return len(dead)
+
+
+REVERSE_SOURCE = "reverse"              # 反查到且**归属本项目** ⇒ 自身子域名
+EXT_REVERSE_SOURCE = "osint:reverse"    # 反查到但**主域不同** ⇒ 拓展域名
+
+
+def reverse_writeback(ips, task_id, settings=None, logger=None, bases=None, stop=None):
+    """把**真实 IP 反查到的域名**按注册域回写：归属本项目的 → 子域名，主域不同 → 拓展域名。
+
+    主理人 2026-10-11 点单："真实 IP 反查域名：反查到且我们没有的子域名→加进子域名，
+    主域不同→放进拓展域名。" 三条边界：
+
+    ① **只回写、不扫描**：这一步只打第三方反查接口（`iprecon`），一个目标侧请求都不发；
+       要不要扫，是人看完列表之后点「送去探测」的事。
+    ② 归属判定只有 `is_owned` 这一处；黑名单 / 第三方清单 / zone 不存在三道过滤与 osint
+       共用**同一批产地函数**（这里是第二个调用点，不是第二份判据）。
+    ③ 跨运行幂等：库里已有该域名（任何来源）就不再插；同一个 IP 点两次不翻倍。
+
+    返回计数 dict，调用方只负责把它说成人话（两边各算一遍数就是第二个产地）。
+    """
+    from .jsmine import is_thirdparty        # 延迟导入：jsmine 反向依赖本模块
+    settings = settings or {}
+    task_id = int(task_id)
+    asked = list(dict.fromkeys(str(i or "").strip() for i in (ips or [])))
+    clean = [i for i in asked if i and iprecon.is_public_ip(i)]
+    out = {"ips": len(clean), "skipped_ip": len(asked) - len(clean), "domains": 0,
+           "existing": 0, "blocked": 0, "thirdparty": 0, "zone": 0, "own": [], "ext": []}
+    if not clean:
+        if logger:
+            logger.info("[extdom] IP 反查回写：没有可查的公网 IP"
+                        + ("（%d 个是私网/保留/格式不对，已跳过）" % out["skipped_ip"]
+                           if out["skipped_ip"] else "")
+                        + "，一次请求都不发")
+        return out
+    if bases is None:
+        bases = task_bases(task_id)
+    mapping, stats = iprecon.lookup_many(clean, settings, logger=logger, stop=stop)
+    existing = {str(r["domain"] or "") for r in db.list_subdomains(task_id)}
+    pairs, ip_of = [], {}
+    for ip in clean:
+        for raw in mapping.get(ip) or []:
+            d = iprecon.normalize_domain(raw)
+            if not d or "*" in d or not is_domain(d):
+                continue
+            if d in existing or d in ip_of:
+                out["existing"] += 1
+                continue
+            ip_of[d] = ip
+            pairs.append((d, ip))
+    out["domains"] = len(pairs)
+    if not pairs:
+        if logger:
+            logger.info("[extdom] IP 反查 %d 个：查到结果的 IP %d 个、带回候选 %d 个，"
+                        "其中 %d 个库里有或形态不对 ⇒ 本次零新增"
+                        % (out["ips"], stats.get("hit_ips", 0), stats.get("domains", 0),
+                           out["existing"]))
+        return out
+    kept, blocked = blacklist.filter_pairs(pairs, settings, owner_id=owner_of(task_id))
+    out["blocked"] = len(blocked)
+    own, ext, third = [], [], []
+    for d, ip in kept:
+        owned = is_owned(d, bases)
+        if not owned and is_thirdparty(d):
+            third.append(d)
+            continue
+        (own if owned else ext).append((d, ip))
+    out["thirdparty"] = len(third)
+    kept_zone, absent = filter_absent_zones([d for d, _ in own + ext], settings,
+                                            logger=logger)
+    out["zone"] = len(absent)
+    allow = set(kept_zone)
+    own = [(d, ip) for d, ip in own if d in allow]
+    ext = [(d, ip) for d, ip in ext if d in allow]
+    if own:
+        db.insert_subdomains(task_id, [(d, REVERSE_SOURCE) for d, _ in own])
+    if ext:
+        db.insert_subdomains(task_id, [(d, EXT_REVERSE_SOURCE) for d, _ in ext])
+    net = {d: (ip_of.get(d, ""), "", "") for d, _ in own + ext}
+    if net:
+        db.set_subdomain_net(task_id, net)
+    out["own"] = [d for d, _ in own]
+    out["ext"] = [d for d, _ in ext]
+    if logger:
+        logger.info("[extdom] IP 反查回写：查 %d 个 IP → 候选 %d 个 → 新增子域名 %d 个、"
+                    "新增拓展域名 %d 个%s%s%s；只回写不扫描，要扫就勾上点「送去探测」"
+                    % (out["ips"], out["domains"], len(out["own"]), len(out["ext"]),
+                       "，第三方清单挡掉 %d 个" % out["thirdparty"] if out["thirdparty"] else "",
+                       "，zone 不存在挡掉 %d 个" % out["zone"] if out["zone"] else "",
+                       "，黑名单拦截 %d 个" % out["blocked"] if out["blocked"] else ""))
+    return out
 
 
 def promote_owned(task_id, settings=None, logger=None, bases=None):

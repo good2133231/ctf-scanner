@@ -107,10 +107,35 @@
       {% if vuln_sev or vuln_q %}<a class="btn-mini ghost" href="{{ url_for('task_detail', task_id=task.id) }}">清空</a>{% endif %}
       <a class="btn-mini ghost" href="{{ url_for('vulns', task_id=task.id) }}">在「漏洞风险」页打开（含排序）</a>
     </form>
-    <p class="muted small">复核台账：待复核 <b>{{ review.pending }}</b> ｜ 已确认
-      <b>{{ review.confirmed }}</b> ｜ 已判误报 <b>{{ review.false_positive }}</b>。
-      复核状态逐行下拉打标，会进 Markdown 报告（误报单独成节）。
-    </p>
+    {# 续157 #7（主理人点单）：原先的复核汇总那一栏换成**可视化总览** —— 「级别 × 来源」
+       计数矩阵 + 每目标命中数。纯展示层：数据来自本任务已有 `vulns` 行（路由侧一条 GROUP BY），
+       零额外请求。逐行复核下拉仍在（`复核` 列），复核数据仍进 Markdown 报告。 #}
+    <div>
+      <p class="muted small">漏洞总览（本任务全部 <b>{{ vuln_matrix.total }}</b> 条）：按「级别 × 来源」</p>
+      <table class="matrix">
+        <thead><tr><th>级别</th>
+          {% for s in vuln_matrix.srcs %}<th>{{ s }}</th>{% endfor %}<th>小计</th></tr></thead>
+        <tbody>
+        {% for sev in vuln_matrix.sevs %}
+          {% set _row = vuln_matrix.cells[sev] %}
+          <tr><td><span class="sev sev-{{ sev }}">{{ sev }}</span></td>
+            {% for s in vuln_matrix.srcs %}<td>{{ _row[s] or "" }}</td>{% endfor %}
+            <td><b>{{ vuln_matrix.rowsum[sev] }}</b></td></tr>
+        {% endfor %}
+        </tbody>
+        <tfoot><tr><td><b>合计</b></td>
+          {% for s in vuln_matrix.srcs %}<td><b>{{ vuln_matrix.col[s] }}</b></td>{% endfor %}
+          <td><b>{{ vuln_matrix.total }}</b></td></tr></tfoot>
+      </table>
+      {% if vuln_matrix.targets %}
+      <p class="muted small">每目标命中数（前 10）：</p>
+      <ol class="muted small">
+        {% for t, c in vuln_matrix.targets[:10] %}
+        <li><span class="mono">{{ t }}</span> —— {{ c }}</li>
+        {% endfor %}
+      </ol>
+      {% endif %}
+    </div>
       <table id="tbl-vulns">
         <thead><tr>
           <th>级别</th><th>名称</th><th>检查/POC</th><th>目标</th><th>复核</th><th>详情</th></tr></thead>

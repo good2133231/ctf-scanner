@@ -39,12 +39,16 @@
   <form method="post" action="{{ url_for('api_blacklist_add') }}">
     <input type="hidden" name="next"
       value="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ '&tag=' + tag if tag }}{{ kt }}">
+      <input type="hidden" name="task_id" value="{{ task_id or '' }}">
     <div class="bulkbar">
       <button type="submit" class="ghost">加入黑名单（勾选行）</button>
       <button type="submit" class="ghost"
         formaction="{{ url_for('api_run_subdomain') }}">批量跑子域名（新建任务）</button>
+      <button type="submit" class="ghost" formaction="{{ url_for('api_ip_reverse') }}"
+        title="把勾选行解析到的真实 IP 反查成域名并回写：归属本项目的进子域名、主域不同的进拓展域名。CDN / 多 IP / 未解析的行会跳过并说明数量；只回写、不扫描">
+        真实 IP 反查域名并回写</button>
       <span class="muted">黑名单：命中即不入资产库，后续阶段也不会扫它；
-        批量跑子域名会新建一个只跑 subdomain 阶段的任务。</span>
+        批量跑子域名会新建一个只跑 subdomain 阶段的任务；反查回写只改资产表、不发目标侧请求。</span>
     </div>
     <table id="tbl-all-subs">
       <thead><tr>

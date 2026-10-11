@@ -562,6 +562,9 @@ DEFAULTS = {
         "per_page": 10,            # 单次请求最多取回多少条命中
         "max_leads": 30,           # 单任务最多入库多少条线索
         "timeout": 20,             # 单次请求超时（秒）
+        # 续157：#11 弱相关降级与白名单（与 github 同口径；此前硬编码在 multileak.build_lead 里）
+        "weak_downgrade": True,
+        "relevance_whitelist": [],
     },
     "flags": {
         # 敏感信息 / CTF flag 候选抽取：在**已经拿到**的响应正文里按形状找值得抄走的串，

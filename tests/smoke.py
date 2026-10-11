@@ -5353,8 +5353,9 @@ workflows:
     finally:
         gh_mod.http_request = _orig_req6p
     assert not _l6p and "JSON" in (_m6p.get("error") or ""), _m6p
-    # 7e) 规则表：四条规则的（关键词 / 级别）就是实现口径，写死防漂移
-    assert [r[0] for r in gh_mod.SEARCH_RULES] == ["mention", "credential", "apikey", "env-file"]
+    # 7e) 规则表：规则名的（关键词 / 级别 / 顺序）就是实现口径，写死防漂移
+    assert [r[0] for r in gh_mod.SEARCH_RULES] == ["mention", "credential", "apikey", "env-file",
+                                                   "secret", "token", "npmrc", "ssh-key", "aws-key"]
     assert gh_mod.rule_of("nope") is None and gh_mod.rule_of("mention")[2] == "info"
     assert gh_mod.build_query("a.example.com") == '"a.example.com"'
     assert gh_mod.build_query("a.example.com", "filename:.env") == '"a.example.com" filename:.env'
@@ -5412,6 +5413,14 @@ workflows:
         # 无注册域 → 零请求
         _ml_l2, _ml_m2 = ml_mod.collect([], {"multileak": {}})
         assert _ml_l2 == [] and _ml_m2["queries"] == 0 and _ml_req == [], _ml_m2
+        # 续157 #11：multileak 弱相关不再是硬编码 —— weak_downgrade / relevance_whitelist 可配
+        _bk157ml = {("t157ml.test", "someone/notes", "a.txt"): {"rules": {"credential"}, "url": ""}}
+        assert ml_mod._leads_from(dict(_bk157ml), weak_downgrade=True)[0]["level"] == "info"
+        assert ml_mod._leads_from(dict(_bk157ml), weak_downgrade=False)[0]["level"] == "medium"
+        assert ml_mod._leads_from(dict(_bk157ml), weak_downgrade=True,
+                                  whitelist=("someone",))[0]["level"] == "medium"
+        assert _DEF6P["multileak"]["weak_downgrade"] is True, "DEFAULTS 缺 multileak.weak_downgrade"
+        assert _DEF6P["multileak"]["relevance_whitelist"] == [], "DEFAULTS 缺 relevance_whitelist"
     finally:
         ml_mod.http_request = _orig_ml_http
 
@@ -20747,8 +20756,11 @@ expression: r0()
     _y156 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
     assert "  console_logs: false" in _y156, "shipped 配置没跟上 DEFAULTS"
     _app156 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
-    assert "_g0.get(\"console_logs\", False)" in _app156, \
-        "POST 映射必须原样带回这一项（save_settings 是整份重写，漏带＝把键删掉）"
+    assert '"console_logs": f.get("console_logs") == "1"' in _app156, \
+        "POST 映射必须接上这一项（save_settings 整份重写，漏带＝把键删掉）"
+    _tpl157 = (ROOT / "gui" / "templates" / "settings.html").read_text(
+        encoding="utf-8", errors="replace")
+    assert 'name="console_logs"' in _tpl157, "控制台段缺 console_logs 勾选框（续157 #1）"
     _off156, _ = _serve_out7i({"host": "127.0.0.1", "console_logs": False})
     _on156b, _ = _serve_out7i({"host": "127.0.0.1", "console_logs": True})
     assert any("只写文件" in x for x in _off156), _off156[-6:]
@@ -20761,8 +20773,99 @@ expression: r0()
         "TLS 校验开着还提静音 = 那句话在骗人（文案必须跟着配置走）"
     print("[8bm] 续156 控制台静音 ok: stdout handler 由进程级开关决定（库默认仍是开 ⇒ CLI 不受影响、"
           "关着时 logger 一个终端 handler 都不挂）｜urllib3 的逐请求警告单独静音（它绕开 logging）｜"
-          "DEFAULTS / shipped yaml / POST 带回三处一致｜横幅两句跟着 gui.console_logs 与 "
+          "DEFAULTS / shipped yaml / POST 取勾选框值一致｜横幅两句跟着 gui.console_logs 与 "
           "limits.verify_tls 现取分叉（开着 TLS 就一个字不提静音）")
+
+    # ---------------- [8bn] 续157 #2：真实 IP 反查域名并按注册域回写 ----------------
+    #      主理人点单："真实 IP 反查域名：反查到且我们没有的子域名→加进子域名，
+    #      主域不同→放进拓展域名。" 三条都钉：归属分流（`is_owned` 一处判据）、
+    #      三道过滤（黑名单 / 第三方清单 / zone 不存在）、跨运行幂等（点两次不翻倍）。
+    #      另外钉"入口只回写不扫描"、来源标签与分类胶囊都认这两个新来源。
+    from scanner import extdom as _xd157
+    _tid157 = db.create_task("smoke-157-rev", "rev157.test", ["subdomain"], {})
+    db.insert_subdomains(_tid157, [("a.rev157.test", "subfinder"),
+                                   ("cdn.rev157.test", "subfinder"),
+                                   ("m.rev157.test", "subfinder"),
+                                   ("n.rev157.test", "subfinder")])
+    db.set_subdomain_net(_tid157, {
+        "a.rev157.test": ("8.8.8.8", "", ""),
+        "cdn.rev157.test": ("198.51.100.9", "cloudfront.net", ""),
+        "m.rev157.test": ("192.0.2.1,192.0.2.2", "", ""),
+        "n.rev157.test": ("", "", "nxdomain")})
+    _asked157 = []
+    _map157 = {"8.8.8.8": ["a.rev157.test",        # 库里已有 ⇒ 不许重复插
+                           "b.rev157.test",        # 归属本项目、库里没有 ⇒ 子域名
+                           "sib.rev157.other.test",  # 主域不同 ⇒ 拓展域名
+                           "x.cloudfront.net",     # 主域不同 + 第三方清单 ⇒ 挡掉
+                           "dead157.zone"]}        # zone 不存在 ⇒ 挡掉
+
+    def _lookup157(ips, settings, logger=None, stop=None):
+        _asked157.append(list(ips))
+        return ({k: v for k, v in _map157.items() if k in ips},
+                {"attempted": len(ips), "hit_ips": len(ips),
+                 "domains": sum(len(v) for k, v in _map157.items() if k in ips)})
+
+    _real_lk, _real_zone = _xd157.iprecon.lookup_many, _xd157.zone_is_absent
+    _xd157.iprecon.lookup_many = _lookup157
+    _xd157.zone_is_absent = lambda h, settings=None, cache=None, timeout=3.0: \
+        str(h).endswith("dead157.zone")
+    try:
+        _r157 = _xd157.reverse_writeback(["8.8.8.8"], _tid157, settings, logger=None)
+        _rows157 = {x["domain"]: x["source"] for x in db.list_subdomains(_tid157)}
+        _ip157 = {x["domain"]: x["ip"] for x in db.list_subdomains(_tid157)}
+        _r157b = _xd157.reverse_writeback(["8.8.8.8"], _tid157, settings, logger=None)
+        _n_after = len(db.list_subdomains(_tid157))
+    finally:
+        _xd157.iprecon.lookup_many, _xd157.zone_is_absent = _real_lk, _real_zone
+    assert _rows157["b.rev157.test"] == _xd157.REVERSE_SOURCE, _rows157
+    assert _rows157["sib.rev157.other.test"] == _xd157.EXT_REVERSE_SOURCE, _rows157
+    assert "x.cloudfront.net" not in _rows157, f"第三方清单没生效：{_rows157}"
+    assert "dead157.zone" not in _rows157, f"zone 不存在的没挡掉：{_rows157}"
+    assert _rows157["a.rev157.test"] == "subfinder", "库里已有的行不许被改写来源"
+    assert _ip157["b.rev157.test"] == "8.8.8.8", _ip157      # 出处 IP 一起回填
+    assert _r157["own"] == ["b.rev157.test"], _r157
+    assert _r157["ext"] == ["sib.rev157.other.test"], _r157
+    assert _r157["thirdparty"] == 1 and _r157["zone"] == 1 and _r157["existing"] == 1, _r157
+    assert len(_r157b["own"]) == 0 and _n_after == len(_rows157), "第二次点必须有零新增（幂等）"
+    assert _xd157.reverse_writeback(["127.0.0.1", ""], _tid157, settings)["ips"] == 0, \
+        "私网/空值不该进反查队列（查了只浪费第三方配额）"
+    # 入口与标签：三个产地都得上，否则页面显示原始 `osint:reverse`、也找不到分类胶囊
+    assert 'extdom.REVERSE_SOURCE: "IP 反查' in _app156, \
+        "SOURCE_LABELS 少了 reverse ⇒ 子域名页来源列显示原始英文"
+    assert 'extdom.EXT_REVERSE_SOURCE, "ip反查拓展"' in _app156, \
+        "EXT_SRC_TAGS 少了这一类 ⇒ 拓展域名页没有对应的分类胶囊，`osint:reverse` 会掉进「其他」"
+    _ext_html157 = c.get("/extdomains", query_string={"task": str(_tid157)}).get_data(as_text=True)
+    _sub_html157 = c.get("/subdomains").get_data(as_text=True)
+    assert "真实 IP 反查域名并回写" in _sub_html157, "子域名页缺反查回写入口"
+    assert 'formaction="/api/domains/reverse"' in _sub_html157, "入口得走 POST（只回写不扫描）"
+    assert "/api/rescan" not in _sub_html157, "这个动作不许顺手建扫描任务"
+    assert "sib.rev157.other.test" in _ext_html157 and "IP 反查" in _ext_html157, \
+        "反查回来的拓展域名在页面上不可见 / 没有可读来源标签"
+    print("[8bn] 续157 #2 反查回写 ok: 归属分流（自家 → 子域名 reverse、主域不同 → 拓展域名 "
+          "osint:reverse）｜黑名单 / 第三方清单 / zone 不存在三道过滤各自挡掉一类｜库里已有不重写、"
+          "第二次点零新增（幂等）｜私网与空值不进队列｜出处 IP 一起回填｜子域名页有入口且它不建扫描任务")
+
+    # ---------------- [8bo] 续157 #7：详情页漏洞页签「复核台账」→「级别 × 来源」可视化总览 ----------------
+    #      纯展示层：poc_id → 四来源桶（内置检查 / POC / afrog / js-secret），再按级别 × 来源计数，
+    #      外加每目标命中数。数据来自已有 `vulns` 行，零额外请求。
+    _src157 = gui_app.vuln_source
+    assert _src157("afrog:xss") == "afrog" and _src157("js-secret-aws-access-key") == "js-secret"
+    assert _src157("a02-no-https") == "内置检查" and _src157("takeover-tomcat") == "内置检查"
+    assert _src157("exposure-git-config") == "POC" and _src157("") == "POC", "未知 poc_id 归 POC"
+    _mx157 = gui_app.build_vuln_matrix([
+        {"severity": "high", "poc_id": "a03-sqli-error", "target": "a.t", "c": 2},
+        {"severity": "high", "poc_id": "afrog:rce", "target": "a.t", "c": 1},
+        {"severity": "low", "poc_id": "js-secret-token", "target": "b.t", "c": 3},
+    ])
+    assert _mx157["total"] == 6 and _mx157["col"]["内置检查"] == 2, _mx157
+    assert _mx157["col"]["afrog"] == 1 and _mx157["col"]["js-secret"] == 3, _mx157
+    assert _mx157["rowsum"]["high"] == 3 and _mx157["rowsum"]["low"] == 3, _mx157
+    assert _mx157["targets"] == [("a.t", 3), ("b.t", 3)], _mx157["targets"]
+    _td157 = (ROOT / "gui" / "templates" / "task_detail.html").read_text(encoding="utf-8", errors="replace")
+    assert "vuln_matrix.total" in _td157 and "级别 × 来源" in _td157, "详情页缺可视化总览"
+    assert "复核台账" not in _td157, "旧的「复核台账」那栏没换成可视化"
+    print("[8bo] 续157 #7 漏洞可视化总览 ok: poc_id → 来源四桶（内置检查/POC/afrog/js-secret）｜"
+          "级别 × 来源计数 + 小计/合计 + 每目标命中数（按命中降序）｜详情页渲染该总览、旧「复核台账」已移除")
 
     # ---------------- [8au] 续146：站点默认只看 200/404 / 批量打标只读本面板 / 判据收敛 / 入口搬进 cli ----------------
     #      用户点单四件事：① 站点默认只看 200/404 + 「显示全部」开关（跨任务 /sites 与任务详情
