@@ -95,7 +95,7 @@
 `docs/docker.md` 写进去之后的复验，14 是这条数字修正后的终验：**`SMOKE PASS`、AssertionError 0、
         组打印 214 行**（续153 同口径实测 212 行，差 2 = 新增两组）；`tests/browser_e2e.py` 真浏览器
         真 Flask **72 条全绿**（`logs/_e2e154a.log`）。
-`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 对本轮 20 个被跟踪文件（代码 12 + 三份记忆 + README + 两处 yaml/dict）两两相等。
+`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 对本轮 20 个被跟踪文件（代码与模板 12、`tests/smoke.py`、三份记忆、README 与 `docs/docker.md`、`settings.yaml` 与第三方清单）两两相等。
 
 工具增量：`logs/_apatch.py` —— **内容锚点**版补丁。`_lpatch.py` 按行号打补丁时同一文件一次改四处
 要逐批重取行号，每次重取都是一次打偏机会；`_apatch` 要求整段原文在文件里**恰好命中一次**
