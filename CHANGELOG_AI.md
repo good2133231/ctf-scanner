@@ -86,13 +86,15 @@
 ### ⑥ 回归与门禁
 
 新增 `[8bg]`（401 可勾选 + 撤复查入口 + 截图分档）与 `[8bh]`（真实 IP 产地 + 第三方收口 + 全任务探测）。
-门禁连跑 **13 轮**（`logs/_gate154a`～`logs/_gate154m`）：前 11 轮每轮都红，且**全部红在新判据或
+门禁连跑 **14 轮**（`logs/_gate154a`～`logs/_gate154n`）：前 11 轮每轮都红，且**全部红在新判据或
 被我改动语义的旧判据上**（`[7o]⑥` 表单计数、`[8bg]` 被 Jinja 转义的 `<口令>`、`[5t]` 的 targets 从
 "勾一个"变"全任务"、同组 `aa-title.test` 刚被解析成 nxdomain 本就不该送、`[5y]` osint 的
 `example.com`、`[8i]⑥` 未解析换档后落到末页、`[8bg]` 三态断言吃的是门禁全局桩、`[8bh]` 按文本数
 `cdn.IP_RANK_SQL` 被自己的注释绊红、`[8bh]` 用 `read_text()` 数 CRLF 自己就是那条 §9 毛病、
-最后一轮是**把记忆（CHANGELOG / todo / AGENTS）与 `docs/docker.md` 写进去之后的复验**：
-**`SMOKE PASS`、AssertionError 0、组打印 214 行**（续153 同口径实测 212 行，差 2 = 新增两组）。
+`ip_kind` 只认 `.get`、`_apatch` 替换区间少算一行留下孤儿行）；第 12/13/14 轮绿：12 是撤入口与分档改完，13 是**把记忆（CHANGELOG / todo / AGENTS）与
+`docs/docker.md` 写进去之后的复验，14 是这条数字修正后的终验：**`SMOKE PASS`、AssertionError 0、
+        组打印 214 行**（续153 同口径实测 212 行，差 2 = 新增两组）；`tests/browser_e2e.py` 真浏览器
+        真 Flask **72 条全绿**（`logs/_e2e154a.log`）。
 `git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 对本轮 16 个被跟踪文件两两相等。
 
 工具增量：`logs/_apatch.py` —— **内容锚点**版补丁。`_lpatch.py` 按行号打补丁时同一文件一次改四处

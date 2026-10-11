@@ -3330,7 +3330,7 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [x] #5：`jsmine.thirdparty_suffixes()` / `is_thirdparty()` / `_is_under()` 公开且规则一处；
       osint 入库前挡第三方并报条数（自家优先放行）；清单 306→359（五档：隧道/APM/SaaS/回调/CDN 字体）；
       「送去探测」默认全任务 + `limits.ext_probe_max=100` + 两个入口的范围选择栏
-- [x] 新增 `[8bg]`、`[8bh]` 两组回归；门禁连跑 13 轮（`logs/_gate154a`～`_gate154m`，最后一轮是记忆写完后的复验）：
+- [x] 新增 `[8bg]`、`[8bh]` 两组回归；门禁连跑 14 轮（`logs/_gate154a`～`_gate154n`，最后三轮是记忆/数字修正后的复验）：
       前 11 轮每轮都红且全部红在新判据或被本轮改动语义的旧判据上，最后一轮 SMOKE PASS /
       AssertionError 0 / 组打印 214（续153 同口径 212，差 2 ＝ 新增两组）
 - [x] `docs/docker.md` 1b 节同样按"出厂就 401"在写 → 改成"出厂关、开了而口令没配才 401"（§5.19）
