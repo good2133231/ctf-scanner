@@ -5,8 +5,8 @@
 
 ## 续157 控制台日志勾选框 + 漏洞页可视化总览 + 真实 IP 反查回写 + multileak 弱相关可配
 
-实施者：WorkBuddy · DeepSeek-V4.1-Flash。本轮把续157 清单里**可自包含**的四项做完（#12 MITM
-与「多平台源」见文末「还没做」）。
+实施者：WorkBuddy · DeepSeek-V4.1-Flash。本轮做续157 清单（分批：先 #1/#2/#7/#11，再做
+#D/E/F/G 的横幅与出口开关收口）；#12 MITM 与「多平台源」见文末「还没做」。
 
 ### 做了什么
 
@@ -25,11 +25,19 @@
   改为读 `multileak.weak_downgrade` / `relevance_whitelist`（与 `github_leak` 同口径）；
   `scanner/github_leak.py::SEARCH_RULES` 补 secret / token / `.npmrc` / `id_rsa` / AKIA 五条；
   `scanner/config.py` + `config/settings.yaml` 补默认键，POST 保存原样带回（防整段重写抹掉）。
+- **#D 出口地址开关**：新增 `gui.announce_egress_ip`（默认 true，主理人 2026-10-11 拍板“可以用
+  第三方”）；`serve()` 只在“非回环且开关开着”时才问第三方取公网出口 IP，关掉＝零外发。
+  DEFAULTS / shipped yaml / POST / 策略页「控制台」勾选框四处齐。
+- **#E 横幅日志收口**：把「启动日志 / 扫描运行日志 / 逐请求访问日志」三行并成**一行摘要**
+  `[*] 日志：启动与告警 → … ｜ 逐请求访问日志 → … ｜ 扫描逐条 …`（原来的“相对路径 + 说明”收进一句）。
+- **F `AGENTS.md` 入口示例**：同步成 `http://<host>:<port>/<10位>/<10位>/`（续153 后的真实写法）。
+- **G `todo.txt` 结构**：把夹在续151/续152 前面的 `下一轮（续149）：` 块挪到文末「附」节，并把本轮
+  改成正式的 `## 续157` 段（`[8as]` 的 max续(CHANGELOG)==max续(todo.txt) 才过得了）。
 
 ### 验证
 
 - 全量 `tests/smoke.py` → **`SMOKE PASS` / AssertionError 0 / exit 0**，门禁日志
-  `logs/_gate157c.log`（#1）、`logs/_gate157f.log`（#7+#11）。
+  `logs/_gate157c.log`（#1）、`logs/_gate157f.log`（#7+#11）、`logs/_gate157i.log`（#D/E/F/G）。
 - 新增/改写回归：`[8bm]`（#1 勾选框 + 三处一致）、`[8bn]`（#2 反查回写）、`[8bo]`（#7 四桶 +
   矩阵 + 详情页渲染、旧「复核台账」已移除）、`[6p]`/`[8bc]`（#11 规则表 + 弱相关三态）。
 - 行尾：改动文件 `git diff --numstat` 无整文件级 churn（过程中 `tests/smoke.py` 曾被整体
@@ -37,10 +45,11 @@
 
 ### 还没做（下一轮）
 
-- **#11 多平台源**：`multileak` 仍只有 grepapp。`config/keys.yaml.example` 的凭据 schema 只有
-  fofa/shodan/quake/github，**没有 gitlab** 段；gitlab 匿名 401、无 token 无法核实响应形态，
-  按“不凭记忆写”未接。
-- 其余见 `todo.txt` 末尾「下一轮（续157）」。
+- **#11 多平台源**：接 GitLab provider（读 `keys.gitlab.token`；`keys.yaml.example` 补 gitlab 段）。
+- **策略页补输入框**：`queue` / `dev` / `http` / `tools` / `dicts` 五段（POST 映射里目前完全没有）。
+- **#12 MITM**：代理录制 + Agent 编排（红线：可发目标请求、仅高危动作审批）。
+- **合并 worktree / 同步本地 `main`**：共享区 `ctf-scanner/tests/smoke.py` 仍是别的会话未提交的坏文件。
+
 
 
 ## 续156 控制台不再被日志刷爆：逐条运行日志只进文件，TLS 警告只在启动说一次

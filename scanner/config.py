@@ -120,6 +120,10 @@ DEFAULTS = {
         # 个阶段，终端滚动本身成了瓶颈，而该看的地方一直是 `logs/server.log` 与每个任务的
         # `task.log`（页面上的「任务日志」面板读的就是后者）。CLI 不受这项影响：它不动开关。
         "console_logs": False,
+        # 续157 #D：启动横幅要不要问第三方 https 接口取"公网出口 IP"（续150 加的那行）。
+        # 开着才去问（默认开，主理人 2026-10-11 拍板"可以用第三方"）；关掉＝一个外发请求都不发，
+        # 横幅首行只印绑定值。绑回环时本来就不取；取不到一律静默降级，绝不拖住启动。
+        "announce_egress_ip": True,
         "web_path_random": True,
         # behind_proxy：是否信任反向代理转发的 `X-Forwarded-Proto/Host/For`。
         #   默认关 —— 它是**请求头**，任何客户端都能伪造，无条件信任会让 Host 白名单

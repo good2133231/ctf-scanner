@@ -37,6 +37,9 @@ gui:
   # 逐条 INFO 只进 logs/server.log 与每个任务的 task.log；页面上的「任务日志」面板读的是后者。
   # CLI 不看这一项（它的全部界面就是终端）。
   console_logs: false
+  # 续157 #D：要不要问第三方 https 接口取"公网出口 IP"（默认开）。关掉＝一个外发请求都不发，
+  # 横幅首行只印绑定值。绑回环时本来就不取（本机自用没有"外网地址"这回事）。
+  announce_egress_ip: true
   # ---- 401 边缘认证门（scanner/edgeauth.py）：无 Basic 凭据的请求进不到任何路由 ----
   # 这里**只有开关**。口令写在 config/edge_auth.yaml —— 明文、一行 password: <口令>；该文件与
   # config/keys.yaml 同类、在 .gitignore 里。本文件被 git 跟踪而仓库是公开的，口令写进这里就等于

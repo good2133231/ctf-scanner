@@ -20761,11 +20761,21 @@ expression: r0()
     _tpl157 = (ROOT / "gui" / "templates" / "settings.html").read_text(
         encoding="utf-8", errors="replace")
     assert 'name="console_logs"' in _tpl157, "控制台段缺 console_logs 勾选框（续157 #1）"
+    # 续157 #D：出口 IP 询问开关（第三方）三处一致 + 页面勾选框
+    assert _D145["gui"].get("announce_egress_ip") is True, "DEFAULTS 缺 gui.announce_egress_ip"
+    assert "  announce_egress_ip: true" in _y156, "shipped 配置没跟上 DEFAULTS"
+    assert '"announce_egress_ip": f.get("announce_egress_ip") == "1"' in _app156, \
+        "POST 映射缺 announce_egress_ip（勾了存不进去）"
+    assert 'name="announce_egress_ip"' in _tpl157, "控制台段缺出口 IP 勾选框"
     _off156, _ = _serve_out7i({"host": "127.0.0.1", "console_logs": False})
     _on156b, _ = _serve_out7i({"host": "127.0.0.1", "console_logs": True})
     assert any("只写文件" in x for x in _off156), _off156[-6:]
     assert not any("终端与文件各一份" in x for x in _off156), _off156[-6:]
     assert any("gui.console_logs=true" in x for x in _on156b), _on156b[-6:]
+    # 续157 #E：三条日志指路并成一行摘要（启动/告警 + 逐请求访问日志 + 扫描逐条）
+    assert not any(x.startswith("[*] 启动日志：") for x in _off156), "启动日志那行没并进摘要"
+    assert any("日志：启动与告警" in x and "逐请求访问日志" in x for x in _off156), \
+        "日志一行摘要没生成"
     _muted156, _ = _serve_out7i({"host": "127.0.0.1"}, limits_over={"verify_tls": False})
     _verif156, _ = _serve_out7i({"host": "127.0.0.1"}, limits_over={"verify_tls": True})
     assert any("InsecureRequestWarning 已静音" in x for x in _muted156), _muted156[-6:]

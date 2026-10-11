@@ -3464,6 +3464,8 @@ def create_app():
                                           "enabled": f.get("edge_auth_enabled") == "1"},
                             # 续157：这一项页面上有勾选框了（用户点单「日志不要刷控制台」），取表单值。
                             "console_logs": f.get("console_logs") == "1",
+                            # 续157 #D：询问第三方取出口 IP 的开关（同 console_logs，取表单值）
+                            "announce_egress_ip": f.get("announce_egress_ip") == "1",
                             "keys_ask_passphrase": bool(
                                 _g0.get("keys_ask_passphrase", True)),
                             "login_lockout": dict(_g0.get("login_lockout") or {}),
@@ -4485,11 +4487,7 @@ def serve(start_queue=True):
         else:
             _boot.info(line)
 
-    if _log_path is not None:
-        say(f"[*] 启动日志：{rel_display(_log_path, mask_outside=True)}"
-            "（追加 + 自动滚动；本次横幅、告警与运行期 [gui] 日志都在里面）")
-    else:
-        say(f"[!] 启动日志写不出来（{_log_note}）—— 本次横幅只在终端里，终端一关就没了")
+    # 续157 #E：启动日志那句并入下面的一行摘要（见 attach_access_log 之后的合并行）。
     # 凭据解锁（续98）：口令**只在这里要一次** —— 紧接着的 load_settings() 会把 keys
     # 读进配置，之后工作线程与 GUI 每个请求都会反复调它，绝不能再提示。没加密文件时静默通过。
     # 续134 的"启动不要提问"（`gui.keys_ask_passphrase=false`）由 **keystore 自己**去取那一个键，
@@ -4511,10 +4509,7 @@ def serve(start_queue=True):
     # 逐条提醒在这里没有价值，事实改由下面那一句现取配置说一次（§5.19）。
     _muted156 = bool(not (_settings.get("limits") or {}).get("verify_tls", False)) \
         and runlog.mute_insecure_warnings()
-    say("[*] 扫描运行日志：只写文件（每个任务的 `task.log` + 上面的启动日志），终端不再逐条刷"
-        "；实时进度看控制台页面的「任务日志」面板"
-        if not _console156 else
-        "[*] 扫描运行日志：终端与文件各一份（`gui.console_logs=true`）")
+    # 续157 #E：扫描运行日志那句并入下面的一行摘要。
     if _muted156:
         say("[*] 目标侧 TLS 校验是关的（`limits.verify_tls=false`）：每请求一条的 "
             "InsecureRequestWarning 已静音，这件事只在启动时说这一次 —— 要逐条提示就把该开关打开")
@@ -4577,7 +4572,8 @@ def serve(start_queue=True):
     # 绑回环时不去取出口地址（本机自用没有"外网地址"这回事）；取不到就不加注释 ——
     # **绝不为了这一行拖住启动**（`_egress_ip()` 自带超时与静默降级，见其文档串）。
     _ext153 = ""
-    if host not in ("127.0.0.1", "localhost", "::1"):
+    if host not in ("127.0.0.1", "localhost", "::1") \
+            and bool((_settings.get("gui") or {}).get("announce_egress_ip", True)):
         _e153 = _egress_ip()
         if _e153 and _e153 not in (host, "0.0.0.0", "::"):
             _ext153 = _e153
@@ -4587,12 +4583,17 @@ def serve(start_queue=True):
     # 为什么在这儿而不是最上面：要把 `_wp`（本次前缀）交给它打码 —— 落盘的每一行里带着**客户端送来
     # 的原始路径**，而「前缀绝不落盘」是续138 的硬约束。这几行措辞本身不含前缀，所以能进 server.log。
     _ap, _an = attach_access_log(_wp)
-    if _ap is not None:
-        say(f"[*] 逐请求访问日志：{rel_display(_ap, mask_outside=True)}"
-            "（追加 + 自动滚动；本次随机后台前缀已脱敏，终端不再一屏一行刷请求）")
-    else:
-        say(f"[!] 逐请求访问日志写不出来（{_an}）—— 本次只有启动日志，"
-            "且 Werkzeug 仍会把每个请求刷在终端上")
+    # 续157 #E（主理人点单）：原先「启动日志 / 扫描运行日志 / 逐请求访问日志」各占一行、且都是
+    # 「相对路径 + 说明」，收成**一行摘要**（口径：能直接用的东西放能直接用的位置）。
+    _srv157 = (rel_display(_log_path, mask_outside=True)
+               if _log_path is not None else f"写不出来（{_log_note}）")
+    _acc157 = (rel_display(_ap, mask_outside=True)
+               if _ap is not None else f"写不出来（{_an}）—— Werkzeug 仍会把每个请求刷在终端上")
+    _scan157 = ("终端与文件各一份（`gui.console_logs=true`）" if _console156 else
+                "只写文件（每个任务的 `task.log` + 启动日志），终端不再逐条刷；"
+                "实时进度看控制台页面的「任务日志」面板")
+    say(f"[*] 日志：启动与告警 → {_srv157} ｜ 逐请求访问日志 → {_acc157}"
+        f"（本次随机后台前缀已脱敏） ｜ 扫描逐条 {_scan157}")
     # 续47：HTTPS 与 Host 白名单的现状**在启动时就说明白**（部署排错时最先看的就是这几行）。
     # 文案由 `_deploy_hints()` 生成 —— 抽成纯函数是为了让回归门禁能**真跑**这些告警
     # （`serve()` 会起真实服务器，测试不能调它；而"只 grep 源码里有这个字符串"证明不了运行期行为）。

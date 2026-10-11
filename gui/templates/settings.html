@@ -561,7 +561,8 @@
     <label>端口 <input name="port" value="{{ s.gui.port }}"></label>
     <label>401 边缘认证门 <input type="checkbox" name="edge_auth_enabled" value="1"{% if s.gui.edge_auth and s.gui.edge_auth.enabled %} checked{% endif %}></label>
     <label>逐条运行日志刷终端 <input type="checkbox" name="console_logs" value="1"{% if s.gui.console_logs %} checked{% endif %}></label>
-    <p class="muted small">{{ edge_note }}　监听地址 / 端口 / 逐条运行日志三项改完要重启控制台才生效。</p>
+    <label>外网出口 IP（问第三方接口） <input type="checkbox" name="announce_egress_ip" value="1"{% if s.gui.announce_egress_ip %} checked{% endif %}></label>
+    <p class="muted small">{{ edge_note }}　以上四项改完要重启控制台才生效。</p>
     <p class="muted small">{{ console_note }}</p>
 
     {# 续117：这一页**不再有口令输入框**。原先那一栏写的是 `gui.token`（引导口令），
