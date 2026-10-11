@@ -2162,11 +2162,12 @@ def main():
     assert 'name="dirscan_mode"' in _set_html and 'name="dirscan_quick_max_paths"' in _set_html
     assert 'name="dirscan_suffix_aware"' in _set_html
     _det_html = c.get(f"/tasks/{tid}").get_data(as_text=True)
-    # 续145：四个补扫入口彻底摘掉（用户点单“这种东西先不搞了”）。`POST /api/rescan` **保留** ——
-    # 漏洞「复查」还在用它，本文件另有 8 处直接打这个接口；摘掉的只是 GUI 上的按钮。
+    # 续145：四个补扫入口彻底摘掉（用户点单“这种东西先不搞了”）；续154 连漏洞「复查」也摘了
+    # （用户 2026-10-11：复查 / 追加到本任务 / 批量确认存在 / 批量判误报 / 退回待复核「暂时没什么用」）。
+    # `POST /api/rescan` 的**路由本体保留** —— 本文件另有 8 处直接打这个接口，撤的只是 GUI 入口。
     # 判据是**页面级**的“整页不许再出现”（续144 给目录页签定的口径）：比“某个按钮不在”强
     # （换一句解说词把它写回来照样红），也比 grep 模板强（Jinja 注释不渲染，页面级判据不吃那套）。
-    assert "/api/rescan" in _det_html, "漏洞「复查」仍在用 /api/rescan，接口不许被顺手删掉"
+    assert "/api/rescan" not in _det_html, "续154 撤了漏洞「复查」入口，详情页不该再有 /api/rescan 表单"
     for _gone145 in ("深度目录补扫", "全端口补扫", "补截图", "深度补扫", "补扫全目录", "补扫全端口"):
         assert _gone145 not in _det_html, f"续145 已摘掉补扫入口，任务详情页不该再出现「{_gone145}」"
     _sites145 = c.get("/sites").get_data(as_text=True)
@@ -2581,13 +2582,29 @@ def main():
         _new_t = db.get_task(_new_id)
         # 续40：送去检测**带上 subdomain 阶段**（用户要求"拓展域名再去检测也要去子域名扫描"）
         assert _new_t["stages"] == "subdomain,probe,dirscan,vulnscan", _new_t["stages"]
-        assert _new_t["targets"] == "zz-js.test", _new_t["targets"]
-        assert f'"rescan_of": {_et}' in _new_t["options"], _new_t["options"]
-        assert _re.match(r"^拓展探测-\d{4}-\d{6}$", _new_t["name"]), _new_t["name"]
-        # 空勾选 → 只回站内 next，不建任务
-        _r3 = c.post("/api/domains/scan-ext", data={"task_id": str(_et), "next": "/tasks"})
+        # 续154（用户点单"送去探测也就默认全任务扫描"）：不给 `scope` 就是**全任务**，所以这里
+        # 只勾了一个也会把该任务的拓展域名一起送走；`own.test`（来源 subfinder = 自身子域名，
+        # 不在拓展域名那一侧）不许混进来。
+        _got154 = set((_new_t["targets"] or "").split())
+        assert {"zz-js.test", "bb-js.test", "cc-title.test"} <= _got154, _got154
+        # 上面那次「解析选中域名」把 aa-title.test 判成 nxdomain（ip 被清空），于是它**不该**
+        # 被默认送走 —— 这条同时钉住"全任务那一档吃的是拓展域名页同一个 `RESOLVED_WHERE`"。
+        assert "aa-title.test" not in _got154, f"解析不出 IP 的域名被送走了：{_got154}"
+        assert "own.test" not in _got154, "自身子域名不该被当成拓展域名送走"
+        assert len(db.list_tasks(limit=1000)) == _before + 1
+        # 显式 `scope=picked` 才回到"只探勾选"那一档（那个选择栏不是摆设）
+        _r2b = c.post("/api/domains/scan-ext", data={
+            "task_id": str(_et), "scope": "picked", "domain": ["zz-js.test"],
+            "next": f"/tasks/{_et}"})
+        _t2b = db.get_task(int(_r2b.headers["Location"].rstrip("/").rsplit("/", 1)[-1]))
+        assert _t2b["targets"] == "zz-js.test", _t2b["targets"]
+        # 任务里一个拓展域名都没有 → 只回站内 next、不建任务（旧口径"没勾选就不建"已被
+        # 全任务默认替掉，现在这一档判的是"没东西可送"）
+        _empty_t = db.create_task("smoke-ext-none", targets, ["probe"], {})
+        _n0 = len(db.list_tasks(limit=1000))
+        _r3 = c.post("/api/domains/scan-ext", data={"task_id": str(_empty_t), "next": "/tasks"})
         assert _r3.headers["Location"] == "/tasks" and \
-            len(db.list_tasks(limit=1000)) == _before + 1, "空勾选不该建出任务"
+            len(db.list_tasks(limit=1000)) == _n0, "没有拓展域名时不该建出探测任务"
 
         # 加黑名单：任务详情页签用的也是同一个端点，next 只放行站内相对路径。
         # 这里把 `blacklist.add` 换成记录桩 —— 断言"端点把勾选域名交给了黑名单"，不去动真文件。
@@ -9923,12 +9940,17 @@ http:
     assert _c7o.get("/tasks?page=9999").status_code == 200
     assert _c7o.get(f"/tasks/{_tidB7o}?vpage=9999").status_code == 200
 
-    # ⑥ 详情页 GET 筛选表单与 POST 复核表单没有嵌套（HTML 不允许 form 嵌套）
+    # ⑥ 详情页的 GET 筛选表单必须在**下一个表单开始前**闭合（HTML 不允许 form 嵌套）。
+    #    续154：漏洞页签里那个 POST「复查/追加/复测」表单已撤（用户 2026-10-11 判定暂不常用），
+    #    所以这里同时钉两件事：旧表单不许换个壳回来，且 GET 表单自己关得干净。
     _iget7o = _dh1_7o.find('<form class="filters" method="get"')
-    _ipost7o = _dh1_7o.find('action="/api/rescan"')
-    assert 0 <= _iget7o < _ipost7o, "详情页 GET 筛选表单必须排在 POST 复核表单之前"
-    assert "</form>" in _dh1_7o[_iget7o:_ipost7o], \
-        "GET 表单必须在 POST 表单开始前闭合（HTML 不允许 form 嵌套）"
+    _inext7o = _dh1_7o.find("<form", _iget7o + 5)
+    assert 0 <= _iget7o, "详情页漏洞页签的 GET 筛选表单不见了"
+    assert 'action="/api/rescan"' not in _dh1_7o, \
+        "续154 撤掉了漏洞「复查」表单，它不许回来（接口本体仍在，见 [8at]①）"
+    _end7o = _inext7o if _inext7o > 0 else len(_dh1_7o)
+    assert "</form>" in _dh1_7o[_iget7o:_end7o], \
+        "GET 表单必须在下一个表单开始前闭合（HTML 不允许 form 嵌套）"
 
     # ---- §6.1 变异证伪（把新行为退回"旧/天真"实现，确认上面的断言真的变红）----
     # (M1) `/tasks` 数据源退回固定 `list_tasks(limit=200)`（旧写法，忽略分页/筛选）→ ①② 必红
@@ -13484,7 +13506,17 @@ http:
     # ⑥ 展开态：碎片放出来、链接文案变回收，且翻页链接**保持**展开状态
     _o112 = c.get("/subdomains", query_string={"q": "dedupe112", "size": "50",
                                                "nores": "1"}).get_data(as_text=True)
-    assert "b112.dedupe112.example" in _o112 and "只看解析成功的" in _o112
+    assert "只看解析成功的" in _o112, "展开态要把那句链接文案换成回收"
+    # 续154：未解析那一条现在排在**最后一档**（真实 IP → 多解析 → CDN → 未解析），所以它在
+    # 展开态的末页而不是首页。旧 SQL 把 ip='' 的行归进"非 CDN"档、与真实 IP 并排，才是缺陷
+    # （判据与这条序都由 `[8bh]` 钉住）。
+    _o112p2 = c.get("/subdomains", query_string={"q": "dedupe112", "size": "50",
+                                                 "nores": "1", "page": "2"}).get_data(as_text=True)
+    assert "b112.dedupe112.example" in _o112p2, "展开态末页应能看到未解析那一条"
+    _o112all = c.get("/subdomains", query_string={"q": "dedupe112", "size": "100",
+                                                  "nores": "1"}).get_data(as_text=True)
+    assert _o112all.rfind("b112.dedupe112.example") > \
+        _o112all.rfind("p51112.dedupe112.example"), "未解析的行该排在已解析那些之后"
     _pl112b = _page_links(_o112)
     assert _pl112b and all("nores=1" in u for u in _pl112b), f"展开态翻页丢了状态：{_pl112b}"
 
@@ -13505,16 +13537,20 @@ http:
         "目标自身域名必须被 protect 放行"
 
     # ⑨ §6.1 变异：把"只看解析成功"打回恒真 → 未解析那条就该出现在默认页（证明 ④⑤ 真的接在 SQL 上）
+    #    两式都带 `size=100`：这条判的是"这道门有没有接上查询"，不该顺带依赖档位排序（续154
+    #    把未解析排到最后一档之后，不放宽分页它就会落到末页，判据变成在测排序）。
     _orig_res112 = db.RESOLVED_WHERE
     try:
         db.RESOLVED_WHERE = "1=1"
         assert "b112.dedupe112.example" in c.get("/subdomains",
-                                                 query_string={"q": "dedupe112"}).get_data(as_text=True), \
+                                                 query_string={"q": "dedupe112",
+                                                               "size": "100"}).get_data(as_text=True), \
             "变异未生效：这道默认门其实没接上查询"
     finally:
         db.RESOLVED_WHERE = _orig_res112
     assert "b112.dedupe112.example" not in c.get("/subdomains",
-                                                 query_string={"q": "dedupe112"}).get_data(as_text=True)
+                                                 query_string={"q": "dedupe112",
+                                                               "size": "100"}).get_data(as_text=True)
 
     print("[8i] 续112 域名去重 + 默认只看解析成功 ok: 同域名只留最权威来源一行（subfinder 压过 "
           "js:mine/promote）｜total 与列表同口径｜不开去重回到 15 行（变异对照）｜其余来源并进「另见于」"
@@ -19923,19 +19959,22 @@ expression: r0()
     _td145 = (ROOT / "gui" / "templates" / "task_detail.html").read_text(encoding="utf-8")
     _st145 = (ROOT / "gui" / "templates" / "sites.html").read_text(encoding="utf-8")
 
-    # ---- ① 入口摘了、接口留着：`/api/rescan` 在 GUI 上只剩漏洞「复查」一个消费方 ----
+    # ---- ① 入口摘了、接口留着：续154 起 `/api/rescan` 在 GUI 上**一个消费方都没有** ----
+    #      （续145 摘掉四个补扫入口时还剩漏洞「复查」；用户 2026-10-11 判定复查/追加/复测
+    #       这批动作"暂时没什么用"，入口一并撤掉，接口与复测数据都留着，随时可挂回来。）
     _n_rescan145 = _td145.count("url_for('api_rescan')")
-    assert _n_rescan145 == 1, \
-        f"任务详情页只该剩「复查」一个 /api/rescan 表单：实测 {_n_rescan145}"
-    assert 'value="vulnscan"' in _td145, "剩下那一个必须是漏洞「复查」（其它 stage 的入口都摘了）"
+    assert _n_rescan145 == 0, \
+        f"任务详情页不该再有 /api/rescan 表单（续154 撤入口）：实测 {_n_rescan145}"
+    assert "复测模式" not in _td145 and "复查（勾选目标重跑漏洞初筛）" not in _td145, \
+        "撤掉的三个控件不许换个壳回来（「追加到本任务」那一格在「送去探测」表单里是另一件事，不在此列）"
     assert "api_rescan" not in _st145, "sites.html 里不该再有任何 /api/rescan 引用"
     assert '"/api/rescan"' in _apa145, \
-        "路由本体不许被顺手删掉（本文件有 8 处直接打它，「复查」也在用）"
-    # 详情页剩下的 POST 表单只该是「复查」与拓展域名的「送去探测」两个 —— 数一遍，
-    # 多一个就是有人把补扫入口加回来了（比逐个搜按钮文案强：换个文案就绕过去了）
+        "路由本体不许被顺手删掉（本文件有 8 处直接打它，接口留着随时可挂回来）"
+    # 详情页剩下的 POST 表单只该是拓展域名的「送去探测」一个 —— 数一遍，
+    # 多一个就是有人把补扫/复查入口加回来了（比逐个搜按钮文案强：换个文案就绕过去了）
     _n_post145 = _td145.count('method="post"')
-    assert _n_post145 == 2, \
-        f"任务详情页的 POST 表单应该恰好 2 个（复查 + 送去探测）：实测 {_n_post145}"
+    assert _n_post145 == 1, \
+        f"任务详情页的 POST 表单应该恰好 1 个（送去探测）：实测 {_n_post145}"
 
     # ---- ② `subdomain.auto_root` 三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射）----
     assert _D145["subdomain"]["auto_root"] is True, \
@@ -20154,7 +20193,7 @@ expression: r0()
         _l2.close()
 
     print("[8at] 续145 摘补扫入口 + 自动提取主域 + 启动日志落文件 ok: "
-          "/api/rescan 接口保留而 GUI 只剩「复查」一个消费方（详情页 POST 表单恰好 2 个）｜"
+          "/api/rescan 接口保留而 GUI 一个消费方都没有（续154 撤复查入口，详情页 POST 表单恰好 1 个）｜"
           "subdomain.auto_root 三方一致 + 真 POST 两个方向都存得进去｜"
           "折叠那行日志仍带 devflow 认的「自动拓展」kw（判据本体的红线搬到 [8au]⑤）｜"
           "_boot_gaps 五档纯函数（门关时一个字不提边缘门、清单里不许有第二处补法）｜"
@@ -20164,6 +20203,316 @@ expression: r0()
           "运行期 [gui] 日志与横幅共用同一个文件｜"
           "端口预检与 Werkzeug 同样宽：残留连接放行（夹具先自证）、真监听者仍报占用")
 
+    # ---------------- [8bg] 续154：401 门可在策略页勾选 / 撤复查入口 / 截图失败原因分档 ----------------
+    #      用户 2026-10-11 一次点单 12 条，这一组钉其中三条里"**只做一半等于没做**"的部分：
+    #      ① 门出厂是关的（`[8aw]⑥` 已钉 DEFAULTS 与 settings.yaml），但**页面上开不了**就仍然
+    #        没满足"可以让我在配置里面选择要不要开启" —— 所以钉勾选框存在 + POST 两个方向 +
+    #        页面那句现状**跟着配置走**（§5.19：写死"出厂是关的"在用户勾上后立刻变假话）。
+    #      ② 「复查/追加到本任务/复测模式」入口撤掉，`/api/rescan` **路由本体必须还在**
+    #        （本文件另有 8 处直接打它；撤 UI 顺手删接口就是那类"改 A 坏 B"）。
+    #      ③ 截图失败只把浏览器的原始 stderr 写进格子，用户看到的还是一句看不懂的英文 ——
+    #        钉**原因档**：分档表覆盖全部档（判据自证）、阶段里不许留第二处判断、端到端跑一次
+    #        看标签真落库、重试决策真按标签走（301 那条换成落地页再截）。
+    from scanner import screenshot as S154, edgeauth as _ea154
+    from scanner.stages.screenshot import ScreenshotStage as _SS154
+
+    _set_html154 = c.get("/settings").get_data(as_text=True)
+    assert 'name="edge_auth_enabled"' in _set_html154, "策略页「控制台」段缺 401 门勾选框"
+    assert 'name="edge_auth_enabled" value="1"' in _set_html154, "勾选框要能 POST 出值"
+    _note154 = gui_app._edge_note(load_settings())
+    # 比"括号前那一截"而不是整句：句尾的补法里有 `<口令>` 这个占位符，Jinja 渲染时会被
+    # 转义成 `&lt;口令&gt;` —— 拿整句去比页面就成了假红（本轮真红过一次）。
+    assert _note154.split("（")[0] in _set_html154, \
+        f"页面那句门现状必须是**现取**的且真渲染出来（写死就成了假话）：{_note154!r}"
+    # 三态各有自己的句子，且互不通用。**口令在不在**要桩掉再判 —— 这台机器上有没有
+    # config/edge_auth.yaml 不是被测对象，跟着它走就成了"沙箱绿、别人的机器红"（§6.2 那类）。
+    _keep_rp154 = _ea154.read_password
+    # 门禁从第 583 行起把 `edgeauth.enabled` 整体桩成"这道门不存在"（否则本机 settings.yaml 被
+    # 改成 true 时后面几百条 GUI 断言全 401）。要看三态就得临时换回**真货**——用那份存下来的
+    # `_edgeauth_real`，不在这里重写一遍判据（那就是第二个产地）。
+    _keep_en154 = _ea154.enabled
+    _ea154.enabled = _edgeauth_real
+    try:
+        _ea154.read_password = lambda: ""
+        _n_off154 = gui_app._edge_note({"gui": {"edge_auth": {"enabled": False}}})
+        _n_on154 = gui_app._edge_note({"gui": {"edge_auth": {"enabled": True}}})
+        _ea154.read_password = lambda: "x"
+        _n_has154 = gui_app._edge_note({"gui": {"edge_auth": {"enabled": True}}})
+    finally:
+        _ea154.read_password = _keep_rp154
+        _ea154.enabled = _keep_en154
+    assert len({_n_off154, _n_on154, _n_has154}) == 3, "三态文案撞成一句 = 状态没分出来"
+    assert _ea154.SET_HINT in _n_off154 and _ea154.SET_HINT in _n_on154, \
+        "补法那句话的产地是 edgeauth.SET_HINT，页面不许自己抄一份（§5.14）"
+
+    _orig154 = gui_app.save_settings
+    _cap154 = {}
+
+    def _fake154(_d154):
+        _cap154.clear()
+        _cap154.update(_d154)
+        return load_settings()
+
+    gui_app.save_settings = _fake154
+    try:
+        assert c.post("/settings", data={"min_severity": "medium",
+                                         "edge_auth_enabled": "1"}).status_code == 302
+        assert _cap154["gui"]["edge_auth"]["enabled"] is True, _cap154.get("gui")
+        # 反方向（只钉"勾了能存"会漏掉"取消勾选存不进去"这一半，与 [8at]② 同一口径）
+        assert c.post("/settings", data={"min_severity": "medium"}).status_code == 302
+        assert _cap154["gui"]["edge_auth"]["enabled"] is False, \
+            f"取消勾选必须存成 False：{_cap154.get('gui')}"
+    finally:
+        gui_app.save_settings = _orig154
+
+    # ---- ② 入口撤了、接口留着（渲染级判据在 [5p] 那条 `"/api/rescan" not in _det_html`）----
+    _readme154 = (ROOT / "README.md").read_text(encoding="utf-8", errors="replace")
+    assert "出厂 `gui.edge_auth.enabled: true`" not in _readme154, \
+        "部署 checklist ⑤ 还在宣称出厂开 401 —— 与 `[8aw]⑥` 钉的 false 互相打脸（§5.19 文档漂移）"
+
+    # ---- ③ 截图失败原因分档 ----
+    _stg154 = (ROOT / "scanner" / "stages" / "screenshot.py").read_text(encoding="utf-8")
+    assert '"browser" in _low' not in _stg154 and 'screenshot.classify(' in _stg154, \
+        "阶段里还在自己嗅 err 文本判原因 = 第二个产地（落库标签与重试决策必须同一个判断）"
+    _tab154 = [
+        (S154.REASON_BROWSER, "未找到可用的无头浏览器（Edge/Chrome）", None),
+        (S154.REASON_BROWSER, "executable not found: /no/such/edge", None),
+        (S154.REASON_TIMEOUT, "timeout", None),
+        (S154.REASON_BUDGET, "throttle: 请求预算耗尽", None),
+        (S154.REASON_BUDGET, "throttle: 任务已请求停止", None),
+        (S154.REASON_EMPTY, "", None),
+        (S154.REASON_EMPTY, "没有产出新的截图文件", {"url": "https://a154.test/", "status": 200}),
+        (S154.REASON_EMPTY, "退出码 2", None),
+        (S154.REASON_REDIRECT, "没有产出新的截图文件",
+         {"url": "https://a154.test/", "status": 301, "redirect_url": "https://a154.test/new"}),
+        (S154.REASON_REDIRECT, "没有产出新的截图文件",
+         {"url": "https://a154.test/", "status": 200, "redirect_url": "https://b154.test/"}),
+        (S154.REASON_DNS, "[33mERROR: dns error: no such host", None),
+        (S154.REASON_TLS, "net::ERR_CERT_AUTHORITY_INVALID ssl handshake failed", None),
+        (S154.REASON_CONNECT, "net::ERR_CONNECTION_REFUSED", None),
+        (S154.REASON_OTHER, "完全想不到的形状", None),
+        (S154.REASON_OTHER, "乱码", {"url": "https://a154.test/", "status": "not-a-number"}),
+    ]
+    for _want154, _err154, _site154 in _tab154:
+        assert S154.classify(_err154, _site154) == _want154, \
+            f"{_err154!r} / {_site154} -> {S154.classify(_err154, _site154)}（应为 {_want154}）"
+    # 判据自证：每个档位都要有夹具命中，否则"某一档永不出现"是空写（§6.1）
+    _hit154 = {w for w, _e, _s in _tab154}
+    assert _hit154 == set(S154.REASONS), \
+        f"分档表没覆盖全部档：缺 {sorted(set(S154.REASONS) - _hit154)}（那一档统计不到＝页面沉默）"
+
+    # 端到端：阶段跑完，标签进库、分布进日志、301 那条按**落地页**重试
+    _lg154 = []
+
+    class _Rec154:
+        def info(self, m, *a): _lg154.append(str(m))
+        def warning(self, m, *a): _lg154.append("W:" + str(m))
+        def error(self, m, *a): _lg154.append("E:" + str(m))
+        def exception(self, m, *a): _lg154.append("X:" + str(m))
+        def debug(self, m, *a): pass
+
+    _st154 = copy.deepcopy(settings)
+    _st154["screenshot"] = dict(_st154.get("screenshot") or {}, enabled=True,
+                                browser=sys.executable, max_sites=10, timeout=5)
+    _tid154 = db.create_task("smoke-8bg", "lab154.test", ["screenshot"], {})
+    _wd154 = Path(tempfile.mkdtemp(prefix="smoke-8bg-")) / "8bg"
+    _wd154.mkdir(parents=True, exist_ok=True)
+    _ctx154 = StageContext(_tid154, "smoke-8bg", parse_lines(["lab154.test"]),
+                           ["screenshot"], {}, _st154, _wd154, _Rec154())
+    _ctx154.results["sites"] = [
+        {"url": "https://to.lab154.test/", "host": "to.lab154.test", "status": 200, "title": "T"},
+        {"url": "https://red.lab154.test/", "host": "red.lab154.test", "status": 301,
+         "title": "R", "redirect_url": "https://red.lab154.test/new"},
+        {"url": "https://ok.lab154.test/", "host": "ok.lab154.test", "status": 200, "title": "O"},
+    ]
+    db.insert_sites(_tid154, _ctx154.results["sites"])
+    _call154 = []
+
+    def _cap154f(url, out, settings=None, timeout=30, throttle=None, want_title=False):
+        _call154.append((url, timeout))
+        if ".ok." in url or url.startswith("https://ok."):
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
+            Path(out).write_bytes(b"\x89PNG fake")
+            return True, "", ""
+        return False, ("timeout" if "to." in url else "没有产出新的截图文件"), ""
+
+    _keep154 = S154.capture
+    try:
+        S154.capture = _cap154f
+        _SS154(_ctx154).run()
+    finally:
+        S154.capture = _keep154
+    _rows154 = {r["url"]: r for r in db.list_sites(_tid154)}
+    assert str(_rows154["https://to.lab154.test/"]["shot_error"] or "").startswith(
+        S154.REASON_TIMEOUT + "｜"), _rows154["https://to.lab154.test/"]["shot_error"]
+    assert str(_rows154["https://red.lab154.test/"]["shot_error"] or "").startswith(
+        S154.REASON_REDIRECT + "｜"), _rows154["https://red.lab154.test/"]["shot_error"]
+    assert not str(_rows154["https://ok.lab154.test/"]["shot_error"] or ""), "成功的行不许留原因"
+    assert (_call154.count(("https://red.lab154.test/new", 5)) == 1
+            and _call154.count(("https://to.lab154.test/", 10)) == 1), \
+        f"重试决策没跟着原因档走（301 换落地页 / 超时翻倍）：{_call154}"
+    assert any("失败原因分布" in x and S154.REASON_TIMEOUT in x for x in _lg154), _lg154[-4:]
+    # §6.1 证伪：把 classify 打成"永远返回其他"，落库标签与分布都必须跟着变红（否则它们没吃 classify）
+    _keep_cls = S154.classify
+    try:
+        S154.classify = lambda err, site=None: S154.REASON_OTHER
+        _tid154b = db.create_task("smoke-8bg-mut", "lab154.test", ["screenshot"], {})
+        _ctx154b = StageContext(_tid154b, "smoke-8bg-mut", parse_lines(["lab154.test"]),
+                                ["screenshot"], {}, _st154, _wd154, _Rec154())
+        _ctx154b.results["sites"] = [
+            {"url": "https://to.lab154.test/", "host": "to.lab154.test", "status": 200, "title": "T"}]
+        db.insert_sites(_tid154b, _ctx154b.results["sites"])
+        _call154.clear()
+        _lg154.clear()
+        S154.capture = _cap154f
+        _SS154(_ctx154b).run()
+    finally:
+        S154.classify = _keep_cls
+        S154.capture = _keep154
+    _rows154b = {r["url"]: r for r in db.list_sites(_tid154b)}
+    assert str(_rows154b["https://to.lab154.test/"]["shot_error"] or "").startswith(
+        S154.REASON_OTHER + "｜"), \
+        f"classify 被换掉而落库标签没变 → 标签不是从 classify 来的：{_rows154b}"
+    print("[8bg] 续154 401 门可勾选 + 撤复查入口 + 截图失败原因分档 ok: "
+          "策略页勾选框在、POST 两个方向都存得进去、页面那句现状现取且跟着配置走｜"
+          "三态各有句子且都指回 _ea154.SET_HINT（补法只有一个产地）｜"
+          "README 不再宣称出厂开 401；/api/rescan 接口保留而详情页零消费方｜"
+          "截图失败九个原因档全覆盖（判据自证）、阶段里不留第二处判断、"
+          "标签真落库 + 分布真打印 + 重试真按档走（301 换落地页、超时翻倍）、"
+          "classify 换成常量后落库标签跟着变红")
+
+    # ---------------- [8bh] 续154：真实 IP 分档单一产地 / 第三方清单收口 / 送去探测默认全任务 ----------------
+    #      用户点单里"判据只能有一份"的那几条：
+    #      ① 真实 IP 分档此前**同时**存在 Python（展示）与 SQL（排序）两份，注释还写着"同源"——
+    #        本轮实测两份并不同源：SQL 那份把**没解析出来**的行排进"非 CDN"档，与真实 IP 并排；
+    #        而 `SELECT DISTINCT … ORDER BY 表达式` 在 SQLite 里连档位本身都算错（ngrok 那行被排到
+    #        multi 之后）。所以现在既钉真值表，也钉**两条路跑同一批数据得到同一个序**。
+    #      ② 第三方/CDN 清单此前只被 JS 挖掘一条路消费，osint（C 段 / FOFA / 证书 / CT）回来的
+    #        `*.cloudfront.net` 照样入拓展域名 —— 钉"入库前挡一道"与那句必须报出的条数。
+    #      ③ 「送去探测」默认送全任务（`scope` 不给就是 all），且有 `limits.ext_probe_max` 收口。
+    from scanner import cdn as _cdn8bh, jsmine as _js8bh, extdom as _xd8bh
+
+    _tab8bh = [
+        ({"ip": "", "cdn": ""}, _cdn8bh.IP_NONE),
+        ({"ip": "1.1.1.1", "cdn": ""}, _cdn8bh.IP_REAL),
+        ({"ip": "1.1.1.1,2.2.2.2", "cdn": ""}, _cdn8bh.IP_MULTI),
+        ({"ip": "1.1.1.1", "cdn": "cloudfront.net"}, _cdn8bh.IP_CDN),
+        ({"ip": "", "cdn": "akamai"}, _cdn8bh.IP_CDN),          # CDN 已知而 IP 空：仍算 CDN 档
+        ({"ip": " 1.1.1.1 ", "cdn": ""}, _cdn8bh.IP_REAL),      # 空格不许改变分档
+    ]
+    for _r8bh, _want8bh in _tab8bh:
+        assert _cdn8bh.ip_kind(_r8bh) == _want8bh, f"{_r8bh} -> {_cdn8bh.ip_kind(_r8bh)}（应 {_want8bh}）"
+    assert _cdn8bh.ip_kind(None) == _cdn8bh.IP_NONE, "坏输入不许抛（展示层一行都不该少）"
+    assert set(_cdn8bh.IP_RANK) == {_cdn8bh.IP_REAL, _cdn8bh.IP_MULTI,
+                                    _cdn8bh.IP_CDN, _cdn8bh.IP_NONE}, "档位表与判据不同源"
+    assert [_cdn8bh.IP_RANK[k] for k in
+             (_cdn8bh.IP_REAL, _cdn8bh.IP_MULTI, _cdn8bh.IP_CDN, _cdn8bh.IP_NONE)] == [0, 1, 2, 3], \
+        "排序方向漂了（用户要的是真实 IP 最上、未解析最下）"
+
+    # Python 与 SQL 两条路必须给同一批行同一个序（这一条就是本轮那个 DISTINCT bug 的钉子）
+    _tid8bh = db.create_task("smoke-8bh", "lab8bh.test", ["subdomain"], {})
+    _rows8bh = [("a.real8bh.test", "js:mine", "1.1.1.1", ""),
+                ("b.multi8bh.test", "js:mine", "2.2.2.2,3.3.3.3", ""),
+                ("c.cdn8bh.test", "js:mine", "4.4.4.4", "cloudfront.net"),
+                ("d.nores8bh.test", "js:mine", "", ""),
+                ("e.real28bh.test", "js:mine", "5.5.5.5", "")]
+    db.insert_subdomains(_tid8bh, [(d, s) for d, s, _i, _c in _rows8bh])
+    for _d, _s, _ip, _cd in _rows8bh:
+        db._exec("UPDATE subdomains SET ip=?, cdn=? WHERE task_id=? AND domain=?",
+                 (_ip, _cd, _tid8bh, _d))
+    _sel8bh = ("SELECT domain, ip, cdn FROM subdomains WHERE task_id=? "
+               f"ORDER BY {_cdn8bh.IP_RANK_SQL}, domain")
+    _sql_order = [r["domain"] for r in db._query(_sel8bh, (_tid8bh,))]
+    _py_order = [r["domain"] for r in sorted(
+        db._query("SELECT domain, ip, cdn FROM subdomains WHERE task_id=?", (_tid8bh,)),
+        key=lambda r: (_cdn8bh.IP_RANK[_cdn8bh.ip_kind(r)], r["domain"]))]
+    assert _sql_order == _py_order == ["a.real8bh.test", "e.real28bh.test", "b.multi8bh.test",
+                                       "c.cdn8bh.test", "d.nores8bh.test"], \
+        f"SQL 与 Python 两份判据给出的序不一致：SQL={_sql_order} PY={_py_order}"
+    # 行形状也得两边通吃：`sqlite3.Row` 没有 `.get`，只按 `.get` 取会把每一行都读成空、
+    # 于是全体静默落进「未解析」档（本轮门禁就是被这条抓红的）。
+    _raw8bh = db._query("SELECT domain, ip, cdn FROM subdomains WHERE task_id=? ORDER BY id",
+                        (_tid8bh,))[0]
+    assert _cdn8bh.ip_kind(_raw8bh) == _cdn8bh.ip_kind(dict(_raw8bh)), \
+        f"dict 与 Row 两种行形状分档不一致：{_cdn8bh.ip_kind(_raw8bh)!r} vs {_cdn8bh.ip_kind(dict(_raw8bh))!r}"
+    assert _cdn8bh.ip_kind(_raw8bh) in _cdn8bh.IP_RANK, "Row 那一路给的必须是档位表里的值"
+    # 旧 SQL 的形状（`cdn='' AND instr(ip,',')=0 THEN 0`）会把未解析排进真实 IP 档 —— 钉它不许回来
+    assert "AND instr(COALESCE(ip,''), ',')=0 THEN 0 WHEN COALESCE(cdn,'')='' THEN 1" \
+        not in (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace"), \
+        "排序键又长回第二处实现（产地只有 scanner/cdn.py::IP_RANK_SQL）"
+    _appsrc8bh = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    # 计数只吃**非注释行**：注释里提到这个名字不算第二个产地（§6.1 推论四那一类，本轮自己
+    # 也被绊红过一次——`gui/app.py` 里 2 处代码 + 1 处注释，按文本数就是 3）。
+    _uses8bh = [x for x in _appsrc8bh.splitlines()
+                if "cdn.IP_RANK_SQL" in x and not x.strip().startswith("#")]
+    assert len(_uses8bh) == 2, \
+        f"排序键的消费方应恰好两处（子域名页排序 + 拓展域名页序），实测 {len(_uses8bh)}"
+    assert "SELECT DISTINCT domain FROM subdomains" not in _appsrc8bh, \
+        "「送去探测」又回到 `SELECT DISTINCT … ORDER BY 表达式` —— SQLite 下那个组合算不出对的档位"
+
+    # ② 第三方清单：判据一份（`_suffix_hit`），且 osint 入库前挡一道
+    _jssrc8bh = (ROOT / "scanner" / "jsmine.py").read_text(encoding="utf-8", errors="replace")
+    assert _jssrc8bh.count('endswith("." + ') == 1, \
+        "后缀匹配规则又出现第二处实现（应统一走 `_suffix_hit`）"
+    assert _js8bh.is_thirdparty("x.ngrok.io") and _js8bh.is_thirdparty("a.workers.dev") \
+        and _js8bh.is_thirdparty("d.datadoghq.com") and _js8bh.is_thirdparty("cdn.edgekey.net"), \
+        "清单里这些形状必须判第三方（续154 新补的隧道 / APM / CDN 档）"
+    assert not _js8bh.is_thirdparty("targ8bh.test") and not _js8bh.is_thirdparty("www.targ8bh.test"), \
+        "目标自身不许被当成第三方噪声"
+    # 资产侧刻意**不认 apex**（`ngrok.io` 本身是 ngrok 公司的站点，收不收归人判）且豁免
+    # `example.*` 那族文档占位域名（JS 里它们是注释，证书/CT 反查里它们是**真注册域名**）。
+    assert not _js8bh.is_thirdparty("ngrok.io") and not _js8bh.is_thirdparty("a.example.com") \
+        and not _js8bh.is_thirdparty("example.com"), \
+        (_js8bh.is_thirdparty("ngrok.io"), _js8bh.is_thirdparty("a.example.com"))
+    # 同一条清单项在 JS 挖掘那条路上**照旧**要拦（那里 `example.com` 就是注释里的占位）
+    assert _js8bh._is_noise("a.example.com", ["targ8bh.test"], []), "豁免只该作用于资产侧"
+    assert not _js8bh.is_thirdparty("nottarg8bh.test"), "后缀匹配必须带点：notX 不算 X 的子域"
+    assert not _js8bh.is_thirdparty("") and not _js8bh.is_thirdparty(None), "空输入不许误判"
+    _dict8bh = (ROOT / "config" / "dicts" / "js_thirdparty.txt").read_bytes()
+    # 按**字节**数行尾：`read_text()` 的通用换行会把 CRLF 直接吞成 LF（§9 那条"read_text 单独
+    # 一步就会洗掉 CRLF"，本轮自己也被这条绊红过一次）。
+    # 这份清单**历史上就有一行是裸 LF**（HEAD 里也是 1 行），所以判"没被洗"不能用"裸 LF 必须为 0"，
+    # 要比的是**追加前后同形**：本轮追加的 53+ 行都沿用了 CRLF，裸 LF 仍是那一行（实测 1）。
+    _cr8bh = _dict8bh.count(b"\r\n")
+    _lf8bh = _dict8bh.count(b"\n")
+    assert _cr8bh >= 360 and _lf8bh - _cr8bh <= 1, \
+        f"追加部分没沿用这份文件的 CRLF：CRLF={_cr8bh} 裸 LF={_lf8bh - _cr8bh}（历史形态就是 1 行裸 LF）"
+    assert _dict8bh.count(b"\r\n") >= 360, f"清单应当是**扩充**过的：{_cr8bh} 行"
+    assert len(_js8bh.thirdparty_suffixes()) > 340, \
+        f"加载出来的条数才是关键（文件在而读不到＝白补）：{len(_js8bh.thirdparty_suffixes())} 条"
+
+    _osint8bh = (ROOT / "scanner" / "stages" / "osint.py").read_text(encoding="utf-8", errors="replace")
+    assert "jsmine.is_thirdparty(" in _osint8bh and "第三方/CDN 噪声" in _osint8bh, \
+        "osint 产出必须在**入库前**过第三方清单，且挡掉的条数必须报出来（静默少一批＝页面看着像扫过了）"
+    assert "extdom.is_owned(" in _osint8bh, "归属本项目的域名必须优先放行（与 jsmine 同口径）"
+    # 行为面：拿真清单跑一遍"该挡 / 不该挡"的组合（判据自证，§6.1）
+    _bases8bh = _xd8bh.task_bases(_tid8bh, "lab8bh.test")
+    def _kept8bh(d):
+        return not (not _xd8bh.is_owned(d, _bases8bh) and _js8bh.is_thirdparty(d))
+    assert _kept8bh("sub.lab8bh.test") and _kept8bh("cdn.lab8bh.test"), "自家子域必须留"
+    assert not _kept8bh("x.cloudfront.net") and not _kept8bh("app.herokuapp.com"), \
+        "第三方名字必须被挡在拓展域名之外"
+
+    # ③ 送去探测：页面上有范围选择、默认全任务、上限键在 DEFAULTS 与 POST 映射里都活着
+    _ext_html8bh = c.get("/extdomains").get_data(as_text=True)
+    assert 'name="scope"' in _ext_html8bh, "拓展域名页缺「探测范围」选择"
+    assert "<option value=\"all\"" in _ext_html8bh and "全任务" in _ext_html8bh, \
+        "默认档必须是全任务（用户点单）"
+    assert 'name="scope"' in c.get(f"/tasks/{_tid8bh}").get_data(as_text=True), \
+        "任务详情页的拓展域名页签是同一个动作的第二个入口，选择栏不许只在一边有"
+    assert load_settings()["limits"]["ext_probe_max"] == 100, \
+        "全任务模式要有默认刹车（0 才是「不限」那一档）"
+    assert '"ext_probe_max": int(_l0.get("ext_probe_max", 100) or 0)' in _appsrc8bh, \
+        "POST 映射必须把 ext_probe_max 原样带回（save_settings 是整份重写，漏带＝把键删掉）"
+    assert 'or "all").strip().lower() == "picked"' in _appsrc8bh, \
+        "scope 不给值时必须落回**全任务**，而不是只探勾选"
+
+    print("[8bh] 续154 真实 IP 产地 + 第三方收口 + 全任务探测 ok: "
+          "分档真值表（含 CDN 已知而 IP 空、带空格两种边界）+ 档位序 real<multi<cdn<未解析｜"
+          "SQL 与 Python 两条路对同一批行给出同一个序（本轮那个 DISTINCT 误判就是这条抓出来的）、"
+          "旧排序形状与第二处实现都不许回来｜第三方清单一条匹配规则（`_suffix_hit` 全仓唯一）、"
+          "340+ 条且行尾仍是纯 CRLF、自家域名优先放行、osint 入库前挡且报条数｜"
+          "「送去探测」两个入口都有范围选择、默认全任务、ext_probe_max 在 DEFAULTS 与 POST 映射里都在")
     # ---------------- [8au] 续146：站点默认只看 200/404 / 批量打标只读本面板 / 判据收敛 / 入口搬进 cli ----------------
     #      用户点单四件事：① 站点默认只看 200/404 + 「显示全部」开关（跨任务 /sites 与任务详情
     #      站点页签**同一口径**）；② 「批量打标」读整页勾选框，会串到站点行；③ "目标→注册域"

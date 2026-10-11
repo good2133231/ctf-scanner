@@ -157,6 +157,42 @@ def match(cname_chain, settings=None, ips=None):
     return ip_match(ips, settings)
 
 
+# ---- 「真实 IP」分档（续154，用户点单："一个域名解析出多个 IP 多半不是真实 IP；
+#      真实 IP 最上方、非 CDN 中间、CDN 最下面"）----
+# **单一产地**：`ip_kind()`（Python，给展示层与端口扫描用）与 `IP_RANK_SQL`（同一条序，
+# 给分页排序用）必须逐字同口径，`report.py::_sub_note` 也只调这里。
+IP_REAL = "real"        # 单 IP 且非 CDN：最可能是源站
+IP_MULTI = "multi"      # 多个 A 记录：多半是负载均衡 / 边缘，疑非真实 IP
+IP_CDN = "cdn"          # 命中 CDN 厂商：解析到的是边缘节点
+IP_NONE = ""            # 没解析出来
+IP_RANK = {IP_REAL: 0, IP_MULTI: 1, IP_CDN: 2, IP_NONE: 3}
+
+# 与 `ip_kind()` 同口径的 SQL 排序键（真实 IP 最上、未解析最下）。
+IP_RANK_SQL = ("CASE WHEN COALESCE(cdn,'')<>'' THEN 2"
+               " WHEN COALESCE(ip,'')='' THEN 3"
+               " WHEN instr(COALESCE(ip,''),',')=0 THEN 0"
+               " ELSE 1 END")
+
+
+def ip_kind(row):
+    """一行资产（`ip` / `cdn` 两列）→ `real` / `multi` / `cdn` / 空串（未解析）。
+
+    行可能是 dict，也可能是 `sqlite3.Row`（`hasattr(row, "get")` 对后者为假 ⇒ 只按 `get`
+    取就会把每一行都读成空、静默全落"未解析"档，本轮门禁就是这么红的）。
+    """
+    def _f(key):
+        try:
+            return str(row[key] or "").strip()
+        except (KeyError, IndexError, TypeError):
+            return ""
+    ip, cdn = _f("ip"), _f("cdn")
+    if cdn:
+        return IP_CDN
+    if not ip:
+        return IP_NONE
+    return IP_MULTI if "," in ip else IP_REAL
+
+
 def dict_path():
     """当前数据文件的绝对路径（供日志/排错展示）。"""
     return BASE_DIR / DEFAULTS["dicts"]["cdn_cname"]

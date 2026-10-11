@@ -141,7 +141,13 @@ class PortscanStage(Stage):
                 ip_text, cdn_label = net.get(host, ("", ""))
                 if ip_text and not cdn_label:
                     ips = [x.strip() for x in ip_text.split(",") if x.strip()][:2]
-                    ctx.logger.info(f"[portscan] {host} 使用已解析的真实 IP {','.join(ips)}")
+                    # 续154：多 A 记录不再自称"真实 IP"（用户点单原话："一个域名几个解析 IP
+                    # 多半也不是真实 IP"）。分档判据与资产页同一个产地 `cdn.ip_kind`。
+                    _real = cdn.ip_kind({"ip": ip_text, "cdn": ""}) == cdn.IP_REAL
+                    ctx.logger.info(f"[portscan] {host} 使用已解析的"
+                                    + ("真实 IP " if _real else
+                                       f"{len(ips)} 个 A 记录（多解析，疑负载均衡/边缘）")
+                                    + f"{','.join(ips)}")
                 elif cdn_label:
                     ctx.logger.info(f"[portscan] {host} 走 CDN（{cdn_label}），"
                                     f"跳过端口扫描（扫到的不是源站）")

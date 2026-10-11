@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from . import db
+from . import cdn as cdn_mod, db
 from .utils import run_cmd, site_redirect, to_unicode
 
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -181,22 +181,18 @@ def _site_cells(s):
     return rd["status"], ((rd["title"] or "-") + jump)
 
 def _sub_note(r):
-    """子域名行的「归属」标注（续150 真实IP 判定）：真实IP / 多IP / CDN / 未解析。
-
-    判据与 GUI 子域名页 `_sub_rows()` 的 `ip_kind` **同一口径**：CDN 优先（有 CNAME 厂商即
-    判 CDN）、其次看解析 IP 个数（含逗号=多IP）、再退到单 IP（真实IP）、最后空=未解析。
-    报告与页面各拼一遍会互相"纠错"，所以这里与页面共用一个判定思路。
-    """
+    """子域名行的「归属」标注：真实IP / 多IP / CDN / 未解析（分档判据在 `cdn.ip_kind`）。"""
     try:
         ip = str(r["ip"] or "")
-        cdn = str(r["cdn"] or "")
+        cdn_lab = str(r["cdn"] or "")
     except (KeyError, IndexError, TypeError):
         return ""
-    if cdn:
-        return f"[CDN {cdn}]"
-    if not ip:
+    kind = cdn_mod.ip_kind({"ip": ip, "cdn": cdn_lab})
+    if kind == cdn_mod.IP_CDN:
+        return f"[CDN {cdn_lab}]"
+    if kind == cdn_mod.IP_NONE:
         return "[未解析]"
-    if "," in ip:
+    if kind == cdn_mod.IP_MULTI:
         return f"[多IP {ip}]"
     return f"[真实IP {ip}]"
 

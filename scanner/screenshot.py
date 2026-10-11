@@ -122,6 +122,60 @@ def available(settings=None):
     return bool(browser_path(settings))
 
 
+# ---- 截图失败原因分档（续154：用户点单「有些截图经常截不到…失败要标注原因：301 跳转 / 超时 /
+#      其他，方便排查」）。常量与 `classify()` 是**唯一产地**：阶段里的重试决策与落库标签都读这里
+#      —— 两处各嗅一遍 `"timeout" in err.lower()` 迟早漂（§5.14）。
+REASON_BROWSER = "无浏览器"
+REASON_TIMEOUT = "超时"
+REASON_REDIRECT = "跳转未落地"
+REASON_DNS = "DNS 解析失败"
+REASON_CONNECT = "连不上"
+REASON_TLS = "HTTPS 握手失败"
+REASON_EMPTY = "没产出图片"
+REASON_BUDGET = "预算或已停止"
+REASON_OTHER = "其他"
+REASONS = (REASON_BROWSER, REASON_TIMEOUT, REASON_REDIRECT, REASON_DNS, REASON_CONNECT,
+           REASON_TLS, REASON_EMPTY, REASON_BUDGET, REASON_OTHER)
+
+_DNS_KEYS = ("name or service not known", "name not known", "getaddrinfo", "nodename",
+             "no such name", "temporary failure in name resolution", "dns")
+_CONNECT_KEYS = ("refused", "unreachable", "err_network", "err_connection", "connection",
+                 "reset", "eof occurred", "err_socket")
+_TLS_KEYS = ("ssl", "certificate", "handshake", "err_cert", "err_https")
+
+
+def classify(err, site=None):
+    """`(失败文本, 站点行) -> 原因档`；认不出来落「其他」，**绝不落空**（空档统计不到＝页面一片沉默）。"""
+    s = site or {}
+    txt = str(err or "")
+    low = txt.lower()
+    if "browser" in low or "浏览器" in txt or "executable not found" in low:
+        return REASON_BROWSER
+    if low.startswith("throttle:") or "预算耗尽" in txt or "请求停止" in txt:
+        return REASON_BUDGET
+    if not txt.strip():
+        return REASON_EMPTY
+    if "timeout" in low or "超时" in txt:
+        return REASON_TIMEOUT
+    _red = str(s.get("redirect_url") or "").strip()
+    if _red and _red.rstrip("/") != str(s.get("url") or "").rstrip("/"):
+        return REASON_REDIRECT
+    try:
+        if int(s.get("status") or 0) in (301, 302, 303, 307, 308):
+            return REASON_REDIRECT
+    except (TypeError, ValueError):
+        pass
+    if any(k in low for k in _DNS_KEYS):
+        return REASON_DNS
+    if any(k in low for k in _TLS_KEYS):
+        return REASON_TLS
+    if any(k in low for k in _CONNECT_KEYS):
+        return REASON_CONNECT
+    if "没有产出" in txt or low.startswith("退出码") or "exit code" in low:
+        return REASON_EMPTY
+    return REASON_OTHER
+
+
 def _abs_out(p):
     """产物路径**绝对化**：浏览器把 `--screenshot=<相对路径>` 写到**它自己的 CWD**，
     于是我们这边的 out_path 永远不存在 → 静默 0 字节（续64 QA 实测踩到）。

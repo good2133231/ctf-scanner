@@ -694,6 +694,12 @@ ctf-scanner/
     同一句说两遍还带两种措辞）。判据不止查这一次字符，而是查**结构性事实**：全仓源码里
     "凭据保持锁定"字样只允许出现在 `scanner/keystore.py`，三个入口必须出现 `lock_notice(` ——
     新增入口手拼一遍就红。给用户看的成句提示（降级说明、预算说明、级别说明）都该按这个模子做。
+   **续154 再添四个产地**：真实 IP 分档 = `cdn.ip_kind()` + `cdn.IP_RANK_SQL`（页面显示、两个
+   排序、报告标注、端口扫描四处都读它 —— 此前 Python 与 SQL 各一份，实测两份**不同源**：
+   SQL 那份把未解析排进"非 CDN"档）；截图失败原因 = `screenshot.classify()` + `REASON_*`
+   （重试决策与落库标签同一个判断）；第三方清单 = `jsmine.thirdparty_suffixes()`，资产侧判定 =
+   `jsmine.is_thirdparty()`（与 JS 侧 `_is_noise` 的分工写在 docstring 里：不认 apex、豁免
+   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。
 
 15. **指纹前置过滤只许做减法，不许改变判定结果**（续122）：`_lit_filter` 给每条正则算"必现字面量"，
     跳过 `re.search` 的前提是**该字面量在任何一次命中里都必然出现**。四个放弃过滤的条件（宁可不提速，
@@ -1323,6 +1329,15 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
 推广口径：**凡是"页面按 X 筛，然后数 Y 次"的断言，都要先证明 X 生效了**，否则数到的每一处
 都可能来自别人的数据，绿得毫无意义（§6.1 那种"空写"的反面：**满写**——数到一堆但都不是被测对象）。
 
+14. **`SELECT DISTINCT … ORDER BY <表达式>` 在 SQLite 里算不出那个表达式**（续154，2026-10-11）。
+    现象：拓展域名采集用 `SELECT DISTINCT domain FROM subdomains ORDER BY <真实 IP 档位 CASE>`，
+    档位本该是 `real=0 / multi=1 / cdn=2 / 未解析=3`，实测 `app.ngrok.io`（单 IP、非 CDN）被排到
+    multi 档之后。SQLite 对 DISTINCT 的 ORDER BY 表达式求值用的是"所选那一行"，与逐行分档不一致。
+    为什么看着像代码坏了：判据本身没错，`cdn.ip_kind` 也没错，只有那条 SQL 的形状错 —— 而它的输出
+    是"顺序有点怪"，最容易被人当成"数据本来就这样"。**处理**：需要按表达式排序去重时在 Python 里
+    按产地判据算档位再排序（本轮就是这么改的），或按窗口函数（`page_assets(dedupe_domain=True)`）
+    那一套走。**教训**：同一判据在 SQL 与 Python 各写一份，连"同不同源"都要靠实测，能不收进 SQL
+    就别收（§5.14）。
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
 - **缺中文字体＝截图取证与中文报告静默作废（续103 本机实测）**：无头浏览器缺 CJK 字体时**不报错**、
@@ -2665,6 +2680,10 @@ EOL（新增行取该区段的主导形态），所以能改"CRLF 与 LF 在同�
    `python -c "b=open('AGENTS.md','rb').read(); print(sum(1 for i,c in enumerate(b) if c==13 and (i==len(b)-1 or b[i+1]!=10)))"`
    本轮实测：`AGENTS.md` 曾有 1 处（已修），`gui/app.py` / `tests/smoke.py` / `scanner/owasp/checks.py` /
    三个模板都是 0 处 —— 所以之前那几批按行号打的补丁落点没错，但这个结论是**这次才第一次查**。
+- 一次要在**同一个文件**里改四处以上时，用 `logs/_apatch.py`（内容锚点版）而不是 `_lpatch.py`：
+  锚点是"整段原文"，要求在文件里**恰好命中一次**（0 命中会给出半段命中的起点，多命中直接拒绝），
+  所以不必逐批重取行号；EOL 归属与 numstat 复核规则与 `_lpatch.py` 完全相同。行号版留给
+  "锚点本身正在被改、无法用原文定位"的场合。
    ⚠ **重写一个行区间＝逐字重打一遍，只许改自己真要改的那一行（续148 实测踩中）**：给
    `[probe]` 那句日志换文案时，把同一区间里的 `elif any(s.get("source") == "httpx" for s in _reg):`
    凭记忆写成 `elif not got_texts:` ⇒ 行尾形态全对（**两式 numstat 照样相等**），语义却坏了，

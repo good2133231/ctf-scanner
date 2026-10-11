@@ -280,7 +280,7 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 - **`config/dicts/`**：子域名字典、`dirs_shallow.txt`（浅扫精选路径 ~150 条）、`dirs_big.txt`（深扫大字典 11882 条）、`cdn_cname.txt`（CDN 厂商后缀）、`cdn_ips.txt`（CDN 厂商任播 IP 段）、`sensitive.txt`（A01 敏感文件检查的数据源：`路径 | 关键字 | 级别 | 说明`）。
 - **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，默认必须通过 release 自带的 SHA256 校验和。
 
-> 部署 checklist：① 复制 `config/keys.yaml.example` → `config/keys.yaml` 并填 key（仅当要用 FOFA 等外部情报）；② 按需改 `config/settings.yaml`（或 GUI 策略配置页，**仅管理员可改**）；③ `./install.sh`（Windows 或想看清每一步：`python3 run_bootstrap.py --install`）；④ 跑 `python cli/client.py --check` 自检；⑤ 设 401 边缘门口令 `python -m scanner.edgeauth --set`（出厂 `gui.edge_auth.enabled: true` 而口令文件不入库 ⇒ 不设就是全站 401；**没有终端**时走 `CTFSCANNER_EDGE_PASSWORD='<口令>' python -m scanner.edgeauth --set`，续146-附2）；⑥ 起控制台，按启动横幅建**第一个管理员**（非交互环境：`python cli/run_users.py --create-admin`），再登进「账号管理」建子用户账号。
+> 部署 checklist：① 复制 `config/keys.yaml.example` → `config/keys.yaml` 并填 key（仅当要用 FOFA 等外部情报）；② 按需改 `config/settings.yaml`（或 GUI 策略配置页，**仅管理员可改**）；③ `./install.sh`（Windows 或想看清每一步：`python3 run_bootstrap.py --install`）；④ 跑 `python cli/client.py --check` 自检；⑤ 401 边缘门**出厂是关的**（续151 起 `gui.edge_auth.enabled: false`，新 clone 打开就到登录页；续154 起策略配置页「控制台」段有勾选框可开）；要开就勾上它**并先配口令** `python -m scanner.edgeauth --set`（口令文件不入库，门开着而口令没配 ⇒ 全站 401 fail-closed；**没有终端**时走 `CTFSCANNER_EDGE_PASSWORD='<口令>' python -m scanner.edgeauth --set`，续146-附2）；⑥ 起控制台，按启动横幅建**第一个管理员**（非交互环境：`python cli/run_users.py --create-admin`），再登进「账号管理」建子用户账号。
 
 ### 部署到服务器（给队友用 → 必须走 HTTPS）
 

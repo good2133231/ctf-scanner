@@ -39,9 +39,10 @@ docker compose -f docker_todo/docker-compose.yml exec ctfscanner python cli/run_
 
 ## 1b. 401 边缘认证门与容器（续135 补，这条最容易咬人）
 
-`gui.edge_auth.enabled: true` 时，控制台在任何路由之前先要一个 Basic 口令（用户名固定 `edge`）。
-凭据文件 `config/edge_auth.yaml` 在 `.gitignore` 里 —— **新克隆的容器里没有它**，于是 `/login`
-一律 401。两处已按这个事实改过：
+这道门**出厂是关的**（续151 起 `gui.edge_auth.enabled: false`；续154 起策略配置页「控制台」段
+有勾选框可开）。一旦你把它打开：`gui.edge_auth.enabled: true` 时控制台在任何路由之前先要一个 Basic
+口令（用户名固定 `edge`），而凭据文件 `config/edge_auth.yaml` 在 `.gitignore` 里 —— **门开着而容器里
+没有那个文件**，于是 `/login` 一律 401（fail-closed，有意的）。两处已按这个事实改过：
 
 - 健康检查认 `200 或 401`（旧写法只认 200 → 容器被判 unhealthy，配上 `restart: unless-stopped`
   就是"一直重启、看起来永远起不来"）；

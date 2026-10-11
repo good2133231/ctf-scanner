@@ -86,6 +86,44 @@ def _noise_set():
     return _noise_cache
 
 
+def thirdparty_suffixes():
+    """公开入口：第三方 / CDN / SaaS 后缀清单（**就是** JS 挖掘在用那份，别处不必再读文件）。"""
+    return _noise_set()
+
+
+def _suffix_hit(host, suf):
+    """`host` 等于 `suf` 或落在它下面。点号是必须的：`nottarg1.pro` 不算 `targ1.pro` 的子域。"""
+    return bool(suf) and (host == suf or _is_under(host, suf))
+
+
+def _is_under(host, suf):
+    """`host` 是否**落在** `suf` 下面（真子域）。这条点号规则全仓只有这一处实现。"""
+    return bool(suf) and host.endswith("." + suf)
+
+
+# 文档占位域名：URLFinder 那份清单把它们当噪声带进来了（JS 里 `example.com` 确实几乎
+# 只会出现在注释和示例里），但它们本身是**真实可注册的站点**，在"拓展域名入库"这条路上
+# 当第三方挡掉就是丢资产。JS 那条路照旧拦（`_is_noise` 不吃这个豁免），只豁免资产侧。
+PLACEHOLDER_DOMAINS = frozenset({
+    "example.com", "example.org", "example.net", "example.edu", "example.gov",
+    "example.mil", "example.test", "example.invalid", "example.local",
+})
+
+
+def is_thirdparty(host):
+    """资产侧的第三方判定：域名是不是落在 CDN / SaaS / 隧道 / 统计那些后缀**下面**。
+
+    与 `_is_noise()` 的三点分工：① 不看 protect、也不看用户黑名单（调用方自己决定"自家
+    优先放行"，osint 的产出里本来就含目标自身子域）；② **不认 apex 自身**（`ngrok.io`
+    本身是 ngrok 公司的站点，收不收归人判断，`x.ngrok.io` 才是别人的基础设施）；
+    ③ 豁免 `PLACEHOLDER_DOMAINS`（理由见那里）。丢资产比留一条噪声贵。
+    """
+    h = str(host or "").lower().strip(".")
+    if not h:
+        return False
+    return any(_is_under(h, s) for s in _noise_set() - PLACEHOLDER_DOMAINS)
+
+
 # 公共后缀清单（PSL）同样数据驱动：读 `config/dicts/tlds.txt`（由 `tools/import_tlds.py`
 # 从 tldextract 内置快照生成）。用于把"末位不是合法公共后缀"的串挡掉 —— 否则
 # `wallet.filter.withdraw` / `react.transitional.element` / `react.client.reference` /
@@ -269,7 +307,7 @@ def _is_self_host(host, protect):
     host = (host or "").lower().strip(".")
     if not host:
         return False
-    return any(p and (host == p or host.endswith("." + p)) for p in protect)
+    return any(_suffix_hit(host, p) for p in protect)
 
 
 def _is_noise(host, protect, blacklist):
@@ -280,13 +318,12 @@ def _is_noise(host, protect, blacklist):
     if _is_self_host(host, protect):
         return False
     for suf in blacklist:
-        suf = str(suf or "").lower().strip(".")
-        if suf and (host == suf or host.endswith("." + suf)):
+        if _suffix_hit(host, str(suf or "").lower().strip(".")):
             return True
     # 走 `_noise_set()`（= 内置清单 ∪ `config/dicts/js_thirdparty.txt` 的 267 条）。
     # 此前这里直接遍历内置 `_ALL_NOISE`，导致那个"参考 URLFinder 整理"的名单文件**加载了却没用**。
     for suf in _noise_set():
-        if host == suf or host.endswith("." + suf):
+        if _suffix_hit(host, suf):
             return True
     return False
 

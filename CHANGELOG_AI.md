@@ -3,6 +3,110 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续154 主理人点单 12 条的第一批：401 可在策略页勾选 / 截图失败分档 / 撤复查入口 / 真实 IP 分档收口 / 第三方清单收口 / 送去探测默认全任务
+
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）。主理人一次点单 12 条并加一句「并且校验这些任务之前
+做完了吗」。**先逐条核对**（结论写进 `todo.txt` 续154 那节）：已做＝FOFA 启用、拓展扫描折叠进父任务
+且层数 1–10、站点同标题/同长度归组折叠（含跳转后）；半做＝横幅与 401、真实 IP 标签与排序、第三方
+清单、JS 凭据去重、复查类入口、代码搜索；未做＝截图失败分类、技术栈驱动的检查/POC 过滤与可见性。
+
+本轮做完 5 条里"能收口成判据"的部分。仍在独立工作树 `/opt/tools/ctf/wt153-ctf-scanner`
+（分支 `wt153-banner`）：共享工作区那份 `tests/smoke.py` 仍是别的会话未提交的坏文件（少 27 个回归组、
+语法不过），本轮没碰它。
+
+### ① 401 边缘门：开关上了策略页（#1 的剩下那一半）
+
+`DEFAULTS` 与 `config/settings.yaml` 从续151 起就是 `false`，但**页面上开不了** —— "可以让我在配置
+里面选择要不要开启"其实没满足。补三处：`settings.html`「控制台」段加 `name="edge_auth_enabled"`
+勾选框 + 一句现状；POST 映射从"原样带回"改成 `{**(_g0.get("edge_auth") or {}), "enabled": 表单}`
+（仍与整段合并，别的键不许被整份重写抹掉）；新增 `gui/app.py::_edge_note(settings)`，三态各一句
+（开+有口令 / 开而没口令 / 没开），**现取**配置与口令文件在不在，补法那句仍引用 `edgeauth.SET_HINT`。
+`_deploy_hints()` 非回环分支补一句「门没开 → 只剩后台账号这一道门」；门**开着**那档刻意不在这里说
+（成句产地是 `serve()` 里 `edgeauth.wizard()` 的三态分支，`[8ai]⑩` 有反证钉着不许两个产地）。
+实测四种形状：回环+关＝安静；回环+开＝只有向导那句；非回环+开＝`_deploy_hints` 不提门；
+非回环+关＝多一行警告。
+
+顺带修掉两处 §5.19 文档漂移（都还在宣称出厂开 401）：`README.md` 部署 checklist 第⑤条、
+`config/settings.yaml` 顶部 ⚠ 块的"两条后果"（原文写"保持现状 ⇒ 新 clone 全站 401"、"退回 DEFAULTS
+＝ 门开着没口令"，两处与续151 之后的实际值相反）；`docs/docker.md` 第 1b 节同样按"出厂就 401"在写，
+一并改成"出厂关、开了而没口令才 401"。
+
+### ② 截图失败原因分档（#4）
+
+新增**单一产地** `scanner/screenshot.py::classify(err, site)` + 九个 `REASON_*`（无浏览器 / 超时 /
+跳转未落地 / DNS 解析失败 / 连不上 / HTTPS 握手失败 / 没产出图片 / 预算或已停止 / 其他）。
+`stages/screenshot.py` 的**重试决策**改读它（原先自己嗅 `"browser" in _low`、`"timeout" in _low`，
+与落库标签两处各判一遍＝§5.14 的第二个产地）；落库写成 `档｜原文`；完成行补「失败原因分布：…」。
+实测 15 条夹具（`timeout` / `executable not found` / `throttle:` / 301 站点行 / `ERR_CERT_*` /
+空文本 / `status="not-a-number"` 等边界）0 误判；端到端跑一次阶段：301 那条按落地页重截、
+超时那条超时翻倍、标签真进 `sites.shot_error`、分布真打印。
+
+### ③ 撤掉复查/追加/复测入口（#8）
+
+主理人判定"暂时没什么用"。独立漏洞页三个批量按钮续150 已撤；本轮撤任务详情页的三个控件
+（复查 / 追加到本任务 / 复测模式）与只为它们存在的勾选列（表头 `data-pick-all` + 行内 `pick-row`，
+`colspan` 7→6）。`/api/rescan` **路由本体与复测数据都保留**，后端零改动。代价是回头同步 4 处旧断言：
+`[5p]` 从"详情页必须有 /api/rescan"翻成"必须没有"、`[7o]⑥` 的表单嵌套判据改成"GET 表单在下一个
+表单开始前闭合"、`[8at]①` 的计数 1→0 与详情页 POST 表单 2→1、`[8at]` 的 print 文案。
+
+### ④ 真实 IP 分档收口成一份（#2 前两半）—— 顺带修掉两个真缺陷
+
+分档判据此前有两份：Python（`gui/app.py` 展示）与一条 SQL `CASE`（同页排序），注释还写着"同源"。
+实测**两份不同源**：
+- 那条 SQL 把 `ip=''`（根本没解析出来）的行归进"非 CDN"档 ⇒ 未解析与真实 IP 并排显示；
+- 采集侧用了 `SELECT DISTINCT … ORDER BY <表达式>`，SQLite 在这个组合下**算不出那个表达式**
+  （实测 `app.ngrok.io` 被排到 multi 档之后）。
+
+新增 `scanner/cdn.py::IP_REAL/IP_MULTI/IP_CDN/IP_NONE` + `IP_RANK` + `IP_RANK_SQL` + `ip_kind(row)`
+（行形状 dict 与 `sqlite3.Row` 都吃 —— 只按 `.get` 取会把每行读成空、全体静默落"未解析"档，
+本轮门禁就是被这条抓红的）。五个消费方改读它：页面显示、`/subdomains` 排序、拓展域名页序
+（同一来源内按档位）、`report.py::_sub_note`、`portscan` 那句"使用已解析的真实 IP"（多 A 记录不再
+自称真实 IP）。采集侧改在 Python 里按产地排序去重。`[8bh]` 钉真值表、钉"同一批行 SQL 与 Python
+给出同一个序"、钉 dict/Row 一致、钉旧 SQL 形状不许回来、钉非注释行里 `cdn.IP_RANK_SQL` 恰好两处引用。
+
+### ⑤ 第三方清单收口 + 送去探测默认全任务（#5）
+
+`config/dicts/js_thirdparty.txt` 此前**只被 JS 挖掘一条路消费**：osint（C 段 / FOFA / 证书 / CT）
+反查回来的 `*.cloudfront.net`、`*.workers.dev` 照样进「拓展域名」，那一页一半是别人的资产。
+
+- `scanner/jsmine.py` 加公开 `thirdparty_suffixes()` / `is_thirdparty(host)`，点号后缀规则收成一处
+  `_is_under()`（`_suffix_hit` 与 `is_thirdparty` 都调它）。
+- 资产侧两条**刻意与 JS 侧不同**并写进 docstring：不认 apex 自身（`ngrok.io` 本身是 ngrok 的站点，
+  收不收归人判；`x.ngrok.io` 才是别人的基础设施）、豁免 `PLACEHOLDER_DOMAINS`（`example.*` 那族在
+  JS 里是注释占位、在证书/CT 反查里却是**真注册域名** —— `[5y]` 的 osint 接线断言正是靠它）。
+  JS 那条路（`_is_noise`）行为一字未变。
+- `stages/osint.py` 在**入库前**挡一道（`extdom.is_owned` 优先放行自家域名），并把挡掉的条数打进日志
+  （静默少一批＝页面看着像"扫过了、没有"）。
+- 清单 306 → 359 条（补 53、去重跳过 17），按主理人给的形状分五档：隧道/预览环境、APM 与错误上报、
+  SaaS 挂件、三方回调、公共 CDN 与字体源。追加部分沿用该文件原有的 CRLF（该文件历史上就有 1 行裸 LF）。
+- 「送去探测」默认改成**全任务**（`scope` 不给就是 all），两个入口都加了范围选择栏；新增
+  `limits.ext_probe_max=100`（0=不限）收口并在 POST 映射里"原样带回"。语义变了所以回头改 `[5t]`：
+  旧"空勾选不建任务"现在判的是"任务里没有拓展域名才不建"，并补一条显式 `scope=picked` 的对照。
+
+### ⑥ 回归与门禁
+
+新增 `[8bg]`（401 可勾选 + 撤复查入口 + 截图分档）与 `[8bh]`（真实 IP 产地 + 第三方收口 + 全任务探测）。
+门禁连跑 **13 轮**（`logs/_gate154a`～`logs/_gate154m`）：前 11 轮每轮都红，且**全部红在新判据或
+被我改动语义的旧判据上**（`[7o]⑥` 表单计数、`[8bg]` 被 Jinja 转义的 `<口令>`、`[5t]` 的 targets 从
+"勾一个"变"全任务"、同组 `aa-title.test` 刚被解析成 nxdomain 本就不该送、`[5y]` osint 的
+`example.com`、`[8i]⑥` 未解析换档后落到末页、`[8bg]` 三态断言吃的是门禁全局桩、`[8bh]` 按文本数
+`cdn.IP_RANK_SQL` 被自己的注释绊红、`[8bh]` 用 `read_text()` 数 CRLF 自己就是那条 §9 毛病、
+最后一轮是**把记忆（CHANGELOG / todo / AGENTS）与 `docs/docker.md` 写进去之后的复验**：
+**`SMOKE PASS`、AssertionError 0、组打印 214 行**（续153 同口径实测 212 行，差 2 = 新增两组）。
+`git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 对本轮 16 个被跟踪文件两两相等。
+
+工具增量：`logs/_apatch.py` —— **内容锚点**版补丁。`_lpatch.py` 按行号打补丁时同一文件一次改四处
+要逐批重取行号，每次重取都是一次打偏机会；`_apatch` 要求整段原文在文件里**恰好命中一次**
+（0 命中给出"半段起点"、多命中直接拒绝），EOL 归属与 numstat 复核规则与 `_lpatch` 相同。
+
+### ⑦ 本轮**没有**做的（别让它看着像做完了）
+
+#2 第三半（真实 IP 反查域名并按注册域回写）；#7（JS 凭据按 (站点,值) 去重、js-secret 没走
+`drop_existing`、`flags` 表无 line/offset、更多关键字、「漏洞复合」换可视化）；#10（内置 POC 的语言
+判据 `vulnscan._lang_conflict` 早在但零断言且跳过数只在 DEBUG，OWASP 检查与 afrog 两侧还没吃技术栈）；
+#11（multileak 只有 grepapp 一个平台、相关性判定不读 `weak_downgrade`/`relevance_whitelist`）；
+#12 的 MITM 流量录制与 AI/Agent 编排（新子系统，不是补漏量级）。逐条已写进 `todo.txt` 下一轮。
+
 ## 续153 启动横幅那条「控制台地址」改成能点开的那个（「外网地址」不再单独一行）
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。主理人贴出横幅原话：

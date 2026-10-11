@@ -51,7 +51,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scanner import (admin_setup, audit, auth as taskauth, blacklist, captcha, cdn,
                      certs as certs_mod, db, devfixture, devmode, dnsq,
                      # 这三家反查与 GitHub 检索的**取键函数**归它们自己所有，面板只调用不复制路径
-                     extdom, fofa, github_leak, login_guard, migrate, nodes, queue, quake,
+                     extdom, fofa, github_leak, jsmine, login_guard, migrate, nodes,
+                     queue, quake,
                      screenshot,
                      shodan, toolmgr, users, packetcodec)
 from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
@@ -590,6 +591,20 @@ def _asset_tree(task_id):
             "ports": ports_by_host.get(d.lower()) or ports_by_ip.get(ip) or [],
         })
     return [{"root": k, "subs": v} for k, v in sorted(roots.items())]
+
+
+def _edge_note(settings):
+    """策略页那一句 401 门现状：从**配置 + 口令文件在不在**现取（§5.19，写死就成了假话）。"""
+    on = edgeauth.enabled(settings)
+    has = bool(edgeauth.read_password())
+    if on and has:
+        return (f"401 边缘认证门已启用且口令已配置（Basic 用户名 {edgeauth.EDGE_USER}）"
+                "—— 没有凭据的请求进不到任何路由。")
+    if on:
+        return ("[!] 401 边缘认证门已启用但口令没配 → 保存后全站 401、谁都进不来"
+                f"（fail-closed 是有意的）。补法：{edgeauth.SET_HINT}")
+    return ("401 边缘认证门当前没开，能连到端口的人只剩后台账号这一道门；"
+            f"勾选后需配好口令才生效（{edgeauth.SET_HINT}）。")
 
 
 def _shape_note(cfg):
@@ -2375,18 +2390,9 @@ def create_app():
             for r in out:
                 extra = sorted({s for s in others.get(r["domain"], []) if s != r["source"]})
                 r["also_from"] = " / ".join(source_label(s) for s in extra)
-                # 续150（用户点单）：真实 IP 标签。真实=非 CDN 且只有 1 个 A 记录；
-                # 多 IP 多半是负载均衡/边缘节点（"一个域名几个解析 IP 多半也不是真实 IP"）。
-                _ip = str(r.get("ip") or "").strip()
-                _cdn = str(r.get("cdn") or "").strip()
-                if _cdn:
-                    r["ip_kind"] = "cdn"      # 走 CDN：解析到的是边缘节点，不是源站
-                elif "," in _ip:
-                    r["ip_kind"] = "multi"    # 多 A 记录：多半是负载均衡/边缘，疑非真实 IP
-                elif _ip:
-                    r["ip_kind"] = "real"     # 单 IP 且非 CDN：最可能是真实源站
-                else:
-                    r["ip_kind"] = ""
+                # 续150（用户点单）+ 续154：真实 IP 分档的判据在 `scanner/cdn.py::ip_kind`
+                # （页面、排序 SQL、报告、端口扫描四边都读它，各写一遍就会互相"纠错"）。
+                r["ip_kind"] = cdn.ip_kind(r)
         hidden = 0
         if hide_unresolved and base_where:
             rr = db._query("SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE "
@@ -2558,16 +2564,16 @@ def create_app():
         # 续112-E：③「按任务筛选」与「漏洞风险」页同口径（`?task=<id>`），条件并进同一条链。
         base_where = _and_where(db.OWN_SUBDOMAIN_WHERE, where, tw)
         base_params = params + tp
-        # 续150（用户点单"真实 ip 最上方、非 cdn 在中间、cdn 在最下面"）：默认排序先按
-        # **真实IP（非 CDN 且只有 1 个 A 记录）→ 非 CDN（多 IP，疑非真实）→ CDN**，同档再按
-        # 任务与域名。`task_id DESC` 仍放在最前：这是跨任务视图，先分组再看档位才不乱。
-        # 判据与下面 `_sub_rows` 的 `ip_kind` **同源**（都只看 cdn 空否 + ip 里有没有逗号）。
+        # 续150（用户点单"真实 ip 最上方、非 cdn 在中间、cdn 在最下面"）+ 续154：排序键取自
+        # `cdn.IP_RANK_SQL`（与 `_sub_rows` 显示的分档同一个产地，见 `scanner/cdn.py`）。
+        # 顺带修掉旧 SQL 的一处不一致：**没解析出来的行**（ip 为空）旧写法会落进"非 CDN"档、
+        # 排在真实 IP 旁边，现在按第 4 档沉到最下面。
+        # `task_id DESC` 仍放在最前：这是跨任务视图，先按任务分组再看档位才不乱。
         rows, pager, q = _asset_page(
             "subdomains", "/subdomains",
             extra_where=_and_where(base_where, res_where),
             extra_params=base_params, dedupe_domain=True,
-            order=("task_id DESC, CASE WHEN COALESCE(cdn,'')='' AND instr(COALESCE(ip,''), ',')=0 "
-                   "THEN 0 WHEN COALESCE(cdn,'')='' THEN 1 ELSE 2 END, domain"))
+            order=f"task_id DESC, {cdn.IP_RANK_SQL}, domain")
         if tag:
             pager["qs"] += f"&tag={tag}"
         if tid:                     # 筛选状态必须活过翻页，也活过「显示未解析」的切换
@@ -2590,9 +2596,12 @@ def create_app():
         ("cseg", "C 段反查", "osint:cseg", "c段反查拓展"),
     )
     # 分类排序表达式：按 EXT_SRC_TAGS 的顺序，未知来源排最后，同类内按 id 倒序（新的在前）。
-    EXT_SRC_ORDER = "CASE source " + " ".join(
+    # 先按来源分类（用户点单"分类浏览 + 分类排序"），**同一来源内**再按真实 IP 档位排
+    # （续154：拓展域名里 `*.cloudfront.net` 那类已经由 `jsmine.is_thirdparty` 挡在入库前，
+    # 剩下的就是"哪个域名值得先探"，真实 IP 排最前）。
+    EXT_SRC_ORDER = ("CASE source " + " ".join(
         f"WHEN '{s}' THEN {i}" for i, (_k, _l, s, _n) in enumerate(EXT_SRC_TAGS)
-    ) + " ELSE 99 END, id DESC"
+    ) + " ELSE 99 END, " + cdn.IP_RANK_SQL + ", id DESC")
     # 分组模式下**每页多少个主域名**：分页单位是"组"，一页 20 个主域名足够扫一眼来源分布，
     # 再多就要滚很久（平铺模式下分页单位仍是行，走 `?size=`）。
     EXT_GROUPS_PER_PAGE = 20
@@ -3002,6 +3011,49 @@ def create_app():
                 out.append(d)
         return out
 
+    def _ext_scan_domains():
+        """「送去探测」送哪些域名：默认**本任务全部拓展域名**，`scope=picked` 才只送勾选的。
+
+        续154（用户点单"送去探测也就默认全任务扫描"）。全任务那一档沿用拓展域名页的同一套
+        判据（来源=拓展 + 默认收起重叠资产 + 只看解析成功的），再按第三方/CDN 清单挡一道，
+        最后用 `limits.ext_probe_max` 收口（0=不限）—— 一次点击不该无界地扩出扫描目标。
+        返回 `(域名清单, 一句范围说明)`：那句要进日志，事后看得出这次到底送了多少、挡了多少。
+        """
+        raw = (request.form.get("task_id") or "").strip()
+        tid = int(raw) if raw.isdigit() else None
+        if tid is not None and not _owned_task(tid):
+            return [], ""           # 续79：不许借"全任务"这条新路摸到别人任务里的域名
+        if (request.form.get("scope") or "all").strip().lower() == "picked":
+            return _picked_domains(), "勾选的域名"
+        where = _and_where(db.EXT_SUBDOMAIN_WHERE, db.OVERLAP_EXT_WHERE,
+                           db.RESOLVED_WHERE, "task_id=?" if tid is not None else None)
+        rows = db._query(f"SELECT domain, ip, cdn FROM subdomains WHERE {where}",
+                         (tid,) if tid is not None else ())
+        bases = extdom.task_bases(tid) if tid is not None else set()
+        # 档位与去重在 **Python** 里算（读 `cdn.ip_kind`，与资产页显示同一份判据）：
+        # SQL 侧 `SELECT DISTINCT … ORDER BY <表达式>` 在 SQLite 里会拿"表达式对所选那一行"
+        # 求值，与预期不一致（本轮实测同一个表达式在 DISTINCT 下把 ngrok 排到了 multi 之后）。
+        rank, third = {}, 0
+        for r in rows:
+            d = str(r["domain"] or "").strip()
+            if not d:
+                continue
+            if not extdom.is_owned(d, bases) and jsmine.is_thirdparty(d):
+                third += 1
+                continue
+            k = cdn.IP_RANK[cdn.ip_kind(r)]
+            if d not in rank or k < rank[d]:
+                rank[d] = k
+        out = sorted(rank, key=lambda d: (rank[d], d))
+        cap = int((settings.get("limits") or {}).get("ext_probe_max", 100) or 0)
+        cut = len(out) > cap > 0
+        if cut:
+            out = out[:cap]
+        note = (f"全任务拓展域名：入选 {len(out)} 个"
+                + (f"，第三方/CDN 清单挡掉 {third} 个" if third else "")
+                + (f"，达 ext_probe_max={cap} 上限、其余本轮未送" if cut else ""))
+        return out, note
+
     @app.route("/api/blacklist/add", methods=["POST"])
     @login_required
     def api_blacklist_add():
@@ -3103,7 +3155,7 @@ def create_app():
         代价是多一轮被动收集 + DNS 字典爆破（都是只读查询），所以**只对明确勾选的域名**执行 ——
         拓展域名里大量是 CDN / JS 碎片，自动全跑既越权又浪费请求额度。
         """
-        domains = _picked_domains()
+        domains, scope_note154 = _ext_scan_domains()
         fallback = _safe_next(request.form.get("next"), url_for("tasks"))
         if not domains:
             return redirect(fallback)
@@ -3132,7 +3184,8 @@ def create_app():
         task_id = _create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
         logger.info(f"[gui] 拓展域名探测任务 #{task_id} 已创建"
-                    f"（{len(domains)} 个域名，subdomain→probe→dirscan→vulnscan）")
+                    f"（{scope_note154 or f'勾选的 {len(domains)} 个域名'}，"
+                    f"subdomain→probe→dirscan→vulnscan）")
         return redirect(url_for("task_detail", task_id=task_id))
 
     @app.route("/api/domains/promote", methods=["POST"])
@@ -3262,7 +3315,11 @@ def create_app():
                             "behind_proxy": bool(_g0.get("behind_proxy", False)),
                             "secure_cookie": bool(_g0.get("secure_cookie", False)),
                             "web_path_random": bool(_g0.get("web_path_random", True)),
-                            "edge_auth": dict(_g0.get("edge_auth") or {"enabled": False}),
+                            # 续154：这一项**页面上有勾选框**了（用户点单"暂时取消 401，
+                            # 可以让我在配置里面选择要不要开启"），所以取表单值；仍与 `_g0` 合并，
+                            # 免得 `enabled` 之外的键被整段重写抹掉。
+                            "edge_auth": {**(_g0.get("edge_auth") or {}),
+                                          "enabled": f.get("edge_auth_enabled") == "1"},
                             "keys_ask_passphrase": bool(
                                 _g0.get("keys_ask_passphrase", True)),
                             "login_lockout": dict(_g0.get("login_lockout") or {}),
@@ -3299,7 +3356,9 @@ def create_app():
                                "brute_combo_max": int(_l0.get("brute_combo_max", 4000) or 0),
                                "brute_dict_warn_min": int(_l0.get("brute_dict_warn_min", 1000) or 0),
                                "brute_max_domains": int(_l0.get("brute_max_domains", 50) or 50),
-                               "recrawl_max_hosts": int(_l0.get("recrawl_max_hosts", 300) or 300)},
+                               "recrawl_max_hosts": int(_l0.get("recrawl_max_hosts", 300) or 300),
+                               # 页面无输入框（拓展域名「送去探测」的全任务上限），原样带回
+                               "ext_probe_max": int(_l0.get("ext_probe_max", 100) or 0)},
                     # 检测策略：级别门槛 + POC 引擎总开关 + 按 OWASP 分类/检查项/级别关闭
                     "checks": {"min_severity": f.get("min_severity", "medium"),
                                "skip_severities": f.getlist("skip_severities"),
@@ -3511,6 +3570,7 @@ def create_app():
                                        bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                        esp=external_source_panel(_s114),
                                        shape_note=_shape_note(_s114),
+                                       edge_note=_edge_note(_s114),
                                        error="参数必须是整数")
             # 续48：审计只记"改了哪几个区块"，**绝不记值**（键名也省掉 —— 见 `_changed_sections`）。
             _changed = _changed_sections(settings, data)
@@ -3522,7 +3582,8 @@ def create_app():
                                bl=blacklist.load(settings, owner_id=_owner_scope()),
                                bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                esp=external_source_panel(settings),
-                               shape_note=_shape_note(settings))
+                               shape_note=_shape_note(settings),
+                               edge_note=_edge_note(settings))
 
     # ---------- 访问审计（续48） ----------
 
@@ -4097,6 +4158,13 @@ def _deploy_hints(gui_cfg):
     if _host_of(cfg.get("host", "127.0.0.1")) not in _LOOPBACK_HOSTS:
         lines.append(f"[!] 警告：正在监听 {cfg.get('host')}（非回环地址），"
                      "局域网/公网上的任何人都能访问本控制台。")
+        # 门**开着**的成句在 `serve()` 的 `edgeauth.wizard()` 分支（三态各一句、与绑定地址无关，
+        # 见 `[8ai]⑩`），这里只补**门关着**那一档：门没开而端口又对外，"还剩几道门"就成了
+        # 读者要自己推断的事，而它恰恰决定人敢不敢在这台机器上做事（§5.19）。
+        if not edgeauth.enabled({"gui": cfg}):
+            lines.append("    401 边缘认证门**未启用**（`gui.edge_auth.enabled=false`，"
+                         "策略配置页「控制台」段可勾选）→ 现在只剩后台账号这一道门。"
+                         f"要打开就在页面上勾上并配好口令：{edgeauth.SET_HINT}")
         if cfg.get("allowed_hosts"):
             lines.append("    已配置 gui.allowed_hosts → Host 白名单仍然生效（只放行清单里的域名）。")
         else:

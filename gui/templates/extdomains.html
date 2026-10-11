@@ -118,7 +118,9 @@
         formaction="{{ url_for('api_run_subdomain') }}">批量跑子域名（新建任务）</button>
       <button type="submit" class="ghost" formaction="{{ url_for('api_scan_ext') }}"
         title="新建一个 subdomain→probe→dirscan→vulnscan 的任务：先把它的子域也挖一遍，再探存活、扫目录、跑漏洞初筛">
-        送去检测（含子域名扫描，新建任务）</button>
+        送去探测（默认全任务拓展域名，新建任务）</button>
+      <label class="muted" title="默认送本任务全部拓展域名（第三方 / CDN 清单里的那些不送，条数上限见 limits.ext_probe_max）；只想探勾上的几个就改成「只送勾选」">
+        探测范围 <select name="scope"><option value="all">全任务</option><option value="picked">只送勾选</option></select></label>
       <button type="submit" class="ghost" formaction="{{ url_for('api_promote_domains') }}"
         title="勾选的域名里，注册域命中其所属任务目标的那些，会被追加成该任务的子域名（原拓展行保留，出处可查）">
         归属本项目的追加为子域名</button>

@@ -31,7 +31,7 @@ import re
 from urllib.parse import urlparse
 
 from .base import Stage
-from .. import blacklist, db, iprecon, targets
+from .. import blacklist, db, extdom, iprecon, jsmine, targets
 from .. import fofa as fofa_mod
 from .. import shodan as shodan_mod
 from .. import quake as quake_mod
@@ -103,6 +103,22 @@ class OsintStage(Stage):
         # 用户黑名单：命中的域名**不入库**，因此后面的 dirscan/vulnscan 也不会去扫它
         new, blocked = blacklist.filter_pairs(new, ctx.settings,
                                              owner_id=getattr(ctx, "owner_id", 0))
+        # 续154（用户点单）：第三方 / CDN / SaaS 清单同样要挡在**入库前**。此前这张清单只在 JS
+        # 挖掘那条路上生效，FOFA / C 段 / 证书 / CT 反查回来的 `*.cloudfront.net`、
+        # `*.workers.dev` 照样进「拓展域名」，那一页一半是别人的资产。归属本项目的先放行
+        # （与 `jsmine._is_noise` 同一口径：自家域名哪怕长得像第三方也不当噪声）。
+        _bases = extdom.task_bases(ctx.task_id)
+        keep, third = [], []
+        for d, s in new:
+            if extdom.is_owned(d, _bases) or not jsmine.is_thirdparty(d):
+                keep.append((d, s))
+            else:
+                third.append((d, s))
+        new = keep
+        if third:
+            ctx.logger.info(f"[osint] 第三方/CDN 噪声 {len(third)} 个未入库"
+                            f"（如 {third[0][0]} ← {third[0][1]}；清单在 "
+                            f"config/dicts/js_thirdparty.txt，要放行就往那个文件里删一行）")
         if new:
             db.insert_subdomains(ctx.task_id, new)
         if blocked:

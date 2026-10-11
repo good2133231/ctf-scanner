@@ -52,6 +52,7 @@ class ScreenshotStage(Stage):
         timeout = int(cfg.get("timeout", 30) or 30)
         shot_dir = ctx.workdir / "shots"
         rows, errs, ok = [], [], 0
+        reasons = {}
         # 只有"原始 HTML 里没有标题"的那些站点，才值得为渲染后标题多要一次 DOM
         no_title = sum(1 for s in sites if not str(s.get("title") or "").strip())
         title_rows = []
@@ -68,22 +69,22 @@ class ScreenshotStage(Stage):
             want_title = not str(s.get("title") or "").strip()
             good, err, rtitle = screenshot.capture(url, out, ctx.settings, timeout=timeout,
                                                    throttle=ctx.throttle, want_title=want_title)
-            # 续151（用户点单）：失败**自动重试一次** —— 超时就把超时翻倍、3xx 就落到最终
-            # URL 再截一次。只在"重试策略真的变了"时才重发（换 URL 或加超时），且**沿用原始
-            # URL 的产物名**：否则重试成功的图会落到另一个文件、`sites.shot` 就对不上了。
-            # 无浏览器这类"重试也没用"的原因不重试；两次都失败时**两条原因都写进去**。
+            # 续151：失败**自动重试一次** —— 超时翻倍、3xx 落到最终 URL 再截一次；只在"策略真的
+            # 变了"时才重发，且**沿用原始 URL 的产物名**（否则重试成功的图落到别的文件，
+            # `sites.shot` 就对不上）。续154：判"哪一类失败"改读 `screenshot.classify()` ——
+            # 落库标签与重试决策必须是同一个判断，否则会出现"页面写超时、实际按跳转重试"的分裂。
             if not good and not ctx.stopped():
-                _low = (err or "").lower()
-                _no_browser = ("browser" in _low or "浏览器" in (err or ""))
+                _first = screenshot.classify(err, s)
                 _final = str(s.get("redirect_url") or "").strip()
                 _r_url, _r_timeout = url, timeout
-                if "timeout" in _low or "timed out" in _low or "超时" in (err or ""):
+                if _first == screenshot.REASON_TIMEOUT:
                     _r_timeout = timeout * 2
                 elif _final and _final.rstrip("/") != str(url).rstrip("/"):
                     _r_url = _final
-                else:
+                elif _first != screenshot.REASON_BROWSER:
                     _r_timeout = timeout * 2
-                if not _no_browser and (_r_url != url or _r_timeout != timeout):
+                if _first != screenshot.REASON_BROWSER and (
+                        _r_url != url or _r_timeout != timeout):
                     _why = (f"换落地页 {_final}" if _r_url != url
                             else f"超时 {timeout}→{_r_timeout}s")
                     ctx.logger.info(f"[screenshot] {url} 首次失败（{err}）→ 重试（{_why}）")
@@ -108,14 +109,20 @@ class ScreenshotStage(Stage):
                 rows.append((url, rel))
                 ctx.logger.info(f"[screenshot] {url} → {rel}")
             else:
-                # 续150（用户点单）：失败**原因**要落库，不只写日志 —— 站点页那一格空着时，
-                # 用户要能一眼看出是 301 没落地 / 超时 / 无浏览器 / DNS 还是别的。
-                errs.append((url, err))
-                ctx.logger.info(f"[screenshot] {url} 截图失败：{err}")
+                # 续150：失败**原因**要落库，不只写日志；续154：再前置一个**原因档**，
+                # 站点页那一格于是能一眼看出是 301 没落地 / 超时 / 无浏览器 / DNS 还是别的。
+                _reason = screenshot.classify(err, s)
+                reasons[_reason] = reasons.get(_reason, 0) + 1
+                errs.append((url, f"{_reason}｜{err}"[:200]))
+                ctx.logger.info(f"[screenshot] {url} 截图失败（{_reason}）：{err}")
         if rows:
             db.set_site_shots(ctx.task_id, rows)
         if errs:
             db.set_site_shot_errors(ctx.task_id, errs)
+            ctx.logger.info("[screenshot] 失败原因分布："
+                            + "、".join(f"{k} {v}" for k, v in sorted(
+                                reasons.items(), key=lambda kv: (-kv[1], kv[0])))
+                            + "（逐条原因写进站点行的 shot_error，站点页那一格直接显示）")
         write_lines(ctx.workdir / "shots.txt", [f"{u}\t{r}" for u, r in rows])
         filled = db.set_site_titles(ctx.task_id, title_rows) if title_rows else 0
         if no_title:

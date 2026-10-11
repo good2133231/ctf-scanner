@@ -200,6 +200,9 @@ DEFAULTS = {
         "brute_dict_warn_min": 1000,
         # 二层遍历每轮最多补探多少个主机（续139，`probe.second_pass`）；攒够就停止 DNS 预筛。
         "recrawl_max_hosts": 300,
+        # 拓展域名「送去探测」全任务模式下的目标数上限（0=不限，续154）：
+        # 拓展域名动辄上百个，一次点击要能扩出上百个目标的探测任务，就得有个默认的刹车。
+        "ext_probe_max": 100,
         "wildcard_filter": True,  # 泛解析过滤（关闭后字典爆破会保留通配命中，噪声极大）
         "favicon_md5": True,      # probe 阶段计算 favicon MD5（零请求前置指纹，见 P1-1）
         # 统一并发 / 限速 / 全局预算门控（F2，见 scanner/throttle.py）。
