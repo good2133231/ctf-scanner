@@ -81,7 +81,11 @@ CWD 在工作树里 ⇒ `ROOT` 与 `CTFSCANNER_DB` / `logs/` 都是这份树自�
 - 首轮 `logs/_gate153a.log` 跑到 `[8bf]` 判红（前面 **155 组全绿**，包括被改了签名与默认桩的
   `[7i]`/`[8ak]`/`[8ax]`/`[8at]`）；修完再跑 `logs/_gate153b.log` 又红在同一行（我第一版修的时候
   把 needle 写成 `0.0.0.0:5000:` —— 端口后面跟的是 `/` 不是 `:`，等于把一个对的判据改错）；
-  第三轮 `logs/_gate153c.log`（3310 行）：**SMOKE PASS**、`AssertionError` 0 处、组打印 **166** 条。记忆三份文件补完再跑**第四轮** `logs/_gate153d.log`（3305 行）：同样 SMOKE PASS / 166 条 / 0 处（此后到提交之间只剩本节这一句补述，没再动代码与断言）
+  第三轮 `logs/_gate153c.log`（3310 行）：**SMOKE PASS**、`AssertionError` 0 处、组打印 **166** 条。记忆三份文件补完再跑**第四轮** `logs/_gate153d.log`（3305 行）：同样 SMOKE PASS / 166 条 / 0 处
+  第四轮之后到提交之间**只改了本节的文字**：② 那段把「三处隐式出网」校订成实测的
+  「恰好 1 处」，并把那条变异探针桩的归属从 `[8ao]` 修正成真正拥有它的 `[8at]`。
+  `gui/app.py` 与 `tests/smoke.py` 自第四轮之后一个字没再动；`[8as]` 的四条判据
+  （三处 max续 都＝153、本节 >400 字符、AGENTS 含 153、正文号不领先标题号）提交前脚本复算过
   （以这份日志为准：`grep -cE '^\[[0-9]+[a-z]*\] '`）。两式 `git diff --numstat` 对
   `gui/app.py` / `tests/smoke.py` 核对相等，EOL 未洗。
 - `tests/browser_e2e.py` 在这份工作树里真起 Flask + 真 Chrome：**72 条断言全绿**
