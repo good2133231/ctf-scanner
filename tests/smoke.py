@@ -8319,7 +8319,7 @@ http:
     #     （教训与 `_deploy_hints` 抽出来的理由相反：抽函数让文案可测，但**调用点**仍需实测。）
     import contextlib as _ctx7i
 
-    def _serve_out7i(gui_over, egress=""):
+    def _serve_out7i(gui_over, egress="", limits_over=None):
         """真调 `serve()` 并捕获 stdout，返回 `(输出行列表, 实际用到的 settings)`。
 
         `egress`（续153）＝ 喂给 `gui_app._egress_ip` 的东西：给字符串就当"取到了这个地址"
@@ -8328,6 +8328,7 @@ http:
         _base = _copy7i.deepcopy(settings)
         _base.setdefault("gui", {}).update(gui_over)
         _buf = _io7i.StringIO()
+        _base.setdefault("limits", {}).update(limits_over or {})   # 续156：横幅有句子吃 limits
         _orig_port_free = gui_app._port_free
         _orig_eg7i = gui_app._egress_ip
         _orig_run = gui_app.app.run
@@ -8350,6 +8351,10 @@ http:
                 return False
 
         _stdin_real7i, _sys7i.stdin = _sys7i.stdin, _NoTty7i()
+        # 续156：`serve()` 会按 `gui.console_logs` 把**进程级**的"日志刷不刷终端"关掉，
+        # 不还原就会污染后面所有组（它们的 logger 突然没有 stdout handler，而现象是
+        # "某些用例抓不到输出" —— 典型的"改 A 让 B 假红"）。
+        _console_real7i = gui_app.runlog.console_output()
         try:
             with _ctx7i.redirect_stdout(_buf):
                 # 续49：本用例只验启动**提示**文案，绝不能顺手起任务队列 worker
@@ -8357,6 +8362,7 @@ http:
                 gui_app.serve(start_queue=False)
         finally:
             _sys7i.stdin = _stdin_real7i
+            gui_app.runlog.set_console_output(_console_real7i)
             gui_app.load_settings, gui_app._port_free, gui_app._egress_ip = _orig_load7i, _orig_port_free, _orig_eg7i
             if _had_run:
                 gui_app.app.run = _orig_run
@@ -20719,6 +20725,45 @@ expression: r0()
           "并说清 afrog 不在本路收敛里｜目录侧 `dirs_php` 桶不含 jsp/asp 字典、未知语言回退全量且"
           "精选层在前｜`TECH_LANG` 全仓唯一一份定义"
           )
+    # ---------------- [8bm] 续156：GUI 不再把逐条日志刷终端 + TLS 警告只在启动说一次 ----------------
+    #      主理人贴了一屏实跑输出：几十个站点的 INFO 加上 urllib3 每请求一条的
+    #      `InsecureRequestWarning`，原话"我的控制台很容易崩"。两件事修法不同，所以各钉各的：
+    #      ① logger 的 stdout handler 由进程级开关决定（CLI 不动它 ⇒ 终端照旧有进度）；
+    #      ② urllib3 那条走 `warnings` 直写 stderr，**只关控制台挡不住**，必须单独静音，
+    #         静音之后"TLS 校验是关的"这个事实由启动那一句现取配置说一次（§5.19）。
+    from scanner import log as _lg156
+    _real156 = _lg156.console_output()
+    try:
+        assert _lg156.set_console_output(False) is False
+        assert _lg156.get_logger("smoke-156-off").handlers == [], \
+            "开关关着却还是给 logger 挂了 stdout handler（那等于没接上）"
+        _lg156.set_console_output(True)
+        _n156 = [type(h).__name__ for h in _lg156.get_logger("smoke-156-on").handlers]
+        assert _n156 == ["StreamHandler"], f"开关开着时应当恰好一个 stdout handler：{_n156}"
+    finally:
+        _lg156.set_console_output(_real156)
+    assert _lg156.mute_insecure_warnings() is True, "urllib3 装了却没静音 ⇒ 终端照样被刷屏"
+    assert _D145["gui"]["console_logs"] is False, "默认必须是关 —— 主理人要的就是终端不刷屏"
+    _y156 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "  console_logs: false" in _y156, "shipped 配置没跟上 DEFAULTS"
+    _app156 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert "_g0.get(\"console_logs\", False)" in _app156, \
+        "POST 映射必须原样带回这一项（save_settings 是整份重写，漏带＝把键删掉）"
+    _off156, _ = _serve_out7i({"host": "127.0.0.1", "console_logs": False})
+    _on156b, _ = _serve_out7i({"host": "127.0.0.1", "console_logs": True})
+    assert any("只写文件" in x for x in _off156), _off156[-6:]
+    assert not any("终端与文件各一份" in x for x in _off156), _off156[-6:]
+    assert any("gui.console_logs=true" in x for x in _on156b), _on156b[-6:]
+    _muted156, _ = _serve_out7i({"host": "127.0.0.1"}, limits_over={"verify_tls": False})
+    _verif156, _ = _serve_out7i({"host": "127.0.0.1"}, limits_over={"verify_tls": True})
+    assert any("InsecureRequestWarning 已静音" in x for x in _muted156), _muted156[-6:]
+    assert not any("InsecureRequestWarning" in x for x in _verif156), \
+        "TLS 校验开着还提静音 = 那句话在骗人（文案必须跟着配置走）"
+    print("[8bm] 续156 控制台静音 ok: stdout handler 由进程级开关决定（库默认仍是开 ⇒ CLI 不受影响、"
+          "关着时 logger 一个终端 handler 都不挂）｜urllib3 的逐请求警告单独静音（它绕开 logging）｜"
+          "DEFAULTS / shipped yaml / POST 带回三处一致｜横幅两句跟着 gui.console_logs 与 "
+          "limits.verify_tls 现取分叉（开着 TLS 就一个字不提静音）")
+
     # ---------------- [8au] 续146：站点默认只看 200/404 / 批量打标只读本面板 / 判据收敛 / 入口搬进 cli ----------------
     #      用户点单四件事：① 站点默认只看 200/404 + 「显示全部」开关（跨任务 /sites 与任务详情
     #      站点页签**同一口径**）；② 「批量打标」读整页勾选框，会串到站点行；③ "目标→注册域"

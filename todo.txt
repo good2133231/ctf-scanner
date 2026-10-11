@@ -3353,7 +3353,22 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       docstring 绊红 ⇒ 改 AST 数调用（本项目第 6 次栽在"断言吃字面量"）
 
 
-下一轮（续156）：
+## 续156（2026-10-11，WorkBuddy · Qoder-Agent 远端 Linux）：控制台不再被日志刷爆
+
+- [x] 逐条运行日志只进文件：`scanner/log.py` 加进程级 `set_console_output()` / `console_output()`，
+      `get_logger()` 据此决定挂不挂 stdout handler；**库默认仍是开**（CLI 的界面就是终端）
+- [x] urllib3 `InsecureRequestWarning` 每请求一条 ⇒ `mute_insecure_warnings()` 单独静音
+      （它走 `warnings` 直写 stderr，只关控制台挡不住），事实改由启动那一句现取配置说一次
+- [x] 新配置 `gui.console_logs`（默认 false）：DEFAULTS / shipped yaml / POST 原样带回三处一致
+- [x] `_serve_out7i` 加 `limits_over` 并在 finally 还原开关（不还原会污染后面所有组）
+- [x] 新增 `[8bm]`；门禁 `logs/_gate156a.log` SMOKE PASS / AssertionError 0 / 组打印 217
+- [x] README 那句"终端刷行已静音"补成三项一起说（原来只讲逐请求访问日志）
+
+下一轮（续157）：
+
+- [ ] 页面上给 `gui.console_logs` 画一个勾选框（现在只能改文件），并像 401 门那样在
+      「控制台」段现取一句现状；顺手把 `limits.verify_tls` 的"关着会有哪些后果"也现取一句
+- [ ] 策略页勾不上第二项的，都按同一条规矩补输入框（现在仍有十几个键只能改文件）
 
 - [ ] #7 第三半：任务详情页漏洞页签里那栏**复核**（`复测模式` 已随续154 撤入口，逐行下拉打标仍在）
       换成**方便可视化**的东西 —— 主理人原话"漏洞复合我决定功能没用，你改成该方便可视化的功能"，

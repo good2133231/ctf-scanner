@@ -28,16 +28,55 @@ SERVER_LOG_BYTES = 2 * 1024 * 1024
 SERVER_LOG_BACKUP = 3
 
 
+# 控制台 handler 的开关。**库的默认是开**（CLI 的全部界面就是终端，不能默认哑）；
+# 关掉它的是 `gui/app.py::serve()` —— 主理人 2026-10-11 点单「日志也不要输出在控制台
+# 不然我的控制台很容易崩」：常驻 GUI 进程一开几十个阶段，INFO 一行行往终端刷，
+# 终端滚动本身成了瓶颈，而真正该看的地方一直是 `logs/server.log` 与每个任务的 `task.log`。
+_CONSOLE = True
+
+
+def set_console_output(on):
+    """返回设完之后的值（调用方要把"现在日志去哪儿"那句话打出来，别自己再推断一遍）。"""
+    global _CONSOLE
+    _CONSOLE = bool(on)
+    return _CONSOLE
+
+
+def console_output():
+    return _CONSOLE
+
+
+def mute_insecure_warnings():
+    """把 urllib3 的 `InsecureRequestWarning` 静音；**没装 urllib3 就返回 False**（不抛）。
+
+    为什么不在日志层解决：那条警告是 urllib3 用 `warnings` 模块直接写 stderr 的，
+    跟我们挂不挂 handler 无关 —— 只关控制台它照样刷屏。而它每次**关闭 TLS 校验的请求**
+    都会来一条，一晚上几千条，把有用的行冲干净。
+    代价要说清（`serve()` 的横幅负责这句，见 `_tls_hint`）：静音 ≠ 没在做这件事，
+    关掉的是"逐条提醒"，"TLS 校验是关的"这个事实由启动那一句现取配置说一次。
+    """
+    try:
+        import warnings
+
+        from urllib3.exceptions import InsecureRequestWarning
+    except Exception:                                        # noqa: BLE001 - 缺包就什么都别做
+        return False
+    warnings.simplefilter("ignore", InsecureRequestWarning)
+    return True
+
+
 def get_logger(name, log_file=None):
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
     logger.setLevel(logging.DEBUG)
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S")
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setFormatter(fmt)
-    sh.setLevel(logging.INFO)
-    logger.addHandler(sh)
+    if _CONSOLE:
+        # 关掉的只是**终端那一份**；文件 handler（下面）照挂，否则 GUI 里点"看日志"就空了
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(fmt)
+        sh.setLevel(logging.INFO)
+        logger.addHandler(sh)
     if log_file:
         fh = logging.FileHandler(str(log_file), encoding="utf-8")
         fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))

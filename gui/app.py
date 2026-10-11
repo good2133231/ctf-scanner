@@ -56,6 +56,7 @@ from scanner import (admin_setup, audit, auth as taskauth, blacklist, captcha, c
                      screenshot,
                      shodan, toolmgr, users, packetcodec)
 from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
+from scanner import log as runlog
 from scanner.log import (attach_access_log, attach_server_log, boot_logger,
                          get_logger)
 from scanner.owasp import checks as owasp_checks
@@ -3320,6 +3321,8 @@ def create_app():
                             # 免得 `enabled` 之外的键被整段重写抹掉。
                             "edge_auth": {**(_g0.get("edge_auth") or {}),
                                           "enabled": f.get("edge_auth_enabled") == "1"},
+                            # 页面无输入框（续156：日志要不要刷终端），原样带回
+                            "console_logs": bool(_g0.get("console_logs", False)),
                             "keys_ask_passphrase": bool(
                                 _g0.get("keys_ask_passphrase", True)),
                             "login_lockout": dict(_g0.get("login_lockout") or {}),
@@ -4348,6 +4351,27 @@ def serve(start_queue=True):
     if _ks_locked:
         say(f"[!] {keystore.lock_notice(_ks['reason'])}")
     _settings = load_settings()
+    # 续156（主理人点单「日志也不要输出在控制台 不然我的控制台很容易崩」）：从这一行起，
+    # 流水线与 `[gui]` 的**逐条 INFO 只进文件**，终端只留横幅与告警（那些走 `print`，
+    # 不经 logger，所以不受影响）。CLI 不动这个开关 ⇒ 库默认"开"，终端照旧有进度。
+    # 想恢复：策略配置里 `gui.console_logs: true`（页面上没有输入框，改文件即可）。
+    _console156 = runlog.set_console_output(bool(
+        (_settings.get("gui") or {}).get("console_logs", False)))
+    # TLS 校验关着时 urllib3 **每次请求**都往 stderr 写一条 InsecureRequestWarning —— 它走
+    # warnings 模块、绕开我们的 logger，只关控制台挡不住，一晚上几千条把有用的行冲干净。
+    # 逐条提醒在这里没有价值，事实改由下面那一句现取配置说一次（§5.19）。
+    _muted156 = bool(not (_settings.get("limits") or {}).get("verify_tls", False)) \
+        and runlog.mute_insecure_warnings()
+    say("[*] 扫描运行日志：只写文件（每个任务的 `task.log` + 上面的启动日志），终端不再逐条刷"
+        "；实时进度看控制台页面的「任务日志」面板"
+        if not _console156 else
+        "[*] 扫描运行日志：终端与文件各一份（`gui.console_logs=true`）")
+    if _muted156:
+        say("[*] 目标侧 TLS 校验是关的（`limits.verify_tls=false`）：每请求一条的 "
+            "InsecureRequestWarning 已静音，这件事只在启动时说这一次 —— 要逐条提示就把该开关打开")
+    elif not (_settings.get("limits") or {}).get("verify_tls", False):
+        say("[*] 目标侧 TLS 校验是关的（`limits.verify_tls=false`）；本机没装 urllib3，"
+            "所以没有逐请求警告需要静音")
     # 环境变量（容器）优先；并把实际绑定值写回 `s` —— `_deploy_hints(s)` 与下面那句
     # "控制台: http://host:port" 都是照着 `s` 念的，不同步就会打印一个**没在监听**的地址。
     s = dict(_settings.get("gui") or {})

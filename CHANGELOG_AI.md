@@ -3,6 +3,48 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续156 控制台不再被日志刷爆：逐条运行日志只进文件，TLS 警告只在启动说一次
+
+实施者：WorkBuddy · Qoder-Agent（远端 Linux）。主理人贴了一屏实跑输出后说：
+「专业些，日志也不要输出在控制台，不然我的控制台很容易崩」。那屏里有两类噪音，成因不同，
+所以修法也不同：
+
+1. **流水线与 `[gui]` 的逐条 INFO**（`[afrog] …`、`[vulnscan] …`、`[阶段 N/13] …`）——
+   常驻 GUI 进程一开几十个站点几十个阶段，终端滚动本身成了瓶颈。
+2. **urllib3 的 `InsecureRequestWarning`**：目标侧 TLS 校验是关的（`limits.verify_tls=false`，
+   CTF/靶场自签名常见），于是**每个 HTTPS 请求**都往 stderr 写一条完整警告，一屏几十条，
+   而且每条都带着目标主机名。
+
+### 做了什么
+
+- `scanner/log.py`：新增进程级开关 `_CONSOLE` + `set_console_output()` / `console_output()`，
+  `get_logger()` 只在开关开着时才挂 `StreamHandler(sys.stdout)`；**库默认仍是"开"** ——
+  CLI 的全部界面就是终端，不能默认哑。文件 handler 照旧挂（关掉终端那份不等于没日志）。
+- `scanner/log.py::mute_insecure_warnings()`：静音 `InsecureRequestWarning`。为什么不能只在
+  日志层解决——那条警告走的是 `warnings` 模块直写 stderr，绕开我们的 logger，**只关控制台挡不住**。
+  没装 urllib3 时返回 False，不抛。
+- `gui/app.py::serve()`：读 `gui.console_logs`（默认 false）设开关，并打印两句**现取配置**的话
+  （"扫描运行日志：只写文件…" / "目标侧 TLS 校验是关的…已静音"）。TLS 校验开着时后一句
+  **一个字都不提**，且不会去调静音 —— 讲运行期能力的话必须跟着配置走。
+- 新增配置项 `gui.console_logs`：`DEFAULTS` false、`config/settings.yaml` false、POST 映射里
+  原样带回（页面上没画输入框；`save_settings` 是整份重写，漏带就等于把键删掉）。
+- 回归 `_serve_out7i` 加 `limits_over` 参数，并在 `finally` 里**还原进程级开关** —— 不还原就会
+  污染后面所有组（它们的 logger 突然没有 stdout handler，报出来的形状是"别的用例抓不到输出"）。
+
+### 验证
+
+`[8bm]`：关着时 `get_logger()` 一个 handler 都不挂、开着时恰好一个 `StreamHandler`；
+`mute_insecure_warnings()` 真返回 True；DEFAULTS / shipped yaml / POST 带回三处一致；
+`gui.console_logs` 两档 ⇒ 横幅那句话跟着变；`limits.verify_tls` 两档 ⇒ "已静音"那句只在关着时出现。
+门禁 `logs/_gate156a.log`：**`SMOKE PASS` / AssertionError 0 / 组打印 217 行**（续155 终验 216，
+差 1 ＝ 本轮新增一组）。改动 5 个被跟踪文件（`scanner/log.py`、`scanner/config.py`、
+`config/settings.yaml`、`gui/app.py`、`tests/smoke.py`）+ 记忆与 README 两份，两式 numstat 相等。
+
+### 顺带修的一处文档漂移
+
+README 里"终端刷行已静音"那句只讲了续146-附3 的逐请求访问日志，没讲运行日志与 TLS 警告 ——
+补成三项一起说，并写明 `gui.console_logs` 这一档。
+
 ## 续155 主理人点单 12 条的第二批：JS 凭据按站点去重 + 更多敏感形状与整行上下文 + 技术栈收敛变得看得见
 
 实施者：WorkBuddy · Qoder-Agent（远端 Linux）。接续154 那份"12 条逐条核对"，本轮做 #7 的前两半与 #10。

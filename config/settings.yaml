@@ -33,6 +33,10 @@ gui:
   # secure_cookie：会话 Cookie 是否加 Secure（只在 HTTPS 下回传）。
   #   默认 false —— 走 HTTP 时开了会直接登录不上；上了 TLS 反代后请改 true。
   secure_cookie: false
+  # 扫描运行日志要不要**同时**刷到终端（续156：默认关）。关着的时候终端只留启动横幅与告警，
+  # 逐条 INFO 只进 logs/server.log 与每个任务的 task.log；页面上的「任务日志」面板读的是后者。
+  # CLI 不看这一项（它的全部界面就是终端）。
+  console_logs: false
   # ---- 401 边缘认证门（scanner/edgeauth.py）：无 Basic 凭据的请求进不到任何路由 ----
   # 这里**只有开关**。口令写在 config/edge_auth.yaml —— 明文、一行 password: <口令>；该文件与
   # config/keys.yaml 同类、在 .gitignore 里。本文件被 git 跟踪而仓库是公开的，口令写进这里就等于

@@ -116,6 +116,10 @@ DEFAULTS = {
         # 设 false 就挂回根路径（旧行为）。页面上改不了这一项，只能手改本文件
         # （先例 = login_lockout / audit / keys_ask_passphrase）。
         # 临时指定固定前缀走环境变量 CTFSCANNER_WEB_PATH（空串＝根路径），不写进任何文件。
+        # 续156（主理人点单）：控制台进程**不再把逐条 INFO 刷到终端**——常驻 GUI 一开几十
+        # 个阶段，终端滚动本身成了瓶颈，而该看的地方一直是 `logs/server.log` 与每个任务的
+        # `task.log`（页面上的「任务日志」面板读的就是后者）。CLI 不受这项影响：它不动开关。
+        "console_logs": False,
         "web_path_random": True,
         # behind_proxy：是否信任反向代理转发的 `X-Forwarded-Proto/Host/For`。
         #   默认关 —— 它是**请求头**，任何客户端都能伪造，无条件信任会让 Host 白名单
