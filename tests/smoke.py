@@ -8302,16 +8302,25 @@ http:
     #     （教训与 `_deploy_hints` 抽出来的理由相反：抽函数让文案可测，但**调用点**仍需实测。）
     import contextlib as _ctx7i
 
-    def _serve_out7i(gui_over):
-        """真调 `serve()` 并捕获 stdout，返回 `(输出行列表, 实际用到的 settings)`。"""
+    def _serve_out7i(gui_over, egress=""):
+        """真调 `serve()` 并捕获 stdout，返回 `(输出行列表, 实际用到的 settings)`。
+
+        `egress`（续153）＝ 喂给 `gui_app._egress_ip` 的东西：给字符串就当"取到了这个地址"
+        （给空串＝取不到），给可调用对象就当它是那个函数本身（要验"根本不该去取"就用它）。
+        """
         _base = _copy7i.deepcopy(settings)
         _base.setdefault("gui", {}).update(gui_over)
         _buf = _io7i.StringIO()
         _orig_port_free = gui_app._port_free
+        _orig_eg7i = gui_app._egress_ip
         _orig_run = gui_app.app.run
         _had_run = "run" in gui_app.app.__dict__      # 恢复时别留下多余的实例属性
         gui_app.load_settings = lambda: _base
         gui_app._port_free = lambda h, p: True        # 不真 bind（否则占用端口 / 依赖环境）
+        # 续153：横幅首行现在会带"可直接打开"的那个地址，它必须由用例自己给。默认空串 =
+        # 当作没取到 —— 续150 那版让三条非回环用例**隐式出网**（真去问 api.ipify.org 等三个
+        # 接口），离线机器上最坏白等 3×1.5 秒，而那本来就是"横幅少一行"，不该是网络测试。
+        gui_app._egress_ip = egress if callable(egress) else (lambda timeout=1.5: egress)
         gui_app.app.run = lambda *a, **k: None        # 不真起服务器（否则测试会挂在这里）
         # 不等人：续133 起 serve() 里有边缘门向导，它按 isatty 决定要不要开口问口令。
         # 不桩住就是「人在终端里跑 smoke 会卡在口令输入」——admin_setup 那个向导之所以
@@ -8331,7 +8340,7 @@ http:
                 gui_app.serve(start_queue=False)
         finally:
             _sys7i.stdin = _stdin_real7i
-            gui_app.load_settings, gui_app._port_free = _orig_load7i, _orig_port_free
+            gui_app.load_settings, gui_app._port_free, gui_app._egress_ip = _orig_load7i, _orig_port_free, _orig_eg7i
             if _had_run:
                 gui_app.app.run = _orig_run
             else:
@@ -20056,8 +20065,8 @@ expression: r0()
         # 往横幅里塞一条**额外的**含前缀行，它同样必须被扣住（只钉第一行就是位置假设）。
         _orig_wh145 = gui_app.webpath_hints
 
-        def _wh145(b, h, p):
-            return _orig_wh145(b, h, p) + [f"[!] 变异探针：这一行也带了前缀 {b}"]
+        def _wh145(b, h, p, _ext145=""):
+            return _orig_wh145(b, h, p, _ext145) + [f"[!] 变异探针：这一行也带了前缀 {b}"]
 
         gui_app.webpath_hints = _wh145
         try:
@@ -21432,6 +21441,98 @@ expression: r0()
     print("[8bd] 续151 无依赖 ML ok: n-gram Jaccard 近重复（同模板判近、不同页不判）｜SimHash 汉明"
           "距离确定性｜MAD 点名离群、小样本不判｜朴素贝叶斯训练/预测/存读往返一致、缺模型返回 None｜"
           "三处门控齐且默认不改变既有行为")
+
+    # ---------------- [8bf] 续153：横幅那条「控制台地址」必须就是能点开的那个 ----------------
+    # 主理人原话：「这个外网地址就不要显示了 就直接显示在控制台地址里面」。
+    # 续150 的做法是**再印一行**：屏幕上两条地址、只有一条能点，还得自己判断哪条是对的；
+    # 而绑 `0.0.0.0` 时首行那个 `http://0.0.0.0:5000/…` 本来就不是可访问地址（它是监听地址，
+    # 不是主机名 —— 与 AGENTS §7「`_LOOPBACK_HOSTS` 刻意不含 `0.0.0.0`（它是绑定地址、不是可访问的主机名）」同一条事实）。
+    from scanner import log as _log8bf
+    _gui_src8bf = (ROOT / "gui/app.py").read_text(encoding="utf-8")
+
+    # ---- ① 地址形状只有一个拼装点 ----
+    _n_url8bf = _gui_src8bf.count('f"http://{')
+    assert _n_url8bf == 1, f"横幅地址有了第二个拼装点（{_n_url8bf} 处）⇒ 改一处会漏另一处"
+    assert 'def webpath_hints(base, host, port, ext_ip=""):' in _gui_src8bf, \
+        "ext_ip 没从 serve() 传进 webpath_hints ⇒ 那一行多半又是在外面单独拼的"
+    assert '"[*] 外网地址' not in _gui_src8bf, "「外网地址」那一行还在单独印"
+    # 横幅一行都不许拖住启动：取出口地址那条路必须自带超时
+    assert "def _egress_ip(timeout=1.5)" in _gui_src8bf and "timeout=timeout" in _gui_src8bf, \
+        "为了一行地址把启动卡在网络上，是本仓最不被接受的那种取舍"
+
+    _keep8bf = os.environ.pop("CTFSCANNER_WEB_PATH", None)
+    try:
+        # ---- ② 绑 0.0.0.0 且取到出口地址 ⇒ 只有一行，且那一行就能点开 ----
+        _out8bf, _ = _serve_out7i({"host": "0.0.0.0", "allowed_hosts": [],
+                                   "edge_auth": {"enabled": False}, "web_path_random": True},
+                                  egress="203.0.113.9")
+        _u8bf = [l for l in _out8bf if "控制台地址" in l]
+        assert len(_u8bf) == 1, f"横幅里可点开的地址必须只有一行：{_u8bf}"
+        _m8bf = re.search(r"控制台地址：http://203\.0\.113\.9:(\d+)(/[a-z0-9]{10}/[a-z0-9]{10})/?",
+                          _u8bf[0])
+        assert _m8bf, f"首行没换成出口地址（或前缀形状不对）：{_u8bf[0]!r}"
+        assert "本机绑定的是 0.0.0.0" in _u8bf[0], \
+            f"没写明绑定值 ⇒ 读的人不知道服务器绑在哪、也就不知道该放行哪个端口：{_u8bf[0]!r}"
+        assert not any("外网地址" in l for l in _out8bf), "单独那一行没删掉"
+
+        # ---- ③ 含前缀这一行照旧**不落盘**（现在含前缀的就是这一整行，屏蔽判据不能因为合并就漏）----
+        _txt8bf = Path(_log8bf.server_log_path()).read_text(encoding="utf-8", errors="replace")
+        assert _m8bf.group(2) not in _txt8bf, \
+            "随机后台前缀出现在了 server.log 里（续138：前缀绝不落盘）"
+        assert "刻意不写进本文件" in _txt8bf, "扣掉那一行必须说出来（续145 同一口径）"
+
+        # ---- ④ 取不到 / 取到的是监听占位 ⇒ 退回绑定值，且**不加括注** ----
+        for _bad8bf in ("", "0.0.0.0", "::"):
+            _o4, _ = _serve_out7i({"host": "0.0.0.0", "allowed_hosts": [],
+                                   "edge_auth": {"enabled": False}, "web_path_random": True},
+                                  egress=_bad8bf)
+            _u4 = [l for l in _o4 if "控制台地址" in l]
+            assert len(_u4) == 1 and "可直接打开" not in _u4[0], (_bad8bf, _u4)
+            assert "http://0.0.0.0:" in _u4[0], (_bad8bf, _u4[0])
+        # 取到的与绑定值同一个 ⇒ 也当"没取到"：同一个地址不许换个写法再说一遍
+        _o5, _ = _serve_out7i({"host": "172.17.83.209", "allowed_hosts": ["172.17.83.209"],
+                               "edge_auth": {"enabled": False}, "web_path_random": True},
+                              egress="172.17.83.209")
+        assert "可直接打开" not in [l for l in _o5 if "控制台地址" in l][0], _o5
+
+        # ---- ⑤ 绑回环 ⇒ 一次都不该去取出口地址（既不为这一行发外部请求，也不无谓加括注）----
+        def _boom8bf(timeout=1.5):
+            raise AssertionError("绑回环时不该去取出口地址")
+
+        _o6, _ = _serve_out7i({"host": "127.0.0.1", "allowed_hosts": [],
+                               "edge_auth": {"enabled": False}, "web_path_random": True},
+                              egress=_boom8bf)
+        _u6 = [l for l in _o6 if "控制台地址" in l]
+        assert len(_u6) == 1 and "可直接打开" not in _u6[0], _u6
+        assert re.search(r"控制台地址：http://127\.0\.0\.1:(\d+)(/[a-z0-9]{10}/[a-z0-9]{10})/?$",
+                         _u6[0]), f"回环那一支必须与续150 之前逐字一致（`[8ak]` 也按这个形状判）：{_u6[0]!r}"
+
+        # ---- ⑥ §5.19 证伪：首行是**现算**的 —— 换掉出口地址它就跟着换 ----
+        _o7, _ = _serve_out7i({"host": "0.0.0.0", "allowed_hosts": [],
+                               "edge_auth": {"enabled": False}, "web_path_random": True},
+                              egress="198.51.100.7")
+        _u7 = [l for l in _o7 if "控制台地址" in l]
+        assert "http://198.51.100.7:" in _u7[0], f"地址是写死的或根本没传进来：{_u7[0]!r}"
+        assert _u7[0] != _u8bf[0], "换了出口地址而那一行不动 ⇒ 上面那条断言是空写"
+    finally:
+        if _keep8bf is not None:
+            os.environ["CTFSCANNER_WEB_PATH"] = _keep8bf
+    # 判据自证（§6.1）：造一个"ext_ip 参数根本没接"的桩，确认它抓得住这种写法
+    def _stub8bf(base, host, port, ext_ip=""):
+        return [f"[*] 控制台地址：http://{host}:{port}{base}/"]
+
+    _old8bf = "\n".join(_stub8bf("/aaabbbccc1/1112223333", "0.0.0.0", 5000, "203.0.113.9"))
+    assert "203.0.113.9" not in _old8bf and "0.0.0.0:5000" in _old8bf, \
+        "自证夹具失效：这个桩抓不住「忽略 ext_ip」的写法"
+    assert "203.0.113.9" in gui_app.webpath_hints("/aaabbbccc1/1112223333", "0.0.0.0", 5000,
+                                                  "203.0.113.9")[0], "真实现反而没接住 ext_ip"
+
+    print("[8bf] 续153 横幅地址收口 ok: 地址形状只有一个拼装点（源码计数，含「外网地址」那行必须消失）｜"
+          "绑 0.0.0.0 且取到出口地址时首行就换成能点开的那个，并在括注里写明本机绑定值与该放行的端口｜"
+          "取不到、取到的是 `0.0.0.0`/`::`、或与绑定值同一个 ⇒ 退回绑定值且不加括注，"
+          "绝不编一个看着能点的地址｜绑回环时一次都不去取出口地址（用会抛的桩验"
+          "「根本没被调用」，顺带证明离线 CI 不会被这行拖住）｜合并后含前缀那一行仍不落 server.log｜"
+          "换出口地址 ⇒ 那一行跟着变（§5.19）+ 一个「忽略 ext_ip」的自证桩")
 
     print("SMOKE PASS")
 

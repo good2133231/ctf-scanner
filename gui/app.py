@@ -4196,13 +4196,18 @@ def _egress_ip(timeout=1.5):
     return ip
 
 
-def webpath_hints(base, host, port):
+def webpath_hints(base, host, port, ext_ip=""):
     """启动横幅那几行：完整地址 + "它不是认证" + 节点端要改什么。
 
-    单一产地：`serve()` 只调它拿行，别处不再拼第二遍（续124 那条）。
+    单一产地：`serve()` 只调它拿行，别处不再拼第二遍（续124 那条）—— 续150 那版在
+    `serve()` 里又拼了一次 `http://{ip}:{port}{base}/`，于是"地址的形状"有两处，改一处会漏另一处。
+    `ext_ip`（续153）非空时，首行显示的就是**那个能直接点开的地址**，绑定值挪进后面的括注里；
+    空则照旧显示绑定值。这两种形态是同一句话的两个分支，所以也只能在这里生成。
     """
-    url = f"http://{host}:{port}{base}/"
-    out = [f"[*] 控制台地址：{url}"]
+    url = f"http://{ext_ip or host}:{port}{base}/"
+    note = ("" if not ext_ip else
+            f"  ← 可直接打开（本机绑定的是 {host}:{port}，安全组与防火墙放行该端口才通）")
+    out = [f"[*] 控制台地址：{url}{note}"]
     if base:
         out.append("    后台路径为**本次启动随机生成**（两层各 10 位），重启即换；"
                    "根路径与错误路径一律 404 空响应，不给扫描者任何提示。")
@@ -4325,15 +4330,18 @@ def serve(start_queue=True):
     else:
         app.wsgi_app = webpath.PrefixMiddleware(app.wsgi_app, _wp)
         app.wsgi_app._ctf_inner = _inner138
-    for _line in webpath_hints(_wp, host, port) + _wn:
-        say(_line)
-    # 续150：外网出口 IP（用户点单"控制台地址默认获取外网出口ip，这样可以直接打开"）。
-    # 绑回环时不印（本机自用没有"外网地址"这回事）；拿不到 IP 也不印；**绝不因此拖住启动**。
+    # 续153（主理人点单「这个外网地址就不要显示了 就直接显示在控制台地址里面」）：
+    # 绑 `0.0.0.0` 时印出来的 `http://0.0.0.0:5000/…` 根本不是能访问的地址（`0.0.0.0` 不是主机名），
+    # 复制过去还得手改；再单独印一行"外网地址"，就要人自己判断哪一行才是能点的。
+    # 绑回环时不去取出口地址（本机自用没有"外网地址"这回事）；取不到就不加注释 ——
+    # **绝不为了这一行拖住启动**（`_egress_ip()` 自带超时与静默降级，见其文档串）。
+    _ext153 = ""
     if host not in ("127.0.0.1", "localhost", "::1"):
-        _ext_ip = _egress_ip()
-        if _ext_ip and _ext_ip not in (host, "0.0.0.0", "::", ""):
-            say(f"[*] 外网地址（若这台机器有公网 IP / 端口映射，且安全组与防火墙已放行 {port} 端口）："
-                f"http://{_ext_ip}:{port}{_wp}/  ← 可直接打开（含本次随机前缀，重启即换）")
+        _e153 = _egress_ip()
+        if _e153 and _e153 not in (host, "0.0.0.0", "::"):
+            _ext153 = _e153
+    for _line in webpath_hints(_wp, host, port, _ext153) + _wn:
+        say(_line)
     # 续146-附3（用户点单「静音 console + 单独落一个 logs/access.log」）：接管逐请求访问日志。
     # 为什么在这儿而不是最上面：要把 `_wp`（本次前缀）交给它打码 —— 落盘的每一行里带着**客户端送来
     # 的原始路径**，而「前缀绝不落盘」是续138 的硬约束。这几行措辞本身不含前缀，所以能进 server.log。
