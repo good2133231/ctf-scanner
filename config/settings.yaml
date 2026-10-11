@@ -343,7 +343,7 @@ github:
   weak_downgrade: true
   relevance_whitelist: []
 multileak:
-  # 多平台公开代码检索（默认关）：GitHub 之外的只读检索源（默认 grepapp 免 key），只产出线索（leads 表）。
+  # 多平台公开代码检索（默认关）：GitHub 之外的只读检索源（默认 grepapp 免 key；gitlab 需 keys.gitlab.token），只产出线索（leads 表）。
   # 边界见 scanner/multileak.py 文件头：只落元数据（不保存文件内容）、auth=False、请求头不带任务登录态。
   enabled: false
   provider: grepapp
@@ -355,6 +355,8 @@ multileak:
   # 续157 #11：弱相关降级（默认开）与相关性白名单（与上面 github 段同口径）
   weak_downgrade: true
   relevance_whitelist: []
+  # 续158 H：provider=gitlab 时的实例根（自建实例改这里）；PAT 写 config/keys.yaml 的 gitlab.token
+  gitlab_base: https://gitlab.com
 flags:
   # 敏感信息 / CTF flag 候选抽取（续148 由"flag 候选"改名）：只吃**已经拿到**的响应正文，
   # 零额外请求；结果单独进 flags 表（不写 vulns、不计入漏洞数）。判据与成本封顶见

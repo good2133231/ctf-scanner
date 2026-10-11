@@ -442,9 +442,10 @@ ctf-scanner/
 │                          #   不覆盖同名、路径越界拒绝）。红线：机器不判定、没有"整批放开"旗标
 ├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
 ├── tools/fscan/           # fscan 落点（同上：**目录联接**指向仓库外的自编译二进制；.gitignore 排除）
-├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/**ssrf/shodan/quake/ctlog**/blacklist/**intel/heuristic/github** 二十三段（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
+├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/**ssrf/shodan/quake/ctlog**/blacklist/**intel/heuristic/github/multileak/flags/afrog/queue/dev/http/tools/dicts** 三十一段（＝ DEFAULTS 全部段；dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
 │                          #   注：原文写「十八段」且漏列 ssrf/shodan/quake/ctlog，与 GUI 实际覆盖的段数不符，
-│                          #   2026-09-24（续26）按 config/settings.yaml 实测更正为 **23 段**（tools/dicts/http 不可从页面改）
+│                          #   2026-09-24（续26）实测更正为 23 段；2026-10-12（续158）tools/dicts/http/queue/dev
+│                          #   五段接上策略页后实测为 **31 段（= 全部段）**，`tests/smoke.py [8at]` 的例外名单已清空
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
 ├── tools/calibrate_fingerprints.py # 组件指纹的**负样本校准**（续127，与 calibrate_pocs 同性质）：
 │                          #   12 份内联合成响应（通用软 404 / 无厂商特征的登录页 / SPA 首页 /
@@ -1076,6 +1077,7 @@ py -3 tests/browser_e2e.py     # 续60：真浏览器 E2E（无头 Chrome/Edge +
 py -3 cli/client.py -t http://127.0.0.1:8765/ -p probe,vulnscan --offline
 py -3 run_gui.py            # 入口在**启动横幅那行**（形如 http://<host>:<port>/<10位>/<10位>/，续138；
                             #   绑 0.0.0.0 且取到出口 IP 时首行换成能直接点开的公网地址、绑定值挪进括注（续153）；
+                            #   续157 起由 gui.announce_egress_ip 控制要不要问第三方（默认开；关＝零外发）
                             #   直接开根路径是 404 空响应）；库里没账号时**当场向导**问你要设什么口令
 py -3 cli/run_users.py --status # 续117：账号数 + 配置里有无历史残留（只报有无，不报任何值）
 py -3 -m scanner.edgeauth --status                # 续132：401 边缘门配过口令没有（只报有无，绝不报值）
@@ -1623,8 +1625,8 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
   改这一处**模板与路由要一起改**，回归 `[7h+]`（有账号档）与 `[7j]` ⑬（零账号档）两头都钉着。
   失败锁定 `max_fails_per_ip` 续108 由 10 收到 **5**，**三份默认值必须一起改**（`login_guard.DEFAULTS`
   / `config.DEFAULTS` / `config/settings.yaml`，`[7j]` ① 钉三方一致）；用例一律从 `_cfg48` 取阈值、
-  不许把数字写进循环（§6.2）。这两段阈值**页面上改不了** —— `/settings` 的 gui 段只有 host/port
-  两项（续117 起连口令那一栏也没有了）。
+  不许把数字写进循环（§6.2）。这两段阈值**页面上改不了** —— `/settings` 的 gui 段没有它们的输入框
+  （该段只有 host/port 与几个勾选项；`allowed_hosts`/`login_lockout` 等键保存时原样带回；续117 起连口令那一栏也没有了）。
   ✅ 续109 修掉其中第一条：会话签名密钥不再由 `gui.token` 推导 —— `config.session_secret()` 随机 32 字节、
      落在**库同目录**的 `session.secret`（0600；`data/` 本就在 .gitignore，`CTFSCANNER_DB` 一重定向就自动进测试沙箱），
      已存在则复用（重启不打光会话），写不了就**退回进程内随机并 warning**（绝不静默降级，更绝不退回可推导串）。
@@ -1640,12 +1642,12 @@ fail-open 保留 —— 所以这条断言吃的从来不是代码，是**外部
      （否则一升级就把人锁在门外），每次启动打 warning 催迁移。详见下面「引导口令只存派生值」一条。
 - 「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
   takeover/portscan/jsmine/dirscan/vulnscan/screenshot/cert/iprecon/fofa/**ssrf/shodan/quake/ctlog**/
-  blacklist/intel/heuristic/**github** **二十三段**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned）
+  blacklist/intel/heuristic/**github/multileak/flags/afrog/queue/dev/http/tools/dicts** **三十一段（= DEFAULTS 全段；续158 起 tools/dicts/http/queue/dev 也可从页面改）**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned）
   （含按级别 / 按 OWASP 分类 /
   按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
   于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭；
   `dirscan` 默认值于**第十八轮（续9）**由 `false` 反转为 `true`+`mode=quick`）；
-  外部工具路径、字典路径与 `passive.sources` 清单要手改 settings.yaml；
+  `passive.sources` 清单仍要手改 settings.yaml（外部工具路径与字典路径续158 起可在策略页「队列 / 开发模式 / 高级」改）；
   fofa 的 email/key 要手改 `config/keys.yaml`（控制台只读、不写回凭据）。
   （**但"装外部工具"不再需要手改**：续54 的 CLI `--update-tools` / GUI「外部工具」页会自己回写。）
 - **`settings.yaml` 有两条写回路径，别混用**（续54 起因）：GUI「策略配置」保存走 `config.save_settings()`

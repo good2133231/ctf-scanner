@@ -5406,7 +5406,7 @@ workflows:
     _orig_ml_http = ml_mod.http_request
     ml_mod.http_request = _ml_must_not_http
     try:
-        # provider 未实现（gitlab 现已要求认证）→ 零请求 + 如实写原因
+        # gitlab 没配 token → 零请求 + 如实写原因（接口要求认证；配了 token 的请求路径见本组 H 段）
         _ml_l, _ml_m = ml_mod.collect(["targ1.pro"], {"multileak": {"provider": "gitlab"}})
         assert _ml_l == [] and _ml_m["queries"] == 0 and _ml_req == [], _ml_m
         assert "gitlab" in (_ml_m.get("error") or ""), _ml_m
@@ -5421,6 +5421,24 @@ workflows:
                                   whitelist=("someone",))[0]["level"] == "medium"
         assert _DEF6P["multileak"]["weak_downgrade"] is True, "DEFAULTS 缺 multileak.weak_downgrade"
         assert _DEF6P["multileak"]["relevance_whitelist"] == [], "DEFAULTS 缺 relevance_whitelist"
+        # 续158 H：GitLab provider（按官方 Search API 文档实现；无 token 零请求；只读元数据不碰 data）
+        _gl_no, _gl_m = ml_mod.collect(["targ1.pro"], {"multileak": {"provider": "gitlab"}})
+        assert _gl_no == [] and _gl_m["queries"] == 0 and "gitlab.token" in _gl_m["error"], _gl_m
+        _gl_hit = ml_mod.normalize_gitlab_hit(
+            {"basename": "README", "data": "SECRET-LEAK", "path": "README.md",
+             "ref": "main", "startline": 46, "project_id": 6}, "mention")
+        assert _gl_hit == {"repo": "gitlab#6", "path": "README.md",
+                           "ref": "main", "rule": "mention"}, _gl_hit
+        import json as _jH157
+        _gh_h, _gh_t, _gh_e = ml_mod.parse_gitlab_response(
+            _jH157.dumps([{"basename": "a", "data": "x", "path": "a.py",
+                          "ref": "main", "project_id": 9}]), "mention")
+        assert _gh_h and _gh_t == 1 and not _gh_e and "data" not in _gh_h[0], _gh_h
+        assert ml_mod.parse_gitlab_response("{}", "mention")[2], "顶层不是数组要如实报错"
+        assert "scope=blobs" in ml_mod.gitlab_search_url("targ1.pro", {"multileak": {}})
+        assert ml_mod.gitlab_base({"multileak": {"gitlab_base": "https://gl.corp/"}}) == "https://gl.corp", \
+            "gitlab_base 末尾斜杠没抹掉（会拼出 //api/v4）"
+        assert _DEF6P["multileak"]["gitlab_base"] == "https://gitlab.com", "DEFAULTS 缺 gitlab_base"
     finally:
         ml_mod.http_request = _orig_ml_http
 
@@ -20034,20 +20052,26 @@ expression: r0()
         # 例外段（策略页根本没有输入框、页面改不了）**显式列出**，刻意不用"自动跳过没有
         # 输入框的段"那种豁免 —— 上一轮的缺键正是从"没人逐段点名"里藏住的。
         _cov145 = sorted(_cap145)
-        _exc145 = {"tools", "dicts", "http", "queue", "dev"}   # 见 gui/templates/settings.html
         _bad145 = []
         for _sec145 in _cov145:
-            if _sec145 in _exc145:
-                continue
             _lost145 = sorted(set(_D145.get(_sec145, {})) - set(_cap145.get(_sec145) or {}))
             if _lost145:
                 _bad145.append(f"{_sec145}:{_lost145}")
         assert not _bad145, \
             f"POST /settings 映射缺键（保存一次就把这些开关重置）：{_bad145}"
-        # 例外段必须**真的**没被覆盖：哪天给它们加了输入框，这份名单就要跟着改，不许静默放过
-        assert not (set(_exc145) & set(_cov145)), \
-            f"例外段却被 POST 覆盖了（名单过期）：{sorted(set(_exc145) & set(_cov145))}"
-        assert len(_cov145) >= 20, f"覆盖段数异常偏少（判据可能是空写）：{len(_cov145)}"
+        # 续158 A：tools/dicts/http/queue/dev 五段补上输入框后**例外名单清空** —— 判据从
+        # "不少于 N 段"升级为"覆盖 = DEFAULTS 全段"：新增段忘了接页面会当场报出名字，
+        # 也不再保留"自动跳过没有输入框的段"那种豁免（上一轮的缺键正是从那里藏住的）。
+        assert set(_cov145) == set(_D145), \
+            f"POST /settings 映射没覆盖全部段（漏：{sorted(set(_D145) - set(_cov145))}）"
+        # 续158 A：五段真接上了页面（渲染出的 HTML 里有输入框）
+        _sh157 = c.get("/settings").get_data(as_text=True)
+        assert 'name="queue_workers"' in _sh157 and 'name="dev_enabled"' in _sh157, \
+            "策略页缺队列/开发模式输入框"
+        assert 'name="tools_subfinder"' in _sh157 and 'name="tools_dirmap_script"' in _sh157, \
+            "策略页缺工具路径输入框（含 dirmap 子键）"
+        assert 'name="dicts_subdomains"' in _sh157 and 'name="http_user_agent"' in _sh157, \
+            "策略页缺字典/UA 输入框"
         # 重复键是这类损坏的另一半：源码里同一段只许出现一次
         _n_sub145 = _apa145.count('"subdomain": {"max_resolve"')
         assert _n_sub145 == 1, f"POST 映射里 subdomain 段出现了 {_n_sub145} 次（重复键＝后者静默盖前者）"
@@ -20210,6 +20234,7 @@ expression: r0()
     print("[8at] 续145 摘补扫入口 + 自动提取主域 + 启动日志落文件 ok: "
           "/api/rescan 接口保留而 GUI 一个消费方都没有（续154 撤复查入口，详情页 POST 表单恰好 1 个）｜"
           "subdomain.auto_root 三方一致 + 真 POST 两个方向都存得进去｜"
+          "POST /settings 映射逐段逐键不许少（续158 例外名单清空，段集合 == DEFAULTS 全段）｜"
           "折叠那行日志仍带 devflow 认的「自动拓展」kw（判据本体的红线搬到 [8au]⑤）｜"
           "_boot_gaps 五档纯函数（门关时一个字不提边缘门、清单里不许有第二处补法）｜"
           "启动横幅逐行进 logs/server.log、**随机前缀绝不落盘**（含“额外塞一行”的内容级证伪）、"

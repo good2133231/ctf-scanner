@@ -3383,3 +3383,20 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [ ] 合并 worktree / 同步本地 `main`：共享区 `/opt/tools/ctf/ctf-scanner/tests/smoke.py` 仍是别的会话未提交的坏文件（少 27 组、语法不过）；他们提交后再 rebase
 
 - [ ] 策略页 POST 映射的"逐键不许少"推到全部段（见「附」节那条）
+
+## 续158（2026-10-12，WorkBuddy · DeepSeek-V4.1-Flash）：策略页五段接上页面 + GitLab provider 落地（续157「下一轮」清单前两项）
+
+本轮已做（代码 = 上一会话未提交批的收官；记忆 + 提交推送 = 本会话；门禁 `logs/_gate158a.log`、
+复验 `logs/_gate158b.log` / `_gate158c.log`（修重复赋值后终验））：
+- [x] A 策略页：queue/dev/http/tools/dicts 五段接上页面（新「队列 / 开发模式 / 高级」折叠面板 +
+      POST 按字段类型回填、缺字段退回原值）；`[8at]` 的「逐键不许少」升级为**段集合 == DEFAULTS 全段**（例外名单清空）
+- [x] H 多平台源：GitLab provider（`keys.gitlab.token`；没 token 零请求；只读元数据不碰 `data`；`gitlab_base` 可配）
+- [x] 一致性修订：settings.html / multileak 文件头 / DEFAULTS 与 yaml 注释 / stage 日志源名（"grep.app 报告共"改现取）改口；
+      AGENTS「23 段（tools/dicts/http 不可从页面改）」→「31 段 = 全部段」
+- [x] 如实记录：**GitLab 真机检索未实测**（本机无只读 PAT）
+
+下一轮（续159）：
+- [ ] #12 MITM 流量录制与 AI/Agent 编排（主理人定红线：可发目标请求，仅高危动作审批）
+- [ ] 合并 worktree / 同步本地 `main`：共享区 `ctf-scanner/tests/smoke.py` 仍是别的会话未提交的坏文件（少 27 组、语法不过）——
+      该路径在仓库外，读它要先拿到用户当场授权
+- [ ] GitLab 真机端到端：拿到只读 PAT 后跑一次 grepapp / gitlab 对照（本轮只有单元自证）

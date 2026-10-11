@@ -14,3 +14,5 @@ quake:
   key: ""        # 360 Quake API key（favicon 反查，默认关）
 github:
   token: ""      # GitHub PAT（GitHub 泄露检索阶段用，默认关；没配就一次请求都不发）
+gitlab:
+  token: ""      # GitLab PAT（续158：多平台检索 provider=gitlab 用；**只读** scope 即可，默认关）

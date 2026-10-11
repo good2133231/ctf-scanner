@@ -3439,6 +3439,9 @@ def create_app():
         if request.method == "POST":
             f = request.form
             _g0 = settings.get("gui") or {}
+            _h0 = settings.get("http") or {}
+            _q0 = settings.get("queue") or {}
+            _d0 = settings.get("dev") or {}
             _l0 = settings.get("limits") or {}
             _j0 = settings.get("jsmine") or {}
             _p0 = settings.get("passive") or {}
@@ -3713,8 +3716,43 @@ def create_app():
                                       "weak_downgrade", True)),
                                   "relevance_whitelist": list(
                                       (settings.get("multileak") or {}).get(
-                                          "relevance_whitelist") or [])},
+                                          "relevance_whitelist") or []),
+                                  "gitlab_base": (f.get("multileak_gitlab_base")
+                                                  or "https://gitlab.com").strip()},
+                    # 续158 A：原先"只能改文件"的五段（queue/dev/http/tools/dicts）接上页面。
+                    # int/文本键取不到表单字段（或留空）就退回**原值** —— 别的入口 POST 少带
+                    # 字段时不会把键重置；勾选框按 HTML 语义（不勾=False）由整页表单每次带上。
+                    "queue": {"workers": int(f.get("queue_workers")
+                                             or _q0.get("workers", 1) or 1)},
+                    "dev": {"enabled": f.get("dev_enabled") == "1",
+                            "fixture_port": int(f.get("dev_fixture_port")
+                                                or _d0.get("fixture_port", 0) or 0)},
+                    "http": {**(_h0), "user_agent": (f.get("http_user_agent") or "").strip()
+                             or (_h0.get("user_agent") or "")},
                 }
+                # 续158 A：tools / dicts 就地按**字段类型**回填（dirmap 里 threads 是 int，
+                # 不能一律 .strip()；取不到表单字段就退回原值，别的入口少带字段不会重置）。
+                def _fill158(cur, prefix):
+                    out = {}
+                    for _k, _v in (cur or {}).items():
+                        if isinstance(_v, dict):
+                            out[_k] = _fill158(_v, f"{prefix}_{_k}")
+                            continue
+                        raw = f.get(f"{prefix}_{_k}")
+                        if raw is None or raw == "":
+                            out[_k] = _v
+                        elif isinstance(_v, bool):
+                            out[_k] = raw in ("1", "true", "on")
+                        elif isinstance(_v, int):
+                            try:
+                                out[_k] = int(raw)
+                            except ValueError:
+                                out[_k] = _v
+                        else:
+                            out[_k] = str(raw).strip()
+                    return out
+                data["tools"] = _fill158(settings.get("tools") or {}, "tools")
+                data["dicts"] = _fill158(settings.get("dicts") or {}, "dicts")
             except ValueError:
                 _s114 = load_settings()
                 return render_template("settings.html", s=_s114, checks=owasp_checks,

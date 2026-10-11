@@ -560,7 +560,7 @@ DEFAULTS = {
         # ① **只落元数据**（仓库 / 文件路径 / 命中规则名），绝不落文件内容（命中片段可能含凭据明文）；
         # ② 所有请求 `auth=False`（任务级登录态绝不外发）；③ **默认关 + 限额**；**不写 vulns**。
         "enabled": False,
-        "provider": "grepapp",     # 当前只实现 grepapp（免 key）；gitlab 现已要求认证，未实现
+        "provider": "grepapp",     # grepapp 免 key；gitlab（续158）用 keys.gitlab.token，没配 token 零请求
         "max_domains": 3,          # 最多对几个注册域检索
         "max_queries": 4,          # 最多发几次检索请求（免 key 接口有速率限制）
         "per_page": 10,            # 单次请求最多取回多少条命中
@@ -569,6 +569,8 @@ DEFAULTS = {
         # 续157：#11 弱相关降级与白名单（与 github 同口径；此前硬编码在 multileak.build_lead 里）
         "weak_downgrade": True,
         "relevance_whitelist": [],
+        # 续158 H：GitLab provider 的实例根（自建 GitLab 改这一项）；凭据见 config/keys.yaml 的 gitlab.token
+        "gitlab_base": "https://gitlab.com",
     },
     "flags": {
         # 敏感信息 / CTF flag 候选抽取：在**已经拿到**的响应正文里按形状找值得抄走的串，

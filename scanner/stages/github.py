@@ -1,7 +1,7 @@
 """阶段：泄露检索（GitHub 续26 / 多平台 续150-附，11-调度 + 11-多平台）。
 
 位置：本阶段固定排在流水线**最后** —— 它不产出任何被后续阶段消费的数据，只是拿任务的注册域
-去公开代码库里搜一遍，把命中整理成**线索**（`leads` 表，kind=`github` / `grepapp`）供人工判断。
+去公开代码库里搜一遍，把命中整理成**线索**（`leads` 表，kind=`github` / `grepapp` / `gitlab`）供人工判断。
 
 **续150-附（用户 2026-10-11 点单 11-调度）**：检索只依赖**注册域**（`ctx.targets`），与子域名
 收集毫无数据依赖，串行排到流水线末端纯属白等。现在 `subdomain` 阶段**一开始**就并发触发一次
@@ -10,14 +10,15 @@
 
 配置（`github` 段）：`enabled`（**默认关**）/ `max_domains` / `max_queries` / `per_page` /
 `max_leads` / `timeout`；token 在 `config/keys.yaml` 的 `github.token`。
-配置（`multileak` 段，续150-附 11-多平台）：`enabled`（**默认关**）/ `provider`（默认 `grepapp`，
-免 key）/ `max_domains` / `max_queries` / `per_page` / `max_leads` / `timeout`。
+配置（`multileak` 段，续150-附 11-多平台）：`enabled`（**默认关**）/ `provider`（默认 `grepapp` 免 key；
+`gitlab` 需 `keys.gitlab.token`，实例根 `multileak.gitlab_base`）/ `max_domains` / `max_queries` /
+`per_page` / `max_leads` / `timeout`。
 
 三条硬边界（改代码前先读 `scanner/github_leak.py` 文件头，那里写得比这里细）：
 1. **只落元数据，绝不落文件内容** —— 仓库 / 文件路径 / 命中规则名，避免凭据明文入库；
 2. **`auth=False`** —— 任务级登录态（目标侧 Cookie / Token）绝不发给第三方；
 3. **默认关 + 没 token 就零请求** —— GitHub 代码搜索接口要求认证，没配 token 时直接说明原因跳过；
-   多平台源（grep.app）免 key，但同样默认关、且失败一律如实写原因。
+   多平台源默认关（grep.app 免 key；GitLab 每个调用都必须认证、没 token 零请求），失败一律如实写原因。
 
 产出：`db.insert_leads()` —— **不写 `vulns`、不计入漏洞数、不自动导入 POC**。
 线索的出口是 **JSONL 导出**（`type=lead`）：按续24 口径，GUI 页签与人读报告（MD / HTML）
@@ -141,7 +142,7 @@ def run_github_search(ctx):
 
 
 def run_multileak_search(ctx):
-    """幂等地跑一次多平台检索并入库（续150-附 11-多平台：grep.app 免 key 源）。"""
+    """幂等地跑一次多平台检索并入库（续150-附 11-多平台；续158 起 provider 支持 grepapp / gitlab）。"""
     if "leads_multileak" in ctx.results:
         ctx.logger.info("[multileak] 已在子域阶段检索过，跳过")
         return
@@ -177,11 +178,14 @@ def run_multileak_search(ctx):
 
     added = db.insert_leads(ctx.task_id, leads)
     ctx.results["leads_multileak"] = leads
+    # 续158：源名现取（grepapp / gitlab 都可用）—— 写死 "grep.app" 在 gitlab 下就是假话
+    _prov = multileak.provider_of(ctx.settings)
+    _src = (multileak.SOURCES.get(_prov) or {}).get("source") or _prov
     if not leads:
         ctx.logger.info(f"[multileak] 检索 {meta.get('queries', 0)} 次，未命中"
-                        f"（grep.app 报告共 {meta.get('hits', 0)} 条），未产生线索")
+                        f"（{_src} 报告共 {meta.get('hits', 0)} 条），未产生线索")
         return
-    ctx.logger.info(f"[multileak] 检索 {meta.get('queries', 0)} 次（grep.app 报告共 "
+    ctx.logger.info(f"[multileak] 检索 {meta.get('queries', 0)} 次（{_src} 报告共 "
                     f"{meta.get('hits', 0)} 条）→ 线索 {len(leads)} 条，入库 {added} 条"
                     f"（只记仓库/文件路径/命中规则，不保存文件内容）")
     ctx.logger.info("[multileak] 注意：线索≠漏洞结论，需人工确认（不写 vulns、不计入漏洞数）")

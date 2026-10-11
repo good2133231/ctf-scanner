@@ -3,6 +3,55 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续158 策略页「只能改文件」的五段全部接上页面 + GitLab provider 落地
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash。本轮完成 续157 节「还没做（下一轮）」清单里的前两项
+（代码由上一会话写到一半、未提交；本会话收官：补齐一致性修订、升级判据、跑全量门禁、同步记忆）。
+内部标号沿用上一会话：A＝策略页五段、H＝GitLab provider（与 续157 的 #D/#E/#F/#G 同一套点单编号）。
+
+### 做了什么
+
+- **A 策略页补输入框（queue / dev / http / tools / dicts 五段）**：`gui/templates/settings.html`
+  新增「队列 / 开发模式 / 高级」折叠面板（tools/dicts 各自再折叠）；`gui/app.py` POST 映射按
+  **字段类型**回填：int 用 int、bool 认 `1/true/on`、其余 strip；取不到表单字段（或留空）退回
+  **原值** —— 别的入口少带字段不会把键静默重置。`[8at]` 的「逐键不许少」同步升级：
+  例外名单清空，段集合判据从「≥24」改成「**== DEFAULTS 全段（31）**」。
+- **H GitLab provider（第二个多平台检索源）**：`scanner/multileak.py` 按官方 Search API 文档
+  实现 `provider=gitlab`：`/api/v4/search?scope=blobs&search=<域名>`、**每个调用都必须认证** ⇒
+  没配 `config/keys.yaml` 的 `gitlab.token` 时**一次请求都不发**并如实报「未配置」；实例根可配
+  （`multileak.gitlab_base`，自建 GitLab 用）；响应只取元数据（`project_id`/`path`/`ref`，
+  `repo` 记为 `gitlab#<id>`），`data`（命中处文件片段）一个字都不读；401/403/429 各有指名原因。
+  `config/keys.yaml.example` 补 gitlab 段；策略页与 `multileak` 段的 provider 文案同步改口。
+- 一致性修订（避免 gitlab 可用后留假话）：`settings.html` / `multileak.py` 文件头 /
+  `DEFAULTS` 与 `settings.yaml` 注释 / `stages/github.py` 的「grep.app 报告共 …」日志（现取
+  源名）全部改口；`AGENTS.md` 的 `config/settings.yaml` 条目由「23 段（tools/dicts/http 不可
+  从页面改）」更正为「**31 段 ＝ 全部段**」（`[8at]` 例外名单已清空）。
+
+### 验证
+
+- 全量 `tests/smoke.py` → **`SMOKE PASS` / AssertionError 0 / exit 0**，组打印 180 条
+  （口径＝`^\[组名\] ` 行；续157 同口径 180 条 ⇒ 本轮无新增组）；门禁 `logs/_gate158a.log`（代码批）、`logs/_gate158b.log`（记忆补完复验）、`logs/_gate158c.log`（修掉下面「自造坑」两处后的终验）。
+- `tests/browser_e2e.py` → 真 Flask + 真 Chrome **72 条断言全绿**（`logs/_e2e158a.log`）。
+- 备注：a 轮在命令沙箱内跑，headless Chrome 的截图用例被沙箱拦（`/dev/fd` Permission denied）⇒ 按既有的「截不出指名跳过」档处理；独立 `browser_e2e.py` 在沙箱外跑，真浏览器 72 条全绿。
+- 单元自证：gitlab 无 token 零请求 / URL 与 base 规整 / 响应只留元数据不碰 `data` /
+  401/403/429 原因分档；`keys.yaml.example` 与 `DEFAULTS` / `settings.yaml` 三处一致。
+- **GitLab 真机检索未实测**（本机无只读 PAT；如实记，不把"没跑过"说成"验证过"）。
+- 行尾：改动文件 `git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 两式相等（`logs/_apatch.py`
+  逐文件打印对照），无整文件级 churn。
+
+### 自造坑记录在案（下一轮别再踩）
+
+- 给 `stages/github.py` 换日志源名那笔补丁把 `ctx.results["leads_multileak"] = leads` 落了
+  **两行**（同值幂等 ⇒ `py_compile` 与全量门禁都不报红）；同批还把 `multileak.py` 里一行注释
+  掉了缩进（顶格，语法合法）—— 两处都只靠**全量 `git diff` 复查**抓到。教训同续155 那款：
+  **内容锚点补丁改完要盯 `git diff` 的 +/- 面**；已删重复、修缩进，并重跑 `_gate158c.log`。
+
+### 还没做（下一轮）
+
+- **#12 MITM**：代理录制 + Agent 编排（红线：可发目标请求、仅高危动作审批）。
+- **合并 worktree / 同步本地 `main`**：共享区 `ctf-scanner/tests/smoke.py` 仍是别的会话未提交的坏文件。
+- GitLab 真机端到端：拿到只读 PAT 后跑一次 grepapp / gitlab 对照。
+
 ## 续157 控制台日志勾选框 + 漏洞页可视化总览 + 真实 IP 反查回写 + multileak 弱相关可配
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash。本轮做续157 清单（分批：先 #1/#2/#7/#11，再做

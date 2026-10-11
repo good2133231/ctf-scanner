@@ -498,20 +498,24 @@
       绝不会发给 GitHub</b>。三项限额的理由：代码搜索限流约 <b>10 次/分钟</b>，
       所以只查目标的<b>注册域</b>（子域名与主域命中高度重叠），不逐个查子域名。</p>
     <label class="chk"><input type="checkbox" name="multileak_enabled" value="1"
-      {{ 'checked' if s.multileak.enabled }}> 多平台公开代码检索（续150）：GitHub 之外的只读源（grep.app，免 key）</label>
+      {{ 'checked' if s.multileak.enabled }}> 多平台公开代码检索（续150）：GitHub 之外的只读源（grep.app 免 key / GitLab 需 token）</label>
     <div class="row">
       <label>提供方 provider <input name="multileak_provider" value="{{ s.multileak.provider }}"></label>
+      <label>GitLab 实例根 <input name="multileak_gitlab_base" value="{{ s.multileak.gitlab_base }}"></label>
       <label>最多注册域数 <input name="multileak_max_domains" value="{{ s.multileak.max_domains }}"></label>
       <label>最多查询次数 <input name="multileak_max_queries" value="{{ s.multileak.max_queries }}"></label>
       <label>单次取回条数 <input name="multileak_per_page" value="{{ s.multileak.per_page }}"></label>
       <label>单任务线索上限 <input name="multileak_max_leads" value="{{ s.multileak.max_leads }}"></label>
       <label>请求超时（秒） <input name="multileak_timeout" value="{{ s.multileak.timeout }}"></label>
     </div>
-    <p class="muted small">当前只实现 <code class="mono">grepapp</code>（免 key 公开接口）；
-      GitLab 匿名检索已要求认证、无真样本，<b>未实现</b>（见 <code class="mono">scanner/multileak.py</code> 文件头）。
+    <p class="muted small">两个 provider（续158）：<code class="mono">grepapp</code>（免 key 公开接口）与
+      <code class="mono">gitlab</code>（<b>每个调用都必须认证</b>；token 写 <code class="mono">config/keys.yaml</code>
+      的 <code class="mono">gitlab.token</code>，只读 scope 即可；没配 token 就零请求并如实报"未配置"；
+      自建实例改上面的实例根）。
       与 GitHub 检索同一条边界：<b>只落元数据</b>（仓库 / 文件路径 / 命中规则名），
-      <b>不保存文件内容</b>；请求一律 <code class="mono">auth=False</code>，
-      <b>任务级登录态绝不外发</b>；<b>不写 vulns、不计入漏洞数</b>。</p>
+      <b>不保存文件内容</b>；请求 <code class="mono">auth=False</code>，
+      <b>任务级登录态绝不外发</b>（GitLab 自家 token 走它要求的 PRIVATE-TOKEN 头，不是任务登录态）；
+      <b>不写 vulns、不计入漏洞数</b>。</p>
   </section>
 
   <section class="panel collapsible" data-panel="limits">
@@ -552,6 +556,33 @@
         预估 HTTP 请求数，fscan/nmap 按 <span class="mono">主机 × 端口</span> 预估探测次数，
         两者单位不同所以<b>分开设</b>。超限时 afrog 直接不起、端口扫描退回内置实现
         （那条真的走本任务的并发/限速/预算）。<b>预估数字无论设不设上限都会写进任务日志</b>。</p>
+    </details>
+  </section>
+
+  <section class="panel collapsible" data-panel="advanced">
+    <h2>队列 / 开发模式 / 高级</h2>
+    <p class="muted small">续158：这几段原先"只能改文件"，现已接上页面（改完保存即生效；
+      工具路径与字典路径请填仓库内相对路径）。</p>
+    <label>队列 worker 数 <input name="queue_workers" value="{{ s.queue.workers }}"></label>
+    <label class="chk"><input type="checkbox" name="dev_enabled" value="1"
+      {{ 'checked' if s.dev.enabled }}> 开发模式（并发/预算压到最小，跑全流程自检用）</label>
+    <label>开发模式夹具端口（0=自动） <input name="dev_fixture_port" value="{{ s.dev.fixture_port }}"></label>
+    <label>HTTP User-Agent <input name="http_user_agent" value="{{ s.http.user_agent }}"></label>
+    <details class="subpanel"><summary>工具路径 tools.*（共 {{ s.tools|length }} 项）</summary>
+      {% for _k, _v in s.tools.items() %}
+        {% if _v is mapping %}
+          {% for _kk, _vv in _v.items() %}
+          <label class="mono">tools.{{ _k }}.{{ _kk }} <input name="tools_{{ _k }}_{{ _kk }}" value="{{ _vv }}"></label>
+          {% endfor %}
+        {% else %}
+        <label class="mono">tools.{{ _k }} <input name="tools_{{ _k }}" value="{{ _v }}"></label>
+        {% endif %}
+      {% endfor %}
+    </details>
+    <details class="subpanel"><summary>字典路径 dicts.*（共 {{ s.dicts|length }} 条）</summary>
+      {% for _k, _v in s.dicts.items() %}
+      <label class="mono">dicts.{{ _k }} <input name="dicts_{{ _k }}" value="{{ _v }}"></label>
+      {% endfor %}
     </details>
   </section>
 
