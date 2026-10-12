@@ -4,6 +4,146 @@
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
 
+
+## 续162-附 主理人递来一份凭据文件：合并进 `keys.enc.yaml`（只加不减）+ 差点把"没配上"报成"配好了"
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人一句「读取文件1的内容 你自己帮我配置把 要加密」，
+指的是仓库根那个**未跟踪但也没被 ignore** 的文件 `1`（2,946 B、0644、109 行，另一个工具的凭据导出）。
+
+### 先说结果与两处要人知道的事
+
+- 密文 `config/keys.enc.yaml` 现在有 **`fofa`(email+key) / `shodan` / `quake` / `github`(两只)** 四组；
+  `gitlab` 仍没有（那份文件里 `hunter_name`/`censys_id` 等全是空值）。运行期实测：
+  `keystore.unlock()` 从 `~/.secrets/keys-pass` 解开（`source=file`），
+  `fofa.available(settings)=True`、`shodan`/`quake` 同样 True。
+- **只验证了一次、一次都不多**：`fofa.search_query('domain="example.com"', size=1)` 打了一次真查询，
+  返回 total=65 / 1 条 / 无错误 —— 这是"key 有效"的唯一硬证据，光"字段填上了"不算。
+- 那个明文文件已从仓库根**移出**到 `~/.secrets/keys-from-file1-20261012_1116.txt`（0600）。
+  它原先是 `?? 1`（未跟踪**也未 ignore**）—— 一次 `git add -A` 就能把 8 个厂商的明文 key
+  提交进这个**公开仓库**，与 §0.5 记着的那次 `ghp_` 事故同一个形状。我没有删它，位置如上，要不要销毁由主理人定。
+- 旧密文两份备份都在 `~/.secrets/keys.enc.yaml.bak-20261012_111315` / `-111517`（0600）。
+  `github.token` 与 `github.push_token` **逐字未动**（掩码复验 `3687c85f` / `74f813b3`）：
+  文件里那只 github 是**另一只** PAT（掩码 `31e96c0b`，93 字符），我没有拿它盖掉今天刚实测过
+  `/search/code` 能用的那只 —— 覆盖凭据这种事必须保守，猜错了表现为"检索突然没结果"，很难归因。
+
+### 中间出错的一次，记下来（AGENTS §6.2 第十七起）
+
+第一次解析那份文件用的是 `re.finditer(r"^\s*(键)\s*[:=]\s*(\S.*)$", raw, re.M)`：
+`\s*` 吃得到换行，所以 `fofa:` 这种**值在下一行**的段头会把下一行整条吞成一个键 ——
+`fofa_email` / `quake_api` 在结果里**根本不存在**，而 `shodan:`（值在同一行）照常命中。
+于是第一次落盘只带进 shodan 一组。**如果我照"打印出来的段与掩码"就回报配好了，FOFA 仍然是空的。**
+暴露它的是我随后加的那条完整性断言（`assert "fofa" in overlay and "quake" in overlay`）+
+逐行 `match` 重解析；第二次合并后按**来源逐字段**回读复验才报数。
+教训三条：行式配置逐行解析、别在 MULTILINE 里用 `^\s*`；"读进来→落盘"之间要有一条**完整性**断言；
+落盘复验要比**内容**而不是比"能不能解开"。
+
+### 代码侧的连带修正（都属于续162 那条链）
+
+- AGENTS §7 里两条**互相矛盾**的凭据条目合成一条：旧的还写着「本模块刻意不提供记住口令/免输入、
+  无人值守只接受环境变量」—— 那正是续162 改掉的口径，两份并排就是文档自己打自己（§0.4）。
+  仍成立的部分（PBKDF2+AES-GCM、写进被跟踪文件就退化成混淆、不防内存 dump、
+  未解锁绝不回落明文）保留在新条目里。
+- 「本机密文只有 github」那条实况**加了时间戳**并写明同一天已合并 —— 文档里不带时点的
+  本机状态必然漂（§5.19）。
+
+### 实测
+
+- 凭据侧：`keystore.unlock()` `source=file` 解开 → `keys` 段变成
+  `fofa / github / quake / shodan` 四组；`fofa.available=True`、`shodan.available=True`、
+  `quake.available=True`；**一次**最小真查询 `domain="example.com"` size=1 →
+  `total=65 / 返回 1 条 / 错误为空`（旧密文与中间态都留在 `~/.secrets/keys.enc.yaml.bak-*`，0600）。
+- 门禁侧：本附**不新增断言**，只复验三份记忆没把门禁改红 —— `tests/smoke.py`（`logs/_gate162g.log`）**SMOKE PASS**、组打印 185 行（去重 161 组；同一判据数续161 终验 `_gate161c.log` 得 184 行，多的就是 `[8bt]`）、AssertionError 0。
+  **刻意不报「日志总行数」—— 它不可比**：本附落完后端到端复跑两次，一次 4071 行、一次 5162 行，两次都全绿；逐组比对 160/161 条组行**逐字相同**，唯一变的是 `[6u]`（真跑 13 阶段那一组）的 `subdomains 6→5`，它本来就依赖外部被动源与 DNS；而多出来的 1091 行里 **71% 是 urllib3 的 `InsecureRequestWarning` 噪声**。
+  第一版这里我抄的是另一次跑的 4072 行 —— 差一行就是没复验（§0.4），而更该记的是：**这类量压根不该当实测数字报出去**。
+
+## 续162 凭据解锁补上文档早就承诺的第三档；「为什么没 key」改成跟着状态现取；`--encrypt` 不再整份覆盖密文
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人两条点单：① `config/edge_auth.yaml` 删掉
+（暂时不用 401，代码保留）；② 「`keys.enc.yaml` 现在 fofa 应该要读取这个，我记得我是把密钥加密了，
+他应该也要去解密获取」，附三行日志 `FOFA 未配置 email/key（config/keys.yaml）`。
+
+### 先把"到底是什么状态"量清楚（三处实测，全部不落值）
+
+1. **三份密文里都没有 fofa**：`config/keys.enc.yaml`（现，229 B）＋ `logs/keys.enc.yaml.bak-20261012_040825`
+   （176 B）＋ `~/.secrets/keys.enc.yaml.bak-20261008_091048`（197 B），用 `~/.secrets/keys-pass`
+   逐个真解开，顶层组**都只有 `github`**（现文件是 `push_token` + `token` 两条）。
+   全盘 `find` 也没有任何明文 `keys.yaml` 副本（`config/` 里只有 `keys.yaml.example`）。
+   ⇒ **FOFA 的 email/key 从来没进过这份密文**，"解开就有没有"这一条不成立，值得重新给。
+2. **但运行期确实从来没解锁过**：`logs/server.log` 里每一次启动都有一行
+   `凭据保持锁定：已配置为启动时不询问（gui.keys_ask_passphrase=false）…`（2026-10-10 起 6 次，
+   含 05:53 那次也就是**当前在跑的那个进程**）。⇒ 连已经配好的 `github.token` 也没在用。
+3. **文档早就写了三档、代码只实现两档**：`install.sh:95` 与 `AGENTS §2`（2026-10-08 落定的那段）
+   都写着口令「只从 `CTFSCANNER_KEYS_PASSPHRASE` / `~/.secrets/keys-pass`（0600）/ TTY 取」，
+   仓库外那个 `/opt/tools/ctf/git-cred-helper.py` 确实实现了三档 —— 而 `keystore.unlock()` 只有
+   参数 / 环境变量 / TTY。**承诺与实现的缺口就是本机的现象**：推送能免交互（助手认文件），
+   扫描与 GUI 却不认（每次锁着）。
+
+### 做了什么
+
+- `scanner/keystore.py`：新增 `PASSPHRASE_FILE = "~/.secrets/keys-pass"`（**写成 `~/` 字面形、用时才展开**
+  —— 报错文案要引用它，展开成家目录绝对路径会撞 §0.3）、`file_passphrase()`（三条守卫一条不省：
+  POSIX 下权限**正好** 0600、属主必须是当前用户、去空白后非空；不满足就当作没配并给原因 ——
+  这一档买到的三件事里就有"权限一被改坏就自动失效"，写成 `& 0o077 == 0` 等于把它卖掉）、
+  `unlock_howto()`（"怎么解锁"那半句的唯一产地）、`keys_hint(what)`（"为什么取不到这组凭据"，
+  **三态三句**：两份文件都没有 / 有密文但本进程没解锁 / 已解锁但密文里没这一组）、
+  `unlock_notice(source)`（解锁成功过去**一个字都不打**，"靠哪一档解开的"只能靠猜）。
+  `unlock()` 的来源优先级改成 **参数 > 环境变量 > 该文件 > 提问**，第三档排在"问不问"**之前** ——
+  `gui.keys_ask_passphrase=false` 跳的是提问，不是解锁。
+- `scanner/fofa.py` / `shodan.py` / `quake.py` / `github_leak.py` / `multileak.py` /
+  `stages/osint.py`（三行）/ `stages/github.py`：把硬写的「未配置 X（**见 config/keys.yaml**）」
+  全部换成 `keystore.keys_hint("X")`。这句原文案是**指错的**：`config/keys.enc.yaml` 存在时
+  明文 `keys.yaml` 根本不会被读（`load_keys()` 第 2 条口径），照着它补的人永远补不上 ——
+  主理人这一轮就是照着它去找了一遍。
+- `cli/run_keys.py`：`_ask()` 非交互时也认第三档（**只有"设新口令"那一档不认** —— 否则
+  `--change` 会变成"旧口令=新口令=文件里那句"的空操作）；`--encrypt` 从「明文整份覆盖密文」改成
+  **以旧密文为底合并**（`merge_key_dicts()`：明文覆盖同名字段、密文里独有的组**一条不丢**），
+  旧密文解不开又没带新加的 `--force-overwrite` 就**停住不动文件**。
+  这一条是顺手堵的真洞：本机密文里躺着 `github.push_token`，而"补一组 FOFA"的正常流程就是
+  写明文再 `--encrypt` —— 照旧流程走一遍会把推送令牌抹掉，症状要到下一次 `git push` 才出现。
+  报告只打**组名与字段名**（`新增组 [fofa]｜保留 [github, shodan]｜改动 github.{token}`），值不出现。
+- `scanner/devflow.py::skip_category`：加「未解锁」关键词 —— 新那句不再含"未配置"，
+  不跟上就会把"没解锁"归成"无输入"（自检表里的分类是给人看的，归错类等于换了一种说法骗人）。
+- `gui/app.py::serve()`：解锁成功补一行 `[+] 凭据密文已解锁（口令来源：file）`。
+- **`config/edge_auth.yaml` 按主理人说的移除**，代码一行没动：401 门本来就是**关**的
+  （`gui.edge_auth.enabled: false`，随包与 HEAD 都是），删掉它行为逐字不变；
+  口令文件挪到 `logs/edge_auth.yaml.removed-20261012-0940`（0600，`logs/` 在 `.gitignore` 里，
+  不在 `migrate.CRED_FILES` 的名字表里 ⇒ 不会被迁移包带走）。
+  实测删后 `edgeauth.wizard()` 仍返回 `disabled`、启动缺口清单 `[]` —— **没有**新增任何提醒。
+  要再开门：改 `gui.edge_auth.enabled: true` + `python -m scanner.edgeauth --set`
+  （门开而口令缺失是一律 401 的 fail-closed，这是 §5.10 记着的既定语义）。
+
+### 本轮被自家判据抓到的一次（而且抓到的是**真泄露**）
+
+第三档的原因文本里带上了那个文件的路径（`…/no-such-keys-pass 不存在`），而回归沙箱的隔离值当时写成了
+**绝对路径** ⇒ 启动横幅与 `logs/server.log` 里就出现了项目根路径，`[5]`/`[7y]` 那条
+"日志文件里不许泄露项目根绝对路径"当场把门禁打红（红在 `_gate162c.log:4048`）。
+这不是判据太严：**是新文案真的在往日志里写绝对路径**，只是被测试的沙箱值放大成了肉眼可见。
+修法两处一起：① 隔离值与生产默认值一律保持 `~/` 字面形（`file_passphrase` 的原因里用常量原样、
+用时才 `expanduser`）；② `[8bt] ⓪` 加一条源码形态断言，钉住生产默认值必须是
+`PASSPHRASE_FILE = "~/.secrets/keys-pass"`——换成绝对路径，每个用户的 `server.log` 都会带上家目录。
+
+### 回归
+
+`tests/smoke.py` 新增 `[8bt]`：实测：`tests/smoke.py` logs/_gate162e.log **SMOKE PASS**、组打印 185 行（同一判据数上一轮终验 `_gate161c.log` 得 184 行，多的正是本组 `[8bt]`）、AssertionError 0、日志 4072 行；`[8bt]` 本体 185 行
+① `file_passphrase` 三条守卫逐个挡住（0644 / 空文件 / 不存在各有原因）；
+② 优先级 **参数>环境>文件**，且"环境变量给错了就照实失败，不许偷偷回落到文件"，
+`allow_prompt=False` 仍能从文件解开（**这一条就是主理人那台机器卡住的地方**）；
+③ 三态三句、改状态句子跟着变、补法只有一份、哨兵值绝不出现在文案里；
+④ 「见 config/keys.yaml」在生产码 0 命中 —— 判据先自证（造一条含旧句的夹具确认抓得到，
+   并断言扫描范围 > 60 个文件，免得目录一改名就空跑）；
+⑤ 合并式加密保住 `push_token`，变异档把 `merge_key_dicts` 打回"整份覆盖"必须真的丢组（§6.1）；
+⑥ 端到端跑 `cli/run_keys.py --encrypt`，`HOME` 指进沙箱（否则子进程会去读**真的**兜底口令文件）；
+旧密文解不开又没给显式旗标 ⇒ 退出码 1 且文件字节不变。
+另外把既有的两组改了口径：`[2c]` 那两句文案断言**先把 `ENC_KEYS_PATH`/`PLAIN_KEYS_PATH` 钉成
+不存在的临时文件再断言**（keystore 的解锁状态是进程全局的，前面哪组调过 `unlock()` 都会改它），
+`[8f]` 组整体把 `PASSPHRASE_FILE` 指到不存在的路径并在 `finally` 里还原。
+
+### 还没做（下一轮）
+
+见 `todo.txt` 末尾那一节。与本轮直接相关的一条：**主理人要用的 FOFA 凭据不在这台机器上**，
+补法是 `config/keys.yaml` 里写 `fofa: {email, key}` 再跑一次 `./.venv/bin/python cli/run_keys.py
+--encrypt --shred`（有终端会问一次口令，口令就是 `~/.secrets/keys-pass` 里那句）；
+合并逻辑已保证这一步**不会**动到 `github` 那两条。GUI 进程仍需**重启**才吃到本轮代码。
 ## 续161 截图「候补重试」：跑完不再把超时站点永久留在失败态（`screenshot.retry_rounds`，默认 0＝关）
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux。起因是主理人在 #19 与 #17 的对比里提的第三条建议，

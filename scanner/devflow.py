@@ -298,7 +298,9 @@ def _skip_reason(stage, log_lines):
 def skip_category(reason):
     """把跳过原因归类。原因文本来自日志，类别靠关键词判定（改文案时这里要一起看）。"""
     r = str(reason or "")
-    if any(k in r for k in ("未配置", "未启用", "未开启")):
+    # 「未解锁」是续162 新增的一类：凭据**配了**，但本进程没拿到口令 —— 与"未配置"同属
+    # "配置没就位"这一档处置动作（都是去补口令/补 key），但不是"这项能力没做"。
+    if any(k in r for k in ("未配置", "未启用", "未开启", "未解锁")):
         return "未配置"
     if "缓存" in r:
         return "命中缓存"

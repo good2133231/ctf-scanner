@@ -36,6 +36,7 @@ from .. import fofa as fofa_mod
 from .. import shodan as shodan_mod
 from .. import quake as quake_mod
 from .. import ctlog as ctlog_mod
+from .. import keystore
 from ..fingerprint import favicon_hash
 from ..utils import is_domain, pool_run, resolve_host, to_ascii
 
@@ -226,7 +227,7 @@ class OsintStage(Stage):
         ctx = self.ctx
         cfg = ctx.settings.get("fofa", {}) or {}
         if not fofa_mod.available(ctx.settings):
-            ctx.logger.info("[osint] FOFA 未配置 email/key（config/keys.yaml），跳过 favicon 反查")
+            ctx.logger.info(f"[osint] FOFA {keystore.keys_hint('fofa.email / fofa.key')}，跳过 favicon 反查")
             return []
 
         sites = [dict(r) for r in db.list_sites(ctx.task_id)]
@@ -300,7 +301,7 @@ class OsintStage(Stage):
         ctx = self.ctx
         cfg = ctx.settings.get("fofa", {}) or {}
         if not fofa_mod.available(ctx.settings):
-            ctx.logger.info("[osint] FOFA 未配置 email/key（config/keys.yaml），跳过证书反查")
+            ctx.logger.info(f"[osint] FOFA {keystore.keys_hint('fofa.email / fofa.key')}，跳过证书反查")
             return []
         roots = self._root_domains()
         if not roots:
@@ -367,7 +368,7 @@ class OsintStage(Stage):
         ctx = self.ctx
         cfg = ctx.settings.get("fofa", {}) or {}
         if not fofa_mod.available(ctx.settings):
-            ctx.logger.info("[osint] FOFA 未配置 email/key（config/keys.yaml），跳过标题反查")
+            ctx.logger.info(f"[osint] FOFA {keystore.keys_hint('fofa.email / fofa.key')}，跳过标题反查")
             return []
         titles = self._site_titles()
         if not titles:

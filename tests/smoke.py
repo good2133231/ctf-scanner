@@ -176,6 +176,15 @@ _TMPDIR = Path(tempfile.mkdtemp(prefix="smoke-", dir=str(ROOT / "logs")))
 os.environ["CTFSCANNER_DB"] = str(_TMPDIR / "scanner.db")
 os.environ["CTFSCANNER_LOGS"] = str(_TMPDIR)
 
+# 续162：门禁**不许吃操作者的秘密文件**。`keystore.unlock()` 新增了第三档（`~/.secrets/keys-pass`），
+# 不隔离的话 `[7i]` / `[8at]` 里真调 `serve()` 的那几组会把**本机真的**第三方 key 解进进程缓存 ——
+# 于是同一份代码"这台机器绿、那台机器红"，而且红的还是从没人改过的断言（§6.2 第一起那一族，
+# 只是这次吃的是秘密文件的**存在性**：CI 没有、开发机有，报错里也看不见它）。
+import scanner.keystore as _ksbox  # noqa: E402
+# 隔离值也**必须写成 `~/` 字面形**：填绝对路径会被 `file_passphrase` 的原因文本原样带进
+# 启动横幅与 `server.log`，`[5]`/`[7y]` 那两条"日志里不许出现项目根"当场判红（本轮就是这么被抓到的）。
+_ksbox.PASSPHRASE_FILE = "~/no-such-keys-pass-smoke-isolated"
+
 
 def _cleanup_sandbox() -> None:
     """退出时删掉本轮沙箱。
@@ -3610,6 +3619,9 @@ workflows:
     assert quake_mod.is_black_ico(200, settings) is False \
         and quake_mod.is_black_ico(201, settings) is True
 
+    from scanner import keystore as _ks5mod
+    _hs_dir5 = Path(_TMPDIR) / "hint5"
+    _hs_dir5.mkdir(parents=True, exist_ok=True)
     _nokey5 = copy.deepcopy(settings)
     _nokey5["keys"] = {"shodan": {"key": ""}, "quake": {"key": ""}}
     _net5 = {"n": 0}
@@ -3626,8 +3638,23 @@ workflows:
         _e_qk = quake_mod.search(-12345, _nokey5)[2]
     finally:
         shodan_mod.http_request, quake_mod.http_request = _orig_sh5, _orig_qk5
-    assert "未配置 shodan.key（见 config/keys.yaml）" in _e_sh, _e_sh
-    assert "未配置 quake.key（见 config/keys.yaml）" in _e_qk, _e_qk
+    # 续162：这句文案改成"跟着状态现取"之后，判据必须**先把状态钉死**再断言 ——
+    # 本机躺着 `config/keys.enc.yaml` 而 CI 没有，而 keystore 的解锁状态是**进程全局**的
+    # （前面哪一组调过 `unlock()` 都会改它），吃这两种东西就是 §6.2 第一起 + 第十起那一族假红。
+    _ks162mod = _ks5mod
+    _keep_paths5 = (_ks162mod.ENC_KEYS_PATH, _ks162mod.PLAIN_KEYS_PATH)
+    try:
+        _ks162mod.ENC_KEYS_PATH = _hs_dir5 / "none-a.yaml"
+        _ks162mod.PLAIN_KEYS_PATH = _hs_dir5 / "none-b.yaml"
+        _ks162mod.reset()
+        _e_sh = shodan_mod.search(-12345, _nokey5)[2]
+        _e_qk = quake_mod.search(-12345, _nokey5)[2]
+        assert "未配置 shodan.key" in _e_sh and "既没有" in _e_sh, _e_sh
+        assert "未配置 quake.key" in _e_qk and "既没有" in _e_qk, _e_qk
+        assert "见 config/keys.yaml" not in _e_sh, "又退回那句指错文件的旧文案了"
+    finally:
+        _ks162mod.ENC_KEYS_PATH, _ks162mod.PLAIN_KEYS_PATH = _keep_paths5
+        _ks162mod.reset()
     assert _net5["n"] == 0, "无 key 时一个请求都不该发"
 
     _key5 = copy.deepcopy(settings)
@@ -13032,6 +13059,11 @@ http:
                         + '"\nshodan:\n  key: ""\n', encoding="utf-8")
     _old_enc, _old_plain = _ks8f.ENC_KEYS_PATH, _ks8f.PLAIN_KEYS_PATH
     _old_env = os.environ.pop(_ks8f.ENV_PASSPHRASE, None)
+    # 续162 给 `unlock()` 加了第三档（`~/.secrets/keys-pass`）。这一档**本机有、CI 没有**，
+    # 不隔离的话下面那两处"没给口令"的判据会在一台机器上拿到 source=file（另一台 source=prompt），
+    # 症状就是"换台机器红一条从没人改过的断言"（§6.2 第一起同族，这次吃的是秘密文件的存在性）。
+    _old_ppfile8f = _ks8f.PASSPHRASE_FILE
+    _ks8f.PASSPHRASE_FILE = "~/no-such-keys-pass-8f"   # 同样保持 `~/` 字面形（原因文本会进日志）
     try:
         # ① round-trip：密文里一个明文值都不许出现；解回来必须逐字节相同
         _blob8f = _ks8f.encrypt_text(_plain8f.read_text(encoding="utf-8"), _phrase8f)
@@ -13212,6 +13244,7 @@ http:
             _ks8f.reset()
     finally:
         _ks8f.ENC_KEYS_PATH, _ks8f.PLAIN_KEYS_PATH = _old_enc, _old_plain
+        _ks8f.PASSPHRASE_FILE = _old_ppfile8f      # 第三档的隔离跟着一起还原（续162）
         _ks8f.reset()
         os.environ.pop(_ks8f.ENV_PASSPHRASE, None)
         if _old_env is not None:
@@ -21347,6 +21380,191 @@ expression: r0()
           "默认关不排 / 开 2 轮恰好排一轮（append+单阶段+3 URL+ext_depth=1 逐项点名）｜"
           "跑满 / 非 done / 已停止 / 没跑截图阶段 四种都不排｜轮数夹 0.."
           f"{_sh161.RETRYABLE_MAX_ROUNDS}｜收尾两处调用顺序钉住")
+
+    # ---------------- [8bt] 续162：凭据解锁的第三档 + "为什么没凭据"跟着状态走 + 合并式加密 ----
+    #      主理人的原话是「keys.enc.yaml 现在 fofa 应该要读取这个，我记得我是把密钥加密了，
+    #      他应该也要去解密获取」，附的日志是三行 `FOFA 未配置 email/key（config/keys.yaml）`。
+    #      实测拆成两件：**密文里压根没有 fofa 组**（现文件与两份备份都只有 github），
+    #      而运行期**也从来没解锁过**（`gui.keys_ask_passphrase=false` + 环境没口令）。
+    #      更糟的是那句文案指的是 `keys.yaml`，而密文存在时那份明文**根本不会被读** ——
+    #      照着它去补的人永远补不上。第三件是顺手堵的洞：`--encrypt` 原先拿明文**整份覆盖**密文，
+    #      "补一组 FOFA"会连带把 `github.push_token`（推送令牌）抹掉。
+    import ast as _ast162
+    import re as _re162
+    import subprocess as _sp162
+    import yaml as _y162
+    from scanner import keystore as _ks162
+
+    _dir162 = Path(_TMPDIR) / "ks162"
+    _dir162.mkdir(parents=True, exist_ok=True)
+    _PH162, _SENT162 = "p162-passphrase", "SENTINEL162-VALUE-NOT-PRINTABLE"
+
+    def _enc162(path, data, phrase=_PH162):
+        path.write_bytes(_ks162.encrypt_text(
+            _y162.safe_dump(data, allow_unicode=True, sort_keys=False), phrase))
+        return path
+
+    # ⓪ 先确认门禁没吃到操作者真的口令文件（restore 写歪就在这里红，而不是等到换一台机器）
+    assert os.path.expanduser(_ks162.PASSPHRASE_FILE) != os.path.expanduser("~/.secrets/keys-pass") \
+        and not Path(os.path.expanduser(_ks162.PASSPHRASE_FILE)).exists(), \
+        f"门禁必须把第三档指到一个不存在的名字，实得 {_ks162.PASSPHRASE_FILE}"
+    # 生产的**默认值**是另一件事，按源码形态判：写成绝对路径就等于把家目录印进每个用户的日志
+    _src162 = (ROOT / "scanner" / "keystore.py").read_text(encoding="utf-8")
+    assert 'PASSPHRASE_FILE = "~/.secrets/keys-pass"' in _src162, \
+        "默认路径的 `~/` 字面形被改掉了（展开后会在家目录绝对路径上出现在横幅与 server.log 里）"
+
+    # ① `file_passphrase` 的三条守卫逐个都要能挡（这条档买到的就是"权限一坏就自动失效"）
+    _pp162 = _dir162 / "keys-pass"
+    _pp162.write_text(_PH162 + "\n", encoding="utf-8")
+    _pp162.chmod(0o600)
+    assert _ks162.file_passphrase(_pp162) == (_PH162, ""), "0600 的口令文件没被采纳"
+    _pp162.chmod(0o644)
+    _g162, _w162 = _ks162.file_passphrase(_pp162)
+    assert _g162 == "" and "0600" in _w162, f"权限放宽了还采纳：{_g162!r} / {_w162}"
+    _pp162.chmod(0o600)
+    _pp162.write_text("", encoding="utf-8")
+    assert _ks162.file_passphrase(_pp162)[1], "空文件必须有原因"
+    _pp162.unlink()
+    assert "不存在" in _ks162.file_passphrase(_pp162)[1]
+    # 同机兜底档的**代价**也要写在脸上（AGENTS §2 那条诚实边界）：口令与密文同机
+    assert "keys-pass" in _ks162.PASSPHRASE_FILE and _ks162.PASSPHRASE_FILE.startswith("~"), \
+        "路径必须写成 `~/...` 字面形并在报错里保持原样（展开成家目录绝对路径会撞 §0.3）"
+
+    # ② 优先级与"关提问 ≠ 关解锁"（主理人那台机器就卡在这一条上）
+    _enc162p = _enc162(_dir162 / "keys.enc.yaml", {"github": {"token": _SENT162}})
+    _pp162.write_text(_PH162, encoding="utf-8")
+    _pp162.chmod(0o600)
+    _old_pf162, _old_e162 = _ks162.PASSPHRASE_FILE, os.environ.get(_ks162.ENV_PASSPHRASE, "")
+    try:
+        _ks162.PASSPHRASE_FILE = str(_pp162)
+        os.environ.pop(_ks162.ENV_PASSPHRASE, None)
+        _ks162.reset()
+        _r162 = _ks162.unlock(path=_enc162p, allow_prompt=False)
+        assert _r162["ok"] and _r162["source"] == "file", f"关提问时第三档没生效：{_r162}"
+        assert _ks162.current()["github"]["token"] == _SENT162
+        _ks162.reset()
+        os.environ[_ks162.ENV_PASSPHRASE] = "env-but-wrong"
+        _r162b = _ks162.unlock(path=_enc162p, allow_prompt=False)
+        assert not _r162b["ok"] and _r162b["source"] == "env", \
+            f"环境变量错了应当照实失败，不许偷偷回落到文件：{_r162b}"
+        _r162c = _ks162.unlock(passphrase=_PH162, path=_enc162p, allow_prompt=False)
+        assert _r162c["ok"] and _r162c["source"] == "arg", "显式参数必须压过前两档"
+        _pp162.write_text("wrong-from-file", encoding="utf-8")
+        os.environ.pop(_ks162.ENV_PASSPHRASE, None)
+        _ks162.reset()
+        _r162d = _ks162.unlock(path=_enc162p, allow_prompt=False)
+        assert not _r162d["ok"] and "口令不对" in _r162d["reason"], _r162d   # 不是"没配"
+    finally:
+        _ks162.PASSPHRASE_FILE = _old_pf162
+        os.environ[_ks162.ENV_PASSPHRASE] = _old_e162
+        _ks162.reset()
+
+    # ③ 状态化文案：三种状态三句不同的话，且**改状态句子就跟着改**（§5.19 的判据形状）
+    _noenc, _noplain = _dir162 / "none-a.yaml", _dir162 / "none-b.yaml"
+    _old_e162p, _old_p162p = _ks162.ENC_KEYS_PATH, _ks162.PLAIN_KEYS_PATH
+    try:
+        _ks162.ENC_KEYS_PATH, _ks162.PLAIN_KEYS_PATH = _noenc, _noplain
+        _h1 = _ks162.keys_hint("fofa.email / fofa.key")
+        assert "既没有" in _h1 and _noplain.name in _h1, _h1                      # 档一：两份文件都没有
+        _enc162(_dir162 / "enc162.yaml", {"github": {"token": _SENT162}})
+        _ks162.ENC_KEYS_PATH = _dir162 / "enc162.yaml"
+        _ks162.reset()
+        _h2 = _ks162.keys_hint("fofa.email / fofa.key")
+        assert "未解锁" in _h2 and "enc162.yaml" in _h2 and _noplain.name not in _h2, _h2
+        assert _ks162.unlock_howto() in _h2, "补法必须是现取的那一份，不许再抄一遍"
+        _ks162.unlock(passphrase=_PH162, path=_ks162.ENC_KEYS_PATH, allow_prompt=False)
+        _h3 = _ks162.keys_hint("fofa.email / fofa.key")
+        assert "没有这一组" in _h3 and "未解锁" not in _h3, _h3                    # 档三：真没配
+        for _h in (_h1, _h2, _h3):
+            assert _SENT162 not in _h, f"文案里漏出了凭据值：{_h}"
+        _ks162.reset()
+    finally:
+        _ks162.ENC_KEYS_PATH, _ks162.PLAIN_KEYS_PATH = _old_e162p, _old_p162p
+        _ks162.reset()
+
+    # ④ 那句**指错文件的用户可见文案**必须整仓不再出现在字符串字面量里。
+    #    形状判据而不是子串判据（§6 推论四**第七次**，上一轮刚记完第六次）：第一版写的是
+    #    "源码文本里有没有那串字"，被三处正当说明文字绊红 —— `shodan.py` / `quake.py` 的模块头
+    #    正**在引用旧文案解释改动**，`keystore.keys_hint` 的 docstring 也在拿它当反例。
+    #    给文案开豁免等于判据再也抓不到真违规，所以收到两件事上：
+    #    只扫 **AST 字符串字面量**（排除 docstring），且只禁 `未配置 …（见 config/keys.yaml）`
+    #    这个**用户可见的句子形状**（注释里提到这几个字不算动作串）。
+    _pat162 = _re162.compile(r"未配置[^'\"\n]{0,40}（见 ?config/keys\.yaml）")
+    _prod162 = [p for p in (ROOT / "scanner").rglob("*.py")] + [ROOT / "gui" / "app.py"] \
+        + [p for p in (ROOT / "cli").rglob("*.py")]
+    _hit162 = []
+    for _f162 in _prod162:
+        try:
+            _t162 = _ast162.parse(_f162.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        _d162 = _ast162.get_docstring(_t162)
+        for _n in _ast162.walk(_t162):
+            if isinstance(_n, _ast162.Constant) and isinstance(_n.value, str) \
+                    and _n.value != _d162 and _pat162.search(_n.value):
+                _hit162.append(f"{_f162.name}:{getattr(_n, 'lineno', 0)}")
+    assert not _hit162, f"还有把用户指向错文件的地方（应改走 keys_hint）：{_hit162}"
+    assert len(_prod162) > 60, f"扫描范围只有 {len(_prod162)} 个文件，这条判据就是空跑"
+    # 判据先自证：坏形状必须被抓、三种"只是提到这几个字"的写法必须不被误伤
+    assert _pat162.search("未配置 fofa.email / fofa.key（见 config/keys.yaml）"), "坏形状没被抓到"
+    assert not any(_pat162.search(_s) for _s in (
+        "旧文案一律写「见 config/keys.yaml」，而密文存在时明文根本不读",
+        "凭据见 config/keys.yaml 的 gitlab.token",
+        "未配置 shodan.key（keys.enc.yaml 里没有这一组）")), "判据误伤说明文字"
+
+    # ⑤ 合并式加密：补一组不许抹掉另一组（这条是本批次里唯一会**写凭据文件**的改动）
+    _base162 = {"github": {"push_token": _SENT162, "token": "G-OLD"}, "shodan": {"key": "S"}}
+    _over162 = {"github": {"token": "G-NEW"}, "fofa": {"email": "e@x.test", "key": "F"}}
+    _m162, _rep162 = _ks162.merge_key_dicts(_base162, _over162)
+    assert _m162["github"] == {"push_token": _SENT162, "token": "G-NEW"}, _m162
+    assert _m162["shodan"] == {"key": "S"} and _m162["fofa"]["key"] == "F", _m162
+    assert _rep162["added"] == ["fofa"] and _rep162["kept"] == ["shodan"] \
+        and _rep162["changed"] == ["github.{token}"], _rep162
+    assert _SENT162 not in str(_rep162) and "G-OLD" not in str(_rep162), "合并报告里漏出了值"
+    # 变异方向（§6.1）：把"只加不减"打回"整份覆盖"，密文里独有的组必须真的丢
+    _keep162 = _ks162.merge_key_dicts
+    try:
+        _ks162.merge_key_dicts = lambda b, o: (dict(o or {}), {"added": [], "kept": [], "changed": []})
+        _m162b, _ = _ks162.merge_key_dicts(_base162, _over162)
+        assert "shodan" not in _m162b and "push_token" not in _m162b.get("github", {}), \
+            "变异档没塌回去 ⇒ 上面那两条断言没区分度"
+    finally:
+        _ks162.merge_key_dicts = _keep162
+
+    # ⑥ 端到端跑 `cli/run_keys.py --encrypt`：HOME 指进沙箱（否则子进程会读**真的**兜底口令文件）
+    _cfg162 = _dir162 / "cli" / "config"
+    _cfg162.mkdir(parents=True, exist_ok=True)
+    _dst162 = _enc162(_cfg162 / "keys.enc.yaml", {"github": {"push_token": _SENT162}})
+    _src162 = _cfg162 / "keys.yaml"
+    _src162.write_text("fofa:\n  email: e@x.test\n  key: F\n", encoding="utf-8")
+    _env162 = dict(os.environ, TMPDIR=str(Path(_TMPDIR)), HOME=str(_dir162 / "cli"),
+                   CTFSCANNER_KEYS_PASSPHRASE=_PH162)
+    _r162e = _sp162.run([sys.executable, "cli/run_keys.py", "--encrypt",
+                         "--src", str(_src162), "--dst", str(_dst162)],
+                        cwd=str(ROOT), env=_env162, capture_output=True, text=True)
+    assert _r162e.returncode == 0, _r162e.stdout + _r162e.stderr
+    _merged162 = _dst162.read_bytes()
+    _after162 = _y162.safe_load(_ks162.decrypt_blob(_merged162, _PH162)[0])
+    assert _after162["github"]["push_token"] == _SENT162, "补一组 FOFA 把推送令牌抹了（正是要修的洞）"
+    assert _after162["fofa"]["key"] == "F", _after162
+    assert "合并来源" in _r162e.stdout and _SENT162 not in _r162e.stdout, _r162e.stdout
+    # 旧密文解不开又没给显式覆盖旗标 ⇒ 停住、一个字都不写
+    _r162f = _sp162.run([sys.executable, "cli/run_keys.py", "--encrypt",
+                         "--src", str(_src162), "--dst", str(_dst162)],
+                        cwd=str(ROOT), env=dict(_env162, CTFSCANNER_KEYS_PASSPHRASE="another-phrase"),
+                        capture_output=True, text=True, input="")
+    assert _r162f.returncode == 1, (_r162f.returncode, _r162f.stdout)
+    assert _dst162.read_bytes() == _merged162, "解不开旧密文却仍然写了文件（覆盖就发生在这一步）"
+    assert _after162["github"]["push_token"] == _SENT162
+
+    # ⑦ devflow 的跳过归类要认得新那句（"没解锁"属"配置没就位"，不是"无输入"）
+    from scanner import devflow as _df162
+    assert _df162.skip_category("凭据未解锁：本进程启动时没拿到口令") == "未配置", "归类没跟上"
+    assert _df162.skip_category("未配置 github.token（keys.enc.yaml 里没有这一组）") == "未配置"
+    print("[8bt] 续162 凭据第三档 + 状态化文案 ok: 0600/属主/空 三条守卫逐个挡住｜优先级 参数>环境>文件"
+          "（环境错了不偷偷回落）｜关提问仍能解锁｜三态各有句子且改状态跟着改、补法只有一份、值不出现｜"
+          "「见 config/keys.yaml」在生产码 0 命中（先自证夹具）｜合并式加密保住 push_token（变异打回"
+          "整份覆盖立刻丢组）｜旧密文解不开又没旗标 ⇒ 不动文件｜devflow 归类认「未解锁」")
 
     # ---------------- [8au] 续146：站点默认只看 200/404 / 批量打标只读本面板 / 判据收敛 / 入口搬进 cli ----------------
     #      用户点单四件事：① 站点默认只看 200/404 + 「显示全部」开关（跨任务 /sites 与任务详情

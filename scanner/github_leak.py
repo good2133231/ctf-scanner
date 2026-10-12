@@ -26,6 +26,7 @@ import json
 import re
 from urllib.parse import quote
 
+from . import keystore
 from .targets import roots_of
 from .utils import http_request
 
@@ -301,7 +302,7 @@ def collect(domains, settings, logger=None, stopped=None):
     token = load_token(settings)
     if not token:
         return [], {"queries": 0, "hits": 0, "capped": False,
-                    "error": "未配置 github.token（见 config/keys.yaml）——"
+                    "error": keystore.keys_hint("github.token") + "——"
                              "GitHub 代码搜索接口要求认证，已跳过（一次请求都不发）"}
 
     def _int(key, default):

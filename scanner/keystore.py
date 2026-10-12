@@ -17,7 +17,11 @@ AES-GCM 认证加密落盘**：`config/keys.enc.yaml`。
 **与并发的那条硬约束**：`config.load_settings()` 会被工作线程、GUI 每个请求、分布式节点反复调用，
 所以 `load_keys()` **绝不能在这里要口令** —— 它只读 `current()`（未解锁就返回 `{}`）。
 解锁只在**进程启动时**由入口显式调一次 `unlock()`（`gui.serve()` / `cli` 扫描入口 / `cli/run_node.py`）。
-非交互环境（CI、`python -c`、被强接管 stdin 的自动化）**不提示、不挂住**，直接回未解锁。
+非交互环境（CI、`python -c`、被强接管 stdin 的自动化）**不提示、不挂住**，直接回未解锁 ——
+但"不提示"不等于"不解锁"：`CTFSCANNER_KEYS_PASSPHRASE` 与 `~/.secrets/keys-pass` 两档**照旧生效**
+（续162 补的第三档；`install.sh` 与 AGENTS §2 早就把它写成口令来源之一，代码此前没有，
+于是 `gui.keys_ask_passphrase=false` 的部署每次启动都锁着、外部情报源全部按"无 key"降级，
+而日志写的是"未配置"—— 主理人因此找错了一次方向）。
 """
 import base64
 import getpass
@@ -31,6 +35,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 ENC_KEYS_PATH = BASE_DIR / "config" / "keys.enc.yaml"
 PLAIN_KEYS_PATH = BASE_DIR / "config" / "keys.yaml"
 ENV_PASSPHRASE = "CTFSCANNER_KEYS_PASSPHRASE"
+# 同机兜底口令档（AGENTS §2 与 install.sh 都写了它，续162 才真的在运行期实现）。
+# 写**字面 `~/...`**、取用时才展开：报错文案里要引用它，展开后的家目录绝对路径会撞 §0.3 那条
+# "日志与页面里只许出现相对路径"的红线。
+PASSPHRASE_FILE = "~/.secrets/keys-pass"
 
 _MAGIC = b"CTFSCANNER-KEYS-V1\x00"
 MAGIC_KEYS = _MAGIC      # 公开别名：别的模块（`migrate`）拿它做"这不是凭据文件"的判据
@@ -41,6 +49,67 @@ _KEY_LEN = 32
 
 # 进程内缓存：口令只在启动时输一次，之后所有 load_settings() 复用同一份明文。
 _STATE = {"unlocked": False, "data": None, "reason": "", "source": ""}
+
+
+def file_passphrase(path=None):
+    """从 `~/.secrets/keys-pass` 取口令：`(口令, "")` 或 `("", 原因)`，**永不抛、永不打印值**。
+
+    三条守卫一条都不许省（这是这一档成立的前提，不是保守）：POSIX 下权限必须**正好** 0600、
+    属主必须是当前用户、去掉空白后非空。任何一条不满足就**当作没配**并给出原因 ——
+    宁可退回"当场问一次"，也不放宽权限判据；AGENTS §2 说这一档买到的三件事之一就是
+    "权限一被改坏就自动失效"，把判据写成 `& 0o077 == 0`（允许 0644）就把那件事卖掉了。
+    Windows 没有 POSIX 权限位：只查存在与非空（NTFS 走 ACL，这里不猜、不假装验过）。
+    """
+    p = Path(path) if path is not None else Path(os.path.expanduser(PASSPHRASE_FILE))
+    try:
+        st = p.stat()
+    except OSError:
+        return "", f"{PASSPHRASE_FILE} 不存在"
+    if not st.st_size:
+        return "", f"{PASSPHRASE_FILE} 是空文件"
+    if os.name == "posix":
+        mode = st.st_mode & 0o777
+        if mode != 0o600:
+            return "", f"{PASSPHRASE_FILE} 权限是 {oct(mode)}（要求正好 0600）"
+        if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+            return "", f"{PASSPHRASE_FILE} 的属主不是当前用户"
+    try:
+        text = p.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as e:
+        # 只报异常类型，不报路径细节（`OSError` 的字符串里常带家目录绝对路径，§0.3）
+        return "", f"{PASSPHRASE_FILE} 读不出来（{type(e).__name__}）"
+    if not text:
+        return "", f"{PASSPHRASE_FILE} 去掉空白后是空的"
+    return text, ""
+
+
+def unlock_howto():
+    """"怎么把密文解锁"那半句的**唯一产地**（三个启动入口与各家"无凭据"文案都引它，§5.14）。
+
+    为什么单独一个函数：`config-off` 的原因、`keys_hint()` 的补法、`cli/run_keys.py` 的非交互提示
+    说的是同一件事，此前各写一遍已经漂过一次（`lock_notice` 的注释里记着那次"同一句说两遍"）。
+    """
+    return (f"设 {ENV_PASSPHRASE}，或写 {PASSPHRASE_FILE}（0600、属主是自己），"
+            "或把 gui.keys_ask_passphrase 打开（启动时问一次）")
+
+
+def keys_hint(what):
+    """"为什么取不到 {what}"——**跟着当下状态走**的一句，并且指对文件（§5.19）。
+
+    旧文案一律写「见 config/keys.yaml」，而 `keys.enc.yaml` 存在时那份明文**根本不会被读**
+    （`config.load_keys()` 第 2 条口径：有密文未解锁就返回 `{}`，绝不回落明文）。
+    照着那句去补的人只会一直查不到东西 —— 本轮实测：主理人按日志去找 keys.yaml，
+    而真问题是"进程没解锁"+"fofa 段压根不在密文里"，两个都不是那句文案说得上的原因。
+    三种状态各有句子；状态判定只读 `status()` 那一份事实，不在这里再猜。
+    """
+    enc, plain = ENC_KEYS_PATH.exists(), PLAIN_KEYS_PATH.exists()
+    if enc and not _STATE["unlocked"]:
+        return (f"凭据未解锁：{_STATE['reason'] or '本进程启动时没拿到口令'}"
+                f"（补法：{unlock_howto()}）—— {what} 若配在 {ENC_KEYS_PATH.name} 里就取不出来")
+    if enc or plain:
+        return f"未配置 {what}（{(ENC_KEYS_PATH if enc else PLAIN_KEYS_PATH).name} 里没有这一组）"
+    return (f"未配置 {what}（既没有 {PLAIN_KEYS_PATH.name}，也没有 {ENC_KEYS_PATH.name}；"
+            f"{unlock_howto()}）")
 
 
 def _crypto():
@@ -114,6 +183,39 @@ def decrypt_blob(blob, passphrase, magic=None):
         return plain.decode("utf-8"), ""
     except UnicodeDecodeError:
         return None, "解密成功但内容不是 UTF-8（文件被别的程序改写过）"
+
+
+def merge_key_dicts(base, overlay):
+    """把两份 keys dict 合并成一份，**overlay 覆盖同名字段、base 里独有的组一条不丢**。
+
+    返回 `(合并结果, 报告)`，报告只有分组名与条数（`added` / `kept` / `changed`）——
+    合并凭据这件事必须能报"多出来哪几组、保留了哪几组、改了哪几组"，而**值一个字都不许出现**。
+    为什么需要它：`--encrypt` 原先是「明文整份盖掉密文」，而密文里可能躺着明文没有的组
+    （本机就是：密文有 `github.push_token` + `github.token`，明文压根不存在）——
+    照旧流程"补一组 FOFA"会顺手把推送令牌抹掉，下一个 `git push` 才炸，
+    而那已经是另一台机器上的事了（值不落盘 ⇒ 没有第二份可回滚，只剩备份）。
+    """
+    out = {}
+    rep = {"added": [], "kept": [], "changed": []}
+    for name in sorted(set(list((base or {}).keys()) + list((overlay or {}).keys()))):
+        b = (base or {}).get(name)
+        o = (overlay or {}).get(name)
+        if o is None:
+            out[name] = b
+            rep["kept"].append(name)              # 只在密文里有：保留，不删
+        elif isinstance(b, dict) and isinstance(o, dict):
+            m = dict(b)
+            touched = sorted(k for k in o if str(o.get(k) or "").strip())
+            if touched:
+                rep["changed"].append(f"{name}.{'{'+','.join(touched)+'}'}")
+            elif name in (base or {}):
+                rep["added"].append(name)          # 明文给了一个空组：不算改动
+            m.update(o)
+            out[name] = m
+        else:
+            (rep["changed"] if b is not None else rep["added"]).append(name)
+            out[name] = o
+    return out, rep
 
 
 def write_encrypted(dst, blob):
@@ -197,10 +299,19 @@ def lock_notice(reason=None):
     return f"凭据保持锁定：{r}（外部情报源按\"无 key\"如实降级，其余阶段不受影响）"
 
 
+def unlock_notice(source):
+    """"已经解开了"那句的唯一产地 —— 此前只有**锁着**才出声，解锁成功全程静默，
+    于是"这台机器到底用哪一档口令解开的"没人看得见（续162：主理人找 FOFA 时就是因为读不到这个状态）。
+    """
+    return f"凭据密文已解锁（口令来源：{source or '未知'}），第三方情报源按已配置的凭据工作"
+
+
 def unlock(passphrase=None, path=None, allow_prompt=None):
     """启动时调一次：把密文解进进程缓存。返回 `{"ok", "reason", "source"}`，**永不抛**。
 
-    口令来源优先级：显式参数 > `CTFSCANNER_KEYS_PASSPHRASE` > 交互提示。
+    口令来源优先级：显式参数 > `CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass`（守卫见
+    `file_passphrase`）> 交互提示。第三档与"问不问"无关 —— `allow_prompt=False` 跳的是**提问**，
+    不是解锁。
     `allow_prompt=False`（续133，来自 `gui.keys_ask_passphrase=false`）跳过"交互提示"这一级。
     跳的是**提问**、不是加密：没有口令就是未解锁，照实返回并把原因写成"被配置关掉了"—— 既不
     假装成功，也不静默当成"没配 key"（那种混淆正是 §7 续114 登记过的真实误判来源）。
@@ -216,12 +327,21 @@ def unlock(passphrase=None, path=None, allow_prompt=None):
                       reason="没有加密凭据文件（沿用明文 keys.yaml，如有）")
         return {"ok": False, "reason": _STATE["reason"], "source": "absent"}
     given = passphrase if passphrase else os.environ.get(ENV_PASSPHRASE, "")
+    source = "arg" if passphrase else ("env" if given else "")
+    _file_why = ""
+    if not given:
+        # 续162 的第三档：它排在"问不问"之前，所以关掉询问的部署也解得开
+        given, _file_why = file_passphrase()
+        if given:
+            source = "file"
     if not given and not allow_prompt:
-        why = f"已配置为启动时不询问（gui.keys_ask_passphrase=false）；需要解锁请设 {ENV_PASSPHRASE}"
+        why = ("已配置为启动时不询问（gui.keys_ask_passphrase=false）"
+               + (f"，{_file_why}" if _file_why else "")
+               + f"；需要解锁请{unlock_howto()}")
         _STATE.update(unlocked=False, data=None, source="config-off", reason=why)
         return {"ok": False, "reason": why, "source": "config-off"}
-    source = "arg" if passphrase else ("env" if given else "prompt")
     if not given:
+        source = "prompt"
         given, why = _prompt(source)
         if given is None:
             _STATE.update(unlocked=False, data=None, source=source, reason=why)

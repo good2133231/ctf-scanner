@@ -27,7 +27,7 @@
 import threading
 
 from .base import Stage
-from .. import db, github_leak, multileak
+from .. import db, github_leak, keystore, multileak
 
 # github 阶段等待"子域阶段提前触发的线程"的上限（秒）：子域阶段通常早已跑完，这里只是兜底；
 # 等不到就跳过（线程自己会入库），**绝不重复发请求**。
@@ -100,7 +100,7 @@ def run_github_search(ctx):
     # 没 token 就**一次请求都不发**：代码搜索接口要求认证，发了也是 401。
     # 这里刻意把原因写清楚（而不是报"没查到泄露"），否则用户会把 401 当成"确实没泄露"。
     if not github_leak.load_token(ctx.settings):
-        ctx.logger.warning("[github] 未配置 github.token（见 config/keys.yaml）—— "
+        ctx.logger.warning(f"[github] {keystore.keys_hint('github.token')} —— "
                            "GitHub 代码搜索接口要求认证，跳过（一次请求都不发）")
         return
 

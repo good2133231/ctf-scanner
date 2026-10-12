@@ -582,7 +582,7 @@ DEFAULTS = {
         # 续157：#11 弱相关降级与白名单（与 github 同口径；此前硬编码在 multileak.build_lead 里）
         "weak_downgrade": True,
         "relevance_whitelist": [],
-        # 续158 H：GitLab provider 的实例根（自建 GitLab 改这一项）；凭据见 config/keys.yaml 的 gitlab.token
+        # 续158 H：GitLab provider 的实例根（自建 GitLab 改这一项）；gitlab 的 token 在凭据文件里（`config/keys.yaml`，或口令加密的 `config/keys.enc.yaml`）
         "gitlab_base": "https://gitlab.com",
     },
     "flags": {

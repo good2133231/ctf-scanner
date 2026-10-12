@@ -4569,6 +4569,9 @@ def serve(start_queue=True):
     _ks_locked = bool(not _ks["ok"] and keystore.status()["encrypted"])
     if _ks_locked:
         say(f"[!] {keystore.lock_notice(_ks['reason'])}")
+    elif _ks["ok"]:
+        # 续162：解锁成功过去**一个字都不打**，"这台机器到底靠哪一档口令解开的"只能靠猜
+        say(f"[+] {keystore.unlock_notice(_ks['source'])}")
     _settings = load_settings()
     # 续156（主理人点单「日志也不要输出在控制台 不然我的控制台很容易崩」）：从这一行起，
     # 流水线与 `[gui]` 的**逐条 INFO 只进文件**，终端只留横幅与告警（那些走 `print`，

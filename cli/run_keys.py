@@ -26,7 +26,15 @@ from scanner import keystore  # noqa: E402
 def _ask(prompt, confirm=False):
     """取口令：不回显；`--confirm` 时要求输入两遍且必须一致（防手滑把凭据锁死）。"""
     if not sys.stdin.isatty():
-        print("[!] 非交互环境：请用 " + keystore.ENV_PASSPHRASE + " 提供口令（不要写进任何入库文件）")
+        # 续162：非交互时先试 `~/.secrets/keys-pass`（与启动解锁同一档、同一套守卫）。
+        # `confirm=True`（= 设**新**口令）刻意不走这一档：那样 `--change` 会"旧口令=新口令=文件里那句"，
+        # 换口令变成一次静默的空操作。
+        if not confirm:
+            got, _why = keystore.file_passphrase()
+            if got:
+                print(f"[i] 用 {keystore.PASSPHRASE_FILE} 里的口令（{keystore.mask(got)}）")
+                return got
+        print("[!] 非交互环境：" + keystore.unlock_howto() + "（口令不要写进任何入库文件）")
         return None
     first = getpass.getpass(prompt)
     if not first:
@@ -96,6 +104,7 @@ def _do_encrypt(args, change=False):
         print(f"[!] 找不到明文凭据文件 {src} —— 没有可加密的东西。")
         return 1
     text = src.read_text(encoding="utf-8")
+    plain_new = keystore._parse(text) or {}
     old = ""
     if change and dst.exists():
         old = args.passphrase or (_ask("旧口令（解现有密文）：") or "")
@@ -109,6 +118,37 @@ def _do_encrypt(args, change=False):
     phrase = args.passphrase or _ask("新凭据口令（至少一次输入不回显）：", confirm=True)
     if not phrase:
         return 1
+    # 续162：**合并**而不是整份覆盖。老密文能解开就以它为底（补一组不该抹掉另一组），
+    # 解不开就照旧用明文整份写 —— 但必须先问清楚，绝不静默丢弃已有的组。
+    base, merged_from = None, ""
+    if dst.exists() and not change:
+        back, why = keystore.decrypt_blob(dst.read_bytes(), phrase)
+        if back is None:
+            old = args.passphrase or _ask("旧口令（现有密文与新口令不同才能解开它；"
+                                          "直接回车＝不合并，用明文整份覆盖）：") or ""
+            if old:
+                back, why2 = keystore.decrypt_blob(dst.read_bytes(), old)
+                if back is None:
+                    print(f"[!] 旧口令解不开现有密文，已中止（什么都没写）：{why2}")
+                    return 1
+                merged_from = "旧密文"
+            else:
+                print(f"[!] 现有密文解不开（{why}），这次**不合并** —— 明文里没有的组会被整份抹掉。"
+                      f"要保住它们请带正确的旧口令重跑；要继续就用 --force-overwrite。")
+                if not args.force_overwrite:
+                    return 1
+                merged_from = "没合并（整份覆盖）"
+        else:
+            base = keystore._parse(back)
+            merged_from = "旧密文（同一个口令解开）"
+    if base is not None:
+        data, rep = keystore.merge_key_dicts(base, plain_new)
+        import yaml as _yaml
+        text = _yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        print(f"[i] 合并来源：{merged_from}｜新增组 {rep['added'] or '无'}｜"
+              f"保留（明文没有、密文里有）{rep['kept'] or '无'}｜改动字段 {rep['changed'] or '无'}"
+              f"（只报组名与字段名，不报任何值）")
+        print("    注意：合并后的文件是纯数据，明文里的注释不保留。")
     blob = keystore.encrypt_text(text, phrase)
     # 先解密回读校验，再落盘：确保"写进去的这份一定能被这个口令解开"
     back, why = keystore.decrypt_blob(blob, phrase)
@@ -142,6 +182,8 @@ def main(argv=None):
     ap.add_argument("--src", default=str(keystore.PLAIN_KEYS_PATH), help="明文文件路径")
     ap.add_argument("--dst", default=str(keystore.ENC_KEYS_PATH), help="密文文件路径")
     ap.add_argument("--shred", action="store_true", help="加密自校验通过后删掉明文")
+    ap.add_argument("--force-overwrite", action="store_true",
+                    help="（续162 新增的显式旗标）现有密文解不开时仍用明文整份覆盖")
     ap.add_argument("--passphrase", default=os.environ.get(keystore.ENV_PASSPHRASE, ""),
                     help=f"口令（默认读环境变量 {keystore.ENV_PASSPHRASE}；都没有就交互输入）")
     args = ap.parse_args(argv)

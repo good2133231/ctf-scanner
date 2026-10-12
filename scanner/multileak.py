@@ -28,7 +28,7 @@ provider（续158 起两源都可用，默认仍是免 key 的 `grepapp`）：
 import json
 from urllib.parse import quote
 
-from . import github_leak
+from . import github_leak, keystore
 from .utils import http_request
 
 # provider 表：kind=入库 leads 的 kind；source=展示名；api/web=检索接口与人工查看页
@@ -282,7 +282,7 @@ def collect(domains, settings, logger=None, stopped=None):
         # 续158 H：GitLab 搜索**每个调用都必须认证**（官方文档）⇒ 没 token 一次请求都不发。
         if not gitlab_token(settings):
             return [], {"queries": 0, "hits": 0, "capped": False,
-                        "error": "未配置 keys.gitlab.token（见 config/keys.yaml）—— GitLab 搜索接口"
+                        "error": keystore.keys_hint("gitlab.token") + "—— GitLab 搜索接口"
                                  "要求认证，已跳过（一次请求都不发）"}
     elif provider not in SOURCES:
         return [], {"queries": 0, "hits": 0, "capped": False,

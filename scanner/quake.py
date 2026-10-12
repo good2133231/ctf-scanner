@@ -7,7 +7,8 @@ fofa.py 的结构**（`credentials` / `available` / `build_query` / `search` / `
 过早抽象只会把差异塞进一堆分支里。
 
 依赖：`config/keys.yaml` 的 `quake: {key: ...}`（独立文件、不入库、GUI 不碰）。
-**未填 key 时一律返回"未配置 quake.key（见 config/keys.yaml）"并且一个请求都不发。**
+**未填 key 时一律返回 `keystore.keys_hint("quake.key")` 现取的那句（三档状态见续162）
+  并且一个请求都不发。**
 
 **默认关**（`quake.enabled=false`）：任何外部接口都不该在用户没点头时产生流量。
 
@@ -18,6 +19,7 @@ fofa.py 的结构**（`credentials` / `available` / `build_query` / `search` / `
 """
 import json
 
+from . import keystore
 from .utils import http_request
 
 API = "https://quake.360.cn/api/v3/search/quake_service"
@@ -71,7 +73,7 @@ def search(icon_hash, settings, logger=None, size=None):
     """
     key = credentials(settings)
     if not key:
-        return [], 0, "未配置 quake.key（见 config/keys.yaml）"
+        return [], 0, keystore.keys_hint("quake.key")
     if not icon_hash:
         return [], 0, "favicon 哈希为空"
     cfg = (settings or {}).get("quake", {}) or {}

@@ -706,7 +706,7 @@ ctf-scanner/
    SQL 那份把未解析排进"非 CDN"档）；截图失败原因 = `screenshot.classify()` + `REASON_*`
    （重试决策与落库标签同一个判断）；第三方清单 = `jsmine.thirdparty_suffixes()`，资产侧判定 =
    `jsmine.is_thirdparty()`（与 JS 侧 `_is_noise` 的分工写在 docstring 里：不认 apex、豁免
-   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。；**探测候选主机** = `extdom.own_hosts()`（内存 ∪ 库，own 口径 —— 续159，§6.2 第十四起）；**「这个名字在不在目标域之下」的归属比对** = `extdom.is_in_bases()`（`own_hosts` 与 `SubdomainStage.reuse_history` 共用，续160 —— 后缀判断写两遍就会一边一个口径）；**跨任务可借的历史域名** = `db.list_known_domains()`（own 口径 + 账号隔离都在 SQL 里）；**这条截图失败属于哪一档** = `screenshot.shot_bucket()`（落库的是「档｜原文」，取前缀，没有前缀才回退 `classify()` —— 续161 实测 `classify("跳转未落地｜一句话")` 落「其他」，而这一档**可重试**，事后重算＝静默丢候选）；**哪些档值得再排一轮** = `screenshot.RETRYABLE_REASONS`；**候补轮数与上限** = `screenshot.retry_rounds()`（默认 0＝关，夹到 `RETRYABLE_MAX_ROUNDS`）；**候补候选** = `db.list_shot_failures()` + `runner.shot_retry_targets()`（档名一律**不进 SQL**，写 `LIKE '超时%'` 就是第二份判据）；**这次运行的运行期选项** = `queue.run_options()`（`run_payload` 那份，页面与 worker 同源；从 `task["options"]` 读永远是 0 —— 轮次就不在那一列）
+   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。；**探测候选主机** = `extdom.own_hosts()`（内存 ∪ 库，own 口径 —— 续159，§6.2 第十四起）；**「这个名字在不在目标域之下」的归属比对** = `extdom.is_in_bases()`（`own_hosts` 与 `SubdomainStage.reuse_history` 共用，续160 —— 后缀判断写两遍就会一边一个口径）；**跨任务可借的历史域名** = `db.list_known_domains()`（own 口径 + 账号隔离都在 SQL 里）；**这条截图失败属于哪一档** = `screenshot.shot_bucket()`（落库的是「档｜原文」，取前缀，没有前缀才回退 `classify()` —— 续161 实测 `classify("跳转未落地｜一句话")` 落「其他」，而这一档**可重试**，事后重算＝静默丢候选）；**哪些档值得再排一轮** = `screenshot.RETRYABLE_REASONS`；**候补轮数与上限** = `screenshot.retry_rounds()`（默认 0＝关，夹到 `RETRYABLE_MAX_ROUNDS`）；**候补候选** = `db.list_shot_failures()` + `runner.shot_retry_targets()`（档名一律**不进 SQL**，写 `LIKE '超时%'` 就是第二份判据）；**这次运行的运行期选项** = `queue.run_options()`（`run_payload` 那份，页面与 worker 同源；从 `task["options"]` 读永远是 0 —— 轮次就不在那一列）；**「为什么取不到这组凭据」** = `keystore.keys_hint(what)`（三态三句：两份文件都没有 / 有密文但本进程没解锁 / 已解锁但密文里没这一组 —— 续162；旧文案在七处各写一遍「见 config/keys.yaml」，而密文存在时明文根本不读，照着补的人永远补不上）；**「怎么解锁」** = `keystore.unlock_howto()`（补法只这一处，`keys_hint` 与启动横幅都引它）；**口令来源优先级** = `keystore.unlock()` 一处（参数 > `CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass`（守卫见 `file_passphrase`：正好 0600 / 属主是自己 / 非空）> 提问）
 
 15. **指纹前置过滤只许做减法，不许改变判定结果**（续122）：`_lit_filter` 给每条正则算"必现字面量"，
     跳过 `re.search` 的前提是**该字面量在任何一次命中里都必然出现**。四个放弃过滤的条件（宁可不提速，
@@ -1191,7 +1191,7 @@ py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（
 `assert "  httpx: httpx" in 文本` —— 拿**旧值**当哨兵。而 `_set7p` 是**真实 `config/settings.yaml`
 的副本**，只要用户照项目推荐跑过一次 `--update-tools`（续96 的自举也会跑），那一行就变成
 `tools/scanner/httpx`，哨兵必失效。远端 Linux 实跑 `--bootstrap --install` 当天就把 [7p] 打红。
-**正确口径**：改前/改后**逐行 diff**，只允许被改的那一行不同（`[7p]` 已这么改）。 　**同族复发（续159）**：`smoke [5y]`/`[2c]` 把「ctlog / ssrf 出厂默认关」的判据写成 `enabled(settings)`，而那个 `settings` 是 `load_settings()` 的**本机**那份 —— 主理人在策略页打开 ctlog 后这条当场红，且红在 `ctlog_mod.search()` 那一步（现象是「判据真的去打 crt.sh 并拿到 429」，不是「代码坏了」；http 已被桩住，没真的耗配额）。口径同第一起：**「出厂默认」一律吃 `DEFAULTS`**，「关着不发请求」那一档**自己造**一份明确关着的配置（现文件里的 `_ct_off5` / `_ss_off5`）
+**正确口径**：改前/改后**逐行 diff**，只允许被改的那一行不同（`[7p]` 已这么改）。 　**同族复发（续159）**：`smoke [5y]`/`[2c]` 把「ctlog / ssrf 出厂默认关」的判据写成 `enabled(settings)`，而那个 `settings` 是 `load_settings()` 的**本机**那份 —— 主理人在策略页打开 ctlog 后这条当场红，且红在 `ctlog_mod.search()` 那一步（现象是「判据真的去打 crt.sh 并拿到 429」，不是「代码坏了」；http 已被桩住，没真的耗配额）。口径同第一起：**「出厂默认」一律吃 `DEFAULTS`**，「关着不发请求」那一档**自己造**一份明确关着的配置（现文件里的 `_ct_off5` / `_ss_off5`）。**再复发（续162）**：`unlock()` 加上第三档（`~/.secrets/keys-pass`）之后，`[2c]` 那两句「无 key 时报未配置」的判据同时踩上两个环境依赖 —— ① 本机有 `config/keys.enc.yaml` 而 CI 没有；② keystore 的解锁状态是**进程全局**的，前面任何一组调过 `unlock()` 都会改它。现象是门禁红在一条从没人改过的断言上，而红出来的文本还带着真实的密文文件名。口径一样：**判据先把状态钉死再断言**（把那两条路径指到不存在的临时文件、`reset()` 一次、`finally` 还原）。这一族里「秘密文件的存在性」比路径更危险 —— 它不会在报错里告诉你「这台机器恰好有那个文件」。
 
 **第二起（续97，`smoke [5]/[7y]/[8d]` 共 5 处）**：验"页面不得出现项目根绝对路径"用的是
 `assert str(ROOT) not in html`。容器里 `ROOT=/w`（两个字符），正文里
@@ -1362,6 +1362,21 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
 做 §6.1 要求的证伪时用 `Path.read_text()` 读进来、拿按「CRLF 形状的锚点」去找 —— 通用换行把 CRLF 归一成了 LF，锚点命中 **0 次**，而 `str.replace` 命中 0 次时**一声不吭**：现场表现是"把 `if status != \"done\"` 改成 `if False` 之后原型全绿"，看着像那条边界断言形同虚设，实际生产码一个字都没变。两处口径：
 ① **变异一律 `read_bytes()` + 字节锚点**，替换前先确认 `count(old) == 1`，替换后**回读**确认真的改到了；② 每一轮在 `finally` 里还原，并且**还原后再跑一次基线** —— 本轮就是中途一条 `assert count(new) == 1` 写歪（文件里本来就有别的 `return 0`）把脚本打断，仓库被留在"轮数夹取被替成 `return 0`"的变异态里，靠收尾那次 `git diff --numstat` 复核才发现。
 推论：**证伪脚本自己也要能被证伪** —— "红/不红"这个结论的有效性等于"变异确实落盘了"这个前提，而后者必须是一条检查过的事实，不是假设。
+**第十六起（续162，与第十四起同族：文档替代码说话，这回说的是「有一条你没实现的出路」）**
+`install.sh:95` 与 §2 那段（2026-10-08 落定的口令口径）一直写着口令「只从 `CTFSCANNER_KEYS_PASSPHRASE` / `~/.secrets/keys-pass`（0600）/ TTY 取」，仓库外那个 `/opt/tools/ctf/git-cred-helper.py` 确实实现这三档 —— 而**运行期那份 `keystore.unlock()` 只有两档**（参数 / 环境变量 / TTY）。于是本机 `gui.keys_ask_passphrase=false` 的部署每次启动都锁着：`git push` 免交互能用（助手认那个文件），扫描与 GUI 却不认；而三行 `[osint] FOFA 未配置 email/key（config/keys.yaml）` 又把排查方向指到一份**密文存在时永远不会被读**的明文文件上（`load_keys()` 第 2 条口径）。主理人据此问「我记得我是把密钥加密了，它应该也要去解密获取」—— 这句话按文档读完全合理，错在文档与文案，不在提问的人。
+两条口径：① 文案里凡写「可以怎样补」，那个「怎样」**必须当场走得通**（本轮把三档实现补齐，并把七处硬写的路径名换成 `keys_hint()` 现取的那句）；② 同一句承诺写在两处文档（安装说明 + 本文件）时，判据要落在**实现那一侧**：`[8bt] ②` 直接断言 `allow_prompt=False` 仍能从文件解锁 —— 这条断言在缺第三档的代码上必红，文档再漂也拦得住（§6.1）。顺带一条实测事实（**带时间戳，会过期**）：本轮动手**之前**那三份密文（现文件 + 两份备份）顶层都只有 `github`，`fofa` 从来没进过密文；同一天 11:15 才把主理人给的 `fofa`/`shodan`/`quake` 合并进去（见 §7 那条本机实况与 CHANGELOG 续162-附）。所以「解不开」与「解开了也没有」是两件事，揉成一句话报就是在骗人（这正是 `keys_hint` 必须分三态的理由）。
+**第十七起（续162-附：差点把「没配上」报成「配好了」）**：`re.M` 里的 `^\s*` 会吃掉换行，把空值的段头与下一行粘成一个键，目标键静默消失。
+现场：要把主理人给的凭据文件（`fofa:` 段头一行、下面缩进 `fofa_email:` / `fofa_api:`）解析成 dict，
+写的是 `re.finditer(r"^\s*([A-Za-z_][\w .\-]*)\s*[:=]\s*(\S.*)$", raw, re.M)`。
+`\s*` 包含 `\n`，于是匹配到 `fofa:` 这一行时冒号右边没有非空白字符，引擎就**跨过换行**把
+下一行 `fofa_email: '…'` 整个当成 `fofa` 这个键的值吃掉 —— 结果 `fofa_email` / `quake_api` **在结果里根本不存在**，
+而 `shodan:`（值直接写在同一行）照常命中。第一次写入因此只带进 shodan 一组，
+如果我照那句"段与掩码都打印出来了"就回报「配好了」，FOFA 仍然是空的。
+三条口径：① 解析**行式配置**一律**逐行 `match`**（或先 `splitlines()`），别在 MULTILINE 里用 `^\s*`；
+② 从"读进来"到"落盘"之间必须有一条**完整性断言**（本轮补的是 `assert "fofa" in overlay and "quake" in overlay`，
+   缺任何一组就不许写文件）—— 静默少认键的形状与"文件里本来就没有"一模一样；
+③ 落盘后**回读复验**要按**来源逐字段**比（本轮 `github` 两只掩码逐字不变 + 三组新键逐字相同），
+   只比"能不能解开"证明不了内容对了（§6.1 同一形）。
 14. **`SELECT DISTINCT … ORDER BY <表达式>` 在 SQLite 里算不出那个表达式**（续154，2026-10-11）。
     现象：拓展域名采集用 `SELECT DISTINCT domain FROM subdomains ORDER BY <真实 IP 档位 CASE>`，
     档位本该是 `real=0 / multi=1 / cdn=2 / 未解析=3`，实测 `app.ngrok.io`（单 IP、非 CDN）被排到
@@ -1467,13 +1482,17 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   不会报错，只会重新变成"日志里没有线索" —— 回归 `[8q] ⑤` 用 AST 扫 `scanner/` 与 `gui/` 里**每一个**
   `pool_run(...)` 调用点，少传就判红。排查同类问题的最短路径依旧是：在**当前解释器**上直接调那个被吞掉的函数，
   别只看阶段日志。
-- **凭据加密的边界：口令绝不允许存在机器上**（续98，`scanner/keystore.py`）：
-  `config/keys.enc.yaml` 用的是口令派生密钥（PBKDF2 + AES-256-GCM）。**为了"省事"把口令
-  写进仓库、`settings.yaml`、systemd unit、`.env` 或任何本机文件，这套加密就立刻退化成混淆**
-  —— 能读那个文件的人就能解密密文。所以本模块刻意**不提供**"记住口令/免输入"，无人值守只
-  接受进程环境变量 `CTFSCANNER_KEYS_PASSPHRASE`（进程环境 ≠ 磁盘）。另两条：解锁后明文在进程
-  内存里，**不防内存 dump**；有密文但未解锁时 `load_keys()` 返回 `{}` 且**绝不回落到明文文件**
-  （否则"绕过口令就能用凭据"，加密形同虚设）。回归 `tests/smoke.py [8f]`。
+- **凭据加密的边界（续98 立、续162 补齐第三档并按现状改写）**：`scanner/keystore.py` 的解锁来源是四档 —— 显式参数 > `CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass` > TTY 提问。第三档是 2026-10-08 就写进 `install.sh` 与 §2 的**同机兜底**，此前只有仓库外的 git 助手实现、运行期没实现 ⇒ `gui.keys_ask_passphrase=false` 的部署每次启动都锁着（现象见 §6.2 第十六起）。三条边界：① `allow_prompt=false` 关的是**提问**、不是解锁，环境变量与该文件照旧生效；② 该文件的守卫必须是**正好 0600 + 属主是自己 + 非空** —— 写成 `& 0o077 == 0`（放过 0644）就把这一档买到的「权限一被改坏就自动失效」卖掉了；③ 环境变量给错时**照实失败，不偷偷回落到文件**（静默换档会让「这台机器到底靠哪句口令解开的」不可追溯，而 `serve()` 现在会把来源打成一行）。原话「口令绝不允许存在机器上」是续98 当时的口径，续136 用户已选定接受同机兜底这一档（只要值不落明文），本条按现状改写。
+  ⚠️ 诚实边界照旧：解密器与密文同机 ⇒ 这**不是**更强的加密，能读 `~/.secrets/keys-pass` 的人就能解开 `keys.enc.yaml`；要收回就删掉那个文件，回到每次给一次口令（§2）。另记一条本机实况（别当成通用事实，且它会过期）：截至 2026-10-12 续162-附，本机密文里有 `fofa`(email+key)、`shodan`、`quake`、`github`(`token` 只读 PAT + `push_token` 推送令牌)，`gitlab` 仍没有。补进去的那一步是**合并而不是覆盖**（旧密文先备份到 `~/.secrets/keys.enc.yaml.bak-<时间>`，0600），`github` 两只的掩码逐字复验过没动。
+- **加密本身的两条底线没变**（续98，`scanner/keystore.py`）：口令派生密钥
+  （PBKDF2-HMAC-SHA256 60 万次）+ AES-256-GCM 认证加密，**改一个 bit 就解不开** ——
+  所以"文件被人动过"与"口令错"报的是同一句话，不假装能区分；算法全走 `cryptography`，
+  不自研任何原语。三条仍然成立的边界：① 把口令写进**仓库、`settings.yaml`、systemd unit、
+  `.env` 或任何被跟踪文件**，这套加密立刻退化成混淆（能读那个文件的人就能解密密文）；
+  ② 解锁后明文在进程内存里，**不防内存 dump**；③ 有密文但未解锁时 `load_keys()` 返回 `{}`
+  且**绝不回落到明文文件** —— 否则"绕过口令就能用凭据"，加密形同虚设。
+  旧条目里「本模块刻意不提供记住口令/免输入、无人值守只接受环境变量」那半句**已由续162 改掉**
+  （现在多一档同机口令文件，见上一条），所以本条不再重复那句承诺。回归 `[8f]` 与 `[8bt]`。
 - **截图「候补重试」的三条边界（续161，设计如此不是 bug）**：① 出厂 `screenshot.retry_rounds: 0` ＝**关**，行为与续160 逐字相同；打开后也只排**只跑 `screenshot` 一个阶段**的追加运行，只打 `append_targets` 里那批 URL；默认串行队列意味着它就排在别的任务后面"空闲再试"，所以**没有**"每轮冷却 N 秒"那个键 —— 加一个只会 `sleep` 住一个 worker 换一句措辞。② 每一轮仍受 `screenshot.max_sites` 单轮上限约束：超出上限的按站点 id 排在下一轮，而上一轮仍失败的那几条会一直挡在前面（要按"最久没试优先"轮转得单独一轮）。③ 重试成功**不清**旧的 `shot_error`（`set_site_shots` 与 `set_site_shot_errors` 各写一列），所以站点行会同时留着 `shot` 和上一次的失败文本：页面靠 `shot` 优先显示、候选靠 `shot=''` 排除，两个数都不虚，但那一格文案看着怪。
 - **站点截图的 `--ignore-certificate-errors` 不能省（2026-09-28 续64）**：CTF / 内网授权目标多为
   自签 / 过期 / 私有 CA 证书（与 `certs.py` 刻意 `CERT_NONE` 同一现实），无头浏览器不加这个开关

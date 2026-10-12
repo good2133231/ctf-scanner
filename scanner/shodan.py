@@ -6,13 +6,15 @@
 公共基类 —— 三个厂商的字段与配额模型各不相同，过早抽象只会把差异塞进一堆分支里。
 
 依赖：`config/keys.yaml` 的 `shodan: {key: ...}`（独立文件、不入库、GUI 不碰）。
-**未填 key 时一律返回"未配置 shodan.key（见 config/keys.yaml）"并且一个请求都不发。**
+**未填 key 时一律返回 `keystore.keys_hint("shodan.key")` 现取的那句（按当下状态分"没文件 /
+  密文没解锁 / 已解锁但没这一组"三档，续162）并且一个请求都不发。**
 
 **默认关**（`shodan.enabled=false`）：任何外部接口都不该在用户没点头时产生流量。
 """
 import json
 import urllib.parse
 
+from . import keystore
 from .utils import http_request
 
 API = "https://api.shodan.io/shodan/host/search"
@@ -67,7 +69,7 @@ def search(icon_hash, settings, logger=None, size=None):
     """
     key = credentials(settings)
     if not key:
-        return [], 0, "未配置 shodan.key（见 config/keys.yaml）"
+        return [], 0, keystore.keys_hint("shodan.key")
     if not icon_hash:
         return [], 0, "favicon 哈希为空"
     cfg = (settings or {}).get("shodan", {}) or {}

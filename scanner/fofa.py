@@ -4,7 +4,8 @@
 就不去拓展了" —— 本模块实现后半段（反查 + 黑 ico 判定），前半段（favicon 采集与哈希）
 在 `scanner/fingerprint.py` 与 `scanner/mmh3.py`。
 
-依赖：`config/keys.yaml` 的 `fofa: {email, key}`（独立文件、不入库、GUI 不碰）。
+依赖：凭据文件里的 `fofa: {email, key}`（`config/keys.yaml`，或口令加密的
+`config/keys.enc.yaml`；独立文件、不入库、GUI 不碰 —— 续98 起两份谁生效看 `config.load_keys()`）。
 **未填 key 时一律返回"不可用"并只记一行日志**，不影响流水线其它部分。
 
 技术要点：
@@ -17,6 +18,7 @@ import base64
 import json
 import urllib.parse
 
+from . import keystore
 from .utils import http_request
 
 API = "https://fofa.info/api/v1/search/all"
@@ -219,7 +221,7 @@ def search_query(query, settings, logger=None, size=None):
     """
     email, key = credentials(settings)
     if not (email and key):
-        return [], 0, "未配置 fofa.email / fofa.key（见 config/keys.yaml）"
+        return [], 0, keystore.keys_hint("fofa.email / fofa.key")
     cfg = (settings or {}).get("fofa", {}) or {}
     try:
         size = int(size or cfg.get("max_assets") or 100)
