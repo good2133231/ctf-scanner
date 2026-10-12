@@ -3643,7 +3643,32 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       正是续162 改掉的口径），并给「本机密文只有 github」那条实况**加了时间戳**（§5.19）
 - [x] 实测：`tests/smoke.py`（`logs/_gate162g.log`）**SMOKE PASS**、组打印 185 行（去重 161 组）、AssertionError 0。**不报「日志总行数」，它不可比**：本附之后端到端复跑两次一次 4071 行、一次 5162 行都全绿，逐组比对 160/161 组行逐字相同、唯一变的是 `[6u]` 的 `subdomains 6→5`（真跑那一组本来依赖外部被动源与 DNS），多出来的 1091 行里 71% 是 urllib3 的 `InsecureRequestWarning` 噪声。第一版抄的是另一次跑的 4072 行 —— 差一行就是没复验（§0.4）
 
-下一轮（续163）——只做这些，别扩大：
+
+## 续163（2026-10-12，WorkBuddy · Qoder-Agent 远端 Linux）：第一次真的"重新下载一遍项目"跑全流程，并修掉唯一卡死新机器的那个入口
+
+主理人问「我们的可迁移化有验证吗？GitHub 重新下载能不能全流程自己跑起来，不要回头又缺这个又缺那个」。
+
+- [x] **两份独立干净克隆**（公开仓库、零凭据、只用项目自己的入口）逐步实测：
+      `./install.sh` 自动建 `.venv` + 按 `requirements.lock` 装依赖 + 自动下 subfinder v2.17.0 /
+      httpx v1.12.0 / afrog v3.5.8，**按红线拒装 puredns**（官方不发校验和），fscan/dirmap 给
+      可复制的手工命令，依赖复验通过；`cli/client.py --check` rc=0；
+      **`cli/run_devflow.py` rc=0：13 阶段 11 真跑 / 2 SKIP（带原因）/ 0 FAIL，
+      35 个向量 18 点到、0 个覆盖缺口**；克隆里 `tests/smoke.py` **SMOKE PASS（4065 行）**
+      ⇒ "没 AI 在场就跑不起来"这个担心，在依赖 / 外部工具 / 全流程自检 / 唯一门禁这四层上不成立
+- [x] **抓到并修掉唯一一个真会卡死新机器的缺陷**：`CTFSCANNER_ADMIN_PASSWORD=…
+      cli/run_users.py --create-admin` 在干净克隆上崩 `no such table: users`（两份克隆各复现一次，
+      rc=1，留下 4 KB 空库文件）。根因很窄：`cli/run_users.py` 是**全仓唯一一个碰库却没调
+      `db.init_db()` 的入口**（`client.py:115/749`、`run_node.py:140`、`migrate.py:503`、
+      `login_guard.py:367` 都调了）；`users.count_users()` 自己吞 `OperationalError` 返 0 ⇒
+      `--status` 看着没事，`get_by_name()` 不吞 ⇒ 崩的是它。要命的是 `--status` 与登录页
+      0 账号时的指路语**正好把人指到这条跑不通的命令上**（`[7j]`/`[8v]` 还断言那句指路必须在）
+      —— 即本轮刚记的 §6.2 第十六起那一族：**文案给的出路必须当场走得通**
+- [x] **回归 `[8v] ⑦`**：全新库路径上子进程真跑 `--create-admin` → rc=0 + 建出来的账号能
+      `check_login` + `password` 列是 pbkdf2 派生值 + 输出不含口令值；另加一条源码形态断言
+      "入口必须 `db.init_db()`" —— 少了它，这条回归会退化成"这台机器恰好有库才绿"（§6.1）
+- [x] 实测：实测：`tests/smoke.py`（终验 `logs/_gate163c.log`，三份记忆落完之后复跑；代码定稿那次是 `logs/_gate163b.log`，两次都是 185 组打印 / AssertionError 0）**SMOKE PASS**、组打印 185 行（同一判据数上一轮终验 `logs/_gate162h.log` 得 185 行，本轮不新增组）、AssertionError 0。干净克隆那份的实测数字在上面的表里（那条 `SMOKE PASS` 是克隆自己跑出来的，不是本机复跑）。
+
+下一轮（续164）——只做这些，别扩大：
 
 - [ ] **`shodan` / `quake` 的 key 已进密文，但策略段还是关的**（`enabled: false`）——
       「配了 key」与「会去查」是两件事，别把前者当后者。要不要随包打开由主理人定：
@@ -3686,3 +3711,22 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [ ] `~/.secrets/keys-pass` 这一档的**存废**由主理人定：AGENTS §2 早写了"要真正收回同机兜底，
       就把这个文件删掉，回到每次推送给一次口令"。本轮把它接到了运行期（扫描/GUI 也认），
       换来的便利是无人值守能解锁，代价是能读那个文件的人能解开整份密文 —— 说清楚，别当没这回事
+- [ ] **`install.sh` 在任何新克隆上都必然返回非 0**（续163 实测 rc=1）：puredns 官方不发校验和
+      ⇒ 自动层永远"失败一项"，而既有契约是 `[8av]` 断言的"退出码必须带出去，非 0＝有项失败"；
+      脚本自己收尾又写"多半是可选的外部工具没下下来，框架本身仍能跑" —— 一句话里既说"没事"
+      又返回"有事"，`set -e` / systemd / CI 会把一次**成功**的安装判成失败。两个方向选一：
+      ① 把"按红线拒绝安装"归类成**需手工**（改 `run_bootstrap` 的 `failed` 口径 + 同步 `[8av]`）；
+      ② 明确"install.sh rc=1 属正常收尾"并写进 README / docs/docker.md / CI。**口径要主理人定**
+- [ ] `cli/client.py --check` 给 puredns 的出路句「可用 `--update-tools` 联网下载安装」**当场走不通**
+      （续163 实测同一条命令必然被拒，缺 `--allow-unverified`）—— 出路句子少半句旗标，
+      与 §6.2 第十六起同族
+- [ ] **iprecon 只报第一个源的失败**：三源 union（webscan → hackertarget → ip138）早就在，
+      但只有 webscan 非 200 会打一行 DEBUG，另两个源返回空时一个字不说 ⇒ 主理人看到
+      "17 行 HTTP 530"就以为只试了一个源。要补的是"每源各自的结果/失败摊开一行"
+      （与 §7「跳过的量必须可见」同口径；那 530 是 webscan 自己的源站挂了，不是我们配错）
+- [ ] **原生反查要先补 `dnsq` 的 rdata 解码**（PTR / NS / MX / SOA 现在一律给空串，§7 记着实测）；
+      补完才能给 iprecon 加一个免 key 的 `ptr` 源。诚实预期：CDN IP 的 PTR 是
+      `server-<ip>.hkg1.r.cloudfront.net` 这类厂商名 ⇒ 会被续154 的第三方清单挡掉，
+      真正的收益在自建 / IDC 的 IP，**别当万能备用源**
+- [ ] **`exclude_scanned` 挡不住全端口重跑**（只记开放端口，实测那条"已扫过 N 个"一次没出现）：
+      要记 per-host 的"已扫范围/已跑完整轮"才算真省 —— 见 §7 那条

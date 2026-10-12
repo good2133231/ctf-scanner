@@ -14158,7 +14158,33 @@ http:
     assert _r117.returncode == 0, (_r117.returncode, _r117.stderr[-300:])
     assert _SENT117 not in _r117.stdout + _r117.stderr, "--status 把口令值打印出来了"
     assert "账号" in _r117.stdout, _r117.stdout[:200]
-    # `gui.token` 的键名在 DEFAULTS 里已经不存在（新装环境根本不会带上它）
+    # ⑦ **全新库**上建第一个管理员（干净克隆实测过的形状：库文件不存在 → 崩 `no such table: users`）
+    #    这条不是装饰：`--status` 与登录页 0 账号时都把用户指到 `--create-admin`，
+    #    而它此前是全仓唯一一个"碰库却不建表"的入口 —— 文案给的出路必须当场走得通（§6.2 第十六起）。
+    from scanner import admin_setup as _as117, users as _usvc117   # 本组没有模块级的这两个名字
+    _fresh_db = Path(_TMPDIR) / "fresh-users-117.db"
+    if _fresh_db.exists():
+        _fresh_db.unlink()
+    _r117c = _sp117.run([sys.executable, "cli/run_users.py", "--create-admin"], cwd=str(ROOT),
+                        capture_output=True, text=True, timeout=180,
+                        env=dict(os.environ, CTFSCANNER_DB=str(_fresh_db),
+                                 CTFSCANNER_ADMIN_PASSWORD=_SENT117, TMPDIR=str(_TMPDIR)))
+    assert _r117c.returncode == 0, ("新建库上 --create-admin 失败了："
+                                    f"{_r117c.returncode} {_r117c.stdout[-200:]} {_r117c.stderr[-300:]}")
+    assert _SENT117 not in _r117c.stdout + _r117c.stderr, "建号输出里出现了口令值"
+    _old_db117 = db.DB_PATH
+    try:
+        db.DB_PATH = _fresh_db
+        _adm117 = _usvc117.get_by_name(_as117.DEFAULT_NAME)
+        assert _adm117 and _adm117["role"] == _usvc117.ROLE_ADMIN, \
+            f"命令说成了却没建出管理员：{dict(_adm117) if _adm117 else None}"
+        assert _usvc117.check_login(_as117.DEFAULT_NAME, _SENT117), "建出来的账号登不进去"
+        assert _usvc117.get_by_name(_as117.DEFAULT_NAME)["password"] != _SENT117, "口令明文入库了"
+    finally:
+        db.DB_PATH = _old_db117
+    # 判据自己也要有牙：把入口的建表调用拆掉，这条必须红（否则"新库能建号"可能只是库恰好存在）
+    _ru117 = (ROOT / "cli" / "run_users.py").read_text(encoding="utf-8")
+    assert "db.init_db()" in _ru117, "入口不建表 ⇒ 这条回归退化成「这台机器恰好有库才绿」"
     assert "token" not in _cfg117.DEFAULTS["gui"] and "token_hash" not in _cfg117.DEFAULTS["gui"], \
         "DEFAULTS 里还留着登录凭据键 —— 那等于每个新部署都自带一个共享口令"
 

@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import admin_setup, config as scfg, users  # noqa: E402
+from scanner import admin_setup, config as scfg, db, users  # noqa: E402
 
 
 def _legacy_keys():
@@ -99,6 +99,11 @@ def main(argv=None):
     g.add_argument("--purge-legacy-token", action="store_true",
                    help="删掉 settings.yaml 里已废弃的 gui.token / gui.token_hash 残留")
     args = ap.parse_args(argv)
+    # 全新机器上第一次跑本命令时库还没建表，而 `--create-admin` / `--reset-password` 都要读账号表
+    # （`users.get_by_name` 不吞 OperationalError）—— 实测干净克隆上直接崩
+    # `no such table: users`，而 `--status` 与登录页 0 账号时打印的指路语正好把人指到这条命令上。
+    # `cli/client.py` / `run_node.py` / `migrate` 都在入口处 `init_db()`，本入口此前是唯一漏掉的那个。
+    db.init_db()
     if args.status:
         return do_status(args)
     if args.create_admin is not None:

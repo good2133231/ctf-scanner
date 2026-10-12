@@ -1388,6 +1388,9 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
     就别收（§5.14）。
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
+- **碰库的 CLI 入口必须自己 `db.init_db()`，而 `users.count_users()` 吞错让这种洞看起来不存在**（续163，干净克隆实测）：`cli/run_users.py` 是全仓唯一一个碰库却没建表的入口（`client.py` / `run_node.py` / `migrate.py` / `login_guard.__main__` 都调了），于是新机器上 `CTFSCANNER_ADMIN_PASSWORD=… cli/run_users.py --create-admin` 崩 `no such table: users`。为什么长期没被发现：`--status` 读的 `count_users()` **刻意吞 `OperationalError` 返 0**（表没建＝0 个账号，正是它该有的说法），而 `--create-admin` 走的 `get_by_name()` 不吞 ⇒ 只有写路径崩。**最糟的是 `--status` 与登录页 0 账号时的指路语把人指到这条跑不通的命令上** —— 与 §6.2 第十六起同族：文案里写「可以这样补」，那个「这样」必须当场走得通。回归 `[8v] ⑦`（全新库路径子进程真跑 + 一条「入口必须建表」的源码判据，否则它会退化成「这台机器恰好有库才绿」）。
+- **`dnsq` 只解码 CNAME / A / AAAA 的 rdata，其余类型一律给空串**（续163 实测）：`_parse_message` 里 `else: records.append((owner, rtype, ""))` 是有意省事的形状，代价是 **PTR / NS / MX / SOA 拿不到任何名称** —— 实测 1.1.1.1 系统解析器能给出 `one.one.one.one`，`dnsq.query('1.1.1.1.in-addr.arpa', 'PTR')` 给 `[]`。这同时解释了两件事：① 续113 的 `zone_state()` 为什么**只能看 rcode、不能看「NS 记录是否非空」**（那时以为是解析器问题，其实是这里没解码）；② 「我们自己用 DNS 做原生 IP 反查」目前做不到，要先补这一段。补的时候别顺手把`zone_state` 改成看记录非空 —— 那条判据的正确性依赖「未知服务器 / 被防火墙吃掉也返回空」，改之前先想清楚 fail-open 那一半。
+- **`portscan.exclude_scanned` 只能排除「库里已记录的开放端口」**（续163 实测）：三条引擎路（fscan / nmap / 内置）都吃收窄后的 `target_ports`，但 `ports` 表里**只有开放端口** —— 全端口 65535 里 99.9% 是关闭端口、不入库，所以 #17/#18 两份日志里那条「已扫过 N 个端口，本次只扫剩余 M 个」**一次都没出现** ⇒ 断点续跑重进 portscan 时几乎等于重扫（耗时与目标侧压力都翻倍，而且这是「省重复」的开关，读日志的人会以为已经省了）。要真省得记 per-host 的「已扫范围 / 已跑完整轮」标记，而不是只记开放端口。
 - **缺中文字体＝截图取证与中文报告静默作废（续103 本机实测）**：无头浏览器缺 CJK 字体时**不报错**、
   照样产出合法 PNG，只是图里每个汉字都是豆腐块；而 `[7z]` 只验"有没有出图、字节数对不对"，所以它
   **一直是绿的**。这台 Ubuntu 上 `fc-list :lang=zh` 命中 **0**（只有 DejaVu / Liberation）才发现。

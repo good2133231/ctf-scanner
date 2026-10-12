@@ -56,6 +56,72 @@
   **刻意不报「日志总行数」—— 它不可比**：本附落完后端到端复跑两次，一次 4071 行、一次 5162 行，两次都全绿；逐组比对 160/161 条组行**逐字相同**，唯一变的是 `[6u]`（真跑 13 阶段那一组）的 `subdomains 6→5`，它本来就依赖外部被动源与 DNS；而多出来的 1091 行里 **71% 是 urllib3 的 `InsecureRequestWarning` 噪声**。
   第一版这里我抄的是另一次跑的 4072 行 —— 差一行就是没复验（§0.4），而更该记的是：**这类量压根不该当实测数字报出去**。
 
+
+## 续163 第一次认真回答"重下项目能不能自己跑起来"：干净克隆全流程实测 + 修掉唯一那个卡死新机器的入口
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人的问题是：「我们的可迁移化有验证吗？
+比如现在 GitHub 项目重新下载，能不能全流程自己运行起来，而不是又要依赖 AI ——
+最终目的是做一个不依赖 AI 的项目，AI 只帮我们设计写代码，不要回头又缺这个又缺那个。」
+
+### 怎么测的：不看文档说什么，真的下一遍
+
+`git clone https://github.com/good2133231/ctf-scanner.git`（公开仓库、零凭据）→ 只跑项目自己的入口：
+
+| 步骤 | 命令 | 实测结果 |
+| --- | --- | --- |
+| 装 | `./install.sh` | 自动建 `.venv` + 按 `requirements.lock` 装依赖；自动下载 **subfinder v2.17.0 / httpx v1.12.0 / afrog v3.5.8**；**按红线拒装 puredns**（官方 v2.1.1 不发校验和）；给 fscan / dirmap 的**可复制手工命令**；依赖复验 `[+] 能 import flask/requests/yaml` —— **退出码 1**（见下面"记下的三条"第①条） |
+| 查 | `cli/client.py --check` | rc=0；puredns/fscan/dirmap 未装并逐条给原因 + 出路（puredns 那句出路不完整，见第②条） |
+| 全流程 | `cli/run_devflow.py` | rc=0：**13 个阶段 11 个真跑 / 2 个 SKIP（带原因）/ 0 个 FAIL**；35 个功能向量 18 个点到、**0 个覆盖缺口**、17 个本次不可达（每个都带原因） |
+| 门禁 | `tests/smoke.py` | **SMOKE PASS**（4065 行日志）—— 干净树自己就能跑完整回归，不需要任何 AI 在场 |
+| 建号 | `CTFSCANNER_ADMIN_PASSWORD=… cli/run_users.py --create-admin` | **崩**：`sqlite3.OperationalError: no such table: users`（两份独立克隆各复现一次，rc=1，还留下一个 4 KB 空库文件） |
+
+### 修掉的这一个（它会卡死任何无人值守的新机器）
+
+`cli/run_users.py` 是全仓**唯一一个碰库却没调 `db.init_db()` 的入口**
+（`cli/client.py:115/749`、`cli/run_node.py:140`、`scanner/migrate.py:503`、
+`scanner/login_guard.py:367` 都调了）。`users.count_users()` 自己吞 `OperationalError` 返 0，
+所以 `--status` 看着一切正常；而 `users.get_by_name()` 不吞 —— 崩的就是它。
+
+它为什么关键：`--status` 与登录页 0 账号时打印的指路语，**正好把人指向这条跑不通的命令**
+（`[7j]`/`[8v]` 还各自断言"页面上必须给出这条建号指引"）。新机器 + 无终端 ⇒ 控制台
+"无人能登录"而唯一的补救路是坏的 —— 这就是本轮刚记进 §6.2 第十六起的那族毛病
+（文案写「可以这样补」，那个「这样」必须当场走得通）。修法一行：入口先 `db.init_db()`。
+
+回归 `[8v] ⑦`（新增）：在**全新库路径**上子进程真跑 `--create-admin` → rc=0、
+建出来的账号能 `check_login` 通过、`password` 列是 pbkdf2 派生值不是明文、输出里不含口令值；
+另加一条源码形态断言"入口必须建表"，否则这条回归会退化成"这台机器恰好有库才绿"。
+
+### 记下来、本轮**没动**的三条（都要人先定口径，不是我能顺手改的）
+
+① **`install.sh` 在任何新克隆上都必然非 0**：puredns 官方不发校验和 ⇒ 自动层永远"失败一项"，
+   而既有契约（`[8av]` 断言"退出码必须带出去，非 0＝有项失败"）就是这么定的。
+   脚本自己的收尾句还写着"多半是可选的外部工具没下下来，框架本身仍能跑"——
+   一句话里既说"没事"又返回"有事"，`set -e` / systemd / CI 会把一次成功安装判成失败。
+   两个方向：把"按红线拒绝"归类成**需手工**（改 run_bootstrap 的 `failed` 口径 + 同步 `[8av]`），
+   或者明确"install.sh 的 rc=1 属正常收尾"并写进 README/CI。**要主理人定，别两头都不动。**
+② `cli/client.py --check` 给 puredns 的出路是「可用 `--update-tools` 联网下载安装」，
+   实测同一条命令**必然被拒**（缺 `--allow-unverified`）—— 出路句子少半句旗标，与第十六起同族。
+③ iprecon 三源 union 早就有（`webscan → hackertarget → ip138`，本轮主理人只看到 530 那行是因为
+   **只有 webscan 会打失败日志**，另两个源返回空时一个字不说）⇒ "只试了一个源"是被日志形状误导的。
+   缺的是"每源结果都要摊开"那一行（与 §7「跳过的量必须可见」同口径）。
+
+### 顺带查清的两件事（主理人同轮问的 3/4/6）
+
+- **原生反查能不能自己做**：能，但先要修 `dnsq` —— `_parse_message` 只解码 CNAME/A/AAAA 的 rdata，
+  **其余类型一律给空串**，所以 PTR / NS / MX / SOA 的名称拿不到（实测 1.1.1.1：
+  系统解析器给 `one.one.one.one`，`dnsq.query(..., "PTR")` 给 `[]`；NS 同形 —— 这正是续113
+  `zone_state` 只能看 rcode、不能看"记录是否非空"的根因）。修好后 PTR 对 CDN IP 也只给
+  `server-13-33-183-129.hkg1.r.cloudfront.net` 这类厂商名 —— 会被续154 的第三方清单挡掉，
+  真正的收益在自建 / IDC 的 IP。
+- **`portscan` 那两趟不是重复扫描**：是同一个阶段被断点续跑重跑了一遍（续159 的成因）；
+  `exclude_scanned` 三条引擎路都吃收窄后的 `target_ports`（fscan 也吃），**但它只能排除库里
+  已记录的"开放端口"** —— 全端口 65535 里 99.9% 是关闭端口、不入库，所以 #17/#18 实测
+  "已扫过 N 个端口，本次只扫剩余 M 个"**一次都没出现**，重跑那一趟几乎等于重扫。
+  要真省，得记 per-host 的"已扫范围"而不是只记开放端口。
+
+### 实测
+
+实测：`tests/smoke.py`（终验 `logs/_gate163c.log`，三份记忆落完之后复跑；代码定稿那次是 `logs/_gate163b.log`，两次都是 185 组打印 / AssertionError 0）**SMOKE PASS**、组打印 185 行（同一判据数上一轮终验 `logs/_gate162h.log` 得 185 行，本轮不新增组）、AssertionError 0。干净克隆那份的实测数字在上面的表里（那条 `SMOKE PASS` 是克隆自己跑出来的，不是本机复跑）。
 ## 续162 凭据解锁补上文档早就承诺的第三档；「为什么没 key」改成跟着状态现取；`--encrypt` 不再整份覆盖密文
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人两条点单：① `config/edge_auth.yaml` 删掉
