@@ -610,6 +610,16 @@ def _edge_note(settings):
             f"勾选后需配好口令才生效（{edgeauth.SET_HINT}）。")
 
 
+def _shot_retry_note():
+    """策略页与详情页共用的一句：候补重试**只认哪几档**失败。
+
+    档名清单只从 `screenshot.RETRYABLE_REASONS` 现取（§5.14 / §5.19）：文案里抄一份档名，
+    下次改档名就是"页面说重试、代码不重试"的假话。故意**不读 settings** —— 它报的是判据，
+    不是开关状态（开关状态模板自己会打 `s.screenshot.retry_rounds`）。
+    """
+    return "、".join(screenshot.RETRYABLE_REASONS)
+
+
 def _console_note(settings):
     """策略页「控制台」段现取的那句现状（§5.19）：逐条运行日志去向 + 关掉目标侧 TLS 校验的后果。
 
@@ -1783,6 +1793,17 @@ def create_app():
         shot_missing = bool(site_total) and not ((_shot_agg["s"] or 0) if _shot_agg else 0)
         # 本机有没有可用的无头浏览器 —— 页面要区分"策略没开"和"没装浏览器"两种"没截图"
         shot_ready = screenshot.available(settings)
+        # 续161「候补重试」：页面上要说清"这一轮是不是在补截图、还剩几张、上限几轮"，
+        # 否则用户只会看到"已经完成"的任务又变成排队中，像坏了。
+        # 三处判据全部与 runner 同源：可重试档 `screenshot.RETRYABLE_REASONS`、
+        # 轮数 `screenshot.retry_rounds()`、候选 `runner.shot_retry_targets()`，
+        # 轮次从 `run_payload` 读（`queue.run_options`）而**不是**任务的 options 列。
+        _sr_rounds = screenshot.retry_rounds(settings)
+        _sr_cand = runner.shot_retry_targets(task_id) if _sr_rounds else {"urls": [], "skipped": {}}
+        shot_retry = {"rounds": _sr_rounds, "left": len(_sr_cand["urls"]),
+                      "skipped": _sr_cand["skipped"],
+                      "reasons": _shot_retry_note(),
+                      "round": int(queue.run_options(task_id).get("shot_retry_round") or 0)}
         # 「SSL 证书」页签：同样要说清"为什么没有证书"。分两种情况，用与 cert 阶段**同一个**
         # pick_targets() 判定"本次有没有可取证的目标"，避免页面解说与实际行为不一致。
         # 注意它按 dict 取值（阶段那边传的是 probe 的 dict 结果）—— 不转会在渲染时抛 AttributeError。
@@ -1882,6 +1903,7 @@ def create_app():
             run_duration=run_duration_text(task),
 
             shot_enabled=shot_enabled, shot_missing=shot_missing, shot_ready=shot_ready,
+            shot_retry=shot_retry,
 
             running=set(runner.running_task_ids()),
             # 续49：排队位置（0=不在队列里）。页面据此显示「排队中（第 N 位）」。
@@ -3593,6 +3615,10 @@ def create_app():
                                    "max_sites": int(f.get("screenshot_max_sites", 20) or 20),
                                    "window": (f.get("screenshot_window") or "1280x900").strip(),
                                    "timeout": int(f.get("screenshot_timeout", 30) or 30),
+                                   # 续161「候补重试」轮数：0 是**合法值**（关），所以缺字段才回 0；
+                                   # 不能写 `or DEFAULT`，那会把人填的 0 洗成默认值。
+                                   # 越界与非法值不在这里管 —— 读侧 `screenshot.retry_rounds()` 夹
+                                   "retry_rounds": int(f.get("screenshot_retry_rounds", 0) or 0),
                                    "browser": (f.get("screenshot_browser") or "").strip()},
                     # TLS 证书取证（可选，默认关）：只对 https / tls_ports 站点做一次只读握手
                     "cert": {"enabled": f.get("cert_enabled") == "1",
@@ -3768,6 +3794,7 @@ def create_app():
                                        shape_note=_shape_note(_s114),
                                        edge_note=_edge_note(_s114),
                                        console_note=_console_note(_s114),
+                                       shot_retry_note=_shot_retry_note(),
                                        error="参数必须是整数")
             # 续48：审计只记"改了哪几个区块"，**绝不记值**（键名也省掉 —— 见 `_changed_sections`）。
             _changed = _changed_sections(settings, data)
@@ -3781,7 +3808,8 @@ def create_app():
                                esp=external_source_panel(settings),
                                shape_note=_shape_note(settings),
                                edge_note=_edge_note(settings),
-                               console_note=_console_note(settings))
+                               console_note=_console_note(settings),
+                               shot_retry_note=_shot_retry_note())
 
     # ---------- 访问审计（续48） ----------
 

@@ -1280,6 +1280,23 @@ def list_sites(task_id):
     return _query("SELECT * FROM sites WHERE task_id=? ORDER BY id", (task_id,))
 
 
+def list_shot_failures(task_id):
+    """**没截成图、且写着失败原因**的站点行（续161 候补重试的唯一候选来源，纯读库零网络）。
+
+    两条收窄都有代价如果不做：
+    - `shot` 为空才算失败 —— 重试成功时旧 `shot_error` 不会被清掉（`set_site_shots` 与
+      `set_site_shot_errors` 各写一列），不去重会把"早就截成了"的站点永远留在候补名单里；
+    - 原因档**不在这里判**：SQL 里写 `shot_error LIKE '超时%'` 就是把"哪几档可重试"抄第二份，
+      与 `screenshot.classify()` 迟早分家（§5.14；续154 第十四起、续159 都是这个形状）。
+      这里只把文本交出去，判档归 `screenshot.retryable_shot_error()` 一处。
+      顺带：老格式（续150）没有档名前缀、`classify` 又认不全档名，用 SQL 前缀匹配会把
+      可重试的那几条静默漏掉 —— 看着像"候补功能没生效"，实际是判据抄错了地方。
+    """
+    return _query("SELECT url, shot, shot_error, redirect_url, status FROM sites "
+                  "WHERE task_id=? AND TRIM(COALESCE(shot_error,''))<>'' "
+                  "AND TRIM(COALESCE(shot,''))='' ORDER BY id", (task_id,))
+
+
 def list_dirs(task_id):
     # 默认排序按"可读性"而非插入顺序（用户 2026-09-23 明确要求）：
     # ① `200` 排最前（403/302 是"路径存在但看不了"，价值低于能直接访问的 200）；

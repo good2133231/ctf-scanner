@@ -90,6 +90,17 @@ def _load_run_spec(task_id, mode):
     return task, stages, options
 
 
+def run_options(task_id):
+    """这次运行的**运行期选项**（`run_payload` 里那一份）；判据与 worker 完全同源（`_load_run_spec`）。
+
+    GUI 的「候补第 N 轮」必须读它：轮次由 `db.enqueue_task` 写进 `run_payload` 而**不碰**任务的
+    `options` 列（那是持久配置，被运行期参数污染会让下一次「重启」误判 —— 见那里的注释），
+    从 `task["options"]` 读永远是 0，页面就会显示成"候补第 0 轮"。
+    """
+    _task, _stages, options = _load_run_spec(task_id, "")
+    return options if isinstance(options, dict) else {}
+
+
 def _default_dispatch(task_id, mode, settings):
     """默认消费者：按 `mode` 调 `runner.run_task`（生产用；测试可注入自己的 `dispatch`）。"""
     task, stages, options = _load_run_spec(task_id, mode)

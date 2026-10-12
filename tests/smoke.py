@@ -21119,6 +21119,235 @@ expression: r0()
           "开关关=0、上限 2 咬住并报告、0=不限｜task_counts 与 bulk 同为 5/3/2 且 own+ext=total｜"
           "列表页模板换成两档、旧总数写法已消失")
 
+    # ---------------- [8bs] 续161：截图「候补重试」—— 排轮判据 / 轮数上限 / 与追加层数互斥 --------
+    #      主理人点单「有些站点截图超时，建议加入候补运行，在项目没完成前空闲再重试一下」。
+    #      落地＝任务**正常完成后**把「超时 / 跳转未落地 / 连不上」三档没截成的站点，排一次
+    #      只跑 screenshot 的追加运行（worker 串行认领＝天然"空闲再来"，所以不另发明"冷却秒数"
+    #      去睡住一个 worker）。默认 0＝关；`无浏览器` / `预算或已停止` 明确不重试。
+    import ast as _ast161
+    import inspect as _ins161
+    import threading as _th161
+    from scanner import queue as _q161
+    from scanner import screenshot as _sh161
+    from scanner import runner as _rn161
+
+    _lg161 = []
+
+    class _Rec161:
+        def info(self, m, *a): _lg161.append(str(m))
+        def warning(self, m, *a): _lg161.append(str(m))
+        def error(self, m, *a): _lg161.append(str(m))
+        def debug(self, m, *a): pass
+
+    # ① 落库标签必须**原样归回自己那一档**（这是"重试哪几档"的地基，§6.1 先自证判据）。
+    #    顺带钉住一个实测分叉：把落库文本再喂一遍 `classify()` 会跑偏 —— 「跳转未落地」
+    #    重新 classify 落「其他」（它认的是站点行里的 301/302，纯文本里没有），而这一档
+    #    **是可重试档**：判据写成"重新分类"就是把可重试的站点静默丢掉（§6.2 第十四起同族）。
+    _drift161 = [_lab for _lab in _sh161.REASONS
+                 if _lab in _sh161.RETRYABLE_REASONS
+                 and _sh161.classify(f"{_lab}｜一句话") != _lab]
+    assert _drift161, ("shot_bucket 与 classify 已完全同源？那前缀读取成了死代码 —— "
+                       "要么删掉它，要么改测真正会分叉的那一档")
+    for _lab in _sh161.REASONS:
+        _stored161 = f"{_lab}｜一句话"
+        assert _sh161.shot_bucket(_stored161) == _lab, \
+            f"{_stored161} 归档成 {_sh161.shot_bucket(_stored161)}"
+        assert _sh161.retryable_shot_error(_stored161) is (
+            _lab in _sh161.RETRYABLE_REASONS), _stored161
+    assert _sh161.shot_bucket("老格式没有档名前缀的一串 timeout") == _sh161.REASON_TIMEOUT, \
+        "续154 之前落的老数据不带前缀，回退 classify 这条路必须还走得通"
+
+    # ② 造一个"跑完了但有几张没截成"的任务：6 行刚好盖住三条判据边界
+    #    （三档可重试 / 两档不可重试 / 一档**早就截成了**）
+    _t161 = "shot8bs.test"
+    _tid161 = db.create_task("smoke-8bs", _t161, ["probe", "screenshot"], {})
+
+    def _site161(i, status=200, redirect=""):
+        return {"url": f"http://s{i}.{_t161}/", "host": f"s{i}.{_t161}", "port": "80",
+                "status": status, "title": "", "length": 1, "server": "", "tech": "",
+                "source": "probe", "favicon": "", "redirect_url": redirect,
+                "redirect_status": 0, "redirect_title": ""}
+
+    _rows161 = [_site161(i) for i in range(1, 7)]
+    _rows161[1] = _site161(2, status=301)
+    db.insert_sites(_tid161, _rows161)
+    _u161 = [r["url"] for r in _rows161]
+    db.set_site_shot_errors(_tid161, [
+        (_u161[0], f"{_sh161.REASON_TIMEOUT}｜Timeout 30s"),
+        (_u161[1], f"{_sh161.REASON_REDIRECT}｜302 没取到落地页"),
+        (_u161[2], f"{_sh161.REASON_CONNECT}｜Connection refused"),
+        (_u161[3], f"{_sh161.REASON_BROWSER}｜未找到可执行的浏览器"),
+        (_u161[4], f"{_sh161.REASON_BUDGET}｜目标侧返回 429"),
+        (_u161[5], f"{_sh161.REASON_TIMEOUT}｜Timeout 30s")])
+    db.set_site_shots(_tid161, [(_u161[5], "shots/done.png")])   # 截成了 → 不该再进名单
+    _cand161 = _rn161.shot_retry_targets(_tid161)
+    assert _cand161["urls"] == [f"http://s{i}.{_t161}" for i in (1, 2, 3)], _cand161
+    assert _cand161["skipped"] == {_sh161.REASON_BROWSER: 1, _sh161.REASON_BUDGET: 1}, _cand161
+    _keep161 = _sh161.RETRYABLE_REASONS
+    try:
+        _sh161.RETRYABLE_REASONS = _keep161 + (_sh161.REASON_BROWSER,)
+        assert len(_rn161.shot_retry_targets(_tid161)["urls"]) == 4, \
+            "放宽判据候选没跟着涨 ⇒ 这条断言没有区分度"
+        _sh161.RETRYABLE_REASONS = ()
+        assert _rn161.shot_retry_targets(_tid161)["urls"] == [], "判据清空后必须一个都不排"
+    finally:
+        _sh161.RETRYABLE_REASONS = _keep161
+    # 判据不许有第二份：候选那条 SQL 的**字符串字面量**里不能出现任何档名（抄进 SQL 就会与
+    # classify 分家）。只扫字面量、把 docstring 排除 —— 那段注释正是为了讲清"为什么不许这样写"
+    # 才举了 `LIKE '超时%'` 当反例，扫全文会把解释当成实现（§6 第 6 条第六次撞同一件事）。
+    _fn161 = _ast161.parse(_ins161.getsource(db.list_shot_failures)).body[0]
+    _docnode161 = None
+    if isinstance(_fn161.body[0], _ast161.Expr) \
+            and isinstance(_fn161.body[0].value, _ast161.Constant) \
+            and isinstance(_fn161.body[0].value.value, str):
+        _docnode161 = _fn161.body[0].value        # 就是那段 docstring，下面把它排除掉
+    _lit161 = [n.value for n in _ast161.walk(_fn161)
+               if isinstance(n, _ast161.Constant) and isinstance(n.value, str)
+               and n is not _docnode161]
+    _leak161 = [(_lab, _s161[:60]) for _s161 in _lit161 for _lab in _sh161.REASONS if _lab in _s161]
+    assert not _leak161, f"「哪几档可重试」只能在 screenshot.RETRYABLE_REASONS 一处：{_leak161}"
+    assert any("SELECT" in _s161.upper() for _s161 in _lit161), "SQL 字面量没扫到 ⇒ 这条判据是空跑"
+
+    # ③ 排轮本体：真调 `_maybe_queue_shot_retry`，桩住 enqueue 抓**精确参数**
+    #    （§6.2 第十二起：桩掉写路径而不点名存了什么，等于没测）
+    _enq161 = []
+    _real_enq161, _real_notify161 = db.enqueue_task, _q161.notify
+
+    def _drive161(setting_rounds, options=None, status="done", stopped=False,
+                  stages=("probe", "screenshot")):
+        """把任务摆成某种收场状态，跑一次收尾函数，返回 (入队记录, 日志副本)。"""
+        db.update_task(_tid161, status=status, run_payload="")
+        _ev161 = _th161.Event()
+        if stopped:
+            _ev161.set()
+        _st161 = copy.deepcopy(load_settings())
+        _st161.setdefault("screenshot", {})["retry_rounds"] = setting_rounds
+        _ctx161 = StageContext(_tid161, "smoke-8bs", parse_lines([_t161]), list(stages),
+                               dict(options or {}), _st161, str(Path(_TMPDIR) / "8bs"),
+                               _Rec161(), stop_event=_ev161)
+        _enq161.clear()
+        _lg161.clear()
+        db.enqueue_task = lambda *a, **kw: _enq161.append((a, kw))
+        _q161.notify = lambda: _enq161.append(("notify",))
+        try:
+            _rn161._maybe_queue_shot_retry(_ctx161, _tid161, list(stages),
+                                           dict(options or {}), _ctx161.logger)
+        finally:
+            db.enqueue_task, _q161.notify = _real_enq161, _real_notify161
+        return list(_enq161), list(_lg161)
+
+    # ③a 出厂默认必须是**关**。判据只看 DEFAULTS：本机 `config/settings.yaml` 会被策略页整份
+    #    重写（主理人在页面上点一下就变了），拿它当"默认值"就是 §6.2 第一起那一族的复发。
+    assert DEFAULTS["screenshot"]["retry_rounds"] == 0, "出厂默认必须是关，不改现有行为"
+    _enq161d, _lg161d = _drive161(DEFAULTS["screenshot"]["retry_rounds"])
+    assert not _enq161d, f"默认关却排了队：{_enq161d}"
+
+    # ③b 打开后排**一轮**，四个键逐一点名（少一个键就是页面与 worker 各看一份参数）
+    _enq161b, _lg161b = _drive161(2)
+    assert len(_enq161b) == 2 and _enq161b[1] == ("notify",), _enq161b
+    (_tid_arg, _mode, _stg, _opt), _kw = _enq161b[0]
+    assert _tid_arg == _tid161 and _mode == "append" and _stg == ["screenshot"], _enq161b[0]
+    assert _opt["append"] is True and _opt["screenshot_on"] is True, _opt
+    assert _opt["ext_depth"] == 1, "候补轮必须压掉追加层数，否则两次 enqueue 互相覆写 run_payload"
+    assert _opt["shot_retry_round"] == 1 and _opt["append_targets"] == [
+        f"http://s{i}.{_t161}" for i in (1, 2, 3)], _opt
+    assert any("候补第 1/2 轮" in m for m in _lg161b), _lg161b
+    assert any(_sh161.REASON_BROWSER in m for m in _lg161b), "不可重试那两档要报出来，不能静默少两条"
+
+    # ③c 四条"不许排"的边界，各断一条
+    _e161, _l161 = _drive161(2, options={"shot_retry_round": 2})
+    assert not _e161 and any("已跑满" in m for m in _l161), _l161
+    for _st161x in ("running", "failed", "queued"):
+        _e161, _l161 = _drive161(2, status=_st161x)
+        assert not _e161, f"收场是 {_st161x} 却排了队"
+        assert any("不是 done" in m for m in _l161), _l161
+    _e161, _l161 = _drive161(2, stopped=True)
+    assert not _e161 and any("已请求停止" in m for m in _l161), _l161
+    _e161, _l161 = _drive161(2, stages=("probe",))
+    assert not _e161, "本轮没跑 screenshot 阶段也排候补轮＝凭空造一轮没用的运行"
+
+    # ③d 失败全在不可重试档：不排，但必须说清"不是漏了"
+    _tid161b = db.create_task("smoke-8bs-skip", _t161, ["probe", "screenshot"], {})
+    db.update_task(_tid161b, status="done")
+    db.insert_sites(_tid161b, [{"url": f"http://k{i}.{_t161}/", "host": f"k{i}.{_t161}",
+                                "port": "80", "status": 200, "title": "", "length": 1,
+                                "server": "", "tech": "", "source": "probe"} for i in range(2)])
+    db.set_site_shot_errors(_tid161b, [
+        (f"http://k0.{_t161}/", f"{_sh161.REASON_BROWSER}｜没装浏览器"),
+        (f"http://k1.{_t161}/", f"{_sh161.REASON_BUDGET}｜throttle: 预算耗尽")])
+    _ev161b = _th161.Event()
+    _st161b = copy.deepcopy(load_settings())
+    _st161b.setdefault("screenshot", {})["retry_rounds"] = 2
+    _ctx161b = StageContext(_tid161b, "smoke-8bs-skip", parse_lines([_t161]),
+                            ["probe", "screenshot"], {}, _st161b,
+                            str(Path(_TMPDIR) / "8bs-b"), _Rec161(), stop_event=_ev161b)
+    _enq161.clear()
+    _lg161.clear()
+    db.enqueue_task = lambda *a, **kw: _enq161.append(a)
+    _q161.notify = lambda: _enq161.append(("notify",))
+    try:
+        _rn161._maybe_queue_shot_retry(_ctx161b, _tid161b, ["probe", "screenshot"], {}, _ctx161b.logger)
+    finally:
+        db.enqueue_task, _q161.notify = _real_enq161, _real_notify161
+    assert not _enq161, _enq161
+    assert any("不可重试档" in m for m in _lg161), _lg161
+
+    # ④ 轮数夹取（配飞了也不许变成"无限重试"）
+    assert _sh161.retry_rounds({"screenshot": {"retry_rounds": 99}}) == _sh161.RETRYABLE_MAX_ROUNDS
+    for _bad161 in (-3, "abc", None, {}):
+        assert _sh161.retry_rounds({"screenshot": {"retry_rounds": _bad161}}) == 0, _bad161
+
+    # ④b 端到端：把候补轮真跑一遍（起浏览器的那一步桩住），确认它**只打 append_targets 那批**
+    #      —— 这一条是整个功能的落地保证：排轮参数对了、阶段却回退去读全库站点，
+    #      就等于"补三张截图"变成"重扫六十张"。原型实测每站打**两次**（阶段内首试 +
+    #      续151 那次自动重试），所以判"集合相等 + 总次数 2N"，光看次数会误判成重复扫。
+    from scanner.stages import screenshot as _st161
+
+    _hits161 = []
+    _keep_av161, _keep_cap161 = _sh161.available, _sh161.capture
+    _sh161.available = lambda settings=None: True
+    _sh161.capture = (lambda url, out, settings, timeout=30, throttle=None, want_title=False:
+                      _hits161.append(url) or (False, "超时｜Timeout 30s", ""))
+    _opt161 = {"append": True, "screenshot_on": True, "shot_retry_round": 1,
+               "append_targets": [f"http://s{i}.{_t161}" for i in (1, 2, 3)]}
+    db.update_task(_tid161, status="running", run_payload="")
+    _ctx161c = StageContext(_tid161, "smoke-8bs", parse_lines([_t161]), ["screenshot"], _opt161,
+                            _st161b, str(Path(_TMPDIR) / "8bs-c"), _Rec161())
+    try:
+        _st161.ScreenshotStage(_ctx161c).run()
+    finally:
+        _sh161.available, _sh161.capture = _keep_av161, _keep_cap161
+    assert {h.rstrip("/") for h in _hits161} == set(_opt161["append_targets"]), _hits161
+    assert len(_hits161) == 6, f"每站两次（首试 + 阶段内重试）共 6 次，实得 {len(_hits161)}"
+    db.update_task(_tid161, status="done", run_payload="")   # 不把 queued/running 行漏给后面的组
+
+    # ⑤ 接线与文案：一个产地、一处调用、三处显示
+    _tree161 = _ast161.parse((ROOT / "scanner" / "runner.py").read_text(encoding="utf-8"))
+    _call161 = {}
+    for _nd in _ast161.walk(_tree161):
+        if isinstance(_nd, _ast161.Call) and isinstance(_nd.func, _ast161.Name) \
+                and _nd.func.id in ("_maybe_queue_next_layer", "_maybe_queue_shot_retry"):
+            _call161.setdefault(_nd.func.id, []).append(_nd.lineno)
+    assert {k: len(v) for k, v in _call161.items()} == {"_maybe_queue_next_layer": 1,
+                                                        "_maybe_queue_shot_retry": 1}, _call161
+    assert _call161["_maybe_queue_shot_retry"][0] > _call161["_maybe_queue_next_layer"][0], \
+        "候补轮必须排在追加层数**之后**（互斥靠那条 done 判据，顺序反了就会覆写 run_payload）"
+    _tp161 = (ROOT / "gui" / "templates" / "task_detail.html").read_text(encoding="utf-8",
+                                                                          errors="replace")
+    assert "shot_retry.rounds" in _tp161 and "候补第" in _tp161, "详情页没显示候补轮次"
+    _sp161 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8",
+                                                                       errors="replace")
+    assert "screenshot_retry_rounds" in _sp161 and "shot_retry_note" in _sp161, "策略页没有这个开关"
+    _app161 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert "shot_retry_note=_shot_retry_note(" in _app161, "档名清单没从现取的那份传进模板"
+    assert "、".join(_sh161.RETRYABLE_REASONS) not in _sp161, \
+        "模板里抄了第二份档名清单（改档名就成了「页面说重试、代码不重试」）"
+    print("[8bs] 续161 截图候补重试 ok: 九档落库标签全部归位（可重试档里实测有 "
+          f"{len(_drift161)} 档重新 classify 会跑偏）｜候选 3 条 + 跳过 2 档 + 截成的不重排｜"
+          "默认关不排 / 开 2 轮恰好排一轮（append+单阶段+3 URL+ext_depth=1 逐项点名）｜"
+          "跑满 / 非 done / 已停止 / 没跑截图阶段 四种都不排｜轮数夹 0.."
+          f"{_sh161.RETRYABLE_MAX_ROUNDS}｜收尾两处调用顺序钉住")
+
     # ---------------- [8au] 续146：站点默认只看 200/404 / 批量打标只读本面板 / 判据收敛 / 入口搬进 cli ----------------
     #      用户点单四件事：① 站点默认只看 200/404 + 「显示全部」开关（跨任务 /sites 与任务详情
     #      站点页签**同一口径**）；② 「批量打标」读整页勾选框，会串到站点行；③ "目标→注册域"

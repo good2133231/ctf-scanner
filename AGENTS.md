@@ -706,7 +706,7 @@ ctf-scanner/
    SQL 那份把未解析排进"非 CDN"档）；截图失败原因 = `screenshot.classify()` + `REASON_*`
    （重试决策与落库标签同一个判断）；第三方清单 = `jsmine.thirdparty_suffixes()`，资产侧判定 =
    `jsmine.is_thirdparty()`（与 JS 侧 `_is_noise` 的分工写在 docstring 里：不认 apex、豁免
-   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。；**探测候选主机** = `extdom.own_hosts()`（内存 ∪ 库，own 口径 —— 续159，§6.2 第十四起）；**「这个名字在不在目标域之下」的归属比对** = `extdom.is_in_bases()`（`own_hosts` 与 `SubdomainStage.reuse_history` 共用，续160 —— 后缀判断写两遍就会一边一个口径）；**跨任务可借的历史域名** = `db.list_known_domains()`（own 口径 + 账号隔离都在 SQL 里）
+   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。；**探测候选主机** = `extdom.own_hosts()`（内存 ∪ 库，own 口径 —— 续159，§6.2 第十四起）；**「这个名字在不在目标域之下」的归属比对** = `extdom.is_in_bases()`（`own_hosts` 与 `SubdomainStage.reuse_history` 共用，续160 —— 后缀判断写两遍就会一边一个口径）；**跨任务可借的历史域名** = `db.list_known_domains()`（own 口径 + 账号隔离都在 SQL 里）；**这条截图失败属于哪一档** = `screenshot.shot_bucket()`（落库的是「档｜原文」，取前缀，没有前缀才回退 `classify()` —— 续161 实测 `classify("跳转未落地｜一句话")` 落「其他」，而这一档**可重试**，事后重算＝静默丢候选）；**哪些档值得再排一轮** = `screenshot.RETRYABLE_REASONS`；**候补轮数与上限** = `screenshot.retry_rounds()`（默认 0＝关，夹到 `RETRYABLE_MAX_ROUNDS`）；**候补候选** = `db.list_shot_failures()` + `runner.shot_retry_targets()`（档名一律**不进 SQL**，写 `LIKE '超时%'` 就是第二份判据）；**这次运行的运行期选项** = `queue.run_options()`（`run_payload` 那份，页面与 worker 同源；从 `task["options"]` 读永远是 0 —— 轮次就不在那一列）
 
 15. **指纹前置过滤只许做减法，不许改变判定结果**（续122）：`_lit_filter` 给每条正则算"必现字面量"，
     跳过 `re.search` 的前提是**该字面量在任何一次命中里都必然出现**。四个放弃过滤的条件（宁可不提速，
@@ -1169,10 +1169,12 @@ py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（
 （那里正是在解释"为什么不再需要那道守门"）算成了第二份实现；④ 断言 app.js 里不许出现
 `querySelectorAll("#tbl-vulns`，被我自己写的注释绊红；⑤ `[8av]` 原先禁 install.sh 里出现 `get-pip`，
 而脚本里那句"缺了 python3-venv 就退到用官方 get-pip.py 引导"是**正当说明**，不是第二份实现。
+⑥ `[8bs]`（续161）判"候选那条 SQL 里不许抄档名"用的是 `assert 档名 not in inspect.getsource(函数)`，被同一份 docstring 里举的**反例**（`LIKE '超时%'` 为什么不许写）绊红 —— 同一个坑**第六次**。
 处理方式一律是**把判据收紧到代码形态**，而不是给文案开豁免（豁免一加，判据就再也抓不到真违规）：
 `site_urls` 改成认 `\bsite_urls\s*=`；"某函数不再被调用"改成用 **AST 数 `ast.Call` 节点**
 （`[8au]⑤` 就是这么判 `base_domain` 的）；容器判据改成认真实调用 `btn.closest(".panel")`；
 "禁第二份实现"只禁**动作**串（`pip install` / `-m venv`），不禁提到这些词的说明文字。
+续161 那次的收窄方式是**只扫 AST 的字符串字面量并显式排除 docstring**，再**反向断言字面量里必须扫得到那段 SQL** —— 扫全文会把解释当实现，而收窄过头又不复核一次就会变成判据空跑（绿得没有内容）。
 写这类断言前先问一句：**"我即将写下的这段解释，会不会自己命中它？"**
 配套的一条：**"0 命中 / 空列表"型断言必须自带夹具**。`[8au]⑥` 判"活文件里没有指着仓库根的可抄命令"
 之前，先造三条该被抓住的命令确认判据抓得到、再造三条不该被抓住的确认它不误伤，
@@ -1356,6 +1358,10 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
 必须打进日志。**新写同类判据一律照 `[8bp]` 那个双向形状**：正面钉候选数，反手把回填退回"只读内存"
 必须塌回旧数字，否则等于没加（§6.1）。
 
+**第十五起（续161，本轮自己造的假结论）：变异档根本没落到文件上，"这条断言没区分度"于是是一条假结论。**
+做 §6.1 要求的证伪时用 `Path.read_text()` 读进来、拿按「CRLF 形状的锚点」去找 —— 通用换行把 CRLF 归一成了 LF，锚点命中 **0 次**，而 `str.replace` 命中 0 次时**一声不吭**：现场表现是"把 `if status != \"done\"` 改成 `if False` 之后原型全绿"，看着像那条边界断言形同虚设，实际生产码一个字都没变。两处口径：
+① **变异一律 `read_bytes()` + 字节锚点**，替换前先确认 `count(old) == 1`，替换后**回读**确认真的改到了；② 每一轮在 `finally` 里还原，并且**还原后再跑一次基线** —— 本轮就是中途一条 `assert count(new) == 1` 写歪（文件里本来就有别的 `return 0`）把脚本打断，仓库被留在"轮数夹取被替成 `return 0`"的变异态里，靠收尾那次 `git diff --numstat` 复核才发现。
+推论：**证伪脚本自己也要能被证伪** —— "红/不红"这个结论的有效性等于"变异确实落盘了"这个前提，而后者必须是一条检查过的事实，不是假设。
 14. **`SELECT DISTINCT … ORDER BY <表达式>` 在 SQLite 里算不出那个表达式**（续154，2026-10-11）。
     现象：拓展域名采集用 `SELECT DISTINCT domain FROM subdomains ORDER BY <真实 IP 档位 CASE>`，
     档位本该是 `real=0 / multi=1 / cdn=2 / 未解析=3`，实测 `app.ngrok.io`（单 IP、非 CDN）被排到
@@ -1468,6 +1474,7 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   接受进程环境变量 `CTFSCANNER_KEYS_PASSPHRASE`（进程环境 ≠ 磁盘）。另两条：解锁后明文在进程
   内存里，**不防内存 dump**；有密文但未解锁时 `load_keys()` 返回 `{}` 且**绝不回落到明文文件**
   （否则"绕过口令就能用凭据"，加密形同虚设）。回归 `tests/smoke.py [8f]`。
+- **截图「候补重试」的三条边界（续161，设计如此不是 bug）**：① 出厂 `screenshot.retry_rounds: 0` ＝**关**，行为与续160 逐字相同；打开后也只排**只跑 `screenshot` 一个阶段**的追加运行，只打 `append_targets` 里那批 URL；默认串行队列意味着它就排在别的任务后面"空闲再试"，所以**没有**"每轮冷却 N 秒"那个键 —— 加一个只会 `sleep` 住一个 worker 换一句措辞。② 每一轮仍受 `screenshot.max_sites` 单轮上限约束：超出上限的按站点 id 排在下一轮，而上一轮仍失败的那几条会一直挡在前面（要按"最久没试优先"轮转得单独一轮）。③ 重试成功**不清**旧的 `shot_error`（`set_site_shots` 与 `set_site_shot_errors` 各写一列），所以站点行会同时留着 `shot` 和上一次的失败文本：页面靠 `shot` 优先显示、候选靠 `shot=''` 排除，两个数都不虚，但那一格文案看着怪。
 - **站点截图的 `--ignore-certificate-errors` 不能省（2026-09-28 续64）**：CTF / 内网授权目标多为
   自签 / 过期 / 私有 CA 证书（与 `certs.py` 刻意 `CERT_NONE` 同一现实），无头浏览器不加这个开关
   会以 `net::ERR_CERT_AUTHORITY_INVALID` 拒绝加载、`--screenshot` 一个字节都不产出 —— 即**自签

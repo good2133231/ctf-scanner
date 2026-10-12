@@ -137,6 +137,15 @@ REASON_OTHER = "其他"
 REASONS = (REASON_BROWSER, REASON_TIMEOUT, REASON_REDIRECT, REASON_DNS, REASON_CONNECT,
            REASON_TLS, REASON_EMPTY, REASON_BUDGET, REASON_OTHER)
 
+# 续161「候补重试」（主理人 2026-10-12 点单「截图以及有些站点超时，建议加入候补运行，
+# 在项目没完成前空闲再重试一下」）：**哪些失败档值得再排一轮**，判据只在这一处 ——
+# runner 排轮、页面数"还剩几张"都读它，抄第二份迟早和 `classify()` 分家（§5.14）。
+# 只收这三档的理由：`无浏览器` 重试一万次还是没有浏览器；`预算或已停止` 是人在停、预算在拦，
+# 再排一轮等于绕过停止（红线）；`DNS 解析失败` / `HTTPS 握手失败` / `没产出图片` / `其他`
+# 给不出"再来一次就成了"的证据，宁可只报原因，不自动加请求量。
+RETRYABLE_REASONS = (REASON_TIMEOUT, REASON_REDIRECT, REASON_CONNECT)
+RETRYABLE_MAX_ROUNDS = 2      # 候补轮数硬上限（与主理人达成的口径一致）：配得再大也只跑到这里
+
 _DNS_KEYS = ("name or service not known", "name not known", "getaddrinfo", "nodename",
              "no such name", "temporary failure in name resolution", "dns")
 _CONNECT_KEYS = ("refused", "unreachable", "err_network", "err_connection", "connection",
@@ -174,6 +183,41 @@ def classify(err, site=None):
     if "没有产出" in txt or low.startswith("退出码") or "exit code" in low:
         return REASON_EMPTY
     return REASON_OTHER
+
+
+def shot_bucket(stored, site=None):
+    """把**落库的** `shot_error` 归回原因档：阶段写进去的是「档｜原文」，前缀就是当时判的那一档。
+
+    为什么不把那段文本再喂一遍 `classify()`：档名与判据关键字不是一回事 —— 实测
+    `classify("预算或已停止｜…")` 落「其他」（`REASON_BUDGET` 认的是 `throttle:` / 「预算耗尽」/
+    「请求停止」三个词，档名本身一个都不含）。今天侥幸拼得回来，明天改一个档名就**静默改判**，
+    而表现是"候补重试偷偷不再重试预算档"这种没人会注意的事。所以：有前缀用前缀，
+    没有前缀才回退 `classify()`（续154 之前落的老数据不带档名前缀，那条路必须还走得通）。
+    """
+    txt = str(stored or "").strip()
+    head = txt.split("｜", 1)[0].strip()
+    if head in REASONS:
+        return head
+    return classify(txt, site)
+
+
+def retryable_shot_error(stored, site=None):
+    """这条落库的失败文本该不该进候补重试 —— 判据只有 `RETRYABLE_REASONS` 那一处。"""
+    return shot_bucket(stored, site) in RETRYABLE_REASONS
+
+
+def retry_rounds(settings=None):
+    """`screenshot.retry_rounds`：任务正常完成后**最多**再排几轮候补重试；**默认 0＝关**。
+
+    非法值 / 负数一律归 0（= 关，出厂行为一个字都不变），正数夹到 `RETRYABLE_MAX_ROUNDS`。
+    排轮的 runner 与页面上那句"上限几轮"都从这里读（§5.14）。
+    """
+    cfg = (settings or {}).get("screenshot") or {}
+    try:
+        n = int(cfg.get("retry_rounds", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(RETRYABLE_MAX_ROUNDS, n))
 
 
 def _abs_out(p):

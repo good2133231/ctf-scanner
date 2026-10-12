@@ -196,6 +196,20 @@
       所以没有产物；可在「策略配置 → 资产面拓展」填 <span class="mono">screenshot.browser</span>。
       {% else %}本任务已开启截图但还没有产物（可能是截图失败），失败原因见运行日志。{% endif %}</p>
     {% endif %}
+    {% if shot_retry.rounds %}
+    <p class="muted small">截图<b>候补重试</b>已开（上限 {{ shot_retry.rounds }} 轮）：
+      {% if shot_retry.round %}<b>候补第 {{ shot_retry.round }}/{{ shot_retry.rounds }} 轮</b>，
+      本轮只重跑 <span class="mono">screenshot</span> 阶段；{% endif %}现在还有
+      <b>{{ shot_retry.left }}</b> 张没截成、且原因在「{{ shot_retry.reasons }}」这几档 ——
+      任务正常跑完后会自动排进队列，等前面的任务跑完、worker 空了再试
+      （跑满 {{ shot_retry.rounds }} 轮为止；每张站点阶段内已先重试过一次，见运行日志）。
+      {% if shot_retry.skipped %}另有
+      {% for k, v in shot_retry.skipped.items() %}{{ v }} 张{{ k }}{% if not loop.last %}、{% endif %}{% endfor %}
+      在<b>不可重试</b>的档里（重试也解决不了，比如没装浏览器、或预算耗尽 / 人已停止），这一轮不碰它们。
+      {% endif %}{% if not shot_retry.left and not shot_retry.round %}
+      本轮没有需要候补的站点（要么全截成了，要么失败都在不可重试档）。{% endif %}
+      开关在「策略配置 → 站点截图 → 截图候补重试轮数」。</p>
+    {% endif %}
     <p class="muted small">状态码：
       {% if sites_pager.allst %}
         当前<b>显示全部状态码</b>。

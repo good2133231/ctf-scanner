@@ -18,7 +18,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import db, extdom
+from . import db, extdom, screenshot
 from .config import LOGS_DIR, load_settings
 from . import auth as taskauth
 from . import throttle
@@ -395,6 +395,93 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
                 f" → 已排入第 {layer + 1}/{total} 层追加运行，剩余 {remaining} 层")
 
 
+def shot_retry_targets(task_id):
+    """候补重试的候选：读库取「没截成 + 属于可重试档」的站点 URL（**一个请求都不发**）。
+
+    返回值里带 `skipped`（不可重试档的分布）不是装饰：页面上要说清"那几条失败不是被漏了，
+    是判据认定重试也没用"，否则下一次排查会从"候补功能坏了"起步（§6.2 第一起同族）。
+    """
+    urls, skipped = [], {}
+    for r in db.list_shot_failures(task_id):
+        row = dict(r)
+        if screenshot.retryable_shot_error(row.get("shot_error"), row):
+            u = str(row.get("url") or "").strip().rstrip("/")
+            if u and u not in urls:
+                urls.append(u)
+            continue
+        b = screenshot.shot_bucket(row.get("shot_error"), row)
+        skipped[b] = skipped.get(b, 0) + 1
+    return {"urls": urls, "skipped": skipped}
+
+
+def _maybe_queue_shot_retry(ctx, task_id, stages, options, logger):
+    """续161「候补重试」收尾：任务**正常完成后**，把这一轮没截成的站点排一次只跑截图的追加运行。
+
+    为什么排在**收尾**而不是在阶段里就地重试：`db.enqueue_task` 会把状态改成 `queued`，
+    流水线中途调它会把正在跑的 `running` 行拧掉。而"排进队列"恰好就是主理人那句**空闲再重试**
+    —— worker 默认串行认领，前面还有别的任务就先把那些跑完，于是不需要再发明一个"冷却"键，
+    也不占住 worker 线程干等（自己发明一个"冷却秒数"只会睡住一个 worker 去换一句措辞，
+    要隔一会儿再说本来就有阶段内那次重试与队列排队管着）。
+
+    四条边界，缺一条就变成"对打不通的站点无限发包"：
+    1. `screenshot.retry_rounds` **默认 0＝关**（不改现有行为；夹取与上限都在
+       `screenshot.retry_rounds()` 一处）；
+    2. 只重试 `screenshot.RETRYABLE_REASONS` 那三档，`无浏览器` / `预算或已停止` 一次都不重；
+    3. 收场状态不是 `done`（未正常完成 / 已停止 / 已被「追加层数」重新排队）都不排 ——
+       这一条顺带保证了**层数追加优先**：`_maybe_queue_next_layer` 先跑，它一入队状态就变
+       `queued`，两次 `enqueue_task` 因此不会互相覆写同一份 `run_payload`；
+    4. 候补轮只跑 `screenshot` 一个阶段、只打 `append_targets` 里那批 URL，并把 `ext_depth`
+       压成 1（候补轮自己不许再触发追加层数）。
+    """
+    rounds = screenshot.retry_rounds(ctx.settings)
+    if not rounds:
+        return
+    if "screenshot" not in [str(s) for s in (stages or [])]:
+        return      # 本轮压根没跑截图阶段：没有 shot_error 可重试，也不该由候补路把它悄悄打开
+    if ctx.stopped():
+        logger.info("[shot] 候补重试：任务已请求停止，不再排下一轮")
+        return
+    cur = db.get_task(task_id)
+    status = str((cur["status"] if cur else "") or "")
+    if status != "done":
+        logger.info(f"[shot] 候补重试：本轮收场状态是「{status or '未知'}」不是 done"
+                    f"（未正常完成，或已排进追加层数）→ 不排候补轮")
+        return
+    try:
+        round_no = max(0, int((options or {}).get("shot_retry_round") or 0))
+    except (TypeError, ValueError):
+        round_no = 0
+    if round_no >= rounds:
+        logger.info(f"[shot] 候补重试：已跑满 {rounds} 轮候补，还有站点没截成就不再排了"
+                    f"（逐条原因见站点页的「截图失败」那一格）")
+        return
+    cand = shot_retry_targets(task_id)
+    urls = cand["urls"]
+    skipped = cand["skipped"]
+    _skip_note = ("；另有 " + "、".join(f"{k} {v}" for k, v in sorted(skipped.items()))
+                  + " 张在**不可重试档**（重试也解决不了），不排") if skipped else ""
+    if not urls:
+        if skipped:
+            logger.info("[shot] 候补重试：失败站点全在不可重试档，不排轮（"
+                        + "、".join(f"{k} {v}" for k, v in sorted(skipped.items()))
+                        + f"；可重试档只有 {'、'.join(screenshot.RETRYABLE_REASONS)}）")
+        return
+    next_opts = dict(options or {})
+    next_opts["append"] = True
+    next_opts["append_targets"] = urls
+    next_opts["shot_retry_round"] = round_no + 1
+    # 点名要截图：策略里 `screenshot.enabled` 事后被人关掉也不该让这一轮空跑一趟再回一句"未启用"
+    next_opts["screenshot_on"] = True
+    next_opts["ext_depth"] = 1      # 与「追加层数」互斥，见上面第 3 条
+    from . import queue as _queue      # 延迟导入：queue 顶层 import 本模块，避免循环导入
+    db.enqueue_task(task_id, "append", ["screenshot"], next_opts)
+    _queue.notify()
+    logger.info(f"[shot] 候补第 {round_no + 1}/{rounds} 轮：还有 {len(urls)} 张没截成"
+                f"（只认 {'、'.join(screenshot.RETRYABLE_REASONS)} 这三档）"
+                f" → 已排入**只跑 screenshot 阶段**的追加运行，队列空了自动执行"
+                f"（{'、'.join(urls[:5])}{' 等' if len(urls) > 5 else ''}）" + _skip_note)
+
+
 def run_task(task_id, name, targets_text, stages, options, settings, append=False,
              resume=False):
     """CLI 与 GUI 共用的任务执行入口（阻塞执行，调用方负责放线程）。
@@ -507,4 +594,7 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
     # 续151「追加层数」：正常完成后，本层若挖出新的归属域名且还剩层数，再排一次追加运行
     # （折叠在同一任务里，不再新建任务）。停止 / 未正常完成的收场不追加。
     _maybe_queue_next_layer(ctx, task_id, stages, options, logger)
+    # 续161「候补重试」：只有上面**没有**再排出追加层数（收场状态仍是 done）才排候补轮 ——
+    # 两条路写同一份 `run_payload`，同时排会互相覆写。互斥判据在函数内那条 `!= "done"`。
+    _maybe_queue_shot_retry(ctx, task_id, stages, options, logger)
     return ctx
