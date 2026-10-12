@@ -3,6 +3,52 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续159-附 随仓库分发的策略默认值：五个线索段打开 + `min_severity` 提到 high（并把 31 行文案改成三档口径）
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人一句话触发：「**我改动也要提交，说明是我希望的默认配置**」
+—— 即上一节里那六项页面保存的改动（`ctlog`/`intel`/`heuristic`/`github`/`multileak` = true、
+`checks.min_severity` = high）不是本机临时状态，而是**要给所有 clone 的默认配置**。
+
+### 先订正：上一节有一句话就此作废
+
+续159 第④节写着「**这六项值仍是本机未提交改动**」—— 该判断在本附节被推翻，值已提交。
+不改写历史条目（AGENTS §5.19 那句「历史条目不改写」），而是在这里说明：**上一节把「要不要改出厂默认」
+当成需要单独一轮的决定，是对的；但它漏掉了「主理人已经用页面投票表达过意图」这一事实**，
+我据此把「等确认」写成了默认动作。这是本轮第二次犯同一类错（第一次是引用门禁数字前没重看现场）。
+
+### 做了什么
+
+- `config/settings.yaml`：六项值随本轮提交（**注释一行没少**——上一节已把被 `save_settings()`
+  抹掉的 423 行按段还原，diff 是 6/6 且两式 numstat 相等）。
+- **`scanner/config.py` 的 `DEFAULTS` 一个字没动**（五段仍 False、`min_severity` 仍 medium）。
+  理由三条，都写进了判据：① 「代码默认」与「发行配置」分层是这个仓既有的做法
+  （先例 `fofa`/`iprecon`/`afrog`）；② 现有门禁钉着 `DEFAULTS[...] is False`
+  （`tests/smoke.py:1860`/`5096`/`3785`），改 DEFAULTS 要连着翻那几条；③ 新克隆真正生效的是
+  文件盖在 DEFAULTS 上的合并结果，所以**只要文件改了，效果就到位**，不必动代码。
+- **31 行「默认关」类文案改成三档口径**（DEFAULTS ／ 随包 settings.yaml ／ 合并生效）：
+  `AGENTS.md` 5 处、`docs/usage.md` 7 处、`README.md` 5 处、`docs/pipeline.md` 6 处。
+  其中 `README.md`「FOFA 没查询」与 `docs/usage.md` 的 `iprecon` / `fofa`「默认关闭」是
+  **续150 起就漂掉的旧假话**（文件里一直是 true），这次一并收。
+- 新增回归 `tests/smoke.py [8bq]`（41 行）：五段**随包 true 而 DEFAULTS 仍 False**｜
+  `min_severity` 随包 high／DEFAULTS medium｜`load_settings()` 合并后生效值必须是 true/high｜
+  `iprecon`/`fofa` 同样两份不等｜`portscan`/`screenshot`/`cert` **必须仍然关**（防"随包全开"越放越大）｜
+  7 条已被证伪的旧成句在 4 份文档里 **0 命中**，且这条"0 命中"判据**先自证**抓得到被替掉的句子
+  （§6.1：0 命中型断言必须自带夹具）。
+
+### 后果（写给读这段的人，不是写给编译器）
+
+1. **新克隆的默认 13 阶段任务会真的向外发请求**：GitHub 代码搜索（要 `github.token`，
+   没配则零请求）、grep.app（`multileak`，免 key）、crt.sh（`ctlog`）、C 段域名反查（`iprecon`）、
+   CISA KEV（`intel`）。`osint` 与 `github`/`multileak` 都是**第三方出口**，
+   走 `limits.verify_tls_external`（证书校验独立于目标侧那一档）。
+2. **`checks.min_severity: high` 会把 medium 结论挡在报告外** —— 上一节 #17 那次报的
+   `潜在漏洞 4 项（medium:4）` 在新默认下**不再出现**。要旧口径就在「策略配置 → 检测策略」
+   把最低报告级别改回 medium；这不是 bug，是这次选定的默认。
+3. 门禁里那些「必须默认关」的断言吃的是 `DEFAULTS`，所以上面 2 条生效值变化**不会**让门禁变红，
+   也不需要它们变红 —— `[8bq]` 钉的正是这两档的分工。
+
+实测：门禁 `logs/_gate159i.log`：**SMOKE PASS**、组打印 185 行、AssertionError 0、日志 4066 行；另 `logs/_gate159h.log` 与 `logs/_gate159i.log` 同口径全绿
+
 ## 续159 断点续跑不再把下游降级成「只扫目标」：候选主机收敛到 `extdom.own_hosts()`
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux。起因是主理人贴出两个同目标的实跑对比：

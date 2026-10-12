@@ -146,7 +146,7 @@ limits:
   external_max_requests: 0
   external_max_port_probes: 0    # 每次外部工具调用消耗的预算单位
 checks:
-  min_severity: medium
+  min_severity: high
   skip_severities:
   - info
   - low
@@ -308,7 +308,7 @@ quake:
   black_ico_threshold: 200
 ctlog:
   # 证书透明度（CT）日志在线查询（crt.sh，免 key，默认关）：证书维度记录 + 拓展域名来源
-  enabled: false
+  enabled: true
   max_domains: 10
   max_records: 50
   max_domains_per_cert: 50
@@ -319,7 +319,7 @@ blacklist:
   path: config/blacklist.txt
 intel:
   # 漏洞情报订阅（默认关）：CISA KEV（免 key）拉回来后与本地指纹保守匹配，只产出线索（leads 表）
-  enabled: false
+  enabled: true
   source: kev
   url: ''
   cache_hours: 24
@@ -327,13 +327,13 @@ intel:
   max_leads: 50
 heuristic:
   # 启发式候选发现（默认关）：对已收集数据做差分/异常聚合，不发请求，只产出线索（leads 表）
-  enabled: false
+  enabled: true
   max_leads: 50
 github:
   # GitHub 泄露检索（默认关）：拿目标注册域去 GitHub 公开代码里搜命中，只产出线索（leads 表）。
   # token 不在本文件：填 config/keys.yaml 的 github.token（GUI 不写回、该文件已 gitignore）。
   # 边界见 scanner/github_leak.py 文件头：只落元数据（不保存文件内容）、auth=False、没 token 零请求。
-  enabled: false
+  enabled: true
   max_domains: 3
   max_queries: 4
   per_page: 30
@@ -345,7 +345,7 @@ github:
 multileak:
   # 多平台公开代码检索（默认关）：GitHub 之外的只读检索源（默认 grepapp 免 key；gitlab 需 keys.gitlab.token），只产出线索（leads 表）。
   # 边界见 scanner/multileak.py 文件头：只落元数据（不保存文件内容）、auth=False、请求头不带任务登录态。
-  enabled: false
+  enabled: true
   provider: grepapp
   max_domains: 3
   max_queries: 4

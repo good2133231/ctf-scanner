@@ -15,7 +15,7 @@
 │            portscan（默认关）→ probe → cert（默认关）→         │
 │            screenshot（默认关）→ osint（默认关）→ jsmine →     │
 │            dirscan（默认开·浅扫）→ vulnscan →                 │
-│            intel / heuristic / github（默认关，只产"线索"）    │
+│            intel / heuristic / github（随包开，只产"线索"）    │
 │            （13 个阶段，见 runner.STAGE_ORDER）               │
 │  资产层    scanner/dnsq.py（DNS 客户端）                      │
 │            scanner/cdn.py（CDN 判定：CNAME 后缀匹配厂商名单）  │
@@ -135,7 +135,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 | 启发式检查全部 GET + 无破坏 payload | 控制误伤与法律风险 | 检出率有限，定位是"初筛信号" |
 | 分级门控（`skip_severities` 执行级 + `min_severity` 结果级，默认 info/low 不执行、门槛 medium） | 默认屏蔽低危/info 噪声，连请求都不发，只留能拿 flag 的高位结果 | 想广谱信息收集需**同时**放宽级别开关与门槛 |
 | **导入 POC 的级别判据用「有效级别」而不是模板里写的 `severity`**（续60，`db.effective_poc_severity()`） | 导入器（`tools/import_ref_pocs.py`）把参考项目的 `bug_level` 原样抄成 `severity`（一律 HIGH），而这批 305 条绝大多数是**指纹**规则 —— 声明级别与 `confidence`（全 low）自相矛盾。判据改成"受本条 `poc_confidence()` 上限约束"（只降不升，**只对 `imported` 来源生效**），执行闸/批量开关/级别列/入库级别四处统一 | 导入 POC 变为**默认完全惰性**（有效级别 100% low，默认 `skip_severities` 下进 0 条）；要用只能人工复核后整理进 `config/pocs-user/`（那才是 `user` 来源）。`pocs.severity` 列仍存原始声明值以备查 |
-| **阶段级 `enabled` 总开关**（`takeover`/`jsmine`/`dirscan`/`vulnscan` 默认开，`portscan` 默认关、`osint` 由 `iprecon`/`fofa` 两个子开关代替；`subdomain`/`probe` 刻意不设） | 用户要求"大功能都要有按分类的总开关"；关掉即整阶段跳过、连请求都不发，便于按需裁剪（如"只做资产测绘不探测"） | 开关分散在各段，新增阶段必须记得补 `enabled` 与 GUI 复选框（`tests/smoke.py` 的 `[3d]`/`[5b]` 已加断言防漏） |
+| **阶段级 `enabled` 总开关**（`takeover`/`jsmine`/`dirscan`/`vulnscan` 默认开，`portscan` 默认关、`osint` 由 `iprecon`/`fofa` 两个子开关代替（这两段 DEFAULTS 关、**随包 settings.yaml 已开**，续159-附）；`subdomain`/`probe` 刻意不设） | 用户要求"大功能都要有按分类的总开关"；关掉即整阶段跳过、连请求都不发，便于按需裁剪（如"只做资产测绘不探测"） | 开关分散在各段，新增阶段必须记得补 `enabled` 与 GUI 复选框（`tests/smoke.py` 的 `[3d]`/`[5b]` 已加断言防漏） |
 | 动态免杀（evasion）只改变 payload 编码形态与请求伪装 | 提升隐蔽性与 WAF 绕过率，同时不越过非破坏性红线 | 变形不改变语义，对非规则型 WAF 效果有限 |
 | 指纹用自研精简规则表（scanner/fingerprint.py） | 无外部依赖；httpx 缺失时也能填充 sites.tech | 规则少、只给组件标签不解析版本 |
 | 外部情报（osint）默认全关，且"两个子开关都关＝一次请求都不发" | 依赖第三方公共接口（api.webscan.cc / FOFA），可用性不由我们掌控；不配置就不该有网络行为 | 想用 C 段/favicon 拓展需先去「策略配置 → 外部情报拓展」显式打开 |
@@ -281,10 +281,10 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 见 `scanner/extdom.py`；原拓展行保留不动，出处可查） |
 | sites | url, host, port, status, title, length, server, tech, favicon, shot, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定；shot 为截图相对路径（screenshot 阶段回填，默认关） |
 | ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认关闭） |
-| csegs | segment, ip, domains, count, **note** | `/24` C 段视野（osint 阶段产出，默认关闭）：每行一个 IP 与其反查到的域名。`count` 是**截断前**的数量；反查命中数超过 `iprecon.max_domains_per_ip`（默认 30）判为共享主机/任播 CDN 段时，**`domains` 留空、`note` 写明"命中多少 / 为什么不列"**（续110：判为噪声的内容不该再被报告「C 段视野」原样抄走）。老库由 `_COLUMN_PATCHES` 补 `note` 列 |
+| csegs | segment, ip, domains, count, **note** | `/24` C 段视野（osint 阶段产出；`iprecon` 随包已开）：每行一个 IP 与其反查到的域名。`count` 是**截断前**的数量；反查命中数超过 `iprecon.max_domains_per_ip`（默认 30）判为共享主机/任播 CDN 段时，**`domains` 留空、`note` 写明"命中多少 / 为什么不列"**（续110：判为噪声的内容不该再被报告「C 段视野」原样抄走）。老库由 `_COLUMN_PATCHES` 补 `note` 列 |
 | dirs | site_url, path, status, length, note, title | 目录发现（dirscan 阶段产出；`length` 即返回包大小，`title` 为命中页 `<title>` —— 内置扫描从已在手里的响应体提取、零额外请求，dirmap 解析行没有响应体故留空。默认排序为 `200 优先 → 大小降序`，页面按 `(site_url,status,length)` 折叠重复长度） |
 | vulns | target, poc_id, name, severity, owasp, detail, evidence, **review, review_note, reviewed_at** | 统一存放 POC 命中与 OWASP 检查结果。`review` 是**人工复核三态**（`""` 待复核 / `confirmed` 已确认 / `false_positive` 误报，见 `db.REVIEW_STATES`，非法值经 `db.norm_review()` 归一）；**判误报的行不进「潜在漏洞」计数与报告主表**，改为报告文末「已判误报（人工复核排除）」附录 |
-| leads | task_id, kind, code, title, target, matched, level, detail, source, url | **「线索」**（intel / heuristic / github 三个默认关阶段产出）：`kind` 区分情报/启发式/GitHub，`level` 只用于排序着色、**不是漏洞级别**。**不是漏洞结论** —— 不进 `vulns`、不计入漏洞数、不自动导入 POC；**出口只有 JSONL 导出**（`type=lead` 行 + `counts.leads`），GUI 页签与人读报告（MD / HTML）自 2026-09-24（续24）起不再露出。GitHub 线索（`kind="github"`）的 `code` 是 `仓库:文件路径`、`detail` 写明只记录了仓库/路径/命中规则 —— **文件内容与命中的凭据明文不入库** |
+| leads | task_id, kind, code, title, target, matched, level, detail, source, url | **「线索」**（intel / heuristic / github 三个阶段产出，随包已开）：`kind` 区分情报/启发式/GitHub，`level` 只用于排序着色、**不是漏洞级别**。**不是漏洞结论** —— 不进 `vulns`、不计入漏洞数、不自动导入 POC；**出口只有 JSONL 导出**（`type=lead` 行 + `counts.leads`），GUI 页签与人读报告（MD / HTML）自 2026-09-24（续24）起不再露出。GitHub 线索（`kind="github"`）的 `code` 是 `仓库:文件路径`、`detail` 写明只记录了仓库/路径/命中规则 —— **文件内容与命中的凭据明文不入库** |
 | certs | url, host, port, cn, subject, issuer, not_before, not_after, days_left, expired, self_signed, san, serial, sig_algo, sha256, source | TLS 证书取证（cert 阶段产出，**默认关**）：一个 `host:port` 一行。`san` 用 `,` 拼接截断到 2000 字符；`expired` / `self_signed` 是**证书属性而非漏洞结论**（握手不校验证书）。默认排序 `已过期 → 自签 → 剩余天数升序`，让异常项先露头；进 `db.ASSET_TABLES`，重启任务会一并清掉 |
 | pocs | path(唯一), poc_id, name, severity, tags, enabled, status, **confidence** | POC 注册表：由扫描目录同步生成，GUI 控制启停。`enabled` 是**用户意图**（同步时不覆盖）；`confidence`（low/medium/high）是**推导值**，每次同步按 `db.poc_confidence(path, meta)` 重算（来源分 × 内容型匹配器，**只降级不升级**），仅作 `vulnscan` 同批候选的排序键，**不做过滤**。`severity` 列存的是**模板声明值**（原始数据不篡改）；**判据一律用 `db.effective_poc_severity(path, meta)` 算出的「有效级别」**（续60：`imported` 来源的声明级别不采信，按 `confidence` 上限压级、只降不升） |
 | **users**（续46） | username(唯一), password, role, enabled, must_change, created_at, updated_at, last_login_at | 控制台账号。`password` 存的是 `pbkdf2_sha256$<迭代>$<盐>$<哈希>`（**绝不是明文**，由 `scanner/users.py` 派生与校验，20 万次迭代 + 每账号随机盐 + `hmac.compare_digest`）；`role` 只有 `admin` / `user` 两级；`enabled=0` 时其现有会话在下一个请求即失效；`must_change=1` 表示首次登录强制改口令（管理员建号默认置 1）。**不含**任何扫描数据，删表/重建都不影响任务与资产 |

@@ -21004,6 +21004,49 @@ expression: r0()
           "probe 候选 2→10（变异退回只读内存必须塌回 2）｜追加档**不**并库（候选仍只有勾选那一个×2）｜"
           "补量那句进日志｜portscan/probe 各恰好一处调用")
 
+    # ---------------- [8bq] 续159-附：随仓库分发的策略默认值（开哪几段、级别门槛）----------------
+    #      主理人选定的默认配置：`ctlog` / `intel` / `heuristic` / `github` / `multileak` 打开 +
+    #      `checks.min_severity` 提到 high。这一组的意义不是"再钉一遍值"，而是钉住
+    #      **三档必须分开说**这件事本身：代码 DEFAULTS、随包 settings.yaml、合并后的生效值 ——
+    #      把任何一档写成另一档的数，就是 §5.19 那类会改变读者行为的假话（续159-附之前
+    #      README / usage / pipeline / AGENTS 里 23 处「默认关」全是这种形状）。
+    import yaml as _y160
+    from scanner.config import DEFAULTS as _DEF160   # 自带 import：不吃别的组的执行顺序
+    _ship160 = _y160.safe_load((ROOT / "config/settings.yaml").read_text(encoding="utf-8"))
+    _on160 = ("ctlog", "intel", "heuristic", "github", "multileak")
+    for _s160 in _on160:
+        assert _ship160[_s160]["enabled"] is True, f"随包 settings.yaml 的 {_s160}.enabled 应为 true"
+        assert _DEF160[_s160]["enabled"] is False, \
+            f"{_s160} 的代码默认必须仍是 False —— 「开」是**文件层**的选择，不是偷偷改出厂代码"
+    assert _ship160["checks"]["min_severity"] == "high" and \
+        _DEF160["checks"]["min_severity"] == "medium", "级别门槛：随包 high / DEFAULTS medium（两份不等是有意的）"
+    _eff160 = load_settings()
+    assert all(_eff160[_s160]["enabled"] is True for _s160 in _on160), "合并后生效值必须是开"
+    assert _eff160["checks"]["min_severity"] == "high", "合并后默认结果门槛必须是 high"
+    # 随包已开但 DEFAULTS 关的两段（历史漂移，续159-附一起收口）
+    for _s160 in ("iprecon", "fofa"):
+        assert _ship160[_s160]["enabled"] is True and _DEF160[_s160]["enabled"] is False, _s160
+    # 仍然关着的三段必须真的还关着（防止"随包全开"把端口/截图/证书也顺手放进来）
+    for _s160 in ("portscan", "screenshot", "cert"):
+        assert _ship160[_s160]["enabled"] is False and _DEF160[_s160]["enabled"] is False, _s160
+
+    # 已被证伪的成句不许回来。**判据先自证**（§6.1 的"0 命中"型断言必须自带夹具）：
+    _ban160 = ("三个阶段**默认关**", "三个**默认关**阶段", "**三个开关都默认关**",
+               "`iprecon.enabled` **默认关闭**", "（外部情报类默认关）",
+               "`heuristic.enabled`，**默认关**", "`github.enabled`，**默认关**",
+               "三个默认关阶段产出", "（默认关，只产")
+    assert any(b in "x 三个阶段**默认关** y" for b in _ban160), "判据本身没牙：抓不到被替掉的旧句子"
+    for _f160 in ("AGENTS.md", "README.md", "docs/usage.md", "docs/pipeline.md",
+                  "docs/architecture.md"):
+        _t160 = (ROOT / _f160).read_text(encoding="utf-8", errors="replace")
+        for _b160 in _ban160:
+            if _b160 in _t160:
+                raise AssertionError(f"{_f160} 还在说「{_b160}」—— 随包默认值已改，这句是假话（§5.19）")
+    print(f"[8bq] 续159-附 随包策略默认值 ok: 五段随包开而 DEFAULTS 仍 False（开在文件层）｜"
+          f"min_severity 随包 high / DEFAULTS medium｜生效值已核｜portscan/screenshot/cert 仍关｜"
+          f"{len(_ban160)} 条已证伪的旧句子在 4 份文档里 0 命中（判据先自证抓得到）")
+
+
     # ---------------- [8au] 续146：站点默认只看 200/404 / 批量打标只读本面板 / 判据收敛 / 入口搬进 cli ----------------
     #      用户点单四件事：① 站点默认只看 200/404 + 「显示全部」开关（跨任务 /sites 与任务详情
     #      站点页签**同一口径**）；② 「批量打标」读整页勾选框，会串到站点行；③ "目标→注册域"

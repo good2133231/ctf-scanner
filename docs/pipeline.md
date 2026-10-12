@@ -5,7 +5,7 @@
 （CLI 可用 `-p` 裁剪，GUI 用复选框勾选）。
 
 其中 `takeover` / `jsmine` / `dirscan` / `vulnscan` 由**策略级开关**控制、默认开，
-`portscan` / `cert` / `screenshot` / `osint` / `intel` / `heuristic` / `github` 默认关：
+`portscan` / `cert` / `screenshot` 默认关（DEFAULTS 与随包 settings.yaml 都是关）；`intel` / `heuristic` / `github` 在 DEFAULTS 里关、**随包 `config/settings.yaml` 已开**（续159-附）；`osint` 由 `iprecon.enabled` / `fofa.enabled` 两个子开关决定（DEFAULTS 关、随包已开）：
 勾选只表示"这个阶段参与本次任务"，真正执行与否还看
 `settings.takeover.enabled` / `portscan.enabled` / `cert.enabled` / `screenshot.enabled` / `jsmine.enabled` /
 `dirscan.enabled` / `vulnscan.enabled` / `intel.enabled` / `heuristic.enabled` / `github.enabled`
@@ -55,9 +55,9 @@
 | （手工没有的部分） | screenshot | 本机无头 Edge/Chrome（`--headless=new` + `--ignore-certificate-errors`）截图，产物 `shots/*.png` 并回填 `sites.shot`；**同一次调用顺带回填「渲染后标题」**（续140，
   仅对原始 HTML 没有 `<title>` 的站点用 `--dump-dom` 取渲染后 DOM，只补空、不覆盖）；默认关。**不校验证书**（自签/过期/私有 CA 也能截，续64） |
 | `openssl s_client -connect host:443 -showcerts` | cert | 一次只读 TLS 握手取 DER → 纯标准库 ASN.1 解析（CN/SAN/有效期/自签/指纹）→ `certs` 表；**不校验证书**（自签/过期是常态）；默认关 |
-| （手工没有的部分） | intel | 拉 CISA KEV 公开 JSON → 与本地指纹**白名单式**匹配 → 「线索」（`leads` 表）；单向下行、默认关 |
-| （手工没有的部分） | heuristic | 对已采集数据做**零请求**差分/异常聚合（软 404 / 高价值入口 / 同标题 / 目录离群 / 同 C 段）→ 「线索」；默认关 |
-| （手工没有的部分） | github | 拿目标**注册域**去 GitHub 公开代码里搜命中（`api.github.com/search/code`）→ 「线索」（只落仓库/文件路径/命中规则名）；默认关、没 token 零请求 |
+| （手工没有的部分） | intel | 拉 CISA KEV 公开 JSON → 与本地指纹**白名单式**匹配 → 「线索」（`leads` 表）；单向下行、DEFAULTS 关而**随包 settings.yaml 已开**（续159-附）|
+| （手工没有的部分） | heuristic | 对已采集数据做**零请求**差分/异常聚合（软 404 / 高价值入口 / 同标题 / 目录离群 / 同 C 段）→ 「线索」；DEFAULTS 关、**随包已开** |
+| （手工没有的部分） | github | 拿目标**注册域**去 GitHub 公开代码里搜命中（`api.github.com/search/code`）→ 「线索」（只落仓库/文件路径/命中规则名）；DEFAULTS 关、**随包已开**，没 token 零请求 |
 
 ## 各阶段细节
 
@@ -436,11 +436,11 @@
   恰恰是校验会失败的场景 —— 本阶段是**取证**（把颁发者与有效期读出来给人看），不是建立可信连接；
   因此**「自签 / 已过期」是证书属性，不是漏洞结论**，报告与页签里都显式声明了这一点；
 - **不做什么**：不校验证书链、不做 CRL/OCSP、不做多协议/多密码套件试探（一次握手、只读）；
-  **CT 日志（crt.sh）在线查询已在续18 落地**（`scanner/ctlog.py`，`ctlog` 段，**默认关**；
+  **CT 日志（crt.sh）在线查询已在续18 落地**（`scanner/ctlog.py`，`ctlog` 段，DEFAULTS 关、**随包 settings.yaml 已开**；
   产出**证书维度**记录，归「拓展域名」页）—— 与 Shodan/Quake 同一批，**不是**"未实现"；
   `osint` 阶段里已有的 FOFA 证书反查是**另一件事**（按证书找同源资产，不是读站点证书）。
 
-### ⑩ intel 漏洞情报订阅（`intel.enabled`，**默认关**）
+### ⑩ intel 漏洞情报订阅（`intel.enabled`，DEFAULTS 关、**随包已开**）
 
 - 位置：流水线**最末**（`vulnscan` 之后）—— 它不产出任何被后续阶段消费的数据；
 - 情报源：内置 `scanner/intel.py::FEEDS`（默认 `kev` = CISA `known_exploited_vulnerabilities.json`，
@@ -461,7 +461,7 @@
 - 局限：KEV 覆盖面窄于全量 CVE 库；匹配到**产品/厂商关键词级**、**不含版本比对**，
   命中只说明"这条已知被利用的 CVE 与你扫到的组件可能相关"，是不是真漏洞必须人工确认。
 
-### ⑪ heuristic 启发式候选发现（`heuristic.enabled`，**默认关**，零出站请求）
+### ⑪ heuristic 启发式候选发现（`heuristic.enabled`，DEFAULTS 关、**随包已开**，零出站请求）
 
 - 位置：流水线**最末**（与 `intel` 同批）—— 它要读 `dirscan` 的目录结果与 `vulnscan` 的漏洞，
   越晚跑看到的数据越全；本身**不发任何请求**，只对已采回的本机数据做差分与异常聚合；
@@ -482,7 +482,7 @@
 - 产物：`leads` 表（`kind="heuristic"`，级别一律 `info`）；`max_leads`（默认 50）截断；
 - **边界**：只写 `leads`，不写 `vulns`、不计入漏洞数；**主动 fuzz 仍不做**（样本量不够时那是纯噪声）。
 
-### ⑫ github GitHub 泄露检索（`github.enabled`，**默认关**，需 `config/keys.yaml` 的 `github.token`）
+### ⑫ github GitHub 泄露检索（`github.enabled`，DEFAULTS 关、**随包已开**，需 `config/keys.enc.yaml` 的 `github.token`）
 
 - 位置：流水线**最末**（排在 `intel` 之后）—— 它要发外部请求、受第三方限流约束，
   不产出任何被后续阶段消费的数据，放在最后便于"只重跑本阶段"；
@@ -579,7 +579,7 @@ logs/task_1_mytask/
 | portscan.enabled / screenshot.enabled | false | 端口与服务扫描 / 站点截图 的阶段级开关（**均默认关**） |
 | cert.enabled / max_sites / timeout / tls_ports | **false** / 30 / 8s / [443,8443,9443] | TLS 证书取证（**默认关**）：握手目标上限与超时；`tls_ports` 决定"非 https 但端口命中"的站点是否也试。建任务勾选或 CLI `-p cert` → 任务级 `cert_on` 单次生效 |
 | dirscan.enabled / vulnscan.enabled | true / true | 目录发现（**默认开、默认只浅扫**）/ 漏洞初筛（默认开）的阶段级开关。想要早期那种"目录默认不扫"的行为，把 `dirscan.mode` 之外的总开关关掉即可 |
-| intel.enabled / heuristic.enabled / github.enabled | false | 三个「**线索**」阶段的阶段级开关（均默认关；只写 `leads` 表，不写 `vulns`） |
+| intel.enabled / heuristic.enabled / github.enabled | DEFAULTS false ／ **随包 settings.yaml true** | 三个「**线索**」阶段的阶段级开关（续159-附：新克隆拿到的是 true；只写 `leads` 表，不写 `vulns`） |
 | limits.brute_max_domains | 50 | 参与 DNS 爆破的域名上限 |
 | limits.wildcard_filter | true | 泛解析过滤：目标开 `*.domain` 时丢弃通配命中的字典结果 |
 | limits.favicon_md5 | true | probe 阶段计算 favicon MD5（POC 可据此做零请求前置判定） |
@@ -600,7 +600,7 @@ logs/task_1_mytask/
 | takeover.enabled / max_hosts / http_check | true / 300 / true | 子域接管检测：开关、主机上限、是否补一次 HTTP 特征比对降误报 |
 | portscan.enabled / max_hosts / ports / timeout / workers / banner | **false** / 100 / 空(TOP 表) / 1.0s / 64 / true | 端口与服务扫描（默认关）；端口支持 `"80,443"` 或 `"1-1024"` |
 | jsmine.enabled / max_pages / max_js / secrets / blacklist / drop_absent_zone | true / 20 / 40 / true / [] / true | JS 资产挖掘：开关、页面/JS 上限、是否提取凭据、额外排除的第三方域后缀、**是否剔掉「注册域不存在」的成员访问链碎片**（续113，关掉只是碎片回库，页面仍默认收起未解析行） |
-| iprecon.enabled / api / max_ips / max_hosts / max_domains_per_ip / workers / timeout | **false** / api.webscan.cc / 500 / 200 / 30 / 5 / 10s | C 段反查（默认关）：接口地址（留空回落默认）、待查 IP/主机上限、单 IP 域名上限（超过判共享主机，不纳入资产）、并发与超时 |
+| iprecon.enabled / api / max_ips / max_hosts / max_domains_per_ip / workers / timeout | **随包 true**（DEFAULTS false）/ api.webscan.cc / 500 / 200 / 30 / 5 / 10s | C 段反查（DEFAULTS 关、随包已开）：接口地址（留空回落默认）、待查 IP/主机上限、单 IP 域名上限（超过判共享主机，不纳入资产）、并发与超时 |
 | fofa.enabled / max_sites / max_assets / workers / black_ico_threshold | **false** / 30 / 100 / 5 / 200 | favicon（mmh3）反查同源资产（默认关）：算 favicon 的站点上限、单次查询资产上限、并发、黑 ico 阈值（命中数超过即放弃拓展） |
 | fofa.cert_enabled / cert_threshold / max_cert_queries | true / 200 / 10 | 证书反查（`cert="domain"`，跟随 favicon 开关）：通用证书阈值（命中数超过即放弃拓展）、每任务最多查几个注册域 |
 | blacklist.enabled / path | true / config/blacklist.txt | 用户黑名单：命中即不入资产库（含其所有子域）；纯文本、每次重读、可直接手工编辑 |

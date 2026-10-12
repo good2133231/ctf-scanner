@@ -200,7 +200,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    下方为 **11 个横向页签 —— 潜在漏洞（默认）/ 站点 / 子域名 / 拓展域名 / 端口服务 / C 段 / 目录 / SSL 证书 /
    敏感信息 / 目标与配置 / 运行日志**，每个页签内可先筛选再查看（潜在漏洞的 evidence 可展开；日志页签显示尾部）；
    > 「**线索**」是「情报订阅（`intel`）」「启发式候选（`heuristic`）」与「GitHub 泄露检索（`github`）」
-   > 三个**默认关**阶段的产物。它们**不是漏洞结论**（来自外部情报匹配、本地统计推断或第三方代码搜索，
+   > 三个**线索阶段**（DEFAULTS 关、随包 settings.yaml 已开）的产物。它们**不是漏洞结论**（来自外部情报匹配、本地统计推断或第三方代码搜索，
    > 误报率高于实测型检查），框架在结构上做了隔离：
    > 独立 `leads` 表、独立计数，**不并入「潜在漏洞」、不计入漏洞数、不自动导入 POC**。
    > **自 2026-09-24（续24）起不再有独立页签、也不进人读报告（MD / HTML）** —— 唯一出口是
@@ -307,7 +307,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    `section.panel` 为准），**面板默认全部折叠**（一屏几百个勾选框实在难找）——
    点面板标题栏即可展开/收起，页顶有「全部展开 / 全部折叠」；展开状态记在浏览器 localStorage，
    刷新后保持。面板列表：
-   - **检测策略**（`detect`）：最低报告级别（`min_severity`，默认 medium）+ **漏洞初筛阶段总开关**
+   - **检测策略**（`detect`）：最低报告级别（`min_severity`，代码默认 medium；**随包 settings.yaml 是 high** ⇒ 新克隆默认只报 high/critical）+ **漏洞初筛阶段总开关**
      （`vulnscan.enabled`，默认开；取消勾选＝整个 vulnscan 阶段跳过，适合"只做资产测绘"）+
      POC 引擎总开关 + 指纹→POC 联动 + 采集 favicon MD5。**同一个面板内还有三个子区块**：
      **按级别分类批量开关**（`skip_severities`，默认勾掉 info 与 low）—— **勾上＝该级别连请求都不发**，
@@ -344,12 +344,12 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
      并发 / 黑 ico 阈值 / **证书反查子开关 `cert_enabled`** / **通用证书阈值 `cert_threshold`** /
      **每任务最多查几个注册域 `max_cert_queries`** / **标题反查子开关 `title_enabled`** /
      **公共标题阈值 `title_threshold`** / **每任务最多查几个标题 `max_title_queries`** /
-     **标题反查归属相关性 `title_match`（`label`＝label 完全相等 / `substring`＝子串匹配）**）—— **默认关闭**，且 iprecon 与 fofa
+     **标题反查归属相关性 `title_match`（`label`＝label 完全相等 / `substring`＝子串匹配）**）—— **DEFAULTS 关，而随包分发的 settings.yaml 已把 iprecon / fofa 打开**（续159-附订正：此处原写「默认关闭」是早就漂掉的假话），且 iprecon 与 fofa
      都关时整个 `osint` 阶段一次请求都不发。接口地址留空即用默认的 `api.webscan.cc`；
      FOFA 的 email/key 不在这里填（见 `config/keys.yaml`）；
    - **用户黑名单**（`blacklist`）：显示黑名单文件路径（**相对路径**）、总开关与**当前条目列表**，
      可勾选条目后点「移除勾选条目」。文件是纯文本 `config/blacklist.txt`，也可直接手工编辑；
-   - **情报与线索**（`intel`，**三个开关都默认关**）：`intel`（CISA KEV 情报订阅：`source` / `url` /
+   - **情报与线索**（`intel`，**三个段 DEFAULTS 都关，而随包 settings.yaml 已把它们打开**）：`intel`（CISA KEV 情报订阅：`source` / `url` /
      `cache_hours` / `timeout` / `max_leads`）、`heuristic`（启发式候选：`max_leads`）与
      `github`（GitHub 泄露检索：`max_domains` / `max_queries` / `per_page` / `max_leads` / `timeout`）。
      三者产出**只是线索**（独立 `leads` 表），**不写漏洞、不计入漏洞数、不自动导入 POC**；
@@ -520,11 +520,11 @@ CIDR 已支持展开：`10.0.0.0/30` 会展开为可用主机逐条进入流水�
 
 **Q：为什么结果里看不到"明文 HTTP""安全响应头缺失"这类项了？**
 这是刻意的默认取向。`checks.skip_severities`（默认 `["info","low"]`）让这些级别**连请求都不发**，
-`checks.min_severity`（默认 medium）再兜一层结果过滤 —— CTF 实战里它们拿不到 flag。
+`checks.min_severity`（代码默认 medium，随包 settings.yaml 是 high）再兜一层结果过滤 —— CTF 实战里它们拿不到 flag。
 需要广谱信息收集时，在「策略配置」取消这两个级别的勾选，并把最低报告级别改成 `low`/`info`。
 
 **Q：「C 段视野」一直是空的？**（该页已不在侧边栏，改到任务详情「C 段」页签看，或直接访问 `/csegs`）
-该数据来自 `osint` 阶段的 C 段反查，而 `iprecon.enabled` **默认关闭**（走第三方公共接口
+该数据来自 `osint` 阶段的 C 段反查，而 `iprecon.enabled` **随包 settings.yaml 已打开**（DEFAULTS 是关）（走第三方公共接口
 `api.webscan.cc`，可用性不由我们掌控）。打开路径：「策略配置 → 外部情报拓展」，打开后**只对新任务生效**。
 另外私有地址（`10.` / `192.168.` / `127.` 等）会被直接跳过 —— 反查公共接口对它们没有意义。
 
@@ -538,7 +538,7 @@ CIDR 已支持展开：`10.0.0.0/30` 会展开为可用主机逐条进入流水�
 **Q：打开了「情报与线索」开关，界面上却看不到线索？**
 这是**预期行为**（2026-09-24 续24 起）：产出线索的三个阶段 —— 「策略配置 → 情报与线索」里的
 `intel.enabled`（CISA KEV 情报订阅）、`heuristic.enabled`（启发式候选）与 `github.enabled`
-（GitHub 泄露检索）—— 都**默认关闭**，
+（GitHub 泄露检索）—— 在 DEFAULTS 里都**默认关闭**（`github` / `ctlog` / `multileak` 自续159-附起随包分发为**开**），
 打开后**只对新任务生效**；而它们写出的 `leads` 表**不再有 GUI 页签、也不进人读报告（MD / HTML）**，
 唯一出口是**任务详情页顶的「导出 JSONL」**（里面的 `type=lead` 行与 `counts.leads`）。
 另外两点容易误判：① 线索的语义是"值得人工看一眼"的**候选**，不是漏洞结论，所以它**不进「潜在漏洞」、

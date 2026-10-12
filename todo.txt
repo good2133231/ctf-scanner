@@ -3439,6 +3439,12 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 
 - [x] 实测：`logs/_gate159f.log`（代码+判据）与 `logs/_gate159g.log`（记忆后终验）两轮都 **SMOKE PASS**、组打印各 184 行、AssertionError 0、日志 4067 行；九份改动文件 `git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件相等；settings.yaml 注释还原前后 `load_settings()` 摊平 232 项逐项相同
 
+- [x] **续159-附**：主理人说「我改动也要提交，说明是我希望的默认配置」⇒ 那六项值随包提交（注释仍齐全，diff 6/6 两式相等）；**DEFAULTS 一个字没动**（分层：代码默认 vs 发行配置，先例 fofa/iprecon/afrog；门禁里钉 `DEFAULTS[...] is False` 的 1860/5096/3785 三条不受影响）
+- [x] **31 行「默认关」类文案改成三档口径**（AGENTS 5／README 5／usage 7／pipeline 10／architecture 4），含收掉续150 起就漂掉的 README「FOFA 没查询」与 usage 的 iprecon/fofa 旧假话
+- [x] 回归新增 `[8bq]`（41 行）：五段随包 true 而 DEFAULTS 仍 False｜`min_severity` 随包 high／DEFAULTS medium｜合并生效值必须是 true/high｜`portscan`/`screenshot`/`cert` **必须仍关**｜7 条被证伪的旧句子在 4 份文档里 0 命中（判据先自证）
+- [x] 后果已写进 CHANGELOG：新克隆默认任务会向 GitHub/grep.app/crt.sh/C 段/KEV 发请求；**`min_severity: high` 会把 medium 结论挡在报告外**（#17 那批 medium:4 从此不出现）
+- [x] 实测：门禁 `logs/_gate159i.log`：**SMOKE PASS**、组打印 185 行、AssertionError 0、日志 4066 行；另 `logs/_gate159h.log` 与 `logs/_gate159i.log` 同口径全绿
+
 下一轮（续160）——只做这些，别扩大：
 
 - [ ] **`[8bp]` 的姊妹缺口**：`probe.second_pass` 仍挂在 `jsmine` 里，而 `jsmine` 在
@@ -3471,3 +3477,4 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       与他原话「我们不介入 ai，我们的扫描框架」方向相反，开工前要先定口径）
 - [ ] `push_token` 将于 2026-11-07 过期（实测 `X-GitHub-...-expiration` 头），轮换走同一条
       录入路（键名 `github.push_token`）
+- [ ] `tempfile.mkdtemp` 无处可建时导出会 500：`gui/app.py:1912` 的 `task_export` 直接调 `tempfile.mkdtemp(prefix="ctfscan-report-")`，`TMPDIR` 指向不存在的目录时抛 `FileNotFoundError` ⇒ `/api/tasks/<id>/export` 返 500（门禁判据要的是 400 + 可读原因）。本轮实跑撞到：修法是把临时目录建在本项目 `logs/` 下（受 `CTFSCANNER_LOGS` 覆盖，测试沙箱天然隔离），并像其它失败那样**说出来**而不是抛栈。

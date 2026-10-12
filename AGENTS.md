@@ -352,7 +352,7 @@ ctf-scanner/
 │   ├── fofa.py            # FOFA 反查（qbase64）：favicon(icon_hash) / cert="domain" / title="xxx" 三种；黑 ico / 通用证书 / 公共标题阈值
 │   ├── shodan.py          # Shodan 反查（http.favicon.hash:<mmh3>）—— 与 fofa.py **同构照抄**，默认关，无 key 显式报错
 │   ├── quake.py           # 360 Quake 反查（favicon: "<mmh3>"，POST + X-QuakeToken）—— 同上，默认关
-│   ├── ctlog.py           # 证书透明度日志在线查询（crt.sh，免 key，**默认关**）：产出**证书维度**记录
+│   ├── ctlog.py           # 证书透明度日志在线查询（crt.sh，免 key，DEFAULTS 关、**随包 settings.yaml 已开**）：产出**证书维度**记录
 │   ├── ssrf.py            # A10 SSRF 受控回连（**默认关**）：本机 HTTP 回连监听 + 每参数唯一 token
 │   ├── mmh3.py            # 纯标准库 MurmurHash3 x86_32（平台 favicon 指纹用；含 SELF_TEST 向量）
 │   ├── intel.py           # 漏洞情报订阅（P3-2）：CISA KEV 拉取+本地缓存+白名单式匹配 → **只产线索**（不写 vulns）
@@ -497,18 +497,18 @@ ctf-scanner/
   `cert` 只做**一次只读 TLS 握手**（`verify_mode=CERT_NONE`）并解析证书（CN/SAN/有效期/自签/指纹），
   **是取证不是漏洞结论** —— 自签/过期是证书属性，不等于漏洞；解析用纯标准库 ASN.1/DER（`scanner/certs.py`）；
   `dirscan` 默认开且**续144 起默认深扫**（`dirscan.mode=deep` + `recursive_depth=1`；`quick` 档仍在，需显式选，见 §8）；
-  末尾三个**线索阶段默认关**，且**只写 `leads` 表**（不写 `vulns`、不计入漏洞数、不自动导 POC）：
+  末尾三个**线索阶段：代码 DEFAULTS 关，而**随仓库分发的 `config/settings.yaml` 已把 `intel` / `heuristic` / `github` 三段打开**（续159-附，主理人选定的默认配置）⇒ `load_settings()` 是文件盖在 DEFAULTS 上 ⇒ **新克隆实际会跑这三段**，且**只写 `leads` 表**（不写 `vulns`、不计入漏洞数、不自动导 POC）：
   `intel` = CISA KEV 情报 × 本地指纹白名单式匹配（`scanner/intel.py`），
   `heuristic` = 对已收集数据做零请求的差分/异常聚合（`scanner/heuristics.py`），
   `github`（续26）= 拿目标**注册域**去 GitHub 公开代码里搜命中（`scanner/github_leak.py`）
   —— 三条硬边界：**只落仓库 / 文件路径 / 命中规则名**（绝不落文件内容，避免凭据明文入库）、
   **`auth=False`**（任务级登录态绝不发给 GitHub；GitHub 自己的 token 走 `Authorization`）、
-  **默认关 + 没 token 零请求**（token 在 `config/keys.yaml` 的 `github.token`，代码搜索接口要求认证）。
+  **随包已开（DEFAULTS 仍关）+ 没 token 零请求**（token 在 `config/keys.yaml` 的 `github.token`，代码搜索接口要求认证）。
   新增阶段在此登记即可被 CLI `-p` 与 GUI 识别）。
 - 阶段开关有两层：**任务级**（建任务时勾选 stages / CLI `-p`）与**策略级**
   （`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled`，阶段内部自查后跳过）。
   `takeover` / `jsmine` / `dirscan` / `vulnscan` 默认开，
-  `portscan` / `screenshot` / `cert`（都受策略级开关约束）/ `intel` / `heuristic` / `github` 默认关。
+  `portscan` / `screenshot` / `cert`（都受策略级开关约束）/ `intel` / `heuristic` / `github` 默认关（**这是 DEFAULTS 那一档**；随包分发的 settings.yaml 自续159-附起把 `intel`/`heuristic`/`github`/`ctlog`/`multileak` 改成开，而 `portscan`/`screenshot`/`cert` 仍是关 —— 说「谁默认开」之前要先看这两份并不相等）。
   另有**任务级「全量档」选项**：`portscan_full`（全端口 1-65535，见 §8）与 `dirscan_full`（深扫，见 §8），
   二者都是"用户点名要扫"→ **即使对应全局 `enabled=false` 也执行**，且 GUI/CLI 在勾了全量档却漏勾阶段时
   **自动补上该阶段并按 `STAGE_ORDER` 归位**（`runner` 按给定顺序执行、不排序，所以必须显式 sort）。
@@ -617,7 +617,7 @@ ctf-scanner/
       （`owasp.checks.enabled_checks` + `pocs.engine.load_enabled_pocs` 同规则，helper 是
       `config.skip_severities()`）；
    2. `disabled_categories` / `disabled_checks` 命中的检查根本不执行（省请求）；
-   3. `min_severity` 默认 `medium` —— **结果级**，过滤残余的低危/info 结果。
+   3. `min_severity` 代码默认 `medium`，**随包分发的 settings.yaml 是 `high`**（续159-附） ⇒ 新克隆的默认任务**只产出 high/critical，medium 会被结果闸丢掉**（这是主理人选定的口径，要旧的宽口径就在策略页把最低报告级别改回 medium） —— **结果级**，过滤残余的低危/info 结果。
    即 `a02-no-https`、`a05-security-headers`、`a05-banner-disclosure` 这类项默认既不执行也不产出。
 8. **所有对外"在飞动作"必须过统一门控（F2，`scanner/throttle.py`）**：HTTP 走 `utils.http_request`
    （已自动读 `settings["_throttle"]`）、外部子进程走 `utils.run_cmd(..., throttle=...)`、裸 socket 走

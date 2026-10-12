@@ -36,7 +36,7 @@
   Next.js/Vue 这类 SPA 外壳的原始 HTML 里**根本没有** `<title>`，标题是 JS 注入的，
   所以那一列的 `-` 不是抓取失败；只补空标题、绝不覆盖已经拿到的，且没开截图时探测日志会直接说出
   「多少个站点原始 HTML 里没有 `<title>`」并指出这条出路；
-- **线索层：情报订阅 + 启发式候选 + GitHub 泄露检索**（三个阶段**默认关**）：拉取 **CISA KEV**（免 key 公开 JSON，只收录已被在野利用的 CVE）与本地指纹做**白名单式匹配**；对已采集数据做**零请求**的差分/异常聚合（软 404 模板 / 高价值入口暴露 / 同标题多主机 / 目录命中离群 / 同 C 段多 IP）；以及拿目标的**注册域**去 **GitHub 公开代码**里搜命中（需在 `config/keys.yaml` 填 `github.token`，**没配就一次请求都不发**）。三者产出**只是「线索」**：独立 `leads` 表 + **JSONL 导出**（`type=lead` 行与 `counts.leads`），**不写漏洞、不计入漏洞数、不自动导入 POC**；页签与人读报告（MD / HTML）自 2026-09-24 起不再露出（用户口径），机器格式的口径不变。GitHub 检索另有两条硬边界：**只落仓库 / 文件路径 / 命中规则名**（绝不保存文件内容，避免把凭据明文写进本地库、日志与报告），且所有请求 **`auth=False`** —— 任务级登录态（目标侧 Cookie / Token）绝不发给 GitHub；
+- **线索层：情报订阅 + 启发式候选 + GitHub 泄露检索**（三个阶段（DEFAULTS 关，**随包 `config/settings.yaml` 已开** ⇒ 新克隆会跑））：拉取 **CISA KEV**（免 key 公开 JSON，只收录已被在野利用的 CVE）与本地指纹做**白名单式匹配**；对已采集数据做**零请求**的差分/异常聚合（软 404 模板 / 高价值入口暴露 / 同标题多主机 / 目录命中离群 / 同 C 段多 IP）；以及拿目标的**注册域**去 **GitHub 公开代码**里搜命中（需在 `config/keys.yaml` 填 `github.token`，**没配就一次请求都不发**）。三者产出**只是「线索」**：独立 `leads` 表 + **JSONL 导出**（`type=lead` 行与 `counts.leads`），**不写漏洞、不计入漏洞数、不自动导入 POC**；页签与人读报告（MD / HTML）自 2026-09-24 起不再露出（用户口径），机器格式的口径不变。GitHub 检索另有两条硬边界：**只落仓库 / 文件路径 / 命中规则名**（绝不保存文件内容，避免把凭据明文写进本地库、日志与报告），且所有请求 **`auth=False`** —— 任务级登录态（目标侧 Cookie / Token）绝不发给 GitHub；
 - **JS 敏感字符**：17 条凭据规则（AKID/LTAI/AKIA、JWT、私钥 PEM、数据库连接串、Slack/Telegram/SendGrid/Stripe 等）+ 两级降噪（占位符、变量引用、成员访问），命中值掩码脱敏后以 high 级入库，「拓展域名」页按域名显示敏感命中数；
 - **OWASP Top 10**：内置轻量启发式检查（全部非破坏性，结论为"潜在漏洞/初筛信号"，需人工确认）；其中 **A01 敏感文件检查是数据驱动的** —— 路径、特征关键字、级别、说明都写在 `config/dicts/sensitive.txt`（`路径 | 关键字 | 级别 | 说明`，签名必填以免被统一 200 的软 404 页放大成误报），文件缺失时自动回退内置清单。
 - **报告三格式 + 漏洞趋势**：三种格式共用**同一份数据快照**（`report.collect()`，防"某种格式少一节"的漂移）——**Markdown**（默认，CLI `--report` / GUI 任务行「导出」）、**自包含单文件 HTML**（样式内联、不引外链，可直接发人）、**PDF**（复用本机无头 Edge/Chrome 的 `--print-to-pdf`，**不引入新依赖**）；报告里所有来自被测目标的文本（标题 / URL / banner / evidence）**全量 HTML 转义**，避免"打开报告即执行 JS"的反射型 XSS。本机没有可用浏览器时 PDF **明确报错**（GUI 给一页说明 + 替代路径，CLI 退出码 1），不静默丢交付物；仪表盘另有**漏洞趋势统计**面板（级别分布条 + 最近 15 个任务逐任务计数，口径与报告一致：**已判误报不计入**，未知级别归入 `other` 不静默丢）；
@@ -67,7 +67,7 @@
    │     域名 / 接口 URL / 疑似凭据      浅扫=精选敏感路径；深扫=dirmap/   │
    │                                   内置字典（技术栈+框架选字典，软404基线）│
    │                                                                     │
-   │  ⑨ vulnscan 漏洞初筛             ⑩⑪⑫ intel / heuristic / github（默认关）│
+   │  ⑨ vulnscan 漏洞初筛             ⑩⑪⑫ intel / heuristic / github（DEFAULTS 关、随包已开）│
    │     POC 引擎（YAML，nuclei 兼容子集） KEV 情报 × 本地指纹白名单匹配│
    │     OWASP Top10 检查 + 四层门控 + 绕 WAF  零请求差分/异常聚合      │
    │                                    GitHub 公开代码里搜目标注册域   │
@@ -262,7 +262,7 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 | 改了代码页面没变 | 控制台进程没重启（不热重载）→ 重启 `run_gui.py` |
 | 端口 5000 被占用 | 旧进程还在 → 结束它或改 `gui.port`；请求仍打到旧进程是新路由 404 的常见原因 |
 | 目录扫出 0 条 | 看看是不是浅扫档（默认 150 条/站）；深扫要 `--full-dir` 或结果页「补扫」 |
-| FOFA 没查询 | `fofa.enabled` 默认关；`config/keys.yaml` 也要填真实凭据 |
+| FOFA 没查询 | `fofa.enabled` 随包是**开**的，但密文里没有 fofa 段；`config/keys.yaml` 也要填真实凭据 |
 
 ## 配置说明（部署前必看）
 
@@ -273,9 +273,9 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
   fofa:   {email: "", key: ""}   # FOFA（favicon / 证书 / 标题反查；settings.yaml 里 fofa.enabled 现为 false，配好 key 并显式打开才会真查并消耗配额）
   shodan: {key: ""}              # Shodan favicon 反查（默认关）
   quake:  {key: ""}              # 360 Quake favicon 反查（默认关）
-  github: {token: ""}            # GitHub 泄露检索（默认关；没配就一次请求都不发）
+  github: {token: ""}            # GitHub 泄露检索（DEFAULTS 关、随包 settings.yaml 已开；没配就一次请求都不发）
   ```
-- **`config/settings.yaml`（全局策略，已随仓库提交）**：GUI「策略配置」页可图形化修改并写回；CLI 也可直接编辑。常见开关：`fofa.enabled` / `iprecon.enabled` / `shodan` / `quake` / `ctlog` / `intel` / `heuristic` / `github`（外部情报类默认关）；`dirscan.mode`（`quick` 浅扫 / `deep` 深扫）；`screenshot.enabled`（站点截图，默认关，需本机有 Edge/Chrome 无头）；`portscan.engine`（`auto` = fscan → nmap → 内置）。
+- **`config/settings.yaml`（全局策略，已随仓库提交）**：GUI「策略配置」页可图形化修改并写回；CLI 也可直接编辑。常见开关：`fofa.enabled` / `iprecon.enabled` / `shodan` / `quake` / `ctlog` / `intel` / `heuristic` / `github`（外部情报类：DEFAULTS 关，而随包 settings.yaml 已开 iprecon/fofa/ctlog/intel/heuristic/github/multileak）；`dirscan.mode`（`quick` 浅扫 / `deep` 深扫）；`screenshot.enabled`（站点截图，默认关，需本机有 Edge/Chrome 无头）；`portscan.engine`（`auto` = fscan → nmap → 内置）。
 - **`config/blacklist.txt`**：一行一个域名，命中即不入资产库（入库前过滤）。
 - **`config/dicts/`**：子域名字典、`dirs_shallow.txt`（浅扫精选路径 ~150 条）、`dirs_big.txt`（深扫大字典 11882 条）、`cdn_cname.txt`（CDN 厂商后缀）、`cdn_ips.txt`（CDN 厂商任播 IP 段）、`sensitive.txt`（A01 敏感文件检查的数据源：`路径 | 关键字 | 级别 | 说明`）。
 - **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，默认必须通过 release 自带的 SHA256 校验和。
