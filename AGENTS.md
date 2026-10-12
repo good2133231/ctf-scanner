@@ -155,12 +155,25 @@ Flask Web 控制台（仿 ARL）。
   **续54 起有了"装它们"的入口**（此前只能手工放 PATH 或手改 `settings.yaml`）：
   `scanner/toolmgr.py` + CLI `--update-tools` + GUI 管理员侧栏「外部工具」页 —— 仍是
   **只在显式触发时才联网**（扫描期任何阶段都不会自动下载），只允许 https + 官方主机，
-  默认必须通过 release 自带的 SHA256 校验和才落盘；装完**逐行文本替换**回写 `tools.<名>`。
+  落盘前必须过 SHA256（摘要**两个产地**，见下）；装完**逐行文本替换**回写 `tools.<名>`。
   平台事实（2026-09-26 查 GitHub API 实测）：subfinder、httpx 双平台产物 + checksums 齐；
   **puredns 官方只发 Linux / macOS 产物且无 checksums**，Windows 上会如实报"未提供当前平台产物"。
-  **续142 起本机 Linux 上 puredns 已装**（v2.1.1 → `tools/scanner/puredns`）—— 这是**用户显式批准**
-  破那条"官方无校验和就拒装"的红线（`--update-tools --tool puredns --allow-unverified`），
-  属于**本机的一次运维例外**，不是口径变更：新克隆/新机器仍然不会自动装它，`--check` 会如实报未安装。
+  **续164：puredns 改由本框架自己钉摘要** —— `TOOLS["puredns"].pin_version = "v2.1.1"` +
+  `pin_sha256`（那一版四件产物各一条），并且取 release 时**按确切 tag**
+  （`/releases/tags/v2.1.1`，**不跟 latest** —— 跟 latest 的话上游一发新版就没有能对上摘要的产物，
+  安装脚本又回到必然非 0）。这**不是松红线**：字节必须与钉住的摘要一字不差（不符时连
+  `--allow-unverified` 都越不过去 —— 那个开关只管"根本没有校验依据"那一类），
+  tag 不是钉住的那一版就**连下载都不发起**。
+  摘要产地（2026-10-12 实测，不是抄来的）：https 取官方 v2.1.1 的四件产物 → 本机 sha256 →
+  解包跑出 `puredns version v2.1.1` 核对版本；本机 `tools/scanner/puredns`（续142 那一次
+  用户显式批准 `--allow-unverified` 装的）与钉住的 Linux-amd64 产物解包出来**逐字节相同**
+  （`bf9f6273…`）⇒ 这一档没有引入任何本机没在用的新字节。
+  **为什么要改**：续163 在干净克隆实测 `./install.sh` ⇒ **rc=1**，唯一失败项就是它 ——
+  "官方不发校验和就永远拒装"与"非 0＝有项失败"这两条契约合起来，就是每台新机器都得有人兜一次。
+  本轮改完复测（同一条件：只放 513 个被跟踪文件的干净目录）⇒ **`./install.sh` rc=0**，
+  清单里那行是 `[+] puredns v2.1.1 → tools/scanner/puredns（SHA256 已校验（本框架钉住的产物摘要））`。
+  **升级它只有一条路**：人工核过新版四件产物的摘要后**同时**改 `pin_version` 与 `pin_sha256`
+  （只改一个会在"tag 必须等于钉住的那版"这条判据上拒装，那是刻意的）。
   装上的直接后果是 `limits.brute_max_words: 0` **从此真的等于"全量"**（深字典 177,875 条整份喂进去），
   所以续139 记的"冷启动比对标少 16 台主机"那一段前提已经变了；开发模式仍把爆破四项压到 4/4/4/1
   （`devmode.DEV_LIMITS`）⇒ CI 与全流程自检不受影响。
@@ -706,7 +719,7 @@ ctf-scanner/
    SQL 那份把未解析排进"非 CDN"档）；截图失败原因 = `screenshot.classify()` + `REASON_*`
    （重试决策与落库标签同一个判断）；第三方清单 = `jsmine.thirdparty_suffixes()`，资产侧判定 =
    `jsmine.is_thirdparty()`（与 JS 侧 `_is_noise` 的分工写在 docstring 里：不认 apex、豁免
-   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。；**探测候选主机** = `extdom.own_hosts()`（内存 ∪ 库，own 口径 —— 续159，§6.2 第十四起）；**「这个名字在不在目标域之下」的归属比对** = `extdom.is_in_bases()`（`own_hosts` 与 `SubdomainStage.reuse_history` 共用，续160 —— 后缀判断写两遍就会一边一个口径）；**跨任务可借的历史域名** = `db.list_known_domains()`（own 口径 + 账号隔离都在 SQL 里）；**这条截图失败属于哪一档** = `screenshot.shot_bucket()`（落库的是「档｜原文」，取前缀，没有前缀才回退 `classify()` —— 续161 实测 `classify("跳转未落地｜一句话")` 落「其他」，而这一档**可重试**，事后重算＝静默丢候选）；**哪些档值得再排一轮** = `screenshot.RETRYABLE_REASONS`；**候补轮数与上限** = `screenshot.retry_rounds()`（默认 0＝关，夹到 `RETRYABLE_MAX_ROUNDS`）；**候补候选** = `db.list_shot_failures()` + `runner.shot_retry_targets()`（档名一律**不进 SQL**，写 `LIKE '超时%'` 就是第二份判据）；**这次运行的运行期选项** = `queue.run_options()`（`run_payload` 那份，页面与 worker 同源；从 `task["options"]` 读永远是 0 —— 轮次就不在那一列）；**「为什么取不到这组凭据」** = `keystore.keys_hint(what)`（三态三句：两份文件都没有 / 有密文但本进程没解锁 / 已解锁但密文里没这一组 —— 续162；旧文案在七处各写一遍「见 config/keys.yaml」，而密文存在时明文根本不读，照着补的人永远补不上）；**「怎么解锁」** = `keystore.unlock_howto()`（补法只这一处，`keys_hint` 与启动横幅都引它）；**口令来源优先级** = `keystore.unlock()` 一处（参数 > `CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass`（守卫见 `file_passphrase`：正好 0600 / 属主是自己 / 非空）> 提问）
+   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。；**探测候选主机** = `extdom.own_hosts()`（内存 ∪ 库，own 口径 —— 续159，§6.2 第十四起）；**「这个名字在不在目标域之下」的归属比对** = `extdom.is_in_bases()`（`own_hosts` 与 `SubdomainStage.reuse_history` 共用，续160 —— 后缀判断写两遍就会一边一个口径）；**跨任务可借的历史域名** = `db.list_known_domains()`（own 口径 + 账号隔离都在 SQL 里）；**这条截图失败属于哪一档** = `screenshot.shot_bucket()`（落库的是「档｜原文」，取前缀，没有前缀才回退 `classify()` —— 续161 实测 `classify("跳转未落地｜一句话")` 落「其他」，而这一档**可重试**，事后重算＝静默丢候选）；**哪些档值得再排一轮** = `screenshot.RETRYABLE_REASONS`；**候补轮数与上限** = `screenshot.retry_rounds()`（DEFAULTS 0＝关、**随包 settings.yaml 出厂写 1**（续164），夹到 `RETRYABLE_MAX_ROUNDS`；读侧那个"键不存在时的兜底"跟 DEFAULTS 同值，不跟随包文件）；**候补候选** = `db.list_shot_failures()` + `runner.shot_retry_targets()`（档名一律**不进 SQL**，写 `LIKE '超时%'` 就是第二份判据）；**这次运行的运行期选项** = `queue.run_options()`（`run_payload` 那份，页面与 worker 同源；从 `task["options"]` 读永远是 0 —— 轮次就不在那一列）；**这个工具该看哪一个 release** = `toolmgr._release_for()`（钉了 `pin_version` 就按 `/releases/tags/<tag>` 精确取，没钉才看 latest —— 续164；`install` 与 `update` 都走它，别在两处各判一次"有没有钉"）；**某工具钉了哪一版、哪些产物摘要** = `toolmgr.pin(name)`（唯一读 `TOOLS[...]["pin_version"]/["pin_sha256"]` 的地方）；**「校验」那一格与政策句** = `toolmgr.verified_label()` / `verify_policy()`（CLI、GUI「外部工具」页、run_bootstrap、模板四处共用；页面里再抄一句"必须通过 release 自带的 SHA256 校验和"就是假话，`[8bu]` ⑤ 用 AST 扫字面量钉住）；**「为什么取不到这组凭据」** = `keystore.keys_hint(what)`（三态三句：两份文件都没有 / 有密文但本进程没解锁 / 已解锁但密文里没这一组 —— 续162；旧文案在七处各写一遍「见 config/keys.yaml」，而密文存在时明文根本不读，照着补的人永远补不上）；**「怎么解锁」** = `keystore.unlock_howto()`（补法只这一处，`keys_hint` 与启动横幅都引它）；**口令来源优先级** = `keystore.unlock()` 一处（参数 > `CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass`（守卫见 `file_passphrase`：正好 0600 / 属主是自己 / 非空）> 提问）
 
 15. **指纹前置过滤只许做减法，不许改变判定结果**（续122）：`_lit_filter` 给每条正则算"必现字面量"，
     跳过 `re.search` 的前提是**该字面量在任何一次命中里都必然出现**。四个放弃过滤的条件（宁可不提速，
@@ -1496,7 +1509,19 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   且**绝不回落到明文文件** —— 否则"绕过口令就能用凭据"，加密形同虚设。
   旧条目里「本模块刻意不提供记住口令/免输入、无人值守只接受环境变量」那半句**已由续162 改掉**
   （现在多一档同机口令文件，见上一条），所以本条不再重复那句承诺。回归 `[8f]` 与 `[8bt]`。
-- **截图「候补重试」的三条边界（续161，设计如此不是 bug）**：① 出厂 `screenshot.retry_rounds: 0` ＝**关**，行为与续160 逐字相同；打开后也只排**只跑 `screenshot` 一个阶段**的追加运行，只打 `append_targets` 里那批 URL；默认串行队列意味着它就排在别的任务后面"空闲再试"，所以**没有**"每轮冷却 N 秒"那个键 —— 加一个只会 `sleep` 住一个 worker 换一句措辞。② 每一轮仍受 `screenshot.max_sites` 单轮上限约束：超出上限的按站点 id 排在下一轮，而上一轮仍失败的那几条会一直挡在前面（要按"最久没试优先"轮转得单独一轮）。③ 重试成功**不清**旧的 `shot_error`（`set_site_shots` 与 `set_site_shot_errors` 各写一列），所以站点行会同时留着 `shot` 和上一次的失败文本：页面靠 `shot` 优先显示、候选靠 `shot=''` 排除，两个数都不虚，但那一格文案看着怪。
+- **puredns 的产物摘要是本框架自己核、自己钉的（续164）**：官方 release **不发 checksums**，
+  而"必须有官方校验和才落盘"会让它在自动层里**永远**装不上（`./install.sh` 因此每台新机器都 rc=1）。
+  现在 `TOOLS["puredns"]` 里写死了 `pin_version: v2.1.1` 与那一版四件产物的 SHA256，摘要产地从
+  "release 里的文件"换成"本文件里那串十六进制"，**校验强度一个字没降**：字节不符拒装、
+  `--allow-unverified` 也越不过"不符"（它只管"没有校验依据"），tag 不符连下载都不发起。
+  三条连带事实：① 它**不跟 latest**，所以上游发新版不会改变本机装到的是什么，也不会让安装脚本变红；
+  ② `check_updates` 对钉了版本的工具**不许**报 `has_update=True`（报了就是诱导人去按「更新」，
+  而那一次必然走到 tag 拒装）；③ Windows 仍然装不上 —— 官方压根没发 Windows 产物，
+  钉摘要变不出一个包来，页面上照实报"未提供当前平台产物"。
+  ⚠️ 改这块时别在 `scanner/toolmgr.py` 里 `import inspect` —— 本模块自己就有一个 `inspect()` 函数，
+  导入会被它**整名遮蔽**（实测 `AttributeError: 'function' object has no attribute 'signature'`），
+  `[8bu]` 用 AST 把这条钉住了。
+- **截图「候补重试」的三条边界（续161 立、续164 随包打开，设计如此不是 bug）**：① **三档分开**：代码 `DEFAULTS` 是 `0`＝关（`[8bs]` ③a 钉住"不偷改出厂行为"），**随包 `config/settings.yaml` 写的是 `1`**（续164 主理人点单"空闲再重试"），合并后的生效值才是 1；要退回"一个字都不排"就在策略页填 0。打开后也只排**只跑 `screenshot` 一个阶段**的追加运行，只打 `append_targets` 里那批 URL；默认串行队列意味着它就排在别的任务后面"空闲再试"，所以**没有**"每轮冷却 N 秒"那个键 —— 加一个只会 `sleep` 住一个 worker 换一句措辞。② 每一轮仍受 `screenshot.max_sites` 单轮上限约束：超出上限的按站点 id 排在下一轮，而上一轮仍失败的那几条会一直挡在前面（要按"最久没试优先"轮转得单独一轮）。③ 重试成功**不清**旧的 `shot_error`（`set_site_shots` 与 `set_site_shot_errors` 各写一列），所以站点行会同时留着 `shot` 和上一次的失败文本：页面靠 `shot` 优先显示、候选靠 `shot=''` 排除，两个数都不虚，但那一格文案看着怪。
 - **站点截图的 `--ignore-certificate-errors` 不能省（2026-09-28 续64）**：CTF / 内网授权目标多为
   自签 / 过期 / 私有 CA 证书（与 `certs.py` 刻意 `CERT_NONE` 同一现实），无头浏览器不加这个开关
   会以 `net::ERR_CERT_AUTHORITY_INVALID` 拒绝加载、`--screenshot` 一个字节都不产出 —— 即**自签

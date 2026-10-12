@@ -252,8 +252,11 @@ screenshot:
   window: 1280x900
   timeout: 30
   # 续161「候补重试」：任务跑完后把「超时 / 跳转未落地 / 连不上」三档没截成的站点排进队列
-  # 再试一轮（只跑 screenshot 阶段）。0＝关（默认，行为与之前逐字相同），最多 2 轮。
-  retry_rounds: 0
+  # 再试一轮（只跑 screenshot 阶段、只打这批 URL，等前面的任务跑完、worker 空了才执行）。
+  # 续164 起随包**打开成 1**（主理人点单「有些站点截图超时，建议加入候补运行，在项目没完成前
+  # 空闲再重试一下」）。代码 DEFAULTS 仍是 0＝关 —— 开在这一层，不偷改出厂代码（[8bq] 的口径）。
+  # 填 0 就退回"一个字都不排"；上限 2 轮（夹在 screenshot.RETRYABLE_MAX_ROUNDS，配多了也没用）。
+  retry_rounds: 1
   browser: ''
 cert:
   # TLS 证书取证（默认关）：对 https / tls_ports 站点做一次 TLS 握手，解析颁发者与有效期到「SSL 证书」页签

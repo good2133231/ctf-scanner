@@ -3996,6 +3996,8 @@ def create_app():
                                versions_keep=toolmgr.VERSIONS_KEEP,
                                versions_dirname=toolmgr.VERSIONS_DIRNAME,
                                max_mb=toolmgr._MAX_BYTES // (1024 * 1024),
+                               # 校验口径那句话**现取**自 toolmgr（页面不手抄一份，抄了会漂）
+                               verify_policy=toolmgr.verify_policy(),
                                hosts=sorted(toolmgr._ALLOWED_HOSTS),
                                dest=toolmgr.DEFAULT_DEST,
                                msg=(request.args.get("msg") or "").strip(),
@@ -4052,6 +4054,9 @@ def create_app():
             error = ""
         except Exception as e:      # noqa: BLE001 - 不让页面崩；失败如实展示
             results, error = [], f"{type(e).__name__}: {e}"
+        for r in results:
+            # 「校验」那一格的话与 CLI 同源（`toolmgr.verified_label`），模板只负责印
+            r["verify_label"] = toolmgr.verified_label(r)
         _TOOLS_LAST.update({"results": results,
                             "at": time.strftime("%Y-%m-%d %H:%M:%S"),
                             "os": f"{os_label}/{arch}", "error": error})

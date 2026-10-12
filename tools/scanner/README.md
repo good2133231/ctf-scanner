@@ -12,7 +12,9 @@ python cli/client.py --update-tools              # subfinder / httpx / puredns�
 ```
 
 GUI 里是管理员侧栏的「外部工具」页。两条路都**只在显式触发时联网**（扫描期任何阶段都不会自动下载），
-只允许 https + 官方主机，默认**必须通过 release 自带的 SHA256 校验和**才落盘。
+只允许 https + 官方主机，落盘前**必须通过 SHA256 校验**才落盘。摘要有两个产地：官方 release 自带的
+checksums 文件；官方不发 checksums 的（只有 puredns）用本框架人工核过、钉在 `scanner/toolmgr.py`
+`TOOLS` 里的产物摘要（`pin_version` / `pin_sha256`，续164）—— 按**确切 tag** 下载，字节对不上就拒装。
 
 迁移到**新机器**时用 `python cli/client.py --bootstrap`（续96）：它按平台一次点清「解释器 / pip 依赖 / 外部工具 / 截图用的浏览器」还缺什么；加 `--install` 才联网，且自动层只装 `requirements.txt` 与下表标「自动」的那三个。nmap / fscan / dirmap **仍然只打印命令、一条都不代跑**（逐条原因见下表与 `scanner/toolmgr.py` 的 `MANUAL`）。
 
@@ -66,15 +68,16 @@ python cli/client.py --check-afrog-pocs <你的 PoC 目录>     # 只读，不�
 
 ## 工具清单与获取
 
-「自动」＝续54 起可由 `--update-tools` / GUI「外部工具」页一键下载（**默认必须过 release 自带的
-SHA256 校验和**才落盘）；「手工」＝官方没有"可下载且带官方校验和的单二进制产物"，步骤见下方
-「手工安装」。
+「自动」＝续54 起可由 `--update-tools` / GUI「外部工具」页一键下载，落盘前**必须过 SHA256**
+（摘要取官方 release 自带的 checksums，官方不发的取本框架钉住的那份 —— 见 `scanner/toolmgr.py`）；
+「手工」＝官方**压根没有"可下载的单二进制产物"**（只有安装器 / 源码包 / dmg，或 release 零产物、
+纯 Python），连校验的对象都没有，步骤见下方「手工安装」。
 
 | 工具 | 用途 | 一键下载 | 平台说明 |
 |---|---|---|---|
 | subfinder | 被动子域名收集 | 自动 | 官方产物双平台都有（`windows_amd64.zip` / `linux_amd64.zip`）+ checksums |
 | httpx | HTTP 存活探测/指纹 | 自动 | 官方产物双平台都有 + checksums；需 ≥1.x（`-json` 输出）；注意别和 pip 的 Python httpx 同名命令混淆（框架会做版本握手校验，假的自动降级） |
-| puredns | DNS 字典爆破 | 自动（**Windows 无产物**） | **官方只发布 Linux / macOS 产物**（`puredns-{Linux\|macOS}-{amd64\|arm64}.tgz`），**无 Windows 包、也无 checksums**；Windows 上请自行 `go install` 或依赖内置爆破兜底（2026-09-26 查 GitHub API 实测） |
+| puredns | DNS 字典爆破 | 自动（**Windows 无产物**） | **官方只发布 Linux / macOS 产物**（`puredns-{Linux\|macOS}-{amd64\|arm64}.tgz`），**无 Windows 包、也无 checksums**；Windows 上请自行 `go install` 或依赖内置爆破兜底（2026-09-26 查 GitHub API 实测）。续164 起本框架**替 v2.1.1 的四件产物钉住 SHA256**（`TOOLS["puredns"].pin_version` / `pin_sha256`，2026-10-12 从官方 release 取包、本机哈希、解包跑出 `puredns version v2.1.1` 核对），下载时按**确切 tag** 取那一版；摘要不符直接拒装（`--allow-unverified` 也越不过去） |
 | nmap | 端口扫描（第二引擎，见下） | **手工** | 官方发布在 nmap.org/dist（**非** GitHub release）：Windows 只有安装器、Linux 只有源码包、macOS 只有 dmg |
 | fscan | 端口扫描（第一引擎，见下） | **手工** | 官方不发二进制，需用 Go 从源码自编译（本仓为避免 Defender 拦截的既定做法） |
 | dirmap | 目录扫描（补充） | **手工** | 纯 Python 项目，release 的 `assets` 为空数组（零二进制、零 checksums） |

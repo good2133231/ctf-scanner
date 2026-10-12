@@ -3668,7 +3668,46 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       "入口必须 `db.init_db()`" —— 少了它，这条回归会退化成"这台机器恰好有库才绿"（§6.1）
 - [x] 实测：实测：`tests/smoke.py`（终验 `logs/_gate163c.log`，三份记忆落完之后复跑；代码定稿那次是 `logs/_gate163b.log`，两次都是 185 组打印 / AssertionError 0）**SMOKE PASS**、组打印 185 行（同一判据数上一轮终验 `logs/_gate162h.log` 得 185 行，本轮不新增组）、AssertionError 0。干净克隆那份的实测数字在上面的表里（那条 `SMOKE PASS` 是克隆自己跑出来的，不是本机复跑）。
 
-下一轮（续164）——只做这些，别扩大：
+## 续164（2026-10-12，WorkBuddy · Qoder-Agent 远端 Linux）：puredns 的摘要改由本框架自己核、自己钉 —— 干净克隆 `./install.sh` 第一次 rc=0
+
+主理人只回了一个字：**B**（我们发布并核验钉住的 SHA256），并当场定了三件：`retry_rounds` **打开**、
+报告/详情页**可以显示**"被级别闸挡掉 N 条"、那只多余 PAT 与明文原件**不用管**。
+
+- [x] `scanner/toolmgr.py`：`TOOLS["puredns"]` 加 `pin_version: v2.1.1` + `pin_sha256`（四件产物，
+      2026-10-12 本机从官方 release 取包 → sha256 → 解包跑出 `puredns version v2.1.1` 核对；
+      本机已装那份与钉住的 Linux-amd64 产物解包结果**逐字节相同** `bf9f6273…` ⇒ 没引入新字节）
+- [x] `fetch_release(..., tag="")` 与 **`_release_for()`**（"这个工具该看哪一个 release"的唯一判据：
+      钉了版本按 `/releases/tags/<tag>` 精确取，没钉才 latest）；`install()` 两条新拒装 ——
+      tag ≠ `pin_version` 时**连下载都不发起**（即便那一次自带 checksums 也能对上字节）、
+      字节与钉住的摘要不符时**连 `--allow-unverified` 都越不过去**（那个开关只管"没有校验依据"）
+- [x] `verified_label()` / `verify_policy()` 成为"校验"文案的唯一产地：CLI `--update-tools`、
+      GUI 结果表那一格、页面顶部政策句、run_bootstrap 的 `[+]` 行**四处全改调它**（原先四处都写
+      "必须通过 release 自带的 SHA256 校验和"，摘要有了第二个产地之后每处都是假话）；
+      `check_updates()` 对钉了版本的工具不许报 `has_update=True`；`status()` / `probe()` 行多出 `pinned`
+- [x] **顺手修掉本轮才暴露的一支**：`cli/client.py --update-tools` 装**成功**也 rc=1 ——
+      `do_update_tools()` 只在失败时 sys.exit，成功就 return 回 `main()`，接着掉进扫描流程撞那句
+      「未提供目标」（干净克隆实测：`httpx OK v1.12.0（SHA256 已校验…）` 那行明明印着）。
+      修法：没给 `--bootstrap*` 时直接 `return`；同一条命令实测 rc 从 1 → **0**
+- [x] 实测（`git ls-files` 的 513 个被跟踪文件复制到干净目录，与 续163 同条件）：
+      `./install.sh` ⇒ **rc=0**，`已就绪 14｜可自动补齐 0｜需手工 2｜本轮已装 5`，
+      puredns 那行是 `[+] puredns v2.1.1 → tools/scanner/puredns（SHA256 已校验（本框架钉住的产物摘要））`；
+      对照 续163 同条件 **rc=1**（唯一失败项就是它）
+- [x] 截图「候补重试」随包打开：`config/settings.yaml` 写 `retry_rounds: 1`，代码 `DEFAULTS` **仍是 0**
+      （沿用 `[8bq]` 的口径：开在文件层，不偷改出厂行为）；`[8bs]` ③a 于是改成**三档分开**断言，
+      外加"读侧键缺失时的兜底跟 DEFAULTS 同值、不跟随包文件"
+- [x] 回归 `[8bu]` 七件 + **四处变异证伪**（抽掉一个平台的摘要 / `_release_for` 退回"永远看 latest" /
+      摘掉 `pin_version` / 一份**去掉守卫**的 client.py 副本），另有两处"判据自证"夹具
+- [x] 文档与记忆收口：`README.md`、`tools/scanner/README.md`（"手工"的定义改成"压根没有可下载的
+      单二进制产物"）、`docs/security-notice.md`、`docs/architecture.md`、`docs/usage.md`；
+      AGENTS §2 那段"本机一次运维例外"按现状改写 + §5.14 补三个新产地 + §7 补一条局限
+      （`docs/roadmap.md` 里 续54 / 续59-3 是当时的实测记录，不改历史条目）
+- [x] 撞坑记录：在 `scanner/toolmgr.py` 里 `import inspect` 会被**本模块自己的 `inspect()`** 整名遮蔽
+      （实测 `AttributeError: 'function' object has no attribute 'signature'`）⇒ 改成要求注入的
+      `fetch` 接受 `tag=`，并用 AST 钉住"别再往这个文件里引 stdlib inspect"
+- [x] 门禁：`tests/smoke.py` ⇒ **SMOKE PASS**，组打印 **189** 行（判据 `grep -cE '^\[[0-9]'`；
+      上一轮终验 `logs/_gate163c.log` 是 188 行，本轮 +1 组正好对得上）
+
+下一轮（续165）——只做这些，别扩大：
 
 - [ ] **`shodan` / `quake` 的 key 已进密文，但策略段还是关的**（`enabled: false`）——
       「配了 key」与「会去查」是两件事，别把前者当后者。要不要随包打开由主理人定：
@@ -3706,20 +3745,26 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       某个站点每轮都超时就会连打两轮；按 URL 记失败次数更省，但要落库字段
 - [ ] 观察 `reuse_history` 的实跑效果：#19 那类目标重跑时应能补回 `ibt4`；历史资产过多（上千条）
       时 300 的上限会开始挡量 —— 届时按实测调默认值而不是放成"不限"
-- [ ] 新默认 `min_severity: high` 的取舍再确认一次：报告/详情页要不要显示"被级别闸挡掉 N 条"
-      （与"被收起的条数必须报数字"同口径）还没做
+- [ ] **报告与任务详情页显示"被 `min_severity: high` 挡掉 N 条"**（主理人 2026-10-12 已答"可以显示"）：
+      与 §0 第 10 条"被收起的条数必须报在页面上、并写明入库一条没动"同口径；默认值本身的取舍
+      不用再问，缺的是**可见性**。判据产地：挡条的判据在 `vulnscan` / 报告侧，别在模板里再抄一份门槛
+- [ ] **puredns 没有版本握手（`verify: None`）⇒ 三个连带后果**：每次 `--install` / `--update-tools`
+      都重下 7.8 MB（`only_if_newer` 问不出本机版本就永不跳过）、GUI「外部工具」页那一格版本是空的、
+      `archive_version` 问不出版本 ⇒ **不进版本库**（续94 的多版本共存对它失效，`--tool-versions`
+      列不出）。实测 `puredns --version` 在管道下会退出并打 `puredns version v2.1.1`（2026-10-12），
+      所以配 `verify: "--version"` 是可行的 —— 但那是**行为变更**（开页多起一次探测子进程、
+      `[8x]` ③ 那条"起几次探测"的断言要同步），单独一轮做
+- [ ] `retry_rounds=1` 目前只有**门禁内的端到端**（浏览器被桩掉）。下一次带截图的真实任务要观察：
+      「候补第 1/1 轮」是否真在队列空时跑起来、那批超时站点第二轮的命中率、以及它有没有把
+      `max_sites` 单轮上限堵住（同一 todo 里那条"上一轮仍失败的会一直挡在前面"）
 - [ ] `~/.secrets/keys-pass` 这一档的**存废**由主理人定：AGENTS §2 早写了"要真正收回同机兜底，
       就把这个文件删掉，回到每次推送给一次口令"。本轮把它接到了运行期（扫描/GUI 也认），
       换来的便利是无人值守能解锁，代价是能读那个文件的人能解开整份密文 —— 说清楚，别当没这回事
-- [ ] **`install.sh` 在任何新克隆上都必然返回非 0**（续163 实测 rc=1）：puredns 官方不发校验和
-      ⇒ 自动层永远"失败一项"，而既有契约是 `[8av]` 断言的"退出码必须带出去，非 0＝有项失败"；
-      脚本自己收尾又写"多半是可选的外部工具没下下来，框架本身仍能跑" —— 一句话里既说"没事"
-      又返回"有事"，`set -e` / systemd / CI 会把一次**成功**的安装判成失败。两个方向选一：
-      ① 把"按红线拒绝安装"归类成**需手工**（改 `run_bootstrap` 的 `failed` 口径 + 同步 `[8av]`）；
-      ② 明确"install.sh rc=1 属正常收尾"并写进 README / docs/docker.md / CI。**口径要主理人定**
-- [ ] `cli/client.py --check` 给 puredns 的出路句「可用 `--update-tools` 联网下载安装」**当场走不通**
-      （续163 实测同一条命令必然被拒，缺 `--allow-unverified`）—— 出路句子少半句旗标，
-      与 §6.2 第十六起同族
+- [ ] **Windows 上 `install.sh` 仍然 rc=1**（续164 只解掉 Linux / macOS：puredns 改成框架自钉摘要）：
+      官方压根**没发 Windows 产物**，自动层于是"必然失败一项"。两个方向仍要主理人定口径 ——
+      ① 把"本平台官方没有产物"归类成**需手工 / 不适用**（改 `run_bootstrap` 的 `failed` 判据 +
+      同步 `[8av]` 那句"非 0＝有项失败"）；② 认它就是失败，在 README / docs/docker.md 写明
+      "Windows 上 rc=1 属正常收尾"。**别顺手改**：这条与 `[8av]` 的退出码断言绑在一起
 - [ ] **iprecon 只报第一个源的失败**：三源 union（webscan → hackertarget → ip138）早就在，
       但只有 webscan 非 200 会打一行 DEBUG，另两个源返回空时一个字不说 ⇒ 主理人看到
       "17 行 HTTP 530"就以为只试了一个源。要补的是"每源各自的结果/失败摊开一行"

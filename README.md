@@ -278,7 +278,10 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 - **`config/settings.yaml`（全局策略，已随仓库提交）**：GUI「策略配置」页可图形化修改并写回；CLI 也可直接编辑。常见开关：`fofa.enabled` / `iprecon.enabled` / `shodan` / `quake` / `ctlog` / `intel` / `heuristic` / `github`（外部情报类：DEFAULTS 关，而随包 settings.yaml 已开 iprecon/fofa/ctlog/intel/heuristic/github/multileak）；`dirscan.mode`（`quick` 浅扫 / `deep` 深扫）；`screenshot.enabled`（站点截图，默认关，需本机有 Edge/Chrome 无头）；`portscan.engine`（`auto` = fscan → nmap → 内置）。
 - **`config/blacklist.txt`**：一行一个域名，命中即不入资产库（入库前过滤）。
 - **`config/dicts/`**：子域名字典、`dirs_shallow.txt`（浅扫精选路径 ~150 条）、`dirs_big.txt`（深扫大字典 11882 条）、`cdn_cname.txt`（CDN 厂商后缀）、`cdn_ips.txt`（CDN 厂商任播 IP 段）、`sensitive.txt`（A01 敏感文件检查的数据源：`路径 | 关键字 | 级别 | 说明`）。
-- **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，默认必须通过 release 自带的 SHA256 校验和。
+- **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，落盘前必须通过 SHA256 校验。
+摘要有两个产地：官方 release 自带的 checksums 文件；puredns 官方不发 checksums，改按本框架人工核过并钉在
+`scanner/toolmgr.py` 里的产物摘要（`pin_version` / `pin_sha256`，续164）—— 只装钉住的那一版，字节对不上就拒装，
+连 `--allow-unverified` 也越不过去。
 
 > 部署 checklist：① 复制 `config/keys.yaml.example` → `config/keys.yaml` 并填 key（仅当要用 FOFA 等外部情报）；② 按需改 `config/settings.yaml`（或 GUI 策略配置页，**仅管理员可改**）；③ `./install.sh`（Windows 或想看清每一步：`python3 run_bootstrap.py --install`）；④ 跑 `python cli/client.py --check` 自检；⑤ 401 边缘门**出厂是关的**（续151 起 `gui.edge_auth.enabled: false`，新 clone 打开就到登录页；续154 起策略配置页「控制台」段有勾选框可开）；要开就勾上它**并先配口令** `python -m scanner.edgeauth --set`（口令文件不入库，门开着而口令没配 ⇒ 全站 401 fail-closed；**没有终端**时走 `CTFSCANNER_EDGE_PASSWORD='<口令>' python -m scanner.edgeauth --set`，续146-附2）；⑥ 起控制台，按启动横幅建**第一个管理员**（非交互环境：`python cli/run_users.py --create-admin`），再登进「账号管理」建子用户账号。
 

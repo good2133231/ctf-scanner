@@ -9,8 +9,12 @@ subfinder/httpx/puredns 时一律退到内置兜底（覆盖面与速度差一�
    —— 任何阶段代码都不得调用本模块的 `install`/`update`（`tests/smoke.py [7p]` 用变异钉住这一条）。
 2. 只允许 https，且主机必须在 `_ALLOWED_HOSTS` 内（含**跟随跳转后**的真实 URL —— GitHub 的
    release 资产会 302 到 `objects.githubusercontent.com`）。
-3. **默认必须校验 release 自带的 checksums**：比对不上**绝不落盘**；release 没发布 checksums 时
-   默认**拒绝**，只有显式 `allow_unverified=True` 才继续，并在结果里如实标注"未校验"。
+3. **落盘前必须校验 SHA256**：比对不上**绝不落盘**。摘要有**两个产地**（结果里 `verify_source`
+   区分）：① release 自带的 checksums 文件；② 本框架替某个工具**钉死**的产物摘要 `pin_sha256`
+   （puredns 官方不发 checksums，走这条）。两个产地都没有时默认**拒绝**，只有显式
+   `allow_unverified=True` 才继续，并在结果里如实标注"未校验"。
+   **钉摘要不等于松绑**：字节仍必须与人工核过、写进本文件的那串十六进制一字不差，而且只装
+   `pin_version` 那一版（tag 对不上就直接拒装 —— 新版＝新字节＝没核过）。
 4. 解包**只按预期成员名取**（`ZipFile.read()` / `TarFile.extractfile()`，不用 `extractall`），
    并从根上拒绝 `..` / 绝对路径成员 —— zip slip 与 tar 路径穿越都不成立。
 5. 落盘用"同目录临时文件 + `os.replace`"原子替换；任何一步失败都不留半成品（`.part` 会被删）。
@@ -24,6 +28,8 @@ subfinder/httpx/puredns 时一律退到内置兜底（覆盖面与速度差一�
   os 标签是 `linux` / `windows` / `macOS`，arch 有 `386/amd64/arm/arm64`。
 - d3mondev/puredns：产物 `puredns-{Linux|macOS}-{amd64|arm64}.tgz` —— **官方没有 Windows 产物，
   也没有 checksums 文件**。所以 Windows 上本模块会如实报"未提供当前平台产物"，**不猜、不自动编译**。
+  续164 起本模块**自己替它钉住版本与四件产物的 SHA256**（见下方 TOOLS 的 `pin_version`/`pin_sha256`），
+  并按**确切 tag** 取 release（不跟 latest）：上游哪天发新版，也不会把没核过的字节装进来。
 - nmap / fscan / dirmap 走**手工安装**（本模块不为它们发任何请求）：逐条原因见下方 `MANUAL`，
   步骤见 `tools/scanner/README.md`「手工安装」。
 """
@@ -58,7 +64,27 @@ _UA = "CTFScanner-toolmgr/0.1 (+authorized-testing-only)"
 TOOLS = {
     "subfinder": {"repo": "projectdiscovery/subfinder", "style": "pd", "verify": "-version"},
     "httpx": {"repo": "projectdiscovery/httpx", "style": "pd", "verify": "-version"},
-    "puredns": {"repo": "d3mondev/puredns", "style": "puredns", "verify": None},
+    # puredns 官方 release **不发 checksums 文件**（见文件头"平台事实"），而它在扫描路径里是
+    # 真被调用的（subdomain 阶段的 DNS 爆破）—— 于是"默认必须有官方校验和"这条红线在这里只有一个
+    # 后果：**永远装不上**，且把 `./install.sh` 的退出码拖成非 0（续163 在干净克隆上实测 rc=1）。
+    # 出路不是"对 puredns 松手"，而是**由本框架替它核摘要并钉住**：
+    #   摘要产地（2026-10-12 实测，不是从别处抄的）：https 取官方 v2.1.1 的四件产物 → 本机
+    #   sha256 → 解包跑 `puredns --version` 得 `puredns version v2.1.1` 核对版本；
+    #   最新 release 的 tag 也复核过仍是 v2.1.1（2023-04-11 发布，非 draft / 非 prerelease）。
+    # ⚠️ 要升级它：**同时**改 `pin_version` 与 `pin_sha256`。只改一个会在下面"tag 必须等于钉住的
+    #    那版"那条判据上拒装 —— 那是刻意的：新字节的摘要必须重新人工核过才配进这个文件。
+    "puredns": {"repo": "d3mondev/puredns", "style": "puredns", "verify": None,
+                "pin_version": "v2.1.1",
+                "pin_sha256": {
+                    "puredns-Linux-amd64.tgz":
+                        "9f78ae91f4f58c3c3185be650c25ba38d5ef80fb092436054d17f67008a93344",
+                    "puredns-Linux-arm64.tgz":
+                        "d7bfc4d744af227e6cbbdb20920ea7b236ce9b86f17f69dde866e11854715272",
+                    "puredns-macOS-amd64.tgz":
+                        "c059a1f7ec349d939963f9864b611e8d1f0b8cab49455994e687b3005f053dde",
+                    "puredns-macOS-arm64.tgz":
+                        "d0f2bdf4d496aeb6b54a6277971aa6a8e697585676bc3a64d15aa4427d7988b4",
+                }},
     # afrog（续119 进本模块；续121 接入 vulnscan 适配器；续149 起**默认开**）。
     #   2026-10-07 查官方 latest release（v3.5.7）实测：7 个产物 = linux / macOS / windows
     #   × amd64 / arm64 的 zip，外加 `afrog_3.5.7_checksums.txt`；命名与 projectdiscovery 同一规律
@@ -74,6 +100,54 @@ TOOLS = {
     #   同时用 `fallback: False` 把"没内置兜底"这件事**单独说清** —— 两个语义各归各位。
     "afrog": {"repo": "zan8in/afrog", "style": "pd", "verify": None, "fallback": False},
 }
+
+
+# ---------- 摘要的两个产地（`verify_source`）与"校验"文案的单一产地 ----------
+# CLI、GUI「外部工具」页、run_bootstrap 打印校验状态一律调 `verified_label()`；
+# 页面顶部那句"落盘前必须过什么"调 `verify_policy()`。判据只这一处 —— 在文案里抄一份
+# 版本/摘要来源，就是 AGENTS §5.19 说的那类会漂的成句（本项目被它绊过四次）。
+VERIFY_RELEASE = "release"      # 官方 release 自带的 checksums 文件
+VERIFY_PINNED = "pinned"        # 本框架人工核过并钉进 TOOLS 的产物摘要（`pin_sha256`）
+_VERIFY_LABEL = {VERIFY_RELEASE: "SHA256 已校验（官方 checksums）",
+                 VERIFY_PINNED: "SHA256 已校验（本框架钉住的产物摘要）"}
+# 失败原因里要说的是**摘要从哪儿来**（人要照着它去核对），不是那两行结果标签 —— 长得像，
+# 但抄成同一串会写成「摘要来自SHA256 已校验（…）」这种读不通的句子（本轮实测撞过一次）。
+_VERIFY_SRC = {VERIFY_RELEASE: "官方 release 自带的 checksums 文件",
+               VERIFY_PINNED: "scanner/toolmgr.py 里本框架钉住的产物摘要"}
+
+
+def pin(tool):
+    """该工具钉住的 `(版本, {产物名: SHA256})`；没钉 → `("", {})`。"""
+    cfg = TOOLS.get(tool) or {}
+    return str(cfg.get("pin_version") or ""), dict(cfg.get("pin_sha256") or {})
+
+
+def verified_label(res):
+    """一次安装结果里"校验"那一格该印的话。
+
+    `verified` 是三态：`None`（没走到校验，比如失败/跳过）→ 返回 `""`，调用方自己决定占位；
+    `False`（显式允许的未校验安装）→ 如实说"未校验"；`True` → 按 `verify_source` 说清算的是哪一份摘要。
+    """
+    v = res.get("verified")
+    if v is None:
+        return ""
+    if v is not True:
+        return "未校验（按你的显式要求）"
+    return _VERIFY_LABEL.get(res.get("verify_source") or VERIFY_RELEASE, "SHA256 已校验")
+
+
+def verify_policy():
+    """「装之前必须过什么」这句**现取**自 TOOLS：新增或去掉一个钉摘要的工具，文案自己跟着变。"""
+    pinned = sorted(t for t in TOOLS if pin(t)[0])
+    plain = sorted(t for t in TOOLS if not pin(t)[0])
+    parts = ["落盘前必须过 SHA256，比对不过一律拒绝落盘、也不覆盖已装好的："]
+    if plain:
+        parts.append(f"{'、'.join(plain)} 用官方 release 自带的 checksums 文件；")
+    if pinned:
+        parts.append("、".join(f"{t}（钉在 {pin(t)[0]}）" for t in pinned)
+                     + " 官方不发 checksums，改用本框架人工核过并写进 scanner/toolmgr.py 的产物摘要；")
+    parts.append("两个来源都没有时默认拒绝安装（要装得显式允许「未校验」，界面如实标注）。")
+    return "".join(parts)
 
 
 def wired(name):
@@ -227,20 +301,44 @@ def download_bytes(url, timeout=120, max_bytes=_MAX_BYTES):
         return buf.getvalue()
 
 
-def fetch_release(repo, timeout=30):
-    """查最新 release → `{"tag": "v1.2.3", "assets": {名字: 下载URL}}`。
+def fetch_release(repo, timeout=30, tag=""):
+    """查 release → `{"tag": "v1.2.3", "assets": {名字: 下载URL}}`。
+
+    `tag` 给了就按**确切版本**取（`/releases/tags/<tag>`，钉了摘要的工具走这条），不给才看 latest。
+    为什么要按 tag：只认 latest 的话，"上游一发新版 → 本框架没有那一版的摘要 → 装不上 → 安装脚本
+    非 0"迟早复发；按 tag 取则装的就是当年核过摘要的那份字节。
 
     用**公开 API 且不传任何凭据**：只读、无副作用；未认证的 60 次/小时对"偶尔装个工具"绰绰有余
     （与本项目 github_leak 阶段"不把登录态发出去"的口径一致）。
     """
-    data = json.loads(download_bytes(
-        f"https://api.github.com/repos/{repo}/releases/latest",
-        timeout=timeout, max_bytes=4 * 1024 * 1024).decode("utf-8", "replace"))
+    _t = str(tag or "").strip()
+    url = (f"https://api.github.com/repos/{repo}/releases/tags/{_t}" if _t
+           else f"https://api.github.com/repos/{repo}/releases/latest")
+    data = json.loads(download_bytes(url, timeout=timeout, max_bytes=4 * 1024 * 1024)
+                      .decode("utf-8", "replace"))
     assets = {}
     for a in (data.get("assets") or []):
         if a.get("name") and a.get("browser_download_url"):
             assets[str(a["name"])] = str(a["browser_download_url"])
     return {"tag": str(data.get("tag_name") or ""), "assets": assets}
+
+
+def _release_for(tool, fetch=None, timeout=120):
+    """这个工具**该看哪一个 release**：钉了版本按 tag 精确取，没钉才看 latest。
+
+    判据只这一处（`install` 自己联网时、`update` 用注入的 `fetch` 时都走它）—— 两处各写一遍
+    "有没有 pin_version"迟早漂。
+    ⚠️ 注入口径：`fetch` **必须接受 `tag=` 关键字**（`fetch_release` 接受）。桩少了这个形参，
+    TypeError 会被调用方兜成"查询最新版本失败"并**如实上报**，不会退回去误装别的版本。
+    刻意**不做**签名探测：本模块自己就有一个 `inspect()` 函数，`import inspect` 会被它整名遮蔽
+    （实测 AttributeError），少写一个形参换来那种坑不值。
+    """
+    fetch = fetch or fetch_release
+    repo = TOOLS[tool]["repo"]
+    pinned = pin(tool)[0]
+    if not pinned:
+        return fetch(repo, timeout=timeout)
+    return fetch(repo, timeout=timeout, tag=pinned)
 
 
 # ---------- 解包 ----------
@@ -331,20 +429,28 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
     if pre["asset"] is None:
         out["reason"] = pre["reason"]
         return out
+    pinned, pinmap = pin(tool)
     try:
-        rel = release if release is not None else fetch_release(TOOLS[tool]["repo"], timeout=timeout)
+        rel = release if release is not None else _release_for(tool, timeout=timeout)
     except Exception as e:                                   # 网络/解析失败一律如实报，不猜
         out["reason"] = f"查询最新版本失败：{e}"
         return out
     tag, assets = rel.get("tag") or "", rel.get("assets") or {}
     out["version"] = tag
+    if pinned and tag != pinned:
+        # 钉了版本却拿到别的版本＝那批字节没被人工核过。这里**不做**"只要官方 checksums 对得上
+        # 也算"的变通：认钉住的版本就是认它的**摘要**，中途把口径换成官方文件等于没钉。
+        out["reason"] = (f"本框架把 {tool} 钉在 {pinned}（产物摘要人工核过、写进 scanner/toolmgr.py），"
+                         f"这次拿到的是 {tag or '没有版本号'} —— 拒绝安装"
+                         "（升级请核过新版产物摘要后**同时**改 pin_version 与 pin_sha256）")
+        return out
     want_asset = asset_name(tool, tag, os_label, arch)
     if not want_asset or want_asset not in assets:
         out["reason"] = (f"{tag or '最新版'} 未提供 {os_label}/{arch} 产物"
                          f"（release 里有：{'、'.join(sorted(assets)[:6])}…）")
         return out
     csum_name = checksum_asset(assets, tag)
-    want_digest = None
+    want_digest, verify_src = None, ""
     if csum_name:
         try:
             if blob is not None and csum_name in (blob or {}):
@@ -359,9 +465,15 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
         if not want_digest:
             out["reason"] = f"校验和文件 {csum_name} 里没有 {want_asset} 的条目（拒绝落盘）"
             return out
+        verify_src = VERIFY_RELEASE
+    elif want_asset in pinmap:
+        # 官方不发 checksums，但本框架**替这一版这一个产物**钉了摘要：校验强度一个字没降，
+        # 只是摘要的产地从"release 里的文件"换成"本文件里那串十六进制"（怎么核的见 TOOLS 注释）。
+        want_digest, verify_src = str(pinmap[want_asset]).strip().lower(), VERIFY_PINNED
     elif not allow_unverified:
-        out["reason"] = (f"{tag or '最新版'} 未发布校验和文件；默认拒绝安装"
-                         "（确要安装请显式允许未校验安装）")
+        out["reason"] = (f"{tag or '最新版'} 未发布校验和文件"
+                         + (f"，而 {want_asset} 也不在本框架钉住的摘要里" if pinned else "")
+                         + "；默认拒绝安装（确要安装请显式允许未校验安装）")
         return out
     try:
         data = (blob[want_asset] if blob is not None and want_asset in (blob or {})
@@ -372,11 +484,16 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
     if want_digest:
         got = hashlib.sha256(data).hexdigest()
         if got != want_digest:
-            out["reason"] = f"SHA256 校验不符（期望 {want_digest[:16]}…，实得 {got[:16]}…）—— 拒绝落盘"
+            out["reason"] = (f"SHA256 校验不符（期望 {want_digest[:16]}…，实得 {got[:16]}…，"
+                             "期望值来自" + _VERIFY_SRC.get(verify_src, "未知产地")
+                             + "）—— 拒绝落盘；摘要对不上通常是产物被换过或平台挑错了包，"
+                             "不是重试能解决的事")
             return out
         out["verified"] = True
+        out["verify_source"] = verify_src
     else:
         out["verified"] = False        # 显式允许的未校验安装（不是 True，页面要如实显示）
+        out["verify_source"] = ""
     binary = binary_name(tool)
     try:
         payload = extract_binary(data, want_asset, binary)
@@ -514,8 +631,9 @@ def update(tools=None, dest_dir=None, allow_unverified=False, wire=True, setting
            timeout=120, fetch=fetch_release, blobs=None, only_if_newer=False, settings=None):
     """按顺序装/更新若干工具，返回结果列表。**只由显式入口调用**（CLI / GUI 按钮）。
 
-    `fetch` 与 `blobs` 是给测试的注入口：`fetch` 换掉"查最新版本"，
-    `blobs` 是 `{工具名: {资产名: bytes}}` —— 传了就完全不联网（`install` 优先用 blob）。
+    `fetch` 与 `blobs` 是给测试的注入口：`fetch` 换掉"查哪个 release"（**必须接受 `tag=` 关键字
+    形参**，钉了版本的工具会带 tag 调用，见 `_release_for`），`blobs` 是 `{工具名: {资产名: bytes}}`
+    —— 传了就完全不联网（`install` 优先用 blob）。
 
     `only_if_newer=True`（续149，GUI/CLI 显式开，默认关＝保持既有"总是重装"语义）：先用
     `check_updates` 同一套办法问本机版本，**已是最新就跳过**（结果里 `skipped=True`、
@@ -526,7 +644,7 @@ def update(tools=None, dest_dir=None, allow_unverified=False, wire=True, setting
     for name in names:
         rel = None
         try:
-            rel = fetch(TOOLS[name]["repo"], timeout=timeout) if name in TOOLS else None
+            rel = _release_for(name, fetch, timeout) if name in TOOLS else None
         except Exception as e:
             results.append({"tool": name, "ok": False, "version": "", "path": "",
                             "verified": None, "reason": f"查询最新版本失败：{e}"})
@@ -639,6 +757,7 @@ def status(settings):
             note = "未找到（不装则本轮不跑该外部引擎；本框架内置引擎不受影响）"
         rows.append({"tool": name, "configured": configured, "path": path or "",
                      "version": version, "asset": pre["asset"] or "",
+                     "pinned": pin(name)[0],
                      "reason": pre["reason"], "wired": _wired, "note": note})
     return rows
 
@@ -866,7 +985,8 @@ def check_updates(settings, fetch=fetch_release, timeout=30):
     tools_cfg = (settings or {}).get("tools", {}) or {}
     rows = []
     for name, cfg in TOOLS.items():
-        row = {"tool": name, "installed": "", "latest": "", "has_update": False, "reason": ""}
+        row = {"tool": name, "installed": "", "latest": "", "has_update": False,
+               "pinned": "", "reason": ""}
         path = which(str(tools_cfg.get(name, name) or name))
         if not path:
             row["reason"] = "未安装（可一键安装）"
@@ -882,7 +1002,16 @@ def check_updates(settings, fetch=fetch_release, timeout=30):
             row["reason"] = f"查询最新版本失败：{e}"
             rows.append(row)
             continue
+        pinned = pin(name)[0]
+        row["pinned"] = pinned
         row["latest"] = str((rel or {}).get("tag") or "")
+        if pinned and row["latest"] and row["latest"] != pinned:
+            # 钉了摘要的工具：官方出了新版**不等于**这边点一下就能更新 —— 新字节没有核过的摘要。
+            # 报成 has_update=True 会诱导人去按「更新」，而那必然走到拒装分支（比不报更糟）。
+            row["reason"] = (f"官方最新 {row['latest']}，本框架钉在 {pinned}"
+                             "（升级须人工核新版产物摘要并同步改 pin_version/pin_sha256）")
+            rows.append(row)
+            continue
         if not row["latest"]:
             row["reason"] = "release 里没有版本号"
         elif not _ver_tuple(row["installed"]):

@@ -5,7 +5,123 @@
 
 
 
-## 续162-附 主理人递来一份凭据文件：合并进 `keys.enc.yaml`（只加不减）+ 差点把"没配上"报成"配好了"
+## 续164 puredns 的产物摘要改由本框架自己核、自己钉 —— 干净克隆的 `./install.sh` 第一次跑到 rc=0（另：截图候补重试随包打开）
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人上一轮听完"新克隆必然 rc=1"的两条出路后只说了
+一个字：**B**（我们自己发布并核验钉住的 SHA256），另外当场定了三件：`retry_rounds` **打开**、
+报告/详情页**可以显示**"被 `min_severity` 挡掉 N 条"、那只多余 PAT 与明文原件**不用管**。
+"全程不要有交互动作，你按你推荐的选" ⇒ 具体取值由我定并在下面写清。
+
+### 一、摘要不是抄来的，是这一台机器上核出来的
+
+官方 `d3mondev/puredns` 的 latest release 复核仍是 **v2.1.1**（2023-04-11 发布，非 draft / 非
+prerelease），四件产物**没有 checksums 文件**。https 取回四件、本机算摘要、再解包跑版本握手：
+
+| 产物 | 大小 | SHA256（前 16 位） |
+| --- | --- | --- |
+| `puredns-Linux-amd64.tgz` | 3,198,353 B | `9f78ae91f4f58c3c` |
+| `puredns-Linux-arm64.tgz` | 2,882,833 B | `d7bfc4d744af227e` |
+| `puredns-macOS-amd64.tgz` | 3,343,425 B | `c059a1f7ec349d93` |
+| `puredns-macOS-arm64.tgz` | 3,144,529 B | `d0f2bdf4d496aeb6` |
+
+解包出来的 Linux 二进制是**静态链接 Go ELF**，`puredns --version` → `puredns version v2.1.1`、rc=0。
+另一条对得上的事实：本机 `tools/scanner/puredns`（续142 那次**用户显式批准** `--allow-unverified`
+装的）与钉住的 Linux-amd64 产物解包结果**逐字节相同**（`bf9f627317a0b1cd…`）⇒ 这一档没有往任何
+机器上放一个"本机之前没在用"的字节。
+
+### 二、改的是什么（红线一根没松，只是换了摘要的产地）
+
+`scanner/toolmgr.py`：
+
+- `TOOLS["puredns"]` 多出 `pin_version: "v2.1.1"` 与 `pin_sha256`（四件产物各一条，注释写明"怎么核的"）；
+- **`fetch_release(repo, timeout, tag="")`** —— 给了 tag 就走 `/releases/tags/<tag>`；
+- **`_release_for(tool, fetch, timeout)`** 是"这个工具该看哪一个 release"的**唯一判据**：钉了版本
+  就按 tag 精确取，没钉才看 latest。**为什么不跟 latest**：跟 latest 的话上游一发新版就没有能对上
+  摘要的产物，`install.sh` 又回到必然非 0 —— 现在装到的永远是核过的那一份字节；
+- `install()` 新增两条拒装：① **tag ≠ `pin_version`** → 连下载都不发起（即便那一次 release 自带
+  checksums 且能与字节对上 —— 认钉住的版本就是认它的**摘要**，中途换成官方文件等于没钉）；
+  ② 字节与钉住的摘要不符 → 拒装，且 **`allow_unverified=True` 也越不过去**（那个开关只管
+  "根本没有校验依据"那一类）；拒装时不建目录、不动已装好的、不留 `.part`；
+- 摘要产地进入结果字典：`verify_source ∈ {release, pinned}`，`verified` 仍是三态；
+- **`verified_label(res)` / `verify_policy()`** 是"校验"那两句话的唯一产地，CLI `--update-tools`、
+  run_bootstrap 的 `[+]` 行、GUI 结果表那一格、页面顶部那句政策说明**全部改调它们**（§5.19：
+  原先那四处都写着"必须通过 release 自带的 SHA256 校验和"，摘要有了第二个产地之后全是假话）；
+- `check_updates()` 对钉了版本的工具**不许**报 `has_update=True` —— 报了就是诱导人去按「更新」，
+  而那一次必然走到 tag 拒装；改成如实一句"官方最新 vX，本框架钉在 vY（升级须人工核摘要）"；
+- `status()` / `run_bootstrap.probe()` 的行多出 `pinned`，页面上看得见"会装哪一版、按什么校验"。
+
+⚠️ 本轮自己撞的一个坑（值得记着）：我一开始用 stdlib `inspect` 去探测注入 `fetch` 的签名，结果
+`AttributeError: 'function' object has no attribute 'signature'` —— **`toolmgr` 自己就有一个
+`inspect()` 函数**，`import inspect` 被它整名遮蔽。改成"注入口径要求 `fetch` 接受 `tag=`"，
+并在 `[8bu]` 里用 AST 钉住"别再往这个文件里 `import inspect`"。
+
+### 三、`--check` 那句出路，本轮才真的走得通
+
+`cli/client.py --check` 一直提示"puredns 可用 `python cli/client.py --update-tools` 联网下载安装"，
+而续163 实测那条命令**当场被红线拒**（缺 `--allow-unverified`）。钉摘要之后它理论上能装了 ——
+真跑一遍才发现**另一支**问题（干净克隆实测原话）：
+
+```
+  puredns    OK  v2.1.1（SHA256 已校验（本框架钉住的产物摘要））→ tools/scanner/puredns
+[!] 未提供目标：使用 -f 目标文件 或 -t 单目标        ← rc=1
+```
+
+`do_update_tools()` 只在"有工具没装上"时 `sys.exit(1)`，**成功就 return 回 `main()`**，接着掉进
+扫描流程。以前没人看见这一支：那条命令在第一步就被拒了。修法是在 `--update-tools` 之后、没给
+`--bootstrap*` 时直接 `return`（`--bootstrap` 那条路复用同一批开关，行为不变）。
+
+### 四、实测：同一条件的干净克隆，rc 从 1 变成 0
+
+条件与续163 一致：`git ls-files` 的 **513 个被跟踪文件**复制到 `/tmp/ctfclone164`（不含 `.git` /
+`.venv` / `data` / `logs` / `tools/scanner/*` 二进制 / `config/keys.enc.yaml`），只跑项目自己的入口：
+
+| 命令 | 续163 | 本轮 |
+| --- | --- | --- |
+| `./install.sh` | **rc=1**（puredns 按红线拒装） | **rc=0**，`已就绪 14｜可自动补齐 0｜需手工 2｜本轮已装 5` |
+| 其中 puredns 那一行 | `[!] puredns 未装上：…未发布校验和文件` | `[+] puredns v2.1.1 → tools/scanner/puredns（SHA256 已校验（本框架钉住的产物摘要））` |
+| 另外三个 | subfinder v2.17.0 / httpx v1.12.0 / afrog v3.5.8（官方 checksums） | 同一批版本、同一结论 |
+| `cli/client.py --update-tools --tool puredns` | rc=1（被拒） | **rc=0**，输出就上面那两行 |
+
+装出来的 `tools/scanner/puredns` 哈希 `bf9f6273…` 与本机那份、与钉住产物的解包结果**三者一致**。
+
+### 五、截图「候补重试」随包打开（值我定的，理由写在配置注释里）
+
+主理人说"打开"，没说几轮。落地是 **`config/settings.yaml` 写 `retry_rounds: 1`**，代码
+`DEFAULTS` **保持 0** —— 沿用 `[8bq]` 立的口径："开"是**文件层**的选择，不偷改出厂行为；新克隆
+合并后的生效值就是 1，要退回"一个字都不排"在策略页填 0。选 1 而不是 2：续151 已经在阶段内重试过
+一次（超时翻倍 / 换落地页），候补那一轮的意义是"队列空了再给一次机会"，两轮连打同一个坏站点只是
+多消耗一遍目标侧的额度。上限仍是 2（`RETRYABLE_MAX_ROUNDS` 夹取）。
+`[8bs]` ③a 于是从"出厂默认必须是关"改成**三档分开断言**：`DEFAULTS==0` / 随包文件 `==1` /
+`load_settings()` 生效 `==1`，外加"读侧那个键不存在时的兜底跟 `DEFAULTS` 同值、**不**跟随包文件"
+（否则删掉那一行的 settings 会静默变成"替目标再发一轮包"）。
+
+### 六、门禁与文档
+
+- 新增 `tests/smoke.py [8bu]`（七件：覆盖面 / 摘要不符 / tag 不符 / 带 tag 取 release /
+  文案同源 / 钉版本不被"有新版本"绕过 / 出路句 rc），**四处变异证伪**：抽掉一个平台的摘要、
+  把 `_release_for` 退回"永远看 latest"、摘掉 `pin_version`、拿一份**去掉守卫**的 client.py
+  副本（写在 `logs/` 下、跑完即删）；判据自证两处（AST 字面量扫描必须抓得住"实现里抄了一句"
+  而不误抓 docstring 里的反例）。
+- `[8bs]` ③a 改成三档；`[7p]` / `[8x]` 一行没动就跟着绿（`TOOLS∩MANUAL=∅`、puredns Windows 平台
+  事实、`--update-tools` 的失败退出码都仍然成立）。
+- 文档六处收口：`README.md`、`tools/scanner/README.md`（含"手工"的定义 —— 边界从来不是"没有官方
+  校验和"而是"压根没有可下载的单二进制产物"）、`docs/security-notice.md`、`docs/architecture.md`、
+  `docs/usage.md`、`AGENTS.md` §2 那段"本机一次运维例外"按现状改写 + §5.14 补三个新产地 + §7 补
+  一条局限。`docs/roadmap.md` 里 续54 / 续59-3 那两段是**当时的实测记录**，不改历史条目。
+- 门禁：`./.venv/bin/python tests/smoke.py` ⇒ **SMOKE PASS**，组打印 **189** 行
+  （判据 `grep -cE '^\[[0-9]'`；上一轮终验 `logs/_gate163c.log` 是 188 行，本轮新增一组 `[8bu]`
+  正好 +1）。刻意不报总行数 —— 续162-附 已说明它不可比。
+
+### 七、留下的（都进了 todo.txt 的下一轮清单）
+
+① 报告/详情页显示"被 `min_severity` 挡掉 N 条"（主理人已答"可以显示"）；② iprecon 每源摊开一行、
+portscan per-host"已扫范围"、jsmine「无站点输入」措辞；③ puredns 的 `verify` 仍是 `None` ⇒
+每次 `--install` 重下 7.8 MB、版本那一格空、`--only-newer` 永不跳过（`--version` 实测在管道下会
+退出，那是行为变更，单独一轮）；④ **Windows/macOS 之外**：Windows 上 puredns 仍会"自动层失败一项"
+⇒ `install.sh` 仍 rc=1，因为官方压根没发 Windows 产物 —— "按平台没有产物"该算失败还是算需手工，
+这个口径要主理人定；⑤ `retry_rounds=1` 只在门禁里做过端到端（浏览器被桩掉），真任务效果待观察。
+
+
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人一句「读取文件1的内容 你自己帮我配置把 要加密」，
 指的是仓库根那个**未跟踪但也没被 ignore** 的文件 `1`（2,946 B、0644、109 行，另一个工具的凭据导出）。

@@ -20,8 +20,11 @@ subfinder/httpx/puredns、`requirements.txt` 得自己记得 `pip install`；至
    官方 `get-pip.py` 引导 —— Ubuntu/Debian 把 ensurepip 拆进 `python3.x-venv` 包，这是常态）；
    ② pip 装依赖：有 `requirements.lock` 且当前解释器预检装得动就吃 lock，否则回落
      `requirements.txt` —— **两种情况都会把"这次吃了哪一份"打进输出**（见 `pick_requirements_file()`）；
-   ③ `toolmgr.update()`（官方产物 + release 自带 SHA256
-   才落盘）。取 get-pip 用的是**另一套同纪律但独立**的白名单（只 `https://bootstrap.pypa.io` +
+   ③ `toolmgr.update()`（官方产物 + **SHA256 校验过**才落盘）。摘要有两个产地：release 自带的
+     checksums 文件，或本框架替某个工具人工核过、钉在 `scanner/toolmgr.py` 里的那份摘要 ——
+     puredns 官方不发 checksums，走的正是第二条（续164：否则 `./install.sh` 在任何新克隆上都必然
+     非 0，而"钉摘要"不是松绑，字节仍必须一字不差，且只装 `pin_version` 那一版）。
+   取 get-pip 用的是**另一套同纪律但独立**的白名单（只 `https://bootstrap.pypa.io` +
    大小上限）—— 刻意不复用 `toolmgr.download_bytes`，把该主机塞进 toolmgr 的白名单等于为了
    一个安装脚本去放宽那条校验红线。
    `toolmgr.MANUAL` 的 nmap / fscan / dirmap **一条请求都不发、一条命令都不代跑**：它们要么
@@ -515,6 +518,10 @@ def probe(settings=None):
         insp = toolmgr.inspect(name)
         detail = f"已装 {cur}" if cur else \
             (insp["reason"] or f"未装（本平台产物：{insp['binary']}）")
+        if not cur and toolmgr.pin(name)[0]:
+            # 钉了版本的工具要说清"装的是哪一版、按什么校验"，否则页面上只写着"未装"，
+            # 用户会以为跟另外两个一样是"跟着 latest 装"（实际是装钉住的那一版）。
+            detail += f"；本框架钉在 {toolmgr.pin(name)[0]}，按人工核过的产物摘要校验"
         if not cur and not _wired:
             detail += "；框架尚未调用它"
         rows.append(_row(name, "auto" if _wired else "pending", _wired,
@@ -700,7 +707,11 @@ def install_auto(only=(), allow_unverified=False, dest_dir=None, wire=True):
                                 allow_unverified=allow_unverified, wire=wire):
             if r.get("ok"):
                 installed.append(r)
-                print(f"[+] {r['tool']} {r.get('version')} → {r.get('path')}")
+                # 校验状态那句话与 CLI / GUI 同源（`toolmgr.verified_label`），这里不另写一份；
+                # `verified is None`（--only-newer 跳过的那类）就**不加括号**，别说成"已校验"。
+                _lbl = toolmgr.verified_label(r)
+                print(f"[+] {r['tool']} {r.get('version')} → {r.get('path')}"
+                      + (f"（{_lbl}）" if _lbl else ""))
             else:
                 failed.append({"name": r["tool"], "reason": r.get("reason") or "未知原因"})
                 print(f"[!] {r['tool']} 未装上：{r.get('reason')}")

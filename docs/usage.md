@@ -450,7 +450,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
 
 ```bash
 # 一把就绪（续99）：自动建 `.venv`、缺 pip 时用官方 get-pip.py 引导、装依赖、
-# 按需下载带官方校验和的外部工具
+# 按需下载外部工具（落盘前必须过 SHA256：官方 checksums，或本框架钉住的产物摘要）
 python3 run_bootstrap.py --install
 
 # 手工等价步骤（目录名请用 .venv —— start.sh 与 run_bootstrap.VENV_DIR 认的就是它）

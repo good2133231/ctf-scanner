@@ -207,9 +207,13 @@ def retryable_shot_error(stored, site=None):
 
 
 def retry_rounds(settings=None):
-    """`screenshot.retry_rounds`：任务正常完成后**最多**再排几轮候补重试；**默认 0＝关**。
+    """`screenshot.retry_rounds`：任务正常完成后**最多**再排几轮候补重试。
 
-    非法值 / 负数一律归 0（= 关，出厂行为一个字都不变），正数夹到 `RETRYABLE_MAX_ROUNDS`。
+    三档要分清：代码 `DEFAULTS` 是 0＝关，**随包 `config/settings.yaml` 出厂写 1**（续164，
+    主理人点单"空闲再重试"）—— 所以 `load_settings()` 拿到的生效值是 1，而这里那个"键不存在时
+    的兜底"仍跟 DEFAULTS 同为 0（`[8bs]` ③a 钉住两边不许分家：兜底跟着文件层走就会让"手工删掉
+    这一行的 settings"静默变成"替目标再发一轮包"）。
+    非法值 / 负数一律归 0（配歪了不许被读成"用默认悄悄打开"），正数夹到 `RETRYABLE_MAX_ROUNDS`。
     排轮的 runner 与页面上那句"上限几轮"都从这里读（§5.14）。
     """
     cfg = (settings or {}).get("screenshot") or {}

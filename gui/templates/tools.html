@@ -19,9 +19,12 @@
     本页是<b>两个联网入口之一</b>（另一个是 <code>python cli/client.py --update-tools</code>）：
     <b>只有点下面的按钮才会联网</b>，扫描期任何阶段都不会自动下载。
     下载只允许 https + 官方主机（{{ hosts|join(' / ') }}，含跳转后的真实地址），
-    单产物上限 {{ max_mb }} MB，默认<b>必须通过 release 自带的 SHA256 校验和</b>（比对不过绝不落盘）；
-    解包只按预期文件名取（不用 <code>extractall</code>，并拒绝 <code>..</code> / 绝对路径成员）。
-    安装目录：<code>{{ dest }}/</code>（当前平台 {{ platform }}）。
+    单产物上限 {{ max_mb }} MB；解包只按预期文件名取（不用 <code>extractall</code>，
+    并拒绝 <code>..</code> / 绝对路径成员）。安装目录：<code>{{ dest }}/</code>（当前平台 {{ platform }}）。
+  </p>
+  <p class="muted small">
+    {{ verify_policy }}
+    （这句取自 <code>scanner/toolmgr.py::verify_policy()</code>，不在页面里手抄 —— 手抄的那份会漂）。
   </p>
   <table>
     <tr><th>工具</th><th>配置值</th><th>解析到的路径</th><th>版本</th><th>状态</th></tr>
@@ -35,6 +38,7 @@
         {% if r.path %}<span class="sev sev-low">OK</span>{% endif %}
         {{ r.note }}
         {% if r.reason %}<span class="muted small">（{{ r.reason }}）</span>{% endif %}
+        {% if r.pinned %}<span class="muted small">（版本钉在 {{ r.pinned }}，按本框架核过的产物摘要校验）</span>{% endif %}
       </td>
     </tr>
     {% endfor %}
@@ -78,7 +82,9 @@
       {% endfor %}
     </p>
     <p><label><input type="checkbox" name="allow_unverified">
-      允许安装<b>没有官方校验和</b>的 release（默认拒绝；装了会如实标注"未校验"）</label></p>
+      允许安装<b>既没有官方 checksums、也没有本框架钉住摘要</b>的 release
+      （默认拒绝；装了会如实标注"未校验"。<b>摘要是钉住的、却与产物对不上时这个勾也没用</b> ——
+      校验不符永远拒装）</label></p>
     <p><label><input type="checkbox" name="no_wire">
       只下载，<b>不</b>写回 config/settings.yaml</label></p>
     <p><label><input type="checkbox" name="only_newer" checked>
@@ -159,8 +165,7 @@
         {% else %}<span class="sev sev-high">未安装</span>{% endif %}
       </td>
       <td class="muted">{{ r.version or '—' }}</td>
-      <td class="muted">{% if r.get('verified') %}SHA256 已校验
-        {% elif r.ok %}未校验（按你的显式要求）{% else %}—{% endif %}</td>
+      <td class="muted">{{ r.verify_label or '—' }}</td>
       <td class="muted">{{ r.path if r.ok else (r.reason or '') }}</td>
     </tr>
     {% endfor %}

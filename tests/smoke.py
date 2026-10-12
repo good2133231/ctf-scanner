@@ -21295,11 +21295,34 @@ expression: r0()
             db.enqueue_task, _q161.notify = _real_enq161, _real_notify161
         return list(_enq161), list(_lg161)
 
-    # ③a 出厂默认必须是**关**。判据只看 DEFAULTS：本机 `config/settings.yaml` 会被策略页整份
-    #    重写（主理人在页面上点一下就变了），拿它当"默认值"就是 §6.2 第一起那一族的复发。
-    assert DEFAULTS["screenshot"]["retry_rounds"] == 0, "出厂默认必须是关，不改现有行为"
+    # ③a **三档分开**（`[8bq]` 立的口径）：代码 DEFAULTS 是 0＝关（不偷改出厂行为），
+    #     **随包 `config/settings.yaml` 写 1**（续164 主理人点单「空闲再重试」），合并后的
+    #     生效值才是 1。判据里的"默认"一律只看 DEFAULTS —— 本机那份文件会被策略页整份重写
+    #     （主理人在页面上点一下就变了），拿它当"默认值"就是 §6.2 第一起那一族的复发。
+    import yaml as _y164
+    _ship164 = _y164.safe_load((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
+    assert DEFAULTS["screenshot"]["retry_rounds"] == 0, \
+        "代码默认必须是关：要开就开在文件层，不许偷改出厂行为（[8bq] 同一口径）"
+    assert _ship164["screenshot"]["retry_rounds"] == 1, \
+        "随包 settings.yaml 该把候补重试打开（续164 点单）；这一行没了＝新克隆静默不重试"
+    _eff164 = load_settings()["screenshot"]["retry_rounds"]
+    assert _eff164 == 1 and _sh161.retry_rounds(load_settings()) == 1, \
+        f"合并后的生效值必须是 1（DEFAULTS={DEFAULTS['screenshot']['retry_rounds']} / 文件=1 两档没接上）"
+    # 读侧"键不存在时的兜底"跟 **DEFAULTS** 同值，**不**跟随包文件：删掉那一行该等于"没配＝关"
+    assert _sh161.retry_rounds({}) == DEFAULTS["screenshot"]["retry_rounds"], \
+        "读侧兜底与 DEFAULTS 分家 ⇒ 少这一行的 settings 会静默变成「替目标再发一轮包」"
     _enq161d, _lg161d = _drive161(DEFAULTS["screenshot"]["retry_rounds"])
-    assert not _enq161d, f"默认关却排了队：{_enq161d}"
+    assert not _enq161d, f"代码默认（0＝关）却排了队：{_enq161d}"
+    # 生效值 1 确实排**一轮**：上面那条证的是 0，这条证的才是主理人实际拿到的行为
+    _enq164, _lg164 = _drive161(_eff164)
+    assert len(_enq164) == 2 and _enq164[1] == ("notify",), f"出厂生效值该排一轮，实得 {_enq164}"
+    (_t164, _mode164, _stg164, _opt164), _kw164 = _enq164[0]
+    assert _stg164 == ["screenshot"] and _opt164["shot_retry_round"] == 1, _enq164[0]
+    assert any("候补第 1/1 轮" in m for m in _lg164), _lg164
+    # 配歪与关掉：99 只排到上限那一轮；**显式 0** 永远一个字都不排（那是唯一一条退路）
+    _enq164b, _lg164b = _drive161(99)
+    assert _enq164b and any(f"候补第 1/{_sh161.RETRYABLE_MAX_ROUNDS} 轮" in m for m in _lg164b), _lg164b
+    assert not _drive161(0)[0], "配 0 还排队＝把「关掉这一档」这条唯一的路走丢了"
 
     # ③b 打开后排**一轮**，四个键逐一点名（少一个键就是页面与 worker 各看一份参数）
     _enq161b, _lg161b = _drive161(2)
@@ -21403,7 +21426,9 @@ expression: r0()
         "模板里抄了第二份档名清单（改档名就成了「页面说重试、代码不重试」）"
     print("[8bs] 续161 截图候补重试 ok: 九档落库标签全部归位（可重试档里实测有 "
           f"{len(_drift161)} 档重新 classify 会跑偏）｜候选 3 条 + 跳过 2 档 + 截成的不重排｜"
-          "默认关不排 / 开 2 轮恰好排一轮（append+单阶段+3 URL+ext_depth=1 逐项点名）｜"
+          "三档分开（DEFAULTS 0＝关 / 随包 settings.yaml 写 1 / 合并生效值 1，而读侧兜底跟 DEFAULTS "
+          "不跟随包文件）：0 一个字不排、生效值恰好排一轮、99 夹到上限；"
+          "开 2 轮也只排第一轮（append+单阶段+3 URL+ext_depth=1 逐项点名）｜"
           "跑满 / 非 done / 已停止 / 没跑截图阶段 四种都不排｜轮数夹 0.."
           f"{_sh161.RETRYABLE_MAX_ROUNDS}｜收尾两处调用顺序钉住")
 
@@ -22961,6 +22986,317 @@ expression: r0()
           "绝不编一个看着能点的地址｜绑回环时一次都不去取出口地址（用会抛的桩验"
           "「根本没被调用」，顺带证明离线 CI 不会被这行拖住）｜合并后含前缀那一行仍不落 server.log｜"
           "换出口地址 ⇒ 那一行跟着变（§5.19）+ 一个「忽略 ext_ip」的自证桩")
+
+    # ---------------- [8bu] 续164-A：puredns 的版本与产物摘要由本框架**钉死** ----------------
+    #      起因是续163 在干净克隆上的实测：`./install.sh` ⇒ **rc=1**，唯一失败项就是 puredns ——
+    #      官方 release 不发 checksums 文件，而"默认必须有校验和才落盘"这条红线不为单个工具松手，
+    #      于是它在自动层里**永远**装不上；`install.sh` 又把"非 0＝有项失败"当契约。两边各自都算
+    #      说真话，合起来就是"每台新机器都得有人手工兜一下"—— 正是用户明确不要的那种事。
+    #      修法不是松红线，而是**换摘要的产地**：`pin_version` + `pin_sha256`（人工核过、写进源文件），
+    #      并且取 release 时**按确切 tag**（不跟 latest）。本组钉六件事：
+    #      ① 钉的**覆盖面**：`asset_name` 能产出的每个平台产物都得有摘要，形状是 64 位小写十六进制，
+    #         且不许四件产物共用一个（少一个平台＝那个平台照样装不上，症状看着像"这台机器网络不好"）；
+    #      ② 校验强度没降：字节与钉住的摘要不符 → 拒装，**`allow_unverified` 也越不过去**
+    #         （"校验不符"与"根本没有校验依据"是两件事，只有后者归那个开关管）；
+    #      ③ tag 与钉住的版本不一致 → 拒装，**即便那一次 release 自带的 checksums 能对上也不算**：
+    #         认钉住的版本就是认它的摘要，中途把口径换成官方文件等于没钉；
+    #      ④ "该看哪一个 release"只有一处判据：钉了版本必须**带 `tag=` 调用**
+    #         （变异＝退回"永远看 latest"，那时 ③ 会让安装必然失败）；
+    #      ⑤ 「校验」那句话同源：`verified_label()` / `verify_policy()` 从 TOOLS 现取，
+    #         CLI / GUI / run_bootstrap / 模板都不许再抄一份成句（§5.19）；
+    #      ⑥ `check_updates` 对钉了版本的工具**不许**报 has_update=True —— 报了就是诱导人去按
+    #         「更新」，而那一次必然走到 ③ 的拒装（比不报更糟）。
+    import ast as _ast8bu
+    import hashlib as _hl8bu
+    import io as _io8bu
+    import tarfile as _tf8bu
+    from scanner import toolmgr as _tm8bu
+
+    _d8bu = _TMPDIR / "toolmgr8bu"
+    _d8bu.mkdir(parents=True, exist_ok=True)
+    _os8bu, _ar8bu = _tm8bu.host_arch()
+    _pv8bu, _pm8bu = _tm8bu.pin("puredns")
+    _bin8bu = _tm8bu.binary_name("puredns")
+    _asset8bu = _tm8bu.asset_name("puredns", _pv8bu, _os8bu, _ar8bu) or "puredns-Linux-amd64.tgz"
+    _combo8bu = [(_o, _a) for _o in ("linux", "macOS") for _a in ("amd64", "arm64")]
+
+    def _mktgz8bu(payload):
+        _b8bu = _io8bu.BytesIO()
+        with _tf8bu.open(fileobj=_b8bu, mode="w:gz") as _t8bu:
+            _m8bu = _tf8bu.TarInfo("puredns")
+            _m8bu.size, _m8bu.mode = len(payload), 0o755
+            _t8bu.addfile(_m8bu, _io8bu.BytesIO(payload))
+        return _b8bu.getvalue()
+
+    def _cover_gap8bu(tool, ver=None):
+        """该工具**缺摘要**的平台产物清单（判据只这一处，① 与它的变异夹具都喂给它）。
+
+        `ver` 是"按哪个版本号算产物名"（`asset_name` 没有版本号就编不出名字）：默认用钉住的那版，
+        没钉版本的工具要显式给一个，否则这里看到的只有 `None`。
+        """
+        _p, _m = _tm8bu.pin(tool)
+        _ver = ver or _p or "v0.0.0"
+        return sorted({_tm8bu.asset_name(tool, _ver, _o, _a) for _o, _a in _combo8bu}
+                      - set(_m) - {None})
+
+    # ---- ① 覆盖面与形状（钉漏一个平台，等于那个平台的机器仍然装不上）----
+    assert _pv8bu and _pm8bu, (_pv8bu, sorted(_pm8bu))
+    assert _cover_gap8bu("puredns") == [], f"钉住的摘要没覆盖全部平台产物：{_cover_gap8bu('puredns')}"
+    assert all(re.fullmatch(r"[0-9a-f]{64}", str(v)) for v in _pm8bu.values()), \
+        "摘要必须是 64 位小写十六进制（大写或短串会在比对时永远对不上）"
+    assert len(set(_pm8bu.values())) == len(_pm8bu), "几个产物共用一个摘要＝复制粘贴漏改，等于没钉"
+    # 反向自证：**没钉**版本号的工具（subfinder）走同一个判据必须报出**全部**平台产物 ——
+    # 否则"缺口为 0"可能只是判据自己空跑（本项目撞过第七次的那类假绿）。
+    assert _cover_gap8bu("subfinder", "v2.16.0") == sorted(
+        _tm8bu.asset_name("subfinder", "v2.16.0", _o, _a) for _o, _a in _combo8bu), \
+        f"缺口判据对没钉版本的工具应当全报，实得 {_cover_gap8bu('subfinder', 'v2.16.0')}"
+    # 变异（§6.1）：抽掉一个平台的摘要 → 同一个判据必须报出那一个（否则 ① 是空写）
+    _real_pm8bu = _tm8bu.TOOLS["puredns"]["pin_sha256"]
+    try:
+        _tm8bu.TOOLS["puredns"]["pin_sha256"] = {k: v for k, v in _real_pm8bu.items()
+                                                if k != "puredns-macOS-arm64.tgz"}
+        assert _cover_gap8bu("puredns") == ["puredns-macOS-arm64.tgz"], \
+            "抽掉一个平台摘要后判据不报警 → ① 测的是空气"
+    finally:
+        _tm8bu.TOOLS["puredns"]["pin_sha256"] = _real_pm8bu
+    assert _cover_gap8bu("puredns") == [], "还原后覆盖面判据该重新变绿"
+
+    # ---- ②③ 校验强度与"只认钉住的那一版" ----
+    _good8bu = _mktgz8bu(b"FAKE-PUREDNS-PAYLOAD-8bu")
+    _bad8bu = _mktgz8bu(b"TAMPERED-PUREDNS-8bu")
+    _rel8bu = {"tag": _pv8bu, "assets": {_asset8bu: "https://github.com/x/" + _asset8bu}}
+    _pin2 = dict(_real_pm8bu)
+    _pin2[_asset8bu] = _hl8bu.sha256(_good8bu).hexdigest()
+    try:
+        _tm8bu.TOOLS["puredns"]["pin_sha256"] = _pin2
+        _r1 = _tm8bu.install("puredns", dest_dir=str(_d8bu), wire=False,
+                             release=_rel8bu, blob={_asset8bu: _good8bu})
+        assert _r1["ok"] and _r1["verified"] is True \
+            and _r1["verify_source"] == _tm8bu.VERIFY_PINNED, _r1
+        assert (_d8bu / _bin8bu).read_bytes() == _tm8bu.extract_binary(_good8bu, _asset8bu, _bin8bu), \
+            "落盘的字节必须就是归档里那一个成员"
+        assert _tm8bu.verified_label(_r1) == "SHA256 已校验（本框架钉住的产物摘要）", \
+            _tm8bu.verified_label(_r1)
+
+        # ② 篡改产物：拒装，且**显式 allow_unverified 也越不过去**（校验不符 ≠ 没有校验依据）
+        _r2 = _tm8bu.install("puredns", dest_dir=str(_d8bu / "n2"), wire=False,
+                             release=_rel8bu, blob={_asset8bu: _bad8bu}, allow_unverified=True)
+        assert not _r2["ok"] and _r2["verified"] is None and "校验不符" in _r2["reason"], _r2
+        assert "钉住的产物摘要" in _r2["reason"], f"要说出期望值从哪来（人要照着核对）：{_r2['reason']}"
+        assert not (_d8bu / "n2").exists(), "拒装时连目录都不该建（更不许留 .part 半成品）"
+        assert not list(_d8bu.glob("*.part"))
+        assert (_d8bu / _bin8bu).exists(), "已装好的那份不许被动过"
+
+        # ③ tag 对不上：拒装（连下载都不该发起 —— 新字节的摘要没核过就不进这台机器）
+        _r3 = _tm8bu.install("puredns", dest_dir=str(_d8bu / "n3"), wire=False,
+                             release={"tag": "v9.9.9",
+                                      "assets": {_asset8bu: "https://github.com/x/" + _asset8bu}},
+                             blob={_asset8bu: _good8bu})
+        assert not _r3["ok"] and "钉在" in _r3["reason"] and "v9.9.9" in _r3["reason"], _r3
+        assert not (_d8bu / "n3").exists(), "版本对不上时不该走到下载/落盘那一步"
+
+        # ③b 那一次 release **自带** checksums 且能与篡改字节对上 —— 仍然拒装：
+        #     认钉住的版本就是认它的摘要，中途把口径换成官方文件等于没钉。
+        _csum8bu = (f"{_hl8bu.sha256(_bad8bu).hexdigest()}  {_asset8bu}\n").encode()
+        _r3b = _tm8bu.install("puredns", dest_dir=str(_d8bu / "n3b"), wire=False,
+                              release={"tag": "v9.9.9", "assets": {
+                                  _asset8bu: "https://github.com/x/" + _asset8bu,
+                                  "puredns_9.9.9_checksums.txt": "https://github.com/x/c.txt"}},
+                              blob={_asset8bu: _bad8bu, "puredns_9.9.9_checksums.txt": _csum8bu})
+        assert not _r3b["ok"] and "钉在" in _r3b["reason"], \
+            f"官方 checksums 能对上就装 ⇒ 钉住的版本等于没钉：{_r3b['reason']}"
+
+        # ④ 钉了版本 ⇒ 取 release 必须带 `tag=`（"该看哪一版"只此一处判据）
+        _calls8bu = []
+
+        def _fetch8bu(repo, timeout=30, tag=""):
+            _calls8bu.append((repo, tag))
+            return {"tag": tag or "vLATEST",
+                    "assets": {_asset8bu: "https://github.com/x/" + _asset8bu}}
+
+        _rr8bu = _tm8bu.update(["puredns"], dest_dir=str(_d8bu / "n4"), wire=False,
+                               fetch=_fetch8bu, blobs={"puredns": {_asset8bu: _good8bu}})
+        assert _rr8bu[0]["ok"] and _rr8bu[0]["verify_source"] == _tm8bu.VERIFY_PINNED, _rr8bu
+        assert _calls8bu == [("d3mondev/puredns", _pv8bu)], \
+            f"钉了版本却没按 tag 取 release：{_calls8bu}"
+        # 没钉版本的工具**不该**被塞进 tag 分支（那会把"跟 latest"的既有语义一起改掉）
+        _calls8bu.clear()
+        assert _tm8bu._release_for("subfinder", _fetch8bu, 5)["tag"] == "vLATEST", _calls8bu
+        assert _calls8bu == [("projectdiscovery/subfinder", "")], _calls8bu
+
+        def _naive8bu(tool, fetch=None, timeout=120):
+            """被修掉的旧行为：永远看 latest（不认 pin_version）。"""
+            return (fetch or _tm8bu.fetch_release)(_tm8bu.TOOLS[tool]["repo"], timeout=timeout)
+
+        _real_rf8bu = _tm8bu._release_for
+        _tm8bu._release_for = _naive8bu
+        try:
+            _calls8bu.clear()
+            _rr2 = _tm8bu.update(["puredns"], dest_dir=str(_d8bu / "n5"), wire=False,
+                                 fetch=_fetch8bu, blobs={"puredns": {_asset8bu: _good8bu}})
+            assert not _rr2[0]["ok"] and "钉在" in _rr2[0]["reason"], \
+                f"变异（不传 tag）却仍装成功 → ④ 没真盯住：{_rr2[0]}"
+            assert _calls8bu == [("d3mondev/puredns", "")], _calls8bu
+        finally:
+            _tm8bu._release_for = _real_rf8bu
+        # 还原后同一份输入必须重新装得上（否则上面那条红是因为夹具自己坏了）
+        _calls8bu.clear()
+        assert _tm8bu.update(["puredns"], dest_dir=str(_d8bu / "n6"), wire=False,
+                             fetch=_fetch8bu,
+                             blobs={"puredns": {_asset8bu: _good8bu}})[0]["ok"], _calls8bu
+    finally:
+        _tm8bu.TOOLS["puredns"]["pin_sha256"] = _real_pm8bu
+
+    # ---- ⑤ 「校验」那句话只有一个产地（扫 AST 字符串字面量并**排除 docstring**）----
+    def _pylits8bu(src):
+        _tree = _ast8bu.parse(src)
+        _docs = set()
+        for _n in _ast8bu.walk(_tree):
+            if isinstance(_n, (_ast8bu.Module, _ast8bu.ClassDef, _ast8bu.FunctionDef,
+                               _ast8bu.AsyncFunctionDef)):
+                _b = getattr(_n, "body", None)
+                if _b and isinstance(_b[0], _ast8bu.Expr) \
+                        and isinstance(_b[0].value, _ast8bu.Constant) \
+                        and isinstance(_b[0].value.value, str):
+                    _docs.add(id(_b[0].value))
+        return [n.value for n in _ast8bu.walk(_tree)
+                if isinstance(n, _ast8bu.Constant) and isinstance(n.value, str)
+                and id(n) not in _docs]
+
+    _BAN8bu = ("SHA256 已校验", "必须通过 release 自带的 SHA256")
+    # 判据自证（§6.1）：同一个扫描器必须抓得住"实现里抄了一句"，且不误抓说明文字里的反例
+    assert any("SHA256 已校验" in x for x in _pylits8bu('x = "SHA256 已校验（抄的一份）"\n')), \
+        "自证夹具失效：这个字面量扫描器抓不住被抄的成句"
+    assert not any("SHA256 已校验" in x for x in
+                   _pylits8bu('def f():\n    """SHA256 已校验 —— 这里是解释为什么不许抄"""\n')), \
+        "自证夹具失效：docstring 里的解释被当成了实现（本项目第七次撞同一件事）"
+    _drift8bu = []
+    for _f8bu in ("cli/client.py", "run_bootstrap.py", "gui/app.py"):
+        _drift8bu += [_f8bu] if any(any(b in x for b in _BAN8bu)
+                                    for x in _pylits8bu((ROOT / _f8bu).read_text(
+                                        encoding="utf-8", errors="replace"))) else []
+    assert _drift8bu == [], f"「校验」那句话只能写在 scanner/toolmgr.py：{_drift8bu}"
+    assert any("SHA256 已校验（本框架钉住的产物摘要）" in x
+               for x in _pylits8bu((ROOT / "scanner" / "toolmgr.py").read_text(
+                   encoding="utf-8", errors="replace"))), "产地那一侧必须扫得到（否则上面是空跑）"
+    _tpl8bu = re.sub(r"\{#.*?#\}|<!--.*?-->", "",
+                     (ROOT / "gui" / "templates" / "tools.html").read_text(
+                         encoding="utf-8", errors="replace"), flags=re.S)
+    assert "SHA256 已校验" not in _tpl8bu, "页面又抄了一份校验文案 ⇒ 与 toolmgr.verified_label 分家"
+    assert re.search(r"\{\{\s*r\.verify_label\b", _tpl8bu) and "{{ verify_policy }}" in _tpl8bu, \
+        "页面没走同源文案（那两句话是 verify_policy()/verified_label() 印出来的）"
+    for _f8bu in ("cli/client.py", "run_bootstrap.py", "gui/app.py"):
+        assert "verified_label" in (ROOT / _f8bu).read_text(encoding="utf-8", errors="replace"), \
+            f"{_f8bu} 不再调 toolmgr.verified_label ⇒ 那一格开始各说各话"
+    # 本模块自己就有 `inspect()`，`import inspect` 会被它**整名遮蔽**（本轮实测 AttributeError）：
+    # 用 AST 钉住"别把 stdlib inspect 引回来"，否则下次谁想探测签名就是一颗必响的哑弹。
+    _tt8bu = _ast8bu.parse((ROOT / "scanner" / "toolmgr.py").read_text(encoding="utf-8"))
+    assert any(isinstance(n, _ast8bu.FunctionDef) and n.name == "inspect" for n in _ast8bu.walk(_tt8bu)), \
+        "自证夹具失效：toolmgr 本来就该有自己的 inspect()"
+    assert not [n for n in _ast8bu.walk(_tt8bu) if isinstance(n, _ast8bu.Import)
+                and any(str(a.name).split(".")[0] == "inspect" for a in n.names)], \
+        "toolmgr 里 `import inspect` 会被本模块自己的 inspect() 遮蔽（AttributeError）"
+
+    # ---- ⑥ 钉了版本的工具不许被报成"有新版本、点一下就能更新" ----
+    import scanner.utils as _u8bu
+    _ow8bu, _orw8bu = _u8bu.which, _u8bu.run_cmd
+    _u8bu.which = lambda name: "/fake/" + str(name)
+    _u8bu.run_cmd = lambda argv, **kw: (0, "puredns version v2.1.1", "")
+
+    def _late8bu(repo, timeout=30, **kw):
+        """桩：官方 latest 已经跑到 v9.9.9（比钉住的那版新）。"""
+        return {"tag": "v9.9.9", "assets": {}}
+    try:
+        _up8bu = {r["tool"]: r for r in _tm8bu.check_updates(
+            {"tools": {"puredns": "puredns"}}, fetch=_late8bu)}
+    finally:
+        _u8bu.which, _u8bu.run_cmd = _ow8bu, _orw8bu
+    _pr8bu = _up8bu["puredns"]
+    assert _pr8bu["pinned"] == _pv8bu and _pr8bu["has_update"] is False, _pr8bu
+    assert "钉在 " + _pv8bu in _pr8bu["reason"] and "官方最新 v9.9.9" in _pr8bu["reason"], _pr8bu["reason"]
+    # 变异（M-⑥）：把 pin_version 摘掉（当成没钉的工具）—— 同一份输入必须改口报"有新版本"，
+    # 否则上面那条 has_update is False 只是空写（结论根本没被 pin 驱动）。
+    _pd8bu = dict(_tm8bu.TOOLS["puredns"])
+    try:
+        _tm8bu.TOOLS["puredns"]["pin_version"] = ""
+        _tm8bu.TOOLS["puredns"]["verify"] = "--version"      # 让它问得出本机版本（比对才有输入）
+        _u8bu.which = lambda name: "/fake/" + str(name)
+        _u8bu.run_cmd = lambda argv, **kw: (0, "puredns version v2.1.1", "")
+        try:
+            _up2 = {r["tool"]: r for r in _tm8bu.check_updates(
+                {"tools": {"puredns": "puredns"}}, fetch=_late8bu)}
+        finally:
+            _u8bu.which, _u8bu.run_cmd = _ow8bu, _orw8bu
+        assert _up2["puredns"]["has_update"] is True, \
+            "摘掉 pin 之后仍不报「有新版本」⇒ 判据压根没被 pin 驱动，⑥ 是空写"
+    finally:
+        _tm8bu.TOOLS["puredns"] = _pd8bu
+    assert _tm8bu.pin("puredns")[0] == _pv8bu, "还原后 pin 必须回来"
+    assert _tm8bu.verify_policy().count("puredns") == 1 \
+        and "官方 release 自带的 checksums" in _tm8bu.verify_policy(), _tm8bu.verify_policy()
+    assert "钉在 " + _pv8bu in _tm8bu.verify_policy(), f"政策句要跟着 TOOLS 走：{_tm8bu.verify_policy()}"
+
+    # ---- ⑦ `--check` 打给用户的出路句**当场走得通** ----
+    #      本轮把 puredns 变成"真能一键装"之后才暴露出来的：`--update-tools` 装成功也 rc=1，
+    #      因为 `do_update_tools()` 只在"有工具没装上"时 sys.exit(1)，成功就 return 回 main()，
+    #      然后一路掉进扫描流程撞上那句「未提供目标」。干净克隆实测（2026-10-12，原话）：
+    #        httpx  OK  v1.12.0（SHA256 已校验（官方 checksums））→ tools/scanner/httpx
+    #        [!] 未提供目标：使用 -f 目标文件 或 -t 单目标      ← rc=1
+    #      以前没人看见这一支：那条命令在第一步就被红线拒了。§6.1 要求证伪 ⇒ 同一个判据
+    #      还要吃一份**去掉守卫**的变异体（写到 logs/ 下的一次性副本，跑完就删；它不参与提交，
+    #      所以 `read_text()` 把 CRLF 归一成 LF 无所谓 —— 但**绝不用这套写法改真文件**，§9）。
+    import contextlib as _cl8bu
+    import importlib.util as _ilu8bu
+
+    _ok8bu = [{"tool": "httpx", "ok": True, "version": "v1.12.0", "path": "tools/scanner/httpx",
+               "verified": True, "verify_source": _tm8bu.VERIFY_RELEASE, "wired": True}]
+
+    def _run_cli8bu(path, tag):
+        """把 client.py 的**某一份**（真实 / 变异体）当一个 CLI 跑一遍，返回 `(退出码, 输出)`。"""
+        _spec8bu = _ilu8bu.spec_from_file_location(f"_smoke_cli_{tag}", str(path))
+        _m8bu = _ilu8bu.module_from_spec(_spec8bu)
+        _spec8bu.loader.exec_module(_m8bu)
+        _oa8bu, _oup8bu = list(sys.argv), _tm8bu.update
+        _tm8bu.update = lambda *a, **k: list(_ok8bu)
+        sys.argv = ["client.py", "--update-tools", "--tool", "httpx"]
+        _buf8bu = _io8bu.StringIO()
+        _rc8bu = "没退出"
+        try:
+            with _cl8bu.redirect_stdout(_buf8bu):
+                _m8bu.main()
+        except SystemExit as _se8bu:
+            _rc8bu = _se8bu.code
+        finally:
+            sys.argv, _tm8bu.update = _oa8bu, _oup8bu
+        return _rc8bu, _buf8bu.getvalue()
+
+    _rc8bu, _out8bu = _run_cli8bu(ROOT / "cli" / "client.py", "real")
+    assert _rc8bu == "没退出" and "未提供目标" not in _out8bu, \
+        f"--update-tools 装成功却掉进扫描流程（rc={_rc8bu}）：{_out8bu[-200:]!r}"
+    assert "SHA256 已校验（官方 checksums）" in _out8bu, f"那句话没走 verified_label：{_out8bu[-200:]!r}"
+    _naive_src, _n8bu = re.subn(
+        r"        if not \(args\.bootstrap or args\.bootstrap_install\):\n            return\n",
+        "", (ROOT / "cli" / "client.py").read_text(encoding="utf-8"), count=1)
+    assert _n8bu == 1, "变异锚点没命中（守卫的形状漂了）⇒ ⑦ 这条证伪是空写，去同步锚点"
+    _np8bu = ROOT / "logs" / "_naive_client164.py"
+    _np8bu.write_text(_naive_src, encoding="utf-8")
+    try:
+        _rc2, _out2 = _run_cli8bu(_np8bu, "naive")
+        assert _rc2 == 1 and "未提供目标" in _out2, \
+            f"去掉守卫的变异体居然没退回旧行为 ⇒ ⑦ 没真盯住：rc={_rc2}"
+    finally:
+        _np8bu.unlink(missing_ok=True)
+
+    print("[8bu] 续164-A puredns 钉版本 + 自核摘要 ok: 钉住的摘要逐个平台覆盖（抽掉一个立刻报警）｜"
+          "字节与钉住的摘要不符 → 拒装、不建目录、不动已装好的，且 `--allow-unverified` 越不过去｜"
+          "tag 与 pin_version 不一致 → 连下载都不发起（**即便那一次自带 checksums 能与字节对上**）｜"
+          "取 release 必须带 tag=（变异：退回看 latest ⇒ 安装必然失败）；没钉版本的工具不受影响｜"
+          "「校验」那句话只在 toolmgr 一处（AST 扫字面量、排除 docstring，夹具自证），"
+          "CLI / GUI / run_bootstrap / 模板都调 verified_label/verify_policy｜"
+          "钉了版本的工具在 check_updates 里不许被报成『有新版本』（变异：摘掉 pin ⇒ 必须改口）｜"
+          "顺带钉住『别在 toolmgr 里 import inspect』—— 本模块自己就有个 inspect()，会整名遮蔽｜"
+          "`--check` 那句出路当场走得通：--update-tools 装成功不再掉进扫描流程（rc=0），"
+          "同一判据吃过一份**去掉守卫**的变异体 ⇒ 它必须退回 rc=1 + 那句「未提供目标」")
 
     print("SMOKE PASS")
 

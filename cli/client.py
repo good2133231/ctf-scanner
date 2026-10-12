@@ -197,7 +197,7 @@ def do_update_tools(args):
         sys.exit(1)
     os_label, arch = toolmgr.host_arch()
     print(f"[*] 外部工具更新：平台 {os_label}/{arch}"
-          f"（{'允许未校验安装' if args.allow_unverified else '默认必须通过校验和'}；"
+          f"（{'允许未校验安装' if args.allow_unverified else '默认必须过 SHA256（摘要产地见 toolmgr）'}；"
           f"{'仅下载，不写回配置' if args.no_wire else '装好后写回 config/settings.yaml'}）")
     results = toolmgr.update(names or None, dest_dir=args.tools_dest,
                              allow_unverified=args.allow_unverified,
@@ -214,7 +214,9 @@ def do_update_tools(args):
         if r.get("skipped"):
             print(f"  {r['tool']:<10} 已是最新 {tag}，跳过（--only-newer）")
             continue
-        mark = "SHA256 已校验" if r.get("verified") else "**未校验**，按你的显式要求"
+        # 那句话的产地只在 `toolmgr.verified_label()`：CLI / GUI / run_bootstrap 三处共用，
+        # 各写一份就会出现"命令行说已校验、页面说未校验"这种分裂（摘要产地换成两个以后尤其如此）。
+        mark = toolmgr.verified_label(r)
         print(f"  {r['tool']:<10} OK  {tag}（{mark}）→ {r['path']}")
         if r.get("wired") is False and r.get("reason"):
             print(f"     注意：{r['reason']}")
@@ -692,6 +694,12 @@ def main():
         sys.exit(check_afrog_pocs(settings, args.check_afrog_pocs))
     if args.update_tools:
         do_update_tools(args)
+        # 装完工具就该**收工**。原先这里直接往下走，于是掉进扫描流程，撞上那句「未提供目标」
+        # 并 sys.exit(1) —— 一次**成功**的安装被脚本 / CI 判成失败（2026-10-12 干净克隆实测：
+        # `httpx OK v1.12.0（SHA256 已校验…）` 那行明明印着，rc 仍是 1）。
+        # 给了 --bootstrap* 时才继续往下：那条路复用同一批开关（--tool / --allow-unverified / …）。
+        if not (args.bootstrap or args.bootstrap_install):
+            return
     if args.bootstrap or args.bootstrap_install:
         # 复用既有开关（--tool/--allow-unverified/--no-wire/--tools-dest），不另立一套
         import run_bootstrap

@@ -282,8 +282,9 @@
     <p class="muted small">任务<b>正常跑完</b>后，把这一轮<b>没截成</b>、且失败原因落在
       「{{ shot_retry_note }}」这几档的站点<b>排进队列再试一轮</b>：那一轮只跑
       <span class="mono">screenshot</span> 阶段、只打这批 URL，等前面的任务跑完、worker
-      空了才执行（这就是「空闲再重试」，不是另起一个进程）。<b>0＝关</b>（默认，行为与不开时
-      逐字相同），最多 2 轮。<b>「无浏览器」与「预算耗尽 / 已停止」不重试</b> —— 前者重试还是
+      空了才执行（这就是「空闲再重试」，不是另起一个进程）。<b>随包出厂是 1 轮</b>（续164 按
+      主理人点单打开；代码默认仍是关，开在 <code>config/settings.yaml</code> 这一层），
+      <b>填 0＝关</b>，行为与续161 之前逐字相同；上限 2 轮。<b>「无浏览器」与「预算耗尽 / 已停止」不重试</b> —— 前者重试还是
       没浏览器，后者是人和预算在拦，绕过停止是红线。</p>
     <label>浏览器路径（留空＝自动探测 Edge/Chrome） <input name="screenshot_browser"
       value="{{ s.screenshot.browser }}" placeholder="留空自动探测（PATH → 注册表 → 标准安装位置）"></label>

@@ -424,8 +424,8 @@ def _maybe_queue_shot_retry(ctx, task_id, stages, options, logger):
     要隔一会儿再说本来就有阶段内那次重试与队列排队管着）。
 
     四条边界，缺一条就变成"对打不通的站点无限发包"：
-    1. `screenshot.retry_rounds` **默认 0＝关**（不改现有行为；夹取与上限都在
-       `screenshot.retry_rounds()` 一处）；
+    1. `screenshot.retry_rounds` 为 0 就不排（代码 DEFAULTS 是 0，**随包 settings.yaml 出厂写 1**
+       —— 续164；夹取与上限都在 `screenshot.retry_rounds()` 一处，这里不另写一份默认值）；
     2. 只重试 `screenshot.RETRYABLE_REASONS` 那三档，`无浏览器` / `预算或已停止` 一次都不重；
     3. 收场状态不是 `done`（未正常完成 / 已停止 / 已被「追加层数」重新排队）都不排 ——
        这一条顺带保证了**层数追加优先**：`_maybe_queue_next_layer` 先跑，它一入队状态就变
