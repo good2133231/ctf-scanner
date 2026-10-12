@@ -418,6 +418,10 @@ def main():
 
     # 2c) favicon 平台指纹（mmh3）与外部情报模块（iprecon / fofa）的纯函数行为
     settings = load_settings()
+    # 「出厂默认」类判据一律吃 DEFAULTS，**不吃本机 settings.yaml**（§6.2 第一起同族：
+    # 续159 用户在策略页把 ctlog 打开，`ctlog_mod.enabled(settings)` 那条当场红，
+    # 现象长得像代码坏了 —— 判据要问的是「新克隆拿到什么」，不是「这台机改过什么」）。
+    from scanner.config import DEFAULTS as _DEF5
     for data, want in mmh3.SELF_TEST:      # 公开已知向量：算法写错立刻暴露
         assert mmh3.hash32(data) == want, (data, mmh3.hash32(data), want)
     assert mmh3.favicon_hash(b"") == 0
@@ -3390,11 +3394,14 @@ workflows:
         owasp_checks._get = _orig_get5
 
     # ---- ② A10 SSRF 受控回连（默认关 + 本机监听自证 + 外部回调不谎报）----
-    assert ssrf_mod.enabled(settings) is False, "ssrf 必须默认关"
+    assert ssrf_mod.enabled(_DEF5) is False, "ssrf 出厂必须默认关（判据吃 DEFAULTS，见 2c 开头）"
+    # 同上：SSRF 的"默认关"这一档也自己造一份关着的，不吃本机 settings.yaml
+    # （续159 这台机上 ctlog 就是被页面打开后把同类判据变成"真的发请求"的）。
+    _ss_off5 = copy.deepcopy(_DEF5)
     _calls5 = []
     owasp_checks._get = lambda u, s, **kw: (_calls5.append(u), None)[1]
     try:
-        assert owasp_checks._ssrf_callback(targets, settings) is None
+        assert owasp_checks._ssrf_callback(targets, _ss_off5) is None
     finally:
         owasp_checks._get = _orig_get5
     assert not _calls5, "默认关时 SSRF 检查一个请求都不该发"
@@ -3668,7 +3675,7 @@ workflows:
         quake_mod.http_request = _orig_qk5
 
     # ---- ⑤ CT 日志（crt.sh）：非 JSON/限流容错 + 通配符处理 + 默认关门控 ----
-    assert ctlog_mod.enabled(settings) is False, "ctlog 必须默认关"
+    assert ctlog_mod.enabled(_DEF5) is False, "ctlog 出厂必须默认关（判据吃 DEFAULTS，见 2c 开头）"
     assert ctlog_mod.build_url("example.com") == "https://crt.sh/?q=example.com&output=json"
     _ct5 = _json5.dumps([
         {"issuer_name": "C=US, O=Let's Encrypt, CN=R3", "common_name": "a.example.com",
@@ -3707,11 +3714,16 @@ workflows:
         ctlog_mod.http_request = _orig_ct5
     assert _rr5 == [] and "429" in _ee5 and "限流" in _ee5, _ee5
     assert _ct_calls and all("auth" not in kw for _, kw in _ct_calls), "第三方出口绝不能带登录态"
-    # 默认关 → 一次请求都不发
+    # 默认关 → 一次请求都不发。**关**这一档必须自己造（续159 §6.2 第一起同族复发）：
+    # 本机 settings.yaml 里 ctlog 被用户在策略页打开了，拿实时那份当"默认关"用，
+    # 现象是"这条判据真的打到了 crt.sh"—— 判据问的是"关着会不会发请求"，
+    # 那就必须交一份明确关着的配置给它，不能吃这台机器恰好是什么。
+    _ct_off5 = copy.deepcopy(settings)
+    _ct_off5["ctlog"] = dict(_ct_off5.get("ctlog") or {}, enabled=False)
     _ct_calls.clear()
     ctlog_mod.http_request = _ct_http
     try:
-        _rr6, _ee6 = ctlog_mod.search("example.com", settings)
+        _rr6, _ee6 = ctlog_mod.search("example.com", _ct_off5)
     finally:
         ctlog_mod.http_request = _orig_ct5
     assert _rr6 == [] and "ctlog.enabled=false" in _ee6 and not _ct_calls, (_ee6, _ct_calls)
@@ -20901,6 +20913,96 @@ expression: r0()
     assert "复核台账" not in _td157, "旧的「复核台账」那栏没换成可视化"
     print("[8bo] 续157 #7 漏洞可视化总览 ok: poc_id → 来源四桶（内置检查/POC/afrog/js-secret）｜"
           "级别 × 来源计数 + 小计/合计 + 每目标命中数（按命中降序）｜详情页渲染该总览、旧「复核台账」已移除")
+
+    # ---------------- [8bp] 续159：断点续跑不许把下游降级成「只扫目标」（§6.2 第十四起）----------------
+    #      真机教训：授权目标那次 portscan 跑到一半进程被终止，重启对账自动续跑 ——
+    #      `ctx.results` 每次构造都是空的（`runner.py:153`），而 portscan / probe 的域名候选
+    #      只读内存里的 `domains_for_probe`，于是主机 9→1、探测候选 18→2、站点 0、漏洞 0，
+    #      而任务终态照旧 done / 100% / `error` 空。修法＝候选主机走 `extdom.own_hosts`
+    #      （内存 ∪ 库，own 口径），形状与 `jsmine` 的站点回退、`probe` 的端口回退一致。
+    import ast as _ast159
+    import inspect as _ins159
+    from scanner import extdom as _xd159
+    from scanner.stages import probe as _pb159
+
+    _lg159 = []
+
+    class _Rec159:
+        def info(self, m, *a): _lg159.append(str(m))
+        def warning(self, m, *a): _lg159.append(str(m))
+        def error(self, m, *a): _lg159.append(str(m))
+        def exception(self, m, *a): _lg159.append(str(m))
+        def debug(self, m, *a): pass
+
+    _t159 = "targ8bp.test"
+    _tid159 = db.create_task("smoke-8bp", _t159, ["subdomain", "portscan", "probe"], {})
+    db.insert_subdomains(_tid159, [(f"h{i}.{_t159}", "subfinder") for i in range(4)]
+                         + [("other8bp.victim.test", "osint:cseg"),
+                            ("junk8bp.jsdelivr.net", "js:mine")])
+
+    # ① 判据先自证（§6.1）：own 口径必须**恰好拦住**那两条别人的行，而不是恒空 / 恒放行
+    _own159 = _xd159.own_hosts(_tid159)
+    assert len(_own159) == 4, f"own_hosts 应只收自家 4 个，实得 {_own159}"
+    assert "other8bp.victim.test" not in _own159 and "junk8bp.jsdelivr.net" not in _own159, \
+        "js:/osint: 那两路是别人的资产面 —— 进候选就是越权发请求"
+    # ② 归属判据不写第二遍（§5.14）：LIKE 只许待在 db.list_own_subdomains 那条 SQL 里
+    assert "LIKE" not in _ins159.getsource(_xd159.own_hosts), \
+        "own 口径的 LIKE 判据只能在 SQL 那一处（续154 就是 Python/SQL 各一份不同源）"
+
+    def _probe_cands159(backfill=True):
+        """跑一遍 probe 的候选组装（工具与网络全桩住），返回候选 URL 清单。"""
+        _lg159.clear()
+        _seen = {}
+        _keep = _pb159.probe_candidates
+        _orig_own = _xd159.own_hosts
+        _pb159.probe_candidates = lambda ctx, cands: (_seen.__setitem__("c", list(cands)) or [])
+        try:
+            if not backfill:                      # 变异档：退回「只读内存」的旧行为
+                _xd159.own_hosts = lambda task_id, extra=(), logger=None, **kw: list(extra or ())
+            _ctx159 = StageContext(_tid159, "smoke-8bp", parse_lines([_t159]), ["probe"], {},
+                                   load_settings(), str(Path(_TMPDIR) / "8bp"), _Rec159())
+            _pb159.ProbeStage(_ctx159).run()
+        finally:
+            _pb159.probe_candidates = _keep        # 桩必须还原（同组后面还有别的 probe 用例）
+            _xd159.own_hosts = _orig_own
+        return _seen.get("c", [])
+
+    _cand_fix = _probe_cands159(True)
+    _lg_fix = list(_lg159)   # 必须**在这一档之后**立刻取：下一档开头会 clear（门禁自己抓过一次）
+    _cand_old = _probe_cands159(False)
+    assert len(_cand_old) == 2, f"变异档（旧行为）候选应塌回 2，实得 {len(_cand_old)} —— 塌不回来说明这条断言没区分度"
+    assert len(_cand_fix) == 10, f"修复后候选应为 4 子域×2 + 目标×2 = 10，实得 {len(_cand_fix)}"
+    for _h159 in ("h0." + _t159, "h3." + _t159, _t159):
+        assert any(_h159 in u for u in _cand_fix), f"候选里少了 {_h159}"
+    assert not any("victim" in u or "jsdelivr" in u for u in _cand_fix), "候选里混进了别人的域名"
+    assert any("探测候选补入库产物" in m for m in _lg_fix), \
+        "从库里补量必须说出来（§5.9 同口径：静默降级是本仓反复出事的地方）"
+
+    # ③ 追加式执行的**收窄**语义不许被并库放宽（`runner.py:413-415` 两套口径）：
+    #    续跑＝库里已有资产，追加＝只 `append_targets` 点的那几个。
+    _cap_ap = {}
+    _keep_ap = _pb159.probe_candidates
+    _pb159.probe_candidates = lambda ctx, cands: (_cap_ap.__setitem__("c", list(cands)) or [])
+    try:
+        _ctx_ap = StageContext(_tid159, "smoke-8bp-append", parse_lines([f"pick.{_t159}"]),
+                               ["probe"], {"append": True, "append_targets": [f"pick.{_t159}"]},
+                               load_settings(), str(Path(_TMPDIR) / "8bp-ap"), _Rec159())
+        _pb159.ProbeStage(_ctx_ap).run()
+    finally:
+        _pb159.probe_candidates = _keep_ap
+    _ap_c = _cap_ap.get("c", [])
+    assert not any("h0." in u for u in _ap_c), f"追加档被并库放宽成重扫全部子域名了：{_ap_c}"
+    assert len(_ap_c) == 2, f"追加档应只探勾选那一个（×2 scheme），实得 {_ap_c}"
+
+    # ③ 接线判据按 ast.Call 数，不按文本（§6.1 第五次撞那条：注释里提一句不算违规）
+    for _f159 in ("scanner/stages/portscan.py", "scanner/stages/probe.py"):
+        _tree159 = _ast159.parse((ROOT / _f159).read_text(encoding="utf-8"))
+        _calls159 = [n for n in _ast159.walk(_tree159) if isinstance(n, _ast159.Call)
+                     and isinstance(n.func, _ast159.Attribute) and n.func.attr == "own_hosts"]
+        assert len(_calls159) == 1, f"{_f159} 应恰好一处 own_hosts 调用，实得 {len(_calls159)}"
+    print("[8bp] 续159 断点续跑候选回填 ok: own_hosts＝内存∪库（own 口径，实测拦住 js:/osint: 两行）｜"
+          "probe 候选 2→10（变异退回只读内存必须塌回 2）｜追加档**不**并库（候选仍只有勾选那一个×2）｜"
+          "补量那句进日志｜portscan/probe 各恰好一处调用")
 
     # ---------------- [8au] 续146：站点默认只看 200/404 / 批量打标只读本面板 / 判据收敛 / 入口搬进 cli ----------------
     #      用户点单四件事：① 站点默认只看 200/404 + 「显示全部」开关（跨任务 /sites 与任务详情

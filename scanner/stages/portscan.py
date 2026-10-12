@@ -8,7 +8,7 @@
 且 CTF 里经常只给一个 Web 入口。需要时在 GUI「策略配置 → 端口与服务」里打开。
 """
 from .base import Stage
-from .. import cdn, config, db, dnsq, extcost, ml, portscan
+from .. import cdn, config, db, dnsq, extcost, extdom, ml, portscan
 from ..utils import pool_run, resolve_host, which
 
 
@@ -41,7 +41,11 @@ class PortscanStage(Stage):
                     hosts.append(h)
             elif kind == "domain":
                 hosts.append(raw)
-        hosts.extend(ctx.results.get("domains_for_probe") or [])
+        # 续159（§6.2 第十四起）：内存 ∪ 库（own 口径）。只读内存时断点续跑会把主机数
+        # 从 9 个塌成 1 个（= 目标本身），而任务照样 done。
+        hosts.extend(extdom.own_hosts(ctx.task_id,
+                                     ctx.results.get("domains_for_probe") or (), ctx.logger,
+                                     include_db=not ctx.options.get("append")))
         hosts = list(dict.fromkeys(h for h in hosts if h))
         cap = int(cfg.get("max_hosts", 100))
         if len(hosts) > cap:

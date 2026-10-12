@@ -417,8 +417,12 @@ class ProbeStage(Stage):
                 # 这里自己补上候选，与子域名同规则（https 优先、失败回退 http）；
                 # 两条路都走时后面的 `dict.fromkeys` 会去重，不会产生重复请求。
                 candidates.extend([f"https://{raw}", f"http://{raw}"])
-        # 域名 / 子域名按 https、http 两种 scheme 生成候选
-        for h in ctx.results.get("domains_for_probe") or []:
+        # 域名 / 子域名按 https、http 两种 scheme 生成候选。候选主机走 `extdom.own_hosts`
+        # （内存 ∪ 库，own 口径）—— 续159 §6.2 第十四起：只读内存时断点续跑会塌成
+        # 「只有目标本身两条」，站点归零而任务照样 done。
+        for h in extdom.own_hosts(ctx.task_id,
+                                 ctx.results.get("domains_for_probe") or (), ctx.logger,
+                                 include_db=not ctx.options.get("append")):
             candidates.extend([f"https://{h}", f"http://{h}"])
         # 已发现的开放端口也要参与探测：灯塔能扫出 `http://host:9007` 这类站点，是因为它在
         # **开放端口**上补做了 HTTP 探测；我们此前只生成 :443/:80，所以永远看不到非标端口站点。

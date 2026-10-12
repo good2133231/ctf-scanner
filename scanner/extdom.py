@@ -78,6 +78,52 @@ def task_bases(task_id, targets_text=None):
     return {b for b in set(hosts) | {base_of(h) for h in hosts} if b}
 
 
+def own_hosts(task_id, extra=(), logger=None, include_db=True):
+    """探测候选主机：内存里前序阶段交的那批 **∪** 库里已入库的那批（都限 own 口径）。
+
+    为什么必须并库（续159，§6.2 第十四起）：`ctx.results` 每次构造都是空的
+    （`runner.py:153`），而断点续跑 / 进程重启后自动重新入队时**前序阶段不再跑** ——
+    只读内存的 portscan / probe 于是塌成「只剩目标本身」。实测一次 13 阶段深扫被降级成
+    `portscan 1 主机 / probe 2 候选 / 站点 0 / 漏洞 0`，而任务终态照旧 `done`、进度 100%、
+    `error` 空 —— 正是本仓反复出事的那类「把没干成说成没查到」。
+    形状与 `jsmine` 的站点回退、`probe` 的端口回退同构：那两处早有「内存空则读库」，
+    唯独域名候选这一处没有。
+
+    三条口径：① 只收 own（`db.list_own_subdomains`），`js:*` / `osint:*` 是别人的资产面，
+    发探测请求过去就是越权；② `extra` 与库里的行**过同一道**归属判定（`task_bases`），
+    判据不写第二遍；③ 顺序 = `extra` 原序在前、库里新增在后（新增条数会打进日志，
+    不静默补量）。
+
+    `include_db=False` 是给**追加式执行**留的：`runner.py:413-415` 把两套口径写死了 ——
+    「续跑的输入＝库里已有的资产」而「追加的输入＝`append_targets` 收窄的那几个」。
+    无条件并库会把「只扫勾选那一个」放宽成「重扫全表」，那是另一桩事故，不是修复。
+    """
+    bases = task_bases(task_id)
+    out, seen = [], set()
+
+    def _add(name):
+        n = str(name or "").strip().lower()
+        if not n or n in seen:
+            return
+        if not any(n == b or n.endswith("." + b) for b in bases):
+            return
+        seen.add(n)
+        out.append(n)
+
+    for n in (extra or ()):
+        _add(n)
+    _mem = len(out)
+    if include_db:
+        for r in db.list_own_subdomains(task_id):
+            _add(r["domain"])
+    _added = len(out) - _mem
+    if logger is not None and _added:
+        logger.info(f"[extdom] 探测候选补入库产物：内存 {_mem} 个 + 库里新增 {_added} 个 = "
+                    f"{len(out)} 个（只取 own 口径；`js:` / `osint:` 那两路是别人的资产面，"
+                    "一个请求都不发）")
+    return out
+
+
 def owner_of(task_id):
     """任务归属账号（续89）；取不到 / 老库无该列 → 0（= 只看全局黑名单）。"""
     try:

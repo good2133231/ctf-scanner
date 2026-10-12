@@ -3400,3 +3400,74 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [ ] 合并 worktree / 同步本地 `main`：共享区 `ctf-scanner/tests/smoke.py` 仍是别的会话未提交的坏文件（少 27 组、语法不过）——
       该路径在仓库外，读它要先拿到用户当场授权
 - [ ] GitLab 真机端到端：拿到只读 PAT 后跑一次 grepapp / gitlab 对照（本轮只有单元自证）
+
+## 续159（2026-10-12，WorkBuddy · Qoder-Agent 远端 Linux）：断点续跑不再把下游降级成「只扫目标」
+
+主理人贴出同目标两次实跑对比问「为什么结果不一样、0 站点是不是严重 bug」：
+#17 站点 15 / 域名 49 / 漏洞 6（17 分 17 秒）vs #18 **站点 0 / 域名 14 / 漏洞 0**（2 分 45 秒）。
+
+- [x] **根因定位（三段实测证据）**：`runner.py:153` 每次构造清空 `ctx.results`，而域名候选
+      `domains_for_probe` 唯一产地是内存（`stages/subdomain.py:365`），两个消费方
+      `stages/portscan.py:44`、`stages/probe.py:421` 只读它 ⇒ 断点续跑（本次触发原因是
+      进程被终止 + 启动对账自动重新入队，日志 03:49:40→03:59:52 空档 10 分钟）把
+      主机 9→1、探测候选 18→2、站点归零，**而任务终态照旧 done/100%/error 空**。
+      「域名 14 vs 49」是下游结果不是收集差异：`subfinder` 两边都是 8，差的是
+      `js:mine` 31→0 与 `osint:cseg` 10→6。
+- [x] **`scanner/db.py::list_own_subdomains()`**：own 口径的 SQL 判据只留这一处（复用既有
+      `OWN_SUBDOMAIN_WHERE`），Python 侧不再抄第二份 LIKE
+- [x] **`scanner/extdom.py::own_hosts(task_id, extra, logger, include_db=True)`**：探测候选主机的
+      **唯一产地** = 内存 ∪ 库，两者过同一道归属判定（`task_bases`）；`js:*` / `osint:*` 是别人的
+      资产面，一个请求都不发；库里补出的条数打进日志，不静默补量
+- [x] `stages/portscan.py` 与 `stages/probe.py` 的候选主机改读 `own_hosts`，并带
+      `include_db=not ctx.options.get("append")`——追加式执行的输入按 `runner.py:413-415` 是
+      **刻意收窄**的，无条件并库会把"只扫勾选那一个"放宽成"重扫全表"（这条守卫是本轮自查补的）
+- [x] 回归新增 `[8bp]`（106 行）：own 口径自证夹具（自家 4 条全收、`osint:cseg`/`js:mine`
+      两条拦住）｜候选 **2 → 10**｜**变异档**把 `own_hosts` 退回只读内存必须塌回 2｜
+      追加档候选恒为 2（不并库）｜补量那句进日志｜两处接线按 `ast.Call` 各恰好 1｜
+      `inspect.getsource` 钉没有第二份 LIKE
+- [x] **顺手修掉 §6.2 第一起的复发**（同轮门禁当场抓出来的）：`ctlog`/`ssrf` 两组把
+      「出厂默认关」的判据建立在**本机 `config/settings.yaml`** 上——主理人在策略页打开
+      ctlog 后，那条判据变成"真的去打 crt.sh"（门禁红在 `search()` 那一步，好在 http 已被
+      桩住、没真的耗配额）。改成：断言吃 `DEFAULTS`，「关着不发请求」这一档自己造一份
+      明确关着的配置（`_ct_off5` / `_ss_off5`）
+- [x] **收拾主理人页面保存造成的注释灾难**：04:42:39 与 04:44:36 两次 POST /settings
+      （`audit_log` actor=admin）把 ctlog/intel/heuristic/github/multileak 打开、
+      `checks.min_severity` medium→high，`save_settings()` 整份重写抹掉 settings.yaml 的
+      423 行中文注释（两式 numstat 一度 274/423 对 47/196）。按段把六项值逐行改回 HEAD 版
+      （`logs/_restore159.py`），落盘前用 `config.load_settings()` 摊平比对
+      **232 项逐项相同**——注释 155 行回来，diff 收敛成 6/6 且两式相等
+
+- [x] 实测：`logs/_gate159f.log`（代码+判据）与 `logs/_gate159g.log`（记忆后终验）两轮都 **SMOKE PASS**、组打印各 184 行、AssertionError 0、日志 4067 行；九份改动文件 `git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 逐文件相等；settings.yaml 注释还原前后 `load_settings()` 摊平 232 项逐项相同
+
+下一轮（续160）——只做这些，别扩大：
+
+- [ ] **`[8bp]` 的姊妹缺口**：`probe.second_pass` 仍挂在 `jsmine` 里，而 `jsmine` 在
+      「无站点输入」时先 `return`（`stages/jsmine.py:64`）—— AGENTS §7 那句「由 jsmine
+      无条件调用」只在函数体内成立。要么把它挪进 probe 末尾自己调，要么把话说准
+- [ ] **`runner.py:153` 的语义收口**：现在是"消费方各自读库"。更彻底的做法是在 `run_task`
+      的 resume 分支按「阶段 → results 键」映射统一回填，并把那句
+      「此前各阶段的产物沿用库中已有数据」变成带数字的话
+- [ ] **`_pick_port`（`gui/app.py:4396`，端口占用自动顺延最多 10 个）零回归断言**，
+      `tries` 硬编码、无配置键（主理人本轮又点了一次这件事，代码早有、判据没有）
+- [ ] **`extdom.reverse_writeback` 没有策略键、osint 阶段不自动调**（只有 GUI 路由
+      `app.py:3270` 手工点），而续157 的记忆里写着这个并不存在的键名
+- [ ] 任务详情页站点页签**不做**标题/长度折叠（`_site_fold_key` 只在 `/sites` 一处调用），
+      与跨任务页两处口径不一致
+- [ ] `/extdomains` 的重叠收起**只给文字不给条数**（违反"被收起的条数必须报数字"那条口径）
+- [ ] `stages/dirscan.py:459-461` docstring 自称「与 `/sites` 页折叠口径完全一致」——续147 起
+      已是假话（§5.19 那一类）
+- [ ] `iprecon.enabled` / `fofa.enabled`：DEFAULTS=False 与 settings.yaml=true **两份不等**，
+      且 DEFAULTS 侧注释仍写"默认关闭"＝成假话；另外 FOFA 段在 `keys.enc.yaml` 里**根本不存在**
+      （开关开着但零凭据 ⇒ 一次请求都不发，容易被读成"查过了、没东西"）
+- [ ] `AGENTS.md` 目录地图写「17 条」、§5.16⑤ 写「15 条」内置凭据形状，实测 **29 条**
+- [ ] `/vulns` 页勾选列（`data-pick-all`）遗留无消费方（`app.js:445` 的 `data-review-bulk`
+      已无任何模板提供宿主）
+- [ ] **拓展扫描追加层数的真机验收**（主理人指定用小域名 `dzmm.ai` 跑 1/3/5 层，核对
+      层数咬住 + 无新域即停 + 每层日志可见）——逻辑有 `[6lb]`，端到端一次都没跑过
+- [ ] GitLab 真机端到端（缺 `keys.gitlab.token`：密文里从来没有 gitlab 段，连 10-08 那份
+      旧备份也比对过）；`multileak` 的 `query_variants` 只有全域 + 主标签两档，
+      主理人点单里的 `tag1 pro`（空格形/去点形）没实现
+- [ ] #12 MITM 流量录制与 AI/Agent 编排（主理人已说"先不管"；且待办那句「AI/Agent 编排」
+      与他原话「我们不介入 ai，我们的扫描框架」方向相反，开工前要先定口径）
+- [ ] `push_token` 将于 2026-11-07 过期（实测 `X-GitHub-...-expiration` 头），轮换走同一条
+      录入路（键名 `github.push_token`）

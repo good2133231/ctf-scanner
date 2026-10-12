@@ -3,6 +3,95 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续159 断点续跑不再把下游降级成「只扫目标」：候选主机收敛到 `extdom.own_hosts()`
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。起因是主理人贴出两个同目标的实跑对比：
+#17（站点 15 / 域名 49 / 漏洞 6，17 分 17 秒）与 #18（**站点 0 / 域名 14 / 漏洞 0，2 分 45 秒**），
+并问「为什么两次同样的扫描结果不一样、0 站点是不是严重 bug」。
+
+### ① 根因（三段实测证据，先说清"为什么看着像环境问题"）
+
+1. **数据层**：#18 的 `subdomains` 有 14 行，其中 `subfinder` 那 8 条与 #17 **逐字相同**；
+   差额全在 `js:mine` 31→0 与 `osint:cseg` 10→6，`sites`/`ports`/`vulns` 全 0。
+   ⇒「域名少」是站点归零的**下游结果**，不是收集变弱。
+2. **日志层**：`logs/task_18_*/task.log` 里 portscan 第一趟 `9 个主机 × 65535`，03:49:40 之后
+   **日志空档 10 分钟**，03:59:52 是一次**全新启动横幅** +
+   `[resume] 从断点续跑：上次停在 portscan`（原因行＝`进程重启，任务已重新入队（启动时对账）`，
+   **不是**页面「停止」）；续跑那 58 秒里 portscan 只剩 **1 个主机**、probe 只剩 **2 个候选**、
+   站点 0，而终态照旧 `done` / 100% / `error` 空。
+3. **代码层**：`runner.py:153` 每次构造 `StageContext` 都把 `ctx.results` 清成空表；域名候选
+   `domains_for_probe` 的**唯一产地是内存**（`stages/subdomain.py:365`），两个消费方
+   `stages/portscan.py:44`、`stages/probe.py:421` **只读它**。仓里其实早有同形状的兜底
+   （`jsmine` 的站点回退、`probe` 的端口回退 `db.list_ports`），**唯独域名候选这一处漏了**。
+
+### ② 做了什么（每个数字都是实测）
+
+- `scanner/db.py`：新增 `list_own_subdomains()` ＝ own 口径 SQL 判据的唯一落点（复用既有
+  `OWN_SUBDOMAIN_WHERE`），Python 侧不抄第二份 LIKE（§5.14；续154 那次两份不同源就是抄出来的）。
+- `scanner/extdom.py`：新增 `own_hosts(task_id, extra=(), logger=None, include_db=True)` ＝
+  探测候选主机的**唯一产地**：内存 ∪ 库（`include_db` 为假时只认内存），两者过**同一道**归属判定
+  （`task_bases`）；`js:*` / `osint:*` 是别人的资产面，一个请求都不发；库里补出的条数打进日志
+  （`[extdom] 探测候选补入库产物：内存 N 个 + 库里新增 M 个 = K 个…`），不静默补量。
+- `stages/portscan.py` / `stages/probe.py`：候选主机改读 `own_hosts(...)`，并带
+  **`include_db=not ctx.options.get("append")`** —— 追加式执行（同任务追加、追加层数第 2 层起）的
+  输入按 `runner.py:413-415` 是**刻意收窄**到 `append_targets` 的，无条件并库会把「只扫勾选那一个」
+  放宽成「重扫全表」，那是另一桩事故。**这条守卫是本轮写完后自查时补上的**（原方案确实会踩）。
+- 回归新增 `tests/smoke.py [8bp]`（106 行）：own 口径自证夹具（自家 4 条全收、`osint:cseg` /
+  `js:mine` 各一条必须拦住）｜候选 **2 → 10**｜**变异档**把 `own_hosts` 退回「只读内存」后候选
+  必须**塌回 2**（塌不回来说明这条断言没区分度，§6.1）｜追加档候选恒为 2（不并库）｜
+  补量那句必须进日志｜两处接线按 `ast.Call` 各恰好 1｜`inspect.getsource` 钉 `own_hosts`
+  里没有第二份 `LIKE`。
+- 离线复现与验收（零网络请求，`logs/_resume_repro/` 沙箱库、`CTFSCANNER_DB` 隔离）：
+  续跑形状候选 **10**、追加形状 **2**、第三方域名 **False**。
+
+### ③ 本轮门禁当场抓出来的第二件事（§6.2 第一起同族复发）
+
+`smoke [5y]`/`[2c]` 把「ctlog / ssrf 出厂默认关」的判据写成 `enabled(settings)`，而那个
+`settings` 是 `load_settings()` 的**本机**那份。主理人在策略页打开 ctlog 之后这条当场红，
+且红在 `ctlog_mod.search()` 那一步——现象是"判据真的去打 crt.sh 并拿到 HTTP 429"，
+不是"代码坏了"（http 已被桩住，**没真的耗配额**）。修法：断言一律吃 `DEFAULTS`；
+「关着不发请求」那一档**自己造**一份明确关着的配置（`_ct_off5` / `_ss_off5`）。
+已把这一复发登记在 §6.2 第一起下面。
+
+### ④ 顺手收拾的现场（与本 bug 无关，但就在同一份被跟踪文件上）
+
+`audit_log` 记着 04:42:39 与 04:44:36 两次 `kind=settings`（actor=admin）：ctlog/intel/heuristic/
+github/multileak 五段打开、`checks.min_severity` medium→high。页面保存走
+`config.save_settings()` 的整份重写 ⇒ `config/settings.yaml` 的 **423 行中文注释被抹光**
+（§9 记着的既有破坏；两式 numstat 一度 274/423 对 47/196）。处理：以 `git show HEAD:` 那份为底、
+**按段把六项值逐行改回**（`logs/_restore159.py`），落盘前把改前/改后的 `load_settings()` 各摊平
+逐项比对 —— **232 项完全相同**才写。结果：注释 155 行回来，diff 收敛成 6/6 且两式相等。
+`save_settings()` 这个破坏本身没动（既有语义，要改得单独一轮）。
+**这六项值仍是本机未提交改动**：提交它们＝把「新克隆每个默认任务都往 GitHub/crt.sh 发查询」和
+`min_severity: high` 一起变成出厂默认，要连着同步 `AGENTS §4/§7` 与 `docs/usage.md` 里
+「末尾三个线索阶段默认关」那句 —— 属另一轮，不混进本轮。
+
+### ⑤ 本轮自己犯的错（记下来免得下一个人重犯）
+
+`[8bp]` 第一版把桩写成 `_seen.setdefault("c", list(cands)) or []` —— `setdefault` 返回**那个列表**
+（非空 ⇒ `or []` 不生效），于是候选 URL 字符串数组被当成 `sites` 传进 `register_sites`，门禁红在
+`s["url"]`：`TypeError: string indices must be integers, not 'str'`。正确写法
+`_seen.__setitem__(...) or []`（返回 None）。同族口径：**打桩函数的返回值形状必须与真函数一致**，
+否则"绿"只证明桩自洽、不证明被测路径。
+
+实测（门禁口径：`./.venv/bin/python tests/smoke.py`，组打印按 `^\[[0-9]` 计数）：
+- `logs/_gate159f.log`（代码 + 新判据）：**SMOKE PASS**、组打印 184 行、AssertionError 0、日志 4067 行，05:18:04→05:23:25（约 5 分 20 秒）
+- `logs/_gate159g.log`（三份记忆落地后的终验）：**SMOKE PASS**、组打印 184 行、AssertionError 0、日志 4067 行，05:28:06→05:33:3x（约 5 分 30 秒）
+- 离线复现：`logs/_resume_repro/` 沙箱库零网络，续跑形状候选 10 / 追加形状 2 / 越权 False
+- `config/settings.yaml` 注释还原：改前改后 `load_settings()` 摊平 **232 项逐项相同**，diff 从 274/423 收敛到 6/6 且两式相等
+
+### 还没做（下一轮）
+
+- `runner.py:153` 的「每次构造清空 results」没收口成显式的"按阶段→键映射回填"；现在是消费方
+  各自读库。要更彻底得在 `run_task` 的 resume 分支统一回填，并把那句「此前各阶段的产物沿用库中
+  已有数据」变成带数字的话。
+- `probe.second_pass` 仍挂在 `jsmine` 里，而 `jsmine` 在「无站点输入」时先 `return`
+  （`stages/jsmine.py:64`）—— AGENTS §7 那句「无条件调用」只在函数体内成立。
+- `_pick_port`（`gui/app.py:4396`，端口占用自动顺延最多 10 个）**零回归断言**、`tries` 硬编码。
+- 本轮查出但未动的漂移清单（详情页站点不折叠、`/extdomains` 收起条数不报数字、DEFAULTS 与
+  settings.yaml 两处 `iprecon/fofa` 不等、AGENTS 里凭据形状「15/17 条」实测 29 条等）逐条写在
+  `todo.txt` 末尾那一节。
+
 ## 续158 策略页「只能改文件」的五段全部接上页面 + GitLab provider 落地
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash。本轮完成 续157 节「还没做（下一轮）」清单里的前两项

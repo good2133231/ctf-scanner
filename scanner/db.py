@@ -1207,6 +1207,17 @@ def list_subdomains(task_id):
     return _query("SELECT * FROM subdomains WHERE task_id=? ORDER BY domain", (task_id,))
 
 
+def list_own_subdomains(task_id):
+    """本任务「自身子域名」的域名行 —— 判据就是 `OWN_SUBDOMAIN_WHERE`，只此一处。
+
+    为什么单独一个函数而不是让调用方自己写 LIKE（续159，§5.14）：`js:*` / `osint:*`
+    那两路是**别人的资产面**，探测候选必须走 own 口径；续154 那次「SQL 与 Python 各一份、
+    两份不同源」就是抄出来的，能不收进 Python 就不收。
+    """
+    return _query("SELECT domain FROM subdomains WHERE task_id=? AND "
+                  + OWN_SUBDOMAIN_WHERE + " ORDER BY domain", (task_id,))
+
+
 def list_subdomain_net(limit=None, owner_id=None):
     """跨任务返回解析过的子域名（domain/ip/cdn）——「IP 资产」页用。
 
