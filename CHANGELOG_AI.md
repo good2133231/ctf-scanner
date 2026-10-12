@@ -3,6 +3,54 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续160 子域名不再"这轮没发现就当它不存在"：`reuse_history` 沿用历史资产 + 任务列表拆「子域名 / 拓展」
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。起因是主理人拿 #19 与 #17 同目标对比问"为什么两次结果不一样"。
+查下来 #19 少掉的那 11 条分三拨：`ibt4.brazil-pix.com`（**subfinder 这次只给 7 个，上次 8 个**，
+整条资产链跟着空掉）、`osint:cseg` 那 6 条（webscan.cc 当天 17 个 IP 全部 HTTP 530，反查为空）、
+以及 `server-*.cloudfront.net` 那几条（续154 的第三方清单在入库前挡掉——这是点单要的效果）。
+第一条是真缺陷，本轮修它。
+
+### 做了什么
+
+- `scanner/extdom.py`：归属比对收成**一处** —— 新增 `is_in_bases()` 与 `filter_owned()`，
+  `own_hosts()` 里原来那份 `n == b or n.endswith("." + b)` 改调它（判据不写第二遍，§5.14）。
+- `scanner/db.py`：新增 `list_known_domains(except_task, owner_id, limit)` —— 跨任务、自家口径
+  （SQL 里用现成的 `OWN_SUBDOMAIN_WHERE`）、账号隔离用现成的 `_owner_asset_clause`，
+  两个判据都不在 Python 里重抄。
+- `scanner/stages/subdomain.py`：新增方法 `reuse_history(subs, domains, sources)`，把库里
+  **别的任务**已确认、且归属本次目标的自家域名并进本次结果（`sources[name] = "history"`，
+  上限 `subdomain.reuse_history_max`，0 = 不限），日志固定打一句
+  `[subdomain] 历史沿用：库里自家口径命中 N 个 → 本次并入 M 个`。**放在黑名单之后** ⇒ 被拉黑的历史名进不来。
+- `scanner/config.py` DEFAULTS + `config/settings.yaml`：`subdomain.reuse_history: true` /
+  `reuse_history_max: 300`。
+- `gui/templates/settings.html` + `gui/app.py` 的 POST 映射：两个新键接上策略页
+  （勾选框 + 数字框；**留空＝不改**，填 `0` 真的存成 `0`，不用 `or 300` 那种把"不限"变成 300 的写法）。
+- (3) `db.task_counts()` 与 `task_counts_bulk()` 各加 `subs_own` / `subs_ext`（判据仍是
+  `OWN_SUBDOMAIN_WHERE` / `EXT_SUBDOMAIN_WHERE` 那两份），`gui/templates/tasks.html` 那一列从
+  含糊的「域名: 38」改成「子域名: 7（拓展: 31）」；两处口径由回归钉成必须相等。
+- 回归新增 `tests/smoke.py [8br]`（72 行）：借到自家 3 条 / `js:`+`osint:`+跨账号 各一条都不借｜
+  开关关掉＝一个都不并（变异方向）｜上限 2 咬住并打"超过"｜`0` = 不限｜第二次调用不重复并｜
+  `task_counts` 与 bulk 同为 5/3/2 且 own+ext=total｜模板里旧的"打总行数"写法必须消失｜
+  `subdomain.py` 三个接线点按 `ast.Call` 各恰好一处。
+
+### 本轮被自己的判据抓到的两件事（记下来，别当成"环境问题"）
+
+1. **`[8at]` 的"逐键不许少"当场把我拦下**：我先只加了 DEFAULTS 键、没接 POST 映射，报
+   `POST /settings 映射缺键：["subdomain:['reuse_history','reuse_history_max']"]` —— 这正是续145
+   第十二起立那道锁要防的形状（保存一次就把开关重置回默认，而 130+ 组门禁原本一律看不见）。
+   补页面 + 映射后才继续。
+2. **第一版把逻辑写在 `run()` 里，导致它没法被门禁真跑**：要么桩掉 subfinder / 被动源 / 爆破
+   一整排网络入口（桩出来的绿是假绿），要么不测。改成独立方法后它**零网络**（只读沙箱库与配置），
+   判据才真的是行为判据。
+3. **`[8as]` 的「说了没做」也抓了我一次**：CHANGELOG 写了 §5 的口径变化，AGENTS 里却没有
+   `续160` 这个号 —— 那条机器判据（`max续(AGENTS)` 必须等于本轮）当场报红。补登记三处产地
+   （`is_in_bases()` / `list_known_domains()` / `own_hosts()` 已在续159 登记）才算收口。
+   同轮还发现自己算「组打印行数」的正则多转义一层（`r'^\\[[0-9]'` 恒不命中 → 报成 0 行），
+   已按实测改回 186 行：**记忆里报出去的数必须是复核过的**，不是脚本随手算的。
+
+门禁 `_gate160b.log`：**SMOKE PASS**、组打印 186 行、AssertionError 0、日志 4070 行
+
 ## 续159-附 随仓库分发的策略默认值：五个线索段打开 + `min_severity` 提到 high（并把 31 行文案改成三档口径）
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人一句话触发：「**我改动也要提交，说明是我希望的默认配置**」

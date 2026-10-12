@@ -165,6 +165,11 @@ subdomain:
   union_passive: true
   # 目标是 URL 或子域时，自动把注册域也当成子域名收集的根（续145，用户点单）
   auto_root: true
+  # 续160：沿用历史子域名。上游源（subfinder 的多来源、被动源、C 段反查）每次返回的集合
+  # 并不稳定，只看本轮新发现会让同一目标的资产面忽大忽小；库里别的任务已经发现过、且归属
+  # 本次目标的自家域名，这次没被重新发现也该继续参与探测。0 = 不限（不建议）。
+  reuse_history: true
+  reuse_history_max: 300
 passive:
   enabled: true
   sources: []

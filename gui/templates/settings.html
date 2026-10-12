@@ -211,7 +211,13 @@
       {{ 'checked' if s.subdomain.auto_root }}> <b>自动提取主域</b>：目标写的是 URL 或子域
       （<code>https://www.a.com/x</code> / <code>www.a.com</code>）时，自动把注册域
       <code>a.com</code> 也当成子域名收集的根，不必再手动把主域抠出来填一遍；
-      取消勾选＝只用目标里写的那个名字（收集面更小）</label>
+      取消勾选＝只用目标里写的那个名字（收集面更小）</label><br>
+    <label class="chk"><input type="checkbox" name="subdomain_reuse_history" value="1"
+      {{ 'checked' if s.subdomain.reuse_history }}> <b>沿用历史子域名</b>：库里<b>其他任务</b>已经发现过、且归属本次目标的自家子域名，这次即使上游没重新发现也继续参与探测
+      （实测抖动：同一目标 <code>subfinder</code> 一次给 8 个、一次给 7 个，少掉的那条会让「端口 → 站点 → 指纹 → 漏洞」整条链空掉）。
+      只借自家口径，<code>js:</code> / <code>osint:</code> 那两路是别人的资产面，不会拿去发请求；也只借同一账号的任务。取消勾选＝只信本轮新发现</label><br>
+    <label>沿用历史上限 <input name="subdomain_reuse_history_max" style="width:7em"
+      value="{{ s.subdomain.reuse_history_max }}">（个；<code>0</code> = 不限。超出时只并前 N 个，并在任务日志里说明）</label>
     <p class="muted small">subfinder 调用恒带 <code>-all</code>（全部数据源，不加时只用默认源集合，覆盖明显更小）。</p>
   </section>
 

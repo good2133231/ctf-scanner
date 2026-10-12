@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS login_fails (
 );
 CREATE INDEX IF NOT EXISTS idx_login_fails_at ON login_fails(at);
 -- 续116：资产表补 `task_id` 索引。按任务过滤是**每一条**读取路径的公共条件（任务详情页的
--- 10 个页签、跨任务资产页、`task_counts_bulk` 的 7 条 GROUP BY、`delete_task` 的批量删、
+-- 10 个页签、跨任务资产页、`task_counts_bulk` 的 8 条 GROUP BY、`delete_task` 的批量删、
 -- 去重用的 `drop_existing`），而此前全库只有 audit_log / login_fails 两张表有索引 ——
 -- 于是每条查询都是 SCAN 整表 + TEMP B-TREE 排序。实测（30000 行的 dirs 表）：
 -- COUNT 形态 20 次 71 ms → 5 ms，详情页签的分页形态 34 ms → 9 ms。
@@ -915,6 +915,13 @@ def task_counts(task_id):
         "certs": count("SELECT COUNT(*) c FROM certs WHERE task_id=?"),
         "dirs": count("SELECT COUNT(*) c FROM dirs WHERE task_id=?"),
         "vulns": count("SELECT COUNT(*) c FROM vulns WHERE task_id=?"),
+        # 续160：`subdomains` 一张表里混着「自家子域名」与「拓展域名」（`js:` / `osint:`），
+        # 只报一个数会让人以为"拓展的那 31 个都是本项目资产"。判据不吃重抄的 LIKE，
+        # 用的就是下面 `OWN_SUBDOMAIN_WHERE` / `EXT_SUBDOMAIN_WHERE` 那两份常量。
+        "subs_own": count("SELECT COUNT(*) c FROM subdomains WHERE task_id=? AND "
+                          + OWN_SUBDOMAIN_WHERE),
+        "subs_ext": count("SELECT COUNT(*) c FROM subdomains WHERE task_id=? AND "
+                          + EXT_SUBDOMAIN_WHERE),
     }
 
 
@@ -922,22 +929,32 @@ def task_counts_bulk(task_ids):
     """**一次**算出多个任务的资产计数，返回 `{task_id: {表: 计数}}`（续91）。
 
     为什么需要：任务列表页原来是 `{t["id"]: task_counts(t["id"]) for t in rows}` ——
-    而 `task_counts()` 内部跑 **7 条 COUNT**，于是**一页 100 个任务 = 700 次查询**（典型 N+1）。
-    这里改成"每张表一条 `GROUP BY task_id`"，共 **7 条**，与页大小无关。
+    而 `task_counts()` 内部跑 **9 条 COUNT**，于是**一页 100 个任务 = 900 次查询**（典型 N+1）。
+    这里改成"每张表一条 `GROUP BY task_id`"（7 条）+ 子域名分档一条 = **8 条**，与页大小无关。
     返回的字典**预置全部 key 为 0**（没有资产的任务也在里面），调用方不必再兜空。
     """
     ids = [int(t) for t in (task_ids or [])]
     blank = {"sites": 0, "subdomains": 0, "ports": 0, "csegs": 0,
-             "certs": 0, "dirs": 0, "vulns": 0}
+             "certs": 0, "dirs": 0, "vulns": 0, "subs_own": 0, "subs_ext": 0}
+    # 表名清单与 `blank` 分开：分档两个键不是表，混进循环就会去 `FROM subs_own`。
+    _tbl = ("sites", "subdomains", "ports", "csegs", "certs", "dirs", "vulns")
     out = {i: dict(blank) for i in ids}
     if not ids:
         return out
     marks = ",".join("?" for _ in ids)
-    for key in blank:
+    for key in _tbl:
         for row in _query(f"SELECT task_id t, COUNT(*) c FROM {key} "
                           f"WHERE task_id IN ({marks}) GROUP BY task_id", tuple(ids)):
             if row["t"] in out:
                 out[row["t"]][key] = int(row["c"] or 0)
+    # 子域名分档（续160）：与 task_counts() 同一对判据，两个口径必须给同一个数
+    for row in _query(f"SELECT task_id t, "
+                      f"SUM(CASE WHEN {OWN_SUBDOMAIN_WHERE} THEN 1 ELSE 0 END) own, "
+                      f"SUM(CASE WHEN {EXT_SUBDOMAIN_WHERE} THEN 1 ELSE 0 END) ext "
+                      f"FROM subdomains WHERE task_id IN ({marks}) GROUP BY task_id", tuple(ids)):
+        if row["t"] in out:
+            out[row["t"]]["subs_own"] = int(row["own"] or 0)
+            out[row["t"]]["subs_ext"] = int(row["ext"] or 0)
     return out
 
 
@@ -1205,6 +1222,27 @@ def merge_sites_tech(task_id, updates):
 
 def list_subdomains(task_id):
     return _query("SELECT * FROM subdomains WHERE task_id=? ORDER BY domain", (task_id,))
+
+
+def list_known_domains(except_task=None, owner_id=None, limit=2000):
+    """**跨任务**已入库的自家口径子域名（去重，最近写入的优先）—— 续160「沿用历史资产」用。
+
+    两条判据都不在这里重写：own 走 `OWN_SUBDOMAIN_WHERE`、账号隔离走 `_owner_asset_clause`，
+    与页面读资产同一套口径（§5.14）。`except_task` 排掉本次任务自己（那些名字本来就在结果里）。
+    """
+    conds = [OWN_SUBDOMAIN_WHERE]
+    params = []
+    if except_task is not None:
+        conds.append("task_id <> ?")
+        params.append(int(except_task))
+    _oc, _op = _owner_asset_clause(owner_id)
+    if _oc:
+        conds.append(_oc)
+        params.extend(_op)
+    params.append(max(1, int(limit)))
+    return [r["domain"] for r in _query(
+        "SELECT domain FROM subdomains WHERE " + " AND ".join(conds)
+        + " GROUP BY domain ORDER BY MAX(id) DESC LIMIT ?", tuple(params))]
 
 
 def list_own_subdomains(task_id):

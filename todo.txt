@@ -3478,3 +3478,45 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [ ] `push_token` 将于 2026-11-07 过期（实测 `X-GitHub-...-expiration` 头），轮换走同一条
       录入路（键名 `github.push_token`）
 - [ ] `tempfile.mkdtemp` 无处可建时导出会 500：`gui/app.py:1912` 的 `task_export` 直接调 `tempfile.mkdtemp(prefix="ctfscan-report-")`，`TMPDIR` 指向不存在的目录时抛 `FileNotFoundError` ⇒ `/api/tasks/<id>/export` 返 500（门禁判据要的是 400 + 可读原因）。本轮实跑撞到：修法是把临时目录建在本项目 `logs/` 下（受 `CTFSCANNER_LOGS` 覆盖，测试沙箱天然隔离），并像其它失败那样**说出来**而不是抛栈。
+
+## 续160（2026-10-12，WorkBuddy · Qoder-Agent 远端 Linux）：子域名沿用历史资产 + 任务列表拆「子域名 / 拓展」
+
+主理人拿 #19 与 #17 同目标对比问"为什么两次结果不一样"。查清是三拨原因，第一条是真缺陷：
+`ibt4.brazil-pix.com` 这次 **subfinder 只给了 7 个（上次 8 个）**，少掉的那条让
+「端口 → 站点 → 指纹 → 漏洞」整条链空掉；另两条是 webscan.cc 当天 17 个 IP 全 530（C 段反查为空）
+与续154 第三方清单入库前挡掉（点单要的效果）。
+
+- [x] `extdom.is_in_bases()` / `filter_owned()`：归属比对收成一处，`own_hosts()` 内那份后缀判断改调它
+- [x] `db.list_known_domains(except_task, owner_id, limit)`：跨任务、自家口径（SQL 用现成
+      `OWN_SUBDOMAIN_WHERE`）、账号隔离用现成 `_owner_asset_clause`，两个判据都不在 Python 重抄
+- [x] `SubdomainStage.reuse_history()`：把库里别的任务已确认、且归属本次目标的自家域名并进本次
+      结果（`sources["history"]`、上限 `reuse_history_max`（0=不限）、放在黑名单之后、
+      日志固定打「历史沿用：库里自家口径命中 N 个 → 本次并入 M 个」）。**方法零网络**，所以能被门禁真跑
+- [x] DEFAULTS + `settings.yaml` 新增 `subdomain.reuse_history: true` / `reuse_history_max: 300`；
+      策略页加勾选框与数字框，POST 映射接上（留空＝不改、填 0 真存 0）
+- [x] (3) `task_counts()` 与 `task_counts_bulk()` 各加 `subs_own` / `subs_ext`；
+      `tasks.html` 那一列从含糊的「域名: 38」改成「子域名: 7（拓展: 31）」
+- [x] 回归 `[8br]`（72 行）：借到自家 3 条 / `js:`+`osint:`+跨账号 各一条都不借｜开关关＝0（变异方向）｜
+      上限 2 咬住并报告｜0=不限｜第二次调用不重复并｜两口径同为 5/3/2 且 own+ext=total｜
+      模板旧的"打总行数"写法必须消失｜三个接线点按 `ast.Call` 各恰好一处
+- [x] 本轮被自己的判据抓到两次，都记进 CHANGELOG：① 只加 DEFAULTS 键没接 POST 映射，
+      `[8at]` 的"逐键不许少"当场报 `subdomain:['reuse_history','reuse_history_max']`
+      （续145 第十二起那道锁该干的活）；② 第一版逻辑写在 `run()` 里 → 要么桩一整排网络入口
+      （桩出来的绿是假绿）要么测不到，抽成方法后才是行为判据
+- [x] 实测：门禁 `_gate160b.log`：**SMOKE PASS**、组打印 186 行、AssertionError 0、日志 4070 行
+
+下一轮（续161）：
+
+- [ ] **续159 节那份「下一轮（续160）」的 15 条一条都没做**（本轮做的是主理人当场新增的两条），
+      逐条继续有效，原文见 `todo.txt` 那一节 —— 头三条仍是：详情页站点折叠与 `/sites` 同源、
+      `_pick_port` 补回归断言、`second_pass` 挂在 jsmine「无站点」门后
+- [ ] **截图/超时的「候补重试」**（主理人本轮新提，已达成口径）：任务末尾把
+      `shot_error` 档 ∈ {超时, 跳转未落地, 连不上} 的站点排成一次 append 轮
+      （复用 `db.enqueue_task(task_id,"append")` + 单阶段 screenshot），上限 2 轮、每轮冷却、
+      尊重停止与预算；`无浏览器` / `预算耗尽` / `已停止` 三档**不重试**（重试也没用，§6.2 第九起同族）；
+      页面上必须显示"候补第 N 轮：还有 M 张在重试"，并给一个默认 0（不改变现有行为）的策略开关
+- [ ] 观察 `reuse_history` 的实跑效果：#19 那类目标重跑时应能补回 `ibt4`；若某个目标历史资产过多
+      （上千条），300 的上限会开始挡量 —— 届时按实测调默认值而不是直接放成"不限"
+- [ ] 新默认 `min_severity: high` 的取舍再确认一次：它把 medium 结论挡在报告外（#17 那批 4 条
+      medium 开放重定向就不会再出现）。主理人已确认这是他要的默认，但报告/详情页要不要显示
+      "被级别闸挡掉 N 条"（与"被收起的条数必须报数字"同口径）还没做

@@ -19,7 +19,7 @@
 """
 from .base import Stage
 from . import github as github_stage
-from .. import blacklist, cdn, db, dnsq, passive, targets, wildcard
+from .. import blacklist, cdn, db, dnsq, extdom, passive, targets, wildcard
 from ..config import resolve
 from ..utils import (is_domain, to_ascii, which, verify_tool, run_cmd, read_lines,
                     write_lines, pool_run)
@@ -360,6 +360,10 @@ class SubdomainStage(Stage):
                                                  owner_id=getattr(ctx, "owner_id", 0))
         if blocked:
             ctx.logger.info(f"[subdomain] 黑名单拦截 {blocked} 个域名（config/blacklist.txt）")
+        # 续160（主理人点单"同一目标两次结果不一样"里的第二类成因）：沿用历史资产。
+        # 抽成方法而不是写在 run() 里 —— 它只读库与配置，抽出来才能被门禁**真跑**，
+        # 不必桩 subfinder / 被动源 / 爆破那一整排网络入口（桩出来的绿是假绿，§6.1）。
+        hist_added = self.reuse_history(subs, domains, sources)
         all_hosts = sorted(set(subs) | set(domains))
         ctx.results["subdomains"] = subs
         ctx.results["domains_for_probe"] = all_hosts
@@ -372,7 +376,44 @@ class SubdomainStage(Stage):
         db.insert_subdomains(ctx.task_id, db.drop_existing(
             ctx.task_id, "subdomains", ("domain",), _rows, lambda it: (it[0],)))
         self._fill_net(subs, workers)
-        ctx.logger.info(f"[subdomain] 新增子域名 {len(subs)} 个，参与探测主机 {len(all_hosts)} 个")
+        ctx.logger.info(f"[subdomain] 新增子域名 {len(subs)} 个"
+                        + (f"（含沿用历史 {hist_added} 个）" if hist_added else "")
+                        + f"，参与探测主机 {len(all_hosts)} 个")
+
+    def reuse_history(self, subs, domains, sources):
+        """把库里**其他任务**已发现、且归属本次目标的自家子域名并进本次结果。
+
+        动机（续160，主理人实跑抓到）：上游源每次返回的集合并不稳定 —— 同一目标一次
+        `subfinder → 新增 8 个`、一次 `7 个`，少掉的那条名字会让「端口 → 站点 → 指纹 →
+        漏洞」整条链都空掉。库里已经确认过它是本项目的资产，就不该因为这次没重新发现而消失。
+
+        四条口径：① 只借 own 口径（`db.list_known_domains` 的 SQL 判据），`js:` / `osint:`
+        是别人的资产面，不该被"借用"成探测目标；② 归属判定走 `extdom.task_bases` +
+        `is_in_bases`（与探测候选同一份口径，不分叉）；③ 上限 `subdomain.reuse_history_max`
+        （0 = 不限），触顶要说出来；④ 就地写 `sources[name] = "history"` 让 provenance 可见，
+        返回并入个数供调用方打日志。**本方法零网络**（只读 SQLite + 配置）。
+        """
+        ctx = self.ctx
+        cfg = ctx.settings.get("subdomain") or {}
+        if not cfg.get("reuse_history", True):
+            return 0
+        cap = max(0, int(cfg.get("reuse_history_max", 300) or 0))
+        pool = db.list_known_domains(except_task=ctx.task_id,
+                                     owner_id=getattr(ctx, "owner_id", 0),
+                                     limit=(cap * 8) if cap else 8000)
+        known = extdom.filter_owned(pool, extdom.task_bases(ctx.task_id))
+        new = [d for d in known if d not in set(subs) | set(domains)]
+        if cap and len(new) > cap:
+            ctx.logger.info(f"[subdomain] 历史沿用：候选 {len(new)} 个超过 "
+                            f"subdomain.reuse_history_max={cap}，只并前 {cap} 个")
+            new = new[:cap]
+        for d in new:
+            sources[d] = "history"
+        subs.extend(new)
+        ctx.logger.info(f"[subdomain] 历史沿用：库里自家口径命中 {len(known)} 个 → "
+                        + (f"本次并入 {len(new)} 个（其余本轮已自己发现）" if new
+                           else "一个新都不用（本轮已全部发现，或没有可借的历史资产）"))
+        return len(new)
 
     def _fill_net(self, subs, workers):
         """回填每个子域名的解析 IP 与 CDN 标记（纯 DNS 只读查询）。

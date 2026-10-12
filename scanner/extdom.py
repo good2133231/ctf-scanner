@@ -78,6 +78,27 @@ def task_bases(task_id, targets_text=None):
     return {b for b in set(hosts) | {base_of(h) for h in hosts} if b}
 
 
+def is_in_bases(name, bases):
+    """`name` 是否落在 `bases`（主机或注册域）之下 —— 归属比对的**唯一**口径。
+
+    与 `base_of()` 的粗切不同，这里是**纯后缀**判断，不碰公共后缀表：调用方给的 `bases`
+    已经是 `task_bases()` 收好的"目标本身 + 其注册域"，所以宁可少算也不误算。
+    """
+    n = str(name or "").strip().lower()
+    return bool(n) and any(n == b or n.endswith("." + b) for b in bases)
+
+
+def filter_owned(names, bases):
+    """从 `names` 里留下归属这批 `bases` 的（保序去重）。"""
+    out, seen = [], set()
+    for n in names:
+        k = str(n or "").strip().lower()
+        if k and k not in seen and is_in_bases(k, bases):
+            seen.add(k)
+            out.append(k)
+    return out
+
+
 def own_hosts(task_id, extra=(), logger=None, include_db=True):
     """探测候选主机：内存里前序阶段交的那批 **∪** 库里已入库的那批（都限 own 口径）。
 
@@ -105,7 +126,7 @@ def own_hosts(task_id, extra=(), logger=None, include_db=True):
         n = str(name or "").strip().lower()
         if not n or n in seen:
             return
-        if not any(n == b or n.endswith("." + b) for b in bases):
+        if not is_in_bases(n, bases):
             return
         seen.add(n)
         out.append(n)

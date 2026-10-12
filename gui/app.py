@@ -3528,7 +3528,13 @@ def create_app():
                                   "dns_timeout": float(
                                       (settings.get("subdomain") or {}).get("dns_timeout", 3) or 3),
                                   "union_passive": f.get("union_passive") == "1",
-                                  "auto_root": f.get("subdomain_auto_root") == "1"},
+                                  "auto_root": f.get("subdomain_auto_root") == "1",
+                                  # 续160：沿用历史子域名。留空＝不改（沿用现值），填 0 要真的存成 0 —— 0 在配置里的语义是"不限"，
+                                  # 用 `or 300` 那种写法会把它悄悄变成 300，方向正好相反。
+                                  "reuse_history": f.get("subdomain_reuse_history") == "1",
+                                  "reuse_history_max": int(
+                                      f.get("subdomain_reuse_history_max")
+                                      or (settings.get("subdomain") or {}).get("reuse_history_max", 300))},
                     "evasion": {"random_ua": f.get("random_ua") == "1",
                                 "spoof_xff": f.get("spoof_xff") == "1",
                                 "waf_bypass": f.get("waf_bypass") == "1",

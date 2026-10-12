@@ -21047,6 +21047,78 @@ expression: r0()
           f"{len(_ban160)} 条已证伪的旧句子在 4 份文档里 0 命中（判据先自证抓得到）")
 
 
+    # ---------------- [8br] 续160：subdomain 沿用历史资产 + 任务列表拆「子域名 / 拓展」 ----------------
+    #   (1) 的动机是主理人实跑抓到的上游抖动：同一目标一次 `subfinder → 新增 8 个`、一次 `7 个`，
+    #       少掉的那条名字让「端口 → 站点 → 指纹 → 漏洞」整条链空掉。判据必须同时挡住
+    #       "没并入"（漏）与"越界并入"（把别人的资产面当成自己的去探测）。
+    from scanner.stages.subdomain import SubdomainStage as _S8br
+    import ast as _ast8br
+
+    _t8br = "targ8br.test"
+    _own8br = f"ibt4.{_t8br}"
+    _h8br = db.create_task("smoke-8br-hist", _t8br, ["subdomain"], {}, owner_id=41)
+    db.insert_subdomains(_h8br, [(_own8br, "subfinder"), (f"a.{_t8br}", "puredns"),
+                                 (f"b.{_t8br}", "dns-brute"), (f"js1.{_t8br}", "js:mine"),
+                                 ("cdn8br.jsdelivr.net", "osint:cseg")])
+    _o8br = db.create_task("smoke-8br-other", _t8br, ["subdomain"], {}, owner_id=42)
+    db.insert_subdomains(_o8br, [(f"foreign9.{_t8br}", "subfinder")])
+    _n8br = db.create_task("smoke-8br-new", _t8br, ["subdomain"], {}, owner_id=41)
+
+    class _L8br:
+        def __init__(self): self.lines = []
+        def info(self, m, *a): self.lines.append(str(m))
+        def warning(self, m, *a): self.lines.append(str(m))
+        def error(self, m, *a): self.lines.append(str(m))
+        def exception(self, m, *a): self.lines.append(str(m))
+        def debug(self, m, *a): pass
+
+    def _reuse8br(**over):
+        """跑一次 `reuse_history`（零网络：只读沙箱库与配置）→ (并入数, 结果, sources, 日志)。"""
+        st = copy.deepcopy(load_settings())
+        st["subdomain"] = dict(st.get("subdomain") or {}, **over)
+        lg = _L8br()
+        ctx = StageContext(_n8br, "smoke-8br", parse_lines([_t8br]), ["subdomain"], {},
+                           st, str(Path(_TMPDIR) / "8br"), lg)
+        ctx.owner_id = 41
+        subs, src = [], {}
+        k = _S8br(ctx).reuse_history(subs, [_t8br], src)
+        return k, subs, src, lg.lines
+
+    k1, s1, src1, g1 = _reuse8br()
+    assert sorted(s1) == sorted([_own8br, f"a.{_t8br}", f"b.{_t8br}"]), f"应借到 3 条自家历史域名：{s1}"
+    assert not any("js1." in x or "jsdelivr" in x or "foreign9" in x for x in s1), f"越界借用：{s1}"
+    assert all(v == "history" for v in src1.values()), f"provenance 必须标 history：{src1}"
+    assert any("历史沿用" in m for m in g1), "沿用多少必须说出来，不能静默补量"
+    k2, s2, _, _ = _reuse8br()
+    assert k2 == 3, f"第二次调用结果应一致（去重看调用方给的 subs）：{k2}"
+    k3, s3, _, _ = _reuse8br(reuse_history=False)
+    assert k3 == 0 and s3 == [], "开关关掉还并 ⇒ 这条判据没牙（§6.1 要求的变异方向）"
+    k4, s4, _, g4 = _reuse8br(reuse_history_max=2)
+    assert k4 == 2 and any("超过" in m for m in g4), f"上限没咬住或没报告：{k4}"
+    k5, s5, _, _ = _reuse8br(reuse_history_max=0)
+    assert k5 == 3, f"0 = 不限 却截断了：{k5}"
+
+    # (3) 两档计数：单任务与批量两个口径必须给同一个数，且 own + ext == 总数
+    _c1 = db.task_counts(_h8br)
+    _c2 = db.task_counts_bulk([_h8br])[_h8br]
+    assert _c1["subdomains"] == _c2["subdomains"] == 5, (_c1, _c2)
+    assert _c1["subs_own"] == _c2["subs_own"] == 3, (_c1, _c2)
+    assert _c1["subs_ext"] == _c2["subs_ext"] == 2, (_c1, _c2)
+    assert _c1["subs_own"] + _c1["subs_ext"] == _c1["subdomains"], "分档不许漏一条或多算一条"
+    _tp8br = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8", errors="replace")
+    assert "counts[t.id].subs_own" in _tp8br and "counts[t.id].subs_ext" in _tp8br, "列表页没换成两档"
+    assert "counts[t.id].subdomains" not in _tp8br, "列表页还在打那张表的总行数（标签含糊的老问题）"
+    _tree8br = _ast8br.parse((ROOT / "scanner" / "stages" / "subdomain.py").read_text(encoding="utf-8"))
+    _c8br = {"list_known_domains": 0, "filter_owned": 0, "reuse_history": 0}
+    for _nd in _ast8br.walk(_tree8br):
+        if isinstance(_nd, _ast8br.Call) and isinstance(_nd.func, _ast8br.Attribute) \
+                and _nd.func.attr in _c8br:
+            _c8br[_nd.func.attr] += 1
+    assert _c8br == {"list_known_domains": 1, "filter_owned": 1, "reuse_history": 1}, _c8br
+    print("[8br] 续160 历史沿用 + 计数分档 ok: 借到自家 3 条，js:/osint:/跨账号 各一条都不借｜"
+          "开关关=0、上限 2 咬住并报告、0=不限｜task_counts 与 bulk 同为 5/3/2 且 own+ext=total｜"
+          "列表页模板换成两档、旧总数写法已消失")
+
     # ---------------- [8au] 续146：站点默认只看 200/404 / 批量打标只读本面板 / 判据收敛 / 入口搬进 cli ----------------
     #      用户点单四件事：① 站点默认只看 200/404 + 「显示全部」开关（跨任务 /sites 与任务详情
     #      站点页签**同一口径**）；② 「批量打标」读整页勾选框，会串到站点行；③ "目标→注册域"

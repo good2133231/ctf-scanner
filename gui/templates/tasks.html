@@ -132,7 +132,7 @@
         <td class="muted small">{{ (t.targets.splitlines() | first) or '-' }}
           {% if t.targets.splitlines() | length > 1 %}<span class="muted">（共 {{ t.targets.splitlines()|length }} 条）</span>{% endif %}
         </td>
-        <td class="muted small">站点: {{ counts[t.id].sites }}<br>域名: {{ counts[t.id].subdomains }}<br>漏洞: {{ counts[t.id].vulns }}</td>
+        <td class="muted small">站点: {{ counts[t.id].sites }}<br>子域名: {{ counts[t.id].subs_own }}（拓展: {{ counts[t.id].subs_ext }}）<br>漏洞: {{ counts[t.id].vulns }}</td>
         <td class="muted small">{{ t.stages }}</td>
         <td><span class="badge st-{{ t.status }}">{{ '排队中' if t.status == 'queued' else t.status }}</span>
           {% if t.status == 'queued' and qpos.get(t.id) %}<span class="muted small">第 {{ qpos.get(t.id) }} 位</span>{% endif %}</td>
