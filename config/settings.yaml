@@ -215,6 +215,16 @@ jsmine:
   secrets: true
   blacklist: []
   recrawl: true          # 二层遍历：jsmine 挖出的新域名（含库里其余未探过的本任务域名）补探成站点
+  # ---- 续171（2026-10-13 用户点单）：拓展域名"宁缺毋滥"三道闸（只对非自有域名动手）----
+  # ① 解析门：明确 nxdomain 的第三方候选不入库（DNS 无结论照常放行 —— 可能会漏但不会错）；
+  # ② CDN 门：解析命中 CDN 厂商（CNAME/IP 段，如 at.alicdn.com）→ 别人的基础设施，不入库；
+  # ③ 停车门：首页是"域名转让 / DNS resolution error"或两端口均无响应（如 style.font.name）→ 不入库。
+  # 每一档拒绝的数量与样本都写进任务日志；关闭 verify_resolve = 三道闸整条停用。
+  verify_resolve: true
+  drop_cdn: true
+  parking_check: true
+  parking_check_max: 100   # 停车检测的首页 GET 预算（超出的候选直接放行并在日志报数）
+  strip_comments: true     # 域名抽取前剥离 JS 注释（license banner 里的 OSS 主页是噪声大头）
 dirscan:
   # 默认**开启，但只跑浅扫**（mode=quick）：只打精选敏感路径（约 150 条/站），请求量可控。
   # 这是对早期"默认关闭"决策的**有意反转**（用户要求"先浅浅过一遍，再手动决定深度扫"）。
@@ -452,3 +462,9 @@ dicts:
   cdn_ips: config/dicts/cdn_ips.txt
 http:
   user_agent: Mozilla/5.0 (compatible; CTFScanner/0.1; +authorized-testing-only)
+report:
+  # ---- 报告导出（2026-10-13 用户点单）：默认**关闭** ----
+  # 开关打开后，任务详情页右上角出现 MD / JSONL / HTML / PDF / 完整版报告 导出入口；
+  # 关闭期间任务详情页只显示一句提示，导出路由会返回"去哪儿开"的说明页（不静默）。
+  # 报告数据本身照常入库，随时打开随时可导。CLI 导出不受这项约束。
+  export_enabled: false

@@ -29,6 +29,8 @@
     {# 续112：去重后一行只显示一个来源，其余并到「另见于」（平铺与分组两种视图同一渲染） #}
     <td class="muted">{{ source_label(s.source) }}{% if s.also_from %}<br>
       <span class="muted small" title="同一域名还被这些来源找到过（入库行仍在，只是默认不重复列）">另见于 {{ s.also_from }}</span>{% endif %}</td>
+    {# 续171（用户点单"FOFA·ICO 反查的结果你要标明语法"）：反查来源随行入库的查询语法 #}
+    <td class="muted small mono">{{ s.note or '-' }}</td>
     <td>{% if secrets.get(s.domain) %}<span class="sev sev-high"
           title="该域名下 JS 挖到的疑似凭据条数（详见「漏洞风险」页 js-secret-*）">
           敏感 {{ secrets.get(s.domain) }}</span>{% else %}<span class="muted small">-</span>{% endif %}</td>
@@ -40,7 +42,7 @@
       <th class="pick"><input type="checkbox" class="pick-all-page"
         data-pick-all="#tbl-{{ tid }}" title="全选本页"></th>
       <th>#</th><th>任务</th><th>域名</th><th>置信度</th><th>解析 IP</th><th>CDN</th>
-      <th>CNAME</th><th>来源</th><th>敏感</th></tr></thead>
+      <th>CNAME</th><th>来源</th><th>语法</th><th>敏感</th></tr></thead>
     <tbody>
       {{ caller() }}
     </tbody>
@@ -176,7 +178,7 @@
     {% else %}
       {% call ext_table('all-ext-subs') %}
         {% for s in subs %}{{ ext_row(s) }}{% else %}
-          <tr><td colspan="10" class="muted">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
+          <tr><td colspan="11" class="muted">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
         {% endfor %}
       {% endcall %}
     {% endif %}

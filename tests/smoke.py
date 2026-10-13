@@ -633,11 +633,15 @@ def main():
     assert _login7(c, _admin_form117()).status_code == 302
     for path in ("/", "/tasks", f"/tasks/{tid}", "/subdomains", "/sites", "/dirs",
                  "/ports", "/csegs", "/pocs", "/vulns", "/settings",
-                 f"/api/tasks/{tid}/status", f"/tasks/{tid}/export"):
+                 f"/api/tasks/{tid}/status"):
         r = c.get(path)
         assert r.status_code == 200, (path, r.status_code)
-    # 导出接口应回传 Markdown 报告正文
-    assert "潜在漏洞" in c.get(f"/tasks/{tid}/export").get_data(as_text=True)
+    # 续171：报告导出**默认关**（report.export_enabled=false）—— 关着时导出路由回 403 提示页
+    #（说清去哪儿开），任务详情页不渲染导出按钮、只渲染指路提示
+    _exp_off = c.get(f"/tasks/{tid}/export")
+    assert _exp_off.status_code == 403, _exp_off.status_code
+    assert "报告导出功能已关闭" in _exp_off.get_data(as_text=True)
+    assert "导出已关闭" in c.get(f"/tasks/{tid}").get_data(as_text=True)
     # 任务列表页应有批量操作条与行内操作；详情页默认页签应为「潜在漏洞」
     tasks_html = c.get("/tasks").get_data(as_text=True)
     assert "批量停止" in tasks_html and "批量删除" in tasks_html and "data-op=\"restart\"" in tasks_html
@@ -667,6 +671,18 @@ def main():
         captured.update(d)
         return load_settings()
 
+    def _export_gate171(client, on):
+        """[171] 把 GUI **内存态** settings 的导出开关掰开/掰关（走 settings_page 真路径，
+        save_settings 桩回传改好的副本 —— 不碰真实 config/settings.yaml）。
+        给「报告三格式 / JSONL / 完整版」这些**测内容**的存量用例临时打开导出。"""
+        _real_save_171 = gui_app.save_settings
+        gui_app.save_settings = lambda d, **kw: {
+            **load_settings(), "report": {"export_enabled": bool(on)}}
+        try:
+            assert client.post("/settings", data={"min_severity": "medium"}).status_code == 302
+        finally:
+            gui_app.save_settings = _real_save_171
+
     _orig_save = gui_app.save_settings
     gui_app.save_settings = _fake_save
     try:
@@ -681,6 +697,36 @@ def main():
     finally:
         gui_app.save_settings = _orig_save
     print("[5b] settings POST ok: dirscan/vulnscan 总开关的勾选与取消勾选均正确落库")
+    # 续171：report.export_enabled 与 jsmine 三道闸的表单→配置映射（勾选/取消都要落对）。
+    # **必须自己再挂一次桩**：上面 [5b] 的 finally 已把 save_settings 还原成真货，
+    # 直接 POST 会把整份 config/settings.yaml 重写掉（注释全蒸发 —— 那份文件被 git 跟踪，
+    # safe_dump 一遍 400 行注释就没了，这不是演习）。[170] 的 [8bu] 之前也踩过同一坑。
+    _orig_save_171 = gui_app.save_settings
+    gui_app.save_settings = _fake_save
+    try:
+        assert c.post("/settings", data={"min_severity": "medium",
+                                         "report_export_enabled": "1",
+                                         "jsmine_verify_resolve": "1",
+                                         "jsmine_drop_cdn": "1",
+                                         "jsmine_parking_check": "1",
+                                         "jsmine_parking_check_max": "80",
+                                         "jsmine_strip_comments": "1"}).status_code == 302
+        assert captured["report"]["export_enabled"] is True, captured.get("report")
+        _j171 = captured["jsmine"]
+        assert _j171["verify_resolve"] and _j171["drop_cdn"] and _j171["parking_check"] \
+            and _j171["strip_comments"], _j171
+        assert _j171["parking_check_max"] == 80, _j171
+        # 全不勾 = 全部落 False（不是保持旧值）；0 也是停车预算的**合法值**（关），不能被洗成默认
+        assert c.post("/settings", data={"min_severity": "medium",
+                                         "jsmine_parking_check_max": "0"}).status_code == 302
+        assert captured["report"]["export_enabled"] is False, captured.get("report")
+        _j171 = captured["jsmine"]
+        assert not _j171["verify_resolve"] and not _j171["drop_cdn"] \
+            and not _j171["parking_check"] and not _j171["strip_comments"], _j171
+        assert _j171["parking_check_max"] == 0, _j171
+    finally:
+        gui_app.save_settings = _orig_save
+    print("[5b-171] settings POST ok: report.export_enabled 与 jsmine 三道闸的勾选/取消/0 值均正确落库")
     # 批量接口：导入 POC 默认关闭 → 启用（仅改不一致的）应影响全部导入项，再关闭还原原状
     assert db.bulk_set_poc_enabled(False, source="imported") > 0
     r = c.post("/api/pocs/bulk", json={"action": "enable", "source": "imported", "kind": "diff"})
@@ -2964,6 +3010,7 @@ def main():
     assert db.vuln_trend()["by_severity"]["other"] >= 1, "未知级别没归入 other"
     db.delete_task(_o_tid, backup=False)
 
+    _export_gate171(c, True)   # [171] 这批用例测的是**报告内容**，临时打开导出开关
     # GUI 三格式路由：md 默认、html、pdf 的失败路径都要**说清原因**（无浏览器时 400 + 原因）
     _r1 = c.get(f"/tasks/{w_tid}/export")
     assert _r1.status_code == 200 and "attachment" in _r1.headers["Content-Disposition"]
@@ -2994,6 +3041,7 @@ def main():
     assert "漏洞趋势统计" in _dash and "smoke-report-formats" in _dash, "仪表盘缺趋势面板"
     assert "已判误报不计入" in _dash, "趋势面板没写口径"
     db.delete_task(w_tid, backup=False)
+    _export_gate171(c, False)   # [171] 还原出厂默认（导出关）
     print("[5w] 续16 ok: 报告三格式（MD/HTML/PDF）与漏洞趋势统计（七节齐全 + XSS 载荷全转义 + "
           "自包含无外链 + 误报不计入趋势/未知级别归 other + 三格式路由 + 无浏览器 400 说明原因 + "
           "仪表盘趋势面板）；续24 线索只走 JSONL ok: 有线索却不进 MD/HTML 小节与概览卡片")
@@ -4116,12 +4164,14 @@ workflows:
     # 证书行能正常序列化（证明 sqlite3.Row → dict 转换有效，没踩 .get() 那个坑）
     _j_cert = [o for o in _j_objs if o["type"] == "cert"]
     assert _j_cert and _j_cert[0]["cn"] == "j.test", _j_cert
+    _export_gate171(c, True)   # [171] 临时打开导出开关（测的是 NDJSON 内容）
     # GUI 路由：fmt=jsonl 走 NDJSON mimetype + .jsonl 文件名
     _jr = c.get(f"/tasks/{_j_tid}/export?fmt=jsonl")
     assert _jr.status_code == 200, _jr.status_code
     assert "application/x-ndjson" in _jr.headers["Content-Type"], _jr.headers["Content-Type"]
     assert ".jsonl" in _jr.headers["Content-Disposition"], _jr.headers["Content-Disposition"]
     db.delete_task(_j_tid, backup=False)
+    _export_gate171(c, False)   # [171] 还原出厂默认（导出关）
     print(f"[6b] JSONL 导出 ok: {len(_j_lines)} 行合法 / 首行 meta / 中文原样 / "
           "误报行仍在（与 MD 结论表刻意差异）/ 证书行可序列化 / 路由 NDJSON")
 
@@ -6017,6 +6067,11 @@ workflows:
                  "vulnscan", "heuristic"):
         _u_cfg[_k6u] = dict(_u_cfg.get(_k6u) or {}, enabled=True)
         assert _u_cfg[_k6u]["enabled"] is True, _k6u
+    # [171] 停车门会对"解析成功的第三方候选"发**站外首页 GET**（靶场 JS 里带出来的
+    # sketch.com / pwg.org 这类真域名会被它摸一遍）—— 与 FOFA / intel 同一档外部请求，
+    # 本用例必须关。解析门（纯 DNS）保持打开，随本用例一起真跑。
+    _u_cfg.setdefault("jsmine", {})["parking_check"] = False
+    assert _u_cfg["jsmine"]["parking_check"] is False
     # 前提：确确实实是 13 个阶段（续26 之后才是 13；续10 手工跑那次才 11 个）
     assert len(STAGE_ORDER) == 13 and set(STAGE_ORDER) == set(_rn6.STAGE_REGISTRY), \
         (len(STAGE_ORDER), sorted(STAGE_ORDER))
@@ -6030,7 +6085,6 @@ workflows:
                if str(getattr(m, "__name__", "") or "").startswith("scanner")
                and getattr(m, "http_request", None) is _u_orig_http]
     _u_sent = []
-
     def _u_http(u, **kw):
         _u_sent.append(str(u))
         return _u_orig_http(u, **kw)      # 真发请求，只做计数（绝不桩掉扫描实现）
@@ -11438,6 +11492,7 @@ http:
     _h59v_full = _rep7v.generate_html(_t59vr, full=True)
     assert _d201_59v not in _h59v_def and _d201_59v in _h59v_full, \
         "HTML 报告必须与 Markdown 同口径（同一个 full 参数、同一份快照）"
+    _export_gate171(_c7o, True)   # [171] 临时打开导出开关（测的是完整版内容）
     assert _d201_59v not in _c7o.get(f"/tasks/{_t59vr}/export").get_data(as_text=True), \
         "GUI 默认导出仍是截断版"
     assert _d201_59v in _c7o.get(f"/tasks/{_t59vr}/export?full=1").get_data(as_text=True), \
@@ -11445,6 +11500,7 @@ http:
     assert _d201_59v in _c7o.get(
         f"/tasks/{_t59vr}/export?fmt=html&full=1").get_data(as_text=True), \
         "HTML 的「完整版」导出同样要生效"
+    _export_gate171(_c7o, False)   # [171] 还原出厂默认（导出关）
 
     # CLI 侧：直接调 `_emit_reports`（唯一入口，四条命令行入口共用），不带/带 `--full-report` 各导一次
     import importlib.util as _ilu59v
@@ -13053,6 +13109,15 @@ http:
     for _seg8e in _killed8e:
         assert _out8e[_seg8e]["enabled"] is False, _seg8e
     assert _on8e == _snap8e, "suppress_external 原地改了入参（CLI/测试复用同一个 dict 会串味）"
+
+    # ②b [171] 停车门是**键级**压制：dev 开着时 jsmine.parking_check 必须被压掉并进名单，
+    #    但 jsmine 段本身（解析门等纯 DNS 能力）不许被整段关掉
+    _on8e2 = {"dev": {"enabled": True}, "jsmine": {"enabled": True, "parking_check": True}}
+    _out8e2, _killed8e2 = _dm8e.suppress_external(_on8e2)
+    assert "jsmine.parking_check" in _killed8e2 and \
+        _out8e2["jsmine"]["parking_check"] is False, (_killed8e2, _out8e2.get("jsmine"))
+    assert _out8e2["jsmine"]["enabled"] is True, "键级压制不许把整段关掉"
+    assert _on8e2["jsmine"]["parking_check"] is True, "原地改了入参"
 
     # ③ 脏值不抛（缺段 / 非 dict / 段不是 dict / 整个 settings 不是 dict）
     for _dirty8e in (None, {}, 42, {"dev": "x"}, {"dev": {"enabled": 1}},
@@ -23813,6 +23878,8 @@ expression: r0()
     assert _base147.index('setAttribute("data-theme"') < _base147.index('<link rel="stylesheet"'), \
         "赋值必须排在样式表之前，否则浏览器先按 :root（深色）画一遍再改"
 
+    _export_gate171(c, True)   # [171] 本组测的是导出区的**排版**，临时打开默认关着的导出
+
     # ---- ④ 导出：收成一行，四个格式都还在，「完整版」只剩一个入口 ----
     _det147 = c.get(f"/tasks/{_t147}").get_data(as_text=True)
     for _w147 in ("报告 MD", "JSONL", "HTML", "PDF", "完整版报告"):
@@ -23821,6 +23888,7 @@ expression: r0()
         assert _o147 not in _det147, f"旧的四连按钮文案还在：{_o147}"
     assert _det147.count("完整版报告") == 1 and "full=1" in _det147, \
         "「完整版」要剩一个入口 —— 报告小节截断提示指的就是它，没了就是假出口"
+    _export_gate171(c, False)   # [171] 还原出厂默认（导出关）
 
     print("[8az] 续147 站点按标题折叠 + 主题首屏定档 + 导出一行 ok: "
           "折叠键=有标题按标题折（3xx 取跳转后标题）/无标题按长度折（长度 0 不折），且**旧键在同一份夹具上判「不折」**——证明这条断言有牙｜"
@@ -24626,6 +24694,136 @@ expression: r0()
           "`--check` 那句出路当场走得通：--update-tools 装成功不再掉进扫描流程（rc=0），"
           "同一判据吃过一份**去掉守卫**的变异体 ⇒ 它必须退回 rc=1 + 那句「未提供目标」")
 
+    # ---- [171] JS 候选域名三道闸 / 停车页判定 / FOFA 语法标注（2026-10-13 用户点单）----
+    from scanner import jsmine as _jsmine171, parked as _parked171
+    import scanner.stages.jsmine as _sj171
+
+    # (a) 注释剥离：license banner 里的 OSS 主页必须消失，字符串里的 URL 必须活着
+    _t171 = ("/*! lodash v4.17.21 | MIT | lodash.com */\n"
+             'var a="https://api.example.com/v1";\n'
+             "var b='//proto-rel.example.net/x';\n"
+             'fetch("//rel.example.org/p");\n'
+             "x=1;// see comment.example.net\n"
+             "// TODO evil.example.com\n")
+    _o171 = _jsmine171.strip_js_comments(_t171)
+    assert "lodash.com" not in _o171, _o171
+    for _keep171 in ("api.example.com", "proto-rel.example.net", "rel.example.org"):
+        assert _keep171 in _o171, _keep171
+    assert "comment.example.net" not in _o171 and "evil.example.com" not in _o171
+
+    # (b) 停车页判定：内容标记 / CNAME 特征 / 空壳（HTTPS+HTTP 均无响应）
+    assert _parked171.content_parked("<title>This Domain is for Sale</title>")
+    assert _parked171.content_parked(
+        "<title>DNS resolution error | x.com | Cloudflare</title>")
+    assert _parked171.content_parked("<body>域名转让，请联系</body>")
+    assert not _parked171.content_parked("<html><title>Login</title></html>")
+    assert _parked171.cname_hit(["x.bodis.com"]) == "bodis.com"
+    assert _parked171.cname_hit(["ns.example.com"]) == ""
+    _real_http171 = _parked171.http_request
+    try:
+        _parked171.http_request = lambda *a, **k: None      # 两端口都无响应
+        assert _parked171.probe("dead.example.com", {})[0] == "dead"
+        _parked171.http_request = lambda *a, **k: {
+            "status": 200, "text": "<title>Buy this domain</title>"}
+        _v171, _w171 = _parked171.probe("sale.example.com", {})
+        assert _v171 == "parked" and "停放" in _w171, (_v171, _w171)
+        _parked171.http_request = lambda *a, **k: {
+            "status": 200, "text": "<title>Console</title>hello"}
+        assert _parked171.probe("live.example.com", {})[0] == "alive"
+    finally:
+        _parked171.http_request = _real_http171
+
+    # (c) 三道闸端到端：nxdomain / CDN / 空壳拒收，DNS 无结论放行，
+    #     **自有域名（任务目标的注册域）无条件放行且不发一次解析**
+    _tid171 = db.create_task("smoke-171", "owncheck.test", ["probe"], "{}")
+    _ctx_settings171 = copy.deepcopy(settings)
+    class _Ctx171:
+        task_id = _tid171
+        settings = _ctx_settings171
+        stopped = staticmethod(lambda: False)
+        logger = get_logger("smoke-171", LOGS_DIR / "smoke-171.log")
+    class _FakeDNS171:
+        def __init__(self, table):
+            self.table, self.asked = table, []
+
+        def resolve_detail(self, host, timeout=3, resolver=None, settings=None):
+            self.asked.append(host)
+            return self.table.get(host, ([], [], "timeout"))
+    _dns171 = _FakeDNS171({
+        "gone.example.com": ([], [], "nxdomain"),
+        "cdn.example.com": (["x.alicdn.com"], ["155.102.175.136"], ""),
+        "park.example.com": ([], ["64.190.63.111"], ""),
+        "shell.example.com": ([], ["2.2.2.2"], ""),
+        "live.example.com": ([], ["3.3.3.3"], ""),
+    })
+    _real_dns171 = _sj171.dnsq
+    try:
+        _sj171.dnsq = _dns171
+        _parked171.http_request = lambda *a, **k: None                     # 全部无响应
+        _stage171 = _sj171.JsmineStage(_Ctx171())
+        _kept171, _st171, _net171, _cn171 = _stage171._verify_candidates([
+            "api.owncheck.test",          # 自有：放行且不解析
+            "gone.example.com",           # nxdomain -> 拒
+            "cdn.example.com",            # CDN -> 拒
+            "park.example.com",           # 停车（此处无响应=空壳）-> 拒
+            "shell.example.com",          # 空壳 -> 拒
+            "live.example.com",           # 无响应也拒 —— 真活站在下面单独验
+            "timeout.example.com",        # DNS 无结论 -> 放行
+        ])
+        assert "api.owncheck.test" in _kept171 and "api.owncheck.test" not in _dns171.asked, \
+            (_kept171, _dns171.asked)
+        assert "gone.example.com" not in _kept171 and _st171["nxdomain"] == ["gone.example.com"]
+        assert _st171["cdn"] == [("cdn.example.com", "alicdn.com")], _st171
+        assert _st171["parked"] == [] and len(_st171["dead"]) == 3, _st171
+        assert "timeout.example.com" in _kept171
+        assert "live.example.com" not in _kept171
+        # 活站路径：有响应且无停放标记 -> 保留并带回解析回填
+        _parked171.http_request = lambda *a, **k: {
+            "status": 200, "text": "<title>Home</title>fine"}
+        _kept171, _st171, _net171, _cn171 = _stage171._verify_candidates(
+            ["live.example.com"])
+        assert _kept171 == ["live.example.com"] and _st171["dead"] == [] \
+            and _st171["parked"] == [], (_kept171, _st171)
+        assert _net171["live.example.com"][0] == "3.3.3.3", _net171
+    finally:
+        _sj171.dnsq = _real_dns171
+        _parked171.http_request = _real_http171
+    _stage171._log_verify_stats({"nxdomain": ["gone.example.com"], "cdn": [],
+                                 "parked": [], "dead": [], "unchecked": 2})
+
+    # (d) FOFA 反查随行语法入库 → 拓展域名页「语法」列 / 详情页 / MD / JSONL 都可见。
+    #     **自带独立任务**：跑到套件末尾时 early 的 tid 可能已被迁移类用例清掉
+    #     （实测 /tasks/{tid} 404 —— 别让断言吃别的用例的生命周期）。
+    _tid171d = db.create_task("smoke-171-syntax", "http://127.0.0.1:1/", ["probe"], "{}")
+    db.insert_subdomains(_tid171d, [
+        ("syntax-ico.example.com", "osint:fofa", "", 'icon_hash="123456"'),
+        ("syntax-cert.example.com", "osint:fofa-cert", "", 'cert="owncheck.test"')])
+    db.set_subdomain_net(_tid171d, {"syntax-ico.example.com": ("7.7.7.9", ""),
+                                    "syntax-cert.example.com": ("7.7.7.10", "")})
+    _ext171 = c.get("/extdomains?all=1").get_data(as_text=True)
+    assert 'icon_hash=' in _ext171 and '123456' in _ext171, \
+        "拓展域名页应显示 ICO 反查语法（Jinja 转义形态）"
+    assert 'cert=' in _ext171 and 'owncheck.test' in _ext171
+    assert "语法" in _ext171, "拓展域名页应有「语法」列"
+    # 库侧先自证：note 必须在库里（把"页面没渲染"与"数据没落库"两种失败分开）
+    _dbnote171 = [dict(r) for r in db._query(
+        "SELECT domain, source, note, ip FROM subdomains WHERE task_id=? "
+        "AND domain LIKE 'syntax-%'", (_tid171d,))]
+    assert len(_dbnote171) == 2 and all(r['note'] for r in _dbnote171), _dbnote171
+    # 用 esrc=ico 只看 ICO 来源：默认页签有分页与来源排序，别让断言吃环境顺序
+    _det171 = c.get(f"/tasks/{_tid171d}?esrc=ico").get_data(as_text=True)
+    assert 'icon_hash=' in _det171 and '123456' in _det171, \
+        "任务详情拓展页签也应显示语法"
+    _md171 = generate(_tid171d)
+    assert 'icon_hash="123456"' in _md171, "MD 报告的子域名行应带反查语法"
+    _jl171 = generate_jsonl(_tid171d)
+    assert any('icon_hash=' in ln and '123456' in ln for ln in _jl171.splitlines()), \
+        "JSONL 的 subdomain 行应带 note"
+    # (e) 导出开关出厂值：DEFAULTS 与随包 settings.yaml 都是关（用户点单"默认是关闭"）
+    from scanner.config import DEFAULTS as _D171
+    assert _D171["report"]["export_enabled"] is False
+    assert load_settings()["report"]["export_enabled"] is False
+    print("[171] js-domain gate ok: 注释剥离 | 停车/空壳判定 | 解析门/CDN 门（自有域名零查询） | FOFA 语法进拓展页/详情/MD/JSONL | 导出开关出厂关")
     print("SMOKE PASS")
 
 

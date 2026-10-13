@@ -15,6 +15,9 @@
     title="{{ '从断点续跑：' + resume_rest|join(' / ') if resume_rest else '没有可用断点（任务未停在某个阶段上）' }}">续跑</button>
   <a class="btn-mini ghost" href="{{ url_for('diff_view') }}?task={{ task.id }}"
      title="与最近一个可比的上一轮对比（子域名/站点/指纹/端口/漏洞/敏感信息 各算新增与消失）">与上次对比</a>
+  {# 续171（用户点单"导出报告的功能设置可以开启或者关闭 默认是关闭"）：开关关着时不渲染
+     导出按钮，改渲染一句指路提示 —— 避免"点了才知道不行"。开关在 策略配置 → 报告导出 #}
+  {% if report_export %}
   <span class="muted small">导出：<a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">报告 MD</a>
     <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='jsonl') }}">JSONL</a>
     <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">HTML</a>
@@ -22,6 +25,9 @@
   {# 续59-2：默认版报告每节截在 100/200 条（可读性护栏，不是丢数据），小节标题会指「完整版」——下面就是那个出口 #}
   <a class="btn-mini ghost" href="{{ url_for('task_export', task_id=task.id, full=1) }}"
      title="资产小节不截断的那一版（默认版每节限 100/200 条）">完整版报告</a>
+  {% else %}
+  <span class="muted small" title="在 策略配置 → 报告导出 勾选 report.export_enabled 后，这里会出现 MD / JSONL / HTML / PDF / 完整版 导出入口">导出已关闭（策略配置 → 报告导出 可打开）</span>
+  {% endif %}
   <button class="btn-mini danger" data-op="delete" data-id="{{ task.id }}">删除</button>
   <span id="op-msg" class="muted"></span>
   <span class="spacer"></span>
@@ -460,7 +466,7 @@
         <thead><tr>
           <th class="pick"><input type="checkbox" class="pick-all-page"
             data-pick-all="#tbl-ext-subs" title="全选本页"></th>
-          <th>域名</th><th>置信度</th><th>解析 IP</th><th>CDN</th><th>CNAME</th><th>来源</th></tr></thead>
+          <th>域名</th><th>置信度</th><th>解析 IP</th><th>CDN</th><th>CNAME</th><th>来源</th><th>语法</th></tr></thead>
         <tbody>
         {# 续169：徽章标记与「拓展域名」跨任务页共用 `_conf.html` 那一份 macro（不各写一遍）#}
         {% from "_conf.html" import conf_badge %}
@@ -476,9 +482,10 @@
                 {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
             <td class="muted small mono">{{ s.cname or '-' }}</td>
             <td class="muted">{{ source_label(s.source) }}{% if s.also_from %}<br>
-              <span class="muted small" title="同一域名还被这些来源找到过（入库行仍在，只是默认不重复列）">另见于 {{ s.also_from }}</span>{% endif %}</td></tr>
+              <span class="muted small" title="同一域名还被这些来源找到过（入库行仍在，只是默认不重复列）">另见于 {{ s.also_from }}</span>{% endif %}</td>
+            <td class="muted small mono">{{ s.note or '-' }}</td></tr>
         {% else %}
-          <tr><td colspan="7" class="muted">暂无拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
+          <tr><td colspan="8" class="muted">暂无拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
         {% endfor %}
         </tbody>
       </table>

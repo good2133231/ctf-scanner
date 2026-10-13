@@ -197,6 +197,18 @@ def _sub_note(r):
     return f"[真实IP {ip}]"
 
 
+def _sub_syntax(r):
+    """子域名行的「查询语法」（续171）：`icon_hash="123"` 这类随行入库的语法串。
+
+    只有 osint 反查来源（FOFA·ICO / 证书 / 标题，Shodan / Quake）才有；空串表示没有
+    （JS 挖掘 / 被动收集来的行）。报告里把它印在行内 —— 用户要求反查结果必须标明语法。
+    """
+    try:
+        return str(r["note"] or "").strip()
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
 def _retest_counts(vulns):
     """复测三态计数（报告台账用）：仍可复现 / 已修复 / 无法确认。"""
     out = {"reproduced": 0, "fixed": 0, "unconfirmed": 0}
@@ -386,8 +398,10 @@ def generate(task_id, full=False):
         lines.append("## " + _cap_title("子域名", len(subs), CAP_SUBS))
         lines.append("")
         lines.append("```")
-        lines.extend(f"{_idn(r['domain'])} {_sub_note(r)}".rstrip()
-                     for r in subs[:CAP_SUBS])
+        lines.extend(
+            (f"{_idn(r['domain'])} {_sub_note(r)}"
+             + (f" ← {_sub_syntax(r)}" if _sub_syntax(r) else "")).rstrip()
+            for r in subs[:CAP_SUBS])
         lines.append("```")
         lines.append("")
     if dirs:
@@ -578,7 +592,9 @@ def generate_html(task_id, full=False):
     if subs:
         p.append("<h2>" + _cap_title("子域名", len(subs), CAP_SUBS) + "</h2>")
         p.append("<pre>" + _h("\n".join(
-            (f"{_idn(r['domain'])} {_sub_note(r)}").rstrip() for r in subs[:CAP_SUBS])) + "</pre>")
+            (f"{_idn(r['domain'])} {_sub_note(r)}"
+             + (f" ← {_sub_syntax(r)}" if _sub_syntax(r) else "")).rstrip()
+            for r in subs[:CAP_SUBS])) + "</pre>")
     if dirs:
         p.append("<h2>" + _cap_title("目录发现", len(dirs), CAP_DIRS) + "</h2>")
         p.append(_html_table(["状态", "路径"],

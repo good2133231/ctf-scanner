@@ -95,11 +95,14 @@ class OsintStage(Stage):
             return
 
         known = {r["domain"] for r in db.list_subdomains(ctx.task_id)}
-        new, seen = [], set()
-        for domain, source in found:
+        new, seen, notes = [], set(), {}
+        for item in found:
+            domain, source = item[0], item[1]
+            note = item[2] if len(item) > 2 else ""
             if not domain or domain in known or domain in seen:
                 continue
             seen.add(domain)
+            notes[domain] = note
             new.append((domain, source))
         # 用户黑名单：命中的域名**不入库**，因此后面的 dirscan/vulnscan 也不会去扫它
         new, blocked = blacklist.filter_pairs(new, ctx.settings,
@@ -121,7 +124,10 @@ class OsintStage(Stage):
                             f"（如 {third[0][0]} ← {third[0][1]}；清单在 "
                             f"config/dicts/js_thirdparty.txt，要放行就往那个文件里删一行）")
         if new:
-            db.insert_subdomains(ctx.task_id, new)
+            # 续171：入库时带上**查询语法**（`icon_hash="123"` / `cert="x"` / `title="x"`），
+            # 拓展域名页「语法」列据此展示 —— 用户要求反查结果必须标明用的是哪条语法。
+            db.insert_subdomains(ctx.task_id,
+                                 [(d, s, "", notes.get(d, "")) for d, s in new])
         if blocked:
             ctx.logger.info(f"[osint] 黑名单拦截 {len(blocked)} 个域名"
                             + f"（如 {blocked[0][0]} ← {blocked[0][1]}）")
@@ -215,7 +221,7 @@ class OsintStage(Stage):
                 # 一个 IP 挂了几十个域名 → 共享主机/CDN，继续当资产拓展只会灌噪声
                 shared += 1
                 continue
-            found += [(d, "osint:cseg") for d in doms]
+            found += [(d, "osint:cseg", "") for d in doms]
         ctx.logger.info(f"[osint] C 段 → 域名 {stats['domains']} 个 / 命中 IP {stats['hit_ips']} 个"
                         + (f"；{shared} 个 IP 命中过多（>{cap}）判为共享主机，不纳入域名资产"
                            if shared else ""))
@@ -272,7 +278,9 @@ class OsintStage(Stage):
             ctx.logger.info(f"[osint] FOFA 反查 mmh3 {icon_hash}（{url}）→ {len(assets)} 条 / 共 {total} 条")
             for a in assets:
                 domain = _domain_of(a)
-                found.append((domain, "osint:fofa"))
+                # 续171（用户点单"FOFA·ICO 反查的结果你要标明语法"）：随行带上**本次查询
+                # 的语法**（`icon_hash="123"`），入库进 `subdomains.note`，拓展域名页可查
+                found.append((domain, "osint:fofa", fofa_mod.build_query(icon_hash)))
         ctx.logger.info(f"[osint] FOFA 拓展：查询 {queried} 个 favicon，跳过黑 ico {black} 个")
         return found
 
@@ -337,7 +345,8 @@ class OsintStage(Stage):
             ctx.logger.info(f'[osint] 证书反查 cert="{root}" → {len(assets)} 条 / 共 {total} 条')
             for a in assets:
                 domain = _domain_of(a)
-                found.append((domain, "osint:fofa-cert"))
+                # 续171：随行带上证书反查语法（`cert="root"`），入库进 note
+                found.append((domain, "osint:fofa-cert", fofa_mod.build_cert_query(root)))
         ctx.logger.info(f"[osint] 证书拓展：查询 {queried} 个注册域，跳过通用证书 {common} 个"
                         + (f"（另有 {pre} 个占位证书连查询都未发）" if pre else ""))
         return found
@@ -405,7 +414,8 @@ class OsintStage(Stage):
                 if domain and not _title_relevant(title, domain, title_match):
                     skipped += 1
                     continue
-                found.append((domain, "osint:fofa-title"))
+                # 续171：随行带上标题反查语法（`title="xxx"`），入库进 note
+                found.append((domain, "osint:fofa-title", fofa_mod.build_title_query(title)))
         ctx.logger.info(f"[osint] 标题拓展：查询 {queried} 个标题，跳过公共标题 {common} 个"
                         + (f"，相关性过滤掉 {skipped} 条" if skipped else ""))
         return found
@@ -486,7 +496,8 @@ class OsintStage(Stage):
             ctx.logger.info(f"[osint] {name} 反查 mmh3 {icon_hash}（{url}）→ "
                             f"{len(assets)} 条 / 共 {total} 条")
             for a in assets:
-                found.append((_domain_of(a), f"osint:{name}"))
+                # 续171：Shodan / Quake 的语法（`http.favicon.hash:N` / `favicon:"N"`）同样随行入库
+                found.append((_domain_of(a), f"osint:{name}", mod.build_query(icon_hash)))
         ctx.logger.info(f"[osint] {name} 拓展：查询 {queried} 个 favicon，跳过黑 ico {black} 个")
         return found
 
@@ -528,7 +539,7 @@ class OsintStage(Stage):
                     row.update({"url": "", "host": root, "port": 0, "source": "ct"})
                     certs.append(row)
                 for d in ctlog_mod.domains_of([rec]):
-                    found.append((d, "osint:ctlog"))
+                    found.append((d, "osint:ctlog", ""))
         if certs:
             # 跨运行去重（续25）：同一 (host, port, sha256, serial) 的证书记录不再重复入库
             db.insert_certs(ctx.task_id, db.drop_existing(

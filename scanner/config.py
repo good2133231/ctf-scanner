@@ -343,6 +343,26 @@ DEFAULTS = {
         # 二层遍历总开关（续139）：jsmine 挖出的新域名 + 库里其余子域名，先过 DNS 再补探一轮，
         # 把"只进表、没变成站点"的那批名字落成站点。关闭只影响站点数量，不影响子域名表。
         "recrawl": True,
+        # ---- 拓展域名"宁缺毋滥"三道闸（2026-10-13 用户点单）----
+        # 背景：JS 挖掘从第三方库 JS 里带回来的候选域名里，"能解析"≠"是资产"——
+        # 实测样本：`com.text.name` / `style.font.name`（能解析但打开是域名转让页）、
+        # `at.alicdn.com`（CDN 基础设施）。三道闸只对**非自有**域名动手（任务目标及其
+        # 注册域无条件放行），且每一档的拒绝数量都打进任务日志（不静默丢，§0 第 10 条）。
+        # **总开关**：域名解析门 —— JS 挖到的非自有域名先做一次只读解析：
+        #   明确 nxdomain（域名不存在）→ 不入库；servfail / timeout 等无结论 → 放行
+        #   （"解析可能会漏但不会错"，用户原话）。关掉它＝三道闸整条停用。
+        "verify_resolve": True,
+        # 解析结果命中 CDN 厂商（CNAME 链或 IP 段，`scanner/cdn.py` 同一份名单）→
+        # 那是别人的基础设施（at.alicdn.com 这类第三方 JS 资源），不入库。
+        "drop_cdn": True,
+        # 停车页 / 空壳检测（`scanner/parked.py`，只读）：解析成功但首页是
+        # "域名转让 / for sale / DNS resolution error" 或两端口均无响应 → 不入库。
+        "parking_check": True,
+        # 停车检测的域名数上限（每候选最多 https+http 两次首页 GET，超出的直接放行）
+        "parking_check_max": 100,
+        # 域名抽取前剥离 JS 注释（license banner 里的 OSS 主页是噪声大头）。
+        # 只影响域名/URL 抽取，凭据与 flag 候选仍看原始正文。
+        "strip_comments": True,
     },
     "dirscan": {
         # 目录/路径发现阶段总开关（与 takeover/portscan/jsmine 同一类"资产面拓展"）。
@@ -690,6 +710,14 @@ DEFAULTS = {
     },
     "http": {
         "user_agent": "Mozilla/5.0 (compatible; CTFScanner/0.1; +authorized-testing-only)",
+    },
+    "report": {
+        # ---- 报告导出（2026-10-13 用户点单）：**默认关** ----
+        # MD / JSONL / HTML / PDF 四种格式（GUI 任务详情页右上角那排按钮）共用这一个开关：
+        # 关着时导出路由直接给出"为什么不能导出 + 去哪儿开"的提示页，任务页也不显示
+        # 导出按钮（避免"点了才知道不行"）。报告数据本身照常在库，打开开关立即可导出。
+        # CLI（`run_devflow` 等）不受这一项约束 —— 那是本机操作者的出口。
+        "export_enabled": False,
     },
 }
 

@@ -16,8 +16,8 @@ from .base import Stage
 from . import probe as probe_stage
 import re
 
-from .. import blacklist, db, extdom, fingerprint, flagfind, jsmine
-from ..utils import write_lines
+from .. import blacklist, cdn, db, dnsq, extdom, fingerprint, flagfind, jsmine, parked
+from ..utils import pool_run, write_lines
 
 
 _SECRET_VAL_RE = re.compile(r"，值 (.*?)；前后文：")
@@ -43,6 +43,110 @@ def _existing_js_secrets(task_id):
 class JsmineStage(Stage):
     name = "jsmine"
     description = "JS 资产挖掘（从站点 JS 提取域名/接口 URL/疑似凭据，含第三方黑名单降噪）"
+
+    def _verify_candidates(self, domains):
+        """JS 候选域名"宁缺毋滥"三道闸（2026-10-13 用户点单）——入库前的最后一道质检。
+
+        背景（用户原话与实测样本）：拓展域名页里 `com.text.name` 这种一眼不是域名、
+        `style.font.name` 能解析但打开是**域名转让页**、`at.alicdn.com` 是**第三方 JS
+        资源（CDN）**。判定顺序与口径：
+
+        ① **解析门**（`jsmine.verify_resolve`，总开关）：候选先做一次只读解析。明确
+           `nxdomain`（域名不存在）→ 不入库；`servfail` / `timeout` 等 DNS 无结论 →
+           放行 —— "解析可能会漏，但不会错"。**自有域名（任务目标及其注册域）无条件放行**。
+        ② **CDN 门**（`drop_cdn`）：解析结果命中 CDN 厂商（CNAME 链 / IP 段，
+           `scanner/cdn.py` 同一份名单）→ 是别人的基础设施，不入库。
+        ③ **停车门**（`parking_check`，只读首页 GET，上限 `parking_check_max`）：
+           首页命中停放/转让标记（`scanner/parked.py`）或 HTTPS/HTTP 均无响应（空壳）→
+           不入库。活站 → 保留，且把这次解析结果回填（`ip/cdn/ip_note/cname`），
+           「拓展域名」页与 `resolve_extended` 不必再查一遍。
+
+        返回 `(保留域名, 统计, 解析回填, CNAME 回填)`。每一档拒绝**都带回样本与数量**
+        由调用方打进日志 —— 静默丢条目是本仓红线（AGENTS §0 第 10 条）。
+        """
+        ctx = self.ctx
+        cfg = ctx.settings.get("jsmine") or {}
+        stats = {"nxdomain": [], "cdn": [], "parked": [], "dead": [], "unchecked": 0}
+        if not domains or cfg.get("verify_resolve", True) is False:
+            return list(domains), stats, {}, {}
+        bases = extdom.task_bases(ctx.task_id)
+        owned, cand = [], []
+        for d in domains:
+            (owned if extdom.is_owned(d, bases) else cand).append(d)
+        if not cand:
+            return owned, stats, {}, {}
+        timeout = float((ctx.settings.get("subdomain") or {}).get("dns_timeout", 3) or 3)
+        workers = max(1, min(20, int((ctx.settings.get("limits") or {}).get(
+            "max_workers", 20) or 20)))
+
+        def _resolve(host):
+            if ctx.stopped():
+                return None
+            chain, ips, reason = dnsq.resolve_detail(host, timeout=timeout,
+                                                     settings=ctx.settings)
+            return host, chain, ips, reason
+
+        results = [r for r in pool_run(_resolve, cand, workers=workers,
+                                       logger=ctx.logger, label="JS 域名解析门") if r]
+        drop_cdn = cfg.get("drop_cdn", True) is not False
+        want_park = cfg.get("parking_check", True) is not False
+        try:
+            park_budget = max(0, int(cfg.get("parking_check_max", 100) or 0))
+        except (TypeError, ValueError):
+            park_budget = 100
+        kept, net, cnames = [], {}, {}
+        for host, chain, ips, reason in results:
+            if ctx.stopped():
+                kept.append(host)            # 停止时刻未判完的：放行，不假装修剪过
+                continue
+            if reason == "nxdomain":
+                stats["nxdomain"].append(host)
+                continue                     # 域名不存在 —— 唯一"不会错"的拒绝判据
+            cdn_label = cdn.match(chain, ctx.settings, ips)
+            if drop_cdn and cdn_label:
+                stats["cdn"].append((host, cdn_label))
+                continue
+            if want_park and ips:
+                if park_budget <= 0:
+                    stats["unchecked"] += 1  # 超出预算：放行，但数量要报出来
+                else:
+                    park_budget -= 1
+                    verdict, why = parked.probe(host, ctx.settings)
+                    if verdict == "parked":
+                        stats["parked"].append((host, why))
+                        continue
+                    if verdict == "dead":
+                        stats["dead"].append((host, why))
+                        continue
+            if ips or reason:
+                net[host] = (",".join(ips), cdn_label, reason)
+            if chain:
+                cnames[host] = chain[-1]
+            kept.append(host)
+        return sorted(kept + owned), stats, net, cnames
+
+    def _log_verify_stats(self, stats):
+        """三道闸的拒绝清单进日志（数量 + 样本）——"拦了多少、为什么拦"必须看得见。"""
+        ctx = self.ctx
+        parts = []
+        if stats["nxdomain"]:
+            parts.append(f"解析不存在 {len(stats['nxdomain'])} 个"
+                         f"（如 {', '.join(stats['nxdomain'][:3])}）")
+        if stats["cdn"]:
+            parts.append(f"第三方 CDN {len(stats['cdn'])} 个"
+                         f"（如 {', '.join(h for h, _ in stats['cdn'][:3])}）")
+        if stats["parked"]:
+            parts.append(f"停放/转让页 {len(stats['parked'])} 个"
+                         f"（如 {', '.join(h for h, _ in stats['parked'][:3])}）")
+        if stats["dead"]:
+            parts.append(f"空壳无响应 {len(stats['dead'])} 个"
+                         f"（如 {', '.join(h for h, _ in stats['dead'][:3])}）")
+        if stats["unchecked"]:
+            parts.append(f"超出停车检测预算放行 {stats['unchecked']} 个"
+                         "（jsmine.parking_check_max）")
+        if parts:
+            ctx.logger.info("[jsmine] 候选域名质检拒收：" + "；".join(parts)
+                            + "（判据与开关见 scanner/stages/jsmine.py::_verify_candidates）")
 
     def run(self):
         ctx = self.ctx
@@ -121,9 +225,19 @@ class JsmineStage(Stage):
                                                           logger=ctx.logger)
         if junk113 and not (ctx.settings.get("jsmine") or {}).get("drop_absent_zone", True):
             junk113 = []          # 开关关着时 filter 不会返回东西，这里只是把话说明白
+        # 三道闸（2026-10-13 用户点单）：解析门 / CDN 门 / 停车门 —— 先质检再入库，
+        # 库里从此没有"能解析但是转让页 / 是 CDN / 压根不存在"的行。自有域名不受影响。
+        new_domains, vstats, vnet, vcnames = self._verify_candidates(new_domains)
+        self._log_verify_stats(vstats)
         ctx.results["js_domains"] = new_domains
         if new_domains:
             db.insert_subdomains(ctx.task_id, [(d, "js:mine") for d in new_domains])
+            # 解析门已发过的查询不浪费：结果直接回填（拓展页立刻有 IP/CDN/CNAME 可看，
+            # resolve_extended 的 only_missing 也不会重复查这一批）
+            if vnet:
+                db.set_subdomain_net(ctx.task_id, vnet)
+            if vcnames:
+                db.set_subdomain_cnames(ctx.task_id, vcnames)
         # 二层遍历（续139）：JS 里挖出来的域名以前**只进表**，没有任何一条路把它们变成
         # 站点 —— 灯塔的站点数就是这么比我们有货的。这一轮**不要求本轮真挖到新域名**：
         # 补探的池子除了 js 新交的，还包括库里其余没试过的本任务域名（osint/cert 带回来的

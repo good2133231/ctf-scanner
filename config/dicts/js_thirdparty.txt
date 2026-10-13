@@ -1,6 +1,9 @@
 # JS 挖掘的第三方域名单（命中即视为噪声，不纳入资产）
 # 来源：本项目原有内置清单 + URLFinder「含过滤规则版」config.yaml 的 jsFiler
-# 共 287 条（续22 追加 20 条：用户真实数据里的第三方域名 + 同类常见缺失）；一行一个域名后缀，`#` 注释；可直接手工增删（改完立即生效）
+# 共 378 条（续22 追加 20 条：用户真实数据里的第三方域名 + 同类常见缺失；
+# 续171 追加 19 条：拓展域名页实测样本 —— alicdn/unisvg/iconify/lodash 这批
+# 第三方 JS 资源与 OSS 主页，用户 2026-10-13 点单"这种又是第三方 js 的要好好判断"）；
+# 一行一个域名后缀，`#` 注释；可直接手工增删（改完立即生效）
 cloudflare.com
 bytedance.com
 segment.com
@@ -366,3 +369,24 @@ iconfont.cn
 typekit.com
 stackpath.com
 stackpathdns.com
+# ---- 续171（2026-10-13 用户点单）：拓展域名页实测样本，第三方 JS 资源 / OSS 主页 ----
+# （这批在 JS 里高频出现但不可能是目标资产；apex 自身在 JS 抽取路径按"等于后缀"命中）
+alicdn.com
+unisvg.com
+simplesvg.com
+iconify.design
+iconoir.com
+eleme.io
+element-plus.org
+lodash.com
+feross.org
+js.foundation
+underscorejs.org
+momentjs.com
+npms.io
+npmjs.com
+bit.ly
+tinyurl.com
+uppy.io
+fontawesome.com
+iconarchive.com

@@ -2,6 +2,91 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续171（2026-10-13，WorkBuddy · GLM-5.3-Flash）：JS 挖掘域名"宁缺毋滥"三道闸 + FOFA 反查标语法 + 报告导出开关（默认关）
+
+实施者：WorkBuddy · GLM-5.3-Flash。主理人 2026-10-13 看着「拓展域名」页点单三条
+（原话）："我一眼看下去就知道 com.text.name 这种不上域名，我们有必要添加一个域名解析，
+域名解析可能会漏但不会错"；"at.alicdn.com 这种 CDN 的，这种又是第三方 js 的，好好判断"；
+"像 style.font.name 虽然能解析，但我打开就是域名转让的"；"FOFA·ICO 反查的结果你要标明语法"；
+"导出：报告 MD JSONL HTML PDF，完整版报告，导出报告的功能设置可以开启或者关闭，默认是关闭"。
+
+### 一、JS 候选域名入库前的三道闸（`stages/jsmine.py::_verify_candidates`，全仓唯一产地）
+
+背景实测样本就是主理人贴的那张表：`com.text.name` / `com.password.name`（形态是成员访问链，
+靠既有 PSL 闸门拦不住 —— 它们能"解析"）；`style.font.name`（解析到 64.190.63.111，
+打开是**域名转让**页）；`at.alicdn.com`（CNAME → danuoyi.alicdn.com，第三方 JS 资源）；
+`u.ant.design`（靶场 JS 带出来的 CDN 域）。判定顺序与口径：
+
+1. **解析门**（`jsmine.verify_resolve`，总开关）：候选先做一次只读解析
+   （`dnsq.resolve_detail`）。明确 `nxdomain` → 不入库；`servfail` / `timeout` 等
+   DNS 无结论 → 放行 —— "可能会漏但不会错"。**自有域名（任务目标及其注册域）无条件放行
+   且不发一次解析**（`extdom.is_owned`）。
+2. **第三方 CDN 门**（`drop_cdn`）：解析结果命中 CDN 厂商（`scanner/cdn.py` 同一份名单：
+   CNAME 链 + IP 段两条判据）→ 别人的基础设施，不入库。实测：`at.alicdn.com`（CNAME 判据）、
+   靶场带出的 `u.ant.design`（IP 段判据）都被它拦下。
+3. **停车门**（`parking_check` + 预算 `parking_check_max`，新模块 `scanner/parked.py`，
+   只读）：HTTPS/HTTP 各试一次首页 GET，命中"for sale / buy this domain /
+   DNS resolution error / 域名出售 / 域名转让"等标记（title 或前 8000 字）或**两端均无响应**
+   （空壳，`com.text.name` / `style.font.name` 正是这形状）→ 不入库。已知停放商 CNAME
+   片段（bodis / sedoparking / parkingcrew / afternic / dan / above / parklogic）也算命中。
+   活站 → 保留，并把这次解析结果回填（`set_subdomain_net` / `set_subdomain_cnames`），
+   「拓展域名」页立刻有 IP/CDN/CNAME 可看，`resolve_extended` 的 `only_missing` 不会重复查。
+
+**每一档拒绝的数量与样本都写进任务日志**（`[jsmine] 候选域名质检拒收：解析不存在 N 个（如 …）；
+第三方 CDN N 个…`）—— 静默丢条目是本仓红线（§0 第 10 条）。开关四个键
+（`verify_resolve` / `drop_cdn` / `parking_check` / `parking_check_max` / `strip_comments`）
+四方一致：DEFAULTS ↔ 随包 settings.yaml ↔ 策略页表单（资产面拓展段 5 个新控件）↔
+`/settings` POST 映射；`[5b-171]` 逐键点名（勾选/取消/0 值都不许洗成默认）。
+另加 `js_thirdparty.txt` 19 条实测样本（alicdn / unisvg / iconify / lodash / feross …）。
+
+配套改动：`jsmine.strip_comments`（默认开）—— 域名抽取前剥离 JS 块注释与行注释，
+`lodash.com` / `feross.org` / `js.foundation` 这类 OSS 主页都藏在 license banner 注释里；
+行注释判据认"代码位置"（行首 / 空白 / 标点），**字符串里的 `//host` 与 `https://` 一律保留**
+（错剥一个真资产比多留一行噪声贵）。凭据与 flag 抽取仍看原始正文（注释里可能藏 CTF 线索）。
+
+### 二、FOFA 反查结果标明查询语法（`subdomains.note` 新列）
+
+`subdomains` 表加 `note TEXT DEFAULT ''`（SCHEMA + 老库 `_COLUMN_PATCHES` 双份），
+`insert_subdomains` 的 items 支持第 4 位。osint 阶段五个来源随行带语法入库：
+FOFA·ICO `icon_hash="123"`、证书 `cert="x.com"`、标题 `title="xxx"`（`fofa.build_*` 是唯一产地）；
+Shodan `http.favicon.hash:123` / Quake `favicon:"123"` 各用自家 `build_query`；
+C 段 / CT 日志没有语法，落空串。展示三处：「拓展域名」页与任务详情拓展页签各加**「语法」列**；
+MD / HTML 报告的子域名行尾 ` ← icon_hash="123456"`；JSONL 的 subdomain 行天然带 `note`。
+
+### 三、报告导出开关（`report.export_enabled`，**默认关**）
+
+DEFAULTS 新增 `report` 段（`export_enabled: False`），随包 settings.yaml 同步（带注释），
+策略配置页「报告导出」段一个勾选框。关着时：任务详情页**不渲染**导出按钮（改渲染一句
+"导出已关闭（策略配置 → 报告导出 可打开）"指路提示），`/tasks/<id>/export` 四种格式一律
+403 + 说明页（`_export_disabled_page`：为什么不能导、去哪儿开、开了立即可用）——
+不静默、不让"点了才知道不行"。报告数据照常入库，CLI 导出不受这一项约束。
+
+### 四、验证
+
+- `tests/smoke.py` 新增 `[171]` 门禁组：(a) 注释剥离（banner 里的 `lodash.com` 消失、
+  `https://` 与引号内协议相对 URL 存活、两种行注释被剥）；(b) 停车判定（for-sale /
+  Cloudflare DNS-resolution-error / 域名转让命中；正常登录页不命中；CNAME 特征；
+  probe 三态 dead/parked/alive 全桩验）；(c) 三道闸端到端（桩 DNS：nxdomain / CDN /
+  空壳拒收、timeout 放行、**自有域名零 DNS 查询**；活站保留并带回解析回填）；
+  (d) 语法四出口（拓展页 / 详情页 / MD / JSONL 都能看到 `icon_hash="123456"`）；
+  (e) 导出开关出厂值（DEFAULTS 与 settings.yaml 都是关）。
+- 既有用例三处接线：[5w]（报告三格式）/ [6b]（JSONL 路由）/ [59v]（完整版）这几组
+  **测的是报告内容**，用 `_export_gate171(client, on)` 临时打开开关、跑完还原出厂关
+  （经 settings_page 真路径 + save_settings 桩回传副本，**不碰真实 settings.yaml**）；
+  `[5]` 起的默认 403 断言钉住"默认关"；`[6u]` 的零外部请求断言要求把停车门关掉
+  （靶场 JS 带出的 sketch.com / pwg.org 会被它真摸一遍 —— 外部请求档与 FOFA 同类）。
+- 全量门禁 `./.venv/bin/python tests/smoke.py` 通过（`SMOKE PASS`）。
+
+### 五、踩过的坑（给下一个接手的人）
+
+- **`tests/smoke.py` 的编辑被 IDE 反复回滚**：文件在 IDE 里开着，Edit 工具报成功、
+  Read 也能读到新内容，稍后却被旧缓冲区覆盖（本轮实锤两次：`[6u]` 修复先"成功"后消失，
+  导致 run3/run4 两轮在零外部请求断言上**假红**）。规矩：改 smoke.py 一律走脚本按字节改 +
+  改完**立即**在同一命令里 `grep` 验证再跑门禁。
+- **smoke 里 POST /settings 忘挂桩会把真实 `config/settings.yaml` 整份重写**（safe_dump
+  一遍，400 行注释全蒸发）—— [5b] 的 finally 还原后，**后续再用必须自己重新挂桩**
+  （`[5b-171]` 块现在自带挂桩/还原）。本轮第一次跑门禁就真写坏了一次，靠 git checkout 找回。
+
 ## 续170（2026-10-13，WorkBuddy · Qoder-Agent 远端 Linux）：截图「永远等不到 load」这一类站点第一次真能截到 —— CDP 兜底 + 尝试次数落库 + 站点页「重新截图」
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人 2026-10-13 看完一轮真实扫描后点单四条，

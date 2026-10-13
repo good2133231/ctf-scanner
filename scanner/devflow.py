@@ -152,6 +152,9 @@ def selfcheck_settings(settings, intel_url=None):
     out = relax_pacing(devmode.enable_all_stages(devmode.apply(settings)))
     for key in _EXTERNAL_OFF:
         out[key] = dict(out.get(key) or {}, enabled=False)
+    # 续171：停车门（parked.py）对解析成功的第三方候选发站外首页 GET —— 自检的
+    # "零外网"铁律覆盖到它（键级关闭，解析门照常跑；与 devmode.suppress_external 同口径）
+    out.setdefault("jsmine", {})["parking_check"] = False
     out["keys"] = {}          # 自检不携带任何第三方凭据（见 docstring）
     if intel_url:
         out["intel"] = dict(out.get("intel") or {}, enabled=True, url=str(intel_url),

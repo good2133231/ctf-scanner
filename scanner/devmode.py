@@ -193,6 +193,13 @@ def suppress_external(settings):
         if isinstance(cur, dict) and cur.get("enabled"):
             out[seg] = dict(cur, enabled=False)
             killed.append(seg)
+    # 续171：JS 候选域名的**停车门**（scanner/parked.py）会对解析成功的第三方候选发
+    # 站外首页 GET —— 同属"会真出网"的动作，开发模式一并压掉。键级而不是段级：
+    # 解析门（纯 DNS）照常跑，jsmine 阶段本身的流程价值不受影响。
+    _j = out.get("jsmine")
+    if isinstance(_j, dict) and _j.get("parking_check"):
+        out["jsmine"] = dict(_j, parking_check=False)
+        killed.append("jsmine.parking_check")
     return out, killed
 
 

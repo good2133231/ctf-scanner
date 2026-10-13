@@ -173,6 +173,9 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
      任务详情页顶另有**四个导出按钮**：`导出 MD` / `导出 HTML` / `导出 PDF` / `导出 JSONL`，
      以及一组**「完整版」**入口（续59-2：`完整版：MD / HTML / PDF`）
      （对应 `GET /tasks/<id>/export?fmt=md|html|pdf|jsonl`，CLI 侧等价参数 `--report` / `--report-html` / `--report-pdf` / `--report-jsonl`，见上）。
+     **导出功能受 `report.export_enabled` 控制（续171，默认关闭）**：关闭时任务详情页不显示
+     导出按钮（只有一句指路提示），导出路由返回说明页（403）——去「策略配置 → 报告导出」勾选
+     `report.export_enabled` 即可打开，数据一直在库，打开立即可导；**CLI 导出不受这一项约束**。
      **资产小节的展示上限**（站点/目录 100，端口/C 段/证书/子域名 200）是**有意的可读性护栏**，不是丢数据：
      被截断时小节标题会写明"共 N 条，此处仅列前 M 条 —— **完整清单请用「完整版」导出**"，
      那个出口就是 `?full=1`（GUI）/ `--full-report`（CLI）；要按资产逐条核对台账时用它。
@@ -237,6 +240,17 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    列/筛选/勾选操作同「子域名资产」（来源列带 **FOFA** 字样，一眼能看出哪些是 FOFA 找出来的）。
    末列「**敏感**」显示该域名下 JS 挖到的疑似凭据条数（`js-secret-*`，详见「漏洞风险」页）。这些域名**未必属于目标**，
    独立成页是为了避免误判资产归属。
+   「**语法**」列（续171）显示反查来源**入库时用的查询语句**（`icon_hash="123"` / `cert="x.com"` /
+   `title="xxx"`，Shodan / Quake 各是自己的写法）—— 反查结果必须能对上是哪次查询带回来的；
+   JS 挖掘与被动收集来的行没有语法，显示 `-`。
+   **JS 候选域名入库前过三道闸**（续171，`jsmine.verify_resolve` 总开关，只对**非自有**域名动手，
+   每一档拒绝数量与样本都写进任务日志）：① **解析门** —— 明确 `nxdomain` 的候选不入库
+   （DNS 无结论照常放行，"可能会漏但不会错"）；② **第三方 CDN 门** —— 解析命中 CDN 厂商
+   （CNAME 链或 IP 段，如 `at.alicdn.com`）是别人的基础设施，不入库；③ **停车门**
+   （`jsmine.parking_check`，只读首页 GET，预算 `parking_check_max`）—— 首页是"域名转让 /
+   for sale / DNS resolution error"或 HTTPS/HTTP 均无响应的空壳（如 `style.font.name`），不入库。
+   另有 `jsmine.strip_comments`：域名抽取前剥离 JS 注释（`lodash.com` / `feross.org` 这类
+   OSS 主页都藏在 license banner 注释里；凭据与 flag 抽取不受影响）。
    **按来源分类浏览与排序**（`?src=`）：页顶「来源分类」按钮组可只看某一类，默认列表也按
    **JS 挖掘 → FOFA·标题反查 → FOFA·证书反查 → FOFA·ICO 反查 → C 段反查** 的顺序排列
    （同类内新的在前），不会把几种来源夹在一起。

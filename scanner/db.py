@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS subdomains (
   source TEXT DEFAULT '',
   cname TEXT DEFAULT '',
   ip TEXT DEFAULT '',
-  cdn TEXT DEFAULT ''
+  cdn TEXT DEFAULT '',
+  note TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS sites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -283,7 +284,10 @@ _COLUMN_PATCHES = {
     "subdomains": {"cname": "TEXT DEFAULT ''", "ip": "TEXT DEFAULT ''",
                    "cdn": "TEXT DEFAULT ''",
                    # 解析失败/未解析的原因码（nxdomain / no-a / timeout / over-limit…）
-                   "ip_note": "TEXT DEFAULT ''"},
+                   "ip_note": "TEXT DEFAULT ''",
+                   # 续171（2026-10-13 用户点单）：反查来源的**查询语法** ——
+                   # `icon_hash="123"` / `cert="x.com"` / `title="xxx"`，拓展域名页"语法"列展示
+                   "note": "TEXT DEFAULT ''"},
     "sites": {"favicon": "TEXT DEFAULT ''",
               # 站点截图的**相对项目根**路径（logs/task_x/shots/xxx.png）
               "shot": "TEXT DEFAULT ''",
@@ -961,7 +965,11 @@ def task_counts_bulk(task_ids):
 # ---------- 资产 ----------
 
 def insert_subdomains(task_id, items):
-    """items: [(domain, source[, cname]), ...]
+    """items: [(domain, source[, cname[, note]]), ...]
+
+    `note`（续171）是反查来源的**查询语法**（`icon_hash="123"` / `cert="x.com"` /
+    `title="xxx"`），拓展域名页「语法」列直接展示 —— 用户要求 FOFA·ICO 反查的结果
+    必须标明用的是哪条语法。
 
     ⚠️ **punycode 归一化的唯一咽喉点**（续65）：`domain` 一律先过 `utils.to_ascii()` 再入库，
     于是"库里只可能有 punycode 形态"是**结构性保证**，新增写库路径不必再各自归一
@@ -974,14 +982,17 @@ def insert_subdomains(task_id, items):
     for it in items:
         domain, source = it[0], it[1]
         cname = it[2] if len(it) > 2 else ""
+        # 续171：第 4 位是**查询语法**（`icon_hash="123"` 这类，osint 反查来源带；
+        # 其它来源没有就不传，落空串）
+        note = it[3] if len(it) > 3 else ""
         a = to_ascii(domain)
         if not a:
             logger.warning(f"[db] insert_subdomains 跳过归一失败的域名：{domain!r}（source={source!r}）")
             continue
-        rows.append((task_id, a, source, cname or ""))
+        rows.append((task_id, a, source, cname or "", note or ""))
     if not rows:
         return
-    _exec("INSERT INTO subdomains(task_id, domain, source, cname) VALUES(?,?,?,?)",
+    _exec("INSERT INTO subdomains(task_id, domain, source, cname, note) VALUES(?,?,?,?,?)",
           rows, many=True)
 
 
@@ -1377,8 +1388,10 @@ SITE_TITLE_ORDER = ("CASE WHEN COALESCE(NULLIF(TRIM(title),''),NULLIF(TRIM(redir
 
 # 表 -> (默认排序, 可被关键字过滤的文本列)
 _ASSET_PAGES = {
+    # `note`（续171）是反查来源随行入库的**查询语法**（icon_hash="123" 这类），
+    # 「拓展域名」页与任务详情拓展页签的「语法」列都靠它 —— 列清单少了它就是'-'
     "subdomains": ("task_id DESC, domain",
-                   ("domain", "source", "cname", "ip", "cdn", "ip_note")),
+                   ("domain", "source", "cname", "ip", "cdn", "ip_note", "note")),
     # 关键字要能搜到「跳转后」的标题与落地 URL（续112-B）：页面上显示的就是这些，
     # 搜不到等于"看得见、找不到"。
     "sites": ("task_id DESC, " + SITE_TITLE_ORDER,

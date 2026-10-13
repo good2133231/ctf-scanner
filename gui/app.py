@@ -103,6 +103,28 @@ def _export_error_page(err, task_id):
             "</body></html>")
 
 
+def _export_disabled_page(task_id):
+    """报告导出开关关着时给用户看的页面（`report.export_enabled`，默认关 —— 用户 2026-10-13 点单）。
+
+    说清三件事：为什么导不了（开关关着）、去哪儿开（策略配置 → 报告导出，或直接改
+    config/settings.yaml）、改完立即生效（数据一直在库里，开完再点导出就行）。
+    纯静态 HTML 不经模板（与 `_export_error_page` 同一做法）。
+    """
+    return ("<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
+            "<title>导出已关闭</title></head><body style='font:14px/1.7 sans-serif;margin:32px'>"
+            "<h1 style='font-size:18px'>报告导出功能已关闭</h1>"
+            f"<p>任务 #{int(task_id)} 的报告数据都在，但<b>导出功能</b>默认关闭"
+            "（<code>report.export_enabled: false</code>）。</p>"
+            "<p>打开方式（二选一）：<br>"
+            "① 控制台「策略配置 → 报告导出」勾选后保存；<br>"
+            "② 直接编辑 <code>config/settings.yaml</code>，把 "
+            "<code>report.export_enabled</code> 改为 <code>true</code>。</p>"
+            "<p>打开后回到任务详情页即可导出 MD / JSONL / HTML / PDF（含完整版）。</p>"
+            f"<p><a href='/tasks/{int(task_id)}'>← 返回任务</a> ｜ "
+            "<a href='/settings#report'>打开策略配置</a></p>"
+            "</body></html>")
+
+
 def ip_note_label(note):
     """把原因码翻译成中文；空值返回空串（表示解析正常）。"""
     text = str(note or "").strip()
@@ -1922,6 +1944,8 @@ def create_app():
             rescan_of=top.get("rescan_of"),
             # 续25：本任务是否被"追加执行"过（次数）—— 详情页据此显示标记与横幅
             append_count=int(top.get("append_count") or 0),
+            # 续171：报告导出开关（默认关）—— 关着时详情页不渲染导出按钮，改渲染一句提示
+            report_export=bool((settings.get("report") or {}).get("export_enabled")),
             # 登录态只显示**掩码后的**名字 + 值（`Cookie=abc***xyz`），见上面的 auth_view
             auth_view=auth_view,
             # 续35「运行时长」：目标是"这个任务一共跑了多久" —— 续跑 / 追加会跑多段，
@@ -1945,12 +1969,19 @@ def create_app():
         那是可读性护栏）。默认版的小节标题会写明"共 N 条，此处仅列前 M 条 —— 完整清单请用
         「完整版」导出"，这个参数就是那句话指向的出口。`jsonl` 本来就是全量，不受影响。
 
+        续171（用户 2026-10-13 点单）：导出功能受 `report.export_enabled` 控制（**默认关**）。
+        关着时四种格式一律返回提示页（403）：说清开关在哪、怎么开 —— 不静默、也不让
+        "点了才知道不行"。任务页的导出按钮在开关关着时同样隐藏（见 task_detail.html）。
+
         PDF 走本机无头浏览器的 `--print-to-pdf`（见 `report.export_pdf`）：找不到浏览器时
         **把原因显示出来**（而不是 500 或一个空文件），并提示可改导出 HTML。
         """
         task = _owned_task(task_id)
         if not task:
             abort(404)
+        if not bool((settings.get("report") or {}).get("export_enabled")):
+            return Response(_export_disabled_page(task_id), status=403,
+                            mimetype="text/html; charset=utf-8")
         from scanner.report import (export_pdf, generate, generate_html,
                                     generate_jsonl)
         fmt = (request.args.get("fmt") or "md").strip().lower()
@@ -3726,6 +3757,8 @@ def create_app():
                               "max_chars": int(f.get("flags_max_chars", 2000000) or 2000000),
                               "max_per_source": int(f.get("flags_max_per_source", 20) or 20),
                               "max_per_task": int(f.get("flags_max_per_task", 200) or 200)},
+                    # 报告导出（续171，默认关）：MD / JSONL / HTML / PDF 共用一个开关
+                    "report": {"export_enabled": f.get("report_export_enabled") == "1"},
                     "afrog": {"enabled": f.get("afrog_enabled") == "1",
                               "poc_dir": (f.get("afrog_poc_dir") or "").strip(),
                               "max_targets": int(f.get("afrog_max_targets", 20) or 20),
@@ -3781,6 +3814,13 @@ def create_app():
                                "max_js": int(f.get("jsmine_max_js", 40) or 40),
                                "secrets": f.get("jsmine_secrets") == "1",
                                "recrawl": f.get("jsmine_recrawl") == "1",
+                               # 续171（用户点单"有必要添加一个域名解析…不会错"）：三道闸
+                               "verify_resolve": f.get("jsmine_verify_resolve") == "1",
+                               "drop_cdn": f.get("jsmine_drop_cdn") == "1",
+                               "parking_check": f.get("jsmine_parking_check") == "1",
+                               "parking_check_max": int(
+                                   f.get("jsmine_parking_check_max", 100) or 0),
+                               "strip_comments": f.get("jsmine_strip_comments") == "1",
                                # blacklist / drop_absent_zone 页面无输入框，原样带回
                                "blacklist": list(_j0.get("blacklist") or []),
                                "drop_absent_zone": bool(_j0.get("drop_absent_zone", True))},

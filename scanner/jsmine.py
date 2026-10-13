@@ -201,6 +201,32 @@ _CODE_LABELS = frozenset({
     "undefined", "null", "true", "false", "function", "return", "typeof",
 })
 
+# ---------- JS 注释剥离（2026-10-13 用户点单）----------
+
+# 为什么：lodash.com / feross.org / js.foundation 这类 OSS 主页**几乎只出现在
+# 库文件头部的 license banner 注释里**（`/*! lodash v4 | MIT | lodash.com */`），
+# 抽域名前把注释剥掉，这批噪声就不存在了。只用于**域名抽取**，flagfind / 指纹
+# 仍看原始正文（注释里也可能藏着 CTF 线索，抽取与线索两条路不共用）。
+
+# 块注释 `/* ... */`（含 `/*! ... */`，非贪婪跨行）
+_JS_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
+
+# 行注释 `// ...`。**关键在"前面是谁"**：`https://` / 协议相对 `"//host/x"` 的 `//`
+# 前面是 `:` 或引号，绝不能剥 —— 那会把真资产一起剥没。所以只认"代码位置"：
+# 行首，或前面是空白 / 语句标点 / 运算符。字符串里的 `//`（前面是引号或普通字符）
+# 一律保留。宁可少剥（噪声多留一行）也不能错剥（真资产消失）。
+_JS_LINE_COMMENT_RE = re.compile(
+    r"(?:^|(?<=[\s;,({\[)\]}=<>!&|?+\-*/%~^]))//[^\n]*", re.M)
+
+
+def strip_js_comments(text):
+    """剥掉 JS 正文里的块注释与行注释（**只用于域名抽取**；失败原样返回）。"""
+    try:
+        text = _JS_BLOCK_COMMENT_RE.sub(" ", text)
+        return _JS_LINE_COMMENT_RE.sub(" ", text)
+    except (TypeError, ValueError):
+        return text
+
 # ---------- 提取正则 ----------
 
 # <script src="...">（单引号 / 双引号 / 无引号三种写法）
@@ -499,6 +525,9 @@ def mine(url, settings, logger=None, text_sink=None):
     max_js = max(0, int(cfg.get("max_js", 40)))
     want_secrets = cfg.get("secrets", True) is not False
     blacklist = cfg.get("blacklist") or []
+    # 注释剥离（2026-10-13 用户点单）：只作用于**域名抽取**——license banner 注释里的
+    # OSS 主页（lodash.com / feross.org / js.foundation …）是拓展域名噪声的大头。
+    strip_comments = cfg.get("strip_comments", True) is not False
 
     out = _new_result()
     seed = urlparse(url or "")
@@ -560,7 +589,10 @@ def mine(url, settings, logger=None, text_sink=None):
         bodies = pool_run(_get, scripts, workers=workers, logger=logger, label="JS 脚本抓取")
         js_count = len(bodies)
         for b in bodies:
-            h2, u2 = _extract(b["text"], scheme, protect, blacklist)
+            # 域名抽取看**剥过注释**的正文（secrets / flagfind / 指纹仍看原始正文）：
+            # banner 注释里的 OSS 主页不是资产，但注释里藏的 CTF 线索不能丢。
+            js_text = strip_js_comments(b["text"]) if strip_comments else b["text"]
+            h2, u2 = _extract(js_text, scheme, protect, blacklist)
             hosts |= h2
             urls |= u2
             if want_secrets:
