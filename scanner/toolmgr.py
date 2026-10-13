@@ -204,11 +204,50 @@ MANUAL = {
 
 # ---------- 平台 / 命名 ----------
 
+# 续168：**显式指定目标平台**的唯一入口（CLI `--platform` 就是设这个环境变量）。
+# 它只改"选品与清单怎么说"——**产物仍只下本平台那一份**：给别的平台备货会把这台机器永远
+# 用不到的字节留在仓库里，而"预览另一平台该装哪些"才是真需求。
+PLATFORM_OVERRIDE_ENV = "CTFSCANNER_TARGET_PLATFORM"
+
+
+# 官方产物命名用的架构名。**唯一一张表**（§5.14）：本机探测与 `--platform` 覆盖都从这里过，
+# 否则 `--platform windows/x86_64` 会拿着"x86_64"去比对官方的"windows_amd64.zip"，
+# 把一个人畜无害的别名说成"本平台没有产物"。
+_ARCH_ALIASES = {"x86_64": "amd64", "amd64": "amd64", "x64": "amd64",
+                 "aarch64": "arm64", "arm64": "arm64",
+                 "i386": "386", "i686": "386", "x86": "386", "386": "386",
+                 "armv7l": "arm", "arm": "arm"}
+
+
+def platform_override():
+    """解析 `CTFSCANNER_TARGET_PLATFORM` → `((os_label, arch) 或 None, 说明)`。
+
+    值不认识时**不静默忽略**：返回 `(None, 原因)` 让上层照本机探测值继续，并把那句话打进
+    清单抬头（§5.19：讲"这次按什么口径"的成句必须跟着配置走，且降级要看得见）。
+    """
+    raw = (os.environ.get(PLATFORM_OVERRIDE_ENV) or "").strip().lower()
+    if not raw:
+        return None, ""
+    parts = [x for x in raw.replace("\\", "/").split("/") if x]
+    if len(parts) != 2:
+        return None, (f"{PLATFORM_OVERRIDE_ENV}={raw!r} 不是「os/arch」两段（如 windows/amd64）"
+                      " —— 按本机探测值继续")
+    os_label, arch = parts
+    if os_label in ("darwin", "macos", "osx"):
+        os_label = "macOS"
+    arch = _ARCH_ALIASES.get(arch, arch)
+    return (os_label, arch), f"目标平台按 {os_label}/{arch} 预览（产物仍只装本平台那一份）"
+
+
 def host_arch():
     """返回官方产物命名用的 `(os_label, arch)`；认不出的平台如实返回 `("unknown", ...)`。
 
     刻意**不猜**：宁可让上层报"未提供当前平台产物"，也不要拿一个错的产物去覆盖现有二进制。
+    平台判据**只这一处**（AGENTS §5.14），`--platform` 的覆盖也接在这里 —— 别在调用方各判一次。
     """
+    ov, _note = platform_override()
+    if ov:
+        return ov
     plat = sys.platform
     if plat.startswith("win"):
         os_label = "windows"
@@ -219,9 +258,7 @@ def host_arch():
     else:
         return "unknown", "unknown"
     machine = (platform.machine() or "").lower()
-    arch = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64",
-            "i386": "386", "i686": "386", "x86": "386", "armv7l": "arm"}.get(machine, machine)
-    return os_label, (arch or "unknown")
+    return os_label, (_ARCH_ALIASES.get(machine, machine) or "unknown")
 
 
 def binary_name(tool):
@@ -432,14 +469,19 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
     `wire=True` 时把 `tools.<name>` 写成刚装好的可执行文件路径 —— 否则"装了也用不上"
     （`which()` 只认 PATH 与配置里的相对路径）。
     """
-    out = {"tool": tool, "ok": False, "version": "", "path": "", "verified": None, "reason": ""}
+    out = {"tool": tool, "ok": False, "version": "", "path": "", "verified": None, "reason": "",
+           "not_applicable": ""}
     if tool not in TOOLS:
         out["reason"] = f"不支持的工具（可选：{'、'.join(TOOLS)}）"
         return out
     os_label, arch = host_arch()
     pre = inspect(tool, os_label, arch)
     if pre["asset"] is None:
+        # 续168：**「本平台没有可校验产物」不是一种失败**，是一态"不适用"。混进 failed 的后果是
+        # Windows 上 `./install.sh` 恒 rc=1（puredns 官方无 Windows 产物 —— 每台新机器都要有人
+        # 来问一句"是不是装坏了"）。不但不算失败，还**必须单独点名**（见 run_bootstrap.render）。
         out["reason"] = pre["reason"]
+        out["not_applicable"] = "本平台不适用（官方没有该平台的可校验产物）"
         return out
     pinned, pinmap = pin(tool)
     try:
@@ -1397,6 +1439,27 @@ def stack_present(name, dest_root=None):
     return _markers_ok(d, cfg.get("marker") or (), cfg.get("marker_any") or ())[0]
 
 
+def stack_applicable(name):
+    """本平台**该不该**装这一件 → `(是否适用, 原因)`。纯计算、**零网络**（`probe()` 那条
+    "打桩三个出口仍要出全清单"的判据依赖它不悄悄出网）。
+
+    为什么要有它：与 `install()` 那条同一口径 —— "官方压根没发这个平台的产物"和"本框架只核过
+    部分平台的摘要"都**不是失败**，是**不适用**；但混进失败就会让 Windows 上 `./install.sh` 恒非 0，
+    混进就绪又会静默少装。两个方向都得看得见，所以清单里单独一节点名（`run_bootstrap.render`）。
+    """
+    cfg = LOCAL_STACK.get(name)
+    if not cfg:
+        return False, f"不支持的组件（可选：{'、'.join(LOCAL_STACK)}）"
+    asset = stack_asset(name)
+    if not asset:
+        os_label, arch = host_arch()
+        return False, f"官方未提供 {os_label}/{arch} 的 {name} 产物"
+    if cfg["kind"] == _STACK_CFT and asset not in (cfg.get("pin_sha256") or {}):
+        return False, (f"{asset} 没有本框架核过的产物摘要（{name} 只登记人工核过的平台，"
+                       "不拿别的平台的字节凑数）")
+    return True, ""
+
+
 def stack_install(name, dest_root=None, allow_unverified=False, timeout=600,
                   blob=None, json_fetch=None):
     """下载并解包一个运行时组件，返回结果字典（**永不抛异常**，失败走 `ok=False` + `reason`）。
@@ -1408,17 +1471,19 @@ def stack_install(name, dest_root=None, allow_unverified=False, timeout=600,
     cfg = LOCAL_STACK.get(name) or {}
     out = {"name": name, "ok": False, "version": str(cfg.get("version") or ""), "path": "",
            "verified": None, "verify_source": "", "reason": "",
-           "bytes": 0, "files": 0, "skipped": 0}
+           "bytes": 0, "files": 0, "skipped": 0, "not_applicable": ""}
     if not cfg:
         out["reason"] = f"不支持的组件（可选：{'、'.join(LOCAL_STACK)}）"
         return out
     root = Path(dest_root) if dest_root else _BASE_DIR
+    ok_platform, why_na = stack_applicable(name)
+    if not ok_platform:
+        out["reason"] = why_na + "（不猜、不回落）"
+        out["not_applicable"] = "本平台不适用"
+        return out
     os_label, arch = host_arch()
     asset = stack_asset(name, os_label, arch)
     url = stack_url(name, os_label, arch)
-    if not asset or not url:
-        out["reason"] = f"官方未提供 {os_label}/{arch} 的 {name} 产物（不猜、不回落）"
-        return out
     out["asset"] = asset
     digest, vsrc, why = stack_digest(name, asset, timeout=min(int(timeout), 120), fetch=json_fetch)
     if not digest and not allow_unverified:

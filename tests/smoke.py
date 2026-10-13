@@ -20541,6 +20541,130 @@ expression: r0()
           "（干扰夹具）｜配置里的相对值按项目根折算（换 CWD 仍是绝对路径，退回旧写法即红）｜"
           "落点字符串 scanner 里只有一处（判据自带夹具）")
 
+    import contextlib as _ctx168b
+    import io as _io168b
+
+    # ---------------- [168] 续168：「本平台不适用」不是一种失败；--platform 只用于清单预览 ----------------
+    #      主理人点单（2026-10-13）：「跨平台安装可以选择平台，亦或是自己识别平台，
+    #      就不用安装一些平台不需要的了」。改前的现状：Windows 上 puredns（官方压根没发 Windows 产物）
+    #      与 chrome（本框架只核过 linux64 摘要）都算"自动层失败" ⇒ `./install.sh` 恒 rc=1，
+    #      每台新机器都要有人来问一句"是不是装坏了"；而"选择平台"这件事根本没有入口。
+    print('[168] 续168 平台不适用态 …')
+    from scanner import toolmgr as _tm168
+    _loc168 = _tm168.host_arch()      # 本机真值：**设覆盖之前**取，① 用它证伪"非法值仍生效"
+    _loc168 = _tm168.host_arch()      # 本机真值：**设覆盖之前**取，① 用它证伪"非法值仍生效"
+
+    # ① 覆盖入口只有一处：`platform_override()` 认两段、认别名、不认的**给原因且不生效**
+    assert _tm168.platform_override() == (None, ''), '没设环境变量时不该有覆盖'
+    os.environ[_tm168.PLATFORM_OVERRIDE_ENV] = 'darwin/arm64'
+    assert _tm168.host_arch() == ('macOS', 'arm64'), _tm168.host_arch()
+    os.environ[_tm168.PLATFORM_OVERRIDE_ENV] = 'windows/x86_64'
+    assert _tm168.host_arch() == ('windows', 'amd64'), \
+        '架构别名必须过**同一张表**折算；不折算就是拿着 x86_64 去比官方的 amd64，' \
+        '把一个人畜无害的写法说成"本平台没有产物"（假不适用）'
+    assert _tm168.inspect('httpx')['asset'], 'windows/x86_64 折算后 httpx 要能选到产物'
+    _note168 = _tm168.platform_override()[1]
+    assert '预览' in _note168 and '本平台' in _note168, \
+        '抬头那句话要同时说清"按谁预览"和"产物仍只装本平台那份"（否则读的人会以为在给那个平台备货）'
+    os.environ[_tm168.PLATFORM_OVERRIDE_ENV] = '不认识了'
+    _ov168, _why168 = _tm168.platform_override()
+    assert _ov168 is None and '两段' in _why168, (_ov168, _why168)
+    assert _tm168.host_arch() == _loc168, \
+        '值不认识时必须照本机探测值继续（静默按别的口径选品＝清单上是谎话）：' + repr(_tm168.host_arch())
+    del os.environ[_tm168.PLATFORM_OVERRIDE_ENV]
+
+    # ② 官方没发这个平台的产物 ⇒ 一态"不适用"（`not_applicable` 非空），既不是失败也不算就绪
+    os.environ[_tm168.PLATFORM_OVERRIDE_ENV] = 'windows/amd64'
+    try:
+        _r168 = _tm168.install('puredns')            # 零网络：asset 算不出来就在查 release 之前 return
+        assert _r168['ok'] is False and _r168['not_applicable'], _r168
+        assert _r168['verified'] is None, '没走到校验就不许给 verified 真/假（§5.19 那类假话）'
+        assert _tm168.stack_applicable('chrome')[0] is False, \
+            'chrome 只登记核过的 linux64 摘要 ⇒ windows 必须是**不适用**，而不是"核过了却装不上"'
+        assert _tm168.stack_applicable('fscan-src')[0] is True, '源码包与平台无关，不该被算成不适用'
+        assert _tm168.stack_applicable('go')[0] is True, 'Go 官方每个主流平台都发 ⇒ 平台覆盖不该收窄'
+        _sk168 = _tm168.stack_install('chrome', dest_root=str(ROOT / 'logs' / '_nonexist168'))
+        assert _sk168['ok'] is False and _sk168['not_applicable'] and _sk168['bytes'] == 0, _sk168
+        assert not (ROOT / 'logs' / '_nonexist168').exists(), '不适用那条必须在下任何字节之前返回'
+    finally:
+        del os.environ[_tm168.PLATFORM_OVERRIDE_ENV]
+    assert _tm168.stack_applicable('chrome')[0] is True, '本平台（linux/amd64）chrome 是适用的'
+
+    # ③ rc 的生死线：`install_auto` / `install_stack` 对"不适用"**不排进 failed**，真失败照旧要排
+    import run_bootstrap as _rb168
+    _pb168, _up168 = _rb168.probe, _tm168.update
+    try:
+        _rb168.probe = lambda *_a, **_k: [
+            _rb168._row('__platform__', 'runtime', False, 'ok', 'windows/amd64'),
+            _rb168._row('httpx', 'auto', True, 'missing', '未装'),
+            _rb168._row('puredns', 'auto', True, 'warn', '官方只发布 Linux / macOS 产物'),
+            _rb168._row('go', 'stack', False, 'missing', '未取'),
+            _rb168._row('chrome', 'stack', False, 'warn', '本平台没有核过的摘要')]
+        _tm168.update = lambda names, **kw: [
+            {'tool': 'httpx', 'ok': True, 'path': 'tools/scanner/httpx', 'version': 'v1'},
+            {'tool': 'puredns', 'ok': False, 'verified': None, 'path': '',
+             'reason': 'puredns 官方只发布 Linux / macOS 产物',
+             'not_applicable': '本平台不适用（官方没有该平台的可校验产物）'}]
+        _ins168, _fld168 = _rb168.install_auto()
+        assert _fld168 == [], '「不适用」被算成失败 ⇒ Windows 上 install.sh 又恒 rc=1：' + repr(_fld168)
+        assert [i['tool'] for i in _ins168] == ['httpx'], _ins168
+        # 变异证伪：摘掉 not_applicable（＝旧行为"没装上就是失败"），同一条判据必须立刻报出 1 项
+        _tm168.update = lambda names, **kw: [
+            {'tool': 'puredns', 'ok': False, 'verified': None, 'path': '',
+             'reason': 'stub：该平台没有产物'}]
+        _ins2, _fld2 = _rb168.install_auto()
+        assert [f['name'] for f in _fld2] == ['puredns'], \
+            '摘掉标记后仍不算失败 ⇒ 上面那条断言是空写：' + repr(_fld2)
+        _tm168.update = _up168
+        # 清单必须**单开一节点名**（隐藏的"不适用"就是新的静默降级，§0 第 10 条）
+        _buf168 = _io168b.StringIO()
+        with _ctx168b.redirect_stdout(_buf168):
+            _rb168.render(_rb168.summarize(_rb168.probe()), [], [], install=True, sys_plan=[])
+        _txt168 = _buf168.getvalue()
+        assert '本平台不适用' in _txt168 and 'puredns' in _txt168 and 'chrome' in _txt168, _txt168[:600]
+        assert '不是失败' in _txt168, '那一节的标题要自己说清这不是失败（否则读者仍去找"哪里坏了"）'
+        assert '自动层失败' not in _txt168, 'stub 里一项都没失败，却印了失败小节 ⇒ 计数与正文不一致'
+    finally:
+        _rb168.probe, _tm168.update = _pb168, _up168
+
+    # ④ 预览模式必须**自己声明**"已装吃的是本机文件系统"（不然那一列就是谎话）
+    os.environ[_tm168.PLATFORM_OVERRIDE_ENV] = 'windows/amd64'
+    try:
+        _buf2 = _io168b.StringIO()
+        with _ctx168b.redirect_stdout(_buf2):
+            _rb168.render(_rb168.summarize(_rb168.probe()), [], [], sys_plan=[])
+        _txt2 = _buf2.getvalue()
+        assert '预览模式' in _txt2 and '本机' in _txt2, _txt2[:400]
+        # 变异证伪：平台没覆盖时这句话不许出现（否则等于给本机装的东西扣一顶"预览"的帽子）
+        del os.environ[_tm168.PLATFORM_OVERRIDE_ENV]
+        _buf3 = _io168b.StringIO()
+        with _ctx168b.redirect_stdout(_buf3):
+            _rb168.render(_rb168.summarize(_rb168.probe()), [], [], sys_plan=[])
+        assert '预览模式' not in _buf3.getvalue(), '本机探测也被打成"预览" ⇒ 那句话不再是可信信号'
+    finally:
+        os.environ.pop(_tm168.PLATFORM_OVERRIDE_ENV, None)
+
+    # ⑤ `--platform` 的接线：命令行 → 那个唯一的环境变量 → 判据仍只有 host_arch 一处
+    #    （走 `main()` 而不是自己拼环境：这一条要验的就是"命令行到底把什么传下去了"）
+    _rc168 = 0
+    _buf5 = _io168b.StringIO()
+    try:
+        with _ctx168b.redirect_stdout(_buf5):
+            _rc168 = _rb168.main(['--platform', 'windows/amd64'])
+        _txt5 = _buf5.getvalue()
+        assert _rc168 == 0, (
+            '预览清单不该有失败项（有就说明那条「不适用」又漏回 failed 了）：rc=%s' % _rc168)
+        assert 'windows/amd64 预览' in _txt5 and '预览模式' in _txt5, _txt5[:300]
+        assert '自动层失败' not in _txt5, _txt5[-500:]
+    finally:
+        os.environ.pop(_tm168.PLATFORM_OVERRIDE_ENV, None)
+
+    print('[168] 续168 平台不适用态 ok: 覆盖入口只有一处（别名过同一张表折算、非法值不生效还给原因）｜'
+          '官方没发该平台产物＝不适用（不算失败也不算就绪，verified 保持 None，且一个字节都不下）｜'
+          'install_auto/install_stack 对它不排 failed（变异：摘掉标记 ⇒ 立刻算 1 项失败）｜'
+          '清单单开一节逐条点名 + 预览模式自己声明（本机探测时不许出现那句）｜'
+          'chrome 只登记核过的平台、源码包与 go 不受平台影响')
+
     # ---------------- [8as] 续140：记忆同步是硬规矩（AGENTS §0.4 + §10 多 agent） ----------------
     #      用户点单（2026-10-09）：「我们的记忆你都要同步到todo，以及修改完同步是硬记录，
     #      让我们换对话框，换AI也能接着执行」+「把多agent执行加入记忆…就算其他ai来了也会多agent执行」。

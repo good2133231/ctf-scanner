@@ -552,11 +552,20 @@ def probe(settings=None):
     # 70 MB 的 Go），并且**绝不混进"需手工"那一栏**（混进去就是骗人：它明明能自动取）。
     # `stack_status()` 只看文件系统，一条请求都不发（`[8d]③` 那条"probe 零网络"照样成立）。
     for _stk in toolmgr.stack_status():
-        rows.append(_row(_stk["name"], "stack", False,
-                         "ok" if _stk["present"] else "missing",
-                         (f"已就位 {_stk['dest']}（{_stk['version']}）" if _stk["present"]
-                          else f"未取（{_stk['version']} → {_stk['dest']}）：{_stk['why']}"),
-                         [] if _stk["present"] else ["python run_bootstrap.py --with-stack"]))
+        _na168, _why168 = toolmgr.stack_applicable(_stk["name"])
+        _rows168 = ([] if _stk["present"] or not _na168
+                    else ["python run_bootstrap.py --with-stack"])
+        if not _na168:                       # 不适用优先于"本机有没有"（预览时那条不算数）
+            _st168, _det168 = "warn", _why168 + (
+                "；本机落点里有东西，但那是按本平台装的，不代表那个平台可用"
+                if _stk["present"] else "")
+            _rows168 = []
+        elif _stk["present"]:
+            _st168, _det168 = "ok", f"已就位 {_stk['dest']}（{_stk['version']}）"
+        else:
+            _st168 = "missing"
+            _det168 = f"未取（{_stk['version']} → {_stk['dest']}）：{_stk['why']}"
+        rows.append(_row(_stk["name"], "stack", False, _st168, _det168, _rows168))
 
     path = screenshot.browser_path(st)
     if path and snap_confined(path):
@@ -678,16 +687,27 @@ def summarize(rows):
 
 def render(s, failed=(), installed=(), install=False, sys_plan=()):
     """打印报告。CLI 口径：命令可直接复制，路径原样（不遮项目外路径）。"""
+    from scanner import toolmgr
     os_label, arch, mgrs = platform_info()
     # `s` 可能来自调用方自己拼的字典（门禁里就有），所以这一堆一律 `.get` 兜空。
     _stk166 = s.get("todo_stack") or []
-    print(f"[*] 迁移自举｜平台 {os_label}/{arch}｜包管理器 {'、'.join(mgrs) or '无'}")
+    _ov168 = toolmgr.platform_override()[1]      # 有 --platform 覆盖时这句话说的是"按谁预览"
+    _na168 = [r for r in s["rows"] if r["status"] == "warn"
+              and r["kind"] in ("auto", "pending", "stack")]
+    print(f"[*] 迁移自举｜平台 {os_label}/{arch}｜包管理器 {'、'.join(mgrs) or '无'}"
+          + (f"｜{_ov168}" if _ov168 else ""))
+    if _ov168:
+        print("[!] 预览模式：下面只回答「那个平台该装哪些 / 哪些天生没有」——"
+              "每一行的「已装」吃的仍是**本机**文件系统，不代表那个平台真的能用。")
     print(f"  已就绪 {len(s['ok'])}｜可自动补齐 {len(s['todo_auto'])}｜需手工 {len(s['todo_manual'])}"
+          + (f"｜本平台不适用 {len(_na168)}" if _na168 else "")
           + (f"｜工作目录内可取 {len(_stk166)}" if _stk166 else "")
           + (f"｜本轮已装 {len(installed)}" if installed else "")
           + (f"｜自动层失败 {len(failed)}" if failed else ""))
     auto_title = "仍未就绪（自动层没补上）" if install else "可自动补齐（加 --install 就会装）"
     for title, items in (("需要手工安装（本框架不自动下载、也不代跑）", s["todo_manual"]),
+                         ("本平台不适用（**不是失败**，也不算已就绪：官方没发该平台的可校验产物）",
+                          _na168),
                          ("工作目录内运行时组件（加 --with-stack 就取；全落仓库内、不写家目录）",
                           _stk166),
                          (auto_title, s["todo_auto"])):
@@ -767,8 +787,15 @@ def install_auto(only=(), allow_unverified=False, dest_dir=None, wire=True):
                 print(f"[+] {r['tool']} {r.get('version')} → {r.get('path')}"
                       + (f"（{_lbl}）" if _lbl else ""))
             else:
-                failed.append({"name": r["tool"], "reason": r.get("reason") or "未知原因"})
-                print(f"[!] {r['tool']} 未装上：{r.get('reason')}")
+                _why = r.get("reason") or "未知原因"
+                if r.get("not_applicable"):
+                    # 续168：**不适用 ≠ 失败**，不排进 failed（否则 Windows 上 `./install.sh`
+                    # 恒 rc=1 —— puredns 官方压根没发 Windows 产物）。但也不能静默：这一行照印，
+                    # 而且复探后它会以 `status=warn` 出现在下面"本平台不适用"那一节里。
+                    print(f"[=] {r['tool']} 本平台不适用：{_why}")
+                else:
+                    failed.append({"name": r["tool"], "reason": _why})
+                    print(f"[!] {r['tool']} 未装上：{_why}")
     return installed, failed
 
 
@@ -807,6 +834,8 @@ def install_stack(only=(), allow_unverified=False, timeout=600):
             print(f"[+] {r['name']} {r.get('version')} → {r.get('path')}"
                   f"（{r.get('files')} 个文件、{r.get('bytes', 0) / 1048576:.1f} MB"
                   + (f"，{lbl}" if lbl else "") + "）")
+        elif r.get("not_applicable"):
+            print(f"[=] {r['name']} 本平台不适用：{r.get('reason')}")   # 不算失败（续168）
         else:
             failed.append({"name": r["name"], "reason": r.get("reason") or "未知原因"})
             print(f"[!] {r['name']} 未取到：{r.get('reason')}")
@@ -831,11 +860,18 @@ def main(argv=None):
     ap.add_argument("--with-stack", action="store_true",
                     help="工作目录内运行时组件层（续166）：取 Go 便携归档与上游源码包"
                          "（过 SHA256、落 tools/ 与 .cache/，**不写家目录、不装系统包、不代跑编译**）")
+    ap.add_argument("--platform", default=None, metavar="os/arch",
+                    help="按**另一个平台**预览选品与清单（如 windows/amd64；只影响「该装哪些」"
+                         "的判定与打印，产物仍只下本平台那一份 —— 续168）")
     ap.add_argument("--stack", action="append", default=[], metavar="NAME",
                     help="配合 --with-stack：只取这几件（可重复；名字见清单里 kind=stack 那些行）")
     ap.add_argument("--yes", action="store_true",
                     help="配合 --with-system：跳过交互确认（非交互环境没有它就**拒绝执行**）")
     args = ap.parse_args(argv)
+    if args.platform:
+        # 唯一的覆盖入口是环境变量（判据仍只 `toolmgr.host_arch()` 一处）；值不认识时
+        # `platform_override()` 会给出一句原因，清单抬头就印出来 —— 不静默按本机跑。
+        os.environ["CTFSCANNER_TARGET_PLATFORM"] = str(args.platform)
 
     # 一键就绪：`--install` 时先保证有个带 pip 的 .venv，再用**它**重跑本脚本 ——
     # 否则在 Ubuntu 那种"系统解释器没 pip/ensurepip"的机器上，自动层只能报"装不了"。

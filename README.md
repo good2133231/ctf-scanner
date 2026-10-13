@@ -131,6 +131,8 @@ python3 run_bootstrap.py                    # 只探测，**零网络**：先看
 `python run_bootstrap.py --with-stack` 取来后自动回写 `screenshot.browser`，实测本机用
 `tools/browser/chrome` 截出一张 10,576 B 的 PNG（0.6 s）。⚠ 它**运行时仍要系统共享库**
 （libnss3 / libgbm / libatk…），裸机上取来也可能起不来 —— 那时截图照旧如实报失败。
+
+**按另一个平台看清单（续168）**：`python3 run_bootstrap.py --platform windows/amd64`。它只回答「那个平台该装哪些 / 哪些天生没有」，**产物仍只下本平台那一份**；「官方压根没发这个平台的产物」（Windows 上的 `puredns`）与「本框架只核过部分平台的摘要」（`chrome` 的 win/mac）现在都算**不适用**，既不算失败也不算就绪 —— 清单里单开一节点名，`./install.sh` 在 Windows 上因此 rc=0（旧行为是恒 1，每台新机器都要有人问一句"是不是装坏了"）。⚠ 预览那一列「已装」吃的是**本机**文件系统，抬头会明说这一点。
 ⚠ 两件事仍要本机具备，脚本缺了就**如实报**、不假装编成：`massdns` 要 **gcc/make**（C 工具链没有
 便携替代品）；`fscan` 编译期要**联网取 Go 模块**（模块摘要由它自带的 `go.sum` 校验）。
 

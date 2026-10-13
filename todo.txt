@@ -3783,30 +3783,28 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [x] 边界如实写进文档与 §7：**没在裸机验过**，Chrome 运行时仍要系统共享库（libnss3/libgbm…），
       缺库时截图照旧失败并给原因
 
-下一轮（续168）——只做这些，别扩大：
-### 下一轮要做的两组（主理人 2026-10-13 已定口径；各自一轮、各跑一次全量门禁）
+## 续168（2026-10-13，WorkBuddy · Qoder-Agent 远端 Linux）：「本平台不适用」不再算失败 + `--platform` 清单预览
 
-**第一组：跨平台"选择平台 / 不装本平台不需要的"**
+- [x] `toolmgr.install()` 新增显式态 `not_applicable`（`pre["asset"] is None` 那一支）；新函数
+      `stack_applicable(name)`（纯计算、零网络）与它同口径，`stack_install()` 开头就吃它
+- [x] `install_auto()` / `install_stack()` 对它**不排进 failed**（这条就是 rc 的生死线），但照印一行
+      `[=]`；`render()` 单开一节「本平台不适用（不是失败，也不算已就绪）」+ 抬头 `｜本平台不适用 N`
+- [x] `--platform os/arch`（只预览、不给别的平台备货）：唯一入口 `toolmgr.platform_override()` 读
+      `CTFSCANNER_TARGET_PLATFORM`，`host_arch()` 内部接上 ⇒ 判据仍只一处；非法值不生效但给原因；
+      预览模式自己声明「已装吃的是本机文件系统」（本机探测时那句不许出现）
+- [x] **实测抓到的假不适用**：覆盖值原先不折算架构 ⇒ `windows/x86_64` 让 httpx 被判成"这平台没产物"；
+      修法是那张内联表提成 `toolmgr._ARCH_ALIASES`（探测与覆盖同过一处），顺手补 `x64`/`386`/`arm`
+- [x] `install.sh`：退出码注释按新契约重写；两处「浏览器仍要系统装」的**过期话术**按续167 现状改掉
+      （浏览器＝能自动但要点头、Win/mac 不适用；字体＝仍要系统装 —— 两件事分开说）
+- [x] 门禁 `[168]` 五节 + 三条证伪各自实测（清空别名表 / 摘掉 `not_applicable` 标记 /
+      本机探测时不许出现"预览模式"）⇒ SMOKE PASS
+- [ ] **真 Windows 一台都没跑过**（原「Windows 一档完全没验」那条**没勾掉**，只是症状从"恒 rc=1"
+      变成"清单会说清不适用"）；`chrome` 的 win/mac 摘要仍未核 ⇒ 那些平台永远不适用；
+      预览的「已装」吃的是本机文件系统 ⇒ 换机器必须重跑一次，那份清单**不能当 Windows 的结论**
 
-- [ ] **新增一态「本平台不适用」，Windows 上 `./install.sh` 必须 rc=0**（主理人选定）：现状是
-      puredns（官方无 Windows 产物）、massdns（无便携产物）、chrome（本框架只核过 linux64 摘要）
-      三条都走 `install():440-443` 的 `ok=False` ⇒ `run_bootstrap.py:770` 排进 `failed` ⇒
-      `:872 return 1 if failed else 0` ⇒ `install.sh:160 exit "$BOOT_RC"` 恒 1。改法：结果字典加
-      `skipped="本平台没有可校验产物"` 之类的**显式态**，`install_auto`/`install_stack` 对它
-      **不计 failed**，但 `render()` 要**单开一节逐条点名**（"本平台不适用（不是失败）：…"）——
-      隐藏的"不适用"就是新的静默降级（§0 第 10 条、§5.19）。同一轮把 `todo.txt:3839-3843`
-      那条待办结项。**要一起改的判据**：`tests/smoke.py:22515-22516`（`[8av]` 那句
-      "非 0＝有项失败"的契约原文）与 `[8d]⑨`（`smoke.py:12825` "自动层有失败却回 0"那条）——
-      两条都要新增"不适用不算失败、但必须出现在清单那一节"的正反夹具，否则改了代码门禁仍绿。
-- [ ] **`--platform os/arch`（只用于清单预览，主理人选定）**：判据产地只有 `toolmgr.host_arch()`
-      （`scanner/toolmgr.py:207-224`，`run_bootstrap.platform_info():122-126` 直取它）⇒ 覆盖入口
-      必须加在 `host_arch()` **内部**（读 `CTFSCANNER_TARGET_PLATFORM`，形如 `windows/amd64`），
-      CLI 的 `--platform` 只设这个环境变量；**产物只下本平台那一份**（为别的平台备货不做）。
-      非法值不许静默忽略：照 §5.19 的口径打印"这个平台我不认识，按探测值 X 继续"+ 原因。
-      `LOCAL_STACK` 三件（go / fscan-src / massdns-src / chrome）都要跟着走：`stack_asset`
-      认不出的平台给 `None` 已有（`[167]③` 钉着），要补的是 `chrome` 未核平台从"失败"改判"不适用"。
+下一轮（续169）——只做这些，别扩大：
 
-**第二组：主面板控件 + 拓展域名置信度 + 一键黑名单**
+本轮的口径与判据**只在这一段里**，别再回到「两组」那个写法（第一组＝续168 已落地，见上面那一节）。
 
 - [ ] **建任务面板补两个控件**（现状：`gui/templates/tasks.html:4-74` 那张表单**没有**它们，
       `api_create_task`（`gui/app.py:1528-1601`）读的字段里也没有）：
