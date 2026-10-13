@@ -170,6 +170,14 @@ subdomain:
   # 本次目标的自家域名，这次没被重新发现也该继续参与探测。0 = 不限（不建议）。
   reuse_history: true
   reuse_history_max: 300
+  # 续169：拓展域名的「自动递归」两档默认。**默认组合＝不扩** —— 层数 1 时 runner 直接早退，
+  # 阈值一个字都不参与；要扩就把层数调到 2..10（每层上限 10 层，写更大也夹到 10）。
+  # 阈值 `high` 的含义：拓展域名与「已确认资产」（本任务自家子域 + 目标注册域那一层）的
+  # 主标签差 ≤2 步且相似度 ≥0.70 才跟着进下一层，例如目标 `abcd.org` 拓展出 `abdc.com`。
+  # 判据只有一份（`scanner/extdom.py::confidence()`），页面上的徽章读的也是它。
+  # 第三方清单 / CDN / 黑名单命中的名字**无论多像都不自动扫**。
+  ext_depth: 1
+  ext_min_confidence: high
 passive:
   enabled: true
   sources: []

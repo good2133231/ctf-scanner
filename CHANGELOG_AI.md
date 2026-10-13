@@ -2,6 +2,94 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续169（2026-10-13，WorkBuddy · Qoder-Agent 远端 Linux）：拓展域名「像不像自家资产」做成分档判据，主面板补上层数与阈值
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人点单（2026-10-13）三件事：
+「主界面依然没有 追加到本任务 / 追加扫描层数 —— 这个不仅要在拓展域名那个位置显示，主界面也要显示」；
+「关于这个拓展域名我们动态搞一个识别：如果拓展域名和父域名相似度高——这个父域名可以是爷爷域名，
+反正就是项目有关、确定是资产的域名，举例 abdc.com 索引 abcd.org，那这多半是（我们的）——
+置信度高才会自动递归，主界面可以选择置信度，默认是高」；「拓展扫描之后我看到不对劲，
+可以把那个域名加黑名单」。四条已定口径里「**追加到本任务**不放主面板」（新建任务没有父任务可折，
+放上去是个永远勾不中的框）与「**第三方命中永不自动扫**」是主理人自己拍的，本轮照此落地。
+
+### 一、置信度只有一个产地：`scanner/extdom.py`
+新增 `CONF_LEVELS/CONF_RANK/CONF_LABELS` + `conf_norm` + `similarity` + `confidence` +
+`confirmed_bases` + `auto_expand_block` + `similar_candidates`。四条不是顺手写的口径：
+
+- **对照对象是「已确认资产」那一层**，取法只有一处 `confirmed_bases(task_id)`
+  ＝ `own_hosts()`（内存 ∪ 库，own 口径）∪ `task_bases()`。这就是主理人说的"父域名可以是爷爷域名"：
+  能当对照的不只是本次目标字符串。页面徽章与自动递归读**同一个集合**——
+  两边各取一次就会出现"页面上写着高、递归却没带上"。
+- **三档各带依据文本**，不许只给一个数：`abdc.com` 的 reason 实测是
+  「与已确认资产 abcd.org 的主标签相差 2 步（abdc ↔ abcd，相似度 0.75，TLD 不同）：判定为高 ——
+  同一批业务换个 TLD 或打错一个字符的形状」。
+- **比的是注册域的主标签**，不是整串：`api.abdc.com` 与 `abdc.com` 同判高，
+  而 `admin.abcd.org` 与 `login.abcd.org` 不参与比对（它们本来就同属一个注册域，比子域前缀
+  只会把一堆同名不同用的名字误判成"像"）。主标签短于 4 个字符一律判低（`a.com` 那种巧合不算相似）。
+- **严格后缀那一档说的是"归属"不是"相似"**：`www.abcd.org` 的 reason 明写
+  「注册域就是已确认资产 abcd.org（这是归属，不是相似）」——两条混成一条就会把
+  "事实"与"线索"读成同一种东西。
+
+### 二、自动递归：三道闸赢过分数，且**默认一个字都不扩**
+- `DEFAULTS["subdomain"]` 新增 `ext_depth: 1` 与 `ext_min_confidence: "high"`，随包
+  `config/settings.yaml` 同步这两个值 ⇒ **默认组合＝层数 1＝不递归**，既有行为不变；
+  阈值"默认高"是主理人点的那一句，但它只在用户把层数调到 ≥2 之后才起作用。
+- 层数与阈值的读取各只有一处：`runner.resolve_ext_depth()` / `resolve_ext_confidence()`
+  （任务级选项优先，退回策略配置）。实测钉住两个方向：策略 3 + 无选项 ⇒ 3；
+  **显式填 1 + 策略 3 ⇒ 1**（`or` 写法会把用户点的那一下吃掉，这是本轮自己写出来又改掉的）。
+- `auto_expand_block()` 三道闸：黑名单 → `js_thirdparty.txt` → CDN 标记，**无论多像都挡**。
+  双向夹具才拦得住空写：不带闸时 `abdc.com` 必须放行，桩成"第三方"后同一个高分名字必须被挡；
+  端到端（`ext_depth=2`、阈值高）下一层目标是 `abdc.com`，**没有** `abcd.co`（桩成第三方）
+  也**没有** `google.com`（低置信）；阈值放宽到"低"时 `google.com` 进来了、`abcd.co` 仍然没有。
+- **相似域名不写进 `subdomains` 的归属行**：`promote_owned` 的语义是"这是本项目自己的子域"，
+  一个 TLD 都不一样的名字写进去就是造假，还会顺着 `own_hosts` 被 portscan/probe 当自家资产打。
+  它只进这一层的探测目标（`append_targets`），页面上仍带着 `js:` / `osint:` 来源。
+- 被挡的条数**必须说出来**：日志那行现在是「下一层目标 N 个（归属 X 个 + 置信度≥高 的相似域名 Y 个：…），
+  另有 Z 个被第三方/CDN/黑名单或阈值挡在外面」。
+
+### 三、页面：主面板补两个控件，两处拓展域名共用一份徽章标记
+- `gui/templates/tasks.html` 的「拓展选项」那一行加了「追加扫描层数（1=只扫当下这批）」与
+  「置信度阈值」；默认值取自 `_ext_defaults()`（＝策略配置那一份），页面里没写死第二个默认值。
+  批量勾选那颗「全部勾上」只动 `input[type=checkbox]`，两个 `<select>` 不受它影响（实测读 app.js）。
+- `api_create_task` 读这两个字段：夹值走 `runner.clamp_ext_depth`、归一走 `extdom.conf_norm`；
+  **没填就不落选项**（落了等于替用户改默认）。实测 `ext_depth=99` → 落 10、`ext_min_conf=中` → 落 `medium`。
+- 徽章标记只有一份：新文件 `gui/templates/_conf.html` 里的 macro `conf_badge(row)`，
+  `task_detail.html` 与 `extdomains.html` 都 import 它；判据由 `gui/app.py::_ext_confidence`
+  在视图里贴到行上（按 `task_id` 分组取 `confirmed_bases`，纯读库、零请求）。
+  门禁断言两处页面都渲染出 `<th>置信度</th>`，并且**同一刀里还砍定夹具那一行确实在页上**——
+  这一页默认收起未解析与重叠两类行（续112 那两道显示门），空表上"有没有表头"会假绿。
+- `/extdomains` 补上了「层数 / 阈值 /（按任务筛选时的）追加到本任务 /（同上）解析选中域名」：
+  那两颗只在 `?task=` 生效时出现，因为 `api_resolve_domains` 与追加都要求一个具体任务号，
+  跨任务视图里画出来就是一颗点了没反应的按钮。
+- 策略页两个新输入框 + POST 映射一起补（`[8at]②` 那条"逐段点名一个键都不许少"会盯着它）。
+
+### 四、实测数字
+- 档位表（对照集 `{abcd.org}`，纯计算、零请求）：`abdc.com` 高 / `api.abdc.com` 高 /
+  `abnd.com` 高 / `www.abcd.org` 高（依据是归属）/ `google.com` 低 / `a.com` 低（主标签太短）/
+  `whatever.io`（无对照）低。
+- `similar_candidates` 五行夹具：keep 2（abdc.com / abnd.com）、blocked 2（google.com 低于阈值 /
+  abcd.co 标着 CDN）、www.abcd.org 两边都不进（它走 promote_owned）。
+- 端到端一次追加（阈值高）：`append_targets` 实测**恰好** `["abdc.com"]`，`ext_depth` 2 → 1，
+  阶段被 `depth_stages` 补成 `subdomain → osint → jsmine`，日志里那句「挡」出现；
+  同一批数据把阈值放宽到「低」⇒ `append_targets` = `["abdc.com", "google.com"]`，
+  而桩成第三方的 `abcd.co` **两种阈值都进不来**（这道闸不吃分数，是本轮最要紧的一条）。
+- 门禁 `./.venv/bin/python tests/smoke.py` ⇒ **SMOKE PASS**；组打印行数（同一式子
+  `grep -cE '^\[[0-9a-z]+\]'`）168 轮是 **193**，本轮 **195**（`[169]` 占进度行 + ok 行）。
+  新组 `[169]` 九节 234 行，其中两处是**变异证伪**：把 `_HIGH_DISTANCE/_HIGH_RATIO` 拆成
+  `(99, 0.0)` ⇒ `google.com` 必须被判高（证明档位吃这两个常量）；阈值调到「低」⇒
+  `google.com` 必须进下一层而 `abcd.co` 仍然进不来。
+
+### 五、诚实边界（没做的事）
+- **相似度是启发式，一定会误判**：`abnd.com` 与 `abcd.org` 判高，但那是两个不相干的人注册的
+  域也完全可能。买到的三件事是"默认不扩 + 阈值默认高 + 看错了有一键黑名单"，
+  买不到"判据正确"。所以相似域名绝不写归属行，且绝不越过第三方/CDN/黑名单那道闸。
+- **没做**：`追加到本任务` 不放主面板（主理人定的）；`ext_depth` 与 `auto_expand` 的关系没并轨
+  —— 层数>1 但没勾「自动拓展」时仍会跑多层采集，只是不做归属追加（本轮只在日志里说清，
+  没改门控，改它要连着动 `[6q]/[6lb]` 三条断言，单独一轮）。
+- 徽章每行都要按任务取一次对照集（一页内按 `task_id` 去重），跨任务视图里任务多时是
+  每任务 2 条 SQL；**没有**为它加缓存层——那是另一笔账（先要有人测出慢）。
+- 阈值与层数**没有**做进 CLI（`cli/client.py` 只有策略默认）；要在命令行点这一档，
+  下一轮补 `--ext-depth` / `--ext-min-conf` 两个参数。
 ## 续168（2026-10-13，WorkBuddy · Qoder-Agent 远端 Linux）：「本平台不适用」不再是一种失败 + `--platform` 只用于清单预览
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人点单（2026-10-13）：「跨平台安装可以选择平台

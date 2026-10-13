@@ -218,6 +218,18 @@
       只借自家口径，<code>js:</code> / <code>osint:</code> 那两路是别人的资产面，不会拿去发请求；也只借同一账号的任务。取消勾选＝只信本轮新发现</label><br>
     <label>沿用历史上限 <input name="subdomain_reuse_history_max" style="width:7em"
       value="{{ s.subdomain.reuse_history_max }}">（个；<code>0</code> = 不限。超出时只并前 N 个，并在任务日志里说明）</label>
+    <label>拓展自动递归层数 <input name="subdomain_ext_depth" style="width:4em" type="number"
+      min="1" max="10" value="{{ s.subdomain.ext_depth or 1 }}">（层；<code>1</code> = 不自动递归。
+      N&gt;1 时每层把「本轮新确认的自家域名」再采集一次，上限 10 由 <code>runner.clamp_ext_depth</code> 夹住）</label>
+    <label>自动递归置信度阈值 <select name="subdomain_ext_min_confidence">
+        {% for lv, lab in [("high", "高"), ("medium", "中"), ("low", "低")] %}
+        <option value="{{ lv }}" {{ 'selected' if lv == (s.subdomain.ext_min_confidence or 'high') }}>{{ lab }}</option>
+        {% endfor %}
+      </select></label>
+    <p class="muted small">上面这一档只管<b>自动递归</b>要不要带上「像自家、但注册域不是目标」的拓展域名
+      （例：目标 <code>abcd.org</code> 拓展出 <code>abdc.com</code>）；人工点「送去探测」时勾选的行不受它约束。
+      第三方清单 / CDN / 黑名单命中的<b>无论哪一档都不自动扫</b>。判据与依据文本只有一份：
+      <code>scanner/extdom.py::confidence()</code>；建任务面板与拓展域名页读的都是它。</p>
     <p class="muted small">subfinder 调用恒带 <code>-all</code>（全部数据源，不加时只用默认源集合，覆盖明显更小）。</p>
   </section>
 

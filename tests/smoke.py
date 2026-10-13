@@ -20665,6 +20665,240 @@ expression: r0()
           '清单单开一节逐条点名 + 预览模式自己声明（本机探测时不许出现那句）｜'
           'chrome 只登记核过的平台、源码包与 go 不受平台影响')
 
+    # ---------------- [169] 续169：拓展域名的置信度分档 + 主面板的层数/阈值 + 三道闸 ----------------
+    #      主理人点单（2026-10-13）：「主界面依然没有 追加到本任务 / 追加扫描层数 —— 这个不仅要
+    #      在拓展域名那个位置显示，主界面也要显示」+「关于这个拓展域名，我们动态搞一个识别：
+    #      如果拓展域名和父域名相似度高，这个父域名可以是爷爷域名，反正就是项目有关、确定是
+    #      资产的域名。举例 abdc.com 索引 abcd.org，那这多半是（我们的）；置信度高才会自动递归，
+    #      主界面可以选择置信度，默认是高」+「拓展扫描之后我看到了不对劲，可以把那个域名加黑名单」。
+    #      已定四条口径逐条钉住：
+    #      ① 层数 + 阈值上主面板（「追加到本任务」**不放**主面板 —— 新建任务没有父任务可折，
+    #         放上去是个永远勾不中的框）；
+    #      ② 相似度/置信度**只有一个产地**（`extdom.confidence`），三档各带依据文本，不许只给一个数；
+    #      ③ 只有 ≥阈值才自动递归，且第三方清单 / CDN / 黑名单命中**无论多像都不自动扫**
+    #         （这条必须双向夹具：不带闸时同名放行、带闸时必须挡住，否则"永不自动扫"是空话）；
+    #      ④ 拓展域名页每行有徽章 + 一键黑名单（徽章的标记也只有一份：`_conf.html` 那个 macro）。
+    print('[169] 续169 拓展域名置信度 …')
+    from scanner import extdom as _ex169
+    from scanner import jsmine as _jm169
+    from scanner import blacklist as _bl169
+    from scanner import runner as _rn169
+
+    # ---- ① 档位归一：页面（中文）/ 配置（英文）/ 大小写 / 垃圾输入都要过同一个产地 ----
+    assert _ex169.CONF_LEVELS == ("low", "medium", "high")
+    assert _ex169.conf_norm(None) == "high" and _ex169.conf_norm("") == "high", \
+        '默认必须是「高」—— 主理人点单原话："我们主界面可以选择置信度默认是高"'
+    assert [_ex169.conf_norm(x) for x in ("HIGH", "高", "medium", "中", "Low", "低")] == \
+        ["high", "high", "medium", "medium", "low", "low"], \
+        "三档的四种写法（英文 / 中文 / 大小写 / 空）都归到同一档，否则页面与自动递归会各认一套"
+    assert _ex169.conf_norm("乱七八糟", default="medium") == "medium", \
+        "认不出时回落 default 且**由调用方决定回落哪一档**（写死回落 high 就等于悄悄收紧）"
+    assert _ex169.conf_label("high") == "高" and _ex169.conf_rank("低") == 0
+
+    # ---- ② 相似度本体：分档 + 依据文本（主理人的例子必须真的落在"高"那一档） ----
+    _b169 = {"abcd.org"}
+    _hi169 = _ex169.confidence("abdc.com", bases=_b169)
+    assert _hi169["level"] == "high" and _hi169["near"] == "abcd.org" and not _hi169["owned"], _hi169
+    assert "步" in _hi169["reason"] and "TLD 不同" in _hi169["reason"], _hi169["reason"]
+    assert _ex169.confidence("api.abdc.com", bases=_b169)["level"] == "high", \
+        "比的是**注册域的主标签**：子域前缀不参与（否则 api.abdc.com 会被判成不像）"
+    _own169 = _ex169.confidence("www.abcd.org", bases=_b169)
+    assert _own169["owned"] is True and "归属" in _own169["reason"] and "相似" in _own169["reason"], \
+        _own169["reason"]
+    assert _ex169.confidence("google.com", bases=_b169)["level"] == "low", "无关域名必须判低"
+    assert _ex169.confidence("a.com", bases=_b169)["level"] == "low", \
+        "主标签短于一律判低：`a.com` 与 `abcd` 的'距离'是小串之间的噪声，不是相似"
+    _none169 = _ex169.confidence("whatever.io", bases=set())
+    assert _none169["level"] == "low" and "没有可比对" in _none169["reason"], _none169
+    try:
+        _ex169.confidence("whatever.io", bases=None, task_id=None)
+        raise AssertionError("bases 与 task_id 都不给时必须报错，不许静默按'无对照'判低")
+    except ValueError:
+        pass
+    # 变异证伪（§6.1）：把"高"的门限拆掉 ⇒ 无关域名也判高 ⇒ 下面那条断言**必须**在这一档成立，
+    # 而还原后它必须不成立 —— 两边都观察一次，否则"高"这一档其实是硬编码在函数里、不吃常量。
+    _keep169 = (_ex169._HIGH_DISTANCE, _ex169._HIGH_RATIO)
+    try:
+        _ex169._HIGH_DISTANCE, _ex169._HIGH_RATIO = 99, 0.0
+        assert _ex169.confidence("google.com", bases=_b169)["level"] == "high", \
+            "档位不吃这两个常量 ⇒ 调阈值是假开关"
+    finally:
+        _ex169._HIGH_DISTANCE, _ex169._HIGH_RATIO = _keep169
+    assert _ex169.confidence("google.com", bases=_b169)["level"] == "low", "还原后必须退回低"
+
+    # ---- ③ 三道闸：第三方 / CDN / 黑名单**无论多像都挡**，且不带闸时同一个名字放行 ----
+    assert _ex169.auto_expand_block("abdc.com", settings={}) == "", \
+        "没有闸时自家相似域名是放行的（先把'放行'这一向钉住，下面三条'挡住'才不是空写）"
+    assert "第三方" in _ex169.auto_expand_block("static.cloudflareinsights.com", settings={}), \
+        "清单里真实存在的第三方域名必须被挡（config/dicts/js_thirdparty.txt）"
+    _cdn169 = _ex169.auto_expand_block("abdc.com", settings={}, cdn_label="cloudflare")
+    assert "CDN" in _cdn169, _cdn169
+    _ld169 = _bl169.load
+    try:
+        _bl169.load = lambda *a, **k: ["abdc.com"]
+        assert "黑名单" in _ex169.auto_expand_block("abdc.com", settings={}), \
+            "黑名单命中必须挡 —— 主理人要的就是'看到不对劲就拉黑，此后不再自动扫'"
+    finally:
+        _bl169.load = _ld169
+    # 双向夹具的第二半：同一个名字**既高相似又撞上第三方清单**时，闸必须赢过分数
+    _ip169 = _jm169.is_thirdparty
+    try:
+        _jm169.is_thirdparty = lambda h: str(h).startswith("abdc")
+        assert _ex169.confidence("abdc.com", bases=_b169)["level"] == "high", "夹具前提：它确实算高"
+        assert "第三方" in _ex169.auto_expand_block("abdc.com", settings={}), \
+            "高置信 + 第三方命中 ⇒ 必须不自动扫（这是主理人定的红线，不是'像就扫'）"
+    finally:
+        _jm169.is_thirdparty = _ip169
+
+    # ---- ④ `similar_candidates`：keep / blocked 分区，且被挡的条数必须可见 ----
+    _rows169 = [{"domain": "abdc.com", "source": "js:mine", "cdn": ""},
+                {"domain": "abnd.com", "source": "osint:cseg", "cdn": ""},
+                {"domain": "google.com", "source": "js:mine", "cdn": ""},
+                {"domain": "www.abcd.org", "source": "js:mine", "cdn": ""},
+                {"domain": "abcd.co", "source": "js:mine", "cdn": "cloudflare"}]
+    _cand169 = _ex169.similar_candidates(_rows169, _b169, min_level="high", settings={})
+    _kept169 = sorted(c["domain"] for c in _cand169["keep"])
+    assert _kept169 == ["abdc.com", "abnd.com"], _kept169
+    assert all(c["reason"] for c in _cand169["keep"]), "每一行都要带依据，不许只给档位"
+    assert "www.abcd.org" not in _kept169 and not any(
+        b["domain"] == "www.abcd.org" for b in _cand169["blocked"]), \
+        "严格归属那批由 promote_owned 处理，这里既不keep也不blocked（否则一条域名被算两次）"
+    assert len(_cand169["blocked"]) == 2, _cand169["blocked"]
+    assert any(b["blocked"] == "低于阈值" for b in _cand169["blocked"]), _cand169["blocked"]
+    _cdn_block169 = [b for b in _cand169["blocked"] if b["domain"] == "abcd.co"]
+    assert _cdn_block169 and "CDN" in _cdn_block169[0]["blocked"], _cdn_block169
+    _lo169 = _ex169.similar_candidates(_rows169, _b169, min_level="low", settings={})
+    assert len(_lo169["keep"]) > len(_cand169["keep"]), \
+        "阈值调到「低」就该放宽（这一条不吃阈值 ⇒ 阈值就是假开关）"
+
+    # ---- ⑤ 层数 / 阈值的读取只有一个产地：任务选项优先，退回策略配置 ----
+    _st169 = {"subdomain": {"ext_depth": 3, "ext_min_confidence": "medium"}}
+    assert _rn169.resolve_ext_depth({}, _st169) == 3, "策略层的层数要生效（否则策略页那个框是摆设）"
+    assert _rn169.resolve_ext_depth({"ext_depth": 1}, _st169) == 1, \
+        "用户显式填的 1 不许被策略顶掉（`or` 写法正是这么坏的）"
+    assert _rn169.resolve_ext_depth({"ext_depth": "99"}, _st169) == 10, "上限必须咬住 10"
+    assert _rn169.resolve_ext_depth(None, None) == 1 and _rn169.resolve_ext_depth({}, {}) == 1, \
+        "两处都没有 ⇒ 默认 1 = 不自动递归（既有行为不许变）"
+    assert _rn169.resolve_ext_confidence({"ext_min_conf": "低"}, _st169) == "low"
+    assert _rn169.resolve_ext_confidence({}, _st169) == "medium"
+    assert _rn169.resolve_ext_confidence({}, {}) == "high"
+
+    # ---- ⑥ 端到端：层数>1 时下一层带上"高置信相似"，但第三方那批一个都不带 ----
+    import json as _json169
+    from scanner import queue as _q169
+    _rec169 = []
+
+    class _L169:
+        info = warning = error = debug = staticmethod(lambda m, *a, **k: _rec169.append(str(m)))
+
+    class _C169:
+        def __init__(self, opts, settings=None):
+            self.options = opts
+            self.settings = settings or {}
+            self.owned_new = []
+
+        def stopped(self):
+            return False
+
+    _notify169, _promote169 = _q169.notify, _ex169.promote_owned
+    _tid169 = db.create_task("smoke-similar-169", "abcd.org", ["subdomain"], {"offline": True})
+    db.update_task(_tid169, status="done")
+    db.insert_subdomains(_tid169, [("abdc.com", "js:mine"), ("abcd.co", "js:mine"),
+                                   ("google.com", "osint:cseg")])
+    try:
+        _q169.notify = lambda: None
+        _ex169.promote_owned = lambda *a, **k: {"promoted": []}
+        _jm169.is_thirdparty = lambda h: str(h) == "abcd.co"
+        # (a) 默认层数 1 ⇒ 什么都不排（既有行为不变的证明）
+        _rn169._maybe_queue_next_layer(_C169({}), _tid169, ["subdomain"], {}, _L169())
+        assert db.get_task(_tid169)["status"] == "done", "ext_depth=1 不该排下一层"
+        # (b) 层数 2 + 阈值「高」⇒ 带上 abdc.com，不带 abcd.co（第三方）与 google.com（低）
+        _rn169._maybe_queue_next_layer(_C169({"ext_depth": 2, "ext_layer": 1}),
+                                       _tid169, ["subdomain"], {"ext_depth": 2, "ext_layer": 1},
+                                       _L169())
+        _p169 = _json169.loads(db.get_task(_tid169)["run_payload"] or "{}")
+        _targets169 = _p169["options"]["append_targets"]
+        assert "abdc.com" in _targets169, _targets169
+        assert "abcd.co" not in _targets169, "第三方命中却被相似度带进来 ⇒ 红线没守住"
+        assert "google.com" not in _targets169, "低置信不该自动递归"
+        assert _p169["options"]["ext_depth"] == 1, "层数要递减（2 → 1）"
+        assert _p169["stages"] == _rn169.depth_stages(["subdomain"]), "多层要把挖名阶段补上"
+        _log169 = "\n".join(_rec169)
+        assert "带上 abdc.com" in _log169 and "abdc" in _log169, _log169[-400:]
+        assert "挡" in _log169, "被挡的条数必须说出来，否则'没扫'与'扫不了'在日志里长一个样"
+        # (c) 阈值调到「低」⇒ 连 google.com 都该带上（证明阈值真的在起作用）
+        db.update_task(_tid169, status="done")
+        _rn169._maybe_queue_next_layer(_C169({"ext_depth": 2, "ext_layer": 1, "ext_min_conf": "低"}),
+                                       _tid169, ["subdomain"],
+                                       {"ext_depth": 2, "ext_layer": 1, "ext_min_conf": "low"},
+                                       _L169())
+        _p169c = _json169.loads(db.get_task(_tid169)["run_payload"] or "{}")
+        assert "google.com" in _p169c["options"]["append_targets"], _p169c["options"]
+        assert "abcd.co" not in _p169c["options"]["append_targets"], "阈值放宽也不许越过第三方那道闸"
+    finally:
+        _q169.notify, _ex169.promote_owned, _jm169.is_thirdparty = _notify169, _promote169, _ip169
+
+    # ---- ⑦ 主面板：两个控件真的落进任务选项（`run_task` 桩住，绝不真扫） ----
+    _run169 = gui_app.run_task
+    try:
+        gui_app.run_task = lambda *a, **kw: None
+        _j169 = c.post("/api/tasks", data={"name": "smoke-ext-169", "targets": "abcd.org",
+                                          "stages": ["probe"], "ext_depth": "99",
+                                          "ext_min_conf": "中"}).get_json()
+        _o169 = _json169.loads(db.get_task(_j169["id"])["options"] or "{}")
+        assert _o169["ext_depth"] == 10, _o169
+        assert _o169["ext_min_conf"] == "medium", _o169
+        _j169b = c.post("/api/tasks", data={"name": "smoke-ext-169b", "targets": "abcd.org",
+                                           "stages": ["probe"]}).get_json()
+        _o169b = _json169.loads(db.get_task(_j169b["id"])["options"] or "{}")
+        assert "ext_depth" not in _o169b and "ext_min_conf" not in _o169b, \
+            f"没填就不落选项（落了就等于替用户改默认）：{_o169b}"
+    finally:
+        gui_app.run_task = _run169
+
+    # ---- ⑧ 策略页四档一致：DEFAULTS ↔ settings.yaml ↔ 页面输入 ↔ POST 映射 ----
+    from scanner.config import DEFAULTS as _D169
+    assert _D169["subdomain"]["ext_depth"] == 1 and \
+        _D169["subdomain"]["ext_min_confidence"] == "high", \
+        "默认组合＝不扩（层数 1）+ 阈值高；改这两个默认值要连着改 CHANGELOG"
+    _yml169 = ((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+               .split("subdomain:", 1)[1].split("\npassive:", 1)[0])
+    assert "ext_depth: 1" in _yml169 and "ext_min_confidence: high" in _yml169, \
+        "随包 settings.yaml 缺这两键（三方一致）"
+    _sh169 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
+    for _fld in ("subdomain_ext_depth", "subdomain_ext_min_confidence"):
+        assert _sh169.count(f'name="{_fld}"') == 1, f"策略页的「{_fld}」必须恰好一个：{_sh169.count(_fld)}"
+    _apa169 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert '"ext_depth": runner.clamp_ext_depth(' in _apa169, "POST 映射缺 ext_depth（勾了存不进去）"
+    assert '"ext_min_confidence": extdom.conf_norm(' in _apa169, "POST 映射缺 ext_min_confidence"
+
+    # ---- ⑨ 页面：徽章列真的渲染出来，且标记只有一份 macro ----
+    # 这一页默认收起「未解析」与「重叠」两类行（续112 那两道显示门），而本组的夹具恰好
+    # 一个都没解析过 ⇒ 表头在、行不在。所以这里显式放开两道门，并**同时**砍定夹具那一行
+    # 确实在页上 —— 否则"缺徽章列"与"徽章列有但夹具没显示"这两种红分不清。
+    _h169 = c.get("/extdomains?all=1&nores=1&group=0").get_data(as_text=True)
+    assert "<th>置信度</th>" in _h169 and "abdc.com" in _h169, \
+        "跨任务拓展域名页缺徽章列（或夹具那一行根本没渲染 ⇒ 表头判据会在空表上假绿）"
+    _h169d = c.get(f"/tasks/{_tid169}").get_data(as_text=True)
+    assert "<th>置信度</th>" in _h169d, "任务详情的拓展域名页签缺徽章列"
+    assert "加入黑名单" in _h169, "一键黑名单的入口不许掉（主理人：看到不对劲就拉黑）"
+    _conf_macro = (ROOT / "gui" / "templates" / "_conf.html").read_text(encoding="utf-8")
+    assert "macro conf_badge" in _conf_macro
+    for _tpl in ("extdomains.html", "task_detail.html"):
+        _t169 = (ROOT / "gui" / "templates" / _tpl).read_text(encoding="utf-8")
+        assert 'from "_conf.html" import conf_badge' in _t169, f"{_tpl} 没共用那份 macro"
+        assert "SequenceMatcher" not in _t169, f"{_tpl} 里自己算了一遍相似度 ⇒ 第二个产地"
+    assert 'ext_defaults=_ext_defaults()' in _apa169, "页面默认值没走 `_ext_defaults()` 那一处"
+
+    print('[169] 续169 拓展域名置信度 ok: 三档归一只有一个产地（中文/英文/大小写/垃圾输入同一档）｜'
+          '主理人的例子 abdc.com × abcd.org 实测判高且依据里写明差几步与 TLD 不同｜'
+          '子域比注册域主标签、短标签一律低、无对照如实报错｜'
+          '第三方/CDN/黑名单**无论多像都挡**（双向夹具：不带闸先放行，高置信+第三方仍挡）｜'
+          'keep/blocked 分区且被挡条数进日志｜层数与阈值"选项优先退回策略"（显式 1 不被顶掉、99 夹到 10）｜'
+          '端到端下一层带上 abdc.com 而不带 abcd.co/google.com，阈值放宽也越不过闸｜'
+          '主面板真 POST 落选项（没填不落）｜DEFAULTS↔settings.yaml↔页面↔POST 四档一致｜'
+          '徽章列两处都渲染、macro 只有一份、模板里不许出现第二个 SequenceMatcher')
+
     # ---------------- [8as] 续140：记忆同步是硬规矩（AGENTS §0.4 + §10 多 agent） ----------------
     #      用户点单（2026-10-09）：「我们的记忆你都要同步到todo，以及修改完同步是硬记录，
     #      让我们换对话框，换AI也能接着执行」+「把多agent执行加入记忆…就算其他ai来了也会多agent执行」。

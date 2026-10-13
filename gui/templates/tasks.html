@@ -54,10 +54,33 @@
         拓展选项（可选）：</span>
       <label class="chk" title="① 自动补上 osint / jsmine 两个拓展阶段（没勾也补）；② 拓展结束后自动做 DNS 存在性判定，并把「归属本项目」的拓展域名追加成子域名；③ 目标是子域（如 aaa.targ1.pro）时自动补收它的主域名 targ1.pro，并把该子域也记成一条子域资产">
         <input type="checkbox" name="auto_expand" value="1"> 自动拓展扫描</label>
+      {# 续169（主理人点单：「这个不仅要在拓展域名哪个位置显示，主界面也要显示」）：
+         「追加扫描层数」与「置信度阈值」这两个控件从「送去探测」那一处接到主面板上来。
+         默认值吃 `ext_defaults`（策略配置里的 `subdomain.ext_depth` /
+         `subdomain.ext_min_confidence`）—— 页面里写死 1 与「高」就是第二份默认值，
+         策略页改了这里不跟着变，读的人会以为策略页那两个框没用。 #}
+      <label class="muted" title="1 = 只对当下这批域名跑一轮；N&gt;1 时每层把「本轮新确认的自家域名」再追加采集一次，最多 N 层（折叠在本任务里，不新建任务）。夹值与上限只有 `runner.clamp_ext_depth` 一处">
+        追加扫描层数（1=只扫当下这批）
+        <select name="ext_depth">
+          {% for d in range(1, 11) %}
+          <option value="{{ d }}" {{ 'selected' if d == (ext_defaults.ext_depth or 1) }}>{{ d }}</option>
+          {% endfor %}
+        </select></label>
+      <label class="muted" title="拓展域名与「已确认资产」（自家子域 + 目标及其主域）的主标签只差 ≤2 步时算「高」，例如目标 abcd.org 拓展出 abdc.com。只有达到这一档的名字才会被自动带进下一层；第三方清单 / CDN / 黑名单命中的无论哪一档都不自动扫。判据与依据文本只有 `scanner/extdom.py::confidence()` 那一份">
+        置信度阈值
+        <select name="ext_min_conf">
+          {% for lv, lab in [("high", "高"), ("medium", "中"), ("low", "低")] %}
+          <option value="{{ lv }}" {{ 'selected' if lv == (ext_defaults.ext_min_confidence or 'high') }}>{{ lab }}</option>
+          {% endfor %}
+        </select></label>
       <span class="muted small">勾上后本次任务默认把拓展做全：挖出来的拓展域名会<b>自动判断存不存在</b>，
         其中<b>注册域属于本项目</b>的（如目标 <span class="mono">targ1.pro</span> 拓展出
         <span class="mono">aaa.targ1.pro</span>）会<b>追加成正常子域</b>；
-        不勾则维持原样（拓展域名只入库，需要手动处置）。</span>
+        不勾则维持原样（拓展域名只入库，需要手动处置）。<br>
+        上面两个下拉是<b>另一件事</b>：层数 &gt;1 时，除了注册域就是目标的那些，
+        像到「多半是自家另一个 TLD」（<span class="mono">abdc.com</span> 对
+        <span class="mono">abcd.org</span>）的拓展域名也会跟着进下一层 ——
+        看错了就在「拓展域名」页勾选那一行、点<b>加入黑名单</b>。</span>
     </div>
     <div class="row">
       <span class="muted" title="登录态只发给目标侧；crt.sh / FOFA / CISA KEV / IP 反查等第三方接口不带（避免把目标凭据外发）；值不会写进日志与报告">

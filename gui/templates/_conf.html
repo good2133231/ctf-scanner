@@ -1,0 +1,14 @@
+{# 续169：拓展域名的「置信度」徽章 —— 标记本体只在这一份里。
+   判据来自 `scanner/extdom.py::confidence()`，由 `gui/app.py::_ext_confidence` 贴到行上
+   （`row.conf`）。页面**不许**在这里重算相似度：重算就会与自动递归的结论不一致，
+   那正是本仓反复出事的"同一判据两处各写一遍"。 #}
+{% macro conf_badge(row) %}
+  {%- set c = row.conf or {} -%}
+  <span class="badge" title="{{ c.get('reason') or '没有可比对的已确认资产域名，无法判断相似性' }}">
+    {{- c.get('label') or '低' -}}</span>
+  {%- if c.get('near') and not c.get('owned') %}
+    <span class="muted small" title="{{ c.get('reason') }}">像 {{ c.get('near') }}</span>
+  {%- elif c.get('owned') %}
+    <span class="muted small" title="注册域就是已确认资产（这是归属，不是相似）">自家</span>
+  {%- endif -%}
+{% endmacro %}

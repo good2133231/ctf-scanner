@@ -258,6 +258,30 @@ def depth_stages(stages):
     return sorted(dict.fromkeys(union), key=lambda s: order.get(s, len(order)))
 
 
+def resolve_ext_depth(options, settings=None):
+    """这一轮该扩几层：**任务级选项优先，退回策略级 `subdomain.ext_depth`**，最后夹到 1..10。
+
+    为什么要有这一处（续169）：`ext_depth` 有三个来源（主面板/详情页表单写的任务选项、
+    策略配置里的默认、以及压根没填），而 `run_task` 的日志与 `_maybe_queue_next_layer`
+    的决策必须吃同一个数。两处各写一遍"选项 or 策略"，迟早一边认策略一边不认。
+    """
+    opt = (options or {}).get("ext_depth")
+    pol = ((settings or {}).get("subdomain") or {}).get("ext_depth")
+    # `is not None` 而不是 `or`：显式填的 1 被 `or` 顶掉，等于把用户点的那一下吃掉
+    return clamp_ext_depth(opt if opt is not None else pol)
+
+
+def resolve_ext_confidence(options, settings=None):
+    """自动递归的置信度阈值：任务级 `ext_min_conf` 优先，退回策略级 `subdomain.ext_min_confidence`。
+
+    归一化只有 `extdom.conf_norm` 一处（页面上是「高/中/低」，配置里是 `high/medium/low`，
+    老任务选项可能是空串 —— 三种形状都从这里过，别在调用方各判一次）。
+    """
+    from . import extdom       # 延迟导入：extdom 顶层不依赖 runner，但保持与别处同一形状
+    return extdom.conf_norm((options or {}).get("ext_min_conf")
+                            or ((settings or {}).get("subdomain") or {}).get("ext_min_confidence"))
+
+
 class PipelineRunner:
     def __init__(self, ctx):
         self.ctx = ctx
@@ -351,8 +375,16 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
     与既有 append 语义完全一致：**折叠在同一任务里**（`db.enqueue_task(task_id, "append")`，
     不新建任务、沿用同一日志），只是 `append_targets` 换成这批新域名、`ext_depth` 减 1。
     停止 / 未正常完成的收场一律不追加（不把一次没跑完的运行接下去）。
+
+    续169 加上第二种"自家域名"：主理人的原话是「`abdc.com` 索引到 `abcd.org`，那这多半是
+    我们的」—— 严格后缀（`is_in_bases`）认不出"换个 TLD 的同一批业务"。于是层数 >1 时
+    除了归属追加那批，还带上**置信度达到阈值**的那批拓展域名。三条边界一起守住：
+    ① 阈值默认「高」，且**层数默认 1**（默认组合就是"一个字都不扩"，既有行为不变）；
+    ② 第三方清单 / CDN / 黑名单命中的**无论多像都不带**（`extdom.auto_expand_block`）；
+    ③ 相似域名**不写进 `subdomains` 的归属行**（那不是它的语义），只进这一层的探测目标，
+       页面上仍带着 `js:` / `osint:` 来源与置信度徽章 —— 看错了就一键拉黑。
     """
-    depth = clamp_ext_depth((options or {}).get("ext_depth"))
+    depth = resolve_ext_depth(options, ctx.settings)
     if depth <= 1:
         return
     if ctx.stopped():
@@ -372,9 +404,30 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
                 promoted.append(d)
     except Exception as e:      # 归属追加失败不该影响上一层已完成的结果
         logger.error(f"[extdom] 归属追加异常：{e}")
-    if not promoted:
-        logger.info(f"[extdom] 追加层数：本层未挖出新的归属本项目域名，追加到此为止"
-                    f"（还剩 {depth - 1} 层未用）")
+    # 置信度那一档：任务级 `ext_min_conf` 优先，退回策略级 `subdomain.ext_min_confidence`
+    min_conf = resolve_ext_confidence(options, ctx.settings)
+    similar, sim_blocked = [], 0
+    try:
+        cand = extdom.similar_candidates(extdom.ext_rows(task_id),
+                                         extdom.confirmed_bases(task_id),
+                                         min_level=min_conf, settings=ctx.settings,
+                                         owner_id=extdom.owner_of(task_id))
+        similar = [c["domain"] for c in cand["keep"]]
+        sim_blocked = len(cand["blocked"])
+        for c in cand["keep"][:5]:      # 逐条说依据，但只说前 5 条（一屏读得完）
+            logger.info(f"[extdom] 置信度 {c['label']}（阈值 {extdom.conf_label(min_conf)}）"
+                        f"带上 {c['domain']}：{c['reason']}")
+        if len(cand["keep"]) > 5:
+            logger.info(f"[extdom] 另有 {len(cand['keep']) - 5} 个同样达到阈值的拓展域名，"
+                        "依据逐条可在「拓展域名」页的徽章上看")
+    except Exception as e:      # 判据异常 ⇒ 退回"只按归属追加"，不把没验过的域名塞进目标
+        logger.error(f"[extdom] 置信度判断异常，本轮只按归属追加（相似域名一个都不带）：{e}")
+        similar, sim_blocked = [], 0
+    targets = promoted + [d for d in similar if d not in promoted]
+    if not targets:
+        logger.info(f"[extdom] 追加层数：本层既没有新的归属本项目域名，也没有达到"
+                    f"「{extdom.conf_label(min_conf)}」阈值的相似域名"
+                    f"（相似那道闸另挡 {sim_blocked} 个），追加到此为止（还剩 {depth - 1} 层未用）")
         return
     try:
         layer = max(1, int((options or {}).get("ext_layer") or 1))
@@ -384,15 +437,19 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
     remaining = depth - 1
     next_opts = dict(options or {})
     next_opts["append"] = True
-    next_opts["append_targets"] = promoted
+    next_opts["append_targets"] = targets
     next_opts["ext_depth"] = remaining
     next_opts["ext_layer"] = layer + 1
     from . import queue as _queue      # 延迟导入：queue 顶层 import 本模块，避免循环导入
     db.enqueue_task(task_id, "append", depth_stages(stages), next_opts)
     _queue.notify()
-    logger.info(f"[extdom] 追加层数：第 {layer}/{total} 层完成，新追加 {len(promoted)} 个归属域名"
-                f"（{', '.join(promoted[:5])}{' 等' if len(promoted) > 5 else ''}）"
-                f" → 已排入第 {layer + 1}/{total} 层追加运行，剩余 {remaining} 层")
+    _sim_n = len(targets) - len(promoted)
+    logger.info(f"[extdom] 追加层数：第 {layer}/{total} 层完成，下一层目标 {len(targets)} 个"
+                f"（归属 {len(promoted)} 个"
+                + (f" + 置信度≥{extdom.conf_label(min_conf)} 的相似域名 {_sim_n} 个" if _sim_n else "")
+                + f"：{', '.join(targets[:5])}{' 等' if len(targets) > 5 else ''}）"
+                + (f"，另有 {sim_blocked} 个被第三方/CDN/黑名单或阈值挡在外面" if sim_blocked else "")
+                + f" → 已排入第 {layer + 1}/{total} 层追加运行，剩余 {remaining} 层")
 
 
 def shot_retry_targets(task_id):
@@ -542,7 +599,7 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
     # 续151「追加层数」：第 2 层起的采集根就是本层的新域名（`append_targets`）——
     # subdomain / probe 取的是 `ctx.targets`，不覆盖就会退回「重扫父任务原始目标」，
     # 这一层就白跑了。**只对追加层（ext_layer>=2）生效**，不改既有 append / resume 的输入口径。
-    _depth = clamp_ext_depth((options or {}).get("ext_depth"))
+    _depth = resolve_ext_depth(options, settings or load_settings())
     try:
         _layer = max(1, int((options or {}).get("ext_layer") or 1))
     except (TypeError, ValueError):

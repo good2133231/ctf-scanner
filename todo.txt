@@ -3802,38 +3802,60 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       变成"清单会说清不适用"）；`chrome` 的 win/mac 摘要仍未核 ⇒ 那些平台永远不适用；
       预览的「已装」吃的是本机文件系统 ⇒ 换机器必须重跑一次，那份清单**不能当 Windows 的结论**
 
-下一轮（续169）——只做这些，别扩大：
+## 续169（2026-10-13，WorkBuddy · Qoder-Agent 远端 Linux）：拓展域名「像不像自家资产」分档 + 主面板补层数与阈值
 
-本轮的口径与判据**只在这一段里**，别再回到「两组」那个写法（第一组＝续168 已落地，见上面那一节）。
+- [x] `scanner/extdom.py` 立起唯一产地：`CONF_LEVELS/CONF_RANK/CONF_LABELS` + `conf_norm`（中文档名、
+      英文、大小写、垃圾输入都归到同一档）+ `similarity` + `confidence` + `confirmed_bases`
+      （对照集＝`own_hosts` ∪ `task_bases`，就是主理人说的"父域名可以是爷爷域名"）+
+      `auto_expand_block` + `similar_candidates`；主标签差 ≤2 步且比值 ≥0.70 判「高」，
+      三档**各带依据文本**（`abdc.com` 实测判高，依据里写明相差几步、相似度、TLD 不同）
+- [x] 三道闸赢过分数：黑名单 → `js_thirdparty.txt` → CDN 标记，**无论多像都不自动扫**；
+      双向夹具钉住（不带闸时 `abdc.com` 必须放行，桩成第三方后同一个高分名字必须被挡）
+- [x] 只有 ≥阈值才自动递归，且**默认一个字都不扩**：`DEFAULTS["subdomain"]` 新增
+      `ext_depth: 1` + `ext_min_confidence: "high"`（随包 settings.yaml 同步），层数与阈值的读取
+      各只有一处 `runner.resolve_ext_depth` / `resolve_ext_confidence`（任务选项优先、退回策略；
+      显式填的 1 不许被 `or` 顶掉——本轮自己写出来又改掉的坑）
+- [x] 相似域名**不写进 `subdomains` 的归属行**（那是 `promote_owned` 的语义），只进这一层的
+      `append_targets`；实测阈值高时 `append_targets` 恰好 `["abdc.com"]`，放宽到「低」时
+      `["abdc.com", "google.com"]`，而桩成第三方的 `abcd.co` 两种阈值都进不来
+- [x] 主面板（`tasks.html`「拓展选项」那一行）补「追加扫描层数」+「置信度阈值」，默认值取自
+      `_ext_defaults()`（＝策略配置那一份）；`api_create_task` 落选项时夹值/归一都走既有产地，
+      **没填就不落键**；「追加到本任务」按主理人定的口径**不放**主面板（新建任务没有父任务可折）
+- [x] `/extdomains` 补上「层数 / 阈值 /（按任务筛选时的）追加到本任务 /（同上）解析选中域名」，
+      两处拓展域名页共用一份徽章标记（新文件 `gui/templates/_conf.html` 的 macro `conf_badge`，
+      判据由 `gui/app.py::_ext_confidence` 在视图里贴到行上）；一键黑名单本来就有，本轮确认在页上
+- [x] 策略页两个新输入框 + POST 映射一起补（`[8at]②` 那条"逐段点名一个键都不许少"盯着它）
+- [x] 门禁 `[169]` 九节 234 行（两处变异证伪：拆掉档位常量 ⇒ `google.com` 必须被判高；
+      阈值调到「低」⇒ `google.com` 进下一层而 `abcd.co` 仍进不来）⇒ SMOKE PASS，组打印 193 → 195
+- [ ] **`ext_depth` 与 `auto_expand` 没并轨**：层数 >1 但没勾「自动拓展」时仍会跑多层采集，
+      只是不做归属追加。本轮只在日志里说清，没改门控（改它要连着动 `[6q]/[6lb]` 三条断言）
+- [ ] **CLI 点不了这一档**：`cli/client.py` 只吃策略默认，没有 `--ext-depth` / `--ext-min-conf`
+- [ ] **相似度对 IDN / punycode 没验**：主标签比的是 `xn--...` 那串字节，中文域名换 TLD 的形状
+      （`例子.中国` vs `例子.com`）实测过不过得了 0.70 没人知道；要接就先补夹具再谈调阈值
+- [ ] 徽章每行都要按任务取一次对照集（页内按 `task_id` 去重，每任务 2 条 SQL），**没有**缓存层
 
-- [ ] **建任务面板补两个控件**（现状：`gui/templates/tasks.html:4-74` 那张表单**没有**它们，
-      `api_create_task`（`gui/app.py:1528-1601`）读的字段里也没有）：
-      **拓展扫描层数 1–10** 与 **置信度阈值（默认＝高）**。「追加到本任务」**不放**主面板
-      （新建任务没有父任务可折，放上去是个永远勾不中的框；它留在 `task_detail.html:404` 与
-      `/extdomains` 补控件那一处）。层数一律走既有产地：`runner.clamp_ext_depth()` +
-      `runner.depth_stages()`（`scanner/runner.py:236/239/348-395`），**不许在 GUI 里再夹一次**。
-      `ext_depth` 目前 DEFAULTS 里没有、只能从任务详情页设（`app.py:3332-3335`）⇒ 建任务这条
-      路要把它接进 `options`，并顺手补 `DEFAULTS` 一个键（连带策略页/`[8at]②`"逐段点名不许少存键"）。
-- [ ] **新判据：拓展域名"像不像自家资产"的置信度**（全仓现在**没有**任何相似度实现，唯一归属
-      判据是严格后缀 `extdom.is_in_bases():81`；唯一"相关性"是 GitHub 弱相关降级
-      `github_leak.py:271-277` + `build_lead:243-246`，只降不升、绝不丢）。设计：
-      纯标准库（`difflib.SequenceMatcher`，**不引第三方**），比对对象是**已确认资产**那一层
-      （`extdom.own_hosts():102` ∪ `task_bases():67`，即主理人说的"父域名/爷爷域名"），
-      主标签复用 `github_leak.label_of():85`；例：`abdc.com` × `abcd.org`（同主标签、TLD 不同、
-      编辑距离 1）⇒ 高。三档 高/中/低，**每档都要给依据文本**（像哪个域名、距离几步、TLD 是否不同），
-      不许只给一个数。判据**只有一个产地**（`scanner/extdom.py` 里一个新函数），
-      页面标注与自动递归决策都读它；GitHub 那套弱相关**不合并**（语义不同：那边是"仓库里提没提到"）。
-- [ ] **自动递归只扫 ≥阈值，且第三方命中永不自动扫**（主理人选定）：CDN 任播段
-      （`cdn.match()/ip_kind()`，`config/dicts/cdn_ips.txt`）、`config/dicts/js_thirdparty.txt`
-      （`jsmine.is_thirdparty():113`，清单本身穷尽不了）、`blacklist.matches():85` 命中的，
-      **无论算得多像都不进自动扫描**（可人工点"送去探测"）。这条要有一张**正反双向**夹具：
-      高置信 + 第三方命中 ⇒ 零请求；高置信 + 自家后缀 ⇒ 扫；否则"永不自动扫"是空话。
-      开关默认值要在 DEFAULTS / 随包 settings.yaml / 生效值**三档分开写**（§5.19 那口径）。
-- [ ] **一键加黑名单已经有一半**（`POST /api/blacklist/add` 在 `app.py:3158`，按钮在
-      `subdomains.html:44`、`extdomains.html:116`、`task_detail.html:419`）：缺的是跨任务
-      `/extdomains`（`extdomains.html:111-126`）**没有解析按钮、没有层数输入、没有 append 勾选**
-      （那页"送去探测"恒为新建任务）⇒ 与任务详情页签同源化，并且每行显示置信度徽章 + 依据。
-      展示层过滤/标注**不许动入库**（§0 第 10 条），被收起的条数要报数字。
+下一轮（续170）——只做这些，别扩大：
+
+**续170：把「换一台机器」这条线跑到真机上（主理人 2026-10-12 点单的第三段，前两段＝续166/续167）**
+
+- [ ] **装的时候能配凭据**（主理人选定"密钥走交互问答 + 环境变量"）：`run_bootstrap.py --install`
+      末尾加一步可选的凭据录入，把 `CTFSCANNER_KEYS_*` 与交互式问答并进 `config/keys.enc.yaml`
+      （**合并而不是覆盖**，改前备份；口令只从 `CTFSCANNER_KEYS_PASSPHRASE` / `~/.secrets/keys-pass`
+      / TTY 取，**绝不写进仓库里任何被跟踪文件**）。三条红线要一起守：`[8aw]①` 那句
+      "只有显式命令吃环境变量，启动流程一律不吃"、`[8ai]` 的"向导绝不代填"、
+      以及 `keystore.unlock()` 的来源优先级只有一份
+- [ ] **CJK 字体接线那一半**（续167 留下的）：字体取进 `tools/fonts/` 之后，要让无头浏览器真读到，
+      得给 `screenshot` 段加一个 fontconfig 配置键并在子进程 env 里注入 —— 新增配置键要连着
+      DEFAULTS / 随包 settings.yaml / 策略页表单 / `[8at]②` 逐段点名一起改，并把
+      `has_cjk_font()` 改成认得到仓库内那一份（现在它只扫系统目录，认不到就是撒谎）
+- [ ] **`dirmap` 的便携 Python**（主理人点了"便携 CPython"这一件，本轮**没做**）：先确认上游
+      哪一支还认 `-e`（`stages/dirscan.py::_dirmap_accepts_lang_arg` 的判据在那儿），
+      否则装上也只是"多一个不干活的外部工具"
+- [ ] **`chrome` 的 win/mac 摘要**：各下一遍（100-200 MB/件）、人工核过再补进 `pin_sha256`；
+      不核就维持「本平台不适用」（续168 那一档已经是诚实的说法，不许为省事直接写数字）
+- [ ] **真机验收一次 `./install.sh --full`**：干净克隆 + 空 `.cache/` 跑到底，把每一步的**实测数字**
+      （下载量、耗时、`tools/` 与 `.cache/` 各占多少）写进 CHANGELOG；本轮之前所有"能自动建环境"
+      的结论都是在**已经有 Go / 源码 / venv 的这台机器**上测的
 
 - [ ] **`shodan` / `quake` 的 key 已进密文，但策略段还是关的**（`enabled: false`）——
       「配了 key」与「会去查」是两件事，别把前者当后者。要不要随包打开由主理人定：
@@ -3931,14 +3953,10 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       退出码断言绑在一起，别顺手改）
 - [ ] **`tools/build_*.py` 的 `--fetch` 没有"只取不编"的档位**：想先把件备好、离线再编的人只能
       跑 `run_bootstrap.py --with-stack`（等价但名字不一样）。要不要给 `--fetch-only`，看主理人用不用
-- [x] **续167 已落地**（见上面 续167 那一节）：`chrome` 进 `LOCAL_STACK`（钉 155.0.8059.39 的
-      linux64 摘要）、`--with-stack` 取来后回写 `screenshot.browser`、`browser_path` 的相对值
-      按项目根折算、`[167]` 七节判据全绿
-- [ ] **CJK 字体那一半还没接**（续168）：字体能取进 `tools/fonts/`，但要让无头浏览器**真读到**，
-      得给 `screenshot` 段加一个 fontconfig 配置键并在浏览器子进程 env 里注入 —— 那是**新增配置键**，
-      要连 DEFAULTS / 随包 settings.yaml / 策略页表单 / `[8at]②` 的"逐段点名不许少存键"一起改，
-      单独一轮做（续166 那批 `GOMEMLIMIT` 式的实测：`has_cjk_font()` 目前只扫系统字体目录，
-      仓库内那份它认不到 ⇒ 现在把它写进清单会撒谎，所以**没写**）
+（这两条**不在这里重复维护**：`chrome` 那一件已在上面「## 续167」那一节记完；
+CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字体目录、认不到仓库内那份）
+一起挪到「下一轮（续170）」的清单里 —— 「下一轮」清单只放未做的 `- [ ]`，
+这是 AGENTS §0.4 第 4 条明写的结构要求。）
 - [ ] **`chrome` 只钉了 linux64 一件摘要**：mac-x64 / mac-arm64 / win64 三件**没核过** ⇒ 现在
       这些平台会拒装。要放开就得各下一遍（每件 100-200 MB）、核过再补进 `pin_sha256`
 - [ ] **`stack_update` 仍没有"更新"语义**（续166 那条待办对 chrome 同样成立）：钉的版本一改，

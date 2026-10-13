@@ -22,6 +22,8 @@
 
 所有写库路径都过 `blacklist` —— 被拦的域名既不解析也不追加。
 """
+import difflib
+
 from . import blacklist, cdn, db, dnsq, iprecon, targets
 from .utils import base_domain, is_domain, pool_run
 
@@ -97,6 +99,211 @@ def filter_owned(names, bases):
             seen.add(k)
             out.append(k)
     return out
+
+
+# ---------- 「像不像自家资产」的置信度（续169，全仓唯一产地） ------------------------------------
+#
+# 主理人点单的原话是：「如果拓展域名和父域名相似度高，这个父域名可以是爷爷域名 —— 反正就是
+# 项目有关、确定是资产的那个域名。举例 `abdc.com` 索引到 `abcd.org`，那这多半是我们的」。
+# 于是"归属"就不再只有严格后缀那一种形状：同一批业务换个 TLD、或主标签差一两个字符，
+# 人一眼认得出来，代码以前认不出来（`is_in_bases` 只会答"不是"）。
+#
+# 三条一起守，缺一条这功能就越线：
+# ① **三档各带依据文本**，不许只给一个数 —— 让人能核"凭什么算高"，也让人知道该不该拉黑；
+# ② **第三方 / CDN / 黑名单命中一律不自动递归**，无论多像（清单本身穷尽不了，所以它是闸不是滤镜）；
+# ③ 只有**用户点名要了 ≥2 层**时这里才可能发出新目标（层数默认 1 = 一个字都不动），
+#    而阈值默认就是最高档 —— 默认组合是"不扩"，扩了也只扩近乎确定的那批。
+#
+# 刻意**不写进 `subdomains` 的归属行**：`promote_owned` 那条的语义是"这是本项目自己的子域"，
+# 一个 TLD 都不一样的名字写进去就是造假（而且会顺着 `own_hosts` 被 portscan/probe 当自家资产打）。
+# 相似域名进的是**下一层的探测目标**（`append_targets`），拓展域名页上它仍然带着
+# `js:` / `osint:` 的来源与这一档置信度。
+
+CONF_LEVELS = ("low", "medium", "high")
+CONF_RANK = {"low": 0, "medium": 1, "high": 2}
+CONF_LABELS = {"low": "低", "medium": "中", "high": "高"}
+CONF_DEFAULT = "high"
+
+_HIGH_DISTANCE, _HIGH_RATIO = 2, 0.70        # 高：差 ≤2 步且比值 ≥0.70（`abdc` ↔ `abcd` 正好落在这一档）
+_MEDIUM_DISTANCE, _MEDIUM_RATIO = 3, 0.55    # 中：像，但够不上"多半是我们的"
+_MIN_LABEL = 4                               # 主标签短于 4 个字符一律判低（`a.com` vs `b.com` 那种巧合不算相似）
+
+
+def conf_norm(value, default=CONF_DEFAULT):
+    """任何输入 → 三档之一（认不出给 `default`）。**唯一归一处**：页面选项、任务选项、
+    策略配置三条路都可能送来字符串（`"high"` / `"高"` / 空），别在各处各写一份 if。"""
+    v = str(value or "").strip().lower()
+    if not v:
+        return default
+    if v in CONF_RANK:
+        return v
+    for level, label in CONF_LABELS.items():      # 中文档名也算（页面上印的就是这两个字）
+        if v == label:
+            return level
+    return default
+
+
+def conf_rank(level):
+    return CONF_RANK[conf_norm(level)]
+
+
+def conf_label(level):
+    return CONF_LABELS[conf_norm(level)]
+
+
+def _root_parts(host):
+    """`api.abdc.com` → `('abdc.com', 'abdc', 'com')`；不像域名给 `('', '', '')`。
+
+    比的是**注册域的第一个 label**（主标签）：`x.abcd.org` 与 `abdc.com` 该像，
+    而 `admin.abcd.org` 与 `login.abcd.org` 本来就同属一个注册域 —— 比子域前缀只会把
+    一堆同名不同用的名字误判成"像"。
+    """
+    root = base_of(host)
+    if not root or "." not in root:
+        return "", "", ""
+    parts = root.split(".")
+    return root, parts[0], parts[-1]
+
+
+def _edit_distance(a, b):
+    """Levenshtein 距离（纯标准库、短串 DP）。给"差几步"这个说法一个能复算的定义。"""
+    if a == b:
+        return 0
+    if not a or not b:
+        return len(a) + len(b)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def similarity(name, bases):
+    """与「已确认资产」那一层最近的一对有多像 → `{level, near, ratio, distance, same_tld, reason}`。
+
+    `bases` 由调用方给（`own_hosts` ∪ `task_bases`，见 `confidence()`），**这里不再判归属** ——
+    同一个注册域走 `is_in_bases`，那条是事实；这一条只是线索，两者在页面上必须分开说。
+    """
+    root, sld, tld = _root_parts(name)
+    if not sld:
+        return {"level": "low", "near": "", "ratio": 0.0, "distance": 0, "same_tld": False,
+                "reason": "形态上不像域名（没有可比的注册域），不参与置信度判断"}
+    best = None
+    for b in (bases or ()):
+        b_root, b_sld, b_tld = _root_parts(b)
+        if not b_sld or b_root == root:
+            continue
+        dist = _edit_distance(sld, b_sld)
+        ratio = _seq_ratio(sld, b_sld)
+        key = (dist, -ratio)
+        if best is None or key < best["key"]:
+            best = {"key": key, "near": b_root, "sld": b_sld, "tld": b_tld,
+                    "dist": dist, "ratio": ratio}
+    if best is None:
+        return {"level": "low", "near": "", "ratio": 0.0, "distance": 0, "same_tld": False,
+                "reason": f"没有可比对的已确认资产域名（{root} 找不到"
+                          "「主标签不同但注册域相近」的对象）"}
+    same_tld = (tld == best["tld"])
+    out = {"near": best["near"], "ratio": round(best["ratio"], 3), "distance": best["dist"],
+           "same_tld": same_tld}
+    words = (f"与已确认资产 {best['near']} 的主标签相差 {best['dist']} 步"
+             f"（{sld} ↔ {best['sld']}，相似度 {out['ratio']}，"
+             f"TLD {'相同' if same_tld else '不同'}）")
+    if len(sld) >= _MIN_LABEL and len(best["sld"]) >= _MIN_LABEL \
+            and best["dist"] <= _HIGH_DISTANCE and best["ratio"] >= _HIGH_RATIO:
+        out["level"] = "high"
+        out["reason"] = words + "：判定为高 —— 同一批业务换个 TLD 或打错一个字符的形状"
+    elif best["dist"] <= _MEDIUM_DISTANCE and best["ratio"] >= _MEDIUM_RATIO:
+        out["level"] = "medium"
+        out["reason"] = words + "：判定为中 —— 像，但够不上「多半是我们自己的资产」"
+    else:
+        out["level"] = "low"
+        out["reason"] = words + f"：判定为低（{'主标签太短' if min(len(sld), len(best['sld'])) < _MIN_LABEL else '差得足够多'}）"
+    return out
+
+
+def _seq_ratio(a, b):
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def confirmed_bases(task_id):
+    """「已确认是自家的域名」那一层 = 自家子域名（内存里交给调用方的那批 + 库里的行）
+    ∪ 任务目标及其注册域。置信度的对照对象**只有这一处取法**（续169）——
+    页面徽章与自动递归读同一个集合，否则会出现"页面上写着高、递归却没带上"。
+    """
+    return set(own_hosts(task_id)) | set(task_bases(task_id))
+
+
+def confidence(name, bases=None, task_id=None):
+    """一个拓展域名「有多大把握是自家资产」→ `{level, label, owned, near, reason, ...}`。
+
+    `bases` 不给就现取（`confirmed_bases(task_id)`）—— 那一层就是主理人说的
+    "父域名 / 爷爷域名"：**已经确认是资产的域名**，不是本次目标字符串。
+    """
+    if bases is None:
+        if task_id is None:
+            raise ValueError("confidence() 要么给 bases，要么给 task_id（没得比对就不许判）")
+        bases = confirmed_bases(task_id)
+    n = _norm(name)
+    hit = next((b for b in (bases or ()) if b and (n == b or n.endswith("." + b))), "")
+    if hit:
+        return {"level": "high", "label": "高", "owned": True, "near": hit, "ratio": 1.0,
+                "distance": 0, "same_tld": True,
+                "reason": f"注册域就是已确认资产 {hit}（这是归属，不是相似）"}
+    out = similarity(n, bases)
+    out["owned"] = False
+    out["label"] = conf_label(out["level"])
+    return out
+
+
+def auto_expand_block(name, settings=None, owner_id=0, cdn_label=""):
+    """这个名字**能不能**进自动递归 → 拦下的原因（空串＝放行）。
+
+    只管三道闸：黑名单 → 第三方清单 → CDN。顺序是刻意的，这三道判的都是"它压根不是你的"，
+    多像都不放行；**阈值那一档由调用方比**（`similar_candidates`），因为"低于阈值"与
+    "被这三道拦下"在页面上要写不同的话，两处各判一次就会有一处忘。
+    """
+    from .jsmine import is_thirdparty        # 延迟导入：jsmine 反向依赖本模块
+    entry = blacklist.matches(name, blacklist.load(settings, owner_id=owner_id))
+    if entry:
+        return f"命中黑名单条目 {entry}（黑名单里的东西不自动扫，无论多像）"
+    if is_thirdparty(name):
+        return "在第三方/CDN 清单里（config/dicts/js_thirdparty.txt），不是自家资产的候选"
+    if str(cdn_label or "").strip():
+        return f"解析结果标为 CDN（{str(cdn_label).strip()}），那是别人的基础设施"
+    return ""
+
+
+def similar_candidates(rows, bases, min_level=CONF_DEFAULT, settings=None, owner_id=0):
+    """从拓展域名行里挑「够得上阈值、且没被三道闸拦下」的那批 → `[{domain, level, reason, blocked}]`。
+
+    `rows` 由调用方给（`ext_rows(task_id)` 那批），本函数**不发任何请求、不写库**，
+    纯计算 —— 所以门禁可以整条桩掉，不依赖这台机器的 DNS 与配置。
+    返回里 `blocked` 非空的行**也带出来**：被挡掉的条数必须在日志和页面上看得见，
+    否则"没扫"与"扫不了"在读者眼里长一个样（§0 第 10 条）。
+    """
+    floor = conf_rank(min_level)
+    keep, blocked = [], []
+    for r in (rows or ()):
+        d = _norm(r.get("domain") if isinstance(r, dict) else r)
+        if not d:
+            continue
+        conf = confidence(d, bases=bases)
+        why = auto_expand_block(d, settings=settings, owner_id=owner_id,
+                                cdn_label=(r.get("cdn") if isinstance(r, dict) else ""))
+        if not why and conf_rank(conf["level"]) >= floor and not conf["owned"]:
+            keep.append({"domain": d, "level": conf["level"], "label": conf["label"],
+                         "reason": conf["reason"], "near": conf["near"]})
+        elif not conf["owned"]:
+            blocked.append({
+                "domain": d, "level": conf["level"], "label": conf["label"],
+                "near": conf["near"],
+                "reason": why or (f"置信度 {conf['label']} 低于阈值 "
+                                  f"{conf_label(min_level)}；{conf['reason']}"),
+                "blocked": why or "低于阈值"})
+    return {"keep": keep, "blocked": blocked}
 
 
 def own_hosts(task_id, extra=(), logger=None, include_db=True):

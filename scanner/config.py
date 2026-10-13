@@ -270,6 +270,14 @@ DEFAULTS = {
         # 上限是防"历史越攒越多"把 DNS 与探测量放大；关掉即退回"只信本轮新发现"。
         "reuse_history": True,
         "reuse_history_max": 300,
+        # 续169：拓展域名「自动递归」的两档默认（层数 + 置信度阈值）。**默认组合＝不扩**：
+        # 层数 1 时 `runner._maybe_queue_next_layer` 直接早退，阈值一个字都不参与。
+        # 层数 N>1 ＝ 每一层把「本轮新确认的自家域名」再追加采集一次（上限 10，见
+        # `runner.EXT_DEPTH_MAX`）；阈值「高」＝ 只有像到「多半是自家另一个 TLD」那种程度的
+        # 拓展域名才跟着进下一层 —— 判据与依据文本只有 `scanner/extdom.py::confidence()` 那一份。
+        # 第三方 / CDN / 黑名单命中**无论多像都不自动扫**（`extdom.auto_expand_block()`）。
+        "ext_depth": 1,
+        "ext_min_confidence": "high",
     },
     "passive": {
         # 多来源被动子域名收集（免 API key 的公开接口，见 scanner/passive.py）

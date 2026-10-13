@@ -1523,7 +1523,12 @@ def create_app():
                                counts=counts, durations=durations,
                                running=set(runner.running_task_ids()), qpos=qpos,
                                pager=pager, page_sizes=PAGE_SIZES, q=q,
-                               status=status, stages_f=stages_f)
+                               status=status, stages_f=stages_f,
+                               # 续169：主面板那两个控件的默认值**取自策略配置**（唯一产地是
+                               # `subdomain.ext_depth` / `subdomain.ext_min_confidence`）。页面里
+                               # 写死 1 与「高」就是第二份默认值 —— 策略页改了页面不跟着变，
+                               # 读的人会以为策略页那两个框没用。
+                               ext_defaults=_ext_defaults())
 
     @app.route("/api/tasks", methods=["POST"])
     @login_required
@@ -1566,6 +1571,18 @@ def create_app():
                 if stage not in stages:
                     stages.append(stage)
                     auto_stages.append(stage)
+        # 续169（主理人点单：「这个不仅要在拓展域名哪个位置显示，主界面也要显示」）：
+        # 主面板的「拓展扫描层数」与「置信度阈值」。两个值都**只归一/夹值一次**，产地是既有的
+        # `runner.clamp_ext_depth` 与 `extdom.conf_norm` —— 在 GUI 里再写一遍 1..10 就是第二个产地，
+        # 而"层数忘了夹"是往授权边界外多跑一整轮的那种错。
+        # 只在本次任务生效（任务级选项），策略级默认在 `subdomain.ext_depth` /
+        # `subdomain.ext_min_confidence`，两者都夹在同一个上限里（`runner.EXT_DEPTH_MAX`）。
+        _d169 = str(data.get("ext_depth", "") or "").strip()
+        _c169 = str(data.get("ext_min_conf", "") or "").strip()
+        if _d169:
+            options["ext_depth"] = runner.clamp_ext_depth(_d169)
+        if _c169:
+            options["ext_min_conf"] = extdom.conf_norm(_c169)
         for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan")):
             # 判据是**生效选项**（options）或表单字段 —— 上面「目录递归」会直接把
             # `dirscan_full` 写进 options，而表单里并没有这个字段名；只看表单会漏掉它，
@@ -1722,6 +1739,8 @@ def create_app():
         ext_subs, _hid = _sub_rows(
             ext_subs, f"task_id=? AND ({ext_base})",
             (task_id,) + ((ext_pick[2],) if ext_pick else ()), hide_res)
+        # 续169：这一页签每行的「置信度」徽章 —— 判据只有 `extdom.confidence` 一份，页面只读不另算
+        _ext_confidence(ext_subs, tid=task_id)
         _nores_state(ext_pager, hide_res, _hid)
         # 目录页签：折叠是**整表语义**（同一 站点 + 状态码 + 大小 只留首个），`_fold_dirs` 是这条
         # 规则的**唯一实现** —— 所以顺序只能是「取全量 → 折叠 → 过滤 → 切片」，**只有渲染**变成一页。
@@ -1871,6 +1890,7 @@ def create_app():
             "task_detail.html", task=task,
             subs=subs, ext_subs=ext_subs,
             ext_src=ext_src, ext_counts=ext_counts, ext_src_tags=EXT_SRC_TAGS,
+            ext_defaults=_ext_defaults(),
             resume_rest=resume_rest,
             sites=sites,
             ports=ports, csegs=csegs, certs=certs_rows,
@@ -2500,6 +2520,36 @@ def create_app():
             hidden = int(rr["c"] or 0) if rr else 0
         return out, hidden
 
+    def _ext_defaults():
+        """拓展域名那两个控件（层数 / 置信度阈值）的**默认值只从这一处读**。
+
+        建任务面板、任务详情「送去探测」、跨任务「拓展域名」页三个地方都吃同一份
+        `subdomain.ext_depth` / `subdomain.ext_min_confidence`；在每个模板里写死 1 与「高」
+        就是第二份默认值 —— 策略页改了它们不跟着变，读的人会以为策略页那两个框没用（§5.14）。
+        """
+        return load_settings().get("subdomain") or {}
+
+
+    def _ext_confidence(rows, tid=None):
+        """给拓展域名的每一行贴上「多大把握是自家资产」那一档（判据只 `extdom.confidence` 一处）。
+
+        对照对象是**已确认资产**那一层（`extdom.own_hosts` ∪ `extdom.task_bases`）—— 主理人的
+        说法是"父域名可以是爷爷域名"：能当对照的不只是本次目标字符串，而是这个任务已经确认
+        下来的所有自家域名。按任务取一次、逐行复用（同一域名在两个任务里的结论可以不同，
+        所以跨任务视图必须按行自己的 `task_id` 分组取）。纯读库 + 纯计算：**一个请求都不发**。
+        """
+        cache = {}
+        for r in rows:
+            key = int(tid) if tid is not None else int(r.get("task_id") or 0)
+            if key not in cache:
+                try:
+                    cache[key] = extdom.confirmed_bases(key)
+                except Exception as exc:      # 老库/坏任务不许把整页带倒：无从比对就如实给低档
+                    logger.warning(f"[extdom] 取 #{key} 的已确认资产失败，置信度按无对照算：{exc}")
+                    cache[key] = set()
+            r["conf"] = extdom.confidence(r.get("domain") or "", bases=cache[key])
+        return rows
+
     def _overlap_args():
         """「是否显示重叠资产」开关：默认隐藏，`?all=1` 显示全部（两个资产页口径一致）。"""
         return request.args.get("all") == "1"
@@ -2773,6 +2823,7 @@ def create_app():
             # 平铺模式整表贴（同一份 `_sub_rows`，不分两套逻辑）。
             for g in groups:
                 g["rows"], _ = _sub_rows(g["rows"], base_where, params, False)
+                _ext_confidence(g["rows"])      # 续169：徽章与自动递归共用同一个判据
             _, hidden = _sub_rows([], base_where, params, hide_res)
             _nores_state(pager, hide_res, hidden)
         else:
@@ -2782,8 +2833,10 @@ def create_app():
             pager["qs"] = qs
             row_total = pager["total"]
             subs, hidden = _sub_rows(subs, base_where, params, hide_res)
+            _ext_confidence(subs)               # 续169：平铺视图也要贴（两种视图一边有一边没有＝假徽章）
             _nores_state(pager, hide_res, hidden)
         return render_template("extdomains.html", subs=subs, groups=groups, grouped=grouped,
+            ext_defaults=_ext_defaults(),
                                row_total=row_total, pager=pager, q=q, tag=tag,
                                show_all=show_all, task_id=tid or "",
                                tasks=_tasks_with_asset("subdomains"),
@@ -3329,7 +3382,14 @@ def create_app():
         # 归属本项目（注册域命中任务目标）的拓展域名再追加成子域名并**再采集一次**，最多 N 层。
         # 夹到 1..10（上限咬住，绝不无限递归）；N>1 时把 osint / jsmine 补进阶段 ——
         # 否则每层挖不出新的 js:* / osint:*，「多层」就退化成「把同一批重复扫 N 遍」。
-        depth = runner.clamp_ext_depth(request.form.get("depth"))
+        # 续169：层数与阈值都**只归一一次**，产地是 `runner.resolve_ext_depth` /
+        # `extdom.conf_norm`；表单没填就退回策略配置（`subdomain.ext_depth`）。
+        depth = runner.resolve_ext_depth({"ext_depth": request.form.get("depth")}, settings)
+        # 续169：这一档只影响**自动递归**会不会带上「像自家、但注册域不是目标」的那些名字
+        # （人工勾选送探的行不受它约束 —— 那是人决定的）。归一只走 `extdom.conf_norm` 一处。
+        _c169 = str(request.form.get("ext_min_conf", "") or "").strip()
+        if _c169:
+            options["ext_min_conf"] = extdom.conf_norm(_c169)
         if depth > 1:
             stages = runner.depth_stages(stages)
         options["ext_depth"] = depth
@@ -3556,7 +3616,17 @@ def create_app():
                                   "reuse_history": f.get("subdomain_reuse_history") == "1",
                                   "reuse_history_max": int(
                                       f.get("subdomain_reuse_history_max")
-                                      or (settings.get("subdomain") or {}).get("reuse_history_max", 300))},
+                                      or (settings.get("subdomain") or {}).get("reuse_history_max", 300)),
+                                  # 续169：拓展域名自动递归的两档（层数 / 置信度阈值）。
+                                  # 页面上没填就原样带回现值 —— `save_settings` 是整份重写，
+                                  # 漏带＝把键删掉（`[8at]②` 那条"逐段点名一个键都不许少"为此而设）。
+                                  # 夹值与归一都走既有产地，不在这里再写一遍范围。
+                                  "ext_depth": runner.clamp_ext_depth(
+                                      f.get("subdomain_ext_depth")
+                                      or (settings.get("subdomain") or {}).get("ext_depth", 1)),
+                                  "ext_min_confidence": extdom.conf_norm(
+                                      f.get("subdomain_ext_min_confidence")
+                                      or (settings.get("subdomain") or {}).get("ext_min_confidence"))},
                     "evasion": {"random_ua": f.get("random_ua") == "1",
                                 "spoof_xff": f.get("spoof_xff") == "1",
                                 "waf_bypass": f.get("waf_bypass") == "1",

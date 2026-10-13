@@ -8,6 +8,9 @@
   <span class="mono">osint:fofa-title</span> FOFA·标题反查）。
   这些域名<b>未必属于目标自身</b>——第三方接口、CDN、统计服务都会出现在 JS 里，
   因此与「子域名资产」分开放，避免误判资产归属。来源列已标出哪些是 FOFA 找出来的。</p>
+{# 续169：置信度徽章的标记只有一份（`_conf.html` 里那个 macro）。平铺表与分组表共用同一个
+   `ext_row`，所以这一格不会在两处各长一遍（本仓"同一标记写两处迟早漂"的老毛病）#}
+{% from "_conf.html" import conf_badge %}
 {# 一行的渲染（平铺表与分组表共用，避免两处改一处漏） #}
 {% macro ext_row(s) %}
   <tr>
@@ -16,6 +19,7 @@
     <td>{{ s.id }}</td>
     <td><a href="{{ url_for('task_detail', task_id=s.task_id) }}">#{{ s.task_id }}</a></td>
     <td class="mono">{{ idn_display(s.domain) }}</td>
+    <td>{{ conf_badge(s) }}</td>
     <td class="muted small mono">{{ s.ip or '-' }}
       {%- if not s.ip and s.ip_note %}<br><span class="muted small"
         title="为什么没有解析结果">{{ ip_note_label(s.ip_note) }}</span>{% endif %}</td>
@@ -35,7 +39,7 @@
     <thead><tr>
       <th class="pick"><input type="checkbox" class="pick-all-page"
         data-pick-all="#tbl-{{ tid }}" title="全选本页"></th>
-      <th>#</th><th>任务</th><th>域名</th><th>解析 IP</th><th>CDN</th>
+      <th>#</th><th>任务</th><th>域名</th><th>置信度</th><th>解析 IP</th><th>CDN</th>
       <th>CNAME</th><th>来源</th><th>敏感</th></tr></thead>
     <tbody>
       {{ caller() }}
@@ -121,6 +125,30 @@
         送去探测（默认全任务拓展域名，新建任务）</button>
       <label class="muted" title="默认送本任务全部拓展域名（第三方 / CDN 清单里的那些不送，条数上限见 limits.ext_probe_max）；只想探勾上的几个就改成「只送勾选」">
         探测范围 <select name="scope"><option value="all">全任务</option><option value="picked">只送勾选</option></select></label>
+      <label class="muted" title="1 = 只对当下这批域名做一轮；N&gt;1 时每层把「本轮新确认的自家域名」+「置信度达到阈值的相似域名」再追加采集一次，最多 N 层。默认值取自策略配置 subdomain.ext_depth">
+        追加扫描层数（1=只扫当下这批）
+        <select name="depth">
+          {% for d in range(1, 11) %}
+          <option value="{{ d }}" {{ 'selected' if d == (ext_defaults.ext_depth or 1) }}>{{ d }}</option>
+          {% endfor %}
+        </select></label>
+      <label class="muted" title="只有「多大把握是自家资产」达到这一档的拓展域名才会被自动带进下一层（高＝主标签与已确认资产只差 ≤2 步，例：目标 abcd.org 拓展出 abdc.com）。第三方清单 / CDN / 黑名单命中的无论哪一档都不自动扫；判据只有 scanner/extdom.py::confidence() 那一份">
+        自动递归置信度阈值
+        <select name="ext_min_conf">
+          {% for lv, lab in [("high", "高"), ("medium", "中"), ("low", "低")] %}
+          <option value="{{ lv }}" {{ 'selected' if lv == (ext_defaults.ext_min_confidence or 'high') }}>{{ lab }}</option>
+          {% endfor %}
+        </select></label>
+      {% if task_id %}
+      <label class="muted" title="续150：默认勾选 —— 探测结果追加进 #{{ task_id }}（折叠在父任务里，跨运行去重）；取消勾选才新建一个独立任务">
+        <input type="checkbox" name="append" value="1" checked> 追加到本任务</label>
+      {% endif %}
+      {% if task_id %}
+      <button type="submit" class="ghost" formaction="{{ url_for('api_resolve_domains') }}"
+        title="纯 DNS 查询（零 HTTP）：回填解析 IP / CNAME / CDN 与失败原因。这一颗只在「按任务筛选」时出现 —— 回填要落到具体任务的行上">
+        解析选中域名（DNS）</button>
+      <input type="hidden" name="task_id" value="{{ task_id }}">
+      {% endif %}
       <button type="submit" class="ghost" formaction="{{ url_for('api_promote_domains') }}"
         title="勾选的域名里，注册域命中其所属任务目标的那些，会被追加成该任务的子域名（原拓展行保留，出处可查）">
         归属本项目的追加为子域名</button>
@@ -148,7 +176,7 @@
     {% else %}
       {% call ext_table('all-ext-subs') %}
         {% for s in subs %}{{ ext_row(s) }}{% else %}
-          <tr><td colspan="9" class="muted">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
+          <tr><td colspan="10" class="muted">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</td></tr>
         {% endfor %}
       {% endcall %}
     {% endif %}
