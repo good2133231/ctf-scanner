@@ -17,6 +17,8 @@
   ./tools/scanner/puredns bruteforce ./config/subdomains.txt -d url -r ./config/resolvers.txt -w logs/brute.txt
   cat passive.txt brute.txt | sort -u    ->  Python 端以 sorted(set(...)) 等价实现
 """
+import os
+
 from .base import Stage
 from . import github as github_stage
 from .. import blacklist, cdn, db, dnsq, extdom, passive, targets, wildcard
@@ -244,10 +246,21 @@ class SubdomainStage(Stage):
         words = cur + deep_sel
         dict_path = str(resolve(dict_raw)) if dict_raw else ""
         pd_bin = which(ctx.settings.get("tools", {}).get("puredns", "puredns"))
+        # 续165：puredns 的 bruteforce/resolve 会**在进程内 exec `massdns`**（传递依赖，靠 PATH 找），
+        # 而本仓的 `TOOLS`/`MANUAL`/`SYSTEM_PACKAGES`/`install.sh` 里此前一处都没有 massdns ⇒
+        # 每个域名都退码 1、报 `exec: "massdns": executable file not found in $PATH`（实测）。
+        # 先预检：缺 massdns 就别拿整轮时间（每域名 timeout=3600）去换一条看不懂的错，改用内置兜底。
+        massdns_bin = which(ctx.settings.get("tools", {}).get("massdns", "massdns"))
         # puredns 只吃**一个文件**，所以配了深档时要把并集落盘它才读得到。
         # 没装 puredns（或离线）时**不落盘**：内置那路直接拿内存里的词表，写一份 1.5MB 的副本
         # 只是把任务工作目录撑大，谁也不读它。
         use_pd = bool(pd_bin) and not offline and bool(words)
+        if use_pd and not massdns_bin:
+            ctx.logger.warning(
+                "[subdomain] puredns 已装，但缺它必需的 massdns（PATH 里找不到）—— 本次跳过 "
+                "字典爆破、改用内置兜底（否则每个域名都会以退出码 1 失败）。"
+                "装 massdns：python tools/build_massdns.py --wire（需 gcc/make）")
+            use_pd = False
         if deep and use_pd:
             dict_path = str(write_lines(ctx.workdir / "brute_words.txt", words))
         if brute_domains and words and use_pd:
@@ -264,16 +277,21 @@ class SubdomainStage(Stage):
                     ctx.logger.warning("[subdomain] 任务已请求停止，中止 puredns 爆破")
                     break
                 out_file = ctx.workdir / f"brute_{d}.txt"
+                # 把 massdns 所在目录塞进**这一个子进程**的 PATH（puredns 在进程内 exec 它，
+                # 拿不到我们在 settings 里写的绝对路径）——见 utils.run_cmd 的 extra_path。
                 rc, _, err = run_cmd([pd_bin, "bruteforce", dict_path, "-d", d,
                                       "-r", resolvers, "-w", str(out_file)], timeout=3600,
-                                     throttle=th)
+                                     throttle=th,
+                                     extra_path=os.path.dirname(massdns_bin) if massdns_bin else None)
                 if rc == 0:
                     add_many((line, "puredns") for line in read_lines(out_file))
                 else:
                     ctx.logger.warning(f"[subdomain] puredns {d} 退出码 {rc}：{err.strip()[:150]}")
         else:
             if not offline:
-                ctx.logger.info("[subdomain] puredns 不可用，回退内置 DNS 爆破（系统解析器）")
+                # 没说死"没装 puredns"：也可能是装了但缺 massdns（上一行的 WARNING 已说清），
+                # 所以这里只报"本次走内置兜底"这个事实，不重复下结论。
+                ctx.logger.info("[subdomain] 本次不做 puredns 爆破，回退内置 DNS 爆破（系统解析器）")
             if words:
                 # 内置那路是逐条 socket 解析，深字典在这里会跑几个小时 —— 单独一道更紧的闸门，
                 # 而且**只抽深档**（精简档那几十条永远全量在场），并把"想吃全量就装 puredns"

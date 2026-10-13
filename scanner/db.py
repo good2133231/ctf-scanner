@@ -1366,13 +1366,22 @@ CERT_ORDER = ("expired DESC, self_signed DESC, "
 
 # ---------- 全局资产视图（GUI 资产分栏用） ----------
 
+# 站点表「按标题聚合」的排序片段（续165，用户点单「相同标题应该聚集在一起」）：
+# 先按任务，再把**标题相同的排在一起**（3xx 站点没有 `title` 时退用跳转后的 `redirect_title`，
+# 与 `gui/app.py::_site_fold_key` 的折叠键同口径）；无标题的沉到最后。
+# 组内仍 `id DESC`（＝同标题只留最新一条的那条口径一字不变，代表行还是最新的那条）。
+SITE_TITLE_ORDER = ("CASE WHEN COALESCE(NULLIF(TRIM(title),''),NULLIF(TRIM(redirect_title),''),'')"
+                    "='' THEN 1 ELSE 0 END,"
+                    " COALESCE(NULLIF(TRIM(title),''),NULLIF(TRIM(redirect_title),''),''),"
+                    " id DESC")
+
 # 表 -> (默认排序, 可被关键字过滤的文本列)
 _ASSET_PAGES = {
     "subdomains": ("task_id DESC, domain",
                    ("domain", "source", "cname", "ip", "cdn", "ip_note")),
     # 关键字要能搜到「跳转后」的标题与落地 URL（续112-B）：页面上显示的就是这些，
     # 搜不到等于"看得见、找不到"。
-    "sites": ("task_id DESC, id DESC",
+    "sites": ("task_id DESC, " + SITE_TITLE_ORDER,
               ("url", "host", "title", "server", "tech", "redirect_url", "redirect_title")),
     "ports": ("task_id DESC, port", ("host", "ip", "service", "banner")),
     "csegs": ("task_id DESC, segment, ip", ("segment", "ip", "domains")),

@@ -10585,11 +10585,11 @@ http:
     except SystemExit as _se7p:
         assert _se7p.code == 1, _se7p.code
 
-    # ⑨ 续59-3：「需手工安装」的三个（nmap / fscan / dirmap）**如实展示**，且**绝不混进 TOOLS**
+    # ⑨ 续59-3：「需手工安装」的这几个（nmap / fscan / dirmap / massdns）**如实展示**，且**绝不混进 TOOLS**
     #    —— 2026-09-27 实测：nmap 官方只发安装器/源码包/dmg（不在 GitHub release）、fscan 官方不发
     #    二进制、dirmap 的 release `assets` 是空数组。硬塞进 TOOLS 就等于让它们绕过"必须过官方
     #    SHA256 才落盘"这条红线，所以这里用**不变式 + 变异证伪**把它钉死，而不是只写个注释。
-    assert sorted(tm7p.MANUAL) == ["dirmap", "fscan", "nmap"], sorted(tm7p.MANUAL)
+    assert sorted(tm7p.MANUAL) == ["dirmap", "fscan", "massdns", "nmap"], sorted(tm7p.MANUAL)
     assert all(str(v).strip() for v in tm7p.MANUAL.values()), "每条都要写明原因（页面直接展示它）"
 
     def _overlap7p(_tools, _manual):
@@ -10606,7 +10606,7 @@ http:
     # GUI：面板渲染出三条原因原文，且**不给**它们的下载复选框
     _h3_7p = _c7p.get("/tools").get_data(as_text=True)
     assert "需手工安装（本框架不自动下载）" in _h3_7p, "外部工具页必须如实列出需手工安装的工具"
-    for _mn7p in ("nmap", "fscan", "dirmap"):
+    for _mn7p in ("nmap", "fscan", "dirmap", "massdns"):
         assert tm7p.MANUAL[_mn7p] in _h3_7p, f"页面必须展示 {_mn7p} 的**原因原文**"
         assert f'name="tool" value="{_mn7p}"' not in _h3_7p, f"{_mn7p} 不得出现下载复选框"
     assert 'name="tool" value="httpx"' in _h3_7p, "可自动安装的三个仍要有下载复选框"
@@ -10637,16 +10637,60 @@ http:
 
     _out7p = _run_check7p()
     assert "需手工安装（本框架不自动下载）" in _out7p, _out7p
-    for _mn7p in ("nmap", "fscan", "dirmap"):
+    for _mn7p in ("nmap", "fscan", "dirmap", "massdns"):
         assert _mn7p in _out7p, f"`--check` 必须列出需手工安装的 {_mn7p}"
     assert "--update-tools" in _out7p, "可自动安装那条提示不能因为加了这个块就没了"
     try:
         tm7p.MANUAL = {}
         _out2_7p = _run_check7p()
-        assert "nmap" not in _out2_7p and "fscan" not in _out2_7p and "dirmap" not in _out2_7p, \
-            "`--check` 的三个名字必须来自 MANUAL（写死就会与 GUI 漂移）"
+        assert ("nmap" not in _out2_7p and "fscan" not in _out2_7p
+                and "dirmap" not in _out2_7p and "massdns" not in _out2_7p), \
+            "`--check` 的这几个名字必须来自 MANUAL（写死就会与 GUI 漂移）"
     finally:
         tm7p.MANUAL = _real_manual7p
+
+    # [165] 续165 收口（用户报的实跑问题）：① passive 源"未取到"必须**分因**（不可达 / HTTP 非 200 /
+    #   空响应体 / 响应正常但零匹配 —— 此前四种压成一句"无结果或不可达"）；
+    #   ② `run_cmd` 支持 `extra_path`（puredns 的传递依赖 massdns 靠 PATH 找，见 subdomain 预检）；
+    #   ③ 站点列表默认**按标题聚合**（同标题排在一起）。
+    import inspect as _inspect165
+    from scanner import utils as _u165, passive as _pa165
+    assert hasattr(_u165, "http_last_error"), "passive 分因依赖 utils.http_last_error"
+    def _fresh165():
+        """在一个**干净线程**里读一次失败原因（这条判据的全部意义在于"按线程隔离"）。"""
+        _got165 = []
+        _th165 = threading.Thread(target=lambda: _got165.append(_u165.http_last_error()))
+        _th165.start(); _th165.join()
+        return _got165[0]
+
+    # 变异证伪：把 `_HTTP_LOCAL` 换成模块级全局 ⇒ 前面几十组里必然有过失败的 HTTP 请求，
+    #   这个新线程一读就不是空串（原先在主线程上直接读，绿不绿取决于"这次跑之前有没有红过"）。
+    assert _fresh165() == "", "`http_last_error()` 必须按线程隔离（新线程没失败过＝空串）"
+    _to165 = type("ReadTimeout", (Exception,), {})("Read timed out. (read timeout=5)")
+    assert _u165._exc_reason(_to165) == "超时", _u165._exc_reason(_to165)
+    assert "extra_path" in _inspect165.signature(_u165.run_cmd).parameters, \
+        "run_cmd 必须支持 extra_path（否则 wire 好的 massdns 不会被 puredns 找到）"
+    _realreq165, _realerr165 = _pa165.http_request, _pa165.http_last_error
+    try:
+        _pa165.http_request = lambda *a, **k: None
+        _pa165.http_last_error = lambda: "超时"
+        _s165, _f165, _w165 = _pa165._probe("crt.sh", "http://x", "targ1.pro", {}, 20)
+        assert _f165 is None and _w165.startswith("不可达：超时"), _w165
+        _pa165.http_request = lambda *a, **k: {"status": 502, "text": "", "length": 0}
+        _, _f165, _w165 = _pa165._probe("crt.sh", "http://x", "targ1.pro", {}, 20)
+        assert _f165 is None and "空响应体" in _w165 and "502" in _w165, _w165
+        _pa165.http_request = lambda *a, **k: {"status": 200, "text": "no domains here", "length": 15}
+        _, _f165, _w165 = _pa165._probe("crt.sh", "http://x", "targ1.pro", {}, 20)
+        assert _f165 is None and "未匹配到" in _w165, _w165
+        _pa165.http_request = lambda *a, **k: {"status": 200, "text": "a.targ1.pro", "length": 11}
+        _, _f165, _w165 = _pa165._probe("crt.sh", "http://x", "targ1.pro", {}, 20)
+        assert _f165 == {"a.targ1.pro"} and _w165 == "", (_f165, _w165)
+    finally:
+        _pa165.http_request, _pa165.http_last_error = _realreq165, _realerr165
+    assert db.SITE_TITLE_ORDER in db._ASSET_PAGES["sites"][0], db._ASSET_PAGES["sites"][0]
+    assert "COALESCE(NULLIF(TRIM(title)" in db.SITE_TITLE_ORDER, db.SITE_TITLE_ORDER
+    print("[165] 续165 收口 ok: passive 未取到分因（不可达/HTTP码/空响应/零匹配）"
+          "｜run_cmd extra_path｜sites 默认按标题聚合")
 
     print("[7p] 续54 外部工具版本管理 ok: 平台 "
           f"{_os7p}/{_ar7p}｜scanner 包内零引用（M5 检测器敏感）｜https+白名单"
@@ -10655,9 +10699,11 @@ http:
           "zip slip 拒绝（M2 证伪）｜puredns Windows 无产物如实报（M3 证伪）｜"
           "回写相对路径且注释/行数/CRLF 行尾/其它键全不变｜GUI 管理员 200·子用户 403·结果留页｜"
           "CLI --no-wire 生效·失败退出码 1·未知工具名中止｜"
-          "续59-3 需手工安装三项（nmap/fscan/dirmap）TOOLS∩MANUAL=∅（M6 证伪·塞进 TOOLS 即红）、"
+          f"续59-3 需手工安装 {len(tm7p.MANUAL)} 项"
+          f"（{'、'.join(sorted(tm7p.MANUAL))}）"
+          "TOOLS∩MANUAL=∅（M6 证伪·塞进 TOOLS 即红）、"
           "GUI 面板展示原因原文且无下载框（M7 证伪·MANUAL 清空即消失）、"
-          "`--check` 同源列出三项（M8 证伪·清空 MANUAL 即不再出现）｜"
+          f"`--check` 同源列出 {len(tm7p.MANUAL)} 项（M8 证伪·清空 MANUAL 即不再出现）｜"
           "续94 多版本共存（版本库按 tag 归档·内容哈希判 active·任意版本可逆来回切·"
           "问不出版本号不归档·prune 如实报出删了什么·protect 不删·未知工具 ok=False）")
 
@@ -12613,6 +12659,18 @@ http:
     assert _need8d - _names8d == set(), f"清单缺项：{sorted(_need8d - _names8d)}"
     assert all(r["status"] in ("ok", "missing", "warn") for r in _rows8d), "status 必须只有三态"
     assert all(r["detail"] for r in _rows8d), "每行都要有如实的 detail（空串＝把未知当已就绪）"
+    # 续165：`run_bootstrap._manual_row` 是 if/elif/**else**，else 里写死的是 dirmap 那套命令。
+    #   给 `toolmgr.MANUAL` 添名字却忘了添分支时，新工具会印出 dirmap 的 clone/pip，还因为
+    #   dirmap 真在盘上而被报成"已装"（本轮加 massdns 时实测就是这个形态）。
+    #   变异证伪（已实测）：把 `_manual_row` 退回本轮之前的形状（massdns 无分支、dirmap 回到 else）
+    #     ⇒ massdns 行同时踩中"没提自己"与"混进 dirmap"两条。
+    for _mn8d in sorted(_tm8d.MANUAL):
+        _mr8d = [r for r in _rows8d if r["name"] == _mn8d][0]
+        _mtx8d = " ".join(_mr8d["cmds"]) + "|" + _mr8d["detail"]
+        assert _mn8d in _mtx8d, f"{_mn8d} 的行没提自己（命令/原因都不是它的）：{_mtx8d[:160]}"
+        for _other8d in sorted(set(_tm8d.MANUAL) - {_mn8d}):
+            assert _other8d not in _mtx8d, \
+                f"{_mn8d} 的行里混进了 {_other8d} 的命令/原因（else 兜底冒充了别的工具）：{_mtx8d[:160]}"
 
     # ④ 分层不变式：`auto=True` 与 MANUAL **必须不相交**（[7p] ⑨ 那条 TOOLS∩MANUAL=∅ 的运行期另一半）
     def _vio8d(_rs):
@@ -19306,7 +19364,8 @@ expression: r0()
         _sd8aq.write_lines(Path(str(cmd[cmd.index("-w") + 1])), ["w9999.lab8aq.test"])
         return 0, "", ""
 
-    def _run_sub(tag, fb=0, mw=0, warn=0, cur=None, deep="", opts=None, pd=False, combo=None):
+    def _run_sub(tag, fb=0, mw=0, warn=0, cur=None, deep="", opts=None, pd=False, combo=None,
+                       massdns=True):
         """跑一遍 subdomain 阶段的爆破段。`cur`=精简档、`deep`=深档（默认**不配**深档，
         否则本机/CI 上有没有那份 17.8 万条的文件会改变测试结果 —— 两档必须各自钉住）。"""
         st = copy.deepcopy(settings)
@@ -19320,8 +19379,16 @@ expression: r0()
         tid = db.create_task(f"smoke-8aq-{tag}", "lab8aq.test", ["subdomain"], {})
         ctx = StageContext(tid, "smoke-8aq", parse_lines(["lab8aq.test"]), ["subdomain"],
                            opts or {}, st, _d8aq / tag, _Rec8ap())
-        _sd8aq.which = (lambda name=None, *a, **kw: "/fake/puredns" if (
-            pd and "puredns" in str(name or "")) else None)
+        def _which165(name=None, *a, **kw):
+            # 续165：puredns 与它必需的 massdns 都要能"桩出来"，否则那道新预检会把
+            #   整条 puredns 路关掉，本组既有的断言就变成"什么都没测"的假绿。
+            _n165 = str(name or "")
+            if pd and "puredns" in _n165:
+                return "/fake/puredns"
+            if pd and massdns and "massdns" in _n165:
+                return "/fake/massdns"
+            return None
+        _sd8aq.which = _which165
         _sd8aq.SubdomainStage(ctx).run()
         return _lg8ap[n:]
 
@@ -19361,6 +19428,19 @@ expression: r0()
         assert any("等距抽样" in x for x in _t6d), _t6d[:6]
         assert any("爆破规模预估" in x and "次 DNS 查询" in x for x in _t6d), \
             f"没把查询量预估说出来：{_t6d[:6]}"
+        # 续165（用户实跑报"puredns 每个域名退码 1"）：装了 puredns 但 PATH 里没有 massdns
+        #   ⇒ **根本不该起** puredns 子进程（每域名 timeout=3600，白烧一整轮），且要把出路
+        #   （本仓那份自编译脚本）当场说出来。
+        #   变异证伪：摘掉 `scanner/stages/subdomain.py` 里 `if use_pd and not massdns_bin`
+        #   那道预检 ⇒ `_pd_dicts` 立刻变非空（真的去跑 puredns），第一条断言就红。
+        _lg8ap.clear(); _tried.clear(); _pd_dicts.clear()
+        _t6m = _run_sub("nomassdns", mw=100, cur=_tiny8aq, deep=_big8aq, pd=True,
+                        massdns=False)
+        assert _pd_dicts == [], f"缺 massdns 仍去跑 puredns（每域名退码 1）：{_pd_dicts}"
+        assert any("massdns" in x and "build_massdns.py" in x for x in _t6m), \
+            f"缺 massdns 没给出编译出路：{_t6m[:6]}"
+        assert any("本次不做 puredns 爆破" in x for x in _t6m), \
+            f"回退内置那路没在日志里说清（只留一片沉默）：{_t6m[:6]}"
         # ⑨ 两档分工（这是"深字典"能安全启用的前提）：抽样**只冲深档，精简档一条不丢**
         _lg8ap.clear(); _tried.clear()
         _t9 = _run_sub("tier", fb=300, cur=_tiny8aq, deep=_big8aq, opts={"offline": True})

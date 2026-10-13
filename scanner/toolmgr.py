@@ -30,7 +30,7 @@ subfinder/httpx/puredns 时一律退到内置兜底（覆盖面与速度差一�
   也没有 checksums 文件**。所以 Windows 上本模块会如实报"未提供当前平台产物"，**不猜、不自动编译**。
   续164 起本模块**自己替它钉住版本与四件产物的 SHA256**（见下方 TOOLS 的 `pin_version`/`pin_sha256`），
   并按**确切 tag** 取 release（不跟 latest）：上游哪天发新版，也不会把没核过的字节装进来。
-- nmap / fscan / dirmap 走**手工安装**（本模块不为它们发任何请求）：逐条原因见下方 `MANUAL`，
+- nmap / fscan / dirmap / massdns 走**手工安装**（本模块不为它们发任何请求）：逐条原因见下方 `MANUAL`，
   步骤见 `tools/scanner/README.md`「手工安装」。
 """
 import hashlib
@@ -169,7 +169,7 @@ def fallback(name):
     return bool(TOOLS.get(name, {}).get("fallback", True))
 
 #  「需手工安装」的工具 —— **刻意不进 `TOOLS`**：`TOOLS` 的语义是"能自动下载、且默认必须过
-#  release 自带的 SHA256 校验才落盘"。这三个都不满足（2026-09-27 实测，不是推测）：
+#  release 自带的 SHA256 校验才落盘"。这几项都不满足（nmap/fscan/dirmap 2026-09-27 实测；massdns 2026-10-13 实测官方 release 的`assets` 是空数组）：
 #    - nmap   官方发布在 nmap.org/dist（**不在** GitHub release，本模块的 fetch_release 够不着）；
 #             Windows 只发 NSIS 安装器 `nmap-7.991-setup.exe`（是"装到 Program Files"的系统级动作，
 #             不是"解包取一个可执行文件"）；Linux 只发源码包（要编译）；macOS 只发 .dmg（要挂载）。
@@ -179,7 +179,7 @@ def fallback(name):
 #             （要 `pip install` 依赖），不是单二进制 —— `extract_binary()` 的模型套不上。
 #  之所以**写出来**而不是"眼不见为净"：GUI「外部工具」页若只列 `TOOLS`，会让人以为
 #  "没列出来的框架不管"，而 `cli --check` 里它们又都是"未找到（自动使用内置兜底）"。
-#  这三条只做**如实展示 + 指向 README 的手工步骤**，本模块不会为它们发任何请求。
+#  这几条只做**如实展示 + 指向 README 的手工步骤**，本模块不会为它们发任何请求。
 MANUAL = {
     "nmap": "官方只发安装器 / 源码包 / dmg（无便携 zip），自动装会变成系统级安装"
             "（可交给包管理器：./install.sh --with-system --yes）",
@@ -187,6 +187,10 @@ MANUAL = {
              "（已提供自动化编译：./install.sh --with-build，或 python tools/build_fscan.py --src 源码目录；"
              "页面按原文比对，故此处不写尖括号）",
     "dirmap": "release 零产物、无 checksums，且是纯 Python 项目（需 pip 依赖）",
+    "massdns": "官方只发 C 源码（make 出 bin/massdns），无带官方校验和的单二进制——"
+               "而 puredns 的 bruteforce/resolve 会在进程内 exec 它，缺它 puredns 每个域名都退码 1"
+               "（已提供自动化编译：python tools/build_massdns.py --wire，需 gcc/make；"
+               "页面按原文比对，故此处不写尖括号）",
 }
 
 

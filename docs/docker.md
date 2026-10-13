@@ -112,8 +112,11 @@ docker compose start
 
 装到命名卷 `ctf-tools` 里，**重建镜像不用重装**。多版本共存（`.versions/`）也在那个卷里。
 
-**nmap / fscan / dirmap 三个仍需手工装**（官方没有"可校验的单二进制产物"）：
+**nmap / fscan / dirmap / massdns 这几项仍需手工装**（官方没有"可校验的单二进制产物"）：
 容器里用 `apt-get install -y nmap` 之后重建镜像，或自己写个基于本镜像的派生 Dockerfile。
+`massdns` 是 **puredns 的传递依赖**（puredns 在进程内 exec 它，官方只发 C 源码）：镜像里
+`apt-get install -y build-essential git` 再 `python tools/build_massdns.py --src ./massdns --wire`。
+**不装也不影响**：`subdomain` 阶段会预检到缺它并自动回退内置 DNS 爆破。
 
 > **要在容器里用截图 / PDF，必须同时装浏览器和中文字体**（续103）：
 > `apt-get install -y chromium fonts-noto-cjk` 之后重建镜像。只装浏览器、不装字体是**最坏的一种** ——

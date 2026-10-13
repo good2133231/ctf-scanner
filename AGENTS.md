@@ -271,7 +271,7 @@ ctf-scanner/
 │                          #     会让 bash 报 `bad interpreter: /usr/bin/env bash^M`，而从 Windows 检出后
 │                          #     的症状看着像"这台机器没装 bash"，最难往行尾上想
 ├── run_gui.py             # Web 控制台入口（库里 0 个账号时**先跑首启动向导**建第一个管理员，续117）
-├── run_bootstrap.py      # 迁移自举（续96）：按平台点清环境缺口，自动补 `.venv`(含 pip 引导) + pip 依赖 + `toolmgr.TOOLS` + 可选系统包层 `--with-system`；nmap/fscan/dirmap **只打印命令、不代跑**。放仓库根、刻意不进 `scanner/` 包（免得给 [7p] 的扫描期零下载红线开豁免）
+├── run_bootstrap.py      # 迁移自举（续96）：按平台点清环境缺口，自动补 `.venv`(含 pip 引导) + pip 依赖 + `toolmgr.TOOLS` + 可选系统包层 `--with-system`；nmap/fscan/dirmap/massdns **只打印命令、不代跑**。放仓库根、刻意不进 `scanner/` 包（免得给 [7p] 的扫描期零下载红线开豁免）
 │                          #   ⚠ 续146 起仓库根**只有上面这两个启动文件**（用户点单："根目录这些文件太乱了，
 │                          #     主目录只留启动文件"），其余入口全在 `cli/` 下
 ├── cli/                   # 命令行入口（续146 从仓库根搬进来；搬完路径自举都要 `.parent.parent`，
@@ -719,7 +719,7 @@ ctf-scanner/
    SQL 那份把未解析排进"非 CDN"档）；截图失败原因 = `screenshot.classify()` + `REASON_*`
    （重试决策与落库标签同一个判断）；第三方清单 = `jsmine.thirdparty_suffixes()`，资产侧判定 =
    `jsmine.is_thirdparty()`（与 JS 侧 `_is_noise` 的分工写在 docstring 里：不认 apex、豁免
-   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。；**探测候选主机** = `extdom.own_hosts()`（内存 ∪ 库，own 口径 —— 续159，§6.2 第十四起）；**「这个名字在不在目标域之下」的归属比对** = `extdom.is_in_bases()`（`own_hosts` 与 `SubdomainStage.reuse_history` 共用，续160 —— 后缀判断写两遍就会一边一个口径）；**跨任务可借的历史域名** = `db.list_known_domains()`（own 口径 + 账号隔离都在 SQL 里）；**这条截图失败属于哪一档** = `screenshot.shot_bucket()`（落库的是「档｜原文」，取前缀，没有前缀才回退 `classify()` —— 续161 实测 `classify("跳转未落地｜一句话")` 落「其他」，而这一档**可重试**，事后重算＝静默丢候选）；**哪些档值得再排一轮** = `screenshot.RETRYABLE_REASONS`；**候补轮数与上限** = `screenshot.retry_rounds()`（DEFAULTS 0＝关、**随包 settings.yaml 出厂写 1**（续164），夹到 `RETRYABLE_MAX_ROUNDS`；读侧那个"键不存在时的兜底"跟 DEFAULTS 同值，不跟随包文件）；**候补候选** = `db.list_shot_failures()` + `runner.shot_retry_targets()`（档名一律**不进 SQL**，写 `LIKE '超时%'` 就是第二份判据）；**这次运行的运行期选项** = `queue.run_options()`（`run_payload` 那份，页面与 worker 同源；从 `task["options"]` 读永远是 0 —— 轮次就不在那一列）；**这个工具该看哪一个 release** = `toolmgr._release_for()`（钉了 `pin_version` 就按 `/releases/tags/<tag>` 精确取，没钉才看 latest —— 续164；`install` 与 `update` 都走它，别在两处各判一次"有没有钉"）；**某工具钉了哪一版、哪些产物摘要** = `toolmgr.pin(name)`（唯一读 `TOOLS[...]["pin_version"]/["pin_sha256"]` 的地方）；**「校验」那一格与政策句** = `toolmgr.verified_label()` / `verify_policy()`（CLI、GUI「外部工具」页、run_bootstrap、模板四处共用；页面里再抄一句"必须通过 release 自带的 SHA256 校验和"就是假话，`[8bu]` ⑤ 用 AST 扫字面量钉住）；**「为什么取不到这组凭据」** = `keystore.keys_hint(what)`（三态三句：两份文件都没有 / 有密文但本进程没解锁 / 已解锁但密文里没这一组 —— 续162；旧文案在七处各写一遍「见 config/keys.yaml」，而密文存在时明文根本不读，照着补的人永远补不上）；**「怎么解锁」** = `keystore.unlock_howto()`（补法只这一处，`keys_hint` 与启动横幅都引它）；**口令来源优先级** = `keystore.unlock()` 一处（参数 > `CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass`（守卫见 `file_passphrase`：正好 0600 / 属主是自己 / 非空）> 提问）
+   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。；**探测候选主机** = `extdom.own_hosts()`（内存 ∪ 库，own 口径 —— 续159，§6.2 第十四起）；**「这个名字在不在目标域之下」的归属比对** = `extdom.is_in_bases()`（`own_hosts` 与 `SubdomainStage.reuse_history` 共用，续160 —— 后缀判断写两遍就会一边一个口径）；**跨任务可借的历史域名** = `db.list_known_domains()`（own 口径 + 账号隔离都在 SQL 里）；**这条截图失败属于哪一档** = `screenshot.shot_bucket()`（落库的是「档｜原文」，取前缀，没有前缀才回退 `classify()` —— 续161 实测 `classify("跳转未落地｜一句话")` 落「其他」，而这一档**可重试**，事后重算＝静默丢候选）；**哪些档值得再排一轮** = `screenshot.RETRYABLE_REASONS`；**候补轮数与上限** = `screenshot.retry_rounds()`（DEFAULTS 0＝关、**随包 settings.yaml 出厂写 1**（续164），夹到 `RETRYABLE_MAX_ROUNDS`；读侧那个"键不存在时的兜底"跟 DEFAULTS 同值，不跟随包文件）；**候补候选** = `db.list_shot_failures()` + `runner.shot_retry_targets()`（档名一律**不进 SQL**，写 `LIKE '超时%'` 就是第二份判据）；**这次运行的运行期选项** = `queue.run_options()`（`run_payload` 那份，页面与 worker 同源；从 `task["options"]` 读永远是 0 —— 轮次就不在那一列）；**这个工具该看哪一个 release** = `toolmgr._release_for()`（钉了 `pin_version` 就按 `/releases/tags/<tag>` 精确取，没钉才看 latest —— 续164；`install` 与 `update` 都走它，别在两处各判一次"有没有钉"）；**某工具钉了哪一版、哪些产物摘要** = `toolmgr.pin(name)`（唯一读 `TOOLS[...]["pin_version"]/["pin_sha256"]` 的地方）；**「校验」那一格与政策句** = `toolmgr.verified_label()` / `verify_policy()`（CLI、GUI「外部工具」页、run_bootstrap、模板四处共用；页面里再抄一句"必须通过 release 自带的 SHA256 校验和"就是假话，`[8bu]` ⑤ 用 AST 扫字面量钉住）；**「为什么取不到这组凭据」** = `keystore.keys_hint(what)`（三态三句：两份文件都没有 / 有密文但本进程没解锁 / 已解锁但密文里没这一组 —— 续162；旧文案在七处各写一遍「见 config/keys.yaml」，而密文存在时明文根本不读，照着补的人永远补不上）；**「怎么解锁」** = `keystore.unlock_howto()`（补法只这一处，`keys_hint` 与启动横幅都引它）；**口令来源优先级** = `keystore.unlock()` 一处（参数 > `CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass`（守卫见 `file_passphrase`：正好 0600 / 属主是自己 / 非空）> 提问）；**站点表的默认排序** = `db.SITE_TITLE_ORDER`（续165，跨任务 /sites 与资产页共用；它与 `gui/app.py::_site_fold_key` 必须同口径 —— 折叠键认「标题优先、3xx 退 `redirect_title`」，排序若另拼一份 CASE 就会「聚在一起但代表行不是最新那条」；模板里再手写一遍就是第二份）；**一次 HTTP 失败到底为什么** = `utils._exc_reason()` + `utils.http_last_error()`（续165：`http_request` 的返回契约一字未改、失败仍是 `None`，原因按**线程本地**存；分类只在 `_exc_reason` 一处，调用方（passive 那类只读源）不许自己 `except` 再猜一遍超时/DNS/TLS）
 
 15. **指纹前置过滤只许做减法，不许改变判定结果**（续122）：`_lit_filter` 给每条正则算"必现字面量"，
     跳过 `re.search` 的前提是**该字面量在任何一次命中里都必然出现**。四个放弃过滤的条件（宁可不提速，
@@ -1067,7 +1067,7 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
 py -3 cli/run_keys.py --status                        # 续98：凭据是明文还是密文、是否已解锁（只打摘要，不打值）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 cli/client.py --check-afrog-pocs <目录>   # 只读自查 afrog PoC 目录：能喂几条、为什么拒（续123）
-                            #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）
+                            #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）+ massdns（续165，puredns 的传递依赖）
 py -3 cli/client.py --bootstrap                           # 续96：迁移自举——按平台点清缺口（解释器/pip 依赖/外部工具/浏览器），**不联网**
 py -3 run_bootstrap.py --install                            # 续99：等价入口（会先建 .venv 再用它自重跑；--no-venv 可退回当前解释器）
 ./install.sh                                        # 续146：Linux/macOS 一键安装（薄包装，判据全在 run_bootstrap.py）
@@ -1390,6 +1390,12 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
    缺任何一组就不许写文件）—— 静默少认键的形状与"文件里本来就没有"一模一样；
 ③ 落盘后**回读复验**要按**来源逐字段**比（本轮 `github` 两只掩码逐字不变 + 三组新键逐字相同），
    只比"能不能解开"证明不了内容对了（§6.1 同一形）。
+**第十八起（续165，**假绿**，由上一段会话留在工作树的改动造出来）：给 `toolmgr.MANUAL` 添名字，`run_bootstrap` 那个 if/elif/**else** 会把**别的工具的命令**打在它名下，而 `[8d]` 一组判据全绿。**
+`_manual_row()` 只有 nmap / fscan 两条明写分支，**else 里写死的是 dirmap 的 clone + pip**。本批给 `MANUAL` 加了
+`massdns`（puredns 在进程内 exec 的传递依赖）却没加分支 ⇒ `--check` / `--install` 输出 `massdns … git clone …/dirmap`，并因为 `tools/dirmap/dirmap.py` 真在盘上而把这一行标成 **ok**。为什么看着没问题：那一行**有原因、有命令、状态合法**；`[8d]` 那三条（清单不缺项 / `detail` 非空 / `auto∩MANUAL=∅`）判的是形状不是内容 —— **内容说的是别的工具**。同一批还留下第二形：新预检「缺 massdns 就跳过 puredns」让 `[8aq]` 的 `which` 桩（只认 puredns）把整条被测路关掉，那条恰好是**红**的（`puredns 仍在吃整份深字典：[]`）；同形但判据写成「日志里出现过某句」的话就会静默绿。
+三条口径：① **给注册表添条目 = 必须同时给每个消费这条注册表的分支添名**，`[8d]` 现在钉「MANUAL 每一行只许提自己、不许提别的 MANUAL 成员」，把 `_manual_row` 退回旧形状它立刻红（已实测：同时踩中「没提自己」与「混进 dirmap」）；
+② **兜底分支不许冒充**：通用 else 只能说「见 README 手工安装」，绝不能复用另一个工具的命令与 `found` 判据；
+③ **「缺依赖就跳过」这类闸落地时，先把所有把该工具桩成「已装」的夹具过一遍**，并补一条正向判据（缺依赖 ⇒ **根本不起子进程**），否则测的是跳过、绿的是功能。
 14. **`SELECT DISTINCT … ORDER BY <表达式>` 在 SQLite 里算不出那个表达式**（续154，2026-10-11）。
     现象：拓展域名采集用 `SELECT DISTINCT domain FROM subdomains ORDER BY <真实 IP 档位 CASE>`，
     档位本该是 `real=0 / multi=1 / cdn=2 / 未解析=3`，实测 `app.ngrok.io`（单 IP、非 CDN）被排到

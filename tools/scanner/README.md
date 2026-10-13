@@ -16,7 +16,7 @@ GUI 里是管理员侧栏的「外部工具」页。两条路都**只在显式�
 checksums 文件；官方不发 checksums 的（只有 puredns）用本框架人工核过、钉在 `scanner/toolmgr.py`
 `TOOLS` 里的产物摘要（`pin_version` / `pin_sha256`，续164）—— 按**确切 tag** 下载，字节对不上就拒装。
 
-迁移到**新机器**时用 `python cli/client.py --bootstrap`（续96）：它按平台一次点清「解释器 / pip 依赖 / 外部工具 / 截图用的浏览器」还缺什么；加 `--install` 才联网，且自动层只装 `requirements.txt` 与下表标「自动」的那三个。nmap / fscan / dirmap **仍然只打印命令、一条都不代跑**（逐条原因见下表与 `scanner/toolmgr.py` 的 `MANUAL`）。
+迁移到**新机器**时用 `python cli/client.py --bootstrap`（续96）：它按平台一次点清「解释器 / pip 依赖 / 外部工具 / 截图用的浏览器」还缺什么；加 `--install` 才联网，且自动层只装 `requirements.txt` 与下表标「自动」的那三个。nmap / fscan / dirmap / massdns **仍然只打印命令、一条都不代跑**（逐条原因见下表与 `scanner/toolmgr.py` 的 `MANUAL`）。
 
 否则可以手工放置，两种方式任选：
 
@@ -70,7 +70,7 @@ python cli/client.py --check-afrog-pocs <你的 PoC 目录>     # 只读，不�
 
 「自动」＝续54 起可由 `--update-tools` / GUI「外部工具」页一键下载，落盘前**必须过 SHA256**
 （摘要取官方 release 自带的 checksums，官方不发的取本框架钉住的那份 —— 见 `scanner/toolmgr.py`）；
-「手工」＝官方**压根没有"可下载的单二进制产物"**（只有安装器 / 源码包 / dmg，或 release 零产物、
+「手工」＝官方**压根没有"可下载的单二进制产物"**（只有安装器 / 源码包 / dmg，或 release 零产物、只有 C 源码、
 纯 Python），连校验的对象都没有，步骤见下方「手工安装」。
 
 | 工具 | 用途 | 一键下载 | 平台说明 |
@@ -81,6 +81,7 @@ python cli/client.py --check-afrog-pocs <你的 PoC 目录>     # 只读，不�
 | nmap | 端口扫描（第二引擎，见下） | **手工** | 官方发布在 nmap.org/dist（**非** GitHub release）：Windows 只有安装器、Linux 只有源码包、macOS 只有 dmg |
 | fscan | 端口扫描（第一引擎，见下） | **手工** | 官方不发二进制，需用 Go 从源码自编译（本仓为避免 Defender 拦截的既定做法） |
 | dirmap | 目录扫描（补充） | **手工** | 纯 Python 项目，release 的 `assets` 为空数组（零二进制、零 checksums） |
+| massdns | **puredns 的传递依赖**（puredns `bruteforce`/`resolve` 在进程内 exec 它） | **手工** | 官方 release 的 `assets` 是**空数组**（2026-10-13 查 GitHub API，最新 tag `v1.1.0`），只有 C 源码（`make` 出 `bin/massdns`）；缺它 puredns 每个域名退码 1，框架预检到就回退内置爆破。自编译：`python tools/build_massdns.py --src ./massdns --wire`（需 gcc/make） |
 | afrog | 漏洞检测（**外部引擎，续149 起默认开**） | 自动（并入 `--install` 默认层） | 官方产物七件（linux/macOS/windows × amd64/arm64 + `checksums.txt`），命名与 projectdiscovery 同规律 ⇒ `--update-tools --tool afrog` 装它、装完必须过 SHA256。装了会被 vulnscan 调用（续121 接线），但要真跑还要 PoC 目录里有只读模板；只喂"只读 + info 级"的模板（详见下） |
 
 > 端口扫描的引擎优先级是 **fscan → nmap → 内置 TCP connect**；两者都没有时会**如实回退**，
@@ -88,12 +89,13 @@ python cli/client.py --check-afrog-pocs <你的 PoC 目录>     # 只读，不�
 
 ## 手工安装（无法自动下载；但有自动化脚本）
 
-以下三个**不在** `--update-tools` / GUI「外部工具」页的覆盖范围内（它们没有"可下载且带官方
+以下四项**不在** `--update-tools` / GUI「外部工具」页的覆盖范围内（它们没有"可下载且带官方
 校验和的单二进制产物"），但都能用**一键脚本**装上：
 
 - **nmap** → `./install.sh --with-system --yes`（交给发行版包管理器真装）；
 - **fscan** → `./install.sh --with-build`（用本机 Go 从源码自编译，见下）；
-- **dirmap** → 纯 Python、release 无产物；本仓已随附一份兼容快照在 `tools/dirmap/`，无需另装（见下）。
+- **dirmap** → 纯 Python、release 无产物；本仓已随附一份兼容快照在 `tools/dirmap/`，无需另装（见下）；
+- **massdns** → 官方只发 C 源码，`python tools/build_massdns.py --src <源码目录> --wire` 自编译（需 gcc/make）。它不是"可选工具"：puredns 会在进程内 exec 它，见下面「massdns」。
 
 细节与逐条原因见下文与 `scanner/toolmgr.py` 的 `MANUAL`：
 
@@ -173,6 +175,26 @@ tools:
 > 目录扫描的主路径是本框架内置的「分层字典 + 12 个框架桶 + 暴露面」，dirmap 只作补充
 > （见 `docs/roadmap.md`）。
 
+### massdns
+
+**它不是"另一个可选扫描器"，而是 puredns 的传递依赖**：`puredns bruteforce` / `puredns resolve`
+会**在进程内 exec `massdns`**（靠 PATH 找）。官方 release 的 `assets` 是**空数组**（2026-10-13 查
+GitHub API：最新 tag `v1.1.0`、零产物、零 checksums），只有 C 源码 ⇒ 进不了本框架"必须过官方
+SHA256 才落盘"那条自动层，与 fscan 同类。
+
+缺它时的实测现象（2026-10-12）：puredns 每个域名都以退出码 1 失败，报
+`exec: "massdns": executable file not found in $PATH`。续165 起 `subdomain` 阶段**先预检**：
+PATH 里找不到 massdns 就不起 puredns（否则每域名 `timeout=3600`，白烧一整轮），直接回退内置
+DNS 爆破，并把下面这条命令写进同一行日志。
+
+```bash
+git clone https://github.com/blechschmidt/massdns && git -C massdns checkout v1.1.0
+python tools/build_massdns.py --src ./massdns --wire    # 需 gcc/make；产物落 tools/scanner/massdns
+```
+
+`--wire` 把 `tools.massdns` 写回 `config/settings.yaml`（相对路径）。框架调用 puredns 时把 massdns
+所在目录加进**那一个子进程**的 PATH（`utils.run_cmd(..., extra_path=…)`），不改父进程、不改全局。
+
 ## 验证
 
 ```bash
@@ -180,11 +202,12 @@ python cli/client.py --check
 ```
 
 输出每项工具的可用性；未找到的工具会注明"自动使用内置兜底"，并在末尾给出 `--update-tools` 的一键
-安装提示；此外会单列一行 **「需手工安装（本框架不自动下载）」**（nmap / fscan / dirmap + 各自原因），
+安装提示；此外会单列一行 **「需手工安装（本框架不自动下载）」**（nmap / fscan / dirmap / massdns + 各自原因），
 免得用户一直等一个不会出现的"一键安装"。
 
 ## 说明（客观）
 
 - subfinder 被动收集依赖其自身的数据源 API（无需 key 也有基础结果，配置 key 后效果更好）；
 - puredns 需要可用 resolver 列表，框架自带 `config/dicts/resolvers.txt`；
+- puredns 还需要 **massdns**（`bruteforce` / `resolve` 在进程内 exec 它，靠 PATH 找）：没装时 `subdomain` 阶段预检到就**跳过 puredns、回退内置 DNS 爆破**，并在日志里指向下面那节的编译脚本；
 - 内置兜底实现仅覆盖最小可用路径（见 docs/pipeline.md 的降级策略表），不要期望与本体等价。

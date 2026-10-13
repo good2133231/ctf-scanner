@@ -3707,7 +3707,49 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [x] 门禁：`tests/smoke.py` ⇒ **SMOKE PASS**，组打印 **189** 行（判据 `grep -cE '^\[[0-9]'`；
       上一轮终验 `logs/_gate163c.log` 是 188 行，本轮 +1 组正好对得上）
 
-下一轮（续165）——只做这些，别扩大：
+## 续165（2026-10-13，WorkBuddy · Qoder-Agent 远端 Linux）：收口上一段会话留在工作树的三件事 —— passive「未取到」分因、puredns 缺 massdns 的预检、站点按标题聚合
+
+开场状态（主理人说「继续工作」）：`git status` 挂着 **7 个已改文件 + 1 个未跟踪脚本**，最新提交是 续164，
+`CHANGELOG_AI.md` / `todo.txt` 里**一个字没写这批**，`logs/` 里也没有比 续164 更晚的门禁日志 ⇒ 一批
+「改完没验、没记账」的活。主理人当场定两件：轮次号**改回 续165**（那批注释自标 166 号，而 165 号从未发生，
+本地与 `origin/main` 最新都是 续164），本轮**只收口这批、不扩大**。
+
+- [x] **第一批就跑门禁 ⇒ 当场红**：`[8aq]` 那条「puredns 必须吃落盘并集」报
+      `AssertionError: puredns 仍在吃整份深字典：[]`。根因不在功能，在**夹具**：该组把 `which` 桩成
+      「只认 puredns」，新预检一看 PATH 里没有 massdns 就把整条 puredns 路关了。修法：桩**按名字供**
+      （puredns / massdns 各一条），并另加三条正向判据 —— 缺 massdns ⇒ `_pd_dicts` 必须为空（**根本不该
+      起子进程**，否则每域名 `timeout=3600` 白烧一轮）+ 日志必须给出 `build_massdns.py` 那条出路 +
+      必须说「本次不做 puredns 爆破」（不许静默回退）
+- [x] **抓出并修掉这批自己造的假绿（第十八起，AGENTS §6.2）**：`run_bootstrap._manual_row` 是
+      if/elif/**else**，else 里写死 dirmap 的 clone/pip —— 给 `toolmgr.MANUAL` 加了 `massdns` 却没加分支，
+      于是 `--check` / `--install` 把 **dirmap 的命令打在 massdns 名下**，还因为 dirmap 真在盘上而报「已装」。
+      `[8d]` 既有三条判据（清单不缺项 / `detail` 非空 / `auto∩MANUAL=∅`）**一组都不会红** —— 假的不是判据，是内容。
+      补：massdns 单独一条分支 + 通用 else 只报「见 README」不许冒充别的工具 + 新判据「MANUAL 每一行只许提自己」
+      （**变异证伪已实测**：把 `_manual_row` 退回旧形状 ⇒「没提自己」与「混进 dirmap」两条同时红）
+- [x] `toolmgr.MANUAL` 四项 ⇒ 把所有「需手工安装＝那三个」的成句一起跟上（§5.19）：GUI「外部工具」页那句
+      改成 `{{ manual|length }}` 现取，`[7p]` 组自己那句 print 也改成 `len(tm7p.MANUAL)`；
+      `README.md` / `docs/architecture.md`(两处) / `docs/docker.md` / `docs/usage.md`(两处) /
+      `tools/scanner/README.md`（表格一行 + 新增「massdns」一节 + 手工清单 + `--check` 那行 + 说明一节）/
+      `AGENTS.md`（§3 那两行成句 + §5.14 两个新产地 + §6.2 第十八起）/ `cli/client.py` 注释 /
+      `scanner/toolmgr.py` 文件头
+- [x] 官方事实**当场核实**（2026-10-13 查 GitHub API，不抄记忆）：`blechschmidt/massdns` 最新 tag
+      **`v1.1.0`**、`releases/latest` 的 **`assets` 数量 = 0**；官方 `Makefile` 的 `all:` 产出 `bin/massdns`
+      ⇒ 文档里「只有 C 源码、无带官方校验和的单二进制」这句有依据。本机 `gcc` / `make` / `cc` 均在，
+      massdns **仍未编译**（要 clone 到仓库外 = 联网 + 仓库外写，需主理人点头）
+- [x] `gui/app.py` 站点页签那句注释按现状改写（它说「`_ASSET_PAGES["sites"]` 的表默认序是 `id DESC`」，
+      而本批已把默认序换成「同标题聚在一起、组内 `id DESC`」；页签仍显式 `order="id"`，行为没变、说明是假的）
+- [x] 加固 `[165]` 组里一条会漂的判据：`http_last_error()` 空串那条原先在**主线程**上直接读，
+      绿不绿取决于「这次跑之前主线程有没有红过」⇒ 改成在**新线程**里读（换成模块级全局就必红）
+- [x] 轮次号回收：**12 处** `续166` → `续165`（6 个文件，等长字节替换、行尾一个字节没动）+ 组名
+      `[166]`→`[165]` + 组内局部标识符 **52 处** `*166`→`*165`
+- [x] `toolmgr.patch_settings_tool` 用 `("massdns", "tools/scanner/massdns")` 在 settings.yaml 的副本上往返实测：**438 行不变、438 条 CRLF 不变**，
+      只把那一条 `massdns: massdns` 换成相对路径（`build_massdns.py --wire` 走的就是它）
+- [x] 门禁：`./.venv/bin/python tests/smoke.py` ⇒ **SMOKE PASS**，组打印 **190** 行（上一轮终验 189，
+      本轮 +1 组正好对得上），本轮新增 `assert` **17** 条；`tests/browser_e2e.py` ⇒ **rc=0**，
+      真 Chrome + 真 Flask 进程 **72** 条断言全绿；18 个改动文件逐一对齐
+      `git diff --numstat` 与 `--ignore-cr-at-eol --numstat`（两式相等，无整文件级行尾漂）
+
+下一轮（续166）——只做这些，别扩大：
 
 - [ ] **`shodan` / `quake` 的 key 已进密文，但策略段还是关的**（`enabled: false`）——
       「配了 key」与「会去查」是两件事，别把前者当后者。要不要随包打开由主理人定：
@@ -3775,3 +3817,17 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       真正的收益在自建 / IDC 的 IP，**别当万能备用源**
 - [ ] **`exclude_scanned` 挡不住全端口重跑**（只记开放端口，实测那条"已扫过 N 个"一次没出现）：
       要记 per-host 的"已扫范围/已跑完整轮"才算真省 —— 见 §7 那条
+- [ ] **massdns 本机仍未编译**：`subdomain` 阶段现在会「装了 puredns 但缺 massdns ⇒ 跳过字典爆破、回退
+      内置那路」，所以**这台机器上 puredns 的深字典其实一次都没真跑过**。要跑：clone 官方源码（tag `v1.1.0`）
+      到仓库外，再 `python tools/build_massdns.py --src ./massdns --wire`（gcc/make 已就位）。
+      **别把它当已完成**：`[8aq]` 那三条判据靠夹具供名，与真机装没装无关
+- [ ] **`--update-tools --help` 仍写「默认三个都更新」，而 `toolmgr.TOOLS` 是四项**（含 afrog，续150 起）：
+      本轮只把与 MANUAL 同源的成句跟上了，这条同类漂移不在点单范围。动它要连 `[7p]` 那句
+      「可自动安装的三个仍要有下载复选框」一起核，别只改 help
+- [ ] **`scanner/utils.py` 里 10 行 LF 混在 899 行 CRLF 中间**（上一段会话所留，未整文件漂 ⇒ 两式 numstat
+      相等）：要归一单独一轮，改完仍按同一对判据核，别顺手 `read_text` 重写整份
+- [ ] **站点「按标题聚合」只在跨任务 `/sites` 与资产页生效**：任务详情页签仍是显式 `order="id"`（不聚标题），
+      折叠逻辑 `_site_fold_key` 也只作用在当前页。要不要让详情页同源，先定「同一个任务里同标题是否也该排在一起」—— 那是展示口径变更，不是顺手改
+- [ ] **`http_last_error()` 的契约是「同线程紧接着读」**：跨线程读到的是别的请求的原因或空串（`[165]` 现在
+      用新线程钉住了这一半）。若将来把 passive 的调用挪进 `pool_run` 之外，必须改成**返回值带原因**，
+      而不是让调用方去猜线程

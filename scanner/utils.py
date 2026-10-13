@@ -111,7 +111,7 @@ def pick_python(configured="python"):
     return sys.executable
 
 
-def run_cmd(argv, cwd=None, timeout=900, throttle=None):
+def run_cmd(argv, cwd=None, timeout=900, throttle=None, extra_path=None):
     """执行外部命令，返回 (returncode, stdout, stderr)。
 
     命令不存在返回 127；超时返回 124。统一 shell=False，避免注入。
@@ -119,23 +119,31 @@ def run_cmd(argv, cwd=None, timeout=900, throttle=None):
     `throttle` 是任务级限流器（`settings["_throttle"]`，见 `scanner/throttle.py`）：
     传入时本次子进程调用占用一个 `"subprocess"` 名额（并消耗预算），
     预算耗尽 / 被取消时**不启动进程**、直接返回 `(1, "", 原因)`。
+
+    `extra_path`（续165）是**追加到子进程 PATH 最前面**的一个目录：给"工具本体能找到、
+    但它的**传递依赖**去 PATH 里找"的场景用（实测：puredns 内部 exec `massdns`，本仓从不
+    安装 massdns ⇒ 每个域名都退码 1）。只影响这一个子进程的环境，不改父进程、不改全局。
     """
     if throttle is None:
-        return _do_run_cmd(argv, cwd, timeout)
+        return _do_run_cmd(argv, cwd, timeout, extra_path)
     try:
         with throttle.slot("subprocess"):
-            return _do_run_cmd(argv, cwd, timeout)
+            return _do_run_cmd(argv, cwd, timeout, extra_path)
     except _throttle_mod.BudgetExhausted:
         return 1, "", "throttle: 请求预算耗尽"
     except _throttle_mod.StopRequested:
         return 1, "", "throttle: 任务已请求停止"
 
 
-def _do_run_cmd(argv, cwd, timeout):
+def _do_run_cmd(argv, cwd, timeout, extra_path=None):
+    env = None
+    if extra_path:
+        env = dict(os.environ)
+        env["PATH"] = os.pathsep.join([str(extra_path), env.get("PATH", "")])
     try:
         p = subprocess.run([str(a) for a in argv], cwd=str(cwd) if cwd else None,
                            capture_output=True, text=True, errors="replace",
-                           timeout=timeout, shell=False)
+                           timeout=timeout, shell=False, env=env)
         return p.returncode, p.stdout or "", p.stderr or ""
     except FileNotFoundError:
         return 127, "", f"executable not found: {argv[0]}"
@@ -609,6 +617,16 @@ def http_request(url, method="GET", headers=None, data=None, timeout=10,
         return None
 
 
+def http_last_error():
+    """本线程最近一次 `http_request` 失败的**短原因**（成功或没失败过返回 `""`，续165）。
+
+    只读旁路：`http_request` 的返回契约一字未改（失败仍是 `None`），原因由 `_do_http` /
+    `_urllib_request` 在 except 里写进线程本地。因为它按线程存放，**必须在同一次调用的同一线程
+    里紧接着读**（`pool_run` 的 lambda 里正是如此），跨线程读到的是别的请求的原因或空串。
+    """
+    return getattr(_HTTP_LOCAL, "last_error", "") or ""
+
+
 # ---------- HTTP 连接复用（续116）----------
 #
 # 原先每条请求走模块级 `requests.request()` —— 它内部**每次新建一个 Session、用完即关**，
@@ -660,6 +678,31 @@ def _http_session(verify):
     return sess
 
 
+def _exc_reason(e):
+    """把一次 HTTP 异常压成**一句短原因**（续165），供 `http_last_error()` 读出。
+
+    为什么要它：`http_request` 失败只回 `None`，而"超时 / DNS 解析失败 / TLS 证书不符 /
+    连接被拒 / 连接被重置"在调用方眼里长得一模一样 —— 被动源那类只读调用只能把它统一报成
+    "不可达"，排查时无法判断是源挂了还是本地网络问题。这里只分类，不改任何返回契约。
+    """
+    name = type(e).__name__
+    msg = str(e) or ""
+    low = msg.lower()
+    if "timed out" in low or "timeout" in name.lower():
+        return "超时"
+    if any(s in low for s in ("getaddrinfo", "name or service not known",
+                              "nodename nor servname", "name resolution",
+                              "temporary failure in name resolution")):
+        return "DNS 解析失败"
+    if "connection refused" in low:
+        return "连接被拒"
+    if "connection reset" in low or "reset by peer" in low:
+        return "连接被重置"
+    if any(s in low for s in ("certificate", "ssl", "tls", "cert verify")):
+        return "TLS/证书校验失败"
+    return name + (f"：{msg[:80]}" if msg else "")
+
+
 def _do_http(url, method, headers, data, timeout, verify, allow_redirects,
              settings, want_bytes, auth):
     # `verify` 为 None 的分流在 `http_request` 入口处就解完了（见那里的注释）—— 这里拿到的
@@ -672,10 +715,15 @@ def _do_http(url, method, headers, data, timeout, verify, allow_redirects,
                                allow_redirects, want_bytes)
     sess = _http_session(verify)
     sess.cookies.clear()   # 每次请求从空 jar 出发（＝今天"每次新建 Session"的无状态语义）
+    _HTTP_LOCAL.last_error = ""      # 续165：本次的失败原因从零开始（成功也清，免残留上一次）
     try:
         r = sess.request(method, url, headers=hdrs, data=data, timeout=timeout,
                          verify=verify, allow_redirects=allow_redirects)
-    except requests.RequestException:
+    except requests.RequestException as e:
+        # 续165：**返回值契约一字未改**（失败仍是 None），只把异常压成一句可展示的原因
+        # 旁路存到线程本地 —— 让只读调用方（passive 被动源）能区分超时/DNS/TLS/连接被拒，
+        # 而不是把它们统统报成"不可达"。
+        _HTTP_LOCAL.last_error = _exc_reason(e)
         return None
     finally:
         sess.cookies.clear()   # 本次响应种下的 cookie 不渗到下一条探测
@@ -712,7 +760,9 @@ def _urllib_request(url, method, headers, data, timeout, verify, allow_redirects
         resp = opener.open(req, timeout=timeout)
     except urllib.error.HTTPError as e:
         resp = e
-    except Exception:
+    except Exception as e:
+        # 续165：与 requests 分支同口径 —— 记一句可展示的原因，返回值仍是 None。
+        _HTTP_LOCAL.last_error = _exc_reason(e)
         return None
     body = resp.read() or b""
     hdrs_out = dict(resp.headers.items()) if resp.headers else {}

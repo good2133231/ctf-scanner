@@ -128,7 +128,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 | 决策 | 理由 | 代价 |
 |---|---|---|
 | 外部工具优先 + 内置兜底 | 你的手工流水线效果最好时用原工具；任何裸机也能跑通框架 | 兜底实现能力弱于本体 |
-| **自动安装只覆盖"有可下载的单二进制产物、且摘要拿得到"的工具**（`toolmgr.TOOLS`＝subfinder/httpx/puredns/afrog；其余进 `toolmgr.MANUAL`，两者不相交） | "落盘前必须过 SHA256"是这条功能的安全口径；摘要有两个产地 —— 官方 release 自带的 checksums，或本框架人工核过、钉在 `toolmgr.py` 里的产物摘要（puredns 官方不发 checksums，续164；按确切 tag 只装钉住的那一版）；`nmap`（官方只发安装器/源码包/dmg）、`fscan`（官方不发二进制，本仓 Go 自编译）、`dirmap`（release 零产物、纯 Python）硬塞进来就等于绕过校验 | 这三个只能在 GUI「外部工具」页与 `cli --check` 里被**如实告知"需手工安装"**，本框架不为它们发任何请求；用户得自己照着 `tools/scanner/README.md` 装（`tests/smoke.py [7p] ⑨` 用不变式钉住） |
+| **自动安装只覆盖"有可下载的单二进制产物、且摘要拿得到"的工具**（`toolmgr.TOOLS`＝subfinder/httpx/puredns/afrog；其余进 `toolmgr.MANUAL`，两者不相交） | "落盘前必须过 SHA256"是这条功能的安全口径；摘要有两个产地 —— 官方 release 自带的 checksums，或本框架人工核过、钉在 `toolmgr.py` 里的产物摘要（puredns 官方不发 checksums，续164；按确切 tag 只装钉住的那一版）；`nmap`（官方只发安装器/源码包/dmg）、`fscan`（官方不发二进制，本仓 Go 自编译）、`dirmap`（release 零产物、纯 Python）、`massdns`（官方只发 C 源码、`assets` 空数组，但它是 puredns 在进程内 exec 的**传递依赖**）硬塞进来就等于绕过校验 | 这几项只能在 GUI「外部工具」页与 `cli --check` 里被**如实告知"需手工安装"**，本框架不为它们发任何请求；用户得自己照着 `tools/scanner/README.md` 装（`tests/smoke.py [7p] ⑨` 用不变式钉住） |
 | SQLite 单文件 | 零部署成本，单机 CTF 场景足够 | 不支持多节点并发写，需要时替换 db.py 即可 |
 | Flask + 后台线程 | GUI 只做"发任务 + 看结果"，逻辑全部复用核心引擎 | 无任务队列，进程重启则运行中任务中断 |
 | POC 引擎向 nuclei 语法靠拢 | 社区事实标准（数千模板、可直接加载官方模板），声明式 YAML、无外部依赖 | 仅兼容核心子集（raw/flow/workflows 为子集支持，dsl、oob、flow 的 JS/循环等显式标 unsupported） |
@@ -305,7 +305,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 `/vulns`（级别筛选 + `review=` 复核状态筛选 + `?task_id=` 按任务筛选，页内三态下拉与批量打标走
 `POST /api/vulns/review`）/ `/pocs`（含置信度列与按层批量启停，**列表服务端分页 + `q` / `on=1` 筛选**
 （续59-2，分类统计仍按全量算），`admin_only`）/ `/tools`（外部工具：一键装/更新 subfinder ·
-httpx · puredns，并如实列出需手工安装的 nmap / fscan / dirmap，`admin_only`）/ `/settings`
+httpx · puredns，并如实列出需手工安装的 nmap / fscan / dirmap / massdns，`admin_only`）/ `/settings`
 （`admin_only`）/ `/users`（账号管理，`admin_only`）/ `/audit`（访问审计流水，`admin_only`）。
 **续50**：`dev.enabled=true` 时另追加**第 13 栏**「开发模式」`/devmode`（`admin_only`，
 由 `create_app()` 注入 `app.jinja_env.globals["dev_enabled"]` 决定**是否渲染**，未打开时该栏根本不出现、

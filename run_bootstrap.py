@@ -27,7 +27,7 @@ subfinder/httpx/puredns、`requirements.txt` 得自己记得 `pip install`；至
    取 get-pip 用的是**另一套同纪律但独立**的白名单（只 `https://bootstrap.pypa.io` +
    大小上限）—— 刻意不复用 `toolmgr.download_bytes`，把该主机塞进 toolmgr 的白名单等于为了
    一个安装脚本去放宽那条校验红线。
-   `toolmgr.MANUAL` 的 nmap / fscan / dirmap **一条请求都不发、一条命令都不代跑**：它们要么
+   `toolmgr.MANUAL` 的 nmap / fscan / dirmap / massdns **一条请求都不发、一条命令都不代跑**：它们要么
    要装进系统目录（apt / 安装器 / dmg，需要 root），要么要用 Go 自编译 —— 代跑就是越
    "系统级动作"的界，还会绕过那条校验和红线。这里只**按平台打印**命令，由用户复制执行。
 3. **只出现相对路径**（项目硬规矩）：打印的路径一律相对项目根（`tools/scanner/…`）；
@@ -570,7 +570,8 @@ def _rel(path):
 
 
 def _manual_row(name, os_label, mgrs, tools_cfg, resolve):
-    """nmap / fscan / dirmap：按平台**只打印**命令，本脚本不执行、也不发请求。"""
+    """`toolmgr.MANUAL` 里的每一项：按平台**只打印**命令，本脚本不执行、也不发请求。
+    新增 MANUAL 名字必须在这里加一条分支（[8d] 会钉"每行只许提自己"）。"""
     from scanner import toolmgr
     from scanner.utils import which
 
@@ -597,7 +598,16 @@ def _manual_row(name, os_label, mgrs, tools_cfg, resolve):
             for prereq, pkg in (("go", "golang"), ("git", "git")):
                 if not shutil.which(prereq):
                     cmds += pkg_cmd(pkg, mgrs) or [f"本机没有 {prereq}：fscan 自编译需要它"]
-    else:
+    elif name == "massdns":
+        # puredns 的**传递依赖**（它在进程内 exec massdns，靠 PATH 找）。官方 release 的
+        #   `assets` 是空数组（2026-10-13 查 GitHub API：最新 tag v1.1.0、零产物、零 checksums）
+        #   ⇒ 只能 `make` 出 bin/massdns，本框架不为它发任何请求，只打印本仓那条自编译命令。
+        found = _rel(which(tools_cfg.get("massdns", "massdns")))
+        why = toolmgr.MANUAL["massdns"]
+        cmds = ["git clone https://github.com/blechschmidt/massdns && "
+                "git -C massdns checkout v1.1.0",
+                "python tools/build_massdns.py --src ./massdns --wire（需 gcc/make）"]
+    elif name == "dirmap":
         script = _rel((tools_cfg.get("dirmap", {}) or {}).get("script", "")
                       or "tools/dirmap/dirmap.py")
         # 克隆落点同样取**配置里写的路径**（本项目既定 `tools/dirmap/`），不另写一套。
@@ -613,6 +623,13 @@ def _manual_row(name, os_label, mgrs, tools_cfg, resolve):
                 "逐条实测坑见 tools/scanner/README.md「手工安装」"]
         found = _rel(resolve(script)) if resolve(script).exists() else ""
         why = toolmgr.MANUAL["dirmap"]
+    else:
+        # 新增 MANUAL 条目而这里没分支 ⇒ 宁可只报"见 README"，也**不许**套到上面任何一个
+        #   工具的命令上（续165：massdns 落进 dirmap 的 else，`--check` 给它印了 dirmap 的
+        #   clone/pip 还报"已装"）。[8d] 那条"每行只许提自己"就是钉这个的。
+        found = _rel(which(tools_cfg.get(name, name)))
+        why = toolmgr.MANUAL[name]
+        cmds = [f"{name}：官方没有可校验的单二进制产物，步骤见 tools/scanner/README.md「手工安装」一节"]
     return _row(name, "manual", False, "ok" if found else "missing",
                 (f"已装 {found}" if found else why), [] if found else cmds)
 

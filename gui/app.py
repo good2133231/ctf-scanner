@@ -1764,9 +1764,9 @@ def create_app():
             opts_display["auth"] = dict(auth_view)
             task["options"] = json.dumps(opts_display, ensure_ascii=False)
 
-        # 站点页签。`order="id"` 是**显式**的：`_ASSET_PAGES["sites"]` 的表默认排序是 `id DESC`
-        # （跨任务 /sites 页要"最新扫到的在前"），而本页沿用 `db.list_sites()` 的 `ORDER BY id`
-        # —— 分页不该顺手把行序也翻过来。
+        # 站点页签。`order="id"` 是**显式**的：`_ASSET_PAGES["sites"]` 的表默认序自 续165 起是
+        # "同标题聚在一起、组内 `id DESC`"（跨任务 /sites 页要的是**聚集**，不再是单纯"最新在前"），
+        # 而本页沿用 `db.list_sites()` 的 `ORDER BY id` —— 分页不该顺手把行序也翻过来。
         # 续146：默认只显示 200/404（含 3xx **跳转后**落在 200/404 的），`?allst=1` 放开；
         # 判据在 `db.SITE_STATUS_WHERE` 一处，与跨任务 /sites 页共用同一份。
         st_where, hide_st = _site_status_arg()

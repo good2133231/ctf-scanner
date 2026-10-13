@@ -117,7 +117,7 @@ python3 run_bootstrap.py                    # 只探测，**零网络**：先看
 ```
 
 之后请用虚拟环境里的解释器运行：`./start.sh`（等价 `./.venv/bin/python run_gui.py`；Windows 是
-`.venv\Scripts\python.exe run_gui.py`）。`nmap / fscan / dirmap` **不会被自动下载也不会被代跑**
+`.venv\Scripts\python.exe run_gui.py`）。`nmap / fscan / dirmap / massdns` **不会被自动下载也不会被代跑**
 （官方没有「可下载且带官方校验和的单二进制产物」），脚本会按平台打印该执行的命令。
 
 > ⚠ **换机器别拷 `.venv`**：venv 里写死了绝对路径（`pyvenv.cfg`、`bin/activate`、各 console
@@ -278,7 +278,7 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 - **`config/settings.yaml`（全局策略，已随仓库提交）**：GUI「策略配置」页可图形化修改并写回；CLI 也可直接编辑。常见开关：`fofa.enabled` / `iprecon.enabled` / `shodan` / `quake` / `ctlog` / `intel` / `heuristic` / `github`（外部情报类：DEFAULTS 关，而随包 settings.yaml 已开 iprecon/fofa/ctlog/intel/heuristic/github/multileak）；`dirscan.mode`（`quick` 浅扫 / `deep` 深扫）；`screenshot.enabled`（站点截图，默认关，需本机有 Edge/Chrome 无头）；`portscan.engine`（`auto` = fscan → nmap → 内置）。
 - **`config/blacklist.txt`**：一行一个域名，命中即不入资产库（入库前过滤）。
 - **`config/dicts/`**：子域名字典、`dirs_shallow.txt`（浅扫精选路径 ~150 条）、`dirs_big.txt`（深扫大字典 11882 条）、`cdn_cname.txt`（CDN 厂商后缀）、`cdn_ips.txt`（CDN 厂商任播 IP 段）、`sensitive.txt`（A01 敏感文件检查的数据源：`路径 | 关键字 | 级别 | 说明`）。
-- **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，落盘前必须通过 SHA256 校验。
+- **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，落盘前必须通过 SHA256 校验。`massdns` 不在这条自动层里：它是 **puredns 的传递依赖**（puredns 在进程内 exec 它），官方只发 C 源码（2026-10-13 实测 release 的 `assets` 是空数组）⇒ 只能 `python tools/build_massdns.py --wire` 自编译；没装时 `subdomain` 阶段**预检到就回退内置 DNS 爆破**，不再拿整轮时间去换一条看不懂的退码 1。
 摘要有两个产地：官方 release 自带的 checksums 文件；puredns 官方不发 checksums，改按本框架人工核过并钉在
 `scanner/toolmgr.py` 里的产物摘要（`pin_version` / `pin_sha256`，续164）—— 只装钉住的那一版，字节对不上就拒装，
 连 `--allow-unverified` 也越不过去。

@@ -2,6 +2,83 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续165 收口上一段会话留在工作树的三件事 —— passive「未取到」分因、puredns 缺 massdns 的预检、站点按标题聚合（另：抓出它自己造的一处假绿）
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。开场状态：主理人只说了「继续工作」，而 `git status` 挂着
+**7 个已改文件 + 1 个未跟踪脚本**、最新提交是 续164、三份记忆里**一个字没写这批**、`logs/` 里没有比 续164
+更晚的门禁日志 —— 也就是「改完没验、没记账」。主理人当场定两件：**轮次号改回 续165**（那批注释与门禁组名
+自标 166 号，而 165 号从未发生：本地与 `origin/main` 的最新提交都是 续164），以及**本轮只收口这批、不扩大**。
+
+### 一、这批本身是什么（三件，都来自主理人实跑反馈）
+
+- **passive 被动源「未取到」必须分因**（`scanner/passive.py`，8 个免 key 源）：原先「网络不可达 / HTTP 非 200 /
+  空响应体 / 响应正常但零匹配」四种被压成同一句「无结果或不可达」，排查时**分不出「源挂了」与「这个域名真没
+  有记录」**。现在 `_probe()` 返回 `(源, 结果或 None, 原因)`，原因带 HTTP 码、字节数、耗时与超时上限；
+  `collect()` 末尾那句汇总也从「N/M 个源有响应」改成「N/M 有结果；其余 X 个无结果、Y 个不可达」。
+  配套 `utils.http_last_error()`：`http_request` 的**返回契约一字未改**（失败仍是 `None`），只由 `_do_http` /
+  `_urllib_request` 在 except 里把异常压成一句短原因（超时 / DNS 解析失败 / 连接被拒 / 连接被重置 / TLS
+  证书校验失败）旁路存进**线程本地**，调用方必须同线程紧接着读。
+- **puredns 的传递依赖 massdns**（`scanner/stages/subdomain.py` + `scanner/utils.py` + `scanner/toolmgr.py`）：
+  实测装了 puredns 的机器上，`puredns bruteforce` **在进程内 exec `massdns`**（靠 PATH 找），而本仓的
+  `TOOLS` / `MANUAL` / `SYSTEM_PACKAGES` / `install.sh` **一处都没有 massdns** ⇒ 每个域名退码 1、报
+  `exec: "massdns": executable file not found in $PATH`。三处一起补：① 阶段**先预检**，缺它就不起子进程
+  （否则每域名 `timeout=3600`，白烧一整轮）并回退内置爆破、把编译出路写进同一行日志；② `run_cmd` 新增
+  `extra_path`，只把 massdns 所在目录加进**那一个子进程**的 PATH（不改父进程、不改全局）；③ `MANUAL`
+  多出 `massdns` 一条 + `tools/build_massdns.py`（官方只发 C 源码，与 fscan 同形：不进 SHA256 自动层）。
+- **站点列表默认按标题聚合**（`scanner/db.py` 新增 `SITE_TITLE_ORDER`）：跨任务 `/sites` 与资产页的默认序从
+  `task_id DESC, id DESC` 改成「同标题排在一起（3xx 无 title 时退用 `redirect_title`），无标题沉底，组内仍
+  `id DESC`」，与 `gui/app.py::_site_fold_key` 的折叠键同口径 —— 折叠原本只作用在当前页，行序一散就折不动。
+
+### 二、第一批门禁就红，而红的是夹具不是功能
+
+`[8aq]` 那条「puredns 必须吃落盘并集」当场报 `AssertionError: puredns 仍在吃整份深字典：[]`。根因：该组把
+`which` 桩成「只认 puredns」，新预检发现 PATH 里没有 massdns 就把整条 puredns 路关了 —— **被测功能被夹具
+关掉，而不是功能坏了**。修法是把桩改成**按名字供**（puredns / massdns 各一条），并补三条正向判据：缺 massdns
+时 `_pd_dicts` 必须为空（根本不该起子进程）、日志必须给出 `build_massdns.py`、必须写明「本次不做 puredns 爆破」。
+同形风险写进 §6.2：**给阶段加「缺依赖就跳过」这类闸时，必须把每一条把该工具桩成「已装」的夹具都过一遍**。
+
+### 三、这批自己造的一处假绿（已进 AGENTS §6.2 第十八起）
+
+`run_bootstrap._manual_row` 是 if/elif/**else**，else 里写死的是 dirmap 那套命令。给 `toolmgr.MANUAL` 添了
+`massdns` 却没添分支 ⇒ `--check` / `--install` 把 **dirmap 的 clone/pip 打在 massdns 名下**，还因为
+`tools/dirmap/dirmap.py` 真在盘上而报「已装」。`[8d]` 既有三条判据（清单不缺项 / `detail` 非空 /
+`auto∩MANUAL=∅`）**一组都不会红** —— 那一行内容齐全、状态合法，只是**说的是别的工具**。
+修：massdns 单独一条分支（命令就是 `tools/build_massdns.py`）、通用 else 只报「见 README」且不许冒充别的工具、
+新判据「MANUAL 每一行只许提自己」。**变异证伪已实测**：把 `_manual_row` 退回本轮之前的形状 ⇒
+「massdns 行没提自己」与「混进 dirmap」两条同时红。
+
+### 四、成句与文档（§5.19：`MANUAL` 从三项变四项，凡是写死「那三个」的地方都成了假话）
+
+GUI「外部工具」页那句「下面这三个不在上表里」改成 `{{ manual|length }}` 现取；`[7p]` 组自己那句 print 也改成
+`len(tm7p.MANUAL)`（原先写着「三项」，第四项一加就漂）；`README.md`、`docs/architecture.md`（两处）、
+`docs/docker.md`、`docs/usage.md`（两处）、`tools/scanner/README.md`（表格加一行 + 新增「massdns」一节 +
+手工清单/`--check` 行/说明一节）、`AGENTS.md`（§3 两行成句 + §5.14 两个新产地 + §6.2 第十八起）、`cli/client.py` 注释、`scanner/toolmgr.py` 文件头
+全部跟上。`gui/app.py` 站点页签那句注释也按现状改写 —— 它说表默认序是 `id DESC`，而本批已经改成按标题聚合。
+
+**官方事实是当场查的，不是抄记忆**（2026-10-13，GitHub API）：`blechschmidt/massdns` 最新 tag **`v1.1.0`**，
+`releases/latest` 的 `assets` 数量 **0**；官方 `Makefile` 的 `all:` 编译到 `bin/massdns` ⇒ 「只有 C 源码、
+没有带官方校验和的单二进制」这句有依据。本机 `gcc` / `make` / `cc` 均在，massdns **仍未编译**（要 clone
+到仓库外 = 联网 + 仓库外写操作，按 §0.2 需主理人逐次批准，已挂待办）。
+
+### 五、实测数字
+
+- 门禁 `./.venv/bin/python tests/smoke.py` ⇒ **SMOKE PASS**，组打印 **190** 行（上一轮终验 189，本轮 +1 组
+  `[165]` 正好对得上）；本轮新增 `assert` **17** 条（`git diff -U0 -- tests/smoke.py | grep -c '^+.*assert '`）。
+- `tests/browser_e2e.py` ⇒ **rc=0**，真 Chrome + 真 Flask 进程 **72** 条断言全绿（登录 + 8 项交互）。
+- 改号：**12 处**轮次标记从「166 号」改回「165 号」（6 个文件，等长字节替换）+ 组名 `[166]`→`[165]` + 组内局部标识符 **52 处**。
+- `run_bootstrap.probe()` 本机实测四个 MANUAL 行：`dirmap` / `fscan` / `nmap` = **ok**（已装路径如实报出），
+  `massdns` = **missing** + 两条自编译命令。
+- `toolmgr.patch_settings_tool("massdns", "tools/scanner/massdns")` 在 `config/settings.yaml` 副本上往返实测：
+  **438 行不变、438 条 CRLF 不变**，只改那一行的值。
+- 行尾纪律：18 个改动文件的 `git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` **逐文件相等**；
+  `scanner/passive.py` 末行无 EOL 这一点与 HEAD 逐字节相同（不是本轮造成的）。
+
+### 六、还没做 / 坑（详单在 todo.txt 续165 之后）
+
+- 这台机器上 **puredns 的深字典其实一次都没真跑过**：预检缺 massdns 就跳过。真机验收要先编译 massdns。
+- `--update-tools --help` 仍写「默认三个都更新」，而 `TOOLS` 是四项（含 afrog）—— 同类漂移，本轮没动。
+- 站点按标题聚合只在跨任务页生效，任务详情页签仍 `order="id"`；折叠也只作用当前页（分页条「共 N 条」是 SQL 总数）。
+
 
 
 
