@@ -34,6 +34,7 @@ tools/fscan/
 tools/go/
 tools/fscan-src/
 tools/massdns-src/
+tools/browser/
 .cache/
 
 # 会话/记忆目录（AI 工作笔记，不进仓库）

@@ -206,6 +206,7 @@ python tools/build_massdns.py --src ./massdns --wire   # 或用自己放的源�
 | `go`（便携工具链，钉 1.27.2） | `tools/go/`（283 MB） | **官方** `go.dev/dl/?mode=json` 的 `sha256` ⇒ `verify_source=release` | `python run_bootstrap.py --with-stack` |
 | `fscan-src`（tag v2.2.1） | `tools/fscan-src/` | **本框架钉住**（GitHub 不为 tag 归档发校验和） ⇒ `pinned` | 同上，或 `build_fscan.py --fetch` |
 | `massdns-src`（tag v1.1.0） | `tools/massdns-src/` | 同上（`pinned`） | 同上，或 `build_massdns.py --fetch` |
+| `chrome`（Chrome for Testing，钉 155.0.8059.39） | `tools/browser/`（399 MB） | 官方 JSON **只有 `platform`+`url`、没有校验和** ⇒ 摘要由本框架核过并钉住，且**只登记 linux64 那一件**（其余平台拿不到摘要 ⇒ 拒装，不猜） | `python run_bootstrap.py --with-stack`（取完自动回写 `screenshot.browser`） |
 
 三条口径（`tests/smoke.py [166]` 逐条钉住，含变异证伪）：
 
@@ -218,6 +219,13 @@ python tools/build_massdns.py --src ./massdns --wire   # 或用自己放的源�
    连 Go 的本地遥测计数也靠 `XDG_CONFIG_HOME=.cache/goconfig` 收进来（实测：给了
    `GOTELEMETRY=off` 它**照样**建 `~/.config/go/telemetry/`，所以必须重定向配置目录本身；
    macOS/Windows 上 Go 不认 XDG ⇒ `go_env()` 连 `HOME`/`USERPROFILE` 一起指进仓库）。
+4. **取来 ≠ 用上**：带 `wire` 的条目（现在是 `chrome` → `screenshot.browser`）取来后要回写进配置，
+   `screenshot.browser_path()` 只认配置值不认目录。回写走 `patch_settings_kv` 那一处逐行替换
+   （行数/注释数/行尾不变、别的段同名键不碰 —— `[167]⑤` 有干扰夹具），`wire` 指向的键必须真在
+   `DEFAULTS` 里（`[167]①`）；落点字符串 `tools/browser` 在 `scanner/` 里只许出现零次
+   （`[167]⑦` 扫 AST 的代码字符串常量、**显式排除 docstring** —— 说明文案不是第二份实现）。
+   ⚠ Chrome **运行时要系统共享库**（libnss3/libgbm/libatk…），本框架不代装 ⇒ 裸机上取来也可能
+   起不来，那时截图照旧如实报失败（续167 只在有这些库的机器上验过）。
 3. **编译仍是显式入口**：`run_bootstrap.py` 的自动层被 `[8d]②` 钉死"绝不代跑系统级命令"
    （`go build` / `git clone` / 包管理器都在禁列），所以它只负责"把件取齐"，
    `make` 与 `go build` 永远发生在 `tools/build_*.py` 里。

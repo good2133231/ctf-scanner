@@ -126,6 +126,11 @@ python3 run_bootstrap.py                    # 只探测，**零网络**：先看
 再就地编译到 `tools/scanner/`，构建缓存全落 `.cache/` —— **不装系统包、不写家目录**（实测一次 fscan
 编译：GOMODCACHE 192 MB + GOCACHE 239 MB，Go 默认那套会写进 `~/go` 与 `~/.cache/go-build`；
 连 Go 的本地遥测计数都被 `XDG_CONFIG_HOME` 收进 `.cache/goconfig`）。
+⚠ 续167 起 `chrome` 也在这份清单里（Chrome for Testing 155.0.8059.39，198,195,769 B，官方 JSON
+不发校验和 ⇒ 摘要由本框架核过并钉住，且**只登记核过的 linux64 那一平台**，其余平台拒装）：
+`python run_bootstrap.py --with-stack` 取来后自动回写 `screenshot.browser`，实测本机用
+`tools/browser/chrome` 截出一张 10,576 B 的 PNG（0.6 s）。⚠ 它**运行时仍要系统共享库**
+（libnss3 / libgbm / libatk…），裸机上取来也可能起不来 —— 那时截图照旧如实报失败。
 ⚠ 两件事仍要本机具备，脚本缺了就**如实报**、不假装编成：`massdns` 要 **gcc/make**（C 工具链没有
 便携替代品）；`fscan` 编译期要**联网取 Go 模块**（模块摘要由它自带的 `go.sum` 校验）。
 

@@ -793,6 +793,16 @@ def install_stack(only=(), allow_unverified=False, timeout=600):
                 print(f"[=] {r['name']} 已就位（{r.get('path')}）—— 不重下")
                 continue
             installed.append(r)
+            # 取来还要**真的被用上**：注册表里带了 `wire` 的条目回写对应配置键
+            # （`screenshot.browser_path()` 只认配置值，不认目录本身）。写回走的是
+            # "只改一个键"那条逐行替换（`patch_settings_kv`），不整份重写 settings.yaml。
+            _w = (toolmgr.LOCAL_STACK.get(r["name"]) or {}).get("wire")
+            if _w:
+                _val = toolmgr.stack_exec_path(r["name"])
+                ok, note = (toolmgr.patch_settings_kv(_w[0], _w[1], _val) if _val
+                            else (False, "产物没找到可执行文件"))
+                print(f"[{'+' if ok else '!'}] 回写 {_w[0]}.{_w[1]} = {_val or '(空)'}"
+                      + ("" if ok else f" 失败：{note}（请手动填）"))
             lbl = toolmgr.verified_label(r)
             print(f"[+] {r['name']} {r.get('version')} → {r.get('path')}"
                   f"（{r.get('files')} 个文件、{r.get('bytes', 0) / 1048576:.1f} MB"

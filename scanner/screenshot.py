@@ -96,11 +96,21 @@ def _from_registry():
 
 
 def browser_path(settings=None):
-    """返回可用的无头浏览器路径；找不到返回 ""。"""
+    """返回可用的无头浏览器路径；找不到返回 ""。
+
+    ⚠ 配置里写**相对路径**时必须按项目根折算（续167，§5.13 那同一个坑的第四次）：
+    `Path("tools/browser/chrome").exists()` 吃的是**进程 CWD**，从仓库外启动 GUI / CLI 时
+    它就"没找到"，症状是"明明配了浏览器，截图永远失败"。折算后一律返回**绝对路径** ——
+    调用方要把它当 argv[0] 并显式换 `cwd=任务目录` 起子进程，相对串进了新 cwd 就起不来。
+    """
+    from .config import resolve          # 局部导入：折算规则只此一个产地
     cfg = (settings or {}).get("screenshot", {}) or {}
     configured = str(cfg.get("browser") or "").strip()
     if configured:
-        return configured if Path(configured).exists() or shutil.which(configured) else ""
+        if "/" in configured or "\\" in configured:
+            p = resolve(configured)
+            return str(p) if p.exists() else ""
+        return shutil.which(configured) or ""
     for name in _CMD_NAMES:
         found = shutil.which(name)
         if found:

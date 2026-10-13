@@ -3766,7 +3766,24 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
 - [x] 门禁：新增 `[166]` 九节（注册表形状 / 白名单只多三个口 / 摘要两产地与四条拒装路径 / `extract_tree` 正反夹具 / 缓存与 env 一个产地且全在仓库内（AST 数 pip 调用）/ 两个编译脚本直跑能 import + 假工具链端到端 `--wire` + **摘掉 path 自举即红** + 跟踪的 settings.yaml 一个字节没动 / 真 Go 那次 HOME 零写入）；全量 `tests/smoke.py` ⇒ **SMOKE PASS**，组打印 **192** 行（上一轮 190，本轮 +2 行＝`[166]` 的进度行与 ok 行）
 - [x] 文档与记忆：`README.md`（`--full` + 那段"不会被自动下载"按现状改写）、`docs/architecture.md`（自动安装那一行补第三档）、`docs/docker.md`（容器里的一条命令 + `.cache/` 不在命名卷里）、`tools/scanner/README.md`（新增「工作目录内运行时组件」一节：三个组件、三条口径、实测数字）；AGENTS §3 补两个编译入口、§5.14 补三个新产地、§6.2 记第十九起、§7 补四条局限
 
-下一轮（续167）——只做这些，别扩大：
+## 续167（2026-10-13，WorkBuddy · Qoder-Agent 远端 Linux）：Chrome for Testing 进工作目录并被截图阶段真用上
+
+- [x] `chrome` 进 `LOCAL_STACK`（kind=cft，钉 stable 155.0.8059.39）：官方 JSON 只有 `platform`+`url`、
+      **没有校验和** ⇒ 本框架下载后本机算摘要钉住（`chrome-linux64.zip` 198,195,769 B /
+      `55672d1f…`）；**只登记核过的 linux64**，win/mac 拿不到摘要就拒装（不猜、不跟 latest）
+- [x] 接线：注册表新增 `wire` 字段（chrome → `screenshot.browser`），`--with-stack` 取完自动回写；
+      `patch_settings_tool` 推广成 `patch_settings_kv(section, key, value)`（"只改一个键"的写法
+      只此一份），`stack_exec_path()` 给回写值（相对项目根的 posix 路径）
+- [x] 修掉一处 §5.13 同族缺陷（第四次）：`screenshot.browser_path` 的配置分支原先按**进程 CWD**
+      判相对路径存在性 ⇒ "配了浏览器却永远截不到图"；现在按项目根折算并返回绝对路径
+- [x] 实测端到端：解包 2.7 s → 399 MB → `browser_path` 绝对路径 → 真截一张 **PNG 10,576 B / 0.6 s**；
+      被跟踪的 `config/settings.yaml` 一个字节没动（本轮只写沙箱副本）
+- [x] 门禁 `[167]` 七节（`wire` 指向不存在的键即红 / 回写只差那一行 + 干扰夹具 / 落点字符串在
+      `scanner/` 里只许零次且判据两头各自证 / 换 CWD 仍解析成绝对路径）⇒ SMOKE PASS **194** 组
+- [x] 边界如实写进文档与 §7：**没在裸机验过**，Chrome 运行时仍要系统共享库（libnss3/libgbm…），
+      缺库时截图照旧失败并给原因
+
+下一轮（续168）——只做这些，别扩大：
 
 - [ ] **`shodan` / `quake` 的 key 已进密文，但策略段还是关的**（`enabled: false`）——
       「配了 key」与「会去查」是两件事，别把前者当后者。要不要随包打开由主理人定：
@@ -3864,3 +3881,15 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       退出码断言绑在一起，别顺手改）
 - [ ] **`tools/build_*.py` 的 `--fetch` 没有"只取不编"的档位**：想先把件备好、离线再编的人只能
       跑 `run_bootstrap.py --with-stack`（等价但名字不一样）。要不要给 `--fetch-only`，看主理人用不用
+- [x] **续167 已落地**（见上面 续167 那一节）：`chrome` 进 `LOCAL_STACK`（钉 155.0.8059.39 的
+      linux64 摘要）、`--with-stack` 取来后回写 `screenshot.browser`、`browser_path` 的相对值
+      按项目根折算、`[167]` 七节判据全绿
+- [ ] **CJK 字体那一半还没接**（续168）：字体能取进 `tools/fonts/`，但要让无头浏览器**真读到**，
+      得给 `screenshot` 段加一个 fontconfig 配置键并在浏览器子进程 env 里注入 —— 那是**新增配置键**，
+      要连 DEFAULTS / 随包 settings.yaml / 策略页表单 / `[8at]②` 的"逐段点名不许少存键"一起改，
+      单独一轮做（续166 那批 `GOMEMLIMIT` 式的实测：`has_cjk_font()` 目前只扫系统字体目录，
+      仓库内那份它认不到 ⇒ 现在把它写进清单会撒谎，所以**没写**）
+- [ ] **`chrome` 只钉了 linux64 一件摘要**：mac-x64 / mac-arm64 / win64 三件**没核过** ⇒ 现在
+      这些平台会拒装。要放开就得各下一遍（每件 100-200 MB）、核过再补进 `pin_sha256`
+- [ ] **`stack_update` 仍没有"更新"语义**（续166 那条待办对 chrome 同样成立）：钉的版本一改，
+      旧落点不会被换掉，只按 marker 判"已就位"

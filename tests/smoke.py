@@ -20097,7 +20097,8 @@ expression: r0()
     _pre166 = {"api.github.com", "github.com", "objects.githubusercontent.com",
                "release-assets.githubusercontent.com"}
     assert set(_tm166._ALLOWED_HOSTS) - _pre166 == {"go.dev", "dl.google.com",
-                                                    "codeload.github.com"}, \
+                                                    "codeload.github.com",
+                                                    "storage.googleapis.com"}, \
         ("下载白名单被多开了口子（go.dev＝官方版本清单、dl.google.com＝Go 归档、"
          f"codeload.github.com＝源码包 302 目标）：{sorted(set(_tm166._ALLOWED_HOSTS) - _pre166)}")
     for _h166 in ("go.dev", "dl.google.com", "codeload.github.com"):
@@ -20381,6 +20382,164 @@ expression: r0()
           "路径穿越与'链接指仓库外'都拒｜缓存与 env 一个产地且全在仓库内（run_bootstrap 每处 pip 调用"
           "都带 env，AST 数出来的）｜两个编译脚本直跑能 import（摘掉 path 自举即红）+ 端到端假工具链"
           "跑通 --wire 且**跟踪的 settings.yaml 一个字节没动**｜" + _note166)
+
+    import ast as _ast166b   # [167] 要独立扫一遍，不复用 [166] 的局部别名（两组各自自证）
+
+    # ---------------- [167] 续167：Chrome for Testing 进工作目录，并被截图阶段**真的**用上 ----------------
+    #      与 [166] 同一批口径：摘要只登记核过的平台、路径与配置键各只有一个产地、
+    #      "取来了却没人读"这种半接线一律判红。全程零网络（注入口 + 假产物）。
+    print("[167] 续167 渲染栈（浏览器）…")
+    import io as _io167
+    import tarfile as _tar167
+    import tempfile as _tf167
+    import hashlib as _hl167
+    import zipfile as _zip167
+    from scanner import screenshot as _shot167, toolmgr as _tm167
+    from scanner.config import DEFAULTS as _DEFAULTS_167
+
+    _d167 = Path(_tf167.mkdtemp(prefix="smoke-167-", dir=str(ROOT / "logs")))
+    try:
+        # ① 注册表形状：`wire` 必须指向**DEFAULTS 里真存在**的键 —— 回写到一个没人读的键
+        #    就是"看起来接上了、其实没有"（§6.2 第十六起同族的配置版）。
+        _cf167 = _tm167.LOCAL_STACK.get("chrome")
+        assert _cf167 and _cf167["kind"] == _tm167._STACK_CFT, "chrome 没进 LOCAL_STACK"
+        assert _cf167.get("marker_any"), "chrome 没有 marker_any（'取好了没'就没判据）"
+        _w167 = _cf167.get("wire")
+        assert _w167 and _w167[0] in _DEFAULTS_167 and _w167[1] in (_DEFAULTS_167[_w167[0]] or {}), \
+            f"chrome 的 wire 指向一个 DEFAULTS 里不存在的键：{_w167}"
+        # ② 平台标签：四件都算得出来；认不出的平台必须 `None`（**不拿别的平台归档凑数**）
+        _plat167 = {}
+        for _os167 in ("linux", "windows", "macOS"):
+            for _ar167 in ("amd64", "arm64"):
+                _a167 = _tm167.stack_asset("chrome", _os167, _ar167)
+                if _a167:
+                    _plat167[_a167] = _tm167.stack_url("chrome", _os167, _ar167)
+        assert set(_plat167) == {"chrome-linux64.zip", "chrome-linux-arm64.zip",
+                                 "chrome-win64.zip", "chrome-mac-x64.zip", "chrome-mac-arm64.zip"}, \
+            f"平台标签算出来的产物名不对：{sorted(_plat167)}"
+        assert all(v.startswith(_tm167.CFT_BASE + "/") and _cf167["version"] in v
+                   for v in _plat167.values()), _plat167
+        assert _tm167.stack_asset("chrome", "plan9", "amd64") is None
+        assert _tm167.stack_asset("chrome", "linux", "386") is None
+        # ③ 摘要**只登记核过的那一平台**：没登记的平台 ⇒ 拿不到摘要 ⇒ 默认拒装
+        #    （不是"退到 latest 再猜"，也不是"随便拿另一平台的字节装进来"）
+        _dig167, _src167, _ = _tm167.stack_digest("chrome", "chrome-linux64.zip")
+        assert _src167 == _tm167.VERIFY_PINNED and len(_dig167 or "") == 64, (_dig167, _src167)
+        for _other167 in ("chrome-win64.zip", "chrome-mac-x64.zip"):
+            _d2, _s2, _ = _tm167.stack_digest("chrome", _other167)
+            assert not _d2 and _s2 == "", \
+                f"{_other167} 没被人工核过却有摘要 ⇒「只装核过的平台」那条红线没了"
+        # ④ `stack_exec_path`：没产物 → 空串；有产物 → **相对项目根**的 posix 路径（§0.3）
+        assert _tm167.stack_exec_path("chrome") in ("", "tools/browser/chrome", "tools/browser/chrome.exe")
+        _fx167 = dict(_tm167.LOCAL_STACK["chrome"])
+        _keep167 = dict(_tm167.LOCAL_STACK)
+        _fx167.update({"dest": "sandbox-167/browser", "marker_any": ("chrome", "chrome.exe"),
+                       "max_bytes": 1 << 20})
+        # 现造一个 zip（带 unix mode），验"解包保留可执行位 + 前缀剥掉 + exec 路径算得对"
+        _zb167 = _io167.BytesIO()
+        with _zip167.ZipFile(_zb167, "w") as _zf167:
+            _zi = _zip167.ZipInfo("chrome-linux64/chrome")
+            _zi.external_attr = 0o755 << 16
+            _zf167.writestr(_zi, b"#!/bin/sh\necho fake\n")
+            _zf167.writestr("chrome-linux64/locales/en-US.pak", b"x")
+        _fx167["pin_sha256"] = {str(_tm167.stack_asset("chrome")):
+                                _hl167.sha256(_zb167.getvalue()).hexdigest()}
+        _tm167.LOCAL_STACK["chrome"] = _fx167
+        try:
+            _rz = _tm167.stack_install("chrome", dest_root=_d167, blob=_zb167.getvalue(),
+                                        allow_unverified=True)
+            assert _rz["ok"] and _rz["files"] == 2, _rz
+            assert not (_d167 / "sandbox-167/browser/chrome-linux64").exists(), "顶层前缀没剥掉"
+            if os.name != "nt":
+                assert (_d167 / "sandbox-167/browser/chrome").stat().st_mode & 0o111, \
+                    "zip 里的 0o755 没保留 —— 症状是'下载解包都成功，浏览器起不来（权限不够）'"
+            # 传 dest_root：沙箱才是这一件的"根"（生产路径不传，就是项目根）
+            _ep = _tm167.stack_exec_path("chrome", dest_root=_d167)
+            assert _ep.replace("\\", "/").endswith("sandbox-167/browser/chrome"), _ep
+            assert "/" in _ep and not _ep.startswith("/") and not Path(_ep).is_absolute(), \
+                f"回写值必须是相对路径（§0.3）：{_ep}"
+            # ⑤ 回写走"只改一个键"那条逐行替换：行数 / 注释数 / 行尾形态 / 其它键全不许动
+            _set167 = _d167 / "settings.yaml"
+            _raw0 = (ROOT / "config" / "settings.yaml").read_bytes()
+            _set167.write_bytes(_raw0)
+            _ok167, _note167 = _tm167.patch_settings_kv("screenshot", "browser", _ep, path=_set167)
+            assert _ok167, _note167
+            _raw1 = _set167.read_bytes()
+            assert len(_raw0.splitlines()) == len(_raw1.splitlines()), "行数变了（替换打成插入？）"
+            assert _raw0.count(b"#") == _raw1.count(b"#"), "注释被吃掉了（那是整份重写的症状）"
+            assert _raw0.count(b"\r\n") == _raw1.count(b"\r\n"), "行尾形态被改"
+            _diff167 = [(a, b) for a, b in zip(_raw0.decode("utf-8").splitlines(),
+                                               _raw1.decode("utf-8").splitlines()) if a != b]
+            assert len(_diff167) == 1 and "browser:" in _diff167[0][1], \
+                f"改动不止那一行：{_diff167[:4]}"
+            assert _diff167[0][0].startswith("  browser:"), f"改的不是那一段里的键：{_diff167}"
+            # 段边界：`screenshot:` 段内的键才许动 —— 别的段里同名的键必须一个字都不碰
+            _decoy = _d167 / "decoy.yaml"
+            _decoy.write_bytes(("other:\n  browser: keep-me\nscreenshot:\n  browser: old\n"
+                                "\n").encode("utf-8"))
+            assert _tm167.patch_settings_kv("screenshot", "browser", "new-val",
+                                            path=_decoy)[0] is True
+            _dt = _decoy.read_text(encoding="utf-8")
+            assert "browser: keep-me" in _dt and "browser: new-val" in _dt, _dt
+            # ⑥ 配置里的**相对路径**必须按项目根折算（§5.13 那个坑的第四次）：
+            #    换个 CWD 再解析一次，结果必须还是同一个绝对路径 —— 退回 `Path(configured).exists()`
+            #    的旧写法时，从仓库外启动就会返回 ""（"配了浏览器却永远截不到图"）。
+            _st167 = {"screenshot": {"browser": "tools/browser/chrome"}}
+            _cwd0 = os.getcwd()
+            try:
+                os.chdir(str(_d167))
+                _p167 = _shot167.browser_path(_st167)
+                assert Path(_p167).is_absolute(), \
+                    f"相对配置值没按项目根折算（返回了相对串或空）：{_p167!r}"
+                assert _p167.replace("\\", "/").endswith("/tools/browser/chrome"), _p167
+            finally:
+                os.chdir(_cwd0)
+            assert _shot167.browser_path({"screenshot": {"browser": "no-such-browser-167"}}) == "", \
+                "配置指向不存在的路径时必须报\"没有浏览器\"，不许猜一个"
+            # ⑦ 路径只有一个产地：`tools/browser` 这个字符串只许出现在注册表那一处
+            def _paths167(_t167):
+                """一个 AST 里**当代码用**的字符串常量（docstring 排除 —— §6.1 推论四：
+                解释"为什么不能这么写"的文案不是第二份实现，把它一起禁就等于给文案开豁免）。"""
+                _docs = set()
+                for _nd in _ast166b.walk(_t167):
+                    if isinstance(_nd, (_ast166b.Module, _ast166b.ClassDef,
+                                        _ast166b.FunctionDef, _ast166b.AsyncFunctionDef)):
+                        _bd = getattr(_nd, "body", None)
+                        if _bd and isinstance(_bd[0], _ast166b.Expr) \
+                                and isinstance(_bd[0].value, _ast166b.Constant) \
+                                and isinstance(_bd[0].value.value, str):
+                            _docs.add(id(_bd[0].value))
+                return [_n for _n in _ast166b.walk(_t167)
+                        if id(_n) not in _docs and isinstance(_n, _ast166b.Constant)
+                        and isinstance(_n.value, str)]
+
+            # 排除方向要两头都验（只验"不抓 docstring"会把判据收窄成空写，§6.1）：
+            assert _paths167(_ast166b.parse('"""docstring 里提到 tools/browser 不算实现"""')) == [], \
+                "docstring 被当成第二份实现（那是给文案开豁免的反面 —— 它本来就不该禁）"
+            assert len(_paths167(_ast166b.parse(
+                '"""doc 里也提 tools/browser"""\nx = "tools/browser/chrome"\n'))) == 1, \
+                "排除过头：代码里真抄了一份却抓不到 ⇒ 判据空写"
+            assert any("tools/browser" in _c.value for _c in _paths167(
+                _ast166b.parse("x = 'tools/browser/chrome'\n"))), "判据连代码里的赋值都抓不到 ⇒ 空写"
+            _leak167 = [f"{_f167.name}:{_n167.lineno}"
+                        for _f167 in sorted((ROOT / "scanner").rglob("*.py"))
+                        if _f167.name != "toolmgr.py"
+                        for _n167 in _paths167(_ast166b.parse(
+                            _f167.read_text(encoding="utf-8", errors="replace")))
+                        if "tools/browser" in _n167.value]
+            assert _leak167 == [], f"落点在 scanner 里被抄了第二份：{_leak167}"
+        finally:
+            _tm167.LOCAL_STACK.clear()
+            _tm167.LOCAL_STACK.update(_keep167)
+    finally:
+        shutil.rmtree(str(_d167), ignore_errors=True)
+
+    print("[167] 续167 渲染栈（浏览器）ok: chrome 进注册表（kind=cft、摘要只登记核过的 linux64，"
+          "win/mac 拿不到摘要就拒装）｜wire 指向 DEFAULTS 真存在的 screenshot.browser（回写到没人读的键"
+          "＝半接线，判红）｜平台标签五件各算得对、认不出的平台给 None｜zip 解包保留 0o755 + 剥前缀 + "
+          "exec 路径是相对 posix｜回写走逐行替换：行数/注释数/CRLF 不变、只差那一行、别的段同名键不碰"
+          "（干扰夹具）｜配置里的相对值按项目根折算（换 CWD 仍是绝对路径，退回旧写法即红）｜"
+          "落点字符串 scanner 里只有一处（判据自带夹具）")
 
     # ---------------- [8as] 续140：记忆同步是硬规矩（AGENTS §0.4 + §10 多 agent） ----------------
     #      用户点单（2026-10-09）：「我们的记忆你都要同步到todo，以及修改完同步是硬记录，

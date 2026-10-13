@@ -64,7 +64,9 @@ _MAX_BYTES = 120 * 1024 * 1024
 _ALLOWED_HOSTS = frozenset({"api.github.com", "github.com",
                             "objects.githubusercontent.com",
                             "release-assets.githubusercontent.com",
-                            "go.dev", "dl.google.com", "codeload.github.com"})
+                            "go.dev", "dl.google.com", "codeload.github.com",
+                            # 续167：Chrome for Testing 的归档桶（`chrome-linux64.zip` 等四件都在那儿）
+                            "storage.googleapis.com"})
 _UA = "CTFScanner-toolmgr/0.1 (+authorized-testing-only)"
 
 TOOLS = {
@@ -675,19 +677,21 @@ def update(tools=None, dest_dir=None, allow_unverified=False, wire=True, setting
 
 # ---------- 回写 settings.yaml（**逐行文本替换，保住注释**） ----------
 
-def patch_settings_tool(name, value, path=None):
-    """把 `config/settings.yaml` 里 `tools.<name>` 的值改成 `value`；返回 `(ok, note)`。
+def patch_settings_kv(section, key, value, path=None):
+    """把 `config/settings.yaml` 里 `<section>.<key>` 的值改成 `value`；返回 `(ok, note)`。
 
     **为什么不复用 `config.save_settings()`**：那个实现是 `load_settings()` + `yaml.safe_dump`
     **整份重写** —— 会把 tools 段那一大段中文注释（以及全文件所有注释）一次抹掉。
-    装工具是"改一个键"，不该有这种副作用，所以这里做**定点文本替换**：
-    只在顶层 `tools:` 段内找 `  <name>: ...` 那一行替换；没有就插在 `tools:` 下一行。
+    装工具 / 接浏览器都是"改一个键"，不该有这种副作用，所以这里做**定点文本替换**：
+    只在顶层 `<section>:` 段内找 `  <key>: ...` 那一行替换；没有就插在 `<section>:` 下一行。
     行尾符**沿用文件原有形态**（本仓 settings.yaml 实测是 CRLF，但这里不硬编码，
     而是探测首处换行 —— 迁移到别处也不会把整个文件的行尾搅乱）。
+    续166/167 把它从 `tools.<名>` 专用推广成任意段：`tools.massdns`、`screenshot.browser`
+    都读这**同一个**实现（"只改一个键"的写法写两遍迟早漂，§5.14）。
     """
     p = Path(path) if path else (_BASE_DIR / "config" / "settings.yaml")
     if not p.exists():
-        return False, "config/settings.yaml 不存在（请手动把 tools.%s 填成该路径）" % name
+        return False, f"config/settings.yaml 不存在（请手动把 {section}.{key} 填成该路径）"
     val = str(value or "").strip()
     if not val or "\n" in val or "\r" in val:
         return False, "值非法（空或含换行）"
@@ -699,16 +703,16 @@ def patch_settings_tool(name, value, path=None):
     had_trailing = raw.endswith(b"\n")
     lines = raw.decode("utf-8").splitlines()
     start = next((i for i, ln in enumerate(lines)
-                  if ln.startswith("tools:")), None)
+                  if ln.startswith(section + ":")), None)
     if start is None:
-        return False, "settings.yaml 里没有顶层 tools: 段"
+        return False, f"settings.yaml 里没有顶层 {section}: 段"
     end = len(lines)
     for j in range(start + 1, len(lines)):
         ln = lines[j]
         if ln and not ln[0].isspace() and not ln.lstrip().startswith("#"):
             end = j
             break
-    pat = re.compile(r"^(\s+)" + re.escape(name) + r":(\s*)(.*)$")
+    pat = re.compile(r"^(\s+)" + re.escape(key) + r":(\s*)(.*)$")
     done = False
     for k in range(start + 1, end):
         m = pat.match(lines[k])
@@ -719,16 +723,21 @@ def patch_settings_tool(name, value, path=None):
         idx = cur.find("#")
         if idx > 0:
             comment = "  " + cur[idx:]
-        lines[k] = f"{m.group(1)}{name}: {val}{comment}"
+        lines[k] = f"{m.group(1)}{key}: {val}{comment}"
         done = True
         break
     if not done:
-        lines.insert(start + 1, f"  {name}: {val}")
+        lines.insert(start + 1, f"  {key}: {val}")
     data = eol.join(ln.encode("utf-8") for ln in lines)
     if had_trailing:
         data += eol
     p.write_bytes(data)
     return True, ""
+
+
+def patch_settings_tool(name, value, path=None):
+    """`tools.<name>` 那一档的便捷入口 —— 实现与判据都在 `patch_settings_kv`，此处不另写一份。"""
+    return patch_settings_kv("tools", name, value, path=path)
 
 
 # ---------- 状态展示 ----------
@@ -1049,7 +1058,9 @@ STACK_DEST_ROOT = "tools"
 CACHE_DIR = ".cache"                 # pip / Go 的缓存都收在这里（默认它们写 `~/.cache` 与 `~/go`）
 _STACK_GOJSON = "gojson"             # 官方 JSON 里带 sha256（摘要产地＝release）
 _STACK_GITHUB_TAG = "github-tag"     # GitHub 按 tag 生成的源码包（无官方校验和 ⇒ 钉摘要）
+_STACK_CFT = "cft"                   # Chrome for Testing：JSON 里**只有 platform+url、没有校验和**
 GOJSON_URL = "https://go.dev/dl/?mode=json"
+CFT_BASE = "https://storage.googleapis.com/chrome-for-testing-public"
 
 LOCAL_STACK = {
     # 摘要产地：官方 `?mode=json` 的 `sha256` 字段 ⇒ `verify_source=release`（**不自己再钉一份** ——
@@ -1084,6 +1095,24 @@ LOCAL_STACK = {
                                    "93b14431496b358ee9f3a5b71bd9618fe4ff1af8c420267392164f7b2d949559"},
                     "why": "puredns 在进程内 exec massdns；tools/build_massdns.py 要它才能编译"
                            "（**仍需本机 gcc/make** —— 便携 C 编译器不存在，缺它就如实报）"},
+    # 续167：站点截图与 PDF 报告要的无头浏览器。官方
+    #   `last-known-good-versions-with-downloads.json` 里**只有 `platform` 与 `url`、没有任何校验和**
+    #   （2026-10-13 实测）⇒ 摘要只能由本框架核过并钉住，而 `pin_sha256` **只登记核过的那一平台**：
+    #   没登记的平台一律拒装（不"退到 latest 再猜"，也不拿别的平台的摘要凑数）。
+    #   实测：stable = 155.0.8059.39；`chrome-linux64.zip` 198,195,769 B、309 个成员、顶层前缀
+    #   `chrome-linux64/`；zip 里带 unix mode（`chrome` 与 `chrome_crashpad_handler` 都是 0o755）
+    #   ⇒ `extract_tree` 原样保留可执行位，不必额外补 chmod。
+    # ⚠ **它不保证在裸机上跑得起来**：Chrome 运行时要系统的 libnss3 / libgbm / libatk 等共享库，
+    #   那是"装进系统"的东西、本框架不代装 ⇒ 取来只买到"在有这些库的机器上省一步"；缺库时
+    #   `screenshot.capture()` 照旧返回失败并给出原因（不假绿，§5.12 那一族）。
+    "chrome": {"kind": _STACK_CFT, "version": "155.0.8059.39", "dest": "tools/browser",
+               "strip": 1, "marker_any": ("chrome", "chrome.exe"),
+               "max_bytes": 600 * 1024 * 1024,
+               "wire": ("screenshot", "browser"),
+               "pin_sha256": {"chrome-linux64.zip":
+                              "55672d1f392fd3e7b7a08621b6e804e6bcb39d40cf155504abb74b3a021ea8ea"},
+               "why": "截图 / PDF 报告要无头浏览器；官方不发校验和 ⇒ 只装本框架核过摘要的那一平台"
+                      "那一版，其余平台拒装；运行时仍要系统共享库（libnss3/libgbm…），本框架不代装"},
 }
 
 
@@ -1165,7 +1194,17 @@ def stack_asset(name, os_label=None, arch=None):
         return f"go{cfg['version']}.{go_os}-{arch}.{ext}"
     if cfg["kind"] == _STACK_GITHUB_TAG:
         return f"{cfg['version']}.tar.gz"       # 源码包与平台无关（tag 原样，含前导 v）
+    if cfg["kind"] == _STACK_CFT:
+        plat = _CFT_PLATFORMS.get(os_label, {}).get(arch)
+        return f"chrome-{plat}.zip" if plat else None
     return None
+
+
+# Chrome for Testing 的平台标签与 projectdiscovery / Go 那两套都不同名（`linux64`、`mac-x64`…），
+# 认不出来就返回 `None` ⇒ 上层如实报"官方未提供本平台产物"，**绝不拿别的平台归档凑数**。
+_CFT_PLATFORMS = {"linux": {"amd64": "linux64", "arm64": "linux-arm64"},
+                  "windows": {"amd64": "win64"},
+                  "macOS": {"amd64": "mac-x64", "arm64": "mac-arm64"}}
 
 
 def stack_url(name, os_label=None, arch=None):
@@ -1178,6 +1217,9 @@ def stack_url(name, os_label=None, arch=None):
         return f"https://dl.google.com/go/{asset}"
     if cfg["kind"] == _STACK_GITHUB_TAG:
         return f"https://github.com/{cfg['repo']}/archive/refs/tags/{cfg['version']}.tar.gz"
+    if cfg["kind"] == _STACK_CFT:
+        plat = str(asset)[len("chrome-"):-len(".zip")]
+        return f"{CFT_BASE}/{cfg['version']}/{plat}/{asset}"
     return None
 
 
@@ -1438,6 +1480,27 @@ def stack_update(names=(), dest_root=None, allow_unverified=False, timeout=600,
         rows.append(stack_install(n, dest_root=dest_root, allow_unverified=allow_unverified,
                                   timeout=timeout, json_fetch=json_fetch))
     return rows
+
+
+def stack_exec_path(name, dest_root=None):
+    """取好之后该写进配置的那个值（**相对项目根**的 posix 路径；没就位 → `""`）。
+
+    为什么要有它：`--with-stack` 把浏览器取进 `tools/browser/` 之后，还得让它**真的被用上**——
+    `screenshot.browser_path()` 认的是配置里的值，不认目录本身。"落点 + 可执行文件名"这两件事
+    在本模块已经各有一份产地（`LOCAL_STACK[*]["dest"]` 与 `binary_name()`），这里只是把它们
+    拼一次；调用方（run_bootstrap 的回写、门禁）都不许自己再拼第二遍。
+    """
+    cfg = LOCAL_STACK.get(name)
+    if not cfg:
+        return ""
+    root = Path(dest_root) if dest_root else _BASE_DIR
+    p = root / cfg["dest"] / binary_name(name)
+    if not p.is_file():
+        return ""
+    try:
+        return p.resolve().relative_to(_BASE_DIR).as_posix()
+    except ValueError:
+        return str(p.resolve()).replace("\\", "/")
 
 
 def stack_status(dest_root=None):

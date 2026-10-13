@@ -2,6 +2,57 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续167 渲染栈第二层：Chrome for Testing 也进工作目录，而且**真的被截图阶段用上**（附一处 §5.13 同族缺陷）
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。接 续166 那三轮拆分的第二轮（主理人点了四件：大件全下、
+浏览器也下、密钥走交互+环境变量、无官方校验和的由我们自己核并钉摘要）。
+
+### 一、事实先问官方
+`chrome-for-testing/last-known-good-versions-with-downloads.json` 的每个产物只有 `platform` 与 `url`
+**两个字段、没有任何校验和**（2026-10-13 实测）。⇒ 只能走 续164/续166 那一档：本框架**下载 → 本机算
+摘要 → 钉住**。核的是 stable 155.0.8059.39 的 `chrome-linux64.zip`：198,195,769 B、
+sha256 `55672d1f392fd3e7b7a08621b6e804e6bcb39d40cf155504abb74b3a021ea8ea`、309 个成员、顶层前缀
+`chrome-linux64/`；zip 里**带 unix mode**（`chrome` 与 `chrome_crashpad_handler` 都是 0o755）
+⇒ `extract_tree` 原样保留可执行位，不需要额外补 chmod（这一条是造夹具时验的，不是猜的）。
+**只登记核过的这一平台**：`chrome-win64.zip` / `chrome-mac-*.zip` 拿不到摘要 ⇒ `stack_install` 拒装。
+这不是保守，是"新字节没核过就不配进自动层"那条线（与 puredns 同一理由）。
+
+### 二、接线：取来 ≠ 用上
+`screenshot.browser_path()` 只认**配置值**，不认目录 —— 所以注册表里给 `chrome` 加了 `wire` 字段，
+`--with-stack` 取完就回写 `screenshot.browser`。三条一起守：
+
+- **`wire` 必须指向 DEFAULTS 里真存在的键**（`[167]①`）：回写到一个没人读的键，形状与 续162
+  那次"文案承诺一条没实现的出路"同一族 —— 看着接上了，实际没有。
+- 回写走 `patch_settings_kv(section, key, value)` —— 本轮把原先只能改 `tools.<名>` 的那份逐行替换
+  **推广成任意顶层段**（`patch_settings_tool` 变成它的包装），因为「只改一个键」的写法写两遍迟早漂。
+  `[167]⑤` 钉：行数 / 注释数 / CRLF 数不变、**只差那一行**、别的段里同名的键一个字都不碰（干扰夹具）。
+- 落点字符串 `tools/browser` 在 `scanner/` 里**只许出现零次**（除了 toolmgr 那份注册表）——
+  `[167]⑦` 扫 AST 的**代码字符串常量**并**显式排除 docstring**（这是本项目第 6 次撞"自己的说明文案
+  绊红自己的断言"，本轮一开始就踩了：`screenshot.py` 的 docstring 提了一句 `tools/browser/chrome`
+  就被判成第二份实现）。判据两头都验：docstring 提一句 ⇒ 不许报；代码里真抄了一份 ⇒ 必须报。
+
+### 三、顺手修掉一处 §5.13 同族缺陷（第四次）
+`browser_path()` 的配置分支原先是 `Path(configured).exists() or shutil.which(configured)` —— 相对路径
+按**进程 CWD** 判存在性。从仓库外启动 GUI/CLI 时它返回 ""，症状是"明明配了浏览器，截图永远失败"。
+现在按项目根折算（`config.resolve`，与 `which()` 同一个折算产地）并返回**绝对路径** —— 因为调用方要
+拿它当 `argv[0]` 配合 `cwd=任务目录` 起子进程（§5.13 那条原话）。回归是**换 CWD 再解析一次**，
+结果仍是同一个绝对路径；退回旧写法必红。
+
+### 四、实测
+- 端到端：`stack_install("chrome", blob=…)` 解包 2.7 s → `tools/browser/`（399 MB、301 个文件）→
+  `stack_exec_path` 给 `tools/browser/chrome` → 回写**沙箱那份** settings.yaml → `browser_path` 解析成
+  绝对路径 → 用它真截一张本地页：**PNG 10,576 B、0.6 s、`ok=True`**。（被跟踪的 `config/settings.yaml`
+  一个字节没动 —— 本轮没把本机配置改掉，要改请自己跑 `--with-stack`。）
+- 门禁 `./.venv/bin/python tests/smoke.py` ⇒ **SMOKE PASS**，组打印 **194** 行（续166 是 192；
+  `[167]` 占进度行 + ok 行）。
+- 诚实边界：**没在裸机上验过**。Chrome 要系统的 libnss3 / libgbm / libatk 等共享库，本框架不代装；
+  缺库时截图仍失败（会如实报原因，不假绿）。这条已写进 AGENTS §7 与 README。
+
+### 五、下一轮之前先看清楚
+- CJK 字体那一半**没做**：字体能取，但要让浏览器真读到得新增 `screenshot` 段的 fontconfig 键 +
+  策略页三档一致 + `has_cjk_font()` 认仓库内目录，属"动配置面"的活，单独一轮（详单在 todo）。
+- `chrome` 只钉了一件摘要；其余平台是**故意**装不上，不是漏了。
+
 ## 续166 换一台机器一条命令把环境建全（第一层）：「工作目录内运行时组件」立起来 —— Go 便携版与上游源码包自己取、自己核、自己编，一个字节都不写仓库外
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人点单原话：「你要实现我们源码 换一台机子自主完成
