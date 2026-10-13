@@ -265,6 +265,14 @@ screenshot:
   # 空闲再重试一下」）。代码 DEFAULTS 仍是 0＝关 —— 开在这一层，不偷改出厂代码（[8bq] 的口径）。
   # 填 0 就退回"一个字都不排"；上限 2 轮（夹在 screenshot.RETRYABLE_MAX_ROUNDS，配多了也没用）。
   retry_rounds: 1
+  # 续170：一次性截图失败后改走 **CDP 兜底**（挡掉埋点/统计域、不等 load 直接要图）。
+  # 为什么不是"再打一次同一条 URL"：实测那类页面永不 load，同一条路再走一遍必然还是超时
+  # （一份真实任务日志里 6 个超时站点白等 30+60 秒、0 张救回）。
+  # 关掉 `cdp_fallback` 就退回"只有一次性 + 候补轮"。数值含义见 scanner/config.py 的注释。
+  cdp_fallback: true
+  cdp_wait: 45
+  fallback_wait: 10
+  block_extra: []
   browser: ''
 cert:
   # TLS 证书取证（默认关）：对 https / tls_ports 站点做一次 TLS 握手，解析颁发者与有效期到「SSL 证书」页签

@@ -1798,7 +1798,7 @@ def create_app():
         _st_hidden, site_total = _site_status_extra("sites", hide_st, sites_pager["total"],
                                                     sites_q, "task_id=?", (task_id,), order="id")
         _allst_state(sites_pager, hide_st, _st_hidden)
-        # 站点页签的截图状态：有站点却一张截图都没有时，页面上要说清"为什么没有"并给补截图入口
+        # 站点页签的截图状态：有站点却一张截图都没有时，页面上要说清"为什么没有"并给「重新截图」入口
         # （用户 2026-09-23：「站点的截图显示为什么还没有完成」—— 实际是策略开关默认关、
         #   且当时建任务勾的 screenshot 阶段不生效，页面上只留一片空白）。
         # 续57：`sites` 变成"当前页"后这个判定不能再从它推 —— 改用一条聚合查询看**全任务**
@@ -1819,9 +1819,15 @@ def create_app():
         # 轮次从 `run_payload` 读（`queue.run_options`）而**不是**任务的 options 列。
         _sr_rounds = screenshot.retry_rounds(settings)
         _sr_cand = runner.shot_retry_targets(task_id) if _sr_rounds else {"urls": [], "skipped": {}}
+        _sr_fail = db.list_shot_failures(task_id)
         shot_retry = {"rounds": _sr_rounds, "left": len(_sr_cand["urls"]),
                       "skipped": _sr_cand["skipped"],
                       "reasons": _shot_retry_note(),
+                      # 续170：页面上"这一轮每张会试几次、用什么方式"必须**由配置现算**
+                      # （以前模板里写死"已先重试过一次"，而当场翻倍再打那一条已经按主理人点单去掉了）
+                      "plan": screenshot.attempts_plan_note(settings),
+                      "failed": len(_sr_fail),
+                      "cap": int(((settings.get("screenshot") or {}).get("max_sites") or 20)),
                       "round": int(queue.run_options(task_id).get("shot_retry_round") or 0)}
         # 「SSL 证书」页签：同样要说清"为什么没有证书"。分两种情况，用与 cert 阶段**同一个**
         # pick_targets() 判定"本次有没有可取证的目标"，避免页面解说与实际行为不一致。
@@ -3412,6 +3418,53 @@ def create_app():
                     f"subdomain→probe→dirscan→vulnscan）")
         return redirect(url_for("task_detail", task_id=task_id))
 
+    @app.route("/api/sites/reshoot", methods=["POST"])
+    @login_required
+    def api_reshoot_sites():
+        """续170：给勾选的站点（或"本任务全部截图失败的站点"）再排一轮**只跑 screenshot** 的追加运行。
+
+        主理人点单：「站点可以给我加一个重新截图的功能」+「截图失败的记录一下、复查一下」。
+        为什么不在请求线程里当场截：一次无头浏览器调用要几秒到几十秒，压在 HTTP 线程上会把
+        整个控制台卡住，而且绕开任务队列、并发闸与请求预算。排队 = 复用既有的**追加执行**机制
+        （`append_targets` 收窄到这几个 URL、跨运行去重、沿用同一份任务日志、停止与预算都管得到它），
+        与续161 那条"空闲候补轮"是同一条路 —— 区别只是这一次由人点名，不等自动触发。
+
+        三条边界：
+        ① 越权：先 `_owned_task` 核一遍任务归属，别人的任务直接 404（不先读它的失败清单）；
+        ② 并发：同任务已有追加在跑 ⇒ 沿用 `_append_guard` 的硬拒绝（停止信号会被覆盖）；
+        ③ 一次最多排多少张走 `screenshot.max_sites`（**不在这里另写一个魔法数**），
+           超出的条数在跳转前的日志里说出来，不静默截断。
+        """
+        fallback = _safe_next(request.form.get("next"), url_for("tasks"))
+        raw_id = (request.form.get("task_id") or "").strip()
+        if not raw_id.isdigit():
+            return _append_err("这个入口没有带任务号，无法在原任务里重截"
+                               "（请在任务详情页的「站点」页签里点）", fallback)
+        tid = int(raw_id)
+        if not _owned_task(tid):
+            abort(404)
+        urls = [str(u).strip() for u in (request.form.getlist("url") or []) if str(u).strip()]
+        only_failed = str(request.form.get("only_failed", "")) == "1"
+        if only_failed and not urls:
+            # 「失败的」= 有 shot_error 且没有 shot —— 判据只有 `db.list_shot_failures` 一处。
+            # 这里**不按原因档筛**：人点这颗按钮就是在说"管它是超时还是没产出，我都要再看一眼"；
+            # 原因档那一道只用于**自动**候补重试（`screenshot.RETRYABLE_REASONS`），两件事别混。
+            urls = [str(r["url"]).strip() for r in db.list_shot_failures(tid) if str(r["url"]).strip()]
+        if not urls:
+            return _append_err("没有要重截的站点：勾选几行，或点「重截失败的站点」"
+                               "（一张都没失败过就没有重截的必要）", fallback)
+        cap = int(((load_settings().get("screenshot") or {}).get("max_sites") or 20))
+        dropped = 0
+        if len(urls) > cap:
+            dropped, urls = len(urls) - cap, urls[:cap]
+        # 并发/在跑的拒绝由 `_do_append` 里那道 `_append_guard` 统一管（两处各判就会有一处忘）
+        _do_append(str(tid), ["screenshot"], "\n".join(urls), urls,
+                   {"screenshot_on": True, "reshoot": True}, fallback)
+        logger.info(f"[gui] 任务 #{tid} 已排入一轮**只跑截图**的追加运行：{len(urls)} 个站点"
+                    + (f"（另有 {dropped} 个超出 screenshot.max_sites={cap}，本次不排）" if dropped else "")
+                    + ("；来源是「只重截失败的」" if only_failed else "；来源是勾选的行"))
+        return redirect(url_for("task_detail", task_id=tid) + "#sites")
+
     @app.route("/api/domains/promote", methods=["POST"])
     @login_required
     def api_promote_domains():
@@ -3457,7 +3510,8 @@ def create_app():
         再回头去「漏洞风险」页给旧记录打「确认/误报」。任务级选项 `dirscan_full` / `portscan_full`
         让这个任务无视全局开关与档位走全量，**不改全局策略**；`rescan_of` 记下发起它的原任务，
         任务详情页据此显示「由任务 #N 的补扫发起」并可回跳。
-        `stage=screenshot` → **补截图**（站点页签）：勾选站点单独截图，任务选项 `screenshot_on`
+        `stage=screenshot` → **补扫截图**（只有 `/api/rescan` 这条接口路，会**新建一个任务**）：任务选项
+        `screenshot_on`
         让本次无视 `screenshot.enabled=false`（同样不改全局策略）。
 
         与「批量跑子域名」「发起全端口扫描」同一套做法（一任务一线程，可独立停止/删除）。
@@ -3689,6 +3743,15 @@ def create_app():
                                    # 不能写 `or DEFAULT`，那会把人填的 0 洗成默认值。
                                    # 越界与非法值不在这里管 —— 读侧 `screenshot.retry_rounds()` 夹
                                    "retry_rounds": int(f.get("screenshot_retry_rounds", 0) or 0),
+                                   # 续170：CDP 兜底的三个旋钮 + 追加拦截清单。0 / 空 都是**合法值**，
+                                   # 不能写 `or DEFAULT`（那会把人填的 0 洗成默认）；越界与非法值
+                                   # 由读侧 `screenshot.cdp_wait()` / `fallback_wait()` 夹。
+                                   "cdp_fallback": f.get("screenshot_cdp_fallback") == "1",
+                                   "cdp_wait": int(f.get("screenshot_cdp_wait", 45) or 45),
+                                   "fallback_wait": int(f.get("screenshot_fallback_wait", 10) or 10),
+                                   "block_extra": [x for x in re.split(r"[,，;；\s]+",
+                                                       str(f.get("screenshot_block_extra") or ""))
+                                                   if x.strip()],
                                    "browser": (f.get("screenshot_browser") or "").strip()},
                     # TLS 证书取证（可选，默认关）：只对 https / tls_ports 站点做一次只读握手
                     "cert": {"enabled": f.get("cert_enabled") == "1",

@@ -10,6 +10,8 @@ GUI 的站点页 / 任务详情「站点」页签显示缩略图（点击看大�
 为什么默认关：截图要拉起一个无头浏览器，单站点通常 1~3 秒、内存占用明显高于纯 HTTP 探测，
 而且它对"拿 flag"没有直接帮助 —— 需要看站点长相时再打开。
 """
+import time
+
 from .base import Stage
 from .. import db, screenshot
 from ..utils import write_lines
@@ -69,33 +71,57 @@ class ScreenshotStage(Stage):
             want_title = not str(s.get("title") or "").strip()
             good, err, rtitle = screenshot.capture(url, out, ctx.settings, timeout=timeout,
                                                    throttle=ctx.throttle, want_title=want_title)
-            # 续151：失败**自动重试一次** —— 超时翻倍、3xx 落到最终 URL 再截一次；只在"策略真的
-            # 变了"时才重发，且**沿用原始 URL 的产物名**（否则重试成功的图落到别的文件，
-            # `sites.shot` 就对不上）。续154：判"哪一类失败"改读 `screenshot.classify()` ——
-            # 落库标签与重试决策必须是同一个判断，否则会出现"页面写超时、实际按跳转重试"的分裂。
-            if not good and not ctx.stopped():
-                _first = screenshot.classify(err, s)
-                _final = str(s.get("redirect_url") or "").strip()
-                _r_url, _r_timeout = url, timeout
-                if _first == screenshot.REASON_TIMEOUT:
-                    _r_timeout = timeout * 2
-                elif _final and _final.rstrip("/") != str(url).rstrip("/"):
-                    _r_url = _final
-                elif _first != screenshot.REASON_BROWSER:
-                    _r_timeout = timeout * 2
-                if _first != screenshot.REASON_BROWSER and (
-                        _r_url != url or _r_timeout != timeout):
-                    _why = (f"换落地页 {_final}" if _r_url != url
-                            else f"超时 {timeout}→{_r_timeout}s")
-                    ctx.logger.info(f"[screenshot] {url} 首次失败（{err}）→ 重试（{_why}）")
-                    _g2, _e2, _r2 = screenshot.capture(
-                        _r_url, out, ctx.settings, timeout=_r_timeout,
-                        throttle=ctx.throttle, want_title=want_title)
-                    if _g2:
-                        good, err, rtitle = True, "", (_r2 or rtitle)
-                        ctx.logger.info(f"[screenshot] {url} 重试成功（{_why}）")
+            attempts = [("一次性", timeout)]
+            # 续151 的老形状是"当场再打一次同一条 URL、超时翻倍"。续170 把它换成**换一种截法**，
+            # 两条理由都是实测的（主理人 2026-10-13：「重试可以不要那么快急着重试」+
+            # 「超时你要显示重试了多少次」）：
+            # ① 那份日志里 6 个超时站点各白等 30+60 秒，**一张都没救回来**（单阶段多花约 9 分钟）；
+            # ② 它们超时不是因为"等得不够久"，而是页面**永远不等 load**（第三方子资源挂死），
+            #    同一条路再走一遍必然还是超时 —— 能救的只有 CDP 那条（挡掉埋点域、不等 load 要图）。
+            # 保留"3xx 换落地页再截一次"：那是一次**不同的导航**，不是同一件事重来。
+            _reason = "" if good else screenshot.classify(err, s)
+            _final = str(s.get("redirect_url") or "").strip()
+            _try = _final if (_reason == screenshot.REASON_REDIRECT and _final
+                              and _final.rstrip("/") != str(url).rstrip("/")) else url
+            if not good and _try != url and not ctx.stopped():
+                ctx.logger.info(f"[screenshot] {url} 首次失败（{_reason}：{err}）"
+                                f"→ 换落地页 {_try} 再截一次")
+                _g2, _e2, _r2 = screenshot.capture(_try, out, ctx.settings, timeout=timeout,
+                                                   throttle=ctx.throttle, want_title=want_title)
+                attempts.append(("落地页一次性", timeout))
+                if _g2:
+                    good, err, rtitle = True, "", (_r2 or rtitle)
+                else:
+                    err = _e2 or err
+                    _reason = screenshot.classify(err, s)
+            if (not good and _reason != screenshot.REASON_BROWSER
+                    and screenshot.cdp_fallback_enabled(ctx.settings) and not ctx.stopped()):
+                _wait = screenshot.fallback_wait(ctx.settings)
+                _dl = time.time() + _wait
+                while time.time() < _dl and not ctx.stopped():
+                    time.sleep(0.5)              # 等一等再兜底，但**等得起也要停得下**
+                if ctx.stopped():
+                    ctx.logger.info("[screenshot] 任务已停止，这一张不再走 CDP 兜底")
+                else:
+                    _cw = screenshot.cdp_wait(ctx.settings)
+                    _nb = len(screenshot.shot_block_patterns(_try, ctx.settings))
+                    ctx.logger.info(f"[screenshot] {url} 一次性没截成（{_reason}）→ CDP 兜底："
+                                    f"挡掉 {_nb} 个埋点/统计域、不等 load，{int(_cw)}s 内要一张图")
+                    _g3, _e3, _r3 = screenshot.capture_cdp(_try, out, ctx.settings,
+                                                            timeout=_cw, throttle=ctx.throttle,
+                                                            want_title=want_title)
+                    attempts.append(("CDP 兜底", _cw))
+                    if _g3:
+                        good, err = True, ""
+                        rtitle = rtitle or _r3
+                        ctx.logger.info(f"[screenshot] {url} CDP 兜底截到了"
+                                        f"（共尝试 {len(attempts)} 次，前一次是 {_reason}）")
                     else:
-                        err = f"{err}（重试仍失败：{_e2}）"
+                        # 档位**不跟着兜底重判**：档说的是"这站点为什么截不到"（超时/连不上/跳转），
+                        # 它不因为我们换了第二条截取路子而改变。跟着重判会把「超时」洗成「其他」，
+                        # 而候补重试只认 `RETRYABLE_REASONS` 那三档 —— 洗一次就悄悄少一批重试。
+                        # 兜底自己的失败原文照样留下（人要看的正是"两条路各卡在哪"）。
+                        err = f"{err}；CDP 兜底：{_e3}"
             if want_title and str(rtitle or "").strip():
                 # 内存里也补上：screenshot 之后还有 osint / jsmine / dirscan / vulnscan 读这批站点行
                 s["title"] = rtitle
@@ -111,10 +137,10 @@ class ScreenshotStage(Stage):
             else:
                 # 续150：失败**原因**要落库，不只写日志；续154：再前置一个**原因档**，
                 # 站点页那一格于是能一眼看出是 301 没落地 / 超时 / 无浏览器 / DNS 还是别的。
-                _reason = screenshot.classify(err, s)
+                # 续170：档名沿用**诊断那一次**的结论（见上面 CDP 分支的注释），这里不再重判一遍。
                 reasons[_reason] = reasons.get(_reason, 0) + 1
-                errs.append((url, f"{_reason}｜{err}"[:200]))
-                ctx.logger.info(f"[screenshot] {url} 截图失败（{_reason}）：{err}")
+                errs.append((url, screenshot.error_text(_reason, err, attempts)))
+                ctx.logger.info(f"[screenshot] {url} 截图失败（{_reason}，尝试 {len(attempts)} 次）：{err}")
         if rows:
             db.set_site_shots(ctx.task_id, rows)
         if errs:

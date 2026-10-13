@@ -2662,23 +2662,28 @@ def main():
     finally:
         _gui.run_task = _orig_run5
     # 站点页签：有站点却一张截图都没有时，必须说清**原因**。
-    # 续145：「补截图」按钮已摘掉（用户点单），判据因此翻面 —— 按钮必须**不在**，而
-    # “为什么没有截图”那段解说必须**还在**（那才是用户当初报的问题：页面上只留一片空白），
-    # 并且要指一条出路（建任务时勾 screenshot）。摘掉入口的既定后果已登记进 AGENTS §7：
-    # 渲染后标题只能在**建任务时**拿到，已跑完的任务从此没有补截图的入口。
+    # 续145 摘掉了「补截图」入口；续170 按主理人点单换回一颗**形态不同**的按钮：
+    # 「重新截图（勾选站点）」/「重截失败的站点」，走 `/api/sites/reshoot` 排一轮**只跑 screenshot**
+    # 的追加运行（不当场截：一次无头浏览器要几秒到几十秒，压在 HTTP 线程上会把整个控制台卡住，
+    # 还绕开队列、并发闸与请求预算）。判据因此是双向的：旧入口的形态必须**不在**、
+    # 新入口必须**真渲染出来**；而"为什么没有截图"那段解说要跟着换口径（§5.19：
+    # 话术不许停在"摘掉入口"那一版，§7 那条既定后果也一并改写）。
     _nt = db.create_task("smoke-shot-none", targets, ["probe"], {})
     db.insert_sites(_nt, [{"url": "http://a.test/", "host": "a.test", "status": 200,
                            "title": "A", "length": 10}])
     _shtml = c.get(f"/tasks/{_nt}").get_data(as_text=True)
     assert 'value="screenshot"' not in _shtml and "补截图" not in _shtml, \
-        "续145 已摘掉「补截图」入口，站点页签不该再出现它"
+        "续145 摘掉的旧「补截图」入口不许回来（续170 的新入口是 /api/sites/reshoot，形态不同）"
+    assert 'action="/api/sites/reshoot"' in _shtml and "重新截图" in _shtml, \
+        "续170 主理人点单的「重新截图」入口没渲染出来"
+    assert 'name="url"' in _shtml, "站点行的勾选框没接到重截表单上（点提交会一个 URL 都送不到）"
     assert "截图阶段策略级" in _shtml or "没找到可用的无头浏览器" in _shtml, \
         "没有截图产物时页面未说明原因"
     assert "建任务时" in _shtml, "摘掉入口之后必须指一条出路（建任务时勾 screenshot 阶段）"
     print("[5t] 续13 GUI 反馈修复 ok: 拓展域名按来源分类排序(?esrc= 过滤)/解析·送去探测·加黑名单"
           "三个手动端点(含 next 防跳外站)/目录 title 列与 200 优先·大小降序/目录文案精简/"
           "截图任务级 screenshot_on 生效 + 站点页「为什么没有截图」的原因与出路"
-          "（补截图入口已于续145 摘掉）")
+          "（旧「补截图」入口续145 摘掉；续170 换成 /api/sites/reshoot 排队重截）")
 
     # 5u) 续14：sensitive.txt 签名列（A01 改为数据驱动）+ db 写操作串行化
     #     两条都是"静默失效"型收尾 —— 前者字典长期只当预留位、检查用硬编码清单；
@@ -10857,7 +10862,8 @@ http:
     assert "data-pick-from" in _q_js7r.split("function initOpenSites(", 1)[1], \
         "缺 data-pick-from 时的兜底提示没了（那会退化成静默失灵）"
     # 勾选行的 value 必须就是站点 URL —— 这正是 JS 读去 window.open 的数据源。
-    # 续145 起勾选框不再有 `name="target"`：它外面已经没有表单了，留着就是“看起来还能提交”。
+    # 勾选框现在**又**在一个 POST 表单里了（续170 的「重新截图」按 `url` 收勾选行），
+    # 所以它带着 `name="url"`；而 `name="target"` 那个旧形状仍不许回来（那是补扫表单的 hidden 清单）。
     assert _re7q.search(r'class="pick pick-row"\s+value="\{\{\s*s\.url\s*\}\}"',
                         _q_tpl7r), "站点勾选框的 value 必须是站点 URL（批量打开的数据来源）"
 
@@ -11000,10 +11006,13 @@ http:
     #    ⚠️ POST 表单的实际 URL 必须照抄路由表（`api_scan_ext` 的规则是
     #    `/api/domains/scan-ext`，不是想当然的 `/api/scan_ext`）—— 写错的话 `find()` 返回 -1，
     #    这条断言会以“顺序不对”的名义误红。
-    #    续145：站点 / 端口 / 目录三个页签的 POST 补扫表单已摘掉，剩下**唯一**一处是拓展域名的
-    #    「送去探测」。那三个页签改成钉“一个 POST 表单都不许有”—— 那才是本轮真正要保证的事：
-    #    补扫入口一旦被加回来，就又会撞上“GET 排在 POST 后面 / 表单嵌套”这个老坑。
-    for _pane7s, _post7s in (("pane-ext", 'action="/api/domains/scan-ext"'),):
+    #    续145 摘掉端口 / 目录两个页签的 POST 补扫表单后，"一个 POST 都不许有"就是它们的判据。
+    #    续170 按主理人点单给**站点页签**加回一颗「重新截图」（`/api/sites/reshoot`，只排
+    #    screenshot 阶段的那一种），所以那一档翻成"**恰好那一个**"；而 GET 先闭合 / 不嵌套 /
+    #    标签配平这三条红线照旧 —— 它们本来就是为"往页签里加表单"这件事立的：那个新表单
+    #    包着整张站点表，漏一个 `</form>` 就把分页链接整块吞进表单里。端口 / 目录仍是零。
+    for _pane7s, _post7s in (("pane-ext", 'action="/api/domains/scan-ext"'),
+                             ("pane-sites", 'action="/api/sites/reshoot"')):
         _seg7s = _det7s.split(f'id="{_pane7s}"', 1)[1].split('class="tabpane"', 1)[0]
         _ig7s = _seg7s.find('<form class="filters" method="get"')
         _ip7s = _seg7s.find(_post7s)
@@ -11011,7 +11020,11 @@ http:
         assert 0 <= _ig7s < _ip7s, f"{_pane7s}: GET 筛选表单必须排在 POST 表单之前"
         assert "</form>" in _seg7s[_ig7s:_ip7s], \
             f"{_pane7s}: GET 表单必须在 POST 表单开始前闭合（HTML 不允许 form 嵌套）"
-    for _pane7s in ("pane-sites", "pane-ports", "pane-dirs"):
+        assert _seg7s.count('method="post"') == 1, \
+            f"{_pane7s}: 这个页签只该有那**一个** POST 表单（补扫/复查入口加回来就是另一个故事）"
+        assert _seg7s.count("<form") == _seg7s.count("</form>"), \
+            f"{_pane7s}: form 标签不配平（漏一个 </form> 会把分页链接整块吞进表单里）"
+    for _pane7s in ("pane-ports", "pane-dirs"):
         _seg7s = _det7s.split(f'id="{_pane7s}"', 1)[1].split('class="tabpane"', 1)[0]
         assert 'method="post"' not in _seg7s, \
             f"{_pane7s}: 续145 已摘掉补扫入口，这个页签不该再有 POST 表单"
@@ -20899,6 +20912,336 @@ expression: r0()
           '主面板真 POST 落选项（没填不落）｜DEFAULTS↔settings.yaml↔页面↔POST 四档一致｜'
           '徽章列两处都渲染、macro 只有一份、模板里不许出现第二个 SequenceMatcher')
 
+    # ---------------- [170] 续170：截图「截不到」的兼容性 / 尝试次数落库 / 站点重新截图入口 ----------------
+    #   主理人 2026-10-13 的四条点单，逐条给能证伪的判据：
+    #   ① 「超时 你要显示重试了多少次」→ `error_text` 的第二段，且阶段真把 attempts 传进去；
+    #   ② 「这个截图你重试 可以不要那么快急着重试」→ `fallback_wait`（真等，且等得起也停得下）；
+    #   ③ 「截图失败的记录一下 + 站点可以给我加一个重新截图的功能，让截图更有兼容性」→
+    #      `db.list_shot_failures` 的清单、`/api/sites/reshoot` 的排队追加、`capture_cdp` 的
+    #      **真浏览器端到端**（一次性救不回的那类页面，兜底必须真能出一张图）；
+    #   ④ 「反查失败 我们的备用接口和人工实现呢」→ 本轮只把现状说清，实现与判据在续172。
+    print("[170] 续170 CDP 兜底 / 尝试次数 / 重新截图入口 …")
+    import json as _json170
+    import re as _re170
+    import socket as _sk170
+    import tempfile as _tf170
+    import threading as _th170
+    import time as _ti170
+    from pathlib import Path as _P170
+    from scanner import cdp as _cdp170, queue as _q170, screenshot as _S170, users as _us170
+    from scanner.config import DEFAULTS as _D170, load_settings as _ld170
+    from scanner.runner import StageContext as _SC170
+    from scanner.stages.screenshot import ScreenshotStage as _SS170
+    from scanner.targets import parse_lines as _pl170
+
+    # ---- ① 四个新开关：默认值、夹取，以及「DEFAULTS ↔ settings.yaml ↔ 表单 ↔ POST 映射」四方一致 ----
+    assert _D170["screenshot"]["cdp_fallback"] is True, "兜底默认必须开（关掉＝截不到就放弃）"
+    _sh170 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
+    _apa170 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    _yaml170 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+    _seg170 = _re170.split(r"\n(?=[a-z_]+:)", _yaml170.split("screenshot:", 1)[1])[0]
+    for _k170, _y170 in (("cdp_fallback", "cdp_fallback: true"), ("cdp_wait", "cdp_wait: 45"),
+                         ("fallback_wait", "fallback_wait: 10"), ("block_extra", "block_extra: []")):
+        assert _k170 in _D170["screenshot"], f"DEFAULTS 缺 screenshot.{_k170}（保存一次就被重置）"
+        assert f"screenshot_{_k170}" in _sh170, f"策略页没有 screenshot.{_k170} 的控件（只能手改 yaml）"
+        assert f'"screenshot_{_k170}"' in _apa170, f"/settings 的 POST 映射缺 screenshot.{_k170}"
+        assert _y170 in _seg170, f"settings.yaml 的 screenshot 段缺 {_y170}（四方不一致）"
+    assert _S170.cdp_fallback_enabled({}) is True and \
+        _S170.cdp_fallback_enabled({"screenshot": {"cdp_fallback": False}}) is False
+    assert _S170.cdp_wait({}) == 45 and _S170.cdp_wait({"screenshot": {"cdp_wait": 1}}) == 8 \
+        and _S170.cdp_wait({"screenshot": {"cdp_wait": 99999}}) == 180 \
+        and _S170.cdp_wait({"screenshot": {"cdp_wait": "abc"}}) == 45, "兜底秒数没夹到 8..180"
+    assert _S170.fallback_wait({}) == 10 \
+        and _S170.fallback_wait({"screenshot": {"fallback_wait": -5}}) == 0 \
+        and _S170.fallback_wait({"screenshot": {"fallback_wait": 10 ** 6}}) == 120 \
+        and _S170.fallback_wait({"screenshot": {"fallback_wait": None}}) == 10, \
+        "兜底前的等待没夹到 0..120（填错不许变成「把 worker 卡住十分钟」）"
+
+    # ---- ② 「这一轮每张试几次、用什么方式」必须跟着配置现算（§5.19） ----
+    _on170 = _S170.attempts_plan_note({"screenshot": {"cdp_fallback": True, "fallback_wait": 9}})
+    _off170 = _S170.attempts_plan_note({"screenshot": {"cdp_fallback": False}})
+    assert "2 次" in _on170 and "CDP 兜底" in _on170 and "9s" in _on170, _on170
+    assert "1 次" in _off170 and "兜底已关" in _off170, _off170
+    assert _on170 != _off170, "开关翻面而文案不变 ⇒ 文案不是现算的（下一版就会漂）"
+
+    # ---- ③ 落库文本：第一段是档名（`shot_bucket` 只读它），第二段是"试了几次" ----
+    _e170 = _S170.error_text(_S170.REASON_TIMEOUT, "timeout",
+                             [("一次性", 30), ("CDP 兜底", 45)])
+    assert _e170.split("｜", 1)[0] == _S170.REASON_TIMEOUT, _e170
+    assert "尝试 2 次" in _e170 and "一次性 30s" in _e170 and "CDP 兜底 45s" in _e170, _e170
+    assert _S170.shot_bucket(_e170) == _S170.REASON_TIMEOUT, "落库文本读不回同一档＝候补重试在猜"
+    assert _S170.retryable_shot_error(_e170) is True, "超时档必须仍可候补重试"
+    assert len(_S170.error_text(_S170.REASON_OTHER, "x" * 500, [("一次性", 30)] * 9)) <= 200
+    assert _S170.error_text(_S170.REASON_DNS, "no such host") == "DNS 解析失败｜no such host", \
+        "没有 attempts 也要落档（老的调用点不许炸）"
+
+    # ---- ④ 兜底挡的是埋点域，**永不挡页面自己**（挡了＝截出一张没有样式的空壳，更误导人） ----
+    _p170 = _S170.shot_block_patterns("https://shop.acme-a.test/cart", {"screenshot": {}})
+    assert "*google-analytics.com*" in _p170 and "*googletagmanager.com*" in _p170, _p170
+    assert not any("acme-a" in x for x in _p170), "页面自己的注册域被挡了"
+    assert not any("cloudfront" in x or "jsdelivr" in x or "unpkg" in x for x in _p170), \
+        "清单里混进了 CDN/静态资源域 —— 那些是页面内容，挡掉就等于把站点截成空壳"
+    _p170b = _S170.shot_block_patterns("https://www.hotjar.com/", {"screenshot": {}})
+    assert "*hotjar.com*" not in _p170b, "把埋点商自己的域名当目标时不许挡它（挡了就截不到自家内容）"
+    _p170c = _S170.shot_block_patterns(
+        "https://a170.test/",
+        {"screenshot": {"block_extra": [" track.ads170.test ", "not a domain", "../etc/passwd",
+                                        "cdn.a170.test", "a170.test"]}})
+    assert "*track.ads170.test*" in _p170c, "block_extra 没生效（填了等于没填）"
+    assert not any(".." in x or " " in x or "/" in x for x in _p170c), f"垃圾条目被带进清单：{_p170c}"
+    assert not any("a170.test" in x for x in _p170c), f"自家注册域或它的子域被挡了：{_p170c}"
+
+    # ---- ⑤ 调试通道只连我们自己起的那个浏览器（这是本模块能存在的先决条件） ----
+    for _bad170 in ("ws://cdp.evil.test:9222/devtools/page/x", "ws://10.1.2.3:9222/x",
+                    "http://127.0.0.1:9222/devtools", "not-a-url"):
+        try:
+            _cdp170.WS(_bad170, timeout=1)
+            raise AssertionError(f"非回环/非 ws 形态竟被接受：{_bad170}")
+        except RuntimeError as _ex170:
+            assert "拒绝" in str(_ex170) or "合法" in str(_ex170), str(_ex170)
+    assert _cdp170.ready(1) is False, "`ready()` 必须永不抛（没人监听＝False，不是异常）"
+    assert 0 < _cdp170.free_port() < 65536
+
+    # ---- ⑥ 阶段：兜底开/关、停止能打断等待、尝试次数与两条路的原文都落库 ----
+    _lg170 = []
+
+    class _R170:
+        def info(self, m, *a):
+            _lg170.append(str(m))
+        warning = error = exception = info
+        def debug(self, m, *a):
+            pass
+
+    _wd170 = _P170(_tf170.mkdtemp(prefix="smoke-170-")) / "s"
+    _wd170.mkdir(parents=True, exist_ok=True)
+    _cdps170 = []
+    _stop170 = _th170.Event()
+    _stop_mid170 = [False]
+
+    def _capA170(url, out, settings=None, timeout=30, throttle=None, want_title=False):
+        if _stop_mid170[0]:
+            _th170.Timer(0.2, _stop170.set).start()   # 人在**那段等待里**点了停止
+        return False, "timeout", ""
+
+    def _capB170(url, out, settings=None, timeout=None, throttle=None, want_title=False):
+        _cdps170.append((url, timeout))
+        return False, "cdp: 兜底也没截到（桩）", ""
+
+    def _mk170(tid, st):
+        ctx = _SC170(tid, "smoke-170", _pl170(["reshoot170.test"]), ["screenshot"],
+                     {}, st, _wd170, _R170(), stop_event=_stop170)
+        ctx.results["sites"] = [{"url": "http://h170.reshoot170.test/", "host": "h170",
+                                 "status": 200, "title": "H"}]
+        db.insert_sites(tid, ctx.results["sites"])
+        return ctx
+
+    _st170 = {"screenshot": {"enabled": True, "browser": sys.executable, "max_sites": 10,
+                             "timeout": 5, "cdp_fallback": True, "cdp_wait": 45,
+                             "fallback_wait": 1}}
+    _keepA170, _keepB170 = _S170.capture, _S170.capture_cdp
+    _tid170a = db.create_task("smoke-170-on", "reshoot170.test", ["screenshot"], {})
+    _tid170b = db.create_task("smoke-170-off", "reshoot170.test", ["screenshot"], {})
+    _tid170c = db.create_task("smoke-170-stop", "reshoot170.test", ["screenshot"], {})
+    _shot170 = {}
+    try:
+        _S170.capture, _S170.capture_cdp = _capA170, _capB170
+        # (a) 兜底开：先等满 fallback_wait 再兜底；两条路的失败原文都留下
+        _t0170 = _ti170.time()
+        _SS170(_mk170(_tid170a, _st170)).run()
+        _spent170 = _ti170.time() - _t0170
+        assert _spent170 >= 0.9, f"「别急着重试」那段等待没真发生（只等了 {_spent170:.2f}s）"
+        assert len(_cdps170) == 1 and _cdps170[0][1] == 45, f"兜底没走或秒数不是 cdp_wait：{_cdps170}"
+        _shot170["a"] = str(db.list_sites(_tid170a)[0]["shot_error"] or "")
+        assert _shot170["a"].split("｜", 1)[0] == _S170.REASON_TIMEOUT, \
+            ("一次性判的是超时、兜底失败后档名被重判成别的 ⇒ 「超时」洗成「其他」，"
+             "而候补重试只认三档，洗一次就悄悄少一批：" + _shot170["a"])
+        assert "尝试 2 次" in _shot170["a"] and "cdp:" in _shot170["a"], _shot170["a"]
+        # (b) 兜底关：一个都不许多起第二个浏览器进程（②里那句"不会再起"的兑现处）
+        _cdps170.clear()
+        _SS170(_mk170(_tid170b, {**_st170, "screenshot": dict(
+            _st170["screenshot"], cdp_fallback=False, fallback_wait=0)})).run()
+        assert not _cdps170, f"兜底关着仍起了第二个进程：{_cdps170}"
+        _shot170["b"] = str(db.list_sites(_tid170b)[0]["shot_error"] or "")
+        assert "尝试 1 次" in _shot170["b"], _shot170["b"]
+        # (c) 等待期间点停止 ⇒ 等待被剪短、这一张不再兜底（"等得起也要停得下"）
+        _cdps170.clear()
+        _lg170.clear()
+        _stop_mid170[0] = True
+        _t1170 = _ti170.time()
+        _SS170(_mk170(_tid170c, {**_st170, "screenshot": dict(
+            _st170["screenshot"], fallback_wait=2)})).run()
+        _spent170c = _ti170.time() - _t1170
+        assert not _cdps170, f"已请求停止还去走 CDP 兜底（停止按钮成了摆设）：{_cdps170}"
+        assert any("不再走 CDP 兜底" in x for x in _lg170), _lg170[-3:]
+        assert _spent170c < 1.5, f"等待没被停止信号剪短（白等满 {_spent170c:.2f}s）"
+    finally:
+        _S170.capture, _S170.capture_cdp = _keepA170, _keepB170
+        _stop_mid170[0] = False
+        for _t170 in (_tid170a, _tid170b, _tid170c):
+            db.update_task(_t170, status="done", progress=100)
+
+    # ---- ⑦ 真浏览器端到端：一条永不返回的子资源把 load 挂死 ⇒ 一次性 0 字节、CDP 出图 ----
+    _bin170 = _S170.browser_path(_ld170())
+    if not _bin170:
+        _e2e170 = "本机没有可用的无头浏览器 ⇒ **跳过（这一条不算通过）**"
+    else:
+        _srv170 = _sk170.socket()
+        _srv170.setsockopt(_sk170.SOL_SOCKET, _sk170.SO_REUSEADDR, 1)
+        _srv170.bind(("127.0.0.1", 0))
+        _srv170.listen(8)
+        _hp170 = _srv170.getsockname()[1]
+        _hang170 = _th170.Event()
+        _body170 = (b"<html><head><meta charset='utf-8'><title>HANG-170</title></head>"
+                    b"<body style='background:#123456;color:#fff;font:40px sans-serif'>"
+                    b"<h1>never-load</h1><script src='/hang'></script></body></html>")
+
+        def _talk170(cc):
+            try:
+                req = cc.recv(4096).decode("latin1", "replace")
+                if req.startswith("GET /hang"):
+                    _hang170.wait(60)          # 接了连接就是不回包 → load 永远不来
+                    return
+                cc.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                           b"Content-Length: " + str(len(_body170)).encode() + b"\r\n\r\n"
+                           + _body170)
+            except OSError:
+                pass
+            finally:
+                try:
+                    cc.close()
+                except OSError:
+                    pass
+
+        def _loop170():
+            while not _hang170.is_set():
+                try:
+                    _conn170, _addr = _srv170.accept()
+                except OSError:
+                    return
+                _th170.Thread(target=_talk170, args=(_conn170,), daemon=True).start()
+
+        _th170.Thread(target=_loop170, daemon=True).start()
+        _url170 = "http://127.0.0.1:%d/" % _hp170
+        _fs170 = {"screenshot": {"enabled": True, "browser": _bin170, "timeout": 6,
+                                 "cdp_fallback": True, "cdp_wait": 12, "fallback_wait": 0,
+                                 "window": "800x600"}}
+        try:
+            _fA = _wd170 / "one.png"
+            _okA = _S170.capture(_url170, _fA, _fs170, timeout=6)[0]
+            _nA = _fA.stat().st_size if _fA.exists() else 0
+            _fB = _wd170 / "cdp.png"
+            _okB, _eB, _tB = _S170.capture_cdp(_url170, _fB, _fs170, timeout=12, want_title=True)
+            _nB = _fB.stat().st_size if _fB.exists() else 0
+            # 夹具自证（§6.1）：一次性**必须**救不回，否则下面两条只是在证明"浏览器能截图"
+            assert not _okA and _nA == 0, \
+                f"夹具没复现「永远不等 load」（一次性竟截出 {_nA} 字节）⇒ 兜底那两条断言是空的"
+            assert _okB and _nB > 1000, \
+                f"CDP 兜底在同一条夹具上没出图（{_nB} 字节）：{_eB[:120]}"
+            assert _tB == "HANG-170", f"兜底拿到的不是渲染后的 DOM（title={_tB!r}）"
+            _e2e170 = f"一次性 0 字节 → CDP 兜底 {_nB} 字节 + 渲染后标题"
+        finally:
+            _hang170.set()
+            _srv170.close()
+    print(f"[170] ⑦ 真浏览器端到端：{_e2e170}")
+
+    # ---- ⑧ 「重新截图」入口：只跑 screenshot、走追加、别人的任务 404、上限读配置 ----
+    _tid170q = db.create_task("smoke-170-reshoot", "reshoot170.test", ["probe"], {})
+    db.update_task(_tid170q, status="done", progress=100)
+    db.insert_sites(_tid170q, [{"url": f"http://p{i}.reshoot170.test/", "host": f"p{i}",
+                                "status": 200, "title": f"P{i}"} for i in (1, 2, 3)])
+    db.set_site_shot_errors(_tid170q, [
+        (f"http://p{i}.reshoot170.test/",
+         _S170.error_text(_S170.REASON_TIMEOUT, "timeout", [("一次性", 30), ("CDP 兜底", 45)]))
+        for i in (1, 2)])
+    assert sorted(str(r["url"]) for r in db.list_shot_failures(_tid170q)) == [
+        "http://p1.reshoot170.test/", "http://p2.reshoot170.test/"], \
+        "「截图失败的」清单不对（主理人要的「失败的记录一下」就靠它）"
+    db.set_site_shots(_tid170q, [("http://p2.reshoot170.test/", "shots/p2.png")])
+    assert [str(r["url"]) for r in db.list_shot_failures(_tid170q)] == [
+        "http://p1.reshoot170.test/"], "截成了的站点必须从失败清单出去（否则名单只增不减）"
+
+    def _pl170_of(tid):
+        row = db.get_task(tid)
+        return _json170.loads(row["run_payload"] or "{}"), row
+
+    _notify170, _ld_keep170 = _q170.notify, gui_app.load_settings
+    _us170.create_user("smoke170-sub", "Passw0rd!170", _us170.ROLE_USER, must_change=False)
+    _uid170 = int(_us170.get_by_name("smoke170-sub")["id"])
+    _tid170o = db.create_task("smoke-170-other", "other170.test", ["probe"], {}, owner_id=_uid170)
+    db.update_task(_tid170o, status="done", progress=100)
+    db.insert_sites(_tid170o, [{"url": "http://x.other170.test/", "host": "x", "status": 200,
+                               "title": "X"}])
+    db.set_site_shot_errors(_tid170o, [("http://x.other170.test/", "超时｜timeout")])
+    try:
+        _q170.notify = lambda: None
+        _r170 = c.post("/api/sites/reshoot", data={"task_id": str(_tid170q), "next": "/tasks",
+                                                   "url": ["http://p1.reshoot170.test/",
+                                                           "http://p3.reshoot170.test/"]})
+        assert _r170.status_code == 302, _r170.status_code
+        _plA, _rowA = _pl170_of(_tid170q)
+        assert _plA["stages"] == ["screenshot"], \
+            f"重截只该跑 screenshot 一个阶段：{_plA['stages']}"
+        assert sorted(_plA["options"]["append_targets"]) == ["http://p1.reshoot170.test/",
+                                                             "http://p3.reshoot170.test/"], \
+            _plA["options"]
+        assert _plA["options"]["screenshot_on"] is True and _plA["options"]["reshoot"] is True
+        assert _plA["options"]["append"] is True, "必须走**追加**（沿用同一任务，不新建）"
+        assert _rowA["status"] in ("queued", "pending"), \
+            f"排进队列后任务态应是 queued/pending，实测 {_rowA['status']}"
+        # 「只重截失败的」＝读库里那份清单；人工点的这颗**不看原因档**
+        db.update_task(_tid170q, status="done")
+        c.post("/api/sites/reshoot", data={"task_id": str(_tid170q), "only_failed": "1"})
+        assert _pl170_of(_tid170q)[0]["options"]["append_targets"] == [
+            "http://p1.reshoot170.test/"], "「失败的」那条路没读库里的清单"
+        # 单次上限来自 `screenshot.max_sites`，不是这里另写一个魔法数
+        gui_app.load_settings = lambda *a, **k: {"screenshot": {"max_sites": 1}}
+        db.update_task(_tid170q, status="done")
+        c.post("/api/sites/reshoot", data={"task_id": str(_tid170q),
+                                          "url": ["http://p1.reshoot170.test/",
+                                                  "http://p2.reshoot170.test/",
+                                                  "http://p3.reshoot170.test/"]})
+        assert _pl170_of(_tid170q)[0]["options"]["append_targets"] == [
+            "http://p1.reshoot170.test/"], "单次上限没跟着配置走（写死了魔法数？）"
+        gui_app.load_settings = _ld_keep170
+        # 什么都没勾 → 409 说清原因，且不许留下半个入队入参
+        db.update_task(_tid170q, status="done", run_payload="")
+        _r4 = c.post("/api/sites/reshoot", data={"task_id": str(_tid170q)})
+        assert _r4.status_code == 409 and "没有要重截的站点" in _r4.get_data(as_text=True), \
+            f"空清单被排成了一轮：{_r4.status_code}"
+        assert (db.get_task(_tid170q)["run_payload"] or "") == "", "被拒的一轮不许留下入队入参"
+        assert c.post("/api/sites/reshoot", data={"task_id": "abc"}).status_code == 409
+        # 越权：子用户点别人的任务 = 404（且不许先把它的失败清单读出来）
+        _cs170 = gui_app.app.test_client()
+        assert _login7(_cs170, {"username": "smoke170-sub",
+                                "password": "Passw0rd!170"}).status_code == 302
+        assert _cs170.post("/api/sites/reshoot", data={"task_id": str(_tid170q),
+                                                       "only_failed": "1"}).status_code == 404, \
+            "别人的任务被排了一轮（越权**写**，比越权读更严重）"
+        assert (db.get_task(_tid170q)["run_payload"] or "") == ""
+        _r6 = _cs170.post("/api/sites/reshoot", data={"task_id": str(_tid170o),
+                                                      "only_failed": "1"})
+        assert _r6.status_code == 302, f"子用户点自己任务的重截被挡了：{_r6.status_code}"
+        assert _pl170_of(_tid170o)[0]["options"]["append_targets"] == [
+            "http://x.other170.test/"], "子用户那轮的候选清单不对"
+        # 页面上"失败的有几张"与"每张的尝试口径"都要看得见（不让人自己猜）
+        _h170 = c.get(f"/tasks/{_tid170q}").get_data(as_text=True)
+        assert 'action="/api/sites/reshoot"' in _h170 and "重截失败的站点（1）" in _h170, \
+            "详情页没有「重新截图」入口或没报失败张数"
+        assert "每张最多" in _h170, "页面没把本轮的尝试口径说出来（配置改了页面不跟着变＝假话）"
+    finally:
+        _q170.notify, gui_app.load_settings = _notify170, _ld_keep170
+        for _t170 in (_tid170q, _tid170o):
+            db.update_task(_t170, status="done", run_payload="")
+        _u170 = _us170.get_by_name("smoke170-sub")
+        if _u170:
+            _us170.delete_user(int(_u170["id"]))
+
+    print("[170] 续170 ok: 四个新开关四方一致且夹取有界｜尝试口径文案跟着开关翻面（现算）｜"
+          "落库文本「档｜尝试 N 次（方式 秒）｜原文」能读回同一档｜兜底只挡埋点域、"
+          "自家注册域与它的子域双向都不挡、垃圾条目不进清单｜CDP 只连回环且 ready 永不抛｜"
+          "阶段三种情形（兜底开：等满 1s 再兜底 / 关着：零额外进程 / 停止：不再兜底）"
+          "落库的尝试次数各不同｜" + _e2e170 + "｜重截入口只跑 screenshot、走追加、"
+          "上限读配置、空清单 409、别人的任务 404、页面报出失败张数与尝试口径")
     # ---------------- [8as] 续140：记忆同步是硬规矩（AGENTS §0.4 + §10 多 agent） ----------------
     #      用户点单（2026-10-09）：「我们的记忆你都要同步到todo，以及修改完同步是硬记录，
     #      让我们换对话框，换AI也能接着执行」+「把多agent执行加入记忆…就算其他ai来了也会多agent执行」。
@@ -21003,11 +21346,11 @@ expression: r0()
     assert "api_rescan" not in _st145, "sites.html 里不该再有任何 /api/rescan 引用"
     assert '"/api/rescan"' in _apa145, \
         "路由本体不许被顺手删掉（本文件有 8 处直接打它，接口留着随时可挂回来）"
-    # 详情页剩下的 POST 表单只该是拓展域名的「送去探测」一个 —— 数一遍，
+    # 详情页的 POST 表单：拓展域名「送去探测」+ 续170 站点页签「重新截图」= 恰好 2 个 —— 数一遍，
     # 多一个就是有人把补扫/复查入口加回来了（比逐个搜按钮文案强：换个文案就绕过去了）
     _n_post145 = _td145.count('method="post"')
-    assert _n_post145 == 1, \
-        f"任务详情页的 POST 表单应该恰好 1 个（送去探测）：实测 {_n_post145}"
+    assert _n_post145 == 2, \
+        f"任务详情页的 POST 表单应该恰好 2 个（送去探测 + 重新截图）：实测 {_n_post145}"
 
     # ---- ② `subdomain.auto_root` 三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射）----
     assert _D145["subdomain"]["auto_root"] is True, \
@@ -21353,7 +21696,8 @@ expression: r0()
 
     _st154 = copy.deepcopy(settings)
     _st154["screenshot"] = dict(_st154.get("screenshot") or {}, enabled=True,
-                                browser=sys.executable, max_sites=10, timeout=5)
+                                browser=sys.executable, max_sites=10, timeout=5,
+                                cdp_fallback=True, cdp_wait=45, fallback_wait=0)
     _tid154 = db.create_task("smoke-8bg", "lab154.test", ["screenshot"], {})
     _wd154 = Path(tempfile.mkdtemp(prefix="smoke-8bg-")) / "8bg"
     _wd154.mkdir(parents=True, exist_ok=True)
@@ -21377,20 +21721,42 @@ expression: r0()
         return False, ("timeout" if "to." in url else "没有产出新的截图文件"), ""
 
     _keep154 = S154.capture
+    _keep154c = S154.capture_cdp
+    _cdp154 = []
+
+    def _capcdp154f(url, out, settings=None, timeout=None, throttle=None, want_title=False):
+        _cdp154.append((url, timeout))
+        return False, "cdp: 兜底也没截到（桩）", ""
+
     try:
         S154.capture = _cap154f
+        S154.capture_cdp = _capcdp154f
         _SS154(_ctx154).run()
     finally:
-        S154.capture = _keep154
+        S154.capture, S154.capture_cdp = _keep154, _keep154c
     _rows154 = {r["url"]: r for r in db.list_sites(_tid154)}
     assert str(_rows154["https://to.lab154.test/"]["shot_error"] or "").startswith(
         S154.REASON_TIMEOUT + "｜"), _rows154["https://to.lab154.test/"]["shot_error"]
     assert str(_rows154["https://red.lab154.test/"]["shot_error"] or "").startswith(
         S154.REASON_REDIRECT + "｜"), _rows154["https://red.lab154.test/"]["shot_error"]
     assert not str(_rows154["https://ok.lab154.test/"]["shot_error"] or ""), "成功的行不许留原因"
-    assert (_call154.count(("https://red.lab154.test/new", 5)) == 1
-            and _call154.count(("https://to.lab154.test/", 10)) == 1), \
-        f"重试决策没跟着原因档走（301 换落地页 / 超时翻倍）：{_call154}"
+    assert (_call154.count(("https://red.lab154.test/", 5)) == 1
+            and _call154.count(("https://red.lab154.test/new", 5)) == 1), \
+        f"3xx 那条要按**落地页**再截一次（原 URL 与落地页各一次）：{_call154}"
+    assert _call154.count(("https://to.lab154.test/", 10)) == 0, \
+        ("续170 起不再有「同一条 URL 超时翻倍再打一次」（主理人点单；实测 6 个超时站点"
+         "各白等 30+60 秒、一张都没救回）：" + repr(_call154))
+    assert len(_cdp154) == 2, f"一次性没截成的两条各走一次 CDP 兜底：{_cdp154}"
+    assert [t for _u, t in _cdp154] == [45, 45], \
+        f"兜底的秒数必须来自 `cdp_wait`（不是把一次性 timeout 翻倍）：{_cdp154}"
+    assert [u for u, _t in _cdp154] == ["https://to.lab154.test/", "https://red.lab154.test/new"], \
+        f"兜底要用**换好落地页**的那条 URL，不是回头再打原址：{_cdp154}"
+    _to_err = str(_rows154["https://to.lab154.test/"]["shot_error"] or "")
+    assert "尝试 2 次" in _to_err and "CDP 兜底" in _to_err, \
+        f"主理人要的「超时你要显示重试了多少次」没落进 shot_error：{_to_err}"
+    assert _to_err.split("｜", 1)[0] == S154.REASON_TIMEOUT, \
+        f"档名必须仍是第一段（候补重试与页面「还剩几张」都只读它）：{_to_err}"
+    assert "cdp:" in _to_err, f"兜底自己的失败原文也要留下（两条路各卡在哪）：{_to_err}"
     assert any("失败原因分布" in x and S154.REASON_TIMEOUT in x for x in _lg154), _lg154[-4:]
     # §6.1 证伪：把 classify 打成"永远返回其他"，落库标签与分布都必须跟着变红（否则它们没吃 classify）
     _keep_cls = S154.classify
@@ -21405,10 +21771,11 @@ expression: r0()
         _call154.clear()
         _lg154.clear()
         S154.capture = _cap154f
+        S154.capture_cdp = _capcdp154f
         _SS154(_ctx154b).run()
     finally:
         S154.classify = _keep_cls
-        S154.capture = _keep154
+        S154.capture, S154.capture_cdp = _keep154, _keep154c
     _rows154b = {r["url"]: r for r in db.list_sites(_tid154b)}
     assert str(_rows154b["https://to.lab154.test/"]["shot_error"] or "").startswith(
         S154.REASON_OTHER + "｜"), \
@@ -21418,7 +21785,8 @@ expression: r0()
           "三态各有句子且都指回 _ea154.SET_HINT（补法只有一个产地）｜"
           "README 不再宣称出厂开 401；/api/rescan 接口保留而详情页零消费方｜"
           "截图失败九个原因档全覆盖（判据自证）、阶段里不留第二处判断、"
-          "标签真落库 + 分布真打印 + 重试真按档走（301 换落地页、超时翻倍）、"
+          "标签真落库 + 分布真打印 + 重试真按档走（301 换落地页；同 URL 超时翻倍已被 CDP 兜底替掉）、"
+          "尝试次数与两种方式真落进 shot_error、兜底原文也留下、档名仍在第一段、"
           "classify 换成常量后落库标签跟着变红")
 
     # ---------------- [8bh] 续154：真实 IP 分档单一产地 / 第三方清单收口 / 送去探测默认全任务 ----------------
@@ -22308,28 +22676,39 @@ expression: r0()
     for _bad161 in (-3, "abc", None, {}):
         assert _sh161.retry_rounds({"screenshot": {"retry_rounds": _bad161}}) == 0, _bad161
 
-    # ④b 端到端：把候补轮真跑一遍（起浏览器的那一步桩住），确认它**只打 append_targets 那批**
+    # ④b 端到端：把候补轮真跑一遍（起浏览器的那两步都桩住），确认它**只打 append_targets 那批**
     #      —— 这一条是整个功能的落地保证：排轮参数对了、阶段却回退去读全库站点，
-    #      就等于"补三张截图"变成"重扫六十张"。原型实测每站打**两次**（阶段内首试 +
-    #      续151 那次自动重试），所以判"集合相等 + 总次数 2N"，光看次数会误判成重复扫。
+    #      就等于"补三张截图"变成"重扫六十张"。续170 起每站是**一次性一次 + 兜底一次**
+    #      （老形状"同 URL 超时翻倍再打一次"实测 6 站各白等 30+60 秒、0 张救回，已按点单去掉），
+    #      所以两个方法各自钉"恰好 N 次且 URL 集合就是那三个"，光看总次数会误判成重复扫。
     from scanner.stages import screenshot as _st161
 
-    _hits161 = []
+    _hits161, _cdp161b = [], []
     _keep_av161, _keep_cap161 = _sh161.available, _sh161.capture
+    _keep_cdp161 = _sh161.capture_cdp
     _sh161.available = lambda settings=None: True
     _sh161.capture = (lambda url, out, settings, timeout=30, throttle=None, want_title=False:
                       _hits161.append(url) or (False, "超时｜Timeout 30s", ""))
+    _sh161.capture_cdp = (lambda url, out, settings=None, timeout=None, throttle=None,
+                          want_title=False: _cdp161b.append(url) or (False, "cdp: 桩", ""))
     _opt161 = {"append": True, "screenshot_on": True, "shot_retry_round": 1,
                "append_targets": [f"http://s{i}.{_t161}" for i in (1, 2, 3)]}
+    # 候补这一轮的设置只把**兜底前那段等待**归零（真 10s × 3 站＝白等半分钟，判据一条都不多验），
+    # 兜底本身留着 —— 留着才验得出"每站两种方法各一次、URL 还是那三个"。
+    _st161c = {**_st161b, "screenshot": {**(_st161b.get("screenshot") or {}), "fallback_wait": 0}}
     db.update_task(_tid161, status="running", run_payload="")
     _ctx161c = StageContext(_tid161, "smoke-8bs", parse_lines([_t161]), ["screenshot"], _opt161,
-                            _st161b, str(Path(_TMPDIR) / "8bs-c"), _Rec161())
+                            _st161c, str(Path(_TMPDIR) / "8bs-c"), _Rec161())
     try:
         _st161.ScreenshotStage(_ctx161c).run()
     finally:
         _sh161.available, _sh161.capture = _keep_av161, _keep_cap161
+        _sh161.capture_cdp = _keep_cdp161
     assert {h.rstrip("/") for h in _hits161} == set(_opt161["append_targets"]), _hits161
-    assert len(_hits161) == 6, f"每站两次（首试 + 阶段内重试）共 6 次，实得 {len(_hits161)}"
+    assert len(_hits161) == 3, \
+        f"一次性每站只该打**一次**（同 URL 超时翻倍再打那一支已按主理人点单去掉）：{_hits161}"
+    assert len(_cdp161b) == 3 and {u.rstrip("/") for u in _cdp161b} == set(
+        _opt161["append_targets"]), f"CDP 兜底该给这三条各一次（URL 不许回退成原址或全库）：{_cdp161b}"
     db.update_task(_tid161, status="done", run_payload="")   # 不把 queued/running 行漏给后面的组
 
     # ⑤ 接线与文案：一个产地、一处调用、三处显示
@@ -23736,13 +24115,33 @@ expression: r0()
     _w3 = _gh8bc._leads_from(dict(_bk8bc), weak_downgrade=True,
                              whitelist=["someone/notes"])
     assert _w3 and _w3[0]["level"] == "medium", _w3        # 白名单命中 → 不判弱
-    # 截图失败自动重试（超时翻倍 / 3xx 落地页再截；静态判据——真跑要浏览器）
+    # 截图失败的处理形状（续170 换档：3xx 换落地页再截 + 一次性失败后走 CDP 兜底）。
+    # 行为判据在 [8bg]/[170]（要桩或要浏览器），这里只做**静态**判据，且刻意钉代码形态而不是
+    # 文本：本仓自己的注释里就写着"超时翻倍"那句话（§6.1 第 6 条 —— 钉裸词会被说明文案绊红）。
     _ss8bc = (ROOT / "scanner" / "stages" / "screenshot.py").read_text(
         encoding="utf-8", errors="replace")
     assert "redirect_url" in _ss8bc and "重试" in _ss8bc, "截图阶段缺失败自动重试分支"
+    import ast as _ast8bc
+    _caps8bc = [n for n in _ast8bc.walk(_ast8bc.parse(_ss8bc))
+                if isinstance(n, _ast8bc.Call) and isinstance(n.func, _ast8bc.Attribute)
+                and getattr(n.func.value, "id", "") == "screenshot"
+                and n.func.attr in ("capture", "capture_cdp")]
+    assert sum(1 for n in _caps8bc if n.func.attr == "capture") == 2, \
+        f"截图调用点只该有「一次性 + 3xx 落地页」两次 `screenshot.capture`" \
+        f"（加第三次同 URL 的调用就是主理人点单去掉的那支）：{_caps8bc}"
+    assert sum(1 for n in _caps8bc if n.func.attr == "capture_cdp") == 1, \
+        "CDP 兜底在阶段里只能有**一个**调用点（判据写第二处迟早分家，§5.14）"
+    _to_kw8bc = [kw for n in _caps8bc for kw in n.keywords if kw.arg == "timeout"]
+    # 先让这条判据**自证**（§6.1）：`ast.Call` 的关键字字段叫 `keywords`、不叫 `kwargs` ——
+    # 写错的话它恒真（一个都找不到），本轮全量门禁就是这么红的。
+    assert len(_to_kw8bc) >= 2, \
+        f"调用点上没找到任何 `timeout=` 关键字 ⇒ 下面那条判据是空写：{len(_to_kw8bc)}"
+    assert not any(isinstance(kw.value, _ast8bc.BinOp) for kw in _to_kw8bc), \
+        "timeout 不许在调用点做算术（「同 URL 超时翻倍再打」不许回来）"
     print("[8bc] 续151 ok: 复测三态与真实IP/CDN 归属进 MD/HTML、复测态进 JSONL｜详情页漏洞页签有复测徽章｜"
-          "multileak 策略开关 + POST 映射齐｜relevance 三态（降级/关降级/白名单）可配｜截图失败自动重试"
-          "（换落地页或翻倍超时，沿用原 URL 产物名）")
+          "multileak 策略开关 + POST 映射齐｜relevance 三态（降级/关降级/白名单）可配｜截图失败换档："
+          "3xx 换落地页 + 一次性失败后 CDP 兜底，同 URL 超时翻倍那支用 AST 确认已不在"
+          "（调用点次数与 timeout 不许是算术式）")
 
     # ---------------- [8be] 续151：资产关系图 + 复测闭环建议 + smoke 依赖自检 ----------------
     print("[8be] 续151 资产关系图 / 复测闭环建议 / smoke 依赖自检 …")

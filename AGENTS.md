@@ -353,6 +353,9 @@ ctf-scanner/
 │   ├── wildcard.py        # 泛解析识别与过滤（纯 DNS 查询）
 │   ├── passive.py         # 免 key 多来源被动子域名收集
 │   ├── dnsq.py            # 纯标准库 DNS 客户端（A/CNAME/TXT/MX/NS…，UDP+TCP 回退，异常不外抛）
+│   ├── cdp.py             # 最小 CDP（Chrome DevTools Protocol）客户端：**纯标准库**（RFC6455 文本帧 + call/wait_event/ev），
+│   │                      #   只为截图兜底存在（续170）。`WS` 只连回环（拒非 127.0.0.1）、`ready()` 永不抛、
+│   │                      #   `free_port()` 要系统分配的空闲端口 —— 浏览器调试口不许写死也不许对远端开
 │   ├── cdn.py             # CDN 判定：两条判据 —— CNAME 链读 config/dicts/cdn_cname.txt 按后缀匹配厂商，解析 IP 段读 config/dicts/cdn_ips.txt（CNAME 优先、IP 兜底任播 CDN；只读、无请求）
 │   ├── takeover.py        # 子域接管指纹库（41 条第三方服务 suffix）+ detect()
 │   ├── portscan.py        # 端口/服务扫描（TOP 表 + **fscan** + nmap 适配 + 内置 TCP connect 兜底 + 被动 banner；
@@ -726,7 +729,7 @@ ctf-scanner/
    SQL 那份把未解析排进"非 CDN"档）；截图失败原因 = `screenshot.classify()` + `REASON_*`
    （重试决策与落库标签同一个判断）；第三方清单 = `jsmine.thirdparty_suffixes()`，资产侧判定 =
    `jsmine.is_thirdparty()`（与 JS 侧 `_is_noise` 的分工写在 docstring 里：不认 apex、豁免
-   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。；**探测候选主机** = `extdom.own_hosts()`（内存 ∪ 库，own 口径 —— 续159，§6.2 第十四起）；**「这个名字在不在目标域之下」的归属比对** = `extdom.is_in_bases()`（`own_hosts` 与 `SubdomainStage.reuse_history` 共用，续160 —— 后缀判断写两遍就会一边一个口径）；**跨任务可借的历史域名** = `db.list_known_domains()`（own 口径 + 账号隔离都在 SQL 里）；**这条截图失败属于哪一档** = `screenshot.shot_bucket()`（落库的是「档｜原文」，取前缀，没有前缀才回退 `classify()` —— 续161 实测 `classify("跳转未落地｜一句话")` 落「其他」，而这一档**可重试**，事后重算＝静默丢候选）；**哪些档值得再排一轮** = `screenshot.RETRYABLE_REASONS`；**候补轮数与上限** = `screenshot.retry_rounds()`（DEFAULTS 0＝关、**随包 settings.yaml 出厂写 1**（续164），夹到 `RETRYABLE_MAX_ROUNDS`；读侧那个"键不存在时的兜底"跟 DEFAULTS 同值，不跟随包文件）；**候补候选** = `db.list_shot_failures()` + `runner.shot_retry_targets()`（档名一律**不进 SQL**，写 `LIKE '超时%'` 就是第二份判据）；**这次运行的运行期选项** = `queue.run_options()`（`run_payload` 那份，页面与 worker 同源；从 `task["options"]` 读永远是 0 —— 轮次就不在那一列）；**这个工具该看哪一个 release** = `toolmgr._release_for()`（钉了 `pin_version` 就按 `/releases/tags/<tag>` 精确取，没钉才看 latest —— 续164；`install` 与 `update` 都走它，别在两处各判一次"有没有钉"）；**某工具钉了哪一版、哪些产物摘要** = `toolmgr.pin(name)`（唯一读 `TOOLS[...]["pin_version"]/["pin_sha256"]` 的地方）；**「校验」那一格与政策句** = `toolmgr.verified_label()` / `verify_policy()`（CLI、GUI「外部工具」页、run_bootstrap、模板四处共用；页面里再抄一句"必须通过 release 自带的 SHA256 校验和"就是假话，`[8bu]` ⑤ 用 AST 扫字面量钉住）；**「为什么取不到这组凭据」** = `keystore.keys_hint(what)`（三态三句：两份文件都没有 / 有密文但本进程没解锁 / 已解锁但密文里没这一组 —— 续162；旧文案在七处各写一遍「见 config/keys.yaml」，而密文存在时明文根本不读，照着补的人永远补不上）；**「怎么解锁」** = `keystore.unlock_howto()`（补法只这一处，`keys_hint` 与启动横幅都引它）；**口令来源优先级** = `keystore.unlock()` 一处（参数 > `CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass`（守卫见 `file_passphrase`：正好 0600 / 属主是自己 / 非空）> 提问）；**站点表的默认排序** = `db.SITE_TITLE_ORDER`（续165，跨任务 /sites 与资产页共用；它与 `gui/app.py::_site_fold_key` 必须同口径 —— 折叠键认「标题优先、3xx 退 `redirect_title`」，排序若另拼一份 CASE 就会「聚在一起但代表行不是最新那条」；模板里再手写一遍就是第二份）；**一次 HTTP 失败到底为什么** = `utils._exc_reason()` + `utils.http_last_error()`（续165：`http_request` 的返回契约一字未改、失败仍是 `None`，原因按**线程本地**存；分类只在 `_exc_reason` 一处，调用方（passive 那类只读源）不许自己 `except` 再猜一遍超时/DNS/TLS）；**「工作目录内运行时组件」的落点与缓存** = `toolmgr.LOCAL_STACK[*]['dest']` + `toolmgr.cache_path()`（续166：pip 与 Go 的缓存都从这一处取，`toolmgr.go_env()` 是「编译该带哪些环境变量」的唯一产地 —— 在 `tools/build_fscan.py` 里再手拼一份 `GOCACHE` 就是第二份，而漏一个变量的后果是「悄悄写进家目录」）；**settings.yaml「只改一个键」的唯一实现** = `toolmgr.patch_settings_kv(section, key, value)`（续167 把原先只能改 `tools.<名>` 的那份逐行替换推广成任意顶层段；`patch_settings_tool` 现在只是它的包装 —— 再写一份逐行替换就是第二产地，`[167]⑤` 钉住"只差那一行、别的段同名键不碰"）；**「取来之后该往配置里写什么」** = `LOCAL_STACK[*]["wire"]` + `toolmgr.stack_exec_path()`（续167：回写一个没人读的键＝半接线，判据要求 `wire` 指向的键必须真在 `DEFAULTS` 里）；**「这一件到底装好了没」** = `toolmgr._markers_ok()`（`extract_tree` 收尾与 `stack_present` 共用；本轮实测把「平台二选一」的 marker 写成「全部都要」，Linux 上于是永远缺 `bin/go.exe`、报成「归档形状与注册表对不上」——两处各写一份 marker 判据就是这类漂移的产地）；**「这台机器按哪个平台选品」** = `toolmgr.host_arch()`，而它的**唯一覆盖入口** = `toolmgr.platform_override()`（续168：CLI `--platform` 只设 `CTFSCANNER_TARGET_PLATFORM`；架构别名一律过 `toolmgr._ARCH_ALIASES` **同一张表**折算 —— 探测与覆盖各写一份表，实测就会把 `windows/x86_64` 这种无害写法判成「本平台没有产物」，那是**假不适用**）；**「这一件本平台该不该装」** = `toolmgr.stack_applicable()`（与 `install()` 里 `pre["asset"] is None` 那一支同口径：算不出产物、或 CFT 产物没有登记过的摘要 ⇒ **不适用**，既不进 `failed` 也不算 `ok`）；**「不适用这件事怎么说」** = `run_bootstrap.render()` 那一节（标题自带「不是失败」，抬头计数有一格 `本平台不适用 N`）—— 算成失败会让 Windows 上 `./install.sh` 恒 rc=1，藏起来则是新的静默降级（§0 第 10 条）；**「这个拓展域名有多大把握是自家资产」** = `scanner/extdom.py::confidence()`（续169：三档 `low/medium/high` 各带**依据文本**，档位门限是 `_HIGH_DISTANCE/_HIGH_RATIO/_MEDIUM_*` 那四个常量；`conf_norm` 是中文档名/英文/大小写唯一的归一处）；**「拿什么去比」** = `extdom.confirmed_bases(task_id)`（＝`own_hosts` ∪ `task_bases`，主理人说的"父域名可以是爷爷域名"—— 页面徽章与自动递归**必须读同一个集合**，各取一次就会出现"页面上写着高、递归却没带上"）；**「能不能自动扫」** = `extdom.auto_expand_block()`（黑名单 → `js_thirdparty.txt` → CDN 三道闸，**无论多像都挡**；阈值那一档刻意放在调用方 `similar_candidates`，两处各判就会有一处忘）；**「这一轮该扩几层 / 阈值哪档」** = `runner.resolve_ext_depth()` / `resolve_ext_confidence()` （任务级选项优先、退回策略配置；`is not None` 而不是 `or` —— 显式填的 1 被策略顶掉就是把 用户点的那一下吃掉）；**徽章的标记** = `gui/templates/_conf.html` 里的 `conf_badge` macro（续169，两处拓展域名页共用；在模板里各写一遍 span 就是第二产地）
+   `PLACEHOLDER_DOMAINS`）；点号后缀这条规则 = `jsmine._is_under()`（全仓该字面量恰好一处）。；**探测候选主机** = `extdom.own_hosts()`（内存 ∪ 库，own 口径 —— 续159，§6.2 第十四起）；**「这个名字在不在目标域之下」的归属比对** = `extdom.is_in_bases()`（`own_hosts` 与 `SubdomainStage.reuse_history` 共用，续160 —— 后缀判断写两遍就会一边一个口径）；**跨任务可借的历史域名** = `db.list_known_domains()`（own 口径 + 账号隔离都在 SQL 里）；**这条截图失败属于哪一档** = `screenshot.shot_bucket()`（落库的是「档｜尝试 N 次（方式 秒）｜原文」（续170 多了中间那一段），取前缀，没有前缀才回退 `classify()` —— 续161 实测 `classify("跳转未落地｜一句话")` 落「其他」，而这一档**可重试**，事后重算＝静默丢候选）；**哪些档值得再排一轮** = `screenshot.RETRYABLE_REASONS`；**候补轮数与上限** = `screenshot.retry_rounds()`（DEFAULTS 0＝关、**随包 settings.yaml 出厂写 1**（续164），夹到 `RETRYABLE_MAX_ROUNDS`；读侧那个"键不存在时的兜底"跟 DEFAULTS 同值，不跟随包文件）；**候补候选** = `db.list_shot_failures()` + `runner.shot_retry_targets()`（档名一律**不进 SQL**，写 `LIKE '超时%'` 就是第二份判据）；**这次运行的运行期选项** = `queue.run_options()`（`run_payload` 那份，页面与 worker 同源；从 `task["options"]` 读永远是 0 —— 轮次就不在那一列）；**这个工具该看哪一个 release** = `toolmgr._release_for()`（钉了 `pin_version` 就按 `/releases/tags/<tag>` 精确取，没钉才看 latest —— 续164；`install` 与 `update` 都走它，别在两处各判一次"有没有钉"）；**某工具钉了哪一版、哪些产物摘要** = `toolmgr.pin(name)`（唯一读 `TOOLS[...]["pin_version"]/["pin_sha256"]` 的地方）；**「校验」那一格与政策句** = `toolmgr.verified_label()` / `verify_policy()`（CLI、GUI「外部工具」页、run_bootstrap、模板四处共用；页面里再抄一句"必须通过 release 自带的 SHA256 校验和"就是假话，`[8bu]` ⑤ 用 AST 扫字面量钉住）；**「为什么取不到这组凭据」** = `keystore.keys_hint(what)`（三态三句：两份文件都没有 / 有密文但本进程没解锁 / 已解锁但密文里没这一组 —— 续162；旧文案在七处各写一遍「见 config/keys.yaml」，而密文存在时明文根本不读，照着补的人永远补不上）；**「怎么解锁」** = `keystore.unlock_howto()`（补法只这一处，`keys_hint` 与启动横幅都引它）；**口令来源优先级** = `keystore.unlock()` 一处（参数 > `CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass`（守卫见 `file_passphrase`：正好 0600 / 属主是自己 / 非空）> 提问）；**站点表的默认排序** = `db.SITE_TITLE_ORDER`（续165，跨任务 /sites 与资产页共用；它与 `gui/app.py::_site_fold_key` 必须同口径 —— 折叠键认「标题优先、3xx 退 `redirect_title`」，排序若另拼一份 CASE 就会「聚在一起但代表行不是最新那条」；模板里再手写一遍就是第二份）；**一次 HTTP 失败到底为什么** = `utils._exc_reason()` + `utils.http_last_error()`（续165：`http_request` 的返回契约一字未改、失败仍是 `None`，原因按**线程本地**存；分类只在 `_exc_reason` 一处，调用方（passive 那类只读源）不许自己 `except` 再猜一遍超时/DNS/TLS）；**「工作目录内运行时组件」的落点与缓存** = `toolmgr.LOCAL_STACK[*]['dest']` + `toolmgr.cache_path()`（续166：pip 与 Go 的缓存都从这一处取，`toolmgr.go_env()` 是「编译该带哪些环境变量」的唯一产地 —— 在 `tools/build_fscan.py` 里再手拼一份 `GOCACHE` 就是第二份，而漏一个变量的后果是「悄悄写进家目录」）；**settings.yaml「只改一个键」的唯一实现** = `toolmgr.patch_settings_kv(section, key, value)`（续167 把原先只能改 `tools.<名>` 的那份逐行替换推广成任意顶层段；`patch_settings_tool` 现在只是它的包装 —— 再写一份逐行替换就是第二产地，`[167]⑤` 钉住"只差那一行、别的段同名键不碰"）；**「取来之后该往配置里写什么」** = `LOCAL_STACK[*]["wire"]` + `toolmgr.stack_exec_path()`（续167：回写一个没人读的键＝半接线，判据要求 `wire` 指向的键必须真在 `DEFAULTS` 里）；**「这一件到底装好了没」** = `toolmgr._markers_ok()`（`extract_tree` 收尾与 `stack_present` 共用；本轮实测把「平台二选一」的 marker 写成「全部都要」，Linux 上于是永远缺 `bin/go.exe`、报成「归档形状与注册表对不上」——两处各写一份 marker 判据就是这类漂移的产地）；**「这台机器按哪个平台选品」** = `toolmgr.host_arch()`，而它的**唯一覆盖入口** = `toolmgr.platform_override()`（续168：CLI `--platform` 只设 `CTFSCANNER_TARGET_PLATFORM`；架构别名一律过 `toolmgr._ARCH_ALIASES` **同一张表**折算 —— 探测与覆盖各写一份表，实测就会把 `windows/x86_64` 这种无害写法判成「本平台没有产物」，那是**假不适用**）；**「这一件本平台该不该装」** = `toolmgr.stack_applicable()`（与 `install()` 里 `pre["asset"] is None` 那一支同口径：算不出产物、或 CFT 产物没有登记过的摘要 ⇒ **不适用**，既不进 `failed` 也不算 `ok`）；**「不适用这件事怎么说」** = `run_bootstrap.render()` 那一节（标题自带「不是失败」，抬头计数有一格 `本平台不适用 N`）—— 算成失败会让 Windows 上 `./install.sh` 恒 rc=1，藏起来则是新的静默降级（§0 第 10 条）；**「这个拓展域名有多大把握是自家资产」** = `scanner/extdom.py::confidence()`（续169：三档 `low/medium/high` 各带**依据文本**，档位门限是 `_HIGH_DISTANCE/_HIGH_RATIO/_MEDIUM_*` 那四个常量；`conf_norm` 是中文档名/英文/大小写唯一的归一处）；**「拿什么去比」** = `extdom.confirmed_bases(task_id)`（＝`own_hosts` ∪ `task_bases`，主理人说的"父域名可以是爷爷域名"—— 页面徽章与自动递归**必须读同一个集合**，各取一次就会出现"页面上写着高、递归却没带上"）；**「能不能自动扫」** = `extdom.auto_expand_block()`（黑名单 → `js_thirdparty.txt` → CDN 三道闸，**无论多像都挡**；阈值那一档刻意放在调用方 `similar_candidates`，两处各判就会有一处忘）；**「这一轮该扩几层 / 阈值哪档」** = `runner.resolve_ext_depth()` / `resolve_ext_confidence()` （任务级选项优先、退回策略配置；`is not None` 而不是 `or` —— 显式填的 1 被策略顶掉就是把 用户点的那一下吃掉）；**徽章的标记** = `gui/templates/_conf.html` 里的 `conf_badge` macro（续169，两处拓展域名页共用；在模板里各写一遍 span 就是第二产地）；**这张站点没截到的原因文本怎么拼** = `screenshot.error_text()`（续170：`档｜尝试 N 次（一次性 30s + CDP 兜底 45s）｜原文`，**第一段必须是档名** —— `shot_bucket()` 按第一个「｜」前的字取档，候补重试与页面那个"还剩几张"都读它）；**兜底失败不许把档名重判一遍** = 阶段里那唯一一次 `classify()`（续170 实测：兜底回来的文本是 `cdp: …`，再喂一次就落「其他」，而候补重试只认 `RETRYABLE_REASONS` 三档 ⇒ 「超时」洗成「其他」＝悄悄少一批重试；兜底自己的原文仍两段都留）；**这一轮每张最多试几次、分别用什么方式** = `screenshot.attempts_plan_note(settings)`（策略页与详情页共用，**由配置现算** —— 模板里写死"已先重试过一次"在续170 之后就是假话）；**兜底该挡哪些域** = `screenshot._TRACKER_HOSTS` + `shot_block_patterns()`（清单只收埋点/统计/广告，**不收 CDN/静态资源域**；自家注册域**与它的子域**双向都不挡；`block_extra` 只吃"像个域名"的条目）；**CDP 客户端与调试端口就绪探针** = `scanner/cdp.py`（探针在调用方各写一遍，本轮就漏了一个 `import urllib` 而让整条兜底路静默死掉 —— 由端到端夹具逼出来）；**「截图失败的站点」有哪些** = `db.list_shot_failures()`（续161 立、续170 多一个消费方：人工点的「重截失败的站点」也读它，且**不按原因档筛** —— 原因档那一道只用于自动候补重试，两件事别混）
 
 15. **指纹前置过滤只许做减法，不许改变判定结果**（续122）：`_lit_filter` 给每条正则算"必现字面量"，
     跳过 `re.search` 的前提是**该字面量在任何一次命中里都必然出现**。四个放弃过滤的条件（宁可不提速，
@@ -1781,8 +1784,11 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   链接各自是一次手势，浏览器就放行；另给「复制链接清单」（非安全上下文里 `navigator.clipboard`
   不可用 → 退回 `execCommand`，两条路径都要报成功/失败）。`OPEN_SITES_MAX = 20` 是防手滑上限，
   未列出/被拦的条数**如实显示**。
-  **不发任何请求** —— 续145 起它是站点表上**唯一**的批量动作（「深度目录补扫 / 补截图 /
-  全端口补扫 / 深度补扫」四个入口都摘掉了，`POST /api/rescan` 接口保留给漏洞「复查」）。
+  **不发任何请求** —— 续145 摘掉那四个补扫入口（深度目录补扫 / 补截图 / 全端口补扫 / 深度补扫）
+  之后它一度是站点表上**唯一**的批量动作；续170 按主理人点单在同排加回「重新截图（勾选站点）」与
+  「重截失败的站点」（`POST /api/sites/reshoot`：在**本任务**里排一轮只跑 `screenshot` 的追加运行，
+  **不新建任务**、排队等 worker），而 `POST /api/rescan` 接口仍在、GUI 上零消费方（续154 撤掉
+  漏洞「复查」入口后一个按钮都不挂它）。`[8at]①` 钉"整页恰好两处 POST"，`[7s]⑤` 钉站点页签那一个。
   三个不能改的点：① 按钮**必须** `type="button"`（它旁边就是 GET 筛选表单，默认 `type=submit`
   会把勾选甩成查询参数并整页刷新丢掉勾选；补扫表单还在的年代它会**误触发真扫描**）；
   ② 拿到句柄后立刻 `w.opener = null`（反向标签劫持）；③ **读哪张表的勾选由按钮自己的
@@ -1842,8 +1848,10 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   分页之后它只筛**当前页**，比原来更误导（同续53 撤 `[data-tfilter]` 的理由）。
   每页条数沿用 `PAGE_SIZES`；凡是"GET 筛选表单 + POST 表单"同页签的，GET **必须排在 POST 之前**
   （HTML 不允许 form 嵌套，否则按浏览器的容错拆法按钮会失灵），且 `action` 尾部带锚点。
-  ⚠ 续145 之后任务详情页只剩**两处** POST 表单（漏洞「复查」与拓展域名「送去探测」）；
-  站点/端口/目录三个页签一个 POST 表单都不许有（`[7s]⑤` 现在钉的是这一条 + form 标签配平）。
+  ⚠ 任务详情页现在恰好**两处** POST 表单：站点页签的「重新截图」（续170 加回）与拓展域名的
+  「送去探测」。端口 / 目录两个页签仍然**一个都不许有**（续145 摘掉的补扫表单不许换个壳回来）——
+  `[7s]⑤` 钉的就是"站点/拓展各恰好一个 + GET 先闭合 + form 标签配平 + 端口目录为零"，
+  `[8at]①` 钉整页 `method="post"` 计数为 2。
   页签徽标一律显示**总数**
   （`*_pager.total`），不是本页行数。目录页签是**唯一例外**：`_fold_dirs()` 折叠是整表语义，
   只能"取全量 → 折叠 → 过滤 → 切片"，`[7s]` ⑦ 的"不得再全量读资产表"检测器给它留了口子。
@@ -2508,12 +2516,17 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   第二个产地（§5.14）—— `[8at]④` 钉了"清单里不许出现 `run_users.py` / `--set`"。
   交互判据一个字没改（有终端才问、无终端绝不代填），边缘门**关着**时汇总里也一个字都不许提它
   （与 `[8ai]⑩` 同口径：默认配置必须安静）。
-- **摘掉「补截图」入口的既定后果（续145，如实登记）**：渲染后标题（续140）从此**只能在
-  建任务时**勾 `screenshot` 阶段拿到 —— 已跑完的任务、库里 `title` 为空的那些站点，
-  **没有任何补的入口了**（接口 `POST /api/rescan&stage=screenshot` 还在，但页面上没有按钮）。
-  站点页签仍会说清"为什么没有截图"并指向"建任务时勾 screenshot"（`[5t]` 钉住原因与出路两条）。
-  这不是缺陷，是用户点单选的取舍；要让"渲染后标题"默认生效，得改 `screenshot.enabled` 的默认值
-  （先量耗时，见待办）。
+- **站点页「重新截图」＝排队，不当场截（续170 改写续145 那条"没有补的入口"）**：续145 摘掉
+  「补截图」时如实登记过"渲染后标题只能在建任务时拿到、已跑完的任务没有任何补的入口"；
+  续170 按主理人点单加回 `POST /api/sites/reshoot`（勾选站点 → 排一轮**只跑 `screenshot` 阶段**
+  的**追加**运行），那句**不再成立** —— 已跑完的任务现在能补图，也能顺带补渲染后标题
+  （那一轮照旧走 `set_site_titles`）。仍然成立的四条：① 它**排队**（一次无头浏览器要几秒到几十秒，
+  压在 HTTP 线程上会把整个控制台卡住，还绕开队列、并发闸与请求预算）；② 策略级
+  `screenshot.enabled` 仍默认关，单次只排 `screenshot.max_sites` 上限内的站点，超出的条数说出来；
+  ③ 人工点的「重截失败的站点」**不看原因档**（人要点第二次就是"都要再看一眼"），原因档那一道
+  只用于**自动**候补重试；④ 旧接口 `POST /api/rescan&stage=screenshot` 仍在、旧入口形态仍不许回来。
+  判据：`[5t]` 钉双向（旧形态不在 + 新入口真渲染出来 + 勾选框接到表单上）、`[7r]/[7s]` 钉
+  "站点页签恰好一个 POST 且 GET 先闭合"、`[170]⑧` 钉归属 404 / 上限读配置 / 空清单 409。
 - **`serve()` 返回时必须把中间件摘掉**（续138，`gui/app.py`）：`app.wsgi_app` 是**模块级对象**，
   挂上去不摘，同进程后续任何 `gui_app.app.test_client().get("/login")` 都会 404。回归 `[7i]` 会
   **真调 `serve()`**（`app.run` 打桩成立刻返回），不摘就把后面每组刷成红、且红在哪个组取决于

@@ -16,7 +16,9 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
+from . import cdp as cdp_mod
 from .utils import html_title, run_cmd
 
 # 命令名（PATH 里能找到就用）
@@ -196,7 +198,8 @@ def classify(err, site=None):
 
 
 def shot_bucket(stored, site=None):
-    """把**落库的** `shot_error` 归回原因档：阶段写进去的是「档｜原文」，前缀就是当时判的那一档。
+    """把**落库的** `shot_error` 归回原因档：阶段写进去的是「档｜尝试 N 次（方式 秒）｜原文」（续170 起中间多一段尝试记录），
+    前缀仍是当时判的那一档。
 
     为什么不把那段文本再喂一遍 `classify()`：档名与判据关键字不是一回事 —— 实测
     `classify("预算或已停止｜…")` 落「其他」（`REASON_BUDGET` 认的是 `throttle:` / 「预算耗尽」/
@@ -214,6 +217,56 @@ def shot_bucket(stored, site=None):
 def retryable_shot_error(stored, site=None):
     """这条落库的失败文本该不该进候补重试 —— 判据只有 `RETRYABLE_REASONS` 那一处。"""
     return shot_bucket(stored, site) in RETRYABLE_REASONS
+
+
+def attempts_plan_note(settings=None):
+    """一句人话：这一轮每张站点**最多**试几次、分别用什么方式。
+
+    必须**由配置现算**（§5.19）：以前模板里写死"每张站点阶段内已先重试过一次"，
+    而续170 之后"再打一次同一条 URL"这一支默认已经不做了 —— 那句话要是还留在页面上，
+    就是在替代码说谎，而它正是用户判断"要不要再等一轮"的依据。
+    """
+    steps = ["一次性"]
+    if cdp_fallback_enabled(settings):
+        steps.append("CDP 兜底")
+    txt = " → ".join(steps)
+    if len(steps) > 1:
+        txt += "（失败前先等 %ds，不等 load）" % fallback_wait(settings)
+    else:
+        txt += "（兜底已关：超时就是超时，不会再起第二个浏览器进程）"
+    return "每张最多 %d 次：%s；3xx 未落地的那类会换成落地页再截一次" % (len(steps), txt)
+
+
+def error_text(reason, err, attempts=()):
+    """把一次失败拼成**落库文本**：`档｜尝试 N 次（一次性 30s + CDP 兜底 45s）｜原文`。
+
+    三段顺序不能换：第一段必须是档名 —— `shot_bucket()` 就是按第一个「｜」前的字判档，
+    候补重试与页面上的"还剩几张"都读它（§5.14）。
+    `attempts` 是 `[(方式, 秒数), …]`；只成功一次也要写清"试过几次、分别是什么方式"，
+    因为主理人问的原话就是「超时 你要显示重试了多少次」——只写"失败"等于让人重新猜。
+    """
+    parts = [str(reason or REASON_OTHER)]
+    n = len(attempts or ())
+    if n:
+        detail = " + ".join("%s %ss" % (w, int(s or 0)) for w, s in attempts)
+        parts.append("尝试 %d 次（%s）" % (n, detail))
+    txt = str(err or "").strip()
+    if txt:
+        parts.append(txt)
+    return "｜".join(parts)[:200]
+
+
+def fallback_wait(settings=None):
+    """一次性失败后**先等几秒**再走兜底（主理人：「可以不要那么快急着重试」）。默认 10 秒。
+
+    这段等待必须是**可打断**的（阶段用 `ctx.stopped()` 轮询），否则"点停止"在这里变成摆设。
+    夹到 0..120：填 0＝立刻兜底（旧形状），填得再大也不许变成"卡住 worker 十分钟"。
+    """
+    try:
+        n = int(((settings or {}).get("screenshot") or {}).get("fallback_wait", 10))
+    except (TypeError, ValueError):
+        n = 10
+    return max(0, min(120, n))
 
 
 def retry_rounds(settings=None):
@@ -309,3 +362,181 @@ def shot_name(url):
     import hashlib
     digest = hashlib.md5(str(url).encode("utf-8", "replace")).hexdigest()[:12]
     return f"{digest}.png"
+
+
+# ============================ CDP 兜底（续170）============================================
+#
+# 为什么要这第二条路（主理人点单「让截图更有兼容性」）：一次性 `--screenshot` 只在页面
+# **load 完成**时才写 PNG。授权目标里非常常见的一类页面永远不 load —— 首屏引了一条回源慢 /
+# 被墙的第三方脚本。本机 Google Chrome 154.0.8037.97 实测（夹具：一条永不返回的
+# `<script src>`）：`--virtual-time-budget=4000`、`--timeout=6000`、old/new headless 四种组合
+# **全部** 20 秒 0 字节 —— 也就是加开关救不回来；而 CDP 把那条子资源挡掉后同一页面
+# 截出 **17,910 字节**（`logs/_shotab.py` / `logs/_cdpab.py`，两份脚本就是这两组数字的出处）。
+#
+# 三条边界，缺一条就不该上这条路：
+# ① **只挡埋点/统计/广告那类域**，且**永不挡页面自己的注册域** —— 挡 CDN 会把页面截成
+#    没有样式的空壳，那比"截不到"更误导人（人正是靠这张图判断站点的）；
+# ② 只连我们自己起的那个浏览器（`127.0.0.1:<随机端口>`），端口由系统分配、只绑回环，
+#    浏览器进程在 `finally` 里一定收掉；`scanner/cdp.py` 里还有一道"拒绝连非回环"的闸；
+# ③ 全程仍受同一个 `throttle` 名额与预算约束（它是一次"起子进程"，不豁免）。
+
+_TRACKER_HOSTS = (
+    # 只列"对画面没有贡献、又最容易把 load 挂死"的那批。新增条目要说得清它属于哪一类，
+    # 不收 CDN / 静态资源域（jsdelivr、unpkg、cloudfront…）—— 那些是页面的内容。
+    "google-analytics.com", "googletagmanager.com", "analytics.google.com",
+    "doubleclick.net", "googleadservices.com", "googlesyndication.com",
+    "adservice.google.com", "facebook.net", "scorecardresearch.com", "quantserve.com",
+    "hotjar.com", "clarity.ms", "mixpanel.com", "segment.io", "segment.com",
+    "amplitude.com", "appsflyer.com", "branch.io", "cnzz.com", "umeng.com",
+)
+
+
+def cdp_fallback_enabled(settings=None):
+    """`screenshot.cdp_fallback`：一次性截图失败后要不要再走一次 CDP 兜底（**默认开**）。
+
+    开在这里而不是"悄悄改行为"：它只在一次性失败后启动，成功路径一个进程都不多起；
+    关掉就退回续170 之前的行为（一次性 + 候补轮）。
+    """
+    return bool(((settings or {}).get("screenshot") or {}).get("cdp_fallback", True))
+
+
+def cdp_wait(settings=None):
+    """兜底这一趟最多花几秒（导航 + 等 load + 要图，全在这一个预算里）。默认 45 秒。
+
+    刻意**不复用** `screenshot.timeout`：那是一次性的预算，两个数揉在一起，改一个会连带
+    把另一条路的时间也改了（而页面/日志上写的秒数就成了假话，§5.19）。
+    """
+    try:
+        n = int(((settings or {}).get("screenshot") or {}).get("cdp_wait", 45) or 45)
+    except (TypeError, ValueError):
+        n = 45
+    return max(8, min(180, n))
+
+
+def shot_block_patterns(url, settings=None):
+    """这次兜底要挡的 URL 通配串 → `["*google-analytics.com*", …]`。
+
+    两道收口：① 页面**自己的注册域**（及子域）永不进清单，配置里误填了也剔掉 —— 挡掉自己的
+    内容等于截出一张没有样式的空壳，那比"截不到"更误导人；② `block_extra` 只吃"像个域名"
+    的条目（去掉前导 `*`/`.` 与空白），别的形态一律不挡（宁可不挡，也不误挡内容）。
+    """
+    host = urlparse(str(url or "")).hostname or ""
+    own = extdom_base(host)
+    cfg = ((settings or {}).get("screenshot") or {}).get("block_extra") or []
+    out, seen = [], set()
+    for raw in list(_TRACKER_HOSTS) + [str(x) for x in cfg]:
+        h = raw.strip().lower().lstrip(".*").rstrip("/")
+        if not h or "." not in h or " " in h or "/" in h:
+            continue                                     # 不像域名的条目一律不用（不猜它想挡什么）
+        if h in seen:
+            continue
+        seen.add(h)
+        if own and (h == own or h.endswith("." + own) or own.endswith("." + h)):
+            continue        # 页面自己的域**和它的子域**都不挡：挡了就是把内容截成没有样式的空壳
+        out.append("*%s*" % h)
+    return out
+
+
+def extdom_base(host):
+    """主机名 → 注册域。**产地仍是 `extdom.base_of`**，这里只做一层薄壳避免循环导入。"""
+    from .extdom import base_of
+    return str(base_of(host) or "")
+
+
+def capture_cdp(url, out_path, settings=None, timeout=None, throttle=None, want_title=False):
+    """CDP 兜底截图：不等 load、只挡埋点域、到点直接问渲染器要一张图。
+
+    返回 `(ok, err, title)`，与 `capture()` **同一个形状**（调用方可以把两条路的结果
+    拼进同一句 `shot_error`）。失败原因一律带 `cdp:` 前缀，页面上才分得清是哪条路没成。
+    """
+    import base64
+    import subprocess
+
+    binary = browser_path(settings)
+    if not binary:
+        return False, "cdp: 未找到可用的无头浏览器（Edge/Chrome）", ""
+    budget = float(timeout or cdp_wait(settings))
+    t0 = time.time()
+    out_path = _abs_out(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = (settings or {}).get("screenshot", {}) or {}
+    size = str(cfg.get("window") or "1280x900").replace(" ", "")
+    blocked = shot_block_patterns(url, settings)
+    port = cdp_mod.free_port()
+    profile = tempfile.mkdtemp(prefix="ctfscan-cdp-")
+    argv = [binary, "--headless=old", "--no-sandbox", "--disable-dev-shm-usage",
+            "--ignore-certificate-errors", "--disable-gpu", "--hide-scrollbars",
+            "--no-first-run", "--no-default-browser-check", "--disable-extensions",
+            "--disable-background-networking",
+            f"--remote-debugging-port={port}", f"--user-data-dir={profile}",
+            f"--window-size={size}", "about:blank"]
+    proc = None
+    client = None
+    try:
+        def _do():
+            nonlocal proc, client
+            proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for _ in range(80):                       # 最多等 8 秒把 CDP 端口起来
+                if cdp_mod.ready(port):
+                    break
+                if proc.poll() is not None:
+                    raise RuntimeError("cdp: 无头浏览器启动即退出（退出码 %s）" % proc.returncode)
+                time.sleep(0.1)
+            else:
+                raise RuntimeError("cdp: 调试端口没起来")
+            client = cdp_mod.CDP(cdp_mod.ws_url_for(port), timeout=budget)
+            sid = client.call("Target.attachToTarget",
+                              {"targetId": client.call("Target.createTarget",
+                                                       {"url": "about:blank"})["targetId"],
+                               "flatten": True}, timeout=min(10, budget))["sessionId"]
+            client.call("Page.enable", session_id=sid, timeout=min(10, budget))
+            if blocked:
+                client.call("Network.enable", session_id=sid, timeout=min(10, budget))
+                client.call("Network.setBlockedURLs", {"urls": blocked},
+                            session_id=sid, timeout=min(10, budget))
+            client.call("Page.navigate", {"url": url}, session_id=sid, timeout=min(15, budget))
+            # load 到不到都往下走：这条路的意义就是"不等一个可能永远不来的事件"
+            remain = max(0.5, budget - (time.time() - t0) - 8)
+            client.wait_event("Page.loadEventFired", session_id=sid, timeout=remain)
+            got = client.call("Page.captureScreenshot", {"format": "png"},
+                              session_id=sid, timeout=max(2, budget - (time.time() - t0)))
+            data = str((got or {}).get("data") or "")
+            if not data:
+                raise RuntimeError("cdp: captureScreenshot 没带回图片数据")
+            raw = base64.b64decode(data)
+            if not raw:
+                raise RuntimeError("cdp: 解码后是 0 字节")
+            tmp = out_path.with_suffix(out_path.suffix + ".part")
+            tmp.write_bytes(raw)
+            os.replace(tmp, out_path)                # 原子替换：失败时绝不动已有产物
+            title = ""
+            if want_title:
+                try:
+                    title = str(client.ev("document.title || ''", session_id=sid,
+                                           timeout=min(8, max(1, budget - (time.time() - t0)))) or "")
+                except Exception:
+                    title = ""
+            return (True, "", title) if raw else (False, "cdp: 0 字节", title)
+
+        if throttle is None:
+            return _do()
+        with throttle.slot("subprocess"):
+            return _do()
+    except Exception as e:
+        return False, ("%s" % e)[:200], ""
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+        if proc is not None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=8)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        shutil.rmtree(profile, ignore_errors=True)

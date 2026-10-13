@@ -291,6 +291,26 @@
     <label>单站点截图超时（秒） <input name="screenshot_timeout" value="{{ s.screenshot.timeout }}"></label>
     <label>截图候补重试轮数 <input name="screenshot_retry_rounds" style="width:5em"
       value="{{ s.screenshot.retry_rounds }}" placeholder="0＝关"></label>
+    <label class="chk"><input type="checkbox" name="screenshot_cdp_fallback" value="1"
+      {{ 'checked' if s.screenshot.cdp_fallback }}> <b>一次性失败后走 CDP 兜底</b>（挡掉埋点/统计域、
+      <b>不等 load</b> 直接问渲染器要一张图 —— 专治"第三方脚本挂死 ⇒ 页面永不 load"那一类）</label>
+    <label>兜底总预算（秒） <input name="screenshot_cdp_wait" style="width:5em"
+      value="{{ s.screenshot.cdp_wait }}"></label>
+    <label>兜底前先等（秒） <input name="screenshot_fallback_wait" style="width:5em"
+      value="{{ s.screenshot.fallback_wait }}"></label>
+    <label>额外拦截的第三方域 <input name="screenshot_block_extra" style="width:22em"
+      value="{{ s.screenshot.block_extra|join(', ') }}"
+      placeholder="逗号/空格分隔，例：foo-tracker.com"></label>
+    <p class="muted small">为什么要兜底而不是"再等久一点"：一次性
+      <span class="mono">--screenshot</span> 只在页面 <b>load 完成</b>时才写 PNG，实测
+      Google Chrome 154 对一条永不返回的子资源 —— <span class="mono">--virtual-time-budget</span>、
+      <span class="mono">--timeout</span>、old/new headless 四种组合<b>全部</b> 20 秒 0 字节；
+      CDP 挡掉那类域之后同一页面截出了 17,910 字节。<br>
+      <b>只挡埋点 / 统计 / 广告那一类</b>（清单在 <span class="mono">scanner/screenshot.py</span>
+      里，这一栏是往里<b>追加</b>）：页面自己的注册域与其子域<b>永远不会被挡</b> ——
+      挡掉 CDN 会截出一张没有样式的空壳，那比"截不到"更误导人。
+      「兜底前先等」是给目标侧喘口气，也是主理人点的那句「不要那么快急着重试」；
+      这段等待会被「停止」立即打断。</p>
     <p class="muted small">任务<b>正常跑完</b>后，把这一轮<b>没截成</b>、且失败原因落在
       「{{ shot_retry_note }}」这几档的站点<b>排进队列再试一轮</b>：那一轮只跑
       <span class="mono">screenshot</span> 阶段、只打这批 URL，等前面的任务跑完、worker
