@@ -93,9 +93,9 @@ python cli/client.py --check-afrog-pocs <你的 PoC 目录>     # 只读，不�
 校验和的单二进制产物"），但都能用**一键脚本**装上：
 
 - **nmap** → `./install.sh --with-system --yes`（交给发行版包管理器真装）；
-- **fscan** → `./install.sh --with-build`（用本机 Go 从源码自编译，见下）；
+- **fscan** → `./install.sh --full`（缺 Go / 缺源码就取进仓库再编，见下）；
 - **dirmap** → 纯 Python、release 无产物；本仓已随附一份兼容快照在 `tools/dirmap/`，无需另装（见下）；
-- **massdns** → 官方只发 C 源码，`python tools/build_massdns.py --src <源码目录> --wire` 自编译（需 gcc/make）。它不是"可选工具"：puredns 会在进程内 exec 它，见下面「massdns」。
+- **massdns** → 官方只发 C 源码，`python tools/build_massdns.py --fetch --wire` 自编译（源码自动取；**仍需本机 gcc/make**）。它不是"可选工具"：puredns 会在进程内 exec 它，见下面「massdns」。
 
 细节与逐条原因见下文与 `scanner/toolmgr.py` 的 `MANUAL`：
 
@@ -131,7 +131,7 @@ git checkout v2.2.1
 go build -ldflags="-s -w" -trimpath -o fscan
 ```
 
-`./install.sh --with-build` 内部调 `python tools/build_fscan.py --wire`：用本机 Go 编译到
+`./install.sh --with-build`（或 `--full`）内部调 `python tools/build_fscan.py --wire`：用 Go 编译到
 `tools/scanner/`，并把 `tools.fscan` 自动写回配置（缺 Go / 缺源码会**如实报**，不静默跳过）。
 也可以自己指定源码目录：`python tools/build_fscan.py --src ./fscan --wire`。
 
@@ -189,11 +189,45 @@ DNS 爆破，并把下面这条命令写进同一行日志。
 
 ```bash
 git clone https://github.com/blechschmidt/massdns && git -C massdns checkout v1.1.0
-python tools/build_massdns.py --src ./massdns --wire    # 需 gcc/make；产物落 tools/scanner/massdns
+python tools/build_massdns.py --fetch --wire           # 一条命令：自动取源码（钉住摘要）→ make → 写回配置
+python tools/build_massdns.py --src ./massdns --wire   # 或用自己放的源码；两者都需 gcc/make
 ```
 
 `--wire` 把 `tools.massdns` 写回 `config/settings.yaml`（相对路径）。框架调用 puredns 时把 massdns
 所在目录加进**那一个子进程**的 PATH（`utils.run_cmd(..., extra_path=…)`），不改父进程、不改全局。
+
+## 工作目录内运行时组件（续166）
+
+「换一台机器一条命令把环境建全、且**都落在工作目录里**」靠的是 `scanner/toolmgr.py` 的
+**第三档注册表** `LOCAL_STACK`（与 `TOOLS`／`MANUAL` 两两不相交）：
+
+| 组件 | 落点 | 摘要产地 | 取法 |
+|---|---|---|---|
+| `go`（便携工具链，钉 1.27.2） | `tools/go/`（283 MB） | **官方** `go.dev/dl/?mode=json` 的 `sha256` ⇒ `verify_source=release` | `python run_bootstrap.py --with-stack` |
+| `fscan-src`（tag v2.2.1） | `tools/fscan-src/` | **本框架钉住**（GitHub 不为 tag 归档发校验和） ⇒ `pinned` | 同上，或 `build_fscan.py --fetch` |
+| `massdns-src`（tag v1.1.0） | `tools/massdns-src/` | 同上（`pinned`） | 同上，或 `build_massdns.py --fetch` |
+
+三条口径（`tests/smoke.py [166]` 逐条钉住，含变异证伪）：
+
+1. **校验强度与 `TOOLS` 一字不差**：https + 主机白名单（本轮只多开 `go.dev` / `dl.google.com` /
+   `codeload.github.com` 三个口，多开一个即红）+ 落盘前 SHA256；字节不符拒装，
+   `--allow-unverified` 也越不过（那个开关只管"根本没有校验依据"）；官方清单里查不到钉住的
+   那一版 ⇒ **拒装**（不跟 latest，与 puredns 同一理由）。
+2. **一个字节都不写仓库外**：解包只落 `tools/<名>/`（先解到 `.part-<pid>`、marker 齐了才换），
+   pip 缓存 → `.cache/pip`，Go 的 `GOPATH/GOCACHE/GOMODCACHE/GOTMPDIR/GOENV` → `.cache/*`，
+   连 Go 的本地遥测计数也靠 `XDG_CONFIG_HOME=.cache/goconfig` 收进来（实测：给了
+   `GOTELEMETRY=off` 它**照样**建 `~/.config/go/telemetry/`，所以必须重定向配置目录本身；
+   macOS/Windows 上 Go 不认 XDG ⇒ `go_env()` 连 `HOME`/`USERPROFILE` 一起指进仓库）。
+3. **编译仍是显式入口**：`run_bootstrap.py` 的自动层被 `[8d]②` 钉死"绝不代跑系统级命令"
+   （`go build` / `git clone` / 包管理器都在禁列），所以它只负责"把件取齐"，
+   `make` 与 `go build` 永远发生在 `tools/build_*.py` 里。
+
+实测数字（2026-10-13，本机 Ubuntu / gcc+make 齐备）：Go 归档 70,590,635 B、下载+解包 5.3 s；
+fscan-src 6,764,308 B（1094 个文件）；用**仓库内** Go（PATH 里没有系统 go）编 fscan 21.9 s →
+28,229,792 B；用本机 apt Go 1.26.0 编同一份源码 20.2 s → 27,869,449 B（工具链版本不同，
+产物字节自然不同）；massdns `make` 2.7 s → 133,816 B。
+⚠ 从 tarball 编 massdns 时目录里没有 `.git`，`make` 会往 stderr 打一行
+`Try --always, or create some tags.`、版本串为空 —— **rc 仍是 0**，别读成编译失败。
 
 ## 验证
 

@@ -28,6 +28,14 @@ config/nuclei-templates/
 tools/dirmap/
 tools/fscan/
 
+# 续166：「工作目录内运行时组件」与构建缓存 —— 全部由 `--fetch` / `run_bootstrap.py --with-stack`
+# 就地取（Go 便携工具链、上游源码包），过 SHA256 后落在仓库内，不随仓库分发；`.cache/` 收的是
+# pip 与 Go 的缓存（默认那套会写 `~/.cache/pip` 与 `~/go`，实测一次编译 192 MB + 239 MB）。
+tools/go/
+tools/fscan-src/
+tools/massdns-src/
+.cache/
+
 # 会话/记忆目录（AI 工作笔记，不进仓库）
 .workbuddy-ai/
 # 另一个 IDE（Trae）的工程目录：里面是各会话的设计稿，随工具走、不属于本项目代码。

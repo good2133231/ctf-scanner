@@ -401,7 +401,7 @@ tools:
   # massdns（续165）：puredns 的 bruteforce/resolve 会在**进程内 exec 它**（靠 PATH 找），
   # 缺它 puredns 每个域名都退码 1。官方只发 C 源码，无带校验和的单二进制，故不进一键下载：
   # 编译：python tools/build_massdns.py --wire（产物落 tools/scanner/massdns，需 gcc/make）。
-  massdns: massdns
+  massdns: tools/scanner/massdns
 dicts:
   subdomains: config/dicts/subdomains.txt
   # 深档子域名字典（续139）：`python tools/import_subdomain_dict.py --src <你那份深字典>` 生成。

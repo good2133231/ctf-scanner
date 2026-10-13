@@ -15,12 +15,18 @@
 `scanner/stages/subdomain.py` 里已加**预检**：缺 massdns 时不硬跑 puredns、不浪费整轮时间，
 并指向本脚本。
 
-用法：
-    python tools/build_massdns.py --src /path/to/massdns          # 编译到 tools/scanner/massdns
-    python tools/build_massdns.py --src /path/to/massdns --wire    # 顺便写回 tools.massdns
+**续166 起源码可以自动取**（此前只能 `git clone`）：`--fetch` 从 `toolmgr.LOCAL_STACK` 取
+`massdns-src`（按确切 tag `v1.1.0`，摘要由本框架钉住、落盘前核对），解到 `tools/massdns-src/`。
+⚠ **编译器仍然只能来自本机**：C 工具链没有"便携且可校验"的官方产物，缺 gcc/make 时本脚本
+如实报并给命令，**不假装编成了**（`--fetch` 也救不了这一档）。
 
-`--src` 缺省按顺序找：环境变量 `CTFSCANNER_MASSDNS_SRC` → `tools/massdns-src` → `/opt/tools/ctf/massdns-src`。
-找不到源码 / 没装 gcc+make 都**如实报**并给出获取步骤，不静默跳过（静默跳过正是本项目反复栽的坑）。
+用法：
+    python tools/build_massdns.py --fetch --wire     # 自动取源码 → make → 写回配置
+    python tools/build_massdns.py --src ./massdns --wire
+    ./install.sh --full
+
+`--src` 缺省时按顺序找：环境变量 `CTFSCANNER_MASSDNS_SRC` → `tools/massdns-src`（`--fetch` 的落点）。
+**刻意不再兜到仓库外的绝对路径**（续166 摘掉，理由与 build_fscan 同）。
 """
 import argparse
 import os
@@ -30,11 +36,17 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    # ⚠ 不能省：脚本直跑时 `sys.path[0]` 是 `tools/`，而那里有个同名的 `tools/scanner/`
+    # （外部工具落点）⇒ `from scanner import toolmgr` 会撞到它并报
+    # `ImportError: cannot import name 'toolmgr' from 'scanner' (unknown location)`（续166 实测）。
+    sys.path.insert(0, str(ROOT))
+
 DEFAULT_DEST = "tools/scanner"
 
 
 def find_source(explicit=None):
-    """定位 massdns 源码目录（含 Makefile）；找不到返回 `None`。"""
+    """定位 massdns 源码目录（含 Makefile）；找不到返回 `None`。只在仓库内与环境变量里找。"""
     cands = []
     if explicit:
         cands.append(Path(explicit))
@@ -42,11 +54,26 @@ def find_source(explicit=None):
     if env:
         cands.append(Path(env))
     cands.append(ROOT / "tools" / "massdns-src")
-    cands.append(Path("/opt/tools/ctf/massdns-src"))
     for c in cands:
         if (c / "Makefile").is_file():
             return c
     return None
+
+
+def fetch(name, allow_unverified=False):
+    """从 `LOCAL_STACK` 取源码包。返回 `(ok, 原因)`，绝不抛。"""
+    from scanner import toolmgr
+    cfg = toolmgr.LOCAL_STACK[name]
+    print(f"[*] 取 {name}（{cfg['version']}）→ {cfg['dest']} …")
+    r = toolmgr.stack_install(name, allow_unverified=allow_unverified)
+    if r.get("ok"):
+        lbl = toolmgr.verified_label(r)
+        print(f"[+] {name} 就位：{r.get('files')} 个文件、{r.get('bytes', 0) / 1048576:.1f} MB"
+              + (f"（{lbl}）" if lbl else ""))
+        return True, ""
+    why = r.get("reason") or "未知原因"
+    print(f"[X] {name} 没取到：{why}")
+    return False, why
 
 
 def main(argv=None):
@@ -55,19 +82,32 @@ def main(argv=None):
     ap.add_argument("--dest", default=DEFAULT_DEST, help=f"产物落点（默认 {DEFAULT_DEST}/）")
     ap.add_argument("--wire", action="store_true",
                     help="装好后把 tools.massdns 写回 config/settings.yaml（相对路径）")
+    ap.add_argument("--settings", default=None,
+                    help="写回哪个 settings.yaml（默认 config/settings.yaml；门禁用沙箱副本）")
+    ap.add_argument("--fetch", action="store_true",
+                    help="缺源码时自动取（按确切 tag，摘要由本框架钉住，落 tools/massdns-src/）")
+    ap.add_argument("--allow-unverified", action="store_true",
+                    help="配合 --fetch：拿不到摘要时也照装（默认拒绝）")
     args = ap.parse_args(argv)
 
     for tool in ("make", "cc"):
         if not shutil.which(tool):
-            print(f"[X] 没装 {tool} —— massdns 官方只发 C 源码，要用它自编译。")
+            print(f"[X] 没装 {tool} —— massdns 官方只发 C 源码，要用它自编译；"
+                  "**这一档没有便携替代品**（`--fetch` 只能取源码，取不来编译器）。")
             print("    装编译工具链：apt/dnf install build-essential（或 gcc + make）后重跑本脚本。")
+            return 1
+    if args.fetch and not find_source(args.src):
+        ok, _ = fetch("massdns-src", args.allow_unverified)
+        if not ok:
+            print("[!] 也可以自己放源码：git clone https://github.com/blechschmidt/massdns && "
+                  "git -C massdns checkout v1.1.0，再 --src ./massdns 重跑")
             return 1
     src = find_source(args.src)
     if not src:
-        print("[X] 找不到 massdns 源码目录（需要含 Makefile）。获取方式（钉到 tag v1.1.0）：")
-        print("    git clone https://github.com/blechschmidt/massdns && "
-              "git -C massdns checkout v1.1.0")
-        print("    然后：python tools/build_massdns.py --src ./massdns --wire")
+        print("[X] 找不到 massdns 源码目录（需要含 Makefile）。两条路：")
+        print("    ① 自动取（推荐）：python tools/build_massdns.py --fetch --wire")
+        print("    ② 自己放：git clone https://github.com/blechschmidt/massdns && "
+              "git -C massdns checkout v1.1.0，再 --src ./massdns --wire")
         return 1
 
     dest = (ROOT / args.dest) if not Path(args.dest).is_absolute() else Path(args.dest)
@@ -89,15 +129,18 @@ def main(argv=None):
     except OSError:
         pass
     print(f"[+] 编译完成：{out}（{out.stat().st_size / 1024:.0f} KB）")
+    print("[i] 从 tarball 编时目录里没有 .git，make 会往 stderr 打一行 "
+          "`Try --always, or create some tags.`、版本串为空 —— 那是**正常**的（rc 仍是 0）。")
     if args.wire:
         from scanner import toolmgr
         try:
             rel = out.resolve().relative_to(ROOT).as_posix()
         except ValueError:
             rel = str(out.resolve())
-        ok, note = toolmgr.patch_settings_tool("massdns", rel)
+        ok, note = toolmgr.patch_settings_tool("massdns", rel, path=args.settings)
         if ok:
-            print(f"[+] 已把 tools.massdns 写回 config/settings.yaml（{rel}）")
+            print(f"[+] 已把 tools.massdns 写回 "
+                  f"{args.settings or 'config/settings.yaml'}（{rel}）")
         else:
             print(f"[!] 写回 config/settings.yaml 失败：{note}（请手动把 tools.massdns 填成 {rel}）")
     else:

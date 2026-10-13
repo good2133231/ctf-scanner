@@ -20050,6 +20050,338 @@ expression: r0()
           "阶段只对空标题站点要 DOM、补到就同时进库/进内存/进产物（shot 仍是相对路径）｜"
           "拿不到标题不编数（「补到 0 个」+「其余连渲染后也没有标题」）、want_title 被吃掉就补不到（变异）｜"
           "门控两条都在（策略关 ⇒ 零请求；任务级勾选能压过）｜probe 入库日志把缺标题数量与出路一起说清")
+    # ---------------- [166] 续166：工作目录内运行时组件（`toolmgr.LOCAL_STACK`） ----------------
+    #      主理人点单：「换一台机子自主完成一切环境构造，最好都放到本地工作目录、不影响其他的」。
+    #      这一组钉的是**边界**而不是"下得快不快"：落点必须在仓库内、摘要必须核过、编译动作必须
+    #      仍在那两个显式入口里（`run_bootstrap` 自动层那条"绝不代跑系统级命令"的红线一根没松）。
+    print("[166] 续166 工作目录内运行时组件 …")
+    import ast as _ast166
+    import hashlib as _hl166
+    import io as _io166
+    import json as _json166
+    import re as _re166
+    import shutil as _sh166
+    import subprocess as _sp166
+    import tarfile as _tar166
+    import tempfile as _tf166
+    from scanner import toolmgr as _tm166
+
+    _d166 = Path(_tf166.mkdtemp(prefix="smoke-166-", dir=str(ROOT / "logs")))
+    _root166 = str(_tm166._BASE_DIR.resolve())
+
+    # ① 注册表形状：每件都要有"装好了没"的判据（marker），落点一律在 `tools/` 下；
+    #    GitHub 源码包那一档**必须钉摘要**（官方不发校验和 ⇒ 不钉就等于放开未校验安装）。
+    assert _tm166.LOCAL_STACK, "LOCAL_STACK 空了（这一档整个消失，而清单还会说'环境齐了'）"
+    for _n166, _c166 in _tm166.LOCAL_STACK.items():
+        for _k166 in ("kind", "version", "dest", "max_bytes", "why"):
+            assert _c166.get(_k166), f"LOCAL_STACK[{_n166}] 缺 {_k166}"
+        assert _c166.get("marker") or _c166.get("marker_any"), \
+            f"LOCAL_STACK[{_n166}] 没有 marker ⇒ '装好了没'只能靠猜"
+        assert not Path(_c166["dest"]).is_absolute(), f"{_n166} 的落点必须是相对路径（§0.3）"
+        assert str(_c166["dest"]).split("/")[0] == _tm166.STACK_DEST_ROOT, \
+            f"{_n166} 的落点必须在 {_tm166.STACK_DEST_ROOT}/ 下（'都放到本地工作目录'那条口径）"
+        if _c166["kind"] == _tm166._STACK_GITHUB_TAG:
+            assert _c166.get("repo") and _c166.get("pin_sha256"), \
+                f"{_n166}：源码包没有官方校验和 ⇒ 必须钉摘要"
+            _a166 = _tm166.stack_asset(_n166)
+            assert _a166 in _c166["pin_sha256"], \
+                f"{_n166}：钉摘要的键 {_a166} 与 `stack_asset` 算出的产物名对不上（＝永远校验不到）"
+            assert all(_re166.fullmatch(r"[0-9a-f]{64}", str(v))
+                       for v in _c166["pin_sha256"].values()), f"{_n166} 的摘要形状不对"
+    # 三组注册表两两不相交：同一件东西进两个表＝两套口径（TOOLS 回写 settings、MANUAL 只打印命令、
+    # LOCAL_STACK 落 tools/<名>/，三者的"装好了没"判据完全不同）。
+    assert not (set(_tm166.LOCAL_STACK) & set(_tm166.TOOLS)), "LOCAL_STACK 与 TOOLS 重名"
+    assert not (set(_tm166.LOCAL_STACK) & set(_tm166.MANUAL)), "LOCAL_STACK 与 MANUAL 重名"
+
+    # ② 白名单：本轮**只**为三件事开口，每一个都要在这里点名（多开一个口就是红）。
+    _pre166 = {"api.github.com", "github.com", "objects.githubusercontent.com",
+               "release-assets.githubusercontent.com"}
+    assert set(_tm166._ALLOWED_HOSTS) - _pre166 == {"go.dev", "dl.google.com",
+                                                    "codeload.github.com"}, \
+        ("下载白名单被多开了口子（go.dev＝官方版本清单、dl.google.com＝Go 归档、"
+         f"codeload.github.com＝源码包 302 目标）：{sorted(set(_tm166._ALLOWED_HOSTS) - _pre166)}")
+    for _h166 in ("go.dev", "dl.google.com", "codeload.github.com"):
+        assert _tm166._check_url(f"https://{_h166}/x") == _h166, _h166
+    try:
+        _tm166._check_url("https://not-allowed.example/x")
+        raise AssertionError("白名单外的主机被放行 ⇒ 那条 https+白名单红线没了")
+    except ValueError:
+        pass
+    try:
+        _tm166._check_url("http://go.dev/x")
+        raise AssertionError("非 https 被放行")
+    except ValueError:
+        pass
+
+    # ③ 摘要的两个产地（与 TOOLS 同一套语义）：Go 走官方清单（release）、源码包走钉住的（pinned）；
+    #    清单里没有钉住的那一版 ⇒ **拒**（不跟 latest：跟了就是把没核过的字节装进仓库）。
+    _ver166 = _tm166.LOCAL_STACK["go"]["version"]
+    _gasset166 = _tm166.stack_asset("go")
+    assert _gasset166 and _gasset166.startswith("go" + _ver166), _gasset166
+    _js166 = _json166.dumps([{"version": "go" + _ver166,
+                              "files": [{"filename": _gasset166, "sha256": "a1" * 32}]}]).encode()
+    _dg, _sg, _ = _tm166.stack_digest("go", _gasset166, fetch=lambda u, t=60: _js166)
+    assert _sg == _tm166.VERIFY_RELEASE and _dg == "a1" * 32, (_dg, _sg)
+    _js2 = _json166.dumps([{"version": "go9.9.9",
+                            "files": [{"filename": _gasset166, "sha256": "b2" * 32}]}]).encode()
+    _dg2, _, _why2 = _tm166.stack_digest("go", _gasset166, fetch=lambda u, t=60: _js2)
+    assert _dg2 is None and _ver166 in _why2, \
+        f"官方清单换了版本就必须拒装（否则钉版本等于没钉）：{_dg2} / {_why2}"
+    _fa166 = _tm166.stack_asset("fscan-src")
+    _df, _sf, _ = _tm166.stack_digest("fscan-src", _fa166)
+    assert _sf == _tm166.VERIFY_PINNED and _df == _tm166.LOCAL_STACK["fscan-src"]["pin_sha256"][_fa166]
+    # URL 是**纯计算**（不联网）：Go 指 dl.google.com、源码包指 github.com 的 tag 归档
+    assert _tm166.stack_url("go") == f"https://dl.google.com/go/{_gasset166}", _tm166.stack_url("go")
+    assert _tm166.stack_url("fscan-src").endswith(
+        "/archive/refs/tags/" + _tm166.LOCAL_STACK["fscan-src"]["version"] + ".tar.gz")
+
+    # ④ `extract_tree`：剥顶层前缀、保可执行位、marker 缺就拒且**不留半成品**；
+    #    `..` / 绝对路径成员、以及"链接指到仓库外"一律拒（正反夹具各自证一次）。
+    def _mk_tar166(members, prefix="top/"):
+        buf = _io166.BytesIO()
+        with _tar166.open(fileobj=buf, mode="w:gz") as tf:
+            for name, data, mode in members:
+                ti = _tar166.TarInfo(prefix + name)
+                ti.size = len(data)
+                ti.mode = mode
+                tf.addfile(ti, _io166.BytesIO(data))
+        return buf.getvalue()
+
+    _ok166 = _mk_tar166([("Makefile", b"all:\n", 0o644), ("bin/tool", b"#!/bin/sh\n", 0o755)])
+    _n166f, _skip166 = _tm166.extract_tree(_ok166, "x.tar.gz", _d166 / "t1", strip=1,
+                                           marker=("Makefile",))
+    assert _n166f == 2 and (_d166 / "t1" / "Makefile").is_file(), (_n166f, _skip166)
+    assert not (_d166 / "t1" / "top").exists(), "顶层前缀没剥掉（落点会多一层目录）"
+    if os.name != "nt":
+        assert (_d166 / "t1" / "bin" / "tool").stat().st_mode & 0o111, \
+            "可执行位丢了 —— 症状是'下载解包都成功、编译却说权限不够'"
+    try:
+        _tm166.extract_tree(_ok166, "x.tar.gz", _d166 / "t2", strip=1, marker=("nope.txt",))
+        raise AssertionError("marker 缺失却当成功（＝把'形状不对的归档'当装好了）")
+    except ValueError:
+        pass
+    assert not list((_d166).glob("t2*")), f"失败后留了半成品：{list((_d166).glob('t2*'))}"
+    for _bad166 in (_mk_tar166([("../evil", b"x", 0o644)]),
+                    _mk_tar166([("/etc/evil", b"x", 0o644)], prefix="")):
+        try:
+            _tm166.extract_tree(_bad166, "x.tar.gz", _d166 / "t3", strip=1)
+            raise AssertionError(f"路径穿越成员被解出来了：{_bad166[:40]}")
+        except ValueError:
+            pass
+    # 链接指到仓库外＝把"工作目录内自足"这条卖掉，必须拒
+    _lnk166 = _io166.BytesIO()
+    with _tar166.open(fileobj=_lnk166, mode="w:gz") as _tf2:
+        _ti = _tar166.TarInfo("top/Makefile")
+        _ti.size, _ti.mode = 4, 0o644
+        _tf2.addfile(_ti, _io166.BytesIO(b"all\n"))
+        _ts = _tar166.TarInfo("top/escape")
+        _ts.type, _ts.linkname = _tar166.SYMTYPE, "/etc/passwd"
+        _tf2.addfile(_ts)
+    try:
+        _tm166.extract_tree(_lnk166.getvalue(), "x.tar.gz", _d166 / "t4", strip=1)
+        raise AssertionError("归档里的符号链接指到仓库外却没被拒")
+    except ValueError:
+        pass
+
+    # ⑤ `stack_install` 的四条拒装/放行路径（全离线：blob 注入 + 沙箱落点）
+    _fx166 = dict(_tm166.LOCAL_STACK["massdns-src"])
+    _fx166.update({"dest": "sandbox-166/comp", "marker": ("Makefile",),
+                   "pin_sha256": {"v1.1.0.tar.gz": _hl166.sha256(_ok166).hexdigest()}})
+    _keep166 = dict(_tm166.LOCAL_STACK)
+    try:
+        _tm166.LOCAL_STACK["_fx166"] = _fx166
+        _r1 = _tm166.stack_install("_fx166", dest_root=_d166, blob=_ok166)
+        assert _r1["ok"] and _r1["verified"] is True and _r1["verify_source"] == _tm166.VERIFY_PINNED
+        assert _tm166.stack_present("_fx166", _d166), "装好了却判不出'已就位'（会每次都重下）"
+        # 摘要不符 ⇒ 拒，且 `allow_unverified` **越不过**（那个开关只管"根本没有校验依据"）
+        _fx166["pin_sha256"] = {"v1.1.0.tar.gz": "0" * 64}
+        _r2 = _tm166.stack_install("_fx166", dest_root=_d166 / "o2", blob=_ok166)
+        _r3 = _tm166.stack_install("_fx166", dest_root=_d166 / "o2", blob=_ok166,
+                                   allow_unverified=True)
+        assert _r2["ok"] is False and "SHA256" in _r2["reason"], _r2
+        assert _r3["ok"] is False, "allow_unverified 越过了'摘要不符'（那是校验红线的底）"
+        # 没有任何摘要 ⇒ 默认拒；显式允许才装，且 `verified` 必须是 False（页面要如实显示"未校验"）
+        _fx166["pin_sha256"] = {}
+        _r4 = _tm166.stack_install("_fx166", dest_root=_d166 / "o3", blob=_ok166)
+        _r5 = _tm166.stack_install("_fx166", dest_root=_d166 / "o3", blob=_ok166,
+                                   allow_unverified=True)
+        assert _r4["ok"] is False and "默认拒绝" in _r4["reason"], _r4
+        assert _r5["ok"] is True and _r5["verified"] is False, _r5
+        assert _tm166.verified_label(_r5) == "未校验（按你的显式要求）", _tm166.verified_label(_r5)
+        # 平台没产物 ⇒ 如实报，不猜（拿 Windows 那种形状试：arch 改成不存在的）
+        assert _tm166.stack_asset("go", os_label="plan9", arch="mips") is None
+        # 已就位就不重下（`stack_update` 的 only_missing）
+        _rows166 = _tm166.stack_update(["_fx166"], dest_root=_d166)
+        assert _rows166[0]["ok"] and _rows166[0].get("already") is True, _rows166[0]
+        assert _tm166.stack_update(["nope-166"])[0]["ok"] is False, "未知组件名必须如实报失败"
+    finally:
+        _tm166.LOCAL_STACK.clear()
+        _tm166.LOCAL_STACK.update(_keep166)
+
+    # ⑥ 缓存与 env 的落点**只有一个产地**，且全在仓库内（"不影响其他的"这条的机器判据）
+    _env166 = _tm166.go_env()
+    for _k166 in ("GOPATH", "GOCACHE", "GOMODCACHE", "GOTMPDIR", "GOENV", "XDG_CONFIG_HOME"):
+        assert _k166 in _env166, f"go_env 少了 {_k166}（那一份就会落回默认位置＝家目录）"
+    _home166 = "HOME" if os.name != "nt" else "USERPROFILE"
+    assert _home166 in _env166, \
+        "go_env 必须把 HOME/USERPROFILE 也指进仓库：Go 在 macOS/Windows 上**不认** XDG_CONFIG_HOME"
+    assert _env166.get("GOTOOLCHAIN") == "local", "不许它按 go.mod 再去下一份别的 Go（绕过钉住的版本）"
+    for _k166, _v166 in _env166.items():
+        if _k166 in ("PATH", "GOTELEMETRY", "GOTOOLCHAIN"):
+            continue
+        assert str(_v166).startswith(_root166), f"go_env[{_k166}] 指到仓库外了：{_v166}"
+    assert str(_tm166.cache_path("pip")).startswith(_root166), _tm166.cache_path("pip")
+    # run_bootstrap 里**每一处** pip 调用都要带 env=_pip_env()（AST 数调用，不 grep 文本 —— §6.1 推论四）
+    _rb_src166 = (ROOT / "run_bootstrap.py").read_text(encoding="utf-8", errors="replace")
+    _rb_tree166 = _ast166.parse(_rb_src166)
+    _pipcalls166 = []
+    for _node in _ast166.walk(_rb_tree166):
+        if not (isinstance(_node, _ast166.Call) and isinstance(_node.func, _ast166.Attribute)
+                and _node.func.attr == "run"):
+            continue
+        _lit = _ast166.dump(_node.args[0]) if _node.args else ""
+        if "'pip'" in _lit:
+            _pipcalls166.append((_node.lineno, [kw.arg for kw in _node.keywords]))
+    assert len(_pipcalls166) >= 3, f"pip 调用点少了（找到 {len(_pipcalls166)} 处）——判据本身失效"
+    assert all("env" in _kw for _, _kw in _pipcalls166), \
+        f"有 pip 调用没带 env=（缓存会落回 ~/.cache/pip）：{_pipcalls166}"
+    # 变异证伪：把 env 关键字从 AST 里摘掉，上面那条必须报得出来
+    _mut166 = [(ln, [k for k in kws if k != "env"]) for ln, kws in _pipcalls166]
+    assert not all("env" in kws for _, kws in _mut166), "变异没生效 ⇒ 判据是空写"
+
+    # ⑦ 编译入口**当场走得通**（§6.2 第十六起那条口径）：直跑要能 import 到 `scanner.toolmgr`
+    #    （续166 之前必崩：`tools/scanner/` 那个同名命名空间包会顶掉真包），且脚本里不许再留
+    #    仓库外绝对路径兜底（那会让"这台机器编得出、换一台编不出"）。
+    def _outside166(text):
+        """源码里的字符串常量有没有指着仓库外的绝对路径（只扫常量，注释里提一句不算）。"""
+        out = []
+        for n in _ast166.walk(_ast166.parse(text)):
+            if isinstance(n, _ast166.Constant) and isinstance(n.value, str):
+                v = n.value
+                if v.startswith(("/opt/", "/home/", "/Users/", "/usr/local/ctf")) \
+                        or _re166.match(r"^[A-Za-z]:\\\\", v):
+                    out.append(v)
+        return out
+
+    # 判据自证：先确认它抓得到该抓的、也不误伤干净的（否则"0 命中"是空写）
+    assert _outside166("P = '/opt/tools/ctf/fscan-src'\n") == ["/opt/tools/ctf/fscan-src"]
+    assert _outside166("P = 'tools/fscan-src'  # /opt/… 只出现在注释里\n") == []
+    for _bn166 in ("build_fscan.py", "build_massdns.py"):
+        _bt166 = (ROOT / "tools" / _bn166).read_text(encoding="utf-8", errors="replace")
+        assert "sys.path.insert(0, str(ROOT))" in _bt166, \
+            f"{_bn166} 少了 path 自举 ⇒ 直跑时 --wire 会 ImportError（续166 实测就是这个形状）"
+        assert _outside166(_bt166) == [], f"{_bn166} 里还有仓库外绝对路径兜底：{_outside166(_bt166)}"
+
+    # ⑧ 端到端跑一次编译入口（**假工具链**：会写出产物的 go / make / cc 脚本）—— 验的是接线：
+    #    产物落点、`--wire` 写的是**给定的那份** settings、跟踪的那份一个字不动。
+    _bin166 = _d166 / "fakebin"
+    _bin166.mkdir()
+    (_bin166 / "go").write_text(
+        '#!/bin/sh\nout=""\nwhile [ $# -gt 0 ]; do\n  if [ "$1" = "-o" ]; then shift; out="$1"; fi\n'
+        '  shift\ndone\n[ -n "$out" ] && printf fake > "$out" && chmod +x "$out"\nexit 0\n',
+        encoding="utf-8")
+    (_bin166 / "make").write_text(
+        '#!/bin/sh\nmkdir -p bin && printf fake > bin/massdns && chmod +x bin/massdns\nexit 0\n',
+        encoding="utf-8")
+    (_bin166 / "cc").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    for _x166 in ("go", "make", "cc"):
+        os.chmod(str(_bin166 / _x166), 0o755)
+    _src_f166 = _d166 / "fscan-src"
+    _src_f166.mkdir()
+    (_src_f166 / "go.mod").write_text("module fake\n", encoding="utf-8")
+    _src_m166 = _d166 / "massdns-src"
+    _src_m166.mkdir()
+    (_src_m166 / "Makefile").write_text("all:\n\ttrue\n", encoding="utf-8")
+    _set166 = _d166 / "settings.yaml"
+    _sh166.copyfile(str(ROOT / "config" / "settings.yaml"), str(_set166))
+    _tracked_before166 = (ROOT / "config" / "settings.yaml").read_bytes()
+    _penv166 = dict(os.environ)
+    _penv166.update({"PATH": os.pathsep.join([str(_bin166), _penv166.get("PATH", "")]),
+                     "HOME": str(_d166 / "home"), "CTFSCANNER_FSCAN_SRC": "",
+                     "CTFSCANNER_MASSDNS_SRC": ""})
+    (_d166 / "home").mkdir()
+    try:
+        _p1 = _sp166.run([sys.executable, str(ROOT / "tools" / "build_fscan.py"),
+                          "--src", str(_src_f166), "--dest", str(_d166 / "out"),
+                          "--wire", "--settings", str(_set166)],
+                         cwd=str(ROOT), capture_output=True, text=True, env=_penv166, timeout=180)
+        assert _p1.returncode == 0, f"build_fscan 直跑失败（rc={_p1.returncode}）：{_p1.stdout[-400:]}" \
+                                    f"\n{_p1.stderr[-400:]}"
+        assert (_d166 / "out" / ("fscan.exe" if os.name == "nt" else "fscan")).is_file(), _p1.stdout[-300:]
+        _p2 = _sp166.run([sys.executable, str(ROOT / "tools" / "build_massdns.py"),
+                          "--src", str(_src_m166), "--dest", str(_d166 / "out"),
+                          "--wire", "--settings", str(_set166)],
+                         cwd=str(ROOT), capture_output=True, text=True, env=_penv166, timeout=180)
+        assert _p2.returncode == 0, f"build_massdns 直跑失败（rc={_p2.returncode}）：{_p2.stdout[-400:]}" \
+                                    f"\n{_p2.stderr[-400:]}"
+        # `--wire` 写回的必须是**相对路径**（§0.3），而且指的是沙箱那份产物
+        _wired166 = dict(_re166.findall(r"(?m)^\s{2}(fscan|massdns):\s*(\S+)\s*$",
+                                        _set166.read_text(encoding="utf-8", errors="replace")))
+        assert set(_wired166) == {"fscan", "massdns"}, f"两个 --wire 没都写进给定的那份配置：{_wired166}"
+        for _k166, _v166 in _wired166.items():
+            assert not _v166.startswith("/") and not _re166.match(r"^[A-Za-z]:", _v166), \
+                f"{_k166} 写回了绝对路径（§0.3）：{_v166}"
+            assert _v166.startswith("logs/smoke-166-") and _v166.endswith(_k166), \
+                f"{_k166} 写回的不是刚编出来的那一份：{_v166}"
+        # 跟踪的那份 settings.yaml 一个字节都不许动（门禁改用户的配置＝最坏的一种副作用）
+        assert (ROOT / "config" / "settings.yaml").read_bytes() == _tracked_before166, \
+            "编译脚本动了被跟踪的 config/settings.yaml"
+        # 变异证伪：把 path 自举那行摘掉，同一条命令必须红（证明 ⑧ 真在验"直跑能 import"）
+        _bf166 = (ROOT / "tools" / "build_fscan.py").read_bytes()
+        _mu166 = _bf166.replace(b"    sys.path.insert(0, str(ROOT))\n", b"    pass\n", 1)
+        assert b"sys.path.insert(0, str(ROOT))" not in _mu166, "变异没落盘（下面那条判据会空写）"
+        _mp166 = _d166 / "mutant_build_fscan.py"
+        _mp166.write_bytes(_mu166)
+        _p3 = _sp166.run([sys.executable, str(_mp166), "--src", str(_src_f166),
+                          "--dest", str(_d166 / "out2"), "--wire", "--settings", str(_set166)],
+                         cwd=str(ROOT), capture_output=True, text=True, env=_penv166, timeout=180)
+        _err3 = _p3.stderr + _p3.stdout
+        assert _p3.returncode != 0 and ("No module named" in _err3 or "ImportError" in _err3), \
+            f"摘掉 path 自举后 --wire 居然还能跑 ⇒ ⑧ 那条断言是空写：{_err3[-200:]}"
+    finally:
+        _sh166.rmtree(str(_d166), ignore_errors=True)
+
+    # ⑨ 真工具链那一档（**只在取了 Go 的机器上跑**）：编一个 hello 模块，验"调用方给的 HOME
+    #    一个文件都不会多"。没取 Go 就如实打印"这一条本次没验到"，绝不冒充通过。
+    _go166 = _tm166.stack_local_go()
+    if _go166:
+        _hd166 = Path(_tf166.mkdtemp(prefix="smoke-166h-", dir=str(ROOT / "logs")))
+        _mod166 = _hd166 / "hello"
+        _mod166.mkdir()
+        (_mod166 / "go.mod").write_text("module hello\n\ngo 1.20\n", encoding="utf-8")
+        (_mod166 / "main.go").write_text(
+            'package main\n\nfunc main() { println("hi") }\n', encoding="utf-8")
+        _henv166 = dict(os.environ)
+        _henv166.update(_tm166.go_env())
+        _henv166["HOME"] = str(_hd166 / "callerhome")     # 调用方给的家目录（必须保持空）
+        (_hd166 / "callerhome").mkdir()
+        for _k166 in ("GOTMPDIR", "GOCACHE", "GOMODCACHE", "GOPATH", "XDG_CONFIG_HOME"):
+            Path(_henv166[_k166]).mkdir(parents=True, exist_ok=True)
+        try:
+            _p4 = _sp166.run([str(_go166), "build", "-o", str(_hd166 / "hello.bin"), "."],
+                             cwd=str(_mod166), capture_output=True, text=True,
+                             env=_henv166, timeout=300)
+            if _p4.returncode == 0:
+                _leaks166 = [str(p.relative_to(_hd166 / "callerhome"))
+                             for p in (_hd166 / "callerhome").rglob("*")]
+                assert _leaks166 == [], \
+                    f"用仓库内 Go 编译时往调用方 HOME 写了东西：{_leaks166[:5]}"
+                _note166 = ("真 Go 编一次 hello：调用方 HOME 零写入（Linux 靠 XDG_CONFIG_HOME 重定向；"
+                            "macOS/Windows 那一档靠 go_env 直接改 HOME/USERPROFILE，本机验不到）")
+            else:
+                _note166 = f"真 Go 那一条**本次没验到**（编译 rc={_p4.returncode}，不是通过）"
+        finally:
+            _sh166.rmtree(str(_hd166), ignore_errors=True)
+    else:
+        _note166 = "本机没取仓库内 Go（--with-stack 才会取）⇒ 'HOME 零写入'那一条**本次没验到**（不是通过）"
+
+    print("[166] 续166 工作目录内运行时组件 ok: 注册表形状 + 落点全在 tools/ 下｜白名单只多开三个口"
+          "（多开一个即红）｜摘要两个产地（Go＝官方清单 / 源码包＝钉住），清单换版本即拒、"
+          "字节不符 allow_unverified 也越不过｜extract_tree 剥前缀·保可执行位·marker 缺即拒且不留半成品·"
+          "路径穿越与'链接指仓库外'都拒｜缓存与 env 一个产地且全在仓库内（run_bootstrap 每处 pip 调用"
+          "都带 env，AST 数出来的）｜两个编译脚本直跑能 import（摘掉 path 自举即红）+ 端到端假工具链"
+          "跑通 --wire 且**跟踪的 settings.yaml 一个字节没动**｜" + _note166)
+
     # ---------------- [8as] 续140：记忆同步是硬规矩（AGENTS §0.4 + §10 多 agent） ----------------
     #      用户点单（2026-10-09）：「我们的记忆你都要同步到todo，以及修改完同步是硬记录，
     #      让我们换对话框，换AI也能接着执行」+「把多agent执行加入记忆…就算其他ai来了也会多agent执行」。

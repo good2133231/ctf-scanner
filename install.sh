@@ -7,10 +7,20 @@
 #
 # 用法：
 #   ./install.sh                       标准安装（.venv + pip 依赖 + subfinder/httpx/puredns/afrog）
+#   ./install.sh --full                **一条命令把环境建全**（续166）：标准安装
+#                                      + 工作目录内取 Go 便携归档与上游源码包（--with-stack）
+#                                      + 就地编译 fscan 与 massdns（--with-build）
+#                                      全部落在仓库内（tools/ 与 .cache/），不装系统包、不写家目录
+#   ./install.sh --with-stack          只取运行时组件（Go / 源码包），不编译
 #   ./install.sh --with-system --yes    额外让发行版包管理器**真装** nmap / 浏览器 / Go / CJK 字体
-#   ./install.sh --with-build           标准安装 + 用本机 Go 从源码编译 fscan（官方不发二进制）
+#   ./install.sh --with-build           标准安装 + 编译 fscan 与 massdns（用本机工具链；
+#                                      给了 --with-stack 才会自动取缺的 Go / 源码）
 #   ./install.sh --no-venv             装到当前解释器（容器 / 受控环境里常用）
 # 其余参数原样透传给 run_bootstrap.py（--only / --allow-unverified / --tools-dest / --no-wire）。
+#
+# ⚠ 仍然**做不到**的（如实说，不假装）：`massdns` 要本机 gcc/make（C 工具链没有便携替代品）；
+#   `nmap` 只有系统包；截图用的浏览器与 CJK 字体目前仍要系统装（没有它们框架照跑，
+#   只是截图里中文变方块、端口扫描退回内置 TCP connect）。
 #
 # ⚠ 本文件必须保持 **LF** 行尾（.gitattributes 已钉）：CRLF 的 shebang 会让 bash 报
 #   `/usr/bin/env bash\r: bad interpreter`，从 Windows 检出后直接跑不起来。
@@ -43,12 +53,20 @@ fi
 echo "[*] 用 $PY（$("$PY" -V 2>&1)）"
 
 # ---- ② 真正的安装：联网只发生在这一层，且只有显式 --install 才下载 ----
-# `--with-build` 是**本脚本自己**的开关（不是 run_bootstrap 的）：先把它剔出去，免得 run_bootstrap
-# 报"未知参数"（本项目最忌讳"传了被静默忽略"）。其余参数原样透传。
+# `--with-build` / `--full` 是**本脚本自己**的开关（不是 run_bootstrap 的）：先剔出去，免得
+# run_bootstrap 报"未知参数"（本项目最忌讳"传了被静默忽略"）。`--full` 展开成
+# `--with-stack`（透传给 run_bootstrap）+ `--with-build`（本脚本自己执行编译入口）。
+# 其余参数原样透传。
 WITH_BUILD=0
+WITH_STACK=0
 ARGS=()
 for _a in "$@"; do
-  if [ "$_a" = "--with-build" ]; then WITH_BUILD=1; else ARGS+=("$_a"); fi
+  case "$_a" in
+    --with-build) WITH_BUILD=1 ;;
+    --with-stack) WITH_STACK=1; ARGS+=("$_a") ;;
+    --full)       WITH_BUILD=1; WITH_STACK=1; ARGS+=("--with-stack") ;;
+    *)            ARGS+=("$_a") ;;
+  esac
 done
 # 不用 `set -e` 直接吃掉它的退出码：run_bootstrap 对"pip 依赖装不上"与"可选的 subfinder 没下下来"
 # 一律返回 1，而后者**不影响框架跑通**（会自动降级到内置实现）。这里把码记下来、先做完复验与
@@ -71,13 +89,22 @@ if [ "$BOOT_RC" -ne 0 ]; then
   echo "    （GitHub release 不可达 / 校验和对不上就拒绝落盘）。框架本身仍能跑，只是覆盖面与速度不如本体。"
 fi
 
-# ---- ④ 可选：--with-build 时用本机 Go 从源码编译 fscan ----
-# fscan 官方不发二进制（本仓为避免 Defender 拦截的既定做法是自编译）。这一步**显式**才发生，
-# 逻辑在 tools/build_fscan.py（不塞进 run_bootstrap：那条自动层被测试钉死了"绝不代跑系统级命令"）。
+# ---- ④ 可选：编译层（fscan 用 Go、massdns 用 gcc/make）----
+# 两家官方都不发"可校验的单二进制"，只能自编译。这一步**显式**才发生，逻辑在 tools/build_*.py
+# （不塞进 run_bootstrap：那条自动层被测试钉死了"绝不代跑系统级命令"，`go build` / `make` 都在禁列）。
+# `--fetch` 只在用户已经要了 `--with-stack` 时才给 —— 那等于已经同意"缺的件下进仓库"；
+# 只给 `--with-build` 时保持老行为：缺 Go / 缺源码就**如实报**并印出获取命令，不擅自下 70 MB。
 if [ "$WITH_BUILD" = "1" ]; then
-  echo "[*] --with-build：尝试用本机 Go 从源码编译 fscan（缺 Go / 缺源码会如实报，不静默跳过）"
-  "$RUNPY" tools/build_fscan.py --wire \
+  FETCH=""
+  if [ "$WITH_STACK" = "1" ]; then FETCH="--fetch"; fi
+  echo "[*] --with-build：编译 fscan（缺 Go / 缺源码会如实报，不静默跳过）"
+  # shellcheck disable=SC2086  # $FETCH 刻意不加引号：空值时不能变成"一个空参数"
+  "$RUNPY" tools/build_fscan.py --wire $FETCH \
     || echo "[!] fscan 编译未完成（原因见上）。框架仍能跑：端口扫描自动回退 nmap → 内置 TCP connect。"
+  echo "[*] --with-build：编译 massdns（puredns 的传递依赖；**要本机 gcc/make**，没有便携替代品）"
+  # shellcheck disable=SC2086
+  "$RUNPY" tools/build_massdns.py --wire $FETCH \
+    || echo "[!] massdns 编译未完成（原因见上）。框架仍能跑：puredns 会被预检跳过、子域名爆破回退内置那路。"
 fi
 
 cat <<'EOF'
@@ -111,10 +138,14 @@ cat <<'EOF'
 随机前缀已打码成 <前缀已脱敏> —— 这份日志看得出谁打了哪个页面，看不出后台路径。
 
 **本脚本刻意没做**（是 run_bootstrap.py 的红线，不是漏了）：
-  · nmap / fscan / dirmap：要么装进系统目录（要 root）、要么要用 Go 自编译 —— 代跑就是越
-    "系统级动作"的界，还会绕过 toolmgr 那条 SHA256 校验红线。上面输出里**按平台印了命令**，
-    自己复制执行；真想让它代装系统包：./install.sh --with-system --yes
-  · CJK 字体与浏览器：站点截图 / PDF 报告里的中文要靠它们，同上（没有也能跑，只是截图里中文变方块）。
+  · nmap：只有系统包（官方发布在 nmap.org/dist，不在 GitHub release）—— 代跑就是越"系统级动作"的界。
+    上面输出里**按平台印了命令**，自己复制执行；真想让它代装系统包：./install.sh --with-system --yes
+  · fscan / massdns：**能自动，但要你点头** —— ./install.sh --full 会把 Go 便携归档与上游源码包
+    取进仓库（过 SHA256）再就地编译，全程不装系统包、不写家目录（缓存在 .cache/，实测一次编译
+    GOMODCACHE 192 MB + GOCACHE 239 MB，默认那套会写进 ~/go 与 ~/.cache）。
+    ⚠ massdns 仍需**本机 gcc/make**：C 工具链没有"便携且可校验"的官方产物，缺它就如实报、不假装编成。
+  · CJK 字体与浏览器：站点截图 / PDF 报告里的中文要靠它们，目前仍要系统装（没有也能跑，
+    只是截图里中文变方块）。
   · 没有这些外部工具框架**仍能跑通**：会自动降级到内置实现，只是覆盖面与速度不如本体。
 
 **换机器别拷 .venv**：venv 里写死了绝对路径（pyvenv.cfg、bin/activate、各 console script 的

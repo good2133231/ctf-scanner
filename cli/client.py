@@ -578,6 +578,10 @@ def main():
                     help="按平台点清环境缺口（解释器/pip 依赖/外部工具/浏览器）后退出；**不联网**")
     ap.add_argument("--bootstrap-install", action="store_true",
                     help="探测后执行「自动层」：pip 依赖 + toolmgr 的 TOOLS；nmap/fscan/dirmap 只打印命令、绝不代跑（见 run_bootstrap.py 文件头）")
+    ap.add_argument("--bootstrap-stack", action="store_true",
+                    help="配合 --bootstrap-install：取「工作目录内运行时组件」（Go 便携归档"
+                         "+ 上游源码包；过 SHA256、落 tools/ 与 .cache/，**不装系统包、"
+                         "不代跑编译** —— 编译仍走 tools/build_*.py，续166）")
     ap.add_argument("--resume-task", type=int, metavar="ID",
                     help="续跑**指定任务的断点**：沿用该任务已有的目标/阶段/选项与库中资产，"
                          "只重跑断点及其之后的阶段（等价 GUI 任务详情页的「续跑」按钮）。"
@@ -712,6 +716,8 @@ def main():
             _bs.append("--no-wire")
         if args.tools_dest:
             _bs += ["--tools-dest", args.tools_dest]
+        if args.bootstrap_stack:
+            _bs.append("--with-stack")
         sys.exit(run_bootstrap.main(_bs))
         return
     if args.check_updates:

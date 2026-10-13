@@ -116,6 +116,10 @@ docker compose start
 容器里用 `apt-get install -y nmap` 之后重建镜像，或自己写个基于本镜像的派生 Dockerfile。
 `massdns` 是 **puredns 的传递依赖**（puredns 在进程内 exec 它，官方只发 C 源码）：镜像里
 `apt-get install -y build-essential git` 再 `python tools/build_massdns.py --src ./massdns --wire`。
+续166 起容器里也能一条命令自建：`python run_bootstrap.py --install --with-stack` 把 Go 便携归档
+与上游源码包取进 `tools/`（过 SHA256），再 `python tools/build_fscan.py --fetch --wire` /
+`python tools/build_massdns.py --fetch --wire` 就地编译；构建缓存落 `.cache/`（在命名卷外，
+**重建镜像会丢**，重编约 20 秒）。`massdns` 仍需 `build-essential`（C 工具链无便携替代品）。
 **不装也不影响**：`subdomain` 阶段会预检到缺它并自动回退内置 DNS 爆破。
 
 > **要在容器里用截图 / PDF，必须同时装浏览器和中文字体**（续103）：

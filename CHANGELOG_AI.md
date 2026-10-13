@@ -2,6 +2,104 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续166 换一台机器一条命令把环境建全（第一层）：「工作目录内运行时组件」立起来 —— Go 便携版与上游源码包自己取、自己核、自己编，一个字节都不写仓库外
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux。主理人点单原话：「你要实现我们源码 换一台机子自主完成
+一切环境构造 并且最好都放到本地工作目录 不影响其他的 如果是密钥类的 可以安装时候配置」。当场定了四条：
+大件**全下**（Go / 便携 CPython / CJK 字体 / Chrome for Testing）、浏览器也下、密钥走**交互问答 +
+环境变量**、没有官方校验和的一律**我们自己核并钉摘要**。一件件加起来 400 MB 量级、且每件都要单独核实
+与钉摘要 ⇒ **拆成三轮**，本轮只做地基（Go + 源码包 + 缓存落点），渲染栈与密钥入口排后两轮。
+
+### 一、先把"能不能自动"逐件问官方（2026-10-13 查接口，不抄记忆）
+
+| 组件 | 便携产物 | 官方校验和 | 体积 | 本轮结论 |
+| --- | --- | --- | --- | --- |
+| Go 工具链 | ✓ `go.dev/dl` | ✓ `?mode=json` 里带 `sha256` | 归档 70,590,635 B / 解包 283 MB | **做了**（`verify_source=release`） |
+| fscan 源码（tag v2.2.1） | ✓ GitHub tag 归档 | ✗ | 6,764,308 B / 1094 文件 | **做了**（钉摘要 `ee9007ff…`） |
+| massdns 源码（tag v1.1.0） | ✓ 同上 | ✗ | 751,113 B / 61 文件 | **做了**（钉摘要 `93b14431…`） |
+| Chrome for Testing | ✓ | ✗（JSON 只有 `platform`+`url`） | 198,195,769 B | 排后一轮 |
+| Noto Sans CJK sc | ✓ `08_NotoSansCJKsc.zip` | ✗ | 90.1 MB | 排后一轮 |
+| 便携 CPython 3.11（dirmap 用） | ✓ `astral-sh/python-build-standalone` | ✓ release 带 `SHA256SUMS` | 3.11.17 `install_only` | 排后一轮 |
+| massdns 的 **C 编译器** | ✗ 不存在便携且可校验的产物 | — | — | **做不到**，如实报（仍需本机 gcc/make） |
+
+### 二、`toolmgr` 多出第三档注册表 `LOCAL_STACK`（与 `TOOLS` / `MANUAL` 两两不相交）
+
+为什么要第三档而不是塞进 `TOOLS`：`TOOLS` 的语义是"扫描期真被调用的**单二进制**、装完回写
+`tools.<名>`"，而 Go 与源码包既不被扫描路径调用、也不回写配置，解包出来的是**一棵目录树**
+（`extract_binary` 那套"只取一个文件"的模型套不上）。塞进去还会连带改掉 GUI「外部工具」页的
+复选框语义与 `--update-tools` 的行为。三档的分工现在写死在模块注释里，`[166]①` 钉住两两不相交。
+
+**校验与文案全部复用既有原语**（§5.14，一个第二产地都没造）：`download_bytes`（https + 白名单 +
+跳转后再校验 + 大小上限）、`verified_label()` / `verify_policy()`、"字节与摘要不符就拒装、
+`allow_unverified` 也越不过"这一条与 `install()` 逐字同义。新增的只有：
+
+- `extract_tree()`：解包成目录。剥顶层前缀（`fscan-2.2.1/`、`go/`）、**保留可执行位**（tar 的 `mode`、
+  zip 的 `external_attr`；丢了它的症状是"下载解包都成功、编译却说权限不够"）、先解到 `.part-<pid>`、
+  marker 齐了才 `os.replace` 换上（失败会把旧的换回来）、任何异常都不留半成品；`..` / 绝对路径成员 /
+  **指到仓库外的符号链接**一律拒（正反夹具都在 `[166]④` 里）。
+- `_markers_ok()` 是"这一件装好了没"的**唯一判据**（`extract_tree` 收尾与 `stack_present` 共用）。
+  它是被实跑逼出来的：第一版把 Go 的 `bin/go` / `bin/go.exe` 写成"两个都要"，Linux 上于是永远缺
+  `bin/go.exe`，报成"归档形状与注册表对不上"—— 下载与摘要明明全对。
+- `stack_url()` / `stack_asset()` **纯计算不联网**；`stack_digest()` 分两个产地：Go 走官方清单
+  （清单里查不到钉住的那一版就**拒装**，不跟 latest，与 puredns 同一理由），源码包走钉住的摘要。
+- 白名单**只多开三个口**，每个都对一件事：`go.dev`（版本清单＝摘要产地）、`dl.google.com`（Go 归档）、
+  `codeload.github.com`（tag 归档的 302 目标）。`[166]②` 钉的是"**恰好多这三个**"，多开一个即红。
+
+### 三、"不影响其他的"这条是实测出来的，不是推出来的
+
+把 `HOME` 指到仓库内一个空目录、用仓库内 Go 编一次 fscan，编完那目录里躺着
+`.config/go/telemetry/local/go@go1.27.2-….count`。查证结果：**`GOTELEMETRY=off` 挡不住它**
+（给了与不给，目录照样建）；`XDG_CONFIG_HOME` 指进仓库才真的重定向（Linux）。而 Go 取用户配置目录
+在 macOS 是 `~/Library/Application Support`、Windows 是 `%AppData%`，**两者都不认 XDG** ⇒
+`go_env()` 连 `HOME`（POSIX）/ `USERPROFILE`+`APPDATA`+`LOCALAPPDATA`（Windows）一起指进
+`.cache/gohome`，另加 `GOTOOLCHAIN=local`（不许它按 `go.mod` 再去下一份别的 Go，那会绕过钉住的版本）。
+改完复测：**调用方给的 HOME 里一个文件都没有**，真家目录 `~/.config/go` 的 mtime 仍停在 10-02。
+pip 那侧同理：`run_bootstrap` 三处 pip 调用全部带 `env=_pip_env()`（`PIP_CACHE_DIR=.cache/pip`、
+`PIP_NO_INPUT=1`）—— 判据用 **AST 数调用**，不 grep 文本（§6.1 推论四）。
+缓存的实际体积（本机实测）：一次 fscan 编译 `GOMODCACHE` **192 MB** + `GOCACHE` **239 MB**，
+默认那套会写进 `~/go` 与 `~/.cache/go-build`。
+
+### 四、顺手修掉两条**从来没跑通过**的出路（§6.2 第十九起）
+
+`python tools/build_fscan.py --wire` 与 `build_massdns.py --wire` 一律 `ImportError`：脚本直跑时
+`sys.path[0]` 是 `tools/`，而那里正好有个同名的 `tools/scanner/`（外部工具落点）⇒
+`from scanner import toolmgr` 撞到那个**命名空间包**，报 `cannot import name 'toolmgr' from
+'scanner' (unknown location)`。`--wire` 是唯一会走到这句的分支，而门禁里**没有任何一条真跑过这两个
+脚本** ⇒ 续165 我刚把这条命令当"出路"写进四份文档时它已经是坏的。同一批还摘掉了两个脚本里
+`/opt/tools/ctf/{fscan,massdns}-src` 那个仓库外绝对路径兜底（违反 §0.3，默认读项目外还违反 §0.2，
+而且它让"这台机器编得出、换一台编不出"）。
+修法：补 `sys.path` 自举、加 `--fetch`（缺件就自己取）与 `--settings`（门禁因此能用沙箱副本验
+`--wire`，**不动被跟踪的配置**）；`[166]⑦⑧` 用**假工具链**（会写出产物的 `go`/`make`/`cc` 脚本）
+真跑两个入口，并做变异证伪（摘掉 `sys.path.insert` 那行 ⇒ 同一条命令必须红）。
+
+### 五、实测数字
+
+- 门禁 `./.venv/bin/python tests/smoke.py` ⇒ **SMOKE PASS**，组打印 **192** 行（上一轮 190，
+  本轮 `[166]` 占进度行与 ok 行两行）；`[166]` 九节全部离线可跑（只有 ⑨ 用真 Go，且**没取 Go 的
+  机器会如实打印"这一条本次没验到"**，不冒充通过）。
+- Go：下载+校验+解包 **5.3 s**（15,657 个文件、283 MB），摘要与官方 JSON 逐字相同；
+  `tools/go/bin/go version` → `go version go1.27.2 linux/amd64`。
+- fscan：源码包 6,764,308 B → 1094 个文件（跳过 1 个＝归档的顶层目录项，已如实计数）；
+  用**仓库内** Go（PATH 里没有系统 go）编 **21.9 s** → 28,229,792 B；用本机 apt Go 1.26.0 编
+  同一份源码 20.2 s → 27,869,449 B（工具链版本不同，产物字节自然不同）。
+- massdns：源码包 751,113 B → 61 个文件，`make` **2.7 s** → `tools/scanner/massdns` 133,816 B，
+  跑起来正常打印 usage；`--wire` 后 `which()` 命中它 ⇒ **续165 那道"缺 massdns 就跳过 puredns"的
+  预检在本机不再触发**（puredns 的深字典这条路第一次真的可用）。
+- `run_bootstrap.py` 清单：本机从 `已就绪 19｜需手工 1` 变成 **`已就绪 20｜可自动补齐 0｜需手工 0`**
+  （第一次零手工项）；`--with-stack` 对已就位的三件报 `[=] 已就位 … 不重下` 且**不计进"本轮已装"**
+  （拿旧状态冒充本轮成果就是假话）。
+- 13 个改动文件 `git diff --numstat` 与 `--ignore-cr-at-eol --numstat` **逐文件相等**。
+
+### 六、还没做 / 坑（详单在 todo.txt）
+
+- **Chrome for Testing + CJK 字体（渲染栈）** 与 **密钥安装期入口** 排在后两轮；便携 CPython 3.11
+  那一档要先查证上游 dirmap **哪一支还带 `-e`**（v1.1 起已删，自动下 master 会得到"装了却用不上"）。
+- `fscan` 编译期**必须联网**取 Go 模块（192 MB）；离线机器上这一步必然失败，本框架不做模块镜像。
+- 本机 `tools.fscan` 仍指仓库外的目录联接（续45 主理人点单的形状，本轮**刻意没动**）；`--full` 编出的
+  产物在 `tools/scanner/fscan`，改指它是一行的事，等点头。
+- `./install.sh --full` **本轮没在真正的裸机上跑过**（本机 gcc/make/git/系统 Go 都在）：验到的是
+  "PATH 里没有 go 时用仓库内 Go 编成功"与"HOME 零写入"，**没有验** "一台什么都没有的机器"。
+
 ## 续165 收口上一段会话留在工作树的三件事 —— passive「未取到」分因、puredns 缺 massdns 的预检、站点按标题聚合（另：抓出它自己造的一处假绿）
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux。开场状态：主理人只说了「继续工作」，而 `git status` 挂着

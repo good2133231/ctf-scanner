@@ -211,6 +211,20 @@ def _fetch_get_pip(dst):
     return len(data)
 
 
+def _pip_env():
+    """跑 pip 时该带的 env：把下载缓存收进仓库内（**唯一产地**是 `toolmgr.cache_path`）。
+
+    为什么要它：pip 默认写 `~/.cache/pip`（Windows 是 `%LOCALAPPDATA%\\pip\\cache`）—— "装一个
+    项目却在家目录留一坨"正是本轮要消掉的形状（Go 那侧同一口径，见 `toolmgr.go_env`）。
+    `PIP_NO_INPUT=1` 一并给上：自举可能在无终端环境跑，交互式提问会挂住。
+    """
+    from scanner import toolmgr
+    env = dict(os.environ)
+    env["PIP_CACHE_DIR"] = str(toolmgr.cache_path("pip"))
+    env["PIP_NO_INPUT"] = "1"
+    return env
+
+
 def ensure_venv(root=None):
     """把项目内 `.venv` 建起来并保证里面有 pip。**幂等**：已可用就复用，绝不重建覆盖。
 
@@ -225,7 +239,7 @@ def ensure_venv(root=None):
     pre_existed = venv_dir.exists()          # 只有"本次新建的半成品"才敢删，见下面
     if py.exists():
         if subprocess.run([str(py), "-m", "pip", "--version"],
-                          capture_output=True, text=True).returncode == 0:
+                          capture_output=True, text=True, env=_pip_env()).returncode == 0:
             return True, f"复用 {VENV_DIR}（pip 可用）"
         ok, msg = _bootstrap_pip(py, venv_dir)
         return ok, (msg if not ok else f"{VENV_DIR} 已存在但缺 pip → {msg}")
@@ -317,7 +331,7 @@ def pick_requirements_file():
     try:
         chk = subprocess.run([sys.executable, "-m", "pip", "install", "--dry-run",
                               "--disable-pip-version-check", "-r", REQ_LOCK],
-                             cwd=str(ROOT), capture_output=True, text=True)
+                             cwd=str(ROOT), capture_output=True, text=True, env=_pip_env())
     except OSError as exc:
         # 预检本身起不来＝"没验证过"，不能当成"验证通过"，回落声明层并说清是哪一步炸的
         return REQ_TXT, f"{REQ_LOCK} 无法预检（{exc}）"
@@ -532,6 +546,18 @@ def probe(settings=None):
     for name in toolmgr.MANUAL:
         rows.append(_manual_row(name, os_label, mgrs, tools_cfg, resolve))
 
+    # 续166：**工作目录内运行时组件**（Go 便携归档 / 上游源码包）。它们既不是 `TOOLS`
+    # （不回写 `tools.<名>`、扫描期不调用），也不是 `MANUAL`（`--with-stack` 就能自动取，
+    # 不必用户手工做）⇒ 单独一档 `kind="stack"`、`auto=False`（默认 `--install` 不顺手拉
+    # 70 MB 的 Go），并且**绝不混进"需手工"那一栏**（混进去就是骗人：它明明能自动取）。
+    # `stack_status()` 只看文件系统，一条请求都不发（`[8d]③` 那条"probe 零网络"照样成立）。
+    for _stk in toolmgr.stack_status():
+        rows.append(_row(_stk["name"], "stack", False,
+                         "ok" if _stk["present"] else "missing",
+                         (f"已就位 {_stk['dest']}（{_stk['version']}）" if _stk["present"]
+                          else f"未取（{_stk['version']} → {_stk['dest']}）：{_stk['why']}"),
+                         [] if _stk["present"] else ["python run_bootstrap.py --with-stack"]))
+
     path = screenshot.browser_path(st)
     if path and snap_confined(path):
         # Ubuntu ≥24 的 apt chromium 只是 snap 过渡壳，而 snap 的 confinement 让它**写不到**
@@ -591,7 +617,9 @@ def _manual_row(name, os_label, mgrs, tools_cfg, resolve):
                 else f"tools/scanner/{binary}")
         cmds = ["git clone https://github.com/shadow1ng/fscan",
                 "cd fscan && git checkout v2.2.1",
-                'go build -ldflags="-s -w" -trimpath -o ' + dest]
+                'go build -ldflags="-s -w" -trimpath -o ' + dest,
+                "一条命令版（续166）：python tools/build_fscan.py --fetch --wire"
+                "（缺 Go / 缺源码就取进仓库、过 SHA256，缓存落 .cache/ 不写家目录）"]
         found = _rel(which(tools_cfg.get("fscan", "fscan")))
         why = toolmgr.MANUAL["fscan"]
         if not found:
@@ -604,7 +632,9 @@ def _manual_row(name, os_label, mgrs, tools_cfg, resolve):
         #   ⇒ 只能 `make` 出 bin/massdns，本框架不为它发任何请求，只打印本仓那条自编译命令。
         found = _rel(which(tools_cfg.get("massdns", "massdns")))
         why = toolmgr.MANUAL["massdns"]
-        cmds = ["git clone https://github.com/blechschmidt/massdns && "
+        cmds = ["一条命令版（续166）：python tools/build_massdns.py --fetch --wire"
+                "（源码按确切 tag 取进仓库、摘要由本框架钉住；**仍需本机 gcc/make**）",
+                "git clone https://github.com/blechschmidt/massdns && "
                 "git -C massdns checkout v1.1.0",
                 "python tools/build_massdns.py --src ./massdns --wire（需 gcc/make）"]
     elif name == "dirmap":
@@ -637,22 +667,29 @@ def _manual_row(name, os_label, mgrs, tools_cfg, resolve):
 # ---------- 汇总 / 自动层 / 打印 ----------
 
 def summarize(rows):
-    """分成三堆：已就绪 / 本脚本能补（auto）/ 只能用户动手（manual）。"""
+    """分成四堆：已就绪 / 本脚本能补（auto）/ `--with-stack` 能补（stack）/ 只能用户动手（manual）。"""
     return {"rows": rows,
             "ok": [r for r in rows if r["status"] == "ok"],
             "todo_auto": [r for r in rows if r["auto"] and r["status"] != "ok"],
-            "todo_manual": [r for r in rows if not r["auto"] and r["status"] != "ok"]}
+            "todo_stack": [r for r in rows if r["kind"] == "stack" and r["status"] != "ok"],
+            "todo_manual": [r for r in rows
+                            if not r["auto"] and r["status"] != "ok" and r["kind"] != "stack"]}
 
 
 def render(s, failed=(), installed=(), install=False, sys_plan=()):
     """打印报告。CLI 口径：命令可直接复制，路径原样（不遮项目外路径）。"""
     os_label, arch, mgrs = platform_info()
+    # `s` 可能来自调用方自己拼的字典（门禁里就有），所以这一堆一律 `.get` 兜空。
+    _stk166 = s.get("todo_stack") or []
     print(f"[*] 迁移自举｜平台 {os_label}/{arch}｜包管理器 {'、'.join(mgrs) or '无'}")
     print(f"  已就绪 {len(s['ok'])}｜可自动补齐 {len(s['todo_auto'])}｜需手工 {len(s['todo_manual'])}"
+          + (f"｜工作目录内可取 {len(_stk166)}" if _stk166 else "")
           + (f"｜本轮已装 {len(installed)}" if installed else "")
           + (f"｜自动层失败 {len(failed)}" if failed else ""))
     auto_title = "仍未就绪（自动层没补上）" if install else "可自动补齐（加 --install 就会装）"
     for title, items in (("需要手工安装（本框架不自动下载、也不代跑）", s["todo_manual"]),
+                         ("工作目录内运行时组件（加 --with-stack 就取；全落仓库内、不写家目录）",
+                          _stk166),
                          (auto_title, s["todo_auto"])):
         if not items:
             continue
@@ -701,7 +738,7 @@ def install_auto(only=(), allow_unverified=False, dest_dir=None, wire=True):
             req_file, req_why = pick_requirements_file()
             print(f"[i] Python 依赖清单：本次用 {req_file} —— {req_why}")
             p = subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file],
-                               cwd=str(ROOT), capture_output=True, text=True)
+                               cwd=str(ROOT), capture_output=True, text=True, env=_pip_env())
             tail = (p.stderr or p.stdout or "").strip().splitlines()
             if p.returncode == 0:
                 installed.append({"tool": "requirements", "path": req_file})
@@ -735,6 +772,37 @@ def install_auto(only=(), allow_unverified=False, dest_dir=None, wire=True):
     return installed, failed
 
 
+def install_stack(only=(), allow_unverified=False, timeout=600):
+    """**工作目录内运行时组件**层（`--with-stack`）：Go 便携归档 + 上游源码包。
+
+    与自动层同一批红线，一条都没松：只走 `toolmgr` 的 https + 主机白名单 + 落盘前 SHA256
+    （摘要产地如实标注：Go 来自官方 `?mode=json`，源码包来自本框架钉住的那串）；
+    **一个子进程都不起** ⇒ `[8d]②` 那份"自动层只许四类意图"的名单一条都不用改。
+    编译仍归 `tools/build_fscan.py` / `tools/build_massdns.py` 那两个显式入口 ——
+    本函数只把"编译要吃的件"取齐，**不代跑 make / go build**（那是红线）。
+    落点与缓存全在仓库内（`toolmgr.LOCAL_STACK[*]["dest"]` 与 `toolmgr.cache_path`）。
+    """
+    from scanner import toolmgr
+    names = [n for n in only if n] or list(toolmgr.LOCAL_STACK)
+    installed, failed = [], []
+    for r in toolmgr.stack_update(names, allow_unverified=allow_unverified, timeout=timeout):
+        if r.get("ok"):
+            if r.get("already"):
+                # **不计进 `installed`**：那一格印的是"本轮已装 N"，把"本来就在"的算进去
+                # 就是拿旧状态冒充本轮成果（§5.19 同族）。
+                print(f"[=] {r['name']} 已就位（{r.get('path')}）—— 不重下")
+                continue
+            installed.append(r)
+            lbl = toolmgr.verified_label(r)
+            print(f"[+] {r['name']} {r.get('version')} → {r.get('path')}"
+                  f"（{r.get('files')} 个文件、{r.get('bytes', 0) / 1048576:.1f} MB"
+                  + (f"，{lbl}" if lbl else "") + "）")
+        else:
+            failed.append({"name": r["name"], "reason": r.get("reason") or "未知原因"})
+            print(f"[!] {r['name']} 未取到：{r.get('reason')}")
+    return installed, failed
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="迁移自举：按平台点清并补齐环境依赖")
     ap.add_argument("--install", action="store_true",
@@ -750,6 +818,11 @@ def main(argv=None):
     ap.add_argument("--with-system", action="store_true",
                     help="系统包层：nmap / 浏览器 / Go / git 交给**发行版包管理器**真装"
                          "（默认只打印命令不执行；fscan/dirmap 永不代跑）")
+    ap.add_argument("--with-stack", action="store_true",
+                    help="工作目录内运行时组件层（续166）：取 Go 便携归档与上游源码包"
+                         "（过 SHA256、落 tools/ 与 .cache/，**不写家目录、不装系统包、不代跑编译**）")
+    ap.add_argument("--stack", action="append", default=[], metavar="NAME",
+                    help="配合 --with-stack：只取这几件（可重复；名字见清单里 kind=stack 那些行）")
     ap.add_argument("--yes", action="store_true",
                     help="配合 --with-system：跳过交互确认（非交互环境没有它就**拒绝执行**）")
     args = ap.parse_args(argv)
@@ -772,6 +845,11 @@ def main(argv=None):
         installed, failed = install_auto(tuple(args.only), args.allow_unverified,
                                         args.tools_dest, not args.no_wire)
         s = summarize(probe())          # 复探：以"真的装上没有"为准，不按安装返回值吹
+    if args.with_stack:
+        got, sfailed = install_stack(tuple(args.stack), args.allow_unverified)
+        installed.extend(got)
+        failed.extend(sfailed)
+        s = summarize(probe())          # 复探：取没取到以文件系统为准（与自动层同一口径）
     if args.with_system:
         got, refused, sfailed = install_system_packages(sys_plan, True, args.yes)
         for name in got:

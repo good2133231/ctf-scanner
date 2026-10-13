@@ -110,6 +110,7 @@
 
 ```bash
 ./install.sh                                # Linux / macOS：等价于下面第二条 + 复验 + 收尾说明
+./install.sh --full                         # 一条命令把环境建全（续166）：上面这些 + 工作目录内取 Go/源码包 + 就地编译 fscan 与 massdns
 python3 run_bootstrap.py --install          # Linux / macOS
 py -3 run_bootstrap.py --install            # Windows
 python3 run_bootstrap.py                    # 只探测，**零网络**：先看这台机器还缺什么
@@ -117,8 +118,16 @@ python3 run_bootstrap.py                    # 只探测，**零网络**：先看
 ```
 
 之后请用虚拟环境里的解释器运行：`./start.sh`（等价 `./.venv/bin/python run_gui.py`；Windows 是
-`.venv\Scripts\python.exe run_gui.py`）。`nmap / fscan / dirmap / massdns` **不会被自动下载也不会被代跑**
-（官方没有「可下载且带官方校验和的单二进制产物」），脚本会按平台打印该执行的命令。
+`.venv\Scripts\python.exe run_gui.py`）。`nmap / dirmap` **不会被自动下载也不会被代跑**（官方没有
+「可下载且带官方校验和的单二进制产物」），脚本会按平台打印该执行的命令。
+
+**`fscan` 与 `massdns` 续166 起能在工作目录内自建**（`./install.sh --full`）：Go 便携归档（摘要取自
+官方 `go.dev/dl/?mode=json`）与上游源码包（按**确切 tag** 取、摘要由本框架钉住）都落进 `tools/`，
+再就地编译到 `tools/scanner/`，构建缓存全落 `.cache/` —— **不装系统包、不写家目录**（实测一次 fscan
+编译：GOMODCACHE 192 MB + GOCACHE 239 MB，Go 默认那套会写进 `~/go` 与 `~/.cache/go-build`；
+连 Go 的本地遥测计数都被 `XDG_CONFIG_HOME` 收进 `.cache/goconfig`）。
+⚠ 两件事仍要本机具备，脚本缺了就**如实报**、不假装编成：`massdns` 要 **gcc/make**（C 工具链没有
+便携替代品）；`fscan` 编译期要**联网取 Go 模块**（模块摘要由它自带的 `go.sum` 校验）。
 
 > ⚠ **换机器别拷 `.venv`**：venv 里写死了绝对路径（`pyvenv.cfg`、`bin/activate`、各 console
 > script 的 shebang），换个目录或换台机器就失效 —— 症状是"拷过去跑不起来，但源码一个字没改"。
@@ -278,7 +287,7 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 - **`config/settings.yaml`（全局策略，已随仓库提交）**：GUI「策略配置」页可图形化修改并写回；CLI 也可直接编辑。常见开关：`fofa.enabled` / `iprecon.enabled` / `shodan` / `quake` / `ctlog` / `intel` / `heuristic` / `github`（外部情报类：DEFAULTS 关，而随包 settings.yaml 已开 iprecon/fofa/ctlog/intel/heuristic/github/multileak）；`dirscan.mode`（`quick` 浅扫 / `deep` 深扫）；`screenshot.enabled`（站点截图，默认关，需本机有 Edge/Chrome 无头）；`portscan.engine`（`auto` = fscan → nmap → 内置）。
 - **`config/blacklist.txt`**：一行一个域名，命中即不入资产库（入库前过滤）。
 - **`config/dicts/`**：子域名字典、`dirs_shallow.txt`（浅扫精选路径 ~150 条）、`dirs_big.txt`（深扫大字典 11882 条）、`cdn_cname.txt`（CDN 厂商后缀）、`cdn_ips.txt`（CDN 厂商任播 IP 段）、`sensitive.txt`（A01 敏感文件检查的数据源：`路径 | 关键字 | 级别 | 说明`）。
-- **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，落盘前必须通过 SHA256 校验。`massdns` 不在这条自动层里：它是 **puredns 的传递依赖**（puredns 在进程内 exec 它），官方只发 C 源码（2026-10-13 实测 release 的 `assets` 是空数组）⇒ 只能 `python tools/build_massdns.py --wire` 自编译；没装时 `subdomain` 阶段**预检到就回退内置 DNS 爆破**，不再拿整轮时间去换一条看不懂的退码 1。
+- **外部工具（可选）**：`subfinder` / `puredns` / `httpx` / `dirmap` / `nmap` / `fscan` 存在时优先调用、否则降级内置实现，无这些工具框架仍能跑通。前三个（子域收集 / DNS 爆破 / 存活探测）可**一键安装**：CLI `python cli/client.py --update-tools`，或控制台管理员侧栏「外部工具」页；也可手工放进 PATH 或 `tools/scanner/`。一键安装**只在显式触发时联网**（扫描期零下载），只允许 https + 官方主机，落盘前必须通过 SHA256 校验。`massdns` 不在这条自动层里：它是 **puredns 的传递依赖**（puredns 在进程内 exec 它），官方只发 C 源码（2026-10-13 实测 release 的 `assets` 是空数组）⇒ 只能自编译（`./install.sh --full`，或 `python tools/build_massdns.py --fetch --wire`）；没装时 `subdomain` 阶段**预检到就回退内置 DNS 爆破**，不再拿整轮时间去换一条看不懂的退码 1。
 摘要有两个产地：官方 release 自带的 checksums 文件；puredns 官方不发 checksums，改按本框架人工核过并钉在
 `scanner/toolmgr.py` 里的产物摘要（`pin_version` / `pin_sha256`，续164）—— 只装钉住的那一版，字节对不上就拒装，
 连 `--allow-unverified` 也越不过去。

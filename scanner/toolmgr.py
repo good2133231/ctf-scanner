@@ -56,9 +56,15 @@ _MAX_BYTES = 120 * 1024 * 1024
 # （2026-09-28 实测：`/releases/download/…` 302 到它；没有它 `--update-tools` 一个
 #  字节都下载不了，续54 的功能从未真正工作过）。`objects.githubusercontent.com` 保留
 #  —— 旧跳转目标，防 GitHub 改回。
+# 续166 为 `LOCAL_STACK`（工作目录内运行时组件）添的三个，每个都只对一件事开口：
+#   `go.dev`               官方版本清单 `?mode=json`（**摘要的产地**，不是产物）
+#   `dl.google.com`        Go 便携归档的实际下载主机（清单里 `url` 字段指的就是它）
+#   `codeload.github.com`  `github.com/<repo>/archive/refs/tags/<tag>.tar.gz` 的 302 目标
+#                          （源码包；GitHub 不为它发校验和 ⇒ 摘要由本框架钉住，见 LOCAL_STACK）
 _ALLOWED_HOSTS = frozenset({"api.github.com", "github.com",
                             "objects.githubusercontent.com",
-                            "release-assets.githubusercontent.com"})
+                            "release-assets.githubusercontent.com",
+                            "go.dev", "dl.google.com", "codeload.github.com"})
 _UA = "CTFScanner-toolmgr/0.1 (+authorized-testing-only)"
 
 TOOLS = {
@@ -184,13 +190,13 @@ MANUAL = {
     "nmap": "官方只发安装器 / 源码包 / dmg（无便携 zip），自动装会变成系统级安装"
             "（可交给包管理器：./install.sh --with-system --yes）",
     "fscan": "官方不发二进制，需用 Go 从源码自编译（本仓为避免 Defender 拦截的既定做法）"
-             "（已提供自动化编译：./install.sh --with-build，或 python tools/build_fscan.py --src 源码目录；"
-             "页面按原文比对，故此处不写尖括号）",
+             "（已提供自动化编译：./install.sh --full，或 python tools/build_fscan.py --fetch --wire"
+             " —— 缺 Go / 缺源码就自己取进仓库、过 SHA256，缓存落 .cache/ 不写家目录）",
     "dirmap": "release 零产物、无 checksums，且是纯 Python 项目（需 pip 依赖）",
     "massdns": "官方只发 C 源码（make 出 bin/massdns），无带官方校验和的单二进制——"
                "而 puredns 的 bruteforce/resolve 会在进程内 exec 它，缺它 puredns 每个域名都退码 1"
-               "（已提供自动化编译：python tools/build_massdns.py --wire，需 gcc/make；"
-               "页面按原文比对，故此处不写尖括号）",
+               "（已提供自动化编译：./install.sh --full，或 python tools/build_massdns.py --fetch --wire"
+               " —— 源码按确切 tag 取进仓库；**仍需本机 gcc/make**，C 工具链没有便携替代品）",
 }
 
 
@@ -1023,4 +1029,422 @@ def check_updates(settings, fetch=fetch_release, timeout=30):
         else:
             row["has_update"] = newer_version(row["latest"], row["installed"])
         rows.append(row)
+    return rows
+
+
+# ---------- 续166：工作目录内运行时组件（`LOCAL_STACK`） ----------
+#
+# 与 `TOOLS` 的分工（两组名字不重叠，`tests/smoke.py [166]` 钉住）：
+#   `TOOLS`       = 扫描期真被调用的**单二进制外部工具**：落 `tools/scanner/`、装完回写 `tools.<名>`；
+#   `LOCAL_STACK` = 把环境**建起来**所需的运行时与源码件（Go 工具链、上游源码包）：落 `tools/<名>/`，
+#                   **不回写 settings.yaml**（它们不是 `tools.<名>` 那一档），并且**一个字节都不写
+#                   仓库外**（缓存也一样，见 `cache_path()`）。
+# 为什么要有它：`./install.sh` 在裸机上到 fscan / massdns 就断了 —— 前者要 Go（本机没有就编不出），
+# 后者要 C 源码（本仓不分发第三方源码）。这两件都能在**工作目录内**解决：Go 官方发便携归档、
+# 且 `?mode=json` 里带 sha256；源码包按确切 tag 取、摘要由本框架钉住（与 puredns 同一先例）。
+# 校验口径与 `TOOLS` **完全同源**（§5.14，不另写一份）：https + 白名单 + 大小上限走 `download_bytes`，
+# "校验"那句话走 `verified_label()` / `verify_policy()`，"字节与摘要不符就拒装、`allow_unverified`
+# 也越不过"与 `install()` 逐字同义。
+STACK_DEST_ROOT = "tools"
+CACHE_DIR = ".cache"                 # pip / Go 的缓存都收在这里（默认它们写 `~/.cache` 与 `~/go`）
+_STACK_GOJSON = "gojson"             # 官方 JSON 里带 sha256（摘要产地＝release）
+_STACK_GITHUB_TAG = "github-tag"     # GitHub 按 tag 生成的源码包（无官方校验和 ⇒ 钉摘要）
+GOJSON_URL = "https://go.dev/dl/?mode=json"
+
+LOCAL_STACK = {
+    # 摘要产地：官方 `?mode=json` 的 `sha256` 字段 ⇒ `verify_source=release`（**不自己再钉一份** ——
+    # 同一件产物两个摘要产地就是 §5.14 说的会漂的形状）。版本**钉死**：清单里查不到这一版就拒装，
+    # 不跟 latest（跟 latest 等于把"没核过的字节"装进仓库，与 puredns 那条同一理由）。
+    # 2026-10-13 本机实测：清单给 go1.27.2；`go1.27.2.linux-amd64.tar.gz` = 70,590,635 B，
+    # 本机下载后算出的 sha256 与清单里那串**逐字相同**（`ecbadb99091a3f46…`）；解包 283 MB，
+    # `GOROOT=<落点> <落点>/bin/go version` → `go version go1.27.2 linux/amd64`；
+    # 用它（PATH 里**没有**系统 go）编 fscan 21.9 s 成功，产物 28,352,775 B。
+    "go": {"kind": _STACK_GOJSON, "version": "1.27.2", "dest": "tools/go", "strip": 1,
+           "marker_any": ("bin/go", "bin/go.exe"), "max_bytes": 400 * 1024 * 1024,
+           "why": "fscan 官方不发二进制，只能用 Go 自编译；本机没装 Go 时用这一份"
+                  "（GOROOT / GOCACHE / GOMODCACHE 全指进仓库，见 go_env()）"},
+    # 摘要产地：**本框架钉住**（GitHub 不为 `archive/refs/tags/…` 发校验和）⇒ `verify_source=pinned`。
+    # 2026-10-13 本机核实（不是抄来的）：取回 6,764,308 B、1225 个成员、顶层前缀 `fscan-2.2.1/`、
+    # `go.mod` 是 `module fscan-lab-api`、`go.sum` 在（模块摘要由 Go 自己校验）；
+    # 编出的 fscan 能跑（⚠ 它的 `-h` 是"指定主机"不是 help，见 §5.2）。
+    "fscan-src": {"kind": _STACK_GITHUB_TAG, "repo": "shadow1ng/fscan", "version": "v2.2.1",
+                  "dest": "tools/fscan-src", "strip": 1, "marker": ("go.mod", "go.sum"),
+                  "max_bytes": 40 * 1024 * 1024,
+                  "pin_sha256": {"v2.2.1.tar.gz":
+                                 "ee9007ff29dad31fcf8afd0c4b8d3427e36927f92078163a7cda1fcdd1156d9e"},
+                  "why": "本仓不分发第三方源码；tools/build_fscan.py 要它才能编译"},
+    # 2026-10-13 本机核实：751,113 B、73 个成员、前缀 `massdns-1.1.0/`；`make` 2.7 s 出
+    # `bin/massdns`（133,816 B）并能打印 usage。⚠ 从 tarball 编时目录里没有 `.git`，Makefile 那句
+    # `git describe --tags` 会往 stderr 打一行 `Try --always, or create some tags.`、
+    # `MASSDNS_REVISION` 为空 —— **make 仍 rc=0**，别把那行读成编译失败。
+    "massdns-src": {"kind": _STACK_GITHUB_TAG, "repo": "blechschmidt/massdns", "version": "v1.1.0",
+                    "dest": "tools/massdns-src", "strip": 1, "marker": ("Makefile",),
+                    "max_bytes": 8 * 1024 * 1024,
+                    "pin_sha256": {"v1.1.0.tar.gz":
+                                   "93b14431496b358ee9f3a5b71bd9618fe4ff1af8c420267392164f7b2d949559"},
+                    "why": "puredns 在进程内 exec massdns；tools/build_massdns.py 要它才能编译"
+                           "（**仍需本机 gcc/make** —— 便携 C 编译器不存在，缺它就如实报）"},
+}
+
+
+def cache_path(*parts):
+    """仓库内缓存目录（pip 的下载缓存、Go 的构建与模块缓存都收在这儿）。
+
+    为什么要它：`pip` 默认写 `~/.cache/pip`，`go` 默认写 `~/go/pkg/mod` 与 `~/.cache/go-build`
+    —— 实测本机编一次 fscan：GOMODCACHE **192 MB**、GOCACHE **239 MB**，全落在**家目录**。
+    那正是"装一个项目却动了别的东西"的形状。落点判据只这一处（§5.14），消费方是
+    `run_bootstrap.py`（pip）与 `tools/build_fscan.py`（go）。
+    """
+    return _BASE_DIR.joinpath(CACHE_DIR, *[str(p) for p in parts])
+
+
+def go_env(dest_root=None):
+    """编译 fscan 该带的 env：GOROOT / GOPATH / GOCACHE / GOMODCACHE（+ 仓库内 Go 的 PATH 前置）。
+
+    **即使本机已有 Go 也要用它给的缓存变量**，否则一次编译就往家目录写几百 MB（数字见
+    `cache_path`）。返回的是**增量**字典，调用方自己 `{**os.environ, **env}`；GOROOT 与 PATH
+    只在仓库内那份 Go 真的存在时才给（本机有系统 Go 时不该把 GOROOT 指到不存在的目录）。
+
+    另外这几个变量是**实测出来的**，不是顺手加的（2026-10-13，把 `HOME` 指到仓库内一个空目录
+    再编一次，编完那目录里躺着 `.config/go/telemetry/local/go@go1.27.2-….count`）：
+      `GOTOOLCHAIN=local` 不许它按 `go.mod` 里的 toolchain 行**再去下一份别的 Go**
+                         （那会绕过我们钉住的版本，还会往模块缓存里塞一整个工具链）；
+      `GOTELEMETRY=off`   关掉上传。⚠ **它挡不住本地那个计数目录** —— 实测给了它与不给它，
+                         `$HOME/.config/go/telemetry/` 都照样建，所以真正管事的是下面两条；
+      `XDG_CONFIG_HOME` / `GOENV` / `GOTMPDIR`：把配置、构建临时件都收进仓库内
+                         （⚠ `GOTMPDIR` 要先 `mkdir`，Go 不自建）；
+      `HOME`（POSIX）/ `USERPROFILE`+`APPDATA`+`LOCALAPPDATA`（Windows）：整份指到
+                         `cache_path("gohome")`。为什么要这么重的一招：Go 取"用户配置目录"
+                         在 macOS 是 `~/Library/Application Support`、Windows 是 `%AppData%`，
+                         **两者都不认 `XDG_CONFIG_HOME`** ⇒ 只重定向 XDG 在那两个平台上仍会写家目录。
+                         代价是子进程看不到用户的 `~/.gitconfig`：本仓的模块全走公共 proxy
+                         （实测 fake HOME 下 192 MB 模块照样取齐），所以不需要它。
+    """
+    root = Path(dest_root) if dest_root else (_BASE_DIR / STACK_DEST_ROOT)
+    goroot = root / "go"
+    gohome = cache_path("gohome")
+    env = {"GOPATH": str(cache_path("gopath")),
+           "GOCACHE": str(cache_path("gobuild")),
+           "GOMODCACHE": str(cache_path("gomod")),
+           "GOTMPDIR": str(cache_path("gotmp")),
+           "GOENV": str(cache_path("goenv")),
+           "XDG_CONFIG_HOME": str(cache_path("goconfig")),
+           "GOTELEMETRY": "off",
+           "GOTOOLCHAIN": "local"}
+    if os.name == "nt":
+        env["USERPROFILE"] = str(gohome)
+        env["APPDATA"] = str(gohome / "AppData" / "Roaming")
+        env["LOCALAPPDATA"] = str(gohome / "AppData" / "Local")
+    else:
+        env["HOME"] = str(gohome)
+    if (goroot / "bin" / binary_name("go")).is_file():
+        env["GOROOT"] = str(goroot)
+        env["PATH"] = os.pathsep.join([str(goroot / "bin"), os.environ.get("PATH", "")])
+    return env
+
+
+def stack_local_go(dest_root=None):
+    """仓库内那份 Go 的可执行文件路径（没装 → `None`）。"""
+    root = Path(dest_root) if dest_root else (_BASE_DIR / STACK_DEST_ROOT)
+    p = root / "go" / "bin" / binary_name("go")
+    return p if p.is_file() else None
+
+
+def stack_asset(name, os_label=None, arch=None):
+    """本平台该下哪个文件名；该平台没有产物 → `None`（**不猜、不回落**，与 `asset_name` 同口径）。"""
+    cfg = LOCAL_STACK.get(name)
+    if not cfg:
+        return None
+    os_label = os_label or host_arch()[0]
+    arch = arch or host_arch()[1]
+    if cfg["kind"] == _STACK_GOJSON:
+        go_os = {"linux": "linux", "macOS": "darwin", "windows": "windows"}.get(os_label)
+        if not go_os or arch not in ("386", "amd64", "arm64"):
+            return None
+        ext = "zip" if go_os == "windows" else "tar.gz"
+        return f"go{cfg['version']}.{go_os}-{arch}.{ext}"
+    if cfg["kind"] == _STACK_GITHUB_TAG:
+        return f"{cfg['version']}.tar.gz"       # 源码包与平台无关（tag 原样，含前导 v）
+    return None
+
+
+def stack_url(name, os_label=None, arch=None):
+    """下载地址（**纯计算、不联网**）；平台没有产物 → `None`。"""
+    cfg = LOCAL_STACK.get(name)
+    asset = stack_asset(name, os_label, arch)
+    if not cfg or not asset:
+        return None
+    if cfg["kind"] == _STACK_GOJSON:
+        return f"https://dl.google.com/go/{asset}"
+    if cfg["kind"] == _STACK_GITHUB_TAG:
+        return f"https://github.com/{cfg['repo']}/archive/refs/tags/{cfg['version']}.tar.gz"
+    return None
+
+
+def _gojson_digest(asset, version, timeout=60, fetch=None):
+    """从官方 `?mode=json` 取该产物的 sha256 → `(digest, 原因)`；查不到就是查不到（不猜、不回落）。"""
+    fetch = fetch or (lambda url, timeout=60: download_bytes(url, timeout=timeout,
+                                                             max_bytes=8 * 1024 * 1024))
+    try:
+        data = json.loads(fetch(GOJSON_URL, timeout).decode("utf-8", "replace"))
+    except Exception as e:                                       # noqa: BLE001 —— 如实报，不猜
+        return None, f"取官方版本清单失败：{e}"
+    for rel in data or []:
+        if str(rel.get("version") or "")[2:] != version:         # "go1.27.2" → "1.27.2"
+            continue
+        for f in rel.get("files") or []:
+            if f.get("filename") == asset and f.get("sha256"):
+                return str(f["sha256"]).strip().lower(), ""
+        return None, f"官方清单里 go{version} 没有 {asset} 这一件"
+    return None, (f"官方清单里已经没有 go{version}（本框架把 Go 钉在这一版）—— "
+                  "升级要先核过新版摘要，再改 LOCAL_STACK['go']['version']")
+
+
+def stack_digest(name, asset, timeout=60, fetch=None):
+    """该产物的摘要与产地 → `(digest, verify_source, 原因)`。
+
+    与 `install()` 同口径：**官方清单里有就用官方的**（`release`），否则用本框架钉住的
+    （`pinned`），两者都没有 ⇒ 返回空摘要，由调用方按 `allow_unverified` 决定拒还是放行。
+    """
+    cfg = LOCAL_STACK.get(name) or {}
+    if cfg.get("kind") == _STACK_GOJSON:
+        d, why = _gojson_digest(asset, str(cfg.get("version") or ""), timeout=timeout, fetch=fetch)
+        if d:
+            return d, VERIFY_RELEASE, ""
+        return None, "", why
+    pinned = (cfg.get("pin_sha256") or {}).get(asset)
+    if pinned:
+        return str(pinned).strip().lower(), VERIFY_PINNED, ""
+    return None, "", f"{asset} 不在本框架钉住的摘要里（{name} 官方不发校验和）"
+
+
+def _markers_ok(base, marker=(), marker_any=()):
+    """「这一件装好了没」的判据 —— **只此一处**（`extract_tree` 收尾与 `stack_present` 共用）。
+
+    `marker` 里的**每一项**都要在；`marker_any` 里的**至少一项**要在（平台二选一那种形状，
+    如 Go 的 `bin/go` / `bin/go.exe`）。返回 `(是否就位, 缺什么)` —— 缺什么要能直接进报错，
+    否则"解包成功却报失败"这种形状没法排查（本轮实测就是它：把二选一写成了"全部都要"，
+    Linux 上永远缺 `bin/go.exe`）。
+    """
+    base = Path(base)
+    miss = [str(mk) for mk in (marker or ()) if not (base / str(mk)).exists()]
+    if miss:
+        return False, miss[0]
+    anys = tuple(str(mk) for mk in (marker_any or ()))
+    if anys and not any((base / mk).exists() for mk in anys):
+        return False, " / ".join(anys)
+    return True, ""
+
+
+def _stack_strip(member, strip):
+    """归档成员名 → 剥掉 `strip` 层前缀后的相对路径；剥完为空（顶层目录本身）→ `None`。
+
+    安全判据与 `extract_binary` 同一条：绝对路径 / 盘符 / 任何 `..` 段一律**抛**（不是跳过）——
+    压缩包是外部输入，"少解一个文件"与"解到仓库外"必须区别对待。
+    """
+    if not _safe_member_name(member):
+        raise ValueError(f"压缩包成员名不安全（拒绝）：{member}")
+    parts = [p for p in str(member).replace("\\", "/").split("/") if p not in ("", ".")]
+    if len(parts) <= strip:
+        return None
+    return str(Path(*parts[strip:]))
+
+
+def extract_tree(blob, asset, dest, strip=1, marker=(), marker_any=()):
+    """把归档**整棵树**解到 `dest`（`extract_binary` 只取一个文件，这里要的是目录）。
+
+    三条口径：① 不用 `extractall`，逐个成员过 `_stack_strip`（内含 `_safe_member_name`）；
+    ② 先解到 `dest.part-<pid>`，**marker 齐了才换上**（换是目录级 `os.replace`，失败会把旧的换回来），
+    中途任何异常都不留半成品；③ 保留可执行位（tar 的 `mode`、zip 的 `external_attr`）——
+    丢了它 `tools/go/bin/go` 就只是个普通文件，症状是"下载解包都成功、编译却说权限不够"。
+    符号链接只在**目标也在仓库内**时才建（指到仓库外＝把"工作目录内自足"这条卖掉），建不了就跳过并计数。
+    返回 `(解出的文件数, 跳过的成员数)`。
+    """
+    dest = Path(dest)
+    part = dest.parent / f"{dest.name}.part-{os.getpid()}"
+    if part.exists():
+        shutil.rmtree(str(part), ignore_errors=True)
+    part.mkdir(parents=True)
+    n_files = n_skip = 0
+    low = str(asset).lower()
+    try:
+        if low.endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+                for info in zf.infolist():
+                    rel = _stack_strip(info.filename, strip)
+                    if rel is None:
+                        n_skip += 1
+                        continue
+                    out = part / rel
+                    if info.is_dir():
+                        out.mkdir(parents=True, exist_ok=True)
+                        continue
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(zf.read(info))
+                    mode = (int(info.external_attr) >> 16) & 0o777
+                    if mode & 0o111 and os.name != "nt":
+                        os.chmod(str(out), mode)
+                    n_files += 1
+        elif low.endswith((".tgz", ".tar.gz")):
+            with tarfile.open(fileobj=io.BytesIO(blob), mode="r:*") as tf:
+                for m in tf.getmembers():
+                    rel = _stack_strip(m.name, strip)
+                    if rel is None:
+                        n_skip += 1
+                        continue
+                    out = part / rel
+                    if m.isdir():
+                        out.mkdir(parents=True, exist_ok=True)
+                        continue
+                    if m.issym() or m.islnk():
+                        tgt = str(m.linkname or "").replace("\\", "/")
+                        if tgt.startswith("/") or re.match(r"^[A-Za-z]:", tgt) \
+                                or any(p == ".." for p in tgt.split("/")):
+                            raise ValueError(f"归档里的链接目标不安全（拒绝）：{m.name} → {tgt}")
+                        out.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            os.symlink(tgt, str(out))
+                            n_files += 1
+                        except (OSError, NotImplementedError, AttributeError):
+                            n_skip += 1     # Windows 无权限建符号链接：跳过并计数（结果里如实报）
+                        continue
+                    if not m.isfile():
+                        n_skip += 1
+                        continue
+                    f = tf.extractfile(m)
+                    if f is None:
+                        n_skip += 1
+                        continue
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_bytes(f.read())
+                    if os.name != "nt" and m.mode & 0o111:
+                        os.chmod(str(out), m.mode & 0o777)
+                    n_files += 1
+        else:
+            raise ValueError(f"未支持的归档类型：{asset}")
+        ok, missing = _markers_ok(part, marker, marker_any)
+        if not ok:
+            raise ValueError(f"解包完成但缺关键文件 {missing}（归档形状与注册表对不上）")
+        old = dest.parent / f"{dest.name}.old"
+        if old.exists():
+            shutil.rmtree(str(old), ignore_errors=True)
+        if dest.exists():
+            os.replace(str(dest), str(old))
+        try:
+            os.replace(str(part), str(dest))
+        except OSError:
+            if old.exists():
+                os.replace(str(old), str(dest))
+            raise
+        shutil.rmtree(str(old), ignore_errors=True)
+    except Exception:
+        shutil.rmtree(str(part), ignore_errors=True)
+        raise
+    return n_files, n_skip
+
+
+def stack_present(name, dest_root=None):
+    """装没装：注册表里的 marker 是否都在（**只看文件系统**，不靠版本号猜）。"""
+    cfg = LOCAL_STACK.get(name)
+    if not cfg:
+        return False
+    d = (Path(dest_root) if dest_root else _BASE_DIR) / cfg["dest"]
+    marks = tuple(cfg.get("marker") or ()) + tuple(cfg.get("marker_any") or ())
+    if not marks:
+        return d.is_dir()
+    return _markers_ok(d, cfg.get("marker") or (), cfg.get("marker_any") or ())[0]
+
+
+def stack_install(name, dest_root=None, allow_unverified=False, timeout=600,
+                  blob=None, json_fetch=None):
+    """下载并解包一个运行时组件，返回结果字典（**永不抛异常**，失败走 `ok=False` + `reason`）。
+
+    `blob`（产物字节）与 `json_fetch`（官方清单的取法）是测试注入口 —— 给了就**零网络**。
+    `dest_root` 只给门禁用（生产就是仓库根）；本函数**没有任何写仓库外的分支**，
+    落点恒为 `<dest_root>/<cfg["dest"]>`，缓存恒为 `cache_path(...)`。
+    """
+    cfg = LOCAL_STACK.get(name) or {}
+    out = {"name": name, "ok": False, "version": str(cfg.get("version") or ""), "path": "",
+           "verified": None, "verify_source": "", "reason": "",
+           "bytes": 0, "files": 0, "skipped": 0}
+    if not cfg:
+        out["reason"] = f"不支持的组件（可选：{'、'.join(LOCAL_STACK)}）"
+        return out
+    root = Path(dest_root) if dest_root else _BASE_DIR
+    os_label, arch = host_arch()
+    asset = stack_asset(name, os_label, arch)
+    url = stack_url(name, os_label, arch)
+    if not asset or not url:
+        out["reason"] = f"官方未提供 {os_label}/{arch} 的 {name} 产物（不猜、不回落）"
+        return out
+    out["asset"] = asset
+    digest, vsrc, why = stack_digest(name, asset, timeout=min(int(timeout), 120), fetch=json_fetch)
+    if not digest and not allow_unverified:
+        out["reason"] = (why or f"{asset} 没有可用的校验和") + "；默认拒绝安装" \
+            "（确要安装请显式允许未校验安装）"
+        return out
+    data = blob
+    if data is None:
+        try:
+            data = download_bytes(url, timeout=timeout,
+                                  max_bytes=int(cfg.get("max_bytes") or _MAX_BYTES))
+        except Exception as e:                                   # noqa: BLE001
+            out["reason"] = f"下载 {asset} 失败：{e}"
+            return out
+    out["bytes"] = len(data)
+    if digest:
+        got = hashlib.sha256(data).hexdigest()
+        if got != digest:
+            out["reason"] = (f"SHA256 校验不符（期望 {digest[:16]}…，实得 {got[:16]}…，"
+                             "期望值来自" + _VERIFY_SRC.get(vsrc, "未知产地")
+                             + "）—— 拒绝落盘；摘要对不上通常是产物被换过，不是重试能解决的事")
+            return out
+        out["verified"] = True
+        out["verify_source"] = vsrc
+    else:
+        out["verified"] = False          # 显式允许的未校验安装（不是 True，页面要如实显示）
+    dest = root / cfg["dest"]
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        n_files, n_skip = extract_tree(data, asset, dest, strip=int(cfg.get("strip") or 0),
+                                       marker=tuple(cfg.get("marker") or ()),
+                                       marker_any=tuple(cfg.get("marker_any") or ()))
+    except Exception as e:                                       # noqa: BLE001
+        out["reason"] = f"解包失败：{e}"
+        return out
+    out["files"], out["skipped"] = n_files, n_skip
+    out["ok"] = True
+    out["path"] = _setting_value(dest)
+    return out
+
+
+def stack_update(names=(), dest_root=None, allow_unverified=False, timeout=600,
+                 only_missing=True, json_fetch=None):
+    """批量装运行时组件；`only_missing=True`（默认）时**已就位的一件都不重下**。"""
+    wanted = [n for n in (names or list(LOCAL_STACK)) if n]
+    rows = []
+    for n in wanted:
+        if n not in LOCAL_STACK:
+            rows.append({"name": n, "ok": False, "verified": None,
+                         "reason": f"不支持的组件（可选：{'、'.join(LOCAL_STACK)}）"})
+            continue
+        cfg = LOCAL_STACK[n]
+        dest = (Path(dest_root) if dest_root else _BASE_DIR) / cfg["dest"]
+        if only_missing and stack_present(n, dest_root):
+            rows.append({"name": n, "ok": True, "verified": None, "already": True,
+                         "version": str(cfg.get("version") or ""),
+                         "path": _setting_value(dest), "reason": ""})
+            continue
+        rows.append(stack_install(n, dest_root=dest_root, allow_unverified=allow_unverified,
+                                  timeout=timeout, json_fetch=json_fetch))
+    return rows
+
+
+def stack_status(dest_root=None):
+    """给自举清单 / 页面用的现状行：`[{name, version, present, dest, why}]`（**零网络**）。"""
+    rows = []
+    for name, cfg in LOCAL_STACK.items():
+        rows.append({"name": name, "version": str(cfg.get("version") or ""),
+                     "present": stack_present(name, dest_root),
+                     "dest": str(cfg.get("dest") or ""), "why": str(cfg.get("why") or "")})
     return rows
