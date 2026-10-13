@@ -3784,6 +3784,58 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       缺库时截图照旧失败并给原因
 
 下一轮（续168）——只做这些，别扩大：
+### 下一轮要做的两组（主理人 2026-10-13 已定口径；各自一轮、各跑一次全量门禁）
+
+**第一组：跨平台"选择平台 / 不装本平台不需要的"**
+
+- [ ] **新增一态「本平台不适用」，Windows 上 `./install.sh` 必须 rc=0**（主理人选定）：现状是
+      puredns（官方无 Windows 产物）、massdns（无便携产物）、chrome（本框架只核过 linux64 摘要）
+      三条都走 `install():440-443` 的 `ok=False` ⇒ `run_bootstrap.py:770` 排进 `failed` ⇒
+      `:872 return 1 if failed else 0` ⇒ `install.sh:160 exit "$BOOT_RC"` 恒 1。改法：结果字典加
+      `skipped="本平台没有可校验产物"` 之类的**显式态**，`install_auto`/`install_stack` 对它
+      **不计 failed**，但 `render()` 要**单开一节逐条点名**（"本平台不适用（不是失败）：…"）——
+      隐藏的"不适用"就是新的静默降级（§0 第 10 条、§5.19）。同一轮把 `todo.txt:3839-3843`
+      那条待办结项。**要一起改的判据**：`tests/smoke.py:22515-22516`（`[8av]` 那句
+      "非 0＝有项失败"的契约原文）与 `[8d]⑨`（`smoke.py:12825` "自动层有失败却回 0"那条）——
+      两条都要新增"不适用不算失败、但必须出现在清单那一节"的正反夹具，否则改了代码门禁仍绿。
+- [ ] **`--platform os/arch`（只用于清单预览，主理人选定）**：判据产地只有 `toolmgr.host_arch()`
+      （`scanner/toolmgr.py:207-224`，`run_bootstrap.platform_info():122-126` 直取它）⇒ 覆盖入口
+      必须加在 `host_arch()` **内部**（读 `CTFSCANNER_TARGET_PLATFORM`，形如 `windows/amd64`），
+      CLI 的 `--platform` 只设这个环境变量；**产物只下本平台那一份**（为别的平台备货不做）。
+      非法值不许静默忽略：照 §5.19 的口径打印"这个平台我不认识，按探测值 X 继续"+ 原因。
+      `LOCAL_STACK` 三件（go / fscan-src / massdns-src / chrome）都要跟着走：`stack_asset`
+      认不出的平台给 `None` 已有（`[167]③` 钉着），要补的是 `chrome` 未核平台从"失败"改判"不适用"。
+
+**第二组：主面板控件 + 拓展域名置信度 + 一键黑名单**
+
+- [ ] **建任务面板补两个控件**（现状：`gui/templates/tasks.html:4-74` 那张表单**没有**它们，
+      `api_create_task`（`gui/app.py:1528-1601`）读的字段里也没有）：
+      **拓展扫描层数 1–10** 与 **置信度阈值（默认＝高）**。「追加到本任务」**不放**主面板
+      （新建任务没有父任务可折，放上去是个永远勾不中的框；它留在 `task_detail.html:404` 与
+      `/extdomains` 补控件那一处）。层数一律走既有产地：`runner.clamp_ext_depth()` +
+      `runner.depth_stages()`（`scanner/runner.py:236/239/348-395`），**不许在 GUI 里再夹一次**。
+      `ext_depth` 目前 DEFAULTS 里没有、只能从任务详情页设（`app.py:3332-3335`）⇒ 建任务这条
+      路要把它接进 `options`，并顺手补 `DEFAULTS` 一个键（连带策略页/`[8at]②`"逐段点名不许少存键"）。
+- [ ] **新判据：拓展域名"像不像自家资产"的置信度**（全仓现在**没有**任何相似度实现，唯一归属
+      判据是严格后缀 `extdom.is_in_bases():81`；唯一"相关性"是 GitHub 弱相关降级
+      `github_leak.py:271-277` + `build_lead:243-246`，只降不升、绝不丢）。设计：
+      纯标准库（`difflib.SequenceMatcher`，**不引第三方**），比对对象是**已确认资产**那一层
+      （`extdom.own_hosts():102` ∪ `task_bases():67`，即主理人说的"父域名/爷爷域名"），
+      主标签复用 `github_leak.label_of():85`；例：`abdc.com` × `abcd.org`（同主标签、TLD 不同、
+      编辑距离 1）⇒ 高。三档 高/中/低，**每档都要给依据文本**（像哪个域名、距离几步、TLD 是否不同），
+      不许只给一个数。判据**只有一个产地**（`scanner/extdom.py` 里一个新函数），
+      页面标注与自动递归决策都读它；GitHub 那套弱相关**不合并**（语义不同：那边是"仓库里提没提到"）。
+- [ ] **自动递归只扫 ≥阈值，且第三方命中永不自动扫**（主理人选定）：CDN 任播段
+      （`cdn.match()/ip_kind()`，`config/dicts/cdn_ips.txt`）、`config/dicts/js_thirdparty.txt`
+      （`jsmine.is_thirdparty():113`，清单本身穷尽不了）、`blacklist.matches():85` 命中的，
+      **无论算得多像都不进自动扫描**（可人工点"送去探测"）。这条要有一张**正反双向**夹具：
+      高置信 + 第三方命中 ⇒ 零请求；高置信 + 自家后缀 ⇒ 扫；否则"永不自动扫"是空话。
+      开关默认值要在 DEFAULTS / 随包 settings.yaml / 生效值**三档分开写**（§5.19 那口径）。
+- [ ] **一键加黑名单已经有一半**（`POST /api/blacklist/add` 在 `app.py:3158`，按钮在
+      `subdomains.html:44`、`extdomains.html:116`、`task_detail.html:419`）：缺的是跨任务
+      `/extdomains`（`extdomains.html:111-126`）**没有解析按钮、没有层数输入、没有 append 勾选**
+      （那页"送去探测"恒为新建任务）⇒ 与任务详情页签同源化，并且每行显示置信度徽章 + 依据。
+      展示层过滤/标注**不许动入库**（§0 第 10 条），被收起的条数要报数字。
 
 - [ ] **`shodan` / `quake` 的 key 已进密文，但策略段还是关的**（`enabled: false`）——
       「配了 key」与「会去查」是两件事，别把前者当后者。要不要随包打开由主理人定：
