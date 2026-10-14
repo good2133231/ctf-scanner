@@ -14436,11 +14436,27 @@ http:
             == list(_ins113.signature(_orig_mine113).parameters), \
             "桩与生产签名漂了 —— 改 `jsmine.mine` 的参数必须同步这里"
         _jm113.mine = _stub_mine113
+        # 端到端里的**真实 DNS 是不确定的**（续176 归档验证 + CI 实测定位）：
+        # `_pick_resolvers` 按进程内轮询挑 2 台，而 resolvers.txt 里 114.114.114.114/115
+        # 在部分网络不可达（rcode=-1）—— 连续两次都挑中它们时 `_exchange` 全失败
+        # ⇒ reason=timeout ⇒ "DNS 无结论放行" ⇒ sub.mystery113.test 被放过
+        # （本地门禁多次就是这么"过"的）；CI 上挑中的是活解析器 ⇒ nxdomain ⇒ 被续171
+        # 的解析门挡掉 ⇒ CI 红。② 的 fake 与注释早已写明意图："注册域存在、自己暂时
+        # 解析不到 ⇒ 一条不剔"，所以这里按那个意图把解析门也钉死：mystery 一律
+        # "无结论"，其余 nxdomain（chat.floating.open 在解析门之前就被注册域闸剔掉）。
+        _orig_rd113 = _dq113.resolve_detail
+
+        def _stub_rd113(host, timeout=3, resolver=None, settings=None):
+            return ([], [], "timeout") if str(host).endswith("mystery113.test") \
+                else ([], [], "nxdomain")
+
+        _dq113.resolve_detail = _stub_rd113
         try:
             _JZ113(StageContext(_tid113j, "smoke-113-jsmine", parse_lines(["zone113.test"]),
                                 ["jsmine"], {}, _st113j, Path(_TMPDIR) / "z113j", _Rec113())).run()
         finally:
             _jm113.mine = _orig_mine113
+            _dq113.resolve_detail = _orig_rd113
         _in_db113 = {r["domain"] for r in db.list_subdomains(_tid113j)}
         assert _in_db113 == {"api.zone113.test", "sub.mystery113.test"}, \
             f"碎片进库了 / 或真资产被误杀：{_in_db113}"
@@ -20562,14 +20578,19 @@ expression: r0()
             # ⑥ 配置里的**相对路径**必须按项目根折算（§5.13 那个坑的第四次）：
             #    换个 CWD 再解析一次，结果必须还是同一个绝对路径 —— 退回 `Path(configured).exists()`
             #    的旧写法时，从仓库外启动就会返回 ""（"配了浏览器却永远截不到图"）。
-            _st167 = {"screenshot": {"browser": "tools/browser/chrome"}}
+            # ⚠ 夹具刻意用**仓库内必然存在的文件**（tlds.txt），不写 tools/browser/chrome ——
+            # 那个目录是 gitignore 的（Chrome for Testing 由 install 拉取），干净克隆/CI 上
+            # 没有它，browser_path 返回 "" ⇒ 这条断言必红（§6.2 拿环境值当哨兵；
+            # 2026-10-14 续176 归档验证实测红过）。判据要的是"相对配置值按项目根折算"，
+            # 文件是哪个不影响那条代码路径。
+            _st167 = {"screenshot": {"browser": "config/dicts/tlds.txt"}}
             _cwd0 = os.getcwd()
             try:
                 os.chdir(str(_d167))
                 _p167 = _shot167.browser_path(_st167)
                 assert Path(_p167).is_absolute(), \
                     f"相对配置值没按项目根折算（返回了相对串或空）：{_p167!r}"
-                assert _p167.replace("\\", "/").endswith("/tools/browser/chrome"), _p167
+                assert _p167.replace("\\", "/").endswith("/config/dicts/tlds.txt"), _p167
             finally:
                 os.chdir(_cwd0)
             assert _shot167.browser_path({"screenshot": {"browser": "no-such-browser-167"}}) == "", \

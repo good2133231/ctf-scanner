@@ -2,6 +2,24 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续176-附（2026-10-14，WorkBuddy · CodeBuddy）：修 CI 红 —— [8m]③ DNS 钉死 + [167]⑥ 夹具换仓库内文件
+
+实施者：WorkBuddy · CodeBuddy（远端 Linux）。GitHub Smoke Test 从续171（2026-10-13 19:57）起 failure、Quality gates 一直 success；本附轮定位根因、应用两修、本地门禁复绿并提交。登记为续176 的附属轮（不改动下一轮清单）。
+
+### 一、根因（§6.2 第二十起：拿"进程内轮询状态 + 网络环境"当哨兵）
+
+[8m]③ 端到端里 jsmine 解析门走**真实 DNS**：`dnsq._pick_resolvers` 按**进程内轮询**挑 2 台，而 `config/dicts/resolvers.txt` 里 114.114.114.114/114.114.115.115 在部分网络不可达（rcode=-1）—— 连续两次挑中它俩时 `_exchange` 全失败 ⇒ `reason=timeout` ⇒ "DNS 无结论放行" ⇒ `sub.mystery113.test` 被放过（本地门禁多次就是这么"过"的）；CI 挑中的是活解析器 ⇒ `nxdomain` ⇒ 被续171 的解析门挡掉 ⇒ CI 红。**同一份代码、同一条断言，在两个网络环境下给出相反结论**。
+
+### 二、两修（tests/smoke.py；扫描行为零变化，只是门禁自身）
+
+1. `[8m]③` 钉死 DNS：桩 `dnsq.resolve_detail` —— mystery113.test 一律 `timeout`（与 ② 的 fake 意图一致："注册域存在、自己暂时解析不到 ⇒ 一条不剔"），其余 `nxdomain`；
+2. `[167]⑥` 夹具 `tools/browser/chrome` → `config/dicts/tlds.txt` —— 前者是 gitignore 的运行时组件（Chrome for Testing 由 install 拉取），干净克隆/CI 上不存在 ⇒ `browser_path` 返回 "" ⇒ 断言必红（§6.2 同族"拿环境值当哨兵"）。判据要的性质是"相对配置值按项目根折算"，文件是哪个不影响那条代码路径。
+
+### 三、验证
+
+- 全量门禁 `./.venv/bin/python tests/smoke.py` → **SMOKE PASS，250 组**（07:22:45 启动 → 07:28:55 收尾，约 6 分 10 秒）。
+- **验证态即提交态**：续176 归档验证期间留下的 5 行 DEBUG113 临时打印已在门禁启动前删除（smoke.py mtime 07:22:23 < 门禁启动 07:22:45；`grep -c DEBUG113 tests/smoke.py` = 0），工作树 diff 只剩上述两修。
+- CI 侧确认：推送后查 GitHub Actions 复核 Smoke Test 转绿，结果记入转存 `docs/takeover-2026-10-14.md` 的那一次提交。
 ## 续176（2026-10-14，WorkBuddy · CodeBuddy）：被 min_severity 挡掉的条目数说出口 —— 计数、落库、报告/详情页三处出口
 
 实施者：WorkBuddy · CodeBuddy（远端 Linux）。主理人 2026-10-12 已拍板的收口项（原话："报告与任务详情页显示'被 min_severity: high 挡掉 N 条'……可以显示"；§0 第 10 条：被过滤 ≠ 不存在）。登记号为续176；续171 节内「下一轮（续172）」那两条即本项，已勾掉并注明（按后续登记序列取号：续172=站点折叠 … 续176=本项）。

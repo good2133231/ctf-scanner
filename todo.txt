@@ -4159,3 +4159,15 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [ ] 「js挖掘后面再加一个(挖掘js数量:)」：位置待确认 —— /extdomains 来源分类行
       （`extdomains.html:53`）与任务详情拓展页签说明（`task_detail.html:383`）都有"JS 挖掘"
       字样；推荐做成**来源分类各项都带条数**（JS 挖掘（N）→ FOFA·标题（N）→ …），不只 JS 一项
+**续176-附（2026-10-14，WorkBuddy · CodeBuddy）：修 CI 红 —— [8m]③ DNS 钉死 + [167]⑥ 夹具换仓库内文件**
+
+根因：`[8m]③` 端到端的 jsmine 解析门走真实 DNS，`dnsq._pick_resolvers` 进程内轮询挑 2 台，114.114.114.114/115 在部分网络不可达 ⇒ 本地"无结论放行"全绿、CI 活解析器 nxdomain 挡掉 ⇒ 红（§6.2 第二十起）。同批 `[167]⑥` 夹具写死 gitignore 的 `tools/browser/chrome`，干净克隆必红。
+
+- [x] `[8m]③` 桩 `dnsq.resolve_detail`：mystery113.test 一律 timeout、其余 nxdomain（贴合 ② fake 意图）
+- [x] `[167]⑥` 夹具换 `config/dicts/tlds.txt`，后缀断言与注释同步
+- [x] 删续176 归档验证留下的 5 行 DEBUG113 打印（提交态已核 `grep -c` = 0）
+- [x] 本地门禁 SMOKE PASS 250 组（07:22:45→07:28:55，约 6 分 10 秒）
+- [x] 收尾四步：本小节 + CHANGELOG_AI.md 续176-附 + AGENTS.md（§6.2 第二十起）三份同步提交
+- [ ] 推送后查 GitHub Actions 确认 Smoke Test 转绿（结果记入 docs/takeover-2026-10-14.md 转存提交）
+- [ ] 交接单转存 docs/takeover-2026-10-14.md 后删 logs/HANDOFF-2026-10-14.md，再推一次
+- 注：「下一轮（续NN）」清单不变，仍以续176 节内那份为准（本附轮是工程修复，不新起功能点、不占续177 号）
