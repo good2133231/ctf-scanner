@@ -595,7 +595,7 @@
     {% if not cert_total %}
       {% if not cert_enabled %}
       <p class="muted small">本任务没有取证书：<b>cert 阶段默认关闭</b>。可在「策略配置 → 资产面拓展」
-        打开「TLS 证书取证」，或新建任务时勾选阶段里的 <code>cert</code>「（勾上＝本次取证书）」。</p>
+        打开「TLS 证书取证」，或新建任务时勾选阶段里的 <code>cert</code>。</p>
       {% elif not cert_pick %}
       <p class="muted small">本任务没有取证书：<b>没有可取证的目标</b> —— 需要站点走 https，
         或端口是 {{ cert_tls_ports|join(' / ') }}（本次扫到 {{ site_total }} 个站点，
