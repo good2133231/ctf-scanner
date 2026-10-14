@@ -19,7 +19,7 @@
 
 - 全量门禁 `./.venv/bin/python tests/smoke.py` → **SMOKE PASS，250 组**（07:22:45 启动 → 07:28:55 收尾，约 6 分 10 秒）。
 - **验证态即提交态**：续176 归档验证期间留下的 5 行 DEBUG113 临时打印已在门禁启动前删除（smoke.py mtime 07:22:23 < 门禁启动 07:22:45；`grep -c DEBUG113 tests/smoke.py` = 0），工作树 diff 只剩上述两修。
-- CI 侧确认：推送后查 GitHub Actions 复核 Smoke Test 转绿，结果记入转存 `docs/takeover-2026-10-14.md` 的那一次提交。
+- CI 侧确认：推送后 GitHub Actions 两个 workflow（Smoke Test run 38529565867、Quality gates run 38529565826）均 **completed success** —— 双边绿闭环（本地 SMOKE PASS 250 组 + CI success）。
 ## 续176（2026-10-14，WorkBuddy · CodeBuddy）：被 min_severity 挡掉的条目数说出口 —— 计数、落库、报告/详情页三处出口
 
 实施者：WorkBuddy · CodeBuddy（远端 Linux）。主理人 2026-10-12 已拍板的收口项（原话："报告与任务详情页显示'被 min_severity: high 挡掉 N 条'……可以显示"；§0 第 10 条：被过滤 ≠ 不存在）。登记号为续176；续171 节内「下一轮（续172）」那两条即本项，已勾掉并注明（按后续登记序列取号：续172=站点折叠 … 续176=本项）。

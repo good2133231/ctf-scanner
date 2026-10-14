@@ -201,6 +201,36 @@ CREATE TABLE IF NOT EXISTS flags (
   context TEXT DEFAULT '',
   created_at TEXT
 );
+-- 续177 JS 凭据**原文**表（主理人 2026-10-14 点单"显示具体值 + 复核 + 值级黑名单"）：
+-- 存原文的只有这一张表 —— vulns 里的 `js-secret-*` 行照旧只存掩码（evidence/packets），
+-- 报告与迁移包沿用它；原文的可见面按 AGENTS.md §5.10 凭据红线新解（2026-10-14 续176）：
+-- 授权目标身上挖到的是**扫描产物**，入库（本库 gitignore）、GUI 展开看、默认不进迁移包。
+-- `masked` 是 `jsmine._masked(raw)` 的唯一落地列（与 vulns evidence 同键同值，GUI 靠它对齐两表）；
+-- 去重在调用方（§5.6 同 flags/vulns），表上无 UNIQUE。
+CREATE TABLE IF NOT EXISTS js_secrets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  host TEXT DEFAULT '',        -- 来源主机名（与 vulns.target 同键，[8bj] 去重键的一半）
+  type TEXT DEFAULT '',        -- 命中的形状名（aws-access-key / jwt / …）
+  value TEXT NOT NULL,         -- **原文**（凭据红线新解，见上）
+  masked TEXT DEFAULT '',      -- 掩码形态（jsmine._masked 唯一产地）
+  source TEXT DEFAULT '',      -- 命中它的 JS URL
+  context TEXT DEFAULT '',
+  line INTEGER DEFAULT 0,
+  line_text TEXT DEFAULT '',
+  created_at TEXT
+);
+-- 续177 值级黑名单（与 config/blacklist.txt 的**域名级**黑名单是两件事，见 scanner/secretbl.py）：
+-- 挡的是凭据 / flag **值**（匹配之后），整值精确比对、大小写敏感；按账号隔离（0=全局，
+-- 仅管理员可写），任务无关 ⇒ **不进 ASSET_TABLES**（clear_task_assets 按任务清，清不掉它）。
+CREATE TABLE IF NOT EXISTS secret_blacklist (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  value TEXT NOT NULL,         -- 原文整值（strip 后比对）
+  kind TEXT DEFAULT '',        -- 命中的形状名（可空）
+  note TEXT DEFAULT '',        -- 用户注：为什么这是误报
+  owner_id INTEGER DEFAULT 0,  -- 0=全局；其余=该账号私有（续46 同款口径）
+  created_at TEXT
+);
 -- 续46 多用户：账号密码登录 + 管理员/子用户两级角色（见 scanner/users.py）。
 -- 与上面各表同走 `CREATE TABLE IF NOT EXISTS` —— 老库**原地补表**，不需要删库重建；
 -- 新增列时按本文件 `_COLUMN_PATCHES` 的老办法 `ALTER TABLE ADD COLUMN` 追加。
@@ -846,7 +876,7 @@ def task_run_seconds(task, now=None):
 
 
 ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "certs", "dirs", "vulns", "leads",
-                "flags")
+                "flags", "js_secrets")
 
 
 def clear_task_assets(task_id):
@@ -1222,6 +1252,71 @@ def list_flags(task_id, limit=None):
         return _query("SELECT * FROM flags WHERE task_id=? ORDER BY id", (task_id,))
     return _query("SELECT * FROM flags WHERE task_id=? ORDER BY id DESC LIMIT ?",
                   (task_id, int(limit)))
+
+
+def insert_js_secret(task_id, s):
+    """写入一条 JS 疑似凭据的**原文**（续177）。去重由调用方负责（§5.6），
+    键与 vulns 的 `js-secret-*` 行同源：`(host, masked)` 之外多一层 `_raw` 全值比对 ——
+    掩码是前4后4，两个不同原文可能撞同一个掩码，光比掩码会把它们误成一条。"""
+    _exec("INSERT INTO js_secrets(task_id,host,type,value,masked,source,context,line,line_text,created_at) "
+          "VALUES(?,?,?,?,?,?,?,?,?,?)",
+          (task_id, str(s.get("host") or ""), str(s.get("type") or ""),
+           str(s.get("_raw") if s.get("_raw") is not None else s.get("value") or ""),
+           str(s.get("value") or ""), str(s.get("source") or ""),
+           (str(s.get("context") or ""))[:1000], int(s.get("line") or 0),
+           (str(s.get("line_text") or ""))[:2000], _now()))
+
+
+def list_js_secrets(task_id, host=None):
+    """本任务的 JS 凭据原文行（续177）。给了 `host` 就只要那台主机的 ——
+    GUI 按 vulns 行取原文用（[8bj] 的去重键一半是主机名）。"""
+    if host is None:
+        return _query("SELECT * FROM js_secrets WHERE task_id=? ORDER BY id", (task_id,))
+    return _query("SELECT * FROM js_secrets WHERE task_id=? AND host=? ORDER BY id",
+                  (task_id, str(host)))
+
+
+def list_secret_blacklist(owner_id=None):
+    """值黑名单清单（续177；判据实现在 `scanner/secretbl.py::matches`，这里只存取）。
+    `owner_id=None`＝**全部生效条目**（扫描阶段用：一个值被判误报就是对所有账号的噪声）；
+    给了账号＝该账号可见范围（0 全局 + 自己的，GUI 管理页用）。"""
+    if owner_id is None:
+        return _query("SELECT * FROM secret_blacklist ORDER BY id")
+    return _query("SELECT * FROM secret_blacklist WHERE owner_id IN (0,?) ORDER BY id",
+                  (int(owner_id),))
+
+
+def insert_secret_blacklist(value, kind="", note="", owner_id=0):
+    """把一个值加进黑名单；同值同账号重复加是 no-op（返回既有 id）。空值不入库（返回 0）。"""
+    v = str(value or "").strip()
+    if not v:
+        return 0
+    hit = _query("SELECT id FROM secret_blacklist WHERE value=? AND owner_id=?",
+                 (v, int(owner_id)), one=True)
+    if hit:
+        return int(hit["id"])
+    return _exec("INSERT INTO secret_blacklist(value,kind,note,owner_id,created_at) "
+                 "VALUES(?,?,?,?,?)",
+                 (v, str(kind or ""), (str(note or ""))[:500], int(owner_id), _now()))
+
+
+def delete_secret_blacklist(entry_id, owner_id=None):
+    """移除一条，返回受影响行数。给了 `owner_id` 就只许删**自己的**（别人的条目连同
+    全局 0 都删不动）；`None`＝不限（管理员路径）。行数语义照 1667/1698/1711 三处先例
+    手写 `_WRITE_LOCK` 块 —— `_exec` 只回 `lastrowid`，DELETE 上拿不到 rowcount。"""
+    with _WRITE_LOCK:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            if owner_id is None:
+                cur.execute("DELETE FROM secret_blacklist WHERE id=?", (int(entry_id),))
+            else:
+                cur.execute("DELETE FROM secret_blacklist WHERE id=? AND owner_id=?",
+                            (int(entry_id), int(owner_id)))
+            conn.commit()
+            return cur.rowcount or 0
+        finally:
+            conn.close()
 
 
 def merge_sites_tech(task_id, updates):

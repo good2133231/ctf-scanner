@@ -48,7 +48,7 @@ CRED_FILES = ("config/keys.yaml", "config/keys.enc.yaml", "config/edge_auth.yaml
 NEVER_TABLES = ("audit_log", "login_fails")
 # 存**原文取值**的表：默认不进包，`--with-secrets` 才带（见文件头红线 4）。
 # 表名仍叫 `flags` —— 续148 起它装的是敏感信息（AK/SK、token、私钥头、连接串）+ flag 候选两类形状。
-SECRET_TABLES = ("flags",)
+SECRET_TABLES = ("flags", "js_secrets")
 
 # 任务状态里"声称本机有个进程在跑/在排"的两档。换机器后这个声称必然是假的。
 # 三个"还没跑完"的状态：running/queued 谎称本机有进程在跑，pending 谎称"已经在排队等着自动开跑"。

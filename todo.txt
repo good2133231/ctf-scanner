@@ -4168,6 +4168,6 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] 删续176 归档验证留下的 5 行 DEBUG113 打印（提交态已核 `grep -c` = 0）
 - [x] 本地门禁 SMOKE PASS 250 组（07:22:45→07:28:55，约 6 分 10 秒）
 - [x] 收尾四步：本小节 + CHANGELOG_AI.md 续176-附 + AGENTS.md（§6.2 第二十起）三份同步提交
-- [ ] 推送后查 GitHub Actions 确认 Smoke Test 转绿（结果记入 docs/takeover-2026-10-14.md 转存提交）
-- [ ] 交接单转存 docs/takeover-2026-10-14.md 后删 logs/HANDOFF-2026-10-14.md，再推一次
+- [x] 推送后查 GitHub Actions 确认 Smoke Test 转绿：两个 workflow（Smoke Test run 38529565867、Quality gates run 38529565826）均 completed success
+- [x] 交接单已转存 docs/takeover-2026-10-14.md（logs/HANDOFF-2026-10-14.md 已删），本提交即转存后那一次推送
 - 注：「下一轮（续NN）」清单不变，仍以续176 节内那份为准（本附轮是工程修复，不新起功能点、不占续177 号）
