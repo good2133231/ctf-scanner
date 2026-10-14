@@ -24042,22 +24042,30 @@ expression: r0()
     assert len(_capped8ba) == 5, f"max_per_source 封顶没作用于内置形状 ⇒ 一页就能刷爆候选表：{len(_capped8ba)}"
     assert len({o for _k, _v, o in _capped8ba}) == 5, f"五条命中其实是同一处被重复计：{_capped8ba}"
 
-    # ---- ⑤ 迁移包：默认不带 `flags`，`--with-secrets` 才带，两侧都要数得出来 ----
+    # ---- ⑤ 迁移包：默认不带 `flags` 与 `js_secrets`（续177 起两张原文表同档），
+    #      `--with-secrets` 才带，两侧都要数得出来 ----
     assert _mg8ba.SECRET_TABLES and set(_mg8ba.SECRET_TABLES) <= set(db.ASSET_TABLES), _mg8ba.SECRET_TABLES
     _t8ba = db.create_task("smoke-8ba-secrets", "http://s8ba.test/", ["probe"], {})
     db.insert_flag(_t8ba, {"value": "AKIAIOSFODNN7EXAMPLE", "kind": "aws-access-key",
                            "source": "dir", "url": "http://s8ba.test/.env",
                            "context": 'k="AKIAIOSFODNN7EXAMPLE"'})
+    # 续177：js_secrets 与 flags 同档进这个夹具 —— 默认档两张都该被数进 secrets_skipped，显式档两张都该被带出。masked 是 `jsmine._masked` 的真实形（AKIA + *** + MPLE）。
+    db.insert_js_secret(_t8ba, {"host": "s8ba.test", "type": "aws-access-key",
+                                "value": "AKIAIOSFODNN7EXAMPLE", "masked": "AKIA***MPLE",
+                                "source": "js", "context": 'k="AKIAIOSFODNN7EXAMPLE"',
+                                "line": 7, "line_text": 'k="AKIAIOSFODNN7EXAMPLE"'})
     _tmp8ba = Path(tempfile.mkdtemp(prefix="mig8ba-"))
     _p_def = _mg8ba.export_bundle(dst=_tmp8ba / "default.json", task_ids=[_t8ba])
     _b_def = _json8ba.loads(Path(_p_def["path"]).read_text(encoding="utf-8"))
     assert _b_def["data"]["assets"]["flags"] == [], "默认包里躺着原文取值 ⇒ 红线没守住"
     assert _b_def["includes"]["secrets_included"] is False
-    assert _b_def["includes"]["secrets_skipped"] == {"flags": 1}, \
+    assert _b_def["includes"]["secrets_skipped"] == {"flags": 1, "js_secrets": 1}, \
         f"「没带」必须数得出来：{_b_def['includes']['secrets_skipped']}"
     _p_yes = _mg8ba.export_bundle(dst=_tmp8ba / "with.json", task_ids=[_t8ba], with_secrets=True)
     _b_yes = _json8ba.loads(Path(_p_yes["path"]).read_text(encoding="utf-8"))
-    assert len(_b_yes["data"]["assets"]["flags"]) == 1 and _b_yes["includes"]["secrets_skipped"] == {}, \
+    assert len(_b_yes["data"]["assets"]["flags"]) == 1 \
+        and len(_b_yes["data"]["assets"]["js_secrets"]) == 1 \
+        and _b_yes["includes"]["secrets_skipped"] == {}, \
         "显式开关带不出东西 ⇒ ⑤ 抓的其实只是「那张表本来就是空的」"
     _w_def = _mg8ba.import_bundle(_tmp8ba / "default.json", dry_run=True)["warnings"]
     assert any("默认没带" in w for w in _w_def), f"收包的人不会被告知这一档被挡了：{_w_def}"

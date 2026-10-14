@@ -16,7 +16,7 @@ from .base import Stage
 from . import probe as probe_stage
 import re
 
-from .. import blacklist, cdn, db, dnsq, extdom, fingerprint, flagfind, jsmine, parked
+from .. import blacklist, cdn, db, dnsq, extdom, fingerprint, flagfind, jsmine, parked, secretbl
 from ..utils import pool_run, write_lines
 
 
@@ -208,6 +208,12 @@ class JsmineStage(Stage):
             ctx.logger.warning("[jsmine] 任务已请求停止，结果不再入账")
             return
 
+        # 续177 值级黑名单（判据唯一产地 `scanner/secretbl.py`，与域名级 config/blacklist.txt 是两件事）：匹配之后过滤，被挡的值**既不进 js_secrets 也不进 vulns** —— "判误报后下次不显示"。阶段内不过账号：一个值被判误报就是对所有账号的噪声（`db.list_secret_blacklist(None)` 的口径）。被挡量必须说出来（§0 第 10 条）。
+        secrets, blocked177 = secretbl.filter_secrets(secrets)
+        if blocked177:
+            _bnote177 = secretbl.blocked_note(blocked177)
+            if _bnote177:
+                ctx.logger.info("[jsmine] " + _bnote177)
         # 1) 新域名：跳过任务中已有的（避免与 subdomain 阶段重复入库）
         existing = {r["domain"] for r in db.list_subdomains(ctx.task_id)}
         new_domains = sorted(d for d in domains if d not in existing)
@@ -261,6 +267,17 @@ class JsmineStage(Stage):
             # 按主机名去重既少重复行，也让「拓展域名」页能直接按域名挂上敏感命中数。
             src = s.get("source", "") or ""
             host = urlparse(src).hostname or src
+            # 续177：原文进 `js_secrets`（凭据红线新解 —— 授权目标挖到的按扫描产物处理，AGENTS.md §5.10 注）；vulns 行照旧只带掩码，报告与迁移包沿用它。两表靠 (task_id, host, masked) 对齐，GUI 按它取原文展开。
+            db.insert_js_secret(ctx.task_id, {
+                "host": host,
+                "type": s.get("type", ""),
+                "value": s.get("_raw") or s.get("value", ""),
+                "masked": s.get("value", ""),
+                "source": src,
+                "context": s.get("context", ""),
+                "line": s.get("line", 0),
+                "line_text": s.get("line_text", ""),
+            })
             db.insert_vuln(ctx.task_id, {
                 "target": host,
                 "poc_id": f"js-secret-{str(s.get('type', '')).lower()}",
@@ -291,4 +308,5 @@ class JsmineStage(Stage):
         fingerprint.flush(ctx, ctx.logger, "jsmine")
         ctx.logger.info(f"[jsmine] JS 文件 {js_count} 个 / 新域名 {len(new_domains)} 个 / "
                         f"接口 URL {len(url_list)} 条 / 疑似凭据 {len(secrets)} 条"
+                        + (f" / 值黑名单挡掉 {len(blocked177)} 条" if blocked177 else "")
                         + (f" / 另拒收 {len(junk113)} 个「不是域名」的碎片" if junk113 else ""))

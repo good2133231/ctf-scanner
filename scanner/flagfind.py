@@ -327,7 +327,8 @@ def stats(ctx):
     """本任务的抽取计数（`StageContext` 建锁；桩对象也够用）。"""
     st = getattr(ctx, "_flag_stats", None)
     if st is None:
-        st = {"texts": 0, "bytes": 0, "oversize": 0, "new": 0, "dedup": 0, "full": 0}
+        st = {"texts": 0, "bytes": 0, "oversize": 0, "new": 0, "dedup": 0, "full": 0,
+              "blocked": 0}   # 续177：值黑名单挡掉的条数（note 汇总说出口）
         ctx._flag_stats = st
         ctx._flag_lock = threading.Lock()
     return st
@@ -363,6 +364,12 @@ def harvest(ctx, url, text, where):
     found = scan(text, ctx.settings, max_hits=per_source)
     if not found:
         return 0
+    # 续177 值级黑名单（判据唯一产地 `scanner/secretbl.py`，与域名级 config/blacklist.txt 是两件事）：匹配之后过滤。flagfind 的候选没有掩码层 —— `(kind, value, off)` 的 value  即**原文**（flags 表存的也是它）⇒ 包成 secretbl 认的 dict 形态，没有 `_raw`，比对退回 到 `value` 本身。不过账号：一个值被判误报就是对所有账号的噪声（`db.list_secret_blacklist(None)` 的口径）。挡掉的量进 stats 由 note 汇总说出口（§0 第 10 条：被收起 ≠ 不存在），样本掩码在下方逐条打日志。
+    from . import secretbl
+    cand177 = [{"kind": k, "value": str(v).strip(), "source": where, "url": str(url or ""),
+                "context": context(text, off, off + len(str(v).strip()))}
+               for k, v, off in found]
+    kept177, blocked177 = secretbl.filter_secrets(cand177)
     pool = ctx.results.setdefault("flags", [])
     seen = getattr(ctx, "_flag_seen", None)
     if seen is None:
@@ -374,8 +381,13 @@ def harvest(ctx, url, text, where):
             from . import db
             db_seen = {str(r["value"]) for r in db.list_flags(ctx.task_id)}
             ctx._flag_db_seen = db_seen
-        for kind, value, off in found:
-            v = str(value).strip()
+        if blocked177:
+            st["blocked"] += len(blocked177)
+            _bnote177 = secretbl.blocked_note(blocked177)
+            if _bnote177:
+                ctx.logger.info("[flagfind] " + _bnote177)
+        for c in kept177:
+            v = str(c["value"]).strip()
             if not v or v in seen:
                 continue
             if len(pool) >= cap:
@@ -387,8 +399,8 @@ def harvest(ctx, url, text, where):
                 st["dedup"] += 1
                 continue
             db_seen.add(v)
-            row = {"value": v, "kind": kind, "source": where, "url": str(url or ""),
-                   "context": context(text, off, off + len(v))}
+            row = {"value": v, "kind": c["kind"], "source": where, "url": str(url or ""),
+                   "context": c["context"]}
             from . import db
             db.insert_flag(ctx.task_id, row)
             pool.append(row)
@@ -415,12 +427,14 @@ def note(ctx, since):
     """
     st = stats(ctx)
     d = {k: st.get(k, 0) - since.get(k, 0) for k in
-         ("texts", "bytes", "oversize", "new", "dedup", "full")}
+         ("texts", "bytes", "oversize", "new", "dedup", "full", "blocked")}
     if not d["texts"] and not d["new"]:
         return ""
     bits = [f"看过正文 {d['texts']} 份", f"新增候选 {d['new']} 条"]
     if d["dedup"]:
         bits.append(f"库里已有同值 {d['dedup']} 条未重复入库")
+    if d["blocked"]:
+        bits.append(f"值黑名单挡掉 {d['blocked']} 条（已判误报，不再显示）")
     if d["oversize"]:
         bits.append(f"跳过 {d['oversize']} 份超大正文（>{_cfg(ctx.settings)['max_chars']} 字符，"
                     f"是「没扫」不是「没找到」）")

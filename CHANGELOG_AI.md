@@ -2,6 +2,25 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续177（2026-10-14，WorkBuddy · CodeBuddy）：JS 疑似凭据原文入库 + 值级黑名单（第一波：后端全链路）
+
+实施者：WorkBuddy · CodeBuddy（远端 Linux）。主理人 2026-10-14 点单（原话见 todo.txt 续177 登记节）；口径已拍板并进 AGENTS.md §5.10 注：红线只管本机配置凭据，授权目标挖到的按**扫描产物**处理 —— 原文入库（库 gitignore）、GUI 可展开、默认不进迁移包、报告外发面单独核。
+
+### 一、改动（后端全链路；GUI 在下一波）
+
+1. **db 层**（提交 ff5b2fc）：`js_secrets` 表（原文 + masked 分列，masked 是 `jsmine._masked` 唯一落地列，GUI 靠 (task_id, host, masked) 与 vulns 行对齐）+ `secret_blacklist` 表（owner_id 隔离、0=全局、任务无关 ⇒ **不进** `ASSET_TABLES`）+ 五函数；`SECRET_TABLES = ("flags", "js_secrets")`（原文表默认不进迁移包，要带得显式 `--with-secrets`）。
+2. **判据唯一产地 `scanner/secretbl.py`**：`matches()` / `filter_secrets()` / `blocked_note()` / `add()` / `remove()`；整值精确比对（**大小写敏感** —— `lower()` 化会让 `AKIA` 与 `akia` 互相顶掉）；Row/dict 双形态读取（db 层返回 `sqlite3.Row`，第一版 `.get()` 崩过，接线即修）。
+3. **两处匹配后过滤**：`stages/jsmine.py`（收集点过滤；过关项写 `js_secrets` 原文 + vulns 掩码行照旧；被挡量进任务日志 / 阶段统计行 / `js_secrets.txt` 落盘三处）与 `scanner/flagfind.py`（`(kind, value, off)` 三元组包成 dict 再过滤 —— 直接喂 tuple 会被整体 `str()` 化、永远比对不中；`stats.blocked` + `note()` 汇总说出口，样本掩码逐条打日志）。
+
+### 二、验证
+
+- 全量门禁 wire2 → **SMOKE PASS，250 组**（wire1 首跑红在 `[8ba]⑤`：`SECRET_TABLES` 加了 `js_secrets` 而精确相等断言 `== {"flags": 1}` 没同步 —— 旧断言红得对（它真在盯那份清单），修法是同步断言而非放松它；复刻脚本 + 全量双边验过）。
+- 接线行为一次性验证（临时库、零网络）：jsmine 与 flagfind 两路各 **正向 ok + 变异证伪 ok**（摘掉 `filter_secrets` ⇒ 被拉黑值也进库、无挡掉日志 —— 证明"挡掉了"有可观测后果）。
+- 迁移包复刻：默认档两表都空都计数（`{"flags": 1, "js_secrets": 1}`）、显式档两表都带出、导入警告点名 `js_secrets`。
+
+### 三、剩下的（GUI 波 + 断言组）
+
+/vulns 与详情页原文行（单独一行）、「判误报并拉黑值」一键、策略页黑名单管理、报告三态掩码断言、`[177]` 断言组。设计定稿见 todo.txt 续177 登记节。
 ## 续176-附（2026-10-14，WorkBuddy · CodeBuddy）：修 CI 红 —— [8m]③ DNS 钉死 + [167]⑥ 夹具换仓库内文件
 
 实施者：WorkBuddy · CodeBuddy（远端 Linux）。GitHub Smoke Test 从续171（2026-10-13 19:57）起 failure、Quality gates 一直 success；本附轮定位根因、应用两修、本地门禁复绿并提交。登记为续176 的附属轮（不改动下一轮清单）。

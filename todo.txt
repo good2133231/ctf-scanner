@@ -4171,3 +4171,24 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] 推送后查 GitHub Actions 确认 Smoke Test 转绿：两个 workflow（Smoke Test run 38529565867、Quality gates run 38529565826）均 completed success
 - [x] 交接单已转存 docs/takeover-2026-10-14.md（logs/HANDOFF-2026-10-14.md 已删），本提交即转存后那一次推送
 - 注：「下一轮（续NN）」清单不变，仍以续176 节内那份为准（本附轮是工程修复，不新起功能点、不占续177 号）
+## 续177（2026-10-14，WorkBuddy · CodeBuddy）：JS 疑似凭据显示具体值 + 复核 + 值级黑名单
+
+主理人 2026-10-14 点单（原话见上方登记节）。口径已拍板并进 AGENTS.md §5.10 注：红线只管本机配置凭据，授权目标挖到的按扫描产物处理。本波＝后端全链路（已提交）；GUI 与断言组在下一波。
+
+- [x] db 层：`js_secrets` 原文表 + `secret_blacklist` 值黑名单表（DB 制、owner_id 隔离）+ 五函数；`ASSET_TABLES` 加 `js_secrets`、`SECRET_TABLES` 加 `js_secrets`（提交 ff5b2fc，临时库冒烟过）
+- [x] 判据唯一产地 `scanner/secretbl.py`（matches/filter_secrets/blocked_note/add/remove；Row/dict 双形态）
+- [x] `stages/jsmine.py` 接线：收集点过滤 + 过关项写 js_secrets 原文 + vulns 掩码行照旧；被挡量进日志/统计行/落盘三处
+- [x] `scanner/flagfind.py` 接线：三元组包 dict 过滤 + stats.blocked + note 汇总
+- [x] 门禁：`[8ba]⑤` 断言随 SECRET_TABLES 同步；全量 SMOKE PASS 250 组（wire2）
+- [ ] GUI：/vulns 与任务详情页显示原文（单独一行）—— 设计定稿：js_raw 配对映射（同 host 的 js-secret vulns 行与 js_secrets 行成对同序插入，按 id 同序配对）
+- [ ] GUI：「判误报并拉黑值」一键（拉黑值 + 复用 `db.bulk_set_vuln_review` 判误报）
+- [ ] GUI：策略页黑名单管理（并进域名黑名单入口，标注"两件事"；值只显掩码，删除按 id）
+- [ ] 报告三态维持掩码的断言 + `[177]` 断言组（每条带变异证伪）
+
+**续178 拍板记录（2026-10-14，主理人确认）**：
+
+- [ ] "送去探测"与"归属本项目的追加为本任务子域名"**是一个东西**：效果＝子标签套在调用它的域名下，可展开，与主域名分开、互不影响
+- [ ] IP 重复**不算 high、只作 medium 佐证**（主理人拍板）：与非 CDN 的已确认子域名同 IP ⇒ medium 理由文本"与已确认资产 x.test 同 IP 1.2.3.4（非 CDN）"，判据复用 `cdn.ip_kind`，零请求
+- [ ] 「js挖掘」后加条数：来源分类**各项都带**（JS 挖掘（N）→ FOFA·标题（N）→ …）
+- [ ] 按钮文案：「送去探测（默认全任务拓展域名，新建任务）」→「送去探测」
+- [ ] 送探过的行留扫描状态标记（手工送探 / 自动递归都要标）
