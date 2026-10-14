@@ -25565,6 +25565,118 @@ expression: r0()
     print("[179b] 动态并发档 ok: ramp_opt 产地（fixed⇒None/ramp⇒floor 封顶）｜pool_run 分批"
           "（有产出翻倍封顶、零产出不升档、结果与契约与整批一致）｜probe 仅探活一处接线"
           "（AST 钉点）｜DEFAULTS limits 逐段点名一个键不少")
+    # ---------------- [180] 续180（借鉴点①收口）：检查执行失败 ⇒ 无法确认（不是已修复） ----------------
+    # 续150 已有三态（reproduced/fixed/unconfirmed）与「没探到 ⇒ unconfirmed」；本轮补
+    # ARTEX retester 的第四种情形：目标活着、但检查**执行失败** —— 一次请求失败不证明已修复。
+    from scanner.stages.vulnscan import _retest_mark as _rm180, VulnscanStage as _VS180
+    from scanner.stages import vulnscan as _vmod180
+    from scanner.owasp import checks as _ck180
+    from scanner import afrog as _af180
+    from scanner.pocs import engine as _eng180
+
+    # (a) 分类单元：reproduced / fixed / unconfirmed（没探到）/ unconfirmed（检查炸了）
+    def _mk_rows180(tid):
+        for t in ("http://a.targ180.test", "http://b.targ180.test",
+                  "http://c.targ180.test", "http://d.targ180.test"):
+            db.insert_vuln(tid, {"target": t, "poc_id": "x01-a", "name": "x",
+                                 "severity": "low"})
+
+    class _C180:
+        def __init__(self, tid):
+            self.task_id = tid
+            self.results = {}
+            self.settings = {}
+            self.logger = _Rec()
+
+        def stopped(self):
+            return False
+
+    _tid180 = db.create_task("smoke-180-retest", "targ180.test", ["vulnscan"], {})
+    _mk_rows180(_tid180)
+    _ctx180a = _C180(_tid180)
+    _sites180 = ["http://a.targ180.test", "http://b.targ180.test", "http://c.targ180.test"]
+    _new180 = [{"target": "http://a.targ180.test", "poc_id": "x01-a"}]
+    _rm180(_ctx180a, _new180, _sites180, scan_errors={"c.targ180.test"})
+    _st180 = {r["target"]: r["retest_state"] for r in db.list_vulns(_tid180, limit=None)}
+    assert _st180["http://a.targ180.test"] == "reproduced", _st180
+    assert _st180["http://b.targ180.test"] == "fixed", _st180
+    assert _st180["http://c.targ180.test"] == "unconfirmed", _st180
+    assert _st180["http://d.targ180.test"] == "unconfirmed", _st180
+    _rt180 = [x for x in _ctx180a.logger.lines if "复测三态" in x]
+    assert _rt180 and "1 个目标检查执行失败" in _rt180[0] \
+        and "一次请求失败不证明已修复" in _rt180[0], _rt180
+    # 变异证伪（§6.1）：摘掉 scan_errors（= 摘掉记账）⇒ c 必须落 fixed（正是要堵的假"已修复"）
+    _tid180b = db.create_task("smoke-180-retest2", "targ180.test", ["vulnscan"], {})
+    _mk_rows180(_tid180b)
+    _rm180(_C180(_tid180b), _new180, _sites180)
+    _st180b = {r["target"]: r["retest_state"] for r in db.list_vulns(_tid180b, limit=None)}
+    assert _st180b["http://c.targ180.test"] == "fixed", _st180b
+    print("[180a] 复测分类 ok: 复现/修复/没探到/检查炸了 四路各归其位；"
+          "变异（摘 scan_errors）⇒ 炸掉的站点落「已修复」—— 记账参数承重")
+
+    # (b) 阶段级端到端：run_all 对 g 站抛异常 ⇒ g 的旧结论 unconfirmed + WARNING 记账
+    _vs180 = copy.deepcopy(settings)
+    _vs180["checks"]["min_severity"] = "info"
+    _vs180["checks"]["skip_severities"] = []
+    _vs180["checks"]["disabled_categories"] = []
+    _vs180["checks"]["disabled_checks"] = []
+    _vs180.setdefault("evasion", {})["waf_detect"] = False
+
+    def _mk_e2e180(name, drop_scan_errors):
+        tid = db.create_task(name, "targ180e2e.test", ["vulnscan"],
+                             {"retest": True, "offline": True})
+        for t in ("http://e.targ180e2e.test", "http://f.targ180e2e.test",
+                  "http://g.targ180e2e.test"):
+            db.insert_vuln(tid, {"target": t, "poc_id": "s01-x", "name": "x",
+                                 "severity": "low"})
+        rec = _Rec()
+        wd = Path(_TMPDIR) / f"vulnscan180_{tid}"
+        wd.mkdir(parents=True, exist_ok=True)
+        ctx = StageContext(tid, name, parse_lines(["targ180e2e.test"]), ["vulnscan"],
+                           {"retest": True, "offline": True}, _vs180, wd, rec)
+        ctx.results["sites"] = [{"url": u, "host": u.split("//", 1)[1],
+                                 "title": "T", "length": 1, "tech": ""}
+                                for u in ("http://e.targ180e2e.test",
+                                          "http://f.targ180e2e.test",
+                                          "http://g.targ180e2e.test")]
+
+        def _ra180(url, settings, min_severity=None, logger=None, blocked=None):
+            if url.startswith("http://g.targ180e2e.test"):
+                raise RuntimeError("boom180")
+            if url.startswith("http://e.targ180e2e.test"):
+                return [{"poc_id": "s01-x", "severity": "high", "target": url,
+                         "name": "桩-复现", "owasp": "A05", "detail": "", "evidence": ""}]
+            return []
+
+        orig = (_ck180.run_all, _eng180.run_poc_on_target, _af180.enabled,
+                _vmod180._retest_mark)
+        try:
+            _ck180.run_all = _ra180
+            _eng180.run_poc_on_target = lambda *a, **k: []
+            _af180.enabled = lambda s: False
+            if drop_scan_errors:      # 变异档：在 _retest_mark 边界把记账摘掉
+                _vmod180._retest_mark = lambda ctx, nv, sites, scan_errors=None: \
+                    orig[3](ctx, nv, sites, None)
+            PipelineRunner(ctx).run()
+        finally:
+            _ck180.run_all, _eng180.run_poc_on_target = orig[0], orig[1]
+            _af180.enabled, _vmod180._retest_mark = orig[2], orig[3]
+        return rec, {r["target"]: r["retest_state"] for r in db.list_vulns(tid, limit=None)}
+
+    _rec180e, _st180e = _mk_e2e180("smoke-180-vulnscan", False)
+    assert _st180e["http://e.targ180e2e.test"] == "reproduced", _st180e
+    assert _st180e["http://f.targ180e2e.test"] == "fixed", _st180e
+    assert _st180e["http://g.targ180e2e.test"] == "unconfirmed", _st180e
+    assert any("检查执行失败" in x and "g.targ180e2e.test" in x for x in _rec180e.lines), \
+        "单站异常必须当场 WARNING 说出口（不拖垮整批）"
+    assert any("复测三态" in x and "无法确认" in x for x in _rec180e.lines), _rec180e.lines
+    # 变异证伪：边界摘掉 scan_errors ⇒ g 落 fixed（红）—— 参数从阶段一路传进分类，链路承重
+    _rec180m, _st180m = _mk_e2e180("smoke-180-vulnscan-mut", True)
+    assert _st180m["http://g.targ180e2e.test"] == "fixed", _st180m
+    assert _st180m["http://f.targ180e2e.test"] == "fixed", _st180m
+    print("[180] 复测第四态情形 ok: 检查执行失败的站点旧结论记「无法确认」并 WARNING 说出口，"
+          "三态原语义不变；两处变异（摘参/边界摘记账）证伪承重（借鉴点①：续150 已有三态，"
+          "本轮补 ARTEX 的『一次请求失败不证明已修复』）")
     print("SMOKE PASS")
 
 
