@@ -4197,7 +4197,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] 送探记录已落库（ext_probes 表，probe/append/promote 三方式、同域同任务同方式 no-op）：行徽章「已送探 → #N」+ 分组组内送探子标签（#号/方式/状态/子任务资产摘要，默认随组折叠）；自动递归发生在同一任务内，痕迹就是 subdomains 行本身，不在此表（IP medium 佐证仍挂账）
 
 **借鉴点登记（2026-10-14 四项目调研，按序做、不新起号；调研全文见 docs/ref-projects-2026-10-14.md）**：
-- [ ] ① 复核加「无法确认」第三态（ARTEX agent/retester.go：reproduced/fixed/inconclusive —— 一次请求失败不证明已修复）
+- [x] ① 复核加「无法确认」第三态（ARTEX agent/retester.go：reproduced/fixed/inconclusive —— 一次请求失败不证明已修复；续180 核实：续150 已有三态，本轮补「检查执行失败 ⇒ unconfirmed」）
 - [ ] ② host 碰撞收集源（ShuiZe Plugins/infoGather/subdomain/hostCollide：同 IP 绑不同 Host 头找隐藏站点）
 - [ ] ③ ICP 备案反查收集源（ShuiZe beian2NewDomain，返回关联公司名可喂企业信息查询）
 - [ ] ④ 拦截动作结构化审计条目（ARTEX guard/guard.go AuditEntry：ts/tool/action/reason 逐条落审计）
@@ -4222,6 +4222,18 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       logs 收尾 / 借鉴点五项）—— todo/CHANGELOG/AGENTS 三份 [8as] 口径已核
 - 验证：波一 wire4、续172 wire8、波二 wire9 三轮全量门禁各自 SMOKE PASS 250 组；
   波二一次性验证含变异证伪（ccc 探针：复选框承重）
+
+## 续180（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点①收口——检查执行失败 ⇒ 无法确认
+
+- [x] 借鉴点①：先核实 —— 「复测加无法确认第三态」**续150 已实现**（登记与现状脱节，教训见 CHANGELOG 续180 第一节）；真正的缺口是「目标活着但检查执行失败 ⇒ 旧结论落已修复」，本轮补上：`_scan_site` 记账 `_scan_err` + `_retest_mark(scan_errors=…)` 第四判据 + 单站 WARNING 说出口；[180a]/[180b] 两级断言各带变异证伪；wire14 SMOKE PASS（265 组）
+- 门禁：wire14 全绿（265 组，+1 组 = [180]）
+
+**下一轮（续181）——只放未做的：**
+- [ ] 借鉴点② host 碰撞收集源（ShuiZe hostCollide：同 IP 绑不同 Host 头找隐藏站点；纯工程，注意只读 GET 口径）
+- [ ] 借鉴点③ ICP 备案反查收集源（ShuiZe beian2NewDomain；第三方接口，注意 verify_tls_external 与凭据口径）
+- [ ] 借鉴点④ 拦截动作结构化审计条目（ARTEX guard AuditEntry：ts/tool/action/reason 逐条落审计）
+- [ ] 借鉴点⑤ 剩余半边：按机器规格（CPU/内存）算并发档上限（与 ramp 组合）
+- [ ] 续173（IP 反查三源成败说清 + PTR 自实现）、续175（真机）照旧挂账
 
 ## 续179（2026-10-14，WorkBuddy · CodeBuddy）：断言组固化 + IP medium 佐证 + 动态并发档（基准实测）
 

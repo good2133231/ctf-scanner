@@ -3,6 +3,82 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续180（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点①收口——复测三态补「检查执行失败 ⇒ 无法确认」
+
+实施者：WorkBuddy · CodeBuddy（远端 Linux）。按 todo 续180 清单做借鉴点①，动手前先核实现状。
+
+### 一、核实：登记与现状脱节
+
+借鉴点①登记为「复测加『无法确认』第三态」，但**续150 已实现**：`db.RETEST_STATES` 三态
+（reproduced/fixed/unconfirmed）、`report.RETEST_LABEL`（"无法确认"）、`_retest_mark` 的
+「没探到 ⇒ unconfirmed，不当已修复」判据与 retest_hint 产地全在。登记照抄调研表没核对现状
+——**"借鉴点"也可能已经做过，先核实再动手**（本轮先撞上这条，已记坑）。
+
+### 二、真正的缺口与改动
+
+ARTEX retester 的口径是"一次请求失败不证明已修复"，落到我们的实现还差一层：
+`vulnscan._scan_site` 的异常被 `pool_run` 整批吞掉——**目标活着、但检查执行失败**的站点，
+其旧结论会落「已修复」（"没报出来"与"没跑成"混说）。
+
+- `vulnscan.py::_scan_site`：检查段包 try/except，失败站点（host）记入 `_scan_err`，
+  单站当场 WARNING（`检查执行失败（类型: 摘要）—— 该站旧结论本轮记「无法确认」，不许当「已修复」`），
+  不拖垮整批；
+- `_retest_mark(..., scan_errors=None)`：新增第四判据「探过但没跑成 ⇒ unconfirmed」；
+  三态原语义与"没探到"分支一字未动；日志行带
+  `其中 N 个目标检查执行失败 —— 一次请求失败不证明已修复`；
+- 调用点传 `scan_errors=_scan_err`，页面/报告/JSONL 出口零改动（三态取值集合没变）。
+
+### 三、验证
+
+- [180a] 分类单元：复现/修复/没探到/检查炸了四路各归其位，日志含计数与口径句；
+  变异证伪：摘掉 scan_errors ⇒ 炸掉的站点落「已修复」（正是要堵的假结论）。
+- [180b] 阶段级端到端（PipelineRunner + run_all 桩对 g 站抛异常）：g 旧结论 unconfirmed、
+  f（跑成）fixed、e（复现）reproduced、单站 WARNING 说出口、复测三态行带计数；
+  边界变异（在 `_retest_mark` 边界 drop_scan_errors）⇒ g 落 fixed —— 参数从阶段一路
+  传进分类，链路承重。
+- 独立快检 SAN180 先行（临时库跑分类与日志），再进全量门禁。
+- **门禁 wire14：SMOKE PASS（265 组）**。
+- 本轮一次性脚本（logs/，收尾已删）：`_patch_retest.py`、`_groups180_block.txt`、
+  `_finalize180.py`、`_final180_*.txt`、`_commit180.txt`、`smoke-wire14.log`、`s180-*` 临时目录。
+
+## 续180（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点①收口——复测三态补「检查执行失败 ⇒ 无法确认」
+
+实施者：WorkBuddy · CodeBuddy（远端 Linux）。按 todo 续180 清单做借鉴点①，动手前先核实现状。
+
+### 一、核实：登记与现状脱节
+
+借鉴点①登记为「复测加『无法确认』第三态」，但**续150 已实现**：`db.RETEST_STATES` 三态
+（reproduced/fixed/unconfirmed）、`report.RETEST_LABEL`（"无法确认"）、`_retest_mark` 的
+「没探到 ⇒ unconfirmed，不当已修复」判据与 retest_hint 产地全在。登记照抄调研表没核对现状
+——**"借鉴点"也可能已经做过，先核实再动手**（本轮先撞上这条，已记坑）。
+
+### 二、真正的缺口与改动
+
+ARTEX retester 的口径是"一次请求失败不证明已修复"，落到我们的实现还差一层：
+`vulnscan._scan_site` 的异常被 `pool_run` 整批吞掉——**目标活着、但检查执行失败**的站点，
+其旧结论会落「已修复」（"没报出来"与"没跑成"混说）。
+
+- `vulnscan.py::_scan_site`：检查段包 try/except，失败站点（host）记入 `_scan_err`，
+  单站当场 WARNING（`检查执行失败（类型: 摘要）—— 该站旧结论本轮记「无法确认」，不许当「已修复」`），
+  不拖垮整批；
+- `_retest_mark(..., scan_errors=None)`：新增第四判据「探过但没跑成 ⇒ unconfirmed」；
+  三态原语义与"没探到"分支一字未动；日志行带
+  `其中 N 个目标检查执行失败 —— 一次请求失败不证明已修复`；
+- 调用点传 `scan_errors=_scan_err`，页面/报告/JSONL 出口零改动（三态取值集合没变）。
+
+### 三、验证
+
+- [180a] 分类单元：复现/修复/没探到/检查炸了四路各归其位，日志含计数与口径句；
+  变异证伪：摘掉 scan_errors ⇒ 炸掉的站点落「已修复」（正是要堵的假结论）。
+- [180b] 阶段级端到端（PipelineRunner + run_all 桩对 g 站抛异常）：g 旧结论 unconfirmed、
+  f（跑成）fixed、e（复现）reproduced、单站 WARNING 说出口、复测三态行带计数；
+  边界变异（在 `_retest_mark` 边界 drop_scan_errors）⇒ g 落 fixed —— 参数从阶段一路
+  传进分类，链路承重。
+- 独立快检 SAN180 先行（临时库跑分类与日志），再进全量门禁。
+- **门禁 wire14：SMOKE PASS（265 组）**。
+- 本轮一次性脚本（logs/，收尾已删）：`_patch_retest.py`、`_groups180_block.txt`、
+  `_finalize180.py`、`_final180_*.txt`、`_commit180.txt`、`smoke-wire14.log`、`s180-*` 临时目录。
+
 ## 续179（2026-10-14，WorkBuddy · CodeBuddy）：断言组固化（[172]/[177]/[178]）+ IP medium 佐证 + 动态并发档（含基准实测）
 
 实施者：WorkBuddy · CodeBuddy（远端 Linux）。接续 logs/HANDOFF-2026-10-14-b.md §1 按序清单做的四件事。

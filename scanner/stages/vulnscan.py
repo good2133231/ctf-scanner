@@ -37,12 +37,14 @@ def _lang_conflict(poc, site_lang):
     return bool(langs) and site_lang not in langs
 
 
-def _retest_mark(ctx, new_vulns, sites):
+def _retest_mark(ctx, new_vulns, sites, scan_errors=None):
     """独立复测三态（续150，用户点单）：把本轮"复测"结果与库中旧结论做对比并落库。
 
     判据（**不只是"没再报出来就算修好了"** —— 那会把"没探到"误报成"已修复"）：
       · 旧结论 `(target, poc_id)` 在本轮结果里**再次出现** → `reproduced`（仍可复现）；
       · 没出现，但它的 `target` 本轮**确实探过**（在 `sites` 里）→ `fixed`（已修复）；
+      · `target` 站点本轮探过、但**检查执行失败**（`scan_errors`，续180 借鉴点①）→
+        `unconfirmed` —— 一次请求失败不证明已修复，"没跑成"不许记成"已修复"；
       · 没出现，且 `target` 本轮**没探到** → `unconfirmed`（无法确认，**不是**已修复）。
     只写复测状态列，不改结论、不删行。
     """
@@ -74,8 +76,11 @@ def _retest_mark(ctx, new_vulns, sites):
                 th = urlsplit(t).netloc.lower()
             except Exception:                                # noqa: BLE001 - 解析失败按未探到
                 th = ""
-            if t in probed or (th and th in probed_hosts):
-                fixed.append(row["id"])          # 目标本轮探过、但没再报出来 ⇒ 已修复
+            _err = bool(scan_errors) and (t in scan_errors or (th and th in scan_errors))
+            if _err:
+                unc.append(row["id"])    # 续180：目标活着但检查没跑成 ⇒ 无法确认，**不**当已修复
+            elif t in probed or (th and th in probed_hosts):
+                fixed.append(row["id"])          # 目标本轮探过、检查跑成且没再报出来 ⇒ 已修复
             else:
                 unc.append(row["id"])            # 目标本轮没探到 ⇒ 无法确认（**不**当已修复）
     if rep:
@@ -84,8 +89,12 @@ def _retest_mark(ctx, new_vulns, sites):
         db.bulk_set_vuln_retest(fixed, "fixed")
     if unc:
         db.bulk_set_vuln_retest(unc, "unconfirmed")
+    _nerr180 = len(scan_errors or ())
     ctx.logger.info(f"[vulnscan] 复测三态：仍可复现 {len(rep)} / 已修复 {len(fixed)} / "
-                    f"无法确认 {len(unc)}（没探到的目标记「无法确认」，**不**误报「已修复」）")
+                    f"无法确认 {len(unc)}"
+                    + (f"（其中 {_nerr180} 个目标检查执行失败 —— 一次请求失败不证明已修复）"
+                       if _nerr180 else "")
+                    + "（没探到/没跑成的目标记「无法确认」，**不**误报「已修复」）")
 
 
 def _lang_summary(skips):
@@ -188,6 +197,9 @@ class VulnscanStage(Stage):
         # （下面的 run_all / POC 路 / afrog 路）各自 add()，阶段末汇总落库并说出口。
         # 与 `skip_severities` 那类"根本不执行"的分开说 —— 两件事混说就是假话。
         _blocked = owasp_checks.SeverityBlocked()
+        # 续180（借鉴点①）：本轮**检查执行失败**的站点（host 集合）——
+        # 复测三态要把它和「探过且跑成」分开：没跑成不许记「已修复」。
+        _scan_err = set()
 
         def _pocs_for(site):
             """指纹→POC 联动（P1-1）：站点技术栈命中的 POC 先跑，其余按上限补在后面。
@@ -238,18 +250,30 @@ class VulnscanStage(Stage):
                     ctx.logger.debug(f"[vulnscan] WAF 探测失败（{url}）：{e}")
             # 把任务 logger 传给检查：需要写过程日志的检查（SSRF 回连在外部回调模式下
             # 要交代注入了哪些 token）才能写进 `logs/task_*/task.log`。
-            found = list(owasp_checks.run_all(url, ctx.settings, logger=ctx.logger,
-                                              blocked=_blocked))
-            for poc in _pocs_for(site if isinstance(site, dict) else {}):
-                # `registry=pocs`：workflow 里 `tags:` 步骤的候选集，直接用本阶段已加载好的
-                # 那份（否则每个站点都会把 300+ 个 POC 文件重读一遍）。
-                for v in engine.run_poc_on_target(poc, url, ctx.settings, site=site,
-                                                  registry=pocs):
-                    # POC 结果与内置检查共用同一级别门槛（critical 恒保留）
-                    if not owasp_checks.severity_ok(v.get("severity", "medium"), floor):
-                        _blocked.add()      # 续176：执行过、命中了，只是被结果闸挡下
-                        continue
-                    found.append(v)
+            # 续180（借鉴点①）：检查**执行失败**的目标要记账（ARTEX retester 同一口径）——
+            # "没报出来"与"没跑成"在复测三态里是两回事，混说就会把没跑成记成"已修复"。
+            found = []
+            try:
+                found = list(owasp_checks.run_all(url, ctx.settings, logger=ctx.logger,
+                                                  blocked=_blocked))
+                for poc in _pocs_for(site if isinstance(site, dict) else {}):
+                    # `registry=pocs`：workflow 里 `tags:` 步骤的候选集，直接用本阶段已加载好的
+                    # 那份（否则每个站点都会把 300+ 个 POC 文件重读一遍）。
+                    for v in engine.run_poc_on_target(poc, url, ctx.settings, site=site,
+                                                      registry=pocs):
+                        # POC 结果与内置检查共用同一级别门槛（critical 恒保留）
+                        if not owasp_checks.severity_ok(v.get("severity", "medium"), floor):
+                            _blocked.add()      # 续176：执行过、命中了，只是被结果闸挡下
+                            continue
+                        found.append(v)
+            except Exception as e:              # noqa: BLE001 —— 单站失败不拖垮整批，但要记账
+                from urllib.parse import urlsplit as _us180
+                try:
+                    _scan_err.add(_us180(url).netloc.lower())
+                except Exception:               # noqa: BLE001 - 解析不了就记全 URL
+                    _scan_err.add(str(url))
+                ctx.logger.warning(f"[vulnscan] {url}：检查执行失败（{type(e).__name__}: "
+                                   f"{str(e)[:160]}）—— 该站旧结论本轮记「无法确认」，不许当「已修复」")
             return found
 
         all_v = []
@@ -334,4 +358,4 @@ class VulnscanStage(Stage):
         db.set_task_sev_blocked(ctx.task_id, floor, _blk)
         # 续150：独立复测模式（任务级选项 retest=True）—— 跑完与旧结论做三态对比。
         if ctx.options.get("retest") is True:
-            _retest_mark(ctx, uniq, sites)
+            _retest_mark(ctx, uniq, sites, scan_errors=_scan_err)
