@@ -2,6 +2,21 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续172（2026-10-14 补做，WorkBuddy · CodeBuddy）：站点列表「同标题聚合 + 可折叠」落到任务详情页签
+
+实施者：WorkBuddy · CodeBuddy（远端 Linux）。主理人 2026-10-13 点单、2026-10-14 给出 brazil-pix 样本催办（"标题还是没有修改……标题是要名称一样聚合起来 并且可以展开……默认是缩起来的"）。
+
+### 一、根因与改动
+
+1. **折叠键根因**：301/302 行**自带 title**（"301 Moved Permanently" = CDN 边缘默认页），`_site_fold_key` 原"有标题就按 title 折"把它们与跳转后真站点（redirect_title = "…| login"）拆成不同组—— 同站点 http/https 六行拆六组。修法：**3xx 优先 redirect_title**（`gui/app.py::_site_fold_key` 一处，跨任务 /sites 页同产地自动生效）。
+2. **详情页签接同源折叠**：task_detail 路由对当前页 sites 按 `_site_fold_key` 分组，代表行在前、成员行紧随（原生 `hidden` 默认收起，代表行按钮「展开同标题（N 条）」内联 onclick 切换，零新依赖）；被收起条数在按钮文案报出（§5 第 10 条）；折叠只作用当前页（同 /sites 口径）。
+3. **连带修一个 500**：`_page_assets` 返回 sqlite3.Row（不可赋值），分组前照 /sites 页 2992 行同款`[dict(r) for r in rows]` dict 化 —— 首跑验证脚本未断言 200，500 被误读成"没按钮"。
+
+### 二、验证
+
+- 一次性验证（复刻主理人样本：ib/mp 两站 http-301 + https-200 + t4admin）：两组各「展开同标题（1 条）」、成员行 `data-dup-of` + hidden、全部 URL 仍在页面（收起 ≠ 删数据）。
+- **变异证伪**：`_site_fold_key` 摘回旧逻辑 ⇒ ib 组拆开、只剩 ib-301 与 mp-301 的默认页**跨站组**（各收 1 条）—— 正是痛点形状，3xx 分支承重。
+- 全量门禁 wire8 → **SMOKE PASS，250 组**。
 ## 续177（2026-10-14，WorkBuddy · CodeBuddy）：JS 疑似凭据原文入库 + 值级黑名单（第一波：后端全链路）
 
 实施者：WorkBuddy · CodeBuddy（远端 Linux）。主理人 2026-10-14 点单（原话见 todo.txt 续177 登记节）；口径已拍板并进 AGENTS.md §5.10 注：红线只管本机配置凭据，授权目标挖到的按**扫描产物**处理 —— 原文入库（库 gitignore）、GUI 可展开、默认不进迁移包、报告外发面单独核。

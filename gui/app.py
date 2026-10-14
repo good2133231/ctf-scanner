@@ -539,7 +539,15 @@ def _site_fold_key(row):
     藏掉真实资产 —— 用户要的是"一样的显示在一起"，不是"把不一样的并掉"。
     空标题且长度为 0 ⇒ 返回 None，不参与折叠（宁留噪声不藏资产）。
     """
-    title = (row.get("title") or "").strip() or (row.get("redirect_title") or "").strip()
+    title = (row.get("title") or "").strip()
+    rtitle = (row.get("redirect_title") or "").strip()
+    if str(row.get("status") or "").startswith("3") and rtitle:
+        # 续172：3xx **优先用跳转后标题** —— 301/302 自己的 title 多是 CDN 边缘默认页
+        # （"301 Moved Permanently"），与跳转后真站点的标题对不上，同站点的 http/https
+        # 两行会被拆进不同组（主理人 brazil-pix 样本实测：同站六行拆成六组）。
+        return (row.get("task_id"), "t", rtitle)
+    title = title or rtitle
+
     if title:
         return (row.get("task_id"), "t", title)
     try:
@@ -1855,6 +1863,37 @@ def create_app():
         _st_hidden, site_total = _site_status_extra("sites", hide_st, sites_pager["total"],
                                                     sites_q, "task_id=?", (task_id,), order="id")
         _allst_state(sites_pager, hide_st, _st_hidden)
+        # 续172：站点页签「同标题放在一起 + 可折叠」。折叠键与跨任务 /sites 页**同一份产地**
+        # （`_site_fold_key`，本轮起 3xx 优先跳转后标题）；组内代表行 = 组内第一行（页序 id），
+        # 成员行紧随其后且默认收起（原生 hidden + 内联 onclick 展开，零新依赖）；
+        # 被收起的条数在代表行的按钮文案里报出（§5 第 10 条：展示过滤 ≠ 删数据）。
+        # 折叠只作用**当前页**（同 /sites 口径；分页条上的"共 N 条"是 SQL 总数）。
+        # _page_assets 返回 sqlite3.Row（不可赋值）—— 照 /sites 页同款先 dict 化
+        sites = [dict(r) for r in sites]
+        _fold172 = {}
+
+        for _r in sites:
+            _r["_dup_group"] = []
+        for _r in sites:
+            _k = _site_fold_key(_r)
+            if _k is None:
+                continue
+            _f = _fold172.get(_k)
+            if _f is None:
+                _fold172[_k] = _r
+            else:
+                _f["_dup_group"].append(_r)
+                _r["_dup_head"] = _f["id"]
+        _ordered172 = []
+        for _r in sites:
+            if _r.get("_dup_head") is not None:
+                continue          # 成员行稍后跟在代表行后面
+            _ordered172.append(_r)
+            for _m in _r.get("_dup_group") or []:
+                _m["_dup_member"] = True
+                _ordered172.append(_m)
+        sites = _ordered172
+
         # 站点页签的截图状态：有站点却一张截图都没有时，页面上要说清"为什么没有"并给「重新截图」入口
         # （用户 2026-09-23：「站点的截图显示为什么还没有完成」—— 实际是策略开关默认关、
         #   且当时建任务勾的 screenshot 阶段不生效，页面上只留一片空白）。
