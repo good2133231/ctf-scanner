@@ -2878,13 +2878,24 @@ def create_app():
             subs, hidden = _sub_rows(subs, base_where, params, hide_res)
             _ext_confidence(subs)               # 续169：平铺视图也要贴（两种视图一边有一边没有＝假徽章）
             _nores_state(pager, hide_res, hidden)
+        # 续178（用户点单"js挖掘后面再加一个(挖掘js数量:)"）：来源分类**各项都带条数**。
+        # 口径与"全部"视图一致：tag / 任务 / 重叠 / 解析筛选照 base_where + res_where，
+        # **故意排除 src_where** —— 选中某一类时若带上它，其他类会全变成 0（那成了
+        # "当前类有多少"而不是"各类分别有多少"）。域名关键字 q 是行内搜索，不进这个口径。
+        _cnt_where = _and_where(db.EXT_SUBDOMAIN_WHERE, where,
+                                None if show_all else db.OVERLAP_EXT_WHERE, tw)
+        _cnt_where = _and_where(_cnt_where, res_where)
+        src_counts = {r["source"]: r["c"] for r in db._query(
+            f"SELECT source, COUNT(*) c FROM subdomains WHERE {_cnt_where} GROUP BY source",
+            tuple(params))}
         return render_template("extdomains.html", subs=subs, groups=groups, grouped=grouped,
             ext_defaults=_ext_defaults(),
                                row_total=row_total, pager=pager, q=q, tag=tag,
                                show_all=show_all, task_id=tid or "",
                                tasks=_tasks_with_asset("subdomains"),
                                secrets=_secret_counts(),
-                               src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name)
+                               src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name,
+                               src_counts=src_counts)
 
     @app.route("/sites")
     @login_required

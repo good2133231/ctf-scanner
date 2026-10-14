@@ -55,7 +55,7 @@
        href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep_tag }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">全部</a>
     {% for k, label, _s, _n in src_tags %}
       <a class="btn-mini {{ 'ghost' if src != k else '' }}"
-         href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&src={{ k }}{{ keep_tag }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">{{ label }}</a>
+         href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&src={{ k }}{{ keep_tag }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">{{ label }}{% if src_counts.get(_s) %}（{{ src_counts.get(_s) }}）{% endif %}</a>
     {% endfor %}
   </p>
   {% set keep_src = '&src=' + src if src else '' %}
@@ -124,7 +124,7 @@
         formaction="{{ url_for('api_run_subdomain') }}">批量跑子域名（新建任务）</button>
       <button type="submit" class="ghost" formaction="{{ url_for('api_scan_ext') }}"
         title="新建一个 subdomain→probe→dirscan→vulnscan 的任务：先把它的子域也挖一遍，再探存活、扫目录、跑漏洞初筛">
-        送去探测（默认全任务拓展域名，新建任务）</button>
+        送去探测</button>
       <label class="muted" title="默认送本任务全部拓展域名（第三方 / CDN 清单里的那些不送，条数上限见 limits.ext_probe_max）；只想探勾上的几个就改成「只送勾选」">
         探测范围 <select name="scope"><option value="all">全任务</option><option value="picked">只送勾选</option></select></label>
       <label class="muted" title="1 = 只对当下这批域名做一轮；N&gt;1 时每层把「本轮新确认的自家域名」+「置信度达到阈值的相似域名」再追加采集一次，最多 N 层。默认值取自策略配置 subdomain.ext_depth">
