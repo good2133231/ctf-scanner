@@ -220,6 +220,21 @@ CREATE TABLE IF NOT EXISTS js_secrets (
   line_text TEXT DEFAULT '',
   created_at TEXT
 );
+-- 续178「送去探测」的送探记录：哪个域名、从哪个任务、送到哪个任务、哪种方式。
+-- 手工送探（api_scan_ext 新建任务 / 追加执行）与"归属追加"（api_promote_domains）都记一行
+-- —— extdomains 页的「已送探 → #N」徽章与组内送探子标签都从这张表出（主理人：
+-- "不管是手工还是置信度自己去扫描，都要标记扫描"；自动递归发生在同一任务内，
+-- 其痕迹就是 subdomains 行本身，不在此表）。
+-- 任务关联数据（跨任务）⇒ **不进 ASSET_TABLES**；不设外键 —— 任务删除不级联，
+-- 历史记录保留，页面按任务存在与否降级显示。
+CREATE TABLE IF NOT EXISTS ext_probes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  domain TEXT NOT NULL,
+  from_task INTEGER DEFAULT 0,  -- 从哪个任务的拓展域名页送出（0=跨任务视图）
+  task_id INTEGER DEFAULT 0,    -- 送到哪个任务（probe=新建任务；append=源任务自身）
+  kind TEXT DEFAULT 'probe',    -- probe / append / promote
+  created_at TEXT
+);
 -- 续177 值级黑名单（与 config/blacklist.txt 的**域名级**黑名单是两件事，见 scanner/secretbl.py）：
 -- 挡的是凭据 / flag **值**（匹配之后），整值精确比对、大小写敏感；按账号隔离（0=全局，
 -- 仅管理员可写），任务无关 ⇒ **不进 ASSET_TABLES**（clear_task_assets 按任务清，清不掉它）。
@@ -1319,7 +1334,41 @@ def delete_secret_blacklist(entry_id, owner_id=None):
             conn.close()
 
 
+def record_ext_probes(from_task, task_id, domains, kind="probe"):
+    """续178：记一批送探。同域同来源同目标同方式重复送 = no-op（防徽章重复行）。"""
+    n = 0
+    for d in domains:
+        d = str(d or "").strip().lower()
+        if not d:
+            continue
+        hit = _query("SELECT id FROM ext_probes WHERE domain=? AND from_task=? "
+                     "AND task_id=? AND kind=?",
+                     (d, int(from_task or 0), int(task_id or 0), str(kind or "probe")), one=True)
+        if hit:
+            continue
+        _exec("INSERT INTO ext_probes(domain,from_task,task_id,kind,created_at) VALUES(?,?,?,?,?)",
+              (d, int(from_task or 0), int(task_id or 0), str(kind or "probe"), _now()))
+        n += 1
+    return n
+
+
+def list_ext_probes(domains):
+    """续178：一批域名的送探记录 → `{domain: [(task_id, kind, created_at)]}`（新的在前）。
+    页面逐域名徽章与组内子标签共用这一处；任务不存在时页面按"任务已删"降级。"""
+    out = {}
+    for d in domains:
+        d = str(d or "").strip().lower()
+        if not d:
+            continue
+        rows = _query("SELECT task_id, kind, created_at FROM ext_probes WHERE domain=? "
+                      "ORDER BY id DESC", (d,))
+        if rows:
+            out[d] = [(int(r["task_id"]), r["kind"], r["created_at"]) for r in rows]
+    return out
+
+
 def merge_sites_tech(task_id, updates):
+
     """把新识别出的组件标签**并集**进 `sites.tech`，返回 `(改动的站点数, 库里没这些 URL 的清单)`。
 
     `updates` 是 `{站点 URL: [标签, …]}`。**并集而不是覆盖**：`sites.tech` 里已经有

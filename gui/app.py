@@ -2961,14 +2961,58 @@ def create_app():
         src_counts = {r["source"]: r["c"] for r in db._query(
             f"SELECT source, COUNT(*) c FROM subdomains WHERE {_cnt_where} GROUP BY source",
             tuple(params))}
+        # 续178：送探记录与子任务摘要（行徽章「已送探 → #N」+ 组内子标签的产地）。
+        # 本页全部域名（分组=组内行；平铺=subs）→ ext_probes 反查 → 按任务聚合状态与资产摘要。
+        _page_domains = []
+        if grouped:
+            for _g in groups:
+                _page_domains += [str(r["domain"]) for r in _g.get("rows") or []]
+        else:
+            _page_domains = [str(r["domain"]) for r in subs]
+        _pmap = db.list_ext_probes(_page_domains)
+        _ptasks = sorted({t for v in _pmap.values() for (t, _k, _c) in v})
+        _tinfo = {r["id"]: dict(r) for r in db._query(
+            f"SELECT id, status, name FROM tasks WHERE id IN ({','.join('?' * len(_ptasks))})",
+            tuple(_ptasks))} if _ptasks else {}
+        _psum = {}
+        if _ptasks:
+            _marks = ",".join("?" * len(_ptasks))
+            for _tn, _tbl in (("子域", "subdomains"), ("站点", "sites"), ("漏洞", "vulns")):
+                for _r in db._query(
+                        f"SELECT task_id, COUNT(*) c FROM {_tbl} WHERE task_id IN ({_marks}) "
+                        "GROUP BY task_id", tuple(_ptasks)):
+                    _psum.setdefault(_r["task_id"], {})[_tn] = _r["c"]
+        _kind_label = {"probe": "送去探测", "append": "追加执行", "promote": "归属追加"}
+        probe_map = {}
+        for _d, _recs in _pmap.items():
+            probe_map[_d] = [{"task_id": t, "kind": k,
+                              "label": _kind_label.get(k, k),
+                              "status": (_tinfo.get(t) or {}).get("status", ""),
+                              "name": (_tinfo.get(t) or {}).get("name", ""),
+                              "summary": "子域 {n}/站点 {s}/漏洞 {v}".format(
+                                  n=(_psum.get(t) or {}).get("子域", 0),
+                                  s=(_psum.get(t) or {}).get("站点", 0),
+                                  v=(_psum.get(t) or {}).get("漏洞", 0))}
+                             for (t, k, _c) in _recs]
+        group_probes = {}
+        if grouped:
+            for _g in groups:
+                _gp = {}
+                for _r in _g.get("rows") or []:
+                    for _pr in probe_map.get(str(_r["domain"])) or []:
+                        _gp[_pr["task_id"]] = _pr
+                if _gp:
+                    group_probes[_g["base"]] = sorted(_gp.values(), key=lambda x: -x["task_id"])
         return render_template("extdomains.html", subs=subs, groups=groups, grouped=grouped,
+
             ext_defaults=_ext_defaults(),
                                row_total=row_total, pager=pager, q=q, tag=tag,
                                show_all=show_all, task_id=tid or "",
                                tasks=_tasks_with_asset("subdomains"),
                                secrets=_secret_counts(),
                                src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name,
-                               src_counts=src_counts)
+                               src_counts=src_counts,
+                               probe_map=probe_map, group_probes=group_probes)
 
     @app.route("/sites")
     @login_required
@@ -3555,7 +3599,22 @@ def create_app():
         fallback = _safe_next(request.form.get("next"), url_for("tasks"))
         if not domains:
             return redirect(fallback)
+        # 续178 入口合并（主理人确认"是一个东西"）：复选框勾选（默认）＝送探前先把
+        # 「注册域命中任务目标」的域名追加为该任务的子域名（extdom.promote_domains
+        # 自判归属，不属于的自动跳过）—— 归属追加的子域也能进送探任务的存活探测。
+        # 续178：分支在 from_task 赋值之前执行 —— 表单的 task_id 在这里就地取。
+        _tform = (request.form.get("task_id") or "").strip()
+        if str(request.form.get("promote_too", "")).lower() in ("1", "true", "on"):
+
+            _pres = extdom.promote_domains(
+                domains, settings, logger=logger,
+                task_id=int(_tform) if _tform.isdigit() else None,
+                owner_id=_owner_scope())
+            if _pres["promoted"]:
+                logger.info(f"[gui] 送去探测随单归属追加 {len(_pres['promoted'])} 个"
+                            f"（任务 {_pres['tasks'] or '无'}）")
         stages = ["subdomain", "probe", "dirscan", "vulnscan"]
+
         options = {}
         # 续151「追加层数」：1 = 只对当下这批域名做一轮（默认）；N>1 时每层把新挖出的、
         # 归属本项目（注册域命中任务目标）的拓展域名再追加成子域名并**再采集一次**，最多 N 层。
@@ -3583,10 +3642,18 @@ def create_app():
             time.strftime("拓展探测-%m%d-%H%M%S")
         targets = "\n".join(domains)
         if str(request.form.get("append", "")).lower() in ("1", "true", "on"):
+            # 续178：送探记录 —— 追加执行也算"送过探"（送到源任务自身）。
+            db.record_ext_probes(int(from_task) if from_task.isdigit() else 0,
+                                 int(from_task) if from_task.isdigit() else 0,
+                                 domains, kind="append")
             return _do_append(from_task, stages, targets, domains, options, fallback)
         task_id = _create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
+        # 续178：送探记录（extdomains 页「已送探 → #N」徽章与组内子标签的产地）
+        db.record_ext_probes(int(from_task) if from_task.isdigit() else 0,
+                             task_id, domains, kind="probe")
         logger.info(f"[gui] 拓展域名探测任务 #{task_id} 已创建"
+
                     f"（{scope_note154 or f'勾选的 {len(domains)} 个域名'}，"
                     f"subdomain→probe→dirscan→vulnscan）")
         return redirect(url_for("task_detail", task_id=task_id))
@@ -3668,6 +3735,11 @@ def create_app():
         res = extdom.promote_domains(domains, settings, logger=logger,
                                      task_id=int(task_id) if task_id.isdigit() else None,
                                      owner_id=_owner_scope())
+        # 续178：归属追加也是"送探"的一种（kind=promote）。跨任务视图（无 task_id）
+        # 记 0 —— touched 可能是多个任务，逐对记录留给需要时再细化。
+        db.record_ext_probes(int(task_id) if task_id.isdigit() else 0,
+                             int(task_id) if task_id.isdigit() else 0,
+                             res["promoted"], kind="promote")
         logger.info(f"[gui] 归属追加：勾选 {len(domains)} 个 → 追加 {len(res['promoted'])} 个"
                     f"（任务 {res['tasks'] or '无'}）")
         return redirect(back)

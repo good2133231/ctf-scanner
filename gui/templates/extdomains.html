@@ -18,7 +18,12 @@
       value="{{ s.domain }}"></td>
     <td>{{ s.id }}</td>
     <td><a href="{{ url_for('task_detail', task_id=s.task_id) }}">#{{ s.task_id }}</a></td>
-    <td class="mono">{{ idn_display(s.domain) }}</td>
+    <td class="mono">{{ idn_display(s.domain) }}
+      {%- if probe_map.get(s.domain) %}{% for pr in probe_map.get(s.domain)[:1] %}
+      <a class="tech-tag" href="{{ url_for('task_detail', task_id=pr.task_id) }}"
+         title="已送探：{{ pr.label }} → 任务 #{{ pr.task_id }}（{{ pr.status or pr.name or '未知状态' }}）；组内子标签见下方">{{ pr.label }} → #{{ pr.task_id }}</a>
+      {%- endfor %}{% endif %}</td>
+
     <td>{{ conf_badge(s) }}</td>
     <td class="muted small mono">{{ s.ip or '-' }}
       {%- if not s.ip and s.ip_note %}<br><span class="muted small"
@@ -127,6 +132,9 @@
         送去探测</button>
       <label class="muted" title="默认送本任务全部拓展域名（第三方 / CDN 清单里的那些不送，条数上限见 limits.ext_probe_max）；只想探勾上的几个就改成「只送勾选」">
         探测范围 <select name="scope"><option value="all">全任务</option><option value="picked">只送勾选</option></select></label>
+      <label class="muted" title="续178：勾选（默认）＝送探前先把「注册域命中任务目标」的域名追加为该任务的子域名 —— 与原「归属本项目的追加为子域名」按钮是同一件事（主理人 2026-10-14 确认合并）">
+        <input type="checkbox" name="promote_too" value="1" checked> 同时把归属本项目的追加为子域名</label>
+
       <label class="muted" title="1 = 只对当下这批域名做一轮；N&gt;1 时每层把「本轮新确认的自家域名」+「置信度达到阈值的相似域名」再追加采集一次，最多 N 层。默认值取自策略配置 subdomain.ext_depth">
         追加扫描层数（1=只扫当下这批）
         <select name="depth">
@@ -151,9 +159,6 @@
         解析选中域名（DNS）</button>
       <input type="hidden" name="task_id" value="{{ task_id }}">
       {% endif %}
-      <button type="submit" class="ghost" formaction="{{ url_for('api_promote_domains') }}"
-        title="勾选的域名里，注册域命中其所属任务目标的那些，会被追加成该任务的子域名（原拓展行保留，出处可查）">
-        归属本项目的追加为子域名</button>
       <span class="muted">黑名单：命中即不入资产库，后续阶段也不会扫它；
         批量跑子域名会新建一个只跑 subdomain 阶段的任务，名称默认
         <span class="mono">{{ scan_name }}-月日-时分秒</span>。</span>
@@ -172,6 +177,19 @@
             {% call ext_table(tid) %}
               {% for s in g.rows %}{{ ext_row(s) }}{% endfor %}
             {% endcall %}
+            {# 续178：组内送探记录 —— 主理人："子标签依附在调用它的域名下，可展开，
+               与主域名分开、互不影响"。送探结果是独立任务，父域名资产不受影响。 #}
+            {% set gp = group_probes.get(g.base) or [] %}
+            {% if gp %}
+            <div class="muted small" style="padding:4px 12px">
+              送探记录：{% for pr in gp %}
+                <a href="{{ url_for('task_detail', task_id=pr.task_id) }}">#{{ pr.task_id }}</a>
+                <span class="tech-tag" title="{{ pr.name or pr.task_id }}">{{ pr.label }}（{{ pr.status or "未跑" }}，{{ pr.summary }}）</span>
+              {%- else %}{% endfor %}
+              —— 送探结果是独立任务，不影响主域名资产。
+            </div>
+            {% endif %}
+
           </details>
         {% endfor %}
       {% endif %}

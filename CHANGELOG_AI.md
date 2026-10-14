@@ -17,6 +17,34 @@
 - 一次性验证（复刻主理人样本：ib/mp 两站 http-301 + https-200 + t4admin）：两组各「展开同标题（1 条）」、成员行 `data-dup-of` + hidden、全部 URL 仍在页面（收起 ≠ 删数据）。
 - **变异证伪**：`_site_fold_key` 摘回旧逻辑 ⇒ ib 组拆开、只剩 ib-301 与 mp-301 的默认页**跨站组**（各收 1 条）—— 正是痛点形状，3xx 分支承重。
 - 全量门禁 wire8 → **SMOKE PASS，250 组**。
+## 续178（2026-10-14，WorkBuddy · CodeBuddy）：送去探测——按钮合并 + 送探记录 + 子标签套娃（波一 + 波二）
+
+实施者：WorkBuddy · CodeBuddy（远端 Linux）。主理人 2026-10-14 点单（原话见 todo.txt 续178 登记节）：
+按钮改名「送去探测」；送探要标记（手工/自动都算）；结果以**子标签**挂在调用它的域名下（可展开、
+与主域名分开互不影响）；"送去探测"与"归属本项目的追加为子域名"**是一个东西**（同日确认）；
+"js挖掘"后加条数（做成来源分类各项都带）。IP 重复**拍板 medium 佐证**（未实现，挂账）。
+
+### 一、改动（波一 b1b01ec / 波二随本小节）
+
+1. **波一**：按钮文案去掉尾巴（title 阶段清单说明保留）；`src_counts` 来源分类各项带条数
+（口径与"全部"视图一致、**故意排除 src_where**——选中某类时其他类不许归 0；q 是行内搜索不进口径；
+0 条不渲染；分组/平铺两视图同源）。
+2. **db**：`ext_probes` 表（domain/from_task/task_id/kind/created_at）+ `record_ext_probes`
+（同域同来源同目标同方式 no-op）+ `list_ext_probes`；**不进 ASSET_TABLES**（跨任务关联数据）。
+3. **送探记录三方式**：api_scan_ext 新建任务记 probe、追加执行记 append（**在 if 分支内**——
+首版误放 if 外变成每次送探都记 append，验证当场抓出）；api_promote_domains 记 promote。
+4. **入口合并**：promote 按钮删除；「送去探测」表单内复选框 promote_too（默认勾）⇒ 送探前先
+`extdom.promote_domains`（自判归属，不属于的自动跳过）。⚠ 该分支在 from_task 赋值**之前**执行，
+首版引用它直接 UnboundLocalError——表单 task_id 就地取（_tform）。
+5. **展示**：域名行徽章「送去探测 → #N」（链子任务，显最新一条）；分组组内送探子标签
+（#号/方式/状态/资产摘要"子域 N/站点 M/漏洞 K"，注明不影响主域名资产）；probe_map/group_probes
+由 extdomains 路由现算（`_tinfo` 要 dict 化——Row 无 .get）。
+
+### 二、验证与坑
+
+- 一次性验证（test client + 真验证码登录）：送探 302 建任务、probe 记录两域名、随单归属追加（aaa/bbb 入 promote:*、ext.example 不入——**promote_owned 是任务级批量**，非波二引入）、徽章/子标签/复选框渲染、（0）摘要如实；**变异证伪**：全新域名 ccc 不勾复选框送探 ⇒ 无 promote 行但有 probe 记录——复选框承重。
+- 全量门禁 wire9 → **SMOKE PASS，250 组**（波一 wire4、续172 wire8 各自绿）。
+- **坑**：跨行锚点 EOL 连踩（改单行锚点 + EOL 探测）；补丁部分落盘后增量续做（带自证）。
 ## 续177（2026-10-14，WorkBuddy · CodeBuddy）：JS 疑似凭据原文入库 + 值级黑名单（第一波：后端全链路）
 
 实施者：WorkBuddy · CodeBuddy（远端 Linux）。主理人 2026-10-14 点单（原话见 todo.txt 续177 登记节）；口径已拍板并进 AGENTS.md §5.10 注：红线只管本机配置凭据，授权目标挖到的按**扫描产物**处理 —— 原文入库（库 gitignore）、GUI 可展开、默认不进迁移包、报告外发面单独核。

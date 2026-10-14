@@ -4194,7 +4194,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [ ] IP 重复**不算 high、只作 medium 佐证**（主理人拍板）：与非 CDN 的已确认子域名同 IP ⇒ medium 理由文本"与已确认资产 x.test 同 IP 1.2.3.4（非 CDN）"，判据复用 `cdn.ip_kind`，零请求
 - [x] 「js挖掘」后加条数：来源分类**各项都带**（JS 挖掘（N）→ FOFA·标题（N）→ …）（口径与"全部"视图一致、排除 src 筛选、0 条不渲染、分组视图同源）
 - [x] 按钮文案：「送去探测（默认全任务拓展域名，新建任务）」→「送去探测」（title 里的阶段清单说明保留，信息不丢）
-- [ ] 送探过的行留扫描状态标记（手工送探 / 自动递归都要标）
+- [x] 送探记录已落库（ext_probes 表，probe/append/promote 三方式、同域同任务同方式 no-op）：行徽章「已送探 → #N」+ 分组组内送探子标签（#号/方式/状态/子任务资产摘要，默认随组折叠）；自动递归发生在同一任务内，痕迹就是 subdomains 行本身，不在此表（IP medium 佐证仍挂账）
 
 **借鉴点登记（2026-10-14 四项目调研，按序做、不新起号；调研全文见 docs/ref-projects-2026-10-14.md）**：
 - [ ] ① 复核加「无法确认」第三态（ARTEX agent/retester.go：reproduced/fixed/inconclusive —— 一次请求失败不证明已修复）
@@ -4202,3 +4202,23 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [ ] ③ ICP 备案反查收集源（ShuiZe beian2NewDomain，返回关联公司名可喂企业信息查询）
 - [ ] ④ 拦截动作结构化审计条目（ARTEX guard/guard.go AuditEntry：ts/tool/action/reason 逐条落审计）
 - [ ] ⑤ 多任务并发实测与动态并发档（limits 按机器规格算并发；参照 StrikeAgent recon-spiral 圈层预算思想，先出基准数字）
+
+**会话二交接（2026-10-14，logs/HANDOFF-2026-10-14-b.md）——下一会话接着做，按序：**
+- [ ] 断言组固化：一次性验证改写进 tests/smoke.py（[172] 站点折叠 / [177] JS 凭据与 GUI / [178] 送探记录与来源条数），每条带变异证伪（脚本在 logs/ 可直接改写）
+- [ ] IP medium 佐证（similar_candidates + confirmed_ips，调用方两处）
+- [ ] 任务 2 并发基准实测（单任务 CPU/内存 → 动态并发档进 limits）
+- [ ] logs/ 收尾（本会话脚本按确切文件名删，清单在 HANDOFF-b §1）
+- [ ] 借鉴点五项（① 复测三态 → ⑤ 动态并发档，见上方登记）
+## 续178（2026-10-14，WorkBuddy · CodeBuddy）：送去探测合并 + 送探记录 + 子标签（波一 + 波二 已完成）
+
+主理人 2026-10-14 点单全程落地（原话与逐项见上方登记节与拍板记录）：按钮改名「送去探测」、
+来源分类各项带条数、送探记录落库（ext_probes，probe/append/promote 三方式）、
+行徽章「已送探 → #N」、分组组内送探子标签（子任务状态与资产摘要）、
+入口合并（promote 按钮删除 → 「送去探测」表单内复选框"同时把归属本项目的追加为子域名"默认勾选）。
+**IP 重复 medium 佐证已拍板未实现**（挂账，见上方拍板记录）。
+
+- [x] 收尾四步：本小节 + CHANGELOG_AI.md 续178 小节（改动/验证/坑全录）+ 交接单
+      logs/HANDOFF-2026-10-14-b.md（下一会话按序待办：断言组固化 / IP medium / 任务 2 基准 /
+      logs 收尾 / 借鉴点五项）—— todo/CHANGELOG/AGENTS 三份 [8as] 口径已核
+- 验证：波一 wire4、续172 wire8、波二 wire9 三轮全量门禁各自 SMOKE PASS 250 组；
+  波二一次性验证含变异证伪（ccc 探针：复选框承重）
