@@ -521,6 +521,26 @@
     {% else %}
       <p class="muted">（名单为空）</p>
     {% endif %}
+    {# 续177 值黑名单（凭据 / flag **值**，与上面域名级是两件事：整值精确比对、匹配之后过滤）。
+        值只显掩码（jsmine._masked）；删除按 id；全局条目（owner_id=0）子账号删不动。 #}
+    {% if sb %}
+      <p class="muted small">值黑名单 {{ sb|length }} 条（JS 疑似凭据 / flag 的**值**，
+        与上面域名级黑名单是两回事：匹配之后整值精确比对，命中即不显示。
+        由漏洞行详情里的「判误报并拉黑值」一键加入）：</p>
+      <ul class="mono small" style="max-height:220px;overflow:auto">
+        {% for e in sb %}<li><label class="chk"><input type="checkbox" name="sid" value="{{ e.id }}">
+          <code>{{ e.value }}</code>{% if e.global %}（全局）{% endif %}
+          {% if e.kind %}<span class="muted">{{ e.kind }}</span>{% endif %}
+          {% if e.created_at %}<span class="muted small">{{ e.created_at }}</span>{% endif %}
+          {% if e.note %}<span class="muted small">（{{ e.note }}）</span>{% endif %}
+        </label></li>{% endfor %}
+      </ul>
+      <button type="submit" formaction="{{ url_for('api_jssecret_blacklist_remove') }}" formmethod="post"
+              formnovalidate>移除勾选的值黑名单条目</button>
+    {% else %}
+      <p class="muted small">值黑名单为空（凭据 / flag 值级，与上面域名级黑名单是两件事；
+        在漏洞行详情里点「判误报并拉黑值」即可加入）。</p>
+    {% endif %}
   </section>
 
   <section class="panel collapsible" data-panel="intel">

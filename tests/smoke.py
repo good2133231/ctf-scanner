@@ -21432,11 +21432,18 @@ expression: r0()
     assert "api_rescan" not in _st145, "sites.html 里不该再有任何 /api/rescan 引用"
     assert '"/api/rescan"' in _apa145, \
         "路由本体不许被顺手删掉（本文件有 8 处直接打它，接口留着随时可挂回来）"
-    # 详情页的 POST 表单：拓展域名「送去探测」+ 续170 站点页签「重新截图」= 恰好 2 个 —— 数一遍，
-    # 多一个就是有人把补扫/复查入口加回来了（比逐个搜按钮文案强：换个文案就绕过去了）
+    # 详情页的 POST 表单：拓展域名「送去探测」+ 续170「重新截图」+ 续177「判误报并拉黑值」
+    # = **点名各恰好 1 个**。续145 原来用"恰好 2 个"计数防补扫/复查复活，那个口径在新增
+    # 合法表单时会误伤（本轮实测：续177 拉黑表单一加就红）—— 升级为点名式：新增表单必须
+    # 来这里显式登记；/api/rescan 依旧一个不许有（上面已断言）。变异证伪：删任一表单 ⇒
+    # 点名红；新增表单不来登记 ⇒ 总数红。
+    for _act145 in ("api_scan_ext", "api_reshoot_sites", "api_jssecret_blacklist"):
+        _cnt145 = _td145.count(f"url_for('{_act145}')")
+        assert _cnt145 == 1, \
+            f"详情页 {_act145} 表单应恰好 1 个：实测 {_cnt145}"
     _n_post145 = _td145.count('method="post"')
-    assert _n_post145 == 2, \
-        f"任务详情页的 POST 表单应该恰好 2 个（送去探测 + 重新截图）：实测 {_n_post145}"
+    assert _n_post145 == 3, \
+        f"详情页 POST 表单总数应 3（新增表单必须显式改这条登记）：实测 {_n_post145}"
 
     # ---- ② `subdomain.auto_root` 三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射）----
     assert _D145["subdomain"]["auto_root"] is True, \

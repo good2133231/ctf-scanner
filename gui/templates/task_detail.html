@@ -180,6 +180,18 @@
               <pre id="tvpy-{{ v.id }}">{{ packet_python(v.packets, v.target) }}</pre>
               {% endif %}
               {% else %}<p class="muted small">{{ no_packets_hint }}</p>{% endif %}
+          {# 续177：JS 疑似凭据的**原文**单独一行（授权目标挖到的按扫描产物处理，
+              AGENTS.md §5.10 注）。"是不是 js-secret 行"由路由侧判（vuln_source 那一处
+              产地），模板只认 js_raw 映射 —— 不在这里抄第二份前缀判据。 #}
+          {% if js_raw.get(v.id) %}
+          <p>凭据原文（单独一行）：<code class="mono">{{ js_raw.get(v.id) }}</code>
+            <form method="post" action="{{ url_for('api_jssecret_blacklist') }}" class="inline-form"
+                  onsubmit="return confirm('把这个值加入黑名单（下次匹配到就不显示），并把本行判为误报？')">
+              <input type="hidden" name="vuln_id" value="{{ v.id }}">
+              <input type="hidden" name="next" value="{{ request.full_path }}">
+              <button type="submit" class="btn-mini">判误报并拉黑值</button>
+            </form></p>
+          {% endif %}
               {% if v.review_note %}<p class="muted small">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
           </tr>
         {% else %}

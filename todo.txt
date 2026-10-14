@@ -4110,7 +4110,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 
 - [ ] **续172**：站点标题折叠落到任务详情页签（登记节在上方，三条子项照旧）
 - [ ] **续173**：IP 反查的备用接口与自己实现（PTR 走 dnsq + 原因档 + 三源成败说清）
-- [ ] **续174**：JS 疑似凭据「可入库 + 点击查看详细」（先要主理人拍口径，动的是凭据红线）
+- [x] **续174**：JS 疑似凭据「可入库 + 点击查看详细」—— 已由续177 整体覆盖（口径拍板 + js_secrets 原文入库 + GUI 原文行与一键拉黑）
 - [ ] **续175**：换一台机器这条线跑到真机上（五项子项）
 - [ ] **续177**：JS 疑似凭据显示具体值 + 复核 + 值级黑名单（登记见下节）
 - [ ] **续178**：拓展域名「送去探测」变成挂在父域名下的独立子扫描（登记见下节）
@@ -4180,15 +4180,22 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] `stages/jsmine.py` 接线：收集点过滤 + 过关项写 js_secrets 原文 + vulns 掩码行照旧；被挡量进日志/统计行/落盘三处
 - [x] `scanner/flagfind.py` 接线：三元组包 dict 过滤 + stats.blocked + note 汇总
 - [x] 门禁：`[8ba]⑤` 断言随 SECRET_TABLES 同步；全量 SMOKE PASS 250 组（wire2）
-- [ ] GUI：/vulns 与任务详情页显示原文（单独一行）—— 设计定稿：js_raw 配对映射（同 host 的 js-secret vulns 行与 js_secrets 行成对同序插入，按 id 同序配对）
-- [ ] GUI：「判误报并拉黑值」一键（拉黑值 + 复用 `db.bulk_set_vuln_review` 判误报）
-- [ ] GUI：策略页黑名单管理（并进域名黑名单入口，标注"两件事"；值只显掩码，删除按 id）
+- [x] GUI：/vulns 与任务详情页显示原文（单独一行）—— js_raw 配对映射（同 host 成对插入按 id 同序配对），路由侧只问 vuln_source() 一处产地
+- [x] GUI：「判误报并拉黑值」一键（POST /api/jssecret/blacklist：secretbl.add + bulk_set_vuln_review 判误报；非 js-secret 行 409 拒绝，_append_err 加 title 参数）
+- [x] GUI：策略页黑名单管理（域名黑名区下新增值黑名单区：值只显掩码、勾选移除、全局条目标出；POST /api/jssecret/blacklist/remove 按账号隔离）
 - [ ] 报告三态维持掩码的断言 + `[177]` 断言组（每条带变异证伪）
 
 **续178 拍板记录（2026-10-14，主理人确认）**：
 
-- [ ] "送去探测"与"归属本项目的追加为本任务子域名"**是一个东西**：效果＝子标签套在调用它的域名下，可展开，与主域名分开、互不影响
+- [x] "送去探测"与"归属本项目的追加为本任务子域名"**是一个东西**（主理人 2026-10-14 确认）：形态＝bulkbar 只留「送去探测」主按钮 + 复选框"同时把归属本项目的追加为子域名"（默认勾选，一次点击两件事都做）；子标签套在调用它的域名下，可展开，与主域名分开、互不影响
 - [ ] IP 重复**不算 high、只作 medium 佐证**（主理人拍板）：与非 CDN 的已确认子域名同 IP ⇒ medium 理由文本"与已确认资产 x.test 同 IP 1.2.3.4（非 CDN）"，判据复用 `cdn.ip_kind`，零请求
 - [x] 「js挖掘」后加条数：来源分类**各项都带**（JS 挖掘（N）→ FOFA·标题（N）→ …）（口径与"全部"视图一致、排除 src 筛选、0 条不渲染、分组视图同源）
 - [x] 按钮文案：「送去探测（默认全任务拓展域名，新建任务）」→「送去探测」（title 里的阶段清单说明保留，信息不丢）
 - [ ] 送探过的行留扫描状态标记（手工送探 / 自动递归都要标）
+
+**借鉴点登记（2026-10-14 四项目调研，按序做、不新起号；调研全文见 docs/ref-projects-2026-10-14.md）**：
+- [ ] ① 复核加「无法确认」第三态（ARTEX agent/retester.go：reproduced/fixed/inconclusive —— 一次请求失败不证明已修复）
+- [ ] ② host 碰撞收集源（ShuiZe Plugins/infoGather/subdomain/hostCollide：同 IP 绑不同 Host 头找隐藏站点）
+- [ ] ③ ICP 备案反查收集源（ShuiZe beian2NewDomain，返回关联公司名可喂企业信息查询）
+- [ ] ④ 拦截动作结构化审计条目（ARTEX guard/guard.go AuditEntry：ts/tool/action/reason 逐条落审计）
+- [ ] ⑤ 多任务并发实测与动态并发档（limits 按机器规格算并发；参照 StrikeAgent recon-spiral 圈层预算思想，先出基准数字）

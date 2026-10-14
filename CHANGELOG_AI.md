@@ -18,7 +18,15 @@
 - 接线行为一次性验证（临时库、零网络）：jsmine 与 flagfind 两路各 **正向 ok + 变异证伪 ok**（摘掉 `filter_secrets` ⇒ 被拉黑值也进库、无挡掉日志 —— 证明"挡掉了"有可观测后果）。
 - 迁移包复刻：默认档两表都空都计数（`{"flags": 1, "js_secrets": 1}`）、显式档两表都带出、导入警告点名 `js_secrets`。
 
-### 三、剩下的（GUI 波 + 断言组）
+### 三、剩下的（断言组）
+### 四、GUI 波（同日第二波，提交随本小节）
+
+1. **原文行（单独一行）**：`_js_secret_raw_map()`（app.py，模块级）按"同 host 成对插入、id 同序"把 js-secret vulns 行与 js_secrets 行配对出 `{vuln_id: 原文}`，/vulns 与任务详情两处传参；模板只认 js_raw 映射，"是不是 js-secret 行"只问 `vuln_source()` 一处产地（§5.14，不抄前缀）。
+2. **「判误报并拉黑值」一键**（`POST /api/jssecret/blacklist`）：`secretbl.add`（值进黑名单）+ `db.bulk_set_vuln_review([vid], "false_positive")`（复用复核台账，不新造状态）；非 js-secret 行/缺 id/无配对原文 ⇒ 409 拒绝——`_append_err` 加 `title` 参数（默认值保住三个既有追加调用方），拒绝页标题讲"无法拉黑这个值"不讲"无法追加执行"。
+3. **策略页值黑名单管理**：域名黑名区下新增子区（值只显**掩码** `jsmine._masked`、勾选移除、全局条目标出），`POST /api/jssecret/blacklist/remove` 批量按 id、按账号隔离；三处 settings render 传 `sb`。
+4. **db 小修**：`insert_secret_blacklist` 容忍 `owner_id=None`（GUI `_owner_scope()` 无归属上下文返 None；与 blacklist.add 的 `or 0` 同口径）——GUI 实测 500 抓出。
+5. **门禁同步**：`[8at]` 详情页 POST 表单断言从"恰好 2 个"计数升级为**点名式**（api_scan_ext / api_reshoot_sites / api_jssecret_blacklist 各恰好 1 个 + 总数 3；新增表单必须显式登记；/api/rescan 依旧一个不许有）——wire5 首跑红在那条计数上，同步而非放松。
+6. **验证**：一次性 test client（临时库+真验证码登录）过七条：原文行两视图、拒绝两路（409+标题）、拉黑+判误报落库、新任务"下次不显示"（黑名单挡在匹配点+日志说出口）、旧任务重跑去重不重复、策略页掩码显示+移除；全量门禁 wire6 → **SMOKE PASS，250 组**。
 
 /vulns 与详情页原文行（单独一行）、「判误报并拉黑值」一键、策略页黑名单管理、报告三态掩码断言、`[177]` 断言组。设计定稿见 todo.txt 续177 登记节。
 ## 续176-附（2026-10-14，WorkBuddy · CodeBuddy）：修 CI 红 —— [8m]③ DNS 钉死 + [167]⑥ 夹具换仓库内文件

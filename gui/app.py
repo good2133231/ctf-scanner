@@ -52,7 +52,7 @@ from scanner import (admin_setup, audit, auth as taskauth, blacklist, captcha, c
                      certs as certs_mod, db, devfixture, devmode, dnsq,
                      # 这三家反查与 GitHub 检索的**取键函数**归它们自己所有，面板只调用不复制路径
                      extdom, fofa, github_leak, jsmine, login_guard, migrate, nodes,
-                     queue, quake,
+                     queue, quake, secretbl,
                      screenshot,
                      shodan, toolmgr, users, packetcodec)
 from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
@@ -662,6 +662,9 @@ def _console_note(settings):
 
 
 _OWASP_ID_RE = re.compile(r"^a\d\d-")
+# 续177：js-secret 行的 poc_id 前缀 —— `vuln_source()` 与 GUI 拉黑路由共用这一处，不各抄一份
+_JS_SECRET_PREFIX = "js-secret-"
+
 
 
 def vuln_source(poc_id):
@@ -674,14 +677,41 @@ def vuln_source(poc_id):
     p = str(poc_id or "").strip().lower()
     if p.startswith("afrog:"):
         return "afrog"
-    if p.startswith("js-secret-"):
+    if p.startswith(_JS_SECRET_PREFIX):
         return "js-secret"
     if _OWASP_ID_RE.match(p) or p.startswith("takeover-"):
         return "内置检查"
     return "POC"
 
 
+def _js_secret_raw_map(vuln_rows=None, task_id=None, host=None):
+    """js-secret 行 → **原文**映射（续177）：页面渲染传 `vuln_rows`，单行操作传 task_id + host。
+    配对依据：同 host 的 js-secret vulns 行与 `js_secrets` 行是 `stages/jsmine.py`
+    同一循环**成对插入**的（先 insert_js_secret 后 insert_vuln，id 严格同序；追加执行
+    续跑时两边继续追加、序号继续成立）⇒ 按 host 分组各按 id 排序后按序号对齐。
+    "是不是 js-secret 行"只问 `vuln_source()`（那一处产地），这里不抄前缀。
+    """
+    if vuln_rows is None:
+        if task_id is None or host is None:
+            return {}
+        vuln_rows = db.list_vulns(task_id=task_id, limit=None)
+    sec = [v for v in vuln_rows if vuln_source(v["poc_id"]) == "js-secret"]
+    if not sec:
+        return {}
+    by_host = {}
+    for v in sec:
+        by_host.setdefault((v["task_id"], v["target"]), []).append(v)
+    out = {}
+    for (tid_, host_), vs in by_host.items():
+        vs.sort(key=lambda r: int(r["id"]))
+        cands = db.list_js_secrets(tid_, host=host_)
+        for i, v in enumerate(vs):
+            if i < len(cands):
+                out[int(v["id"])] = cands[i]["value"]
+    return out
+
 def build_vuln_matrix(rows):
+
     """按「级别 × 来源」汇总计数 + 每目标命中数（纯展示层；`rows` 是 SQL 聚合行）。
 
     `rows` 每行形如 `{"severity","poc_id","target","c"}`（`GROUP BY severity,poc_id,target`）。
@@ -1450,10 +1480,10 @@ def create_app():
             return False, "该任务正在运行或排队中，无法追加（避免并发覆盖停止信号）；请先停止或等它跑完"
         return True, ""
 
-    def _append_err(msg, fallback):
-        """追加被拒：返回 409 + 一个可读的最小页面（表单 POST 直接看到原因）。"""
+    def _append_err(msg, fallback, title="无法追加执行"):
+        """追加 / 其它表单动作被拒：返回 409 + 一个可读的最小页面；title 给非追加的调用方换一句讲对话的标题（默认值保住三个既有追加调用方）。"""
         return ("<!doctype html><meta charset='utf-8'>"
-                f"<h3>无法追加执行</h3><p>{msg}</p>"
+                f"<h3>{title}</h3><p>{msg}</p>"
                 f"<p><a href='{fallback}'>返回</a></p>"), 409
 
     def _do_append(src_raw, stages, text, targets, stage_opts, fallback):
@@ -1944,6 +1974,8 @@ def create_app():
 
             page_sizes=PAGE_SIZES,
             vulns=vuln_rows, vuln_total=vuln_total, vuln_pager=vuln_pager,
+            js_raw=_js_secret_raw_map(vuln_rows),
+
             vuln_sev=vsev, vuln_q=vq, vuln_page_sizes=PAGE_SIZES,
             vuln_matrix=vuln_overview,
             # 「复查 / 拓展域名探测」发起的任务记 rescan_of，详情页据此反向回跳
@@ -2364,7 +2396,9 @@ def create_app():
                                task_id=tid or "", tasks=tasks,
                                task_names={t["id"]: t["name"] for t in tasks},
                                q=q, pager=pager, sort=sort, desc=desc,
-                               page_sizes=PAGE_SIZES)
+                               page_sizes=PAGE_SIZES,
+                               js_raw=_js_secret_raw_map(rows))
+
 
     @app.route("/api/vulns/review", methods=["POST"])
     @login_required
@@ -3272,12 +3306,64 @@ def create_app():
 
     @app.route("/api/blacklist/remove", methods=["POST"])
     @login_required
+    def _value_blacklist_view():
+        """策略页用的值黑名单视图（续177）：值只显**掩码**（`jsmine._masked`，删除按 id），
+        并标出全局条目（owner_id=0，子账号删不动 —— 与 `secretbl.remove` 的隔离同口径）。"""
+        return [{"id": r["id"], "value": jsmine._masked(str(r["value"] or "")),
+                 "kind": r["kind"], "note": r["note"], "created_at": r["created_at"],
+                 "global": int(r["owner_id"] or 0) == 0}
+                for r in secretbl.load(owner_id=_owner_scope())]
+
     def api_blacklist_remove():
+
         n = blacklist.remove(_picked_domains(), settings, owner_id=_owner_scope())
         logger.info(f"[gui] 黑名单移除 {n} 条")
         return redirect(url_for("settings_page"))
 
+    @app.route("/api/jssecret/blacklist", methods=["POST"])
+    @login_required
+    def api_jssecret_blacklist():
+        """续177「判误报并拉黑值」：把一条 `js-secret-*` 行的**值**加进值黑名单，并顺手把该行判为误报。
+        主理人 2026-10-14 原话："添加误报后 比如js的值，可以把那个值加入黑名单
+        下次匹配到就不显示了"。两件事一次做完：黑名单挡的是**值**（判据在
+        `scanner/secretbl.py`，与域名级 `config/blacklist.txt` 是两回事）；
+        "判误报"复用现有复核台账（`db.bulk_set_vuln_review`，不新造状态）。
+        原文按配对取（`_js_secret_raw_map`，与页面展示同一个 helper）。
+        """
+        fallback = _safe_next(request.form.get("next"), url_for("vulns"))
+        vid = str(request.form.get("vuln_id") or "").strip()
+        if not vid.lstrip("-").isdigit():
+            return _append_err("缺少要拉黑的漏洞行号", fallback, title="无法拉黑这个值")
+        row = db._query("SELECT * FROM vulns WHERE id=?", (int(vid),), one=True)
+        if not row:
+            return _append_err("那条漏洞行不在库里（可能已被清理）", fallback, title="无法拉黑这个值")
+        if vuln_source(row["poc_id"]) != "js-secret":
+            return _append_err("只有 JS 疑似凭据行能拉黑值（其它行没有值可拉）", fallback, title="无法拉黑这个值")
+        raw = _js_secret_raw_map(task_id=row["task_id"], host=row["target"]).get(int(vid), "")
+        if not raw:
+            return _append_err("库里没有这一行的原文（js_secrets 表里找不到配对行）", fallback, title="无法拉黑这个值")
+        kind = str(row["poc_id"] or "")[len(_JS_SECRET_PREFIX):] or "js-secret"
+        secretbl.add(raw, kind=kind, note="GUI 判误报拉黑", owner_id=_owner_scope())
+        db.bulk_set_vuln_review([int(vid)], "false_positive",
+                                note="值已加入黑名单，下次匹配到不再显示")
+        logger.info(f"[gui] js-secret 行 #{vid}（{kind}）的值已拉黑并判误报")
+        return redirect(fallback)
+
+    @app.route("/api/jssecret/blacklist/remove", methods=["POST"])
+    @login_required
+    def api_jssecret_blacklist_remove():
+        """续177：策略页移除值黑名单条目（批量按 id；账号隔离 —— 别人的条目删不动）。"""
+        fallback = _safe_next(request.form.get("next"), url_for("settings_page"))
+        ids = [x for x in request.form.getlist("sid")
+               if str(x).strip().lstrip("-").isdigit()]
+        n = 0
+        for x in ids:
+            n += secretbl.remove(int(x), owner_id=_owner_scope())
+        logger.info(f"[gui] 值黑名单移除 {len(ids)} 条（受影响 {n} 行）")
+        return redirect(fallback)
+
     @app.route("/api/domains/run-subdomain", methods=["POST"])
+
     @login_required
     def api_run_subdomain():
         """把勾选的域名打包成**一个新任务**，只跑 subdomain 阶段。
@@ -3980,6 +4066,8 @@ def create_app():
                 return render_template("settings.html", s=_s114, checks=owasp_checks,
                                        bl=blacklist.load(settings, owner_id=_owner_scope()),
                                        bl_path=rel_display(blacklist.path(settings), mask_outside=True),
+                                       sb=_value_blacklist_view(),
+
                                        esp=external_source_panel(_s114),
                                        shape_note=_shape_note(_s114),
                                        edge_note=_edge_note(_s114),
@@ -3995,6 +4083,7 @@ def create_app():
         return render_template("settings.html", s=settings, checks=owasp_checks,
                                bl=blacklist.load(settings, owner_id=_owner_scope()),
                                bl_path=rel_display(blacklist.path(settings), mask_outside=True),
+                               sb=_value_blacklist_view(),
                                esp=external_source_panel(settings),
                                shape_note=_shape_note(settings),
                                edge_note=_edge_note(settings),

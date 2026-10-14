@@ -1292,12 +1292,12 @@ def insert_secret_blacklist(value, kind="", note="", owner_id=0):
     if not v:
         return 0
     hit = _query("SELECT id FROM secret_blacklist WHERE value=? AND owner_id=?",
-                 (v, int(owner_id)), one=True)
+                 (v, int(owner_id or 0)), one=True)
     if hit:
         return int(hit["id"])
     return _exec("INSERT INTO secret_blacklist(value,kind,note,owner_id,created_at) "
                  "VALUES(?,?,?,?,?)",
-                 (v, str(kind or ""), (str(note or ""))[:500], int(owner_id), _now()))
+                 (v, str(kind or ""), (str(note or ""))[:500], int(owner_id or 0), _now()))
 
 
 def delete_secret_blacklist(entry_id, owner_id=None):
