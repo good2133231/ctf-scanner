@@ -14,7 +14,7 @@ import threading
 from .base import Stage
 from .dirscan import TECH_LANG, _dict_kind
 from .. import afrog as afrog_mod
-from .. import config, db, flagfind, ml
+from .. import audit, config, db, flagfind, ml
 from ..evasion import detect as detect_waf
 from ..owasp import checks as owasp_checks
 from ..pocs import engine
@@ -356,6 +356,10 @@ class VulnscanStage(Stage):
                 f"未入库（入库数据一条未动；与 skip_severities 那类「根本不执行」的检查"
                 f"是两回事 —— 这些是真正跑过、并且有命中的）")
         db.set_task_sev_blocked(ctx.task_id, floor, _blk)
+        if _blk:      # 续182（借鉴点④）：拦截动作进结构化审计（旁路，失败自吞）
+            audit.record(audit.KIND_SCAN_BLOCK, "scanner", "", target=str(ctx.task_id),
+                         detail=f"vulnscan：级别门槛 {floor} 挡下 {_blk} 条"
+                                f"（已执行且命中、未入库）", settings=ctx.settings)
         # 续150：独立复测模式（任务级选项 retest=True）—— 跑完与旧结论做三态对比。
         if ctx.options.get("retest") is True:
             _retest_mark(ctx, uniq, sites, scan_errors=_scan_err)

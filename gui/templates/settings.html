@@ -421,6 +421,16 @@
       <input name="iprecon_max_domains_per_ip" value="{{ s.iprecon.max_domains_per_ip }}"></label>
     <label>并发数（公共接口，建议保持克制） <input name="iprecon_workers" value="{{ s.iprecon.workers }}"></label>
     <label>单次超时（秒） <input name="iprecon_timeout" value="{{ s.iprecon.timeout }}"></label>
+    <label class="chk" title="开跑前先探一次每个接口还活不活：挂了的源整轮跳过，不再对每个 IP 各打一条日志"><input type="checkbox" name="iprecon_preflight" value="1"
+      {{ 'checked' if s.iprecon.preflight }}> <b>接口存活预检</b>（源挂了就整轮跳过它）</label>
+    <label title="默认源预检全挂时改用这里；ptr 是本框架自己实现的原生 PTR，不发 HTTP">备用源（逗号分隔）
+      <input name="iprecon_fallback_sources" style="width:22em"
+        value="{{ (s.iprecon.fallback_sources or [])|join(', ') }}"></label>
+    <label>备用源 rapiddns 地址 <input name="iprecon_api_rapiddns" style="width:22em"
+      value="{{ s.iprecon.api_rapiddns or '' }}"></label>
+    <label>备用源 viewdns 地址 <input name="iprecon_api_viewdns" style="width:22em"
+      value="{{ s.iprecon.api_viewdns or '' }}"></label>
+
     <label class="chk"><input type="checkbox" name="fofa_enabled" value="1"
       {{ 'checked' if s.fofa.enabled }}> <b>favicon（ICO）反查同源资产</b>
       （需在 <code>config/keys.yaml</code> 填 fofa.email / fofa.key）</label>
@@ -660,6 +670,9 @@
     <p class="muted small">续158：这几段原先"只能改文件"，现已接上页面（改完保存即生效；
       工具路径与字典路径请填仓库内相对路径）。</p>
     <label>队列 worker 数 <input name="queue_workers" value="{{ s.queue.workers }}"></label>
+    <label class="chk" title="再按本机 CPU/内存收一道上限：小机器 1 / 中 2 / 大 4；配置里写的 workers 仍是天花板"><input type="checkbox" name="queue_workers_auto" value="1"
+      {{ 'checked' if s.queue.workers_auto }}> 按机器规格自动收并发上限</label>
+
     <label class="chk"><input type="checkbox" name="dev_enabled" value="1"
       {{ 'checked' if s.dev.enabled }}> 开发模式（并发/预算压到最小，跑全流程自检用）</label>
     <label>开发模式夹具端口（0=自动） <input name="dev_fixture_port" value="{{ s.dev.fixture_port }}"></label>

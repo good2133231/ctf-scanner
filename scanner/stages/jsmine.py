@@ -176,6 +176,17 @@ class JsmineStage(Stage):
         # 会各报一行 —— 那才是用户看到的"二次出现"。重跑/追加执行还要**先看库里已有什么**
         # （`insert_vuln` 没有 UNIQUE 约束，去重是写方的责任，AGENTS §5.6）。
         domains, urls, secrets = set(), set(), []
+        # 续184：邮箱（数据探测）—— 与挖域名/敏感信息用的是**同一批正文**，正则不同而已，
+        # 因此**零额外请求**；只攒邮箱、不攒正文（JS 动辄 MB 级，攒全文是白烧内存）。
+        from .. import mails as _mails184
+        _mail_hits, _mail_files = {}, 0
+
+        def _mail_sink(_src, _text):
+            nonlocal _mail_files
+            _mail_files += 1
+            _mails184.harvest(_mail_hits, _src, _text)
+
+
         seen_value = _existing_js_secrets(ctx.task_id)
         js_count = 0
         for u in sites:
@@ -189,7 +200,9 @@ class JsmineStage(Stage):
                                  text_sink=lambda _r: (
                                      flagfind.harvest(ctx, _r.get("url") or u,
                                                       _r.get("text") or "", "js"),
-                                     fingerprint.collect(ctx, u, _r, "js")))
+                                     fingerprint.collect(ctx, u, _r, "js"),
+                                     _mail_sink(_r.get("url") or u, _r.get("text") or "")))
+
             except Exception as e:
                 ctx.logger.warning(f"[jsmine] {u} 挖掘失败：{e}")
                 continue
@@ -251,7 +264,14 @@ class JsmineStage(Stage):
         # `probe.second_pass` 一处，口径不会分叉。
         probe_stage.second_pass(ctx, extra=new_domains)
 
+        # 续184：邮箱入库（前面的正文都已 harvest 完，这里一次性落）
+        _mails184.save(ctx.task_id, _mail_hits, settings=ctx.settings,
+                      logger=ctx.logger, files=_mail_files)
+        ctx.results["emails"] = sorted(_mail_hits.values(),
+                                       key=lambda r: (r.get("domain", ""), r.get("email", "")))
+
         # 2) 接口 URL：落盘 + 进内存结果（不入 sites/dirs 表）
+
         url_list = sorted(urls)
         ctx.results["js_urls"] = url_list
         write_lines(ctx.workdir / "js_urls.txt", url_list)

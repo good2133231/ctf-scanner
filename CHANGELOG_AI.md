@@ -3,6 +3,86 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续184（2026-10-14，WorkBuddy · CodeBuddy）：修 machine_tier「探不到内存」哨兵判档 bug（wire19 [181](a) 红）
+
+- 会话三交接首查：smoke-wire19 红（263 组止于 [181](a)）——「探不到内存按中档边界走、只看 CPU」。
+  实测复现：`_mem_gb` 桩 None 后 `machine_tier(16)` 返回 `{'tier':'中','suggested':16}`，
+  期望 `{'tier':'大','suggested':32}`。根因是**实现 bug 不是断言 bug**：哨兵 `mem_gb = 8`
+  落进下一行的 `mem_gb <= 8` 中档判据参与判档，探不到内存的大机器被拉低一档 ——
+  与注释「只看 CPU」自相矛盾。按纪律修实现、不动既有断言。
+- 修法（`scanner/utils.py::machine_tier`，续181 引入）：探不到内存时不再把哨兵并进统一
+  判档链，直接按 CPU 归档（≤2C 小/8、≤4C 中/16、其余大/32），哨兵 8 只进返回值落账。
+  显式给参的档位边界行为一字不变（(1,2)小/(2,4)小/(4,16)中/(8,64)大 原样过）。
+- 实测：桩 `_mem_gb→None` 后 cpu=16→大/32、cpu=4→中/16、cpu=1→小/8；EOL 纪律：
+  utils.py 混排（991CRLF/10LF）走 bytes 单行锚点补丁，`git diff --numstat` 两式相等（53/0 == 53/0）。
+- 门禁：wire19 红 [181](a)（263 组）→ wire20 红 [181](b) 缺省口径 → wire21 红 [181](b) 字符串 'false' 被当真 → wire22 红 [182](d)（/audit 500，265 组）—— 真因是 [179b] 的 save_settings 写路径桩返回 True 把闭包 settings 重绑坏 → **wire23 SMOKE PASS（268 组）**。
+- 同步 AGENTS §5（machine_tier 产地注记补续184 语义）。todo「下一轮（续184）」清单三项均未做
+  （③等接口、②入口等点单、续173/175 挂账），原样滚入下一轮清单。
+- 本轮一次性脚本（logs/，收尾已删）：`_patch_mt184.py`、`_finalize184.py`、`_commit184.txt`、
+  `smoke-wire20.log`。
+
+- **主理人 10 条点单（同一轮内做完 A~E 五批）**：
+  - ① 建任务页删掉 cert / screenshot 两条阶段说明注释（`gui/templates/tasks.html`）。
+  - ③ 站点页 / 同标题从「隐藏」改成**聚合**：成员行紧随代表行、**默认收起**、点标题列的
+    按钮展开，条数报在按钮上，**入库一条没动**（照任务详情页续172 那套，折叠键仍是
+    `_site_fold_key` 一份产地）。[5c] / [8az] 两组页面级断言随之改成新口径
+    （判据从"只剩一条"变成"三条都渲染 + 成员行带 data-dup-of 且默认 hidden" —— 摘掉聚合即红）。
+  - ④+⑩ IP 反查：新增 `scanner/iprecon.py::preflight()` —— 开跑前**先探一次**每个源，
+    挂了的整轮跳过（实测 5 IP × 3 源的白跑从 15 次压到 **3+3 次**探活，并 WARNING 说出口，
+    不再是 500 个 IP 各打一条 DEBUG）；默认源全挂时换**备用池** `fallback_sources`
+    （`ptr` / `dnsdblookup` / `rapiddns` / `viewdns`）；`ptr` 是**本框架自己实现的原生反查**
+    （`socket.gethostbyaddr` 问 PTR，不发 HTTP、不参与预检）—— 实测接口全 530 时它兜住 5/5。
+    新增两个免 key 备用源 rapiddns / viewdns。配置三个产地：DEFAULTS / settings.yaml /
+    策略页（`preflight` 开关 + 备用池输入框）。
+  - ⑧ 任务无结果的直接原因之一：`subdomain` 阶段 puredns 对每个域名退出码 1 时**只 WARNING
+    不兜底** ⇒ 字典爆破整路归零 ⇒ 子域名 0 ⇒ 后面阶段全部"无输入跳过"（任务 22 实测）。
+    改成：全部域名都失败时**回退内置 DNS 爆破**，并把内置兜底抽成 `_builtin_brute`（一处产地）。
+  - ⑩ 数据探测（邮箱）：新 `scanner/mails.py` + `emails` 表 + `/emails` 独立页 + 导航入口；
+    在 **jsmine 挖拓展域名的同一批正文**上顺带抽（**零额外请求**，只攒邮箱不攒正文）；
+    筛选从严：资源文件名（`icon@2x.png`）、占位邮箱（`example.com` / `sentry.io`…）、
+    数字 IP / 数字 TLD 全部不收（8 条自证噪声夹具）；**只记录、不验证**（不发验证邮件、不查 MX）。
+  - ② 任务级并行也能按机器档走：`queue.workers_auto`（小 1 / 中 2 / 大 4，配置值仍是天花板），
+    档位复用 `utils.machine_tier` 同一产地；出厂 false。
+
+
+## 续183（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点②——同 IP 绑 Host 碰撞收集源（hostcollide）
+
+- 新 `scanner/hostcollide.py`：`plan(task_id)`（own 口径、已解析、非多 IP 的行取 IP；
+  候选 Host = 本任务全部 own 域名 —— 判据复用 `db.OWN_SUBDOMAIN_WHERE`，§5.14）→
+  `collide(ip, hosts, settings)`（只读 GET、指纹=状态码+长度+标题、**与该 IP 默认虚机比对**，
+  一样即不算命中；`hostcollide.max_requests` 封单 IP 预算、截断说出口）→
+  `run(ctx)`（策略 `hostcollide.enabled=false` 时**零请求**并打一行"没跑是因为没开"）。
+- 产出落 `subdomains`，source=`collide:<ip>` —— 前缀不匹配 `js:`/`osint:`，**自动归 own 口径**
+  （不碰 OWN_SUBDOMAIN_WHERE，一处产地不变）。
+- 两层开关：策略 `hostcollide.enabled`（出厂 false）+ 任务选项 `hostcollide: true`；
+  PipelineRunner 在流水线正常完成收尾时按选项调用（附加动作级容错，异常进 task error）。
+- [183] 断言：本地双虚机靶场（Host=hidden 回 secret 页）——plan 收口/关=零请求且说出口/
+  开=hidden 命中入 collide: 来源且进 own 口径、默认虚机不命中、预算截断说出口；
+  变异证伪：摘掉默认比对 ⇒ 默认虚机也入库（误报形状，承重）；runner 接线源码钉点。
+- 连带修：既有 [8ax] 组的横幅类数断言抄死"共 11 类"，本轮加一类即红 —— 改成随
+  `len(audit.KINDS)` 现算（该组自己的意图就是"清单不许抄死"）。
+- 未做（登记续184）：GUI/CLI 触发入口（当前经任务选项 hostcollide=true 可用；按钮挂哪个页面待主理人点单）。
+- 门禁：wire17 红在既有零下载守卫（新模块 docstring 里写了「toolmgr」一词被文本扫描点名—— 判据本身是对的，改措辞即绿）→ wire18 未跑完（红在续181 的 [181](a)，263 组）—— [183] 组排在 [181] 之后，首次被执行要等续184 把三处不符修完才轮到；wire23 SMOKE PASS（268 组），见续184 小节。
+- 本轮一次性脚本（logs/，收尾已删）：`_patch_hostcollide.py`、`_groups183_block.txt`、
+  `_finalize183.py`、`_final183_*.txt`、`_commit183.txt`、`smoke-wire16~18.log`。
+
+## 续181（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点⑤剩余半边——按机器规格收并发上限
+
+- `utils.machine_tier()`：档位判据**唯一产地** —— 小（≤2C 或 ≤4G）→ 8、中（≤4C 或 ≤8G）→ 16、其余 → 32；缺省现探（`os.cpu_count()` / `/proc/meminfo`），探不到内存只看 CPU；显式给参供测试对账。
+- `utils.effective_workers(limits)`：`limits.workers_auto=true` 时 `min(配置, 建议)` —— **配置仍是天花板**（机器再大不超用户写下的 max_workers，机器再小也不超它）；出厂 `false`＝现状不变。
+- probe 三处 `workers` 计算全部改走 `effective_workers`（[181](d) 源码钉点：不许再留第二份 `limits.max_workers` 直读 —— 改一处漏两处就是假接线）。
+- [181] 断言：档位边界 / 缺内存 / auto 取小 / `'false'` 字符串不升档 / DEFAULTS+yaml 双产地出厂 false / 三处接线；变异：接线改回直读 ⇒ (d) 红、`workers_auto` 出厂改 true ⇒ (c) 红。
+- 门禁：wire16 红在既有 [8ax]（审计类数断言抄死「共 11 类」，加一类即红 —— 改成随 `len(audit.KINDS)` 现算，该组自己的意图就是「清单不许抄死」）；wire18 / wire19 连红在 [181](a)：本组断言把 `mem_gb=None` 当成「探不到」（实际语义是**现探**）—— 改用 `_mem_gb()` 打桩表达那一支；改完仍红（真因是哨兵 8 落进 `mem_gb<=8` 中档判据的实现 bug，另两处同组不符见续184），由**续184**收口 → wire23 SMOKE PASS（268 组）。
+
+## 续182（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点④——拦截动作进结构化审计条目
+
+- `audit` 新 `KIND_SCAN_BLOCK`（"扫描拦截"）：ts=at、tool/action/reason 在 detail、actor 固定 `"scanner"` —— 与人工操作流水**同一张表、同一个 /audit 页**，不另起 schema。
+- 两个记账点（都是"已执行但被拦"，此前只有日志/计数）：① vulnscan 的 min_severity 挡条（`级别门槛 {floor} 挡下 N 条（已执行且命中、未入库）`，续176 的计数之后顺手落审计）；② 自动拓展的三道闸/阈值挡条（`extdom：自动拓展三道闸/阈值挡下 N 个候选`，在 `_maybe_queue_next_layer` 的置信度判断之后）。
+- 审计是旁路：`record` 自吞异常，扫描不因审计挂掉；`gui.audit.enabled=False` 时扫描器同样被关住（[182](c) 钉住）。
+- [182] 断言：阶段级一条（detail 含"挡下 3 条"、actor=scanner）/ 拓展挡条一条（"挡下 2 个候选"）/ 开关拒落 / `/audit?kind=scan_block` 页面渲染"扫描拦截"与条目；变异：删记账行 ⇒ 对应断言无行即红。
+- 门禁：wire16 红在既有 [8ax]（审计类数断言抄死「共 11 类」，加一类即红 —— 改成随 `len(audit.KINDS)` 现算，该组自己的意图就是「清单不许抄死」）；wire18 / wire19 连红在 [181](a)：本组断言把 `mem_gb=None` 当成「探不到」（实际语义是**现探**）—— 改用 `_mem_gb()` 打桩表达那一支；改完仍红（真因是哨兵 8 落进 `mem_gb<=8` 中档判据的实现 bug，另两处同组不符见续184），由**续184**收口 → wire23 SMOKE PASS（268 组）。
+- 本轮一次性脚本（logs/，收尾已删）：`_patch_machtier.py`、`_groups181_block.txt`、`_patch_scanblock.py`、`_groups182_block.txt`、`_finalize18182.py`、`_final18182_*.txt`、`_commit18182.txt`、`smoke-wire14~19.log`、`s180*` 临时目录。
+
 ## 续180（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点①收口——复测三态补「检查执行失败 ⇒ 无法确认」
 
 实施者：WorkBuddy · CodeBuddy（远端 Linux）。按 todo 续180 清单做借鉴点①，动手前先核实现状。

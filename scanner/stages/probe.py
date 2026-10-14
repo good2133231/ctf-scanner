@@ -18,7 +18,8 @@ from .base import Stage
 from .. import blacklist, db, extdom, flagfind, wildcard
 from ..fingerprint import identify, favicon_md5
 from ..utils import (REDIRECT_STATUS, html_title, which, verify_tool, run_cmd, read_lines,
-                     write_lines, pool_run, http_request, ramp_opt)
+                     write_lines, pool_run, http_request, ramp_opt,
+                     effective_workers)
 
 
 # 「哪些状态算需要跟随的跳转」由 `scanner/utils.py` 单独定义（取证这里与显示侧
@@ -99,7 +100,7 @@ def probe_candidates(ctx, candidates):
     """
     th = ctx.throttle        # F2 统一门控：本任务的限流器（可能是 None）
     limits = ctx.settings.get("limits", {})
-    workers = int(limits.get("max_workers", 20))
+    workers = effective_workers(limits)      # 续181：workers_auto=true 时按机器规格收上限
     timeout = int(limits.get("http_timeout", 10))
     sites = []
     # 登记"这一轮发过请求的候选"，**httpx 与内置两条路都要登记**：只靠 httpx 那份
@@ -205,7 +206,7 @@ def register_sites(ctx, sites, round2=False):
     之后的 dirscan / vulnscan 读到的仍是第一轮那份，新探出来的站点白探（落库了却没人用）。
     """
     limits = ctx.settings.get("limits", {})
-    workers = int(limits.get("max_workers", 20))
+    workers = effective_workers(limits)      # 续181：workers_auto=true 时按机器规格收上限
     timeout = int(limits.get("http_timeout", 10))
     # 去重入库
     uniq, seen = [], set()
@@ -318,7 +319,7 @@ def second_pass(ctx, extra=()):
     # 预算都齐），所以这里 0 夹到 2000 并说出来，而不是当成"一条都不探"。
     raw_cap = int(limits.get("recrawl_max_hosts", 300))
     cap = raw_cap if raw_cap > 0 else 2000
-    workers = int(limits.get("max_workers", 20))
+    workers = effective_workers(limits)      # 续181：workers_auto=true 时按机器规格收上限
     bases = extdom.task_bases(ctx.task_id)
     if not bases:
         ctx.logger.info("[probe] 二层遍历跳过：任务目标里没有可归属的域名"

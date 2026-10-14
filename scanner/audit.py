@@ -32,12 +32,17 @@ KIND_POC = "poc"                     # POC 管理（上传/启停/批量/刷新�
 KIND_TASK = "task"                   # 任务操作（建/停/删/重启/续跑/追加/批量）
 KIND_DENIED = "denied"               # 越权访问被拒（子用户敲管理页 URL）
 KIND_MIGRATE = "migrate"              # 数据迁移（续138）：导出包 / 预检 / 确认导入 / 被拒的包
+KIND_SCAN_BLOCK = "scan_block"        # 扫描拦截（续182，借鉴点④）：扫描期"已执行但被拦"的
+                                      # 结构化条目 —— ts=at、tool/action/reason 在 detail，
+                                      # actor 固定 "scanner"（与人工操作流水同一张表、同一页）。
 
 KINDS = (KIND_LOGIN_OK, KIND_LOGIN_FAIL, KIND_LOGIN_BLOCKED, KIND_LOGOUT,
-         KIND_ACCOUNT, KIND_SETTINGS, KIND_POC, KIND_TASK, KIND_DENIED, KIND_MIGRATE)
+         KIND_ACCOUNT, KIND_SETTINGS, KIND_POC, KIND_TASK, KIND_DENIED, KIND_MIGRATE,
+         KIND_SCAN_BLOCK)
 
 # 页面展示用的中文标签
 KIND_LABELS = {
+    KIND_SCAN_BLOCK: "扫描拦截",
     KIND_LOGIN_OK: "登录成功",
     KIND_LOGIN_FAIL: "登录失败",
     KIND_LOGIN_BLOCKED: "登录被拦截",

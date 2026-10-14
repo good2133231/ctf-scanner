@@ -170,7 +170,10 @@ DEFAULTS = {
         #   只有部署到服务器、确有多任务并行需求时才调大（上限 8）。>1 时靠
         #   `db.claim_next_queued` 的原子认领保证同一任务不被重复消费。
         "workers": 1,
+        # 续184：true ＝ 再按机器规格收一道上限（小 1 / 中 2 / 大 4），配置值仍是天花板。
+        "workers_auto": False,
     },
+
     "dev": {
         # ---- 开发模式 / 全流程自检（续50，见 scanner/devmode.py）----
         # 打开后，各阶段的"量"（并发 / 在飞 / 速率 / 每阶段配额）被**运行时压到最小（1）**，
@@ -187,6 +190,9 @@ DEFAULTS = {
         # 不升档）—— 小任务不再一上来就开满线程。基准实测数字见 CHANGELOG 续179。
         "workers_mode": "fixed",
         "workers_floor": 4,
+        # 按机器规格收并发上限（续181，借鉴点⑤）：false＝只认 max_workers（现状）；
+        # true＝min(max_workers, machine_tier 建议值) —— 小机器自动收敛，机器再大也不超配置。
+        "workers_auto": False,
         "http_timeout": 10,       # 单请求超时（秒）
         "verify_tls": False,
         # 第三方接口（FOFA/Shodan/Quake/crt.sh/KEV/iprecon/api.github.com）的证书校验。
@@ -494,6 +500,20 @@ DEFAULTS = {
         "max_hosts": 200,          # 为收集 IP 最多解析多少个主机名
         "max_domains_per_ip": 30,  # 单 IP 命中域名超过该值 → 判为共享主机，不纳入域名资产
         "workers": 5,              # 并发数：公共接口，刻意保持克制
+        # 续184：开跑前先探一次每个源还活不活（挂了的整轮跳过，不再逐 IP 白跑）
+        "preflight": True,
+        # 默认源预检全挂时的备用池：ptr 是本框架自己实现的原生 PTR（不发 HTTP）
+        "fallback_sources": ["ptr", "dnsdblookup", "rapiddns", "viewdns"],
+        "api_rapiddns": "https://rapiddns.io/s/{ip}?full=1",
+        "api_viewdns": "https://viewdns.info/reverseip/?host={ip}&t=1",
+
+        # 续184：开跑前先探一次每个源还活不活（挂了的整轮跳过，不再逐 IP 白跑）
+        "preflight": True,
+        # 默认源预检全挂时的备用池：ptr 是本框架自己实现的原生 PTR（不发 HTTP）
+        "fallback_sources": ["ptr", "dnsdblookup", "rapiddns", "viewdns"],
+        "api_rapiddns": "https://rapiddns.io/s/{ip}?full=1",
+        "api_viewdns": "https://viewdns.info/reverseip/?host={ip}&t=1",
+
         "timeout": 10,             # 单次反查超时（秒）
     },
     "fofa": {

@@ -227,6 +227,18 @@ CREATE TABLE IF NOT EXISTS js_secrets (
 -- 其痕迹就是 subdomains 行本身，不在此表）。
 -- 任务关联数据（跨任务）⇒ **不进 ASSET_TABLES**；不设外键 —— 任务删除不级联，
 -- 历史记录保留，页面按任务存在与否降级显示。
+-- 续184「数据探测」：邮箱等从正文里顺带抽出来的产物（用户 2026-10-14 点单）。
+-- 是**任务关联资产** ⇒ 进 ASSET_TABLES（重启重置 / 迁移包口径一致）；只记「在哪份正文
+-- 里见过它」，**不验证**（不发验证邮件、不查 MX）。
+CREATE TABLE IF NOT EXISTS emails (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  email TEXT NOT NULL,       -- 原文（域名部分已小写归一）
+  domain TEXT DEFAULT '',    -- 域名部分：页面按它分组统计
+  source TEXT DEFAULT '',    -- 出处（JS / 页面的 URL）
+  created_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS ext_probes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   domain TEXT NOT NULL,
@@ -891,6 +903,8 @@ def task_run_seconds(task, now=None):
 
 
 ASSET_TABLES = ("subdomains", "sites", "ports", "csegs", "certs", "dirs", "vulns", "leads",
+                "emails",
+
                 "flags", "js_secrets")
 
 
@@ -1280,6 +1294,44 @@ def insert_js_secret(task_id, s):
            str(s.get("value") or ""), str(s.get("source") or ""),
            (str(s.get("context") or ""))[:1000], int(s.get("line") or 0),
            (str(s.get("line_text") or ""))[:2000], _now()))
+
+
+def insert_emails(task_id, rows):
+    """批量落邮箱（续184）。**重复执行不产生重复行**：先读本任务已有的，只插新的 ——
+    去重是写方的责任（AGENTS §5.6：这些表没有 UNIQUE 约束）。"""
+    have = {str(r["email"]).lower()
+            for r in _query("SELECT email FROM emails WHERE task_id=?", (task_id,))}
+    n = 0
+    for r in rows or []:
+        e = str(r.get("email") or "").strip()
+        if not e or e.lower() in have:
+            continue
+        dom = str(r.get("domain") or "").strip() or e.partition("@")[2]
+        _exec("INSERT INTO emails(task_id,email,domain,source,created_at) "
+              "VALUES(?,?,?,?,?)",
+              (task_id, e, dom, str(r.get("source") or "")[:500], _now()))
+        have.add(e.lower())
+        n += 1
+    return n
+
+
+def list_emails(task_id=None, q="", limit=50, offset=0):
+    """邮箱列表（跨任务；给了 `task_id` 就只要那一个任务的）。
+
+    `q` 同时匹配邮箱 / 域名 / 出处。返回 `(rows, total)` —— total 是过滤后的总数，
+    分页条报它（§5 第 10 条：过滤掉的条数要说出口）。"""
+    where, args = [], []
+    if task_id:
+        where.append("task_id=?")
+        args.append(task_id)
+    if q:
+        where.append("(email LIKE ? OR domain LIKE ? OR source LIKE ?)")
+        args += [f"%{q}%", f"%{q}%", f"%{q}%"]
+    w = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = _query(f"SELECT * FROM emails{w} ORDER BY id DESC LIMIT ? OFFSET ?",
+                  tuple(args) + (int(limit), int(offset)))
+    total = _query(f"SELECT COUNT(*) c FROM emails{w}", tuple(args))[0]["c"]
+    return rows, total
 
 
 def list_js_secrets(task_id, host=None):

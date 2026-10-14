@@ -55,7 +55,16 @@ def config(settings=None):
         n = int(cfg.get("workers", 1))
     except (TypeError, ValueError):
         n = 1
-    return {"workers": max(1, min(_MAX_WORKERS, n))}
+    n = max(1, min(_MAX_WORKERS, n))
+    # 续184（用户点单「能不能按跑的机子动态改并发」）：`workers_auto=true` 时按机器规格
+    # 再收一道 —— 档位判据复用 `utils.machine_tier`（与阶段内并发同一个产地，§5.14）。
+    # 任务级并行比阶段内线程更吃资源（每个任务都是完整流水线），所以三档给得比阶段内保守。
+    if cfg.get("workers_auto") is True:
+        from .utils import machine_tier
+        cap = {"小": 1, "中": 2, "大": 4}.get(machine_tier().get("tier"), 1)
+        n = max(1, min(n, cap))
+    return {"workers": n}
+
 
 
 def _load_run_spec(task_id, mode):

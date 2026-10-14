@@ -796,6 +796,62 @@ def _pool_logger(logger):
     return _POOL_LOG
 
 
+def _mem_gb():
+    """本机内存 GB（Linux /proc/meminfo；取不到给 None —— 调用方按只有 CPU 判档）。"""
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemTotal:"):
+                return round(int(line.split()[1]) / 1024 / 1024, 1)
+    except Exception:                                   # noqa: BLE001 - 探不到就交回 None
+        return None
+    return None
+
+
+def machine_tier(cpu=None, mem_gb=None):
+    """本机规格 → 并发档（续181，借鉴点⑤；**档位判据只有这一处**）。
+
+    显式给参用于测试与对账；缺省现探（`os.cpu_count()` / `/proc/meminfo`）。
+    小（≤2C 或 ≤4G）→ 8；中（≤4C 或 ≤8G）→ 16；其余 → 32 —— 建议值是**上限的依据**，
+    不是直接开满的线程数（真正生效看 `effective_workers`）。
+    """
+    if cpu is None:
+        cpu = os.cpu_count() or 1
+    if mem_gb is None:
+        mem_gb = _mem_gb()
+    if mem_gb is None:          # 探不到内存：哨兵 8 只落账不判档，判档只看 CPU
+        _sent = 8
+        if cpu <= 2:
+            return {"cpu": cpu, "mem_gb": _sent, "tier": "小", "suggested": 8}
+        if cpu <= 4:
+            return {"cpu": cpu, "mem_gb": _sent, "tier": "中", "suggested": 16}
+        return {"cpu": cpu, "mem_gb": _sent, "tier": "大", "suggested": 32}
+    if cpu <= 2 or mem_gb <= 4:
+        return {"cpu": cpu, "mem_gb": mem_gb, "tier": "小", "suggested": 8}
+    if cpu <= 4 or mem_gb <= 8:
+        return {"cpu": cpu, "mem_gb": mem_gb, "tier": "中", "suggested": 16}
+    return {"cpu": cpu, "mem_gb": mem_gb, "tier": "大", "suggested": 32}
+
+
+def effective_workers(limits, cpu=None, mem_gb=None):
+    """「按机器规格算并发档上限」的开关（续181，借鉴点⑤剩余半边）。
+
+    `limits.workers_auto` 为真：`machine_tier` 建议值与配置值**取小**（配置仍是天花板，
+    机器再大也不超过用户写下的 max_workers）；否则原样返回配置值（现状不变）。
+    各阶段读并发上限都该走这里，不要各自再读一遍 `limits.max_workers`。
+    """
+    try:
+        configured = int((limits or {}).get("max_workers", 20) or 20)
+    except (TypeError, ValueError):
+        configured = 20
+    _auto = (limits or {}).get("workers_auto", False)
+    if isinstance(_auto, str):   # 字符串形态不许被当真："false"/"0"/"no"/"off"/空 都是关
+        _auto = _auto.strip().lower() in ("1", "true", "yes", "on")
+    if not _auto:
+        return max(1, configured)
+    sug = machine_tier(cpu, mem_gb)["suggested"]
+    return max(1, min(configured, sug))
+
+
 def ramp_opt(settings, workers):
     """动态并发档的选项（续179，判据唯一产地 —— 各阶段都从这里拿，不许自己拼 dict）。
 

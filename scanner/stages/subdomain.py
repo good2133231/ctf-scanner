@@ -268,26 +268,7 @@ class SubdomainStage(Stage):
                 f"[subdomain] 爆破规模预估（puredns 这一路）：{len(brute_domains)} 域名 × "
                 f"{len(words)} 词 = {len(brute_domains) * len(words):,} 次 DNS 查询"
                 "（收紧：limits.brute_max_domains / limits.brute_max_words）")
-        if use_pd:
-            resolvers = str(resolve(ctx.settings["dicts"]["resolvers"]))
-            ctx.logger.info(f"[subdomain] puredns 爆破 {len(brute_domains)} 个域名 …")
-            for d in brute_domains:
-                if ctx.stopped():
-                    # 每个域名 timeout=3600，不检查停止会让"停止"最多等到全部域名跑完
-                    ctx.logger.warning("[subdomain] 任务已请求停止，中止 puredns 爆破")
-                    break
-                out_file = ctx.workdir / f"brute_{d}.txt"
-                # 把 massdns 所在目录塞进**这一个子进程**的 PATH（puredns 在进程内 exec 它，
-                # 拿不到我们在 settings 里写的绝对路径）——见 utils.run_cmd 的 extra_path。
-                rc, _, err = run_cmd([pd_bin, "bruteforce", dict_path, "-d", d,
-                                      "-r", resolvers, "-w", str(out_file)], timeout=3600,
-                                     throttle=th,
-                                     extra_path=os.path.dirname(massdns_bin) if massdns_bin else None)
-                if rc == 0:
-                    add_many((line, "puredns") for line in read_lines(out_file))
-                else:
-                    ctx.logger.warning(f"[subdomain] puredns {d} 退出码 {rc}：{err.strip()[:150]}")
-        else:
+        def _builtin_brute(_words):
             if not offline:
                 # 没说死"没装 puredns"：也可能是装了但缺 massdns（上一行的 WARNING 已说清），
                 # 所以这里只报"本次走内置兜底"这个事实，不重复下结论。
@@ -323,6 +304,36 @@ class SubdomainStage(Stage):
                         ctx.logger.info(f"[subdomain] {d} 泛解析过滤丢弃 {len(dropped)} 个"
                                         f"（示例：{dropped[0][0]} → {dropped[0][1]}）")
 
+
+        if use_pd:
+            resolvers = str(resolve(ctx.settings["dicts"]["resolvers"]))
+            _pd_ok, _pd_fail = 0, 0
+            ctx.logger.info(f"[subdomain] puredns 爆破 {len(brute_domains)} 个域名 …")
+            for d in brute_domains:
+                if ctx.stopped():
+                    # 每个域名 timeout=3600，不检查停止会让"停止"最多等到全部域名跑完
+                    ctx.logger.warning("[subdomain] 任务已请求停止，中止 puredns 爆破")
+                    break
+                out_file = ctx.workdir / f"brute_{d}.txt"
+                # 把 massdns 所在目录塞进**这一个子进程**的 PATH（puredns 在进程内 exec 它，
+                # 拿不到我们在 settings 里写的绝对路径）——见 utils.run_cmd 的 extra_path。
+                rc, _, err = run_cmd([pd_bin, "bruteforce", dict_path, "-d", d,
+                                      "-r", resolvers, "-w", str(out_file)], timeout=3600,
+                                     throttle=th,
+                                     extra_path=os.path.dirname(massdns_bin) if massdns_bin else None)
+                if rc == 0:
+                    add_many((line, "puredns") for line in read_lines(out_file))
+                    _pd_ok += 1
+                else:
+                    _pd_fail += 1
+                    ctx.logger.warning(f"[subdomain] puredns {d} 退出码 {rc}：{err.strip()[:150]}")
+            if _pd_fail and not _pd_ok and words:
+                ctx.logger.warning(
+                    f"[subdomain] puredns 对全部 {_pd_fail} 个域名都失败了 —— 改用内置 DNS "
+                    "爆破兜底（不兜的话字典爆破这一路整轮归零，后面阶段全部没得跑）")
+                _builtin_brute(words)
+        else:
+            _builtin_brute(words)
         # ---------- 4b) 组合爆破（续139，对齐灯塔的 alt_dns）----------
         # 与灯塔逐条比实的 24 个"它有我没有"的域名里，**14 个的标签确实在深档里**（受抽样闸门
         # 没爆到），另外 **10 个任何字典里都没有** —— `api-contract` / `ws-spot` / `admin-oss` /

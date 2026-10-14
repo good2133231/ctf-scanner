@@ -4198,10 +4198,10 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 
 **借鉴点登记（2026-10-14 四项目调研，按序做、不新起号；调研全文见 docs/ref-projects-2026-10-14.md）**：
 - [x] ① 复核加「无法确认」第三态（ARTEX agent/retester.go：reproduced/fixed/inconclusive —— 一次请求失败不证明已修复；续180 核实：续150 已有三态，本轮补「检查执行失败 ⇒ unconfirmed」）
-- [ ] ② host 碰撞收集源（ShuiZe Plugins/infoGather/subdomain/hostCollide：同 IP 绑不同 Host 头找隐藏站点）
+- [x] ② host 碰撞收集源（ShuiZe Plugins/infoGather/subdomain/hostCollide：同 IP 绑不同 Host 头找隐藏站点；续183 落地，触发入口待点单）
 - [ ] ③ ICP 备案反查收集源（ShuiZe beian2NewDomain，返回关联公司名可喂企业信息查询）
-- [ ] ④ 拦截动作结构化审计条目（ARTEX guard/guard.go AuditEntry：ts/tool/action/reason 逐条落审计）
-- [ ] ⑤ 多任务并发实测与动态并发档（limits 按机器规格算并发；参照 StrikeAgent recon-spiral 圈层预算思想，先出基准数字）
+- [x] ④ 拦截动作结构化审计条目（ARTEX guard/guard.go AuditEntry：ts/tool/action/reason 逐条落审计；续182 落地）
+- [x] ⑤ 多任务并发实测与动态并发档（limits 按机器规格算并发；参照 StrikeAgent recon-spiral 圈层预算思想，先出基准数字；续179 基准+按产出加码、续181 机器规格档，全落地）
 
 **会话二交接（2026-10-14，logs/HANDOFF-2026-10-14-b.md）——下一会话接着做，按序：**
 - [x] 断言组固化：一次性验证改写进 tests/smoke.py（[172] 站点折叠 / [177] JS 凭据与 GUI / [178] 送探记录与来源条数），每条带变异证伪（脚本在 logs/ 可直接改写）
@@ -4222,6 +4222,45 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       logs 收尾 / 借鉴点五项）—— todo/CHANGELOG/AGENTS 三份 [8as] 口径已核
 - 验证：波一 wire4、续172 wire8、波二 wire9 三轮全量门禁各自 SMOKE PASS 250 组；
   波二一次性验证含变异证伪（ccc 探针：复选框承重）
+
+## 续183（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点②——同 IP 绑 Host 碰撞收集源
+
+- [x] ②：新 `scanner/hostcollide.py`（plan/collide/run；只读 GET、指纹与默认虚机比对、单 IP 预算、
+      两层开关出厂关）+ PipelineRunner 按任务选项 `hostcollide: true` 调用 + config/yaml 新段；
+      命中落 `subdomains`（source=`collide:<ip>`，自动 own 口径）；[183] 断言含变异证伪；
+      连带修 [8ax] 类数抄死（改随 KINDS 现算）；wire18 SMOKE PASS（268 组）
+- [ ] ② 剩余：GUI/CLI 触发入口（按钮挂 IP 资产页还是建任务选项，待主理人点单；当前可经任务选项用）
+
+## 续184（2026-10-14，WorkBuddy · CodeBuddy）：修 machine_tier「探不到内存」哨兵判档 bug
+
+- [x] wire19 红 [181](a)（桩 _mem_gb→None 后 16 核被判「中」）→ 实现修：探不到内存时
+      判档只看 CPU（≤2C 小/8、≤4C 中/16、其余大/32），哨兵 8 只落账不参与档位判断；
+      显式给参边界行为不变；wire23 SMOKE PASS（268 组）
+
+- [x] ① 建任务页删掉 cert/screenshot 两条阶段说明注释
+- [x] ③ 站点页同标题改**聚合**（成员行默认收起 + 可展开，入库一条没动）；[5c]/[8az] 断言改新口径
+- [x] ④+⑩ IP 反查：开跑前先探活（5IP×3源 15 次 ⇒ 6 次）+ 备用源池 + **自实现原生 PTR**（接口全挂时兜住 5/5）
+- [x] ⑧ puredns 对每个域名都失败时回退内置 DNS 爆破（任务 22 整路归零的直接原因）
+- [x] ⑩ 数据探测：新 `scanner/mails.py` + `emails` 表 + `/emails` 页 + 导航；jsmine 顺带抽（零额外请求）；筛选从严
+- [x] ② 任务级并行按机器档：`queue.workers_auto`（小1/中2/大4，配置值仍是天花板），出厂 false
+**下一轮（续185）——只放未做的：**
+
+- [ ] 借鉴点③ ICP 备案反查收集源（第三方接口；先核 verify_tls_external 与凭据口径，产出进 intel/osint 面）
+- [ ] ② 剩余：GUI/CLI 触发入口（待主理人点单按钮位置）
+- [ ] 续173（IP 反查三源成败说清 + PTR 自实现）、续175（真机）照旧挂账
+
+## 续181（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点⑤剩余半边——按机器规格收并发上限
+
+- [x] ⑤：`utils.machine_tier`（小8/中16/大32，缺内存只看 CPU）+ `effective_workers`（`limits.workers_auto`，出厂 false＝现状；auto=min(配置,建议)，配置是天花板）+ probe 三处接线（源码钉点无第二份直读）；[181] 断言含两处变异；wire16 SMOKE PASS（267 组）
+
+## 续182（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点④——拦截动作进结构化审计条目
+
+- [x] ④：`audit.KIND_SCAN_BLOCK`（"扫描拦截"，同表同页不另起 schema）+ 两个记账点（vulnscan min_severity 挡条、自动拓展三道闸/阈值挡条）+ `gui.audit` 开关仍管得住扫描器；[182] 断言（阶段级/拓展/开关/页面四路，变异=删记账行）；wire16 SMOKE PASS（267 组）
+
+**下一轮（续183）——只放未做的：**
+- [ ] 借鉴点② host 碰撞收集源：设计已定 —— `scanner/hostcollide.py`：IP 资产（`db.list_subdomain_net` 按 IP 分组、只收非 CDN）× 候选 Host（own 口径域名）→ `GET http://{ip}/` + `Host:` 覆盖，指纹（状态/长度/标题）与该 IP 默认虚机对比，命中 = 与默认不同且像自家站点；产出按 `collide:` 前缀落 subdomains（**不匹配 js:/osint: ⇒ 自动归 own 口径**）；配置 `hostcollide.enabled: false` 出厂关；只读 GET、吃任务预算
+- [ ] 借鉴点③ ICP 备案反查收集源：第三方接口（beian 类），先核 verify_tls_external 与凭据口径，产出进 intel/osint 面
+- [ ] 续173（IP 反查三源成败说清 + PTR 自实现）、续175（真机）照旧挂账
 
 ## 续180（2026-10-14，WorkBuddy · CodeBuddy）：借鉴点①收口——检查执行失败 ⇒ 无法确认
 

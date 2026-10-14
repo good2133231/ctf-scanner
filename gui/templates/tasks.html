@@ -24,8 +24,6 @@
           title="回到页面刚打开时的状态（策略级默认关的阶段仍不勾）">恢复默认</button></span>
       <span data-ck-group="stages">
       {% for s in stages %}
-      {# 策略级默认关的阶段（screenshot / cert）：这里也**默认不勾**，勾上即"本次要跑"
-         （任务级 `screenshot_on` / `cert_on`，不改全局策略；见 scanner/stages/ 下两个阶段的门控） #}
       {% set off_by_default = s in ['screenshot', 'cert'] %}
       <label class="chk"><input type="checkbox" name="stages" value="{{ s }}"
         data-ck-default="{{ 0 if off_by_default else 1 }}"

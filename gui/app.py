@@ -3042,22 +3042,34 @@ def create_app():
             extra_where=_and_where(base_where, st_where),
             extra_params=tp)
         rows = [dict(r) for r in rows]
-        seen, hidden = {}, 0
+        # 续184（主理人要求）：同标题是**聚合**不是隐藏 —— 成员行紧随代表行、默认收起，
+        # 点代表行上的按钮展开（?all=1 直接展开）；被收起的条数报在按钮上，入库一条没动
+        # （§5 第 10 条：展示层过滤 ≠ 删数据）。折叠键与任务详情页站点页签**同一份产地**。
+        _fold184, hidden = {}, 0
         for r in rows:
             r["dup"] = 0
+        for r in rows:
             key = _site_fold_key(r)
             if key is None:
                 continue
-            first = seen.get(key)
+            first = _fold184.get(key)
             if first is None:
-                seen[key] = r
+                _fold184[key] = r
             else:
                 first["dup"] += 1
-                r["hidden_dup"] = True
+                r["_dup_head"] = first["id"]
+                r["_dup_member"] = True
                 hidden += 1
-        if not show_all:
-            rows = [r for r in rows if not r.get("hidden_dup")]
-        else:
+        _ordered184 = []
+        for r in rows:
+            if r.get("_dup_head") is not None:
+                continue          # 成员行排在代表行之后
+            _ordered184.append(r)
+            for m in rows:
+                if m.get("_dup_head") == r["id"]:
+                    _ordered184.append(m)
+        rows = _ordered184
+        if show_all:
             pager["qs"] += "&all=1"
         if tid:
             pager["qs"] += f"&task={tid}"
@@ -3071,6 +3083,27 @@ def create_app():
         return render_template("sites.html", sites=rows, pager=pager, q=q,
                                show_all=show_all, hidden=hidden, plain=plain,
                                task_id=tid or "", tasks=_tasks_with_asset("sites"))
+
+    @app.route("/emails")
+    @login_required
+    def emails_page():
+        """数据探测（续184）：扫描中在 JS / 页面正文里见到的邮箱。
+
+        **只记录、不验证**（不发验证邮件、不查 MX），页面上也是这么写的 —— 抽取发生在
+        jsmine 挖拓展域名的同一批正文上（零额外请求），筛选判据只有 `scanner/mails.py` 一处。
+        """
+        _tid = request.args.get("task")
+        tid = int(_tid) if str(_tid or "").isdigit() else None
+        q = (request.args.get("q") or "").strip()
+        page = max(1, int(request.args.get("page") or 1))
+        size = max(1, min(int(request.args.get("size") or 50), 200))
+        rows, total = db.list_emails(task_id=tid, q=q, limit=size, offset=(page - 1) * size)
+        pages = max(1, (total + size - 1) // size)
+        qs = (f"&q={quote(q)}" if q else "") + (f"&task={tid}" if tid else "")
+        pager = {"page": page, "size": size, "total": total, "pages": pages,
+                 "base": page_url("/emails"), "qs": qs}
+        return render_template("emails.html", rows=[dict(r) for r in rows], pager=pager,
+                               q=q, task_id=tid or "")
 
     @app.route("/ports")
     @login_required
@@ -4054,7 +4087,15 @@ def create_app():
                                 "max_domains_per_ip": int(
                                     f.get("iprecon_max_domains_per_ip", 30) or 30),
                                 "workers": int(f.get("iprecon_workers", 5) or 5),
-                                "timeout": float(f.get("iprecon_timeout", 10) or 10)},
+                                "timeout": float(f.get("iprecon_timeout", 10) or 10),
+                                "preflight": f.get("iprecon_preflight") == "1",
+                                "fallback_sources": [
+                                    str(x).strip()
+                                    for x in str(f.get("iprecon_fallback_sources") or "").split(",")
+                                    if str(x).strip()] or ["ptr"],
+                                "api_rapiddns": (f.get("iprecon_api_rapiddns") or "").strip(),
+                                "api_viewdns": (f.get("iprecon_api_viewdns") or "").strip()},
+
                     "fofa": {"enabled": f.get("fofa_enabled") == "1",
                              "max_sites": int(f.get("fofa_max_sites", 30) or 30),
                              "max_assets": int(f.get("fofa_max_assets", 100) or 100),
@@ -4149,7 +4190,9 @@ def create_app():
                     # int/文本键取不到表单字段（或留空）就退回**原值** —— 别的入口 POST 少带
                     # 字段时不会把键重置；勾选框按 HTML 语义（不勾=False）由整页表单每次带上。
                     "queue": {"workers": int(f.get("queue_workers")
-                                             or _q0.get("workers", 1) or 1)},
+                                             or _q0.get("workers", 1) or 1),
+                              "workers_auto": f.get("queue_workers_auto") == "1"},
+
                     "dev": {"enabled": f.get("dev_enabled") == "1",
                             "fixture_port": int(f.get("dev_fixture_port")
                                                 or _d0.get("fixture_port", 0) or 0)},
@@ -4194,7 +4237,9 @@ def create_app():
                                        error="参数必须是整数")
             # 续48：审计只记"改了哪几个区块"，**绝不记值**（键名也省掉 —— 见 `_changed_sections`）。
             _changed = _changed_sections(settings, data)
-            settings = save_settings(data)
+            _saved = save_settings(data)
+            if isinstance(_saved, dict):      # 续184：保存返回非 dict（桩/异常值）就保持原配置——重绑成 True/None 会让后续所有页面 500
+                settings = _saved
             _audit(audit.KIND_SETTINGS, target=",".join(_changed) or "（无变化）",
                    detail=f"保存策略配置（变更区块：{','.join(_changed) or '无'}）")
             return redirect(url_for("settings_page"))

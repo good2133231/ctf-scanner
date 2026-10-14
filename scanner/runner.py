@@ -18,7 +18,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import db, extdom, screenshot
+from . import audit, db, extdom, screenshot
 from .config import LOGS_DIR, load_settings
 from . import auth as taskauth
 from . import throttle
@@ -424,6 +424,10 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
     except Exception as e:      # 判据异常 ⇒ 退回"只按归属追加"，不把没验过的域名塞进目标
         logger.error(f"[extdom] 置信度判断异常，本轮只按归属追加（相似域名一个都不带）：{e}")
         similar, sim_blocked = [], 0
+    if sim_blocked:     # 续182（借鉴点④）：拦截动作进结构化审计（旁路，失败自吞）
+        audit.record(audit.KIND_SCAN_BLOCK, "scanner", "", target=str(task_id),
+                     detail=f"extdom：自动拓展三道闸/阈值挡下 {sim_blocked} 个候选",
+                     settings=ctx.settings)
     targets = promoted + [d for d in similar if d not in promoted]
     if not targets:
         logger.info(f"[extdom] 追加层数：本层既没有新的归属本项目域名，也没有达到"

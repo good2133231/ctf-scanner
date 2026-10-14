@@ -786,11 +786,14 @@ def main():
                            "port": "80", "status": 200, "title": dup_title, "length": 1234,
                            "source": "builtin"} for i in range(3)])
     folded = c.get("/sites").get_data(as_text=True)
-    assert folded.count(dup_title) == 1, folded.count(dup_title)
-    assert "已折叠隐藏" in folded and "另有 2 条相同" in folded
+    assert folded.count(dup_title) == 3, folded.count(dup_title)
+
+    assert "已把 2 条同标题" in folded and "另有 2 条相同" in folded
+
     unfolded = c.get("/sites?all=1").get_data(as_text=True)
     assert unfolded.count(dup_title) == 3, unfolded.count(dup_title)
-    assert "（被折叠）" in unfolded
+    assert "同标题（收起在 #" in unfolded
+
     # POC 页只展示相对路径（不出现本机绝对目录）
     _lr5 = leaked_root(poc_html)
     assert not _lr5, f"POC 页不应出现绝对路径，实到上下文：{_lr5!r}"
@@ -23560,7 +23563,7 @@ expression: r0()
         _aud8ax.KINDS = _rkind8ax + ("smoke_kind_8ax",)
         try:
             _der8ax = "\n".join(gui_app._deploy_hints({"host": "0.0.0.0"}))
-            assert "SMOKEKIND8AX" in _der8ax and "共 11 类" in _der8ax, \
+            assert "SMOKEKIND8AX" in _der8ax and f"共 {len(_aud8ax.KINDS)} 类" in _der8ax, \
                 f"清单是抄死的，不是从 audit 现取的：{_der8ax}"
         finally:
             _aud8ax.KIND_LABELS.clear()
@@ -23887,13 +23890,24 @@ expression: r0()
                              "port": "80", "status": 200, "title": _same147,
                              "length": 1000 + i * 7} for i in range(3)])
     _d147 = c.get(f"/sites?task={_t147}").get_data(as_text=True)
-    assert _d147.count(_same147) == 1, f"默认视图应把三条同标题折成一条（实到 {_d147.count(_same147)}）"
-    assert "已折叠隐藏 2 条" in _d147, "被收起的条数必须报出来，不报＝让人以为资产丢了"
+    assert _d147.count(_same147) == 3, f"同标题三条都要渲染出来（收起是 hidden 不是删除，实到 {_d147.count(_same147)}）"
+    _mem147 = re.findall(r"<tr[^>]*data-dup-of=\"(\d+)\"([^>]*)>", _d147)
+    assert len(_mem147) == 2, f"两条成员行必须挂在代表行下（实到 {len(_mem147)}）"
+    assert all("hidden" in a for _, a in _mem147), "成员行默认必须收起"
+
+    assert "已把 2 条同标题" in _d147, "被收起的条数必须报出来，不报＝让人以为资产丢了"
+
     assert "入库一条没动" in _d147, "「这是显示口径、不是删数据」这句话要在（续112 同一口径）"
     assert "显示全部站点（含同标题与重叠）" in _d147, "放开入口要说清它放开哪两层"
+    assert "展开同标题（2 条）" in _d147, "展开按钮要把条数写在文案上"
+
     _u147 = c.get(f"/sites?task={_t147}&all=1").get_data(as_text=True)
     assert _u147.count(_same147) == 3, "?all=1 没放开同标题折叠"
-    assert "（被折叠）" in _u147 and "当前<b>显示全部站点</b>" in _u147
+    assert "当前<b>全部展开</b>" in _u147
+    _mem_u147 = re.findall(r"<tr[^>]*data-dup-of=\"(\d+)\"([^>]*)>", _u147)
+    assert len(_mem_u147) == 2 and not any("hidden" in a for _, a in _mem_u147), \
+        "?all=1 应直接展开（成员行仍在，但不带 hidden）"
+
 
     # ---- ③ 主题：默认档与存储键只有一份产地，且赋值排在样式表之前 ----
     _base147 = (ROOT / "gui" / "templates" / "base.html").read_text(encoding="utf-8", errors="replace")
@@ -25565,6 +25579,146 @@ expression: r0()
     print("[179b] 动态并发档 ok: ramp_opt 产地（fixed⇒None/ramp⇒floor 封顶）｜pool_run 分批"
           "（有产出翻倍封顶、零产出不升档、结果与契约与整批一致）｜probe 仅探活一处接线"
           "（AST 钉点）｜DEFAULTS limits 逐段点名一个键不少")
+    # ---------------- [181] 续181（借鉴点⑤剩余半边）：按机器规格收并发上限 ----------------
+    import scanner.utils as _ut181
+    # (a) machine_tier 档位判据（显式给参，四档边界 + 缺内存只看 CPU）
+    _mt181 = _ut181.machine_tier
+    assert _mt181(1, 2) == {"cpu": 1, "mem_gb": 2, "tier": "小", "suggested": 8}, _mt181(1, 2)
+    assert _mt181(2, 4)["tier"] == "小" and _mt181(2, 4)["suggested"] == 8, "边界值归小档"
+    assert _mt181(4, 16)["tier"] == "中" and _mt181(4, 16)["suggested"] == 16, "4C 大内存按中档"
+    assert _mt181(8, 64)["tier"] == "大" and _mt181(8, 64)["suggested"] == 32, _mt181(8, 64)
+    # 「探不到内存」是 _mem_gb() 返回 None 那一支（给 None 入参的语义是**现探**，别混）
+    _orig_mem181 = _ut181._mem_gb
+    try:
+        _ut181._mem_gb = lambda: None
+        assert _mt181(16)["mem_gb"] == 8 and _mt181(16)["tier"] == "大", \
+            "探不到内存按中档边界走、只看 CPU"
+    finally:
+        _ut181._mem_gb = _orig_mem181
+    # (b) effective_workers：fixed 现状不变；auto 取小（配置仍是天花板）
+    _ew181 = _ut181.effective_workers
+    assert _ew181({}) == 20 and _ew181(None) == 20, "缺省口径（None 与空 dict 同落配置缺省 20；下限钳制另测负值）"
+    assert _ew181({"max_workers": -5}) == 1, "下限钳制：配置负值也收在 1"
+    assert _ew181({"max_workers": 8}) == 8, "fixed ＝ 原样返回配置值"
+    assert _ew181({"max_workers": 20, "workers_auto": True}, 1, 2) == 8, \
+        "小机器自动收敛到 8"
+    assert _ew181({"max_workers": 20, "workers_auto": True}, 16, 64) == 20, \
+        "大机器不超用户写下的 max_workers（配置是天花板）"
+    assert _ew181({"max_workers": 4, "workers_auto": True}, 1, 2) == 4, \
+        "机器再小也不许超过用户写下的 4"
+    assert _ew181({"max_workers": 20, "workers_auto": "false"}, 1, 2) == 20, \
+        "非真值一律按 fixed（字符串 'false' 不许被当真）"
+    # (c) 配置产地：DEFAULTS 与 settings.yaml 都有 workers_auto（出厂 false）
+    from scanner import config as _cfg181
+    assert _cfg181.DEFAULTS["limits"].get("workers_auto") is False, "出厂必须是 false（现状不变）"
+    assert _cfg181.DEFAULTS["limits"].get("workers_mode") == "fixed"
+    _y181 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+    assert "workers_auto: false" in _y181, "settings.yaml 没写出来（用户看不见就等于没有）"
+    # (d) probe 接线：三处 workers 计算全部走 effective_workers（不再各自读 max_workers）
+    _psrc181 = (ROOT / "scanner" / "stages" / "probe.py").read_text(encoding="utf-8")
+    assert _psrc181.count("workers = effective_workers(limits)") == 3, \
+        "probe 的三处 workers 计算必须全部走唯一产地"
+    assert 'limits.get("max_workers"' not in _psrc181, \
+        "probe 里不许再留第二份 max_workers 直读（改一处漏两处就是假接线）"
+    assert "effective_workers" in _psrc181.split("from ..utils import", 1)[1].split(")", 1)[0], \
+        "effective_workers 必须在 utils 导入清单里"
+    # 变异证伪（§6.1）：把三处接线变异回直读 ⇒ (d) 立即红；把 workers_auto 出厂改 true ⇒ (c) 红
+    print("[181] 按机器规格并发档 ok: machine_tier 档位判据唯一产地（小8/中16/大32、边界与"
+          "缺内存只看 CPU）｜effective_workers（auto 取小、配置天花板、'false' 字符串不升档）｜"
+          "DEFAULTS+yaml 双产地出厂 false｜probe 三处接线且无第二份直读")
+    # ---------------- [182] 续182（借鉴点④）：拦截动作进结构化审计条目 ----------------
+    from scanner import audit as _au182
+    from scanner import runner as _rn182, extdom as _ex182
+    from scanner.owasp import checks as _ck182
+    from scanner import afrog as _af182
+    from scanner.pocs import engine as _eng182
+    assert _au182.KIND_SCAN_BLOCK == "scan_block" and _au182.KIND_SCAN_BLOCK in _au182.KINDS
+    assert _au182.KIND_LABELS.get(_au182.KIND_SCAN_BLOCK) == "扫描拦截"
+    # (a) 阶段级：min_severity 挡条 → scan_block 条目（桩位复刻 [176b]：三路各挡 1 条）
+    _vs182 = copy.deepcopy(settings)
+    _vs182["checks"]["min_severity"] = "critical"
+    _vs182["checks"]["skip_severities"] = []
+    _vs182["checks"]["disabled_categories"] = []
+    _vs182["checks"]["disabled_checks"] = []
+    _vs182.setdefault("evasion", {})["waf_detect"] = False
+    _rec182 = _Rec()
+    _tid182 = db.create_task("smoke-182-audit", targets, ["vulnscan"], {"offline": True})
+    _wd182 = Path(_TMPDIR) / f"vulnscan182_{_tid182}"
+    _wd182.mkdir(parents=True, exist_ok=True)
+    _ctx182 = StageContext(_tid182, "smoke-182-audit", parse_lines([targets]),
+                           ["vulnscan"], {"offline": True}, _vs182, _wd182, _rec182)
+    _ctx182.results["sites"] = [{"url": targets, "host": "127.0.0.1", "title": "T",
+                                 "length": 1, "tech": ""}]
+    _orig182 = (_ck182.run_all, _eng182.run_poc_on_target, _af182.enabled, _af182.run)
+
+    def _ra182(url, settings, min_severity=None, logger=None, blocked=None):
+        if blocked is not None:
+            blocked.add()      # 已执行且命中、低于门槛
+        return [{"poc_id": "stub-crit", "severity": "critical", "target": url,
+                 "name": "桩", "owasp": "A05", "detail": "", "evidence": ""}]
+
+    _pn182 = []
+
+    def _sp182(poc, url, settings, site=None, registry=None):
+        _pn182.append(poc.get("id"))
+        if len(_pn182) == 1:
+            return [{"poc_id": "stub-med", "severity": "medium", "target": url,
+                     "name": "桩", "detail": "", "evidence": ""}]
+        return []
+
+    try:
+        _ck182.run_all = _ra182
+        _eng182.run_poc_on_target = _sp182
+        _af182.enabled = lambda s: True
+        _af182.run = lambda sites, settings, logger, workdir=None, throttle=None: \
+            ([{"poc_id": "stub-af-info", "severity": "info", "target": targets,
+               "name": "桩", "detail": "", "evidence": ""}], "afrog 桩：1 条")
+        PipelineRunner(_ctx182).run()
+    finally:
+        _ck182.run_all, _eng182.run_poc_on_target = _orig182[0], _orig182[1]
+        _af182.enabled, _af182.run = _orig182[2], _orig182[3]
+    _ab182 = db._query("SELECT * FROM audit_log WHERE kind='scan_block' AND target=?",
+                       (str(_tid182),))
+    assert len(_ab182) == 1 and _ab182[0]["actor"] == "scanner", _ab182
+    assert "挡下 3 条" in _ab182[0]["detail"] and "vulnscan" in _ab182[0]["detail"], \
+        dict(_ab182[0])
+    # (b) extdom 自动拓展挡条 → scan_block 条目
+    _tid182b = db.create_task("smoke-182-ext", "targ182b.test", ["subdomain"], {})
+    db.update_task(_tid182b, status="done")
+    _rec182b = _Rec()
+    _wd182b = Path(_TMPDIR) / "ext182b"
+    _wd182b.mkdir(parents=True, exist_ok=True)
+    _ctx182b = StageContext(_tid182b, "smoke-182-ext", parse_lines(["targ182b.test"]),
+                            ["subdomain"], {"ext_depth": 2}, copy.deepcopy(settings),
+                            _wd182b, _rec182b)
+    _orig182b = (_ex182.similar_candidates, _ex182.promote_owned, _ex182.owner_of)
+    try:
+        _ex182.similar_candidates = lambda *a, **k: {
+            "keep": [], "blocked": [{"domain": "x1.targ182b.test"},
+                                    {"domain": "x2.targ182b.test"}]}
+        _ex182.promote_owned = lambda *a, **k: {"promoted": []}
+        _ex182.owner_of = lambda tid: 0
+        _rn182._maybe_queue_next_layer(_ctx182b, _tid182b, ["subdomain"],
+                                       {"ext_depth": 2}, _ctx182b.logger)
+    finally:
+        _ex182.similar_candidates, _ex182.promote_owned, _ex182.owner_of = _orig182b
+    _ab182b = db._query("SELECT * FROM audit_log WHERE kind='scan_block' AND target=?",
+                        (str(_tid182b),))
+    assert len(_ab182b) == 1 and "挡下 2 个候选" in _ab182b[0]["detail"] \
+        and "extdom" in _ab182b[0]["detail"], _ab182b
+    # (c) 审计开关仍管得住扫描器：gui.audit.enabled=False ⇒ record 拒落
+    _off182 = copy.deepcopy(settings)
+    _off182.setdefault("gui", {})["audit"] = {"enabled": False}
+    assert _au182.record(_au182.KIND_SCAN_BLOCK, "scanner", "", target="x",
+                         detail="d", settings=_off182) is False, "开关必须仍然有效"
+    # (d) 页面出口：/audit?kind=scan_block 渲染新类别与条目
+    assert _login7(c, _admin_form117()).status_code == 302, "补登录失败"
+    _html182 = c.get("/audit?kind=scan_block").get_data(as_text=True)
+    assert "扫描拦截" in _html182 and "挡下 3 条" in _html182, "审计页没渲染出扫描拦截条目"
+    # 变异证伪（§6.1）：删掉任一记账行 ⇒ 对应 (a)/(b) 无行即红；KIND 摘出 KINDS ⇒ 首两条红
+    print("[182] 拦截审计条目 ok: 新 KIND_SCAN_BLOCK（ts=at/tool/action/reason 结构化，"
+          "actor=scanner）｜vulnscan 挡条与自动拓展挡条两处记账｜审计开关仍管得住扫描器｜"
+          "/audit 页可查")
     # ---------------- [180] 续180（借鉴点①收口）：检查执行失败 ⇒ 无法确认（不是已修复） ----------------
     # 续150 已有三态（reproduced/fixed/unconfirmed）与「没探到 ⇒ unconfirmed」；本轮补
     # ARTEX retester 的第四种情形：目标活着、但检查**执行失败** —— 一次请求失败不证明已修复。
@@ -25677,6 +25831,154 @@ expression: r0()
     print("[180] 复测第四态情形 ok: 检查执行失败的站点旧结论记「无法确认」并 WARNING 说出口，"
           "三态原语义不变；两处变异（摘参/边界摘记账）证伪承重（借鉴点①：续150 已有三态，"
           "本轮补 ARTEX 的『一次请求失败不证明已修复』）")
+    # ---------------- [184b] 续184（用户 2026-10-14）：IP 反查先探活 + 备用源 + 原生 PTR ----------------
+    import scanner.iprecon as _ip184
+    import socket as _sk184
+    _calls184 = []
+
+    def _http530_184(url, timeout=None, settings=None, **kw):
+        _calls184.append(url)
+        return {"status": 530, "text": ""}
+
+    class _L184:
+        def __init__(self):
+            self.warn, self.info = [], []
+
+        def debug(self, m):
+            pass
+
+        def warning(self, m):
+            self.warn.append(m)
+
+        def info(self, m):
+            self.info.append(m)
+
+    _rh184, _rb184 = _ip184.http_request, _sk184.gethostbyaddr
+    try:
+        # (a) 接口全挂（HTTP 530，本机实测就是这一支）：预检只探「每个源一次」
+        _ip184.http_request = _http530_184
+        _sk184.gethostbyaddr = lambda ip: (f"ptr-{ip.replace('.', '-')}.targ184.test", [], [ip])
+        _lg184 = _L184()
+        _st184 = {"iprecon": {"enabled": True, "workers": 5, "timeout": 5, "preflight": True}}
+        _ips184 = [f"9.9.9.{i}" for i in range(1, 6)]
+        _m184, _s184 = _ip184.lookup_many(_ips184, _st184, logger=_lg184)
+        assert len(_calls184) == 6, f"预检后应只探 3+3=6 次（不再是 5 IP x 3 源），实到 {len(_calls184)}"
+        assert _s184["hit_ips"] == 5, f"接口全挂时**原生 PTR**仍要兜住（否则反查等于全废）：{_s184}"
+        assert all(v and v[0].endswith(".targ184.test") for v in _m184.values()), _m184
+        # (b) 说出口：两条 WARNING，而不是 500 个 IP 各打一条 DEBUG
+        _w184 = " | ".join(_lg184.warn)
+        assert "反查源预检" in _w184 and "HTTP 530" in _w184, _lg184.warn
+        assert "改用备用源" in _w184 and "ptr" in _w184, _lg184.warn
+        # (c) 变异证伪（§6.1）：preflight=False 退回旧行为 ⇒ 逐个白跑且零命中
+        _calls184.clear()
+        _st184b = dict(_st184)
+        _st184b["iprecon"] = dict(_st184["iprecon"], preflight=False)
+        _m184b, _s184b = _ip184.lookup_many(_ips184, _st184b, logger=_L184())
+        assert len(_calls184) == 15 and _s184b["hit_ips"] == 0, \
+            f"关掉预检就退化成 15 次白跑 + 零命中，实到 {len(_calls184)} 次 / {_s184b['hit_ips']} 命中"
+        # (d) 源活着时照旧走默认源（预检不该把好源过滤掉）
+        _calls184.clear()
+        _ip184.http_request = lambda url, timeout=None, settings=None, **kw: (
+            _calls184.append(url) or {"status": 200, "text": "a.targ184.test\nb.targ184.test"})
+        _m184c, _s184c = _ip184.lookup_many(["9.9.9.1", "9.9.9.2"], _st184, logger=_L184())
+        assert _m184c.get("9.9.9.1") == ["a.targ184.test", "b.targ184.test"], _m184c
+        assert len(_calls184) == 9, f"2 IP x 3 源 + 3 次预检 = 9，实到 {len(_calls184)}"
+        # (e) 配置两个产地都在（DEFAULTS 是产地，settings.yaml 是用户看得见的那一层）
+        from scanner import config as _cfg184
+        assert _cfg184.DEFAULTS["iprecon"].get("preflight") is True, "出厂必须开启预检"
+        assert _cfg184.DEFAULTS["iprecon"].get("fallback_sources") == \
+            ["ptr", "dnsdblookup", "rapiddns", "viewdns"], "备用池要以原生 ptr 打头"
+        _y184 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+        assert "preflight: true" in _y184 and "fallback_sources: [ptr," in _y184, \
+            "settings.yaml 没写出来（用户看不见就等于没有）"
+        # (f) 原生源是 DNS 查询，不参与 HTTP 预检
+        assert "ptr" in _ip184.DNS_SOURCES and "ptr" in _ip184._SOURCES, "ptr 必须是已注册的原生源"
+        assert not any("ptr" in u for u in _calls184), "ptr 不该发 HTTP"
+    finally:
+        _ip184.http_request = _rh184
+        _sk184.gethostbyaddr = _rb184
+    print("[184b] IP 反查探活 ok: 开跑前先探活（源挂了整轮跳过 —— 5 IP x 3 源的白跑压到 3+3 次）｜"
+          "接口全挂时原生 PTR 兜住 5/5 并 WARNING 说出口｜关掉预检即退回 15 次白跑 + 零命中（变异承重）｜"
+          "源活着时照旧走默认源（预检不误杀好源）｜配置两个产地都在｜ptr 不发 HTTP")
+    # ---------------- [184c] 续184（用户 2026-10-14）：puredns 全失败 ⇒ 回退内置爆破 ----------------
+    # 症状：任务 22 的 puredns 对每个域名退出码 1（日志只 WARNING），字典爆破**整路归零** ⇒
+    # 子域名 0 ⇒ portscan/probe/osint… 全部"无输入跳过"。修法：全失败时走内置那一路。
+    import ast as _ast184c
+    _sd184 = (ROOT / "scanner" / "stages" / "subdomain.py").read_text(encoding="utf-8")
+    _t184c = _ast184c.parse(_sd184)
+    # (a) 内置兜底抽成局部函数：判据与文案只有一处（§5.14），不再两处各写一遍
+    _fn184c = [n for n in _ast184c.walk(_t184c)
+               if isinstance(n, _ast184c.FunctionDef) and n.name == "_builtin_brute"]
+    assert len(_fn184c) == 1, f"内置兜底必须有且只有一个产地，实到 {len(_fn184c)}"
+    # (b) 两处调用：puredns 全失败 / 压根没启用 puredns（AST 钉点，不是 grep 文本）
+    _cl184c = [n for n in _ast184c.walk(_t184c)
+               if isinstance(n, _ast184c.Call) and getattr(n.func, "id", "") == "_builtin_brute"]
+    assert len(_cl184c) == 2, f"_builtin_brute 应被两处调用，实到 {len(_cl184c)}"
+    # (c) 回退挂在「全部失败」守卫下（部分成功不重跑），且成败分别计数
+    assert "_pd_fail and not _pd_ok" in _sd184, "回退必须挂在全部失败这一支上"
+    assert "_pd_ok += 1" in _sd184 and "_pd_fail += 1" in _sd184, "成败要分别计数"
+    # (d) 说出口：回退时 WARNING 点明"不兜就整轮归零"（不写就成了静默降级）
+    assert "改用内置 DNS" in _sd184 and "整轮归零" in _sd184, "回退原因要写进日志"
+    # 变异证伪（§6.1）：摘掉回退那两行 ⇒ (b) 掉到 1 处、立即红（logs/_mut184c.py 实测）
+    print("[184c] puredns 全失败回退 ok: 内置兜底只有一个产地（AST 钉 _builtin_brute 定义×1 / "
+          "调用×2）｜回退挂在『全部失败』守卫下且成败分别计数｜回退原因写进 WARNING｜"
+          "变异：摘掉回退即红")
+    # ---------------- [184d] 续184（用户 2026-10-14 点单）：数据探测 —— 邮箱 ----------------
+    from scanner import mails as _ml184
+    # (a) 筛选从严：这些形状在真 JS 里遍地都是，一条都不许进库（**自证夹具**：判据有牙）
+    for _e184 in ("icon@2x.png", "bootstrap@5.1.3.min.js", "logo@3x.webp", "x@127.0.0.1",
+                  "admin@example.com", "user@domain.com", "noreply@sentry.io", "a@yourdomain.com"):
+        assert _ml184.is_noise(_e184), f"噪声没挡住：{_e184}"
+    # (b) 真邮箱不许被误杀（只挡噪声、不挡正主）
+    for _e184 in ("admin@targ184.test", "contact.us@sub.targ184.test", "a_b+tag@targ184.test"):
+        assert not _ml184.is_noise(_e184), f"真邮箱被误杀：{_e184}"
+    _ex184 = _ml184.extract("mail to Admin@Targ184.test <x> icon@2x.png user@example.com")
+    assert [d["email"] for d in _ex184] == ["Admin@targ184.test"], _ex184
+    # (c) 落库：跨文件去重，且**重复执行不产生重复行**（AGENTS §5.6：去重是写方的责任）
+    _t184d = db.create_task("smoke-184d-mails", "http://m184d.test/", ["jsmine"], {})
+    assert db.insert_emails(_t184d, [{"email": "ops@targ184.test", "domain": "targ184.test",
+                                      "source": "http://m184d.test/app.js"}]) == 1
+    assert db.insert_emails(_t184d, [{"email": "ops@targ184.test"}]) == 0, "重跑不该再插一条"
+    # (d) 页面：/emails 渲染得出，且「只记录、不验证」这句必须在（不发验证邮件是硬边界）
+    assert _login7(c, _admin_form117()).status_code == 302
+    _html184d = c.get(f"/emails?task={_t184d}").get_data(as_text=True)
+    assert "ops@targ184.test" in _html184d and "targ184.test" in _html184d, "数据探测页没渲染出来"
+    assert "只记录、不验证" in _html184d, "「不发验证邮件、不查 MX」这句话要在页面上"
+    # (e) jsmine 顺带做（同一批正文、零额外请求）：AST 钉 harvest 调用，别用 grep 文本
+    import ast as _ast184d
+    _js184d = (ROOT / "scanner" / "stages" / "jsmine.py").read_text(encoding="utf-8")
+    assert any(isinstance(n, _ast184d.Call) and getattr(n.func, "attr", "") == "harvest"
+               for n in _ast184d.walk(_ast184d.parse(_js184d))), "jsmine 没顺带抽邮箱"
+    # (f) 表进 ASSET_TABLES（重启重置 / 迁移包口径一致，§5.14 唯一清单）
+    assert "emails" in db.ASSET_TABLES, "emails 没进 ASSET_TABLES ⇒ 重启重置会漏掉它"
+    # 变异证伪（§6.1）：`is_noise` 改成恒 False ⇒ 8 条噪声全进库 ⇒ (a) 立即红
+    print("[184d] 数据探测（邮箱）ok: 8 条自证噪声全挡（资源文件名/占位邮箱/数字 IP/数字 TLD），"
+          "真邮箱一条不误杀｜跨文件去重且重跑不产生重复行｜/emails 页渲染 + 边界说明在页面上｜"
+          "jsmine 顺带抽（AST 钉 harvest，零额外请求）｜emails 进 ASSET_TABLES｜变异：放开筛选即红")
+    # ---------------- [184e] 续184（用户问题②）：任务级并行也能按机器档走 ----------------
+    from scanner import queue as _q184
+    import scanner.utils as _ut184e
+    _ot184e = _ut184e.machine_tier
+    try:
+        # (a) auto 档：小 1 / 中 2 / 大 4（任务级并行比阶段内线程更吃资源，给得比阶段内保守）
+        for _tier184, _want184 in (("小", 1), ("中", 2), ("大", 4)):
+            _ut184e.machine_tier = lambda *a, _t=_tier184, **k: {"tier": _t, "suggested": 8}
+            assert _q184.config({"queue": {"workers": 8, "workers_auto": True}})["workers"] == _want184, \
+                f"{_tier184} 机器 auto 档应给 {_want184}"
+    finally:
+        _ut184e.machine_tier = _ot184e
+    # (b) 配置值仍是天花板：写了 2 的大机器也不给 4
+    assert _q184.config({"queue": {"workers": 2, "workers_auto": True}})["workers"] == 2
+    # (c) 出厂 false ⇒ 只认 workers（现状不变）
+    assert _q184.config({"queue": {"workers": 6}})["workers"] == 6, "不开 auto 就是原样"
+    from scanner import config as _cfg184e
+    assert _cfg184e.DEFAULTS["queue"].get("workers_auto") is False, "出厂必须是 false（现状不变）"
+    # (d) 用户看得见的那一层要写出来（[179b]④ 的 POST 映射覆盖由那一组逐段点名守住）
+    _y184e = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+    assert "workers_auto: false" in _y184e, "settings.yaml 没写出来（用户看不见就等于没有）"
+    # 变异证伪（§6.1）：删掉 auto 那段 ⇒ (a) 三档全给 8 ⇒ 立即红
+    print("[184e] 任务级并发按机器档 ok: auto=true 时小/中/大 ⇒ 1/2/4（配置值仍是天花板）｜"
+          "出厂 false 只认 workers｜settings.yaml 写出来｜变异：摘掉 auto 段即红")
     print("SMOKE PASS")
 
 
