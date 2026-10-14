@@ -411,7 +411,8 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
         cand = extdom.similar_candidates(extdom.ext_rows(task_id),
                                          extdom.confirmed_bases(task_id),
                                          min_level=min_conf, settings=ctx.settings,
-                                         owner_id=extdom.owner_of(task_id))
+                                         owner_id=extdom.owner_of(task_id),
+                                         confirmed_ips=extdom.confirmed_ip_map(task_id))
         similar = [c["domain"] for c in cand["keep"]]
         sim_blocked = len(cand["blocked"])
         for c in cand["keep"][:5]:      # 逐条说依据，但只说前 5 条（一屏读得完）

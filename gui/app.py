@@ -2659,11 +2659,16 @@ def create_app():
             key = int(tid) if tid is not None else int(r.get("task_id") or 0)
             if key not in cache:
                 try:
-                    cache[key] = extdom.confirmed_bases(key)
+                    cache[key] = (extdom.confirmed_bases(key),
+                                  extdom.confirmed_ip_map(key))
                 except Exception as exc:      # 老库/坏任务不许把整页带倒：无从比对就如实给低档
                     logger.warning(f"[extdom] 取 #{key} 的已确认资产失败，置信度按无对照算：{exc}")
-                    cache[key] = set()
-            r["conf"] = extdom.confidence(r.get("domain") or "", bases=cache[key])
+                    cache[key] = (set(), {})
+            _bases, _ips = cache[key]
+            # 续179：徽章与自动递归吃同一份结论（含 IP 佐证）—— 判据只在
+            # extdom.apply_ip_evidence 一处（§5.14）。
+            r["conf"] = extdom.apply_ip_evidence(
+                extdom.confidence(r.get("domain") or "", bases=_bases), r, _ips)
         return rows
 
     def _overlap_args():
@@ -3854,7 +3859,9 @@ def create_app():
                                 _g0.get("keys_ask_passphrase", True)),
                             "login_lockout": dict(_g0.get("login_lockout") or {}),
                             "audit": dict(_g0.get("audit") or {})},
-                    "limits": {"max_workers": int(f.get("max_workers", 20) or 20),
+                    # 续179：页面上没有输入框的 limits 键（动态并发档 workers_* 等新键）
+                    # 必须原样带回 —— 整段重写会把它们抹掉（§6.2 第十二起同族）。
+                    "limits": {**(_l0), "max_workers": int(f.get("max_workers", 20) or 20),
                                "http_timeout": int(f.get("http_timeout", 10) or 10),
                                "verify_tls": f.get("verify_tls") == "1",
                                "verify_tls_external": f.get("verify_tls_external") == "1",

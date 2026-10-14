@@ -101,6 +101,11 @@ dev:
   fixture_port: 0        # 内置靶场端口，0 = 系统自动分配（避免与已占用端口冲突）
 limits:
   max_workers: 20
+  # 动态并发档（续179，参照 recon-spiral"按产出加码"）：fixed = 整批开满 max_workers（现状）；
+  # ramp = 从 workers_floor 起步、每批有产出就翻倍封顶（零产出的批不升档）——小任务不再
+  # 一上来就开满线程。基准实测数字见 CHANGELOG 续179。
+  workers_mode: fixed
+  workers_floor: 4
   http_timeout: 10
   verify_tls: false
   # 第三方接口（FOFA/Shodan/Quake/crt.sh/KEV/iprecon/api.github.com）的证书校验，**默认开**。

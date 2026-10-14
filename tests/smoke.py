@@ -25022,6 +25022,549 @@ expression: r0()
           "阶段末覆盖写落库 sev_floor+sev_blocked（追加不虚高）｜文案唯一产地"
           "（Row/dict 都认、0 条不渲染、门槛跟着变）｜MD/HTML/详情页三出口｜老库补列且老行不出话")
 
+    # ---------------- [172] 续172：站点「同标题聚合折叠」＝ 3xx 优先 redirect_title ----------------
+    # 夹具复刻主理人样本的形状（域名换合成域）：ib 站 http 301 行（title 是 CDN 默认页）
+    # + https 200 行（跳转后标题）；mp 站同构；另加一个不同标题站点。
+    # 变异证伪（§6.1）：把 _site_fold_key 摘回旧逻辑（title 优先、不看 3xx）⇒ ib 组拆开 ⇒ 红。
+    _tid172 = db.create_task("smoke-172-fold", "targ172.test", ["probe"], {})
+    _login172 = "ib.targ172.test | login"
+    db.insert_sites(_tid172, [
+        {"url": "http://ib.targ172.test", "host": "ib.targ172.test", "port": "80",
+         "status": 301, "title": "301 Moved Permanently", "redirect_status": 200,
+         "redirect_url": "https://ib.targ172.test/", "redirect_title": _login172},
+        {"url": "https://ib.targ172.test", "host": "ib.targ172.test", "port": "443",
+         "status": 200, "title": _login172},
+        {"url": "http://mp.targ172.test", "host": "mp.targ172.test", "port": "80",
+         "status": 301, "title": "301 Moved Permanently", "redirect_status": 200,
+         "redirect_url": "https://mp.targ172.test/", "redirect_title": "商户开放平台"},
+        {"url": "https://mp.targ172.test", "host": "mp.targ172.test", "port": "443",
+         "status": 200, "title": "商户开放平台"},
+        {"url": "https://solo.targ172.test", "host": "solo.targ172.test",
+         "port": "443", "status": 200, "title": "solo.targ172.test | login"},
+    ])
+    assert _login7(c, _admin_form117()).status_code == 302, "补登录失败：共享 client 拿不到会话"
+    _r172 = c.get(f"/tasks/{_tid172}")
+    assert _r172.status_code == 200, f"详情页 {_r172.status_code}"
+    _html172 = _r172.get_data(as_text=True)
+    _btn172 = re.findall(r"展开同标题（(\d+) 条）", _html172)
+    assert _btn172 == ["1", "1"], \
+        f"应恰好两个 2 条组（ib / mp 各一）：{_btn172} —— 3xx 不优先跳转后标题就会拆成 0 组"
+    assert _html172.count('data-dup-of="') == 2, \
+        f"应有 2 个成员行默认收起：{_html172.count('data-dup-of=')}"
+    for _u172 in ("http://ib.targ172.test", "https://ib.targ172.test",
+                  "https://mp.targ172.test"):
+        assert _u172 in _html172, f"{_u172} 不见了 —— 收起不能等于删数据"
+    _real_key172 = gui_app._site_fold_key
+
+    def _old_key172(row):
+        title = (row.get("title") or "").strip() or (row.get("redirect_title") or "").strip()
+        if title:
+            return (row.get("task_id"), "t", title)
+        try:
+            length = int(row.get("length") or 0)
+        except (TypeError, ValueError):
+            length = 0
+        return (row.get("task_id"), "l", length) if length > 0 else None
+
+    try:
+        gui_app._site_fold_key = _old_key172
+        _html172o = c.get(f"/tasks/{_tid172}").get_data(as_text=True)
+        _btn172o = re.findall(r"展开同标题（(\d+) 条）", _html172o)
+        # 旧逻辑（title 优先）下：两条 301 的 CDN 默认页标题**跨站**聚成一组（毫无意义），
+        # 真正的站点行各自独立 —— 这正是主理人"标题还是没有修改"的痛点形状。
+        assert _btn172o == ["1"], f"变异态应只剩跨站默认页组：{_btn172o}"
+        assert _html172o.count('data-dup-of="') == 1, "变异态成员行应只有 1 个"
+    finally:
+        gui_app._site_fold_key = _real_key172
+    print("[172] 站点折叠 ok: 301→200 同站两行聚成一组（3xx 优先 redirect_title 作键）、"
+          "默认收起可展开、收起条数在按钮上报出、收起≠删数据；变异（摘 3xx 分支）后组拆开")
+
+    # ---------------- [177] 续177：JS 凭据「值黑名单」—— 阶段 / flagfind / GUI 三层 ----------------
+    import inspect as _inspect177
+    from scanner import dnsq as _dq177, extdom as _xd177, jsmine as _jm177
+    from scanner.stages import probe as _probe177
+    import scanner.fingerprint as _fp177
+    import scanner.secretbl as _sbl177
+    import scanner.flagfind as _ff177
+    from scanner.stages.jsmine import JsmineStage as _Jsmine177
+    _st177 = copy.deepcopy(settings)
+    _blk_raw177 = "AKIA" + "BLOCKED" * 3 + "11"      # 运行时拼串，源码里不留整串（§0.5 同纪律）
+    _kept_raw177 = "AKIA" + "KEPTKEPT" * 2 + "2222"
+
+    class _Rec177:
+        def __init__(self):
+            self.lines = []
+
+        def info(self, m, *a):
+            self.lines.append(str(m))
+
+        warning = error = exception = info
+
+        def debug(self, m, *a):
+            pass
+
+    def _secrets177():
+        return [
+            {"type": "aws-access-key", "value": _jm177._masked(_blk_raw177),
+             "_raw": _blk_raw177, "source": "http://zone177.test/a.js",
+             "context": "k", "line": 1, "line_text": "k", "offset": 0},
+            {"type": "aws-access-key", "value": _jm177._masked(_kept_raw177),
+             "_raw": _kept_raw177, "source": "http://zone177.test/b.js",
+             "context": "k", "line": 2, "line_text": "k", "offset": 5},
+        ]
+
+    def _stub_mine177(url, settings=None, logger=None, text_sink=None):
+        return {"domains": ["api.zone177.test"], "urls": set(),
+                "secrets": _secrets177(), "js_count": 2}
+
+    assert list(_inspect177.signature(_stub_mine177).parameters) \
+        == list(_inspect177.signature(_jm177.mine).parameters), "桩与生产签名漂了"
+    _orig177 = {"zone": _dq177.zone_state, "res": _dq177.resolve_detail,
+                "sp": _probe177.second_pass, "flush": _fp177.flush,
+                "mine": _jm177.mine, "note": _ff177.note}
+    # 桩：zone exists + 解析无结论放行 + 二阶段探测/指纹 flush 不跑 —— 全组零网络
+    _dq177.zone_state = lambda base, timeout=3, resolver=None, settings=None: "exists"
+    _dq177.resolve_detail = lambda host, timeout=3, resolver=None, settings=None: ([], [], "timeout")
+    _probe177.second_pass = lambda *a, **k: None
+    _fp177.flush = lambda *a, **k: None
+    _jm177.mine = _stub_mine177
+
+    def _run_js177(task_id, name):
+        st = copy.deepcopy(_st177)
+        st["jsmine"] = dict(st.get("jsmine") or {}, enabled=True, drop_absent_zone=True)
+        db.insert_sites(task_id, [{"url": "http://zone177.test/", "host": "zone177.test",
+                                   "port": "80", "status": 200, "title": "T", "length": 1}])
+        rec = _Rec177()
+        wd = Path(_TMPDIR) / ("jsmine177_" + name)
+        wd.mkdir(parents=True, exist_ok=True)
+        _Jsmine177(StageContext(task_id, "smoke-177-" + name, parse_lines(["zone177.test"]),
+                                ["jsmine"], {}, st, wd, rec)).run()
+        return rec, wd
+
+    def _sbl_purge177(value):
+        for _e177 in list(_sbl177.load()):
+            if _sbl177.matches(value, [_e177]):
+                _sbl177.remove(_e177["id"])
+
+    # (a) 阶段：黑名单预置 BLOCKED ⇒ 只放过 KEPT（日志/统计/落盘三处说出口）
+    _tid177a = db.create_task("smoke-177-jsmine", "zone177.test", ["jsmine"], {})
+    db.insert_secret_blacklist(_blk_raw177, kind="aws-access-key", note="门禁夹具：误报")
+    try:
+        _rec177a, _wd177a = _run_js177(_tid177a, "z177a")
+        _js177 = sorted(r["value"] for r in db.list_js_secrets(_tid177a))
+        assert _js177 == [_kept_raw177], f"js_secrets 应只有过关值的原文：{_js177}"
+        assert len(db.list_js_secrets(_tid177a, host="zone177.test")) == 1
+        _v177a = [r for r in db.list_vulns(_tid177a, limit=None)
+                  if str(r["poc_id"]).startswith("js-secret-")]
+        assert len(_v177a) == 1, f"vulns 应只有一条 js-secret 行：{len(_v177a)}"
+        _ev177, _pk177 = str(_v177a[0]["evidence"]), str(_v177a[0]["packets"])
+        assert _kept_raw177[:4] in _ev177, "evidence 里应有过关值的掩码"
+        assert _blk_raw177 not in _ev177 and _blk_raw177 not in _pk177, "被拉黑值的原文不许进 vulns"
+        assert _jm177._masked(_blk_raw177) not in _ev177, "被拉黑值连掩码都不该出现（整条不显示）"
+        _blk177 = [x for x in _rec177a.lines if "值黑名单挡掉 1 条" in x]
+        assert _blk177, f"挡掉的量必须说出来：{_rec177a.lines[-6:]}"
+        assert _jm177._masked(_blk_raw177) in _blk177[0] and "不再显示" in _blk177[0], _blk177[0]
+        _stat177 = [x for x in _rec177a.lines if "JS 文件 2 个" in x and "疑似凭据 1 条" in x]
+        assert _stat177 and "值黑名单挡掉 1 条" in _stat177[0], f"统计行要带挡掉数：{_stat177}"
+        _disk177 = (_wd177a / "js_secrets.txt").read_text(encoding="utf-8")
+        assert _kept_raw177[:4] in _disk177 and _blk_raw177 not in _disk177, \
+            f"落盘也只要过关值：{_disk177!r}"
+        print("[177a] jsmine 阶段 ok: 黑名单挡 1 条（日志/统计/落盘三处说出口），过关 1 条两表都进")
+    finally:
+        _sbl_purge177(_blk_raw177)
+
+    # (a2) 变异证伪（§6.1）：摘掉 filter_secrets ⇒ 被拉黑的值必须能进两表
+    _tid177a2 = db.create_task("smoke-177-jsmine2", "zone177.test", ["jsmine"], {})
+    _real_filter177 = _sbl177.filter_secrets
+    try:
+        _sbl177.filter_secrets = lambda secrets, owner_id=None: (list(secrets or []), [])
+        _rec177a2, _wd177a2 = _run_js177(_tid177a2, "z177b")
+        _js177b = sorted(r["value"] for r in db.list_js_secrets(_tid177a2))
+        assert _js177b == sorted([_blk_raw177, _kept_raw177]), \
+            f"变异态下拉黑值也进库才算证伪成功：{_js177b}"
+        assert not [x for x in _rec177a2.lines if "值黑名单挡掉" in x], "变异态下不该有挡掉行"
+    finally:
+        _sbl177.filter_secrets = _real_filter177
+    print("[177a2] jsmine 变异证伪 ok: 摘掉 filter_secrets 后黑名单形同虚设（两条都进库、无挡掉日志）")
+
+    # (b) flagfind：黑名单挡 flag 候选 + stats/note/日志三处可见
+    _blk_flag177 = "BLOCK" + "EDFL" + "AGVALUE"
+    _kept_flag177 = "KEEPFL" + "AGVALUE222"
+    _text177 = f"flag{{{_blk_flag177}}} and flag{{{_kept_flag177}}} in one body"
+
+    class _Ctx177:
+        def __init__(self, task_id):
+            self.task_id = task_id
+            self.settings = _st177
+            self.results = {}
+            self.logger = _Rec177()
+
+        def stopped(self):
+            return False
+
+    _tid177b = db.create_task("smoke-177-flag", "zone177.test", ["jsmine"], {})
+    db.insert_secret_blacklist(_blk_flag177, kind="flag", note="门禁夹具：误报")
+    try:
+        _ctx177b = _Ctx177(_tid177b)
+        assert _ff177.harvest(_ctx177b, "http://zone177.test/", _text177, "js") == 1, \
+            "只该入库过关的那条"
+        _vals177b = [r["value"] for r in db.list_flags(_tid177b)]
+        assert _vals177b == [_kept_flag177], f"flags 表应只有过关值：{_vals177b}"
+        _stt177 = _ff177.stats(_ctx177b)
+        assert _stt177["blocked"] == 1 and _stt177["new"] == 1 and _stt177["texts"] == 1, _stt177
+        _note177 = _ff177.note(_ctx177b, {})
+        assert "值黑名单挡掉 1 条" in _note177 and "新增候选 1 条" in _note177, _note177
+        _flog177 = [x for x in _ctx177b.logger.lines if "值黑名单挡掉 1 条" in x]
+        assert _flog177 and _jm177._masked(_blk_flag177) in _flog177[0] \
+            and "不再显示" in _flog177[0], _flog177
+        print("[177b] flagfind ok: 黑名单挡 1 条（stats/note/日志三处可见），过关 1 条入库")
+    finally:
+        _sbl_purge177(_blk_flag177)
+
+    # (b2) 变异证伪：摘掉过滤 ⇒ 被拉黑值也进 flags 表
+    _tid177b2 = db.create_task("smoke-177-flag2", "zone177.test", ["jsmine"], {})
+    db.insert_secret_blacklist(_blk_flag177, kind="flag", note="门禁夹具：误报")
+    try:
+        _sbl177.filter_secrets = lambda secrets, owner_id=None: (list(secrets or []), [])
+        _ctx177b2 = _Ctx177(_tid177b2)
+        _added177b2 = _ff177.harvest(_ctx177b2, "http://zone177.test/", _text177, "js")
+        _vals177b2 = sorted(r["value"] for r in db.list_flags(_tid177b2))
+        assert _added177b2 == 2 and _vals177b2 == sorted([_blk_flag177, _kept_flag177]), \
+            f"变异态下拉黑值也进库才算证伪成功：added={_added177b2} vals={_vals177b2}"
+        assert _ff177.stats(_ctx177b2)["blocked"] == 0, "变异态下 blocked 应为 0"
+    finally:
+        _sbl177.filter_secrets = _real_filter177
+        _sbl_purge177(_blk_flag177)
+    print("[177b2] flagfind 变异证伪 ok: 摘掉 filter_secrets 后两条都入库、无挡掉计数")
+
+    # (c) GUI：原文单独一行 + 一键「判误报并拉黑值」+ 下次不显示 + 策略页管理
+    #     ⚠ insert_vuln/insert_js_secret 照既有风格不返回 id —— id 从库里取。
+    _tid177c = db.create_task("smoke-177-gui", "zone177.test", ["jsmine"], {})
+    _raw177c = "AKIA" + "GUIVALUE" * 3
+    _mask177c = _jm177._masked(_raw177c)
+    db.insert_js_secret(_tid177c, {"host": "zone177.test", "type": "aws-access-key",
+                                   "value": _raw177c, "masked": _mask177c,
+                                   "source": "http://zone177.test/a.js", "context": "k",
+                                   "line": 1, "line_text": "k"})
+    db.insert_vuln(_tid177c, {
+        "target": "zone177.test", "poc_id": "js-secret-aws-access-key",
+        "name": "JS 疑似凭据泄露（aws-access-key）", "severity": "high", "owasp": "A08",
+        "detail": "JS 中发现疑似凭据，需人工确认其有效性与作用域",
+        "evidence": "http://zone177.test/a.js:1 命中规则 aws-access-key，值 %s；前后文：k｜所在行：k"
+                    % _mask177c,
+        "packets": "值（已掩码）：%s" % _mask177c})
+    # 一条非 js-secret 行（拉黑必须拒绝它）
+    db.insert_vuln(_tid177c, {"target": "zone177.test", "poc_id": "a02-no-https",
+                              "name": "x", "severity": "low"})
+    _vrows177 = db.list_vulns(_tid177c, limit=None)
+    _vid177 = next(r["id"] for r in _vrows177 if str(r["poc_id"]).startswith("js-secret-"))
+    _vid177x = next(r["id"] for r in _vrows177 if r["poc_id"] == "a02-no-https")
+    assert _login7(c, _admin_form117()).status_code == 302, "补登录失败：共享 client 拿不到会话"
+    _html177c = c.get("/vulns").get_data(as_text=True)
+    assert "凭据原文（单独一行）" in _html177c, "原文行没渲染"
+    assert '<code class="mono">%s</code>' % _raw177c in _html177c, "原文没单独一行以 code 显示"
+    assert "判误报并拉黑值" in _html177c, "一键按钮没渲染"
+    assert 'name="vuln_id" value="%d"' % _vid177 in _html177c, "按钮没带对这一行的 id"
+    _html177d = c.get(f"/tasks/{_tid177c}").get_data(as_text=True)
+    assert "凭据原文（单独一行）" in _html177d, "详情页没有原文行（两个视图一个映射）"
+    # 拒绝：非 js-secret 行 / 缺 id（_append_err 范式 = 409 最小页，标题讲"无法拉黑这个值"）
+    _r177x = c.post("/api/jssecret/blacklist", data={"vuln_id": _vid177x, "next": "/vulns"})
+    assert _r177x.status_code == 409, _r177x.status_code
+    assert "无法拉黑这个值" in _r177x.get_data(as_text=True), "拒绝页标题讲错话"
+    assert not _sbl177.matches("x", _sbl177.load()), "非 js-secret 行不许拉黑"
+    _r177y = c.post("/api/jssecret/blacklist", data={"vuln_id": "", "next": "/vulns"})
+    assert _r177y.status_code == 409, _r177y.status_code
+    # 正向：拉黑 + 判误报（策略页计数动态断言 —— 共享库里可能有别组留下的全局条目）
+    _m0177 = re.search(r"值黑名单 (\d+) 条", c.get("/settings").get_data(as_text=True))
+    # 空名单时该行整块不渲染（模板 {% if sb %}）⇒ 视作 0
+    _sb0177 = int(_m0177.group(1)) if _m0177 else 0
+    _r177z = c.post("/api/jssecret/blacklist", data={"vuln_id": _vid177, "next": "/vulns"})
+    assert _r177z.status_code == 302, (_r177z.status_code, _r177z.get_data(as_text=True)[:300])
+    assert _sbl177.matches(_raw177c, _sbl177.load()), "值没进黑名单"
+    _row177 = db._query("SELECT * FROM vulns WHERE id=?", (_vid177,), one=True)
+    assert _row177["review"] == "false_positive", f"行没被判误报：{_row177['review']}"
+    assert _row177["review_note"] and "黑名单" in _row177["review_note"], _row177["review_note"]
+    _html177s = c.get("/settings").get_data(as_text=True)
+    _sb1177 = int(re.search(r"值黑名单 (\d+) 条", _html177s).group(1))
+    assert _sb1177 == _sb0177 + 1, f"策略页计数没跟上：{_sb0177} → {_sb1177}"
+    assert _mask177c in _html177s and _raw177c not in _html177s, "策略页必须只显掩码"
+    print("[177c] GUI ok: 原文行/一键拉黑(含判误报)/拒绝非 js-secret 行/策略页掩码+计数")
+
+    # (c2) 下次匹配到就不显示：**全新任务**再挖到同一个值 ⇒ 黑名单在匹配点挡住
+    _ff177.note = lambda *a, **k: ""
+
+    def _mine177c2(url, settings=None, logger=None, text_sink=None):
+        return {"domains": [], "urls": set(),
+                "secrets": [{"type": "aws-access-key", "value": _mask177c, "_raw": _raw177c,
+                             "source": "http://zone177.test/a.js", "context": "k",
+                             "line": 1, "line_text": "k", "offset": 0}], "js_count": 1}
+
+    try:
+        _tid177c2 = db.create_task("smoke-177-gui-next", "zone177.test", ["jsmine"], {})
+        _jm177.mine = _mine177c2
+        _rec177c2, _wd177c2 = _run_js177(_tid177c2, "g177n")
+        assert db.list_js_secrets(_tid177c2) == [], "新任务上被拉黑的值不该进 js_secrets"
+        assert not [r for r in db.list_vulns(_tid177c2, limit=None)
+                    if str(r["poc_id"]).startswith("js-secret-")], \
+            "新任务上被拉黑的值不该进 vulns"
+        assert any("值黑名单挡掉 1 条" in x for x in _rec177c2.lines), \
+            f"挡掉量没进日志：{[x for x in _rec177c2.lines if '黑名单' in x]}"
+        # 原任务（旧行已在库）重跑：跨运行去重优先，旧行一条不重复
+        _rec177c3, _wd177c3 = _run_js177(_tid177c, "g177r")
+        _nv177 = len([r for r in db.list_vulns(_tid177c, limit=None)
+                      if str(r["poc_id"]).startswith("js-secret-")])
+        assert _nv177 == 1, f"重跑后 js-secret 行数变了（{_nv177}）—— 旧行被重复插入"
+    finally:
+        _jm177.mine = _orig177["mine"]
+        _ff177.note = _orig177["note"]
+    # 策略页移除路由（按本组刚加的那条的 id，别动别人的条目）
+    _eid177 = next(e["id"] for e in _sbl177.load() if _sbl177.matches(_raw177c, [e]))
+    _r177rm = c.post("/api/jssecret/blacklist/remove",
+                     data={"sid": [_eid177], "next": "/settings"})
+    assert _r177rm.status_code == 302, _r177rm.status_code
+    assert not _sbl177.matches(_raw177c, _sbl177.load()), "移除路由没删掉"
+    print("[177c2] 下次不显示 ok: 全新任务两表零新增且挡掉量说出口、原任务重跑不重复；移除路由生效")
+    # 全组收尾：桩全部还原（后面的组/收尾断言不许吃到本组的桩）
+    _dq177.zone_state, _dq177.resolve_detail = _orig177["zone"], _orig177["res"]
+    _probe177.second_pass, _fp177.flush = _orig177["sp"], _orig177["flush"]
+    print("[177] JS 凭据值黑名单 ok: jsmine 阶段 + flagfind + GUI 三层全链路"
+          "（过滤/统计/落库/页面/日志），两处变异证伪承重（摘 filter_secrets 即假绿）")
+
+    # ---------------- [178] 续178：「送去探测」来源条数 + 送探记录/徽章/入口合并 ----------------
+    # (a) 波一：按钮改名 + 来源分类各项带条数（口径与"全部"视图一致；共享库里必须带 task 过滤）
+    _tid178a = db.create_task("smoke-178-ext", "zone178.test", ["subdomain"], {})
+    db.insert_subdomains(_tid178a, [("api.zone178.test", "js:mine")] * 3
+                         + [("a.zone178.test", "js:mine"), ("b.zone178.test", "js:mine"),
+                            ("t1.zone178.test", "osint:fofa-title"),
+                            ("t2.zone178.test", "osint:fofa-title"),
+                            ("c1.zone178.test", "osint:cseg")])
+    # extdomains 默认"只看解析成功的"（EXT_SUBDOMAIN_WHERE）—— 夹具必须带 IP，否则整页被滤光
+    db._exec("UPDATE subdomains SET ip=? WHERE task_id=?", ("1.2.3.4", _tid178a))
+    assert _login7(c, _admin_form117()).status_code == 302, "补登录失败：共享 client 拿不到会话"
+    _html178 = c.get(f"/extdomains?task={_tid178a}").get_data(as_text=True)
+    assert "送去探测</button>" in _html178, "按钮文案没改成「送去探测」"
+    assert "（默认全任务拓展域名，新建任务）" not in _html178, "旧尾巴还在"
+    assert "title=\"新建一个 subdomain→probe→dirscan→vulnscan 的任务" in _html178, \
+        "title 说明被误删（那里面是阶段清单，信息不丢）"
+    assert "JS 挖掘（5）" in _html178, "js 挖掘条数不对"
+    assert "FOFA·标题反查（2）" in _html178, "fofa 标题条数不对"
+    assert "C 段反查（1）" in _html178, "cseg 条数不对"
+    assert "（0）" not in _html178, "0 条来源不该挂（0）"
+    _html178s = c.get(f"/extdomains?task={_tid178a}&src=js").get_data(as_text=True)
+    assert "JS 挖掘（5）" in _html178s and "FOFA·标题反查（2）" in _html178s, \
+        "选中某一类时其他类条数不该归 0（src_where 被故意排除）"
+    assert "c1.zone178.test" not in _html178s, "src=js 时 cseg 的行不该出现"
+    _html178g = c.get(f"/extdomains?task={_tid178a}&group=1").get_data(as_text=True)
+    assert "JS 挖掘（5）" in _html178g, "分组视图漏了条数"
+    print("[178a] 来源条数 ok: 按钮改名 + 各来源带条数（选中单类不归 0、分组视图同口径）")
+
+    # (b) 波二：送探记录 + 随单归属追加 + 徽章/组内子标签/复选框合并
+    _tid178b = db.create_task("smoke-178b", "targ178.test", ["probe"], {})
+    db.insert_subdomains(_tid178b, [
+        ("aaa.targ178.test", "js:mine"), ("bbb.targ178.test", "js:mine"),
+        ("ext.example178.test", "js:mine")])
+    db._exec("UPDATE subdomains SET ip=? WHERE task_id=?", ("1.2.3.4", _tid178b))
+    _r178b = c.post("/api/domains/scan-ext", data={
+        "task_id": str(_tid178b), "scope": "picked",
+        "domain": ["aaa.targ178.test", "ext.example178.test"],
+        "promote_too": "1", "depth": "1"}, follow_redirects=False)
+    assert _r178b.status_code == 302, \
+        f"送探失败 {_r178b.status_code} {_r178b.get_data(as_text=True)[:200]}"
+    _new178 = int(_r178b.headers["Location"].rsplit("/", 1)[-1])
+    # 送探记录：两个域名各一条 probe（from=tid → new_tid）
+    _pm178 = db.list_ext_probes(["aaa.targ178.test", "ext.example178.test"])
+    assert set(_pm178) == {"aaa.targ178.test", "ext.example178.test"}, _pm178
+    assert all(t == _new178 and k == "probe" for v in _pm178.values() for (t, k, _c) in v), _pm178
+    # 随单归属追加：**批量语义**（promote_owned 把任务下所有注册域命中的拓展行都追加 ——
+    # 与原「归属本项目的追加为子域名」按钮同款）；不归属的 ext.example 不追加
+    _own178 = [r["domain"] for r in db._query(
+        "SELECT domain FROM subdomains WHERE task_id=? AND source LIKE 'promote:%'",
+        (_tid178b,))]
+    assert "aaa.targ178.test" in _own178 and "bbb.targ178.test" in _own178, \
+        f"归属的没追加：{_own178}"
+    assert "ext.example178.test" not in _own178, "不归属的域名不该被追加"
+    _html178b = c.get(f"/extdomains?task={_tid178b}").get_data(as_text=True)
+    assert "送去探测 → #" in _html178b, "行徽章没渲染"
+    assert 'href="/tasks/%d"' % _new178 in _html178b, "徽章没链到子任务"
+    assert "同时把归属本项目的追加为子域名" in _html178b, "合并复选框没渲染"
+    assert 'name="promote_too" value="1" checked' in _html178b, "复选框默认没勾"
+    assert "归属本项目的追加为子域名</button>" not in _html178b, "旧 promote 按钮还在"
+    assert "送探记录：" in _html178b, "组内送探子标签没渲染"
+    assert "不影响主域名资产" in _html178b, "子标签的说明句没渲染"
+    assert re.search(r"送去探测（[^）]*，子域 0/站点 0/漏洞 0）", _html178b), \
+        "组内子标签缺子任务资产摘要（或摘要不是如实 0）"
+    # 变异证伪：promote_too 不勾 ⇒ 无归属追加（探针用全新域名 ccc —— bbb 在上一步
+    # 已被 promote_owned 批量带上，不能当变异探针）
+    db.insert_subdomains(_tid178b, [("ccc.targ178.test", "js:mine")])
+    db._exec("UPDATE subdomains SET ip=? WHERE domain='ccc.targ178.test'", ("1.2.3.4",))
+    _r178b2 = c.post("/api/domains/scan-ext", data={
+        "task_id": str(_tid178b), "scope": "picked",
+        "domain": ["ccc.targ178.test"], "depth": "1"}, follow_redirects=False)
+    assert _r178b2.status_code == 302, _r178b2.status_code
+    _own178b2 = [r["domain"] for r in db._query(
+        "SELECT domain FROM subdomains WHERE task_id=? AND source LIKE 'promote:%' "
+        "AND domain='ccc.targ178.test'", (_tid178b,))]
+    assert _own178b2 == [], "变异态下不勾复选框也发生了归属追加 ⇒ 复选框没承重"
+    _pm178b2 = db.list_ext_probes(["ccc.targ178.test"])
+    assert _pm178b2 and all(k == "probe" for v in _pm178b2.values() for (t, k, _c) in v), \
+        "不勾 promote_too 的送探仍要记 probe"
+    print("[178] 送去探测 ok: 送探记录（probe/append/promote 三方式）+ 随单归属追加 + "
+          "徽章/组内子标签/复选框合并；变异（不勾复选框）证伪承重")
+    # ---------------- [179] 续179：IP 佐证 ⇒ medium（与非 CDN 已确认子域同 IP） ----------------
+    from scanner import extdom as _ex179
+    _bases179 = {"abcd179.test"}
+    _ips179 = {"1.2.3.4": "api.abcd179.test", "5.6.7.8": "edge.abcd179.test"}
+    # ① 判据本体：低相似 + 同 IP ⇒ medium，理由文本说清是谁同 IP（含 IP 本身）
+    _r179 = {"domain": "xqzt-ops.com", "ip": "1.2.3.4", "cdn": ""}
+    _c179 = _ex179.confidence("xqzt-ops.com", bases=_bases179)
+    assert _c179["level"] == "low", f"夹具前提：纯看名字是低 —— {_c179}"
+    _c179b = _ex179.apply_ip_evidence(_c179, _r179, _ips179)
+    assert _c179b["level"] == "medium" and "api.abcd179.test" in _c179b["reason"] \
+        and "1.2.3.4" in _c179b["reason"], _c179b
+    assert _c179b["reason"] != _c179["reason"], "升档必须换理由（不能只改标签不改话）"
+    # 变异证伪（§6.1）：不给 confirmed_ips（= 摘掉佐证）⇒ 结论必须退回 low
+    assert _ex179.apply_ip_evidence(_c179, _r179, None)["level"] == "low", "摘掉佐证必须退回低"
+    # ② 边界：已是中/高不降级不改写；归属行不动；自己标 CDN 不作佐证；没 IP 不作佐证；不自证
+    _hi179 = {"level": "high", "label": "高", "owned": False, "near": "abcd179.test",
+              "reason": "相似度高"}
+    assert _ex179.apply_ip_evidence(_hi179, _r179, _ips179) == _hi179, "已是高不许被改写"
+    _own179 = dict(_hi179, owned=True)
+    assert _ex179.apply_ip_evidence(_own179, _r179, _ips179) == _own179, \
+        "归属行不动（promote_owned 的地盘）"
+    assert _ex179.apply_ip_evidence(
+        _c179, {"domain": "xqzt-ops.com", "ip": "1.2.3.4", "cdn": "cloudflare"},
+        _ips179)["level"] == "low", "自己标了 CDN ⇒ 同 IP 只说明 CDN 段重合，不作佐证"
+    assert _ex179.apply_ip_evidence(
+        _c179, {"domain": "xqzt-ops.com", "ip": "", "cdn": ""},
+        _ips179)["level"] == "low", "没 IP 就没佐证"
+    assert _ex179.apply_ip_evidence(
+        _c179, {"domain": "api.abcd179.test", "ip": "1.2.3.4", "cdn": ""},
+        _ips179)["level"] == "low", "同 IP 的就是它自己 ⇒ 不自证"
+    # ③ similar_candidates 接线：同 IP 的低相似行进 keep（阈值 medium）；CDN 行被闸拦
+    #   （闸赢过佐证 —— IP 再怎么重合，黑名单/第三方/CDN 三道闸都不放行）
+    _rows179 = [{"domain": "xqzt-ops.com", "source": "js:mine", "ip": "1.2.3.4", "cdn": ""},
+                {"domain": "zzzz-ops.com", "source": "js:mine", "ip": "9.9.9.9", "cdn": ""},
+                {"domain": "abdc.com", "source": "js:mine", "ip": "1.2.3.4", "cdn": "cloudflare"}]
+    _kc179 = _ex179.similar_candidates(_rows179, _bases179, min_level="medium",
+                                       settings={}, confirmed_ips=_ips179)
+    _kd179 = {c["domain"]: c for c in _kc179["keep"]}
+    assert "xqzt-ops.com" in _kd179 and _kd179["xqzt-ops.com"]["level"] == "medium" \
+        and "同 IP" in _kd179["xqzt-ops.com"]["reason"], _kc179
+    assert any(b["domain"] == "abdc.com" and "CDN" in b["blocked"] for b in _kc179["blocked"]), \
+        "标了 CDN 的行必须仍被闸拦（佐证赢不过闸，即便它同 IP）"
+    assert any(b["domain"] == "zzzz-ops.com" and b["blocked"] == "低于阈值"
+               for b in _kc179["blocked"]), _kc179["blocked"]
+    # 变异证伪：同一次调用摘掉 confirmed_ips ⇒ xqzt-ops.com 必须从 keep 掉进 blocked
+    _kd0179 = _ex179.similar_candidates(_rows179, _bases179, min_level="medium", settings={})
+    assert "xqzt-ops.com" not in [c["domain"] for c in _kd0179["keep"]], \
+        "摘掉佐证后它不该再进 keep"
+    assert any(b["domain"] == "xqzt-ops.com" and b["blocked"] == "低于阈值"
+               for b in _kd0179["blocked"]), _kd0179["blocked"]
+    print("[179a] IP 佐证判据 ok: 低+同IP⇒中（理由含对方域名与IP）/摘佐证退回低/"
+          "高与归属与CDN行四条边界不动；similar_candidates 接线且变异（摘参）承重")
+    # ④ 徽章同步（页面级）：own 行（非 CDN，ip=1.2.3.4）+ 拓展行同 IP ⇒ /extdomains 徽章「中」
+    _tid179 = db.create_task("smoke-179-ipmed", "abcd179.test", ["probe"], {})
+    db.insert_subdomains(_tid179, [
+        ("api.abcd179.test", "promote:gui"),       # own 行（OWN_SUBDOMAIN_WHERE 判据）
+        ("xqzt-ops.com", "js:mine"),               # 拓展行：名字不像，但同 IP
+        ("zzzz-ops.com", "js:mine")])              # 对照：不同 IP，保持「低」
+    db._exec("UPDATE subdomains SET ip='1.2.3.4' WHERE task_id=? AND domain IN "
+             "('api.abcd179.test','xqzt-ops.com')", (_tid179,))
+    db._exec("UPDATE subdomains SET ip='9.9.9.9' WHERE task_id=? AND domain='zzzz-ops.com'",
+             (_tid179,))
+    _html179 = c.get(f"/extdomains?task={_tid179}").get_data(as_text=True)
+    _badge179 = [seg for seg in _html179.split("<span") if "同 IP" in seg]
+    assert _badge179 and ">中</span>" in _badge179[0], \
+        f"IP 佐证徽章必须是「中」且理由上页面：{[s[:120] for s in _badge179]}"
+    assert "与非 CDN 已确认子域 api.abcd179.test 同 IP（1.2.3.4）" in _html179, \
+        "徽章理由没把对照子域与 IP 说清"
+    assert _html179.count("同 IP（") == 1, "只有同 IP 的那一行该有佐证理由（对照行保持低）"
+    print("[179] IP medium 佐证 ok: extdom 判据单产地（similar_candidates 与徽章共用）"
+          "/runner 自动递归与页面同结论；变异两处承重（摘参退低、闸赢过佐证）")
+    # ---------------- [179b] 续179：动态并发档（按产出加码，recon-spiral 思想落地） ----------------
+    import scanner.utils as _ut179
+    from scanner import config as _cfg179
+    _dl179 = _cfg179.DEFAULTS["limits"]
+    assert _dl179.get("workers_mode") == "fixed" and int(_dl179.get("workers_floor", 0)) == 4, \
+        "出厂必须是 fixed（行为不变）+ floor=4"
+    _y179 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+    assert "workers_mode: fixed" in _y179 and "workers_floor: 4" in _y179, \
+        "settings.yaml 没把两个新键写出来（用户看不见就等于没有）"
+    # ① ramp_opt 产地：fixed ⇒ None（现状不变）；ramp ⇒ floor，且不许超过本轮 workers
+    assert _ut179.ramp_opt({"limits": {}}, 20) is None and _ut179.ramp_opt({}, 20) is None, \
+        "没有 limits 段 / mode 缺省都必须当 fixed"
+    assert _ut179.ramp_opt({"limits": {"workers_mode": "ramp"}}, 20) == {"floor": 4}
+    assert _ut179.ramp_opt({"limits": {"workers_mode": "ramp", "workers_floor": 9}}, 8) \
+        == {"floor": 8}, "floor 不许超过本轮 workers 上限"
+
+    class _L179b:
+        def __init__(self):
+            self.lines = []
+
+        def info(self, m, *a):
+            self.lines.append(str(m))
+
+        warning = info
+
+        def debug(self, m, *a):
+            pass
+
+    # ② pool_run ramp 语义：有产出翻倍封顶、零产出批不升档；结果集合与整批一致
+    _lb179 = _L179b()
+    _rr179 = _ut179.pool_run(lambda x: x, list(range(16)), workers=4,
+                             ramp={"floor": 1}, logger=_lb179, label="档位观测")
+    assert sorted(_rr179) == list(range(16)), "ramp 不得丢结果"
+    assert any("动态并发档" in x and "1→2→4" in x for x in _lb179.lines), _lb179.lines
+    _lb179z = _L179b()
+    assert _ut179.pool_run(lambda x: None, list(range(16)), workers=4,
+                           ramp={"floor": 1}, logger=_lb179z, label="零产出") == []
+    assert not [x for x in _lb179z.lines if "动态并发档" in x], \
+        "零产出批不该升档（否则「加码」没有判据，变异即红的那条）"
+    # fixed 档：同一批调用不给 ramp ⇒ 行为照旧、无档位行
+    _lb179f = _L179b()
+    assert sorted(_ut179.pool_run(lambda x: x, list(range(16)), workers=4,
+                                  logger=_lb179f, label="fixed")) == list(range(16))
+    assert not [x for x in _lb179f.lines if "动态并发档" in x], _lb179f.lines
+    # 异常与契约跨 ramp 保持：坏元素吞并告警、计数用总数
+    def _bad179(x):
+        if x == 3:
+            raise RuntimeError("boom179")
+        return x
+
+    _lb179e = _L179b()
+    _re179 = _ut179.pool_run(_bad179, list(range(8)), workers=2,
+                             ramp={"floor": 2}, logger=_lb179e, label="带坏点")
+    assert 3 not in _re179 and sorted(_re179) == [x for x in range(8) if x != 3], _re179
+    assert any("1/8 个异常被跳过" in x for x in _lb179e.lines), _lb179e.lines
+    # ③ probe 接线：ramp 只许接在「存活探测」那一处（AST 数 Call，不 grep 文本）
+    import ast as _ast179
+    _ptree179 = _ast179.parse((ROOT / "scanner" / "stages" / "probe.py")
+                              .read_text(encoding="utf-8"))
+    _calls179 = []
+    for _n179 in _ast179.walk(_ptree179):
+        if isinstance(_n179, _ast179.Call) and getattr(_n179.func, "id", "") == "pool_run":
+            _calls179.append({k.arg: getattr(k.value, "value", None) for k in _n179.keywords})
+    _ramp179c = [k for k in _calls179 if "ramp" in k]
+    assert len(_ramp179c) == 1 and _ramp179c[0].get("label") == "存活探测", \
+        f"ramp 只许接在探活那一处：{_calls179}"
+    assert any(getattr(_n179.func, "id", "") == "ramp_opt"
+               for _n179 in _ast179.walk(_ptree179)
+               if isinstance(_n179, _ast179.Call)), "probe 必须经 ramp_opt 拿选项（判据唯一产地）"
+    # ④ GUI 保存合并：DEFAULTS["limits"] 的键一个都不许少（§6.2 第十二起的修法口径）
+    _cap179 = {}
+    _real_save179 = gui_app.save_settings
+    gui_app.save_settings = lambda d, **kw: (_cap179.update(d), True)[1]
+    try:
+        _r179p = c.post("/settings", data={"max_workers": "33", "http_timeout": "11"})
+        assert _r179p.status_code == 302, _r179p.status_code
+    finally:
+        gui_app.save_settings = _real_save179
+    assert _cap179.get("limits", {}).get("max_workers") == 33, _cap179.get("limits")
+    _miss179 = [k for k in _dl179 if k not in _cap179.get("limits", {})]
+    assert not _miss179, f"POST /settings 抹掉了 DEFAULTS limits 的键：{_miss179}"
+    print("[179b] 动态并发档 ok: ramp_opt 产地（fixed⇒None/ramp⇒floor 封顶）｜pool_run 分批"
+          "（有产出翻倍封顶、零产出不升档、结果与契约与整批一致）｜probe 仅探活一处接线"
+          "（AST 钉点）｜DEFAULTS limits 逐段点名一个键不少")
     print("SMOKE PASS")
 
 

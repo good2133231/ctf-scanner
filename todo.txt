@@ -4191,7 +4191,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 **续178 拍板记录（2026-10-14，主理人确认）**：
 
 - [x] "送去探测"与"归属本项目的追加为本任务子域名"**是一个东西**（主理人 2026-10-14 确认）：形态＝bulkbar 只留「送去探测」主按钮 + 复选框"同时把归属本项目的追加为子域名"（默认勾选，一次点击两件事都做）；子标签套在调用它的域名下，可展开，与主域名分开、互不影响
-- [ ] IP 重复**不算 high、只作 medium 佐证**（主理人拍板）：与非 CDN 的已确认子域名同 IP ⇒ medium 理由文本"与已确认资产 x.test 同 IP 1.2.3.4（非 CDN）"，判据复用 `cdn.ip_kind`，零请求
+- [x] IP 重复**不算 high、只作 medium 佐证**（主理人拍板）：与非 CDN 的已确认子域名同 IP ⇒ medium 理由文本"与已确认资产 x.test 同 IP 1.2.3.4（非 CDN）"，判据复用 `cdn.ip_kind`，零请求
 - [x] 「js挖掘」后加条数：来源分类**各项都带**（JS 挖掘（N）→ FOFA·标题（N）→ …）（口径与"全部"视图一致、排除 src 筛选、0 条不渲染、分组视图同源）
 - [x] 按钮文案：「送去探测（默认全任务拓展域名，新建任务）」→「送去探测」（title 里的阶段清单说明保留，信息不丢）
 - [x] 送探记录已落库（ext_probes 表，probe/append/promote 三方式、同域同任务同方式 no-op）：行徽章「已送探 → #N」+ 分组组内送探子标签（#号/方式/状态/子任务资产摘要，默认随组折叠）；自动递归发生在同一任务内，痕迹就是 subdomains 行本身，不在此表（IP medium 佐证仍挂账）
@@ -4204,11 +4204,11 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [ ] ⑤ 多任务并发实测与动态并发档（limits 按机器规格算并发；参照 StrikeAgent recon-spiral 圈层预算思想，先出基准数字）
 
 **会话二交接（2026-10-14，logs/HANDOFF-2026-10-14-b.md）——下一会话接着做，按序：**
-- [ ] 断言组固化：一次性验证改写进 tests/smoke.py（[172] 站点折叠 / [177] JS 凭据与 GUI / [178] 送探记录与来源条数），每条带变异证伪（脚本在 logs/ 可直接改写）
-- [ ] IP medium 佐证（similar_candidates + confirmed_ips，调用方两处）
-- [ ] 任务 2 并发基准实测（单任务 CPU/内存 → 动态并发档进 limits）
-- [ ] logs/ 收尾（本会话脚本按确切文件名删，清单在 HANDOFF-b §1）
-- [ ] 借鉴点五项（① 复测三态 → ⑤ 动态并发档，见上方登记）
+- [x] 断言组固化：一次性验证改写进 tests/smoke.py（[172] 站点折叠 / [177] JS 凭据与 GUI / [178] 送探记录与来源条数），每条带变异证伪（脚本在 logs/ 可直接改写）
+- [x] IP medium 佐证（similar_candidates + confirmed_ips，调用方两处）
+- [x] 任务 2 并发基准实测（单任务 CPU/内存 → 动态并发档进 limits）
+- [x] logs/ 收尾（本会话脚本按确切文件名删，清单在 HANDOFF-b §1）
+- [ ] 借鉴点五项（① 复测三态 → ⑤ 动态并发档，见上方登记；⑤ 的「按产出加码」半边已在续179 落地）
 ## 续178（2026-10-14，WorkBuddy · CodeBuddy）：送去探测合并 + 送探记录 + 子标签（波一 + 波二 已完成）
 
 主理人 2026-10-14 点单全程落地（原话与逐项见上方登记节与拍板记录）：按钮改名「送去探测」、
@@ -4222,3 +4222,24 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       logs 收尾 / 借鉴点五项）—— todo/CHANGELOG/AGENTS 三份 [8as] 口径已核
 - 验证：波一 wire4、续172 wire8、波二 wire9 三轮全量门禁各自 SMOKE PASS 250 组；
   波二一次性验证含变异证伪（ccc 探针：复选框承重）
+
+## 续179（2026-10-14，WorkBuddy · CodeBuddy）：断言组固化 + IP medium 佐证 + 动态并发档（基准实测）
+
+接续 logs/HANDOFF-2026-10-14-b.md §1 按序清单。实施者：WorkBuddy · CodeBuddy。
+
+- [x] 断言组固化：logs/ 六个一次性脚本改写进 tests/smoke.py（[172] 站点折叠 / [177a-c2] JS 凭据值黑名单三层 / [178a-b] 送去探测），250 → **264 组**，每条带变异证伪；适配共享 smoke 状态（复用 _login7、桩 try/finally 还原、合成域、动态计数、?task= 过滤）
+- [x] IP medium 佐证：extdom 三函数（confirmed_ip_map / ip_evidence / apply_ip_evidence，判据复用 cdn.ip_kind）+ runner 自动递归与 /extdomains 徽章两处接线（同一份结论）；[179a] 断言含两处变异（摘参退低 / 闸赢过佐证）+ 页面徽章级断言
+- [x] 任务 2 并发基准实测：logs/bench_workers.py（fixed vs ramp × 16/80 项，回环 HTTP @20ms，独立进程 ru_maxrss）——小批量 ramp 省 ~2/3 CPU 墙钟持平、大批量 ramp 慢 4.1x；**动态并发档进 limits**（workers_mode=fixed 出厂 / workers_floor=4，ramp opt-in；pool_run 分批按产出加码 + ramp_opt 唯一产地 + probe 探活一处接线）
+- [x] 连带修复：GUI settings 保存对 limits 段改 {**(_l0), ...} 合并（原整段重写会抹掉页面上无输入框的键 —— §6.2 第十二起同族；[179b]④ 按 DEFAULTS 逐段点名钉住）
+- [x] logs/ 收尾：本会话一次性脚本按确切文件名删除（清单见 CHANGELOG 续179 末节）
+- [ ] 借鉴点五项：⑤ 只做了"按产出加码"半边（基准+档位）；**按机器规格算并发档未做**；①②③④ 未动
+
+**门禁**：wire10 红（[177c] 空名单整块不渲染——坑：模板 `{% if %}` 空态≠渲染成 0）→ 修后 wire11/wire12/wire13 全绿（264 组）。
+
+**下一轮（续180）——只放未做的：**
+- [ ] 借鉴点① 复核加「无法确认」第三态（ARTEX retester：一次请求失败不证明已修复）
+- [ ] 借鉴点② host 碰撞收集源（ShuiZe hostCollide：同 IP 绑不同 Host 头）
+- [ ] 借鉴点③ ICP 备案反查收集源（ShuiZe beian2NewDomain）
+- [ ] 借鉴点④ 拦截动作结构化审计条目（ARTEX guard AuditEntry：ts/tool/action/reason 逐条落审计）
+- [ ] 借鉴点⑤ 剩余半边：按机器规格（CPU/内存）算并发档上限（与 ramp 组合；基准脚本已备）
+- [ ] 续173（IP 反查三源成败说清 + PTR 自实现）、续175（真机）照旧挂账

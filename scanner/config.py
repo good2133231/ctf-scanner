@@ -182,6 +182,11 @@ DEFAULTS = {
     },
     "limits": {
         "max_workers": 20,        # HTTP 探测 / 目录扫描 / DNS 爆破线程数
+        # 动态并发档（续179，参照 recon-spiral"按产出加码"）：fixed = 整批开满 max_workers
+        # （现状，默认）；ramp = 从 workers_floor 起步、每批有产出就翻倍封顶（零产出的批
+        # 不升档）—— 小任务不再一上来就开满线程。基准实测数字见 CHANGELOG 续179。
+        "workers_mode": "fixed",
+        "workers_floor": 4,
         "http_timeout": 10,       # 单请求超时（秒）
         "verify_tls": False,
         # 第三方接口（FOFA/Shodan/Quake/crt.sh/KEV/iprecon/api.github.com）的证书校验。

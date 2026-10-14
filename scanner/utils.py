@@ -796,7 +796,23 @@ def _pool_logger(logger):
     return _POOL_LOG
 
 
-def pool_run(fn, items, workers=10, logger=None, label=""):
+def ramp_opt(settings, workers):
+    """动态并发档的选项（续179，判据唯一产地 —— 各阶段都从这里拿，不许自己拼 dict）。
+
+    `limits.workers_mode == "ramp"` 时给 `{"floor": N}`（起步并发，封顶由调用方传入的
+    workers 即 max_workers 兜住）；其余一律 None ＝ pool_run 走原有整批路径，行为不变。
+    """
+    lim = (settings or {}).get("limits") or {}
+    if str(lim.get("workers_mode", "fixed") or "fixed") != "ramp":
+        return None
+    try:
+        floor = int(lim.get("workers_floor", 4) or 4)
+    except (TypeError, ValueError):
+        floor = 4
+    return {"floor": max(1, min(floor, max(1, int(workers or 1))))}
+
+
+def pool_run(fn, items, workers=10, logger=None, label="", ramp=None):
     """线程池执行；单个任务异常不影响整体，结果为 None 的丢弃。
 
     **返回值契约与历史完全一致**（只返回非 `None` 的结果，顺序为完成顺序）—— 各阶段的
@@ -806,6 +822,11 @@ def pool_run(fn, items, workers=10, logger=None, label=""):
 
     `StopRequested`（用户点停止 / 预算耗尽）单独计数、按 info 说：那是**设计内的取消**，
     报成错误会把每次正常停止都刷成故障。
+
+    `ramp`（续179 动态并发档，`utils.ramp_opt` 的产物）：给定时不再整批开满，而是从
+    `floor` 起步分批跑 —— 每批**有产出**就把并发翻倍（封顶 workers）、零产出的批不升档
+    （recon-spiral"按产出加码"的落地形）。结果集合、异常/停止的契约与整批路径完全一致；
+    档位序列打进日志，"这批为什么快/慢"可查。
     """
     results = []
     items = list(items)
@@ -813,19 +834,42 @@ def pool_run(fn, items, workers=10, logger=None, label=""):
         return results
     workers = max(1, min(int(workers), len(items)))
     errs, stops = [], 0
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(fn, it): it for it in items}
-        for fut in as_completed(futs):
-            try:
-                r = fut.result()
-            except BaseException as e:       # noqa: BLE001 —— 旧行为就是"全吞"，这里只加"说出来"
-                if isinstance(e, _throttle_mod.StopRequested):
-                    stops += 1
-                else:
-                    errs.append(e)
-                r = None
-            if r is not None:   # 只丢"无结果"（None）；falsy 但有效的结果（0/""/[]）不该被吞
-                results.append(r)
+
+    def _drain(pool_items, size):
+        """跑一批：返回本批产出（非 None 结果，完成顺序）。异常/停止计数汇总到外层。"""
+        nonlocal stops
+        out = []
+        with ThreadPoolExecutor(max_workers=size) as ex:
+            futs = {ex.submit(fn, it): it for it in pool_items}
+            for fut in as_completed(futs):
+                try:
+                    r = fut.result()
+                except BaseException as e:   # noqa: BLE001 —— 旧行为就是"全吞"，这里只加"说出来"
+                    if isinstance(e, _throttle_mod.StopRequested):
+                        stops += 1
+                    else:
+                        errs.append(e)
+                    r = None
+                if r is not None:   # 只丢"无结果"（None）；falsy 但有效的结果（0/""/[]）不该被吞
+                    out.append(r)
+        return out
+
+    if ramp and len(items) > workers:
+        floor = max(1, min(int((ramp or {}).get("floor", 4)), workers))
+        cur, i, tiers = floor, 0, [floor]
+        while i < len(items):
+            got = _drain(items[i:i + cur], cur)
+            results.extend(got)
+            i += cur
+            if got and cur < workers:
+                cur = min(workers, cur * 2)
+                tiers.append(cur)
+        if logger is not None and len(tiers) > 1:
+            logger.info(f"[pool] {label or '子任务'}：动态并发档 "
+                        f"{'→'.join(str(t) for t in tiers)}"
+                        f"（起步 {tiers[0]}、封顶 {workers}；有产出才加码，零产出批不升档）")
+    else:
+        results.extend(_drain(items, workers))
     _stop_note = (f"；另有 {stops}/{len(items)} 个因停止或预算耗尽未执行（设计内取消，不是故障）"
                   if stops else "")
     if errs:

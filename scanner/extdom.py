@@ -276,13 +276,70 @@ def auto_expand_block(name, settings=None, owner_id=0, cdn_label=""):
     return ""
 
 
-def similar_candidates(rows, bases, min_level=CONF_DEFAULT, settings=None, owner_id=0):
+def confirmed_ip_map(task_id):
+    """「IP 佐证」的对照集：本任务**非 CDN 已确认子域**的 `IP → 域名`（续179，唯一产地）。
+
+    只收 own 口径的行（判据复用 `db.OWN_SUBDOMAIN_WHERE`，不抄第二遍）；标了 CDN 的行
+    不收 —— 同一段 CDN IP 说明不了"是谁的"，收进来会把全网 CDN 客户都判成自家中置信度。
+    """
+    out = {}
+    for r in db._query("SELECT domain, ip, cdn FROM subdomains WHERE task_id=? AND "
+                       + db.OWN_SUBDOMAIN_WHERE, (task_id,)):
+        ip = str(r["ip"] or "").strip()
+        if ip and not str(r["cdn"] or "").strip():
+            out.setdefault(ip, str(r["domain"] or ""))
+    return out
+
+
+def ip_evidence(row, confirmed_ips):
+    """这一行有没有「与非 CDN 已确认子域同 IP」的佐证 → 空串＝没有，有则给理由文本。
+
+    （续178 拍板"同 IP ⇒ medium"时定的口径：佐证只作**旁证**，永远够不上归属。）
+    """
+    if not confirmed_ips:
+        return ""
+    dom = str((row.get("domain") if isinstance(row, dict) else "") or "").strip()
+    ip = str((row.get("ip") if isinstance(row, dict) else "") or "").strip()
+    if not ip:
+        return ""
+    if str((row.get("cdn") if isinstance(row, dict) else "") or "").strip():
+        return ""      # 自己就标了 CDN：同 IP 只说明 CDN 段重合，不作佐证
+    hit = confirmed_ips.get(ip)
+    if not hit or hit == dom:
+        return ""      # 同 IP 的就是它自己 ⇒ 不自证
+    return (f"与非 CDN 已确认子域 {hit} 同 IP（{ip}）—— 基础设施重合，"
+            "置信度提到「中」（IP 佐证只作旁证，够不上归属）")
+
+
+def apply_ip_evidence(conf, row, confirmed_ips):
+    """把 IP 佐证并进置信度结论：低 ⇒ 中（`similar_candidates` 与页面徽章共用本函数，
+    §5.14 —— 两处各写一遍就会出现"页面上写着中、递归却没带上"）。
+
+    三条边界：已是中/高不降级也不改写理由；归属行（owned）不动（那是 promote_owned 的地盘）；
+    佐证只升到「中」，永远够不上「高」。
+    """
+    why = ip_evidence(row, confirmed_ips)
+    if not why or conf.get("owned"):
+        return conf
+    if conf_rank(conf.get("level") or "low") >= conf_rank("medium"):
+        return conf
+    out = dict(conf)
+    out.update({"level": "medium", "label": conf_label("medium"),
+                "reason": why, "near": "", "ip_hit": True})
+    return out
+
+
+def similar_candidates(rows, bases, min_level=CONF_DEFAULT, settings=None, owner_id=0,
+                       confirmed_ips=None):
     """从拓展域名行里挑「够得上阈值、且没被三道闸拦下」的那批 → `[{domain, level, reason, blocked}]`。
 
     `rows` 由调用方给（`ext_rows(task_id)` 那批），本函数**不发任何请求、不写库**，
     纯计算 —— 所以门禁可以整条桩掉，不依赖这台机器的 DNS 与配置。
     返回里 `blocked` 非空的行**也带出来**：被挡掉的条数必须在日志和页面上看得见，
     否则"没扫"与"扫不了"在读者眼里长一个样（§0 第 10 条）。
+
+    `confirmed_ips`（续179）：`confirmed_ip_map()` 那份 `IP → 域名`；给了它，低相似但
+    与非 CDN 已确认子域同 IP 的行按「中」算（`apply_ip_evidence`，与页面徽章同一份判据）。
     """
     floor = conf_rank(min_level)
     keep, blocked = [], []
@@ -290,16 +347,17 @@ def similar_candidates(rows, bases, min_level=CONF_DEFAULT, settings=None, owner
         d = _norm(r.get("domain") if isinstance(r, dict) else r)
         if not d:
             continue
-        conf = confidence(d, bases=bases)
+        conf = apply_ip_evidence(confidence(d, bases=bases),
+                                 r if isinstance(r, dict) else {}, confirmed_ips)
         why = auto_expand_block(d, settings=settings, owner_id=owner_id,
                                 cdn_label=(r.get("cdn") if isinstance(r, dict) else ""))
         if not why and conf_rank(conf["level"]) >= floor and not conf["owned"]:
             keep.append({"domain": d, "level": conf["level"], "label": conf["label"],
-                         "reason": conf["reason"], "near": conf["near"]})
+                         "reason": conf["reason"], "near": conf.get("near", "")})
         elif not conf["owned"]:
             blocked.append({
                 "domain": d, "level": conf["level"], "label": conf["label"],
-                "near": conf["near"],
+                "near": conf.get("near", ""),
                 "reason": why or (f"置信度 {conf['label']} 低于阈值 "
                                   f"{conf_label(min_level)}；{conf['reason']}"),
                 "blocked": why or "低于阈值"})

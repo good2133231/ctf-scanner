@@ -18,7 +18,7 @@ from .base import Stage
 from .. import blacklist, db, extdom, flagfind, wildcard
 from ..fingerprint import identify, favicon_md5
 from ..utils import (REDIRECT_STATUS, html_title, which, verify_tool, run_cmd, read_lines,
-                     write_lines, pool_run, http_request)
+                     write_lines, pool_run, http_request, ramp_opt)
 
 
 # 「哪些状态算需要跟随的跳转」由 `scanner/utils.py` 单独定义（取证这里与显示侧
@@ -193,7 +193,7 @@ def probe_candidates(ctx, candidates):
             return None
 
         sites = pool_run(_probe, candidates, workers=workers, logger=ctx.logger,
-                         label="存活探测")
+                         label="存活探测", ramp=ramp_opt(ctx.settings, workers))
     return sites
 
 

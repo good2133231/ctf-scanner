@@ -2,6 +2,48 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+
+## 续179（2026-10-14，WorkBuddy · CodeBuddy）：断言组固化（[172]/[177]/[178]）+ IP medium 佐证 + 动态并发档（含基准实测）
+
+实施者：WorkBuddy · CodeBuddy（远端 Linux）。接续 logs/HANDOFF-2026-10-14-b.md §1 按序清单做的四件事。
+
+### 一、断言组固化：logs/ 六个一次性脚本改写进 tests/smoke.py（250 → 264 组，+544 行）
+
+- **[172]** 站点折叠（3xx 优先 redirect_title 作键；变异：`_site_fold_key` 摘回旧逻辑 ⇒ ib 组拆开、只剩跨站默认页组）。
+- **[177a/a2]** jsmine 值黑名单（变异：`sbl.filter_secrets` 恒透传 ⇒ 被拉黑值也进两表）；**[177b/b2]** flagfind 同构变异；**[177c/c2]** GUI 原文行 / 一键拉黑（含判误报）/ 拒非 js-secret 行 409 / 策略页掩码+计数 / 全新任务两表零新增 / 移除路由。
+- **[178a/b]** 送去探测：按钮改名 + 来源分类各项带条数 + 送探记录 + 徽章/组内子标签/复选框合并（变异：不勾 promote_too ⇒ 无归属追加）。
+- 适配共享 smoke 状态的三个改法：登录复用 `c`+`_login7`（不另建号）；全部模块桩（`jm.mine`/`dq.zone_state`/`fp.flush`/`ff.note`/`sbl.filter_secrets`…）一律 try/finally 还原；夹具域名全用合成域（`targ172.test`/`zone177.test`/`zone178.test`/`targ178.test`）。
+- 两处计数断言改**动态**：共享库里 `/extdomains` 来源条数必须带 `?task=`（别的组夹具会污染计数）；策略页黑名单计数断 `N0+1`（别的组可能留全局条目）。
+
+### 二、IP medium 佐证（续178 拍板落地）
+
+- `extdom` 新增三函数（判据唯一产地）：`confirmed_ip_map(task_id)`（own 口径复用 `db.OWN_SUBDOMAIN_WHERE`，"非 CDN 且已解析"复用 `cdn.ip_kind()` real/multi 两档）→ `IP→域名`；`ip_evidence(row, ips)`（理由文本；CDN 行/未解析/同 IP 是自己 ⇒ 不作佐证）；`apply_ip_evidence(conf, row, ips)`（低 ⇒ 中；已是中/高不改写理由；owned 不动；**永远够不上高**）。
+- 接线两处吃同一份结论：`runner.py` 自动递归 `similar_candidates(..., confirmed_ips=...)`；`gui/app.py::_ext_confidence` 徽章（§5.14 —— 两处各写一遍就会出现"页面写着中、递归却没带上"）。
+- 断言 [179a]：低+同 IP ⇒ 中（理由含对照子域与 IP）/ 摘参退低（变异承重）/ **闸赢过佐证**（CDN 行即便同 IP 仍被拦）/ 四条边界 / `/extdomains` 徽章「中」+ 理由上页面、对照行保持低。
+- 取舍说明：拍板记录写"判据复用 cdn.ip_kind"，落地照办（首版手写 `ip and not cdn`，收尾前改回 ip_kind）；佐证行 `near` 清空——IP 佐证不是"像"，徽章不该显示"像 X"。
+
+### 三、动态并发档（借鉴点⑤的"按产出加码"半边，含基准实测）
+
+- `utils.pool_run(..., ramp=None)`：分批执行——`floor` 起步、每批**有产出**翻倍封顶 workers、零产出批不升档（recon-spiral 圈层思想）；结果集合、异常告警（`N/M 个异常被跳过`）、StopRequested 计数契约与整批路径一致；档位序列进日志（`动态并发档 4→8→16→20`）。
+- `utils.ramp_opt(settings, workers)`：选项唯一产地——`limits.workers_mode=="ramp"` 才给 `{"floor": …}`（并夹到 ≤ 本轮 workers），否则 None＝现状不变。
+- `limits` 新键 `workers_mode: fixed`（**出厂 fixed，行为不变**）+ `workers_floor: 4`（DEFAULTS 与 settings.yaml 同步）；probe「存活探测」一处接线（[179b]③ 用 AST 钉点：ramp 只许在这一处、必须经 ramp_opt）。
+- **GUI 保存合并修复**：`"limits": {**(_l0), …}`——原整段重写会把页面上没有输入框的 limits 键抹掉（§6.2 第十二起同族）；[179b]④ 按 DEFAULTS 逐段点名"一个键都不许少"。
+- **基准实测**（logs/bench_workers.py：回环 HTTP @20ms 延迟、独立进程、ru_maxrss；`ok` 均=全部项数）：
+
+| 模式 | 项数 | 墙钟 | CPU | 峰值 RSS |
+|---|---|---|---|---|
+| fixed | 16 | 1.13s | 0.09s | 34.3MB |
+| ramp  | 16 | 1.06s | 0.03s | 35.1MB |
+| fixed | 80 | 1.06s | 0.14s | 35.1MB |
+| ramp  | 80 | 4.38s | 0.16s | 35.4MB |
+
+  结论：小批量 ramp 省 ~2/3 CPU、墙钟持平（不再为 16 个目标开满 20 线程）；大批量 ramp 慢 4.1x（起步档的代价）——**这组数字就是"什么时候开 ramp"的依据**，出厂 fixed 不动；"按机器规格算并发档"（借鉴点⑤的另一半）未做，挂账。
+
+### 四、验证与坑
+
+- wire10：断言组首跑红在 [177c]（模板 `{% if sb %}` —— **空名单时计数行整块不渲染**，"页面上没有"≠"渲染成 0"；断言改空态兼容）。wire11：断言组 + IP medium ⇒ SMOKE PASS。wire12：+ 动态并发档 ⇒ 红在 [179b]③ —— **测量断言自己的 bug**（AST 关键字取值写了双层 `getattr`，把常量 "存活探测" 剥成 None），不是代码坏了；修成单层后 wire13 ⇒ SMOKE PASS（264 组）。
+- 坑（§6.2 同族）：① bytes 补丁的多行锚点必须先把 `\n` 归一到区域 EOL 再 count（`_patch_ramp` 首跑 LF 形态 count=0 的假红）；② 混排文件里同一文件不同区域 EOL 可能不同，锚点 EOL 要逐点探测不能整文件一刀切。
+- 本轮一次性脚本（logs/，收尾已按确切文件名删除）：`_patch_groups.py`、`_groups_block.txt`、`_fix177c.py`、`_patch_ipmed.py`、`_groups179_block.txt`、`_append179.py`、`_san179.py`、`_patch_ramp.py`、`_groups179b_block.txt`、`_fix179b_ast.py`、`_patch_ipkind.py`、`_finalize.py`、`_final_*.txt`、`_commit_msg.txt`、`bench_workers.py`、`smoke-wire10~13.log`（task_*/devflow_*/HANDOFF-b 红线照旧）。
 ## 续172（2026-10-14 补做，WorkBuddy · CodeBuddy）：站点列表「同标题聚合 + 可折叠」落到任务详情页签
 
 实施者：WorkBuddy · CodeBuddy（远端 Linux）。主理人 2026-10-13 点单、2026-10-14 给出 brazil-pix 样本催办（"标题还是没有修改……标题是要名称一样聚合起来 并且可以展开……默认是缩起来的"）。
