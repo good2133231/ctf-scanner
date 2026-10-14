@@ -24824,6 +24824,168 @@ expression: r0()
     assert _D171["report"]["export_enabled"] is False
     assert load_settings()["report"]["export_enabled"] is False
     print("[171] js-domain gate ok: 注释剥离 | 停车/空壳判定 | 解析门/CDN 门（自有域名零查询） | FOFA 语法进拓展页/详情/MD/JSONL | 导出开关出厂关")
+    # ---- [176] 续176（2026-10-14 用户点单）：被 min_severity 挡掉的条数要说出口 ----
+    # 背景（主理人 2026-10-12 已答"可以显示"）：`min_severity` 是**结果级**门控 ——
+    # 低于门槛的发现"执行过、也命中了"，只是在入库前被丢，页面上什么都看不到
+    # （§0 第 10 条：被过滤 ≠ 不存在）。本轮：三个丢弃点计数 → 阶段末落库
+    # （tasks.sev_floor / sev_blocked，**覆盖写**）→ 报告 MD/HTML 与任务详情页
+    # 说出口，文案只有一个产地（report.sev_blocked_note）。与 `skip_severities`
+    # 那类"根本不执行"分开说 —— 两件事混说就是假话。
+    from scanner.owasp import checks as _ck176
+    from scanner.report import sev_blocked_note as _sbn176
+    from scanner import afrog as _afrog176
+
+    # (a) run_all 计数：同一批靶场命中，门槛 info 时一条不挡；抬到 high 时
+    #     被挡数 == 过关数之差。能走到结果闸的一定是"已执行且命中" ——
+    #     skip_severities 那类在执行闸就被拦了，根本到不了这里。
+    # 自建副本并显式写全四个键：**不能复用 `loose`** —— [3b] 在 smoke.py:512
+    # 把它就地改成了 disabled_categories=["A02"]（run1 就是这么挂的：a02-no-https
+    # 被正确门控掉，夹具反而拿不到它）。也不假设 `settings` 没被前面的组动过。
+    _lo176 = copy.deepcopy(settings)
+    _lo176["checks"]["min_severity"] = "info"
+    _lo176["checks"]["skip_severities"] = []
+    _lo176["checks"]["disabled_categories"] = []
+    _lo176["checks"]["disabled_checks"] = []
+    _blk_lo = _ck176.SeverityBlocked()
+    _keep_lo = [v["poc_id"] for v in _ck176.run_all(targets, _lo176, blocked=_blk_lo)]
+    assert "a02-no-https" in _keep_lo, _keep_lo
+    assert _blk_lo.get() == 0, _blk_lo.get()
+    _hi176 = copy.deepcopy(_lo176)
+    _hi176["checks"]["min_severity"] = "high"
+    _blk_hi = _ck176.SeverityBlocked()
+    _keep_hi = [v["poc_id"] for v in _ck176.run_all(targets, _hi176, blocked=_blk_hi)]
+    assert "a02-no-https" not in _keep_hi, _keep_hi
+    assert _blk_hi.get() >= 1, _blk_hi.get()
+    assert _blk_hi.get() == len(_keep_lo) - len(_keep_hi), \
+        f"被挡数应等于过关数之差：{_blk_hi.get()} vs {len(_keep_lo)}-{len(_keep_hi)}"
+    # 不传 blocked = 旧行为（只返回过关的，丢弃量不可见但也不炸）
+    assert [v["poc_id"] for v in _ck176.run_all(targets, _hi176)] == _keep_hi
+    print(f"[176a] run_all 挡条计数 ok: 门槛 info 挡 0 / 抬到 high 挡 {_blk_hi.get()} 条"
+          f"（= 过关数之差 {len(_keep_lo)}→{len(_keep_hi)}）")
+
+    # (b) 阶段级：三个丢弃点都计数、阶段末落库。桩掉 engine/afrog/run_all，
+    #     离线且数量确定（真跑 afrog / POC 的命中数不固定，没法断言）。
+    #     这一层是"接线也接对了"：vulnscan 有没有把计数器传进 run_all、
+    #     POC 路与 afrog 路有没有各自 add()，纯函数测试看不出来。
+    _vs_settings = copy.deepcopy(settings)
+    _vs_settings["checks"]["min_severity"] = "critical"
+    _vs_settings.setdefault("evasion", {})["waf_detect"] = False
+    _rec176 = _Rec()
+    _tid176 = db.create_task("smoke-176-vulnscan", targets, ["vulnscan"], {"offline": True})
+    _wd176 = Path(_TMPDIR) / f"vulnscan176_{_tid176}"
+    _wd176.mkdir(parents=True, exist_ok=True)
+    _ctx176 = StageContext(_tid176, "smoke-176-vulnscan", parse_lines([targets]),
+                           ["vulnscan"], {"offline": True}, _vs_settings, _wd176, _rec176)
+    _ctx176.results["sites"] = [{"url": targets, "host": "127.0.0.1", "title": "T",
+                                 "length": 1, "tech": ""}]
+    _orig_ra176 = owasp_checks.run_all
+    _orig_poc176 = engine.run_poc_on_target
+    _orig_af_en176 = _afrog176.enabled
+    _orig_af_run176 = _afrog176.run
+    _poc_calls176 = []
+
+    def _stub_ra176(url, settings, min_severity=None, logger=None, blocked=None):
+        # 一条 critical 过关；顺手验 vulnscan 真的把计数器传进了 run_all
+        if blocked is not None:
+            blocked.add()
+        return [{"poc_id": "stub-crit", "severity": "critical", "target": url,
+                 "name": "桩-内置过关", "owasp": "A05", "detail": "", "evidence": ""}]
+
+    def _stub_poc176(poc, url, settings, site=None, registry=None):
+        _poc_calls176.append(poc.get("id"))
+        if len(_poc_calls176) == 1:   # 只让第一个 POC 产出被挡的一条 —— 否则每个 POC
+            return [{"poc_id": "stub-poc-med", "severity": "medium", "target": url,
+                     "name": "桩-POC被挡", "detail": "", "evidence": ""}]
+        return []                     # 都挡一条，计数会随启用 POC 数漂移
+
+    def _stub_af_en176(settings):
+        return True
+
+    def _stub_af_run176(sites, settings, logger, workdir=None, throttle=None):
+        return ([{"poc_id": "stub-afrog-info", "severity": "info", "target": targets,
+                  "name": "桩-afrog被挡", "detail": "", "evidence": ""},
+                 {"poc_id": "stub-afrog-crit", "severity": "critical", "target": targets,
+                  "name": "桩-afrog过关", "detail": "", "evidence": ""}],
+                "afrog 桩：2 条")
+
+    try:
+        owasp_checks.run_all = _stub_ra176
+        engine.run_poc_on_target = _stub_poc176
+        _afrog176.enabled = _stub_af_en176
+        _afrog176.run = _stub_af_run176
+        PipelineRunner(_ctx176).run()
+    finally:
+        owasp_checks.run_all = _orig_ra176
+        engine.run_poc_on_target = _orig_poc176
+        _afrog176.enabled = _orig_af_en176
+        _afrog176.run = _orig_af_run176
+    # 三路各挡一条：内置 1 + POC 1 + afrog 1 = 3；过关 2 条（都是 critical）入库
+    assert _poc_calls176, "POC 路必须真的被走到（否则计数缺一路）"
+    _t176 = db.get_task(_tid176)
+    assert _t176["sev_floor"] == "critical", dict(_t176)
+    assert _t176["sev_blocked"] == 3, dict(_t176)
+    _v176 = [dict(r) for r in db._query(
+        "SELECT poc_id, severity FROM vulns WHERE task_id=?", (_tid176,))]
+    assert sorted(r["poc_id"] for r in _v176) == ["stub-afrog-crit", "stub-crit"], _v176
+    assert all(r["severity"] == "critical" for r in _v176), _v176
+    # 阶段末 INFO 行：数量、门槛、"未入库"、与 skip_severities 分开说，四样都要有
+    _blk_line176 = [l for l in _rec176.lines if "另有" in l and "条已执行且命中" in l]
+    assert _blk_line176, _rec176.lines
+    _bl176 = _blk_line176[0]
+    assert "3" in _bl176 and "critical" in _bl176 and "未入库" in _bl176, _bl176
+    assert "skip_severities" in _bl176, _bl176
+    print(f"[176b] 阶段级 ok: 三路各挡 1 条共 {_t176['sev_blocked']} 条落库"
+          f"（floor={_t176['sev_floor']}）｜过关 2 条入库｜INFO 行含数量/门槛/未入库/与执行闸分开")
+
+    # (c) 文案唯一产地：有数才渲染、门槛跟着变、Row/dict 都认、0 条与缺列不出话
+    _n176 = _sbn176({"sev_floor": "high", "sev_blocked": 3})
+    assert "high" in _n176 and "3" in _n176 and "未入库" in _n176, _n176
+    assert "skip_severities" in _n176, _n176          # 与「根本不执行」分开说
+    assert "最近一次 vulnscan 运行" in _n176, _n176     # 覆盖写语义要说出来
+    assert _sbn176({"sev_floor": "high", "sev_blocked": 0}) == ""
+    assert _sbn176({"sev_floor": "", "sev_blocked": 5}) == ""
+    assert _sbn176({}) == "" and _sbn176(None) == ""
+    _n176m = _sbn176({"sev_floor": "medium", "sev_blocked": 1})
+    assert "medium" in _n176m and "high" not in _n176m, _n176m
+    assert _sbn176(_t176) == _sbn176({"sev_floor": "critical", "sev_blocked": 3})
+    print("[176c] 文案产地 ok: 有数才渲染 / 门槛跟着变 / Row 与 dict 同果 / 0 条与缺列不出话")
+
+    # (d) 出口两处：MD / HTML 报告概览 + 任务详情页「潜在漏洞」页签顶部
+    _md176 = generate(_tid176)
+    assert _sbn176(_t176) in _md176, "MD 报告概览应带挡条 note"
+    _html176 = generate_html(_tid176)
+    assert "未入库" in _html176 and "最近一次 vulnscan 运行" in _html176
+    _pg176 = c.get(f"/tasks/{_tid176}").get_data(as_text=True)
+    assert "未入库" in _pg176 and "最近一次 vulnscan 运行" in _pg176, "详情页应显示挡条行"
+    # 另一态：没有可报的数时不渲染（不出"挡掉 0 条"的噪声）
+    _tid176z = db.create_task("smoke-176-zero", targets, ["probe"], "{}")
+    _pg176z = c.get(f"/tasks/{_tid176z}").get_data(as_text=True)
+    assert "条「已执行且命中」的结果低于门槛" not in _pg176z, "没有挡条时不应渲染该行"
+    print("[176d] 出口 ok: MD/HTML 报告 + 详情页潜在漏洞页签均有该行；0 条时不渲染")
+
+    # (e) 老库补列：缺 sev_floor/sev_blocked 的 tasks 表必须被 _ensure_columns 补出；
+    #     展示侧对老行不崩、不编数（缺列 → 空串 → 不渲染）
+    import sqlite3 as _sqlite176
+    _legacy176 = _TMPDIR / "tasks176-legacy.db"
+    _lc176 = _sqlite176.connect(str(_legacy176))
+    _lc176.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY, name TEXT, "
+                   "targets TEXT, stages TEXT)")
+    _lc176.commit()
+    _lc176.close()
+    _saved_db176 = db.DB_PATH
+    db.DB_PATH = _legacy176
+    try:
+        db.init_db()
+        _cols176 = {r["name"] for r in db._query("PRAGMA table_info(tasks)")}
+        for _c176 in ("sev_floor", "sev_blocked"):
+            assert _c176 in _cols176, f"老库必须被补出列 {_c176}：{sorted(_cols176)}"
+    finally:
+        db.DB_PATH = _saved_db176
+    assert _sbn176({"name": "old-row"}) == ""
+    print("[176] min_severity 挡条可见 ok: run_all/POC/afrog 三路计数（=过关数之差）｜"
+          "阶段末覆盖写落库 sev_floor+sev_blocked（追加不虚高）｜文案唯一产地"
+          "（Row/dict 都认、0 条不渲染、门槛跟着变）｜MD/HTML/详情页三出口｜老库补列且老行不出话")
+
     print("SMOKE PASS")
 
 

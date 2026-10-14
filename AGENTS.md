@@ -642,6 +642,16 @@ ctf-scanner/
    2. `disabled_categories` / `disabled_checks` 命中的检查根本不执行（省请求）；
    3. `min_severity` 代码默认 `medium`，**随包分发的 settings.yaml 是 `high`**（续159-附） ⇒ 新克隆的默认任务**只产出 high/critical，medium 会被结果闸丢掉**（这是主理人选定的口径，要旧的宽口径就在策略页把最低报告级别改回 medium） —— **结果级**，过滤残余的低危/info 结果。
    即 `a02-no-https`、`a05-security-headers`、`a05-banner-disclosure` 这类项默认既不执行也不产出。
+   4. **被结果闸挡掉的量必须可见**（续176，用户点单）：低于 `min_severity` 的发现是"执行过、
+      也命中了"，只是在入库前被丢（§0 第 10 条：被过滤 ≠ 不存在）。三个丢弃点
+      （`owasp.checks.run_all` / vulnscan 的 POC 路 / afrog 路）各计数
+      （`owasp.checks.SeverityBlocked`，线程安全；**判据仍只有 `severity_ok()` 一处**，
+      计数器只数数、不引入第二份门槛逻辑），阶段末**覆盖写**落库 `tasks.sev_floor` +
+      `tasks.sev_blocked`（追加执行时累加会重复计同一隐藏项＝虚高，本仓不接受虚高数字 ⇒
+      页面只能说"最近一次 vulnscan 运行"）。出口两处：报告 MD/HTML 概览 note 行 + 任务详情页
+      「潜在漏洞」页签顶部一行，**文案唯一产地是 `report.sev_blocked_note()`**（模板不拼第二份，
+      Row/dict 都认、0 条不渲染、老行缺列不出话）。与 `skip_severities` 那类"根本不执行"
+      分开说 —— 两件事混说就是假话。
 8. **所有对外"在飞动作"必须过统一门控（F2，`scanner/throttle.py`）**：HTTP 走 `utils.http_request`
    （已自动读 `settings["_throttle"]`）、外部子进程走 `utils.run_cmd(..., throttle=...)`、裸 socket 走
    `throttle.slot("socket")`。新增任何"会连目标 / 起进程"的调用点时，**必须显式把限流器传进去**
@@ -1107,6 +1117,13 @@ py -3 -m scanner.edgeauth --status                # 续132：401 边缘门配过
 py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（明文、0600、gitignore）；口令经 getpass，**无终端时认 `CTFSCANNER_EDGE_PASSWORD`**（续146-附2；启动向导仍绝不代填）
                             #   建号 / 改口令：--create-admin [用户名]、--reset-password 用户名
                             #   非交互环境用 CTFSCANNER_ADMIN_PASSWORD 提供；口令只落 users 表
+# 2026-10-14 续176 新增 `[176]`：**被 min_severity 挡掉的条目数说出口**（用户点单的收口项）——
+#   计数三路（`owasp.checks.SeverityBlocked` + `run_all(..., blocked=)` 出参；vulnscan 的内置/POC/
+#   afrog 三个丢弃点各 add()，判据仍只有 `severity_ok` 一处）；阶段末**覆盖写**落库
+#   `tasks.sev_floor`/`sev_blocked`（追加执行累加会重复计同一隐藏项＝虚高，故页面只说"最近一次
+#   vulnscan 运行"）；出口＝报告 MD/HTML 概览 + 详情页「潜在漏洞」页签，**文案唯一产地是
+#   `report.sev_blocked_note()`**（模板不拼第二份）。变异证伪两向都钉着：摘计数 ⇒ [176a]/[176b]
+#   红；只摘展示接线 ⇒ 仅 [176d] 红。
 # Linux 实机验收（**2026-09-23 续12 已达成**：Ubuntu 22.04.5 / Python 3.10.12）
 # Linux 实机验收（2026-10-02 续96-附2 复跑：Ubuntu / Python 3.14.4）—— smoke 131 段 PASS、devflow 18 OK / 0 MISS / 17 N-A、calibrate RC=0、CLI 实走 httpx、GUI /login 无绝对路径；browser_e2e 因无浏览器 RC=2（跳过≠通过），故截图与 PDF 在该机仍未验
 #   python3 tests/smoke.py   → SMOKE PASS（`[5o]` 会按运行平台自报状态）
@@ -1125,6 +1142,24 @@ py -3 -m scanner.edgeauth --set                   # 写 config/edge_auth.yaml（
 ```
 
 改动后**必须**跑 `tests/smoke.py`；GUI/模板改动还应 `run_gui.py` 亲眼确认页面。
+
+> **超过一分钟的命令一律后台跑**（2026-10-14 续176 立，主理人定的效率规矩）：
+> `nohup ./.venv/bin/python tests/smoke.py > logs/<名字>.log 2>&1 &` 挂上就结束回合，
+> 下次交互时再查（`pgrep -f tests/smoke.py` 看还在不在、`tail` 看进度、
+> `grep -c '^\[' logs/<名字>.log` 数组数）。**反过来也成立：门禁跑动着的时候不要改任何
+> 被跟踪文件** —— smoke 有大量断言读源码文本/AST，`[8as]` 还要核三份记忆的轮次号，
+> 中途编辑会造出 §6.2 那类假红；要改就先等它跑完。
+> ⚠ **不许用 `sleep N && 查状态` 轮询**（续176 当天就犯规过一次）：sleep 会阻塞整个回合，
+> 还会每次弹一次 IDE 的"要不要后台运行"——等待只有两种合法形状：启动时 nohup、查询时毫秒级命令。
+
+> **凭据红线的边界**（2026-10-14 续176 立，主理人原话"凭据红线只对我们本地自己配置生效"）：
+> §5.10 / §7 那条"口令 / token / PAT 绝不进被跟踪文件"管的是**我们自己用的凭据** ——
+> `config/keys.yaml` / `config/keys.enc.yaml` / `config/edge_auth.yaml` / `github.txt` /
+> `~/.secrets/keys-pass` 这些**本机配置**（进了公开仓库就等于把我们的钥匙交出去）。
+> 它**不管**扫描中从授权目标身上挖到的东西：靶子的 JS 里泄露的 AK/SK、页面里的 flag 是**扫描产物**，
+> 按 `flags` 表（续126）与 `js_secrets`表的档位处理 —— 入库（`data/scanner.db` 被 gitignore）、
+> GUI 可展开查看、默认不进迁移包、报告外发面单独核。两件事别混：把靶子的凭据也当"绝不出库"处理，
+> 等于把 CTF 最该抄走的东西藏起来。
 
 > **这台 Linux 跑门禁必须 `./.venv/bin/python tests/smoke.py`（续141 亲测踩过）**：`python3` 是系统
 > 3.14 且**没装依赖**，于是 `[1]`~`[4b]` 一路绿到 `tests/smoke.py` 里的 `from gui.app import app`

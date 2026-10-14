@@ -184,6 +184,10 @@ class VulnscanStage(Stage):
         # 语言收敛的账：`{"n": 累计跳过, "sites": 判出语言的站点数, "<语言>": 该语言跳过数}`。
         # DEBUG 逐站、INFO 汇总、回归断言三处都读这一个 dict（判据一处，§5.14）。
         _lang_skips, _lang_lock = {"n": 0, "sites": 0}, threading.Lock()
+        # 续176：「已执行且命中、但被 min_severity 结果闸挡下」的账。三个丢弃点
+        # （下面的 run_all / POC 路 / afrog 路）各自 add()，阶段末汇总落库并说出口。
+        # 与 `skip_severities` 那类"根本不执行"的分开说 —— 两件事混说就是假话。
+        _blocked = owasp_checks.SeverityBlocked()
 
         def _pocs_for(site):
             """指纹→POC 联动（P1-1）：站点技术栈命中的 POC 先跑，其余按上限补在后面。
@@ -234,7 +238,8 @@ class VulnscanStage(Stage):
                     ctx.logger.debug(f"[vulnscan] WAF 探测失败（{url}）：{e}")
             # 把任务 logger 传给检查：需要写过程日志的检查（SSRF 回连在外部回调模式下
             # 要交代注入了哪些 token）才能写进 `logs/task_*/task.log`。
-            found = list(owasp_checks.run_all(url, ctx.settings, logger=ctx.logger))
+            found = list(owasp_checks.run_all(url, ctx.settings, logger=ctx.logger,
+                                              blocked=_blocked))
             for poc in _pocs_for(site if isinstance(site, dict) else {}):
                 # `registry=pocs`：workflow 里 `tags:` 步骤的候选集，直接用本阶段已加载好的
                 # 那份（否则每个站点都会把 300+ 个 POC 文件重读一遍）。
@@ -242,6 +247,7 @@ class VulnscanStage(Stage):
                                                   registry=pocs):
                     # POC 结果与内置检查共用同一级别门槛（critical 恒保留）
                     if not owasp_checks.severity_ok(v.get("severity", "medium"), floor):
+                        _blocked.add()      # 续176：执行过、命中了，只是被结果闸挡下
                         continue
                     found.append(v)
             return found
@@ -270,7 +276,11 @@ class VulnscanStage(Stage):
             else:
                 kept = [v for v in af_v
                         if owasp_checks.severity_ok(v.get("severity", "medium"), floor)]
-                ctx.logger.info(f"[afrog] {af_note}；过级别门槛 {floor} 的 {len(kept)} 条入账")
+                _af_dropped = len(af_v) - len(kept)
+                if _af_dropped:
+                    _blocked.add(_af_dropped)   # 续176：afrog 那一路同样要说清挡掉多少
+                ctx.logger.info(f"[afrog] {af_note}；过级别门槛 {floor} 的 {len(kept)} 条入账"
+                                + (f"（挡掉 {_af_dropped} 条）" if _af_dropped else ""))
                 all_v.extend(kept)
         if ctx.stopped():
             # 这里是"协作式取消"：已完成批次的结果是有效的，**照常入账**
@@ -311,6 +321,17 @@ class VulnscanStage(Stage):
             + (f"（{' / '.join(f'{k}:{n}' for k, n in sorted(by_sev.items()))}）" if uniq else "")
             + (f"（跨运行去重跳过 {_dup} 项已入库）" if _dup else "")
             + "，均为初筛结果，需人工确认")
+        # 续176：把"已执行且命中、但被 min_severity 挡下"的量说出口并落库（§0 第 10 条）。
+        # **覆盖写**不是累加：追加执行时同一隐藏项会被第二次运行重复计到，累加＝虚高，
+        # 而本仓不接受虚高数字（§5.18：日志里的数字是人的判断依据）⇒ 页面只能说
+        # "最近一次 vulnscan 运行"。
+        _blk = _blocked.get()
+        if _blk:
+            ctx.logger.info(
+                f"[vulnscan] 级别门槛 {floor}：另有 {_blk} 条已执行且命中的结果低于门槛、"
+                f"未入库（入库数据一条未动；与 skip_severities 那类「根本不执行」的检查"
+                f"是两回事 —— 这些是真正跑过、并且有命中的）")
+        db.set_task_sev_blocked(ctx.task_id, floor, _blk)
         # 续150：独立复测模式（任务级选项 retest=True）—— 跑完与旧结论做三态对比。
         if ctx.options.get("retest") is True:
             _retest_mark(ctx, uniq, sites)

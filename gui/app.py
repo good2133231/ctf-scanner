@@ -1650,6 +1650,11 @@ def create_app():
         task["log_file"] = rel_display(task.get("log_file") or "", mask_outside=True)
         # 错误消息是**自由文本**（异常原文里常带本机的盘符/绝对路径），展示前过一遍清洗
         task["error"] = scrub_paths(task.get("error") or "")
+        # 续176：被 min_severity 挡掉的条数（用户点单，§0 第 10 条：被过滤 ≠ 不存在）。
+        # 文案唯一产地 = report.sev_blocked_note()，GUI 与 MD/HTML 报告共用同一句；
+        # 老库缺列 / 没有可报的数时返回空串 ⇒ 不渲染。
+        from scanner.report import sev_blocked_note as _sev_blocked_note
+        task["sev_blocked_line"] = _sev_blocked_note(task)
         # ---------- 资产页签的服务端分页（续57） ----------
         #
         # 原先 7 个资产页签（站点/子域名/拓展域名/端口/C 段/证书/目录）一律 `db.list_*` **全量**返回、
@@ -1916,6 +1921,7 @@ def create_app():
             "GROUP BY severity, poc_id, target", (task_id,)))
         return render_template(
             "task_detail.html", task=task,
+            sev_blocked_line=task.get("sev_blocked_line", ""),
             subs=subs, ext_subs=ext_subs,
             ext_src=ext_src, ext_counts=ext_counts, ext_src_tags=EXT_SRC_TAGS,
             ext_defaults=_ext_defaults(),

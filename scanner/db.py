@@ -71,6 +71,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   run_payload TEXT DEFAULT '',
   -- 续79 多租户：任务归属账号（0 = 无归属/老库行，仅管理员可见）。
   owner_id INTEGER DEFAULT 0,
+  -- 续176（用户点单"被 min_severity 挡掉的条数要说出口"）：**最近一次 vulnscan 运行**的
+  -- 结果闸计数与当时门槛。老库靠 `_COLUMN_PATCHES` 的 ALTER TABLE ADD COLUMN 补；
+  -- 老行两列皆空/0 ⇒ 展示侧不渲染（不编数）。放在 created_at/updated_at 之前，
+  -- 与 `_COLUMN_PATCHES` 的列序一致。
+  sev_floor TEXT DEFAULT '',       -- 该次运行的 checks.min_severity（如 high）
+  sev_blocked INTEGER DEFAULT 0,   -- 该次运行"已执行且命中但低于门槛"的条数（未入库）
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS subdomains (
@@ -321,7 +327,10 @@ _COLUMN_PATCHES = {
               "run_mode": "TEXT DEFAULT ''", "queued_at": "TEXT DEFAULT ''",
               "run_payload": "TEXT DEFAULT ''",
               # 续79 多租户：老库补 owner_id（0 = 无归属/老库行，仅管理员可见）。
-              "owner_id": "INTEGER DEFAULT 0"},
+              "owner_id": "INTEGER DEFAULT 0",
+              # 续176：结果闸计数（新库由 SCHEMA 直接建出）。老行空/0 ⇒ 展示侧不渲染。
+              "sev_floor": "TEXT DEFAULT ''",
+              "sev_blocked": "INTEGER DEFAULT 0"},
 }
 
 
@@ -512,6 +521,29 @@ def finish_task_run(task_id, ended_at=None, **fields):
           "MAX(0, strftime('%s', ?) - COALESCE(strftime('%s', started_at), strftime('%s', ?))), "
           "updated_at=? WHERE id=?",
           (*fields.values(), end, end, end, end, task_id))
+
+
+def set_task_sev_blocked(task_id, floor, n):
+    """续176：记录**最近一次 vulnscan 运行**的「低于 `min_severity` 被挡」计数与当时门槛。
+
+    为什么要落库：这两个数只在扫描期产生（被挡的发现根本不入库，事后无法从库里复原），
+    而报告与详情页要在**另一个进程**里把它说出口 —— 不进库就没有可报的数。
+
+    **覆盖写，不是累加**：追加执行（续25）会让同一任务跑多次 vulnscan，同一隐藏项会被
+    第二次运行重复计到，累加＝虚高；而本仓不接受虚高数字（§5.18：日志里的数字是人的
+    判断依据，虚高与虚低都会把人带偏）。因此页面/报告只能说"最近一次 vulnscan 运行"。
+    传 `n=0` 也会写（把上一次的旧计数清掉），`floor` 空串＝该次运行没有可报的门槛。
+    """
+    try:
+        tid = int(task_id)
+    except (TypeError, ValueError):
+        return
+    try:
+        cnt = max(0, int(n or 0))
+    except (TypeError, ValueError):
+        cnt = 0
+    _exec("UPDATE tasks SET sev_floor=?, sev_blocked=? WHERE id=?",
+          (str(floor or ""), cnt, tid))
 
 
 def append_task_error(task_id, msg):

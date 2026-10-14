@@ -2,6 +2,39 @@
 
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
+## 续176（2026-10-14，WorkBuddy · CodeBuddy）：被 min_severity 挡掉的条目数说出口 —— 计数、落库、报告/详情页三处出口
+
+实施者：WorkBuddy · CodeBuddy（远端 Linux）。主理人 2026-10-12 已拍板的收口项（原话："报告与任务详情页显示'被 min_severity: high 挡掉 N 条'……可以显示"；§0 第 10 条：被过滤 ≠ 不存在）。登记号为续176；续171 节内「下一轮（续172）」那两条即本项，已勾掉并注明（按后续登记序列取号：续172=站点折叠 … 续176=本项）。
+
+### 一、改动（七个文件，扫描行为零变化）
+
+1. **计数三路，判据仍只有一处**：`scanner/owasp/checks.py` 新增 `SeverityBlocked`（线程安全计数器 —— `run_all` 在 vulnscan 的站点级 `pool_run` 里被多线程调用）与`run_all(..., blocked=)` 可选出参，被结果闸挡下的每条加一；不传＝旧行为。`scanner/stages/vulnscan.py` 三处丢弃点（内置检查 / POC / afrog）各自 `add()`，阶段末一行 INFO：数量 + 当时门槛 + "未入库" + 与 `skip_severities`「根本不执行」分开说（两件事混说就是假话）。**没有引入第二份门槛判据**（§5.14）——"什么算被挡"仍是 `severity_ok()` 那一处。
+2. **落库两列**：`tasks.sev_floor`（该次运行的门槛）+ `tasks.sev_blocked`（挡掉条数），SCHEMA + `_COLUMN_PATCHES` 老库自动补列；`db.set_task_sev_blocked()` 由 vulnscan 阶段末调用，**覆盖写不是累加** —— 追加执行（续25）会让同一任务跑多次 vulnscan，同一隐藏项会被第二次运行重复计到，累加＝虚高，而本仓不接受虚高数字（§5.18）⇒ 页面只能说"最近一次 vulnscan 运行"。
+3. **出口两处、文案唯一产地**：`report.sev_blocked_note(task)`（Row/dict 都认、缺列返回空串、0 条不渲染）—— 任务详情「潜在漏洞」页签顶部一行（`gui/app.py` 传入 + `task_detail.html` 渲染）与报告 MD/HTML 概览 note 行共用；模板里不拼第二份。
+
+### 二、验证
+
+- 全量门禁 `./.venv/bin/python tests/smoke.py` → **SMOKE PASS，250 组**（245 既有 + `[176]` 五节），05:50:26→05:56:57 约 6.5 分钟。
+- `[176a]` 纯函数：门槛 info 挡 0 条；抬到 high 挡 **3 条**（= 过关数之差 4→1）；不传 `blocked` 时返回与旧行为逐条一致。
+- `[176b]` 阶段级（桩 engine/afrog/run_all，离线）：三路各挡 1 条共 **3 条**落库（floor=critical），过关 2 条（critical）入库；阶段末 INFO 行含数量/门槛/未入库/与执行闸分开。
+- `[176c]` 文案产地：有数才渲染、门槛跟着变（medium≠high）、Row 与 dict 同果、0 条与缺列不出话。`[176d]` 三出口：MD/HTML/详情页均有该行、0 条时不渲染。`[176e]` 老库补列 + 老行不出话。
+- **变异证伪（§6.1，两次都按预期红）**：
+  - A（摘三处计数）⇒ `[176a]`（被挡数=过关数之差）在门禁里当场红
+    （`assert _blk_hi.get() >= 1` → `AssertionError: 0`，smoke fail-fast 就此中止，
+    245 个既有组零回归）；`[176b]` 没被跑到，用一次性脚本在同一变异状态下重放它的桩逻辑
+    确认 `sev_blocked=1 ≠ 3`（该断言必红）；`[176c]` 纯函数不受影响、`[176d]` 因计数变 1
+    仍能渲染 —— 均符合预期；
+  - B（只摘 MD/HTML/GUI 三处展示接线，计数与落库原样）⇒ **只有 `[176d]` 变红**，
+    `[176a]/[176b]/[176c]` 保持绿 —— 证明展示断言有区分度。
+  两次跑完立即还原，还原后终轮门禁再次 SMOKE PASS 才提交。
+
+### 三、踩过的坑（给下一个接手的人）
+
+- **两式 numstat 相等证明不了新行的行尾**：`git diff --numstat` 与`--ignore-cr-at-eol --numstat` 逐文件相等只能证明"没改变旧行的 EOL"；纯 CRLF 文件里混入 LF 新行时两式依然相等。补证办法是字节级 `Counter` 普查（`l[len(l.rstrip(b'\r\n')):] for l in p.read_bytes().splitlines(keepends=True)`）——本轮七个改动文件逐一核过：五个纯 CRLF 文件新行全 CRLF、`gui/app.py` 的 152 条 LF 与 HEAD 一致、smoke 新增 162 行全 LF。
+- **run1 挂在自己的夹具上**：`[176a]` 复用了 `loose`，而 `[3b]` 在 smoke.py:512 把它就地改成了 `disabled_categories=["A02"]` ⇒ `a02-no-https` 被正确门控掉、断言反而拿不到它（245 个既有组零回归，一眼定位到新组）。修法：自建 settings 副本并显式写全四个键，不假设共享变量没被前面的组动过。
+- **补丁脚本里中文不能进字节字面量**（本轮连踩两次）：`b'…中文…'` 在 Python 3 是 SyntaxError，一律 str + `.encode("utf-8")`。另：`cmd1 && cmd2 & nohup …` 把整条链挂后台会静默跳过前面的步骤（本轮因此补丁没执行还以为跑了）—— 后台只挂最后那条命令。
+- **证伪/重放脚本自己也会造假阴性**：重放 `[176b]` 时第一版用最小 settings 造 ctx，缺 `vulnscan` 段 ⇒ 阶段开场就跳过、`sev_blocked=0`，看着像"变异把计数全摘了"，实际是夹具没让阶段跑起来。重放脚本同样要自证"阶段真的跑了"（本脚本靠 POC 调用记录 + 落库数字非默认值判断）。
+
 ## 续171（2026-10-13，WorkBuddy · GLM-5.3-Flash）：JS 挖掘域名"宁缺毋滥"三道闸 + FOFA 反查标语法 + 报告导出开关（默认关）
 
 实施者：WorkBuddy · GLM-5.3-Flash。主理人 2026-10-13 看着「拓展域名」页点单三条

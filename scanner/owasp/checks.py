@@ -47,6 +47,34 @@ def severity_ok(severity, min_severity):
         return True
 
 
+class SeverityBlocked:
+    """「已执行且有命中、但被 `min_severity` 结果闸挡下」的计数器（续176，用户点单）。
+
+    为什么需要它：`min_severity` 是**结果级**门控 —— 低于门槛的发现**执行过、也命中了**，
+    只是在入库前被丢弃，页面上什么都看不到（§0 第 10 条：被过滤 ≠ 不存在）。
+    这个数只在丢弃点产生：`run_all`（内置检查）/ vulnscan 的 POC 路 / afrog 路
+    各自 `add()`，由 vulnscan 阶段末汇总落库（`db.set_task_sev_blocked`），
+    报告与详情页再把它说出口。
+
+    线程安全：`run_all` 在 vulnscan 的站点级 `pool_run` 里被多线程调用，累加必须自带锁
+    （与 `stages/vulnscan.py::_lang_skips` 同一模式）。
+    **判据不在这里**：「什么算被挡」仍是 `severity_ok()` 那一处，本类只数数，
+    不引入第二份门槛逻辑（§5.14）。
+    """
+
+    def __init__(self):
+        self.n = 0
+        self._lock = threading.Lock()
+
+    def add(self, k=1):
+        with self._lock:
+            self.n += int(k)
+
+    def get(self):
+        with self._lock:
+            return self.n
+
+
 def enabled_checks(settings):
     """按 `disabled_categories` / `disabled_checks` / `skip_severities` 过滤出**会执行**的检查。
 
@@ -934,7 +962,7 @@ def _takes_logger(fn):
         return False
 
 
-def run_all(url, settings, min_severity=None, logger=None):
+def run_all(url, settings, min_severity=None, logger=None, blocked=None):
     """顺序执行**启用**的检查，单个检查异常不影响其余；返回 vuln dict 列表。
 
     两级门控（配置在 `checks` 段，GUI「策略配置」页可改）：
@@ -943,6 +971,10 @@ def run_all(url, settings, min_severity=None, logger=None):
     - 结果级：`min_severity`（可被入参覆盖）以下的发现直接丢弃。默认 medium，
       即"明文 HTTP / 安全响应头缺失 / 组件版本泄露"这类低危与 info 项默认不再产出
       —— CTF 实战里它们只会淹没真正能拿 flag 的注入/RCE 类结果。
+
+    `blocked`（续176）：可选的 `SeverityBlocked` 计数器，被结果闸挡下的每条**加一**。
+      能走到这里的一定是"已执行且命中"（执行闸在前面），正是用户要看的"被收起"的量；
+      不传 = 旧行为（只返回过关的那些，丢弃量不可见）。
     """
     cfg = (settings or {}).get("checks", {}) or {}
     floor = str(min_severity or cfg.get("min_severity", "medium")).lower()
@@ -959,6 +991,8 @@ def run_all(url, settings, min_severity=None, logger=None):
             continue
         v.setdefault("target", url)
         if not severity_ok(v.get("severity", "info"), floor):
+            if blocked is not None:
+                blocked.add()
             continue
         out.append(v)
     return out

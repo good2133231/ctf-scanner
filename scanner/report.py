@@ -236,6 +236,46 @@ def _append_count(task):
         return 0
 
 
+def _task_field(task, key, default=""):
+    """按键取任务字段：`sqlite3.Row`（报告侧）与 `dict`（GUI 侧）都要认。
+
+    缺键/缺列（老库）一律返回 default —— 升级过的库里这两列可能还不存在，
+    展示侧因此必须能对"没有这个数"说不出话，而不是崩掉、也不是编一个数。
+    """
+    if task is None:
+        return default
+    try:
+        v = task[key]
+    except (IndexError, KeyError, TypeError):
+        return default
+    return default if v is None else v
+
+
+def sev_blocked_note(task):
+    """「被 `min_severity` 挡掉的条数」那句话的**唯一产地**（续176，用户点单）。
+
+    GUI 任务详情页「潜在漏洞」页签与 MD/HTML 报告概览共用这一句。
+    **判据在 vulnscan 侧**：哪些算被挡、挡了多少，由三个丢弃点计数、
+    `db.set_task_sev_blocked` 落库（覆盖写＝最近一次运行）；这里只把已经落库的
+    两个数说出口 —— 模板里再拼一句就是第二份（§5.14）。
+
+    与 `checks.skip_severities` 那类「根本不执行」**分开说**：被挡的这些是真正执行过、
+    并且有命中的，两件事混说就是假话。
+
+    返回 "" = 没有可报的数（该次运行一条没挡 / 老库没有这两列）⇒ 调用方不渲染。
+    """
+    floor = str(_task_field(task, "sev_floor") or "")
+    try:
+        n = int(_task_field(task, "sev_blocked", 0) or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if not floor or n <= 0:
+        return ""
+    return (f"级别门槛 {floor}：最近一次 vulnscan 运行有 {n} 条「已执行且命中」的结果"
+            f"低于门槛、未入库（入库数据一条未动；与 skip_severities 那类「根本不执行」"
+            f"的检查是两回事 —— 这些是真正跑过、并且有命中的）")
+
+
 def collect(task_id):
     """把一份报告要用的数据一次性取出来（Markdown / HTML / PDF 共用），任务不存在返回 None。"""
     task = db.get_task(task_id)
@@ -312,6 +352,11 @@ def generate(task_id, full=False):
     if _rt["reproduced"] or _rt["fixed"] or _rt["unconfirmed"]:
         lines.append(f"> 人工复测：仍可复现 {_rt['reproduced']} ｜ 已修复 {_rt['fixed']} "
                      f"｜ 无法确认 {_rt['unconfirmed']}（无法确认＝没探到，不等于已修复）")
+    # 续176：被 min_severity 挡掉的条数要说出口（§0 第 10 条：被过滤 ≠ 不存在）。
+    # 文案唯一产地是 `sev_blocked_note()`；没有可报的数时这一行不出现。
+    _sb = sev_blocked_note(task)
+    if _sb:
+        lines.append(f"> {_sb}")
     lines.append("")
     if vulns:
         lines.append("## 潜在漏洞")
@@ -534,6 +579,10 @@ def generate_html(task_id, full=False):
         p.append(f'<div class="note">人工复测：仍可复现 {_rt["reproduced"]} ｜ '
                  f'已修复 {_rt["fixed"]} ｜ 无法确认 {_rt["unconfirmed"]}'
                  "（无法确认＝没探到，不等于已修复）</div>")
+    # 续176：同 Markdown 概览那一行（文案唯一产地 = sev_blocked_note）
+    _sb = sev_blocked_note(task)
+    if _sb:
+        p.append(f'<div class="note">{_h(_sb)}</div>')
     if vulns:
         p.append("<h2>漏洞趋势统计（本任务级别分布，已判误报不计入）</h2>")
         p.append('<table><thead><tr><th>级别</th><th>数量</th><th>占比</th></tr></thead><tbody>'
@@ -724,4 +773,4 @@ def export_pdf(task_id, out_path, settings=None, timeout=90, full=False):
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         shutil.rmtree(tmp_profile, ignore_errors=True)
-
+

@@ -87,6 +87,10 @@
 
 <div class="tabpane active" id="pane-vulns">
   <section class="panel">
+    {# 续176：被 min_severity 挡掉的条数要说出口（§0 第 10 条：被过滤 ≠ 不存在）——
+       文案唯一产地是 report.sev_blocked_note()，模板里不拼第二份（§5.14）；
+       没有可报的数（该次运行一条没挡 / 老库缺列）时这一行不渲染。 #}
+    {% if sev_blocked_line %}<p class="muted small">{{ sev_blocked_line }}</p>{% endif %}
     {# 漏洞列表分页（续53）：过滤（级别 / 关键字）与分页全在**服务端**做（`db.page_vulns`），
        原先固定 `limit=1000`、>1000 条静默丢结果的问题已修；级别 / 关键字筛选也从前端
        （`data-sev` / `data-filter`，只筛当前页）搬到 SQL 侧。⚠️ 这是 **GET form**，必须放在
