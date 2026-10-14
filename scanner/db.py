@@ -77,8 +77,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- 与 `_COLUMN_PATCHES` 的列序一致。
   sev_floor TEXT DEFAULT '',       -- 该次运行的 checks.min_severity（如 high）
   sev_blocked INTEGER DEFAULT 0,   -- 该次运行"已执行且命中但低于门槛"的条数（未入库）
+  -- 续185（主理人点单）：**任务层级**的父任务号（0 = 顶层任务）。
+  -- 拓展域名「送去探测」新建的任务挂在这里 —— 那是**子任务**，与「把域名追加成父任务的
+  -- 子域名」（资产层，promote_too）是两件事，别混。老库靠 `_COLUMN_PATCHES` 补。
+  parent_id INTEGER DEFAULT 0,
   created_at TEXT, updated_at TEXT
 );
+
 CREATE TABLE IF NOT EXISTS subdomains (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
@@ -387,7 +392,10 @@ _COLUMN_PATCHES = {
               "owner_id": "INTEGER DEFAULT 0",
               # 续176：结果闸计数（新库由 SCHEMA 直接建出）。老行空/0 ⇒ 展示侧不渲染。
               "sev_floor": "TEXT DEFAULT ''",
-              "sev_blocked": "INTEGER DEFAULT 0"},
+              "sev_blocked": "INTEGER DEFAULT 0",
+              # 续185 任务层级的老库补列（0 = 顶层任务）
+              "parent_id": "INTEGER DEFAULT 0"},
+
 }
 
 
@@ -444,12 +452,26 @@ def _owner_asset_clause(owner_id):
     return "task_id IN (SELECT id FROM tasks WHERE owner_id = ?)", [int(owner_id)]
 
 
-def create_task(name, targets, stages, options=None, owner_id=0):
+def create_task(name, targets, stages, options=None, owner_id=0, parent_id=0):
+    """建任务。`parent_id` 非 0 表示它是那个任务的**子任务**（续185：拓展送探那一类）。
+
+    ⚠ 与「把域名追加成父任务的子域名」是两件事：后者写的是 `subdomains` 表（资产层），
+    这里记的是**任务层级**（谁发起的谁）。两者可以同时发生，也可以只发生一个。
+    """
     return _exec(
-        "INSERT INTO tasks(name, targets, stages, options, pid, owner_id, created_at, updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO tasks(name, targets, stages, options, pid, owner_id, parent_id, "
+        "created_at, updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
         (name, targets, ",".join(stages), json.dumps(options or {}), os.getpid(),
-         int(owner_id or 0), _now(), _now()))
+         int(owner_id or 0), int(parent_id or 0), _now(), _now()))
+
+
+def list_child_tasks(parent_id):
+    """本任务的子任务（续185）。父任务被删**不级联** —— 与 `ext_probes` 一个口径：
+    那是"送过探"的历史证据，删了父任务也该留着痕迹（孤儿由 `parent_id` 说清来处）。"""
+    return _query("SELECT id, name, status, progress, created_at FROM tasks "
+                  "WHERE parent_id=? ORDER BY id", (int(parent_id or 0),))
+
 
 
 def update_task(task_id, **fields):

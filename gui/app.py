@@ -1022,7 +1022,13 @@ def create_app():
         return db.create_task(name, targets, stages, options, owner_id=_task_owner(), **kw)
 
     @app.context_processor
+    def _inject_child_tasks():
+        """续185：模板里 `child_tasks_of(id)` 取子任务（惰性，用到才查库）。"""
+        return {"child_tasks_of": lambda tid: db.list_child_tasks(tid)}
+
+    @app.context_processor
     def _inject_me():
+
         """让每个模板都能拿到 `me`（当前登录者），侧边栏据此隐藏无权入口。"""
         return {"me": _session_user()}
 
@@ -3685,9 +3691,13 @@ def create_app():
                                  int(from_task) if from_task.isdigit() else 0,
                                  domains, kind="append")
             return _do_append(from_task, stages, targets, domains, options, fallback)
-        task_id = _create_task(name, targets, stages, options)
+        # 续185：新建的这条路**一定**是源任务的子任务（任务层级）—— 拓展送探本来就是
+        # 父任务信息收集的延伸；「追加到本任务」那条路不建任务，所以不涉及。
+        _pid185 = int(from_task) if from_task.isdigit() else 0
+        task_id = _create_task(name, targets, stages, options, parent_id=_pid185)
         _spawn(task_id, name, targets, stages, options)
         # 续178：送探记录（extdomains 页「已送探 → #N」徽章与组内子标签的产地）
+
         db.record_ext_probes(int(from_task) if from_task.isdigit() else 0,
                              task_id, domains, kind="probe")
         logger.info(f"[gui] 拓展域名探测任务 #{task_id} 已创建"

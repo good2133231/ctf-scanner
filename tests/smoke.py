@@ -25979,6 +25979,35 @@ expression: r0()
     # 变异证伪（§6.1）：删掉 auto 那段 ⇒ (a) 三档全给 8 ⇒ 立即红
     print("[184e] 任务级并发按机器档 ok: auto=true 时小/中/大 ⇒ 1/2/4（配置值仍是天花板）｜"
           "出厂 false 只认 workers｜settings.yaml 写出来｜变异：摘掉 auto 段即红")
+    # ---------------- [185a] 续185（主理人点单）：任务层级的父子关系 ----------------
+    # 主理人原话："是建任务探测 并归属于这个父任务的子任务，不是子域名，这个层面是任务层级的"。
+    # 所以：tasks 要有真的 parent_id 列，送探建的任务挂上去，列表页与详情页看得出层级。
+    _p185 = db.create_task("smoke-185-parent", "http://p185.test/", ["subdomain"], {})
+    _c185 = db.create_task("smoke-185-child", "http://c185.test/", ["probe"], {}, parent_id=_p185)
+    assert db.get_task(_c185)["parent_id"] == _p185, "子任务要记住父任务号"
+    assert [r["id"] for r in db.list_child_tasks(_p185)] == [_c185], "父任务要查得到子任务"
+    assert db.get_task(_p185)["parent_id"] == 0, "顶层任务的 parent_id 是 0"
+    # (a) 老库补列：没有它，老库升级后 INSERT 直接炸（新库由 SCHEMA 建出）
+    assert db._COLUMN_PATCHES["tasks"].get("parent_id") == "INTEGER DEFAULT 0"
+    # (b) 送探那条路：新建任务时挂 parent_id（AST 钉点，别用 grep 文本）
+    import ast as _ast185
+    _ap185 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+    _t185 = _ast185.parse(_ap185)
+    _kw185 = [k.arg for n in _ast185.walk(_t185) if isinstance(n, _ast185.Call)
+              and getattr(n.func, "id", "") == "_create_task" for k in n.keywords]
+    assert "parent_id" in _kw185, f"送探建任务没挂 parent_id：{_kw185}"
+    # (c) 页面：列表页看得出谁是子任务；父子详情页能互跳
+    assert _login7(c, _admin_form117()).status_code == 302
+    _h185t = c.get("/tasks?q=smoke-185").get_data(as_text=True)
+    assert "子任务 · 父 #" + str(_p185) in _h185t, "任务列表页看不出层级"
+    _h185k = c.get(f"/tasks/{_c185}").get_data(as_text=True)
+    assert f'任务 #{_p185}' in _h185k and "子任务" in _h185k, "子任务详情页没写清父任务"
+    _h185p = c.get(f"/tasks/{_p185}").get_data(as_text=True)
+    assert "子任务 1 个" in _h185p and f"/tasks/{_c185}" in _h185p, "父任务详情页没列出子任务"
+    # (d) 「追加到本任务」那条路**不建任务**（现状不变）—— 它本来就没有子任务可显示
+    # 变异证伪（§6.1）：去掉 `parent_id=_pid185` ⇒ (b) 与 (c) 立即红
+    print("[185a] 任务层级父子 ok: parent_id 真列（含老库补列）+ 子任务可查｜送探建任务挂父号"
+          "（AST 钉点）｜列表页「子任务 · 父 #N」+ 父子详情页互跳｜变异：摘掉 parent_id 即红")
     print("SMOKE PASS")
 
 

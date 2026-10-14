@@ -148,7 +148,10 @@
           data-stages="{{ t.stages }}">
         <td class="pick"><input type="checkbox" class="pick-row" value="{{ t.id }}"></td>
         <td><a href="{{ url_for('task_detail', task_id=t.id) }}">{{ t.id }}</a></td>
-        <td>{{ t.name }}</td>
+        <td>{% if t.parent_id %}<span class="muted small">└ </span>{% endif %}{{ t.name }}
+          {% if t.parent_id %}<a class="badge" href="{{ url_for('task_detail', task_id=t.parent_id) }}"
+            title="续185：这是任务 #{{ t.parent_id }} 的子任务（拓展域名送去探测发起）">子任务 · 父 #{{ t.parent_id }}</a>{% endif %}</td>
+
         <td class="muted small">{{ (t.targets.splitlines() | first) or '-' }}
           {% if t.targets.splitlines() | length > 1 %}<span class="muted">（共 {{ t.targets.splitlines()|length }} 条）</span>{% endif %}
         </td>
