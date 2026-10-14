@@ -41,6 +41,11 @@
     在 **jsmine 挖拓展域名的同一批正文**上顺带抽（**零额外请求**，只攒邮箱不攒正文）；
     筛选从严：资源文件名（`icon@2x.png`）、占位邮箱（`example.com` / `sentry.io`…）、
     数字 IP / 数字 TLD 全部不收（8 条自证噪声夹具）；**只记录、不验证**（不发验证邮件、不查 MX）。
+- 实测（回答主理人问题②「单任务占多少 CPU/内存」）：`/usr/bin/time -v` 跑 CLI 单任务
+  （1 个目标 × subdomain+probe 两阶段、离线）—— 墙钟 42.1s、**CPU 7%**（user 1.79s + sys 1.24s）、
+  **峰值内存 76.4 MB**。本机 `machine_tier()` 判为 **大档（8C / 15.4G）** ⇒ 阶段内并发上限
+  建议 32（配置 max_workers=20 仍是天花板）、任务级并行 `workers_auto` 给 4。
+  真正吃资源的是 DNS 深档爆破（17.8 万词）与 dirmap 全目录深扫，不是上面这个基线。
   - ② 任务级并行也能按机器档走：`queue.workers_auto`（小 1 / 中 2 / 大 4，配置值仍是天花板），
     档位复用 `utils.machine_tier` 同一产地；出厂 false。
 
