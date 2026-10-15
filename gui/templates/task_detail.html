@@ -406,7 +406,8 @@
 
 <div class="tabpane" id="pane-ext">
   <section class="panel">
-    <p class="muted small">JS 挖掘（<span class="mono">js:mine</span>）与外部情报
+    <p class="muted small">JS 挖掘（<span class="mono">js:mine</span>，挖掘 JS 数量：{{ js_count_of(task.id) if js_count_of(task.id) is not none else '—' }}）与外部情报
+
       （<span class="mono">osint:cseg</span> / <span class="mono">osint:fofa</span> /
       <span class="mono">osint:fofa-cert</span> / <span class="mono">osint:fofa-title</span>）
       带出来的关联域名 —— 它们<b>未必属于目标自身</b>，所以不混进「子域名」页签。
@@ -455,7 +456,30 @@
       <div class="bulkbar">
         <button type="submit" class="ghost"
           title="把这些域名的子域再挖一遍，再探存活、扫目录、跑漏洞初筛；默认**追加进本任务**（不新建任务）">
-          送去探测（子域+存活+目录+漏洞）</button>
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+送
+去
+探
+测
+<
+/
+b
+u
+t
+t
+o
+n
+>
+
         <label class="muted" title="默认送本任务全部拓展域名（第三方 / CDN 清单里的那些不送，条数上限见 limits.ext_probe_max）；只想探勾上的几个就改成「只送勾选」">
           探测范围 <select name="scope"><option value="all">全任务</option><option value="picked">只送勾选</option></select></label>
         <label class="muted" title="续150（用户点单）：默认勾选 —— 探测结果**追加进本任务**（折叠在父任务里，跨运行去重）；取消勾选才新建一个独立任务">

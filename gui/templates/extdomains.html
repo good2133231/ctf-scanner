@@ -55,7 +55,8 @@
 {% endmacro %}
 <section class="panel">
   {% set keep_tag = '&tag=' + tag if tag else '' %}
-  <p class="muted small">来源分类（<b>默认按此顺序排列</b>：JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段）：
+  <p class="muted small">来源分类（<b>默认按此顺序排列</b>：JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段）{% if task_id and js_count_of(task_id) is not none %}，挖掘 JS 数量：{{ js_count_of(task_id) }}{% endif %}：
+
     <a class="btn-mini {{ 'ghost' if src else '' }}"
        href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep_tag }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">全部</a>
     {% for k, label, _s, _n in src_tags %}

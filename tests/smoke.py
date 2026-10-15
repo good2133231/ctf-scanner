@@ -25433,7 +25433,7 @@ expression: r0()
     _c179 = _ex179.confidence("xqzt-ops.com", bases=_bases179)
     assert _c179["level"] == "low", f"夹具前提：纯看名字是低 —— {_c179}"
     _c179b = _ex179.apply_ip_evidence(_c179, _r179, _ips179)
-    assert _c179b["level"] == "medium" and "api.abcd179.test" in _c179b["reason"] \
+    assert _c179b["level"] == "high" and "api.abcd179.test" in _c179b["reason"] \
         and "1.2.3.4" in _c179b["reason"], _c179b
     assert _c179b["reason"] != _c179["reason"], "升档必须换理由（不能只改标签不改话）"
     # 变异证伪（§6.1）：不给 confirmed_ips（= 摘掉佐证）⇒ 结论必须退回 low
@@ -25454,7 +25454,7 @@ expression: r0()
     assert _ex179.apply_ip_evidence(
         _c179, {"domain": "api.abcd179.test", "ip": "1.2.3.4", "cdn": ""},
         _ips179)["level"] == "low", "同 IP 的就是它自己 ⇒ 不自证"
-    # ③ similar_candidates 接线：同 IP 的低相似行进 keep（阈值 medium）；CDN 行被闸拦
+    # ③ similar_candidates 接线：同 IP 的低相似行判高（续186）必进 keep；CDN 行被闸拦
     #   （闸赢过佐证 —— IP 再怎么重合，黑名单/第三方/CDN 三道闸都不放行）
     _rows179 = [{"domain": "xqzt-ops.com", "source": "js:mine", "ip": "1.2.3.4", "cdn": ""},
                 {"domain": "zzzz-ops.com", "source": "js:mine", "ip": "9.9.9.9", "cdn": ""},
@@ -25462,7 +25462,7 @@ expression: r0()
     _kc179 = _ex179.similar_candidates(_rows179, _bases179, min_level="medium",
                                        settings={}, confirmed_ips=_ips179)
     _kd179 = {c["domain"]: c for c in _kc179["keep"]}
-    assert "xqzt-ops.com" in _kd179 and _kd179["xqzt-ops.com"]["level"] == "medium" \
+    assert "xqzt-ops.com" in _kd179 and _kd179["xqzt-ops.com"]["level"] == "high" \
         and "同 IP" in _kd179["xqzt-ops.com"]["reason"], _kc179
     assert any(b["domain"] == "abdc.com" and "CDN" in b["blocked"] for b in _kc179["blocked"]), \
         "标了 CDN 的行必须仍被闸拦（佐证赢不过闸，即便它同 IP）"
@@ -25474,7 +25474,7 @@ expression: r0()
         "摘掉佐证后它不该再进 keep"
     assert any(b["domain"] == "xqzt-ops.com" and b["blocked"] == "低于阈值"
                for b in _kd0179["blocked"]), _kd0179["blocked"]
-    print("[179a] IP 佐证判据 ok: 低+同IP⇒中（理由含对方域名与IP）/摘佐证退回低/"
+    print("[179a] IP 佐证判据 ok: 低+同IP⇒高（续186 拍板，理由含对方域名与IP）/摘佐证退回低/"
           "高与归属与CDN行四条边界不动；similar_candidates 接线且变异（摘参）承重")
     # ④ 徽章同步（页面级）：own 行（非 CDN，ip=1.2.3.4）+ 拓展行同 IP ⇒ /extdomains 徽章「中」
     _tid179 = db.create_task("smoke-179-ipmed", "abcd179.test", ["probe"], {})
@@ -25488,12 +25488,12 @@ expression: r0()
              (_tid179,))
     _html179 = c.get(f"/extdomains?task={_tid179}").get_data(as_text=True)
     _badge179 = [seg for seg in _html179.split("<span") if "同 IP" in seg]
-    assert _badge179 and ">中</span>" in _badge179[0], \
-        f"IP 佐证徽章必须是「中」且理由上页面：{[s[:120] for s in _badge179]}"
+    assert _badge179 and ">高</span>" in _badge179[0], \
+        f"IP 佐证徽章必须是「高」（续186 拍板）且理由上页面：{[s[:120] for s in _badge179]}"
     assert "与非 CDN 已确认子域 api.abcd179.test 同 IP（1.2.3.4）" in _html179, \
         "徽章理由没把对照子域与 IP 说清"
     assert _html179.count("同 IP（") == 1, "只有同 IP 的那一行该有佐证理由（对照行保持低）"
-    print("[179] IP medium 佐证 ok: extdom 判据单产地（similar_candidates 与徽章共用）"
+    print("[179] IP 佐证判高（续186 主理人拍板，原判中）ok: extdom 判据单产地（similar_candidates 与徽章共用）"
           "/runner 自动递归与页面同结论；变异两处承重（摘参退低、闸赢过佐证）")
     # ---------------- [179b] 续179：动态并发档（按产出加码，recon-spiral 思想落地） ----------------
     import scanner.utils as _ut179
@@ -26008,6 +26008,28 @@ expression: r0()
     # 变异证伪（§6.1）：去掉 `parent_id=_pid185` ⇒ (b) 与 (c) 立即红
     print("[185a] 任务层级父子 ok: parent_id 真列（含老库补列）+ 子任务可查｜送探建任务挂父号"
           "（AST 钉点）｜列表页「子任务 · 父 #N」+ 父子详情页互跳｜变异：摘掉 parent_id 即红")
+    # ---------------- [187a] 续187（主理人点单）：「挖掘 JS 数量」持久化 + 页面显示 ----------------
+    _t187a = db.create_task("smoke-187-jscount", "http://j187.test/", ["jsmine"], {})
+    import json as _json187a
+    _o187a = {"append_count": 1}
+    _o187a["js_count"] = 42
+    db.update_task(_t187a, options=_json187a.dumps(_o187a, ensure_ascii=False))
+    assert _json187a.loads(db.get_task(_t187a)["options"]).get("js_count") == 42, \
+        "js_count 要进 task.options（先例 append_count 同款）"
+    assert _json187a.loads(db.get_task(_t187a)["options"]).get("append_count") == 1, \
+        "合并写不许抹掉 options 里已有的键（§6.2 第十二起同族）"
+    # 页面：详情页与拓展页都显示；没跑过 jsmine 的任务显示「—」
+    assert _login7(c, _admin_form117()).status_code == 302
+    _h187a = c.get(f"/tasks/{_t187a}").get_data(as_text=True)
+    assert "挖掘 JS 数量：42" in _h187a, "详情页没显示 js 数量"
+    _e187a = c.get(f"/extdomains?task={_t187a}").get_data(as_text=True)
+    assert "挖掘 JS 数量：42" in _e187a, "拓展域名页没显示 js 数量"
+    # 变异证伪（§6.1）：jmine 收尾摘掉落库那行 ⇒ options 永远没 js_count ⇒ 页面回退「—」⇒ 红
+    import ast as _ast187a
+    _j187a = (ROOT / "scanner" / "stages" / "jsmine.py").read_text(encoding="utf-8")
+    assert '"js_count"' in _j187a and "db.update_task" in _j187a, "jsmine 收尾没落库 js_count"
+    print("[187a] 挖掘 JS 数量 ok: jsmine 收尾落 options.js_count（合并写不抹已有键）｜"
+          "详情页与拓展页显示（没跑过显示「—」）｜变异：摘掉落库即红")
     print("SMOKE PASS")
 
 

@@ -1022,7 +1022,22 @@ def create_app():
         return db.create_task(name, targets, stages, options, owner_id=_task_owner(), **kw)
 
     @app.context_processor
+    def _inject_js_count():
+        """续187：模板里 `js_count_of(id)` 取该任务最近一次 jsmine 挖到的 JS 文件数
+        （存在 task.options.js_count，jsmine 收尾落库；没跑过 ⇒ None，页面显示「—」）。"""
+        def _jsc(tid):
+            try:
+                _t = db.get_task(tid)
+                _o = _t["options"] if isinstance(_t["options"], dict) \
+                    else json.loads(_t["options"] or "{}")
+                return _o.get("js_count")
+            except Exception:
+                return None
+        return {"js_count_of": _jsc}
+
+    @app.context_processor
     def _inject_child_tasks():
+
         """续185：模板里 `child_tasks_of(id)` 取子任务（惰性，用到才查库）。"""
         return {"child_tasks_of": lambda tid: db.list_child_tasks(tid)}
 
@@ -3441,6 +3456,10 @@ def create_app():
                  "global": int(r["owner_id"] or 0) == 0}
                 for r in secretbl.load(owner_id=_owner_scope())]
 
+    # 续186：装饰器丢失修复——本来就是 POST 路由（settings.html:529 的 formaction 在 url_for 它），
+    # 丢了 @app.route 后只要黑名单非空，策略页就 500（BuildError）。
+    @app.route("/api/blacklist/remove", methods=["POST"])
+    @login_required
     def api_blacklist_remove():
 
         n = blacklist.remove(_picked_domains(), settings, owner_id=_owner_scope())

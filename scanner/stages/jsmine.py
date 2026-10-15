@@ -326,7 +326,19 @@ class JsmineStage(Stage):
         if _fnote:
             ctx.logger.info("[jsmine] 敏感信息候选 " + _fnote)
         fingerprint.flush(ctx, ctx.logger, "jsmine")
+        # 续187（主理人点单「js 挖掘后面再加一个(挖掘js数量:)」）：把这次运行的 JS 文件数
+        # 持久化进 task.options（先例是 append_count）—— 详情页/拓展页直接读，不用翻日志。
+        try:
+            import json as _json187
+            _t187 = db.get_task(ctx.task_id)
+            _o187 = _t187["options"] if isinstance(_t187["options"], dict) \
+                else _json187.loads(_t187["options"] or "{}")
+            _o187["js_count"] = int(js_count)
+            db.update_task(ctx.task_id, options=_json187.dumps(_o187, ensure_ascii=False))
+        except Exception as _e187:      # 记数失败不影响扫描结果
+            ctx.logger.warning(f"[jsmine] js_count 落库失败（不影响扫描）：{_e187}")
         ctx.logger.info(f"[jsmine] JS 文件 {js_count} 个 / 新域名 {len(new_domains)} 个 / "
+
                         f"接口 URL {len(url_list)} 条 / 疑似凭据 {len(secrets)} 条"
                         + (f" / 值黑名单挡掉 {len(blocked177)} 条" if blocked177 else "")
                         + (f" / 另拒收 {len(junk113)} 个「不是域名」的碎片" if junk113 else ""))
