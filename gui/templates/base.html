@@ -96,9 +96,14 @@ window.CTF_THEME_DEFAULT = "light";
     </main>
   </div>
 </div>
-<div class="lb-overlay" id="lb-overlay" aria-hidden="true">
-  <button type="button" class="lb-close" id="lb-close" aria-label="关闭">×</button>
-  <img class="lb-img" id="lb-img" alt="站点截图大图">
+{# 续196：截图灯箱泛化成通用**预览框**（主理人点单：点「子任务/统计」出预览框、
+   不要行内展开）—— 同一套遮罩/关闭钮/Esc 机制，内容由 pvOpen() 塞（§5.14） #}
+<div class="pv-overlay" id="pv-overlay" aria-hidden="true" role="dialog" aria-modal="true"
+     aria-label="预览">
+  <div class="pv-box">
+    <button type="button" class="pv-close" id="pv-close" aria-label="关闭">×</button>
+    <div class="pv-body" id="pv-body"></div>
+  </div>
 </div>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 {% block script %}{% endblock %}

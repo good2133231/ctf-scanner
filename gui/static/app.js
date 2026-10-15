@@ -378,24 +378,102 @@ function initOpenSites() {
   });
 }
 
-/* ---------- 站点截图灯箱（点击缩略图放大，遮罩/关闭钮/Esc 关闭，不新开标签页） ---------- */
+/* ---------- 预览框（续196：灯箱泛化）—— pvOpen(字符串或节点) 打开 / Esc·遮罩·关闭钮关闭 ---------- */
+const pvEsc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function pvOpen(content) {
+  const ov = document.getElementById("pv-overlay"), body = document.getElementById("pv-body");
+  if (!ov || !body) return;
+  // 字符串只接受**我们自己生成**的 HTML（任务名/域名都过 pvEsc）；节点（截图 img）直接用
+  if (typeof content === "string") {
+    const t = document.createElement("template");
+    t.innerHTML = content.trim();
+    body.replaceChildren(t.content);
+  } else {
+    body.replaceChildren(content);
+  }
+  ov.classList.add("open"); ov.setAttribute("aria-hidden", "false");
+}
+function pvShut() {
+  const ov = document.getElementById("pv-overlay"), body = document.getElementById("pv-body");
+  if (!ov || !body) return;
+  ov.classList.remove("open"); body.replaceChildren(); ov.setAttribute("aria-hidden", "true");
+}
+function initPreview() {
+  const ov = document.getElementById("pv-overlay");
+  if (!ov) return;
+  const close = document.getElementById("pv-close");
+  if (close) close.addEventListener("click", pvShut);
+  ov.addEventListener("click", e => { if (e.target === ov) pvShut(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") pvShut(); });
+}
+/* 站点截图大图：预览框机制的图片用法（同一机制，不另起第二份） */
 function initLightbox() {
-  const overlay = document.getElementById("lb-overlay");
-  const img = document.getElementById("lb-img");
-  const close = document.getElementById("lb-close");
-  if (!overlay || !img) return;
-  const open = src => {
-    img.src = src; overlay.classList.add("open"); overlay.setAttribute("aria-hidden", "false");
-  };
-  const shut = () => { overlay.classList.remove("open"); img.src = ""; overlay.setAttribute("aria-hidden", "true"); };
-  // 事件委托：缩略图可能跨页/动态渲染，绑在 document 上更稳
   document.addEventListener("click", e => {
     const t = e.target.closest && e.target.closest(".shot-thumb");
-    if (t && t.dataset.full) { e.preventDefault(); open(t.dataset.full); }
+    if (t && t.dataset.full) {
+      e.preventDefault();
+      const img = document.createElement("img");
+      img.className = "pv-img"; img.alt = "站点截图大图"; img.src = t.dataset.full;
+      pvOpen(img);
+    }
   });
-  if (close) close.addEventListener("click", shut);
-  overlay.addEventListener("click", e => { if (e.target === overlay) shut(); });
-  document.addEventListener("keydown", e => { if (e.key === "Escape") shut(); });
+}
+/* ---------- 任务页「子任务/统计」预览框（续196，主理人点单：不要行内展开） ---------- */
+function pvSubtreeHtml(d) {
+  const head = `<h3>子任务（#${pvEsc(d.root.id)} ${pvEsc(d.root.name)}`
+    + (d.total ? `，共 ${pvEsc(d.total)} 个` : "") + `）</h3>`;
+  if (!d.nodes || !d.nodes.length) {
+    return head + `<p class="pv-note">这个任务名下还没有子任务`
+      + `（拓展域名送去探测、自动递归才会长出下一层）。</p>`;
+  }
+  const rows = d.nodes.map(n => {
+    const c = n.counts || {};
+    return `<tr><td class="mono">${pvEsc(n.label)}</td>`
+      + `<td style="padding-left:${8 + (n.depth - 1) * 14}px">${pvEsc(n.name)}</td>`
+      + `<td class="muted">${pvEsc(n.target || "-")}</td>`
+      + `<td class="muted">站点 ${pvEsc(c.sites || 0)}<br>子域名 ${pvEsc(c.subs_own || 0)}`
+      + `<br>漏洞 ${pvEsc(c.vulns || 0)}<br>拓展 ${pvEsc(c.subs_ext || 0)}</td>`
+      + `<td class="muted mono">${pvEsc(n.stages || "-")}</td>`
+      + `<td><span class="badge st-${pvEsc(n.status)}">${pvEsc(n.status)}</span></td>`
+      + `<td>${pvEsc(n.progress)}%</td>`
+      + `<td class="muted">${pvEsc(n.created_at || "-")}</td>`
+      + `<td class="muted">${pvEsc(n.duration || "-")}</td>`
+      + `<td><a class="btn-mini" href="/tasks/${pvEsc(n.id)}">查看结果</a></td></tr>`;
+  }).join("");
+  return head + `<table><thead><tr><th>编号</th><th>任务名</th><th>目标</th><th>统计</th>`
+    + `<th>阶段</th><th>状态</th><th>进度</th><th>开始时间</th><th>时长</th><th></th></tr></thead>`
+    + `<tbody>${rows}</tbody></table>`
+    + `<p class="pv-note">各层同号字，层级只靠缩进；编号 24-a 规则：根任务的子任务按序 a/b/c，`
+    + `孙任务 a-1/a-2。</p>`;
+}
+function pvStatsHtml(d) {
+  const rows = d.rows.map(r => `<tr><td>${pvEsc(r.kind)}</td><td>${pvEsc(r.total)}</td>`
+    + `<td class="muted">${pvEsc(r.by_task || "-")}</td></tr>`).join("");
+  const tasks = (d.tasks || []).map(t =>
+    `<span class="badge">#${pvEsc(t.id)} ${pvEsc(t.name)}</span>`).join(" ");
+  return `<h3>统计（整棵衍生树资产汇聚）</h3>`
+    + `<p class="pv-note">汇聚范围：根任务 #${pvEsc(d.root.id)} 起整棵树共 ${pvEsc(d.total_tasks)} 个任务；`
+    + `同名资产跨任务去重（子域名按域名、站点按 URL、漏洞按主机+规则、邮箱按地址）。</p>`
+    + `<table><thead><tr><th>资产类型</th><th>汇聚后数量</th><th>按来源任务拆分</th></tr></thead>`
+    + `<tbody>${rows}</tbody></table><p class="pv-note">${tasks}</p>`;
+}
+function initTaskPreview() {
+  document.addEventListener("click", async e => {
+    const b = e.target.closest && e.target.closest("button[data-pv]");
+    if (!b) return;
+    const id = b.dataset.id, kind = b.dataset.pv;
+    pvOpen(`<p class="pv-note">加载中…</p>`);
+    try {
+      const url = absUrl(kind === "stats" ? `/api/tasks/${id}/stats` : `/api/tasks/${id}/subtasks`);
+      const r = await fetch(url);
+      const d = await r.json();
+      if (!d.ok) { pvOpen(`<p class="pv-note">${pvEsc(d.error || "加载失败")}</p>`); return; }
+      pvOpen(kind === "stats" ? pvStatsHtml(d) : pvSubtreeHtml(d));
+    } catch (err) {
+      pvOpen(`<p class="pv-note">加载失败：${pvEsc(err && err.message ? err.message : err)}</p>`);
+    }
+  });
 }
 
 /* ---------- 主题：默认档与存储键在 base.html 的首屏脚本里（那里必须早于首次绘制），这里只接线 ---------- */
@@ -508,6 +586,8 @@ function initCopyButtons() {
 
 document.addEventListener("DOMContentLoaded", () => {
   initTheme();
+  initPreview();       // 续196：预览框机制（遮罩/关闭钮/Esc 只绑一次）
+  initTaskPreview();   // 续196：任务页「子任务/统计」按钮 → 预览框
   initTabs();
   initFilters();
   initCollapsiblePanels();

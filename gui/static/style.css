@@ -305,14 +305,30 @@ details pre { margin:8px 0; }
 .shot-cell { white-space:nowrap; text-align:center; vertical-align:middle; }
 /* 截图列表头也居中，否则「图居中、标题偏左」看着没对齐 */
 th.col-shot, td.col-shot { text-align:center; }
-/* 灯箱：点击缩略图放大查看，点遮罩/关闭钮/Esc 关闭（不再新开标签页） */
-.lb-overlay { position:fixed; inset:0; background:var(--lb-bg); z-index:50;
+/* 预览框（续196：截图灯箱泛化）：点遮罩/关闭钮/Esc 关闭；内容是任务页「子任务/统计」
+   预览与站点截图大图（同一机制，不另起第二套 modal） */
+.pv-overlay { position:fixed; inset:0; background:var(--lb-bg); z-index:50;
               display:none; align-items:center; justify-content:center; padding:24px; }
-.lb-overlay.open { display:flex; }
-.lb-img { max-width:94vw; max-height:90vh; border-radius:6px; box-shadow:0 8px 40px var(--lb-shadow); }
-.lb-close { position:fixed; top:18px; right:22px; width:38px; height:38px; font-size:22px;
+.pv-overlay.open { display:flex; }
+.pv-box { position:relative; background:var(--panel); color:var(--text);
+          border:1px solid var(--border); border-radius:8px; max-width:min(1100px, 94vw);
+          max-height:90vh; overflow:auto; padding:16px 18px;
+          box-shadow:0 8px 40px var(--lb-shadow); }
+/* 统一字号：预览框里各层同一号字（主理人点单「子孙任务一个比一个小没必要」）——
+   层级只靠名称列缩进表达，不靠字号；表格与任务列表正文同规格 */
+.pv-body { font-size:13px; line-height:1.5; }
+.pv-body h3 { margin:0 0 10px; font-size:15px; }
+.pv-body table { width:100%; border-collapse:collapse; }
+.pv-body th, .pv-body td { padding:4px 8px; border-bottom:1px solid var(--line);
+                             text-align:left; white-space:nowrap; }
+.pv-body th { color:var(--muted); font-weight:600; }
+.pv-body .muted { color:var(--muted); }
+.pv-body .mono { font-family:var(--mono, monospace); }
+.pv-body .pv-note { margin:8px 0 0; color:var(--muted); }
+.pv-img { max-width:94vw; max-height:86vh; border-radius:6px; display:block; margin:0 auto; }
+.pv-close { position:fixed; top:18px; right:22px; width:38px; height:38px; font-size:22px;
             line-height:1; border-radius:50%; background:var(--ghost-bg); color:var(--text);
-            border:1px solid var(--border); cursor:pointer; }
-.lb-close:hover { color:var(--accent); }
+            border:1px solid var(--border); cursor:pointer; z-index:51; }
+.pv-close:hover { color:var(--accent); }
 .agg-samples { margin:4px 0 0; padding-left:16px; max-height:170px; overflow:auto; }
 .agg-samples li { margin:2px 0; word-break:break-all; }

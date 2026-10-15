@@ -3817,6 +3817,129 @@ def create_app():
         # 续195：新建子任务后回拓展域名页签（主理人点单：点其他功能总被送去漏洞页）
         return redirect(url_for("task_detail", task_id=task_id) + "#ext")
 
+    # ---------------- 续196：套娃预览框的两个数据源（主理人点单：预览框 + 接真数据） ----------------
+    def _task_tree_root(task):
+        """沿 parent_id 一路爬到根任务（预览框从哪一层发起都展示整棵树）。"""
+        root, seen = task, set()
+        while int(root["parent_id"] or 0) and int(root["parent_id"]) not in seen:
+            seen.add(int(root["id"]))
+            nxt = db.get_task(int(root["parent_id"]))
+            if not nxt:
+                break
+            root = nxt
+        return root
+
+    def _task_tree_ids(root_id):
+        """根任务 + 全部后代的任务 id（深度优先，根在最前；环由 seen 兜住）。"""
+        ids, seen = [int(root_id)], {int(root_id)}
+
+        def walk(pid):
+            for ch in db.list_child_tasks(pid):
+                cid = int(ch["id"])
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                ids.append(cid)
+                walk(cid)
+
+        walk(int(root_id))
+        return ids
+
+    @app.route("/api/tasks/<int:tid>/subtasks")
+    @login_required
+    def api_task_subtree(tid):
+        """续196：「子任务」预览框的数据源 —— parent_id 递归整棵子树 + 24-a 编号。
+
+        编号规则（与 mock 一致）：根任务的直接子任务按序 a/b/c…，孙任务 a-1/a-2…；
+        层数不设硬上限，由数据（parent_id）自然长出来。越权按 404（不泄露存在性）。
+        """
+        task = _owned_task(tid)
+        if not task:
+            return jsonify({"ok": False, "error": "任务不存在或无权访问"}), 404
+        root = _task_tree_root(task)
+        rid = int(root["id"])
+        nodes, total = [], 0
+
+        def walk(pid, path, depth):
+            nonlocal total
+            for i, ch in enumerate(db.list_child_tasks(pid), 1):
+                # 24-a 规则：根任务的**直接**子任务用字母 a/b/c…；更深层用序号 1/2/3…
+                # （与 mock 一致：孙任务显示 a-1/a-2，不是 a-a）
+                sub = (chr(ord("a") + i - 1) if i <= 26 else str(i)) if depth <= 1 else str(i)
+                p = path + [sub]
+                cid = int(ch["id"])
+                full = db.get_task(cid) or ch
+                total += 1
+                nodes.append({
+                    "id": cid,
+                    "label": f"{rid}-" + "-".join(p),
+                    "depth": depth,
+                    "name": full["name"],
+                    "target": (str(full["targets"] or "").splitlines() or [""])[0],
+                    "status": ch["status"],
+                    "progress": ch["progress"],
+                    "created_at": ch["created_at"],
+                    "duration": run_duration_text(dict(full)),
+                    "stages": full["stages"],
+                    "counts": db.task_counts(cid),
+                })
+                walk(cid, p, depth + 1)
+
+        walk(rid, [], 1)
+        return jsonify({"ok": True, "root": {"id": rid, "name": root["name"]},
+                        "total": total, "nodes": nodes})
+
+    @app.route("/api/tasks/<int:tid>/stats")
+    @login_required
+    def api_task_stats(tid):
+        """续196：「统计」预览框的数据源 —— 整棵 parent 树资产汇聚（跨任务去重）。
+
+        去重口径（与 mock 的承诺一致）：子域名按域名、站点按 URL、漏洞按 目标+规则、
+        邮箱按地址；「按来源任务拆分」报每个任务各自贡献多少（去重前的口径，用于对账）。
+        判据复用 db.OWN_SUBDOMAIN_WHERE 等既有常量，SQL 侧不重抄第二份（§5.14）。
+        """
+        task = _owned_task(tid)
+        if not task:
+            return jsonify({"ok": False, "error": "任务不存在或无权访问"}), 404
+        root = _task_tree_root(task)
+        ids = _task_tree_ids(int(root["id"]))
+        subs, sites, vulns, emails = set(), set(), set(), set()
+        tasks, meta = [], {"subs": {}, "sites": {}, "vulns": {}, "emails": {}}
+        for t in ids:
+            # db.get_task 回 sqlite3.Row（没有 .get）—— 要 .get 就先 dict 化（本轮第二次栽这个形状）
+            row = dict(db.get_task(t) or {})
+            tasks.append({"id": t, "name": row.get("name") or f"#{t}"})
+            for r in db._query("SELECT domain FROM subdomains WHERE task_id=? AND "
+                               + db.OWN_SUBDOMAIN_WHERE, (t,)):
+                subs.add(str(r["domain"]).lower())
+                meta["subs"][t] = meta["subs"].get(t, 0) + 1
+            for r in db.list_sites(t):
+                u = str(r["url"] or "").strip()
+                if u:
+                    sites.add(u)
+                    meta["sites"][t] = meta["sites"].get(t, 0) + 1
+            for r in db.list_vulns(t, limit=None):
+                vulns.add((str(r["target"] or "").lower(), str(r["poc_id"] or "")))
+                meta["vulns"][t] = meta["vulns"].get(t, 0) + 1
+            erows, _et = db.list_emails(t)
+            for r in erows:
+                emails.add(str(r["email"] or "").lower())
+                meta["emails"][t] = meta["emails"].get(t, 0) + 1
+
+        def by_task(kind):
+            parts = [f"#{x['id']} {x['name']} {meta[kind].get(x['id'], 0)}"
+                     for x in tasks if meta[kind].get(x["id"])]
+            return " / ".join(parts) if parts else "各任务均无"
+
+        rows = [
+            {"kind": "子域名", "total": len(subs), "by_task": by_task("subs")},
+            {"kind": "站点", "total": len(sites), "by_task": by_task("sites")},
+            {"kind": "漏洞", "total": len(vulns), "by_task": by_task("vulns")},
+            {"kind": "邮箱（数据探测）", "total": len(emails), "by_task": by_task("emails")},
+        ]
+        return jsonify({"ok": True, "root": {"id": int(root["id"]), "name": root["name"]},
+                        "total_tasks": len(ids), "tasks": tasks, "rows": rows})
+
     @app.route("/api/sites/reshoot", methods=["POST"])
     @login_required
     def api_reshoot_sites():

@@ -4294,21 +4294,36 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] 任务列表页摆出队列并发现状（同时运行几个、去哪改）；拓展域名页 bulkbar 只留「送去探测」
 - [x] [195a] 断言（根行走链 / 主域名命名 / hash 形状 / 两页按钮集合 / 302 片段）
 
-**下一轮（续196）——只放未做的：**
-- [ ] 套娃改版（主理人拍板）：点「子任务/统计」出**预览框（modal）**、不要行内展开；子孙任务统一
-  字号；接真数据（parent_id 递归 + 24-a 编号 + 汇聚查询 + task_runs 落点）
-- [ ] **hostcollide 接线 + [183] 断言**（`scanner/hostcollide.py` 续183 已建但没接线：runner 无
-  调用、config 无段、GUI/CLI 无入口）。入口位置定为：新建任务表单一个复选（任务选项
-  `hostcollide: true`，阶段跑完后由 runner 调用）+ 任务详情页一颗「Host 碰撞」按钮
-  （给已有任务补跑；形状照 api_reshoot_sites：POST → 置选项 → 排一轮）
-- [ ] **备案反查（ICP）**：免费接口候选（需实测可用性与限流）：api.vvhan.com / chinaz 备案查询 /
-  站长工具 icp.chinaz.com；口径：只读 GET、吃任务预算、`verify_tls` 开关照管、失败整轮跳过并
-  说出口（照 iprecon.preflight 形状）；产出进 intel/osint 面（来源前缀建议 `osint:icp`）。
-  **需要第三方 API 的主理人确认：选哪家、是否接受其可用性/限流风险**
-- [ ] **VirusTotal**：需要 API key（免费额度 500 次/天）。记录：新配置段 `virustotal.api_key`
-  （进 config/keys.enc.yaml，不落明文）+ 策略开关 `virustotal.enabled` 出厂关；用途＝域名/IP
-  信誉佐证（只读 GET /api/v3/...）。**等主理人给 key 再实现**，本轮不写网络代码
-- [ ] 四项目对比 T1–T12 汇入排期（结论在上级目录两份文档）
+## 续196（2026-10-15，WorkBuddy · CodeBuddy）：套娃改版（预览框 + 统一字号 + 接真数据）
+
+- [x] 「子任务/统计」改**预览框**（lb-overlay 泛化 pv-overlay，灯箱同机制）；预览框统一字号、
+  层级只靠缩进；tasks.html 两条行内展开 mock 行整块删除；「查看全结果」撒谎文案修掉
+- [x] `GET /api/tasks/<id>/subtasks`（parent_id 递归整树 + 24-a 编号）与
+  `/api/tasks/<id>/stats`（全树汇聚跨任务去重 + 按来源任务拆分）；越权 404 不泄露
+- [x] [196a] 断言（编号 / 去重 / 404 / 前端四形状 / 撞号证伪）
+
+**下一轮（续197）——只放未做的：**
+- [ ] **hostcollide 接线 + [183] 断言**：入口位置已定——新建任务表单复选（任务选项
+  `hostcollide: true`）+ 任务详情页「Host 碰撞」补跑按钮（形状照 api_reshoot_sites）；
+  runner 阶段跑完后调用 `hostcollide.run(ctx)`，config 加 `hostcollide.enabled` 出厂关
+- [ ] **备案反查（ICP）**：免费接口实测**本机出口全不通**（vvhan/uomg DNS 失败、chinaz/oioweb
+  超时；同机 github 200 ⇒ 国内线路问题）。候选：api.vvhan.com / chinaz / 站长工具。口径：
+  只读 GET、吃任务预算、verify_tls 照管、失败整轮跳过并说出口（照 iprecon.preflight）；产出进
+  osint 面（前缀 `osint:icp`）。**待主理人：指定接口或换机器**
+- [ ] **VirusTotal**：需 API key（免费 500/天）。配置：`virustotal.api_key` 进 keys.enc.yaml
+  （不落明文）+ `virustotal.enabled` 出厂关；用途＝域名/IP 信誉佐证（只读 GET）。
+  **待主理人给 key 再实现**
+- [ ] **四项目对比 T1–T12 排期**（结论在上级目录《四项目完整读码结论》《借鉴落地待办草案》）：
+  P0＝T1 软404补"无法判定"档（dirscan 字节补丁）/ T2 数据文件返回HTML判软404（is_uniform_block
+  同族纯函数）/ T3 子进程整组收割（Popen start_new_session + killpg，双平台）；
+  P1＝T4 外部引擎配额预检（照 iprecon.preflight）/ T5 证书 SAN 消费（过 auto_expand_block 三道闸）/
+  T6 参数化链接喂注入检查 / T7 无证据必 pending / T8 拦截 category 轴 / T9 同簇复核只避三坑 /
+  T10 IP→域名下钻链接 / T11 --dupes 组数截断可见；P2/P3 未展开
+- [ ] **对面 AI 新交材料的三个"待主理人点"问题**（《任务13-14-16预读结论》上级目录）：
+  ① 13 的 4 项"不能做"（弱口令/爆破/主机侧）是否放开 §1 非破坏性边界；② 反连平台（OOB）
+  要不要立项（卡 log4j2/shiro 反序列化/XXE 三行，多天且当前架构不可达）；
+  ③ 14 的 nuclei staging 方案（落点必须在 POC_DIRS 之外 + 生效永远人点）认不认，认了写成 T13
+- [ ] task_runs 表（追加/送探/自动递归逐次运行记录）——预览框已不依赖它，可缓
 - [ ] 四项目对比 T1–T12 汇入排期（结论在上级目录 `/opt/tools/ctf/`：《四项目完整读码结论-2026-10-15.md》
   《借鉴落地待办草案-2026-10-15.md》；用户 2026-10-15 已指明该位置）
 - [ ] 等主理人：备案反查接口、hostcollide 入口位置、virustotal 要不要做

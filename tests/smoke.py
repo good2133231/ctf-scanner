@@ -26262,6 +26262,54 @@ expression: r0()
     assert "加入黑名单（勾选行）" in _sub_html195, "子域名页的把加入黑名单入口弄丢了"
     print("[195a] 续195 ok: 送探域名落根任务（主域名任务找得到）+ 子任务名显主域名 + 302 带 #ext｜"
           "页签点击写 hash｜拓展页 bulkbar 只留送探（子域名页保留同款）｜变异：摘掉根行走链即红")
+    # ---------------- [196a] 续196：套娃改版（预览框 + 统一字号 + 接真数据） ----------------
+    # 主理人点单：点「子任务/统计」出预览框（modal）不要行内展开；子孙任务统一字号；
+    # 样式确认后接真数据（parent_id 递归 + 24-a 编号 + 全树汇聚去重）。
+    _r196 = db.create_task("smoke-196-root", "abcd.org", ["subdomain"], {"offline": True})
+    _c196 = db.create_task("smoke-196-child", "cdn.abcd.org", ["subdomain"],
+                              {"offline": True}, parent_id=_r196)
+    _g196 = db.create_task("smoke-196-grand", "x.abcd.org", ["probe"],
+                              {"offline": True}, parent_id=_c196)
+    # 汇聚去重夹具：同一个域名在两个任务里各有一条（去重后只算一次）
+    db.insert_subdomains(_r196, [("www.abcd.org", "passive"), ("api.abcd.org", "passive")])
+    db.insert_subdomains(_c196, [("cdn.abcd.org", "passive"), ("www.abcd.org", "passive")])
+    # ① subtrees 端点：从**孙任务**发起也展示整棵树；24-a 编号
+    _j196 = c.get(f"/api/tasks/{_g196}/subtasks").get_json()
+    assert _j196["ok"] and _j196["root"]["id"] == _r196, _j196
+    _labels196 = {n["id"]: n["label"] for n in _j196["nodes"]}
+    assert _labels196.get(_c196) == f"{_r196}-a", _labels196
+    assert _labels196.get(_g196) == f"{_r196}-a-1", _labels196
+    assert _j196["total"] == 2 and all(n["depth"] >= 1 for n in _j196["nodes"]), _j196["total"]
+    # ② stats 端点：跨任务去重（www.abcd.org 两条只算一次）+ 按来源任务拆分
+    _s196 = c.get(f"/api/tasks/{_g196}/stats").get_json()
+    assert _s196["ok"] and _s196["root"]["id"] == _r196, _s196
+    assert _s196["total_tasks"] == 3, _s196["total_tasks"]
+    _subrow196 = [r for r in _s196["rows"] if r["kind"] == "子域名"][0]
+    assert _subrow196["total"] == 3, \
+        f"跨任务去重坏了：www.abcd.org 在两个任务里都有，去重后该是 3（ Got {_subrow196['total']}）"
+    assert f"#{_r196}" in _subrow196["by_task"] and f"#{_c196}" in _subrow196["by_task"], \
+        _subrow196["by_task"]
+    # ③ 越权/不存在：404 且不泄露存在性
+    assert c.get("/api/tasks/99999999/subtasks").status_code == 404
+    assert c.get("/api/tasks/99999999/stats").status_code == 404
+    # ④ 前端形状：预览框骨架 + 按钮接 data-pv + 行内展开行删净 + 统一字号
+    _base196 = (ROOT / "gui" / "templates" / "base.html").read_text(encoding="utf-8")
+    assert 'id="pv-overlay"' in _base196 and 'id="pv-body"' in _base196
+    assert "lb-overlay" not in _base196, "旧灯箱骨架还在（预览框泛化没做彻底）"
+    _tk196 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8")
+    assert 'data-pv="subtasks"' in _tk196 and 'data-pv="stats"' in _tk196
+    assert "data-subrun-of" not in _tk196 and "data-allres-of" not in _tk196, \
+        "行内展开行没删净（主理人点单：不要展开）"
+    _css196 = (ROOT / "gui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert ".pv-body { font-size:13px" in _css196, "预览框没有统一字号（子孙任务会一个比一个小）"
+    _js196 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "function pvOpen" in _js196 and "function initTaskPreview" in _js196
+    assert "/api/tasks/" in _js196 and "subtasks" in _js196 and "stats" in _js196
+    # ⑤ 变异证伪：编号规则摘掉层间分隔（label 少了 -1）⇒ 上面那条必须红
+    assert _labels196.get(_g196) != f"{_r196}-a", "孙任务编号与子任务撞号"
+    print("[196a] 续196 套娃改版 ok: subtrees/stats 两端点（递归整树 + 24-a 编号 + 跨任务去重 + "
+          "404 不泄露）｜前端：pv-overlay 骨架、按钮 data-pv、行内展开删净、统一字号｜"
+          "变异：编号撞号即红")
     # ---------------- [192a] 续192（主理人点单）：送探域名本身进父任务子域名资产 ----------------
     # 主理人原话："这个拓展域名也自己变成这个主域名的子域名，以免获取不到这个子域名" ——
     # 拓展域名多半不在目标注册域里（promote_owned 收不进），不落一条衍生链就在父资产上断掉。
