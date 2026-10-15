@@ -3697,6 +3697,18 @@ def create_app():
         from_task = (request.form.get("task_id") or "").strip()
         if from_task.isdigit():          # 只收任务号，避免把任意文本写进任务选项
             options["rescan_of"] = int(from_task)
+        # 续192（主理人点单）：送探的域名**本身**也进父任务的子域名资产 —— 拓展域名多半
+        # 不在目标注册域里（promote_owned 判据收不进它），不落一条的话衍生链在父资产上断掉
+        # （父任务看不出来"这个域名是我派出去探的"）。source=ext:probed：
+        # NOT LIKE js:/osint: ⇒ 自动归 own 口径（与 collide: 同理，§5.14 那份判据不用动）。
+        # 去重是写方的责任（AGENTS §5.6）：先查本任务已有的，只插新的。
+        if from_task.isdigit() and domains:
+            _ft192 = int(from_task)
+            _have192 = {str(r["domain"]).lower() for r in
+                        db._query("SELECT domain FROM subdomains WHERE task_id=?", (_ft192,))}
+            _probe192 = [(d, "ext:probed") for d in domains if d.lower() not in _have192]
+            if _probe192:
+                db.insert_subdomains(_ft192, _probe192)
         # 登录态继承：新挖出的域名同样要用原来的会话去探（否则探到的是未登录视角）
         inherit = _source_auth(from_task, _owner_scope())
         if inherit:
