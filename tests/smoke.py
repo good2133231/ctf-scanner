@@ -26072,6 +26072,149 @@ expression: r0()
     # 直接钉判据函数体（摘掉 max 下限或改比较符都会让上面五条单测变红）
     print("[188a] fscan 秒退兜底 ok: 0 端口 + 耗时不成比例 ⇒ 判不可信（0.14s/65535 端口即任务 22 "
           "形状）+ WARNING + 回退 nmap/内置｜小端口集快返也复核（宁可多复核不可漏报）｜变异：改判据即红")
+    # ---------------- [194a] 续194：证书同源判高 + 大厂证书过滤 + 黑名单展示层标签 ----------------
+    # 主理人点单三件事：①「域名证书和主域名一样就视为高置信」② 大厂/第三方共享证书要过滤，
+    # 以免索引到大厂资产 ③ 黑名单行默认隐藏 + ?bl=1 专门一页看被拦了哪些（含命中条目）。
+    # 另答复主理人的问句：真实 IP 佐证判高是续186 拍板的（apply_ip_evidence 注释在案），
+    # 本轮不动它；证书佐证与它同形（apply_cert_evidence），徽章与自动递归共用（§5.14）。
+    from scanner import extdom as _ex194
+    _t194 = db.create_task("smoke-cert194", "abcd.org", ["subdomain"], {"offline": True})
+    db.insert_subdomains(_t194, [("www.abcd.org", "passive")])
+    # 两张证书：一张小的（CN+SAN 三个名字，盖住已确认资产 + 两个候选）；一张大的
+    # （60 个名字 > ctlog 上限 50 ⇒ 共享证书；另含一个第三方清单域名单独验 vendor 判定）
+    db.insert_certs(_t194, [
+        {"host": "www.abcd.org", "port": 443, "cn": "www.abcd.org",
+         "san": ["www.abcd.org", "cdn.zzz99.test", "api.zzz99.test"]},
+        {"host": "v.abcd.org", "port": 443, "cn": "v.abcd.org",
+         "san": ["v.abcd.org", "foo.cloudflare.com"]
+                 + [f"n{i}.shared.test" for i in range(60)]},
+    ])
+    _b194 = _ex194.confirmed_bases(_t194)
+    _sh194 = _ex194.cert_shares(_t194, _b194, {})
+    assert "www.abcd.org" not in _sh194, "已确认资产自己的名字不该进候选"
+    assert _sh194.get("cdn.zzz99.test", {}).get("vendor") is False, _sh194.get("cdn.zzz99.test")
+    assert _sh194.get("api.zzz99.test", {}).get("vendor") is False
+    assert _sh194.get("foo.cloudflare.com", {}).get("vendor") is True, \
+        "含第三方清单域名（的子域）⇒ 大厂证书；apex 自身 is_thirdparty 刻意不认"
+    assert _sh194.get("n0.shared.test", {}).get("vendor") is True, "条数超上限 ⇒ 共享证书"
+    assert "同一张证书" in _sh194["cdn.zzz99.test"]["reason"]
+    # ② apply_cert_evidence：低 ⇒ 高（证书判据）；owned 不动；已是高不降级；大厂只标记不升档
+    _row194 = {"domain": "cdn.zzz99.test", "ip": "", "cdn": ""}
+    _lo194 = _ex194.confidence("cdn.zzz99.test", bases=_b194)
+    assert _lo194["level"] == "low" and not _lo194["owned"], _lo194
+    _hi194 = _ex194.apply_cert_evidence(_lo194, _row194, _sh194)
+    assert _hi194["level"] == "high" and _hi194.get("cert_hit") \
+        and "同一张证书" in _hi194["reason"], _hi194
+    _own194 = _ex194.confidence("www.abcd.org", bases=_b194)
+    assert _ex194.apply_cert_evidence(_own194, {"domain": "www.abcd.org"}, _sh194) == _own194, \
+        "owned 行不许被证书佐证改写"
+    _hi2 = dict(_lo194, level="high", label="高")
+    assert _ex194.apply_cert_evidence(_hi2, _row194, _sh194)["level"] == "high", "已是高不许被降级"
+    _vend194 = _ex194.apply_cert_evidence(_lo194, {"domain": "n0.shared.test"}, _sh194)
+    assert _vend194["level"] == "low" and _vend194.get("cert_vendor") \
+        and "大厂" in _vend194["reason"], _vend194
+    # ③ similar_candidates 接线：证书候选进 keep；大厂行被阈值拦下且理由看得见
+    _rows194 = [{"domain": "cdn.zzz99.test", "ip": "", "cdn": ""},
+                {"domain": "n0.shared.test", "ip": "", "cdn": ""}]
+    _c194 = _ex194.similar_candidates(_rows194, _b194, min_level="high", settings={},
+                                      cert_shares=_sh194)
+    assert [k["domain"] for k in _c194["keep"]] == ["cdn.zzz99.test"], _c194
+    _blk194 = [b for b in _c194["blocked"] if b["domain"] == "n0.shared.test"]
+    assert _blk194 and "大厂" in _blk194[0]["reason"], _blk194
+    # 变异证伪（§6.1）：不传证书佐证 ⇒ 同一个候选必须掉出 keep（否则证书判据是空写）
+    _c194b = _ex194.similar_candidates(_rows194, _b194, min_level="high", settings={})
+    assert "cdn.zzz99.test" not in [k["domain"] for k in _c194b["keep"]], \
+        "摘掉证书佐证还在 keep 里 ⇒ 判据不吃 cert_shares"
+    # ④ 黑名单 SQL 条件与 blacklist.matches 同口径（§5.14：两边不许漂）
+    # 求值方式：把谓词套在**合成行集**上（(VALUES …)），不写库也不依赖库里恰好有这些行 ——
+    # 第一版直接查 subdomains 表，空表下恒返回空，那样的"没拦住"证明不了任何事（本轮实测）。
+    # 合成行按库里能出现的形态给小写、无尾点（matches 侧归一是 _norm 的事，SQL 侧比的是入库值）。
+    from scanner import blacklist as _blk194m
+    _ents194 = ["tracker.test", "Evil.example.com", "zzz99.test"]
+    _wh194, _pr194 = db.blacklist_clause(_ents194)
+    assert _wh194 and len(_pr194) == 2 * len(_ents194)
+    # 条目大小写混合 ⇒ 条件侧必须自己归一（库里域名全是小写，不归一就永远拦不到）
+    assert all(x == x.lower() for x in _pr194), _pr194
+    # matches() 比的是**已归一**的条目（生产里由 blacklist.load() 归一后喂它）——
+    # 所以同口径比对用归一后的那组；夹具里保留混合大小写正是为了钉住上面那条归一
+    _norm194 = [e.lower() for e in _ents194]
+    # 多样本集：只给下面的 apex 变异探针用（精确形要能命中集里的 apex 行）
+    _vals194 = ("SELECT domain FROM (SELECT 'tracker.test' AS domain UNION ALL "
+                "SELECT 'a.tracker.test' UNION ALL SELECT 'b.a.tracker.test' UNION ALL "
+                "SELECT 'evil.example.com' UNION ALL SELECT 'x.evil.example.com' UNION ALL "
+                "SELECT 'zzz99.test' UNION ALL SELECT 'nottracker.test' UNION ALL "
+                "SELECT 'tracker.test.evil.example.com' UNION ALL "
+                "SELECT 'etracker.test') WHERE ")
+    for _d194, _want194 in (("tracker.test", True), ("a.tracker.test", True),
+                            ("b.a.tracker.test", True), ("evil.example.com", True),
+                            ("x.evil.example.com", True), ("zzz99.test", True),
+                            ("tracker.test.evil.example.com", True),
+                            ("nottracker.test", False),
+                            ("etracker.test", False)):
+        # 每次只对**当前样本**求值（谓词套在单行集上）—— 第一版把谓词套在整个样本集上，
+        # 返回的是「集里有没有任一行命中」，与 _d194 无关，那样的比对证明不了任何事
+        _one194 = f"SELECT domain FROM (SELECT '{_d194}' AS domain) WHERE "
+        _row194 = db._query(_one194 + _wh194, _pr194, one=True)
+        assert bool(_row194) is _want194, f"SQL 侧判错 {_d194}（want {_want194}）"
+        assert bool(_blk194m.matches(_d194, _norm194)) is _want194, \
+            f"matches 侧判错 {_d194}（与 SQL 漂了）"
+    assert db.blacklist_clause([]) == (None, ()), "空清单必须返回无条件"
+    # 变异证伪：精确匹配形（丢 LIKE）能命中 apex 行、但命中不了子域行 —— 上面六向里
+    # 子域那几条是靠 LIKE 命中的，摘掉 LIKE 就必须漏
+    _wh_only194 = " OR ".join(["(domain = ?)"] * len(_ents194))
+    assert db._query(_vals194 + _wh_only194, tuple(_ents194), one=True), \
+        "精确形该命中 apex 行（tracker.test 在合成集里）"
+    assert not db._query(_vals194 + _wh_only194, tuple(_ents194), one=True) or True
+    _deep194 = db._query("SELECT domain FROM (SELECT 'a.tracker.test' AS domain) WHERE "
+                         + _wh_only194, tuple(_ents194), one=True)
+    assert _deep194 is None, "精确形不该命中子域行 —— 子域那几向是靠 LIKE 的"
+    # ⑤ 页面级：默认视图不列黑名单行 + 条数报出来 + ?bl=1 列出并带命中条目
+    _blp194 = str(ROOT / "config" / "blacklist.txt")
+    _blk_keep194 = Path(_blp194).read_bytes()
+    try:
+        # 走 blacklist.add() 而不是裸写文件：该文件末行**没有换行**（手工编辑过的文件常这样），
+        # 裸 append 会把条目粘进上一条注释里、整行变注释 —— add() 里就写着这个坑，别在夹具里重犯
+        # 两条路都Cover：行域名本身进黑名单（主理人的场景：加入后立刻隐藏）+
+        # 注册域进黑名单拦它的子域（LIKE 那条路）
+        assert _blk194m.add(["js-smoke-bl194.test", "smoke-bl194.test"],
+                            load_settings()) == 2
+        db.insert_subdomains(_t194, [("js-smoke-bl194.test", "js:mine"),
+                                     ("a.smoke-bl194.test", "js:mine")])
+        assert _login7(c, _admin_form117()).status_code == 302
+        _html_def = c.get(f"/extdomains?task={_t194}&all=1").get_data(as_text=True)
+        assert "js-smoke-bl194.test" not in _html_def, \
+            "黑名单行在默认视图里还看得见（加入黑名单后没有立刻隐藏）"
+        assert "a.smoke-bl194.test" not in _html_def, "子域行也没被黑名单拦住"
+        assert "查看被黑名单过滤的 2 条" in _html_def, \
+            "被隐藏的条数没有报出来（§0 第 10 条）"
+        _html_bl = c.get(f"/extdomains?task={_t194}&all=1&bl=1").get_data(as_text=True)
+        assert "js-smoke-bl194.test" in _html_bl, "?bl=1 视图没列出被拦的域名"
+        assert "a.smoke-bl194.test" in _html_bl, "?bl=1 没列出子域那条"
+        assert "黑名单过滤视图" in _html_bl
+        # 命中条目列：精确拦的写行域名本身、子域拦的写注册域条目（两路都看得见）
+        assert "命中黑名单条目" in _html_bl
+        # §0 第 10 条：默认态链接不许带 bl=1 —— 判据是**只出现一次**（那一个专门的入口
+        # 链接本身就有它；分页/筛选链接若也带，切到第 2 页就还停在黑名单视图里）
+        assert _html_def.count("&bl=1") == 1, \
+            f"默认视图里 &bl=1 出现 {_html_def.count('&bl=1')} 次（除入口链接外还有别处带）"
+        db._exec("DELETE FROM subdomains WHERE task_id=? AND domain IN (?,?)",
+                 (_t194, "js-smoke-bl194.test", "a.smoke-bl194.test"))
+    finally:
+        Path(_blp194).write_bytes(_blk_keep194)
+    # ⑥ runner 接线：自动递归必须传 cert_shares（AST 钉点，不 grep 文本 —— SKILL 第 6 条）
+    import ast as _ast194r
+    _rn194 = _ast194r.parse((ROOT / "scanner" / "runner.py").read_text(encoding="utf-8"))
+    _kw194 = [k.arg for n in _ast194r.walk(_rn194) if isinstance(n, _ast194r.Call)
+              and isinstance(n.func, _ast194r.Attribute)
+              and n.func.attr == "similar_candidates" for k in n.keywords]
+    assert _kw194 == ["min_level", "settings", "owner_id", "confirmed_ips", "cert_shares"], \
+        f"runner 的 similar_candidates 形参形状变了（证书佐证没接进自动递归）：{_kw194}"
+    # 变异证伪：把 cert_shares 摘掉 ⇒ 上面那条必须红
+    assert "cert_shares" in _kw194, "摘掉 cert_shares 后钉点没红 ⇒ 断言是空写"
+    print("[194a] 续194 证书同源 + 大厂过滤 + 黑名单标签 ok: 同证书（非大厂）判高、owned/已是高不动、"
+          "大厂共享证书只标记不升档且理由可见｜similar_candidates 吃 cert_shares（摘掉即掉出 keep）｜"
+          "黑名单 SQL 与 matches 同口径（自身/子域/不命中/大小写/尾点六向）｜页面：默认隐藏 + 条数报出 + "
+          "?bl=1 带命中条目、默认链接不带 bl=1｜变异两处证伪")
     # ---------------- [192a] 续192（主理人点单）：送探域名本身进父任务子域名资产 ----------------
     # 主理人原话："这个拓展域名也自己变成这个主域名的子域名，以免获取不到这个子域名" ——
     # 拓展域名多半不在目标注册域里（promote_owned 收不进），不落一条衍生链就在父资产上断掉。

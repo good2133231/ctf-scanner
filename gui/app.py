@@ -2680,16 +2680,22 @@ def create_app():
             key = int(tid) if tid is not None else int(r.get("task_id") or 0)
             if key not in cache:
                 try:
-                    cache[key] = (extdom.confirmed_bases(key),
-                                  extdom.confirmed_ip_map(key))
+                    _b194 = extdom.confirmed_bases(key)
+                    cache[key] = (_b194,
+                                  extdom.confirmed_ip_map(key),
+                                  # 续194：证书同源佐证（含大厂证书标记）—— 判据只在
+                                  # extdom.cert_shares / apply_cert_evidence 一处（§5.14）
+                                  extdom.cert_shares(key, _b194, load_settings()))
                 except Exception as exc:      # 老库/坏任务不许把整页带倒：无从比对就如实给低档
                     logger.warning(f"[extdom] 取 #{key} 的已确认资产失败，置信度按无对照算：{exc}")
-                    cache[key] = (set(), {})
-            _bases, _ips = cache[key]
+                    cache[key] = (set(), {}, {})
+            _bases, _ips, _shares = cache[key]
             # 续179：徽章与自动递归吃同一份结论（含 IP 佐证）—— 判据只在
-            # extdom.apply_ip_evidence 一处（§5.14）。
-            r["conf"] = extdom.apply_ip_evidence(
-                extdom.confidence(r.get("domain") or "", bases=_bases), r, _ips)
+            # extdom.apply_ip_evidence 一处（§5.14）；续194 再并进证书佐证（同形）。
+            r["conf"] = extdom.apply_cert_evidence(
+                extdom.apply_ip_evidence(
+                    extdom.confidence(r.get("domain") or "", bases=_bases), r, _ips),
+                r, _shares)
         return rows
 
     def _overlap_args():
@@ -2913,6 +2919,8 @@ def create_app():
         域名往往几十上百个同属一个主域名，摊平成一张长表看不出"这批是从哪个域来的"。
         分组必须按**组**分页才能不把同一个主域名切到两页上，所以分组模式下分页的
         单位是"主域名"而不是"行"。`?group=0` 回到原来的平铺表。
+        续194：黑名单命中的行**默认隐藏**（加入黑名单后立刻看不见），条数报在页面上，
+        `?bl=1` 是一页专门的「被黑名单拦了哪些」（含命中条目，固定平铺）。
         """
         src = (request.args.get("src") or "").strip().lower()
         picked = next((t for t in EXT_SRC_TAGS if t[0] == src), None)
@@ -2931,7 +2939,28 @@ def create_app():
         params = params + tp
         base_where = _and_where(db.EXT_SUBDOMAIN_WHERE, where, src_where,
                                 None if show_all else db.OVERLAP_EXT_WHERE, tw)
-        ext_where = _and_where(base_where, res_where)
+        bl_view = request.args.get("bl") == "1"      # 续194：黑名单专门视图（?bl=1）
+        # 续194：黑名单视图**不再叠**「只看解析成功」那层默认收起 —— 那一页的用途就是看
+        # 都被拦了哪些，再叠一层会出现「计数说有 N 条、翻遍视图找不到」（§0 第 10 条同族）
+        ext_where = _and_where(base_where, None if bl_view else res_where)
+        # 续194（主理人点单）：黑名单行**默认隐藏**（页面上勾选加入黑名单后立刻看不见），
+        # 但被隐藏的条数必须报出来，且 `?bl=1` 是一页专门的「被黑名单拦了哪些」——
+        # §0 第 10 条：展示层过滤 ≠ 删数据，入库一条没动。SQL 条件走
+        # `db.blacklist_clause`（与 `blacklist.matches` 同口径，门禁 [194a] 钉住一致）。
+        _bl_entries = blacklist.load(load_settings(), owner_id=_owner_scope())
+        _bl_where, _bl_params = db.blacklist_clause(_bl_entries)
+        bl_hidden = 0
+        if _bl_where and not bl_view:
+            _blc = db._query("SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE "
+                             + _and_where(base_where, _bl_where),
+                             tuple(params + _bl_params), one=True)
+            bl_hidden = int(_blc["c"] or 0) if _blc else 0
+        q_where, q_params = ext_where, params
+        if _bl_where:
+            q_where = _and_where(ext_where, _bl_where if bl_view else f"NOT {_bl_where}")
+            q_params = params + _bl_params
+        if bl_view:
+            grouped = False          # 黑名单视图固定平铺（分组是另一种视图，不叠加）
         # 分组模式下 `size` 的含义变成"每页多少个主域名"：翻页链接与分页条必须同一个口径，
         # 否则链接里会出现两个 `size=`（Flask 取第一个，页面显示的却是第二个）。
         if grouped:
@@ -2946,12 +2975,12 @@ def create_app():
             qs += f"&task={tid}"
         if not grouped:
             qs += "&group=0"
-        row_total, groups, hidden = 0, [], 0
+        row_total, groups, hidden, bl_hits = 0, [], 0, {}
         if grouped:
             # 分组必须在 Python 里做（SQLite 没有"注册域"函数），但**不设行数上限** ——
             # 旧实现的 `GROUP_ROW_CAP=4000` 会让第 4001 行起的主域名组在任何一页都看不到
             # （静默丢资产），理由与取舍见 `extdom.group_page()`。
-            gp = extdom.group_page(q=q, extra_where=ext_where, extra_params=params,
+            gp = extdom.group_page(q=q, extra_where=q_where, extra_params=q_params,
                                    page=page, per_page=EXT_GROUPS_PER_PAGE,
                                    order=EXT_SRC_ORDER, dedupe_domain=True)
             groups, page = gp["groups"], gp["page"]
@@ -2970,12 +2999,17 @@ def create_app():
             _nores_state(pager, hide_res, hidden)
         else:
             subs, pager, q = _asset_page(
-                "subdomains", "/extdomains", extra_where=ext_where,
-                extra_params=params, order=EXT_SRC_ORDER, dedupe_domain=True)
-            pager["qs"] = qs
+                "subdomains", "/extdomains", extra_where=q_where,
+                extra_params=q_params, order=EXT_SRC_ORDER, dedupe_domain=True)
+            pager["qs"] = qs + ("&bl=1" if bl_view else "")
             row_total = pager["total"]
             subs, hidden = _sub_rows(subs, base_where, params, hide_res)
             _ext_confidence(subs)               # 续169：平铺视图也要贴（两种视图一边有一边没有＝假徽章）
+            if bl_view:
+                # 每条被拦的行写清「命中的是哪个黑名单条目」—— 只报条数不说条目，
+                # 用户没法判断拦得对不对（续194）
+                bl_hits = {str(r["domain"]): e for r in subs
+                           for e in [blacklist.matches(str(r["domain"] or ""), _bl_entries)] if e}
             _nores_state(pager, hide_res, hidden)
         # 续178（用户点单"js挖掘后面再加一个(挖掘js数量:)"）：来源分类**各项都带条数**。
         # 口径与"全部"视图一致：tag / 任务 / 重叠 / 解析筛选照 base_where + res_where，
@@ -3038,7 +3072,8 @@ def create_app():
                                secrets=_secret_counts(),
                                src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name,
                                src_counts=src_counts,
-                               probe_map=probe_map, group_probes=group_probes)
+                               probe_map=probe_map, group_probes=group_probes,
+                               bl_view=bl_view, bl_hidden=bl_hidden, bl_hits=bl_hits)
 
     @app.route("/sites")
     @login_required

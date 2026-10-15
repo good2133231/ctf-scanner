@@ -335,8 +335,145 @@ def apply_ip_evidence(conf, row, confirmed_ips):
     return out
 
 
+def _cert_names(row):
+    """一张证书覆盖的名字集合：CN + SAN（小写、去空白、去首尾点）。"""
+    out = set()
+    for raw in (str(row.get("cn") or ""), str(row.get("san") or "")):
+        for part in raw.replace(",", " ").replace(";", " ").split():
+            p = part.strip().lower().strip(".")
+            if p:
+                out.add(p)
+    return out
+
+
+def _cert_covers(names, host):
+    """`host` 是否被这张证书覆盖：精确命中，或 `*.foo.com` 通配命中它的子域。"""
+    h = str(host or "").lower().strip(".")
+    if not h or not names:
+        return False
+    if h in names:
+        return True
+    return any(n.startswith("*.") and h.endswith(n[1:]) for n in names)
+
+
+def _cert_covers_zone(names, base):
+    """证书是否属于 `base` 这个**注册域**的地盘：名字等于它、落在它下面，或 `*.它`。
+
+    与 `_cert_covers` 的分工：后者判「某个具体主机被不被这张证书盖住」（候选域名用），
+    本函数判「这张证书是不是 base 这一家的」（对照已确认资产用）—— 证书名字是主机名
+    （`v.abcd.org`），而已确认资产那一层是注册域（`abcd.org`），精确相等永远不中，
+    续194 第一版就栽在这：整张证书判不出"属于谁"，候选全丢。
+    """
+    b = str(base or "").lower().strip(".")
+    if not b or not names:
+        return False
+    for n in names:
+        n2 = n[2:] if n.startswith("*.") else n
+        if n2 == b or n2.endswith("." + b):
+            return True
+    return False
+
+
+def cert_shares(task_id, bases, settings=None):
+    """本任务证书里「与已确认资产同证书」的名字 → `{名字: {reason, vendor, bases}}`（续194）。
+
+    主理人点单：「域名证书和主域名一样就视为高置信」—— 某张证书的名字集合（CN+SAN）
+    同时覆盖一个已确认资产（`bases` 里的注册域或其子域）和这个拓展域名，即同一张证书。
+    页面徽章（`_ext_confidence`）与自动递归（`similar_candidates`）共用本函数与其下游
+    `apply_cert_evidence`（§5.14 一处产地）。
+
+    **大厂/第三方共享证书不作数**（`vendor=True`）：SAN 条数超过
+    `ctlog.max_domains_per_cert()`（一张证书盖太多互不相关的域名＝共享证书），或任一名字
+    命中第三方清单（`jsmine.is_thirdparty`）—— 拿它当归属证据就会把大厂资产索引进来
+    （用户原话：「以免索引到大厂资产」）。已知边界：`sni.cloudflaressl.com` 这类形态不在
+    第三方清单里，靠条数上限兜（诚实记录，见 AGENTS §7）。
+    """
+    from . import ctlog                      # 延迟导入：ctlog 反向依赖本模块
+    from .jsmine import is_thirdparty
+    try:
+        cap = ctlog.max_domains_per_cert(settings)
+    except Exception:
+        cap = ctlog.DEFAULT_MAX_DOMAINS_PER_CERT
+    out = {}
+    bl = [str(b or "").lower().strip(".") for b in (bases or ())]
+    bl = [b for b in bl if b]
+    if not bl:
+        return out
+    for r in db._query("SELECT host, cn, san FROM certs WHERE task_id=?",
+                       (int(task_id or 0),)):
+        names = _cert_names(dict(r))      # db._query 回的是 sqlite3.Row，没有 .get
+        if not names:
+            continue
+        covered = [b for b in bl if _cert_covers_zone(names, b)]
+        if not covered:
+            continue
+        vendor = len(names) > cap or any(is_thirdparty(n) for n in names)
+        why_vendor = (f"该证书盖了 {len(names)} 个名字（上限 {cap}）" if len(names) > cap
+                      else "该证书含第三方清单域名")
+        for n in sorted(names):
+            if any(n == b or n.endswith("." + b) for b in covered):
+                continue          # 已确认资产自己的名字不当候选
+            if vendor:
+                reason = (f"与已确认资产 {covered[0]} 签在同一张证书里，但{why_vendor}"
+                          "——大厂/第三方共享证书不作归属证据，以免索引到大厂资产（续194）")
+            else:
+                reason = (f"与已确认资产 {covered[0]} 签在同一张证书里"
+                          f"（CN+SAN 共 {len(names)} 个名字）——同一张证书，判高（续194）")
+            out[n] = {"reason": reason, "vendor": vendor, "bases": covered}
+    return out
+
+
+def _cert_lookup(shares, dom):
+    """按域名取证书佐证：精确命中，或 `*.` 通配键覆盖（与 `_cert_covers` 同口径）。"""
+    if not shares:
+        return None
+    d = str(dom or "").lower().strip(".")
+    if not d:
+        return None
+    hit = shares.get(d)
+    if hit:
+        return hit
+    for k, v in shares.items():
+        if k.startswith("*.") and d.endswith(k[1:]):
+            return v
+    return None
+
+
+def cert_evidence(row, shares):
+    """这一行有没有「与已确认资产同证书」的佐证 → 理由文本（空串＝没有）。"""
+    dom = str((row.get("domain") if isinstance(row, dict) else "") or "")
+    hit = _cert_lookup(shares, dom)
+    return hit["reason"] if hit else ""
+
+
+def apply_cert_evidence(conf, row, shares):
+    """证书佐证并进置信度（续194）：非大厂的同证书 ⇒ 判高；大厂共享证书 ⇒ 不作数并标记。
+
+    与 `apply_ip_evidence` 同形同职责：`_ext_confidence`（页面徽章）与
+    `similar_candidates`（自动递归）共用本函数（§5.14）。边界：owned 行不动；已是高的行
+    不降级，只补 `cert_hit` 标记；大厂证书行打 `cert_vendor` 标记并把原因并进理由
+    （页面与自动递归的 blocked 理由都看得见），**不**凭它升档。
+    """
+    if conf.get("owned"):
+        return conf
+    hit = _cert_lookup(shares, str((row.get("domain") if isinstance(row, dict) else "") or ""))
+    if not hit:
+        return conf
+    out = dict(conf)
+    if hit["vendor"]:
+        out["cert_vendor"] = True
+        prev = out.get("reason") or ""
+        out["reason"] = (prev + "；" + hit["reason"]) if prev else hit["reason"]
+        return out
+    out["cert_hit"] = True
+    if conf_rank(out.get("level") or "low") < conf_rank("high"):
+        out.update({"level": "high", "label": conf_label("high"),
+                    "reason": hit["reason"], "near": ""})
+    return out
+
+
 def similar_candidates(rows, bases, min_level=CONF_DEFAULT, settings=None, owner_id=0,
-                       confirmed_ips=None):
+                       confirmed_ips=None, cert_shares=None):
     """从拓展域名行里挑「够得上阈值、且没被三道闸拦下」的那批 → `[{domain, level, reason, blocked}]`。
 
     `rows` 由调用方给（`ext_rows(task_id)` 那批），本函数**不发任何请求、不写库**，
@@ -346,6 +483,8 @@ def similar_candidates(rows, bases, min_level=CONF_DEFAULT, settings=None, owner
 
     `confirmed_ips`（续179）：`confirmed_ip_map()` 那份 `IP → 域名`；给了它，低相似但
     与非 CDN 已确认子域同 IP 的行按「中」算（`apply_ip_evidence`，与页面徽章同一份判据）。
+    `cert_shares`（续194）：`cert_shares()` 那份 `名字 → {reason, vendor}`；给了它，与已确认
+    资产同证书的行判高（大厂/第三方共享证书只标记不升档，见 `apply_cert_evidence`）。
     """
     floor = conf_rank(min_level)
     keep, blocked = [], []
@@ -353,8 +492,10 @@ def similar_candidates(rows, bases, min_level=CONF_DEFAULT, settings=None, owner
         d = _norm(r.get("domain") if isinstance(r, dict) else r)
         if not d:
             continue
-        conf = apply_ip_evidence(confidence(d, bases=bases),
-                                 r if isinstance(r, dict) else {}, confirmed_ips)
+        conf = apply_cert_evidence(
+            apply_ip_evidence(confidence(d, bases=bases),
+                              r if isinstance(r, dict) else {}, confirmed_ips),
+            r if isinstance(r, dict) else {}, cert_shares)
         why = auto_expand_block(d, settings=settings, owner_id=owner_id,
                                 cdn_label=(r.get("cdn") if isinstance(r, dict) else ""))
         if not why and conf_rank(conf["level"]) >= floor and not conf["owned"]:

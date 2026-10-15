@@ -408,11 +408,16 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
     min_conf = resolve_ext_confidence(options, ctx.settings)
     similar, sim_blocked = [], 0
     try:
+        _bases194 = extdom.confirmed_bases(task_id)
         cand = extdom.similar_candidates(extdom.ext_rows(task_id),
-                                         extdom.confirmed_bases(task_id),
+                                         _bases194,
                                          min_level=min_conf, settings=ctx.settings,
                                          owner_id=extdom.owner_of(task_id),
-                                         confirmed_ips=extdom.confirmed_ip_map(task_id))
+                                         confirmed_ips=extdom.confirmed_ip_map(task_id),
+                                         # 续194：证书同源佐证 —— 与页面徽章（_ext_confidence）
+                                         # 同一份判据，只此一处接线（§5.14）
+                                         cert_shares=extdom.cert_shares(
+                                             task_id, _bases194, ctx.settings))
         similar = [c["domain"] for c in cand["keep"]]
         sim_blocked = len(cand["blocked"])
         for c in cand["keep"][:5]:      # 逐条说依据，但只说前 5 条（一屏读得完）

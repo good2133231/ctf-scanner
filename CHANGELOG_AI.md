@@ -3,6 +3,31 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续194（2026-10-15，WorkBuddy · CodeBuddy）：证书同源判高 + 大厂证书过滤 + 黑名单标签页（拓展域名）
+
+- 主理人点单（拓展域名三件事）：①「域名证书和主域名一样就视为高置信」——
+  `extdom.cert_shares()` 从 `certs` 表的 CN+SAN 找「同时覆盖已确认资产与候选域名」的证书，
+  `apply_cert_evidence()` 把它并进置信度（低⇒高）；页面徽章（`_ext_confidence`）与自动递归
+  （`similar_candidates`）共用同一函数（§5.14）。② 大厂/第三方共享证书**不作归属证据**：
+  SAN 条数超 `ctlog.max_domains_per_cert()`（默认 50）或名字命中第三方清单 ⇒ 只打
+  `cert_vendor` 标记、不升档，理由写进页面与 blocked（用户原话「以免索引到大厂资产」）。
+  已知边界：`sni.cloudflaressl.com` 这类形态不在第三方清单里，靠条数上限兜（AGENTS §7 已记）。
+  ③ 黑名单行**默认隐藏**：`db.blacklist_clause()`（与 `blacklist.matches` 同口径，门禁六向样本
+  钉住）进 `/extdomains` 的 where；勾选加入黑名单后立刻看不见，条数报在页面上，`?bl=1`
+  是专门的「被黑名单拦了哪些」视图（固定平铺、每条写清命中条目、默认链接不带 bl=1）。
+- 另答复主理人问句「真实 IP 是不是也设成高置信了」：是——续186 拍板，
+  `apply_ip_evidence` 注释在案，本轮未动；证书佐证与它同形同职责。
+- 门禁：wire62–74 十三轮返工后绿（wire74 SMOKE PASS，199 组）。返工原因逐条记（都进了
+  本节踩坑）：① `db._query` 回 `sqlite3.Row` 没有 `.get`（cert_shares 首版崩）；
+  ② 夹具把 `cdn.cloudflare.com`（清单 apex）当第三方样本，而 `is_thirdparty` 刻意不认
+  apex 自身；③ 证书名是主机名、对照层是注册域，精确相等永远不中（补 `_cert_covers_zone`）；
+  ④ 谓词套在空 `subdomains` 表上恒空、套在多样本集上又与当前样本无关（改单样本行集求值）；
+  ⑤ 黑名单是「条目＋其子域」，`js-x.test` 不是 `x.test` 的子域（连字符兄弟）；
+  ⑥ `_login7` 要 (client, data) 两个参数；⑦ `(VALUES …) AS t(d)` 这个 SQLite 不认，
+  且列名得叫 `domain` 才与谓词对得上；⑧ **`read_text`+`write_text` 又一次把混排文件洗成
+  LF**（同一个坑续193 栽过一次，本轮 heredoc 里再犯——已 git 恢复 + 字节级重插，内容
+  逐行比对一致）。
+
 ## 续193（2026-10-15，WorkBuddy · CodeBuddy）：控制台路径开发期写死 + [192a] 抗漂移 + 门禁黑名单不变量
 
 - 主理人点单原话：「并且你先把控制台路径先写死 就是固定随机值 等开发完了再随机 也就是现在让我每次

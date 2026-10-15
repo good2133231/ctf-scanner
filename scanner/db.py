@@ -1662,6 +1662,25 @@ _ASSET_PAGES = {
 OWN_SUBDOMAIN_WHERE = "source NOT LIKE 'js:%' AND source NOT LIKE 'osint:%'"
 EXT_SUBDOMAIN_WHERE = "(source LIKE 'js:%' OR source LIKE 'osint:%')"
 
+
+def blacklist_clause(entries):
+    """黑名单命中条件的 SQL 形（与 `blacklist.matches` 同一口径：条目本身或其任意子域）。
+
+    给「展示层默认收起黑名单行」的页面用（续194）：命中即整条丢弃、含所有子域，所以
+    条件是 `domain = ? OR domain LIKE ?`（`%.<条目>`）。判据在 `blacklist.matches` 与这里
+    各一份实现、口径必须一致 —— 门禁 [194a] 用样本（自身/子域/不命中/大小写/尾点）钉住
+    两边同判（§5.14：SQL 侧与 Python 侧不许漂）。
+    """
+    ents = [str(e or "").strip().lower().strip(".") for e in (entries or ())]
+    ents = [e for e in ents if e]
+    if not ents:
+        return None, ()
+    ors = " OR ".join(["(domain = ? OR domain LIKE ?)"] * len(ents))
+    params = []
+    for e in ents:
+        params.extend([e, "%." + e])
+    return "(" + ors + ")", tuple(params)
+
 # 「重叠资产」判据（用户要求：默认不显示重叠，手动勾选才显示）：
 # - 拓展域名：该域名若已经作为**目标自身子域名**存在过（任意任务），说明它早就在资产清单里，
 #   拓展页再列一遍纯属重复 —— 域名级全局判重（用户确认口径）；

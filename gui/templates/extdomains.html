@@ -84,6 +84,12 @@
     {% if tag %}<a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep_src }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">全部</a>{% endif %}
   </p>
   {% set keep = keep_src + keep_tag %}
+  {# 续194（主理人点单）：黑名单行默认隐藏 + 专门一页看被拦了哪些；默认态链接不带 bl=1 #}
+  <p class="muted small">黑名单：命中的行<b>默认隐藏</b>（在页面上勾选、点「加入黑名单」后立刻看不见；
+    入库一条没动，只是本页不列）。
+    {% if bl_hidden %}<a class="btn-mini ghost" title="专门一页看当前筛选下都被黑名单拦了哪些（含命中条目）"
+      href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}&bl=1">查看被黑名单过滤的 {{ bl_hidden }} 条</a>
+    {% else %}当前筛选下没有被黑名单过滤的行。{% endif %}</p>
   <p class="muted small">重叠资产：<b>该域名已作为「目标自身子域名」出现在任意任务里</b>（域名级全局判重），
     说明它早就在资产清单里，这里再列一遍纯属重复，所以<b>默认隐藏</b>。
     {% if show_all %}
@@ -143,7 +149,7 @@
           <option value="{{ d }}" {{ 'selected' if d == (ext_defaults.ext_depth or 1) }}>{{ d }}</option>
           {% endfor %}
         </select></label>
-      <label class="muted" title="只有「多大把握是自家资产」达到这一档的拓展域名才会被自动带进下一层（高＝主标签与已确认资产只差 ≤2 步，例：目标 abcd.org 拓展出 abdc.com）。第三方清单 / CDN / 黑名单命中的无论哪一档都不自动扫；判据只有 scanner/extdom.py::confidence() 那一份">
+      <label class="muted" title="只有「多大把握是自家资产」达到这一档的拓展域名才会被自动带进下一层（高＝主标签与已确认资产只差 ≤2 步，例：目标 abcd.org 拓展出 abdc.com；或与主域名签在同一张证书里 —— 大厂/第三方共享证书除外，续194）。第三方清单 / CDN / 黑名单命中的无论哪一档都不自动扫；判据只有 scanner/extdom.py::confidence() 那一份">
         自动递归置信度阈值
         <select name="ext_min_conf">
           {% for lv, lab in [("high", "高"), ("medium", "中"), ("low", "低")] %}
@@ -164,7 +170,30 @@
         批量跑子域名会新建一个只跑 subdomain 阶段的任务，名称默认
         <span class="mono">{{ scan_name }}-月日-时分秒</span>。</span>
     </div>
-    {% if grouped %}
+    {% if bl_view %}
+      {# 续194：黑名单过滤视图（默认不显示，?bl=1 才进来）—— 固定平铺，每条写清命中哪个条目 #}
+      <p class="muted small">黑名单过滤视图：下面是当前筛选下被黑名单拦下的拓展域名（入库一条没动，
+        只是默认不列）。每条都写清命中的是哪个黑名单条目。
+        <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">返回默认视图</a></p>
+      <table id="tbl-bl">
+        <thead><tr><th>#</th><th>任务</th><th>域名</th><th>命中黑名单条目</th>
+          <th>来源</th><th>解析 IP</th></tr></thead>
+        <tbody>
+          {% for s in subs %}
+          <tr>
+            <td>{{ s.id }}</td>
+            <td><a href="{{ url_for('task_detail', task_id=s.task_id) }}">#{{ s.task_id }}</a></td>
+            <td class="mono">{{ idn_display(s.domain) }}</td>
+            <td class="mono">{{ bl_hits.get(s.domain) or '-' }}</td>
+            <td class="muted">{{ source_label(s.source) }}</td>
+            <td class="muted small mono">{{ s.ip or '-' }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="muted">当前筛选下没有被黑名单过滤的域名。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% elif grouped %}
       {% if not groups %}
         <p class="muted">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</p>
       {% else %}
