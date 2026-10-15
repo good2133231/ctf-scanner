@@ -26064,7 +26064,8 @@ expression: r0()
     _l192 = [(n.lineno, getattr(n.func, "attr", "")) for n in _ast192.walk(_t192)
              if isinstance(n, _ast192.Call) and isinstance(n.func, _ast192.Attribute)
              and getattr(n.func, "attr", "") in ("insert_subdomains", "record_ext_probes")]
-    _ins192 = min(ln for ln, a in _l192 if a == "insert_subdomains" and ln < 3800)
+    _ins192 = min(ln for ln, a in _l192 if a == "insert_subdomains" and 3600 < ln < 3800)
+    _rec192 = min(ln for ln, a in _l192 if a == "record_ext_probes" and 3600 < ln < 3800)
     _rec192 = min(ln for ln, a in _l192 if a == "record_ext_probes" and 3600 < ln < 3800)
     assert _ins192 < _rec192, f"ext:probed 落库必须先于送探记录：{_ins192} vs {_rec192}"
     # 变异证伪（§6.1）：把 source 换回 promote: 前缀语义（只收归属）⇒ 非归属域名断链 ⇒ 钉点文案红
