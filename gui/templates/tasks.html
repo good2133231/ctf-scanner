@@ -151,10 +151,16 @@
         <td>{% if t.parent_id %}<span class="muted small">└ </span>{% endif %}{{ t.name }}
           {% if t.parent_id %}<a class="badge" href="{{ url_for('task_detail', task_id=t.parent_id) }}"
             title="续185：这是任务 #{{ t.parent_id }} 的子任务（拓展域名送去探测发起）">子任务 · 父 #{{ t.parent_id }}</a>{% endif %}
-          <button type="button" class="btn-mini ghost"
+          <button type="button" class="btn-mini ghost btn-xs"
             title="展开本任务名下的子任务/子运行（模拟样式）"
             onclick="var r=document.querySelector('tr[data-subrun-of=&quot;{{ t.id }}&quot;]'); r.hidden=!r.hidden;"
             >子任务</button>
+          <button type="button" class="btn-mini ghost btn-xs"
+            title="把本任务整棵衍生树（父+子+孙）的资产汇聚成一个视图（模拟样式）"
+            onclick="var r=document.querySelector('tr[data-allres-of=&quot;{{ t.id }}&quot;]'); r.hidden=!r.hidden;"
+            >统计</button>
+
+
 </td>
 
 
@@ -163,7 +169,8 @@
         </td>
         <td class="muted small">站点: {{ counts[t.id].sites }}<br>子域名: {{ counts[t.id].subs_own }}<br>漏洞: {{ counts[t.id].vulns }}<br>拓展: {{ counts[t.id].subs_ext }}</td>
 
-        <td class="muted small"><button type="button" class="btn-mini ghost" onclick="var s=this.nextElementSibling; s.hidden=!s.hidden;">阶段</button><span class="mono" hidden style="display:block;margin-top:2px;white-space:normal">{{ t.stages }}</span></td>
+        <td class="muted small"><button type="button" class="btn-mini ghost btn-xs" onclick="var s=this.nextElementSibling; s.style.display=(s.style.display==='block')?'none':'block';">阶段</button><span class="mono" style="display:none;margin-top:2px;white-space:normal">{{ t.stages }}</span>
+</td>
 
 
         <td><span class="badge st-{{ t.status }}">{{ '排队中' if t.status == 'queued' else t.status }}</span>
@@ -174,6 +181,7 @@
            运行中会显示「运行中，已 X」，被强杀未对账会标注「尾段未计入」，老任务显示 `-` #}
         <td class="muted small">{{ durations[t.id] }}</td>
         <td class="ops">
+          <div class="ops-row">
           <a class="btn-mini" href="{{ url_for('task_detail', task_id=t.id) }}"
             title="看单个任务点任务号；这里看的是整棵衍生树的汇聚（模拟样式）">查看全结果</a>
           <button class="btn-mini ghost" data-op="stop" data-id="{{ t.id }}"
@@ -183,6 +191,7 @@
             {{ 'disabled' if t.status == 'running' }}>重启</button>
           <a class="btn-mini" href="{{ url_for('task_export', task_id=t.id) }}">导出</a>
           <button class="btn-mini danger" data-op="delete" data-id="{{ t.id }}">删除</button>
+          </div>
         </td>
       </tr>      <!-- 续190 模拟样式（空壳 · 主理人确认用）：本任务的「子运行」展开行，数据为 mock -->
       <tr data-allres-of="{{ t.id }}" hidden><td colspan="10" style="background:rgba(64,127,200,.04);padding:4px 10px 4px 22px;border-left:2px solid rgba(64,127,200,.3)">
@@ -220,13 +229,14 @@
                   onclick="var r=document.querySelector('tr[data-subrun-of=&quot;mock-11&quot;]'); r.hidden=!r.hidden;">子任务 ▸</button></td>
               <td class="muted small">fsm.brazil-pix.com 等（共 5 条）</td>
               <td class="muted small">站点: 4<br>子域名: 11<br>漏洞: 2<br>拓展: 6</td>
-              <td class="muted small"><button type="button" class="btn-mini ghost" onclick="var s=this.nextElementSibling; s.hidden=!s.hidden;">阶段</button><span class="mono" hidden style="display:block;margin-top:2px;white-space:normal">subdomain,probe,dirscan,vulnscan</span></td>
+              <td class="muted small"><button type="button" class="btn-mini ghost btn-xs" onclick="var s=this.nextElementSibling; s.style.display=(s.style.display==='block')?'none':'block';">阶段</button><span class="mono" style="display:none;margin-top:2px;white-space:normal">subdomain,probe,dirscan,vulnscan</span>
+</td>
 
               <td><span class="badge st-running">running</span></td>
               <td class="progress"><div class="bar"><i style="width: 40%"></i></div>40%</td>
               <td class="muted small">2026-10-15 09:12</td>
               <td class="muted small">00:06:41</td>
-              <td><a class="btn-mini" href="#">查看全结果</a></td>
+              <td><div class="ops-row"><a class="btn-mini" href="#">查看结果</a></div></td>
             </tr>
             <tr data-subrun-of="mock-11" hidden><td colspan="10" style="background:rgba(127,127,127,.10);padding:6px 10px 6px 40px">
               <details class="panel">
@@ -238,13 +248,14 @@
                     <td><span class="muted small">└└ </span>test-拓展二层</td>
                     <td class="muted small">pay.fsm.brazil-pix.com</td>
                     <td class="muted small">站点: 1<br>子域名: 3<br>漏洞: 0<br>拓展: 0</td>
-                    <td class="muted small"><button type="button" class="btn-mini ghost" onclick="var s=this.nextElementSibling; s.hidden=!s.hidden;">阶段</button><span class="mono" hidden style="display:block;margin-top:2px;white-space:normal">subdomain,probe</span></td>
+                    <td class="muted small"><button type="button" class="btn-mini ghost btn-xs" onclick="var s=this.nextElementSibling; s.style.display=(s.style.display==='block')?'none':'block';">阶段</button><span class="mono" style="display:none;margin-top:2px;white-space:normal">subdomain,probe</span>
+</td>
 
                     <td><span class="badge st-done">done</span></td>
                     <td class="progress"><div class="bar"><i style="width: 100%"></i></div>100%</td>
                     <td class="muted small">2026-10-15 09:30</td>
                     <td class="muted small">00:02:10</td>
-                    <td><a class="btn-mini" href="#">查看全结果</a></td>
+                    <td><div class="ops-row"><a class="btn-mini" href="#">查看结果</a></div></td>
                   </tr></tbody>
                 </table>
                 <p class="muted small">嵌套层数不设硬上限：衍生链由数据（parent_id）自然长出来，每层缩进加深；「查看全结果」从根任务发起时把整棵树全收。</p>

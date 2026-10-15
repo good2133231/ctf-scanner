@@ -140,6 +140,12 @@ button.ghost:hover { color:var(--text); background:var(--ghost-hover); }
 button.danger { background:var(--danger-bg); border-color:var(--danger-border); color:var(--danger); }
 /* 行内小按钮（任务列表 / 任务详情的操作列） */
 .btn-mini { padding:3px 9px; font-size:12px; border-radius:5px; }
+/* 续191：更小一档（子任务/统计/阶段 等切换钮，与 .btn-mini 连用）；
+   .ops-row 操作列横排、放不下自动换行（此前各按钮挤成竖列很丑） */
+.btn-mini.btn-xs { padding:0 6px; font-size:11px; border-radius:4px; line-height:1.6; }
+.ops-row { display:flex; flex-wrap:wrap; gap:2px; align-items:center; }
+.ops-row .btn-mini { white-space:nowrap; }
+
 .ops { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
 .ops button, .ops a { padding:3px 9px; font-size:12px; border-radius:5px; }
 .ops a { align-self:center; }
