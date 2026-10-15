@@ -1181,7 +1181,8 @@ def main():
         # （tools/fscan/fscan.exe），桩不能再拿裸名 `"fscan"` 去比。
         _ps_stage.which = lambda name: "fake-fscan" if "fscan" in str(name) else None
         _ps_stage.PortscanStage(_eng_ctx).run()
-        assert _eng_calls == ["fscan"], _eng_calls
+        # 续188：fscan 返回 []（空）且耗时~0 ⇒ 判不可信 ⇒ 回退内置复核 —— 引擎序列变两步。
+        assert _eng_calls == ["fscan", "builtin"], _eng_calls
         assert _eng_wd.get("workdir") == Path(_TMPDIR) / "eng", _eng_wd
     finally:
         _ps_stage.portscan.scan_host = _orig_host
@@ -17440,7 +17441,11 @@ expression: r0()
     from scanner.stages.portscan import PortscanStage as _PSt128
     _hits128 = {"fscan": 0, "nmap": 0, "builtin": 0}
     _real_f, _real_n, _real_b = _ps128.fscan_scan, _ps128.nmap_scan, _ps128.scan_host
-    _ps128.fscan_scan = lambda *a, **k: (_hits128.__setitem__("fscan", _hits128["fscan"] + 1), [])[1]
+    # 续188：桩返回**非空**端口行 —— 空列表会撞上「fscan 秒退 0 端口 ⇒ 回退复核」的新行为，
+    # 而本组测的是预估降级，fscan 正常出结果才贴原意。
+    _ps128.fscan_scan = lambda *a, **k: (_hits128.__setitem__("fscan", _hits128["fscan"] + 1),
+                                         [{"host": "127.0.0.1", "ip": "127.0.0.1", "port": 80,
+                                           "service": "http", "banner": ""}])[1]
     _ps128.nmap_scan = lambda *a, **k: (_hits128.__setitem__("nmap", _hits128["nmap"] + 1), [])[1]
 
     def _fake_builtin(host, ip, ports, **k):
@@ -26030,6 +26035,23 @@ expression: r0()
     assert '"js_count"' in _j187a and "db.update_task" in _j187a, "jsmine 收尾没落库 js_count"
     print("[187a] 挖掘 JS 数量 ok: jsmine 收尾落 options.js_count（合并写不抹已有键）｜"
           "详情页与拓展页显示（没跑过显示「—」）｜变异：摘掉落库即红")
+    # ---------------- [188a] 续188：fscan 秒退 0 端口 ⇒ 判不可信 + 回退下一引擎 ----------------
+    # 任务 22 实测：65535 端口 0.14s 返回空 ⇒ fscan_scan 返回 []（不是 None）⇒ 不回退 ⇒
+    # 端口 0 ⇒ probe 无输入 ⇒ 整链归零。修法：0 端口 + 耗时不成比例 ⇒ WARNING + 回退。
+    from scanner.stages.portscan import _fscan_untrusted as _fu188
+    assert _fu188(0.14, 65535) is True, "任务 22 形状（65535 端口 0.14s）必须判不可信"
+    assert _fu188(0.5, 65535) is True, "全端口 0.5s 仍是不可能跑完"
+    assert _fu188(70.0, 65535) is False, "真跑完 65535 端口的结果要信"
+    assert _fu188(0.6, 100) is True, "TOP 端口秒回也回退复核（宁可多复核不可漏报，刻意取舍）"
+    assert _fu188(5.0, 100) is False, "跑了几秒的空结果要信（真扫过就是没有）"
+    # 回退接线：0 端口判不可信后必须置 found=None（才会落到 nmap/内置），且 WARNING 说出口
+    _ps188 = (ROOT / "scanner" / "stages" / "portscan.py").read_text(encoding="utf-8")
+    assert "结果不可信" in _ps188 and "回退下一引擎复核" in _ps188, "回退要说出口"
+    assert "_fscan_untrusted(time.monotonic() - _t0188" in _ps188, "判据必须接在 fscan 返回之后"
+    # 变异证伪（§6.1）：判据改恒 False ⇒ 回退永不触发 ⇒ (WARN 文案仍在但判据失效) ——
+    # 直接钉判据函数体（摘掉 max 下限或改比较符都会让上面五条单测变红）
+    print("[188a] fscan 秒退兜底 ok: 0 端口 + 耗时不成比例 ⇒ 判不可信（0.14s/65535 端口即任务 22 "
+          "形状）+ WARNING + 回退 nmap/内置｜小端口集快返也复核（宁可多复核不可漏报）｜变异：改判据即红")
     print("SMOKE PASS")
 
 
