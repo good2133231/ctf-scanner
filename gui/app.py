@@ -3701,8 +3701,24 @@ def create_app():
         inherit = _source_auth(from_task, _owner_scope())
         if inherit:
             options["auth"] = inherit
-        name = (request.form.get("name") or "").strip() or \
-            time.strftime("拓展探测-%m%d-%H%M%S")
+        # 续191（主理人点单）：默认名沿用**根任务名** —— test 的子任务叫 test-拓展一层，
+        # 孙任务叫 test-拓展二层（层数从根数起）；手工填了名字就以填的为准。
+        name = (request.form.get("name") or "").strip()
+        if not name and from_task.isdigit():
+            _cur, _depth, _root, _seen = int(from_task), 0, None, set()
+            while _cur and _cur not in _seen:
+                _seen.add(_cur)
+                _row = db.get_task(_cur)
+                if not _row:
+                    break
+                _root = _row["name"]
+                _cur = int(_row["parent_id"] or 0)
+                _depth += 1
+            if _root:
+                _cn = "一二三四五六七八九十"[_depth - 1] if _depth <= 10 else str(_depth)
+                name = f"{_root}-拓展{_cn}层"
+        if not name:
+            name = time.strftime("拓展探测-%m%d-%H%M%S")
         targets = "\n".join(domains)
         if str(request.form.get("append", "")).lower() in ("1", "true", "on"):
             # 续178：送探记录 —— 追加执行也算"送过探"（送到源任务自身）。
