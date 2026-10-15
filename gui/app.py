@@ -4908,7 +4908,8 @@ def _web_base_for(settings):
     """本次启动的挂载前缀，返回 `(前缀, 要额外打印的行)`（续138）。
 
     优先级：环境变量 `CTFSCANNER_WEB_PATH`（**空串＝挂根路径**，给 browser_e2e / 嵌入用法 /
-    就想固定路径的人留的显式口子）> `gui.web_path_random=false` 时的根路径 > 随机生成。
+    就想固定路径的人留的显式口子）> `gui.web_path_random=false` 时的根路径 >
+    开发期固定前缀（`webpath.DEV_PIN_BASE`，续193 主理人点单；`None`＝不启用）> 随机生成。
     那个环境变量写了个不合格的值（连续斜杠、`..`、不以 `/` 开头、大写……）时**不静默挂根**：
     根路径正是本功能要消掉的暴露面，静默降级会让人以为开关还开着。改成照旧随机 + 打印原因。
     刻意**不读任何文件**：这条 URL 一旦落盘，"重启后还能找回来"的收益就远小于泄露面，
@@ -4921,13 +4922,22 @@ def _web_base_for(settings):
             return webpath.normalize(env), []
         except ValueError as e:
             # 不合格**不降级成根路径**（那正是本功能要消掉的暴露面），而是照旧随机 + 说清原因
-            return webpath.new_base(), [
+            # 续193：开发期写死时回落固定前缀（守住「每次启动同一个路径」的承诺），否则照旧随机
+            _fb193 = (webpath.normalize(webpath.DEV_PIN_BASE) if webpath.DEV_PIN_BASE
+                      else webpath.new_base())
+            return _fb193, [
                 f"[!] CTFSCANNER_WEB_PATH 不合格：{e}",
-                '    本次仍用随机前缀（要固定挂根请显式给空串：CTFSCANNER_WEB_PATH=""）',
+                ('    本次仍用开发期固定前缀（要固定挂根请显式给空串：CTFSCANNER_WEB_PATH=""）'
+                 if webpath.DEV_PIN_BASE else
+                 '    本次仍用随机前缀（要固定挂根请显式给空串：CTFSCANNER_WEB_PATH=""）'),
             ]
     gui = settings.get("gui") or {}
     if not gui.get("web_path_random", True):
         return "", []
+    # 续193（主理人点单「先把控制台路径写死……等开发完了再随机」）：开发期固定前缀。
+    # 恢复随机＝把 `webpath.DEV_PIN_BASE` 改回 None（口径与代价见那里的注释）。
+    if webpath.DEV_PIN_BASE:
+        return webpath.normalize(webpath.DEV_PIN_BASE), []
     return webpath.new_base(), []
 
 
@@ -4994,7 +5004,7 @@ def _egress_ip(timeout=1.5):
     return ip
 
 
-def webpath_hints(base, host, port, ext_ip=""):
+def webpath_hints(base, host, port, ext_ip="", pinned=False):
     """启动横幅那几行：完整地址 + "它不是认证" + 节点端要改什么。
 
     单一产地：`serve()` 只调它拿行，别处不再拼第二遍（续124 那条）—— 续150 那版在
@@ -5007,8 +5017,12 @@ def webpath_hints(base, host, port, ext_ip=""):
             f"  ← 可直接打开（本机绑定的是 {host}:{port}，安全组与防火墙放行该端口才通）")
     out = [f"[*] 控制台地址：{url}{note}"]
     if base:
-        out.append("    后台路径为**本次启动随机生成**（两层各 10 位），重启即换；"
-                   "根路径与错误路径一律 404 空响应，不给扫描者任何提示。")
+        if pinned:
+            out.append("    后台路径为**开发期固定值**（主理人点单：先写死，每次启动都一样；"
+                       "开发完成后恢复随机、重启即换），根路径与错误路径仍一律 404 空响应。")
+        else:
+            out.append("    后台路径为**本次启动随机生成**（两层各 10 位），重启即换；"
+                       "根路径与错误路径一律 404 空响应，不给扫描者任何提示。")
         out.append("    ⚠ 这**不是**访问控制 —— 拿到这个地址的人照样到得了登录页，"
                    "真门槛仍是 401 边缘门与 `users` 表账号这两道。")
         out.append("    执行节点要连的话，`cli/run_node.py --controller` 必须指到上面这个**含前缀的完整地址**"
@@ -5156,7 +5170,8 @@ def serve(start_queue=True):
         _e153 = _egress_ip()
         if _e153 and _e153 not in (host, "0.0.0.0", "::"):
             _ext153 = _e153
-    for _line in webpath_hints(_wp, host, port, _ext153) + _wn:
+    for _line in webpath_hints(_wp, host, port, _ext153,
+                                pinned=bool(webpath.DEV_PIN_BASE)) + _wn:
         say(_line)
     # 续146-附3（用户点单「静音 console + 单独落一个 logs/access.log」）：接管逐请求访问日志。
     # 为什么在这儿而不是最上面：要把 `_wp`（本次前缀）交给它打码 —— 落盘的每一行里带着**客户端送来
@@ -5172,7 +5187,7 @@ def serve(start_queue=True):
                 "只写文件（每个任务的 `task.log` + 启动日志），终端不再逐条刷；"
                 "实时进度看控制台页面的「任务日志」面板")
     say(f"[*] 日志：启动与告警 → {_srv157} ｜ 逐请求访问日志 → {_acc157}"
-        f"（本次随机后台前缀已脱敏） ｜ 扫描逐条 {_scan157}")
+        f"（本次后台前缀在日志里已脱敏） ｜ 扫描逐条 {_scan157}")
     # 续47：HTTPS 与 Host 白名单的现状**在启动时就说明白**（部署排错时最先看的就是这几行）。
     # 文案由 `_deploy_hints()` 生成 —— 抽成纯函数是为了让回归门禁能**真跑**这些告警
     # （`serve()` 会起真实服务器，测试不能调它；而"只 grep 源码里有这个字符串"证明不了运行期行为）。

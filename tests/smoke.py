@@ -376,6 +376,13 @@ def main():
     start_fixture()
     db.init_db()
 
+    # [193a] 门禁不许改写被跟踪的 config/blacklist.txt（续189 挂账、续192 实录「某组跑完注释行
+    # 被删」；续193 全代码排查 + wire58 实测均**未能复现** —— smoke 里 blacklist 写路径都已沙箱
+    # /打桩）。把轶事升成不变量：开头取字节快照、结尾比对；写方一旦回来就红在这里，而不是
+    # 死在用户机器上。变异证伪＝删掉结尾那条 assert（本节因此不需要第二份判据）。
+    _blk193 = ROOT / "config" / "blacklist.txt"
+    _blk193_snap = _blk193.read_bytes() if _blk193.exists() else b""
+
     # 1) 目标解析与归一化
     ts = parse_lines(["http://127.0.0.1:8765/", "# comment", "example.com",
                       "10.0.0.1", "10.0.0.1"])
@@ -18409,18 +18416,27 @@ expression: r0()
                 _os_8ak.environ["CTFSCANNER_WEB_PATH"] = _keep
 
     _b, _n = _wb8ak(None)
-    assert _is_rand8ak(_b) and _n == [], f"默认必须随机且不多打行：{_b!r} {_n}"
+    # 续193（主理人点单）：开发期默认档返回写死的前缀；证伪＝摘掉 pin 必须回随机且不等于它
+    assert _b == _wp8ak.DEV_PIN_BASE and _n == [], f"默认必须返回开发期固定前缀：{_b!r} {_n}"
+    _keep_pin8ak, _wp8ak.DEV_PIN_BASE = _wp8ak.DEV_PIN_BASE, None
+    try:
+        _br, _nr = _wb8ak(None)
+        assert _is_rand8ak(_br) and _nr == [] and _br != _keep_pin8ak, \
+            f"摘掉 pin 必须回随机且不等于 pin（否则「开发完改回 None」这条路是假的）：{_br!r}"
+    finally:
+        _wp8ak.DEV_PIN_BASE = _keep_pin8ak
     _b0, _n0 = _wb8ak("")
     assert _b0 == "" and _n0 == [], "环境变量给空串＝显式挂根路径，这是唯一合法的「关掉」写法"
     _bf, _nf = _wb8ak("/gui/console")
     assert _bf == "/gui/console" and _nf == [], f"手动指定的前缀没被采纳：{_bf!r} {_nf}"
     _bb, _nb = _wb8ak("/x//y")
-    assert _is_rand8ak(_bb), f"不合格的值降级成了根路径（静默关掉功能）：{_bb!r}"
+    assert _bb == _wp8ak.DEV_PIN_BASE, \
+        f"不合格的值既不许降级成根路径（静默关掉功能），开发期也不该另随一个：{_bb!r}"
     assert any("不合格" in l for l in _nb), "降级了却没说 —— 用户只会以为随机还在"
     _bo, _no = _wb8ak(None, web_path_random=False)
     assert _bo == "" and _no == [], "gui.web_path_random=false 必须能整体挂回根路径（旧行为）"
     _bh, _nh = _wb8ak("/x//y", web_path_random=False)
-    assert _is_rand8ak(_bh), "开关关了但环境变量不合格 → 仍不该把人放回根路径"
+    assert _bh == _wp8ak.DEV_PIN_BASE, "开关关了但环境变量不合格 → 仍不该把人放回根路径"
 
     # ---- ⑩ 真跑 `serve()`：横幅单一产地、三句必说的话、返回后必须摘掉前缀层 ----
     _keep_env8ak = _os_8ak.environ.pop("CTFSCANNER_WEB_PATH", None)
@@ -18436,19 +18452,21 @@ expression: r0()
                            _url_lines8ak[0])
     assert _m8ak, f"横幅里那条地址不是「两层各 10 位」的形状：{_url_lines8ak[0]!r}"
     _pre8ak = _m8ak.group(2)
-    assert any("重启即换" in l for l in _out8ak), "没说清「重启就换」—— 有人会把它存进书签当永久地址"
+    assert any("固定值" in l for l in _out8ak), "开发期写死却没说出来 —— 有人会以为重启还会换地址"
     assert any("不是" in l and "访问控制" in l for l in _out8ak), \
         "横幅没说清这不是访问控制（§5.10 口径：不许让人误以为安全了）"
     assert any("cli/run_node.py --controller" in l and "前缀" in l for l in _out8ak), \
         "没说节点端要带前缀 —— 现象是「节点一直不领任务」，最难查的那种"
-    assert sum(1 for l in _out8ak if "随机生成" in l) == 1, "同一句说法出现了多处（文案有第二个产地）"
+    assert sum(1 for l in _out8ak if "固定值" in l) == 1, "同一句说法出现了多处（文案有第二个产地）"
+    assert not any("随机生成" in l for l in _out8ak), "印着固定值却又说随机生成 —— 横幅在说谎"
     # `serve()` 返回后模块级 app 必须**没**留着前缀层：`[7i]` 真调 serve() 三次，留着就是往
     # 后续每组 `gui_app.app.test_client().get("/login")` 上刷 404（假红，且红在哪个组随机）。
     assert not getattr(gui_app.app.wsgi_app, "_ctf_prefix", False), "serve() 没摘掉前缀层"
     assert gui_app.app.test_client().get("/login").status_code == 200, \
         "摘掉之后根路径要立刻恢复可用（关掉本功能＝行为一字未改）"
 
-    print("[8ak] 续138 后台路径随机化 ok: 形状承诺（两层各 10 位＝20 位、字符表去掉 0o1li、"
+    print("[8ak] 续138 后台路径随机化 ok: 开发期默认档写死（DEV_PIN_BASE，续193；摘掉必须回随机"
+          "且不等于它）｜形状承诺（两层各 10 位＝20 位、字符表去掉 0o1li、"
           "200 个不重复、生产路径确实走 secrets.SystemRandom 而非 random）｜根路径与任何错误路径"
           "（含只猜中一层、按段边界比的 bbbbbbbbbbX、%2e%2e）一律 404 **空响应体**、不重定向不泄漏｜"
           "前缀对了才可达且 url_for/redirect/static 全带前缀（SCRIPT_NAME 接线）｜normalize 三态分开"
@@ -21587,8 +21605,9 @@ expression: r0()
         # 往横幅里塞一条**额外的**含前缀行，它同样必须被扣住（只钉第一行就是位置假设）。
         _orig_wh145 = gui_app.webpath_hints
 
-        def _wh145(b, h, p, _ext145=""):
-            return _orig_wh145(b, h, p, _ext145) + [f"[!] 变异探针：这一行也带了前缀 {b}"]
+        def _wh145(b, h, p, _ext145="", pinned=False):
+            return _orig_wh145(b, h, p, _ext145, pinned=pinned) \
+                + [f"[!] 变异探针：这一行也带了前缀 {b}"]
 
         gui_app.webpath_hints = _wh145
         try:
@@ -24357,8 +24376,9 @@ expression: r0()
     # ---- ① 地址形状只有一个拼装点 ----
     _n_url8bf = _gui_src8bf.count('f"http://{')
     assert _n_url8bf == 1, f"横幅地址有了第二个拼装点（{_n_url8bf} 处）⇒ 改一处会漏另一处"
-    assert 'def webpath_hints(base, host, port, ext_ip=""):' in _gui_src8bf, \
-        "ext_ip 没从 serve() 传进 webpath_hints ⇒ 那一行多半又是在外面单独拼的"
+    assert 'def webpath_hints(base, host, port, ext_ip="", pinned=False):' in _gui_src8bf, \
+        ("ext_ip 没从 serve() 传进 webpath_hints ⇒ 那一行多半又是在外面单独拼的"
+         "（续193 起多一个 pinned 形参：开发期写死时横幅换措辞，桩与形状断言都要认它）")
     assert '"[*] 外网地址' not in _gui_src8bf, "「外网地址」那一行还在单独印"
     # 横幅一行都不许拖住启动：取出口地址那条路必须自带超时
     assert "def _egress_ip(timeout=1.5)" in _gui_src8bf and "timeout=timeout" in _gui_src8bf, \
@@ -26059,19 +26079,31 @@ expression: r0()
     _ap192 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
     assert '"ext:probed"' in _ap192, "送探域名没进父任务子域名资产"
     _t192 = _ast192.parse(_ap192)
-    # 钉点：插入必须在 record_ext_probes 之前（先落资产再记送探，顺序错了空跑一遍）——
-    # 用行号比对：ext:probed 的写库调用行号 < record_ext_probes 调用行号
-    _l192 = [(n.lineno, getattr(n.func, "attr", "")) for n in _ast192.walk(_t192)
-             if isinstance(n, _ast192.Call) and isinstance(n.func, _ast192.Attribute)
-             and getattr(n.func, "attr", "") in ("insert_subdomains", "record_ext_probes")]
-    _ins192 = min(ln for ln, a in _l192 if a == "insert_subdomains" and 3600 < ln < 3800)
-    _rec192 = min(ln for ln, a in _l192 if a == "record_ext_probes" and 3600 < ln < 3800)
-    _rec192 = min(ln for ln, a in _l192 if a == "record_ext_probes" and 3600 < ln < 3800)
-    assert _ins192 < _rec192, f"ext:probed 落库必须先于送探记录：{_ins192} vs {_rec192}"
+    # 钉点：插入必须在 record_ext_probes 之前（先落资产再记送探，顺序错了空跑一遍）。
+    # 认**函数体与调用形状**，不认绝对行号 —— 附2/附4/附5 三次都栽在行号上：窗口
+    # （3600–3800）会随 gui/app.py 增长而失效，届时 min() 吃空集合，报出来的是
+    # ValueError 而不是断言文案（续193 实测过这个形状：并发会话的附4 版就这么崩的）。
+    _fn192 = [n for n in _ast192.walk(_t192)
+              if isinstance(n, _ast192.FunctionDef) and n.name == "api_scan_ext"]
+    assert len(_fn192) == 1, f"api_scan_ext 定义只剩 {len(_fn192)} 个 —— 钉点找不到函数体"
+    _calls192 = [n for n in _ast192.walk(_fn192[0])
+                 if isinstance(n, _ast192.Call) and isinstance(n.func, _ast192.Attribute)
+                 and n.func.attr in ("insert_subdomains", "record_ext_probes")]
+    _ins192 = [n.lineno for n in _calls192 if n.func.attr == "insert_subdomains"
+               and n.args and getattr(n.args[0], "id", "") == "_ft192"]
+    _rec192 = [n.lineno for n in _calls192 if n.func.attr == "record_ext_probes"]
+    assert _ins192, "api_scan_ext 里没有 insert_subdomains(_ft192, …) 这个调用 —— 送探域名入父资产被摘了"
+    assert _rec192, "api_scan_ext 里没有 record_ext_probes 调用"
+    assert min(_ins192) < min(_rec192), \
+        f"ext:probed 落库必须先于送探记录：{min(_ins192)} vs {min(_rec192)}"
     # 变异证伪（§6.1）：把 source 换回 promote: 前缀语义（只收归属）⇒ 非归属域名断链 ⇒ 钉点文案红
     print("[192a] 送探域名入父资产 ok: source=ext:probed（NOT LIKE js:/osint: ⇒ 自动 own 口径，"
-          "一处产地不变）｜先查已有只插新的（去重是写方责任）｜落库先于送探记录（AST 行号钉点）｜"
+          "一处产地不变）｜先查已有只插新的（去重是写方责任）｜落库先于送探记录（AST 函数体钉点）｜"
           "变异：摘掉落库即红")
+    # [193a] 收尾：被跟踪的 config/blacklist.txt 一个字节都不许变（快照在 main() 开头）
+    assert (_blk193.read_bytes() if _blk193.exists() else b"") == _blk193_snap, \
+        "门禁跑完 config/blacklist.txt 被改写了（续189 挂账：某组会删注释行）—— " \
+        "找到写它的组改走沙箱（blacklist.path/dir 指到 _TMPDIR），别让门禁动用户的真文件"
     print("SMOKE PASS")
 
 
