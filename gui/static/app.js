@@ -52,7 +52,12 @@ function initTabs() {
     const pane = document.getElementById("pane-" + t.dataset.tab);
     if (pane) pane.classList.add("active");
   };
-  tabs.forEach(t => t.addEventListener("click", () => show(t)));
+  tabs.forEach(t => t.addEventListener("click", () => {
+    show(t);
+    // 续195（主理人点单）：点页签也写进 URL —— 否则随后任何整页刷新（停止/重启/删除后的
+    // reload、表单提交后的 302）都掉回默认页签「潜在漏洞」，看着像"点其他功能被送去漏洞页"
+    history.replaceState(null, "", "#" + t.dataset.tab);
+  }));
   const want = (location.hash || "").replace(/^#/, "");
   const hit = want && tabs.find(t => t.dataset.tab === want);
   if (hit) show(hit);
@@ -358,6 +363,10 @@ function initOpenSites() {
         }
       });
       box.appendChild(cp);
+      // 续195（主理人点单"批量打开只能打开一个网页"）：面板自动滚入视野 ——
+      // 浏览器一次手势只放行一个 window.open 是硬策略，其余必须逐个点；
+      // 面板在首屏之下时用户根本看不见，才觉得"只开了一个"
+      if (box.scrollIntoView) box.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
     let text = first
       ? `已打开第 1 个${rest.length ? `，其余 ${rest.length} 个见下方链接` : ""}`

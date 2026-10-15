@@ -131,9 +131,9 @@
       value="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">
     <input type="hidden" name="name" value="{{ scan_name }}">
     <div class="bulkbar">
-      <button type="submit" class="ghost">加入黑名单（勾选行）</button>
-      <button type="submit" class="ghost"
-        formaction="{{ url_for('api_run_subdomain') }}">批量跑子域名（新建任务）</button>
+      {# 续195（主理人点单「拓展域名位置只显示送去探测，因为那个位置送去探测一半都是我人工
+         点击了」）：本页 bulkbar 只留送探 —— 加入黑名单 / 批量跑子域名 在「子域名」页有同款
+         入口（同一端点、全局生效），这里再放一遍只会让人在送探前手滑点错 #}
       <button type="submit" class="ghost" formaction="{{ url_for('api_scan_ext') }}"
         title="新建一个 subdomain→probe→dirscan→vulnscan 的任务：先把它的子域也挖一遍，再探存活、扫目录、跑漏洞初筛">
         送去探测</button>
@@ -166,9 +166,11 @@
         解析选中域名（DNS）</button>
       <input type="hidden" name="task_id" value="{{ task_id }}">
       {% endif %}
-      <span class="muted">黑名单：命中即不入资产库，后续阶段也不会扫它；
-        批量跑子域名会新建一个只跑 subdomain 阶段的任务，名称默认
-        <span class="mono">{{ scan_name }}-月日-时分秒</span>。</span>
+      {# 续195：本页只剩送探，帮助文案跟着改 —— 原文案描述的两个按钮（加入黑名单 /
+         批量跑子域名）已移到「子域名」页，留在这儿就是指向不存在按钮的说明 #}
+      <span class="muted">黑名单：命中即不入资产库、后续阶段也不会扫它（在「子域名」页勾选加入，
+        本页默认不列）；送去探测会把这些域名的子域再挖一遍，再探存活、扫目录、跑漏洞初筛，
+        默认**追加进本任务**（取消勾选才新建独立任务）。</span>
     </div>
     {% if bl_view %}
       {# 续194：黑名单过滤视图（默认不显示，?bl=1 才进来）—— 固定平铺，每条写清命中哪个条目 #}

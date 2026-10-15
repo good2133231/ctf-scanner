@@ -480,7 +480,9 @@
     </form>
     <form method="post" action="{{ url_for('api_scan_ext') }}">
       <input type="hidden" name="task_id" value="{{ task.id }}">
-      <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
+      {# 续195：next 带 #ext —— 提交后 302 回详情页时停在拓展域名页签，
+         而不是掉回默认的「潜在漏洞」（主理人点单的"强制送漏洞页"） #}
+      <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}#ext">
       <div class="bulkbar">
         <button type="submit" class="ghost"
           title="把这些域名的子域再挖一遍，再探存活、扫目录、跑漏洞初筛；默认**追加进本任务**（不新建任务）">

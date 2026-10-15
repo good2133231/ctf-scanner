@@ -54,7 +54,8 @@ from scanner import (admin_setup, audit, auth as taskauth, blacklist, captcha, c
                      extdom, fofa, github_leak, jsmine, login_guard, migrate, nodes,
                      queue, quake, secretbl,
                      screenshot,
-                     shodan, toolmgr, users, packetcodec)
+                     shodan, targets as targets_mod,
+                     toolmgr, users, packetcodec)
 from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
 from scanner import log as runlog
 from scanner.log import (attach_access_log, attach_server_log, boot_logger,
@@ -1568,6 +1569,10 @@ def create_app():
             stages_f = ""    # 阶段白名单：非法一律按"全部"
         rows, total = _page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
                                     status=status or None, stages=stages_f or None)
+        # 续195（主理人点单「多任务执行还是显示排队？」）：把队列并发现状摆在列表页 ——
+        # 同时跑几个是策略配置的 queue.workers（出厂 1＝串行，省目标侧带宽、防风控），
+        # 不是没实现；页面不说，用户只看到"排队"两个字
+        qworkers = int((queue.config(settings) or {}).get("workers") or 1)
         pages = max(1, (total + size - 1) // size)
         if page > pages:     # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
             page = pages
@@ -1601,7 +1606,7 @@ def create_app():
         qpos = {t["id"]: db.queued_position(t["id"])
                 for t in rows if t["status"] == "queued"}
         return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER,
-                               counts=counts, durations=durations,
+                               counts=counts, durations=durations, qworkers=qworkers,
                                running=set(runner.running_task_ids()), qpos=qpos,
                                pager=pager, page_sizes=PAGE_SIZES, q=q,
                                status=status, stages_f=stages_f,
@@ -3738,7 +3743,18 @@ def create_app():
         # NOT LIKE js:/osint: ⇒ 自动归 own 口径（与 collide: 同理，§5.14 那份判据不用动）。
         # 去重是写方的责任（AGENTS §5.6）：先查本任务已有的，只插新的。
         if from_task.isdigit() and domains:
+            # 续195（主理人点单）：送探域名落**根任务**（主域名那个任务）的子域名资产 ——
+            # 层数深了之后"父任务"只是上一层拓展任务，域名挂在那儿，主域名任务里仍然找不到
+            # （用户原话：「这个拓展域名也自己变成这个主域名的子域名，以免获取不到这个子域名」）
             _ft192 = int(from_task)
+            _cur195, _seen195 = _ft192, set()
+            while _cur195 and _cur195 not in _seen195:
+                _seen195.add(_cur195)
+                _row195 = db.get_task(_cur195)
+                if not _row195:
+                    break
+                _ft192 = int(_row195["id"])   # 一路走到没有父任务的那个（根＝主域名任务）
+                _cur195 = int(_row195["parent_id"] or 0)
             _have192 = {str(r["domain"]).lower() for r in
                         db._query("SELECT domain FROM subdomains WHERE task_id=?", (_ft192,))}
             _probe192 = [(d, "ext:probed") for d in domains if d.lower() not in _have192]
@@ -3758,12 +3774,20 @@ def create_app():
                 _row = db.get_task(_cur)
                 if not _row:
                     break
-                _root = _row["name"]
+                _root = _row
                 _cur = int(_row["parent_id"] or 0)
                 _depth += 1
             if _root:
+                # 续195（主理人点单「建任务应该显示主域名」）：根任务名是人起的（"test"），
+                # 层数一深就看不出这是谁家的资产；主域名取根任务目标的注册域，取不到才退回根任务名
+                _main195 = ""
+                for _ln195 in str(_root["targets"] or "").splitlines():
+                    _m195 = targets_mod.root_of(_ln195.strip())
+                    if _m195:
+                        _main195 = _m195
+                        break
                 _cn = "一二三四五六七八九十"[_depth - 1] if _depth <= 10 else str(_depth)
-                name = f"{_root}-拓展{_cn}层"
+                name = f"{_main195 or _root['name']}-拓展{_cn}层"
         if not name:
             name = time.strftime("拓展探测-%m%d-%H%M%S")
         targets = "\n".join(domains)
@@ -3772,7 +3796,11 @@ def create_app():
             db.record_ext_probes(int(from_task) if from_task.isdigit() else 0,
                                  int(from_task) if from_task.isdigit() else 0,
                                  domains, kind="append")
-            return _do_append(from_task, stages, targets, domains, options, fallback)
+            # 续195：回到**拓展域名**页签（这个表单就在那一页；不带片段会掉回默认的漏洞页）
+            _ext_next195 = _safe_next(request.form.get("next"),
+                                      url_for("task_detail", task_id=int(from_task)))
+            return _do_append(from_task, stages, targets, domains, options,
+                               _ext_next195 + "#ext")
         # 续185：新建的这条路**一定**是源任务的子任务（任务层级）—— 拓展送探本来就是
         # 父任务信息收集的延伸；「追加到本任务」那条路不建任务，所以不涉及。
         _pid185 = int(from_task) if from_task.isdigit() else 0
@@ -3786,7 +3814,8 @@ def create_app():
 
                     f"（{scope_note154 or f'勾选的 {len(domains)} 个域名'}，"
                     f"subdomain→probe→dirscan→vulnscan）")
-        return redirect(url_for("task_detail", task_id=task_id))
+        # 续195：新建子任务后回拓展域名页签（主理人点单：点其他功能总被送去漏洞页）
+        return redirect(url_for("task_detail", task_id=task_id) + "#ext")
 
     @app.route("/api/sites/reshoot", methods=["POST"])
     @login_required

@@ -2648,7 +2648,8 @@ def main():
         _before = len(db.list_tasks(limit=1000))
         _r2 = c.post("/api/domains/scan-ext", data={
             "task_id": str(_et), "domain": ["zz-js.test"], "next": f"/tasks/{_et}"})
-        _new_id = int(_r2.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+        # 续195：送探 302 现在带 #ext 片段（回拓展域名页签）—— 取 ID 前先剥片段
+        _new_id = int(_r2.headers["Location"].split("#", 1)[0].rstrip("/").rsplit("/", 1)[-1])
         _new_t = db.get_task(_new_id)
         # 续40：送去检测**带上 subdomain 阶段**（用户要求"拓展域名再去检测也要去子域名扫描"）
         assert _new_t["stages"] == "subdomain,probe,dirscan,vulnscan", _new_t["stages"]
@@ -2666,7 +2667,8 @@ def main():
         _r2b = c.post("/api/domains/scan-ext", data={
             "task_id": str(_et), "scope": "picked", "domain": ["zz-js.test"],
             "next": f"/tasks/{_et}"})
-        _t2b = db.get_task(int(_r2b.headers["Location"].rstrip("/").rsplit("/", 1)[-1]))
+        # 续195：同上，Location 带 #ext 片段，取 ID 前先剥
+        _t2b = db.get_task(int(_r2b.headers["Location"].split("#", 1)[0].rstrip("/").rsplit("/", 1)[-1]))
         assert _t2b["targets"] == "zz-js.test", _t2b["targets"]
         # 任务里一个拓展域名都没有 → 只回站内 next、不建任务（旧口径"没勾选就不建"已被
         # 全任务默认替掉，现在这一档判的是"没东西可送"）
@@ -25409,7 +25411,8 @@ expression: r0()
         "promote_too": "1", "depth": "1"}, follow_redirects=False)
     assert _r178b.status_code == 302, \
         f"送探失败 {_r178b.status_code} {_r178b.get_data(as_text=True)[:200]}"
-    _new178 = int(_r178b.headers["Location"].rsplit("/", 1)[-1])
+    # 续195：送探 302 带 #ext 片段，取 ID 前先剥
+    _new178 = int(_r178b.headers["Location"].split("#", 1)[0].rsplit("/", 1)[-1])
     # 送探记录：两个域名各一条 probe（from=tid → new_tid）
     _pm178 = db.list_ext_probes(["aaa.targ178.test", "ext.example178.test"])
     assert set(_pm178) == {"aaa.targ178.test", "ext.example178.test"}, _pm178
@@ -26215,6 +26218,50 @@ expression: r0()
           "大厂共享证书只标记不升档且理由可见｜similar_candidates 吃 cert_shares（摘掉即掉出 keep）｜"
           "黑名单 SQL 与 matches 同口径（自身/子域/不命中/大小写/尾点六向）｜页面：默认隐藏 + 条数报出 + "
           "?bl=1 带命中条目、默认链接不带 bl=1｜变异两处证伪")
+    # ---------------- [195a] 续195：送探落根任务 + 任务名显主域名 + 页签哈希 + 三件套记录 ----------------
+    # 主理人点单：①「如果拓展域名不是主域，建任务应该显示主域名，并且这个拓展域名也自己变成
+    # 这个主域名的子域名」② 点其他功能总被送去潜在漏洞页 ③ 批量打开只开一个 ④ 多任务排队
+    # ⑤ 拓展域名位置只显示送去探测。①的行为、②的 URL 形态、⑤的按钮集合各钉一处。
+    _rt195 = db.create_task("smoke-195-root", "abcd.org", ["subdomain"], {"offline": True})
+    _ct195 = db.create_task("smoke-195-child", "cdn.zzz99.test", ["subdomain"],
+                              {"offline": True}, parent_id=_rt195)
+    assert int(db.get_task(_ct195)["parent_id"]) == _rt195
+    # ①a 从**子任务**送探：ext:probed 必须落到**根任务**（主域名那个），不是上一层
+    db.insert_subdomains(_ct195, [("js-195-pick.test", "js:mine")])
+    # 端点 URL 照抄路由表：`/api/domains/scan-ext`（11074 行的注释早就警告过别写
+    # 想当然的 `/api/scan_ext`—— 上一会话在这儿摔过，本轮又摔一次，固化成注释）
+    _r195 = c.post("/api/domains/scan-ext", data={"task_id": _ct195, "scope": "picked",
+                                           "domain": "js-195-pick.test",
+                                           "next": f"/tasks/{_ct195}#ext"},
+                  follow_redirects=False)
+    assert _r195.status_code == 302, _r195.status_code
+    assert _r195.headers["Location"].endswith("#ext"), \
+        f"送探后不停在拓展域名页签：{_r195.headers.get('Location')}"
+    _root_rows195 = {str(r["domain"]) for r in
+                     db._query("SELECT domain FROM subdomains WHERE task_id=?", (_rt195,))}
+    assert "js-195-pick.test" in _root_rows195, \
+        "送探域名没进根任务（主域名）的子域名资产 —— 主域名任务里还是找不到它"
+    # ①b 新建子任务的名字显示**主域名**（根任务名叫 smoke-195-root，不是域名）
+    _kids195 = [r for r in db.list_child_tasks(_ct195)]
+    assert _kids195, "送探没建出子任务"
+    _kid195 = db.get_task(int(_kids195[-1]["id"]))
+    assert "abcd.org" in str(_kid195["name"]), \
+        f"子任务名没显示主域名：{_kid195['name']!r}"
+    # ② 页签点击写 hash（app.js 形状断言：点了页签 URL 里必须有片段，刷新才不回漏洞页）
+    _js195 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "history.replaceState" in _js195 and '"#" + t.dataset.tab' in _js195, \
+        "页签点击没写 hash —— 整页刷新还会掉回默认页签"
+    # ⑤ 拓展域名页 bulkbar 只留送去探测（加入黑名单/批量跑子域名 不在这一页）
+    assert _login7(c, _admin_form117()).status_code == 302
+    _ext_html195 = c.get(f"/extdomains?task={_ct195}&all=1").get_data(as_text=True)
+    assert "送去探测" in _ext_html195
+    assert "加入黑名单（勾选行）" not in _ext_html195, "拓展域名页 bulkbar 还有加入黑名单"
+    assert "批量跑子域名" not in _ext_html195, "拓展域名页 bulkbar 还有批量跑子域名"
+    # 子域名页仍保留同款入口（同一端点、全局生效）—— 只从拓展页收，不是把功能删了
+    _sub_html195 = c.get("/subdomains?all=1").get_data(as_text=True)
+    assert "加入黑名单（勾选行）" in _sub_html195, "子域名页的把加入黑名单入口弄丢了"
+    print("[195a] 续195 ok: 送探域名落根任务（主域名任务找得到）+ 子任务名显主域名 + 302 带 #ext｜"
+          "页签点击写 hash｜拓展页 bulkbar 只留送探（子域名页保留同款）｜变异：摘掉根行走链即红")
     # ---------------- [192a] 续192（主理人点单）：送探域名本身进父任务子域名资产 ----------------
     # 主理人原话："这个拓展域名也自己变成这个主域名的子域名，以免获取不到这个子域名" ——
     # 拓展域名多半不在目标注册域里（promote_owned 收不进），不落一条衍生链就在父资产上断掉。
