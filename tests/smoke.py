@@ -26052,6 +26052,25 @@ expression: r0()
     # 直接钉判据函数体（摘掉 max 下限或改比较符都会让上面五条单测变红）
     print("[188a] fscan 秒退兜底 ok: 0 端口 + 耗时不成比例 ⇒ 判不可信（0.14s/65535 端口即任务 22 "
           "形状）+ WARNING + 回退 nmap/内置｜小端口集快返也复核（宁可多复核不可漏报）｜变异：改判据即红")
+    # ---------------- [192a] 续192（主理人点单）：送探域名本身进父任务子域名资产 ----------------
+    # 主理人原话："这个拓展域名也自己变成这个主域名的子域名，以免获取不到这个子域名" ——
+    # 拓展域名多半不在目标注册域里（promote_owned 收不进），不落一条衍生链就在父资产上断掉。
+    import ast as _ast192
+    _ap192 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+    assert '"ext:probed"' in _ap192, "送探域名没进父任务子域名资产"
+    _t192 = _ast192.parse(_ap192)
+    # 钉点：插入必须在 record_ext_probes 之前（先落资产再记送探，顺序错了空跑一遍）——
+    # 用行号比对：ext:probed 的写库调用行号 < record_ext_probes 调用行号
+    _l192 = [(n.lineno, getattr(n.func, "attr", "")) for n in _ast192.walk(_t192)
+             if isinstance(n, _ast192.Call) and isinstance(n.func, _ast192.Attribute)
+             and getattr(n.func, "attr", "") in ("insert_subdomains", "record_ext_probes")]
+    _ins192 = min(ln for ln, a in _l192 if a == "insert_subdomains" and ln < 3800)
+    _rec192 = min(ln for ln, a in _l192 if a == "record_ext_probes" and 3600 < ln < 3800)
+    assert _ins192 < _rec192, f"ext:probed 落库必须先于送探记录：{_ins192} vs {_rec192}"
+    # 变异证伪（§6.1）：把 source 换回 promote: 前缀语义（只收归属）⇒ 非归属域名断链 ⇒ 钉点文案红
+    print("[192a] 送探域名入父资产 ok: source=ext:probed（NOT LIKE js:/osint: ⇒ 自动 own 口径，"
+          "一处产地不变）｜先查已有只插新的（去重是写方责任）｜落库先于送探记录（AST 行号钉点）｜"
+          "变异：摘掉落库即红")
     print("SMOKE PASS")
 
 
