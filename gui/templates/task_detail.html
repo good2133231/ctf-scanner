@@ -64,6 +64,34 @@
   本任务被<b>追加执行</b>过 {{ append_count }} 次：结果是**多次运行的合并**（同名资产已跨运行去重，
   不产生重复行；导出的报告带同样标记）。</p>
 {% endif %}
+{% if append_count %}
+{# 续190 模拟样式（空壳 · 主理人确认用）：下面的数据全是 mock —— 样式确认后再接真数据。
+   目标形态：父任务详情页里可展开的「子运行」列表，每行一次追加/送探/自动递归，资产增量单独报。 #}
+<details class="panel" style="margin:6px 0">
+  <summary><b>子运行（模拟样式 · 空壳，数据非真实）</b> — 展开 {{ append_count }} 次运行的逐次记录</summary>
+  <table>
+    <thead><tr><th>运行</th><th>类型</th><th>触发方式</th><th>目标数</th><th>新增资产</th>
+      <th>开始时间</th><th>状态</th><th>入口</th></tr></thead>
+    <tbody>
+      <tr><td>#1</td><td>追加执行</td><td>拓展域名「送去探测」（追加到本任务）</td>
+        <td>12</td><td>站点 +3 / 子域名 +9 / 漏洞 +1</td>
+        <td>2026-10-14 17:20</td><td><span class="badge st-done">done</span></td>
+        <td><a href="#">运行日志（mock）</a></td></tr>
+      <tr><td>#2</td><td>自动递归层</td><td>置信度=高 自动带出（ext_depth 层 2/3）</td>
+        <td>5</td><td>子域名 +4 / 站点 +2</td>
+        <td>2026-10-14 17:31</td><td><span class="badge st-done">done</span></td>
+        <td><a href="#">运行日志（mock）</a></td></tr>
+      <tr><td>#3</td><td>送探子任务</td><td>勾选域名新建子任务（挂在父任务下）</td>
+        <td>3</td><td>站点 +2 / 漏洞 +0</td>
+        <td>2026-10-14 18:02</td><td><span class="badge st-running">running</span></td>
+        <td><a href="#">子任务详情（mock）</a></td></tr>
+    </tbody>
+  </table>
+  <p class="muted small">空壳说明：本表是**样式确认用的 mock**；接真数据后每行对应一次真实运行
+    （追加/送探/自动递归各一种类型），「入口」列跳运行日志或子任务详情，数量与状态都取真实值。</p>
+</details>
+{% endif %}
+
 {% if task.status == 'queued' %}
 <p class="muted small"><span class="badge st-queued">排队中</span>
   本任务已<b>入队</b>，等待 worker 认领执行

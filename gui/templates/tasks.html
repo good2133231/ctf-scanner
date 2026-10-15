@@ -150,7 +150,12 @@
         <td><a href="{{ url_for('task_detail', task_id=t.id) }}">{{ t.id }}</a></td>
         <td>{% if t.parent_id %}<span class="muted small">└ </span>{% endif %}{{ t.name }}
           {% if t.parent_id %}<a class="badge" href="{{ url_for('task_detail', task_id=t.parent_id) }}"
-            title="续185：这是任务 #{{ t.parent_id }} 的子任务（拓展域名送去探测发起）">子任务 · 父 #{{ t.parent_id }}</a>{% endif %}</td>
+            title="续185：这是任务 #{{ t.parent_id }} 的子任务（拓展域名送去探测发起）">子任务 · 父 #{{ t.parent_id }}</a>{% endif %}
+          <button type="button" class="btn-mini ghost"
+            title="续190 模拟样式（空壳）：展开本任务名下的子运行/子任务套娃视图（数据为 mock）"
+            onclick="var r=document.querySelector('tr[data-subrun-of=&quot;{{ t.id }}&quot;]'); r.hidden=!r.hidden;"
+            >子运行 ▸</button></td>
+
 
         <td class="muted small">{{ (t.targets.splitlines() | first) or '-' }}
           {% if t.targets.splitlines() | length > 1 %}<span class="muted">（共 {{ t.targets.splitlines()|length }} 条）</span>{% endif %}
@@ -173,10 +178,39 @@
           <a class="btn-mini" href="{{ url_for('task_export', task_id=t.id) }}">导出</a>
           <button class="btn-mini danger" data-op="delete" data-id="{{ t.id }}">删除</button>
         </td>
-      </tr>
+      </tr>      <!-- 续190 模拟样式（空壳 · 主理人确认用）：本任务的「子运行」展开行，数据为 mock -->
+      <tr data-subrun-of="{{ t.id }}" hidden><td colspan="10" style="background:rgba(127,127,127,.06)">
+        <details open class="panel">
+          <summary><b>子运行 / 子任务（模拟样式 · 空壳，数据非真实）</b></summary>
+          <table>
+            <thead><tr><th>#</th><th>名称</th><th>类型</th><th>触发方式</th><th>状态</th>
+              <th>新增资产</th><th>入口</th></tr></thead>
+            <tbody>
+              <tr><td>mock-1</td><td>拓展探测-1015-1802</td><td>送探子任务</td>
+                <td>勾选域名新建子任务（挂在父任务下）</td>
+                <td><span class="badge st-running">running</span></td>
+                <td>站点 +2 / 子域名 +5</td>
+                <td><a href="#">详情（mock）</a></td></tr>
+              <tr><td>mock-2</td><td>追加运行 #2</td><td>追加执行</td>
+                <td>拓展域名「送去探测」（追加到本任务，不新建任务）</td>
+                <td><span class="badge st-done">done</span></td>
+                <td>站点 +3 / 漏洞 +1</td>
+                <td><a href="#">运行日志（mock）</a></td></tr>
+              <tr><td>mock-3</td><td>自动递归层 2/3</td><td>自动递归</td>
+                <td>置信度=高 自动带出</td>
+                <td><span class="badge st-done">done</span></td>
+                <td>子域名 +4</td>
+                <td><a href="#">运行日志（mock）</a></td></tr>
+            </tbody>
+          </table>
+          <p class="muted small">空壳说明：接真数据后只在**确有子运行/子任务**的任务行渲染按钮，展开行逐条取真实运行记录（追加/送探/自动递归各一种类型）。</p>
+        </details>
+      </td></tr>
+
       {% else %}
       <tr><td colspan="11" class="muted">暂无任务。</td></tr>
       {% endfor %}
+
     </tbody>
   </table>
   {% include "_pager.html" %}
