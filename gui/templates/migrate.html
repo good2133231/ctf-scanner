@@ -6,12 +6,12 @@
 
 <section class="panel">
   <h2>这一步在做什么</h2>
-  <p class="muted">
+  <p class="muted note">
     把<b>扫描数据</b>（任务 + 九张资产表）打包成一份 JSON 带走，或把别人给的包装进本机库。
     导出落点：<code>{{ export_dir }}</code>（在 <code>data/</code> 里，被 <code>.gitignore</code>
     覆盖，权限 <code>0600</code>）。
   </p>
-  <p class="muted">
+  <p class="muted note">
     ⚠ <b>迁移包里默认没有任何凭据</b>：账号口令哈希、节点令牌哈希、<code>config/keys*.yaml</code>、
     <code>edge_auth.yaml</code>、任务里带的 Cookie/Authorization，以及「敏感信息」那张表里的
     <b>原文取值</b>（各家 AK/SK、token、私钥头、连接串）—— 一个都不带。
@@ -19,7 +19,7 @@
     <code>python cli/client.py --export-scan --with-users --with-task-auth --with-secrets</code>，
     警告会逐条列在你眼前、每一条都写明「带出去等于什么」。
   </p>
-  <p class="muted">
+  <p class="muted note">
     反过来也一样：上传的包里<b>如果含账号 / 凭据 / 登录态，本页面直接拒绝</b>，
     让你回 CLI 看着警告确认。
   </p>
@@ -37,7 +37,7 @@
       <span class="muted small">（勾上后就算填了编号，也只保留属于当前账号的那些）</span>
     </p>
     <p><button type="submit">导出迁移包</button></p>
-    <p class="muted small">导出是<b>只读</b>动作：不改库里任何一行。日志文件<b>不</b>进包
+    <p class="muted small note">导出是<b>只读</b>动作：不改库里任何一行。日志文件<b>不</b>进包
       （里面可能有第三方接口原文）。</p>
   </form>
 </section>
@@ -89,7 +89,7 @@
     <tr><th>导入前快照</th><td><code>{{ done.snapshot_display }}</code></td></tr>
     {% endif %}
   </table>
-  <p class="muted small">新任务的状态是 <b>stopped</b>（包里的 running/queued 与 pid 到这台机器上
+  <p class="muted small note">新任务的状态是 <b>stopped</b>（包里的 running/queued 与 pid 到这台机器上
     必然是假的）；要接着跑请手动「续跑 / 重启」—— 框架<b>不会</b>因为导入了包就自己发起扫描。</p>
   {% endif %}
 </section>

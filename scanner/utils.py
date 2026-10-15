@@ -325,6 +325,46 @@ def html_title(text, limit=200):
     return re.sub(r"<[^>]+>", "", m.group(1)).strip()[:limit]
 
 
+# `<title>` 取不到时的**声明式**兜底（续197）：只认页面作者自己声明的那几种标题元信息
+# —— `<meta property="og:title">`、`<meta name="twitter:title">`、`<meta name="title">`。
+# 为什么是这三条、为什么**不**兜 `<h1>`：SPA（Vue / element-ui / Next.js 那类）首屏常常只有
+# 空壳 HTML，标题要等 JS 渲染后才出现，而 og:title 通常写在静态 HTML 里 ⇒ 它是"还没渲染
+# 也能拿到"的那份真信息；`<h1>` 则是正文标题（一个页面可能有好几个，也可能是文章名），
+# 拿它当站点标题属于"看起来像"，与本项目"不编数"的口径冲突，故不取。
+_META_TITLE_RE = re.compile(
+    r"<meta[^>]+(?:property|name)\s*=\s*[\"'](?:og:title|twitter:title|title)[\"']"
+    r"[^>]*content\s*=\s*[\"']([^\"']*)[\"']",
+    re.I | re.S)
+_META_TITLE_REV_RE = re.compile(
+    r"<meta[^>]+content\s*=\s*[\"']([^\"']*)[\"']"
+    r"[^>]*(?:property|name)\s*=\s*[\"'](?:og:title|twitter:title|title)[\"']",
+    re.I | re.S)
+
+
+def meta_title(text, limit=200):
+    """取 `<meta>` 里声明的标题；取不到返回空串（与 `html_title` 同一套"取不到就留空"口径）。
+
+    两种属性顺序都要认（`content` 在前在后都合法），实测两种写法在真实页面里都有。
+    """
+    s = str(text or "")
+    for rx in (_META_TITLE_RE, _META_TITLE_REV_RE):
+        m = rx.search(s)
+        if m:
+            val = re.sub(r"\s+", " ", m.group(1)).strip()[:limit]
+            if val:
+                return val
+    return ""
+
+
+def page_title(text, limit=200):
+    """页面的"标题"：`html_title` 优先，取不到再退 `meta_title`（续197）。
+
+    只用在**已经在展示这一跳**的地方（3xx 落地页取证）；`html_title` 仍是别处的唯一口径
+    （dirscan 命中页、截图渲染后标题）—— 那里的"没有 `<title>`"本身就是要报出来的事实。
+    """
+    return html_title(text, limit=limit) or meta_title(text, limit=limit)
+
+
 # ---------- 站点显示（3xx 的「跳转后」） ----------
 
 # 需要显示「跳转后」的状态码。放在这里而不是 probe 里：取证（probe）与显示（GUI 三处模板 +
@@ -348,13 +388,20 @@ def _field(row, key, default=""):
 
 
 def site_redirect(row):
-    """3xx 站点在页面 / 报告里该怎么显示（续112-B，用户 2026-10-06 的要求）。
+    """3xx 站点在页面 / 报告里该怎么显示（续112-B，用户 2026-10-06 的要求；续197 改标题口径）。
 
     返回 `dict(status, title, jumped, final_url, note)`：
     - 不是 3xx，或跟随之后的取证没拿到（老库行 / 落地页不可达）→ 原样显示那一跳的
       状态与标题，**不编数**（绝不用"看起来像"的东西凑一个跳转后标题）；
     - 跟到了 → `status` = `301 → 200`，`title` = 落地页标题，`final_url` = 落地 URL，
       `note` = 给 title 提示用的整句话。
+
+    ⚠️ **续197 改的一点（主理人点单"301 跳转的应该获取跳转之后的标题"）**：
+    此前落地页没抓到标题时会退回第一跳的标题（`final_title or title`），结果页面上
+    出现「301 Moved Permanently」—— 那是 **Web 服务器的默认响应文案**，不是站点标题，
+    把它显示在"标题"列等于拿中间件默认页冒充站点身份（CloudFront / nginx 的 301 页都长这样），
+    看着像"这个站点叫 301 Moved Permanently"。现在：**跟到了就只用落地页标题**，
+    落地页确实没有标题就留空（页面显示 `-`），并在 `note` 里说清"落地页无 title"。
 
     ⚠️ 这里**只拼显示**：库里 `status` / `title` / `length` 仍是那一跳的事实本身，
     覆盖原始状态码等于谎报"这个端口直接回 200" —— 301 与 200 的安全含义不同。
@@ -371,9 +418,10 @@ def site_redirect(row):
     final_url = str(_field(r, "redirect_url") or "")
     return {
         "status": f"{st} → {rs}",
-        # 落地页没有 <title>（图片 / JSON / 空页）时保留原来那句（如「301 Moved Permanently」），
-        # 并靠 `note` 说明"跟到了但落地页没标题"，而不是留个空位让人以为漏扫了。
-        "title": final_title or title,
+        # 续197：不再回退到第一跳的标题（那是服务器的默认跳转页文案，不是站点标题）。
+        # 落地页没有标题就留空，页面显示 `-`，`note` 说清"落地页无 title"——
+        # 空位由 `no_title_hint` 提示补上，而不是拿默认页文案填坑。
+        "title": final_title,
         "jumped": True,
         "final_url": final_url,
         "note": f"跟随 {st} 到达 {rs}：{final_url or '-'}"

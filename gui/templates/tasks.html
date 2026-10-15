@@ -133,11 +133,11 @@
     <button type="button" class="danger" data-bulk="delete">批量删除</button>
     <span id="bulk-msg" class="muted"></span>
   </div>
-  <p class="muted small">批量操作作用于<b>本页已勾选</b>的行。</p>
+  <p class="muted small note">批量操作作用于<b>本页已勾选</b>的行。</p>
   {# 续195（主理人点单"多任务执行还是显示排队？"）：并发现状摆在明面上 —— 排队不是没实现，#}
   {# 是 queue.workers 出厂 1（串行＝省目标侧带宽、防风控）；改它：策略配置 → 队列 worker 数，#}
   {# 或勾「按机器规格自动收并发上限」（小 1 / 中 2 / 大 4） #}
-  <p class="muted small">任务并发：同时运行 <b>{{ qworkers }}</b> 个，其余排队
+  <p class="muted small note">任务并发：同时运行 <b>{{ qworkers }}</b> 个，其余排队
     （改它：策略配置 →「队列 worker 数」，或勾「按机器规格自动收并发上限」）。</p>
 
   <table id="tbl-tasks">

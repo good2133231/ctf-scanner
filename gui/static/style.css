@@ -332,3 +332,11 @@ th.col-shot, td.col-shot { text-align:center; }
 .pv-close:hover { color:var(--accent); }
 .agg-samples { margin:4px 0 0; padding-left:16px; max-height:170px; overflow:auto; }
 .agg-samples li { margin:2px 0; word-break:break-all; }
+
+
+/* 续197：页面**说明文字**（那些灰色小字段落，class="note"）默认隐藏 ——
+   主理人点单「站点不是有很多注释解释吗？我们系统设置默认关闭注释，可手动开启注释」。
+   两层开关：全局策略 `gui.notes`（出厂 false）+ 顶栏「说明」按钮（cookie，只管这台浏览器）。
+   用 CSS 隐藏而不是 Jinja 不渲染，两个理由：① 文本仍在 HTML 里，既有门禁断言扫的是渲染出的
+   HTML，不会被这层改动打红；② 不必给上百处说明段各套一层 {% if %}。 */
+body:not(.notes-on) .note { display: none; }

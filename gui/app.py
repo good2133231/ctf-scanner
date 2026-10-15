@@ -1048,6 +1048,22 @@ def create_app():
         """让每个模板都能拿到 `me`（当前登录者），侧边栏据此隐藏无权入口。"""
         return {"me": _session_user()}
 
+    def _notes_on():
+        """页面说明文字（class="note" 那些灰色小段）是否显示 —— 续197。
+
+        两级，cookie 赢：① cookie `ctf_notes`（顶栏「显示说明」，只管**这台浏览器**）；
+        ② 策略 `gui.notes`（全局默认，出厂 false）。cookie 优先是因为"我就看一眼"不该
+        去改被 git 跟踪的 settings.yaml；反过来，策略开着而某人想清屏，也能就地关掉。
+        """
+        c = str(request.cookies.get("ctf_notes") or "").strip()
+        if c in ("1", "0"):
+            return c == "1"
+        return bool((load_settings().get("gui") or {}).get("notes", False))
+
+    @app.context_processor
+    def _inject_notes():
+        return {"notes_on": _notes_on()}
+
     # ---------- 续48：访问审计 + 登录限速（统一收口，失败绝不影响主流程） ----------
 
     def _audit(kind, target="", detail="", ok=True, actor=None, actor_role=None):
@@ -2299,6 +2315,27 @@ def create_app():
 
     # POC 管理与策略配置**同为管理员门内**（续46）：它决定"扫什么、报什么"，且上传会往
     # config/pocs-user/ 落文件 —— 与策略配置是同一类"改平台行为"的操作，不是"看扫描结果"。
+    def _poc_techs(tags):
+        """POC 的 tags 里有哪些是**指纹库认得**的组件名（续197）—— 返回排序后的列表。
+
+        tags 在库里是字符串（"imported, thinkphp, backup" 或 JSON 风格的列表），两种都认。
+        交集口径与 `stages/vulnscan.py::_pocs_for` 完全一致（那里比的是
+        `info.tags` 与 `sites.tech`，同样是小写集合求交）。
+        """
+        if isinstance(tags, (list, tuple, set)):
+            parts = [str(t) for t in tags]
+        else:
+            parts = re.split(r"[,\s]+", str(tags or ""))
+        want = _poc_techs._tags()
+        return sorted({str(t).strip().lower() for t in parts if str(t).strip()} & want)
+
+    def _poc_techs_tags():
+        """指纹库的组件标签集合（每个请求算一次，页面渲染用；`load_extra` 自带缓存）。"""
+        from scanner import fingerprint
+        return {str(t).lower() for t in fingerprint.all_tags()}
+
+    _poc_techs._tags = _poc_techs_tags
+
     @app.route("/pocs")
     @login_required
     @admin_required
@@ -2313,6 +2350,7 @@ def create_app():
         rows = [dict(r) for r in db.list_pocs()]
         # 分类统计（来源 / 级别 / 置信度），供页面上的"按分类批量开关"展示当前分布
         stats = {"source": {}, "severity": {}, "confidence": {}, "enabled": 0, "total": len(rows)}
+        tech_counts = {}          # 续197：组件 -> POC 条数（**筛选前**按全量算，否则分布会骗人）
         for r in rows:
             src = db.poc_source(r["path"])    # 来源判定依赖原始路径，必须在相对化之前算
             r["source"] = src                 # 列表展示 / 前端筛选用
@@ -2329,8 +2367,17 @@ def create_app():
             stats["severity"][r["severity"] or "-"] = stats["severity"].get(r["severity"] or "-", 0) + 1
             stats["confidence"][r["confidence"]] = stats["confidence"].get(r["confidence"], 0) + 1
             stats["enabled"] += int(r["enabled"] or 0)
+            # 续197：这一行属于哪些**组件**（POC 的 tags ∩ 指纹库认得的标签）。
+            # 与 `stages/vulnscan.py::_pocs_for` 用的是同一份交集口径 —— 页面上"这个组件有
+            # 几条 POC"和扫描时"这个站点的 POC 谁先跑"必须是同一个数，否则页面在骗人。
+            r["techs"] = _poc_techs(r.get("tags"))
+            for t in r["techs"]:
+                tech_counts[t] = tech_counts.get(t, 0) + 1
+        # 组件下拉按条数降序、同名按字母序：一眼看到"哪个组件的 POC 最多"
+        techs = sorted(tech_counts.items(), key=lambda kv: (-kv[1], kv[0]))
         page, size, q = _page_args()
         only_on = request.args.get("on") == "1"
+        tech = str(request.args.get("tech") or "").strip()
         if q:
             # 判据与旧前端一致：**整行关键字**，大小写不敏感，任一列命中即保留。
             # 匹配的是表格里可见的**数据列**；「启用」那列的 `开/关` 是状态指示不是数据，不参与匹配
@@ -2342,16 +2389,19 @@ def create_app():
                     if any(_needle in str(r.get(c) or "").lower() for c in _cols)]
         if only_on:
             rows = [r for r in rows if r["enabled"]]
+        if tech:
+            rows = [r for r in rows if tech in r["techs"]]
         total = len(rows)
         pages = max(1, (total + size - 1) // size)
         page = min(max(1, page), pages)      # 越界（筛选后行数变少）→ 回落到最后一页
         rows = rows[(page - 1) * size: page * size]
         # `q` 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页**丢掉筛选条件**
-        qs = (f"&q={quote(q)}&size={size}" if q else f"&size={size}") + ("&on=1" if only_on else "")
+        qs = (f"&q={quote(q)}&size={size}" if q else f"&size={size}") + ("&on=1" if only_on else "") \
+             + (f"&tech={quote(tech)}" if tech else "")
         pager = {"page": page, "size": size, "total": total, "pages": pages,
                  "base": page_url("/pocs"), "qs": qs, "unit": "个 POC"}
         return render_template("pocs.html", pocs=rows, stats=stats, pager=pager, q=q,
-                               only_on=only_on)
+                               only_on=only_on, techs=techs, tech=tech)
 
     @app.route("/api/pocs/upload", methods=["POST"])
     @login_required
@@ -3966,6 +4016,9 @@ def create_app():
         if not _owned_task(tid):
             abort(404)
         urls = [str(u).strip() for u in (request.form.getlist("url") or []) if str(u).strip()]
+        # 续197：两颗按钮并成一颗后 `only_failed` 恒为 1（"没勾就重截失败的"成了按钮的默认语义），
+        # 所以"这次到底截的是谁"要看**提交时有没有勾选行**，不能再拿 only_failed 判断来源。
+        picked = bool(urls)
         only_failed = str(request.form.get("only_failed", "")) == "1"
         if only_failed and not urls:
             # 「失败的」= 有 shot_error 且没有 shot —— 判据只有 `db.list_shot_failures` 一处。
@@ -3973,7 +4026,8 @@ def create_app():
             # 原因档那一道只用于**自动**候补重试（`screenshot.RETRYABLE_REASONS`），两件事别混。
             urls = [str(r["url"]).strip() for r in db.list_shot_failures(tid) if str(r["url"]).strip()]
         if not urls:
-            return _append_err("没有要重截的站点：勾选几行，或点「重截失败的站点」"
+            return _append_err("没有要重截的站点：勾选几行再点「重截」；一行都不勾时"
+                               "按本任务**截图失败**的站点来排"
                                "（一张都没失败过就没有重截的必要）", fallback)
         cap = int(((load_settings().get("screenshot") or {}).get("max_sites") or 20))
         dropped = 0
@@ -3984,8 +4038,25 @@ def create_app():
                    {"screenshot_on": True, "reshoot": True}, fallback)
         logger.info(f"[gui] 任务 #{tid} 已排入一轮**只跑截图**的追加运行：{len(urls)} 个站点"
                     + (f"（另有 {dropped} 个超出 screenshot.max_sites={cap}，本次不排）" if dropped else "")
-                    + ("；来源是「只重截失败的」" if only_failed else "；来源是勾选的行"))
+                    + ("；来源是勾选的行" if picked else "；来源是本任务截图失败的站点"))
         return redirect(url_for("task_detail", task_id=tid) + "#sites")
+
+    @app.route("/api/notes")
+    @login_required
+    def api_notes_toggle():
+        """续197：页面说明文字的**本机**开关（顶栏「显示说明 / 隐藏说明」）。
+
+        只写一个 cookie，不动 `config/settings.yaml`（那文件被 git 跟踪，"看一眼说明"
+        不该落进仓库）；全局默认值仍在「策略配置 → 界面 → 显示页面说明文字」。
+        `next` 一律过 `_safe_next`（只放行站内相对路径），避免变开放重定向。
+        """
+        nxt = _safe_next(request.args.get("next"), url_for("dashboard"))
+        on = "1" if str(request.args.get("on") or "").strip() == "1" else "0"
+        resp = redirect(nxt)
+        resp.set_cookie("ctf_notes", on, max_age=180 * 24 * 3600, httponly=True,
+                        samesite="Lax",
+                        secure=bool((load_settings().get("gui") or {}).get("secure_cookie")))
+        return resp
 
     @app.route("/api/domains/promote", methods=["POST"])
     @login_required
@@ -4130,6 +4201,10 @@ def create_app():
                                           "enabled": f.get("edge_auth_enabled") == "1"},
                             # 续157：这一项页面上有勾选框了（用户点单「日志不要刷控制台」），取表单值。
                             "console_logs": f.get("console_logs") == "1",
+                            # 续197：页面说明文字（各页灰色小字）默认关 —— 主理人点单
+                            # 「我们系统设置默认关闭注释，可手动开启注释」。页面上**有**勾选框，
+                            # 取表单值；顶栏那颗「显示说明」是 cookie 级的本机临时开关，优先级更高。
+                            "notes": f.get("gui_notes") == "1",
                             # 续157 #D：询问第三方取出口 IP 的开关（同 console_logs，取表单值）
                             "announce_egress_ip": f.get("announce_egress_ip") == "1",
                             "keys_ask_passphrase": bool(

@@ -10,7 +10,7 @@
   <p class="error">这是管理员为你创建的账号，初始口令管理员也知道 ——
     <b>请先改成只有你自己知道的口令</b>，改完才能继续使用。</p>
   {% endif %}
-  <p class="muted">当前账号：<code>{{ me.username if me else '-' }}</code>
+  <p class="muted note">当前账号：<code>{{ me.username if me else '-' }}</code>
     （{{ '管理员' if me and me.role == 'admin' else '子用户' }}）。
     口令至少 8 位，只存 pbkdf2 派生值，不存明文。</p>
   <form method="post" class="row">

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}数据探测{% endblock %}
 {% block content %}
-<p class="muted">扫描过程中在 <b>JS / 页面正文</b> 里见到的邮箱 —— 与「拓展域名」「敏感信息」抽的是
+<p class="muted note">扫描过程中在 <b>JS / 页面正文</b> 里见到的邮箱 —— 与「拓展域名」「敏感信息」抽的是
   <b>同一批正文</b>，只是正则不同，因此<b>不额外发一个请求</b>。<br>
   筛选从严（判据只有 <code>scanner/mails.py</code> 一处）：资源文件名
   （<code>icon@2x.png</code>、<code>bootstrap@5.1.3.min.js</code>）与库里写死的占位邮箱
@@ -15,7 +15,7 @@
     <button class="ghost" type="submit">查询</button>
     {% if q %}<a class="btn-mini ghost" href="/emails">清空</a>{% endif %}
   </form>
-  <p class="muted small">
+  <p class="muted small note">
     {% if task_id %}当前只看任务 #{{ task_id }} 的记录，<a href="/emails">看全部任务</a>。{% else %}跨任务视图。{% endif %}
     共 {{ pager.total }} 条（分页条报的是过滤后的总数）。
   </p>

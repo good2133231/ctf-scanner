@@ -19,7 +19,7 @@ window.CTF_THEME_DEFAULT = "light";
 </script>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body class="{{ 'notes-on' if notes_on else '' }}">
 <div class="layout">
   <aside class="sidebar">
     <div class="brand">CTF<span>Scanner</span></div>
@@ -84,6 +84,11 @@ window.CTF_THEME_DEFAULT = "light";
           <option value="violet">紫罗兰</option>
         </select>
       </span>
+      {# 续197：页面说明（灰色小字）的**本机**开关 —— 写 cookie，不改全局策略；
+         全局默认值在「策略配置 → 界面 → 显示页面说明」。 #}
+      <a href="{{ url_for('api_notes_toggle') }}?on={{ '0' if notes_on else '1' }}"
+         title="页面上的灰色说明文字默认不显示；这一颗只影响**这台浏览器**（cookie），
+               全局默认值在「策略配置」">{{ '隐藏说明' if notes_on else '显示说明' }}</a>
       <span class="muted" title="当前登录账号">{{ me.username if me else '未登录' }}
         {% if me %}<span class="muted">（{{ '管理员' if me.role == 'admin' else '子用户' }}）</span>{% endif %}</span>
       <a href="{{ url_for('profile') }}">修改口令</a>

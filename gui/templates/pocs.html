@@ -9,14 +9,14 @@
     <button type="button" id="poc-refresh">重新扫描 POC 目录</button>
     <span id="poc-msg" class="muted"></span>
   </form>
-  <p class="muted">格式规范见 docs/poc-guide.md；上传后保存在 config/pocs-user/。
+  <p class="muted note">格式规范见 docs/poc-guide.md；上传后保存在 config/pocs-user/。
     官方 nuclei 模板可直接放进 config/nuclei-templates/（引擎兼容其常用子集 + raw/flow/workflows 子集，
     超出子集的部分（dsl、oob、flow 的 JS/循环等）会标为 <span class="mono">unsupported</span> 而不是静默失效）。</p>
 </section>
 
 <section class="panel">
   <h2>按分类批量开关（当前启用 {{ stats.enabled }} / {{ stats.total }}）</h2>
-  <p class="muted">共 {{ stats.total }} 个 POC，逐个点显然不现实，这里按<b>来源</b>、<b>级别</b>与
+  <p class="muted note">共 {{ stats.total }} 个 POC，逐个点显然不现实，这里按<b>来源</b>、<b>级别</b>与
     <b>置信度</b>下发。
     「导入」= 参考项目批量转换的第三方 POC，默认全部关闭（指纹式匹配误报率偏高），
     建议先按级别启用 critical / high，跑通后再逐步放开。</p>
@@ -53,7 +53,7 @@
     <button type="button" class="danger" id="poc-bulk-disable">批量关闭</button>
     <span id="poc-bulk-msg" class="muted"></span>
   </div>
-  <p class="muted small">
+  <p class="muted small note">
     分布：来源
     {% for src in ['builtin', 'imported', 'nuclei', 'user', 'other'] %}
       {% set on = stats.source.get(src ~ ':on', 0) %}{% set off = stats.source.get(src ~ ':off', 0) %}
@@ -64,11 +64,11 @@
     ｜置信度
     {% for c in ['high', 'medium', 'low'] %}［{{ c }} {{ stats.confidence.get(c, 0) }}］{% endfor %}
   </p>
-  <p class="muted small">置信度是<b>推导</b>出来的，不是人手填：内置精选暴露面检查（带内容特征关键字）= 高；
+  <p class="muted small note">置信度是<b>推导</b>出来的，不是人手填：内置精选暴露面检查（带内容特征关键字）= 高；
     用户上传 / 官方 nuclei 模板 = 中；参考项目静态导入的指纹型规则 = 低，
     且<b>只判状态码、不判响应内容</b>的规则再降一级（`status: [200]` 这类在真实站点上几乎必中）。
     它影响的是"额度先给谁"：站点 POC 额度用尽时，高置信规则优先执行。</p>
-  <p class="muted small"><b>有效级别</b>=模板声明的级别，但受上面那层置信度的<b>上限</b>约束
+  <p class="muted small note"><b>有效级别</b>=模板声明的级别，但受上面那层置信度的<b>上限</b>约束
     （一条规则的可信度，就是它能声明的最高级别）。列表里「级别」列与「按级别批量开关」用的都是
     有效级别；鼠标停在级别上可看到模板原本声明了什么 —— 对<b>导入</b>的第三方 POC，那个声明值
     一律不采信（导入器照抄参考项目的 `bug_level`，305 条里 290 条写 high，而它们多是"像不像某某
@@ -88,14 +88,28 @@
       placeholder="ID / 名称 / 标签 / 来源 / 置信度 / 路径"></label>
     <label class="muted">只看已启用
       <input type="checkbox" name="on" value="1"{% if only_on %} checked{% endif %}></label>
+    {# 续197（主理人点单「能在 poc 页面进行分类吗，提高效率」）：多一维**按组件（指纹）**筛选 ——
+       每条 POC 属于哪些组件，是它的 `info.tags` 与**指纹库认得的标签**取交集算出来的，
+       与扫描时"这个站点的 POC 谁先跑"（`stages/vulnscan.py::_pocs_for`）同一份口径。 #}
+    <label class="muted">组件（指纹）
+      <select name="tech">
+        <option value="">全部组件</option>
+        {% for t, n in techs %}
+        <option value="{{ t }}"{% if tech == t %} selected{% endif %}>{{ t }}（{{ n }}）</option>
+        {% endfor %}
+      </select></label>
     <input type="hidden" name="size" value="{{ pager.size }}">
     <button class="ghost" type="submit">查询</button>
-    {% if q or only_on %}<a class="btn-mini ghost"
+    {% if q or only_on or tech %}<a class="btn-mini ghost"
       href="{{ url_for('pocs', size=pager.size) }}">清空</a>{% endif %}
   </form>
+  <p class="muted small note">「组件」这一列不是人填的：它是 POC 声明的 tags 与**指纹库认得的
+    组件标签**取交集算出来的（指纹库＝内置表 + 社区库转换来的两张表，共
+    {{ techs|length }} 个组件有对应 POC）。扫描时如果站点被识别出了某个组件，
+    打这个组件的 POC 会**排在前面**先跑 —— 页面上的分类与扫描时的排序是同一份判据。</p>
   <table id="tbl-pocs">
     <thead><tr><th>#</th><th>ID</th><th>名称</th><th>级别</th><th>置信度</th><th>标签</th>
-      <th>状态</th><th>启用</th><th>来源</th></tr></thead>
+      <th>组件</th><th>状态</th><th>启用</th><th>来源</th></tr></thead>
     <tbody>
     {% for p in pocs %}
       <tr data-enabled="{{ 1 if p.enabled else 0 }}" data-confidence="{{ p.confidence }}">
@@ -108,12 +122,14 @@
           {%- endif %}>{{ p.severity }}</span></td>
         <td>{{ p.confidence }}</td>
         <td class="muted">{{ p.tags }}</td>
+        <td>{% for t in p.techs %}<span class="tech-tag">{{ t }}</span>
+            {%- else %}<span class="muted">-</span>{% endfor %}</td>
         <td>{{ p.status }}</td>
         <td><button class="toggle" data-id="{{ p.id }}">{{ '开' if p.enabled else '关' }}</button></td>
         <td class="muted small">{{ p.source }}<br><span class="mono">{{ p.path }}</span></td>
       </tr>
     {% else %}
-      <tr><td colspan="9" class="muted">{% if q or only_on %}没有匹配当前筛选条件的 POC。
+      <tr><td colspan="10" class="muted">{% if q or only_on or tech %}没有匹配当前筛选条件的 POC。
         {% else %}未发现 POC，点击上方「重新扫描 POC 目录」。{% endif %}</td></tr>
     {% endfor %}
     </tbody>

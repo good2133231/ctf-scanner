@@ -81,6 +81,16 @@ def _literal_runs(seq):
             if sub is None:
                 return None
             out.extend(sub)
+        elif op == _sre.ASSERT and _is_seq(arg[1]) and int(arg[0] or 0) >= 1:
+            # 续197：**正向**断言（`(?=…)` / `(?<=…)`，`arg[0]` 为 1 / -1 表示方向，负向那类是
+            # ASSERT_NOT 不在这里）成立 ⇒ 断言里的内容必现在某处 —— 社区库的 and 规则正是
+            # `^(?=.*X)(?=.*Y)` 这个形状，X 与 Y 都必现，所以它们都是合法的过滤条件。
+            # 过滤用的是"任一命中即跑正则"（OR），而 and 规则要求**全部**命中 ⇒ 只会少提速，
+            # 不可能漏报（都不在 ⇒ 必然不命中）。取不到就整条放弃，口径与上面各分支一致。
+            sub = _literal_runs(list(arg[1]))
+            if sub is None:
+                return None
+            out.extend(sub)
         # 其余操作符（AT/IN/ANY/断言/未知）只当作"字面量被截断"，不影响剩下这些段的必现性
     if cur:
         out.append("".join(cur))
@@ -262,6 +272,15 @@ SIGNATURES = {
 # 一个回了 404 却把产品名写进 `<title>` 的目标会被打上该产品的标签 —— 自己制造误报。
 # 所以外置表按行带状态码，内置 SIGNATURES 保持两元组不动。
 EXTRA_FILE = "config/dicts/fingerprints_extra.txt"
+# 续197（主理人点单"参照 github 现有的指纹库来集合，越多越好"）：外置表从**一份**变**多份**
+# —— 手写那张（afrog 导入 + 手工条目）之外，新加两张**社区库转换**来的表，由
+# `tools/import_fingerprints.py` 生成（只转判据，外部仓库源码不进本仓）：
+#   fingerprints_hub.txt   ← FingerprintHub / ObserverWard（3150 个组件标签）
+#   fingerprints_ehole.txt ← EHole 棱洞（805 个）
+# 三张表**同一份格式**，所以解析逻辑仍然只有一份（多一个文件 ≠ 多一套读法）。
+EXTRA_FILES = [EXTRA_FILE,
+               "config/dicts/fingerprints_hub.txt",
+               "config/dicts/fingerprints_ehole.txt"]
 _WHERE = ("headers", "body", "cookies")
 _extra_cache = {"key": None, "rules": {}, "issues": []}
 
@@ -269,6 +288,12 @@ _extra_cache = {"key": None, "rules": {}, "issues": []}
 def _extra_path():
     from .config import resolve      # 函数内导入：不与 config 的加载顺序纠缠（同 utils 里的写法）
     return resolve(EXTRA_FILE)
+
+
+def _extra_paths():
+    """全部外置表的绝对路径（**不存在的文件直接跳过**，不报错 —— 表是可选项）。"""
+    from .config import resolve
+    return [resolve(f) for f in EXTRA_FILES]
 
 
 def _parse_statuses(text):
@@ -284,51 +309,77 @@ def _parse_statuses(text):
     return frozenset(codes)
 
 
-def load_extra(path=None):
-    """读外置指纹表 -> `({标签: [(位置, 编译后的正则, 状态码集合|None)]}, [问题, …])`。
-
-    三件事值得写明：
-    - **分隔符是 TAB**。判据本身就是正则，`|` 在正则里是"或"，拿 `|` 切列会把判据腰斩
-      （`tools/import_afrog_fp.py` 用 `|` 的第一版就是这么坏的）；
-    - 缓存键是 `(路径, mtime_ns, 大小)`：`identify()` 每个响应都要跑一次，不能每次重读文件、
-      重编正则；改完字典下一次响应即生效，不用重启；
-    - 坏行**不静默**：进问题清单交给 `--lint` 与回归；命中逻辑只跳过这一条，不牵连别的行。
-    """
-    p = Path(path) if path else _extra_path()
-    try:
-        st = p.stat()
-    except OSError:
-        _extra_cache.update(key=None, rules={}, issues=[])
-        return {}, []
-    key = (str(p), st.st_mtime_ns, st.st_size)
-    if _extra_cache["key"] == key:
-        return _extra_cache["rules"], _extra_cache["issues"]
+def _parse_extra_text(text, source=""):
+    """解析一张外置表的内容 -> `(rules, issues)`（格式说明见 `load_extra`）。"""
     rules, issues = {}, []
-    text = p.read_text(encoding="utf-8", errors="replace")
+    _pre = f"{source}：" if source else ""
     for no, line in enumerate(text.splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         cols = line.split("\t")
         if len(cols) < 3:
-            issues.append(f"第 {no} 行不足 3 列（标签<TAB>位置<TAB>判据）：{line[:40]!r}")
+            issues.append(f"{_pre}第 {no} 行不足 3 列（标签<TAB>位置<TAB>判据）：{line[:40]!r}")
             continue
         tag, where, pattern = cols[0].strip(), cols[1].strip(), cols[2]
         if not tag:
-            issues.append(f"第 {no} 行标签为空")
+            issues.append(f"{_pre}第 {no} 行标签为空")
             continue
         if where not in _WHERE:
-            issues.append(f"第 {no} 行位置 {where!r} 不属于 {'/'.join(_WHERE)}")
+            issues.append(f"{_pre}第 {no} 行位置 {where!r} 不属于 {'/'.join(_WHERE)}")
             continue
         codes = _parse_statuses(cols[3] if len(cols) > 3 else "")
         if isinstance(codes, str):
-            issues.append(f"第 {no} 行 {codes}")
+            issues.append(f"{_pre}第 {no} 行 {codes}")
             continue
         try:
             rx = re.compile(pattern)
         except re.error as e:
-            issues.append(f"第 {no} 行判据编译失败（{e}）")
+            issues.append(f"{_pre}第 {no} 行判据编译失败（{e}）")
             continue
         rules.setdefault(tag, []).append((where, rx, codes))
+    return rules, issues
+
+
+def load_extra(path=None):
+    """读外置指纹表 -> `({标签: [(位置, 编译后的正则, 状态码集合|None)]}, [问题, …])`。
+
+    `path` 给定 = 只读那一张（lint 与回归用）；不给 = 读 `EXTRA_FILES` 里的**全部**并合并
+    （续197：外置表从一份变多份；同一标签的规则跨表累加，命中口径不变）。
+
+    三件事值得写明：
+    - **分隔符是 TAB**。判据本身就是正则，`|` 在正则里是"或"，拿 `|` 切列会把判据腰斩
+      （`tools/import_afrog_fp.py` 用 `|` 的第一版就是这么坏的）；
+    - 缓存键是**每张表的 `(路径, mtime_ns, 大小)`**：`identify()` 每个响应都要跑一次，
+      不能每次重读文件、重编正则；改完字典下一次响应即生效，不用重启；
+    - 坏行**不静默**：进问题清单交给 `--lint` 与回归；命中逻辑只跳过这一条，不牵连别的行。
+    """
+    if path:
+        p = Path(path)
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return {}, []
+        return _parse_extra_text(text, p.name)
+    paths = [p for p in _extra_paths() if p.exists()]
+    if not paths:
+        _extra_cache.update(key=None, rules={}, issues=[])
+        return {}, []
+    try:
+        key = tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)
+    except OSError:
+        return {}, []
+    if _extra_cache["key"] == key:
+        return _extra_cache["rules"], _extra_cache["issues"]
+    rules, issues = {}, []
+    for p in paths:
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        r, i = _parse_extra_text(text, p.name)
+        for tag, lst in r.items():
+            rules.setdefault(tag, []).extend(lst)
+        issues.extend(i)
     _extra_cache.update(key=key, rules=rules, issues=issues)
     return rules, issues
 
@@ -412,6 +463,22 @@ def flush(ctx, logger=None, where=""):
 MAX_FAVICON = 512 * 1024
 
 
+# 参与匹配的正文长度上限（见 `identify` 里的说明）：只为防"一条慢正则 × 超大正文"把
+# 探测拖死，不是判定口径 —— 截断前后对真实页面的命中集合差异可以忽略。
+MAX_BODY_SCAN = 128 * 1024
+
+
+def all_tags():
+    """**全部**能识别的组件标签（内置 + 全部外置表），排序去重。
+
+    存在的理由（续197）：POC 与指纹要能对上号 —— POC 的 `info.tags` 里写着产品名
+    （`thinkphp`、`shiro`…），指纹识别出的标签也是产品名，两边取交集就是
+    "这条 POC 是打哪个组件的"。POC 页面据此分类，vulnscan 据此把相关 POC 排到前面
+    （见 `stages/vulnscan.py::_pocs_for`）。标签集合只在这里算一次，别处各写一份就会漂移。
+    """
+    return sorted(set(SIGNATURES) | set(load_extra()[0]))
+
+
 def identify(resp):
     """从 http_request 的响应 dict 中提取组件标签，返回排序去重后的列表。
 
@@ -423,7 +490,11 @@ def identify(resp):
     hdrs = resp.get("headers") or {}
     parts = {
         "headers": "\n".join(f"{k}: {v}" for k, v in hdrs.items()),
-        "body": resp.get("text") or "",
+        # 续197：正文**只看前 MAX_BODY_SCAN**。外置表从 51 条涨到 4400+ 条之后，单条规则的
+        # 成本会乘上规则数 —— 一条写坏的正则（灾难性回溯）在 1 MB 正文上能把整个探测拖死，
+        # 而产品特征（标题、登录页、脚本路径）几乎**永远在前几十 KB**。
+        # 截断只影响"特征恰好在 128 KB 之后"那类极端情况，换到的是"不会被一条慢规则卡死"。
+        "body": (resp.get("text") or "")[:MAX_BODY_SCAN],
         # 单独拆出 Cookie：`Set-Cookie: PHPSESSID=` / `JSESSIONID` / `ASP.NET_SessionId`
         # 是判断"这站是什么语言写的"最可靠也最省事的线索（比正文关键字准得多）。
         "cookies": "\n".join(f"{k}: {v}" for k, v in hdrs.items()

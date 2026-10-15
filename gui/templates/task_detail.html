@@ -40,19 +40,19 @@
 <h1>{{ task.name }}</h1>
 
 {% if task.parent_id %}
-<p class="muted small">本任务是 <a href="{{ url_for('task_detail', task_id=task.parent_id) }}">任务 #{{ task.parent_id }}</a>
+<p class="muted small note">本任务是 <a href="{{ url_for('task_detail', task_id=task.parent_id) }}">任务 #{{ task.parent_id }}</a>
   的<b>子任务</b>（拓展域名「送去探测」发起 —— 任务层级；资产层归不归父任务看当时有没有勾
   「同时把归属本项目的追加为子域名」，那是另一件事）。</p>
 {% endif %}
 {% set _kids185 = child_tasks_of(task.id) %}
 {% if _kids185 %}
-<p class="muted small">子任务 {{ _kids185|length }} 个：
+<p class="muted small note">子任务 {{ _kids185|length }} 个：
   {% for c in _kids185 %}<a href="{{ url_for('task_detail', task_id=c.id) }}">#{{ c.id }} {{ c.name }}</a>{% if not loop.last %}、{% endif %}{% endfor %}</p>
 {% endif %}
 
 {% if rescan_of %}
 
-<p class="muted small">本任务是<b>补扫任务</b>：由
+<p class="muted small note">本任务是<b>补扫任务</b>：由
   <a href="{{ url_for('task_detail', task_id=rescan_of) }}">任务 #{{ rescan_of }}</a>
   的补扫发起，只跑
   <span class="mono">{{ task.stages }}</span> 一个阶段并强制走全量档
@@ -60,7 +60,7 @@
 {% endif %}
 
 {% if append_count %}
-<p class="muted small"><span class="badge">追加 ×{{ append_count }}</span>
+<p class="muted small note"><span class="badge">追加 ×{{ append_count }}</span>
   本任务被<b>追加执行</b>过 {{ append_count }} 次：结果是**多次运行的合并**（同名资产已跨运行去重，
   不产生重复行；导出的报告带同样标记）。</p>
 {% endif %}
@@ -87,24 +87,24 @@
         <td><a href="#">子任务详情（mock）</a></td></tr>
     </tbody>
   </table>
-  <p class="muted small">空壳说明：本表是**样式确认用的 mock**；接真数据后每行对应一次真实运行
+  <p class="muted small note">空壳说明：本表是**样式确认用的 mock**；接真数据后每行对应一次真实运行
     （追加/送探/自动递归各一种类型），「入口」列跳运行日志或子任务详情，数量与状态都取真实值。</p>
 </details>
 {% endif %}
 
 {% if task.status == 'queued' %}
-<p class="muted small"><span class="badge st-queued">排队中</span>
+<p class="muted small note"><span class="badge st-queued">排队中</span>
   本任务已<b>入队</b>，等待 worker 认领执行
   {%- if queue_pos %}（当前第 <b>{{ queue_pos }}</b> 位{% if queued_total %}，队列共 {{ queued_total }} 个{% endif %}）{%- endif %}。
   排队中的任务可点「停止」直接从队列移除（尚未开始）。</p>
 {% endif %}
 {% if task.id in running or task.status == 'queued' %}
-<p class="muted small"><b>任务运行中或排队中：追加执行暂不可用</b>（避免并发覆盖停止信号），
+<p class="muted small note"><b>任务运行中或排队中：追加执行暂不可用</b>（避免并发覆盖停止信号），
   请先「停止」或等它跑完再追加。</p>
 {% endif %}
 
 {% if resume_rest %}
-<p class="muted small"><span class="badge">停在 {{ task.current_stage }}</span>
+<p class="muted small note"><span class="badge">停在 {{ task.current_stage }}</span>
   可<b>断点续跑</b>：沿用本任务已有资产（<b>不清空</b>），只重跑
   <span class="mono">{{ resume_rest|join(' / ') }}</span>。
   断点所在阶段会<b>重跑</b>是故意的 —— 中断时它可能只跑了一半；各阶段产物按去重键入库，
@@ -130,7 +130,7 @@
     {# 续176：被 min_severity 挡掉的条数要说出口（§0 第 10 条：被过滤 ≠ 不存在）——
        文案唯一产地是 report.sev_blocked_note()，模板里不拼第二份（§5.14）；
        没有可报的数（该次运行一条没挡 / 老库缺列）时这一行不渲染。 #}
-    {% if sev_blocked_line %}<p class="muted small">{{ sev_blocked_line }}</p>{% endif %}
+    {% if sev_blocked_line %}<p class="muted small note">{{ sev_blocked_line }}</p>{% endif %}
     {# 漏洞列表分页（续53）：过滤（级别 / 关键字）与分页全在**服务端**做（`db.page_vulns`），
        原先固定 `limit=1000`、>1000 条静默丢结果的问题已修；级别 / 关键字筛选也从前端
        （`data-sev` / `data-filter`，只筛当前页）搬到 SQL 侧。⚠️ 这是 **GET form**，必须放在
@@ -161,7 +161,7 @@
        计数矩阵 + 每目标命中数。纯展示层：数据来自本任务已有 `vulns` 行（路由侧一条 GROUP BY），
        零额外请求。逐行复核下拉仍在（`复核` 列），复核数据仍进 Markdown 报告。 #}
     <div>
-      <p class="muted small">漏洞总览（本任务全部 <b>{{ vuln_matrix.total }}</b> 条）：按「级别 × 来源」</p>
+      <p class="muted small note">漏洞总览（本任务全部 <b>{{ vuln_matrix.total }}</b> 条）：按「级别 × 来源」</p>
       <table class="matrix">
         <thead><tr><th>级别</th>
           {% for s in vuln_matrix.srcs %}<th>{{ s }}</th>{% endfor %}<th>小计</th></tr></thead>
@@ -178,7 +178,7 @@
           <td><b>{{ vuln_matrix.total }}</b></td></tr></tfoot>
       </table>
       {% if vuln_matrix.targets %}
-      <p class="muted small">每目标命中数（前 10）：</p>
+      <p class="muted small note">每目标命中数（前 10）：</p>
       <ol class="muted small">
         {% for t, c in vuln_matrix.targets[:10] %}
         <li><span class="mono">{{ t }}</span> —— {{ c }}</li>
@@ -208,18 +208,18 @@
             {% set _rh = retest_hint(v.retest_state) %}{% if _rh %}<span class="muted small">（{{ _rh }}）</span>{% endif %}{% endif %}</td>
             <td class="evidence"><details><summary class="muted">展开</summary>
               <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre>
-              {% if v.packets %}<p class="muted small">数据包（请求行 / 状态与长度 / 关键响应头 / 正文指纹；凭据值一律掩码）</p>
+              {% if v.packets %}<p class="muted small note">数据包（请求行 / 状态与长度 / 关键响应头 / 正文指纹；凭据值一律掩码）</p>
               <pre>{{ v.packets }}</pre>
               {# 续151（用户点单）：数据包 → 可复现的 curl / Python，一键复制 #}
               {% set _curl = packet_curl(v.packets, v.target) %}
               {% if _curl %}
-              <p class="muted small">复现：
+              <p class="muted small note">复现：
                 <button type="button" class="btn-mini ghost" data-copy="#tvcurl-{{ v.id }}">复制 curl</button>
                 <button type="button" class="btn-mini ghost" data-copy="#tvpy-{{ v.id }}">复制 Python</button></p>
               <pre id="tvcurl-{{ v.id }}">{{ _curl }}</pre>
               <pre id="tvpy-{{ v.id }}">{{ packet_python(v.packets, v.target) }}</pre>
               {% endif %}
-              {% else %}<p class="muted small">{{ no_packets_hint }}</p>{% endif %}
+              {% else %}<p class="muted small note">{{ no_packets_hint }}</p>{% endif %}
           {# 续177：JS 疑似凭据的**原文**单独一行（授权目标挖到的按扫描产物处理，
               AGENTS.md §5.10 注）。"是不是 js-secret 行"由路由侧判（vuln_source 那一处
               产地），模板只认 js_raw 映射 —— 不在这里抄第二份前缀判据。 #}
@@ -232,7 +232,7 @@
               <button type="submit" class="btn-mini">判误报并拉黑值</button>
             </form></p>
           {% endif %}
-              {% if v.review_note %}<p class="muted small">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
+              {% if v.review_note %}<p class="muted small note">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
           </tr>
         {% else %}
           <tr><td colspan="6" class="muted">暂无数据（低于「策略配置」中最低报告级别的结果不会收录）。</td></tr>
@@ -246,23 +246,24 @@
 
 <div class="tabpane" id="pane-sites">
   <section class="panel">
-    <p class="muted small">勾选站点 →「批量打开」只在你自己的浏览器里开标签页（单次最多 20 个），
-      <b>不发任何请求</b>；同一排还有「重新截图（勾选站点）」与「重截失败的站点」——
-      那两颗<b>真的会去截图</b>：走 <span class="mono">POST /api/sites/reshoot</span> 在<b>本任务里</b>
+    <p class="muted small note">勾选站点 →「批量打开」只在你自己的浏览器里开标签页（单次最多 20 个），
+      <b>不发任何请求</b>；同一排的「重截」那颗<b>真的会去截图</b>：走
+      <span class="mono">POST /api/sites/reshoot</span> 在<b>本任务里</b>
       排一轮只跑 <span class="mono">screenshot</span> 阶段的追加运行（<b>不新建任务</b>，排队等 worker
-      空了才做，所以点完先看到「排队中」而不是立刻出图）。</p>
+      空了才做，所以点完先看到「排队中」而不是立刻出图）—— 勾了行就截这几个，一行没勾就截本任务
+      所有截图失败的站点。</p>
     {% if shot_missing %}
-    <p class="muted small">{% if not shot_enabled %}本任务没有截图产物：截图阶段策略级<b>默认关闭</b>
+    <p class="muted small note">{% if not shot_enabled %}本任务没有截图产物：截图阶段策略级<b>默认关闭</b>
       （「策略配置 → 资产面拓展」）。要截图请在<b>建任务时</b>勾 <span class="mono">screenshot</span> 阶段
       （落任务级选项 <span class="mono">screenshot_on</span>，不改全局策略）——
-      也可以在本页<b>勾选站点后点「重新截图」</b>，或直接点「重截失败的站点」——
+      也可以在本页<b>点「重截」</b>（勾了行就截这几个，没勾就截所有失败站点）——
       那一轮<b>只跑 screenshot 阶段</b>、排进队列等 worker 空了再执行（不新建任务、沿用本任务日志）。
       {% elif not shot_ready %}本任务已开启截图，但本机<b>没找到可用的无头浏览器</b>（Edge/Chrome），
       所以没有产物；可在「策略配置 → 资产面拓展」填 <span class="mono">screenshot.browser</span>。
       {% else %}本任务已开启截图但还没有产物（可能是截图失败），失败原因见运行日志。{% endif %}</p>
     {% endif %}
     {% if shot_retry.rounds %}
-    <p class="muted small">截图<b>候补重试</b>已开（上限 {{ shot_retry.rounds }} 轮）：
+    <p class="muted small note">截图<b>候补重试</b>已开（上限 {{ shot_retry.rounds }} 轮）：
       {% if shot_retry.round %}<b>候补第 {{ shot_retry.round }}/{{ shot_retry.rounds }} 轮</b>，
       本轮只重跑 <span class="mono">screenshot</span> 阶段；{% endif %}现在还有
       <b>{{ shot_retry.left }}</b> 张没截成、且原因在「{{ shot_retry.reasons }}」这几档 ——
@@ -276,7 +277,7 @@
       本轮没有需要候补的站点（要么全截成了，要么失败都在不可重试档）。{% endif %}
       开关在「策略配置 → 站点截图 → 截图候补重试轮数」。</p>
     {% endif %}
-    <p class="muted small">状态码：
+    <p class="muted small note">状态码：
       {% if sites_pager.allst %}
         当前<b>显示全部状态码</b>。
         <a class="btn-mini ghost" href="{{ sites_pager.base }}?stpage={{ sites_pager.page }}{{ sites_pager.st_off }}{{ sites_pager.anchor }}">只看 200 / 404（含跳转后的）</a>
@@ -320,12 +321,13 @@
       <button type="button" class="ghost" id="btn-open-sites" data-pick-from="#tbl-detail-sites"
         title="把勾选的站点逐个在新标签页打开；只开标签页，不发送任何扫描请求">批量打开（勾选站点）</button>
     </div>
-      <button type="submit" class="ghost"
-        title="把勾选的这些站点排进队列，再截一轮（只跑 screenshot 阶段、只打这几个 URL；沿用本任务、跨运行去重）">
-        重新截图（勾选站点）</button>
+      {# 续197（主理人点单「简化成一个重截，不勾选站点他就默认重截失败站点」）：两颗并一颗 ——
+         勾选了行就重截勾选的那些；一行没勾，后端按库里「有失败原因且没有截图」的行来排
+         （判据只有 db.list_shot_failures 一处，两颗按钮时代也是这一份）。人工点的这颗不看
+         原因档：管它是超时、没产出还是没浏览器，都要再看一眼 —— 原因档只管**自动**候补重试。 #}
       <button type="submit" class="ghost" name="only_failed" value="1"
-        title="不勾选时按库里「有失败原因且没有截图」的那些行来排。人工点的这颗不看原因档：管它是超时、没产出还是没浏览器，都要再看一眼">
-        重截失败的站点{% if shot_retry.failed %}（{{ shot_retry.failed }}）{% endif %}</button>
+        title="排一轮只跑 screenshot 的追加运行：勾了行就截这几个 URL，一行没勾就截本任务所有截图失败的站点（沿用本任务、跨运行去重，不新建任务）">
+        重截{% if shot_retry.failed %}（失败 {{ shot_retry.failed }}）{% endif %}</button>
       <span class="muted small">单次最多排 {{ shot_retry.cap }} 张（<span class="mono">screenshot.max_sites</span>）；
         尝试口径：{{ shot_retry.plan }}。</span>
     {# 续112：「批量打开」的链接面板 —— 浏览器只允许一次手势开一个标签页，其余站点必须交给用户逐个点击才真能开 #}
@@ -434,13 +436,13 @@
 
 <div class="tabpane" id="pane-ext">
   <section class="panel">
-    <p class="muted small">JS 挖掘（<span class="mono">js:mine</span>，挖掘 JS 数量：{{ js_count_of(task.id) if js_count_of(task.id) is not none else '—' }}）与外部情报
+    <p class="muted small note">JS 挖掘（<span class="mono">js:mine</span>，挖掘 JS 数量：{{ js_count_of(task.id) if js_count_of(task.id) is not none else '—' }}）与外部情报
 
       （<span class="mono">osint:cseg</span> / <span class="mono">osint:fofa</span> /
       <span class="mono">osint:fofa-cert</span> / <span class="mono">osint:fofa-title</span>）
       带出来的关联域名 —— 它们<b>未必属于目标自身</b>，所以不混进「子域名」页签。
       侧栏不再单列该页，跨任务视图仍可在 /extdomains 直接访问。</p>
-    <p class="muted small"><b>默认已按来源分类排序</b>（JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段，
+    <p class="muted small note"><b>默认已按来源分类排序</b>（JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段，
       同类内新的在前），不再交错；点下面按钮只看某一类。</p>
     <div class="row">
       <a class="btn-mini {{ 'ghost' if ext_src else '' }}"
@@ -451,7 +453,7 @@
            href="{{ url_for('task_detail', task_id=task.id) }}?esrc={{ k }}#ext">{{ label }}（{{ n }}）</a>
       {% endfor %}
     </div>
-    <p class="muted small"><b>这些域名默认不会自动扫</b> —— probe / dirscan / vulnscan 的输入是
+    <p class="muted small note"><b>这些域名默认不会自动扫</b> —— probe / dirscan / vulnscan 的输入是
       「存活站点」，而 osint、jsmine 两个阶段排在 probe <b>之后</b>，同一任务里新挖出的域名赶不上本轮探测，
       于是停在"有域名、无检测"的状态。勾选你确认要看的域名，用下面几个按钮手动处理
       （拓展域名里大量是 CDN / 开源库 / JS 命名空间碎片，全自动跑既越权又浪费额度）：
@@ -486,29 +488,10 @@
       <div class="bulkbar">
         <button type="submit" class="ghost"
           title="把这些域名的子域再挖一遍，再探存活、扫目录、跑漏洞初筛；默认**追加进本任务**（不新建任务）">
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
-送
-去
-探
-测
-<
-/
-b
-u
-t
-t
-o
-n
->
+        {# 续197：这颗按钮曾被逐字换行拆开（送\n去\n探\n测\n<\n/\nb…）—— 标签里夹了换行，
+           浏览器就不认它是标签，`</button>` 会当正文吐出来，中文之间也被换行渲染成空格。
+           一次改回一行；form / formaction 与提交行为一字未动。 #}
+          送去探测</button>
 
         <label class="muted" title="默认送本任务全部拓展域名（第三方 / CDN 清单里的那些不送，条数上限见 limits.ext_probe_max）；只想探勾上的几个就改成「只送勾选」">
           探测范围 <select name="scope"><option value="all">全任务</option><option value="picked">只送勾选</option></select></label>
@@ -580,7 +563,7 @@ n
 
 <div class="tabpane" id="pane-ports">
   <section class="panel">
-    <p class="muted small">本任务实际扫到的端口。要对某些主机跑<b>全端口</b>
+    <p class="muted small note">本任务实际扫到的端口。要对某些主机跑<b>全端口</b>
       （<span class="mono">1-65535</span>），到侧栏「全端口扫描」页发起：任务选项
       <span class="mono">portscan_full</span> 让它无视全局开关也会执行，并自动跳过已扫过的端口
       （<span class="mono">portscan.exclude_scanned</span>）。6.5 万个端口逐连接，耗时以分钟计。</p>
@@ -651,25 +634,25 @@ n
 
 <div class="tabpane" id="pane-certs">
   <section class="panel">
-    <p class="muted small">对 <b>https 站点</b>与<b>端口命中 {{ cert_tls_ports|join(' / ') }}</b> 的站点
+    <p class="muted small note">对 <b>https 站点</b>与<b>端口命中 {{ cert_tls_ports|join(' / ') }}</b> 的站点
       各做<b>一次只读 TLS 握手</b>取出证书（纯标准库解析颁发者 / 有效期 / CN / SAN / 指纹，
       不发 HTTP、不写目标）。握手<b>不校验证书</b> —— 自签名与过期正是要看的东西，
       所以这里的「自签」「已过期」是<b>取证结论，不是漏洞判定</b>。
       默认排序：<b>已过期 → 自签 → 剩余天数少</b>的在前。</p>
-    <p class="muted small">「来源」列区分两件事：<b>TLS 握手</b>＝本次真的连上去取到的证书
+    <p class="muted small note">「来源」列区分两件事：<b>TLS 握手</b>＝本次真的连上去取到的证书
       （<code>cert</code> 阶段）；<b>CT 日志</b>＝公开证书透明度日志里与该域名相关的历史证书
       （<code>osint</code> 阶段，开关 <code>ctlog.enabled</code>，默认关）——
       后者是<b>线索与资产面补充</b>，不等于"目标此刻在用这张证书"。</p>
     {% if not cert_total %}
       {% if not cert_enabled %}
-      <p class="muted small">本任务没有取证书：<b>cert 阶段默认关闭</b>。可在「策略配置 → 资产面拓展」
+      <p class="muted small note">本任务没有取证书：<b>cert 阶段默认关闭</b>。可在「策略配置 → 资产面拓展」
         打开「TLS 证书取证」，或新建任务时勾选阶段里的 <code>cert</code>。</p>
       {% elif not cert_pick %}
-      <p class="muted small">本任务没有取证书：<b>没有可取证的目标</b> —— 需要站点走 https，
+      <p class="muted small note">本任务没有取证书：<b>没有可取证的目标</b> —— 需要站点走 https，
         或端口是 {{ cert_tls_ports|join(' / ') }}（本次扫到 {{ site_total }} 个站点，
         没有一个是 https / 加密端口）。</p>
       {% else %}
-      <p class="muted small">本任务有 {{ cert_pick }} 个可取证目标，但都没取到证书
+      <p class="muted small note">本任务有 {{ cert_pick }} 个可取证目标，但都没取到证书
         （常见原因：目标没在做 TLS、连接被拒/超时、端口是明文 HTTP 但被记成加密端口）。
         具体失败原因见「运行日志」里 <code>[cert]</code> 开头的行。</p>
       {% endif %}
@@ -716,7 +699,7 @@ n
     </table>
     {% set pager = certs_pager %}{% include "_pager.html" %}
     {% if cert_total %}
-    <p class="muted small">完整字段（含主体全称 <code>subject</code>）见任务工作目录下的
+    <p class="muted small note">完整字段（含主体全称 <code>subject</code>）见任务工作目录下的
       <code>certs.txt</code> 与数据库 <code>certs</code> 表。</p>
     {% endif %}
   </section>
@@ -724,7 +707,7 @@ n
 
 <div class="tabpane" id="pane-dirs">
   <section class="panel">
-    <p class="muted small">「大小」是返回包字节数；同一站点下状态码与大小都相同的多条只留首个
+    <p class="muted small note">「大小」是返回包字节数；同一站点下状态码与大小都相同的多条只留首个
       （软 404 模板 / 统一跳转页），本页已隐藏 {{ dirs_hidden or 0 }} 条重复长度。
       默认排序：<b>200 优先，其次按大小降序</b>（越大的响应越可能是真实页面）。</p>
 
@@ -762,7 +745,7 @@ n
 <div class="tabpane" id="pane-flags">
   <section class="panel">
     <h2>敏感信息（{{ flag_total }} 条）</h2>
-    <p class="muted small">由 <code>scanner/flagfind.py</code> 从<b>本任务已经抓到的正文</b>里按形状抽取
+    <p class="muted small note">由 <code>scanner/flagfind.py</code> 从<b>本任务已经抓到的正文</b>里按形状抽取
       （<b>零额外请求</b>：页面 / JS / 目录命中 / POC 证据），判据在「策略配置 → 敏感信息 / flag 候选抽取」。
       <b>这是候选清单，不是结论</b>：同形状的 <code>flag{xxx}</code> 与 <code>AKIA…</code> 经常是模板或
       JS 里的占位符，逐条判真才是结论 —— 清单刻意偏宽，因为漏报的代价是丢一道题，误报的代价只是多看一眼。</p>
@@ -777,7 +760,7 @@ n
           {# 续151（用户点单）：敏感信息也接同一套 packetcodec —— 没有数据包就用 `url` 按 GET 复现
              （拿回那份正文 / JS 原文，正是"点开即取原文"想要的东西）。 #}
           <td>{% set _fc = packet_curl('', f.url) %}{% if _fc %}<details><summary class="muted small">复现</summary>
-            <p class="muted small"><button type="button" class="btn-mini ghost" data-copy="#fcurl-{{ f.id }}">复制 curl</button>
+            <p class="muted small note"><button type="button" class="btn-mini ghost" data-copy="#fcurl-{{ f.id }}">复制 curl</button>
             <button type="button" class="btn-mini ghost" data-copy="#fpy-{{ f.id }}">复制 Python</button></p>
             <pre id="fcurl-{{ f.id }}">{{ _fc }}</pre>
             <pre id="fpy-{{ f.id }}">{{ packet_python('', f.url) }}</pre></details>
@@ -813,7 +796,7 @@ n
         <tr><th>创建 / 更新</th><td>{{ task.created_at }} / {{ task.updated_at }}</td></tr>
       </tbody>
     </table>
-    <p class="muted">检测策略（最低报告级别 / 分类开关 / 免杀强度）在「策略配置」页统一调整，
+    <p class="muted note">检测策略（最低报告级别 / 分类开关 / 免杀强度）在「策略配置」页统一调整，
       对之后新建的任务生效。
       {% if auth_view %}登录态只发给<b>目标侧</b>（crt.sh / FOFA / KEV / IP 反查等第三方接口不带），
       值在本页与日志里都是掩码；本任务发起的「复查 / 拓展域名探测」会<b>自动继承</b>这份登录态。{% endif %}</p>

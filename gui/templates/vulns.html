@@ -7,7 +7,7 @@
 {% set base_args = dict(task_id=(task_id or None), q=(q or None), size=pager.size,
                         sort=sort, desc=('1' if desc else '0')) %}
 {% set col_args = dict(base_args, severity=(sev or None), review=(review or None)) %}
-<p class="muted small">跨任务漏洞视图：<b>服务端分页 + 排序 + 关键字过滤</b>（共 {{ pager.total }} 条，过滤后）。
+<p class="muted small note">跨任务漏洞视图：<b>服务端分页 + 排序 + 关键字过滤</b>（共 {{ pager.total }} 条，过滤后）。
   级别 / 复核 / 任务 / 关键字 / 排序状态在翻页时<b>全部保持</b>。</p>
 {# 续149：级别 / 复核筛选从"一行裸文字链接"改成胶囊分段控件（用户反馈「很单薄很丑」）。
    链接仍指向同一个 /vulns 路由，筛选状态照旧由服务端 URL 参数承载，翻页保持逻辑一个字节没变。 #}
@@ -68,7 +68,7 @@
     <button class="ghost" type="submit">查询</button>
     {% if task_id or sev or review or q %}<a class="btn-mini ghost" href="{{ url_for('vulns') }}">清空</a>{% endif %}
   </form>
-  <p class="muted small">复核筛选与「已确认 / 误报」计数仍可用（上方胶囊）。续150（用户 2026-10-11
+  <p class="muted small note">复核筛选与「已确认 / 误报」计数仍可用（上方胶囊）。续150（用户 2026-10-11
     点单）：页内「批量确认存在 / 批量判误报 / 退回待复核」与逐行复核下拉已移除 —— 这几个动作
     用户判定暂不常用；后端接口与复核数据一并保留，需要时可再挂回来。</p>
   <table id="tbl-vulns-all">
@@ -108,19 +108,19 @@
           {% set _rh = retest_hint(v.retest_state) %}{% if _rh %}<span class="muted small">（{{ _rh }}）</span>{% endif %}{% endif %}</td>
         <td class="evidence"><details><summary class="muted">展开</summary>
           <p>{{ v.detail }}</p><pre>{{ v.evidence }}</pre>
-          {% if v.packets %}<p class="muted small">数据包（请求行 / 状态与长度 / 关键响应头 / 正文指纹；凭据值一律掩码）</p>
+          {% if v.packets %}<p class="muted small note">数据包（请求行 / 状态与长度 / 关键响应头 / 正文指纹；凭据值一律掩码）</p>
               <pre>{{ v.packets }}</pre>
               {# 续151（用户点单）：把数据包转成**可复现**的 curl / Python 脚本，一键复制。
                  抽不到请求行时不渲染（`packet_curl` 返回空串）。 #}
               {% set _curl = packet_curl(v.packets, v.target) %}
               {% if _curl %}
-              <p class="muted small">复现（点一下复制，粘贴到终端 / 编辑器即可）：
+              <p class="muted small note">复现（点一下复制，粘贴到终端 / 编辑器即可）：
                 <button type="button" class="btn-mini ghost" data-copy="#vcurl-{{ v.id }}">复制 curl</button>
                 <button type="button" class="btn-mini ghost" data-copy="#vpy-{{ v.id }}">复制 Python</button></p>
               <pre id="vcurl-{{ v.id }}">{{ _curl }}</pre>
               <pre id="vpy-{{ v.id }}">{{ packet_python(v.packets, v.target) }}</pre>
               {% endif %}
-          {% else %}<p class="muted small">{{ no_packets_hint }}</p>{% endif %}
+          {% else %}<p class="muted small note">{{ no_packets_hint }}</p>{% endif %}
           {# 续177：JS 疑似凭据的**原文**单独一行（授权目标挖到的按扫描产物处理，
               AGENTS.md §5.10 注）。"是不是 js-secret 行"由路由侧判（vuln_source 那一处
               产地），模板只认 js_raw 映射 —— 不在这里抄第二份前缀判据。 #}
@@ -133,7 +133,7 @@
               <button type="submit" class="btn-mini">判误报并拉黑值</button>
             </form></p>
           {% endif %}
-          {% if v.review_note %}<p class="muted small">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
+          {% if v.review_note %}<p class="muted small note">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
       </tr>
     {% else %}
       <tr><td colspan="9" class="muted">暂无数据。</td></tr>

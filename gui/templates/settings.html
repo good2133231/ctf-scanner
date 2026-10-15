@@ -12,7 +12,7 @@
 {# 这一栏只读，混进表单里就会被"保存策略配置"一起提交，而它一个字段都不该提交。 #}
 <section class="panel collapsible" data-panel="extsrc">
   <h2>外部情报源实际可用性</h2>
-  <p class="muted">这一栏回答的是「这一段现在<b>真跑得了吗</b>」= 策略开关 × 凭据是否就位。
+  <p class="muted note">这一栏回答的是「这一段现在<b>真跑得了吗</b>」= 策略开关 × 凭据是否就位。
     两者缺一个就是零结果，而日志里那句「未配置」通常要等任务跑完才看得见 —— 把结论前置到这里，
     免得"查了个空"被当成"目标没有东西"。</p>
   <table>
@@ -37,7 +37,7 @@
       {% endfor %}
     </tbody>
   </table>
-  <p class="muted small">凭据文件：
+  <p class="muted small note">凭据文件：
     {{ '密文 config/keys.enc.yaml' if esp.vault.encrypted else '明文 config/keys.yaml' }}｜
     本次进程{{ '已解锁' if esp.vault.unlocked else '未解锁' }}。
     本页<b>只显示有 / 无，从不显示值</b>；未解锁时所有需要凭据的源一律按「无 key」如实降级
@@ -50,7 +50,7 @@
 <form method="post">
   <section class="panel collapsible" data-panel="detect">
     <h2>检测策略（分级门控 · 决定"哪些洞值得报"）</h2>
-    <p class="muted">CTF 实战建议保持 medium：明文 HTTP、安全响应头缺失、组件版本泄露这类
+    <p class="muted note">CTF 实战建议保持 medium：明文 HTTP、安全响应头缺失、组件版本泄露这类
       低危与 info 项不会帮你拿到 flag，只会淹没注入/RCE 类结果。</p>
     <div class="row">
       <label>最低报告级别
@@ -75,7 +75,7 @@
         {{ 'checked' if s.limits.favicon_md5 }}> 采集 favicon MD5（POC 可用它做零请求前置判定）</label>
     </div>
     <h2>敏感信息 / flag 候选抽取（默认开，零额外请求）</h2>
-    <p class="muted small">从<b>本任务已经抓到的正文</b>（页面 / JS / 目录命中 / POC 证据）里按形状抽
+    <p class="muted small note">从<b>本任务已经抓到的正文</b>（页面 / JS / 目录命中 / POC 证据）里按形状抽
       云厂商 AK/SK、各家 API key、JWT、私钥头，以及 <code>flag{...}</code> / <code>ctf{...}</code>
       这类值，单独进「敏感信息」页签 —— <b>不写进漏洞、不计入漏洞数</b>。
       本模块<b>不发任何请求</b>，也<b>不判定真伪</b>：同一形状大量是模板 / JS 占位符，逐条判真是人的事。
@@ -102,11 +102,11 @@
     <label class="chk"><input type="checkbox" name="report_export_enabled" value="1"
       {{ 'checked' if s.report.export_enabled }}> <b>启用报告导出</b>（任务详情页右上角出现
       MD / JSONL / HTML / PDF / 完整版报告 五个入口；关闭期间数据照常入库，随时可开）</label>
-    <p class="muted small">「完整版报告」= 各资产小节不截断（默认版每节限 100/200 条，截断时会注明）；
+    <p class="muted small note">「完整版报告」= 各资产小节不截断（默认版每节限 100/200 条，截断时会注明）；
       PDF 走本机无头浏览器打印（复用站点截图那条浏览器探测路径，没有浏览器时可改导 HTML 后
       用浏览器"打印 → 另存为 PDF"）。</p>
     <h2>外部引擎 afrog（默认开）</h2>
-    <p class="muted small">
+    <p class="muted small note">
       勾选后，vulnscan 阶段会<b>额外</b>跑一次外部 afrog：只喂它逐条判过"只读 + info 级"的模板
       （非 GET / 带请求体 / tcp / brute 清单 / severity≠info 的一律不进它的目录，被拒条数写进任务日志）。
       <b>默认已勾选</b>，但真要起进程还要同时满足三条闸门：① 本开关打开；② PoC 目录里<b>有</b>通过
@@ -132,7 +132,7 @@
       <label>整进程超时 s <input name="afrog_proc_timeout" size="5" value="{{ s.afrog.proc_timeout }}"></label>
     </div>
     <h2>按级别分类批量开关（连请求都不发）</h2>
-    <p class="muted">勾上＝该级别的检测**根本不执行**。默认勾掉 info 与 low：CTF 实战里
+    <p class="muted note">勾上＝该级别的检测**根本不执行**。默认勾掉 info 与 low：CTF 实战里
       明文 HTTP / 版本泄露 / 响应头缺失这类项拿不到 flag，即使跑了也会被"最低报告级别"丢掉，
       不执行纯属省请求。想做广谱信息收集时取消勾选，并把上面门槛调成 low/info。</p>
     <div class="row">
@@ -160,7 +160,7 @@
 
   <section class="panel collapsible" data-panel="ssrf">
     <h2>A10 SSRF 受控回连（<b>默认关</b>）</h2>
-    <p class="muted">原理：任务内起一个<b>本机</b> HTTP 回连监听，为每个候选参数生成一个唯一
+    <p class="muted note">原理：任务内起一个<b>本机</b> HTTP 回连监听，为每个候选参数生成一个唯一
       token，把 <code>http://&lt;回调基址&gt;/&lt;token&gt;</code> 喂进去；收到携带该 token 的
       访问，就说明<b>目标服务端真的按我们给的地址发起了出网请求</b> —— 这是 SSRF 存在性的
       直接证据，不依赖任何错误回显。</p>
@@ -177,7 +177,7 @@
       <label>等待回连秒数 <input name="ssrf_wait_seconds" value="{{ s.ssrf.wait_seconds }}"></label>
       <label>每 URL 最多注入几个参数 <input name="ssrf_max_params" value="{{ s.ssrf.max_params }}"></label>
     </div>
-    <p class="muted small"><b>局限先看清楚</b>：本机监听只在<b>目标能回访扫描机</b>时有效 ——
+    <p class="muted small note"><b>局限先看清楚</b>：本机监听只在<b>目标能回访扫描机</b>时有效 ——
       扫描机在 NAT 后 / 云主机无公网 IP / 目标出网被拦时，一条回连都收不到，这是环境限制。
       <b>刻意不做</b>：不打内网地址（<code>127.0.0.1:8080</code>、<code>169.254.169.254</code> 那类
       属于利用，越线），不提交页面表单（可能是写操作，表单只被用来取字段名，注入一律走 GET），
@@ -235,16 +235,16 @@
         <option value="{{ lv }}" {{ 'selected' if lv == (s.subdomain.ext_min_confidence or 'high') }}>{{ lab }}</option>
         {% endfor %}
       </select></label>
-    <p class="muted small">上面这一档只管<b>自动递归</b>要不要带上「像自家、但注册域不是目标」的拓展域名
+    <p class="muted small note">上面这一档只管<b>自动递归</b>要不要带上「像自家、但注册域不是目标」的拓展域名
       （例：目标 <code>abcd.org</code> 拓展出 <code>abdc.com</code>）；人工点「送去探测」时勾选的行不受它约束。
       第三方清单 / CDN / 黑名单命中的<b>无论哪一档都不自动扫</b>。判据与依据文本只有一份：
       <code>scanner/extdom.py::confidence()</code>；建任务面板与拓展域名页读的都是它。</p>
-    <p class="muted small">subfinder 调用恒带 <code>-all</code>（全部数据源，不加时只用默认源集合，覆盖明显更小）。</p>
+    <p class="muted small note">subfinder 调用恒带 <code>-all</code>（全部数据源，不加时只用默认源集合，覆盖明显更小）。</p>
   </section>
 
   <section class="panel collapsible" data-panel="assets">
     <h2>资产面拓展（子域接管 / JS 挖掘 / 端口服务 / 站点截图 / TLS 证书 / 目录发现）</h2>
-    <p class="muted">这几项都属于"发散"用的资产面拓展，默认策略见下方勾选状态；
+    <p class="muted note">这几项都属于"发散"用的资产面拓展，默认策略见下方勾选状态；
       风险与耗时各不相同，可按需逐个开关。</p>
     <label class="chk"><input type="checkbox" name="takeover_enabled" value="1"
       {{ 'checked' if s.takeover.enabled }}> 子域接管检测（CNAME 指向已停用的第三方服务，如 S3 / Heroku / GitHub Pages）</label>
@@ -276,7 +276,7 @@
     <label class="chk"><input type="checkbox" name="jsmine_strip_comments" value="1"
       {{ 'checked' if s.jsmine.strip_comments }}> 域名抽取前剥离 JS 注释（<code>lodash.com</code> /
       <code>feross.org</code> 这类 OSS 主页都藏在 license banner 注释里；凭据与 flag 抽取不受影响）</label>
-    <p class="muted small">三道闸每一档的拒绝<b>数量与样本都会写进任务日志</b>（"候选域名质检拒收：…"），
+    <p class="muted small note">三道闸每一档的拒绝<b>数量与样本都会写进任务日志</b>（"候选域名质检拒收：…"），
       不会静默丢；想回捞某个被拒的名字，往 <code>config/dicts/js_thirdparty.txt</code> /
       <code>config/dicts/cdn_cname.txt</code> 里删对应行即可。</p>
     <label class="chk"><input type="checkbox" name="portscan_enabled" value="1"
@@ -284,7 +284,21 @@
     <label>端口列表（空=内置 TOP 表，也支持 "80,443" 或 "1-1024"）
       <input name="portscan_ports" value="{{ s.portscan.ports }}" placeholder="留空使用内置 TOP 端口"></label>
     <label>扫描主机上限 <input name="portscan_max_hosts" value="{{ s.portscan.max_hosts }}"></label>
+    {# 续197（主理人两问：「1.0 秒是不是太久了」「我们现在是不是默认会进行端口扫描」）：
+       两个答案都写在页面上 —— ① 默认**关闭**（enabled=false 时阶段直接跳过、一个连接都不发）；
+       ② 1.0 秒是 **TOP 档**的值，默认档是**全端口**（续144 起），全端口实际吃的是下面那个
+       「全端口专用单端口超时」；fscan 引擎还会把它量化到整秒（`-time` 只认整秒、最小 1 秒）。 #}
+    <p class="muted small note">当前状态：{% if s.portscan.enabled %}<b>已开启</b> —— 任务跑到
+      portscan 阶段会真的连端口。{% else %}<b>关闭</b> —— portscan 阶段会被跳过，
+      <b>一个连接都不发</b>（要单次触发用「全端口扫描」页）。{% endif %}</p>
     <label>单端口超时（秒） <input name="portscan_timeout" value="{{ s.portscan.timeout }}"></label>
+    <p class="muted small note">两个超时<b>分档生效</b>：上面这个只在「内置 TOP 端口」档用，
+      「全端口专用单端口超时」只在全端口档用 —— 当前档位是
+      <b>{{ '全端口（1-65535）' if s.portscan.mode == 'full' else '内置 TOP 端口' }}</b>，
+      所以实际生效的是 <b>{{ s.portscan.full_timeout if s.portscan.mode == 'full'
+      else s.portscan.timeout }}</b> 秒那个。引擎选 auto/fscan 时，超时会被取整到整秒
+      （fscan 的 <code>-time</code> 只认整秒、最小 1 秒），想真正吃到 0.5 秒就把引擎钉成
+      「只用内置 TCP connect」。</p>
     <label>并发连接数 <input name="portscan_workers" value="{{ s.portscan.workers }}"></label>
     <label class="chk"><input type="checkbox" name="portscan_banner" value="1"
       {{ 'checked' if s.portscan.banner }}> 被动读取 banner（仅 SSH/SMTP/MySQL/Redis 等会主动问候的端口）</label>
@@ -307,10 +321,10 @@
       </select></label>
     <label class="chk"><input type="checkbox" name="portscan_ml_service" value="1"
       {{ 'checked' if s.portscan.ml_service }}> ML·服务识别（banner 字符 n-gram 补服务名，需 data/ml/service_model.json；默认关）</label>
-    <p class="muted small">fscan 不是必需项：把它放进 PATH 或填 <code>tools.fscan</code> 才会用。
+    <p class="muted small note">fscan 不是必需项：把它放进 PATH 或填 <code>tools.fscan</code> 才会用。
       调用时<b>强制带 <code>-np -nobr -nopoc</code></b>（跳过存活探测、关闭内置暴力破解与 Web POC），
       只用它的端口发现能力；老版本不认 <code>-nopoc</code> 时会去掉它重试，<code>-np -nobr</code> 始终保留。</p>
-    <p class="muted small">只想对个别 IP 补一次全端口，不必改这里的全局开关：去「全端口扫描」页勾选主机
+    <p class="muted small note">只想对个别 IP 补一次全端口，不必改这里的全局开关：去「全端口扫描」页勾选主机
       → 点「发起全端口扫描」，它新建的任务会用任务级选项触发，跑完不影响全局策略。</p>
     <label class="chk"><input type="checkbox" name="screenshot_enabled" value="1"
       {{ 'checked' if s.screenshot.enabled }}> <b>站点截图</b>（默认关；调用本机 Edge/Chrome
@@ -330,7 +344,7 @@
     <label>额外拦截的第三方域 <input name="screenshot_block_extra" style="width:22em"
       value="{{ s.screenshot.block_extra|join(', ') }}"
       placeholder="逗号/空格分隔，例：foo-tracker.com"></label>
-    <p class="muted small">为什么要兜底而不是"再等久一点"：一次性
+    <p class="muted small note">为什么要兜底而不是"再等久一点"：一次性
       <span class="mono">--screenshot</span> 只在页面 <b>load 完成</b>时才写 PNG，实测
       Google Chrome 154 对一条永不返回的子资源 —— <span class="mono">--virtual-time-budget</span>、
       <span class="mono">--timeout</span>、old/new headless 四种组合<b>全部</b> 20 秒 0 字节；
@@ -340,7 +354,7 @@
       挡掉 CDN 会截出一张没有样式的空壳，那比"截不到"更误导人。
       「兜底前先等」是给目标侧喘口气，也是主理人点的那句「不要那么快急着重试」；
       这段等待会被「停止」立即打断。</p>
-    <p class="muted small">任务<b>正常跑完</b>后，把这一轮<b>没截成</b>、且失败原因落在
+    <p class="muted small note">任务<b>正常跑完</b>后，把这一轮<b>没截成</b>、且失败原因落在
       「{{ shot_retry_note }}」这几档的站点<b>排进队列再试一轮</b>：那一轮只跑
       <span class="mono">screenshot</span> 阶段、只打这批 URL，等前面的任务跑完、worker
       空了才执行（这就是「空闲再重试」，不是另起一个进程）。<b>随包出厂是 1 轮</b>（续164 按
@@ -396,18 +410,18 @@
       {{ 'checked' if s.dirscan.ml_template }}> ML·软 404 近重复兜底（n-gram Jaccard，md5/长度对不上时判模板页）</label>
     <label class="chk"><input type="checkbox" name="dirscan_ml_outlier" value="1"
       {{ 'checked' if s.dirscan.ml_outlier }}> ML·长度离群提示（把明显离群的 200 命中点名到日志）</label>
-    <p class="muted small">目录递归只在<b>深扫</b>（<code>mode=deep</code> 或建任务勾「全目录深扫」）
+    <p class="muted small note">目录递归只在<b>深扫</b>（<code>mode=deep</code> 或建任务勾「全目录深扫」）
       里生效。请求量估算：一层递归 ≈ <code>+目录数 ×（3 个软 404 基线 + 每目录条数）</code>，
       默认 5 目录 × 40 条时约 <b>+215</b> 请求/站（单站浅扫本身约 153）——
       每个递归目录都会<b>单独</b>探一次软 404 基线，否则子目录自己的统一跳转页会把真实命中全滤掉。</p>
-    <p class="muted small">目录扫描只对<b>不重复站点</b>跑（同任务内标题+长度相同的别名站跳过），
+    <p class="muted small note">目录扫描只对<b>不重复站点</b>跑（同任务内标题+长度相同的别名站跳过），
       目录结果里<b>重复响应长度默认不显示</b>；dirmap 放在 <code>tools/dirmap/</code> 时会自动优先用它，
       找不到就回退内置扫描。</p>
   </section>
 
   <section class="panel collapsible" data-panel="osint">
     <h2>外部情报拓展（OSINT：C 段反查 / ICO 反查 / 证书反查 / 标题反查）</h2>
-    <p class="muted">四项都依赖<b>第三方公共接口</b>，默认关闭；接口不可用时只记一行日志，
+    <p class="muted note">四项都依赖<b>第三方公共接口</b>，默认关闭；接口不可用时只记一行日志，
       不影响流水线其它阶段。产出的新域名都进 <b>「拓展域名」</b>页（来源 <code>osint:*</code>，
       页面上标成「C 段反查 / FOFA·ICO 反查 / FOFA·证书反查 / FOFA·标题反查」），
       C 段归纳结果进任务详情的「C 段」页签。</p>
@@ -448,7 +462,7 @@
     <label class="chk"><input type="checkbox" name="fofa_title_enabled" value="1"
       {{ 'checked' if s.fofa.title_enabled }}> <b>标题反查</b>
       （<code>title="站点标题"</code>：找标题相同的其它资产，需上面的 favicon 开关一并打开）</label>
-    <p class="muted small">黑名单是两层的：① 一眼是模板页的标题（<code>404</code> /
+    <p class="muted small note">黑名单是两层的：① 一眼是模板页的标题（<code>404</code> /
       <code>Error</code> / <code>Welcome to nginx</code> …）<b>连查询都不发</b>；
       ② 查完发现命中数超过下面的阈值，判为"公共标题"并放弃拓展 —— 和"黑 ico"是同一套逻辑，
       只是判据换成标题。</p>
@@ -462,7 +476,7 @@
       </select></label>
 
     <h2>Shodan / Quake favicon 反查（同一批 mmh3，换一家平台）</h2>
-    <p class="muted">与 FOFA 的 favicon 反查<b>同构</b>：三家的指纹都是 MurmurHash3
+    <p class="muted note">与 FOFA 的 favicon 反查<b>同构</b>：三家的指纹都是 MurmurHash3
       （<code>scanner/mmh3.py</code>），所以这里复用同一批哈希，只是查询语句、鉴权方式与响应
       结构不同（<code>scanner/shodan.py</code> / <code>scanner/quake.py</code> 各自一个文件）。
       阈值思路完全沿用"命中过多即放弃拓展"。key 请写入 <code>config/keys.yaml</code>。</p>
@@ -488,7 +502,7 @@
     </div>
 
     <h2>CT 日志在线查询（crt.sh，免 key）</h2>
-    <p class="muted">查 <code>https://crt.sh/?q=&lt;域&gt;&amp;output=json</code>，产出
+    <p class="muted note">查 <code>https://crt.sh/?q=&lt;域&gt;&amp;output=json</code>，产出
       <b>证书维度</b>记录（签发者 / 有效期 / 序列号 / 涉及的域名 / CT 条目数），字段口径与
       <code>scanner/certs.py</code> 对齐，可直接进任务详情的「<b>SSL 证书</b>」页签（来源标成
       <code>ct</code>）；这些证书覆盖的域名同时进「拓展域名」（来源 <code>osint:ctlog</code>）。
@@ -507,7 +521,7 @@
     <label class="chk"><input type="checkbox" name="ctlog_write_certs" value="1"
       {{ 'checked' if s.ctlog.write_certs }}> 把证书记录写进「SSL 证书」页签（来源 <code>ct</code>，
       与「TLS 握手」来源的行<b>分列显示</b>）</label>
-    <p class="muted small">crt.sh 是公共免费服务，返回 HTML 限流页 / 超时 / 502 都是常态：
+    <p class="muted small note">crt.sh 是公共免费服务，返回 HTML 限流页 / 超时 / 502 都是常态：
       所有失败都只记一行日志并继续跑下一个域名，<b>不会让阶段挂掉</b>。
       <code>name_value</code> 里的通配符（<code>*.x.example.com</code>）会剥掉 <code>*.</code>
       再入库并单独标记，<b>不会把 <code>*</code> 写进资产库</b>。</p>
@@ -515,13 +529,13 @@
 
   <section class="panel collapsible" data-panel="blacklist">
     <h2>用户黑名单（命中即不入资产库）</h2>
-    <p class="muted">文件：<code>{{ bl_path or 'config/blacklist.txt' }}</code>（纯文本，一行一个域名，
+    <p class="muted note">文件：<code>{{ bl_path or 'config/blacklist.txt' }}</code>（纯文本，一行一个域名，
       含其所有子域，可直接手工编辑）。命中的域名<b>不入资产库</b>，因此后续 dirscan / vulnscan
       也不会去扫它。批量加入的入口在「子域名」「拓展域名」页：勾选行 → 点「加入黑名单」。</p>
     <label class="chk"><input type="checkbox" name="blacklist_enabled" value="1"
       {{ 'checked' if s.blacklist.enabled }}> 启用黑名单（取消勾选＝整份名单临时失效，文件内容不变）</label>
     {% if bl %}
-      <p class="muted small">当前 {{ bl|length }} 条：</p>
+      <p class="muted small note">当前 {{ bl|length }} 条：</p>
       <ul class="mono small" style="max-height:220px;overflow:auto">
         {% for d in bl %}<li><label class="chk"><input type="checkbox" name="domain" value="{{ d }}">
           {{ d }}</label></li>{% endfor %}
@@ -529,12 +543,12 @@
       <button type="submit" formaction="{{ url_for('api_blacklist_remove') }}" formmethod="post"
               formnovalidate>移除勾选条目</button>
     {% else %}
-      <p class="muted">（名单为空）</p>
+      <p class="muted note">（名单为空）</p>
     {% endif %}
     {# 续177 值黑名单（凭据 / flag **值**，与上面域名级是两件事：整值精确比对、匹配之后过滤）。
         值只显掩码（jsmine._masked）；删除按 id；全局条目（owner_id=0）子账号删不动。 #}
     {% if sb %}
-      <p class="muted small">值黑名单 {{ sb|length }} 条（JS 疑似凭据 / flag 的**值**，
+      <p class="muted small note">值黑名单 {{ sb|length }} 条（JS 疑似凭据 / flag 的**值**，
         与上面域名级黑名单是两回事：匹配之后整值精确比对，命中即不显示。
         由漏洞行详情里的「判误报并拉黑值」一键加入）：</p>
       <ul class="mono small" style="max-height:220px;overflow:auto">
@@ -548,14 +562,14 @@
       <button type="submit" formaction="{{ url_for('api_jssecret_blacklist_remove') }}" formmethod="post"
               formnovalidate>移除勾选的值黑名单条目</button>
     {% else %}
-      <p class="muted small">值黑名单为空（凭据 / flag 值级，与上面域名级黑名单是两件事；
+      <p class="muted small note">值黑名单为空（凭据 / flag 值级，与上面域名级黑名单是两件事；
         在漏洞行详情里点「判误报并拉黑值」即可加入）。</p>
     {% endif %}
   </section>
 
   <section class="panel collapsible" data-panel="intel">
     <h2>情报与线索（默认关：产出的是"线索"，不是漏洞结论）</h2>
-    <p class="muted">本面板各项产出的都是<b>「线索」</b>（独立 <code class="mono">leads</code> 表）：
+    <p class="muted note">本面板各项产出的都是<b>「线索」</b>（独立 <code class="mono">leads</code> 表）：
       续24 起<b>不再进 GUI 页签与人读报告（MD / HTML）</b>，只在 <b>JSONL 导出</b>里以
       <code class="mono">type=lead</code> 保留，<b>不写漏洞、不计入漏洞数、不自动导入 POC</b>。
       线索的语义是"值得人工看一眼"，人工确认后才是漏洞 —— 所以默认关闭，避免线索堆积把结果淹没。</p>
@@ -568,7 +582,7 @@
       <label>拉取超时（秒） <input name="intel_timeout" value="{{ s.intel.timeout }}"></label>
       <label>单任务线索上限 <input name="intel_max_leads" value="{{ s.intel.max_leads }}"></label>
     </div>
-    <p class="muted small">匹配是白名单式的：只有 <code class="mono">scanner/intel.py::MATCH_RULES</code>
+    <p class="muted small note">匹配是白名单式的：只有 <code class="mono">scanner/intel.py::MATCH_RULES</code>
       里显式写过的资产信号（如 weblogic / tomcat / iis / phpmyadmin…）才参与，且要求情报侧的产品与厂商
       关键词同时对上，宁可漏报也不制造噪声。拉取走一次 HTTP（<b>单向下行，不向第三方发送目标信息</b>），
       结果缓存到 <code class="mono">data/intel/</code>，缓存内不再联网；拉取失败会退回过期缓存并告警。</p>
@@ -577,7 +591,7 @@
     <div class="row">
       <label>单任务线索上限 <input name="heuristic_max_leads" value="{{ s.heuristic.max_leads }}"></label>
     </div>
-    <p class="muted small">它<b>不发任何请求</b>，只读站点/目录/漏洞/C 段四类数据，产出软 404 模板、
+    <p class="muted small note">它<b>不发任何请求</b>，只读站点/目录/漏洞/C 段四类数据，产出软 404 模板、
       高价值入口无结论、同标题多主机、目录命中离群、同 C 段多 IP 等线索（规则见
       <code class="mono">scanner/heuristics.py</code>，阈值都写在代码里、刻意保守）。</p>
     <label class="chk"><input type="checkbox" name="github_enabled" value="1"
@@ -594,7 +608,7 @@
     <div class="row">
       <label>相关性白名单（逗号分隔子串，命中即视为相关） <input name="github_relevance_whitelist" value="{{ s.github.relevance_whitelist|join(',') }}"></label>
     </div>
-    <p class="muted small">需先在本机 <code class="mono">config/keys.yaml</code> 填
+    <p class="muted small note">需先在本机 <code class="mono">config/keys.yaml</code> 填
       <code class="mono">github.token</code>（GitHub 代码搜索接口<b>要求认证</b>；
       未配置时<b>一次请求都不发</b>，日志里会写明原因，而不是报"没查到"）。
       本功能<b>只落元数据</b>（仓库 / 文件路径 / 命中规则名）—— <b>不保存文件内容</b>，
@@ -614,7 +628,7 @@
       <label>单任务线索上限 <input name="multileak_max_leads" value="{{ s.multileak.max_leads }}"></label>
       <label>请求超时（秒） <input name="multileak_timeout" value="{{ s.multileak.timeout }}"></label>
     </div>
-    <p class="muted small">两个 provider（续158）：<code class="mono">grepapp</code>（免 key 公开接口）与
+    <p class="muted small note">两个 provider（续158）：<code class="mono">grepapp</code>（免 key 公开接口）与
       <code class="mono">gitlab</code>（<b>每个调用都必须认证</b>；token 写 <code class="mono">config/keys.yaml</code>
       的 <code class="mono">gitlab.token</code>，只读 scope 即可；没配 token 就零请求并如实报"未配置"；
       自建实例改上面的实例根）。
@@ -667,7 +681,7 @@
 
   <section class="panel collapsible" data-panel="advanced">
     <h2>队列 / 开发模式 / 高级</h2>
-    <p class="muted small">续158：这几段原先"只能改文件"，现已接上页面（改完保存即生效；
+    <p class="muted small note">续158：这几段原先"只能改文件"，现已接上页面（改完保存即生效；
       工具路径与字典路径请填仓库内相对路径）。</p>
     <label>队列 worker 数 <input name="queue_workers" value="{{ s.queue.workers }}"></label>
     <label class="chk" title="再按本机 CPU/内存收一道上限：小机器 1 / 中 2 / 大 4；配置里写的 workers 仍是天花板"><input type="checkbox" name="queue_workers_auto" value="1"
@@ -702,17 +716,22 @@
     <label>401 边缘认证门 <input type="checkbox" name="edge_auth_enabled" value="1"{% if s.gui.edge_auth and s.gui.edge_auth.enabled %} checked{% endif %}></label>
     <label>逐条运行日志刷终端 <input type="checkbox" name="console_logs" value="1"{% if s.gui.console_logs %} checked{% endif %}></label>
     <label>外网出口 IP（问第三方接口） <input type="checkbox" name="announce_egress_ip" value="1"{% if s.gui.announce_egress_ip %} checked{% endif %}></label>
-    <p class="muted small">{{ edge_note }}　以上四项改完要重启控制台才生效。</p>
-    <p class="muted small">{{ console_note }}</p>
+    {# 续197（主理人点单「站点不是有很多注释解释吗？我们系统设置默认关闭注释，可手动开启注释」）：
+       页面上的灰色说明段落（class="note"）默认**不显示**；这里打开＝全局默认显示。
+       顶栏那颗「显示说明」是**本机**临时开关（cookie），优先级高于这一项 —— 想"看一眼就关掉"
+       不必改策略。实现方式见 style.css 的 `body:not(.notes-on) .note`。 #}
+    <label>显示页面说明文字（各页灰色小字） <input type="checkbox" name="gui_notes" value="1"{% if s.gui.notes %} checked{% endif %}></label>
+    <p class="muted small note">{{ edge_note }}　以上四项改完要重启控制台才生效。</p>
+    <p class="muted small note">{{ console_note }}</p>
 
     {# 续117：这一页**不再有口令输入框**。原先那一栏写的是 `gui.token`（引导口令），
        而 `config/settings.yaml` 被 git 跟踪、仓库公开 —— 能换管理员身份的串不该出现在那里。
        改口令 / 建第一个管理员都走账号体系：页面侧「账号管理」，命令行侧 `cli/run_users.py`。
        回归 `[8v]` 有一条红线盯着"这一页又长出 password 输入框"与"渲染出的 HTML 里出现
        gui.token"，所以这里也**不要**把那些写法原样抄进注释（注释里的字面量同样会被抓到）。 #}
-    <p class="muted">gui 段只有监听地址与端口两项。登录凭据一律不写进本文件 ——
+    <p class="muted note">gui 段只有监听地址与端口两项。登录凭据一律不写进本文件 ——
       建第一个管理员：<code>python cli/run_users.py --create-admin</code>（或首次启动的向导）。</p>
-    <p class="muted">外部工具路径、字典路径、被动收集来源清单（passive.sources）请直接编辑
+    <p class="muted note">外部工具路径、字典路径、被动收集来源清单（passive.sources）请直接编辑
       config/settings.yaml；<b>第三方 API key 请写入 config/keys.yaml</b>
       （独立文件，控制台只读不改写，便于单独管理凭据）。</p>
   </section>

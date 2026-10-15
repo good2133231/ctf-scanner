@@ -7,7 +7,7 @@
 {% if not enabled %}
 <section class="panel">
   <h2>开发模式 / 全流程自检</h2>
-  <p class="muted">
+  <p class="muted note">
     <b>当前未开启。</b>把 <code>config/settings.yaml</code> 的 <code>dev.enabled</code>
     设为 <code>true</code> 并重启控制台后，侧栏才会出现本页。
   </p>
@@ -15,12 +15,12 @@
 {% else %}
 <section class="panel">
   <h2>开发模式 / 全流程自检</h2>
-  <p class="muted">
+  <p class="muted note">
     开发模式把各阶段的"量"（并发 / 在飞 / 速率 / 每阶段配额）<b>压到最小（1）</b>，
     目的是先验证<b>流程本身能不能跑通</b>，不被"量"的问题干扰。压量只作用于<b>本次运行的内存副本</b>，
     <b>绝不写回 config/settings.yaml</b>（关掉 <code>dev.enabled</code> 即恢复原策略）。
   </p>
-  <p class="muted">⚠️ 本模式仅供流程自检，<b>勿用于真实目标</b>（会得到"几乎什么都没扫到"的假象）。</p>
+  <p class="muted note">⚠️ 本模式仅供流程自检，<b>勿用于真实目标</b>（会得到"几乎什么都没扫到"的假象）。</p>
   <table>
     <tr><th>内置靶场</th>
         <td>{{ base or '未启动' }}{% if fixture_on %} <span class="sev sev-low">运行中</span>{% endif %}</td></tr>
@@ -35,12 +35,12 @@
         onsubmit="return confirm('跑一次全流程自检？（全 13 阶段、配额压到最小（限速节奏为自检放宽，见 scanner/devflow.py），仅打本机夹具，约半分钟到几分钟）')">
     <button type="submit">跑一次全流程自检</button>
   </form>
-  <p class="muted small">
+  <p class="muted small note">
     自检以 <b>子进程</b> 调 <code>cli/run_devflow.py</code>：起夹具（域名 <code>devfixture.test</code>
     → 本机 127.0.0.1）→ 压量到最小 → 真跑全 13 阶段 → 逐阶段列出 <b>真跑 / 跳过（带原因）/ FAIL</b>。
     结果输出见下方「最近一次自检输出」。
   </p>
-  <p class="muted small">
+  <p class="muted small note">
     ⚠️ 自检里的 DNS 覆盖 / 夹具 / 压量都只作用于那个<b>子进程</b>，随它退出一起消失，
     <b>不会影响控制台本身</b>（这也是它必须走子进程的原因）。
   </p>
@@ -55,7 +55,7 @@
         onsubmit="return confirm('停止内置靶场？（仅停本机夹具，不影响其它）')">
     <button type="submit">停止内置靶场</button>
   </form>
-  <p class="muted small">
+  <p class="muted small note">
     这两个按钮起的夹具<b>与上面「全流程自检」用的夹具无关</b>：这里只是起一个进程内的静态站，
     供你<b>手动</b>打开看一眼（<code>{{ base or '（未启动）' }}</code>）。它<b>不装任何 DNS 覆盖</b>，
     也不参与自检 —— 自检有自己独立的夹具（在子进程里，临时端口）。
@@ -69,9 +69,9 @@
     {% for line in compressed %}<li><code>{{ line }}</code></li>{% endfor %}
   </ul>
   {% else %}
-  <p class="muted">所有项都已是目标值（无需改动）。</p>
+  <p class="muted note">所有项都已是目标值（无需改动）。</p>
   {% endif %}
-  <p class="muted small">
+  <p class="muted small note">
     预算刻意<b>不压</b>：{% for k in kept %}<code>{{ k }}</code>{% if not loop.last %}、{% endif %}{% endfor %}
     保持不设 —— <code>budget_total=1</code> 会让第 2 个请求即被预算拒绝、全流程根本跑不完。
   </p>
@@ -80,14 +80,14 @@
 <section class="panel">
   <h2>最近一次自检输出</h2>
   {% if selfcheck_out %}
-  <p class="muted small">
+  <p class="muted small note">
     运行于 {{ selfcheck_at }}，退出码
     {% if selfcheck_code == 0 %}<code>0</code>（无阶段 FAIL）{% else %}
     <code>{{ selfcheck_code }}</code>（非 0，见输出）{% endif %}
   </p>
   <pre class="muted small" style="max-height:520px;overflow:auto;white-space:pre-wrap">{{ selfcheck_out }}</pre>
   {% else %}
-  <p class="muted">还没有跑过自检（自检在<b>子进程</b>里跑，输出会显示在这里）。</p>
+  <p class="muted note">还没有跑过自检（自检在<b>子进程</b>里跑，输出会显示在这里）。</p>
   {% endif %}
 </section>
 {% endif %}

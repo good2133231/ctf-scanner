@@ -2721,20 +2721,25 @@ def main():
     finally:
         _gui.run_task = _orig_run5
     # 站点页签：有站点却一张截图都没有时，必须说清**原因**。
-    # 续145 摘掉了「补截图」入口；续170 按主理人点单换回一颗**形态不同**的按钮：
-    # 「重新截图（勾选站点）」/「重截失败的站点」，走 `/api/sites/reshoot` 排一轮**只跑 screenshot**
-    # 的追加运行（不当场截：一次无头浏览器要几秒到几十秒，压在 HTTP 线程上会把整个控制台卡住，
-    # 还绕开队列、并发闸与请求预算）。判据因此是双向的：旧入口的形态必须**不在**、
-    # 新入口必须**真渲染出来**；而"为什么没有截图"那段解说要跟着换口径（§5.19：
-    # 话术不许停在"摘掉入口"那一版，§7 那条既定后果也一并改写）。
+    # 续145 摘掉了「补截图」入口；续170 按主理人点单换回一颗**形态不同**的按钮，
+    # 走 `/api/sites/reshoot` 排一轮**只跑 screenshot** 的追加运行（不当场截：一次无头浏览器
+    # 要几秒到几十秒，压在 HTTP 线程上会把整个控制台卡住，还绕开队列、并发闸与请求预算）。
+    # 续197（主理人点单「简化成一个重截，不勾选站点他就默认重截失败站点」）：两颗并成一颗
+    # 「重截」—— 勾了行就截这几个，没勾就截本任务所有截图失败的。判据因此是三向的：
+    # 旧入口形态不在、新入口**只渲染一颗**（不许两颗并存）、且那颗必须带 only_failed=1
+    # （后端据此在"没勾"时改用 db.list_shot_failures）；而"为什么没有截图"那段解说要跟着换。
     _nt = db.create_task("smoke-shot-none", targets, ["probe"], {})
     db.insert_sites(_nt, [{"url": "http://a.test/", "host": "a.test", "status": 200,
                            "title": "A", "length": 10}])
     _shtml = c.get(f"/tasks/{_nt}").get_data(as_text=True)
     assert 'value="screenshot"' not in _shtml and "补截图" not in _shtml, \
         "续145 摘掉的旧「补截图」入口不许回来（续170 的新入口是 /api/sites/reshoot，形态不同）"
-    assert 'action="/api/sites/reshoot"' in _shtml and "重新截图" in _shtml, \
-        "续170 主理人点单的「重新截图」入口没渲染出来"
+    assert 'action="/api/sites/reshoot"' in _shtml and "重截" in _shtml, \
+        "续197 简化后的「重截」入口没渲染出来"
+    assert "重新截图" not in _shtml and "重截失败的站点" not in _shtml, \
+        "续197：两颗按钮必须并成一颗（旧文案不许留在页面上）"
+    assert _shtml.count('name="only_failed"') == 1, \
+        "「没勾就重截失败的」这个语义依赖 only_failed=1，页面上必须**恰好**一颗带它"
     assert 'name="url"' in _shtml, "站点行的勾选框没接到重截表单上（点提交会一个 URL 都送不到）"
     assert "截图阶段策略级" in _shtml or "没找到可用的无头浏览器" in _shtml, \
         "没有截图产物时页面未说明原因"
@@ -2742,7 +2747,8 @@ def main():
     print("[5t] 续13 GUI 反馈修复 ok: 拓展域名按来源分类排序(?esrc= 过滤)/解析·送去探测·加黑名单"
           "三个手动端点(含 next 防跳外站)/目录 title 列与 200 优先·大小降序/目录文案精简/"
           "截图任务级 screenshot_on 生效 + 站点页「为什么没有截图」的原因与出路"
-          "（旧「补截图」入口续145 摘掉；续170 换成 /api/sites/reshoot 排队重截）")
+          "（旧「补截图」入口续145 摘掉；续170 换成 /api/sites/reshoot 排队重截；"
+          "续197 两颗并成一颗「重截」，不勾站点即默认重截失败的）")
 
     # 5u) 续14：sensitive.txt 签名列（A01 改为数据驱动）+ db 写操作串行化
     #     两条都是"静默失效"型收尾 —— 前者字典长期只当预留位、检查用硬编码清单；
@@ -8681,7 +8687,11 @@ http:
     #  若拿两个不同的 IP 去比，锁定时点不同 → Retry-After 不同 → 页面自然不同，那是测错了。）
     _v_a = _lg48.check(_IP_H, "smoke-audit", settings)
     _v_b = _lg48.check(_IP_H, "smoke-no-such-user", settings)
-    assert (_v_a.locked, _v_a.retry_after) == (_v_b.locked, _v_b.retry_after), (_v_a, _v_b)
+    # 续197：这里**不能**比秒数相等 —— `retry_after` 是"还剩多少秒"（随墙钟走），
+    # 两次 `check()` 之间只要跨过一个整秒边界就差 1（实测 900 vs 899，门禁偶发红）。
+    # 真判据是"锁没锁、以及两个用户名得到的是不是同一个结论"，秒数给 ±2 秒容差。
+    assert _v_a.locked == _v_b.locked, (_v_a, _v_b)
+    assert abs(_v_a.retry_after - _v_b.retry_after) <= 2, (_v_a, _v_b)
     _b1 = _cl.post("/login", data={"username": "smoke-audit", "password": "x"}, environ_base=_envH)
     _b2 = _cl.post("/login", data={"username": "smoke-no-such-user", "password": "x"},
                    environ_base=_envH)
@@ -14015,12 +14025,43 @@ http:
         _rdNone["title"] == "301 Moved Permanently", "没跟到就不许假装有跳转后"
     assert _u112.site_redirect({"status": 200, "title": "T"})["status"] == "200"
     # 落地页没有 <title>（图片 / JSON）→ 保留原来那句并说明原因，**不留空位**
+    # 续197（主理人点单"301 跳转的应该取跳转之后的标题"）：落地页没有标题时**不再**退回
+    # 第一跳那句「301 Moved Permanently」—— 那是服务器的默认跳转页文案，不是站点标题，
+    # 显示在"标题"列等于拿中间件默认页冒充站点身份。留空（页面显示 `-`）+ note 说清。
     _rdImg = _u112.site_redirect({"status": 301, "title": "301 Moved Permanently",
                                   "redirect_status": 200, "redirect_title": "",
                                   "redirect_url": "http://x.test/img.png"})
-    assert _rdImg["jumped"] and _rdImg["title"] == "301 Moved Permanently", _rdImg
+    assert _rdImg["jumped"] and _rdImg["title"] == "", _rdImg
     assert "无 title" in _rdImg["note"], _rdImg
     assert set(_u112.REDIRECT_STATUS) == {301, 302, 303, 307, 308}, "304 不算需要跟随的跳转"
+
+    # 续197 补强①：SPA 外壳首屏没有 <title> 但常有 og:title —— 落地页取证要认它，
+    # 而 `html_title`（别处的唯一口径）**不许**跟着变，否则"这份 HTML 没有 <title>"这个
+    # 事实会被抹掉（dirscan 命中页、截图渲染后标题都依赖它）。
+    _spa197 = ('<html><head><title>  </title>'
+               '<meta property="og:title" content="SPA 站名-197"></head><body></body></html>')
+    assert _u112.html_title(_spa197) == "", "html_title 口径不许被 og:title 污染"
+    assert _u112.page_title(_spa197) == "SPA 站名-197", _u112.page_title(_spa197)
+    assert _u112.meta_title('<meta content="反着写-197" name="twitter:title">') == "反着写-197", \
+        "content 写在属性前的写法也是合法 HTML，必须认"
+    assert _u112.page_title("<html><head></head></html>") == "", "什么都没有就留空，不编数"
+    # 补强②：截图渲染后拿到的标题回填 redirect_title，且**不覆盖**已有结论
+    _tid112r = db.create_task("smoke-197-redict", "lab197r.test", ["screenshot"], {})
+    db.insert_sites(_tid112r, [{"url": "http://lab197r.test/", "host": "lab197r.test",
+                                "port": "80", "status": 301,
+                                "title": "301 Moved Permanently", "length": 5,
+                                "server": "cloudflare", "source": "httpx",
+                                "redirect_url": "https://lab197r.test/", "redirect_status": 200}])
+    assert db.set_site_redirect_titles(_tid112r, [("http://lab197r.test/", "渲染后-197")]) == 1
+    _row112r = db._query("SELECT title, redirect_title FROM sites WHERE task_id=?",
+                         (_tid112r,), one=True)
+    assert _row112r["title"] == "301 Moved Permanently", "原始那一跳不许被改写"
+    assert _row112r["redirect_title"] == "渲染后-197", dict(_row112r)
+    assert db.set_site_redirect_titles(_tid112r, [("http://lab197r.test/", "后来-197")]) == 1 and \
+        db._query("SELECT redirect_title FROM sites WHERE task_id=?", (_tid112r,),
+                  one=True)["redirect_title"] == "渲染后-197", "已有结论不许被后来的覆盖"
+    assert db.set_site_redirect_titles(_tid112r, []) == 0, "空输入不动库"
+
 
     # ③ 库里真的落了三列（顺带守住"占位符与列数一致"——本轮真踩过 12 值对 14 列）
     _tid112s = db.create_task("smoke-112-jump", "lab112s.test", ["probe"], {})
@@ -15887,9 +15928,12 @@ expression: r0() || r1()
     assert _fp120._parse_statuses("200,404") == frozenset({200, 404})
     assert _fp120._parse_statuses("*") is None and _fp120._parse_statuses("") is None
 
-    _real_ep120 = _fp120._extra_path
+    # 续197：外置表从"一份"变"多份"后，`identify()` 走的是 `_extra_paths()`（复数），
+    # 桩 `_extra_path`（单数）已经拦不住它 —— 那样这组判据会在**真实的三张表**上跑，
+    # 上面那三条 gated/multi/plain 一条都不在里面（假红）。桩点跟着改成复数版本。
+    _real_ep120 = _fp120._extra_paths
     try:
-        _fp120._extra_path = lambda: _dx120
+        _fp120._extra_paths = lambda: [_dx120]
         _fp120._extra_cache.update(key=None)
         _hit120 = lambda status, body="", hdrs=None: _fp120.identify(
             {"status": status, "text": body, "headers": hdrs or {}})
@@ -15915,12 +15959,18 @@ expression: r0() || r1()
         finally:
             _fp120._parse_statuses = _real_ps120
     finally:
-        _fp120._extra_path = _real_ep120
+        _fp120._extra_paths = _real_ep120      # 续197：桩的是复数版本，还原也要还原复数
         _fp120._extra_cache.update(key=None)
 
-    # ⑤ 仓库里真实那份字典与复核表：读得干净、全部门控、来源可追溯、RCE 不在表里
-    _dr120, _ir120 = _fp120.load_extra()
+    # ⑤ 仓库里真实那份字典与复核表：读得干净、全部门控、来源可追溯、RCE 不在表里。
+    #   续197：外置表变多份后"坏行必须为 0"要管**全部表**（社区库那两张也得读得干净），
+    #   而下面那些"51 行 / 全部带状态码门控 / 全部写出处"是**手写那张**的口径 ——
+    #   社区库的表本就不带门控（它们是"认不认得出组件"，不是"这个状态码才算"），
+    #   拿同一份 `_dr120` 去比会把两张不同性质的表混成一个判据。
+    _dr120_all, _ir120 = _fp120.load_extra()
     assert _ir120 == [], f"仓库里的外置字典引擎读不干净：{_ir120}"
+    assert len(_dr120_all) > 49, "多张表没有真的合并（还是只有手写那一）"
+    _dr120, _ = _fp120.load_extra(str(_fp120._extra_path()))
     _raw_real = _fp120._extra_path().read_text(encoding="utf-8")
     _data_lines = [ln for ln in _raw_real.splitlines() if ln.strip() and not ln.startswith("#")]
     assert len(_data_lines) == sum(len(v) for v in _dr120.values()) == 51, len(_data_lines)
@@ -16489,10 +16539,11 @@ expression: r0()
     assert _fp122._FOLD_EXOTIC == ("\u0130", "\u0131", "\u017f")
     _dx122 = _TMPDIR / "fold122.tsv"
     _dx122.write_text("folds\tbody\t" + "(?i)srv-apache" + "\t*\n", encoding="utf-8")
-    _real_ep122 = _fp122._extra_path
+    # 续197：桩点跟着实现改成复数版本（外置表多份化后 `identify` 走 `_extra_paths`）
+    _real_ep122 = _fp122._extra_paths
     _real_fold122 = _fp122._FOLD_EXOTIC
     try:
-        _fp122._extra_path = lambda: _dx122
+        _fp122._extra_paths = lambda: [_dx122]
         _fp122._extra_cache.update(key=None)
         _fx = {"status": 200, "text": "\u017frv-apache", "headers": {}}   # ſ 在 re.I 下等于 s
         assert "folds" in _fp122.identify(_fx), "折叠例外没挡住 ⇒ 前置过滤把这条漏掉了"
@@ -16504,7 +16555,7 @@ expression: r0()
             "变异没生效：拆掉折叠守卫后仍然命中 ⇒ ④(d) 抓不住这种改法，判据是假的"
     finally:
         _fp122._FOLD_EXOTIC = _real_fold122
-        _fp122._extra_path = _real_ep122
+        _fp122._extra_paths = _real_ep122
         _fp122._extra_cache.update(key=None)
 
     # ⑤ 续120 的状态码门控与本轮的缓存都没被改坏
@@ -16512,8 +16563,22 @@ expression: r0()
     # （续120 把 grafana-detect 这条判据**并进了内置标签 grafana**，所以这里查的是 grafana）
     assert "grafana" in _fp122.identify({"status": 200, "text": _gt122, "headers": {}}), \
         "外置判据（并进内置标签的那条）在 200 上应当命中"
-    assert "grafana" not in _fp122.identify({"status": 404, "text": _gt122, "headers": {}}), \
-        "状态码门控被本轮改坏了：404 上也打上了标签"
+    # 续197：grafana 现在**两张表都有**（手写那张带 200 门控、社区那张不分状态），
+    # 拿它当"门控生效"的判据会被社区表干扰（404 上也被社区规则打上）。门控是**机制**，
+    # 机制要用"只此一家"的标签测 ⇒ 换一张临时表，别拿真实表的某个标签当尺子。
+    _dg122 = _TMPDIR / "gate122.tsv"
+    _dg122.write_text("gateonly\tbody\tGATEMARK\t200\n", encoding="utf-8")
+    _real_ep122b = _fp122._extra_paths
+    try:
+        _fp122._extra_paths = lambda: [_dg122]
+        _fp122._extra_cache.update(key=None)
+        assert "gateonly" in _fp122.identify({"status": 200, "text": "GATEMARK", "headers": {}}), \
+            "门控规则在 200 上就该命中（否则这条判据是空的）"
+        assert "gateonly" not in _fp122.identify({"status": 404, "text": "GATEMARK", "headers": {}}), \
+            "状态码门控被本轮改坏了：404 上也打上了标签"
+    finally:
+        _fp122._extra_paths = _real_ep122b
+        _fp122._extra_cache.update(key=None)
     _f1 = _fp122._lit_filter("(?i)nginx")
     assert _f1 is _fp122._lit_filter("(?i)nginx"), "过滤条件没按正则原文缓存（每条响应重算正则结构）"
     assert _f1[0] is True and "nginx" in _f1[1], _f1
@@ -17184,14 +17249,23 @@ expression: r0()
     _R127 = lambda txt, st=200, hdr=None, url="http://t/": {
         "text": txt, "status": st, "headers": hdr or {}, "url": url}
     _c1 = _Ctx127()
+    # 续197：社区指纹库接进来之后，这份样本可能**多**打上别的标签（目录列表页是很多产品的
+    # 判据形状），所以条数不再是"恰好 1"；要钉的是"Server 头那条判据必须打上 nginx"这一件事。
     assert _fp127.collect(_c1, "http://t/", _R127("<title>Index of /</title>",
-                                                  hdr={"Server": "nginx"})) == 1, \
+                                                  hdr={"Server": "nginx"})) >= 1, \
         "Server 头那条内置规则必须打上 nginx（Index of / 本身不是任何产品的判据）"
-    assert _c1._tech_pending["http://t/"] == {"nginx"}, _c1._tech_pending
+    assert "nginx" in (_c1._tech_pending.get("http://t/") or set()), \
+        "样本多打了别的标签可以，但 nginx（Server 头那条）必须还在"
+    # 续197：集合不再"恰好只有 nginx" —— 目录列表页（Index of /）在社区库里是「列目录」
+    # 这个组件的判据，是被**正确识别**出来的（实测这条样本现在是 {'列目录', 'nginx'}）。
+    # 钉"nginx 必须在、且这条样本确实多认出了东西"，比钉一个随字典增长而失效的等号稳。
+    assert "nginx" in _c1._tech_pending["http://t/"], _c1._tech_pending
     assert _fp127.collect(_c1, "http://t/", _R127("", hdr={"Server": "nginx"})) == 0, \
         "同一标签重复攒必须算 0（否则 flush 的行数与日志都会虚高）"
+    # 续197：同上 —— `jquery.min.js` 在社区库里也可能命中别的组件名，所以条数不再钉等号，
+    # 集合改成**超集**判据（"该认出来的必须认出来"，不禁止多认）。
     assert _fp127.collect(_c1, "http://t/", _R127("<script src=\"/a/jquery.min.js\"></script>")) \
-        == 1 and _c1._tech_pending["http://t/"] == {"nginx", "jquery"}
+        >= 1 and _c1._tech_pending["http://t/"] >= {"nginx", "jquery"}
     assert _fp127.collect(None, "http://t/", _R127("", hdr={"Server": "nginx"})) == 0, \
         "ctx 为 None 必须当没发生（不许抛）"
 
@@ -17304,8 +17378,18 @@ expression: r0()
     assert _issues == [], f"外置字典本身有坏行，先修它再谈误报：{_issues[:3]}"
     _ext_tags = set(_ext_rules)
     assert len(_ext_tags) >= 40, f"外置表标签数不对：{len(_ext_tags)}"
-    assert not (_hits.keys() & _ext_tags), \
-        f"外置判据被通用页命中了（这正是要拦的事）：{ {k: v for k, v in _hits.items() if k in _ext_tags} }"
+    # 续197：外置表从一张变三张，"零命中"这条判据要**分开说**：
+    # ① **手写那张**（人工复核、每条带状态码门控）仍然必须**零命中** —— 这正是它存在的意义；
+    # ② 社区库那两张把"目录列表 / 服务器默认页 / 通用登录页"也当成形态认（语料自带 Server 头，
+    #    命中 nginx / iis / apache 是**正确识别**不是误报），零命中不现实 ⇒ 钉"长尾不失控"，
+    #    并把剩下的长尾（igenus / 齐治堡垒机 这类）登记为**已知噪音**，留待按负样本语料回捞清洗。
+    _hand_tags = set(_fp127.load_extra(str(_fp127._extra_path()))[0])
+    assert len(_hand_tags) >= 40, f"手写那张外置表标签数不对：{len(_hand_tags)}"
+    assert not (_hits.keys() & _hand_tags), \
+        f"手写外置判据被通用页命中了（这正是要拦的事）：{sorted(_hits.keys() & _hand_tags)}"
+    _comm_tail = (_hits.keys() & _ext_tags) - _hand_tags - set(_fp127.SIGNATURES)
+    assert len(_comm_tail) <= 20, \
+        f"社区库在通用语料上命中的长尾太多（{len(_comm_tail)} 个）：{sorted(_comm_tail)[:8]}"
     assert _hits, "内置表一个都没命中 ⇒ 语料太干净了（jQuery/nginx 这类特征必须能认出来）"
     assert not (_hits.keys() - _ext_tags - set(_fp127.SIGNATURES)), \
         f"命中里出现了既不在外置也不在内置的标签：{sorted(_hits.keys() - set(_fp127.SIGNATURES))}"
@@ -21339,8 +21423,9 @@ expression: r0()
             "http://x.other170.test/"], "子用户那轮的候选清单不对"
         # 页面上"失败的有几张"与"每张的尝试口径"都要看得见（不让人自己猜）
         _h170 = c.get(f"/tasks/{_tid170q}").get_data(as_text=True)
-        assert 'action="/api/sites/reshoot"' in _h170 and "重截失败的站点（1）" in _h170, \
-            "详情页没有「重新截图」入口或没报失败张数"
+        # 续197：两颗并一颗后按钮文案是「重截（失败 N）」—— "失败张数看得见"这条判据不变
+        assert 'action="/api/sites/reshoot"' in _h170 and "重截（失败 1）" in _h170, \
+            "详情页没有「重截」入口或没报失败张数"
         assert "每张最多" in _h170, "页面没把本轮的尝试口径说出来（配置改了页面不跟着变＝假话）"
     finally:
         _q170.notify, gui_app.load_settings = _notify170, _ld_keep170
@@ -23068,18 +23153,22 @@ expression: r0()
     db.insert_sites(_oth8au, [{"url": "http://noise.oth8au.test/", "host": "noise.oth8au.test",
                                "port": "80", "status": 521, "title": "NOISE8AU-521", "length": 7}])
     _tid8au = db.create_task("smoke-8au-st", "https://st8au.test/", ["probe"], {})
-    _rows8au = [("http://ok200.st8au.test/",  200, "S8AU-OK",  0),
-                ("http://nf404.st8au.test/",  404, "S8AU-NF",  0),
-                ("http://jump.st8au.test/",   301, "S8AU-J200",  200),
-                ("http://jmp404.st8au.test/", 302, "S8AU-J404",  404),
-                ("http://jmp500.st8au.test/", 301, "S8AU-J500", 500),
-                ("http://forbid.st8au.test/", 403, "S8AU-FB403",  0),
-                ("http://cdn521.st8au.test/", 521, "S8AU-CDN521",  0),
-                ("http://nojmp.st8au.test/",  301, "S8AU-JNONE", 0)]
+    # 续197：3xx 行的形状改成**真实**的两跳（第一跳 title / 落地页 redirect_title 各一个）——
+    #   旧夹具把站点名写在第一跳的 title 上、落地页标题留空，靠的是"落地页没标题就回退原句"
+    #   那条老口径；续197 起显示的是**落地页标题**，那种形状会让标题列变空。
+    _rows8au = [("http://ok200.st8au.test/",  200, "S8AU-OK",    0, ""),
+                ("http://nf404.st8au.test/",  404, "S8AU-NF",    0, ""),
+                ("http://jump.st8au.test/",   301, "S8AU-J301",  200, "S8AU-J200"),
+                ("http://jmp404.st8au.test/", 302, "S8AU-J302",  404, "S8AU-J404"),
+                ("http://jmp500.st8au.test/", 301, "S8AU-J301B", 500, "S8AU-J500"),
+                ("http://forbid.st8au.test/", 403, "S8AU-FB403",  0, ""),
+                ("http://cdn521.st8au.test/", 521, "S8AU-CDN521",  0, ""),
+                ("http://nojmp.st8au.test/",  301, "S8AU-JNONE",  0, "")]
     db.insert_sites(_tid8au, [{"url": u, "host": u.split("/")[2], "port": "80", "status": st,
                                "title": ti, "length": 100 + i, "redirect_status": rs,
+                               "redirect_title": rt,
                                "redirect_url": ("https://land8au.test/" if rs else "")}
-                              for i, (u, st, ti, rs) in enumerate(_rows8au)])
+                              for i, (u, st, ti, rs, rt) in enumerate(_rows8au)])
     _SHOW8au = ("S8AU-OK", "S8AU-J200", "S8AU-J404", "S8AU-NF")
     _HIDE8au = ("S8AU-JNONE", "S8AU-J500", "S8AU-FB403", "S8AU-CDN521")
     _q8au = f"?task={_tid8au}"
@@ -23088,6 +23177,10 @@ expression: r0()
         assert _t in _h8au, f"默认视图应显示 {_t}（200/404 与**跳转后** 200/404）"
     for _t in _HIDE8au:
         assert _t not in _h8au, f"默认视图应收起 {_t} —— 判据在 db.SITE_STATUS_WHERE"
+    # 续197：3xx 那一格显示的是**落地页**标题（S8AU-J200），不是第一跳那句（S8AU-J301）——
+    # 后者是服务器默认跳转页文案，拿它冒充站点标题正是主理人报的那个现象。
+    assert "S8AU-J301" not in _h8au and "S8AU-J302" not in _h8au, \
+        "3xx 行不该再显示第一跳的标题（那是中间件默认页，不是站点身份）"
     assert "NOISE8AU-521" not in _h8au, \
         "?task= 没挡住别的任务的行 —— 那样下面每条计数都是捡来的绿"
     assert "已收起 4 条其它状态码" in _h8au, "必须报出被收起的条数（不报＝让人以为资产丢了）"
@@ -26342,6 +26435,63 @@ expression: r0()
     assert (_blk193.read_bytes() if _blk193.exists() else b"") == _blk193_snap, \
         "门禁跑完 config/blacklist.txt 被改写了（续189 挂账：某组会删注释行）—— " \
         "找到写它的组改走沙箱（blacklist.path/dir 指到 _TMPDIR），别让门禁动用户的真文件"
+    # ---- [197] 续197 四项：3xx 取落地页标题 / 重截并一颗 / 页面注释开关 / 社区指纹库 + POC 按组件分类 ----
+    import scanner.fingerprint as _fp197
+    import time as _time197
+
+    # ④ 社区指纹库：多张外置表合并加载，坏行一条都不许有
+    _r197, _i197 = _fp197.load_extra()
+    _n197 = sum(len(v) for v in _r197.values())
+    assert not _i197, f"外置指纹表有坏行：{_i197[:3]}"
+    assert _n197 > 2000, f"外置表只加载了 {_n197} 条（社区库那两张没接上？）"
+    assert len(_fp197.EXTRA_FILES) >= 2, "外置表必须是多份（社区库转换来的表要登记在 EXTRA_FILES）"
+    _tags197 = {t.lower() for t in _fp197.all_tags()}
+    assert "nginx" in _tags197 and "thinkphp" in _tags197, "内置表与外置表没合并成同一份标签集"
+    # 正样本：社区规则真的能认出组件（不是"加载了但没参与判定"）
+    assert "thinkphp" in _fp197.identify(
+        {"status": 200, "headers": {}, "text": "<body>thinkphp_show_page_trace</body>"}), \
+        "FingerprintHub 的规则没生效"
+    assert "nginx" in _fp197.identify({"status": 200, "headers": {"Server": "nginx/1.18"},
+                                       "text": "<html></html>"}), "内置表没生效"
+    # 性能护栏（续197 真踩过）：未锚定的 `(?s)(?=.*w)` 是 O(n²)，一条就能把探测拖死。
+    # 用 128 KB 正文钉一道上限 —— 回归里它比"规则条数"更能反映真实成本。
+    _big197 = "<html><body>login 登录 系统 admin index.php</body></html>" * 4000
+    _t197 = _time197.perf_counter()
+    _fp197.identify({"status": 200, "headers": {}, "text": _big197})
+    _dt197 = _time197.perf_counter() - _t197
+    assert _dt197 < 1.5, f"128 KB 正文识别一轮要 {_dt197:.2f}s —— 有慢正则回归（lookahead 没锚定？）"
+    assert len(_big197) > _fp197.MAX_BODY_SCAN, "护栏用不到：正文必须超过 MAX_BODY_SCAN 才算测到截断"
+
+    # ④ POC 按组件分类（与 vulnscan 的 `tech ∩ tags` 同一份交集口径）
+    _h197p = c.get("/pocs").get_data(as_text=True)
+    assert 'name="tech"' in _h197p, "POC 页没有「组件（指纹）」这一维筛选"
+    _h197s = c.get("/pocs?tech=seeyon").get_data(as_text=True)
+    assert "seeyon" in _h197s, "按组件筛选后页面里看不到该组件"
+    assert _h197s.count("<tr") < _h197p.count("<tr"), \
+        "按组件筛选没生效（行数没变少 ⇒ 筛选条件没接到查询上）"
+
+    # ③ 页面说明（注释）默认关 + 顶栏开关只改本机 cookie
+    _h197n = c.get("/sites").get_data(as_text=True)
+    assert "notes-on" not in _h197n, "注释必须**默认关闭**（body 上不该带 notes-on）"
+    _r197n = c.get("/api/notes?on=1")
+    assert _r197n.status_code == 302, f"顶栏说明开关不是重定向：{_r197n.status_code}"
+    assert "ctf_notes=1" in (_r197n.headers.get("Set-Cookie") or "").replace(" ", ""), \
+        "开关没把 ctf_notes 写进 cookie（持久化靠它）"
+    # cookie 打开后同一页面必须真的显示说明（CSS 靠 body.notes-on 生效）
+    assert "notes-on" in c.get("/sites", headers={"Cookie": "ctf_notes=1"}).get_data(as_text=True), \
+        "cookie=1 时 body 上没有 notes-on —— 说明段永远显示不出来"
+    # 说明段是被 CSS 隐藏而不是不渲染：文本仍在 HTML 里（既有断言扫的是渲染出的 HTML，不会被打红）
+    assert "入库一条没动" in _h197n, "说明段被隐藏时文本也必须还在 HTML 里（只靠 CSS 收起）"
+
+    # ① 3xx 标题口径（详细判据在 [112] 组）：落地页没标题就留空，不退回「301 Moved Permanently」
+    _rd197 = _u112.site_redirect({"status": 301, "title": "301 Moved Permanently",
+                                  "redirect_status": 200, "redirect_title": "",
+                                  "redirect_url": "https://x.test/"})
+    assert _rd197["title"] == "" and "无 title" in _rd197["note"], _rd197
+    print("[197] 续197 ok: 社区指纹库多表合并（%d 条 / 标签 %d 个，坏行 0）+ thinkphp 正样本"
+          "+ 128KB 护栏 %.2fs ｜POC 按组件分类（与 vulnscan 同口径，筛选后行数变少）｜"
+          "页面说明默认关 + cookie 开关 + 文本仍在 HTML ｜3xx 落地页无标题即留空"
+          % (_n197, len(_tags197), _dt197))
     print("SMOKE PASS")
 
 

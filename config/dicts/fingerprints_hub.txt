@@ -1,0 +1,1140 @@
+# 自动生成：tools/import_fingerprints.py --kind fingerprinthub，请勿手工编辑（重跑会覆盖）
+# 来源：fingerprinthub（开源社区指纹库；只转换判据，外部仓库源码不进本仓）
+#
+# 格式（TAB 分隔，后三段可省）：标签 <TAB> 位置 <TAB> 正则 <TAB> 状态码 <TAB> 来源 <TAB> 说明
+#   位置：headers | body | cookies；状态码留空＝不分状态。
+# 共 1133 条规则 / 1032 个标签；导入时的丢弃统计见脚本输出。
+
+apache-storm	body	(?i)(?:<title>storm\ ui</title>)		fingerprinthub	
+apache-wicket	body	(?i)(?:/org\.apache\.wicket\.|xmlns:wicket=)		fingerprinthub	
+nps	body	(?is)^(?=.*ehang)		fingerprinthub	
+yapi	body	(?is)^(?=.*yapi)(?=.*可视化接口管理平台)		fingerprinthub	
+nginx-ui	body	(?mi)<title[^>]*>nginx ui.*?</title>		fingerprinthub	
+123solar	body	(?mi)<title[^>]*>123solar.*?</title>		fingerprinthub	
+3cx	body	(?mi)<title[^>]*>3cx phone system management console.*?</title>		fingerprinthub	
+74cms	body	(?i)(?:/templates/default/css/common\.css|content="74cms\.com|content="74cms\.com"|content="骑士cms|powered\ by\ <a\ href="http://www\.74cms\.com/"|selectjobscategory)		fingerprinthub	
+dse855	body	(?i)(?:deep\ sea\ electronics)		fingerprinthub	
+caseaware	body	(?mi)<title[^>]*>caseaware.*?</title>		fingerprinthub	
+wordpress_toolbar	body	(?i)(?:/wp\-content/plugins/wordpress\-toolbar/)		fingerprinthub	
+acmailer-acmailer_db	body	(?i)(?:title="acmailer4\.0)		fingerprinthub	
+acmailer-acmailer_db	body	(?mi)<title[^>]*>acmailer4.0.*?</title>		fingerprinthub	
+mautic	body	(?mi)<title[^>]*>mautic.*?</title>		fingerprinthub	
+camera_firmware	body	(?mi)<title[^>]*>web configurator.*?</title>		fingerprinthub	
+acymailing	body	(?i)(?:acymailing|com_acym)		fingerprinthub	
+adiscon-loganalyzer	body	(?i)(?:adiscon\ gmbh)		fingerprinthub	
+adminer	body	(?i)(?:://www\.adminer\.org/'\ target="_blank"\ rel="noreferrer)		fingerprinthub	
+coldfusion	body	(?mi)<title[^>]*>coldfusion administrator login.*?</title>		fingerprinthub	
+commerce	body	(?i)(?:x\-magento\-tags)		fingerprinthub	
+adobe-connect	body	(?i)(?:/common/scripts/showcontent\.js)		fingerprinthub	
+experience_manager	body	(?mi)<title[^>]*>aem sign in.*?</title>		fingerprinthub	
+experience_manager_cloud_service	body	(?mi)<title[^>]*>aem sign in.*?</title>		fingerprinthub	
+r-seenet	body	(?i)(?:r\-seenet)		fingerprinthub	
+afterlogic-aurora-webmail	body	(?i)(?:x\-server:\ afterlogicdavserver)		fingerprinthub	
+aurora	body	(?i)(?:x\-server:\ afterlogicdavserver)		fingerprinthub	
+cockpit	body	(?i)(?:cockpit)		fingerprinthub	
+post-timeline	body	(?i)(?:wp\-content/plugins/post\-timeline/)		fingerprinthub	
+cloudtest	body	(?i)(?:akamai\ cloudtest)		fingerprinthub	
+omnipcx	body	(?mi)<title[^>]*>omnipcx for enterprise.*?</title>		fingerprinthub	
+alfresco-content-services	body	(?i)(?:/share/res/js/alfresco)		fingerprinthub	
+alibaba-fastjson	body	(?is)^(?=.*fastjson)(?=.*version)		fingerprinthub	
+alibaba-fastjson	body	(?i)(?:com\.alibaba\.fastjson\.jsonexception|illegal\ identifier\ :\ @pos\ 1,\ json\ :\ \{@type:java\.lang\.autocloseable|js/base/fastjson|syntax\ error,\ expect\ \{,\ actual\ error,\ pos\ 0|unclosed\ string|var\ json\ =\ json\.parse)		fingerprinthub	
+alibaba-nacos	body	(?i)(?:<title>nacos</title>)		fingerprinthub	
+opencms	body	(?i)(?:/opencms/)		fingerprinthub	
+opencms	body	(?mi)<title[^>]*>opencms.*?</title>		fingerprinthub	
+ipm-721s_firmware	body	(?i)(?:amcrest)		fingerprinthub	
+aj-report	body	(?mi)<title[^>]*>aj-report.*?</title>		fingerprinthub	
+report	body	(?mi)<title[^>]*>aj-report.*?</title>		fingerprinthub	
+apache-activemq	body	(?i)(?:<title>apache\ activemq</title>)		fingerprinthub	
+activemq_apollo	body	(?mi)<title[^>]*>apache apollo.*?</title>		fingerprinthub	
+apache-airflow	body	(?i)(?:<span>airflow</span>|airflow|src="/static/pin_100\.png")		fingerprinthub	
+apache-ambari	body	(?is)^(?=.*"/licenses/notice\.txt")(?=.*<title>ambari</title>)		fingerprinthub	
+apache-apisix	headers	(?is)^(?=.*content\-type:\ text/plain)(?=.*server:\ nginx)		fingerprinthub	
+apache-apisix	headers	(?is)^(?=.*content\-type:\ text/plain)(?=.*server:\ openresty)		fingerprinthub	
+apache-apisix	headers	(?is)^(?=.*content\-type:\ text/plain)(?=.*server:\ tengine)		fingerprinthub	
+apache-apisix	body	(?i)(?:\{"error_msg":"404\ route\ not\ found"\})		fingerprinthub	
+apache-apisix	headers	(?i)(?:server:\ apisix)		fingerprinthub	
+apache-axis2	body	(?is)^(?=.*axis2\-admin)(?=.*axis2\-web)		fingerprinthub	
+cloudstack	body	(?mi)<title[^>]*>apache cloudstack.*?</title>		fingerprinthub	
+apache-cocoon	headers	(?i)(?:x\-cocoon\-version:)		fingerprinthub	
+apache-couchdb	headers	(?is)^(?=.*server:\ couchdb)(?=.*x\-couchdb\-body\-time:\ 0)		fingerprinthub	
+dolphinscheduler	body	(?mi)<title[^>]*>dolphinscheduler.*?</title>		fingerprinthub	
+apache-druid	body	(?i)(?:content="apache\ druid\ console")		fingerprinthub	
+apache-dubbo	headers	(?i)(?:www\-authenticate:\ basic\ realm="dubbo")		fingerprinthub	
+apache-flink	body	(?i)(?:<img\ alt="apache\ flink\ dashboard"\ src="images/flink\-logo\.png|<title>apache\ flink\ web\ dashboard</title>)		fingerprinthub	
+gravitino	body	(?mi)<title[^>]*>gravitino.*?</title>		fingerprinthub	
+apache-hadoop	body	(?is)^(?=.*/static/hadoop\-st\.png)(?=.*parsehadoopprogress)		fingerprinthub	
+hertzbeat	body	(?mi)<title[^>]*>hertzbeat.*?</title>		fingerprinthub	
+apache-http	headers	(?i)(?:server:\ apache)		fingerprinthub	
+hugegraph	body	(?mi)<title[^>]*>hugegraph.*?</title>		fingerprinthub	
+kafka_connect	body	(?i)(?:apache\ druid)		fingerprinthub	
+karaf	body	(?i)(?:realm="karaf)		fingerprinthub	
+apache-kylin	body	(?i)(?:<meta\ http\-equiv="refresh"\ content="1;url=kylin">|href="/kylin/")		fingerprinthub	
+apache-mesos	body	(?i)(?:<img\ src="/static/img/mesos_logo\.png"\ alt="apache\ mesos">)		fingerprinthub	
+nifi	body	(?mi)<title[^>]*>nifi.*?</title>		fingerprinthub	
+nifi	body	(?i)(?:<a\ href="/nifi/">/nifi</a>)		fingerprinthub	
+apache-ofbiz	body	(?i)(?:<span>powered\ by\ ofbiz</span>)		fingerprinthub	
+polaris	body	(?mi)<title[^>]*>apache polaris.*?</title>		fingerprinthub	
+ranger	body	(?mi)<title[^>]*>ranger - sign in.*?</title>		fingerprinthub	
+ranger	body	(?i)(?:<img\ src="images/ranger_logo\.png"\ alt="ranger\ logo">)		fingerprinthub	
+apache-shiro	body	(?i)(?:</i>\ shiro</li>)		fingerprinthub	
+apache-shiro	headers	(?i)(?:set\-cookie:\ rememberme)		fingerprinthub	
+apache-skywalking	body	(?i)(?:sorry\ but\ skywalking\ doesn't\ work)		fingerprinthub	
+sling	body	(?mi)<title[^>]*>apache sling.*?</title>		fingerprinthub	
+apache-solr	headers	(?i)(?:location:\ /solr/)		fingerprinthub	
+spark	body	(?i)(?:/apps/imt/html/)		fingerprinthub	
+spark	body	(?mi)<title[^>]*>spark master at.*?</title>		fingerprinthub	
+streampark	body	(?mi)<title[^>]*>apache streampark.*?</title>		fingerprinthub	
+streampipes	body	(?mi)<title[^>]*>apache streampipes.*?</title>		fingerprinthub	
+apache-struts	body	(?i)(?:<form\ action="/login\.action"\ method="post|<form\ action="login\.action"\ method="post|="struts\.token\.name"|content="struts2\ showcase\ for\ apache\ struts\ project"|no\ result\ defined\ for\ action\ and\ result\ input|struts\ problem\ report|there\ is\ no\ action\ mapped\ for\ namespace)		fingerprinthub	
+apache-struts	headers	(?i)(?:location:\ /index\.action|location:\ /login\.action)		fingerprinthub	
+apache-superset	body	(?i)(?:<title>superset</title>|src="/static/assets/images/superset\-logo\-)		fingerprinthub	
+tika	body	(?mi)<title[^>]*>apache tika.*?</title>		fingerprinthub	
+apache-tomcat	body	(?is)^(?=.*/manager/html)(?=.*/manager/status)		fingerprinthub	
+apache-tomcat	body	(?i)(?:<h3>apache\ tomcat|<title>apache\ tomcat/|href="tomcat\.css|this\ is\ the\ default\ tomcat\ home\ page)		fingerprinthub	
+apache-tomcat	headers	(?i)(?:server:\ apache\-coyote/|x\-powered\-by:\ tomcat)		fingerprinthub	
+tomcat_jk_connector	body	(?mi)<title[^>]*>apache tomcat.*?</title>		fingerprinthub	
+apache-unomi	body	(?i)(?:logo\ apache\ unomi)		fingerprinthub	
+central_authentication_service	body	(?mi)<title[^>]*>cas - central authentication service.*?</title>		fingerprinthub	
+appcms	body	(?i)(?:powerd\ by\ appcms)		fingerprinthub	
+appsmith	body	(?mi)<title[^>]*>appsmith.*?</title>		fingerprinthub	
+appspace	body	(?mi)<title[^>]*>appspace.*?</title>		fingerprinthub	
+appwrite	body	(?i)(?:<title>sign\ in\ \-\ appwrite</title>)		fingerprinthub	
+energy_communication_unit_firmware	body	(?mi)<title[^>]*>altenergy power control software.*?</title>		fingerprinthub	
+controller	body	(?i)(?:aquatronica)		fingerprinthub	
+arangodb	body	(?mi)<title[^>]*>arangodb web interface.*?</title>		fingerprinthub	
+arelle	body	(?i)(?:arelle\ web\ services)		fingerprinthub	
+argo_cd	body	(?i)(?:argo\ cd)		fingerprinthub	
+dvr	body	(?mi)<title[^>]*>web viewer for samsung dvr.*?</title>		fingerprinthub	
+pandora_fms	body	(?mi)<title[^>]*>pandora fms.*?</title>		fingerprinthub	
+artica_proxy	body	(?i)(?:artica)		fingerprinthub	
+aruba-instant-access-point	body	(?i)(?:jscripts/third_party/highcharts\.src\.js|jscripts/third_party/raphael\-treemap\.min\.js)		fingerprinthub	
+aruba-instant-access-point	body	(?mi)<title[^>]*>aruba.*?</title>		fingerprinthub	
+aruba_instant	body	(?i)(?:jscripts/third_party/highcharts\.src\.js|jscripts/third_party/raphael\-treemap\.min\.js)		fingerprinthub	
+high_cms	body	(?mi)<title[^>]*>highmail.*?</title>		fingerprinthub	
+astrbot	body	(?mi)<title[^>]*>astrbot.*?</title>		fingerprinthub	
+astro	body	(?i)(?:_astro)		fingerprinthub	
+rt-n16	body	(?i)(?:rt\-n16)		fingerprinthub	
+asustor-data-master	body	(?i)(?:asustor)		fingerprinthub	
+atlassian-jira	body	(?i)(?:ams\-build\-number|com\.atlassian\.jira|jira\.webresources)		fingerprinthub	
+atlassian-jira	headers	(?i)(?:location:\ /secure/setupmode!default\.jspa)		fingerprinthub	
+atmail	body	(?i)(?:/index\.php/mail/auth/processlogin|<input\ id="mailserverinput|powered\ by\ atmail)		fingerprinthub	
+atutor	body	(?i)(?:atutor)		fingerprinthub	
+audiobookshelf	body	(?mi)<title[^>]*>audiobookshelf.*?</title>		fingerprinthub	
+device_manager_express	body	(?mi)<title[^>]*>audiocodes.*?</title>		fingerprinthub	
+compact_5500r_firmware	body	(?i)(?:auerswald)		fingerprinthub	
+candidats	body	(?i)(?:candidats)		fingerprinthub	
+webctrl	body	(?i)(?:/_common/lvl5/dologin\.jsp)		fingerprinthub	
+avantfax	body	(?i)(?:src="images/avantfax\-big\.png"\ border="0"\ alt="avantfax)		fingerprinthub	
+aura_device_services	body	(?i)(?:avaya\ aura|nbsp;utility\ services)		fingerprinthub	
+aura_utility_services	body	(?i)(?:avaya\ aura)		fingerprinthub	
+avaya	body	(?i)(?:avaya\ j179\ phone)		fingerprinthub	
+intouch_access_anywhere	body	(?i)(?:intouch\ access\ anywhere)		fingerprinthub	
+controller	body	(?mi)<title[^>]*>aviatrix cloud controller.*?</title>		fingerprinthub	
+nexis	body	(?i)(?:avid\ nexis)		fingerprinthub	
+simple_job_board	body	(?i)(?:/wp\-content/plugins/simple\-job\-board)		fingerprinthub	
+webmail	body	(?mi)<title[^>]*>axigen.*?</title>		fingerprinthub	
+mailpit	body	(?mi)<title[^>]*>mailpit.*?</title>		fingerprinthub	
+azkaban	body	(?mi)<title[^>]*>azkaban web client.*?</title>		fingerprinthub	
+b2evolution	body	(?i)(?:/powered\-by\-b2evolution\-150t\.gif|content="b2evolution|powered\ by\ b2evolution)		fingerprinthub	
+ueditor	body	(?i)(?:ueditor)		fingerprinthub	
+forms	body	(?i)(?:com_baforms)		fingerprinthub	
+clickshare_cs-100_huddle_firmware	body	(?i)(?:clicksharesession)		fingerprinthub	
+wpcom-member	body	(?i)(?:wpcom\-member)		fingerprinthub	
+datagerry	body	(?mi)<title[^>]*>datagerry.*?</title>		fingerprinthub	
+bentoml	body	(?i)(?:bentoml)		fingerprinthub	
+litellm	body	(?mi)<title[^>]*>litellm.*?</title>		fingerprinthub	
+beyondtrust	body	(?i)(?:beyondtrust)		fingerprinthub	
+remote_support	body	(?i)(?:beyondtrust)		fingerprinthub	
+bibliopac	body	(?mi)<title[^>]*>bibliopac.*?</title>		fingerprinthub	
+bigant_server	body	(?i)(?:bigant)		fingerprinthub	
+larecipe	body	(?i)(?:/binarytorch/larecipe/)		fingerprinthub	
+site_management	body	(?i)(?:/bitrix/)		fingerprinthub	
+bitrix24	body	(?i)(?:/bitrix/)		fingerprinthub	
+bitrix_site_manager	body	(?i)(?:/bitrix/)		fingerprinthub	
+blinko	body	(?mi)<title[^>]*>blinko.*?</title>		fingerprinthub	
+blogengine.net	body	(?i)(?:blogengine\.net)		fingerprinthub	
+bloofox	body	(?i)(?:powered\ by\ bloofoxcms)		fingerprinthub	
+bloofoxcms	body	(?i)(?:powered\ by\ bloofoxcms)		fingerprinthub	
+bludit	body	(?mi)<title[^>]*>bludit.*?</title>		fingerprinthub	
+footprints	body	(?i)(?:/footprints/servicedesk/)		fingerprinthub	
+boa	body	(?i)(?:server:\ boa/0\.94\.13)		fingerprinthub	
+siteengine	body	(?i)(?:siteengine)		fingerprinthub	
+w3-total-cache	body	(?i)(?:/wp\-content/plugins/w3\-total\-cache/|w3\-total\-cache)		fingerprinthub	
+rabbitmq_server	body	(?mi)<title[^>]*>rabbitmq management.*?</title>		fingerprinthub	
+broken_link_notifier	body	(?i)(?:blnotifier_front_end)		fingerprinthub	
+smart_s210_firmware	body	(?i)(?:smart管理平台)		fingerprinthub	
+cacti	body	(?i)(?:/plugins/jqueryskin/include/login\.css)		fingerprinthub	
+cacti	headers	(?i)(?:set\-cookie:\ cacti=)		fingerprinthub	
+calibre	body	(?i)(?:calibre|server:\ calibre)		fingerprinthub	
+car_rental_management_system	body	(?i)(?:car\ rental\ management\ system)		fingerprinthub	
+pcoweb_card_firmware	body	(?i)(?:pcoweb)		fingerprinthub	
+casdoor	body	(?mi)<title[^>]*>casdoor.*?</title>		fingerprinthub	
+xc1000_firmware	body	(?i)(?:cassia\ bluetooth\ gateway\ management\ platform)		fingerprinthub	
+caucho-resin	headers	(?i)(?:server:\ resin)		fingerprinthub	
+ez-net_portal	body	(?i)(?:eznet_)		fingerprinthub	
+nvt_web_server	body	(?i)(?:/viewer/viewer\.html)		fingerprinthub	
+crywolf	body	(?i)(?:false\ alarm\ reduction\ website)		fingerprinthub	
+centreon	body	(?i)(?:generator"\ content="centreon\ \-\ copyright)		fingerprinthub	
+cgit	body	(?mi)<title[^>]*>git repository browser.*?</title>		fingerprinthub	
+chamilo	body	(?i)(?:<meta\ name="generator"\ content="chamilo)		fingerprinthub	
+changedetection	body	(?i)(?:change\ detection)		fingerprinthub	
+chanjet-crm	body	(?mi)<title[^>]*>畅捷crm.*?</title>		fingerprinthub	
+chatgpt_web	body	(?mi)<title[^>]*>chatgpt个人专用版.*?</title>		fingerprinthub	
+quantum_security_gateway	body	(?i)(?:check\ point\ ssl\ network)		fingerprinthub	
+cherokee	headers	(?i)(?:server:\ cherokee)		fingerprinthub	
+churchcrm	body	(?mi)<title[^>]*>churchcrm.*?</title>		fingerprinthub	
+line-tcprs1	body	(?i)(?:line\-tcprs1)		fingerprinthub	
+adaptive-security-appliance-software	body	(?i)(?:/\+cscoe\+/logon\.html)		fingerprinthub	
+evolved_programmable_network_manager	body	(?mi)<title[^>]*>prime infrastructure.*?</title>		fingerprinthub	
+identity_services_engine	body	(?mi)<title[^>]*>identity services engine.*?</title>		fingerprinthub	
+rv160_firmware	body	(?i)(?:cisco\ rv340)		fingerprinthub	
+sg200-50_firmware	body	(?i)(?:/config/log_off_page\.htm)		fingerprinthub	
+unified_communications_domain_manager	body	(?mi)<title[^>]*>cisco unified.*?</title>		fingerprinthub	
+unified_communications_manager	body	(?i)(?:/ucmuser/)		fingerprinthub	
+unified_communications_manager	body	(?mi)<title[^>]*>unified communications self care portal.*?</title>		fingerprinthub	
+webex_meetings_online	body	(?mi)<title[^>]*>cisco webex.*?</title>		fingerprinthub	
+opencti	body	(?i)(?:opencti)		fingerprinthub	
+gateway	body	(?mi)<title[^>]*>citrix gateway.*?</title>		fingerprinthub	
+citrix-netscaler	body	(?i)(?:netscape/firefox/opera)		fingerprinthub	
+citrix-netscaler	headers	(?i)(?:set\-cookie:\ citrix_ns_id)		fingerprinthub	
+netscaler_sd-wan	body	(?mi)<title[^>]*>citrix sd-wan.*?</title>		fingerprinthub	
+sharefile_storage_zones_controller	body	(?mi)<title[^>]*>sharefile storage server.*?</title>		fingerprinthub	
+storefront_server	body	(?i)(?:/citrix/storeweb)		fingerprinthub	
+xenapp	body	(?i)(?:/citrix/xenapp)		fingerprinthub	
+xenmobile_server	body	(?mi)<title[^>]*>xenmobile.*?</title>		fingerprinthub	
+whodb	body	(?i)(?:whodb)		fingerprinthub	
+cliniccases	body	(?mi)<title[^>]*>cliniccases",html:"/cliniccases/.*?</title>		fingerprinthub	
+citrix_storefront	body	(?i)(?:/citrix/storeweb)		fingerprinthub	
+hue	body	(?mi)<title[^>]*>hue - welcome to hue.*?</title>		fingerprinthub	
+cobbler	body	(?mi)<title[^>]*>cobbler web interface.*?</title>		fingerprinthub	
+cockpit	body	(?mi)<title[^>]*>cockpit.*?</title>		fingerprinthub	
+cbx-bookmark-favorite	body	(?i)(?:cbxwpbookmark)		fingerprinthub	
+wp_go_maps	body	(?i)(?:/wp\-content/plugins/wp\-google\-maps)		fingerprinthub	
+code-server	body	(?i)(?:telemetry\.coder\.com)		fingerprinthub	
+code-server	body	(?is)^(?=.*code\-server)(?=.*/_static/)		fingerprinthub	
+itop	body	(?i)(?:itop\ login)		fingerprinthub	
+comfyui-manager	body	(?mi)<title[^>]*>comfyui.*?</title>		fingerprinthub	
+ruckus_vriot	body	(?i)(?:riot\ controller)		fingerprinthub	
+discuz	body	(?mi)<title[^>]*>discuz!.*?</title>		fingerprinthub	
+concrete_cms	body	(?i)(?:concrete5|concretecms)		fingerprinthub	
+conductor	body	(?mi)<title[^>]*>conductor ui.*?</title>		fingerprinthub	
+contao	body	(?i)(?:contao\ open\ source\ cms)		fingerprinthub	
+contao	body	(?mi)<title[^>]*>contao.*?</title>		fingerprinthub	
+solarview_compact	body	(?i)(?:solarview\ compact)		fingerprinthub	
+solarview_compact_firmware	body	(?i)(?:\ title="top|solarview\ compact|solarview\ compact"\ )		fingerprinthub	
+sv-cpt-mc310_firmware	body	(?i)(?:solarview\ compact)		fingerprinthub	
+sidekiq	body	(?mi)<title[^>]*>sidekiq.*?</title>		fingerprinthub	
+webpanel	body	(?mi)<title[^>]*>login .*?</title>		fingerprinthub	
+copyparty	body	(?mi)<title[^>]*>copyparty.*?</title>		fingerprinthub	
+cpanel	body	(?is)^(?=.*cpanel_magic_revision)(?=.*go\.cpanel\.net)		fingerprinthub	
+cms	body	(?i)(?:craftcms)		fingerprinthub	
+craft_cms	body	(?i)(?:craftcms)		fingerprinthub	
+craftercms	body	(?i)(?:craftercms)		fingerprinthub	
+cratedb	body	(?mi)<title[^>]*>cratedb.*?</title>		fingerprinthub	
+contact-form-generator	body	(?i)(?:/wp\-content/plugins/contact\-form\-generator)		fingerprinthub	
+academy_learning_management_system	body	(?i)(?:study\ any\ topic,\ anytime)		fingerprinthub	
+academy_lms	body	(?i)(?:academy\ lms)		fingerprinthub	
+crestron-device	body	(?i)(?:airmedia)		fingerprinthub	
+listingpro	body	(?i)(?:/wp\-content/plugins/listingpro)		fingerprinthub	
+crmeb	body	(?mi)<title[^>]*>crmeb.*?</title>		fingerprinthub	
+crmeb	body	(?i)(?:<h1>crmeb</h1>)		fingerprinthub	
+crushftp	body	(?i)(?:crushftp)		fingerprinthub	
+thinfinity_virtualui	body	(?mi)<title[^>]*>thinfinity virtualui.*?</title>		fingerprinthub	
+geo_mashup	body	(?i)(?:geo\-mashup)		fingerprinthub	
+cyberpanel	body	(?i)(?:cyberpanel)		fingerprinthub	
+d-link	body	(?i)(?:d\-link\ systems,\ inc)		fingerprinthub	
+dagu	body	(?mi)<title[^>]*>dagu.*?</title>		fingerprinthub	
+icc	body	(?i)(?:\*客户端会小于800\*)		fingerprinthub	
+smart_parking_management	body	(?i)(?:/wpms/asset)		fingerprinthub	
+request-baskets	body	(?i)(?:request\-baskets)		fingerprinthub	
+dataease	body	(?i)(?:dataease)		fingerprinthub	
+datahub	body	(?mi)<title[^>]*>datahub.*?</title>		fingerprinthub	
+data_science_studio	body	(?mi)<title[^>]*>dataiku.*?</title>		fingerprinthub	
+datart	body	(?mi)<title[^>]*>datart.*?</title>		fingerprinthub	
+dt80_dex_firmware	body	(?mi)<title[^>]*>datataker.*?</title>		fingerprinthub	
+dbgate	body	(?mi)<title[^>]*>dbgate.*?</title>		fingerprinthub	
+debian	body	(?i)(?:<h1>welcome\ to\ nginx\ on\ debian!</h1>)		fingerprinthub	
+9router	body	(?mi)<title[^>]*>9router.*?</title>		fingerprinthub	
+dedecms	body	(?is)^(?=.*/templets/default/style/dedecms\.css)(?=.*dedecms)		fingerprinthub	
+dedecms	body	(?is)^(?=.*name="dede_fields)(?=.*name="dede_fieldshash)		fingerprinthub	
+dedecms	body	(?is)^(?=.*<form\ \ name="formsearch"\ action="/plus/search\.php">)(?=.*name="q")		fingerprinthub	
+dedecms	body	(?i)(?:<a\ href=http://www\.dedecms\.com\ target='_blank'>power\ by\ dedecms</a>|<div><h3>dedecms\ error\ warning!</h3>|content="order\ by\ dede58\.com"\ />|http://www\.dedecms\.com/|power\ by\ dedecms)		fingerprinthub	
+emc_avamar-emc_integrated_data_protectio	body	(?mi)<title[^>]*>avamar.*?</title>		fingerprinthub	
+daenetip4_meto	body	(?mi)<title[^>]*>daenetip4.*?</title>		fingerprinthub	
+geo-my-wp	body	(?i)(?:/wp\-content/plugins/geo\-my\-wp/)		fingerprinthub	
+dgraph	body	(?i)(?:dgraph)		fingerprinthub	
+huemagic	body	(?mi)<title[^>]*>node-red.*?</title>		fingerprinthub	
+changedetection.io	body	(?i)(?:changedetection\.io)		fingerprinthub	
+drawio	body	(?mi)<title[^>]*>flowchart maker.*?</title>		fingerprinthub	
+hoteldruid	body	(?mi)<title[^>]*>hoteldruid.*?</title>		fingerprinthub	
+discuz_x	body	(?i)(?:discuz!\ x5\.0)		fingerprinthub	
+django	body	(?i)(?:django)		fingerprinthub	
+central_wifimanager	body	(?i)(?:d\-link\ central\ wifimanager)		fingerprinthub	
+dar-8000-10_firmware	body	(?i)(?:\ title="d\-link|dar\-8000\-10"\ )		fingerprinthub	
+dir-605l_firmware	body	(?i)(?:l_tb>dir\-605)		fingerprinthub	
+dir-615	body	(?mi)<title[^>]*>roteador wireless.*?</title>		fingerprinthub	
+dir-816l_firmware	body	(?i)(?:dir\-816l)		fingerprinthub	
+dir-845l	body	(?i)(?:dir\-845l)		fingerprinthub	
+dlink	body	(?i)(?:text:in\ order\ to\ access\ the\ sharecenter)		fingerprinthub	
+dns-320_firmware	body	(?i)(?:sharecenter)		fingerprinthub	
+dns-320l	body	(?i)(?:text:in\ order\ to\ access\ the\ sharecenter)		fingerprinthub	
+dotnetnuke	body	(?i)(?:set\-cookie:\ dnn_ismobile)		fingerprinthub	
+doccano	body	(?mi)<title[^>]*>doccano.*?</title>		fingerprinthub	
+docmost	body	(?mi)<title[^>]*>docmost.*?</title>		fingerprinthub	
+document_locator	body	(?mi)<title[^>]*>document locator - webtools.*?</title>		fingerprinthub	
+dokuwiki	body	(?i)(?:<div\ id="dokuwiki|content="dokuwiki|powered\ by\ dokuwiki)		fingerprinthub	
+dolibarr	body	(?mi)<title[^>]*>dolibarr.*?</title>		fingerprinthub	
+dotclear	body	(?i)(?:powered\ by\ <a\ href="http://dotclear\.org/)		fingerprinthub	
+dotcms	body	(?mi)<title[^>]*>dotcms.*?</title>		fingerprinthub	
+vigor	body	(?i)(?:detectlang|excanvas\.js)		fingerprinthub	
+vigor300b	body	(?i)(?:detectlang|excanvas\.js)		fingerprinthub	
+vigorconnect	body	(?i)(?:vigorconnect)		fingerprinthub	
+opendreambox	body	(?mi)<title[^>]*>dreambox webcontrol.*?</title>		fingerprinthub	
+drupal	body	(?i)(?:/misc/drupal\.js|/sites/all/modules/|/sites/all/themes/|/sites/default/files/|drupal\.settings|powered\ by\ <a\ href="https://www\.drupal\.org">drupal</a>|jquery\.extend\(drupal\.settings)		fingerprinthub	
+localgov_workflows	body	(?i)(?:/modules/contrib/localgov)		fingerprinthub	
+dzzoffice	body	(?i)(?:dzzoffice)		fingerprinthub	
+zentao	body	(?i)(?:zentao)		fingerprinthub	
+mojarra	body	(?i)(?:javax\.faces\.resource|javax\.faces\.viewstate)		fingerprinthub	
+open_edx	body	(?i)(?:open\ edx)		fingerprinthub	
+elastic	body	(?i)(?:<title>elastic</title>)		fingerprinthub	
+elastic	headers	(?i)(?:kbn\-license\-sig:)		fingerprinthub	
+elasticsearch	body	(?i)(?:index_not_found_exception)		fingerprinthub	
+kibana	body	(?mi)<title[^>]*>kibana.*?</title>		fingerprinthub	
+logstash	body	(?i)(?:logstash)		fingerprinthub	
+elasticsearch	body	(?i)(?:\ \ "tagline"\ :\ "you\ know,\ for\ search")		fingerprinthub	
+eleanor_cms	body	(?i)(?:eleanor)		fingerprinthub	
+ethos_identity	body	(?i)(?:ellucian\ company)		fingerprinthub	
+embedthis-appweb	headers	(?i)(?:server:\ embedthis\-appweb)		fingerprinthub	
+emby	body	(?i)(?:content="emby\ server")		fingerprinthub	
+emlog	body	(?mi)<title[^>]*>emlog.*?</title>		fingerprinthub	
+episerver	body	(?i)(?:/javascript/episerverscriptmanager\.js|content="episerver)		fingerprinthub	
+filerise	body	(?mi)<title[^>]*>filerise.*?</title>		fingerprinthub	
+scoold	body	(?i)(?:scoold\-wrapper)		fingerprinthub	
+erxes	body	(?mi)<title[^>]*>erxes.*?</title>		fingerprinthub	
+cdg	body	(?i)(?:esafenet)		fingerprinthub	
+cdg	body	(?mi)<title[^>]*>电子文档安全管理系统",body="cdgserver3/.*?</title>		fingerprinthub	
+esafenet	body	(?mi)<title[^>]*>电子文档安全管理系统",body="cdgserver3/.*?</title>		fingerprinthub	
+esm.sh	body	(?i)(?:esm\.sh)		fingerprinthub	
+device-builder	body	(?mi)<title[^>]*>esphome device builder.*?</title>		fingerprinthub	
+etherpad	body	(?mi)<title[^>]*>etherpad.*?</title>		fingerprinthub	
+reliance	body	(?i)(?:etq\ reliance)		fingerprinthub	
+etl3100	body	(?i)(?:etl3100)		fingerprinthub	
+extplorer	body	(?i)(?:/extplorer\.ico)		fingerprinthub	
+extreme_management_center	body	(?mi)<title[^>]*>extreme management center.*?</title>		fingerprinthub	
+eyesofnetwork	body	(?i)(?:eyesofnetwork)		fingerprinthub	
+eyoucms	body	(?i)(?:name="generator"\ content="eyoucms|powered\ by\ eyoucms)		fingerprinthub	
+f5-big-ip	body	(?i)(?:content="f5\ networks,\ inc\.")		fingerprinthub	
+f5-big-ip	headers	(?i)(?:set\-cookie:\ bigipserverpool)		fingerprinthub	
+big-ip_access_policy_manager	body	(?mi)<title[^>]*>big-ip.*?</title>		fingerprinthub	
+nginx	headers	(?i)(?:server:\ nginx)		fingerprinthub	
+facturascripts	body	(?i)(?:facturascripts\ installer)		fingerprinthub	
+fastbee	body	(?i)(?:fastbee)		fingerprinthub	
+vec40g	body	(?mi)<title[^>]*>飞鱼星企业级智能上网行为管理系统.*?</title>		fingerprinthub	
+fieldpopupnewsletter	body	(?i)(?:fieldpopupnewsletter)		fingerprinthub	
+filegator	body	(?mi)<title[^>]*>filegator.*?</title>		fingerprinthub	
+finecms	body	(?i)(?:/statics/js/dayrui\.js|copyright"\ content="finecms|dayrui@gmail\.com|powered\ by\ finecms)		fingerprinthub	
+jumpserver	body	(?mi)<title[^>]*>jumpserver.*?</title>		fingerprinthub	
+kubeoperator	body	(?i)(?:kubeoperator)		fingerprinthub	
+kubepi	body	(?i)(?:kubepi)		fingerprinthub	
+flaresolverr	body	(?i)(?:flaresolverr\ is\ ready)		fingerprinthub	
+flatpress	body	(?i)(?:flatpress)		fingerprinthub	
+flexnet_publisher	body	(?mi)<title[^>]*>flexnet.*?</title>		fingerprinthub	
+wp-google-map-gold	body	(?i)(?:/wp\-content/plugins/wp\-maps\-pro/)		fingerprinthub	
+ax8	body	(?mi)<title[^>]*>flir.*?</title>		fingerprinthub	
+flowise	body	(?mi)<title[^>]*>flowise.*?</title>		fingerprinthub	
+flowpaper	body	(?mi)<title[^>]*>flexpaper.*?</title>		fingerprinthub	
+dash-uploader	body	(?i)(?:_dash\-undo\-redo)		fingerprinthub	
+am	body	(?mi)<title[^>]*>openam.*?</title>		fingerprinthub	
+openam	body	(?mi)<title[^>]*>openam.*?</title>		fingerprinthub	
+fortinet-fortimail	body	(?is)^(?=.*<script\ language=javascript>)(?=.*location="/m/webmail/";)		fingerprinthub	
+fortinac	body	(?mi)<title[^>]*>fortinac.*?</title>		fingerprinthub	
+fortios	body	(?i)(?:/remote/login"\ "xxxxxxxx)		fingerprinthub	
+fortiportal	body	(?i)(?:fortiportal)		fingerprinthub	
+fortisandbox	body	(?mi)<title[^>]*>fortisandbox.*?</title>		fingerprinthub	
+fortiweb	body	(?mi)<title[^>]*>fortiweb - .*?</title>		fingerprinthub	
+fortiwlm	body	(?i)(?:fortiwlm)		fingerprinthub	
+f3x36	body	(?i)(?:four\-faith)		fingerprinthub	
+fuxa	body	(?mi)<title[^>]*>fuxa.*?</title>		fingerprinthub	
+colibri_firmware	body	(?i)(?:franklin\ fueling\ systems)		fingerprinthub	
+erpnext	body	(?i)(?:login\ to\ frappe)		fingerprinthub	
+frappe	body	(?i)(?:frappe)		fingerprinthub	
+free5gc	body	(?mi)<title[^>]*>free5gc web console.*?</title>		fingerprinthub	
+freescout	body	(?i)(?:freescout)		fingerprinthub	
+frigate	body	(?mi)<title[^>]*>frigate.*?</title>		fingerprinthub	
+froxlor	body	(?mi)<title[^>]*>froxlor server management panel.*?</title>		fingerprinthub	
+fudforum	body	(?i)(?:powered\ by:\ fudforum)		fingerprinthub	
+apeosport-v_c3375	body	(?i)(?:docucentre|prop\.htm)		fingerprinthub	
+ganglia-web	body	(?i)(?:ganglia_form\.submit\(\))		fingerprinthub	
+site-reviews	body	(?i)(?:glsr\-form|site\-reviews)		fingerprinthub	
+cs141	body	(?i)(?:cs141)		fingerprinthub	
+genieacs	body	(?i)(?:genieacs)		fingerprinthub	
+core-geonetwork	body	(?i)(?:/srv/eng/)		fingerprinthub	
+geoserver	body	(?i)(?:/geoserver/)		fingerprinthub	
+jai-ext	body	(?i)(?:/geoserver/)		fingerprinthub	
+geowebserver	body	(?mi)<title[^>]*>geowebserver.*?</title>		fingerprinthub	
+gestsup	body	(?mi)<title[^>]*>gestsup.*?</title>		fingerprinthub	
+arcane	body	(?i)(?:arcane)		fingerprinthub	
+grav_cms	body	(?i)(?:grav\ cms)		fingerprinthub	
+laminas-http	body	(?i)(?:laminas)		fingerprinthub	
+gitblit	body	(?i)(?:gitblit)		fingerprinthub	
+gitea	body	(?i)(?:content="gitea\ \-\ git\ with\ a\ cup\ of\ tea")		fingerprinthub	
+gitea	headers	(?i)(?:set\-cookie:\ i_like_gitea)		fingerprinthub	
+enterprise_server	body	(?i)(?:micro\ focus\ dsd)		fingerprinthub	
+enterprise_server	body	(?mi)<title[^>]*>github enterprise.*?</title>		fingerprinthub	
+gitlab	body	(?is)^(?=.*navbar\-gitlab)(?=.*search\ gitlab)		fingerprinthub	
+gitlab	body	(?i)(?:<a\ href="https://about\.gitlab\.com/">about\ gitlab|class="col\-sm\-7\ brand\-holder\ pull\-left"|content="gitlab\ |content="gitlab\ community\ edition"|gon\.default_issues_tracker)		fingerprinthub	
+gitlab	headers	(?i)(?:set\-cookie:\ _gitlab_session=)		fingerprinthub	
+gl-ar300m_firmware	body	(?mi)<title[^>]*>gl.inet admin panel.*?</title>		fingerprinthub	
+gl-s20_firmware	body	(?mi)<title[^>]*>gl.inet admin panel.*?</title>		fingerprinthub	
+glpi	body	(?mi)<title[^>]*>glpi.*?</title>		fingerprinthub	
+linx_sphere	body	(?i)(?:scs\.web\.server\.spi/1\.0)		fingerprinthub	
+gnuboard5	body	(?i)(?:gnuboard|gnuboard5)		fingerprinthub	
+gitea	body	(?i)(?:gitea)		fingerprinthub	
+gogs	body	(?mi)<title[^>]*>sign in - gogs.*?</title>		fingerprinthub	
+gogs	body	(?i)(?:<a\ class="item"\ target="_blank"\ href="https://gogs\.io/docs"\ rel="noreferrer">帮助</a>|content="gogs)		fingerprinthub	
+harbor	body	(?mi)<title[^>]*>harbor.*?</title>		fingerprinthub	
+adk-python	body	(?mi)<title[^>]*>adk" http.component:"uvicorn.*?</title>		fingerprinthub	
+gorse	body	(?mi)<title[^>]*>gorse dashboard.*?</title>		fingerprinthub	
+gotenberg	body	(?i)(?:gotenberg)		fingerprinthub	
+gradio	body	(?i)(?:__gradio_mode__)		fingerprinthub	
+gradio	body	(?i)(?:gradio\-app)		fingerprinthub	
+gradio	body	(?mi)<title[^>]*>gradio.*?</title>		fingerprinthub	
+grafana	body	(?is)^(?=.*grafana_icon\.svg)		fingerprinthub	
+grafana	body	(?i)(?:grafana\-app|window\.grafanabootdata\ =\ )		fingerprinthub	
+grandnode	headers	(?i)(?:x\-powered\-by:\ grandnode)		fingerprinthub	
+netmaker	body	(?i)(?:netmaker)		fingerprinthub	
+graylog	body	(?mi)<title[^>]*>graylog web interface.*?</title>		fingerprinthub	
+graylog	body	(?i)(?:org\.graylog\.plugins\.pipelineprocessor\.processorplugin)		fingerprinthub	
+grocy	body	(?i)(?:grocy\-version)		fingerprinthub	
+grocy	body	(?mi)<title[^>]*>grocy.*?</title>		fingerprinthub	
+testrail	body	(?i)(?:testrail)		fingerprinthub	
+wpdiscuz	body	(?i)(?:/wp\-content/plugins/wpdiscuz)		fingerprinthub	
+h2o	body	(?mi)<title[^>]*>h2o flow.*?</title>		fingerprinthub	
+integration	body	(?mi)<title[^>]*>home assistant.*?</title>		fingerprinthub	
+edusoho	body	(?i)(?:powered\ by\ <a\ href="http://www\.edusoho\.com/"\ target="_blank">edusoho)		fingerprinthub	
+cph2_echarge	body	(?i)(?:salia\ plcc)		fingerprinthub	
+media-suite	body	(?i)(?:harman\ media\ suite)		fingerprinthub	
+consul	body	(?mi)<title[^>]*>consul by hashicorp.*?</title>		fingerprinthub	
+sentinel	body	(?mi)<title[^>]*>sentinel dashboard.*?</title>		fingerprinthub	
+hd-network_real-time_monitoring_system	body	(?mi)<title[^>]*>hd-network real-time monitoring system v2.0.*?</title>		fingerprinthub	
+control_panel	body	(?mi)<title[^>]*>hestia control panel.*?</title>		fingerprinthub	
+vantara_pentaho	body	(?i)(?:pentaho)		fingerprinthub	
+lightrag	body	(?i)(?:lightrag)		fingerprinthub	
+homarr	body	(?mi)<title[^>]*>homarr.*?</title>		fingerprinthub	
+home-assistant	body	(?mi)<title[^>]*>home assistant.*?</title>		fingerprinthub	
+homebridge-config-ui-x	body	(?mi)<title[^>]*>homebridge.*?</title>		fingerprinthub	
+pm43_firmware	body	(?i)(?:/main/login\.lua\?pageid=)		fingerprinthub	
+hoppscotch	body	(?mi)<title[^>]*>hoppscotch.*?</title>		fingerprinthub	
+horde	body	(?i)(?:_sethordetitle|imp:\ copyright\ 2001\-2009\ the\ horde\ project)		fingerprinthub	
+hospital_management_system	body	(?i)(?:hospital\ management\ system)		fingerprinthub	
+hp	body	(?i)(?:hp\ 1820\-8g\ switch\ j9979a)		fingerprinthub	
+officeconnect_1820_j9979a_firmware	body	(?i)(?:hpe\ officeconnect)		fingerprinthub	
+e-hr	body	(?mi)<title[^>]*>人力资源信息管理系统.*?</title>		fingerprinthub	
+mailinspector	body	(?i)(?:mailinspector)		fingerprinthub	
+hg255s	body	(?i)(?:hg532e)		fingerprinthub	
+hg532e	body	(?i)(?:hg532e)		fingerprinthub	
+usg9500	body	(?mi)<title[^>]*>huawei.*?</title>		fingerprinthub	
+label-studio	body	(?mi)<title[^>]*>label studio.*?</title>		fingerprinthub	
+data_risk_manager	body	(?mi)<title[^>]*>ibm data risk manager.*?</title>		fingerprinthub	
+ibm	body	(?mi)<title[^>]*>ibm security verify access.*?</title>		fingerprinthub	
+integrated_management_module	body	(?i)(?:ibmdojo|integrated\ management\ module)		fingerprinthub	
+langflow	body	(?i)(?:langflow)		fingerprinthub	
+mobilefirst-foundation	body	(?mi)<title[^>]*>mobilefirst operations console.*?</title>		fingerprinthub	
+operational_decision_manager	body	(?i)(?:ibm\ odm)		fingerprinthub	
+planning_analytics	body	(?mi)<title[^>]*>arc for tm1.*?</title>		fingerprinthub	
+tivoli_common_reporting	body	(?i)(?:ibm\ websphere\ portal)		fingerprinthub	
+websphere	body	(?i)(?:ibm\ websphere\ portal)		fingerprinthub	
+websphere	body	(?i)(?:com\.ibm\.websphere\.ihs\.doc|content="websphere\ application\ server|websphere)		fingerprinthub	
+secure_web_gateway	body	(?i)(?:iboss\-font\.css)		fingerprinthub	
+deep_castle_g2	body	(?mi)<title[^>]*>icewarp.*?</title>		fingerprinthub	
+icewarp	body	(?mi)<title[^>]*>icewarp.*?</title>		fingerprinthub	
+icewarp_server	body	(?mi)<title[^>]*>icewarp.*?</title>		fingerprinthub	
+webclient	body	(?mi)<title[^>]*>icewarp.*?</title>		fingerprinthub	
+casaos	body	(?i)(?:/casaos\-ui/public/index\.html)		fingerprinthub	
+icinga	body	(?i)(?:<title>icinga\ web\ 2\ login</title>|mask\-icon"\ href="/icingaweb2/img/website\-icon\.svg"\ color=)		fingerprinthub	
+idccms	body	(?mi)<title[^>]*>idccms.*?</title>		fingerprinthub	
+sigma_wide	body	(?mi)<title[^>]*>idemia.*?</title>		fingerprinthub	
+ilias	body	(?i)(?:ilias)		fingerprinthub	
+immich	body	(?is)^(?=.*immich)(?=.*/_app/immutable)		fingerprinthub	
+impresscms	body	(?i)(?:impresscms)		fingerprinthub	
+influxdata-influxdb	body	(?i)(?:class="influxdb\-version"|influxdb)		fingerprinthub	
+netmri	body	(?i)(?:infoblox\ netmri)		fingerprinthub	
+clusterengine	body	(?mi)<title[^>]*>tscev4.0.*?</title>		fingerprinthub	
+active_management_technology_firmware	body	(?mi)<title[^>]*>active management technology.*?</title>		fingerprinthub	
+nplug	body	(?i)(?:nplug)		fingerprinthub	
+sg_2404_mr_firmware	body	(?mi)<title[^>]*>intelbras.*?</title>		fingerprinthub	
+tip200	body	(?i)(?:/cgi\-bin/cgiserver\.exx)		fingerprinthub	
+tip300	body	(?mi)<title[^>]*>intelbras.*?</title>		fingerprinthub	
+wrn150	body	(?i)(?:wrn150)		fingerprinthub	
+aptus_web	body	(?mi)<title[^>]*>intellian aptus web.*?</title>		fingerprinthub	
+group-office	body	(?mi)<title[^>]*>group-office.*?</title>		fingerprinthub	
+ips_community_suite	body	(?i)(?:invision\ community)		fingerprinthub	
+invoiceplane	body	(?i)(?:invoiceplane)		fingerprinthub	
+orchid_core_vms	body	(?mi)<title[^>]*>orchid core vms.*?</title>		fingerprinthub	
+ipeakcms	body	(?is)^(?=.*ipeak)		fingerprinthub	
+a2004	body	(?mi)<title[^>]*>iptime.*?</title>		fingerprinthub	
+wpbookit	body	(?i)(?:/wp\-content/plugins/wpbookit/)		fingerprinthub	
+ispconfig	body	(?i)(?:powered\ by\ <a\ href="http://www\.ispconfig\.org)		fingerprinthub	
+ispy	body	(?i)(?:ispy\ is\ running)		fingerprinthub	
+issabel-pbx	body	(?mi)<title[^>]*>issabel.*?</title>		fingerprinthub	
+pbx	body	(?mi)<title[^>]*>issabel.*?</title>		fingerprinthub	
+connect_secure	body	(?i)(?:welcome\.cgi\?p=logo)		fingerprinthub	
+connect_secure	body	(?mi)<title[^>]*>ivanti connect secure.*?</title>		fingerprinthub	
+endpoint_manager_cloud_services_applianc	body	(?mi)<title[^>]*>landesk(r) cloud services appliance.*?</title>		fingerprinthub	
+mobileiron	body	(?i)(?:mobileiron)		fingerprinthub	
+mobileiron_sentry	body	(?i)(?:note:\ requires\ a\ local\ sentry\ administrative\ user)		fingerprinthub	
+virtual-traffic-manager	body	(?i)(?:apps/zxtm/login\.cgi)		fingerprinthub	
+self_service	body	(?i)(?:jamf)		fingerprinthub	
+jeecg	body	(?i)(?:plug\-in/ace/)		fingerprinthub	
+jeedom	body	(?mi)<title[^>]*>jeedom.*?</title>		fingerprinthub	
+jeesns	body	(?mi)<title[^>]*>jeesns.*?</title>		fingerprinthub	
+jellyfin	body	(?is)^(?=.*<title>jellyfin</title>)(?=.*content="jellyfin")		fingerprinthub	
+git	body	(?i)(?:x\-jenkins)		fingerprinthub	
+gitlab_hook	body	(?mi)<title[^>]*>gitlab.*?</title>		fingerprinthub	
+jenkins	headers	(?is)^(?=.*x\-jenkins\-session:)(?=.*x\-jenkins:)		fingerprinthub	
+jenkins	body	(?i)(?:jenkins\-agent\-protocols)		fingerprinthub	
+teamcity	body	(?mi)<title[^>]*>teamcity.*?</title>		fingerprinthub	
+tlp-team	body	(?i)(?:rt\-team\-container|tlp\-team)		fingerprinthub	
+jfinalcms	body	(?i)(?:content=jrecms)		fingerprinthub	
+artifactory	body	(?mi)<title[^>]*>jfrog.*?</title>		fingerprinthub	
+jfrog	body	(?i)(?:<meta\ http\-equiv="refresh"\ content="0;url=/artifactory">|src=/ui/img/jfrog)		fingerprinthub	
+jfrog	headers	(?i)(?:location:\ /artifactory/)		fingerprinthub	
+jsherp	body	(?i)(?:jsherp\-boot)		fingerprinthub	
+frick-quantum-hd	body	(?i)(?:quantum\ hd)		fingerprinthub	
+netalertx	body	(?i)(?:netalert\ x)		fingerprinthub	
+joomla	body	(?i)(?:joomla!\ \-\ open\ source\ content\ management)		fingerprinthub	
+joomla	body	(?i)(?:/media/system/js/core\.js|/media/system/js/mootools\-core\.js|<meta\ name="keywords"\ content="joomla,\ joomla"\ />|content="joomla)		fingerprinthub	
+page_builder_ck	body	(?i)(?:com_pagebuilderck)		fingerprinthub	
+jux_real_estate	body	(?i)(?:joomlaux)		fingerprinthub	
+icagenda	body	(?i)(?:com_icagenda)		fingerprinthub	
+easy-store	body	(?i)(?:easy\ store)		fingerprinthub	
+joplin	body	(?mi)<title[^>]*>joplin server.*?</title>		fingerprinthub	
+jorani	body	(?mi)<title[^>]*>login - jorani.*?</title>		fingerprinthub	
+journyx	body	(?i)(?:journyx)		fingerprinthub	
+jquery-bbq	body	(?i)(?:odoo)		fingerprinthub	
+junos	body	(?mi)<title[^>]*>juniper web device manager.*?</title>		fingerprinthub	
+srx100	body	(?mi)<title[^>]*>juniper web device manager.*?</title>		fingerprinthub	
+jupyterhub	body	(?mi)<title[^>]*>jupyterhub.*?</title>		fingerprinthub	
+jupyterhub	body	(?i)(?:<title>jupyterhub</title>)		fingerprinthub	
+jupyterlab	body	(?mi)<title[^>]*>jupyterlab.*?</title>		fingerprinthub	
+jupyterlab	body	(?i)(?:<title>jupyterlab</title>)		fingerprinthub	
+notebook	body	(?mi)<title[^>]*>jupyter notebook.*?</title>		fingerprinthub	
+notebook	body	(?i)(?:<div\ id="ipython\-main\-app"\ class="container">|<div\ id="ipython_notebook"\ class="nav\ navbar\-brand">|<title>jupyter\ notebook</title>)		fingerprinthub	
+kan	body	(?i)(?:_next)		fingerprinthub	
+kan	body	(?mi)<title[^>]*>kan.*?</title>		fingerprinthub	
+kavita	body	(?mi)<title[^>]*>kavita.*?</title>		fingerprinthub	
+kkfileview	body	(?i)(?:kkfileview)		fingerprinthub	
+loadmaster	body	(?i)(?:kemp\ login\ screen)		fingerprinthub	
+kentico_cms	body	(?mi)<title[^>]*>kentico database setup.*?</title>		fingerprinthub	
+kestra	body	(?mi)<title[^>]*>kestra.*?</title>		fingerprinthub	
+kimai	body	(?mi)<title[^>]*>kimai.*?</title>		fingerprinthub	
+kingsoft_antivirus	body	(?mi)<title[^>]*>金山vgm防毒墙.*?</title>		fingerprinthub	
+kiwi_tcms	body	(?mi)<title[^>]*>kiwi tcms - login" http.favicon.hash:-1909533337.*?</title>		fingerprinthub	
+starlette	body	(?i)(?:starlette)		fingerprinthub	
+koha	body	(?i)(?:content="koha\ |name="koha_login_context)		fingerprinthub	
+kubeflow	body	(?i)(?:content="kubeflow\ central\ dashboard")		fingerprinthub	
+kubernetes	body	(?i)(?:<article\ class="post\ kubernetes|<b>kubernetes</b>\ listening|href="assets/images/kubernetes\-logo\.png|value="kubernetes)		fingerprinthub	
+kubernetes	headers	(?i)(?:www\-authenticate:\ realm="kubernetes)		fingerprinthub	
+kubeview	body	(?mi)<title[^>]*>kubeview.*?</title>		fingerprinthub	
+revpi_status	body	(?mi)<title[^>]*>revpi.*?</title>		fingerprinthub	
+labkey_server	body	(?mi)<title[^>]*>sign in: /home.*?</title>		fingerprinthub	
+wegia	body	(?i)(?:wegia)		fingerprinthub	
+langchain	body	(?i)(?:<title>langchain\ chat</title>)		fingerprinthub	
+dify	body	(?i)(?:<title>dify</title>)		fingerprinthub	
+lansweeper	body	(?i)(?:<title>lansweeper\ \-\ login</title>)		fingerprinthub	
+securelinx_spider_firmware	body	(?mi)<title[^>]*>lantronix.*?</title>		fingerprinthub	
+laravel	body	(?i)(?:laravel\-framework)		fingerprinthub	
+bl-wr9000_firmware	body	(?i)(?:goform|lb\-link|lb\-link"\ "goahead\-webs)		fingerprinthub	
+leadconnector	body	(?i)(?:/wp\-content/plugins/leadconnector/|leadconnector)		fingerprinthub	
+leantime	body	(?mi)<title[^>]*>leantime.*?</title>		fingerprinthub	
+connection_broker	body	(?mi)<title[^>]*>leostream.*?</title>		fingerprinthub	
+letta	body	(?mi)<title[^>]*>letta.*?</title>		fingerprinthub	
+lexmark	body	(?is)^(?=.*/status)(?=.*<title>lexmark)		fingerprinthub	
+mlflow	body	(?mi)<title[^>]*>mlflow.*?</title>		fingerprinthub	
+supersign_cms	body	(?mi)<title[^>]*>lg supersign.*?</title>		fingerprinthub	
+librenms	body	(?mi)<title[^>]*>librenms.*?</title>		fingerprinthub	
+liferay	body	(?i)(?:liferay\.aui|liferay\.currenturl|powered\ by\ liferay\ portal)		fingerprinthub	
+ligeo_basics	body	(?mi)<title[^>]*>ligeo.*?</title>		fingerprinthub	
+lightdash	body	(?mi)<title[^>]*>lightdash.*?</title>		fingerprinthub	
+lighttpd	body	(?i)(?:<title>powered\ by\ lighttpd</title>)		fingerprinthub	
+lighttpd	headers	(?i)(?:server:\ lighttpd)		fingerprinthub	
+limesurvey	body	(?mi)<title[^>]*>limesurvey.*?</title>		fingerprinthub	
+ech0	body	(?i)(?:title:"ech0)		fingerprinthub	
+ech0	body	(?mi)<title[^>]*>ech0.*?</title>		fingerprinthub	
+linux_kernel	body	(?i)(?:aspera\ faspex)		fingerprinthub	
+dapr_dashboard	body	(?mi)<title[^>]*>dapr dashboard.*?</title>		fingerprinthub	
+heimdall	body	(?mi)<title[^>]*>heimdall.*?</title>		fingerprinthub	
+liquidfiles	body	(?mi)<title[^>]*>liquidfiles.*?</title>		fingerprinthub	
+dashy	body	(?mi)<title[^>]*>dashy.*?</title>		fingerprinthub	
+web-check	body	(?mi)<title[^>]*>web-check.*?</title>		fingerprinthub	
+livezilla	body	(?i)(?:content="livezilla|href="http://www\.livezilla\.net"\ target="_blank|livezilla\ is\ a\ registered\ trademark\ of\ livezilla\ gmbh</div>|thank\ you\ for\ using\ livezilla!)		fingerprinthub	
+lodash	body	(?i)(?:lodash)		fingerprinthub	
+uptime-kuma	body	(?mi)<title[^>]*>uptime-kuma.*?</title>		fingerprinthub	
+lgate-902_firmware	body	(?i)(?:lgate\-902)		fingerprinthub	
+listserv	body	(?i)(?:listserv)		fingerprinthub	
+lucee	body	(?i)(?:by\ the\ lucee\ association\ switzerland</p>|png"\ alt="lucee">)		fingerprinthub	
+clipbucket	body	(?i)(?:clipbucket)		fingerprinthub	
+cloudlog	body	(?i)(?:login\ \-\ cloudlog)		fingerprinthub	
+magicmirror	body	(?mi)<title[^>]*>magicmirror.*?</title>		fingerprinthub	
+magnolia_cms	body	(?i)(?:magnolia\ is\ a\ registered\ trademark)		fingerprinthub	
+magnusbilling	body	(?i)(?:magnusbilling)		fingerprinthub	
+newsticker	body	(?i)(?:news\-ticker)		fingerprinthub	
+mail-mint	body	(?i)(?:/wp\-content/plugins/mail\-mint/)		fingerprinthub	
+mailcow-dockerized	body	(?mi)<title[^>]*>mailcow.*?</title>		fingerprinthub	
+dtale	body	(?mi)<title[^>]*>d-tale.*?</title>		fingerprinthub	
+manageengine-servicedesk	body	(?i)(?:,'manageengine\ servicedesk\ plus',)		fingerprinthub	
+mantisbt	body	(?i)(?:alt="mantis\ bugtracker|powered\ by\ mantis\ bugtracker)		fingerprinthub	
+mastodon	body	(?i)(?:mastodon\-)		fingerprinthub	
+maxsite_cms	body	(?i)(?:maxsite\ cms)		fingerprinthub	
+maxsite_cms	body	(?i)(?:content="maxsite\ cms)		fingerprinthub	
+melis-platform	body	(?i)(?:/melis/meliscms|melisdemocms)		fingerprinthub	
+memberglut	body	(?i)(?:wp\-content/plugins/memberglut)		fingerprinthub	
+meshery	body	(?mi)<title[^>]*>meshery.*?</title>		fingerprinthub	
+mesop	body	(?i)(?:mesop)		fingerprinthub	
+metabase	body	(?is)^(?=.*_metabasebootstrap)(?=.*_metabaselocalization)		fingerprinthub	
+metersphere	body	(?i)(?:<title>metersphere)		fingerprinthub	
+metinfo	body	(?i)(?:<div\ class="powered_by_metinfo"></div>|<meta\ name="generator"\ content="metinfo)		fingerprinthub	
+cloudpanel	body	(?mi)<title[^>]*>cloudpanel.*?</title>		fingerprinthub	
+3x-ui	body	(?mi)<title[^>]*>3x-ui.*?</title>		fingerprinthub	
+syncserver_s650	body	(?i)(?:symmetricom\ syncserver)		fingerprinthub	
+exchange_server	body	(?mi)<title[^>]*>outlook.*?</title>		fingerprinthub	
+iis	headers	(?i)(?:server:\ microsoft\-iis)		fingerprinthub	
+office_web_apps_server	body	(?i)(?:provide\ a\ link\ that\ opens\ word)		fingerprinthub	
+skype_for_business_server	body	(?i)(?:skype\ for\ business)		fingerprinthub	
+windows	body	(?mi)<title[^>]*>filemage.*?</title>		fingerprinthub	
+windows_7	body	(?i)(?:microsoft\-iis"\ "2015)		fingerprinthub	
+microweber	body	(?i)(?:microweber)		fingerprinthub	
+mikopbx	body	(?mi)<title[^>]*>mikopbx.*?</title>		fingerprinthub	
+ur51	body	(?i)(?:rt_title)		fingerprinthub	
+milvus	body	(?i)(?:404\ page\ not\ found"\ port:"9091)		fingerprinthub	
+mindsdb	body	(?mi)<title[^>]*>mindsdb.*?</title>		fingerprinthub	
+mineadmin	body	(?i)(?:mineadmin)		fingerprinthub	
+console	body	(?mi)<title[^>]*>minio console.*?</title>		fingerprinthub	
+minio	body	(?i)(?:symfony\ profiler)		fingerprinthub	
+anything-llm	body	(?mi)<title[^>]*>anythingllm.*?</title>		fingerprinthub	
+cmg_suite	body	(?i)(?:mitel\ networks)		fingerprinthub	
+micollab	body	(?i)(?:mitel"\ html:"micollab)		fingerprinthub	
+micollab_audio-_web_-_video_conferencing	body	(?i)(?:mitel"\ html:"micollab)		fingerprinthub	
+shoretel	body	(?i)(?:shoretel)		fingerprinthub	
+caldera	body	(?mi)<title[^>]*>caldera.*?</title>		fingerprinthub	
+mjobtime	body	(?i)(?:mjobtime)		fingerprinthub	
+mlflow	body	(?i)(?:<title>mlflow</title>)		fingerprinthub	
+file-manager	body	(?i)(?:wp\-file\-manager)		fingerprinthub	
+s14	body	(?mi)<title[^>]*>mobotix.*?</title>		fingerprinthub	
+mobsf	body	(?i)(?:mobsf)		fingerprinthub	
+mobile-security-framework	body	(?mi)<title[^>]*>mobsf.*?</title>		fingerprinthub	
+modoboa	body	(?i)(?:modoboa)		fingerprinthub	
+mojoportal	body	(?i)(?:mojoportal)		fingerprinthub	
+mongo-express	body	(?mi)<title[^>]*>mongo express.*?</title>		fingerprinthub	
+monsta-ftp	body	(?i)(?:monsta\ ftp)		fingerprinthub	
+monsta_ftp	body	(?mi)<title[^>]*>monsta ftp.*?</title>		fingerprinthub	
+resourcespace	body	(?mi)<title[^>]*>resourcespace.*?</title>		fingerprinthub	
+moodle	body	(?i)(?:content="moodle|m\.str\ =\ \{"moodle":|title="moodle"\ href="http://moodle\.org/)		fingerprinthub	
+moostore	body	(?i)(?:moosocial)		fingerprinthub	
+motioneye	body	(?i)(?:motioneye)		fingerprinthub	
+php-login-system	body	(?i)(?:klik_loginsystem)		fingerprinthub	
+ind780_firmware	body	(?i)(?:ind780)		fingerprinthub	
+mybb	body	(?i)(?:<!\-\-\ mybb\ is\ free\ software\ developed\ and\ maintained|onchange="mybb\.changelanguage\(\);|powered\ by\ <a\ href="http://www\.mybboard\.com|visibility\ of\ the\ mybb\ copyright\ at\ any\ time)		fingerprinthub	
+mysqldumper	body	(?i)(?:<select\ class="sqlcombo"\ name="tablecombo)		fingerprinthub	
+n-central	body	(?mi)<title[^>]*>n-central login.*?</title>		fingerprinthub	
+nagios_xi	body	(?mi)<title[^>]*>nagios xi.*?</title>		fingerprinthub	
+navidrome	body	(?i)(?:content="navidrome)		fingerprinthub	
+ncast	body	(?mi)<title[^>]*>高清智能录播系统.*?</title>		fingerprinthub	
+neo4j	body	(?i)(?:content="neo4j|ng\-show="neo4j\.enterpriseedition|play\-topic="neo4j\-sync|\{\{\ neo4j\.version\ \|\ neo4jdeveloperdoc\ \}\}/)		fingerprinthub	
+netalertx	body	(?mi)<title[^>]*>netalertx.*?</title>		fingerprinthub	
+netbox	body	(?i)(?:netbox\-community)		fingerprinthub	
+netbox	body	(?mi)<title[^>]*>netbox.*?</title>		fingerprinthub	
+application_security_gateway	body	(?i)(?:ns\-icg)		fingerprinthub	
+ns-asg	body	(?mi)<title[^>]*>“ns-asg”.*?</title>		fingerprinthub	
+pfsense	body	(?mi)<title[^>]*>pfsense.*?</title>		fingerprinthub	
+netgear-r6850-router	body	(?i)(?:r6850)		fingerprinthub	
+netgear	body	(?i)(?:gigabit\ dual\ wan\ ssl\ vpn\ firewall\ fvs336gv3</div>)		fingerprinthub	
+r6850_firmware	body	(?i)(?:r6850)		fingerprinthub	
+readynas_surveillance	body	(?mi)<title[^>]*>network video recorder login.*?</title>		fingerprinthub	
+wn604	body	(?mi)<title[^>]*>="netgear.*?</title>		fingerprinthub	
+mw5360_firmware	body	(?mi)<title[^>]*>netis router.*?</title>		fingerprinthub	
+netsweeper	body	(?i)(?:href="http://www\.poweredbynetsweeper\.com"><img\ |netsweepersmbtextatbottomofloginscreen)		fingerprinthub	
+netsweeper	headers	(?i)(?:set\-cookie:\ webadmin=)		fingerprinthub	
+mirth-connect	body	(?mi)<title[^>]*>mirth connect.*?</title>		fingerprinthub	
+mirth_connect	body	(?mi)<title[^>]*>mirth connect administrator.*?</title>		fingerprinthub	
+linear_emerge_e3_access_control_firmware	body	(?i)(?:linear\ emerge)		fingerprinthub	
+ninja_forms_file_uploads	body	(?i)(?:nfpluginsettings\.js\?ver=)		fingerprinthub	
+nocobase	body	(?i)(?:__nocobase_public_path__)		fingerprinthub	
+nocobase	body	(?mi)<title[^>]*>nocobase.*?</title>		fingerprinthub	
+nodebb	body	(?mi)<title[^>]*>nodebb.*?</title>		fingerprinthub	
+node-red-dashboard	body	(?mi)<title[^>]*>node-red.*?</title>		fingerprinthub	
+nordex_control_2_scada	body	(?mi)<title[^>]*>nordex control - wind farm portal.*?</title>		fingerprinthub	
+linear_emerge_essential_firmware	body	(?mi)<title[^>]*>emerge.*?</title>		fingerprinthub	
+dockwatch	body	(?mi)<title[^>]*>dockwatch.*?</title>		fingerprinthub	
+nvrmini_firmware	body	(?mi)<title[^>]*>nuuo.*?</title>		fingerprinthub	
+nvrsolo_firmware	body	(?i)(?:nvrsolo)		fingerprinthub	
+framework	body	(?i)(?:__nuxt|buildassetsdir|buildassetsdir"\ "nuxt)		fingerprinthub	
+triton-inference-server	body	(?mi)<title[^>]*>triton" port:8080.*?</title>		fingerprinthub	
+odoo	body	(?i)(?:<script\ id="web\.layout\.odooscript|odoo\.__session_info__\ =\ \{)		fingerprinthub	
+ckan	body	(?i)(?:ckan\ 2\.8\.2"|html:"ckan\ 2\.3)		fingerprinthub	
+ollama	body	(?i)(?:ollama)		fingerprinthub	
+helix3	body	(?i)(?:shaper_helix3)		fingerprinthub	
+omniroute	body	(?mi)<title[^>]*>omniroute.*?</title>		fingerprinthub	
+onedev	body	(?i)(?:onedev\.io)		fingerprinthub	
+onedev	body	(?mi)<title[^>]*>onedev.*?</title>		fingerprinthub	
+monitor	body	(?mi)<title[^>]*>itrs.*?</title>		fingerprinthub	
+monitor	body	(?i)(?:/monitor/application/views/themes/default/css/default/common\.css)		fingerprinthub	
+openemr	body	(?i)(?:openemr)		fingerprinthub	
+openmetadata	body	(?mi)<title[^>]*>openmetadata.*?</title>		fingerprinthub	
+open-xchange	body	(?i)(?:id="browserchecktext_id|you\ need\ to\ enable\ javascript\ to\ access\ the\ open\-xchange\ server)		fingerprinthub	
+open-xchange_appsuite	body	(?i)(?:appsuite)		fingerprinthub	
+openbullet2	body	(?mi)<title[^>]*>openbullet2webclient.*?</title>		fingerprinthub	
+opencart	body	(?mi)<title[^>]*>opencart.*?</title>		fingerprinthub	
+opencats	body	(?mi)<title[^>]*>opencats.*?</title>		fingerprinthub	
+openchamber	body	(?mi)<title[^>]*>openchamber.*?</title>		fingerprinthub	
+opencode	body	(?i)(?:opencode)		fingerprinthub	
+flagr	body	(?i)(?:flagr)		fingerprinthub	
+openmediavault	body	(?mi)<title[^>]*>openmediavault.*?</title>		fingerprinthub	
+openmrs	body	(?i)(?:openmrs)		fingerprinthub	
+horizon	body	(?mi)<title[^>]*>opennms web console.*?</title>		fingerprinthub	
+quick.cms	body	(?i)(?:quick\.cms\ v6\.7)		fingerprinthub	
+acutoweb	body	(?mi)<title[^>]*>acutoweb.*?</title>		fingerprinthub	
+opentsdb	body	(?i)(?:opentsdb)		fingerprinthub	
+open-webui	body	(?mi)<title[^>]*>open webui.*?</title>		fingerprinthub	
+opnsense	body	(?mi)<title[^>]*>opnsense.*?</title>		fingerprinthub	
+opsview	body	(?mi)<title[^>]*>opsview.*?</title>		fingerprinthub	
+enterprise-proton	body	(?i)(?:optergy)		fingerprinthub	
+access_manager	body	(?i)(?:/oam/pages/css/login_page\.css)		fingerprinthub	
+access_manager	body	(?mi)<title[^>]*>oracle access management.*?</title>		fingerprinthub	
+business_intelligence	body	(?mi)<title[^>]*>oracle business intelligence sign in.*?</title>		fingerprinthub	
+e-business_suite	body	(?mi)<title[^>]*>login" "x-oracle-dms-ecid" 200.*?</title>		fingerprinthub	
+fusion_middleware	body	(?i)(?:weblogic\ application\ server)		fingerprinthub	
+fusion_middleware	body	(?mi)<title[^>]*>weblogic.*?</title>		fingerprinthub	
+identity_manager	body	(?mi)<title[^>]*>oracle access management.*?</title>		fingerprinthub	
+iplanet_web_server	body	(?i)(?:oracle\-iplanet\-web\-server)		fingerprinthub	
+peoplesoft_enterprise	body	(?mi)<title[^>]*>oracle peoplesoft enterprise.*?</title>		fingerprinthub	
+peoplesoft_enterprise_peopletools	body	(?mi)<title[^>]*>oracle peoplesoft sign-in.*?</title>		fingerprinthub	
+retail_xstore_office	body	(?i)(?:xstoremgwt)		fingerprinthub	
+weblogic_server	body	(?mi)<title[^>]*>oracle peoplesoft sign-in.*?</title>		fingerprinthub	
+opensis	body	(?mi)<title[^>]*>opensis.*?</title>		fingerprinthub	
+oscommerce	body	(?i)(?:oscommerce)		fingerprinthub	
+oscommerce	body	(?i)(?:src="images/oscommerce\.png)		fingerprinthub	
+oscommerce	headers	(?i)(?:set\-cookie:\ oscsid=)		fingerprinthub	
+geoserver	body	(?i)(?:/org\.geoserver\.web\.geoserverbasepage/|\\webapps\\geoserver|class="geoserver\ lebeg|geoserver|window\.location\.replace\("web/"\);)		fingerprinthub	
+osticket	body	(?i)(?:href="http://osticket\.com">osticket\.com)		fingerprinthub	
+owncast	body	(?i)(?:owncast)		fingerprinthub	
+graph_api	body	(?mi)<title[^>]*>owncloud.*?</title>		fingerprinthub	
+guests	body	(?mi)<title[^>]*>owncloud.*?</title>		fingerprinthub	
+prtg_network_monitor	body	(?mi)<title[^>]*>prtg.*?</title>		fingerprinthub	
+rundeck	body	(?mi)<title[^>]*>rundeck.*?</title>		fingerprinthub	
+papercut	body	(?i)(?:<h1\ id="papercut\-user\-login\-title">)		fingerprinthub	
+papercut_mf-papercut_ng	body	(?i)(?:content=papercut|papercut)		fingerprinthub	
+papercut_mf	body	(?i)(?:content=papercut|papercut)		fingerprinthub	
+papercut_ng-papercut_mf	body	(?mi)<title[^>]*>papercut.*?</title>		fingerprinthub	
+papercut_ng	body	(?i)(?:content="papercut|content=papercut)		fingerprinthub	
+lollms	body	(?mi)<title[^>]*>lollms.*?</title>		fingerprinthub	
+parse-server	body	(?i)(?:parseserverversion)		fingerprinthub	
+platform	body	(?mi)<title[^>]*>pega.*?</title>		fingerprinthub	
+wapples	body	(?mi)<title[^>]*>intelligent wapples.*?</title>		fingerprinthub	
+balance_two_firmware	body	(?i)(?:peplink)		fingerprinthub	
+perfsonar	body	(?mi)<title[^>]*>perfsonar toolkit.*?</title>		fingerprinthub	
+processplus	body	(?i)(?:process\ plus)		fingerprinthub	
+pfblockerng	body	(?i)(?:pfblockerng)		fingerprinthub	
+pfsense	body	(?i)(?:<h4>login\ to\ pfsense</h4>|rubicon\ communications,\ llc\ \(netgate\))		fingerprinthub	
+pgadmin4	body	(?i)(?:pgadmin4)		fingerprinthub	
+passwordpusher	body	(?i)(?:password\ pusher)		fingerprinthub	
+pheditor	body	(?i)(?:pheditor|pheditor_password)		fingerprinthub	
+php	body	(?i)(?:fatal\ error|php\.ini|the\ requested\ resource\ <code\ class="url">)		fingerprinthub	
+phpcms-2008	body	(?i)(?:powered\ by\ phpcms)		fingerprinthub	
+phpcollab	body	(?i)(?:<!\-\-\ powered\ by\ phpcollab|content='phpcollab)		fingerprinthub	
+art_gallery_management_system	body	(?mi)<title[^>]*>art gallery management system.*?</title>		fingerprinthub	
+phpipam	body	(?i)(?:phpipam\ ip\ address\ management)		fingerprinthub	
+callback_widget	body	(?i)(?:phpjabbers)		fingerprinthub	
+food_delivery_script	body	(?i)(?:phpjabbers)		fingerprinthub	
+fundraising_script	body	(?i)(?:phpjabbers)		fingerprinthub	
+make_an_offer_widget	body	(?i)(?:phpjabbers)		fingerprinthub	
+shuttle_booking_software	body	(?i)(?:php\ jabbers\.com)		fingerprinthub	
+taxi_booking_script	body	(?i)(?:php\ jabbers\.com)		fingerprinthub	
+ticket_support_script	body	(?i)(?:phpjabbers)		fingerprinthub	
+yacht_listing_script	body	(?i)(?:phpjabbers)		fingerprinthub	
+phpldapadmin	body	(?i)(?:phpldapadmin)		fingerprinthub	
+phpmyadmin	body	(?i)(?:href="phpmyadmin\.css\.php|pma_password)		fingerprinthub	
+phpmyadmin	headers	(?i)(?:set\-cookie:\ phpmyadmin=|set\-cookie:\ pma_lang=)		fingerprinthub	
+phpmyfaq	body	(?i)(?:phpmyfaq)		fingerprinthub	
+phppgadmin	body	(?i)(?:class="appname">phppgadmin)		fingerprinthub	
+phpvms	body	(?i)(?:phpvms)		fingerprinthub	
+web_interface	body	(?mi)<title[^>]*>pi-hole.*?</title>		fingerprinthub	
+piwigo	body	(?i)(?:generator"\ content="piwigo)		fingerprinthub	
+obsidian	body	(?i)(?:plesk\ obsidian)		fingerprinthub	
+portainer	body	(?i)(?:ng\-app="portainer")		fingerprinthub	
+powerjob	body	(?i)(?:<title>powerjob</title>)		fingerprinthub	
+basic_pdu_firmware	body	(?i)(?:powertek)		fingerprinthub	
+praisonai	body	(?i)(?:praisonai\ app)		fingerprinthub	
+poststaticfooter	body	(?i)(?:posstaticfooter)		fingerprinthub	
+prestashop	body	(?mi)<title[^>]*>prestashop.*?</title>		fingerprinthub	
+prison_management_system	body	(?mi)<title[^>]*>prison management system.*?</title>		fingerprinthub	
+pritunl	body	(?mi)<title[^>]*>pritunl.*?</title>		fingerprinthub	
+processwire	body	(?i)(?:processwire)		fingerprinthub	
+chef_automate	body	(?mi)<title[^>]*>chef automate.*?</title>		fingerprinthub	
+telerik_report_server	body	(?mi)<title[^>]*>log in.*?</title>		fingerprinthub	
+whatsup_gold	body	(?i)(?:whatsup\ gold)		fingerprinthub	
+whatsup_gold	body	(?mi)<title[^>]*>whatsup gold" http.favicon.hash:-2107233094.*?</title>		fingerprinthub	
+ws_ftp_server	body	(?mi)<title[^>]*>ad hoc transfer.*?</title>		fingerprinthub	
+projectsend	body	(?i)(?:projectsend|projectsend\ setup|provided\ by\ projectsend)		fingerprinthub	
+blackbox_exporter	body	(?mi)<title[^>]*>blackbox exporter.*?</title>		fingerprinthub	
+prometheus	body	(?i)(?:<title>prometheus)		fingerprinthub	
+profilepress	body	(?i)(?:/wp\-content/plugins/profilepress)		fingerprinthub	
+kafka-ui	body	(?mi)<title[^>]*>ui for apache kafka.*?</title>		fingerprinthub	
+proxmox_mail_gateway	body	(?i)(?:proxmox\ =\ \{)		fingerprinthub	
+panel	body	(?mi)<title[^>]*>pterodactyl.*?</title>		fingerprinthub	
+open_journal_systems	body	(?i)(?:pkp\-lib)		fingerprinthub	
+pyload	body	(?i)(?:pyload)		fingerprinthub	
+pyload	body	(?mi)<title[^>]*>login - pyload.*?</title>		fingerprinthub	
+pypiserver	body	(?i)(?:pypiserver)		fingerprinthub	
+torchserve	body	(?i)(?:requested\ method\ is\ not\ allowed,\ please\ refer\ to\ api\ document)		fingerprinthub	
+qlik_sense	body	(?i)(?:qlik)		fingerprinthub	
+qlik_sense	body	(?mi)<title[^>]*>qlik-sense.*?</title>		fingerprinthub	
+music_station	body	(?mi)<title[^>]*>qnap.*?</title>		fingerprinthub	
+qualitor	body	(?i)(?:qualitor)		fingerprinthub	
+chatbot	body	(?i)(?:wp_chatbot_obj)		fingerprinthub	
+kace_system_management_appliance	body	(?mi)<title[^>]*>kace systems management.*?</title>		fingerprinthub	
+kace_systems_management	body	(?i)(?:k1000\ logo)		fingerprinthub	
+quixplorer	body	(?mi)<title[^>]*>my download server.*?</title>		fingerprinthub	
+raidenmaild	body	(?i)(?:raidenmaild)		fingerprinthub	
+rancher	body	(?is)^(?=.*<title>loading\&hellip;</title>)(?=.*ember\-basic\-dropdown\-wormhole)		fingerprinthub	
+ray	body	(?i)(?:ray\ dashboard)		fingerprinthub	
+rconfig	body	(?i)(?:rconfiglogo)		fingerprinthub	
+react_native_community_cli	body	(?mi)<title[^>]*>react native.*?</title>		fingerprinthub	
+real-estate-listing-realtyna-wpl	body	(?i)(?:real\-estate\-listing\-realtyna\-wpl)		fingerprinthub	
+jboss_application_server	body	(?mi)<title[^>]*>jboss.*?</title>		fingerprinthub	
+jboss_enterprise_application_platform	body	(?mi)<title[^>]*>jboss.*?</title>		fingerprinthub	
+jbpm	body	(?i)(?:jbossws)		fingerprinthub	
+keycloak	body	(?i)(?:keycloak)		fingerprinthub	
+openshift_origin	body	(?mi)<title[^>]*>openshift.*?</title>		fingerprinthub	
+redmine	body	(?mi)<title[^>]*>redmine.*?</title>		fingerprinthub	
+redmine	body	(?is)^(?=.*authenticity_token)(?=.*redmine)		fingerprinthub	
+redmine	body	(?i)(?:content="redmine|powered\ by\ <a\ href="http://www\.redmine\.org/)		fingerprinthub	
+relevanssi	body	(?i)(?:/wp\-content/plugins/relevanssi/)		fingerprinthub	
+e1_zoom	body	(?mi)<title[^>]*>reolink.*?</title>		fingerprinthub	
+e1_zoom_firmware	body	(?mi)<title[^>]*>reolink.*?</title>		fingerprinthub	
+repetier-server	body	(?mi)<title[^>]*>repetier-server.*?</title>		fingerprinthub	
+reprise_license_manager	body	(?i)(?:reprise\ license|reprise\ license\ manager)		fingerprinthub	
+reqlogic	body	(?i)(?:reqlogic)		fingerprinthub	
+retool	body	(?mi)<title[^>]*>retool.*?</title>		fingerprinthub	
+revive_adserver	body	(?mi)<title[^>]*>revive adserver.*?</title>		fingerprinthub	
+turbomeeting	body	(?i)(?:turbomeeting)		fingerprinthub	
+netman_204_firmware	body	(?i)(?:ups\ network\ management\ card\ 4)		fingerprinthub	
+netman_204_firmware	body	(?mi)<title[^>]*>netman.*?</title>		fingerprinthub	
+ritecms	body	(?mi)<title[^>]*>ritecms.*?</title>		fingerprinthub	
+rocket.chat	body	(?mi)<title[^>]*>rocket.chat.*?</title>		fingerprinthub	
+rocket-lms	body	(?i)(?:rocket\ lms)		fingerprinthub	
+rosariosis	body	(?i)(?:rosariosis)		fingerprinthub	
+roundcube	body	(?i)(?:roundcube_sessid)		fingerprinthub	
+roxy-wi	body	(?i)(?:roxy\-wi)		fingerprinthub	
+roxy_fileman	body	(?mi)<title[^>]*>roxy file manager.*?</title>		fingerprinthub	
+rpcms	body	(?i)(?:rpcms)		fingerprinthub	
+rsfiles	body	(?i)(?:com_rsfiles)		fingerprinthub	
+connect	body	(?mi)<title[^>]*>openvpn connect.*?</title>		fingerprinthub	
+ruckus_wireless_admin	body	(?mi)<title[^>]*>ruckus wireless.*?</title>		fingerprinthub	
+rg-ew1200g_firmware	body	(?i)(?:app\.2fe6356cdd1ddd0eb8d6317d1a48d379\.css)		fingerprinthub	
+rg-nbs2009g-p-rg-nbs2009g-p_firmware	body	(?i)(?:ruijie\.com\.cn)		fingerprinthub	
+rg-uac	body	(?mi)<title[^>]*>rg-uac登录页面.*?</title>		fingerprinthub	
+rg-uac	body	(?is)^(?=.*bbs\.ruijie\.com\.cn)(?=.*锐捷统一上网行为管理与审计系统)		fingerprinthub	
+rg-uac	body	(?i)(?:src='images/free_login\.png')		fingerprinthub	
+rg-uac_firmware	body	(?i)(?:get_verify_info)		fingerprinthub	
+worldserver	body	(?mi)<title[^>]*>worldserver.*?</title>		fingerprinthub	
+suitecrm	body	(?mi)<title[^>]*>suitecrm.*?</title>		fingerprinthub	
+saltstack	body	(?i)(?:<title>saltstack</title>)		fingerprinthub	
+saltstack	headers	(?i)(?:server:\ tornadoserver)		fingerprinthub	
+scx-6555n	body	(?mi)<title[^>]*>syncthru web service.*?</title>		fingerprinthub	
+next-gen_application_firewall	body	(?mi)<title[^>]*>sangfor.*?</title>		fingerprinthub	
+sangfor	body	(?i)(?:ishighperformance\ :\ !!sfishighperformance)		fingerprinthub	
+freepbx	body	(?mi)<title[^>]*>freepbx.*?</title>		fingerprinthub	
+switchvox	body	(?i)(?:switchvox)		fingerprinthub	
+hybris	body	(?mi)<title[^>]*>hybris.*?</title>		fingerprinthub	
+netweaver_development_infrastructure	body	(?i)(?:sap\ netweaver)		fingerprinthub	
+sap_web_application_server	body	(?i)(?:sap\ business\ server\ pages\ team)		fingerprinthub	
+apc-network-management-card	body	(?mi)<title[^>]*>apc.*?</title>		fingerprinthub	
+evlink_city_evc1s22p4_firmware	body	(?mi)<title[^>]*>evse web interface.*?</title>		fingerprinthub	
+pelco_videoxpert	body	(?mi)<title[^>]*>videoxpert.*?</title>		fingerprinthub	
+spacelogic_c-bus_home_controller_firmwar	body	(?i)(?:spacelogic\ c\-bus)		fingerprinthub	
+ads_pro	body	(?i)(?:/wp\-content/plugins/ap\-plugin\-scripteo)		fingerprinthub	
+seafile	body	(?i)(?:css/seahub\.min\.css)		fingerprinthub	
+nas_os	body	(?mi)<title[^>]*>seagate nas - seagate.*?</title>		fingerprinthub	
+unified_threat_management	body	(?mi)<title[^>]*>securepoint utm.*?</title>		fingerprinthub	
+seeddms	body	(?mi)<title[^>]*>seeddms.*?</title>		fingerprinthub	
+selenium_grid	body	(?mi)<title[^>]*>selenium grid.*?</title>		fingerprinthub	
+majordomo	body	(?i)(?:templates/application\.html)		fingerprinthub	
+servicenow	body	(?mi)<title[^>]*>servicenow.*?</title>		fingerprinthub	
+sonlogger	body	(?i)(?:sonlogger)		fingerprinthub	
+shokoserver	body	(?mi)<title[^>]*>shoko web ui.*?</title>		fingerprinthub	
+shopex	body	(?i)(?:@author\ litie\[aita\]shopex\.cn|content="shopex|http://www\.shopex\.cn'\ target='_blank')		fingerprinthub	
+shopxo	body	(?mi)<title[^>]*>shopxo企业级b2c电商系统提供商.*?</title>		fingerprinthub	
+xfilesharing	body	(?i)(?:/\?op=registration"\ "openssl)		fingerprinthub	
+sinema_remote_connect_server	body	(?mi)<title[^>]*>logon - sinema remote connect.*?</title>		fingerprinthub	
+pmb	body	(?i)(?:pmb\ group)		fingerprinthub	
+signalk-server	body	(?mi)<title[^>]*>signal k server.*?</title>		fingerprinthub	
+simplehelp	body	(?i)(?:simplehelp)		fingerprinthub	
+gnuboard	body	(?i)(?:body:"gnuboard5|gnuboard5)		fingerprinthub	
+experience_commerce-experience_platform	body	(?mi)<title[^>]*>sitecore.*?</title>		fingerprinthub	
+experience_commerce	body	(?mi)<title[^>]*>sitecore.*?</title>		fingerprinthub	
+experience_platform	body	(?mi)<title[^>]*>sitecore.*?</title>		fingerprinthub	
+sitecore.net	body	(?i)(?:sitecore)		fingerprinthub	
+sitecore	body	(?i)(?:alt="sitecore"\ id="sclogo"\ />|title="sitecore\ documentation\ site">)		fingerprinthub	
+movable_type	body	(?mi)<title[^>]*>サインイン .*?</title>		fingerprinthub	
+senayan_library_management_system	body	(?i)(?:slims)		fingerprinthub	
+smartstorenet	body	(?i)(?:content="smartstore)		fingerprinthub	
+wp_go_maps	body	(?i)(?:/wp\-content/plugins/duplicator)		fingerprinthub	
+net-vision	body	(?mi)<title[^>]*>net vision ups.*?</title>		fingerprinthub	
+vpn	body	(?mi)<title[^>]*>softether vpn server.*?</title>		fingerprinthub	
+vpn	body	(?i)(?:<li>manage\ this\ vpn\ server\ or\ vpn\ bridge<ul>)		fingerprinthub	
+i3geo	body	(?i)(?:i3geo)		fingerprinthub	
+security_event_manager	body	(?mi)<title[^>]*>solarwinds security event manager.*?</title>		fingerprinthub	
+serv-u	body	(?i)(?:serv\-u)		fingerprinthub	
+sonarqube	body	(?mi)<title[^>]*>sonarqube.*?</title>		fingerprinthub	
+nexus	body	(?mi)<title[^>]*>nexus repository manager.*?</title>		fingerprinthub	
+nexus_repository	body	(?mi)<title[^>]*>sonatype nexus repository.*?</title>		fingerprinthub	
+network_security_manager	body	(?mi)<title[^>]*>sonicwall network security.*?</title>		fingerprinthub	
+sma1000	body	(?mi)<title[^>]*>appliance management console login.*?</title>		fingerprinthub	
+mcp-atlassian	body	(?i)(?:atlassian\ mcp)		fingerprinthub	
+firewall	body	(?mi)<title[^>]*>sophos.*?</title>		fingerprinthub	
+mobile	body	(?mi)<title[^>]*>sophos mobile.*?</title>		fingerprinthub	
+sfos	body	(?mi)<title[^>]*>sophos.*?</title>		fingerprinthub	
+web_appliance	body	(?mi)<title[^>]*>sophos web appliance.*?</title>		fingerprinthub	
+soplanning	body	(?i)(?:soplanning)		fingerprinthub	
+astrbot	body	(?i)(?:<title>astrbot)		fingerprinthub	
+spamtitan	body	(?i)(?:<table\ class="lhead"><tr><td\ class="img"><img\ src="/imgs/logo\.gif"\ alt="spamtitan\ logo"></td></tr></table></div>)		fingerprinthub	
+webtitan	body	(?mi)<title[^>]*>webtitan.*?</title>		fingerprinthub	
+saisies	body	(?i)(?:spip)		fingerprinthub	
+spip	body	(?i)(?:spip\.php\?page=backend)		fingerprinthub	
+splunk	headers	(?is)^(?=.*server:\ splunkd)(?=.*set\-cookie:\ splunkweb_uid)		fingerprinthub	
+splunk	headers	(?is)^(?=.*server:\ splunkd)(?=.*set\-cookie:\ routeid)		fingerprinthub	
+splunk	body	(?i)(?:<title>303\ see\ other</title>|content="splunk\ inc\.")		fingerprinthub	
+spotweb	body	(?mi)<title[^>]*>spotweb - overview.*?</title>		fingerprinthub	
+squirrelmail	body	(?i)(?:function\ squirrelmail_loginpage_onload\(\))		fingerprinthub	
+stagil_navigation	body	(?mi)<title[^>]*>jira.*?</title>		fingerprinthub	
+showdoc	body	(?mi)<title[^>]*>showdoc.*?</title>		fingerprinthub	
+elfinder	body	(?mi)<title[^>]*>elfinder.*?</title>		fingerprinthub	
+steve	body	(?mi)<title[^>]*>steve - steckdosenverwaltung.*?</title>		fingerprinthub	
+stirling_pdf	body	(?mi)<title[^>]*>stirling pdf.*?</title>		fingerprinthub	
+strapi	body	(?i)(?:welcome\ to\ your\ strapi\ app)		fingerprinthub	
+masterstudy-lms	body	(?i)(?:/wp\-content/plugins/masterstudy\-lms\-learning\-management\-system/|masterstudy\-lms\-learning\-management\-system)		fingerprinthub	
+sugarcrm	body	(?i)(?:<a\ href="\ javascript:void\ window\.open\('http://support\.sugarcrm\.com'\)">support</a>|<img\ style='margin\-top:\ 2px'\ border='0'\ width='106'\ height='23'\ src='include/images/poweredby_sugarcrm\.png'\ alt='powered\ by\ sugarcrm'>|<script>var\ module_sugar_grp1\ =\ 'users';</script><script>var\ action_sugar_grp1\ =\ 'login';</script><script>jscal_today)		fingerprinthub	
+supervisor	body	(?mi)<title[^>]*>supervisor status.*?</title>		fingerprinthub	
+supervisord	body	(?i)(?:images/supervisor\.gif)		fingerprinthub	
+superwebmailer	body	(?mi)<title[^>]*>superwebmailer.*?</title>		fingerprinthub	
+swift_performance_lite	body	(?i)(?:/wp\-content/plugins/swift\-performance\-lite)		fingerprinthub	
+endpoint_protection_manager	body	(?mi)<title[^>]*>symantec endpoint protection manager.*?</title>		fingerprinthub	
+sympa	body	(?i)(?:sympa)		fingerprinthub	
+tagdiv_composer	body	(?i)(?:/wp\-content/plugins/td\-composer)		fingerprinthub	
+lin-cms-spring-boot	body	(?i)(?:心上无垢，林间有风)		fingerprinthub	
+tamronos	body	(?mi)<title[^>]*>tamronos iptv系统.*?</title>		fingerprinthub	
+tautulli	body	(?i)(?:alt="plexpy")		fingerprinthub	
+teampass	body	(?i)(?:teampass)		fingerprinthub	
+kio_firmware	body	(?mi)<title[^>]*>контроллер.*?</title>		fingerprinthub	
+sdt-cs3b1	body	(?i)(?:sdt\-cw3b1)		fingerprinthub	
+tlr-2005ksh	body	(?i)(?:tlr\-2005ksh)		fingerprinthub	
+tlr-2005ksh_firmware	body	(?i)(?:tlr\-2005ksh)		fingerprinthub	
+tlr-2855ks6_firmware	body	(?mi)<title[^>]*>login to tlr-2855ks6.*?</title>		fingerprinthub	
+omnia_mpx_node_firmware	body	(?mi)<title[^>]*>omnia mpx node .*?</title>		fingerprinthub	
+t24	body	(?mi)<title[^>]*>t24 sign in.*?</title>		fingerprinthub	
+temenos	body	(?mi)<title[^>]*>t24 sign in.*?</title>		fingerprinthub	
+ten-framework	body	(?mi)<title[^>]*>ten manager.*?</title>		fingerprinthub	
+wechat	body	(?i)(?:wework_admin\.normal_layout)		fingerprinthub	
+11n_firmware	body	(?mi)<title[^>]*>tenda 11n.*?</title>		fingerprinthub	
+ac15_firmware	body	(?mi)<title[^>]*>tenda wifi.*?</title>		fingerprinthub	
+g0	body	(?mi)<title[^>]*>tenda.*?</title>		fingerprinthub	
+terramaster_operating_system	body	(?i)(?:terramaster)		fingerprinthub	
+tos	body	(?i)(?:terramaster)		fingerprinthub	
+fuel_cms	body	(?mi)<title[^>]*>fuel cms.*?</title>		fingerprinthub	
+atomcms	body	(?i)(?:atomcms)		fingerprinthub	
+masteriyo	body	(?i)(?:/wp\-content/plugins/learning\-management\-system/)		fingerprinthub	
+themegrill-demo-importer	body	(?i)(?:/plugins/themegrill\-demo\-importer)		fingerprinthub	
+multiple_shipping_addresses_for_woocomme	body	(?i)(?:wp\-content/plugins/multiple\-shipping\-address\-woocommerce)		fingerprinthub	
+qubely	body	(?i)(?:qubely_urls)		fingerprinthub	
+eventin	body	(?i)(?:/wp\-content/plugins/eventin)		fingerprinthub	
+builder	body	(?i)(?:wp\-content/plugins/themify\-builder/)		fingerprinthub	
+learnpress	body	(?i)(?:/wp\-content/plugins/learnpress)		fingerprinthub	
+wp-hotel-booking	body	(?i)(?:/wp\-content/plugins/wp\-hotel\-booking/)		fingerprinthub	
+thinkadmin	body	(?i)(?:thinkadmin</title>)		fingerprinthub	
+thinkcmf	body	(?i)(?:<a\ title="官方网站"\ href="http://www\.thinkcmf\.com">thinkcmf</a>|content="thinkcmf|made\ by\ <a\ href="http://www\.thinkcmf\.com"\ target="_blank">thinkcmf</a>)		fingerprinthub	
+thinkcmf	headers	(?i)(?:x\-powered\-by:\ thinkcmf|x\-powered\-by:\ thinkcmf)		fingerprinthub	
+thinkphp	body	(?i)(?:href="http://www\.thinkphp\.cn">thinkphp</a>|thinkphp_show_page_trace)		fingerprinthub	
+thinkphp	headers	(?i)(?:x\-powered\-by:\ thinkphp)		fingerprinthub	
+gocd	body	(?i)(?:gocd\ version)		fingerprinthub	
+gocd	body	(?mi)<title[^>]*>create a pipeline - go" html:"gocd version.*?</title>		fingerprinthub	
+thruk	body	(?i)(?:thruk)		fingerprinthub	
+thruk	body	(?mi)<title[^>]*>="thruk monitoring webinterface.*?</title>		fingerprinthub	
+jasperreports_library	body	(?i)(?:jasperserver\-pro)		fingerprinthub	
+tiki	body	(?mi)<title[^>]*>tiki wiki cms.*?</title>		fingerprinthub	
+tikiwiki_cms-groupware	body	(?i)(?:tiki\ wiki)		fingerprinthub	
+tinacms	body	(?i)(?:tinacms)		fingerprinthub	
+tinyfilemanager	body	(?i)(?:tiny\ file\ manager)		fingerprinthub	
+printmonitor	body	(?mi)<title[^>]*>printmonitor.*?</title>		fingerprinthub	
+office_anywhere	body	(?mi)<title[^>]*>通达oa.*?</title>		fingerprinthub	
+tooljet	body	(?mi)<title[^>]*>tooljet.*?</title>		fingerprinthub	
+a3002ru	body	(?mi)<title[^>]*>totolink.*?</title>		fingerprinthub	
+a3300r_firmware	body	(?mi)<title[^>]*>totolink.*?</title>		fingerprinthub	
+a3700r_firmware	body	(?mi)<title[^>]*>totolink.*?</title>		fingerprinthub	
+cp450_firmware	body	(?mi)<title[^>]*>totolink.*?</title>		fingerprinthub	
+ex1200t_firmware	body	(?mi)<title[^>]*>totolink.*?</title>		fingerprinthub	
+totolink-router	body	(?i)(?:totolink)		fingerprinthub	
+fluig	body	(?mi)<title[^>]*>fluig.*?</title>		fingerprinthub	
+archer-ax21	body	(?i)(?:tp\-link)		fingerprinthub	
+tl-wr840n_firmware	body	(?mi)<title[^>]*>tl-wr840n.*?</title>		fingerprinthub	
+tl-wr841n_-9.0-_firmware	body	(?mi)<title[^>]*>tp-link.*?</title>		fingerprinthub	
+tp-link	body	(?i)(?:wr840n)		fingerprinthub	
+traccar	body	(?i)(?:traccar)		fingerprinthub	
+traefik	headers	(?i)(?:content\-security\-policy:\ \*\.traefik\.io;)		fingerprinthub	
+traggo	body	(?i)(?:traggo)		fingerprinthub	
+tew-827dru_firmware	body	(?i)(?:tew\-827dru)		fingerprinthub	
+datepicker_calendar	body	(?mi)<title[^>]*>triconsole.com - php calendar date picker.*?</title>		fingerprinthub	
+trilium	body	(?mi)<title[^>]*>trilium notes.*?</title>		fingerprinthub	
+custom_product_designer	body	(?i)(?:prestashop|tshirtecommerce)		fingerprinthub	
+prestashop	body	(?i)(?:prestashop|tshirtecommerce)		fingerprinthub	
+camaleon_cms	body	(?i)(?:camaleon_cms)		fingerprinthub	
+camaleon_cms	body	(?mi)<title[^>]*>camaleon cms.*?</title>		fingerprinthub	
+booked	body	(?i)(?:wp\-content/plugins/booked/)		fingerprinthub	
+woocommerce-delivery-notes	body	(?i)(?:wp\-content/plugins/woocommerce\-delivery\-notes/)		fingerprinthub	
+unifi_network_application	body	(?mi)<title[^>]*>unifi network.*?</title>		fingerprinthub	
+umbraco	body	(?i)(?:umbraco)		fingerprinthub	
+crawl4ai	body	(?mi)<title[^>]*>crawl4ai playground.*?</title>		fingerprinthub	
+laravel_filemanager	body	(?i)(?:laravel\ filemanager)		fingerprinthub	
+nvr301-04s2-p4	body	(?mi)<title[^>]*>nvr301-04-p4.*?</title>		fingerprinthub	
+usualtoolcms	body	(?i)(?:usualtool)		fingerprinthub	
+wp-automatic	body	(?i)(?:wp\-content/plugins/wp\-automatic/)		fingerprinthub	
+x-ui	body	(?mi)<title[^>]*>x-ui login.*?</title>		fingerprinthub	
+vbulletin	body	(?i)(?:<!\-\-\ do\ not\ remove\ this\ copyright\ notice\ \-\->powered\ by\ <\ a\ href="https://www\.vbulletin\.com"\ id="vbulletinlink">|content="vbulletin|powered\ by\ vbulletin\&trade;)		fingerprinthub	
+business_intelligence_and_reporting_tool	body	(?mi)<title[^>]*>eclipse birt home.*?</title>		fingerprinthub	
+vendure	body	(?i)(?:vendure)		fingerprinthub	
+next.js	body	(?i)(?:/_next/static)		fingerprinthub	
+workforce_optimization	body	(?mi)<title[^>]*>verint sign-in.*?</title>		fingerprinthub	
+versa_operating_system	body	(?mi)<title[^>]*>flex vnf web-ui.*?</title>		fingerprinthub	
+modeldb	body	(?mi)<title[^>]*>verta ai.*?</title>		fingerprinthub	
+vicidial	body	(?i)(?:url=/vicidial/welcome\.php)		fingerprinthub	
+vitogate_300_firmware	body	(?mi)<title[^>]*>vitogate 300.*?</title>		fingerprinthub	
+vlife	body	(?i)(?:http\.title:"vlife)		fingerprinthub	
+vlife	body	(?mi)<title[^>]*>vlife.*?</title>		fingerprinthub	
+vllm	body	(?i)(?:/v1/models"\ http\.html:"vllm)		fingerprinthub	
+aria_operations_for_logs	body	(?mi)<title[^>]*>vrealize log insight.*?</title>		fingerprinthub	
+cloud_foundation	body	(?mi)<title[^>]*>vmware cloud.*?</title>		fingerprinthub	
+vmware-esxi	body	(?i)(?:<title\ ng\-bind="\$root\.title">|ng\-app="esxuiapp")		fingerprinthub	
+vmware-horizon	body	(?i)(?:alt="vmware\ horizon">|href='https://www\.vmware\.com/go/viewclients')		fingerprinthub	
+nsx_sd-wan_edge	body	(?mi)<title[^>]*>velocloud.*?</title>		fingerprinthub	
+spring_boot	body	(?mi)<title[^>]*>eureka.*?</title>		fingerprinthub	
+spring_cloud_config	body	(?i)(?:label|profiles|propertysources)		fingerprinthub	
+vcenter_server	body	(?mi)<title[^>]*>vmware vcenter.*?</title>		fingerprinthub	
+vmware	body	(?mi)<title[^>]*>vmware cloud.*?</title>		fingerprinthub	
+vrealize_log_insight	body	(?mi)<title[^>]*>vrealize log insight.*?</title>		fingerprinthub	
+vrealize_operations	body	(?mi)<title[^>]*>vrealize operations tenant app.*?</title>		fingerprinthub	
+vrealize_operations_manager	body	(?mi)<title[^>]*>vrealize operations manager.*?</title>		fingerprinthub	
+workspace_one_uem_console	body	(?i)(?:/airwatch/default\.aspx)		fingerprinthub	
+aurall_rec_monitor	body	(?i)(?:aurall)		fingerprinthub	
+voipmonitor	body	(?mi)<title[^>]*>voipmonitor.*?</title>		fingerprinthub	
+voyager	body	(?i)(?:voyager\-assets)		fingerprinthub	
+download_manager	body	(?i)(?:wp\-content/plugins/download\-manager/)		fingerprinthub	
+compact_controller_100_firmware	body	(?i)(?:/wbm/"\ html:"wago)		fingerprinthub	
+wago	body	(?i)(?:wago\ ethernet\ web\-based\ management)		fingerprinthub	
+wl-wn530hg4_firmware	body	(?i)(?:wn530hg4)		fingerprinthub	
+wl-wn530hg4_firmware	body	(?mi)<title[^>]*>wi-fi app login.*?</title>		fingerprinthub	
+wl-wn531g3_firmware	body	(?i)(?:ac1200|wavlink)		fingerprinthub	
+wl-wn533a8_firmware	body	(?i)(?:wn533a8)		fingerprinthub	
+wl-wn535k2	body	(?mi)<title[^>]*>wi-fi app login.*?</title>		fingerprinthub	
+wl-wn535k2_firmware	body	(?mi)<title[^>]*>wi-fi app login.*?</title>		fingerprinthub	
+wn530h4_firmware	body	(?i)(?:wavlink)		fingerprinthub	
+wn530hg4_firmware	body	(?i)(?:wavlink)		fingerprinthub	
+wn533a8_firmware	body	(?i)(?:wavlink)		fingerprinthub	
+wn533a8_firmware	body	(?mi)<title[^>]*>wi-fi app login.*?</title>		fingerprinthub	
+wn535g3_firmware	body	(?i)(?:wavlink)		fingerprinthub	
+wn535g3_firmware	body	(?mi)<title[^>]*>wi-fi app login.*?</title>		fingerprinthub	
+wn575a4	body	(?mi)<title[^>]*>wi-fi app login.*?</title>		fingerprinthub	
+wn579x3_firmware	body	(?i)(?:wavlink)		fingerprinthub	
+wazuh	body	(?mi)<title[^>]*>wazuh.*?</title>		fingerprinthub	
+e-cology	body	(?i)(?:ecology_jsessionid)		fingerprinthub	
+docusaurus_plugin_content_gists	body	(?i)(?:docusaurus)		fingerprinthub	
+webiq	body	(?mi)<title[^>]*>webiq.*?</title>		fingerprinthub	
+bagisto	body	(?i)(?:bagisto)		fingerprinthub	
+krayin-laravel-crm	body	(?mi)<title[^>]*>krayin.*?</title>		fingerprinthub	
+qloapps	body	(?mi)<title[^>]*>qloapps.*?</title>		fingerprinthub	
+usermin	body	(?mi)<title[^>]*>usermin.*?</title>		fingerprinthub	
+webmin	body	(?is)^(?=.*webmin)(?=.*session_login)		fingerprinthub	
+webmin	body	(?i)(?:webmin\ server\ on)		fingerprinthub	
+webp_server_go	body	(?i)(?:webp)		fingerprinthub	
+webpagetest	body	(?mi)<title[^>]*>webpagetest.*?</title>		fingerprinthub	
+websitepanel	body	(?mi)<title[^>]*>websitepanel" html:"login.*?</title>		fingerprinthub	
+websvn	body	(?is)^(?=.*websvn)(?=.*subversion)		fingerprinthub	
+weiphp	body	(?i)(?:/css/weiphp\.css|content="weiphp|本系统由<a\ href="http://www\.weiphp\.cn"\ target="_blank">weiphp</a>强力驱动)		fingerprinthub	
+wgdashboard	body	(?mi)<title[^>]*>wgdashboard.*?</title>		fingerprinthub	
+protop	body	(?i)(?:<title>protop)		fingerprinthub	
+windmill	body	(?i)(?:windmill"\ http\.html:"svelte\-global\-loader)		fingerprinthub	
+wftpserver	body	(?i)(?:server:\ wing\ ftp\ server)		fingerprinthub	
+wftpserver	body	(?mi)<title[^>]*>wing ftp server.*?</title>		fingerprinthub	
+winter	body	(?mi)<title[^>]*>winter cms.*?</title>		fingerprinthub	
+help_scout	body	(?i)(?:/wp\-content/plugins/woocommerce\-help\-scout)		fingerprinthub	
+wordpress	body	(?i)(?:/wp\-content/themes/|/wp\-content/uploads/|/wp\-includes/|<link\ rel='stylesheet'\ id='wp\-block\-library\-css|\\/wp\-admin\\/admin\-ajax\.php","|name="generator"\ content="wordpress\ )		fingerprinthub	
+streaming_engine	body	(?mi)<title[^>]*>manager" product:"wowza streaming engine.*?</title>		fingerprinthub	
+wpb-show-core	body	(?i)(?:wp\-content/plugins/wpb\-show\-core/)		fingerprinthub	
+notificationx	body	(?i)(?:/wp\-content/plugins/notificationx)		fingerprinthub	
+wpdirectorykit	body	(?i)(?:/wp\-content/plugins/wpdirectorykit/)		fingerprinthub	
+everest-forms-pro	body	(?i)(?:/wp\-content/plugins/everest\-forms\-pro/)		fingerprinthub	
+wp-google-maps	body	(?i)(?:wp\-google\-maps)		fingerprinthub	
+wpmobile.app	body	(?i)(?:/wp\-content/plugins/wpappninja)		fingerprinthub	
+wps-hide-login	body	(?i)(?:/wp\-content/plugins/wps\-hide\-login)		fingerprinthub	
+woocommerce_ultimate_gift_card	body	(?i)(?:/wp\-content/plugins/woocommerce\-ultimate\-gift\-card)		fingerprinthub	
+wpvivid-backuprestore	body	(?i)(?:wp\-content/plugins/wpvivid\-backuprestore)		fingerprinthub	
+ninja-tables	body	(?i)(?:/wp\-content/plugins/ninja\-tables/)		fingerprinthub	
+wpzoom-portfolio	body	(?i)(?:/wp\-content/plugins/wpzoom\-portfolio)		fingerprinthub	
+eshop_-_ecommerce_-_store_website	body	(?i)(?:eshop\ \-\ multipurpose\ ecommerce)		fingerprinthub	
+wso2	body	(?i)(?:wso2\ carbon\ server)		fingerprinthub	
+wuzhicms	body	(?i)(?:wuzhicms)		fingerprinthub	
+wuzhicms	body	(?is)^(?=.*content="wuzhicms)(?=.*powered\ by\ wuzhicms)		fingerprinthub	
+wuzhicms	body	(?i)(?:<meta\ name="generator"\ content="wuzhicms)		fingerprinthub	
+avideo	body	(?i)(?:avideo)		fingerprinthub	
+xerte_online_toolkits	body	(?mi)<title[^>]*>xerte online toolkits.*?</title>		fingerprinthub	
+xnat	body	(?mi)<title[^>]*>xnat.*?</title>		fingerprinthub	
+xoops	body	(?i)(?:include/xoops\.js)		fingerprinthub	
+xxl-job	body	(?i)(?:分布式任务调度平台xxl\-job)		fingerprinthub	
+xwiki-platform-distribution-flavor-main	body	(?i)(?:data\-xwiki\-reference)		fingerprinthub	
+xwiki-platform	body	(?i)(?:data\-xwiki\-reference)		fingerprinthub	
+xwiki	body	(?i)(?:data\-xwiki\-reference=)		fingerprinthub	
+yamcs	body	(?mi)<title[^>]*>yamcs.*?</title>		fingerprinthub	
+yealink	body	(?i)(?:yealink\ ctp18)		fingerprinthub	
+cercopitheque	body	(?i)(?:yeswiki)		fingerprinthub	
+yeswiki	body	(?i)(?:yeswiki)		fingerprinthub	
+yii	body	(?mi)<title[^>]*>yii.*?</title>		fingerprinthub	
+easy_forms_for_mailchimp	body	(?i)(?:wp\-content/plugins/yikes\-inc\-easy\-mailchimp\-extender/)		fingerprinthub	
+rengine	body	(?mi)<title[^>]*>rengine.*?</title>		fingerprinthub	
+ufida-nc	body	(?is)^(?=.*ufida_iufo_over\.png)(?=.*ufida_nc\.png)		fingerprinthub	
+ufida-nc	body	(?is)^(?=.*logo/images/)(?=.*ufida)		fingerprinthub	
+ufida-nc	body	(?i)(?:<div\ id="nc_img"\ onmouseover="overimage\('nc'\);|<div\ id="nc_text">|logo/images/ufida_nc\.png)		fingerprinthub	
+ufida_erp-nc	body	(?mi)<title[^>]*>用友.*?</title>		fingerprinthub	
+tpadmin	body	(?i)(?:tpadmin)		fingerprinthub	
+yui	body	(?i)(?:bower_components/yui2/)		fingerprinthub	
+yzmcms	body	(?mi)<title[^>]*>yzmcms.*?</title>		fingerprinthub	
+zabbix	body	(?is)^(?=.*zabbix\ sia)(?=.*zabbix)		fingerprinthub	
+zabbix	body	(?i)(?:images/general/zabbix\.ico)		fingerprinthub	
+zeroshell	body	(?mi)<title[^>]*>zeroshell.*?</title>		fingerprinthub	
+webui-aria2	body	(?mi)<title[^>]*>aria2 webui.*?</title>		fingerprinthub	
+zimaos	body	(?i)(?:zimaos)		fingerprinthub	
+collaboration_server	body	(?i)(?:zimbra\ collaboration\ suite\ web\ client)		fingerprinthub	
+zimbra	body	(?i)(?:imgzimbraicon|content="zimbra|window\._zimbramail)		fingerprinthub	
+zimbra	headers	(?i)(?:set\-cookie:\ zm_login_csrf)		fingerprinthub	
+zk_framework	body	(?mi)<title[^>]*>server backup manager.*?</title>		fingerprinthub	
+biotime	body	(?mi)<title[^>]*>biotime.*?</title>		fingerprinthub	
+manageengine_access_manager_plus	body	(?mi)<title[^>]*>manageengine.*?</title>		fingerprinthub	
+manageengine_desktop_central	body	(?i)(?:manageengine\ desktop\ central\ 10)		fingerprinthub	
+manageengine_firewall_analyzer	body	(?mi)<title[^>]*>opmanager plus.*?</title>		fingerprinthub	
+manageengine_netflow_analyzer	body	(?i)(?:login\ \-\ netflow\ analyzer)		fingerprinthub	
+manageengine_opmanager	body	(?mi)<title[^>]*>opmanager plus.*?</title>		fingerprinthub	
+manageengine_servicedesk_plus	body	(?mi)<title[^>]*>manageengine servicedesk plus.*?</title>		fingerprinthub	
+o2oa	body	(?i)(?:title=="o2oa)		fingerprinthub	
+zoneminder	body	(?i)(?:zoneminder\ login)		fingerprinthub	
+zte	body	(?mi)<title[^>]*>f660.*?</title>		fingerprinthub	
+antd-admin	body	(?i)(?://!\ umi\ version:|/@@/devscripts\.js|/umi\.js|/umi\.js"\ html:"@@/devscripts\.js)		fingerprinthub	
+pichome	body	(?mi)<title[^>]*>pichome.*?</title>		fingerprinthub	
+uag2100	body	(?mi)<title[^>]*>zywall.*?</title>		fingerprinthub	
+uag2100_firmware	body	(?mi)<title[^>]*>zywall.*?</title>		fingerprinthub	
+usg1000_firmware	body	(?mi)<title[^>]*>usg flex.*?</title>		fingerprinthub	
+usg20-vpn_firmware	body	(?mi)<title[^>]*>usg flex 100.*?</title>		fingerprinthub	
+usg40_firmware	body	(?i)(?:\ body="zyxel\ zyxel_style1|/2fa\-access\.cgi"\ )		fingerprinthub	
+usg_flex_100w_firmware	body	(?mi)<title[^>]*>usg flex 100","usg flex 100w","usg flex 200","usg flex 500","usg flex 700","usg flex 50","usg flex 50w","atp100","atp200","atp500","atp700.*?</title>		fingerprinthub	
+vmg1312-b10d_firmware	body	(?i)(?:vmg1312\-b10d)		fingerprinthub	
+zywall_2_plus_internet_security_applianc	body	(?mi)<title[^>]*>zywall2plus.*?</title>		fingerprinthub	
+zyxel	body	(?i)(?:vmg1312\-b10d)		fingerprinthub	
+zzcms	body	(?i)(?:/inc/showuserlogin\.php\?style=h\&t=math\.random\(\))		fingerprinthub	
+zzzcms	body	(?i)(?:powered\ by\ <a\ href='http://zzzcms\.com'>zzzcms</a>)		fingerprinthub	

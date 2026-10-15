@@ -40,23 +40,15 @@ _BASE_RE = re.compile(r"^/[a-z0-9]{%d}/[a-z0-9]{%d}$" % (SEG_LEN, SEG_LEN))
 # 代价说清（开发期接受、收尾必须收回）：这个值进了被跟踪的源码、仓库公开 ⇒ "扫端口的人
 # 找不到入口"这半句在开发期不成立；真门槛（401 边缘门 + users 表）一字不让。
 DEV_PIN_BASE = "/devscanner/setpath999"
+# 续197 复核（主理人再次确认「后台路径先用固定的随机字符，等生产完成再用随机字符」）：
+# 现在**仍是**这一档 —— 开发期固定路径；恢复随机＝把 DEV_PIN_BASE 改回 None。
 
-# ---- 开发期固定前缀（续193，主理人 2026-10-15 点单）----
-# 主理人原话：「先把控制台路径先写死，就是固定随机值，等开发完了再随机，也就是现在让我每次
-# 运行的路径都一样」。取一个**符合 new_base() 形状**的常量（两层各 10 位、字符表内）⇒ 每次
-# 启动都挂同一个路径，不必每次从横幅抄地址；`gui/app.py::_web_base_for` 在随机分支前先看它。
-# **恢复随机的唯一动作**：把 `DEV_PIN_BASE` 改回 `None` —— `_web_base_for` 与门禁 [8ak] 两边
-# 都跟着回随机（回归里有"摘掉 pin ⇒ 必须随机且不等于 pin"的证伪，那条路随时验得了）。
-# 代价说清（开发期接受、收尾必须收回）：这个值进了被跟踪的源码、仓库公开 ⇒ "扫端口的人
-# 找不到入口"这半句在开发期不成立；真门槛（401 边缘门 + users 表）一字不让。
-DEV_PIN_BASE = "/devscanner/setpath999"
 
 # 手动指定（`CTFSCANNER_WEB_PATH`）时放宽到"能用就行"的形状：小写字母或数字开头，
 # 后续可含 `. _ -`，每段 1–64 位、最多 4 段。刻意不接受空段、`.`/`..`、查询串、
 # 反斜杠、非 ASCII —— 这些拼进 `Location` 就是开放重定向与路径穿越的原材料。
 _FIXED_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 MAX_SEGMENTS = 4
-
 
 def new_base(rng=None):
     """生成本次启动的挂载前缀，形如 `/k7m2q8x3pd/5w9yt4hrcb`（无前导/尾随斜杠外的内容）。
@@ -67,7 +59,6 @@ def new_base(rng=None):
     pick = (rng or secrets.SystemRandom()).choice
     segs = ["".join(pick(ALPHABET) for _ in range(SEG_LEN)) for _ in range(SEGMENTS)]
     return "/" + "/".join(segs)
-
 
 def normalize(base):
     """规整挂载前缀 —— **三个态分开，不把"不合格"和"挂根路径"混成同一个返回值**。
@@ -99,7 +90,6 @@ def normalize(base):
                              "后续可含 . _ -，每段 1–64 位")
     return "/" + "/".join(segs)
 
-
 def is_valid(base):
     """能不能当挂载前缀用（含"空串＝挂根路径"这个合法态）。"""
     try:
@@ -108,7 +98,6 @@ def is_valid(base):
         return False
     return True
 
-
 def is_random_base(base):
     """是不是 `new_base()` 承诺的那种形状：两层、各 10 位、字符表内。
 
@@ -116,7 +105,6 @@ def is_random_base(base):
     所以钉"每次启动随机生成 20 位"这条承诺必须用它，不能用 `is_valid()`（那会放走一层 8 位的路径）。
     """
     return bool(_BASE_RE.match(str(base or "")))
-
 
 def strip(environ, base):
     """WSGI 层剥前缀：返回改写后的 `(script_name, path_info)`，不合格返回 `None`。
@@ -133,7 +121,6 @@ def strip(environ, base):
     if not path.startswith(base + "/"):
         return None                                       # 根路径、别的路径：一律 404
     return base, path[len(base):] or "/"
-
 
 class PrefixMiddleware:
     """把整个控制台挂在随机前缀下的 WSGI 包装。

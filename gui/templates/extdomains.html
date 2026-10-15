@@ -2,7 +2,7 @@
 {% set kt = "&task=" + task_id|string if task_id else "" %}{# 续112-E：手拼链接统一带上的 task 片段 #}
 {% block title %}拓展域名{% endblock %}
 {% block content %}
-<p class="muted">从 JS 中匹配到的域名（<span class="mono">js:mine</span>）与外部情报反查结果
+<p class="muted note">从 JS 中匹配到的域名（<span class="mono">js:mine</span>）与外部情报反查结果
   （<span class="mono">osint:cseg</span> C 段反查 / <span class="mono">osint:fofa</span> FOFA·ICO 反查 /
   <span class="mono">osint:fofa-cert</span> FOFA·证书反查 /
   <span class="mono">osint:fofa-title</span> FOFA·标题反查）。
@@ -55,7 +55,7 @@
 {% endmacro %}
 <section class="panel">
   {% set keep_tag = '&tag=' + tag if tag else '' %}
-  <p class="muted small">来源分类（<b>默认按此顺序排列</b>：JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段）{% if task_id and js_count_of(task_id) is not none %}，挖掘 JS 数量：{{ js_count_of(task_id) }}{% endif %}：
+  <p class="muted small note">来源分类（<b>默认按此顺序排列</b>：JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段）{% if task_id and js_count_of(task_id) is not none %}，挖掘 JS 数量：{{ js_count_of(task_id) }}{% endif %}：
 
     <a class="btn-mini {{ 'ghost' if src else '' }}"
        href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep_tag }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">全部</a>
@@ -65,7 +65,7 @@
     {% endfor %}
   </p>
   {% set keep_src = '&src=' + src if src else '' %}
-  <p class="muted small">标签过滤：CDN 标记来自 CNAME 链与
+  <p class="muted small note">标签过滤：CDN 标记来自 CNAME 链与
     <span class="mono">config/dicts/cdn_cname.txt</span>、解析 IP 段与
     <span class="mono">config/dicts/cdn_ips.txt</span> 的比对（接管检测之外的独立判定）。
     <a class="btn-mini {{ 'ghost' if tag != 'cdn' else '' }}"
@@ -85,12 +85,12 @@
   </p>
   {% set keep = keep_src + keep_tag %}
   {# 续194（主理人点单）：黑名单行默认隐藏 + 专门一页看被拦了哪些；默认态链接不带 bl=1 #}
-  <p class="muted small">黑名单：命中的行<b>默认隐藏</b>（在页面上勾选、点「加入黑名单」后立刻看不见；
+  <p class="muted small note">黑名单：命中的行<b>默认隐藏</b>（在页面上勾选、点「加入黑名单」后立刻看不见；
     入库一条没动，只是本页不列）。
     {% if bl_hidden %}<a class="btn-mini ghost" title="专门一页看当前筛选下都被黑名单拦了哪些（含命中条目）"
       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}&bl=1">查看被黑名单过滤的 {{ bl_hidden }} 条</a>
     {% else %}当前筛选下没有被黑名单过滤的行。{% endif %}</p>
-  <p class="muted small">重叠资产：<b>该域名已作为「目标自身子域名」出现在任意任务里</b>（域名级全局判重），
+  <p class="muted small note">重叠资产：<b>该域名已作为「目标自身子域名」出现在任意任务里</b>（域名级全局判重），
     说明它早就在资产清单里，这里再列一遍纯属重复，所以<b>默认隐藏</b>。
     {% if show_all %}
       当前<b>显示全部</b>（含重叠）。
@@ -100,7 +100,7 @@
       <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep }}&all=1{{ '&group=0' if not grouped }}{{ kt }}">显示全部（含重叠）</a>
     {% endif %}
   </p>
-  <p class="muted small">展示方式：
+  <p class="muted small note">展示方式：
     {% if grouped %}
       当前<b>按主域名分组（可折叠）</b>——同一注册域的拓展域名收在一组里，一眼看出
       「这批是从哪个域拓展出来的」；分页单位是<b>主域名</b>（不会把同一个主域名切到两页）。
@@ -174,7 +174,7 @@
     </div>
     {% if bl_view %}
       {# 续194：黑名单过滤视图（默认不显示，?bl=1 才进来）—— 固定平铺，每条写清命中哪个条目 #}
-      <p class="muted small">黑名单过滤视图：下面是当前筛选下被黑名单拦下的拓展域名（入库一条没动，
+      <p class="muted small note">黑名单过滤视图：下面是当前筛选下被黑名单拦下的拓展域名（入库一条没动，
         只是默认不列）。每条都写清命中的是哪个黑名单条目。
         <a class="btn-mini ghost" href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">返回默认视图</a></p>
       <table id="tbl-bl">
@@ -197,7 +197,7 @@
       </table>
     {% elif grouped %}
       {% if not groups %}
-        <p class="muted">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</p>
+        <p class="muted note">没有匹配的拓展域名（JS 挖掘与外部情报拓展可能未启用）。</p>
       {% else %}
         {% for g in groups %}
           {% set tid = 'g' + loop.index|string %}
@@ -234,7 +234,7 @@
     {% endif %}
   </form>
   {% include "_pager.html" %}
-  {% if grouped %}<p class="muted small">共 {{ row_total }} 条拓展域名，分在 {{ pager.total }} 个主域名下。</p>{% endif %}
+  {% if grouped %}<p class="muted small note">共 {{ row_total }} 条拓展域名，分在 {{ pager.total }} 个主域名下。</p>{% endif %}
 </section>
 {% endblock %}
 {% block script %}

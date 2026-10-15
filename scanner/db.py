@@ -1160,6 +1160,30 @@ def set_site_titles(task_id, pairs):
     return n
 
 
+def set_site_redirect_titles(task_id, pairs):
+    """补 3xx 站点的**落地页标题**（续197）：`pairs` 是 `[(url, title), ...]`。
+
+    与 `set_site_titles` 的分工（两列含义不同，别混着写）：
+    - `title`            = **原始那一跳**的实况（301 时就是服务器那句 "301 Moved Permanently"）；
+    - `redirect_title`   = 跟随跳转后**落地页**的标题 —— 页面「标题」列显示的正是这一格
+      （口径在 `utils.site_redirect`）。
+
+    为什么要有这个函数：SPA 外壳（CloudFront + vue/element-ui 那一类）首屏既没有 `<title>`
+    也没有 og:title，标题要等 JS 渲染完才出现 ⇒ 只有无头浏览器渲染后的 `document.title`
+    能补上它，而截图那一次浏览器最终停在的就是落地页。
+
+    只补**还没有落地页标题**的行：已有结论的不覆盖（截图可能跑很多轮，后来的渲染不该
+    把先到的事实洗掉 —— 与 `set_site_titles` 同一条口径）。
+    """
+    rows = [(str(t).strip(), task_id, str(u))
+            for u, t in (pairs or []) if u and str(t or "").strip()]
+    if not rows:
+        return 0
+    _exec("UPDATE sites SET redirect_title=? WHERE task_id=? AND url=?"
+          " AND (redirect_title IS NULL OR redirect_title='')", rows, many=True)
+    return len(rows)
+
+
 def set_site_shots(task_id, pairs):
     """写入站点截图路径：`pairs` 是 `[(url, rel_path), ...]`。"""
     rows = [(rel or "", task_id, url) for url, rel in (pairs or []) if url]

@@ -14,7 +14,7 @@ import time
 
 from .base import Stage
 from .. import db, screenshot
-from ..utils import write_lines
+from ..utils import REDIRECT_STATUS, write_lines
 
 
 class ScreenshotStage(Stage):
@@ -58,6 +58,7 @@ class ScreenshotStage(Stage):
         # 只有"原始 HTML 里没有标题"的那些站点，才值得为渲染后标题多要一次 DOM
         no_title = sum(1 for s in sites if not str(s.get("title") or "").strip())
         title_rows = []
+        final_title_rows = []      # 续197：3xx 站点渲染后拿到的**落地页标题**（补 redirect_title）
         ctx.logger.info(f"[screenshot] 开始截图 {len(sites)} 个站点 …")
         for s in sites:
             if ctx.stopped():
@@ -68,7 +69,14 @@ class ScreenshotStage(Stage):
                 continue
             name = screenshot.shot_name(url)
             out = shot_dir / name
-            want_title = not str(s.get("title") or "").strip()
+            # 续197：3xx 站点的**展示标题**取自落地页那一跳（`utils.site_redirect`），
+            # 而落地页常常是 SPA 外壳 —— 首屏既没有 `<title>`，连 og:title 也可能没有，
+            # 标题要等 JS 渲染完才出现（CloudFront + vue/element-ui 那一类就是这样）。
+            # 所以"要不要渲染后标题"多一档：3xx 且落地页还没标题时也要，
+            # 否则页面上那一格永远只能显示 `-`（主理人点单"301 应该取跳转之后的标题"）。
+            _need_final = (int(s.get("status") or 0) in REDIRECT_STATUS
+                           and not str(s.get("redirect_title") or "").strip())
+            want_title = _need_final or not str(s.get("title") or "").strip()
             good, err, rtitle = screenshot.capture(url, out, ctx.settings, timeout=timeout,
                                                    throttle=ctx.throttle, want_title=want_title)
             attempts = [("一次性", timeout)]
@@ -123,9 +131,15 @@ class ScreenshotStage(Stage):
                         # 兜底自己的失败原文照样留下（人要看的正是"两条路各卡在哪"）。
                         err = f"{err}；CDP 兜底：{_e3}"
             if want_title and str(rtitle or "").strip():
-                # 内存里也补上：screenshot 之后还有 osint / jsmine / dirscan / vulnscan 读这批站点行
-                s["title"] = rtitle
-                title_rows.append((url, rtitle))
+                if _need_final:
+                    # 这一张无论走哪条路（一次性跟跳 / 换落地页 / CDP 兜底），无头浏览器最终停在
+                    # 的都是落地页 ⇒ 渲染后的 `document.title` 正是 `redirect_title` 要的那句话。
+                    s["redirect_title"] = rtitle
+                    final_title_rows.append((url, rtitle))
+                if not str(s.get("title") or "").strip():
+                    # 内存里也补上：screenshot 之后还有 osint / jsmine / dirscan / vulnscan 读这批站点行
+                    s["title"] = rtitle
+                    title_rows.append((url, rtitle))
             if good:
                 ok += 1
                 # 库里只存**相对任务工作目录**的路径（shots/xxx.png）：
@@ -151,6 +165,11 @@ class ScreenshotStage(Stage):
                             + "（逐条原因写进站点行的 shot_error，站点页那一格直接显示）")
         write_lines(ctx.workdir / "shots.txt", [f"{u}\t{r}" for u, r in rows])
         filled = db.set_site_titles(ctx.task_id, title_rows) if title_rows else 0
+        filled_final = (db.set_site_redirect_titles(ctx.task_id, final_title_rows)
+                        if final_title_rows else 0)
+        if filled_final:
+            ctx.logger.info(f"[screenshot] 另有 {filled_final} 个 3xx 站点的**落地页标题**"
+                            "由渲染后补上（SPA 外壳首屏没有 <title>，页面那一格之前只能显示 -）")
         if no_title:
             # 必须说出来：否则页面上那排 `-` 会被读成"我们抓坏了"（用户 2026-10-09 的一问就是它）。
             ctx.logger.info(

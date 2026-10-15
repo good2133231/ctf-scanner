@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block title %}站点资产{% endblock %}
 {% block content %}
-<p class="muted">全库存活站点（跨任务，服务端分页 + 关键字过滤）。URL 可直接点开，勾选后可
+<p class="muted note">全库存活站点（跨任务，服务端分页 + 关键字过滤）。URL 可直接点开，勾选后可
   <b>批量打开</b>（在本机浏览器里逐个开标签页，单次最多 20 个，<b>不发任何请求</b>）；
   favicon MD5 是"零请求前置指纹"，POC 声明 favicon_md5_list 时会先与它比对（见 策略配置 → 检测策略）。
   <b>纯净模式</b>只显示 URL（适合对着列表逐个点开看），页顶可切换。</p>
 <section class="panel">
-  <p class="muted small">重复站点<b>默认隐藏</b>，两层口径都由同一个开关（「显示全部站点」）控制：
+  <p class="muted small note">重复站点<b>默认隐藏</b>，两层口径都由同一个开关（「显示全部站点」）控制：
     ① <b>重叠资产（跨任务）</b>：同一 URL 在多个任务里都探到过时，只保留<b>最新一次扫描</b>的那条
     （行内是当次扫描的状态码/标题/长度/技术栈，留最旧那条等于一直看陈旧数据）
     —— 反复扫同一个目标时，站点列表不会再被撑成 N 倍；
@@ -23,7 +23,7 @@
       <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs }}&all=1">显示全部站点（含同标题与重叠）</a>
     {% endif %}
   </p>
-  <p class="muted small">状态码：
+  <p class="muted small note">状态码：
     {% if pager.allst %}
       当前<b>显示全部状态码</b>。
       <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.st_off }}">只看 200 / 404（含跳转后的）</a>
@@ -33,7 +33,7 @@
       <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.st_on }}">显示全部状态码</a>
     {% endif %}
   </p>
-  <p class="muted small">显示模式：
+  <p class="muted small note">显示模式：
     {% if plain %}
       <b>纯净模式</b>（只显示 URL）
       <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs|replace('&plain=1', '') }}">显示全部列</a>

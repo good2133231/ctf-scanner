@@ -12,7 +12,7 @@
 <body class="login-page">
 <div class="login-box">
   <h1>CTF<span>Scanner</span></h1>
-  <p class="muted">仅用于授权测试与 CTF 场景</p>
+  <p class="muted note">仅用于授权测试与 CTF 场景</p>
   <form method="post">
     <input type="text" name="username" placeholder="用户名" autocomplete="username" autofocus>
     <input type="password" name="password" placeholder="口令" autocomplete="current-password">
@@ -32,7 +32,7 @@
      （配置文件被 git 跟踪、仓库公开，不该放能换管理员身份的串）。`empty_account` **只决定这句
      文案**，不是第二条登录分支：库里 0 个账号时页面上照样没有任何能提交的口令。 #}
   {% if empty_account %}
-  <p class="muted" style="margin-top:14px;font-size:12px;line-height:1.6">
+  <p class="muted note" style="margin-top:14px;font-size:12px;line-height:1.6">
     这台机器上<b>还没有任何账号</b>，所以谁都登不进去 —— 这不是登录页坏了。
     在服务器终端上跑 <code>python cli/run_users.py --create-admin</code> 建第一个管理员
     （首次启动控制台时也会直接向导问你要设什么口令）。

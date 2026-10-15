@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}端口与服务{% endblock %}
 {% block content %}
-<p class="muted">全库端口/服务发现结果（跨任务，服务端分页 + 关键字过滤）。该数据来自
+<p class="muted note">全库端口/服务发现结果（跨任务，服务端分页 + 关键字过滤）。该数据来自
   <b>portscan</b> 阶段，默认关闭，在「策略配置 → 端口与服务」里打开后新任务才会产出。</p>
 <section class="panel">
   <form class="filters" method="get" action="{{ pager.base }}">

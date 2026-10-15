@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block title %}IP 资产{% endblock %}
 {% block content %}
-<p class="muted">按**解析 IP** 聚合的资产视图（跨任务，服务端分页 + 关键字过滤）：同一台机器上挂了哪些域名，一眼可见。
+<p class="muted note">按**解析 IP** 聚合的资产视图（跨任务，服务端分页 + 关键字过滤）：同一台机器上挂了哪些域名，一眼可见。
   默认<b>只显示非 CDN 的解析</b>（走 CDN 的域名解析出来是边缘节点 IP，对找源站没帮助），
   需要时切到「含 CDN」。勾选 IP → 直接对<b>真实 IP</b> 发起全端口扫描。</p>
 <section class="panel">
-  <p class="muted small">显示范围：
+  <p class="muted small note">显示范围：
     {% if include_cdn %}
       <b>含 CDN 的解析</b>（共 {{ pager.total }} 个 IP）
       <a class="btn-mini ghost"

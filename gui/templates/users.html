@@ -6,7 +6,7 @@
 
 <section class="panel">
   <h2>账号（{{ rows|length }} 个）</h2>
-  <p class="muted">
+  <p class="muted note">
     <b>管理员</b>：能用扫描 + 看结果，另有策略配置、POC 管理与本页；
     <b>子用户</b>：只能建任务跑扫描、看结果与导出报告 —— <b>看不到配置页</b>
     （路由上就会挡回来 403，不只是侧边栏不显示）。
@@ -66,7 +66,7 @@
     {% endfor %}
     </tbody>
   </table>
-  {% if not rows %}<p class="muted">（空）</p>{% endif %}
+  {% if not rows %}<p class="muted note">（空）</p>{% endif %}
 </section>
 
 <section class="panel">
@@ -86,7 +86,7 @@
     </label>
     <button type="submit">创建</button>
   </form>
-  <p class="muted small">
+  <p class="muted small note">
     建号即置「待改密」：该账号首次登录会被带到「修改口令」页，改完才能用 ——
     管理员给队友建号时<b>一定知道</b>那个初始口令，不改就等于它长期有效且被第二个人掌握。
     {% if total == 0 %}（当前还没有账号，创建出来的<b>必定是管理员</b>，避免把自己锁在门外。）{% endif %}
@@ -95,7 +95,7 @@
 
 <section class="panel">
   <h2>口令丢了怎么办</h2>
-  <p class="muted">
+  <p class="muted note">
     没有任何人能"找回"口令（库里只有派生值）。管理员可在上面直接重置；
     若连管理员都进不去，在项目根执行一条命令重新建一个管理员（不影响任务与资产数据）：
   </p>

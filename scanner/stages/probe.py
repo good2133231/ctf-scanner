@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from .base import Stage
 from .. import blacklist, db, extdom, flagfind, wildcard
 from ..fingerprint import identify, favicon_md5
-from ..utils import (REDIRECT_STATUS, html_title, which, verify_tool, run_cmd, read_lines,
+from ..utils import (REDIRECT_STATUS, html_title, page_title, which, verify_tool, run_cmd, read_lines,
                      write_lines, pool_run, http_request, ramp_opt,
                      effective_workers)
 
@@ -72,7 +72,10 @@ def attach_redirect_info(sites, fetch, workers=8, logger=None):
             return None
         return {"url": s.get("url"), "redirect_url": str(r.get("url") or ""),
                 "redirect_status": int(r.get("status") or 0),
-                "redirect_title": html_title(r.get("text"))}
+                # 续197：落地页的"标题"用 `page_title`（`<title>` 取不到再退 og:title 那几条
+                # 声明式元信息）—— 3xx 页面展示的正是这一跳，而 SPA 首屏常常没有 `<title>`
+                # 却有 og:title。取不到就留空，由显示层说"落地页无 title"，不编数。
+                "redirect_title": page_title(r.get("text"))}
 
     got = {x["url"]: x for x in pool_run(_one, red, workers=workers, logger=logger,
                                        label="跳转后取证") if x}

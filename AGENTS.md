@@ -708,8 +708,18 @@ ctf-scanner/
     ① 内置 `SIGNATURES` 不许因为外部字典的存在被改写；同名标签**允许**在外置表再加一条判据
     （析取语义，与内置表一致），但**不许**为已有产品另造近似标签 —— `sites.tech` 里同时出现
     `jenkins` 与 `jenkins-login`，dirscan 的框架桶只认前者，后者等于白打。
-    ② 外置表 `config/dicts/fingerprints_extra.txt` 的分隔符**只能是 TAB**：判据本身是正则，
-    `|` 是它的选择运算符，用 `|` 切列会把判据腰斩。
+    ② 外置表**现在是三份**（续197）：`fingerprint.EXTRA_FILES` = 手写那份
+    `config/dicts/fingerprints_extra.txt` + 社区库转换来的 `fingerprints_hub.txt`
+    （FingerprintHub / ObserverWard）+ `fingerprints_ehole.txt`（EHole 棱洞），共 2138 条规则。
+    三张**同一份格式**，解析逻辑仍只有一份（多一个文件 ≠ 多一套读法）；后两张由
+    `tools/import_fingerprints.py` 生成（**一次性转换器**：外部仓库源码不进本仓，重跑即重新生成）。
+    分隔符**只能是 TAB**：判据本身是正则，`|` 是它的选择运算符，用 `|` 切列会把判据腰斩。
+    ⚠ 三张的性质不同：手写那份**每条都带状态码门控**（这正是它存在的意义），社区库那两张**不分
+    状态**（它们是"认不认得出这个组件"）⇒ 别拿同一个标签当两种判据的尺子（续197 的门禁就栽过：
+    `grafana` 两张表都有，手写那份要求 200，社区那份不要求，404 上也打标签是**正常的**）。
+    社区库的两个已知取舍（都写进了转换脚本）：默认只导 `metadata.verified: true` 那批
+    （`--all` 才全量），以及 `GENERIC_WORDS` 黑名单 —— 不合这两道闸时，一份合成通用登录页会被
+    一次打上 38 个互不相关的标签（"全中"比全不中更糟）。剩余长尾误报（约 13 个）挂账待清洗。
     ③ 任何"把第三方 PoC/指纹/字典搬进检测路径"的活儿，落地件必须是**人工复核过的表**
     （`docs/afrog-fp-review.tsv` 那种），工具侧不许提供 `--all-ok`；`severity != info` 一律拒
     （实测 afrog 的 fingerprinting/ 目录里混着一条 HFS RCE，它的判据和普通指纹一模一样）。
@@ -2352,8 +2362,14 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   `probe.attach_redirect_info` 只对 3xx 条目**再发一次允许跟随的请求**，把最终 url/状态/标题写进
   `sites` 的 `redirect_*` 三列；`status`/`title`/`length` 保持原样 —— 把 301 覆盖成落地页的 200
   等于谎报「这个端口直接回 200」，而 301 与 200 的安全含义不同（跳转链本身是信息）。
-  落地页取不到 ⇒ 三列留空、页面原样显示那一跳（**不编数**）；落地页没有 `<title>`（图片/JSON）
-  ⇒ 保留原来那句并写明「落地页无 title」，不留空位。显示口径集中在 `utils.site_redirect`
+  落地页取不到 ⇒ 三列留空、页面原样显示那一跳（**不编数**）。
+  **续197 改了"落地页没标题"这一档**：原先退回第一跳那句「301 Moved Permanently」，但那是
+  **服务器默认跳转页文案**（CloudFront / nginx 的 301 页都长这样），显示在「标题」列等于拿中间件
+  默认页当站点身份（主理人报的就是这个现象）⇒ 现在**跟到了就只用落地页标题**，落地页确实没有
+  就留空（页面 `-`），`note` 写明「落地页无 title」。两条补强：落地取证用 `utils.page_title`
+  （`<title>` 取不到再退 `og:title`/`twitter:title`/`meta name=title`，SPA 首屏常见；
+  **不**兜 `<h1>` —— 那是正文标题，属"看起来像"）；截图阶段把渲染后的 `document.title` 回填
+  `redirect_title`（`db.set_site_redirect_titles`，只补空值）。显示口径集中在 `utils.site_redirect`
   （`301 → 200` + 标记「跳转后」），GUI 两处与报告 MD/HTML 共用同一个函数，四种出口不会各说一套话。
   它同时吃 dict 与 `sqlite3.Row` —— **`Row` 没有 `.get()`**，这是本项目第五次栽在同一处。
 - **引导口令只存派生值：不落盘、不回显、留空不改（续113）**：`config/settings.yaml` 被 git 跟踪，

@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block title %}全端口扫描{% endblock %}
 {% block content %}
-<p class="muted">按任务分布的端口资产（主机 × 任务视角）。默认只扫内置 TOP 端口；
+<p class="muted note">按任务分布的端口资产（主机 × 任务视角）。默认只扫内置 TOP 端口；
   想对某个 IP 补一次 <span class="mono">1-65535</span> 全端口，勾选它 → 点「发起全端口扫描」。</p>
 <section class="panel">
-  <p class="muted small">全端口扫描会新建一个<b>只跑 portscan 阶段</b>的任务（与「批量跑子域名」同一套做法：
+  <p class="muted small note">全端口扫描会新建一个<b>只跑 portscan 阶段</b>的任务（与「批量跑子域名」同一套做法：
     一任务一线程、可独立停止/删除），任务选项 <span class="mono">portscan_full</span> 让它无视全局开关也会执行；
     扫描时<b>自动跳过该任务已经扫过的端口</b>（<span class="mono">portscan.exclude_scanned</span>）。
     注意：6.5 万个端口逐连接，耗时以分钟计 —— 只对你真需要补全的 IP 用。</p>
-  <p class="muted small">共 {{ pager.total }} 行（主机 × 任务，跨任务，服务端分页 + 关键字过滤；
+  <p class="muted small note">共 {{ pager.total }} 行（主机 × 任务，跨任务，服务端分页 + 关键字过滤；
     行数随任务数增长，故不再整表渲染）。</p>
   {# ⚠️ 这是 **GET form**，必须放在下面那个 POST（发起全端口扫描）的 form **之前** ——
      HTML 不允许 form 嵌套，嵌进去只会让内层表单静默失效。 #}
