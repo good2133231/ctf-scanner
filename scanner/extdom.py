@@ -294,8 +294,10 @@ def confirmed_ip_map(task_id):
 def ip_evidence(row, confirmed_ips):
     """这一行有没有「与非 CDN 已确认子域同 IP」的佐证 → 空串＝没有，有则给理由文本。
 
-    （续178 拍板"同 IP ⇒ medium"时定的口径：佐证只作**旁证**，永远够不上归属。）
+    （续186 改口径：主理人拍板「非 CDN 的 IP 与已确认子域重合即判高」——
+    confirmed_ips 只收非 CDN 的 own 行，重合即同机，够得上高、可进自动递归。）
     """
+
     if not confirmed_ips:
         return ""
     dom = str((row.get("domain") if isinstance(row, dict) else "") or "").strip()
@@ -315,8 +317,9 @@ def apply_ip_evidence(conf, row, confirmed_ips):
     """把 IP 佐证并进置信度结论：低 ⇒ 中（`similar_candidates` 与页面徽章共用本函数，
     §5.14 —— 两处各写一遍就会出现"页面上写着中、递归却没带上"）。
 
-    三条边界：已是中/高不降级也不改写理由；归属行（owned）不动（那是 promote_owned 的地盘）；
-    佐证只升到「中」，永远够不上「高」。
+    边界：已是高不降级也不改写理由；归属行（owned）不动（那是 promote_owned 的地盘）；
+    续186：佐证直接升到「高」（主理人拍板，推翻续178 的「只到中」）。
+
     """
     why = ip_evidence(row, confirmed_ips)
     if not why or conf.get("owned"):
@@ -324,8 +327,11 @@ def apply_ip_evidence(conf, row, confirmed_ips):
     if conf_rank(conf.get("level") or "low") >= conf_rank("medium"):
         return conf
     out = dict(conf)
-    out.update({"level": "medium", "label": conf_label("medium"),
+    # 续186（主理人 2026-10-15 拍板，推翻续178「佐证只到中」）：非 CDN 的 IP 与已确认
+    # 子域重合即判高（confirmed_ips 只收非 CDN 的 own 行，重合即同机，可进自动递归）。
+    out.update({"level": "high", "label": conf_label("high"),
                 "reason": why, "near": "", "ip_hit": True})
+
     return out
 
 

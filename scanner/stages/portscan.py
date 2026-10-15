@@ -9,10 +9,27 @@
 """
 from .base import Stage
 from .. import cdn, config, db, dnsq, extcost, extdom, ml, portscan
+import time
+
 from ..utils import pool_run, resolve_host, which
 
 
+
+def _fscan_untrusted(elapsed, n_ports):
+    """fscan 返回 0 端口时，这次结果**可不可信**（续188，唯一判据）。
+
+    经验：fscan 每秒最多尝试约一千个连接（含进程启动开销）。耗时 < max(1s, 端口数/1000)
+    还报 0 端口，说明它**根本没真跑**（任务 22 实测：65535 端口 0.14s 返回空，字典爆破又
+    全失败 ⇒ 子域名 0 ⇒ 后面阶段全部跳过 —— 整条链就是在这里归零的）。TOP 端口全 refused
+    的正常快返在 max(1.0,…) 下限**也会被回退复核一次** —— 那是刻意取舍：多跑一次 nmap
+    的代价远小于把整条扫描链交在一份没真跑的空结果上（宁可多复核，不可漏报）。
+
+    """
+    return elapsed < max(1.0, n_ports / 1000.0)
+
+
 class PortscanStage(Stage):
+
     name = "portscan"
     description = "端口与服务发现（nmap 优先，内置 TCP connect 兜底）"
 
@@ -189,9 +206,19 @@ class PortscanStage(Stage):
                 if fscan_bin:
                     # `workdir=ctx.workdir` 不是可选项：fscan 默认 `-o result.txt` 且按**进程 CWD**
                     # 落盘，不传就会在启动扫描器的目录（通常是仓库根）留下一个跨轮追加的结果文件。
+                    _t0188 = time.monotonic()
                     found = portscan.fscan_scan(host, ip, target_ports, timeout=timeout,
                                                 binary=fscan_bin, workers=workers,
                                                 throttle=th, workdir=ctx.workdir)
+                    # 续188：秒退且 0 端口 ⇒ 结果不可信，WARNING + 回退下一引擎（不拿空结果交差）。
+                    if found is not None and not found and \
+                            _fscan_untrusted(time.monotonic() - _t0188, len(target_ports)):
+                        ctx.logger.warning(
+                            f"[portscan] fscan {host} 用时 {time.monotonic() - _t0188:.2f}s "
+                            f"报 0 端口（{len(target_ports)} 个端口不可能这么快跑完）—— 结果不可信，"
+                            "回退下一引擎复核")
+                        found = None
+
                 if found is None and nmap_bin:
                     found = portscan.nmap_scan(host, ip, target_ports, timeout=timeout,
                                                binary=nmap_bin, throttle=th)

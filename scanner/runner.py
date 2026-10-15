@@ -445,9 +445,16 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
     next_opts["append_targets"] = targets
     next_opts["ext_depth"] = remaining
     next_opts["ext_layer"] = layer + 1
+    # 续186（主理人点单「不管手工还是置信度自己去扫描，都要标记扫描」）：自动递归这批
+    # 也进送探记录（extdomains 页与组内子标签同一产地，kind=auto 区分于手动 probe/append）。
+    try:
+        db.record_ext_probes(task_id, task_id, targets, kind="auto")
+    except Exception as _e186:
+        logger.warning(f"[extdom] 自动递归的送探标记写库失败（不影响排队）：{_e186}")
     from . import queue as _queue      # 延迟导入：queue 顶层 import 本模块，避免循环导入
     db.enqueue_task(task_id, "append", depth_stages(stages), next_opts)
     _queue.notify()
+
     _sim_n = len(targets) - len(promoted)
     logger.info(f"[extdom] 追加层数：第 {layer}/{total} 层完成，下一层目标 {len(targets)} 个"
                 f"（归属 {len(promoted)} 个"
