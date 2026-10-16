@@ -26885,6 +26885,35 @@ expression: r0()
     print("[201] 续201 ok: Host 碰撞接线(阶段/配置一致/出厂关/默认关零请求/补跑端点三态/两处入口)｜"
           "队列并发出厂 2｜_with_hash 只认 #\\w(开放重定向形状全挡)｜前端保 hash + 表单注入｜"
           "批量打开提示写清浏览器限制")
+    # ---- [202] 续202：任务层级筛选 + 送探任务名带域名数 ----
+    # ① 层级筛选：根任务 / 衍生任务分开（送探套娃之后列表里分不清哪个是主域名任务）
+    _t_root202 = db.create_task("smoke-202-root", "https://r202.test/", ["probe"], {})
+    _t_child202 = db.create_task("smoke-202-child", "https://c202.test/", ["probe"], {},
+                                 parent_id=_t_root202)
+    _r_all, _n_all = db.page_tasks(limit=100000, offset=0)
+    _r_root, _n_root = db.page_tasks(limit=100000, offset=0, parent="root")
+    _r_ch, _n_ch = db.page_tasks(limit=100000, offset=0, parent="child")
+    assert _n_root + _n_ch == _n_all, \
+        f"root+child 应等于全部（{_n_root}+{_n_ch} vs {_n_all}）—— 有任务的 parent_id 落在这两类之外？"
+    assert _t_root202 in {int(x["id"]) for x in _r_root}, "根任务没出现在 parent=root 里"
+    assert _t_child202 in {int(x["id"]) for x in _r_ch}, "衍生任务没出现在 parent=child 里"
+    assert _t_child202 not in {int(x["id"]) for x in _r_root}, "衍生任务漏进 root 了"
+    # ② 页面：下拉在 + 筛选真的生效（行数变少）
+    _tp202 = c.get("/tasks").get_data(as_text=True)
+    assert 'name="parent"' in _tp202 and "只看主域名任务" in _tp202, "任务页没有层级筛选"
+    _h_root202 = c.get("/tasks?parent=root").get_data(as_text=True)
+    _h_ch202 = c.get("/tasks?parent=child").get_data(as_text=True)
+    assert _h_root202.count("<tr") != _h_ch202.count("<tr"), \
+        "?parent=root 与 ?parent=child 渲染出的行数一样 ⇒ 筛选没接到查询上"
+    # 翻页链接要带上筛选（否则翻一页就丢了）
+    assert "parent=root" in _h_root202, "翻页链接没带上 parent 筛选"
+    # ③ 送探任务名：`<主域名> · 送探 N 个域名`（旧格式只说第几层，扫了几个看不出来）
+    _src202 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+    assert "· 送探 {len(domains)} 个域名" in _src202, \
+        "送探任务名没带上域名数（主理人点单'建任务应该显示主域名'的那一层）"
+    assert "-拓展{_cn}层" not in _src202, "旧的 `-拓展N层` 命名还在（只说层数，不说扫几个）"
+    print("[202] 续202 ok: 任务层级筛选(root+child=全部/互不串/页面生效/翻页带条件)｜"
+          "送探任务名 `<主域名> · 送探 N 个域名`")
     print("SMOKE PASS")
 
 

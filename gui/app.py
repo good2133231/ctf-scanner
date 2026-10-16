@@ -1602,8 +1602,13 @@ def create_app():
         stages_f = (request.args.get("stages") or "").strip()
         if stages_f not in STAGE_ORDER:
             stages_f = ""    # 阶段白名单：非法一律按"全部"
+        # 续202：只看根任务 / 只看衍生任务（送探套娃之后任务一多就分不清哪个是主域名任务）
+        parent_f = (request.args.get("parent") or "").strip()
+        if parent_f not in ("root", "child"):
+            parent_f = ""
         rows, total = _page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
-                                    status=status or None, stages=stages_f or None)
+                                    status=status or None, stages=stages_f or None,
+                                    parent=parent_f or None)
         # 续195（主理人点单「多任务执行还是显示排队？」）：把队列并发现状摆在列表页 ——
         # 同时跑几个是策略配置的 queue.workers（出厂 1＝串行，省目标侧带宽、防风控），
         # 不是没实现；页面不说，用户只看到"排队"两个字
@@ -1612,7 +1617,8 @@ def create_app():
         if page > pages:     # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
             page = pages
             rows, total = _page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
-                                        status=status or None, stages=stages_f or None)
+                                        status=status or None, stages=stages_f or None,
+                                        parent=parent_f or None)
         # 翻页必须带上**全部**筛选状态；`q` 要 URL 编码 —— 关键字里带 `&` / `#` / 空格时
         # 不编码会让翻页**丢掉条件**（见 `/vulns`、`_asset_page` 的同一处理）。
         parts = []
@@ -1622,6 +1628,8 @@ def create_app():
             parts.append(f"status={quote(status)}")
         if stages_f:
             parts.append(f"stages={quote(stages_f)}")
+        if parent_f:
+            parts.append(f"parent={quote(parent_f)}")
         parts.append(f"size={size}")
         pager = {"page": page, "size": size, "total": total, "pages": pages,
                  "base": page_url("/tasks"), "qs": "&" + "&".join(parts)}
@@ -1644,7 +1652,7 @@ def create_app():
                                counts=counts, durations=durations, qworkers=qworkers,
                                running=set(runner.running_task_ids()), qpos=qpos,
                                pager=pager, page_sizes=PAGE_SIZES, q=q,
-                               status=status, stages_f=stages_f,
+                               status=status, stages_f=stages_f, parent_f=parent_f,
                                # 续169：主面板那两个控件的默认值**取自策略配置**（唯一产地是
                                # `subdomain.ext_depth` / `subdomain.ext_min_confidence`）。页面里
                                # 写死 1 与「高」就是第二份默认值 —— 策略页改了页面不跟着变，
@@ -3897,7 +3905,12 @@ def create_app():
                         _main195 = _m195
                         break
                 _cn = "一二三四五六七八九十"[_depth - 1] if _depth <= 10 else str(_depth)
-                name = f"{_main195 or _root['name']}-拓展{_cn}层"
+                # 续202：格式统一成 `<主域名> · 送探 N 个域名`（层数 >1 时再带上层数）——
+                # 旧格式 `-拓展N层` 只说"第几层"，扫了几个域名看不出来；
+                # 主域名取不到才退回根任务名（根任务名是人起的，可能是"test"这种）。
+                # `_cn` 是字符串（域名计数的文本形态），比较前必须转 int
+                name = (f"{_main195 or _root['name']} · 送探 {len(domains)} 个域名"
+                        + (f"·{_cn}层" if str(_cn).isdigit() and int(_cn) > 1 else ""))
         if not name:
             name = time.strftime("拓展探测-%m%d-%H%M%S")
         targets = "\n".join(domains)

@@ -122,6 +122,15 @@
         {% for s in stages %}<option value="{{ s }}" {{ 'selected' if stages_f == s else '' }}>{{ s }}</option>{% endfor %}
       </select>
     </label>
+    {# 续202（主理人点单"多任务时如何美观清晰"）：只看根任务 / 只看衍生任务。
+        送探套娃之后列表里混着"主域名任务 + 它的送探任务 + 送探的送探任务"，
+        没有这个筛选时分不清哪个是主域名任务（根任务＝parent_id=0）。 #}
+    <label class="muted">层级
+      <select name="parent">
+        <option value="" {{ '' if parent_f else 'selected' }}>全部</option>
+        <option value="root" {{ 'selected' if parent_f == 'root' }}>只看主域名任务</option>
+        <option value="child" {{ 'selected' if parent_f == 'child' }}>只看衍生（送探）任务</option>
+      </select></label>
     <label class="muted">每页
       <select name="size" onchange="this.form.submit()">
         {% for s in page_sizes %}

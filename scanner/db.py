@@ -878,7 +878,8 @@ def find_task_by_name(name):
                   (str(name),), one=True)
 
 
-def page_tasks(limit=100, offset=0, q=None, status=None, stages=None, owner_id=None):
+def page_tasks(limit=100, offset=0, q=None, status=None, stages=None, owner_id=None,
+               parent=None):
     """任务列表分页查询（续53），返回 `(rows, total)`。
 
     **为什么要它**：`/tasks` 页原先固定 `list_tasks(limit=200)` —— 任务超过 200 个就**静默丢**、
@@ -889,6 +890,9 @@ def page_tasks(limit=100, offset=0, q=None, status=None, stages=None, owner_id=N
     - `q`      → `name` / `targets` 子串（`LIKE`，参数两份 `%q%`）；
     - `status` → **精确等值**（前端是下拉框，本就精确）；
     - `stages` → `stages` 列**子串包含**（对齐前端 `includes`，刻意**不**做精确等值）。
+    - `parent`（续202）→ `"root"` 只要根任务（`parent_id=0`）、`"child"` 只要衍生任务
+      （`parent_id<>0`）。衍生任务一多，列表里"哪个是主域名任务"就找不到了 —— 这是
+      「送探 → 子任务 → 孙任务」套娃之后的刚需（主理人点单"多任务时如何美观清晰"）。
 
     **绝不把用户输入拼进 SQL** —— 进 f-string 的只有常量列名 / 常量 SQL 片段，值一律走 `?` 占位。
     排序恒 `id DESC`（与 `list_tasks` 一致，页面行序**不变**）。`total` 与 `rows` 共用同一组 where，
@@ -908,6 +912,10 @@ def page_tasks(limit=100, offset=0, q=None, status=None, stages=None, owner_id=N
     if stages:
         clauses.append("stages LIKE ?")
         params.append(f"%{stages}%")
+    if parent == "root":
+        clauses.append("parent_id = 0")
+    elif parent == "child":
+        clauses.append("parent_id <> 0")
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     total_row = _query(f"SELECT COUNT(*) c FROM tasks{where}", tuple(params), one=True)
     total = total_row["c"] if total_row else 0
