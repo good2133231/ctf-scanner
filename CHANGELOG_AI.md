@@ -33,6 +33,22 @@
   踩坑三处：① `_safe_member` 写成"先剥斜杠再判"会让 `/etc/passwd` 变成合法的
   `etc/passwd` 混过去（那正是 zip slip 想要的），改成**先拒再剥**；
   ② `apply_files` 两路用同一个剥前缀法 ⇒ 指纹被写成 `fingerprints/fingerprints/…`；
+(续206 真拉实测，四件事都是跑起来才知道的）：
+  ① **上游目录名变了** —— `http/fingerprints/` **已不存在**，nuclei 把指纹类并到了
+     `http/technologies/`（第一版写 fingerprints，拉下来 0 个模板，错误消息里那句
+     "目录名变了？仓库结构改了？"正好用上）；
+  ② **`id` 在 nuclei 里是顶层字段**（不在 `info` 里），只查 `info.id` 会把一千多条全拒收；
+  ③ **matchers 在协议块里**（`http[0].matchers`），顶层常常没有，同样全拒；
+  ④ **RCE 护栏第一版误杀一片** —— 它扫整份 yaml 文本，于是 Jenkins 指纹模板 path 里的
+     `/whoami`（端点名不是执行）、一堆模板 description 里的反引号全被判成命令执行。
+     收窄成"只看**会发出去的内容**（path/raw/payloads/body）+ 只认**命令拼接/替换形态**
+     （`;cmd`/`|cmd`/`$(`/反引号）"后：拒收从几十条降到 **1 条**（`wappalyzer-mapping.yml`，
+     那是映射文件不是模板，拒得对）。
+  真拉结果：1162 个模板 → 落盘 1156（manifest 幂等，第二次只写 5 个变化的）→
+  **指纹表 286 条**（1161 个模板只转出 286 条，是因为 `from_fingerprinthub` 有"只认首页探针"
+  与"只导 verified"两道既有口径，不是链路断）；指纹总规则 2136 → 2422。
+  另修 CLI 里一处解包 bug（`_zip_codes` 的写法让 `for (t,w,p,*rest), c in …` 炸掉）。
+
   ③ 门禁两条既有断言拦了我的写法：docstring 里提"toolmgr"字样会被
   "扫描期不得引用 toolmgr"当成引用（改说法）、测试数据里的 `C:\` 会被
   "不许写死盘符路径"拦（改成运行时拼接）。**SMOKE PASS**。

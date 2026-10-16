@@ -722,6 +722,22 @@ ctf-scanner/
     一次打上 38 个互不相关的标签（"全中"比全不中更糟）。
     **长尾误报的清洗落点就是那张黑名单**（续199：按 `tools/calibrate_fingerprints.py` 的负样本
     逐条回捞，13 → 3；剩下 3 个是"语料自己就是它"的服务器标签，列白名单后判据收紧到**零**）。
+- **POC/指纹的自动更新（`--update-pocs`，续206）**：`scanner/pocmgr.py` + `tools/update_pocs.py`，
+  用法 `python tools/update_pocs.py --source nuclei [--ref vX]`。六条硬规矩照工具更新器：只 https、
+  只官方主机（github / raw.githubusercontent / codeload）、落盘前过 SHA256（manifest 记着 ⇒ 重复跑
+  是 no-op）、成员名防路径穿越（**先拒再剥** —— 先剥会让 `/etc/passwd` 变合法相对路径，那正是
+  zip slip 想要的）、逐文件校验不过就拒收、只写本项目目录。
+  `config/nuclei-templates/` **本来就在** `pocs.engine.POC_DIRS` 里 ⇒ 投放即被发现，**不用回写
+  任何配置**。上游目录名会变（2026-10-16 实测 `http/fingerprints/` 已不存在，指纹类并到了
+  `http/technologies/`）⇒ 取到 0 个时错误信息必须说清"目录名变了？仓库结构改了？"。
+  **不做成定时任务**：拉外部仓库＝往机器里写第三方文件，必须人下命令（§2）。
+- **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
+  拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
+  两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /
+  author / reference 一律不看；② 只认形态（`;cmd` / `|cmd` / `&&cmd` / `$(` / 反引号）——
+  `/whoami` 这种**端点路径**不是执行，第一版扫整份文本把它全误杀了。
+  参数路由那边的 `rce` 类别同理：**只识别不测**（`paramroute.KIND_CHECKS` 里没有 rce），
+  要确认它得让目标真的执行命令，那越过 §1。
     改它之后**必须重跑转换脚本重新生成表**，只改黑名单不重生成等于没改（门禁 [199] 两半都钉：
     黑名单里有这个词 + 生成的表里确实没有它）。
     ③ 任何"把第三方 PoC/指纹/字典搬进检测路径"的活儿，落地件必须是**人工复核过的表**

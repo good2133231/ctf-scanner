@@ -27161,14 +27161,31 @@ expression: r0()
             pass
 
     # ③ 校验：RCE 形态拒收 + 变异性证伪（把 ipconfig 去掉就过 ⇒ 承重的正是那条判据）
+    # 形状照 **afrog 里真混着的那条**（HFS RCE）：GET 触发目标执行 ipconfig。
+    # 判据只看**会发出去的内容**（path/raw），所以命令要写在 path 里才构得成这条用例 ——
+    # 写在 matchers.words 里那是"判据"，不是"发出去的东西"（续206 实测：第一版扫整份文本，
+    # 把 Jenkins 的 /whoami 端点路径和 description 里的反引号全误杀了）。
     _rce206 = ("id: hfs-rce\ninfo:\n  id: hfs-rce\n  name: HFS RCE\n"
-               "matchers:\n  - type: word\n    words: [\"ipconfig\"]\n")
+               "http:\n  - path:\n      - \"{{BaseURL}}/?search=%00{.exec|cmd=ipconfig}\"\n"
+               "    matchers:\n      - type: word\n        words: [ok]\n")
     _ok206, _why206 = _pm206.validate_yaml(_rce206, "hfs-rce.yaml")
     assert not _ok206 and "ipconfig" in _why206, (_ok206, _why206)
     assert "非破坏性" in _why206, "拒收理由要说清是**哪条红线**，不只是说不行"
     _same206 = _rce206.replace("ipconfig", "server")
     assert _pm206.validate_yaml(_same206, "ok.yaml")[0] is True, \
         "变异：去掉命令执行特征后应当放行（否则这条判据把正常 POC 也挡了）"
+    # 命令替换形态（`id` 太短不能进命令表，但 `$(` 本身就是形态判据）
+    _sub206 = ("id: b\ninfo: {id: b, name: B}\nhttp:\n  - raw:\n"
+               "      - \"GET /?x=$(id) HTTP/1.1\"\n    matchers: [{type: word, words: [x]}]\n")
+    assert _pm206.validate_yaml(_sub206)[0] is False, "命令替换形态必须拒收"
+    # 反向：端点路径里的 /whoami **不是**执行（第一版就是误杀在这上面）
+    _who206 = ("id: jenkins\ninfo: {id: jenkins, name: Jenkins}\nhttp:\n  - path:\n"
+               "      - \"{{BaseURL}}/whoami\"\n    matchers: [{type: word, words: [ok]}]\n")
+    assert _pm206.validate_yaml(_who206)[0] is True, "`/whoami` 是端点名不是执行，不该被拒"
+    # description 里的反引号同样不算（判据只看会发出去的内容）
+    _tick206 = ("id: a\ninfo: {id: a, name: A, description: \"use `id` here\"}\n"
+                "http:\n  - path: [\"{{BaseURL}}\"]\n    matchers: [{type: word, words: [x]}]\n")
+    assert _pm206.validate_yaml(_tick206)[0] is True, "描述里的反引号不该被拒"
     # 缺 id / 缺 name / 无 matchers 都要拒
     for _bad206 in ("id: a\ninfo: {name: A}\nmatchers: []",
                     "id: a\ninfo: {id: a}\nmatchers: []",
@@ -27177,21 +27194,21 @@ expression: r0()
         assert _pm206.validate_yaml(_bad206)[0] is False, _bad206[:40]
 
     # ④ 分类：fingerprints 走指纹表、其余走 POC、不认识的跳过
-    assert _pm206.classify("http/fingerprints/grafana.yaml")[0] == "fingerprint"
+    assert _pm206.classify("http/technologies/grafana.yaml")[0] == "fingerprint"
     assert _pm206.classify("http/vulnerabilities/generic/x.yaml")[0] == "poc"
     assert _pm206.classify("README.md")[0] is None
 
     # ⑤ 落盘 + manifest（幂等：第二次跑 written=0）
     _d206 = _TMPDIR / "pocmgr206"
-    _files206 = {"http/fingerprints/grafana.yaml": _same206.replace("server", "grafana-app"),
+    _files206 = {"http/technologies/grafana.yaml": _same206.replace("server", "grafana-app"),
                  "http/vulnerabilities/generic/sqli.yaml":
                      "id: sqli\ninfo: {id: sqli, name: SQLi}\nmatchers: [{type: word, words: [sql]}]",
                  "README.md": "hello",
-                 "http/fingerprints/rce.yaml": _rce206}
+                 "http/technologies/rce.yaml": _rce206}
     _okf206, _badf206, _skip206 = _pm206.plan_files(_files206)
     assert set(_okf206) == {"fingerprint", "poc"}, _okf206.keys()
     assert len(_okf206["fingerprint"]) == 1 and len(_okf206["poc"]) == 1, _okf206
-    assert "http/fingerprints/rce.yaml" in _badf206, "RCE 那条必须被拒"
+    assert "http/technologies/rce.yaml" in _badf206, "RCE 那条必须被拒"
     assert "README.md" in _skip206, "不认识的路径该跳过而不是报错"
     _s206 = _pm206.apply_files(str(_d206), _okf206)
     assert _s206["written"] == 2, _s206

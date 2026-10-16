@@ -1,0 +1,286 @@
+t	body	(?s)^(?=.*a\-blog\ cms)(?=.*acms\-js)	
+t	body	(?s)^(?=.*<title>ADempiere\ Application\ Home</title>)(?=.*adempiere\.jnlp)(?=.*ADempiere\ WebStart)	
+t	body	(?s)^(?=.*/adm_program/)(?=.*/adm_themes/)	
+t	headers	(?i)(?:X\-Powered\-By:\ AdonisJs)	
+t	body	content="(.*)AeroCMS(.*)	
+t	body	(?s)^(?=.*<title>AFFiNE</title>)(?=.*name="env:isSelfHosted"\ content="true")(?=.*npm\-blocksuite)	
+t	body	(?s)^(?=.*<title\ data\-next\-head="">Agenta:\ The\ LLMOps\ platform\.</title>)(?=.*src="/__env\.js")	
+c	headers	(?:TCP_HIT|TCP_MISS).*deploy\.akamaitechnologies\.com	
+a	body	(?s)^(?=.*<title>Management\ of\ Ant\ Media\ Server</title>)(?=.*assets/css/ant\-media\.css)	
+t	body	(?s)^(?=.*Validate)(?=.*Welcome)(?=.*Axis)(?=.*deployed)(?=.*installation)	
+t	body	(?s)^(?=.*<title>HiveServer2</title>)(?=.*hiveserver2)	
+t	body	(?s)^(?=.*<title>AppFlowy</title>)(?=.*APPFLOWY_GOTRUE_BASE_URL)	
+t	body	(?i)<title>\s*Apprise API\s*</title>	
+t	body	(?s)^(?=.*/s/favicon\.ico)(?=.*Apprise\ Logo)	
+a	body	(?s)^(?=.*<title>Aptabase</title>)(?=.*content="Open\ Source,\ Privacy\-First\ and\ Simple\ Analytics\ for\ Mobile,\ Desktop\ and\ Web\ apps\.")(?=.*<meta\ name="twitter:site"\ content="@aptabase")	
+t	body	(?i)<title>[^<]*ArchivesSpace[^<]*</title>	
+a	body	(?s)^(?=.*<title>autobrr</title>)(?=.*<meta\ name="description"\ content="autobrr")	
+a	body	(?s)^(?=.*<title>Log\ In\ \-\ AzuraCast</title>)(?=.*href="https://azuracast\.com/")	
+t	body	(?s)^(?=.*content="Backstage\ is\ an\ open\ platform\ for\ building\ developer\ portals")(?=.*module\-backstage\.)	
+t	body	<meta\s+name="generator"\s+content="Bagisto"	
+t	body	(?i)<title>Bahmni(?: Home)?</title>	
+t	body	(?s)^(?=.*<title>Bareos\ \-\ Login</title>)(?=.*img/bareos\.png)	
+b	body	(?i)(?:Powered\ by\ BigCommerce|X\-BigCommerce\-Request\-Id|bigcommerce\.com)	
+b	body	(?i)(?:Powered\ by\ Bitrix|bitrix\.com|bitrixjs|X\-Powered\-By\-Bitrix)	
+b	body	(?i)(?:Powered\ by\ Blogger|blogspot\.com|X\-Powered\-By\-Blogger|blogger\.com)	
+b	headers	Server: Boa/	
+t	body	(?i)(/|")bulma(\.min)?\.css	
+t	body	(?s)^(?=.*<title>BunkerWeb</title>)(?=.*https://www\.bunkerweb\.io/\?utm_campaign=self\&utm_source=bwdefault)	
+t	body	(?s)^(?=.*<title>Cabot\ by\ Arachnys</title>)(?=.*/static/arachnys/img/icon_48x48\.)	
+c	body	(?s)^(?=.*<title>Calaos\ Web\ App</title>)(?=.*ng\-app=calaosApp)	
+t	body	(?i)(?:Powered\ by\ CATALOGcreator|content="CATALOGcreator)	
+c	body	(?s)^(?=.*<meta\ property="og:site_name"\ content="Chartbrew")(?=.*Chartbrew\ allows\ you\ to\ connect\ all\ your\ databases\ and\ APIs)(?=.*<title>Chartbrew\ \-\ Visuali)	
+t	body	(?s)^(?=.*<title>chibisafe</title>)(?=.*content="chibisafe,file\ uploader,vault,react,free,open\ source)	
+c	body	(?s)^(?=.*<title>Cinny</title>)(?=.*A\ Matrix\ client\ where\ you\ can\ enjoy\ the\ conversation)(?=.*name="application\-name"\ content="Cinny")	
+t	body	(?s)^(?=.*Welcome\ to\ Citrix\ Hypervisor)(?=.*XenCenter)	
+t	body	(?i)<meta name="generator" content="ckan [^"<]+"\s*/?>	
+c	body	(?s)^(?=.*<title>CloudBeaver\ Community</title>)(?=.*id="app\-loading\-screen")(?=.*var\ _ROOT_URI_\ =\ )	
+t	body	(?s)^(?=.*<title>Cloudreve</title>)(?=.*/static/img/favicon\.ico)	
+t	body	(?i)content=["']CMSimple(?:["'\s>])	
+t	body	(?s)^(?=.*<title>Coder</title>)(?=.*meta\ property="build\-info")	
+t	body	(?s)^(?=.*Coming\ Soon)(?=.*Future\ home\ of\ something\ quite\ cool\.)	
+c	body	(?i)(?:Powered\ by\ Concrete5|X\-Powered\-By\-Concrete5)	
+t	body	(?s)^(?=.*<title>Coroot</title>)(?=.*window\.coroot\ =\ \{)	
+c	body	(?s)^(?=.*"couchdb":)(?=.*"vendor":)	
+c	body	(?s)^(?=.*<title>Countly</title>)(?=.*window\.countlyGlobal\ =\ window\.countlyGlobal\ \|\|\ \{\})(?=.*stylesheets/pre\-login/main\.css)	
+t	headers	(?i)(?:Server:\ Cowboy)	
+c	body	(?s)^(?=.*<title>Crafty\ Controller</title>)(?=.*/static/assets/crafty\.webmanifest)(?=.*/static/assets/css/crafty\.css)	
+t	body	(?s)^(?=.*<title>Crater\ \-\ Self\ Hosted\ Invoicing\ Platform</title>)(?=.*/build/assets/main\.)	
+t	body	(?s)^(?=.*data\-localization="main_title">CryptPad:)(?=.*data\-bootload="/customize/template\.js")(?=.*data\-main="/common/boot\.js)	
+c	body	(?s)^(?=.*<title>Cube\.js\ Playground</title>)(?=.*id="playground\-root")(?=.*webpackJsonp@cubejs\-client/playground)	
+t	body	content=".*CVSweb.*"	
+t	body	(?s)^(?=.*_dash\-config)(?=.*DashRenderer)	
+t	body	(?s)^(?=.*DD_RUM\.init)(?=.*DD_RUM\.onReady)	
+t	body	(?s)^(?=.*<title>Datasette:)(?=.*href="https://datasette\.io/"\ title="Datasette\ v)	
+t	body	(?i)<title>[^<]*Dataverse[^<]*</title>	
+t	body	(?s)^(?=.*Welcome\ to\ CakePHP)(?=.*CakePHP\ Issues)	
+t	body	(?s)^(?=.*Welcome\ to\ Symfony!)(?=.*Documentation)	
+t	body	(?s)^(?=.*Welcome\ to\ tengine)(?=.*Thank\ you\ for\ using\ tengine)	
+t	headers	(?i)(?:X\-Powered\-By:\ Directus)	
+d	body	(?i)(?:Powered\ by\ Django|django\-project|Django\ Software\ Foundation)	
+t	body	(?s)^(?=.*<title>Docspell</title>)(?=.*/assets/docspell\-webapp/)	
+t	body	(?s)^(?=.*name="documize/config/environment")(?=.*<meta\ property="edition"\ content="Community")(?=.*<title>Documize</title>)	
+t	body	<meta name="generator" content="Docusaurus v[0-9]+\.[0-9]+	
+t	body	(?s)^(?=.*name="docusaurus_locale")(?=.*name="docusaurus_tag")	
+t	body	(?s)^(?=.*data\-theme="docuseal")(?=.*og:site_name"\ content="DocuSeal")	
+t	body	(?s)^(?=.*Initial\ release)(?=.*Drupal\ 1\.0\.0)	
+d	body	(?s)^(?=.*<title>Duplicati\ Login</title>)(?=.*login/login\.js)(?=.*<h2>Duplicati</h2>)	
+t	body	(?s)^(?=.*ruxitagentjs_)(?=.*data\-dtconfig=)	
+t	body	(?i)<title>[^<]+\| Easy!Appointments</title>	
+t	body	(?s)^(?=.*id="book\-appointment\-wizard")(?=.*/assets/css/layouts/booking_layout)	
+e	body	(?s)^(?=.*<title>Eclipse\ Kapua\&trade;\ Console</title>)(?=.*src="js/kapuaconsole/console\.js")	
+m	body	Magento\/([0-9.]+) 	
+e	body	(?s)^(?=.*<title>evcc</title>)(?=.*content="evcc\ \-\ Sonne\ tanken)(?=.*name="application\-name"\ content="evcc")	
+t	body	(?s)^(?=.*var\ eContext\ =)(?=.*Evershop\.\ All\ Rights\ Reserved\.)	
+t	body	<(?:script|link)[^>]+/assets/frontStore/	
+t	body	(?s)^(?=.*property="og:site_name"\ content="Excalidraw")(?=.*window\.EXCALIDRAW_ASSET_PATH\ =)	
+t	body	(?s)^(?=.*<title>Express</title>)(?=.*Welcome\ to\ Express)	
+t	body	(?is)^(?=.*<title>Faveo\ HELPDESK</title>)(?=.*http\-equiv="refresh")(?=.*URL=public)	
+t	body	(?i)(?:<title>Fiberhome</title>)	
+t	body	(?i)(?:/faviconFH\.ico|ais_fibre)	
+f	body	(?s)^(?=.*<title>FileFlows</title>)(?=.*<meta\ name="app\-version")(?=.*flow\-editor/fileflows\-editor\.js)	
+t	body	(?s)^(?=.*<title>FileRise</title>)(?=.*assets/logo\.svg)(?=.*js/main\.js)	
+t	body	(?i)<title>[^<]*FileRun[^<]*</title>	
+t	body	(?i)<title>[^<]*Firezone[^<]*</title>	
+f	body	<title>Flagsmith - Feature Flags, Feature Toggles and Remote Config[^<]*</title>	
+f	body	(?s)^(?=.*src="/config/project\-overrides")(?=.*href="/static/images/favicon\.ico")	
+f	body	(?s)^(?=.*<title>Flipt</title>)(?=.*Javascript\ is\ required\ for\ the\ Flipt\ UI)	
+f	headers	(?is)^(?=.*content\-security\-policy:)(?=.*frame\-ancestors\ 'none')	
+f	body	(?s)^(?=.*<title>fluidd</title>)(?=.*content="The\ Klipper\ web\ interface\ for\ managing\ your\ 3d\ printer")	
+f	body	(?s)^(?=.*<title>Focalboard</title>)(?=.*class="focalboard\-body")(?=.*id="focalboard\-app")	
+f	body	(?s)^(?=.*<title>Formbricks</title>)(?=.*<meta\ name="description"\ content="Open\-Source\ Survey\ Suite")	
+t	body	(?i)<title>FrontAccounting[^<]+Login</title>	
+t	body	(?s)^(?=.*logo_frontaccounting\.png)(?=.*company_login_name)	
+t	body	(?s)^(?=.*_fs_org)(?=.*_fs_host)(?=.*_fs_script)(?=.*_fs_namespace)	
+f	body	<meta\s+name=["']?generator["']?\s+content=["']?Funkwhale["']?	
+t	headers	Server: gabia	
+t	body	(?s)^(?=.*/static/dist/base\.css)(?=.*Javascript\ Required\ for\ Galaxy)	
+t	body	(?is)<title>\s*Galaxy(?:\s*\|[^<]*)?\s*</title>	
+g	body	(?s)^(?=.*<title>GameAP</title>)(?=.*gameap_ui_settings)(?=.*/api/config/public)	
+t	body	(?s)^(?=.*<title>Health\ Dashboard\ \|\ Gatus</title>)(?=.*content="Gatus\ is\ an\ advanced\ automated\ status\ page)	
+t	body	(?s)^(?=.*gitbook\.page\.hasChanged)(?=.*<meta\ name="generator"\ content="GitBook)	
+g	body	(?s)^(?=.*<title>Gladys\ Assistant</title>)(?=.*/assets/splash/apple\-splash\-2048\-2732\.jpg)	
+t	body	(?s)^(?=.*<title>GlitchTip</title>)(?=.*<base\ href="/")	
+g	body	(?s)^(?=.*<title>GoatCounter</title>)(?=.*href="https://github\.com/arp242/goatcounter")(?=.*action="/user/requestlogin")	
+t	headers	Goliath+	
+g	body	(?s)^(?=.*<title>gonic</title>)(?=.*/admin/static/gonic\.png)	
+g	body	(?s)^(?=.*"cast_build_revision":)(?=.*"ssdp_udn":)	
+t	body	(?s)^(?=.*Congratulations\ \|\ Cloud\ Run)(?=.*alt="A\ group\ celebrating)	
+t	headers	(?i)(?:X\-Goog\-Iap\-Generated\-Response)	
+g	body	(?s)^(?=.*served\ by\ an\ instance\ of\ GoToSocial)(?=.*/assets/dist/about\.css)	
+g	body	<title[^>]*>GrowthBook</title>	
+t	body	(?s)^(?=.*Hetzner\ Cloud)(?=.*Hetzner\ Logo)	
+t	body	(?s)^(?=.*<title>highlight\.io</title>)(?=.*highlight\.io\ \|\ The\ Open\ Source,\ Fullstack\ Monitoring\ Platform)(?=.*@highlight\-run/rrweb)	
+h	body	(?is)<title>\s*HomeGenie(?:\s*-\s*YoT)?\s*</title>	
+t	body	(?s)^(?=.*<title>Login\ \-\ Horilla\ Dashboard</title>)(?=.*/static/build/css/style\.min\.css)(?=.*@horilla\.com)	
+t	body	<meta name="generator" content="HTMLy(?: v[0-9.]+)?"\s*/?>	
+t	body	href=["'][^"']*/feed/rss["']	
+h	body	(?s)^(?=.*/static/js/humhub\-app\.js)(?=.*humhub\.modules\.ui\.view\.setState\()(?=.*humhub\.config\.set\()	
+t	body	(?s)^(?=.*<title>iDempiere\ Application\ Home</title>)(?=.*Welcome\ to\ iDempiere)(?=.*idempiereMonitor)	
+t	body	(?s)^(?=.*<title>Invoice\ Ninja</title>)(?=.*/bundle\.)(?=.*/manifest\.json)	
+t	body	(?s)^(?=.*InvoicePlane)(?=.*sessions/login)	
+i	body	(?s)^(?=.*<title>IoTSharp</title>)(?=.*content="IoTSharp\ is\ an\ open\-source\ IoT\ platform)	
+i	body	(?s)^(?=.*<title>iparapheur</title>)(?=.*Libriciel\ SCOP)	
+t	body	(?is)^(?=.*<title>IPPlan\ \-\ Main\ Menu</title>)(?=.*/menus/libjs/layersmenu)	
+t	body	(?s)^(?=.*<title>IT\ Tools\ \-\ Handy\ online\ tools\ for\ developers</title>)(?=.*<link\ rel="canonical"\ href="https://it\-tools\.tech")	
+t	body	(?i)(?:Ivanti\ Endpoint\ Manager|LANDesk\ Management|Ivanti\(R\)\ Cloud\ Services|Ivanti\ Cloud\ Services\ Appliance|LANDesk\(R\)\ Cloud\ Services\ Appliance|LANDesk\(R\)\ Management)	
+t	headers	(?i)(?:LANDesk|Ivanti\ EPM)	
+j	body	(?s)^(?=.*Janus\ WebRTC\ Server)(?=.*https://github\.com/meetecho/janus\-gateway)	
+t	body	(?i)<title>Jirafeau[^<]*</title>	
+t	body	(?s)^(?=.*<version>)(?=.*<creationDate>)(?=.*</metafile>)	
+t	body	(?is)<title>\s*Sign in\s*·\s*Keila\s*</title>	
+t	body	(?s)^(?=.*content="Open\ Source\ Newsletters")(?=.*placeholder="you@keila\.io")	
+t	body	(?i)<title>Kener - (?:Open source )?status page system</title>	
+t	body	(?s)^(?=.*id="kener\-app\-favicon")(?=.*og:site_name"\ content="Kener")	
+t	body	(?s)^(?=.*<title>Kimai)(?=.*kimai_profile)	
+t	body	(?s)^(?=.*<title>Komodo</title>)(?=.*name="apple\-mobile\-web\-app\-title"\ content="Komodo")	
+t	body	(?s)^(?=.*<title>KubeSphere</title>)(?=.*href="/assets/favicon\.ico")(?=.*class="pageLoading")	
+t	body	(?s)^(?=.*<title>Lago)(?=.*<script\ src="env\-config\.js"></script>)	
+t	body	(?s)^(?=.*LANDESK\(R\))(?=.*Cloud\ Services\ Appliance)	
+t	body	(?s)^(?=.*LANDesk\(R\))(?=.*Management\ Agent)	
+l	body	(?s)^(?=.*window\.isoData\ =\ \{)(?=.*"site_res":)(?=.*"local_site":)	
+t	body	(?s)^(?=.*<title>LibreBooking\ \-\ Log\ In</title>)(?=.*librebooking\.css)(?=.*img/librebooking\.png)	
+l	body	<title>[^<]*LibreTime</title>	
+l	body	(?s)^(?=.*/css/radio\-page/radio\-page\.css)(?=.*/embed/weekly\-program)	
+l	body	(?s)^(?=.*<title>Lightdash</title>)(?=.*content="Lightdash\ \-\ Explore\ and\ visualize\ your\ team's\ analytics\ and\ metrics\.")	
+l	headers	(?i)(?:Lightdash\-Version:)	
+t	body	(?i)(?:content="LimeSurvey|alt="LimeSurvey\ Survey\ Software|data\-limesurvey\-lang=|alt="Powered\ by\ LimeSurvey)	
+l	body	(?i)Live.Helper.Chat	
+l	body	(?i)Copyright.\(c\).2019.Remigijus.Kiminas	
+t	body	(?i)<title>[^<]*Lizmap[^<]*</title>	
+t	body	(?s)^(?=.*<title>LLDAP\ Administration</title>)(?=.*LLDAP\ requires\ JavaScript)	
+l	body	(?s)^(?=.*<title>LoxBerry</title>)(?=.*URL=/admin/system/index\.cgi)	
+t	body	(?s)^(?=.*<title>Lufi</title>)(?=.*/css/lufi\.css)	
+t	body	(?s)^(?=.*content="Self\ hosted\ email\ newsletter\ app")(?=.*window\.mailtrainConfig)(?=.*/client/mailtrain\.css)	
+t	body	(?i)<title>Mailu-Admin\s*\|[^<]+</title>	
+t	body	(?s)^(?=.*data\-static="/static/")(?=.*href="/static/vendor\.css")	
+m	body	(?s)^(?=.*<title>Mainflux</title>)(?=.*src="assets/env\.js")	
+m	body	(?s)^(?=.*<title>Mainsail</title>)(?=.*content="Mainsail\ is\ the\ popular\ web\ interface\ for\ Klipper\.")	
+t	body	/static/icons/favicon\.[a-f0-9]+\.ico	
+t	body	(?s)^(?=.*content="Mayan\ EDMS"\ name="title")(?=.*mayan\-edms\-logo)	
+m	body	(?s)^(?=.*var\ MediaCMS\ =)(?=.*MediaCMS\.api\ =)	
+t	body	(?s)^(?=.*<title>Medusa\ Next\.js\ Starter\ Template</title>)(?=.*A\ performant\ frontend\ ecommerce\ starter\ template\ with\ Next\.js)	
+t	body	(?s)^(?=.*__meteor_runtime_config__)(?=.*__meteor\-css__)	
+m	body	(?s)^(?=.*<title>MicroBin</title>)(?=.*id="pasta\-form")(?=.*/static/aes\.js)	
+t	headers	(?i)(?:Server:\ Mikrotik\ HttpProxy)	
+t	headers	(?i)Server:\s*Milvus/[0-9]+(?:\.[0-9]+)*	
+t	body	(?s)^(?=.*<title>MintHCM</title>)(?=.*\./assets/index\.)(?=.*<div\ id="app"></div>)	
+m	body	(?s)^(?=.*Thank\ you\ for\ using\ Misskey!)(?=.*github\.com/misskey\-dev/misskey)(?=.*name="application\-name"\ content="Misskey")	
+t	body	(?s)^(?=.*cdn\.mxpnl\.com)(?=.*window\.mixpanel)(?=.*mixpanel\-2\-latest\.min\.js)	
+m	body	(?s)^(?=.*Mobilizon\ doesn't\ work\ properly\ without\ JavaScript\ enabled)(?=.*/feed/instance/atom)(?=.*/feed/instance/ics)	
+t	headers	MochiWeb	
+t	body	(?s)^(?=.*<title>Monica)(?=.*img/monica\.svg)	
+t	body	(?s)^(?=.*content="Monitoror\ —\ Unified\ monitoring\ wallboard")(?=.*Monitoror\ doesn't\ work\ properly\ without\ JavaScript\ enabled)	
+t	body	(?i)(?:stylesheet_MOVEit|moveit\.transfer|MOVEitPopUp|MOVEit\ Automation)	
+t	body	(?s)^(?=.*<title>NetBird\ Dashboard</title>)(?=.*content="NetBird\ combines\ a\ configuration\-free\ peer\-to\-peer\ private\ network)	
+t	body	(?s)^(?=.*var\ nc_lastLogin)(?=.*var\ nc_pageLoad)	
+t	body	(?s)^(?=.*<title>NIPAP</title>)(?=.*nipap\.css)	
+n	headers	(?mi)^Server:\s*nymea/[0-9]	
+t	body	(?i)<title>[^<]*Omeka S[^<]*</title>	
+t	body	(?i).*<meta.name="generator".content="Open.Journal.Systems.*>	
+t	body	(?s)^(?=.*OAI\-PMH)(?=.*www\.openarchives\.org)(?=.*</OAI\-PMH)	
+t	body	(?s)^(?=.*<title>OpenBAS\ \-\ Open\ Breach\ \&\ Attack\ Simulation\ Platform</title>)(?=.*OpenBAS\ is\ an\ open\ source\ platform\ allowing\ organizations\ to\ plan,\ schedule\ and\ conduct\ adversary\ simulation\ campaigns)	
+t	body	(?i)<title>OpenELIS</title>	
+t	body	(?i)<title>[^<]*OpenMRS[^<]*</title>	
+t	body	(?s)^(?=.*<title>OpenSupports</title>)(?=.*opensupports_version)	
+o	body	(?s)^(?=.*<title>openWB</title>)(?=.*name="apple\-mobile\-web\-app\-title"\ content="openWB")	
+t	body	(?s)^(?=.*<title>Log\ in\ \|\ OpenWISP\ Admin</title>)(?=.*/static/admin/css/openwisp)	
+t	body	(?s)^(?=.*<title>Comet\ Opik</title>)(?=.*<div\ class="size\-full"\ id="root"></div>)	
+t	headers	(?i)(?:x\-atg\-version|atg_session_id)	
+t	body	(?s)^(?=.*/static/css/otterwiki\.css)(?=.*An\ Otter\ Wiki\ Logo)	
+o	body	(?s)^(?=.*<title>OvenMediaEngine\ Enterprise</title>)(?=.*content="OvenStudio")	
+o	body	(?s)^(?=.*<title>Owncast</title>)(?=.*href="/api/auth/provider/indieauth")(?=.*/js/web_modules/videojs/video\-js\.min\.css)	
+t	body	(?s)^(?=.*<title>Dashboard\ \-\ Pangolin</title>)(?=.*NEXT_REDIRECT;replace;/auth/login;307;)	
+t	body	(?i)<title>Parseable(?: Log Storage| \| (?:Fast )?Observability[^<]*)</title>	
+t	body	(?s)^(?=.*<title>Part\-DB</title>)(?=.*content="Part\-DB")(?=.*https://github\.com/Part\-DB/Part\-DB\-server)	
+t	body	<title>PbootCMS(.*)</title>	
+p	body	(?s)^(?=.*property="og:platform"\ content="PeerTube")(?=.*window\.PeerTubeServerConfig\ =\ )	
+p	body	(?s)^(?=.*Pelican\ Panel)(?=.*https://pelican\.dev/docs/\#core\-team)	
+p	body	(?s)^(?=.*<title>Peppermint</title>)(?=.*content="Ticket\ management\ system\ selfhosted\ open\ source")	
+t	body	(?s)^(?=.*<meta\ name="description"\ content="Perses">)(?=.*<title>Perses</title>)(?=.*perses\-dark\-theme\-enabled)	
+t	body	(?s)^(?=.*<title>pgweb</title>)(?=.*src="static/js/ace\-pgsql\.js")(?=.*id="table_connection")	
+t	body	(?i)(?:content="phpList|phpList\ Ltd|phpList</a>)	
+t	body	(?s)^(?=.*Pi\-hole)(?=.*Web\ Interface)	
+t	body	(?s)^(?=.*<title>PicoShare</title>)(?=.*github\.com/mtlynch/picoshare)	
+p	body	(?s)^(?=.*<title>pimatic</title>)(?=.*src="api/decl\-api\-client\.js")	
+t	body	(?s)^(?=.*/pingaccess/assets/css/main\.css)(?=.*/pingaccess/assets/images/favicon\.ico)	
+t	body	<title>[^<]*Pingvin Share[^<]*</title>	
+p	body	(?s)^(?=.*window\.pfl\ =\ \{)(?=.*/css/landing\.css\?id=)	
+p	headers	(?mi)^set-cookie:\s*pxfs=	
+t	body	(?s)^(?=.*<title>Plik</title>)(?=.*ng\-app="plik")(?=.*github\.com/root\-gg/plik)	
+t	body	href=["'][^"']*/themes/[^/]+/css/plucss(?:\.min)?\.css\?v=[0-9.]+	
+t	body	href=["'][^"']*/feed\.php\?rss/commentaires["']	
+t	body	(?s)^(?=.*<title>Login\ \-\ Postal</title>)(?=.*Welcome\ to\ Postal)(?=.*class="loginForm"\ action="/login")	
+t	body	(?s)^(?=.*<title>Log\ In\ \-\ PowerDNS\-Admin</title>)(?=.*/static/generated/login\.)	
+t	body	(?s)^(?=.*/static/pretixbase/img/)(?=.*ticketing\ powered\ by\ pretix)	
+t	headers	(?i)(?:x\-proget\-version:)	
+t	body	(?s)^(?=.*<title>promptfoo</title>)(?=.*content="LLM\ testing\ and\ evaluation")	
+t	body	(?s)^(?=.*\ \-\ Proxmox\ Backup\ Server</title>)(?=.*/js/proxmox\-backup\-gui\.js)	
+p	body	(?s)^(?=.*<title>PrusaLink</title>)(?=.*href="/\#dashboard")(?=.*href="\#files")	
+t	body	(?s)^(?=.*<title>PsiTransfer</title>)(?=.*github\.com/psi\-4ward/psitransfer)	
+t	body	href=["'][^"']*/assets/css/style\.css\?v=[a-f0-9]+	
+p	body	(?s)^(?=.*<title>PufferPanel</title>)(?=.*This\ site\ needs\ JavaScript\ to\ work)	
+p	body	(?s)^(?=.*<title>Pydio\ Cells</title>)(?=.*pydio\.boot\.min\.js)(?=.*"ENDPOINT_S3_GATEWAY":"/io")	
+t	body	(?s)^(?=.*<html\ ng\-app="quay")(?=.*/static/img/quay_favicon\.png)(?=.*window\.__endpoints)	
+r	body	(?s)^(?=.*<title>Login\ \-\ Rapid\ SCADA</title>)(?=.*href="https://rapidscada\.org")(?=.*/js/scada\-common\.js)	
+r	body	(?s)^(?=.*<title>Restreamer</title>)(?=.*datarhei\ Restreamer\ logo)(?=.*Did\ you\ mean\ to\ go\ to\ the\ admin\ panel\?)	
+t	body	(?s)^(?=.*<title>rport</title>)(?=.*This\ browser\ is\ not\ supported)	
+t	headers	(?i)(?:X\-Powered\-By:\ Sails)	
+t	headers	(?i)set-cookie:\s*sails\.sid=	
+t	body	(?s)^(?=.*<title>Saleor\ e\-commerce</title>)(?=.*Your\ Saleor\ instance\ is\ ready\ to\ work)(?=.*GraphQL\ Playground)	
+t	body	(?s)^(?=.*<title>Sign\ in\ to\ the\ Saleor\ Dashboard</title>)(?=.*window\.__SALEOR_CONFIG__)(?=.*id="dashboard\-app")	
+s	body	(?s)^(?=.*/waroot/style\.css)(?=.*/waroot/system_arrow\.gif)	
+s	body	(?s)^(?=.*<title>Debug\ Config</title>)(?=.*MultiScreen\ Service)	
+s	headers	(?i)(?:sap\-server:|SAP\ NetWeaver\ Application\ Server)	
+s	body	(?s)^(?=.*Scada\-LTS)(?=.*content="ScadaLTS\ Software")(?=.*resources/fuscabr/fuscabr\.js)	
+t	body	(?s)^(?=.*<title>scrutiny</title>)(?=.*assets/images/logo/scrutiny\-logo\-white\.svg)	
+s	body	(?s)^(?=.*<title>Scrypted\ Management\ Console</title>)(?=.*href="img/icons/favicon\-196\.png")	
+t	body	"name":\s*"seldon-pipelinegateway"	
+t	body	(?i)<title>[^<]*SENAITE[^<]*</title>	
+t	body	(?s)^(?=.*<title>Sentrifugo)(?=.*/public/media/)	
+t	body	(?s)^(?=.*<title>Sharry</title>)(?=.*assets/sharry\-webapp/)	
+t	body	(?s)^(?=.*<title>ShellHub</title>)(?=.*/env\.js)	
+s	body	(?i)(?:<title>Shibboleth\ IdP</title>)	
+s	body	(?s)^(?=.*href="https://github\.com/milesmcc/shynet")(?=.*action="/accounts/login/")(?=.*/static/dashboard/images/icon\.)	
+t	body	(?s)^(?=.*<title>Splash)(?=.*splash\.loadExample)	
+t	body	(?s)^(?=.*<title>Stalwart\ Management</title>)(?=.*TrunkApplicationStarted)(?=.*_bg\.wasm)	
+t	body	(?s)^(?=.*<title>StarRocks</title>)(?=.*src='/starrocks\.js')(?=.*href='/starrocks\.css')	
+t	headers	X-Powered-By:(.*)Statamic	
+t	body	(?i)<title>[^<]*Statping[^<]* - Service Monitoring</title>	
+t	body	(?s)^(?=.*<meta\ name="title"\ content=")(?=.*Statping)(?=.*\ \-\ Service\ Monitoring">)	
+s	body	(?s)^(?=.*<title>Sunshine</title>)(?=.*images/sunshine\.ico)	
+t	body	(?s)^(?=.*<title>swarmpit</title>)(?=.*content="Lightweight\ Docker\ Swarm\ management\ UI")	
+s	body	(?s)^(?=.*Swetrix\ Community\ Edition</title>)(?=.*<meta\ name="twitter:site"\ content="@swetrix")(?=.*href="/favicon\-ce\.ico")	
+s	headers	(?i)(?:x\-powered\-by:\ Mountain\ Dew)	
+t	body	(?i)(?:Sylius)	
+t	body	(?:id="sylius-cart-button"|class="[^"]*sylius-product-name|data-route="sylius_shop_|/build/sylius-shop-|<title>Sylius \|)	
+t	body	(?s)^(?=.*<title>Taiga</title>)(?=.*window\.TAIGA_VERSION\ =)	
+t	body	(?s)^(?=.*<title>Technitium\ DNS\ Server</title>)(?=.*js/main\.js)	
+t	body	(?s)^(?=.*<title>ThingsPanel</title>)(?=.*clarity',\ 'script',\ 'no47mbcicr')	
+t	headers	(?i)(?:server:\ tinyproxy)	
+p	body	(?s)^(?=.*Welcome\ to\ Docmosis\ Tornado)(?=.*Please\ log\ in:)	
+t	body	(?s)^(?=.*<title>Login\ to\ Trigger\.dev</title>)(?=.*href="https://trigger\.dev")	
+t	body	(?s)^(?=.*<title>Tryton</title>)(?=.*dist/tryton\-sao\.min\.js)(?=.*images/tryton\-icon\.png)	
+t	body	(?s)^(?=.*<title>Typesense\-Dashboard</title>)(?=.*content="A\ Typesense\ Dashboard\ to\ manage\ and\ browse\ collections\.")	
+t	body	(?i)<title>Uptrace(?:|: Open Source APM)</title>	
+t	body	(?i)(?:Powered\ By\ vBulletin|content="vBulletin|id="vbulletin_css)	
+v	body	(?s)^(?=.*<title>Volumio\ \-\ The\ Music\ Player</title>)(?=.*ng\-app="volumio")	
+t	headers	(?s)^(?=.*vouch\-failcount=)(?=.*X\-Vouch\-Token=)	
+t	body	(?s)^(?=.*<title>WatchYourLAN</title>)(?=.*/fs/public/)	
+t	body	(?i)<title>webERP Login screen</title>	
+t	body	(?s)^(?=.*name="CompanyNameField")(?=.*name="UserNameEntryField")	
+t	body	(?s)^(?=.*WebVirtCloud)(?=.*/static/css/signin\.css)	
+t	body	(?s)^(?=.*<title>Wekan</title>)(?=.*/packages/wekan\-)	
+w	body	(?s)^(?=.*<title>Clidey\ WhoDB</title>)(?=.*content="WhoDB\ is\ the\ next\-generation\ database\ explorer")	
+w	body	(?i)(?:Powered\ by\ Wix|X\-Wix\-Request\-Id|Wix\ Static\ Site|wixsite\.com)	
+t	headers	(?mi)^set-cookie:\s*wfu=	
+t	body	(?i)href=["']/?css/write(?:3)?\.css	
+t	body	(?s)^(?=.*"object":"list")(?=.*"data":)	
+y	body	(?s)^(?=.*<title>Yaade</title>)(?=.*rel="modulepreload"\ href="\./assets/vendor\.)	
+y	headers	(?i)(?:set\-cookie:\ vertx\-web\.session=)	
+t	body	(?s)^(?=.*<title>YugabyteDB</title>)(?=.*href='/yb\.css')(?=.*YugabyteDB\ Version)	
+t	headers	(?s)^(?=.*Server:\ ScalityS3)(?=.*X\-Scal\-Request\-Id:)	
+t	body	(?s)^(?=.*"code":"InvalidParameterValue")(?=.*"message":"An\ invalid\ or\ out\-of\-range\ value\ was\ supplied\ for\ the\ input\ parameter\.")	
+z	body	href="\./assets/favicon-[a-f0-9]+\.ico"	
+t	body	\./assets/index[.-][A-Za-z0-9_-]+\.js	
+t	body	(?i)foundation(?:\.min)?\.(?:css|js)	

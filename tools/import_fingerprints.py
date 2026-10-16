@@ -174,7 +174,17 @@ def from_fingerprinthub(src, verified_only=True):
         if verified_only and not ((info.get("metadata") or {}).get("verified") is True):
             stat["unverified"] += 1
             continue
-        tag = _norm_tag(info.get("name") or data.get("id"), f.stem)
+        # 标签优先取 `info.tags` 里的**产品名**（nuclei 的 technologies 模板形如
+        # `tags: aem,tech,discovery`），取不到才退 `info.name`（"AEM Finder"这种带 Finder 的
+        # 名字转出来是 aem-finder，与我们的指纹标签体系对不上）。泛词（tech/discovery/detect/
+        # fingerprint/cms/fingerprinting）跳过 —— 它们不是产品名。
+        _tag_pool = [str(t) for t in (info.get("tags") or []) if str(t).strip()]
+        _tag_pool = [t for t in _tag_pool
+                     if t.strip().lower() not in ("tech", "technology", "discovery", "detect",
+                                                  "fingerprint", "fingerprinting", "cms",
+                                                  "panel", "panel-detect", "wp", "jsp")]
+        tag = _norm_tag(_tag_pool[0] if _tag_pool
+                        else (info.get("name") or data.get("id")), f.stem)
         if not tag:
             continue
         for probe in (data.get("http") or []):

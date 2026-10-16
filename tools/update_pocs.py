@@ -85,8 +85,9 @@ def _to_fingerprints(dest):
     rules, stat = mod.from_fingerprinthub(fp_dir)
     out = os.path.join(ROOT, "config", "dicts", "fingerprints_nuclei.txt")
     if rules:
-        lines = [f"{t}\t{w}\t{p}\t{','.join(str(x) for x in (c or []))}"
-                 for (t, w, p, *rest), c in _zip_codes(rules)]
+        # 表的格式是 `标签<TAB>位置<TAB>判据<TAB>状态码`；社区库这两张**不带状态码门控**
+        # （它们是"认不认得出这个组件"），所以第四列留空 —— 与 fingerprints_hub/ehole 一致。
+        lines = [f"{t}\t{w}\t{p}\t" for (t, w, p) in rules]
         with open(out, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
         print(f"[update-pocs] 指纹表已写 {out}（{len(lines)} 条）")
@@ -94,12 +95,6 @@ def _to_fingerprints(dest):
               "EXTRA_FILES（只此一处，加载逻辑仍然只有一份）")
     else:
         print(f"[update-pocs] 指纹类模板一条都没转出来（{stat}）")
-
-
-def _zip_codes(rules):
-    """`from_fingerprinthub` 返回 `[(tag, where, pattern)]`；我们的表格式多一列状态码（可空）。"""
-    for r in rules:
-        yield tuple(list(r) + [[]])
 
 
 if __name__ == "__main__":

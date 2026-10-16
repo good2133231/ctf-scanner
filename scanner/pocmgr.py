@@ -40,7 +40,11 @@ SOURCES = {
     "nuclei": {
         "repo": "projectdiscovery/nuclei-templates",
         "ref": "",                                  # 空 = 默认分支（main）
-        "paths": ["http/fingerprints"],              # 指纹类模板（转指纹表）
+        # 续206 实测：`http/fingerprints/` **已经不存在了**（2026-10-16 拉的时候是 0 个），
+        # nuclei 把指纹类模板并到了 `http/technologies/`。所以这里写的是**现在**的目录名，
+        # 并且 `fetch_repo` 取到 0 个时会把"目录名变了？仓库结构改了？"说在错误里 ——
+        # 上游会改结构，这是常态，别让它在"一个模板都没取到"这种看不出原因的消息里死掉。
+        "paths": ["http/technologies"],              # 指纹类模板（转指纹表）
     },
     "nuclei-vuln": {
         "repo": "projectdiscovery/nuclei-templates",
@@ -54,12 +58,45 @@ SOURCES = {
 POC_DEST = "config/nuclei-templates"
 MANIFEST = "manifest.json"
 
-# 命令执行形态（拒收判据）。宁可漏一批 POC，也不让框架发出"会让目标执行命令"的请求。
-_RCE_MARKS = (
-    "ipconfig", "ifconfig", "whoami", "/bin/sh", "/bin/bash", "cmd.exe", "cmd /c",
-    "net user", "netstat -", ";ls ", "|ls ", "&&ls", "ls -la", "$(", "`",
-    "system(", "exec(", "popen(", "shell_exec", "passthru(",
-)
+# 命令执行形态（拒收判据）。**宁可漏一批 POC，也不让框架发出"会让目标执行命令"的请求**。
+#
+# ⚠ 这条判据第一版扫的是**整份 yaml 文本**，结果误杀一片（续206 实测）：Jenkins 的指纹模板
+# path 里就有 `/whoami`（那是端点名，不是执行命令）、一堆模板的 description 里有反引号。
+# 所以判据收窄成两条，缺一不可：
+#   ① 只看**会真正发到目标上**的内容（`_request_texts`：path / raw / payloads / body …），
+#      描述、注释、作者名一律不看；
+#   ② 只认**命令拼接形态**（`;cmd` / `|cmd` / `&&cmd` / `$(cmd)` / `` `cmd` ``）——
+#      `/whoami` 这种端点路径前面是 `/` 不是分隔符，不算执行。
+_CMD_NAMES = r"(?:ipconfig|ifconfig|whoami|/bin/sh|/bin/bash|cmd\.exe|net\s+user|ls\s+-la)"
+# 两种形态任一命中即拒：
+#   ① 命令拼接：`;cmd` / `|cmd` / `&&cmd`（HFS 那条就是 `|cmd=ipconfig`）；
+#   ② 命令替换/反引号：`$(` / `` ` `` —— **在请求内容里**几乎只可能是 shell 注入
+#      （`id` 这种名字太短太通用，不能进命令表，但 `$(id)` 照样该拦，所以单独判形态）。
+_CMD_SPLICE = re.compile(r"(?:[;|]\s*(?:cmd[=\s]+)?\s*" + _CMD_NAMES + r")|\$\(|`", re.I)
+
+# 会发到目标上的字段（其余是给人看的：info.description / author / reference …）
+_REQUEST_KEYS = ("path", "raw", "payload", "payloads", "body", "data", "args", "headers")
+
+
+def _request_texts(data):
+    """把模板里**会真正发出去**的字符串收集起来（只看这些，见 `_CMD_SPLICE` 的说明）。"""
+    out = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if str(k) in _REQUEST_KEYS:
+                    if isinstance(v, str):
+                        out.append(v)
+                    elif isinstance(v, (list, tuple)):
+                        out.extend(str(x) for x in v)
+                walk(v)
+        elif isinstance(o, (list, tuple)):
+            for x in o:
+                walk(x)
+
+    walk(data)
+    return "\n".join(out)
 
 
 def _check_url(url):
@@ -90,6 +127,24 @@ def _safe_member(name):
     return n
 
 
+# nuclei 的协议块：判据（matchers / extractors）可能躺在任何一个里面
+_PROTOCOL_BLOCKS = ("http", "network", "dns", "file", "code", "ssl", "websocket", "headless",
+                   "smb", "ldap", "ftp", "kerberos", "mysql", "postgresql", "redis", "mongodb",
+                   "mqtt", "amqp", "pop3", "smtp", "imap", "snmp", "telnet", "ssh", "rdp",
+                   "vhost", "javascript")
+
+
+def _has_matchers(data):
+    """顶层或任一协议块里有 matchers / extractors 吗（见 `validate_yaml` 判据③）。"""
+    if data.get("matchers") or data.get("extractors"):
+        return True
+    for key in _PROTOCOL_BLOCKS:
+        for blk in (data.get(key) or []):
+            if isinstance(blk, dict) and (blk.get("matchers") or blk.get("extractors")):
+                return True
+    return False
+
+
 def validate_yaml(text, name=""):
     """单条模板能不能被我们收下：`(ok, 拒绝理由)`。
 
@@ -107,17 +162,21 @@ def validate_yaml(text, name=""):
     if not isinstance(data, dict):
         return False, "顶层不是 mapping"
     info = data.get("info") or {}
-    if not str(info.get("id") or "").strip():
-        return False, "缺 info.id"
+    # `id` 在 nuclei 里是**顶层**字段（`info` 里只有 name/author/severity/tags）——
+    # 续206 实测：只查 `info.id` 会把 `http/technologies/` 下几千条全判成"缺 info.id"拒收。
+    if not str(data.get("id") or info.get("id") or "").strip():
+        return False, "缺 id（顶层 id 或 info.id）"
     if not str(info.get("name") or "").strip():
         return False, "缺 info.name"
-    if not (data.get("matchers") or data.get("extractors")):
-        return False, "既无 matchers 也无 extractors（跑它纯白发请求）"
-    low = str(text).lower()
-    for mark in _RCE_MARKS:
-        if mark in low:
-            return False, (f"命令执行形态（命中 {mark!r}）⇒ 越过 AGENTS §1 非破坏性红线，"
-                           "拒收。要测这类漏洞请人工在授权环境里做，不走自动扫描。")
+    # nuclei 的判据在**协议块**里（`http[0].matchers`），顶层 `matchers` 常常没有 ——
+    # 续206 实测：只查顶层会把 `http/technologies/` 下几千条全判成"无 matchers"拒收。
+    if not _has_matchers(data):
+        return False, "顶层与各协议块里都没有 matchers/extractors（跑它纯白发请求）"
+    m = _CMD_SPLICE.search(_request_texts(data))
+    if m:
+        return False, (f"命令执行形态（请求内容里命中 {m.group(0).strip()!r}）⇒ 越过 "
+                       "AGENTS §1 非破坏性红线，拒收。要测这类漏洞请人工在授权环境里做，"
+                       "不走自动扫描。")
     return True, ""
 
 
@@ -128,7 +187,7 @@ def classify(relpath):
     其余落 **POC 目录**。不认识的位置（仓库根下的 README、`.github/` 等）直接跳过。
     """
     n = _safe_member(relpath)
-    if n.startswith("http/fingerprints/") and n.endswith((".yaml", ".yml")):
+    if n.startswith("http/technologies/") and n.endswith((".yaml", ".yml")):
         return "fingerprint", ""
     if n.startswith("http/") and n.endswith((".yaml", ".yml")):
         return "poc", ""
