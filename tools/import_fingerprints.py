@@ -89,6 +89,17 @@ GENERIC_WORDS = {
     "index of", "index of /", "autoindex", "directory listing", "目录列表", "列目录",
     "parent directory", "welcome to nginx", "apache2 ubuntu default page",
     "apache2 debian default page", "it works!", "iis7", "iis8.5", "iis windows server",
+    # 续199（按 `tools/calibrate_fingerprints.py` 的负样本逐条回捞，清单与实测对应）：
+    # 下面每一个都对应**真实观察到**的误报，不是凭感觉列的。
+    #  · `login.php` —— 一个词污染 7 条规则（igenus / phpoa / 化视私云 / 电信网关 /
+    #    百卓 / 碧海云盒 / 齐治堡垒机），国产后台的登录页几乎都叫这个名字；
+    #  · `theme`（douphp）、`_next`（kan：任何 Next.js 站点都命中，等于没判据）、
+    #    `language`（igenus）、`360.cn`（电信网关：外链不是自家特征）；
+    #  · 宝塔那组"没有找到站点 / 可能原因 / CDN产品 / Web服务 / 检查端口是否正确"是
+    #    **通用错误页文案**（谁家都能长这样），它真正的特征是 `bt.cn` 与"宝塔Linux面板"，
+    #    去掉这些通用串后识别能力一点没少。
+    "login.php", "/login", "theme", "_next", "language", "360.cn",
+    "没有找到站点", "可能原因", "cdn产品", "web服务", "检查端口是否正确",
 }
 
 

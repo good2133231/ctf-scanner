@@ -3,7 +3,7 @@
 #
 # 格式（TAB 分隔，后三段可省）：标签 <TAB> 位置 <TAB> 正则 <TAB> 状态码 <TAB> 来源 <TAB> 说明
 #   位置：headers | body | cookies；状态码留空＝不分状态。
-# 共 1133 条规则 / 1032 个标签；导入时的丢弃统计见脚本输出。
+# 共 1132 条规则 / 1032 个标签；导入时的丢弃统计见脚本输出。
 
 apache-storm	body	(?i)(?:<title>storm\ ui</title>)		fingerprinthub	
 apache-wicket	body	(?i)(?:/org\.apache\.wicket\.|xmlns:wicket=)		fingerprinthub	
@@ -520,7 +520,6 @@ jupyterlab	body	(?mi)<title[^>]*>jupyterlab.*?</title>		fingerprinthub
 jupyterlab	body	(?i)(?:<title>jupyterlab</title>)		fingerprinthub	
 notebook	body	(?mi)<title[^>]*>jupyter notebook.*?</title>		fingerprinthub	
 notebook	body	(?i)(?:<div\ id="ipython\-main\-app"\ class="container">|<div\ id="ipython_notebook"\ class="nav\ navbar\-brand">|<title>jupyter\ notebook</title>)		fingerprinthub	
-kan	body	(?i)(?:_next)		fingerprinthub	
 kan	body	(?mi)<title[^>]*>kan.*?</title>		fingerprinthub	
 kavita	body	(?mi)<title[^>]*>kavita.*?</title>		fingerprinthub	
 kkfileview	body	(?i)(?:kkfileview)		fingerprinthub	

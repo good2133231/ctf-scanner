@@ -120,6 +120,7 @@
   <div class="tab" data-tab="csegs">C 段<span class="cnt">{{ csegs_pager.total }}</span></div>
   <div class="tab" data-tab="certs">SSL 证书<span class="cnt">{{ cert_total }}</span></div>
   <div class="tab" data-tab="dirs">目录<span class="cnt">{{ dir_total }}</span></div>
+  <div class="tab" data-tab="urls">链接<span class="cnt">{{ url_total }}</span></div>
   <div class="tab" data-tab="flags">敏感信息<span class="cnt">{{ flag_total }}</span></div>
   <div class="tab" data-tab="target">目标与配置</div>
   <div class="tab" data-tab="log">运行日志</div>
@@ -739,6 +740,47 @@
       </tbody>
     </table>
     {% set pager = dirs_pager %}{% include "_pager.html" %}
+  </section>
+</div>
+
+{# 续199：链接页签（crawl 阶段产物）—— 「目录」是猜出来的路径，这里是页面里本来写着的入口。 #}
+<div class="tabpane" id="pane-urls">
+  <section class="panel">
+    <p class="muted small note">来自 <b>crawl</b> 阶段（默认关闭，在「策略配置 → 站点爬虫」打开）。
+      「目录」页签是字典<b>猜</b>出来的路径，这里是<b>站点自己给出</b>的入口。
+      <b>带参</b>（URL 里有 <span class="mono">?</span>）的那部分会被喂给漏洞检测；
+      <span class="mono">form</span> 行的方法只记录，<b>POST 表单一律不提交</b>。</p>
+    <form class="filters" method="get" action="{{ url_for('task_detail', task_id=task.id) }}#urls">
+      <label class="muted">关键词
+        <input name="urq" value="{{ urls_q }}" placeholder="URL / 查询串 / 类型 / 来源站点"></label>
+      <label class="muted">每页
+        <select name="ursize" onchange="this.form.submit()">
+          {% for s in page_sizes %}
+          <option value="{{ s }}" {{ 'selected' if urls_pager.size == s else '' }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="ghost" type="submit">查询</button>
+      {% if urls_q %}<a class="btn-mini ghost" href="{{ url_for('task_detail', task_id=task.id) }}#urls">清空</a>{% endif %}
+    </form>
+    <table id="tbl-task-urls">
+      <thead><tr><th>URL</th><th>类型</th><th>方法</th><th>层</th><th>来源站点</th></tr></thead>
+      <tbody>
+      {% for u in urls %}
+        <tr><td class="mono"><a class="url-link" href="{{ u.url }}" target="_blank"
+              rel="noopener noreferrer">{{ u.url }}</a>
+            {%- if u.query %}<span class="tech-tag" title="带参数：已喂给漏洞检测">带参</span>{% endif %}</td>
+          <td>{{ u.kind or '-' }}</td>
+          <td class="muted small">{{ u.method or 'get' }}</td>
+          <td class="muted small">{{ u.depth if u.depth is not none else 0 }}</td>
+          <td class="muted small mono">{{ u.site_url or '-' }}</td></tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">暂无数据（crawl 阶段默认关闭，
+          在「策略配置 → 站点爬虫」打开后新任务才会产出）。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% set pager = urls_pager %}{% include "_pager.html" %}
   </section>
 </div>
 

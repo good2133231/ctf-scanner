@@ -3,7 +3,7 @@
 #
 # 格式（TAB 分隔，后三段可省）：标签 <TAB> 位置 <TAB> 正则 <TAB> 状态码 <TAB> 来源 <TAB> 说明
 #   位置：headers | body | cookies；状态码留空＝不分状态。
-# 共 954 条规则 / 805 个标签；导入时的丢弃统计见脚本输出。
+# 共 953 条规则 / 805 个标签；导入时的丢弃统计见脚本输出。
 
 致远oa	body	(?i)(?:/seeyon/USER\-DATA/IMAGES/LOGIN/login\.gif)		ehole	
 致远oa	body	(?i)(?:/seeyon/common/)		ehole	
@@ -121,10 +121,9 @@ coremail	body	(?i)(?:coremail/common)		ehole
 jboss	body	(?i)(?:jboss\.css)		ehole	
 gitlab	body	(?i)(?:assets/gitlab_logo)		ehole	
 宝塔-bt.cn	body	(?i)(?:入口校验失败)		ehole	
-宝塔-bt.cn	body	(?i)(?:没有找到站点|可能原因|CDN产品|Web服务|检查端口是否正确)		ehole	
 宝塔-bt.cn	body	(?i)(?:<title>恭喜，站点创建成功|面板系统后台|系统自动生成)		ehole	
-douphp	body	(?i)(?:Powered\ by\ DouPHP|DouPHP|theme)		ehole	
-宝塔-bt.cn	body	(?i)(?:扫码登录更安全|bt\.cn|/login)		ehole	
+douphp	body	(?i)(?:Powered\ by\ DouPHP|DouPHP)		ehole	
+宝塔-bt.cn	body	(?i)(?:扫码登录更安全|bt\.cn)		ehole	
 宝塔-bt.cn	body	(?i)(?:站点创建成功|bt\.cn)		ehole	
 宝塔-bt.cn	body	(?i)(?:站点创建成功)		ehole	
 宝塔-bt.cn	body	(?i)(?:\-386189083)		ehole	
@@ -729,7 +728,7 @@ xampp-默认页面	body	(?i)(?:Welcome\ to\ XAMPP)		ehole
 网神下一代极速防火墙	body	(?i)(?:网神信息技术)		ehole	
 中腾oa	body	(?i)(?:systemAction|zt_webframe)		ehole	
 新软科技-极通ewebs	body	(?i)(?:N\-soft|ClientDownload\.xgi)		ehole	
-igenus邮件系统	body	(?i)(?:iGENUS|login\.php|language)		ehole	
+igenus邮件系统	body	(?i)(?:iGENUS)		ehole	
 图创图书馆集群管理系统	body	(?i)(?:interlib/common/|self\.location\.href)		ehole	
 华天动力oa	body	(?i)(?:OAapp/WebObjects/OAapp\.woa|window\.location)		ehole	
 jeecms	body	(?i)(?:/r/cms/www|shortcut\ icon)		ehole	
@@ -758,7 +757,7 @@ outlook	body	(?i)(?:owa/auth|Outlook|logonDiv)		ehole
 万户网络ezeip	body	(?i)(?:Powered\ By\ wanhu\ \-\ www\.wanhu\.com\.cn|ezEip)		ehole	
 海康威视联网网关	body	(?i)(?:独立运行\(无平台\)|login_form)		ehole	
 阿姆瑞特智能dns	body	(?i)(?:main\.php\?mod=member|DNS_)		ehole	
-phpoa-协同办公软件	body	(?i)(?:login\.php|提示信息|showMsg)		ehole	
+phpoa-协同办公软件	body	(?i)(?:提示信息|showMsg)		ehole	
 明致-oa	body	(?i)(?:1591287747)		ehole	
 jboss-eap	body	(?i)(?:title>EAP|eap\.css|JBoss)		ehole	
 若依	body	(?i)(?:ruoyi)		ehole	
@@ -816,7 +815,7 @@ vmware-horizon	body	(?i)(?:VMware Horizon)		ehole
 迪普vpn	body	(?i)(?:dptech_ssl|sslvpn|loginAPI\.js)		ehole	
 openshift-web-console	body	(?i)(?:OpenShift\ Web\ Console)		ehole	
 好视通	body	(?i)(?:fsmeeting|loginCheck\.do|app\.result)		ehole	
-碧海云盒	body	(?i)(?:碧海云盒|mt_login|login\.php)		ehole	
+碧海云盒	body	(?i)(?:碧海云盒|mt_login)		ehole	
 phpwind	body	(?i)(?:content="phpwind)		ehole	
 cmseasy	body	(?i)(?:content="CmsEasy)		ehole	
 empirecms	body	(?i)(?:Powered\ by\ EmpireCMS)		ehole	
@@ -830,12 +829,12 @@ kesioncms	body	(?i)(?:ks_inc/common\.js|KesionCMS)		ehole
 cmstop	body	(?i)(?:css/cmstop\-common\.css|js/cmstop\-common\.js)		ehole	
 华域reporter	body	(?i)(?:reporter|action\.php)		ehole	
 智邦国际-企业管理软件	body	(?i)(?:index2\.asp|update/exec\.asp|images/full\.gif)		ehole	
-电信网关配置管理系统	body	(?i)(?:<TITLE>系统登录|login\.php|img/login_bg3\.png|360\.cn)		ehole	
+电信网关配置管理系统	body	(?i)(?:<TITLE>系统登录|img/login_bg3\.png)		ehole	
 方配在线考试系统-fpexam	body	(?i)(?:exam/logo/favicon\.ico|fangpage)		ehole	
 spring-eureka	body	(?i)(?:<title>Eureka</title>|eureka)		ehole	
 迪普-sslvpn	body	(?i)(?:DPSSLVPN|SSL\ VPN\ Service)		ehole	
 grafana	body	(?i)(?:<title>Grafana</title>)		ehole	
-百卓byzoro-安全网关	body	(?i)(?:北京百卓|PatrolFlow|login\.php)		ehole	
+百卓byzoro-安全网关	body	(?i)(?:北京百卓|PatrolFlow)		ehole	
 enesys	body	(?i)(?:dwr/interface/WebContextUtil\.js)		ehole	
 kvm_创梦云计算管理系统	body	(?i)(?:<title>KVM_创梦云计算管理系统</title>)		ehole	
 任我行-管家婆分销erp	body	(?i)(?:分销ERP|txt_DbName|DownloadDriver\.asp)		ehole	
@@ -859,7 +858,7 @@ h2-database-console	body	(?i)(?:\-525659379)		ehole
 天融信设备	body	(?i)(?:\-2019013898)		ehole	
 慧林icp-ip备案系统	body	(?i)(?:\-556918553)		ehole	
 飞鱼星路由器-行为管理	body	(?i)(?:content="0\.2;|/home/login\.html)		ehole	
-化视私云cdn直播加速服务器	body	(?i)(?:img/dl\.gif|华视美达|login\.php)		ehole	
+化视私云cdn直播加速服务器	body	(?i)(?:img/dl\.gif|华视美达)		ehole	
 冰峰网络-iceflow	body	(?i)(?:Web\ 配置中心|/images/splash\.jpg)		ehole	
 华夏-erp	body	(?i)(?:jshERP\-boot|platformConfig)		ehole	
 78-oa	body	(?i)(?:/resource/javascript/system/runtime\.min\.js)		ehole	
@@ -875,7 +874,7 @@ growatt-系统	body	(?i)(?:v3/js/odm/odm\.js)		ehole
 天融信应用交付系统	body	(?i)(?:TopApp\-AD)		ehole	
 慧林信息安全管理系统	body	(?i)(?:用户管理登录|images/zh\-CN/login_03\.gif)		ehole	
 华为云桌面	body	(?i)(?:Desktop@FusionAccess|/webui/)		ehole	
-齐治堡垒机	body	(?i)(?:fp_download|login\.php|logo\-icon\-ico72\.png)		ehole	
+齐治堡垒机	body	(?i)(?:fp_download|logo\-icon\-ico72\.png)		ehole	
 turbomail-邮件系统	body	(?i)(?:TurboMail|mailmain\?type=login)		ehole	
 安恒数据大脑api网关	body	(?i)(?:mssp\-fe|/static/imgs/logo\.png)		ehole	
 山石网科云数据库审计与防护系统	body	(?i)(?:\#!/dbSummary|/lib/colResizable/)		ehole	

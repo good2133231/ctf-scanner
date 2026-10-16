@@ -1866,6 +1866,21 @@ def create_app():
             _dr_page = _dr_pages
         dirs = dirs_all[(_dr_page - 1) * _dr_size:_dr_page * _dr_size]
         dirs_pager = _mk_pager("dr", "#dirs", _dr_page, _dr_size, dir_total, dirs_q)
+        # 续199：链接页签（crawl 阶段的产物）。与全局「链接资产」页同一张表，
+        # 这里只是按 task_id 收口 —— 排序、列、关键字口径都跟着那一页，不另立一套。
+        urls_all = [dict(r) for r in db.list_task_urls(task_id, only_params=False)]
+        _ur_page, _ur_size, urls_q = _tab_args("ur")
+        if urls_q:      # 与目录页签同款：按**表格实际显示的列**做整行匹配
+            _ur_cols = ("url", "site_url", "path", "query", "kind", "note")
+            _ur_needle = urls_q.lower()
+            urls_all = [r for r in urls_all
+                        if any(_ur_needle in str(r.get(c) or "").lower() for c in _ur_cols)]
+        url_total = len(urls_all)
+        _ur_pages = max(1, (url_total + _ur_size - 1) // _ur_size)
+        if _ur_page > _ur_pages:
+            _ur_page = _ur_pages
+        urls = urls_all[(_ur_page - 1) * _ur_size:_ur_page * _ur_size]
+        urls_pager = _mk_pager("ur", "#urls", _ur_page, _ur_size, url_total, urls_q)
         # 敏感信息候选（续148）：整表读是有意的 —— 条数由 `flags.max_per_task`（默认 200）封顶，
         # 且这张表**没有折叠/聚合语义**，分页只会把一个短清单切成几页，反而更难抄。
         flag_rows = [dict(r) for r in db.list_flags(task_id)]
@@ -2052,6 +2067,7 @@ def create_app():
             csegs_pager=csegs_pager, csegs_q=csegs_q,
             certs_pager=certs_pager, certs_q=certs_q, cert_total=certs_pager["total"],
             dirs_pager=dirs_pager, dirs_q=dirs_q, dir_total=dir_total,
+            urls=urls, urls_pager=urls_pager, urls_q=urls_q, url_total=url_total,
 
             page_sizes=PAGE_SIZES,
             vulns=vuln_rows, vuln_total=vuln_total, vuln_pager=vuln_pager,

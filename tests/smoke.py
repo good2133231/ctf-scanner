@@ -17392,9 +17392,15 @@ expression: r0()
     assert len(_hand_tags) >= 40, f"手写那张外置表标签数不对：{len(_hand_tags)}"
     assert not (_hits.keys() & _hand_tags), \
         f"手写外置判据被通用页命中了（这正是要拦的事）：{sorted(_hits.keys() & _hand_tags)}"
-    _comm_tail = (_hits.keys() & _ext_tags) - _hand_tags - set(_fp127.SIGNATURES)
-    assert len(_comm_tail) <= 20, \
-        f"社区库在通用语料上命中的长尾太多（{len(_comm_tail)} 个）：{sorted(_comm_tail)[:8]}"
+    # 续199：按负样本逐条回捞清洗后（`GENERIC_WORDS` 补了 login.php / theme / _next /
+    # 宝塔的通用错误页文案等），长尾 13 → 3，且剩下这 3 个是**语料自己就是它**：
+    # "Apache 默认页" ⇒ apache-http、"Tomcat 默认 404" ⇒ apache-tomcat/tomcat_jk_connector
+    # —— 那是正确识别不是误报，列进白名单后判据就可以收紧到**零**。
+    _NEG_SERVER127 = {"apache-http", "apache-tomcat", "tomcat_jk_connector"}
+    _comm_tail = ((_hits.keys() & _ext_tags) - _hand_tags
+                  - set(_fp127.SIGNATURES) - _NEG_SERVER127)
+    assert not _comm_tail, \
+        f"社区库在通用语料上仍有长尾误报（{len(_comm_tail)} 个）：{sorted(_comm_tail)[:8]}"
     assert _hits, "内置表一个都没命中 ⇒ 语料太干净了（jQuery/nginx 这类特征必须能认出来）"
     assert not (_hits.keys() - _ext_tags - set(_fp127.SIGNATURES)), \
         f"命中里出现了既不在外置也不在内置的标签：{sorted(_hits.keys() - set(_fp127.SIGNATURES))}"
@@ -26612,6 +26618,75 @@ expression: r0()
     print("[198] 续198 ok: 归一化(相对/去#/挡伪协议)｜提取 a+form(POST 只记录)｜同站判据(子域需放行)｜"
           "扩展名先于 content-type｜每站上限+深度+外链计数｜阶段默认关时零请求(变异:摘开关即红)｜"
           "带参链接喂 vulnscan(每站上限)｜落库 query/host 一次拆好｜vulnscan 接线钉点｜/urls 页+筛选+侧栏")
+    # ---- [199] 续199：① 长尾误报清洗 ② 任务详情「链接」页签 ③ 爬虫**真机**端到端 ----
+    # ① 清洗的落点是转换脚本里那张通用词黑名单：钉"黑名单必须有它"且"生成的表里确实没有它"，
+    #    两半都要 —— 只钉黑名单会放过"规则表没重新生成"，只钉规则表会在有人删黑名单时哑掉。
+    import importlib.util as _ilu199
+    _sp199 = _ilu199.spec_from_file_location("ifp199", str(ROOT / "tools" / "import_fingerprints.py"))
+    _if199 = _ilu199.module_from_spec(_sp199)
+    _sp199.loader.exec_module(_if199)
+    assert "login.php" in _if199.GENERIC_WORDS, "通用词黑名单丢了 login.php（它会一次污染 7 条规则）"
+    # ② 效果侧：EHole 那张是重灾区（它的规则全是 word 型，黑名单对它应当**完全**生效）
+    _eh199 = (ROOT / "config" / "dicts" / "fingerprints_ehole.txt").read_text(encoding="utf-8")
+    assert "login\\.php" not in _eh199, "EHole 表里还留着 login.php（黑名单没起作用？）"
+    # FingerprintHub 那张里唯一还带 login.php 的是 zzcms 的**具体路径**
+    # （`/inc/showuserlogin.php?style=h&t=math.random()`）—— 那是产品特征不是通用登录页，放行；
+    # 这里只拦"把 login.php 当**独立**判据"的那种（`(?:…|login\.php`）。
+    import re as _re199
+    _hub199 = (ROOT / "config" / "dicts" / "fingerprints_hub.txt").read_text(encoding="utf-8")
+    assert not _re199.search(r"[(|^]login\\.php\b", _hub199), \
+        "hub 表里出现了把 login.php 当独立判据的规则"
+
+    # ③ 真机：起一个**临时靶场**（端口交给系统分配，不与任何固定端口打架），
+    #    用**真实的** http_request 跑一遍 crawl —— [198] 全是打桩，这里要的是"真能爬到东西"。
+    import functools as _ft199
+    import threading as _th199
+    from http.server import SimpleHTTPRequestHandler as _SH199, ThreadingHTTPServer as _TS199
+
+    _d199 = _TMPDIR / "site199"
+    _d199.mkdir(parents=True, exist_ok=True)
+    (_d199 / "index.html").write_text(
+        '<html><body><a href="/p1.html">1</a><a href="/s?x=1">s</a>'
+        '<a href="mailto:a@b.test">m</a><a href="https://external.invalid/z">外</a>'
+        '<form action="/login" method="post"></form></body></html>', encoding="utf-8")
+    (_d199 / "p1.html").write_text('<html><body><a href="/deep?y=2">d</a></body></html>',
+                                   encoding="utf-8")
+
+    class _Q199(_SH199):
+        def log_message(self, *a):
+            pass
+
+    _srv199 = _TS199(("127.0.0.1", 0), _ft199.partial(_Q199, directory=str(_d199)))
+    _port199 = _srv199.server_address[1]
+    _th199.Thread(target=_srv199.serve_forever, daemon=True).start()
+    try:
+        _base199 = f"http://127.0.0.1:{_port199}/"
+        _tid199 = db.create_task("smoke-199", _base199, ["crawl"], {})
+        _st199b = {"crawl": {"enabled": True, "max_sites": 5, "max_links": 20,
+                             "max_pages": 6, "max_depth": 1, "same_site": True,
+                             "include_subdomains": False, "timeout": 5, "workers": 2,
+                             "feed_vulnscan": True, "max_feed": 5, "max_feed_total": 10}}
+        _c199 = _C198(_st199b, {"sites": [{"url": _base199}]}, task_id=_tid199)
+        _cs198.CrawlStage(_c199).run()            # ← 真发 HTTP
+        _u199 = [r["url"] for r in (_c199.results.get("urls") or [])]
+        assert _base199 + "s?x=1" in _u199, f"没爬到带参链接：{_u199}"
+        assert _base199 + "deep?y=2" in _u199, f"第二层（depth=1）没爬到：{_u199}"
+        assert not [u for u in _u199 if "external.invalid" in u], "外链没被挡住"
+        assert not [u for u in _u199 if "mailto" in u], "mailto 没被挡住"
+        _f199 = _c199.results.get("crawl_feed") or []
+        assert _f199 and all("?" in u for u in _f199), f"喂漏洞检测的必须是带参链接：{_f199}"
+        # 库里也要有（真入库，不是只在内存）
+        assert db.list_task_urls(_tid199, only_params=False), "真机跑完库里没有链接"
+        # ② 详情页「链接」页签
+        _h199 = c.get(f"/tasks/{_tid199}").get_data(as_text=True)
+        assert 'data-tab="urls"' in _h199, "任务详情页没有「链接」页签"
+        assert 'id="pane-urls"' in _h199, "页签按钮有了但内容块没有（点了是空的）"
+    finally:
+        _srv199.shutdown()
+
+    print("[199] 续199 ok: 长尾清洗(黑名单有 login.php + 规则表里确实没有)｜"
+          "真机爬虫(临时靶场·系统分配端口, 真发 HTTP): 带参/第二层/外链与 mailto 三向｜"
+          "带参喂漏洞检测｜真入库｜详情页「链接」页签(按钮+内容块)")
     print("SMOKE PASS")
 
 
