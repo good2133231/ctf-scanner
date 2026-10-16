@@ -4408,7 +4408,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [ ] 社区指纹库继续加源（Glass / TideFinger；`from_glass` 骨架已在，未接源）；
       FingerprintHub 未验证那 2163 条（`--all`）也没导
 - [ ] hostcollide 接线 / 备案反查（国内接口不通）/ VirusTotal（待 key）/ 四项目对比 T1–T12
-- [ ] `/opt/tools/ctf/verify-197` 验证区待删（rm 被安全机制拦，需主理人确认）
+- [x] ~~`/opt/tools/ctf/verify-197` 验证区待删~~ —— 续205 复核：目录**已不存在**（主理人删掉或此前删除生效），本条关闭
 
 ## 续199（2026-10-16，WorkBuddy · CodeBuddy）：指纹长尾清洗 + 爬虫真机端到端 + 详情页「链接」页签
 
