@@ -27068,6 +27068,74 @@ expression: r0()
     assert not _i204 and sum(len(v) for v in _r204.values()) > 2000, "外置表规模不对"
     print("[204] 续204 ok: LFI/IDOR 检查落地(已注册+路由映射+真机命中 high+未归类不跑)｜"
           "POC 也按参数类别挑｜路由下限放宽 info｜指纹第三源 fingers 已登记")
+    # ---- [205] 续205：ICP 备案反查（可插拔源 + 连通性预检）----
+    from scanner import icp as _icp205
+
+    # ① 出厂关 + 两处配置一致（加源不改代码：源全在 `icp.sources` 里）
+    assert _icp205.DEFAULT_SOURCES and "{{domain}}" not in _icp205.DEFAULT_SOURCES[0]["url"]
+    assert _cf201.DEFAULTS["icp"]["enabled"] is False, "备案反查必须出厂关（要烧配额）"
+    assert _cf201.load_settings()["icp"] == _cf201.DEFAULTS["icp"], "settings 与 DEFAULTS 漂了"
+    # ② 预检：连不上的源 ⇒ 整轮跳过**并给出原因**（不白跑）
+    _ok205, _bad205 = _icp205.preflight(
+        [{"name": "dead", "url": "http://127.0.0.1:1/icp?d={{domain}}", "key_header": ""}],
+        {"icp": {"probe_domain": "example.com", "preflight": True}})
+    assert _ok205 == [] and "dead" in _bad205, (_ok205, _bad205)
+    # 关掉预检时原样返回（不做无意义探测）
+    _ok205b, _bad205b = _icp205.preflight(
+        [{"name": "dead", "url": "http://127.0.0.1:1/icp?d={{domain}}"}],
+        {"icp": {"preflight": False}})
+    assert _ok205b and not _bad205b, (_ok205b, _bad205b)
+
+    # ③ **本地假源**：可达 ⇒ 查询解析出域名（认多种字段名/嵌套），且 key 只进请求头
+    import json as _json205
+    import threading as _th205
+    from http.server import BaseHTTPRequestHandler as _BH205, ThreadingHTTPServer as _TS205
+
+    class _FakeICP(_BH205):
+        seen_key = []
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            _FakeICP.seen_key.append(self.headers.get("APPCODE") or "")
+            # ⚠ 合成域名别用 `.test`：`_NOISE_DOMAIN` 会按"保留 TLD / 常见合成词"滤掉它
+            # （那是防把夹具域名当资产写进库，刻意的）。这里用 .invalid 绕开。
+            body = _json205.dumps({"params": [{"domain": "sib1.icp205.invalid"},
+                                              {"domain": "sib2.icp205.invalid"}],
+                                   "unitName": "某主体"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    _srv205 = _TS205(("127.0.0.1", 0), _FakeICP)
+    _th205.Thread(target=_srv205.serve_forever, daemon=True).start()
+    try:
+        _src205 = {"name": "fake", "key_header": "APPCODE",
+                   "url": f"http://127.0.0.1:{_srv205.server_address[1]}/icp?d={{{{domain}}}}"}
+        _okc, _badc = _icp205.preflight([_src205], {"icp": {"probe_domain": "example.com"}})
+        assert _okc and not _badc, (_okc, _badc)
+        _got205 = _icp205.query("icp205.test", {"icp": {"api_key": "K-1"}}, _src205)
+        assert set(_got205["domains"]) == {"sib1.icp205.invalid", "sib2.icp205.invalid"}, _got205
+        assert _got205["org"] == "某主体", _got205
+        assert "K-1" in _FakeICP.seen_key, "key 没按 key_header 带进请求头"
+        assert _FakeICP.seen_key and all(k in ("", "K-1") for k in _FakeICP.seen_key)
+    finally:
+        _srv205.shutdown()
+
+    # ④ run：关着 ⇒ 零动作 + 一句话说清（不静默）
+    _n205, _note205 = _icp205.run(_C198({"icp": {"enabled": False}}, {"sites": []}))
+    assert _n205 == 0 and "未启用" in _note205, (_n205, _note205)
+    # 没有可查域名时也说清，而不是假装查过
+    _n205b, _note205b = _icp205.run(_C198({"icp": {"enabled": True}}, {"sites": []}))
+    assert _n205b == 0 and "没有可查的域名" in _note205b, (_n205b, _note205b)
+    # ⑤ 接线：osint 阶段按 icp.enabled 调它（源码钉点）
+    _os205 = (ROOT / "scanner" / "stages" / "osint.py").read_text(encoding="utf-8")
+    assert 'do_icp' in _os205 and "_icp205.run(ctx" in _os205, "osint 没接备案反查"
+    print("[205] 续205 ok: 备案反查可插拔(源全在配置/出厂关)｜预检(不可达跳过+给原因/可关)｜"
+          "本地假源解析域名+主体｜key 只进请求头｜run 三态说清｜osint 接线")
     print("SMOKE PASS")
 
 

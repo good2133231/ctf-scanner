@@ -308,6 +308,22 @@
       但框架不会去发那个请求。</p>
 
     {# 续201：Host 碰撞（同 IP 绑不同 Host 头找隐藏站点）—— 只读 GET、默认关 #}
+    {# 续205：备案反查（同主体域名）。源全在配置里，加一个可达的源改 yaml 即可 #}
+    <label class="chk"><input type="checkbox" name="icp_enabled" value="1"
+      {{ 'checked' if s.icp.enabled }}> <b>备案反查（ICP）</b>（默认关闭；查同主体下的其它域名，
+      产出进「拓展域名」页）</label>
+    <p class="muted small note">当前状态：{% if s.icp.enabled %}<b>已开启</b> —— 每轮先对每个源探一次，
+      不通的整轮跳过并说明。{% else %}<b>关闭</b> —— 不发任何查询。{% endif %}
+      <b>源清单走配置</b>（<span class="mono">icp.sources</span>，见 settings.yaml 注释）：
+      加一个可达的源就是加一行，不改代码；要 key 的源按该行的
+      <span class="mono">key_header</span> 带上 <span class="mono">icp.api_key</span>
+      （值只进 <span class="mono">config/keys.enc.yaml</span>，不落明文）。
+      预置的工信部官方源在国内托管 ⇒ 海外出口通常不可达，换机器/加代理后即可用。</p>
+    <label class="chk"><input type="checkbox" name="icp_preflight" value="1"
+      {{ 'checked' if s.icp.preflight }}> 启用前先探活（不通的源整轮跳过）</label>
+    <label>最多查多少个域名 <input name="icp_max_domains" value="{{ s.icp.max_domains }}"></label>
+    <label>预检用的探活域名 <input name="icp_probe_domain" value="{{ s.icp.probe_domain }}"></label>
+
     <label class="chk"><input type="checkbox" name="hostcollide_enabled" value="1"
       {{ 'checked' if s.hostcollide.enabled }}> <b>Host 碰撞</b>（默认关闭；同 IP 绑不同
       Host 头找藏在背后的站点）</label>

@@ -4294,6 +4294,24 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] 任务列表页摆出队列并发现状（同时运行几个、去哪改）；拓展域名页 bulkbar 只留「送去探测」
 - [x] [195a] 断言（根行走链 / 主域名命名 / hash 形状 / 两页按钮集合 / 302 片段）
 
+## 续205（2026-10-16，WorkBuddy · CodeBuddy）：备案反查可插拔源 + 连通性预检
+
+- [x] **搜索核实**：真实备案数据只有一个源头（工信部 hlwicpfwc.miit.gov.cn）；开源实现
+      （ICP-Checker / ICP_Query）都打它；付费型有阿里云市场 APPCODE 接口、腾讯云离线库接口；
+      国内域名本机全不可达 ⇒ "换免费接口"无解，做成可插拔
+- [x] **`scanner/icp.py`**：`icp.sources` 配置项（加源不改代码，`{{domain}}` 占位、
+      `key_header` 带 key、key 只进 keys.enc.yaml）+ preflight（不通整轮跳过并说清）
+      + 同主体域名反查（`osint:icp` 前缀）+ 出厂关 + osint 阶段接线 + 策略页一段
+- [x] [205] 断言组（本地假源验预检/查询/key 只进请求头）；SMOKE PASS
+
+**下一轮（续206）——只放未做的：**
+- [ ] **`--update-pocs`**（主理人点单第一条，仍未做）：仿 `--update-tools`，只 https + 官方主机 +
+      落盘前过摘要 + 逐行回写注册表；nuclei 整仓 ~9000 模板不能整份拉，要按 tag/sparse checkout
+- [ ] **备案源待主理人给一个可达的**：预置的工信部源在国内（海外出口不通）；
+      候选＝阿里云市场 APPCODE 型（付费 key）、或自建海外中转。给了就改 `icp.sources` 一行
+- [ ] 参数路由的 RCE 类仍只识别不测（红线）
+- [ ] 指纹库继续加源（nuclei `http/fingerprints/` 是下一个最合适的，与 --update-pocs 同一件事）
+
 ## 续204（2026-10-16，WorkBuddy · CodeBuddy）：LFI/IDOR 检查落地 + POC 也按参数类别挑 + 指纹第三源
 
 - [x] **`a01-lfi-traversal`**（high）：只对带文件类参数的 URL 跑，判据是文件内容特征回显；只读、≤6 请求

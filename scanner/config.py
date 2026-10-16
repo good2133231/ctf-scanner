@@ -347,6 +347,23 @@ DEFAULTS = {
         # 朴素贝叶斯补一个服务名（模型 `data/ml/service_model.json`）。没模型不动。
         "ml_service": False,
     },
+    "icp": {
+        # 备案反查（续205）。**默认关**，且源全部走配置 —— 加一个可达的源就是往
+        # `sources` 里加一行，不改代码（{{domain}} 会被替换成要查的域名；
+        # `key_header` 非空时把 api_key 按那个头名带上，值只进 keys.enc.yaml）。
+        # 为什么默认关、为什么预置的是国内域名：见 scanner/icp.py 顶部说明。
+        "enabled": False,
+        "preflight": True,          # 开跑前每个源先探一次，不通的整轮跳过并说清
+        "max_domains": 50,          # 最多查多少个域名（按次计费/限流，别全量打）
+        "probe_domain": "example.com",
+        "api_key": "",              # 只进 keys.enc.yaml，不落明文
+        "sources": [
+            {"name": "miit",
+             "url": "https://hlwicpfwc.miit.gov.cn/icpproject_query/api/"
+                    "icpAbbreviateInfo/queryByCondition",
+             "key_header": "token"},
+        ],
+    },
     "hostcollide": {
         # Host 碰撞（续183 模块、续201 接线）：同 IP 绑不同 Host 头找隐藏站点。
         # 续203 改**默认开**（主理人点单"host 碰撞默认也要开"）：它只读 GET、

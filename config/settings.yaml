@@ -225,6 +225,21 @@ portscan:
   engine: auto
   # 续151 无依赖 ML：banner 字符 n-gram 朴素贝叶斯补服务识别（需 data/ml/service_model.json；默认关）
   ml_service: false
+icp:
+  enabled: false              # 续205：备案反查（同主体域名）。默认关 —— 只读查询，但要按次烧配额
+  preflight: true             # 开跑前每个源先探一次，不通的整轮跳过并说清（不白跑）
+  max_domains: 50             # 最多查多少个域名
+  probe_domain: example.com   # 预检用的探活域名
+  # api_key 只进 config/keys.enc.yaml（不落明文）；源需要 key 时按该项的 key_header 带上
+  api_key: ''
+  # 源清单：加一个**可达的**源就是往这里加一行，不改代码。
+  #   {{domain}} 会被替换成要查的域名；key_header 非空时把 api_key 按那个头名带上。
+  # 预置的工信部官方源**在国内托管** ⇒ 海外出口通常不可达（本机实测 http=000）；
+  # 换机器/加代理后它即可用，或换成海外托管的镜像/付费 API（如阿里云市场 APPCODE 型）。
+  sources:
+    - name: miit
+      url: https://hlwicpfwc.miit.gov.cn/icpproject_query/api/icpAbbreviateInfo/queryByCondition
+      key_header: token
 hostcollide:
   # 续203：默认**开**（主理人点单）。只读 GET、请求量由 max_requests 夹住；
   # 命中按 collide:<ip> 前缀落库 ⇒ 自动归 own 口径。

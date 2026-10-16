@@ -67,7 +67,10 @@ class OsintStage(Stage):
         do_shodan = (ctx.settings.get("shodan", {}) or {}).get("enabled") is True
         do_quake = (ctx.settings.get("quake", {}) or {}).get("enabled") is True
         do_ctlog = ctlog_mod.enabled(ctx.settings)
-        if not (do_ip or do_fofa or do_shodan or do_quake or do_ctlog):
+        # 续205：备案反查有**自己的**开关（icp.enabled）—— 它用的是另一套接口、另一份配额，
+        # 与"外部情报拓展"那批不是一回事。默认全关时整段跳过、零请求。
+        do_icp = (ctx.settings.get("icp", {}) or {}).get("enabled") is True
+        if not (do_ip or do_fofa or do_shodan or do_quake or do_ctlog or do_icp):
             ctx.logger.info("[osint] 未启用（策略配置 → 外部情报拓展 可打开），跳过")
             return
         if ctx.stopped():
@@ -75,6 +78,18 @@ class OsintStage(Stage):
             return
 
         found = []
+        if do_icp and not ctx.stopped():
+            try:
+                from .. import icp as _icp205
+                _n205, _note205 = _icp205.run(ctx, logger=ctx.logger)
+                if _note205:
+                    ctx.logger.info(f"[osint] 备案反查：{_note205}")
+                if _n205:
+                    found += [str(r["domain"]) for r in db._query(
+                        "SELECT domain FROM subdomains WHERE task_id=? AND source='osint:icp'",
+                        (ctx.task_id,))]
+            except Exception as _e205:            # noqa: BLE001 —— 情报阶段不许把任务带崩
+                ctx.logger.warning(f"[osint] 备案反查失败（不影响其余情报）：{_e205}")
         if do_ip:
             found += self._c_segments()
         if do_fofa and not ctx.stopped():

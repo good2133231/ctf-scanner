@@ -4594,6 +4594,15 @@ def create_app():
                               "max_feed": int(f.get("crawl_max_feed", 10) or 0),
                               "max_feed_total": int(f.get("crawl_max_feed_total", 40) or 40)},
                     # 续201：Host 碰撞（逐键点名，与 crawl 同一条口径）
+                    # 续205：备案反查。逐键点名（save_settings 整份重写，漏带＝删键）。
+                    "icp": {"enabled": f.get("icp_enabled") == "1",
+                            "preflight": f.get("icp_preflight") == "1",
+                            "max_domains": int(f.get("icp_max_domains", 50) or 50),
+                            "probe_domain": (f.get("icp_probe_domain") or "example.com").strip(),
+                            # api_key 与 sources 页面没有输入框 ⇒ 原样带回现值（不抹掉）
+                            "api_key": (settings.get("icp") or {}).get("api_key", ""),
+                            "sources": list((settings.get("icp") or {}).get("sources")
+                                            or [])},
                     "hostcollide": {"enabled": f.get("hostcollide_enabled") == "1",
                                     "max_requests": int(f.get("hostcollide_max_requests", 200) or 200),
                                     "timeout": int(f.get("hostcollide_timeout", 5) or 5)},
