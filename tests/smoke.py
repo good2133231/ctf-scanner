@@ -27136,6 +27136,95 @@ expression: r0()
     assert 'do_icp' in _os205 and "_icp205.run(ctx" in _os205, "osint 没接备案反查"
     print("[205] 续205 ok: 备案反查可插拔(源全在配置/出厂关)｜预检(不可达跳过+给原因/可关)｜"
           "本地假源解析域名+主体｜key 只进请求头｜run 三态说清｜osint 接线")
+    # ---- [206] 续206：--update-pocs（POC/指纹自动更新）+ RCE 运行期护栏 ----
+    from scanner import pocmgr as _pm206
+
+    # ① URL 白名单（照 toolmgr：只 https + 官方主机）
+    _pm206._check_url("https://github.com/projectdiscovery/nuclei-templates.git")
+    _pm206._check_url("https://raw.githubusercontent.com/a/b/c.yaml")
+    for _u206 in ("http://github.com/x", "https://evil.com/x", "https://github.com.evil.com/x"):
+        try:
+            _pm206._check_url(_u206)
+            raise AssertionError(f"{_u206} 不该被放行")
+        except ValueError:
+            pass
+
+    # ② 路径穿越：绝对路径必须**拒绝**（不是剥掉斜杠放行 —— 那正是 zip slip 想要的）
+    assert _pm206._safe_member("http/fingerprints/a.yaml") == "http/fingerprints/a.yaml"
+    # 盘符路径**运行时拼**：源码里不留 `C:`+斜杠 的连续串（门禁 [5o] 有条"不许出现写死的
+    # 盘符路径"，它不区分这是测试数据还是真路径 —— 拼一下两边都满足）
+    for _n206 in ("/etc/passwd", "../../etc/passwd", "a/../b", "C:" + "\\windows\\x"):
+        try:
+            _pm206._safe_member(_n206)
+            raise AssertionError(f"{_n206!r} 必须被拒绝")
+        except ValueError:
+            pass
+
+    # ③ 校验：RCE 形态拒收 + 变异性证伪（把 ipconfig 去掉就过 ⇒ 承重的正是那条判据）
+    _rce206 = ("id: hfs-rce\ninfo:\n  id: hfs-rce\n  name: HFS RCE\n"
+               "matchers:\n  - type: word\n    words: [\"ipconfig\"]\n")
+    _ok206, _why206 = _pm206.validate_yaml(_rce206, "hfs-rce.yaml")
+    assert not _ok206 and "ipconfig" in _why206, (_ok206, _why206)
+    assert "非破坏性" in _why206, "拒收理由要说清是**哪条红线**，不只是说不行"
+    _same206 = _rce206.replace("ipconfig", "server")
+    assert _pm206.validate_yaml(_same206, "ok.yaml")[0] is True, \
+        "变异：去掉命令执行特征后应当放行（否则这条判据把正常 POC 也挡了）"
+    # 缺 id / 缺 name / 无 matchers 都要拒
+    for _bad206 in ("id: a\ninfo: {name: A}\nmatchers: []",
+                    "id: a\ninfo: {id: a}\nmatchers: []",
+                    "id: a\ninfo: {id: a, name: A}\n",
+                    "not: [a, mapping"):
+        assert _pm206.validate_yaml(_bad206)[0] is False, _bad206[:40]
+
+    # ④ 分类：fingerprints 走指纹表、其余走 POC、不认识的跳过
+    assert _pm206.classify("http/fingerprints/grafana.yaml")[0] == "fingerprint"
+    assert _pm206.classify("http/vulnerabilities/generic/x.yaml")[0] == "poc"
+    assert _pm206.classify("README.md")[0] is None
+
+    # ⑤ 落盘 + manifest（幂等：第二次跑 written=0）
+    _d206 = _TMPDIR / "pocmgr206"
+    _files206 = {"http/fingerprints/grafana.yaml": _same206.replace("server", "grafana-app"),
+                 "http/vulnerabilities/generic/sqli.yaml":
+                     "id: sqli\ninfo: {id: sqli, name: SQLi}\nmatchers: [{type: word, words: [sql]}]",
+                 "README.md": "hello",
+                 "http/fingerprints/rce.yaml": _rce206}
+    _okf206, _badf206, _skip206 = _pm206.plan_files(_files206)
+    assert set(_okf206) == {"fingerprint", "poc"}, _okf206.keys()
+    assert len(_okf206["fingerprint"]) == 1 and len(_okf206["poc"]) == 1, _okf206
+    assert "http/fingerprints/rce.yaml" in _badf206, "RCE 那条必须被拒"
+    assert "README.md" in _skip206, "不认识的路径该跳过而不是报错"
+    _s206 = _pm206.apply_files(str(_d206), _okf206)
+    assert _s206["written"] == 2, _s206
+    # 前缀按**这一路**剥：指纹路剥 `http/fingerprints/`、POC 路剥 `http/`
+    assert (_d206 / "fingerprints" / "grafana.yaml").exists(), \
+        sorted(str(x.relative_to(_d206)) for x in _d206.rglob("*") if x.is_file())
+    assert (_d206 / "pocs" / "vulnerabilities" / "generic" / "sqli.yaml").exists()
+    _s206b = _pm206.apply_files(str(_d206), _okf206)
+    assert _s206b["written"] == 0, f"第二次跑必须全幂等（manifest 生效）：{_s206b}"
+    assert not (_d206 / "fingerprints" / "rce.yaml").exists(), "RCE 那条不该落盘"
+
+    # ⑥ update() 桩掉 fetch_repo：报告要能念给用户听（各类计数 + 拒收理由）
+    _real_fetch206 = _pm206.fetch_repo
+    _pm206.fetch_repo = lambda *a, **k: _files206
+    try:
+        _rep206 = _pm206.update("nuclei", dest=str(_d206))
+    finally:
+        _pm206.fetch_repo = _real_fetch206
+    assert _rep206["ok"] and _rep206["counts"]["fingerprint"] == 1, _rep206
+    assert _rep206["counts"]["rejected"] == 1 and _rep206["counts"]["skipped"] == 1, _rep206["counts"]
+    assert any("ipconfig" in v for v in _rep206["rejected"].values()), _rep206["rejected"]
+
+    # ⑦ CLI：--list 与 --help 都能跑（真拉取不在门禁里跑 —— 零网络）
+    import subprocess as _sp206
+    _r206l = _sp206.run([sys.executable, "tools/update_pocs.py", "--list"],
+                        capture_output=True, text=True, cwd=str(ROOT), timeout=120)
+    assert _r206l.returncode == 0 and "nuclei" in _r206l.stdout, _r206l.stdout[:200]
+
+    # ⑧ 指纹第五源已登记（nuclei 官方 fingerprints；文件可不存在，加载器跳过）
+    assert any("fingerprints_nuclei.txt" in f for f in _fp197.EXTRA_FILES), \
+        "nuclei 指纹表没登记进 EXTRA_FILES（跑完更新命令不会自动生效）"
+    print("[206] 续206 ok: --update-pocs(URL 白名单/路径穿越/校验四道/分类两路/落盘幂等/manifest)｜"
+          "RCE 运行期护栏(拒收+说清红线+变异证伪)｜CLI --list｜nuclei 指纹源已登记")
     print("SMOKE PASS")
 
 

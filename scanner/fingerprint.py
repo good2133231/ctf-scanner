@@ -281,6 +281,10 @@ EXTRA_FILE = "config/dicts/fingerprints_extra.txt"
 EXTRA_FILES = [EXTRA_FILE,
                "config/dicts/fingerprints_hub.txt",
                "config/dicts/fingerprints_ehole.txt",
+               # 续206：nuclei 官方 `http/fingerprints/`（由 `tools/update_pocs.py --source nuclei`
+               # 拉取并转换）。**文件可以不存在**（`load_extra` 跳过缺失的表），
+               # 先登记是为了"跑一次更新命令就自动生效"，不用改代码。
+               "config/dicts/fingerprints_nuclei.txt",
                # 续204：chainreactors/fingers（第三个外部源；规模最小 —— 它仓库里那份
                # yaml 只是维护清单，完整规则在 Go 源码内。留着是为了证明"再加一个源"
                # 只是往这个列表里加一行 + 跑一次转换器）。

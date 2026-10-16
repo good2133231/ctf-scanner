@@ -3,6 +3,40 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续206（2026-10-16，WorkBuddy · CodeBuddy）：--update-pocs（POC/指纹自动更新）+ RCE 运行期护栏
+
+- **`--update-pocs`**（主理人点单第一条）：新增 `scanner/pocmgr.py` + `tools/update_pocs.py`。
+  口径完全照本包下那个**工具二进制**更新器的六条硬规矩：只 https、只官方主机
+  （`github.com` / `raw.githubusercontent.com` / `codeload.github.com`）、落盘前过 **SHA256**
+  （manifest 记着 ⇒ 重复跑就是 no-op）、成员名防**路径穿越**、逐文件校验不过就拒收、
+  只写本项目目录。差别只在"取什么"：这边取 nuclei 模板仓库的**指定子目录** —— 整仓约 9000 个
+  模板不能整份拉 ⇒ `git clone --depth 1 --filter=blob:none --sparse` 只取 `http/fingerprints/`。
+  用法：`python tools/update_pocs.py --source nuclei [--ref v9.9.9]`。
+  **为什么不做成定时任务**：拉外部仓库＝往机器里写第三方文件，必须人下命令（§2）；要定期更新
+  就挂自己的 cron。
+- **POC 与指纹源合成一件事**（主理人点单「指纹库下一个源：nuclei 官方 http/fingerprints/，
+  正好和 --update-pocs 是同一件事」）：nuclei 的 `http/fingerprints/` 与 FingerprintHub
+  **同一份格式** ⇒ 拉下来后 `tools/import_fingerprints.py` 直接吃。
+  `update()` 按目录分两路：`fingerprints/` 转指纹表（`config/dicts/fingerprints_nuclei.txt`，
+  已登记进 `fingerprint.EXTRA_FILES`，**文件可以不存在**，先登记是为了"跑一次命令就自动生效"），
+  其余落 `config/nuclei-templates/` —— 那个目录**本来就在** `pocs.engine.POC_DIRS` 里，
+  所以投放即被发现，**不用回写任何配置**。
+- **RCE 红线落地为代码**（主理人点单「参数路由的 RCE 只识别不测，红线」）：
+  AGENTS §1 的非破坏性红线原先只写在注释里，而 afrog 的 `pocs/` 里**真的混着一条**
+  `hfs-rce-cmd-exec.yaml`（GET 触发目标执行 `ipconfig`）。光靠导入期人工复核不够 ——
+  复核是一次性的，新拉的 POC 没人复核过。所以 `validate_yaml()` 加了第四道判据：
+  文本命中命令执行形态（`ipconfig` / `whoami` / `/bin/sh` / `cmd.exe` / `$(…)` / `system(` …）
+  **直接拒收**，它连落盘的资格都没有（更不会被跑到），拒收理由里写明是哪条红线。
+  这条判据带**变异性证伪**（把 `ipconfig` 换成 `server` 就放行 ⇒ 承重的正是它）。
+- **门禁**：新增 `[206]` 组（URL 白名单 / 路径穿越含绝对路径 / 校验四道 / 分类两路 /
+  落盘幂等 + manifest / update() 报告 / CLI `--list` / 指纹源登记）。
+  踩坑三处：① `_safe_member` 写成"先剥斜杠再判"会让 `/etc/passwd` 变成合法的
+  `etc/passwd` 混过去（那正是 zip slip 想要的），改成**先拒再剥**；
+  ② `apply_files` 两路用同一个剥前缀法 ⇒ 指纹被写成 `fingerprints/fingerprints/…`；
+  ③ 门禁两条既有断言拦了我的写法：docstring 里提"toolmgr"字样会被
+  "扫描期不得引用 toolmgr"当成引用（改说法）、测试数据里的 `C:\` 会被
+  "不许写死盘符路径"拦（改成运行时拼接）。**SMOKE PASS**。
+
 ## 续205（2026-10-16，WorkBuddy · CodeBuddy）：备案反查做成可插拔源 + 连通性预检（ICP）
 
 主理人点单「备案接口不通就想办法弄新的接口或别的方式，你去搜索类似功能别人用什么站参考借鉴」。

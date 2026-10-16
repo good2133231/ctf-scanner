@@ -4294,6 +4294,27 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] 任务列表页摆出队列并发现状（同时运行几个、去哪改）；拓展域名页 bulkbar 只留「送去探测」
 - [x] [195a] 断言（根行走链 / 主域名命名 / hash 形状 / 两页按钮集合 / 302 片段）
 
+## 续206（2026-10-16，WorkBuddy · CodeBuddy）：--update-pocs + RCE 运行期护栏 + nuclei 指纹源
+
+- [x] **`--update-pocs`**（`scanner/pocmgr.py` + `tools/update_pocs.py`）：照工具更新器六条硬规矩
+      （只 https/官方主机/落盘前 SHA256/防路径穿越/逐条校验/只写本项目目录）；
+      sparse-checkout 只取 `http/fingerprints`（整仓 9000 模板不整份拉）；CLI：
+      `python tools/update_pocs.py --source nuclei [--ref vX]`
+- [x] **POC 与指纹源合成一件事**：fingerprints 转指纹表（已登记 EXTRA_FILES，文件可不存在）；
+      其余落 `config/nuclei-templates/`（**本就在 POC_DIRS 里，不用改配置**）
+- [x] **RCE 运行期护栏**：`validate_yaml` 第四道判据——命令执行形态直接拒收并说明红线；
+      带变异性证伪（去掉特征就放行）
+- [x] [206] 断言组；SMOKE PASS
+- [ ] **ICP 接口代办**（主理人已确认"暂时设代办"）：预置工信部源在国内（海外出口不通）；
+      候选＝阿里云市场 APPCODE 型（付费 key）或自建海外中转。**待主理人给地址+key**
+
+**下一轮（续207）——只放未做的：**
+- [ ] **真跑一次 `--update-pocs --source nuclei`**（门禁零网络，没真拉过）：会拉
+      `http/fingerprints`（几千条）→ 转指纹表 → 看规则数与误报（按负样本语料回捞）
+- [ ] `pocs.sources` 配置项（现在源硬编码在 `pocmgr.SOURCES`；主理人要加自己的源得改代码）
+- [ ] 参数路由 RCE 仍只识别不测（红线，已落地为运行期护栏）
+- [ ] `/opt/tools/ctf/verify-197` 验证区已不存在（续205 复核），无需再删
+
 ## 续205（2026-10-16，WorkBuddy · CodeBuddy）：备案反查可插拔源 + 连通性预检
 
 - [x] **搜索核实**：真实备案数据只有一个源头（工信部 hlwicpfwc.miit.gov.cn）；开源实现
