@@ -3384,6 +3384,27 @@ def create_app():
         return render_template("csegs.html", csegs=rows, pager=pager, q=q,
                                task_id=tid or "", tasks=_tasks_with_asset("csegs"))
 
+    @app.route("/urls")
+    @login_required
+    def urls():
+        # 续198（主理人点单「爬虫 + 独立标签页」）：页面里**本来就写着**的链接。
+        # 与「目录」页的分工写在 `scanner/crawl.py` 顶部，别混。
+        tid, tw, tp = _task_scope()
+        only_params = request.args.get("params") == "1"
+        _wh = [tw] if tw else []
+        if only_params:
+            _wh.append("query <> ''")      # 带参 = 注入面，是漏洞检测下钻的对象
+        rows, pager, q = _asset_page("urls", "/urls",
+                                     extra_where=" AND ".join(_wh) or None,
+                                     extra_params=tuple(tp))
+        if tid:
+            pager["qs"] += f"&task={tid}"
+        if only_params:
+            pager["qs"] += "&params=1"
+        return render_template("urls.html", urls=rows, pager=pager, q=q,
+                               task_id=tid or "", only_params=only_params,
+                               tasks=_tasks_with_asset("urls"))
+
     @app.route("/dirs")
     @login_required
     def dirs():
@@ -4366,6 +4387,20 @@ def create_app():
                              # 端口列表：页面输入 "443,8443" 这种逗号/空格分隔的写法；
                              # 全非法时回退默认值（不要让一个手滑把功能变成"永不触发"）
                              "tls_ports": parse_port_list(f.get("cert_tls_ports"))},
+                    # 续198：站点爬虫。逐键点名，一个都不许少（`save_settings` 是整份重写，
+                    # 漏带＝把键删掉，与 [8at]② 同一条口径）。
+                    "crawl": {"enabled": f.get("crawl_enabled") == "1",
+                              "max_sites": int(f.get("crawl_max_sites", 30) or 30),
+                              "max_links": int(f.get("crawl_max_links", 60) or 60),
+                              "max_pages": int(f.get("crawl_max_pages", 8) or 8),
+                              "max_depth": int(f.get("crawl_max_depth", 0) or 0),
+                              "same_site": f.get("crawl_same_site") == "1",
+                              "include_subdomains": f.get("crawl_include_subdomains") == "1",
+                              "timeout": int(f.get("crawl_timeout", 10) or 10),
+                              "workers": int(f.get("crawl_workers", 8) or 8),
+                              "feed_vulnscan": f.get("crawl_feed_vulnscan") == "1",
+                              "max_feed": int(f.get("crawl_max_feed", 10) or 0),
+                              "max_feed_total": int(f.get("crawl_max_feed_total", 40) or 40)},
                     "portscan": {"enabled": f.get("portscan_enabled") == "1",
                                  "max_hosts": int(f.get("portscan_max_hosts", 100) or 100),
                                  "ports": f.get("portscan_ports", ""),

@@ -139,6 +139,18 @@ class VulnscanStage(Stage):
             sites = [{"url": raw, "source": "input"} for kind, raw in ctx.targets if kind == "url"]
         sites = ctx.scope_sites(sites)          # 续25：追加执行时限定到本次勾选（非追加原样）
         sites = sites[: int(limits.get("vulnscan_max_urls", 100))]
+        # 续198：爬虫喂过来的**带参链接**（注入面）—— 主理人点单"这些也要智能测漏洞"。
+        # 它们**不占**上面那个站点名额（否则爬得越多、站点被挤掉越多，等于用爬虫惩罚自己），
+        # 但要有自己的总闸：每条都要跑一遍检查与 POC，喂 300 条就是把请求量翻几倍。
+        # 上限在 `crawl.max_feed_total`（crawl 阶段已按**每站**夹过一道 max_feed）。
+        _feed = [str(u) for u in (ctx.results.get("crawl_feed") or []) if u]
+        if _feed:
+            _fcap = int((ctx.settings.get("crawl") or {}).get("max_feed_total", 40) or 40)
+            if len(_feed) > _fcap:
+                ctx.logger.info(f"[vulnscan] 爬虫喂来 {len(_feed)} 条带参链接，"
+                                f"超过 max_feed_total={_fcap}，只取前 {_fcap} 条")
+                _feed = _feed[:_fcap]
+            sites = sites + [{"url": u, "source": "crawl", "tech": ""} for u in _feed]
         if not sites:
             ctx.logger.info("[vulnscan] 无可扫描站点，跳过")
             return

@@ -3,6 +3,34 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续198（2026-10-16，WorkBuddy · CodeBuddy）：站点爬虫（链接资产）+ 带参链接喂漏洞检测
+
+- **12 后半（主理人点单「加个爬虫，获取和网站相关的链接，独立标签页，这些也要智能测漏洞」）**：
+  - 新表 `urls`（`site_url/url/host/path/query/method/depth/status/title/kind/source/note`）
+    + 新模块 `scanner/crawl.py`（纯函数）+ 新阶段 `scanner/stages/crawl.py`（薄壳）。
+    **`host/path/query` 由 `db.insert_urls` 一次拆好**，页面与漏洞侧不再各 `urlparse` 一遍。
+  - **与 `dirs` 的分工写死在模块顶部**：`dirs` 是字典**猜**出来的路径（要证明它存在），
+    `urls` 是页面里**本来就写着**的链接（站点自己暴露的入口）；`jsmine` 挖的是 JS 里的域名与接口。
+    三件事三张表，合并就会把"猜中几条"和"站点有几个入口"混成一个数。
+  - 三条红线写进代码（不是靠配置）：**只发 GET**；`<form method="post">` **只记录永不提交**；
+    **默认不跟外链**（`same_site=true`，外链单独计数并说明为什么少）。
+  - **带参链接喂漏洞检测**（主理人"这些也要智能测漏洞"）：crawl 阶段把带参链接算成
+    `ctx.results["crawl_feed"]`（每站上限 `crawl.max_feed`），vulnscan 侧再夹一道总闸
+    `crawl.max_feed_total`（默认 40）后作为**额外目标** —— 它们**不占** `vulnscan_max_urls`
+    的站点名额，否则"爬得越多、站点被挤掉越多"。
+  - 规模夹子齐全：每任务 `max_sites`(30) × 每站 `max_links`(60) / `max_pages`(8) / `max_depth`(1)。
+    开关两层：策略 `crawl.enabled`（**出厂关**）+ 任务选项 `crawl: true`。
+  - GUI：新标签页**「链接资产」**（`/urls`，带「只看带参」筛选、侧栏入口）+ 策略页「站点爬虫」段。
+- **门禁**：新增 `[198]` 组（归一化 / 提取 / 同站 / 扩展名先于 content-type / 每站上限 /
+  深度 / 外链计数 / **阶段默认关时零请求**（变异：摘开关即红）/ 喂 vulnscan 每站上限 /
+  落库拆分 / vulnscan 接线钉点 / 页面与侧栏）。
+  同步 5 处因"阶段从 13 变 14"而失效的既有断言（`STAGE_ORDER` 清单 ×2、`stage_seconds`、
+  browser_e2e 的建任务表单计数 ×2）。**SMOKE PASS**。
+- **踩到的坑（值得记）**：① `looks_like_page` 原先先判 Content-Type 再判扩展名，结果
+  `.css` 被 `text/html` 响应头盖住 ⇒ 扩展名是更强信号，判据顺序反过来；
+  ② 新文件用 `write_to_file` 落下来是 **LF**，而本仓 `config/settings.yaml` 是 CRLF ⇒
+  门禁那条"回写后行尾形态不许变"立刻红了（settings 里混入 1 行 LF），新文件已统一转 CRLF。
+
 ## 续197（2026-10-15，WorkBuddy · CodeBuddy）：301 落地页标题 + 注释开关 + 重截并一颗 + 社区指纹库与 POC 分类 + 端口扫描口径
 
 - **9a（主理人点单「301 跳转的应该获取跳转之后的标题」）**：`utils.site_redirect` 不再拿第一跳的

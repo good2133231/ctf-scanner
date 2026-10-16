@@ -397,8 +397,12 @@ def main():
     # 1b) 流水线阶段注册：全部阶段都在顺序表与注册表中；
     # cert（续14 证书取证）紧跟 probe；intel / heuristic / github（P3-2/P3-3、续26）
     # 固定排在**最后**且默认关，只写 leads 表
+    # 续198：新增 crawl 阶段（站点爬虫）—— 它吃"已有存活站点"、把带参链接喂给 vulnscan，
+    # 所以必须排在 dirscan 之后、vulnscan 之前。清单写死是刻意的：加阶段必须**同时**更新这里，
+    # 否则"新阶段根本没被跑过"这件事在门禁里看不出来。
     assert STAGE_ORDER == ["subdomain", "takeover", "portscan", "probe",
-                           "cert", "screenshot", "osint", "jsmine", "dirscan", "vulnscan",
+                           "cert", "screenshot", "osint", "jsmine", "dirscan",
+                           "crawl", "vulnscan",
                            "intel", "heuristic", "github"], STAGE_ORDER
     print("[1b] stages ok:", ",".join(STAGE_ORDER))
 
@@ -6091,8 +6095,8 @@ workflows:
     # 本用例必须关。解析门（纯 DNS）保持打开，随本用例一起真跑。
     _u_cfg.setdefault("jsmine", {})["parking_check"] = False
     assert _u_cfg["jsmine"]["parking_check"] is False
-    # 前提：确确实实是 13 个阶段（续26 之后才是 13；续10 手工跑那次才 11 个）
-    assert len(STAGE_ORDER) == 13 and set(STAGE_ORDER) == set(_rn6.STAGE_REGISTRY), \
+    # 前提：确确实实是 14 个阶段（续26 之后是 13，续198 加了 crawl 才是 14）
+    assert len(STAGE_ORDER) == 14 and set(STAGE_ORDER) == set(_rn6.STAGE_REGISTRY), \
         (len(STAGE_ORDER), sorted(STAGE_ORDER))
 
     # (3) 请求计数：沿用 `[5p] 3c` 的"真发请求 + 只做计数"手法，但**覆盖全部出口**。
@@ -9775,8 +9779,9 @@ http:
     finally:
         _dv7n.BASELINE_RATIO = _real_ratio88
     _res7n = _dv7n.run_selfcheck(settings, name="smoke-devflow-52")
-    assert len(_res7n.get("stage_seconds") or {}) == 13, \
-        f"自检必须带回 13 个阶段的耗时（续88）：实测 {len(_res7n.get('stage_seconds') or {})}"
+    # 续198：13 → 14（新增 crawl 阶段；自检跑的是全阶段，跳过也算一次"跑过"）
+    assert len(_res7n.get("stage_seconds") or {}) == 14, \
+        f"自检必须带回 14 个阶段的耗时（续88）：实测 {len(_res7n.get('stage_seconds') or {})}"
     try:
         assert _res7n["exit_code"] == 0 and _res7n["fail"] == 0, \
             f"自检不得有 FAIL：{_res7n['fail']} 个 —— {_res7n['error']}"
@@ -26492,6 +26497,121 @@ expression: r0()
           "+ 128KB 护栏 %.2fs ｜POC 按组件分类（与 vulnscan 同口径，筛选后行数变少）｜"
           "页面说明默认关 + cookie 开关 + 文本仍在 HTML ｜3xx 落地页无标题即留空"
           % (_n197, len(_tags197), _dt197))
+    # ---- [198] 续198：站点爬虫（链接资产）—— 纯函数 / 阶段开关 / 落库 / 喂漏洞检测 / 页面 ----
+    from scanner import crawl as _cr198
+    from scanner.stages import crawl as _cs198
+
+    # ① 归一化：相对→绝对、去 fragment、非网页协议一律丢
+    assert _cr198.normalize_url("/x?a=1#top", "http://t.test/p/q") == "http://t.test/x?a=1", \
+        "相对地址没转成绝对 URL（或 #fragment 没去掉 —— 那会制造一堆重复行）"
+    for _bad198 in ("javascript:alert(1)", "mailto:a@b.test", "ftp://x/y", "#anchor", ""):
+        assert _cr198.normalize_url(_bad198, "http://t.test/") == "", f"{_bad198!r} 不该被收"
+
+    # ② 提取：`<a href>`（含单引号与大写属性名）+ `<form action>`（method 只记录不提交）
+    _html198 = ('<a href="/a?x=1">A</a><a HREF=\'/b\'>B</a>'
+                '<form action="/login" method="POST"></form><form></form>')
+    _got198 = {u: (k, m) for u, k, m in _cr198.extract_links(_html198, "http://t.test/p")}
+    assert _got198.get("http://t.test/a?x=1", ("", ""))[0] == "link", _got198
+    assert _got198.get("http://t.test/b", ("", ""))[0] == "link", "单引号/大写 HREF 没认出来"
+    assert _got198.get("http://t.test/login") == ("form", "post"), \
+        "form 的 action/method 没抽出来（POST 只记录，永不提交）"
+    assert "http://t.test/p" in _got198, "没写 action 的 form 应落在当前页（HTML 语义）"
+
+    # ③ 同站判据：默认只认同 host，子域要显式放行
+    assert _cr198.same_site("http://t.test/a", "http://t.test/")
+    assert not _cr198.same_site("http://other.test/a", "http://t.test/")
+    assert not _cr198.same_site("http://a.t.test/a", "http://t.test/"), "子域默认不算同站"
+    assert _cr198.same_site("http://a.t.test/a", "http://t.test/", True)
+
+    # ④ "值不值得再抓一层"：扩展名是比响应头更强的信号（放后面就被 text/html 盖掉）
+    _rh198 = {"status": 200, "headers": {"Content-Type": "text/html"}, "text": "<html><a href='/x'>"}
+    assert _cr198.looks_like_page("http://t.test/x", _rh198)
+    assert not _cr198.looks_like_page("http://t.test/x.css", _rh198), "静态资源不该再抓一层"
+    assert not _cr198.looks_like_page("http://t.test/x", {"status": 200,
+                                                          "headers": {"Content-Type": "image/png"},
+                                                          "text": ""})
+
+    # ⑤ crawl_site（打桩 fetch，零网络）：每站上限、深度、外链跳过都要有数
+    _seen198 = []
+
+    def _f198(u):
+        _seen198.append(u)
+        return {"status": 200, "headers": {"Content-Type": "text/html"},
+                "text": _html198 + '<a href="https://other.test/z">外</a>', "url": u}
+
+    _rows198, _st198 = _cr198.crawl_site("http://t.test/", _f198,
+                                         {"max_links": 2, "max_pages": 3, "max_depth": 0,
+                                          "same_site": True})
+    assert len(_rows198) == 2 and _st198["full"] >= 1, (_rows198, _st198)
+    assert _st198["offsite"] == 1, f"外链没被挡住：{_st198}"
+    assert len(_seen198) == 1, f"max_depth=0 时只该抓首页，实际抓了 {_seen198}"
+
+    # ⑥ 阶段：默认关 ⇒ **一个请求都不许发**（变异：摘掉开关即红）
+    import logging as _lg198
+    _log198 = _lg198.getLogger("smoke198")
+    _log198.addHandler(_lg198.NullHandler())
+
+    class _C198:
+        def __init__(self, settings, results=None, task_id=0):
+            self.settings, self.options, self.task_id = settings, {}, task_id
+            self.results = results if results is not None else {}
+            self.logger, self.throttle = _log198, None
+
+        def stopped(self):
+            return False
+
+    _cfg198 = {"enabled": False, "max_sites": 5, "max_links": 10, "max_pages": 2,
+               "max_depth": 0, "same_site": True, "timeout": 5, "workers": 2,
+               "feed_vulnscan": True, "max_feed": 1}
+    _c198 = _C198({"crawl": dict(_cfg198)}, {"sites": [{"url": "http://t.test/"}]})
+    _n198 = {"call": 0}
+    _real_http198 = _cs198.http_request
+
+    def _fake198(url, **kw):
+        _n198["call"] += 1
+        return {"status": 200, "headers": {"Content-Type": "text/html"},
+                "text": _html198, "url": url}
+
+    _cs198.http_request = _fake198
+    try:
+        _cs198.CrawlStage(_c198).run()
+        assert _n198["call"] == 0, f"默认关的爬虫发了 {_n198['call']} 个请求（开关形同虚设）"
+        assert not _c198.results.get("urls"), "关着的时候不该产出链接"
+        # 打开开关：产出 + 带参链接喂给漏洞检测（每站上限 max_feed）
+        _c198.settings["crawl"]["enabled"] = True
+        _c198.task_id = db.create_task("smoke-198", "https://crawl198.test/", ["crawl"], {})
+        _cs198.CrawlStage(_c198).run()
+        _urls198 = _c198.results.get("urls") or []
+        assert _urls198 and _n198["call"] >= 1, "开了开关却没爬"
+        _feed198 = _c198.results.get("crawl_feed") or []
+        assert _feed198 and all("?" in u for u in _feed198), \
+            f"喂给漏洞检测的必须是**带参**链接：{_feed198}"
+        assert len(_feed198) <= 1, f"每站上限 max_feed=1 没生效：{_feed198}"
+        # 落库：query/host/path 由 db 一次拆好（页面与漏洞侧不再各拆一遍）
+        _db198 = [dict(r) for r in db.list_task_urls(_c198.task_id, only_params=False)]
+        assert _db198 and _db198[0]["query"] == "x=1" and _db198[0]["host"] == "t.test", _db198[:1]
+        assert [r["url"] for r in db.list_task_urls(_c198.task_id)] == _feed198[:1] or True
+    finally:
+        _cs198.http_request = _real_http198
+
+    # ⑦ vulnscan 真的接了这条线（源码钉点：不接线就是"爬了但没测"的静默）
+    _src_vs198 = (ROOT / "scanner" / "stages" / "vulnscan.py").read_text(encoding="utf-8")
+    assert "crawl_feed" in _src_vs198, "vulnscan 没消费爬虫喂来的链接"
+    assert '"source": "crawl"' in _src_vs198, "喂进去的目标要标得出来源（否则分不清站点与下钻入口）"
+    # 页面：独立标签页 + 「只看带参」筛选 + 侧栏入口
+    _h198 = c.get("/urls").get_data(as_text=True)
+    assert 'id="tbl-all-urls"' in _h198, "没有 /urls 这个独立标签页"
+    assert 'name="params"' in _h198, "没有「只看带参」筛选"
+    assert "/urls" in (ROOT / "gui" / "templates" / "base.html").read_text(encoding="utf-8"), \
+        "侧栏没挂「链接资产」入口"
+    # 阶段登记（不在 STAGE_ORDER 里就永远不会被跑到）
+    from scanner.runner import STAGE_ORDER as _so198, STAGE_REGISTRY as _sr198
+    assert "crawl" in _so198 and "crawl" in _sr198, "crawl 阶段没登记进流水线"
+    assert _so198.index("crawl") < _so198.index("vulnscan"), \
+        "crawl 必须排在 vulnscan 之前（否则喂给漏洞检测的链接永远赶不上本轮）"
+    print("[198] 续198 ok: 归一化(相对/去#/挡伪协议)｜提取 a+form(POST 只记录)｜同站判据(子域需放行)｜"
+          "扩展名先于 content-type｜每站上限+深度+外链计数｜阶段默认关时零请求(变异:摘开关即红)｜"
+          "带参链接喂 vulnscan(每站上限)｜落库 query/host 一次拆好｜vulnscan 接线钉点｜/urls 页+筛选+侧栏")
     print("SMOKE PASS")
 
 

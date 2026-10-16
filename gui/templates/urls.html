@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}链接资产{% endblock %}
+{% block content %}
+<p class="muted note">站点页面里<b>本来就写着</b>的链接（爬虫收集），与「目录」页是两件事：
+  「目录」是字典<b>猜</b>出来的路径（要证明它存在），这里是站点<b>自己暴露</b>的入口。
+  数据来自 <b>crawl</b> 阶段，默认关闭（它一定会发 GET），
+  在「策略配置 → 站点爬虫」里打开后新任务才会产出。</p>
+<section class="panel">
+  <p class="muted small note"><b>带参</b>（URL 里有 <span class="mono">?</span>）的那部分是注入面：
+    crawl 阶段会把它们<b>喂给漏洞检测</b>（每站上限 <span class="mono">max_feed</span>、
+    全任务上限 <span class="mono">max_feed_total</span>），无参的静态页不喂 —— 喂了只是白花请求。
+    <span class="mono">form</span> 行的「方法」只做记录：<b>POST 表单一律不提交</b>（§1 非破坏性）。</p>
+  <form class="filters" method="get" action="{{ pager.base }}">
+    {% include "_taskpick.html" %}
+    <label class="muted">关键字 <input name="q" value="{{ q }}" placeholder="URL / 路径 / 查询串 / 来源站点"></label>
+    <label class="muted">只看带参
+      <input type="checkbox" name="params" value="1"{% if only_params %} checked{% endif %}></label>
+    <input type="hidden" name="size" value="{{ pager.size }}">
+    <button class="ghost" type="submit">查询</button>
+    {% if q or only_params %}<a class="btn-mini ghost" href="{{ pager.base }}">清空</a>{% endif %}
+  </form>
+  <table id="tbl-all-urls">
+    <thead><tr><th>#</th><th>任务</th><th>URL</th><th>类型</th><th>方法</th>
+      <th>层</th><th>来源站点</th></tr></thead>
+    <tbody>
+    {% for u in urls %}
+      <tr>
+        <td>{{ u.id }}</td>
+        <td><a href="{{ url_for('task_detail', task_id=u.task_id) }}">#{{ u.task_id }}</a></td>
+        <td class="mono url-cell"><a class="url-link" href="{{ u.url }}" target="_blank"
+              rel="noopener noreferrer">{{ u.url }}</a>
+          {%- if u.query %}<span class="tech-tag" title="带参数的链接：注入面，已喂给漏洞检测">带参</span>{% endif %}
+          {%- if u.note %}<br><span class="muted small">{{ u.note }}</span>{% endif %}</td>
+        <td>{{ u.kind or '-' }}</td>
+        <td class="muted small">{{ u.method or 'get' }}</td>
+        <td class="muted small">{{ u.depth if u.depth is not none else 0 }}</td>
+        <td class="muted small mono">{{ u.site_url or '-' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">没有匹配的链接（crawl 阶段默认关闭，
+        在「策略配置 → 站点爬虫」打开）。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% include "_pager.html" %}
+</section>
+{% endblock %}

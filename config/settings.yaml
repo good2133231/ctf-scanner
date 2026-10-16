@@ -222,6 +222,19 @@ portscan:
   engine: auto
   # 续151 无依赖 ML：banner 字符 n-gram 朴素贝叶斯补服务识别（需 data/ml/service_model.json；默认关）
   ml_service: false
+crawl:
+  enabled: false              # 续198：站点爬虫（收页面里写着的链接）—— 默认关，它一定会发 GET
+  max_sites: 30               # 每任务最多爬多少个站点
+  max_links: 60               # 每站点最多收多少条
+  max_pages: 8                # 每站点最多抓几页（含首页）
+  max_depth: 1                # 最多再跟几层（0＝只解析站点首页）
+  same_site: true             # 只收同 host 的链接；外链（社交按钮/CDN 直链）不收
+  include_subdomains: false
+  timeout: 10
+  workers: 8
+  feed_vulnscan: true         # 带参链接（注入面）喂给漏洞检测
+  max_feed: 10                # 每站最多喂几条（0＝不喂）
+  max_feed_total: 40          # 全任务总闸（vulnscan 侧再夹一道）
 jsmine:
   enabled: true
   max_pages: 20

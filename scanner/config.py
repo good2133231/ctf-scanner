@@ -347,6 +347,23 @@ DEFAULTS = {
         # 朴素贝叶斯补一个服务名（模型 `data/ml/service_model.json`）。没模型不动。
         "ml_service": False,
     },
+    "crawl": {
+        # 站点爬虫（续198）：收集页面里**本来就写着**的链接（与 dirscan 的"猜路径"是两件事）。
+        # 默认关 —— 它一定会发 GET，开关必须留在用户手里。
+        "enabled": False,
+        "max_sites": 30,           # 每任务最多爬多少个站点
+        "max_links": 60,           # 每站点最多收多少条链接
+        "max_pages": 8,            # 每站点最多抓多少个页面（含首页）
+        "max_depth": 1,            # 最多再跟几层（0＝只看站点首页上写着的）
+        "same_site": True,         # 只收同 host 的链接（外链默认不收 —— 那不是目标资产）
+        "include_subdomains": False,   # 开了才收 `*.目标域` 的子域链接
+        "timeout": 10,
+        "workers": 8,
+        # 带参链接喂给 vulnscan（注入面下钻）：每站最多喂几条。0＝不喂。
+        "feed_vulnscan": True,
+        "max_feed": 10,            # 每**站点**最多喂几条
+        "max_feed_total": 40,      # 全任务总闸（喂得太多等于把请求量翻几倍，见 vulnscan 接线处）
+    },
     "jsmine": {
         # JS 资产挖掘（P0-3）：从站点 JS 中提取域名/接口 URL/密钥，扩展资产面
         "enabled": True,

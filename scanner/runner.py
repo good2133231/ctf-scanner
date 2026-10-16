@@ -24,6 +24,7 @@ from . import auth as taskauth
 from . import throttle
 from . import devmode
 from .log import get_logger
+from .stages.crawl import CrawlStage
 from .stages.subdomain import SubdomainStage
 from .stages.takeover import TakeoverStage
 from .stages.portscan import PortscanStage
@@ -42,7 +43,10 @@ STAGE_ORDER = ["subdomain", "takeover", "portscan", "probe",
                # cert 与 screenshot 都需要"已有存活站点"，所以紧跟 probe；
                # cert 只做一次 TLS 握手（纯标准库、秒级），比截图廉价得多，故排在截图之前；
                # 它默认关闭（`cert.enabled`），打开后才对 https / tls_ports 站点取证
-               "cert", "screenshot", "osint", "jsmine", "dirscan", "vulnscan",
+               "cert", "screenshot", "osint", "jsmine", "dirscan",
+               # crawl（续198）排在 dirscan 之后、vulnscan 之前：它要吃"已有存活站点"，
+               # 产出的**带参链接**又要喂给漏洞检测 —— 放 vulnscan 之后那些链接就白爬了。
+               "crawl", "vulnscan",
                # 三个"线索"阶段固定排在最后：它们不产出被后续阶段消费的数据，
                # 只把外部情报（intel / github）与本地数据（heuristic）整理成人工复核用的线索。
                # 三者都默认关闭（`intel.enabled` / `github.enabled` / `heuristic.enabled`），
@@ -52,8 +56,8 @@ STAGE_ORDER = ["subdomain", "takeover", "portscan", "probe",
                "intel", "heuristic", "github"]
 STAGE_REGISTRY = {c.name: c for c in (SubdomainStage, TakeoverStage, PortscanStage,
                                       ProbeStage, CertStage, ScreenshotStage, OsintStage,
-                                      JsmineStage, DirscanStage, VulnscanStage, IntelStage,
-                                      HeuristicStage, GithubStage)}
+                                      JsmineStage, DirscanStage, CrawlStage, VulnscanStage,
+                                      IntelStage, HeuristicStage, GithubStage)}
 
 
 def resume_stages(stages, current_stage):

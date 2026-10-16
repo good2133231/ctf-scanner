@@ -2357,6 +2357,15 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   有依据的，按计数判是在猜。回归 `[8j]`（⑦⑧ 两面都钉：CF 式拦截页收掉、nginx 式真 403 原样入库；
   ⑨ 钉住 dirmap 那一路"没标题⇒不滤但明说"，含"漏掉标题条件"与"run() 没接线"两种变异都会红）。
 
+- **链接（`urls` 表 / crawl 阶段）与目录（`dirs`）是两件事，不许合并（续198）**：
+  `dirs` 是**字典猜出来的路径**（我们要证明它存在不存在），`urls` 是**页面里本来就写着的链接**
+  （站点自己暴露的入口，一定存在）；`jsmine` 挖的是 **JS 文件里**的域名与接口（又是一回事）。
+  判据分散在三处：收集在 `scanner/crawl.py`（`extract_links` / `same_site` / `looks_like_page`），
+  `host/path/query` 的拆法只有 `db.insert_urls` 一处（**带不带参 = `query` 空不空**，这是
+  "是不是注入面"的唯一判据），喂给漏洞检测的链接由 crawl 阶段算好放进
+  `ctx.results["crawl_feed"]`、vulnscan 只管消费（每站 `crawl.max_feed`、总闸 `crawl.max_feed_total`）。
+  三条红线在 `scanner/crawl.py` 顶部：**只发 GET**；`<form method="post">` **只记录永不提交**；
+  **默认不跟外链**（`same_site`）。阶段**出厂关闭**（它一定会发请求，开关必须留在用户手里）。
 - **3xx 站点补「跳转后」取证：只新增列，绝不改写那一跳的实况（续112-B）**：满屏
   `301 / 标题「301 Moved Permanently」`看不出落地页是什么（httpx 默认**不跟随**重定向）。现在
   `probe.attach_redirect_info` 只对 3xx 条目**再发一次允许跟随的请求**，把最终 url/状态/标题写进

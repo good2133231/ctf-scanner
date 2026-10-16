@@ -279,6 +279,34 @@
     <p class="muted small note">三道闸每一档的拒绝<b>数量与样本都会写进任务日志</b>（"候选域名质检拒收：…"），
       不会静默丢；想回捞某个被拒的名字，往 <code>config/dicts/js_thirdparty.txt</code> /
       <code>config/dicts/cdn_cname.txt</code> 里删对应行即可。</p>
+    {# 续198（主理人点单「加爬虫」）：只发 GET、默认关、外链默认不收 —— 三条都写在页面上，
+       因为"它一定会发请求"这件事必须让用户看得见再决定。 #}
+    <label class="chk"><input type="checkbox" name="crawl_enabled" value="1"
+      {{ 'checked' if s.crawl.enabled }}> <b>站点爬虫</b>（默认关闭；从存活站点的页面里收集
+      本来就写着的链接）</label>
+    <p class="muted small note">当前状态：{% if s.crawl.enabled %}<b>已开启</b> —— 任务跑到
+      crawl 阶段会对每个站点发 GET（上限见下面）。{% else %}<b>关闭</b> —— crawl 阶段会被跳过，
+      <b>一个请求都不发</b>。{% endif %}
+      「目录」阶段猜的是<b>可能存在的路径</b>，这里收的是<b>站点自己给出的入口</b>，两回事。</p>
+    <label>每任务最多爬几个站点 <input name="crawl_max_sites" value="{{ s.crawl.max_sites }}"></label>
+    <label>每站点最多收几条链接 <input name="crawl_max_links" value="{{ s.crawl.max_links }}"></label>
+    <label>每站点最多抓几页（含首页） <input name="crawl_max_pages" value="{{ s.crawl.max_pages }}"></label>
+    <label>最多再跟几层（0=只解析站点首页）
+      <input name="crawl_max_depth" value="{{ s.crawl.max_depth }}"></label>
+    <label class="chk"><input type="checkbox" name="crawl_same_site" value="1"
+      {{ 'checked' if s.crawl.same_site }}> 只收同站链接（关掉会把社交按钮/CDN 直链也收进来）</label>
+    <label class="chk"><input type="checkbox" name="crawl_include_subdomains" value="1"
+      {{ 'checked' if s.crawl.include_subdomains }}> 同站判据放行子域（*.目标域）</label>
+    <label>单页超时（秒） <input name="crawl_timeout" value="{{ s.crawl.timeout }}"></label>
+    <label>并发站点数 <input name="crawl_workers" value="{{ s.crawl.workers }}"></label>
+    <label class="chk"><input type="checkbox" name="crawl_feed_vulnscan" value="1"
+      {{ 'checked' if s.crawl.feed_vulnscan }}> 带参链接喂给漏洞检测（注入面下钻）</label>
+    <label>每站最多喂几条 <input name="crawl_max_feed" value="{{ s.crawl.max_feed }}"></label>
+    <label>全任务总闸 <input name="crawl_max_feed_total" value="{{ s.crawl.max_feed_total }}"></label>
+    <p class="muted small note">POST 表单<b>只记录不提交</b>（§1 非破坏性）—— 页面里
+      <span class="mono">&lt;form method="post"&gt;</span> 会作为一条链接收进「链接资产」页，
+      但框架不会去发那个请求。</p>
+
     <label class="chk"><input type="checkbox" name="portscan_enabled" value="1"
       {{ 'checked' if s.portscan.enabled }}> <b>端口与服务扫描</b>（默认关闭；引擎 auto = fscan → nmap → 内置 TCP connect）</label>
     <label>端口列表（空=内置 TOP 表，也支持 "80,443" 或 "1-1024"）

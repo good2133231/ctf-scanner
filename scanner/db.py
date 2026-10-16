@@ -145,6 +145,31 @@ CREATE TABLE IF NOT EXISTS dirs (
   method TEXT DEFAULT 'GET', note TEXT,
   title TEXT DEFAULT ''            -- 命中页面的 <title>（仅内置扫描有；dirmap 解析行没有 body 取不到）
 );
+-- 续198（主理人点单「加个爬虫，获取和网站相关的链接」）：与 `dirs` 是**两件事**，别合并 ——
+--   `dirs` 是**字典猜出来的路径**（我们要证明它存在），`urls` 是**页面里本来就写着的链接**
+--   （它一定存在，是站点自己暴露的面）。合并会让"猜中了几条"和"站点有多少入口"混成一个数。
+--   `query` 非空 = **带参链接**（注入面），漏洞检测只对这一类下钻（见 `stages/vulnscan.py`）。
+--   `method` 只**记录** `<form method=...>`：POST 表单**永远不提交**（§1 非破坏性红线），
+--   写下来只是让人知道"这里有个表单入口"。
+--   去重是**调用方**责任（§5.6 同一口径），表上不加 UNIQUE。
+CREATE TABLE IF NOT EXISTS urls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  site_url TEXT DEFAULT '',      -- 从哪个站点/页面爬出来的（溯源用）
+  url TEXT NOT NULL,             -- 绝对 URL（已归一化：去掉 #fragment）
+  host TEXT DEFAULT '',
+  path TEXT DEFAULT '',
+  query TEXT DEFAULT '',         -- 查询串（不含 '?'）；非空即"带参"
+  method TEXT DEFAULT 'get',     -- link 恒为 get；form 按页面写的记（不提交）
+  depth INTEGER DEFAULT 0,       -- 0=站点首页上发现的，1=再跟一层
+  status INTEGER DEFAULT 0,      -- 0 = 没探测过（爬虫默认**不逐个探测**，见 crawl.probe 开关）
+  title TEXT DEFAULT '',
+  length INTEGER DEFAULT 0,
+  kind TEXT DEFAULT 'link',      -- link（<a>/<link>） / form（<form action>） / redirect（3xx 目标）
+  source TEXT DEFAULT 'crawl',
+  note TEXT DEFAULT '',          -- 被跳过/降级的理由（外链 / 非 HTTP / 超上限 / 重复）
+  created_at TEXT
+);
 CREATE TABLE IF NOT EXISTS vulns (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
@@ -1226,6 +1251,59 @@ def set_subdomain_net(task_id, mapping):
           rows, many=True)
 
 
+def insert_urls(task_id, rows):
+    """落库**爬虫**产出的链接（续198），返回写入条数。
+
+    `host/path/query` 在这里**一次拆好**（不再让页面或漏洞侧自己 `urlparse`）：
+    判断"这条带不带参数"是注入面下钻的入口判据，拆法写两遍就会一边一个口径
+    （§5.14）。`query` 存的是**不含 `?` 的查询串**，空串 = 不带参。
+    """
+    if not rows:
+        return 0
+    from urllib.parse import urlparse      # 函数内导入：db 只在写链接时用到它
+    vals = []
+    for r in rows:
+        u = str(r.get("url") or "").strip()
+        if not u:
+            continue
+        try:
+            p = urlparse(u)
+        except ValueError:
+            continue
+        vals.append((int(task_id), str(r.get("site_url") or "")[:500], u[:1000],
+                     (p.hostname or "")[:255], (p.path or "")[:500], (p.query or "")[:500],
+                     str(r.get("method") or "get").strip().lower()[:8],
+                     int(r.get("depth") or 0), int(r.get("status") or 0),
+                     str(r.get("title") or "")[:200], int(r.get("length") or 0),
+                     str(r.get("kind") or "link").strip().lower()[:16],
+                     str(r.get("source") or "crawl").strip()[:32],
+                     str(r.get("note") or "")[:120], _now()))
+    if not vals:
+        return 0
+    _exec("INSERT INTO urls(task_id,site_url,url,host,path,query,method,depth,status,title,"
+          "length,kind,source,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          vals, many=True)
+    return len(vals)
+
+
+def list_task_urls(task_id, only_params=True, limit=0, site_url=""):
+    """取本任务的链接（续198）：默认只要**带参**的（那是注入面，漏洞检测的下钻对象）。
+
+    `only_params=False` 时返回全部（页面用 `_ASSET_PAGES` 那条通用路子，不走这里）。
+    """
+    where = ["task_id=?"]
+    args = [int(task_id)]
+    if only_params:
+        where.append("query <> ''")
+    if site_url:
+        where.append("site_url=?")
+        args.append(str(site_url))
+    sql = f"SELECT * FROM urls WHERE {' AND '.join(where)} ORDER BY id"
+    if limit and limit > 0:
+        sql += f" LIMIT {int(limit)}"
+    return _query(sql, tuple(args))
+
+
 def insert_sites(task_id, sites):
     if not sites:
         return
@@ -1673,6 +1751,8 @@ _ASSET_PAGES = {
     "ports": ("task_id DESC, port", ("host", "ip", "service", "banner")),
     "csegs": ("task_id DESC, segment, ip", ("segment", "ip", "domains")),
     "dirs": ("task_id DESC, id DESC", ("site_url", "path", "note", "title")),
+    # 续198：爬虫产物。关键字要能搜"带参"的查询串（`query`），否则"哪些是注入面"查不出来。
+    "urls": ("task_id DESC, id DESC", ("url", "site_url", "path", "query", "title", "kind", "note")),
     # 证书不是「跨任务资产页」的表（侧栏没有它），但任务详情页的「SSL 证书」页签要分页，
     # 于是同样登记在这里（续57）。默认排序 = `CERT_ORDER`（与 `list_certs()` 一字不差）。
     "certs": (CERT_ORDER, ("url", "host", "cn", "subject", "issuer", "san",
