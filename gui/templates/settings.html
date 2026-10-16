@@ -307,6 +307,19 @@
       <span class="mono">&lt;form method="post"&gt;</span> 会作为一条链接收进「链接资产」页，
       但框架不会去发那个请求。</p>
 
+    {# 续201：Host 碰撞（同 IP 绑不同 Host 头找隐藏站点）—— 只读 GET、默认关 #}
+    <label class="chk"><input type="checkbox" name="hostcollide_enabled" value="1"
+      {{ 'checked' if s.hostcollide.enabled }}> <b>Host 碰撞</b>（默认关闭；同 IP 绑不同
+      Host 头找藏在背后的站点）</label>
+    <p class="muted small note">当前状态：{% if s.hostcollide.enabled %}<b>已开启</b> —— 任务跑到
+      hostcollide 阶段会按「非 CDN 的真实 IP × 候选 Host」发 GET。{% else %}<b>关闭</b> ——
+      hostcollide 阶段会被跳过，<b>一个请求都不发</b>（要单次触发：新建任务勾「Host 碰撞」，
+      或任务详情页那颗按钮）。{% endif %}
+      命中按 <span class="mono">collide:&lt;ip&gt;</span> 前缀落库 ⇒ 自动归 own 口径；
+      只读 GET、单任务请求预算见下。</p>
+    <label>单任务请求预算 <input name="hostcollide_max_requests" value="{{ s.hostcollide.max_requests }}"></label>
+    <label>单次超时（秒） <input name="hostcollide_timeout" value="{{ s.hostcollide.timeout }}"></label>
+
     <label class="chk"><input type="checkbox" name="portscan_enabled" value="1"
       {{ 'checked' if s.portscan.enabled }}> <b>端口与服务扫描</b>（默认关闭；引擎 auto = fscan → nmap → 内置 TCP connect）</label>
     <label>端口列表（空=内置 TOP 表，也支持 "80,443" 或 "1-1024"）

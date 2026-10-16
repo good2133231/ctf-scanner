@@ -95,7 +95,10 @@ gui:
 # workers：并发消费者数。默认 1 = 串行 —— 最省目标侧带宽、最不容易触发风控/封禁；
 #   只有部署到服务器、确有多任务并行需求时才调大（上限 8）。
 queue:
-  workers: 1
+  # 续201（主理人点单"多任务执行现在还是实现不了吗，我看还是排队"）：1 → 2。
+  # 代价说清：两个任务同时打同一个目标侧，请求量翻倍、更容易触发风控/封禁；
+  # 只图最省带宽与最不容易被封就改回 1。想按机器规格自动收：勾 workers_auto（小 1 / 中 2 / 大 4）。
+  workers: 2
   # 续184：true ＝ 再按本机规格收一道（小 1 / 中 2 / 大 4）；false ＝ 只认 workers
   workers_auto: false
 # ---- 开发模式 / 全流程自检（续50，见 scanner/devmode.py）----
@@ -222,6 +225,10 @@ portscan:
   engine: auto
   # 续151 无依赖 ML：banner 字符 n-gram 朴素贝叶斯补服务识别（需 data/ml/service_model.json；默认关）
   ml_service: false
+hostcollide:
+  enabled: false              # 续201：Host 碰撞（同 IP 绑不同 Host 头找隐藏站点）—— 默认关
+  max_requests: 200           # 单任务请求预算（只读 GET）
+  timeout: 5
 crawl:
   enabled: false              # 续198：站点爬虫（收页面里写着的链接）—— 默认关，它一定会发 GET
   max_sites: 30               # 每任务最多爬多少个站点

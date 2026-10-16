@@ -400,7 +400,8 @@ def main():
     # 续198：新增 crawl 阶段（站点爬虫）—— 它吃"已有存活站点"、把带参链接喂给 vulnscan，
     # 所以必须排在 dirscan 之后、vulnscan 之前。清单写死是刻意的：加阶段必须**同时**更新这里，
     # 否则"新阶段根本没被跑过"这件事在门禁里看不出来。
-    assert STAGE_ORDER == ["subdomain", "takeover", "portscan", "probe",
+    # 续201：hostcollide 紧随 takeover（两者都吃"子域名 + 解析 IP"，都要在 portscan/probe 前）
+    assert STAGE_ORDER == ["subdomain", "takeover", "hostcollide", "portscan", "probe",
                            "cert", "screenshot", "osint", "jsmine", "dirscan",
                            "crawl", "vulnscan",
                            "intel", "heuristic", "github"], STAGE_ORDER
@@ -6100,8 +6101,8 @@ workflows:
     # 本用例必须关。解析门（纯 DNS）保持打开，随本用例一起真跑。
     _u_cfg.setdefault("jsmine", {})["parking_check"] = False
     assert _u_cfg["jsmine"]["parking_check"] is False
-    # 前提：确确实实是 14 个阶段（续26 之后是 13，续198 加了 crawl 才是 14）
-    assert len(STAGE_ORDER) == 14 and set(STAGE_ORDER) == set(_rn6.STAGE_REGISTRY), \
+    # 前提：确确实实是 15 个阶段（续198 加 crawl、续201 加 hostcollide）
+    assert len(STAGE_ORDER) == 15 and set(STAGE_ORDER) == set(_rn6.STAGE_REGISTRY), \
         (len(STAGE_ORDER), sorted(STAGE_ORDER))
 
     # (3) 请求计数：沿用 `[5p] 3c` 的"真发请求 + 只做计数"手法，但**覆盖全部出口**。
@@ -9784,9 +9785,9 @@ http:
     finally:
         _dv7n.BASELINE_RATIO = _real_ratio88
     _res7n = _dv7n.run_selfcheck(settings, name="smoke-devflow-52")
-    # 续198：13 → 14（新增 crawl 阶段；自检跑的是全阶段，跳过也算一次"跑过"）
-    assert len(_res7n.get("stage_seconds") or {}) == 14, \
-        f"自检必须带回 14 个阶段的耗时（续88）：实测 {len(_res7n.get('stage_seconds') or {})}"
+    # 续198：13 → 14（crawl）；续201：→ 15（hostcollide）。自检跑全阶段，跳过也算一次
+    assert len(_res7n.get("stage_seconds") or {}) == 15, \
+        f"自检必须带回 15 个阶段的耗时（续88）：实测 {len(_res7n.get('stage_seconds') or {})}"
     try:
         assert _res7n["exit_code"] == 0 and _res7n["fail"] == 0, \
             f"自检不得有 FAIL：{_res7n['fail']} 个 —— {_res7n['error']}"
@@ -21571,8 +21572,10 @@ expression: r0()
         assert _cnt145 == 1, \
             f"详情页 {_act145} 表单应恰好 1 个：实测 {_cnt145}"
     _n_post145 = _td145.count('method="post"')
-    assert _n_post145 == 3, \
-        f"详情页 POST 表单总数应 3（新增表单必须显式改这条登记）：实测 {_n_post145}"
+    # 续201：3 → 4（新增「Host 碰撞」补跑表单，`api_hostcollide_run`）
+    assert _n_post145 == 4, \
+        f"详情页 POST 表单总数应 4（新增表单必须显式改这条登记）：实测 {_n_post145}"
+    assert _td145.count("url_for('api_hostcollide_run')") == 1, "Host 碰撞表单应恰好 1 个"
 
     # ---- ② `subdomain.auto_root` 三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射）----
     assert _D145["subdomain"]["auto_root"] is True, \
@@ -26803,6 +26806,85 @@ expression: r0()
           "任务页行内只留查看全结果(停止/重启/删除/导出四颗都在勾选栏,「批量」字眼已去)｜"
           "阶段改预览框｜详情页对新变量容错(旧进程不 500)｜批量导出: 403 说清开关/单份 md/"
           "多份 zip/空勾选 400/PDF 400/越权跳过")
+    # ---- [201] 续201：Host 碰撞接线 / 页签不再丢 / 队列并发 / 批量打开提示 ----
+    from scanner import hostcollide as _hc201
+    from scanner.stages import hostcollide as _hcs201
+
+    # ① 阶段已接线，且标签表跟着补了（加阶段忘补标签 ⇒ 预览框出现英文名）
+    assert "hostcollide" in _rn200.STAGE_ORDER and "hostcollide" in _rn200.STAGE_REGISTRY
+    assert _rn200.STAGE_LABELS.get("hostcollide", ("",))[0] == "Host 碰撞", _rn200.STAGE_LABELS.get("hostcollide")
+    assert _rn200.STAGE_ORDER.index("hostcollide") < _rn200.STAGE_ORDER.index("portscan"), \
+        "hostcollide 要在 portscan 之前（它按 IP 挑候选，先挑完再打端口更省）"
+    # ② 配置两处一致 + **出厂关**
+    _hcd = _cfg201 = None
+    from scanner import config as _cf201
+    assert _cf201.DEFAULTS["hostcollide"]["enabled"] is False, "Host 碰撞必须出厂关（它一定发请求）"
+    assert _cf201.load_settings()["hostcollide"] == _cf201.DEFAULTS["hostcollide"], \
+        "settings.yaml 与 DEFAULTS 漂了"
+
+    # ③ 阶段默认关时**一个请求都不发**（变异：摘掉开关即红）
+    _hc_calls = {"n": 0}
+    _hc_real = _hcs201.hostcollide.run
+
+    def _hc_stub(ctx):
+        _hc_calls["n"] += 1
+
+    _hcs201.hostcollide.run = _hc_stub
+    _hc_http = _hcs201.http_request if hasattr(_hcs201, "http_request") else None
+    try:
+        _c201 = _C198({"hostcollide": {"enabled": False}}, {"sites": []})
+        _hcs201.HostcollideStage(_c201).run()
+        assert _hc_calls["n"] == 0, f"默认关的 hostcollide 跑了 {_hc_calls['n']} 次（开关形同虚设）"
+        _c201.settings["hostcollide"]["enabled"] = True
+        _hcs201.HostcollideStage(_c201).run()
+        assert _hc_calls["n"] == 1, "打开开关后应当调用 hostcollide.run"
+    finally:
+        _hcs201.hostcollide.run = _hc_real
+
+    # ④ 补跑端点：没带任务号 400 / 越权 404 / 正常排队
+    _t201 = db.create_task("smoke-201", "https://hc201.test/", ["subdomain"], {})
+    # 409（不是 400）：`_append_err` 对"表单被拒"一律回 409 + 一页能读的话
+    _r201 = c.post("/api/hostcollide/run", data={})
+    assert _r201.status_code == 409, f"没带任务号应是 409：{_r201.status_code}"
+    assert c.post("/api/hostcollide/run", data={"task_id": "abc"}).status_code == 409
+    assert c.post("/api/hostcollide/run", data={"task_id": "999999"}).status_code == 404, \
+        "别人的/不存在的任务必须 404"
+    _h201 = c.post("/api/hostcollide/run", data={"task_id": str(_t201),
+                                                 "next": "/tasks/%d" % _t201})
+    assert _h201.status_code == 302, f"正常排队应是 302：{_h201.status_code}"
+    # ⑤ 两处入口都在页面上
+    _tk201 = c.get("/tasks").get_data(as_text=True)
+    assert 'name="hostcollide"' in _tk201, "新建任务表单没有「Host 碰撞」勾选"
+    _hd201 = c.get(f"/tasks/{_t201}").get_data(as_text=True)
+    # 渲染后查的是 **URL**（`url_for('api_hostcollide_run')` 已变成 /api/hostcollide/run），
+    # 查函数名会永远假红 —— 模板源那一侧由 [145] 的 `url_for(...)` 计数负责。
+    assert "/api/hostcollide/run" in _hd201, "任务详情页没有「Host 碰撞」补跑按钮"
+
+    # ⑥ 队列并发：出厂 2（主理人点单"多任务执行"），且 workers_auto 仍是关的
+    from scanner import queue as _q201
+    _qc201 = _q201.config(_cf201.load_settings())
+    assert _qc201.get("workers") == 2, f"队列并发出厂应是 2（多任务并行）：{_qc201.get('workers')}"
+
+    # ⑦ `_with_hash`：只认 `#\w`，别的（开放重定向形状）一律忽略
+    _wh201 = gui_app._with_hash
+    with gui_app.app.test_request_context("/tasks/1", method="POST",
+                                          data={"next_hash": "#sites"}):
+        assert _wh201("/tasks/1").endswith("#sites"), "合法的页签 hash 要拼回去"
+    for _bad201 in ("#../evil", "https://evil.com", "#a" * 40, "", "sites"):
+        with gui_app.app.test_request_context("/tasks/1", method="POST",
+                                              data={"next_hash": _bad201}):
+            assert _wh201("/tasks/1") == "/tasks/1", f"{_bad201!r} 不该被拼进 Location"
+    # ⑧ 前端：reload 保 hash + 表单注入 next_hash + 8a 提示写清浏览器限制
+    _js201 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "initDetailTabPersist" in _js201 and "next_hash" in _js201, \
+        "详情页表单没带上当前页签（提交后仍会掉回「潜在漏洞」）"
+    assert "location.replace(location.pathname + location.search + location.hash)" in _js201, \
+        "批量操作后的刷新没保住 hash"
+    assert "浏览器只允许一次点击开一个标签页" in _js201, "批量打开的提示没写清为什么只开一个"
+
+    print("[201] 续201 ok: Host 碰撞接线(阶段/配置一致/出厂关/默认关零请求/补跑端点三态/两处入口)｜"
+          "队列并发出厂 2｜_with_hash 只认 #\\w(开放重定向形状全挡)｜前端保 hash + 表单注入｜"
+          "批量打开提示写清浏览器限制")
     print("SMOKE PASS")
 
 

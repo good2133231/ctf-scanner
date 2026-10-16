@@ -25,6 +25,7 @@ from . import throttle
 from . import devmode
 from .log import get_logger
 from .stages.crawl import CrawlStage
+from .stages.hostcollide import HostcollideStage
 from .stages.subdomain import SubdomainStage
 from .stages.takeover import TakeoverStage
 from .stages.portscan import PortscanStage
@@ -39,7 +40,11 @@ from .stages.intel import IntelStage
 from .stages.heuristic import HeuristicStage
 from .stages.github import GithubStage
 
-STAGE_ORDER = ["subdomain", "takeover", "portscan", "probe",
+STAGE_ORDER = ["subdomain", "takeover",
+               # hostcollide（续201 接线）紧随 takeover：两者都吃"子域名 + 解析 IP"，
+               # 都要在 portscan/probe 之前把该丢的候选丢掉（它只读 GET、默认关）。
+               "hostcollide",
+               "portscan", "probe",
                # cert 与 screenshot 都需要"已有存活站点"，所以紧跟 probe；
                # cert 只做一次 TLS 握手（纯标准库、秒级），比截图廉价得多，故排在截图之前；
                # 它默认关闭（`cert.enabled`），打开后才对 https / tls_ports 站点取证
@@ -61,6 +66,7 @@ STAGE_ORDER = ["subdomain", "takeover", "portscan", "probe",
 STAGE_LABELS = {
     "subdomain": ("子域名收集", True),
     "takeover": ("子域接管检测", True),
+    "hostcollide": ("Host 碰撞", False),
     "portscan": ("端口与服务扫描", False),
     "probe": ("存活探测", True),
     "cert": ("SSL 证书取证", False),
@@ -75,7 +81,8 @@ STAGE_LABELS = {
     "github": ("代码泄露侦察", False),
 }
 
-STAGE_REGISTRY = {c.name: c for c in (SubdomainStage, TakeoverStage, PortscanStage,
+STAGE_REGISTRY = {c.name: c for c in (SubdomainStage, TakeoverStage, HostcollideStage,
+                                      PortscanStage,
                                       ProbeStage, CertStage, ScreenshotStage, OsintStage,
                                       JsmineStage, DirscanStage, CrawlStage, VulnscanStage,
                                       IntelStage, HeuristicStage, GithubStage)}

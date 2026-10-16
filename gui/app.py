@@ -248,6 +248,24 @@ def external_source_panel(settings):
                      "runnable": runnable, "reason": "；".join(why)})
     # 保险箱本身的状态也要说清（面板脚注用）。
     return {"rows": rows, "vault": vault}
+_HASH_RE = re.compile(r"^#[A-Za-z0-9_-]{1,32}$")
+
+
+def _with_hash(url):
+    """把当前提交带来的**页签 hash** 拼回 redirect 目标（续201）。
+
+    为什么需要它：hash 从不随请求发到服务器（浏览器不发），所以"提交后回到原来那个页签"
+    只能由前端在提交前把它塞进表单（`gui/static/app.js::initDetailTabPersist` 写 `next_hash`）。
+    没有这一步时，详情页里任何一次 POST（补扫 / 追加执行 / 加入黑名单 …）都会掉回第一个
+    页签「潜在漏洞」—— 主理人报的就是这个。
+
+    ⚠ 校验形状是**必须的**：`next_hash` 来自用户可控的表单字段，拼进 `Location` 就是
+    开放重定向的原材料。只认 `#` 后跟字母数字/下划线/连字符（≤32），其余一律忽略。
+    """
+    h = str(request.form.get("next_hash") or "").strip()
+    return url + h if _HASH_RE.match(h) else url
+
+
 def _safe_next(target, fallback):
     """只放行**站内相对路径**的 `next` 跳转目标，其余一律回退（防开放重定向）。
 
@@ -1568,7 +1586,8 @@ def create_app():
                     f"{len(targets)} 个目标，第 {meta['append_count']} 次追加）")
         _audit(audit.KIND_TASK, target=f"#{src_id}",
                detail=f"追加执行（{'/'.join(stages)}，{len(targets)} 个目标）")
-        return redirect(url_for("task_detail", task_id=src_id))
+        # 续201：同上 —— 追加执行完成后回到来源任务的原页签
+        return redirect(_with_hash(url_for("task_detail", task_id=src_id)))
 
     @app.route("/tasks")
     @login_required
@@ -1685,7 +1704,11 @@ def create_app():
             options["ext_depth"] = runner.clamp_ext_depth(_d169)
         if _c169:
             options["ext_min_conf"] = extdom.conf_norm(_c169)
-        for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan")):
+        # 续201：hostcollide 同一套（勾了「Host 碰撞」而没勾阶段 ＝ 白勾，静默失效）
+        if str(data.get("hostcollide", "")).lower() in ("1", "true", "on"):
+            options["hostcollide"] = True
+        for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan"),
+                            ("hostcollide", "hostcollide")):
             # 判据是**生效选项**（options）或表单字段 —— 上面「目录递归」会直接把
             # `dirscan_full` 写进 options，而表单里并没有这个字段名；只看表单会漏掉它，
             # 结果是"任务里没有 dirscan 阶段"：勾了递归却连目录扫都不跑（静默失效）。
@@ -4128,6 +4151,32 @@ def create_app():
         return jsonify({"ok": True, "root": {"id": int(root["id"]), "name": root["name"]},
                         "total_tasks": len(ids), "tasks": tasks, "rows": rows})
 
+    @app.route("/api/hostcollide/run", methods=["POST"])
+    @login_required
+    def api_hostcollide_run():
+        """续201：Host 碰撞补跑 —— 在本任务里排一轮**只跑 hostcollide** 的追加运行。
+
+        形状照 `api_reshoot_sites`（排队，不在请求线程里当场跑）：那一轮要发
+        "非 CDN 的真实 IP × 候选 Host"个请求，压在线程上会把控制台卡住；
+        排队才能让预算 / 限流 / 停止信号都管得住它，也复用既有的追加执行机制
+        （沿用同一份任务日志、`_append_guard` 挡住并发）。
+        入口两处：新建任务勾「Host 碰撞」（任务选项 `hostcollide: true`）与详情页这颗按钮。
+        """
+        fallback = _safe_next(request.form.get("next"), url_for("tasks"))
+        raw_id = (request.form.get("task_id") or "").strip()
+        if not raw_id.isdigit():
+            return _append_err("这个入口没有带任务号（请在任务详情页里点「Host 碰撞」）", fallback)
+        tid = int(raw_id)
+        if not _owned_task(tid):
+            abort(404)
+        # 不传 targets：hostcollide 自己从库里算"哪些 IP 可碰撞"（`hostcollide.plan(task_id)`），
+        # 与重截不同 —— 那里要的是人勾中的那几个 URL。
+        _do_append(str(tid), ["hostcollide"], "", [], {"hostcollide": True}, fallback)
+        logger.info(f"[gui] 任务 #{tid} 已排入一轮**只跑 Host 碰撞**的追加运行"
+                    f"（hostcollide.enabled={bool((load_settings().get('hostcollide') or {}).get('enabled'))}"
+                    f"，未开时这一轮会零请求跳过并说明）")
+        return redirect(_with_hash(fallback))
+
     @app.route("/api/sites/reshoot", methods=["POST"])
     @login_required
     def api_reshoot_sites():
@@ -4297,7 +4346,8 @@ def create_app():
         _spawn(task_id, name, text, stages, options)
         logger.info(f"[gui] 补扫任务 #{task_id} 已创建（{stage} 全量档，"
                     f"{len(targets)} 个目标，来源任务 #{from_task or '-'}）")
-        return redirect(url_for("task_detail", task_id=task_id))
+        # 续201：带回用户提交时停在的那个页签（前端注入 next_hash），别掉回「潜在漏洞」
+        return redirect(_with_hash(url_for("task_detail", task_id=task_id)))
 
     # ---------- 设置 ----------
 
@@ -4518,6 +4568,10 @@ def create_app():
                               "feed_vulnscan": f.get("crawl_feed_vulnscan") == "1",
                               "max_feed": int(f.get("crawl_max_feed", 10) or 0),
                               "max_feed_total": int(f.get("crawl_max_feed_total", 40) or 40)},
+                    # 续201：Host 碰撞（逐键点名，与 crawl 同一条口径）
+                    "hostcollide": {"enabled": f.get("hostcollide_enabled") == "1",
+                                    "max_requests": int(f.get("hostcollide_max_requests", 200) or 200),
+                                    "timeout": int(f.get("hostcollide_timeout", 5) or 5)},
                     "portscan": {"enabled": f.get("portscan_enabled") == "1",
                                  "max_hosts": int(f.get("portscan_max_hosts", 100) or 100),
                                  "ports": f.get("portscan_ports", ""),

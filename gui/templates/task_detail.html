@@ -13,6 +13,13 @@
   <button class="btn-mini ghost" data-op="resume" data-id="{{ task.id }}"
     {{ 'disabled' if task.status in ('running', 'queued') or not resume_rest }}
     title="{{ '从断点续跑：' + resume_rest|join(' / ') if resume_rest else '没有可用断点（任务未停在某个阶段上）' }}">续跑</button>
+  {# 续201：Host 碰撞补跑（默认关；点了会排一轮只跑 hostcollide 的追加运行，排队等 worker） #}
+  <form method="post" action="{{ url_for('api_hostcollide_run') }}" class="inline-form">
+    <input type="hidden" name="task_id" value="{{ task.id }}">
+    <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}">
+    <button class="btn-mini ghost" type="submit"
+      title="同 IP 绑不同 Host 头找隐藏站点（只读 GET、默认关）：在本任务里排一轮只跑 hostcollide 的追加运行，排队等 worker 空了才做">Host 碰撞</button>
+  </form>
   <a class="btn-mini ghost" href="{{ url_for('diff_view') }}?task={{ task.id }}"
      title="与最近一个可比的上一轮对比（子域名/站点/指纹/端口/漏洞/敏感信息 各算新增与消失）">与上次对比</a>
   {# 续171（用户点单"导出报告的功能设置可以开启或者关闭 默认是关闭"）：开关关着时不渲染

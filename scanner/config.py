@@ -347,6 +347,13 @@ DEFAULTS = {
         # 朴素贝叶斯补一个服务名（模型 `data/ml/service_model.json`）。没模型不动。
         "ml_service": False,
     },
+    "hostcollide": {
+        # Host 碰撞（续183 模块、续201 接线）：同 IP 绑不同 Host 头找隐藏站点。
+        # 默认关 —— 只读 GET，但请求量随"非 CDN 的真实 IP × 候选 Host"增长。
+        "enabled": False,
+        "max_requests": 200,      # 单任务请求预算（引擎内部也会再夹一次）
+        "timeout": 5,
+    },
     "crawl": {
         # 站点爬虫（续198）：收集页面里**本来就写着**的链接（与 dirscan 的"猜路径"是两件事）。
         # 默认关 —— 它一定会发 GET，开关必须留在用户手里。

@@ -111,7 +111,8 @@ async function taskOp(action, id, btn, msgEl) {
       if (btn) btn.disabled = false;
       return;
     }
-    setTimeout(() => location.reload(), 700);
+    // 续201：同上 —— 保住当前页签（这是行内 taskOp 的刷新路径）
+    setTimeout(() => location.replace(location.pathname + location.search + location.hash), 700);
   } catch (e) {
     say("网络错误");
     if (btn) btn.disabled = false;
@@ -126,6 +127,28 @@ function bindTaskOps(scope, msgEl) {
     if (b.dataset.opBound) return;
     b.dataset.opBound = "1";
     b.addEventListener("click", () => taskOp(b.dataset.op, b.dataset.id, b, msgEl));
+  });
+}
+
+/* ---------- 续201：详情页页签的"提交后别丢" ---------- */
+/* 服务端渲染时不知道用户停在哪个页签（hash 从不发到服务器），所以由前端在提交前把当前
+   hash 塞进表单；后端 redirect 时用 `_with_hash()` 拼回去。 */
+function initDetailTabPersist() {
+  if (!document.getElementById("pane-vulns")) return;      // 不是任务详情页
+  document.querySelectorAll("form[method=post]").forEach(form => {
+    if (form.dataset.hashBound) return;
+    form.dataset.hashBound = "1";
+    form.addEventListener("submit", () => {
+      const h = (location.hash || "").replace(/^#/, "");
+      if (!h) return;
+      let f = form.querySelector("input[name=next_hash]");
+      if (!f) {
+        f = document.createElement("input");
+        f.type = "hidden"; f.name = "next_hash";
+        form.appendChild(f);
+      }
+      f.value = "#" + h;
+    });
   });
 }
 
@@ -162,7 +185,9 @@ function initTaskTable() {
       const j = await r.json();
       bulkMsg.textContent = j.error ? j.error
         : `已处理 ${j.affected} 个${j.skipped && j.skipped.length ? `，跳过 ${j.skipped.length} 个（状态不符）` : ""}`;
-      setTimeout(() => location.reload(), 700);
+      // 续201：reload 要**保住当前页签** —— `location.reload()` 会连 hash 一起丢，
+      // 于是停止/重启/删除之后必定掉回第一个页签「潜在漏洞」（主理人报的就是这个）。
+      setTimeout(() => location.replace(location.pathname + location.search + location.hash), 700);
     } catch (e) { bulkMsg.textContent = "网络错误"; }
   };
   document.querySelectorAll("[data-bulk]").forEach(b =>
@@ -371,7 +396,10 @@ function initOpenSites() {
     if (box && rest.length) {
       const tip = document.createElement("div");
       tip.className = "muted small";
-      tip.textContent = `剩下 ${rest.length} 个逐个点即可各开一个标签页（浏览器只允许一次点击开一个）：`;
+      // 续201：把"为什么"说在前面 —— 这是浏览器的硬策略（一次用户手势只放行一个window.open），不是本工具的限制；允许本站点弹出窗口后能一次多开几个。
+      tip.textContent = `浏览器只允许一次点击开一个标签页，所以第 1 个已自动打开；`
+        + `剩下 ${rest.length} 个点下面任意一条各开一个`
+        + `（地址栏若提示\"允许弹出式窗口\"，点允许后重试可一次多开）：`;
       box.appendChild(tip);
       rest.forEach(u => {
         const a = document.createElement("a");
@@ -646,6 +674,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initPreview();       // 续196：预览框机制（遮罩/关闭钮/Esc 只绑一次）
   initTaskPreview();   // 续196：任务页「子任务/统计」按钮 → 预览框
   initTabs();
+  initDetailTabPersist();   // 续201：详情页表单提交前带上当前页签
   initFilters();
   initCollapsiblePanels();
   initPickAll();
