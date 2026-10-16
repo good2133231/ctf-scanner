@@ -280,7 +280,11 @@ EXTRA_FILE = "config/dicts/fingerprints_extra.txt"
 # 三张表**同一份格式**，所以解析逻辑仍然只有一份（多一个文件 ≠ 多一套读法）。
 EXTRA_FILES = [EXTRA_FILE,
                "config/dicts/fingerprints_hub.txt",
-               "config/dicts/fingerprints_ehole.txt"]
+               "config/dicts/fingerprints_ehole.txt",
+               # 续204：chainreactors/fingers（第三个外部源；规模最小 —— 它仓库里那份
+               # yaml 只是维护清单，完整规则在 Go 源码内。留着是为了证明"再加一个源"
+               # 只是往这个列表里加一行 + 跑一次转换器）。
+               "config/dicts/fingerprints_fingers.txt"]
 _WHERE = ("headers", "body", "cookies")
 _extra_cache = {"key": None, "rules": {}, "issues": []}
 

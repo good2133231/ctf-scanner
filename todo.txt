@@ -4294,6 +4294,28 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] 任务列表页摆出队列并发现状（同时运行几个、去哪改）；拓展域名页 bulkbar 只留「送去探测」
 - [x] [195a] 断言（根行走链 / 主域名命名 / hash 形状 / 两页按钮集合 / 302 片段）
 
+## 续204（2026-10-16，WorkBuddy · CodeBuddy）：LFI/IDOR 检查落地 + POC 也按参数类别挑 + 指纹第三源
+
+- [x] **`a01-lfi-traversal`**（high）：只对带文件类参数的 URL 跑，判据是文件内容特征回显；只读、≤6 请求
+- [x] **`a01-idor-enum`**（info）：换数字值比对，**明确不是越权证明**（无凭据），边界写进 detail
+- [x] **RCE 故意不实现**（要让目标真执行命令，越 §1 红线）；只识别不测，页面标「暂无对应检查」
+- [x] **路由下限放宽 info**（否则 IDOR 线索被 skip_severities 挡掉）
+- [x] **POC 也按参数类别挑**（`_pocs_for` 并入 paramroute.kinds）
+- [x] **指纹第三源 fingers**（数据文件）；Glass/TideFinger（规则在 Python 源码）与
+      Wappalyzer（仓库已不存在）放弃，原因写进 CHANGELOG
+- [x] [204] 断言组（LFI 真机命中 high + 未归类零产出）；SMOKE PASS
+
+**下一轮（续205）——只放未做的：**
+- [ ] **`--update-pocs`**（主理人点单第一条，仍未做）：仿 `--update-tools` —— 只 https + 官方主机 +
+      落盘前过摘要 + 逐行回写注册表；源优先 nuclei templates 的 tag 子集与 afrog poc 库
+      （nuclei 整仓 ~9000 模板，不能整份拉，要按 tag/sparse checkout 取子集）
+- [ ] **备案反查（ICP）**：免费接口本机出口**全不通**（vvhan/uomg/chinaz/oioweb 都试过）。
+      主理人要求"想办法弄新的接口或别的方式" ⇒ 计划做成**可插拔源 + preflight 实测**（像
+      `iprecon.preflight` 那样：每个源探一次，不通的整轮跳过并说清），源清单留配置项，
+      **待主理人给一个能通的接口**（付费 key 类按先前约定先记录）
+- [ ] 参数路由的 RCE 类仍只识别不测（红线）；若将来要做，只能做"错误回显"形态
+- [ ] `/opt/tools/ctf/verify-197` 验证区待删（rm 被安全机制拦，需主理人确认）
+
 ## 续203（2026-10-16，WorkBuddy · CodeBuddy）：参数路由自动判该测什么 + hostcollide 默认开 + 送探并一颗 + 导出已关
 
 - [x] **参数路由** `scanner/paramroute.py`（纯函数：参数名→类别→检查 id）：`?id=`→SQL 注入/越权、

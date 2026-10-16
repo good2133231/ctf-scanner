@@ -244,6 +244,11 @@ class VulnscanStage(Stage):
             if not link_tags or not pool:
                 return _by_conf(pool, site)[:poc_cap] if pool else []
             tech = {t.strip().lower() for t in str(site.get("tech") or "").split(",") if t.strip()}
+            # 续204：爬虫喂来的带参链接，把**参数类别**也并进匹配集合 —— `?id=` 的链接
+            # 该优先跑 tags 里写着 sqli/idor 的 POC，与 owasp 那侧的路由同一份判据
+            # （`paramroute.kinds`）。没识别出指纹的链接由此也能排上相关的 POC。
+            if str(site.get("source") or "") == "crawl":
+                tech |= set(paramroute.kinds(site.get("url") or ""))
             if not tech:
                 return _by_conf(pool, site)[:poc_cap]
             hit, rest = [], []
@@ -280,6 +285,10 @@ class VulnscanStage(Stage):
                 _kw203 = {"logger": ctx.logger, "blocked": _blocked}
                 if _only203 is not None:
                     _kw203["only"] = _only203
+                    # 下限放宽到 info：参数路由是**针对注入面的下钻**，噪声已经被参数名
+                    # 筛过一轮，此时仍套用站点全量扫描的 skip_severities（默认丢 info/low）
+                    # 会把 a01-idor-enum 这类线索白白挡掉 —— 那是"挑出来要看的"不是噪声。
+                    _kw203["min_severity"] = "info"
                 found = list(owasp_checks.run_all(url, ctx.settings, **_kw203))
                 for poc in _pocs_for(site if isinstance(site, dict) else {}):
                     # `registry=pocs`：workflow 里 `tags:` 步骤的候选集，直接用本阶段已加载好的

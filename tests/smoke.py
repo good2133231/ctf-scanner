@@ -26939,13 +26939,21 @@ expression: r0()
     # 数字后缀：id1 / page3 与 id / page 同类（真实站点大量这种命名）
     assert "sqli" in _pr203.kinds("http://t/a?id1=9")
     # ② 类别 → 检查 id：**只映射真实存在的检查**；没有对应检查的类别不造映射
-    assert _pr203.checks_for("http://t/a?id=1") == ["a03-sqli-blind", "a03-sqli-error"]
+    # 续204：`?id=` 现在还会路由到 IDOR 线索（a01-idor-enum）—— 同一个参数名该试多类
+    assert _pr203.checks_for("http://t/a?id=1") == \
+        ["a01-idor-enum", "a03-sqli-blind", "a03-sqli-error"], _pr203.checks_for("http://t/a?id=1")
     assert _pr203.checks_for("http://t/a?url=http://x") == \
         ["a01-open-redirect", "a03-xss-reflect", "a10-ssrf-callback"]
-    assert _pr203.checks_for("http://t/a?file=x") == [], "LFI 没有对应检查 ⇒ 必须空（不造映射）"
-    assert _pr203.checks_for("http://t/a?cmd=ls") == [], "RCE 同上"
+    # 续204：LFI 有落点了（a01-lfi-traversal）；**RCE 仍然没有** —— 确认它要让目标真的
+    # 执行命令，越过 §1 非破坏性红线，所以宁可不测也不造假映射。
+    assert _pr203.checks_for("http://t/a?file=x") == ["a01-lfi-traversal"], \
+        _pr203.checks_for("http://t/a?file=x")
+    assert _pr203.checks_for("http://t/a?cmd=ls") == [], "RCE 仍不该有检查（红线）"
     # 映射出来的 id 必须真的是注册过的检查（否则 only 白名单会静默空转）
-    _reg203 = {m["id"] for m in owasp_checks.enabled_checks(settings)}
+    # 注意：`enabled_checks` 会应用 `skip_severities`（默认丢 info/low）—— 那是一个**子集**。
+    # 这里要验的是"映射的 id 真的注册过"，所以把 skip 清空再取（否则 info 级的
+    # a01-idor-enum 会被误判成"未注册"）。
+    _reg203 = {m["id"] for m in owasp_checks.enabled_checks({"checks": {"skip_severities": []}})}
     for _cid in _pr203.checks_for("http://t/a?url=http://x&id=1&q=2"):
         assert _cid in _reg203, f"{_cid} 不是已注册的检查（映射写到不存在的东西上了）"
     # ③ run_all(only=...) 真的只跑白名单（变异：only=[] ⇒ 一条都不跑）
@@ -26995,6 +27003,71 @@ expression: r0()
         "/urls 页不该有手动勾选送检的入口（要自动化，不要手动化）"
     print("[203] 续203 ok: 参数路由(按参数名判/只映射真实检查/id 已注册/only=[] 不跑/vulnscan 接线)｜"
           "hostcollide 默认开(默认即调用)｜送探并一颗(复选框消失+恒执行)｜/urls 显示自动判据")
+    # ---- [204] 续204：LFI/IDOR 检查落地 + POC 也按参数类别挑 + 指纹第三个源 ----
+    from scanner.owasp import checks as _ck204
+
+    # ① 新检查已注册，且参数路由真的映射到它们（rce 仍故意缺席 —— 要执行命令，越非破坏性红线）
+    # 同上：清空 skip_severities 取**全部注册**（a01-idor-enum 是 info 级，会被默认 skip 挡在
+    # "启用集合"之外，但它确实注册了 —— 参数路由时我们会把下限放宽到 info）
+    _ids204 = {m["id"] for m in _ck204.enabled_checks({"checks": {"skip_severities": []}})}
+    assert "a01-lfi-traversal" in _ids204, "LFI 检查没注册"
+    assert "a01-idor-enum" in _ids204, "IDOR 检查没注册"
+    assert _pr203.checks_for("http://t/a?file=x") == ["a01-lfi-traversal"]
+    assert "a01-idor-enum" in _pr203.checks_for("http://t/a?id=1")
+    assert _pr203.checks_for("http://t/a?cmd=ls") == [], "RCE 仍不该有检查（红线）"
+    # 映射出来的 id 必须真的是注册过的（否则 only 白名单静默空转）
+    for _c in _pr203.checks_for("http://t/a?file=x&id=1&url=http://x"):
+        assert _c in _ids204, f"{_c} 未注册"
+
+    # ② **真机**：本地靶场故意回显 /etc/passwd 特征 ⇒ LFI 检查必须命中 high
+    import functools as _ft204
+    import threading as _th204
+    from http.server import SimpleHTTPRequestHandler as _SH204, ThreadingHTTPServer as _TS204
+
+    class _T204(_SH204):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            body = (b"<html><body><pre>root:x:0:0:root:/root:/bin/bash\n"
+                    b"daemon:x:1:1:daemon:/usr/sbin:</pre></body></html>"
+                    if self.path.startswith("/vuln") else b"<html><body>normal</body></html>")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    _srv204 = _TS204(("127.0.0.1", 0), _T204)
+    _th204.Thread(target=_srv204.serve_forever, daemon=True).start()
+    try:
+        _b204 = f"http://127.0.0.1:{_srv204.server_address[1]}"
+        _hit204 = _ck204.run_all(_b204 + "/vuln?file=x", {"checks": {}},
+                                 min_severity="info",
+                                 only=_pr203.checks_for(_b204 + "/vuln?file=x"))
+        assert any(str(v.get("poc_id")) == "a01-lfi-traversal" and v.get("severity") == "high"
+                   for v in _hit204), f"LFI 检查没命中：{_hit204}"
+        # 反证：参数名不是文件类 ⇒ 不跑（省请求）
+        _miss204 = _ck204.run_all(_b204 + "/other?x=1", {"checks": {}},
+                                  min_severity="info",
+                                  only=_pr203.checks_for(_b204 + "/other?x=1"))
+        assert _miss204 == [], f"参数未归类时不该有产出：{_miss204}"
+    finally:
+        _srv204.shutdown()
+
+    # ③ POC 侧也按参数类别挑（源码钉点：`tech |= paramroute.kinds`）
+    _vs204 = (ROOT / "scanner" / "stages" / "vulnscan.py").read_text(encoding="utf-8")
+    assert "tech |= set(paramroute.kinds(" in _vs204, \
+        "POC 匹配没把参数类别并进去（带参链接仍只按指纹挑 POC）"
+    assert '_kw203["min_severity"] = "info"' in _vs204, \
+        "路由时没把下限放宽到 info（IDOR 线索会被 skip_severities 挡掉）"
+
+    # ④ 指纹第三个源已登记（规模最小，但证明"加源＝加一行 + 跑一次转换器"）
+    assert any("fingers" in f for f in _fp197.EXTRA_FILES), "fingers 表没登记进 EXTRA_FILES"
+    _r204, _i204 = _fp197.load_extra()
+    assert not _i204 and sum(len(v) for v in _r204.values()) > 2000, "外置表规模不对"
+    print("[204] 续204 ok: LFI/IDOR 检查落地(已注册+路由映射+真机命中 high+未归类不跑)｜"
+          "POC 也按参数类别挑｜路由下限放宽 info｜指纹第三源 fingers 已登记")
     print("SMOKE PASS")
 
 

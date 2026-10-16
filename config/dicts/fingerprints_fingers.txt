@@ -1,0 +1,15 @@
+# 自动生成：tools/import_fingerprints.py --kind fingers，请勿手工编辑（重跑会覆盖）
+# 来源：fingers（开源社区指纹库；只转换判据，外部仓库源码不进本仓）
+#
+# 格式（TAB 分隔，后三段可省）：标签 <TAB> 位置 <TAB> 正则 <TAB> 状态码 <TAB> 来源 <TAB> 说明
+#   位置：headers | body | cookies；状态码留空＝不分状态。
+# 共 8 条规则 / 3 个标签；导入时的丢弃统计见脚本输出。
+
+it-tools	body	<title>it tools - handy online tools for developers</title>		fingers	
+wakapi	body	(?s)<title>wakapi – coding statistics</title>.*?<link\s+href="assets/css/app\.dist\.css\?v=v([0-9]{1,4}(?:\.[0-9]{1,4}){1,3}(?:[A-Za-z]+[0-9]*|[-+][0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)(?:[^0-9A-Za-z.+-]|$)		fingers	
+wakapi	body	(?s)<title>wakapi – coding statistics</title>.*?<div\s+class="text-xs\s+font-mono\s+font-semibold">\s+v([0-9]{1,4}(?:\.[0-9]{1,4}){1,3}(?:[A-Za-z]+[0-9]*|[-+][0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)(?:[^0-9A-Za-z.+-]|$)		fingers	
+wakapi	body	(?s)<title>wakapi – coding statistics</title>.*?<script\s+src="assets/js/icons\.dist\.js\?v=v([0-9]{1,4}(?:\.[0-9]{1,4}){1,3}(?:[A-Za-z]+[0-9]*|[-+][0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)(?:[^0-9A-Za-z.+-]|$)		fingers	
+wakapi	body	(?s)<title>wakapi – coding statistics</title>.*?<script\s+src="assets/js/base\.js\?v=v([0-9]{1,4}(?:\.[0-9]{1,4}){1,3}(?:[A-Za-z]+[0-9]*|[-+][0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)(?:[^0-9A-Za-z.+-]|$)		fingers	
+wakapi	body	<title>wakapi – coding statistics</title>		fingers	
+searxng	body	<meta name="generator" content="searxng/([0-9]{1,4}(?:\.[0-9]{1,4}){1,3}(?:[A-Za-z]+[0-9]*|[-+][0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?|[0-9]+)		fingers	
+searxng	body	<meta name="generator" content="searxng/		fingers	

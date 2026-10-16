@@ -304,7 +304,66 @@ def from_glass(src):
     return out, stat
 
 
-KINDS = {"fingerprinthub": from_fingerprinthub, "ehole": from_ehole, "glass": from_glass}
+def from_fingers(src):
+    """chainreactors/fingers 的 `fingerprints/*.yaml`（续204，第三个源）。
+
+    形状（每个条目 = 一个产品，`rule` 是可选的**多条**判据，任一命中即算）：
+        - name: Wakapi
+          rule:
+            - regexps:
+                body:    [<title>wakapi …</title>, …]     # 只看正文
+            - regexps:
+                regexp:  [<meta name="generator" …>, …]   # 整个响应
+    映射：`regexps.body` → body、`regexps.regexp` → body（fingers 里它指整个响应，
+    保守落到正文 —— 落到 headers 会把大量只出现在 body 的特征判成"看不到"）、
+    `regexps.header` → headers（若该版本有）。
+
+    选它而不选 Glass / TideFinger 的原因写在报告里：那两个的规则在 **Python 源码**里
+    （Glass 的 `config/rules.py`、TideFinger 是 Python2），取规则就要**执行外部代码**，
+    那是另一条安全边界，本脚本不做。fingers 的规则是**数据文件**，与另两个源同级。
+    """
+    try:
+        import yaml
+    except ImportError:
+        print("[!] 需要 PyYAML：pip install pyyaml", file=sys.stderr)
+        return [], {}
+    stat = {"files": 0, "matchers": 0, "compile_fail": 0, "short": 0}
+    out = []
+    for f in sorted(Path(src).rglob("*.y*ml")):
+        if f.name in ("port.yaml", "aliases.yaml"):     # 端口表/别名表不是 Web 指纹
+            continue
+        stat["files"] += 1
+        try:
+            data = yaml.safe_load(f.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            continue
+        if not isinstance(data, list):
+            continue
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            tag = _norm_tag(item.get("name"), f.stem)
+            if not tag:
+                continue
+            for rule in (item.get("rule") or []):
+                regs = ((rule or {}).get("regexps") or {})
+                for key, where in (("body", "body"), ("regexp", "body"), ("header", "headers")):
+                    for pat in (regs.get(key) or []):
+                        pat = str(pat or "").strip()
+                        if not pat:
+                            continue
+                        stat["matchers"] += 1
+                        try:
+                            re.compile(pat)
+                        except re.error:
+                            stat["compile_fail"] += 1
+                            continue
+                        out.append((tag, where, pat))
+    return out, stat
+
+
+KINDS = {"fingerprinthub": from_fingerprinthub, "ehole": from_ehole,
+         "fingers": from_fingers, "glass": from_glass}
 
 
 def main(argv=None):

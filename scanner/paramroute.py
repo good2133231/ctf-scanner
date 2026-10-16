@@ -55,6 +55,12 @@ KIND_CHECKS = {
     "xss": ("a03-xss-reflect",),
     "openredirect": ("a01-open-redirect",),
     "ssrf": ("a10-ssrf-callback",),
+    # 续204补上 LFI 与 IDOR 的落点（`a01-lfi-traversal` / `a01-idor-enum`）。
+    "lfi": ("a01-lfi-traversal",),
+    "idor": ("a01-idor-enum",),
+    # `rce` **故意仍然缺席**：确认它要让目标真的把命令跑起来（`;ls` / `|id`），
+    # 那越过 AGENTS §1 的"检测一律非破坏性、无写操作"红线。我们只识别"这个参数像命令入口"
+    # （`kinds()` 里照旧返回 rce，页面标「暂无对应检查」），不假装能测。
 }
 
 # 中文名（页面展示用；与 KIND_CHECKS 的键同一套）

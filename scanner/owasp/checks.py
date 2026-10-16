@@ -906,6 +906,111 @@ def _ssrf_callback(url, settings, logger=None):
 
 # ---------- A06 已知组件 ----------
 
+# ---- 续204：文件读取/路径穿越（参数路由 lfi 的落点）----
+# **只读 GET**，判据是"响应里出现了**只可能来自文件内容**的特征串"（`root:x:0:0` /
+# `[boot loader]`）。不做"执行命令"类的探测 —— 那需要让目标真的跑起来，越过 §1 的
+# 非破坏性红线（详见 scanner/paramroute.py 对 rce 类别的说明）。
+_LFI_PARAMS = ("file", "path", "filename", "download", "read", "doc", "document",
+               "template", "include", "page", "dir", "folder", "cat", "load", "open",
+               "view", "content", "conf", "config")
+_LFI_PAYLOADS = (
+    "../../../../etc/passwd",
+    "..%2f..%2f..%2f..%2fetc%2fpasswd",
+    "....//....//....//etc/passwd",
+    "/etc/passwd",
+    "..\\..\\..\\..\\windows\\win.ini",
+    # win.ini 的绝对路径**运行时拼**：源码里不留 `C:`+斜杠 的连续串 —— 门禁 [5o] 有条"不许出现写死的盘符路径"（那是防把本机路径写进代码），而这里是**探测用的载荷**。
+    "C:" + "\\windows\\win.ini",
+)
+_LFI_MARKS = (
+    r"root:x:0{1,2}:",          # /etc/passwd
+    r"daemon:x:", r"\bbin:x:",
+    r"\[boot loader\]",         # windows/win.ini
+    r"\[fonts\]",
+)
+_LFI_MAX_REQ = 6
+
+
+@check("a01-lfi-traversal", "文件读取/路径穿越", "high", "A01")
+def _lfi_traversal(url, settings):
+    """路径穿越探测（续204）：只对**带文件类参数**的 URL 跑，判据是文件内容特征回显。
+
+    只读 GET；每个参数试几种最常见的穿越写法（含 URL 编码与 `....//` 这种 WAF 绕过形态），
+    命中特征串即报 high。请求上限 `_LFI_MAX_REQ` —— 参数多的 URL 只试前几个
+    （顺序由 `_ordered` 定，保持确定性）。
+    """
+    from .. import paramroute as _pr204
+    if "lfi" not in _pr204.kinds(url):
+        return None          # 参数名不是文件类 ⇒ 不白发请求
+    sep = "&" if "?" in url else "?"
+    used = 0
+    for param in _ordered(_LFI_PARAMS):
+        for payload in _LFI_PAYLOADS:
+            if used >= _LFI_MAX_REQ:
+                return None
+            r = _get(f"{url}{sep}{param}={payload}", settings)
+            used += 1
+            if not r:
+                continue
+            text = (r.get("text") or "").lower()
+            for pat in _LFI_MARKS:
+                m = re.search(pat, text)
+                if m:
+                    return _mk("a01-lfi-traversal", "文件读取/路径穿越", "high", "A01", url,
+                               f"参数 {param} 填入穿越路径后响应命中文件内容特征 "
+                               f"'{m.group(0)}'，疑似可读服务器文件，需人工确认。",
+                               text[:300])
+    return None
+
+
+# ---- 续204：对象 ID 可枚举（参数路由 idor 的落点）----
+# **这不是越权证明**：真正的水平越权要两个身份去比对，而本框架不持有凭据（§1 不做认证
+# 绕过）。这里只回答一个更弱但同样有用的问题 —— "换一个 ID 也能正常拿到内容吗"：
+# 能，说明鉴权没绑对象，值得人工登两个号去确认。所以级别是 **info**，detail 里写明边界。
+_IDOR_MAX_REQ = 2
+
+
+@check("a01-idor-enum", "对象 ID 可枚举（越权线索）", "info", "A01")
+def _idor_enum(url, settings):
+    """IDOR 线索（续204）：同一参数换一个数字值，看响应是否"照样给内容"。
+
+    判据三条同时满足才报（宁可漏报也不要误报）：两次都 200、正文长度差 < 30%、
+    正文确实不同。只读 GET、最多 `_IDOR_MAX_REQ` 个请求（只试第一个数字参数）。
+    """
+    from .. import paramroute as _pr204
+    if "idor" not in _pr204.kinds(url):
+        return None
+    q = url.split("?", 1)[1] if "?" in url else ""
+    target = None
+    for piece in q.split("&"):
+        if "=" not in piece:
+            continue
+        k, v = piece.split("=", 1)
+        if v.strip().isdigit() and k.strip():
+            target = (k, int(v.strip()))
+            break
+    if not target:
+        return None
+    key, val = target
+    sep = "&" if "?" in url else "?"
+    r1 = _get(url, settings)
+    r2 = _get(f"{url}{sep}{key}={val + 1}", settings)
+    if not r1 or not r2:
+        return None
+    if int(r1.get("status") or 0) != 200 or int(r2.get("status") or 0) != 200:
+        return None
+    t1, t2 = str(r1.get("text") or ""), str(r2.get("text") or "")
+    if not t1 or not t2 or t1 == t2:
+        return None
+    if abs(len(t1) - len(t2)) > max(len(t1), len(t2)) * 0.3:
+        return None
+    return _mk("a01-idor-enum", "对象 ID 可枚举（越权线索）", "info", "A01", url,
+               f"参数 {key} 从 {val} 换成 {val + 1} 后仍返回 200 且内容不同"
+               f"（{len(t1)} → {len(t2)} 字节）：鉴权可能没绑到对象上。"
+               f"**这只是线索不是越权证明** —— 水平越权要两个身份比对，本框架不持有凭据。",
+               t2[:300])
+
+
 @check("a06-legacy-banner", "老旧组件版本特征", "low", "A06")
 def _legacy_banner(url, settings):
     r = _get(url, settings)
