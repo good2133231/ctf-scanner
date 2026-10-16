@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}EXP 待确认{% endblock %}
+{% block content %}
+<p class="muted note">
+  <b>这里放的是"利用型"POC —— 会真的在目标上执行命令或改动数据的那一类。</b><br>
+  扫描<b>从不</b>自动跑它们：它们不在 POC 引擎的目录里（<span class="mono">config/exp-pending/</span>），
+  引擎压根发现不了。要跑，在下面填目标 URL 点「执行」—— <b>一次一个，没有批量</b>：
+  批量执行不是"验证"，那是拿目标当靶场。<br>
+  <b>结果不落漏洞表</b>：EXP 的产出由人判读，页面原样回显；跑一次记一条审计（谁、跑哪个、打哪个 URL）。<br>
+  验证型的（SQL 注入报错回显 / XSS 反射 / 开放重定向 / 布尔盲注…）<b>不在这里</b>，
+  它们照旧在扫描里自动跑 —— 主理人点单"sql 注入那种帮派就不必有"。
+</p>
+<section class="panel">
+  <h2>待确认清单（{{ rows|length }} 条）</h2>
+  {% if not rows %}
+  <p class="muted">暂无。来源：<span class="mono">python tools/update_pocs.py --source nuclei</span>
+    拉取时，被判定为"利用型"的模板会落到这里（而不是进自动扫描的 POC 目录）。</p>
+  {% endif %}
+  <table id="tbl-exp">
+    <thead><tr><th>#</th><th>文件</th><th>名称</th><th>级别</th><th>为什么待确认</th>
+      <th>标签</th><th>大小</th><th>落盘时间</th><th>手动执行</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td class="mono small">{{ r.name }}</td>
+        <td>{{ r.title }}{% if r.pid %}<span class="muted small"> · {{ r.pid }}</span>{% endif %}</td>
+        <td>{{ r.severity }}</td>
+        <td class="mono small" title="{{ r.reason }}">{{ r.reason }}</td>
+        <td class="muted small">{{ r.tags or '-' }}</td>
+        <td class="muted small">{{ r.size }}</td>
+        <td class="muted small">{{ r.mtime }}</td>
+        <td>
+          <form class="inline-form" method="post" action="{{ url_for('api_exp_run') }}"
+                onsubmit="return confirm('将对这个 URL 执行该 EXP（会真的改动目标）：\\n\\n{{ r.name }}\\n{{ r.reason }}\\n\\n确定执行？');">
+            <input type="hidden" name="file" value="{{ r.name }}">
+            <input name="url" placeholder="https://目标/" size="26" required>
+            <button class="btn-mini danger" type="submit">执行</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

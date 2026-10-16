@@ -27168,16 +27168,21 @@ expression: r0()
     _rce206 = ("id: hfs-rce\ninfo:\n  id: hfs-rce\n  name: HFS RCE\n"
                "http:\n  - path:\n      - \"{{BaseURL}}/?search=%00{.exec|cmd=ipconfig}\"\n"
                "    matchers:\n      - type: word\n        words: [ok]\n")
+    # 续207：RCE 判据从 validate_yaml **移到 exploit_reason**（validate 管"能不能收"，
+    # exploit_reason 管"走哪路"）⇒ 这里改成：**要收下**（资产留着），但认出它是利用型。
     _ok206, _why206 = _pm206.validate_yaml(_rce206, "hfs-rce.yaml")
-    assert not _ok206 and "ipconfig" in _why206, (_ok206, _why206)
-    assert "非破坏性" in _why206, "拒收理由要说清是**哪条红线**，不只是说不行"
+    assert _ok206, f"RCE 型 POC 也该被**收下**（分流保留，不是扔掉）：{_why206}"
+    assert "命令执行" in _pm206.exploit_reason(_pm206._load_yaml(_rce206)), \
+        "exploit_reason 必须认出它是利用型"
     _same206 = _rce206.replace("ipconfig", "server")
-    assert _pm206.validate_yaml(_same206, "ok.yaml")[0] is True, \
-        "变异：去掉命令执行特征后应当放行（否则这条判据把正常 POC 也挡了）"
+    assert _pm206.validate_yaml(_same206, "ok.yaml")[0] is True
+    assert _pm206.exploit_reason(_pm206._load_yaml(_same206)) == "", \
+        "变异：去掉命令执行特征后不该再被判利用型（承重点是 exploit_reason 那条判据）"
     # 命令替换形态（`id` 太短不能进命令表，但 `$(` 本身就是形态判据）
     _sub206 = ("id: b\ninfo: {id: b, name: B}\nhttp:\n  - raw:\n"
                "      - \"GET /?x=$(id) HTTP/1.1\"\n    matchers: [{type: word, words: [x]}]\n")
-    assert _pm206.validate_yaml(_sub206)[0] is False, "命令替换形态必须拒收"
+    assert "命令执行" in _pm206.exploit_reason(_pm206._load_yaml(_sub206)), \
+        "命令替换形态（`$(`）必须被认出是利用型"
     # 反向：端点路径里的 /whoami **不是**执行（第一版就是误杀在这上面）
     _who206 = ("id: jenkins\ninfo: {id: jenkins, name: Jenkins}\nhttp:\n  - path:\n"
                "      - \"{{BaseURL}}/whoami\"\n    matchers: [{type: word, words: [ok]}]\n")
@@ -27206,19 +27211,24 @@ expression: r0()
                  "README.md": "hello",
                  "http/technologies/rce.yaml": _rce206}
     _okf206, _badf206, _skip206 = _pm206.plan_files(_files206)
-    assert set(_okf206) == {"fingerprint", "poc"}, _okf206.keys()
-    assert len(_okf206["fingerprint"]) == 1 and len(_okf206["poc"]) == 1, _okf206
-    assert "http/technologies/rce.yaml" in _badf206, "RCE 那条必须被拒"
+    # 续207：三路。rce 那条**不再是被拒**，而是被分流到 exploit（资产留着，只是不自动跑）
+    assert set(_okf206) == {"fingerprint", "poc", "exploit"}, sorted(_okf206)
+    assert len(_okf206["fingerprint"]) == 1 and len(_okf206["poc"]) == 1, sorted(_okf206)
+    assert len(_okf206["exploit"]) == 1, f"RCE 那条该被分流：{_okf206.get('exploit')}"
+    assert "http/technologies/rce.yaml" not in _badf206, "RCE 不再是'被拒'，是'分流'"
     assert "README.md" in _skip206, "不认识的路径该跳过而不是报错"
     _s206 = _pm206.apply_files(str(_d206), _okf206)
-    assert _s206["written"] == 2, _s206
+    assert _s206["written"] == 2 and _s206["exploit"] == 1, _s206
     # 前缀按**这一路**剥：指纹路剥 `http/fingerprints/`、POC 路剥 `http/`
     assert (_d206 / "fingerprints" / "grafana.yaml").exists(), \
         sorted(str(x.relative_to(_d206)) for x in _d206.rglob("*") if x.is_file())
     assert (_d206 / "pocs" / "vulnerabilities" / "generic" / "sqli.yaml").exists()
     _s206b = _pm206.apply_files(str(_d206), _okf206)
     assert _s206b["written"] == 0, f"第二次跑必须全幂等（manifest 生效）：{_s206b}"
-    assert not (_d206 / "fingerprints" / "rce.yaml").exists(), "RCE 那条不该落盘"
+    assert not (_d206 / "fingerprints" / "rce.yaml").exists(), "RCE 不该落进指纹目录"
+    # `EXP_DEST` 是相对路径 `config/exp-pending`，拼到 dest.parent 上 ⇒ 多一级 config/
+    assert (_d206.parent / "config" / "exp-pending" / "technologies" / "rce.yaml").exists(), \
+        "RCE 该落到 EXP 目录（引擎发现不了的地方）"
 
     # ⑥ update() 桩掉 fetch_repo：报告要能念给用户听（各类计数 + 拒收理由）
     _real_fetch206 = _pm206.fetch_repo
@@ -27228,8 +27238,8 @@ expression: r0()
     finally:
         _pm206.fetch_repo = _real_fetch206
     assert _rep206["ok"] and _rep206["counts"]["fingerprint"] == 1, _rep206
-    assert _rep206["counts"]["rejected"] == 1 and _rep206["counts"]["skipped"] == 1, _rep206["counts"]
-    assert any("ipconfig" in v for v in _rep206["rejected"].values()), _rep206["rejected"]
+    assert _rep206["counts"]["exploit"] == 1, _rep206["counts"]
+    assert _rep206["counts"]["skipped"] == 1, _rep206["counts"]
 
     # ⑦ CLI：--list 与 --help 都能跑（真拉取不在门禁里跑 —— 零网络）
     import subprocess as _sp206
@@ -27240,8 +27250,87 @@ expression: r0()
     # ⑧ 指纹第五源已登记（nuclei 官方 fingerprints；文件可不存在，加载器跳过）
     assert any("fingerprints_nuclei.txt" in f for f in _fp197.EXTRA_FILES), \
         "nuclei 指纹表没登记进 EXTRA_FILES（跑完更新命令不会自动生效）"
-    print("[206] 续206 ok: --update-pocs(URL 白名单/路径穿越/校验四道/分类两路/落盘幂等/manifest)｜"
-          "RCE 运行期护栏(拒收+说清红线+变异证伪)｜CLI --list｜nuclei 指纹源已登记")
+    # 续207：RCE 那道从 validate_yaml 移到 exploit_reason（拒收 → **分流保留**），措辞跟着改
+    print("[206] 续206 ok: --update-pocs(URL 白名单/路径穿越/校验三道/分类两路/落盘幂等/manifest)｜"
+          "利用型识别(只扫请求内容+只认形态+变异证伪)｜CLI --list｜nuclei 指纹源已登记")
+    # ---- [207] 续207：验证型 / 利用型分流（EXP 待确认，手动才跑）----
+    # ① 分流：验证型照旧自动跑；利用型（命令执行 / 写操作）走 exploit 路
+    _v207 = {
+        "sqli": ("id: sqli\ninfo: {id: sqli, name: SQLi}\nhttp:\n  - path: [\"{{BaseURL}}/?id=1'\"]\n"
+                 "    matchers: [{type: word, words: [sql syntax]}]\n", "poc"),
+        "xss": ("id: x\ninfo: {id: x, name: XSS}\nhttp:\n  - path: [\"{{BaseURL}}/?q=x\"]\n"
+                "    matchers: [{type: word, words: [alert]}]\n", "poc"),
+        "blind": ("id: b\ninfo: {id: b, name: Blind}\nhttp:\n  - path: [\"{{BaseURL}}/?id=1 AND 1=1\"]\n"
+                  "    matchers: [{type: word, words: [ok]}]\n", "poc"),
+        "whoami": ("id: j\ninfo: {id: j, name: Jenkins}\nhttp:\n  - path: [\"{{BaseURL}}/whoami\"]\n"
+                   "    matchers: [{type: word, words: [ok]}]\n", "poc"),
+        "rce": ("id: hfs\ninfo: {id: hfs, name: HFS}\nhttp:\n  - path:\n"
+                "      - \"{{BaseURL}}/?s=%00{.exec|cmd=ipconfig}\"\n"
+                "    matchers: [{type: word, words: [ok]}]\n", "exploit"),
+        "write": ("id: w\ninfo: {id: w, name: W}\nhttp:\n  - raw:\n"
+                  "      - \"GET /?f=x> /etc/cron.d/y HTTP/1.1\"\n"
+                  "    matchers: [{type: word, words: [ok]}]\n", "exploit"),
+    }
+    for _n207, (_t207, _want207) in _v207.items():
+        _ok207, _bad207, _ = _pm206.plan_files({"http/vulnerabilities/generic/t.yaml": _t207})
+        assert _want207 in _ok207, f"{_n207} 该走 {_want207}，实到 {list(_ok207) or _bad207}"
+    # 判据同源、处置不同：两者都要"能收"，区别只在 exploit_reason
+    for _n207 in ("sqli", "rce", "write"):
+        assert _pm206.validate_yaml(_v207[_n207][0])[0] is True, f"{_n207} 连收都没收下"
+    assert "命令执行" in _pm206.exploit_reason(_pm206._load_yaml(_v207["rce"][0]))
+    assert "写操作" in _pm206.exploit_reason(_pm206._load_yaml(_v207["write"][0]))
+    assert _pm206.exploit_reason(_pm206._load_yaml(_v207["sqli"][0])) == "", "SQLi 不是利用型"
+    assert _pm206.exploit_reason(_pm206._load_yaml(_v207["blind"][0])) == "", "布尔盲注不是利用型"
+
+    # ② EXP 落点**不在** POC_DIRS ⇒ 引擎发现不了 ⇒ 自动扫描跑不到（物理隔离）
+    from scanner.pocs import engine as _eng207
+    assert not any("exp-pending" in str(d) for d in _eng207.POC_DIRS), \
+        "exp-pending 竟在 POC_DIRS 里 ⇒ EXP 会被自动跑（这条改动的全部意义就没了）"
+    _d207 = _TMPDIR / "expdest207"
+    _ok207b, _, _ = _pm206.plan_files(
+        {"http/vulnerabilities/generic/rce.yaml": _v207["rce"][0],
+         "http/vulnerabilities/generic/sqli.yaml": _v207["sqli"][0]})
+    _st207 = _pm206.apply_files(str(_TMPDIR / "pocdest207"), _ok207b, exp_dest=str(_d207))
+    assert _st207["exploit"] == 1 and _st207["written"] == 1, _st207
+    assert (_d207 / "vulnerabilities" / "generic" / "rce.yaml").exists(), "RCE 没落到 EXP 目录"
+    assert (_TMPDIR / "pocdest207" / "pocs" / "vulnerabilities" / "generic"
+            / "sqli.yaml").exists(), "SQLi 必须照旧进 POC 目录（自动跑）"
+    assert not (_TMPDIR / "pocdest207" / "pocs" / "vulnerabilities" / "generic"
+                / "rce.yaml").exists(), "RCE 竟落进了 POC 目录（会被自动跑）"
+
+    # ③ GUI：清单页 + 手动执行（一次一个、无批量、结果不落 vulns 表）
+    #  `resolve` 桩到临时目录 —— 视图读的是**真实** config/exp-pending/，测试不该往仓库里写
+    _real_res207 = _pm206.resolve
+    _pm206.resolve = lambda pth: (_d207 if "exp-pending" in str(pth) else _real_res207(pth))
+    try:
+        _h207 = c.get("/exp").get_data(as_text=True)
+        assert "EXP 待确认" in _h207, _h207[:200]
+        assert "结果不落漏洞表" in _h207, "页面必须写明结果不落 vulns 表（人工判读）"
+        assert "一次一个，没有批量" in _h207, "必须写明没有批量这条边界"
+        assert "/exp" in (ROOT / "gui" / "templates" / "base.html").read_text(encoding="utf-8"), \
+            "侧栏没有「EXP 待确认」入口"
+        # 三态拒绝：路径穿越 / 非 http URL / 文件不存在
+        assert c.post("/api/exp/run", data={"file": "../../etc/passwd",
+                                            "url": "https://x.test/"}).status_code == 400
+        assert c.post("/api/exp/run", data={"file": "a.yaml",
+                                            "url": "ftp://x/"}).status_code == 400
+        assert c.post("/api/exp/run", data={"file": "nope.yaml",
+                                            "url": "https://x.test/"}).status_code == 404
+        # 真跑一个：结果原样回显，且**不写 vulns 表**
+        _tid207 = db.create_task("smoke-207", "https://hc207.test/", ["vulnscan"], {})
+        _r207 = c.post("/api/exp/run",
+                       data={"file": "vulnerabilities/generic/rce.yaml",
+                             "url": "https://hc207.test/"})
+        assert _r207.status_code == 200, _r207.get_data(as_text=True)[:300]
+        _j207 = _r207.get_json()
+        assert _j207["ok"] and "findings" in _j207, _j207
+        assert db.list_vulns(_tid207, limit=None) == [], \
+            "EXP 的结果不该落 vulns 表（由人工判读）"
+    finally:
+        _pm206.resolve = _real_res207
+    print("[207] 续207 ok: 验证型(SQLi/XSS/盲注/whoami端点)自动跑｜利用型(RCE/写操作)分流保留｜"
+          "EXP 落引擎发现不了的目录(POC_DIRS 无 exp-pending)｜/exp 清单页+手动执行(三态拒绝/"
+          "一次一个/结果不落 vulns 表)")
     print("SMOKE PASS")
 
 

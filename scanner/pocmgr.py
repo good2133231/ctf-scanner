@@ -74,6 +74,21 @@ _CMD_NAMES = r"(?:ipconfig|ifconfig|whoami|/bin/sh|/bin/bash|cmd\.exe|net\s+user
 #      （`id` 这种名字太短太通用，不能进命令表，但 `$(id)` 照样该拦，所以单独判形态）。
 _CMD_SPLICE = re.compile(r"(?:[;|]\s*(?:cmd[=\s]+)?\s*" + _CMD_NAMES + r")|\$\(|`", re.I)
 
+# **写操作**形态（续207，主理人点单"有些需要 exp 再次验证的"）：会改动目标的一律不能自动跑。
+# 与命令执行同等对待 —— 都是"利用"而不是"验证"。
+_WRITE_MARKS = (
+    r"\brm\s+-", r"\bmv\s+", r"\bchmod\b", r"\bchown\b", r"\bmkdir\b", r"\btouch\b",
+    r">\s*/", r">>\s*/", r"\bDROP\s+TABLE\b", r"\bDELETE\s+FROM\b", r"\bUPDATE\s+\w+\s+SET\b",
+    r"\bINSERT\s+INTO\b", r"\bTRUNCATE\b", r"\bwget\s+", r"\bcurl\s+.*-o\b",
+    r"\bshutdown\b", r"\breboot\b", r"\bkill\s+-9", r"\bformat\s+c:",
+)
+_WRITE_SPLICE = re.compile("|".join(_WRITE_MARKS), re.I)
+
+# 利用型 POC 的落点：**刻意不在** `pocs.engine.POC_DIRS` 里 ⇒ 引擎永远发现不了它，
+# 自动扫描因此跑不到；只有 GUI「EXP 待确认」页列得出它，人点了才跑（见 gui/app.py 的
+# `/exp` 与 `/api/exp/run`）。这是"验证"与"利用"分开的物理保证，不靠约定。
+EXP_DEST = "config/exp-pending"
+
 # 会发到目标上的字段（其余是给人看的：info.description / author / reference …）
 _REQUEST_KEYS = ("path", "raw", "payload", "payloads", "body", "data", "args", "headers")
 
@@ -148,11 +163,17 @@ def _has_matchers(data):
 def validate_yaml(text, name=""):
     """单条模板能不能被我们收下：`(ok, 拒绝理由)`。
 
-    四道判据，缺一不可：
+    **三道**判据（续207 从四道改成三道，原因见下）：
     ① **YAML 能解析**（且是 dict）—— 解析不了的东西没法匹配；
-    ② 有 `info.id` 与 `info.name` —— 没有 id 就没法在 manifest / 页面上指认它；
-    ③ 有 `matchers` 或 `extractors` —— 没有判据的模板跑一次纯白发请求；
-    ④ **不是命令执行形态**（RCE 护栏，见模块 docstring）。
+    ② 有 `id`（顶层或 `info.id`）与 `info.name` —— 没有 id 就没法在 manifest / 页面上指认它；
+    ③ 顶层或任一协议块里有 matchers / extractors —— 没有判据的模板跑一次纯白发请求。
+
+    **为什么原来那道"命令执行形态就拒收"被移走了**（续206 → 续207）：它的出发点是对的
+    （AGENTS §1：检测非破坏性），但处置太粗 —— 直接拒收会把"利用型 POC"这个**资产**扔掉，
+    而主理人要的是"留着 exp，只是别自动跑，回头手动点"。于是职责拆成两问：
+      - `validate_yaml`（本函数）只回答"**能不能收**"；
+      - `exploit_reason()` 回答"**该走哪路**"（验证型自动跑 / 利用型分流待人工确认）。
+    两问同源（都只看会发出去的内容、都只认形态），但处置不同：拦掉 vs 保留。
     """
     try:
         import yaml
@@ -172,12 +193,32 @@ def validate_yaml(text, name=""):
     # 续206 实测：只查顶层会把 `http/technologies/` 下几千条全判成"无 matchers"拒收。
     if not _has_matchers(data):
         return False, "顶层与各协议块里都没有 matchers/extractors（跑它纯白发请求）"
-    m = _CMD_SPLICE.search(_request_texts(data))
-    if m:
-        return False, (f"命令执行形态（请求内容里命中 {m.group(0).strip()!r}）⇒ 越过 "
-                       "AGENTS §1 非破坏性红线，拒收。要测这类漏洞请人工在授权环境里做，"
-                       "不走自动扫描。")
     return True, ""
+
+
+def exploit_reason(data):
+    """这个模板属于**利用型**吗：返回 `''`（验证型，可自动跑）或一句理由。
+
+    续207（主理人点单）："我们如果有一些 rce 只想命令我们仅做去验证 poc 验证他存在即可"，
+    "回头可以给个列表 如何 exp 也保留着，有些需要 exp 验证我们回头再手动点击执行 exp"，
+    "比如 sql 注入那种帮派就不必有"。
+    ⇒ 于是 POC 分两档：
+      - **验证型**（判"漏洞在不在"）：SQL 注入报错回显、布尔盲注、XSS 反射、开放重定向…
+        照旧自动跑，一个都不该被拦（上面那句"sql 注入那种帮派就不必有"就是它）；
+      - **利用型**（会真的改动/执行）：命令执行、写文件、删改数据 ⇒ **不自动跑**，
+        落 `config/exp-pending/`（引擎的 `POC_DIRS` 里没有这个目录），只在 GUI 的
+        「EXP 待确认」页里列着，人点了才跑。
+    判据与 `validate_yaml` 的 RCE 护栏**同源**（都只看会发出去的内容、都只认形态），
+    区别只是处置：拦掉 vs 分流保留。
+    """
+    req = _request_texts(data)
+    m = _CMD_SPLICE.search(req)
+    if m:
+        return f"命令执行（请求内容命中 {m.group(0).strip()!r}）"
+    m = _WRITE_SPLICE.search(req)
+    if m:
+        return f"写操作（请求内容命中 {m.group(0).strip()!r}）"
+    return ""
 
 
 def classify(relpath):
@@ -225,24 +266,74 @@ def plan_files(files, validate=validate_yaml):
         if not good:
             bad[rel] = reason
             continue
+        if kind == "poc" or kind == "fingerprint":
+            # 续207：**利用型分流**（对两路都生效 —— 第一版只对 poc 路判，结果
+            # `http/technologies/` 下的 RCE 型模板被归类成 fingerprint，直接漏进指纹表）。
+            # 验证型（SQL 注入报错回显 / XSS 反射 / 开放重定向…）照旧进各自目录自动跑；
+            # 会真的执行命令或改动目标的那类**不进** —— 改走 exploit 路，落到引擎的
+            # `POC_DIRS` 里没有的目录（见 `EXP_DEST`）。
+            # 这不是"拦掉"，是"留着但不让自动跑"：exp 本身仍是资产，只是要人点头。
+            why207 = exploit_reason(_load_yaml(text))
+            if why207:
+                ok.setdefault("exploit", {})[rel] = text
+                continue
         ok.setdefault(kind, {})[rel] = text
     return ok, bad, skip
 
 
-def apply_files(dest, planned, logger=None):
-    """落盘 + 记 manifest。**只写 dest 目录内**，先写 `.tmp` 再 rename（不留下半截文件）。"""
+def _load_yaml(text):
+    """解析 yaml 供判据用；解析不了就返回 `{}`（调用方按"无判据可看"处理）。"""
+    try:
+        import yaml
+        d = yaml.safe_load(text)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def apply_files(dest, planned, logger=None, exp_dest=None):
+    """落盘 + 记 manifest。**只写 dest 目录内**，先写 `.tmp` 再 rename（不留下半截文件）。
+
+    `exp_dest`（续207）：利用型那一路的落点，**刻意不给默认值等于 dest** ——
+    默认必须指向 `EXP_DEST` 那个引擎发现不了的目录，调用方忘了传就等于把 EXP 混进
+    自动扫描的 POC 目录里（那正是这条改动要防的事）。
+    """
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     man = load_manifest(dest)
     new_man = dict(man)
-    stats = {"written": 0, "unchanged": 0}
+    stats = {"written": 0, "unchanged": 0, "exploit": 0}
+    exp_dir = Path(exp_dest) if exp_dest else dest.parent / EXP_DEST
     for kind, files in (planned or {}).items():
+        if kind == "exploit":
+            # 单独记一份 manifest（与自动跑的那批分开，"哪些待人工确认"一眼数得出来）
+            sub = exp_dir
+            exp_dir.mkdir(parents=True, exist_ok=True)
+            eman = load_manifest(exp_dir)
+            for rel, text in files.items():
+                name = _safe_member(rel)[len("http/"):]
+                if not name:
+                    continue
+                target = sub / name
+                digest = sha256_text(text)
+                rel_key = str(target.relative_to(exp_dir))
+                if eman.get(rel_key) == digest and target.exists():
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_suffix(target.suffix + ".tmp")
+                tmp.write_text(text, encoding="utf-8")
+                tmp.replace(target)
+                eman[rel_key] = digest
+                stats["exploit"] += 1
+            (exp_dir / MANIFEST).write_text(
+                json.dumps(eman, indent=1, sort_keys=True), encoding="utf-8")
+            continue
         sub = dest / ("fingerprints" if kind == "fingerprint" else "pocs")
         for rel, text in files.items():
             # 剥前缀要**按这一路剥**：指纹路剥掉 `http/fingerprints/`（只留 `grafana.yaml`），
             # POC 路剥掉 `http/`（留 `vulnerabilities/generic/sqli.yaml`）。
             # 两路用同一个剥法会把指纹写成 `fingerprints/fingerprints/…`（续206 实测第一版）。
-            _pfx = "http/fingerprints/" if kind == "fingerprint" else "http/"
+            _pfx = "http/technologies/" if kind == "fingerprint" else "http/"
             name = _safe_member(rel)[len(_pfx):]
             if not name:
                 continue
@@ -319,16 +410,22 @@ def fetch_repo(source, ref="", logger=None):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def update(source="nuclei", ref="", dest=None, logger=None):
-    """跑一轮：取 → 校验分类 → 落盘。返回一份能直接念给用户听的报告。"""
+def update(source="nuclei", ref="", dest=None, logger=None, exp_dest=None):
+    """跑一轮：取 → 校验分类 → 落盘。返回一份能直接念给用户听的报告。
+
+    `exp_dest`（续207）：利用型 POC 的落点，默认 `EXP_DEST`（**不在** POC_DIRS 里 ⇒ 不自动跑）。
+    """
     dest = dest or resolve(POC_DEST)
     files = fetch_repo(source, ref=ref, logger=logger)
     if not files:
         return {"ok": False, "error": "一个模板都没取到（目录名变了？仓库结构改了？）"}
     ok, bad, skip = plan_files(files)
-    stats = apply_files(dest, ok, logger=logger)
+    # `dest` 可能是调用方传的字符串（CLI 就传 str）—— `Path()` 包一层再用 `.parent`
+    stats = apply_files(dest, ok, logger=logger,
+                        exp_dest=exp_dest or str(Path(dest).parent / EXP_DEST))
     return {"ok": True, "source": source, "ref": ref,
             "counts": {"fingerprint": len(ok.get("fingerprint", {})),
                        "poc": len(ok.get("poc", {})),
+                       "exploit": len(ok.get("exploit", {})),
                        "rejected": len(bad), "skipped": len(skip)},
             "written": stats, "rejected": dict(list(bad.items())[:20])}

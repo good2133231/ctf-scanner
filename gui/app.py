@@ -3421,6 +3421,90 @@ def create_app():
         logger.info(f"[gui] 全端口扫描任务 #{task_id} 已创建（{len(hosts)} 个主机）")
         return redirect(url_for("task_detail", task_id=task_id))
 
+    # ---------- EXP 待确认（续207）----------
+    # 主理人点单：「有些需要 exp 再次验证的，比如 sql 注入那种帮派就不必有」+「回头可以给个列表，
+    # 如何 exp 也保留着，有些需要 exp 验证我们回头再手动点击执行 exp」。
+    # ⇒ POC 分两档：**验证型**（SQL 注入报错回显 / XSS 反射 / 开放重定向…）照旧自动跑；
+    #    **利用型**（命令执行 / 写文件 / 删改数据）不进 POC 目录（引擎发现不了），落到
+    #    `config/exp-pending/`，只在这一页列着，人点了才跑。物理隔离，不靠约定。
+    @app.route("/exp")
+    @login_required
+    def exp_pending():
+        """列出待人工确认的 EXP（只读清单 + 手动执行入口）。"""
+        from scanner import pocmgr as _pm207
+        d = _pm207.resolve(_pm207.EXP_DEST)
+        rows = []
+        if d.is_dir():
+            for f in sorted(d.rglob("*.y*ml")):
+                try:
+                    text = f.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                data = _pm207._load_yaml(text)
+                info = data.get("info") or {}
+                rows.append({
+                    "name": f.relative_to(d).as_posix(),
+                    "title": str(info.get("name") or f.stem),
+                    "pid": str(data.get("id") or info.get("id") or ""),
+                    "severity": str(info.get("severity") or "unknown"),
+                    "tags": ", ".join(str(t) for t in (info.get("tags") or [])),
+                    "reason": _pm207.exploit_reason(data) or "（判据未命中，请人工看）",
+                    "size": len(text),
+                    "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime)),
+                })
+        return render_template("exp.html", rows=rows, dest=str(d))
+
+    @app.route("/api/exp/run", methods=["POST"])
+    @login_required
+    def api_exp_run():
+        """手动执行**一个** EXP（续207）。三条硬边界：
+
+        ① 文件必须在本项目 `config/exp-pending/` 内（防路径穿越去打服务器上别的东西）；
+        ② 目标 URL 必须 http(s)（并且只打这一个，**没有批量**——批量执行 EXP 不是"验证"）；
+        ③ **结果不落 vulns 表**：EXP 的产出由人判读，页面原样回显。
+           跑一次记一条审计（谁、跑哪个、打哪个 URL）—— 这一步会真的改动目标。
+        """
+        from scanner import pocmgr as _pm207
+        _raw_name = str(request.form.get("file") or "").strip()
+        try:
+            name = _pm207._safe_member(_raw_name)
+        except ValueError as _e207:
+            # `_safe_member` 对绝对路径 / 盘符 / `..` 一律**抛**（那是它的契约，
+            # 见 scanner/pocmgr.py）⇒ 这里必须接住并翻成 400，不能让它变成 500。
+            return jsonify({"ok": False, "error": f"非法的 EXP 文件名：{_e207}"}), 400
+        if not name or ".." in name:
+            return jsonify({"ok": False, "error": f"非法的 EXP 文件名：{_raw_name!r}"}), 400
+        url = str(request.form.get("url") or "").strip()
+        if not re.match(r"^https?://", url):
+            return jsonify({"ok": False, "error": "目标 URL 必须以 http:// 或 https:// 开头"}), 400
+        d = _pm207.resolve(_pm207.EXP_DEST)
+        target = d / name
+        try:
+            target.resolve().relative_to(d.resolve())
+        except ValueError:
+            return jsonify({"ok": False, "error": "文件不在 EXP 目录内"}), 400
+        if not target.is_file():
+            return jsonify({"ok": False, "error": f"EXP 不存在：{name}"}), 404
+        from scanner.pocs import engine as _eng207
+        try:
+            poc = _eng207.load_poc_file(str(target))
+            if not poc:
+                return jsonify({"ok": False, "error": "POC 载入失败（格式不对？）"}), 400
+            res = _eng207.run_poc_on_target(poc, url, settings)
+        except Exception as e:                   # noqa: BLE001 —— 失败也要把原因说清
+            return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+        me = _session_user() or {}
+        try:
+            audit.record("exp-run", me.get("username", ""), request.remote_addr or "",
+                         target=url, detail=f"{name} → {len(res or [])} 条结果", ok=True,
+                         actor_role=me.get("role", ""), settings=settings)
+        except Exception:                        # noqa: BLE001 —— 审计失败不该吞掉执行结果
+            logger.warning(f"[exp] 审计写入失败（{name} → {url}）")
+        logger.info(f"[exp] 手动执行 {name} → {url}：{len(res or [])} 条结果"
+                    f"（结果不落 vulns 表，由人工判读）")
+        return jsonify({"ok": True, "file": name, "url": url,
+                        "findings": [dict(x) for x in (res or [])]})
+
     @app.route("/csegs")
     @login_required
     def csegs():
