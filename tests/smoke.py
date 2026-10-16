@@ -653,9 +653,14 @@ def main():
     assert _exp_off.status_code == 403, _exp_off.status_code
     assert "报告导出功能已关闭" in _exp_off.get_data(as_text=True)
     assert "导出已关闭" in c.get(f"/tasks/{tid}").get_data(as_text=True)
-    # 任务列表页应有批量操作条与行内操作；详情页默认页签应为「潜在漏洞」
+    # 任务列表页应有勾选操作条；详情页默认页签应为「潜在漏洞」
+    # 续200：停止/重启/删除/导出**都搬到勾选栏**（行内只留「查看全结果」），
+    # 且按钮上的"批量"两个字去掉了 —— 判据跟着改成按 `data-bulk` 认，不再认文案。
     tasks_html = c.get("/tasks").get_data(as_text=True)
-    assert "批量停止" in tasks_html and "批量删除" in tasks_html and "data-op=\"restart\"" in tasks_html
+    for _b in ('data-bulk="stop"', 'data-bulk="restart"', 'data-bulk="delete"',
+               'data-bulk="export"'):
+        assert _b in tasks_html, f"任务页勾选栏缺 {_b}"
+    assert "查看全结果" in tasks_html, "行内仍要留「查看全结果」（那是看，不是改）"
     detail_html = c.get(f"/tasks/{tid}").get_data(as_text=True)
     assert "潜在漏洞" in detail_html and "目标与配置" in detail_html and "端口服务" in detail_html
     assert "C 段" in detail_html, "任务详情应含「C 段」页签"
@@ -26687,6 +26692,117 @@ expression: r0()
     print("[199] 续199 ok: 长尾清洗(黑名单有 login.php + 规则表里确实没有)｜"
           "真机爬虫(临时靶场·系统分配端口, 真发 HTTP): 带参/第二层/外链与 mailto 三向｜"
           "带参喂漏洞检测｜真入库｜详情页「链接」页签(按钮+内容块)")
+    # ---- [200] 续200：任务页操作收敛（行内只留查看全结果）/ 阶段预览框 / 批量导出 ----
+    from scanner import runner as _rn200, users as _us200
+
+    # ① 阶段中文标签与 STAGE_ORDER **同一产地**（加阶段忘补标签 ⇒ 预览框出现英文名）
+    assert set(_rn200.STAGE_LABELS) == set(_rn200.STAGE_ORDER), \
+        f"STAGE_LABELS 与 STAGE_ORDER 不一致：{set(_rn200.STAGE_ORDER) ^ set(_rn200.STAGE_LABELS)}"
+
+    # ② /api/tasks/<id>/stages：三态要说清（本任务含不含 / 策略开关开没开 / 有没有这个开关）
+    _t200 = db.create_task("smoke-200", "https://s200.test/", ["probe", "portscan"], {})
+    _j200 = c.get(f"/api/tasks/{_t200}/stages").get_json()
+    assert _j200.get("ok") and _j200["task"]["id"] == _t200, _j200
+    _by200 = {s["name"]: s for s in _j200["stages"]}
+    assert _by200["probe"]["in_task"] is True and _by200["crawl"]["in_task"] is False, _by200["probe"]
+    # portscan 有 enabled 键（出厂 false）⇒ 必须是 False 而不是 None；probe 没有该键 ⇒ None
+    assert _by200["portscan"]["enabled"] is False, "有开关的阶段要报**实际值**"
+    assert _by200["probe"]["enabled"] is None, "没有开关的阶段回 None（＝总跑），不能混成 False"
+    assert c.get("/api/tasks/999999/stages").status_code == 404, "越权/不存在必须 404"
+
+    # ③ 任务页：行内只留「查看全结果」，四颗操作（停止/重启/删除/导出）都在勾选栏
+    _hp200 = c.get("/tasks").get_data(as_text=True)
+    for _w200 in ("批量停止", "批量重启", "批量删除", 'data-op="stop"', 'data-op="restart"',
+                  'data-op="delete"'):
+        assert _w200 not in _hp200, f"任务页还留着 {_w200}（应已收敛到勾选栏）"
+    for _w200 in ('data-bulk="stop"', 'data-bulk="restart"', 'data-bulk="delete"',
+                  'data-bulk="export"'):
+        assert _w200 in _hp200, f"勾选栏缺 {_w200}"
+    assert _hp200.count('data-bulk="export"') == 1, "导出按钮只能有一颗"
+    assert 'data-pv="stages"' in _hp200, "「阶段」没改成预览框（还是行内展开？）"
+
+    # ④ 详情页对**续199 新增变量**要有容错：旧进程（没传 urls_pager）+ 新模板 ⇒ 500 就是这个形状
+    from flask import render_template as _rt200
+    _ok200 = True
+    try:
+        with gui_app.app.test_request_context("/tasks/1"):
+            _rt200("task_detail.html")     # 故意一个变量都不传
+    except Exception as _e200:
+        _ok200 = "urls_pager" not in str(_e200)
+    assert _ok200, "模板对 urls_pager 缺失没有容错 ⇒ 服务没重启时详情页 500"
+
+    # ⑤ 批量导出。**开关状态门禁里不一定是出厂值**（前面的导出用例会打开它），
+    #    所以两种状态各起一个 app（`load_settings` 是模块级函数，桩它再 create_app 即生效）。
+    _ld200 = gui_app.load_settings
+    _cfg_off200 = _ld200()
+    _cfg_off200["report"]["export_enabled"] = False
+    _cfg_on200 = _ld200()
+    _cfg_on200["report"]["export_enabled"] = True
+    try:
+        def _mk200(cfg):
+            gui_app.load_settings = lambda: cfg
+            return gui_app.create_app()
+
+        _nu200 = _us200.get_by_name("smoke200-admin")
+        if not _nu200:
+            _us200.create_user("smoke200-admin", "Passw0rd!200", role="admin")
+            _nu200 = _us200.get_by_name("smoke200-admin")
+        _us200.set_password(int(_nu200["id"]), "Passw0rd!200", must_change=False)
+        _uid200 = int(_nu200["id"])
+
+        from flask import session as _ss200
+
+        def _call200(app, payload, uid=None):
+            with app.test_request_context("/api/tasks/export", method="POST", json=payload):
+                _ss200["auth"] = True
+                _ss200["uid"] = _uid200 if uid is None else uid
+                return app.view_functions["api_tasks_export"]()
+
+        def _unwrap200(resp):
+            """直接调 `view_functions[...]` 拿到的是 `(Response, status)` 元组 ——
+            合成 Response 是 Flask 在**真实请求**时才做的事，所以这里自己拆。"""
+            return (resp[0], resp[1]) if isinstance(resp, tuple) else (resp, resp.status_code)
+
+        # 开关关着：403 且**说清开关在哪**（不静默、也不让人"点了才知道不行"）
+        _o403, _s403 = _unwrap200(_call200(_mk200(_cfg_off200), {"ids": [_t200]}))
+        # jsonify 默认把非 ASCII 转成 \uXXXX，直接比字符串会假红 —— 解析回来看
+        import json as _json200
+        _e403 = (_json200.loads(_o403.get_data(as_text=True)) or {}).get("error") or ""
+        assert _s403 == 403 and "报告导出" in _e403, \
+            f"导出开关关着时应是 403 并指明开关在哪：{_s403} {_e403!r}"
+
+        _a200 = _mk200(_cfg_on200)
+        _export200 = lambda payload, uid=None: _call200(_a200, payload, uid)
+        _o1, _s1 = _unwrap200(_export200({"ids": [_t200]}))
+        assert _s1 == 200 and ".md" in (_o1.headers.get("Content-Disposition") or ""), \
+            f"单任务导出应直接下载一份 md：{_s1}"
+        _t200b = db.create_task("smoke-200b", "https://s200b.test/", ["probe"], {})
+        _o2, _s2 = _unwrap200(_export200({"ids": [_t200, _t200b]}))
+        assert _s2 == 200 and _o2.data[:2] == b"PK", \
+            f"多任务导出应打包成 zip：{_s2} {_o2.data[:8]!r}"
+        assert _o2.headers.get("Content-Disposition", "").endswith(".zip"), _o2.headers
+        assert _unwrap200(_export200({"ids": []}))[1] == 400, "没勾选必须 400（而不是默默导出全部）"
+        assert _unwrap200(_export200({"ids": [_t200], "fmt": "pdf"}))[1] == 400, \
+            "批量不支持 PDF（要无头浏览器、慢），必须明说而不是静默降级"
+        # 越权：不是自己的任务直接跳过（不报错、也不把能导出的那几个否掉）
+        _sub200 = _us200.get_by_name("smoke200-sub")
+        if not _sub200:
+            _us200.create_user("smoke200-sub", "Passw0rd!200", role="user")
+            _sub200 = _us200.get_by_name("smoke200-sub")
+        _us200.set_password(int(_sub200["id"]), "Passw0rd!200", must_change=False)
+        _s3 = _unwrap200(_export200({"ids": [_t200]}, uid=int(_sub200["id"])))[1]
+        assert _s3 == 404, f"别人的任务应当被跳过（404），实到 {_s3}"
+    finally:
+        gui_app.load_settings = _ld200
+        for _n200 in ("smoke200-admin", "smoke200-sub"):
+            _u200c = _us200.get_by_name(_n200)
+            if _u200c:
+                _us200.delete_user(int(_u200c["id"]))
+
+    print("[200] 续200 ok: 阶段标签与 STAGE_ORDER 同产地｜/stages 三态(含/开关值/无开关 None)｜"
+          "任务页行内只留查看全结果(停止/重启/删除/导出四颗都在勾选栏,「批量」字眼已去)｜"
+          "阶段改预览框｜详情页对新变量容错(旧进程不 500)｜批量导出: 403 说清开关/单份 md/"
+          "多份 zip/空勾选 400/PDF 400/越权跳过")
     print("SMOKE PASS")
 
 

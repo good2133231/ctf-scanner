@@ -3976,6 +3976,107 @@ def create_app():
         return jsonify({"ok": True, "root": {"id": rid, "name": root["name"]},
                         "total": total, "nodes": nodes})
 
+    @app.route("/api/tasks/<int:tid>/stages")
+    @login_required
+    def api_task_stages(tid):
+        """续200：「阶段」预览框的数据源 —— 这个任务跑了哪些阶段、各阶段是什么、开关状态。
+
+        三段信息分开给，缺一段都会让人看不懂"为什么我的任务没跑某个阶段"：
+        ① `in_task`：是否在本任务的阶段清单里；② `enabled`：策略里那个开关的**实际值**
+        （没有该键的阶段回 `null` —— 那是"没有开关、总跑"，与"开关关着"不是一回事）；
+        ③ `label`/`default_on`：中文名与出厂默认值，来自 `runner.STAGE_LABELS`（唯一产地）。
+        """
+        task = _owned_task(tid)
+        if not task:
+            return jsonify({"ok": False, "error": "任务不存在或无权访问"}), 404
+        task = dict(task)      # sqlite3.Row **没有 .get()**（本仓第六次栽这个形状）
+        try:
+            picked = [s.strip() for s in str(task.get("stages") or "").split(",") if s.strip()]
+        except Exception:
+            picked = []
+        from scanner import runner as _rn200
+        items = []
+        for i, name in enumerate(_rn200.STAGE_ORDER, 1):
+            cfg = settings.get(name) or {}
+            label, default_on = _rn200.STAGE_LABELS.get(name, (name, True))
+            items.append({"name": name, "label": label, "seq": i,
+                          "in_task": name in picked,
+                          "enabled": (cfg.get("enabled") if isinstance(cfg, dict)
+                                      and "enabled" in cfg else None),
+                          "default_on": bool(default_on)})
+        return jsonify({"ok": True, "task": {"id": int(tid),
+                                             "name": task.get("name") or f"#{tid}"},
+                        "stages": items})
+
+    @app.route("/api/tasks/export", methods=["POST"])
+    @login_required
+    def api_tasks_export():
+        """续200：勾选任务的**批量导出**（导出按钮从每行的操作列搬到了勾选栏）。
+
+        - 勾 1 个 → 直接下载那一份（与原来的行内导出完全一致）；
+        - 勾多个 → 打包成一个 **zip**（一次下载，不必让浏览器连开 N 个下载）。
+        格式沿用单任务的 `fmt=md|html|jsonl`（PDF 需要本机无头浏览器、慢且有失败面，
+        批量时**不提供**，按钮提示里写明了 —— 静默降级比说清楚更糟）。
+        越权同其它端点：不是自己的任务直接跳过（**不报错**，因为清单里混着别人的任务时
+        报错会把"能导出的那几个"也一起否掉）。
+        """
+        # `force=True`：表单提交（application/x-www-form-urlencoded）也能用，
+        # 不必强制调用方带 Content-Type —— 拿不到 body 时静默变成"没勾选"最难查。
+        data = request.get_json(silent=True, force=True) or {}
+        _raw_ids = data.get("ids")
+        if _raw_ids is None:
+            _raw_ids = request.form.getlist("ids")
+        if isinstance(_raw_ids, str):
+            _raw_ids = [_x for _x in _raw_ids.split(",")]
+        try:
+            ids = [int(x) for x in (_raw_ids or []) if str(x).strip().isdigit()]
+        except (TypeError, ValueError):
+            ids = []
+        if not ids:
+            return jsonify({"ok": False, "error": "没有勾选任何任务"}), 400
+        if not bool((settings.get("report") or {}).get("export_enabled")):
+            return jsonify({"ok": False, "error": "导出开关关着（策略配置 → 报告导出）"}), 403
+        fmt = str(data.get("fmt") or "md").strip().lower()
+        if fmt not in ("md", "html", "jsonl"):
+            return jsonify({"ok": False, "error": f"批量导出不支持 {fmt}（PDF 请单条导出）"}), 400
+        full = data.get("full") == 1 or data.get("full") is True
+        from scanner.report import generate, generate_html, generate_jsonl
+        files, skipped = [], []
+        for tid in ids:
+            if not _owned_task(tid):
+                skipped.append(tid)
+                continue
+            try:
+                if fmt == "jsonl":
+                    body, ext = generate_jsonl(tid), "jsonl"
+                elif fmt == "html":
+                    body, ext = generate_html(tid, full=full), "html"
+                else:
+                    body, ext = generate(tid, full=full), "md"
+            except Exception as _e200:
+                skipped.append(tid)
+                continue
+            files.append((f"task_{tid}.{ext}", body))
+        if not files:
+            return jsonify({"ok": False, "error": "没有可导出的任务（都不是你的，或生成失败）"}), 404
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        if len(files) == 1:
+            name, body = files[0]
+            mime = {"md": "text/markdown", "html": "text/html",
+                    "jsonl": "application/x-ndjson"}[fmt]
+            return Response(body, mimetype=f"{mime}; charset=utf-8",
+                            headers={"Content-Disposition":
+                                     f"attachment; filename=task_{stamp}_{name}"})
+        import io as _io200
+        import zipfile as _zf200
+        buf = _io200.BytesIO()
+        with _zf200.ZipFile(buf, "w", _zf200.ZIP_DEFLATED) as _z200:
+            for name, body in files:
+                _z200.writestr(name, body)
+        return Response(buf.getvalue(), mimetype="application/zip",
+                        headers={"Content-Disposition":
+                                 f"attachment; filename=tasks_{stamp}.zip"})
+
     @app.route("/api/tasks/<int:tid>/stats")
     @login_required
     def api_task_stats(tid):

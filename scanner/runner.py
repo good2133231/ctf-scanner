@@ -54,6 +54,27 @@ STAGE_ORDER = ["subdomain", "takeover", "portscan", "probe",
                # github（续26）排在 intel 之后：它要发外部请求、受第三方限流约束，
                # 而 intel 只是拉一次 KEV，谁先谁后不影响结果，排在最后便于"只重跑本阶段"。
                "intel", "heuristic", "github"]
+# 续200：阶段的中英文名（任务页「阶段」预览框用）。刻意与 `STAGE_ORDER` 放在**同一个文件**
+# —— 阶段清单写两遍必然漂移（§5.14），加阶段时必须同时补这里（门禁 [200] 钉住两者一致）。
+# 第二项是"默认开不开"，只作展示：真正的开关在各阶段的 `cfg.get("enabled")`，
+# 这里写的与 `config.DEFAULTS` 一致，但**不作为判据**。
+STAGE_LABELS = {
+    "subdomain": ("子域名收集", True),
+    "takeover": ("子域接管检测", True),
+    "portscan": ("端口与服务扫描", False),
+    "probe": ("存活探测", True),
+    "cert": ("SSL 证书取证", False),
+    "screenshot": ("站点截图", False),
+    "osint": ("外部情报拓展", True),
+    "jsmine": ("JS 资产挖掘", True),
+    "dirscan": ("目录发现", True),
+    "crawl": ("站点爬虫", False),
+    "vulnscan": ("漏洞检测", True),
+    "intel": ("情报线索", False),
+    "heuristic": ("启发式线索", False),
+    "github": ("代码泄露侦察", False),
+}
+
 STAGE_REGISTRY = {c.name: c for c in (SubdomainStage, TakeoverStage, PortscanStage,
                                       ProbeStage, CertStage, ScreenshotStage, OsintStage,
                                       JsmineStage, DirscanStage, CrawlStage, VulnscanStage,

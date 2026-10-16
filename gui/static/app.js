@@ -150,6 +150,9 @@ function initTaskTable() {
     const ids = selectedTaskIds();
     if (!ids.length) { bulkMsg.textContent = "请先勾选任务"; return; }
     if (action === "delete" && !confirm(`确认删除选中的 ${ids.length} 个任务及其全部资产？`)) return;
+    // 续200：导出搬进这一排了。它**不是** `/api/tasks/bulk` 的 action（那三者改任务状态、
+    // 回 JSON；导出回的是文件），单独走 `/api/tasks/export` 并触发下载。
+    if (action === "export") { return bulkExport(ids, bulkMsg); }
     bulkMsg.textContent = "提交中…";
     try {
       const r = await fetch(absUrl("/api/tasks/bulk"), {
@@ -164,6 +167,37 @@ function initTaskTable() {
   };
   document.querySelectorAll("[data-bulk]").forEach(b =>
     b.addEventListener("click", () => bulk(b.dataset.bulk)));
+
+  // 续200：勾选后**导出** —— 一个任务直接下载那一份；多个任务打包 zip（后端给
+  // Content-Disposition，这里只负责把字节变成一个本地文件，不 reload 页面）。
+  async function bulkExport(ids, msgEl) {
+    msgEl.textContent = "生成中…";
+    try {
+      const r = await fetch(absUrl("/api/tasks/export"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, fmt: "md" }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        msgEl.textContent = j.error || `导出失败（HTTP ${r.status}）`;
+        return;
+      }
+      const disp = r.headers.get("Content-Disposition") || "";
+      const m = /filename=([^;]+)/.exec(disp);
+      const name = m ? m[1].replace(/["']/g, "") : "tasks_export.zip";
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+      msgEl.textContent = `已导出 ${ids.length} 个任务`;
+    } catch (e) {
+      msgEl.textContent = "导出失败（网络错误）";
+    }
+  }
 
   // 4) 行内操作（查看/导出是链接；停止/重启/删除走 API）
   bindTaskOps("#task-rows", bulkMsg);
@@ -458,6 +492,27 @@ function pvStatsHtml(d) {
     + `<table><thead><tr><th>资产类型</th><th>汇聚后数量</th><th>按来源任务拆分</th></tr></thead>`
     + `<tbody>${rows}</tbody></table><p class="pv-note">${tasks}</p>`;
 }
+// 续200：「阶段」预览框 —— 列出全部阶段，标明这个任务跑不跑、策略开关是什么状态。
+// 三态要说清：**没这个开关**（enabled 为 null，总跑）/ **开关开着** / **开关关着**，
+// 混成"关着"会让人以为是配置错了。
+function pvStagesHtml(d) {
+  const rows = (d.stages || []).map(s => {
+    const on = s.in_task;
+    const gate = s.enabled === null ? '<span class="muted small">无开关（总跑）</span>'
+      : (s.enabled ? '<span class="badge">策略开启</span>'
+                   : '<span class="muted small">策略关闭</span>');
+    return `<tr class="${on ? "" : "muted"}"><td>${s.seq}</td><td class="mono">${pvEsc(s.name)}</td>`
+      + `<td>${pvEsc(s.label)}</td><td>${on ? '<span class="badge">本任务含</span>'
+                                            : '<span class="muted small">未选</span>'}</td>`
+      + `<td>${gate}</td></tr>`;
+  }).join("");
+  const picked = (d.stages || []).filter(s => s.in_task).length;
+  return `<h3 class="pv-title">${pvEsc(d.task && d.task.name || "")} · 阶段</h3>`
+    + `<table><thead><tr><th>#</th><th>阶段</th><th>名称</th><th>本任务</th>`
+    + `<th>策略开关</th></tr></thead><tbody>${rows}</tbody></table>`
+    + `<p class="pv-note">本任务共选 ${picked} / ${(d.stages || []).length} 个阶段；`
+    + `「策略关闭」的阶段即使选了也会被跳过（不发请求）。</p>`;
+}
 function initTaskPreview() {
   document.addEventListener("click", async e => {
     const b = e.target.closest && e.target.closest("button[data-pv]");
@@ -465,11 +520,13 @@ function initTaskPreview() {
     const id = b.dataset.id, kind = b.dataset.pv;
     pvOpen(`<p class="pv-note">加载中…</p>`);
     try {
-      const url = absUrl(kind === "stats" ? `/api/tasks/${id}/stats` : `/api/tasks/${id}/subtasks`);
+      const path = kind === "stats" ? "stats" : (kind === "stages" ? "stages" : "subtasks");
+      const url = absUrl(`/api/tasks/${id}/${path}`);
       const r = await fetch(url);
       const d = await r.json();
       if (!d.ok) { pvOpen(`<p class="pv-note">${pvEsc(d.error || "加载失败")}</p>`); return; }
-      pvOpen(kind === "stats" ? pvStatsHtml(d) : pvSubtreeHtml(d));
+      pvOpen(kind === "stats" ? pvStatsHtml(d)
+             : kind === "stages" ? pvStagesHtml(d) : pvSubtreeHtml(d));
     } catch (err) {
       pvOpen(`<p class="pv-note">加载失败：${pvEsc(err && err.message ? err.message : err)}</p>`);
     }

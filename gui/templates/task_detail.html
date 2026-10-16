@@ -753,6 +753,7 @@
     <form class="filters" method="get" action="{{ url_for('task_detail', task_id=task.id) }}#urls">
       <label class="muted">关键词
         <input name="urq" value="{{ urls_q }}" placeholder="URL / 查询串 / 类型 / 来源站点"></label>
+      {% if urls_pager is defined and urls_pager %}
       <label class="muted">每页
         <select name="ursize" onchange="this.form.submit()">
           {% for s in page_sizes %}
@@ -760,6 +761,7 @@
           {% endfor %}
         </select>
       </label>
+      {% endif %}
       <button class="ghost" type="submit">查询</button>
       {% if urls_q %}<a class="btn-mini ghost" href="{{ url_for('task_detail', task_id=task.id) }}#urls">清空</a>{% endif %}
     </form>
@@ -780,7 +782,12 @@
       {% endfor %}
       </tbody>
     </table>
+    {# 续200：`urls_pager` 是续199 才加的变量 —— 服务没重启时（旧代码 + 新模板）它是 Undefined，
+       而 `_pager.html` 会取它的 `.page`，Jinja 对 Undefined 取属性直接抛 ⇒ 详情页 500。
+       判据就是"有没有这个变量"，有才渲染分页，没有就只显示清单（不白屏）。 #}
+    {% if urls_pager is defined and urls_pager %}
     {% set pager = urls_pager %}{% include "_pager.html" %}
+    {% endif %}
   </section>
 </div>
 
