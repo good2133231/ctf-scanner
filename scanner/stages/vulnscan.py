@@ -18,6 +18,7 @@ from .. import audit, config, db, flagfind, ml
 from ..evasion import detect as detect_waf
 from ..owasp import checks as owasp_checks
 from ..pocs import engine
+from .. import paramroute
 from ..utils import pool_run
 
 
@@ -266,8 +267,20 @@ class VulnscanStage(Stage):
             # "没报出来"与"没跑成"在复测三态里是两回事，混说就会把没跑成记成"已修复"。
             found = []
             try:
-                found = list(owasp_checks.run_all(url, ctx.settings, logger=ctx.logger,
-                                                  blocked=_blocked))
+                # 续203：爬虫喂来的带参链接按**参数名**路由检查（`?file=` 不白跑 SQL 注入）。
+                # 判据只有 `paramroute.checks_for` 一处（纯函数，页面与扫描同源）。
+                _only203 = None
+                if str(site.get("source") or "") == "crawl":
+                    _only203 = paramroute.checks_for(url)
+                    if _only203:
+                        ctx.logger.debug(f"[vulnscan] {url} 参数路由 → "
+                                         f"{'/'.join(_only203)}")
+                # 只在**真的路由了**时才多传 `only`：不带它时调用形状与旧版逐字一致 ——
+                # 否则任何按旧签名打桩的调用方（回归里就有）会被一个多出来的关键字参数打挂。
+                _kw203 = {"logger": ctx.logger, "blocked": _blocked}
+                if _only203 is not None:
+                    _kw203["only"] = _only203
+                found = list(owasp_checks.run_all(url, ctx.settings, **_kw203))
                 for poc in _pocs_for(site if isinstance(site, dict) else {}):
                     # `registry=pocs`：workflow 里 `tags:` 步骤的候选集，直接用本阶段已加载好的
                     # 那份（否则每个站点都会把 300+ 个 POC 文件重读一遍）。

@@ -25537,12 +25537,16 @@ expression: r0()
     assert "aaa.targ178.test" in _own178 and "bbb.targ178.test" in _own178, \
         f"归属的没追加：{_own178}"
     assert "ext.example178.test" not in _own178, "不归属的域名不该被追加"
+    _src203app = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
     _html178b = c.get(f"/extdomains?task={_tid178b}").get_data(as_text=True)
     assert "送去探测 → #" in _html178b, "行徽章没渲染"
     assert 'href="/tasks/%d"' % _new178 in _html178b, "徽章没链到子任务"
-    assert "同时把归属本项目的追加为子域名" in _html178b, "合并复选框没渲染"
-    assert 'name="promote_too" value="1" checked' in _html178b, "复选框默认没勾"
-    assert "归属本项目的追加为子域名</button>" not in _html178b, "旧 promote 按钮还在"
+    # 续203：复选框**并进了送探**（主理人点单"送去探测应该只有一个功能"）⇒ 判据翻转：
+    # 页面上不该再有那颗复选框，而归属追加变成送探的固有行为（后端恒执行）。
+    assert "promote_too" not in _html178b, "复选框还在（应已并进送探，人不必再理解要不要追加）"
+    assert "同时把归属本项目的追加为子域名" not in _html178b, "那颗说明文案还在"
+    assert "归属追加" in _src203app and "if True:" in _src203app, \
+        "归属追加应是送探的固有行为（恒执行），不是可勾选项"
     assert "送探记录：" in _html178b, "组内送探子标签没渲染"
     assert "不影响主域名资产" in _html178b, "子标签的说明句没渲染"
     assert re.search(r"送去探测（[^）]*，子域 0/站点 0/漏洞 0）", _html178b), \
@@ -25558,12 +25562,15 @@ expression: r0()
     _own178b2 = [r["domain"] for r in db._query(
         "SELECT domain FROM subdomains WHERE task_id=? AND source LIKE 'promote:%' "
         "AND domain='ccc.targ178.test'", (_tid178b,))]
-    assert _own178b2 == [], "变异态下不勾复选框也发生了归属追加 ⇒ 复选框没承重"
+    # 续203：判据**翻转** —— 复选框并进送探后，表单里根本没有 promote_too 字段，
+    # 归属追加照样发生（这才是"两个按钮合成一个"的含义）。旧的"不勾就不追加"变异
+    # 证伪随之失效，换成"字段缺席也追加"这条正向判据（承重点是 app.py 里的 `if True:`）。
+    assert _own178b2, "表单没带 promote_too 却没发生归属追加 ⇒ 固有行为没生效"
     _pm178b2 = db.list_ext_probes(["ccc.targ178.test"])
     assert _pm178b2 and all(k == "probe" for v in _pm178b2.values() for (t, k, _c) in v), \
-        "不勾 promote_too 的送探仍要记 probe"
+        "送探仍要记 probe"
     print("[178] 送去探测 ok: 送探记录（probe/append/promote 三方式）+ 随单归属追加 + "
-          "徽章/组内子标签/复选框合并；变异（不勾复选框）证伪承重")
+          "徽章/组内子标签；续203 复选框并进送探（字段缺席也追加，`if True:` 承重）")
     # ---------------- [179] 续179：IP 佐证 ⇒ medium（与非 CDN 已确认子域同 IP） ----------------
     from scanner import extdom as _ex179
     _bases179 = {"abcd179.test"}
@@ -26818,7 +26825,9 @@ expression: r0()
     # ② 配置两处一致 + **出厂关**
     _hcd = _cfg201 = None
     from scanner import config as _cf201
-    assert _cf201.DEFAULTS["hostcollide"]["enabled"] is False, "Host 碰撞必须出厂关（它一定发请求）"
+    # 续203（主理人点单"host 碰撞默认也要开"）：出厂值 false → true，判据随之翻转。
+    # 它仍然只读 GET、请求量由 max_requests 夹住 —— "默认开"不等于"无限发请求"。
+    assert _cf201.DEFAULTS["hostcollide"]["enabled"] is True, "Host 碰撞应默认开（主理人点单）"
     assert _cf201.load_settings()["hostcollide"] == _cf201.DEFAULTS["hostcollide"], \
         "settings.yaml 与 DEFAULTS 漂了"
 
@@ -26882,7 +26891,10 @@ expression: r0()
         "批量操作后的刷新没保住 hash"
     assert "浏览器只允许一次点击开一个标签页" in _js201, "批量打开的提示没写清为什么只开一个"
 
-    print("[201] 续201 ok: Host 碰撞接线(阶段/配置一致/出厂关/默认关零请求/补跑端点三态/两处入口)｜"
+    # 续203：hostcollide 改成**默认开**了 —— "关着时零请求"那条仍在（上面用显式 False 验），
+    # 但组描述不能再写"出厂关"，否则下一个人会以为配置没改过。
+    print("[201] 续201 ok: Host 碰撞接线(阶段/配置一致/**默认开(续203)**/显式关时零请求/"
+          "补跑端点三态/两处入口)｜"
           "队列并发出厂 2｜_with_hash 只认 #\\w(开放重定向形状全挡)｜前端保 hash + 表单注入｜"
           "批量打开提示写清浏览器限制")
     # ---- [202] 续202：任务层级筛选 + 送探任务名带域名数 ----
@@ -26914,6 +26926,75 @@ expression: r0()
     assert "-拓展{_cn}层" not in _src202, "旧的 `-拓展N层` 命名还在（只说层数，不说扫几个）"
     print("[202] 续202 ok: 任务层级筛选(root+child=全部/互不串/页面生效/翻页带条件)｜"
           "送探任务名 `<主域名> · 送探 N 个域名`")
+    # ---- [203] 续203：参数路由（自动判该测什么）+ hostcollide 默认开 + 送探并一颗 ----
+    from scanner import paramroute as _pr203
+
+    # ① 参数名 → 类别（只按**参数名**判，不看值）
+    assert _pr203.kinds("http://t/a?id=1") == {"sqli", "idor"}, _pr203.kinds("http://t/a?id=1")
+    assert "ssrf" in _pr203.kinds("http://t/a?url=http://x") and \
+        "openredirect" in _pr203.kinds("http://t/a?url=http://x")
+    assert _pr203.kinds("http://t/a?file=../../etc/passwd") == {"lfi"}
+    assert _pr203.kinds("http://t/a?cmd=ls") == {"rce"}
+    assert _pr203.kinds("http://t/a?x=1") == set(), "不认识的参数名不许瞎猜类别"
+    # 数字后缀：id1 / page3 与 id / page 同类（真实站点大量这种命名）
+    assert "sqli" in _pr203.kinds("http://t/a?id1=9")
+    # ② 类别 → 检查 id：**只映射真实存在的检查**；没有对应检查的类别不造映射
+    assert _pr203.checks_for("http://t/a?id=1") == ["a03-sqli-blind", "a03-sqli-error"]
+    assert _pr203.checks_for("http://t/a?url=http://x") == \
+        ["a01-open-redirect", "a03-xss-reflect", "a10-ssrf-callback"]
+    assert _pr203.checks_for("http://t/a?file=x") == [], "LFI 没有对应检查 ⇒ 必须空（不造映射）"
+    assert _pr203.checks_for("http://t/a?cmd=ls") == [], "RCE 同上"
+    # 映射出来的 id 必须真的是注册过的检查（否则 only 白名单会静默空转）
+    _reg203 = {m["id"] for m in owasp_checks.enabled_checks(settings)}
+    for _cid in _pr203.checks_for("http://t/a?url=http://x&id=1&q=2"):
+        assert _cid in _reg203, f"{_cid} 不是已注册的检查（映射写到不存在的东西上了）"
+    # ③ run_all(only=...) 真的只跑白名单（变异：only=[] ⇒ 一条都不跑）
+    _r_all203 = owasp_checks.run_all("http://127.0.0.1:1/", settings, min_severity="info")
+    _r_only203 = owasp_checks.run_all("http://127.0.0.1:1/", settings, min_severity="info",
+                                      only=["a02-no-https"])
+    _r_none203 = owasp_checks.run_all("http://127.0.0.1:1/", settings, min_severity="info", only=[])
+    assert isinstance(_r_all203, list) and isinstance(_r_only203, list)
+    assert _r_none203 == [], "only=[] 时不该跑任何检查（否则路由就失了意义）"
+    # ④ vulnscan 真的接了这条线（源码钉点：不接线＝"页面说会测、扫描没跑"）
+    _vs203 = (ROOT / "scanner" / "stages" / "vulnscan.py").read_text(encoding="utf-8")
+    assert "paramroute.checks_for" in _vs203 and '_kw203["only"] = _only203' in _vs203, \
+        "vulnscan 没按参数名路由（带参链接还在跑全部检查）"
+    # 不路由时**不多传** only：调用形状与旧版逐字一致（否则按旧签名打桩的调用方会被多出来的
+    # 关键字参数打挂 —— 续203 实测踩过，[176] 那组就是这么红的）
+    assert "if _only203 is not None:" in _vs203, "没路由时也传 only ⇒ 破坏既有调用契约"
+
+    # ⑤ hostcollide 默认开（主理人点单）
+    assert _cf201.DEFAULTS["hostcollide"]["enabled"] is True, "hostcollide 应默认开"
+    assert _cf201.load_settings()["hostcollide"]["enabled"] is True, "settings.yaml 与 DEFAULTS 漂了"
+    # 默认开 ⇒ 阶段会真的跑（不再打"未启用"那行）；桩掉 run 验证它被调用
+    _hc_n203 = {"n": 0}
+    _hc_real203 = _hcs201.hostcollide.run
+    _hcs201.hostcollide.run = lambda ctx: _hc_n203.__setitem__("n", _hc_n203["n"] + 1)
+    try:
+        # 用**出厂配置**（settings.yaml 的真实值）来验 —— 比塞一个空 dict 有意义：
+        # 它证明"默认开"这三个字真的能让阶段跑起来，而不只是 DEFAULTS 里写着 true。
+        _c203 = _C198({"hostcollide": dict(_cf201.load_settings()["hostcollide"])},
+                      {"sites": []})
+        _hcs201.HostcollideStage(_c203).run()
+        assert _hc_n203["n"] == 1, "默认开之后阶段应当调用 hostcollide.run"
+    finally:
+        _hcs201.hostcollide.run = _hc_real203
+
+    # ⑥ 送探并一颗：promote 复选框从模板消失、后端恒执行
+    for _t203 in ("gui/templates/extdomains.html", "gui/templates/task_detail.html"):
+        assert "promote_too" not in (ROOT / _t203).read_text(encoding="utf-8"), \
+            f"{_t203} 还留着「归属追加」复选框（应已并进送探）"
+    _se203 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+    assert "if True:" in _se203 and "promote_domains(" in _se203, \
+        "归属追加应是送探的固有行为（恒执行）"
+    # ⑦ /urls 页把"会自动测哪几类"显示出来（自动化可见，不搞手动勾选）
+    _u203 = c.get("/urls").get_data(as_text=True)
+    assert "参数名路由" in _u203 or "参数未归类" in _u203, \
+        "/urls 页没把自动路由的判据显示出来（用户看不到自动化在干什么）"
+    assert 'name="urls"' not in _u203 and "送去漏洞检测" not in _u203, \
+        "/urls 页不该有手动勾选送检的入口（要自动化，不要手动化）"
+    print("[203] 续203 ok: 参数路由(按参数名判/只映射真实检查/id 已注册/only=[] 不跑/vulnscan 接线)｜"
+          "hostcollide 默认开(默认即调用)｜送探并一颗(复选框消失+恒执行)｜/urls 显示自动判据")
     print("SMOKE PASS")
 
 

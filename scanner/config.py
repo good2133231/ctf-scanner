@@ -349,8 +349,10 @@ DEFAULTS = {
     },
     "hostcollide": {
         # Host 碰撞（续183 模块、续201 接线）：同 IP 绑不同 Host 头找隐藏站点。
-        # 默认关 —— 只读 GET，但请求量随"非 CDN 的真实 IP × 候选 Host"增长。
-        "enabled": False,
+        # 续203 改**默认开**（主理人点单"host 碰撞默认也要开"）：它只读 GET、
+        # 请求量由下面的 max_requests 夹住，而"同 IP 不同 Host"是找旁站/隐藏后台
+        # 性价比最高的一招 —— 默认关着等于这一 capability 没人用过。
+        "enabled": True,
         "max_requests": 200,      # 单任务请求预算（引擎内部也会再夹一次）
         "timeout": 5,
     },

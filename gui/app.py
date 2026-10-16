@@ -3444,6 +3444,14 @@ def create_app():
         rows, pager, q = _asset_page("urls", "/urls",
                                      extra_where=" AND ".join(_wh) or None,
                                      extra_params=tuple(tp))
+        # 续203：每行标出"这条会被路由去测哪几类"—— 判据与扫描侧**同一个**纯函数
+        # （`paramroute.kinds`），页面上看到的与真正跑的是同一份，不会各说一套。
+        from scanner import paramroute as _pr203
+        # ⚠ `_asset_page` 给的是 **sqlite3.Row**（只读、不能塞新键）—— 先 dict 化。
+        # 本仓第五次栽这个形状（AGENTS §5：Row 没有 .get，更不能赋值）。
+        rows = [dict(_r) for _r in rows]
+        for _r203 in rows:
+            _r203["_kinds"] = sorted(_pr203.kinds(_r203.get("url") or ""))
         if tid:
             pager["qs"] += f"&task={tid}"
         if only_params:
@@ -3825,7 +3833,11 @@ def create_app():
         # 自判归属，不属于的自动跳过）—— 归属追加的子域也能进送探任务的存活探测。
         # 续178：分支在 from_task 赋值之前执行 —— 表单的 task_id 在这里就地取。
         _tform = (request.form.get("task_id") or "").strip()
-        if str(request.form.get("promote_too", "")).lower() in ("1", "true", "on"):
+        # 续203（主理人点单「送去探测应该只有一个功能」）：归属追加从"可勾选的复选框"变成
+        # 送探的**固有行为** —— 两个按钮合成一个，人不必再理解"要不要顺手追加"。
+        # 判据仍是 `extdom.promote_domains` 自判归属（不属于的自动跳过），
+        # 所以"总是执行"不等于"总是写库"；追加了几条照旧写进日志。
+        if True:
 
             _pres = extdom.promote_domains(
                 domains, settings, logger=logger,

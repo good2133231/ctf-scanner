@@ -226,7 +226,9 @@ portscan:
   # 续151 无依赖 ML：banner 字符 n-gram 朴素贝叶斯补服务识别（需 data/ml/service_model.json；默认关）
   ml_service: false
 hostcollide:
-  enabled: false              # 续201：Host 碰撞（同 IP 绑不同 Host 头找隐藏站点）—— 默认关
+  # 续203：默认**开**（主理人点单）。只读 GET、请求量由 max_requests 夹住；
+  # 命中按 collide:<ip> 前缀落库 ⇒ 自动归 own 口径。
+  enabled: true
   max_requests: 200           # 单任务请求预算（只读 GET）
   timeout: 5
 crawl:

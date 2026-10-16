@@ -962,7 +962,7 @@ def _takes_logger(fn):
         return False
 
 
-def run_all(url, settings, min_severity=None, logger=None, blocked=None):
+def run_all(url, settings, min_severity=None, logger=None, blocked=None, only=None):
     """顺序执行**启用**的检查，单个检查异常不影响其余；返回 vuln dict 列表。
 
     两级门控（配置在 `checks` 段，GUI「策略配置」页可改）：
@@ -976,10 +976,16 @@ def run_all(url, settings, min_severity=None, logger=None, blocked=None):
       能走到这里的一定是"已执行且命中"（执行闸在前面），正是用户要看的"被收起"的量；
       不传 = 旧行为（只返回过关的那些，丢弃量不可见）。
     """
+    # `only`（续203）：检查 id 白名单 —— 给定就**只跑这些**（爬虫按参数名路由：
+    # `?file=` 不该白跑一遍 SQL 注入），None = 全部启用项（原行为）。
+    # 白名单与两级门控**叠加**：`only` 里但被 disabled 的仍然不跑。
     cfg = (settings or {}).get("checks", {}) or {}
     floor = str(min_severity or cfg.get("min_severity", "medium")).lower()
+    _only_set = set(only) if only is not None else None
     out = []
     for meta in enabled_checks(settings):
+        if _only_set is not None and str(meta.get("id") or "") not in _only_set:
+            continue
         try:
             if logger is not None and _takes_logger(meta["fn"]):
                 v = meta["fn"](url, settings, logger=logger)
