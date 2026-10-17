@@ -21572,9 +21572,9 @@ expression: r0()
         assert _cnt145 == 1, \
             f"详情页 {_act145} 表单应恰好 1 个：实测 {_cnt145}"
     _n_post145 = _td145.count('method="post"')
-    # 续201：3 → 4（新增「Host 碰撞」补跑表单，`api_hostcollide_run`）
-    assert _n_post145 == 4, \
-        f"详情页 POST 表单总数应 4（新增表单必须显式改这条登记）：实测 {_n_post145}"
+    # 续201：3 → 4（Host 碰撞）；续208：4 → 5（敏感信息候选的「误报」复核表单）
+    assert _n_post145 == 5, \
+        f"详情页 POST 表单总数应 5（新增表单必须显式改这条登记）：实测 {_n_post145}"
     assert _td145.count("url_for('api_hostcollide_run')") == 1, "Host 碰撞表单应恰好 1 个"
 
     # ---- ② `subdomain.auto_root` 三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射）----
@@ -27337,6 +27337,9 @@ expression: r0()
     _tid208 = db.create_task("smoke-208", "https://f208.test/", ["jsmine"], {})
     db.insert_flag(_tid208, {"value": "AKIAIOSFODNN7EXAMPLE", "kind": "aws-access-key",
                              "source": "js", "url": "https://f208.test/a.js"})
+    # 第二条**留着**：拉黑流程会删第一条，而"页面上有误报按钮"的断言需要页面里至少有一行
+    db.insert_flag(_tid208, {"value": "GH_pat_h_EXAMPLE2", "kind": "github-token",
+                             "source": "js", "url": "https://f208.test/b.js"})
     _fid208 = db._query("SELECT id FROM flags WHERE task_id=?", (_tid208,))[0]["id"]
     # 缺参 / 不存在的候选
     assert c.post("/api/flags/blacklist", data={}).status_code == 400
@@ -27353,11 +27356,15 @@ expression: r0()
     # 清理：黑名单是**全局口径**（owner_id=0），测试值必须拿掉，否则污染其它用例
     _e208 = [e for e in _sb208.load(None) if "AKIAIOSFODNN7EXAMPLE" in (_sb208._entry_value(e) or "")]
     for e in _e208:
-        _sb208.remove(e["id"], owner_id=None)
-    assert _sb208.matches("AKIAIOSFODNN7EXAMPLE", _sb208.load(None)) is False, "清理失败"
+        # add 时用的 owner_id=0（全局口径），remove 也要同值 —— None 的语义在 db 层
+        # 是"按当前账号过滤"，删不动全局条目
+        _sb208.remove(e["id"], owner_id=0)
+    # `matches` 返回的是 falsy（可能 None/[]/False），用真值判断而不是 `is False`
+    assert not _sb208.matches("AKIAIOSFODNN7EXAMPLE", _sb208.load(None)), "清理失败"
     # 页面：按钮在
     _h208 = c.get(f"/tasks/{_tid208}").get_data(as_text=True)
-    assert "api_flag_blacklist" in _h208, "候选页没有「误报」按钮"
+    # 渲染后查 **URL**（`url_for('api_flag_blacklist')` 已变成 /api/flags/blacklist）
+    assert "/api/flags/blacklist" in _h208, "候选页没有「误报」按钮"
     print("[208] 续208 ok: 敏感信息复核闭环（误报一键拉黑：行删 + 值进 secretbl + "
           "filter_secrets 全链路挡掉 + 审计）")
     print("SMOKE PASS")
