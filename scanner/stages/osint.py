@@ -67,6 +67,21 @@ class OsintStage(Stage):
         do_shodan = (ctx.settings.get("shodan", {}) or {}).get("enabled") is True
         do_quake = (ctx.settings.get("quake", {}) or {}).get("enabled") is True
         do_ctlog = ctlog_mod.enabled(ctx.settings)
+        # 续211-P1-4：外部引擎**配额预检**（三家按 key 计费/限流）。额度耗尽时的现状是
+        # 逐条请求失败、日志刷一片归因错的失败原因（用户看到"工具坏了"，事实是"额度用完了"）。
+        # 口径照 `iprecon.preflight`：**跳过必须点名**；查不到额度的一律放行
+        # （"我不知道" ≠ "没额度"，§6.2 第十七起同族）；`auth=False`（§5.1 第三方不带登录态）。
+        # 每轮只查一次（它自己吃一次 HTTP，但不吃目标侧请求预算）。
+        if do_fofa or do_shodan or do_quake:
+            from .. import extquota as _eq211
+            _srcs211 = [s for s, on in (("fofa", do_fofa), ("shodan", do_shodan),
+                                        ("quake", do_quake)) if on]
+            _ok211, _bad211 = _eq211.preflight(_srcs211, ctx.settings,
+                                               logger=ctx.logger)
+            if _bad211:
+                do_fofa = do_fofa and "fofa" in _ok211
+                do_shodan = do_shodan and "shodan" in _ok211
+                do_quake = do_quake and "quake" in _ok211
         # 续205：备案反查有**自己的**开关（icp.enabled）—— 它用的是另一套接口、另一份配额，
         # 与"外部情报拓展"那批不是一回事。默认全关时整段跳过、零请求。
         do_icp = (ctx.settings.get("icp", {}) or {}).get("enabled") is True

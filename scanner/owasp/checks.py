@@ -297,6 +297,11 @@ def _sensitive_files(url, settings):
 
 # ---------- A03 注入类（仅"回显信号"） ----------
 
+# 内置的**兜底**特征（续211-P2-11 起降级为兜底）：外置表 `config/dicts/sql_errors_extra.txt`
+# 才是主产地 —— 那边的量级是这里的十倍以上（ShuiZe errors.xml 有 89 条 / 多 DBMS 家族），
+# 而且能白得 DBMS 指纹（每条带家族名，命中时报"疑似 MySQL"而不是只说"疑似 SQL 注入"）。
+# ⚠ 内置这几条**一条都不许删**：外置表读不到时（文件缺失/被误删）它们就是最后的判据，
+# 删了等于"没字典就连报错型注入都发现不了"（宁可不全，不可没有）。
 SQL_ERRORS = [
     r"you have an error in your sql syntax",
     r"warning: mysql",
@@ -307,6 +312,76 @@ SQL_ERRORS = [
     r"odbc.*driver.*error",
     r"mysqli?_[a-z_]+\(\)",
 ]
+
+# 外置 SQL 报错特征表（与指纹表同一套读法：TAB 分隔、进程内缓存、坏行不静默）。
+# 每行：`家族<TAB>正则`。家族名会带进命中说明（"疑似 MySQL"），所以它不是装饰而是信息。
+SQL_ERRORS_EXTRA = "config/dicts/sql_errors_extra.txt"
+_SQLX_CACHE = {"key": None, "rules": [], "issues": []}
+
+
+def load_sql_error_rules(settings=None):
+    """读外置 SQL 报错特征 ⇒ `([(家族, 编译后的正则)], [问题行, …])`。
+
+    与 `fingerprint.load_extra` 同款三件事（TAB 分隔 / mtime+size 缓存 / 坏行进清单），
+    但不合并多份 —— 目前只有一张表，需要多张时再照 EXTRA_FILES 那样列清单。
+    """
+    from ..config import resolve          # 函数内导入：不与 config 的加载顺序纠缠
+    from pathlib import Path
+    p = Path(resolve(SQL_ERRORS_EXTRA))
+    try:
+        st = p.stat()
+    except OSError:
+        # 表不存在 ⇒ 只走内置兜底，并且**不报警**（表是可选项，与指纹外置表同口径）
+        _SQLX_CACHE.update(key=None, rules=[], issues=[])
+        return [], []
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    if _SQLX_CACHE["key"] == key:
+        return _SQLX_CACHE["rules"], _SQLX_CACHE["issues"]
+    rules, issues = [], []
+    for no, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        cols = line.split("\t")
+        if len(cols) < 2:
+            issues.append(f"第 {no} 行不足 2 列（家族<TAB>判据）：{line[:40]!r}")
+            continue
+        fam, pat = cols[0].strip(), cols[1]
+        if not fam:
+            issues.append(f"第 {no} 行家族名为空")
+            continue
+        try:
+            # 大小写不敏感用**编译参数** `re.I`，不往判据字符串前面拼内联标志：
+            # 非串首的内联标志在 Python 3.11 起弃用、3.14 直接抛 SyntaxError
+            # （门禁 [5o] 那条 AST 审计就是钉这个的，续211 实测踩到）。
+            rules.append((fam, re.compile(pat, re.I)))
+        except re.error as e:
+            issues.append(f"第 {no} 行判据编译失败（{e}）")
+            continue
+    _SQLX_CACHE.update(key=key, rules=rules, issues=issues)
+    return rules, issues
+
+
+def sql_error_hits(text):
+    """命中SQL 报错特征 ⇒ `[(家族, 命中片段), ...]`（内置兜底 + 外置表，去重后按家族排序）。
+
+    **大小写不敏感在这里统一保证**（函数内对原文做匹配，不要求调用方先 lower）——
+    内置那几条判据是小写形态，所以对原文匹配时要 lower 一份；外置表在加载时已带 re.I。
+    内置那几条的家族名统一记 `generic`（它们不带家族信息）；外置表的家族名来自表本身。
+    """
+    raw = str(text or "")
+    low = raw.lower()
+    out, seen = [], set()
+    for pat in SQL_ERRORS:
+        m = re.search(pat, low)
+        if m and ("generic", m.group(0)) not in seen:
+            seen.add(("generic", m.group(0)))
+            out.append(("generic", m.group(0)))
+    for fam, rx in load_sql_error_rules()[0]:
+        m = rx.search(raw)
+        if m and (fam, m.group(0)) not in seen:
+            seen.add((fam, m.group(0)))
+            out.append((fam, m.group(0)))
+    return sorted(out, key=lambda x: (x[0], x[1]))
 
 # 注入检查的请求预算：先打"原始 payload"（便宜、常见），全部未命中才升级到变形变体，
 # 且总请求数封顶，避免对单站点产生过大压力（非破坏性约束）。
@@ -349,14 +424,15 @@ def _sqli_error(url, settings):
                     if not r:
                         continue
                     text = (r.get("text") or "").lower()
-                    for pat in SQL_ERRORS:
-                        m = re.search(pat, text)
-                        if m:
-                            tip = ("" if payload == base else
-                                   f"（命中 WAF 绕过变体：{payload}）")
-                            return _mk("a03-sqli-error", "SQL 注入报错回显", "high", "A03", url,
-                                       f"参数 {param} 注入后响应命中数据库报错特征 '{m.group(0)}'，"
-                                       f"疑似存在 SQL 注入，需人工确认{tip}。", text[:300])
+                    # 续211-P2-11：走 `sql_error_hits`（内置兜底 + 外置表）。命中时报**家族名**
+                    # —— "疑似 MySQL" 比 "疑似 SQL 注入" 有用得多（换 payload、选利用方式都靠它）。
+                    for fam, frag in sql_error_hits(text):
+                        tip = ("" if payload == base else
+                               f"（命中 WAF 绕过变体：{payload}）")
+                        _dbms = "" if fam == "generic" else f"，DBMS 疑似 {fam}"
+                        return _mk("a03-sqli-error", "SQL 注入报错回显", "high", "A03", url,
+                                   f"参数 {param} 注入后响应命中数据库报错特征 '{frag}'"
+                                   f"{_dbms}，疑似存在 SQL 注入，需人工确认{tip}。", text[:300])
     return None
 
 

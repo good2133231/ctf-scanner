@@ -336,6 +336,19 @@
     <label>单任务请求预算 <input name="hostcollide_max_requests" value="{{ s.hostcollide.max_requests }}"></label>
     <label>单次超时（秒） <input name="hostcollide_timeout" value="{{ s.hostcollide.timeout }}"></label>
 
+    {# 续211-P1-4：外部引擎配额预检（FOFA/Shodan/Quake）—— 默认开，自己只吃一次 HTTP #}
+    <label class="chk"><input type="checkbox" name="extquota_enabled" value="1"
+      {{ 'checked' if s.extquota.enabled }}> <b>外部引擎配额预检</b>（默认开启；FOFA /
+      Shodan / Quake 开跑前先查一次余额）</label>
+    <p class="muted small note">当前状态：{% if s.extquota.enabled %}<b>已开启</b> —— 每轮 osint
+      开始前对每个启用的源查一次剩余额度；**确认剩得少才跳过**并在日志点名（换 key 或等重置）。
+      {% else %}<b>关闭</b> —— 额度耗尽时会逐条请求失败，日志里刷一片归因错的失败原因
+      （看到的是"工具坏了"，事实是"额度用完了"）。{% endif %}
+      查不到额度时**不跳过**（"我不知道"≠"没额度"）；查询只走各源官方端点、
+      <span class="mono">auth=False</span>（不带任何登录态），也不占目标侧请求预算。</p>
+    <label>剩余次数低于此值就跳过 <input name="extquota_min_left"
+      value="{{ s.extquota.min_left }}"></label>
+
     <label class="chk"><input type="checkbox" name="portscan_enabled" value="1"
       {{ 'checked' if s.portscan.enabled }}> <b>端口与服务扫描</b>（默认关闭；引擎 auto = fscan → nmap → 内置 TCP connect）</label>
     <label>端口列表（空=内置 TOP 表，也支持 "80,443" 或 "1-1024"）

@@ -199,6 +199,9 @@ class Throttle:
         self._subprocess_weight = max(1, int(subprocess_weight or 1))
         self._stop_event = stop_event
         self._logger = logger
+        # 续211-T3：停止事件的**公开只读**别名。`utils.run_cmd` 要在子进程退场后整组收割，
+        # 需要读"任务是否已被要求停止"；让它摸 `_stop_event` 就是把私有细节漏出去。
+        self.stop_event = stop_event
         self._task_gate = _Gate(self._task_cap)
         self._global_gate = global_state.gate_for(self._global_cap, logger)
         self._rate = TokenBucket(rate, burst)

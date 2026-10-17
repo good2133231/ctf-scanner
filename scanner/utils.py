@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -111,10 +112,13 @@ def pick_python(configured="python"):
     return sys.executable
 
 
-def run_cmd(argv, cwd=None, timeout=900, throttle=None, extra_path=None):
+def run_cmd(argv, cwd=None, timeout=900, throttle=None, extra_path=None, stop=None):
     """执行外部命令，返回 (returncode, stdout, stderr)。
 
-    命令不存在返回 127；超时返回 124。统一 shell=False，避免注入。
+    命令不存在返回 127；超时返回 124；**被叫停返回 125**（续211-T3：这一路的
+    `returncode` 其实是 -9 —— 我们主动 SIGKILL 的。返回 -9 会让按 `rc != 0` 判失败的
+    调用方（portscan.py:207/312）把"我们主动停的"报成"工具坏了"，原因与事实相反）。
+    统一 shell=False，避免注入。
 
     `throttle` 是任务级限流器（`settings["_throttle"]`，见 `scanner/throttle.py`）：
     传入时本次子进程调用占用一个 `"subprocess"` 名额（并消耗预算），
@@ -124,33 +128,132 @@ def run_cmd(argv, cwd=None, timeout=900, throttle=None, extra_path=None):
     但它的**传递依赖**去 PATH 里找"的场景用（实测：puredns 内部 exec `massdns`，本仓从不
     安装 massdns ⇒ 每个域名都退码 1）。只影响这一个子进程的环境，不改父进程、不改全局。
     """
+    # `stop`（续211-T3）：协作式停止事件。给了它 ⇒ 子进程一退场就**整组**收割
+    # （`_do_run_cmd` 的 finally 里做），不等超时。收割发生在 slot 内部：先收割、后还槽。
+    stop = stop if stop is not None else getattr(throttle, "stop_event", None)
     if throttle is None:
-        return _do_run_cmd(argv, cwd, timeout, extra_path)
+        return _do_run_cmd(argv, cwd, timeout, extra_path, stop=stop)
     try:
         with throttle.slot("subprocess"):
-            return _do_run_cmd(argv, cwd, timeout, extra_path)
+            return _do_run_cmd(argv, cwd, timeout, extra_path, stop=stop)
     except _throttle_mod.BudgetExhausted:
         return 1, "", "throttle: 请求预算耗尽"
     except _throttle_mod.StopRequested:
         return 1, "", "throttle: 任务已请求停止"
 
 
-def _do_run_cmd(argv, cwd, timeout, extra_path=None):
+# 续211-T3（借鉴 StrikeAgent `exec/runner.py`：`start_new_session=True` + `os.killpg`）：
+# `subprocess.run(timeout=)` 的超时**只杀直接子进程** —— 而我们起的工具几乎都自己再 exec 一层
+# （puredns → massdns、afrog → 它的 worker、fscan → 它的协程池）。父进程被杀、孙进程还活着
+# 继续发请求，是"停止信号发了但目标侧还在被打"的实锤形状（本仓 utils.py:123-125 的注释
+# 自己就记着 puredns/massdns 这一层）。
+#
+# 做法：`start_new_session=True` 让子进程自成进程组（POSIX 是 setsid），超时或被取消时
+# `killpg` **整组**杀。三条纪律：
+#   ① **先收割、后还槽** —— 收割发生在 `throttle.slot("subprocess")` 内部，槽还回去的时候
+#      外部资源已经收回（否则"槽已还、外部还在跑"比原来的问题更糟）；
+#   ② 返回值形状 `(rc, out, err)` 与超时码 **124** 一字不改（afrog/portscan/subdomain 都在吃）；
+#   ③ Windows 无 `killpg`/`SIGKILL` ⇒ 分叉：那边退回 `subprocess.run` 原路径
+#      （Windows 的 job object 是另一套，本仓不引第三方依赖，先把已知缺口写明）。
+# 续211-T3：整组收割后读输出的**宽限窗口**（秒）。SIGKILL 异步生效，孙进程真正消失
+# 要一个调度周期；等太久等于把调用挂住（20s 的工具曾让我们等 5s），等太短会丢尾部
+# 几行输出。0.5s 是实测折中：足够让管道读完已有数据，又不让整轮任务变慢。
+_REAP_GRACE = 0.5
+
+_HAS_KILLPG = hasattr(os, "killpg") and hasattr(os, "getpgid")
+
+
+def _kill_group(proc, log=None):
+    """整组杀掉一个子进程（含它 exec 出来的孙进程）。POSIX 用 killpg，Windows 只能杀直接子进程。"""
+    try:
+        if _HAS_KILLPG:
+            os.killpg(os.getpgid(proc.pid), 9)
+        else:                                   # Windows：只杀直接子进程（缺口写明，不装作杀了）
+            proc.kill()
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False                             # 已经退了 / 不是我们的进程：都算收割完成
+    except OSError:
+        return False
+
+
+def _do_run_cmd(argv, cwd, timeout, extra_path=None, stop=None):
     env = None
     if extra_path:
         env = dict(os.environ)
         env["PATH"] = os.pathsep.join([str(extra_path), env.get("PATH", "")])
+    argv = [str(a) for a in argv]
+    cwd = str(cwd) if cwd else None
+    if not _HAS_KILLPG:
+        # Windows 档：保持原实现（超时只杀直接子进程 —— 这是该平台的已知缺口）。
+        try:
+            p = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
+                               errors="replace", timeout=timeout, shell=False, env=env)
+            return p.returncode, p.stdout or "", p.stderr or ""
+        except FileNotFoundError:
+            return 127, "", f"executable not found: {argv[0]}"
+        except subprocess.TimeoutExpired:
+            return 124, "", "timeout"
+        except OSError as e:
+            return 1, "", str(e)
+
+    # POSIX：自建进程组，超时/取消都整组收割
     try:
-        p = subprocess.run([str(a) for a in argv], cwd=str(cwd) if cwd else None,
-                           capture_output=True, text=True, errors="replace",
-                           timeout=timeout, shell=False, env=env)
-        return p.returncode, p.stdout or "", p.stderr or ""
+        p = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             stdin=subprocess.DEVNULL, text=True, errors="replace",
+                             shell=False, env=env, start_new_session=True)
     except FileNotFoundError:
         return 127, "", f"executable not found: {argv[0]}"
-    except subprocess.TimeoutExpired:
-        return 124, "", "timeout"
     except OSError as e:
         return 1, "", str(e)
+    try:
+        # ⚠ 不能用 `communicate()` 等退出：它等的是**管道关闭**，而孙进程继承了
+        # stdout/stderr 的写端 ⇒ 父进程明明退了，communicate 仍要等孙进程自己关管道
+        # （实测：一个 fork 出 20s 孙进程的工具，run_cmd 会被挂满 20s，rc 还是 0 ——
+        # 比原来的 bug 更隐晦）。所以改成**轮询等进程退出**（`wait` 只等直接子进程），
+        # 一退场就整组收割，孙进程死后管道自然关闭，那时再读输出。
+        #
+        # ⚠ 超时判定必须在 `wait` **之前**：`wait(timeout=0.2)` 成功返回只说明"这 0.2s 内
+        # 它退了"，不说明"没超时"—— 父进程 0.3s 就退、timeout=1s 时，第二轮 wait 成功返回，
+        # 若把"wait 成功"当"没超时"就会漏报超时（实测第一版就是这么错的：rc=0 而不是 124）。
+        deadline = (time.monotonic() + timeout) if timeout else None
+        timed_out = False
+        while p.poll() is None:                       # 直接子进程还在跑
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
+            if stop is not None and stop.is_set():
+                break
+            time.sleep(0.05)
+        _kill_group(p)                                # 三条出路都收割：正常退/超时/被叫停
+        try:
+            out, err = p.communicate(timeout=_REAP_GRACE)
+        except Exception:
+            out, err = "", ""
+        if timed_out:
+            return 124, "", "timeout"
+        if stop is not None and stop.is_set():
+            # 被叫停 ⇒ `returncode` 是 **-9（我们 SIGKILL 的）**。调用方普遍按
+            # `rc != 0` 判失败（portscan.py:207/312 就是），那会把"我们主动停的"
+            # 报成"工具坏了"—— 用户看到的失败原因与事实相反。
+            # 所以这一路**不返回 -9**：125 是自留的"被停止"码（124=超时、127=不存在），
+            # stderr 写清原因，调用方照旧能分流。
+            return 125, "", "stopped"
+        return p.returncode, out or "", err or ""
+    except subprocess.TimeoutExpired:
+        _kill_group(p)
+        try:
+            p.communicate(timeout=5)             # 收尸，别让管道把父进程也挂住
+        except Exception:
+            pass
+        return 124, "", "timeout"
+    finally:
+        # 续211-T3：**父进程已退场**（正常退出、超时、被取消，三条路都走到这里）⇒
+        # 进程组里若还有成员，那只能是它 exec 出来的**孙进程**（puredns 正常退出后
+        # massdns 还在跑，正是本仓注释里记着的那个形状）。此时无条件整组收割 ——
+        # 不等 stop、也不赌"父退了孙会自己退"（实测：孙会一直跑满自己的生命周期）。
+        # 组里没有成员时 killpg 抛 ProcessLookupError，被 `_kill_group` 吞掉 ⇒ 零成本。
+        _kill_group(p)
 
 
 # ---------- 域名 ----------

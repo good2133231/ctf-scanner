@@ -27426,6 +27426,198 @@ expression: r0()
         f"基线正常时不该标 baseline-unverified：{[r.get('note') for r in _rows_ok]}"
     print("[210] 续210 ok: T1 基线不可得要明说（命中照常入库+note 标 token，两向变异）｜"
           "T2 语义矛盾判据（数据文件路径回 HTML => 挡；真键值正文/非数据路径/空正文绝不挡）")
+    # ---- [211] 续211：T3 子进程整组收割（孙进程不再活着继续发）----
+    # 来源：上级目录《借鉴落地待办草案》P0-3，参照 StrikeAgent exec/runner.py
+    # （start_new_session=True + os.killpg 整组杀）。三条纪律钉在断言里：
+    #   ① 收割在 slot 内部完成（先收割、后还槽）；
+    #   ② 返回值契约不变（0 正常 / 124 超时 / 127 不存在 / **125 被叫停**）；
+    #   ③ 父进程退场后**无条件**整组收割（孙进程不会自己退 —— 实测会跑满自己的一生）。
+    import base64 as _b64_211
+    import threading as _th211
+    from scanner import utils as _ut211
+
+    # 夹具：父进程 fork 一个孙进程后**立刻退出**（puredns→massdns 的真实形状），
+    # 孙进程每 50ms 往文件追加一行、跑 20s。用 base64 传，免得 heredoc 把 \n 吃掉。
+    _FIX211 = _b64_211.b64decode(
+        "aW1wb3J0IG9zLCBzeXMsIHRpbWUKbWFya2VyID0gc3lzLmFyZ3ZbMV0KcGlkID0gb3MuZm9yaygpCmlmI"
+        "HBpZCA9PSAwOgogICAgd2l0aCBvcGVuKG1hcmtlciwgImEiKSBhcyBmaDoKICAgICAgICBmb3IgaSBpbiBy"
+        "YW5nZSg0MDApOgogICAgICAgICAgICBmaC53cml0ZSgidGljayAlZFxuIiAlIGkpCiAgICAgICAgICAgIGZo"
+        "LmZsdXNoKCkKICAgICAgICAgICAgb3MuZnN5bmMoZmguZmlsZW5vKCkpCiAgICAgICAgICAgIHRpbWUuc2xl"
+        "ZXAoMC4wNSkKICAgIG9zLl9leGl0KDApCm9zLl9leGl0KDApCg==").decode()
+    _d211 = _TMPDIR / "t3_211"
+    _d211.mkdir(parents=True, exist_ok=True)
+    _fx211 = _d211 / "spawner.py"
+    _fx211.write_text(_FIX211, encoding="utf-8")
+    _mk211 = _d211 / "ticks.txt"
+
+    def _lines211():
+        try:
+            return len(_mk211.read_text(encoding="utf-8").splitlines())
+        except OSError:
+            return 0
+
+    # ① 父进程正常退出：调用**不被孙进程挂住**（原实现会被挂满 20s），且孙进程被收
+    _mk211.write_text("", encoding="utf-8")
+    _t0_211 = time.perf_counter()
+    _rc211, _o211, _e211 = _ut211.run_cmd([sys.executable, str(_fx211), str(_mk211)], timeout=30)
+    _dt211 = time.perf_counter() - _t0_211
+    _a211 = _lines211()
+    time.sleep(1.0)
+    _b211 = _lines211()
+    assert _rc211 == 0, f"父进程正常退出应 rc=0：{_rc211} {_e211!r}"
+    assert _dt211 < 3.0, f"被孙进程挂住了：{_dt211:.2f}s（communicate 等管道关闭的老毛病）"
+    assert _b211 < 400, f"孙进程没被收：跑到 {_b211}/400 行"
+    assert _b211 == _a211 or _b211 - _a211 < 60, f"杀完还在写：{_a211}→{_b211}"
+
+    # ② 真超时（父进程自己跑 10s > timeout=1）⇒ 124，且耗时≈1s（不是 10s）
+    _t0_211 = time.perf_counter()
+    _rc211, _, _e211 = _ut211.run_cmd([sys.executable, "-c", "import time; time.sleep(10)"],
+                                      timeout=1)
+    _dt211 = time.perf_counter() - _t0_211
+    assert _rc211 == 124 and _e211 == "timeout" and _dt211 < 3.0, (_rc211, _e211, _dt211)
+
+    # ③ 被叫停 ⇒ **125 + stderr=stopped**（不是 -9：调用方按 rc!=0 会把"主动停"报成"工具坏"）
+    _stop211 = _th211.Event()
+    _res211 = {}
+
+    def _run211():
+        _res211["r"] = _ut211.run_cmd([sys.executable, "-c", "import time; time.sleep(30)"],
+                                      timeout=30, stop=_stop211)
+
+    _th211.Thread(target=_run211, daemon=True).start()
+    time.sleep(0.4)
+    _t0_211 = time.perf_counter()
+    _stop211.set()
+    for _ in range(60):
+        if "r" in _res211:
+            break
+        time.sleep(0.1)
+    _dt211 = time.perf_counter() - _t0_211
+    _rc211, _, _e211 = _res211["r"]
+    assert _rc211 == 125 and _e211 == "stopped", f"停止路径应是 125/stopped：{_rc211} {_e211!r}"
+    assert _dt211 < 3.0, f"叫停后 {_dt211:.2f}s 才返回（没在轮询边界停）"
+
+    # ④ 契约不变：正常 0 / 不存在 127 / 输出一条不丢（管道读完）
+    _rc211, _o211, _e211 = _ut211.run_cmd([sys.executable, "-c", "print('hi')"], timeout=10)
+    assert _rc211 == 0 and _o211.strip() == "hi" and _e211 == "", (_rc211, _o211, _e211)
+    _rc211, _, _e211 = _ut211.run_cmd(["no-such-binary-211-t3"], timeout=5)
+    assert _rc211 == 127 and "not found" in _e211, (_rc211, _e211)
+    _rc211, _o211, _ = _ut211.run_cmd([sys.executable, "-c",
+                                       "import sys\nfor i in range(2000): "
+                                       "sys.stdout.write('L%d\\n' % i)"], timeout=30)
+    assert _rc211 == 0 and _o211.count("\n") == 2000, (_rc211, len(_o211))
+
+    # ⑤ 变异证伪：把 `_kill_group` 摘成 no-op ⇒ ①②③ 全红（承重的正是它）
+    _real_kg211 = _ut211._kill_group
+    _ut211._kill_group = lambda proc, log=None: False
+    try:
+        _mk211.write_text("", encoding="utf-8")
+        _t0_211 = time.perf_counter()
+        _ut211.run_cmd([sys.executable, str(_fx211), str(_mk211)], timeout=30)
+        _dt_bad = time.perf_counter() - _t0_211
+        _lines_bad = _lines211()
+        time.sleep(0.6)
+        _lines_bad2 = _lines211()
+        assert _dt_bad > 5.0 or _lines_bad2 > _lines_bad, \
+        "摘掉 _kill_group 后应当出现「被挂住」或「孙进程继续写」 —— 两条都没出现，断言没承重"
+    finally:
+        _ut211._kill_group = _real_kg211
+
+    # ⑥ Windows 档必须分叉（无 killpg ⇒ 不许静默走 POSIX 路径）
+    assert hasattr(_ut211, "_HAS_KILLPG"), "缺平台判定开关（Windows 会静默走错分支）"
+    assert "Windows" in (_ut211._do_run_cmd.__doc__ or "") or \
+        "Windows" in (ROOT / "scanner" / "utils.py").read_text(encoding="utf-8"), \
+        "Windows 分叉的已知缺口必须写明（不许装作跨平台都杀了）"
+
+    # ---- [211-P1-4] 外部引擎配额预检（续211）----
+    from scanner import extquota as _eq211
+    # ① 三家额度解析（合成响应，零网络）：各家的字段名都不一样，逐家钉
+    assert _eq211._fofa_quota({"fofa_point": 5, "fofa_free": 100}) == \
+        (105, "付费积分 5 + 免费 100"), _eq211._fofa_quota({"fofa_point": 5, "fofa_free": 100})
+    assert _eq211._shodan_quota({"scan_credits": 10, "query_credits": 3})[0] == 3
+    assert _eq211._quake_quota({"data": {"month_remaining_credit": 42}})[0] == 42
+    assert _eq211._quake_quota({"credit": 7})[0] == 7, "字段名随版本漂：裸 credit 也要认"
+    # ② 查不到 ⇒ **放行**（"我不知道" ≠ "没额度" —— §6.2 第十七起同族）
+    _ok211q, _bad211q = _eq211.preflight(["fofa"], {"keys": {}, "extquota": {"enabled": True}})
+    assert _ok211q == ["fofa"] and not _bad211q, (_ok211q, _bad211q)
+    # ③ 确认剩得少 ⇒ 跳过并**点名**（剩余数 + 下限都要说）
+    _real_ck211 = _eq211.check
+    _eq211.check = lambda s, st, **k: (0, "付费积分 0")
+    try:
+        _ok211q, _bad211q = _eq211.preflight(["fofa", "shodan"], {}, min_left=1)
+        assert _ok211q == [] and set(_bad211q) == {"fofa", "shodan"}, (_ok211q, _bad211q)
+        assert "剩余 0" in _bad211q["fofa"] and "低于下限" in _bad211q["fofa"], _bad211q["fofa"]
+    finally:
+        _eq211.check = _real_ck211
+    # ④ 开关关着 ⇒ 不预检（回到原来的逐条失败形态，这是允许的选择）
+    assert _eq211.preflight(["fofa"], {"extquota": {"enabled": False}})[0] == ["fofa"]
+    # ⑤ 配置两处一致 + 接线（osint 阶段三家源开跑前各查一次）
+    from scanner import config as _cfq211
+    _dq211 = _cfq211.DEFAULTS["extquota"]
+    assert _dq211["enabled"] is True and "min_left" in _dq211, _dq211
+    assert _cfq211.load_settings()["extquota"] == _dq211, "settings 与 DEFAULTS 漂了"
+    _os211 = (ROOT / "scanner" / "stages" / "osint.py").read_text(encoding="utf-8")
+    # 查的是"导入了模块 + 调了 preflight + 用了结果"，不是某一个字面量
+    # （调用处写的是 `_eq211.preflight`，`import … as _eq211` 的别名形式）
+    assert "from .. import extquota as _eq211" in _os211, "osint 没导入 extquota"
+    assert "_eq211.preflight(" in _os211 and "_bad211" in _os211, \
+        "osint 没接配额预检（额度耗尽时仍旧逐条失败、归因错）"
+    assert 'do_fofa and "fofa" in _ok211' in _os211, \
+        "预检不过却没把该源关掉（跳过了等于没跳）"
+    assert "auth=False" in (ROOT / "scanner" / "extquota.py").read_text(encoding="utf-8"), \
+        "第三方查询必须 auth=False（§5.1 不带登录态）"
+    # ---- [211-P2-11] SQL 报错特征库（外置表 + 家族名 + 大小写无关）----
+    from scanner.owasp.checks import load_sql_error_rules as _lsr211, sql_error_hits as _sh211
+    _rules211, _iss211 = _lsr211()
+    assert not _iss211, f"SQL 特征表有坏行：{_iss211[:3]}"
+    assert len(_rules211) >= 40, f"外置表只有 {len(_rules211)} 条（没接上？）"
+    _fams211 = {f for f, _ in _rules211}
+    for _f211 in ("mysql", "mssql", "postgresql", "oracle", "sqlite", "db2",
+                  "access", "sybase", "mariadb", "informix"):
+        assert _f211 in _fams211, f"缺 {_f211} 家族（多 DBMS 覆盖不完整）"
+    # 正向：11 个家族各中一条，且**大小写无关**（页面回显大小写不定）
+    _pos211 = {
+        "mysql": "You have an error in your SQL syntax; check the manual",
+        "mysql_lc": "you have an error in your sql syntax",
+        "mssql": "Microsoft OLE DB Provider for SQL Server error 80040e14",
+        "postgresql": 'ERROR: syntax error at or near "SELECT"',
+        "oracle": "ORA-00933: SQL command not properly ended",
+        "sqlite": 'near "x": syntax error',
+        "db2": "DB2 SQL Error: SQLCODE=-104",
+        "access": "Microsoft JET Database Engine error",
+        "sybase": "Sybase message: Invalid column name",
+        "mariadb": "MariaDB server version for the right syntax to use near '1'",
+        "informix": "INFORMIX error: SQL syntax error",
+    }
+    for _k211, _v211 in _pos211.items():
+        _hits211 = _sh211(_v211)
+        assert _hits211, f"{_k211} 样本没命中：{_v211!r}"
+        assert any(f in {f for f, _ in _hits211} for f in _fams211 - {"generic"}), \
+            f"{_k211} 只命中 generic，没认出家族 ⇒ DBMS 指纹白丢"
+    # 反向：无关页零误报 + 真实键值正文（.env）不命中
+    for _neg211 in ("<html><body>hello world</body></html>",
+                    "DB_PASSWORD=abc\nAPI_KEY=xyz\n", "404 Not Found"):
+        assert _sh211(_neg211) == [], f"误报：{_neg211!r} → {_sh211(_neg211)}"
+    # 大小写变体必须同结论（这条是"判据不得依赖大小写"的机器判据）
+    _a211 = _sh211("YOU HAVE AN ERROR IN YOUR SQL SYNTAX")
+    _b211 = _sh211("you have an error in your sql syntax")
+    assert {f for f, _ in _a211} == {f for f, _ in _b211} and _a211, (_a211, _b211)
+    # 内置兜底仍在（外置表读不到时它们是最后的判据 —— 不许被"升级"替换掉）
+    from scanner.owasp.checks import SQL_ERRORS as _se211
+    assert len(_se211) >= 8 and any("sql syntax" in p for p in _se211), \
+        "内置兜底被删了（外置表缺失时就什么都没了）"
+    # 接线：报错型注入的说明里带家族名（"疑似 MySQL" 比 "疑似 SQL 注入" 有用）
+    _src_sq211 = (ROOT / "scanner" / "owasp" / "checks.py").read_text(encoding="utf-8")
+    assert "DBMS 疑似" in _src_sq211 and "sql_error_hits(text)" in _src_sq211, \
+        "报错型注入没接新判据（家族名白做了）"
+    print("[211-P2-11] 续211 ok: SQL 报错特征外置表（45 条/11 家族/坏行 0）｜11 家族全中+大小写"
+          "无关｜无关页与键值正文零误报｜内置兜底仍在｜命中报 DBMS 家族名")
+
+    print("[211-P1-4] 续211 ok: 外部引擎配额预检（三家字段各自解析/查不到放行/剩得少才跳过并点名/"
+          "可关/配置两处一致/osint 接线/auth=False）")
+
+    print("[211] 续211 ok: T3 子进程整组收割(父退不等管道/孙进程被收/超时 124/叫停 125/输出不丢)｜"
+          "变异证伪(摘 _kill_group ⇒ 挂住或孙进程续写)｜平台分叉写明")
     print("SMOKE PASS")
 
 

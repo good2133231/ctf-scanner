@@ -360,6 +360,9 @@ iprecon:
 
 # FOFA 反查（默认关）：favicon(icon_hash) / cert="domain" / title 三种。需 config/keys.yaml 填 fofa.key。
 # 2026-09-26 用户决定**先关，投入生产时再开** —— 本机开发期少一个出网依赖，也避免误触额度。
+extquota:
+  enabled: true               # 续211-P1-4：外部引擎配额预检（FOFA/Shodan/Quake 开跑前查余额）
+  min_left: 1                 # 剩余次数低于此值 ⇒ 本轮跳过该源并点名
 fofa:
   # 续150（用户 2026-10-11 点单"fofa功能也可以启用了 方便我们核查"）：默认打开。
   # 没配 key（config/keys*.yaml 的 fofa.email + fofa.key）时**一次请求都不发**，只写一行日志，

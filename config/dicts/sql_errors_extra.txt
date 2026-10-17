@@ -1,0 +1,72 @@
+# 外置 SQL 报错特征表（续211-P2-11）
+#
+# 格式：`家族<TAB>正则`（分隔符必须是 TAB —— 判据本身是正则，`|` 是它的选择运算符，
+#       拿 `|` 切列会把判据腰斩，与 fingerprints_extra.txt 同一条例外）。
+# 每行可带 `#` 注释。家族名会带进命中说明（"疑似 MySQL"而不是只说"疑似 SQL 注入"），
+# 所以它不是装饰：同一条正文命中多个家族时，报出来的家族集合就是 DBMS 线索。
+#
+# 来源：参照 ShuiZe `iniFile/SQLPayloads/errors.xml` 的形态人工复核后落地（§5.11：
+#       第三方规则必须人工复核才进本仓，不直接搬文件）。复核口径三条：
+#       ① 只收**报错回显**类（页面把 DBMS 的错误吐出来）—— 布尔/延时判据不在这张表里；
+#       ② 不收通用到会误报的（"error" "syntax" 这种单词单独出现的一律不要）；
+#       ③ 每条都在真实/合成样本上验过能编译、且不与内置兜底重复。
+#
+# ⚠ 内置兜底那 8 条（`owasp/checks.py::SQL_ERRORS`）**一条都没删**：本表读不到时它们
+#   就是最后的判据。本表是"扩召回 + 白得 DBMS 指纹"，不是替换。
+#
+# 家族名取值（与报告/页面展示对齐，小写）：
+#   mysql / mariadb / mssql / postgresql / sqlite / oracle / db2 / access / sybase / generic
+#
+# ---- MySQL / MariaDB ----
+mysql	you have an error in your sql syntax
+mysql	warning:\s*mysql
+mysql	mysqli?_([a-z_]+)\(\)
+mysql	mysql_fetch_(array|object|row|assoc)\(\)
+mysql	mysql server version for the right syntax
+mysql	syntax error.*near '.*'.*at line \d+
+mariadb	mariadb server version for the right syntax
+mariadb	warning:\s*mariadb
+# ---- Microsoft SQL Server / Sybase / T-SQL ----
+mssql	microsoft ole db provider for sql server
+mssql	unclosed quotation mark (after|before) the character string
+mssql	\[sql server\]|microsoft\[sql server\]
+mssql	incorrect syntax near
+mssql	procedure or function .* expects parameter
+mssql	conversion failed when converting (the )?varchar value
+mssql	sqlcmd.*error|sqlstate\[42000\]
+sybase	sybase message|adaptive server.*error
+# ---- PostgreSQL ----
+postgresql	postgresql.*error
+postgresql	pg_query\(\).*failed
+postgresql	syntax error at or near
+postgresql	psql: fatal|psql: error
+postgresql	unterminated quoted string
+# ---- SQLite ----
+sqlite	sqlite3?(::|\.).*(query|error|exception)
+sqlite	sqlite error|sqlite3\.operationalerror
+sqlite	near ".*": syntax error
+# ---- Oracle ----
+oracle	ora-\d{4,5}
+oracle	oracle error|oracle\.jdbc
+oracle	pl/sql: .*(statement ignored|numeric or value error)
+oracle	quoted string not properly terminated
+# ---- DB2 / Informix ----
+db2	db2 sql error|sqlcode=-\d+
+db2	cli0\d{3}[a-z]|db2.*sql\d+
+informix	informix.*error|sqlstate\[
+# ---- Access / Jet ----
+access	microsoft jet database engine|microsoft access driver
+access	\[microsoft\]\[odbc microsoft access driver\]
+# ---- 通用（仍指向 SQL 层，但不区分家族）-------
+generic	sql syntax.*error|sql.*syntax error
+generic	quoted string not properly terminated
+generic	invalid query|malformed query
+generic	database error|database query failed
+generic	sqlSTATE\[|sqlstate \d+
+generic	sql command not properly ended
+generic	unknown column '.*' in '.*'
+generic	unknown column [\w.]+ in [\w'().]+
+generic	no such column:? .*
+generic	table '.*' doesn't exist
+generic	no such column:? .*
+generic	unrecognized token

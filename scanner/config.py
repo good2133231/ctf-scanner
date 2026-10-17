@@ -569,6 +569,13 @@ DEFAULTS = {
 
         "timeout": 10,             # 单次反查超时（秒）
     },
+    "extquota": {
+        # 外部引擎配额预检（续211-P1-4）：开跑前问一句"我还有多少次"。
+        # 默认开（它自己只吃一次 HTTP 且不吃目标侧预算）；关掉它 ⇒ 回到原来的
+        # "逐条失败、归因错"形态。`min_left` 低于这个数就整轮跳过该源。
+        "enabled": True,
+        "min_left": 1,
+    },
     "fofa": {
         # favicon 反查同源资产（P3-1）：需 config/keys.yaml 填 fofa.email / fofa.key
         # 代码默认值是 False（保证"没填 key 就不该发请求"）。

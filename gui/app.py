@@ -4720,6 +4720,9 @@ def create_app():
                             "api_key": (settings.get("icp") or {}).get("api_key", ""),
                             "sources": list((settings.get("icp") or {}).get("sources")
                                             or [])},
+                    # 续211-P1-4：外部引擎配额预检。逐键点名（`save_settings` 整份重写）。
+                    "extquota": {"enabled": f.get("extquota_enabled") == "1",
+                                 "min_left": int(f.get("extquota_min_left", 1) or 1)},
                     "hostcollide": {"enabled": f.get("hostcollide_enabled") == "1",
                                     "max_requests": int(f.get("hostcollide_max_requests", 200) or 200),
                                     "timeout": int(f.get("hostcollide_timeout", 5) or 5)},
