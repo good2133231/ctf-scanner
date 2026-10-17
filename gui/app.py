@@ -2578,8 +2578,27 @@ def create_app():
         if not ids:
             return jsonify({"error": "ids 不能为空"}), 400
         note = data.get("note")
-        n = db.bulk_set_vuln_review(ids, data.get("state"), note=note)
-        return jsonify({"ok": True, "affected": n, "state": db.norm_review(data.get("state"))})
+        # 续211-P1-8：同簇顶班。人勾了**同簇的多条**时 bulk 已经覆盖了它们，
+        # 只有"只勾了一条"时才需要顶班 —— 所以 `cover_cluster` 按勾选数决定：
+        # 勾 1 条 ⇒ 顶班（人的结论扩散到同簇未判的）；勾多条 ⇒ 不顶班（那就是逐条明判）。
+        # 顶班写进 `review_note` 可追溯，且 GUI 每行都有"只改这条"入口（单行覆盖）。
+        cover = str(data.get("cover") or "auto").lower()
+        if cover in ("0", "false", "no"):
+            cover_cluster = False
+        elif cover in ("1", "true", "yes"):
+            cover_cluster = True
+        else:
+            cover_cluster = len(ids) == 1
+        n = db.bulk_set_vuln_review(ids, data.get("state"), note=note,
+                                    cover_cluster=cover_cluster)
+        # 同簇现状一起回给前端：顶了哪几班、每班现在什么状态，必须看得见（不能暗箱）
+        clusters = {}
+        if cover_cluster and ids:
+            for _vid in ids[:20]:
+                clusters[_vid] = db.cluster_of(_vid)
+        return jsonify({"ok": True, "affected": n,
+                        "state": db.norm_review(data.get("state")),
+                        "covered": cover_cluster, "clusters": clusters})
 
     # ---------- 资产分栏 ----------
     #

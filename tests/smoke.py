@@ -4150,8 +4150,12 @@ workflows:
                               "cn": "j.test", "issuer": "CN=j.test", "expired": 1,
                               "self_signed": 1, "days_left": -3, "san": ["j.test"],
                               "sig_algo": "sha256WithRSA", "sha256": "AA:BB", "source": "tls"}])
+    # 续211-P1-7：这是**合成夹具**（没有 evidence 是刻意的，测的是 JSONL 的字段形状），
+    # 所以走显式逃生门 `trust_caller=True` —— 否则入库闸①会把它夹成 info，
+    # 下面那条"导出 severity 仍是 high"的断言就失去意义（那是 JSONL 的判据，不是闸的）。
     db.insert_vuln(_j_tid, {"target": "http://j.test/", "poc_id": "smoke-jsonl-hit",
-                            "name": "中文漏洞名", "severity": "high", "owasp": "A03"})
+                            "name": "中文漏洞名", "severity": "high", "owasp": "A03"},
+                   trust_caller=True)
     db.insert_vuln(_j_tid, {"target": "http://j.test/", "poc_id": "smoke-jsonl-fp",
                             "name": "复核掉的中文漏洞", "severity": "low"})
     _j_fp_id = [v["id"] for v in db.list_vulns(task_id=_j_tid, limit=50)
@@ -25077,8 +25081,11 @@ expression: r0()
         # 一条 critical 过关；顺手验 vulnscan 真的把计数器传进了 run_all
         if blocked is not None:
             blocked.add()
+        # 续211-P1-7：带 evidence 与坐实语 —— 入库闸①会把"无证据的 critical"夹成 info，
+        # 这组用例测的是 severity floor 的**挡与放**，不是闸本身，所以桩要像真实产物。
         return [{"poc_id": "stub-crit", "severity": "critical", "target": url,
-                 "name": "桩-内置过关", "owasp": "A05", "detail": "", "evidence": ""}]
+                 "name": "桩-内置过关", "owasp": "A05", "detail": "已复现：命中特征",
+                 "evidence": "HTTP 200 len=42 body=stub"}]
 
     def _stub_poc176(poc, url, settings, site=None, registry=None):
         _poc_calls176.append(poc.get("id"))
@@ -25094,7 +25101,7 @@ expression: r0()
         return ([{"poc_id": "stub-afrog-info", "severity": "info", "target": targets,
                   "name": "桩-afrog被挡", "detail": "", "evidence": ""},
                  {"poc_id": "stub-afrog-crit", "severity": "critical", "target": targets,
-                  "name": "桩-afrog过关", "detail": "", "evidence": ""}],
+                  "name": "桩-afrog过关", "detail": "已复现：命中", "evidence": "afrog stub"}],
                 "afrog 桩：2 条")
 
     try:
@@ -25802,7 +25809,8 @@ expression: r0()
         if blocked is not None:
             blocked.add()      # 已执行且命中、低于门槛
         return [{"poc_id": "stub-crit", "severity": "critical", "target": url,
-                 "name": "桩", "owasp": "A05", "detail": "", "evidence": ""}]
+                 "name": "桩", "owasp": "A05", "detail": "已复现：命中",
+                 "evidence": "HTTP 200 body=stub"}]
 
     _pn182 = []
 
@@ -25879,8 +25887,13 @@ expression: r0()
     def _mk_rows180(tid):
         for t in ("http://a.targ180.test", "http://b.targ180.test",
                   "http://c.targ180.test", "http://d.targ180.test"):
+            # 续211-P1-7：带 evidence —— 它们是"历史已坐实的结论"（真实库里这种行本来
+            # 就有证据）。不带的话闸③会把复测出的 fixed 夹成 unconfirmed，
+            # 这组用例测的是复测三态，不是闸（闸由 [211-P1-7] 单独测）。
             db.insert_vuln(tid, {"target": t, "poc_id": "x01-a", "name": "x",
-                                 "severity": "low"})
+                                 "severity": "low",
+                                 "evidence": "HTTP 200 body=x", "detail": "已复现：命中"},
+                           trust_caller=True)
 
     class _C180:
         def __init__(self, tid):
@@ -25929,7 +25942,8 @@ expression: r0()
         for t in ("http://e.targ180e2e.test", "http://f.targ180e2e.test",
                   "http://g.targ180e2e.test"):
             db.insert_vuln(tid, {"target": t, "poc_id": "s01-x", "name": "x",
-                                 "severity": "low"})
+                                 "severity": "low", "evidence": "HTTP 200 body=x",
+                                 "detail": "已复现：命中"}, trust_caller=True)
         rec = _Rec()
         wd = Path(_TMPDIR) / f"vulnscan180_{tid}"
         wd.mkdir(parents=True, exist_ok=True)
@@ -27618,6 +27632,91 @@ expression: r0()
 
     print("[211] 续211 ok: T3 子进程整组收割(父退不等管道/孙进程被收/超时 124/叫停 125/输出不丢)｜"
           "变异证伪(摘 _kill_group ⇒ 挂住或孙进程续写)｜平台分叉写明")
+    # ---- [211-P1-7] 证据三硬闸 + [211-P1-8] 同簇复核顶班 ----
+    _t217 = db.create_task("smoke-p17", "https://p17.test/", ["vulnscan"], {})
+    _EV217 = "HTTP 500 body=err"
+    db.insert_vuln(_t217, {"target": "https://p17.test/a", "poc_id": "ev", "name": "A",
+                           "severity": "high", "detail": "已复现：命中", "evidence": _EV217})
+    db.insert_vuln(_t217, {"target": "https://p17.test/b", "poc_id": "noev", "name": "B",
+                           "severity": "high", "detail": "疑似存在", "evidence": ""})
+    db.insert_vuln(_t217, {"target": "https://p17.test/c", "poc_id": "unproven", "name": "C",
+                           "severity": "critical", "detail": "疑似RCE", "evidence": _EV217})
+    _r217 = {dict(r)["poc_id"]: dict(r) for r in db._query(
+        "SELECT * FROM vulns WHERE task_id=?", (_t217,))}
+    # ① 无证据 ⇒ 夹到 info，且说明写进 detail（不丢数据，只是不以高危形状进库）
+    assert _r217["noev"]["severity"] == "info", _r217["noev"]["severity"]
+    assert "无证据" in _r217["noev"]["detail"], _r217["noev"]["detail"]
+    # ② 未证实的高危 ⇒ 缺口话术（结论仍看得见，但不说成已验证）
+    assert _r217["unproven"]["severity"] == "critical", "有证据时不降级"
+    assert "【未证实】" in _r217["unproven"]["detail"] and "坐实语" in _r217["unproven"]["detail"]
+    # ③ fixed 的闸在**复测三态的产地**（bulk_set_vuln_retest）：没证据的夹 unconfirmed
+    assert db.bulk_set_vuln_retest([_r217["ev"]["id"], _r217["noev"]["id"]], "fixed") == 1, \
+        "只有有证据的那条能落 fixed"
+    _byid217 = {dict(r)["id"]: dict(r) for r in db._query(
+        "SELECT * FROM vulns WHERE task_id=?", (_t217,))}
+    _id_ev = _byid217 and [i for i, r in _byid217.items() if r["poc_id"] == "ev"][0]
+    _id_noev = [i for i, r in _byid217.items() if r["poc_id"] == "noev"][0]
+    assert _byid217[_id_ev]["retest_state"] == "fixed", _byid217[_id_ev]["retest_state"]
+    assert _byid217[_id_noev]["retest_state"] == "unconfirmed", \
+        f"没证据的 fixed 必须夹到 unconfirmed：{_byid217[_id_noev]['retest_state']}"
+    # 逃生门（显式、有人按才生效）
+    db.bulk_set_vuln_retest([_id_noev], "fixed", allow_fixed_without_proof=True)
+    _byid217 = {dict(r)["id"]: dict(r) for r in db._query(
+        "SELECT * FROM vulns WHERE task_id=?", (_t217,))}
+    assert _byid217[_id_noev]["retest_state"] == "fixed", "逃生门没生效"
+    # 其它三态与非法值不受影响
+    for _st217 in ("reproduced", "unconfirmed", "", "bogus"):
+        db.bulk_set_vuln_retest([_id_ev], _st217)
+        _got217 = dict(db._query("SELECT retest_state FROM vulns WHERE id=?",
+                                 (_id_ev,))[0])["retest_state"]
+        assert _got217 == db.norm_retest(_st217), (_st217, _got217)
+
+    # ---- P1-8 同簇复核顶班 ----
+    _t318 = db.create_task("smoke-p18", "https://p18.test/", ["vulnscan"], {})
+    for _i318 in range(3):
+        db.insert_vuln(_t318, {"target": "https://p18.test/x", "poc_id": "same",
+                               "name": "簇", "severity": "medium", "detail": f"第{_i318}条"})
+    _ids318 = sorted(dict(r)["id"] for r in db._query(
+        "SELECT id FROM vulns WHERE task_id=?", (_t318,)))
+    # 勾 1 条 ⇒ 顶班（人的结论扩散到同簇未判的），且**可追溯**
+    _n318 = db.bulk_set_vuln_review([_ids318[0]], "confirmed", cover_cluster=True)
+    _by318 = {dict(r)["id"]: dict(r) for r in db._query(
+        "SELECT * FROM vulns WHERE task_id=?", (_t318,))}
+    assert all(_by318[i]["review"] == "confirmed" for i in _ids318), _by318
+    assert "同簇顶班" in _by318[_ids318[1]]["review_note"], "顶班必须写明依据（哪条顶的）"
+    assert f"#{_ids318[0]}" in _by318[_ids318[1]]["review_note"], "依据要带 id"
+    # 已判过的不被覆写（那叫人覆写，不叫顶班）
+    db.set_vuln_review(_ids318[2], "false_positive")
+    db.set_vuln_review(_ids318[0], "confirmed")
+    _by318 = {dict(r)["id"]: dict(r) for r in db._query(
+        "SELECT * FROM vulns WHERE task_id=?", (_t318,))}
+    assert _by318[_ids318[2]]["review"] == "false_positive", "已判过的不该被顶班覆写"
+    # 勾多条 ⇒ 不顶班（逐条明判）
+    _t418 = db.create_task("smoke-p18b", "https://p18b.test/", ["vulnscan"], {})
+    for _i418 in range(2):
+        db.insert_vuln(_t418, {"target": "https://p18b.test/x", "poc_id": "same",
+                               "name": "簇", "severity": "medium", "detail": f"第{_i418}条"})
+    db.insert_vuln(_t418, {"target": "https://p18b.test/x", "poc_id": "other",
+                           "name": "别的", "severity": "low", "detail": "d"})
+    _multi418 = sorted(dict(r)["id"] for r in db._query(
+        "SELECT id FROM vulns WHERE task_id=? AND poc_id='same'", (_t418,)))
+    db.bulk_set_vuln_review(_multi418, "confirmed", cover_cluster=True)
+    _by418 = {dict(r)["id"]: dict(r) for r in db._query(
+        "SELECT * FROM vulns WHERE task_id=?", (_t418,))}
+    _other418 = [i for i in _by418 if i not in _multi418][0]
+    assert _by418[_other418]["review"] == "", "勾多条时不该顶班（明判范围外不动）"
+    # 单行覆盖入口（cover_cluster=False 只改这一条）
+    db.set_vuln_review(_multi418[1], "false_positive", cover_cluster=False)
+    _by418 = {dict(r)["id"]: dict(r) for r in db._query(
+        "SELECT * FROM vulns WHERE task_id=?", (_t418,))}
+    assert _by418[_multi418[1]]["review"] == "false_positive"
+    assert _by418[_multi418[0]]["review"] == "confirmed", "单行覆盖不该动同簇其它行"
+    # 簇现状可见（cluster_of：顶了哪几班、每班什么状态）
+    _cl418 = db.cluster_of(_multi418[0])
+    assert len(_cl418) == 2 and any(c["id"] == _multi418[0] for c in _cl418), _cl418
+    print("[211-P1-7/P1-8] 续211 ok: 证据三闸（无证据降 info / 未证实高危缺口话术 / "
+          "fixed 需证据否则 unconfirmed + 显式逃生门）｜同簇顶班（勾1条扩散+可追溯+已判不覆写"
+          "+勾多条不顶+单行覆盖+簇现状可见）")
     print("SMOKE PASS")
 
 

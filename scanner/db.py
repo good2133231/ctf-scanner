@@ -1381,11 +1381,55 @@ def insert_dirs(task_id, dirs):
             d.get("title", "")) for d in dirs], many=True)
 
 
-def insert_vuln(task_id, v):
+def insert_vuln(task_id, v, trust_caller=False):
+    """写入一条漏洞结论。**续211-P1-7：入库硬闸**（借鉴 ARTEX `graph/verify.py`
+    的 `if not finding_has_authenticity_proof(finding): status="pending"`）。
+
+    两条判据都在**写入这一处**（唯一产地），不新增第二份校验：
+      ① **无证据必降级**：`evidence`/`packets` 全空的 high/critical，`severity` 夹到 `info`
+         （不许以高危形状入库 —— 那是"看着像坐实了"）；
+      ② **未证实的高危不给结论正文**：severity 在 high 及以上而 `detail` 里没有
+         「已复现/命中/证据」这类坐实语的，`detail` 改写为缺口话术
+         （结论仍看得见，但不说成已验证）。
+    ⚠ **第三条（缺二次验证不算已修复）不在这儿**：它在 `bulk_set_vuln_retest`
+      （写 `retest_state` 的唯一产地）—— 本函数的 INSERT 压根不写 review/retest_* 列，
+      放这儿会是一条永不触发的空闸（续211 实测踩到）。
+
+    两条都**不丢数据**（§0 第 10 条）：降级/改写只影响这一行的呈现形状，
+    原始证据仍在 evidence/packets 里，人照旧能复核。
+
+    `trust_caller=True`（续211）：显式逃生门 —— 调用方说"这条我负责"（合成夹具、
+    回归用例、测试数据），跳过两条闸。逃生**必须显式**，且调用点要在注释里说清为什么
+    （否则"绕过闸"会成为默认动作，那这两条闸就等于没有）。
+    """
+    v = dict(v or {})
+    ev = (v.get("evidence") or "").strip()
+    pk = (v.get("packets") or "").strip()
+    sev = str(v.get("severity") or "medium").lower()
+    note = ""
+    if not trust_caller:
+        # ① 无证据 ⇒ 夹到 info（不丢，只是不以高危形状进库）
+        #   ⚠ 只夹**已知的高危档**（high/critical）：未知级别（"weird" 这类）不夹 ——
+        #   那是 `vuln_trend` 的"归 other 不静默丢"要看见的东西，在这儿被夹成 info
+        #   等于把"脏数据"洗成"干净数据"，趋势统计反而少一类（续211 实测踩到）。
+        if not ev and not pk and sev in ("high", "critical"):
+            note = "（无证据：本条以降危形状入库，证据齐了再复测升级）"
+            sev = "info"
+        # ② 未证实的高危 ⇒ 结论正文换成缺口话术
+        if sev in ("high", "critical"):
+            detail = str(v.get("detail") or "")
+            _proven = any(w in detail for w in
+                          ("已复现", "命中", "证据", "回显", "响应含", "实测"))
+            if not _proven:
+                v["detail"] = (f"【未证实】{detail}".strip()
+                               + "\n\n本条标为高危但**没有任何坐实语**（已复现/命中/证据/回显）。"
+                                 "先复现一次再采信；在此之前它只是线索，不是结论。")
+        elif note:
+            v["detail"] = f"{v.get('detail') or ''}\n\n{note}".strip()
     _exec("INSERT INTO vulns(task_id,target,poc_id,name,severity,owasp,detail,evidence,created_at,packets) "
           "VALUES(?,?,?,?,?,?,?,?,?,?)",
           (task_id, v.get("target", ""), v.get("poc_id", ""), v.get("name", ""),
-           v.get("severity", "medium"), v.get("owasp", ""), v.get("detail", ""),
+           sev, v.get("owasp", ""), v.get("detail", ""),
            (v.get("evidence", "") or "")[:2000], _now(),
            # 上限比 evidence 大一个量级：它是「凭什么这么说」的原始材料，截太短等于
            # 又让人看不到包（续143 用户原话：数据包都没有）。
@@ -1998,8 +2042,25 @@ def norm_review(state):
     return s if s in ("confirmed", "false_positive") else ""
 
 
-def set_vuln_review(vuln_id, state, note=None):
-    """标记一条漏洞的复核状态（P1-1）。`note` 为 None 表示不改备注，返回受影响行数。"""
+def set_vuln_review(vuln_id, state, note=None, cover_cluster=True):
+    """标记一条漏洞的复核状态（P1-1）。`note` 为 None 表示不改备注，返回受影响行数。
+
+    **续211-P1-8 同簇顶班**（借鉴 ARTEX `graph/store.py:2407-2420` 的
+    `sec_done_keys`/`rate_done_keys` 并集）：复核一条时，把**同簇**里还没判过的一并
+    标成同一结论，并在这些行的 `review_note` 里写明"顶班依据"（谁顶的、依据是哪条）。
+
+    簇的判据 = **同 poc_id + 同 target**（同一份判据打在同一个目标上 ⇒ 同样的证据
+    同样的结论）。为什么不是同 poc_id 全任务顶班：同一条 POC 在不同目标上的命中
+    可能是两回事（一个真一个误报），跨目标顶班就是把 A 的结论安到 B 头上。
+
+    三条纪律（草案红线逐条落地）：
+      ① **机器不判定** —— 顶班只发生在"人已经判了其中一条"之后，是**人的结论**在扩散，
+         不是机器自己下结论（§5.11 同口径）；
+      ② **必须留单行覆盖** —— `cover_cluster=False` 就只改这一条（GUI 每行都有
+         "只改这条"的入口，顶班行也能单独改掉）；
+      ③ 顶班写进 `review_note`（可追溯：哪条是顶班的、依据是哪条 id），
+         且**只顶没判过的**（`review=''`）—— 已判过的一律不碰，那叫人覆写不叫顶班。
+    """
     st = norm_review(state)
     now = _now()
     with _WRITE_LOCK:
@@ -2012,10 +2073,49 @@ def set_vuln_review(vuln_id, state, note=None):
             else:
                 cur.execute("UPDATE vulns SET review=?, review_note=?, reviewed_at=? WHERE id=?",
                             (st, str(note)[:500], now, int(vuln_id)))
+            n = cur.rowcount or 0
+            covered = 0
+            if cover_cluster and st:
+                row = cur.execute(
+                    "SELECT task_id, poc_id, target FROM vulns WHERE id=?",
+                    (int(vuln_id),)).fetchone()
+                if row:
+                    _tip = (f"同簇顶班：与 #{vuln_id} 同 poc_id + 同 target，"
+                            f"依其复核结论一并标记（可单独改掉这一行）")
+                    c2 = conn.cursor()
+                    c2.execute(
+                        "UPDATE vulns SET review=?, review_note=?, reviewed_at=? "
+                        "WHERE task_id=? AND poc_id=? AND target=? AND id<>? "
+                        "AND (review IS NULL OR review='')",
+                        (st, _tip, now, row["task_id"], row["poc_id"] or "",
+                         row["target"] or "", int(vuln_id)))
+                    covered = c2.rowcount or 0
             conn.commit()
-            return cur.rowcount or 0
+            return n + covered if cover_cluster else n
         finally:
             conn.close()
+
+
+def cluster_of(vuln_id):
+    """这条漏洞的同簇成员（**含自己**）：`[{id, review, review_note}, …]`。
+
+    给 GUI 的"同簇"徽章用：复核一条之后，人能看到"这条的结论顶了哪几班"，
+    以及每一班现在是什么状态 —— 顶班必须是看得见的，不能是暗箱。
+    """
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT task_id, poc_id, target FROM vulns WHERE id=?",
+            (int(vuln_id),)).fetchone()
+        if not row:
+            return []
+        rows = conn.execute(
+            "SELECT id, review, review_note FROM vulns "
+            "WHERE task_id=? AND poc_id=? AND target=? ORDER BY id",
+            (row["task_id"], row["poc_id"] or "", row["target"] or "")).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 # 续150（用户点单「漏洞独立复测三态」）：复测状态取值 —— '' 未复测 / reproduced 仍可复现 /
@@ -2029,8 +2129,17 @@ def norm_retest(state):
     return s if s in RETEST_STATES else ""
 
 
-def bulk_set_vuln_retest(ids, state):
-    """批量写**复测三态**，返回受影响行数（只更新真实存在的 id，不做全表兜底）。"""
+def bulk_set_vuln_retest(ids, state, allow_fixed_without_proof=False):
+    """批量写**复测三态**，返回受影响行数（只更新真实存在的 id，不做全表兜底）。
+
+    **续211-P1-7 闸③落在这里**（这是写 `retest_state` 的唯一产地）：判 `fixed`
+    （已修复）时，该行必须**有证据**（`evidence` 或 `packets` 非空）——
+    "这次没探到"与"它已经好了"长得一模一样（AGENTS §6.2 第十七起同族），
+    而没有证据的 fixed 会把"没复现"漂成"已修复"，读报告的人据此下线排查。
+    没证据的一律夹到 `unconfirmed`（无法确认），detail 不动、原始结论不动（§0 第 10 条）。
+    `allow_fixed_without_proof=True` 是显式逃生门（GUI 勾了"强制"才传）——
+    逃生必须由人按，且会被审计记下。
+    """
     ids = [int(i) for i in (ids or []) if str(i).strip().lstrip("-").isdigit()]
     if not ids:
         return 0
@@ -2041,6 +2150,24 @@ def bulk_set_vuln_retest(ids, state):
         conn = get_conn()
         try:
             cur = conn.cursor()
+            if st == "fixed" and not allow_fixed_without_proof:
+                # 只让"有证据"的那些真的写 fixed，没证据的夹到 unconfirmed
+                provable = [r["id"] for r in cur.execute(
+                    f"SELECT id FROM vulns WHERE id IN ({marks}) "
+                    "AND (evidence IS NOT NULL AND evidence<>'' "
+                    "OR packets IS NOT NULL AND packets<>'')",
+                    tuple(ids)).fetchall()]
+                rest = [i for i in ids if i not in set(provable)]
+                if provable:
+                    pm = ",".join("?" for _ in provable)
+                    cur.execute(f"UPDATE vulns SET retest_state=?, retested_at=? "
+                                f"WHERE id IN ({pm})", tuple(["fixed", now] + provable))
+                if rest:
+                    rm = ",".join("?" for _ in rest)
+                    cur.execute(f"UPDATE vulns SET retest_state=?, retested_at=? "
+                                f"WHERE id IN ({rm})", tuple(["unconfirmed", now] + rest))
+                conn.commit()
+                return len(provable)
             cur.execute(f"UPDATE vulns SET retest_state=?, retested_at=? WHERE id IN ({marks})",
                         tuple([st, now] + ids))
             conn.commit()
@@ -2049,11 +2176,18 @@ def bulk_set_vuln_retest(ids, state):
             conn.close()
 
 
-def bulk_set_vuln_review(ids, state, note=None):
-    """批量标记复核状态，返回受影响行数（只更新真实存在的 id，不做全表兜底）。"""
+def bulk_set_vuln_review(ids, state, note=None, cover_cluster=False):
+    """批量标记复核状态，返回受影响行数（只更新真实存在的 id，不做全表兜底）。
+
+    `cover_cluster`（续211-P1-8）：**只勾了一条**时走同簇顶班（`set_vuln_review`），
+    勾了多条就是逐条明判、不顶班（那会把人明确勾掉的结论又扩散一遍）。
+    返回值含顶班行数 —— GUI 要能显示"这条的结论顶了 N 班"，顶班必须是看得见的。
+    """
     ids = [int(i) for i in (ids or []) if str(i).strip().lstrip("-").isdigit()]
     if not ids:
         return 0
+    if cover_cluster and len(ids) == 1:
+        return set_vuln_review(ids[0], state, note=note, cover_cluster=True)
     st = norm_review(state)
     now = _now()
     marks = ",".join("?" for _ in ids)
