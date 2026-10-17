@@ -153,12 +153,16 @@ class StageContext:
     """贯穿一条流水线的上下文：目标、配置、结果、工作目录、取消信号。"""
 
     def __init__(self, task_id, name, targets, stages, options, settings, workdir, logger,
-                 stop_event=None):
+                 stop_event=None, progress=None):
         self.task_id = task_id
         self.name = name
         self.targets = targets          # [(kind, raw), ...] 由 targets.parse_lines 产出
         self.stages = stages
         self.options = options or {}
+        # CLI 前台进度条（续212，P3-14①）：duck-typed，要有 `stage(done, total, label)`
+        # 与 `finish()`。GUI / 队列 worker / 测试不传 ⇒ None，行为与从前逐字节一致。
+        # 生命周期归 `run_task`（它的 finally 里 finish，阶段抛异常也收条）。
+        self.progress = progress
         # 取消信号：**必须在注入限流器之前**赋值 —— `throttle.inject` 要把它交给限流器，
         # 让所有等待闸门 / 令牌的地方都能在 `stop_event` 置位时立刻醒来（见 scanner/throttle.py）。
         self.stop_event = stop_event or threading.Event()
@@ -331,11 +335,16 @@ class PipelineRunner:
         auto_expand = ctx.options.get("auto_expand") is True
         last_ext = max((i for i, s in enumerate(stages) if s in _EXT_STAGES), default=-1) \
             if auto_expand else -1
+        # 续212（P3-14①）：CLI 前台进度条钩子。先推进度再打阶段横幅，日志才会
+        # 落在"新阶段"的那一条上方（`scanner/log.py` 的控制台 handler 走 progress.write）。
+        pg = getattr(ctx, "progress", None)
         for i, sname in enumerate(stages):
             if ctx.stopped():
                 stopped = True
                 break
             db.update_task(ctx.task_id, current_stage=sname, progress=int(i * 100 / total))
+            if pg is not None:
+                pg.stage(i + 1, total, STAGE_LABELS.get(sname, (sname,))[0])
             ctx.logger.info(f"===== 阶段 {i + 1}/{total}：{sname} =====")
             _t_stage = time.time()          # 续88：阶段级耗时（失败也记，才能看出"卡在哪一步"）
             try:
@@ -596,7 +605,7 @@ def _maybe_queue_shot_retry(ctx, task_id, stages, options, logger):
 
 
 def run_task(task_id, name, targets_text, stages, options, settings, append=False,
-             resume=False):
+             resume=False, progress=None):
     """CLI 与 GUI 共用的任务执行入口（阻塞执行，调用方负责放线程）。
 
     `append=True`（续25「同任务追加式执行」）与默认的"新建式"执行的差别只有三处：
@@ -615,6 +624,12 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
       `append_targets`"时返回**空集**，那会把所有站点过滤光、一次都不扫。所以这里必须是
       独立参数，不能复用 `append=True`。
     本次真正执行的阶段 = `resume_stages(stages, 任务的 current_stage)`（见该函数）。
+
+    `progress`（续212，P3-14①）：CLI 前台进度条钩子，duck-typed —— 要有
+    `stage(done, total, 阶段中文名)` 与 `finish()`（见 `scanner/progress.py`）。
+    每个阶段开始前调一次 `stage()`，本函数 finally 里 `finish()`（阶段抛异常也收条）。
+    **GUI / 队列 worker / 测试不传**（None ⇒ 一行代码都不多跑，行为与从前逐字节一致）；
+    `progress.Bar` 自己还有一道 TTY 闸，管道 / 重定向下同样是 no-op。
     """
     log_file = None
     prev = None
@@ -669,7 +684,7 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
                     f"待采集目标 {len(targets)} 个，剩余 {_depth} 层")
     stop_event = _register_stop(task_id)
     ctx = StageContext(task_id, name, targets, stages, options, settings or load_settings(),
-                       workdir, logger, stop_event=stop_event)
+                       workdir, logger, stop_event=stop_event, progress=progress)
     # 续89：从任务行取归属账号（`get_task` 是廉价读；老库没有该列时按 0 处理）。
     _orow = db.get_task(task_id)
     ctx.owner_id = int(_orow["owner_id"] or 0) \
@@ -704,6 +719,11 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
         db.append_task_error(task_id, str(e))
     finally:
         _unregister_stop(task_id)
+        # 进度条收条放在** finally**：阶段抛异常 / 循环被 break / 预算耗尽都得擦掉
+        # （续212，P3-14① —— 少这一步，CLI 的摘要行会接着半条进度条印，正是要消灭的东西）。
+        # 幂等；`progress=None`（GUI / 队列 / 测试）时这一行等于不存在。
+        if progress is not None:
+            progress.finish()
     # 续151「追加层数」：正常完成后，本层若挖出新的归属域名且还剩层数，再排一次追加运行
     # （折叠在同一任务里，不再新建任务）。停止 / 未正常完成的收场不追加。
     _maybe_queue_next_layer(ctx, task_id, stages, options, logger)

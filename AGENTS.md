@@ -315,6 +315,13 @@ ctf-scanner/
 │   │                      #     「SSL 证书」＝cert 阶段产物；页签按数据源实有出现，没有产物时说明原因）
 ├── scanner/
 │   ├── runner.py          # StageContext / PipelineRunner / run_task / sync_pocs（协作式取消：request_stop/is_stopped）
+│   ├── progress.py        # CLI 前台进度条 + 「日志不刷乱进度条」（续212，P3-14①）：零依赖的 tqdm
+│   │                      #   等价物，只取 `tqdm.write`「日志打在条上方」那一瓣（阶段级 Bar + write()）。
+│   │                      #   三条纪律：**只在 TTY 渲染**（管道/CI/测试一个字节不多，smoke 的逐字
+│   │                      #   比对回归靠这条）、**日志不许直接 print**（`write()`＝擦条→写行→重画）、
+│   │                      #   **纯 ASCII 序列**（`\r`+空格回退，不碰 `\033[K` —— Windows 旧 conhost
+│   │                      #   会原样印）。`log.py` 的控制台 handler（`_ConsoleHandler`）与
+│   │                      #   `run_task(progress=)`（阶段边界 `pg.stage(中文名)`、finally 收条）都走它
 │   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic/**github**（13 个）
 │   ├── migrate.py         # 扫描数据的导出/导入（续136，跨机迁移）。**默认零凭据**：包里只有
 │   │                      #   tasks + 八张资产表；账号表/凭据文件/任务登录态/`flags`（原文取值）

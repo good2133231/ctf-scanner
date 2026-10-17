@@ -22,10 +22,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scanner import auth as taskauth
 from scanner import db
 from scanner import keystore
+from scanner import progress
 from scanner.config import load_settings, resolve
 from scanner.report import export_pdf, generate, generate_html, generate_jsonl
 from scanner.runner import STAGE_ORDER, STAGE_REGISTRY, resume_stages, run_task
 from scanner.utils import format_duration, rel_display, which, verify_tool
+
+
+def _run_task_fg(task_id, name, targets_text, stages, options, settings, **kw):
+    """CLI 前台执行：TTY 下挂一个**阶段级**进度条（续212，P3-14①）。
+
+    两条腿合起来才是"日志不刷乱进度条"：
+    ① `scanner/progress.py` 的 Bar —— 只在 stdout 是 TTY 时渲染；管道 / 重定向 /
+       测试里 `Bar(enabled=False)` 全成 no-op，stdout 逐字节与从前一致；
+    ② 日志不刷它 —— `scanner/log.py` 的控制台 handler 走 `progress.write()`，
+       有条时"擦条 → 打日志 → 重画"（tqdm.write 同思路，机制见该模块文件头）。
+    收条在 `run_task` 的 finally 里（阶段抛异常也擦），所以任务摘要行永远不会
+    接着半条进度条印。`--resume-task` 与新建任务两条入口都走这里。
+    """
+    bar = progress.start(f"任务 #{task_id}", len(stages) or 1)
+    try:
+        return run_task(task_id, name, targets_text, stages, options, settings,
+                        progress=bar, **kw)
+    finally:
+        progress.stop(bar)
 
 
 def _print_summary(task_id, ctx):
@@ -136,8 +156,8 @@ def do_resume(args, settings):
     print(f"[*] 续跑任务 #{args.resume_task}：{task['name']}"
           f"（断点 {task['current_stage']} → 本次只跑 {','.join(rest)}）")
     print("    已有资产沿用库中数据，不清空、不重扫已完成阶段。")
-    ctx = run_task(args.resume_task, task["name"], task["targets"], stages, options, settings,
-                   resume=True)
+    ctx = _run_task_fg(args.resume_task, task["name"], task["targets"], stages, options,
+                       settings, resume=True)
     _print_summary(args.resume_task, ctx)
     _emit_reports(args, args.resume_task, settings)
 
@@ -818,7 +838,7 @@ def main():
         print(f"[*] 登录态请求头 {len(auth_headers)} 条："
               f"{taskauth.summary(auth_headers)}（值已掩码）")
 
-    ctx = run_task(task_id, name, targets_text, stages, options, settings)
+    ctx = _run_task_fg(task_id, name, targets_text, stages, options, settings)
 
     _print_summary(task_id, ctx)
     _emit_reports(args, task_id, settings)

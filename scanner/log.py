@@ -19,6 +19,8 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from . import progress
+
 BOOT_LOGGER = "ctfscanner.boot"
 SERVER_LOG_NAME = "server.log"
 ACCESS_LOG_NAME = "access.log"
@@ -65,6 +67,23 @@ def mute_insecure_warnings():
     return True
 
 
+class _ConsoleHandler(logging.StreamHandler):
+    """控制台 handler：有进度条时日志打在条**上方**（续212，P3-14①）。
+
+    与裸 `StreamHandler` 的差别只有一处：输出走 `progress.write()` —— 没有条时
+    逐字节等价于原来那行，有条时"擦条 → 写行 → 重画"。CLI 前台跑任务时
+    `run_task(progress=...)` 会挂上一条（仅 TTY），此后每个阶段的日志行都落在
+    进度条上方，终端里不会再出现进度条被日志冲成乱码。
+    """
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            progress.write(msg, end=self.terminator or "\n", stream=self.stream)
+        except Exception:                                # noqa: BLE001 - 与基类同口径
+            self.handleError(record)
+
+
 def get_logger(name, log_file=None):
     logger = logging.getLogger(name)
     if logger.handlers:
@@ -73,7 +92,7 @@ def get_logger(name, log_file=None):
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S")
     if _CONSOLE:
         # 关掉的只是**终端那一份**；文件 handler（下面）照挂，否则 GUI 里点"看日志"就空了
-        sh = logging.StreamHandler(sys.stdout)
+        sh = _ConsoleHandler(sys.stdout)
         sh.setFormatter(fmt)
         sh.setLevel(logging.INFO)
         logger.addHandler(sh)

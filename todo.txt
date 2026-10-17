@@ -4303,6 +4303,33 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续212（2026-10-17，WorkBuddy · CodeBuddy）：P3-14① CLI 日志不刷乱进度条 + P1-9 拍板不做
+
+主理人点单：「P1-9 授权范围对象化这个感觉没必要，因为实机都是我自己填进去的；
+P3-14① CLI 日志不刷乱进度条顺手做掉」。
+
+- [x] **P3-14① CLI 日志不刷乱进度条**：新模块 `scanner/progress.py`（零依赖、~90 行的
+      tqdm 等价物，只取「日志打在条上方」那一瓣）—— 阶段级 `Bar` + `write()`
+      「擦条 → 写行 → 重画」。三条纪律：**只在 TTY 渲染**（管道/CI/测试一个字节不多）、
+      **日志不许直接 print**、**纯 ASCII 控制序列**（`\r`+空格回退，不碰 `\033[K` ——
+      Windows 旧 conhost 会原样印）。接线三处：`log.py` 控制台 handler 换 `_ConsoleHandler`
+      （走 `progress.write`）；`runner.py` `run_task(progress=)` + `StageContext.progress` +
+      `PipelineRunner` 阶段边界 `pg.stage(中文名)` + `run_task` **finally** `progress.finish()`
+      （阶段炸 / PipelineRunner 炸两路都收条）；`cli/client.py` `_run_task_fg()` 包住两个
+      前台入口（新建 + 续跑）。[212] 断言组七路；SMOKE PASS（组标题打印 222 → 223，+1 = [212]；另适配 _fake_rt30b 签名与 [8bm] 类名断言）
+- [x] **P1-9 授权范围对象化 —— 拍板不做**（主理人 2026-10-17：「实机都是我自己填进去的」）：
+      对象化（ARTEX `db/task_scope.go` 八类 + source+reason）唯一用途是判据与展示，而本项目
+      目标全部由主理人本人录入（CLI -f/-t、GUI 建任务、送探）⇒ 不存在「来源不可信的输入」
+      这一前提，对象化买不到新信息、只多一套要维护的模型。续211「下一轮」清单里那一项
+      据此关闭，不再挂账
+
+**下一轮（续213）——只放未做的：**
+- [ ] **P3-14 剩余半边：进度条细化**（阶段内条目级进度 / 配色 / ETA；当前只有阶段级一条）
+- [ ] **P2-12 吞吐实测 -> 预计耗时 -> 阈值自动降档 + 覆盖边界进报告**（要真任务 profiling）
+- [ ] hostcollide 的 GUI/CLI 触发入口（续183 残留，待主理人点单按钮位置）
+- [ ] ICP 接口（等地址+key）/ VirusTotal（等 key）/ 样式（等截图）
+- [ ] 续173（IP 反查三源成败说清 + PTR 自实现）、续175（真机）照旧挂账
+
 ## 续211（2026-10-17，WorkBuddy · CodeBuddy）：借鉴草案六项落地（主理人「逐个进行完，不要再停」）
 
 - [x] **T3 子进程整组收割**：Popen(start_new_session)+killpg；实测修掉两个更隐晦的问题

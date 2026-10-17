@@ -3,6 +3,51 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续212（2026-10-17，WorkBuddy · CodeBuddy）：P3-14① CLI 日志不刷乱进度条（+ P1-9 拍板不做）
+
+主理人点单：「P1-9 授权范围对象化这个感觉没必要，因为实机都是我自己填进去的；
+P3-14① CLI 日志不刷乱进度条顺手做掉」。前者记拍板，后者落地。
+
+### P3-14①：新模块 `scanner/progress.py`（零依赖的 tqdm 等价物，只取有用的那一瓣）
+来源是 `docs/ref-projects-2026-10-14.md` 第 37 行「tqdm 彩色 CLI 输出（`tqdm.write` 打在
+进度条上方）值得学」，但本仓零第三方依赖 ⇒ 自己写 ~90 行，**只做阶段级进度条**：
+`Bar`（`任务 #12 存活探测 [#####---------------] 25% (3/12)`）+ 模块级 `write()`。
+三条纪律（写进文件头，都有断言钉）：
+1. **只在 TTY 渲染** —— 管道 / 重定向 / CI / 测试里一个字节都不多（smoke 大批"逐字比对
+   stdout"的回归靠这条；`> log.txt` 的用户也不该收到一堆 `\r`）；
+2. **日志行不许直接 print** —— 有条时「擦条 → 写行 → 重画」，这就是"不刷乱"的全部机制；
+3. **纯 ASCII 控制序列**（`\r` + 空格回退）—— 不碰 ANSI `\033[K`：Windows 旧 conhost 不开
+   VT 处理时会把它原样印出来，比乱更糟。代价是只能擦掉自己画过的长度，故 `Bar` 记 `last_len`。
+
+### 三处接线（缺一处就是半成品）
+- `scanner/log.py`：控制台 handler 换成 `_ConsoleHandler`，`emit` 走 `progress.write()`
+  —— 无条时与裸 `StreamHandler` 逐字节等价（这是"测试零字节"的前提）。
+- `scanner/runner.py`：`run_task(..., progress=None)` → `StageContext.progress`；
+  `PipelineRunner.run()` 每个阶段边界调 `pg.stage(i+1, total, STAGE_LABELS 中文名)`
+  （先推进度再打阶段横幅，日志才落在新那一条上方）；`run_task` 的 **finally** 里
+  `progress.finish()` —— 阶段抛异常 / PipelineRunner 整体炸 / 循环被 break 都得收条，
+  否则 CLI 的摘要行会接着半条进度条印（正是本项要消灭的东西）。
+- `cli/client.py`：`_run_task_fg()` 包住两个前台入口（新建任务 + `--resume-task`），
+  自带 `finally: progress.stop(bar)` 兜底（`run_task` 在构造 StageContext 前就炸的极端路径）。
+
+### P1-9 授权范围对象化 —— 拍板不做（主理人 2026-10-17）
+原话「实机都是我自己填进去的」。授权范围对象化（ARTEX `db/task_scope.go` 八类 + source+reason）
+唯一用途是判据与展示，而本项目目标全部来自主理人本人录入（CLI `-f/-t`、GUI 建任务、送探），
+**不存在"来源不可信的输入"这一前提** ⇒ 对象化买不到新信息，只多一套要维护的模型。
+续211「下一轮」清单里那一项据此关闭，不再挂账（决定写在 todo.txt 续212，不是静默删除）。
+
+**门禁**：`[212]` 一组七路 —— 无条时逐字节等价 `print`｜非 TTY 全 no-op｜日志「擦条→独立
+成行→重画」（变异＝退化成普通 print，两条同时不成立）｜`stop` 擦干净 + `finish` 幂等｜
+控制台 handler 走 `progress.write`（行为级：猴子补丁抓调用 + 消息内容）｜`run_task` 钩子
+行为级两路证伪（桩阶段抛异常 / `PipelineRunner.run` 整体抛异常，finish 都必须 exactly 1 次；
+阶段标签必须是 `STAGE_LABELS` 中文名）｜CLI 源码钉点（两个前台入口都走 `_run_task_fg`）。
+另适配两处既有夹具：`_fake_rt30b`（镜像 `run_task` 签名，加 `progress=None`）与
+`[8bm]` 续156（原钉 `type(h).__name__ == ["StreamHandler"]`，改为钉 `_ConsoleHandler` ——
+意图"恰好一个 stdout handler"不变，且从此"被换回裸 handler 就红"）。
+**SMOKE PASS**（组标题打印 222 → **223**，+1 = [212]；AssertionError 0）。
+另做 pty 端到端实测（`script` 起真终端跑 `cli/client.py -t 127.0.0.1:1 -p probe --offline`）：
+进度条随阶段刷新、每条日志走在条上方、收条擦净后才印摘要 —— 与设计逐字相符。
+
 ## 续211（2026-10-17，WorkBuddy · CodeBuddy）：借鉴草案六项落地（T3 / P1-4 / P1-7 / P1-8 / P2-11 / P2-10）
 
 主理人点单「逐个进行完，不要再停」。来源全部是上级目录《四项目完整读码结论》§4 + 《借鉴落地待办草案》，

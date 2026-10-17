@@ -5888,9 +5888,10 @@ workflows:
     _orig_rt30b = _cli.run_task
 
     def _fake_rt30b(task_id, name, targets, stages, options, settings, append=False,
-                    resume=False):
+                    resume=False, progress=None):
         _calls30b.append({"task_id": task_id, "name": name, "stages": list(stages),
-                          "options": dict(options), "append": append, "resume": resume})
+                          "options": dict(options), "append": append, "resume": resume,
+                          "progress": progress})
         return types.SimpleNamespace(results={}, workdir=Path(_TMPDIR) / "cli-resume")
 
     def _cli_run30b(argv):
@@ -22371,7 +22372,11 @@ expression: r0()
             "开关关着却还是给 logger 挂了 stdout handler（那等于没接上）"
         _lg156.set_console_output(True)
         _n156 = [type(h).__name__ for h in _lg156.get_logger("smoke-156-on").handlers]
-        assert _n156 == ["StreamHandler"], f"开关开着时应当恰好一个 stdout handler：{_n156}"
+        # 续212：控制台 handler 换成 _ConsoleHandler（仍是 StreamHandler 子类，只多
+        #   "走 progress.write"这一瓣 —— TTY 下日志打在进度条上方，P3-14①）。
+        #   钉类名正是为了"被换回裸 StreamHandler 就红"。
+        assert _n156 == ["_ConsoleHandler"], \
+            f"开关开着时应当恰好一个 stdout handler：{_n156}"
     finally:
         _lg156.set_console_output(_real156)
     assert _lg156.mute_insecure_warnings() is True, "urllib3 装了却没静音 ⇒ 终端照样被刷屏"
@@ -27760,6 +27765,155 @@ expression: r0()
     assert "cause_zh" in _tk210 or "具名取消原因" in _tk210, "任务页没传 cause_zh（徽章渲染不出来）"
     print("[211-P2-10] 续211 ok: 具名取消原因（封闭枚举/每条带状态映射/优先级三级/落库归一/"
           "新老库两处有列/runner 接线/GUI 徽章）")
+    # ---- [212] 续212：P3-14① CLI 日志不刷乱进度条（scanner/progress.py + 三处接线）----
+    # 来源：docs/ref-projects-2026-10-14.md 第 37 行「tqdm 彩色 CLI 输出（tqdm.write 打在
+    #       进度条上方）值得学」（《借鉴落地待办草案》P3-14 ①）。本仓零第三方依赖，故用
+    #       scanner/progress.py 的等价物，只取那一瓣：日志打在条上方。纪律：
+    #       ① 只在 TTY 渲染（管道/测试一个字节不多）；② 日志不许直接 print；
+    #       ③ 纯 ASCII 控制序列（\r + 空格回退，不碰 \033[K）。
+    import io as _io212
+    import logging as _logging212
+    from scanner import log as _lg212
+    from scanner import progress as _pg212
+    from scanner import runner as _rn212
+
+    # ① 无条时 write 与普通写**逐字节一致**（smoke 大批"逐字比对 stdout"的回归靠这条）
+    _pa212, _pb212 = _io212.StringIO(), _io212.StringIO()
+    print("阶段日志一行", file=_pa212)
+    _pg212.write("阶段日志一行", stream=_pb212)
+    assert _pa212.getvalue() == _pb212.getvalue(), (_pa212.getvalue(), _pb212.getvalue())
+    _pa212, _pb212 = _io212.StringIO(), _io212.StringIO()
+    print("", file=_pa212)
+    _pg212.write("", stream=_pb212)
+    assert _pa212.getvalue() == _pb212.getvalue()
+
+    # ② 非 TTY 的 Bar 是彻底 no-op（StringIO.isatty()=False ⇒ 管道/CI/测试天然走这条路）
+    _nt212 = _io212.StringIO()
+    _nb212 = _pg212.Bar("任务 #1", 3, stream=_nt212)
+    assert _nb212.enabled is False
+    _nb212.stage(1, 3, "存活探测")
+    _nb212.finish()
+    assert _nt212.getvalue() == "", _nt212.getvalue()
+    assert _pg212.active() is None
+
+    # ③ 有条时：建条即画；日志必须"擦条 -> 独立成行 -> 重画"
+    _tb212 = _io212.StringIO()
+    _bar212 = _pg212.start("任务 #1", 2, stream=_tb212, enabled=True)
+    _l0212 = _bar212._line()
+    assert _tb212.getvalue() == "\r" + _l0212, repr(_tb212.getvalue())
+    _bar212.stage(1, 2, "存活探测")
+    _l1212 = _bar212._line()
+    assert "50%" in _l1212 and "(1/2)" in _l1212, _l1212
+    _log212 = "12:00:00 [INFO] probe 命中 3 个站点\n"
+    _pg212.write(_log212.rstrip("\n"), stream=_tb212)
+    _v212 = _tb212.getvalue()
+    # 擦条：写日志前必须把画过的长度空格擦掉并回车（少了它，日志接在条的尾巴上）
+    assert "\r" + " " * len(_l1212) + "\r" + _log212 in _v212, repr(_v212)
+    # 重画：日志之后当前行又是一条完整进度（少了它，终端里再也看不到进度）
+    assert _v212.endswith("\r" + _l1212), repr(_v212)
+    # 变异证伪：退化成普通 print（不清不画）时上面两条同时不成立
+    _mut212 = _io212.StringIO()
+    print(_log212.rstrip("\n"), file=_mut212)
+    assert not _mut212.getvalue().endswith("\r" + _l1212), "变异没造出差别"
+    assert "\r" + " " * len(_l1212) + "\r" not in _mut212.getvalue()
+    _bar212.stage(2, 2, "存活探测")
+    assert "100%" in _bar212._line() and "(2/2)" in _bar212._line()
+    # 收条要擦干净：摘要行才不会接着半条进度条印
+    _pg212.stop(_bar212)
+    assert _tb212.getvalue().endswith("\r" + " " * _bar212.last_len + "\r"), \
+        "stop 之后必须把画过的长度擦掉"
+    assert _pg212.active() is None
+    _after_stop212 = _tb212.getvalue()
+    _bar212.finish()          # 幂等：再调一个字节都不追加
+    assert _tb212.getvalue() == _after_stop212, "finish 必须幂等"
+
+    # ④ log.py 的控制台 handler 走的是 progress.write（不是裸 StreamHandler.write）
+    _real_con212 = _lg212.console_output()
+    _lg212.set_console_output(True)
+    _calls212 = []
+    _real_write212 = _pg212.write
+    _pg212.write = lambda *a, **k: _calls212.append((a, k))
+    try:
+        _lg212.get_logger("smoke-progress-212", None).info("probe 命中 3 个站点")
+    finally:
+        _pg212.write = _real_write212
+        _lg212.set_console_output(_real_con212)
+    assert _calls212, "控制台日志没走 progress.write（有条时必然刷乱）"
+    assert "[INFO]" in _calls212[0][0][0] and "probe 命中 3 个站点" in _calls212[0][0][0], \
+        _calls212
+    assert isinstance(_lg212.get_logger("smoke-progress-212", None).handlers[0],
+                      _logging212.StreamHandler)
+
+    # ⑤ runner 接线（行为级，走真实 run_task）：阶段前调一次（带中文名）；
+    #    finally 收条 —— 阶段抛异常、PipelineRunner 整体炸，两条路都必须收
+    class _Boom212:                                   # 必抛的桩阶段
+        name = "probe"
+
+        def __init__(self, ctx):
+            pass
+
+        def run(self):
+            raise RuntimeError("boom-212")
+
+    class _FakePg212:
+        def __init__(self):
+            self.calls = []
+            self.finished = 0
+
+        def stage(self, done, total, label):
+            self.calls.append((done, total, label))
+
+        def finish(self):
+            self.finished += 1
+
+    _fp212 = _FakePg212()
+    _real_reg212 = _rn212.STAGE_REGISTRY
+    _rn212.STAGE_REGISTRY = dict(_real_reg212, probe=_Boom212)
+    try:
+        _tid212 = db.create_task("smoke-212", "https://t212.test/", ["probe"],
+                                 {"offline": True})
+        run_task(_tid212, "smoke-212", "https://t212.test/", ["probe"],
+                 {"offline": True}, settings, progress=_fp212)
+    finally:
+        _rn212.STAGE_REGISTRY = _real_reg212
+    # 阶段边界推进度 + 传的是 STAGE_LABELS 的中文名（传裸英文名这条就红）
+    assert _fp212.calls == [(1, 1, _rn212.STAGE_LABELS["probe"][0])], _fp212.calls
+    assert _fp212.calls == [(1, 1, "存活探测")], _fp212.calls
+    # 阶段抛异常被阶段级容错吃掉 ⇒ 仍要收条（放在 done 分支里就会漏）
+    assert _fp212.finished == 1, _fp212.finished
+
+    # ⑥ 变异证伪：finish 若不在 finally 里，PipelineRunner 整体炸掉时就没人收条
+    _fp2_212 = _FakePg212()
+    _real_run212 = _rn212.PipelineRunner.run
+    _rn212.PipelineRunner.run = lambda self: (_ for _ in ()).throw(RuntimeError("runner-boom"))
+    try:
+        _tid2_212 = db.create_task("smoke-212b", "https://t212.test/", ["probe"],
+                                   {"offline": True})
+        run_task(_tid2_212, "smoke-212b", "https://t212.test/", ["probe"],
+                 {"offline": True}, settings, progress=_fp2_212)
+    finally:
+        _rn212.PipelineRunner.run = _real_run212
+    assert _fp2_212.finished == 1, "PipelineRunner 炸了也得收条（finally 接线）"
+    assert dict(db.get_task(_tid2_212))["status"] == "failed", "整体炸必须落 failed"
+
+    # ⑦ CLI 接线：两个前台入口都走 _run_task_fg（新建 + 续跑），且条只在 TTY 渲染
+    assert "progress" in __import__("inspect").signature(run_task).parameters, \
+        "run_task 缺 progress 钩子"
+    _cl212 = (ROOT / "cli" / "client.py").read_text(encoding="utf-8")
+    assert "from scanner import progress" in _cl212, "CLI 没导入 progress"
+    assert 'progress.start(f"任务 #{task_id}"' in _cl212, "CLI 没建条"
+    assert "progress=bar" in _cl212, "CLI 没把条交给 run_task"
+    assert _cl212.count("_run_task_fg(") == 3, \
+        "def + 两个前台入口（新建/续跑）都要走 _run_task_fg，各少一处这里就红"
+    _rnsrc212 = (ROOT / "scanner" / "runner.py").read_text(encoding="utf-8")
+    assert "pg.stage(i + 1, total," in _rnsrc212, "PipelineRunner 没在阶段边界推进度"
+    assert "progress.finish()" in _rnsrc212, "run_task 的 finally 里没收条"
+    print("[212] 续212 ok: P3-14① CLI 日志不刷乱进度条 —— 无条时逐字节等价 print｜"
+          "非 TTY 全 no-op（管道/CI/测试零字节）｜日志擦条→独立成行→重画（变异=普通 print）｜"
+          "stop 擦干净（摘要不接半条条）｜控制台 handler 走 progress.write｜"
+          "run_task 钩子：阶段前调一次带中文名 + finally 收条（阶段炸/PipelineRunner 炸两路证伪）｜"
+          "CLI 两个前台入口都挂条")
+
     print("SMOKE PASS")
 
 
