@@ -81,6 +81,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- 拓展域名「送去探测」新建的任务挂在这里 —— 那是**子任务**，与「把域名追加成父任务的
   -- 子域名」（资产层，promote_too）是两件事，别混。老库靠 `_COLUMN_PATCHES` 补。
   parent_id INTEGER DEFAULT 0,
+  -- 续211-P2-10：具名取消/停止原因（`scanner/cancelcause.py` 的封闭枚举）。
+  -- `tasks.error` 照旧是人话（给人读的），这一列是给机器判的 —— 两不重复、不互推。
+  -- 空串 = 正常跑完（done）或压根没被取消。老库靠 `_COLUMN_PATCHES` 补。
+  stop_reason TEXT DEFAULT '',
   created_at TEXT, updated_at TEXT
 );
 
@@ -419,7 +423,9 @@ _COLUMN_PATCHES = {
               "sev_floor": "TEXT DEFAULT ''",
               "sev_blocked": "INTEGER DEFAULT 0",
               # 续185 任务层级的老库补列（0 = 顶层任务）
-              "parent_id": "INTEGER DEFAULT 0"},
+              "parent_id": "INTEGER DEFAULT 0",
+              # 续211-P2-10 具名取消原因（枚举见 scanner/cancelcause.py::CAUSES）
+              "stop_reason": "TEXT DEFAULT ''"},
 
 }
 
@@ -648,6 +654,26 @@ def set_task_sev_blocked(task_id, floor, n):
         cnt = 0
     _exec("UPDATE tasks SET sev_floor=?, sev_blocked=? WHERE id=?",
           (str(floor or ""), cnt, tid))
+
+
+def set_stop_reason(task_id, cause):
+    """写**具名取消原因**（续211-P2-10，枚举见 `scanner/cancelcause.py`）。
+
+    归一成合法枚举再写（空/未知一律 `unknown`）—— 与 `norm_review` 同口径：
+    不许把调用方传来的任意字符串写进库，否则又是一堆幽灵状态。
+    返回受影响行数；任务不存在返回 0（补跑/收场的竞态下这很正常）。
+    """
+    from . import cancelcause as _cc
+    with _WRITE_LOCK:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE tasks SET stop_reason=? WHERE id=?",
+                        (_cc.norm(cause), int(task_id)))
+            conn.commit()
+            return cur.rowcount or 0
+        finally:
+            conn.close()
 
 
 def append_task_error(task_id, msg):

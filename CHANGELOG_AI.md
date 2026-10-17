@@ -3,6 +3,63 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续211（2026-10-17，WorkBuddy · CodeBuddy）：借鉴草案六项落地（T3 / P1-4 / P1-7 / P1-8 / P2-11 / P2-10）
+
+主理人点单「逐个进行完，不要再停」。来源全部是上级目录《四项目完整读码结论》§4 + 《借鉴落地待办草案》，
+六项全部落地并各自带变异证伪。**P2-12 未做**（理由见文末）。
+
+### T3 子进程整组收割（P0-3，参照 StrikeAgent `exec/runner.py`）
+`utils._do_run_cmd` 从 `subprocess.run(timeout=)` 改成 `Popen(start_new_session=True)` +
+`killpg` 整组收割。**实测揪出两个比原 bug 更隐晦的问题**：
+1. `communicate()` 等的是**管道关闭**，而孙进程继承 stdout/stderr 写端 => 父进程明明退了，
+   调用仍被挂满 20s（`rc` 还是 0，看不出任何异常）—— 改成轮询等进程退出后才读输出；
+2. 超时判定必须放在 `wait` **之前**：`wait(timeout=0.2)` 成功返回只说明"这 0.2s 内它退了"，
+   不说明"没超时"（父进程 0.5s 退、timeout=1s 时第一版就这么漏报了 124）。
+另新增退出码 **125 = 被叫停**：原 `returncode` 是 `-9`（我们主动 SIGKILL 的），
+而 `portscan.py:207/312` 按 `rc != 0` 判失败 => 会把"我们主动停的"报成"工具坏了"。
+Windows 无 `killpg` => 分叉并把缺口写明（不装作跨平台都杀了）。
+已知边界：孙进程自己 `setsid()` 逃组后 `killpg` 无效，只能靠超时兜底（注释与断言都记了）。
+
+### P1-4 外部引擎配额预检（参照 ShuiZe `quakeApi.py:111-117`）
+新模块 `scanner/extquota.py`：FOFA/Shodan/Quake 三家额度端点各自解析
+（`fofa_point+fofa_free` / `query_credits` / `month_remaining_credit`），预检流程只一份。
+口径照 `iprecon.preflight`：**查不到一律放行**（"我不知道" != "没额度"）、
+确认剩得少才跳过并**点名**（剩余数+下限）、`auth=False`、不吃目标侧请求预算。
+osint 阶段三家源开跑前各查一次 + 策略页一段（可关）。
+
+### P1-7 证据三硬闸（参照 ARTEX `graph/verify.py:84-90`）
+- 闸①②落在 `db.insert_vuln`（写入唯一产地）：**无证据的 high/critical 夹到 info**
+  （不以高危形状进库；只夹已知高危档 —— 未知级别放行，否则把 `vuln_trend` 的"归 other"洗没）；
+  **未证实的高危把 detail 改写成缺口话术**（结论仍看得见，不说成已验证）。
+- 闸③落在 `bulk_set_vuln_retest`（写 `retest_state` 的唯一产地）：判 `fixed` 时该行必须
+  **有证据**，没证据的夹到 `unconfirmed`；带显式逃生门 `allow_fixed_without_proof`。
+  第一版曾把闸③放在 `insert_vuln` 里 —— 那条 INSERT 压根不写 retest_* 列，
+  是**永不触发的空闸**，已挪走并在注释里写明。
+- `insert_vuln` 加 `trust_caller` 逃生门。连带适配 4 处既有夹具（[176]/[180]/[180e2e]/JSONL）：
+  它们造的是无证据的 critical/fixed，正是新闸要管的形状 —— 给桩补 evidence 与坐实语
+  （更贴近真实产物），**不给闸开口子**。
+
+### P1-8 同簇复核顶班（参照 `graph/store.py:2407-2420`）
+`db.set_vuln_review(cover_cluster=True)`：同簇（**同 poc_id + 同 target**，不跨目标）未判的
+一并顶班，`review_note` 写明"哪条顶的"可追溯；已判过的**不覆写**；勾多条不顶班（逐条明判）；
+`cover_cluster=False` 单行覆盖；`db.cluster_of()` 让顶班可见（不暗箱）。
+
+### P2-11 SQL 报错特征库（参照 ShuiZe `errors.xml`）
+外置表 `config/dicts/sql_errors_extra.txt`：**45 条 / 11 个 DBMS 家族**。命中时报**家族名**。
+内置 8 条降级为兜底**不删**。大小写不敏感用 `re.I` 编译参数（拼内联标志 3.14 抛错 + 门禁 AST 拦）。
+
+### P2-10 具名取消原因（参照 ARTEX `cancelcause.go`）
+新模块 `scanner/cancelcause.py`：封闭枚举 6 值，每条带"接下来状态怎么变"；
+`cause_of()` 带优先级（异常 > 进程信号 > 预算 > 用户停止，理由写进 docstring）。
+落 `tasks.stop_reason` 新列（SCHEMA + `_COLUMN_PATCHES` 两处），与 `tasks.error` 人话分工不互推；
+GUI 任务页徽章显示中文名。
+
+### 未做：P2-12（吞吐实测 -> 预计耗时 -> 阈值降档）
+需要一轮**真任务 profiling**，合成数据只能拍脑袋系数 —— 挂账下一轮用真任务做。
+
+**门禁**：`[211]` / `[211-P1-4]` / `[211-P1-7/P1-8]` / `[211-P2-10]` / `[211-P2-11]` 五组，
+T3 带变异证伪（摘 `_kill_group` => 挂住或孙进程续写）。**SMOKE PASS**。
+
 ## 续210（2026-10-17，WorkBuddy · CodeBuddy）：借鉴落地 T1/T2（软 404「没证据」不再冒充真发现）
 
 主理人提醒「四项目对比上一个 AI 做过，在上级文件夹」⇒ 读到 `/opt/tools/ctf/四项目完整读码结论-2026-10-15.md`

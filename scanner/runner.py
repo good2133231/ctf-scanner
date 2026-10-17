@@ -18,7 +18,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import audit, db, extdom, screenshot
+from . import audit, cancelcause, db, extdom, screenshot
 from .config import LOGS_DIR, load_settings
 from . import auth as taskauth
 from . import throttle
@@ -376,6 +376,13 @@ class PipelineRunner:
             # "被停止 / 预算耗尽"恰恰是最需要续跑的两类收场。
             # 走 `finish_task_run` 而不是 `update_task`（续35）：收场时必须结一次运行时长的账。
             db.finish_task_run(ctx.task_id, status="stopped", progress=done)
+            # 续211-P2-10：具名取消原因。与上面的人话 error 行**分工**——
+            # 那行给人读（"已拒绝 N 次请求"），这一列给机器判（`budget_exhausted`）。
+            # 判据只在这里算一次（`cancelcause.cause_of` 是纯函数，优先级写在那 module 里）。
+            _cause211 = cancelcause.cause_of(
+                stopped=True, budget_exhausted=budget_exhausted,
+                signaled=getattr(ctx, "signaled", False))
+            db.set_stop_reason(ctx.task_id, _cause211)
             if budget_exhausted:
                 # 预算耗尽与"用户点了停止"是**两种原因**：都用 `stopped` 状态（结果确实不完整），
                 # 但错误行必须写清楚，否则事后无法区分"被拒绝"与"被人为停"。

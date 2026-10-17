@@ -48,7 +48,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanner import (admin_setup, audit, auth as taskauth, blacklist, captcha, cdn,
+from scanner import (admin_setup, audit, auth as taskauth, blacklist, cancelcause,
+                     captcha, cdn,
                      certs as certs_mod, db, devfixture, devmode, dnsq,
                      # 这三家反查与 GitHub 检索的**取键函数**归它们自己所有，面板只调用不复制路径
                      extdom, fofa, github_leak, jsmine, login_guard, migrate, nodes,
@@ -789,6 +790,11 @@ def _shape_note(cfg):
                  "那一档在 JS 正文上是整篇匹配的）：" + "；".join(rej))
     return line
 
+
+# 续211-P2-10：具名取消原因的中文名（任务页徽章 title/文案用）。
+# 枚举与状态映射的唯一产地是 scanner/cancelcause.py —— 这里只做"给UI看的那半边"，
+# 不复制枚举、不复制优先级（复制两份必然漂移）。
+CAUSE_ZH = {c: cancelcause.describe(c) for c in cancelcause.CAUSE_NAMES}
 
 def create_app():
     settings = load_settings()
@@ -1648,7 +1654,7 @@ def create_app():
         # 续91：只有 `queued` 才有"第几位"（其余状态位置无意义）—— 顺带省掉每页 ~100 条 COUNT。
         qpos = {t["id"]: db.queued_position(t["id"])
                 for t in rows if t["status"] == "queued"}
-        return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER,
+        return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER, cause_zh=CAUSE_ZH,
                                counts=counts, durations=durations, qworkers=qworkers,
                                running=set(runner.running_task_ids()), qpos=qpos,
                                pager=pager, page_sizes=PAGE_SIZES, q=q,

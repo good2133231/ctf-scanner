@@ -205,7 +205,10 @@
 
 
         <td><span class="badge st-{{ t.status }}">{{ '排队中' if t.status == 'queued' else t.status }}</span>
-          {% if t.status == 'queued' and qpos.get(t.id) %}<span class="muted small">第 {{ qpos.get(t.id) }} 位</span>{% endif %}</td>
+          {% if t.status == 'queued' and qpos.get(t.id) %}<span class="muted small">第 {{ qpos.get(t.id) }} 位</span>{% endif %}
+          {# 续211-P2-10：具名取消原因（`tasks.stop_reason`，枚举见 scanner/cancelcause.py）。
+             人话 error 行照旧在详情页，这一颗是给"一眼看出为什么没跑完"用的。 #}
+          {% if t.stop_reason %}<span class="badge" title="具名取消原因：{{ t.stop_reason }}">{{ cause_zh.get(t.stop_reason, t.stop_reason) }}</span>{% endif %}</td>
         <td class="progress"><div class="bar"><i style="width: {{ t.progress }}%"></i></div>{{ t.progress }}%</td>
         <td class="muted small">{{ t.created_at }}</td>
         {# 续36：与详情页「目标与配置」同一口径（`run_duration_text`，见 gui/app.py 的 tasks 路由）：

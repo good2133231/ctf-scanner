@@ -4303,6 +4303,23 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续211（2026-10-17，WorkBuddy · CodeBuddy）：借鉴草案六项落地（主理人「逐个进行完，不要再停」）
+
+- [x] **T3 子进程整组收割**：Popen(start_new_session)+killpg；实测修掉两个更隐晦的问题
+      （communicate 等管道被孙进程挂 20s / 超时判定漏报 124）；退出码 125=被叫停；Windows 分叉
+- [x] **P1-4 外部引擎配额预检**：`scanner/extquota.py` 三家额度各自解析 + 一套预检流程
+- [x] **P1-7 证据硬闸**：无证据高危夹 info / 未证实高危缺口话术 / 无证据的 fixed 夹 unconfirmed
+- [x] **P1-8 同簇复核顶班**：可追溯、已判不覆写、勾多条不顶、单行覆盖、cluster_of 可见
+- [x] **P2-11 SQL 报错特征库**：外置表 45 条 / 11 DBMS 家族；命中报家族名；内置兜底不删
+- [x] **P2-10 具名取消原因**：cancelcause.py 封闭枚举 + 状态映射 + 优先级；新列 + 接线 + 徽章
+- [x] 五组断言 + 4 处既有夹具适配；SMOKE PASS
+
+**下一轮（续212）——只放未做的：**
+- [ ] **P2-12 吞吐实测 -> 预计耗时 -> 阈值自动降档 + 覆盖边界进报告**（要真任务 profiling）
+- [ ] **P1-9 授权范围对象化**（ARTEX `db/task_scope.go` 八类 + source+reason；只作判据与展示）
+- [ ] **P3-14 tqdm 形态 CLI 输出**
+- [ ] ICP 接口（等地址+key）/ VirusTotal（等 key）/ 样式（等截图）
+
 ## 续210（2026-10-17，WorkBuddy · CodeBuddy）：借鉴落地 T1/T2（软 404 两档）
 
 - [x] **读到上级目录两份四项目成果**（结论 461 行 + 待办草案 210 行）并**逐条核查覆盖度**：

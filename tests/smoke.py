@@ -27717,6 +27717,49 @@ expression: r0()
     print("[211-P1-7/P1-8] 续211 ok: 证据三闸（无证据降 info / 未证实高危缺口话术 / "
           "fixed 需证据否则 unconfirmed + 显式逃生门）｜同簇顶班（勾1条扩散+可追溯+已判不覆写"
           "+勾多条不顶+单行覆盖+簇现状可见）")
+    # ---- [211-P2-10] 具名取消原因 ----
+    from scanner import cancelcause as _cc210
+    # ① 枚举封闭：非法/空一律 unknown（不许把任意串写进库）
+    assert _cc210.norm("user_stop") == "user_stop"
+    # 大小写与空白是**刻意归一**的（`strip().lower()`）—— 那两类不是"非法值"；
+    # 真正要挡的是枚举外的名字与非字符串。
+    for _bad210 in ("", None, "bogus", "user_stop_x", 42, "stopped"):
+        assert _cc210.norm(_bad210) == "unknown", _bad210
+    assert _cc210.norm("  USER_STOP  ") == "user_stop", "大小写/空白要归一（这是刻意的）"
+    assert set(_cc210.CAUSES) == set(_cc210.CAUSE_NAMES)
+    # ② 每条写明"接下来状态怎么变"（枚举必须带状态映射，否则 GUI 没法预览）
+    assert _cc210.next_status("stage_error") == "failed"
+    for _c210 in ("user_stop", "budget_exhausted", "signal_terminated",
+                  "target_unreachable", "unknown"):
+        assert _cc210.next_status(_c210) == "stopped", _c210
+    assert _cc210.describe("budget_exhausted") == "请求预算耗尽"
+    # ③ cause_of 优先级（写进 module docstring 的理由，这里用机器钉住）
+    assert _cc210.cause_of(stage_error=True, stopped=True) == "stage_error", "异常最具体排第一"
+    assert _cc210.cause_of(signaled=True, stopped=True, budget_exhausted=True) == "signal_terminated", \
+        "进程级事件优先于预算账（容器被停时预算已无意义）"
+    assert _cc210.cause_of(stopped=True, budget_exhausted=True) == "budget_exhausted"
+    assert _cc210.cause_of(stopped=True) == "user_stop"
+    assert _cc210.cause_of(target_unreachable=True) == "target_unreachable"
+    assert _cc210.cause_of() == "unknown"
+    # ④ 落库：归一后写、读得回、不存在的任务 0 行
+    _t210 = db.create_task("smoke-p210", "https://p210.test/", ["probe"], {})
+    assert db.set_stop_reason(_t210, "budget_exhausted") == 1
+    assert dict(db.get_task(_t210))["stop_reason"] == "budget_exhausted"
+    db.set_stop_reason(_t210, "bogus-value")
+    assert dict(db.get_task(_t210))["stop_reason"] == "unknown", "非法值必须归一成 unknown"
+    assert db.set_stop_reason(999999, "user_stop") == 0, "不存在的任务返回 0（竞态下很正常）"
+    # ⑤ 列存在（新库 SCHEMA + 老库 _COLUMN_PATCHES 两处都要有）
+    _cols210 = [r[1] for r in db._query("PRAGMA table_info(tasks)")]
+    assert "stop_reason" in _cols210, "tasks 表缺 stop_reason 列"
+    assert "stop_reason" in db._COLUMN_PATCHES.get("tasks", {}), "老库补列清单里没有它"
+    # ⑥ runner 接线 + GUI 徽章（源码钉点：不接线＝枚举只是装饰）
+    _rn210 = (ROOT / "scanner" / "runner.py").read_text(encoding="utf-8")
+    assert "cancelcause.cause_of(" in _rn210 and "db.set_stop_reason(" in _rn210, \
+        "runner 收场处没落具名原因"
+    _tk210 = c.get("/tasks").get_data(as_text=True)
+    assert "cause_zh" in _tk210 or "具名取消原因" in _tk210, "任务页没传 cause_zh（徽章渲染不出来）"
+    print("[211-P2-10] 续211 ok: 具名取消原因（封闭枚举/每条带状态映射/优先级三级/落库归一/"
+          "新老库两处有列/runner 接线/GUI 徽章）")
     print("SMOKE PASS")
 
 
