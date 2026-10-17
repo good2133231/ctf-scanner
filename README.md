@@ -177,7 +177,7 @@ py -3 -m pip install -r requirements.txt
 
 ### 2. 配置（**可跳过** —— 不配任何 key 也能完成子域名 / 端口 / 探测 / 目录 / 漏洞初筛）
 
-只有「外部情报拓展」（FOFA / Shodan / Quake / GitHub 检索）需要 key：
+只有「外部情报拓展」（FOFA / Shodan / Quake / VirusTotal / GitHub 检索）需要 key：
 
 ```bash
 cp config/keys.yaml.example config/keys.yaml    # 然后填真实值；该文件已被 .gitignore 忽略，切勿提交
@@ -302,6 +302,7 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
   fofa:   {email: "", key: ""}   # FOFA（favicon / 证书 / 标题反查；settings.yaml 里 fofa.enabled 现为 false，配好 key 并显式打开才会真查并消耗配额）
   shodan: {key: ""}              # Shodan favicon 反查（默认关）
   quake:  {key: ""}              # 360 Quake favicon 反查（默认关）
+  virustotal: {key: ""}         # VirusTotal 子域名反查（默认关）
   github: {token: ""}            # GitHub 泄露检索（DEFAULTS 关、随包 settings.yaml 已开；没配就一次请求都不发）
   ```
 - **`config/settings.yaml`（全局策略，已随仓库提交）**：GUI「策略配置」页可图形化修改并写回；CLI 也可直接编辑。常见开关：`fofa.enabled` / `iprecon.enabled` / `shodan` / `quake` / `ctlog` / `intel` / `heuristic` / `github`（外部情报类：DEFAULTS 关，而随包 settings.yaml 已开 iprecon/fofa/ctlog/intel/heuristic/github/multileak）；`dirscan.mode`（`quick` 浅扫 / `deep` 深扫）；`screenshot.enabled`（站点截图，默认关，需本机有 Edge/Chrome 无头）；`portscan.engine`（`auto` = fscan → nmap → 内置）。

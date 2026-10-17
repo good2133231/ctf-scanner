@@ -250,7 +250,8 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    每行左侧可勾选，页面顶部两个按钮对勾选行生效：**加入黑名单**、**批量跑子域名（新建任务）**；
    JS 与外部情报带出来的关联域名**不在此页**（见下一栏）；
 5. **拓展域名**：从 JS 挖掘（`js:mine`）与外部情报（`osint:cseg` C 段反查 / `osint:fofa` FOFA·ICO 反查 /
-   `osint:fofa-cert` FOFA·证书反查 / `osint:fofa-title` FOFA·标题反查）带出来的**关联域名**，
+   `osint:fofa-cert` FOFA·证书反查 / `osint:fofa-title` FOFA·标题反查 /
+   `osint:vt` VirusTotal·子域反查）带出来的**关联域名**，
    列/筛选/勾选操作同「子域名资产」（来源列带 **FOFA** 字样，一眼能看出哪些是 FOFA 找出来的）。
    末列「**敏感**」显示该域名下 JS 挖到的疑似凭据条数（`js-secret-*`，详见「漏洞风险」页）。这些域名**未必属于目标**，
    独立成页是为了避免误判资产归属。

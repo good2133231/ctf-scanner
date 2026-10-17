@@ -3017,6 +3017,7 @@ def create_app():
         ("ico", "FOFA·ICO 反查", "osint:fofa", "fofa-ico拓展"),
         ("shodan", "Shodan·ICO 反查", "osint:shodan", "shodan-ico拓展"),
         ("quake", "Quake·ICO 反查", "osint:quake", "quake-ico拓展"),
+        ("virustotal", "VirusTotal·子域反查", "osint:vt", "vt子域拓展"),
         ("ctlog", "CT 日志(crt.sh)", "osint:ctlog", "ct日志拓展"),
         ("cseg", "C 段反查", "osint:cseg", "c段反查拓展"),
         ("reverse", "IP 反查", extdom.EXT_REVERSE_SOURCE, "ip反查拓展"),
@@ -4841,6 +4842,13 @@ def create_app():
                               "workers": int(f.get("quake_workers", 5) or 5),
                               "black_ico_threshold": int(
                                   f.get("quake_black_ico_threshold", 200) or 200)},
+                    # VirusTotal **子域名**反查（续214）：与前三家不同路 —— 输入是注册域、
+                    # 产出是已收录的子域（不是 favicon 同源推断）。
+                    "virustotal": {"enabled": f.get("virustotal_enabled") == "1",
+                                   "max_domains": int(f.get("virustotal_max_domains", 20) or 20),
+                                   "limit": int(f.get("virustotal_limit", 40) or 40),
+                                   "min_interval": float(
+                                       f.get("virustotal_min_interval", 15.0) or 15.0)},
                     # CT 日志（crt.sh，免 key）在线查询：证书维度记录 + 拓展域名来源
                     "ctlog": {"enabled": f.get("ctlog_enabled") == "1",
                               "max_domains": int(f.get("ctlog_max_domains", 10) or 10),

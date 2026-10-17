@@ -403,6 +403,12 @@ quake:
   max_assets: 100
   workers: 5
   black_ico_threshold: 200
+virustotal:
+  # VirusTotal 子域名反查（默认关）：GET /v3/domains/<注册域>/subdomains，需 config/keys.yaml 填 virustotal.key
+  enabled: false
+  max_domains: 20
+  limit: 40
+  min_interval: 15.0
 ctlog:
   # 证书透明度（CT）日志在线查询（crt.sh，免 key，默认关）：证书维度记录 + 拓展域名来源
   enabled: true

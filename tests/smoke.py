@@ -27914,6 +27914,164 @@ expression: r0()
           "run_task 钩子：阶段前调一次带中文名 + finally 收条（阶段炸/PipelineRunner 炸两路证伪）｜"
           "CLI 两个前台入口都挂条")
 
+    # ---- [214] 续214：VirusTotal 子域名反查（scanner/virustotal.py + osint 接线）----
+    # 来源：借鉴清单里最后一项「等 key」的能力（主理人点单"virustotal 要不要做"）。
+    # 与 FOFA / Shodan / Quake 的 favicon 反查**不同路**：那是同源推断，这是已收录的父子关系。
+    # 三条边界：出厂关 / 无 key 零请求 / 免费档节流（4 次/分钟、500 次/天 ⇒ min_interval）。
+    import io as _io214
+    from scanner import virustotal as _vt214
+
+    # ① 无 key ⇒ **一个请求都不发**（桩 http_request 计数，这是"零请求"唯一的判法）
+    _calls214 = []
+    _real_hr214 = _vt214.http_request
+
+    def _fake_hr214(url, **kw):
+        _calls214.append({"url": url, "kw": kw})
+        return None
+
+    _vt214.http_request = _fake_hr214
+    try:
+        _s214, _t214, _e214 = _vt214.search("t214.test", {})
+    finally:
+        _vt214.http_request = _real_hr214
+    assert not _calls214, f"没配 key 却发了请求：{_calls214}"
+    assert _s214 == [] and _t214 == 0 and _e214, (_s214, _e214)
+    assert "virustotal.key" in _e214 or "key" in _e214.lower(), _e214
+
+    # ② 有 key ⇒ 解析形状 + x-apikey 头 + **第三方不带登录态**（§5.1：auth 默认 False）
+    _JSON214 = ('{"data":[{"id":"a.t214.test","type":"domain",'
+                '"attributes":{"ip_address":"1.2.3.4"}},'
+                '{"id":"b.t214.test","type":"domain"},'
+                '{"id":"t214.test","type":"domain"}],"meta":{"count":5}}')
+
+    def _ok_hr214(url, **kw):
+        _calls214.append({"url": url, "kw": kw})
+        return {"status": 200, "headers": {}, "text": _JSON214, "length": len(_JSON214),
+                "url": url}
+
+    _st214 = {"keys": {"virustotal": {"key": "vt-fake-214"}},
+              "virustotal": {"enabled": True, "min_interval": 0}}
+    _calls214 = []
+    _vt214.http_request = _ok_hr214
+    try:
+        _s214, _t214, _e214 = _vt214.search("t214.test", _st214)
+    finally:
+        _vt214.http_request = _real_hr214
+    assert _e214 == "" and _t214 == 5, (_s214, _t214, _e214)
+    # 查询的那个域名自己**不重复收**（t214.test 被跳过）
+    assert [x["domain"] for x in _s214] == ["a.t214.test", "b.t214.test"], _s214
+    assert "x-apikey" in {k.lower() for k in (_calls214[0]["kw"].get("headers") or {})}, \
+        _calls214
+    assert _calls214[0]["kw"].get("auth") in (None, False), "第三方接口绝不能带登录态（§5.1）"
+    assert "/domains/t214.test/subdomains" in _calls214[0]["url"], _calls214[0]["url"]
+
+    # ③ 四档响应：404 是"它确实没被收录"（**不是错误**）/ 401 key 无效 / 429 配额 / 500 如实报
+    def _resp214(status, text="{}"):
+        def _f(url, **kw):
+            return {"status": status, "headers": {}, "text": text, "length": len(text),
+                    "url": url}
+        return _f
+
+    for _code214, _need214 in ((404, ""), (401, "key 无效"), (429, "配额"), (500, "HTTP 500")):
+        _vt214.http_request = _resp214(_code214)
+        try:
+            _sc214, _tc214, _ec214 = _vt214.search("t214.test", _st214)
+        finally:
+            _vt214.http_request = _real_hr214
+        if _code214 == 404:
+            assert _sc214 == [] and _ec214 == "", "没有记录不是错误，必须与查询失败分开"
+        else:
+            assert _need214 in (_ec214 or ""), f"HTTP {_code214} 要说清：{_ec214}"
+    _vt214.http_request = _resp214(200, "not-json")
+    try:
+        assert "不是合法 JSON" in _vt214.search("t214.test", _st214)[2]
+    finally:
+        _vt214.http_request = _real_hr214
+
+    # ④ 节流：免费档 4 次/分钟 ⇒ min_interval 内第二次必须真的等（now/sleep 注入桩）
+    _st_slow214 = {"keys": {"virustotal": {"key": "vt-fake-214"}},
+                    "virustotal": {"enabled": True, "min_interval": 15.0}}
+    _clock214 = {"t": 1000.0}
+    _slept214 = []
+
+    def _now214():
+        return _clock214["t"]
+
+    def _sleep214(s):
+        _slept214.append(s)
+        _clock214["t"] += s          # 桩时钟必须随 sleep 推进，否则 _rate_wait 会原地转
+
+    _vt214._LAST_TS = 0.0
+    _vt214.http_request = _ok_hr214
+    try:
+        _vt214.search("t214.test", _st_slow214, now=_now214, sleep=_sleep214)
+        _first214 = len(_slept214)
+        _vt214.search("t214.test", _st_slow214, now=_now214, sleep=_sleep214)
+    finally:
+        _vt214.http_request = _real_hr214
+        _vt214._LAST_TS = 0.0
+    assert _first214 == 0, "第一次查询不该等（节流只在连续请求之间生效）"
+    assert _slept214 and _slept214[0] >= 14.0, f"连续两次查询没按 min_interval 节流：{_slept214}"
+    # 变异证伪：把节流摘掉 ⇒ ④ 立刻不成立（承重的是 _rate_wait）
+    _real_rw214 = _vt214._rate_wait
+    _vt214._rate_wait = lambda *a, **k: 0.0
+    try:
+        _slept214_bad = []
+        _vt214.http_request = _ok_hr214
+        try:
+            _vt214.search("t214.test", _st_slow214, now=_now214,
+                           sleep=lambda s: _slept214_bad.append(s))
+        finally:
+            _vt214.http_request = _real_hr214
+        assert not _slept214_bad, "变异没生效：摘掉节流后本该一次都不等"
+    finally:
+        _vt214._rate_wait = _real_rw214
+        _vt214._LAST_TS = 0.0
+
+    # ⑤ 阶段级（行为）：跑一次只开 VT 的 osint ⇒ 库里出现 `osint:vt` 来源，且 note 带查询语法
+    _cfg214 = copy.deepcopy(settings)
+    _cfg214["keys"] = {"virustotal": {"key": "vt-fake-214"}}
+    _cfg214["virustotal"] = {"enabled": True, "max_domains": 5, "limit": 40,
+                             "min_interval": 0}
+    for _off214 in ("iprecon", "fofa", "shodan", "quake", "ctlog", "icp"):
+        _cfg214[_off214] = dict(_cfg214.get(_off214) or {})
+        _cfg214[_off214]["enabled"] = False
+    _tid214 = db.create_task("smoke-214", "https://t214.test/", ["osint"], {"offline": True})
+    _wd214 = Path(_TMPDIR) / f"vt214_{_tid214}"
+    _wd214.mkdir(parents=True, exist_ok=True)
+    _vt214.http_request = _ok_hr214
+    try:
+        _ctx214 = StageContext(_tid214, "smoke-214", parse_lines(["https://t214.test/"]),
+                               ["osint"], {"offline": True}, _cfg214, _wd214, _Rec(),
+                               progress=None)
+        PipelineRunner(_ctx214).run()
+    finally:
+        _vt214.http_request = _real_hr214
+    _rows214 = [dict(r) for r in db._query(
+        "SELECT domain, source, note FROM subdomains WHERE task_id=? AND source='osint:vt'",
+        (_tid214,))]
+    assert _rows214, f"VT 反查结果没进库：{[dict(r) for r in db.list_subdomains(_tid214)]}"
+    assert {r["domain"] for r in _rows214} == {"a.t214.test", "b.t214.test"}, _rows214
+    # 续171 那条口径：反查结果必须标明用的是哪条语法（否则事后解释不清这条域名哪来的）
+    assert all('domain="t214.test"' in (r["note"] or "") for r in _rows214), _rows214
+
+    # ⑥ 配置两处一致 + 出厂关（外部接口不该在用户没点头时产生流量）
+    from scanner import config as _cf214
+    _dv214 = _cf214.DEFAULTS["virustotal"]
+    assert _dv214["enabled"] is False, _dv214
+    assert _dv214["limit"] <= 40 and "min_interval" in _dv214, _dv214
+    assert _cf214.load_settings()["virustotal"] == _dv214, "settings 与 DEFAULTS 漂了"
+    _kx214 = (ROOT / "config" / "keys.yaml.example").read_text(encoding="utf-8")
+    assert "virustotal:" in _kx214 and "key:" in _kx214, "keys 样例里没有 virustotal 组"
+    # ⑦ 接线（源码钉点：不接线＝模块只是装饰）
+    _os214 = (ROOT / "scanner" / "stages" / "osint.py").read_text(encoding="utf-8")
+    assert "from .. import virustotal as vt_mod" in _os214, "osint 没导入 virustotal"
+    assert "_vt_domains(" in _os214 and "do_vt" in _os214, "osint 没接 VT 子域反查"
+    assert 'do_vt or do_ctlog' in _os214, "全关时的早退没算上 VT"
+    print("[214] 续214 ok: VirusTotal 子域反查 —— 无 key 零请求｜有 key 解析形状+自身域名不重复收+"
+          "x-apikey 头+不带登录态｜404 是没记录不是错、401/429/500/非 JSON 如实报｜"
+          "min_interval 节流（变异=摘掉节流）｜阶段级落 osint:vt 且 note 带查询语法｜"
+          "配置两处一致+出厂关+keys 样例+osint 接线")
     print("SMOKE PASS")
 
 

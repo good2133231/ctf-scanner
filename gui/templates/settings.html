@@ -569,7 +569,25 @@
       <label>并发数 <input name="quake_workers" value="{{ s.quake.workers }}"></label>
       <label>黑 ico 阈值 <input name="quake_black_ico_threshold"
         value="{{ s.quake.black_ico_threshold }}"></label>
+ 
+    <h2>VirusTotal 子域名反查</h2>
+    <p class="muted note">走 <code>GET /v3/domains/&lt;注册域&gt;/subdomains</code> ——
+      与上面三家 favicon 反查<b>不同路</b>：那三家回答"还有谁用了同一个图标"，VT 回答
+      "这个域名下还有哪些已收录的子域"。key 请写入 <code>config/keys.yaml</code> 的
+      <code>virustotal.key</code>；免费档 4 次/分钟、500 次/天，故两次请求之间按
+      「最小间隔」节流（填 0 可关掉节流 —— 会更快撞上 429）。</p>
+    <label class="chk"><input type="checkbox" name="virustotal_enabled" value="1"
+      {{ 'checked' if s.virustotal.enabled }}> <b>VirusTotal 子域名反查</b>
+      （需 <code>config/keys.yaml</code> 的 virustotal.key）</label>
+    <div class="row">
+      <label>注册域上限 <input name="virustotal_max_domains"
+        value="{{ s.virustotal.max_domains }}"></label>
+      <label>单域名取回上限 <input name="virustotal_limit"
+        value="{{ s.virustotal.limit }}"></label>
+      <label>请求最小间隔（秒） <input name="virustotal_min_interval"
+        value="{{ s.virustotal.min_interval }}"></label>
     </div>
+   </div>
 
     <h2>CT 日志在线查询（crt.sh，免 key）</h2>
     <p class="muted note">查 <code>https://crt.sh/?q=&lt;域&gt;&amp;output=json</code>，产出

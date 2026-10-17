@@ -375,6 +375,12 @@ ctf-scanner/
 │   ├── fofa.py            # FOFA 反查（qbase64）：favicon(icon_hash) / cert="domain" / title="xxx" 三种；黑 ico / 通用证书 / 公共标题阈值
 │   ├── shodan.py          # Shodan 反查（http.favicon.hash:<mmh3>）—— 与 fofa.py **同构照抄**，默认关，无 key 显式报错
 │   ├── quake.py           # 360 Quake 反查（favicon: "<mmh3>"，POST + X-QuakeToken）—— 同上，默认关
+│   ├── virustotal.py     # VirusTotal **子域名**反查（续214）：`GET /v3/domains/<注册域>/subdomains`，
+│   │                      #   与上面三家 favicon 反查**不同路**（那是同源推断，这是已收录的父子关系）。
+│   │                      #   与 shodan.py 同构、刻意不抽公共基类；出厂关 + 没 key 零请求；
+│   │                      #   免费档 4 次/分钟 ⇒ 模块自带 `min_interval` 节流、429 如实停不重试。
+│   │                      #   ⚠ 读配置必须判 `is None`：**显式 0 不能被 `or DEFAULT` 吞掉**
+│   │                      #     （`0 or 15.0`＝15.0 ⇒ 关不掉节流，本轮实测抓出来的）
 │   ├── ctlog.py           # 证书透明度日志在线查询（crt.sh，免 key，DEFAULTS 关、**随包 settings.yaml 已开**）：产出**证书维度**记录
 │   ├── ssrf.py            # A10 SSRF 受控回连（**默认关**）：本机 HTTP 回连监听 + 每参数唯一 token
 │   ├── mmh3.py            # 纯标准库 MurmurHash3 x86_32（平台 favicon 指纹用；含 SELF_TEST 向量）

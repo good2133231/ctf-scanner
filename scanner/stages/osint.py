@@ -21,7 +21,7 @@
   （写进 `certs` 表，source='ct'）并把它覆盖的域名当作拓展域名来源。
 
 产出的域名来源分别是 `osint:cseg` / `osint:fofa` / `osint:fofa-cert` / `osint:fofa-title` /
-`osint:shodan` / `osint:quake` / `osint:ctlog`，都归「拓展域名」页。
+`osint:shodan` / `osint:quake` / `osint:vt` / `osint:ctlog`，都归「拓展域名」页。
 全部子能力都关时整个阶段直接跳过 —— 一次请求都不发（与低危检查的处理方式一致）。
 
 **收口不变量**：所有外部来源产出的域名一律经 `_domain_of()` 过滤，
@@ -35,6 +35,7 @@ from .. import blacklist, db, extdom, iprecon, jsmine, targets
 from .. import fofa as fofa_mod
 from .. import shodan as shodan_mod
 from .. import quake as quake_mod
+from .. import virustotal as vt_mod
 from .. import ctlog as ctlog_mod
 from .. import keystore
 from ..fingerprint import favicon_hash
@@ -66,6 +67,11 @@ class OsintStage(Stage):
         do_title = do_fofa and fofa_cfg.get("title_enabled") is not False
         do_shodan = (ctx.settings.get("shodan", {}) or {}).get("enabled") is True
         do_quake = (ctx.settings.get("quake", {}) or {}).get("enabled") is True
+        # 续214：VirusTotal **子域名**反查 —— 与前三家 favicon 反查不同路（那是同源推断、
+        # 这是已收录的父子关系）。它**不进 extquota 预检**：VT 免费档是速率限制
+        # （4 次/分钟、500 次/天）而不是"剩余额度"，没有可查的额度端点；那一档由模块
+        # 自己的 `min_interval` 节流 + 429 如实停来兑现（塞进 preflight 只会得到假数字）。
+        do_vt = (ctx.settings.get("virustotal", {}) or {}).get("enabled") is True
         do_ctlog = ctlog_mod.enabled(ctx.settings)
         # 续211-P1-4：外部引擎**配额预检**（三家按 key 计费/限流）。额度耗尽时的现状是
         # 逐条请求失败、日志刷一片归因错的失败原因（用户看到"工具坏了"，事实是"额度用完了"）。
@@ -85,7 +91,7 @@ class OsintStage(Stage):
         # 续205：备案反查有**自己的**开关（icp.enabled）—— 它用的是另一套接口、另一份配额，
         # 与"外部情报拓展"那批不是一回事。默认全关时整段跳过、零请求。
         do_icp = (ctx.settings.get("icp", {}) or {}).get("enabled") is True
-        if not (do_ip or do_fofa or do_shodan or do_quake or do_ctlog or do_icp):
+        if not (do_ip or do_fofa or do_shodan or do_quake or do_vt or do_ctlog or do_icp):
             ctx.logger.info("[osint] 未启用（策略配置 → 外部情报拓展 可打开），跳过")
             return
         if ctx.stopped():
@@ -117,6 +123,9 @@ class OsintStage(Stage):
             found += self._platform_assets(shodan_mod, "shodan")
         if do_quake and not ctx.stopped():
             found += self._platform_assets(quake_mod, "quake")
+        if do_vt and not ctx.stopped():
+            found += self._vt_domains()
+
         if do_ctlog and not ctx.stopped():
             found += self._ctlog()
 
@@ -312,6 +321,49 @@ class OsintStage(Stage):
                 # 的语法**（`icon_hash="123"`），入库进 `subdomains.note`，拓展域名页可查
                 found.append((domain, "osint:fofa", fofa_mod.build_query(icon_hash)))
         ctx.logger.info(f"[osint] FOFA 拓展：查询 {queried} 个 favicon，跳过黑 ico {black} 个")
+        return found
+
+    # ---------- VirusTotal 子域名反查（续214） ----------
+
+    def _vt_domains(self):
+        """按注册域问 VirusTotal "这个域名下还有哪些子域"。
+
+        与前三家 favicon 反查不同路：那三家回答"还有谁用了同一个图标"（同源推断），
+        VT 回答的是**已收录的父子关系**，正好补上被动收集漏掉的那一格。
+        三处口径照既有三家：
+        ① 没 key ⇒ **零请求**并点名（`keystore.keys_hint`，与 fofa 同一句）；
+        ② `max_domains`（默认 20）夹住请求数，`min_interval` 节流在模块内（免费档 4 次/分钟）；
+        ③ 撞 429 就**如实停**（不重试 —— 重试只会把"额度用完"变成"扫得很慢"）。
+        随行带查询语法 `domain="<注册域>"` ⇒ 入库进 note（续171 那条口径）。
+        """
+        ctx = self.ctx
+        cfg = ctx.settings.get("virustotal", {}) or {}
+        if not vt_mod.available(ctx.settings):
+            ctx.logger.info(f"[osint] VirusTotal {keystore.keys_hint('virustotal.key')}，"
+                            f"跳过子域反查")
+            return []
+        roots = self._root_domains()
+        if not roots:
+            ctx.logger.info("[osint] 没有可用于反查的注册域，跳过 VirusTotal 子域反查")
+            return []
+        cap = max(1, int(cfg.get("max_domains") or 20))
+        if len(roots) > cap:
+            ctx.logger.info(f"[osint] 注册域 {len(roots)} 个超过上限 {cap}，仅反查前 {cap} 个")
+            roots = roots[:cap]
+        found, queried = [], 0
+        for root in roots:
+            if ctx.stopped():
+                break
+            subs, total, err = vt_mod.search(root, ctx.settings, logger=ctx.logger)
+            if err:
+                ctx.logger.info(f"[osint] VirusTotal 子域反查中止：{err}")
+                break
+            queried += 1
+            for s in subs:
+                domain = str(s.get("domain") or "").strip().lower()
+                if domain:
+                    found.append((domain, "osint:vt", vt_mod.query_of(root)))
+        ctx.logger.info(f"[osint] VirusTotal 拓展：查询 {queried} 个注册域 → {len(found)} 个子域")
         return found
 
     # ---------- FOFA 证书反查 ----------

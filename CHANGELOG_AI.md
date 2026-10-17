@@ -3,6 +3,36 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续214（2026-10-17，WorkBuddy · CodeBuddy）：VirusTotal 子域名反查（借鉴清单最后一项"等 key"）
+
+主理人点单"virustotal 要不要做"+ 续213 核查后的剩余项。形态与 FOFA / Shodan / Quake **不同路**：
+那三家是 favicon 哈希反查（同源推断），VT 是 `GET /v3/domains/<注册域>/subdomains`
+（**已收录的父子关系**），补的正是被动收集漏掉的那一格。
+
+- 新模块 `scanner/virustotal.py`：与 `shodan.py` 同构（`credentials` / `available` / `search` /
+  `query_of`），**刻意不抽公共基类**（四家鉴权、响应结构、配额模型各不相同 —— `shodan.py`
+  文件头同一条理由）。三条边界：出厂 `enabled=false`；**没 key 零请求**
+  （返回 `keystore.keys_hint('virustotal.key')` 现取那句）；免费档 4 次/分钟、500 次/天 ⇒
+  模块自带 `min_interval`（默认 15 秒）节流，撞 429 **如实停、不重试**。
+- 接线：`osint` 阶段 `do_vt` + `_vt_domains()` —— 复用 `_root_domains()` 拿注册域、`max_domains`
+  夹住请求数，产出落 `osint:vt` 并**随行带查询语法** `domain="<注册域>"`（续171 那条口径，
+  否则事后解释不清这条域名是怎么来的）。**不进 `extquota` 预检**并写明理由：VT 免费档是
+  **速率限制**而不是"剩余额度"，没有可查的额度端点 —— 塞进 preflight 只会得到一个假数字。
+- 配置两处（DEFAULTS + `config/settings.yaml`）+ `config/keys.yaml.example` 加 virustotal 组。
+- **两个被断言抓出来的实现 bug**（都是配置/时序型，肉眼读代码看不出来）：
+  ① `min_interval` / `limit` 用 `or DEFAULT` 读配置 ⇒ 显式写 0 被读成默认值 15
+     （Python 里 `0 or 15.0` == 15.0）—— **"关掉节流"根本关不掉**，[214] ③ 因此真睡 60 秒挂住；
+     改成判 `is None`。② `_rate_wait` 在 sleep 之后**立刻**把 `_LAST_TS` 推进到当前时刻 ⇒
+     下一轮 `cur - _LAST_TS` 又变回 0 ⇒ `left` 恒等于 gap ⇒ **死循环**（[214] ④ 挂住）；
+     改成只在退出循环时推进一次。两条都是**修实现不放宽断言**。
+- **订正续213 的一处错判**：上一轮核查把「ICP 备案反查」记成"未做、等接口+key"，
+  **实际续205 已落地**（`scanner/icp.py`：可插拔源 + 连通性预检 + `icp.enabled` 出厂关）。
+  教训：核查时按"能力关键词"搜 passive/osint 是不够的 —— 要按**模块文件**普查一遍。
+- 门禁：`[214]` 一组（无 key 零请求 / 解析形状 + 自身域名不重复收 / `x-apikey` 头 /
+  第三方不带登录态 / 404 是"没记录"不是错误 + 401·429·500·非 JSON 如实报 / 节流 + 变异证伪 /
+  阶段级落 `osint:vt` 且 note 带语法 / 配置两处一致 + 出厂关 + keys 样例 + osint 接线）。
+  **SMOKE PASS（组标题打印 223 → 224，+1 = [214]）**。
+
 ## 续213（2026-10-17，WorkBuddy · CodeBuddy）：核查轮——主理人长清单逐项对账 + 四项目借鉴八维度汇总（**无代码改动**）
 
 主理人一次贴出积压清单（item5/6/1-10 + 第二批 6 条 + 四项目借鉴），要求「完整阅读代码再给结论」。
@@ -40,7 +70,7 @@
 | 维度 | 结论（我们的现状） |
 |---|---|
 | 架构 | 四家无一优于我们的 runner/StageContext/协作式取消/断点续跑；ShuiZe 的「插件式收集源目录」我们 `stages/` 已同形 |
-| 未用到的东西 | ShuiZe 4 个收集源：host 碰撞 **✅已落地（续183/201/203，默认开）**、ICP 备案反查 **❌等接口+key**、爱企查企业关联 **❌付费第三方，不借鉴**、参数链接收集 **△部分等价（续198 crawl + 参数路由）** |
+| 未用到的东西 | ShuiZe 4 个收集源：host 碰撞 **✅已落地（续183/201/203，默认开）**、ICP 备案反查 **✅续205 已落地**（`scanner/icp.py`：可插拔源 + 连通性预检 + 出厂关；**续213 曾误记为"未做"，续214 订正**）、爱企查企业关联 **❌付费第三方，不借鉴**、参数链接收集 **△部分等价（续198 crawl + 参数路由）** |
 | 他做得更好的 | ARTEX 复测三态 **✅续150 立三态 + 续180 补「执行失败⇒无法确认」**；ARTEX guard 结构化拦截审计 **✅续182（audit.KIND_SCAN_BLOCK）**；ShuiZe docker 一键 **✅install.sh/start.sh + docker_todo/**；tqdm 彩色 CLI **✅续212（进度条 + 日志打在条上方）** |
 | 功能完整度 | 13 阶段 + POC 引擎 + 14 内置检查 + 指纹/POC 联动；缺的只有 ICP/VT 这类第三方情报源（等 key） |
 | 发现强度 | 强于 ShuiZe（它靠外部 nuclei）；弱项在第三方情报覆盖面（FOFA/Shodan/Quake 有、VT/ICP 无） |
@@ -48,7 +78,7 @@
 | 可迁移性 | `.venv` 不可搬是已知项，但有 `migrate.py` 导出/导入（续136）；docker 化已有 `docker_todo/Dockerfile` |
 | 便捷性 | install.sh/start.sh 一键 + `--bootstrap`；缺 ARTEX 那种纯前端 Mock Demo（价值低，不借鉴） |
 
-**借鉴清单剩下没做的只有三条**：ICP 备案反查（等接口+key）、VirusTotal（等 key）、P2-12 真任务 profiling
+**借鉴清单剩下没做的只有两条**（续214 订正：ICP 续205 已落地、VT 本轮续214 已落地，剩下的是真任务 profiling 与"等主理人填 key 才生效"的那一半）：P2-12 真任务 profiling，以及 ICP / VT 填了 key 之后的**真机验收**（两块能力的代码都已就绪）。
 （单任务 CPU/内存实测 → 动态档位；续179 的基准是合成回环，不是真任务）。
 
 ## 续212（2026-10-17，WorkBuddy · CodeBuddy）：P3-14① CLI 日志不刷乱进度条（+ P1-9 拍板不做）

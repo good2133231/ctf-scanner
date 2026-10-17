@@ -12,6 +12,8 @@ shodan:
   key: ""        # Shodan API key（favicon 反查，默认关）
 quake:
   key: ""        # 360 Quake API key（favicon 反查，默认关）
+virustotal:
+  key: ""        # VirusTotal API key（子域名反查，默认关）
 github:
   token: ""      # GitHub PAT（GitHub 泄露检索阶段用，默认关；没配就一次请求都不发）
 gitlab:
