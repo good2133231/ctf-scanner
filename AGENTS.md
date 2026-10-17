@@ -731,6 +731,16 @@ ctf-scanner/
   任何配置**。上游目录名会变（2026-10-16 实测 `http/fingerprints/` 已不存在，指纹类并到了
   `http/technologies/`）⇒ 取到 0 个时错误信息必须说清"目录名变了？仓库结构改了？"。
   **不做成定时任务**：拉外部仓库＝往机器里写第三方文件，必须人下命令（§2）。
+- **软 404 的「没证据」不再冒充真发现（续210，借鉴 7scanAI）**：`scanner/stages/dirscan.py` 两档。
+  - **T1 基线不可得**：`_baseline()` 的 3 次随机 marker 路径**全失败**时，元组里的 `ok_samples` 停在 0
+    ⇒ 这一轮软 404 过滤**没有任何证据**。此时命中**照常入库**（展示层过滤 ≠ 删数据，§0 第 10 条），
+    只在 `dirs.note` 追加固定 token `baseline-unverified`，并给该站点记账、轮末日志点名总量。
+    「确实有 .env」与「当时没比成」长得一模一样，是 AGENTS §6.2 第十七起同族毛病。
+  - **T2 语义矛盾判据**：`datafile_html_contradiction(path, text)`（纯函数，与 `is_uniform_block` /
+    `block_markers()` 并排，**不在阶段循环里内联写正则**）—— 路径形如数据文件
+    （`.env` / `.git/config` / `wp-config.php.bak` / `.sql`…）而响应体是 **HTML 文档** ⇒ 判软 404 模板。
+    反向保证写进断言：真 `.env` 回 `text/plain` 键值正文**绝不**被挡（否则就是把 A01 真发现吃了）。
+    两条判据各有适用面，不许合并（基线比对对响应不稳定的站点会失效，内容判定不依赖基线）。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /
