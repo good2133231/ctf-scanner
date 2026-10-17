@@ -3,6 +3,54 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续213（2026-10-17，WorkBuddy · CodeBuddy）：核查轮——主理人长清单逐项对账 + 四项目借鉴八维度汇总（**无代码改动**）
+
+主理人一次贴出积压清单（item5/6/1-10 + 第二批 6 条 + 四项目借鉴），要求「完整阅读代码再给结论」。
+**结论：除 ICP 备案反查与 VirusTotal（都等第三方接口与 key）外，清单里其余项在代码里都已落地**；
+主理人看到的「没有」多数是**旧任务数据**（标题折叠 / 任务 2 零结果）或**没配 key 零请求**（FOFA/VT）。
+
+| 项 | 结论（代码证据） |
+|---|---|
+| 5 js 泄漏：具体值单独一行 | **有**：`gui/templates/task_detail.html:812` `{{ f.value }}`（flags 存原文、flagfind 不掩码），每条一行 |
+| 5 复核 + 误报拉黑值 | **有**：`gui/app.py:3455-3486`（误报按钮 → `secretbl.add(值)` + 删当前行 + 记审计）；`/vulns` 页 JS 凭据行 `app.py:3777-3804` 走同一套 |
+| 5 下次匹配到不显示 | **值级精确匹配**：`scanner/secretbl.py:36-44`；两条抽取链路都过 `filter_secrets` —— `flagfind.py:372` 与 `stages/jsmine.py:225` |
+| 6 送去探测 = 建**子任务**挂在调用任务下 | **正是这个形态**：`gui/app.py:4084` `_create_task(..., parent_id=from_task)`（续185）；子任务可展开套娃＝`api_task_subtree` 递归整树 + 24-a 编号（`app.py:4127`，续196）；任务列表有「子任务 · 父 #N」标记（`tasks.html:179`） |
+| 6 送探域名归到主域名底下 | **有**：`app.py:4014-4032` 以 `ext:probed` 沿 parent_id 爬到**根任务**写 subdomains（续195），徽章＋送探记录 `record_ext_probes`（手工/追加两条路都有，续178） |
+| 6 按钮只写「送去探测」 | **已是**：`extdomains.html:139`、`task_detail.html:502`；「（子域+存活+目录+漏洞）」后缀全仓已无 |
+| 6 IP 重合算高置信 | **续186 已拍板**：非 CDN 的 IP 与已确认子域重合判 high（`extdom.apply_ip_evidence`），可进自动递归 |
+| 6 挖掘 js 数量 | **有**：`task_detail.html:447`、`extdomains.html:58`，数据源 `app.py:1050-1061`（`task.options.js_count`，续187） |
+| 1 cert/screenshot 注释取消 | **已无**：`tasks.html:27-30` 只剩 `off_by_default = s in ['screenshot','cert']`，那两条注释文字全仓仅存于 CHANGELOG 历史 |
+| 2 按机器/规模动态改并发 | **有但出厂保守**：`utils.machine_tier`/`effective_workers`（`utils.py:961/986`，`limits.workers_auto` 出厂 false＝只认配置）；任务级 `queue.workers` 默认 **1（串行）**、夹 1..8，`workers_auto` 按档收 1/2/4（`queue.py:47-66`）；ramp 按产出加码是 opt-in（续179） |
+| 2 多进程 / 协程 | **刻意不做**：多进程会把 SQLite 单库 + 全局预算闸/去重口径打散；协程要重写 requests 同步栈（evasion/fingerprint/throttle 全链路），收益不如线程池。**现状＝线程池 + 全局闸** |
+| 3 标题聚合默认收起可展开 | **已做**（续172）：`task_detail.html:359`「展开同标题（N 条）」，成员行默认 hidden。主理人贴的 brazil-pix 是**旧任务**——`redirect_title` 续197 才回填，老 301 行标题还是「301 Moved Permanently」，fold key 与 200 行不同 ⇒ 不聚合。**重跑即见** |
+| 4 IP 反查：先探活＋多源＋自研 PTR | **全在**（续184）：7 源注册 + `preflight()` 开跑前逐源探活（`iprecon.py:320`）+ `ptr` 自研原生 PTR（不发 HTTP、恒可用）+ `DEFAULT_FALLBACK=[ptr,dnsdblookup,rapiddns,viewdns]`。日志里 HTTP 530 是 webscan 源被 CloudFront 拒，**预检正在起作用** |
+| 7 FOFA / VirusTotal | FOFA 已在 osint 阶段接线（`stages/osint.py:35`，fofa/cert/title 三路），**没配 key ⇒ 零请求**（只写一行日志，所以日志里看不见）；**VT 未实现**，`passive.py:10` 明写「需要 key 的一律不接」，一直挂账等 key |
+| 8 任务 2 零结果 | worker 从 `run_payload` 重建入参（`queue.py:80-98`），**老库行没有 payload 且 stages 为空 ⇒ stages=[] ⇒ 零阶段直接 done**；叠加它是 10/5 旧版跑的（当时无 crawl/参数路由/链接页）。**重跑即见** |
+| 9 domain_brute + 用户字典 | 有：subdomain 阶段 puredns 优先 + 内置 DNS 爆破回退；字典 `config/dicts/subdomains_deep.txt` = **177,876 条**（用户字典已导入），深扫档整份喂（续164 起 `brute_max_words:0`＝全量），浅扫用 `subdomains.txt`（85 条）。无独立 domain_brute 服务（不需要） |
+| 10 数据探测邮箱独立页 | **有**（续184）：`/emails`（`app.py:3270`）+ `mails.is_noise`（`mails.py:48`）挡占位域/资源文件名（`x@2x.png`、`bootstrap@5.1.3`）/纯 IP/TLD 非字母；**零额外请求**（jsmine 同批正文顺带抽） |
+| 二-1 screen 里命令不显示 | 横幅每次 `serve()` 都打 22 行（`gui/app.py:5718` `say()`），不是「只有第一次」；screen 看不到是它的滚动缓冲/清屏机制（续208 结论）。**续145 起横幅同时落 `logs/server.log`** ⇒ `tail -f logs/server.log` 不受终端影响 |
+| 二-2 Docker 四问 | 文档已答（`docs/docker.md:239` 基于 `python:3.9-slim` ≈ **150 MB**，不含外部工具）：镜像里是 **.pyc 可反编译**非真保护；重 build 走层缓存不麻烦；时间锁可做但改系统时间可绕（真保护要 license 服务器）——都只是提高门槛 |
+| 二-3 host 碰撞默认开 | **续203 已改出厂 true**（`scanner/config.py:367` + `config/settings.yaml:243`） |
+| 二-4 样式挤/按钮变化 | 续196 做过套娃改版 + 统一字号；**需要主理人给截图定位**（挂账） |
+| 二-5 全面核查功能是否正常 | 门禁已在跑：续212 实测 **SMOKE PASS（组标题打印 223、AssertionError 0）** |
+| 二-6 多任务会不会影响流程 | 默认 1 worker **串行**最安全（省带宽、少触发风控）；可调到 8；阶段内与任务级并发吃同一套全局闸（`throttle`）与 SQLite（WAL），不会互偷预算 |
+
+### 四项目借鉴：八维度汇总（基于 2026-10-14 完整读码 `docs/ref-projects-2026-10-14.md` + 本轮代码核对）
+
+| 维度 | 结论（我们的现状） |
+|---|---|
+| 架构 | 四家无一优于我们的 runner/StageContext/协作式取消/断点续跑；ShuiZe 的「插件式收集源目录」我们 `stages/` 已同形 |
+| 未用到的东西 | ShuiZe 4 个收集源：host 碰撞 **✅已落地（续183/201/203，默认开）**、ICP 备案反查 **❌等接口+key**、爱企查企业关联 **❌付费第三方，不借鉴**、参数链接收集 **△部分等价（续198 crawl + 参数路由）** |
+| 他做得更好的 | ARTEX 复测三态 **✅续150 立三态 + 续180 补「执行失败⇒无法确认」**；ARTEX guard 结构化拦截审计 **✅续182（audit.KIND_SCAN_BLOCK）**；ShuiZe docker 一键 **✅install.sh/start.sh + docker_todo/**；tqdm 彩色 CLI **✅续212（进度条 + 日志打在条上方）** |
+| 功能完整度 | 13 阶段 + POC 引擎 + 14 内置检查 + 指纹/POC 联动；缺的只有 ICP/VT 这类第三方情报源（等 key） |
+| 发现强度 | 强于 ShuiZe（它靠外部 nuclei）；弱项在第三方情报覆盖面（FOFA/Shodan/Quake 有、VT/ICP 无） |
+| 强壮度 | **我们最高**：请求预算/协作式取消/断点续跑/去重口径/审计；ShuiZe 最弱（裸 except、无预算） |
+| 可迁移性 | `.venv` 不可搬是已知项，但有 `migrate.py` 导出/导入（续136）；docker 化已有 `docker_todo/Dockerfile` |
+| 便捷性 | install.sh/start.sh 一键 + `--bootstrap`；缺 ARTEX 那种纯前端 Mock Demo（价值低，不借鉴） |
+
+**借鉴清单剩下没做的只有三条**：ICP 备案反查（等接口+key）、VirusTotal（等 key）、P2-12 真任务 profiling
+（单任务 CPU/内存实测 → 动态档位；续179 的基准是合成回环，不是真任务）。
+
 ## 续212（2026-10-17，WorkBuddy · CodeBuddy）：P3-14① CLI 日志不刷乱进度条（+ P1-9 拍板不做）
 
 主理人点单：「P1-9 授权范围对象化这个感觉没必要，因为实机都是我自己填进去的；
