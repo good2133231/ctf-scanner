@@ -806,7 +806,7 @@
       <b>这是候选清单，不是结论</b>：同形状的 <code>flag{xxx}</code> 与 <code>AKIA…</code> 经常是模板或
       JS 里的占位符，逐条判真才是结论 —— 清单刻意偏宽，因为漏报的代价是丢一道题，误报的代价只是多看一眼。</p>
     <table id="tbl-flags">
-      <thead><tr><th>值</th><th>形状</th><th>来源</th><th>URL</th><th>上下文</th><th>复现</th></tr></thead>
+      <thead><tr><th>值</th><th>形状</th><th>来源</th><th>URL</th><th>上下文</th><th>复核</th><th>复现</th></tr></thead>
       <tbody>
       {% for f in flags %}
         <tr><td class="mono">{{ f.value }}</td><td class="muted">{{ f.kind }}</td>
@@ -821,6 +821,14 @@
             <pre id="fcurl-{{ f.id }}">{{ _fc }}</pre>
             <pre id="fpy-{{ f.id }}">{{ packet_python('', f.url) }}</pre></details>
             {% else %}<span class="muted">-</span>{% endif %}</td></tr>
+          {# 续208（主理人点单第 5 条）：复核 = 误报一键拉黑。值已在「值」列**完整显示**（flags 表存原文），
+             判了误报就加进**值级黑名单**（secretbl，判据唯一产地）并删掉当前行 ——
+             下次抽取（flagfind.harvest / jsmine）经过 filter_secrets 就不再显示。加黑名单记审计。 #}
+          <td><form class="inline-form" method="post" action="{{ url_for('api_flag_blacklist') }}"
+                onsubmit="return confirm('把该值加进黑名单并删除这条候选？\\n\\n{{ f.value[:80] }}');">
+            <input type="hidden" name="flag_id" value="{{ f.id }}">
+            <button class="btn-mini ghost" type="submit"
+              title="误报：该值加进值级黑名单（下次抽取不再显示），并删除当前这条候选">误报</button></form></td></tr>
       {% else %}
         <tr><td colspan="6" class="muted">还没有候选。抽取只吃已经抓到的正文，所以
           「没跑过 probe / jsmine / dirscan / vulnscan 的任务」本来就是空的，不等于"目标没有敏感信息"。</td></tr>

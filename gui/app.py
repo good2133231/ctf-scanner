@@ -3427,6 +3427,39 @@ def create_app():
     # ⇒ POC 分两档：**验证型**（SQL 注入报错回显 / XSS 反射 / 开放重定向…）照旧自动跑；
     #    **利用型**（命令执行 / 写文件 / 删改数据）不进 POC 目录（引擎发现不了），落到
     #    `config/exp-pending/`，只在这一页列着，人点了才跑。物理隔离，不靠约定。
+    @app.route("/api/flags/blacklist", methods=["POST"])
+    @login_required
+    def api_flag_blacklist():
+        """把一条敏感信息候选标记为**误报**（续208，主理人点单第 5 条）。
+
+        「显示具体值 / 单独一行」其实已经有了（flags 表存**原文**、候选页一条一行），
+        缺的是**复核动作**：看到误报，一键把那个值加进**值级黑名单**（`scanner/secretbl.py`
+        —— 判据唯一产地），下次抽取（flagfind.harvest / jsmine）经过 `filter_secrets`
+        就不再显示。同时**删掉当前这条**（它已经是被你判了死刑的噪声，留着只会再让人看一遍）。
+        加黑名单记审计（谁、把什么值拉黑）—— 黑名单影响的是**所有账号**的抽取口径。
+        """
+        fid = str(request.form.get("flag_id") or "").strip()
+        if not fid.isdigit():
+            return jsonify({"ok": False, "error": "缺 flag_id"}), 400
+        row = db._query("SELECT id, value, kind FROM flags WHERE id=?", (int(fid),))
+        if not row:
+            return jsonify({"ok": False, "error": f"候选不存在：{fid}"}), 404
+        f = dict(row[0])
+        from scanner import secretbl as _sb208
+        _sb208.add(f["value"], kind=f["kind"] or "",
+                   note=f"误报（候选 #{fid}）", owner_id=0)
+        db._exec("DELETE FROM flags WHERE id=?", (int(fid),))
+        me = _session_user() or {}
+        try:
+            audit.record("flag-blacklist", me.get("username", ""), request.remote_addr or "",
+                         target=f["url"] or "", detail=f"{f['kind']}: {f['value'][:60]}",
+                         ok=True, actor_role=me.get("role", ""), settings=settings)
+        except Exception:                        # noqa: BLE001 —— 审计失败不吞结果
+            logger.warning(f"[flags] 审计写入失败（{f['kind']} 值已入黑名单）")
+        logger.info(f"[flags] 候选 #{fid} 判误报 → 值级黑名单 + 删除当前行"
+                    f"（{f['kind']}，下次抽取不再显示）")
+        return jsonify({"ok": True, "removed": int(fid)})
+
     @app.route("/exp")
     @login_required
     def exp_pending():

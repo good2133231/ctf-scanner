@@ -27331,6 +27331,35 @@ expression: r0()
     print("[207] 续207 ok: 验证型(SQLi/XSS/盲注/whoami端点)自动跑｜利用型(RCE/写操作)分流保留｜"
           "EXP 落引擎发现不了的目录(POC_DIRS 无 exp-pending)｜/exp 清单页+手动执行(三态拒绝/"
           "一次一个/结果不落 vulns 表)")
+    # ---- [208] 续208：敏感信息候选的复核闭环（误报一键拉黑）----
+    # 值级黑名单的**判据产地**是 secretbl（续177 就有）；本轮补的是**入口**：
+    # 候选页每行「误报」按钮 → secretbl.add + 删当前行 ⇒ 下次抽取不再显示。
+    _tid208 = db.create_task("smoke-208", "https://f208.test/", ["jsmine"], {})
+    db.insert_flag(_tid208, {"value": "AKIAIOSFODNN7EXAMPLE", "kind": "aws-access-key",
+                             "source": "js", "url": "https://f208.test/a.js"})
+    _fid208 = db._query("SELECT id FROM flags WHERE task_id=?", (_tid208,))[0]["id"]
+    # 缺参 / 不存在的候选
+    assert c.post("/api/flags/blacklist", data={}).status_code == 400
+    assert c.post("/api/flags/blacklist", data={"flag_id": "999999"}).status_code == 404
+    # 真拉黑：候选行被删 + 值进黑名单 + **下次抽取被过滤**（filter_secrets 全链路）
+    _r208 = c.post("/api/flags/blacklist", data={"flag_id": str(_fid208)})
+    assert _r208.status_code == 200 and _r208.get_json()["ok"], _r208.get_data(as_text=True)[:200]
+    assert db._query("SELECT id FROM flags WHERE id=?", (_fid208,)) == [], "候选行没删"
+    from scanner import secretbl as _sb208
+    assert _sb208.matches("AKIAIOSFODNN7EXAMPLE", _sb208.load(None)), "值没进黑名单"
+    _kept208, _blk208 = _sb208.filter_secrets([{"kind": "aws-access-key",
+                                                "value": "AKIAIOSFODNN7EXAMPLE"}])
+    assert _kept208 == [] and _blk208, "filter_secrets 没把黑名单值挡掉"
+    # 清理：黑名单是**全局口径**（owner_id=0），测试值必须拿掉，否则污染其它用例
+    _e208 = [e for e in _sb208.load(None) if "AKIAIOSFODNN7EXAMPLE" in (_sb208._entry_value(e) or "")]
+    for e in _e208:
+        _sb208.remove(e["id"], owner_id=None)
+    assert _sb208.matches("AKIAIOSFODNN7EXAMPLE", _sb208.load(None)) is False, "清理失败"
+    # 页面：按钮在
+    _h208 = c.get(f"/tasks/{_tid208}").get_data(as_text=True)
+    assert "api_flag_blacklist" in _h208, "候选页没有「误报」按钮"
+    print("[208] 续208 ok: 敏感信息复核闭环（误报一键拉黑：行删 + 值进 secretbl + "
+          "filter_secrets 全链路挡掉 + 审计）")
     print("SMOKE PASS")
 
 
