@@ -240,6 +240,36 @@ def is_uniform_block(digest, length, blk_md5s, blk_sizes):
     return bool(blk_sizes and (length or 0) in blk_sizes)
 
 
+# 续208-T2：路径像**数据文件**而响应是 **HTML 文档** => 语义矛盾，判软 404 模板。
+# 为什么单独立一条（而不扩 is_uniform_block）：基线比对对**响应不稳定**的站点会失效
+# —— 那一档由 T1 的 baseline-unverified 明说「这次没证据」；而内容判定不依赖基线，
+# 两条判据各有适用面，合并会让「谁在承重」说不清（参照 7scanai dirsearch_filter.py:177-186，
+# 注释原话：对响应不稳定的站点基线比对会失效，HTML 内容判定仍成立）。
+# 反向保证：真数据文件返回**非 HTML** 正文时这条绝不生效（.env 回 text/plain 键值
+# 必须照常入库，否则就是把 A01 真发现吃了）。
+_DATA_FILE_RE = re.compile(
+    r"\.(env|sql|sqlite3?|db|bak|old|zip|tar|tgz|log|ini|conf|config|ya?ml|json|xml|csv"
+    r"|pem|key|crt|jks|war|jar|ds_store|htpasswd|htaccess)(\.|$)"
+    r"|/\.(env|git|svn|htaccess|ds_store)(/|$)"
+    r"|(^|/)(config|settings|database|backup|dump|configuration|wp-config)(\.|/|$)",
+    re.I)
+
+
+def datafile_html_contradiction(path, text):
+    """T2 判据：路径像数据文件、响应体是 HTML 文档 => True（见上面注释）。
+
+    纯函数（不读库、不发请求）—— 与 is_uniform_block / block_markers() 并排，
+    不在阶段循环里内联写正则（§5.14 产地纪律）。
+    """
+    t = str(text or "").strip().lower()
+    if not t:
+        return False
+    head = t[:512]
+    is_html = (head.startswith("<!doctype html") or "<html" in head
+               or "<head" in head or "<body" in head)
+    return bool(is_html) and bool(_DATA_FILE_RE.search(str(path or "")))
+
+
 _BLOCK_FILE = "config/dicts/waf_block_titles.txt"
 # 文件缺失/读不出来时回退这两条：都是 Cloudflare 的专属文案，绝不会撞 nginx 默认 403 页
 _BLOCK_FALLBACK = ("attention required! | cloudflare", "just a moment...")
@@ -825,6 +855,8 @@ class DirscanStage(Stage):
         _dcfg = (ctx.settings.get("dirscan") or {})   # 续151：ML 开关
         baseline = {}
         baseline_lock = threading.Lock()
+        unverified = {}            # 续208-T1：站点 => 基线不可得的命中条数
+        contra = {}                # 续208-T2：站点 => 语义矛盾判掉的命中条数
         # 两类"整站统一响应"的计数（基址 → 被滤掉的路径数 / 那张页的特征）：
         # 复用 `baseline_lock` 同步（同一批线程、同一类一次性累加，没必要再多一把锁）
         blocked, blocked_sig = {}, {}          # 随机路径也被拦、正文同内容的 403
@@ -861,12 +893,14 @@ class DirscanStage(Stage):
                 md5s, sizes = set(), set()
                 blk_md5s, blk_sizes = set(), set()
                 texts = []                             # 续151：留正文给 n-gram 兜底
+                ok_samples = 0                          # 续208-T1：成功取到的样本数
                 for _ in range(3):
                     marker = f"/{random.randint(10 ** 6, 10 ** 7 - 1)}/ctfscan-none"
                     r = http_request(u.rstrip("/") + marker, timeout=timeout,
                                      settings=ctx.settings, auth=True)
                     if not r:
-                        continue
+                        continue          # 三次全失败 => ok_samples 停在 0（T1 要的就是它）
+                    ok_samples += 1
                     digest = hashlib.md5((r.get("text") or "").encode(
                         "utf-8", "replace")).hexdigest()
                     md5s.add(digest)
@@ -877,14 +911,18 @@ class DirscanStage(Stage):
                         blk_md5s.add(digest)
                         if r.get("length"):
                             blk_sizes.add(int(r["length"]))
-                baseline[u] = (md5s, sizes, blk_md5s, blk_sizes, texts)
+                # 续208-T1：元组多带一个 ok_samples（三次里成功取到几次）。
+                # 它是 0 时 => 这一轮软 404 过滤没有任何证据，而命中项仍会以「已验证的真发现」
+                # 形状入库、进页面、进报告 —— 读报告的人分不清「确实有 .env」与「当时没比成」
+                # （AGENTS §6.2 第十七起同族毛病）。
+                baseline[u] = (md5s, sizes, blk_md5s, blk_sizes, texts, ok_samples)
                 return baseline[u]
 
         def _hit(item):
             if ctx.stopped():
                 return None
             u, p, root = item
-            md5s, sizes, blk_md5s, blk_sizes, btexts = _baseline(u)
+            md5s, sizes, blk_md5s, blk_sizes, btexts, ok_base = _baseline(u)
             url = u.rstrip("/") + "/" + p.lstrip("/")
             r = http_request(url, timeout=timeout, settings=ctx.settings, auth=True)
             if not r:
@@ -901,6 +939,11 @@ class DirscanStage(Stage):
                 # 仅当基线正文本身就**不稳定**（3 个随机路径回了 ≥2 种 md5）时才兜底；
                 # 只对够长的正文（≥128 字节）判 n-gram Jaccard，避开超短文本不稳的那一档。
                 # 稳定站点的 3 个基线 md5 相同 ⇒ 走不到这里，既有行为一字不变。
+                # 续208-T2：不依赖基线的语义矛盾判据（路径像数据文件却回 HTML 文档）
+                if datafile_html_contradiction(url, r.get("text")):
+                    with baseline_lock:
+                        contra[u] = contra.get(u, 0) + 1
+                    return None
                 if (_dcfg.get("ml_template", True) is not False) \
                         and len(md5s) >= 2 and len(btexts) >= 2:
                     _body = r.get("text") or ""
@@ -940,8 +983,15 @@ class DirscanStage(Stage):
             # 也只会在候选表里留同一个值 / 只会把同一批标签重复攒进同一个站点。
             flagfind.harvest(ctx, url, r.get("text") or "", "dir")
             fingerprint.collect(ctx, root, r, "dir")
+            # 续208-T1：基线一个样本都没取到 => note 追加固定 token。命中照常入库
+            #（展示层过滤 != 删数据，§0 第 10 条），只是把「这次没证据」写进数据里。
+            _note = "builtin"
+            if ok_base == 0:
+                _note = "builtin+baseline-unverified"
+                with baseline_lock:
+                    unverified[u] = unverified.get(u, 0) + 1
             return {"site_url": root, "path": url, "status": st,
-                    "length": r.get("length"), "method": "GET", "note": "builtin",
+                    "length": r.get("length"), "method": "GET", "note": _note,
                     "title": title}
 
         entries = [e for e in pool_run(_hit, jobs, workers=workers,
@@ -956,6 +1006,17 @@ class DirscanStage(Stage):
             ctx.logger.info(
                 f"[dirscan] {u} 的 {blocked[u]} 个路径返回与随机路径**完全相同**的 403 拦截页"
                 f"（长度 {blocked_sig.get(u)}），判为整站被拦、不计入目录发现")
+        # 续208-T1/T2：滤掉了什么必须说（§0 第 10 条）；两种「没证据」分开说，
+        # 因为下一步不同：基线不可得要重试/换字典，语义矛盾说明命中页本身就是模板。
+        for u in sorted(unverified):
+            ctx.logger.info(
+                f"[dirscan] {u} 有 {unverified[u]} 条命中的**基线不可得**"
+                f"（3 次随机路径都没取到样本）=> 这一轮软 404 过滤没有证据；"
+                f"命中照常入库、note 标 baseline-unverified（不是假发现，是「没比成」）")
+        for u in sorted(contra):
+            ctx.logger.info(
+                f"[dirscan] {u} 有 {contra[u]} 条命中被**语义矛盾判据**滤掉"
+                f"（路径像数据文件却返回 HTML 文档 => 软 404 模板页）")
         for u in sorted(soft):
             ctx.logger.info(
                 f"[dirscan] {u} 的 {soft[u]} 个路径正文与随机路径基线**近重复**"

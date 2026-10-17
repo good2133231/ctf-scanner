@@ -27367,6 +27367,65 @@ expression: r0()
     assert "/api/flags/blacklist" in _h208, "候选页没有「误报」按钮"
     print("[208] 续208 ok: 敏感信息复核闭环（误报一键拉黑：行删 + 值进 secretbl + "
           "filter_secrets 全链路挡掉 + 审计）")
+    # ---- [210] 续210：借鉴落地 T1/T2（软 404 两档：基线不可得要明说 + 语义矛盾判据）----
+    # 来源：/opt/tools/ctf/借鉴落地待办草案-2026-10-15.md（P0-1 / P0-2），
+    #       证据：7scanai dirsearch_filter.py:139-160 / :177-186
+    from scanner.stages import dirscan as _ds210
+
+    # ① T2 纯函数：路径像数据文件 + 响应是 HTML 文档 => True；非 HTML 正文**绝不**被挡
+    assert _ds210.datafile_html_contradiction("/.env", "<!DOCTYPE html><html><body>x</body>")
+    assert _ds210.datafile_html_contradiction("/wp-config.php.bak", "<html><head><title>t")
+    assert _ds210.datafile_html_contradiction("/backup.sql", "<body>hello</body>")
+    assert _ds210.datafile_html_contradiction("/.git/config", "<html>oops</html>")
+    # 反向（这条是 A01 真发现，被挡就是把发现吃了）
+    assert not _ds210.datafile_html_contradiction(
+        "/.env", "DB_PASSWORD=abc\nAPI_KEY=xyz\n"), "真 .env 的键值正文绝不能被挡"
+    assert not _ds210.datafile_html_contradiction("/backup.sql", "-- dump\nCREATE TABLE t")
+    # 路径不像数据文件时，回什么都不算矛盾
+    assert not _ds210.datafile_html_contradiction("/admin", "<html><body>login</body>")
+    # 空正文不判（没证据）
+    assert not _ds210.datafile_html_contradiction("/.env", "")
+
+    # ② T1 阶段级：基线三次全失败 => 命中照常入库，但 note 必须标明「没证据」
+    def _run210(baseline_ok):
+        """跑一轮 dirscan（桩 http_request：基线可控成败，命中恒返 200+HTML）。"""
+        _real210 = _ds210.http_request
+
+        def _fake(url, **kw):
+            if "ctfscan-none" in url:                    # 基线用的随机 marker 路径
+                return None if not baseline_ok else {
+                    "status": 404, "text": "<html>nf</html>", "length": 12, "headers": {}}
+            return {"status": 200, "text": "<html><title>hit</title></html>",
+                    "length": 30, "headers": {}}
+
+        _ds210.http_request = _fake
+        try:
+            _tid = db.create_task("smoke-210", "https://t210.test/", ["dirscan"], {})
+            _wd = Path(_TMPDIR) / f"dirscan210_{_tid}"
+            _wd.mkdir(parents=True, exist_ok=True)
+            _cfg = copy.deepcopy(settings)
+            _cfg["dirscan"] = {"enabled": True, "big_dict": False, "max_paths": 60}
+            _cfg["tools"]["dirmap"]["script"] = "tools/does-not-exist.py"
+            _ctx = StageContext(_tid, "smoke-210", parse_lines(["https://t210.test/"]),
+                                ["dirscan"], {"offline": True}, _cfg, _wd, _Rec())
+            _ctx.results["sites"] = [{"url": "https://t210.test/", "host": "t210.test",
+                                      "title": "T", "length": 30}]
+            PipelineRunner(_ctx).run()
+            return _tid, [dict(r) for r in db.list_dirs(_tid)]
+        finally:
+            _ds210.http_request = _real210
+
+    _t_bad, _rows_bad = _run210(baseline_ok=False)
+    assert _rows_bad, "基线失败也该有命中入库（不许变成静默无结果）"
+    assert all("baseline-unverified" in (r.get("note") or "") for r in _rows_bad), \
+        f"基线不可得时 note 必须标明：{[r.get('note') for r in _rows_bad]}"
+    # 变异：基线取得到 => note 不该带这个 token（承重的正是 ok_samples 那个计数）
+    _t_ok, _rows_ok = _run210(baseline_ok=True)
+    assert _rows_ok and not any("baseline-unverified" in (r.get("note") or "")
+                                for r in _rows_ok), \
+        f"基线正常时不该标 baseline-unverified：{[r.get('note') for r in _rows_ok]}"
+    print("[210] 续210 ok: T1 基线不可得要明说（命中照常入库+note 标 token，两向变异）｜"
+          "T2 语义矛盾判据（数据文件路径回 HTML => 挡；真键值正文/非数据路径/空正文绝不挡）")
     print("SMOKE PASS")
 
 

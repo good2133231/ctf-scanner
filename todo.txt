@@ -4303,6 +4303,28 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续210（2026-10-17，WorkBuddy · CodeBuddy）：借鉴落地 T1/T2（软 404 两档）
+
+- [x] **读到上级目录两份四项目成果**（结论 461 行 + 待办草案 210 行）并**逐条核查覆盖度**：
+  多数已做（hostcollide 接线 / SAN 消费 / 参数化链接喂注入 / dummy verify）；未做 = T1/T2/T3 + 配额预检
+- [x] **T1 基线不可得要明说**：`ok_samples` 计数 + 命中照常入库 + `note=builtin+baseline-unverified`
+      + 站点记账 + 轮末日志点名（零新增请求）
+- [x] **T2 语义矛盾判据**：`datafile_html_contradiction()`（数据文件路径回 HTML ⇒ 软 404 模板；
+      真键值正文绝不挡）——与 is_uniform_block 并排的纯函数
+- [x] [210] 断言组（T2 四正四反 + T1 阶段级两向变异）；SMOKE PASS；EOL 校验逐字相同
+
+**下一轮（续211）——只放未做的（均来自上级目录草案）：**
+- [ ] **T3 子进程整组收割**（`utils.py::_do_run_cmd` 改 Popen(start_new_session=True) + killpg；
+      Windows 分叉；先收割后还槽；夹具要合成"父杀孙活"脚本验证）——草案标风险最高，单独一轮
+- [ ] **P1-4 外部引擎配额/积分预检**（FOFA/Shodan/Quake 开跑前问一句"我还有额度吗"，形状抄
+      `iprecon.preflight()`；auth=False；跳过必须点名）
+- [ ] **P1-7 证据三硬闸**（无证据必 pending、未证实高危夹级别、缺二次验证不给结论正文）
+- [ ] **P2-11 SQL 报错特征库扩到 89 条**（ShuiZe errors.xml 人工复核后落**外置表**，不进硬编）
+- [ ] **P1-8 同簇复核顶班**（`poc_review --dupes` 已有事实，缺机制；机器不判定）
+- [ ] **P2-10 具名取消原因**（18 种 cause；与 tasks.error 兼容，不拼第二份句子）
+- [ ] **P2-12 吞吐实测→预计耗时→阈值降档 + 覆盖边界进报告**
+- [ ] 其余小项（P1-9 授权范围对象化 / P3-14 tqdm 形态 CLI 输出）——见草案 §4
+
 ## 续209（2026-10-17，WorkBuddy · CodeBuddy）：核查轮——主理人清单逐项对账
 
 纯核查轮（无代码改动）。主理人贴的清单里多数项**已被之前轮次覆盖**，逐项对账写进
