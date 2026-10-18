@@ -216,6 +216,9 @@ th { color:var(--muted); font-weight:600; font-size:12px; white-space:nowrap; }
 #tbl-tasks td, #tbl-tasks th { vertical-align:middle; }
 #tbl-tasks td:nth-child(3) { min-width:220px; }
 #tbl-tasks td:nth-child(4) { min-width:170px; }
+/* 续216：子任务行在名称列缩进一格；只动名称列，不挤操作列（树形层级靠这里，
+   预览框里仍由服务端按深度缩进，两处互不依赖）。 */
+#tbl-tasks tr.task-child td:nth-child(3) { padding-left:18px; }
 #tbl-tasks td:nth-child(5), #tbl-tasks td:nth-child(6),
 #tbl-tasks td:nth-child(7), #tbl-tasks td:nth-child(8),
 #tbl-tasks td:nth-child(9), #tbl-tasks td:nth-child(10),

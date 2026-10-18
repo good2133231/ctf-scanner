@@ -4303,6 +4303,24 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续216（2026-10-18，WorkBuddy · Claude）：排期收口 —— IP 反查逐源成败 + 队列运行中扩缩容 + 续175 凭据/fontconfig
+
+接续 续215「下一轮」清单与续175 两项；主理人原话「接着做完」。细节与实测数字见 CHANGELOG 续216
+（唯一产地，不在这里抄第二份）。
+
+- [x] **续173 的可诊断性**：`iprecon.reverse_lookup_detail()` 五档（ok/empty/http_error/network_error/unregistered）+ `format_source_stats()` 一行汇总；`osint` 打日志并落 `iprecon_sources.json`；显式空源不再回落默认源（[216] 钉住）
+- [x] **队列运行中改并发**：`queue.reconfigure(n)` 扩容立即生效、缩容跑完当前任务再退场；GUI 保存按 `queue.config(settings)` 生效（不绕 auto/profile 两道闸）；退休线程不占编制（3→1→3 断言 + 真实线程复验）
+- [x] **续175 两项**：安装收尾 `prompt_credentials()`（仅 TTY、非交互跳过、进程内复用 `run_keys`、临时明文 `--shred`）；`screenshot.fontconfig` 四方接线 + `run_cmd(extra_env=)` + `has_cjk_font()` 认 `tools/fonts/`
+- [x] **连带修复**：`icp._api_key()` 优先 `settings["keys"]["icp"]["api_key"]`（否则安装向导填的 ICP key 等于没填）；`keys.yaml.example` 补 `icp` 组
+- [x] **任务列表树形缩进**：`tasks.html` + `style.css` 子任务名称列缩进一格（续215 说"价值低"的那项，顺手收口）
+- [x] **门禁**：[216] 一组 + SMOKE PASS（最终代码复跑）；两式 numstat 逐文件相等（本轮替换工具两次把整份行尾归一，已按 §9 difflib 重建，见 CHANGELOG）
+
+**下一轮（续216 之后）——只放未做的：**
+- [ ] VT / ICP 真机验收：等主理人填 `virustotal.key` 与可用 ICP 源（或换机器）后跑 `python tools/check_intel_sources.py --strict`
+- [ ] 续175 剩余四项：`CTFSCANNER_KEYS_*` 环境变量那一半、dirmap 便携 Python、chrome win/mac 摘要、干净克隆 `./install.sh --full` 真机数字
+- [ ] 续173 剩余：PTR 自实现已在续184，三源成败的真机联网输出仍未验（本轮只验合成五档）
+- [ ] `tests/smoke.py` 的 8765 夹具：`start_fixture()` 绑定失败会静默返回 None（首跑 [3e] 假红），是否该显式报错/重试
+
 ## 续215（2026-10-18，WorkBuddy · CodeBuddy）：P2-12 真任务资源画像 + 任务表/仪表盘挤压修复 + VT/ICP 真机验收（无 key）
 
 - [x] **P2-12 真任务 profiling**：新 `scanner/profiling.py`（`TaskProfile` + `suggest_workers` +

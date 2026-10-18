@@ -56,9 +56,17 @@ def _sources(settings):
 
 
 def _api_key(settings):
-    """查询用的 key：只从 `icp.api_key`（**值在 keys.enc.yaml 里，不落明文**）取。"""
+    """查询用的 key：优先 `settings["keys"]["icp"]["api_key"]`（加密凭据，**不落明文**）。
+
+    settings.yaml 里那个 `icp.api_key` 是历史占位（也已写死为空），只在没有 keys 段时兜底 ——
+    续216 的安装凭据录入把值写进 `keys.enc.yaml`，若这里只读 settings 段，用户填了也等于没填。
+    """
+    keys = ((settings or {}).get("keys") or {}).get("icp") or {}
+    val = str(keys.get("api_key") or "").strip()
+    if val:
+        return val
     cfg = (settings or {}).get("icp", {}) or {}
-    return str(cfg.get("api_key") or "")
+    return str(cfg.get("api_key") or "").strip()
 
 
 def _fill(url, domain):

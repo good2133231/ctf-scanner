@@ -4718,7 +4718,9 @@ def create_app():
                                    "block_extra": [x for x in re.split(r"[,，;；\s]+",
                                                        str(f.get("screenshot_block_extra") or ""))
                                                    if x.strip()],
-                                   "browser": (f.get("screenshot_browser") or "").strip()},
+                                   "browser": (f.get("screenshot_browser") or "").strip(),
+                                   # 续175：留空＝不注入；填相对路径按仓库根解释
+                                   "fontconfig": (f.get("screenshot_fontconfig") or "").strip()},
                     # TLS 证书取证（可选，默认关）：只对 https / tls_ports 站点做一次只读握手
                     "cert": {"enabled": f.get("cert_enabled") == "1",
                              "max_sites": int(f.get("cert_max_sites", 30) or 30),
@@ -4959,6 +4961,15 @@ def create_app():
                 settings = _saved
             _audit(audit.KIND_SETTINGS, target=",".join(_changed) or "（无变化）",
                    detail=f"保存策略配置（变更区块：{','.join(_changed) or '无'}）")
+            # 续216：保存策略后让 queue.workers **当场生效**（扩容立即起线程；缩容让多出的
+            # 线程跑完当前任务再退场）。队列没启动时 reconfigure 什么都不做，等下次启动按配置起。
+            # 目标数必须走 `queue.config(settings)`，不能拿表单里的裸值：`workers_auto` /
+            # `workers_profile` 两道"只往下收"的闸也在那里，绕过去就等于保存一次把画像降档
+            # 顶回配置值（续216 断言钉住这条接线）。
+            try:
+                queue.reconfigure(queue.config(settings)["workers"], settings)
+            except Exception:                       # noqa: BLE001 - 重配失败不许影响保存
+                pass
             return redirect(url_for("settings_page"))
         return render_template("settings.html", s=settings, checks=owasp_checks,
                                bl=blacklist.load(settings, owner_id=_owner_scope()),

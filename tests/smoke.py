@@ -28210,6 +28210,139 @@ expression: r0()
           "effective_workers 只开 profile 也降、'false' 不降、无证据不降｜"
           "runner 深拷贝注入｜真 run_task 落画像｜create_task 逗号串不再逐字拆")
 
+    # ------------------------------------------------------------------ [216]
+    # 续216：排期收口 —— ① IP 反查逐源成败（续173 的可诊断性）；② 队列运行中扩缩容；
+    # ③ 续175 的安装凭据非交互跳过 + fontconfig 接线。
+    from scanner import iprecon as _ip216
+    from scanner import queue as _q216
+    from scanner import screenshot as _shot216
+
+    # ⓪ 续175：安装末尾凭据录入非交互必跳过；fontconfig 四方一致且只注入子进程
+    import run_bootstrap as _rb216
+    assert _rb216.prompt_credentials(ask=False) is False, "非交互环境不许挂住/不许写凭据"
+    # 凭据录入必须进程内复用 run_keys，不许在本文件再起子进程（[8d] 的红线）
+    _rb216_src = (ROOT / "run_bootstrap.py").read_text(encoding="utf-8", errors="replace")
+    assert "cli.run_keys" in _rb216_src and "subprocess.call(" not in _rb216_src
+    assert "fontconfig" in _cf215.DEFAULTS["screenshot"], "DEFAULTS 缺 screenshot.fontconfig"
+    assert "screenshot_fontconfig" in (
+        ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
+    assert '"screenshot_fontconfig"' in (
+        ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    _fc216 = tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False, encoding="utf-8")
+    _fc216.write("<fontconfig></fontconfig>\n"); _fc216.close()
+    try:
+        _env216 = _shot216._browser_env({"screenshot": {"fontconfig": _fc216.name}})
+        assert _env216 and _env216.get("FONTCONFIG_FILE") == _fc216.name, _env216
+        assert _shot216._browser_env({"screenshot": {"fontconfig": ""}}) is None
+        assert _shot216.fontconfig_file({"screenshot": {"fontconfig": "no-such.conf"}}) == ""
+    finally:
+        os.unlink(_fc216.name)
+
+    # ① 逐源状态：HTTP 403 / 200 命中 / 未知源 三种必须分得开
+    def _fake403_216(ip, settings, logger=None, timeout=None, raw=False):
+        _ip216._src_mark(403, "HTTP 403")
+        return []
+
+    def _fakeok_216(ip, settings, logger=None, timeout=None, raw=False):
+        _ip216._src_mark(200, "", 1)
+        return ["a.example.com"]
+
+    _old_src216 = dict(_ip216._SOURCES)
+    _old_pf216 = _ip216.preflight
+    _ip216._SOURCES["f403"] = _fake403_216
+    _ip216._SOURCES["fok"] = _fakeok_216
+    try:
+        _doms216, _rows216 = _ip216.reverse_lookup_detail(
+            "8.8.8.8", {"iprecon": {}}, sources=["f403", "fok", "nope"])
+        assert _doms216 == ["a.example.com"], _doms216
+        _by216 = {r["name"]: r for r in _rows216}
+        assert _by216["f403"]["status"] == "http_error" and _by216["f403"]["http"] == 403
+        assert _by216["fok"]["status"] == "ok" and _by216["fok"]["found"] == 1
+        assert _by216["nope"]["status"] == "unregistered", _by216
+        # 旧 API 仍返回纯列表（兼容性）
+        assert _ip216.reverse_lookup("8.8.8.8", {"iprecon": {}},
+                                     sources=["fok"]) == ["a.example.com"]
+        # 显式空源＝预检后一个都不剩：不许被 `sources or …` 当成"没传"回头再打默认源
+        assert _ip216.reverse_lookup_detail(
+            "8.8.8.8", {"iprecon": {"sources": ["fok"]}}, sources=[]) == ([], [])
+        # lookup_many 的汇总要同时有"试过"与"预检跳过"两类
+        _ip216.preflight = lambda *a, **k: (["f403", "fok"], {"dead": "HTTP 530"})
+        _map216, _st216 = _ip216.lookup_many(
+            ["8.8.8.8"], {"iprecon": {"sources": ["f403", "fok"], "workers": 1, "timeout": 1}})
+        assert _map216.get("8.8.8.8") == ["a.example.com"], _map216
+        _ss216 = _st216["sources"]
+        assert _ss216["f403"]["attempted"] == 1 and _ss216["f403"]["http"]["403"] == 1
+        assert _ss216["fok"]["ok"] == 1 and _ss216["dead"]["skipped"] == 1, _ss216
+        _line216 = _ip216.format_source_stats(_ss216)
+        assert "f403" in _line216 and "HTTP 403" in _line216 and "dead 未试" in _line216, _line216
+    finally:
+        _ip216._SOURCES.clear()
+        _ip216._SOURCES.update(_old_src216)
+        _ip216.preflight = _old_pf216
+
+    # ② 队列运行中 1→3→1；缩容线程跑完当前任务后退场，active_workers 跟着变
+    _orig_claim216 = db.claim_next_queued
+    db.claim_next_queued = lambda: None
+    _q216.stop()
+    try:
+        _qs216 = {"queue": {"workers": 1, "workers_auto": False, "workers_profile": False}}
+        _q216.start(_qs216, dispatch=lambda tid, mode: None)
+        _wait216 = time.time() + 2
+        while _q216.active_workers() != 1 and time.time() < _wait216:
+            time.sleep(0.02)
+        assert _q216.active_workers() == 1, _q216.active_workers()
+        assert _q216.reconfigure(3, _qs216)["ok"] and _q216.active_workers() == 3
+        assert _q216.reconfigure(1, _qs216)["ok"]
+        _wait216 = time.time() + 4
+        while _q216.active_workers() != 1 and time.time() < _wait216:
+            time.sleep(0.05)
+        assert _q216.active_workers() == 1, f"缩容后应剩 1 个，实际 {_q216.active_workers()}"
+    finally:
+        _q216.stop()
+        db.claim_next_queued = _orig_claim216
+
+    # ②b 连续 3→1→3：已打退休信号但还在跑当前任务的线程**不算编制**，否则补不够人。
+    #     用假线程钉住这一刻的判定（真线程跑得太快，时序上抓不稳）。
+    _Q216 = _q216._QUEUE
+
+    class _T216:
+        def __init__(self, name):
+            self.name = name
+
+        def is_alive(self):
+            return True
+
+    _t216 = [_T216("a"), _T216("b"), _T216("c")]
+    _ev216 = [threading.Event() for _ in range(3)]
+    _ev216[0].set()
+    _ev216[1].set()                      # 前两个已退休、还没退出；第三个在编
+    _spawned216 = []
+    _old_spawn216 = _Q216._spawn_locked
+    _old_threads216 = list(_Q216._threads)
+    _old_retire216 = dict(_Q216._retire)
+    _Q216._threads = list(_t216)
+    _Q216._retire = dict(zip(_t216, _ev216))
+    _Q216._spawn_locked = lambda count: _spawned216.append(int(count))
+    try:
+        _res216b = _Q216.reconfigure(3)
+        assert _res216b["ok"] and _spawned216 == [2], (_res216b, _spawned216)
+    finally:
+        _Q216._spawn_locked = _old_spawn216
+        _Q216._threads = _old_threads216
+        _Q216._retire = _old_retire216
+
+    # ③ 接线：GUI 保存后按 `queue.config(settings)` 生效（绕过去＝保存一次把画像降档顶回去）
+    _gui216_src = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert "queue.reconfigure(queue.config(settings)" in _gui216_src, "GUI 未按 config() 生效"
+    # ④ ICP 凭据：加密 keys 段优先，settings 里的历史占位只兜底
+    from scanner import icp as _icp216
+    assert _icp216._api_key({"keys": {"icp": {"api_key": "K-keys"}}}) == "K-keys"
+    assert _icp216._api_key({"icp": {"api_key": "K-settings"}}) == "K-settings"
+
+    print("[216] 续216 排期收口 ok: IP 反查逐源五档（ok/empty/http_error/network_error/"
+          "unregistered）+ 汇总含预检跳过原因｜队列运行中 1→3→1（缩容协作式退场）+ "
+          "3→1→3 退休线程不占编制｜安装凭据非交互跳过（进程内复用 run_keys）+ "
+          "fontconfig 四方一致且只注入子进程｜GUI 按 config() 生效｜ICP 加密凭据优先")
     print("SMOKE PASS")
 
 

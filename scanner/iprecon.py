@@ -17,12 +17,32 @@
 import ipaddress
 import json
 import re
+import threading
 
-from .utils import http_request, is_domain, pool_run, to_ascii
+from .utils import http_last_error, http_request, is_domain, pool_run, to_ascii
 
 DEFAULT_API = "https://api.webscan.cc/?action=query&ip={ip}"
 # 默认反查源顺序；可在 settings["iprecon"]["sources"] 覆盖（名字须在 _SOURCES 注册）
 DEFAULT_SOURCES = ["webscan", "hackertarget", "ip138"]
+
+# 续173：每个源**这一次调用**的 HTTP 状态/失败原因。适配器仍然返回"域名列表"这一份契约
+# （旧调用方一个都不改），状态只作旁路；按线程存放，`reverse_lookup_detail` 在同一个线程里
+# 紧接着读。为什么不在适配器里直接改返回形状：`_SOURCES` 还被 preflight/测试直接调用，
+# 改形状会把"空结果"与"HTTP 530"混成同一个 []。
+_SRC_LOCAL = threading.local()
+
+
+def _src_mark(status=0, reason="", found=None):
+    _SRC_LOCAL.status = int(status or 0)
+    _SRC_LOCAL.reason = str(reason or "")
+    _SRC_LOCAL.found = found
+
+
+def source_last():
+    """本线程最近一次源调用的 `{status, reason, found}`（没有调用过返回 0/空）。"""
+    return {"status": int(getattr(_SRC_LOCAL, "status", 0) or 0),
+            "reason": str(getattr(_SRC_LOCAL, "reason", "") or ""),
+            "found": getattr(_SRC_LOCAL, "found", None)}
 
 
 def is_public_ip(ip):
@@ -117,19 +137,25 @@ def _reverse_webscan(ip, settings, logger=None, timeout=None, raw=False):
     cfg = (settings or {}).get("iprecon", {}) or {}
     api = str(cfg.get("api") or DEFAULT_API)
     url = api.format(ip=ip) if "{ip}" in api else f"{api}{ip}"
+    _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
     except Exception as e:  # 网络层异常不该影响流水线
+        _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} webscan 反查异常：{e}")
         return {"status": 0} if raw else []
+    status = int((resp or {}).get("status") or 0)
+    _src_mark(status, "" if status == 200 else (f"HTTP {status}" if status else "不可达"))
     if raw:
         return resp or {"status": 0}
-    if not resp or resp.get("status") != 200:
+    if not resp or status != 200:
         if logger:
-            logger.debug(f"[iprecon] {ip} webscan 反查失败（HTTP {resp.get('status') if resp else '-'}）")
+            logger.debug(f"[iprecon] {ip} webscan 反查失败（HTTP {status or '-'}）")
         return []
-    return parse_domains(resp.get("text"))
+    out = parse_domains(resp.get("text"))
+    _src_mark(200, "", len(out))
+    return out
 
 
 def _reverse_hackertarget(ip, settings, logger=None, timeout=None, raw=False):
@@ -142,18 +168,23 @@ def _reverse_hackertarget(ip, settings, logger=None, timeout=None, raw=False):
     api = str(cfg.get("api_hackertarget")
               or "https://api.hackertarget.com/reverseiplookup/?q={ip}")
     url = api.format(ip=ip) if "{ip}" in api else f"{api}{ip}"
+    _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
     except Exception as e:
+        _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} hackertarget 反查异常：{e}")
         return {"status": 0} if raw else []
+    status = int((resp or {}).get("status") or 0)
+    _src_mark(status, "" if status == 200 else (f"HTTP {status}" if status else "不可达"))
     if raw:
         return resp or {"status": 0}
-    if not resp or resp.get("status") != 200:
+    if not resp or status != 200:
         return []
     text = (resp.get("text") or "").strip()
     if not text or text.lower().startswith("error"):
+        _src_mark(200, "接口返回 error 文本", 0)
         return []
     out, seen = [], set()
     for line in text.splitlines():
@@ -161,6 +192,7 @@ def _reverse_hackertarget(ip, settings, logger=None, timeout=None, raw=False):
         if d and d not in seen:
             seen.add(d)
             out.append(d)
+    _src_mark(200, "", len(out))
     return out
 
 
@@ -174,15 +206,19 @@ def _reverse_ip138(ip, settings, logger=None, timeout=None, raw=False):
     cfg = (settings or {}).get("iprecon", {}) or {}
     api = str(cfg.get("api_ip138") or "https://site.ip138.com/{ip}/domain/")
     url = api.format(ip=ip) if "{ip}" in api else f"{api}{ip}"
+    _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
     except Exception as e:
+        _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} ip138 反查异常：{e}")
         return {"status": 0} if raw else []
+    status = int((resp or {}).get("status") or 0)
+    _src_mark(status, "" if status == 200 else (f"HTTP {status}" if status else "不可达"))
     if raw:
         return resp or {"status": 0}
-    if not resp or resp.get("status") != 200:
+    if not resp or status != 200:
         return []
     text = resp.get("text") or ""
     out, seen = [], set()
@@ -192,6 +228,7 @@ def _reverse_ip138(ip, settings, logger=None, timeout=None, raw=False):
         if d and d not in seen and not d.endswith(("ip138.com", "ip138.net")):
             seen.add(d)
             out.append(d)
+    _src_mark(200, "", len(out))
     return out
 
 
@@ -204,15 +241,19 @@ def _reverse_dnsdblookup(ip, settings, logger=None, timeout=None, raw=False):
     cfg = (settings or {}).get("iprecon", {}) or {}
     api = str(cfg.get("api_dnsdblookup") or "https://dnsdblookup.com/?query={ip}")
     url = api.format(ip=ip) if "{ip}" in api else f"{api}{ip}"
+    _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
     except Exception as e:
+        _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} dnsdblookup 反查异常：{e}")
         return {"status": 0} if raw else []
+    status = int((resp or {}).get("status") or 0)
+    _src_mark(status, "" if status == 200 else (f"HTTP {status}" if status else "不可达"))
     if raw:
         return resp or {"status": 0}
-    if not resp or resp.get("status") != 200:
+    if not resp or status != 200:
         return []
     text = resp.get("text") or ""
     out, seen = [], set()
@@ -221,6 +262,7 @@ def _reverse_dnsdblookup(ip, settings, logger=None, timeout=None, raw=False):
         if d and d not in seen and not d.endswith(("dnsdblookup.com",)):
             seen.add(d)
             out.append(d)
+    _src_mark(200, "", len(out))
     return out
 
 
@@ -243,17 +285,23 @@ def _reverse_rapiddns(ip, settings, logger=None, timeout=None, raw=False):
     cfg = (settings or {}).get("iprecon", {}) or {}
     api = str(cfg.get("api_rapiddns") or "https://rapiddns.io/s/{ip}?full=1")
     url = api.format(ip=ip) if "{ip}" in api else f"{api}{ip}"
+    _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
     except Exception as e:
+        _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} rapiddns 反查异常：{e}")
         return {"status": 0} if raw else []
+    status = int((resp or {}).get("status") or 0)
+    _src_mark(status, "" if status == 200 else (f"HTTP {status}" if status else "不可达"))
     if raw:
         return resp or {"status": 0}
-    if not resp or resp.get("status") != 200:
+    if not resp or status != 200:
         return []
-    return _html_domains(resp.get("text"), exclude=("rapiddns.io",))
+    out = _html_domains(resp.get("text"), exclude=("rapiddns.io",))
+    _src_mark(200, "", len(out))
+    return out
 
 
 def _reverse_viewdns(ip, settings, logger=None, timeout=None, raw=False):
@@ -261,17 +309,23 @@ def _reverse_viewdns(ip, settings, logger=None, timeout=None, raw=False):
     cfg = (settings or {}).get("iprecon", {}) or {}
     api = str(cfg.get("api_viewdns") or "https://viewdns.info/reverseip/?host={ip}&t=1")
     url = api.format(ip=ip) if "{ip}" in api else f"{api}{ip}"
+    _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
     except Exception as e:
+        _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} viewdns 反查异常：{e}")
         return {"status": 0} if raw else []
+    status = int((resp or {}).get("status") or 0)
+    _src_mark(status, "" if status == 200 else (f"HTTP {status}" if status else "不可达"))
     if raw:
         return resp or {"status": 0}
-    if not resp or resp.get("status") != 200:
+    if not resp or status != 200:
         return []
-    return _html_domains(resp.get("text"), exclude=("viewdns.info",))
+    out = _html_domains(resp.get("text"), exclude=("viewdns.info",))
+    _src_mark(200, "", len(out))
+    return out
 
 
 def _reverse_ptr(ip, settings=None, logger=None, timeout=None, raw=False):
@@ -284,6 +338,7 @@ def _reverse_ptr(ip, settings=None, logger=None, timeout=None, raw=False):
     """
     import socket
     _ip = str(ip).strip()
+    _src_mark(0, "")
     try:
         _old = socket.getdefaulttimeout()
         socket.setdefaulttimeout(float(timeout or 5))
@@ -292,12 +347,15 @@ def _reverse_ptr(ip, settings=None, logger=None, timeout=None, raw=False):
         finally:
             socket.setdefaulttimeout(_old)
     except Exception as e:      # 没 PTR / 超时 / DNS 挂了 —— 都算"没查到"
+        _src_mark(0, f"无 PTR 记录（{type(e).__name__}）")
         if logger:
             logger.debug(f"[iprecon] {_ip} 原生 PTR 无结果：{e}")
         return {"status": 0} if raw else []
     d = normalize_domain(host or "")
     if not d or not is_domain(d):
+        _src_mark(200, "PTR 结果不是合法域名", 0)
         return {"status": 0} if raw else []
+    _src_mark(200, "", 1)
     return {"status": 200} if raw else [d]
 
 
@@ -351,36 +409,96 @@ def preflight(sources, settings, logger=None, timeout=None, probe_ip=""):
     return ok, report
 
 
-def reverse_lookup(ip, settings, logger=None, timeout=None, sources=None):
-    """单个 IP 反查域名，返回域名列表（失败/无结果返回空表，异常不外抛）。
+def _classify_source(domains, last):
+    """把"这次源调用"归成五档之一（续173；页面/日志只要这一句就够）。"""
+    if domains:
+        return "ok"
+    status = int((last or {}).get("status") or 0)
+    reason = str((last or {}).get("reason") or "")
+    if status >= 400:
+        return "http_error"
+    if status == 200:
+        return "empty"
+    if status == 0 and reason and not reason.startswith(("无 PTR", "PTR 结果")):
+        return "network_error"
+    return "empty" if reason else "error"
 
-    多源：依次尝试 `sources`（不给就取 `settings["iprecon"]["sources"]`，默认
-    webscan → hackertarget → ip138），各源结果做 **union**（任一源非空即采用合并结果；
-    单源失败/空继续下一个；全部失败返回 []）。`sources` 参数供 `lookup_many` 把**预检过的**
-    可用源名单传下来 —— 已判定挂掉的源不该再对每个 IP 重试一遍（续184）。
-    所有请求均走 `utils.http_request`（共享 UA/超时/TLS），解析只用 `json.loads`/正则，绝不 eval。
+
+def reverse_lookup_detail(ip, settings, logger=None, timeout=None, sources=None):
+    """单个 IP 反查域名，返回 `(域名列表, 逐源结果)`（续173）。
+
+    域名列表与旧 `reverse_lookup` **同一口径**：依次试 `sources`、各源 union、全空返回 []。
+    逐源结果是旁路，形状 `[{name, status, http, found, reason}]`：
+    `status` ∈ `ok` / `empty` / `http_error` / `network_error` / `unregistered`。
+    这样"主源被挡 / 备源压根没试 / 三路都空"在页面上分得开，不再只有一句"反查失败"。
     """
     cfg = (settings or {}).get("iprecon", {}) or {}
-    sources = sources or cfg.get("sources") or DEFAULT_SOURCES
+    # 显式传 `[]` = "预检后一个源都不剩" ⇒ 真的一个都不试；旧写法 `sources or …` 会把空表
+    # 当成"没传"，回头再打一遍已判定挂掉的源（续216 连带修复）。
+    sources = sources if sources is not None else (cfg.get("sources") or DEFAULT_SOURCES)
     if timeout is None:
         timeout = float(cfg.get("timeout") or 10)
-    merged, got = set(), False
+    merged, got, detail = set(), False, []
     for name in sources:
-        adapter = _SOURCES.get(str(name).strip().lower())
+        key = str(name).strip().lower()
+        adapter = _SOURCES.get(key)
         if adapter is None:
             if logger:
                 logger.debug(f"[iprecon] {ip} 未知反查源：{name}")
+            detail.append({"name": key or str(name), "status": "unregistered",
+                           "http": 0, "found": 0, "reason": "未注册的源名"})
             continue
+        _src_mark(0, "")
         try:
             doms = adapter(ip, settings, logger=logger, timeout=timeout)
         except Exception as e:  # 兜底：任何源抛异常都不该影响流水线
+            _src_mark(0, http_last_error() or type(e).__name__)
             if logger:
                 logger.debug(f"[iprecon] {ip} 源 {name} 反查异常：{e}")
             doms = []
+        last = source_last()
+        detail.append({"name": key, "status": _classify_source(doms, last),
+                       "http": last["status"], "found": len(doms or []),
+                       "reason": last["reason"]})
         if doms:
             got = True
             merged.update(doms)
-    return sorted(merged) if got else []
+    return (sorted(merged) if got else []), detail
+
+
+def reverse_lookup(ip, settings, logger=None, timeout=None, sources=None, detail=None):
+    """单个 IP 反查域名，返回域名列表（旧 API，行为不变；`detail` 传入 list 时原地填逐源结果）。"""
+    domains, rows = reverse_lookup_detail(ip, settings, logger=logger, timeout=timeout,
+                                          sources=sources)
+    if isinstance(detail, list):
+        detail.extend(rows)
+    return domains
+
+
+def format_source_stats(stats):
+    """把 `lookup_many` 的逐源汇总压成**一行**中文（日志/落档共用，续173）。
+
+    `stats` 形状见 `lookup_many` 的 `stats["sources"]`；没有数据返回空串。
+    只报次数与原因，绝不带任何凭据/响应正文。
+    """
+    parts = []
+    for name, s in sorted((stats or {}).items()):
+        if not isinstance(s, dict):
+            continue
+        if s.get("skipped"):
+            parts.append(f"{name} 未试（{s.get('reason') or '预检失败'}）")
+            continue
+        bits = [f"试{s.get('attempted', 0)}", f"成{s.get('ok', 0)}",
+                f"空{s.get('empty', 0)}", f"错{s.get('error', 0)}"]
+        codes = s.get("http") or {}
+        if codes:
+            bits.append("HTTP " + "/".join(f"{k}×{v}" for k, v in sorted(codes.items())))
+        reasons = s.get("reasons") or {}
+        if reasons:
+            top = sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))[:2]
+            bits.append("原因 " + "、".join(f"{k}×{v}" for k, v in top))
+        parts.append(f"{name} " + "，".join(bits))
+    return "；".join(parts)
 
 
 def lookup_many(ips, settings, logger=None, stop=None):
@@ -393,8 +511,9 @@ def lookup_many(ips, settings, logger=None, stop=None):
     """
     cfg = (settings or {}).get("iprecon", {}) or {}
     candidates = [ip for ip in dict.fromkeys(ips or []) if is_public_ip(ip)]
-    stats = {"attempted": len(candidates), "skipped_private": len(list(dict.fromkeys(ips or []))) - len(candidates),
-             "hit_ips": 0, "domains": 0}
+    stats = {"attempted": len(candidates),
+             "skipped_private": len(list(dict.fromkeys(ips or []))) - len(candidates),
+             "hit_ips": 0, "domains": 0, "sources": {}}
     if not candidates:
         return {}, stats
     workers = max(1, min(int(cfg.get("workers") or 5), len(candidates)))
@@ -409,10 +528,12 @@ def lookup_many(ips, settings, logger=None, stop=None):
         logger.warning("[iprecon] 反查源预检：" +
                        "；".join(f"{k} {v}" for k, v in _bad.items()) +
                        f" —— 本轮跳过这几个源（{len(candidates)} 个 IP 不再逐个白跑）")
+    _preflight_bad = dict(_bad or {})
     if not _ok:
         _fb = cfg.get("fallback_sources") or DEFAULT_FALLBACK
         _ok, _bad2 = preflight(_fb, settings, logger=logger, timeout=timeout,
                                probe_ip=candidates[0])
+        _preflight_bad.update(_bad2 or {})
         if logger:
             logger.warning(f"[iprecon] 默认源全部不可用，改用备用源：{_ok or '（无）'}"
                            + (f"；仍不可用：{_bad2}" if _bad2 else ""))
@@ -420,11 +541,45 @@ def lookup_many(ips, settings, logger=None, stop=None):
     def _one(ip):
         if stop and stop():
             return None
-        return (ip, reverse_lookup(ip, settings, logger=logger, timeout=timeout,
-                                   sources=_ok))
+        rows = []
+        doms = reverse_lookup(ip, settings, logger=logger, timeout=timeout,
+                              sources=_ok, detail=rows)
+        return (ip, doms, rows)
 
     results = pool_run(_one, candidates, workers=workers, logger=logger, label="ip 反查")
-    mapping = {ip: doms for ip, doms in results if doms}
+    src_stats = {str(name): {"skipped": 1, "attempted": 0, "ok": 0, "empty": 0,
+                             "error": 0, "domains": 0, "reason": str(why)}
+                 for name, why in _preflight_bad.items()}
+    mapping = {}
+    for item in results or []:
+        if not item:
+            continue
+        ip, doms, rows = item
+        if doms:
+            mapping[ip] = doms
+        for row in rows or []:
+            name = row.get("name") or "未知"
+            s = src_stats.setdefault(name, {"skipped": 0, "attempted": 0, "ok": 0,
+                                             "empty": 0, "error": 0, "domains": 0,
+                                             "http": {}, "reasons": {}})
+            s["attempted"] = int(s.get("attempted", 0)) + 1
+            status = row.get("status")
+            if status == "ok":
+                s["ok"] = int(s.get("ok", 0)) + 1
+            elif status == "empty":
+                s["empty"] = int(s.get("empty", 0)) + 1
+            else:
+                s["error"] = int(s.get("error", 0)) + 1
+            s["domains"] = int(s.get("domains", 0)) + int(row.get("found") or 0)
+            code = int(row.get("http") or 0)
+            if code:
+                s.setdefault("http", {})
+                s["http"][str(code)] = int(s["http"].get(str(code), 0)) + 1
+            why = str(row.get("reason") or "")
+            if why:
+                s.setdefault("reasons", {})
+                s["reasons"][why] = int(s["reasons"].get(why, 0)) + 1
+    stats["sources"] = src_stats
     stats["hit_ips"] = len(mapping)
     stats["domains"] = sum(len(v) for v in mapping.values())
     return mapping, stats

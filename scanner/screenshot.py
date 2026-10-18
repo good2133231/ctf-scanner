@@ -80,6 +80,32 @@ _FLAGS = (
 )
 
 
+def fontconfig_file(settings=None):
+    """`screenshot.fontconfig` 指向的 fontconfig 配置文件（不存在返回 ""）。
+
+    留空＝不注入（保持浏览器自己的字体配置）；相对路径按**仓库根**解释，也接受 `~`。
+    只做"这个文件在不在"的判定，不读内容、不打印路径（GUI/日志都不需要知道它）。
+    """
+    cfg = (settings or {}).get("screenshot", {}) or {}
+    raw = str(cfg.get("fontconfig") or "").strip()
+    if not raw:
+        return ""
+    p = Path(os.path.expanduser(raw))
+    if not p.is_absolute():
+        p = Path(__file__).resolve().parent.parent / p
+    return str(p) if p.is_file() else ""
+
+
+def _browser_env(settings=None):
+    """给浏览器子进程的环境变量（续175）：只有配了 fontconfig 才返回 dict，否则 None。"""
+    fc = fontconfig_file(settings)
+    if not fc:
+        return None
+    env = dict(os.environ)
+    env["FONTCONFIG_FILE"] = fc
+    return env
+
+
 def _from_registry():
     try:
         import winreg  # noqa: WPS433 （仅 Windows 有）
@@ -335,7 +361,8 @@ def capture(url, out_path, settings=None, timeout=30, throttle=None, want_title=
         if want_title:
             argv.append("--dump-dom")             # 渲染后的 DOM 打到 stdout，顺带取标题
         argv.append(str(url))
-        rc, _out, err = run_cmd(argv, timeout=int(timeout or 30), throttle=throttle)
+        rc, _out, err = run_cmd(argv, timeout=int(timeout or 30), throttle=throttle,
+                                extra_env=_browser_env(settings))
         # mtime 必须**严格不早于**这次调用开始（同一次进程里时间戳只会往前走）
         _fresh = False
         try:
@@ -475,7 +502,8 @@ def capture_cdp(url, out_path, settings=None, timeout=None, throttle=None, want_
     try:
         def _do():
             nonlocal proc, client
-            proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    env=_browser_env(settings))
             for _ in range(80):                       # 最多等 8 秒把 CDP 端口起来
                 if cdp_mod.ready(port):
                     break

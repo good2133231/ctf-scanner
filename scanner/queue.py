@@ -29,6 +29,11 @@
 
 5. **worker 异常绝不杀线程**：单次 dispatch 抛异常只记日志并把该任务收成 `failed`，线程继续
    处理下一个 —— 否则一次坏任务会让整个队列永久停摆。
+
+6. **运行中扩缩容**（续216）：`reconfigure(n)` 扩容立即补线程；缩容只给多出的线程打
+   `threading.Event` 退休信号，线程**跑完当前任务**再退场（不打断正在扫的任务）。
+   已打信号但还在跑的线程**不算编制**，再次扩容按"未退休的存活数"补人 —— 否则连续
+   3→1→3 会在退休线程退场后只剩 1 个。
 """
 import json
 import threading
@@ -147,7 +152,11 @@ class _Queue:
         self._gen = 0                       # 唤醒代数：notify() 自增，worker 靠它避免丢唤醒
         self._stop = threading.Event()
         self._threads = []
+        self._retire = {}                   # 续216：thread -> Event（缩容时只让指定线程退场）
+        self._target = 0
+        self._settings = None
         self._dispatch = None
+        self._dispatch_custom = False
 
     # ---- 生命周期 ----
 
@@ -158,19 +167,76 @@ class _Queue:
         `runner.run_task` 执行。
         """
         with self._lock:
-            if self._threads:
+            alive = [t for t in self._threads if t.is_alive()]
+            if alive:
                 return
+            self._threads = []
+            self._retire = {}
             n = config(settings)["workers"]
+            self._settings = settings
             self._stop = threading.Event()
+            self._dispatch_custom = dispatch is not None
             if dispatch is None:
                 def dispatch(tid, mode, _s=settings):
                     return _default_dispatch(tid, mode, _s)
             self._dispatch = dispatch
-            self._threads = [threading.Thread(target=self._run, name=f"cs-queue-{i}",
-                                              daemon=True) for i in range(n)]
-            for t in self._threads:
-                t.start()
+            self._spawn_locked(n)
+            self._target = n
             logger.info(f"[queue] 已启动 {n} 个 worker（queue.workers={n}）")
+
+    def _spawn_locked(self, count):
+        """在**已持锁**的前提下补 count 个 worker（`start` / `reconfigure` 共用）。"""
+        for _ in range(max(0, int(count))):
+            t = threading.Thread(target=self._run, name=f"cs-queue-{len(self._threads)}",
+                                 daemon=True)
+            self._retire[t] = threading.Event()
+            self._threads.append(t)
+            t.start()
+
+    def reconfigure(self, workers, settings=None):
+        """运行中调整 worker 数（续216）：扩容立即生效，缩容让多出的线程**跑完当前任务**再退场。
+
+        返回 `{"ok": bool, "workers": 目标数, "active": 当前存活数, "reason": str}`。
+        队列没启动时不做任何事（下一次 `start()` 仍按 `config(settings)` 起）——"改配置"与
+        "现在扩缩"是两件事，不在这里偷偷启动队列。
+
+        **缩容中的线程不算"还在编"**：已打退休信号的线程会跑完当前任务再退出，所以再次扩容
+        必须按"未退休的存活数"补线程；否则连续 3→1→3 会在退休线程退场后只剩 1 个（续216
+        断言抓出的真缺口）。
+        """
+        try:
+            n = max(1, min(_MAX_WORKERS, int(workers)))
+        except (TypeError, ValueError):
+            return {"ok": False, "workers": active_workers(), "active": active_workers(),
+                    "reason": "worker 数不是整数"}
+        with self._lock:
+            alive = [t for t in self._threads if t.is_alive()]
+            self._threads = alive
+            if not alive:
+                return {"ok": False, "workers": 0, "active": 0, "reason": "队列未启动"}
+            if settings is not None:
+                self._settings = settings
+                if not self._dispatch_custom:
+                    def dispatch(tid, mode, _s=settings):
+                        return _default_dispatch(tid, mode, _s)
+                    self._dispatch = dispatch
+            # 只把"没打退休信号"的线程算进编制；已退休但还在跑当前任务的线程会自己退出。
+            active = [t for t in alive
+                      if not (self._retire.get(t) and self._retire[t].is_set())]
+            current = len(active)
+            if n > current:
+                self._spawn_locked(n - current)
+            elif n < current:
+                for t in active[n:]:
+                    ev = self._retire.get(t)
+                    if ev is not None:
+                        ev.set()
+            self._target = n
+            logger.info(f"[queue] 运行中调整 worker：{current} → {n}"
+                        f"（扩容立即生效；缩容线程跑完当前任务后退场）")
+            # 叫醒等待中的 worker：缩容的要看到退休信号，扩容的立刻开始认领。
+            self.notify()
+            return {"ok": True, "workers": n, "active": active_workers(), "reason": ""}
 
     def stop(self, timeout=5.0):
         """停止 worker 并 join（测试需要确定性收尾；生产里 daemon 线程随进程退出即可）。"""
@@ -190,28 +256,38 @@ class _Queue:
             self._cv.notify_all()
 
     def running(self):
-        return bool(self._threads)
+        return any(t.is_alive() for t in list(self._threads))
 
     # ---- worker 主循环 ----
 
     def _run(self):
+        me = threading.current_thread()
+        retire = self._retire.get(me)
         idle = _IDLE_MIN
-        while not self._stop.is_set():
-            with self._cv:
-                gen = self._gen
-            # 认领**不持锁**：避免与扫描的批量写争 `db._WRITE_LOCK` 时把 notify() 也堵住
-            row = db.claim_next_queued()
-            if row is not None:
-                idle = _IDLE_MIN
-                self._handle(row)
-                continue
-            # 空队列：只有"自取 gen 以来没有新入队"时才安心退避等待（否则立刻再认领一次）
-            with self._cv:
-                if self._stop.is_set():
-                    break
-                if self._gen == gen:
-                    self._cv.wait(timeout=idle)
-                    idle = min(idle * 2.0, _IDLE_MAX)
+        try:
+            while not self._stop.is_set() and not (retire and retire.is_set()):
+                with self._cv:
+                    gen = self._gen
+                # 认领**不持锁**：避免与扫描的批量写争 `db._WRITE_LOCK` 时把 notify() 也堵住
+                row = db.claim_next_queued()
+                if row is not None:
+                    idle = _IDLE_MIN
+                    self._handle(row)
+                    continue
+                # 空队列：只有"自取 gen 以来没有新入队"时才安心退避等待（否则立刻再认领一次）
+                with self._cv:
+                    if self._stop.is_set() or (retire and retire.is_set()):
+                        break
+                    if self._gen == gen:
+                        self._cv.wait(timeout=idle)
+                        idle = min(idle * 2.0, _IDLE_MAX)
+        finally:
+            # 续216：缩容退场的线程要从 `_threads` 里摘掉，`active_workers()` 才不会把
+            # "已退休但还没退出"算成在跑。`stop()` 已经清空列表时这里是空操作。
+            with self._lock:
+                if me in self._threads:
+                    self._threads.remove(me)
+                self._retire.pop(me, None)
 
     def _handle(self, row):
         """执行一次认领到的任务；任何异常都只收尾该任务，绝不杀 worker（见文件头第 5 点）。"""
@@ -256,9 +332,15 @@ def running():
 
 
 def active_workers():
-    """**实际已启动**的 worker 数（没启动返回 0）。
+    """**实际已启动且还活着**的 worker 数（没启动返回 0）。
 
     页面上的"同时运行 N 个"必须读它，不要读 `config()`：`config()` 是"下次启动会起几个"，
-    按实测画像收档后两者可能不同（见 `config` 末尾注释）。
+    按实测画像收档后两者可能不同（见 `config` 末尾注释）；缩容时已打退休信号但还在跑
+    当前任务的线程**算在跑**，跑完自己摘除。
     """
-    return len(list(_QUEUE._threads))
+    return len([t for t in list(_QUEUE._threads) if t.is_alive()])
+
+
+def reconfigure(workers, settings=None):
+    """运行中调整 worker 数（续216）；队列没启动时返回失败、不偷偷启动。"""
+    return _QUEUE.reconfigure(workers, settings)

@@ -112,7 +112,8 @@ def pick_python(configured="python"):
     return sys.executable
 
 
-def run_cmd(argv, cwd=None, timeout=900, throttle=None, extra_path=None, stop=None):
+def run_cmd(argv, cwd=None, timeout=900, throttle=None, extra_path=None, stop=None,
+            extra_env=None):
     """执行外部命令，返回 (returncode, stdout, stderr)。
 
     命令不存在返回 127；超时返回 124；**被叫停返回 125**（续211-T3：这一路的
@@ -127,15 +128,19 @@ def run_cmd(argv, cwd=None, timeout=900, throttle=None, extra_path=None, stop=No
     `extra_path`（续165）是**追加到子进程 PATH 最前面**的一个目录：给"工具本体能找到、
     但它的**传递依赖**去 PATH 里找"的场景用（实测：puredns 内部 exec `massdns`，本仓从不
     安装 massdns ⇒ 每个域名都退码 1）。只影响这一个子进程的环境，不改父进程、不改全局。
+
+    `extra_env`（续175）是同一档的**追加环境变量**：截图把 `FONTCONFIG_FILE` 指到
+    仓库内/用户指定的 fontconfig 配置，让无头浏览器认得到 `tools/fonts/` 里的中文字体。
+    同样只影响这一个子进程，不改父进程、不改全局。
     """
     # `stop`（续211-T3）：协作式停止事件。给了它 ⇒ 子进程一退场就**整组**收割
     # （`_do_run_cmd` 的 finally 里做），不等超时。收割发生在 slot 内部：先收割、后还槽。
     stop = stop if stop is not None else getattr(throttle, "stop_event", None)
     if throttle is None:
-        return _do_run_cmd(argv, cwd, timeout, extra_path, stop=stop)
+        return _do_run_cmd(argv, cwd, timeout, extra_path, stop=stop, extra_env=extra_env)
     try:
         with throttle.slot("subprocess"):
-            return _do_run_cmd(argv, cwd, timeout, extra_path, stop=stop)
+            return _do_run_cmd(argv, cwd, timeout, extra_path, stop=stop, extra_env=extra_env)
     except _throttle_mod.BudgetExhausted:
         return 1, "", "throttle: 请求预算耗尽"
     except _throttle_mod.StopRequested:
@@ -177,11 +182,14 @@ def _kill_group(proc, log=None):
         return False
 
 
-def _do_run_cmd(argv, cwd, timeout, extra_path=None, stop=None):
+def _do_run_cmd(argv, cwd, timeout, extra_path=None, stop=None, extra_env=None):
     env = None
-    if extra_path:
+    if extra_path or extra_env:
         env = dict(os.environ)
-        env["PATH"] = os.pathsep.join([str(extra_path), env.get("PATH", "")])
+        if extra_path:
+            env["PATH"] = os.pathsep.join([str(extra_path), env.get("PATH", "")])
+        if extra_env:
+            env.update({str(k): str(v) for k, v in dict(extra_env).items()})
     argv = [str(a) for a in argv]
     cwd = str(cwd) if cwd else None
     if not _HAS_KILLPG:

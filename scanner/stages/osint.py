@@ -27,6 +27,7 @@
 **收口不变量**：所有外部来源产出的域名一律经 `_domain_of()` 过滤，
 裸 IP / 带端口 / 带路径 / 通配符**绝不写进 `subdomains`**（IP 类资产归 portscan / probe）。
 """
+import json
 import re
 from urllib.parse import urlparse
 
@@ -232,6 +233,17 @@ class OsintStage(Stage):
                                              logger=ctx.logger, stop=ctx.stopped)
         if ctx.stopped():
             return []
+
+        # 续173：把"每个源到底成没成"落档。日志只一行（任务日志能直接读），
+        # 完整逐源计数/HTTP 码/失败原因写进工作目录，复盘时不用再猜"反查失败"是哪一路。
+        src_stats = stats.get("sources") or {}
+        if src_stats:
+            ctx.logger.info("[osint] IP 反查源：" + iprecon.format_source_stats(src_stats))
+            try:
+                (ctx.workdir / "iprecon_sources.json").write_text(
+                    json.dumps(src_stats, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OSError as e:
+                ctx.logger.warning(f"[osint] IP 反查源成败落档失败（不影响扫描）：{e}")
 
         # C 段本身也是资产视野：即使没反查到域名，也把"段 + IP"落库（含命中数量）
         cap = max(1, int(cfg.get("max_domains_per_ip", 30)))

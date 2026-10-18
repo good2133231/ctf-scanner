@@ -32,16 +32,21 @@ subfinder/httpx/puredns、`requirements.txt` 得自己记得 `pip install`；至
    "系统级动作"的界，还会绕过那条校验和红线。这里只**按平台打印**命令，由用户复制执行。
 3. **只出现相对路径**（项目硬规矩）：打印的路径一律相对项目根（`tools/scanner/…`）；
    平台口径只有 `toolmgr.host_arch()` 一处，本文件不另写一份平台分支。
-4. **写回只有一条路**：装完工具仍走 `toolmgr` 的逐行替换改 `tools.<名>`；本脚本不碰
-   `config/keys.yaml`，也不整份重写 `config/settings.yaml`。
+4. **写回只有一条路**：装完工具仍走 `toolmgr` 的逐行替换改 `tools.<名>`；本脚本不改写
+   明文 `config/keys.yaml`（只在还没有密文时**读一次**用于合并），也不整份重写
+   `config/settings.yaml`。安装末尾的凭据录入把用户输入交给 `cli.run_keys.main(
+   ["--encrypt", …])`（进程内调用，合并/自校验/落盘都复用那一份；不另起子进程），临时明文放
+   系统临时目录、`--shred` 删掉，绝不写进仓库。
 """
 import argparse
+import getpass
 import importlib.util
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -376,7 +381,9 @@ _CJK_FONT_HINTS = ("notosanscjk", "notoserifcjk", "sourcehansans", "sourcehanser
 
 # fontconfig 的默认目录 + 用户级目录（不递归搜全盘，那既不礼貌也慢）
 _FONT_DIRS = ("/usr/share/fonts", "/usr/local/share/fonts",
-              "/opt/fonts", "~/.fonts", "~/.local/share/fonts")
+              "/opt/fonts", "~/.fonts", "~/.local/share/fonts",
+              # 续175：仓库内字体目录（用户把字体放进来后，安装自检不再报"缺中文字体"）
+              str(ROOT / "tools" / "fonts"))
 
 
 def has_cjk_font():
@@ -842,6 +849,100 @@ def install_stack(only=(), allow_unverified=False, timeout=600):
     return installed, failed
 
 
+# 续175：安装末尾可选的凭据字段（组, 键, 人话名, 是否隐藏输入）。
+# 只收 `config.load_keys()` 真正消费的组；空输入＝保留现有值，绝不把空串写进去覆盖旧 key。
+_KEY_FIELDS = (
+    ("fofa", "email", "FOFA 邮箱", False),
+    ("fofa", "key", "FOFA API key", True),
+    ("shodan", "key", "Shodan API key", True),
+    ("quake", "key", "360 Quake API key", True),
+    ("github", "token", "GitHub 只读 token", True),
+    ("gitlab", "token", "GitLab 只读 token", True),
+    ("virustotal", "key", "VirusTotal API key", True),
+    ("icp", "api_key", "ICP 备案源 api_key", True),
+)
+
+
+def prompt_credentials(ask=None):
+    """安装末尾**可选**的凭据录入（续175；只在 TTY 里问，绝不挂住 CI）。
+
+    返回 `True` 表示走完了 `run_keys.py` 且 rc=0；`False` 表示跳过/失败/非交互。
+    三条红线：① 不打印任何输入值；② 明文只进系统临时文件，交给 `run_keys --encrypt
+    --shred` 后立即删除；③ 已有密文由 `run_keys` 自己合并（这里不重写加密/合并逻辑）。
+    """
+    if ask is None:
+        ask = sys.stdin.isatty()
+    if not ask:
+        print("[i] 非交互环境：跳过凭据录入（事后可运行 python cli/run_keys.py --encrypt）")
+        return False
+    try:
+        yn = input("现在录入第三方 API 凭据吗？输错/留空都只是跳过，之后可再补 [y/N]：").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n[i] 已跳过凭据录入")
+        return False
+    if yn not in ("y", "yes", "是"):
+        print("[i] 已跳过凭据录入（随时可运行 python cli/run_keys.py --encrypt 补）")
+        return False
+
+    overlay = {}
+    for group, key, label, secret in _KEY_FIELDS:
+        prompt = f"  {label}（留空＝不改）: "
+        try:
+            val = getpass.getpass(prompt) if secret else input(prompt)
+        except (EOFError, KeyboardInterrupt):
+            print("\n[!] 输入被取消，本轮不写任何凭据（已输入的部分也不会落盘）")
+            return False
+        val = str(val or "").strip()
+        if val:
+            overlay.setdefault(group, {})[key] = val
+    if not overlay:
+        print("[i] 没有输入任何值，跳过（现有凭据未动）")
+        return False
+    try:
+        import yaml
+        from scanner import keystore
+        from cli.run_keys import main as _run_keys_main
+    except ImportError:
+        print("[!] 当前环境没有 PyYAML/cryptography，无法生成临时凭据文件；跳过（现有凭据未动）")
+        return False
+    # 还没有密文、但旧明文 keys.yaml 存在时，必须把它并进来：run_keys 只拿得到本函数的
+    # 临时 src，不会自动去读明文；不并就会在第一次加密后把旧组"静默丢掉"（之后 load_keys
+    # 只看密文）。只读明文，不写、不打印值。
+    base = {}
+    if not (ROOT / "config" / "keys.enc.yaml").exists():
+        try:
+            _old = yaml.safe_load((ROOT / "config" / "keys.yaml").read_text(encoding="utf-8"))
+            if isinstance(_old, dict):
+                base = _old
+        except Exception:                           # noqa: BLE001 - 读不到就按没有明文处理
+            base = {}
+    data, _rep = keystore.merge_key_dicts(base, overlay)
+
+    tmp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml",
+                                         prefix="ctfscan-keys-", delete=False) as fh:
+            yaml.safe_dump(data, fh, allow_unicode=True, sort_keys=False)
+            tmp_name = fh.name
+        # 进程内复用同一条 CLI 路径（合并/自校验/覆盖策略都只有 `run_keys` 一份）——
+        # 不在这里 `subprocess.call`：本文件的红线是"除 pip 引导外不起子进程"（[8d]）。
+        rc = _run_keys_main(["--encrypt", "--src", tmp_name, "--shred"])
+        if rc == 0:
+            print("[+] 凭据已写入加密文件（值不会出现在任何输出里；下次启动解锁一次即可）")
+            if (ROOT / "config" / "keys.yaml").exists():
+                print("[!] 旧明文 config/keys.yaml 仍在：确认密文能解开后请手工删掉它，"
+                      "否则\"加密\"只防住了密文被拷走这一半。")
+            return True
+        print(f"[!] 凭据录入未完成（run_keys rc={rc}），现有凭据未动")
+        return False
+    finally:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="迁移自举：按平台点清并补齐环境依赖")
     ap.add_argument("--install", action="store_true",
@@ -854,6 +955,8 @@ def main(argv=None):
     ap.add_argument("--no-wire", action="store_true", help="透传 toolmgr：装完不写回 settings.yaml")
     ap.add_argument("--no-venv", action="store_true",
                     help="不要自动建 .venv，就用当前解释器装依赖（容器/受控环境里常用）")
+    ap.add_argument("--no-keys", action="store_true",
+                    help="跳过安装末尾的可选凭据录入（CI / 非交互环境本来也会自动跳过）")
     ap.add_argument("--with-system", action="store_true",
                     help="系统包层：nmap / 浏览器 / Go / git 交给**发行版包管理器**真装"
                          "（默认只打印命令不执行；fscan/dirmap 永不代跑）")
@@ -905,6 +1008,10 @@ def main(argv=None):
             print("[!] 系统包层被拒绝执行：" + "、".join(refused))
         s = summarize(probe())          # 复探：装没装以文件系统为准
     render(s, failed, installed, install=args.install, sys_plan=sys_plan)
+    # 续175：安装收尾再问一次凭据（可选）。放在 render 之后，用户先看到"装了什么"，
+    # 再决定要不要现在填 key；非交互环境由 prompt_credentials 直接跳过，不会挂住。
+    if args.install and not args.no_keys:
+        prompt_credentials()
     return 1 if failed else 0
 
 

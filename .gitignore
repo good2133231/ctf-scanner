@@ -35,6 +35,8 @@ tools/go/
 tools/fscan-src/
 tools/massdns-src/
 tools/browser/
+# 续175：字体体积大、授权各异，不入库；需要时放到这里并配 screenshot.fontconfig
+tools/fonts/
 .cache/
 
 # 会话/记忆目录（AI 工作笔记，不进仓库）

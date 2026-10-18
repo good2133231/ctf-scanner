@@ -18,3 +18,5 @@ github:
   token: ""      # GitHub PAT（GitHub 泄露检索阶段用，默认关；没配就一次请求都不发）
 gitlab:
   token: ""      # GitLab PAT（续158：多平台检索 provider=gitlab 用；**只读** scope 即可，默认关）
+icp:
+  api_key: ""    # ICP 备案源 token（续205/续216：按源配置的 key_header 带头；默认关）

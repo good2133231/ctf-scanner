@@ -3,6 +3,78 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续216（2026-10-18，WorkBuddy · Claude）：排期收口 —— IP 反查逐源成败 + 队列运行中扩缩容 + 续175 安装凭据/fontconfig
+
+接续 续215「下一轮」清单的三项（树形缩进 / 运行中改并发 / 续173 逐源成败），外加 续175 的两项
+（安装凭据录入、CJK 字体接线）。主理人本轮只说「接着做完」，没有新增点单。
+
+### ① 续173 的可诊断性：IP 反查逐源五档
+
+- `scanner/iprecon.py`：新增线程本地 `_SRC_LOCAL` + `_src_mark()` / `source_last()`，适配器返回契约
+  一字不改（仍是域名列表），状态只作旁路。`reverse_lookup_detail()` 返回 `(域名, 逐源明细)`，
+  五档：`ok` / `empty` / `http_error` / `network_error` / `unregistered`；旧 `reverse_lookup()`
+  保持纯列表（新增可选 `detail=` 出参）。
+- `lookup_many()` 的 `stats["sources"]` 汇总每源 attempted/ok/empty/error/domains/HTTP 码/原因；
+  `format_source_stats()` 压成一行中文；`stages/osint.py` 在任务日志打这一行，并把完整 JSON
+  落 `工作目录/iprecon_sources.json`（复盘不用再猜「反查失败」是哪一路）。
+- 连带修一个真缺口：`reverse_lookup_detail(sources=[])` 原先会被 `sources or …` 当成"没传"，
+  回头再打一遍预检已判死的默认源；改成 `sources is not None` 口径，`[216]` 断言钉住。
+
+### ② 队列运行中改并发（续215 挂账的高风险项）
+
+- `scanner/queue.py`：`_Queue.reconfigure(n, settings=None)` —— 扩容立即 `_spawn_locked`；
+  缩容只给多出的线程打 `threading.Event` 退休信号，线程**跑完当前任务**再退场。
+  `_run()` 每轮检查退休信号，`finally` 从 `_threads` 摘除；`active_workers()` 改看 `is_alive()`。
+- **退休线程不占编制**：已打信号但还在跑当前任务的线程不算 `current`，否则连续 3→1→3 会在
+  退休线程退场后只剩 1 个。`[216]` 用假线程钉住这一刻（真线程太快，时序抓不稳）；另用真实线程
+  跑过 3→1→3（两个线程被 dispatch 堵住时缩容、立即扩容，最终回到 3 个）。
+- GUI：策略保存后调 `queue.reconfigure(queue.config(settings)["workers"], settings)` —— 目标数
+  必须走 `queue.config()`，不能拿表单裸值；否则 `workers_auto` / `workers_profile` 两道
+  「只往下收」的闸会被保存动作顶回配置值。队列没启动时 reconfigure 返回失败、不偷偷启动。
+- 策略页 `workers_profile` 的 tooltip 改为「保存策略后立即生效」。
+
+### ③ 续175 两项：安装凭据录入 + CJK 字体接线
+
+- `run_bootstrap.py`：新增 `prompt_credentials()`（安装收尾、**只在 TTY** 问一次；非交互直接跳过，
+  `--no-keys` 可显式跳过）。字段只收 `config.load_keys()` 真正消费的组：fofa.email/key、
+  shodan.key、quake.key、github.token、gitlab.token、virustotal.key、icp.api_key。
+  **进程内**调 `cli.run_keys.main(["--encrypt", "--src", tmp, "--shred"])`，复用合并/自校验/覆盖
+  策略那一份；临时明文放系统临时目录、加密后立即删除；不新增子进程（`[8d]` 红线）。
+  还没有密文但存在旧明文 `keys.yaml` 时先读一次合并，避免第一次加密把旧组静默丢掉。
+- 字体：`screenshot.fontconfig` 新键（DEFAULTS / 随包 settings.yaml / 策略页表单 / 保存映射
+  四处一致）；`screenshot.fontconfig_file()` + `_browser_env()` 只给浏览器子进程注入
+  `FONTCONFIG_FILE`；`utils.run_cmd(extra_env=)` 新增同档的追加环境变量（只影响该子进程）；
+  `has_cjk_font()` 认仓库内 `tools/fonts/`；`.gitignore` 忽略 `tools/fonts/`。
+- 连带修：`icp._api_key()` 原先只读 `settings["icp"]["api_key"]`（历史占位且永远为空），
+  现在优先读 `settings["keys"]["icp"]["api_key"]`（加密凭据），settings 段只兜底；否则安装
+  向导里填的 ICP key 等于没填。`keys.yaml.example` 补 `icp` 组。
+
+### ④ 任务列表树形缩进（续215 说"价值低"的那项，顺手收口）
+
+- `tasks.html` 子任务行加 `task-child` class；`style.css` 只给名称列（第 3 列）加 18px 左内边距，
+  不动操作列。预览框里的层级仍是服务端按深度缩进，两处互不依赖。
+
+### 门禁与实测
+
+- `[216]` 一组（逐源五档 / 汇总与预检跳过 / 显式空源不回退 / 队列 1→3→1 / 退休线程不占编制 /
+  凭据非交互跳过 + 进程内 run_keys / fontconfig 四方一致 / GUI 按 config() 生效 / ICP 加密凭据优先）。
+- **SMOKE PASS**（全量门禁，含 `[216]`；最终代码复跑同样通过）。
+- EOL 陷阱（本轮又撞）：`replace_in_file` 把 `tests/smoke.py` 整份行尾归一（一度 11076/10982 假改动、
+  且截掉过 [216] 块），`gui/app.py` 也把三处历史 LF 行改成 CRLF（18/7 vs 12/1）。按 AGENTS §9
+  用 `git show HEAD:<file>` + `difflib` 按内容对齐、同内容行恢复 HEAD 行尾，重插 [216] 块；
+  两式 `git diff --numstat` 现已逐文件相等（`tests/smoke.py` 133/0、`gui/app.py` 12/1）。
+- 首跑 `[3e]` 曾因 8765 夹具端口未起来红了一次（`start_fixture()` 绑定失败会静默返回 None），
+  隔一会儿复跑全绿；不是本轮代码问题，但值得记一笔（见下方下一轮）。
+
+**下一轮（续216 之后）——只放未做的：**
+
+- [ ] VT / ICP 真机验收：等主理人填 `virustotal.key` 与可用 ICP 源（或换机器）后跑
+  `python tools/check_intel_sources.py --strict`
+- [ ] 续175 剩余四项：`CTFSCANNER_KEYS_*` 环境变量那一半、dirmap 便携 Python、chrome win/mac 摘要、
+  干净克隆 `./install.sh --full` 真机数字
+- [ ] 续173 剩余：PTR 自实现已在续184，三源成败的真机联网输出仍没验（本轮只验了合成五档）
+- [ ] `tests/smoke.py` 的 8765 夹具：`start_fixture()` 绑定失败时是否该显式报错/重试，避免假红
+
 ## 续215（2026-10-18，WorkBuddy · CodeBuddy）：P2-12 真任务资源画像 + 任务表/仪表盘挤压修复 + VT/ICP 真机验收（无 key）
 
 主理人点单：P2-12 真任务 profiling（续179 基准是合成回环）、前端样式挤/按钮变化（自己截图定位）、

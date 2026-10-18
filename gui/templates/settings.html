@@ -433,6 +433,8 @@
       没浏览器，后者是人和预算在拦，绕过停止是红线。</p>
     <label>浏览器路径（留空＝自动探测 Edge/Chrome） <input name="screenshot_browser"
       value="{{ s.screenshot.browser }}" placeholder="留空自动探测（PATH → 注册表 → 标准安装位置）"></label>
+    <label>字体配置 fontconfig（留空＝不注入） <input name="screenshot_fontconfig"
+      value="{{ s.screenshot.fontconfig }}" placeholder="如 tools/fonts/fonts.conf"></label>
     <label class="chk"><input type="checkbox" name="cert_enabled" value="1"
       {{ 'checked' if s.cert.enabled }}> <b>TLS 证书取证</b>（默认关；对 https 站点与加密端口
       各做<b>一次只读握手</b>，把颁发者 / 有效期 / CN / SAN / 指纹记进任务详情的
@@ -776,7 +778,7 @@
     <label>队列 worker 数 <input name="queue_workers" value="{{ s.queue.workers }}"></label>
     <label class="chk" title="再按本机 CPU/内存收一道上限：小机器 1 / 中 2 / 大 4；配置里写的 workers 仍是天花板"><input type="checkbox" name="queue_workers_auto" value="1"
       {{ 'checked' if s.queue.workers_auto }}> 按机器规格自动收并发上限</label>
-    <label class="chk" title="再按最近一次真任务实测的 CPU/内存收一道（只会往下收；下一次启动队列生效）"><input type="checkbox" name="queue_workers_profile" value="1"
+    <label class="chk" title="再按最近一次真任务实测的 CPU/内存收一道（只会往下收；保存策略后立即生效）"><input type="checkbox" name="queue_workers_profile" value="1"
       {{ 'checked' if s.queue.workers_profile }}> 按单任务实测画像收队列并发</label>
 
     <label class="chk"><input type="checkbox" name="dev_enabled" value="1"

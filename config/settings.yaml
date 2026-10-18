@@ -338,6 +338,9 @@ screenshot:
   fallback_wait: 10
   block_extra: []
   browser: ''
+  # 续175：中文字体（可选）。留空＝不注入；填了才给无头浏览器设 FONTCONFIG_FILE。
+  # 典型：把字体放进 tools/fonts/，再指向 tools/fonts/fonts.conf。
+  fontconfig: ''
 cert:
   # TLS 证书取证（默认关）：对 https / tls_ports 站点做一次 TLS 握手，解析颁发者与有效期到「SSL 证书」页签
   enabled: false

@@ -170,6 +170,7 @@
     <tbody id="task-rows">
       {% for t in tasks %}
       <tr data-id="{{ t.id }}" data-name="{{ t.name }}"
+          class="{% if t.parent_id %}task-child{% endif %}"
           data-targets="{{ t.targets|replace('\n', ' ')|e }}" data-status="{{ t.status }}"
           data-stages="{{ t.stages }}">
         <td class="pick"><input type="checkbox" class="pick-row" value="{{ t.id }}"></td>

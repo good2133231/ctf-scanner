@@ -536,6 +536,10 @@ DEFAULTS = {
         "fallback_wait": 10,
         "block_extra": [],
         "browser": "",
+        # 续175：无头浏览器的 fontconfig 配置文件（留空＝不注入）。填相对路径按仓库根解释；
+        # 典型用法是把中文字体放进 `tools/fonts/` 再指向那里的 fonts.conf —— 服务器最小镜像
+        # 常常没有中文字体，截图里的中文会变成方框，这一项是给那条部署路径留的口子。
+        "fontconfig": "",
     },
     "cert": {
         # TLS 证书取证（可选，**默认关闭**）：对 https 站点 / tls_ports 站点做一次 TLS
