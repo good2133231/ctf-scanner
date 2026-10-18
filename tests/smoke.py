@@ -28557,6 +28557,165 @@ expression: r0()
     print("[217] 续217 ok: CTFSCANNER_KEYS_* 非交互直通（值不回显/0600）｜"
           "8765 夹具可复用且空端口不误判｜chrome win64/mac-x64/mac-arm64 摘要钉住｜"
           "dirmap 有 -e 分组/无 -e 跑一轮 + imp 垫片进 PYTHONPATH")
+    # ------------------------------------------------------------------ [218]
+    # 续218：脱敏机器判据（AGENTS §0.5 明说"下一轮要做"的那条，不需要真名）。
+    # 被跟踪文件里出现的任何注册域，若同时是 data/scanner.db 资产表（subdomains）里的
+    # 注册域 ⇒ 判红。库本身 gitignore（.gitignore: data/），判据不依赖别名表；
+    # 机器上没有库（CI / 干净克隆）就跳过，不算失败。
+    import re as _re218
+    import sqlite3 as _sq218
+    import subprocess as _sp218
+    from scanner import extdom as _xd218
+    from scanner.stages import dirscan as _ds218
+
+
+    class _L218:
+        def info(self, m):
+            pass
+
+        def warning(self, m):
+            pass
+
+
+    class _C218:
+        def __init__(self, wd):
+            self.workdir = wd
+            self.throttle = None
+            self.logger = _L218()
+            self.stopped = lambda: False
+
+
+
+    _db218 = ROOT / "data" / "scanner.db"
+    if not _db218.exists():
+        print("[218] 脱敏判据 skip：本机没有 data/scanner.db（CI / 干净克隆无库）")
+    else:
+        _con218 = _sq218.connect(f"file:{_db218}?mode=ro", uri=True)
+        _reg218 = sorted({_xd218.base_domain(r[0] or "") or "" for r in
+                          _con218.execute("select distinct domain from subdomains")} - {""})
+        _con218.close()
+        assert _reg218, "库里连一个注册域都没有？base_domain 全判空 ⇒ 折算口径坏了"
+
+        # 白名单三档（都不含任何真实目标名，全是公共知识）：
+        # ① 仓库**公开字典**里的厂商域（cdn_cname / js_thirdparty）；
+        # ② 合成夹具约定（*.test 与 example.com / evil.com / xxx.com）；
+        # ③ AGENTS 已文档化的 jsmine「成员访问链」残余（network.protocol.name 这族：
+        #    注册域是真 gTLD、rcode=0 ⇒ 判不掉，仓库多处拿它们当例子）。
+        _wl218 = set()
+        for _f218 in ("config/dicts/cdn_cname.txt", "config/dicts/js_thirdparty.txt"):
+            _p218 = ROOT / _f218
+            if _p218.exists():
+                _wl218 |= {x.strip().lower() for x in
+                           _p218.read_text(encoding="utf-8", errors="ignore").splitlines()
+                           if x.strip() and not x.lstrip().startswith("#")}
+        from scanner import takeover as _to218
+        _wl218 |= {(s.get("cname_suffix") or "").lstrip("*.").strip().lower()
+                   for s in _to218.SERVICES if s.get("cname_suffix")}
+        _syn218 = {"example.com", "evil.com", "xxx.com"}
+        _noise218 = {"action.click", "protocol.name", "font.name", "text.name",
+                     "password.name", "password.new"}
+
+        def _wl_218(r):
+            if r in _syn218 or r in _noise218 or r.endswith(".test"):
+                return True
+            return any(e == r or e.endswith("." + r) or r.endswith("." + e) for e in _wl218)
+        _live218 = [d for d in _reg218 if not _wl_218(d)]
+        _files218 = []
+        for _f218 in _sp218.check_output(["git", "ls-files"], cwd=str(ROOT)).decode().splitlines():
+            try:
+                _files218.append((_f218, (ROOT / _f218).read_bytes().decode("utf-8", "ignore")))
+            except OSError:
+                pass
+
+        # 扫描用"每文件一次 tokenize"而不是逐域全文正则：全库 ~10MB 文本 × 几十个域
+        # 的逐域扫描要 17s+，token 化后是把每个域形 token 的**全部后缀折算**进一个集合，
+        # 再与待查域做交集 —— 同样的判据（token 等于域或以 .域 结尾），快两个数量级。
+        _tok218 = _re218.compile(r"(?<![a-z0-9-])([a-z0-9][a-z0-9.-]{1,200}[a-z0-9])", _re218.I)
+
+        def _scan218(doms):
+            want = {d.lower() for d in doms}
+            out = {}
+            for n, t in _files218:
+                ds = set()
+                for m in _tok218.finditer(t):
+                    parts = m.group(1).lower().rstrip(".").split(".")
+                    for i in range(len(parts) - 1):
+                        ds.add(".".join(parts[i:]))
+                hit = want & ds
+                for d in hit:
+                    out.setdefault(d, []).append(n)
+            return out
+
+        _hits218 = _scan218(_live218)
+        assert not _hits218, (
+            "§0.5 脱敏红线：以下注册域在**库里有资产**、又出现在**被跟踪文件**里 —— "
+            "按 2026-10-09 约定改成 xxx.com 或从库里清掉：" +
+            "; ".join(f"{d} ← {fs[:3]}" for d, fs in sorted(_hits218.items())[:8]))
+        # 变异证伪（§6.1）：往域名清单里塞一个必然出现在 tracked 文件里的公共域，
+        # 判据必须立刻命中 —— 否则上面这条断言是空写。
+        _mut218 = _scan218({"github.com"})
+        assert _mut218.get("github.com"), "脱敏判据没牙：连 github.com 都扫不出来"
+    # ---- ② run_cmd：大输出**不许死锁**（真 dirmap 踩出来的一小时卡死）----
+    from scanner.utils import run_cmd as _rc218
+    _code218 = "import sys; sys.stdout.write('x'*200000); sys.stderr.write('e'*200000)"
+    _t218 = time.time()
+    _c218, _o218, _e218 = _rc218([sys.executable, "-c", _code218], timeout=30)
+    _el218 = time.time() - _t218
+    assert _c218 == 0, f"大输出子进程被当成失败：rc={_c218}（套住就是管道死锁）"
+    assert len(_o218) >= 200000 and len(_e218) >= 200000, \
+        f"输出被截断/丢了：out={len(_o218)} err={len(_e218)}"
+    assert _el218 < 20, f"200KB 输出花了 {_el218:.1f}s ⇒ 又回到\"等退出才读管道\"的死锁形状"
+
+    # ---- ③ dirmap 无 -e 的新形态：产物是 output/<netloc>.txt 单文件（不是旧版的目录）----
+    _dt218 = Path(tempfile.mkdtemp(prefix="smoke218-dirmap-"))
+    try:
+        _sc218 = _dt218 / "dirmap.py"; _sc218.write_text("# fake\n", encoding="utf-8")
+        (_dt218 / "output").mkdir()
+        _net218 = "127.0.0.1_8765"
+        (_dt218 / "output" / (_net218 + ".txt")).write_text(
+            "[200] [text/html] [1.23kb] http://127.0.0.1:8765/admin\n", encoding="utf-8")
+        _st218b = _ds218.DirscanStage(_C218(_dt218))
+        _old218 = _ds218.run_cmd
+        _ds218.run_cmd = lambda *a, **k: (0, "", "")
+        try:
+            _rows218 = _st218b._run_dirmap(_sc218, {"": [{"url": "http://127.0.0.1:8765/"}]},
+                                           {"python": "python", "threads": 30},
+                                           lang_arg=False, py=sys.executable)
+        finally:
+            _ds218.run_cmd = _old218
+        assert _rows218 and _rows218[0]["status"] == 200, \
+            f"新形态单文件产物没被解析出来（旧代码会因 DIRMAP_KEEP 整份跳过）：{_rows218}"
+        assert _rows218[0]["path"].endswith("/admin"), _rows218
+        assert not (_dt218 / "output" / (_net218 + ".txt")).exists(), \
+            "解析完必须连单文件一起清掉（否则重扫时 saveResults 去重 ⇒ 0 行新内容）"
+    finally:
+        shutil.rmtree(_dt218, ignore_errors=True)
+
+        # ---- ④ 截图候补轮：轮转（最久没试优先）+ 截成功清掉旧 shot_error ----
+        _st218c = db.create_task("smoke218-shot", "http://127.0.0.1:8765/", ["screenshot"], {})
+        _ua218, _ub218 = "http://127.0.0.1:8765/a", "http://127.0.0.1:8765/b"
+        db.insert_sites(_st218c, [{"url": _ua218, "status": 200, "title": "t"},
+                                  {"url": _ub218, "status": 200, "title": "t"}])
+        db.set_site_shot_errors(_st218c, [(_ua218, "超时｜一次性（1 次）"),
+                                          (_ub218, "超时｜一次性（1 次）")])
+        _c1 = [r["url"] for r in db.list_shot_failures(_st218c)]
+        db.set_site_shots(_st218c, [(_ua218, "shots/a.png")])
+        _c2 = [r["url"] for r in db.list_shot_failures(_st218c)]
+        assert _c1 == [_ua218, _ub218], _c1
+        assert _c2 == [_ub218], f"截成功的站不该还在候补名单里（旧行为：shot 与旧 shot_error 并存）：{_c2}"
+        _r1 = [r for r in db.list_sites(_st218c) if r["url"] == _ua218][0]
+        assert not (_r1["shot_error"] or "").strip(), "重试成功必须清掉旧 shot_error（数据才干净）"
+        db.set_site_shots(_st218c, [(_ua218, "")])
+        db.set_site_shot_errors(_st218c, [(_ua218, "超时｜一次性（1 次）")])
+        _c3 = [r["url"] for r in db.list_shot_failures(_st218c)]
+        assert _c3 == [_ub218, _ua218], \
+            f"最久没试的应排前面（按 id 的老行为会让刚试过的永远挡在最前）：{_c3}"
+
+        print(f"[218] 续218 ok: 脱敏判据（库内注册域 {len(_reg218)} 个、待查 {len(_live218)} 个 × "
+              f"被跟踪文件 {len(_files218)} 个 ⇒ 0 泄漏；变异注入 github.com 立即命中）｜"
+              f"run_cmd 200KB 输出 {_el218:.2f}s 返回不截断（管道死锁已修）｜"
+              "dirmap 无 -e 的 output/<netloc>.txt 单文件产物解析 + 清理｜"
+              "截图候补轮按最久没试轮转 + 截成功清旧 shot_error")
     print("SMOKE PASS")
 
 

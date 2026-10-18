@@ -143,6 +143,8 @@ def install(py, script):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="dirmap 依赖自检 / 安装（续217）")
     ap.add_argument("--install", action="store_true", help="显式联网安装 requirement.txt")
+    ap.add_argument("--check", action="store_true",
+                    help="只检查不联网（默认行为；此旗标只为把文档里的写法变真）")
     ap.add_argument("--python", default=None, help="指定解释器（默认 .venv / 便携 / 当前）")
     ap.add_argument("--src", default=None, help="dirmap.py 路径（默认读 settings.yaml）")
     args = ap.parse_args(argv)

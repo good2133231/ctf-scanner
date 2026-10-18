@@ -745,14 +745,23 @@ class DirscanStage(Stage):
         for d in dirs:
             for f in sorted(d.glob("*.txt")):
                 rows.extend(self._parse_output(f))
+        # 续218：无 `-e` 的 dirmap（v1.1/master）不写目录，写**单文件** `output/<netloc>.txt`；
+        # 文件名不在 DIRMAP_KEEP 里，必须点名强读，否则整轮结果被静默丢掉、回退内置扫描。
+        single = []
+        for netloc in targets:
+            f = out_dir / (netloc.replace(":", "_") + ".txt")
+            if f.is_file():
+                single.append(f)
+        for f in single:
+            rows.extend(self._parse_output(f, force=True))
         if not rows:      # 兜底：目录命名/层级变了，退回"本次运行写过的文件"
             for f in self._outputs_since(out_dir, started):
                 rows.extend(self._parse_output(f))
         # 只保留确实属于我们扫过的主机的行（防读到别人的历史产物）
         if targets:
             rows = [r for r in rows if urlparse(r.get("path") or "").netloc in targets]
-        # 清理由**本次解析过**的目标目录。放在最后一步：解析出问题时现场还在。
-        self._cleanup_output(ctx.logger, dirs)
+        # 清理由**本次解析过**的目标目录/单文件。放在最后一步：解析出问题时现场还在。
+        self._cleanup_output(ctx.logger, dirs, single)
         return rows
 
     @staticmethod
@@ -768,12 +777,13 @@ class DirscanStage(Stage):
         return found
 
     @staticmethod
-    def _cleanup_output(logger, dirs):
-        """删掉本次解析过的 dirmap 产物目录（`output/<netloc>/`）。
+    def _cleanup_output(logger, dirs, files=()):
+        """删掉本次解析过的 dirmap 产物目录（`output/<netloc>/`）与单文件（`output/<netloc>.txt`）。
 
         为什么必须清：`output/` 是 dirmap 的**持久**目录、没有上限 —— `404.txt` 每目标约 1 MB，
         一个长期跑的任务列表就能堆到几百 MB；而我们的适配器只读 `res.txt` 与 `403.txt`，
         其余文件（`404.txt` / `othercode.txt` / `重复长度.txt`）对我们没有任何价值。
+        无 `-e` 的 v1.1/master 写的是**单文件** `output/<netloc>.txt`，同样只删本次目标那几份。
         顺带解决另一个隐患：dirmap 的 `saveResults()` 会与文件里已有的行去重，残留文件会让
         "重扫同一目标"写出 0 行新内容（mtime 也不变）——清理后每次拿到的都是新产物。
         **只删本次扫过的目标对应的目录**，别人的历史产物不动；删除失败只告警不抛。
@@ -785,6 +795,15 @@ class DirscanStage(Stage):
                 shutil.rmtree(d)
             except OSError as e:
                 logger.warning(f"[dirscan] 清理 dirmap 产物目录失败：{d}（{e}）")
+                continue
+            removed += 1
+            freed += size
+        for f in files:
+            try:
+                size = f.stat().st_size
+                f.unlink()
+            except OSError as e:
+                logger.warning(f"[dirscan] 清理 dirmap 产物文件失败：{f}（{e}）")
                 continue
             removed += 1
             freed += size
@@ -806,10 +825,16 @@ class DirscanStage(Stage):
         return found[:limit]
 
     @staticmethod
-    def _parse_output(path):
-        """解析 dirmap 的一行结果；读不懂的行跳过（宁可少报，不猜）。"""
+    def _parse_output(path, force=False):
+        """解析 dirmap 的一行结果；读不懂的行跳过（宁可少报，不猜）。
+
+        `force=True`：绕过 `DIRMAP_KEEP` 文件名门槛。老版 dirmap 在 `output/<netloc>/`
+        目录里写 `res.txt` / `403.txt`（名单内的才值得读，`404.txt`/`重复长度.txt` 是噪声）；
+        无 `-e` 的 v1.1/master 写的是 `output/<netloc>.txt` 单文件 —— 名单必然不收它，
+        由调用方按"本次目标"点名强读。
+        """
         rows = []
-        if path.name not in DIRMAP_KEEP:
+        if path.name not in DIRMAP_KEEP and not force:
             return rows
         try:
             lines = read_lines(path)

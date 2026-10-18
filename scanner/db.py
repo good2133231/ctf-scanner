@@ -115,7 +115,8 @@ CREATE TABLE IF NOT EXISTS sites (
   status INTEGER, title TEXT, length INTEGER, server TEXT, tech TEXT, source TEXT,
   favicon TEXT DEFAULT '',
   redirect_url TEXT DEFAULT '', redirect_status INTEGER DEFAULT 0,
-  redirect_title TEXT DEFAULT '', shot_error TEXT DEFAULT ''
+  redirect_title TEXT DEFAULT '', shot_error TEXT DEFAULT '',
+  shot_last_at TEXT DEFAULT ''          -- 续218：最近一次截图尝试时间（轮转用）
 );
 CREATE TABLE IF NOT EXISTS ports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -366,6 +367,14 @@ def _now():
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _now_ms():
+    """带毫秒的时间串（续218）：截图候补轮的轮转排序要能分辨**同一秒内**的两次尝试，
+    否则 `ORDER BY shot_last_at, id` 在同一秒里会退回按 id ⇒ 上一轮刚试过的还是排最前。
+    只给需要精细排序的列用；其它列继续吃 `_now()`（页面与报告按秒展示就够了）。
+    """
+    return time.strftime("%Y-%m-%d %H:%M:%S") + ".%03d" % int((time.time() % 1) * 1000)
+
+
 def get_conn():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
@@ -405,7 +414,10 @@ _COLUMN_PATCHES = {
               "redirect_title": "TEXT DEFAULT ''",
               # 续150（用户点单）：截图**失败原因**（301 未落地 / 超时 / 无浏览器 / DNS / 其他），
               # 空串 = 没失败（或没跑截图）。让页面能回答"为什么这一格是空的"。
-              "shot_error": "TEXT DEFAULT ''"},
+              "shot_error": "TEXT DEFAULT ''",
+              # 续218：最近一次**尝试**截图的时间（成功/失败都盖）。候补轮按它轮转，
+              # 否则"上一轮仍失败的那批"永远排在前面，后面那批一辈子轮不到一次重试。
+              "shot_last_at": "TEXT DEFAULT ''"},
     # P1-1 误报复核 / P1-2 置信度分层：老库补列（新库由 SCHEMA 直接建出）
     "vulns": {"review": "TEXT DEFAULT ''", "review_note": "TEXT DEFAULT ''",
               "reviewed_at": "TEXT DEFAULT ''", "packets": "TEXT DEFAULT ''",
@@ -1325,11 +1337,22 @@ def set_site_redirect_titles(task_id, pairs):
 
 
 def set_site_shots(task_id, pairs):
-    """写入站点截图路径：`pairs` 是 `[(url, rel_path), ...]`。"""
-    rows = [(rel or "", task_id, url) for url, rel in (pairs or []) if url]
-    if not rows:
-        return
-    _exec("UPDATE sites SET shot=? WHERE task_id=? AND url=?", rows, many=True)
+    """写入站点截图路径：`pairs` 是 `[(url, rel_path), ...]`。
+
+    续218 两处收紧：
+    - 截成功的行**顺手清掉旧 `shot_error`**。以前只写 `shot` 一列 ⇒ 库里同时躺着这一轮的
+      `shot` 与上一轮的 `shot_error`；页面靠"shot 优先显示"才没出事故，但任何按
+      `shot_error<>''` 取数的口径都会把"早就截成了"的站点算成失败（数据本身是脏的）。
+    - 每次尝试（成功或失败）都盖 `shot_last_at`，候补轮据此轮转（见 `list_shot_failures`）。
+    """
+    ok = [(rel, _now_ms(), task_id, url) for url, rel in (pairs or []) if url and rel]
+    if ok:
+        _exec("UPDATE sites SET shot=?, shot_error='', shot_last_at=? "
+              "WHERE task_id=? AND url=?", ok, many=True)
+    cleared = [("", _now_ms(), task_id, url) for url, rel in (pairs or []) if url and not rel]
+    if cleared:
+        _exec("UPDATE sites SET shot=?, shot_last_at=? WHERE task_id=? AND url=?",
+              cleared, many=True)
 
 
 def set_site_shot_errors(task_id, pairs):
@@ -1337,11 +1360,12 @@ def set_site_shot_errors(task_id, pairs):
 
     只写非空原因（成功的不写 —— 空串本身就是"没失败"）。页面据此回答"截图那一格为什么是空的"。
     """
-    rows = [(str(reason or "").strip(), task_id, url)
+    rows = [(str(reason or "").strip(), _now_ms(), task_id, url)
             for url, reason in (pairs or []) if url and str(reason or "").strip()]
     if not rows:
         return
-    _exec("UPDATE sites SET shot_error=? WHERE task_id=? AND url=?", rows, many=True)
+    _exec("UPDATE sites SET shot_error=?, shot_last_at=? WHERE task_id=? AND url=?",
+          rows, many=True)
 
 
 def set_subdomain_net(task_id, mapping):
@@ -1814,9 +1838,14 @@ def list_shot_failures(task_id):
       顺带：老格式（续150）没有档名前缀、`classify` 又认不全档名，用 SQL 前缀匹配会把
       可重试的那几条静默漏掉 —— 看着像"候补功能没生效"，实际是判据抄错了地方。
     """
+    # 续218：排序从"按 id"改成**最久没试的排前面**（没试过 → 最早试过 → id 兜底）。
+    # 候补轮受 `screenshot.max_sites` 单轮上限约束，按 id 排就意味着"上一轮仍失败的那批"
+    # 永远挡在后面那批前面 ⇒ 后面那批一辈子轮不到一次重试。
     return _query("SELECT url, shot, shot_error, redirect_url, status FROM sites "
                   "WHERE task_id=? AND TRIM(COALESCE(shot_error,''))<>'' "
-                  "AND TRIM(COALESCE(shot,''))='' ORDER BY id", (task_id,))
+                  "AND TRIM(COALESCE(shot,''))='' "
+                  "ORDER BY CASE WHEN TRIM(COALESCE(shot_last_at,''))='' THEN 0 ELSE 1 END, "
+                  "shot_last_at, id", (task_id,))
 
 
 def list_dirs(task_id):

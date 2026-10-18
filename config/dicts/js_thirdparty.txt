@@ -390,3 +390,7 @@ tinyurl.com
 uppy.io
 fontawesome.com
 iconarchive.com
+# 续218 追加 3 条：本框架自身的公网 IP 回显服务（gui/app.py「本机公网 IP」探测用的就是这三家：api.ipify.org / icanhazip.com / ipinfo.io）
+ipify.org
+icanhazip.com
+ipinfo.io

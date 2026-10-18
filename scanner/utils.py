@@ -214,55 +214,53 @@ def _do_run_cmd(argv, cwd, timeout, extra_path=None, stop=None, extra_env=None):
         return 127, "", f"executable not found: {argv[0]}"
     except OSError as e:
         return 1, "", str(e)
-    try:
-        # ⚠ 不能用 `communicate()` 等退出：它等的是**管道关闭**，而孙进程继承了
-        # stdout/stderr 的写端 ⇒ 父进程明明退了，communicate 仍要等孙进程自己关管道
-        # （实测：一个 fork 出 20s 孙进程的工具，run_cmd 会被挂满 20s，rc 还是 0 ——
-        # 比原来的 bug 更隐晦）。所以改成**轮询等进程退出**（`wait` 只等直接子进程），
-        # 一退场就整组收割，孙进程死后管道自然关闭，那时再读输出。
-        #
-        # ⚠ 超时判定必须在 `wait` **之前**：`wait(timeout=0.2)` 成功返回只说明"这 0.2s 内
-        # 它退了"，不说明"没超时"—— 父进程 0.3s 就退、timeout=1s 时，第二轮 wait 成功返回，
-        # 若把"wait 成功"当"没超时"就会漏报超时（实测第一版就是这么错的：rc=0 而不是 124）。
-        deadline = (time.monotonic() + timeout) if timeout else None
-        timed_out = False
-        while p.poll() is None:                       # 直接子进程还在跑
-            if deadline is not None and time.monotonic() >= deadline:
-                timed_out = True
-                break
-            if stop is not None and stop.is_set():
-                break
-            time.sleep(0.05)
-        _kill_group(p)                                # 三条出路都收割：正常退/超时/被叫停
-        try:
-            out, err = p.communicate(timeout=_REAP_GRACE)
-        except Exception:
-            out, err = "", ""
-        if timed_out:
-            return 124, "", "timeout"
-        if stop is not None and stop.is_set():
-            # 被叫停 ⇒ `returncode` 是 **-9（我们 SIGKILL 的）**。调用方普遍按
-            # `rc != 0` 判失败（portscan.py:207/312 就是），那会把"我们主动停的"
-            # 报成"工具坏了"—— 用户看到的失败原因与事实相反。
-            # 所以这一路**不返回 -9**：125 是自留的"被停止"码（124=超时、127=不存在），
-            # stderr 写清原因，调用方照旧能分流。
-            return 125, "", "stopped"
-        return p.returncode, out or "", err or ""
-    except subprocess.TimeoutExpired:
-        _kill_group(p)
-        try:
-            p.communicate(timeout=5)             # 收尸，别让管道把父进程也挂住
-        except Exception:
-            pass
-        return 124, "", "timeout"
-    finally:
-        # 续211-T3：**父进程已退场**（正常退出、超时、被取消，三条路都走到这里）⇒
-        # 进程组里若还有成员，那只能是它 exec 出来的**孙进程**（puredns 正常退出后
-        # massdns 还在跑，正是本仓注释里记着的那个形状）。此时无条件整组收割 ——
-        # 不等 stop、也不赌"父退了孙会自己退"（实测：孙会一直跑满自己的生命周期）。
-        # 组里没有成员时 killpg 抛 ProcessLookupError，被 `_kill_group` 吞掉 ⇒ 零成本。
-        _kill_group(p)
 
+    # 续218：**边等边排空管道** —— 这是真死锁，不是慢。
+    #   形状：`Popen(stdout=PIPE, stderr=PIPE)`，父进程只 `poll()` 等退出、退出后才去读管道；
+    #   而 dirmap 这类第三方工具会持续往 stdout 刷命中行与回车进度条，一写满管道缓冲
+    #   （Linux 默认 64KB）就永久阻塞。两边互等 ⇒ 任务能挂一整小时，
+    #   外在只有"进度不动、CPU 0%"，极容易被误读成"工具在慢慢跑"。
+    #   ⇒ 起两个读线程持续抽干管道；进程退场后再收割整组。
+    #   （旧那条前提仍成立：不用 `communicate()` 等管道关闭 —— 孙进程会继承写端，那等的是
+    #     孙进程而不是直接子进程，实测能白挂 20s；这里只 `poll()` 直接子进程是否退出。）
+    _chunks = {"out": [], "err": []}
+
+    def _drain218(stream, key):
+        try:
+            data = stream.read()
+        except Exception:
+            data = None
+        if data:
+            _chunks[key].append(data)
+
+    _readers218 = [threading.Thread(target=_drain218, args=(p.stdout, "out"), daemon=True),
+                threading.Thread(target=_drain218, args=(p.stderr, "err"), daemon=True)]
+    for _r in _readers218:
+        _r.start()
+
+    deadline = (time.monotonic() + timeout) if timeout else None
+    timed_out = False
+    while p.poll() is None:                       # 直接子进程还在跑
+        if deadline is not None and time.monotonic() >= deadline:
+            timed_out = True
+            break
+        if stop is not None and stop.is_set():
+            break
+        time.sleep(0.05)
+    _kill_group(p)                                # 三条出路都收割：正常退/超时/被叫停
+    for _r in _readers218:
+        _r.join(_REAP_GRACE)                      # 收尸：等管道 EOF；孙进程还活着就只等到宽限期
+    out, err = "".join(_chunks["out"]), "".join(_chunks["err"])
+    if timed_out:
+        return 124, out, "timeout"
+    if stop is not None and stop.is_set():
+        # 被叫停 ⇒ `returncode` 是 **-9（我们 SIGKILL 的）**。调用方普遍按
+        # `rc != 0` 判失败（portscan.py:207/312 就是），那会把"我们主动停的"
+        # 报成"工具坏了"—— 用户看到的失败原因与事实相反。
+        # 所以这一路**不返回 -9**：125 是自留的"被停止"码（124=超时、127=不存在），
+        # stderr 写清原因，调用方照旧能分流。
+        return 125, out, "stopped"
+    return p.returncode, out, err or ""
 
 # ---------- 域名 ----------
 
