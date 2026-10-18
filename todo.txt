@@ -4303,6 +4303,27 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续217（2026-10-18，WorkBuddy · Claude）：续175 收尾 —— 环境变量凭据 + dirmap 兼容 + chrome 三平台摘要 + 干净安装实测 + 8765 夹具
+
+主理人原话「这个做了」；四项续175 挂账 + 8765 夹具一轮全收。细节与实测数字见 CHANGELOG 续217
+（唯一产地，不在这里抄第二份）。
+
+- [x] **CTFSCANNER_KEYS_\***：8 个变量非交互直通进密文（值不回显、密文 0600、decrypt round-trip 断言）；TTY 时 env 优先、缺项补问
+- [x] **dirmap 免便携 CPython**：`import imp` 是上游未使用导入，`tools/dirmap_compat/imp.py` 垫片实测 v1.1 在 3.14 `-h` rc=0；依赖改用 `tools/dirmap_requirements.txt`（上游 2020 pin 在 3.14 编不过，实测 greenlet C 扩展失败）；新 `tools/setup_dirmap.py --check/--install`；无 `-e` 跑一轮不再整份跳过（`_dirmap_argv` 唯一产地）
+- [x] **chrome 三平台摘要**：win64 / mac-x64 / mac-arm64 三件下载算哈希（sha256 见 toolmgr 注册表）+ `stack_install(blob=…)` 全部 ok/verified + mac `.app` 路径折算；linux-arm64 保持未核拒装（红线没松）
+- [x] **干净安装实测**：干净克隆 `./install.sh --full` rc=0 / 60s；fscan 27.0 MB、massdns 131 KB 编译成功；首跑抓出 `find_go()` "PATH Go 1.26 × GOROOT 1.27.2" 版本错配真 bug 并修掉（仓库内 Go 优先 + `CTFSCANNER_GO` 覆盖）
+- [x] **8765 夹具**：绑定失败短重试 + 明确 SystemExit；`_fixture_alive` 认 `/.git/config`，本机已有靶场时复用、空端口不误判（`[217]` 双向钉住）
+- [x] **门禁环境坑**：本机 IDE 的批量删除守卫在 SMOKE PASS 后拦了 atexit 沙箱清理（Exception ignored，退出码不受影响）——`_cleanup_sandbox` 改为接住 BaseException，清理失败永不改写门禁结论
+- [x] **门禁**：`[217]` 一组 + SMOKE PASS —— 第六跑（加固前）与第七跑（最终代码）都全绿，
+  第七跑结尾还顺带验证了 atexit 加固：上一跑被本机 IDE 守卫拦出的 `SystemExit` 这一跑没再出现
+
+**下一轮（续217 之后）——只放未做的：**
+- [ ] chrome win/mac 真机启动（只核了归档字节与版本；macOS `.app` 路径折算没在真 mac 验过）
+- [ ] 本机 `tools/dirmap/` 快照（无 `-e`）按新适配器真跑一轮深扫档，核对产物与内置字典的互补性
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] `tools/setup_dirmap.py --install` 在 Windows / macOS 各跑一次（三个钉版只验过 Linux 3.14 wheel）
+- [ ] 干净安装的 Windows / macOS 数字（本轮只有 Linux x86_64）
+
 ## 续216（2026-10-18，WorkBuddy · Claude）：排期收口 —— IP 反查逐源成败 + 队列运行中扩缩容 + 续175 凭据/fontconfig
 
 接续 续215「下一轮」清单与续175 两项；主理人原话「接着做完」。细节与实测数字见 CHANGELOG 续216

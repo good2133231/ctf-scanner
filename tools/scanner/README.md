@@ -94,7 +94,7 @@ python cli/client.py --check-afrog-pocs <你的 PoC 目录>     # 只读，不�
 
 - **nmap** → `./install.sh --with-system --yes`（交给发行版包管理器真装）；
 - **fscan** → `./install.sh --full`（缺 Go / 缺源码就取进仓库再编，见下）；
-- **dirmap** → 纯 Python、release 无产物；本仓已随附一份兼容快照在 `tools/dirmap/`，无需另装（见下）；
+- **dirmap** → 纯 Python、release 无产物；本机若已把一份兼容快照放在 `tools/dirmap/`（目录联接，不入库）就无需另装（见下）；
 - **massdns** → 官方只发 C 源码，`python tools/build_massdns.py --fetch --wire` 自编译（源码自动取；**仍需本机 gcc/make**）。它不是"可选工具"：puredns 会在进程内 exec 它，见下面「massdns」。
 
 细节与逐条原因见下文与 `scanner/toolmgr.py` 的 `MANUAL`：
@@ -145,26 +145,35 @@ go build -ldflags="-s -w" -trimpath -o fscan
 
 ```bash
 git clone https://github.com/H4ckForJob/dirmap tools/dirmap
-cd tools/dirmap && python -m pip install -r requirement.txt
+python tools/setup_dirmap.py --install     # 用 tools/dirmap_requirements.txt（上游 2020 pin 在 3.12+ 编不过）
 ```
 
-> ⚠️ 三条**实测**坑（2026-10-02 在 Linux 上装上游 master 撞出来的，不是猜的）：
-> ① 清单文件名是 `requirement.txt`（**少一个 s**），按 pip 惯例猜 `requirements.txt` 会报 `No such file`；
-> ② 它 `import imp`（Python 3.12 起标准库已删除）→ **上游 master 在 3.12+ 的解释器上根本起不来**，
->    而 `requirement.txt` 钉的 2020 年 `gevent` / `lxml` 也编不过（放宽版本能装上，但救不了 `imp`）；
->    需要一个 ≤3.11 的解释器，并把下面的 `tools.dirmap.python` 指过去。
-> ③ 框架调用时固定传 `-e <技术栈>`（`php` / `jsp` / `asp` / `d` / `big` / `all`），而**上游 master
->    已经删掉了 `-e`**（v1.1 只认 `-t` / `-i` / `-iF` / `-lcf` / `--debug`，字典与后缀改由
->    `dirmap.conf` 配）。装了新版的表现是：dirmap 退出码 2 → 框架日志写明原因 → **回退内置扫描**
->    （不静默，但"装了却没用上"）。带 `-e` 的旧版（本仓适配审查所用的 `dirmap-master` 快照）才是
->    框架现在兼容的那一支。
+> ⚠️ 三条**实测**坑（2026-10-02 首测；2026-10-18 续217 逐文件复核后改写）：
+> ① 上游清单文件名是 `requirement.txt`（**少一个 s**），按 pip 惯例猜 `requirements.txt`
+>    会报 `No such file`；`tools/setup_dirmap.py` 仍按这个文件名找，但实际安装优先用
+>    本框架钉的 `tools/dirmap_requirements.txt`（见 ②）。
+> ② 上游 `lib/core/option.py` 有 `import imp`，但**全仓库没有任何 `imp.` 调用**
+>    （v1.1 与 master 都逐文件 grep 过）。Python 3.12 起标准库删了 `imp`，于是这行无用的
+>    导入会让 dirmap 在 3.14 上直接 ImportError。**不需要为此装 ≤3.11 的便携 CPython**：
+>    `scanner/stages/dirscan.py` 启动 dirmap 时会把 `tools/dirmap_compat/` 放在子进程
+>    `PYTHONPATH` 最前面，用一个空 `imp` 模块兜住；实测 v1.1 在 Python 3.14 上
+>    `python dirmap.py -h` rc=0。仓库内若另有 `tools/python311/` 便携解释器，
+>    `dirscan._dirmap_python()` 会优先用它（没有也不影响）。上游 `requirement.txt` 钉的
+>    `gevent==20.12.1` / `lxml==4.5.0` 在 3.14 编不出 wheel（实测 greenlet C 扩展直接失败）；
+>    `tools/dirmap_requirements.txt` 换成 3.14 实测通过的 gevent 26.9.0 / lxml 6.1.3 /
+>    progressbar2 4.6.0。
+> ③ 框架原先固定传 `-e <技术栈>`，而**上游 master / v1.1 都没有 `-e`**
+>    （只认 `-t` / `-i` / `-iF` / `-lcf` / `--debug`，字典与后缀由 `dirmap.conf` 配）。
+>    续217 起适配器会先按源码判 `-e`：**有就按技术栈分组跑；没有就只跑一轮、不带 `-e`**，
+>    让 dirmap 自己的 `dirmap.conf` 决定字典 —— 不再是"装了却不用"。
+>    带 `-e` 的旧快照仍走原来的分组路径，两种形态共用同一段产物解析。
 
 `tools.dirmap` 是**两段式**配置（不是单个路径）：
 
 ```yaml
 tools:
   dirmap:
-    python: "python"
+    python: "python"          # 默认解释器：自动优先 tools/python311/ → .venv → PATH
     script: "tools/dirmap/dirmap.py"
 ```
 

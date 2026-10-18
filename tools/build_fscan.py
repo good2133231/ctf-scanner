@@ -58,13 +58,23 @@ def find_source(explicit=None):
 
 
 def find_go():
-    """Go 可执行文件：先本机 PATH，再仓库内那份（`tools/go/bin/go`）；都没有 → `None`。"""
-    sysgo = shutil.which("go")
-    if sysgo:
-        return sysgo, False
+    """Go 可执行文件：**先仓库内那份**（`tools/go/bin/go`，`--full` 取来的、版本钉死），
+    再本机 PATH；都没有 → `None`。
+
+    续217 在干净克隆实测踩出来的：`--with-stack` 装的是 Go 1.27.2，而系统 PATH 里有
+    1.26.0 —— 旧顺序让 `go build` 用了系统那个，却带着 `GOROOT=tools/go`，报
+    `compile: version "go1.27.2" does not match go tool version "go1.26.0"`。
+    仓库内那份是**本框架刚刚取来并校验过的**，优先用它才与 `go_env()` 的 GOROOT 同源。
+    """
+    explicit = os.environ.get("CTFSCANNER_GO", "").strip()
+    if explicit:
+        return str(Path(explicit).resolve()), False
     from scanner import toolmgr
     local = toolmgr.stack_local_go()
-    return (str(local), True) if local else (None, False)
+    if local:
+        return str(local), True
+    sysgo = shutil.which("go")
+    return (sysgo, False) if sysgo else (None, False)
 
 
 def fetch(name, allow_unverified=False):
@@ -128,7 +138,8 @@ def main(argv=None):
 
     from scanner import toolmgr
     env = dict(os.environ)
-    env.update(toolmgr.go_env())          # 缓存/配置/遥测/临时件一律指进仓库内（见 go_env 的实测注）
+    # 仓库内 Go 才配 GOROOT/PATH；显式 CTFSCANNER_GO 或系统 Go 时不把 GOROOT 指到别处
+    env.update(toolmgr.go_env(with_local=go_local))
     for _k in ("GOTMPDIR", "GOCACHE", "GOMODCACHE", "GOPATH", "XDG_CONFIG_HOME",
                "HOME" if os.name != "nt" else "USERPROFILE"):
         Path(env[_k]).mkdir(parents=True, exist_ok=True)   # GOTMPDIR 必须先存在，Go 不自建

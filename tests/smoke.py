@@ -10,6 +10,7 @@ import functools
 import os
 import re
 import shutil
+import socket
 import sys
 import tempfile
 import threading
@@ -197,9 +198,12 @@ def _cleanup_sandbox() -> None:
         return
     try:
         shutil.rmtree(_TMPDIR)
-    except OSError as exc:
+    except BaseException as exc:      # noqa: BLE001 - 清理失败不许改写门禁结论
+        # 连 SystemExit 一起接住：本机 IDE 会给 shutil.rmtree 挂"批量删除守卫"（超过 500 个
+        # 文件就拒绝并 raise SystemExit），它发生在 atexit 里时 Python 会打"Exception ignored"
+        # 不改退出码，但不能赌每台机器的钩子行为一致 —— 门禁结论只由断言决定（续217 实测）。
         rel = _TMPDIR.relative_to(ROOT).as_posix() if _TMPDIR.is_relative_to(ROOT) else _TMPDIR.name
-        print("[!] 本轮冒烟沙箱未删净（不影响测试结论）：%s —— %s" % (rel, exc))
+        print("[!] 本轮冒烟沙箱未删净（不影响测试结论）：%s —— %r" % (rel, exc))
         print("    下次跑 smoke 会自动清扫 %d 分钟前的 logs/smoke-* 残留。" % int(_SWEEP_MIN_AGE // 60))
 
 
@@ -326,17 +330,54 @@ def ensure_fixture_git_config():
     return p
 
 
+def _fixture_alive(port, timeout=0.8):
+    """端口上是否已经有一个**能服务**的靶场（不是"端口被占"就算）。
+
+    续217：只探 `/.git/config` 并看响应里有没有 `[core]` —— 别的进程恰好占着 8765 时，
+    不能把它当成自己的靶场复用，否则测试会拿着陌生响应一路跑偏。
+    """
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout) as sock:
+            sock.sendall(b"GET /.git/config HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+            data = b""
+            while len(data) < 65536:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                if b"[core]" in data:
+                    break
+        return b"[core]" in data
+    except OSError:
+        return False
+
+
 def start_fixture(port=FIXTURE_PORT):
-    """在后台线程启动内置靶场；端口被占用时返回 None（复用外部服务）。"""
+    """在后台线程启动内置靶场；端口被**真的能服务的**靶场占用时复用它。
+
+    续217：绑定失败不再静默 `return None`（那会让 `[3e]` 报一个看起来像流水线坏了的假红）。
+    先短重试几次（上一个测试的收尾窗口），再探端口；探不到就打印原因并 `SystemExit(1)`，
+    让门禁在**开头**红，且红得能直接看出是 8765 被占/夹具没起来。
+    """
     ensure_fixture_git_config()      # 必须在起服务**之前**（复用到外部服务时同样需要）
     handler = functools.partial(_QuietHandler, directory=str(ROOT / "smoke_root"))
-    try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
-    except OSError:
-        return None
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    atexit.register(httpd.shutdown)
-    return httpd
+    last = None
+    for attempt in range(5):
+        try:
+            httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+        except OSError as e:
+            last = e
+            if _fixture_alive(port):
+                print(f"[i] 端口 {port} 已有靶场在服务，复用它（不再起第二个）")
+                return None
+            time.sleep(0.5)
+            continue
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        atexit.register(httpd.shutdown)
+        return httpd
+    print(f"[X] 8765 夹具起不来：127.0.0.1:{port} 绑定失败且端口没有可服务的靶场"
+          f"（最后一次：{last}）。先确认没有别的进程占着这个端口，再重跑。")
+    raise SystemExit(1)
 
 from scanner import db
 from scanner.config import LOGS_DIR, load_settings
@@ -439,6 +480,11 @@ def main():
 
     # 2c) favicon 平台指纹（mmh3）与外部情报模块（iprecon / fofa）的纯函数行为
     settings = load_settings()
+    # 续217：门禁不拉真实 dirmap（第三方工具、耗时且依赖本机装没装）。需要验适配器的测试
+    # 自己造临时脚本/临时 run_cmd；这里把全局配置指到不存在的路径，让管道只走内置字典。
+    _tools217 = settings.setdefault("tools", {})
+    _tools217["dirmap"] = dict(_tools217.get("dirmap") or {},
+                               script="tools/does-not-exist.py")
     # 「出厂默认」类判据一律吃 DEFAULTS，**不吃本机 settings.yaml**（§6.2 第一起同族：
     # 续159 用户在策略页把 ctlog 打开，`ctlog_mod.enabled(settings)` 那条当场红，
     # 现象长得像代码坏了 —— 判据要问的是「新克隆拿到什么」，不是「这台机改过什么」）。
@@ -2051,11 +2097,15 @@ def main():
         warning = error = info
 
     _seen105 = []
-    _bs0, _dm0, _la0, _rs0 = (DirscanStage._builtin_scan, DirscanStage._run_dirmap,
-                              DirscanStage._dirmap_accepts_lang_arg, _ds105.resolve)
+    _bs0, _dm0, _la0, _rs0, _dp0 = (DirscanStage._builtin_scan, DirscanStage._run_dirmap,
+                                    DirscanStage._dirmap_accepts_lang_arg, _ds105.resolve,
+                                    DirscanStage._dirmap_deps_ok)
     try:
         DirscanStage._builtin_scan = lambda self, s, c, l, only_fw=False, shallow=False: []
-        DirscanStage._run_dirmap = lambda self, *a, **k: _seen105.append("called") or []
+        DirscanStage._run_dirmap = lambda self, *a, **k: (
+            _seen105.append(k.get("lang_arg"))
+            or [{"path": "http://x/", "status": 200, "length": 1}])
+        DirscanStage._dirmap_deps_ok = lambda self, py, script: (True, "")
         DirscanStage._dirmap_accepts_lang_arg = lambda self, script: False
         _script105 = _mk105("script", {"dirmap.py": ""})
         _ds105.resolve = lambda _p: _script105
@@ -2065,21 +2115,24 @@ def main():
         _lg105 = _Log105()
         _cx105.logger = _lg105
         DirscanStage(_cx105).run()
-        assert _seen105 == [], "不支持 -e 却仍然逐组白跑 dirmap"
+        assert _seen105 == [False], "没有 -e 时应跑一轮（lang_arg=False），不是逐组白跑也不是跳过"
         _txt105 = " ".join(_lg105.lines)
-        assert "不支持 -e" in _txt105, _txt105[-200:]
+        assert "没有 -e" in _txt105 and "dirmap.conf" in _txt105, _txt105[-200:]
+        assert "不支持 -e" not in _txt105, "旧归因不该再出现"
         assert "未解析到结果" not in _txt105, "归因又写回'没解析到结果'了 —— 那是误导"
-        # 支持时照旧要调用（反向：把探测打回"永远支持"，_run_dirmap 必须被点到）
+        # 支持时照旧按技术栈分组（lang_arg=True）
         _seen105.clear()
         DirscanStage._dirmap_accepts_lang_arg = lambda self, script: True
         DirscanStage(_cx105).run()
-        assert _seen105 == ["called"], "支持 -e 时不该跳过 dirmap（探测写反就会在这里红）"
+        assert _seen105 == [True], "支持 -e 时应按技术栈分组调用"
     finally:
         DirscanStage._builtin_scan, DirscanStage._run_dirmap = _bs0, _dm0
         DirscanStage._dirmap_accepts_lang_arg, _ds105.resolve = _la0, _rs0
-    print("[5p-附] 续105 dirmap -e 探测 ok: 参数定义里有 -e＝支持、没有＝不支持、读不到任何 add_argument＝"
-          "按支持走旧行为；只有帮助文本含 -e 不算支持。不支持时 run() 一个子进程都不起且归因写准，"
-          "支持时照旧调用（双向都钉）")
+        DirscanStage._dirmap_deps_ok = _dp0
+    print("[5p-附] 续105/217 dirmap -e 探测 ok: 参数定义里有 -e＝支持、没有＝不支持、读不到任何 "
+          "add_argument＝按支持走旧行为；只有帮助文本含 -e 不算支持。没有 -e 时跑一轮 "
+          "lang_arg=False（按 dirmap.conf，不再逐组白跑、也不跳过）；有时照旧分组 "
+          "lang_arg=True（双向都钉）")
     # 只跑 dirscan 的补扫任务没有 probe 产物：必须能从目标兜底出站点，否则整阶段空跑
     _noactx = StageContext(tid, "smoke-dir-targets", parse_lines(["http://fallback.test/"]),
                            ["dirscan"], {}, _q_settings, Path(_TMPDIR) / "dir-fb", rec)
@@ -12859,8 +12912,11 @@ http:
         f"dirmap 克隆落点必须跟着配置的 script 走：{_dm8d}"
     assert not any("dirmap-master" in c for c in _dm8d), \
         "不得写死第三方项目的历史目录名（配置一改就指错地方）"
-    assert any("nope-8d/requirement.txt" in c for c in _dm8d), \
-        "依赖安装也得跟着同一个落点，且必须用它真实的清单名 requirement.txt（少一个 s）"
+    assert any("setup_dirmap.py --install" in c and "nope-8d/dirmap.py" in c
+               for c in _dm8d), \
+        "依赖安装也得跟着配置里的 script 落点（setup_dirmap --src）"
+    assert any("requirement.txt" in c for c in _dm8d), \
+        "必须说清 setup_dirmap 读的是 requirement.txt（少一个 s）"
     assert any("tools.dirmap" in c for c in _dm8d), "dirmap 是两段式配置，指引里必须写明"
     _dmd8d = _rb8d._manual_row("dirmap", "linux", [], {}, _nores8d)["cmds"]
     assert any("H4ckForJob/dirmap tools/dirmap" in c for c in _dmd8d), \
@@ -20527,6 +20583,7 @@ expression: r0()
     _penv166 = dict(os.environ)
     _penv166.update({"PATH": os.pathsep.join([str(_bin166), _penv166.get("PATH", "")]),
                      "HOME": str(_d166 / "home"), "CTFSCANNER_FSCAN_SRC": "",
+                     "CTFSCANNER_GO": str(_bin166 / "go"),
                      "CTFSCANNER_MASSDNS_SRC": ""})
     (_d166 / "home").mkdir()
     try:
@@ -20649,16 +20706,21 @@ expression: r0()
                    for v in _plat167.values()), _plat167
         assert _tm167.stack_asset("chrome", "plan9", "amd64") is None
         assert _tm167.stack_asset("chrome", "linux", "386") is None
-        # ③ 摘要**只登记核过的那一平台**：没登记的平台 ⇒ 拿不到摘要 ⇒ 默认拒装
-        #    （不是"退到 latest 再猜"，也不是"随便拿另一平台的字节装进来"）
-        _dig167, _src167, _ = _tm167.stack_digest("chrome", "chrome-linux64.zip")
-        assert _src167 == _tm167.VERIFY_PINNED and len(_dig167 or "") == 64, (_dig167, _src167)
-        for _other167 in ("chrome-win64.zip", "chrome-mac-x64.zip"):
-            _d2, _s2, _ = _tm167.stack_digest("chrome", _other167)
-            assert not _d2 and _s2 == "", \
-                f"{_other167} 没被人工核过却有摘要 ⇒「只装核过的平台」那条红线没了"
+        # ③ 摘要**只登记核过的平台**：续217 已核 Linux/Win/mac-x64/mac-arm64 四件；
+        #    linux-arm64 仍未核 ⇒ 拿不到摘要 ⇒ 默认拒装（不是"退到 latest 再猜"，也不是
+        #    "随便拿另一平台的字节装进来"）。
+        for _pinned167 in ("chrome-linux64.zip", "chrome-win64.zip",
+                           "chrome-mac-x64.zip", "chrome-mac-arm64.zip"):
+            _dig167, _src167, _ = _tm167.stack_digest("chrome", _pinned167)
+            assert _src167 == _tm167.VERIFY_PINNED and len(_dig167 or "") == 64, \
+                (_pinned167, _dig167, _src167)
+        _d2, _s2, _ = _tm167.stack_digest("chrome", "chrome-linux-arm64.zip")
+        assert not _d2 and _s2 == "", \
+            "chrome-linux-arm64.zip 没被人工核过却有摘要 ⇒「只装核过的平台」那条红线没了"
         # ④ `stack_exec_path`：没产物 → 空串；有产物 → **相对项目根**的 posix 路径（§0.3）
-        assert _tm167.stack_exec_path("chrome") in ("", "tools/browser/chrome", "tools/browser/chrome.exe")
+        assert _tm167.stack_exec_path("chrome") in (
+            "", "tools/browser/chrome", "tools/browser/chrome.exe",
+            "tools/browser/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
         _fx167 = dict(_tm167.LOCAL_STACK["chrome"])
         _keep167 = dict(_tm167.LOCAL_STACK)
         _fx167.update({"dest": "sandbox-167/browser", "marker_any": ("chrome", "chrome.exe"),
@@ -20767,7 +20829,7 @@ expression: r0()
     finally:
         shutil.rmtree(str(_d167), ignore_errors=True)
 
-    print("[167] 续167 渲染栈（浏览器）ok: chrome 进注册表（kind=cft、摘要只登记核过的 linux64，"
+    print("[167] 续167 渲染栈（浏览器）ok: chrome 进注册表（kind=cft、摘要登记 Linux/Win/mac-x64/mac-arm64 四件，"
           "win/mac 拿不到摘要就拒装）｜wire 指向 DEFAULTS 真存在的 screenshot.browser（回写到没人读的键"
           "＝半接线，判红）｜平台标签五件各算得对、认不出的平台给 None｜zip 解包保留 0o755 + 剥前缀 + "
           "exec 路径是相对 posix｜回写走逐行替换：行数/注释数/CRLF 不变、只差那一行、别的段同名键不碰"
@@ -20780,7 +20842,7 @@ expression: r0()
     # ---------------- [168] 续168：「本平台不适用」不是一种失败；--platform 只用于清单预览 ----------------
     #      主理人点单（2026-10-13）：「跨平台安装可以选择平台，亦或是自己识别平台，
     #      就不用安装一些平台不需要的了」。改前的现状：Windows 上 puredns（官方压根没发 Windows 产物）
-    #      与 chrome（本框架只核过 linux64 摘要）都算"自动层失败" ⇒ `./install.sh` 恒 rc=1，
+    #      与 chrome（本框架曾只核过 linux64 摘要，续217 已补 win/mac）都算"自动层失败" ⇒ `./install.sh` 恒 rc=1，
     #      每台新机器都要有人来问一句"是不是装坏了"；而"选择平台"这件事根本没有入口。
     print('[168] 续168 平台不适用态 …')
     from scanner import toolmgr as _tm168
@@ -20812,10 +20874,16 @@ expression: r0()
         _r168 = _tm168.install('puredns')            # 零网络：asset 算不出来就在查 release 之前 return
         assert _r168['ok'] is False and _r168['not_applicable'], _r168
         assert _r168['verified'] is None, '没走到校验就不许给 verified 真/假（§5.19 那类假话）'
-        assert _tm168.stack_applicable('chrome')[0] is False, \
-            'chrome 只登记核过的 linux64 摘要 ⇒ windows 必须是**不适用**，而不是"核过了却装不上"'
+        assert _tm168.stack_applicable('chrome')[0] is True, \
+            '续217 已核 win64 摘要 ⇒ windows 上 chrome 应是**适用**（不再拿"只核过 linux"当借口）'
         assert _tm168.stack_applicable('fscan-src')[0] is True, '源码包与平台无关，不该被算成不适用'
         assert _tm168.stack_applicable('go')[0] is True, 'Go 官方每个主流平台都发 ⇒ 平台覆盖不该收窄'
+    finally:
+        del os.environ[_tm168.PLATFORM_OVERRIDE_ENV]
+    os.environ[_tm168.PLATFORM_OVERRIDE_ENV] = 'linux/arm64'
+    try:
+        assert _tm168.stack_applicable('chrome')[0] is False, \
+            'linux-arm64 没登记摘要 ⇒ 必须**不适用**，而不是"核过了却装不上"'
         _sk168 = _tm168.stack_install('chrome', dest_root=str(ROOT / 'logs' / '_nonexist168'))
         assert _sk168['ok'] is False and _sk168['not_applicable'] and _sk168['bytes'] == 0, _sk168
         assert not (ROOT / 'logs' / '_nonexist168').exists(), '不适用那条必须在下任何字节之前返回'
@@ -20896,7 +20964,7 @@ expression: r0()
           '官方没发该平台产物＝不适用（不算失败也不算就绪，verified 保持 None，且一个字节都不下）｜'
           'install_auto/install_stack 对它不排 failed（变异：摘掉标记 ⇒ 立刻算 1 项失败）｜'
           '清单单开一节逐条点名 + 预览模式自己声明（本机探测时不许出现那句）｜'
-          'chrome 只登记核过的平台、源码包与 go 不受平台影响')
+          'chrome 只登记核过的平台（Linux/Win/mac 四件；linux-arm64 仍未核）、源码包与 go 不受平台影响')
 
     # ---------------- [169] 续169：拓展域名的置信度分档 + 主面板的层数/阈值 + 三道闸 ----------------
     #      主理人点单（2026-10-13）：「主界面依然没有 追加到本任务 / 追加扫描层数 —— 这个不仅要
@@ -28343,6 +28411,152 @@ expression: r0()
           "unregistered）+ 汇总含预检跳过原因｜队列运行中 1→3→1（缩容协作式退场）+ "
           "3→1→3 退休线程不占编制｜安装凭据非交互跳过（进程内复用 run_keys）+ "
           "fontconfig 四方一致且只注入子进程｜GUI 按 config() 生效｜ICP 加密凭据优先")
+    # ------------------------------------------------------------------ [217]
+    # 续217：续175 剩余两项（环境变量凭据 / dirmap 兼容）+ chrome win/mac 摘要 + 8765 夹具
+    import contextlib
+    import io
+    import yaml as _yaml217
+    from scanner import keystore as _ks217
+    from scanner import toolmgr as _tm217
+    from scanner.stages import dirscan as _ds217
+    import run_bootstrap as _rb217
+
+    # ① CTFSCANNER_KEYS_*：非交互也能把值带进密文；只报字段名，不打印值
+    _tmp217 = Path(tempfile.mkdtemp(prefix="smoke217-keys-"))
+    _envnames217 = [f[4] for f in _rb217._KEY_FIELDS] + ["CTFSCANNER_KEYS_PASSPHRASE"]
+    _oldenv217 = {k: os.environ.get(k) for k in _envnames217}
+    try:
+        os.environ["CTFSCANNER_KEYS_FOFA_EMAIL"] = "env@example.test"
+        os.environ["CTFSCANNER_KEYS_FOFA_KEY"] = "fake-fofa-value"
+        os.environ["CTFSCANNER_KEYS_VIRUSTOTAL_KEY"] = "fake-vt-value"
+        os.environ["CTFSCANNER_KEYS_ICP_API_KEY"] = "fake-icp-value"
+        os.environ["CTFSCANNER_KEYS_PASSPHRASE"] = "smoke-pass-217"
+        _ov217 = _rb217._env_credentials()
+        assert _ov217["fofa"]["email"] == "env@example.test"
+        assert _ov217["virustotal"]["key"] == "fake-vt-value"
+        _buf217 = io.StringIO()
+        with contextlib.redirect_stdout(_buf217):
+            _ok217 = _rb217.prompt_credentials(
+                ask=False, root=_tmp217, dst=_tmp217 / "keys.enc.yaml")
+        _out217 = _buf217.getvalue()
+        assert _ok217, _out217
+        assert "fake-fofa-value" not in _out217 and "fake-vt-value" not in _out217, "值不许回显"
+        _enc217 = _tmp217 / "keys.enc.yaml"
+        assert _enc217.exists()
+        if os.name != "nt":
+            assert (_enc217.stat().st_mode & 0o777) == 0o600
+        _text217, _why217 = _ks217.decrypt_blob(_enc217.read_bytes(), "smoke-pass-217")
+        assert _text217 is not None, _why217
+        _data217 = _yaml217.safe_load(_text217)
+        assert _data217["fofa"] == {"email": "env@example.test", "key": "fake-fofa-value"}
+        assert _data217["virustotal"]["key"] == "fake-vt-value"
+        assert _data217["icp"]["api_key"] == "fake-icp-value"
+    finally:
+        for _k217, _v217 in _oldenv217.items():
+            if _v217 is None:
+                os.environ.pop(_k217, None)
+            else:
+                os.environ[_k217] = _v217
+        shutil.rmtree(_tmp217, ignore_errors=True)
+
+    # ② 8765 夹具：真的靶场可复用；空端口不能被误判为"有服务"
+    assert _fixture_alive(FIXTURE_PORT) is True, "当前 smoke 自己的夹具应能通过 /.git/config 识别"
+    _s217 = socket.socket(); _s217.bind(("127.0.0.1", 0))
+    _free217 = _s217.getsockname()[1]
+    try:
+        assert _fixture_alive(_free217) is False, "空端口不该被当成靶场"
+    finally:
+        _s217.close()
+
+    # ③ chrome win/mac 三份摘要（只查表，不下载）
+    for _plat217, _arch217, _asset217, _sha217 in (
+            ("windows", "amd64", "chrome-win64.zip",
+             "59ab2a6e99bde9c0bc180414988394f9f5355a0d3764c704151ee8ecea235c7e"),
+            ("macOS", "amd64", "chrome-mac-x64.zip",
+             "9e4da7961d4a426078f02e89ecfa569a7926ada2dc88aa53c0bd9ed0d46c3bb7"),
+            ("macOS", "arm64", "chrome-mac-arm64.zip",
+             "529a71bd61aaa2ef266a4d4bd300ae9572ba6a3468a8d55c3023ffeffb5b6b4e")):
+        assert _tm217.stack_asset("chrome", _plat217, _arch217) == _asset217
+        _d217, _src217, _why217 = _tm217.stack_digest("chrome", _asset217)
+        assert _d217 == _sha217 and _src217 == _tm217.VERIFY_PINNED and not _why217, (
+            _asset217, _d217, _src217, _why217)
+    assert "Google Chrome for Testing.app" in _tm217.LOCAL_STACK["chrome"]["marker_any"]
+
+    # ④ dirmap：有 -e 分组跑、无 -e 跑一轮；兼容垫片进 PYTHONPATH
+    _argv217 = _ds217.DirscanStage._dirmap_argv("py", "d.py", "in.txt", 30, "php")
+    assert _argv217 == ["py", "d.py", "-iF", "in.txt", "-e", "php", "-t", "30"], _argv217
+    _argv217b = _ds217.DirscanStage._dirmap_argv("py", "d.py", "in.txt", 30, None)
+    assert "-e" not in _argv217b, _argv217b
+    _env217 = _ds217.DirscanStage._dirmap_env()
+    assert "dirmap_compat" in _env217["PYTHONPATH"]
+    assert _env217["PYTHONWARNINGS"] == "ignore::SyntaxWarning"
+    assert Path(_ds217.DirscanStage._dirmap_python({"python": "python"})).is_file()
+
+    _dtmp217 = Path(tempfile.mkdtemp(prefix="smoke217-dirmap-"))
+    try:
+        _yes217 = _dtmp217 / "yes"; _yes217.mkdir()
+        (_yes217 / "dirmap.py").write_text('p.add_argument("-e", dest="x")\n', encoding="utf-8")
+        _no217 = _dtmp217 / "no"; _no217.mkdir()
+        (_no217 / "dirmap.py").write_text('p.add_argument("-iF", dest="x")\n', encoding="utf-8")
+        _empty217 = _dtmp217 / "empty"; _empty217.mkdir()
+        (_empty217 / "dirmap.py").write_text("# no args\n", encoding="utf-8")
+        _st217 = _ds217.DirscanStage(None)
+        assert _st217._dirmap_accepts_lang_arg(_yes217 / "dirmap.py") is True
+        assert _st217._dirmap_accepts_lang_arg(_no217 / "dirmap.py") is False
+        assert _st217._dirmap_accepts_lang_arg(_empty217 / "dirmap.py") is True
+    finally:
+        shutil.rmtree(_dtmp217, ignore_errors=True)
+
+    # 无 -e 的完整调用：argv 不带 -e，产物仍按 output/<netloc>/*.txt 解析
+    _rtmp217 = Path(tempfile.mkdtemp(prefix="smoke217-run-"))
+    _script217 = _rtmp217 / "dirmap.py"; _script217.write_text("# fake\n", encoding="utf-8")
+    _work217 = _rtmp217 / "work"; _work217.mkdir()
+
+    class _L217:
+        def info(self, m):
+            pass
+
+        def warning(self, m):
+            pass
+
+    class _C217:
+        def __init__(self, wd):
+            self.workdir = wd
+            self.throttle = None
+            self.logger = _L217()
+            self.stopped = lambda: False
+
+    _stage217 = _ds217.DirscanStage(_C217(_work217))
+    _calls217 = []
+    _old_run217 = _ds217.run_cmd
+
+    def _fake_run217(argv, cwd=None, timeout=None, throttle=None, extra_env=None, **kw):
+        _calls217.append((list(argv), dict(extra_env or {})))
+        _in217 = Path(argv[argv.index("-iF") + 1])
+        for _u217 in _in217.read_text(encoding="utf-8").splitlines():
+            from urllib.parse import urlparse as _up217
+            _net217 = _up217(_u217).netloc.replace(":", "_")
+            _outd217 = Path(cwd) / "output" / _net217
+            _outd217.mkdir(parents=True, exist_ok=True)
+            (_outd217 / "res.txt").write_text(
+                f"[200] [text/html] [1.23kb] {_u217}admin\n", encoding="utf-8")
+        return 0, "", ""
+
+    _ds217.run_cmd = _fake_run217
+    try:
+        _rows217 = _stage217._run_dirmap(
+            _script217, {"php": [{"url": "http://127.0.0.1:8765/"}]},
+            {"python": "python", "threads": 30}, lang_arg=False, py=sys.executable)
+    finally:
+        _ds217.run_cmd = _old_run217
+        shutil.rmtree(_rtmp217, ignore_errors=True)
+    assert _calls217 and "-e" not in _calls217[-1][0], _calls217[-1][0]
+    assert _rows217 and _rows217[0]["status"] == 200, _rows217
+    assert _rows217[0]["path"].endswith("/admin"), _rows217
+
+    print("[217] 续217 ok: CTFSCANNER_KEYS_* 非交互直通（值不回显/0600）｜"
+          "8765 夹具可复用且空端口不误判｜chrome win64/mac-x64/mac-arm64 摘要钉住｜"
+          "dirmap 有 -e 分组/无 -e 跑一轮 + imp 垫片进 PYTHONPATH")
     print("SMOKE PASS")
 
 

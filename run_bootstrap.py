@@ -661,12 +661,15 @@ def _manual_row(name, os_label, mgrs, tools_cfg, resolve):
         # ⚠️ 它的清单文件名是 `requirement.txt`（**少一个 s**），按 pip 惯例猜 `requirements.txt`
         #    会报"No such file"，看起来像"源码不完整"。
         cmds = [f"git clone https://github.com/H4ckForJob/dirmap {target}",
-                f"python -m pip install -r {target}/requirement.txt",
+                f"python tools/setup_dirmap.py --install --src {script}"
+                "（显式联网装 gevent/lxml/progressbar2；读同目录的 requirement.txt，"
+                "不装也能回退内置扫描）",
                 "再把 config/settings.yaml 的 tools.dirmap 两段填好（python / script）"
                 "—— GUI「策略配置」页改不了 tools 段",
-                "注：它 `import imp`（Python 3.12 起标准库已删）→ 需要 ≤3.11 的解释器并把 "
-                "tools.dirmap.python 指过去；另外上游 master 已删掉本框架要传的 `-e` 参数，"
-                "逐条实测坑见 tools/scanner/README.md「手工安装」"]
+                "注：上游 `import imp` 是无用导入，3.12+ 由 tools/dirmap_compat/imp.py 兜住；"
+                "上游 requirement.txt 的 2020 年 pin 在 3.12+ 编不过，setup_dirmap 改用 "
+                "tools/dirmap_requirements.txt；上游 master 没有 `-e`，dirscan 会按 dirmap.conf "
+                "跑一轮而不是白跑；逐条实测坑见 tools/scanner/README.md「手工安装」"]
         found = _rel(resolve(script)) if resolve(script).exists() else ""
         why = toolmgr.MANUAL["dirmap"]
     else:
@@ -849,69 +852,121 @@ def install_stack(only=(), allow_unverified=False, timeout=600):
     return installed, failed
 
 
-# 续175：安装末尾可选的凭据字段（组, 键, 人话名, 是否隐藏输入）。
+# 续175/217：安装末尾可选的凭据字段（组, 键, 人话名, 是否隐藏输入, 环境变量名）。
 # 只收 `config.load_keys()` 真正消费的组；空输入＝保留现有值，绝不把空串写进去覆盖旧 key。
+# 环境变量这一档是给容器 / CI / cloud-init 用的：非交互也能把 key 带进密文，值不落命令行、
+# 不落仓库；只在本函数里读一次，不写进任何被跟踪文件。
 _KEY_FIELDS = (
-    ("fofa", "email", "FOFA 邮箱", False),
-    ("fofa", "key", "FOFA API key", True),
-    ("shodan", "key", "Shodan API key", True),
-    ("quake", "key", "360 Quake API key", True),
-    ("github", "token", "GitHub 只读 token", True),
-    ("gitlab", "token", "GitLab 只读 token", True),
-    ("virustotal", "key", "VirusTotal API key", True),
-    ("icp", "api_key", "ICP 备案源 api_key", True),
+    ("fofa", "email", "FOFA 邮箱", False, "CTFSCANNER_KEYS_FOFA_EMAIL"),
+    ("fofa", "key", "FOFA API key", True, "CTFSCANNER_KEYS_FOFA_KEY"),
+    ("shodan", "key", "Shodan API key", True, "CTFSCANNER_KEYS_SHODAN_KEY"),
+    ("quake", "key", "360 Quake API key", True, "CTFSCANNER_KEYS_QUAKE_KEY"),
+    ("github", "token", "GitHub 只读 token", True, "CTFSCANNER_KEYS_GITHUB_TOKEN"),
+    ("gitlab", "token", "GitLab 只读 token", True, "CTFSCANNER_KEYS_GITLAB_TOKEN"),
+    ("virustotal", "key", "VirusTotal API key", True, "CTFSCANNER_KEYS_VIRUSTOTAL_KEY"),
+    ("icp", "api_key", "ICP 备案源 api_key", True, "CTFSCANNER_KEYS_ICP_API_KEY"),
 )
 
 
-def prompt_credentials(ask=None):
-    """安装末尾**可选**的凭据录入（续175；只在 TTY 里问，绝不挂住 CI）。
+def _env_credentials(environ=None):
+    """把 `CTFSCANNER_KEYS_*` 收成与交互录入同形的 overlay（只返回非空字段）。
 
-    返回 `True` 表示走完了 `run_keys.py` 且 rc=0；`False` 表示跳过/失败/非交互。
+    `environ` 是测试注入口；生产走 `os.environ`。这里**不打印任何值**，调用方只报字段名。
+    """
+    env = environ if environ is not None else os.environ
+    out = {}
+    for group, key, _label, _secret, env_name in _KEY_FIELDS:
+        val = str((env or {}).get(env_name) or "").strip()
+        if val:
+            out.setdefault(group, {})[key] = val
+    return out
+
+
+def prompt_credentials(ask=None, root=None, run_keys=None, dst=None):
+    """安装末尾**可选**的凭据录入（续175/217：交互问答 + `CTFSCANNER_KEYS_*` 环境变量）。
+
+    两种入口共用同一条加密路径：
+    - 交互：只在 TTY 里问，绝不挂住 CI；空输入＝不改，已有值不会被空串覆盖。
+    - 环境变量：`CTFSCANNER_KEYS_FOFA_EMAIL` / `..._FOFA_KEY` / `..._SHODAN_KEY` /
+      `..._QUAKE_KEY` / `..._GITHUB_TOKEN` / `..._GITLAB_TOKEN` / `..._VIRUSTOTAL_KEY` /
+      `..._ICP_API_KEY`。非交互环境只要有任意一项就直接加密；没有就跳过。
+
+    返回 `True` 表示走完了 `cli.run_keys.main` 且 rc=0；`False` 表示跳过/失败/没有输入。
     三条红线：① 不打印任何输入值；② 明文只进系统临时文件，交给 `run_keys --encrypt
     --shred` 后立即删除；③ 已有密文由 `run_keys` 自己合并（这里不重写加密/合并逻辑）。
+    `root` / `run_keys` / `dst` 是测试注入口（默认就是仓库根、真实 CLI、真实密文路径）；
+    生产调用不传它们。
     """
+    root = Path(root) if root is not None else ROOT
+    env_overlay = _env_credentials()
+    provided = [f"{g}.{k}" for g, fields in sorted(env_overlay.items())
+                for k in sorted(fields)]
+    if provided:
+        print(f"[i] 环境变量已读取 {len(provided)} 项凭据：{'、'.join(provided)}"
+              "（值不打印；只用于本次生成密文）")
+    overlay = {g: dict(fields) for g, fields in env_overlay.items()}
+
     if ask is None:
         ask = sys.stdin.isatty()
-    if not ask:
-        print("[i] 非交互环境：跳过凭据录入（事后可运行 python cli/run_keys.py --encrypt）")
-        return False
-    try:
-        yn = input("现在录入第三方 API 凭据吗？输错/留空都只是跳过，之后可再补 [y/N]：").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print("\n[i] 已跳过凭据录入")
-        return False
-    if yn not in ("y", "yes", "是"):
-        print("[i] 已跳过凭据录入（随时可运行 python cli/run_keys.py --encrypt 补）")
+    missing = [f for f in _KEY_FIELDS
+               if not (overlay.get(f[0], {}).get(f[1]))]
+    if ask and missing:
+        if provided:
+            question = (f"环境变量已填 {len(_KEY_FIELDS) - len(missing)} 项，"
+                        f"还要补录其余 {len(missing)} 项吗？[y/N]：")
+        else:
+            question = "现在录入第三方 API 凭据吗？输错/留空都只是跳过，之后可再补 [y/N]："
+        try:
+            yn = input(question).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n[i] 已跳过交互补录" + ("（继续使用环境变量里的凭据）" if provided else ""))
+            yn = "n"
+        if yn in ("y", "yes", "是"):
+            for group, key, label, secret, _env_name in missing:
+                prompt = f"  {label}（留空＝不改）: "
+                try:
+                    val = getpass.getpass(prompt) if secret else input(prompt)
+                except (EOFError, KeyboardInterrupt):
+                    print("\n[!] 输入被取消" + ("，继续使用环境变量里已读取的凭据"
+                                                  if provided else "，本轮不写任何凭据"))
+                    if not provided:
+                        return False
+                    # 丢掉刚输入到一半的字段，回到环境变量那一份（避免半截凭据落盘）
+                    overlay = {g: dict(fields) for g, fields in env_overlay.items()}
+                    break
+                val = str(val or "").strip()
+                if val:
+                    overlay.setdefault(group, {})[key] = val
+        elif not provided:
+            print("[i] 已跳过凭据录入（随时可运行 python cli/run_keys.py --encrypt 补）")
+            return False
+    elif ask:
+        print("[i] 环境变量已覆盖全部字段，直接加密（不再交互）")
+
+    if not overlay:
+        print("[i] 非交互环境且未提供 CTFSCANNER_KEYS_*：跳过凭据录入"
+              "（事后可运行 python cli/run_keys.py --encrypt，或设置环境变量后重跑）")
         return False
 
-    overlay = {}
-    for group, key, label, secret in _KEY_FIELDS:
-        prompt = f"  {label}（留空＝不改）: "
-        try:
-            val = getpass.getpass(prompt) if secret else input(prompt)
-        except (EOFError, KeyboardInterrupt):
-            print("\n[!] 输入被取消，本轮不写任何凭据（已输入的部分也不会落盘）")
-            return False
-        val = str(val or "").strip()
-        if val:
-            overlay.setdefault(group, {})[key] = val
-    if not overlay:
-        print("[i] 没有输入任何值，跳过（现有凭据未动）")
-        return False
     try:
         import yaml
         from scanner import keystore
-        from cli.run_keys import main as _run_keys_main
     except ImportError:
         print("[!] 当前环境没有 PyYAML/cryptography，无法生成临时凭据文件；跳过（现有凭据未动）")
         return False
+    if run_keys is None:
+        try:
+            from cli.run_keys import main as run_keys
+        except ImportError:
+            print("[!] 当前环境没有 cli/run_keys.py，无法生成密文；跳过（现有凭据未动）")
+            return False
     # 还没有密文、但旧明文 keys.yaml 存在时，必须把它并进来：run_keys 只拿得到本函数的
     # 临时 src，不会自动去读明文；不并就会在第一次加密后把旧组"静默丢掉"（之后 load_keys
     # 只看密文）。只读明文，不写、不打印值。
     base = {}
-    if not (ROOT / "config" / "keys.enc.yaml").exists():
+    if not (root / "config" / "keys.enc.yaml").exists():
         try:
-            _old = yaml.safe_load((ROOT / "config" / "keys.yaml").read_text(encoding="utf-8"))
+            _old = yaml.safe_load((root / "config" / "keys.yaml").read_text(encoding="utf-8"))
             if isinstance(_old, dict):
                 base = _old
         except Exception:                           # noqa: BLE001 - 读不到就按没有明文处理
@@ -926,10 +981,13 @@ def prompt_credentials(ask=None):
             tmp_name = fh.name
         # 进程内复用同一条 CLI 路径（合并/自校验/覆盖策略都只有 `run_keys` 一份）——
         # 不在这里 `subprocess.call`：本文件的红线是"除 pip 引导外不起子进程"（[8d]）。
-        rc = _run_keys_main(["--encrypt", "--src", tmp_name, "--shred"])
+        argv = ["--encrypt", "--src", tmp_name, "--shred"]
+        if dst is not None:
+            argv += ["--dst", str(dst)]
+        rc = run_keys(argv)
         if rc == 0:
             print("[+] 凭据已写入加密文件（值不会出现在任何输出里；下次启动解锁一次即可）")
-            if (ROOT / "config" / "keys.yaml").exists():
+            if (root / "config" / "keys.yaml").exists():
                 print("[!] 旧明文 config/keys.yaml 仍在：确认密文能解开后请手工删掉它，"
                       "否则\"加密\"只防住了密文被拷走这一半。")
             return True

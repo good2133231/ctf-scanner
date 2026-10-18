@@ -41,6 +41,7 @@ dirmap 的 `-e` 只认 `php/jsp/asp/d/big/all`，**吃不下自定义字典**，
   同样长度的 `200` 基本都是同一个软 404 模板，列出来只会淹没真信号。
 """
 import hashlib
+import os
 import random
 import re
 import shutil
@@ -50,7 +51,7 @@ from urllib.parse import urlparse
 
 from .base import Stage
 from .. import db, fingerprint, flagfind, ml
-from ..config import resolve
+from ..config import BASE_DIR, resolve
 from ..utils import (read_lines, write_lines, pool_run, http_request, pick_python, run_cmd,
                      html_title)
 
@@ -377,15 +378,21 @@ class DirscanStage(Stage):
                             f"{int(cfg.get('quick_max_paths', 150) or 0)} 条/站）")
             entries = self._builtin_scan(sites, cfg, limits, shallow=True)
         elif script.exists() and not ctx.options.get("offline"):
-            if not self._dirmap_accepts_lang_arg(script):
-                # 原因必须写准：不是"没解析到结果"，是**这份 dirmap 压根没有 -e** ——
-                # 那就一个子进程都不该起（旧表现：每个技术栈分组都 rc=2 白跑一次，
-                # 最后只留一句归因错误的「dirmap 未解析到结果」）。
-                ctx.logger.warning("[dirscan] 装的 dirmap 不支持 -e（上游 master 已删该参数，"
-                                   "本框架适配的是认 -e 的那支快照）→ 本轮不逐组白跑，直接用内置字典")
+            py = self._dirmap_python(tool)
+            deps_ok, dep_err = self._dirmap_deps_ok(py, script)
+            if not deps_ok:
+                ctx.logger.warning(
+                    "[dirscan] dirmap 依赖不齐（gevent/lxml/progressbar）→ 本轮用内置字典；"
+                    "补法：python tools/setup_dirmap.py --install"
+                    + (f"（{dep_err.strip()[:120]}）" if dep_err else ""))
             else:
+                lang_arg = self._dirmap_accepts_lang_arg(script)
+                if not lang_arg:
+                    ctx.logger.info(
+                        "[dirscan] 这份 dirmap 没有 -e：按它自己的 dirmap.conf 跑一轮"
+                        "（不再按技术栈分组；框架补充扫描仍会补）")
                 ctx.logger.info(f"[dirscan] dirmap 处理 {len(sites)} 个站点 …")
-                entries = self._run_dirmap(script, groups, tool)
+                entries = self._run_dirmap(script, groups, tool, lang_arg=lang_arg, py=py)
                 used_dirmap = bool(entries)
                 if used_dirmap:
                     ctx.logger.info(f"[dirscan] dirmap 输出 {len(entries)} 条")
@@ -403,7 +410,6 @@ class DirscanStage(Stage):
                     ctx.logger.warning("[dirscan] dirmap 未解析到结果，回退内置扫描")
         else:
             ctx.logger.info("[dirscan] dirmap 不可用（或 --offline），使用内置字典扫描")
-
         # 浅扫结果在上面已经拿到，不再叠加任何字典（那是深扫的事）
         if deep and not used_dirmap:
             entries = self._builtin_scan(sites, cfg, limits)
@@ -588,6 +594,7 @@ class DirscanStage(Stage):
 
     _DIRMAP_LANG_ARG_RE = re.compile(r"""add_argument\(\s*['"]-e['"]""")
     _DIRMAP_LANG_CACHE = {}         # 按脚本路径缓存：一次深扫不该反复重读第三方源码
+    _DIRMAP_DEPS_CACHE = {}         # (解释器, 脚本) -> (齐不齐, stderr)；同一次扫描只探一次
 
     def _dirmap_accepts_lang_arg(self, script):
         """装的这份 dirmap 认不认 `-e`（按技术栈选字典）—— 判据是**它自己的参数定义源码**。
@@ -625,12 +632,67 @@ class DirscanStage(Stage):
         DirscanStage._DIRMAP_LANG_CACHE[key] = ok
         return ok
 
-    def _run_dirmap(self, script, groups, tool):
-        """**按技术栈分组**调用 dirmap，并解析产出。
+    @staticmethod
+    def _dirmap_python(tool):
+        """dirmap 用哪个解释器（续217）。
 
-        分组的意义（用户要求"确定是 java 就不要用 php asp"）：dirmap 自带按语言拆分的字典，
-        `-e` 支持 `php` / `jsp` / `asp` / `d` / `big` / `all` —— 对每个分组各跑一次、
-        各带对应的 `-e`，Java 站就不会被 PHP/ASP 的后缀浪费请求；未知栈的组用 `all`。
+        优先级：配置里显式写的非默认值 > 仓库内可选便携 Python（tools/python311/）>
+        项目 .venv > `pick_python()` 的兜底。默认值 `python` / `python3` 视为"没指定"——
+        否则在 Windows 上会去 PATH 找一个可能不存在/版本不对的解释器。
+        """
+        configured = str((tool or {}).get("python") or "").strip()
+        if configured and configured.lower() not in ("python", "python3"):
+            return pick_python(configured)
+        for rel in ("tools/python311/bin/python3", "tools/python311/bin/python3.11",
+                    "tools/python311/python.exe", "tools/python311/python3.exe"):
+            p = BASE_DIR / rel
+            if p.is_file():
+                return str(p)
+        for rel in (".venv/bin/python", ".venv/Scripts/python.exe"):
+            p = BASE_DIR / rel
+            if p.is_file():
+                return str(p)
+        return pick_python(configured or "python")
+
+    @staticmethod
+    def _dirmap_env():
+        """dirmap 子进程的环境：兼容垫片 + 抑制上游那些无害的 SyntaxWarning。"""
+        compat = str(BASE_DIR / "tools" / "dirmap_compat")
+        old = os.environ.get("PYTHONPATH", "")
+        return {"PYTHONPATH": compat + (os.pathsep + old if old else ""),
+                "PYTHONWARNINGS": "ignore::SyntaxWarning"}
+
+    @staticmethod
+    def _dirmap_argv(py, script, in_file, threads, e_arg=None):
+        """dirmap 的命令行（唯一产地；有 -e 才带，没 -e 就按它自己的 dirmap.conf）。"""
+        argv = [str(py), str(script), "-iF", str(in_file)]
+        if e_arg:
+            argv += ["-e", str(e_arg)]
+        argv += ["-t", str(threads)]
+        return argv
+
+    def _dirmap_deps_ok(self, py, script):
+        """依赖齐不齐（一次扫描只探一次）；缺依赖就别起一个必然 ImportError 的长任务。"""
+        key = (str(py), str(script))
+        hit = self._DIRMAP_DEPS_CACHE.get(key)
+        if hit is not None:
+            return hit
+        compat = BASE_DIR / "tools" / "dirmap_compat"
+        code = ("import sys; sys.path.insert(0, %r); "
+                "import gevent, lxml, progressbar" % str(compat))
+        rc, _, err = run_cmd([str(py), "-c", code], cwd=script.parent, timeout=30,
+                             extra_env=self._dirmap_env())
+        out = (rc == 0, err if rc != 0 else "")
+        self._DIRMAP_DEPS_CACHE[key] = out
+        return out
+
+    def _run_dirmap(self, script, groups, tool, lang_arg=True, py=None):
+        """调用 dirmap 并解析产出（续217：没有 `-e` 时按它自己的 dirmap.conf 跑一轮）。
+
+        `lang_arg=True` 时保持旧行为：按技术栈分组、各带 `-e`，Java 站不吃 PHP/ASP 后缀。
+        `lang_arg=False` 时只跑**一次**（全部 URL 一个输入文件、不带 `-e`），字典由 dirmap
+        自己的 `dirmap.conf` 决定 —— 上游 master 确实没有 `-e`，不这么做就等于装了个不干活的
+        外部工具。两种形态的产物解析完全共用下面同一段代码。
 
         三个坑（都是实测踩出来的）：
         - dirmap 把结果写进 `output/<域名>/` **子目录**（`res.txt` / `403.txt` / `404.txt` /
@@ -645,11 +707,16 @@ class DirscanStage(Stage):
         """
         ctx = self.ctx
         th = ctx.throttle        # F2 统一门控：本任务的限流器（可能是 None）
-        py = pick_python(tool.get("python", "python"))
+        py = py or self._dirmap_python(tool)
         threads = str(int(tool.get("threads", 30) or 30))
         started = time.time() - 1.0     # 留 1 秒余量，避免文件系统时间戳精度问题漏掉本次产物
         targets = set()
-        for kind, sites in (groups or {}).items():
+        if lang_arg:
+            work = [(kind or "all", sites) for kind, sites in (groups or {}).items()]
+        else:
+            all_sites = [s for sites in (groups or {}).values() for s in sites]
+            work = [("all", all_sites)]
+        for kind, sites in work:
             if ctx.stopped():
                 ctx.logger.warning("[dirscan] 任务已请求停止，中止 dirmap 扫描")
                 break
@@ -657,15 +724,20 @@ class DirscanStage(Stage):
             if not urls:
                 continue
             targets.update(u for u in (urlparse(x).netloc for x in urls) if u)
-            e_arg = kind or "all"
+            e_arg = (kind or "all") if lang_arg else None
             in_file = write_lines(ctx.workdir / f"dirmap_in_{kind or 'all'}.txt", urls)
-            ctx.logger.info(f"[dirscan] dirmap：{len(urls)} 个站点（技术栈 {kind or '未知'}"
-                            f" → -e {e_arg}）…")
-            rc, _, err = run_cmd([py, str(script), "-iF", str(in_file),
-                                  "-e", e_arg, "-t", threads],
-                                 cwd=script.parent, timeout=7200, throttle=th)
+            if e_arg:
+                ctx.logger.info(f"[dirscan] dirmap：{len(urls)} 个站点（技术栈 {kind or '未知'}"
+                                f" → -e {e_arg}）…")
+            else:
+                ctx.logger.info(f"[dirscan] dirmap：{len(urls)} 个站点（这份没有 -e，"
+                                "按 dirmap.conf 的字典跑）…")
+            argv = self._dirmap_argv(py, script, in_file, threads, e_arg)
+            rc, _, err = run_cmd(argv, cwd=script.parent, timeout=7200, throttle=th,
+                                 extra_env=self._dirmap_env())
             if rc != 0 and err.strip():
-                ctx.logger.info(f"[dirscan] dirmap（-e {e_arg}）rc={rc}：{err.strip()[:150]}")
+                ctx.logger.info(f"[dirscan] dirmap（{' -e ' + e_arg if e_arg else '无 -e'}）"
+                                f"rc={rc}：{err.strip()[:150]}")
 
         out_dir = script.parent / "output"
         rows = []

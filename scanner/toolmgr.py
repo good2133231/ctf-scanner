@@ -1144,15 +1144,32 @@ LOCAL_STACK = {
     #   实测：stable = 155.0.8059.39；`chrome-linux64.zip` 198,195,769 B、309 个成员、顶层前缀
     #   `chrome-linux64/`；zip 里带 unix mode（`chrome` 与 `chrome_crashpad_handler` 都是 0o755）
     #   ⇒ `extract_tree` 原样保留可执行位，不必额外补 chmod。
+    #   续217 补核 Windows / macOS 三件（2026-10-18 从同一版本的官方桶下载、本机算 sha256）：
+    #   - `chrome-win64.zip` 207,197,429 B；清单 `chrome-win64/155.0.8059.39.manifest`
+    #     的 assemblyIdentity 两行都是 155.0.8059.39；顶层 `chrome.exe`。
+    #   - `chrome-mac-x64.zip` 203,101,743 B；`Info.plist` 的 CFBundleShortVersionString
+    #     是 155.0.8059.39；可执行文件在 `Google Chrome for Testing.app/Contents/MacOS/`。
+    #   - `chrome-mac-arm64.zip` 192,634,606 B；同样版本；两份 mac 归档的顶层前缀分别是
+    #     `chrome-mac-x64/` 与 `chrome-mac-arm64/`。
+    #   ⚠ 只核了"归档字节 + 归档内版本号"，**没有在 Windows / macOS 真机上启动过**；
+    #     这不影响摘要的可复核性，但别把它说成跨平台运行验收。
     # ⚠ **它不保证在裸机上跑得起来**：Chrome 运行时要系统的 libnss3 / libgbm / libatk 等共享库，
     #   那是"装进系统"的东西、本框架不代装 ⇒ 取来只买到"在有这些库的机器上省一步"；缺库时
     #   `screenshot.capture()` 照旧返回失败并给出原因（不假绿，§5.12 那一族）。
     "chrome": {"kind": _STACK_CFT, "version": "155.0.8059.39", "dest": "tools/browser",
-               "strip": 1, "marker_any": ("chrome", "chrome.exe"),
+               "strip": 1, "marker_any": ("chrome", "chrome.exe",
+                                         "Google Chrome for Testing.app"),
                "max_bytes": 600 * 1024 * 1024,
                "wire": ("screenshot", "browser"),
-               "pin_sha256": {"chrome-linux64.zip":
-                              "55672d1f392fd3e7b7a08621b6e804e6bcb39d40cf155504abb74b3a021ea8ea"},
+               "pin_sha256": {
+                   "chrome-linux64.zip":
+                   "55672d1f392fd3e7b7a08621b6e804e6bcb39d40cf155504abb74b3a021ea8ea",
+                   "chrome-win64.zip":
+                   "59ab2a6e99bde9c0bc180414988394f9f5355a0d3764c704151ee8ecea235c7e",
+                   "chrome-mac-x64.zip":
+                   "9e4da7961d4a426078f02e89ecfa569a7926ada2dc88aa53c0bd9ed0d46c3bb7",
+                   "chrome-mac-arm64.zip":
+                   "529a71bd61aaa2ef266a4d4bd300ae9572ba6a3468a8d55c3023ffeffb5b6b4e"},
                "why": "截图 / PDF 报告要无头浏览器；官方不发校验和 ⇒ 只装本框架核过摘要的那一平台"
                       "那一版，其余平台拒装；运行时仍要系统共享库（libnss3/libgbm…），本框架不代装"},
 }
@@ -1169,7 +1186,7 @@ def cache_path(*parts):
     return _BASE_DIR.joinpath(CACHE_DIR, *[str(p) for p in parts])
 
 
-def go_env(dest_root=None):
+def go_env(dest_root=None, with_local=True):
     """编译 fscan 该带的 env：GOROOT / GOPATH / GOCACHE / GOMODCACHE（+ 仓库内 Go 的 PATH 前置）。
 
     **即使本机已有 Go 也要用它给的缓存变量**，否则一次编译就往家目录写几百 MB（数字见
@@ -1208,7 +1225,7 @@ def go_env(dest_root=None):
         env["LOCALAPPDATA"] = str(gohome / "AppData" / "Local")
     else:
         env["HOME"] = str(gohome)
-    if (goroot / "bin" / binary_name("go")).is_file():
+    if with_local and (goroot / "bin" / binary_name("go")).is_file():
         env["GOROOT"] = str(goroot)
         env["PATH"] = os.pathsep.join([str(goroot / "bin"), os.environ.get("PATH", "")])
     return env
@@ -1559,7 +1576,12 @@ def stack_exec_path(name, dest_root=None):
     if not cfg:
         return ""
     root = Path(dest_root) if dest_root else _BASE_DIR
-    p = root / cfg["dest"] / binary_name(name)
+    if name == "chrome" and sys.platform == "darwin":
+        # macOS 的可执行文件在 .app 包里，名字也不叫 chrome；只在这一处折算。
+        p = (root / cfg["dest"] / "Google Chrome for Testing.app" / "Contents" /
+             "MacOS" / "Google Chrome for Testing")
+    else:
+        p = root / cfg["dest"] / binary_name(name)
     if not p.is_file():
         return ""
     try:

@@ -3,6 +3,100 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续217（2026-10-18，WorkBuddy · Claude）：续175 收尾 —— CTFSCANNER_KEYS_* 直通 + dirmap 兼容（免便携 CPython）+ chrome 三平台摘要 + 干净安装实测 + 8765 夹具加固
+
+主理人原话「这个做了」，指名续216 末尾挂的续175 四项与 8765 夹具一项，一轮全收。
+
+### ① CTFSCANNER_KEYS_*：非交互也能把 key 带进密文
+
+- `run_bootstrap._KEY_FIELDS` 每项带上环境变量名（`CTFSCANNER_KEYS_FOFA_EMAIL / …_FOFA_KEY /`
+  `…_SHODAN_KEY / …_QUAKE_KEY / …_GITHUB_TOKEN / …_GITLAB_TOKEN / …_VIRUSTOTAL_KEY / …_ICP_API_KEY`）；
+  新增 `_env_credentials()` 读非空项并按同一份字段表回显**已读了哪些字段名**（绝不打印值）。
+- `prompt_credentials()`：环境变量有任意一条 ⇒ 非交互也直通 `cli.run_keys.main(["--encrypt",
+  "--src", tmp, "--shred"])`；交互（TTY）时缺哪项再补问哪项，env 值优先、用户输入只填空缺；
+  一条都没有 ⇒ 照旧跳过。`--src` / `--dst`（密文落点）做了**注入口**供门禁用沙箱验证，
+  生产不传即真路径。
+- 门禁 `[217]`：假 env → 临时密文 → `decrypt_blob` round-trip 逐组断言；stdout 不含任何值；
+  密文 0600。`install.sh` / `README.md` 列全 8 个变量名。
+
+### ② dirmap：实测不需要便携 CPython（续175 那条子项就此关门）
+
+- **实测澄清**：上游 v1.1 与 master 的 `lib/core/option.py` 里 `import imp` 都是**未使用导入**
+  （两份源码逐文件 grep 过，没有任何 `imp.` 调用）。`tools/dirmap_compat/imp.py` 空垫片由
+  `dirscan._dirmap_env()` 放进子进程 `PYTHONPATH` 最前面，实测 v1.1 在 **Python 3.14** 上
+  `python dirmap.py -h` rc=0（用 /tmp 里的上游源码验的，不往仓库写第三方代码）。
+  续102/105 写的"必须 ≤3.11"就此作废，AGENTS §7 该条已改写。
+- 依赖另有第二道坎：上游 `requirement.txt`（文件名少个 s）钉 `gevent==20.12.1 / lxml==4.5.0`，
+  3.14 上 greenlet 的 C 扩展直接编译失败（实测）。新 `tools/dirmap_requirements.txt`
+  钉本机 3.14 实测通过的组合（gevent 26.9.0 / lxml 6.1.3 / progressbar2 4.6.0；
+  `requests` 不重复钉，吃 requirements.lock 那份），`tools/setup_dirmap.py --install`
+  优先用它、没有才退回上游清单并明说风险。
+- 新 `tools/setup_dirmap.py`：`--check`（依赖齐不齐、解释器版本、≥3.12 会提示垫片兜底）
+  与 `--install`（**显式联网**，只在这条命令；`--src` 指配置里的 script 落点）。
+  `run_bootstrap` 的 dirmap 手工指引改成 `git clone` + `setup_dirmap.py --install --src <script>`，
+  `[8d]` 的断言跟着改。
+- dirscan：`_dirmap_python()`（配置非默认值 > `tools/python311/` > `.venv` > PATH）、
+  `_dirmap_deps_ok()`（真 import 探测 + 按解释器缓存；不齐只回退内置并写清补法）、
+  `_dirmap_argv()`（唯一产地：有 `-e` 带 `-e`，没有不带）。**无 `-e` 的 dirmap 不再被整份跳过**：
+  按 `lang_arg=False` 只跑一轮、字典由它自己的 `dirmap.conf` 决定，产物解析与带 `-e` 的完全共用。
+  `[5p-附]` 更新为双向（没有 → 跑一轮不是跳过；有 → 照旧分组）。
+- 门禁自身把 `tools.dirmap.script` 全局指到不存在的路径（本机 `tools/dirmap/` 是目录联接且
+  恰好没有 `-e`，第三次跑门禁时真把 dirmap 拉起来了、直接改跑它自己的大字典 —— 第三方工具
+  不许影响门禁时长与结果，这条隔离就是为它加的）。
+
+### ③ chrome win/mac 摘要：三件全部下载、算哈希、解包核过
+
+- `chrome-win64.zip` 207,197,429 B（sha256 `59ab2a6e…`）、`chrome-mac-x64.zip` 203,101,743 B
+  （`9e4da796…`）、`chrome-mac-arm64.zip` 192,634,606 B（`529a71bd…`），全部 155.0.8059.39
+  （win 看清单 manifest、mac 看 Info.plist）。`stack_install(blob=…)` 三件全部
+  `ok=True / verified=True`（305 / 349 / 349 个成员），mac 的 `.app` 可执行文件路径核过。
+- `stack_exec_path("chrome")` 在 macOS 折算 `.app/Contents/MacOS/…`（只这一处）；
+  `marker_any` 增加 `Google Chrome for Testing.app`。
+- **红线没松**：`chrome-linux-arm64.zip` 仍未人工核过 ⇒ `stack_digest` 返回空 ⇒ 默认拒装；
+  `[167]`/`[168]` 的断言从"只核过 linux64"改成"四件已核 + linux-arm64 必须仍拒"。
+- 诚实边界：只核了**归档字节 + 归档内版本号**，Windows / macOS 真机启动没做（`install.sh`
+  与注册表注释都写明，不说成跨平台运行验收）。
+
+### ④ 干净克隆 `./install.sh --full` 真机数字（Linux x86_64）
+
+- 干净克隆 + 工作树注入（新文件手拷），`./install.sh --full --no-keys`：**rc=0、60 秒**。
+  subfinder v2.17.0 / puredns v2.1.1 / afrog v3.5.8 校验和全过；go 1.27.2 → 67.3 MB
+  （15657 个文件）；fscan-src 6.5 MB、massdns-src 0.7 MB；chrome 189.0 MB（301 个文件）；
+  **fscan 27.0 MB / massdns 131 KB 编译成功**；落点 `tools/` 957M、`.cache/` 443M、`.venv/` 45M。
+- **首跑抓出一个真 bug**（这正是"换台干净机器再跑一次"的价值）：`tools/build_fscan.py::find_go()`
+  原先**先查 PATH 再查仓库内**，干净机器装了系统 Go 1.26，编译时却用钉住版本的 GOROOT 1.27.2，
+  报版本不匹配直接失败。改为**仓库内 Go 优先**（`CTFSCANNER_GO` 可显式覆盖，显式路径先转绝对，
+  `go_env(with_local=…)` 与它同源）；修复后同条件复跑 rc=0、fscan 27.0 MB。
+- 诚实边界：这是 Linux x86_64 的数字；Windows / macOS 的干净安装没跑过。
+
+### ⑤ 8765 夹具：假红从"偶发"变"结构性不可能"
+
+- `start_fixture()`：绑定失败先**短重试**（5 次 × 0.5s）；仍失败时**明确 SystemExit** 并说明
+  端口被占，不再静默返回 None 让几百行之后的断言莫名其妙地红。
+- `_fixture_alive()`：从"端口连得上就算"改成读 `http://<ip>:<port>/.git/config` 并认 `[core]`
+  段 —— 本机已有别的靶场占着 8765 时，门禁**复用**它而不是误判"空端口有服务"；
+  空端口必须判 False（`[217]` 双向钉住，free-port 检查期间保持 bind 防 race）。
+
+### ⑥ 门禁自身的一个环境坑（本轮实测，已加固）
+
+- 本机 IDE 给 `shutil.rmtree` 挂了"批量删除守卫"（超过 500 个文件就拒绝并 `raise SystemExit`），
+  第六次全量跑 **SMOKE PASS 打完之后**，atexit 清理沙箱（575 个文件）被它拦下、
+  打了一屏 `Exception ignored in atexit callback`。Python 对 atexit 异常是"打印后忽略"、
+  退出码不受影响，但**门禁结论不该赌每台机器的钩子行为一致** —— `_cleanup_sandbox()`
+  改为接住 `BaseException` 只打提示（另做了针对性验证：让 rmtree 抛 SystemExit 也不外抛）。
+- 全量门禁：`[217]` 一组 + **SMOKE PASS**（第六跑全绿；atexit 加固后的最终复跑结果见 todo 末节）。
+  两式 `git diff --numstat` 逐文件相等。
+
+**下一轮（续217 之后）——只放未做的：**
+
+- [ ] chrome win/mac 真机启动（本轮只核了归档字节与版本；`stack_exec_path` 的 macOS 分支没在真 mac 上跑过）
+- [ ] 本机 `tools/dirmap/` 快照（无 `-e`）按新适配器真跑一轮深扫档，核对产物行与内置字典的互补性
+  （门禁已隔离第三方工具；这条是"真目录上的验收"，不是门禁）
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`（续216 起一直挂着）
+- [ ] `tools/setup_dirmap.py --install` 在 Windows / macOS 上各跑一次（`dirmap_requirements.txt`
+  的三个版本只验过 Linux 3.14 的 wheel；Windows 是否有对应 wheel 没验）
+- [ ] 干净安装的 Windows / macOS 数字（本轮只有 Linux x86_64）
+
 ## 续216（2026-10-18，WorkBuddy · Claude）：排期收口 —— IP 反查逐源成败 + 队列运行中扩缩容 + 续175 安装凭据/fontconfig
 
 接续 续215「下一轮」清单的三项（树形缩进 / 运行中改并发 / 续173 逐源成败），外加 续175 的两项

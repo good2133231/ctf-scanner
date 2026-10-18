@@ -326,7 +326,7 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 不随仓库分发；**门开而口令缺失 ⇒ 一律 401**，fail-closed，启动横幅与 `_boot_gaps` 会点名这一项）。
 容器 / systemd / cloud-init 这种**没有终端**的场合用 `CTFSCANNER_EDGE_PASSWORD='<口令>' python -m scanner.edgeauth --set`
 （临时变量，别写进任何入库文件）—— 与建管理员的 `CTFSCANNER_ADMIN_PASSWORD`、解锁凭据密文的
-`CTFSCANNER_KEYS_PASSPHRASE` 同一套口径：**只有显式命令吃环境变量，启动向导一律不代填**。
+`CTFSCANNER_KEYS_PASSPHRASE` 同一套口径：**只有显式命令吃环境变量，启动向导一律不代填**。安装末尾的凭据录入也吃 `CTFSCANNER_KEYS_*`（`..._FOFA_EMAIL` / `..._FOFA_KEY` / `..._SHODAN_KEY` / `..._QUAKE_KEY` / `..._GITHUB_TOKEN` / `..._GITLAB_TOKEN` / `..._VIRUSTOTAL_KEY` / `..._ICP_API_KEY`）：非交互环境有一条就直通加密，没有就跳过；输出只报字段名，不打印值。
 纯本机单人自用想省事，把 `gui.host` 改回 `127.0.0.1`、`gui.edge_auth.enabled` 改成 `false`
 （代码里的默认值 `scanner.config.DEFAULTS` 正是这两项 —— 仓库 shipped 的那份比代码默认值更保守）。
 要放到服务器上用域名访问，请**由反向代理终止 TLS**（应用侧不碰证书），并按需打开三项配置：

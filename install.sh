@@ -124,6 +124,9 @@ cat <<'EOF'
   · 凭据密文口令（config/keys.enc.yaml，只在你配过第三方 key 时才有）
       只从 CTFSCANNER_KEYS_PASSPHRASE / ~/.secrets/keys-pass（0600）/ TTY 取，
       **绝不写进仓库里的任何文件**，也不会写进 .git/config 或远端地址。
+      非交互安装要顺带填第三方 key：设 CTFSCANNER_KEYS_FOFA_EMAIL / ..._FOFA_KEY / ..._SHODAN_KEY /
+      ..._QUAKE_KEY / ..._GITHUB_TOKEN / ..._GITLAB_TOKEN / ..._VIRUSTOTAL_KEY / ..._ICP_API_KEY；
+      有一条就直通加密，没有就跳过。值只进密文，安装输出只报字段名，不打印值。
   · **401 边缘认证门（续151 起出厂默认关）**：仓库里 config/settings.yaml 是 gui.host: 0.0.0.0 +
       gui.edge_auth.enabled: false —— 满足"clone 下来直接打开控制台"；**代价是同一网段谁都能访问**。
       要开门：把 gui.edge_auth.enabled 改回 true 并设口令。口令文件 config/edge_auth.yaml 在
@@ -148,8 +151,9 @@ cat <<'EOF'
     GOMODCACHE 192 MB + GOCACHE 239 MB，默认那套会写进 ~/go 与 ~/.cache）。
     ⚠ massdns 仍需**本机 gcc/make**：C 工具链没有"便携且可校验"的官方产物，缺它就如实报、不假装编成。
   · 浏览器：**能自动，但要你点头** —— ./install.sh --full（或 --with-stack）把 Chrome for Testing
-    取进 tools/browser/ 并回写 tools.screenshot.browser（续167）。Windows / macOS 上这一条**不适用**：
-    本框架只登记人工核过摘要的那个产物，没有摘要就不下（清单里单开一节点名，不算失败）。
+    取进 tools/browser/ 并回写 tools.screenshot.browser（续167）。Linux / Windows / macOS（x64+arm64）
+    的摘要都已人工核过（续217）；Linux 在本机真机启动过，Windows/macOS 只核过归档字节与归档内版本号，
+    **没在真机启动过**。运行时仍要系统共享库，缺库时截图照旧如实失败。
   · CJK 字体：站点截图 / PDF 报告里的中文要靠它，仍要系统装（没有也能跑，只是截图里中文变方块）。
     浏览器解决的是"有没有东西能渲染"，字体解决的是"中文渲染成不成字"，两件事别混。
   · 没有这些外部工具框架**仍能跑通**：会自动降级到内置实现，只是覆盖面与速度不如本体。
