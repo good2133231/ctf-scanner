@@ -28072,6 +28072,144 @@ expression: r0()
           "x-apikey 头+不带登录态｜404 是没记录不是错、401/429/500/非 JSON 如实报｜"
           "min_interval 节流（变异=摘掉节流）｜阶段级落 osint:vt 且 note 带查询语法｜"
           "配置两处一致+出厂关+keys 样例+osint 接线")
+
+    # ------------------------------------------------------------------ [215]
+    # 续215-P2-12：单任务资源画像（真任务 CPU/内存实测 → 动态并发档）。
+    # 钉六组语义（末尾 §6.1 变异证伪）：
+    #   ① 采样器真读数（墙钟/CPU/RSS 都 >0，stop 幂等）；
+    #   ② suggest_workers 四种边界（CPU 顶 / 内存顶 / 配置顶 / 短任务无证据不降档）；
+    #   ③ 库行 → 画像映射 + DB 往返 + last_task_profile（列存在且两式一致）；
+    #   ④ effective_workers：只开 profile 也能降、关掉/字符串 false 不降、配置是天花板；
+    #   ⑤ `_profile_limits` 深拷贝注入、开关关着一个字节不动；
+    #   ⑥ **真 run_task（devfixture + probe）** 落库：profiled_at/cpu/峰值内存/建议并发都有值。
+    from scanner import profiling as _pf215
+    from scanner import runner as _rn215
+    from scanner import devfixture as _df215
+    from scanner import config as _cf215
+    from scanner import utils as _ut215
+
+    # ① 采样器（真烧 0.12s CPU，不走桩）
+    _rss_now215 = _pf215.current_rss_mb()
+    assert _rss_now215 is not None and _rss_now215 > 0, \
+        f"current_rss_mb 探不到（平台={sys.platform}）：{_rss_now215}"
+    _tp215 = _pf215.TaskProfile(interval=0.05).start()
+    _until215 = time.time() + 0.12
+    _spin215 = 0
+    while time.time() < _until215:
+        _spin215 += 1
+    _p215 = _tp215.stop()
+    assert _spin215 > 0, "自旋循环没跑起来，测不到 CPU"
+    assert _p215["wall_s"] >= 0.1 and _p215["cpu_s"] > 0, _p215
+    assert _p215["cpu_ratio"] > 0 and _p215["rss_peak_mb"] and _p215["rss_peak_mb"] > 0, _p215
+    assert _tp215.stop() is _p215, "stop() 必须幂等（finally 会调两次）"
+
+    # ② 建议值四档（显式给 cpu_count / 内存，不依赖本机规格）
+    _cpu_prof215 = {"wall_s": 10, "cpu_s": 8, "cpu_ratio": 0.8,
+                    "rss_peak_mb": 100, "mem_available_mb": 8192, "cpu_count": 4}
+    _sug215 = _pf215.suggest_workers(_cpu_prof215, configured=8)
+    assert _sug215["cap"] == 3 and _sug215["bound"] == "cpu", _sug215
+    _mem_prof215 = {"wall_s": 10, "cpu_s": 0.5, "cpu_ratio": 0.05,
+                    "rss_peak_mb": 6000, "mem_available_mb": 8000, "cpu_count": 8}
+    _sug215m = _pf215.suggest_workers(_mem_prof215, configured=8)
+    assert _sug215m["cap"] == 1 and _sug215m["bound"] == "mem", _sug215m
+    _cfg_prof215 = {"wall_s": 10, "cpu_s": 1.0, "cpu_ratio": 0.1,
+                    "rss_peak_mb": 64, "mem_available_mb": 8192, "cpu_count": 8}
+    _sug215c = _pf215.suggest_workers(_cfg_prof215, configured=8)
+    assert _sug215c["cap"] == 8 and _sug215c["bound"] == "config", _sug215c
+    _short215 = {"wall_s": 0.1, "cpu_s": 0.5, "cpu_ratio": 5.0,
+                 "rss_peak_mb": 100, "mem_available_mb": 8192, "cpu_count": 1}
+    assert _pf215.suggest_workers(_short215, configured=8)["cap"] == 8, \
+        "短任务（墙钟 <0.5s）证据不足，必须不降档"
+    # 变异证伪：把 CPU 侧公式拿掉（cpu_cap 恒 32）⇒ CPU 顶那档立刻变 8
+    assert _pf215.suggest_workers(_cpu_prof215, configured=8)["cap"] < 8
+
+    # ③ 映射 + DB 往返（列名两式一致：SCHEMA 与 _COLUMN_PATCHES 都要有）
+    _cols215 = {r["name"] for r in db._query("PRAGMA table_info(tasks)")}
+    _need215 = {"cpu_seconds", "cpu_ratio", "peak_rss_mb", "profile_wall_s",
+                "worker_hint", "profiled_at"}
+    assert _need215 <= _cols215, f"tasks 缺画像列：{_need215 - _cols215}"
+    assert _need215 <= set(db._COLUMN_PATCHES["tasks"]), "老库补列清单缺画像列"
+    _tid215 = db.create_task("smoke-215-profile", "https://t215.test/", ["probe"], {"offline": True})
+    db.set_task_profile(_tid215, {"cpu_s": 1.2, "cpu_ratio": 0.5, "rss_peak_mb": 64.5,
+                                  "wall_s": 2.4, "worker_hint": 8,
+                                  "at": "2099-12-31 23:59:59"})
+    _row215 = db.task_profile(_tid215)
+    assert _row215 and _row215["profile_wall_s"] == 2.4 and _row215["cpu_seconds"] == 1.2, _row215
+    assert _row215["peak_rss_mb"] == 64.5, "rss_peak_mb 必须落进 peak_rss_mb 列"
+    _img215 = _pf215.from_row(_row215)
+    assert _img215 and _img215["wall_s"] == 2.4 and _img215["cpu_ratio"] == 0.5, _img215
+    assert _pf215.from_row({}) is None, "空行必须返回 None（不编数）"
+    _last215 = db.last_task_profile()
+    assert _last215 and _last215["profiled_at"] == "2099-12-31 23:59:59", _last215
+    # 造数收尾：把假时刻清掉，别让它冒充"最近一次运行"污染后面的队列配置
+    db._exec("UPDATE tasks SET profiled_at='' WHERE id=?", (_tid215,))
+
+    # ④ effective_workers：profile 开关独立于 workers_auto
+    _lim215 = {"max_workers": 8, "workers_profile": True, "_profile": _cpu_prof215}
+    assert _ut215.effective_workers(_lim215) == 3, \
+        "只开 profile 也必须按实测收（不该被 workers_auto=false 挡住）"
+    assert _ut215.effective_workers({**_lim215, "workers_profile": False}) == 8
+    assert _ut215.effective_workers({**_lim215, "workers_profile": "false"}) == 8, \
+        "字符串 'false' 不许被当真（§6.2 同族）"
+    assert _ut215.effective_workers({"max_workers": 8, "workers_profile": True}) == 8, \
+        "没有 _profile 时不许降档（没有证据）"
+    # 变异证伪：摘掉 _profile ⇒ ④ 的第一条立刻变 8
+    assert _ut215.effective_workers(
+        {"max_workers": 8, "workers_profile": True, "_profile": {}}) == 8
+
+    # ⑤ runner 注入：深拷贝、不改入参；开关关着返回原对象
+    _base_lim215 = {"max_workers": 8, "workers_profile": True}
+    db.set_task_profile(_tid215, {"cpu_s": 1.2, "cpu_ratio": 0.5, "peak_rss_mb": 64.5,
+                                  "wall_s": 2.4, "worker_hint": 8,
+                                  "at": "2099-12-31 23:59:58"})
+    _inj215 = _rn215._profile_limits(_base_lim215, _tid215)
+    assert _inj215 is not _base_lim215 and "_profile" not in _base_lim215, \
+        "注入必须深拷贝，不能污染调用方的 settings"
+    assert _inj215["_profile"]["wall_s"] == 2.4, _inj215
+    _off_lim215 = {"max_workers": 8, "workers_profile": False}
+    assert _rn215._profile_limits(_off_lim215, _tid215) is _off_lim215, \
+        "开关关着时不该深拷贝/不该动一个字节"
+    db._exec("UPDATE tasks SET profiled_at='' WHERE id=?", (_tid215,))
+
+    # ⑥ 真 run_task（devfixture + probe）—— 这是"真任务"而不是合成回环
+    _fx215, _base215 = _df215.start()
+    try:
+        _s215 = copy.deepcopy(settings)
+        _s215.setdefault("limits", {})
+        _s215["limits"]["workers_profile"] = False   # 本次要的是原始读数，不让旧画像降档
+        _s215["limits"]["max_workers"] = 4
+        _tid_r215 = db.create_task("smoke-215-real", _base215, ["probe"], {"offline": True})
+        run_task(_tid_r215, "smoke-215-real", _base215, ["probe"],
+                 {"offline": True}, _s215)
+        _tr215 = db.get_task(_tid_r215)
+        assert _tr215["status"] == "done", dict(_tr215)
+        assert _tr215["profiled_at"], "真任务跑完必须落画像时刻"
+        assert (_tr215["cpu_seconds"] or 0) > 0, dict(_tr215)
+        assert (_tr215["peak_rss_mb"] or 0) > 0, dict(_tr215)
+        assert 1 <= int(_tr215["worker_hint"] or 0) <= 4, dict(_tr215)
+    finally:
+        _df215.stop(_fx215)
+
+    # ⑦ create_task 传逗号串：必须落成 "probe,dirscan"，不许逐字加逗号
+    _tid_s215 = db.create_task("smoke-215-stages", "https://t215.test/", "probe,dirscan")
+    assert db.get_task(_tid_s215)["stages"] == "probe,dirscan", \
+        db.get_task(_tid_s215)["stages"]
+
+    # ⑧ 配置两处 + 页面开关（出厂 true，但不该在无画像时改变任何并发）
+    _dq215 = _cf215.DEFAULTS["queue"]
+    _dl215 = _cf215.DEFAULTS["limits"]
+    assert _dq215.get("workers_profile") is True and _dl215.get("workers_profile") is True, \
+        (_dq215, _dl215)
+    _y215 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+    assert "workers_profile: true" in _y215, "settings.yaml 没写出画像开关"
+    _tpl215 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
+    assert "limits_workers_profile" in _tpl215 and "queue_workers_profile" in _tpl215, \
+        "策略页缺画像开关（用户看不见就等于没有）"
+    print("[215] 续215-P2-12 ok: 真任务采样（墙钟/CPU/峰值 RSS）｜suggest_workers 四边界"
+          "（CPU/内存/配置/短任务不降档）｜库行映射+往返+last_task_profile｜"
+          "effective_workers 只开 profile 也降、'false' 不降、无证据不降｜"
+          "runner 深拷贝注入｜真 run_task 落画像｜create_task 逗号串不再逐字拆")
+
     print("SMOKE PASS")
 
 

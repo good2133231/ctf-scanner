@@ -1618,7 +1618,10 @@ def create_app():
         # 续195（主理人点单「多任务执行还是显示排队？」）：把队列并发现状摆在列表页 ——
         # 同时跑几个是策略配置的 queue.workers（出厂 1＝串行，省目标侧带宽、防风控），
         # 不是没实现；页面不说，用户只看到"排队"两个字
-        qworkers = int((queue.config(settings) or {}).get("workers") or 1)
+        # 续215：显示**实际已启动**的 worker 数；队列按画像收档只在下次启动生效，
+        # 拿 config() 冒充运行中数量会说错（见 scanner/queue.py::active_workers）。
+        qworkers = int(queue.active_workers() or 0) or \
+            int((queue.config(settings) or {}).get("workers") or 1)
         pages = max(1, (total + size - 1) // size)
         if page > pages:     # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
             page = pages
@@ -4570,6 +4573,7 @@ def create_app():
                     # 续179：页面上没有输入框的 limits 键（动态并发档 workers_* 等新键）
                     # 必须原样带回 —— 整段重写会把它们抹掉（§6.2 第十二起同族）。
                     "limits": {**(_l0), "max_workers": int(f.get("max_workers", 20) or 20),
+                               "workers_profile": f.get("limits_workers_profile") == "1",
                                "http_timeout": int(f.get("http_timeout", 10) or 10),
                                "verify_tls": f.get("verify_tls") == "1",
                                "verify_tls_external": f.get("verify_tls_external") == "1",
@@ -4903,7 +4907,8 @@ def create_app():
                     # 字段时不会把键重置；勾选框按 HTML 语义（不勾=False）由整页表单每次带上。
                     "queue": {"workers": int(f.get("queue_workers")
                                              or _q0.get("workers", 1) or 1),
-                              "workers_auto": f.get("queue_workers_auto") == "1"},
+                              "workers_auto": f.get("queue_workers_auto") == "1",
+                              "workers_profile": f.get("queue_workers_profile") == "1"},
 
                     "dev": {"enabled": f.get("dev_enabled") == "1",
                             "fixture_port": int(f.get("dev_fixture_port")

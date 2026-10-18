@@ -176,6 +176,9 @@ DEFAULTS = {
         "workers": 1,
         # 续184：true ＝ 再按机器规格收一道上限（小 1 / 中 2 / 大 4），配置值仍是天花板。
         "workers_auto": False,
+        # 续215-P2-12：true ＝ 再用**最近一次真任务实测**（CPU 几核 / 峰值内存）收一道，
+        # 只会往下收。首次运行还没有画像时原样不动；下一次**启动**队列才生效。
+        "workers_profile": True,
     },
 
     "dev": {
@@ -197,6 +200,10 @@ DEFAULTS = {
         # 按机器规格收并发上限（续181，借鉴点⑤）：false＝只认 max_workers（现状）；
         # true＝min(max_workers, machine_tier 建议值) —— 小机器自动收敛，机器再大也不超配置。
         "workers_auto": False,
+        # 续215-P2-12：true＝再按**上一轮真任务实测**（cpu_ratio / peak_rss_mb）收一道。
+        # 两个开关独立：只开 profile 也能按实测收，只是不做机器档位那一道。
+        # 无画像（首跑/老库）时原样不动 —— 没有证据就不降档。
+        "workers_profile": True,
         "http_timeout": 10,       # 单请求超时（秒）
         "verify_tls": False,
         # 第三方接口（FOFA/Shodan/Quake/crt.sh/KEV/iprecon/api.github.com）的证书校验。

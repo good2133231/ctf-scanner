@@ -11,7 +11,7 @@
 <div class="grid2">
   <section>
     <h2>最近任务</h2>
-    <table>
+    <table class="tbl-recent">
       <thead><tr><th>#</th><th>名称</th><th>状态</th><th>进度</th><th>创建时间</th></tr></thead>
       <tbody>
       {% for t in tasks %}
@@ -73,7 +73,7 @@
       </table>
     </div>
     <div>
-      <table>
+      <table class="tbl-trend">
         <thead><tr><th>任务</th><th>crit</th><th>high</th><th>med</th><th>low</th><th>info</th><th>合计</th></tr></thead>
         <tbody>
         {% for r in trend.recent %}

@@ -13,12 +13,13 @@ GUI/CLI 调 `request_stop(task_id)` 置位事件，阶段在循环边界调 `ctx
 最终任务状态写为 `stopped`（区别于 `failed`）。粒度是"当前一批请求跑完即停"，
 不会对正在飞行的 HTTP 请求做中断。
 """
+import copy
 import threading
 import time
 import traceback
 from pathlib import Path
 
-from . import audit, cancelcause, db, extdom, screenshot
+from . import audit, cancelcause, db, extdom, profiling, screenshot
 from .config import LOGS_DIR, load_settings
 from . import auth as taskauth
 from . import throttle
@@ -604,6 +605,31 @@ def _maybe_queue_shot_retry(ctx, task_id, stages, options, logger):
                 f"（{'、'.join(urls[:5])}{' 等' if len(urls) > 5 else ''}）" + _skip_note)
 
 
+def _profile_limits(limits, task_id):
+    """把上一轮画像注入 `settings.limits._profile`（续215-P2-12）。
+
+    只做两件事：把库里的列名映射成 `profiling.suggest_workers` 认的键，补上**当下**的
+    CPU/可用内存（库里的旧值可能已经过时）。`workers_profile` 关着时**一个字节都不动**
+    （连深拷贝都不做）；开着但没有画像（新库/首跑）也原样返回 —— 没有证据就不降档。
+    """
+    lim = limits if isinstance(limits, dict) else {}
+    flag = lim.get("workers_profile", False)
+    if isinstance(flag, str):
+        flag = flag.strip().lower() in ("1", "true", "yes", "on")
+    if not flag:
+        return limits
+    try:
+        row = db.task_profile(task_id) or db.last_task_profile()
+    except Exception:                                  # noqa: BLE001 - 画像不许拖垮任务
+        return limits
+    prof = profiling.from_row(row)
+    if not prof:
+        return limits
+    out = copy.deepcopy(limits)
+    out["_profile"] = prof
+    return out
+
+
 def run_task(task_id, name, targets_text, stages, options, settings, append=False,
              resume=False, progress=None):
     """CLI 与 GUI 共用的任务执行入口（阻塞执行，调用方负责放线程）。
@@ -665,6 +691,12 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
                            "按全部阶段重跑；如需清空已有资产请改用「重启」")
         if prev_err:
             logger.warning(f"[resume] 上次中断原因（转存到这里后，error 字段按本次运行清空）：{prev_err}")
+    # 续215-P2-12：把上一轮**实测**画像挂到 limits 上（开关见 limits.workers_profile）。
+    # 只在开关打开且有画像时替换 limits；settings 其余字段与对象身份不变（GUI/队列可继续用）。
+    if isinstance(settings, dict):
+        _lim_new = _profile_limits(settings.get("limits") or {}, task_id)
+        if _lim_new is not settings.get("limits"):
+            settings = {**settings, "limits": _lim_new}
     from .targets import parse_lines
     targets = parse_lines(targets_text.splitlines())
     # 续151「追加层数」：第 2 层起的采集根就是本层的新域名（`append_targets`）——
@@ -703,6 +735,10 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
     # 经 `db.finish_task_run` 写入。`fresh` = **新建式执行**（含 GUI「重启」）→ 累计时长清零；
     # 续跑（续29）/ 追加执行（续25）沿用同一任务与同一份资产 → 累加，见 `db.start_task_run`。
     db.start_task_run(task_id, fresh=not (append or resume), **fields)
+    # 续215-P2-12：真任务资源画像。起点放在 `sync_pocs` **之后** —— 那一步是 POC 注册表
+    # 全量扫描（312 个模板，约 3 秒/次），把它算进来会让每条小任务都显示"3 秒 0.8 核"，
+    # 量到的就不是扫描本身。采样器不参与取消/预算，也不改任何阶段行为。
+    _prof = None
     try:
         try:
             sync_pocs(ctx.settings)
@@ -710,6 +746,7 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
             # POC 注册表同步是"锦上添花"：它失败不该让整条流水线直接 failed
             # （并发场景下 upsert_poc 曾撞 UNIQUE 约束，实测 6 个任务里 5 个因此失败）。
             logger.warning(f"[pocs] 注册表同步失败，继续扫描：{e}")
+        _prof = profiling.TaskProfile().start()
         PipelineRunner(ctx).run()
     except Exception as e:
         logger.error(f"任务失败：{e}\n{traceback.format_exc()}")
@@ -718,6 +755,36 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
         # 错误信息**追加**（不覆盖）：保留前面各阶段已经记下的错误（否则只剩这一条）
         db.append_task_error(task_id, str(e))
     finally:
+        # 续215-P2-12：收资源画像（异常/停止路径也收 —— 失败的运行同样说明"这台机器
+        # 跑这类任务要多少资源"）。`stop()` 幂等；写库失败只告警，绝不影响任务终态。
+        _psum = _prof.stop() if _prof is not None else {}
+        if _psum.get("wall_s"):
+            try:
+                _lim_now = (ctx.settings.get("limits") or {}) if ctx else {}
+                _configured = int(_lim_now.get("max_workers", 20) or 20)
+            except (TypeError, ValueError):
+                _configured = 20
+            _sug = profiling.suggest_workers(_psum, configured=_configured)
+            _psum["worker_hint"] = _sug["cap"]
+            try:
+                db.set_task_profile(task_id, _psum)
+            except Exception as _pe:                   # noqa: BLE001
+                try:
+                    logger.warning(f"[profile] 资源画像写库失败（不影响任务结果）：{_pe}")
+                except Exception:                      # noqa: BLE001 - 日志失败同样不许外溢
+                    pass
+            # 画像日志是**附加说明**，不许成为新的失败点：[6v] 专门测"logger.info 抛异常
+            # 时任务仍要 failed 而不是把异常从 finally 里再抛一次"（2026-10-18 被它抓过）。
+            try:
+                _bound_zh = {"cpu": "CPU", "mem": "内存", "io": "I/O",
+                             "config": "配置"}.get(_sug["bound"], _sug["bound"])
+                logger.info(
+                    f"[profile] 单任务资源画像：墙钟 {_psum.get('wall_s', 0):.1f}s / "
+                    f"CPU {_psum.get('cpu_s', 0):.2f}s（{_psum.get('cpu_ratio', 0):.2f} 核）/ "
+                    f"峰值内存 {_psum.get('rss_peak_mb') or 0:.1f} MB / "
+                    f"建议并发 {_sug['cap']}（配置 {_configured}，限制项：{_bound_zh}）")
+            except Exception:                          # noqa: BLE001 - 见上
+                pass
         _unregister_stop(task_id)
         # 进度条收条放在** finally**：阶段抛异常 / 循环被 break / 预算耗尽都得擦掉
         # （续212，P3-14① —— 少这一步，CLI 的摘要行会接着半条进度条印，正是要消灭的东西）。

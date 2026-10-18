@@ -4303,6 +4303,39 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续215（2026-10-18，WorkBuddy · CodeBuddy）：P2-12 真任务资源画像 + 任务表/仪表盘挤压修复 + VT/ICP 真机验收（无 key）
+
+- [x] **P2-12 真任务 profiling**：新 `scanner/profiling.py`（`TaskProfile` + `suggest_workers` +
+  `from_row`）；`run_task` 在 `sync_pocs` 之后采样、异常/停止也落库；tasks 新增
+  `cpu_seconds/cpu_ratio/peak_rss_mb/profile_wall_s/worker_hint/profiled_at` 六列
+- [x] **动态并发档**：`limits.workers_profile` + `queue.workers_profile`（出厂 true，只在有画像时
+  **向下**收，配置是天花板）；`runner._profile_limits` 深拷贝注入；`queue.active_workers()`
+  让页面显示"实际已启动"而不是 `config()` 的"下次会起几个"
+- [x] **实测数字（真任务，非合成回环）**：`probe,jsmine` 3 轮 wall 2.079/1.736/1.737s、
+  CPU 0.95/0.69/0.69s（0.455/0.400/0.400 核）、峰值 RSS 46.2/47.2/47.3 MB、建议 13/15/15（配置 20）；
+  `probe,jsmine,dirscan` 一轮 6.504s / 1.85s（0.284 核）/ 47.8 MB、建议 20（配置先到顶）
+- [x] **实测抓出的两个坑**：画像日志在 `logger.info` 被打桩抛异常时从 finally 外溢（[6v] 抓到，
+  已 try/except）；`db.create_task` 传逗号串会把阶段逐字拆开（已归一为列表）
+- [x] **前端挤压（自己截图定位）**：Playwright + 本机 Chrome 登录沙箱（独立 `data/preview.db` +
+  5011 端口，不碰真实库）；1280 任务表「统计/阶段」竖排、按钮逐字换行，1024 仪表盘 7 列趋势表同形
+- [x] **CSS 修复**：`#tbl-tasks` min-width 1040 + 关键列 nowrap + 任务名/目标最小宽；<1300 隐藏
+  「开始时间」列（详情页仍可见）；`.btn-mini`/`.badge` nowrap；`.grid2` 单栏断点 900→1400；
+  <1200 顶栏可换行（「退出」不再掉第二行）。实测 1280 表 1040/容器 1044、1024 趋势表 754/754、
+  430/360 视口整页溢出 0（browser_e2e [9] 判据仍成立）
+- [x] **VT/ICP 真机验收（无 key）**：`keys.enc.yaml` 无 virustotal / icp.api_key；VT 零请求并返回
+  「未配置 virustotal.key」；ICP 预置 miit 源「没有响应」。新增 `tools/check_intel_sources.py`
+  （填 key 后一条命令验收，不打印值，`--strict` 缺 key 也算失败）
+- [x] **门禁**：`[215]` 一组 + **SMOKE PASS**；`tests/smoke.py` 按字节插入（LF），numstat 138/0
+
+**下一轮（续216）——只放未做的：**
+- [ ] **任务列表树形缩进**：与 subtasks 预览框重叠，主理人原话"价值低"，继续挂账
+- [ ] **队列级运行中改并发**：本轮只做到"下一次启动按画像收档"；运行中 `reconfigure(n)` 要处理
+  新增/退休 worker 的生命周期，风险高，未动
+- [ ] **VT / ICP 真机验收**：等主理人填 `virustotal.key` 与可用 ICP 源（或换机器）后跑
+  `python tools/check_intel_sources.py --strict`；两块代码已就绪
+- [ ] **续173**：IP 反查三源成败说清 + PTR 自实现（照旧挂账）
+- [ ] **续175**：换一台机器这条线跑到真机（照旧挂账；五项子项见本节上方原文）
+
 ## 续214（2026-10-17，WorkBuddy · CodeBuddy）：VirusTotal 子域名反查 + 订正续213 的 ICP 误判
 
 主理人点单"virustotal 要不要做"。与前三家 favicon 反查**不同路**：那是同源推断，

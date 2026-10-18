@@ -855,6 +855,17 @@
           {% else %}-{% endif %}</td></tr>
         <tr><th>状态</th><td><span class="badge st-{{ task.status }}">{{ '排队中' if task.status == 'queued' else task.status }}</span></td></tr>
         <tr><th>运行时长</th><td>{{ run_duration }}</td></tr>
+        {# 续215-P2-12：最近一次运行的单任务资源画像（老行/未跑完时为 0 ⇒ 不编数） #}
+        <tr><th>资源画像</th><td>
+          {% if task.profiled_at %}
+          CPU {{ '%.2f'|format(task.cpu_seconds or 0) }}s
+          （{{ '%.2f'|format(task.cpu_ratio or 0) }} 核） ／
+          峰值内存 {{ '%.1f'|format(task.peak_rss_mb or 0) }} MB ／
+          建议并发 <b>{{ task.worker_hint or 0 }}</b>
+          <span class="muted small">（{{ task.profiled_at }}，只会 ≤ 配置值）</span>
+          {% else %}
+          <span class="muted">尚无实测（任务跑完后自动记录）</span>
+          {% endif %}</td></tr>
         <tr><th>开始 / 结束</th><td class="mono small">{{ task.started_at or '-' }} / {{ task.finished_at or '-' }}</td></tr>
         <tr><th>日志文件</th><td class="mono small">{{ task.log_file or '-' }}</td></tr>
         <tr><th>创建 / 更新</th><td>{{ task.created_at }} / {{ task.updated_at }}</td></tr>

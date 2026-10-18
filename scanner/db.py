@@ -85,6 +85,16 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- `tasks.error` 照旧是人话（给人读的），这一列是给机器判的 —— 两不重复、不互推。
   -- 空串 = 正常跑完（done）或压根没被取消。老库靠 `_COLUMN_PATCHES` 补。
   stop_reason TEXT DEFAULT '',
+  -- 续215-P2-12：**最近一次运行**的单任务资源画像（`scanner/profiling.py`）。
+  -- `cpu_seconds` / `cpu_ratio` 是进程 CPU 时间与"几个核"；`peak_rss_mb` 是采样峰值；
+  -- `worker_hint` 是 `profiling.suggest_workers` 的建议并发（只会 ≤ 配置值）。
+  -- 老行全 0 ⇒ 页面不渲染（不编数）。**覆盖写**：与 sev_blocked 同口径，最近一次运行说了算。
+  cpu_seconds REAL DEFAULT 0,
+  cpu_ratio REAL DEFAULT 0,
+  peak_rss_mb REAL DEFAULT 0,
+  profile_wall_s REAL DEFAULT 0,
+  worker_hint INTEGER DEFAULT 0,
+  profiled_at TEXT DEFAULT '',
   created_at TEXT, updated_at TEXT
 );
 
@@ -425,7 +435,11 @@ _COLUMN_PATCHES = {
               # 续185 任务层级的老库补列（0 = 顶层任务）
               "parent_id": "INTEGER DEFAULT 0",
               # 续211-P2-10 具名取消原因（枚举见 scanner/cancelcause.py::CAUSES）
-              "stop_reason": "TEXT DEFAULT ''"},
+              "stop_reason": "TEXT DEFAULT ''",
+              # 续215-P2-12 单任务资源画像（见 SCHEMA 里的同名列注释）
+              "cpu_seconds": "REAL DEFAULT 0", "cpu_ratio": "REAL DEFAULT 0",
+              "peak_rss_mb": "REAL DEFAULT 0", "profile_wall_s": "REAL DEFAULT 0",
+              "worker_hint": "INTEGER DEFAULT 0", "profiled_at": "TEXT DEFAULT ''"},
 
 }
 
@@ -488,12 +502,20 @@ def create_task(name, targets, stages, options=None, owner_id=0, parent_id=0):
 
     ⚠ 与「把域名追加成父任务的子域名」是两件事：后者写的是 `subdomains` 表（资产层），
     这里记的是**任务层级**（谁发起的谁）。两者可以同时发生，也可以只发生一个。
+
+    `stages` 接受**列表/元组**或逗号串。2026-10-18 实测撞到：调用方传字符串时
+    `",".join("probe,dirscan")` 会把每个字符用逗号串起来，落库成
+    `p,r,o,b,e,,,d,i,r,s,c,a,n` —— 页面看着像样式坏了，实际是数据被写坏。这里统一归一。
     """
+    if isinstance(stages, str):
+        stage_list = [s.strip() for s in stages.split(",") if s.strip()]
+    else:
+        stage_list = [str(s).strip() for s in (stages or []) if str(s).strip()]
     return _exec(
         "INSERT INTO tasks(name, targets, stages, options, pid, owner_id, parent_id, "
         "created_at, updated_at) "
         "VALUES(?,?,?,?,?,?,?,?,?)",
-        (name, targets, ",".join(stages), json.dumps(options or {}), os.getpid(),
+        (name, targets, ",".join(stage_list), json.dumps(options or {}), os.getpid(),
          int(owner_id or 0), int(parent_id or 0), _now(), _now()))
 
 
@@ -654,6 +676,65 @@ def set_task_sev_blocked(task_id, floor, n):
         cnt = 0
     _exec("UPDATE tasks SET sev_floor=?, sev_blocked=? WHERE id=?",
           (str(floor or ""), cnt, tid))
+
+
+def set_task_profile(task_id, profile):
+    """续215-P2-12：写**最近一次运行**的资源画像（覆盖写，口径同 `set_task_sev_blocked`）。
+
+    只落五个数 + 时刻：CPU 秒 / CPU 核数比 / 峰值 RSS / 墙钟 / 建议并发。`profile` 就是
+    `scanner/profiling.TaskProfile.stop()` 的返回（或测试手写同形 dict）；缺失字段写 0，
+    **不编数**。任务不存在/参数脏值时静默返回（补跑收场的竞态下这很正常）。
+    """
+    try:
+        tid = int(task_id)
+    except (TypeError, ValueError):
+        return
+    p = profile or {}
+
+    def _num(key, cast=float, default=0.0):
+        try:
+            return cast(p.get(key, default) or default)
+        except (TypeError, ValueError):
+            return default
+
+    cpu_s = max(0.0, _num("cpu_s"))
+    ratio = max(0.0, _num("cpu_ratio"))
+    # `TaskProfile` 的键叫 rss_peak_mb，库列叫 peak_rss_mb —— 两个都认，
+    # 免得调用方按列名写时内存值被静默记成 0（2026-10-18 造数时踩到）。
+    rss = max(0.0, _num("rss_peak_mb"))
+    if rss <= 0:
+        rss = max(0.0, _num("peak_rss_mb"))
+    wall = max(0.0, _num("wall_s"))
+    hint = max(0, _num("worker_hint", int, 0))
+    at = str(p.get("at") or "").strip() or _now()
+    _exec("UPDATE tasks SET cpu_seconds=?, cpu_ratio=?, peak_rss_mb=?, "
+          "profile_wall_s=?, worker_hint=?, profiled_at=? WHERE id=?",
+          (cpu_s, ratio, rss, wall, hint, at, tid))
+
+
+def task_profile(task_id):
+    """读一条任务的**最近一次**画像；没有则 `None`（老库/没跑完的任务不编数）。"""
+    try:
+        tid = int(task_id)
+    except (TypeError, ValueError):
+        return None
+    row = _query("SELECT cpu_seconds, cpu_ratio, peak_rss_mb, profile_wall_s, "
+                 "worker_hint, profiled_at "
+                 "FROM tasks WHERE id=? AND profiled_at<>''", (tid,), one=True)
+    return dict(row) if row else None
+
+
+def last_task_profile():
+    """全库最近一份画像（`worker_hint` 也算在内存里再算一遍，见 profiling.suggest_workers）。
+
+    用途：新建任务的第一次运行还没有自己的画像，用"这台机器最近跑过的同类任务"做冷启动。
+    多任务并发时读数是进程级、只会偏大 ⇒ 建议保守，见 `scanner/profiling.py` 文件头第 3 条。
+    """
+    row = _query("SELECT cpu_seconds, cpu_ratio, peak_rss_mb, profile_wall_s, "
+                 "worker_hint, profiled_at "
+                 "FROM tasks WHERE profiled_at<>'' ORDER BY profiled_at DESC, id DESC LIMIT 1",
+                 one=True)
+    return dict(row) if row else None
 
 
 def set_stop_reason(task_id, cause):

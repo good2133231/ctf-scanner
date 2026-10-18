@@ -984,23 +984,42 @@ def machine_tier(cpu=None, mem_gb=None):
 
 
 def effective_workers(limits, cpu=None, mem_gb=None):
-    """「按机器规格算并发档上限」的开关（续181，借鉴点⑤剩余半边）。
+    """并发档上限的唯一产地（续181 机器规格 + 续215 单任务实测画像）。
 
-    `limits.workers_auto` 为真：`machine_tier` 建议值与配置值**取小**（配置仍是天花板，
-    机器再大也不超过用户写下的 max_workers）；否则原样返回配置值（现状不变）。
+    - `limits.workers_auto` 为真：`machine_tier` 建议值与配置值**取小**（配置是天花板）。
+    - `limits.workers_profile` 为真且 `limits._profile` 有读数：再用
+      `profiling.suggest_workers` 收一道 —— 这一次只按**实测**（CPU 几核 / 峰值内存）
+      判断，不会再被机器规格的粗档位掩盖。两条开关彼此独立：
+      只开 profile 也能按实测收，只是不做机器档位那一道。
+    - 两个都关 = 原样返回配置值（现状不变）。
     各阶段读并发上限都该走这里，不要各自再读一遍 `limits.max_workers`。
+
+    `_profile` 由 `runner.run_task` 从库里取上一轮画像后注入 `settings.limits` ——
+    它是**运行期**数据，不属于 `config/settings.yaml`（GUI 保存时按 DEFAULTS 白名单写回，
+    不会把它落盘）。
     """
+    lim = limits or {}
     try:
-        configured = int((limits or {}).get("max_workers", 20) or 20)
+        configured = int(lim.get("max_workers", 20) or 20)
     except (TypeError, ValueError):
         configured = 20
-    _auto = (limits or {}).get("workers_auto", False)
-    if isinstance(_auto, str):   # 字符串形态不许被当真："false"/"0"/"no"/"off"/空 都是关
-        _auto = _auto.strip().lower() in ("1", "true", "yes", "on")
-    if not _auto:
-        return max(1, configured)
-    sug = machine_tier(cpu, mem_gb)["suggested"]
-    return max(1, min(configured, sug))
+
+    def _flag(name):
+        v = lim.get(name, False)
+        if isinstance(v, str):   # 字符串形态不许被当真："false"/"0"/"no"/"off"/空 都是关
+            return v.strip().lower() in ("1", "true", "yes", "on")
+        return bool(v)
+
+    cap = max(1, configured)
+    if _flag("workers_auto"):
+        cap = min(cap, machine_tier(cpu, mem_gb)["suggested"])
+    if _flag("workers_profile"):
+        prof = lim.get("_profile")
+        if isinstance(prof, dict) and prof:
+            from .profiling import suggest_workers
+            cap = min(cap, suggest_workers(prof, configured=cap,
+                                           cpu_count=cpu)["cap"])
+    return max(1, cap)
 
 
 def ramp_opt(settings, workers):

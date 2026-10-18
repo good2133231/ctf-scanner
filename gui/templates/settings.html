@@ -729,6 +729,8 @@
   <section class="panel collapsible" data-panel="limits">
     <h2>扫描限制</h2>
     <label>并发线程 max_workers <input name="max_workers" value="{{ s.limits.max_workers }}"></label>
+    <label class="chk" title="按上一轮真任务实测的 CPU 占比与峰值内存再收一道（只会往下收；首跑还没有画像时不动）"><input type="checkbox" name="limits_workers_profile" value="1"
+      {{ 'checked' if s.limits.workers_profile }}> 按单任务实测画像收并发上限</label>
     <label>HTTP 超时（秒） <input name="http_timeout" value="{{ s.limits.http_timeout }}"></label>
     <label class="chk"><input type="checkbox" name="verify_tls" value="1"
       {{ 'checked' if s.limits.verify_tls }}> 校验 HTTPS 证书（CTF 自签名靶场请保持关闭）</label>
@@ -774,6 +776,8 @@
     <label>队列 worker 数 <input name="queue_workers" value="{{ s.queue.workers }}"></label>
     <label class="chk" title="再按本机 CPU/内存收一道上限：小机器 1 / 中 2 / 大 4；配置里写的 workers 仍是天花板"><input type="checkbox" name="queue_workers_auto" value="1"
       {{ 'checked' if s.queue.workers_auto }}> 按机器规格自动收并发上限</label>
+    <label class="chk" title="再按最近一次真任务实测的 CPU/内存收一道（只会往下收；下一次启动队列生效）"><input type="checkbox" name="queue_workers_profile" value="1"
+      {{ 'checked' if s.queue.workers_profile }}> 按单任务实测画像收队列并发</label>
 
     <label class="chk"><input type="checkbox" name="dev_enabled" value="1"
       {{ 'checked' if s.dev.enabled }}> 开发模式（并发/预算压到最小，跑全流程自检用）</label>

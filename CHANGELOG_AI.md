@@ -3,6 +3,65 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续215（2026-10-18，WorkBuddy · CodeBuddy）：P2-12 真任务资源画像 + 任务表/仪表盘挤压修复 + VT/ICP 真机验收（无 key）
+
+主理人点单：P2-12 真任务 profiling（续179 基准是合成回环）、前端样式挤/按钮变化（自己截图定位）、
+VT/ICP 填 key 后的真机验收；续173/175 与树形缩进继续挂账。
+
+### P2-12：真任务 CPU/内存实测 → 动态并发档
+
+- 新模块 `scanner/profiling.py`：`TaskProfile`（0.2s 采样墙钟/CPU/峰值 RSS；Linux 读 `/proc`、
+  Windows 走 `psapi` + `GlobalMemoryStatusEx`、macOS 用 `resource` 兜底）+ `suggest_workers`
+  （CPU / 内存 / 配置三边界；墙钟 <0.5s 或没有峰值证据时**不降档**）。
+- `runner.run_task` 只包 `PipelineRunner.run()`（**不含** `sync_pocs` —— 那一步约 3 秒/次，
+  算进来会让每条小任务都显示"3 秒 0.8 核"）；异常/停止路径也收画像，写 tasks 新列
+  `cpu_seconds/cpu_ratio/peak_rss_mb/profile_wall_s/worker_hint/profiled_at`。
+- 动态档：`limits.workers_profile` + `queue.workers_profile`（出厂 true，只在**有画像**时
+  **向下**收；配置永远是天花板）。`runner._profile_limits` 深拷贝注入 `limits._profile`
+  （开关关着连深拷贝都不做）；`queue.config` 启动时按最近画像收，页面显示实际值用
+  `queue.active_workers()`，不拿 `config()` 冒充运行中数量。
+- **实测数字（本机 Linux 8C，devfixture + `probe,jsmine`，workers=20）**：3 轮
+  wall **2.079 / 1.736 / 1.737 s**，CPU **0.95 / 0.69 / 0.69 s**（**0.455 / 0.400 / 0.400 核**），
+  峰值 RSS **46.2 / 47.2 / 47.3 MB**，建议 **13 / 15 / 15**（配置 20，CPU 先到顶）；同一任务后续复跑也出现过 **0.443 s / 0.27 s CPU（0.618 核）/ 46.3 MB** 的短样本（缓存与机器负载波动）——画像只用来**收上限**，不拿它预测耗时；
+  更重的 `probe,jsmine,dirscan` 一轮：**6.504 s / 1.85 s（0.284 核）/ 47.8 MB**，
+  建议 **20**（配置先到顶）。→ 续179 的合成回环结论（ramp 大批量慢 4.1x）不再外推；
+  真任务里 I/O 型任务只吃 0.28~0.46 核，20 线程并没有把机器打满。
+- `db.set_task_profile` 兼容 `rss_peak_mb`（`TaskProfile` 的键）与 `peak_rss_mb`（库列）；
+  `profiling.from_row` 是"库行 → 建议值"的唯一映射（runner 与 queue 共用）。
+- 两个被实测抓出来的坑：① [6v] 故意让 `logger.info` 抛异常时，画像日志从 finally 外溢会让
+  任务多一层失败 ⇒ 已用 try/except 包住；② `db.create_task` 传逗号串 `"probe,dirscan"` 会被
+  `",".join` 逐字拆成 `p,r,o,b,e...` ⇒ 已统一归一为列表（页面看着像样式坏，实际是数据坏）。
+
+### 前端：任务列表 / 仪表盘挤压（自己截图定位，不靠主理人截图）
+
+- 用 Playwright + 本机 Chrome 登录**沙箱控制台**（独立 `data/preview.db` + 5011 端口，不碰真实库）
+  实测：1280 视口下任务表「统计 / 阶段」被压成单字竖排、行内按钮逐字换行；1024 仪表盘 7 列趋势表同样。
+- CSS：`#tbl-tasks` 最小宽 1040 + 关键列 nowrap + 任务名/目标最小宽；<1300 隐藏「开始时间」列
+  （详情页「目标与配置」仍可见），保证「查看全结果」在首屏；`.btn-mini` / `.badge` nowrap；
+  `.grid2` 单栏断点 900→1400；<1200 顶栏允许换行（「退出」不再掉到第二行）。
+- 实测：1280 任务表 **1040 / 容器 1044**、无竖排；1024 趋势表 **754 / 754**、整页无横向溢出；
+  430 / 360 视口 `scrollWidth - innerWidth = 0`（browser_e2e [9] 的判据仍成立）。
+- 任务列表树形缩进与 subtasks 预览框重叠：**仍挂账**（主理人原话"价值低"）。
+
+### VT / ICP 真机验收（无 key，如实报）
+
+- 现状：`config/keys.enc.yaml` 只有 fofa / github / quake / shodan，**virustotal 与 icp.api_key
+  都没填**；两者 `enabled` 都是 false。
+- VT：`vt.search("example.com")` 返回 `未配置 virustotal.key`，**HTTP 调用 0 次**（零请求契约成立）。
+- ICP：`icp.preflight` 对预置 miit 源返回「没有响应（DNS 失败 / 连接被拒 / 超时）」——
+  与续196/续205 的国内线路结论一致；代码侧可插拔源 + 预检已就绪，换可达源或换机器即可。
+- 新增 `tools/check_intel_sources.py`（填 key 后一条命令验收；只打印"有没有配"、绝不打印值；
+  `--strict` 把缺 key 也算失败）。本轮实测输出：VT skipped / ICP miit unreachable。
+- 结论：**不是代码没做，是 key 没填 + 国内源不可达**；真机验收要等主理人填 key / 换源后跑该脚本。
+
+### 门禁
+
+- `[215]` 一组（采样器真读数 / `suggest_workers` 四边界 / 库行映射+往返 / `effective_workers` /
+  runner 深拷贝注入 / 真 `run_task` 落画像 / `create_task` 逗号串）；**SMOKE PASS**。
+- `AGENTS.md` §5.14 的并发档条目已同步：`workers_profile` / `scanner/profiling.py` / `queue.active_workers()` 三个入口都写进了指针。
+- 另记一条行尾陷阱：`tests/smoke.py` 本次必须按字节插入（沿用插入点的 LF），两式 numstat 138/0；
+  `scanner/config.py`、`gui/app.py`、`scanner/utils.py` 同法恢复原行尾，避免"整段假改动"。
+
 ## 续214（2026-10-17，WorkBuddy · CodeBuddy）：VirusTotal 子域名反查（借鉴清单最后一项"等 key"）
 
 主理人点单"virustotal 要不要做"+ 续213 核查后的剩余项。形态与 FOFA / Shodan / Quake **不同路**：

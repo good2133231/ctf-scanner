@@ -139,7 +139,7 @@ button.ghost:hover { color:var(--text); background:var(--ghost-hover); }
 .op-list button { margin-top:6px; }
 button.danger { background:var(--danger-bg); border-color:var(--danger-border); color:var(--danger); }
 /* 行内小按钮（任务列表 / 任务详情的操作列） */
-.btn-mini { padding:3px 9px; font-size:12px; border-radius:5px; }
+.btn-mini { padding:3px 9px; font-size:12px; border-radius:5px; white-space:nowrap; }
 /* 续191：更小一档（子任务/统计/阶段 等切换钮，与 .btn-mini 连用）；
    .ops-row 操作列横排、放不下自动换行（此前各按钮挤成竖列很丑） */
 .btn-mini.btn-xs { padding:0 6px; font-size:11px; border-radius:4px; line-height:1.6; }
@@ -207,8 +207,30 @@ button.danger { background:var(--danger-bg); border-color:var(--danger-border); 
 table { width:100%; border-collapse:collapse; font-size:13px; }
 th, td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
 th { color:var(--muted); font-weight:600; font-size:12px; white-space:nowrap; }
+/* 续215（主理人点单「前端样式挤」）：任务列表 11 列，在 1024/1280 下曾被自动布局压成
+   「统/计」竖排、按钮逐字换行。做法分两层：① 给关键单元格 nowrap（统计/阶段/状态/进度/
+   时间/操作）；② 整表设一个 min-width，容器 `.panel` 已有 overflow-x:auto ⇒ 窄屏横向滚动，
+   不把整页撑出横向滚动条（browser_e2e [9] 的 430/360 判据仍成立）。任务名/目标允许换行，
+   但给最小宽度，中文不再一字一行。 */
+#tbl-tasks { min-width:1040px; }
+#tbl-tasks td, #tbl-tasks th { vertical-align:middle; }
+#tbl-tasks td:nth-child(3) { min-width:220px; }
+#tbl-tasks td:nth-child(4) { min-width:170px; }
+#tbl-tasks td:nth-child(5), #tbl-tasks td:nth-child(6),
+#tbl-tasks td:nth-child(7), #tbl-tasks td:nth-child(8),
+#tbl-tasks td:nth-child(9), #tbl-tasks td:nth-child(10),
+#tbl-tasks td:nth-child(11) { white-space:nowrap; }
+/* 仪表盘两张紧凑表同理：状态/时间/序号不拆字；名称列允许换行。 */
+.tbl-recent td, .tbl-trend td { vertical-align:middle; }
+.tbl-recent td:nth-child(1), .tbl-recent td:nth-child(3),
+.tbl-recent td:nth-child(4), .tbl-recent td:nth-child(5) { white-space:nowrap; }
+.tbl-recent td:nth-child(2) { min-width:150px; }
+/* 趋势表第一列是「#id 任务名 + 创建时间」，允许换行；六个计数列必须整行。 */
+.tbl-trend td:nth-child(n+2) { white-space:nowrap; }
+.tbl-trend td:first-child { min-width:260px; }
 tr:hover td { background:var(--hover); }
-.badge { padding:2px 9px; border-radius:20px; font-size:12px; background:var(--chip-bg); color:var(--text); }
+.badge { padding:2px 9px; border-radius:20px; font-size:12px; background:var(--chip-bg); color:var(--text);
+         white-space:nowrap; }
 .st-running { background:var(--st-run-bg); color:var(--st-run-fg); }
 .st-done { background:var(--st-done-bg); color:var(--st-done-fg); }
 .st-failed { background:var(--st-fail-bg); color:var(--st-fail-fg); }
@@ -255,8 +277,23 @@ details pre { margin:8px 0; }
 .login-box .captcha-row img { height:38px; border:1px solid var(--border); border-radius:6px;
                               cursor:pointer; background:var(--input-bg); }
 
-@media (max-width:900px) {
+/* 续215：仪表盘「漏洞趋势」是 7 列表格（任务 + crit/high/med/low/info/合计）。
+   两栏并排时每栏只有 ~390px（1024 视口），列会被压成单字一行 —— 把断点从 900 提前到
+   1400：常见 1280/1366 笔记本直接单栏，表格拿到整行宽度；1920 仍保留两栏。 */
+@media (max-width:1400px) {
   .grid2 { grid-template-columns:1fr; }
+}
+@media (max-width:1300px) {
+  /* 续215：1280 视口下把「开始时间」整列藏掉（详情页「目标与配置」仍看得到），
+     省出的 120px 让「运行时长 / 操作」留在首屏 —— 比横向滚到最右才能点「查看全结果」好。 */
+  #tbl-tasks th:nth-child(9), #tbl-tasks td:nth-child(9) { display:none; }
+}
+@media (max-width:1200px) {
+  /* 续215：1024 档顶栏右侧「退出」曾被挤到第二行、与正文重叠。52px 固定高度装不下时
+     允许换行并自动增高（sticky 定位不变），比把字压小更好读。 */
+  .topbar { flex-wrap:wrap; height:auto; min-height:52px; padding:8px 12px; gap:8px 12px; }
+}
+@media (max-width:900px) {
   .sidebar { width:150px; flex-basis:150px; }
 }
 

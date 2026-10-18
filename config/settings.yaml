@@ -118,6 +118,9 @@ limits:
   # 按机器规格收并发上限（续181，借鉴点⑤）：false＝只认 max_workers（现状）；
   # true＝min(max_workers, machine_tier 建议值)（小 ≤2C/4G→8、中 ≤4C/8G→16、其余→32）。
   workers_auto: false
+  # 续215-P2-12：true ＝ 再按**上一轮真任务实测**收一道（CPU 占比 / 峰值内存）；
+  # 与 workers_auto 独立，且只会往下收。无画像（首跑/老库）时不动。
+  workers_profile: true
   http_timeout: 10
   verify_tls: false
   # 第三方接口（FOFA/Shodan/Quake/crt.sh/KEV/iprecon/api.github.com）的证书校验，**默认开**。

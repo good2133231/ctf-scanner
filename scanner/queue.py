@@ -63,6 +63,18 @@ def config(settings=None):
         from .utils import machine_tier
         cap = {"小": 1, "中": 2, "大": 4}.get(machine_tier().get("tier"), 1)
         n = max(1, min(n, cap))
+    # 续215-P2-12：再用**最近一次真任务实测**收一道（queue.workers_profile，出厂 true）。
+    # 只往下收、不会超过上面的配置/机器档位；首次运行还没有画像 ⇒ 原样不动。
+    # 队列启动时读一次（`start()`）；页面显示"已启动几个"用 `active_workers()`，
+    # 不拿这个函数的返回值冒充运行中的 worker 数（重启后才会按新画像变）。
+    if cfg.get("workers_profile") is True:
+        try:
+            from . import profiling
+            prof = profiling.from_row(db.last_task_profile())
+            if prof:
+                n = max(1, min(n, profiling.suggest_workers(prof, configured=n)["cap"]))
+        except Exception:                              # noqa: BLE001 - 画像不许拖垮队列
+            pass
     return {"workers": n}
 
 
@@ -241,3 +253,12 @@ def notify():
 def running():
     """worker 是否在跑（测试 / 诊断用）。"""
     return _QUEUE.running()
+
+
+def active_workers():
+    """**实际已启动**的 worker 数（没启动返回 0）。
+
+    页面上的"同时运行 N 个"必须读它，不要读 `config()`：`config()` 是"下次启动会起几个"，
+    按实测画像收档后两者可能不同（见 `config` 末尾注释）。
+    """
+    return len(list(_QUEUE._threads))
