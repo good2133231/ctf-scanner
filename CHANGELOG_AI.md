@@ -87,15 +87,16 @@
 - 全量门禁：`[217]` 一组 + **SMOKE PASS**（第六跑全绿；atexit 加固后的最终复跑结果见 todo 末节）。
   两式 `git diff --numstat` 逐文件相等。
 
-**下一轮（续217 之后）——只放未做的：**
+**主理人 2026-10-18 拍板：Windows / macOS 真机不考虑** —— chrome 真机启动、setup_dirmap
+win/mac 实跑、干净安装 win/mac 数字三条就此关闭；归档字节级核验（本轮 ③）仍有效。
 
-- [ ] chrome win/mac 真机启动（本轮只核了归档字节与版本；`stack_exec_path` 的 macOS 分支没在真 mac 上跑过）
-- [ ] 本机 `tools/dirmap/` 快照（无 `-e`）按新适配器真跑一轮深扫档，核对产物行与内置字典的互补性
-  （门禁已隔离第三方工具；这条是"真目录上的验收"，不是门禁）
-- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`（续216 起一直挂着）
-- [ ] `tools/setup_dirmap.py --install` 在 Windows / macOS 上各跑一次（`dirmap_requirements.txt`
-  的三个版本只验过 Linux 3.14 的 wheel；Windows 是否有对应 wheel 没验）
-- [ ] 干净安装的 Windows / macOS 数字（本轮只有 Linux x86_64）
+**下一轮（续217 之后）——只放未做的：**
+- [ ] **脱敏机器判据**（§0.5 那条，不需要真名）：被跟踪文件里出现的注册域若同时是
+  `data/scanner.db` 资产表里的域名 ⇒ 判红；CDN / 公开厂商走白名单例外
+- [ ] 本机 `tools/dirmap/` 快照（无 `-e`）按新适配器真跑一轮深扫档，核对产物与内置字典的互补性
+  （续217 适配器只过了合成测试 + 上游 `-h`；真目录上的完整产物解析没验过）
+- [ ] 截图候补轮轮转 + 重试成功清 `shot_error`（两条同链路旧账一并做）
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`（等 key）
 
 ## 续216（2026-10-18，WorkBuddy · Claude）：排期收口 —— IP 反查逐源成败 + 队列运行中扩缩容 + 续175 安装凭据/fontconfig
 
