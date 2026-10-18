@@ -185,10 +185,7 @@
             >子任务</button>
           <button type="button" class="btn-mini ghost btn-xs" data-pv="stats" data-id="{{ t.id }}"
             title="预览框看整棵衍生树的资产汇聚（跨任务去重 + 按来源任务拆分）"
-            >统计</button>
-
-
-</td>
+            >统计</button></td>
 
 
         <td class="muted small">{{ (t.targets.splitlines() | first) or '-' }}
@@ -201,10 +198,7 @@
            能看到每个阶段在本任务里跑不跑、为什么。 #}
         <td class="muted small"><button type="button" class="btn-mini ghost btn-xs"
           data-pv="stages" data-id="{{ t.id }}"
-          title="预览框看这个任务跑了哪些阶段（含各阶段说明与开关状态）">阶段</button>
-</td>
-
-
+          title="预览框看这个任务跑了哪些阶段（含各阶段说明与开关状态）">阶段预览</button></td>
         <td><span class="badge st-{{ t.status }}">{{ '排队中' if t.status == 'queued' else t.status }}</span>
           {% if t.status == 'queued' and qpos.get(t.id) %}<span class="muted small">第 {{ qpos.get(t.id) }} 位</span>{% endif %}
           {# 续211-P2-10：具名取消原因（`tasks.stop_reason`，枚举见 scanner/cancelcause.py）。

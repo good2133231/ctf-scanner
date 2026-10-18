@@ -4316,6 +4316,8 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] **门禁环境坑**：本机 IDE 的批量删除守卫在 SMOKE PASS 后拦了 atexit 沙箱清理（Exception ignored，退出码不受影响）——`_cleanup_sandbox` 改为接住 BaseException，清理失败永不改写门禁结论
 - [x] **门禁**：`[217]` 一组 + SMOKE PASS —— 第六跑（加固前）与第七跑（最终代码）都全绿，
   第七跑结尾还顺带验证了 atexit 加固：上一跑被本机 IDE 守卫拦出的 `SystemExit` 这一跑没再出现
+- [x] **任务页「阶段」按钮**改「阶段预览」（表头同字重复的观感问题，主理人截图反馈）；诊断出
+  截图页面来自旧 GUI 进程（`debug=False` 模板不热更新，重启即对齐；本机另有两个 run_gui 并存）
 
 **主理人 2026-10-18 拍板：Windows / macOS 真机不考虑** —— chrome 真机启动、setup_dirmap
 win/mac 实跑、干净安装 win/mac 数字三条就此关闭；归档字节级核验（本轮 ③）仍有效。
