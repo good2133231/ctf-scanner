@@ -4303,6 +4303,20 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续226（2026-10-19，WorkBuddy · Claude）：TODO 里 puredns 结案 + logs/ 精确清理清单与门禁
+
+- [x] `TODO.md` 的 puredns 条改为 `[x]`，写明续164 已 pin（v2.1.1 + 四件产物 SHA256）
+- [x] `docs/logs-cleanup.md`：必留确切文件名 / 可删候选前缀 / task_* 条件可删 / 禁止通配
+- [x] `tools/clean_logs.py`：--list 分类；--apply 逐个点名；拒绝通配/必留/DB 引用（实测三路 rc=2）
+- [x] `[226]` 门禁：清单四节 + 危险删除形态扫描 + 工具拒绝路径自测
+- [x] 全量 SMOKE PASS（257 组，7 分 08 秒；a 红 `[8as]`、b 红 `[226]` 自扫，c 绿）
+- [x] 复核主理人 1–7 的代码证据（详见 CHANGELOG 续226 末节）
+
+**下一轮（续226 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过（依赖真 runner 数据）
+
+
 ## 续225（2026-10-19，WorkBuddy · Claude）：任务页 7 项收口（注释/按钮/子任务进度/图标/邮箱/截图/拓展说明）
 
 主理人一次提 7 条，逐条落地；细节与实测见 CHANGELOG 续225。

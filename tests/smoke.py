@@ -29417,6 +29417,50 @@ expression: r0()
     print("[225] 续225 ok: 邮箱页签（页内按任务过滤）｜favicon 贴图 + icon_hash(FOFA) + 已拓展/三方未拓展 + 文件接口防穿越｜"
           "子任务页显示父任务进度、父页列出子任务 %｜截图 --virtual-time-budget 与 JS 后 md5 多数表决（一致/换图/不稳定三档）｜"
           "站点两条注释已隐藏、批量打开与重截同一行、策略页两个新开关在")
+    # ------------------------------------------------------------------ [226]
+    # 续226：logs/ 精确清理（清单 + 工具 + 防通配门禁）
+    _doc226 = ROOT / "docs" / "logs-cleanup.md"
+    assert _doc226.is_file(), "缺 docs/logs-cleanup.md"
+    _dt226 = _doc226.read_text(encoding="utf-8", errors="replace")
+    for _sec226 in ("## 必留", "## 可删候选", "## 任务目录", "## 工具"):
+        assert _sec226 in _dt226, f"清理清单缺小节：{_sec226}"
+    for _keep226 in ("devflow_baseline.json", "smoke-timing.jsonl", "HANDOFF-2026-10-14-b.md",
+                     "access.log", "server.log", "scanner.db.bak-20261006-062530-112d-thirdparty"):
+        assert _keep226 in _dt226, f"必留清单没写确切名字：{_keep226}"
+    _tool226 = ROOT / "tools" / "clean_logs.py"
+    assert _tool226.is_file(), "缺 tools/clean_logs.py"
+    _tt226 = _tool226.read_text(encoding="utf-8", errors="replace")
+    assert "--apply" in _tt226 and "--list" in _tt226 and "通配" in _tt226
+    assert "glob(" not in _tt226 and 'rmtree("logs"' not in _tt226
+    # 危险删除形态：除了 clean_logs.py（它自己实现了"点名 + 拒绝"），任何脚本都不许通配删 logs
+    _bad226 = []
+    _scan226 = [p for d in ("tools", "cli", "tests", "scanner") for p in (ROOT / d).rglob("*.py")]
+    _scan226 += list(ROOT.rglob("*.sh"))
+    _self226 = (ROOT / "tests" / "smoke.py").resolve()
+    for _p226 in _scan226:
+        # 排掉门禁自己（源码里就有这些模式串，扫自己＝恒红）与清理工具（它自己实现了保护）
+        if _p226.resolve() == _self226 or _p226.name == "clean_logs.py" or ".venv" in _p226.parts:
+            continue
+        _t226 = _p226.read_text(encoding="utf-8", errors="replace")
+        for _pat226 in (r"rm\s+-rf\s+logs", r"rm\s+-r\s+logs", r"rm\s+logs/\*",
+                        r"shutil\.rmtree\(\s*['\"]logs"):
+            if re.search(_pat226, _t226):
+                _bad226.append((str(_p226.relative_to(ROOT)), _pat226))
+    assert not _bad226, f"发现通配清理 logs/ 的写法：{_bad226}"
+    # 工具自测：--list 只列分类；通配 / 必留 / 未登记名字一律非 0
+    import subprocess as _sp226
+    _r226 = _sp226.run([sys.executable, str(_tool226), "--list"], cwd=str(ROOT),
+                      capture_output=True, text=True, timeout=30)
+    assert _r226.returncode == 0 and "可删候选" in _r226.stdout, \
+        (_r226.returncode, _r226.stdout[:200], _r226.stderr[:200])
+    for _args226 in (["--apply", "*"], ["--apply", "devflow_baseline.json"],
+                     ["--apply", "__definitely_not_a_log__"]):
+        _rr226 = _sp226.run([sys.executable, str(_tool226)] + _args226, cwd=str(ROOT),
+                            capture_output=True, text=True, timeout=30)
+        assert _rr226.returncode != 0, f"工具没收下非法删除：{_args226} rc={_rr226.returncode}"
+    print("[226] 续226 ok: docs/logs-cleanup.md 必留确切名字/可删候选/任务目录条件；"
+          "clean_logs.py 只认点名（--list 分类、--apply 拒绝通配/必留/未登记）；"
+          "代码里无 rmtree(logs)/rm -rf logs 形态")
     print("SMOKE PASS")
 
 

@@ -801,6 +801,10 @@ ctf-scanner/
   都不重复保留旧图并记 unstable）。复核只覆盖 `sites.shot` 同一路径；只在 screenshot 真跑过时触发。
 - **邮箱的入口（续225）**：`emails` 表早已存在，任务页的「邮箱」页签走 `_ASSET_PAGES["emails"]`
   服务端分页（按 task_id 过滤）；别再只把它挂在跨任务 `/emails` 页。
+- **logs/ 清理只走点名（续226）**：清单在 `docs/logs-cleanup.md`（必留确切文件名 / 可删候选前缀 /
+  `task_*` 条件可删）；执行只走 `tools/clean_logs.py --apply <确切名字>`。**禁止**
+  `rm -rf logs/*` / `rm -r logs` / `shutil.rmtree("logs")` / `glob(...).unlink()`；
+  门禁 `[226]` 扫危险形态，并自测"通配 / 必留 / 未登记"三类拒绝。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /

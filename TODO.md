@@ -28,19 +28,17 @@
       同一份库与任务目录），所以续125 明确**拒绝** `--only <组>`（跳组会在依赖它的后续组里造成假绿），
       `AGENTS.md` §6.2 第七起也只允许**一个门禁执行者**。要并行先得解决"组间隔离"，
       不是先加旗标 —— 顺序搞反就是在给自己批量造假红。
-- [ ] **puredns 的安装红线不许被绕过**：上游 d3mondev/puredns **不发布校验和**，本仓红线是
-      "没有官方 SHA256 就拒装"（`scanner/toolmgr.py` 的 `TOOLS` / `MANUAL` 分档 +
-      `TOOLS ∩ MANUAL = ∅` 不变式）。要吃上子域名深档全量，必须**用户显式**跑
-      `cli/client.py --update-tools --tool puredns --allow-unverified`；AI 不代做这个决定。
-      不装的代价已实测并写在 `todo.txt` 续139：内置那一路 17.8 万条 @128 线程 45 分钟仍未跑完，
-      冷启动比对标灯塔少 16 台主机。
+- [x] **puredns 的安装红线** —— **续164 已解决，本条结案**：上游不发布校验和的问题，
+      已改为由**本框架**钉住 `pin_version=v2.1.1` + 四件产物的 `pin_sha256`（不是放松红线：
+      字节必须与钉住的摘要一字不差；tag 不对连下载都不发起）。`tools/install.sh` / `toolmgr`
+      都已按这条走，不再需要 `--allow-unverified`；原来"AI 不代做这个决定"的挂账随之解除。
 - [ ] **Python 3.14 那一档 CI 探针升为必过**：`.github/workflows/quality.yml` 里 3.14 目前是
       "允许红的探针"，`smoke.yml`（3.9 全量）才是权威口径。升法＝在真 runner 上**连绿几轮**之后，
       升太早等于教所有人忽略红（`todo.txt` 续125 原话）。
-- [ ] **`logs/` 的清理要有个明确清单，而不是通配符**：`logs/` 是临时工作区，但里面躺着前几轮的
-      **产物与审计证据**（`devflow_baseline.json` / `smoke-timing.jsonl` / `fp_calibration.json` /
-      `poc_calibration.json` …）。清理只按**确切文件名**删（`AGENTS.md` §6.2 的清理纪律，
-      本轮又重申过一次）；多 agent 并行时这条更重要 —— 别人正在往里写预检脚本。
+- [x] **`logs/` 的清理清单** —— **续226 已落地**：`docs/logs-cleanup.md`（必留的确切文件名 /
+      可删候选前缀 / `task_*` 条件可删）+ `tools/clean_logs.py`（`--list` 只列分类；`--apply`
+      必须逐个点名，拒绝通配符、必留项与 `tasks.log_file` 仍在引用的任务目录）；
+      门禁 `[226]` 扫代码里的危险删除形态并自测工具拒绝通配/必留项。
 
 
 ## 当前未解决（2026-10-01 盘点，权威清单以 `docs/roadmap.md` 为准）

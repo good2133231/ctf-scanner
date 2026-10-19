@@ -3,6 +3,57 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续226（2026-10-19，WorkBuddy · Claude）：TODO 里 puredns 结案 + logs/ 精确清理清单与门禁
+
+主理人点单的两件收尾；顺手回答"1–7 都解决了吗"（逐条见本节末）。
+
+### ① puredns 那条过时待办结案
+
+- `TODO.md` 的「puredns 安装红线不许被绕过」改为 `[x]`，写明：**续164 已用本框架自己钉住的
+  `pin_version=v2.1.1` + 四件产物 `pin_sha256` 解决**（字节必须与钉住摘要一字不差；tag 不对
+  连下载都不发起），不再需要 `--allow-unverified`。
+- 同时把 `logs/` 清理那条也改成 `[x]`（见 ②）。
+
+### ② `logs/` 精确清理：清单 + 工具 + 门禁
+
+- 新 `docs/logs-cleanup.md`：
+  - **必留**（确切文件名）：`devflow_baseline.json`、`smoke-timing.jsonl`、5 份
+    `HANDOFF-*.md`、`access.log`(+`.1/.2/.3`)、`server.log`、4 个 `scanner.db.bak-*`；
+    外加 **`tasks.log_file` 指向的 `task_*` 目录**（截图/favicon/产物还在用）。
+  - **可删候选**（明确前缀）：`_smoke*.txt`、`_*.py`、`_*.json/.txt`、`smoke*.out`、
+    `smoke-*`、`h8am-*`、`w178b-*`、`verify*`、`scan_*.run`、`profile-*`、`preview/`、
+    `__pycache__/`、非 access/server 的 `*.log`。
+  - **禁止**：`rm -rf logs/*`、`rm -r logs`、`shutil.rmtree("logs")`、`glob(...).unlink()`。
+- 新 `tools/clean_logs.py`：
+  - `--list` 只给分类/示例；`--apply` 必须**逐个点名**，不接受 `* ? [ ] / \ ..`；
+  - 「必留」/ 未登记名字一律拒绝；`task_*` 实时查 `tasks.log_file`，被引用就拒绝，
+    **库读不到也拒绝**（读不到引用 ≠ 没引用）。
+  - 实测本机：`logs/` 顶层 691 项 = 必留 16 / 可删候选 556 / 任务目录 26 / 其它 93；
+    `--apply '*'`、`--apply devflow_baseline.json`、`--apply 不存在` 三路均返回 rc=2。
+- 新门禁 `[226]`：
+  - 清单必须含四节（必留/可删候选/任务目录/工具）且必留项写了确切名字；
+  - 工具文本必须保留 `--apply` / `--list` / "通配" 拒绝语义，且自己不许用 `glob(`/`rmtree("logs")`；
+  - 扫 `tools/ cli/ tests/ scanner/` 与全仓 `*.sh` 的危险删除形态（`rm -rf logs` 等）；
+  - 真跑 `--list` 与三条拒绝路径（通配 / 必留 / 未登记），任一收下就红。
+
+### 主理人 1–7 的核对（都在 续225 已落地，本轮复核代码证据）
+
+1. 站点页「单次最多排 / 尝试口径」长注释：`task_detail.html` 命中 0；`[170]` 已改成"不再展示"。
+2. 批量打开 + 重截：两个按钮同在一个 `.bulkbar`（源码断言通过）。
+3. 子任务进度：父页列 `（37%）`、子页显示 `父任务当前进度 88%`；代码/真实库均无"父任务清零"。
+4. favicon：`sites.icon_hash/icon_file/icon_ext`、probe 一次抓取算 MD5+mmh3 并落盘、
+   osint 复用 hash 写 expanded/black/empty、页面 URL 下方贴图 + `icon_hash=` + 徽章、
+   `/favicons` 只认 `<32hex>.ico`。**旧任务需重启 GUI 跑迁移 + 重跑 probe 才有图标/mmh3。**
+5. 截图：`settle_ms` → `--virtual-time-budget`；jsmine 后 H0/H1/H2/H3 多数表决（runner 已接线）。
+6. 邮箱：任务页新增「邮箱」页签（分页/关键字/按任务过滤）；真实库 7 条此前无任务页入口。
+7. 建任务页拓展长说明：`tasks.html` 命中 0；`auto_expand` 的 DNS 判定 + 归属追加已存在（未改）。
+
+### 门禁实测
+
+- 本轮全量：a 红在 `[8as]`（先改 TODO.md 写了 226、CHANGELOG 还没写，机器判据当场抓到）；
+  b 红在 `[226]`（扫描把门禁自己的模式串也算成危险写法）；修掉后 c **SMOKE PASS**
+  （**257 组**，14:28:50 → 14:35:58，**7 分 08 秒**）。
+- `[226]` 自测：`--list` rc=0；通配 / 必留 / 未登记三路 rc=2。
 ## 续225（2026-10-19，WorkBuddy · Claude）：任务页 7 项收口 —— 注释隐藏/按钮同行/子任务进度/图标与邮箱/截图稳定与 JS 后复核
 
 主理人一次提了 7 条，逐条落地。**没有改任何扫描语义**：改的是展示、落库字段与截图的取图时机。
