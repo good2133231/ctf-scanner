@@ -307,7 +307,8 @@
       <span class="mono">&lt;form method="post"&gt;</span> 会作为一条链接收进「链接资产」页，
       但框架不会去发那个请求。</p>
 
-    {# 续201：Host 碰撞（同 IP 绑不同 Host 头找隐藏站点）—— 只读 GET、默认关 #}
+    {# 续201：Host 碰撞（同 IP 绑不同 Host 头找隐藏站点）—— 只读 GET、
+      续203 起策略**默认开**（主理人点单）、建任务默认也勾 ⇒ 不用用户再勾一次 #}
     {# 续205：备案反查（同主体域名）。源全在配置里，加一个可达的源改 yaml 即可 #}
     <label class="chk"><input type="checkbox" name="icp_enabled" value="1"
       {{ 'checked' if s.icp.enabled }}> <b>备案反查（ICP）</b>（默认关闭；查同主体下的其它域名，
@@ -325,12 +326,11 @@
     <label>预检用的探活域名 <input name="icp_probe_domain" value="{{ s.icp.probe_domain }}"></label>
 
     <label class="chk"><input type="checkbox" name="hostcollide_enabled" value="1"
-      {{ 'checked' if s.hostcollide.enabled }}> <b>Host 碰撞</b>（默认关闭；同 IP 绑不同
+      {{ 'checked' if s.hostcollide.enabled }}> <b>Host 碰撞</b>（默认**开启**；同 IP 绑不同
       Host 头找藏在背后的站点）</label>
     <p class="muted small note">当前状态：{% if s.hostcollide.enabled %}<b>已开启</b> —— 任务跑到
       hostcollide 阶段会按「非 CDN 的真实 IP × 候选 Host」发 GET。{% else %}<b>关闭</b> ——
-      hostcollide 阶段会被跳过，<b>一个请求都不发</b>（要单次触发：新建任务勾「Host 碰撞」，
-      或任务详情页那颗按钮）。{% endif %}
+      hostcollide 阶段会被跳过，<b>一个请求都不发</b>（策略开着就自动跑、**不用勾**；策略关掉时可用任务选项/详情页按钮单次触发）。{% endif %}
       命中按 <span class="mono">collide:&lt;ip&gt;</span> 前缀落库 ⇒ 自动归 own 口径；
       只读 GET、单任务请求预算见下。</p>
     <label>单任务请求预算 <input name="hostcollide_max_requests" value="{{ s.hostcollide.max_requests }}"></label>

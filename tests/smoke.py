@@ -28716,6 +28716,68 @@ expression: r0()
               f"run_cmd 200KB 输出 {_el218:.2f}s 返回不截断（管道死锁已修）｜"
               "dirmap 无 -e 的 output/<netloc>.txt 单文件产物解析 + 清理｜"
               "截图候补轮按最久没试轮转 + 截成功清旧 shot_error")
+    # ------------------------------------------------------------------ [219]
+    # 续219：Host 碰撞"**默认就做、不用勾选**"（主理人第二次明说）。
+    #   历史形状：续203 就把策略默认值改成开了，但**注释与三处 GUI 文案**仍写"默认关闭/要勾选"
+    #   —— 用户看到的就是这些文案，于是以为还得勾一次。这里把**行为 + 文案**一起钉住防回潮。
+    from scanner.stages import hostcollide as _hcs219
+    from scanner.config import DEFAULTS as _DEF219
+    assert _DEF219["hostcollide"]["enabled"] is True, "Host 碰撞策略默认必须是开"
+
+    class _Log219:
+        def __init__(self):
+            self.lines = []
+
+        def info(self, m):
+            self.lines.append(str(m))
+
+        def warning(self, m):
+            self.lines.append(str(m))
+
+    class _Ctx219:
+        def __init__(self, settings, options):
+            self.settings = settings
+            self.options = options
+            self.logger = _Log219()
+            self.task_id = 0
+            self.stopped = lambda: False
+
+    # ① 策略开着 + **不勾任务选项** ⇒ 必须真跑（不许打一句"未启用"就跳过）
+    _lg219 = _Log219()
+    _ctx219 = _Ctx219({"hostcollide": {"enabled": True, "max_requests": 1, "timeout": 1}}, {})
+    _ctx219.logger = _lg219
+    _ran219 = {"n": 0}
+    import scanner.hostcollide as _hcm219
+    _old_run219 = _hcm219.run
+    _hcm219.run = lambda ctx: _ran219.__setitem__("n", _ran219["n"] + 1)
+    try:
+        _stg219 = _hcs219.HostcollideStage.__new__(_hcs219.HostcollideStage)
+        _stg219.ctx = _ctx219
+        _stg219.run()
+    finally:
+        _hcm219.run = _old_run219
+    assert _ran219["n"] == 1, \
+        f"策略开着、没勾选项也应该真跑（hostcollide.run 没被调用）：{_lg219.lines}"
+    assert not any("未启用" in l or "未开启" in l for l in _lg219.lines), _lg219.lines
+
+    # ② 建任务表单：hostcollide 必须在**默认勾选**那一拨（模板里默认不勾的只有 screenshot/cert）
+    _tt219 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8", errors="replace")
+    assert "off_by_default = s in ['screenshot', 'cert']" in _tt219, \
+        "建任务默认勾选集合变了 ⇒ hostcollide 不能被塞进 off_by_default（否则又得用户手动勾）"
+
+    # ③ Host 碰撞**自己的那些行**不许再写"默认关闭 / 默认关"（与 DEFAULTS 相反，正是误导来源）。
+    #    只取含 `hostcollide` 的行：同一个文件里别的功能（截图/爬虫/备案…）本来就该写"默认关"，
+    #    而写"Host 碰撞"的中文注释里也可能提到别人的默认值 —— 按关键字取行最稳。
+    for _f219 in ("gui/templates/settings.html", "gui/templates/tasks.html",
+                  "gui/templates/task_detail.html"):
+        _t219 = (ROOT / _f219).read_text(encoding="utf-8", errors="replace")
+        _seg219 = "\n".join(l for l in _t219.splitlines() if "hostcollide" in l.lower())
+        assert _seg219, f"{_f219} 里找不到 hostcollide 相关行"
+        assert "默认关闭" not in _seg219 and "默认关" not in _seg219, \
+            f"{_f219} 的 hostcollide 行还在写「默认关闭/默认关」—— 与 DEFAULTS（默认开）相反，\
+用户会以为还要勾：{_seg219[:160]}"
+    print("[219] 续219 ok: Host 碰撞默认就做（策略默认开 + 建任务默认勾 + 不勾也真跑）；"
+          "三处 GUI 文案不再写「默认关」")
     print("SMOKE PASS")
 
 

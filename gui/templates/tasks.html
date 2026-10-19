@@ -46,11 +46,11 @@
       <span class="muted small">默认只跑「浅扫」：端口 top 档 + 目录敏感路径精选字典；
         想深挖再勾上面三项，或在结果页对选中资产发起补扫。</span>
     </div>
-      {# 续201：Host 碰撞的**任务级**开关（策略 hostcollide.enabled 出厂关；
+      {# 续201：Host 碰撞的**任务级**开关（策略 hostcollide.enabled 出厂**开**，建任务不用勾；
           勾它＝本任务无视全局开关也跑）—— 与 portscan_full 同一形状。
           刻意放在 `data-ck-group="expand"` **外面**：它不是拓展能力，混进那一组会让
           「一键勾选」的"拓展选项"语义变浑（[118] 那条分组断言就是钉这个的）。 #}
-      <label class="chk" title="同 IP 绑不同 Host 头找隐藏站点（只读 GET）。全局开关默认关，勾它＝本任务强制跑；忘了勾 hostcollide 阶段时会自动补上">
+      <label class="chk" title="同 IP 绑不同 Host 头找隐藏站点（只读 GET）。全局默认**已开** ⇒ 建任务不用勾；勾它只在策略被关掉时给本任务强制开">
         <input type="checkbox" name="hostcollide" value="1"> Host 碰撞（同 IP 绑不同 Host 找隐藏站点）</label>
     <div class="row" data-ck-group="expand">
       <span class="muted" title="任务级选项 auto_expand：只影响本次任务，不改全局策略">

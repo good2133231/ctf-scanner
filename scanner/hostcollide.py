@@ -1,7 +1,7 @@
 """同 IP 绑不同 Host 头找隐藏站点（续183，借鉴点②；ShuiZe hostCollide 思路，纯工程落地）。
 
-法律边界照旧：**只读 GET**、单任务请求预算封顶、默认关（`hostcollide.enabled: false`），
-只在显式开启（任务选项 `hostcollide: true` 且策略开着）时发请求。
+法律边界照旧：**只读 GET**、单任务请求预算封顶、**默认开**（`hostcollide.enabled: true`，续203），
+策略开着就跑（建任务**不用勾**）；任务选项 `hostcollide: true` 只在策略被关掉时给单次任务强制开。
 
 产出是「这个域名在这台 IP 上也能服务」的绑定关系：落 `subdomains`，source=`collide:<ip>`
 —— 前缀不匹配 `js:` / `osint:`，自动归 own 口径（判据复用 `db.OWN_SUBDOMAIN_WHERE`，§5.14）。

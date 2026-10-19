@@ -3,9 +3,9 @@
 判据与边界全在 `scanner/hostcollide.py`（只读 GET、按 IP 预算封顶、命中落
 `collide:<ip>` 前缀 ⇒ 自动归 own 口径）。这里只做三件事：开关、日志、把它接进流水线。
 
-开关两层（与 portscan / crawl 同形状）：策略 `hostcollide.enabled`（**出厂关**）
-+ 任务选项 `hostcollide: true`（新建任务勾「Host 碰撞」，或详情页那颗补跑按钮）。
-默认关的理由：它**一定**会按"非 CDN 的真实 IP × 候选 Host"发请求，请求量随资产面增长。
+开关两层（与 portscan / crawl 同形状）：策略 `hostcollide.enabled`（**出厂开**，续203 主理人点单）
++ 任务选项 `hostcollide: true` —— **只剩一个用途**：策略被关掉时给某一个任务强制开。
+  ⇒ 策略默认开着时，建任务**不用勾任何东西**（续219：主理人再次明确"这个默认就做、不用勾选"）。
 """
 from .. import hostcollide
 from .base import Stage
