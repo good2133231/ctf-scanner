@@ -17,7 +17,7 @@ window.CTF_THEME_DEFAULT = "light";
   document.documentElement.setAttribute("data-theme", t);
 })();
 </script>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=static_v('style.css')) }}">
 </head>
 <body class="{{ 'notes-on' if notes_on else '' }}">
 <div class="layout">
@@ -112,7 +112,12 @@ window.CTF_THEME_DEFAULT = "light";
     <div class="pv-body" id="pv-body"></div>
   </div>
 </div>
-<script src="{{ url_for('static', filename='app.js') }}"></script>
+{# 续234：URL 带 mtime 版本号（?v=）⇒ 30 天缓存也能在文件一变时立刻失效。
+   ⚠ 这颗 script **不能加 defer**：模板的 `{% block script %}` 在它后面**同步**调用
+   initTaskTable()/pollTask()（tasks.html/task_detail.html），defer 会把执行推迟到
+   整个文档解析完 —— 内联调用时函数还不存在，轮询整个初始化不出来（浏览器 E2E [8]
+   实测 4 条全红）。脚本本来就在 </body> 前，defer 也没有可观的收益。 #}
+<script src="{{ url_for('static', filename='app.js', v=static_v('app.js')) }}"></script>
 {% block script %}{% endblock %}
 </body>
 </html>

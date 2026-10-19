@@ -106,6 +106,11 @@ def is_random_base(base):
     """
     return bool(_BASE_RE.match(str(base or "")))
 
+# 续234：前缀之外**唯一放行**的路径。浏览器无条件请求 /favicon.ico（连登录页都会），
+# 不放行它 = 每个页面一条 404 噪声。204 不回任何内容，"这台机器像没跑服务"的伪装不变。
+_PUBLIC_PATHS = ("/favicon.ico",)
+
+
 def strip(environ, base):
     """WSGI 层剥前缀：返回改写后的 `(script_name, path_info)`，不合格返回 `None`。
 
@@ -116,11 +121,14 @@ def strip(environ, base):
     path = environ.get("PATH_INFO", "") or "/"
     if not base:
         return environ.get("SCRIPT_NAME", ""), path
+    if path in _PUBLIC_PATHS:
+        return base, path                                 # 放行：按原路径交给应用
     if path == base:
         return base, "/"                                  # `/前缀` 视作进首页
     if not path.startswith(base + "/"):
         return None                                       # 根路径、别的路径：一律 404
     return base, path[len(base):] or "/"
+
 
 class PrefixMiddleware:
     """把整个控制台挂在随机前缀下的 WSGI 包装。

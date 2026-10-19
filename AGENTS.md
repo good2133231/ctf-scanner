@@ -831,6 +831,16 @@ ctf-scanner/
   每次杀都连 PID+命令行进启动日志。开关 `gui.kill_port_on_conflict`（默认 true，策略页有
   勾选框，POST 映射必须带上）与 `CTFSCANNER_GUI_KILL_PORT=0`；杀不动/找不到占用者 ⇒
   退回续150 的"自动顺延"。只作用于 GUI 监听端口，别把这条规则带到 fixture / 队列 / 探测目标上。
+- **前端资产改动必须带版本号（续234）**：`app.js` / `style.css` 的 URL 一律
+  `url_for('static', filename=…, v=static_v(…))`（mtime 版本化）＋
+  `SEND_FILE_MAX_AGE_DEFAULT=30 天`。直接改文件不改 URL，用户端最长 30 天拿旧缓存；
+  把 max_age 调小来"修缓存"是反模式。新增**根路径公开端点**只能走
+  `webpath._PUBLIC_PATHS`（当前仅 `/favicon.ico`），放行了什么在 CHANGELOG 里必须能查到。
+- **前端资产改动必须带版本号（续234）**：`app.js` / `style.css` 的 URL 一律
+  `url_for('static', filename=…, v=static_v(…))`（mtime 版本化）＋
+  `SEND_FILE_MAX_AGE_DEFAULT=30 天`。直接改文件不改 URL，用户端最长 30 天拿旧缓存；
+  把 max_age 调小来"修缓存"是反模式。新增**根路径公开端点**只能走
+  `webpath._PUBLIC_PATHS`（当前仅 `/favicon.ico`），放行了什么在 CHANGELOG 里必须能查到。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /

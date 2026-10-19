@@ -900,6 +900,25 @@ def create_app():
     # 挂在 `app.config` 上（而不是闭包变量）有两个理由：① `serve()` 要打印放行清单；
     # ② 测试可以对它做**变异证伪**（把集合改坏，看断言是否真的变红，见 tests/smoke.py [7i]）。
     app.config["CS_ALLOWED_HOSTS"] = frozenset(_allowed)
+    # 续234：静态文件按 **mtime 版本化**（`?v=<mtime>`）⇒ 可以放心长缓存；
+    # 改了 app.js/style.css 后版本号自动变，浏览器立刻拉新，不会出现"改了前端没生效"。
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 30 * 86400
+
+    @app.context_processor
+    def _static_version():
+        """静态资产的 mtime 版本号（续234）：文件一变 `?v=` 就变，缓存自动失效。"""
+        def static_v(name):
+            try:
+                return int((BASE_DIR / "gui" / "static" / name).stat().st_mtime)
+            except OSError:
+                return 0
+        return {"static_v": static_v}
+
+    @app.route("/favicon.ico")
+    def favicon_ico():
+        """浏览器无条件请求它（续234）：不给就每页一条 404 噪声（access.log 里已堆了 10 条）。
+        返回 204（无内容）—— 不 404、不重定向、没有响应体，日志立刻安静下来。"""
+        return "", 204
     app.config["CS_GUARD_HOST"] = bool(_allowed - _LOOPBACK_HOSTS) or _bound_loopback
     app.config["CS_BAD_ALLOWED_HOSTS"] = tuple(_bad_allowed)
 

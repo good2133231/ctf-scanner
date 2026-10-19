@@ -29658,6 +29658,40 @@ expression: r0()
     assert _pg233 is not None and _DEF233["gui"]["kill_port_on_conflict"] is True
     print("[233] 续233 ok: 端口被占 ⇒ 先 SIGTERM 等 1.5s 再 SIGKILL（绝不杀自己/PID1/身份不明）；"
           "gui.kill_port_on_conflict 默认开、CTFSCANNER_GUI_KILL_PORT=0 可关；serve() 已接线")
+    # ------------------------------------------------------------------ [234]
+    # 续234：全面复查/壮骨/前端 —— favicon 204（降噪）+ 静态缓存版本化 + app.js 禁 defer
+    from werkzeug.test import EnvironBuilder as _EB234
+    from scanner.webpath import PrefixMiddleware as _PM234
+
+    class _Cap234:
+        status = None
+        def __call__(self, status, headers, exc=None):
+            self.status = status
+
+    # ① 前缀中间件：/favicon.ico 放行（拿到 204），别的根路径依旧"像没跑服务"
+    import gui.app as _gmod234
+    _app234 = _gmod234.create_app()
+    _mw234 = _PM234(_app234.wsgi_app, base="/devscanner/whatever")
+    _cap234 = _Cap234()
+    _it234 = _mw234(_EB234(path="/favicon.ico").get_environ(), _cap234)
+    assert _cap234.status.startswith("204"), _cap234.status
+    _cap234b = _Cap234()
+    _body234 = list(_mw234(_EB234(path="/definitely-not-here").get_environ(), _cap234b))
+    assert _cap234b.status == "404 NOT FOUND" and _body234 == [b""], (_cap234b.status, _body234)
+    # ② 路由本体：204 且无响应体
+    _fav234 = _app234.test_client().get("/favicon.ico")
+    assert _fav234.status_code == 204, _fav234.status_code
+    # ③ 前端：app.js 带 defer；静态资产 mtime 版本化 + 长缓存
+    _base234 = (ROOT / "gui" / "templates" / "base.html").read_text(encoding="utf-8", errors="replace")
+    assert "filename='app.js', v=static_v('app.js')" in _base234, "app.js 没版本化"
+    _js234 = _base234.split("filename='app.js'", 1)[1].split(">", 1)[0]
+    assert "defer" not in _js234, \
+        "app.js 不许加 defer —— 模板的 {% block script %} 在其后同步调用 initTaskTable()/pollTask()"
+    assert "filename='style.css', v=static_v('style.css')" in _base234, "style.css 没版本化"
+    _ga234b = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert "SEND_FILE_MAX_AGE_DEFAULT" in _ga234b and "def static_v" in _ga234b
+    print("[234] 续234 ok: /favicon.ico 公开放行（204，穿过随机前缀）｜根路径仍伪装 404｜"
+          "静态资产 mtime 版本化 + 30 天缓存｜app.js 禁止 defer（模板同步调用契约）")
     print("SMOKE PASS")
 
 
