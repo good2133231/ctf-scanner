@@ -1338,12 +1338,12 @@ def main():
                           "status": 200, "length": 2048, "method": "GET", "note": "dirmap"}])
     # 任务详情目录页签：本页共有两批重复 —— 777 那批 3 条折 1（隐藏 2）+ 2048 那批 4 条折 3（隐藏 1）
     _pane2 = c.get(f"/tasks/{tid}").get_data(as_text=True)
-    assert _pane2.count(">dirmap<") + _pane2.count(">builtin<") == 4, \
+    assert _pane2.count('dir-note">dirmap<') + _pane2.count('dir-note">builtin<') == 4, \
         "2048 那批应渲染 3 行 + 777 那批渲染 1 行；旧口径会把跨站点的 dirmap 行折掉（只渲染 3 行）"
     assert "本页已隐藏 3 条重复长度" in _pane2, "隐藏数应为 2（777 批）+ 1（2048 批）"
     # 跨任务 /dirs 用**唯一关键字**把这 4 条隔离出来：本站点 2 条折 1、另两个站点各留 1
     _dirs2 = c.get("/dirs?q=zzfoldalpha").get_data(as_text=True)
-    assert _dirs2.count(">dirmap<") + _dirs2.count(">builtin<") == 3, \
+    assert _dirs2.count('dir-note">dirmap<') + _dirs2.count('dir-note">builtin<') == 3, \
         "跨任务页折叠应只折「同站点」的 2 条（旧代码会因 site_url 全空把 3 个站点的行折成 1 条）"
     assert "已隐藏 1 条重复长度" in _dirs2
 
@@ -29415,6 +29415,14 @@ expression: r0()
             assert any("仍不稳定 1" in m for m in _lg225), _lg225[-3:]
         finally:
             _shot225.capture, _shot225.available = _orig_cap, _orig_av
+        # 来源字典：外部工具 dirmap 的产出行**也要带标签**（不许显示成 '-'）
+        from scanner.stages.dirscan import DirscanStage as _dss225
+        _dm225 = _wd225 / "res.txt"
+        _dm225.write_text("[200][text/html][1.23kb] http://e225.test/admin\n", encoding="utf-8")
+        _drows225 = _dss225._parse_output(_dm225, force=True)
+        assert _drows225 and _drows225[0]["dict_src"] == "dirmap", _drows225
+        _drows225b = _dss225._parse_output(_dm225, force=True, src="dirmap:通用字典")
+        assert _drows225b[0]["dict_src"] == "dirmap:通用字典", _drows225b
         assert not list((_wd225 / "shots").glob(".verify-*")), "复核临时图没清干净"
     finally:
         db.delete_task(_tid225, backup=False)

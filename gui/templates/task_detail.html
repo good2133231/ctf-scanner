@@ -763,7 +763,7 @@
           <td class="muted small mono">{{ d.length if d.length is not none else '-' }}
             {% if d.dup %}<span class="muted small">（另有 {{ d.dup }} 条相同）</span>{% endif %}</td>
           <td class="muted small">{{ d.title or '-' }}</td>
-          <td class="muted">{{ d.note or '-' }}</td>
+          <td class="muted dir-note">{{ d.note or '-' }}</td>
           {# 续222：来源字典（dict_src＝字典名/分类名，如 dirs_php / dirsearch/api；绝不含绝对路径） #}
           <td class="muted">{{ d.dict_src or '-' }}</td></tr>
       {% else %}

@@ -72,7 +72,7 @@
         <td class="muted small mono">{{ d.length if d.length is not none else '-' }}
           {% if d.dup %}<span class="muted small">（另有 {{ d.dup }} 条相同）</span>{% endif %}</td>
         <td class="muted small">{{ d.title or '-' }}</td>
-        <td class="muted">{{ d.note or '-' }}</td>
+        <td class="muted dir-note">{{ d.note or '-' }}</td>
       </tr>
     {% else %}
       <tr><td colspan="7" class="muted">没有匹配的目录发现结果。</td></tr>

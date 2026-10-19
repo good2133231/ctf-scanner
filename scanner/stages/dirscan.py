@@ -900,6 +900,9 @@ class DirscanStage(Stage):
                 continue
             targets.update(u for u in (urlparse(x).netloc for x in urls) if u)
             e_arg = (kind or "all") if lang_arg else None
+            # 续225：dirmap 用的是**它自己 conf 里那份通用字典**，不是我们的自定义字典 ——
+            # 「来源字典」列如实写 `dirmap:<模式>`，别让这一列显示成 '-'（看着像没接上）。
+            _src225b = "dirmap:%s" % (e_arg or "通用字典")
             in_file = write_lines(ctx.workdir / f"dirmap_in_{kind or 'all'}.txt", urls)
             if e_arg:
                 ctx.logger.info(f"[dirscan] dirmap：{len(urls)} 个站点（技术栈 {kind or '未知'}"
@@ -919,7 +922,7 @@ class DirscanStage(Stage):
         dirs = self._target_dirs(out_dir, targets)
         for d in dirs:
             for f in sorted(d.glob("*.txt")):
-                rows.extend(self._parse_output(f))
+                rows.extend(self._parse_output(f, src=_src225b))
         # 续218：无 `-e` 的 dirmap（v1.1/master）不写目录，写**单文件** `output/<netloc>.txt`；
         # 文件名不在 DIRMAP_KEEP 里，必须点名强读，否则整轮结果被静默丢掉、回退内置扫描。
         single = []
@@ -928,10 +931,10 @@ class DirscanStage(Stage):
             if f.is_file():
                 single.append(f)
         for f in single:
-            rows.extend(self._parse_output(f, force=True))
+            rows.extend(self._parse_output(f, force=True, src=_src225b))
         if not rows:      # 兜底：目录命名/层级变了，退回"本次运行写过的文件"
             for f in self._outputs_since(out_dir, started):
-                rows.extend(self._parse_output(f))
+                rows.extend(self._parse_output(f, src=_src225b))
         # 只保留确实属于我们扫过的主机的行（防读到别人的历史产物）
         if targets:
             rows = [r for r in rows if urlparse(r.get("path") or "").netloc in targets]
@@ -1000,7 +1003,7 @@ class DirscanStage(Stage):
         return found[:limit]
 
     @staticmethod
-    def _parse_output(path, force=False):
+    def _parse_output(path, force=False, src="dirmap"):
         """解析 dirmap 的一行结果；读不懂的行跳过（宁可少报，不猜）。
 
         `force=True`：绕过 `DIRMAP_KEEP` 文件名门槛。老版 dirmap 在 `output/<netloc>/`
@@ -1022,7 +1025,7 @@ class DirscanStage(Stage):
                              "path": _strip_fragment(m.group(4)),
                              "status": int(m.group(1)),
                              "length": _size_to_int(m.group(3)), "method": "GET",
-                             "note": "dirmap"})
+                             "note": "dirmap", "dict_src": src})
                 continue
             urls = URL_RE.findall(line)
             if not urls:
@@ -1031,7 +1034,8 @@ class DirscanStage(Stage):
             rows.append({"site_url": _origin_of(urls[0]),
                          "path": _strip_fragment(urls[0]),
                          "status": int(sm.group(1)) if sm else None,
-                         "length": None, "method": "GET", "note": "dirmap"})
+                         "length": None, "method": "GET",
+                         "note": "dirmap", "dict_src": src})
         return rows
 
     # ---------- 内置兜底 ----------

@@ -4303,6 +4303,18 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续228（2026-10-19，WorkBuddy · Claude）：目录结果「来源字典」补齐 dirmap 那条路
+
+- [x] `_parse_output(src=...)` + `_run_dirmap` 按模式传标签（`dirmap:<模式>` / `dirmap:通用字典`）
+- [x] `[225]` 补断言：dirmap 产出行必须带 `dict_src`
+- [x] 经确认 kill 掉 5011 的旧 GUI 进程（PID 2829266）并重启
+- [x] 全量 SMOKE PASS（257 组，6 分 40 秒；a 红旧断言、b 红 `[225]` 期望值，c 绿）
+
+**下一轮（续228 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过（依赖真 runner 数据）
+
+
 ## 续227（2026-10-19，WorkBuddy · Claude）：Host 碰撞从建任务页移除（默认就做）
 
 - [x] 建任务页删除 `name="hostcollide"` 勾选框（225 只删了「自动拓展」说明，这是漏项）
