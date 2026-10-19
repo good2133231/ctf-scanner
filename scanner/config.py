@@ -613,6 +613,9 @@ DEFAULTS = {
         "max_sites": 30,           # 每任务最多对多少个站点算 favicon 并反查
         "max_assets": 100,         # 单个 favicon 最多取回多少条资产
         "workers": 5,
+        # 续229：两次 FOFA 请求的最小间隔（秒）。循环反查（每个 favicon/证书/标题一次）不节流
+        # 就会撞 HTTP 429 —— 那是"发太快"，不是接口坏了。填 0 = 不节流。
+        "min_interval": 3.0,
         "black_ico_threshold": 200,  # 命中数超过该值 → 判为"黑 ico"（公共图标），放弃拓展
         # 证书反查（cert="example.com"）：找"与该目标共用同一张 TLS 证书"的其它域名。
         # 独立子开关（`fofa.enabled` 关掉时它也不会跑）；命中数超过 cert_threshold

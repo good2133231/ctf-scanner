@@ -812,6 +812,11 @@ ctf-scanner/
   第四项（`dirs_php` / `dirsearch/api` / `suffix`）；外部工具 **dirmap 那条路走
   `_parse_output(src=...)`**（`dirmap:<模式>`，无 `-e` 时 `dirmap:通用字典`）——
   它用的是 dirmap 自带字典，不许写成我们的字典名（假话），也不许留空（那一列会显示 `-`）。
+- **第三方情报接口必须自带节流（续229）**：FOFA 按 **key 计频率**，osint 是循环反查
+  （favicon/证书/标题各一次）⇒ 不节流必然撞 **HTTP 429**；节流走 `fofa.min_interval`
+  （默认 3s，`_rate_wait()` 的 `now`/`sleep` 可注入以便测试）。429 的语义是"你发太快"，
+  按 `Retry-After` 退避重试一次后再判失败，**错误文案必须指到 `fofa.min_interval`**，
+  不许说成"接口坏了"，也不许一遇错就 break 掉整轮反查。VirusTotal 那路早已同款。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /

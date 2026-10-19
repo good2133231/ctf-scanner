@@ -546,6 +546,42 @@ function initTaskPreview() {
     const b = e.target.closest && e.target.closest("button[data-pv]");
     if (!b) return;
     const id = b.dataset.id, kind = b.dataset.pv;
+    // 续229（主理人点单）：子任务改成**行内展开**，不再弹预览框 —— 弹窗会把整个任务列表
+    // 盖住，而“一个都没扫到”时也必须展开：空态本身就是结论（这一层没长出来）。
+    if (b.dataset.inline === "1") {
+      const tr = b.closest("tr");
+      if (!tr) return;
+      const key = id + ":" + kind;
+      let slot = tr.nextElementSibling;
+      if (slot && slot.classList && slot.classList.contains("pv-inline-row")
+          && slot.dataset.for === key) {
+        slot.remove();          // 再点一次 = 收起
+        return;
+      }
+      const cols = document.querySelectorAll("#tbl-tasks thead th").length || 11;
+      slot = document.createElement("tr");
+      slot.className = "pv-inline-row";
+      slot.dataset.for = key;
+      const td = document.createElement("td");
+      td.colSpan = cols;
+      td.innerHTML = '<div class="pv-inline-box"><p class="pv-note">加载中…</p></div>';
+      slot.appendChild(td);
+      tr.parentNode.insertBefore(slot, tr.nextSibling);
+      try {
+        const path = kind === "stats" ? "stats" : (kind === "stages" ? "stages" : "subtasks");
+        const r = await fetch(absUrl(`/api/tasks/${id}/${path}`));
+        const d = await r.json();
+        td.innerHTML = '<div class="pv-inline-box">' + (
+          !d.ok ? `<p class="pv-note">${pvEsc(d.error || "加载失败")}</p>`
+                : (kind === "stats" ? pvStatsHtml(d)
+                   : kind === "stages" ? pvStagesHtml(d) : pvSubtreeHtml(d))
+        ) + '</div>';
+      } catch (err) {
+        td.innerHTML = '<div class="pv-inline-box"><p class="pv-note">加载失败：'
+          + pvEsc(err && err.message ? err.message : err) + '</p></div>';
+      }
+      return;
+    }
     pvOpen(`<p class="pv-note">加载中…</p>`);
     try {
       const path = kind === "stats" ? "stats" : (kind === "stages" ? "stages" : "subtasks");

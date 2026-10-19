@@ -16,6 +16,7 @@
 """
 import base64
 import json
+import time
 import urllib.parse
 
 from . import keystore
@@ -35,6 +36,11 @@ DEFAULT_CERT_THRESHOLD = 200
 # `404 Not Found` / `Error` / `Apache2 Ubuntu Default Page` 这类**通用标题**一搜一大堆，
 # 按它拓展只会灌进成千上万条无关资产。阈值见 fofa.title_threshold（默认 200）。
 DEFAULT_TITLE_THRESHOLD = 200
+
+# 续229：两次 FOFA 请求之间的最小间隔（秒）。FOFA 按 key 计频率，循环反查不节流就会撞
+# HTTP 429（`min_interval` 与 VirusTotal 那路同款；填 0 = 不节流）。
+DEFAULT_MIN_INTERVAL = 3.0
+_LAST_TS = 0.0
 
 # 这些标题一眼就是"模板页"，连一次查询都不值得发（省配额、也省时间）
 GENERIC_TITLES = frozenset({
@@ -212,6 +218,56 @@ def is_common_cert(total, settings):
         return False
 
 
+def min_interval(settings):
+    """两次 FOFA 请求之间的最小间隔（秒）；`fofa.min_interval`，默认 `DEFAULT_MIN_INTERVAL`。
+
+    为什么必须有（续229）：osint 阶段是**循环**反查 —— 每个 favicon 哈希一次、每个证书一次、
+    每个标题一次，而 FOFA 按 key 计**频率**，连发就是把 429 撞出来（本模块此前完全没有节流，
+    VirusTotal 那路早就有 `min_interval` 了）。填 0 表示不节流（自己承担 429）。
+    """
+    raw = ((settings or {}).get("fofa") or {}).get("min_interval")
+    if raw is None:
+        return DEFAULT_MIN_INTERVAL
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_INTERVAL
+
+
+def _rate_wait(settings, now=None, sleep=None):
+    """按 `min_interval` 等够间隔；返回实际等待秒数（`now`/`sleep` 可注入，测试不用真睡）。"""
+    global _LAST_TS
+    now_fn = now or time.monotonic
+    sleep_fn = sleep or time.sleep
+    gap = min_interval(settings)
+    if gap <= 0 or _LAST_TS <= 0:
+        _LAST_TS = now_fn()
+        return 0.0
+    waited = 0.0
+    while True:
+        left = gap - (now_fn() - _LAST_TS)
+        if left <= 0:
+            break
+        sleep_fn(left)
+        waited += left
+    _LAST_TS = now_fn()
+    return waited
+
+
+def _retry_after(resp):
+    """响应头里的 `Retry-After`（秒）；读不到返回 0。FOFA 限流时会带它。"""
+    hdrs = resp.get("headers") or {}
+    if not isinstance(hdrs, dict):
+        return 0.0
+    for k, v in hdrs.items():
+        if str(k).lower() == "retry-after":
+            try:
+                return float(str(v).strip()[:8])
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
 def search_query(query, settings, logger=None, size=None):
     """按 FOFA 查询语句反查，返回 `(assets, total, error)`。
 
@@ -237,9 +293,27 @@ def search_query(query, settings, logger=None, size=None):
         base64.b64encode(str(query).encode("utf-8")).decode("ascii"))
     url = (f"{API}?email={urllib.parse.quote_plus(email)}&key={urllib.parse.quote_plus(key)}"
            f"&qbase64={qbase64}&size={size}&fields={FIELDS}")
+    # 续229：发之前先按 `fofa.min_interval` 等够间隔（循环反查不节流 = 把 429 撞出来）
+    _rate_wait(settings)
     resp = http_request(url, timeout=timeout, settings=settings)
     if not resp:
         return [], 0, "请求 fofa 失败（网络不可达或超时）"
+    if resp.get("status") == 429:
+        # 频率超限：按 `Retry-After`（没有就用 min_interval）等一次再试一次；仍 429 就如实报，
+        # 不说成"接口坏了"—— 429 的意思是"你发太快"，改 `fofa.min_interval` 就能解决。
+        _gap = max(1.0, min(float(_retry_after(resp) or min_interval(settings) or 5.0), 60.0))
+        if logger:
+            logger.info(f"[fofa] HTTP 429（请求频率超限）：等 {_gap:.0f}s 后重试一次"
+                        f"（fofa.min_interval={min_interval(settings)}s；"
+                        f"仍被限就把它调大，或稍后重跑）")
+        time.sleep(_gap)
+        resp = http_request(url, timeout=timeout, settings=settings)
+        if not resp:
+            return [], 0, "请求 fofa 失败（429 后重试仍无响应）"
+        if resp.get("status") == 429:
+            return [], 0, (f"fofa 返回 HTTP 429（请求频率超限）：已等 {_gap:.0f}s 重试一次仍被限"
+                           f" ⇒ 把 fofa.min_interval（当前 {min_interval(settings)}s）调大，"
+                           f"或稍后重跑")
     if resp.get("status") != 200:
         return [], 0, f"fofa 返回 HTTP {resp.get('status')}"
     try:

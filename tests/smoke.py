@@ -29474,6 +29474,83 @@ expression: r0()
     print("[226] 续226 ok: docs/logs-cleanup.md 必留确切名字/可删候选/任务目录条件；"
           "clean_logs.py 只认点名（--list 分类、--apply 拒绝通配/必留/未登记）；"
           "代码里无 rmtree(logs)/rm -rf logs 形态")
+    # ------------------------------------------------------------------ [229]
+    # 续229：FOFA 频率限制（HTTP 429）与「子任务」行内展开
+    from scanner import fofa as _f229
+
+    class _T229:
+        """可注入的时钟/睡眠桩：节流与 429 退避都不能真睡（否则门禁要多等好几十秒）。"""
+
+        def __init__(self):
+            self.t = 1000.0
+            self.slept = []
+
+        def monotonic(self):
+            return self.t
+
+        def sleep(self, s):
+            self.slept.append(s)
+            self.t += s
+
+    _real_t229, _real_rq229 = _f229.time, _f229.http_request
+    _f229._LAST_TS = 0.0
+    _t229 = _T229()
+    _f229.time = _t229
+    try:
+        # ① 节流：间隔内的第二次调用必须等够（min_interval 缺省 3s，可配）
+        assert _f229.min_interval({"fofa": {"min_interval": 5}}) == 5.0
+        assert _f229.min_interval({}) == _f229.DEFAULT_MIN_INTERVAL
+        assert _f229._rate_wait({"fofa": {"min_interval": 5}}) == 0.0
+        _t229.t += 1.0                       # 才过 1 秒
+        _w229 = _f229._rate_wait({"fofa": {"min_interval": 5}})
+        assert abs(_w229 - 4.0) < 1e-6 and _t229.slept == [4.0], (_w229, _t229.slept)
+
+        # ② 429：按 `Retry-After` 等一次再试一次；仍 429 ⇒ 报错说清"是你发太快 + 改哪个配置"
+        _calls229 = {"n": 0}
+
+        def _rq429(_u, **_k):
+            _calls229["n"] += 1
+            return {"status": 429, "headers": {"Retry-After": "7"}, "text": ""}
+
+        _f229.http_request = _rq429
+        _a229, _tot229, _err229 = _f229.search_query(
+            'icon_hash="1"', {"keys": {"fofa": {"email": "e", "key": "k"}},
+                              "fofa": {"min_interval": 0}})
+        assert _a229 == [] and "429" in _err229 and "min_interval" in _err229, _err229
+        assert _calls229["n"] == 2, f"429 只该重试一次：{_calls229['n']}"
+        assert 7.0 in _t229.slept, _t229.slept
+
+        # ③ 429 之后重试成功 ⇒ 照常解析（不许把"可恢复的限流"当成接口坏了）
+        _seq229 = [{"status": 429, "headers": {}, "text": ""},
+                   {"status": 200, "text": '{"error": false, "size": 3, "results": '
+                                           '[["a.e.test", "e.test", "1.2.3.4", "443", "t"]]}'}]
+
+        def _rq229(_u, **_k):
+            return _seq229.pop(0)
+
+        _f229.http_request = _rq229
+        _a229b, _tot229b, _err229b = _f229.search_query(
+            'icon_hash="1"', {"keys": {"fofa": {"email": "e", "key": "k"}},
+                              "fofa": {"min_interval": 0}})
+        assert _err229b == "" and _tot229b == 3, (_err229b, _tot229b)
+        assert _a229b and _a229b[0]["domain"] == "e.test", _a229b
+    finally:
+        _f229.time, _f229.http_request = _real_t229, _real_rq229
+        _f229._LAST_TS = 0.0
+
+    # 子任务行内展开：按钮带 data-inline=1（只有「子任务」，「统计」仍走预览框）+ JS/CSS 接线
+    _tk229 = (ROOT / "gui" / "templates" / "tasks.html").read_text(
+        encoding="utf-8", errors="replace")
+    _sub_btn229 = _tk229.split('data-pv="subtasks"', 1)[1].split("</button>", 1)[0]
+    _stat_btn229 = _tk229.split('data-pv="stats"', 1)[1].split("</button>", 1)[0]
+    assert 'data-inline="1"' in _sub_btn229, "子任务按钮没有标记行内展开"
+    assert 'data-inline="1"' not in _stat_btn229, "统计应保持预览框"
+    _js229 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+    assert 'dataset.inline === "1"' in _js229 and "pv-inline-row" in _js229
+    _css229 = (ROOT / "gui" / "static" / "style.css").read_text(encoding="utf-8", errors="replace")
+    assert ".pv-inline-row" in _css229
+    print("[229] 续229 ok: FOFA 有 min_interval 节流（循环反查不再裸连发）+ 429 按 Retry-After 退避重试一次"
+          "且报错说清是「发太快」；子任务改行内展开（空结果也展开）、统计仍是预览框")
     print("SMOKE PASS")
 
 

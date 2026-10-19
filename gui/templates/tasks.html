@@ -168,10 +168,12 @@
         <td>{% if t.parent_id %}<span class="muted small">└ </span>{% endif %}{{ t.name }}
           {% if t.parent_id %}<a class="badge" href="{{ url_for('task_detail', task_id=t.parent_id) }}"
             title="续185：这是任务 #{{ t.parent_id }} 的子任务（拓展域名送去探测发起）">子任务 · 父 #{{ t.parent_id }}</a>{% endif %}
-          {# 续196（主理人点单）：行内展开改**预览框** —— 点「子任务/统计」弹 modal，
-             页面布局零变化；子孙任务在框里同号字，层级只靠缩进 #}
+          {# 续229（主理人点单）：子任务改回**行内展开** —— 续196 做成预览框会把整个任务列表
+             盖住；而且"一个都没扫到"时必须也展开（空态本身就是结论：这一层没长出来）。
+             「统计」仍是预览框（跨任务汇聚、行数多）。 #}
           <button type="button" class="btn-mini ghost btn-xs" data-pv="subtasks" data-id="{{ t.id }}"
-            title="预览框看这个任务名下的子任务（parent_id 递归整棵子树，24-a 编号）"
+            data-inline="1"
+            title="在下面展开这个任务名下的子任务（parent_id 递归整棵子树，24-a 编号；没有子任务也会展开说明）"
             >子任务</button>
           <button type="button" class="btn-mini ghost btn-xs" data-pv="stats" data-id="{{ t.id }}"
             title="预览框看整棵衍生树的资产汇聚（跨任务去重 + 按来源任务拆分）"

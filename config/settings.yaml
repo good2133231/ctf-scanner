@@ -396,6 +396,9 @@ fofa:
   max_sites: 30
   max_assets: 100
   workers: 5
+  # 续229：两次 fofa 请求的最小间隔（秒）—— 循环反查不节流会撞 HTTP 429（按 key 计频率）。
+  # 429 = "你发太快"；调大这个值即可。填 0 = 不节流。
+  min_interval: 3
   black_ico_threshold: 200
   cert_enabled: true
   cert_threshold: 200

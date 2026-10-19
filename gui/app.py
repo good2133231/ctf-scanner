@@ -4980,6 +4980,9 @@ def create_app():
                              "max_sites": int(f.get("fofa_max_sites", 30) or 30),
                              "max_assets": int(f.get("fofa_max_assets", 100) or 100),
                              "workers": int(f.get("fofa_workers", 5) or 5),
+                             # 续229：请求最小间隔（秒）。0 是**合法值**（不节流），
+                             # 所以缺字段才回默认 3，不能写 `or DEFAULT`（那会把人填的 0 洗掉）。
+                             "min_interval": float(f.get("fofa_min_interval", 3) or 0),
                              "black_ico_threshold": int(
                                  f.get("fofa_black_ico_threshold", 200) or 200),
                              # 证书反查：独立子开关 + 通用证书阈值 + 查询上限

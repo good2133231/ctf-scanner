@@ -4303,6 +4303,20 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续229（2026-10-19，WorkBuddy · Claude）：FOFA 429（缺节流）+ 子任务行内展开 + 拓展送探模拟
+
+- [x] **FOFA 429 定位**：不是请求头/IP，是**循环反查没节流**（FOFA 按 key 计频率）；
+      新增 `fofa.min_interval`（默认 3s）+ `Retry-After` 退避重试一次 + 报错说清"发太快"
+- [x] **子任务行内展开**（不再弹窗，没有子任务也展开）；「统计」仍是预览框
+- [x] 拓展→送探链路**模拟**（合成域名、桩 DNS、零真实网络）：判定 alive、归属追加为空、
+      送探建成子任务、父子进度互不影响
+- [x] 全量 SMOKE PASS（258 组，6 分 42 秒；a 红 `[145]` POST 映射漏 `fofa.min_interval`，b 绿）
+
+**下一轮（续229 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过（依赖真 runner 数据）
+
+
 ## 续228（2026-10-19，WorkBuddy · Claude）：目录结果「来源字典」补齐 dirmap 那条路
 
 - [x] `_parse_output(src=...)` + `_run_dirmap` 按模式传标签（`dirmap:<模式>` / `dirmap:通用字典`）

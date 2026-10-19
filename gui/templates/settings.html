@@ -588,6 +588,8 @@
     <label>每任务算 favicon 的站点上限 <input name="fofa_max_sites" value="{{ s.fofa.max_sites }}"></label>
     <label>单 favicon 取回资产上限 <input name="fofa_max_assets" value="{{ s.fofa.max_assets }}"></label>
     <label>favicon 并发数 <input name="fofa_workers" value="{{ s.fofa.workers }}"></label>
+    <label>两次请求最小间隔（秒；FOFA 按 key 计频率，不节流会撞 HTTP 429，填 0 = 不节流）
+      <input name="fofa_min_interval" style="width:5em" value="{{ s.fofa.min_interval }}"></label>
     <label>黑 ico 阈值（命中数超过该值 = 公共图标，放弃拓展）
       <input name="fofa_black_ico_threshold" value="{{ s.fofa.black_ico_threshold }}"></label>
     <label class="chk"><input type="checkbox" name="fofa_cert_enabled" value="1"
