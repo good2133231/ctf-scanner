@@ -823,6 +823,9 @@ ctf-scanner/
   ① `runner.run()` 起跑（阶段边界/被停止也要用 `_base`）；② `db.start_task_run()` 队列认领
   （它先于 runner 执行，漏了它 runner 的 `_base` 读到的已经是 0）。fresh 还要清
   `elapsed_seconds`；长阶段进度本来就不动，任务列表必须把 `current_stage` 写在百分比旁边。
+- **送探默认建子任务（续232）**：拓展页「送去探测」的「追加到本任务」**默认不勾** ——
+  点按钮就新建一个子任务（独立进度/结果页，任务列表「子任务」行内展开）；勾上才折叠进本任务。
+  别把默认值改回"追加"（那会让任务树里永远没有子任务，主理人的任务层级就空了）。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /

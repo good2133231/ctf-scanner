@@ -518,7 +518,7 @@
       <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}#ext">
       <div class="bulkbar">
         <button type="submit" class="ghost"
-          title="把这些域名的子域再挖一遍，再探存活、扫目录、跑漏洞初筛；默认**追加进本任务**（不新建任务）">
+          title="把这些域名的子域再挖一遍，再探存活、扫目录、跑漏洞初筛；默认**新建一个子任务**挂在当前任务下（独立进度/结果页）；勾「追加到本任务」才折叠进本任务">
         {# 续197：这颗按钮曾被逐字换行拆开（送\n去\n探\n测\n<\n/\nb…）—— 标签里夹了换行，
            浏览器就不认它是标签，`</button>` 会当正文吐出来，中文之间也被换行渲染成空格。
            一次改回一行；form / formaction 与提交行为一字未动。 #}
@@ -526,8 +526,8 @@
 
         <label class="muted" title="默认送本任务全部拓展域名（第三方 / CDN 清单里的那些不送，条数上限见 limits.ext_probe_max）；只想探勾上的几个就改成「只送勾选」">
           探测范围 <select name="scope"><option value="all">全任务</option><option value="picked">只送勾选</option></select></label>
-        <label class="muted" title="续150（用户点单）：默认勾选 —— 探测结果**追加进本任务**（折叠在父任务里，跨运行去重）；取消勾选才新建一个独立任务">
-          <input type="checkbox" name="append" value="1" checked> 追加到本任务（默认，折叠进父任务）</label>
+        <label class="muted" title="续232（主理人点单）：默认**不勾** —— 送去探测就新建一个子任务挂在当前任务下（独立进度、独立结果页，任务列表里点「子任务」行内展开）；勾上才把结果折叠进本任务（跨运行去重，不新建任务）">
+          <input type="checkbox" name="append" value="1"> 追加到本任务（勾上＝不建子任务，结果折叠进本任务）</label>
         <label class="muted" title="1 = 只对当下这批域名做一轮采集/探测；N&gt;1 时每层把「本轮新确认的自家域名」+「置信度达到阈值的相似域名」再追加采集一次，最多 N 层（折叠在父任务里）。默认值取自策略配置 subdomain.ext_depth">
           追加扫描层数（1=只扫当下这批）
           <select name="depth">
