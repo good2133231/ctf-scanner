@@ -410,6 +410,11 @@ _COLUMN_PATCHES = {
                    # `icon_hash="123"` / `cert="x.com"` / `title="xxx"`，拓展域名页"语法"列展示
                    "note": "TEXT DEFAULT ''"},
     "sites": {"favicon": "TEXT DEFAULT ''",
+              # 续225：favicon 的 mmh3（对外平台提问值）与图标本体（页面贴图）
+              "icon_hash": "INTEGER DEFAULT 0",
+              "icon_file": "TEXT DEFAULT ''",
+              # 续225：这份图标的拓展结论（expanded / black / empty；空串=没查/无图标）
+              "icon_ext": "TEXT DEFAULT ''",
               # 续223：标签来源（页面/报告据此分主次；老行空串 ⇒ 按原顺序取前 N 个）
               "tech_detail": "TEXT DEFAULT ''",
               # 站点截图的**相对项目根**路径（logs/task_x/shots/xxx.png）
@@ -1456,14 +1461,27 @@ def insert_sites(task_id, sites):
     if not sites:
         return
     _exec("INSERT INTO sites(task_id,url,host,port,status,title,length,server,tech,"
-          "tech_detail,source,favicon,redirect_url,redirect_status,redirect_title) "
-          "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          "tech_detail,source,favicon,icon_hash,icon_file,icon_ext,"
+          "redirect_url,redirect_status,redirect_title) "
+          "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
           [(task_id, s.get("url", ""), s.get("host", ""), str(s.get("port", "") or ""),
             s.get("status"), s.get("title", ""), s.get("length"), s.get("server", ""),
             s.get("tech", ""), s.get("tech_detail", ""), s.get("source", ""),
-            s.get("favicon", ""), s.get("redirect_url", ""),
+            s.get("favicon", ""), int(s.get("icon_hash") or 0), s.get("icon_file", ""),
+            s.get("icon_ext", ""), s.get("redirect_url", ""),
             int(s.get("redirect_status") or 0), s.get("redirect_title", "")) for s in sites],
           many=True)
+
+
+def set_site_icon_status(task_id, rows):
+    """写 favicon 的拓展结论（续225）：`rows=[(url, status)]`，status ∈ expanded/black/empty。
+
+    只更新**本任务**的行；空状态不写（空串=没查/无图标，页面据此不显示徽章）。
+    """
+    rows = [(str(st), task_id, str(u)) for u, st in (rows or []) if st]
+    if not rows:
+        return
+    _exec("UPDATE sites SET icon_ext=? WHERE task_id=? AND url=?", rows, many=True)
 
 
 def insert_ports(task_id, ports):
@@ -2018,6 +2036,9 @@ _ASSET_PAGES = {
     # 于是同样登记在这里（续57）。默认排序 = `CERT_ORDER`（与 `list_certs()` 一字不差）。
     "certs": (CERT_ORDER, ("url", "host", "cn", "subject", "issuer", "san",
                            "serial", "sig_algo", "sha256")),
+    # 续225：任务详情页的「邮箱」页签（jsmine 的数据探测产物；零额外请求）。
+    # 关键字只能搜这三列 —— `source` 是出处 URL，正好是"这封邮箱从哪抓的"。
+    "emails": ("task_id DESC, id DESC", ("email", "domain", "source")),
 }
 
 # 子域名来源分类（资产视图的"子域名 / 拓展域名"两个页面靠它分流）：

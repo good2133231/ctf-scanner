@@ -49,12 +49,15 @@
 {% if task.parent_id %}
 <p class="muted small note">本任务是 <a href="{{ url_for('task_detail', task_id=task.parent_id) }}">任务 #{{ task.parent_id }}</a>
   的<b>子任务</b>（拓展域名「送去探测」发起 —— 任务层级；资产层归不归父任务看当时有没有勾
-  「同时把归属本项目的追加为子域名」，那是另一件事）。</p>
+  「同时把归属本项目的追加为子域名」，那是另一件事）。
+  {% if parent_task %}<br>父任务当前进度 <b>{{ parent_task.progress }}%</b>
+  —— 本页顶部是本子任务自己的进度，两者互不影响。{% endif %}</p>
 {% endif %}
 {% set _kids185 = child_tasks_of(task.id) %}
 {% if _kids185 %}
 <p class="muted small note">子任务 {{ _kids185|length }} 个：
-  {% for c in _kids185 %}<a href="{{ url_for('task_detail', task_id=c.id) }}">#{{ c.id }} {{ c.name }}</a>{% if not loop.last %}、{% endif %}{% endfor %}</p>
+  {% for c in _kids185 %}<a href="{{ url_for('task_detail', task_id=c.id) }}">#{{ c.id }} {{ c.name }}</a>
+  <span class="muted">（{{ c.progress }}%）</span>{% if not loop.last %}、{% endif %}{% endfor %}</p>
 {% endif %}
 
 {% if rescan_of %}
@@ -129,6 +132,7 @@
   <div class="tab" data-tab="dirs">目录<span class="cnt">{{ dir_total }}</span></div>
   <div class="tab" data-tab="urls">链接<span class="cnt">{{ url_total }}</span></div>
   <div class="tab" data-tab="flags">敏感信息<span class="cnt">{{ flag_total }}</span></div>
+  <div class="tab" data-tab="emails">邮箱<span class="cnt">{{ email_total }}</span></div>
   <div class="tab" data-tab="target">目标与配置</div>
   <div class="tab" data-tab="log">运行日志</div>
 </div>
@@ -276,8 +280,8 @@
       本轮只重跑 <span class="mono">screenshot</span> 阶段；{% endif %}现在还有
       <b>{{ shot_retry.left }}</b> 张没截成、且原因在「{{ shot_retry.reasons }}」这几档 ——
       任务正常跑完后会自动排进队列，等前面的任务跑完、worker 空了再试
-      （跑满 {{ shot_retry.rounds }} 轮为止。本阶段每张站点的尝试口径：<b>{{ shot_retry.plan }}</b>，
-      逐条写进站点行的失败原因里，见下表「截图」那一格与运行日志）。
+      （跑满 {{ shot_retry.rounds }} 轮为止；逐条尝试写进站点行的失败原因里，
+      见下表「截图」那一格与运行日志）。
       {% if shot_retry.skipped %}另有
       {% for k, v in shot_retry.skipped.items() %}{{ v }} 张{{ k }}{% if not loop.last %}、{% endif %}{% endfor %}
       在<b>不可重试</b>的档里（重试也解决不了，比如没装浏览器、或预算耗尽 / 人已停止），这一轮不碰它们。
@@ -332,7 +336,6 @@
     <div class="bulkbar">
       <button type="button" class="ghost" id="btn-open-sites" data-pick-from="#tbl-detail-sites"
         title="把勾选的站点逐个在新标签页打开；只开标签页，不发送任何扫描请求">批量打开（勾选站点）</button>
-    </div>
       {# 续197（主理人点单「简化成一个重截，不勾选站点他就默认重截失败站点」）：两颗并一颗 ——
          勾选了行就重截勾选的那些；一行没勾，后端按库里「有失败原因且没有截图」的行来排
          （判据只有 db.list_shot_failures 一处，两颗按钮时代也是这一份）。人工点的这颗不看
@@ -340,8 +343,7 @@
       <button type="submit" class="ghost" name="only_failed" value="1"
         title="排一轮只跑 screenshot 的追加运行：勾了行就截这几个 URL，一行没勾就截本任务所有截图失败的站点（沿用本任务、跨运行去重，不新建任务）">
         重截{% if shot_retry.failed %}（失败 {{ shot_retry.failed }}）{% endif %}</button>
-      <span class="muted small">单次最多排 {{ shot_retry.cap }} 张（<span class="mono">screenshot.max_sites</span>）；
-        尝试口径：{{ shot_retry.plan }}。</span>
+    </div>
     {# 续112：「批量打开」的链接面板 —— 浏览器只允许一次手势开一个标签页，其余站点必须交给用户逐个点击才真能开 #}
     <div id="op-list" class="op-list" aria-live="polite"></div>
       <table id="tbl-detail-sites">
@@ -355,7 +357,19 @@
 
                 name="url"></td>
             <td class="mono url-cell"><a class="url-link" href="{{ s.url }}" target="_blank"
-              rel="noopener noreferrer">{{ s.url }}</a></td>
+              rel="noopener noreferrer">{{ s.url }}</a>
+              {# 续225：favicon 贴在 URL 下方 —— 不包链接、不影响点击；下面给 FOFA 提问值
+                 与拓展结论（已拓展 / 三方未拓展 = 命中过多判为公共图标）。 #}
+              {% if s.icon_file %}
+              <div class="favicon-row">
+                <img class="favicon-img" loading="lazy" alt="站点图标"
+                  style="width:16px;height:16px;vertical-align:middle;margin-right:4px;border-radius:3px"
+                  src="{{ url_for('favicon_file', task_id=task.id, name=s.icon_file.rsplit('/', 1)[-1]) }}">
+                <span class="mono small" title="FOFA icon_hash / Shodan http.favicon.hash（mmh3）">icon_hash={{ s.icon_hash }}</span>
+                {% if s.icon_ext == 'expanded' %}<span class="badge" title="外部平台已按这份图标反查并拓展出域名">已拓展</span>
+                {% elif s.icon_ext == 'black' %}<span class="badge" title="命中数超过黑 ico 阈值，判为公共图标，未做拓展">三方未拓展</span>{% endif %}
+              </div>
+              {% endif %}</td>
           {% set rd = site_redirect(s) %}
           <td>{{ rd.status }}{% if rd.jumped %}
                 <span class="tech-tag" title="{{ rd.note }}">跳转后</span>{% endif %}</td>
@@ -846,6 +860,41 @@
       {% endfor %}
       </tbody>
     </table>
+  </section>
+</div>
+
+<div class="tabpane" id="pane-emails">
+  <section class="panel">
+    <h2>邮箱（{{ email_total }} 条）</h2>
+    <p class="muted small note">由 jsmine 的「数据探测」从本任务<b>已经抓到的正文</b>里抽取（零额外请求）；
+      只记「在哪份正文里见过它」，不验证、不查 MX。去重按邮箱值，重复执行不会堆重复行。</p>
+    <form class="filters" method="get" action="{{ url_for('task_detail', task_id=task.id) }}#emails">
+      <label class="muted">关键词
+        <input name="emq" value="{{ emails_q }}" placeholder="邮箱 / 域名 / 出处 URL"></label>
+      <label class="muted">每页
+        <select name="emsize" onchange="this.form.submit()">
+          {% for s in page_sizes %}
+          <option value="{{ s }}" {{ 'selected' if emails_pager.size == s else '' }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="ghost" type="submit">查询</button>
+      {% if emails_q %}<a class="btn-mini ghost" href="{{ url_for('task_detail', task_id=task.id) }}#emails">清空</a>{% endif %}
+      <a class="btn-mini ghost" href="{{ url_for('emails_page') }}?task={{ task.id }}">在「邮箱」页打开</a>
+    </form>
+    <table id="tbl-emails">
+      <thead><tr><th>邮箱</th><th>域名</th><th>出处（首次见到的 URL）</th></tr></thead>
+      <tbody>
+      {% for e in emails %}
+        <tr><td class="mono">{{ e.email }}</td><td class="muted">{{ e.domain or '-' }}</td>
+          <td class="muted small mono">{{ e.source or '-' }}</td></tr>
+      {% else %}
+        <tr><td colspan="3" class="muted">还没有邮箱。抽取只吃已经抓到的正文 —— 没跑过 jsmine
+          （或 JS/页面里确实没有邮箱）时本来就是空的。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% set pager = emails_pager %}{% include "_pager.html" %}
   </section>
 </div>
 

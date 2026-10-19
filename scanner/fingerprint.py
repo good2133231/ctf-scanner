@@ -977,10 +977,23 @@ def fetch_favicon(base_url, settings=None, timeout=None):
     return content
 
 
+def favicon_info(base_url, settings=None, timeout=None):
+    """一次抓取返回 `(md5, mmh3, content)`（续225）。
+
+    页面要"图标本体 + FOFA 提问值"，而 probe 又已经抓过一次 —— 别再为了两个哈希各抓一遍：
+    同一次 GET 同时算两种指纹，并让调用方把 `content` 落盘给站点表贴图。
+    拿不到/不像图标 ⇒ `("", 0, b"")`。
+    """
+    content = fetch_favicon(base_url, settings, timeout)
+    if not content:
+        return "", 0, b""
+    from .mmh3 import favicon_hash as _murmur
+    return hashlib.md5(content).hexdigest(), _murmur(content), content
+
+
 def favicon_md5(base_url, settings=None, timeout=None):
     """favicon 内容 MD5；拿不到或不像图标时返回 ""（用于 favicon_md5_list 前置判定）。"""
-    content = fetch_favicon(base_url, settings, timeout)
-    return hashlib.md5(content).hexdigest() if content else ""
+    return favicon_info(base_url, settings, timeout)[0]
 
 
 def favicon_hash(base_url, settings=None, timeout=None):
@@ -988,6 +1001,4 @@ def favicon_hash(base_url, settings=None, timeout=None):
 
     仅用于向外部平台（FOFA / Shodan）提问，**不要**拿去和 `favicon_md5_list` 比对。
     """
-    from .mmh3 import favicon_hash as _murmur
-    content = fetch_favicon(base_url, settings, timeout)
-    return _murmur(content) if content else 0
+    return favicon_info(base_url, settings, timeout)[1]

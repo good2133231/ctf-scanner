@@ -791,6 +791,16 @@ ctf-scanner/
   `dirscan.dict_sources` 的下标 + 根目录下的 `.txt` 分类（`picks` 过滤、`resolve()` 后父目录
   必须仍是配置根）。**禁止**把请求参数当路径拼接 —— 预览接口不是任意文件读取，大字典也
   不许整份下发（前端扛不住）。**导出**走 `/dict_export`（单份附件 / 整源 zip；同一套 resolve，zip 限 64 类 / 32 MB）。
+- **favicon 的两套指纹与页面贴图（续225）**：probe 一次 GET 走 `fingerprint.favicon_info()` →
+  MD5（`sites.favicon`，POC 前置判定）与 mmh3（`sites.icon_hash`，FOFA/Shodan 提问值），
+  图标本体落 `favicons/<md5>.ico`（`sites.icon_file`）。osint 优先复用 `icon_hash`（不要为每家
+  平台重抓）；结论写 `sites.icon_ext`：expanded > black > empty（多平台取最有信息量的）。
+  `/favicons/<task_id>/<name>` 只认 `<32hex>.ico` 且必须在该任务工作目录的 `favicons/` 下。
+- **截图取图时机（续225）**：`screenshot.settle_ms`（默认 3000）→ `--virtual-time-budget`；
+  jsmine 后 `ScreenshotStage.verify_after_js()` 用 H0/H1/H2/H3 多数表决（出现两次才换图，
+  都不重复保留旧图并记 unstable）。复核只覆盖 `sites.shot` 同一路径；只在 screenshot 真跑过时触发。
+- **邮箱的入口（续225）**：`emails` 表早已存在，任务页的「邮箱」页签走 `_ASSET_PAGES["emails"]`
+  服务端分页（按 task_id 过滤）；别再只把它挂在跨任务 `/emails` 页。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /

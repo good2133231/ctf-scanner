@@ -233,17 +233,32 @@ def register_sites(ctx, sites, round2=False):
         seen.add(s["url"])
         uniq.append(s)
 
-    # favicon MD5（P1-1）：存活站点各补一次 GET，作为 POC 的"零请求前置指纹"
+    # favicon（P1-1）：存活站点各补**一次** GET —— 同一次响应用来算 MD5（POC 前置判定）
+    # 与 mmh3（FOFA/Shodan 提问值，续225），并把图标本体落盘给站点表贴图。
     if limits.get("favicon_md5", True) and uniq:
+        _icon_dir = ctx.workdir / "favicons"
+
         def _fav(s):
-            return {"url": s["url"],
-                    "md5": favicon_md5(s["url"], ctx.settings, timeout=timeout)}
-        favs = {r["url"]: r["md5"] for r in pool_run(_fav, uniq, workers=workers,
-                                      logger=ctx.logger, label="favicon 指纹")}
+            md5, h, data = favicon_info(s["url"], ctx.settings, timeout=timeout)
+            rel = ""
+            if data:
+                _icon_dir.mkdir(parents=True, exist_ok=True)
+                f = _icon_dir / f"{md5}.ico"
+                if not f.exists():
+                    f.write_bytes(data)
+                rel = f"favicons/{f.name}"
+            return {"url": s["url"], "md5": md5, "hash": h, "file": rel}
+
+        favs = {r["url"]: r for r in pool_run(_fav, uniq, workers=workers,
+                                              logger=ctx.logger, label="favicon 指纹") if r}
         for s in uniq:
-            s["favicon"] = favs.get(s["url"], "")
+            r = favs.get(s["url"]) or {}
+            s["favicon"] = r.get("md5", "")
+            s["icon_hash"] = r.get("hash", 0)
+            s["icon_file"] = r.get("file", "")
         hits = sum(1 for s in uniq if s["favicon"])
-        ctx.logger.info(f"[probe] favicon 指纹 {hits}/{len(uniq)} 个站点已获取")
+        ctx.logger.info(f"[probe] favicon 指纹 {hits}/{len(uniq)} 个站点已获取"
+                        f"（MD5 供 POC 前置判定、mmh3 供外部平台反查，均已落库）")
 
     # 3xx 站点补一次「跳转后」取证（续112-B，用户 2026-10-06：「301 的状态码我希望给跳转
     # 之后的标题，标记一个跳转后」）：httpx 不跟随重定向，收上来的 301 行标题就是

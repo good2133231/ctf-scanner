@@ -295,6 +295,33 @@ def fallback_wait(settings=None):
     return max(0, min(120, n))
 
 
+def settle_ms(settings=None):
+    """一次性截图给页面跑完首屏 JS 的时间（`--virtual-time-budget`，毫秒；0=关，续225）。
+
+    夹到 0..15000：填 0 ＝ 退回旧行为；填得再大也不许让一张图等十几秒以上。
+    """
+    try:
+        n = int(((settings or {}).get("screenshot") or {}).get("settle_ms", 3000))
+    except (TypeError, ValueError):
+        n = 3000
+    return max(0, min(15000, n))
+
+
+def verify_after_js(settings=None):
+    """jsmine 跑完后是否复核截图（`screenshot.verify_after_js`，续225）。默认开。"""
+    cfg = (settings or {}).get("screenshot") or {}
+    return cfg.get("verify_after_js") is not False
+
+
+def file_md5(path):
+    """文件内容 md5；读不到回空串（截图复核用，续225）。"""
+    import hashlib
+    try:
+        return hashlib.md5(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
 def retry_rounds(settings=None):
     """`screenshot.retry_rounds`：任务正常完成后**最多**再排几轮候补重试。
 
@@ -357,7 +384,13 @@ def capture(url, out_path, settings=None, timeout=30, throttle=None, want_title=
     _t0 = time.time()
     try:
         argv = [binary, *_FLAGS, f"--user-data-dir={tmp_profile}",   # 隔离：不碰用户真实浏览器配置
-                f"--window-size={size}", f"--screenshot={out_path}"]
+                f"--window-size={size}"]
+        # 续225：先让首屏 JS / 定时器跑一段时间再落图 —— 直接 `--screenshot` 常在
+        # SPA 还停在 loading 骨架时就截了。0 = 不加这个参数（旧行为逐字节不变）。
+        _settle = settle_ms(settings)
+        if _settle:
+            argv.append(f"--virtual-time-budget={_settle}")
+        argv.append(f"--screenshot={out_path}")
         if want_title:
             argv.append("--dump-dom")             # 渲染后的 DOM 打到 stdout，顺带取标题
         argv.append(str(url))

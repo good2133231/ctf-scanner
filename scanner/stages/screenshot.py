@@ -10,6 +10,7 @@ GUI 的站点页 / 任务详情「站点」页签显示缩略图（点击看大�
 为什么默认关：截图要拉起一个无头浏览器，单站点通常 1~3 秒、内存占用明显高于纯 HTTP 探测，
 而且它对"拿 flag"没有直接帮助 —— 需要看站点长相时再打开。
 """
+import os
 import time
 
 from .base import Stage
@@ -177,3 +178,84 @@ class ScreenshotStage(Stage):
                 f"（SPA 外壳常见，不是抓取失败）；无头浏览器渲染后补到标题 {filled} 个"
                 + ("，其余连渲染后也没有标题" if filled < no_title else ""))
         ctx.logger.info(f"[screenshot] 完成 {ok}/{len(sites)} 个")
+
+    @classmethod
+    def verify_after_js(cls, ctx):
+        """jsmine 之后再截一次，核对首图 md5（续225，主理人点单）。
+
+        算法：H0=库里那张；H1=再截一张。H1==H0 ⇒ 两张一致，不换。
+        否则 H2：H2==H1 ⇒ 采用新图；H2==H0 ⇒ 保留旧图；三张都不同 ⇒ 再截 H3，
+        取**出现两次**的那个 hash（都不重复 ⇒ 如实记 unstable、保留旧图）。
+        只覆盖 `sites.shot` 指向的同一路径（不新增文件、不改库）。
+        """
+        if not screenshot.verify_after_js(ctx.settings) or ctx.stopped():
+            return
+        if not screenshot.available(ctx.settings):
+            ctx.logger.info("[screenshot] JS 后复核跳过：没有可用的无头浏览器")
+            return
+        rows = [dict(r) for r in db.list_sites(ctx.task_id) if r["shot"]]
+        cap = int((ctx.settings.get("screenshot", {}) or {}).get("max_sites", 20) or 20)
+        rows = rows[:max(0, cap)]
+        if not rows:
+            return
+        cfg = ctx.settings.get("screenshot", {}) or {}
+        timeout = int(cfg.get("timeout", 30) or 30)
+        same = changed = unstable = failed = 0
+        ctx.logger.info(f"[screenshot] JS 后复核 {len(rows)} 张"
+                        "（与首图比 md5；不同则多截一张、取出现两次的那张）…")
+        for s in rows:
+            if ctx.stopped():
+                break
+            url = s["url"]
+            old = ctx.workdir / s["shot"]
+            h0 = screenshot.file_md5(old)
+            if not h0:
+                continue
+            picks = []
+            for i in range(3):
+                tmp = ctx.workdir / "shots" / f".verify-{s['id']}-{i}.png"
+                g, _e, _t = screenshot.capture(url, tmp, ctx.settings, timeout=timeout,
+                                               throttle=ctx.throttle)
+                h = screenshot.file_md5(tmp) if g else ""
+                if h:
+                    picks.append((h, tmp))
+                else:
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
+                if i == 0 and h == h0:
+                    break                     # 与首图一致：已有两张相同
+                if i == 1:
+                    if h == h0 or (picks and picks[0][0] == h):
+                        break                 # 回到首图 / 两张新图一致
+            votes = {h0: 1}
+            for h, _p in picks:
+                votes[h] = votes.get(h, 0) + 1
+            top = max(votes.values())
+            if top < 2:
+                # 三张（含首图）都不重复：说不出哪张是真的，保留旧图并点名。
+                unstable += 1
+            else:
+                best = max(votes.items(), key=lambda kv: (kv[1], kv[0] == h0))[0]
+                if best == h0:
+                    same += 1
+                else:
+                    src = next((p for h, p in picks if h == best), None)
+                    if src and src.is_file():
+                        try:
+                            os.replace(src, old)   # 原子替换：同一路径，库里不用改
+                            changed += 1
+                            ctx.logger.info(f"[screenshot] {url} JS 后画面变了，采用多数一致的版本")
+                        except OSError:
+                            failed += 1
+                    else:
+                        unstable += 1
+            for _h, p in picks:
+                if p != old and p.exists():
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+        ctx.logger.info(f"[screenshot] JS 后复核完成：一致 {same} / 采用新图 {changed} / "
+                        f"仍不稳定 {unstable} / 失败 {failed}")

@@ -371,6 +371,14 @@ class PipelineRunner:
                     ctx.logger.error(f"[extdom] 拓展域名后处理异常：{e}")
                     ctx.logger.debug(traceback.format_exc())
                     db.append_task_error(ctx.task_id, f"extdom: {e}")
+            if sname == "jsmine" and "screenshot" in stages:
+                # 续225：JS 跑完后再截一次核对首图（主理人点单）。只在本轮真的跑过
+                # screenshot 时触发；复核是附加动作，挂了不许牵连 jsmine 的产物。
+                try:
+                    ScreenshotStage.verify_after_js(ctx)
+                except Exception as e:      # noqa: BLE001 - 附加动作级容错
+                    ctx.logger.warning(f"[screenshot] JS 后复核异常（不影响主流程）：{e}")
+                    ctx.logger.debug(traceback.format_exc())
             if ctx.stopped():
                 stopped = True
                 break

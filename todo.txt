@@ -4303,6 +4303,27 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续225（2026-10-19，WorkBuddy · Claude）：任务页 7 项收口（注释/按钮/子任务进度/图标/邮箱/截图/拓展说明）
+
+主理人一次提 7 条，逐条落地；细节与实测见 CHANGELOG 续225。
+
+- [x] 站点页截图口径长注释移除（候补段里的 plan 文案一并收掉）；`[170]` 断言改"不再展示"
+- [x] 「批量打开」与「重截」同属一个 bulkbar（前端一行）
+- [x] 子任务进度：父页列出每个子任务的 %、子页显示父任务当前进度；代码/真实库核对无父任务清零
+- [x] `sites.icon_hash/icon_file/icon_ext` + probe 一次抓取算 MD5+mmh3 并落盘图标；
+      osint 复用 hash、写 expanded/black/empty；任务页 URL 下方贴图 + FOFA 值 + 徽章；
+      `/favicons` 只认 `<32hex>.ico` 且限任务目录
+- [x] 截图：`settle_ms`（virtual-time-budget）+ jsmine 后复核（H0/H1/H2/H3 多数表决）；
+      策略页两个开关
+- [x] 邮箱：任务页新增「邮箱」页签（分页/关键字/按任务过滤）——真实库已有 7 条，此前无入口
+- [x] 建任务页拓展说明隐藏；核对 auto_expand 已实现"DNS 判定 + 归属追加"
+- [x] **[225] 断言 + 全量 SMOKE PASS（256 组，7 分 08 秒）**；本轮 5 次全量（4 红 1 绿，
+      红因全是旧 UI 断言或改测试手滑，逐条记在 CHANGELOG）
+
+**下一轮（续225 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`（等主理人提供 key）
+
+
 ## 续224（2026-10-19，WorkBuddy · Claude）：指纹来源统计视图 + 字典导出（单份/整源 zip）
 
 续223 挂账的两项收尾；VT / ICP 仍需真 key，仍是唯一挂账项。细节与实测见 CHANGELOG 续224。

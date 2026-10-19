@@ -76,14 +76,7 @@
           <option value="{{ lv }}" {{ 'selected' if lv == (ext_defaults.ext_min_confidence or 'high') }}>{{ lab }}</option>
           {% endfor %}
         </select></label>
-      <span class="muted small">勾上后本次任务默认把拓展做全：挖出来的拓展域名会<b>自动判断存不存在</b>，
-        其中<b>注册域属于本项目</b>的（如目标 <span class="mono">targ1.pro</span> 拓展出
-        <span class="mono">aaa.targ1.pro</span>）会<b>追加成正常子域</b>；
-        不勾则维持原样（拓展域名只入库，需要手动处置）。<br>
-        上面两个下拉是<b>另一件事</b>：层数 &gt;1 时，除了注册域就是目标的那些，
-        像到「多半是自家另一个 TLD」（<span class="mono">abdc.com</span> 对
-        <span class="mono">abcd.org</span>）的拓展域名也会跟着进下一层 ——
-        看错了就在「拓展域名」页勾选那一行、点<b>加入黑名单</b>。</span>
+
     </div>
     <div class="row">
       <span class="muted" title="登录态只发给目标侧；crt.sh / FOFA / CISA KEV / IP 反查等第三方接口不带（避免把目标凭据外发）；值不会写进日志与报告">

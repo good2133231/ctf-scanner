@@ -1771,6 +1771,10 @@ def create_app():
             abort(404)
         # 页面只展示相对路径（日志文件路径在库里存的是绝对路径，因为要真的去读它）
         task = dict(task)
+        # 续225：子任务页显示**父任务自己的**进度 —— 加子任务不会改动父任务行；
+        # 之前跳到子任务详情看到 0% 容易被当成"父任务进度被清零"。
+        _parent_task = (db.get_task(int(task.get("parent_id") or 0))
+                        if task.get("parent_id") else None)
         task["log_file"] = rel_display(task.get("log_file") or "", mask_outside=True)
         # 错误消息是**自由文本**（异常原文里常带本机的盘符/绝对路径），展示前过一遍清洗
         task["error"] = scrub_paths(task.get("error") or "")
@@ -1967,6 +1971,8 @@ def create_app():
         # 续224：技术栈来源统计（全任务，轻量两列）；页面那句"多少站内置识别/只靠 JS"
         # 与报告共用 `fingerprint.tech_stats()`，别在模板里再算一遍。
         _tech_stats = fingerprint.tech_stats(db.list_site_tech(task_id))
+        # 续225：邮箱页签（jsmine 的数据探测产物）—— 与 /emails 页同一张表，页内按任务过滤。
+        emails, emails_pager, emails_q = _tab_page("emails", "em", "#emails")
         # 续172：站点页签「同标题放在一起 + 可折叠」。折叠键与跨任务 /sites 页**同一份产地**
         # （`_site_fold_key`，本轮起 3xx 优先跳转后标题）；组内代表行 = 组内第一行（页序 id），
         # 成员行紧随其后且默认收起（原生 hidden + 内联 onclick 展开，零新依赖）；
@@ -2100,6 +2106,7 @@ def create_app():
             ext_defaults=_ext_defaults(),
             resume_rest=resume_rest,
             sites=sites,
+            parent_task=_parent_task,
             tech_stats=_tech_stats,
             tech_stats_text=fingerprint.tech_stats_text(_tech_stats),
             ports=ports, csegs=csegs, certs=certs_rows,
@@ -2107,6 +2114,9 @@ def create_app():
             cert_tls_ports=sorted(certs_mod.tls_ports(settings)),
             dirs=dirs, dirs_hidden=dirs_hidden,
             flags=flag_rows, flag_total=len(flag_rows),
+            # 续225：邮箱页签（分页/关键字走服务端；与 /emails 同一张表）
+            emails=emails, emails_pager=emails_pager, emails_q=emails_q,
+            email_total=emails_pager["total"],
             # 续57：6 个资产页签的服务端分页条 / 关键字 / 总数。徽标与「共 N 条」都用 `*_total`
             # （`|length` 现在是"当前页行数"，拿它当总数会少报）。
             subs_pager=subs_pager, subs_q=subs_q,
@@ -2928,6 +2938,25 @@ def create_app():
         if base not in target.parents or not target.is_file():
             abort(404)
         return send_file(str(target), mimetype="image/png")
+
+    @app.route("/favicons/<int:task_id>/<name>")
+    @login_required
+    def favicon_file(task_id, name):
+        """返回站点 favicon（续225）。
+
+        与 `shot_file` 同一套边界：只允许该任务工作目录下 `favicons/` 里的 `<md5>.ico`；
+        名字必须是 32 位小写 hex（路径分隔符 / 其它扩展名一律 404）。
+        """
+        task = _owned_task(task_id)
+        if not task:
+            abort(404)
+        if not re.fullmatch(r"[0-9a-f]{32}\.ico", name):
+            abort(404)
+        base = Path(task["log_file"] or "").parent.resolve()
+        target = (base / "favicons" / name).resolve()
+        if base not in target.parents or not target.is_file():
+            abort(404)
+        return send_file(str(target), mimetype="image/x-icon")
 
     @app.route("/ips")
     @login_required
@@ -4838,6 +4867,9 @@ def create_app():
                                    "max_sites": int(f.get("screenshot_max_sites", 20) or 20),
                                    "window": (f.get("screenshot_window") or "1280x900").strip(),
                                    "timeout": int(f.get("screenshot_timeout", 30) or 30),
+                                   # 续225：0 是合法值（不等）；缺字段才用 3000
+                                   "settle_ms": int(f.get("screenshot_settle_ms", 3000) or 0),
+                                   "verify_after_js": f.get("screenshot_verify_after_js") == "1",
                                    # 续161「候补重试」轮数：0 是**合法值**（关），所以缺字段才回 0；
                                    # 不能写 `or DEFAULT`，那会把人填的 0 洗成默认值。
                                    # 越界与非法值不在这里管 —— 读侧 `screenshot.retry_rounds()` 夹

@@ -59,8 +59,24 @@ class OsintStage(Stage):
     name = "osint"
     description = "外部情报拓展（C 段反查域名 / favicon 反查同源资产 / 证书反查）"
 
+    def _mark_icon(self, url, status):
+        """记录一份图标的拓展结论（续225）：expanded > black > empty（多平台取最有信息量的）。
+
+        页面据此在图标下显示「已拓展」/「三方未拓展」；空串 = 没查/无图标，不显示徽章。
+        """
+        rank = {"expanded": 3, "black": 2, "empty": 1}
+        cur = self.__dict__.setdefault("_icon_status", {})
+        if rank.get(status, 0) >= rank.get(cur.get(url, ""), 0):
+            cur[url] = status
+
+    def _flush_icon_status(self):
+        st = getattr(self, "_icon_status", {})
+        if st:
+            db.set_site_icon_status(self.ctx.task_id, list(st.items()))
+
     def run(self):
         ctx = self.ctx
+        self._icon_status = {}
         do_ip = (ctx.settings.get("iprecon", {}) or {}).get("enabled") is True
         fofa_cfg = ctx.settings.get("fofa", {}) or {}
         do_fofa = fofa_cfg.get("enabled") is True
@@ -296,17 +312,26 @@ class OsintStage(Stage):
             ctx.logger.info(f"[osint] 站点 {len(sites)} 个超过上限 {cap}，仅取前 {cap} 个算 favicon")
             sites = sites[:cap]
 
-        def _fav(s):
-            if ctx.stopped():
-                return None
-            return {"url": s["url"], "hash": favicon_hash(s["url"], ctx.settings)}
-
+        # 续225：probe 已经把 mmh3 落库（`sites.icon_hash`）⇒ 直接复用，别再抓一遍；
+        # 只有老任务/未跑 probe 的行才补抓。同一 hash 只查一次（同图标站点共用结果）。
         hashes = {}
-        for r in pool_run(_fav, sites, workers=max(1, int(cfg.get("workers", 5))),
-                        logger=ctx.logger, label="osint favicon 采集"):
-            if r and r["hash"]:
-                hashes.setdefault(r["hash"], r["url"])
-        ctx.logger.info(f"[osint] favicon 指纹 {len(hashes)}/{len(sites)} 个站点可算（mmh3）")
+        for s in sites:
+            h = int(s.get("icon_hash") or 0)
+            if h:
+                hashes.setdefault(h, s["url"])
+        missing = [s for s in sites if not int(s.get("icon_hash") or 0)]
+        if missing:
+            def _fav(s):
+                if ctx.stopped():
+                    return None
+                return {"url": s["url"], "hash": favicon_hash(s["url"], ctx.settings)}
+
+            for r in pool_run(_fav, missing, workers=max(1, int(cfg.get("workers", 5))),
+                            logger=ctx.logger, label="osint favicon 采集"):
+                if r and r["hash"]:
+                    hashes.setdefault(r["hash"], r["url"])
+        ctx.logger.info(f"[osint] favicon 指纹 {len(hashes)}/{len(sites)} 个站点可算（mmh3，"
+                        f"其中 {len(sites) - len(missing)} 个直接复用 probe 已落库的值）")
         if not hashes:
             return []
 
@@ -333,6 +358,7 @@ class OsintStage(Stage):
                 # 的语法**（`icon_hash="123"`），入库进 `subdomains.note`，拓展域名页可查
                 found.append((domain, "osint:fofa", fofa_mod.build_query(icon_hash)))
         ctx.logger.info(f"[osint] FOFA 拓展：查询 {queried} 个 favicon，跳过黑 ico {black} 个")
+        self._flush_icon_status()
         return found
 
     # ---------- VirusTotal 子域名反查（续214） ----------
@@ -538,16 +564,23 @@ class OsintStage(Stage):
             ctx.logger.info(f"[osint] 站点 {len(sites)} 个超过上限 {cap}，仅取前 {cap} 个算 favicon")
             sites = sites[:cap]
 
-        def _fav(s):
-            if ctx.stopped():
-                return None
-            return {"url": s["url"], "hash": favicon_hash(s["url"], ctx.settings)}
-
+        # 续225：同样优先复用 probe 已落库的 mmh3；只有缺值的行才补抓。
         hashes = {}
-        for r in pool_run(_fav, sites, workers=max(1, workers),
-                        logger=ctx.logger, label="osint 三方 favicon 采集"):
-            if r and r["hash"]:
-                hashes.setdefault(r["hash"], r["url"])
+        for s in sites:
+            h = int(s.get("icon_hash") or 0)
+            if h:
+                hashes.setdefault(h, s["url"])
+        missing = [s for s in sites if not int(s.get("icon_hash") or 0)]
+        if missing:
+            def _fav(s):
+                if ctx.stopped():
+                    return None
+                return {"url": s["url"], "hash": favicon_hash(s["url"], ctx.settings)}
+
+            for r in pool_run(_fav, missing, workers=max(1, workers),
+                            logger=ctx.logger, label="osint 三方 favicon 采集"):
+                if r and r["hash"]:
+                    hashes.setdefault(r["hash"], r["url"])
         ctx.logger.info(f"[osint] favicon 指纹 {len(hashes)}/{len(sites)} 个站点可算（mmh3）")
         cache[(cap, workers)] = hashes
         return hashes
@@ -593,6 +626,7 @@ class OsintStage(Stage):
                 # 续171：Shodan / Quake 的语法（`http.favicon.hash:N` / `favicon:"N"`）同样随行入库
                 found.append((_domain_of(a), f"osint:{name}", mod.build_query(icon_hash)))
         ctx.logger.info(f"[osint] {name} 拓展：查询 {queried} 个 favicon，跳过黑 ico {black} 个")
+        self._flush_icon_status()
         return found
 
     # ---------- CT 日志（crt.sh） ----------

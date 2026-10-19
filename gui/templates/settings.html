@@ -408,6 +408,11 @@
     <label>截图站点上限 <input name="screenshot_max_sites" value="{{ s.screenshot.max_sites }}"></label>
     <label>截图视口（宽x高） <input name="screenshot_window" value="{{ s.screenshot.window }}"></label>
     <label>单站点截图超时（秒） <input name="screenshot_timeout" value="{{ s.screenshot.timeout }}"></label>
+    <label>截图前留时间跑首屏 JS（毫秒） <input name="screenshot_settle_ms" style="width:6em"
+      value="{{ s.screenshot.settle_ms }}" placeholder="0＝不等（旧行为）"></label>
+    <label class="chk"><input type="checkbox" name="screenshot_verify_after_js" value="1"
+      {{ 'checked' if s.screenshot.verify_after_js }}> <b>JS 抓完后复核截图</b>（再截一次比 md5；
+      不一致就多截一张、取出现两次的那张 —— 专治"首图还停在加载骨架"）</label>
     <label>截图候补重试轮数 <input name="screenshot_retry_rounds" style="width:5em"
       value="{{ s.screenshot.retry_rounds }}" placeholder="0＝关"></label>
     <label class="chk"><input type="checkbox" name="screenshot_cdp_fallback" value="1"

@@ -21543,7 +21543,8 @@ expression: r0()
         # 续197：两颗并一颗后按钮文案是「重截（失败 N）」—— "失败张数看得见"这条判据不变
         assert 'action="/api/sites/reshoot"' in _h170 and "重截（失败 1）" in _h170, \
             "详情页没有「重截」入口或没报失败张数"
-        assert "每张最多" in _h170, "页面没把本轮的尝试口径说出来（配置改了页面不跟着变＝假话）"
+        assert "每张最多" not in _h170 and "尝试口径" not in _h170, \
+            "站点页不该再展示尝试口径长文案（续225 按主理人点单移除）"
     finally:
         _q170.notify, gui_app.load_settings = _notify170, _ld_keep170
         for _t170 in (_tid170q, _tid170o):
@@ -21552,7 +21553,8 @@ expression: r0()
         if _u170:
             _us170.delete_user(int(_u170["id"]))
 
-    print("[170] 续170 ok: 四个新开关四方一致且夹取有界｜尝试口径文案跟着开关翻面（现算）｜"
+    print("[170] 续170 ok: 四个新开关四方一致且夹取有界｜尝试口径函数仍跟着开关现算"
+          "（续225 起页面不再展示长文案）｜"
           "落库文本「档｜尝试 N 次（方式 秒）｜原文」能读回同一档｜兜底只挡埋点域、"
           "自家注册域与它的子域双向都不挡、垃圾条目不进清单｜CDP 只连回环且 ready 永不抛｜"
           "阶段三种情形（兜底开：等满 1s 再兜底 / 关着：零额外进程 / 停止：不再兜底）"
@@ -24485,10 +24487,15 @@ expression: r0()
         encoding="utf-8", errors="replace")
     assert "redirect_url" in _ss8bc and "重试" in _ss8bc, "截图阶段缺失败自动重试分支"
     import ast as _ast8bc
-    _caps8bc = [n for n in _ast8bc.walk(_ast8bc.parse(_ss8bc))
+    # 续225：只数 **run() 内**的调用 —— 「不许第三次同 URL 重打」约束的是初次截图流程；
+    # JS 后复核（verify_after_js）是独立方法、按主理人点单做"多数表决"，不算那条约束。
+    _run8bc = next(n for n in _ast8bc.walk(_ast8bc.parse(_ss8bc))
+                   if isinstance(n, _ast8bc.FunctionDef) and n.name == "run")
+    _caps8bc = [n for n in _ast8bc.walk(_run8bc)
                 if isinstance(n, _ast8bc.Call) and isinstance(n.func, _ast8bc.Attribute)
                 and getattr(n.func.value, "id", "") == "screenshot"
                 and n.func.attr in ("capture", "capture_cdp")]
+    assert "def verify_after_js" in _ss8bc, "续225 的 JS 后复核方法不见了"
     assert sum(1 for n in _caps8bc if n.func.attr == "capture") == 2, \
         f"截图调用点只该有「一次性 + 3xx 落地页」两次 `screenshot.capture`" \
         f"（加第三次同 URL 的调用就是主理人点单去掉的那支）：{_caps8bc}"
@@ -29265,6 +29272,151 @@ expression: r0()
     print("[224] 续223/224 ok: 字典编辑（路径留空沿用/新增/清空来源名删除）｜字典一览只回条数｜"
           "预览默认 100 行（硬上限 200）、非法 key 全 404（路径穿越/未登记）｜"
           "导出（单份附件 / 整源 zip，picks 过滤；非法键 404）｜页面不回显绝对路径")
+    # ------------------------------------------------------------------ [225]
+    # 续225：邮箱页签 / favicon 贴图 + FOFA 值 + 拓展结论 / 子任务进度 / 截图稳定性 + JS 后复核
+    from scanner import screenshot as _shot225
+    from scanner.stages.screenshot import ScreenshotStage as _ss225
+
+    _wd225 = Path(tempfile.mkdtemp(prefix="smoke225-job-"))
+    _tid225 = db.create_task("smoke225-ui", "http://e225.test/", ["probe"], {})
+    try:
+        (_wd225 / "favicons").mkdir(parents=True)
+        (_wd225 / "shots").mkdir(parents=True)
+        _icon225 = "a" * 32 + ".ico"
+        (_wd225 / "favicons" / _icon225).write_bytes(b"ICO225")
+        (_wd225 / "shots" / "s225.png").write_bytes(b"OLD")
+        db.update_task(_tid225, log_file=str(_wd225 / "run.log"))
+        db.insert_sites(_tid225, [{
+            "url": "http://e225.test/", "host": "e225.test", "port": "80", "status": 200,
+            "title": "e225", "length": 10, "server": "nginx", "tech": "zz",
+            "source": "builtin", "favicon": "f" * 32, "icon_hash": 123456,
+            "icon_file": f"favicons/{_icon225}", "icon_ext": "black"}])
+        db.set_site_shots(_tid225, [("http://e225.test/", "shots/s225.png")])
+        db.insert_emails(_tid225, [{"email": "a@e225.test", "domain": "e225.test",
+                                    "source": "http://e225.test/app.js"}])
+        _row225 = [dict(r) for r in db.list_sites(_tid225)][0]
+        assert _row225["icon_hash"] == 123456 and _row225["icon_ext"] == "black", _row225
+        db.set_site_icon_status(_tid225, [("http://e225.test/", "expanded")])
+        assert [dict(r) for r in db.list_sites(_tid225)][0]["icon_ext"] == "expanded"
+        db.set_site_icon_status(_tid225, [("http://e225.test/", "black")])
+
+        import gui.app as _gui225
+        _orig225 = (_gui225.load_settings, _gui225.sync_pocs)
+        _gui225.load_settings = lambda: settings
+        _gui225.sync_pocs = lambda *_a, **_k: None
+        try:
+            _c225 = _gui225.create_app().test_client()
+            assert _c225.post("/login", data=_admin_form117(),
+                              environ_base={"REMOTE_ADDR": "203.0.113.245"}).status_code == 302
+            _h225 = _c225.get(f"/tasks/{_tid225}").get_data(as_text=True)
+            _fav225 = _c225.get(f"/favicons/{_tid225}/{_icon225}")
+            assert _fav225.status_code == 200 and _fav225.data == b"ICO225", _fav225.status_code
+            # 文件接口只认 <32hex>.ico + 该任务工作目录；穿越/换扩展名一律 404
+            assert _c225.get(f"/favicons/{_tid225}/../x.ico").status_code == 404
+            assert _c225.get(f"/favicons/{_tid225}/{_icon225[:-4]}.png").status_code == 404
+        finally:
+            _gui225.load_settings, _gui225.sync_pocs = _orig225
+        assert 'data-tab="emails"' in _h225 and 'id="pane-emails"' in _h225
+        assert "a@e225.test" in _h225, "邮箱页签没显示邮箱"
+        assert "icon_hash=123456" in _h225 and "三方未拓展" in _h225
+        assert f"/favicons/{_tid225}/{_icon225}" in _h225
+
+        # 子任务进度：父页列出子任务的 %，子页显示父任务当前进度（互不影响）
+        _kid225 = db.create_task("smoke225-kid", "http://k225.test/", ["probe"], {},
+                                 parent_id=_tid225)
+        try:
+            db.update_task(_kid225, progress=37)
+            db.update_task(_tid225, progress=88)
+            _hp225 = _c225.get(f"/tasks/{_tid225}").get_data(as_text=True)
+            _hk225 = _c225.get(f"/tasks/{_kid225}").get_data(as_text=True)
+            assert f"#{_kid225}" in _hp225 and "（37%）" in _hp225, "父页没列出子任务进度"
+            assert "父任务当前进度 <b>88%</b>" in _hk225, "子页没显示父任务进度"
+        finally:
+            db.delete_task(_kid225, backup=False)
+
+        # 模板硬规矩：两条注释已隐藏、两个按钮同一行、手工开关仍在策略页
+        _td225 = (ROOT / "gui" / "templates" / "task_detail.html").read_text(
+            encoding="utf-8", errors="replace")
+        assert "单次最多排" not in _td225 and "尝试口径" not in _td225
+        _bulk225 = _td225.split('<div class="bulkbar">', 1)[1].split("</div>", 1)[0]
+        assert 'id="btn-open-sites"' in _bulk225 and 'name="only_failed"' in _bulk225
+        _ts225 = (ROOT / "gui" / "templates" / "tasks.html").read_text(
+            encoding="utf-8", errors="replace")
+        assert "勾上后本次任务默认把拓展做全" not in _ts225
+        _st225 = (ROOT / "gui" / "templates" / "settings.html").read_text(
+            encoding="utf-8", errors="replace")
+        assert 'name="screenshot_settle_ms"' in _st225
+        assert 'name="screenshot_verify_after_js"' in _st225
+
+        # 截图：--virtual-time-budget 真的进了 argv（settle_ms=0 时不加）
+        _argv225 = []
+        _orig_bp, _orig_rc = _shot225.browser_path, _shot225.run_cmd
+        _shot225.browser_path = lambda *_a, **_k: "/bin/true"
+        _shot225.run_cmd = lambda argv, **k: (_argv225.append(list(argv)), (0, "", ""))[1]
+        try:
+            _shot225.capture("http://x225/", _wd225 / "shots" / "t225.png",
+                             {"screenshot": {"settle_ms": 1500}}, timeout=1)
+            _shot225.capture("http://x225/", _wd225 / "shots" / "t225.png",
+                             {"screenshot": {"settle_ms": 0}}, timeout=1)
+        finally:
+            _shot225.browser_path, _shot225.run_cmd = _orig_bp, _orig_rc
+        assert any(a == "--virtual-time-budget=1500" for a in _argv225[0]), _argv225
+        assert not any(a.startswith("--virtual-time-budget=") for a in _argv225[1]), _argv225
+
+        # JS 后复核：多数表决（H1,H1 ⇒ 采用新图；H1,H0 ⇒ 保留；三张全不同 ⇒ 保留 + unstable）
+        _lg225 = []
+
+        class _L225:
+            def info(self, m):
+                _lg225.append(str(m))
+
+            def warning(self, m):
+                _lg225.append(str(m))
+
+        class _Ctx225:
+            task_id = _tid225
+            settings = {"screenshot": {"verify_after_js": True, "max_sites": 20, "timeout": 1}}
+            workdir = _wd225
+            throttle = None
+            logger = _L225()
+
+            def stopped(self):
+                return False
+
+        _seq225 = [b"NEW1", b"NEW1"]
+        _orig_cap, _orig_av = _shot225.capture, _shot225.available
+
+        def _cap225(u, o, st=None, timeout=None, throttle=None):
+            o.write_bytes(_seq225.pop(0))
+            return True, "", ""
+
+        _shot225.capture = _cap225
+        _shot225.available = lambda *_a, **_k: True
+        try:
+            _shot225_path = _wd225 / "shots" / "s225.png"
+            _shot225_path.write_bytes(b"OLD")
+            _ss225.verify_after_js(_Ctx225())
+            assert _shot225_path.read_bytes() == b"NEW1", "两张新图一致时必须采用新图"
+
+            _seq225 = [b"NEW2", b"OLD"]
+            _shot225_path.write_bytes(b"OLD")
+            _ss225.verify_after_js(_Ctx225())
+            assert _shot225_path.read_bytes() == b"OLD", "回到首图时必须保留旧图"
+
+            _seq225 = [b"U1", b"U2", b"U3"]
+            _shot225_path.write_bytes(b"OLD")
+            _ss225.verify_after_js(_Ctx225())
+            assert _shot225_path.read_bytes() == b"OLD", "三张全不同时必须保留旧图"
+            assert any("仍不稳定 1" in m for m in _lg225), _lg225[-3:]
+        finally:
+            _shot225.capture, _shot225.available = _orig_cap, _orig_av
+        assert not list((_wd225 / "shots").glob(".verify-*")), "复核临时图没清干净"
+    finally:
+        db.delete_task(_tid225, backup=False)
+        shutil.rmtree(_wd225, ignore_errors=True)
+    print("[225] 续225 ok: 邮箱页签（页内按任务过滤）｜favicon 贴图 + icon_hash(FOFA) + 已拓展/三方未拓展 + 文件接口防穿越｜"
+          "子任务页显示父任务进度、父页列出子任务 %｜截图 --virtual-time-budget 与 JS 后 md5 多数表决（一致/换图/不稳定三档）｜"
+          "站点两条注释已隐藏、批量打开与重截同一行、策略页两个新开关在")
     print("SMOKE PASS")
 
 
