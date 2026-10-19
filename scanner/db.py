@@ -649,10 +649,16 @@ def start_task_run(task_id, fresh=False, **fields):
     不清的话，被队列重新入队后又跑起来的任务会一直显示旧 `finished_at`，页面上的
     「运行中，已 X」不再增长（`task_run_seconds` 见 `finished_at` 非空即只报累计值）。
     """
-    fields.update({"status": "running", "progress": 0, "current_stage": "",
+    # 续231：**追加 / 续跑不许把进度归零**（续230 只修了 runner，队列认领这一处还在打回 0）。
+    # 只有 fresh 才归零；append/resume 保留当前进度，由 `runner.run()` 以 `_base` 继续推进。
+    fields.update({"status": "running", "current_stage": "",
                    "started_at": _now(), "finished_at": ""})
     if fresh:
+        fields["progress"] = 0
         fields["elapsed_seconds"] = 0
+    else:
+        _cur = dict(_query("SELECT progress FROM tasks WHERE id=?", (task_id,), one=True) or {})
+        fields["progress"] = int(_cur.get("progress") or 0)
     update_task(task_id, **fields)
 
 

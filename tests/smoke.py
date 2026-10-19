@@ -29588,6 +29588,15 @@ expression: r0()
                                 get_logger(f"task-{_t230}", _wd230 / "task.log"))
         _PR230(_ctx230b).run()
         assert _seen230 == [0], f"fresh 应从 0 起：{_seen230}"
+        # [231] 队列认领那一处也不许归零：`db.start_task_run(fresh=False)` 必须保留进度
+        db.update_task(_t230, progress=100, run_mode="append", status="done")
+        db.start_task_run(_t230, fresh=False)
+        assert int(db.get_task(_t230)["progress"] or 0) == 100, \
+            "队列认领（append）把进度打回了 0"
+        db.start_task_run(_t230, fresh=True)
+        assert int(db.get_task(_t230)["progress"] or 0) == 0, \
+            "队列认领（fresh）应归零"
+        db.update_task(_t230, status="done", progress=100)
     finally:
         if _real_st230 is not None:
             _SR230["probe"] = _real_st230

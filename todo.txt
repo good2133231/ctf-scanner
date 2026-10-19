@@ -4303,6 +4303,24 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续231（2026-10-19，WorkBuddy · Claude）：真机演示抓出第二处进度归零（队列认领）
+
+主理人点单真跑一个任务+子任务演示。演示抓出续230 漏掉的第二处归零：**队列认领**
+（`db.start_task_run()` 无条件 progress=0）在 runner 之前执行，append 的 `_base` 读到的已是 0。
+
+- [x] `db.start_task_run()`：fresh 才归零；append/resume 保留当前进度（与续230 合并为
+      一条不变式：**进度单调，归零点全仓只有 runner 起跑 + 队列认领两处，都带 run_mode 判据**）
+- [x] 真机演示（本地靶场，真队列）：父 #52 done 100% → 建子 #53（parent_id=52）done 100%、
+      父进度不动；追加 #52 修复前掉 0、修复后全程 100%
+- [x] `[230]` 补队列认领断言（append 保留 100 / fresh 归零）
+- [x] 全量 SMOKE PASS（259 组，7 分 03 秒）
+
+**下一轮（续231 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] smoke 分组并行（先做组间隔离）
+
+
 ## 续230（2026-10-19，WorkBuddy · Claude）：追加执行不许把父任务进度打回 0 + 列表显示当前阶段
 
 - [x] 真 bug：`runner.run()` 无条件 `progress=0` ⇒ append/resume（追加/重截/Host 碰撞）
