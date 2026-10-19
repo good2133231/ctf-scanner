@@ -4758,6 +4758,10 @@ def create_app():
                     "hostcollide": {"enabled": f.get("hostcollide_enabled") == "1",
                                     "max_requests": int(f.get("hostcollide_max_requests", 200) or 200),
                                     "timeout": int(f.get("hostcollide_timeout", 5) or 5)},
+                    # 续221：指纹单站标签上限（`fingerprint.max_tags`）。没有输入框就原样带回现值。
+                    "fingerprint": {"max_tags": int(f.get("fingerprint_max_tags",
+                                                          (settings.get("fingerprint") or {})
+                                                          .get("max_tags", 10) or 10) or 10)},
                     "portscan": {"enabled": f.get("portscan_enabled") == "1",
                                  "max_hosts": int(f.get("portscan_max_hosts", 100) or 100),
                                  "ports": f.get("portscan_ports", ""),

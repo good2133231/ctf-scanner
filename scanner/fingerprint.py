@@ -418,10 +418,14 @@ def collect(ctx, site_url, resp, where=""):
     if pend is None:
         pend = ctx._tech_pending = {}
     lock = getattr(ctx, "_tech_lock", None) or _TECH_LOCK
+    src = "js" if str(where or "") == "js" else "doc"
     with lock:
-        bucket = pend.setdefault(str(site_url), set())
-        n = len([t for t in tags if t not in bucket])
-        bucket.update(tags)
+        # 续221：桶按来源分。超上限截断时**主文档优先**，JS 侧的标签先丢 ——
+        # 同一个产品，主文档认不出来而 JS 里有个字样，后者显然更不可信。
+        bucket = pend.setdefault(str(site_url), {"doc": set(), "js": set()})
+        part = bucket.setdefault(src, set())
+        n = len([t for t in tags if t not in part])
+        part.update(tags)
     return n
 
 
@@ -438,17 +442,26 @@ def flush(ctx, logger=None, where=""):
         return 0, set()
     from . import db
     new_tags = set()
-    for tags in pend.values():
-        new_tags |= set(tags)
     sites = ctx.results.get("sites") or []
     by_url = {str(s.get("url")): s for s in sites}
     updates = {}
-    for url, tags in pend.items():
+    hidden_js = hidden_over = 0
+    cap = max_tags(getattr(ctx, "settings", None))
+    for url, bucket in pend.items():
+        doc_tags = set((bucket or {}).get("doc") or set())
+        js_tags = set((bucket or {}).get("js") or set()) - doc_tags
+        # 主文档优先、JS 补位；仍超上限 ⇒ 只取前 cap 个，**丢了多少必须说出来**
+        ordered = sorted(doc_tags) + sorted(js_tags)
+        if len(ordered) > cap:
+            hidden_js += len([t for t in ordered[cap:] if t in js_tags])
+            hidden_over += len(ordered) - cap
+            ordered = ordered[:cap]
+        new_tags |= set(ordered)
         cur = [t for t in str((by_url.get(url) or {}).get("tech") or "").split(",") if t]
-        add = [t for t in sorted(tags) if t not in cur]
+        add = [t for t in ordered if t not in cur]
         if not add:
             continue
-        updates[url] = sorted(set(cur) | set(tags))
+        updates[url] = sorted(set(cur) | set(ordered))
         # 内存里同步：本阶段之后的下一阶段读的就是这份快照
         if url in by_url:
             by_url[url]["tech"] = ",".join(updates[url])
@@ -462,6 +475,11 @@ def flush(ctx, logger=None, where=""):
             # 不写就是"扫过了、页面上却没有"那种静默。
             bits.append(f"另有 {len(missing)} 个目标不在本任务站点表里（补扫任务没跑 probe？"
                         f"标签没挂上：{'、'.join(missing[:3])}{'…' if len(missing) > 3 else ''}）")
+        if hidden_over:
+            # 续221：标签上限（fingerprint.max_tags）截断的也必须说出来 ——
+            # "20+ 个标签"本身就是用户报的故障，静默截断只会把故障藏成"怎么少了几个"。
+            bits.append(f"另有 {hidden_over} 个标签未纳入（上限 {cap}，其中 {hidden_js} 个"
+                        f"来自 JS 内容、优先级低于主文档）")
         logger.info(f"[{where}] 指纹补标（吃的是本阶段已发的响应，零额外请求）：" + "，".join(bits))
     ctx._tech_pending = {}
     return n, new_tags
@@ -487,11 +505,171 @@ def all_tags():
     return sorted(set(SIGNATURES) | set(load_extra()[0]))
 
 
-def identify(resp):
-    """从 http_request 的响应 dict 中提取组件标签，返回排序去重后的列表。
+# --------------------------------------------------------------------------
+# 同义归一 / 弱规则降级 / 数量收口（续221）
+# --------------------------------------------------------------------------
+# 起因（主理人 2026-10-19 报的一个真站）：一个 Sentry 登录页被打出 20+ 个标签
+# （Cloudflare ×3、next.js/nextjs、禅道、群晖-nas、群晖-diskstation、深信服、联软…）。
+# 逐条查下来是三件事叠加：① 外置社区表里有"路径型无左边界"分支（`js/app\.`），
+# 连 `nextjs/app.css` 都算命中 ⇒ 打出一个完全不相干的「朗拓健康医院管理系统」；
+# ② 同一产品在社区表里有多个 tag（群晖-nas / 群晖-diskstation），没有归一；
+# ③ jsmine 把**JS 文件正文**也喂给全部 4400+ 条 body 规则，且没有任何数量上限。
+_ALIAS_FILE = "config/dicts/fingerprint_aliases.txt"
+_alias_cache = {"key": None, "map": {}}
+
+
+def _canon_key(tag):
+    """归一化 key：大小写、空格、点、划、下划线都不算差异（`next.js` == `nextjs`）。"""
+    return re.sub(r"[\s._\-]+", "", str(tag or "")).lower()
+
+
+def _load_aliases():
+    """同义别名表：一行一个 canonical，后面 TAB 分隔是它的别名。
+
+    只收"同一个产品的不同叫法"，**不收不同产品** —— 收宽了会把真信号合掉。
+    文件缺失/为空 ⇒ 空表（此时只剩 `_canon_key` 那一层归一）。
+    """
+    from .config import resolve
+    try:
+        p = resolve(_ALIAS_FILE)
+        key = (str(p), p.stat().st_mtime_ns if p.exists() else 0)
+    except Exception:
+        return {}
+    if _alias_cache["key"] == key:
+        return _alias_cache["map"]
+    table = {}
+    try:
+        if p.is_file():
+            for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = [x.strip() for x in line.split("\t") if x.strip()]
+                if len(parts) < 2:
+                    continue
+                for alias in parts:
+                    table.setdefault(_canon_key(alias), parts[0])
+    except OSError:
+        pass
+    _alias_cache.update(key=key, map=table)
+    return table
+
+
+def canonical_tags(tags):
+    """同义归一：别名表 → 规范化 key 合并 → 每组选**确定性**的一个代表。
+
+    代表规则（同组内 `min`）：内置 `SIGNATURES` 的拼写优先，其次更短，再按小写字母序。
+    必须确定性 —— 早期版本按"迭代途中比较"选代表，同一组输入因 set 迭代序不同会给出
+    不同拼写（`ThinkPHP` / `thinkphp` 随机二选一），那种不可复现的展示比不归一更糟。
+    """
+    if not tags:
+        return []
+    aliases = _load_aliases()
+    groups = {}
+    for t in {str(x).strip() for x in tags if str(x).strip()}:
+        canon = aliases.get(_canon_key(t)) or t
+        groups.setdefault(_canon_key(canon), set()).add(canon)
+    return sorted(min(vs, key=lambda t: (t not in SIGNATURES, len(t), t.lower(), t))
+                  for vs in groups.values())
+
+
+_FIX_FILE = "config/dicts/fingerprint_fixes.txt"
+_fix_cache = {"key": None, "map": {}}
+_fixed_cache = {"fix_key": None, "rules_key": None, "rules": None}
+
+
+def _load_fixes():
+    """已证实的"烂分支"剔除表：`标签<TAB>分支正则<TAB>理由`（续221）。
+
+    为什么不用"路径型片段一律降级"那种机器判据（本轮实测后废弃）：那判据在 2430 条
+    外置规则里命中 24 条，其中 23 条是**真实产品路径**（致远oa 的 N/login.gif、
+    蓝凌-oa 的 e/icon.css、moodle 的 moodle.org/、weblogic 的 HTTP/1.1……），
+    一刀切全降级等于把这些真产品全部漏掉。社区表的质量问题只能一条一条修，修在明处。
+    文件缺失/为空 ⇒ 空表（一条都不修）。
+    """
+    from .config import resolve
+    try:
+        p = resolve(_FIX_FILE)
+        key = (str(p), p.stat().st_mtime_ns if p.exists() else 0)
+    except Exception:
+        return {}
+    if _fix_cache["key"] == key:
+        return _fix_cache["map"]
+    table = {}
+    try:
+        if p.is_file():
+            for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = [x.strip() for x in line.split("\t") if x.strip()]
+                if len(parts) >= 2:
+                    table.setdefault(parts[0], set()).add(parts[1])
+    except OSError:
+        pass
+    _fix_cache.update(key=key, map=table)
+    return table
+
+
+def _fixed_rules(rules):
+    """把 fixes 表登记的烂分支替换成永不匹配的 `(?!)`，**保留同规则里的强分支**。
+
+    为什么要替换而不是整条禁用：朗拓那条规则是"产品路径 或 js 目录下的 app 片段"二选一，
+    烂的只是后半支；整条禁掉会把前半支（真实的产品路径）一起丢掉。
+    替换后原规则对象不动（外置表是加载时编译的 Pattern），生成一份新的给 identify 用。
+    """
+    fixes = _load_fixes()
+    fk = tuple(sorted((k, tuple(sorted(v))) for k, v in fixes.items()))
+    if not fk:
+        return rules
+    if _fixed_cache["fix_key"] == fk and _fixed_cache["rules_key"] == id(rules):
+        return _fixed_cache["rules"]
+    out = {}
+    for tag, rs in (rules or {}).items():
+        bad = fixes.get(tag)
+        if not bad:
+            out[tag] = rs
+            continue
+        fixed = []
+        for r in rs:
+            pat = r[1]
+            src = str(getattr(pat, "pattern", pat))
+            flags = int(getattr(pat, "flags", 0))
+            for b in bad:
+                if b in src:
+                    src = src.replace(b, "(?!)")
+            fixed.append((r[0], re.compile(src, flags)) + tuple(r[2:]))
+        out[tag] = fixed
+    _fixed_cache.update(fix_key=fk, rules_key=id(rules), rules=out)
+    return out
+
+
+def max_tags(settings=None):
+    """单站标签上限（`fingerprint.max_tags`，默认 10）。
+
+    存在的理由：4400+ 条规则对着一个页面跑，命中十几个是常态；全塞进 `sites.tech`
+    只会把"这个站到底是什么"淹掉。超出部分**不静默丢** —— 由 `flush()` 说清丢了多少。
+    """
+    try:
+        return max(1, int(((settings or {}).get("fingerprint") or {}).get("max_tags", 10)))
+    except (TypeError, ValueError):
+        return 10
+
+
+def identify(resp, where=""):
+    """从 http_request 的响应 dict 中提取组件标签，返回**同义归一后**排序去重的列表。
 
     规则有两个来源：内置 `SIGNATURES` 与外置 `EXTRA_FILE`（`load_extra`，带状态码门控）。
     带第三元组的规则只在响应状态落在那个集合里时才参与判定。
+
+    `where`（续221）：这份响应是**主文档**（""，probe / dirscan 的路径响应）还是
+    **JS 文件内容**（"js"，jsmine 的补标）。两种在 body 规则上区别很大：
+    - JS 正文里出现"禅道 / 群晖 / next.js"这类字样，**不能证明这个站是那个产品**
+      （可能是文档、示例代码、字符串表、甚至是别人的品牌名）；真正该看的是
+      **主文档引用这个 JS 的路径**（那属于主文档的 body）。
+    - ⇒ `where="js"` 时 body 规则一律不参与，只认 headers / cookies。
+    实测：这一刀把"Sentry 登录页被打出 20+ 个标签"里的 JS 侧噪声全部消掉，
+    且不损失主文档侧的识别（JS 路径特征在主文档 body 里照样命中）。
     """
     if not resp:
         return []
@@ -515,13 +693,17 @@ def identify(resp):
     for key, val in parts.items():
         folded[key] = val.lower() if (val.isascii() or not any(c in val for c in _FOLD_EXOTIC)) else None
     tags = []
-    for source in (SIGNATURES, load_extra()[0]):
+    for _src_i, source in enumerate((SIGNATURES, _fixed_rules(load_extra()[0]))):
+        _extra = _src_i == 1                     # 外置社区表：规则质量参差，要降级
         for tag, rules in source.items():
             for rule in rules:
                 codes = rule[2] if len(rule) > 2 else None
                 if codes is not None and status not in codes:
                     continue
                 part, pattern = rule[0], rule[1]
+                if where == "js" and part == "body":
+                    continue                      # JS 正文不参与产品判定（见文档串）
+                    continue                      # 路径型无左边界分支：body 上不生效
                 flt = _lit_filter(pattern)
                 if flt:
                     ci, lits = flt
@@ -536,7 +718,7 @@ def identify(resp):
                 if re.search(pattern, parts.get(part, "")):
                     tags.append(tag)
                     break
-    return sorted(set(tags))
+    return canonical_tags(tags)
 
 
 def fetch_favicon(base_url, settings=None, timeout=None):

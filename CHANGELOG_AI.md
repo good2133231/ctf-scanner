@@ -3,6 +3,86 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续221（2026-10-19，WorkBuddy · Claude）：指纹标签治理 —— JS 不吃 body 规则 + 同义归一 + 单站上限 + 烂分支精准剔除
+
+主理人报的真站故障：`http://sentry.xxx.com`（301→200，标题 `Sign In | Sentry`）被打出 **20+ 个标签**
+—— Cloudflare ×3、next.js/nextjs、禅道、群晖-nas、群晖-diskstation、深信服、联软、华天动力oa、
+图创图书馆集群管理系统、网心云设备、kyan-监控设备、novnc、spring_cloud_config、webp_server_go、
+stagil_navigation、django、ibm-http-server……"怎么可能一个站有这么多指纹？这不就是 Sentry 吗？"
+
+### 逐条查下来的三个真因（都复现了，都不是"指纹库太大"）
+
+1. **jsmine 把 JS 文件正文喂给了全部 4400+ 条 body 规则**：`fingerprint.collect(ctx, u, _r, "js")`
+   对每个 JS 响应做 `identify(resp)`，而 `identify` 对 headers/body/cookies 无差别跑全表。
+   Sentry 的 bundle 里引用到的库名/资源名/中文 UI 词，全被打成"整站产品指纹"。
+2. **外置社区表有"路径型无左边界"烂分支**：EHole「朗拓健康医院管理系统」的规则是
+   `(?i)(?:static/mq/yaoxun_pbm_im\.js|js/app\.)`，后半支 `js/app.` 没有任何左边界 ——
+   `nextjs/app.css` 都含它 ⇒ 一个 Sentry 页面被打成"朗拓健康医院管理系统"。
+3. **同产品多 tag、无归一、无上限**：群晖-nas / 群晖-diskstation 同时出现；`sites.tech` 是并集，
+   命中多少塞多少。
+
+### 修法（四件事，全部收敛在 `scanner/fingerprint.py` 一处）
+
+- **JS 正文不吃 body 规则**：`identify(resp, where="js")`（jsmine 的补标走这一路）时，
+  body 规则一律不参与，只认 headers/cookies。产品字样在 JS 里**不能证明整站是那个产品**
+  （可能是文档/示例/字符串表）；真正的 JS 路径特征由**主文档** body 命中（`<script src=…>`）。
+  实测：这一刀消掉用户看到的全部 JS 侧噪声，主文档侧识别零损失。
+- **同义归一**：新表 `config/dicts/fingerprint_aliases.txt`（一行一个 canonical + TAB 分隔别名），
+  外加 `_canon_key()` 的规范化合并（大小写/空格/点/划/下划线差异：`next.js` == `nextjs`）。
+  代表选取**确定性**（内置拼写优先 → 最短 → 字母序）—— 早期按迭代途中比较，同一输入会因
+  set 迭代序给出不同拼写，那种不可复现的展示比不归一更糟。
+- **单站上限 + 明示**：`fingerprint.max_tags`（默认 10，DEFAULTS / 随包 settings.yaml 两处）。
+  `collect()` 的桶按来源分（doc / js），`flush()` 按"主文档优先、JS 补位"截断，
+  **丢了多少要写进日志**（"另有 N 个标签未纳入（上限 10，其中 M 个来自 JS 内容）"）——
+  用户报的故障本身就是"标签太多"，静默截断只会把故障藏成"怎么少了几个"。
+- **烂分支精准剔除**（替代被废弃的"路径型一律降级"判据）：新表
+  `config/dicts/fingerprint_fixes.txt`（`标签<TAB>分支正则<TAB>理由`），只把登记的分支替换成
+  永不匹配的 `(?!)`，**同规则里的强分支照旧生效**。已登记 3 条：朗拓的 `js/app\.`、
+  cdg/esafenet 的 `cdgserver3/.`（点未转义＝任意字符）。
+  **为什么废弃机器判据**：实测"分支含 `/` + 含 `.` + 无左边界 + 长度 ≤ 12"在 2430 条外置规则里
+  命中 24 条，其中 **23 条是真实产品路径**（致远 `N/login.gif`、蓝凌 `e/icon.css`、
+  moodle `moodle.org/`、weblogic `HTTP/1.1`、gogs `gogs.io/docs`、税控 `sys/login.do`…）——
+  一刀切全降级等于把这些真产品全部漏掉。社区表的质量问题只能逐条修，修在明处。
+
+### 实测（复现脚本 + 门禁）
+
+- 复现：主文档 `Sign In | Sentry` + `/_static/nextjs/app.css` + JS bundle ⇒
+  **修复前** `['cloudflare','webp_server_go','朗拓健康医院管理系统']`（JS 侧另 7 个），
+  **修复后** 主文档 `['cloudflare','webp_server_go']`、JS `['cloudflare']`。
+- 强分支仍在：body 含真实路径 `/static/mq/yaoxun_pbm_im.js` ⇒ 仍命中「朗拓健康医院管理系统」
+  （证明是"修分支"不是"禁规则"）。
+- 未登记标签规则**零改动**（致远/蓝凌/moodle/weblogic/群晖 的对象同一性 + 规则总数不变 + 缓存生效）。
+- `[221]` 一组 + **全量 SMOKE PASS**。
+
+### 门禁实测（§0 第 6 条 ③：本轮跑了 9 次全量，8 次红 1 次绿 —— 红的全在"我自己写的断言/文档"上）
+
+1. [221] 断言把 `Synology|webman/` 预期写成"不 weak"，实测它是 weak ⇒ 引出误伤面统计；
+2. 统计发现"路径型一律降级"在 2430 条外置规则里 24 条命中、**23 条是真产品路径**
+   ⇒ **废弃该机器判据**，改成 fixes 清单精准剔除（本轮最重要的一个转向）；
+3. fixes 第一版读 `str(pattern)`，而外置表存的是**编译后的 re.Pattern** ⇒ 分支分解全落在
+   repr 噪声上、漏判了朗拓；改成取 `.pattern` 源文本后才真正修掉（教训： Pattern 不能 str()）；
+4. `[8af]`（续127）按 `{url: set}` 旧结构断言 ⇒ 适配新的 doc/js 分桶；
+5. `[8aa]`（续122）差分组里那份**参照实现**没过归一 ⇒ 差分混入两个关注点假红；
+   参照侧也过 `canonical_tags` 后该组回到"只验前置过滤"；
+6. 误报校准组：负样本里那条"通用 SPA 首页（Next.js + antd）"**自己就是 Next.js 站点** ⇒
+   按既有口径登记为"语料自己就是它"（正确识别），判据仍是零长尾；
+7. 策略保存映射漏 `fingerprint` 段（`[158]` 那条"覆盖 = DEFAULTS 全段"当场报出名字）⇒
+   补 app.py 映射 + 策略页输入框；
+8. **脱敏判据第三次抓到泄漏，又是我们自己写进去的**：复现现场时把那个真实注册域写进了
+   CHANGELOG 与 [221] 注释 ⇒ 已按约定改成 xxx.com（域名按 §0.5 **不在此复述** ——
+   §0.5 早就点明"最容易把真名写回去的，正是写这条规矩本身与记这一轮那两段"，本轮再度应验，
+   连"记录这次泄漏"的那句话都可能成为下一次泄漏，所以这里只写形状、不写名字）；
+9. EOL：`replace_in_file` 两次把 CRLF 文件写成 LF（gui/app.py 6 行、settings.html 1 行）⇒
+   按 §9 difflib 重建，两式 numstat 逐文件相等。
+
+死锁排查（§0 第 6 条 ②）：本轮只改 fingerprint 的判定/收口与配置、页面、门禁，
+**没有新增子进程、锁、等待或重试** ⇒ 无新增死锁面。
+
+### 仍开着的一件事（不属本轮范围，但主理人问了）
+
+`sites.tech` 现在最多 10 个标签，**页面上仍是平铺一串**。若还要"一眼看出这是什么站"，
+下一轮可以做标签权重展示（主文档 > JS、内置 > 外置）或折叠次要标签。已记进 todo。
+
 ## 续220（2026-10-18，WorkBuddy · Claude）：dirmap 按指纹收敛 —— 无 -e 的字典是通用的，已认出栈的站点不喂它
 
 主理人点单："dirmap 有没有按指纹动态选择扫描？我们的指纹系统白建吗 —— php 系统用 php 后缀和

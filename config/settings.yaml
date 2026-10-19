@@ -243,6 +243,10 @@ icp:
     - name: miit
       url: https://hlwicpfwc.miit.gov.cn/icpproject_query/api/icpAbbreviateInfo/queryByCondition
       key_header: token
+# 指纹识别（续221）：单站标签上限，超出截断并明示（见 fingerprint.flush）
+fingerprint:
+  max_tags: 10
+
 hostcollide:
   # 续203：默认**开**（主理人点单）。只读 GET、请求量由 max_requests 夹住；
   # 命中按 collide:<ip> 前缀落库 ⇒ 自动归 own 口径。

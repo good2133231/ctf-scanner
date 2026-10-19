@@ -4303,6 +4303,29 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续221（2026-10-19，WorkBuddy · Claude）：指纹标签治理 —— JS 不吃 body 规则 + 同义归一 + 单站上限 + 烂分支精准剔除
+
+主理人报的真站故障：一个 Sentry 登录页被打出 20+ 个标签（Cloudflare×3、禅道、群晖×2、深信服…）。
+逐条查下来三个真因（都复现）：jsmine 把 JS 正文喂给全部 4400+ 条 body 规则；社区表有
+"路径型无左边界"烂分支（`js/app.` 命中 `nextjs/app.css` ⇒ 打出「朗拓健康医院管理系统」）；
+同产品多 tag 无归一、无上限。细节见 CHANGELOG 续221。
+
+- [x] **JS 正文不吃 body 规则**：`identify(resp, where="js")` 时 body 规则一律不参与，只认 headers/cookies
+- [x] **同义归一**：`config/dicts/fingerprint_aliases.txt` + `_canon_key()` 规范化合并；代表选取确定性
+- [x] **单站上限 + 明示**：`fingerprint.max_tags`（默认 10）；`flush()` 主文档优先、JS 补位，丢多少写日志
+- [x] **烂分支精准剔除**：`config/dicts/fingerprint_fixes.txt` 只把登记分支换成 `(?!)`，强分支照旧生效
+  （已登记 3 条；废弃了"路径型一律降级"判据 —— 它 24 条命中里 23 条是真产品路径）
+- [x] **门禁**：[221] 一组 + **SMOKE PASS**。本轮共跑 **12 次**全量（11 红 1 绿，红因全部记在
+  CHANGELOG 续221「门禁实测」：弱判据误伤真产品⇒废弃改 fixes、Pattern 不能 str()、[8af]/[8aa]
+  两组旧断言要适配新结构/新归一、策略映射漏段、**脱敏判据第三次抓到我自己写进文档的域名**）
+
+**下一轮（续221 之后）——只放未做的：**
+- [ ] **页面上把标签分个主次**（主理人问"怎么可能一个站这么多指纹"的展示侧收尾）：主文档 > JS、
+  内置 > 外置，或把次要标签折叠；`sites.tech` 现在最多 10 个仍是平铺
+- [ ] **smoke 提速专项**：`[6u]` 13 阶段端到端 46.5s + `[7w]` 305 POC/负样本校准 38.5s
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+
+
 ## 续220（2026-10-18，WorkBuddy · Claude）：dirmap 按指纹收敛 —— 无 -e 的字典是通用的，已认出栈的站点不喂它
 
 主理人点单"dirmap 能不能按指纹选字典（php 用 php+通用，别用 jsp asp；框架同理）"。

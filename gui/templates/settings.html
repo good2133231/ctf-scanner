@@ -336,6 +336,12 @@
     <label>单任务请求预算 <input name="hostcollide_max_requests" value="{{ s.hostcollide.max_requests }}"></label>
     <label>单次超时（秒） <input name="hostcollide_timeout" value="{{ s.hostcollide.timeout }}"></label>
 
+    {# 续221：指纹单站标签上限（fingerprint.max_tags）—— 超出按"主文档优先、JS 补位"截断，
+        丢多少写进任务日志。一个站被打出 20+ 个标签就是这么收住的。 #}
+    <label>单站标签上限 <input name="fingerprint_max_tags" value="{{ s.fingerprint.max_tags }}"></label>
+    <p class="muted small note">超出后按「主文档优先、JS 内容补位」截断，丢掉的个数会写进任务日志
+      （不静默）。同义标签（Cloudflare/cloudflare、群晖-nas/群晖-diskstation…）会先归一并显示。</p>
+
     {# 续211-P1-4：外部引擎配额预检（FOFA/Shodan/Quake）—— 默认开，自己只吃一次 HTTP #}
     <label class="chk"><input type="checkbox" name="extquota_enabled" value="1"
       {{ 'checked' if s.extquota.enabled }}> <b>外部引擎配额预检</b>（默认开启；FOFA /

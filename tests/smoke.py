@@ -16523,7 +16523,10 @@ expression: r0()
                     if re.search(rule[1], parts.get(rule[0], "")):
                         tags.append(tag)
                         break
-        return sorted(set(tags))
+        # 续221：参照实现也要过 canonical_tags —— 这一组只验"前置过滤不改变结果"，
+        # 归一是输出层的统一行为，参照侧不过就会把两个关注点混进同一个差分里
+        # （实测：/_next/ 语料上 nextjs 被归一成 next.js，差分立刻假红）。
+        return _fp122.canonical_tags(sorted(set(tags)))
 
     # ① 差分：同一批文本上新旧实现的**标签集合必须完全相同**。语料刻意包含：空文本、
     #    三个大小写折叠例外码点（U+0130/U+0131/U+017F —— 实测枚举 BMP 得到的全部不一致点）、
@@ -17326,18 +17329,18 @@ expression: r0()
     assert _fp127.collect(_c1, "http://t/", _R127("<title>Index of /</title>",
                                                   hdr={"Server": "nginx"})) >= 1, \
         "Server 头那条内置规则必须打上 nginx（Index of / 本身不是任何产品的判据）"
-    assert "nginx" in (_c1._tech_pending.get("http://t/") or set()), \
+    assert "nginx" in ((_c1._tech_pending.get("http://t/") or {}).get("doc") or set()),  \
         "样本多打了别的标签可以，但 nginx（Server 头那条）必须还在"
     # 续197：集合不再"恰好只有 nginx" —— 目录列表页（Index of /）在社区库里是「列目录」
     # 这个组件的判据，是被**正确识别**出来的（实测这条样本现在是 {'列目录', 'nginx'}）。
     # 钉"nginx 必须在、且这条样本确实多认出了东西"，比钉一个随字典增长而失效的等号稳。
-    assert "nginx" in _c1._tech_pending["http://t/"], _c1._tech_pending
+    assert "nginx" in (_c1._tech_pending["http://t/"].get("doc") or set()), _c1._tech_pending
     assert _fp127.collect(_c1, "http://t/", _R127("", hdr={"Server": "nginx"})) == 0, \
         "同一标签重复攒必须算 0（否则 flush 的行数与日志都会虚高）"
     # 续197：同上 —— `jquery.min.js` 在社区库里也可能命中别的组件名，所以条数不再钉等号，
     # 集合改成**超集**判据（"该认出来的必须认出来"，不禁止多认）。
     assert _fp127.collect(_c1, "http://t/", _R127("<script src=\"/a/jquery.min.js\"></script>")) \
-        >= 1 and _c1._tech_pending["http://t/"] >= {"nginx", "jquery"}
+        and {"nginx", "jquery"} <= (_c1._tech_pending["http://t/"].get("doc") or set())
     assert _fp127.collect(None, "http://t/", _R127("", hdr={"Server": "nginx"})) == 0, \
         "ctx 为 None 必须当没发生（不许抛）"
 
@@ -17463,9 +17466,12 @@ expression: r0()
     # 宝塔的通用错误页文案等），长尾 13 → 3，且剩下这 3 个是**语料自己就是它**：
     # "Apache 默认页" ⇒ apache-http、"Tomcat 默认 404" ⇒ apache-tomcat/tomcat_jk_connector
     # —— 那是正确识别不是误报，列进白名单后判据就可以收紧到**零**。
-    _NEG_SERVER127 = {"apache-http", "apache-tomcat", "tomcat_jk_connector"}
+    # 续221：再添 next.js —— 负样本里那条"通用 SPA 首页（Next.js + antd）"**自己就是**
+    # Next.js 站点（语料名就写着），命中是正确识别；同语料命中的 antd/jquery/bootstrap
+    # 分别在手写表/内置表里，不进这个集合。集合名也从"服务器默认页"改成"语料自己就是它"。
+    _NEG_SELF127 = {"apache-http", "apache-tomcat", "tomcat_jk_connector", "next.js"}
     _comm_tail = ((_hits.keys() & _ext_tags) - _hand_tags
-                  - set(_fp127.SIGNATURES) - _NEG_SERVER127)
+                  - set(_fp127.SIGNATURES) - _NEG_SELF127)
     assert not _comm_tail, \
         f"社区库在通用语料上仍有长尾误报（{len(_comm_tail)} 个）：{sorted(_comm_tail)[:8]}"
     assert _hits, "内置表一个都没命中 ⇒ 语料太干净了（jQuery/nginx 这类特征必须能认出来）"
@@ -28801,6 +28807,79 @@ expression: r0()
     assert "全部站点都认出了指纹" in _src220
     print("[220] 续220 ok: 无 -e 的 dirmap 只兜底没认出指纹的站点（php/wordpress 不喂，"
           "字典由内置扫描按指纹选）；带 -e 的老快照原样全喂；全未知照旧全喂")
+    # ------------------------------------------------------------------ [221]
+    # 续221：指纹标签治理（主理人报的真站故障：一个 Sentry 登录页被打出 20+ 个标签）。
+    #   三刀：① JS 正文不吃 body 规则 ② 外置表"路径型无左边界分支"在 body 上不生效
+    #        ③ 同义归一（别名表）+ 单站上限并明示。
+    from scanner import fingerprint as _fp221
+
+    _doc221 = {"status": 200,
+               "headers": {"Server": "cloudflare", "CF-RAY": "8a1b2c-SEA",
+                           "Content-Type": "text/html; charset=utf-8"},
+               "text": ('<!doctype html><title>Sign In | Sentry</title>'
+                        '<link rel="stylesheet" href="/_static/nextjs/app.css">'
+                        '<script src="/static/webp_server_go/bundle.js"></script>'),
+               "url": "https://sentry.xxx.com/auth/login/stone/"}
+    _js221 = {"status": 200,
+              "headers": {"Server": "cloudflare", "Content-Type": "application/javascript"},
+              "text": ("var tags=['禅道','群晖-diskstation','深信服安全感知平台','华天动力oa'];"
+                       "import next from 'next.js'; django; 'ibm-http-server'; novnc;"),
+              "url": "https://sentry.xxx.com/static/bundle.js"}
+
+    _td221 = _fp221.identify(_doc221)
+    _tj221 = _fp221.identify(_js221, where="js")
+    assert "cloudflare" in _td221 and len([t for t in _td221 if t.lower() == "cloudflare"]) == 1, _td221
+    assert not any("朗拓" in t for t in _td221), \
+        f"宽泛分支 js/app. 又把 nextjs/app.css 算成「朗拓健康医院管理系统」：{_td221}"
+    assert not any("Bot Management" in t for t in _td221), _td221
+    # JS 正文不再产出产品标签（只剩 headers 侧的 cloudflare）
+    assert _tj221 == ["cloudflare"], f"JS 正文不该打出产品标签：{_tj221}"
+    # 同义归一：群晖-nas / 群晖-diskstation 只能剩一个「群晖」
+    _both221 = _fp221.canonical_tags(["群晖-nas", "群晖-diskstation", "Synology DSM"])
+    assert _both221 == ["群晖"], _both221
+    assert _fp221.canonical_tags(["Cloudflare Bot Management", "cloudflare", "CF"]) == ["cloudflare"]
+    assert _fp221.canonical_tags(["next.js", "nextjs"]) == ["next.js"]
+    assert _fp221.canonical_tags(["禅道", "zentao"]) == ["禅道"]
+    # 规范化合并：别名表没收录的，靠 _canon_key（大小写/空格/点划差异）；
+    # 代表取**内置表里的拼写**（这里是内置的小写 thinkphp）—— 确定性，不靠迭代序
+    assert _fp221.canonical_tags(["ThinkPHP", "think_php", "thinkphp"]) == ["thinkphp"]
+    assert _fp221.canonical_tags(["thinkphp", "ThinkPHP"]) == ["thinkphp"]
+    # 烂分支剔除（fixes 表）必须**只剔烂分支、不废整条规则**：
+    # 同一规则的强分支 static/mq/yaoxun_pbm_im.js 仍要能命中（否则就是"禁规则"不是"修规则"）
+    _strong221 = {"status": 200, "headers": {"Content-Type": "text/html"},
+                  "text": '<script src="/static/mq/yaoxun_pbm_im.js"></script>',
+                  "url": "http://x/"}
+    assert _fp221.identify(_strong221) == ["朗拓健康医院管理系统"], _fp221.identify(_strong221)
+    _rules221 = _fp221.load_extra()[0]
+    _fixed221 = _fp221._fixed_rules(_rules221)
+    # 未登记的标签规则**零改动**（对象同一性）—— 修在明处，不搞一刀切
+    for _t221 in ("致远oa", "蓝凌-oa", "moodle", "weblogic", "群晖-nas"):
+        if _t221 in _rules221:
+            assert _fixed221.get(_t221) is _rules221.get(_t221), f"{_t221} 的规则被意外改动"
+    # 规则总数不变（替换分支不是删规则）
+    assert sum(len(v) for v in _rules221.values()) == sum(len(v) for v in _fixed221.values())
+    assert _fp221._fixed_rules(_rules221) is _fixed221, "修复结果要缓存（别每次重建 2430 条）"
+    # 上限：flush 按"主文档优先 + JS 补位"截断，丢多少要说出来
+    _c221 = type("C", (), {})()
+    _c221.settings = {"fingerprint": {"max_tags": 3}}
+    _c221._tech_pending = {"http://x/": {"doc": {"a", "b", "c", "d"}, "js": {"e", "f"}}}
+    _c221.results = {"sites": [{"url": "http://x/", "tech": ""}]}
+    _c221.task_id = 0
+    _lg221 = []
+
+    class _L221:
+        def info(self, m):
+            _lg221.append(str(m))
+
+        def warning(self, m):
+            _lg221.append(str(m))
+
+    _n221, _new221 = _fp221.flush(_c221, _L221(), "jsmine")
+    _tech221 = _c221.results["sites"][0]["tech"].split(",")
+    assert len(_tech221) == 3, _tech221
+    assert not ({"e", "f"} & set(_tech221)), f"超上限时 JS 侧标签该先丢：{_tech221}"
+    assert any("未纳入" in m and "上限 3" in m for m in _lg221), _lg221
+    print("[221] 续221 ok: JS 正文不吃 body 规则｜烂分支按 fixes 清单精准剔除（强分支仍生效、未登记规则零改动）｜同义归一（群晖-nas/diskstation→群晖、CF/Cloudflare Bot Management→cloudflare）｜上限截断按主文档优先并明示")
     print("SMOKE PASS")
 
 

@@ -1,0 +1,12 @@
+# 指纹同义归一表（续221）
+# 格式：一行一个 canonical，后面 TAB 分隔是它的别名；命中的别名一律显示成 canonical。
+# 只收"同一个产品的不同叫法"，**不收不同产品** —— 收宽了会把真信号合掉（那是另一种故障）。
+# 来源：主理人报的真站误报（Sentry 登录页被打出 20+ 标签）+ 社区表同产品多 tag 的实测对账。
+# 规范化合并（大小写/空格/点/划/下划线差异，如 next.js == nextjs）由 canonical_tags() 做，不写在这里。
+cloudflare	Cloudflare Bot Management	cloudflare CDN	CF
+群晖	群晖-nas	群晖-diskstation	群晖NAS	Synology DSM	synology
+next.js	nextjs	Next.js
+禅道	zentao	ZenTao
+深信服安全感知平台	深信服	sangfor
+华天动力oa	华天动力
+图创图书馆集群管理系统	图创图书馆
