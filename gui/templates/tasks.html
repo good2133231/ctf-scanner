@@ -196,7 +196,10 @@
           {# 续211-P2-10：具名取消原因（`tasks.stop_reason`，枚举见 scanner/cancelcause.py）。
              人话 error 行照旧在详情页，这一颗是给"一眼看出为什么没跑完"用的。 #}
           {% if t.stop_reason %}<span class="badge" title="具名取消原因：{{ t.stop_reason }}">{{ cause_zh.get(t.stop_reason, t.stop_reason) }}</span>{% endif %}</td>
-        <td class="progress"><div class="bar"><i style="width: {{ t.progress }}%"></i></div>{{ t.progress }}%</td>
+        <td class="progress"><div class="bar"><i style="width: {{ t.progress }}%"></i></div>{{ t.progress }}%
+          {# 续230：长阶段（subdomain 等）跑十分钟时进度就是不动 —— 把当前阶段写出来，
+             别让人以为"卡死在 0%"。 #}
+          {% if t.status == 'running' and t.current_stage %}<span class="muted small">· {{ t.current_stage }}</span>{% endif %}</td>
         <td class="muted small">{{ t.created_at }}</td>
         {# 续36：与详情页「目标与配置」同一口径（`run_duration_text`，见 gui/app.py 的 tasks 路由）：
            运行中会显示「运行中，已 X」，被强杀未对账会标注「尾段未计入」，老任务显示 `-` #}

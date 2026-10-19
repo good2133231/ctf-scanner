@@ -4303,6 +4303,20 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续230（2026-10-19，WorkBuddy · Claude）：追加执行不许把父任务进度打回 0 + 列表显示当前阶段
+
+- [x] 真 bug：`runner.run()` 无条件 `progress=0` ⇒ append/resume（追加/重截/Host 碰撞）
+      把已 100% 的父任务打回 0；改成 fresh 才归零、其余从当前进度按 [_base,100] 推进
+- [x] 长阶段停在 0% 的观感：任务列表在百分比旁显示 `· 当前阶段`
+- [x] 核对：截图里的是根任务 + 「子任务」是展开按钮（行内展开已生效，空态也展开）
+- [x] 全量 SMOKE PASS（259 组，7 分 03 秒）
+
+**下一轮（续230 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过（依赖真 runner 数据）
+- [ ] smoke 分组并行（先做组间隔离；见 CHANGELOG 续229 之后的讨论）
+
+
 ## 续229（2026-10-19，WorkBuddy · Claude）：FOFA 429（缺节流）+ 子任务行内展开 + 拓展送探模拟
 
 - [x] **FOFA 429 定位**：不是请求头/IP，是**循环反查没节流**（FOFA 按 key 计频率）；

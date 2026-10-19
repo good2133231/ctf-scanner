@@ -326,7 +326,19 @@ class PipelineRunner:
     def run(self):
         ctx = self.ctx
         stages = [s for s in ctx.stages if s in STAGE_REGISTRY]
-        db.update_task(ctx.task_id, status="running", progress=0)
+        # 续230：**追加 / 续跑不许把进度打回 0**。父任务已跑到 100%，点一次「追加到本任务」
+        # 进度条从 0 重新爬，看起来就是"父任务的进度被清零了"（主理人 2026-10-19 的截图）。
+        # 只有 fresh 归零；append/resume 从当前进度起，按剩余区间 [_base, 100] 推进。
+        _row0 = db.get_task(ctx.task_id)
+        try:
+            _mode = str((_row0["run_mode"] if "run_mode" in _row0.keys() else "") or "fresh")
+        except (TypeError, KeyError):
+            _mode = "fresh"
+        try:
+            _base = 0 if _mode == "fresh" else max(0, min(100, int(_row0["progress"] or 0)))
+        except (TypeError, ValueError):
+            _base = 0
+        db.update_task(ctx.task_id, status="running", progress=_base)
         total = max(1, len(stages))
         stopped = False
         failed = []
@@ -343,7 +355,8 @@ class PipelineRunner:
             if ctx.stopped():
                 stopped = True
                 break
-            db.update_task(ctx.task_id, current_stage=sname, progress=int(i * 100 / total))
+            db.update_task(ctx.task_id, current_stage=sname,
+                           progress=_base + int((100 - _base) * i / total))
             if pg is not None:
                 pg.stage(i + 1, total, STAGE_LABELS.get(sname, (sname,))[0])
             ctx.logger.info(f"===== 阶段 {i + 1}/{total}：{sname} =====")
@@ -388,7 +401,7 @@ class PipelineRunner:
         th = ctx.throttle
         budget_exhausted = bool(th and th.exhausted() and not ctx.stop_event.is_set())
         if stopped:
-            done = int((i + 1) * 100 / total) if stages else 0
+            done = (_base + int((100 - _base) * (i + 1) / total)) if stages else _base
             # **刻意不清 `current_stage`**（续29）：它是"最后进入的阶段"，也就是断点续扫的断点
             # （`resume_stages` 按它切片）。原来的 `current_stage=""` 会把断点抹掉 ——
             # "被停止 / 预算耗尽"恰恰是最需要续跑的两类收场。

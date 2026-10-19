@@ -29551,6 +29551,56 @@ expression: r0()
     assert ".pv-inline-row" in _css229
     print("[229] 续229 ok: FOFA 有 min_interval 节流（循环反查不再裸连发）+ 429 按 Retry-After 退避重试一次"
           "且报错说清是「发太快」；子任务改行内展开（空结果也展开）、统计仍是预览框")
+    # ------------------------------------------------------------------ [230]
+    # 续230：追加/续跑不许把进度打回 0（父任务 100% 点「追加到本任务」后仍从 100 起）；
+    # fresh 仍必须从 0 起（别把归零行为改坏）。用假阶段跑真 PipelineRunner。
+    from scanner.runner import STAGE_REGISTRY as _SR230, PipelineRunner as _PR230
+    _seen230 = []
+    _t230 = 0
+
+    class _St230:
+        name = "probe"
+
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+        def run(self):
+            _seen230.append(int(db.get_task(_t230)["progress"] or 0))
+
+    _real_st230 = _SR230.get("probe")
+    _SR230["probe"] = _St230
+    try:
+        _t230 = db.create_task("smoke230-prog", "http://p230.test/", ["probe"], {})
+        _wd230 = LOGS_DIR / f"task_{_t230}_smoke230"
+        _wd230.mkdir(parents=True, exist_ok=True)
+        db.update_task(_t230, progress=100, run_mode="append")
+        _ctx230 = StageContext(_t230, "smoke230-append", parse_lines(["http://p230.test/"]),
+                               ["probe"], {}, settings, _wd230,
+                               get_logger(f"task-{_t230}", _wd230 / "task.log"))
+        _PR230(_ctx230).run()
+        assert _seen230 == [100], f"append 把进度打回了 0：{_seen230}"
+        assert int(db.get_task(_t230)["progress"] or 0) == 100
+        # fresh：仍然从 0 起（归零只对全新任务生效）
+        _seen230.clear()
+        db.update_task(_t230, progress=55, run_mode="fresh")
+        _ctx230b = StageContext(_t230, "smoke230-fresh", parse_lines(["http://p230.test/"]),
+                                ["probe"], {}, settings, _wd230,
+                                get_logger(f"task-{_t230}", _wd230 / "task.log"))
+        _PR230(_ctx230b).run()
+        assert _seen230 == [0], f"fresh 应从 0 起：{_seen230}"
+    finally:
+        if _real_st230 is not None:
+            _SR230["probe"] = _real_st230
+        else:
+            _SR230.pop("probe", None)
+        if _t230:
+            db.delete_task(_t230, backup=False)
+    _tk230 = (ROOT / "gui" / "templates" / "tasks.html").read_text(
+        encoding="utf-8", errors="replace")
+    assert "t.current_stage" in _tk230 and "· {{ t.current_stage }}" in _tk230, \
+        "任务列表没把当前阶段写出来（长阶段停在 0% 时看着像卡死）"
+    print("[230] 续230 ok: 追加/续跑从当前进度起（不再打回 0），fresh 仍归零；"
+          "任务列表进度旁显示当前阶段")
     print("SMOKE PASS")
 
 

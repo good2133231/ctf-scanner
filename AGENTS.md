@@ -817,6 +817,10 @@ ctf-scanner/
   （默认 3s，`_rate_wait()` 的 `now`/`sleep` 可注入以便测试）。429 的语义是"你发太快"，
   按 `Retry-After` 退避重试一次后再判失败，**错误文案必须指到 `fofa.min_interval`**，
   不许说成"接口坏了"，也不许一遇错就 break 掉整轮反查。VirusTotal 那路早已同款。
+- **进度是单调的（续230）**：只有 `run_mode == fresh` 才能把 `progress` 归零；
+  `append` / `resume`（追加到本任务、重截、Host 碰撞补跑、续跑）必须从当前进度起，
+  按 `[_base, 100]` 推进 —— **起跑、阶段边界、被停止三处都要用 `_base`**（漏一处中途就掉回 0）。
+  长阶段（subdomain 等）进度本来就不动，任务列表必须把 `current_stage` 写在百分比旁边。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /
