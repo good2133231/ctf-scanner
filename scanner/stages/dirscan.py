@@ -388,11 +388,22 @@ class DirscanStage(Stage):
             else:
                 lang_arg = self._dirmap_accepts_lang_arg(script)
                 if not lang_arg:
+                    groups, _fp_skipped = self._dirmap_targets(groups, lang_arg)
                     ctx.logger.info(
-                        "[dirscan] 这份 dirmap 没有 -e：按它自己的 dirmap.conf 跑一轮"
-                        "（不再按技术栈分组；框架补充扫描仍会补）")
-                ctx.logger.info(f"[dirscan] dirmap 处理 {len(sites)} 个站点 …")
-                entries = self._run_dirmap(script, groups, tool, lang_arg=lang_arg, py=py)
+                        "[dirscan] 这份 dirmap 没有 -e：字典是它自己 dirmap.conf 里那份**通用**"
+                        "字典（不分技术栈）⇒ 只兜底没认出指纹的站点"
+                        + (f"，{_fp_skipped} 个已认出栈的站点不喂它"
+                           "（php 站吃 php+通用字典是内置扫描按指纹做的事）"
+                           if _fp_skipped else ""))
+                _fp_n = sum(len(v) for v in groups.values())
+                if not _fp_n:
+                    ctx.logger.info("[dirscan] 全部站点都认出了指纹 ⇒ 本轮不跑 dirmap，"
+                                    "目录由内置扫描按指纹选字典")
+                    entries = []
+                else:
+                    ctx.logger.info(f"[dirscan] dirmap 处理 {_fp_n} 个站点 …")
+                    entries = self._run_dirmap(script, groups, tool,
+                                               lang_arg=lang_arg, py=py)
                 used_dirmap = bool(entries)
                 if used_dirmap:
                     ctx.logger.info(f"[dirscan] dirmap 输出 {len(entries)} 条")
@@ -525,6 +536,23 @@ class DirscanStage(Stage):
             kind = _dict_kind(s.get("tech"), s.get("url")) if tech_aware else ""
             groups.setdefault(kind, []).append(s)
         return groups
+
+    @staticmethod
+    def _dirmap_targets(groups, lang_arg):
+        """无 `-e` 的 dirmap 该喂哪些站点（续220）。
+
+        这份 dirmap 没有 `-e` 时，字典是它自己 `dirmap.conf` 里那份**通用**字典
+        （本机快照 5715 条，不分技术栈、没有 jsp/asp 分册）⇒ 把已认出指纹的站点喂给它
+        纯属浪费请求。"php 站只吃 php + 通用字典、别跑 jsp/asp"这件事由**内置扫描**
+        （框架桶 + 语言桶，`_builtin_scan`）按指纹做，dirmap 只兜底"没认出栈"的站点。
+
+        返回 `(要喂的 groups, 被跳过数)`。带 `-e` 的老快照按原样全喂（语言分组是它的参数）。
+        """
+        if lang_arg:
+            return groups, 0
+        keep = {k: v for k, v in (groups or {}).items() if not k}
+        skipped = sum(len(v) for k, v in (groups or {}).items() if k)
+        return keep, skipped
 
     def _dict_paths_for(self, kind, cfg, fw=""):
         """给出某站点要用的字典文件列表（**越具体的排越前**）。

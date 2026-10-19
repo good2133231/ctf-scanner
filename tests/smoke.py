@@ -28778,6 +28778,29 @@ expression: r0()
 用户会以为还要勾：{_seg219[:160]}"
     print("[219] 续219 ok: Host 碰撞默认就做（策略默认开 + 建任务默认勾 + 不勾也真跑）；"
           "三处 GUI 文案不再写「默认关」")
+    # ------------------------------------------------------------------ [220]
+    # 续220：dirmap 按指纹收敛 —— 无 `-e` 的 dirmap 字典是**通用**的（5715 条、不分技术栈），
+    #   把已认出指纹的站点喂给它纯属浪费请求；"php 站只吃 php+通用字典"由内置扫描按指纹做。
+    from scanner.stages.dirscan import DirscanStage as _ds220
+    _g220 = {"php": [{"url": "http://a/index.php", "tech": "php"}],
+             "wordpress": [{"url": "http://b/", "tech": "wordpress"}],
+             "": [{"url": "http://c/", "tech": ""}]}
+    _keep220, _sk220 = _ds220._dirmap_targets(_g220, lang_arg=False)
+    assert set(_keep220) == {""} and _sk220 == 2, (_keep220, _sk220)
+    assert [x["url"] for x in _keep220[""]] == ["http://c/"]
+    _keep220b, _sk220b = _ds220._dirmap_targets(_g220, lang_arg=True)
+    assert _sk220b == 0 and {k: len(v) for k, v in _keep220b.items()} == \
+        {"php": 1, "wordpress": 1, "": 1}, "带 -e 的老快照必须原样全喂（语言分组是它的参数）"
+    # 全未知 ⇒ 一个不跳过、照旧全喂（"只兜底"不许退化成"不扫"）
+    _keep220c, _sk220c = _ds220._dirmap_targets({"": [{"url": "http://c/"}]}, lang_arg=False)
+    assert _sk220c == 0 and len(_keep220c[""]) == 1, (_keep220c, _sk220c)
+    # 调用点真的用了它，且"全认出指纹"时必须明说不跑 dirmap（§0 第 10 条）
+    _src220 = (ROOT / "scanner" / "stages" / "dirscan.py").read_text(
+        encoding="utf-8", errors="replace")
+    assert "self._dirmap_targets(groups, lang_arg)" in _src220, "函数定义了却没接到调用点上"
+    assert "全部站点都认出了指纹" in _src220
+    print("[220] 续220 ok: 无 -e 的 dirmap 只兜底没认出指纹的站点（php/wordpress 不喂，"
+          "字典由内置扫描按指纹选）；带 -e 的老快照原样全喂；全未知照旧全喂")
     print("SMOKE PASS")
 
 
