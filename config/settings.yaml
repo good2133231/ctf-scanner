@@ -17,6 +17,10 @@ gui:
   notes: false
   host: 0.0.0.0
   port: 5000
+  # 续233（主理人规则）：起动时端口被占 ⇒ 直接结束占用者、占回首选端口（不再顺延换端口）。
+  # 护栏见 scanner/portguard.py（绝不杀自己 / PID 1 / 身份不明）；临时关：环境变量
+  # CTFSCANNER_GUI_KILL_PORT=0。每次杀进程都会连 PID + 命令行写进启动日志。
+  kill_port_on_conflict: true
   # ---- 部署到服务器（续47，见 docs/deploy-https.md）----
   # 三项默认都是最保守值，要用必须显式改；改完需重启控制台才生效。
   # allowed_hosts：Host 白名单的显式扩展（空 = 只认 127.0.0.1/localhost/::1）。

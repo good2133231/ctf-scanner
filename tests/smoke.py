@@ -29621,6 +29621,43 @@ expression: r0()
     _btn232 = _td232.split('api_scan_ext', 1)[1].split("送去探测</button>", 1)[0]
     assert "新建一个子任务" in _btn232, "按钮 title 没写默认行为是建子任务"
     print("[232] 续232 ok: 拓展页送探默认新建子任务（「追加到本任务」改为显式勾选）")
+    # ------------------------------------------------------------------ [233]
+    # 续233：端口占用处置（主理人规则）—— 起动时端口被占 ⇒ 直接结束占用者、占回首选端口。
+    # 全程用桩（find/kill/sleep 注入），门禁里绝不真杀任何进程。
+    from scanner import portguard as _pg233
+    from scanner.config import DEFAULTS as _DEF233
+    import signal as _sig233
+    _ev233, _findn233 = [], {"n": 0}
+
+    def _find233(_port):
+        _findn233["n"] += 1
+        return [(4242, "./run_gui.py")] if _findn233["n"] <= 2 else []
+
+    def _kill233(pid, sig):
+        _ev233.append((pid, sig))
+
+    _fr233, _kd233, _sk233 = _pg233.kill_occupiers(
+        5000, find=_find233, kill=_kill233, sleep=lambda _s: None, deadline=5)
+    assert _fr233 and _sk233 == [], (_fr233, _kd233, _sk233)
+    assert (_4242 := (4242, _sig233.SIGTERM)) in _ev233 and \
+        (4242, _sig233.SIGKILL) in _ev233, _ev233      # 先优雅退出，没反应才升级
+    # 自我保护：PID 1 / 身份不明 ⇒ 不杀；正常进程 ⇒ 杀（审计里有它）
+    _fr2, _kd2, _sk2 = _pg233.kill_occupiers(
+        5000, find=lambda _p: [(1, "systemd"), (99999, ""), (424242, "nginx")],
+        kill=_kill233, sleep=lambda _s: None, deadline=0.1)
+    assert (1, "PID 1 / 系统进程，不杀") in _sk2, _sk2
+    assert (99999, "cmdline 读不到（身份不明，不盲杀）") in _sk2, _sk2
+    assert any(p == 424242 for p, _c in _kd2), (_kd2, _sk2)
+    # 开关：配置默认 True；显式 False 或环境变量 CTFSCANNER_GUI_KILL_PORT=0 ⇒ 关
+    assert _pg233.enabled({"gui": {"kill_port_on_conflict": True}}) is True
+    assert _pg233.enabled({"gui": {"kill_port_on_conflict": False}}) is False
+    assert _pg233.enabled({}, env={"CTFSCANNER_GUI_KILL_PORT": "0"}) is False
+    # 接线：serve() 里真的调用了 kill_occupiers；配置缺省值是 True
+    _ga233 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert "portguard.kill_occupiers(port, log=say)" in _ga233, "serve() 没接端口占用处置"
+    assert _pg233 is not None and _DEF233["gui"]["kill_port_on_conflict"] is True
+    print("[233] 续233 ok: 端口被占 ⇒ 先 SIGTERM 等 1.5s 再 SIGKILL（绝不杀自己/PID1/身份不明）；"
+          "gui.kill_port_on_conflict 默认开、CTFSCANNER_GUI_KILL_PORT=0 可关；serve() 已接线")
     print("SMOKE PASS")
 
 

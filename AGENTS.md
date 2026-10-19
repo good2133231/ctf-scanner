@@ -825,7 +825,12 @@ ctf-scanner/
   `elapsed_seconds`；长阶段进度本来就不动，任务列表必须把 `current_stage` 写在百分比旁边。
 - **送探默认建子任务（续232）**：拓展页「送去探测」的「追加到本任务」**默认不勾** ——
   点按钮就新建一个子任务（独立进度/结果页，任务列表「子任务」行内展开）；勾上才折叠进本任务。
-  别把默认值改回"追加"（那会让任务树里永远没有子任务，主理人的任务层级就空了）。
+- **端口占用处置（续233，主理人规则）**：GUI 起动时首选端口被占 ⇒ 走
+  `scanner/portguard.kill_occupiers()` **直接结束占用者、占回首选端口**（SIGTERM 等 1.5s →
+  SIGKILL；`/proc` 解析占用者，无子进程）。**绝不杀**自己 / PID 1 / cmdline 读不到的进程；
+  每次杀都连 PID+命令行进启动日志。开关 `gui.kill_port_on_conflict`（默认 true，策略页有
+  勾选框，POST 映射必须带上）与 `CTFSCANNER_GUI_KILL_PORT=0`；杀不动/找不到占用者 ⇒
+  退回续150 的"自动顺延"。只作用于 GUI 监听端口，别把这条规则带到 fixture / 队列 / 探测目标上。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /

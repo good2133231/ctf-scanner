@@ -64,7 +64,7 @@ from scanner.log import (attach_access_log, attach_server_log, boot_logger,
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
-from scanner import diffview, edgeauth, fingerprint, dictstats, keystore, webpath
+from scanner import diffview, edgeauth, fingerprint, dictstats, keystore, webpath, portguard
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
@@ -4710,6 +4710,8 @@ def create_app():
                             "behind_proxy": bool(_g0.get("behind_proxy", False)),
                             "secure_cookie": bool(_g0.get("secure_cookie", False)),
                             "web_path_random": bool(_g0.get("web_path_random", True)),
+                            # 续233：页面上有勾选框（端口被占 ⇒ 杀占用者、占回端口）
+                            "kill_port_on_conflict": f.get("gui_kill_port") == "1",
                             # 续154：这一项**页面上有勾选框**了（用户点单"暂时取消 401，
                             # 可以让我在配置里面选择要不要开启"），所以取表单值；仍与 `_g0` 合并，
                             # 免得 `enabled` 之外的键被整段重写抹掉。
@@ -5968,6 +5970,15 @@ def serve(start_queue=True):
     host, port = gui_bind(_settings)
     # 续150：端口被占用时自动顺延重试（用户点单"如果端口自己给我实现重试功能"）；
     # 一个都挑不到才按原样报占用并退出（绝不静默换到看不见的地方）。
+    # 续233（主理人规则）：端口被占 ⇒ **直接结束占用者，端口归本程序**（不再顺延换端口）。
+    # 护栏与开关见 scanner/portguard.py：绝不杀自己 / PID 1 / 身份不明；gui.kill_port_on_conflict
+    # 或 CTFSCANNER_GUI_KILL_PORT=0 可关；杀不动才退回下面的"自动顺延"。
+    if portguard.enabled(_settings) and not _port_free(host, port):
+        _pf233, _pk233, _ps233 = portguard.kill_occupiers(port, log=say)
+        if _pk233:
+            say(f"[*] 端口 {port} 原被占用，已按规则结束 {len(_pk233)} 个占用进程，端口归本程序")
+        for _pid, _why in _ps233:
+            say(f"[!] 端口 {port} 的占用者 PID {_pid} 未能结束：{_why}")
     port, _port_note150 = _pick_port(host, port)
     s["host"], s["port"] = host, port
     if _port_note150:

@@ -882,6 +882,9 @@
        顶栏那颗「显示说明」是**本机**临时开关（cookie），优先级高于这一项 —— 想"看一眼就关掉"
        不必改策略。实现方式见 style.css 的 `body:not(.notes-on) .note`。 #}
     <label>显示页面说明文字（各页灰色小字） <input type="checkbox" name="gui_notes" value="1"{% if s.gui.notes %} checked{% endif %}></label>
+    <label class="chk"><input type="checkbox" name="gui_kill_port" value="1"{% if s.gui.kill_port_on_conflict %} checked{% endif %}>
+      起动时端口被占 ⇒ <b>直接结束占用者、占回该端口</b>（不杀自己 / 系统进程 / 身份不明者；
+      每次都连 PID+命令行写进启动日志。临时关也可设环境变量 CTFSCANNER_GUI_KILL_PORT=0）</label>
     <p class="muted small note">{{ edge_note }}　以上四项改完要重启控制台才生效。</p>
     <p class="muted small note">{{ console_note }}</p>
 

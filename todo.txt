@@ -4303,6 +4303,24 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续233（2026-10-19，WorkBuddy · Claude）：端口占用新规则 —— 直接结束占用者，端口归本程序
+
+主理人规则：新服务器上端口被占 ⇒ 直接杀掉占用者、占回首选端口（不再顺延换端口）。
+
+- [x] `scanner/portguard.py`：`/proc` 找 LISTEN 占用者（无子进程）；SIGTERM 等 1.5s →
+      还活着才 SIGKILL；绝不杀自己 / PID 1 / 身份不明；每次杀连 PID+命令行进启动日志
+- [x] 开关：`gui.kill_port_on_conflict`（默认 true）+ `CTFSCANNER_GUI_KILL_PORT=0` 临时关；
+      关掉退回续150 的"自动顺延"；杀不动也顺延并说明原因
+- [x] `serve()` 已接线（杀完横幅说明）；只作用于 GUI 监听端口
+- [x] `[233]` 门禁（全桩注入，绝不真杀）：TERM→KILL 升级 / 三类自我保护 / 开关三态 / 接线
+- [x] 全量 SMOKE PASS（261 组，6 分 55 秒；a 红 `[145]` POST 映射漏 gui.kill_port_on_conflict，b 绿）
+
+**下一轮（续233 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] smoke 分组并行（先做组间隔离）
+
+
 ## 续232（2026-10-19，WorkBuddy · Claude）：送探默认新建子任务（「追加到本任务」改显式勾选）
 
 主理人手动从拓展页送探"依然不行"的真因：表单里「追加到本任务」**默认勾着**（续150 留下的），
