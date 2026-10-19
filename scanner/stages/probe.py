@@ -162,6 +162,12 @@ def probe_candidates(ctx, candidates):
                     "length": j.get("content_length"),
                     "server": j.get("webserver") or "",
                     "tech": ",".join(tech) if isinstance(tech, list) else str(tech),
+                    # 续223：httpx 的标签是**外置工具**给的（没有主文档/JS 之分）⇒
+                    # src=doc、origin=external；页面会把它们排在内置标签之后。
+                    # 存储键用紧凑的 `t`（DB/页面共用；`identify(detail=True)` 对外仍是 `tag`）。
+                    "tech_detail": (json.dumps(
+                        [{"t": str(t), "src": "doc", "origin": "external"}
+                         for t in tech], ensure_ascii=False) if isinstance(tech, list) else ""),
                     "source": "httpx",
                 })
         else:
@@ -185,6 +191,10 @@ def probe_candidates(ctx, candidates):
                         port = p.port
                     except ValueError:
                         port = None
+                    # 续223：probe 的根响应是**主文档**；detail 里带 builtin/external，
+                    # 页面据此把内置标签排前面。空列表也写 `[]`（不是空串）——
+                    # 页面能区分"没有标签"与"老行没有来源信息"。
+                    _det = identify(resp, detail=True)
                     return {
                         "url": resp.get("url") or u, "host": p.hostname,
                         "port": str(port or (443 if p.scheme == "https" else 80)),
@@ -192,7 +202,11 @@ def probe_candidates(ctx, candidates):
                         "title": title,
                         "length": resp.get("length"),
                         "server": (resp.get("headers") or {}).get("Server", ""),
-                        "tech": ",".join(identify(resp)), "source": "builtin",
+                        "tech": ",".join(d["tag"] for d in _det),
+                        "tech_detail": json.dumps(
+                            [{"t": d["tag"], "src": d["src"], "origin": d["origin"]}
+                             for d in _det], ensure_ascii=False),
+                        "source": "builtin",
                     }
             return None
 

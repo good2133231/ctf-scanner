@@ -76,6 +76,11 @@ class _LabHandler(BaseHTTPRequestHandler):
     """所有路径（含不存在的）都回 200 + 同一页样板 —— 这就是"软 404"最坏形态。"""
 
     protocol_version = "HTTP/1.1"
+    # 续223（实测）：keep-alive 下响应头与正文是两次小 write，不关 Nagle 就会撞上
+    # **delayed ACK** —— 每条请求固定多等 ~40ms，305 条 POC 校准实测 34.2s。
+    # 关掉后 **1.2s（28x）**，命中基线一字不变（仍 3 条：dashboard/unidoc/v10）。
+    # 这是校准靶场自己的 socket 选项，不改被测模板的任何语义。
+    disable_nagle_algorithm = True
 
     def _reply(self, body=True):
         payload = LAB_BODY if body else b""

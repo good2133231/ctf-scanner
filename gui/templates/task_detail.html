@@ -358,8 +358,13 @@
           <td{% if not rd.title %} title="{{ no_title_hint }}"{% endif %}>{{ rd.title or '-' }}{% if rd.jumped and rd.final_url %}<br>
                 <span class="muted small" title="{{ rd.note }}">→ {{ idn_display(rd.final_url) }}</span>{% endif %}{% if s._dup_group %}<button type="button" class="btn-mini" title="同标题的站点聚合在一起，默认收起（被收起的条数在此报出）" onclick="var t=document.querySelectorAll('tr[data-dup-of=\'{{ s.id }}\']'),any=false;for(var i=0;i<t.length;i++){t[i].hidden=!t[i].hidden;any=any||t[i].hidden}this.textContent=(any?'展开同标题':'收起同标题')+'（{{ s._dup_group|length }} 条）'">展开同标题（{{ s._dup_group|length }} 条）</button>{% endif %}</td>
 
-          <td>{% for x in (s.tech or '').split(',') if x.strip() %}
-              <span class="tech-tag">{{ x.strip() }}</span>{% else %}<span class="muted">-</span>{% endfor %}</td>
+          {# 续223：标签分主次 —— 主文档+内置排前面，其余折叠成「+N」；title 写来源 #}
+          <td>{% set tv = tech_view(s.tech, s.tech_detail) %}
+            {% for x in tv.primary %}<span class="tech-tag" title="{{ tv.labels[x] }}">{{ x }}</span>{% endfor %}
+            {% if tv.more %}<details class="tech-more"><summary class="muted small">+{{ tv.more|length }}</summary>
+              {% for x in tv.more %}<span class="tech-tag" title="{{ tv.labels[x] }}">{{ x }}</span>{% endfor %}
+            </details>{% endif %}
+            {% if not tv.total %}<span class="muted">-</span>{% endif %}</td>
           <td class="muted">{{ s.server or '-' }}</td>
           <td class="shot-cell">{% if s.shot %}<img class="shot-thumb" loading="lazy" alt="站点截图"
               data-full="{{ url_for('shot_file', task_id=task.id, name=s.shot.rsplit('/', 1)[-1]) }}"

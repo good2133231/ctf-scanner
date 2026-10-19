@@ -780,6 +780,17 @@ ctf-scanner/
   每行命中的来源写 `dirs.dict_src`：内置层用字典文件名（`dirs_php`）、外部源用 `来源名/分类名`
   （`dirsearch/api`），**只放名字、绝不放绝对路径**（页面与报告是交付物）；策略页只读展示时
   路径仍过 `rel_display(mask_outside=True)`。
+- **指纹标签的来源与主次（续223）**：`fingerprint.identify(resp, where, detail=True)` 回
+  `{tag,src,origin}`；`collect()` 的桶是 `{tag: origin}`（doc/js），`flush()` 与 `sites.tech`
+  同一条 UPDATE 写 `sites.tech_detail`（JSON，紧凑键 `t`）。**旧 detail 原样保留**（一次补标
+  不许把老标签的 JS/内置来源洗掉），完全没有来源才落 `unknown`。页面/报告只认
+  `fingerprint.tech_groups()`（主文档+内置 > … > 未知，**前 3 个主标签、其余折叠 +N**）——
+  别在模板/report 里各写一份排序。
+- **字典一览/预览的边界（续223）**：`scanner/dictstats.py` 只回**条数**与**最多 200 行 / 64 KB**
+  （默认 100 行）；`resolve_builtin()` 只认 `settings["dicts"]` 的键，`resolve_external()` 只认
+  `dirscan.dict_sources` 的下标 + 根目录下的 `.txt` 分类（`picks` 过滤、`resolve()` 后父目录
+  必须仍是配置根）。**禁止**把请求参数当路径拼接 —— 预览接口不是任意文件读取，大字典也
+  不许整份下发（前端扛不住）。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /

@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from . import cdn as cdn_mod, db
+from . import fingerprint
 from .utils import run_cmd, site_redirect, to_unicode
 
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -391,8 +392,12 @@ def generate(task_id, full=False):
             # 「跳转后」（续112-B）：3xx 那一跳本身的标题就是字面的「301 Moved Permanently」，
             # 看不出落地页是什么；两格文本由 `_site_cells` 统一拼（与 GUI 同一口径）。
             _st_txt, _ti_txt = _site_cells(s)
+            # 续223：技术栈列只写主标签，次要的折成「(+N)」—— 报告是交付物，
+            # 一行里堆十几个标签等于没有信息（与页面 `tech_view` 同一套排序）。
+            _tech_txt = fingerprint.tech_summary(
+                s["tech"], s["tech_detail"] if "tech_detail" in s.keys() else "")
             lines.append(f"| {_c(_idn_url(s['url']))} | {_c(_st_txt)} | {_c(_ti_txt)} | "
-                         f"{_c(s['tech'] or '-')} | {_c(s['server'] or '-')} |")
+                         f"{_c(_tech_txt)} | {_c(s['server'] or '-')} |")
         lines.append("")
     if ports:
         lines.append("## " + _cap_title("开放端口与服务", len(ports), CAP_PORTS))
@@ -609,7 +614,9 @@ def generate_html(task_id, full=False):
         p.append(_html_table(
             ["URL", "状态", "标题", "技术栈", "Server"],
             [[_h(_idn_url(s["url"])), _h(_site_cells(s)[0]), _h(_site_cells(s)[1]),
-              _h(s["tech"] or "-"), _h(s["server"] or "-")] for s in sites[:CAP_SITES]]))
+              _h(fingerprint.tech_summary(
+                  s["tech"], s["tech_detail"] if "tech_detail" in s.keys() else "")),
+              _h(s["server"] or "-")] for s in sites[:CAP_SITES]]))
     if ports:
         p.append("<h2>" + _cap_title("开放端口与服务", len(ports), CAP_PORTS) + "</h2>")
         p.append(_html_table(

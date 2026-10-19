@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}字典预览 - {{ name }}{% endblock %}
+{% block content %}
+<p class="muted small">
+  <a href="{{ url_for('settings_page') }}">← 返回策略配置</a>
+  ｜ <b>{{ name }}</b>：共 <b>{{ total }}{{ '+' if total_truncated else '' }}</b> 条。
+  本页只显示前 {{ lines|length }} 行（硬上限 200 行 / 64 KB）——
+  完整字典永远不随页面下发，十七万条的公共词表也不会把浏览器打挂。
+</p>
+{% if truncated %}<p class="muted small">后面还有内容（已截断）。</p>{% endif %}
+<pre class="mono small" style="max-height:70vh;overflow:auto;white-space:pre-wrap">{{ lines|join('\n') }}</pre>
+{% endblock %}

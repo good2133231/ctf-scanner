@@ -3,6 +3,72 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续223（2026-10-19，WorkBuddy · Claude）：指纹分主次 + smoke 提速 + 外部字典 GUI 编辑/一览
+
+主理人三件事一起做：① 指纹标签页面分主次（主文档 > JS、内置 > 外置，或折叠）；
+② smoke 提速（`[6u]` / `[7w]`）；③ 外部字典源 GUI 编辑入口 + Web 端显示详细字典
+（并问"前端会不会扛不住"—— 答案：不整份下发，只给条数 + 受限预览）。
+
+### ① 指纹标签分主次（`scanner/fingerprint.py`）
+
+- `identify(resp, where, detail=True)` 现在回 `[{"tag","src","origin"}]`：`src=doc/js`、
+  `origin=builtin/external`。`flat` 结果与旧版逐字符一致；同义归一仍走 `canonical_details()`
+  （同组只要有一个内置拼写就算内置）。
+- `sites.tech_detail` 新列（SCHEMA + `_COLUMN_PATCHES`）：`collect()` 的桶从 `set` 升级为
+  `{tag: origin}`，`flush()` 与 `tech` **同一条 UPDATE** 落库；老标签已有 detail **原样保留**
+  （一次补标不许把它的 JS/内置来源洗成主文档/未知），完全没有来源才落 `unknown`。
+- 页面/报告共用 `fingerprint.tech_groups()`：主文档+内置 > 主文档+外置 > JS+内置 > JS+外置 >
+  未知，**前 3 个主标签**直接展示、其余折叠成「+N」；`title` 写「主文档·内置」这类来源。
+  报告 Markdown/HTML 的技术栈列改成 `nginx, php (+3)`。
+- probe 的内置探测写 `doc/builtin|external`；httpx 分支写 `doc/external`（外置工具的标签）。
+
+### ② smoke 提速（都是实测，不是估算）
+
+- **`[7w]` 本地校准靶场关 Nagle**（`tools/calibrate_pocs.py::_LabHandler.disable_nagle_algorithm`）：
+  HTTP/1.1 keep-alive 下响应头与正文是两次小 write，撞 delayed ACK，每条请求固定多等 ~40ms。
+  305 条 POC 校准 **34.15s → 1.21s（28x）**，命中基线一字不变（仍 dashboard/unidoc/v10 三条）。
+- **`[6u]` portscan 收窄**：默认 `mode=full` 会把本机其它服务全扫出来（本机 14 个站点，
+  5000/5011/5003/631…），probe/screenshot/jsmine/dirscan/vulnscan 逐个乘上去 —— 同一份代码
+  换台机器耗时差 2 倍以上。`[6u]` 钉的是"15 个阶段能串起来"、不是全端口发现（专门用例已有），
+  故把 `full_ports` 钉成 `8765`：本机 **101.5s → 10.4~11.6s**（两次实测）、站点 14→1、请求 7306→523，
+  断言（done / error 空 / 断点清 / dirs≥2 / vulns≥1 / 站外 0）全部不变。
+
+### ③ 外部字典 GUI 编辑 + 字典一览/受限预览（`scanner/dictstats.py` 新增）
+
+- 策略页的外部字典源从"只读徽章"改成**可编辑表格**：来源名/路径/picks/after 四列；
+  清空「来源名」= 删除该行；路径留空 = 沿用**同下标**旧值（项目外绝对路径不在页面回显，
+  想改就整条重填）。POST 走 `_parse_dict_sources()`，校验失败带原话退回表单。
+- 「字典一览」列出内置/外部每份字典的**条数**（分块计数，按 `(路径,mtime,size)` 缓存），
+  每行一个「前 100 行」链接 → `/dict_preview`。
+- **前端不会扛不住**：页面只下发条数；预览接口最多 200 行 / 64 KB（默认 100 行），
+  17.8 万条的公共词表也不会整份进浏览器。预览只认 `settings` 里登记的键
+  （`dictstats.resolve_builtin` / `resolve_external`），`../`、子目录、符号链接逃逸、
+  未登记分类一律 404 —— 它不是任意文件读取。
+
+### 本轮抓出来的真问题
+
+1. **`replace_in_file` 多次"报成功但内容丢失"**（同一文件连续编辑时用旧快照写回）：
+   本轮至少 5 处（probe 的 httpx 分支、db 的补列、report 的 Markdown 列、fingerprint 的
+   `_added`、旧断言），全部靠"改完立刻 grep"抓回来。**结论：每次编辑后必须复查目标行**。
+2. `tech_groups()` 只吃 JSON 字符串，测试直接传 list ⇒ 来源全丢；改成两种都接。
+3. `flush()` 给老标签补 `unknown` 时覆盖了已有的 JS 来源（把 `js/builtin` 洗成 `doc/unknown`）；
+   改成"旧 detail 原样保留，只有完全没有来源才 unknown"。
+4. `tech_detail` 存储键 `t` 与写入侧 `tag` 不一致（DB 侧读不到）；统一成紧凑键 `t`。
+5. `[222]` 的脱敏变异只桩了 `gui/app.py::rel_display`，新编辑器走
+   `scanner.utils.rel_display` ⇒ 变异失效；两处一起桩。
+6. 旧断言按 `set` 读 `_tech_pending` / 按"无新增不写库"读 `flush`：桶升级为 dict、
+   首次来源也算一次有意义的写 —— `[127]` 两处适配（仍保持"没新增不打日志"）。
+
+### 门禁实测
+
+- **全量 SMOKE PASS：255 个断言组，11:36:50 → 11:44:24（7 分 34 秒）**；本轮共跑 **12 次**
+  全量（`logs/_smoke223a…l.txt`）：3 次全组通过（j / k / l，k/l 带 SMOKE PASS），9 次红。
+  红因逐条记在上面"真问题"与本节：`[127]` 桶结构、`[222]` 变异桩、`[223]` 的
+  next.js 归一 / more 顺序 / `_db223` 未定义 / 旧 client 会话、`[224]` 预览默认 100 行。
+- 9 个改动文件的 `git diff --numstat` 与 `--ignore-cr-at-eol --numstat` **逐文件相等**。
+- 死锁排查（§0 第 6 条 ②）：本轮**没有新增子进程、锁、等待或重试** —— `[7w]` 只关了一个
+  socket 选项；`[6u]` 只是把端口列表变短；`dictstats` 的计数/预览都是**有界分块读**
+  （1 MB / 64 KB），不会把大字典整份读进内存。
 ## 续222（2026-10-19，WorkBuddy · Claude）：目录扫描接外部字典源 + 每行标注「来源字典」
 
 目标：把第三方字典目录（如 dirsearch 的 `dicts/`，一个分类一个 `.txt`）**零入仓**接进来

@@ -96,8 +96,12 @@
         <td{% if not rd.title %} title="{{ no_title_hint }}"{% endif %}>{{ rd.title or '-' }}{% if rd.jumped and rd.final_url %}<br>
               <span class="muted small" title="{{ rd.note }}">→ {{ idn_display(rd.final_url) }}</span>{% endif %}{% if s.dup %}<button type="button" class="btn-mini" title="同标题的站点聚合在这里，默认收起（被收起的条数报在按钮上，入库一条没动）" onclick="var t=document.querySelectorAll('tr[data-dup-of=&quot;{{ s.id }}&quot;]'),a=false;for(var i=0;i<t.length;i++){t[i].hidden=!t[i].hidden;a=a||t[i].hidden}this.textContent=(a?'展开同标题':'收起同标题')+'（{{ s.dup }} 条）'">{{ '收起同标题' if show_all else '展开同标题' }}（{{ s.dup }} 条）</button>{% endif %}</td>
 
-        <td>{% for t in (s.tech or '').split(',') if t.strip() %}
-              <span class="tech-tag">{{ t.strip() }}</span>{% else %}<span class="muted">-</span>{% endfor %}</td>
+        <td>{% set tv = tech_view(s.tech, s.tech_detail) %}
+          {% for t in tv.primary %}<span class="tech-tag" title="{{ tv.labels[t] }}">{{ t }}</span>{% endfor %}
+          {% if tv.more %}<details class="tech-more"><summary class="muted small">+{{ tv.more|length }}</summary>
+            {% for t in tv.more %}<span class="tech-tag" title="{{ tv.labels[t] }}">{{ t }}</span>{% endfor %}
+          </details>{% endif %}
+          {% if not tv.total %}<span class="muted">-</span>{% endif %}</td>
         <td class="muted small">{{ s.server or '-' }}</td>
         <td class="muted small mono">{{ (s.favicon or '-')[:12] }}</td>
         <td class="muted small">

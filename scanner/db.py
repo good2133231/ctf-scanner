@@ -112,7 +112,10 @@ CREATE TABLE IF NOT EXISTS sites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
   url TEXT NOT NULL, host TEXT, port TEXT,
-  status INTEGER, title TEXT, length INTEGER, server TEXT, tech TEXT, source TEXT,
+  status INTEGER, title TEXT, length INTEGER, server TEXT, tech TEXT,
+  tech_detail TEXT DEFAULT '',      -- 续223：标签来源（JSON：[{t,src,origin}]，src=doc/js、
+                                    --   origin=builtin/external/unknown；页面据此分主次）
+  source TEXT,
   favicon TEXT DEFAULT '',
   redirect_url TEXT DEFAULT '', redirect_status INTEGER DEFAULT 0,
   redirect_title TEXT DEFAULT '', shot_error TEXT DEFAULT '',
@@ -407,6 +410,8 @@ _COLUMN_PATCHES = {
                    # `icon_hash="123"` / `cert="x.com"` / `title="xxx"`，拓展域名页"语法"列展示
                    "note": "TEXT DEFAULT ''"},
     "sites": {"favicon": "TEXT DEFAULT ''",
+              # 续223：标签来源（页面/报告据此分主次；老行空串 ⇒ 按原顺序取前 N 个）
+              "tech_detail": "TEXT DEFAULT ''",
               # 站点截图的**相对项目根**路径（logs/task_x/shots/xxx.png）
               "shot": "TEXT DEFAULT ''",
               # 续112-B「跳转后」：3xx 站点跟随重定向后的最终 url / 状态 / 标题。
@@ -1450,14 +1455,14 @@ def list_task_urls(task_id, only_params=True, limit=0, site_url=""):
 def insert_sites(task_id, sites):
     if not sites:
         return
-    _exec("INSERT INTO sites(task_id,url,host,port,status,title,length,server,tech,source,"
-          "favicon,redirect_url,redirect_status,redirect_title) "
-          "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    _exec("INSERT INTO sites(task_id,url,host,port,status,title,length,server,tech,"
+          "tech_detail,source,favicon,redirect_url,redirect_status,redirect_title) "
+          "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
           [(task_id, s.get("url", ""), s.get("host", ""), str(s.get("port", "") or ""),
             s.get("status"), s.get("title", ""), s.get("length"), s.get("server", ""),
-            s.get("tech", ""), s.get("source", ""), s.get("favicon", ""),
-            s.get("redirect_url", ""), int(s.get("redirect_status") or 0),
-            s.get("redirect_title", "")) for s in sites],
+            s.get("tech", ""), s.get("tech_detail", ""), s.get("source", ""),
+            s.get("favicon", ""), s.get("redirect_url", ""),
+            int(s.get("redirect_status") or 0), s.get("redirect_title", "")) for s in sites],
           many=True)
 
 
@@ -1730,13 +1735,59 @@ def list_ext_probes(domains):
     return out
 
 
-def merge_sites_tech(task_id, updates):
+def _norm_tech_detail(raw):
+    """把 `tech_detail` 列的 JSON 文本读成 `[{t,src,origin}]`（坏值一律当空）。"""
+    try:
+        arr = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(arr, list):
+        return []
+    out = []
+    for x in arr:
+        if isinstance(x, dict) and x.get("t"):
+            out.append({"t": str(x["t"]),
+                        "src": str(x.get("src") or "doc"),
+                        "origin": str(x.get("origin") or "unknown")})
+    return out
 
+
+def _merge_tech_detail(old_items, new_items):
+    """按 tag 合并来源，并排序（doc+builtin 优先）—— 与 `fingerprint.tech_groups()` 同口径。"""
+    by = {}
+    for x in list(old_items or []) + list(new_items or []):
+        t = str(x.get("t") or "")
+        if not t:
+            continue
+        cur = by.get(t)
+        src = str(x.get("src") or "doc")
+        origin = str(x.get("origin") or "unknown")
+        if cur is None:
+            by[t] = {"t": t, "src": src, "origin": origin}
+            continue
+        if cur["src"] == "js" and src == "doc":
+            cur["src"] = "doc"                     # 主文档证据更强
+        if cur["origin"] != "builtin" and origin == "builtin":
+            cur["origin"] = "builtin"              # 内置证据更强
+        elif cur["origin"] == "unknown" and origin in ("builtin", "external"):
+            cur["origin"] = origin
+    rank = lambda x: (0 if x["src"] == "doc" else 1,          # noqa: E731 - 局部纯函数
+                      0 if x["origin"] == "builtin" else
+                      (1 if x["origin"] == "external" else 2),
+                      x["t"].lower(), x["t"])
+    return sorted(by.values(), key=rank)
+
+
+def merge_sites_tech(task_id, updates, details=None):
     """把新识别出的组件标签**并集**进 `sites.tech`，返回 `(改动的站点数, 库里没这些 URL 的清单)`。
 
     `updates` 是 `{站点 URL: [标签, …]}`。**并集而不是覆盖**：`sites.tech` 里已经有
     probe 阶段从**根响应**打上的标签（nginx / python …），覆盖等于把实况抹掉。
-    只写真有新增的行（一条 UPDATE 都不许多发）。
+    只写真有新增（或来源信息真有变化）的行（一条 UPDATE 都不许多发）。
+
+    `details`（续223）是 `{URL: [{"tag","src","origin"}, …]}`：与 `tech` **同一个 UPDATE**
+    落进 `tech_detail`（页面/报告据此分主次）。按 tag 与库里旧值合并（老标签保留），
+    优先级 doc > js、builtin > external > unknown。不传 ⇒ 不动 `tech_detail`。
 
     ⚠️ 这是"读-改-写"三步，中间没有事务：同一任务里只有 dirscan / jsmine 两个阶段会调
     `fingerprint.flush()`，而阶段是**串行**的，所以窗口不存在；**跨任务**更新的行必然不同
@@ -1746,8 +1797,14 @@ def merge_sites_tech(task_id, updates):
     items = {u: v for u, v in items.items() if u and v}
     if not items:
         return 0, []
+    det = {}
+    for u, arr in (details or {}).items():
+        u = str(u or "")
+        if u:
+            det[u] = [x for x in (arr or []) if isinstance(x, dict) and x.get("t")]
     marks = ",".join("?" for _ in items)
-    rows = _query(f"SELECT id, url, tech FROM sites WHERE task_id=? AND url IN ({marks})",
+    rows = _query(f"SELECT id, url, tech, tech_detail FROM sites "
+                  f"WHERE task_id=? AND url IN ({marks})",
                   tuple([task_id]) + tuple(items))
     found = {r["url"]: r for r in rows}
     missing = [u for u in items if u not in found]
@@ -1762,11 +1819,18 @@ def merge_sites_tech(task_id, updates):
             if t not in seen:
                 seen.add(t)
                 merged.append(t)
-        if merged == cur:
-            continue                    # 没有新增 ⇒ 一行都不写
-        batch.append((",".join(merged), task_id, url))
+        old_detail = _norm_tech_detail(row["tech_detail"])
+        if url in det:
+            new_detail = _merge_tech_detail(old_detail, det[url])
+            new_detail_json = json.dumps(new_detail, ensure_ascii=False)
+        else:
+            new_detail_json = row["tech_detail"] or ""
+        if merged == cur and new_detail_json == (row["tech_detail"] or ""):
+            continue                    # 标签与来源都没变 ⇒ 一行都不写
+        batch.append((",".join(merged), new_detail_json, task_id, url))
     if batch:
-        _exec("UPDATE sites SET tech=? WHERE task_id=? AND url=?", batch, many=True)
+        _exec("UPDATE sites SET tech=?, tech_detail=? WHERE task_id=? AND url=?",
+              batch, many=True)
     return len(batch), missing
 
 

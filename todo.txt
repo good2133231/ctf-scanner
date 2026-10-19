@@ -4303,6 +4303,33 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续223（2026-10-19，WorkBuddy · Claude）：指纹分主次 + smoke 提速（[6u]/[7w]）+ 外部字典 GUI 编辑/一览
+
+主理人点单三件事，全部落地。细节、踩坑与实测见 CHANGELOG 续223。
+
+- [x] **指纹分主次**：`identify(detail=True)` 带 `src=doc/js`、`origin=builtin/external`；
+      `sites.tech_detail` 新列（SCHEMA + 老库补列）；`collect/flush` 与 `tech` 同条 UPDATE 落库；
+      页面/报告共用 `fingerprint.tech_groups()`（主文档+内置 > … > 未知，前 3 个主标签、其余折叠 +N）
+- [x] **smoke 提速 [7w]**：本地校准靶场关 Nagle（`disable_nagle_algorithm`）——
+      305 条 POC 校准 **34.15s → 1.21s（28x）**，命中基线仍是那 3 条
+- [x] **smoke 提速 [6u]**：`portscan.full_ports` 收窄到夹具端口 8765（全端口行为已有专门用例）——
+      本机 **101.5s → 10.4~11.6s**、站点 14→1、请求 7306→523；断言（done/error/断点/dirs/vulns/站外 0）不变
+- [x] **外部字典 GUI 编辑**：策略页表格增删改（清空来源名=删除、路径留空=沿用同下标旧值）；
+      项目外绝对路径不回显（value 留空 + 脱敏 placeholder）
+- [x] **字典一览/受限预览**：`scanner/dictstats.py` 分块计数（缓存按 mtime/size）+ 每份字典
+      只给条数与「前 100 行」（硬上限 200 行 / 64 KB）；`/dict_preview` 只认配置里登记过的键，
+      路径穿越/符号链接/未登记分类一律 404
+- [x] **门禁**：[223]（来源/排序/落库/页面/报告 + 变异）+ [224]（编辑/统计/预览/穿越）+
+      **全量 SMOKE PASS（255 组，7 分 34 秒）**
+- [x] 工具踩坑：`replace_in_file` 对混合 EOL 文件**多次出现"报成功但内容丢失"**（本轮 5 处以上）
+      ⇒ 每次编辑后必须重新 grep 核实；EOL/引号仍按 HEAD 逐行还原，9 个文件两式 numstat 逐文件相等
+
+**下一轮（续223 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] 若主理人需要：字典预览支持"按分类批量预览/导出"（当前每次只看一份、最多 200 行）
+- [ ] 指纹 `tech_detail` 的统计视图（任务内"多少站是内置识别 / 多少站只靠 JS"）—— 数据已落库，尚未展示
+
+
 ## 续222（2026-10-19，WorkBuddy · Claude）：目录扫描接外部字典源 + 每行标注「来源字典」
 
 第三方字典目录（如 dirsearch 的 `dicts/`）零入仓接进来，每条命中要看得出是哪份字典猜出来的。
@@ -4322,9 +4349,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 
 **下一轮（续222 之后）——只放未做的：**
 - [ ] **页面上把指纹标签分个主次**（续221 挂账）：主文档 > JS、内置 > 外置，或折叠次要标签
-- [ ] **smoke 提速专项**：`[6u]` 13 阶段端到端 46.5s + `[7w]` 305 POC/负样本校准 38.5s
 - [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
-- [ ] 若主理人需要：外部字典源的 GUI 编辑入口（现在是只读展示，增删改仍编辑 settings.yaml）
 
 
 ## 续221（2026-10-19，WorkBuddy · Claude）：指纹标签治理 —— JS 不吃 body 规则 + 同义归一 + 单站上限 + 烂分支精准剔除

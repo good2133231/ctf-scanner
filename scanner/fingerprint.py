@@ -28,6 +28,7 @@ favicon 指纹（P1-1 / P3-1，参考项目 `_get_favicon_md5` 的启发）：
 该理由已不成立（`mmh3.py` 自带已知向量自检），故补齐，否则 `fofa.py` 无从提问。
 """
 import hashlib
+import json
 import re
 import threading
 from pathlib import Path
@@ -403,16 +404,32 @@ def load_extra(path=None):
 _TECH_LOCK = threading.Lock()    # 桩 ctx（回归里手搓的）没带锁时用它，宁可串行也不留静默并发
 
 
+def _origin_map(v):
+    """桶里的 value 归一成 `{tag: origin}`。兼容旧调用方塞进来的 `set`（origin=unknown）。"""
+    if isinstance(v, dict):
+        return {str(k): str(o or "unknown") for k, o in v.items() if str(k)}
+    return {str(x): "unknown" for x in (v or []) if str(x)}
+
+
+def _detail_key(items):
+    """detail 列表比较键：只比 `(tag, src, origin)`，顺序无关（DB 侧会统一排序）。"""
+    return tuple(sorted((str(x.get("t")), str(x.get("src")), str(x.get("origin")))
+                        for x in (items or []) if isinstance(x, dict) and x.get("t")))
+
+
 def collect(ctx, site_url, resp, where=""):
     """把一份已在手的响应里识别出的标签**攒进 ctx**（不写库、不发请求），返回新增标签数。
 
     攒到阶段末尾由 `flush()` 一次合并：dirscan 一个站点要打几百条路径，逐条 UPDATE
     会把写锁踩成瓶颈；而且同一条路径的标题往往和根响应重复。
+
+    续223：桶里存 `{tag: "builtin"/"external"}` 而不是裸 set —— 页面要把"主文档+内置"
+    排前面、JS/外置折叠，来源必须在这里留下。同一标签后来被内置认出来 ⇒ 升级为 builtin。
     """
     if ctx is None or not resp or not site_url:
         return 0
-    tags = identify(resp)
-    if not tags:
+    details = identify(resp, where=where, detail=True)
+    if not details:
         return 0
     pend = getattr(ctx, "_tech_pending", None)
     if pend is None:
@@ -422,10 +439,19 @@ def collect(ctx, site_url, resp, where=""):
     with lock:
         # 续221：桶按来源分。超上限截断时**主文档优先**，JS 侧的标签先丢 ——
         # 同一个产品，主文档认不出来而 JS 里有个字样，后者显然更不可信。
-        bucket = pend.setdefault(str(site_url), {"doc": set(), "js": set()})
-        part = bucket.setdefault(src, set())
-        n = len([t for t in tags if t not in part])
-        part.update(tags)
+        bucket = pend.setdefault(str(site_url), {"doc": {}, "js": {}})
+        for _k in ("doc", "js"):
+            if not isinstance(bucket.get(_k), dict):
+                bucket[_k] = _origin_map(bucket.get(_k))
+        part = bucket.setdefault(src, {})
+        n = 0
+        for d in details:
+            t, o = d["tag"], d["origin"]
+            if t not in part:
+                part[t] = o
+                n += 1
+            elif o == "builtin" and part.get(t) != "builtin":
+                part[t] = "builtin"
     return n
 
 
@@ -444,29 +470,56 @@ def flush(ctx, logger=None, where=""):
     new_tags = set()
     sites = ctx.results.get("sites") or []
     by_url = {str(s.get("url")): s for s in sites}
-    updates = {}
+    updates, details = {}, {}
     hidden_js = hidden_over = 0
+    _added = False                     # 只有**真新增标签**才值得打一句日志（续223）
     cap = max_tags(getattr(ctx, "settings", None))
     for url, bucket in pend.items():
-        doc_tags = set((bucket or {}).get("doc") or set())
-        js_tags = set((bucket or {}).get("js") or set()) - doc_tags
-        # 主文档优先、JS 补位；仍超上限 ⇒ 只取前 cap 个，**丢了多少必须说出来**
-        ordered = sorted(doc_tags) + sorted(js_tags)
-        if len(ordered) > cap:
-            hidden_js += len([t for t in ordered[cap:] if t in js_tags])
-            hidden_over += len(ordered) - cap
-            ordered = ordered[:cap]
+        doc_map = _origin_map((bucket or {}).get("doc"))
+        js_map = _origin_map((bucket or {}).get("js"))
+        for t in list(js_map):
+            if t in doc_map:
+                js_map.pop(t)              # 主文档已认，JS 的同一标签不重复展示
+        # 续223 优先级：doc+builtin > doc+外置 > js+builtin > js+外置 > 来源未知。
+        # 这与页面 `tech_groups()` 的排序**同一套**（§5.14 单产地）。
+        pairs = []
+        for src_name, m in (("doc", doc_map), ("js", js_map)):
+            for origin in ("builtin", "external", "unknown"):
+                for t in sorted(x for x, o in m.items() if o == origin):
+                    pairs.append({"t": t, "src": src_name, "origin": origin})
+        # 仍超上限 ⇒ 只取前 cap 个，**丢了多少必须说出来**
+        if len(pairs) > cap:
+            hidden_js += len([p for p in pairs[cap:] if p["src"] == "js"])
+            hidden_over += len(pairs) - cap
+            pairs = pairs[:cap]
+        ordered = [p["t"] for p in pairs]
         new_tags |= set(ordered)
         cur = [t for t in str((by_url.get(url) or {}).get("tech") or "").split(",") if t]
         add = [t for t in ordered if t not in cur]
-        if not add:
-            continue
-        updates[url] = sorted(set(cur) | set(ordered))
+        _added = _added or bool(add)
+        merged = sorted(set(cur) | set(ordered))
+        try:
+            _old_detail = json.loads((by_url.get(url) or {}).get("tech_detail") or "[]")
+        except (TypeError, ValueError):
+            _old_detail = []
+        _old_meta = {str(x.get("t")): x for x in _old_detail
+                     if isinstance(x, dict) and x.get("t")}
+        # 老标签已有 detail ⇒ **原样保留**（一次补标不许把它的 JS/内置来源洗成主文档/未知）；
+        # 完全没有来源信息（httpx / 更早轮次）才落 unknown，页面就不会把它当"主文档+内置"。
+        _have = {p["t"] for p in pairs}
+        details[url] = pairs + [
+            _old_meta[t] if t in _old_meta else {"t": t, "src": "doc", "origin": "unknown"}
+            for t in merged if t not in _have]
+        if not add and _detail_key(details[url]) == _detail_key(_old_detail):
+            continue                     # 标签与来源都没变 ⇒ 一行都不写
+        updates[url] = merged
         # 内存里同步：本阶段之后的下一阶段读的就是这份快照
         if url in by_url:
-            by_url[url]["tech"] = ",".join(updates[url])
-    n, missing = db.merge_sites_tech(ctx.task_id, updates) if updates else (0, [])
-    if logger and (n or missing):
+            by_url[url]["tech"] = ",".join(merged)
+            by_url[url]["tech_detail"] = json.dumps(details[url], ensure_ascii=False)
+    n, missing = (db.merge_sites_tech(ctx.task_id, updates, details)
+                  if updates else (0, []))
+    if logger and (missing or hidden_over or _added):
         bits = [f"补标 {n} 个站点"] if n else ["没有新标签"]
         if new_tags:
             bits.append("新增标签：" + "、".join(sorted(new_tags)))
@@ -573,6 +626,34 @@ def canonical_tags(tags):
                   for vs in groups.values())
 
 
+def canonical_details(tags_with_origin):
+    """同义归一 + **保留来源**：`[(tag, origin)]` -> `[(canonical, origin)]`（按代表排序）。
+
+    代表选取与 `canonical_tags()` 完全同一套规则（否则页面上的标签会和 `sites.tech`
+    对不上）；同组里只要有一个拼写来自内置表，整组就算内置 —— 内置证据更强。
+    `origin` 取 `builtin` / `external` / `unknown`。
+    """
+    pairs = [(str(t).strip(), str(o or "unknown"))
+             for t, o in (tags_with_origin or []) if str(t).strip()]
+    if not pairs:
+        return []
+    aliases = _load_aliases()
+    groups = {}
+    for t, o in pairs:
+        canon = aliases.get(_canon_key(t)) or t
+        groups.setdefault(_canon_key(canon), {}).setdefault(canon, set()).add(o)
+    out = []
+    for vs in groups.values():
+        rep = min(vs, key=lambda t: (t not in SIGNATURES, len(t), t.lower(), t))
+        origins = set()
+        for os_ in vs.values():
+            origins |= os_
+        origin = "builtin" if "builtin" in origins else (
+            "external" if "external" in origins else "unknown")
+        out.append((rep, origin))
+    return sorted(out)
+
+
 _FIX_FILE = "config/dicts/fingerprint_fixes.txt"
 _fix_cache = {"key": None, "map": {}}
 _fixed_cache = {"fix_key": None, "rules_key": None, "rules": None}
@@ -656,8 +737,75 @@ def max_tags(settings=None):
         return 10
 
 
-def identify(resp, where=""):
+_SRC_RANK = {"doc": 0, "js": 1}
+_ORI_RANK = {"builtin": 0, "external": 1, "unknown": 2}
+
+
+def _tag_rank(tag, meta):
+    """标签优先级：主文档+内置 > 主文档+外置 > JS+内置 > JS+外置 > 未知。"""
+    m = meta.get(tag) or {}
+    return (_SRC_RANK.get(str(m.get("src") or ""), 2),
+            _ORI_RANK.get(str(m.get("origin") or ""), 3), str(tag).lower(), str(tag))
+
+
+def tech_groups(tech, detail="", max_primary=4):
+    """页面/报告共用的标签分主次（续223）：返回 `{primary, more, labels, total}`。
+
+    - 优先级与 `flush()` 落库的 `tech_detail` 顺序同一套（doc+builtin → … → unknown）；
+    - `max_primary` 个主标签直接展示，其余进 `more`（页面折叠成「+N」、报告写「(+N)」）；
+    - `tech_detail` 缺失（老行 / httpx）⇒ 退化成"按 `sites.tech` 原顺序取前 N 个"，
+      `labels` 写「来源未知」—— **不把猜的来源画成事实**。
+    """
+    tags = [str(t).strip() for t in str(tech or "").split(",") if str(t).strip()]
+    tags = list(dict.fromkeys(tags))
+    meta = {}
+    if isinstance(detail, (list, tuple)):
+        arr = list(detail)             # 调用方已解析好（测试/内部复用）—— 别再去 json.loads
+    else:
+        try:
+            arr = json.loads(detail or "[]")
+        except (TypeError, ValueError):
+            arr = []
+    if isinstance(arr, list):
+        for x in arr:
+            if isinstance(x, dict) and x.get("t"):
+                meta[str(x["t"])] = {"src": str(x.get("src") or ""),
+                                     "origin": str(x.get("origin") or "")}
+    try:
+        cap = max(1, int(max_primary))
+    except (TypeError, ValueError):
+        cap = 4
+    ordered = sorted(tags, key=lambda t: _tag_rank(t, meta))
+    # 按优先级取前 N 个直接展示（主文档优先；老行/httpx 没有 detail 时就是原顺序前 N 个，
+    # 不会整列变空），其余折叠 —— 这就是"分主次"的**唯一**实现。
+    primary, more = ordered[:cap], ordered[cap:]
+    labels = {}
+    for t in ordered:
+        m = meta.get(t) or {}
+        s = {"doc": "主文档", "js": "JS"}.get(m.get("src"), "来源未知")
+        o = {"builtin": "内置", "external": "外置"}.get(m.get("origin"), "")
+        labels[t] = f"{s}·{o}" if o else s
+    return {"primary": primary, "more": more, "labels": labels, "total": len(ordered)}
+
+
+def tech_summary(tech, detail="", max_primary=3):
+    """报告用的单行摘要：`nginx, php (+3)`；空标签回 `-`。"""
+    g = tech_groups(tech, detail, max_primary)
+    if not g["total"]:
+        return "-"
+    s = ", ".join(g["primary"])
+    if g["more"]:
+        s += f" (+{len(g['more'])})"
+    return s
+
+
+def identify(resp, where="", detail=False):
     """从 http_request 的响应 dict 中提取组件标签，返回**同义归一后**排序去重的列表。
+
+    `detail=True`（续223）：返回 `[{"tag", "src", "origin"}]` 而不是标签字符串 ——
+    `src` 是 `doc` / `js`（这份响应是主文档还是 JS 正文），`origin` 是 `builtin` /
+    `external`（命中来自内置表还是外置社区表）。页面/报告据此把主文档 + 内置的标签
+    排前面、其余折叠；不改变 `sites.tech` 的既有内容与顺序（`flat` 结果与旧版一致）。
 
     规则有两个来源：内置 `SIGNATURES` 与外置 `EXTRA_FILE`（`load_extra`，带状态码门控）。
     带第三元组的规则只在响应状态落在那个集合里时才参与判定。
@@ -692,10 +840,13 @@ def identify(resp, where=""):
     folded = {}
     for key, val in parts.items():
         folded[key] = val.lower() if (val.isascii() or not any(c in val for c in _FOLD_EXOTIC)) else None
-    tags = []
+    found = {}                       # tag -> "builtin" / "external"（先到先得 = 内置优先）
     for _src_i, source in enumerate((SIGNATURES, _fixed_rules(load_extra()[0]))):
-        _extra = _src_i == 1                     # 外置社区表：规则质量参差，要降级
+        origin = "builtin" if _src_i == 0 else "external"
         for tag, rules in source.items():
+            if tag in found:
+                # 内置已经认了；同一标签不必再跑一遍外置规则（续223，纯省时间不改结果）
+                continue
             for rule in rules:
                 codes = rule[2] if len(rule) > 2 else None
                 if codes is not None and status not in codes:
@@ -703,7 +854,6 @@ def identify(resp, where=""):
                 part, pattern = rule[0], rule[1]
                 if where == "js" and part == "body":
                     continue                      # JS 正文不参与产品判定（见文档串）
-                    continue                      # 路径型无左边界分支：body 上不生效
                 flt = _lit_filter(pattern)
                 if flt:
                     ci, lits = flt
@@ -716,9 +866,13 @@ def identify(resp, where=""):
                     elif not any(l in parts.get(part, "") for l in lits):
                         continue
                 if re.search(pattern, parts.get(part, "")):
-                    tags.append(tag)
+                    found[tag] = origin
                     break
-    return canonical_tags(tags)
+    pairs = canonical_details(found.items())
+    if detail:
+        _src = "js" if str(where or "") == "js" else "doc"
+        return [{"tag": t, "src": _src, "origin": o} for t, o in pairs]
+    return [t for t, _o in pairs]
 
 
 def fetch_favicon(base_url, settings=None, timeout=None):

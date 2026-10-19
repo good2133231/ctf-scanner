@@ -6165,6 +6165,14 @@ workflows:
                  "vulnscan", "heuristic"):
         _u_cfg[_k6u] = dict(_u_cfg.get(_k6u) or {}, enabled=True)
         assert _u_cfg[_k6u]["enabled"] is True, _k6u
+    # 续223（提速 + 确定性）：[6u] 钉的是"15 个阶段能串起来跑完"，**不是** portscan 的
+    # 全端口发现能力 —— 全端口 / 引擎选择 / 真实 IP 各有专门用例（[3e]、引擎选择组、[5h]）。
+    # 默认 mode=full 会把本机其它服务全扫出来（本机实测 14 个站点：5000/5011/5003/631…），
+    # 后续 probe / screenshot / jsmine / dirscan / vulnscan 逐个乘上去，同一份代码换台机器
+    # 耗时能差 2 倍以上（本机 101.5s，主理人机器 46.5s —— 差别几乎全在这里）。
+    # 收窄到夹具端口后站点恒为 1 个；断言不变（8765 仍必须被发现，dirs/vulns 仍必须为真）。
+    _u_cfg["portscan"] = dict(_u_cfg.get("portscan") or {}, full_ports="8765")
+    assert _u_cfg["portscan"]["full_ports"] == "8765"
     # [171] 停车门会对"解析成功的第三方候选"发**站外首页 GET**（靶场 JS 里带出来的
     # sketch.com / pwg.org 这类真域名会被它摸一遍）—— 与 FOFA / intel 同一档外部请求，
     # 本用例必须关。解析门（纯 DNS）保持打开，随本用例一起真跑。
@@ -17345,13 +17353,13 @@ expression: r0()
     # 续197：集合不再"恰好只有 nginx" —— 目录列表页（Index of /）在社区库里是「列目录」
     # 这个组件的判据，是被**正确识别**出来的（实测这条样本现在是 {'列目录', 'nginx'}）。
     # 钉"nginx 必须在、且这条样本确实多认出了东西"，比钉一个随字典增长而失效的等号稳。
-    assert "nginx" in (_c1._tech_pending["http://t/"].get("doc") or set()), _c1._tech_pending
+    assert "nginx" in set(_c1._tech_pending["http://t/"].get("doc") or {}), _c1._tech_pending
     assert _fp127.collect(_c1, "http://t/", _R127("", hdr={"Server": "nginx"})) == 0, \
         "同一标签重复攒必须算 0（否则 flush 的行数与日志都会虚高）"
     # 续197：同上 —— `jquery.min.js` 在社区库里也可能命中别的组件名，所以条数不再钉等号，
     # 集合改成**超集**判据（"该认出来的必须认出来"，不禁止多认）。
     assert _fp127.collect(_c1, "http://t/", _R127("<script src=\"/a/jquery.min.js\"></script>")) \
-        and {"nginx", "jquery"} <= (_c1._tech_pending["http://t/"].get("doc") or set())
+        and {"nginx", "jquery"} <= set(_c1._tech_pending["http://t/"].get("doc") or {})
     assert _fp127.collect(None, "http://t/", _R127("", hdr={"Server": "nginx"})) == 0, \
         "ctx 为 None 必须当没发生（不许抛）"
 
@@ -17365,7 +17373,7 @@ expression: r0()
             _logged127.append(msg)
 
     try:
-        _db127.merge_sites_tech = lambda tid, up: (_upd.append((tid, dict(up))), _ret)[1]
+        _db127.merge_sites_tech = lambda tid, up, det=None: (_upd.append((tid, dict(up))), _ret)[1]
         _c2 = _Ctx127(sites=[{"url": "http://t/", "tech": "python"},
                              {"url": "http://other/", "tech": ""}])
         _fp127.collect(_c2, "http://t/", _R127("", hdr={"Server": "nginx"}))
@@ -17381,12 +17389,14 @@ expression: r0()
             f"标签无处可挂必须说出来（否则就成了『扫过了、页面上却没有』）：{_logged127}"
         _logged127.clear()
         _upd.clear()
-        _db127.merge_sites_tech = lambda tid, up: (_upd.append(dict(up)), (0, []))[1]
+        _db127.merge_sites_tech = lambda tid, up, det=None: (_upd.append(dict(up)), (0, []))[1]
         _c3 = _Ctx127(sites=[{"url": "http://t/", "tech": "nginx"}])
         _fp127.collect(_c3, "http://t/", _R127("", hdr={"Server": "nginx"}))
         _n3, _t3 = _fp127.flush(_c3, _L127(), "dirscan")
-        assert _upd == [] and _n3 == 0 and _logged127 == [], \
-            f"没有新增就不该写库、也不该打日志（不刷噪声）：{_upd} {_logged127}"
+        # 续223：标签没新增，但**来源**从"未知"变成"内置" ⇒ 该写一次 tech_detail；
+        # 仍然不许打"补标"日志（日志只报真新增，不刷噪声）。
+        assert _upd == [{"http://t/": ["nginx"]}] and _n3 == 0 and _logged127 == [], \
+            f"没有新增标签时只该补来源、不该打日志：{_upd} {_logged127}"
     finally:
         _db127.merge_sites_tech = _real_merge
 
@@ -28995,11 +29005,15 @@ expression: r0()
         _rp222 = (ROOT / "scanner" / "report.py").read_text(encoding="utf-8", errors="replace")
         assert '| 状态 | 路径 | 来源字典 |' in _rp222 and '"状态", "路径", "来源字典"' in _rp222
         _ap222 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
-        assert '"dict_sources": list((settings.get("dirscan")' in _ap222, \
-            "POST /settings 的 dirscan 段没把 dict_sources 原样带回"
+        assert '"dict_sources": _parse_dict_sources(f, settings)' in _ap222, \
+            "POST /settings 的 dirscan 段没接上 dict_sources 表格解析"
         # 两处渲染（正常 / 保存参数报错分支）都要传视图：漏一处就会显示成「未配置」。
         assert _ap222.count("dict_sources_view=_dict_sources_view(") == 2, \
             "settings.html 的渲染点没有全部传入 dict_sources_view"
+        assert _ap222.count("dict_sources_edit=dictstats.edit_rows(") == 2, \
+            "两处渲染都要传可编辑行（否则编辑框不出现）"
+        assert _ap222.count("dict_index=dictstats.dict_index(") == 2, \
+            "两处渲染都要传字典一览（否则一览不出现）"
         _st222 = (ROOT / "gui" / "templates" / "settings.html").read_text(
             encoding="utf-8", errors="replace")
         assert "外部字典源" in _st222, "策略页应展示已配置的外部字典源（只读）"
@@ -29007,6 +29021,7 @@ expression: r0()
         # 只断言"页面里没有绝对路径"挡不住"模板根本没渲染这一条"（空渲染也永远绿）。
         import copy as _copy222
         import gui.app as _gui222
+        from scanner import utils as _u222
         _outside222 = ("C:" + chr(92) + "secret" + chr(92) + "dicts"
                        if os.name == "nt" else "/opt" + "/secret" + "/dicts")
         _masked222 = "…/secret/dicts"
@@ -29015,18 +29030,21 @@ expression: r0()
             _s222 = _copy222.deepcopy(settings)
             _s222.setdefault("dirscan", {})["dict_sources"] = [
                 {"name": "ext", "path": _outside222, "picks": ["api"], "after": "exposure"}]
-            _orig = (_gui222.load_settings, _gui222.sync_pocs, _gui222.rel_display)
+            _orig = (_gui222.load_settings, _gui222.sync_pocs, _gui222.rel_display,
+                     _u222.rel_display)
             _gui222.load_settings = lambda: _s222
             _gui222.sync_pocs = lambda *_a, **_k: None
             if rel_patch:
                 _gui222.rel_display = rel_patch
+                _u222.rel_display = rel_patch   # dictstats.edit_rows 在函数内 import 的就是它
             try:
                 _c = _gui222.create_app().test_client()
                 assert _c.post("/login", data=_admin_form117(),
                                environ_base={"REMOTE_ADDR": "203.0.113.242"}).status_code == 302
                 return _c.get("/settings").get_data(as_text=True)
             finally:
-                _gui222.load_settings, _gui222.sync_pocs, _gui222.rel_display = _orig
+                (_gui222.load_settings, _gui222.sync_pocs, _gui222.rel_display,
+                 _u222.rel_display) = _orig
 
         _h222 = _mk222()
         assert _outside222 not in _h222, "策略页回显了外部字典源的绝对路径"
@@ -29038,6 +29056,184 @@ expression: r0()
     print("[222] 续222 ok: 外部字典源 dict_sources（分类即层、picks 过滤、after 定位、"
           "额度共用、目录不存在跳过）｜每行标注来源字典（名字不含绝对路径）并进页面与报告｜"
           "保存映射不抹配置")
+    # ------------------------------------------------------------------ [223]
+    # 续223：指纹标签分主次（主文档 > JS、内置 > 外置）+ 来源落库 + 页面折叠/报告 (+N)
+    import json as _json223
+    from scanner import fingerprint as _fp223
+    from scanner import report as _rp223
+    _orig_sig223, _orig_extra223 = _fp223.SIGNATURES, _fp223.load_extra
+    try:
+        _fp223.SIGNATURES = {"zz-builtin": [("headers", re.compile(r"X-Zz: 1"))]}
+        _fp223.load_extra = lambda: (
+            {"zz-ext": [("headers", re.compile(r"X-Ext: 1"))]}, [])
+        _resp223 = {"status": 200, "headers": {"X-Zz": "1", "X-Ext": "1"}, "text": ""}
+        _det223 = _fp223.identify(_resp223, detail=True)
+        assert [x["tag"] for x in _det223] == ["zz-builtin", "zz-ext"], _det223
+        assert [x["origin"] for x in _det223] == ["builtin", "external"], _det223
+        assert all(x["src"] == "doc" for x in _det223), _det223
+        # 同义归一后仍保留来源：同组里只要有一个内置拼写，整组算内置
+        _canon223 = _fp223.canonical_details([("next.js", "external"), ("nextjs", "builtin")])
+        assert _canon223 == [("next.js", "builtin")], _canon223
+        # 排序：doc+builtin > doc+外置 > JS+内置 > 未知；前 2 个主标签，其余进 more
+        _dd223 = [{"t": "zz-js", "src": "js", "origin": "builtin"},
+                  {"t": "zz-ext", "src": "doc", "origin": "external"},
+                  {"t": "zz-old", "src": "doc", "origin": "unknown"},
+                  {"t": "zz-builtin", "src": "doc", "origin": "builtin"}]
+        _g223 = _fp223.tech_groups("zz-js,zz-ext,zz-old,zz-builtin", _dd223, max_primary=2)
+        assert _g223["primary"] == ["zz-builtin", "zz-ext"], _g223
+        assert _g223["more"] == ["zz-old", "zz-js"], _g223
+        assert _g223["labels"]["zz-builtin"] == "主文档·内置", _g223
+        assert _g223["labels"]["zz-js"] == "JS·内置", _g223
+        assert _fp223.tech_summary("zz-js,zz-ext,zz-old,zz-builtin", _dd223, 2) == \
+            "zz-builtin, zz-ext (+2)"
+        # 落库：collect/flush 把 detail 与 tech 一起写；老标签保留 unknown，不伪装成内置
+        db.init_db()
+        _t223 = db.create_task("smoke223-fp", "http://fp223.test/", ["probe"], {})
+        db.insert_sites(_t223, [{"url": "http://fp223.test/", "host": "fp223.test",
+                                     "port": "80", "status": 200, "title": "",
+                                     "length": 1, "server": "", "tech": "zz-old,zz-js",
+                                     "tech_detail": _json223.dumps([
+                                         {"t": "zz-old", "src": "doc", "origin": "unknown"},
+                                         {"t": "zz-js", "src": "js", "origin": "builtin"}]),
+                                     "source": "builtin"}])
+
+        class _L223:
+            def info(self, m):
+                pass
+
+        class _C223:
+            task_id = _t223
+            settings = {"fingerprint": {"max_tags": 10}}
+            logger = _L223()
+            results = {"sites": [{"url": "http://fp223.test/", "tech": "zz-old,zz-js",
+                                  "tech_detail": _json223.dumps([
+                                      {"t": "zz-old", "src": "doc", "origin": "unknown"},
+                                      {"t": "zz-js", "src": "js", "origin": "builtin"}])}]}
+
+        _cx223 = _C223()
+        _fp223.collect(_cx223, "http://fp223.test/", _resp223)
+        _fp223.collect(_cx223, "http://fp223.test/", _resp223, "js")
+        _fp223.flush(_cx223, _cx223.logger, "smoke223")
+        _row223 = [dict(r) for r in db.list_sites(_t223)][0]
+        assert set(_row223["tech"].split(",")) == {"zz-old", "zz-js", "zz-builtin", "zz-ext"}, _row223
+        _d223 = _json223.loads(_row223["tech_detail"])
+        assert [x["t"] for x in _d223] == ["zz-builtin", "zz-ext", "zz-old", "zz-js"], _d223
+        assert [x["origin"] for x in _d223] == ["builtin", "external", "unknown", "builtin"], _d223
+        # 页面：新建 app 并真登录（不用 [7o] 的旧 client —— 跑到这里已隔了几十组，
+        # 会话/配置快照都可能变；[222]/[224] 同款做法）。
+        import gui.app as _gui223
+        _orig223 = (_gui223.load_settings, _gui223.sync_pocs)
+        _gui223.load_settings = lambda: settings
+        _gui223.sync_pocs = lambda *_a, **_k: None
+        try:
+            _c223 = _gui223.create_app().test_client()
+            assert _c223.post("/login", data=_admin_form117(),
+                              environ_base={"REMOTE_ADDR": "203.0.113.244"}).status_code == 302
+            _h223 = _c223.get(f"/tasks/{_t223}").get_data(as_text=True)
+        finally:
+            _gui223.load_settings, _gui223.sync_pocs = _orig223
+        assert "zz-builtin" in _h223 and "zz-ext" in _h223 and "zz-old" in _h223 and "zz-js" in _h223
+        assert _h223.index("zz-builtin") < _h223.index("zz-ext"), "页面没把内置标签排在前面"
+        assert "主文档·内置" in _h223 and '<details class="tech-more">' in _h223
+        assert '<summary class="muted small">+1</summary>' in _h223, "次要标签应折叠成 +1"
+        # 报告：主标签 + (+N)
+        _md223 = _rp223.generate(_t223)
+        assert "zz-builtin, zz-ext, zz-old (+1)" in _md223, _md223[:1200]
+        # §6.1 变异：把内置/外置的来源对调 ⇒ 主标签顺序必须跟着变（证明排序看 detail）
+        _swap223 = [{"t": "zz-builtin", "src": "doc", "origin": "external"},
+                    {"t": "zz-ext", "src": "doc", "origin": "builtin"}]
+        assert _fp223.tech_groups("zz-builtin,zz-ext", _swap223, 2)["primary"] == \
+            ["zz-ext", "zz-builtin"]
+    finally:
+        _fp223.SIGNATURES, _fp223.load_extra = _orig_sig223, _orig_extra223
+    print("[223] 续223 ok: identify(detail) 带 src/origin｜同义归一保留内置优先｜"
+          "tech_groups 主文档+内置 > … > 未知（前 N 个主标签、其余 +N）｜"
+          "collect/flush 与 tech 同条 UPDATE 落库、老标签保留 unknown｜页面折叠 + 报告 +N｜"
+          "变异（内置/外置对调）顺序立刻改变")
+
+    # ------------------------------------------------------------------ [224]
+    # 续223：外部字典源 GUI 编辑 + 字典一览/受限预览（大字典不整份下发）
+    from scanner import dictstats as _dstat224
+    _root224 = Path(tempfile.mkdtemp(prefix="smoke224-")) / "deep" / "dicts"
+    _root224.mkdir(parents=True)
+    try:
+        (_root224 / "api.txt").write_text("\n".join(f"/p{i}" for i in range(500)),
+                                          encoding="utf-8")
+        (_root224 / "backup.txt").write_text("/b1\n/b2\n", encoding="utf-8")
+        (_root224 / "zzz.txt").write_text("/z\n", encoding="utf-8")
+        _s224 = copy.deepcopy(settings)
+        _s224.setdefault("dirscan", {})["dict_sources"] = [
+            {"name": "demo", "path": str(_root224), "picks": ["api"], "after": "exposure"}]
+        # 统计/预览：只回条数与前 N 行
+        assert _dstat224.count_lines(_root224 / "api.txt") == (500, False)
+        _pv224, _tr224 = _dstat224.read_preview(_root224 / "api.txt", limit=5)
+        assert _pv224 == [f"/p{i}" for i in range(5)] and _tr224 is True, _pv224
+        assert len(_dstat224.read_preview(_root224 / "api.txt")[0]) <= 200
+        # 路径穿越/未登记键一律 None（预览接口不是任意文件读取）
+        assert _dstat224.resolve_external(_s224, 0, "api")
+        for _bad224 in ("../api", "sub/x", "..", "api.txt", "a/b"):
+            assert _dstat224.resolve_external(_s224, 0, _bad224) is None, _bad224
+        assert _dstat224.resolve_external(_s224, 9, "api") is None
+        assert _dstat224.resolve_builtin(_s224, "nope") is None
+        # 页面：编辑器有输入框、绝对路径不回显、字典一览给条数 + 预览链接
+        import gui.app as _gui224
+        _cap224 = {}
+        _orig224 = (_gui224.load_settings, _gui224.sync_pocs, _gui224.save_settings)
+
+        def _fake_save224(d, **kw):
+            _m = copy.deepcopy(_s224)
+
+            def _deep(a, b):
+                for k, v in (b or {}).items():
+                    if isinstance(v, dict) and isinstance(a.get(k), dict):
+                        _deep(a[k], v)
+                    else:
+                        a[k] = v
+            _deep(_m, d)
+            _cap224.clear()
+            _cap224.update(_m)
+            return _m
+        _gui224.load_settings = lambda: _s224
+        _gui224.sync_pocs = lambda *_a, **_k: None
+        _gui224.save_settings = _fake_save224
+        try:
+            _c224 = _gui224.create_app().test_client()
+            assert _c224.post("/login", data=_admin_form117(),
+                              environ_base={"REMOTE_ADDR": "203.0.113.243"}).status_code == 302
+            _h224 = _c224.get("/settings").get_data(as_text=True)
+            assert 'name="dict_src_name_0"' in _h224 and "字典一览" in _h224
+            assert str(_root224) not in _h224, "策略页回显了外部字典源的绝对路径"
+            assert "…/" in _h224, "项目外路径应显示成 …/父/名"
+            _i224 = _h224.index("demo/api")
+            assert "500" in _h224[_i224:_i224 + 300], "字典一览要显示外部源条数"
+            # 预览：200 + 内容；非法 key 404
+            _pvhtml224 = _c224.get("/dict_preview?key=e:0:api").get_data(as_text=True)
+            assert "/p0" in _pvhtml224 and "/p99" in _pvhtml224 and "/p100" not in _pvhtml224, "预览默认只给前 100 行"
+            for _bad224 in ("e:0:../api", "e:0:sub/x", "b:nope", "x:1:2"):
+                assert _c224.get("/dict_preview?key=" + _bad224).status_code == 404, _bad224
+            # POST 编辑：路径留空=沿用旧值；新增一行（中文逗号也认）；清空来源名=删除
+            assert _c224.post("/settings", data={
+                "dict_src_name_0": "demo", "dict_src_path_0": "",
+                "dict_src_picks_0": "api", "dict_src_after_0": "exposure",
+                "dict_src_name_1": "more", "dict_src_path_1": "tools/dirsearch/dicts",
+                "dict_src_picks_1": "api，backup", "dict_src_after_1": "common",
+            }).status_code == 302
+            _ds224 = _cap224["dirscan"]["dict_sources"]
+            assert _ds224[0]["path"] == str(_root224), "路径留空必须沿用旧值"
+            assert _ds224[1] == {"name": "more", "path": "tools/dirsearch/dicts",
+                                 "picks": ["api", "backup"], "after": "common"}, _ds224
+            assert _c224.post("/settings", data={
+                "dict_src_name_0": "", "dict_src_path_0": "",
+                "dict_src_name_1": "more", "dict_src_path_1": "",
+                "dict_src_picks_1": "api", "dict_src_after_1": "common",
+            }).status_code == 302
+            assert [x["name"] for x in _cap224["dirscan"]["dict_sources"]] == ["more"], _cap224
+        finally:
+            _gui224.load_settings, _gui224.sync_pocs, _gui224.save_settings = _orig224
+    finally:
+        shutil.rmtree(_root224.parent.parent, ignore_errors=True)
+    print("[224] 续223 ok: 字典编辑（路径留空沿用/新增/清空来源名删除）｜字典一览只回条数｜"
+          "预览默认 100 行（硬上限 200）、非法 key 全 404（路径穿越/未登记）｜页面不回显绝对路径")
     print("SMOKE PASS")
 
 

@@ -64,7 +64,7 @@ from scanner.log import (attach_access_log, attach_server_log, boot_logger,
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
-from scanner import diffview, edgeauth, keystore, webpath
+from scanner import diffview, edgeauth, fingerprint, dictstats, keystore, webpath
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
@@ -838,6 +838,10 @@ def create_app():
         return {"reproduced": "建议复核：确认存在", "fixed": "建议复核：判误报",
                 "unconfirmed": "无从判断，需人工确认"}.get(str(state or ""), "")
     app.jinja_env.globals["retest_hint"] = _retest_hint
+    def _tech_view(tech, detail=""):
+        """续223：站点标签分主次（主文档+内置 > … > 未知，前 4 个主标签，其余折叠）。"""
+        return fingerprint.tech_groups(tech, detail, max_primary=3)
+    app.jinja_env.globals["tech_view"] = _tech_view
     app.jinja_env.globals["packet_curl"] = packetcodec.to_curl
     app.jinja_env.globals["packet_python"] = packetcodec.to_python
     app.jinja_env.globals["dir_url"] = _dir_url
@@ -4520,6 +4524,33 @@ def create_app():
         # 续201：带回用户提交时停在的那个页签（前端注入 next_hash），别掉回「潜在漏洞」
         return redirect(_with_hash(url_for("task_detail", task_id=task_id)))
 
+    # 续223：字典**受限预览**（只认配置里登记过的内置键 / 外部源分类）。
+    @app.route("/dict_preview")
+    @login_required
+    @admin_required
+    def dict_preview():
+        """最多 200 行 / 64 KB，绝不整份下发；路径只从 settings 解析，不接受任意路径。"""
+        key = str(request.args.get("key") or "")
+        p = None
+        if key.startswith("b:"):
+            p = dictstats.resolve_builtin(settings, key[2:])
+        elif key.startswith("e:"):
+            _parts = key.split(":", 2)
+            if len(_parts) == 3:
+                p = dictstats.resolve_external(settings, _parts[1], _parts[2])
+        if not p:
+            return "字典不存在或不在配置里", 404
+        try:
+            _limit = int(request.args.get("limit", 100) or 100)
+        except (TypeError, ValueError):
+            _limit = 100
+        _lines, _trunc = dictstats.read_preview(p, limit=_limit)
+        _total, _total_trunc = dictstats.count_lines(p)
+        _name = (key.split(":", 2)[-1] if key.startswith("e:") else key[2:])
+        return render_template("dict_preview.html", key=key, name=_name,
+                               lines=_lines, truncated=_trunc,
+                               total=_total, total_truncated=_total_trunc)
+
     # ---------- 设置 ----------
 
     # 策略配置：FOFA/Shodan/Quake 的三方配置与全部策略开关都在这一页 —— 续46 起**仅管理员**。
@@ -4546,6 +4577,39 @@ def create_app():
                              "picks": [str(p) for p in (_x.get("picks") or [])],
                              "after": str(_x.get("after") or "common")})
             return _out
+
+        def _parse_dict_sources(f, _base):
+            """续223：把策略页的外部字典源表格解析回 `list[dict]`。
+
+            - 清空「来源名」＝删除该行（路径一并忽略）；
+            - 某行路径留空 ⇒ 沿用**同下标**的旧值（项目外绝对路径不在页面回显，
+              想改就整条重填）；新行留空 = 明确报错，不静默丢；
+            - `after` 非法 ⇒ 落 common（与 `_external_layers` 同口径）；
+            - `picks` 支持逗号 / 中文逗号 / 空白分隔。
+            """
+            old = list(((_base.get("dirscan") or {}).get("dict_sources") or []))
+            out, errs = [], []
+            for i in range(len(old) + 2):        # 模板固定给两个空行（见 dictstats.edit_rows）
+                name = str(f.get(f"dict_src_name_{i}") or "").strip()
+                if not name:
+                    continue                     # 清空来源名 = 删除
+                path = str(f.get(f"dict_src_path_{i}") or "").strip()
+                if not path and i < len(old) and isinstance(old[i], dict):
+                    path = str(old[i].get("path") or "")
+                if not path:
+                    errs.append(f"第 {i + 1} 行（{name}）缺少路径")
+                    continue
+                after = str(f.get(f"dict_src_after_{i}") or "common").strip()
+                if after not in ("fw", "lang", "shallow", "exposure", "common"):
+                    after = "common"
+                picks = [x.strip() for x in re.split(
+                    r"[,，\s]+", str(f.get(f"dict_src_picks_{i}") or "")) if x.strip()]
+                out.append({"name": name, "path": path, "picks": picks, "after": after})
+            if len(out) > 30:
+                errs.append("外部字典源最多 30 个")
+            if errs:
+                raise ValueError("；".join(errs))
+            return out
 
         if request.method == "POST":
             f = request.form
@@ -4692,11 +4756,11 @@ def create_app():
                                     f.get("dirscan_recursive_max_paths", 40) or 0),
                                 "ml_template": f.get("dirscan_ml_template") == "1",
                                 "ml_outlier": f.get("dirscan_ml_outlier") == "1",
-                                # 续222：外部字典源是 list[dict]（name/path/picks/after），页面只读展示、
-                                # 没有逐项输入框 ⇒ 原样带回现值。整份重写的保存动作不许把它抹成空
-                                # （[158] 的"覆盖 = DEFAULTS 全段"钉的正是这件事）。
-                                "dict_sources": list((settings.get("dirscan") or {})
-                                                     .get("dict_sources") or [])},
+                                # 续223：外部字典源改成**页面可编辑**（续222 是只读展示）。
+                                # 表格按行解析；清空来源名=删除、路径留空=沿用同下标旧值
+                                # （项目外绝对路径不在页面回显）。校验失败走 ValueError →
+                                # 下面那个 except 会带着原话退回表单，不静默吞行。
+                                "dict_sources": _parse_dict_sources(f, settings)},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
                     # 外部引擎 afrog（续121 接入；续149 默认开）；限速值由 scanner/afrog.py 的封顶再压一道
                     # 敏感信息 / flag 候选抽取（续148 由"flag 候选"改名）：零额外请求所以默认开；
@@ -4968,20 +5032,22 @@ def create_app():
                     return out
                 data["tools"] = _fill158(settings.get("tools") or {}, "tools")
                 data["dicts"] = _fill158(settings.get("dicts") or {}, "dicts")
-            except ValueError:
+            except ValueError as _e:
                 _s114 = load_settings()
                 return render_template("settings.html", s=_s114, checks=owasp_checks,
                                        bl=blacklist.load(settings, owner_id=_owner_scope()),
                                        bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                        sb=_value_blacklist_view(),
                                        dict_sources_view=_dict_sources_view(_s114),
+                                       dict_sources_edit=dictstats.edit_rows(_s114),
+                                       dict_index=dictstats.dict_index(_s114),
 
                                        esp=external_source_panel(_s114),
                                        shape_note=_shape_note(_s114),
                                        edge_note=_edge_note(_s114),
                                        console_note=_console_note(_s114),
                                        shot_retry_note=_shot_retry_note(),
-                                       error="参数必须是整数")
+                                       error=str(_e) or "参数必须是整数")
             # 续48：审计只记"改了哪几个区块"，**绝不记值**（键名也省掉 —— 见 `_changed_sections`）。
             _changed = _changed_sections(settings, data)
             _saved = save_settings(data)
@@ -5004,6 +5070,8 @@ def create_app():
                                bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                sb=_value_blacklist_view(),
                                dict_sources_view=_dict_sources_view(settings),
+                               dict_sources_edit=dictstats.edit_rows(settings),
+                               dict_index=dictstats.dict_index(settings),
                                esp=external_source_panel(settings),
                                shape_note=_shape_note(settings),
                                edge_note=_edge_note(settings),

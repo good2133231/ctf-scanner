@@ -489,21 +489,52 @@
     <label class="chk"><input type="checkbox" name="dirscan_ml_outlier" value="1"
       {{ 'checked' if s.dirscan.ml_outlier }}> ML·长度离群提示（把明显离群的 200 命中点名到日志）</label>
 
-    {# 续222：外部字典源（dirscan.dict_sources）—— 结构复杂（list[dict]），页面只读展示，
-       保存时原样带回；要增删改请编辑 config/settings.yaml。
-       path 走 dict_sources_view（路由里已过 rel_display mask_outside）——
-       页面绝不回显绝对路径（§0.3）。 #}
-    <p class="muted small note"><b>外部字典源</b>（零入仓接第三方字典目录，如 dirsearch 的 dicts/；
-      <b>只在深扫档生效</b>，快扫与框架补充扫描不吃外部字典）：
-      {% if dict_sources_view %}
-        {% for _src in dict_sources_view %}
-          <span class="badge" title="path: {{ _src.path }}{% if _src.picks %}｜picks: {{ _src.picks|join(',') }}{% endif %}｜after: {{ _src.after }}">
-            {{ _src.name }}</span>
+    {# 续223：外部字典源 —— 可直接编辑（续222 只读）。清空「来源名」=删除该行；
+       项目外绝对路径不回显（value 留空，placeholder 给脱敏形），留空=沿用原值。 #}
+    <details class="tech-more" {% if dict_sources_view %}open{% endif %}>
+      <summary><b>外部字典源</b>（零入仓接第三方字典目录，如 dirsearch 的 dicts/；<b>只在深扫档生效</b>）</summary>
+      <p class="muted small note">分类＝目录下的 <code>.txt</code> 文件名；<code>picks</code> 只接列出的分类（空＝全接）；
+        <code>after</code> 插在那一层之后。清空「来源名」即删除该行；路径留空＝沿用原值
+        （项目外绝对路径不回显，想改就整条重填）。</p>
+      <table>
+        <thead><tr><th>来源名</th><th>路径（相对仓库根或绝对）</th><th>分类 picks（逗号分隔）</th><th>插在</th></tr></thead>
+        <tbody>
+        {% for r in dict_sources_edit %}
+          <tr>
+            <td><input name="dict_src_name_{{ r.idx }}" value="{{ r.name }}" placeholder="如 dirsearch"></td>
+            <td><input name="dict_src_path_{{ r.idx }}" value="{{ r.path_value }}"
+                  placeholder="{{ r.path_hint or 'tools/dirsearch/dicts' }}" class="mono"></td>
+            <td><input name="dict_src_picks_{{ r.idx }}" value="{{ r.picks }}" placeholder="api,backup"></td>
+            <td><select name="dict_src_after_{{ r.idx }}">
+              {% for a in ['fw','lang','shallow','exposure','common'] %}
+                <option value="{{ a }}" {{ 'selected' if r.after == a }}>{{ a }}</option>
+              {% endfor %}
+            </select></td>
+          </tr>
         {% endfor %}
-      {% else %}
-        <span class="muted">未配置（编辑 config/settings.yaml 的 dirscan.dict_sources 添加）</span>
-      {% endif %}
-      命中的结果会在目录发现里标注「来源字典」（只写字典名/分类名，不写绝对路径）。</p>
+        </tbody>
+      </table>
+      <p class="muted small note">命中的结果会在目录发现里标注「来源字典」（只写字典名/分类名，不写绝对路径）。</p>
+    </details>
+
+    {# 续223：字典一览 —— 只回**条数**，完整内容点「预览」走受限接口（200 行/64KB 上限）。 #}
+    <details class="tech-more">
+      <summary><b>字典一览</b>（内置 {{ dict_index|selectattr('kind','equalto','builtin')|list|length }} 份 /
+        外部 {{ dict_index|selectattr('kind','equalto','external')|list|length }} 份）</summary>
+      <p class="muted small note">只显示条数与受限预览；页面不会下发整份字典（大字典也不会卡浏览器）。</p>
+      <table>
+        <thead><tr><th>来源</th><th>条数</th><th>预览</th></tr></thead>
+        <tbody>
+        {% for d in dict_index %}
+          <tr><td class="mono">{{ d.name }}</td>
+            <td>{{ d.count }}{{ '+' if d.truncated else '' }}</td>
+            <td><a href="{{ url_for('dict_preview', key=d.key) }}" target="_blank" rel="noopener noreferrer">前 100 行</a></td></tr>
+        {% else %}
+          <tr><td colspan="3" class="muted">没有可展示的字典。</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
     <p class="muted small note">目录递归只在<b>深扫</b>（<code>mode=deep</code> 或建任务勾「全目录深扫」）
       里生效。请求量估算：一层递归 ≈ <code>+目录数 ×（3 个软 404 基线 + 每目录条数）</code>，
       默认 5 目录 × 40 条时约 <b>+215</b> 请求/站（单站浅扫本身约 153）——
