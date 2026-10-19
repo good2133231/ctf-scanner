@@ -1964,6 +1964,9 @@ def create_app():
         _st_hidden, site_total = _site_status_extra("sites", hide_st, sites_pager["total"],
                                                     sites_q, "task_id=?", (task_id,), order="id")
         _allst_state(sites_pager, hide_st, _st_hidden)
+        # 续224：技术栈来源统计（全任务，轻量两列）；页面那句"多少站内置识别/只靠 JS"
+        # 与报告共用 `fingerprint.tech_stats()`，别在模板里再算一遍。
+        _tech_stats = fingerprint.tech_stats(db.list_site_tech(task_id))
         # 续172：站点页签「同标题放在一起 + 可折叠」。折叠键与跨任务 /sites 页**同一份产地**
         # （`_site_fold_key`，本轮起 3xx 优先跳转后标题）；组内代表行 = 组内第一行（页序 id），
         # 成员行紧随其后且默认收起（原生 hidden + 内联 onclick 展开，零新依赖）；
@@ -2097,6 +2100,8 @@ def create_app():
             ext_defaults=_ext_defaults(),
             resume_rest=resume_rest,
             sites=sites,
+            tech_stats=_tech_stats,
+            tech_stats_text=fingerprint.tech_stats_text(_tech_stats),
             ports=ports, csegs=csegs, certs=certs_rows,
             cert_enabled=cert_enabled, cert_pick=cert_pick,
             cert_tls_ports=sorted(certs_mod.tls_ports(settings)),
@@ -4551,6 +4556,36 @@ def create_app():
                                lines=_lines, truncated=_trunc,
                                total=_total, total_truncated=_total_trunc)
 
+    # 续224：字典导出（单份走附件下载 / 整源走 zip）—— 与预览同一套 resolve，
+    # 请求参数只能是配置里的键，不许变成任意文件读取；zip 有文件数/总大小上限。
+    @app.route("/dict_export")
+    @login_required
+    @admin_required
+    def dict_export():
+        import io as _io224
+        from flask import send_file as _send224
+        _src = request.args.get("src")
+        if _src is not None:
+            _data, _name = dictstats.export_zip(settings, _src)
+            if _data is None:
+                return _name, 404
+            return _send224(_io224.BytesIO(_data), mimetype="application/zip",
+                            as_attachment=True, download_name=_name)
+        _key = str(request.args.get("key") or "")
+        _p = None
+        if _key.startswith("b:"):
+            _p = dictstats.resolve_builtin(settings, _key[2:])
+        elif _key.startswith("e:"):
+            _parts = _key.split(":", 2)
+            if len(_parts) == 3:
+                _p = dictstats.resolve_external(settings, _parts[1], _parts[2])
+        if not _p:
+            return "字典不存在或不在配置里", 404
+        # 附件下载：浏览器不渲染内容，所以"整份字典"只在这一步、且由用户显式触发。
+        return _send224(str(_p), mimetype="text/plain; charset=utf-8",
+                        as_attachment=True, download_name=_p.name,
+                        conditional=True)
+
     # ---------- 设置 ----------
 
     # 策略配置：FOFA/Shodan/Quake 的三方配置与全部策略开关都在这一页 —— 续46 起**仅管理员**。
@@ -4577,6 +4612,17 @@ def create_app():
                              "picks": [str(p) for p in (_x.get("picks") or [])],
                              "after": str(_x.get("after") or "common")})
             return _out
+
+        def _dict_meta(_s):
+            """续224：字典一览 + 「整源导出」的来源列表（一次算好，两处渲染共用）。"""
+            _idx = dictstats.dict_index(_s)
+            _ext, _seen = [], set()
+            for _d in _idx:
+                _i = _d.get("src_idx")
+                if _d.get("kind") == "external" and _i not in _seen:
+                    _seen.add(_i)
+                    _ext.append({"idx": _i, "name": _d.get("src_name") or f"源{int(_i) + 1}"})
+            return _idx, _ext
 
         def _parse_dict_sources(f, _base):
             """续223：把策略页的外部字典源表格解析回 `list[dict]`。
@@ -5034,13 +5080,15 @@ def create_app():
                 data["dicts"] = _fill158(settings.get("dicts") or {}, "dicts")
             except ValueError as _e:
                 _s114 = load_settings()
+                _dict_idx114, _dict_ext114 = _dict_meta(_s114)
                 return render_template("settings.html", s=_s114, checks=owasp_checks,
                                        bl=blacklist.load(settings, owner_id=_owner_scope()),
                                        bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                        sb=_value_blacklist_view(),
                                        dict_sources_view=_dict_sources_view(_s114),
                                        dict_sources_edit=dictstats.edit_rows(_s114),
-                                       dict_index=dictstats.dict_index(_s114),
+                                       dict_index=_dict_idx114,
+                                       dict_ext_sources=_dict_ext114,
 
                                        esp=external_source_panel(_s114),
                                        shape_note=_shape_note(_s114),
@@ -5065,13 +5113,15 @@ def create_app():
             except Exception:                       # noqa: BLE001 - 重配失败不许影响保存
                 pass
             return redirect(url_for("settings_page"))
+        _dict_idx224, _dict_ext224 = _dict_meta(settings)
         return render_template("settings.html", s=settings, checks=owasp_checks,
                                bl=blacklist.load(settings, owner_id=_owner_scope()),
                                bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                sb=_value_blacklist_view(),
                                dict_sources_view=_dict_sources_view(settings),
                                dict_sources_edit=dictstats.edit_rows(settings),
-                               dict_index=dictstats.dict_index(settings),
+                               dict_index=_dict_idx224,
+                               dict_ext_sources=_dict_ext224,
                                esp=external_source_panel(settings),
                                shape_note=_shape_note(settings),
                                edge_note=_edge_note(settings),

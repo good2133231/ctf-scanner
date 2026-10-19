@@ -1894,6 +1894,11 @@ def list_sites(task_id):
     return _query("SELECT * FROM sites WHERE task_id=? ORDER BY id", (task_id,))
 
 
+def list_site_tech(task_id):
+    """只取技术栈两列（续224）：任务页的"来源统计"要**全任务**，但不必把整行资产拉回来。"""
+    return _query("SELECT tech, tech_detail FROM sites WHERE task_id=?", (task_id,))
+
+
 def list_shot_failures(task_id):
     """**没截成图、且写着失败原因**的站点行（续161 候补重试的唯一候选来源，纯读库零网络）。
 

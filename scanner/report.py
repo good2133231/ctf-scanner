@@ -399,6 +399,11 @@ def generate(task_id, full=False):
             lines.append(f"| {_c(_idn_url(s['url']))} | {_c(_st_txt)} | {_c(_ti_txt)} | "
                          f"{_c(_tech_txt)} | {_c(s['server'] or '-')} |")
         lines.append("")
+        # 续224：来源统计一句（全任务，不是当前上限内的那批）——与页面同一句。
+        _tech_line = fingerprint.tech_stats_text(fingerprint.tech_stats(sites))
+        if _tech_line:
+            lines.append("> " + _tech_line)
+            lines.append("")
     if ports:
         lines.append("## " + _cap_title("开放端口与服务", len(ports), CAP_PORTS))
         lines.append("")
@@ -617,6 +622,10 @@ def generate_html(task_id, full=False):
               _h(fingerprint.tech_summary(
                   s["tech"], s["tech_detail"] if "tech_detail" in s.keys() else "")),
               _h(s["server"] or "-")] for s in sites[:CAP_SITES]]))
+        # 续224：来源统计一句（与 Markdown / 任务页同一句）
+        _tech_line = fingerprint.tech_stats_text(fingerprint.tech_stats(sites))
+        if _tech_line:
+            p.append(f'<p class="muted small">{_h(_tech_line)}</p>')
     if ports:
         p.append("<h2>" + _cap_title("开放端口与服务", len(ports), CAP_PORTS) + "</h2>")
         p.append(_html_table(

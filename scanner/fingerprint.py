@@ -748,7 +748,28 @@ def _tag_rank(tag, meta):
             _ORI_RANK.get(str(m.get("origin") or ""), 3), str(tag).lower(), str(tag))
 
 
-def tech_groups(tech, detail="", max_primary=4):
+def _detail_meta(detail):
+    """`tech_detail` → `{tag: {src, origin}}`（**唯一的解析产地**，续224）。
+
+    接受 JSON 字符串（DB / probe 写的）与已解析 list（测试 / 内部复用）。
+    """
+    if isinstance(detail, (list, tuple)):
+        arr = list(detail)
+    else:
+        try:
+            arr = json.loads(detail or "[]")
+        except (TypeError, ValueError):
+            arr = []
+    meta = {}
+    if isinstance(arr, list):
+        for x in arr:
+            if isinstance(x, dict) and x.get("t"):
+                meta[str(x["t"])] = {"src": str(x.get("src") or ""),
+                                     "origin": str(x.get("origin") or "")}
+    return meta
+
+
+def tech_groups(tech, detail="", max_primary=3):
     """页面/报告共用的标签分主次（续223）：返回 `{primary, more, labels, total}`。
 
     - 优先级与 `flush()` 落库的 `tech_detail` 顺序同一套（doc+builtin → … → unknown）；
@@ -758,19 +779,7 @@ def tech_groups(tech, detail="", max_primary=4):
     """
     tags = [str(t).strip() for t in str(tech or "").split(",") if str(t).strip()]
     tags = list(dict.fromkeys(tags))
-    meta = {}
-    if isinstance(detail, (list, tuple)):
-        arr = list(detail)             # 调用方已解析好（测试/内部复用）—— 别再去 json.loads
-    else:
-        try:
-            arr = json.loads(detail or "[]")
-        except (TypeError, ValueError):
-            arr = []
-    if isinstance(arr, list):
-        for x in arr:
-            if isinstance(x, dict) and x.get("t"):
-                meta[str(x["t"])] = {"src": str(x.get("src") or ""),
-                                     "origin": str(x.get("origin") or "")}
+    meta = _detail_meta(detail)
     try:
         cap = max(1, int(max_primary))
     except (TypeError, ValueError):
@@ -797,6 +806,73 @@ def tech_summary(tech, detail="", max_primary=3):
     if g["more"]:
         s += f" (+{len(g['more'])})"
     return s
+
+
+def tech_stats(rows):
+    """站点技术栈的**来源统计**（续224）：任务页/报告那句"多少站是内置识别"。
+
+    `rows` 每项是 `{tech, tech_detail}` 或 `(tech, tech_detail)`（`db.list_site_tech` 的形状）。
+    口径：
+    - `total`：`tech` 非空的站点数；
+    - `resolved`：至少有一个标签带来源记录；`unmarked`：有 tech 但完全没有来源（老数据/httpx）；
+    - `builtin`：至少一个**内置**标签；`external`：没有内置、至少一个外置；
+      `unknown`：有来源记录但全是 unknown；
+    - `js_only`：所有带来源的标签都来自 **JS**（"只靠 JS 补标"）；
+    - `doc`：至少有一个主文档标签。
+    """
+    st = {"total": 0, "resolved": 0, "builtin": 0, "external": 0,
+          "unknown": 0, "js_only": 0, "doc": 0, "unmarked": 0}
+    for row in rows or []:
+        if isinstance(row, dict):
+            tech, detail = row.get("tech"), row.get("tech_detail")
+        else:
+            try:
+                # sqlite3.Row 支持按**列名**取；整数下标是列序（id/task_id），不能当 tech 用。
+                tech, detail = row["tech"], row["tech_detail"]
+            except (TypeError, IndexError, KeyError):
+                try:
+                    tech, detail = row[0], row[1]
+                except (TypeError, IndexError, KeyError):
+                    continue
+        tags = [str(t).strip() for t in str(tech or "").split(",") if str(t).strip()]
+        if not tags:
+            continue
+        st["total"] += 1
+        meta = _detail_meta(detail)
+        if not meta:
+            st["unmarked"] += 1
+            continue
+        st["resolved"] += 1
+        origins = {m.get("origin") for m in meta.values()}
+        srcs = {m.get("src") for m in meta.values()}
+        # 「内置优先」与 tech_groups 的排序同一口径：有内置就不算"仅外置"。
+        if "builtin" in origins:
+            st["builtin"] += 1
+        elif "external" in origins:
+            st["external"] += 1
+        else:
+            st["unknown"] += 1
+        if srcs == {"js"}:
+            st["js_only"] += 1
+        if "doc" in srcs:
+            st["doc"] += 1
+    return st
+
+
+def tech_stats_text(st):
+    """把 `tech_stats()` 拼成一句人话；没有站点 ⇒ 空串（模板据此决定是否渲染）。"""
+    if not st or not st.get("total"):
+        return ""
+    bits = [f"内置识别 {st['builtin']} 站"]
+    if st.get("external"):
+        bits.append(f"仅外置 {st['external']} 站")
+    if st.get("unknown"):
+        bits.append(f"来源未知 {st['unknown']} 站")
+    if st.get("unmarked"):
+        bits.append(f"未标注 {st['unmarked']} 站")
+    if st.get("js_only"):
+        bits.append(f"仅靠 JS 补标 {st['js_only']} 站")
+    return f"技术栈来源（共 {st['total']} 站）：" + " · ".join(bits)
 
 
 def identify(resp, where="", detail=False):

@@ -521,19 +521,26 @@
     <details class="tech-more">
       <summary><b>字典一览</b>（内置 {{ dict_index|selectattr('kind','equalto','builtin')|list|length }} 份 /
         外部 {{ dict_index|selectattr('kind','equalto','external')|list|length }} 份）</summary>
-      <p class="muted small note">只显示条数与受限预览；页面不会下发整份字典（大字典也不会卡浏览器）。</p>
+      <p class="muted small note">只显示条数与受限预览；页面不会下发整份字典（大字典也不会卡浏览器）。
+        需要全文时点「导出」——那是用户显式触发的附件下载，不经过页面渲染。</p>
       <table>
-        <thead><tr><th>来源</th><th>条数</th><th>预览</th></tr></thead>
+        <thead><tr><th>来源</th><th>条数</th><th>预览 / 导出</th></tr></thead>
         <tbody>
         {% for d in dict_index %}
           <tr><td class="mono">{{ d.name }}</td>
             <td>{{ d.count }}{{ '+' if d.truncated else '' }}</td>
-            <td><a href="{{ url_for('dict_preview', key=d.key) }}" target="_blank" rel="noopener noreferrer">前 100 行</a></td></tr>
+            <td><a href="{{ url_for('dict_preview', key=d.key) }}" target="_blank" rel="noopener noreferrer">前 100 行</a>
+              ｜ <a href="{{ url_for('dict_export', key=d.key) }}" rel="noopener noreferrer">导出</a></td></tr>
         {% else %}
           <tr><td colspan="3" class="muted">没有可展示的字典。</td></tr>
         {% endfor %}
         </tbody>
       </table>
+      {% if dict_ext_sources %}
+      <p class="muted small">整源导出（只含 picks 里登记的分类）：
+        {% for s in dict_ext_sources %}<a href="{{ url_for('dict_export', src=s.idx) }}" rel="noopener noreferrer">{{ s.name }} 全部分类（zip）</a>{% if not loop.last %}｜{% endif %}{% endfor %}
+      </p>
+      {% endif %}
     </details>
     <p class="muted small note">目录递归只在<b>深扫</b>（<code>mode=deep</code> 或建任务勾「全目录深扫」）
       里生效。请求量估算：一层递归 ≈ <code>+目录数 ×（3 个软 404 基线 + 每目录条数）</code>，

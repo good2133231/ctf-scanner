@@ -29012,8 +29012,10 @@ expression: r0()
             "settings.html 的渲染点没有全部传入 dict_sources_view"
         assert _ap222.count("dict_sources_edit=dictstats.edit_rows(") == 2, \
             "两处渲染都要传可编辑行（否则编辑框不出现）"
-        assert _ap222.count("dict_index=dictstats.dict_index(") == 2, \
+        assert _ap222.count("dict_index=_dict_idx") == 2, \
             "两处渲染都要传字典一览（否则一览不出现）"
+        assert _ap222.count("dict_ext_sources=_dict_ext") == 2, \
+            "两处渲染都要传整源导出列表"
         _st222 = (ROOT / "gui" / "templates" / "settings.html").read_text(
             encoding="utf-8", errors="replace")
         assert "外部字典源" in _st222, "策略页应展示已配置的外部字典源（只读）"
@@ -29086,7 +29088,19 @@ expression: r0()
         assert _g223["labels"]["zz-js"] == "JS·内置", _g223
         assert _fp223.tech_summary("zz-js,zz-ext,zz-old,zz-builtin", _dd223, 2) == \
             "zz-builtin, zz-ext (+2)"
-        # 落库：collect/flush 把 detail 与 tech 一起写；老标签保留 unknown，不伪装成内置
+        # 续224：来源统计（任务页/报告那句）—— 内置优先、只靠 JS 单独计数
+        _st223 = _fp223.tech_stats([
+            {"tech": "a,b", "tech_detail": [{"t": "a", "src": "doc", "origin": "builtin"}]},
+            {"tech": "c", "tech_detail": [{"t": "c", "src": "js", "origin": "builtin"}]},
+            {"tech": "d", "tech_detail": [{"t": "d", "src": "doc", "origin": "external"}]},
+            {"tech": "e", "tech_detail": []},
+            {"tech": "", "tech_detail": [{"t": "x", "src": "doc", "origin": "builtin"}]},
+        ])
+        assert _st223 == {"total": 4, "resolved": 3, "builtin": 2, "external": 1,
+                          "unknown": 0, "js_only": 1, "doc": 2, "unmarked": 1}, _st223
+        assert _fp223.tech_stats_text(_st223) == \
+            "技术栈来源（共 4 站）：内置识别 2 站 · 仅外置 1 站 · 未标注 1 站 · 仅靠 JS 补标 1 站", \
+            _fp223.tech_stats_text(_st223)
         db.init_db()
         _t223 = db.create_task("smoke223-fp", "http://fp223.test/", ["probe"], {})
         db.insert_sites(_t223, [{"url": "http://fp223.test/", "host": "fp223.test",
@@ -29135,10 +29149,12 @@ expression: r0()
         assert "zz-builtin" in _h223 and "zz-ext" in _h223 and "zz-old" in _h223 and "zz-js" in _h223
         assert _h223.index("zz-builtin") < _h223.index("zz-ext"), "页面没把内置标签排在前面"
         assert "主文档·内置" in _h223 and '<details class="tech-more">' in _h223
+        assert "技术栈来源（共 1 站）：内置识别 1 站" in _h223, "站点页缺来源统计"
         assert '<summary class="muted small">+1</summary>' in _h223, "次要标签应折叠成 +1"
         # 报告：主标签 + (+N)
         _md223 = _rp223.generate(_t223)
         assert "zz-builtin, zz-ext, zz-old (+1)" in _md223, _md223[:1200]
+        assert "技术栈来源（共 1 站）：内置识别 1 站" in _md223, "报告缺来源统计"
         # §6.1 变异：把内置/外置的来源对调 ⇒ 主标签顺序必须跟着变（证明排序看 detail）
         _swap223 = [{"t": "zz-builtin", "src": "doc", "origin": "external"},
                     {"t": "zz-ext", "src": "doc", "origin": "builtin"}]
@@ -29149,7 +29165,7 @@ expression: r0()
     print("[223] 续223 ok: identify(detail) 带 src/origin｜同义归一保留内置优先｜"
           "tech_groups 主文档+内置 > … > 未知（前 N 个主标签、其余 +N）｜"
           "collect/flush 与 tech 同条 UPDATE 落库、老标签保留 unknown｜页面折叠 + 报告 +N｜"
-          "变异（内置/外置对调）顺序立刻改变")
+          "来源统计（内置/仅外置/未知/仅 JS）与页面/报告同一句｜变异（内置/外置对调）顺序立刻改变")
 
     # ------------------------------------------------------------------ [224]
     # 续223：外部字典源 GUI 编辑 + 字典一览/受限预览（大字典不整份下发）
@@ -29222,6 +29238,20 @@ expression: r0()
             assert _ds224[0]["path"] == str(_root224), "路径留空必须沿用旧值"
             assert _ds224[1] == {"name": "more", "path": "tools/dirsearch/dicts",
                                  "picks": ["api", "backup"], "after": "common"}, _ds224
+            # 续224：导出（单份附件 / 整源 zip）—— 与预览同一套 resolve，非法键仍 404。
+            # 必须在删除 demo 之前测：后面那一 POST 会把 source 0 换成不存在的 more。
+            import io as _io224, zipfile as _zip224
+            _ex224 = _c224.get("/dict_export?key=e:0:api")
+            assert _ex224.status_code == 200, _ex224.status_code
+            assert "attachment" in _ex224.headers.get("Content-Disposition", ""), _ex224.headers
+            assert _ex224.data == (_root224 / "api.txt").read_bytes(), len(_ex224.data)
+            _zp224 = _c224.get("/dict_export?src=0")
+            assert _zp224.status_code == 200 and _zp224.mimetype == "application/zip", _zp224.mimetype
+            with _zip224.ZipFile(_io224.BytesIO(_zp224.data)) as _z224:
+                assert sorted(_z224.namelist()) == ["api.txt"], _z224.namelist()  # picks 外的 backup 不许进包
+            assert _c224.get("/dict_export?key=e:0:../etc").status_code == 404
+            assert _c224.get("/dict_export?key=e:9:api").status_code == 404
+            assert _c224.get("/dict_export?src=9").status_code == 404
             assert _c224.post("/settings", data={
                 "dict_src_name_0": "", "dict_src_path_0": "",
                 "dict_src_name_1": "more", "dict_src_path_1": "",
@@ -29232,8 +29262,9 @@ expression: r0()
             _gui224.load_settings, _gui224.sync_pocs, _gui224.save_settings = _orig224
     finally:
         shutil.rmtree(_root224.parent.parent, ignore_errors=True)
-    print("[224] 续223 ok: 字典编辑（路径留空沿用/新增/清空来源名删除）｜字典一览只回条数｜"
-          "预览默认 100 行（硬上限 200）、非法 key 全 404（路径穿越/未登记）｜页面不回显绝对路径")
+    print("[224] 续223/224 ok: 字典编辑（路径留空沿用/新增/清空来源名删除）｜字典一览只回条数｜"
+          "预览默认 100 行（硬上限 200）、非法 key 全 404（路径穿越/未登记）｜"
+          "导出（单份附件 / 整源 zip，picks 过滤；非法键 404）｜页面不回显绝对路径")
     print("SMOKE PASS")
 
 

@@ -296,6 +296,10 @@
       {% endif %}
       页签徽标 {{ site_total }} 是<b>未过滤</b>的站点总数（被收起的也是事实，不从徽标里消失）。
     </p>
+    {# 续224：技术栈来源统计（全任务）—— 数据来自 sites.tech_detail，页面只显示计数 #}
+    {% if tech_stats_text %}
+    <p class="muted small note">{{ tech_stats_text }}</p>
+    {% endif %}
     {# 筛选 / 每页（续57）：资产页签改为**服务端分页**后，筛选也必须走服务端 ——
        前端 `data-filter` 只筛当前页，比原来更误导。
        `action` 尾部带 `#sites` 让提交后回到本页签（页签是纯前端切换，不带锚点会掉回第一个）。

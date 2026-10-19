@@ -14,9 +14,12 @@
 
 页面只渲染"名字 + 条数"，完整内容永远不随页面下发。
 """
+import io
 import os
+import re
 import threading
 import time
+import zipfile
 from pathlib import Path
 
 from .config import BASE_DIR, resolve
@@ -173,6 +176,50 @@ def resolve_external(settings, idx, cat):
     return p
 
 
+EXPORT_MAX_FILES = 64
+EXPORT_MAX_BYTES = 32 * 1024 * 1024
+
+
+def export_zip(settings, idx):
+    """把一个外部源的**全部分类**打成 zip（续224；内存内，受文件数与总大小上限保护）。
+
+    返回 `(zip_bytes, filename)`；源不存在 / 没有分类 / 超限 ⇒ `(None, 原因)`。
+    只打包 `external_categories()` 给出的文件（已过 `picks` 与根目录约束）——
+    与预览同一套边界，请求参数不能指定任意路径。
+    """
+    srcs = ((settings or {}).get("dirscan") or {}).get("dict_sources") or []
+    try:
+        idx = int(idx)
+    except (TypeError, ValueError):
+        return None, "来源下标非法"
+    if idx < 0 or idx >= len(srcs) or not isinstance(srcs[idx], dict):
+        return None, "来源不存在"
+    src = srcs[idx]
+    name = str(src.get("name") or "").strip() or f"src{idx + 1}"
+    cats = external_categories(src)
+    if not cats:
+        return None, "该来源没有可导出的分类"
+    if len(cats) > EXPORT_MAX_FILES:
+        return None, f"分类过多（{len(cats)} > {EXPORT_MAX_FILES}），请改用单份导出"
+    total = 0
+    for _cat, p in cats:
+        try:
+            total += p.stat().st_size
+        except OSError:
+            continue
+        if total > EXPORT_MAX_BYTES:
+            return None, f"总大小超过上限（{EXPORT_MAX_BYTES // (1024 * 1024)} MB）"
+    buf = io.BytesIO()
+    safe = re.sub(r"[^0-9A-Za-z._-]+", "_", name) or f"src{idx + 1}"
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for cat, p in cats:
+            try:
+                z.write(str(p), arcname=f"{cat}.txt")
+            except OSError:
+                continue
+    return buf.getvalue(), f"dicts-{safe}.zip"
+
+
 def dict_index(settings, external_limit=200):
     """策略页「字典一览」的数据：内置 + 外部，每项 `{key,name,count,truncated}`。
 
@@ -196,7 +243,8 @@ def dict_index(settings, external_limit=200):
         for cat, p in external_categories(src)[:external_limit]:
             n, trunc = count_lines(p)
             out.append({"key": f"e:{i}:{cat}", "name": f"{sname}/{cat}", "count": n,
-                        "truncated": trunc, "kind": "external"})
+                        "truncated": trunc, "kind": "external",
+                        "src_idx": i, "src_name": sname})
     return out
 
 
