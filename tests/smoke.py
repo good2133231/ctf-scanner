@@ -26985,9 +26985,11 @@ expression: r0()
     _h201 = c.post("/api/hostcollide/run", data={"task_id": str(_t201),
                                                  "next": "/tasks/%d" % _t201})
     assert _h201.status_code == 302, f"正常排队应是 302：{_h201.status_code}"
-    # ⑤ 两处入口都在页面上
+    # ⑤ 入口：详情页补跑按钮在；建任务页**不再放勾选框**（续227 —— 默认就做，不用勾）
     _tk201 = c.get("/tasks").get_data(as_text=True)
-    assert 'name="hostcollide"' in _tk201, "新建任务表单没有「Host 碰撞」勾选"
+    assert 'name="hostcollide"' not in _tk201, \
+        "建任务页又出现了 Host 碰撞勾选框（默认就做，不该再要求用户勾）"
+    _hd201 = c.get(f"/tasks/{_t201}").get_data(as_text=True)
     _hd201 = c.get(f"/tasks/{_t201}").get_data(as_text=True)
     # 渲染后查的是 **URL**（`url_for('api_hostcollide_run')` 已变成 /api/hostcollide/run），
     # 查函数名会永远假红 —— 模板源那一侧由 [145] 的 `url_for(...)` 计数负责。
@@ -27017,8 +27019,8 @@ expression: r0()
 
     # 续203：hostcollide 改成**默认开**了 —— "关着时零请求"那条仍在（上面用显式 False 验），
     # 但组描述不能再写"出厂关"，否则下一个人会以为配置没改过。
-    print("[201] 续201 ok: Host 碰撞接线(阶段/配置一致/**默认开(续203)**/显式关时零请求/"
-          "补跑端点三态/两处入口)｜"
+    print("[201] 续201/227 ok: Host 碰撞接线(阶段/配置一致/**默认开(续203)**/显式关时零请求/"
+          "补跑端点三态/详情页入口；建任务页不再放勾选框)｜"
           "队列并发出厂 2｜_with_hash 只认 #\\w(开放重定向形状全挡)｜前端保 hash + 表单注入｜"
           "批量打开提示写清浏览器限制")
     # ---- [202] 续202：任务层级筛选 + 送探任务名带域名数 ----
@@ -28801,6 +28803,9 @@ expression: r0()
     _tt219 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8", errors="replace")
     assert "off_by_default = s in ['screenshot', 'cert']" in _tt219, \
         "建任务默认勾选集合变了 ⇒ hostcollide 不能被塞进 off_by_default（否则又得用户手动勾）"
+    # ④ 续227：建任务页不再有可见的 Host 碰撞勾选框（默认就做，不需要勾）
+    assert 'name="hostcollide"' not in _tt219, \
+        "建任务页又出现 Host 碰撞勾选框（默认就做，不该再要求用户勾）"
 
     # ③ Host 碰撞**自己的那些行**不许再写"默认关闭 / 默认关"（与 DEFAULTS 相反，正是误导来源）。
     #    只取含 `hostcollide` 的行：同一个文件里别的功能（截图/爬虫/备案…）本来就该写"默认关"，
@@ -28813,7 +28818,7 @@ expression: r0()
         assert "默认关闭" not in _seg219 and "默认关" not in _seg219, \
             f"{_f219} 的 hostcollide 行还在写「默认关闭/默认关」—— 与 DEFAULTS（默认开）相反，\
 用户会以为还要勾：{_seg219[:160]}"
-    print("[219] 续219 ok: Host 碰撞默认就做（策略默认开 + 建任务默认勾 + 不勾也真跑）；"
+    print("[219] 续219/227 ok: Host 碰撞默认就做（策略默认开 + 建任务页不再放勾选框 + 不勾也真跑）；"
           "三处 GUI 文案不再写「默认关」")
     # ------------------------------------------------------------------ [220]
     # 续220：dirmap 按指纹收敛 —— 无 `-e` 的 dirmap 字典是**通用**的（5715 条、不分技术栈），

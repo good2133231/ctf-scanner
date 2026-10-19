@@ -4303,6 +4303,19 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续227（2026-10-19，WorkBuddy · Claude）：Host 碰撞从建任务页移除（默认就做）
+
+- [x] 建任务页删除 `name="hostcollide"` 勾选框（225 只删了「自动拓展」说明，这是漏项）
+- [x] 默认行为不变：策略 `hostcollide.enabled=True` 时不勾也跑；详情页按钮仍可单任务强制跑
+- [x] `[219]` 补 ④：建任务页不得再出现 Host 碰撞勾选框
+- [x] 排查"重启看不到新 UI"：5000 = 14:12 新进程，5011 = 10-18 旧进程（看 5011 就是旧页面）
+- [x] 全量 SMOKE PASS（257 组，7 分 02 秒；a 红 `[201]` 旧断言，b 绿）
+
+**下一轮（续227 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过（依赖真 runner 数据）
+
+
 ## 续226（2026-10-19，WorkBuddy · Claude）：TODO 里 puredns 结案 + logs/ 精确清理清单与门禁
 
 - [x] `TODO.md` 的 puredns 条改为 `[x]`，写明续164 已 pin（v2.1.1 + 四件产物 SHA256）

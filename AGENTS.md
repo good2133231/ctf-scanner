@@ -805,6 +805,9 @@ ctf-scanner/
   `task_*` 条件可删）；执行只走 `tools/clean_logs.py --apply <确切名字>`。**禁止**
   `rm -rf logs/*` / `rm -r logs` / `shutil.rmtree("logs")` / `glob(...).unlink()`；
   门禁 `[226]` 扫危险形态，并自测"通配 / 必留 / 未登记"三类拒绝。
+- **Host 碰撞不再要勾（续227）**：策略 `hostcollide.enabled` 默认开 ⇒ 建任务页**不放勾选框**
+  （`name="hostcollide"` 不得再出现）；要单任务强制跑用详情页那颗按钮，全局开关在策略页。
+  `[219]④` / `[201]⑤` 钉住这条，别再把勾选框加回去。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /
