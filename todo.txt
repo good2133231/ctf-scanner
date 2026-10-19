@@ -4303,6 +4303,30 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续222（2026-10-19，WorkBuddy · Claude）：目录扫描接外部字典源 + 每行标注「来源字典」
+
+第三方字典目录（如 dirsearch 的 `dicts/`）零入仓接进来，每条命中要看得出是哪份字典猜出来的。
+细节、修过的 6 个真问题与工具踩坑见 CHANGELOG 续222。
+
+- [x] `dirscan.dict_sources`：`{name, path, picks?, after?}`；分类＝`.txt` 文件名；
+      **只在深扫全层生效**；与内置层共用 `max_paths`；目录不存在/没匹配到分类 ⇒ 跳过并只报一次
+- [x] `after` 按**层名**定位（层名 vs 字典名是两个键空间，本轮实测踩过）；内置层标签用
+      字典文件名（`dirs_php`）、外部源用 `来源名/分类名`（`dirsearch/api`）
+- [x] `dirs.dict_src` 新列（SCHEMA + 老库补列）；详情页「来源字典」列；MD/HTML 报告加列
+- [x] 策略页只读展示外部源；`path` 过 `rel_display(mask_outside=True)`（§0.3，不回显绝对路径）；
+      POST /settings 原样带回，不抹配置
+- [x] 顺手修夹具被 GC（`_FIXTURE_HTTPD`）
+- [x] **[222] 断言 + 全量 SMOKE PASS（253 组，约 9 分 24 秒）**；本轮共 18 次全量（5 绿 13 红，
+      红因逐条记在 CHANGELOG「本轮抓出来的真问题」与「门禁实测」）
+- [x] 工具踩坑记进 AGENTS §9（混合 EOL 文件被整份重写 + 中文弯引号被洗成 ASCII）
+
+**下一轮（续222 之后）——只放未做的：**
+- [ ] **页面上把指纹标签分个主次**（续221 挂账）：主文档 > JS、内置 > 外置，或折叠次要标签
+- [ ] **smoke 提速专项**：`[6u]` 13 阶段端到端 46.5s + `[7w]` 305 POC/负样本校准 38.5s
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] 若主理人需要：外部字典源的 GUI 编辑入口（现在是只读展示，增删改仍编辑 settings.yaml）
+
+
 ## 续221（2026-10-19，WorkBuddy · Claude）：指纹标签治理 —— JS 不吃 body 规则 + 同义归一 + 单站上限 + 烂分支精准剔除
 
 主理人报的真站故障：一个 Sentry 登录页被打出 20+ 个标签（Cloudflare×3、禅道、群晖×2、深信服…）。

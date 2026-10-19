@@ -4529,6 +4529,24 @@ def create_app():
     @admin_required
     def settings_page():
         nonlocal settings
+
+        def _dict_sources_view(_s):
+            """续222：外部字典源的只读展示（页面没有逐项输入框）。
+
+            路径必须过 `rel_display(..., mask_outside=True)`：字典目录可以配在项目外
+            （§0.3 的 GUI 硬规矩：项目外绝对路径也不许回显，压成 `…/父/名`）。
+            """
+            _out = []
+            for _x in ((_s.get("dirscan") or {}).get("dict_sources") or []):
+                if not isinstance(_x, dict):
+                    continue
+                _out.append({"name": str(_x.get("name") or ""),
+                             "path": rel_display(str(_x.get("path") or ""),
+                                                 mask_outside=True),
+                             "picks": [str(p) for p in (_x.get("picks") or [])],
+                             "after": str(_x.get("after") or "common")})
+            return _out
+
         if request.method == "POST":
             f = request.form
             _g0 = settings.get("gui") or {}
@@ -4673,7 +4691,12 @@ def create_app():
                                 "recursive_max_paths": int(
                                     f.get("dirscan_recursive_max_paths", 40) or 0),
                                 "ml_template": f.get("dirscan_ml_template") == "1",
-                                "ml_outlier": f.get("dirscan_ml_outlier") == "1"},
+                                "ml_outlier": f.get("dirscan_ml_outlier") == "1",
+                                # 续222：外部字典源是 list[dict]（name/path/picks/after），页面只读展示、
+                                # 没有逐项输入框 ⇒ 原样带回现值。整份重写的保存动作不许把它抹成空
+                                # （[158] 的"覆盖 = DEFAULTS 全段"钉的正是这件事）。
+                                "dict_sources": list((settings.get("dirscan") or {})
+                                                     .get("dict_sources") or [])},
                     "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
                     # 外部引擎 afrog（续121 接入；续149 默认开）；限速值由 scanner/afrog.py 的封顶再压一道
                     # 敏感信息 / flag 候选抽取（续148 由"flag 候选"改名）：零额外请求所以默认开；
@@ -4951,6 +4974,7 @@ def create_app():
                                        bl=blacklist.load(settings, owner_id=_owner_scope()),
                                        bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                        sb=_value_blacklist_view(),
+                                       dict_sources_view=_dict_sources_view(_s114),
 
                                        esp=external_source_panel(_s114),
                                        shape_note=_shape_note(_s114),
@@ -4979,6 +5003,7 @@ def create_app():
                                bl=blacklist.load(settings, owner_id=_owner_scope()),
                                bl_path=rel_display(blacklist.path(settings), mask_outside=True),
                                sb=_value_blacklist_view(),
+                               dict_sources_view=_dict_sources_view(settings),
                                esp=external_source_panel(settings),
                                shape_note=_shape_note(settings),
                                edge_note=_edge_note(settings),

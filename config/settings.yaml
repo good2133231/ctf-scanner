@@ -293,6 +293,17 @@ dirscan:
   quick_max_paths: 150
   big_dict: true
   tech_aware: true
+  # 续222：外部字典源（零入仓）。path 指向本机字典目录（相对仓库根或绝对路径），
+  # 该目录下每个 .txt 的分类名就是一层；picks 只接列出的分类（空＝全接）；
+  # after 指定插在哪一层之后（fw/lang/shallow/exposure/common，缺省 common）。
+  # **只在深扫档生效**：快扫（150 条精选）与框架补充扫描（fw+exposure）不吃外部字典。
+  # 例：把 dirsearch 的 api/backup 两类接在暴露面之后
+  # dict_sources:
+  #   - name: dirsearch
+  #     path: tools/dirsearch/dicts
+  #     picks: [api, backup]
+  #     after: exposure
+  dict_sources: []
   max_paths: 400
   # 深扫专用：对命中的文件名型路径派生 .bak/.zip/.old 等备份变体（额度同 max_paths）
   suffix_aware: true

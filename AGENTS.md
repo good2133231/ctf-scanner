@@ -773,6 +773,13 @@ ctf-scanner/
     （`.env` / `.git/config` / `wp-config.php.bak` / `.sql`…）而响应体是 **HTML 文档** ⇒ 判软 404 模板。
     反向保证写进断言：真 `.env` 回 `text/plain` 键值正文**绝不**被挡（否则就是把 A01 真发现吃了）。
     两条判据各有适用面，不许合并（基线比对对响应不稳定的站点会失效，内容判定不依赖基线）。
+- **外部字典源与「这一行来自哪份字典」（续222）**：`dirscan.dict_sources` 零入仓接第三方字典目录
+  （如 dirsearch 的 `dicts/`，一个分类一个 `.txt`）。**只在深扫全层生效**（快扫 150 条精选与
+  框架补充扫描不吃，避免被第三方大字典稀释）。`after` 按**层名**（fw/lang/shallow/exposure/common）
+  定位 —— 层名与字典文件名是两个键空间（`dirs_exposure` ≠ `exposure`，本轮实测踩过）。
+  每行命中的来源写 `dirs.dict_src`：内置层用字典文件名（`dirs_php`）、外部源用 `来源名/分类名`
+  （`dirsearch/api`），**只放名字、绝不放绝对路径**（页面与报告是交付物）；策略页只读展示时
+  路径仍过 `rel_display(mask_outside=True)`。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /
@@ -2831,6 +2838,11 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   （difflib 对齐内容、等价的行沿用 HEAD 那一行的 EOL，新增行取该区段主导形态；
   可参考本轮用的 `logs/_eolfix.py`），然后核 `git diff --numstat` 与
   `git diff --ignore-cr-at-eol --numstat` 是否重新相等。
+  ⚠️ **同一类工具还会洗引号（续222 实测）**：对混合 EOL 的 `tests/smoke.py` 做局部替换，
+  整份重写后 **中文弯引号 `“”` 被归一成 ASCII `"`**（25 行；落在中文注释/字符串里就是语法错误，
+  `py_compile` 才暴露）。救法与 EOL 同源：按 HEAD 逐行还原（只替换"归一化后逐字相等"的行），
+  改完**必须** `py_compile` + 人眼过一遍 `git diff` 里的引号。结论不变：混合 EOL 文件只用
+  `read_bytes()/write_bytes()` 的补丁脚本（`logs/_lpatch.py` / `logs/_eolfix.py`）。
   ⚠️ **具体陷阱（2026-09-28 续64 又踩一次）**：Edit/Write 这类工具会把**整个文件**归一成 LF，
   对**混合 EOL** 的文件尤其致命。归位办法**不是**无脑全文件 `\r\n`，而是**从 `git show HEAD:<file>`
   取原始字节、只替换目标文本、其余行的原 EOL 保留**。

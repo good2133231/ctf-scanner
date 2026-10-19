@@ -352,6 +352,9 @@ def _fixture_alive(port, timeout=0.8):
         return False
 
 
+_FIXTURE_HTTPD = None            # 续222：持有靶场实例，防 GC 把监听 socket 收掉
+
+
 def start_fixture(port=FIXTURE_PORT):
     """在后台线程启动内置靶场；端口被**真的能服务的**靶场占用时复用它。
 
@@ -359,6 +362,9 @@ def start_fixture(port=FIXTURE_PORT):
     先短重试几次（上一个测试的收尾窗口），再探端口；探不到就打印原因并 `SystemExit(1)`，
     让门禁在**开头**红，且红得能直接看出是 8765 被占/夹具没起来。
     """
+    # 续222：起成功的 httpd 必须由调用方**持有**（`main()` 挂到模块级 `_FIXTURE_HTTPD`）。
+    # 只被局部变量引用时，函数一返回就被 GC、监听 socket 关闭 ⇒ 夹具"起过又空了"，
+    # 而 `[217]` 的 `_fixture_alive(FIXTURE_PORT)` 会红得像靶场被外部抢走。
     ensure_fixture_git_config()      # 必须在起服务**之前**（复用到外部服务时同样需要）
     handler = functools.partial(_QuietHandler, directory=str(ROOT / "smoke_root"))
     last = None
@@ -414,7 +420,9 @@ def _ff126_ast_names(src):
 
 
 def main():
-    start_fixture()
+    # 续222：返回值必须接住并挂到模块级（见 start_fixture 上方说明）。
+    global _FIXTURE_HTTPD
+    _FIXTURE_HTTPD = start_fixture()
     db.init_db()
 
     # [193a] 门禁不许改写被跟踪的 config/blacklist.txt（续189 挂账、续192 实录「某组跑完注释行
@@ -2261,7 +2269,7 @@ def main():
         [{"site_url": "http://a/", "path": "http://a/x.php"}], 0) == []
 
     _sent = []
-    _orig_http6, _orig_lp6 = _ds_mod.http_request, DirscanStage._load_paths
+    _orig_http6, _orig_lp6 = _ds_mod.http_request, DirscanStage._load_paths_src
 
     def _fake_http6(u, **k):
         _sent.append(u)
@@ -2270,8 +2278,10 @@ def main():
         return {"status": 200, "length": 200, "text": "hit:" + u, "content": b"h"}
 
     _site6 = [{"url": "http://sfx.test/", "tech": "", "title": "", "length": None}]
-    DirscanStage._load_paths = lambda self, kind, cfg, fw="", layers=None, limit=None: \
-        ["config.php"]
+    # 续222：生产入口改成 `_load_paths_src`（要来源标签），桩跟着挪 ——
+    # 继续桩 `_load_paths` 会让真字典被加载，浅扫断言当场变成一堆 .git 路径。
+    DirscanStage._load_paths_src = lambda self, kind, cfg, fw="", layers=None, limit=None: \
+        (["config.php"], {"config.php": "dirs_shallow"})
     _ds_mod.http_request = _fake_http6
     try:
         _sent.clear()
@@ -2282,7 +2292,7 @@ def main():
         DirscanStage(dstage.ctx)._builtin_scan(_site6, {"max_paths": 5, "suffix_aware": True}, {})
         _hits_deep = [u for u in _sent if "ctfscan-none" not in u]
     finally:
-        _ds_mod.http_request, DirscanStage._load_paths = _orig_http6, _orig_lp6
+        _ds_mod.http_request, DirscanStage._load_paths_src = _orig_http6, _orig_lp6
     assert _hits_shallow == ["http://sfx.test/config.php"], _hits_shallow
     assert "http://sfx.test/config.php.bak" in _hits_deep, _hits_deep
     assert len(_hits_deep) > len(_hits_shallow), "深扫应派生出备份后缀变体"
@@ -5780,7 +5790,7 @@ workflows:
     assert _dp30("http://h", "http://other/x", 200) is None, "站点根之外的条目不递归"
 
     _sent30, _layers30 = [], []
-    _orig_http30, _orig_lp30 = _ds_mod.http_request, DirscanStage._load_paths
+    _orig_http30, _orig_lp30 = _ds_mod.http_request, DirscanStage._load_paths_src
     _PATHS30 = ["config.php", "sub"]        # `sub` 故意是目录型，用来验证"第二层"
 
     def _fake_http30(u, **k):
@@ -5790,16 +5800,17 @@ workflows:
         return {"status": 200, "length": 200, "text": "hit:" + u, "content": b"h"}
 
     def _fake_lp30(self, kind, cfg, fw="", layers=None, limit=None):
-        # 真 `_load_paths` 的 limit 就是"截断到多少条"，这里如实模拟 ——
+        # 真 `_load_paths_src` 的 limit 就是"截断到多少条"，这里如实模拟 ——
         # 否则 recursive_max_paths 那条断言是空过的（桩忽略 limit 就永远 2 条）
         _layers30.append(tuple(layers or ()))
-        return _PATHS30[:int(limit)] if limit else list(_PATHS30)
+        _p30 = _PATHS30[:int(limit)] if limit else list(_PATHS30)
+        return _p30, {x: "dirs_shallow" for x in _p30}
 
     _st30 = DirscanStage(dstage.ctx)         # 复用 [5g] 建好的 ctx（task_id / settings 都齐）
     _sites30 = [{"url": "http://h.test/", "tech": "", "title": "", "length": None}]
     _dir30 = {"site_url": "http://h.test", "path": "http://h.test/admin", "status": 200,
               "length": 10, "method": "GET", "note": "builtin", "title": ""}
-    _ds_mod.http_request, DirscanStage._load_paths = _fake_http30, _fake_lp30
+    _ds_mod.http_request, DirscanStage._load_paths_src = _fake_http30, _fake_lp30
     try:
         # 2) 显式关掉（recursive_depth=0；续144 起默认是 1 层）：连字典都不读、**一个请求都不发**
         _sent30.clear()
@@ -5859,7 +5870,7 @@ workflows:
                                "recursive_max_paths": 1}, {})
         assert len(_sent30) == 4, f"3 基线 + 1 路径：{sorted(_sent30)}"
     finally:
-        _ds_mod.http_request, DirscanStage._load_paths = _orig_http30, _orig_lp30
+        _ds_mod.http_request, DirscanStage._load_paths_src = _orig_http30, _orig_lp30
 
     # 7) 接线：任务级「目录递归」勾选 = 本次强制开（**策略关着也生效**，且不原地改全局策略）；
     #    没勾就按策略走。递归是深扫的附属能力，所以放在 `run()` 里对两种产物一视同仁
@@ -22403,7 +22414,10 @@ expression: r0()
 
     class _S155:
         ctx = _C155()
+        # 续222：`_layer_paths` 现在是 `_layer_paths_named` 的薄封装 —— 替身类两个都要绑，
+        # 否则 `self._layer_paths_named` 在替身上不存在（本轮全量就是这么红的）。
         _layer_paths = _DS155._layer_paths
+        _layer_paths_named = _DS155._layer_paths_named
 
     def _tails155(kind):
         return {str(x).rsplit("/", 1)[-1] for x in
@@ -28880,6 +28894,150 @@ expression: r0()
     assert not ({"e", "f"} & set(_tech221)), f"超上限时 JS 侧标签该先丢：{_tech221}"
     assert any("未纳入" in m and "上限 3" in m for m in _lg221), _lg221
     print("[221] 续221 ok: JS 正文不吃 body 规则｜烂分支按 fixes 清单精准剔除（强分支仍生效、未登记规则零改动）｜同义归一（群晖-nas/diskstation→群晖、CF/Cloudflare Bot Management→cloudflare）｜上限截断按主文档优先并明示")
+    # ------------------------------------------------------------------ [222]
+    # 续222：外部字典源（dirscan.dict_sources，零入仓接 dirsearch 那类字典目录）
+    #   + 每行标注"来源字典"（dirs.dict_src，只放名字不放绝对路径）。
+    from scanner.stages import dirscan as _dsmod222
+    from scanner.stages.dirscan import DirscanStage as _ds222
+    from scanner import db as _db222
+    _FULL_LAYERS_222 = _dsmod222._FULL_LAYERS
+
+    _root222 = Path(tempfile.mkdtemp(prefix="smoke222-dicts-"))
+    try:
+        # 形态与 dirsearch 一致：**分类名就是根下的 .txt 文件名**（api.txt / backup.txt…）
+        (_root222 / "api.txt").write_text("# c\n/admin-api\n", encoding="utf-8")
+        (_root222 / "backup.txt").write_text("/db-dump.sql\n", encoding="utf-8")
+        (_root222 / "zzz.txt").write_text("/nope.txt\n", encoding="utf-8")   # picks 之外的分类
+        (_root222 / "sub").mkdir()                                          # 子目录不算分类
+
+        class _Lg222:
+            def __init__(self):
+                self.lines = []
+
+            def info(self, m):
+                self.lines.append(str(m))
+
+            def warning(self, m):
+                self.lines.append(str(m))
+
+        class _Cx222:
+            def __init__(self, cfg, dicts=None):
+                # 默认用真实 settings 的 dicts（外部源解析/日志用例只需要目录）；
+                # 顺序断言另传**合成字典** —— 真实 dirs_exposure 有 720 条，max_paths=400
+                # 时外部层根本轮不到（上一版就是被真实字典尺寸坑红的，见下）。
+                self.settings = {"dicts": dict(dicts or settings.get("dicts") or {}),
+                                 "dirscan": cfg}
+                self.logger = _Lg222()
+
+            def stopped(self):
+                return False
+
+        _st222 = _ds222.__new__(_ds222)
+        _cfg222 = {"max_paths": 400, "dict_sources": [
+            {"name": "dirsearch", "path": str(_root222), "picks": ["api", "backup"],
+             "after": "exposure"}]}
+        _st222.ctx = _Cx222(_cfg222)
+        _ext222 = _st222._external_layers(_cfg222, _FULL_LAYERS_222)
+        assert [lab for _a, lab, _f in _ext222] == ["dirsearch/api", "dirsearch/backup"], _ext222
+        for _a, lab, f in _ext222:
+            assert not lab.startswith("/") and str(_root222) not in lab, lab
+            assert Path(f).is_absolute()
+        _cfg222b = {"dict_sources": [{"name": "d", "path": str(_root222), "picks": ["api"]}]}
+        assert [lab for _a, lab, _f in _st222._external_layers(_cfg222b, ())] == ["d/api"]
+        _cfg222c = {"dict_sources": [{"name": "d", "path": "tools/no-such-dir"}]}
+        assert _st222._external_layers(_cfg222c, ()) == []
+        assert any("不存在" in l for l in _st222.ctx.logger.lines), _st222.ctx.logger.lines
+        # 顺序断言用**合成字典**（每层 2 条）：层名→after 的定位关系才可判，且不随
+        # 真实字典行数漂移。文件名保持 `dirs_<层>.txt`，展示标签就正好是 `dirs_<层>`。
+        _dicts222 = {}
+        for _ly222 in ("jsp", "shallow", "exposure", "common"):
+            _f222 = _root222 / f"dirs_{_ly222}.txt"
+            _f222.write_text(f"/{_ly222}-a\n/{_ly222}-b\n", encoding="utf-8")
+            _dicts222[f"dirs_{_ly222}"] = str(_f222)
+        _cfg222d = {"max_paths": 100, "dict_sources": [
+            {"name": "ds", "path": str(_root222), "picks": ["api"], "after": "exposure"}]}
+        _st222.ctx = _Cx222(_cfg222d, dicts=_dicts222)
+        _paths222, _src222 = _st222._load_paths_src("jsp", _cfg222d, layers=_FULL_LAYERS_222)
+        assert "/admin-api" in _paths222 and _src222["/admin-api"] == "ds/api", _paths222
+        _order222 = [_src222[p] for p in _paths222]
+        # 内置层的展示标签必须是**字典名**（dirs_exposure）：带 .txt 会让页面/报告多一个
+        # 无意义后缀；退化成层名（exposure）则看不出用的是哪份字典。两者都实测踩过。
+        assert "dirs_exposure" in _order222 and "exposure" not in _order222, _order222
+        assert not any(_x.endswith(".txt") for _x in _order222), _order222
+        # after 必须真的落在 exposure 与 common 之间（第一版拿 `dirs_exposure.txt` 去比
+        # `exposure`，永远匹配不上 ⇒ 外部层被静默追加到 common 之后，顺序断言当场红）。
+        assert _order222 == ["dirs_jsp", "dirs_jsp", "dirs_shallow", "dirs_shallow",
+                             "dirs_exposure", "dirs_exposure", "ds/api",
+                             "dirs_common", "dirs_common"], _order222
+        # 外部源只在**深扫全层**生效：快扫（150 条精选）与框架补充扫描不吃，
+        # 否则第三方大字典会把这两档的预算稀释掉（口径写在 settings.yaml 注释里）。
+        _p222q, _ = _st222._load_paths_src("jsp", _cfg222d,
+                                           layers=_dsmod222._SHALLOW_LAYERS)
+        assert "/admin-api" not in _p222q, "快扫不该吃外部字典源"
+        _p222f, _ = _st222._load_paths_src("jsp", _cfg222d,
+                                           layers=_dsmod222._FW_LAYERS)
+        assert "/admin-api" not in _p222f, "框架补充扫描不该吃外部字典源"
+        _cfg222e = {"max_paths": 3, "dict_sources": [
+            {"name": "ds", "path": str(_root222), "picks": ["api"]}]}
+        _p222e, _s222e = _st222._load_paths_src("jsp", _cfg222e, layers=_FULL_LAYERS_222)
+        assert len(_p222e) == 3, _p222e
+        _db222.init_db()
+        _tid222 = _db222.create_task("smoke222-dirs", "http://127.0.0.1:8765/", ["dirscan"], {})
+        _db222.insert_dirs(_tid222, [{"site_url": "http://127.0.0.1:8765/", "path": "/x",
+                                      "status": 200, "length": 1, "note": "builtin",
+                                      "dict_src": "dirsearch/api"}])
+        _row222 = [r for r in _db222.list_dirs(_tid222) if r["path"] == "/x"][0]
+        assert _row222["dict_src"] == "dirsearch/api", list(_row222.keys())
+        _td222 = (ROOT / "gui" / "templates" / "task_detail.html").read_text(
+            encoding="utf-8", errors="replace")
+        assert "<th>来源字典</th>" in _td222 and "{{ d.dict_src or '-' }}" in _td222, \
+            "详情页目录表要有「来源字典」列，且单元格渲染 dict_src"
+        _rp222 = (ROOT / "scanner" / "report.py").read_text(encoding="utf-8", errors="replace")
+        assert '| 状态 | 路径 | 来源字典 |' in _rp222 and '"状态", "路径", "来源字典"' in _rp222
+        _ap222 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+        assert '"dict_sources": list((settings.get("dirscan")' in _ap222, \
+            "POST /settings 的 dirscan 段没把 dict_sources 原样带回"
+        # 两处渲染（正常 / 保存参数报错分支）都要传视图：漏一处就会显示成「未配置」。
+        assert _ap222.count("dict_sources_view=_dict_sources_view(") == 2, \
+            "settings.html 的渲染点没有全部传入 dict_sources_view"
+        _st222 = (ROOT / "gui" / "templates" / "settings.html").read_text(
+            encoding="utf-8", errors="replace")
+        assert "外部字典源" in _st222, "策略页应展示已配置的外部字典源（只读）"
+        # 策略页只读展示：路径必须脱敏（§0.3 GUI 不回显项目外绝对路径），并带变异证伪 ——
+        # 只断言"页面里没有绝对路径"挡不住"模板根本没渲染这一条"（空渲染也永远绿）。
+        import copy as _copy222
+        import gui.app as _gui222
+        _outside222 = ("C:" + chr(92) + "secret" + chr(92) + "dicts"
+                       if os.name == "nt" else "/opt" + "/secret" + "/dicts")
+        _masked222 = "…/secret/dicts"
+
+        def _mk222(rel_patch=None):
+            _s222 = _copy222.deepcopy(settings)
+            _s222.setdefault("dirscan", {})["dict_sources"] = [
+                {"name": "ext", "path": _outside222, "picks": ["api"], "after": "exposure"}]
+            _orig = (_gui222.load_settings, _gui222.sync_pocs, _gui222.rel_display)
+            _gui222.load_settings = lambda: _s222
+            _gui222.sync_pocs = lambda *_a, **_k: None
+            if rel_patch:
+                _gui222.rel_display = rel_patch
+            try:
+                _c = _gui222.create_app().test_client()
+                assert _c.post("/login", data=_admin_form117(),
+                               environ_base={"REMOTE_ADDR": "203.0.113.242"}).status_code == 302
+                return _c.get("/settings").get_data(as_text=True)
+            finally:
+                _gui222.load_settings, _gui222.sync_pocs, _gui222.rel_display = _orig
+
+        _h222 = _mk222()
+        assert _outside222 not in _h222, "策略页回显了外部字典源的绝对路径"
+        assert _masked222 in _h222, "策略页应显示脱敏后的路径（…/父/名）"
+        _h222m = _mk222(lambda p, base=None, mask_outside=False: str(p or ""))
+        assert _outside222 in _h222m, "变异后仍不见绝对路径 → 说明断言测的不是脱敏通道"
+    finally:
+        shutil.rmtree(_root222, ignore_errors=True)
+    print("[222] 续222 ok: 外部字典源 dict_sources（分类即层、picks 过滤、after 定位、"
+          "额度共用、目录不存在跳过）｜每行标注来源字典（名字不含绝对路径）并进页面与报告｜"
+          "保存映射不抹配置")
     print("SMOKE PASS")
 
 

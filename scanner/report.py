@@ -452,10 +452,13 @@ def generate(task_id, full=False):
     if dirs:
         lines.append("## " + _cap_title("目录发现", len(dirs), CAP_DIRS))
         lines.append("")
-        lines.append("| 状态 | 路径 |")
-        lines.append("|---|---|")
+        # 续222：加一列"来源字典"（dict_src：字典名/分类名，如 dirs_php / dirsearch/api）。
+        # 只放名字、不放绝对路径 —— 报告是交付物；老行该列为空 ⇒ 显示 -。
+        lines.append("| 状态 | 路径 | 来源字典 |")
+        lines.append("|---|---|---|")
         for d in dirs[:CAP_DIRS]:
-            lines.append(f"| {_c(d['status'])} | {_c(d['path'])} |")
+            lines.append(f"| {_c(d['status'])} | {_c(d['path'])} | "
+                         f"{_c(d['dict_src'] or '-')} |")
         lines.append("")
     fp = [v for v in all_vulns if (v["review"] or "") == "false_positive"]
     if fp:
@@ -646,8 +649,10 @@ def generate_html(task_id, full=False):
             for r in subs[:CAP_SUBS])) + "</pre>")
     if dirs:
         p.append("<h2>" + _cap_title("目录发现", len(dirs), CAP_DIRS) + "</h2>")
-        p.append(_html_table(["状态", "路径"],
-                             [[_h(x["status"]), _h(x["path"])] for x in dirs[:CAP_DIRS]]))
+        # 续222：目录行补一列"来源字典"（dict_src；名字而非绝对路径）
+        p.append(_html_table(["状态", "路径", "来源字典"],
+                             [[_h(x["status"]), _h(x["path"]),
+                               _h(x["dict_src"] or "-")] for x in dirs[:CAP_DIRS]]))
     fp = [v for v in all_vulns if (v["review"] or "") == "false_positive"]
     if fp:
         p.append("<h2>已判误报（人工复核排除）</h2>")

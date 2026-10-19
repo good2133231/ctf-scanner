@@ -158,7 +158,9 @@ CREATE TABLE IF NOT EXISTS dirs (
   task_id INTEGER NOT NULL,
   site_url TEXT, path TEXT NOT NULL, status INTEGER, length INTEGER,
   method TEXT DEFAULT 'GET', note TEXT,
-  title TEXT DEFAULT ''            -- 命中页面的 <title>（仅内置扫描有；dirmap 解析行没有 body 取不到）
+  title TEXT DEFAULT '',           -- 命中页面的 <title>（仅内置扫描有；dirmap 解析行没有 body 取不到）
+  dict_src TEXT DEFAULT ''         -- 续222：这一行来自哪份字典（`dirs_php` / `dirsearch/api`…
+                                  -- 只放**字典名/分类名**，绝不放绝对路径 —— 报告是交付物）
 );
 -- 续198（主理人点单「加个爬虫，获取和网站相关的链接」）：与 `dirs` 是**两件事**，别合并 ——
 --   `dirs` 是**字典猜出来的路径**（我们要证明它存在），`urls` 是**页面里本来就写着的链接**
@@ -425,7 +427,9 @@ _COLUMN_PATCHES = {
               "retest_state": "TEXT DEFAULT ''", "retested_at": "TEXT DEFAULT ''"},
     "pocs": {"confidence": "TEXT DEFAULT ''"},
     # 目录命中页的 <title>：老库补列（新库由 SCHEMA 直接建出）
-    "dirs": {"title": "TEXT DEFAULT ''"},
+    "dirs": {"title": "TEXT DEFAULT ''",
+             # 续222：来源字典标签（见 SCHEMA 同名列注释；老行空串 ⇒ 展示层显示 -）
+             "dict_src": "TEXT DEFAULT ''"},
     # 续110：C 段"共享主机"结论。老库补列（新库由 SCHEMA 直接建出）—— 命中过多时
     #   `domains` 留空、由 `note` 说明为什么不入库（见 stages/osint.py 与 §7）。
     "csegs": {"note": "TEXT DEFAULT ''"},
@@ -1505,11 +1509,11 @@ def insert_certs(task_id, rows):
 def insert_dirs(task_id, dirs):
     if not dirs:
         return
-    _exec("INSERT INTO dirs(task_id,site_url,path,status,length,method,note,title) "
-          "VALUES(?,?,?,?,?,?,?,?)",
+    _exec("INSERT INTO dirs(task_id,site_url,path,status,length,method,note,title,dict_src) "
+          "VALUES(?,?,?,?,?,?,?,?,?)",
           [(task_id, d.get("site_url", ""), d.get("path", ""), d.get("status"),
             d.get("length"), d.get("method", "GET"), d.get("note", ""),
-            d.get("title", "")) for d in dirs], many=True)
+            d.get("title", ""), d.get("dict_src", "")) for d in dirs], many=True)
 
 
 def insert_vuln(task_id, v, trust_caller=False):

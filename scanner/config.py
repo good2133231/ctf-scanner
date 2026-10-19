@@ -458,6 +458,11 @@ DEFAULTS = {
         "big_dict": True,      # 未知技术栈时用全量字典（config/dicts/dirs_big.txt）
         "tech_aware": True,    # 按 sites.tech 选字典：Java 站不吃 PHP/ASP 后缀（用户要求）
         "max_paths": 400,      # 深扫：单站点最多扫多少条字典（框架字典优先占额度）
+        # 续222：外部字典源（零入仓接第三方字典目录，如 dirsearch 的 dicts/）。
+        # 每项：{name, path, picks?, after?}；标签只进**名字/分类名**，不进绝对路径。
+        # 与内置层共用 max_paths 额度；目录不存在/没匹配到分类 ⇒ 跳过并写日志。
+        # **只在深扫档生效**（快扫/框架补充扫描不吃外部字典，避免稀释精选路径）。
+        "dict_sources": [],
         # 后缀派生（deep 专用，借鉴 dirmap 的备份文件扩展）：对命中的**文件名型**路径再派生
         # .bak/.zip/.tar.gz/.old/~/.swp/.copy/.txt 等变体，额度上限同 max_paths。浅扫不做（省请求）。
         "suffix_aware": True,

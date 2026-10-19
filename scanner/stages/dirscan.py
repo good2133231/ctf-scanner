@@ -47,6 +47,7 @@ import re
 import shutil
 import threading
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 from .base import Stage
@@ -564,11 +565,92 @@ class DirscanStage(Stage):
         """
         return self._layer_paths(kind, cfg, fw, _FULL_LAYERS)
 
-    def _layer_paths(self, kind, cfg, fw, layers):
-        """按 `layers` 挑出要用哪些层的字典文件（返回相对路径列表）。
+    # 外部字典源（续222）：`dirscan.dict_sources`，零入仓地接第三方字典目录
+    # （如 dirsearch 的 dicts/，一份分类一个 .txt）。
+    #   配置形状（settings.yaml 有注释示例）：
+    #     dict_sources:
+    #       - name: dirsearch          # 来源名，进标签：`dirsearch/api`
+    #         path: tools/dirsearch/dicts   # 相对仓库根或绝对路径
+    #         picks: [api, backup]     # 只接这些分类（分类名＝文件名去后缀）；空＝全接
+    #         after: exposure          # 插在哪一层之后（fw/lang/shallow/exposure/common）
+    #   三条硬规矩：
+    #   ① 标签只放**字典名/分类名**，绝不放绝对路径 —— 报告是交付物（§0.5 同族）；
+    #   ② 外部字典与内置层共用同一个 `max_paths` 额度（不是额外加成），否则"接一份大字典"
+    #      会把内置的语言/框架桶整个挤出额度；
+    #   ③ 目录不存在/没匹配到分类 ⇒ 该源**静默跳过**（第三方目录是可选件，不是依赖），
+    #      但**接了哪些、跳过什么要写进日志**（§0 第 10 条）。
+    # 外部字典源允许的 `after` 取值 = 全部内置层名（与 `_FULL_LAYERS` 同集合）。
+    _EXT_AFTER = ("fw", "lang", "shallow", "exposure", "common")
+    # 一次任务里每个站点都会调 `_load_layers` ⇒ 同一份外部源配置只报一次日志。
+    # 只去重**日志**、不缓存解析结果：运行期往字典目录里加文件应当立刻可见。
+    _EXT_LOGGED = set()
+
+    def _ext_log_once(self, key, level, msg):
+        if key in DirscanStage._EXT_LOGGED:
+            return
+        DirscanStage._EXT_LOGGED.add(key)
+        getattr(self.ctx.logger, level)(msg)
+
+    def _external_layers(self, cfg, layers):
+        """外部字典源 ⇒ `[(after_layer, label, 绝对路径), ...]`。
+
+        单独返回而不塞进 `_layer_paths`：那个函数吃的是 `settings["dicts"]` 的**相对键**，
+        外部源是文件系统路径，两套解析方式混在一个函数里迟早漂移（§5.14）。
+        """
+        srcs = cfg.get("dict_sources") or []
+        if not srcs:
+            return []
+        out = []
+        for src in srcs:
+            if not isinstance(src, dict):
+                continue
+            name = str(src.get("name") or "").strip()
+            root = str(src.get("path") or "").strip()
+            if not name or not root:
+                continue
+            after = str(src.get("after") or "common").strip() or "common"
+            if after not in self._EXT_AFTER:
+                after = "common"
+            picks = [str(x).strip() for x in (src.get("picks") or []) if str(x).strip()]
+            d = Path(root)
+            if not d.is_absolute():
+                d = (BASE_DIR / d)
+            if not d.is_dir():
+                self._ext_log_once(
+                    (name, root, "missing"), "warning",
+                    f"[dirscan] 外部字典源 {name} 的目录不存在：{root}（相对仓库根解释）⇒ 跳过")
+                continue
+            cats = []
+            for f in sorted(d.glob("*.txt")):
+                cat = f.stem
+                if picks and cat not in picks:
+                    continue
+                cats.append((cat, f))
+            if not cats:
+                self._ext_log_once(
+                    (name, root, tuple(picks), "nopick"), "warning",
+                    f"[dirscan] 外部字典源 {name} 在 {root} 下没匹配到分类"
+                    f"{'（picks=' + ','.join(picks) + '）' if picks else ''} ⇒ 跳过")
+                continue
+            self._ext_log_once(
+                (name, root, tuple(picks), after, tuple(c for c, _ in cats)), "info",
+                f"[dirscan] 外部字典源 {name}：接入 {len(cats)} 个分类"
+                f"（{','.join(c for c, _ in cats)}），插在 {after} 层之后，"
+                f"与内置层共用 max_paths 额度")
+            for cat, f in cats:
+                out.append((after, f"{name}/{cat}", f))
+        return out
+
+    def _layer_paths_named(self, kind, cfg, fw, layers):
+        """按 `layers` 挑出要用哪些层的字典文件（返回 `[(层名, 相对路径), ...]`）。
 
         单独抽出来是为了"框架补充扫描"能复用同一套取词逻辑：那种场景只要
         `_FW_LAYERS = ("fw", "exposure")` 两层，不吃语言/通用字典。
+
+        **层名与字典文件名不是同一个键空间**（续222 踩过）：层名是
+        `fw/lang/shallow/exposure/common`，字典文件名是 `dirs_php` / `dirs_exposure`。
+        外部字典源的 `after` 按**层名**定位，所以这里必须把层名一起带出来 ——
+        拿 `dirs_exposure` 去比 `"exposure"` 永远不相等，外部层会静默追加到末尾。
         """
         dicts = self.ctx.settings.get("dicts", {}) or {}
         # **未知技术栈**时把精选层提到语言层之前：那一档的语言字典是 `dirs_big`
@@ -583,39 +665,104 @@ class DirscanStage(Stage):
         out = []
         for name in layers:
             if name == "shallow":
-                out.append(dicts.get("dirs_shallow"))
+                out.append((name, dicts.get("dirs_shallow")))
             elif name == "fw":
                 if fw:
-                    out.append(dicts.get(f"dirs_{fw}"))
+                    out.append((name, dicts.get(f"dirs_{fw}")))
             elif name == "lang":
                 if kind:
-                    out.append(dicts.get(f"dirs_{kind}"))
+                    out.append((name, dicts.get(f"dirs_{kind}")))
                 else:
-                    out.append(dicts.get("dirs_big") if cfg.get("big_dict") is not False
-                               else dicts.get("dirs"))
+                    out.append((name, dicts.get("dirs_big") if cfg.get("big_dict") is not False
+                                else dicts.get("dirs")))
             elif name == "exposure":
-                out.append(dicts.get("dirs_exposure"))
+                out.append((name, dicts.get("dirs_exposure")))
             elif name == "common" and kind:
-                out.append(dicts.get("dirs_common"))
-        return [p for p in out if p]
+                out.append((name, dicts.get("dirs_common")))
+        return [(name, p) for name, p in out if p]
 
-    def _load_paths(self, kind, cfg, fw="", layers=_FULL_LAYERS, limit=None):
-        """读字典（去注释、保序去重、截断到上限），返回路径列表。
+    def _layer_paths(self, kind, cfg, fw, layers):
+        """只要相对路径列表（旧契约，`_layer_paths_named` 的薄封装）。"""
+        return [rel for _name, rel in self._layer_paths_named(kind, cfg, fw, layers)]
+
+    def _load_layers(self, kind, cfg, fw="", layers=_FULL_LAYERS, limit=None):
+        """读字典（去注释、保序去重、截断到上限），返回 `(路径列表, {路径: 来源标签})`。
 
         `limit` 给了就用它当上限（框架补充扫描用 `dirscan.fw_max_paths`），
         否则用 `dirscan.max_paths`。多个字典文件之间可能有重复条目（框架字典就是
         从全量字典里抽出来的），去重后额度才不会被重复项吃掉。
+
+        来源标签（续222）：内置层用**字典文件名**（`dirs_php` / `dirs_exposure`，
+        不带 .txt）、外部字典源用 `来源名/分类名`（`dirsearch/api`）。**只放名字，
+        绝不放绝对路径** —— 它会进 `dirs.dict_src`、进页面、进报告（交付物）。
+
+        外部层按配置的 `after`（**层名** fw/lang/shallow/exposure/common）插在内置层
+        之后，与内置层**共用同一个额度**："接一份 10 万条的字典"不该把语言/框架桶
+        挤出额度，只是优先级更低。外部源只在**深扫全层**生效：快扫的卖点是 150 条
+        精选路径，框架补充扫描只该吃 fw+exposure，两者都不该被第三方大字典稀释。
         """
         max_paths = int(limit if limit is not None else (cfg.get("max_paths", 400) or 400))
-        paths, seen = [], set()
-        for rel in self._layer_paths(kind, cfg, fw, layers):
-            for p in read_lines(resolve(rel)):
+        # 内置层：[(层名, 展示标签, 路径)]。
+        # **层名与展示标签是两个键空间**（续222 实测教训）：`after` 要用层名
+        # （`exposure`），页面/报告要用字典名（`dirs_exposure`）。第一版把两者当成
+        # 一个（拿 `dirs_exposure.txt` 去比 `exposure`）⇒ 永远匹配不上，外部层被
+        # 静默追加到末尾，after=exposure 实际排到了 common 之后。
+        builtin = [(layer, Path(str(rel)).stem, resolve(rel))
+                   for layer, rel in self._layer_paths_named(kind, cfg, fw, layers)]
+        ext = (self._external_layers(cfg, layers)
+               if tuple(layers) == _FULL_LAYERS else [])
+        merged = list(builtin)
+        for after, label, path in ext:
+            pos = len(merged)
+            for i, (layer, _lab, _p) in enumerate(merged):
+                if layer == after:
+                    pos = i + 1
+                    break
+            merged.insert(pos, ("ext", label, path))
+        paths, seen, src_of = [], set(), {}
+        for _layer, label, f in merged:
+            try:
+                lines = read_lines(f)
+            except OSError:
+                continue
+            for p in lines:
                 if not p or p.startswith("#") or p in seen:
                     continue
                 seen.add(p)
                 paths.append(p)
+                src_of[p] = label
                 if len(paths) >= max_paths:
-                    return paths
+                    # 续222：额度用光才说"谁没排上" —— 静默截断会让"配了外部字典源"看起来
+                    # 生效了（页面上一行都没有，用户只会以为目标没这些路径）。
+                    _missed = [lab for _ly, lab, _f2 in merged
+                               if "/" in lab and lab not in set(src_of.values())]
+                    if _missed:
+                        self.ctx.logger.info(
+                            f"[dirscan] 外部字典源 {','.join(sorted(set(_missed)))} 排在后面，"
+                            f"本轮 max_paths={max_paths} 额度已用尽 ⇒ 它一条都没排上"
+                            f"（把它调到更前的 after，或调大 dirscan.max_paths）")
+                    return paths, src_of
+        return paths, src_of
+
+    def _load_paths_src(self, kind, cfg, fw="", layers=_FULL_LAYERS, limit=None):
+        """读字典并带回**来源标签**（续222）。返回 `(路径列表, {路径: 标签})`。
+
+        标签：内置层用字典文件名（`dirs_php` / `dirs_exposure`），外部字典源用
+        `来源名/分类名`（`dirsearch/api`）。**只放名字，绝不放绝对路径** ——
+        它会进 `dirs.dict_src`、进页面、进报告（交付物）。
+        外部层按配置的 `after` 插在内置层之间/之后，与内置层**共用同一个额度**：
+        "接一份 10 万条的字典"不该把语言/框架桶挤出额度，只是优先级更低。
+        """
+        return self._load_layers(kind, cfg, fw=fw, layers=layers, limit=limit)
+
+    def _load_paths(self, kind, cfg, fw="", layers=_FULL_LAYERS, limit=None):
+        """只要路径列表（旧契约，续30 起一路这么用）。
+
+        新代码统一走 `_load_paths_src`（要来源标签）；这个薄封装留着是因为
+        既有调用方与门禁都按"返回 list"在用 —— 为加一个字段去改十处调用方，
+        收益（少一次解包）远小于风险（漏改一处就静默变成路径=元组）。
+        """
+        paths, _src = self._load_layers(kind, cfg, fw=fw, layers=layers, limit=limit)
         return paths
 
     # ---------- dirmap 适配 ----------
@@ -930,12 +1077,14 @@ class DirscanStage(Stage):
             fw = _framework_of(s.get("tech"), s.get("url")) if tech_aware else ""
             if only_fw and not fw:
                 continue          # 补充扫描只针对判得出框架的站点
-            paths = self._load_paths(kind, cfg, fw=fw, layers=layers, limit=limit)
+            paths, src_of = self._load_paths_src(kind, cfg, fw=fw, layers=layers, limit=limit)
             if not paths:
                 continue
             label = f"{fw}/{kind}" if fw else (kind or "未知")
             tally[label] = tally.get(label, 0) + 1
-            jobs.extend((s["url"], p, s["url"]) for p in paths)
+            # 续222：jobs 从三元组变四元组，第四项是**来源字典标签**（字典名/分类名）。
+            # 后缀派生轮（`_suffix_jobs`）没有对应字典 ⇒ 标签 `suffix`（派生变体）。
+            jobs.extend((s["url"], p, s["url"], src_of.get(p, "?")) for p in paths)
         if not jobs:
             if only_fw:
                 ctx.logger.info("[dirscan] 无可识别的框架站点，跳过框架补充扫描")
@@ -954,7 +1103,7 @@ class DirscanStage(Stage):
             cap = int(cfg.get("max_paths", 400) or 400)
             # `_suffix_jobs` 只回 `(站点根, 相对路径)`：派生轮的请求基址**就是站点根**
             # （备份文件与它在同一层），补成 `_scan` 要的三元组。
-            extra_jobs = [(s, p, s) for s, p in self._suffix_jobs(entries, cap)]
+            extra_jobs = [(s, p, s, "suffix") for s, p in self._suffix_jobs(entries, cap)]
             if extra_jobs and not ctx.stopped():
                 ctx.logger.info(f"[dirscan] 后缀派生：对 {len(extra_jobs)} 个变体补扫 …")
                 entries.extend(self._scan(extra_jobs, limits))
@@ -963,7 +1112,9 @@ class DirscanStage(Stage):
     # ---------- 单轮扫描（软 404 基线 + 命中提取）----------
 
     def _scan(self, jobs, limits):
-        """跑一轮扫描，返回命中条目。`jobs` 元素是 `(基址, 相对路径, 站点根)` 三元组。
+        """跑一轮扫描，返回命中条目。`jobs` 元素是
+        `(基址, 相对路径, 站点根[, 来源字典标签])`；旧调用方给三元组时标签落
+        `"recursive"`（续222：第四项只进 `dirs.dict_src`，不参与请求/去重语义）。
 
         抽成独立方法是为了**目录递归能复用同一套请求语义**（续30）：递归那一轮同样要
         「按基址缓存的软 404 基线 + 标题提取 + 只收 200/301/302/403」。复制一份实现
@@ -1046,7 +1197,10 @@ class DirscanStage(Stage):
         def _hit(item):
             if ctx.stopped():
                 return None
-            u, p, root = item
+            # 续222：item 是四元组 `(基址, 相对路径, 站点根, 来源字典标签)`。
+            # 传三元组的老调用方 ⇒ 标签落 "recursive"，不抛。
+            u, p, root = item[0], item[1], item[2]
+            _src = item[3] if len(item) > 3 else "recursive"
             md5s, sizes, blk_md5s, blk_sizes, btexts, ok_base = _baseline(u)
             url = u.rstrip("/") + "/" + p.lstrip("/")
             r = http_request(url, timeout=timeout, settings=ctx.settings, auth=True)
@@ -1117,7 +1271,10 @@ class DirscanStage(Stage):
                     unverified[u] = unverified.get(u, 0) + 1
             return {"site_url": root, "path": url, "status": st,
                     "length": r.get("length"), "method": "GET", "note": _note,
-                    "title": title}
+                    "title": title,
+                    # 续222：这一行出自哪份字典（`dirs_php` / `dirsearch/api` / `suffix`）。
+                    # 只放名字，**绝不放绝对路径** —— 它会进页面和报告（交付物）。
+                    "dict_src": _src}
 
         entries = [e for e in pool_run(_hit, jobs, workers=workers,
                               logger=ctx.logger, label="目录探测") if e]
@@ -1248,7 +1405,9 @@ class DirscanStage(Stage):
         if depth <= 0 or max_dirs <= 0 or max_paths <= 0:
             return []
         ctx = self.ctx
-        paths = self._load_paths("", cfg, layers=_SHALLOW_LAYERS, limit=max_paths)
+        paths, _src222 = self._load_paths_src("", cfg, layers=_SHALLOW_LAYERS, limit=max_paths)
+        # 续222：递归轮用的就是浅扫那份字典 ⇒ 标签取其来源（通常是 dirs_shallow）
+        _rec_src = _src222.get(paths[0], "dirs_shallow") if paths else "dirs_shallow"
         if not paths:
             ctx.logger.warning("[dirscan] 目录递归：浅扫精选字典为空，跳过")
             return []
@@ -1280,7 +1439,7 @@ class DirscanStage(Stage):
                 visited.add(prefix)
                 used[root] = used.get(root, 0) + 1
                 dirs.append(prefix)
-                jobs.extend((prefix, p, root) for p in paths)
+                jobs.extend((prefix, p, root, _rec_src) for p in paths)
             if not jobs:
                 break
             ctx.logger.info(f"[dirscan] 目录递归第 {level} 层：{len(dirs)} 个目录 x "
