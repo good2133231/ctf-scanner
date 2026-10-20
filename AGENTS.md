@@ -168,6 +168,27 @@ Flask Web 控制台（仿 ARL）。
   `run_bootstrap.py --install` 也优先 lock（解不开才回落 txt 并明说）。回归 `[8al]` 钉住这三条：
   lock 覆盖全部直接依赖、整份都是 `==`、CI 里不许再出现 `-r requirements.txt`。
   ⚠ 新增 job 时**照 lock 装**，别退回 txt —— 那会让"CI 每次装最新版"重新变成假红的来源。
+  **续245 编码不变量**：两份清单首行必须是 `# -*- coding: utf-8 -*-`。Python 3.9 venv 自带的
+  pip 20.2.3 在中文 Windows 上按 `locale`（GBK）解码 requirements 文件，而它的 `auto_decode`
+  只认 BOM 与前两行 PEP 263 声明；文件里又有中文注释（续98 起）⇒ 没有这一行时 `dev.py setup`
+  直接 `UnicodeDecodeError`（实测 byte 0xad）。`[245]` 复刻了这个旧解码器（先自证能复现失败）
+  并钉住两份文件，别再让"加一句中文注释"把新机器的安装打红。
+  **续246 代理环境坑（本地跑门禁前必做）**：AI 工具会话给每个 shell 注入
+  `HTTP_PROXY`/`HTTPS_PROXY`（`http://127.0.0.1:<随机端口>` 的连接器代理，`env | grep -i proxy`
+  可见），而 `requests` 的 `trust_env` 对**包括 127.0.0.1 在内的所有地址**生效 ⇒ 冒烟里
+  `[5y]②` 的 SSRF 回环自证会改为过代理、间歇性 `RemoteDisconnected`/收不到回连，端到端断言
+  `_v_ssrf=None` 假红（intel 的本地夹具拉取同族）。服务器/CI 没有这些变量、门禁的设计目标环境
+  就是无代理 ⇒ **本地跑 `dev.py smoke` 前先注销四个变量**：
+  `env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy py -3 dev.py smoke`
+  （Git Bash；PowerShell 逐条 `$env:HTTP_PROXY=$null`）。最快的判墙信号：`[5y]` 红在
+  `_ssrf_callback` 返回 None、而把这个断言块单独抄出来跑却能通。
+  **同族的还有 `PYTHONPATH`**：AI 工具会话经 `PYTHONPATH` 把 CLI shim 目录塞进**每个**
+  Python 进程（里面有 `sitecustomize.py` 与 safe-delete 批量删除守卫）⇒ 冒烟自己收尾时的
+  `rmtree`（组内沙箱 >50 文件、退出时整沙箱 ~300 文件）会被守卫 `SystemExit` 打死 —— 打在
+  模块顶（启动清扫）就是零输出秒退，打在组内 finally 就是那一组之后的全部不跑。所以本地
+  跑门禁连它一起注销：`env -u PYTHONPATH -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy
+  -u https_proxy py -3 dev.py smoke`（`[8an]` 的 rmtree 就是这么打死的，续217 注释里记过
+  同一现象）。
 - 外部工具：subfinder / puredns / httpx **均未安装** → 走内置兜底。**三个例外**：
   **fscan 可用**（续45 自编译 2.2.1 挂到 `tools/fscan/` 的**目录联接**，`settings.yaml` 的
   `tools.fscan=tools/fscan/fscan.exe`）→ 端口扫描 `engine=auto` 的**第一环命中**，实走 fscan；
@@ -2840,6 +2861,31 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   `brute_fallback_max`/`brute_workers`/`recrawl_max_hosts` 四项（`devmode.DEV_LIMITS` 各给 4/4/4/1），
   否则用户带 17.8 万条深字典时，CI 跟着字典一起变慢。
   回归 `[8aq]`（⑥⑦⑨⑩ 四条各盯一面）。
+- **任务级爆破档位 `subdomain_profile`（续246，B 批）= `brute_max_words` 闸门的任务级封装**：
+  `quick` 把深档等距抽样到 `BRUTE_PROFILE_QUICK_WORDS`（1 万）条，`deep` 显式回到策略值
+  （0=全量），未指定/不认识的值行为与加这个选项之前逐字节一致。**策略值更小时永远以策略为准**
+  （配置是天花板：开发模式把 `brute_max_words` 压到 4 时勾「快速」不许放大回 1 万，否则 CI 与
+  自检跟着字典一起慢）；精简档那 84 条任何档位全量在场。入口三处同一套口径：GUI 任务区下拉
+  （与「全部勾上/清掉/恢复默认」三按钮联动）/ CLI `--subdomain-profile` / `create_app` 的
+  `options["subdomain_profile"]`，且**勾了档位没勾 subdomain 阶段就自动补阶段**（“勾了就要生效”）。
+  档位生效必须打日志说清“是等距抽样不是截断、要怎么放开”（用户看到“子域名少”时要能分辨是字典小
+  还是自己选了快速档）。回归 `[246b]`（真跑 stage、读 puredns 落盘词表：12000→10002 / 策略 300
+  更小→302 / deep+策略 0 全量 / 未知值不收窄也不打档位日志）。
+- **被动源默认集（续246，A 批）**：`scanner/passive.py` 的 `DEFAULT_SOURCES` 6→8 ——
+  +chaziyu（HTML）+urlscan（公开 search API，JSON），均 keyless 且 2026-10-20 实测可用；
+  threatminer 接口本身 keyless 但实测整站 CF 522/超时 ⇒ **保留在 `SOURCES`、默认不启用**；
+  ipv4info 在 OneForAll 参考实现里要 API key（且 `ipv4info.com` 当前无 A 记录）⇒ 不属于
+  “免 key”档，不接。`[246]` 钉住源集合、URL 形态、`_extract` 对两种真实响应形状与
+  “单源不可达不拖垮其它源”。
+- **“要不要提问”的判据只有一个产地：`utils.is_interactive_stdin()`（续246）**：
+  Windows 版 MSVCRT 的 `isatty()` 只判“是不是字符设备”，**NUL（DEVNULL/计划任务/服务）
+  也返回 True** ⇒ 裸 `sys.stdin.isatty()` 分流会让非交互环境掉进 `getpass` —— Windows 的
+  getpass 走 `msvcrt.getch()` 读**控制台**而不是 stdin，没有输入就永久挂住（`--create-admin`
+  实测 180 秒超时）。Linux 走 `tcgetattr` 没这个坑 ⇒ Linux CI 上永远看不见。helper 在 isatty
+  为真后再用 `GetConsoleMode(STD_INPUT_HANDLE)` 复核（只有真控制台才算交互；测试注入的假
+  stdin 永远说了算）。`admin_setup`×2 / `keystore` / `edgeauth`×2 / `run_keys` /
+  `run_bootstrap`×2 全部路由过去；`[8v]⑧` 逐文件源码断言“再无第二份裸 isatty”，
+  ⑦ 的 `stdin=DEVNULL` 子进程钉端到端形状。
 
 - **`<title>` 的提取只有一个产地，渲染后标题只补空、绝不覆盖**（续140）：正则与取法只在
   `scanner/utils.py` 的 `TITLE_RE`（`re.I | re.S`）+ `html_title()` 定义一次，probe 的内置兜底与

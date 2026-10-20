@@ -14,6 +14,11 @@ threatbook / securitytrails / riskiq / fullhunt / bevigil / chinaz），
 解析策略（重要取舍）：**不为每个源写专用 JSON 解析**。那些接口随时改字段名/改结构，
 写死的解析器会集体失效；实测这些源返回的域名都是明文出现在 JSON/HTML 文本里，
 因此统一用 `_extract()` 正则提取"以根域名结尾的主机名"，通吃且稳。
+
+2026-10-20 实测（续246）：chaziyu（HTML）与 urlscan（公开 search API，JSON）可用，进默认集；
+threatminer 接口本身 keyless，但整站 CF 522 / 超时 ⇒ 保留可开、不进默认集；
+ipv4info 在参考实现里是 `ipv4info_api.py`（**要 API key**），且 `ipv4info.com` 当前无 A 记录
+（DNS 只有 SOA）⇒ 不属于"免 key"这一档，不接入。
 """
 import re
 import time
@@ -29,6 +34,11 @@ SOURCES = {
     "hackertarget": "https://api.hackertarget.com/hostsearch/?q={d}",
     "rapiddns": "https://rapiddns.io/subdomain/{d}?full=1",
     "sublist3r": "https://api.sublist3r.com/search.php?domain={d}",
+    # 续246：2026-10-20 实测可用的两路 keyless 源（HTML / JSON 都由 `_extract` 统一提取）
+    "chaziyu": "https://chaziyu.com/{d}/",
+    "urlscan": "https://urlscan.io/api/v1/search/?q=domain:{d}",
+    # threatminer 接口是 keyless，但 2026-10-20 实测整站 CF 522 / 超时 ⇒ 保留可开、默认不启用
+    "threatminer": "https://api.threatminer.org/v2/domain.php?q={d}&rt=5",
     # 以下两个历史上不稳定（HTTP 站点/接口变更），默认不启用，但保留可随时在配置里打开
     "sitedossier": "http://www.sitedossier.com/parentdomain/{d}",
     "bufferover": "http://dns.bufferover.run/dns?q=.{d}",
@@ -36,7 +46,8 @@ SOURCES = {
 
 # 默认启用的源（config/settings.yaml 的 passive.sources 可覆盖）
 DEFAULT_SOURCES = ["crt.sh", "certspotter", "alienvault",
-                   "hackertarget", "rapiddns", "sublist3r"]
+                   "hackertarget", "rapiddns", "sublist3r",
+                   "chaziyu", "urlscan"]
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_\-.]{0,253}")
 

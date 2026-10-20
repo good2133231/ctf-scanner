@@ -560,6 +560,11 @@ def main():
                     help="本次任务开启**自动拓展扫描**（等价 GUI 任务选项 auto_expand）："
                          "自动补 osint/jsmine 阶段、拓展结束后自动做 DNS 存在性判定、"
                          "把注册域属于本项目的拓展域名追加成子域名；目标是子域时自动补收其主域名")
+    ap.add_argument("--subdomain-profile", choices=["quick", "deep"], default=None,
+                    help="本次任务的子域名爆破档位（等价 GUI 任务选项 subdomain_profile）："
+                         "quick=深档词表等距抽样到 1 万条（不是取前 1 万条）；"
+                         "deep=按策略 limits.brute_max_words（0=全量）。"
+                         "精简档那几十条人工前缀任何档位都全量参与")
     ap.add_argument("--report", metavar="PATH", help="结束后生成 Markdown 报告到指定路径")
     ap.add_argument("--report-html", metavar="PATH", help="结束后生成 HTML 报告（自包含单文件）")
     ap.add_argument("--report-pdf", metavar="PATH",
@@ -824,6 +829,12 @@ def main():
         for st in ("osint", "jsmine"):
             if st not in stages:
                 stages.append(st)
+    # 续246（B 批）：子域名爆破档位（任务级）。与 GUI 同一套"勾了就要生效"：
+    # 只给档位却不给 subdomain 阶段＝白给，所以自动补阶段（`stages.sort` 随后归位）。
+    if args.subdomain_profile:
+        options["subdomain_profile"] = args.subdomain_profile
+        if "subdomain" not in stages:
+            stages.append("subdomain")
     # 与 GUI 建任务一致：选了全量档却没把对应阶段写进 -p 时**自动补上**（否则勾了等于白勾）。
     # `run_task` 按给定顺序执行、不排序，所以要按 STAGE_ORDER 归位。
     for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan")):

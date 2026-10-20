@@ -31,6 +31,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from .utils import is_interactive_stdin
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENC_KEYS_PATH = BASE_DIR / "config" / "keys.enc.yaml"
 PLAIN_KEYS_PATH = BASE_DIR / "config" / "keys.yaml"
@@ -282,7 +284,7 @@ def _prompt(src):
     `凭据保持锁定：非交互环境且未设置 …—— 凭据保持锁定（外部情报源按"无 key"…）（外部情报源将按"无 key"…）`
     同一句说了两遍，还带两种措辞（"按"与"将按"），提示文本自己变成噪音源。
     """
-    if not sys.stdin.isatty():
+    if not is_interactive_stdin():     # 续246：Windows isatty 对 NUL 也真，会挂死在 getpass
         return None, "非交互环境且未设置 " + ENV_PASSPHRASE
     try:
         got = getpass.getpass("CTFScanner 凭据口令（config/keys.enc.yaml 解锁）：")

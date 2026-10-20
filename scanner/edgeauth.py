@@ -49,6 +49,7 @@ import sys
 import yaml
 
 from scanner import users
+from scanner.utils import is_interactive_stdin
 
 PASSWORD_FILE = "edge_auth.yaml"
 EDGE_USER = "edge"                 # Basic 的用户名固定，只有口令是秘密
@@ -155,7 +156,7 @@ def wizard(settings, ask_password=None, isatty=None):
         return ST_DISABLED, ""
     if read_password():
         return ST_CONFIGURED, ""
-    tty = sys.stdin.isatty() if isatty is None else bool(isatty)
+    tty = is_interactive_stdin() if isatty is None else bool(isatty)   # 续246：统一判据
     if not tty:
         # 向导**绝不代填**（`[8ai]` 钉的红线），但必须把非交互那条路说出来 —— 否则容器里
         # 起一个新控制台，操作者只看到"一律 401"，不知道除了手改 YAML 还能怎么办。
@@ -252,7 +253,7 @@ def _main(argv=None):
 
     # --set：口令只从 **getpass**（有终端，两次确认）或 **环境变量**（没终端）来 ——
     # 两条路都不进 argv、不回显、不出现在任何输出里（docstring ⑤ 讲了为什么要有第二条）。
-    if not sys.stdin.isatty():
+    if not is_interactive_stdin():      # 续246：Windows isatty 对 NUL 也真，会挂死在 getpass
         pw = (os.environ.get(ENV_PASSWORD) or "").strip()
         if not pw:
             print(f"[!] 非交互环境不做代填 —— 用环境变量 {ENV_PASSWORD} 提供口令"

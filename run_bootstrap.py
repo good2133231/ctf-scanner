@@ -444,7 +444,10 @@ def install_system_packages(plan, with_system=False, assume_yes=False, runner=No
     todo = [r for r in plan if not r["present"] and r["argv"]]
     if not todo:
         return [], [], []
-    if not assume_yes and not sys.stdin.isatty():
+    from scanner.utils import is_interactive_stdin
+    if not assume_yes and not is_interactive_stdin():
+        # 续246：这里原为裸 isatty 分流 —— Windows 上 NUL 也是"字符设备"返回 True，
+        # 非交互环境会漏掉这道拒直接掉进下面的 input()（NUL 上 EOFError 崩）。
         return [], [r["name"] for r in todo], [
             {"name": "system", "reason": "非交互环境必须显式 --yes 才会执行系统包安装"}]
     if not assume_yes:
@@ -907,7 +910,8 @@ def prompt_credentials(ask=None, root=None, run_keys=None, dst=None):
     overlay = {g: dict(fields) for g, fields in env_overlay.items()}
 
     if ask is None:
-        ask = sys.stdin.isatty()
+        from scanner.utils import is_interactive_stdin
+        ask = is_interactive_stdin()    # 续246：与所有提问入口同一处判据（Windows NUL 坑）
     missing = [f for f in _KEY_FIELDS
                if not (overlay.get(f[0], {}).get(f[1]))]
     if ask and missing:

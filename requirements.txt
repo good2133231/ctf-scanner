@@ -1,5 +1,10 @@
+# -*- coding: utf-8 -*-
 flask>=2.0
 requests>=2.25
 PyYAML>=5.4
 # 续98：config/keys.enc.yaml 的 AES-GCM 解密（无此依赖时明文老路照走，只是读不了密文）
-cryptography>=41
+# 续245-附2：Python 3.9.0 的 python3.dll 不导出 `PyCMethod_New`（3.9.1 才补），
+# cryptography 42+ 的 Windows abi3 轮子一 import 就 "DLL load failed while importing _rust"
+# （本机实测 43.0.3 / 42.0.8 失败，41.0.5 / 41.0.7 可用）。只对 3.9.0 钉上限，其它解释器照旧。
+cryptography>=41,<42; python_full_version == "3.9.0"
+cryptography>=41; python_full_version != "3.9.0"

@@ -339,6 +339,13 @@ function initTaskCheckAll() {
             : mode === "none" ? false : c.dataset.ckDefault === "1";
           n++;
         });
+        /* 续246（B 批）：带 data-ck-all 的 <select>（子域名爆破档位）也跟这三颗按钮走：
+           "全部勾上"＝最重档（deep），"清掉/默认"＝跟策略（空值）。只改值，不碰目标与登录态。 */
+        tf.querySelectorAll(`[data-ck-group="${g}"] select[data-ck-all]`).forEach(s => {
+          s.value = mode === "all" ? s.dataset.ckAll
+            : mode === "none" ? (s.dataset.ckNone || "") : (s.dataset.ckDefault || "");
+          n++;
+        });
       });
       const msg = document.getElementById("task-msg");
       const label = mode === "all" ? "全部勾上" : mode === "none" ? "全部清掉" : "恢复默认";

@@ -21,11 +21,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scanner import keystore  # noqa: E402
+from scanner.utils import is_interactive_stdin  # noqa: E402
 
 
 def _ask(prompt, confirm=False):
     """取口令：不回显；`--confirm` 时要求输入两遍且必须一致（防手滑把凭据锁死）。"""
-    if not sys.stdin.isatty():
+    if not is_interactive_stdin():     # 续246：Windows isatty 对 NUL 也真，会挂死在 getpass
         # 续162：非交互时先试 `~/.secrets/keys-pass`（与启动解锁同一档、同一套守卫）。
         # `confirm=True`（= 设**新**口令）刻意不走这一档：那样 `--change` 会"旧口令=新口令=文件里那句"，
         # 换口令变成一次静默的空操作。

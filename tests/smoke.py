@@ -21,6 +21,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# ---- 中文 Windows 输出编码（续245-②）：模块顶先固定 stdout/stderr，再让 main() 打印 ----
+# 为什么必须在这里：`python tests/smoke.py > 日志` 或 `python dev.py smoke`（子进程继承同一个
+# 文件/管道句柄）时，Windows 上 sys.stdout.encoding 是 locale（中文机器 = gbk），main() 里
+# 带 `↔` 的那句 print（[6m] 组）会直接 UnicodeEncodeError —— 整套门禁在那一组崩掉（实测）。
+# errors=backslashreplace 是兜底：从此「某个字符写不出去」不会表现成「门禁崩了」。
+for _stream245 in (sys.stdout, sys.stderr):
+    try:
+        _stream245.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
+
 # ---- 每组耗时记录（续125，**默认关**）：`--timing` 或 CTFSCANNER_SMOKE_TIMING=1 才开 ----
 # 为什么不做 `--only <组>`：这 130 个组共享进程内状态（DB / 任务 / settings / 本地靶场 / GUI app），
 # 跳过任何一组都可能在"依赖它留下状态的后续组"里造成**假绿** —— 门禁一旦可能假绿就不配当门禁。
@@ -10640,8 +10651,10 @@ http:
 
     # ⑥ puredns 在 Windows 上：如实报平台不可用（不猜、不自动编译）
     if _os7p == "windows":
+        # 续245-④：puredns 钉了版本 ⇒ `_release_for` 会带 `tag=` 调 fetch。桩原先缺这个形参，
+        # Windows 上必红（这一段只在 Windows 进，Linux/CI 一直没跑到）。
         _r7p5 = tm7p.update(["puredns"], dest_dir=str(_dest7p / "n3"), wire=False,
-                            fetch=lambda _repo, timeout=0: {"tag": "v2.1.1", "assets": {}})
+                            fetch=lambda _repo, timeout=0, tag="": {"tag": "v2.1.1", "assets": {}})
         assert len(_r7p5) == 1 and not _r7p5[0]["ok"], _r7p5
         assert "只发布 Linux / macOS" in _r7p5[0]["reason"], _r7p5
         assert not (_dest7p / "n3").exists()
@@ -12955,14 +12968,44 @@ http:
     assert "sys.platform" not in _src8d and "platform.machine()" not in _src8d, \
         "run_bootstrap.py 里不该出现平台分支的原语（口径只有 host_arch()）"
 
-    # ⑦ 输出只出现相对路径（§0 硬规矩 3）：不含项目根、不含家目录，且过 scrub_paths 不变
+    # ⑦ 输出不许泄露本机路径（§0 硬规矩 3）：不含项目根、不含家目录；**项目外**的工具安装路径
+    #    是 CLI 的既定口径（§0.3：CLI 要能照抄去命令行，`--check` 与自举的「已装 …」都原样打印）。
+    #    续245 修：续96 那版直接断言 `scrub_paths(txt) == txt`，在装了 nmap 的 Windows 上必红
+    #    （`C:/Program Files (x86)/Nmap/nmap.EXE`）—— 那是**环境**，不是泄露；Linux 的
+    #    `/usr/bin/nmap` 不带盘符、scrub_paths 本就不碰，所以这条假红一直没被看见（§6.2 同族）。
     _home8d = os.path.expanduser("~")
-    for _r8d in _rows8d:
-        _txt8d = _r8d["detail"] + " " + " ".join(_r8d["cmds"])
-        assert not leaked_root(_txt8d), f"{_r8d['name']} 输出了项目根绝对路径"
-        assert _home8d not in _txt8d, f"{_r8d['name']} 输出了家目录"
-        assert _ut8d.scrub_paths(_txt8d) == _txt8d, \
-            f"{_r8d['name']} 的输出里有可被抹掉的绝对路径：{_txt8d}"
+    _tools8d = (settings.get("tools", {}) or {})
+    _known8d = set()
+    for _kn8d in list(_tm8d.TOOLS) + [n for n in _tm8d.MANUAL if n != "dirmap"]:
+        _kv8d = _tools8d.get(_kn8d, _kn8d)
+        _kp8d = _ut8d.which(_kv8d) if isinstance(_kv8d, str) else ""
+        if _kp8d:
+            _known8d.add(str(_kp8d).replace("\\", "/"))
+            try:
+                _known8d.add(Path(_kp8d).resolve().as_posix())
+            except OSError:
+                pass
+    _ds8d = ((_tools8d.get("dirmap", {}) or {}).get("script", "")
+             or "tools/dirmap/dirmap.py")
+    _known8d.add(_res8d(_ds8d).resolve().as_posix())
+
+    def _leak8d(_rows):
+        """抹掉「本机真正解析到的工具路径」后，第一段仍可被 scrub_paths 抹掉的文本（None＝干净）。"""
+        for _r in _rows:
+            _t = _r["detail"] + " " + " ".join(_r["cmds"])
+            assert not leaked_root(_t), f"{_r['name']} 输出了项目根绝对路径"
+            assert _home8d not in _t, f"{_r['name']} 输出了家目录"
+            for _k in sorted(_known8d, key=len, reverse=True):
+                _t = _t.replace(_k, "")
+            if _ut8d.scrub_paths(_t) != _t:
+                return _t
+        return None
+
+    _leak8d_txt = _leak8d(_rows8d)
+    assert _leak8d_txt is None, f"自举输出里有工具自身之外的绝对路径：{_leak8d_txt}"
+    # 变异证伪：无关盘符路径必须被抓到 —— 否则「全绿」可能只是工具路径恰好把该行抹空了
+    assert _leak8d([{"name": "x", "detail": "已装 C:/secret/elsewhere.exe", "cmds": []}]), \
+        "⑦ 对无关的盘符绝对路径不敏感 → 假绿"
 
     # ⑧ 依赖行集＝requirements.txt；PyYAML 走别名（分发名≠模块名，别名表失效就会永远报缺）
     _py8d = {r["name"]: r for r in _rows8d if r["name"].startswith("py:")}
@@ -13150,7 +13193,17 @@ http:
     _run12 = lambda argv: (_calls12.append(argv), 0)[1]
     _g12 = _rb8d.install_system_packages(_plan12, with_system=False, runner=_run12)
     assert _calls12 == [] and _g12[1] == ["golang"], f"不带 --with-system 却准备执行：{_g12}"
-    _g12 = _rb8d.install_system_packages(_plan12, True, False, runner=_run12)
+    # 非交互档：显式把 stdin 钉成"不是 TTY"，不依赖宿主恰好没有终端。
+    # 本仓 harness 的 stdin 是 TTY 但读不到数据（§6.2 假红：那样会落到 input() 抛 EOFError）。
+    class _NotATty12:
+        def isatty(self):
+            return False
+    _real_stdin12 = sys.stdin
+    sys.stdin = _NotATty12()
+    try:
+        _g12 = _rb8d.install_system_packages(_plan12, True, False, runner=_run12)
+    finally:
+        sys.stdin = _real_stdin12
     assert _calls12 == [] and any("--yes" in _f12["reason"] for _f12 in _g12[2]), \
         f"非交互且没 --yes 必须拒绝执行而不是挂住等输入：{_g12}"
     _g12 = _rb8d.install_system_packages(_plan12, True, True, runner=_run12)
@@ -13519,18 +13572,50 @@ http:
     from scanner.config import SECRET_FILE as _SF109, session_secret as _ss109
 
     # 1) 纯函数：稳定复用 / 落盘 0600 / 截断即重建 / 写不了就**明说**降级（绝不退回可推导的串）
+    #    ⚠ 续246 修（Windows 假红，§6.2 同族）：`os.chmod(f, 0o600)` 在 Windows 上**只能切
+    #    只读位**（有写位 ⇒ 清只读），NTFS 没有 POSIX owner-only 位，`S_IMODE` 恒报 0o666 ——
+    #    照 `[8f]④` 的既有形状按平台分支。但 Windows 不白跳过：改用 **spy `os.chmod`**
+    #    钉住"落盘时仍发起过 `chmod(..., 0o600)`"（调用被摘掉 ⇒ Windows 也红；POSIX 上
+    #    仍是字面 0600，两侧都不空过）。config.py 那边本就 try/except 容错，不是回归。
     _d109 = Path(tempfile.mkdtemp(prefix="smoke-109-"))
-    _k1, _w1 = _ss109(_d109)
-    _k2, _w2 = _ss109(_d109)
+    _ch109, _real_ch109 = [], os.chmod
+
+    def _spy_ch109(p, m, *a, **k):
+        _ch109.append((str(p), m))
+        return _real_ch109(p, m, *a, **k)
+
+    os.chmod = _spy_ch109
+    try:
+        _k1, _w1 = _ss109(_d109)
+        _k2, _w2 = _ss109(_d109)
+    finally:
+        os.chmod = _real_ch109
     assert _k1 == _k2 and not _w1 and len(_k1) >= 32, (_k1 == _k2, _w1, len(_k1))
-    assert _stat109.S_IMODE((_d109 / _SF109).stat().st_mode) == 0o600, "密钥文件必须 0600"
+    if os.name == "nt":
+        assert any(str(_p109).endswith(_SF109) and _m109 == 0o600
+                   for _p109, _m109 in _ch109), (
+            "Windows 上看不到 POSIX 权限位（S_IMODE 恒 0o666），但落盘时必须仍发起 "
+            "chmod(..., 0o600)：spy 全程没抓到这次调用＝约束被摘了")
+    else:
+        assert _stat109.S_IMODE((_d109 / _SF109).stat().st_mode) == 0o600, "密钥文件必须 0600"
     (_d109 / _SF109).write_text("abc", encoding="utf-8")            # 模拟被截断/写坏
     _k3, _w3 = _ss109(_d109)
     assert len(_k3) >= 32 and _k3 != _k1 and not _w3, "坏文件要重新生成，不能拿短串当密钥"
     _ro109 = _d109 / "ro"
-    _ro109.mkdir()
-    _ro109.chmod(0o500)
-    _k4, _w4 = _ss109(_ro109)
+    if os.name == "nt":
+        # ⚠ 续246 修（Windows 假红，§6.2 同族）：目录的 read-only 位在 Windows 上
+        # **拦不在里面建文件**（只影响删除）⇒ `chmod(0o500)` 后 write_text 照旧成功，
+        # "写不了必须明说"这一半在 Windows 上永远观测不到。换成**任何平台/uid 都写不
+        # 进去**的形状：父路径是个普通文件 —— `mkdir(exist_ok=True)` 撞上非目录必抛
+        # FileExistsError（⊂ OSError），走的正是 session_secret 的 except 降级分支。
+        # （与上一段 root 的处理同一思路：换一个"环境拦不住也假"的形状，而不是跳过。）
+        _ro_as_file109 = _d109 / "ro-as-file"
+        _ro_as_file109.write_text("x", encoding="utf-8")
+        _k4, _w4 = _ss109(_ro_as_file109)
+    else:
+        _ro109.mkdir()
+        _ro109.chmod(0o500)
+        _k4, _w4 = _ss109(_ro109)
     # ⚠ root 会**无视权限位**（§6.2 第四起）：容器里以 root 跑时 0o500 照样写得进去，`_w4` 恒空，
     #    这条必然红 —— 而红出来的形状是"密钥落盘失败没明说"，看起来像产品缺陷。
     #    不跳过整段（跳过＝这次没验过，必须说出来）：换成 root 也挡不住的形状 ——
@@ -13546,7 +13631,8 @@ http:
             "root 下的替代判据（父路径是文件）也必须『明说降级』"
     _note109 = ("（本机是 root：chmod 0o500 那一档**没验到**，改用「父路径是文件」验降级要说清）"
                 if _root109 else "")
-    _ro109.chmod(0o700)
+    if os.name != "nt":
+        _ro109.chmod(0o700)     # POSIX：还原权限再删；Windows 上 ro 目录根本没建（走文件占位形状）
     shutil.rmtree(_d109, ignore_errors=True)
 
     # 2) 真 app 的密钥：既不含 "ctfscanner::" 也不含引导口令，并且就落在**库同目录**（测试自动隔离）
@@ -14434,9 +14520,18 @@ http:
         _cfg117.BASE_DIR = _orig_base117
 
     # ⑥ 命令行入口在子进程里真跑得动，且**任何输出都不出现口令值**
+    # ⑦ **全新库**上建第一个管理员（干净克隆实测过的形状：库文件不存在 → 崩 `no such table: users`）
+    #    这条不是装饰：`--status` 与登录页 0 账号时都把用户指到 `--create-admin`，
+    #    而它此前是全仓唯一一个"碰库却不建表"的入口 —— 文案给的出路必须当场走得通（§6.2 第十六起）。
+    #    ⚠ 续246：两处子进程都显式 `stdin=DEVNULL`，且这不是洁癖 —— Windows 的 MSVCRT
+    #    `isatty()` 对 NUL（DEVNULL）也返回 True（NUL 是字符设备），只凭它分流的话
+    #    `--create-admin` 会在 getpass 的 `msvcrt.getch()` 上挂死（读一个永远没有输入的
+    #    控制台，实测 180 秒超时）。产品侧修在 `utils.is_interactive_stdin()`（isatty 之后
+    #    再用 GetConsoleMode 复核），⑦ 的 DEVNULL 子进程就是把那个修复钉在门禁上：
+    #    没有修复时它在 Windows 上挂到超时，Linux 上两条路都走环境变量、恒过。
     import subprocess as _sp117
     _r117 = _sp117.run([sys.executable, "cli/run_users.py", "--status"], cwd=str(ROOT),
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, stdin=_sp117.DEVNULL)
     assert _r117.returncode == 0, (_r117.returncode, _r117.stderr[-300:])
     assert _SENT117 not in _r117.stdout + _r117.stderr, "--status 把口令值打印出来了"
     assert "账号" in _r117.stdout, _r117.stdout[:200]
@@ -14448,7 +14543,7 @@ http:
     if _fresh_db.exists():
         _fresh_db.unlink()
     _r117c = _sp117.run([sys.executable, "cli/run_users.py", "--create-admin"], cwd=str(ROOT),
-                        capture_output=True, text=True, timeout=180,
+                        capture_output=True, text=True, timeout=180, stdin=_sp117.DEVNULL,
                         env=dict(os.environ, CTFSCANNER_DB=str(_fresh_db),
                                  CTFSCANNER_ADMIN_PASSWORD=_SENT117, TMPDIR=str(_TMPDIR)))
     assert _r117c.returncode == 0, ("新建库上 --create-admin 失败了："
@@ -14464,6 +14559,32 @@ http:
         assert _usvc117.get_by_name(_as117.DEFAULT_NAME)["password"] != _SENT117, "口令明文入库了"
     finally:
         db.DB_PATH = _old_db117
+    # ⑧ 续246：交互判据只有一个产地。⑦ 的 DEVNULL 子进程钉的是端到端形状，这里补两枪：
+    #    进程内注入"非 tty stdin"必须判非交互（CI / 管道 / 测试都靠这个形状）；源码里
+    #    不许再出现第二份裸 `sys.stdin.isatty()`（progress 的进度条刷新是 cosmetic，
+    #    走自己的 `_isatty(stream)`，不在此列）。没有这两条，下一个"图省事直接 isatty()"
+    #    的提交在 Linux CI 上照样全绿，坑只在 Windows 上炸。
+    from scanner import utils as _ut117
+
+    class _NoTty117:
+        def isatty(self):
+            return False
+
+    _real_stdin117 = sys.stdin
+    try:
+        sys.stdin = _NoTty117()
+        assert _ut117.is_interactive_stdin() is False, \
+            "注入非 tty stdin 后必须判非交互（这是 DEVNULL/管道/CI 的形状）"
+    finally:
+        sys.stdin = _real_stdin117
+    for _pf117 in ("scanner/admin_setup.py", "scanner/keystore.py", "scanner/edgeauth.py",
+                   "cli/run_keys.py", "run_bootstrap.py"):
+        _src117 = (ROOT / _pf117).read_text(encoding="utf-8", errors="replace")
+        assert "sys.stdin.isatty()" not in _src117, (
+            f"{_pf117} 里又出现了裸 sys.stdin.isatty() —— 「要不要提问」的判据只有一处产地"
+            "（utils.is_interactive_stdin()）；Linux CI 看不见 Windows NUL 那个坑（续246）")
+        assert "is_interactive_stdin()" in _src117, (
+            f"{_pf117} 没接上 utils.is_interactive_stdin()（上一枪对它就不成立了）")
     # 判据自己也要有牙：把入口的建表调用拆掉，这条必须红（否则"新库能建号"可能只是库恰好存在）
     _ru117 = (ROOT / "cli" / "run_users.py").read_text(encoding="utf-8")
     assert "db.init_db()" in _ru117, "入口不建表 ⇒ 这条回归退化成「这台机器恰好有库才绿」"
@@ -14477,7 +14598,9 @@ http:
           "load_settings() 都没有它｜无 uid 的 Cookie 一律不认（0 账号那一档也不认 —— 旧实现正是在这里 "
           "给管理员）｜策略页与登录页再无口令输入框、HTML 里不再出现 gui.token｜删键只动那一行、注释一字"
           "不损（并反证 save_settings 的合并写**删不掉**）｜cli/run_users.py --status 子进程可跑且不出口令值｜"
-          "DEFAULTS 的 gui 段不再有 token/token_hash")
+          "DEFAULTS 的 gui 段不再有 token/token_hash｜续246：stdin=NUL（DEVNULL）的 --create-admin "
+          "子进程秒过（走环境变量，不挂死在 Windows getpass）｜注入非 tty stdin 判非交互｜五个提问入口"
+          "全部接上 utils.is_interactive_stdin()、源码里再无第二份裸 isatty()")
 
 
 
@@ -15238,7 +15361,12 @@ http:
         return p.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
 
     _big116 = _d116 / "big.log"
-    _big116.write_text("".join(f"line-{i}-{'x' * 90}\n" for i in range(20000)), encoding="utf-8")
+    # ⚠ 续246 修（Windows 假红，§6.2 同族）：`write_text` 在 Windows 文本模式下会把 `\n`
+    #    翻译成 `\r\n` —— 盘上 st_size 比文本模式读回来的**字符数**每行多 1 字节，④ 的字节
+    #    计数器（数的是 read() 的字符数）与 `_size116`（st_size）就永远对不上，⑤ 的
+    #    "旧写法读满整份"断言必然差一个换行符的量。改成二进制写入：任何平台字符数==字节数，
+    #    断言语义（有界读 vs 整份读）一字不变。
+    _big116.write_bytes("".join(f"line-{i}-{'x' * 90}\n" for i in range(20000)).encode("utf-8"))
     _size116 = _big116.stat().st_size
 
     # ① 与「整份读再切尾」逐行一致（四种边界：常规 / 无尾换行 / n 大于总行数 / 文件不存在）
@@ -16453,9 +16581,18 @@ expression: r0()
     _fake_bin = _TMPDIR / "fakebin121"
     _fake_bin.mkdir(parents=True, exist_ok=True)
     _script = _fake_bin / ("fake121.exe" if os.name == "nt" else "fake121")
-    _script.write_text("#!/bin/sh\necho ok\n" if os.name != "nt" else "@echo off\r\necho ok\r\n",
-                       encoding="utf-8")
-    _script.chmod(0o755)
+    # ⚠ 续246 修（Windows 盲区，§6.2 同族）：这一组历来只在 Linux CI 上跑过 —— Windows 上
+    #    "可执行文件"必须是**真 PE**：CreateProcess 不认 `.exe` 后缀的批处理内容
+    #    （实测起不来，`绝对路径应当起得来` 当场红）。复制一个不问 stdin、无参数、立即退 0
+    #    的系统小工具当替身；POSIX 仍是 shebang 脚本 + 755。两半断言语义不变。
+    if os.name == "nt":
+        # 从 PATH 找（shutil.which 返回绝对路径）；不写死盘符路径（[5o] 静态审计红线）
+        _sys_tool121 = shutil.which("hostname.exe") or shutil.which("hostname")
+        assert _sys_tool121, "Windows 上 PATH 里找不到 hostname.exe（换个无参数、不问 stdin 的系统工具）"
+        shutil.copy(_sys_tool121, _script)
+    else:
+        _script.write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
+        _script.chmod(0o755)
     _rel121 = _script.relative_to(ROOT).as_posix()
     _got121 = _which121(_rel121)
     assert _got121 is None or os.path.isabs(str(_got121)), \
@@ -16463,7 +16600,20 @@ expression: r0()
     _other = _TMPDIR / "other-cwd121"
     _other.mkdir(parents=True, exist_ok=True)
     assert _runcmd121([str(_script)], cwd=str(_other))[0] == 0, "绝对路径应当起得来"
-    assert _runcmd121([_rel121], cwd=str(_other))[0] == 127, \
+    if os.name == "nt":
+        # ⚠ 续246：Windows 上 subprocess 的相对 argv[0] 按**父进程 cwd**解析（不是传入的
+        #    cwd 参数）—— 只换 cwd 参数，logs/smoke-*/fakebin121/... 相对冒烟自己的 cwd
+        #    是存在的 ⇒ 起得来，127 那一半观测不到。 faithful 的形状是**真的换进程 cwd**
+        #    （Linux 上换 cwd 参数即可，两边语义不同、同一把尺子）。
+        _real_cwd121 = os.getcwd()
+        os.chdir(str(_other))
+        try:
+            _rc121 = _runcmd121([_rel121])[0]
+        finally:
+            os.chdir(_real_cwd121)
+    else:
+        _rc121 = _runcmd121([_rel121], cwd=str(_other))[0]
+    assert _rc121 == 127, \
         "同一把尺子：相对路径 + 换 cwd 应当起不来（⑦ 的存在理由）"
 
     # ⑧ 页面：策略配置里必须有 afrog 的字段，且**表单名与 app.py 读的键一一对上**
@@ -18180,7 +18330,20 @@ expression: r0()
     try:
         _mig_build134("src.db")
         # ---- ① 默认包：任务与资产有，四类凭据一个都不许有 ----
-        _info134 = _mg134.export_bundle(dst=_tmp134 / "d.json")
+        # ⚠ 续246：`os.chmod(dst, 0o600)` 在 Windows 上只能切只读位（S_IMODE 恒 0o666，
+        #    POSIX owner-only 位在 NTFS 上不存在）⇒ 按平台分支；Windows 不白跳过 ——
+        #    spy `os.chmod` 钉住"导出时仍发起过 chmod(..., 0o600)"（与 [109] 同一修法）。
+        _ch134, _real_ch134 = [], os.chmod
+
+        def _spy_ch134(p, m, *a, **k):
+            _ch134.append((str(p), m))
+            return _real_ch134(p, m, *a, **k)
+
+        os.chmod = _spy_ch134
+        try:
+            _info134 = _mg134.export_bundle(dst=_tmp134 / "d.json")
+        finally:
+            os.chmod = _real_ch134
         _raw134 = (_tmp134 / "d.json").read_text(encoding="utf-8")
         _bd134 = _json.loads(_raw134)
         assert _bd134["magic"] == _mg134.MAGIC and _bd134["format"] == _mg134.FORMAT
@@ -18191,7 +18354,13 @@ expression: r0()
             assert _s134 not in _raw134, f"默认包里泄了：{_s134}"
         assert "audit_log" not in _bd134["data"] and "login_fails" not in _bd134["data"], \
             "审计流水不属于资产，跨机合并会把「谁在何时登录失败」的来源搅混"
-        assert _stat134.S_IMODE((_tmp134 / "d.json").stat().st_mode) == 0o600, "包必须是 0600"
+        if os.name == "nt":
+            assert any(str(_p134).endswith("d.json") and _m134 == 0o600
+                       for _p134, _m134 in _ch134), (
+                "Windows 上看不到 POSIX 权限位（S_IMODE 恒 0o666），但导出时必须仍发起 "
+                "chmod(..., 0o600)：spy 全程没抓到这次调用＝约束被摘了")
+        else:
+            assert _stat134.S_IMODE((_tmp134 / "d.json").stat().st_mode) == 0o600, "包必须是 0600"
         assert _bd134["includes"]["task_auth_stripped"] == 1, "Cookie 一条都没剥掉？"
         # ---- ② log_file：包里相对、库里绝对 ----
         _logs134 = [t["log_file"] for t in _bd134["data"]["tasks"] if t["log_file"]]
@@ -18209,12 +18378,18 @@ expression: r0()
             _mg134.redact_auth = _real_redact134
 
         # ---- ④ 变异证伪 B：log_file 不做相对化 ⇒ 绝对路径进包 ----
+        #    ⚠ 续246：原来这条是字面量子串匹配（`str(_TMPDIR) in 原文`）—— Windows 上 JSON
+        #    会把反斜杠转义（`C:\x` → `C:\\x`），子串恒假、断言恒过。改**值级**判据：
+        #    解析回 JSON，看 log_file 里有没有绝对路径，两个平台语义一致。
         _real_rel134 = _mg134.to_rel_path
         try:
             _mg134.to_rel_path = lambda v: str(v or "")
             _mg134.export_bundle(dst=_tmp134 / "mB.json")
-            assert str(_TMPDIR) in (_tmp134 / "mB.json").read_text(encoding="utf-8"), \
-                "打回原样后包里还是没有绝对路径 ⇒ ②那条断言是假的"
+            _bdB134 = _json.loads((_tmp134 / "mB.json").read_text(encoding="utf-8"))
+            _absB134 = [t["log_file"] for t in _bdB134["data"]["tasks"]
+                        if t.get("log_file") and Path(t["log_file"]).is_absolute()]
+            assert _absB134, \
+                "打回原样后包里还是没有绝对路径 ⇒ ②那条断言是假的（Windows 上 JSON 转义反斜杠，字面量子串恒假）"
         finally:
             _mg134.to_rel_path = _real_rel134
 
@@ -18816,15 +18991,31 @@ expression: r0()
     assert "MB" in _html8am
 
     # ③ 导出：只读、0600、零凭据
+    #    ⚠ 续246：0600 在 Windows 只能是 spy 判据（os.chmod 语义见 [109]/[134] 两处注释）
     _n0 = _mig_n_tasks()
     _before8am = _mig_files("export")
-    _r8am = _ca8am.post("/api/migrate/export", data={"ids": str(_own8am)})
+    _ch8am, _real_ch8am = [], os.chmod
+
+    def _spy8am(p, m, *a, **k):
+        _ch8am.append((str(p), m))
+        return _real_ch8am(p, m, *a, **k)
+
+    os.chmod = _spy8am
+    try:
+        _r8am = _ca8am.post("/api/migrate/export", data={"ids": str(_own8am)})
+    finally:
+        os.chmod = _real_ch8am
     _after8am = _mig_files("export")
     assert _r8am.status_code == 200 and len(set(_after8am) - set(_before8am)) == 1, \
         f"导出没产出恰好一个包：{[p.name for p in set(_after8am) - set(_before8am)]}"
     _new8am = list(set(_after8am) - set(_before8am))[0]
     _b8am = _json8am.loads(_new8am.read_text(encoding="utf-8"))
-    assert _new8am.stat().st_mode & 0o777 == 0o600, oct(_new8am.stat().st_mode)
+    if os.name == "nt":
+        assert any(_p8am.endswith(".json") and _m8am == 0o600 for _p8am, _m8am in _ch8am), (
+            "Windows 上看不到 POSIX 权限位，但导出时必须仍发起 chmod(..., 0o600)："
+            "spy 没抓到这次调用＝约束被摘了")
+    else:
+        assert _new8am.stat().st_mode & 0o777 == 0o600, oct(_new8am.stat().st_mode)
     assert not (_b8am.get("data") or {}).get("users"), "默认包里出现了账号表"
     assert not (_b8am.get("data") or {}).get("credentials"), "默认包里出现了凭据文件"
     assert str(_MIG_DIR) not in _r8am.get_data(as_text=True), "页面回显了本机绝对路径"
@@ -19799,6 +19990,49 @@ expression: r0()
             f"combo=0 仍在试拼接名：{_tried}"
         assert not any("组合爆破" in x for x in _t12b), _t12b[:8]
 
+        # ⑬ 续246（B 批）：任务级爆破档位 —— quick 把深档等距抽样到 1 万条、deep 回到策略值。
+        # 判据落在**真实 stage run 写出的词表文件**上（不是只测 pure helper）：
+        # 12000 条深档 + 2 条精简档 ⇒ quick 10002 / 策略 300 ⇒ 302 / deep 0 ⇒ 12002。
+        assert _sd8aq.brute_profile("quick", 4)[:2] == ("quick", 4), \
+            "开发模式把策略压到 4 时，quick 不许把上限放大回 1 万"
+        assert _sd8aq.brute_profile("bogus", 300)[:2] == ("", 300), \
+            "未知档位必须按未指定处理（行为与加选项之前一致）"
+        _huge8aq = _d8aq / "huge_dict246.txt"
+        _huge8aq.write_text("\n".join(f"q{i}" for i in range(12000)) + "\n", encoding="utf-8")
+
+        def _pd_words246():
+            assert _pd_dicts, "puredns 没被调用（档位测试需要走 puredns 那一路）"
+            return len([x for x in _sd8aq.read_lines(Path(_pd_dicts[-1])) if x])
+
+        _lg8ap.clear(); _tried.clear(); _pd_dicts.clear()
+        _t13 = _run_sub("quick", mw=0, cur=_tiny8aq, deep=_huge8aq, pd=True,
+                        opts={"subdomain_profile": "quick"})
+        assert _pd_words246() == 10002, (
+            f"quick 档应把 12000 条深档等距抽样到 10000 条（+2 条精简档），实得 {_pd_words246()}")
+        assert any("爆破档位：快速" in x and "10,000" in x for x in _t13), _t13[:10]
+        assert any("等距抽样" in x and "不是截断" in x for x in _t13), _t13[:10]
+
+        # 策略值更小时**以策略为准**（配置是天花板；开发模式把它压到 4 也走这一支）
+        _lg8ap.clear(); _tried.clear(); _pd_dicts.clear()
+        _t13b = _run_sub("quickcap", mw=300, cur=_tiny8aq, deep=_huge8aq, pd=True,
+                         opts={"subdomain_profile": "quick"})
+        assert _pd_words246() == 302, f"策略 300 更小，quick 不许反超：{_pd_words246()}"
+        assert any("以策略为准" in x for x in _t13b), _t13b[:10]
+
+        # deep 档不改数字：策略 0 = 全量 12000（+2）
+        _lg8ap.clear(); _tried.clear(); _pd_dicts.clear()
+        _t13c = _run_sub("deep246", mw=0, cur=_tiny8aq, deep=_huge8aq, pd=True,
+                         opts={"subdomain_profile": "deep"})
+        assert _pd_words246() == 12002, f"deep + 策略 0 应全量：{_pd_words246()}"
+        assert any("爆破档位：深度" in x and "全量" in x for x in _t13c), _t13c[:10]
+
+        # 不认识的值按"未指定"处理（行为与加选项之前一致，且不许打档位日志）
+        _lg8ap.clear(); _tried.clear(); _pd_dicts.clear()
+        _t13d = _run_sub("bogus246", mw=0, cur=_tiny8aq, deep=_huge8aq, pd=True,
+                         opts={"subdomain_profile": "bogus"})
+        assert _pd_words246() == 12002, f"未知档位不该收窄：{_pd_words246()}"
+        assert not any("爆破档位：" in x for x in _t13d), _t13d[:10]
+
     finally:
         (_sd8aq.which, _sd8aq.passive.collect, _sd8aq.wildcard.resolve_all,
          _sd8aq.run_cmd) = _keep8aq
@@ -19907,6 +20141,9 @@ expression: r0()
           "出路｜字典过小自己喊并指名那条导入命令｜每轮都报「域名 × 词 = 多少次 DNS 查询」｜"
           "`_spread` 换成恒等的变异立刻硬啃整份深字典（断言有牙）｜recrawl 与四个 limits 键三方一致，"
           "且开发模式/自检把词数与补探主机数压回个位数（用户装深字典不许把 CI 拖慢）")
+    print("[246b] 续246（B 批）ok: 任务级爆破档位 quick/deep —— quick 12000→10000（+2）、"
+          "策略 300 更小以策略为准（302）、deep+策略 0 全量（12002）、未知值按未指定处理｜"
+          "断言在 [8aq] ⑬（真跑 stage、读 puredns 落盘词表，不是只测纯函数）")
     # ---------------- [8ar] 续140：「渲染后标题」（SPA 站点的原始 HTML 里根本没有 <title>） ----------------
     #      用户点单（2026-10-09）：「有些明明有标题为什么我们就是获取不到标题 我们能在等待时间把这个解决了吗」
     #      附的那一行就是任务 14 站点 #279 `https://agent.targ2.com/` 200 / tech=nextjs,react / 标题空。
@@ -20614,46 +20851,54 @@ expression: r0()
                      "CTFSCANNER_GO": str(_bin166 / "go"),
                      "CTFSCANNER_MASSDNS_SRC": ""})
     (_d166 / "home").mkdir()
-    try:
-        _p1 = _sp166.run([sys.executable, str(ROOT / "tools" / "build_fscan.py"),
-                          "--src", str(_src_f166), "--dest", str(_d166 / "out"),
-                          "--wire", "--settings", str(_set166)],
-                         cwd=str(ROOT), capture_output=True, text=True, env=_penv166, timeout=180)
-        assert _p1.returncode == 0, f"build_fscan 直跑失败（rc={_p1.returncode}）：{_p1.stdout[-400:]}" \
-                                    f"\n{_p1.stderr[-400:]}"
-        assert (_d166 / "out" / ("fscan.exe" if os.name == "nt" else "fscan")).is_file(), _p1.stdout[-300:]
-        _p2 = _sp166.run([sys.executable, str(ROOT / "tools" / "build_massdns.py"),
-                          "--src", str(_src_m166), "--dest", str(_d166 / "out"),
-                          "--wire", "--settings", str(_set166)],
-                         cwd=str(ROOT), capture_output=True, text=True, env=_penv166, timeout=180)
-        assert _p2.returncode == 0, f"build_massdns 直跑失败（rc={_p2.returncode}）：{_p2.stdout[-400:]}" \
-                                    f"\n{_p2.stderr[-400:]}"
-        # `--wire` 写回的必须是**相对路径**（§0.3），而且指的是沙箱那份产物
-        _wired166 = dict(_re166.findall(r"(?m)^\s{2}(fscan|massdns):\s*(\S+)\s*$",
-                                        _set166.read_text(encoding="utf-8", errors="replace")))
-        assert set(_wired166) == {"fscan", "massdns"}, f"两个 --wire 没都写进给定的那份配置：{_wired166}"
-        for _k166, _v166 in _wired166.items():
-            assert not _v166.startswith("/") and not _re166.match(r"^[A-Za-z]:", _v166), \
-                f"{_k166} 写回了绝对路径（§0.3）：{_v166}"
-            assert _v166.startswith("logs/smoke-166-") and _v166.endswith(_k166), \
-                f"{_k166} 写回的不是刚编出来的那一份：{_v166}"
-        # 跟踪的那份 settings.yaml 一个字节都不许动（门禁改用户的配置＝最坏的一种副作用）
-        assert (ROOT / "config" / "settings.yaml").read_bytes() == _tracked_before166, \
-            "编译脚本动了被跟踪的 config/settings.yaml"
-        # 变异证伪：把 path 自举那行摘掉，同一条命令必须红（证明 ⑧ 真在验"直跑能 import"）
-        _bf166 = (ROOT / "tools" / "build_fscan.py").read_bytes()
-        _mu166 = _bf166.replace(b"    sys.path.insert(0, str(ROOT))\n", b"    pass\n", 1)
-        assert b"sys.path.insert(0, str(ROOT))" not in _mu166, "变异没落盘（下面那条判据会空写）"
-        _mp166 = _d166 / "mutant_build_fscan.py"
-        _mp166.write_bytes(_mu166)
-        _p3 = _sp166.run([sys.executable, str(_mp166), "--src", str(_src_f166),
-                          "--dest", str(_d166 / "out2"), "--wire", "--settings", str(_set166)],
-                         cwd=str(ROOT), capture_output=True, text=True, env=_penv166, timeout=180)
-        _err3 = _p3.stderr + _p3.stdout
-        assert _p3.returncode != 0 and ("No module named" in _err3 or "ImportError" in _err3), \
-            f"摘掉 path 自举后 --wire 居然还能跑 ⇒ ⑧ 那条断言是空写：{_err3[-200:]}"
-    finally:
-        _sh166.rmtree(str(_d166), ignore_errors=True)
+    if os.name == "nt":
+        # ⚠ 续246：假工具链是 POSIX shebang 形状（go/make/cc 无后缀 + #!/bin/sh）——
+        #    Windows 的 CreateProcess 起不来、shutil.which 也找不到无后缀文件（与 [121]⑦
+        #    同族的 Windows 盲区；这一节历来只在 Linux CI 跑过）。**不冒充通过**：明说未验，
+        #    真编译链路以服务器正式门禁（Linux）为准；⑨ 取到真 Go 的机器照旧跑。
+        print("[166] ⑧ 工具链端到端在 Windows 上未验：假 go/make/cc 是 POSIX shebang 形状，"
+              "CreateProcess 起不来 —— 以服务器 Linux 门禁为准（不冒充通过）")
+    else:
+        try:
+            _p1 = _sp166.run([sys.executable, str(ROOT / "tools" / "build_fscan.py"),
+                              "--src", str(_src_f166), "--dest", str(_d166 / "out"),
+                              "--wire", "--settings", str(_set166)],
+                             cwd=str(ROOT), capture_output=True, text=True, env=_penv166, timeout=180)
+            assert _p1.returncode == 0, f"build_fscan 直跑失败（rc={_p1.returncode}）：{_p1.stdout[-400:]}" \
+                                        f"\n{_p1.stderr[-400:]}"
+            assert (_d166 / "out" / ("fscan.exe" if os.name == "nt" else "fscan")).is_file(), _p1.stdout[-300:]
+            _p2 = _sp166.run([sys.executable, str(ROOT / "tools" / "build_massdns.py"),
+                              "--src", str(_src_m166), "--dest", str(_d166 / "out"),
+                              "--wire", "--settings", str(_set166)],
+                             cwd=str(ROOT), capture_output=True, text=True, env=_penv166, timeout=180)
+            assert _p2.returncode == 0, f"build_massdns 直跑失败（rc={_p2.returncode}）：{_p2.stdout[-400:]}" \
+                                        f"\n{_p2.stderr[-400:]}"
+            # `--wire` 写回的必须是**相对路径**（§0.3），而且指的是沙箱那份产物
+            _wired166 = dict(_re166.findall(r"(?m)^\s{2}(fscan|massdns):\s*(\S+)\s*$",
+                                            _set166.read_text(encoding="utf-8", errors="replace")))
+            assert set(_wired166) == {"fscan", "massdns"}, f"两个 --wire 没都写进给定的那份配置：{_wired166}"
+            for _k166, _v166 in _wired166.items():
+                assert not _v166.startswith("/") and not _re166.match(r"^[A-Za-z]:", _v166), \
+                    f"{_k166} 写回了绝对路径（§0.3）：{_v166}"
+                assert _v166.startswith("logs/smoke-166-") and _v166.endswith(_k166), \
+                    f"{_k166} 写回的不是刚编出来的那一份：{_v166}"
+            # 跟踪的那份 settings.yaml 一个字节都不许动（门禁改用户的配置＝最坏的一种副作用）
+            assert (ROOT / "config" / "settings.yaml").read_bytes() == _tracked_before166, \
+                "编译脚本动了被跟踪的 config/settings.yaml"
+            # 变异证伪：把 path 自举那行摘掉，同一条命令必须红（证明 ⑧ 真在验"直跑能 import"）
+            _bf166 = (ROOT / "tools" / "build_fscan.py").read_bytes()
+            _mu166 = _bf166.replace(b"    sys.path.insert(0, str(ROOT))\n", b"    pass\n", 1)
+            assert b"sys.path.insert(0, str(ROOT))" not in _mu166, "变异没落盘（下面那条判据会空写）"
+            _mp166 = _d166 / "mutant_build_fscan.py"
+            _mp166.write_bytes(_mu166)
+            _p3 = _sp166.run([sys.executable, str(_mp166), "--src", str(_src_f166),
+                              "--dest", str(_d166 / "out2"), "--wire", "--settings", str(_set166)],
+                             cwd=str(ROOT), capture_output=True, text=True, env=_penv166, timeout=180)
+            _err3 = _p3.stderr + _p3.stdout
+            assert _p3.returncode != 0 and ("No module named" in _err3 or "ImportError" in _err3), \
+                f"摘掉 path 自举后 --wire 居然还能跑 ⇒ ⑧ 那条断言是空写：{_err3[-200:]}"
+        finally:
+            _sh166.rmtree(str(_d166), ignore_errors=True)
 
     # ⑨ 真工具链那一档（**只在取了 Go 的机器上跑**）：编一个 hello 模块，验"调用方给的 HOME
     #    一个文件都不会多"。没取 Go 就如实打印"这一条本次没验到"，绝不冒充通过。
@@ -20754,12 +20999,17 @@ expression: r0()
         _fx167.update({"dest": "sandbox-167/browser", "marker_any": ("chrome", "chrome.exe"),
                        "max_bytes": 1 << 20})
         # 现造一个 zip（带 unix mode），验"解包保留可执行位 + 前缀剥掉 + exec 路径算得对"
+        #    ⚠ 续246：夹具按平台取形 —— Windows 上 binary_name 是 chrome.exe（[8x] 同款口径），
+        #    zip 里放 Linux 形状的 chroma 会永远 is_file()=False（exec 路径算不出、断言空跑）。
+        _nt167 = os.name == "nt"
         _zb167 = _io167.BytesIO()
         with _zip167.ZipFile(_zb167, "w") as _zf167:
-            _zi = _zip167.ZipInfo("chrome-linux64/chrome")
+            _zi = _zip167.ZipInfo(("chrome-win64/" if _nt167 else "chrome-linux64/")
+                                  + ("chrome.exe" if _nt167 else "chrome"))
             _zi.external_attr = 0o755 << 16
-            _zf167.writestr(_zi, b"#!/bin/sh\necho fake\n")
-            _zf167.writestr("chrome-linux64/locales/en-US.pak", b"x")
+            _zf167.writestr(_zi, b"#!/bin/sh\necho fake\n" if not _nt167 else b"MZ fake")
+            _zf167.writestr(("chrome-win64/" if _nt167 else "chrome-linux64/")
+                            + "locales/en-US.pak", b"x")
         _fx167["pin_sha256"] = {str(_tm167.stack_asset("chrome")):
                                 _hl167.sha256(_zb167.getvalue()).hexdigest()}
         _tm167.LOCAL_STACK["chrome"] = _fx167
@@ -20767,13 +21017,16 @@ expression: r0()
             _rz = _tm167.stack_install("chrome", dest_root=_d167, blob=_zb167.getvalue(),
                                         allow_unverified=True)
             assert _rz["ok"] and _rz["files"] == 2, _rz
-            assert not (_d167 / "sandbox-167/browser/chrome-linux64").exists(), "顶层前缀没剥掉"
+            assert not (_d167 / "sandbox-167/browser" / ("chrome-win64" if _nt167
+                                                          else "chrome-linux64")).exists(), \
+                "顶层前缀没剥掉"
             if os.name != "nt":
                 assert (_d167 / "sandbox-167/browser/chrome").stat().st_mode & 0o111, \
                     "zip 里的 0o755 没保留 —— 症状是'下载解包都成功，浏览器起不来（权限不够）'"
             # 传 dest_root：沙箱才是这一件的"根"（生产路径不传，就是项目根）
             _ep = _tm167.stack_exec_path("chrome", dest_root=_d167)
-            assert _ep.replace("\\", "/").endswith("sandbox-167/browser/chrome"), _ep
+            assert _ep.replace("\\", "/").endswith(
+                "sandbox-167/browser/chrome.exe" if _nt167 else "sandbox-167/browser/chrome"), _ep
             assert "/" in _ep and not _ep.startswith("/") and not Path(_ep).is_absolute(), \
                 f"回写值必须是相对路径（§0.3）：{_ep}"
             # ⑤ 回写走"只改一个键"那条逐行替换：行数 / 注释数 / 行尾形态 / 其它键全不许动
@@ -30002,6 +30255,157 @@ expression: r0()
     assert "本地开发.md" in _ds244, "dev-sync 没指回入口"
     print("[244] 续244 ok: 根目录《本地开发.md》入口文档（触发语/三角色/三条命令/每轮循环/"
           "服务器收尾/红线/前人坑）｜README 与两份详细文档互指，防漂移")
+    # ------------------------------------------------------------------ [245]
+    # 续245：中文 Windows 上 pip 20.2.3（Python 3.9 venv 自带）按 locale(GBK) 解码
+    # requirements 文件。它的 auto_decode 只认 BOM 与前两行 PEP263 声明，否则回落到 locale；
+    # 两份清单都含中文注释 ⇒ 没有声明时 `dev.py setup` 直接 UnicodeDecodeError。
+    import re as _re245
+
+    def _pip_old_decode245(raw):
+        """复刻 pip 20.2.3 的 auto_decode：BOM → 前两行 PEP263 → locale(GBK)。"""
+        for _bom245, _enc245 in ((b"\xef\xbb\xbf", "utf-8"),
+                                  (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+            if raw.startswith(_bom245):
+                return raw[len(_bom245):].decode(_enc245)
+        for _ln245 in raw.split(b"\n")[:2]:
+            if _ln245.startswith(b"#"):
+                _m245 = _re245.search(br"coding[:=][ \t]*([-\w.]+)", _ln245)
+                if _m245:
+                    return raw.decode(_m245.group(1).decode("ascii"))
+        return raw.decode("gbk")  # 中文 Windows 的 locale.getpreferredencoding(False)
+
+    # 先自证模拟器抓得到这个 bug（否则"现在能解码"可能只是判据恒过）
+    try:
+        _pip_old_decode245("flask>=2.0\n# 续98：中文注释\n".encode("utf-8"))
+    except UnicodeDecodeError:
+        pass
+    else:
+        raise AssertionError("[245] 模拟器没复现旧 pip 的 GBK 解码失败，下面的判据没有区分度")
+    for _rf245 in ("requirements.txt", "requirements.lock"):
+        _raw245 = (ROOT / _rf245).read_bytes()
+        _l1_245 = _raw245.split(b"\n", 1)[0].lower()
+        assert b"coding" in _l1_245 and b"utf-8" in _l1_245, \
+            f"{_rf245} 首行缺 `# -*- coding: utf-8 -*-`：中文 Windows 上 pip 20.2.3 会按 GBK 解码"
+        try:
+            _pip_old_decode245(_raw245)
+        except UnicodeDecodeError as _exc245:
+            raise AssertionError(f"[245] {_rf245} 旧 pip 解码失败：{_exc245}")
+    # ② 输出编码（续245-②）：stdout/stderr 重定向到文件/管道时，中文 Windows 的 locale 是
+    #    gbk，main() 里带 `↔` 的 print 会让整套门禁崩在 [6m]（实测）。模块顶那段重配置
+    #    必须真的生效，且必须排在 `def main(` 之前 —— 两件事都在这里钉住。
+    for _st245 in (sys.stdout, sys.stderr):
+        _enc245n = (_st245.encoding or "").lower().replace("-", "").replace("_", "")
+        assert _enc245n == "utf8", (
+            f"[245] {getattr(_st245, 'name', '?')} 编码 = {_st245.encoding!r}："
+            "模块顶的 utf-8 重配置没生效，重定向场景会在非 ASCII print 上崩")
+    _src245 = (ROOT / "tests" / "smoke.py").read_text(encoding="utf-8", errors="replace")
+    _i245 = _src245.index("for _stream245 in (sys.stdout, sys.stderr):")
+    _m245 = _src245.index("def main(")
+    assert _i245 < _m245, "stdio 重配置必须排在 `def main(` 之前（main 里第一句非 ASCII print 之前）"
+    # ③ Python 3.9.0 的 abi3 缺口（续245-附2）：它的 python3.dll 不导出 `PyCMethod_New`
+    #    （3.9.1 才补），cryptography 42+ 的 Windows abi3 轮子一 import 就 "DLL load failed"。
+    #    requirements.txt 必须只对 3.9.0 钉上限；旧文件（单行 `cryptography>=41`）必须被判红 ——
+    #    先自证判据抓得到它，否则"现在有上限"可能只是这条断言恒过（§6.1）。
+    def _crypto_cap245(text):
+        for _l245 in text.splitlines():
+            _s245 = _l245.split("#")[0].strip()
+            if not _s245.lower().startswith("cryptography"):
+                continue
+            if 'python_full_version == "3.9.0"' not in _s245:
+                continue
+            _m245b = _re245.search(r"<\s*(\d+)", _s245.split(";", 1)[0])
+            if _m245b:
+                return int(_m245b.group(1))
+        return None
+
+    _cap245 = _crypto_cap245((ROOT / "requirements.txt").read_text(encoding="utf-8"))
+    assert _cap245 is not None and _cap245 <= 42, (
+        "[245] requirements.txt 没给 Python 3.9.0 钉 cryptography<42：3.9.0 的 python3.dll "
+        "缺 PyCMethod_New，42+ 的 Windows abi3 轮子 import 即 DLL load failed")
+    assert _crypto_cap245("cryptography>=41\n") is None, \
+        "③ 的判据对旧文件不敏感（没上限也当合格）→ 假绿"
+    print("[245] 续245 ok: requirements.txt/lock 首行 PEP263 utf-8 声明（旧 pip GBK 解码路径自证复现）"
+          "｜stdout/stderr 模块顶重配 utf-8（中文 Windows 重定向不再崩在非 ASCII print）"
+          "｜requirements.txt 对 Python 3.9.0 钉 cryptography<42（该版 python3.dll 缺 "
+          "PyCMethod_New，42+ 的 Windows 轮子 import 即 DLL load failed）")
+    # ------------------------------------------------------------------ [246]
+    # 续246（A 批）：子域名被动源补齐。只接 **keyless 且实测可用** 的源：
+    #   chaziyu（HTML）/ urlscan（JSON）进默认集；threatminer 接口 keyless 但 2026-10-20
+    #   实测 CF 522 / 超时 ⇒ 保留可开、默认不启用；ipv4info 在 OneForAll 里要 API key
+    #   （且域名当前无 A 记录）⇒ 不属于本档，不接。判据全部桩掉网络（§6.2 第二十起）。
+    from scanner import passive as _pa246
+
+    assert "chaziyu" in _pa246.SOURCES and "urlscan" in _pa246.SOURCES, _pa246.SOURCES.keys()
+    assert "threatminer" in _pa246.SOURCES, "threatminer 接口应保留（恢复后配置里一开就能用）"
+    assert "chaziyu" in _pa246.DEFAULT_SOURCES and "urlscan" in _pa246.DEFAULT_SOURCES
+    assert "threatminer" not in _pa246.DEFAULT_SOURCES, (
+        "threatminer 2026-10-20 实测 522：默认启用会让每轮都白等一个超时")
+    assert "ipv4info" not in _pa246.SOURCES, (
+        "ipv4info 不是 keyless（参考实现里要 api key），别按免 key 接进来")
+    assert all(_s246 in _pa246.SOURCES for _s246 in _pa246.DEFAULT_SOURCES), (
+        "DEFAULT_SOURCES 里有未注册的源名 → collect() 会静默少跑一路")
+    assert _pa246.SOURCES["chaziyu"].format(d="a.test") == "https://chaziyu.com/a.test/"
+    assert _pa246.SOURCES["urlscan"].format(d="a.test").endswith("q=domain:a.test")
+
+    # ① 解析：两个新源的真实响应形状（chaziyu 的 HTML 表格 / urlscan 的 JSON）
+    assert _pa246._extract("<td>www.a.test</td><td>api.a.test</td><td>nota.test</td>", "a.test") == \
+        {"www.a.test", "api.a.test"}
+    assert _pa246._extract('{"page":{"domain":"cdn.a.test"}}', "a.test") == {"cdn.a.test"}
+
+    # ② collect 接线：三路各给命中、其中一路不可达，别的源不许被拖垮
+    _cfg246 = {"passive": {"enabled": True, "timeout": 5,
+                           "sources": ["chaziyu", "urlscan", "threatminer"]}}
+    _seen246 = []
+
+    def _http246(url, **kw):
+        _seen246.append(url)
+        if "chaziyu.com" in url:
+            return {"status": 200, "length": 64,
+                    "text": "<table><td>www.a.test</td><td>api.a.test</td></table>"}
+        if "urlscan.io" in url:
+            return {"status": 200, "length": 48,
+                    "text": '{"results":[{"page":{"domain":"cdn.a.test"}}]}'}
+        return None                      # threatminer：模拟当前 522 / 超时（http_request 返回 None）
+
+    _orig246 = (_pa246.http_request, _pa246.http_last_error)
+    _pa246.http_request, _pa246.http_last_error = _http246, lambda: "HTTP 522（上游不可达）"
+    try:
+        _got246 = _pa246.collect("a.test", _cfg246, workers=3)
+    finally:
+        _pa246.http_request, _pa246.http_last_error = _orig246
+    assert _got246 == {"www.a.test": "passive:chaziyu",
+                       "api.a.test": "passive:chaziyu",
+                       "cdn.a.test": "passive:urlscan"}, _got246
+    assert len(_seen246) == 3 and any("threatminer" in _u246 for _u246 in _seen246), _seen246
+    print("[246] 续246 ok: 被动源 A 批（chaziyu HTML / urlscan JSON 进默认集，"
+          "threatminer 保留但默认关；ipv4info 要 key 不接）｜三源并发，单源不可达不拖垮其它")
+    # ------------------------------------------------------------------ [247]
+    # 续246：远程服务器一键更新脚本（主理人点单"本地更新了，服务器拉最新 GitHub 再启动验证"）。
+    # 钉的是结构事实（红线的可执行形状），不是把 shell 再实现一遍：
+    # LF 行尾（CRLF 的 shebang 在 Linux 上直接 bad interpreter）、set -euo pipefail、
+    # 仓库自定位（工具可能装在项目外）、sync_check --strict、只 rebase 不 reset --hard、
+    # 依赖吃 lock 不吃 txt、重启只杀 pid 文件记着的进程、无绝对路径、不替用户 push。
+    _up247 = (ROOT / "update.sh").read_bytes()
+    _src247 = _up247.decode("utf-8", errors="replace")
+    assert b"\r\n" not in _up247, "update.sh 必须是 LF（*.sh 被 .gitattributes 钉死，CRLF 在 Linux 上 bad interpreter）"
+    assert _src247.startswith("#!/usr/bin/env bash"), "update.sh 少 shebang"
+    assert "set -euo pipefail" in _src247, "update.sh 少 set -euo pipefail（半套失败会静默继续）"
+    assert 'git rev-parse --show-toplevel' in _src247, "update.sh 必须自定位仓库根（不许写死路径）"
+    assert "tools/sync_check.py --strict" in _src247, "更新前必须过同步体检（§0.6）"
+    assert "git pull --rebase origin main" in _src247, "更新必须是 rebase origin main"
+    assert "reset --hard" not in _src247, "update.sh 不许出现 reset --hard（裸 reset 是跨机事故源）"
+    assert "requirements.lock" in _src247 and "-r requirements.txt" not in _src247, \
+        "依赖只吃 lock（[8al]：CI 与安装都不许吃 txt）"
+    assert "run_gui.py" in _src247 and "CTFSCANNER_GUI_PORT" in _src247, \
+        "启动路径必须复用 run_gui.py + CTFSCANNER_GUI_PORT（第二个产地就是漂移起点）"
+    assert "$PIDFILE" in _src247 or "PIDFILE" in _src247, "重启必须只杀 pid 文件记着的进程，不许按名字乱杀"
+    assert "git push" not in _src247, "update.sh 不替用户 push（推代码是本地角色的显式动作）"
+    for _bad247 in ("C:" + os.sep, "/opt/", "/home/", str(ROOT)):
+        assert _bad247 not in _src247, f"update.sh 里出现绝对路径 {_bad247!r}（§0.3）"
+    assert "update.sh" in (ROOT / "本地开发.md").read_text(encoding="utf-8"), \
+        "本地开发.md 得告诉本地 AI 有这个脚本（否则没人知道服务器侧怎么更新）"
+    print("[247] 续246 ok: update.sh 远程一键更新（自定位仓库根 / 工作区干净才动 / sync_check --strict / "
+          "rebase 不 reset / 依赖只吃 lock / 重启只杀 pid 文件记着的进程 / 无绝对路径 / 不替用户 push）")
     print("SMOKE PASS")
 
 

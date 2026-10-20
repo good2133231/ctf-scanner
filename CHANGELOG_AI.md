@@ -3,6 +3,114 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续246（2026-10-20，WorkBuddy · DeepSeek-V4.1-Flash 代码 + Step-5-Preview 收尾）：子域名被动源 A 批（chaziyu/urlscan）+ 爆破快速档接线（B 批）
+
+主理人 2026-10-20 点单「按 A→B 两批做」：A 批挑 OneForAll 里独有的 keyless 数据源（本体不接），
+B 批给"快速任务"接 top 1 万等距抽样。**代码由 DeepSeek-V4.1-Flash 在本机工作区完成（未提交、
+未跑全量门禁）**；本轮 Step-5-Preview 接手：打全量、修掉两处 Windows 假红、补记忆三件套并提交。
+
+### A 批：被动源 6 → 8（`scanner/passive.py`）
+
+- [x] `SOURCES` +chaziyu（HTML 表格）+urlscan（公开 search API，JSON），两者进 `DEFAULT_SOURCES`；
+  threatminer 接口本身 keyless，但 **2026-10-20 实测整站 CF 522 / 超时** ⇒ 保留可开、默认不启用；
+  ipv4info 在参考实现里要 API key、且 `ipv4info.com` 当前无 A 记录（DNS 只有 SOA）⇒ 不属于
+  “免 key”档，不接。
+- [x] `[246]` 断言：源集合与 URL 形态；`_extract` 对两种真实响应形状（chaziyu 的 `<td>` 表格 /
+  urlscan 的 `{"page":{"domain":…}}`）；`collect` 三源并发、其中 threatminer 模拟 522 返回 None
+  时其它两路照旧出数（“失败只记一行不炸”）。
+
+### B 批：任务级爆破档位 quick/deep（`scanner/stages/subdomain.py` + CLI + GUI）
+- [x] `brute_profile(profile, policy_cap)`：quick = 深档等距抽样到 `BRUTE_PROFILE_QUICK_WORDS`
+  （1 万）条；**策略值更小时以策略为准**（配置永远是天花板）；deep = 显式“按策略”（0=全量）；
+  未指定/不认识的值返回 `("", 策略值, "")`，行为与加选项之前逐字节一致。
+- [x] 入口三处同一套“勾了就要生效”：GUI 任务区下拉（`tasks.html` 的 `subdomain_profile`，
+  与「全部勾上/清掉/恢复默认」三按钮联动 —— `app.js` 新增 `select[data-ck-all]` 分支）/
+  CLI `--subdomain-profile` / `create_app` 读 `options["subdomain_profile"]`；三处都会在没勾
+  subdomain 阶段时**自动补阶段**。
+- [x] 档位生效必须打日志：说清“等距抽样、不是截断”“首尾与整个字母表都保得住”与放开办法
+  （改「深度」或把策略 `brute_max_words` 设 0）；没有深档字典时也如实说“档位不影响本次词表”。
+
+###  remote 一键更新脚本 `update.sh`（主理人点单）
+
+- [x] 服务器侧一条命令拉到 GitHub 最新 main：自定位仓库根（不写死路径）/ 工作区不干净拒动 /
+  `sync_check --strict` / 只 `pull --rebase` 不 `reset --hard` / 依赖只吃 lock（变了才装）/
+  `--smoke` 顺带跑服务器全量门禁 / `--restart` 重启控制台（只杀 pid 文件记着的实例，
+  端口 30 秒没监听就报错并指出日志）/ 不替用户 push；`本地开发.md` 收尾段已登记。
+- [x] `[247]` 门禁：LF 行尾（CRLF shebang 在 Linux 直接 bad interpreter）/ set -euo pipefail /
+  五个结构锚点 / 无绝对路径 / 无 "git push"。
+
+### 本轮打红并修掉的 Windows 假红 + 一个真 bug（都不是"改断言让它绿"）
+
+- [x] `[109]` “密钥文件必须 0600”：Windows 的 `os.chmod` 只能切只读位（有写位 ⇒ 清只读），
+  `S_IMODE` 恒报 0o666，POSIX owner-only 位在 NTFS 上不存在 ⇒ 照 `[8f]④` 的既有形状按平台
+  分支；但 Windows 不白跳过：**spy `os.chmod`** 钉住“落盘时仍发起过 `chmod(..., 0o600)`”
+  （变异证伪见下：摘掉调用 ⇒ spy 抓不到 ⇒ 红）。同组第二半“落盘失败必须明说”：Windows 的
+  目录只读位**拦不在里面建文件** ⇒ 换成“父路径是个普通文件”的形状（任何平台/uid 都 mkdir 必炸，
+  与既有的 root 分支同一思路；`FileExistsError ⊂ OSError`，走的正是 `session_secret` 的 except 分支）。
+- [x] `[116]⑤` 字节计数变异证伪：Windows 的 `write_text` 把 `\n` 翻译成 `\r\n`（盘上 st_size 比
+  文本模式读回的字符数每行多 1 字节）⇒ 夹具改二进制写入，任何平台“字符数==字节数”，语义不变。
+- [x] **`[117]⑦` 真 bug（产品级，不只是门禁）**：`--create-admin` 子进程挂死 180 秒。根因：
+  Windows 版 MSVCRT 的 `isatty()` 只判“是不是字符设备”，**NUL（DEVNULL/计划任务/服务）也返回
+  True** ⇒ `admin_setup.read_password` 掉进 `getpass`，而 Windows 的 getpass 走
+  `msvcrt.getch()` 读的是**控制台**不是 stdin，没有输入就永久挂住。Linux 的 isatty 走
+  `tcgetattr`，NUL/管道/文件一律 False ⇒ 这个不一致在 Linux CI 上永远看不见（前几轮门禁全绿
+  不代表 Windows 没这个洞）。修法：`utils.is_interactive_stdin()`（isatty 之后 Windows 再用
+  `GetConsoleMode` 复核，只有真控制台才算交互；注入的假 stdin 永远说了算），**六个提问入口全部
+  路由过去**（admin_setup×2 / keystore / edgeauth×2 / run_keys / run_bootstrap×2），源码里不许
+  再有第二份裸 `sys.stdin.isatty()`。门禁新增两枪：⑦ 的 `stdin=DEVNULL` 子进程必须秒过
+  （没修复就挂到超时）+ 逐文件源码断言再无裸 isatty。
+- [x] **环境坑（已记入 AGENTS §2）**：AI 工具会话注入的 `HTTP_PROXY`/`HTTPS_PROXY` 让 requests
+  对**回环地址也走代理** ⇒ `[5y]②` 的 SSRF 回环自证间歇性假红（`_v_ssrf=None`；把断言块单独
+  抄出来跑却能通）。本地跑门禁前先
+  `env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy py -3 dev.py smoke`。
+  另：冒烟启动清扫 60 分钟前沙箱时，删除量 >50 文件会触发本机 safe-delete 守卫、
+  在模块顶把进程直接掐掉（零输出秒退）—— 沙箱残留要及时清（本轮清掉 7 个）。
+
+- **变异证伪（本轮新断言有牙的凭据）**：spy 断言用两份独立复现脚本各验一端 —— 真代码下 spy
+  抓到 `chmod(<…>/session.secret, 384)`；把 `session_secret` 换成“不 chmod”的等价实现后 spy
+  零记录、断言转红（logs/repro_109_spy.py，跑完即删的一次性脚本同理适用于 file 占位形状那半）。
+- **全量门禁**：本地（Windows）以“守卫免疫环境”（`env -u PYTHONPATH -u HTTP_PROXY -u HTTPS_PROXY
+  -u http_proxy -u https_proxy py -3 dev.py smoke`）跑到 **`[167]` 全绿**，本轮正主
+  `[246b]`（B 批：真跑 stage、读 puredns 落盘词表）**已过**；`[246]`（A 批被动源端到端）
+  及其后未在本地跑到。**主理人 2026-10-21 明确定位：Windows 夹具形状（权限位 / 假可执行文件 /
+  端口残留）不是生产 bug，不为追本地全绿再改门禁；正式门禁以服务器 Linux 为准
+  （`bash update.sh --smoke`）**。本地顺手修掉的 Windows 假红见上（均为 Linux 中性的平台分支，
+  不影响服务器结论）。
+
+**下一轮（续246 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+- [ ] `_do_http` 的代理口径：本机有 `HTTP_PROXY` 时**回环请求不该走代理**（本轮只是绕开门禁，
+  真实使用里同一坑仍在：SSRF 回连监听、intel 本地夹具、FOFA min_interval 之外的任何回环依赖）
+
+## 续245（2026-10-20，WorkBuddy · DeepSeek-V4.1-Flash）：`dev.py setup` 中文 Windows 编码修复
+
+主理人在中文 Windows 上跑 `python dev.py setup` 时，pip 20.2.3（Python 3.9 venv 自带）
+读 `requirements.txt` 按 `locale`（GBK）解码，撞上中文注释：
+
+    UnicodeDecodeError: 'gbk' codec can't decode byte 0xad in position 45
+
+`setup` 随即以 `CalledProcessError` 退出（exit 2），依赖一个都没装上。
+
+- [x] `requirements.txt` / `requirements.lock` 首行补 `# -*- coding: utf-8 -*-`：
+  旧 pip 的 `auto_decode` 只认 BOM 与前两行 PEP 263 声明，没有声明就回落到
+  `locale.getpreferredencoding(False)`；两份文件都含中文注释，声明后 GBK 环境也能读。
+- [x] `[245]` 门禁：复刻 pip 20.2.3 的 `auto_decode`（BOM → 前两行 PEP263 → GBK），
+  先用"无声明 + 中文"的合成输入自证模拟器抓得到旧故障，再要求两份清单首行都有 utf-8 声明；
+  摘掉声明 = 直接 `UnicodeDecodeError`（判据有区分度，不是恒过的漂亮断言）。
+- **实测**：`py -3 dev.py setup` rc=0，装成 19 个包（flask 3.1.3 / requests 2.32.5 /
+  PyYAML 6.0.3 / cryptography 43.0.3；Python 3.9.0 低于 lock 里 cryptography 50 的
+  `!=3.9.0` 门槛，故 pip 按 `>=41` 选了 43.0.3 —— 这是声明层的正常结果，不是锁失效）。
+- **全量门禁**：`py -3 dev.py smoke` 跑完见下一条；本轮只改编码声明与门禁，不动扫描逻辑。
+- AGENTS §2 补了这条编码不变量，防止下次给两份清单加中文注释时再撞。
+
+**下一轮（续245 之后）——只放未做的：**
+- [ ] 子域名被动源补齐（threatminer / chaziyu / ipv4info，主理人已批"挑着拿 OneForAll 接口"）
+- [ ] 子域名爆破"快速档"接线（quick 模式自动收 1 万等距抽样，deep 全量）
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
 ## 续244（2026-10-20，WorkBuddy · Claude）：本地开发入口文档《本地开发.md》
 
 主理人要把开发交给本地 AI：pull 下仓库后说一句「你是本地开发」，那边就该知道全套流程。

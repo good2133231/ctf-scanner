@@ -36,6 +36,19 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# ---- 中文 Windows 输出编码（续245-③）：子进程的出口也要固定成 UTF-8 ----
+# 为什么必须在这里：本文件是 `tests/smoke.py [7x]` 的**子进程**，那边用
+# `subprocess.run(..., text=True, encoding="utf-8")` 收本文件的 stdout（管道 ⇒ Windows
+# 下默认 locale = gbk）。收尾那行「通过：… 共 N 条断言全绿」含中文，按 GBK 写进管道再按
+# UTF-8 解就是乱码 ⇒ `[7x]` 取不到条数、整组判红（实测：72 条断言全过，红的却是「格式变了？」）。
+# `tests/smoke.py` 顶部有同一形状的一段（它自己是父进程）；两处都对上，日志才不会一半
+# UTF-8 一半 GBK。errors=backslashreplace 与那边同口径：字符写不出去不该表现成「脚本崩了」。
+for _stream245 in (sys.stdout, sys.stderr):
+    try:
+        _stream245.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
+
 # `--headless=new` 在 Windows 上拿不到 stdout（早期探针踩过），所以下面固定用 `--headless=old`。
 _BROWSER_LEAF = (("Google", "Chrome", "Application", "chrome.exe"),
                  ("Microsoft", "Edge", "Application", "msedge.exe"))

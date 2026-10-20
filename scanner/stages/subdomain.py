@@ -30,7 +30,7 @@ from ..utils import (is_domain, to_ascii, which, verify_tool, run_cmd, read_line
 _PASSIVE_SRC = ("subfinder", "passive:")
 
 
-def _spread(words, cap, logger=None, knob="limits.brute_max_words"):
+def _spread(words, cap, logger=None, knob="limits.brute_max_words", hint=None):
     """需要收窄词表时**等距抽样**并如实报出比例；`cap<=0` 或词表本就不长时原样返回。
 
     为什么不取前 N 条：字典是排好序的，`words[:3000]` 拿到的全是 `0/00/000/0000/a/aa…` ——
@@ -50,11 +50,45 @@ def _spread(words, cap, logger=None, knob="limits.brute_max_words"):
     last, span = len(words) - 1, cap - 1
     got = [words[int(i * last / span)] for i in range(cap)]
     if logger:
+        tail = hint or f"要用全量把 {knob} 设 0"
         logger.info(f"[subdomain] 词表 {len(words)} 条超出 {knob}={cap}，等距抽样取 {len(got)} 条"
                     f"（约每 {len(words) / cap:.1f} 条取 1 条，首尾都保住、覆盖整个字典而不是"
-                    f"字母表开头；要用全量把 {knob} 设 0）")
+                    f"字母表开头；{tail}）")
     return got
 
+
+
+# 续246（B 批）：任务级爆破档位。**不新增一套词表机制** —— 快速档就是给既有的
+# `limits.brute_max_words` 这道等距抽样闸门换一个任务级上限；深度档显式回到策略值。
+# 为什么是"等距抽样"而不是"前 1 万条"：字典是排序的，前 1 万条几乎全是数字/叠字符
+# 前缀（见 `_spread` 的注释），那等于把快速档做成"只扫字母表开头"。
+BRUTE_PROFILE_QUICK_WORDS = 10000
+
+
+def brute_profile(profile, policy_cap):
+    """任务级爆破档位 → `(生效档名, 生效词数上限, 备注)`；上限 0 = 不限。
+
+    - `quick`：深档收到 `BRUTE_PROFILE_QUICK_WORDS` 条；**策略值更小时以策略为准**
+      （配置永远是天花板 —— 开发模式把 `limits.brute_max_words` 压到 4 时，
+      勾「快速」不许反而把它放大，否则 CI 与自检会跟着字典一起变慢）。
+    - `deep`：显式声明"按策略"，数字原样返回（策略 0 = 全量）。
+    - 未指定 / 不认识的值：返回 `("", 策略值, "")`，行为与加这个选项之前逐字节一致。
+    """
+    name = str(profile or "").strip().lower()
+    if name not in ("quick", "deep"):
+        name = ""
+    try:
+        cap = max(0, int(policy_cap or 0))
+    except (TypeError, ValueError):
+        cap = 0
+    if name == "quick":
+        want = BRUTE_PROFILE_QUICK_WORDS
+        if cap and cap < want:
+            return name, cap, f"策略 limits.brute_max_words={cap} 更小，以策略为准"
+        return name, want, ""
+    if name == "deep":
+        return name, cap, ""
+    return "", cap, ""
 
 
 def _fofa_subdomains(domains, settings, logger=None):
@@ -297,7 +331,29 @@ class SubdomainStage(Stage):
         # 逐条查）更是跑不完 —— 两路各自收窄，并把"怎么放开"写在日志里，不做静默截断。
         # **闸门只冲深档**：精简档那几十条人工挑的前缀任何情况下都全量在场（把它一起抽样，
         # 84/177893 ≈ 0.05% 会几乎全冲掉 —— 那不叫收窄，叫倒退）。
-        deep_sel = _spread(deep, int(limits.get("brute_max_words", 0) or 0), ctx.logger)
+        # 续246（B 批）：任务级「快速 / 深度」档位。快速档只改**深档**的抽样上限
+        # （精简档那几十条人工前缀任何档位都全量在场）；深度档就是"按策略"的显式写法。
+        # 档位生效时必须说出来 —— 用户看到"子域名少"时要能分清是字典小、还是自己选了快速档。
+        profile, brute_cap, profile_note = brute_profile(
+            ctx.options.get("subdomain_profile"), limits.get("brute_max_words", 0))
+        if profile:
+            _pname = "快速" if profile == "quick" else "深度"
+            _pextra = f"；{profile_note}" if profile_note else ""
+            if deep:
+                _cap_txt = f"{brute_cap:,} 条" if brute_cap else "不限（全量）"
+                ctx.logger.info(
+                    f"[subdomain] 爆破档位：{_pname}（任务选项 subdomain_profile={profile}）—— "
+                    f"深档 {len(deep):,} 条，生效上限 {_cap_txt}{_pextra}；超出时按等距抽样取"
+                    f"（**不是截断**，字典首尾与整个字母表都保得住）")
+            else:
+                ctx.logger.info(
+                    f"[subdomain] 爆破档位：{_pname}（任务选项 subdomain_profile={profile}）—— "
+                    f"本次没有深档字典（dicts.subdomains_deep 未配或不存在），"
+                    f"只跑精简档 {len(cur)} 条，档位不影响本次词表")
+        _sknob = "子域名快速档" if profile == "quick" else "limits.brute_max_words"
+        _shint = ("要用全量请把任务档位改成「深度」，或把策略 limits.brute_max_words 设 0"
+                  if profile == "quick" else None)
+        deep_sel = _spread(deep, brute_cap, ctx.logger, _sknob, hint=_shint)
         words = cur + deep_sel
         dict_path = str(resolve(dict_raw)) if dict_raw else ""
         pd_bin = which(ctx.settings.get("tools", {}).get("puredns", "puredns"))

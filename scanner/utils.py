@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -110,6 +111,47 @@ def pick_python(configured="python"):
     if configured and which(configured):
         return configured
     return sys.executable
+
+
+def is_interactive_stdin():
+    """stdin 是不是一个**真能提示、且提示真有人答**的交互终端（续246）。
+
+    ⚠ Windows 的老坑（本轮实测踩到）：MSVCRT 的 `isatty()` 只判"是不是字符设备"，
+    NUL（`subprocess.DEVNULL` / 计划任务 / 服务重定向）也是字符设备 ⇒ 返回 True。
+    只凭 `sys.stdin.isatty()` 分流的提示逻辑会在"没有真控制台"时掉进 `getpass` ——
+    Windows 的 `getpass` 走 `msvcrt.getch()`，读的是**控制台**而不是 stdin，控制台里
+    永远没有输入 ⇒ 挂死（冒烟 `[117]` 实测 180 秒超时；Linux CI 的 isatty 走
+    `tcgetattr`，NUL/管道/文件一律 False，所以这个不一致在 Linux 上永远看不见）。
+
+    修法分两层，且**注入的假 stdin 永远说了算**：
+    1. `isatty()` 为假（或注入 False）→ 直接非交互，不再往下看；
+    2. Windows 上只在 stdin 真是**字符设备**时才用 `GetConsoleMode` 复核 —— 管道/文件上
+       `isatty()` 本该为 False，能走到这说明是测试注入的桩（`sys.stdin.isatty = lambda:
+       True`），听桩的（`[8f]` / `[8ac]` / `[12]` 都靠这一条；管道 fstat 是 S_IFIFO、
+       NUL 才是 S_IFCHR，两者分得开）。
+
+    全仓所有"要不要提问"的判断都走这一处（admin_setup / keystore / edgeauth /
+    run_keys / run_bootstrap / read_password），别再各写一份 `sys.stdin.isatty()`。
+    """
+    try:
+        stdin = sys.stdin
+        if stdin is None or not stdin.isatty():
+            return False
+    except Exception:
+        return False
+    if os.name != "nt":
+        return True
+    try:
+        if not stat.S_ISCHR(os.fstat(stdin.fileno()).st_mode):
+            return True                     # 管道/文件：isatty 都该假，能到这＝注入的桩
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        mode = ctypes.c_uint32()
+        # STD_INPUT_HANDLE；只有真控制台 GetConsoleMode 才成功（NUL 上失败 ⇒ 非交互）
+        return bool(kernel32.GetConsoleMode(kernel32.GetStdHandle(-10),
+                                            ctypes.byref(mode)))
+    except Exception:
+        return False
 
 
 def run_cmd(argv, cwd=None, timeout=900, throttle=None, extra_path=None, stop=None,

@@ -3668,7 +3668,7 @@ B 步2 = 真跑靶场取真实 JSON 样本后写 vulnscan 适配器（argv 固�
       `check_login` + `password` 列是 pbkdf2 派生值 + 输出不含口令值；另加一条源码形态断言
       "入口必须 `db.init_db()`" —— 少了它，这条回归会退化成"这台机器恰好有库才绿"（§6.1）
 - [x] 实测：实测：`tests/smoke.py`（终验 `logs/_gate163c.log`，三份记忆落完之后复跑；代码定稿那次是 `logs/_gate163b.log`，两次都是 185 组打印 / AssertionError 0）**SMOKE PASS**、组打印 185 行（同一判据数上一轮终验 `logs/_gate162h.log` 得 185 行，本轮不新增组）、AssertionError 0。干净克隆那份的实测数字在上面的表里（那条 `SMOKE PASS` 是克隆自己跑出来的，不是本机复跑）。
-
+
 ## 续164（2026-10-12，WorkBuddy · Qoder-Agent 远端 Linux）：puredns 的摘要改由本框架自己核、自己钉 —— 干净克隆 `./install.sh` 第一次 rc=0
 
 主理人只回了一个字：**B**（我们发布并核验钉住的 SHA256），并当场定了三件：`retry_rounds` **打开**、
@@ -4302,6 +4302,57 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] **修真 bug**：分流判据原只对 poc 路，technologies/ 下模板归类 fingerprint ⇒ 利用型漏进指纹表
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
+
+## 续246（2026-10-20，WorkBuddy · DeepSeek-V4.1-Flash 代码 + Step-5-Preview 收尾）：子域名被动源 A 批（chaziyu/urlscan）+ 爆破快速档接线（B 批）
+
+主理人点单"按 A→B 两批做"；代码 DeepSeek-V4.1-Flash 在本机工作区写完（未提交、未跑全量），
+Step-5-Preview 本轮接手：全量门禁、修两处 Windows 假红、补记忆三件套并提交推送。
+
+- [x] A 批：`scanner/passive.py` 加 chaziyu（HTML）/urlscan（JSON）进 DEFAULT_SOURCES（6→8）；
+      threatminer keyless 但实测 CF 522/超时 ⇒ 保留可开、默认关；ipv4info 要 API key ⇒ 不接
+- [x] A 批门禁 [246]：源集合/URL 形态/`_extract` 两种真实响应形状/三源并发单源 522 不拖垮其它
+- [x] B 批：`brute_profile()`（quick=深档等距抽样 1 万、策略更小以策略为准、deep=按策略、未知值逐字节旧行为）
+      + GUI 下拉/CLI `--subdomain-profile`/`create_app` 三入口 + 没勾 subdomain 阶段自动补 + 档位生效必打日志
+- [x] B 批门禁 [246b]：真跑 stage 读 puredns 落盘词表（12000→10002 / 策略 300→302 / deep+0=12002 / 未知值不收窄不打日志）
+- [x] 修 [109] Windows 假红两处（均非回归）：0600 改 spy chmod（摘调用即红，变异证伪过）；
+      "落盘失败必须明说" 换"父路径是普通文件"形状（Windows 目录只读位拦不在里面建文件）
+- [x] 修 [116]⑤ 字节计数：夹具改二进制写入（Windows write_text 把 \n 翻成 \r\n，st_size 与
+      文本读回字符数差一个换行符）
+- [x] 修 [117]⑦ 真 bug（产品级）：Windows MSVCRT isatty 对 NUL 也返 True ⇒ --create-admin 挂死
+      在 getpass（msvcrt.getch 读控制台）。新增 utils.is_interactive_stdin()（GetConsoleMode 复核），
+      六个提问入口全部路由（admin_setup×2/keystore/edgeauth×2/run_keys/run_bootstrap×2）；
+      门禁加两枪：DEVNULL 子进程秒过 + 源码无第二份裸 isatty
+- [x] 新增 update.sh：服务器一键拉最新 main 并（可选）跑门禁/重启控制台；[247] 结构门禁；
+      本地开发.md 收尾段登记
+- [x] 环境坑记入 AGENTS §2：IDE 注入的 HTTP_PROXY 让 requests 对回环也走代理 ⇒ [5y]② SSRF 自证假红；
+      且 PYTHONPATH 注入的 shim 带 safe-delete 守卫会把冒烟自己的 rmtree 打死（[8an] 就是这么死的）——
+      本地跑门禁先 `env -u PYTHONPATH -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy`
+- [x] 全量门禁：本地（Windows，守卫免疫环境 env -u PYTHONPATH -u HTTP_PROXY …）绿到 [167]，
+      [246b] B 批驱动（真跑 stage 读 puredns 落盘词表）已过；[246] A 批驱动及其后按主理人定位
+      **不在 Windows 上追**（夹具形状≠生产 bug）——正式门禁以服务器 Linux 为准：bash update.sh --smoke
+
+**下一轮（续246 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+- [ ] `_do_http` 代理口径：本机有 HTTP_PROXY 时回环请求不该走代理（本轮只绕开门禁，真实使用同坑仍在）
+
+
+## 续245（2026-10-20，WorkBuddy · DeepSeek-V4.1-Flash）：dev.py setup 中文 Windows 编码修复
+
+- [x] `requirements.txt` / `requirements.lock` 首行加 PEP 263 `coding: utf-8` 声明
+- [x] `[245]` 门禁复刻 pip 20.2.3 的 GBK 解码路径（含旧行为自证）
+- [x] `py -3 dev.py setup` 实测 rc=0，19 个包装成
+
+本轮无新增待办；续244 的清单继续有效。
+
+**下一轮（续245 之后）——只放未做的：**
+- [ ] 子域名被动源补齐（threatminer / chaziyu / ipv4info）
+- [ ] 子域名爆破"快速档"接线（quick 收 1 万等距抽样，deep 全量）
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+
 
 ## 续244（2026-10-20，WorkBuddy · Claude）：本地开发入口文档《本地开发.md》
 

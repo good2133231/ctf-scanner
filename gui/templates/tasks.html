@@ -43,6 +43,15 @@
         <input type="checkbox" name="dirscan_full" value="1"> 全目录深扫</label>
       <label class="chk" title="对命中的目录再往下打一层浅扫精选字典（深扫专属能力，勾了就自动带上「全目录深扫」；每站最多 5 个目录 × 40 条，约 +215 请求/站）">
         <input type="checkbox" name="recursive_dir" value="1"> 目录递归（一层）</label>
+      {# 续246（B 批）：子域名爆破档位。**只影响本次任务**，策略值仍是天花板；
+         quick 不是"取前 1 万条"，是等距抽样（见 scanner/stages/subdomain.py::_spread）。 #}
+      <label class="muted" title="只影响本次任务：快速＝深档词表等距抽样到 1 万条（不是取前 1 万条）；深度＝按策略 limits.brute_max_words（0=全量）。精简档的几十条人工前缀任何档位都全量参与；内置兜底另有 limits.brute_fallback_max 更紧的闸门">
+        子域名爆破档位
+        <select name="subdomain_profile" data-ck-all="deep" data-ck-none="" data-ck-default="">
+          <option value="">跟策略（limits.brute_max_words）</option>
+          <option value="quick">快速（深档抽样 1 万条）</option>
+          <option value="deep">深度（按策略，0=全量）</option>
+        </select></label>
       <span class="muted small">默认只跑「浅扫」：端口 top 档 + 目录敏感路径精选字典；
         想深挖再勾上面三项，或在结果页对选中资产发起补扫。</span>
     </div>

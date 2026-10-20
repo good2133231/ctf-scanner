@@ -16,6 +16,7 @@ import getpass
 import sys
 
 from . import users
+from .utils import is_interactive_stdin
 
 ENV_PASSWORD = "CTFSCANNER_ADMIN_PASSWORD"
 DEFAULT_NAME = "admin"
@@ -37,8 +38,11 @@ def read_password(who, confirm=True):
 
     两次确认是给命令行用的：这里没有"登录失败再试一次"的余地 —— 手滑打错就把人锁在
     一个自己不知道的口令后面。
+
+    "是不是交互"判据只有一处：`utils.is_interactive_stdin()`（续246 —— Windows 的
+    `isatty()` 对 NUL 也返回 True，直接用它会让非交互环境掉进 getpass 挂死）。
     """
-    if not sys.stdin.isatty():
+    if not is_interactive_stdin():
         import os
         return os.environ.get(ENV_PASSWORD) or None
     first = getpass.getpass(f"为「{who}」设置口令：")
@@ -91,7 +95,7 @@ def wizard(ask_name=None, ask_password=None, isatty=None):
     if users.count_users() > 0:
         return ST_HAS_USERS, "库里已有账号，不重复建号"
     if isatty is None:
-        isatty = sys.stdin.isatty()
+        isatty = is_interactive_stdin()      # 续246：与 read_password 同一处判据
     if not isatty:
         return ST_NO_TTY, NO_TTY_HINT
     ask_name = ask_name or (lambda: input(f"管理员用户名（直接回车用 {DEFAULT_NAME}）："))

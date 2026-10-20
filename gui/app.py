@@ -1732,6 +1732,14 @@ def create_app():
                 if stage not in stages:
                     stages.append(stage)
                     auto_stages.append(stage)
+        # 续246（B 批）：子域名爆破档位（任务级，只影响本次）。选了档位却没勾 subdomain
+        # 阶段＝白选，与上面全量档同一套"勾了就要生效"的口径。
+        _prof246 = str(data.get("subdomain_profile", "") or "").strip().lower()
+        if _prof246 in ("quick", "deep"):
+            options["subdomain_profile"] = _prof246
+            if "subdomain" not in stages:
+                stages.append("subdomain")
+                auto_stages.append("subdomain")
         # 续169（主理人点单：「这个不仅要在拓展域名哪个位置显示，主界面也要显示」）：
         # 主面板的「拓展扫描层数」与「置信度阈值」。两个值都**只归一/夹值一次**，产地是既有的
         # `runner.clamp_ext_depth` 与 `extdom.conf_norm` —— 在 GUI 里再写一遍 1..10 就是第二个产地，
