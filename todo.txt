@@ -4303,6 +4303,21 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续237（2026-10-20，WorkBuddy · Claude）：本地↔服务器双机开发同步（文档 + 本地 AI 提示词）
+
+- [x] `docs/dev-sync.md`：三角色（GitHub=事实源 / 服务器=门禁+运行态 / 本地=编辑）、
+      本地开工流程、服务器接手流程（pull→门禁→重启）、git 不跟踪清单、硬规矩七条、冲突处理
+- [x] `docs/local-ai-prompt.md`：本地 AI **整段开场提示词**（读文件顺序/工作循环/记忆同步顺序/
+      红线/常见坑/服务器操作参考）——新开会话整段粘贴即用
+- [x] AGENTS §0.4 加"双机开发"硬规矩（正式门禁在服务器、一轮一台机、同号续接）
+- [x] 全量 SMOKE PASS（见下一行）
+
+**下一轮（续237 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务 #52/#53 与本地 8899 靶场：主理人看完即可清（说一声就删）
+
+
 ## 续236（2026-10-20，WorkBuddy · Claude）：扫描队列并发 2 → 3
 
 - [x] `config/settings.yaml`：`queue.workers: 2 → 3`（仅队列段）
