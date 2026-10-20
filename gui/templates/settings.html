@@ -590,6 +590,9 @@
     <label>favicon 并发数 <input name="fofa_workers" value="{{ s.fofa.workers }}"></label>
     <label>两次请求最小间隔（秒；FOFA 按 key 计频率，不节流会撞 HTTP 429，填 0 = 不节流）
       <input name="fofa_min_interval" style="width:5em" value="{{ s.fofa.min_interval }}"></label>
+    <label class="chk"><input type="checkbox" name="fofa_subdomain" value="1"{% if s.fofa.subdomain_enabled %} checked{% endif %}>
+      用 FOFA 反查**子域名**（`domain="注册域"`，source=osint:fofa；关掉后 FOFA 只做图标/证书/标题反查）</label>
+    <label>FOFA 子域名单域上限（条）<input name="fofa_subdomain_max" style="width:6em" value="{{ s.fofa.subdomain_max }}"></label>
     <label>黑 ico 阈值（命中数超过该值 = 公共图标，放弃拓展）
       <input name="fofa_black_ico_threshold" value="{{ s.fofa.black_ico_threshold }}"></label>
     <label class="chk"><input type="checkbox" name="fofa_cert_enabled" value="1"

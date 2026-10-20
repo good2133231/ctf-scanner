@@ -211,6 +211,14 @@ Flask Web 控制台（仿 ARL）。
   （12,124 条，trickest 验证列表 + 国内头部置顶，全 IPv4 无注释）——puredns/massdns 靠它分摊
   并发，只有十几条必被公共 DNS 限流。**别删减到千条以下**；更新走 trickest 全量合并，
   `[242]` 钉着 ≥10000/无重复/全 IPv4。内置 socket 兜底那路仍用系统解析器（未接列表）。
+- **FOFA 参与子域名收集（续243）**：subdomain 阶段在被动收集之后调
+  `_fofa_subdomains()`（`domain="<注册域>"`，source=`osint:fofa`，注册域归一+同域只查一次），
+  单域上限 `fofa.subdomain_max`（默认 100）**本地也截断**（size 只是请求参数）；
+  没 key / 开关关 / 上游报错 ⇒ 跳过并说一句，不许炸（它是并集里的一路）。
+- **纯前端框架不进动态语言字典（续243）**：`_dict_kind()` 判出 FRONTEND_ONLY
+  （vue/react/angular/nextjs/nuxt…；**不收 jquery/bootstrap**）⇒ 返回 `"static"`，
+  lang 层查 `dirs_static`（不存在 ⇒ 自动跳过），common/exposure 照旧；
+  判定顺序 URL 后缀 → 服务端标签 → 前端标签（`vue,php` 是 PHP 站）。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`

@@ -5041,6 +5041,9 @@ def create_app():
                              # 续229：请求最小间隔（秒）。0 是**合法值**（不节流），
                              # 所以缺字段才回默认 3，不能写 `or DEFAULT`（那会把人填的 0 洗掉）。
                              "min_interval": float(f.get("fofa_min_interval", 3) or 0),
+                            # 续243：FOFA 子域名反查开关与上限（0=不节流同款：显式 False 才算关）
+                            "subdomain_enabled": f.get("fofa_subdomain") != "0",
+                            "subdomain_max": int(f.get("fofa_subdomain_max", 100) or 100),
                              "black_ico_threshold": int(
                                  f.get("fofa_black_ico_threshold", 200) or 200),
                              # 证书反查：独立子开关 + 通用证书阈值 + 查询上限

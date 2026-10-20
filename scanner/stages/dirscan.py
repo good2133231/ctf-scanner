@@ -68,6 +68,11 @@ DIRMAP_KEEP = ("res.txt", "403.txt")
 
 # 技术栈标签 -> 语言桶。标签来自 probe 阶段 `fingerprint.identify()`（sites.tech），
 # 以及 URL 后缀判定；判不出就是 ""（未知 → 全量字典）。
+# 续243：纯前端框架指纹 ⇒ 语言桶 "static"（跳过动态语言字典；理由见 _dict_kind）。
+FRONTEND_ONLY = {"vue", "vuejs", "react", "reactjs", "angular", "angularjs",
+                  "svelte", "nextjs", "next.js", "nuxt", "nuxtjs", "gatsby",
+                  "astro", "ember", "emberjs", "backbone", "knockout"}
+
 TECH_LANG = {
     # Java 系
     "jsp": "jsp", "java": "jsp", "tomcat": "jsp", "jetty": "jsp", "spring": "jsp",
@@ -89,12 +94,19 @@ _EXT_LANG = {
 
 
 def _dict_kind(tech, url=""):
-    """判定站点的语言桶：`"jsp"` / `"php"` / `"asp"` / `""`（未知）。
+    """判定站点的语言桶：`"jsp"` / `"php"` / `"asp"` / `"static"` / `""`（未知）。
 
-    先看 URL 后缀（`/index.php` 这种最直接），再看指纹标签；都判不出返回 ""，
-    调用方会用全量字典兜底 —— **不猜**，猜错等于把预算花在无关后缀上。
+    续243：**纯前端框架**（Vue / React / Angular / Next.js / Nuxt…）返回 `"static"` ——
+    站点由前端渲染，`dirs_php` / `dirs_jsp` / `dirs_asp` 这类动态语言字典对它没有意义，
+    扫了只是浪费请求额度、还把结果搅浑（主理人点单）。`_layer_paths_named` 对
+    `"static"` 的行为正好正确：lang 层查 `dirs_static`（不存在 ⇒ 自动跳过），
+    common 层照旧吃（`if kind:` 为真）。
+
+    判定顺序（按可靠性）：① URL 自身后缀（`/index.php` 最直接）→ ② **服务端**语言
+    标签 → ③ 纯前端框架标签。**服务端标签优先**：`vue,php` 是 PHP 站用了 Vue，
+    不是纯前端。都判不出 ⇒ `""`（调用方用全量字典兜底，不猜）。
     """
-    tail = str(url or "").rsplit("/", 1)[-1].split("?")[0].lower()
+    tail = str(url or "").rsplit("/", 1)[-1].split("?", 1)[0].lower()
     if "." in tail:
         ext = tail.rsplit(".", 1)[-1]
         if ext in _EXT_LANG:
@@ -102,6 +114,9 @@ def _dict_kind(tech, url=""):
     for tag in re.split(r"[,\s;|]+", str(tech or "").lower()):
         if tag in TECH_LANG:
             return TECH_LANG[tag]
+    for tag in re.split(r"[,\s;|]+", str(tech or "").lower()):
+        if tag in FRONTEND_ONLY:
+            return "static"
     return ""
 
 
@@ -368,6 +383,10 @@ class DirscanStage(Stage):
         groups = self._group_by_kind(sites, tech_aware)
         ctx.logger.info(f"[dirscan] {'深扫' if deep else '浅扫'}模式；技术栈分组：" + " / ".join(
             f"{k or '未知'}={len(v)} 站点" for k, v in groups.items()))
+        if groups.get("static"):
+            ctx.logger.info(f"[dirscan] {len(groups['static'])} 个站点识别为**纯前端框架**"
+                            "（Vue/React/Angular…）⇒ 跳过动态语言字典（dirs_php/jsp/asp），"
+                            "仍扫通用/暴露面字典（续243）")
 
         entries = []
         used_dirmap = False

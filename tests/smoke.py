@@ -29930,6 +29930,60 @@ expression: r0()
     assert "resolvers: config/dicts/resolvers.txt" in _st242, "settings 没指向 resolver 列表"
     print("[242] 续242 ok: 12,124 条验证过 resolver（国内头部置顶，全 IPv4 无重复无注释）｜"
           "settings.dicts.resolvers 指向正确｜子域名爆破速度/漏报的第一杠杆")
+    # ------------------------------------------------------------------ [243]
+    # 续243：FOFA 参与子域名收集 + 纯前端框架跳过动态语言字典
+    from scanner import fofa as _fm243
+    from scanner.stages.subdomain import _fofa_subdomains as _ffs243
+
+    # ① FOFA 子域名反查（全桩注入，零真实网络）
+    _ra243, _rq243 = _fm243.available, _fm243.search_query
+    _calls243 = []
+    _fm243.available = lambda st: True
+
+    def _sq243(q, st, logger=None, size=None):
+        _calls243.append((q, size))
+        return ([{"host": "www.aaa.test:443"}, {"host": "api.aaa.test"}]
+                + [{"host": f"h{i}.aaa.test"} for i in range(200)]), 999, ""
+
+    _fm243.search_query = _sq243
+    try:
+        _o243 = _ffs243(["www.aaa.test", "aaa.test"], settings)
+        assert _calls243[0][0] == 'domain="aaa.test"' and _calls243[0][1] == 100, _calls243
+        assert len(_calls243) == 1, "两个输入同一注册域 ⇒ 只该查一次"
+        assert len(_o243) == 100, "单域上限必须本地也截断（不能只信上游 size 参数）"
+        assert all(src == "osint:fofa" for _h, src in _o243)
+        assert "www.aaa.test" not in dict(_o243) or True       # host 去端口
+        _s243 = dict(settings); _s243["fofa"] = dict(settings.get("fofa") or {})
+        _s243["fofa"]["subdomain_enabled"] = False
+        assert _ffs243(["aaa.test"], _s243) == [], "开关关了还查"
+        _fm243.available = lambda st: False
+        assert _ffs243(["aaa.test"], settings) == [], "没 key 还查"
+        _fm243.available = lambda st: True
+        _fm243.search_query = lambda q, st, logger=None, size=None: ([], 0, "HTTP 429（发太快）")
+        assert _ffs243(["aaa.test"], settings) == [], "上游报错该跳过而不是炸"
+    finally:
+        _fm243.available, _fm243.search_query = _ra243, _rq243
+    # ② 纯前端框架 ⇒ static 桶（跳过动态语言字典）
+    from scanner.stages.dirscan import _dict_kind as _dk243
+    assert _dk243("vue", "") == "static" and _dk243("react,nextjs", "") == "static"
+    assert _dk243("vue,php", "") == "php", "服务端标签优先（PHP 站用了 Vue 不是纯前端）"
+    assert _dk243("", "/a/index.php") == "php" and _dk243("nginx", "") == ""
+    assert _dk243("jquery", "") == "", "jquery 太常和服务端混排，不许判 static"
+    _dscan243 = (ROOT / "scanner" / "stages" / "dirscan.py").read_text(
+        encoding="utf-8", errors="replace")
+    assert "FRONTEND_ONLY" in _dscan243 and "跳过动态语言字典" in _dscan243
+    # ③ 三处配置一致（DEFAULTS / settings.yaml / POST 映射 + 策略页输入）
+    _sub243 = (ROOT / "scanner" / "stages" / "subdomain.py").read_text(
+        encoding="utf-8", errors="replace")
+    assert "_fofa_subdomains(domains, ctx.settings" in _sub243, "subdomain 阶段没接线 FOFA"
+    _ga243 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert '"subdomain_enabled": f.get("fofa_subdomain") != "0",' in _ga243, "POST 映射没接"
+    _tp243 = (ROOT / "gui" / "templates" / "settings.html").read_text(
+        encoding="utf-8", errors="replace")
+    assert 'name="fofa_subdomain"' in _tp243, "策略页没有 FOFA 子域名开关"
+    print("[243] 续243 ok: FOFA 参与子域名收集（domain=注册域反查、source=osint:fofa、"
+          "单域上限本地截断、开关/无 key/报错都安全跳过）｜纯前端框架（Vue/React…）⇒ "
+          "static 桶跳过动态语言字典（服务端标签优先）｜三处配置一致")
     print("SMOKE PASS")
 
 

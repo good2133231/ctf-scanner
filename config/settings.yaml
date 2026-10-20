@@ -403,6 +403,10 @@ fofa:
   # 续229：两次 fofa 请求的最小间隔（秒）—— 循环反查不节流会撞 HTTP 429（按 key 计频率）。
   # 429 = "你发太快"；调大这个值即可。填 0 = 不节流。
   min_interval: 3
+  # 续243：FOFA 也参与**子域名**收集（domain="<注册域>" 反查，source=osint:fofa）。
+  # 关掉：false；单域条数上限（FOFA 单次上限 10000）：
+  subdomain_enabled: true
+  subdomain_max: 100
   black_ico_threshold: 200
   cert_enabled: true
   cert_threshold: 200

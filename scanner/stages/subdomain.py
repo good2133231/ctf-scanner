@@ -21,7 +21,7 @@ import os
 
 from .base import Stage
 from . import github as github_stage
-from .. import blacklist, cdn, db, dnsq, extdom, passive, targets, wildcard
+from .. import blacklist, cdn, db, dnsq, extdom, fofa as fofa_mod, passive, targets, wildcard
 from ..config import resolve
 from ..utils import (is_domain, to_ascii, which, verify_tool, run_cmd, read_lines,
                     write_lines, pool_run)
@@ -54,6 +54,54 @@ def _spread(words, cap, logger=None, knob="limits.brute_max_words"):
                     f"（约每 {len(words) / cap:.1f} 条取 1 条，首尾都保住、覆盖整个字典而不是"
                     f"字母表开头；要用全量把 {knob} 设 0）")
     return got
+
+
+
+def _fofa_subdomains(domains, settings, logger=None):
+    """续243：FOFA `domain="<注册域>"` 反查子域名（主理人点单"fofa 子域名获取也要进行工作"）。
+
+    此前 FOFA 只参与 **osint** 阶段（图标/证书/标题反查，产出的是*拓展域名*），子域名阶段
+    完全没有它 —— 而 FOFA 的爬虫存量本身就是覆盖面很广的子域名来源。返回
+    `[(host, "osint:fofa"), ...]`（去重保序）；没配 key / 开关关 / 单域查错 ⇒ 空表并说一句，
+    绝不影响其它来源（这是并集里的一路，不是关键路径）。
+    """
+    cfg = (settings or {}).get("fofa", {}) or {}
+    if cfg.get("subdomain_enabled") is False:
+        if logger:
+            logger.info("[subdomain] FOFA 子域名反查已关闭（fofa.subdomain_enabled=false）")
+        return []
+    if not fofa_mod.available(settings):
+        if logger:
+            logger.info("[subdomain] 未配 FOFA 凭据，跳过子域名反查（fofa.email / fofa.key）")
+        return []
+    try:
+        cap = max(1, min(int(cfg.get("subdomain_max") or 100), 10000))
+    except (TypeError, ValueError):
+        cap = 100
+    seen, out = set(), set()
+    for d in domains or []:
+        d = str(d or "").strip().lower()
+        base = extdom.base_of(d) or d
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        assets, total, err = fofa_mod.search_query(f'domain="{base}"', settings,
+                                                   logger=logger, size=cap)
+        if err:
+            if logger:
+                logger.info(f"[subdomain] FOFA 子域名反查 {base} 失败：{err}（跳过，不影响其它来源）")
+            continue
+        n = 0
+        # 上限**本地也截一次**：`size` 只是请求参数，FOFA 真多返回时不能把库撑爆
+        # （`subdomain_max` 的语义是"单域最多入账多少条"，不能只信上游听话）。
+        for a in (assets or [])[:cap]:
+            host = str((a or {}).get("host") or "").split(":", 1)[0].strip().lower()
+            if host and host not in out:
+                out.add(host); n += 1
+        if logger:
+            logger.info(f"[subdomain] FOFA 子域名反查 {base} → {n} 个"
+                        f"（命中 {total}，上限 {cap}）")
+    return [(h, "osint:fofa") for h in sorted(out)]
 
 
 class SubdomainStage(Stage):
@@ -188,6 +236,13 @@ class SubdomainStage(Stage):
                 ctx.logger.info(f"[subdomain] 被动来源 {d} → 新增 {n} 个")
         elif offline:
             ctx.logger.info("[subdomain] 被动收集已跳过（--offline）")
+
+        # ---------- 2b) FOFA 域名反查（续243，主理人点单"fofa 子域名获取也要进行工作"）----------
+        if not offline:
+            _fx243 = _fofa_subdomains(domains, ctx.settings, logger=ctx.logger)
+            if _fx243:
+                _n243 = add_many(_fx243)
+                ctx.logger.info(f"[subdomain] FOFA 子域名反查合计新增 {_n243} 个")
 
         # ---------- 3) 泛解析探测（每域名一次，纯 DNS 查询）----------
         wild = {}

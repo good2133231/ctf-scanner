@@ -3,6 +3,62 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续243（2026-10-20，WorkBuddy · Claude）：FOFA 参与子域名收集 + 纯前端框架跳过动态语言字典
+
+主理人三问：① "fofa 子域名获取也要进行工作" ② "识别到 Vue 这类前端框架是不是就不用再扫
+动态语言后缀" ③ "平台接口经常 502/429，是我们 IP 黑了吗"。
+
+### ① FOFA 子域名收集（真缺口，已补）
+
+事实：FOFA 此前**只参与 osint 阶段**（图标/证书/标题反查 → 产出的是**拓展域名**），
+**子域名阶段完全没有它**——而 `domain="<注册域>"` 反查是覆盖面很广的子域名来源。
+
+- `scanner/stages/subdomain.py` 新增 `_fofa_subdomains()`：按注册域（`extdom.base_of` 归一，
+  多目标同一注册域只查一次）调 `fofa.search_query(f'domain="<base>"')`，host 去端口后按
+  `source=osint:fofa` 入库；接在被动收集之后、泛解析之前（并集的一路）；
+- 单域上限 `fofa.subdomain_max`（默认 100）——**本地也截断**（`size` 只是请求参数，
+  不能只信上游听话）；节流复用续229 的 `fofa.min_interval`；
+- 没配 key / 开关关（`fofa.subdomain_enabled`）/ 上游报错 ⇒ **安全跳过并说一句**，
+  绝不影响其它来源；
+- 三处配置一致：DEFAULTS / settings.yaml / POST 映射 + 策略页勾选框与上限输入
+  （`[145]` 那一类"保存一次就重置"的坑照旧靠门禁兜）。
+
+### ② 纯前端框架 ⇒ 跳过动态语言字典（已做）
+
+事实：`_dict_kind()` 判不出语言时返回 `""` ⇒ 调用方**全量语言字典兜底**（php+jsp+asp 全扫）。
+识别到 Vue 的站也走这条路——白扫还搅结果。
+
+- 新增 `FRONTEND_ONLY` 指纹集（vue/react/angular/svelte/nextjs/nuxt/gatsby/astro/ember…；
+  **刻意不收 jquery/bootstrap**——太常和服务端混排）；
+- `_dict_kind()` 判出纯前端 ⇒ 返回 `"static"`：`_layer_paths_named` 里 lang 层查
+  `dirs_static`（不存在 ⇒ 自动跳过），common/exposure 层照旧吃——**正是想要的行为**；
+- 判定顺序：URL 后缀 → **服务端语言标签** → 前端框架标签（`vue,php` 判 php：PHP 站用了
+  Vue 不是纯前端）；dirscan 运行时打一行说明（N 个站点识别为纯前端框架 ⇒ 跳过动态字典）。
+
+### ③ 502/429 的真相（日志证据，不是 IP 被黑）
+
+日志实据（`logs/task_*/task.log`）：
+
+```
+[passive] crt.sh 未取到：HTTP 502        ← crt.sh 自己网关过载（它常年 502，业内共知）
+[passive] alienvault 未取到：HTTP 429    ← OTX 免费 API 按 IP 限流速
+[osint] CT 日志查询失败：crt.sh 返回 502
+[multileak] grep.app 限流（HTTP 429）    ← 免 key 公共接口限速（已有 WARNING 指引）
+```
+
+- **不是我们 IP 被拉黑**：是不同上游、间歇性、且报文里明写"限流/网关错误"；
+- 处理方式本来就是对：单源失败只记一行、继续其它来源（并集设计）；FOFA 那路已有
+  `min_interval` 节流 + 429 退避重试一次（续229）；
+- 真要再降噪：把 `multileak.max_queries` 调小、或给 crt.sh 失败加一次重试（可选项，未做）。
+
+### 门禁
+
+- `[243]`：FOFA 子域名反查（桩注入：注册域归一/去重查询/上限本地截断/开关/无 key/报错）+
+  `_dict_kind` 五个用例（含 jquery 不判 static）+ 三处配置一致 + subdomain 阶段接线。
+
+### 门禁实测
+
+- 全量结果见下一行更新。
 ## 续242（2026-10-20，WorkBuddy · Claude）：resolver 列表 13 条 → 12,124 条（爆破提速/漏报第一杠杆）
 
 主理人批准"把 config/resolvers.txt 换成验证过的高速公共 resolver"。
