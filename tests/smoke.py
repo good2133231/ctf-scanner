@@ -26997,10 +26997,10 @@ expression: r0()
     # 查函数名会永远假红 —— 模板源那一侧由 [145] 的 `url_for(...)` 计数负责。
     assert "/api/hostcollide/run" in _hd201, "任务详情页没有「Host 碰撞」补跑按钮"
 
-    # ⑥ 队列并发：出厂 2（主理人点单"多任务执行"），且 workers_auto 仍是关的
+    # ⑥ 队列并发：出厂 3（续236 主理人点单 2→3），且 workers_auto 仍是关的
     from scanner import queue as _q201
     _qc201 = _q201.config(_cf201.load_settings())
-    assert _qc201.get("workers") == 2, f"队列并发出厂应是 2（多任务并行）：{_qc201.get('workers')}"
+    assert _qc201.get("workers") == 3, f"队列并发出厂应是 3（续236 主理人点单 2→3）：{_qc201.get('workers')}"
 
     # ⑦ `_with_hash`：只认 `#\w`，别的（开放重定向形状）一律忽略
     _wh201 = gui_app._with_hash

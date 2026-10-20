@@ -4303,6 +4303,19 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续236（2026-10-20，WorkBuddy · Claude）：扫描队列并发 2 → 3
+
+- [x] `config/settings.yaml`：`queue.workers: 2 → 3`（仅队列段）
+- [x] 门禁核对：引用 `queue.workers` 的都是 devmode 压量副本断言，不钉出厂值
+- [x] 重启验证：日志出现「已启动 3 个 worker（queue.workers=3）」
+- [x] 全量 SMOKE PASS（263 组，6 分 56 秒；a 红出厂值登记、b 绿）
+
+**下一轮（续236 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] smoke 分组并行（暂缓：主理人已确认真正需要的是队列并发，非门禁提速）
+
+
 ## 续235（2026-10-19，WorkBuddy · Claude）：老任务 favicon 回填（补图标按钮）
 
 老任务只有 favicon MD5、没有 mmh3/图标本体 ⇒ 纯 DB 回填做不到，做成**按任务补抓**的维护动作。
