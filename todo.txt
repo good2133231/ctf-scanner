@@ -4303,6 +4303,22 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续241（2026-10-20，WorkBuddy · Claude）：子任务面板进度条 + 子域名爆破核查
+
+- [x] 子任务面板行内进度条（不只百分比文字）；编号列保持双编号
+- [x] 真链路复跑：父 #59 100% → 子 #60 独立 100%，父进度不变
+- [x] 子域名爆破核查：每任务 subdomain 阶段都跑 DNS 爆破；精简档 84 条全量 + 深档 177,876 条
+      （主理人大字典 10-09 已导入）受 brute_max_words=0（全量）；puredns+massdns 已装走快路；
+      无需再集成别的爆破（OneForAll 等词表是目录扫描侧的，别当子域名字典）
+- [x] `[241]` 门禁 + 全量 SMOKE PASS（见下一行）
+
+**下一轮（续241 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+- [ ] js:mine 拓展域名误报质量（启发式待查）
+
+
 ## 续240（2026-10-20，WorkBuddy · Claude）：跨平台启动器 dev.py
 
 - [x] `dev.py`：setup / smoke / check 三条命令，Windows/Linux 同一条命令（无需 activate；刻意不做 gui）

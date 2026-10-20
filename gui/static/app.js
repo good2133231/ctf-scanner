@@ -498,7 +498,7 @@ function pvSubtreeHtml(d) {
       + `<br>漏洞 ${pvEsc(c.vulns || 0)}<br>拓展 ${pvEsc(c.subs_ext || 0)}</td>`
       + `<td class="muted mono">${pvEsc(n.stages || "-")}</td>`
       + `<td><span class="badge st-${pvEsc(n.status)}">${pvEsc(n.status)}</span></td>`
-      + `<td>${pvEsc(n.progress)}%</td>`
+      + `<td><div class="bar"><i style="width:${pvEsc(n.progress)}%"></i></div>${pvEsc(n.progress)}%</td>`   /* 续241：面板里也要有进度条，不只一个百分比 */
       + `<td class="muted">${pvEsc(n.created_at || "-")}</td>`
       + `<td class="muted">${pvEsc(n.duration || "-")}</td>`
       + `<td><a class="btn-mini" href="/tasks/${pvEsc(n.id)}">查看结果</a></td></tr>`;

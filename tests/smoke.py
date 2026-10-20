@@ -29906,6 +29906,14 @@ expression: r0()
             f"{_doc240} 没写 dev.py setup（两平台同一条命令）"
     print("[240] 续240 ok: dev.py 跨平台启动器（setup/smoke/check 三条；Windows 路径差异收口）｜"
           "文档两处已改用 dev.py")
+    # ------------------------------------------------------------------ [241]
+    # 续241：子任务面板里的**进度条**（不只一个百分比数字）
+    _js241 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+    i241 = _js241.split("pvSubtreeHtml", 1)[-1]
+    assert '<div class="bar"><i style="width:${pvEsc(n.progress)}%"></i></div>' in i241, \
+        "子任务面板的行没有进度条（主理人点单：进度条也要有）"
+    assert '（#${pvEsc(n.id)}）' in i241, "编号列没有同时显示任务号（239）"
+    print("[241] 续241 ok: 子任务面板行内进度条 + 双编号")
     print("SMOKE PASS")
 
 
