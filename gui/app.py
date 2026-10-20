@@ -64,7 +64,7 @@ from scanner.log import (attach_access_log, attach_server_log, boot_logger,
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
-from scanner import diffview, edgeauth, fingerprint, dictstats, keystore, webpath, portguard
+from scanner import diffview, edgeauth, fingerprint, dictstats, keystore, webpath, portguard, iconbackfill
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
@@ -4455,6 +4455,26 @@ def create_app():
                     + (f"（另有 {dropped} 个超出 screenshot.max_sites={cap}，本次不排）" if dropped else "")
                     + ("；来源是勾选的行" if picked else "；来源是本任务截图失败的站点"))
         return redirect(url_for("task_detail", task_id=tid) + "#sites")
+
+    @app.route("/api/sites/iconbackfill", methods=["POST"])
+    @login_required
+    def api_icon_backfill():
+        """续235：老任务的 favicon 回填 —— 对「有 favicon 但没落图标」的行各补抓一次。
+
+        为什么走后台线程而不是请求线程/队列：一次回填最多 200 个 GET，压在 HTTP 线程上会
+        卡住控制台；它也不是一次任务运行（不产任务行），走追加队列反而把 run_payload 弄脏。
+        后台 daemon 线程 + 同任务重入拒绝 + 逐条写任务日志（任务日志面板看得见进度）。
+        """
+        fallback = _safe_next(request.form.get("next"), url_for("tasks"))
+        raw_id = (request.form.get("task_id") or "").strip()
+        if not raw_id.isdigit():
+            return _append_err("这个入口没有带任务号（请在任务详情页的「站点」页签里点）", fallback)
+        tid = int(raw_id)
+        if not _owned_task(tid):
+            abort(404)
+        ok, msg = iconbackfill.launch(tid, load_settings())
+        logger.info(f"[gui] 任务 #{tid} 图标回填：{msg}")
+        return redirect(fallback)
 
     @app.route("/api/notes")
     @login_required

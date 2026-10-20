@@ -836,11 +836,10 @@ ctf-scanner/
   `SEND_FILE_MAX_AGE_DEFAULT=30 天`。直接改文件不改 URL，用户端最长 30 天拿旧缓存；
   把 max_age 调小来"修缓存"是反模式。新增**根路径公开端点**只能走
   `webpath._PUBLIC_PATHS`（当前仅 `/favicon.ico`），放行了什么在 CHANGELOG 里必须能查到。
-- **前端资产改动必须带版本号（续234）**：`app.js` / `style.css` 的 URL 一律
-  `url_for('static', filename=…, v=static_v(…))`（mtime 版本化）＋
-  `SEND_FILE_MAX_AGE_DEFAULT=30 天`。直接改文件不改 URL，用户端最长 30 天拿旧缓存；
-  把 max_age 调小来"修缓存"是反模式。新增**根路径公开端点**只能走
-  `webpath._PUBLIC_PATHS`（当前仅 `/favicon.ico`），放行了什么在 CHANGELOG 里必须能查到。
+- **老数据回填是"补抓"不是"补算"（续235）**：`icon_hash`（mmh3）必须拿到图标的**字节**才
+  算得出，老任务只存了 MD5 ⇒ 回填只能重新 GET 一次（`iconbackfill.backfill_task`：幂等只补
+  `icon_file=''`、单次 cap 200、顺序执行、stop 可中断、重入拒绝）。别试图从 MD5"反推"mmh3
+  —— 那是密码学上的不可能。新入口必须：属主校验 + 后台线程 + 任务日志进度。
 - **RCE 护栏（§1 红线落地为代码，续206）**：`pocmgr.validate_yaml()` 拒收"**请求内容**里有命令
   拼接/命令替换形态"的模板（afrog 的 `pocs/` 里真混着一条 GET 触发 `ipconfig` 的 HFS RCE）。
   两条边界写死在代码里：① 只扫**会发出去的内容**（path/raw/payloads/body），info.description /

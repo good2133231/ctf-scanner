@@ -4303,6 +4303,23 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续235（2026-10-19，WorkBuddy · Claude）：老任务 favicon 回填（补图标按钮）
+
+老任务只有 favicon MD5、没有 mmh3/图标本体 ⇒ 纯 DB 回填做不到，做成**按任务补抓**的维护动作。
+
+- [x] `scanner/iconbackfill.py`：幂等（只补 `icon_file=''` 的行）、单次上限 200、顺序执行、
+      协作式停止、MD5 变了如实更新、任务日志逐条进度；同任务重入拒绝
+- [x] 站点页签「补图标（老数据）」按钮 → POST `/api/sites/iconbackfill`（属主校验 404、
+      后台 daemon 线程，不卡请求线程、不弄脏 run_payload）
+- [x] `[235]` 门禁（全桩注入零真实网络）：回填主路径/跳过规则/cap/stop/重入/路由
+- [x] 全量 SMOKE PASS（263 组，6 分 57 秒；a/b 红表单计数旧口径、c 红登记、d 红我方断言，e 绿）
+
+**下一轮（续235 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] smoke 分组并行（先做组间隔离）
+
+
 ## 续234（2026-10-19，WorkBuddy · Claude）：全面复查 —— 壮骨 + 前端小优化
 
 - [x] `/favicon.ico` → 204（含随机前缀中间件的公开放行）—— 消掉每页一条 404 噪声

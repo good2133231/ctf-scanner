@@ -1490,6 +1490,19 @@ def set_site_icon_status(task_id, rows):
     _exec("UPDATE sites SET icon_ext=? WHERE task_id=? AND url=?", rows, many=True)
 
 
+def set_site_icon(task_id, url, *, icon_hash=0, icon_file="", favicon=None):
+    """回填一行站点的图标（续235）：mmh3 / 图标相对路径；MD5 变了就一并更新。
+
+    只按 `(task_id, url)` 定位本任务的行；`favicon` 传 None = 不动旧值。
+    """
+    sets, vals = ["icon_hash=?", "icon_file=?"], [int(icon_hash or 0), str(icon_file or "")]
+    if favicon is not None:
+        sets.append("favicon=?")
+        vals.append(str(favicon or ""))
+    vals += [task_id, str(url)]
+    _exec(f"UPDATE sites SET {','.join(sets)} WHERE task_id=? AND url=?", vals)
+
+
 def insert_ports(task_id, ports):
     """items: [{host, ip, port, service, banner}, ...]"""
     if not ports:

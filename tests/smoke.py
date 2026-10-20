@@ -11176,8 +11176,8 @@ http:
     #    screenshot 阶段的那一种），所以那一档翻成"**恰好那一个**"；而 GET 先闭合 / 不嵌套 /
     #    标签配平这三条红线照旧 —— 它们本来就是为"往页签里加表单"这件事立的：那个新表单
     #    包着整张站点表，漏一个 `</form>` 就把分页链接整块吞进表单里。端口 / 目录仍是零。
-    for _pane7s, _post7s in (("pane-ext", 'action="/api/domains/scan-ext"'),
-                             ("pane-sites", 'action="/api/sites/reshoot"')):
+    for _pane7s, _post7s, _posts7s in (("pane-ext", 'action="/api/domains/scan-ext"', 1),
+                             ("pane-sites", 'action="/api/sites/reshoot"', 2)):
         _seg7s = _det7s.split(f'id="{_pane7s}"', 1)[1].split('class="tabpane"', 1)[0]
         _ig7s = _seg7s.find('<form class="filters" method="get"')
         _ip7s = _seg7s.find(_post7s)
@@ -11185,8 +11185,8 @@ http:
         assert 0 <= _ig7s < _ip7s, f"{_pane7s}: GET 筛选表单必须排在 POST 表单之前"
         assert "</form>" in _seg7s[_ig7s:_ip7s], \
             f"{_pane7s}: GET 表单必须在 POST 表单开始前闭合（HTML 不允许 form 嵌套）"
-        assert _seg7s.count('method="post"') == 1, \
-            f"{_pane7s}: 这个页签只该有那**一个** POST 表单（补扫/复查入口加回来就是另一个故事）"
+        assert _seg7s.count('method="post"') == _posts7s, \
+            f"{_pane7s}: 该页签 POST 表单数应是 {_posts7s}（续235：站点页签=重截+补图标两个）；多出来的是有人又加了入口"
         assert _seg7s.count("<form") == _seg7s.count("</form>"), \
             f"{_pane7s}: form 标签不配平（漏一个 </form> 会把分页链接整块吞进表单里）"
     for _pane7s in ("pane-ports", "pane-dirs"):
@@ -21669,14 +21669,16 @@ expression: r0()
     # 合法表单时会误伤（本轮实测：续177 拉黑表单一加就红）—— 升级为点名式：新增表单必须
     # 来这里显式登记；/api/rescan 依旧一个不许有（上面已断言）。变异证伪：删任一表单 ⇒
     # 点名红；新增表单不来登记 ⇒ 总数红。
-    for _act145 in ("api_scan_ext", "api_reshoot_sites", "api_jssecret_blacklist"):
+    for _act145 in ("api_scan_ext", "api_reshoot_sites", "api_jssecret_blacklist",
+                     "api_icon_backfill"):
         _cnt145 = _td145.count(f"url_for('{_act145}')")
         assert _cnt145 == 1, \
             f"详情页 {_act145} 表单应恰好 1 个：实测 {_cnt145}"
     _n_post145 = _td145.count('method="post"')
     # 续201：3 → 4（Host 碰撞）；续208：4 → 5（敏感信息候选的「误报」复核表单）
-    assert _n_post145 == 5, \
-        f"详情页 POST 表单总数应 5（新增表单必须显式改这条登记）：实测 {_n_post145}"
+    # 续201：3 → 4（Host 碰撞）；续208：4 → 5（误报复核）；续235：5 → 6（站点「补图标」）
+    assert _n_post145 == 6, \
+        f"详情页 POST 表单总数应 6（新增表单必须显式改这条登记）：实测 {_n_post145}"
     assert _td145.count("url_for('api_hostcollide_run')") == 1, "Host 碰撞表单应恰好 1 个"
 
     # ---- ② `subdomain.auto_root` 三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射）----
@@ -29692,6 +29694,78 @@ expression: r0()
     assert "SEND_FILE_MAX_AGE_DEFAULT" in _ga234b and "def static_v" in _ga234b
     print("[234] 续234 ok: /favicon.ico 公开放行（204，穿过随机前缀）｜根路径仍伪装 404｜"
           "静态资产 mtime 版本化 + 30 天缓存｜app.js 禁止 defer（模板同步调用契约）")
+    # ------------------------------------------------------------------ [235]
+    # 续235：老任务 favicon 回填（补抓一次 → mmh3 + 落盘 + 更新行；幂等/上限/停止/重入保护）
+    from scanner import iconbackfill as _ib235
+    import shutil as _sh235
+    _wd235b = LOGS_DIR / "smoke235-workdir"
+    _sh235.rmtree(_wd235b, ignore_errors=True)
+    _wd235b.mkdir(parents=True)
+    (_wd235b / "favicons").mkdir(exist_ok=True)
+    _t235 = db.create_task("smoke235-icons", "http://i235.test/", ["probe"], {})
+    db.update_task(_t235, log_file=str(_wd235b / "task.log"))
+    db.insert_sites(_t235, [
+        {"url": "http://a235.test/", "host": "a235.test", "port": "80", "status": 200,
+         "title": "a", "length": 1, "server": "", "source": "builtin",
+         "favicon": "a" * 32},                                   # 待补
+        {"url": "http://b235.test/", "host": "b235.test", "port": "80", "status": 200,
+         "title": "b", "length": 1, "server": "", "source": "builtin",
+         "favicon": "b" * 32, "icon_file": "favicons/b235.ico"},  # 已补 ⇒ 跳过
+        {"url": "http://c235.test/", "host": "c235.test", "port": "80", "status": 200,
+         "title": "c", "length": 1, "server": "", "source": "builtin"},  # 无 favicon ⇒ 跳过
+    ])
+    _real_fi235 = _ib235.favicon_info
+
+    def _fi235(url, settings=None, timeout=None):
+        if url.startswith("http://a235.test"):
+            return ("a" * 32, 777, b"ICON-A-BYTES")   # MD5 与库里一致 ⇒ 命中回填主路径
+        return ("", 0, b"")                            # 没拿到图标
+
+    _ib235.favicon_info = _fi235
+    try:
+        _r235 = _ib235.backfill_task(_t235, {}, cap=10)
+        assert _r235["saved"] == 1 and _r235["processed"] == 1, _r235
+        assert _r235["empty"] == 0, _r235                # c 无 favicon ⇒ 根本不在待补清单
+        _f235 = _wd235b / "favicons" / ("a" * 32 + ".ico")
+        assert _f235.is_file() and _f235.read_bytes() == b"ICON-A-BYTES"
+        _rows235 = {r["url"]: dict(r) for r in db.list_sites(_t235)}
+        assert _rows235["http://a235.test/"]["icon_hash"] == 777
+        assert _rows235["http://a235.test/"]["icon_file"] == "favicons/" + "a" * 32 + ".ico"
+        assert _rows235["http://b235.test/"]["icon_file"] == "favicons/b235.ico", "已补的行不许动"
+        assert _rows235["http://c235.test/"]["icon_file"] == "", "无 favicon 的行不许编数据"
+        # 上限：再放一行待补，cap=1 只处理一行（超出部分说"下轮再点"）
+        db.insert_sites(_t235, [{"url": "http://d235.test/", "host": "d235.test", "port": "80",
+                                 "status": 200, "title": "d", "length": 1, "server": "",
+                                 "source": "builtin", "favicon": "d" * 32}])
+        _r235b = _ib235.backfill_task(_t235, {}, cap=1)
+        assert _r235b["processed"] == 1 and _r235b["empty"] == 1 and _r235b["saved"] == 0, _r235b   # d 没拿到图标 = empty 路径
+        # 停止：stop 一置位就一行都不抓
+        assert _ib235.backfill_task(_t235, {}, stop=lambda: True)["processed"] == 0
+        # 重入保护：同任务第二次 launch 直接拒绝
+        with _ib235._LOCK:
+            _ib235._RUNNING.add(_t235)
+        try:
+            _ok235, _msg235 = _ib235.launch(_t235, {}, inline=True)
+            assert _ok235 is False and "已在进行中" in _msg235, (_ok235, _msg235)
+        finally:
+            with _ib235._LOCK:
+                _ib235._RUNNING.discard(_t235)
+        # GUI 路由：属主校验 + 正常排队
+        import gui.app as _g235
+        _app235 = _g235.create_app()
+        _c235 = _app235.test_client()
+        assert _c235.post("/login", data=_admin_form117(),
+                          environ_base={"REMOTE_ADDR": "203.0.113.245"}).status_code == 302
+        assert _c235.post("/api/sites/iconbackfill",
+                          data={"task_id": "999999"}).status_code == 404, "别人的/不存在的任务必须 404"
+        _rb235 = _c235.post("/api/sites/iconbackfill", data={"task_id": str(_t235)})
+        assert _rb235.status_code == 302, _rb235.status_code
+    finally:
+        _ib235.favicon_info = _real_fi235
+        db.delete_task(_t235, backup=False)
+        _sh235.rmtree(_wd235b, ignore_errors=True)
+    print("[235] 续235 ok: 老任务图标回填（幂等跳过已补行 / MD5 变了如实更新 / cap 与 stop /"
+          "重入拒绝 / 路由属主校验）")
     print("SMOKE PASS")
 
 
