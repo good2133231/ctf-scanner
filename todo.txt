@@ -4303,6 +4303,24 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续244（2026-10-20，WorkBuddy · Claude）：本地开发入口文档《本地开发.md》
+
+主理人要把开发交给本地 AI（pull 仓库 +「你是本地开发」即可上手）。
+
+- [x] 根目录新增 `本地开发.md`：触发语/三角色/dev.py 三命令/每轮循环（记忆先于门禁）/
+      服务器收尾三步/红线六条/前人坑五条/文档索引
+- [x] README 顶部加入口指引；`docs/local-ai-prompt.md` 把入口列为第 0 读本；
+      `docs/dev-sync.md` 指回入口（三份文档互指防漂移）
+- [x] 全量 SMOKE PASS（270 组，1 次即绿）
+
+**下一轮（续244 之后）——只放未做的：**
+- [ ] 子域名被动源补齐（threatminer / chaziyu / ipv4info）
+- [ ] 子域名爆破"快速档"接线（quick 收 1 万等距抽样，deep 全量）
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+
+
 ## 续243（2026-10-20，WorkBuddy · Claude）：FOFA 参与子域名收集 + 纯前端框架跳过动态语言字典
 
 - [x] FOFA 子域名收集：subdomain 阶段按注册域反查（source=osint:fofa），单域上限本地截断、

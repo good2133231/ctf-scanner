@@ -207,6 +207,9 @@ Flask Web 控制台（仿 ARL）。
   `python dev.py smoke`（全量门禁）、`python dev.py check`——
   **Windows/Linux 同一条命令**，路径差异（`.venv/Scripts` vs `.venv/bin`）由它收口；
   新增子命令必须带门禁（[240] 有 usage/未知命令/check 的测试）。
+- **本地 AI 的第一读本是根目录 `本地开发.md`（续244）**：触发语「你是本地开发」；
+  README 顶部、`docs/local-ai-prompt.md`（第 0 读本）、`docs/dev-sync.md`（指回入口）
+  四处互指，改任何一份都要同步另外三份（`[244]` 门禁盯着互指关系）。
 - **resolver 列表是子域名爆破的第一杠杆（续242）**：`config/dicts/resolvers.txt`
   （12,124 条，trickest 验证列表 + 国内头部置顶，全 IPv4 无注释）——puredns/massdns 靠它分摊
   并发，只有十几条必被公共 DNS 限流。**别删减到千条以下**；更新走 trickest 全量合并，

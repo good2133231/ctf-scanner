@@ -29984,6 +29984,24 @@ expression: r0()
     print("[243] 续243 ok: FOFA 参与子域名收集（domain=注册域反查、source=osint:fofa、"
           "单域上限本地截断、开关/无 key/报错都安全跳过）｜纯前端框架（Vue/React…）⇒ "
           "static 桶跳过动态语言字典（服务端标签优先）｜三处配置一致")
+    # ------------------------------------------------------------------ [244]
+    # 续244：本地开发入口文档（pull 下来 +「你是本地开发」即可上手）
+    _ld244 = ROOT / "本地开发.md"
+    assert _ld244.is_file(), "缺根目录入口文档 本地开发.md（本地 AI 的第一读本）"
+    _t244 = _ld244.read_text(encoding="utf-8", errors="replace")
+    for _kw244 in ("你是本地开发", "python dev.py setup", "python dev.py smoke",
+                   "python dev.py check", "docs/local-ai-prompt.md", "docs/dev-sync.md",
+                   "AGENTS.md", "一轮只在一台机器上做"):
+        assert _kw244 in _t244, f"入口文档缺关键内容：{_kw244}"
+    # 三份文档互相指得到（防漂移）：README → 入口；入口 → 两份详细文档；提示词第 0 步读入口
+    _rm244 = (ROOT / "README.md").read_text(encoding="utf-8", errors="replace")
+    assert "本地开发.md" in _rm244, "README 没指向本地开发入口"
+    _pr244 = (ROOT / "docs" / "local-ai-prompt.md").read_text(encoding="utf-8", errors="replace")
+    assert "本地开发.md" in _pr244.split("0. ", 1)[-1][:300], "提示词没把入口文档列为首读"
+    _ds244 = (ROOT / "docs" / "dev-sync.md").read_text(encoding="utf-8", errors="replace")
+    assert "本地开发.md" in _ds244, "dev-sync 没指回入口"
+    print("[244] 续244 ok: 根目录《本地开发.md》入口文档（触发语/三角色/三条命令/每轮循环/"
+          "服务器收尾/红线/前人坑）｜README 与两份详细文档互指，防漂移")
     print("SMOKE PASS")
 
 
