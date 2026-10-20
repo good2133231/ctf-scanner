@@ -4310,7 +4310,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] `docs/local-ai-prompt.md`：本地 AI **整段开场提示词**（读文件顺序/工作循环/记忆同步顺序/
       红线/常见坑/服务器操作参考）——新开会话整段粘贴即用
 - [x] AGENTS §0.4 加"双机开发"硬规矩（正式门禁在服务器、一轮一台机、同号续接）
-- [x] 全量 SMOKE PASS（见下一行）
+- [x] 全量 SMOKE PASS（263 组，6 分 56 秒）
 
 **下一轮（续237 之后）——只放未做的：**
 - [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
