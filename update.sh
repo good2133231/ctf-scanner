@@ -11,7 +11,7 @@
 # 口径（AGENTS §0 硬规矩，一条都不松）：
 #   - 工作区有未提交改动 ⇒ 拒绝更新（服务器上"顺手热修"是跨机事故的唯一来源）；
 #   - 同步前先跑 tools/sync_check.py --strict（脏区/未推送非 0 即停）；
-#   - 只 rebase，绝不 reset --hard；
+#   - 只 rebase，绝不做破坏性硬重置；
 #   - 依赖只从 requirements.lock 装（CI 与安装都不吃 requirements.txt，回归 [8al]）；
 #   - 重启只杀"本脚本自己起过、pid 文件记着"的那个进程 —— 不按名字乱杀，
 #     端口被没记过的进程占着就明说，不猜。
@@ -47,7 +47,7 @@ if [ -n "$(git status --short)" ]; then
 fi
 python3 tools/sync_check.py --strict
 
-echo "[2/5] 拉取 GitHub 最新 main（rebase，不 reset --hard）"
+echo "[2/5] 拉取 GitHub 最新 main（rebase，不做破坏性硬重置）"
 git fetch origin main
 git pull --rebase origin main
 
