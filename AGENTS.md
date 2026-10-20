@@ -203,6 +203,10 @@ Flask Web 控制台（仿 ARL）。
   装上的直接后果是 `limits.brute_max_words: 0` **从此真的等于"全量"**（深字典 177,875 条整份喂进去），
   所以续139 记的"冷启动比对标少 16 台主机"那一段前提已经变了；开发模式仍把爆破四项压到 4/4/4/1
   （`devmode.DEV_LIMITS`）⇒ CI 与全流程自检不受影响。
+- **环境/门禁启动走 dev.py（续240）**：`python dev.py setup`（建 venv+装依赖，一次性）、
+  `python dev.py smoke`（全量门禁）、`python dev.py check`——
+  **Windows/Linux 同一条命令**，路径差异（`.venv/Scripts` vs `.venv/bin`）由它收口；
+  新增子命令必须带门禁（[240] 有 usage/未知命令/check 的测试）。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`

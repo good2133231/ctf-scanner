@@ -29866,12 +29866,46 @@ expression: r0()
     _rn239 = (ROOT / "scanner" / "runner.py").read_text(encoding="utf-8", errors="replace")
     assert "===== 本次目标：" in _rn239, "runner 没打目标首行"
     _ds239 = (ROOT / "docs" / "dev-sync.md").read_text(encoding="utf-8", errors="replace")
-    assert ".venv\\Scripts\\pip" in _ds239, "dev-sync 缺 Windows venv 路径"
+    assert "python dev.py setup" in _ds239, "dev-sync 没写跨平台启动器 dev.py"
     _db239.delete_task(_kid239, backup=False)
     _db239.delete_task(_p239, backup=False)
     shutil.rmtree(_wd239, ignore_errors=True)
     print("[239] 续239 ok: 送探默认只送勾选（空勾选 409 且不建任务）｜子树面板根=点的那一行｜"
           "父任务日志写明范围与域名｜runner 首行打目标｜文档补 Windows venv 路径")
+    # ------------------------------------------------------------------ [240]
+    # 续240：跨平台启动器 dev.py —— setup/smoke/gui/check 四条命令吃掉 Windows 路径差异
+    import subprocess as _sp240
+    _dv240 = ROOT / "dev.py"
+    assert _dv240.is_file(), "缺 dev.py（跨平台启动器）"
+    _dvt240 = _dv240.read_text(encoding="utf-8", errors="replace")
+    for _kw240 in ("Scripts", "bin", "COMMANDS", "def venv_python"):
+        assert _kw240 in _dvt240, f"dev.py 缺 {_kw240}（跨平台路径处理不见了）"
+
+    def _drun240(*args):
+        _r = _sp240.run([sys.executable, str(_dv240), *args], cwd=str(ROOT),
+                            capture_output=True, text=True, timeout=60)
+        return _r.returncode, _r.stdout
+
+    _rc240, _o240 = _drun240()
+    assert _rc240 == 2 and "用法" in _o240, (_rc240, _o240[:120])
+    _rc240, _o240 = _drun240("badcmd")
+    assert _rc240 == 2 and "未知命令" in _o240, (_rc240, _o240[:120])
+    import subprocess as _sp240r
+    _tmp239r = Path(_sp240r.run(["mktemp", "-d"], capture_output=True, text=True,
+                                   timeout=30).stdout.strip())
+    _g239r = _sp240r.run(["git", "-C", str(_tmp239r), "init", "-q"], capture_output=True, timeout=30)
+    (_tmp239r / "f.txt").write_text("x", encoding="utf-8")
+    _sp240r.run(["git", "-C", str(_tmp239r), "add", "f.txt"], capture_output=True, timeout=30)
+    _sp240r.run(["git", "-C", str(_tmp239r), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "init"], capture_output=True, timeout=30)
+    _rc240, _o240 = _drun240("check", "--repo", str(_tmp239r))
+    assert _rc240 == 0 and "干净且与 origin 同步" in _o240, (_rc240, _o240[:200])
+    assert _rc240 == 0 and "干净且与 origin 同步" in _o240, (_rc240, _o240[:200])
+    for _doc240 in ("docs/dev-sync.md", "docs/local-ai-prompt.md"):
+        assert "python dev.py setup" in (ROOT / _doc240).read_text(encoding="utf-8", errors="replace"), \
+            f"{_doc240} 没写 dev.py setup（两平台同一条命令）"
+    print("[240] 续240 ok: dev.py 跨平台启动器（setup/smoke/check 三条；Windows 路径差异收口）｜"
+          "文档两处已改用 dev.py")
     print("SMOKE PASS")
 
 

@@ -16,10 +16,10 @@
 ## 每轮标准流程
 
 ### A. 在本地开发（新增）
-> **本地一次性准备**：`git clone` 后 `python -m venv .venv`；
-> **Windows** 用 `.venv\Scripts\pip install -r requirements.txt`（`bin/` 是 Linux/macOS 路径，
-> 这就是"`\'.venv\' 不是内部或外部命令\'"报错的来源）；跑门禁用
-> `.venv\Scripts\python tests/smoke.py`。没有 Chrome 时浏览器 E2E 组会红——留给服务器跑即可。
+> **本地一次性准备**：`git clone` 后 `python dev.py setup` —— Windows / Linux / macOS
+> 同一条命令（`dev.py` 会建 `.venv` 并装依赖，路径差异由它吃掉；此前手写
+> `.venv/bin/pip` 在 Windows 报"不是内部或外部命令"就是踩了这个）。
+> 跑门禁：`python dev.py smoke`（没有 Chrome 时浏览器 E2E 组会红——留给服务器跑即可）。
 
 
 ```

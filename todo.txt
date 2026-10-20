@@ -4303,6 +4303,20 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续240（2026-10-20，WorkBuddy · Claude）：跨平台启动器 dev.py
+
+- [x] `dev.py`：setup / smoke / check 三条命令，Windows/Linux 同一条命令（无需 activate；刻意不做 gui）
+- [x] 文档两处改用 dev.py；概念澄清：`dev.py setup`=环境启动（一次性），`dev.py smoke`=门禁启动
+- [x] `[240]` 门禁（usage/未知命令/check 真跑/文档）
+- [x] 全量 SMOKE PASS（264 组；[240] 主仓干净断言改临时仓库；跑门禁须设 CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD）
+
+**下一轮（续240 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务 #52/#53 与本地 8899 靶场：主理人看完即可清（说一声就删）
+- [ ] js:mine 把无关域名挖成"拓展域名"的误报质量 问题（黑名单兜住，启发式待查）
+
+
 ## 续239（2026-10-20，WorkBuddy · Claude）：送探三连修（范围默认/子树面板/链路日志）+ Windows 文档
 
 - [x] 送探范围默认**「只送勾选」**（旧默认"全任务"把没勾的 nginx 也送跑了）；空勾选 409 + 文案

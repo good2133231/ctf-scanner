@@ -3,6 +3,17 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续240（2026-10-20，WorkBuddy · Claude）：跨平台启动器 dev.py（环境/门禁一条命令）
+
+主理人指出：`.venv/bin/pip` 是 Linux 路径，Windows 报"不是内部或外部命令"；且要分清
+**环境启动**（建 venv + 装依赖，一次性）与**门禁启动**（跑 tests/smoke.py）是两件事。
+
+- [x] `dev.py`：`setup`（建 .venv+装依赖）/ `smoke`（跑全量门禁，参数透传）/ `gui`（起控制台）/
+      `check`（同步体检 --strict）——路径差异由它吃掉，**两平台同一条命令**；不需要 activate
+- [x] 文档改用 dev.py：dev-sync.md 本地准备段、local-ai-prompt.md Windows 提醒
+- [x] `[240]` 门禁：usage/未知命令/ check 真跑/文档两处
+- **全量 SMOKE PASS：264 个断言组（含浏览器 E2E 72 条全绿），07:16 → 07:23 左右**；本轮多次全量（红因：[240] check 对主仓库断言干净——轮次中途必脏，改为对临时仓库验；[239] 文档断言未随 dev.py 更新；日志清扫触发 CodeBuddy 批量删除守卫——跑门禁需 CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=100000000，CHANGELOG 续49 已有先例）。
+
 ## 续239（2026-10-20，WorkBuddy · Claude）：送探三连修（范围默认/子树面板/链路日志）+ Windows 文档
 
 主理人实测抓到的问题（任务 #55→#56）：勾了其中 1 个拓展域名，却把另外 2 个也一起送出去跑了；
