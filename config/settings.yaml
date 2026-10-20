@@ -531,6 +531,10 @@ dicts:
   # 深档子域名字典（续139）：`python tools/import_subdomain_dict.py --src <你那份深字典>` 生成。
   # 文件不存在＝没配，只用上面那份精简档（日志会指路）。精简档永远全量打底，深档才受抽样闸门。
   subdomains_deep: config/dicts/subdomains_deep.txt
+  # 续242：12,124 条验证过的公共 resolver（trickest/resolvers 全量 + 国内头部置顶：
+  # 223.5.5.5/119.29.29.29/114.114.114.114 …）。puredns 高并发靠它分摊——只有十几条时
+  # 必被公共 DNS 限流（慢+漏报）。更新：curl -sL https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt
+  # 然后与国内头部合并去重（保留 223.5.5.5 等，只收 IPv4）。
   resolvers: config/dicts/resolvers.txt
   dirs: config/dicts/dirs_small.txt
   # 浅扫精选字典（dirscan.mode=quick 时只用这一份）

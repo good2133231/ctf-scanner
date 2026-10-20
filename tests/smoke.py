@@ -29914,6 +29914,22 @@ expression: r0()
         "子任务面板的行没有进度条（主理人点单：进度条也要有）"
     assert '（#${pvEsc(n.id)}）' in i241, "编号列没有同时显示任务号（239）"
     print("[241] 续241 ok: 子任务面板行内进度条 + 双编号")
+    # ------------------------------------------------------------------ [242]
+    # 续242：resolver 列表质量（爆破速度/漏报的第一杠杆，比换引擎更大）
+    _rs242 = ROOT / "config" / "dicts" / "resolvers.txt"
+    assert _rs242.is_file(), "缺 config/dicts/resolvers.txt（puredns -r 用）"
+    import ipaddress as _ipa242
+    _lines242 = [l.strip() for l in _rs242.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(_lines242) >= 10000, f"resolver 列表退化到 {len(_lines242)} 条（应 ≥10000）"
+    assert len(_lines242) == len(set(_lines242)), "resolver 列表有重复"
+    for _ip242 in _lines242:
+        _ipa242.IPv4Address(_ip242)          # 非法条目立刻红
+    for _must242 in ("223.5.5.5", "8.8.8.8", "1.1.1.1"):
+        assert _must242 in _lines242, f"resolver 列表缺 {_must242}"
+    _st242 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "resolvers: config/dicts/resolvers.txt" in _st242, "settings 没指向 resolver 列表"
+    print("[242] 续242 ok: 12,124 条验证过 resolver（国内头部置顶，全 IPv4 无重复无注释）｜"
+          "settings.dicts.resolvers 指向正确｜子域名爆破速度/漏报的第一杠杆")
     print("SMOKE PASS")
 
 

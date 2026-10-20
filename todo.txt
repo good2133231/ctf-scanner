@@ -4303,6 +4303,19 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续242（2026-10-20，WorkBuddy · Claude）：resolver 列表 13 → 12,124 条（爆破第一杠杆）
+
+- [x] trickest/resolvers 验证列表接入（+国内头部置顶），全 IPv4 去重 12,124 条，抽样 8/9 可用
+- [x] settings.yaml 写明出处与更新方法；`[242]` 门禁防退化（≥10000/无重复/全 IPv4/必含三条）
+- [x] 全量 SMOKE PASS（268 组；a 红 EOL 混合，b 绿）
+
+**下一轮（续242 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+- [ ] js:mine 拓展域名误报质量（启发式待查）
+
+
 ## 续241（2026-10-20，WorkBuddy · Claude）：子任务面板进度条 + 子域名爆破核查
 
 - [x] 子任务面板行内进度条（不只百分比文字）；编号列保持双编号

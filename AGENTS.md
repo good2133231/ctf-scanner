@@ -207,6 +207,10 @@ Flask Web 控制台（仿 ARL）。
   `python dev.py smoke`（全量门禁）、`python dev.py check`——
   **Windows/Linux 同一条命令**，路径差异（`.venv/Scripts` vs `.venv/bin`）由它收口；
   新增子命令必须带门禁（[240] 有 usage/未知命令/check 的测试）。
+- **resolver 列表是子域名爆破的第一杠杆（续242）**：`config/dicts/resolvers.txt`
+  （12,124 条，trickest 验证列表 + 国内头部置顶，全 IPv4 无注释）——puredns/massdns 靠它分摊
+  并发，只有十几条必被公共 DNS 限流。**别删减到千条以下**；更新走 trickest 全量合并，
+  `[242]` 钉着 ≥10000/无重复/全 IPv4。内置 socket 兜底那路仍用系统解析器（未接列表）。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`
