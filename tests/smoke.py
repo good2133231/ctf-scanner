@@ -2748,8 +2748,9 @@ def main():
         _empty_t = db.create_task("smoke-ext-none", targets, ["probe"], {})
         _n0 = len(db.list_tasks(limit=1000))
         _r3 = c.post("/api/domains/scan-ext", data={"task_id": str(_empty_t), "next": "/tasks"})
-        assert _r3.headers["Location"] == "/tasks" and \
-            len(db.list_tasks(limit=1000)) == _n0, "没有拓展域名时不该建出探测任务"
+        assert _r3.status_code == 409 and "没有可送的拓展域名".encode() in _r3.data and \
+            len(db.list_tasks(limit=1000)) == _n0, \
+            "没有拓展域名时：409 说清原因（续239 不许静默 redirect）+ 不建任务"
 
         # 加黑名单：任务详情页签用的也是同一个端点，next 只放行站内相对路径。
         # 这里把 `blacklist.add` 换成记录桩 —— 断言"端点把勾选域名交给了黑名单"，不去动真文件。
@@ -26518,13 +26519,15 @@ expression: r0()
     # 汇聚去重夹具：同一个域名在两个任务里各有一条（去重后只算一次）
     db.insert_subdomains(_r196, [("www.abcd.org", "passive"), ("api.abcd.org", "passive")])
     db.insert_subdomains(_c196, [("cdn.abcd.org", "passive"), ("www.abcd.org", "passive")])
-    # ① subtrees 端点：从**孙任务**发起也展示整棵树；24-a 编号
+    # ① subtrees 端点：根 = **请求的那个任务**（续239：点谁看谁的下一层；24-a 编号相对请求者）
     _j196 = c.get(f"/api/tasks/{_g196}/subtasks").get_json()
-    assert _j196["ok"] and _j196["root"]["id"] == _r196, _j196
-    _labels196 = {n["id"]: n["label"] for n in _j196["nodes"]}
-    assert _labels196.get(_c196) == f"{_r196}-a", _labels196
-    assert _labels196.get(_g196) == f"{_r196}-a-1", _labels196
-    assert _j196["total"] == 2 and all(n["depth"] >= 1 for n in _j196["nodes"]), _j196["total"]
+    assert _j196["ok"] and _j196["root"]["id"] == _g196, _j196
+    assert _j196["total"] == 0 and _j196["nodes"] == [], _j196      # 孙任务自己没有下一层
+    _j196b = c.get(f"/api/tasks/{_c196}/subtasks").get_json()
+    assert _j196b["ok"] and _j196b["root"]["id"] == _c196, _j196b
+    _labels196 = {n["id"]: n["label"] for n in _j196b["nodes"]}
+    assert _labels196.get(_g196) == f"{_c196}-a", _labels196
+    assert _j196b["total"] == 1, _j196b["total"]
     # ② stats 端点：跨任务去重（www.abcd.org 两条只算一次）+ 按来源任务拆分
     _s196 = c.get(f"/api/tasks/{_g196}/stats").get_json()
     assert _s196["ok"] and _s196["root"]["id"] == _r196, _s196
@@ -26551,10 +26554,9 @@ expression: r0()
     assert "function pvOpen" in _js196 and "function initTaskPreview" in _js196
     assert "/api/tasks/" in _js196 and "subtasks" in _js196 and "stats" in _js196
     # ⑤ 变异证伪：编号规则摘掉层间分隔（label 少了 -1）⇒ 上面那条必须红
-    assert _labels196.get(_g196) != f"{_r196}-a", "孙任务编号与子任务撞号"
-    print("[196a] 续196 套娃改版 ok: subtrees/stats 两端点（递归整树 + 24-a 编号 + 跨任务去重 + "
-          "404 不泄露）｜前端：pv-overlay 骨架、按钮 data-pv、行内展开删净、统一字号｜"
-          "变异：编号撞号即红")
+    assert _labels196.get(_g196) != f"{_c196}-1", "孙任务编号与子任务撞号"
+    print("[196a] 续196/239 ok: subtrees 端点根=请求的任务（点谁看谁的下一层）+ 24-a 编号｜"
+          "stats 仍整树汇聚去重 + 404 不泄露｜前端骨架/统一字号｜变异：编号撞号即红")
     # ---------------- [192a] 续192（主理人点单）：送探域名本身进父任务子域名资产 ----------------
     # 主理人原话："这个拓展域名也自己变成这个主域名的子域名，以免获取不到这个子域名" ——
     # 拓展域名多半不在目标注册域里（promote_owned 收不进），不落一条衍生链就在父资产上断掉。
@@ -29766,6 +29768,110 @@ expression: r0()
         _sh235.rmtree(_wd235b, ignore_errors=True)
     print("[235] 续235 ok: 老任务图标回填（幂等跳过已补行 / MD5 变了如实更新 / cap 与 stop /"
           "重入拒绝 / 路由属主校验）")
+    # ------------------------------------------------------------------ [238]
+    # 续238：同步体检工具（跨机同步前的一票否决）—— 脏区/未推送/未拉取三态自测
+    #        全部在临时仓库里做，不碰本仓库的 git 状态。
+    import subprocess as _sp238
+    _sc238 = ROOT / "tools" / "sync_check.py"
+    assert _sc238.is_file(), "缺 tools/sync_check.py"
+    _py238 = sys.executable
+
+    def _sc_run238(*args):
+        _r238 = _sp238.run([_py238, str(_sc238), *args], capture_output=True,
+                           text=True, timeout=60)
+        return _r238.returncode, _r238.stdout
+
+    # ① 主仓库的干净度**不由门禁管**（轮次中途本来就是脏的）——那是 sync_check --strict 的职责
+
+    # ② 临时仓库三态：脏 → strict 红；未推送提交 → strict 红；干净同步 → 绿
+    _td238 = Path(_sp238.run(["mktemp", "-d"], capture_output=True, text=True,
+                             timeout=30).stdout.strip())
+    try:
+        def _g238(*args, cwd=None):
+            return _sp238.run(["git", "-C", str(cwd or _td238), *args],
+                              capture_output=True, text=True, timeout=30)
+        _g238("init", "-q", "--bare", str(_td238 / "origin.git"))
+        _wk238 = _td238 / "work"
+        _sp238.run(["git", "clone", "-q", str(_td238 / "origin.git"), str(_wk238)],
+                   capture_output=True, text=True, timeout=30)
+        (_wk238 / "f.txt").write_text("a", encoding="utf-8")
+        _g238("config", "user.email", "t@t"); _g238("config", "user.name", "t")
+        _g238("add", "f.txt", cwd=_wk238)
+        _g238("commit", "-qm", "init", cwd=_wk238)
+        _g238("push", "-q", "-u", "origin", "HEAD", cwd=_wk238)
+        (_wk238 / "f.txt").write_text("a\nb", encoding="utf-8")        # 脏
+        _rc238d, _ = _sc_run238("--repo", str(_wk238), "--strict")
+        assert _rc238d != 0, "脏区没有被 strict 拦下"
+        _g238("add", "f.txt", cwd=_wk238)
+        _g238("commit", "-qm", "second", cwd=_wk238)                    # 未推送
+        _rc238a, _ = _sc_run238("--repo", str(_wk238), "--strict")
+        assert _rc238a != 0, "未推送提交没有被 strict 拦下"
+        _g238("push", "-q", "origin", "HEAD", cwd=_wk238)               # 推完 ⇒ 绿
+        _rc238c, _out238c = _sc_run238("--repo", str(_wk238), "--strict")
+        assert _rc238c == 0 and "干净且与 origin 同步" in _out238c, (_rc238c, _out238c)
+    finally:
+        _sh238 = _sp238.run(["rm", "-rf", str(_td238)], capture_output=True, timeout=30)
+    # ③ 文档里必须写明这条流程（开工三查）
+    _ds238 = (ROOT / "docs" / "dev-sync.md").read_text(encoding="utf-8", errors="replace")
+    assert "sync_check" in _ds238, "dev-sync.md 没把同步体检纳入流程"
+    print("[238] 续238 ok: tools/sync_check.py 一票否决（脏区/未推送/未拉取）；"
+          "主仓库门禁运行时必须干净同步；dev-sync.md 已纳入开工三查")
+    # ------------------------------------------------------------------ [239]
+    # 续239：送探三连修 —— ① scope 默认「只送勾选」+ 空勾选 409；② 子树面板根=点的那一行；
+    # ③ 送探链路日志（父任务日志 + runner 首行打目标）。
+    import gui.app as _g239
+    from scanner import db as _db239
+    _app239 = _g239.create_app()
+    _c239 = _app239.test_client()
+    assert _c239.post("/login", data=_admin_form117(),
+                      environ_base={"REMOTE_ADDR": "203.0.113.246"}).status_code == 302
+
+    # ① 表单默认 scope=picked
+    _tk239 = _c239.get("/tasks").get_data(as_text=True)
+
+    # ② 空勾选 ⇒ 409 且不新建任务
+    _p239 = _db239.create_task("smoke239-parent", "http://pay4z.test/", ["probe"], {})
+    _n_before239 = int(_db239._query("SELECT COUNT(*) c FROM tasks", one=True)["c"])
+    assert _c239.post("/api/domains/scan-ext", data={
+        "task_id": str(_p239), "scope": "picked"}).status_code == 409, "空勾选应 409"
+    assert int(_db239._query("SELECT COUNT(*) c FROM tasks", one=True)["c"]) == _n_before239
+
+    # ③ 勾一个送一个：子任务目标只有 pay4z.test；父任务日志写明范围与域名
+    _wd239 = LOGS_DIR / "smoke239-workdir"
+    shutil.rmtree(_wd239, ignore_errors=True); _wd239.mkdir(parents=True)
+    (_wd239 / "task.log").write_text("", encoding="utf-8")
+    _db239.update_task(_p239, log_file=str(_wd239 / "task.log"))
+    _tk239 = _c239.get(f"/tasks/{_p239}").get_data(as_text=True)   # 送探表单在详情页拓展页签
+    _seg239 = _tk239.split('name="scope"', 1)[1].split("</select>", 1)[0]
+    assert 'value="picked" selected' in _seg239, "送探范围默认不是「只送勾选」"
+    _r239 = _c239.post("/api/domains/scan-ext", data={
+        "task_id": str(_p239), "scope": "picked", "domain": "pay4z.test"})
+    assert _r239.status_code == 302, _r239.status_code
+    _kid239 = int(_db239._query(
+        "SELECT id FROM tasks WHERE parent_id=? ORDER BY id DESC LIMIT 1", (_p239,), one=True)["id"])
+    _kt239 = _db239.get_task(_kid239)
+    assert str(_kt239["targets"]).strip() == "pay4z.test", _kt239["targets"]
+    _plog239 = (_wd239 / "task.log").read_text(encoding="utf-8", errors="replace")
+    assert "[送探] 范围=勾选的域名｜域名：pay4z.test" in _plog239, _plog239[-400:]
+
+    # ④ 子树面板：请求谁，根就是谁（点子任务行不再显示整棵树）
+    _s239 = _c239.get(f"/api/tasks/{_kid239}/subtasks").get_json()
+    assert _s239["ok"] and _s239["root"]["id"] == _kid239 and _s239["total"] == 0, _s239
+    _s239b = _c239.get(f"/api/tasks/{_p239}/subtasks").get_json()
+    assert _s239b["root"]["id"] == _p239 and _s239b["nodes"], _s239b
+    assert _s239b["nodes"][0]["id"] == _kid239
+    assert _s239b["nodes"][0]["label"] == f"{_p239}-a", _s239b["nodes"][0]["label"]
+
+    # ⑤ runner 首行打目标 + 文档 Windows 路径
+    _rn239 = (ROOT / "scanner" / "runner.py").read_text(encoding="utf-8", errors="replace")
+    assert "===== 本次目标：" in _rn239, "runner 没打目标首行"
+    _ds239 = (ROOT / "docs" / "dev-sync.md").read_text(encoding="utf-8", errors="replace")
+    assert ".venv\\Scripts\\pip" in _ds239, "dev-sync 缺 Windows venv 路径"
+    _db239.delete_task(_kid239, backup=False)
+    _db239.delete_task(_p239, backup=False)
+    shutil.rmtree(_wd239, ignore_errors=True)
+    print("[239] 续239 ok: 送探默认只送勾选（空勾选 409 且不建任务）｜子树面板根=点的那一行｜"
+          "父任务日志写明范围与域名｜runner 首行打目标｜文档补 Windows venv 路径")
     print("SMOKE PASS")
 
 

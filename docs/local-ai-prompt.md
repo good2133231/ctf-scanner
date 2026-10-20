@@ -2,6 +2,7 @@
 
 > 用法：在本地机器上打开你的 AI 编程助手（Claude Code / Cursor 等），把下面整段粘进第一条消息。
 > 它假设你已 `git pull` 到最新。粘贴后正常说需求即可（"把 X 页签加个 Y"）。
+> **Windows 本机**：python/pip 用 `.venv\Scripts\` 下的（不是 `bin/`）。
 
 ---
 

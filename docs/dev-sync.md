@@ -16,9 +16,15 @@
 ## 每轮标准流程
 
 ### A. 在本地开发（新增）
+> **本地一次性准备**：`git clone` 后 `python -m venv .venv`；
+> **Windows** 用 `.venv\Scripts\pip install -r requirements.txt`（`bin/` 是 Linux/macOS 路径，
+> 这就是"`\'.venv\' 不是内部或外部命令\'"报错的来源）；跑门禁用
+> `.venv\Scripts\python tests/smoke.py`。没有 Chrome 时浏览器 E2E 组会红——留给服务器跑即可。
+
 
 ```
 1. git pull --rebase origin main          # 开工前先拿最新（含服务器上刚完成的轮次）
+1b. python tools/sync_check.py --strict   # 开工三查之一：脏区/未推送/未拉取必须全 0
 2. 读一遍 AGENTS.md（协作规矩）+ todo.txt 顶部"下一轮"清单
 3. 做一轮工作（轮号 = 上一轮 + 1，全局连续，不按机器分）
 4. 写齐三份记忆：CHANGELOG_AI.md（本轮小节）/ todo.txt（顶部小节）/ AGENTS.md（若有新规矩）
@@ -29,7 +35,9 @@
 ### B. 服务器接手（收尾门禁 + 上线）
 
 ```
-1. git pull --rebase origin main
+1. python tools/sync_check.py --strict   # 服务器开工三查：脏区/未推送必须先清零
+   （先于 pull：若服务器有未提交改动，pull --rebase 会拒绝，正好逼你先处理）
+1b. git pull --rebase origin main
 2. .venv/bin/python -m py_compile <本轮改过的 .py>     # 快速冒烟
 3. .venv/bin/python tests/smoke.py                     # 正式收尾门禁（约 7 分钟）
    - 若本地已跑过且全绿，服务器这次是"落地复核"；红了就在服务器上继续修（沿用同一轮号）
@@ -53,6 +61,11 @@
    push 前用两式 numstat 自查：`git diff --numstat` vs `git diff --ignore-cr-at-eol --numstat` 逐文件相等；
 6. **不把真实目标域名写进任何被跟踪的文件**（聊天里可以说，仓库里不行）；
 7. **本地永远不用真实数据库**（`data/scanner.db` 只在服务器）；测试一律 `CTFSCANNER_DB=<临时文件>`。
+8. **服务器收尾时工作区必须归零**：每轮结束 `git status --short` 必须为空——
+   未提交的"顺手热修"就是"GitHub 没同步完、本地拉了再改坏"的唯一来源（续238 实测抓到一次）；
+   体检命令：`python tools/sync_check.py --strict`。
+9. **禁止裸 `git reset --hard`**：只在 `git status` 为空且 `sync_check` 显示 0 未推/0 未拉时，
+   才允许用它把本地副本对齐 origin；有未提交改动时它会销毁唯一副本。
 
 ## 冲突处理
 

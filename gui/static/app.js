@@ -491,7 +491,7 @@ function pvSubtreeHtml(d) {
   }
   const rows = d.nodes.map(n => {
     const c = n.counts || {};
-    return `<tr><td class="mono">${pvEsc(n.label)}</td>`
+    return `<tr><td class="mono">${pvEsc(n.label)}（#${pvEsc(n.id)}）</td>`
       + `<td style="padding-left:${8 + (n.depth - 1) * 14}px">${pvEsc(n.name)}</td>`
       + `<td class="muted">${pvEsc(n.target || "-")}</td>`
       + `<td class="muted">站点 ${pvEsc(c.sites || 0)}<br>子域名 ${pvEsc(c.subs_own || 0)}`

@@ -4030,7 +4030,14 @@ def create_app():
         domains, scope_note154 = _ext_scan_domains()
         fallback = _safe_next(request.form.get("next"), url_for("tasks"))
         if not domains:
-            return redirect(fallback)
+            # 续239：以前这里**静默** redirect 回来，用户不知道"为什么点了没反应"。
+            _scope239 = (request.form.get("scope") or "all").strip().lower()
+            if _scope239 == "picked":
+                return _append_err("范围=只送勾选，但一个域名都没勾上 —— 在拓展域名页先勾选行，"
+                                   "或把范围切到「全任务」。", fallback, title="没有可送的域名")
+            logger.info(f"[gui] 送探没有可送的域名（scope={_scope239}）→ 不新建任务")
+            return _append_err("本任务没有可送的拓展域名（没有解析成功的拓展行）。", fallback,
+                               title="没有可送的域名")
         # 续178 入口合并（主理人确认"是一个东西"）：复选框勾选（默认）＝送探前先把
         # 「注册域命中任务目标」的域名追加为该任务的子域名（extdom.promote_domains
         # 自判归属，不属于的自动跳过）—— 归属追加的子域也能进送探任务的存活探测。
@@ -4148,6 +4155,15 @@ def create_app():
 
         db.record_ext_probes(int(from_task) if from_task.isdigit() else 0,
                              task_id, domains, kind="probe")
+        # 续239：送探链路写明白 —— 父任务日志留"谁、以什么范围、送了哪些域名、生了哪个任务"。
+        try:
+            _pt239 = db.get_task(_pid185) if _pid185 else None
+            _pl239 = str(_pt239["log_file"] or "") if _pt239 else ""
+            if _pl239 and Path(_pl239).parent.is_dir():
+                get_logger(f"task-{_pid185}", Path(_pl239).parent / "task.log").info(
+                    f"[送探] 范围={scope_note154}｜域名：{'、'.join(domains)}｜→ 新任务 #{task_id}")
+        except Exception as _e239:      # noqa: BLE001 - 日志辅助失败不影响送探本身
+            logger.warning(f"[gui] 送探父任务日志写入失败（不影响功能）：{_e239}")
         logger.info(f"[gui] 拓展域名探测任务 #{task_id} 已创建"
 
                     f"（{scope_note154 or f'勾选的 {len(domains)} 个域名'}，"
@@ -4186,7 +4202,7 @@ def create_app():
     @app.route("/api/tasks/<int:tid>/subtasks")
     @login_required
     def api_task_subtree(tid):
-        """续196：「子任务」预览框的数据源 —— parent_id 递归整棵子树 + 24-a 编号。
+        """续196/239：「子任务」面板的数据源 —— 从**请求的那个任务**出发递归子树 + 24-a 编号。
 
         编号规则（与 mock 一致）：根任务的直接子任务按序 a/b/c…，孙任务 a-1/a-2…；
         层数不设硬上限，由数据（parent_id）自然长出来。越权按 404（不泄露存在性）。
@@ -4194,7 +4210,8 @@ def create_app():
         task = _owned_task(tid)
         if not task:
             return jsonify({"ok": False, "error": "任务不存在或无权访问"}), 404
-        root = _task_tree_root(task)
+        # 续239：面板从**点的那一行**出发 —— 点子任务行看到的是它自己的下一层，不再上溯到树根。
+        root = task
         rid = int(root["id"])
         nodes, total = [], 0
 

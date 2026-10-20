@@ -339,6 +339,11 @@ class PipelineRunner:
         except (TypeError, ValueError):
             _base = 0
         db.update_task(ctx.task_id, status="running", progress=_base)
+        # 续239：把"这次到底在扫谁"打成第一行 —— 送探送错了域名时，日志一眼可见。
+        _tg239 = "; ".join(str(t[1]) for t in (ctx.targets or []))
+        ctx.logger.info(f"===== 本次目标：{_tg239 or '(空)'} ====="
+                        + (f"（送探自任务 #{ctx.options.get('rescan_of')}）"
+                           if ctx.options.get("rescan_of") else ""))
         total = max(1, len(stages))
         stopped = False
         failed = []
