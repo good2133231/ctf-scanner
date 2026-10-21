@@ -3,6 +3,23 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续254 附（2026-10-21，WorkBuddy · Step-5-Preview）：还原 todo/CHANGELOG 行尾为 CRLF（行尾回归史上第三次）
+
+纯行尾修复 + 一个环境坑登记，零逻辑改动。
+
+- [x] **现象**：64c2465 的 numstat 万行级假增减（todo 4760/4738、CHANGELOG 15668/15639），
+      `git diff 3b4a021..64c2465 --ignore-cr-at-eol` 下真实改动仅 65/2 —— 两个文件被从
+      CRLF 整体翻成 LF（`git ls-files --eol`：i/lf；3b4a021 里本是 i/crlf）。
+- [x] **根因**：仓库里 `todo.txt`/`CHANGELOG_AI.md`/`TODO.md` 形态是 CRLF（`AGENTS.md`
+      是 LF）；Windows 侧文件编辑把 CRLF 记忆文件整文件写成 LF。同族问题史上第三次
+      （① `core.autocrlf=true` 时代，后已设 false；② 续246 附2/附3 远程侧还原过一次；
+      ③ 本次）。TODO.md 未受影响（14/2 是真实内容改动）。
+- [x] **修法**：`sed -i 's/\r$//' <file> && sed -i 's/$/\r/' <file>` 先剥后加转回
+      CRLF，与 3b4a021 行尾形态逐字节一致（除本轮真实新增内容）。
+- [x] **登记**：AGENTS §2 新增「续254 附 行尾回归坑」—— 免疫动作：编辑 CRLF 记忆文件后、
+      提交前必跑 `git ls-files --eol todo.txt CHANGELOG_AI.md TODO.md` 核对 `i/crlf`，
+      不对就转回去，且行尾修复单独一个「附」提交、别和内容改动混提。
+
 ## 续254（2026-10-21，WorkBuddy · Step-5-Preview）：两项挂账拍板（katana 不采用 / _do_http 先不走）+ 3.14 探针升格口径
 
 主理人逐条拍板上两轮挂账，**零代码改动**（纯决策登记轮：改的只有 todo.txt / CHANGELOG /

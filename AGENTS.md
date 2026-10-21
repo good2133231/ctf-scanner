@@ -189,6 +189,29 @@ Flask Web 控制台（仿 ARL）。
   跑门禁连它一起注销：`env -u PYTHONPATH -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy
   -u https_proxy py -3 dev.py smoke`（`[8an]` 的 rmtree 就是这么打死的，续217 注释里记过
   同一现象）。
+  **续254 附 行尾回归坑（Windows 侧编辑记忆文件后必查）**：这四个记忆文件在仓库里的形态
+  **都不是纯 LF**：`todo.txt`/`CHANGELOG_AI.md`/`TODO.md` 是**纯 CRLF**；`AGENTS.md` 是
+  **混合行尾**（3b4a021 实测：2990 行 CRLF + 171 行 LF，`git ls-files --eol` 的 `i/` 列
+  显示 `mixed`）。AI 工具的文件编辑在 Windows 上会把文件**整文件归一成 LF**（续254 两次
+  实测：CRLF 的 todo/CHANGELOG 被翻成 LF 并提交进 64c2465；混合行尾的 AGENTS 的 2990 个
+  CRLF 行也被剥成纯 LF；同期编辑的 TODO.md 却没翻 —— 触发条件不明，别猜）⇒ `git add` 后
+  numstat 就是千行到万行级假增减（真实改动只有几十行，用 `git diff --ignore-cr-at-eol`
+  可验）。同族问题史上第三次：① `core.autocrlf=true` 时代（后已设 false）；
+  ② 续246 附2/附3 远程侧还原过一次；③ 续254 的 64c2465 把 todo/CHANGELOG 翻成 LF，
+  续254 附全部转回原形态（todo/CHANGELOG 用 sed 先剥后加；AGENTS 从 3b4a021 原字节重建、
+  新增段落按锚行行尾插入）。
+  **免疫动作**：编辑过这四个文件后、提交前，必跑
+  `git ls-files --eol AGENTS.md todo.txt CHANGELOG_AI.md TODO.md`：`todo/CHANGELOG/TODO`
+  的 `i/` 列必须是 `crlf`，`AGENTS.md` 必须是 `mixed`（行数随内容增长，别背数）。不是就
+  转回：纯 CRLF 文件用 `sed -i 's/\r$//' <file> && sed -i 's/$/\r/' <file>`（先剥后加，
+  对混合行尾也安全）；**AGENTS.md 这种混合文件别用 sed**（会把那 171 个 LF 行也改成
+  CRLF、又是几千行假增减），从上一个形态正确的提交重建：`git show <提交>:AGENTS.md`
+  取原字节，把本轮新增段落按**锚行的行尾**插回去。且**行尾修复单独一个「附」提交**，
+  别和内容改动混在一个提交里。
+  ⚠ 核对行尾**别用 `grep -c $'\r'`**：续254 实测这个工具链里它两次给出互相矛盾的结果
+  （同一文件：管道里报 0——实际有 2990 个 CR 行；循环里报"全是 CR"），都不可信；用
+  python 数字节（`b.count(b'\r\n')` / `b.count(b'\r')`）或 `git ls-files --eol` 的 `i/`
+  列才作数。
 - 外部工具：subfinder / puredns / httpx **均未安装** → 走内置兜底。**三个例外**：
   **fscan 可用**（续45 自编译 2.2.1 挂到 `tools/fscan/` 的**目录联接**，`settings.yaml` 的
   `tools.fscan=tools/fscan/fscan.exe`）→ 端口扫描 `engine=auto` 的**第一环命中**，实走 fscan；
