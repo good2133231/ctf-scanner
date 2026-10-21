@@ -692,9 +692,10 @@ DEFAULTS = {
         # VirusTotal **子域名**反查（续214）：`GET /v3/domains/<注册域>/subdomains`。
         # 与 FOFA / Shodan / Quake 那三家 favicon 反查**不是一条路** —— 那是"同源推断"，
         # 这是"已收录的父子关系"，补的正是"这个域名下还有哪些子域"。
-        # 需 config/keys.yaml 填 virustotal.key；**默认关**（外部接口不该在用户没点头时产生流量）。
+        # 需 config/keys.yaml 填 virustotal.key（或用口令加密的 config/keys.enc.yaml）；
+        # **默认开**（2026-10-21 主理人点单：key 已配好，开关不该再挡路；免费档由节流夹住）。
         # 免费档 4 次/分钟、500 次/天 ⇒ 节流靠 `min_interval`（秒），在模块内自己兑现。
-        "enabled": False,
+        "enabled": True,
         "max_domains": 20,       # 单任务最多查几个注册域（每个一次请求）
         "limit": 40,             # 单域名最多收多少子域（v3 硬上限 40）
         "min_interval": 15.0,    # 两次请求之间的最小间隔（免费档 4 次/分钟 ⇒ 15 秒）

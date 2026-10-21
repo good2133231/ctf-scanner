@@ -4303,6 +4303,27 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续258（2026-10-21，WorkBuddy · Step-5-Preview）：VT 开关默认开（主理人点单）+ key 加密入库
+
+- [x] VT key 加密入库：`config/keys.enc.yaml`（AES-256-GCM/PBKDF2-600k，147 字节），
+      明文 `1.txt` 已删；口令文件 `~/.secrets/keys-pass`（本机原先没有，已生成 32 字符随机口令）
+- [x] 真机验收：`tools/check_intel_sources.py` → **VT: ok**（example.com total=5919）；
+      解密读取路径验证通过（unlock source=file → load_keys 取值一致）
+- [x] **VT 开关默认开**（主理人点单）：DEFAULTS + settings.yaml + 策略页文案 + README 四处同步；
+      [214] 的 DEFAULTS/settings 一致性断言口径不变（实测相等）
+- [ ] **跨平台口令待定**：本机（随机 32 字符）与服务器（6 字节）口令不同 ⇒ 两份
+      keys.enc.yaml 不能互换。定了统一口令后：本机重加密 + 服务器侧 merge_key_dicts 合并
+      （服务器有 github.*，本机有 virustotal.key）
+
+**下一轮（续259）——只放未做的：**
+- [ ] 服务器全量门禁：拉取后 `bash update.sh` → SMOKE PASS 组数+耗时回填 CHANGELOG
+      续255/续256/续257/续258 门禁节
+- [ ] 跨平台口令统一（等主理人定值/给服务器口令）→ 两侧密文合并成一份
+- [ ] **3.14 探针先修红**（最近 ≥8 次全红）——服务器 `python3.14 tests/smoke.py` 复现；修绿后
+      再攒连续 ≥3 次全绿，才谈升必过
+- [ ] ICP 真 key（VT 已 ok，ICP 仍缺 key / miit 403）
+- [ ] 对面 AI 新交材料的三个"待主理人点"问题（13 的非破坏性边界 / OOB 立项 / 14 nuclei staging）
+
 ## 续257（2026-10-21，WorkBuddy · Step-5-Preview）：CLI 补 Host 碰撞入口（续183 挂账最后一截）
 
 - [x] `--hostcollide`：单次强开（任务选项 `hostcollide=true`，策略关着也生效）+ 阶段没写进

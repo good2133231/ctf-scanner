@@ -659,12 +659,12 @@
     <h2>VirusTotal 子域名反查</h2>
     <p class="muted note">走 <code>GET /v3/domains/&lt;注册域&gt;/subdomains</code> ——
       与上面三家 favicon 反查<b>不同路</b>：那三家回答"还有谁用了同一个图标"，VT 回答
-      "这个域名下还有哪些已收录的子域"。key 请写入 <code>config/keys.yaml</code> 的
-      <code>virustotal.key</code>；免费档 4 次/分钟、500 次/天，故两次请求之间按
+      "这个域名下还有哪些已收录的子域"。key 请写入 <code>config/keys.yaml</code>（或加密的
+      <code>config/keys.enc.yaml</code>）的 <code>virustotal.key</code>；免费档 4 次/分钟、500 次/天，故两次请求之间按
       「最小间隔」节流（填 0 可关掉节流 —— 会更快撞上 429）。</p>
     <label class="chk"><input type="checkbox" name="virustotal_enabled" value="1"
       {{ 'checked' if s.virustotal.enabled }}> <b>VirusTotal 子域名反查</b>
-      （需 <code>config/keys.yaml</code> 的 virustotal.key）</label>
+      （需 <code>config/keys.yaml</code> 或加密的 <code>config/keys.enc.yaml</code> 里的 virustotal.key）</label>
     <div class="row">
       <label>注册域上限 <input name="virustotal_max_domains"
         value="{{ s.virustotal.max_domains }}"></label>

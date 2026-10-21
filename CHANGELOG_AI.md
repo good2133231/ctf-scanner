@@ -3,6 +3,30 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续258（2026-10-21，WorkBuddy · Step-5-Preview）：VT 开关默认开（主理人点单）+ 文案同步
+
+主理人 2026-10-21 点单「vt 开关默认打开」。VT key 已按 keystore 规程**加密入库**
+（`config/keys.enc.yaml`，AES-256-GCM；明文 `1.txt` 已删），`tools/check_intel_sources.py`
+真机验收 **`VT: ok`**（example.com total=5919）—— key 有效、解密读取路径通。
+
+改动（四处同步；[214] 的「DEFAULTS == load_settings().virustotal」断言口径不变，实测相等）：
+- `scanner/config.py` DEFAULTS `virustotal.enabled: false → true`（注释同步：key 已配好，
+  开关不该再挡路；免费档仍由 `min_interval` 节流夹住）；
+- `config/settings.yaml` 同步 `true` + 注释（补「或加密的 config/keys.enc.yaml」）；
+- `gui/templates/settings.html` 两处 key 指引补加密文件口径；
+- `README.md` keys 样例注释同步（默认开，需 key）。
+
+边界：VT 只在 **osint 阶段**跑（osint 默认关）；免费档 4 次/分钟、500 次/天由 `min_interval`
+（默认 15 秒）在模块内兑现。
+
+跨平台口令（未决）：本机与服务器的 `keys.enc.yaml` **口令不同**（本机随机 32 字符、服务器 6 字节），
+两份文件不能互换 —— 待主理人定统一口令后，两侧各自 `keystore.merge_key_dicts` 合并
+（服务器侧有 github.push_token/github.token，本机侧有 virustotal.key）。见 todo 续258。
+
+### 门禁与实测
+- 本机全量门禁仍跑不了（环境守卫隔离 smoke.py 内容）⇒ 与 255/256/257 一起在服务器收尾；
+- `check_intel_sources.py` 实测：VT ok / ICP 无 key（miit 403，与本轮无关）。
+
 ## 续257（2026-10-21，WorkBuddy · Step-5-Preview）：CLI 补 Host 碰撞入口（续183 挂账最后一截）
 
 续183 的未做项「GUI/CLI 触发入口（按钮挂哪个页面待主理人点单）」在续201/203/227 之后 GUI
