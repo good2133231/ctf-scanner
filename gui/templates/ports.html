@@ -19,7 +19,7 @@
         <td>{{ p.id }}</td>
         <td><a href="{{ url_for('task_detail', task_id=p.task_id) }}">#{{ p.task_id }}</a></td>
         <td class="mono">{{ p.host or '-' }}</td>
-        <td class="muted mono">{{ p.ip or '-' }}</td>
+        <td class="muted mono">{% if p.ip %}<a href="{{ ip_drill(p.ip) }}" title="查看解析到 {{ p.ip }} 的全部子域名">{{ p.ip }}</a>{% else %}-{% endif %}</td>
         <td>{{ p.port }}</td>
         <td>{{ p.service or '-' }}</td>
         <td class="muted small mono">{{ p.banner or '-' }}</td>

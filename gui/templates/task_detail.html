@@ -454,7 +454,7 @@
       <tbody>
       {% for s in subs %}
         <tr><td class="mono">{{ idn_display(s.domain) }}</td>
-          <td class="muted small mono">{{ s.ip or '-' }}
+          <td class="muted small mono">{% if s.ip %}<a href="{{ ip_drill(s.ip) }}" title="查看解析到 {{ s.ip }} 的全部子域名">{{ s.ip }}</a>{% else %}-{% endif %}
             {%- if not s.ip and s.ip_note %}<br><span class="muted small"
               title="为什么没有解析结果">{{ ip_note_label(s.ip_note) }}</span>{% endif %}</td>
           <td>{% if s.cdn %}<span class="sev sev-medium">{{ s.cdn }}</span>
@@ -579,7 +579,7 @@
                 name="domain" value="{{ s.domain }}"></td>
             <td class="mono">{{ idn_display(s.domain) }}</td>
             <td>{{ conf_badge(s) }}</td>
-            <td class="muted small mono">{{ s.ip or '-' }}
+            <td class="muted small mono">{% if s.ip %}<a href="{{ ip_drill(s.ip, ext=True) }}" title="查看解析到 {{ s.ip }} 的全部拓展域名">{{ s.ip }}</a>{% else %}-{% endif %}
               {%- if not s.ip and s.ip_note %}<br><span class="muted small"
                 title="为什么没有解析结果">{{ ip_note_label(s.ip_note) }}</span>{% endif %}</td>
             <td>{% if s.cdn %}<span class="tech-tag">{{ s.cdn }}</span>
@@ -632,7 +632,7 @@
         <tbody>
         {% for p in ports %}
           <tr><td class="mono">{{ p.host or '-' }}</td>
-            <td class="muted mono">{{ p.ip or '-' }}</td>
+            <td class="muted mono">{% if p.ip %}<a href="{{ ip_drill(p.ip) }}" title="查看解析到 {{ p.ip }} 的全部子域名">{{ p.ip }}</a>{% else %}-{% endif %}</td>
             <td>{{ p.port }}</td>
             <td>{{ p.service or '-' }}</td>
             <td class="muted small mono">{{ p.banner or '-' }}</td></tr>
@@ -665,7 +665,7 @@
       <tbody>
       {% for c in csegs %}
         <tr><td class="mono">{{ c.segment or '-' }}</td>
-          <td class="mono">{{ c.ip or '-' }}</td>
+          <td class="mono">{% if c.ip %}<a href="{{ ip_drill(c.ip, ext=True) }}" title="查看解析到 {{ c.ip }} 的全部拓展域名">{{ c.ip }}</a>{% else %}-{% endif %}</td>
           <td>{{ c.count }}</td>
           <td class="muted small mono">{{ c.domains or c.note or '-' }}</td></tr>
       {% else %}

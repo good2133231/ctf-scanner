@@ -683,6 +683,22 @@ def _fold_dirs(rows, show_all):
     return rows, hidden
 
 
+def _ip_drill(ip, ext=False):
+    """IP → 域名下钻链接（续256-T10，主理人点单「IP→域名下钻链接」）。
+
+    资产表里的 IP 点下去 = 「看解析到这个 IP 的域名」：自身子域名口径跳
+    `/subdomains?q=<ip>`、拓展域名口径跳 `/extdomains?q=<ip>`。两条页的 q 搜索列
+    都含 `ip`（`db._ASSET_PAGES` 的 subdomains 列清单），拓展域名页的分组视图同样
+    吃 q（`extdom.group_page(q=…)`）—— 所以一个链接两种视图都落得进去。
+    空 IP 返回空串：模板据此渲染 '-'，不渲染死链。只做 URL 编码，不猜 IP 格式。
+    """
+    ip = str(ip or "").strip()
+    if not ip:
+        return ""
+    base = "/extdomains" if ext else "/subdomains"
+    return f"{base}?q={quote(ip)}"
+
+
 def _asset_tree(task_id):
     """资产关系（续151，借鉴 ARTEX 的父子图**思路**，落地成服务端缩进树）：
         root_domain → subdomain → ip → port(service)。
@@ -937,6 +953,7 @@ def create_app():
     app.jinja_env.globals["packet_python"] = packetcodec.to_python
     app.jinja_env.globals["dir_url"] = _dir_url
     app.jinja_env.globals["dir_path"] = _dir_path_display
+    app.jinja_env.globals["ip_drill"] = _ip_drill
     app.jinja_env.globals["asset_tree"] = _asset_tree   # 续151：资产关系图
     db.init_db()
     # 启动时对账（续49 语义变更）：进程重启后，之前 status='running' 的孤儿任务没人推进 ——

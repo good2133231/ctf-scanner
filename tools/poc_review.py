@@ -46,6 +46,10 @@ SRC_DIR_NAME = "config/pocs-imported"
 DEST_DIR = ROOT / "config" / "pocs-user"
 CALIB_JSON = ROOT / "logs" / "poc_calibration.json"
 DEFAULT_SHEET = ROOT / "logs" / "poc_review.md"
+# `--dupes` 列前多少组（按条数降序）。**截断必须说出口**（续256-T11，§0 第 10 条：
+# 展示过滤 ≠ 不存在）——总组数由 `dupes_total()` 另行报出，静默截断会让
+# "还有没有更多同指纹组"变成猜。
+DUPES_CAP = 40
 # 复核栏认这两个词（大小写、首尾空白都不敏感）。别的都算"没判"。
 OK_TOKENS = {"ok", "pass"}
 
@@ -166,13 +170,38 @@ def _annotate_dupes(rows):
     return rows
 
 
-def dupes(src_dirs=None, min_n=2):
-    """按判据分组返回 `[(条数, 匹配器摘要, [id…])]`，用来回答"这 305 条真有 305 份判据吗"。"""
+def dupes(src_dirs=None, min_n=2, limit=DUPES_CAP):
+    """按判据分组返回 `[(条数, 匹配器摘要, [id…])]`，用来回答"这 305 条真有 305 份判据吗"。
+
+    按条数降序，默认只返回前 `limit` 组（输出可读性）；**总组数另行 `dupes_total()`
+    报出** —— 静默截断会让"还有没有更多同指纹组"变成猜（续256-T11）。
+    """
     groups = {}
     for r in candidates(src_dirs=src_dirs):
         groups.setdefault(r["matchers"], []).append(r["id"])
     return sorted(((len(v), k, sorted(v)) for k, v in groups.items() if len(v) >= min_n),
-                  key=lambda t: (-t[0], t[1]))[:40]
+                  key=lambda t: (-t[0], t[1]))[:limit]
+
+
+def dupes_total(src_dirs=None, min_n=2):
+    """同指纹分组的**总组数**（不受 `DUPES_CAP` 截断）——给 CLI 报"共 N 组仅列前 M 组"用。"""
+    groups = {}
+    for r in candidates(src_dirs=src_dirs):
+        groups.setdefault(r["matchers"], []).append(r["id"])
+    return sum(1 for v in groups.values() if len(v) >= min_n)
+
+
+def _dupes_note(total, shown):
+    """列出范围提示行（续256-T11）：截断时必须说出口（§0 第 10 条：展示过滤 ≠ 不存在）。
+
+    截断：「同指纹共 N 组，按条数降序仅列前 M 组，另有 K 组未列出」；
+    未截断：「同指纹共 N 组，全部列出」。单独成函数是为了可单测 —— 这行是用户唯一能
+    看出"被截断"的地方，写死在 main() 里就没法被门禁钉住。
+    """
+    if total > shown:
+        return (f"（同指纹共 {total} 组，按条数降序仅列前 {shown} 组，"
+                f"另有 {total - shown} 组未列出）")
+    return f"（同指纹共 {total} 组，全部列出）"
 
 
 def write_sheet(rows, out, note=""):
@@ -291,9 +320,11 @@ def main(argv=None):
     if a.dupes:
         gs = dupes(a.src)
         tot = len(candidates(a.src))
+        n_all = dupes_total(a.src)
         share = sum(n for n, _, _ in gs)
         print(f"[i] {tot} 条导入 POC 的判据只有 {tot - share + len(gs)} 种："
-              f"其中 {share} 条与别人共用**一字不差**的匹配器（列前 {len(gs)} 组）")
+              f"其中 {share} 条与别人共用**一字不差**的匹配器"
+              + _dupes_note(n_all, len(gs)))
         for n, k, ids in gs:
             print(f"  {n:3d} 条｜{k[:100]}")
             print(f"        {'、'.join(ids[:8])}{' …' if len(ids) > 8 else ''}")

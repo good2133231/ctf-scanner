@@ -4303,6 +4303,28 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续256（2026-10-21，WorkBuddy · Step-5-Preview）：四项目对比剩余 T10/T11（IP→域名下钻链接 + --dupes 组数截断可见）
+
+- [x] T10 IP→域名下钻链接：单一产地 `gui/app.py::_ip_drill`（jinja 全局 `ip_drill`，模板不各拼
+      URL）——自身子域口径跳 `/subdomains?q=<ip>`、拓展口径跳 `/extdomains?q=<ip>`（两条页 q
+      列都含 ip、分组视图也吃 q）；空 IP 返回空串不渲染死链。落点 9 处：subdomains.html、
+      任务详情子域名/拓展/端口/C 段四个页签、ports.html、csegs.html、extdomains.html 分组+平铺
+- [x] T11 `--dupes` 组数截断可见：`DUPES_CAP=40` 显式化 + `dupes(limit=)` 参数 + `dupes_total()`
+      总组数 + `_dupes_note()` 提示行（截断报「共 N 组，仅列前 M 组，另有 K 组未列出」；未截断报
+      「全部列出」）；CLI `--dupes` 首行带上。真数据：305 条导入 POC 共 25 组（未触帽）
+- [x] [256] 断言组：ip_drill 单测（含 IPv6 编码）+ 页面级三处（隔离库插 own/ext 两行同 IP）+
+      dupes 三级（纯函数/真数据不变量/CLI 输出）；全部先经 logs/verify256.py 17 项实测再入禁
+- [x] 续255 已推送同步（3e40a09；用户终端 GCM 登录后 push 成功，sync_check rc=0，保险分支/
+      bundle/调试文件已清理）
+
+**下一轮（续257）——只放未做的：**
+- [ ] 服务器全量门禁：`git pull --rebase`（快进到 3e40a09）→ `bash update.sh --smoke` →
+      SMOKE PASS 组数+耗时回填 CHANGELOG 续255/续256 门禁节
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针升必过（口径见 CHANGELOG 续254：真 runner 连续 ≥3 次 push 全绿）
+- [ ] hostcollide 的 GUI/CLI 触发入口（续183 残留，待主理人点单按钮位置）
+- [ ] 对面 AI 新交材料的三个"待主理人点"问题（13 的非破坏性边界 / OOB 立项 / 14 nuclei staging）
+
 ## 续255（2026-10-21，WorkBuddy · Step-5-Preview）：IP 反查真机验证收尾 + 主理人四连点单（自家子域直接进站 / 双斜杠 / 同路径折叠）
 
 - [x] 续173 剩余（三源成败**真机联网**验证）闭环：4 个公共 IP（8.8.8.8 / 1.1.1.1 / 223.5.5.5 /

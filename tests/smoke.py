@@ -30742,6 +30742,54 @@ expression: r0()
         "续255：归属追加不许再被 auto_expand 门控（主理人点单：自家子域直接进站点）"
     print("[255] 续255 ok: iprecon 三修复（.arpa/备用追加/配额原因）｜目录双斜杠归一｜"
           "跨站同路径折叠｜归属追加解门控+同轮探测入站")
+    # ------------------------------------------------------------------ [256]
+    # 续256：四项目对比剩余 T10（IP→域名下钻链接）+ T11（poc_review --dupes 组数截断可见）。
+    from gui.app import _ip_drill as _idp256
+    import importlib.util as _ilu256
+    import io as _io256
+    import contextlib as _cl256
+
+    # ⓪ T10 下钻链接：单一产地（模板只认 ip_drill；自身子域/拓展域名两个口径两条路）
+    assert _idp256("203.0.113.9") == "/subdomains?q=203.0.113.9"
+    assert _idp256("203.0.113.9", ext=True) == "/extdomains?q=203.0.113.9"
+    assert _idp256("") == "" and _idp256(None) == "", "空 IP 不渲染死链"
+    assert _idp256(" 10.0.0.1 ") == "/subdomains?q=10.0.0.1"
+    # 页面级：同 IP 插一行自身子域 + 一行拓展域名，三个视图都要出现对应口径的下钻链接
+    db.insert_subdomains(tid, [("drill-smoke.example.com", "subfinder")])
+    db.set_subdomain_net(tid, {"drill-smoke.example.com": ("203.0.113.9", "")})
+    db.insert_subdomains(tid, [("drill-ext-smoke.example.com", "js:mine")])
+    db.set_subdomain_net(tid, {"drill-ext-smoke.example.com": ("203.0.113.9", "")})
+    assert 'href="/subdomains?q=203.0.113.9"' in c.get("/subdomains").get_data(as_text=True), \
+        "子域名页 IP 没有下钻链接"
+    _td256 = c.get(f"/tasks/{tid}").get_data(as_text=True)
+    assert 'href="/subdomains?q=203.0.113.9"' in _td256, "任务详情子域名页签缺下钻链接"
+    assert 'href="/extdomains?q=203.0.113.9"' in _td256, "任务详情拓展域名页签缺下钻链接"
+    assert 'href="/extdomains?q=203.0.113.9"' in \
+        c.get("/extdomains?group=0").get_data(as_text=True), "拓展域名页 IP 没有下钻链接"
+
+    # ① T11：--dupes 的截断必须说出口（纯函数 + 真数据不变量 + CLI 输出三级）
+    _spec256 = _ilu256.spec_from_file_location("poc_review256",
+                                               str(ROOT / "tools" / "poc_review.py"))
+    _pr256 = _ilu256.module_from_spec(_spec256)
+    _spec256.loader.exec_module(_pr256)
+    _note256 = _pr256._dupes_note(50, 40)
+    assert "共 50 组" in _note256 and "仅列前 40 组" in _note256 \
+        and "另有 10 组未列出" in _note256, _note256
+    _nf256 = _pr256._dupes_note(12, 12)
+    assert "全部列出" in _nf256 and "未列出" not in _nf256, _nf256
+    _tot256 = _pr256.dupes_total()
+    _gs256 = _pr256.dupes()
+    assert len(_gs256) <= _pr256.DUPES_CAP and _tot256 >= len(_gs256), (len(_gs256), _tot256)
+    assert len(_pr256.dupes(limit=1)) <= 1, "limit 参数必须真的截断（变异证伪：帽子变无限）"
+    _buf256 = _io256.StringIO()
+    with _cl256.redirect_stdout(_buf256):
+        _rc256 = _pr256.main(["--dupes"])
+    _out256 = _buf256.getvalue()
+    assert _rc256 == 0 and "同指纹共" in _out256, _out256[:200]
+    if _tot256 > _pr256.DUPES_CAP:      # 真数据够多时，截断提示必须出现在 CLI 输出里
+        assert "仅列前" in _out256 and "未列出" in _out256, _out256[:300]
+    print("[256] 续256 ok: IP→域名下钻链接（ip_drill 单一产地，子域/拓展两口径，页面级三处）｜"
+          "poc_review --dupes 截断可见（DUPES_CAP/dupes_total/_dupes_note，纯函数+真数据+CLI）")
     print("SMOKE PASS")
 
 

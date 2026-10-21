@@ -25,7 +25,7 @@
       {%- endfor %}{% endif %}</td>
 
     <td>{{ conf_badge(s) }}</td>
-    <td class="muted small mono">{{ s.ip or '-' }}
+    <td class="muted small mono">{% if s.ip %}<a href="{{ ip_drill(s.ip, ext=True) }}" title="查看解析到 {{ s.ip }} 的全部拓展域名">{{ s.ip }}</a>{% else %}-{% endif %}
       {%- if not s.ip and s.ip_note %}<br><span class="muted small"
         title="为什么没有解析结果">{{ ip_note_label(s.ip_note) }}</span>{% endif %}</td>
     <td>{% if s.cdn %}<span class="sev sev-medium">{{ s.cdn }}</span>
@@ -186,7 +186,7 @@
             <td class="mono">{{ idn_display(s.domain) }}</td>
             <td class="mono">{{ bl_hits.get(s.domain) or '-' }}</td>
             <td class="muted">{{ source_label(s.source) }}</td>
-            <td class="muted small mono">{{ s.ip or '-' }}</td>
+            <td class="muted small mono">{% if s.ip %}<a href="{{ ip_drill(s.ip, ext=True) }}" title="查看解析到 {{ s.ip }} 的全部拓展域名">{{ s.ip }}</a>{% else %}-{% endif %}</td>
           </tr>
           {% else %}
           <tr><td colspan="6" class="muted">当前筛选下没有被黑名单过滤的域名。</td></tr>
