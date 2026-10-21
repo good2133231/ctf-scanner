@@ -28816,7 +28816,11 @@ expression: r0()
     _env217 = _ds217.DirscanStage._dirmap_env()
     assert "dirmap_compat" in _env217["PYTHONPATH"]
     assert _env217["PYTHONWARNINGS"] == "ignore::SyntaxWarning"
-    assert Path(_ds217.DirscanStage._dirmap_python({"python": "python"})).is_file()
+    _p217 = _ds217.DirscanStage._dirmap_python({"python": "python"})
+    # CI（无 .venv、依赖装在系统 Python）上解析结果是 PATH 里的名字而非绝对路径 ——
+    # 判据是「解析出一个**可用**解释器」：绝对路径要存在，名字要能在 PATH 里找到
+    # （[6u] 同款可移植口径：环境差异只要求"不失败"，不假装成"必须绝对路径"）。
+    assert Path(_p217).is_file() or shutil.which(_p217), _p217
 
     _dtmp217 = Path(tempfile.mkdtemp(prefix="smoke217-dirmap-"))
     try:

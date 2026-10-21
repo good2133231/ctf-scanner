@@ -3,6 +3,22 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续259 附3（2026-10-21，WorkBuddy · Step-5-Preview）：[217] 的 dirmap 解释器断言按可移植口径放宽（CI 长期红点）
+
+CI 越过 [214] 后红在 `tests/smoke.py:28819`：
+
+```
+assert Path(_ds217.DirscanStage._dirmap_python({"python": "python"})).is_file()
+```
+
+根因是**环境差异**（与本轮改动无关，属 40 次连红的一部分）：CI 没有 `.venv`、依赖装在系统
+Python 上 ⇒ `_dirmap_python` 落到 `pick_python("python")`，返回的是 **PATH 里的名字**（"python"）
+而不是绝对路径 ⇒ `Path("python").is_file()` 恒 False。本机/服务器有 `.venv` 所以永远看不见。
+
+按 [6u] 同款可移植口径放宽（判据改成「解析出一个**可用**解释器」）：
+`Path(p).is_file() or shutil.which(p)` —— 绝对路径要存在、名字要能在 PATH 里找到，
+两边都算过；print 文案不变。
+
 ## 续259 附2（2026-10-21，WorkBuddy · Step-5-Preview）：[214] 组的「VT 出厂关」登记按续258 改出厂开
 
 CI 越过 [184](c) 后红在下一条（`tests/smoke.py:28453`）：
