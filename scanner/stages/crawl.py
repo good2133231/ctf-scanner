@@ -6,9 +6,8 @@
   （主理人点单："这些我们也要智能测漏洞"）。带参链接才是注入面，无参的静态页喂给漏洞检测
   只是白花请求 —— 所以这里就筛掉，不让 vulnscan 再去判一次。
 
-开关两层（与 portscan 同一形状）：策略 `crawl.enabled`（**出厂关**）+ 任务选项 `crawl: true`。
-默认关是因为它**一定会发请求**：一个站点一页就是一次 GET，开着就等于把"扫不扫"这件事
-从用户手里拿走了。
+开关两层（与 portscan 同一形状）：策略 `crawl.enabled` + 任务选项 `crawl: true`。续198 出厂**关**（它一定会发请求：一个站点一页就是一次 GET）；
+**续249 起默认开**（主理人点单"默认要开"）——开关仍完整保留：策略页随时可关，关掉时本阶段一个请求都不发；真正兜底的是额度上限（max_sites / max_pages / max_links / 同站判据），不是"替你决定"。
 """
 from .. import crawl as crawl_mod, db
 from ..utils import http_request, pool_run

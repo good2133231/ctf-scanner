@@ -248,6 +248,11 @@ Flask Web 控制台（仿 ARL）。
   无 scheme 的别把 host 当路径），来源标签 `历史URL(wayback)` / `历史URL(OTX)`；
   按注册域查一次并缓存，**只并入深扫**（浅扫保住精选额度）、与字典共用 `max_paths` 额度；
   上游失败只记一行跳过。别再接第二个爆破引擎（puredns+massdns 已是最优）。
+- **站点爬虫默认开（续249）**：`crawl.enabled` 出厂 **True**（主理人点单）。它一定会发
+  GET，护栏是额度上限（max_sites/max_pages/max_links/同站判据）与策略页可关（关掉零请求，
+  `[198]` 家族钉着）。页面入口（`urls` 表）与带参链接（vulnscan feed）都从这里来。
+  katana 是**可选增强**（增量=JS/robots/sitemap/并发），要接就做成"装了优先用、没装退回内置"，
+  别让默认路径依赖 Go 二进制。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`

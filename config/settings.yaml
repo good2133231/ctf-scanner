@@ -258,7 +258,7 @@ hostcollide:
   max_requests: 200           # 单任务请求预算（只读 GET）
   timeout: 5
 crawl:
-  enabled: false              # 续198：站点爬虫（收页面里写着的链接）—— 默认关，它一定会发 GET
+  enabled: true               # 续249 起默认开（主理人点单）；额度上限见下，要关：策略页取消勾选
   max_sites: 30               # 每任务最多爬多少个站点
   max_links: 60               # 每站点最多收多少条
   max_pages: 8                # 每站点最多抓几页（含首页）

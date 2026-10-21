@@ -4303,6 +4303,21 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续249（2026-10-21，WorkBuddy · Claude）：站点爬虫默认开 + katana 与内置爬虫的区别
+
+- [x] 内置 `crawl` 阶段（续198：页面链接 → urls 表 + 带参喂 vulnscan）**默认开**：
+      DEFAULTS/settings.yaml 四处登记一致；策略页可关（关掉零请求）；额度上限照旧兜底
+- [x] katana vs 内置爬虫的区别写进 CHANGELOG：增量在 JS/robots/sitemap 与并发；
+      内置零依赖且落点已通 ⇒ 内置做默认，katana 留作可选增强（装了优先用，同 subfinder 形状）
+- [x] 全量 SMOKE PASS（276 组；a 红 settings.yaml 混行尾，b 绿）
+
+**下一轮（续249 之后）——只放未做的：**
+- [ ] katana 可选增强接入（装了优先用/没装退回内置 crawl）—— 等主理人确认
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+
+
 ## 续248（2026-10-21，WorkBuddy · Claude）：历史 URL（wayback+OTX，零目标流量）并入目录候选
 
 - [x] `scanner/urlhist.py` 原生复刻 gau 的两路数据源（不引 Go 二进制，迁移性优先）；

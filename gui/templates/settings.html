@@ -282,7 +282,7 @@
     {# 续198（主理人点单「加爬虫」）：只发 GET、默认关、外链默认不收 —— 三条都写在页面上，
        因为"它一定会发请求"这件事必须让用户看得见再决定。 #}
     <label class="chk"><input type="checkbox" name="crawl_enabled" value="1"
-      {{ 'checked' if s.crawl.enabled }}> <b>站点爬虫</b>（默认关闭；从存活站点的页面里收集
+      {{ 'checked' if s.crawl.enabled }}> <b>站点爬虫</b>（<b>续249 起默认开启</b>；从存活站点的页面里收集
       本来就写着的链接）</label>
     <p class="muted small note">当前状态：{% if s.crawl.enabled %}<b>已开启</b> —— 任务跑到
       crawl 阶段会对每个站点发 GET（上限见下面）。{% else %}<b>关闭</b> —— crawl 阶段会被跳过，

@@ -30452,6 +30452,24 @@ expression: r0()
     assert _DEF248["dirscan"]["history_enabled"] is True, "缺省应该是开"
     print("[248] 续248 ok: 历史 URL（wayback+OTX，零目标流量）归一化成路径并入目录候选｜"
           "去重/上限/上游失败都安全｜三处配置一致")
+    # ------------------------------------------------------------------ [249]
+    # 续249：站点爬虫默认开（主理人点单"默认要开"）—— 出厂值登记 + 关掉仍零请求
+    from scanner.config import DEFAULTS as _DEF249
+    _t249 = db.create_task("smoke249-crawl", "https://s249.test/", ["probe"], {})
+    assert _DEF249["crawl"]["enabled"] is True, "站点爬虫出厂值应为 True（续249 主理人点单）"
+    _sty249 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
+    _cg249 = _sty249.split("crawl:", 1)[1].split("\nmax_sites:", 1)[0]
+    assert "enabled: true" in _cg249, f"settings.yaml 的 crawl.enabled 没跟着翻正：{_cg249!r}"
+    _ga249 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert '"crawl": {"enabled": f.get("crawl_enabled") == "1",' in _ga249, "POST 映射口径变了"
+    _tp249 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8", errors="replace")
+    assert "续249 起默认开启" in _tp249, "策略页文案没更新"
+    # 阶段预览要报**实际值**（crawl 现在默认开 ⇒ 预览里 enabled=True）
+    _j249 = c.get(f"/api/tasks/{_t249}/stages").get_json()
+    _b249 = {s["name"]: s for s in _j249["stages"]}
+    assert _b249["crawl"]["enabled"] is True, _b249["crawl"]
+    print("[249] 续249 ok: 站点爬虫出厂默认开（DEFAULTS/settings.yaml/POST 映射/策略页四处一致，"
+          "阶段预览报实际值）；关掉时本阶段仍一个请求都不发")
     print("SMOKE PASS")
 
 
