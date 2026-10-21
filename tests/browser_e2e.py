@@ -830,11 +830,12 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     page.ev("document.querySelector('#task-form button[data-ck-mode=all]').click()")
     _on10 = page.ev(f"document.querySelectorAll('{_cb10}:checked').length")
     _off_on10 = page.ev("!!document.querySelector('#task-form input[name=offline]').checked")
-    # 续201：一键勾选覆盖的是 15 阶段 + 3 深度 + 1 拓展 = 19（外加 offline 共 20 个框）。
+    # 续201：一键勾选覆盖的是 15 阶段 + 深度 + 1 拓展；续250 起深度少一项（全端口勾选
+    # 从建任务表单摘掉、挪到任务详情「端口」页签按钮）⇒ 18 项（外加 offline 共 19 个框）。
     # 「Host 碰撞」那颗**刻意不在任何 data-ck-group 里** —— 它是独立的任务级开关，
     # 混进"拓展选项"会让一键勾选的语义变浑（[118] 的分组断言就是钉这个的）。
-    rep.check("[10] 「全部勾上」把 scope 覆盖的 19 项全勾上（15 阶段 + 3 深度 + 1 拓展）",
-              _on10 == _tot10 - 1 == 19, f"总 {_tot10} / 勾上 {_on10}")
+    rep.check("[10] 「全部勾上」把 scope 覆盖的 18 项全勾上（15 阶段 + 2 深度 + 1 拓展）",
+              _on10 == _tot10 - 1 == 18, f"总 {_tot10} / 勾上 {_on10}")
     rep.check("[10] 「全部勾上」不带动离线模式（勾它=禁用外部工具，与跑全相反）",
               _off_on10 is False, f"offline.checked={_off_on10}")
     page.ev("document.querySelector('#task-form button[data-ck-mode=none]').click()")

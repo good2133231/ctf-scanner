@@ -2315,7 +2315,10 @@ def main():
 
     # 7) GUI 可见性：建任务勾选、策略强度下拉/额度；**补扫入口已摘掉**（续145，用户点单）
     _tasks_html = c.get("/tasks").get_data(as_text=True)
-    assert 'name="portscan_full"' in _tasks_html and 'name="dirscan_full"' in _tasks_html
+    # 续250：portscan_full 勾选已从建任务表单摘掉（全端口改到任务详情「端口」页签按钮）；
+    # dirscan_full 仍在（全目录深扫仍是任务级选项）
+    assert 'name="portscan_full"' not in _tasks_html, "建任务表单不该再有全端口勾选（续250）"
+    assert 'name="dirscan_full"' in _tasks_html
     _set_html = c.get("/settings").get_data(as_text=True)
     assert 'name="dirscan_mode"' in _set_html and 'name="dirscan_quick_max_paths"' in _set_html
     assert 'name="dirscan_suffix_aware"' in _set_html
@@ -11197,7 +11200,9 @@ http:
     #    续170 按主理人点单给**站点页签**加回一颗「重新截图」（`/api/sites/reshoot`，只排
     #    screenshot 阶段的那一种），所以那一档翻成"**恰好那一个**"；而 GET 先闭合 / 不嵌套 /
     #    标签配平这三条红线照旧 —— 它们本来就是为"往页签里加表单"这件事立的：那个新表单
-    #    包着整张站点表，漏一个 `</form>` 就把分页链接整块吞进表单里。端口 / 目录仍是零。
+    #    标签配平这三条红线照旧 —— 它们本来就是为"往页签里加表单"这件事立的：那个新表单
+    #    包着整张站点表，漏一个 `</form>` 就把分页链接整块吞进表单里。
+    #    续250：端口页签多了「全端口扫描」一颗（pane-ports=1）；目录页签仍是零。
     for _pane7s, _post7s, _posts7s in (("pane-ext", 'action="/api/domains/scan-ext"', 1),
                              ("pane-sites", 'action="/api/sites/reshoot"', 2)):
         _seg7s = _det7s.split(f'id="{_pane7s}"', 1)[1].split('class="tabpane"', 1)[0]
@@ -11211,12 +11216,14 @@ http:
             f"{_pane7s}: 该页签 POST 表单数应是 {_posts7s}（续235：站点页签=重截+补图标两个）；多出来的是有人又加了入口"
         assert _seg7s.count("<form") == _seg7s.count("</form>"), \
             f"{_pane7s}: form 标签不配平（漏一个 </form> 会把分页链接整块吞进表单里）"
-    for _pane7s in ("pane-ports", "pane-dirs"):
+    # 续250：端口页签**有了**一颗 POST（「全端口扫描」按钮，主理人点单：全端口从建任务表单
+    # 挪到这里）；目录页签仍是零（续145 摘掉后没再加回来）。
+    for _pane7s, _posts7s in (("pane-ports", 1), ("pane-dirs", 0)):
         _seg7s = _det7s.split(f'id="{_pane7s}"', 1)[1].split('class="tabpane"', 1)[0]
-        assert 'method="post"' not in _seg7s, \
-            f"{_pane7s}: 续145 已摘掉补扫入口，这个页签不该再有 POST 表单"
+        assert _seg7s.count('method="post"') == _posts7s, \
+            f"{_pane7s}: POST 表单数应是 {_posts7s}（续250：端口页签=全端口按钮一个；目录页签=零）"
         assert _seg7s.count("<form") == _seg7s.count("</form>"), \
-            f"{_pane7s}: form 标签不配平（摘表单时漏了闭合标签 → 后面的内容全被吞进表单）"
+            f"{_pane7s}: form 标签不配平（摘表单时漏了闭合标签 ⇒ 后面的内容全被吞进表单）"
 
     # ⑥ 目录页签的补扫表单**已整个删掉**（续145）：连同它那份“把全任务站点 URL 当 hidden 提交”
     #    的 `site_urls` 查询一起删 —— 入口没了还留着查询就是死代码（每渲染一次白读一遍 sites 表）。
@@ -15588,11 +15595,12 @@ http:
     _off118 = sorted(s for s, d in _st118 if d == "0")
     assert _off118 == sorted(["cert", "screenshot"]), f"默认不勾的应当只有策略级默认关那两个：{_off118}"
     assert sum(1 for s, d in _st118 if d == "1") == len(_SO118) - 2
-    for _g118, _n118 in (("deep", 3), ("expand", 1), ("mode", 1)):
+    # 续250：deep 分组少一项 —— 「全端口扫描」勾选从建任务表单摘掉（挪到任务详情端口页签）
+    for _g118, _n118 in (("deep", 2), ("expand", 1), ("mode", 1)):
         _seg = _th118.split(f'data-ck-group="{_g118}"', 1)[1]
         _seg = _seg.split("</div>", 1)[0] if _g118 != "mode" else _seg.split("</span>", 1)[0]
         assert _seg.count('type="checkbox"') == _n118, \
-            f"分组 {_g118} 里 checkbox 数是 {_seg.count(chr(34) + 'type' + chr(34))}，应为 {_n118}"
+            f"分组 {_g118} 里 checkbox 数应为 {_n118}（续250：deep=2，全端口勾选已摘）；实测 {_seg.count(chr(116) + chr(121) + chr(112) + chr(101) + chr(61))} 个"
 
     # ④ JS 侧：函数存在、被 DOMContentLoaded 调用、认 data-ck-default、**不写阶段名**
     _js118 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
@@ -21932,15 +21940,16 @@ expression: r0()
     # 来这里显式登记；/api/rescan 依旧一个不许有（上面已断言）。变异证伪：删任一表单 ⇒
     # 点名红；新增表单不来登记 ⇒ 总数红。
     for _act145 in ("api_scan_ext", "api_reshoot_sites", "api_jssecret_blacklist",
-                     "api_icon_backfill"):
+                     "api_icon_backfill", "api_ports_fullscan"):
         _cnt145 = _td145.count(f"url_for('{_act145}')")
         assert _cnt145 == 1, \
             f"详情页 {_act145} 表单应恰好 1 个：实测 {_cnt145}"
     _n_post145 = _td145.count('method="post"')
     # 续201：3 → 4（Host 碰撞）；续208：4 → 5（敏感信息候选的「误报」复核表单）
     # 续201：3 → 4（Host 碰撞）；续208：4 → 5（误报复核）；续235：5 → 6（站点「补图标」）
-    assert _n_post145 == 6, \
-        f"详情页 POST 表单总数应 6（新增表单必须显式改这条登记）：实测 {_n_post145}"
+    # 续250：6 → 7（端口页签「全端口扫描」按钮，主理人点单把全端口从建任务表单挪到这里）
+    assert _n_post145 == 7, \
+        f"详情页 POST 表单总数应 7（新增表单必须显式改这条登记）：实测 {_n_post145}"
     assert _td145.count("url_for('api_hostcollide_run')") == 1, "Host 碰撞表单应恰好 1 个"
 
     # ---- ② `subdomain.auto_root` 三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射）----
@@ -30470,6 +30479,73 @@ expression: r0()
     assert _b249["crawl"]["enabled"] is True, _b249["crawl"]
     print("[249] 续249 ok: 站点爬虫出厂默认开（DEFAULTS/settings.yaml/POST 映射/策略页四处一致，"
           "阶段预览报实际值）；关掉时本阶段仍一个请求都不发")
+    # ------------------------------------------------------------------ [250]
+    # 续250：① 端口默认只打常见 web 端口（全端口移到任务详情端口页签，表单摘掉勾选）
+    #       ② robots/sitemap 站点自曝入口并入目录候选
+    from scanner import urlself as _us250
+
+    from scanner.config import DEFAULTS as _DEF250
+    # ① 端口档位：出厂 top + 显式 web 端口表；表单不再有 portscan_full；按钮与端点在位
+    assert _DEF250["portscan"]["mode"] == "top", "端口默认档位应是 top（常见 web 端口）"
+    _wp250 = _DEF250["portscan"]["ports"]
+    for _p250 in ("80", "443", "8080", "8443"):
+        assert f",{_p250}," in f",{_wp250},", _wp250
+    _sty250 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "mode: top" in _sty250, "settings.yaml 的 portscan.mode 没跟着改"
+    _tk250 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8", errors="replace")
+    assert 'name="portscan_full"' not in _tk250, "建任务表单还留着全端口勾选（续250 已摘掉）"
+    assert "全端口不在这里" in _tk250, "「全部勾上」的文案没讲明全端口挪位了"
+    _det250 = (ROOT / "gui" / "templates" / "task_detail.html").read_text(
+        encoding="utf-8", errors="replace")
+    _pp250 = _det250.split('id="pane-ports"', 1)[1].split('class="tabpane"', 1)[0]
+    assert "api_ports_fullscan" in _pp250 and "全端口扫描（1-65535）" in _pp250, "端口页签没有全端口按钮"
+    _ga250 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert "def api_ports_fullscan" in _ga250, "缺 /api/ports/fullscan 端点"
+    assert '"portscan_full": True}, fallback)' in _ga250, "端点没走追加路 + portscan_full 选项"
+
+    # ② robots/sitemap：解析层 + 采集层（全桩注入，零真实网络）
+    _rob250 = ("User-agent: *\nDisallow: /admin\nDisallow: /internal/\nDisallow: /\n"
+               "Sitemap: https://a250.test/sm.xml\n")
+    assert _us250.robots_paths(_rob250) == ["/admin", "/internal/"]
+    assert _us250.robots_sitemaps(_rob250) == ["https://a250.test/sm.xml"]
+    _idx250 = ('<sitemapindex><sitemap><loc>https://a250.test/s1.xml</loc></sitemap>'
+               '<sitemap><loc>https://a250.test/s2.xml</loc></sitemap></sitemapindex>')
+    _pg250 = ('<urlset><url><loc>https://a250.test/old.php?id=1</loc></url>'
+              '<url><loc>https://a250.test/deep/x</loc></url></urlset>')
+    assert _us250.is_index(_idx250) and not _us250.is_index(_pg250)
+    _calls250 = []
+
+    def _rq250(url, timeout=None, settings=None, **_k):
+        _calls250.append(url)
+        if url.endswith("/robots.txt"):
+            return {"status": 200, "text": _rob250, "headers": {}}
+        if url.endswith("/sm.xml"):
+            return {"status": 200, "text": _idx250, "headers": {}}
+        if url.endswith("/s1.xml"):
+            return {"status": 200, "text": _pg250, "headers": {}}
+        return {"status": 404, "text": "", "headers": {}}
+
+    _o250 = _us250.collect("https://a250.test:8443/", {}, cap=50, request=_rq250)
+    _m250 = dict(_o250)
+    assert _m250.get("/admin") == "robots.txt" and _m250.get("/internal/") == "robots.txt"
+    assert _m250.get("/old.php") == "sitemap.xml" and _m250.get("/deep/x") == "sitemap.xml"
+    assert "https://a250.test:8443/robots.txt" in _calls250 and "https://a250.test/sm.xml" in _calls250
+    assert len(_us250.collect("https://a250.test/", {}, cap=1, request=_rq250)) == 1
+    assert _us250.collect("https://a250.test/", {},
+                          request=lambda *a, **k: {"status": 500, "text": ""}) == []
+    assert _us250.collect("", {}, request=_rq250) == []
+    # ③ dirscan 接线 + 三处配置一致
+    _dh250 = (ROOT / "scanner" / "stages" / "dirscan.py").read_text(
+        encoding="utf-8", errors="replace")
+    assert "urlself.collect(url" in _dh250 and "_selfurls(sites, cfg)" in _dh250, "dirscan 没接自曝入口"
+    assert _DEF250["dirscan"]["selfurls_enabled"] is True
+    _ga250b = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert '"selfurls_enabled": f.get("dirscan_selfurls") == "1",' in _ga250b, "POST 映射没接"
+    _tp250 = (ROOT / "gui" / "templates" / "settings.html").read_text(
+        encoding="utf-8", errors="replace")
+    assert 'name="dirscan_selfurls"' in _tp250, "策略页没有自曝入口开关"
+    print("[250] 续250 ok: 端口默认常见 web 端口（全端口→任务详情端口页签按钮，表单摘掉）｜"
+          "robots/sitemap 自曝入口并入目录候选（索引表取一层、cap、失败安全）｜三处配置一致")
     print("SMOKE PASS")
 
 

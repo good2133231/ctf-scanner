@@ -328,13 +328,16 @@ DEFAULTS = {
         # 端口扫描（P1-2）：默认关闭 —— CTF 里它噪声与耗时都大，需要时在策略配置里打开
         "enabled": False,
         "max_hosts": 100,          # 每任务最多扫描多少个主机
-        "ports": "",               # 留空 = 内置 TOP 端口表；也可写 "80,443,8080" 或 "1-1024"
+        # 续250：常见 web 端口（显式列；空串仍表示"内置 TOP 48"——那是通用服务档）
+        "ports": "80,81,443,3000,5000,5001,7001,7002,8000,8001,8002,8008,8080,8081,8082,8088,8443,8888,9000,9090,9443",
         # 全端口扫描：`mode="full"` 时对 `full_ports`（默认 1-65535）逐端口 connect。
         # 6.5 万次连接耗时可观，但**续144 起默认就是 full**（用户点单"全部默认开"）——
         # 于是 `full_workers` / `full_timeout` 才是全端口实际吃的那两个值，
         # `workers` / `timeout` 只在 top 档生效。想对单个 IP 补一次全端口而不改全局策略，
         # 走 GUI「全端口扫描」页（任务选项 `portscan_full` 单次触发）。
-        "mode": "full",            # 续144：默认全端口（用户点单"全部默认开"）；top＝内置 TOP 端口
+        # 续250（主理人点单）：默认只打**常见 web 端口**；full＝1-65535 改为**单任务触发**
+        # （任务详情「端口」页签按钮 / CLI --portscan-full / 侧栏「全端口扫描」页）。
+        "mode": "top",             # top＝内置 TOP 端口或 ports 显式列表
         "full_ports": "1-65535",
         "exclude_scanned": True,   # 跳过本任务已经扫过的端口（全端口扫描时尤其有用）
         # 全端口专用并发/超时（只在 full 模式生效，不动 TOP 模式的既有行为）。
@@ -466,6 +469,9 @@ DEFAULTS = {
         "history_enabled": True,
         "history_max": 1000,
         "history_with_query": False,
+        # 续250：站点自曝入口（robots.txt Disallow + sitemap.xml，含索引表一层）并入候选。
+        "selfurls_enabled": True,
+        "selfurls_max": 500,
         "max_paths": 400,      # 深扫：单站点最多扫多少条字典（框架字典优先占额度）
         # 续222：外部字典源（零入仓接第三方字典目录，如 dirsearch 的 dicts/）。
         # 每项：{name, path, picks?, after?}；标签只进**名字/分类名**，不进绝对路径。

@@ -483,6 +483,11 @@
       否则 <code>?id=</code> 变体会吃光候选额度）</label>
     <label>历史 URL 单注册域上限（条）
       <input name="dirscan_history_max" style="width:6em" value="{{ s.dirscan.history_max }}"></label>
+    <label class="chk"><input type="checkbox" name="dirscan_selfurls" value="1"{% if s.dirscan.selfurls_enabled %} checked{% endif %}>
+      并入<b>站点自曝入口</b>（续250）：robots.txt 的 <code>Disallow:</code>（站长亲手标的"别收录"路径，
+      常是最敏感的）+ sitemap.xml 全站入口（含索引表一层、robots 里 <code>Sitemap:</code> 指名的那份）</label>
+    <label>自曝入口单站上限（条）
+      <input name="dirscan_selfurls_max" style="width:6em" value="{{ s.dirscan.selfurls_max }}"></label>
     <label class="chk"><input type="checkbox" name="dirscan_big_dict" value="1"
       {{ 'checked' if s.dirscan.big_dict }}> 未知技术栈时用大字典
       （<code>config/dicts/dirs_big.txt</code>，由外部字典整理而来）</label>

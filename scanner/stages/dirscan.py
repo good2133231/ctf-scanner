@@ -51,7 +51,7 @@ from pathlib import Path
 from urllib.parse import urlparse, urlsplit
 
 from .base import Stage
-from .. import db, fingerprint, flagfind, ml, urlhist
+from .. import db, fingerprint, flagfind, ml, urlhist, urlself
 from ..extdom import base_of
 from ..config import BASE_DIR, resolve
 from ..utils import (read_lines, write_lines, pool_run, http_request, pick_python, run_cmd,
@@ -1060,6 +1060,45 @@ class DirscanStage(Stage):
 
     # ---------- 内置兜底 ----------
 
+    def _selfurls(self, sites, cfg):
+        """站点自曝入口（续250）：robots.txt + sitemap.xml，按**站点源**各查一次并缓存。
+
+        与 `_history_paths` 同一契约（`{键: [(路径, 标签)]}`），只是寻址单位是站点而不是
+        注册域；同样只并入深扫、与字典共用额度、失败只记一行。开关
+        `dirscan.selfurls_enabled`（默认开，关掉=这两个请求都不发）。
+        """
+        if cfg.get("selfurls_enabled") is not True or self.ctx.options.get("offline"):
+            return {}
+        cache = getattr(self, "_self_cache250", None)
+        if cache is None:
+            cache = self._self_cache250 = {}
+        cap = int(cfg.get("selfurls_max", 500) or 500)
+        try:
+            timeout = int((self.ctx.settings.get("limits") or {}).get("http_timeout", 10))
+        except (TypeError, ValueError):
+            timeout = 10
+        out, todo = {}, []
+        for s in sites or []:
+            url = str(s.get("url") or "").strip()
+            if not url or url in out:
+                continue
+            if url in cache:
+                out[url] = cache[url]
+            else:
+                out[url] = []
+                todo.append(url)
+        for url in todo:
+            rows = urlself.collect(url, self.ctx.settings, logger=self.ctx.logger,
+                                   cap=cap, timeout=timeout)
+            cache[url] = rows
+            out[url] = rows
+        tot = sum(len(v or []) for v in out.values())
+        if tot:
+            self.ctx.logger.info(
+                f"[dirscan] 站点自曝入口 {tot} 条（robots/sitemap，{len([k for k, v in out.items() if v])} "
+                f"个站点，单站上限 dirscan.selfurls_max={cap}）")
+        return {k: (v or []) for k, v in out.items()}
+
     def _history_paths(self, sites, cfg):
         """历史 URL 候选（续248）：按**注册域**各查一次并缓存（同一注册域下的站点共用一份）。
 
@@ -1141,6 +1180,7 @@ class DirscanStage(Stage):
 
         # 续248：历史 URL（零目标流量）只在深扫/补充扫并入；浅扫保住精选字典的额度
         _hist248 = {} if shallow else self._history_paths(sites, cfg)
+        _self248 = {} if shallow else self._selfurls(sites, cfg)
         jobs, tally = [], {}
         for s in sites:
             kind = _dict_kind(s.get("tech"), s.get("url")) if tech_aware else ""
@@ -1158,6 +1198,9 @@ class DirscanStage(Stage):
             for _p248, _lab248 in _hist248.get(base_of(_host248) or _host248, []):
                 if _p248 and _p248 not in src_of:      # 字典里已有的按字典的来源标签算
                     paths.append(_p248); src_of[_p248] = _lab248
+            for _p250, _lab250 in _self248.get(str(s.get("url") or "").strip(), []):
+                if _p250 and _p250 not in src_of:
+                    paths.append(_p250); src_of[_p250] = _lab250
             if limit and len(paths) > limit:           # 历史 URL 与字典共用同一个额度
                 paths = paths[:limit]
             jobs.extend((s["url"], p, s["url"], src_of.get(p, "?")) for p in paths)

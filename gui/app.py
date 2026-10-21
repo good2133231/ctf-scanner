@@ -3515,6 +3515,40 @@ def create_app():
         logger.info(f"[gui] 全端口扫描任务 #{task_id} 已创建（{len(hosts)} 个主机）")
         return redirect(url_for("task_detail", task_id=task_id))
 
+    @app.route("/api/ports/fullscan", methods=["POST"])
+    @login_required
+    def api_ports_fullscan():
+        """续250：任务详情「端口」页签的**全端口扫描**按钮（主理人点单：默认只打常见 web
+        端口，全端口改成任务页签下的单任务触发，不再放在建任务表单里）。
+
+        走 `_do_append`（与「重截」「补图标」同一条追加路）：给**本任务**排一轮只跑
+        portscan 的追加执行，任务选项 `portscan_full=True` 让它无视全局
+        `portscan.enabled` 也执行，并自动跳过已扫过的端口（`portscan.exclude_scanned`）。
+        结果仍落在本任务 —— 端口页签直接看，不新建任务行。
+
+        三条边界与重截那颗按钮一致：越权 404 / 在跑或重复追加 409（`_append_guard`）/
+        目标取本任务的 targets（不收外部传参 —— 这个入口扫的就是"这个任务的全端口"）。
+        """
+        fallback = _safe_next(request.form.get("next"), url_for("tasks"))
+        raw_id = (request.form.get("task_id") or "").strip()
+        if not raw_id.isdigit():
+            return _append_err("这个入口没有带任务号"
+                               "（请在任务详情页的「端口」页签里点）", fallback)
+        tid = int(raw_id)
+        task = _owned_task(tid)
+        if not task:
+            abort(404)
+        targets_text = str(task["targets"] or "").strip()
+        picked = [t.strip() for t in targets_text.splitlines() if t.strip()]
+        if not picked:
+            return _append_err("这个任务没有目标行，没法对谁扫全端口", fallback)
+        _do_append(str(tid), ["portscan"], targets_text, picked,
+                   {"portscan_full": True}, fallback)
+        logger.info(f"[gui] 任务 #{tid} 已排入一轮**只跑全端口**的追加执行"
+                    f"（{len(picked)} 个目标，1-65535，跳过已扫端口）")
+        return redirect(url_for("task_detail", task_id=tid) + "#ports")
+
+
     # ---------- EXP 待确认（续207）----------
     # 主理人点单：「有些需要 exp 再次验证的，比如 sql 注入那种帮派就不必有」+「回头可以给个列表，
     # 如何 exp 也保留着，有些需要 exp 验证我们回头再手动点击执行 exp」。
@@ -4890,6 +4924,9 @@ def create_app():
                             "history_enabled": f.get("dirscan_history") == "1",
                             "history_max": int(f.get("dirscan_history_max", 1000) or 1000),
                             "history_with_query": f.get("dirscan_history_query") == "1",
+                            # 续250：robots/sitemap 自曝入口并入目录候选
+                            "selfurls_enabled": f.get("dirscan_selfurls") == "1",
+                            "selfurls_max": int(f.get("dirscan_selfurls_max", 500) or 500),
                                 "max_paths": int(f.get("dirscan_max_paths", 400) or 400),
                                 "fw_max_paths": int(f.get("dirscan_fw_max_paths", 150) or 0),
                                 # 目录递归（续30，默认关）：0 = 关闭

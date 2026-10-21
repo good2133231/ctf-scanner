@@ -248,6 +248,15 @@ Flask Web 控制台（仿 ARL）。
   无 scheme 的别把 host 当路径），来源标签 `历史URL(wayback)` / `历史URL(OTX)`；
   按注册域查一次并缓存，**只并入深扫**（浅扫保住精选额度）、与字典共用 `max_paths` 额度；
   上游失败只记一行跳过。别再接第二个爆破引擎（puredns+massdns 已是最优）。
+- **端口默认只打常见 web 端口（续250）**：`portscan.mode=top` + 显式 web 端口表
+  （80/81/443/3000/5000/5001/7001/7002/8000-8002/8008/8080-8082/8088/8443/8888/9000/9090/9443）；
+  全端口**不在建任务表单里**，只能从任务详情「端口」页签的按钮（`/api/ports/fullscan`，
+  `_do_append` 追加、`portscan_full=True`、`exclude_scanned` 跳过已扫、结果落本任务）
+  或侧栏「全端口扫描」页（跨任务新建）触发。
+- **站点自曝入口走 `scanner/urlself.py`（续250）**：robots.txt 的 `Disallow:` + sitemap.xml
+  （robots 里 `Sitemap:` 指名优先，`<sitemapindex>` 再取一层、上限 3 份）→ 路径并入 dirscan 候选
+  （**只深扫**、与字典共用 `max_paths`、来源标签 `robots.txt`/`sitemap.xml`）。
+  与 urlhist 同契约同纪律：失败只记一行、关掉即零请求、单站上限 `dirscan.selfurls_max`。
 - **站点爬虫默认开（续249）**：`crawl.enabled` 出厂 **True**（主理人点单）。它一定会发
   GET，护栏是额度上限（max_sites/max_pages/max_links/同站判据）与策略页可关（关掉零请求，
   `[198]` 家族钉着）。页面入口（`urls` 表）与带参链接（vulnscan feed）都从这里来。

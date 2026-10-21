@@ -219,8 +219,8 @@ takeover:
 portscan:
   enabled: false
   max_hosts: 100
-  ports: ''
-  mode: full                  # 续144：默认全端口（用户点单）；top＝只打内置 TOP 端口表
+  ports: '80,81,443,3000,5000,5001,7001,7002,8000,8001,8002,8008,8080,8081,8082,8088,8443,8888,9000,9090,9443'   # 续250：常见 web 端口（空串=内置 TOP 48）
+  mode: top                  # 续250 起：默认只打常见 web 端口（主理人点单）；full＝1-65535 走单任务触发
   full_ports: 1-65535
   exclude_scanned: true
   full_workers: 256
@@ -302,6 +302,10 @@ dirscan:
   history_enabled: true
   history_max: 1000
   history_with_query: false
+  # 续250：站点自曝入口（robots.txt Disallow + sitemap.xml 含索引一层）并入目录候选。
+  # 关掉：selfurls_enabled=false；单站条数上限：selfurls_max
+  selfurls_enabled: true
+  selfurls_max: 500
   # 续222：外部字典源（零入仓）。path 指向本机字典目录（相对仓库根或绝对路径），
   # 该目录下每个 .txt 的分类名就是一层；picks 只接列出的分类（空＝全接）；
   # after 指定插在哪一层之后（fw/lang/shallow/exposure/common，缺省 common）。

@@ -4303,6 +4303,20 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续250（2026-10-21，WorkBuddy · Claude）：端口默认常见 web 端口 + robots/sitemap 自曝入口
+
+- [x] 端口：`mode: full→top` + 显式 web 端口表；建任务表单摘掉全端口勾选；
+      新端点 `/api/ports/fullscan`（任务详情端口页签按钮，追加执行、结果落本任务）
+- [x] `scanner/urlself.py`：robots Disallow + sitemap（索引表取一层）→ 路径并入 dirscan 候选
+      （只深扫、共用额度、来源标签 robots.txt/sitemap.xml）；三处配置一致 + 策略页开关
+- [x] `[250]` 门禁 + `[5p]`/`[7s]` 断言与注释同步更新；全量 SMOKE PASS（见下一行）
+
+**下一轮（续250 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+
+
 ## 续249（2026-10-21，WorkBuddy · Claude）：站点爬虫默认开 + katana 与内置爬虫的区别
 
 - [x] 内置 `crawl` 阶段（续198：页面链接 → urls 表 + 带参喂 vulnscan）**默认开**：
