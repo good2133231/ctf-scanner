@@ -3,6 +3,21 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续259 附4（2026-10-21，WorkBuddy · Step-5-Preview）：[218] 的 skip 分支补变量初始化（CI 长期红点）
+
+CI 越过 [217] 后红在 `tests/smoke.py:29044`：
+
+```
+UnboundLocalError: local variable '_reg218' referenced before assignment
+```
+
+[218] 的 ① 段（脱敏判据）在**没有 `data/scanner.db` 时跳过**（CI / 干净克隆），
+但 ④ 段末尾的汇总 print 仍引用 `_reg218/_live218/_files218` —— 只有 else 分支才赋值
+⇒ skip 路径必崩。本机/服务器有库所以永远看不见（又一条 40 次连红的组成部分）。
+
+修法：skip 分支补一行 `_reg218, _live218, _files218 = [], [], []` —— 汇总行如实显示
+0/0/0，上方那行「skip：本机没有 data/scanner.db」已经说明原因，不假装判过。
+
 ## 续259 附3（2026-10-21，WorkBuddy · Step-5-Preview）：[217] 的 dirmap 解释器断言按可移植口径放宽（CI 长期红点）
 
 CI 越过 [214] 后红在 `tests/smoke.py:28819`：

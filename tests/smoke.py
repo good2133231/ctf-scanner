@@ -28919,6 +28919,7 @@ expression: r0()
     _db218 = ROOT / "data" / "scanner.db"
     if not _db218.exists():
         print("[218] 脱敏判据 skip：本机没有 data/scanner.db（CI / 干净克隆无库）")
+        _reg218, _live218, _files218 = [], [], []
     else:
         _con218 = _sq218.connect(f"file:{_db218}?mode=ro", uri=True)
         _reg218 = sorted({_xd218.base_domain(r[0] or "") or "" for r in
