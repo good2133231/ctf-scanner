@@ -30083,7 +30083,10 @@ expression: r0()
         _sp238.run(["git", "clone", "-q", str(_td238 / "origin.git"), str(_wk238)],
                    capture_output=True, text=True, timeout=30)
         (_wk238 / "f.txt").write_text("a", encoding="utf-8")
-        _g238("config", "user.email", "t@t"); _g238("config", "user.name", "t")
+        # 续259 附5：身份必须写进**工作仓库**（cwd=_wk238）—— 写到裸仓库上等于没配；
+        # CI 的 runner 没有全局身份 ⇒ commit 静默失败 ⇒ 后面「干净」断言红（本机有全局身份所以看不见）。
+        _g238("config", "user.email", "t@t", cwd=_wk238)
+        _g238("config", "user.name", "t", cwd=_wk238)
         _g238("add", "f.txt", cwd=_wk238)
         _g238("commit", "-qm", "init", cwd=_wk238)
         _g238("push", "-q", "-u", "origin", "HEAD", cwd=_wk238)

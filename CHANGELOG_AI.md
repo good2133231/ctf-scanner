@@ -3,6 +3,21 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续259 附5（2026-10-21，WorkBuddy · Step-5-Preview）：[238] 临时仓库的 git 身份配错了地方（CI 长期红点）
+
+CI 越过 [218] 后红在 `tests/smoke.py:30099`：
+
+```
+AssertionError: (1, '[sync] 分支 HEAD｜未提交改动 1｜...脏: A  f.txt ...')
+```
+
+[238] 在临时仓库里测 `sync_check --strict` 三态。`git config user.email/name` 两次调用
+**漏了 `cwd=_wk238`** —— 配到了**裸仓库** `_td238` 上，工作仓库没有身份；本机有全局身份
+（WorkBuddy）所以 commit 照常成功，CI 的 runner 没有全局身份 ⇒ `commit` 静默失败 ⇒
+文件停在暂存区（A f.txt）⇒ 后面的"干净"断言必红。
+
+修法：两处 config 都加 `cwd=_wk238`，临时仓库自带身份、不依赖全局配置。
+
 ## 续259 附4（2026-10-21，WorkBuddy · Step-5-Preview）：[218] 的 skip 分支补变量初始化（CI 长期红点）
 
 CI 越过 [217] 后红在 `tests/smoke.py:29044`：
