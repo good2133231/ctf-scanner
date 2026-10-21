@@ -3,6 +3,26 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续259（2026-10-21，WorkBuddy · Step-5-Preview）：CI 失败日志可见化（smoke + 3.14 探针）
+
+排查 CI 时发现：**smoke.yml（权威 3.9 门禁）最近 40 次运行 0 次成功**（33 failure + 7
+cancelled，最早可查窗口内就没绿过 —— 不是本轮引入），失败在「Run smoke test」步；而 job
+日志端点要 admin 权限（无 token 403）⇒ **"为什么红"完全不可见**。quality.yml 的
+probe-3-14（3.14 探针）同理（≥8 连红）。
+
+修法（两个 workflow 同款）：
+- 跑 smoke 的步骤改成 `set -o pipefail; python3 tests/smoke.py 2>&1 | tee <log>` ——
+  tee 留一份日志、`pipefail` 保住 python 的退出码（否则管道最后是 tee，步骤恒绿）；
+- 新增 `if: failure()` 的 `actions/upload-artifact@v4`：失败时上传日志。公开仓库的
+  artifacts API **可无凭据读**（实测列出返回 200）⇒ 维护者 / AI 不必有 admin 权限也能
+  拿到红在哪条断言。artifact 名：`smoke-log`（3.9）/ `probe314-log`（3.14）。
+
+### 门禁与实测
+- 两个 workflow 的 YAML 结构已用 PyYAML 解析校验（步骤名与顺序确认：smoke 4→5、
+  probe-3-14 同样多出上传步）；
+- 本机全量门禁仍跑不了（环境守卫）；本次改动在下一次 push 触发的 CI 里生效，之后按
+  artifact 内容定位那 40 次红点的真因。
+
 ## 续258（2026-10-21，WorkBuddy · Step-5-Preview）：VT 开关默认开（主理人点单）+ 文案同步
 
 主理人 2026-10-21 点单「vt 开关默认打开」。VT key 已按 keystore 规程**加密入库**

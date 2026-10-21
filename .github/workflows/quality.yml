@@ -112,4 +112,15 @@ jobs:
       - name: Run smoke test on a newer interpreter
         env:
           PYTHONUNBUFFERED: "1"
-        run: python3 tests/smoke.py
+        # 续259：同 smoke.yml —— tee 日志 + 失败时上传 artifact（探针长期全红，日志此前不可见）。
+        run: |
+          set -o pipefail
+          python3 tests/smoke.py 2>&1 | tee smoke314.log
+
+      - name: Upload probe log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe314-log
+          path: smoke314.log
+          if-no-files-found: ignore

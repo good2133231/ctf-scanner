@@ -38,4 +38,17 @@ jobs:
       - name: Run smoke test
         env:
           PYTHONUNBUFFERED: "1"
-        run: python3 tests/smoke.py
+        # 续259：tee 一份日志并保留 python 的退出码（pipefail）——失败时上传 artifact。
+        # 公开仓库的 artifacts 可无凭据下载 ⇒ 不必有 admin 权限也能看到红在哪条断言
+        # （此前 job logs 端点要 admin，403 让"为什么红"完全不可见）。
+        run: |
+          set -o pipefail
+          python3 tests/smoke.py 2>&1 | tee smoke.log
+
+      - name: Upload smoke log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-log
+          path: smoke.log
+          if-no-files-found: ignore
