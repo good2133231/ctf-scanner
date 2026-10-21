@@ -253,6 +253,11 @@ Flask Web 控制台（仿 ARL）。
   全端口**不在建任务表单里**，只能从任务详情「端口」页签的按钮（`/api/ports/fullscan`，
   `_do_append` 追加、`portscan_full=True`、`exclude_scanned` 跳过已扫、结果落本任务）
   或侧栏「全端口扫描」页（跨任务新建）触发。
+- **配置注释不许和行为撒谎（续252）**：`settings.yaml` 的 dirscan 注释烂过 12 天
+  （写着“只跑浅扫”而 `mode` 实际是 deep，误导了主理人）。改任何配置值必须同步改它的注释；
+  `[252]` 钉着 dirscan 注释口径（默认深扫的事实、请求量口径、“以 mode 行为准”）。
+  档位请求量参考：端口 top≈21 连接/主机；目录 quick≈150+基线/站、deep≈400+基线+派生/站
+  （递归默认关；全端口 6.5 万连接/主机，已改单任务触发）。
 - **站点自曝入口走 `scanner/urlself.py`（续250）**：robots.txt 的 `Disallow:` + sitemap.xml
   （robots 里 `Sitemap:` 指名优先，`<sitemapindex>` 再取一层、上限 3 份）→ 路径并入 dirscan 候选
   （**只深扫**、与字典共用 `max_paths`、来源标签 `robots.txt`/`sitemap.xml`）。

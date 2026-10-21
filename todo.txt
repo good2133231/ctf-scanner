@@ -4303,6 +4303,20 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续252（2026-10-21，WorkBuddy · Claude）：dirscan 默认深扫的事实对齐（过期注释修掉）
+
+- [x] 事实：默认就是 deep（续144 起，主理人点单）；“只跑浅扫”是 10-08 过期注释，撒谎 12 天
+- [x] 请求量口径写进注释：quick≈150+基线3 / deep≈400+基线3+派生≤400（递归默认关）；
+      与全端口 6.5 万连接差两个数量级；深扫还顺带吃到只在深扫并入的历史URL/robots/sitemap
+- [x] settings.yaml 注释重写（含自曝撒谎史 + “以 mode 行为准”）；`[252]` 门禁钉住注释口径
+- [x] 全量 SMOKE PASS（279 组，1 次即绿）
+
+**下一轮（续252 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+
+
 ## 续251（2026-10-21，WorkBuddy · Claude）：cert/screenshot 出厂关显式登记 + 本地口径
 
 - [x] 史实否证主理人疑心：两个默认值至少 10-16 起就是 False，本地 AI 提交没碰——产品决策

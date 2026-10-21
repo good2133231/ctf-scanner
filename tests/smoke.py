@@ -30564,6 +30564,23 @@ expression: r0()
         "《本地开发.md》没把这两个默认关与隔离口径写清楚"
     print("[251] 续251 ok: cert/screenshot 出厂关显式登记（偷翻即红）｜[6u] 可移植隔离仍在｜"
           "《本地开发.md》写明口径与正确做法（策略页临时开，别改 DEFAULTS）")
+    # ------------------------------------------------------------------ [252]
+    from scanner.config import DEFAULTS as _DEF252
+    # 续252：settings.yaml 的注释不许和行为撒谎（dirscan 档位注释烂了 12 天）
+    #         主理人问"dirscan 为什么默认不深扫"—— 实际默认就是 deep（续144 起），
+    #         是 10-08 的"只跑浅扫"注释翻档时没同步，误导了用户也差点误导开发。
+    assert _DEF252["dirscan"]["mode"] == "deep", "dirscan 出厂档位应是 deep（续144 主理人点单）"
+    _seg252 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
+    _dseg252 = _seg252.split("dirscan:", 1)[1].split("\npassive:", 1)[0]
+    assert "mode: deep" in _dseg252, "settings.yaml 的 dirscan.mode 不是 deep"
+    # 注释口径：必须承认 deep 是默认、且点明 quick 才是降档；不许再出现"默认只跑浅扫"
+    assert "默认**开启且默认深扫**" in _dseg252, "注释没写明默认深扫"
+    assert "只跑浅扫（mode=quick）" not in _dseg252, "过期注释还在（与实际 mode=deep 矛盾）"
+    assert "以 mode 行为准" in _dseg252, "注释没提醒读者档位描述可能过期"
+    # 请求量口径要写在注释里（用户拿它判断"占不占时间"的依据）
+    assert "quick ≈ 150" in _dseg252 and "deep ≈ 400" in _dseg252, "注释缺请求量口径"
+    print("[252] 续252 ok: dirscan 默认深扫的事实与注释对齐（过期浅扫文案已修）｜"
+          "注释带请求量口径（quick≈150 / deep≈400+派生）｜门禁钉住注释不再撒谎")
     print("SMOKE PASS")
 
 
