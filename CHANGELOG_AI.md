@@ -118,7 +118,7 @@ gau 的两个数据源都是公开 HTTP/JSON，`scanner/urlhist.py` 原生复刻
 
 ### 门禁实测
 
-- 全量结果见下一行更新。
+- **全量 SMOKE PASS：275 个断言组（含浏览器 E2E 72 条全绿），03:40:43 → 03:47:56（7 分 13 秒）**；本轮 6 次全量（红因：导入被脚本吞掉、history_enabled 缺键默认开导致门禁里发真实请求、settings.yaml 混行尾——每次都被门禁真抓到，最后绿）。
 ## 续246（2026-10-20，WorkBuddy · DeepSeek-V4.1-Flash 代码 + Step-5-Preview 收尾）：子域名被动源 A 批（chaziyu/urlscan）+ 爆破快速档接线（B 批）
 
 主理人 2026-10-20 点单「按 A→B 两批做」：A 批挑 OneForAll 里独有的 keyless 数据源（本体不接），
@@ -303,7 +303,7 @@ B 批给"快速任务"接 top 1 万等距抽样。**代码由 DeepSeek-V4.1-Flas
 
 ### 门禁实测
 
-- 全量结果见下一行更新。
+- **全量 SMOKE PASS：269 个断言组（含浏览器 E2E 72 条全绿），08:16:29 → 08:23:48（7 分 19 秒）**；本轮 2 次全量（a 红在 [167] —— settings.yaml 那行替换没带 CR，混行尾又被行尾守门抓到；b 绿）。
 ## 续242（2026-10-20，WorkBuddy · Claude）：resolver 列表 13 条 → 12,124 条（爆破提速/漏报第一杠杆）
 
 主理人批准"把 config/resolvers.txt 换成验证过的高速公共 resolver"。
@@ -330,7 +330,7 @@ B 批给"快速任务"接 top 1 万等距抽样。**代码由 DeepSeek-V4.1-Flas
 
 ### 门禁实测
 
-- 全量结果见下一行更新。
+- **全量 SMOKE PASS：268 个断言组（含浏览器 E2E 72 条全绿），07:51:14 → 07:58:35（7 分 21 秒）**；本轮 2 次全量（a 红在 EOL 门禁——settings.yaml 插注释引入混合行尾，eolfix 后 b 绿）。
 ## 续241（2026-10-20，WorkBuddy · Claude）：子任务面板进度条 + 子域名爆破核查
 
 - [x] 子任务面板行内**进度条**（此前只有一个百分比文字）：`pvSubtreeHtml` 进度格改为
