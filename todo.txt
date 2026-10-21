@@ -4303,6 +4303,24 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续257（2026-10-21，WorkBuddy · Step-5-Preview）：CLI 补 Host 碰撞入口（续183 挂账最后一截）
+
+- [x] `--hostcollide`：单次强开（任务选项 `hostcollide=true`，策略关着也生效）+ 阶段没写进
+      `-p` 时**自动补上**（勾了不补＝白勾，与 `--auto-expand`/`--subdomain-profile` 同纪律）
+- [x] `-p hostcollide` 显式点名也算「这次要跑」（与 `-p cert/screenshot` 同语义；否则只换来
+      阶段里一行"没开、跳过"）；不提就不加（既有行为不变）
+- [x] [257] 断言组：三种形态（flag / 显式点名 / 不提），桩掉 run_task 零真实请求；
+      先经 logs/verify257.py 5 项实测再入禁
+- [x] 续183 的「GUI/CLI 触发入口」挂账就此闭环（GUI 侧续201/203/227 早已齐）
+
+**下一轮（续258）——只放未做的：**
+- [ ] 服务器全量门禁：拉取后 `bash update.sh`（门禁默认开启）→ SMOKE PASS 组数+耗时回填
+      CHANGELOG 续255/续256/续257 门禁节
+- [ ] **3.14 探针先修红**（口径修正：最近 ≥8 次全红，不是"攒连绿"）——服务器
+      `python3.14 tests/smoke.py` 复现失败断言；修绿后再攒连续 ≥3 次全绿，才谈升必过
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] 对面 AI 新交材料的三个"待主理人点"问题（13 的非破坏性边界 / OOB 立项 / 14 nuclei staging）
+
 ## 续256（2026-10-21，WorkBuddy · Step-5-Preview）：四项目对比剩余 T10/T11（IP→域名下钻链接 + --dupes 组数截断可见）
 
 - [x] T10 IP→域名下钻链接：单一产地 `gui/app.py::_ip_drill`（jinja 全局 `ip_drill`，模板不各拼

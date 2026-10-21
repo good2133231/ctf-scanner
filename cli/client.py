@@ -560,6 +560,10 @@ def main():
                     help="本次任务开启**自动拓展扫描**（等价 GUI 任务选项 auto_expand）："
                          "自动补 osint/jsmine 阶段、拓展结束后自动做 DNS 存在性判定、"
                          "把注册域属于本项目的拓展域名追加成子域名；目标是子域时自动补收其主域名")
+    ap.add_argument("--hostcollide", action="store_true",
+                    help="本次任务强制开启 **Host 碰撞**（等价 GUI 任务选项 hostcollide）："
+                         "同 IP 换不同 Host 头发只读 GET，找同 IP 绑别的域名的隐藏站点；"
+                         "策略 hostcollide.enabled 关着时也能单次生效（阶段没写进 -p 会自动补上）")
     ap.add_argument("--subdomain-profile", choices=["quick", "deep"], default=None,
                     help="本次任务的子域名爆破档位（等价 GUI 任务选项 subdomain_profile）："
                          "quick=深档词表等距抽样到 1 万条（不是取前 1 万条）；"
@@ -813,6 +817,10 @@ def main():
         for st in ("screenshot", "cert"):
             if st in stages:
                 options[f"{st}_on"] = True
+        # 续257：写进 -p 的 hostcollide 同样是"这次要跑" —— 策略关着时也要单次生效，
+        # 否则 `-p hostcollide` 只换来阶段里一行"没开、跳过"（静默失效）。
+        if "hostcollide" in stages:
+            options["hostcollide"] = True
     if args.full_ports:
         options["portscan_full"] = True
     if args.full_dir:
@@ -829,6 +837,12 @@ def main():
         for st in ("osint", "jsmine"):
             if st not in stages:
                 stages.append(st)
+    # Host 碰撞（续183 模块 / 续201 接线 / 续257 补 CLI 入口）：与 GUI 任务选项同一套语义 ——
+    # 策略关着时单次强开；勾了就等于点名要跑，所以阶段没写进 -p 时自动补上（勾了不补=白勾）。
+    if args.hostcollide:
+        options["hostcollide"] = True
+        if "hostcollide" not in stages:
+            stages.append("hostcollide")
     # 续246（B 批）：子域名爆破档位（任务级）。与 GUI 同一套"勾了就要生效"：
     # 只给档位却不给 subdomain 阶段＝白给，所以自动补阶段（`stages.sort` 随后归位）。
     if args.subdomain_profile:

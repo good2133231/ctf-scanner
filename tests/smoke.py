@@ -30790,6 +30790,51 @@ expression: r0()
         assert "仅列前" in _out256 and "未列出" in _out256, _out256[:300]
     print("[256] 续256 ok: IP→域名下钻链接（ip_drill 单一产地，子域/拓展两口径，页面级三处）｜"
           "poc_review --dupes 截断可见（DUPES_CAP/dupes_total/_dupes_note，纯函数+真数据+CLI）")
+    # ------------------------------------------------------------------ [257]
+    # 续257：CLI 补 Host 碰撞入口（续183 挂账的最后一截）——`--hostcollide` 单次强开
+    #      （选项 + 自动补阶段）、`-p hostcollide` 显式点名也算"这次要跑"、不提不加。
+    import cli.client as _cli257
+    import types as _types257
+    import io as _io257
+    import contextlib as _cl257
+    _calls257 = []
+    _orig_rt257 = _cli257.run_task
+
+    def _fake_rt257(task_id, name, targets, stages, options, settings, append=False,
+                    resume=False, progress=None):
+        _calls257.append({"stages": list(stages), "options": dict(options)})
+        return _types257.SimpleNamespace(results={}, workdir=Path(_TMPDIR) / "cli-257")
+
+    def _cli_run257(argv):
+        _buf257 = _io257.StringIO()
+        _calls257.clear()
+        _old257 = sys.argv
+        sys.argv = ["client.py"] + argv
+        try:
+            with _cl257.redirect_stdout(_buf257):
+                _cli257.main()
+        except SystemExit as _e257:
+            return (_e257.code or 0), _buf257.getvalue()
+        finally:
+            sys.argv = _old257
+        return 0, _buf257.getvalue()
+
+    _cli257.run_task = _fake_rt257
+    try:
+        _c257, _o257 = _cli_run257(["-t", "hc257.test", "-p", "probe", "--hostcollide",
+                                    "--offline"])
+        assert _c257 == 0, (_c257, _o257)
+        assert _calls257[-1]["options"].get("hostcollide") is True, _calls257
+        assert "hostcollide" in _calls257[-1]["stages"], "勾了 --hostcollide 却没补阶段＝白勾"
+        _c257, _o257 = _cli_run257(["-t", "hc257b.test", "-p", "probe,hostcollide",
+                                    "--offline"])
+        assert _c257 == 0 and _calls257[-1]["options"].get("hostcollide") is True, _calls257
+        _c257, _o257 = _cli_run257(["-t", "hc257c.test", "-p", "probe", "--offline"])
+        assert _c257 == 0 and "hostcollide" not in _calls257[-1]["options"], _calls257
+    finally:
+        _cli257.run_task = _orig_rt257
+    print("[257] 续257 ok: CLI Host 碰撞入口（--hostcollide 落选项+自动补阶段 / "
+          "-p hostcollide 显式点名也单次生效 / 不提不加）")
     print("SMOKE PASS")
 
 
