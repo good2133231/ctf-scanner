@@ -26422,13 +26422,15 @@ expression: r0()
         _w184 = " | ".join(_lg184.warn)
         assert "反查源预检" in _w184 and "HTTP 530" in _w184, _lg184.warn
         assert "改用备用源" in _w184 and "ptr" in _w184, _lg184.warn
-        # (c) 变异证伪（§6.1）：preflight=False 退回旧行为 ⇒ 逐个白跑且零命中
+        # (c) 变异证伪（§6.1）：preflight=False 退回旧行为 ⇒ 逐个白跑；续255 的「零命中追加批」
+        #     兜住了结果（PTR 救回 5 个 IP），代价是调用数翻倍 —— 预检的价值＝6 次 vs 30 次
+        #     拿到同样的 5 个命中
         _calls184.clear()
         _st184b = dict(_st184)
         _st184b["iprecon"] = dict(_st184["iprecon"], preflight=False)
         _m184b, _s184b = _ip184.lookup_many(_ips184, _st184b, logger=_L184())
-        assert len(_calls184) == 15 and _s184b["hit_ips"] == 0, \
-            f"关掉预检就退化成 15 次白跑 + 零命中，实到 {len(_calls184)} 次 / {_s184b['hit_ips']} 命中"
+        assert len(_calls184) == 30 and _s184b["hit_ips"] == 5, \
+            f"关预检应白跑 15 次、追加批再白跑 15 次（共 30），PTR 救回 5 个：实到 {len(_calls184)} 次 / {_s184b['hit_ips']} 命中"
         # (d) 源活着时照旧走默认源（预检不该把好源过滤掉）
         _calls184.clear()
         _ip184.http_request = lambda url, timeout=None, settings=None, **kw: (
