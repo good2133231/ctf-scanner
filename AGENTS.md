@@ -262,6 +262,11 @@ Flask Web 控制台（仿 ARL）。
   `[198]` 家族钉着）。页面入口（`urls` 表）与带参链接（vulnscan feed）都从这里来。
   katana 是**可选增强**（增量=JS/robots/sitemap/并发），要接就做成"装了优先用、没装退回内置"，
   别让默认路径依赖 Go 二进制。
+- **cert / screenshot 出厂关是显式登记的产品决策（续251）**：`[251]` 钉着
+  `DEFAULTS["cert"]["enabled"]` 与 `["screenshot"]["enabled"]` 都是 False（理由：cert 是按需能力、
+  screenshot 每任务起无头 Chrome）。**不许**为“本地跑门禁方便”偷翻它们——翻了当场红；
+  门禁侧 `[6u]` 显式开着跑这两个阶段但断言可移植（没 Chrome 只要求不失败、产物可为 0），
+  真正要 Chrome 的只有浏览器 E2E 72 条。本地想试真效果：策略页临时开 → 跑完关回。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`

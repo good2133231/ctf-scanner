@@ -4303,6 +4303,19 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续251（2026-10-21，WorkBuddy · Claude）：cert/screenshot 出厂关显式登记 + 本地口径
+
+- [x] 史实否证主理人疑心：两个默认值至少 10-16 起就是 False，本地 AI 提交没碰——产品决策
+- [x] `[251]`：DEFAULTS 两个值显式登记（偷翻即红）+ [6u] 可移植隔离仍在（开着跑、没 Chrome 只要求不失败）
+- [x] 《本地开发.md》新增“本地跑门禁的两个默认关”一节（口径 + 正确做法：策略页临时开，别改 DEFAULTS）
+- [x] 全量 SMOKE PASS（278 组，1 次即绿）
+
+**下一轮（续251 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+
+
 ## 续250（2026-10-21，WorkBuddy · Claude）：端口默认常见 web 端口 + robots/sitemap 自曝入口
 
 - [x] 端口：`mode: full→top` + 显式 web 端口表；建任务表单摘掉全端口勾选；

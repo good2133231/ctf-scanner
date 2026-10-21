@@ -30546,6 +30546,24 @@ expression: r0()
     assert 'name="dirscan_selfurls"' in _tp250, "策略页没有自曝入口开关"
     print("[250] 续250 ok: 端口默认常见 web 端口（全端口→任务详情端口页签按钮，表单摘掉）｜"
           "robots/sitemap 自曝入口并入目录候选（索引表取一层、cap、失败安全）｜三处配置一致")
+    # ------------------------------------------------------------------ [251]
+    from scanner.config import DEFAULTS as _DEF251
+    # 续251：cert/screenshot 出厂关的**显式登记** + 门禁可移植隔离仍在位
+    #         （主理人担心"本地开发为方便跑门禁偷翻默认值"——用机制钉死：翻就红）
+    assert _DEF251["cert"]["enabled"] is False, \
+        "cert 出厂值是 False（按需能力：子域接管/证书情报才用）—— 要开必须显式改这条登记并写清理由"
+    assert _DEF251["screenshot"]["enabled"] is False, \
+        "screenshot 出厂值是 False（每任务起无头 Chrome，容器里常没有浏览器）—— 同上，要开先登记"
+    # 门禁侧的可移植隔离必须仍在：[6u] 显式开着跑，但断言只要求"不失败、产物可为 0"
+    _sm251 = (ROOT / "tests" / "smoke.py").read_text(encoding="utf-8", errors="replace")
+    assert '"cert", "screenshot", "jsmine", "dirscan"' in _sm251, \
+        "[6u] 不再显式开 cert/screenshot 了？那全阶段真跑就没覆盖它们"
+    assert "产物可为 0" in _sm251, "[6u] 的可移植断言口径变了（没 Chrome 也必须只要求不失败）"
+    _ld251 = (ROOT / "本地开发.md").read_text(encoding="utf-8", errors="replace")
+    assert "本地跑门禁的两个“默认关”" in _ld251 and "不要改" in _ld251, \
+        "《本地开发.md》没把这两个默认关与隔离口径写清楚"
+    print("[251] 续251 ok: cert/screenshot 出厂关显式登记（偷翻即红）｜[6u] 可移植隔离仍在｜"
+          "《本地开发.md》写明口径与正确做法（策略页临时开，别改 DEFAULTS）")
     print("SMOKE PASS")
 
 
