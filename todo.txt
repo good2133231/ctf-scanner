@@ -4309,7 +4309,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       新端点 `/api/ports/fullscan`（任务详情端口页签按钮，追加执行、结果落本任务）
 - [x] `scanner/urlself.py`：robots Disallow + sitemap（索引表取一层）→ 路径并入 dirscan 候选
       （只深扫、共用额度、来源标签 robots.txt/sitemap.xml）；三处配置一致 + 策略页开关
-- [x] `[250]` 门禁 + `[5p]`/`[7s]` 断言与注释同步更新；全量 SMOKE PASS（见下一行）
+- [x] 全量 SMOKE PASS（277 组，8 分 19 秒；5 次全量，红因全是登记类真问题 + 1 次行尾）
 
 **下一轮（续250 之后）——只放未做的：**
 - [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
