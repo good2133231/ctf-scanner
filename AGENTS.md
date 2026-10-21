@@ -258,6 +258,10 @@ Flask Web 控制台（仿 ARL）。
   `[252]` 钉着 dirscan 注释口径（默认深扫的事实、请求量口径、“以 mode 行为准”）。
   档位请求量参考：端口 top≈21 连接/主机；目录 quick≈150+基线/站、deep≈400+基线+派生/站
   （递归默认关；全端口 6.5 万连接/主机，已改单任务触发）。
+- **演示资产与临时残留要即时清（续253）**：演示任务/靶场/临时管理员/`/tmp` 验证库，
+  用完当轮清掉（db.delete_task + 杀进程 + rm）；`todo.txt` 各节里**已完成的待办项要删掉**——
+  完成的事留在清单里就是“文档撒谎”（续252 同款纪律）。清理前必须点名确认动的是谁：
+  用户自己的任务（含 stopped 的）一个不碰，除非主理人明确点名。
 - **站点自曝入口走 `scanner/urlself.py`（续250）**：robots.txt 的 `Disallow:` + sitemap.xml
   （robots 里 `Sitemap:` 指名优先，`<sitemapindex>` 再取一层、上限 3 份）→ 路径并入 dirscan 候选
   （**只深扫**、与字典共用 `max_paths`、来源标签 `robots.txt`/`sitemap.xml`）。
