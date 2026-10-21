@@ -4886,6 +4886,10 @@ def create_app():
                                 "suffix_aware": f.get("dirscan_suffix_aware") == "1",
                                 "big_dict": f.get("dirscan_big_dict") == "1",
                                 "tech_aware": f.get("dirscan_tech_aware") == "1",
+                            # 续248：历史 URL 并入目录候选（零目标流量）
+                            "history_enabled": f.get("dirscan_history") == "1",
+                            "history_max": int(f.get("dirscan_history_max", 1000) or 1000),
+                            "history_with_query": f.get("dirscan_history_query") == "1",
                                 "max_paths": int(f.get("dirscan_max_paths", 400) or 400),
                                 "fw_max_paths": int(f.get("dirscan_fw_max_paths", 150) or 0),
                                 # 目录递归（续30，默认关）：0 = 关闭

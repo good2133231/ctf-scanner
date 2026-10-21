@@ -460,6 +460,11 @@ DEFAULTS = {
         "quick_max_paths": 150,    # 浅扫单站点上限（dirs_shallow 共约 150 条，基本全吃）
         "big_dict": True,      # 未知技术栈时用全量字典（config/dicts/dirs_big.txt）
         "tech_aware": True,    # 按 sites.tech 选字典：Java 站不吃 PHP/ASP 后缀（用户要求）
+        # 续248：历史 URL（wayback CDX + OTX url_list，**零目标流量**）并入目录候选。
+        # 上限是"单注册域最多取多少条"；带查询串的路径默认折叠（否则 ?id= 变体吃光额度）。
+        "history_enabled": True,
+        "history_max": 1000,
+        "history_with_query": False,
         "max_paths": 400,      # 深扫：单站点最多扫多少条字典（框架字典优先占额度）
         # 续222：外部字典源（零入仓接第三方字典目录，如 dirsearch 的 dicts/）。
         # 每项：{name, path, picks?, after?}；标签只进**名字/分类名**，不进绝对路径。

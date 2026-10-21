@@ -297,6 +297,11 @@ dirscan:
   quick_max_paths: 150
   big_dict: true
   tech_aware: true
+  # 续248：历史 URL（wayback CDX + OTX url_list，零目标流量）并入目录候选路径。
+  # 关掉：history_enabled=false；单注册域条数上限：history_max；带查询串：history_with_query
+  history_enabled: true
+  history_max: 1000
+  history_with_query: false
   # 续222：外部字典源（零入仓）。path 指向本机字典目录（相对仓库根或绝对路径），
   # 该目录下每个 .txt 的分类名就是一层；picks 只接列出的分类（空＝全接）；
   # after 指定插在哪一层之后（fw/lang/shallow/exposure/common，缺省 common）。

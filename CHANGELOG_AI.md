@@ -3,6 +3,47 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续248（2026-10-21，WorkBuddy · Claude）：历史 URL 来源（wayback + OTX，零目标流量）并入目录候选
+
+主理人问"爬虫爬接口完善吗？要不要上 gau"。结论：我们只从 **JS 里挖接口**（jsmine）+ **字典猜
+路径**（dirscan），**缺历史 URL 这一路**——而 gau 的价值正是"零目标流量拿到早已下线但仍暴露的
+路径与参数"。
+
+### 做法：**原生实现，不引 Go 二进制**
+
+gau 的两个数据源都是公开 HTTP/JSON，`scanner/urlhist.py` 原生复刻（≈120 行），换台机器
+`pip install -r requirements.txt` 就能跑（迁移性优先于"再装一个 Go 工具"）：
+
+- `web.archive.org` CDX（`url=*.注册域&filter=statuscode:200&collapse=urlkey`）；
+- AlienVault OTX `url_list`（我们 passive.py 里已在用同域的 passive_dns，风格一致）；
+- 归一化 `to_path()`：URL → 路径（**无 scheme 的别把 host 当路径**——`/api/v1?k=1` 曾被错判成
+  `/v1`，单测抓出来修的），根路径与超长路径不入候选，查询串默认折叠（`?id=` 变体会吃光额度）；
+- 去重保序 + `dirscan.history_max`（默认 1000，单注册域）；**上游失败/429/超时只记一行跳过**，
+  它只是候选词的一路补充，缺了不影响字典扫描。
+
+### 接线与落点
+
+- `DirscanStage._history_paths()`：**按注册域查一次并缓存**（同一注册域下的站点共用一份），
+  并入 `_builtin_scan` 的候选路径（**浅扫不吃**，保住精选字典的额度；与字典共用同一个
+  `max_paths` 额度）；
+- 来源标签 `历史URL(wayback)` / `历史URL(OTX)` —— 页面与报告上看得出这条路径是怎么来的
+  （沿用续222 的"第四项是来源标签"契约）；
+- 三处配置一致：DEFAULTS / settings.yaml / POST 映射 + 策略页（开关 + 保留查询串 + 上限）。
+
+### 关于"要不要再接一个爆破引擎"
+
+同一轮给出的结论（不重复做）：**被动继续用 subfinder（已有），爆破继续用 puredns+massdns
+（已装、最快、泛解析最严）**；ksubdomain 需原始套接字特权（迁移性差）、OneForAll/subDomainsBrute
+是慢速 Python 且被动面已被 subfinder 覆盖 ⇒ 都不接。
+
+### 门禁
+
+- `[248]`：`to_path` 五个用例（含"无 scheme 的 host 不当路径"）＋ 两路解析/去重/上限/429/异常
+  全部安全空表 ＋ dirscan 接线 ＋ 三处配置一致（全桩注入，零真实网络）。
+
+### 门禁实测
+
+- 全量结果见下一行更新。
 ## 续246（2026-10-20，WorkBuddy · DeepSeek-V4.1-Flash 代码 + Step-5-Preview 收尾）：子域名被动源 A 批（chaziyu/urlscan）+ 爆破快速档接线（B 批）
 
 主理人 2026-10-20 点单「按 A→B 两批做」：A 批挑 OneForAll 里独有的 keyless 数据源（本体不接），

@@ -243,6 +243,11 @@ Flask Web 控制台（仿 ARL）。
   （vue/react/angular/nextjs/nuxt…；**不收 jquery/bootstrap**）⇒ 返回 `"static"`，
   lang 层查 `dirs_static`（不存在 ⇒ 自动跳过），common/exposure 照旧；
   判定顺序 URL 后缀 → 服务端标签 → 前端标签（`vue,php` 是 PHP 站）。
+- **历史 URL 走 `scanner/urlhist.py`（续248）**：gau 那类"零目标流量拿历史 URL"的能力
+  **原生实现**（wayback CDX + OTX url_list），不引 Go 二进制。产出是**路径**（`to_path`，
+  无 scheme 的别把 host 当路径），来源标签 `历史URL(wayback)` / `历史URL(OTX)`；
+  按注册域查一次并缓存，**只并入深扫**（浅扫保住精选额度）、与字典共用 `max_paths` 额度；
+  上游失败只记一行跳过。别再接第二个爆破引擎（puredns+massdns 已是最优）。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`

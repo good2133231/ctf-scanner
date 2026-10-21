@@ -4303,6 +4303,22 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续248（2026-10-21，WorkBuddy · Claude）：历史 URL（wayback+OTX，零目标流量）并入目录候选
+
+- [x] `scanner/urlhist.py` 原生复刻 gau 的两路数据源（不引 Go 二进制，迁移性优先）；
+      归一化 `to_path`（无 scheme 的 host 不当路径）/ 去重 / 上限 / 上游失败安全跳过
+- [x] dirscan 按注册域查一次并缓存，并入深扫候选（浅扫不吃、与字典共用额度）；来源标签
+      `历史URL(wayback)`/`历史URL(OTX)`；三处配置一致 + 策略页开关
+- [x] 结论：爆破引擎继续用 puredns+massdns，不接 ksubdomain/OneForAll/subDomainsBrute
+- [x] 全量 SMOKE PASS（271 组；6 次全量，红因全部被门禁真抓到）
+
+**下一轮（续248 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针攒够连绿后升必过
+- [ ] 演示任务与本地 8899 靶场清理（等主理人确认）
+- [ ] katana 页面爬取（可选，默认关）
+
+
 ## 续246（2026-10-20，WorkBuddy · DeepSeek-V4.1-Flash 代码 + Step-5-Preview 收尾）：子域名被动源 A 批（chaziyu/urlscan）+ 爆破快速档接线（B 批）
 
 主理人点单"按 A→B 两批做"；代码 DeepSeek-V4.1-Flash 在本机工作区写完（未提交、未跑全量），

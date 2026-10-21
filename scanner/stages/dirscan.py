@@ -48,10 +48,11 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from .base import Stage
-from .. import db, fingerprint, flagfind, ml
+from .. import db, fingerprint, flagfind, ml, urlhist
+from ..extdom import base_of
 from ..config import BASE_DIR, resolve
 from ..utils import (read_lines, write_lines, pool_run, http_request, pick_python, run_cmd,
                      html_title)
@@ -1059,6 +1060,50 @@ class DirscanStage(Stage):
 
     # ---------- 内置兜底 ----------
 
+    def _history_paths(self, sites, cfg):
+        """历史 URL 候选（续248）：按**注册域**各查一次并缓存（同一注册域下的站点共用一份）。
+
+        wayback CDX + OTX url_list，**零目标流量**——挖字典猜不到、JS 里已删掉的历史路径。
+        `dirscan.history_enabled` 不为 True ⇒ 直接空（缺配置/离线/测试环境都不许偷偷发请求）；
+        上游失败也只是这一路没有词，字典扫描照旧。
+        """
+        if cfg.get("history_enabled") is not True or self.ctx.options.get("offline"):
+            return {}
+        cache = getattr(self, "_hist_cache248", None)
+        if cache is None:
+            cache = self._hist_cache248 = {}
+        cap = int(cfg.get("history_max", 1000) or 1000)
+        with_q = cfg.get("history_with_query") is True
+        try:
+            timeout = int((self.ctx.settings.get("limits") or {}).get("http_timeout", 10))
+        except (TypeError, ValueError):
+            timeout = 10
+        out, todo = {}, []
+        for s in sites or []:
+            host = (urlsplit(str(s.get("url") or "")).hostname or "").strip().lower()
+            base = base_of(host) or host
+            if not base or base in out:
+                continue
+            if base in cache:
+                out[base] = cache[base]
+            else:
+                out[base] = []
+                todo.append(base)
+        for base in todo:
+            rows = urlhist.collect(base, self.ctx.settings, logger=self.ctx.logger,
+                                   cap=cap, with_query=with_q, timeout=timeout)
+            cache[base] = rows
+            out[base] = rows
+        tot = sum(len(v or []) for v in out.values())
+        if tot:
+            self.ctx.logger.info(
+                f"[dirscan] 历史 URL 候选 {tot} 条（{len([k for k, v in out.items() if v])} 个注册域，"
+                f"上限 dirscan.history_max={cap}）")
+        else:
+            self.ctx.logger.info("[dirscan] 历史 URL 本轮没有可用候选（第三方档案没命中/不可达）")
+        return {k: (v or []) for k, v in out.items()}
+
+
     def _builtin_scan(self, sites, cfg, limits, only_fw=False, shallow=False):
         """内置字典扫描（按站点技术栈 + 框架选字典）。
 
@@ -1094,6 +1139,8 @@ class DirscanStage(Stage):
         else:
             layers, limit = _FULL_LAYERS, None
 
+        # 续248：历史 URL（零目标流量）只在深扫/补充扫并入；浅扫保住精选字典的额度
+        _hist248 = {} if shallow else self._history_paths(sites, cfg)
         jobs, tally = [], {}
         for s in sites:
             kind = _dict_kind(s.get("tech"), s.get("url")) if tech_aware else ""
@@ -1107,6 +1154,12 @@ class DirscanStage(Stage):
             tally[label] = tally.get(label, 0) + 1
             # 续222：jobs 从三元组变四元组，第四项是**来源字典标签**（字典名/分类名）。
             # 后缀派生轮（`_suffix_jobs`）没有对应字典 ⇒ 标签 `suffix`（派生变体）。
+            _host248 = (urlsplit(str(s.get("url") or "")).hostname or "").strip().lower()
+            for _p248, _lab248 in _hist248.get(base_of(_host248) or _host248, []):
+                if _p248 and _p248 not in src_of:      # 字典里已有的按字典的来源标签算
+                    paths.append(_p248); src_of[_p248] = _lab248
+            if limit and len(paths) > limit:           # 历史 URL 与字典共用同一个额度
+                paths = paths[:limit]
             jobs.extend((s["url"], p, s["url"], src_of.get(p, "?")) for p in paths)
         if not jobs:
             if only_fw:

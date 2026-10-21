@@ -499,6 +499,10 @@ def main():
 
     # 2c) favicon 平台指纹（mmh3）与外部情报模块（iprecon / fofa）的纯函数行为
     settings = load_settings()
+    # 续248：历史 URL（wayback CDX / OTX url_list）默认开，但它发往**站外** —— 门禁必须零外部
+    # 请求，全局关掉（需要验它的 [248] 自己造桩打在 urlhist 上，不走网络）。
+    settings["dirscan"] = dict(settings.get("dirscan") or {}, history_enabled=False)
+    assert settings["dirscan"]["history_enabled"] is False
     # 续217：门禁不拉真实 dirmap（第三方工具、耗时且依赖本机装没装）。需要验适配器的测试
     # 自己造临时脚本/临时 run_cmd；这里把全局配置指到不存在的路径，让管道只走内置字典。
     _tools217 = settings.setdefault("tools", {})
@@ -6157,6 +6161,10 @@ workflows:
         _u_cfg[_k6u] = dict(_u_cfg.get(_k6u) or {}, enabled=False)
         assert _u_cfg[_k6u]["enabled"] is False, _k6u
     _u_cfg["intel"] = dict(_u_cfg.get("intel") or {}, enabled=False)
+    # 续248：历史 URL（wayback/OTX）同样发往站外 —— 默认开，这里必须显式关，
+    # 否则一次"全阶段真跑"就会真的去查 web.archive.org（与上面 FOFA 同一个道理）。
+    _u_cfg["dirscan"] = dict(_u_cfg.get("dirscan") or {}, history_enabled=False)
+    assert _u_cfg["dirscan"]["history_enabled"] is False
     _u_cfg["github"] = dict(_u_cfg.get("github") or {}, enabled=False)
     # 内置被动子域源（crt.sh / certspotter / alienvault …）同样是外部接口：一并关掉。
     # 本用例目标是 URL，`subdomain` 阶段对 URL 目标本来就整阶段跳过；关它是为了让
@@ -30406,6 +30414,44 @@ expression: r0()
         "本地开发.md 得告诉本地 AI 有这个脚本（否则没人知道服务器侧怎么更新）"
     print("[247] 续246 ok: update.sh 远程一键更新（自定位仓库根 / 工作区干净才动 / sync_check --strict / "
           "rebase 不 reset / 依赖只吃 lock / 重启只杀 pid 文件记着的进程 / 无绝对路径 / 不替用户 push）")
+    # ------------------------------------------------------------------ [248]
+    # 续248：历史 URL（wayback CDX + OTX url_list，零目标流量）并入目录候选
+    from scanner import urlhist as _uh248
+    from scanner.config import DEFAULTS as _DEF248
+
+    # ① 归一化：URL → 路径（无 scheme 的别把 host 当路径；根路径与超长路径不进）
+    assert _uh248.to_path("https://a.test/admin/x.php") == "/admin/x.php"
+    assert _uh248.to_path("/api/v1?k=1") == "/api/v1" and _uh248.to_path("admin") == ""
+    assert _uh248.to_path("https://a.test/") == "/" and _uh248.to_path("a.test/x/y") == "/x/y"
+
+    # ② 两路解析 + 去重/上限/失败不炸（全桩注入，零真实网络）
+    _wb248 = ('[["original","timestamp"],["https://a.test/admin/x.php","1"],'
+              '["http://a.test/api/v1?k=1","2"],["https://a.test/","3"]]')
+    _otx248 = '{"has_next": false, "url_list": [{"url": "https://a.test/login"}, {"url": "/admin/x.php"}]}'
+
+    def _req248(url, timeout=None, settings=None, **_k):
+        return {"status": 200, "headers": {},
+                "text": _wb248 if "web.archive" in url else _otx248}
+
+    _o248 = _uh248.collect("a.test", {}, cap=50, request=_req248)
+    _m248 = dict(_o248)
+    assert _m248.get("/admin/x.php") == "历史URL(wayback)", _o248      # 先到先得
+    assert "/api/v1" in _m248 and "/login" in _m248 and "/" not in _m248
+    assert len(_uh248.collect("a.test", {}, cap=1, request=_req248)) == 1
+    assert _uh248.collect("a.test", {}, request=lambda *a, **k: {"status": 429, "text": ""}) == []
+    assert _uh248.collect("a.test", {}, request=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))) == []
+    assert _uh248.collect("", {}, request=_req248) == []
+
+    # ③ 接线与三处配置一致
+    _dh248 = (ROOT / "scanner" / "stages" / "dirscan.py").read_text(encoding="utf-8", errors="replace")
+    assert "urlhist.collect(base" in _dh248 and "_history_paths(sites, cfg)" in _dh248, "dirscan 没接线历史 URL"
+    _ga248 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert '"history_enabled": f.get("dirscan_history") == "1",' in _ga248, "POST 映射没接"
+    _tp248 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8", errors="replace")
+    assert 'name="dirscan_history"' in _tp248, "策略页没有历史 URL 开关"
+    assert _DEF248["dirscan"]["history_enabled"] is True, "缺省应该是开"
+    print("[248] 续248 ok: 历史 URL（wayback+OTX，零目标流量）归一化成路径并入目录候选｜"
+          "去重/上限/上游失败都安全｜三处配置一致")
     print("SMOKE PASS")
 
 
