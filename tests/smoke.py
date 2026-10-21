@@ -7643,12 +7643,12 @@ http:
     finally:
         _gui.run_task = _orig_run7
 
-    # ⑥b 流水线挂钩：auto_expand 时在**最后一个**拓展阶段后自动做后处理（不勾则不做）
+    # ⑥b 流水线挂钩：**不论 auto_expand 是否勾选**，都在**最后一个**拓展阶段后自动做一次后处理（续255 解门控：归属是数据模型的 correctness；勾选只影响 GUI 补阶段/目标子域补收/多层递归）
     _calls7 = []
     _orig_proc7 = _exd7.process
     try:
         _exd7.process = lambda *a, **kw: _calls7.append(a[0] if a else None)
-        for _opt7b, _want in (({"auto_expand": True}, True), ({}, False)):
+        for _opt7b, _want in (({"auto_expand": True}, True), ({}, True)):
             _calls7.clear()
             _t7e = db.create_task(f"smoke-hook-{bool(_opt7b)}", "targ1.pro", ["jsmine"], {})
             PipelineRunner(StageContext(_t7e, "smoke-hook", parse_lines(["targ1.pro"]),
@@ -7663,7 +7663,7 @@ http:
     print("[7a] 续40 拓展域名六条 ok: 存在性判定(幂等·失败落原因)/目标是子域→补收主域名+"
           "当子域入库/归属本项目→追加 promote:<原来源>（原行保留·第三方不误加·子域页显示·"
           "拓展页默认隐藏）/按主域名分组折叠(?group=0 平铺)/建任务 auto_expand 补 osint·jsmine/"
-          "流水线在最后拓展阶段后自动后处理（不勾则不动）/ 续94 跨任务追加按 owner 收口"
+          "流水线在最后拓展阶段后自动后处理（不论是否勾选）/ 续94 跨任务追加按 owner 收口"
           "（只碰自己的任务·越权 task_id 空手而归·管理员不受限）")
 
     # [7b] 续42：`internal: true` 命名提取器的值**回填模板上下文**（A1）—— nuclei 的

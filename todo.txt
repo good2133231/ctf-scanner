@@ -4315,6 +4315,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] [256] 断言组：ip_drill 单测（含 IPv6 编码）+ 页面级三处（隔离库插 own/ext 两行同 IP）+
       dupes 三级（纯函数/真数据不变量/CLI 输出）；全部先经 logs/verify256.py 17 项实测再入禁
 - [x] 续255 已推送同步（3e40a09；用户终端 GCM 登录后 push 成功，sync_check rc=0，保险分支/
+- [x] 门禁红点修复：[7a] ⑥b 旧断言按续255 新语义改（不勾 auto_expand 也调 extdom.process；注释/print 文案同步）——服务器首跑发现，已推送待重跑
       bundle/调试文件已清理）
 
 **下一轮（续257）——只放未做的：**
