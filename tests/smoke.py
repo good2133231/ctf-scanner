@@ -28447,10 +28447,12 @@ expression: r0()
     # 续171 那条口径：反查结果必须标明用的是哪条语法（否则事后解释不清这条域名哪来的）
     assert all('domain="t214.test"' in (r["note"] or "") for r in _rows214), _rows214
 
-    # ⑥ 配置两处一致 + 出厂关（外部接口不该在用户没点头时产生流量）
+    # ⑥ 配置两处一致 + 出厂**开**（续258 主理人点单：VT key 已按 keystore 规程配好，
+    #    开关不该再挡路；免费档 4 次/分钟、500 次/天由 min_interval（默认 15 秒）节流夹住）
     from scanner import config as _cf214
     _dv214 = _cf214.DEFAULTS["virustotal"]
-    assert _dv214["enabled"] is False, _dv214
+    # 要改回出厂关必须同时改这条登记并写清理由（[251] 同款纪律：偷翻即红）。
+    assert _dv214["enabled"] is True, _dv214
     assert _dv214["limit"] <= 40 and "min_interval" in _dv214, _dv214
     assert _cf214.load_settings()["virustotal"] == _dv214, "settings 与 DEFAULTS 漂了"
     _kx214 = (ROOT / "config" / "keys.yaml.example").read_text(encoding="utf-8")
@@ -28463,7 +28465,7 @@ expression: r0()
     print("[214] 续214 ok: VirusTotal 子域反查 —— 无 key 零请求｜有 key 解析形状+自身域名不重复收+"
           "x-apikey 头+不带登录态｜404 是没记录不是错、401/429/500/非 JSON 如实报｜"
           "min_interval 节流（变异=摘掉节流）｜阶段级落 osint:vt 且 note 带查询语法｜"
-          "配置两处一致+出厂关+keys 样例+osint 接线")
+          "配置两处一致+出厂开+keys 样例+osint 接线")
 
     # ------------------------------------------------------------------ [215]
     # 续215-P2-12：单任务资源画像（真任务 CPU/内存实测 → 动态并发档）。
