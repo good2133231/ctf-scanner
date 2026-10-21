@@ -55,7 +55,7 @@ from .. import db, fingerprint, flagfind, ml, urlhist, urlself
 from ..extdom import base_of
 from ..config import BASE_DIR, resolve
 from ..utils import (read_lines, write_lines, pool_run, http_request, pick_python, run_cmd,
-                     html_title)
+                     html_title, norm_hit_path)
 
 URL_RE = re.compile(r"https?://[^\s'\"<>()]+")
 # dirmap 的产出格式：[状态码][content-type][大小] URL（大小形如 `1.23kb` / `512.00b`）
@@ -1042,7 +1042,7 @@ class DirscanStage(Stage):
             m = DIRMAP_RE.match(line)
             if m:
                 rows.append({"site_url": _origin_of(m.group(4)),
-                             "path": _strip_fragment(m.group(4)),
+                             "path": norm_hit_path(_strip_fragment(m.group(4))),
                              "status": int(m.group(1)),
                              "length": _size_to_int(m.group(3)), "method": "GET",
                              "note": "dirmap", "dict_src": src})
@@ -1052,7 +1052,7 @@ class DirscanStage(Stage):
                 continue
             sm = re.match(r"^\s*[\[(]?(\d{3})[\])]?", line)
             rows.append({"site_url": _origin_of(urls[0]),
-                         "path": _strip_fragment(urls[0]),
+                         "path": norm_hit_path(_strip_fragment(urls[0])),
                          "status": int(sm.group(1)) if sm else None,
                          "length": None, "method": "GET",
                          "note": "dirmap", "dict_src": src})

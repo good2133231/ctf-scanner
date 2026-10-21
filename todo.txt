@@ -4303,6 +4303,50 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续255（2026-10-21，WorkBuddy · Step-5-Preview）：IP 反查真机验证收尾 + 主理人四连点单（自家子域直接进站 / 双斜杠 / 同路径折叠）
+
+- [x] 续173 剩余（三源成败**真机联网**验证）闭环：4 个公共 IP（8.8.8.8 / 1.1.1.1 / 223.5.5.5 /
+      114.114.114.114）真跑 preflight / reverse_lookup_detail / lookup_many，五档全中真实结局
+      （webscan 530 / ip138 200-空 / viewdns 403 / dnsdblookup 间歇不可达 / 原生 PTR 4-4；
+      hackertarget 单源出数 496~500）——与续215 在服务器上的观察互相印证
+- [x] 验证现场抓到三处真问题全修：① `.arpa` 反解链过滤（`iprecon.normalize_domain` 出口，
+      六个适配器 + PTR 一并生效；实测 8.8.8.8 合并域名 727→663）；② 备用池追加批
+      （默认源整批零命中 ⇒ 对没试过的备用源预检+再跑一批，真机 命中IP 0→4 / 域名 0→787）；
+      ③ hackertarget 配额耗尽（HTTP 200 + "API count exceeded"）与"无记录"分开（五档契约不动，
+      reason 点名配额，汇总行原因列顶上）
+- [x] 主理人点单②：fofaico / js 拓展到的自家子域**直接进站点** —— `extdom.process`（存在性判定+
+      归属追加）不再由 `auto_expand` 门控（归属是数据模型 correctness，不是可选项）；
+      新归属域名同轮探测入站（`runner._probe_promoted`：probe_candidates + register_sites
+      round2=True 同一份实现，不覆盖第一批站点）；只在 probe 已跑过的轮次补探；
+      tasks.html 复选框 tooltip 同步改写（② 那条承诺已变假）
+- [x] 主理人点单③：目录双斜杠归一 —— 单一产地 `utils.norm_hit_path` 三处共用（写入侧
+      `dirscan._parse_output` / 链接 `_dir_url` / 「路径」列 `dir_path`，旧库行也显示正确）；
+      只动站点边界后的前导斜杠，路径内部 `//` 原样（服务端上可能是另一个资源，不猜）
+- [x] 主理人点单④：目录跨站同路径折叠 —— `_fold_dirs` 第二级（键 = 归一路径 + 状态码；
+      大小**不进键**（同路径不同站点大小经常不同，主理人点名要折），状态不同不折）；
+      代表行报「另有 N 条相同：站点A、站点B 等」；`?all=1` 全显；`_fold_dirs` 从 create_app()
+      闭包提到模块级（与 _safe_next/_dir_url 同模式，门禁可单测）
+- [x] 主理人点单①（问答无改动）：「另见于 X」= 同一域名还被来源 X 找到过（去重展示，
+      入库行一条没动）；FOFA·ICO 反查 = favicon 反查源；history = wayback/OTX 历史 URL 源（续248）
+- [x] [255] 断言组：新逻辑全部先经 logs/verify255_gui.py 38 项实测（含 Jinja 展示串优先级、
+      runner 双桩接线、隔离临时库）再入禁；每条带变异证伪方向；续24 时代 (4b) 折叠断言按新语义
+      重写（同路径跨站折是主理人点单新行为，与旧用例"跨站不误折"期待相反；保留其"站点身份来自
+      数据本身"的保护意图）
+- [ ] **全量门禁待服务器跑**：本机 AI 环境守卫把 tests/smoke.py 的**内容**判危隔离 —— 任何
+      Python 进程一 open 即 EBADF 且文件被删（实测 4 次；副本同样中招 ⇒ 判内容不判路径；
+      bash/git/Read/Edit 不受影响；注销 PYTHONPATH 无效）⇒ push 后服务器 `bash update.sh --smoke`，
+      结果回填本节；已登记 AGENTS.md §2「续255 环境守卫坑」
+
+**下一轮（续256）——只放未做的：**
+- [ ] 续255 推送后**服务器全量门禁**结果回填（SMOKE PASS 组数 + 耗时补进 CHANGELOG 续255 门禁节）
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针升必过：口径见 CHANGELOG 续254 —— 真 runner 上 `probe-3-14`
+      连续 ≥3 次 push 全绿后，摘 `continue-on-error: true` 并同步 quality.yml 头部注释
+- [ ] hostcollide 的 GUI/CLI 触发入口（续183 残留，待主理人点单按钮位置）
+- [ ] 四项目对比剩余 T10（IP→域名下钻链接）/ T11（--dupes 组数截断可见）
+- [ ] 对面 AI 新交材料的三个"待主理人点"问题（《任务13-14-16预读结论》：13 的非破坏性边界 /
+      OOB 反连平台立项 / 14 的 nuclei staging 方案认不认）
+
 ## 续254 附（2026-10-21，WorkBuddy · Step-5-Preview）：还原 todo/CHANGELOG 行尾为 CRLF（行尾回归史上第三次）
 
 - [x] 现象：64c2465 的 numstat 又是万行级（todo 4760/4738、CHANGELOG 15668/15639），

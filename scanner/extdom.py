@@ -976,7 +976,9 @@ def group_page(q=None, extra_where=None, extra_params=(), page=1, per_page=20, o
 
 
 def process(task_id, settings=None, logger=None, stopped=None):
-    """流水线上用的入口：存在性判定 + 归属追加（都只在 `auto_expand` 打开时由 runner 调）。
+    """流水线上用的入口：存在性判定 + 归属追加（续255 起固定由 runner 在最后一个
+    产出拓展域名的阶段之后调，不再由 `auto_expand` 门控 —— 归属追加是数据模型的
+    correctness，不是可选项）。
 
     顺序**必须先判定再追加**：追加时会把拓展行的 `ip / cdn / ip_note` 一起复制到新行上，
     先解析能让新行一落库就带"存不存在"的结论。

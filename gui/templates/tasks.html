@@ -59,7 +59,7 @@
     <div class="row" data-ck-group="expand">
       <span class="muted" title="任务级选项 auto_expand：只影响本次任务，不改全局策略">
         拓展选项（可选）：</span>
-      <label class="chk" title="① 自动补上 osint / jsmine 两个拓展阶段（没勾也补）；② 拓展结束后自动做 DNS 存在性判定，并把「归属本项目」的拓展域名追加成子域名；③ 目标是子域（如 aaa.targ1.pro）时自动补收它的主域名 targ1.pro，并把该子域也记成一条子域资产">
+      <label class="chk" title="① 自动补上 osint / jsmine 两个拓展阶段（没勾也补）；② 目标是子域（如 aaa.targ1.pro）时自动补收它的主域名 targ1.pro，并把该子域也记成一条子域资产；③ 「追加扫描层数」>1 时，把每层新挖出的自家子域与高置信拓展域名自动带进下一轮。注：拓展出的「归属本项目」子域追加为子域名 + 同轮探测入站，自续255 起固定执行，不再取决于本选项">
         <input type="checkbox" name="auto_expand" value="1"> 自动拓展扫描</label>
       {# 续169（主理人点单：「这个不仅要在拓展域名哪个位置显示，主界面也要显示」）：
          「追加扫描层数」与「置信度阈值」这两个控件从「送去探测」那一处接到主面板上来。

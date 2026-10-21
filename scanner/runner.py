@@ -347,12 +347,16 @@ class PipelineRunner:
         total = max(1, len(stages))
         stopped = False
         failed = []
-        # 自动拓展扫描（任务级 `auto_expand`，见 `scanner/extdom.py`）：只在**最后一个**
-        # 产出拓展域名的阶段之后跑一次 —— 挂在中间会把后一个阶段的产物漏掉，
-        # 每个阶段后都跑则重复解析（虽然幂等，但白白多一轮 DNS）。
-        auto_expand = ctx.options.get("auto_expand") is True
-        last_ext = max((i for i, s in enumerate(stages) if s in _EXT_STAGES), default=-1) \
-            if auto_expand else -1
+        # 拓展域名的存在性判定 + 归属追加（`extdom.process`）：续255 起**不再由
+        # `auto_expand` 门控** —— 主理人点单「fofaico / js 拓展到归属本项目的子域，
+        # 就不在拓展域名扫描，直接放到站点里面」：那是数据模型的 correctness
+        # （它们本来就是本项目子域），不该取决于用户记不记得勾一个选项。仍在
+        # **最后一个**产出拓展域名的阶段之后跑一次 —— 挂在中间会把后一个阶段的产物
+        # 漏掉，每个阶段后都跑则重复解析（虽然幂等，但白白多一轮 DNS）。
+        # `auto_expand` 剩下的语义：GUI 侧补 osint/jsmine 阶段、目标是子域时补收主域，
+        # 以及层数 >1 时的自动递归（`_maybe_queue_next_layer`，仍由 ext_depth 把着）。
+        last_ext = max((i for i, s in enumerate(stages) if s in _EXT_STAGES), default=-1)
+        done_stages = set()
         # 续212（P3-14①）：CLI 前台进度条钩子。先推进度再打阶段横幅，日志才会
         # 落在"新阶段"的那一条上方（`scanner/log.py` 的控制台 handler 走 progress.write）。
         pg = getattr(ctx, "progress", None)
@@ -376,6 +380,7 @@ class PipelineRunner:
                 failed.append(sname)
             finally:
                 ctx.stage_seconds[sname] = round(time.time() - _t_stage, 3)
+            done_stages.add(sname)
             if i == last_ext:
                 # 拓展域名的存在性判定 + 归属追加（纯 DNS 只读 + 本地写库）。
                 # 单独 try：这是**附加动作**，它挂了不该把 osint/jsmine 已经入库的产物牵连掉。
@@ -385,6 +390,14 @@ class PipelineRunner:
                     # 续151：记下本轮**归属追加**产出的域名，供「追加层数」决定下一层目标。
                     ctx.owned_new = list(
                         (ext_res.get("promote") or {}).get("promoted") or [])
+                    # 续255：新归属的域名**同轮探测入站**。probe 在阶段表里排在
+                    # osint/jsmine 之前，不补这一下，这批域名要等下一次运行才成为站点，
+                    # 本轮后面的 dirscan/crawl/vulnscan 就吃不到它们（主理人点单：
+                    # 「直接放到站点里面，进行正常站点后续一系列操作」）。只补 probe
+                    # **已经跑过**的轮次；probe 还没跑（阶段表里排在后面）时它自己会
+                    # 从库里读到这批新行（`extdom.own_hosts(include_db=True)`）。
+                    if ctx.owned_new and "probe" in done_stages and not ctx.stopped():
+                        _probe_promoted(ctx, ctx.owned_new)
                 except Exception as e:  # 附加动作级容错
                     ctx.logger.error(f"[extdom] 拓展域名后处理异常：{e}")
                     ctx.logger.debug(traceback.format_exc())
@@ -444,6 +457,29 @@ def sync_pocs(settings=None):
         db.upsert_poc(m.get("_path") or m.get("id"), m)
 
 
+def _probe_promoted(ctx, domains):
+    """续255：把归属追加产出的新域名**同轮探测入站**（主理人点单）。
+
+    fofa-ico / jsmine 拓展到的自家子域（`promote:*` 行）不留在「拓展域名」里等人工
+    送探：追加成子域名的同一轮就探测入站，让本轮后面的 dirscan / crawl / vulnscan
+    按正常站点覆盖到它们。探测走 `probe_candidates` + `register_sites` 同一份实现
+    （与 ProbeStage 共用，不另写"什么算存活"的第二套口径）；候选 = 每域名 https/http
+    两条（与 ProbeStage 对域名目标同规则）。失败只警告不抛 —— 它是附加动作，挂了不该
+    把已完成的阶段产物牵连掉。返回入站站点数。
+    """
+    from .stages import probe as _probe
+    cands = []
+    for d in domains:
+        cands.extend([f"https://{d}", f"http://{d}"])
+    sites = _probe.probe_candidates(ctx, list(dict.fromkeys(cands)))
+    # round2=True：`ctx.results["sites"]` 追加而不是覆盖 —— 后面的 dirscan / vulnscan
+    # 读的是这一份（不传会把第一批站点从内存里抹掉，落库了却没人用，见 register_sites 注释）。
+    reg = _probe.register_sites(ctx, sites, round2=True)
+    ctx.logger.info(f"[probe] 归属追加的 {len(domains)} 个域名同轮探测：入站 {len(reg)} 个"
+                    "（dirscan / crawl / vulnscan 将按正常站点覆盖）")
+    return len(reg)
+
+
 def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
     """续151「追加层数」收尾：本层挖出**新的归属本项目域名**且还剩层数时，再排一次追加运行。
 
@@ -470,8 +506,9 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
         logger.info("[extdom] 追加层数：本轮未正常完成，不再排下一层")
         return
     promoted = [d for d in (getattr(ctx, "owned_new", []) or []) if d]
-    # `extdom.process`（归属追加）只在 `auto_expand` 打开时随流水线跑；「送去探测」不一定带它，
-    # 这里补一次幂等、纯本地写库的归属追加 —— 保证「每层新挖出的归属域名」确实被算进来。
+    # `extdom.process`（归属追加）续255 起固定随流水线跑（不再由 auto_expand 门控）；
+    # 「送去探测」不一定带它，这里补一次幂等、纯本地写库的归属追加 —— 保证
+    # 「每层新挖出的归属域名」确实被算进来。
     try:
         res = extdom.promote_owned(task_id, ctx.settings, logger=logger)
         for d in (res.get("promoted") or []):

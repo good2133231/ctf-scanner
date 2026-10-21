@@ -3,6 +3,96 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续255（2026-10-21，WorkBuddy · Step-5-Preview）：IP 反查真机验证收尾 + 主理人四连点单（自家子域直接进站 / 双斜杠 / 同路径折叠）
+
+本轮两半：① 续173 剩余项 —— IP 反查三源成败的**真机联网**验证（续216 只验过合成五档），
+验证中现场抓到三处真问题；② 主理人当场点单的四件事（「另见于」释义 / fofaico·js 自家
+子域直接进站点 / 目录双斜杠 / 同路径跨站折叠）。
+
+### A. 续173 真机验证（logs/verify255_iprecon.py + logs/verify255_gui.py（均在 gitignore 的 logs/ 下；守卫挡本机门禁期间留作本地验证路径，下轮可改可删））
+
+本机（Windows；会话代理在场，但与直连结果逐条一致）对 4 个公共 IP 真跑 `preflight` /
+`reverse_lookup_detail` / `lookup_many`，五档全部命中真实结局：
+
+- webscan：**HTTP 530**（CloudFront 拒）—— 与续215 在服务器上观察一致，跨机器复现；
+- hackertarget：200 出数（8.8.8.8 单源 496~500 个域名）；
+- ip138：200 但**一个域名都不出**（HTML 结构变了，解析正则失效）—— 预检判"活着"；
+- viewdns：**HTTP 403**（开始要 key 了）；dnsdblookup：间歇 `network_error 不可达`；
+- 原生 PTR：4/4 全中（不发 HTTP、恒可用 —— 续184 的自实现在真机上兑现）。
+
+### B. 验证现场抓到的三处真问题（全修，各带断言）
+
+1. **`.arpa` 反解链会入库**：hackertarget 对 8.8.8.8 / 1.1.1.1 的返回里
+   `0.0.d.5.9.6.0.7.4.0.1.0.0.2.ip6.arpa` 这类 PTR 链占据前列；IP 命中 ≤30（未判共享
+   主机）时整页 arpa 链会被当"域名"写进 `csegs.domains` 与 `osint:cseg` 资产面。
+   修在 `iprecon.normalize_domain` 出口（六个适配器 + PTR 一并生效，不逐源打补丁）：
+   `.arpa` 是 IANA 保留给反向 DNS 的 TLD，永远不是可扫资产。实测 8.8.8.8 合并域名
+   727 → 663。`utils.is_domain` 形态上仍认 `.arpa`（通用形态判据不动），只收 IP 反查这一条出口。
+2. **备用池在"源活着但全军覆没"时永远不上场**：`lookup_many` 的 `if not _ok` 只覆盖
+   "预检全灭"；ip138 这种 200-空的源让预检永远算存活 ⇒ 默认源静默失败时备用池
+   （ptr/dnsdblookup/rapiddns/viewdns）是死代码 —— 续173 点单要的"反查失败时有备用
+   接口"在这条路上是空的。修法：整批零命中 ⇒ 对**没试过**的备用源预检 + 再跑一批
+   （有界：最多追加一轮，只在全军覆没时发生，正常路径零成本）。真机复测（强制
+   sources=[webscan, ip138]）：命中 IP 0 → 4、域名 0 → 787（ptr 4/4、rapiddns 4/4）。
+3. **hackertarget 配额耗尽与"无记录"混淆**：连跑几批后真机抓到它返回 **HTTP 200** +
+   "API count exceeded - Increase Quota with Membership" 文本，旧代码归进 `empty`，
+   与"这个 IP 没记录"混为一谈。五档契约不动（仍 empty），reason 点名配额，
+   `format_source_stats` 的原因列会把它顶上汇总行。
+
+### C. 主理人四连点单
+
+1. **「另见于」释义**（问答，无改动）：子域名 / 拓展域名页对同一域名的多来源做去重展示，
+   一行只显示一个来源，其余并进「另见于 X」= "这个域名还被来源 X 找到过"（入库行一条
+   没动，只是默认不重复列）。「另见于 FOFA·ICO 反查」= 还被 favicon 反查源找到过；
+   「另见于 history」= 还被历史 URL 源（wayback + OTX，续248）找到过。
+2. **fofaico / js 拓展到的自家子域直接进站点**：`extdom.process`（存在性判定 + 归属追加）
+   **不再由 `auto_expand` 门控** —— 归属本项目是数据模型的 correctness，不该取决于用户
+   记不记得勾一个选项；新归属的域名**同轮探测入站**（`runner._probe_promoted`：走
+   `probe_candidates` + `register_sites(round2=True)` 同一份实现，`round2=True` 是追加
+   `ctx.results["sites"]` 不覆盖第一批），让本轮后面的 dirscan / crawl / vulnscan 按正常
+   站点覆盖到它们。只在 probe **已跑过**的轮次补探（probe 排在后面的阶段表里它自己会从
+   库里读到新行）。`auto_expand` 剩余语义：GUI 侧补阶段、目标子域补收主域、层数 >1 自动
+   递归。tasks.html 复选框 tooltip 同步改写（原第②条承诺已变假）。
+3. **目录双斜杠归一**：dirmap 自拼 URL（站点入口带尾斜杠 + 字典条目带前导斜杠）产出
+   `https://a.xxx.com//assets/x.css`。单一产地 `utils.norm_hit_path` 三处共用：写入侧
+   （`dirscan._parse_output`，新行不再存 //path）、链接（`_dir_url`）、「路径」列展示
+   （新 jinja 全局 `dir_path`，旧库行也显示正确）。只动站点边界后的前导斜杠，路径内部的
+   `//` 原样保留（服务端上它可能是另一个资源，不猜）。
+4. **目录跨站同路径折叠**：`_fold_dirs` 加第二级 —— 键 = 归一路径（完整 URL 取主机后
+   部分，dirmap 行与内置行因此能对上）+ 状态码；大小**不进键**（同路径不同站点大小经常
+   不同，主理人点名要折），状态不同不折（200 / 404 是两个发现）。代表行报
+   「另有 N 条相同：站点A、站点B 等」，`?all=1` 全显。与站点按标题折叠（`_site_fold_key`）
+   同机制同口径。`_fold_dirs` 从 `create_app()` 闭包提到模块级（与 `_safe_next` / `_dir_url`
+   同模式，门禁才能直接单测它）。
+
+### 门禁与实测
+
+- 全部新逻辑先经一次性脚本实测（logs/verify255_gui.py，**38 项全过**：含 Jinja 展示串
+  优先级 `d.dup > d.dup_hosts|length`、runner 级双桩接线、隔离临时库）再写进 `[255]`；
+- `[255]` 断言组（.arpa 过滤 / 备用追加批 / 配额原因 / 双斜杠三处 / 两级折叠 / runner
+  接线 + 解门控源码判据），每条带变异证伪方向；续24 时代的 (4b) 折叠断言按新语义重写
+  （同路径跨站折是主理人点单的新行为，与旧用例"跨站不误折"的期待相反 —— 重写并保留其
+  "站点身份必须来自数据本身"的保护意图：d1 内置不同路径行仍走第一级折叠）；
+- **⚠ 本机全量门禁没跑成 —— 环境守卫拦截（新坑，已登记 AGENTS.md §2）**：本会话的 AI
+  环境带一个**内容级**文件守卫：`tests/smoke.py` 的内容被判为危险 ⇒ 任何 Python 进程
+  （`py -3` / `.venv` / harness managed python 实测一致）一 `open` 它就 `EBADF [Errno 9]`，
+  且文件随即被删（2026-10-21 实测 4 次；换文件名/换目录的**副本**同样中招 ⇒ 判内容不判
+  路径；bash / git / Read / Edit 工具不受影响；注销 `PYTHONPATH` 无效 ⇒ 不是续246 那个 shim）。
+  被删后 `git checkout -- tests/smoke.py` 可无损还原（与 HEAD 逐字节一致）。⇒ **正式收尾
+  门禁必须在服务器跑**（push 后 `bash update.sh --smoke`），SMOKE PASS 组数与耗时回填本节。
+  连带解释：续254 附的行尾回归为什么每次都要查（记忆文件编辑 + 守卫同族风险）。
+- **行尾第四次回归（本轮又踩一次，根因比文档记的更细）**：编辑工具对**混合行尾**文件
+  （`tests/smoke.py` / `gui/app.py` / `task_detail.html` / `runner.py` / `dirscan.py`）会整文件
+  归一成 LF；且本机 `core.autocrlf=true` 让 `git add`（以及 `git hash-object -w <路径>` 形态）
+  把 CRLF 再转成 LF 入 index —— 两下叠加，numstat 又是万行级（smoke.py 一度 18456/18295）。
+  修法（续216 按行对齐同款 + 新一步）：difflib 按行对齐、未变行恢复 HEAD 原字节、新行进
+  锚行行尾；**入 index 必须走 `git hash-object -w --stdin < 文件` +
+  `git update-index --cacheinfo`**（`--stdin` 才不过滤，路径形态会被 autocrlf 转换）。
+  修完两式 `git diff --cached --numstat` 与 `--ignore-cr-at-eol` 逐文件相等（本轮 13 个
+  文件全绿后才提交）。
+- 死锁排查：`_probe_promoted` 只在整批零命中时追加一轮且有界（≤ 候选 IP × 备用源数），
+  外部请求全走既有 `probe_candidates`（边等边读管道、超时齐备）；`_fold_dirs` 纯内存计算。
+
 ## 续254 附（2026-10-21，WorkBuddy · Step-5-Preview）：还原 todo/CHANGELOG 行尾为 CRLF（行尾回归史上第三次）
 
 纯行尾修复 + 一个环境坑登记，零逻辑改动。

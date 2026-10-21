@@ -538,6 +538,34 @@ def _field(row, key, default=""):
     return default if value is None else value
 
 
+def norm_hit_path(u):
+    """目录命中路径 / URL 的斜杠归一（续255，主理人点单「显示 / 就行」）。
+
+    两条规则，都只动**边界**、不猜内部：
+    ① 完整 URL：`scheme://host` 之后的路径部分，**前导**连续斜杠归一成一个
+       （dirmap 自己拼 URL：站点入口带尾斜杠 + 字典条目带前导斜杠 ⇒ 产出
+       `https://a.xxx.com//assets/x.css`；库里已有多轮这种历史行）；
+    ② 相对路径：前导连续斜杠归一成一个（`//a/b` → `/a/b`）。
+    路径**内部**的 `//` 原样保留 —— 服务端上它可能真的是另一个资源，不猜。
+    空值 / 非 http(s) 开头的相对串原样返回（调用方各自兜底）。
+
+    单一产地：dirscan 写入侧（`_parse_output`）、GUI 链接与展示（`_dir_url` /
+    目录「路径」列）、跨站折叠键三处共用，不各写一份正则（§5.14）。
+    """
+    s = str(u or "")
+    if not s:
+        return s
+    m = re.match(r"^(https?://)([^/?#]+)(.*)$", s, re.I)
+    if m:
+        tail = m.group(3)
+        if tail:
+            tail = re.sub(r"^/+", "/", tail)
+        return m.group(1) + m.group(2) + tail
+    if s.startswith("/"):
+        return re.sub(r"^/+", "/", s)
+    return s
+
+
 def site_redirect(row):
     """3xx 站点在页面 / 报告里该怎么显示（续112-B，用户 2026-10-06 的要求；续197 改标题口径）。
 

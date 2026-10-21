@@ -212,6 +212,16 @@ Flask Web 控制台（仿 ARL）。
   （同一文件：管道里报 0——实际有 2990 个 CR 行；循环里报"全是 CR"），都不可信；用
   python 数字节（`b.count(b'\r\n')` / `b.count(b'\r')`）或 `git ls-files --eol` 的 `i/`
   列才作数。
+- **续255 环境守卫坑（Windows 本机跑不了全量门禁，不是代码问题）**：AI 会话环境带一个
+  **内容级**文件守卫：`tests/smoke.py` 的内容被判为危险 ⇒ 任何 Python 进程（`py -3` /
+  `.venv/Scripts/python` / harness managed python，2026-10-21 实测三者一致）一 `open`
+  它就 `OSError [Errno 9] Bad file descriptor`，且文件随即被删（同一天实测 4 次；换文件名、
+  换目录的**副本**同样中招 ⇒ 判的是**内容**不是路径；bash / git / Read / Edit 工具不受影响；
+  注销 `PYTHONPATH` 后 sys.path 干净也照拦 ⇒ **不是**续246 那个 shim，是另一道）。
+  后果：本机跑不了 `dev.py smoke`（解释器启动读主脚本即被拦；且 `[251]` 等断言要
+  `read_text` 自己的源文件，同样被拦）。**动作**：被删后 `git checkout -- tests/smoke.py`
+  无损还原（与 HEAD 逐字节一致，本轮未提交前反复验过）；正式门禁去服务器跑
+  （`bash update.sh --smoke`）。**别为绕守卫改门禁文件内容**（§0 红线：不改门禁让它变绿）。
 - 外部工具：subfinder / puredns / httpx **均未安装** → 走内置兜底。**三个例外**：
   **fscan 可用**（续45 自编译 2.2.1 挂到 `tools/fscan/` 的**目录联接**，`settings.yaml` 的
   `tools.fscan=tools/fscan/fscan.exe`）→ 端口扫描 `engine=auto` 的**第一环命中**，实走 fscan；

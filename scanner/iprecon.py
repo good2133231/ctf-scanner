@@ -94,6 +94,14 @@ def normalize_domain(raw):
         return ""
     d = d.split(":")[0].lstrip("*.")
     d = to_ascii(d) or ""
+    # 续255：`.arpa` 是 IANA 保留给反向 DNS / 基础设施的 TLD（`8.8.8.8.in-addr.arpa`、
+    # `…ip6.arpa`），永远不是可扫资产。真机实测（2026-10-21，hackertarget 对 8.8.8.8 /
+    # 1.1.1.1 的响应）：这类反解链占据返回列表前列；IP 命中数 ≤30（未判共享主机）时
+    # 整页 arpa 链会被当"域名"写进 `csegs.domains` 与 `osint:cseg` 资产面。挡在归一化
+    # 出口 = 六个适配器与 PTR 一并生效，不逐源打补丁。`utils.is_domain` 形态上仍认
+    # `.arpa`（那是通用形态判据），这里只收 IP 反查这一条出口。
+    if d.endswith(".arpa"):
+        return ""
     return d if is_domain(d) else ""
 
 
@@ -185,6 +193,14 @@ def _reverse_hackertarget(ip, settings, logger=None, timeout=None, raw=False):
     text = (resp.get("text") or "").strip()
     if not text or text.lower().startswith("error"):
         _src_mark(200, "接口返回 error 文本", 0)
+        return []
+    # 续255：真机实测（2026-10-21 连跑几批后）hackertarget 配额耗尽时返回
+    # **HTTP 200** + "API count exceeded - Increase Quota with Membership" 文本。
+    # 不识别的话它会被归进 `empty`，与"这个 IP 没记录"混为一谈 —— 续173 要的
+    # "成败说清"在配额这条路上又聋了。五档契约不动（仍 empty：确实没拿到域名），
+    # 但 reason 点名配额，`format_source_stats` 的原因列会把它顶上汇总行。
+    if text.lower().startswith("api count exceeded"):
+        _src_mark(200, "接口配额耗尽（hackertarget 免费配额，HTTP 200 但不出数）", 0)
         return []
     out, seen = [], set()
     for line in text.splitlines():
@@ -508,6 +524,8 @@ def lookup_many(ips, settings, logger=None, stop=None):
     stats:   `{"attempted": n, "hit_ips": n, "domains": n}`
     仅公开 IP 会被查询，私有地址由 `is_public_ip` 直接过滤（参考项目同样这么做，
     但它是逐条 try/except，这里用标准库 `ipaddress` 显式判定，语义更清楚）。
+    整批零命中时会对**没试过**的备用源再追洗一批（续255：预检把 200-空判为"存活"，
+    `if not _ok` 覆盖不了"默认源全活着但全不出数"这种静默失败）。
     """
     cfg = (settings or {}).get("iprecon", {}) or {}
     candidates = [ip for ip in dict.fromkeys(ips or []) if is_public_ip(ip)]
@@ -538,47 +556,87 @@ def lookup_many(ips, settings, logger=None, stop=None):
             logger.warning(f"[iprecon] 默认源全部不可用，改用备用源：{_ok or '（无）'}"
                            + (f"；仍不可用：{_bad2}" if _bad2 else ""))
 
-    def _one(ip):
+    def _one(ip, srcs):
         if stop and stop():
             return None
         rows = []
         doms = reverse_lookup(ip, settings, logger=logger, timeout=timeout,
-                              sources=_ok, detail=rows)
+                              sources=srcs, detail=rows)
         return (ip, doms, rows)
 
-    results = pool_run(_one, candidates, workers=workers, logger=logger, label="ip 反查")
+    results = pool_run(lambda ip: _one(ip, _ok), candidates, workers=workers,
+                       logger=logger, label="ip 反查")
     src_stats = {str(name): {"skipped": 1, "attempted": 0, "ok": 0, "empty": 0,
                              "error": 0, "domains": 0, "reason": str(why)}
                  for name, why in _preflight_bad.items()}
     mapping = {}
-    for item in results or []:
-        if not item:
-            continue
-        ip, doms, rows = item
-        if doms:
-            mapping[ip] = doms
-        for row in rows or []:
-            name = row.get("name") or "未知"
-            s = src_stats.setdefault(name, {"skipped": 0, "attempted": 0, "ok": 0,
-                                             "empty": 0, "error": 0, "domains": 0,
-                                             "http": {}, "reasons": {}})
-            s["attempted"] = int(s.get("attempted", 0)) + 1
-            status = row.get("status")
-            if status == "ok":
-                s["ok"] = int(s.get("ok", 0)) + 1
-            elif status == "empty":
-                s["empty"] = int(s.get("empty", 0)) + 1
-            else:
-                s["error"] = int(s.get("error", 0)) + 1
-            s["domains"] = int(s.get("domains", 0)) + int(row.get("found") or 0)
-            code = int(row.get("http") or 0)
-            if code:
-                s.setdefault("http", {})
-                s["http"][str(code)] = int(s["http"].get(str(code), 0)) + 1
-            why = str(row.get("reason") or "")
-            if why:
-                s.setdefault("reasons", {})
-                s["reasons"][why] = int(s["reasons"].get(why, 0)) + 1
+    _tried = set(_ok)          # 这一轮真试过的源（含预检全灭后接班的备用源）
+
+    def _absorb(items):
+        """把一批 `(ip, doms, rows)` 并进 mapping / src_stats（首批与追加批共用）。"""
+        for item in items or []:
+            if not item:
+                continue
+            ip, doms, rows = item
+            if doms:
+                got = mapping.setdefault(ip, [])
+                for _d in doms:
+                    if _d not in got:
+                        got.append(_d)
+            for row in rows or []:
+                name = row.get("name") or "未知"
+                s = src_stats.setdefault(name, {"skipped": 0, "attempted": 0, "ok": 0,
+                                                 "empty": 0, "error": 0, "domains": 0,
+                                                 "http": {}, "reasons": {}})
+                s["attempted"] = int(s.get("attempted", 0)) + 1
+                status = row.get("status")
+                if status == "ok":
+                    s["ok"] = int(s.get("ok", 0)) + 1
+                elif status == "empty":
+                    s["empty"] = int(s.get("empty", 0)) + 1
+                else:
+                    s["error"] = int(s.get("error", 0)) + 1
+                s["domains"] = int(s.get("domains", 0)) + int(row.get("found") or 0)
+                code = int(row.get("http") or 0)
+                if code:
+                    s.setdefault("http", {})
+                    s["http"][str(code)] = int(s["http"].get(str(code), 0)) + 1
+                why = str(row.get("reason") or "")
+                if why:
+                    s.setdefault("reasons", {})
+                    s["reasons"][why] = int(s["reasons"].get(why, 0)) + 1
+
+    _absorb(results)
+
+    # 续255：默认源"活着但全军覆没"（整批每个 IP 都零域名）时，上面的 `if not _ok`
+    # 覆盖不到 —— ip138 那种 200-空的源预检永远算"存活"，备用池于是永远不上场，
+    # 续173 点单要的"反查失败时有备用接口"在静默失败这条路上是空的。这里补一次：
+    # 整批零命中 ⇒ 对**没试过**的备用源预检 + 再跑一批（有界：最多追加一轮，
+    # 请求数 ≤ 候选 IP × 备用源数；只在全军覆没时发生，正常路径零成本）。
+    if not mapping:
+        _fb = cfg.get("fallback_sources") or DEFAULT_FALLBACK
+        _todo = [str(n).strip().lower() for n in _fb
+                 if str(n).strip().lower() not in _tried
+                 and str(n).strip().lower() in _SOURCES]
+        if _todo:
+            if stop and stop():
+                stats["sources"] = src_stats
+                stats["hit_ips"] = 0
+                stats["domains"] = 0
+                return {}, stats
+            _ok2, _bad2 = preflight(_todo, settings, logger=logger, timeout=timeout,
+                                    probe_ip=candidates[0])
+            for _n, _why in (_bad2 or {}).items():
+                src_stats.setdefault(_n, {"skipped": 1, "attempted": 0, "ok": 0,
+                                          "empty": 0, "error": 0, "domains": 0,
+                                          "reason": str(_why)})
+            if _ok2:
+                if logger:
+                    logger.warning("[iprecon] 默认源整批零命中，追加未试过的备用源："
+                                   + ",".join(_ok2)
+                                   + f"（{len(candidates)} 个 IP 再跑一批）")
+                _absorb(pool_run(lambda ip: _one(ip, _ok2), candidates, workers=workers,
+                                 logger=logger, label="ip 反查备用源"))
     stats["sources"] = src_stats
     stats["hit_ips"] = len(mapping)
     stats["domains"] = sum(len(v) for v in mapping.values())

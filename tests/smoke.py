@@ -1330,37 +1330,46 @@ def main():
     assert "显示全部" in dirs_html
     assert c.get("/dirs?all=1").get_data(as_text=True).count("777") == 3
 
-    # (4b) 续24：折叠的**站点身份**必须来自数据本身。旧代码里 dirmap 解析行的 site_url 恒为
-    #      空串（dirmap 的 `path` 存的是完整 URL），于是折叠键 `(site_url, 状态码, 大小)`
-    #      两个方向都错：① 同站点的 dirmap 行与内置行永不互折（"同样大小的没过滤"）；
-    #      ② **不同站点**的 dirmap 行因 site_url 都为空，同 (状态码, 大小) 就被误折成一条（真丢结果）。
-    #      这里**不手写 site_url**（旧用例正是手写了真 URL 才漏掉这个缺陷），而是先真解一遍
-    #      dirmap 产物、拿解析结果入库，再走页面折叠验数。
+    # (4b) 续24 + 续255：折叠的**站点身份**必须来自数据本身；续255 起同路径跨站也折。
+    #      续24 的旧缺陷：dirmap 解析行的 site_url 恒为空串（dirmap 的 `path` 存的是完整
+    #      URL），折叠键两个方向都错。修在写入侧（`_origin_of`）后，这里**不手写 site_url**
+    #      （旧用例正是手写了真 URL 才漏掉那个缺陷），而是先真解一遍 dirmap 产物、拿解析
+    #      结果入库，再走页面折叠验数。续255：dirmap 自拼 URL 的双斜杠也在写入侧归一
+    #      （`norm_hit_path`）；同路径跨子域折叠（主理人点单「路径一样就和站点一样折叠」）。
     d_out2 = Path(_TMPDIR) / "output" / "fold2"
     d_out2.mkdir(parents=True, exist_ok=True)
     (d_out2 / "res.txt").write_text(
-        "[200][text/html][2.00kb] http://d1.test/zzfoldalpha\n"
-        "[200][text/html][2.00kb] http://d2.test/zzfoldalpha\n", encoding="utf-8")
+        "[200][text/html][2.00kb] http://d1.test//zzfoldalpha\n"
+        "[200][text/html][2.00kb] http://d2.test//zzfoldalpha\n", encoding="utf-8")
     _parsed2 = DirscanStage._parse_output(d_out2 / "res.txt")
+    # 双斜杠在写入侧就归一（库里不再存 //path）；site_url 仍由数据本身反推
+    assert [p["path"] for p in _parsed2] == ["http://d1.test/zzfoldalpha",
+                                             "http://d2.test/zzfoldalpha"], _parsed2
     assert [p["site_url"] for p in _parsed2] == ["http://d1.test/", "http://d2.test/"], _parsed2
     db.insert_dirs(tid, _parsed2)
-    # d1 站点再来一条**内置**结果：同站同 (200, 2048) → 必须与上面 d1 的 dirmap 行折成一条
-    # （site_url 故意不带尾斜杠，顺带验折叠键的尾斜杠归一）
+    # d1 站点再来两条**内置**结果：一条同路径（相对路径形，验归一对上）、一条不同路径
+    # （验第一级「同站同状态同大小」仍然照折；site_url 故意不带尾斜杠，顺带验尾斜杠归一）
     db.insert_dirs(tid, [{"site_url": "http://d1.test", "path": "/zzfoldalpha", "status": 200,
                           "length": 2048, "method": "GET", "note": "builtin"}])
-    # d3 站点：同大小但**另一个站点** → 绝不能被折掉
+    db.insert_dirs(tid, [{"site_url": "http://d1.test/", "path": "/zzfoldbeta", "status": 200,
+                          "length": 2048, "method": "GET", "note": "builtin"}])
+    # d3 站点：同路径（续255 跨站折的对象）
     db.insert_dirs(tid, [{"site_url": "http://d3.test/", "path": "http://d3.test/zzfoldalpha",
                           "status": 200, "length": 2048, "method": "GET", "note": "dirmap"}])
-    # 任务详情目录页签：本页共有两批重复 —— 777 那批 3 条折 1（隐藏 2）+ 2048 那批 4 条折 3（隐藏 1）
+    # 任务详情目录页签：777 那批 3 条折 1（不同路径，隐藏 2）；zzfoldalpha 那批 5 条
+    # 同路径同状态折 1（d2、d1 内置同路径、d3 走第二级；d1 内置不同路径走第一级 ⇒ 隐藏 4）
     _pane2 = c.get(f"/tasks/{tid}").get_data(as_text=True)
-    assert _pane2.count('dir-note">dirmap<') + _pane2.count('dir-note">builtin<') == 4, \
-        "2048 那批应渲染 3 行 + 777 那批渲染 1 行；旧口径会把跨站点的 dirmap 行折掉（只渲染 3 行）"
-    assert "本页已隐藏 3 条重复长度" in _pane2, "隐藏数应为 2（777 批）+ 1（2048 批）"
-    # 跨任务 /dirs 用**唯一关键字**把这 4 条隔离出来：本站点 2 条折 1、另两个站点各留 1
+    assert _pane2.count('dir-note">dirmap<') + _pane2.count('dir-note">builtin<') == 2, \
+        "应只渲染 777 批 1 行 + zzfoldalpha 批 1 行（续255 起同路径跨站折叠）"
+    assert "已隐藏 6 条" in _pane2, "隐藏数 = 777 批 2 + zzfoldalpha 批 4"
+    assert "另有 4 条相同：http://d2.test、http://d3.test 等" in _pane2, \
+        "代表行要把折进来的站点说出来（d1 自家两条例行不计站点）"
+    # 跨任务 /dirs 用**唯一关键字**把这批隔离出来：zzfoldalpha 命中的 4 条折 1
+    # （/zzfoldbeta 不含该关键字，被 q 挡在外面，不进本页折叠）
     _dirs2 = c.get("/dirs?q=zzfoldalpha").get_data(as_text=True)
-    assert _dirs2.count('dir-note">dirmap<') + _dirs2.count('dir-note">builtin<') == 3, \
-        "跨任务页折叠应只折「同站点」的 2 条（旧代码会因 site_url 全空把 3 个站点的行折成 1 条）"
-    assert "已隐藏 1 条重复长度" in _dirs2
+    assert _dirs2.count('dir-note">dirmap<') + _dirs2.count('dir-note">builtin<') == 1, \
+        "跨任务页同路径跨站也只留 1 行（续255）"
+    assert "已隐藏 3 条" in _dirs2
 
     # (4c) FOFA 资产行的域名收口：真实查询里大量行 `domain` 为空、只有 IP 形式的 host，
     #      裸 IP 绝不能当域名写进 subdomains 表（实测数据见 osint.py::_domain_of 注释）
@@ -30581,6 +30590,158 @@ expression: r0()
     assert "quick ≈ 150" in _dseg252 and "deep ≈ 400" in _dseg252, "注释缺请求量口径"
     print("[252] 续252 ok: dirscan 默认深扫的事实与注释对齐（过期浅扫文案已修）｜"
           "注释带请求量口径（quick≈150 / deep≈400+派生）｜门禁钉住注释不再撒谎")
+    # ------------------------------------------------------------------ [255]
+    # 续255：① IP 反查真机验证收尾（续173 剩余项）：.arpa 反解链过滤 / 默认源整批零命中
+    #        时追加备用池 / hackertarget 配额耗尽与"无记录"分开；② 目录双斜杠归一
+    #        （utils.norm_hit_path 单一产地：写入侧 + 链接 + 展示 + 折叠键）；③ 目录跨站
+    #        同路径折叠（_fold_dirs 第二级）；④ 归属追加解门控 + 新域名同轮探测入站。
+    from scanner.utils import norm_hit_path as _nhp255
+    from gui.app import _dir_url as _du255, _dir_path_display as _dpd255
+    from gui.app import _fold_dirs as _fd255
+    from scanner.stages.dirscan import DirscanStage as _DS255
+
+    # ② 斜杠归一：只动站点边界后的前导斜杠，路径内部原样（内部 // 可能是另一个资源，不猜）
+    assert _nhp255("https://a.test//x/y.css") == "https://a.test/x/y.css"
+    assert _nhp255("http://a.test:8080//p") == "http://a.test:8080/p"
+    assert _nhp255("https://a.test/") == "https://a.test/" and _nhp255("https://a.test") == "https://a.test"
+    assert _nhp255("//x/y") == "/x/y" and _nhp255("/x//y") == "/x//y"
+    assert _nhp255("") == "" and _nhp255(None) == ""
+    assert _du255("https://a.test/", "//x/y") == "https://a.test/x/y"
+    assert _du255("", "/x/y") == "" and _du255("https://a.test", "https://a.test//x") == "https://a.test/x"
+    assert _dpd255("//x/y") == "/x/y" and _dpd255("https://a.test//x") == "https://a.test/x"
+    # dirscan 写入侧：dirmap 行的完整 URL 也归一（真机形态：接口自拼的双斜杠）
+    _d255 = Path(_TMPDIR) / "output" / "fold255"
+    _d255.mkdir(parents=True, exist_ok=True)
+    (_d255 / "res.txt").write_text(
+        "[200][text/html][1.23kb] https://a.test//static/js/vendor.js\n", encoding="utf-8")
+    _p255 = _DS255._parse_output(_d255 / "res.txt")
+    assert [p["path"] for p in _p255] == ["https://a.test/static/js/vendor.js"], _p255
+
+    # ③ _fold_dirs 第二级：跨站同路径折叠（状态进键、大小不进键）；?all=1 全显、隐藏数仍报
+    _rows255 = [
+        {"site_url": "https://m.xxx.test/", "path": "https://m.xxx.test//assets/x.css",
+         "status": 200, "length": 1484, "note": "dirmap"},
+        {"site_url": "https://a.xxx.test/", "path": "https://a.xxx.test//assets/x.css",
+         "status": 200, "length": 1105, "note": "dirmap"},
+        {"site_url": "https://a.xxx.test/", "path": "/assets/y.css",
+         "status": 200, "length": 900, "note": "builtin"},
+        {"site_url": "https://b.xxx.test/", "path": "/assets/x.css",
+         "status": 404, "length": 100, "note": "builtin"},
+    ]
+    _f255, _h255 = _fd255([dict(r) for r in _rows255], False)
+    assert [r["path"] for r in _f255] == ["https://m.xxx.test//assets/x.css",
+                                          "/assets/y.css", "/assets/x.css"], _f255
+    assert _h255 == 1 and _f255[0]["dup"] == 1, (_h255, _f255[0])
+    assert _f255[0]["dup_hosts"] == ["https://a.xxx.test"], _f255[0]
+    _fa255, _ha255 = _fd255([dict(r) for r in _rows255], True)
+    assert len(_fa255) == 4 and _ha255 == 1, "?all=1 全显，隐藏数仍如实报"
+    # 第一级没被顶掉：同站同状态同大小、不同路径仍照折（尾斜杠不同的同站点算同站）
+    _f2_255, _h2_255 = _fd255([
+        {"site_url": "http://d1.test/", "path": "/a", "status": 200, "length": 10},
+        {"site_url": "http://d1.test", "path": "/b", "status": 200, "length": 10},
+        {"site_url": "http://d2.test/", "path": "/c", "status": 200, "length": 10}], False)
+    assert len(_f2_255) == 2 and _h2_255 == 1 and _f2_255[0]["dup"] == 1, _f2_255
+
+    # ①-1 iprecon：.arpa 反解链不是资产（真机实测：hackertarget 对 8.8.8.8/1.1.1.1 的
+    #      返回里这类名字占前列；≤30 命中的 IP 会把整页 arpa 链当"域名"写进 csegs/资产面）
+    assert iprecon.normalize_domain("8.8.8.8.in-addr.arpa") == ""
+    assert iprecon.normalize_domain("0.0.d.5.9.6.0.7.4.0.1.0.0.2.ip6.arpa") == ""
+    assert iprecon.normalize_domain("dns.google") == "dns.google", "正常域名不许被误杀"
+    assert iprecon.parse_domains('["a.in-addr.arpa", "ok.example.com"]') == ["ok.example.com"]
+
+    # ①-2 iprecon：默认源整批零命中 ⇒ 追加没试过的备用源（续173 点单的"备用接口"）
+    #      真机形态：webscan 530（预检即弃）+ ip138 200-空（预检认为活着、一个域名都不出）
+    #      ⇒ 旧代码在这里全军覆没，备用池（ptr/dnsdblookup/rapiddns/viewdns）永远不上场。
+    def _f_dead255(ip, settings, logger=None, timeout=None, raw=False):
+        iprecon._src_mark(530, "HTTP 530")
+        return {"status": 530} if raw else []
+
+    def _f_silent255(ip, settings, logger=None, timeout=None, raw=False):
+        iprecon._src_mark(200, "接口配额耗尽（测试）", 0)
+        return {"status": 200} if raw else []
+
+    def _f_back255(ip, settings, logger=None, timeout=None, raw=False):
+        iprecon._src_mark(200, "", 1)
+        return {"status": 200} if raw else [f"b{ip.replace('.', '')}.example.com"]
+
+    class _L255:
+        def __init__(self):
+            self.msgs = []
+
+        def warning(self, m, *a):
+            self.msgs.append(str(m))
+
+        info = debug = warning
+
+    _old_src255 = dict(iprecon._SOURCES)
+    iprecon._SOURCES["f255dead"] = _f_dead255
+    iprecon._SOURCES["f255silent"] = _f_silent255
+    iprecon._SOURCES["f255back"] = _f_back255
+    _lg255 = _L255()
+    try:
+        _map255, _st255 = iprecon.lookup_many(
+            ["8.8.8.8", "1.1.1.1"],
+            {"iprecon": {"sources": ["f255dead", "f255silent"],
+                         "fallback_sources": ["f255back"], "workers": 2, "timeout": 5}},
+            logger=_lg255)
+    finally:
+        iprecon._SOURCES.clear()
+        iprecon._SOURCES.update(_old_src255)
+    assert sorted(_map255) == ["1.1.1.1", "8.8.8.8"], _map255   # 变异证伪：删追加批 ⇒ 空表
+    assert _st255["sources"]["f255back"]["ok"] == 2, _st255["sources"]
+    assert _st255["sources"]["f255dead"].get("skipped") == 1, _st255["sources"]
+    assert _st255["sources"]["f255silent"]["empty"] == 2, _st255["sources"]
+    assert any("追加未试过的备用源" in m for m in _lg255.msgs), _lg255.msgs
+
+    # ①-3 iprecon：hackertarget 配额耗尽（HTTP 200 + "API count exceeded"）必须与
+    #      "这个 IP 没记录"分开 —— 五档契约不动（仍 empty），reason 点名配额
+    _old_http255 = iprecon.http_request
+    iprecon.http_request = lambda *a, **k: {
+        "status": 200, "text": "API count exceeded - Increase Quota with Membership"}
+    try:
+        _doms255, _rows255b = iprecon.reverse_lookup_detail(
+            "8.8.8.8", {"iprecon": {}}, sources=["hackertarget"])
+    finally:
+        iprecon.http_request = _old_http255
+    assert _doms255 == [] and _rows255b[0]["status"] == "empty", _rows255b
+    assert "配额" in _rows255b[0]["reason"], _rows255b   # 变异证伪：删配额识别 ⇒ reason 空
+
+    # ④ 归属追加解门控 + 同轮探测入站（runner 接线；extdom.process 与探测双桩）
+    import scanner.runner as _rn255
+    from scanner.stages import probe as _probe_mod255
+    tid255 = db.create_task("smoke255-promote", "smoke255.test", ["probe", "jsmine"],
+                            {"offline": True, "ext_depth": 1})
+    wd255 = LOGS_DIR / f"task_{tid255}_promote"
+    wd255.mkdir(parents=True, exist_ok=True)
+    ctx255 = StageContext(tid255, "smoke255-promote", parse_lines(["smoke255.test"]),
+                          ["probe", "jsmine"], {"offline": True, "ext_depth": 1},
+                          settings, wd255,
+                          get_logger(f"task-{tid255}", wd255 / "task.log"))
+    _rec255 = []
+    _orig_pc255 = _probe_mod255.probe_candidates
+    _orig_rs255 = _probe_mod255.register_sites
+    _orig_proc255 = _rn255.extdom.process
+    _probe_mod255.probe_candidates = lambda ctx, cands: (
+        _rec255.append(list(cands)) or [{"url": "https://sub.smoke255.test/"}])
+    _probe_mod255.register_sites = lambda ctx, sites, round2=False: (
+        _rec255.append(round2) or sites)
+    _rn255.extdom.process = lambda *a, **k: {"promote": {"promoted": ["sub.smoke255.test"]}}
+    try:
+        PipelineRunner(ctx255).run()
+    finally:
+        _probe_mod255.probe_candidates = _orig_pc255
+        _probe_mod255.register_sites = _orig_rs255
+        _rn255.extdom.process = _orig_proc255
+    # 末两条记录 = _probe_promoted 的候选与 round2 标记（前两条是 probe 阶段自己的）
+    assert _rec255[-2] == ["https://sub.smoke255.test", "http://sub.smoke255.test"], _rec255
+    assert _rec255[-1] is True, "register_sites 必须 round2=True（追加 sites，不覆盖第一批）"
+    assert ctx255.owned_new == ["sub.smoke255.test"], ctx255.owned_new
+    # 没有 auto_expand 也必须归属追加（续255 解门控的机器判据）
+    _rn_src255 = (ROOT / "scanner" / "runner.py").read_text(encoding="utf-8", errors="replace")
+    assert "if auto_expand else -1" not in _rn_src255, \
+        "续255：归属追加不许再被 auto_expand 门控（主理人点单：自家子域直接进站点）"
+    print("[255] 续255 ok: iprecon 三修复（.arpa/备用追加/配额原因）｜目录双斜杠归一｜"
+          "跨站同路径折叠｜归属追加解门控+同轮探测入站")
     print("SMOKE PASS")
 
 

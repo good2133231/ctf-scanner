@@ -45,8 +45,8 @@
         <td><b>{{ g.count }}</b></td>
         <td class="muted small">
           {% if g.samples %}
-          <details><summary>{{ g.samples[0].path }}</summary>
-            <ul class="agg-samples">{% for s in g.samples %}<li>{{ s.path }} <span class="muted">@ {{ s.site }}</span></li>{% endfor %}</ul>
+          <details><summary>{{ dir_path(g.samples[0].path) }}</summary>
+            <ul class="agg-samples">{% for s in g.samples %}<li>{{ dir_path(s.path) }} <span class="muted">@ {{ s.site }}</span></li>{% endfor %}</ul>
           </details>
           {% else %}-{% endif %}
         </td>
@@ -68,9 +68,9 @@
         <td>{{ d.id }}</td>
         <td><a href="{{ url_for('task_detail', task_id=d.task_id) }}">#{{ d.task_id }}</a></td>
         <td>{{ d.status or '-' }}</td>
-        <td>{% set _u = dir_url(d.site_url, d.path) %}{% if _u %}<a class="url-link" href="{{ _u }}" target="_blank" rel="noopener noreferrer" title="在新标签页打开 {{ _u }}">{{ d.path }}</a>{% else %}{{ d.path }}{% endif %}</td>
+        <td>{% set _u = dir_url(d.site_url, d.path) %}{% if _u %}<a class="url-link" href="{{ _u }}" target="_blank" rel="noopener noreferrer" title="在新标签页打开 {{ _u }}">{{ dir_path(d.path) }}</a>{% else %}{{ dir_path(d.path) }}{% endif %}</td>
         <td class="muted small mono">{{ d.length if d.length is not none else '-' }}
-          {% if d.dup %}<span class="muted small">（另有 {{ d.dup }} 条相同）</span>{% endif %}</td>
+          {% if d.dup %}<span class="muted small">（另有 {{ d.dup }} 条相同{% if d.dup_hosts %}：{{ d.dup_hosts|join('、') }}{% if d.dup > d.dup_hosts|length %} 等{% endif %}{% endif %}）</span>{% endif %}</td>
         <td class="muted small">{{ d.title or '-' }}</td>
         <td class="muted dir-note">{{ d.note or '-' }}</td>
       </tr>

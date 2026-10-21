@@ -68,7 +68,7 @@ from scanner import diffview, edgeauth, fingerprint, dictstats, keystore, webpat
 from scanner.runner import STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
-                           tail_lines, to_unicode)
+                           tail_lines, to_unicode, norm_hit_path)
 
 logger = get_logger("gui")
 
@@ -582,14 +582,105 @@ def _dir_url(site_url, path):
 
     只放行 http/https；`path` 有时本身就是完整 URL（dirmap 那一路），此时直接用。
     拼不出来返回 ""（模板据此退化成纯文本，不渲染死链）。
+    续255：拼出来再过 `norm_hit_path` —— dirmap 自拼 URL 与库里历史行都可能有
+    `https://host//path` 双斜杠，归一后链接与「路径」列显示一致。
     """
     p = str(path or "").strip()
     if p.lower().startswith(("http://", "https://")):
-        return p
+        return norm_hit_path(p)
     base = str(site_url or "").strip()
     if not base.lower().startswith(("http://", "https://")) or not p:
         return ""
-    return base.rstrip("/") + ("" if p.startswith("/") else "/") + p
+    return norm_hit_path(base.rstrip("/") + ("" if p.startswith("/") else "/") + p)
+
+
+def _dir_path_display(path):
+    """目录「路径」列的显示值（续255）：与 `_dir_url` 同一个归一产地
+    （`utils.norm_hit_path`）—— 链接干净、文字也干净，不会一处斜杠一处双斜杠。
+    只有显示走它；库里存什么不改（写入侧归一见 `dirscan._parse_output`）。
+    """
+    return norm_hit_path(path)
+
+
+def _fold_dirs(rows, show_all):
+    """目录结果两级折叠，返回 `(rows, hidden)`（续255 加第二级：跨站同路径）。
+
+    第一级（原有）：按「站点 + 状态码 + 响应大小」折叠同站重复（软 404 模板 /
+    统一跳转页，与 dirmap 的「重复长度.txt」同口径）；`?all=1`（`/dirs`）放开。
+    站点身份取 `dirs.site_url` 并**把尾斜杠归一**（续24）：库里同一站点既可能是
+    `http://a:8080`（probe 拼的）也可能是带斜杠的 httpx 回显形。本函数只做归一、
+    **不做"空值兜底估算"** —— 早先 dirmap 行把 `site_url` 写成空串，结果同站点的行
+    永不互折、不同站点的行反被误折成一条（见 `scanner/stages/dirscan.py::_origin_of`）；
+    站点身份必须来自数据本身，不能靠展示层猜。
+
+    第二级（续255，主理人点单「路径一样就和站点一样采用折叠」）：站点按标题折
+    （`_site_fold_key`），目录里同一个 `/assets/layout-theme-default.css` 散在
+    m./a. 各一行纯属刷屏。键 = **归一路径 + 状态码**：状态不同（200 / 404）不折
+    （那是两个发现），大小**不进键**（同路径不同站点大小经常不同，用户点名要折）。
+    路径归一走 `utils.norm_hit_path`（与链接、「路径」列同一产地）：dirmap 行的
+    path 是完整 URL、内置行是相对路径，两种形态必须能对上。代表行 = 组内第一行
+    （页序 id），成员行进 `dup_hosts`（展示用，最多 12 个，防刷屏）；两级折叠的
+    隐藏数都累计进 `hidden`（模板报"已隐藏 N 条"，§0 第 10 条：折叠 != 删数据）。
+
+    续255 从 `create_app()` 里提到模块级：与 `_safe_next` / `_dir_url` 同一模式
+    （可复用助手不窝在闭包里），门禁才能直接单测它。
+    """
+    rows = [dict(r) for r in rows]
+    hidden = 0
+
+    def _host(r):
+        return (r.get("site_url") or "").rstrip("/") or "-"
+
+    def _pkey(r):
+        """跨站同路径折叠的**路径身份**：完整 URL 只取主机后的部分（dirmap 行的 path
+        就是完整 URL，不剥主机永远跨站对不上）；相对路径原样。都过 `norm_hit_path`
+        归一双斜杠。查询串跟着路径走（`?id=1` 与 `?id=2` 是两个资源，不猜）。
+        """
+        p = str(r.get("path") or "").strip()
+        if p.lower().startswith(("http://", "https://")):
+            _u = urlparse(p)
+            p = _u.path or "/"
+            if _u.query:
+                p += "?" + _u.query
+        return norm_hit_path(p)
+
+    def _absorb(first, r):
+        """把成员行 r 折进代表行 first：计数 + 记账它的站点（只记不同站点的）。"""
+        first["dup"] += 1
+        host = _host(r)
+        if host != _host(first) and host not in first["dup_hosts"] \
+                and len(first["dup_hosts"]) < 12:
+            first["dup_hosts"].append(host)
+        r["hidden_dup"] = True
+        return 1
+
+    # 第二级（续255）先行：跨站同路径，在**全量**行上做（代表行选取才与页序一致）。
+    seen_p = {}
+    for r in rows:
+        r["dup"] = 0
+        r["dup_hosts"] = []
+        pk = (_pkey(r), r.get("status"))
+        first = seen_p.get(pk)
+        if first is None:
+            seen_p[pk] = r
+        else:
+            hidden += _absorb(first, r)
+    if not show_all:
+        rows = [r for r in rows if not r.get("hidden_dup")]
+    # 第一级（原有）随后：同站同状态同大小。先清掉上一轮的隐藏标记再跑 ——
+    # 两道筛的键不同，同一批行要能先后过两遍（show_all 时行上还留着旧标记）。
+    seen = {}
+    for r in rows:
+        r.pop("hidden_dup", None)
+        key = (_host(r), r.get("status"), r.get("length") or -1)
+        first = seen.get(key)
+        if first is None:
+            seen[key] = r
+        else:
+            hidden += _absorb(first, r)
+    if not show_all:
+        rows = [r for r in rows if not r.get("hidden_dup")]
+    return rows, hidden
 
 
 def _asset_tree(task_id):
@@ -845,6 +936,7 @@ def create_app():
     app.jinja_env.globals["packet_curl"] = packetcodec.to_curl
     app.jinja_env.globals["packet_python"] = packetcodec.to_python
     app.jinja_env.globals["dir_url"] = _dir_url
+    app.jinja_env.globals["dir_path"] = _dir_path_display
     app.jinja_env.globals["asset_tree"] = _asset_tree   # 续151：资产关系图
     db.init_db()
     # 启动时对账（续49 语义变更）：进程重启后，之前 status='running' 的孤儿任务没人推进 ——
@@ -2892,34 +2984,6 @@ def create_app():
         except Exception:
             return {}
         return out
-
-    def _fold_dirs(rows, show_all):
-        """目录结果按「站点 + 状态码 + 响应大小」折叠重复，返回 `(rows, hidden)`。
-
-        按大小折叠是因为一个站点下动辄几百条同长度的 `200`（软 404 模板、统一重定向页），
-        它们不是真发现（与 dirmap 把这类单独写进「重复长度.txt」同一口径）；默认只留首个，
-        `?all=1`（`/dirs`）放开。站点身份取 `dirs.site_url` 并**把尾斜杠归一**（续24）：库里同一
-        站点既可能是 `http://a:8080`（probe 拼的）也可能是带斜杠的 httpx 回显形。本函数只做归一、
-        **不做"空值兜底估算"** —— 早先 dirmap 行把 `site_url` 写成空串，结果同站点的行永不互折、
-        不同站点的行反被误折成一条（见 `scanner/stages/dirscan.py::_origin_of`）；
-        站点身份必须来自数据本身，不能靠展示层猜。
-        """
-        rows = [dict(r) for r in rows]
-        seen, hidden = {}, 0
-        for r in rows:
-            r["dup"] = 0
-            key = ((r.get("site_url") or "").rstrip("/"), r.get("status"),
-                   r.get("length") or -1)
-            first = seen.get(key)
-            if first is None:
-                seen[key] = r
-            else:
-                first["dup"] += 1
-                r["hidden_dup"] = True
-                hidden += 1
-        if not show_all:
-            rows = [r for r in rows if not r.get("hidden_dup")]
-        return rows, hidden
 
     def _agg_dirs(rows):
         """目录按「状态码 + 响应大小 + 标题」聚合（忽略站点），返回指纹分组列表。
