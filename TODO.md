@@ -33,8 +33,11 @@
       字节必须与钉住的摘要一字不差；tag 不对连下载都不发起）。`tools/install.sh` / `toolmgr`
       都已按这条走，不再需要 `--allow-unverified`；原来"AI 不代做这个决定"的挂账随之解除。
 - [ ] **Python 3.14 那一档 CI 探针升为必过**：`.github/workflows/quality.yml` 里 3.14 目前是
-      "允许红的探针"，`smoke.yml`（3.9 全量）才是权威口径。升法＝在真 runner 上**连绿几轮**之后，
-      升太早等于教所有人忽略红（`todo.txt` 续125 原话）。
+      "允许红的探针"（`probe-3-14` job，`continue-on-error: true`，在 3.14 上跑全量 smoke，
+      专治「在 3.9 上永远看不见」的版本漂移，实例：续96 的 `re.PatternError`），
+      `smoke.yml`（3.9 全量）才是权威口径。升法＝真 runner 上 `probe-3-14` **连续 ≥3 次
+      push 全绿**后，摘掉 `continue-on-error: true`，同步改 quality.yml 头部「允许红」注释；
+      升太早等于教所有人忽略红（`todo.txt` 续125 原话）。升格口径详见 CHANGELOG_AI 续254。
 - [x] **`logs/` 的清理清单** —— **续226 已落地**：`docs/logs-cleanup.md`（必留的确切文件名 /
       可删候选前缀 / `task_*` 条件可删）+ `tools/clean_logs.py`（`--list` 只列分类；`--apply`
       必须逐个点名，拒绝通配符、必留项与 `tasks.log_file` 仍在引用的任务目录）；
@@ -52,6 +55,11 @@
   "控制端独占 DB + 节点 HTTP 轮询认领/回传"这条更小的路：`scanner/nodes.py` / `cli/run_node.py`，
   令牌只存 sha256、心跳与在线判定、掉线任务自动重新入队、边跑边增量回传；
   管理员侧栏「执行节点」页 + CLI `--node-add/--node-list/--node-revoke`；回归 `tests/smoke.py [8c]`。）
+- [ ] **`_do_http` 回环请求走代理**（真 bug，主理人 2026-10-21 决定**先不走**、挂账保留）：
+      本机/会话有 `HTTP_PROXY` 时 `requests` 对**回环地址也走代理** ⇒ 访问本机控制台
+      间歇失败（`[5y]②` SSRF 回环自证假红同根）。续246 只用 `env -u HTTP_PROXY …`
+      绕开门禁，**真实使用同坑仍在**。触发条件：真实使用里撞到再排（修法方向：回环/
+       localhost 显式 bypass 代理，别全局禁代理）。
 
 **② 部分完成、有明确残留**
 
@@ -76,6 +84,10 @@
   **收编 dirmap 上游 master 的 `-e` 删除**（续105：改写 `dirmap.conf` 是替我们不依赖的外部工具
   维护第二套配置通道；已改为"探参数定义 + 写准回退原因"，见 AGENTS §7）；
 - 破坏性利用、口令爆破、DDoS；低危 info 噪声项（`skip_severities` 默认整级跳过）。
+- **katana 可选增强**（「装了优先用 katana / 没装退回内置爬虫」这层接线层）—— 主理人
+  2026-10-21 明确**不采用**：续249 对照表已论证内置 `crawl` 覆盖核心价值（页面入口 +
+  注入面下钻、零依赖、默认开），robots/sitemap 增量已在续250 并进 `urlself.py`、JS 部分
+  jsmine 早已覆盖；内置爬虫即终态。
 
 ---
 

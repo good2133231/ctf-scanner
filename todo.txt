@@ -4303,6 +4303,28 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续254（2026-10-21，WorkBuddy · Step-5-Preview）：两项挂账拍板（katana 不采用 / _do_http 先不走）+ 3.14 探针升格口径
+
+主理人逐条拍板，**零代码改动**（纯决策登记轮）：
+
+- [x] **katana 可选增强 ⇒ 决策不采用（内置爬虫即终态）**：续249 对照表已论证内置 `crawl`
+      覆盖核心价值（页面入口 + 注入面下钻，零依赖、默认开）；katana 的增量里
+      robots/sitemap 已在续250 并进 `urlself.py`、JS 部分 jsmine 早已覆盖。剩余
+      「装了优先用 katana / 没装退回内置」这层接线层，主理人 2026-10-21 明确**不采用**。
+      已登记 TODO.md「刻意不做」，从待办面移除。
+- [x] **`_do_http` 回环请求走代理 ⇒ 决策先不走（挂账保留）**：本机/会话有 `HTTP_PROXY` 时
+      `requests` 对**回环地址也走代理** ⇒ 访问本机控制台间歇失败（`[5y]②` SSRF 回环
+      自证假红同根）。续246 只用 `env -u HTTP_PROXY …` 绕开门禁，**真实使用同坑仍在**。
+      主理人 2026-10-21 决定先不走；登记 TODO.md「当前未解决①」并注明触发条件：
+      真实使用里撞到再排。
+- [x] **3.14 探针「有什么用 / 为什么现在不升 / 怎么算攒够」写成口径**（详见 CHANGELOG
+      续254；探针本体不动，仍 `continue-on-error`）
+
+**下一轮（续254 之后）——只放未做的：**
+- [ ] VT / ICP 真 key 到位后 `python tools/check_intel_sources.py --strict`
+- [ ] Python 3.14 CI 探针升必过：口径见 CHANGELOG 续254 —— 真 runner 上 `probe-3-14`
+      连续 ≥3 次 push 全绿后，摘 `continue-on-error: true` 并同步 quality.yml 头部注释
+
 ## 续253（2026-10-21，WorkBuddy · Claude）：演示资产与临时残留清理（收尾类）
 
 主理人点名清理“演示任务与本地 8899 靶场”。**续251 收尾早已完成**（adeb475：278 组数字入账并推送；
