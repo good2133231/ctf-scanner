@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# 远程服务器一键更新：拉 GitHub 最新 main + 对齐依赖（可选跑门禁 / 重启控制台）。
+# 远程服务器一键更新：拉 GitHub 最新 main + 对齐依赖（默认跑门禁，可跳过 / 重启控制台）。
 #
 # 给谁用：本地改代码 → push 到 GitHub 后，在**服务器**上把仓库更新到最新再启动验证。
 # 用法（在仓库目录内外都能跑，脚本自己定位仓库根）：
-#   bash update.sh                 # 只更新代码 + 依赖（lock 变了才装）
-#   bash update.sh --smoke         # 更新后顺带跑全量门禁（服务器正式收尾口径，约 6~10 分钟）
-#   bash update.sh --restart       # 更新后重启控制台（端口取 CTFSCANNER_GUI_PORT，默认 5000）
-#   bash update.sh --smoke --restart
+#   bash update.sh                 # 更新 + 全量门禁（默认，服务器正式收尾口径，约 6~10 分钟）
+#   bash update.sh --no-smoke      # 只更新代码 + 依赖（快速通道，不跑门禁）
+#   bash update.sh --restart       # 更新 + 门禁 + 重启控制台（端口取 CTFSCANNER_GUI_PORT，默认 5000）
+#   bash update.sh --no-smoke --restart
+#   （--smoke 是旧写法，仍兼容，等同默认）
 #
 # 口径（AGENTS §0 硬规矩，一条都不松）：
 #   - 有**真实**未提交改动 ⇒ 拒绝更新（服务器上"顺手热修"是跨机事故的唯一来源）；
@@ -31,14 +32,15 @@ cd "$ROOT"
 
 PORT="${CTFSCANNER_GUI_PORT:-5000}"
 PIDFILE="logs/gui-$PORT.pid"
-DO_SMOKE=0
+DO_SMOKE=1
 DO_RESTART=0
 for arg in "$@"; do
   case "$arg" in
-    --smoke)   DO_SMOKE=1 ;;
-    --restart) DO_RESTART=1 ;;
-    -h|--help) sed -n '4,14p' "$0"; exit 0 ;;
-    *) echo "[X] 不认识的参数：$arg（只支持 --smoke / --restart / -h）" >&2; exit 1 ;;
+    --smoke)    DO_SMOKE=1 ;;
+    --no-smoke) DO_SMOKE=0 ;;
+    --restart)  DO_RESTART=1 ;;
+    -h|--help) sed -n '4,10p' "$0"; exit 0 ;;
+    *) echo "[X] 不认识的参数：$arg（只支持 --no-smoke / --smoke / --restart / -h）" >&2; exit 1 ;;
   esac
 done
 
@@ -92,10 +94,10 @@ else
 fi
 
 if [ "$DO_SMOKE" = "1" ]; then
-  echo "[4/5] 全量门禁（服务器正式收尾口径；约 6~10 分钟，跑完见 SMOKE PASS）"
+  echo "[4/5] 全量门禁（默认开启；约 6~10 分钟，跑完见 SMOKE PASS；跳过用 --no-smoke）"
   "$PY" tests/smoke.py
 else
-  echo "[4/5] 跳过门禁（服务器收尾建议跑一次：bash update.sh --smoke）"
+  echo "[4/5] 跳过门禁（--no-smoke）"
 fi
 
 if [ "$DO_RESTART" = "1" ]; then
