@@ -30882,6 +30882,99 @@ expression: r0()
         _cli257.run_task = _orig_rt257
     print("[257] 续257 ok: CLI Host 碰撞入口（--hostcollide 落选项+自动补阶段 / "
           "-p hostcollide 显式点名也单次生效 / 不提不加）")
+    # ------------------------------------------------------------------ [262]
+    # 续262：probe 阶段 favicon 接线修复 —— 续225（a9c5052）引入的真 bug，本机全量
+    #   门禁现场抓到（每个站点一条 NameError WARNING）。register_sites() 调用
+    #   favicon_info(...)，但模块导入行只有 `identify, favicon_md5` ⇒ 名字不在命名
+    #   空间，每个站点一次 NameError 被 pool_run 吞掉 ⇒ favicon 指纹（MD5 供 POC
+    #   前置判定 / mmh3 供 FOFA·Shodan 反查 / 图标本体落盘供任务页贴图）从续225 起
+    #   整条链路是坏的，日志"0/N 个站点已获取"是假象。CI 260 组没抓到：[2c] 只
+    #   单测 fingerprint.favicon_info 本身、[3] 只断言"favicon"键存在（靶场无
+    #   favicon.ico 时允许空串）。两层断言补上：① 命名空间覆盖（[8k] 同款）
+    #   ② 端到端回填（先经 logs/verify262_fav.py 复现失败→修复后 PASS 再入禁）。
+    from scanner.stages import probe as _pb262
+    import hashlib as _hl262
+    import threading as _th262
+    from http.server import BaseHTTPRequestHandler as _BHR262
+    from http.server import HTTPServer as _HS262
+
+    # ① 命名空间：probe.py 调的名字必须真的在它的命名空间里（删导入即红）
+    assert callable(getattr(_pb262, "favicon_info", None)), \
+        "probe 阶段调用了 favicon_info 却没导入它（续225 起的 NameError 回归）"
+
+    # ② 端到端：本地桩服务器供已知图标 → register_sites 必须回填三种产物
+    _icon262 = b"\x00\x01\x02\x03ico!"      # 与 [2c] 同款已知向量
+    _want_md5262 = _hl262.md5(_icon262).hexdigest()
+    _want_h262 = mmh3.favicon_hash(_icon262)
+    _hits262 = []
+
+    class _H262(_BHR262):
+        def do_GET(self):
+            if self.path.startswith("/favicon.ico"):
+                _body262, _ctype262 = _icon262, "image/x-icon"
+                _hits262.append(self.path)
+            else:
+                _body262, _ctype262 = b"ok", "text/plain"
+            self.send_response(200)
+            self.send_header("Content-Type", _ctype262)
+            self.send_header("Content-Length", str(len(_body262)))
+            self.end_headers()
+            self.wfile.write(_body262)
+
+        def log_message(self, *a):
+            pass
+
+    _srv262 = _HS262(("127.0.0.1", 0), _H262)
+    _th262.Thread(target=_srv262.serve_forever, daemon=True).start()
+    _port262 = _srv262.server_address[1]
+
+    class _Rec262:
+        def __init__(self):
+            self.lines = []
+
+        def info(self, m, *a):
+            self.lines.append(str(m))
+
+        def warning(self, m, *a):
+            self.lines.append("[W] " + str(m))
+
+        def error(self, m, *a):
+            self.lines.append("[E] " + str(m))
+
+        def debug(self, *a, **k):
+            pass
+
+    try:
+        _st262 = copy.deepcopy(settings)
+        _st262["limits"] = dict(_st262.get("limits") or {}, favicon_md5=True)
+        _tid262 = db.create_task("smoke262-favicon", "fav262.test", ["probe"], {"offline": True})
+        _wd262 = Path(_TMPDIR) / f"task_{_tid262}_fav"
+        _wd262.mkdir(parents=True, exist_ok=True)
+        _rec262 = _Rec262()
+        _ctx262 = StageContext(_tid262, "smoke262-favicon", parse_lines(["fav262.test"]),
+                               ["probe"], {"offline": True}, _st262, _wd262, _rec262)
+        _n262 = _pb262.register_sites(_ctx262, [
+            {"url": f"http://127.0.0.1:{_port262}/", "host": "127.0.0.1",
+             "port": str(_port262), "status": 200, "title": "fav", "length": 2,
+             "server": "", "tech": "", "source": "builtin"}])
+        assert len(_n262) == 1, _n262
+        _s262 = _n262[0]
+        assert _s262["favicon"] == _want_md5262, \
+            f"favicon MD5 没回填（{_s262['favicon']!r}）——NameError 回归或抓取失败"
+        assert _s262["icon_hash"] == _want_h262, (_s262["icon_hash"], _want_h262)
+        assert _s262["icon_file"].startswith("favicons/"), _s262["icon_file"]
+        _ico262 = _wd262 / _s262["icon_file"]
+        assert _ico262.is_file() and _ico262.read_bytes() == _icon262, \
+            "图标本体要落盘（任务页贴图读它）"
+        assert _hits262, "桩服务器一次都没被请求过——favicon 那条路根本没走"
+        assert any("favicon 指纹 1/1 个站点已获取" in x for x in _rec262.lines), \
+            _rec262.lines[-3:]
+        assert not [x for x in _rec262.lines if x.startswith("[W]")], \
+            "favicon 那一批不许再有异常被吞（续225 起每站一条 NameError）"
+    finally:
+        _srv262.shutdown()
+    print("[262] 续262 ok: probe favicon 接线修复（续225 NameError：命名空间覆盖 + "
+          "端到端 md5/mmh3/落盘三产物 + 日志不再吞异常）")
     print("SMOKE PASS")
 
 

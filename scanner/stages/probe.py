@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from .base import Stage
 from .. import blacklist, db, extdom, flagfind, wildcard
-from ..fingerprint import identify, favicon_md5
+from ..fingerprint import identify, favicon_md5, favicon_info
 from ..utils import (REDIRECT_STATUS, html_title, page_title, which, verify_tool, run_cmd, read_lines,
                      write_lines, pool_run, http_request, ramp_opt,
                      effective_workers)

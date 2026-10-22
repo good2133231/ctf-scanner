@@ -4303,6 +4303,33 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续262（2026-10-22，WorkBuddy · CodeBuddy）：服务器全量门禁收官（回填续255/256/257）+ favicon NameError 修复（续225 引入）
+
+- [x] 拉取本地推送的 31 个提交（续256~续261）：rebase 干净快进（本地 0 ahead）、
+      sync_check --strict rc=0
+- [x] 服务器全量门禁：`bash update.sh`（env -u PYTHONPATH 注销会话 shim；lock 未变动
+      跳过安装）⇒ **SMOKE PASS、rc=0、13:08:41→13:17:30 耗时 8 分 49 秒、256 个唯一
+      组标签全过**（.venv Python 3.14.4 + Chrome 在位 e2e 真跑；日志 logs/_smoke262srv.log）；
+      CHANGELOG 续255 门禁节 / 续256 附 / 续257 门禁节三处回填
+- [x] 门禁现场抓到真 bug：`scanner/stages/probe.py` 调 `favicon_info` 却没导入
+      （续225 a9c5052 引入，修复前门禁日志 9 处 NameError）⇒ 每站点一次 NameError 被
+      pool 吞、favicon 三产物（MD5/mmh3/图标文件）全空、日志"0/N 已获取"是假象；
+      MD5 空 ⇒ POC favicon_md5_list 前置判定永不命中；mmh3 恒 0；任务页图标列空
+- [x] 修复：导入行补 `favicon_info`（一行）；logs/verify262_fav.py 先复现 FAIL 再修复 PASS
+      （md5 2b021800…/mmh3 -1026017266/落盘/日志 1-1/零 WARNING）
+- [x] [262] 断言组：命名空间覆盖（[8k] 同款）+ 端到端（桩服务器供图标 → register_sites
+      回填三产物 + 落盘 + 无 WARNING）；字节级插入保混合行尾（93 增 0 删）
+- [x] 文档更正：todo.txt"下一轮清单"实际在轮次区最顶部（续255 起的形态），不在文件末尾；
+      AGENTS.md §0.4 与 TODO.md 首节"末尾"表述已改（续262）
+- [x] 记忆同步：CHANGELOG 续262 + 三处回填；todo 续262 小节 + 下一轮清单
+
+**下一轮（续263）——只放未做的：**
+- [ ] T13：nuclei staging 暂存机制（续261 认了）—— 暂存区在 POC_DIRS 之外 + 生效永远人点；
+      叠加"结合指纹自动测试"（组件 → 暂存模板，吃 vulnscan P1-1 指纹→POC 联动）
+- [ ] ICP 真 key（VT 已 ok；ICP 要服务器网络）到位后 `python tools/check_intel_sources.py --strict`
+- [ ] 密文合并成一份（口令已统一；等服务器 config/keys.enc.yaml 拷到本机 → 并入
+      virustotal.key → 重加密 → 拷回）
+- [ ] 续262 推送后 CI 复跑结果回填（smoke 3.9 + probe-3-14 必过档）
 ## 续261（2026-10-22，WorkBuddy · Step-5-Preview）：主理人对面 AI 三问决策（两项明确不做 + T13 认了）
 
 - [x] ① 任务13 的 4 项（弱口令/爆破/主机侧）：**明确不做、不开口子** —— §1 现有红线已覆盖，

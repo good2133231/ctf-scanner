@@ -3,6 +3,72 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续262（2026-10-22，WorkBuddy · CodeBuddy）：服务器全量门禁收官（回填续255/256/257 挂账）+ 门禁现场抓到并修复续225 的 favicon NameError（整条指纹链路坏了约两周）
+
+本地推送 31 个提交（续256~续261）后，**服务器侧**收尾轮：全量门禁 + 三处门禁节回填 + 现场抓到的真 bug。
+
+### A. 服务器全量门禁（续255/续256 附/续257/续259 挂账的"服务器收尾"项，全部落听）
+
+- 环境：本机 Ubuntu、`.venv` = Python 3.14.4（等同 CI `probe-3-14` 档）、Chrome 在位
+  （`/usr/bin/google-chrome`，浏览器 E2E 组真跑不缺位）；本会话带 `PYTHONPATH` shim
+  （续246 同款，会打死冒烟收尾时的 rmtree）⇒ 全程 `env -u PYTHONPATH bash update.sh`；
+  无 HTTP_PROXY（续246 那条墙本机不撞）。
+- 动作：`git pull --rebase origin main`（31 个提交，本地 0 ahead，干净快进）→
+  `python3 tools/sync_check.py --strict` rc=0 → `bash update.sh`（拉取 + 依赖对齐
+  [requirements.lock 未变动，跳过安装] + 全量门禁）。
+- 结果：**SMOKE PASS，rc=0**；2026-10-22 13:08:41 → 13:17:30，**耗时 8 分 49 秒**
+  （CI 同代码 5 分 19 秒；本机 CPU 共享，墙钟慢约 2/3）；组标签去重 **256 个**全过
+  （口径：行首标签 + 含 ok 的去重计数；窄口径会漏 `[5b-171]` / `[211-P2-11]` 这类带
+  后缀标签 —— 与 CI 报的 260 组差 4 属统计口径差异，以 SMOKE PASS + rc=0 为准）。
+  日志：`logs/_smoke262srv.log`。
+- **门禁的价值当场兑现**：CI 260 组全绿的同时，这条全量在服务器上抓到 9 处 favicon
+  NameError（见 B）—— 又一例"CI 绿 ≠ 功能对"。
+
+### B. 抓到并修复：probe 阶段 favicon 接线 NameError（续225 引入，坏了约两周）
+
+- **现象**（修复前门禁日志 9 处实证）：
+  `[pool] favicon 指纹：1/1 个异常被跳过（首个 NameError: name 'favicon_info' is not defined）`，
+  紧接着日志显示"favicon 指纹 0/N 个站点已获取"—— **是假象**。
+- **根因**：`scanner/stages/probe.py` 的 `register_sites()` 调用 `favicon_info(...)`，
+  但模块导入行只有 `from ..fingerprint import identify, favicon_md5`（初始提交起就没带它）；
+  该调用是续225（a9c5052，"任务页 7 项收口"加 mmh3/图标落盘那一轮）引入的 ⇒
+  **每个站点一次 NameError 被 `pool_run` 吞掉、只留一行 WARNING**（续115 起 pool 不再
+  静默，所以 WARNING 可见 —— 但"0/N 已获取"的主日志没人觉得异常）。
+- **影响面**：favicon 三产物全空 —— ① MD5 不进 `sites.favicon` ⇒ POC 的
+  `favicon_md5_list` 零请求前置判定永远不命中（漏报方向、不误杀，但属静默失效）；
+  ② mmh3 恒 0 ⇒ 站点表的 FOFA/Shodan `icon_hash` 提问值不可用（osint 阶段自抓那条
+  路不受影响）；③ 图标本体不落盘 ⇒ 任务页图标列空、老任务回填无从对比。
+  `fingerprint.favicon_info` 本身是好的（[2c] 单测它）；`iconbackfill.py`（老任务补图标）
+  导入正确也不受影响 —— 坏的只有 probe 阶段这一处接线。
+- **为什么 CI 260 组没抓到**：[2c] 只单测 `fingerprint.favicon_info` 纯函数；
+  [3] 只断言 `"favicon" in sites[0]`（键存在），且注释明写"靶场无 favicon.ico 时为空串"
+  —— 空值既是"站点没图标"的合法值、也是 NameError 之后的值，断言形状上分不出。
+- **修复**：导入行补 `favicon_info`（一行，`scanner/stages/probe.py`）。
+  先经 `logs/verify262_fav.py` 自证：修复前 FAIL（md5 空 / mmh3 0 / 无文件 /
+  NameError WARNING）；修复后 PASS（md5 `2b0218007f2d8065dea38fd24edf484c`、
+  mmh3 `-1026017266`、`favicons/<md5>.ico` 落盘、日志"1/1 个站点已获取"、零 WARNING）。
+- **新断言组 [262]**（tests/smoke.py 尾部、SMOKE PASS 前）：① 命名空间覆盖
+  （[8k] 同款：probe.py 调的名字必须在它的命名空间里，删导入即红）；② 端到端
+  （本地桩服务器供已知图标 ⇒ `register_sites` 必须回填 md5/mmh3/icon_file 三产物 +
+  图标落盘 + 桩服务器真被请求 + 日志"1/1" + 那一批不许再有 WARNING）。
+  字节级插入保混合行尾（93 增 0 删，`git ls-files --eol` 仍 `i/mixed`）。
+- **教训**（登记进 CHANGELOG，不新设红线）：加接线时除了"调用 ↔ 导入"对齐，
+  还要问一句"既有断言能不能分辨**空值**与**异常**"—— 只断言键存在的验收，
+  对"每个站点都抛异常被吞"是瞎的；[8k] 的 import 覆盖模式这次漏了 probe 这一处。
+
+### C. 文档更正（顺手，属记忆正确性）
+
+`todo.txt` 的"下一轮清单"实际位置自续255 起已从**文件物理末尾**迁到**轮次区最顶部**
+（用户原始待办块之后、`## 续<最新轮>` 之前）；文件末尾现在是续179 时代的陈旧块。
+AGENTS.md §0.4 与 TODO.md 首节"末尾"的表述已按此更正（续262）—— 不改的话，
+下一个接手者照文档去末尾读，会拿到 10-14 的旧清单当成"还没做什么"。
+
+### D. 记忆同步与门禁
+
+- CHANGELOG 续255 门禁节 / 续256 附 / 续257 门禁节三处"待服务器跑"已回填（本节 A 的数字）。
+- todo.txt 新增续262 小节；下一轮清单见该小节末尾（T13 / ICP 真 key / 密文合并 / CI 复跑回填）。
+- 本轮改动（probe.py 一行 + smoke.py 一组）经服务器**二次全量门禁**验证：SMOKE PASS、rc=0、**257 个唯一组标签**（256 + [262]）全过、耗时 **9 分 33 秒**；favicon NameError **9 → 0**（日志 `logs/_smoke262srv2.log`）后提交推送；
+  CI 将在新提交上复跑（smoke 3.9 + probe-3-14 必过档），结果由下一轮回填。
 ## 续261（2026-10-22，WorkBuddy · Step-5-Preview）：主理人对面 AI 三问决策（两项明确不做 + T13 认了）
 
 《任务13-14-16预读结论》三个"待主理人点"问题今日全部落听：
@@ -288,6 +354,7 @@ probe-3-14（3.14 探针）同理（≥8 连红）。
   零真实请求、隔离库）再写进 `[257]`；
 - `[257]` 断言组钉三件事：选项落库、阶段自动补、不提不加；变异证伪方向＝删任一分支即红；
 - 本机全量门禁仍跑不了（环境守卫隔离 smoke.py 内容）⇒ 与 255/256 一起在服务器收尾。
+- ✅ 服务器收尾已完成（续262）：SMOKE PASS、rc=0、8 分 49 秒、256 组（[257] 在其中通过；日志 `logs/_smoke262srv.log`）。
 
 ## 续256 附（2026-10-21，WorkBuddy · Step-5-Preview）：[7a] ⑥b 旧断言按续255 新语义修正（服务器门禁红点）
 
@@ -305,6 +372,7 @@ auto_expand 就不做后处理"验收（`({}, False)`），而流水线现在无
 教训：**改行为时，同一语义的旧断言要跟着改** —— [255] 组钉了新语义，却没回头搜"还有谁在
 验收旧语义"（本轮 grep `auto_expand` 才发现）。门禁在第一个失败处即停，所以这类"漏改的旧
 验收"会逐个暴露；服务器重跑 `bash update.sh` 后把组数+耗时回填本节。
+**已回填（续262，2026-10-22）**：服务器 `bash update.sh` 重跑 ⇒ SMOKE PASS、rc=0、8 分 49 秒、256 个唯一组标签全过（日志 `logs/_smoke262srv.log`）；[7a]⑥b 修后在服务器全量下通过，无红。
 
 ## 续256（2026-10-21，WorkBuddy · Step-5-Preview）：四项目对比剩余 T10/T11（IP→域名下钻链接 + --dupes 组数截断可见）
 
@@ -422,6 +490,7 @@ csegs.html、extdomains.html 的分组与平铺两个表。口径按上下文分
   路径；bash / git / Read / Edit 工具不受影响；注销 `PYTHONPATH` 无效 ⇒ 不是续246 那个 shim）。
   被删后 `git checkout -- tests/smoke.py` 可无损还原（与 HEAD 逐字节一致）。⇒ **正式收尾
   门禁必须在服务器跑**（push 后 `bash update.sh --smoke`），SMOKE PASS 组数与耗时回填本节。
+- **✅ 服务器门禁已跑（续262，2026-10-22）**：`bash update.sh`（更新到 1210c4b + 依赖对齐 + 全量）⇒ **SMOKE PASS、rc=0、8 分 49 秒、256 个唯一组标签全过**（.venv 3.14.4、Chrome 在位；日志 `logs/_smoke262srv.log`）。本机无 Windows 那道环境守卫，smoke.py 读写正常。
   连带解释：续254 附的行尾回归为什么每次都要查（记忆文件编辑 + 守卫同族风险）。
 - **行尾第四次回归（本轮又踩一次，根因比文档记的更细）**：编辑工具对**混合行尾**文件
   （`tests/smoke.py` / `gui/app.py` / `task_detail.html` / `runner.py` / `dirscan.py`）会整文件
