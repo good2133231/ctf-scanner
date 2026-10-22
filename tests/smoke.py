@@ -30823,9 +30823,10 @@ expression: r0()
         "drill-smoke.example.com" in _td256,
         'href="/subdomains?q=203.0.113.9"' in _td256,
         'href="/extdomains?q=203.0.113.9"' in _td256))
-    print("[256][dbg7] me=%r owner=%r tasks=%s home=%s login=%s" % (
-        gui_app._session_user(),
+    from scanner import users as _us7d
+    print("[256][dbg7] owner=%r role=%r tasks=%s home=%s login=%s" % (
         (db.get_task(tid) or {}).get("owner_id"),
+        (_us7d.get_by_name("smoke-owner117") or {}).get("role"),
         c.get("/tasks").status_code,
         c.get("/").status_code,
         c.get("/login").status_code))
