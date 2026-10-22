@@ -27291,9 +27291,18 @@ expression: r0()
     assert "/api/hostcollide/run" in _hd201, "任务详情页没有「Host 碰撞」补跑按钮"
 
     # ⑥ 队列并发：出厂 3（续236 主理人点单 2→3），且 workers_auto 仍是关的
+    # ⑥ 队列并发：出厂 3（续236 主理人点单 2→3），且 workers_auto 仍是关的。
+    # 续259 附9：验的是**出厂配置值**，不是 `queue.config()` 的运行值 —— 后者还会被
+    # `workers_profile`（续215-P2-12）按最近一次真任务的画像**只往下**收（CI 上实测画像
+    # ⇒ cap=2），那是画像在起作用、不是配置丢了 3；原断言在 CI 上永远不成立（长期红点）。
     from scanner import queue as _q201
+    _qs201 = _cf201.load_settings().get("queue") or {}
+    assert _qs201.get("workers") == 3, \
+        f"队列并发出厂应是 3（续236 主理人点单 2→3）：{_qs201.get('workers')}"
+    assert _qs201.get("workers_auto") is False, "workers_auto 出厂应是关的（原注释就钉了这条，却没验）"
     _qc201 = _q201.config(_cf201.load_settings())
-    assert _qc201.get("workers") == 3, f"队列并发出厂应是 3（续236 主理人点单 2→3）：{_qc201.get('workers')}"
+    assert _qc201.get("workers") <= 3, \
+        f"画像/机器档只许把运行值往下收（不许超过配置 3）：{_qc201.get('workers')}"
 
     # ⑦ `_with_hash`：只认 `#\w`，别的（开放重定向形状）一律忽略
     _wh201 = gui_app._with_hash

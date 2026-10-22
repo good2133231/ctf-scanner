@@ -3,6 +3,23 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续259 附9（2026-10-22，WorkBuddy · Step-5-Preview）：[201]⑥ 队列并发出厂断言改验配置值（CI 长期红点）
+
+CI 越过 [7o] 后红在 `tests/smoke.py:27296`：
+
+```
+AssertionError: 队列并发出厂应是 3（续236 主理人点单 2→3）：2
+```
+
+根因：`queue.config()` 的返回值是**三道收窄后的运行值** —— `workers`（配置 3）→ `workers_auto`
+（机器档，CI 上 false 不收）→ **`workers_profile`（续215-P2-12，出厂 true）按最近一次真任务的
+画像只往下收**。CI 上 smoke 跑过真实流水线，画像实测 ⇒ `suggest_workers` 给 cap=2 ⇒ 运行值 2。
+**画像在起作用，不是配置丢了 3**；原断言在 CI 上永远不成立（又是 40 次连红的一环，与本轮改动无关）。
+
+修法：断言拆成“出厂配置值”与“运行值上界”两条：
+- `settings["queue"]["workers"] == 3` + `workers_auto is False`（原注释就钉了 auto 却没验，补上）；
+- `config()["workers"] <= 3`（画像/机器档只许往下收，不许超过配置）。
+
 ## 续259 附6（2026-10-22，WorkBuddy · Step-5-Preview）：[256] 页面断言补 q 过滤（CI 长期红点）
 
 CI 越过 [238] 后红在 `tests/smoke.py:30774`：
