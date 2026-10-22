@@ -4303,6 +4303,17 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续261（2026-10-22，WorkBuddy · Step-5-Preview）：主理人对面 AI 三问决策（两项明确不做 + T13 认了）
+
+- [x] ① 任务13 的 4 项（弱口令/爆破/主机侧）：**明确不做、不开口子** —— §1 现有红线已覆盖，
+      不为此新设红线也不放开；TODO.md 登记防未来再提
+- [x] ② OOB 反连平台（log4j2/shiro/XXE 盲漏洞检测）：**明确不做** —— 多天工作量 + 公网收包
+      设施、当前架构不可达；三族永久标"测不了"，不挂模糊账；将来做按新立项标准重新评估
+- [x] ③ nuclei staging：**认了，编号 T13** —— 暂存区在 POC_DIRS 之外 + 生效永远人点；
+      叠加主理人新要求"结合指纹自动测试"（组件 → 暂存模板，吃 vulnscan P1-1 指纹→POC 联动
+      与指纹表，不另建匹配）
+- [x] 1.txt（6 字节明文）已删（主理人确认无用）；TODO.md / todo.txt 前瞻块同步
+
 ## 续260（2026-10-22，WorkBuddy · Step-5-Preview）：3.14 探针升必过（续254/续125 口径达成）
 
 - [x] 连绿满 3 次实测（GitHub Actions API）：3a42a45 / d9e4bfd / 9cc6930 三次 push，
@@ -4332,20 +4343,12 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [ ] 服务器侧：拉最新后 `bash update.sh` 跑门禁（**update.sh 只拉不推**；服务器有未推送
       提交会拒绝更新；回填 CHANGELOG 需手动 commit+push）
 
-**下一轮（续261）——只放未做的：**
+**下一轮（续262）——只放未做的：**
+- [ ] T13：nuclei staging 暂存机制（续261 认了）—— 暂存区在 POC_DIRS 之外 + 生效永远人点；
+      叠加"结合指纹自动测试"（组件 → 暂存模板，吃 vulnscan P1-1 指纹→POC 联动）
 - [ ] ICP 真 key（VT 已 ok：加密入库 + check_intel_sources 验收；ICP 要服务器网络）
 - [ ] 密文合并成一份（口令已统一；等服务器 config/keys.enc.yaml 拷到本机 → 并入 virustotal.key
-      → 重加密 → 拷回；另：本机工作区有个 6 字节的 1.txt，等主理人澄清用途）
-- [ ] 对面 AI 三问（13 非破坏性边界 / OOB 反连平台立项 / 14 nuclei staging，等主理人）
-- [x] ~~3.14 探针升必过~~（续260 已办：连绿满 3 次后摘 continue-on-error，TODO.md 结案）
-- [x] `--hostcollide`：单次强开（任务选项 `hostcollide=true`，策略关着也生效）+ 阶段没写进
-      `-p` 时**自动补上**（勾了不补＝白勾，与 `--auto-expand`/`--subdomain-profile` 同纪律）
-- [x] `-p hostcollide` 显式点名也算「这次要跑」（与 `-p cert/screenshot` 同语义；否则只换来
-      阶段里一行"没开、跳过"）；不提就不加（既有行为不变）
-- [x] [257] 断言组：三种形态（flag / 显式点名 / 不提），桩掉 run_task 零真实请求；
-      先经 logs/verify257.py 5 项实测再入禁
-- [x] 续183 的「GUI/CLI 触发入口」挂账就此闭环（GUI 侧续201/203/227 早已齐）
-
+      → 重加密 → 拷回）
 **下一轮（续258）——只放未做的：**
 - [ ] 服务器全量门禁：拉取后 `bash update.sh`（门禁默认开启）→ SMOKE PASS 组数+耗时回填
       CHANGELOG 续255/续256/续257 门禁节
