@@ -3,6 +3,27 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续259 附6（2026-10-22，WorkBuddy · Step-5-Preview）：[256] 页面断言补 q 过滤（CI 长期红点）
+
+CI 越过 [238] 后红在 `tests/smoke.py:30774`：
+
+```
+AssertionError: 子域名页 IP 没有下钻链接
+```
+
+真因（本机 logs/dbg256b.py 实证）：`/subdomains` 是**跨任务**视图、排序 `task_id DESC`、
+每页 100 行 —— smoke 前面各用例创建的新任务只要占满第一页，主 tid 的 drill 行就被挤出
+第一页。续256 当时用干净库的一次性脚本验证（17 项全过），看不见这个累积效应
+（与 [217]/[218]/[238] 同族：本机/服务器环境与 CI 的差异）。
+
+修法（与 [112] `query_string={"q": "dedupe112", "size": "50"}` 同款成熟范式）：
+四条页面断言全部加唯一关键字过滤 —— `/subdomains?q=drill-smoke`、
+`/tasks/<tid>?sdq=drill-smoke&exq=drill-ext-smoke`、`/extdomains?q=drill-ext-smoke&group=0`。
+四种过滤形态先在 dbg256b.py 实证通过再改断言。
+
+顺带记一个本机 sed 坑：范围地址第二个数字**位数写少**（`30774,3080d` 应为 `30774,30780d`）
+时 GNU sed 4.9 不报错，范围永不闭合、只作用于第一行 —— 行号级操作必须回读行数核对。
+
 ## 续259 附5（2026-10-21，WorkBuddy · Step-5-Preview）：[238] 临时仓库的 git 身份配错了地方（CI 长期红点）
 
 CI 越过 [218] 后红在 `tests/smoke.py:30099`：

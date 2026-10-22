@@ -30771,13 +30771,22 @@ expression: r0()
     db.set_subdomain_net(tid, {"drill-smoke.example.com": ("203.0.113.9", "")})
     db.insert_subdomains(tid, [("drill-ext-smoke.example.com", "js:mine")])
     db.set_subdomain_net(tid, {"drill-ext-smoke.example.com": ("203.0.113.9", "")})
-    assert 'href="/subdomains?q=203.0.113.9"' in c.get("/subdomains").get_data(as_text=True), \
-        "子域名页 IP 没有下钻链接"
-    _td256 = c.get(f"/tasks/{tid}").get_data(as_text=True)
+    # 续259 附6：页面断言必须带 q 过滤（CI 实证的真因）。`/subdomains` 是**跨任务**视图、
+    # 排序 `task_id DESC` 且每页 100 行 —— smoke 前面各用例建的新任务只要占满第一页，
+    # 主 tid 的 drill 行就被挤出去（本机 verify 脚本用的是干净库所以永远看不见）。
+    # 与 [112]（`query_string={"q": "dedupe112", "size": "50"}`）同款成熟范式；
+    # ext 行来源是 js:mine，按设计只在 /extdomains 与任务详情拓展页签出现（自身子域页查不到）。
+    assert 'href="/subdomains?q=203.0.113.9"' in c.get(
+        "/subdomains", query_string={"q": "drill-smoke", "size": "50"}
+    ).get_data(as_text=True), "子域名页 IP 没有下钻链接"
+    _td256 = c.get(f"/tasks/{tid}",
+                   query_string={"sdq": "drill-smoke", "exq": "drill-ext-smoke"}
+                   ).get_data(as_text=True)
     assert 'href="/subdomains?q=203.0.113.9"' in _td256, "任务详情子域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in _td256, "任务详情拓展域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in \
-        c.get("/extdomains?group=0").get_data(as_text=True), "拓展域名页 IP 没有下钻链接"
+        c.get("/extdomains", query_string={"q": "drill-ext-smoke", "group": "0"}
+              ).get_data(as_text=True), "拓展域名页 IP 没有下钻链接"
 
     # ① T11：--dupes 的截断必须说出口（纯函数 + 真数据不变量 + CLI 输出三级）
     _spec256 = _ilu256.spec_from_file_location("poc_review256",
