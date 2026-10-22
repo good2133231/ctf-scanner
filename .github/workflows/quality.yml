@@ -9,9 +9,10 @@
 # - 本文件的 `contrast`＝秒级快查（改颜色/改模板就会红，没必要等十分钟）；
 # - `devflow`＝13 阶段功能向量自检（每阶段真跑或如实 SKIP）；
 # - `e2e`＝真浏览器（headless Chrome + CDP）跑页面交互，含"点了按钮 DOM 真的变"；
-# - `probe-3.14`＝**探针，允许红**：换个新解释器跑全量，专治 `(?i)` 位置、`sre_parse` 搬家这类
-#   "在 CI 口径的 3.9 上永远看不见"的版本漂移。它 `continue-on-error`，红不阻塞合并，
-#   但必须有人看；等它在 CI 里连续绿过几轮再考虑升成必过。
+# - `probe-3.14`＝**必过门禁**（续260 升格）：换个新解释器跑全量，专治 `(?i)` 位置、`sre_parse`
+#   搬家这类"在 CI 口径的 3.9 上永远看不见"的版本漂移。续259 修完红点链后它在真 runner 上
+#   连绿满 3 次（3a42a45 / d9e4bfd / 9cc6930），按续254/续125 口径摘掉 `continue-on-error`
+#   升为必过 —— 红了就挡合并；降级回去只允许出现在"连续 3 次全红且定位为新解释器上游问题"。
 name: Quality gates
 
 on:
@@ -92,10 +93,9 @@ jobs:
         run: python3 tests/browser_e2e.py
 
   probe-3-14:
-    name: 探针 · Python 3.14 全量 smoke（允许红）
+    name: 门禁 · Python 3.14 全量 smoke（必过，续260 升格）
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

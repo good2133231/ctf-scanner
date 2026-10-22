@@ -32,17 +32,17 @@
       已改为由**本框架**钉住 `pin_version=v2.1.1` + 四件产物的 `pin_sha256`（不是放松红线：
       字节必须与钉住的摘要一字不差；tag 不对连下载都不发起）。`tools/install.sh` / `toolmgr`
       都已按这条走，不再需要 `--allow-unverified`；原来"AI 不代做这个决定"的挂账随之解除。
-- [ ] **Python 3.14 那一档 CI 探针升为必过**：`.github/workflows/quality.yml` 里 3.14 目前是
+- [x] **Python 3.14 那一档 CI 探针升为必过**（续260 已升格，本条结案）：`.github/workflows/quality.yml` 里 3.14 升格前是
       "允许红的探针"（`probe-3-14` job，`continue-on-error: true`，在 3.14 上跑全量 smoke，
       专治「在 3.9 上永远看不见」的版本漂移，实例：续96 的 `re.PatternError`），
       `smoke.yml`（3.9 全量）才是权威口径。升法＝真 runner 上 `probe-3-14` **连续 ≥3 次
       push 全绿**后，摘掉 `continue-on-error: true`，同步改 quality.yml 头部「允许红」注释；
       升太早等于教所有人忽略红（`todo.txt` 续125 原话）。升格口径详见 CHANGELOG_AI 续254。
-      **进度（2026-10-22，续259 附11–附12）**：红点链修完后的连绿计数 **2/3** ——
-      `3a42a45`（附10）与 `d9e4bfd`（收尾）两个 workflow 均 success；`23c482f` 被 GitHub
-      自动取消（连续快速 push），严格口径下打断计数。满 3 后执行升格三步：
-      摘 `continue-on-error: true` → 改 quality.yml 头部注释 → 回签本条目 + CHANGELOG 登记。
-- [x] **`logs/` 的清理清单** —— **续226 已落地**：`docs/logs-cleanup.md`（必留的确切文件名 /
+      **已升格（2026-10-22，续260）**：续259 修完红点链后连绿满 3 次
+      （`3a42a45` / `d9e4bfd` / `9cc6930`，smoke.yml 与 quality.yml 均 success）⇒ 已摘掉
+      `probe-3-14` 的 `continue-on-error: true`，job 名与 quality.yml 头部注释同步改为
+      「必过」口径（红了挡合并）。降级回去只允许出现在"连续 3 次全红且定位为新解释器
+      上游问题"（§5.14：降级口径与升格口径同产地，都在本条与 CHANGELOG_AI 续254/续260）。
       可删候选前缀 / `task_*` 条件可删）+ `tools/clean_logs.py`（`--list` 只列分类；`--apply`
       必须逐个点名，拒绝通配符、必留项与 `tasks.log_file` 仍在引用的任务目录）；
       门禁 `[226]` 扫代码里的危险删除形态并自测工具拒绝通配/必留项。

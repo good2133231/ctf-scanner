@@ -3,6 +3,22 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续260（2026-10-22，WorkBuddy · Step-5-Preview）：3.14 探针升必过（续254/续125 口径达成）
+
+**连绿满 3 次（GitHub Actions API 实测）**：`3a42a45`（续259 附10）、`d9e4bfd`（收尾）、
+`9cc6930`（附12）三次 push，`smoke.yml`（3.9 权威门禁）与 `quality.yml` 的 `probe-3-14`
+双双 success ⇒ 按续254/续125 口径执行升格三步：
+
+1. `.github/workflows/quality.yml`：摘掉 `probe-3-14` 的 `continue-on-error: true`，
+   job 名改「门禁 · Python 3.14 全量 smoke（必过，续260 升格）」；
+2. quality.yml 头部注释同步改写为必过口径（含降级条件：连续 3 次全红且定位为上游问题）；
+3. TODO.md 探针条目结案（`- [x]` + 已升格登记；正文"目前是允许红"改过去式，
+   续252 纪律：文案不与现状撒谎）。
+
+YAML 结构校验通过（4 job 齐全、continue-on-error absent）。升格后第一次 push（本提交）
+即为必过模式下的首次验证。
+
+
 ## 续259 附12（2026-10-22，WorkBuddy · Step-5-Preview）：3.14 探针连绿进度登记 TODO.md
 
 续259 附11 收官后，`probe-3-14` 的连绿计数现状（GitHub Actions API 实测）：
