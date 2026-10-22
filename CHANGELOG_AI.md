@@ -3,6 +3,16 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续259 附12（2026-10-22，WorkBuddy · Step-5-Preview）：3.14 探针连绿进度登记 TODO.md
+
+续259 附11 收官后，`probe-3-14` 的连绿计数现状（GitHub Actions API 实测）：
+`3a42a45`（附10）smoke+quality 双 success、`d9e4bfd`（收尾）双 success；
+`23c482f` 因连续快速 push 被 GitHub 自动取消（cancelled 非 failure，但严格口径下打断
+「连续 ≥3 次 push 全绿」的计数）⇒ 当前 **2/3**。进度已登记 TODO.md 的探针条目
+（含升格三步：摘 `continue-on-error` → 改 quality.yml 头部注释 → 回签条目）；
+本次 push 自身即为计数 +1 的候选（绿则满 3）。
+
+
 ## 续259 附11（2026-10-22，WorkBuddy · Step-5-Preview）：CI 双绿收官（40+ 次连红终结）
 
 **`3a42a45`（续259 附10）起，smoke.yml 与 quality.yml 双双 success**：

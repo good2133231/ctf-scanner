@@ -38,6 +38,10 @@
       `smoke.yml`（3.9 全量）才是权威口径。升法＝真 runner 上 `probe-3-14` **连续 ≥3 次
       push 全绿**后，摘掉 `continue-on-error: true`，同步改 quality.yml 头部「允许红」注释；
       升太早等于教所有人忽略红（`todo.txt` 续125 原话）。升格口径详见 CHANGELOG_AI 续254。
+      **进度（2026-10-22，续259 附11–附12）**：红点链修完后的连绿计数 **2/3** ——
+      `3a42a45`（附10）与 `d9e4bfd`（收尾）两个 workflow 均 success；`23c482f` 被 GitHub
+      自动取消（连续快速 push），严格口径下打断计数。满 3 后执行升格三步：
+      摘 `continue-on-error: true` → 改 quality.yml 头部注释 → 回签本条目 + CHANGELOG 登记。
 - [x] **`logs/` 的清理清单** —— **续226 已落地**：`docs/logs-cleanup.md`（必留的确切文件名 /
       可删候选前缀 / `task_*` 条件可删）+ `tools/clean_logs.py`（`--list` 只列分类；`--apply`
       必须逐个点名，拒绝通配符、必留项与 `tasks.log_file` 仍在引用的任务目录）；
