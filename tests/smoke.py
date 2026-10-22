@@ -30823,6 +30823,12 @@ expression: r0()
         "drill-smoke.example.com" in _td256,
         'href="/subdomains?q=203.0.113.9"' in _td256,
         'href="/extdomains?q=203.0.113.9"' in _td256))
+    print("[256][dbg7] me=%r owner=%r tasks=%s home=%s login=%s" % (
+        gui_app._session_user(),
+        (db.get_task(tid) or {}).get("owner_id"),
+        c.get("/tasks").status_code,
+        c.get("/").status_code,
+        c.get("/login").status_code))
     assert 'href="/subdomains?q=203.0.113.9"' in _td256, "任务详情子域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in _td256, "任务详情拓展域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in \
