@@ -4312,7 +4312,8 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] [8ad] ④（续125 的 CI 分层断言）同批翻：continue-on-error is True → is not True
       + 登记注释 + print 文案同步（升格首验 7b3fbe0 双红抓出的学费：续256 教训当天第二次）
 - [x] TODO.md / todo.txt 前瞻块推进到续261；CHANGELOG 续260 + 附记
-- [ ] CI 复跑待绿（本小节提交 ae8fc96 后的下一轮验证）
+- [x] CI 复跑双绿（02bfe47：smoke + quality 均 success）—— **必过模式首次全绿**，
+      3.14 探针升必过完整闭环（连绿满 3 → 升格 → [8ad]④ 断言同批翻 → 轮次等式补 todo 小节）
 ## 续259（2026-10-21，WorkBuddy · Step-5-Preview）：CI 失败日志可见化（smoke + 3.14 探针）
 
 - [x] smoke.yml / quality.yml（probe-3-14）：`set -o pipefail; … | tee <log>` +
