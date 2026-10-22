@@ -559,18 +559,6 @@ def main():
     targets = "http://127.0.0.1:8765/"
     stages = ["probe", "vulnscan"]
     tid = db.create_task("smoke", targets, stages, {"offline": True})
-    # [256][dbg3] CI 上 get_task(tid)=None ⇒ 有人删了主任务；监控 delete_task 抓调用栈
-    import traceback as _tb256
-    _orig_del256 = db.delete_task
-    def _spy_del256(_t, **kw):
-        try:
-            if _t is not None and int(_t) == int(tid):
-                print("[256][dbg3] DELETING main task %r" % (_t,))
-                _tb256.print_stack()
-        except (TypeError, ValueError):
-            pass
-        return _orig_del256(_t, **kw)
-    db.delete_task = _spy_del256
     sync_pocs(settings)
     ctx = run_task(tid, "smoke", targets, stages, {"offline": True}, settings)
     sites = ctx.results["sites"]
@@ -10135,10 +10123,15 @@ http:
     #      ⑤ 非法 `page` / `vpage`（9999）不 500，回落末页；
     #      ⑥ 详情页 GET 筛选表单与 POST 复核表单**没有嵌套**（HTML 不允许 form 嵌套）。
     # 说明：为让"最老任务在末页"这条断言确定成立，先把库里任务清空（本组是 main() 最后一组，
-    # 其后只打印 SMOKE PASS；冒烟库本就是隔离的 logs/ 临时库，跑完整体删除）。
+    # 说明：为让"最老任务在末页"这条断言确定成立，先把库里任务清空。续259 附7：**必须豁免
+    # 主任务 tid** —— 本组写时是 main() 最后一组，但续255/256/257 之后插在了它后面且仍在用
+    # tid（[256] 的 /tasks/<tid> 页面断言）⇒ 无豁免清空会把主任务删掉、后面的页面断言全 404
+    # （CI 实证：监控抓到 [7o] 删掉主任务，dbg 三轮定位）。断言从"全空"改成"除主任务外全空"。
     for _t0_7o in db.list_tasks(limit=100000):
-        db.delete_task(_t0_7o["id"], backup=False)
-    assert len(db.list_tasks(limit=100000)) == 0, "本组开始前应已清空任务表"
+        if int(_t0_7o["id"]) != int(tid):
+            db.delete_task(_t0_7o["id"], backup=False)
+    assert [t["id"] for t in db.list_tasks(limit=100000)] == [int(tid)], \
+        "清空后应只剩主任务（续255 起的后续组还在用 tid）"
 
     _N7O = 250
     _ids7o = []
@@ -30791,15 +30784,10 @@ expression: r0()
     assert 'href="/subdomains?q=203.0.113.9"' in c.get(
         "/subdomains", query_string={"q": "drill-smoke", "size": "50"}
     ).get_data(as_text=True), "子域名页 IP 没有下钻链接"
-    _r256 = c.get(f"/tasks/{tid}",
-                  query_string={"sdq": "drill-smoke", "exq": "drill-ext-smoke"})
-    _td256 = _r256.get_data(as_text=True)
-    _gt256 = db.get_task(tid)
-    with c.session_transaction() as _s256:
-        _auth256 = _s256.get("auth")
-    print("[256][dbg2] tid=%r task=%r status=%s len=%d auth=%r head=%r" % (
-        tid, (_gt256 or {}).get("name"), _r256.status_code, len(_td256),
-        _auth256, _td256[:70]))
+    _td256 = c.get(f"/tasks/{tid}",
+                   query_string={"sdq": "drill-smoke", "exq": "drill-ext-smoke"}
+                   ).get_data(as_text=True)
+    assert 'href="/subdomains?q=203.0.113.9"' in _td256, "任务详情子域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in _td256, "任务详情拓展域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in \
         c.get("/extdomains", query_string={"q": "drill-ext-smoke", "group": "0"}
