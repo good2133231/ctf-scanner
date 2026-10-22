@@ -559,13 +559,16 @@ def main():
     targets = "http://127.0.0.1:8765/"
     stages = ["probe", "vulnscan"]
     tid = db.create_task("smoke", targets, stages, {"offline": True})
-    # [256][dbg5] CI 上 [7o] 修复后 tid 仍不存在 ⇒ 有第二个删除者；监控抓调用栈
+    # [256][dbg6] 全链路：创建时 tid/存活 + [7o] 后复查 + 删除监控
     import traceback as _tb256
+    print("[256][dbg6] created tid=%r alive=%r first3=%r" % (
+        tid, bool(db.get_task(tid)),
+        [(t["id"], t["name"]) for t in db.list_tasks(limit=3)]))
     _orig_del256 = db.delete_task
     def _spy_del256(_t, **kw):
         try:
             if _t is not None and int(_t) == int(tid):
-                print("[256][dbg5] DELETING main task %r" % (_t,))
+                print("[256][dbg6] DELETING main task %r" % (_t,))
                 _tb256.print_stack()
         except (TypeError, ValueError):
             pass
@@ -10144,6 +10147,8 @@ http:
             db.delete_task(_t0_7o["id"], backup=False)
     assert [t["id"] for t in db.list_tasks(limit=100000)] == [int(tid)], \
         "清空后应只剩主任务（续255 起的后续组还在用 tid）"
+    print("[256][dbg6] after-7o: tid=%r alive=%r total=%r" % (
+        tid, bool(db.get_task(tid)), len(db.list_tasks(limit=100000))))
 
     # 续259 附7：主任务 tid 豁免后仍在表里（续255 起的后续组还在用它）⇒ 这里造 249 个，
     # 加上主任务正好 250 —— ① 的「任务列表（250）/ 5 页 / 每页 50 / 末页可见最老」全部原样成立。
