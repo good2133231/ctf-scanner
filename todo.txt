@@ -4303,6 +4303,16 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续260（2026-10-22，WorkBuddy · Step-5-Preview）：3.14 探针升必过（续254/续125 口径达成）
+
+- [x] 连绿满 3 次实测（GitHub Actions API）：3a42a45 / d9e4bfd / 9cc6930 三次 push，
+      smoke.yml 与 quality.yml 的 probe-3-14 双双 success
+- [x] quality.yml 升格三步：摘 probe-3-14 的 continue-on-error: true；job 名与头部注释
+      同步改必过口径（降级条件：连续 3 次全红且定位为上游解释器问题）；TODO.md 探针条目结案
+- [x] [8ad] ④（续125 的 CI 分层断言）同批翻：continue-on-error is True → is not True
+      + 登记注释 + print 文案同步（升格首验 7b3fbe0 双红抓出的学费：续256 教训当天第二次）
+- [x] TODO.md / todo.txt 前瞻块推进到续261；CHANGELOG 续260 + 附记
+- [ ] CI 复跑待绿（本小节提交 ae8fc96 后的下一轮验证）
 ## 续259（2026-10-21，WorkBuddy · Step-5-Preview）：CI 失败日志可见化（smoke + 3.14 探针）
 
 - [x] smoke.yml / quality.yml（probe-3-14）：`set -o pipefail; … | tee <log>` +
