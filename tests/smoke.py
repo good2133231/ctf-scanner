@@ -17189,8 +17189,11 @@ expression: r0()
     assert "tools/check_contrast.py" in str(_jobs["contrast"])
     assert "cli/run_devflow.py" in str(_jobs["devflow"])
     assert "browser_e2e.py" in str(_jobs["e2e"])
-    assert _jobs["probe-3-14"].get("continue-on-error") is True, \
-        "新版本解释器是**探针**：允许红（还没证明它稳定），但既不阻塞合并，也不许假装成必过项"
+    # 续260 升格：连绿满 3 次（3a42a45 / d9e4bfd / 9cc6930）后按续254/续125 口径摘掉
+    # continue-on-error 升为必过 —— 断言从"必须允许红"翻成"必须不再允许红"（续252 纪律：
+    # 文案与行为一起翻；降级条件同产地：连续 3 次全红且定位为上游解释器问题）。
+    assert _jobs["probe-3-14"].get("continue-on-error") is not True, \
+        "3.14 已升必过（续260，连绿满 3 次）：不许退回允许红的探针形态（降级需连续 3 次全红且定位为上游问题）"
     assert "tests/smoke.py" in str(_jobs["probe-3-14"]), "探针不跑全量就没有意义"
     # e2e 在 CI 上最容易因"runner 没有浏览器"而红 —— 那不是代码红，必须先探一次环境再跑
     assert "chrome" in str(_jobs["e2e"]["steps"]).lower(), "e2e 缺环境前置检查：浏览器缺失会被误读成代码红"
@@ -17201,7 +17204,7 @@ expression: r0()
           "不然就是静默改变被测口径｜计时探针默认关（不重绑 print）、打开时 stdout 逐字节不变"
           "（第一版改了 stdout 把 [7i] 打红，这条就是那次的学费）+ 归因只认组行｜CI 三份口径齐全："
           "smoke.yml 仍是 3.9 全量权威，quality.yml 补 check_contrast / run_devflow / browser_e2e，"
-          "新版本解释器标成允许红的探针且带浏览器环境前置检查｜放宽逻辑只有 relax_pacing 一个入口，"
+          "新版本解释器已升必过（续260，连绿满 3 次）且带浏览器环境前置检查｜放宽逻辑只有 relax_pacing 一个入口，"
           "两条自检路径（run_selfcheck 与 [7l] 的进程内流水线）共用，基线写的是**实际生效**的节奏而非抄常量。"
           "实测：单跑自检 146.2s→26.2s（5.6x），全量门禁里 [7l] 那 146.7s 是同一条路省下来的")
 
