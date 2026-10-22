@@ -30798,9 +30798,14 @@ expression: r0()
     assert 'href="/subdomains?q=203.0.113.9"' in c.get(
         "/subdomains", query_string={"q": "drill-smoke", "size": "50"}
     ).get_data(as_text=True), "子域名页 IP 没有下钻链接"
-    _td256 = c.get(f"/tasks/{tid}",
-                   query_string={"sdq": "drill-smoke", "exq": "drill-ext-smoke"}
-                   ).get_data(as_text=True)
+    _r256d = c.get(f"/tasks/{tid}",
+                   query_string={"sdq": "drill-smoke", "exq": "drill-ext-smoke"})
+    _td256 = _r256d.get_data(as_text=True)
+    print("[256][dbg4] status=%s len=%d has-row=%s has-sub=%s has-ext=%s" % (
+        _r256d.status_code, len(_td256),
+        "drill-smoke.example.com" in _td256,
+        'href="/subdomains?q=203.0.113.9"' in _td256,
+        'href="/extdomains?q=203.0.113.9"' in _td256))
     assert 'href="/subdomains?q=203.0.113.9"' in _td256, "任务详情子域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in _td256, "任务详情拓展域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in \
