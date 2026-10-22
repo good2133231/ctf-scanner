@@ -10133,7 +10133,9 @@ http:
     assert [t["id"] for t in db.list_tasks(limit=100000)] == [int(tid)], \
         "清空后应只剩主任务（续255 起的后续组还在用 tid）"
 
-    _N7O = 250
+    # 续259 附7：主任务 tid 豁免后仍在表里（续255 起的后续组还在用它）⇒ 这里造 249 个，
+    # 加上主任务正好 250 —— ① 的「任务列表（250）/ 5 页 / 每页 50 / 末页可见最老」全部原样成立。
+    _N7O = 249
     _ids7o = []
     for _i7o in range(_N7O):
         if _i7o == 0:
@@ -10169,6 +10171,9 @@ http:
         "旧写法（limit=200）看不到最老任务 → 证明静默丢结果真实存在"
 
     # ② /tasks 服务端筛选：q（名字/目标子串）与 status（精确）
+    # 续259 附7：主任务 tid 跑过流水线会是 done —— 显式按成 pending，done 数才确定是 7
+    # （[7o] 之后的组不读主任务 status，这一步无副作用）。
+    db.update_task(tid, status="pending")
     _hq_7o = _c7o.get("/tasks?q=NEEDLE53").get_data(as_text=True)
     assert "任务列表（1）" in _hq_7o, "服务端 q 必须精确命中 1 条（旧前端过滤只搜当前页）"
     assert _oldest_name7o in _hq_7o and "smoke53-task-100" not in _hq_7o, "q 只应返回匹配行"
