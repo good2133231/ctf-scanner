@@ -559,6 +559,18 @@ def main():
     targets = "http://127.0.0.1:8765/"
     stages = ["probe", "vulnscan"]
     tid = db.create_task("smoke", targets, stages, {"offline": True})
+    # [256][dbg5] CI 上 [7o] 修复后 tid 仍不存在 ⇒ 有第二个删除者；监控抓调用栈
+    import traceback as _tb256
+    _orig_del256 = db.delete_task
+    def _spy_del256(_t, **kw):
+        try:
+            if _t is not None and int(_t) == int(tid):
+                print("[256][dbg5] DELETING main task %r" % (_t,))
+                _tb256.print_stack()
+        except (TypeError, ValueError):
+            pass
+        return _orig_del256(_t, **kw)
+    db.delete_task = _spy_del256
     sync_pocs(settings)
     ctx = run_task(tid, "smoke", targets, stages, {"offline": True}, settings)
     sites = ctx.results["sites"]
