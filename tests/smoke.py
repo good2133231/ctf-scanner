@@ -559,21 +559,6 @@ def main():
     targets = "http://127.0.0.1:8765/"
     stages = ["probe", "vulnscan"]
     tid = db.create_task("smoke", targets, stages, {"offline": True})
-    # [256][dbg6] 全链路：创建时 tid/存活 + [7o] 后复查 + 删除监控
-    import traceback as _tb256
-    print("[256][dbg6] created tid=%r alive=%r first3=%r" % (
-        tid, bool(db.get_task(tid)),
-        [(t["id"], t["name"]) for t in db.list_tasks(limit=3)]))
-    _orig_del256 = db.delete_task
-    def _spy_del256(_t, **kw):
-        try:
-            if _t is not None and int(_t) == int(tid):
-                print("[256][dbg6] DELETING main task %r" % (_t,))
-                _tb256.print_stack()
-        except (TypeError, ValueError):
-            pass
-        return _orig_del256(_t, **kw)
-    db.delete_task = _spy_del256
     sync_pocs(settings)
     ctx = run_task(tid, "smoke", targets, stages, {"offline": True}, settings)
     sites = ctx.results["sites"]
@@ -10141,15 +10126,12 @@ http:
     # 说明：为让"最老任务在末页"这条断言确定成立，先把库里任务清空。续259 附7：**必须豁免
     # 主任务 tid** —— 本组写时是 main() 最后一组，但续255/256/257 之后插在了它后面且仍在用
     # tid（[256] 的 /tasks/<tid> 页面断言）⇒ 无豁免清空会把主任务删掉、后面的页面断言全 404
-    # （CI 实证：监控抓到 [7o] 删掉主任务，dbg 三轮定位）。断言从"全空"改成"除主任务外全空"。
+    # （CI 实证：delete_task 监控抓到 [7o] 删掉主任务）。断言从"全空"改成"除主任务外全空"。
     for _t0_7o in db.list_tasks(limit=100000):
         if int(_t0_7o["id"]) != int(tid):
             db.delete_task(_t0_7o["id"], backup=False)
     assert [t["id"] for t in db.list_tasks(limit=100000)] == [int(tid)], \
         "清空后应只剩主任务（续255 起的后续组还在用 tid）"
-    print("[256][dbg6] after-7o: tid=%r alive=%r total=%r" % (
-        tid, bool(db.get_task(tid)), len(db.list_tasks(limit=100000))))
-
     # 续259 附7：主任务 tid 豁免后仍在表里（续255 起的后续组还在用它）⇒ 这里造 249 个，
     # 加上主任务正好 250 —— ① 的「任务列表（250）/ 5 页 / 每页 50 / 末页可见最老」全部原样成立。
     _N7O = 249
@@ -30802,34 +30784,27 @@ expression: r0()
     assert _idp256("203.0.113.9", ext=True) == "/extdomains?q=203.0.113.9"
     assert _idp256("") == "" and _idp256(None) == "", "空 IP 不渲染死链"
     assert _idp256(" 10.0.0.1 ") == "/subdomains?q=10.0.0.1"
-    # 页面级：同 IP 插一行自身子域 + 一行拓展域名，三个视图都要出现对应口径的下钻链接
-    db.insert_subdomains(tid, [("drill-smoke.example.com", "subfinder")])
-    db.set_subdomain_net(tid, {"drill-smoke.example.com": ("203.0.113.9", "")})
-    db.insert_subdomains(tid, [("drill-ext-smoke.example.com", "js:mine")])
-    db.set_subdomain_net(tid, {"drill-ext-smoke.example.com": ("203.0.113.9", "")})
+    # 页面级：同 IP 插一行自身子域 + 一行拓展域名，三个视图都要出现对应口径的下钻链接。
+    # 续259 附10：用**自备夹具任务** _tid256，不用全局 tid —— [8ao]/[8ap]/[8aq]/[8ar] 等
+    # 循环用例会把 tid 覆盖成它们自己的任务（多已删），主任务的 tid 变量到这儿早丢了
+    # （CI 实证：/tasks/<tid> 404，tid 已指向 [8ar] 循环最后造的任务）。
+    _tid256 = db.create_task("smoke256-drill", "drill-smoke.test", ["probe"],
+                             {"offline": True})
+    db.insert_subdomains(_tid256, [("drill-smoke.example.com", "subfinder")])
+    db.set_subdomain_net(_tid256, {"drill-smoke.example.com": ("203.0.113.9", "")})
+    db.insert_subdomains(_tid256, [("drill-ext-smoke.example.com", "js:mine")])
+    db.set_subdomain_net(_tid256, {"drill-ext-smoke.example.com": ("203.0.113.9", "")})
     # 续259 附6：页面断言必须带 q 过滤（CI 实证的真因）。`/subdomains` 是**跨任务**视图、
-    # 排序 `task_id DESC` 且每页 100 行 —— smoke 前面各用例建的新任务只要占满第一页，
-    # 主 tid 的 drill 行就被挤出去（本机 verify 脚本用的是干净库所以永远看不见）。
+    # 排序 `task_id DESC` 且每页 100 行 —— 前面各用例建的新任务只要占满第一页，
+    # drill 行就被挤出去（本机 verify 脚本用的是干净库所以永远看不见）。
     # 与 [112]（`query_string={"q": "dedupe112", "size": "50"}`）同款成熟范式；
     # ext 行来源是 js:mine，按设计只在 /extdomains 与任务详情拓展页签出现（自身子域页查不到）。
     assert 'href="/subdomains?q=203.0.113.9"' in c.get(
         "/subdomains", query_string={"q": "drill-smoke", "size": "50"}
     ).get_data(as_text=True), "子域名页 IP 没有下钻链接"
-    _r256d = c.get(f"/tasks/{tid}",
-                   query_string={"sdq": "drill-smoke", "exq": "drill-ext-smoke"})
-    _td256 = _r256d.get_data(as_text=True)
-    print("[256][dbg4] status=%s len=%d has-row=%s has-sub=%s has-ext=%s" % (
-        _r256d.status_code, len(_td256),
-        "drill-smoke.example.com" in _td256,
-        'href="/subdomains?q=203.0.113.9"' in _td256,
-        'href="/extdomains?q=203.0.113.9"' in _td256))
-    from scanner import users as _us7d
-    print("[256][dbg7] owner=%r role=%r tasks=%s home=%s login=%s" % (
-        (db.get_task(tid) or {}).get("owner_id"),
-        (_us7d.get_by_name("smoke-owner117") or {}).get("role"),
-        c.get("/tasks").status_code,
-        c.get("/").status_code,
-        c.get("/login").status_code))
+    _td256 = c.get(f"/tasks/{_tid256}",
+                   query_string={"sdq": "drill-smoke", "exq": "drill-ext-smoke"}
+                   ).get_data(as_text=True)
     assert 'href="/subdomains?q=203.0.113.9"' in _td256, "任务详情子域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in _td256, "任务详情拓展域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in \

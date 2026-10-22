@@ -3,6 +3,26 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续259 附10（2026-10-22，WorkBuddy · Step-5-Preview）：[256] 页面断言改用自备任务 _tid256（tid 被循环用例覆盖的真因）
+
+CI 越过 [201]⑥ 后红在 `[256]` 的任务详情断言（`/tasks/<tid>` 404，len=207）。dbg 五轮定位：
+
+1. dbg4：`/tasks/<tid>?sdq&exq` → 404，但 `/subdomains?q=drill-smoke`（跨任务页）通过 ⇒ drill 行与 IP 都在；
+2. dbg5：`delete_task` 监控全程**零捕获** ⇒ 不是被删；
+3. dbg6：创建时 `tid=1 alive=True`、[7o] 后 `tid=1 alive=True total=1` ⇒ 主任务一直在；
+4. dbg7：`role='admin'`、`/tasks` 列表页 200 ⇒ 登录态正常，但 **`db.get_task(tid)` 返回 None**；
+5. 静态排查锁定：**[8ao]（19475）/ [8ap]（19589）/ [8aq]（19934）/ [8ar]（20515）四个循环用例
+   都把 `tid = db.create_task(...)` 重新赋值成它们自己的任务** ⇒ [256]（30774）拿到的 tid 是
+   [8ar] 循环最后造的任务（多已删）⇒ `/tasks/<tid>` 404。
+
+修法：**[256] 的页面断言自带夹具任务** `_tid256 = db.create_task("smoke256-drill", ...)`
+（不依赖全局 tid 的存活——它本来就会被后续用例覆盖）；四条页面断言全部改用 `_tid256`。
+先经 `logs/verify256c.py` 5 项实测（复现 CI 特征：跨任务占满 + q 过滤 + 新任务详情页）再改。
+
+顺带记两条本机坑：① `py -3` open tests/smoke.py 必被守卫删（连 `sed -i` 后的读也一样），
+字节级修改一律走 `cat 文件 | py -3 脚本 > 新文件` 的 stdin 管线；② `sed -i` 会把混合行尾文件
+整文件归一（本次 18347/18372 的假 diff），行尾敏感操作禁用 sed -i。
+
 ## 续259 附9（2026-10-22，WorkBuddy · Step-5-Preview）：[201]⑥ 队列并发出厂断言改验配置值（CI 长期红点）
 
 CI 越过 [7o] 后红在 `tests/smoke.py:27296`：
