@@ -30779,14 +30779,15 @@ expression: r0()
     assert 'href="/subdomains?q=203.0.113.9"' in c.get(
         "/subdomains", query_string={"q": "drill-smoke", "size": "50"}
     ).get_data(as_text=True), "子域名页 IP 没有下钻链接"
-    _td256 = c.get(f"/tasks/{tid}",
-                   query_string={"sdq": "drill-smoke", "exq": "drill-ext-smoke"}
-                   ).get_data(as_text=True)
-    print("[256][dbg] len=%d has-row=%s has-sub=%s has-ext=%s has-500=%s" % (
-        len(_td256), "drill-smoke.example.com" in _td256,
-        'href="/subdomains?q=203.0.113.9"' in _td256,
-        'href="/extdomains?q=203.0.113.9"' in _td256,
-        ("500" in _td256[:400] or "Traceback" in _td256)))
+    _r256 = c.get(f"/tasks/{tid}",
+                  query_string={"sdq": "drill-smoke", "exq": "drill-ext-smoke"})
+    _td256 = _r256.get_data(as_text=True)
+    _gt256 = db.get_task(tid)
+    with c.session_transaction() as _s256:
+        _auth256 = _s256.get("auth")
+    print("[256][dbg2] tid=%r task=%r status=%s len=%d auth=%r head=%r" % (
+        tid, (_gt256 or {}).get("name"), _r256.status_code, len(_td256),
+        _auth256, _td256[:70]))
     assert 'href="/extdomains?q=203.0.113.9"' in _td256, "任务详情拓展域名页签缺下钻链接"
     assert 'href="/extdomains?q=203.0.113.9"' in \
         c.get("/extdomains", query_string={"q": "drill-ext-smoke", "group": "0"}
