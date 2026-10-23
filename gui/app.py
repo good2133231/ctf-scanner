@@ -4732,31 +4732,6 @@ def create_app():
         return jsonify({"ok": True, "root": {"id": int(root["id"]), "name": root["name"]},
                         "total_tasks": len(ids), "tasks": tasks, "rows": rows})
 
-    @app.route("/api/hostcollide/run", methods=["POST"])
-    @login_required
-    def api_hostcollide_run():
-        """续201：Host 碰撞补跑 —— 在本任务里排一轮**只跑 hostcollide** 的追加运行。
-
-        形状照 `api_reshoot_sites`（排队，不在请求线程里当场跑）：那一轮要发
-        "非 CDN 的真实 IP × 候选 Host"个请求，压在线程上会把控制台卡住；
-        排队才能让预算 / 限流 / 停止信号都管得住它，也复用既有的追加执行机制
-        （沿用同一份任务日志、`_append_guard` 挡住并发）。
-        入口两处：新建任务勾「Host 碰撞」（任务选项 `hostcollide: true`）与详情页这颗按钮。
-        """
-        fallback = _safe_next(request.form.get("next"), url_for("tasks"))
-        raw_id = (request.form.get("task_id") or "").strip()
-        if not raw_id.isdigit():
-            return _append_err("这个入口没有带任务号（请在任务详情页里点「Host 碰撞」）", fallback)
-        tid = int(raw_id)
-        if not _owned_task(tid):
-            abort(404)
-        # 不传 targets：hostcollide 自己从库里算"哪些 IP 可碰撞"（`hostcollide.plan(task_id)`），
-        # 与重截不同 —— 那里要的是人勾中的那几个 URL。
-        _do_append(str(tid), ["hostcollide"], "", [], {"hostcollide": True}, fallback)
-        logger.info(f"[gui] 任务 #{tid} 已排入一轮**只跑 Host 碰撞**的追加运行"
-                    f"（hostcollide.enabled={bool((load_settings().get('hostcollide') or {}).get('enabled'))}"
-                    f"，未开时这一轮会零请求跳过并说明）")
-        return redirect(_with_hash(fallback))
 
     @app.route("/api/sites/reshoot", methods=["POST"])
     @login_required

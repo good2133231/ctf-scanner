@@ -3,6 +3,43 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续269（2026-10-23，WorkBuddy · CodeBuddy）：⑧ Host 碰撞 —— 详情页去掉补跑按钮（路由一并撤）
+
+### A. 点单原文
+
+> 「host 碰撞不放在详情页、不要按钮、默认运行」
+
+### B. 查清（本条几乎不用写新代码）
+
+- `hostcollide.enabled` **续203 起就是 True**（DEFAULTS 与 settings.yaml 同值），建任务默认
+  阶段清单里也有它 ⇒ "默认运行"**早就成立**；真正要改的只有"详情页那颗补跑按钮"。
+- 那颗按钮（续201）的语义是"策略关着时给本任务补跑一轮" —— 开着的时候点了只会多跑一轮，
+  关着的时候又该去策略页开 ⇒ 两边都不该点它，撤掉。
+
+### C. 改
+
+- `gui/templates/task_detail.html`：按钮那张 `<form>` 换成一句 Jinja 注释（说清"要单次强制跑
+  用任务选项 `hostcollide: true` / CLI `--hostcollide`，要全局关去策略页"）。
+- `gui/app.py`：`POST /api/hostcollide/run` 整段路由**一并撤掉** —— 按钮没了还留着端点＝死代码。
+  （与 `/api/rescan` 那个"接口留着、只撤 GUI 入口"是两回事：那个另有 8 处调用方，这个没有。）
+- 单任务强制开的那条旁路没动：任务选项 `hostcollide: true` 与 CLI `--hostcollide`（续257）。
+
+### D. 验证
+
+- 门禁改**既有组**（不新增组）：
+  - `[145]`：详情页 POST 表单总数 7 ⇒ 6；模板里 `url_for('api_hostcollide_run')` 计数 1 ⇒ 0；
+    另加一条"`gui/app.py` 里不许再有 `api_hostcollide_run`"。
+  - `[201]④`：补跑端点那三态（409 / 404 / 302）改成"端点已撤 ⇒ POST 一律 404"。
+  - `[201]⑤`：详情页**没有** `/api/hostcollide/run`、也没有 `>Host 碰撞</button>`；
+    并补上"能力没跟着撤"的判据 —— 默认阶段清单建的任务里 `hostcollide.in_task=True`、
+    `enabled=True`（走 `/api/tasks/<id>/stages`）。
+- 顺手：`[201]` 组描述里"队列并发出厂 2"与 ⑥ 断言的 3 对不上（§5.19 那类假话），改成 3。
+
+### E. 结果
+
+服务器全量门禁 SMOKE PASS rc=0，**295 组**（与上一轮同数 —— 本轮改的是既有组的判据，
+没有新增组），日志 `logs/_smoke269.log`。
+
 ## 续268（2026-10-23，WorkBuddy · CodeBuddy）：⑥ pay-api 打开是 500 却不在列表里（5xx 默认可见）
 
 ### A. 点单原文

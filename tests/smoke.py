@@ -21991,9 +21991,13 @@ expression: r0()
     # 续201：3 → 4（Host 碰撞）；续208：4 → 5（敏感信息候选的「误报」复核表单）
     # 续201：3 → 4（Host 碰撞）；续208：4 → 5（误报复核）；续235：5 → 6（站点「补图标」）
     # 续250：6 → 7（端口页签「全端口扫描」按钮，主理人点单把全端口从建任务表单挪到这里）
-    assert _n_post145 == 7, \
-        f"详情页 POST 表单总数应 7（新增表单必须显式改这条登记）：实测 {_n_post145}"
-    assert _td145.count("url_for('api_hostcollide_run')") == 1, "Host 碰撞表单应恰好 1 个"
+    # 续269：7 → 6（Host 碰撞补跑按钮撤掉 —— 默认就跑，不给人手动入口）
+    assert _n_post145 == 6, \
+        f"详情页 POST 表单总数应 6（新增表单必须显式改这条登记）：实测 {_n_post145}"
+    assert _td145.count("url_for('api_hostcollide_run')") == 0, \
+        "详情页不该再有 Host 碰撞补跑表单（续269 撤掉：默认就跑）"
+    assert "api_hostcollide_run" not in _apa145, \
+        "路由也一并撤了（按钮没了还留着端点＝死代码）"
 
     # ---- ② `subdomain.auto_root` 三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射）----
     assert _D145["subdomain"]["auto_root"] is True, \
@@ -27311,26 +27315,27 @@ expression: r0()
     finally:
         _hcs201.hostcollide.run = _hc_real
 
-    # ④ 补跑端点：没带任务号 400 / 越权 404 / 正常排队
+    # ④ 续269：补跑端点随按钮**一起撤**（按钮没了还留着端点＝死代码）⇒ POST 一律 404
     _t201 = db.create_task("smoke-201", "https://hc201.test/", ["subdomain"], {})
-    # 409（不是 400）：`_append_err` 对"表单被拒"一律回 409 + 一页能读的话
-    _r201 = c.post("/api/hostcollide/run", data={})
-    assert _r201.status_code == 409, f"没带任务号应是 409：{_r201.status_code}"
-    assert c.post("/api/hostcollide/run", data={"task_id": "abc"}).status_code == 409
-    assert c.post("/api/hostcollide/run", data={"task_id": "999999"}).status_code == 404, \
-        "别人的/不存在的任务必须 404"
-    _h201 = c.post("/api/hostcollide/run", data={"task_id": str(_t201),
-                                                 "next": "/tasks/%d" % _t201})
-    assert _h201.status_code == 302, f"正常排队应是 302：{_h201.status_code}"
-    # ⑤ 入口：详情页补跑按钮在；建任务页**不再放勾选框**（续227 —— 默认就做，不用勾）
+    assert c.post("/api/hostcollide/run", data={}).status_code == 404, "端点已撤 ⇒ 404"
+    assert c.post("/api/hostcollide/run", data={"task_id": str(_t201)}).status_code == 404, \
+        "端点已撤 ⇒ 带不带任务号都是 404（不再走 409/302 那条老路）"
+    # ⑤ 入口：详情页**没有**补跑按钮（续269 —— 默认就跑，不给人手动入口）；
+    #    建任务页**不再放勾选框**（续227 —— 默认就做，不用勾）
     _tk201 = c.get("/tasks").get_data(as_text=True)
     assert 'name="hostcollide"' not in _tk201, \
         "建任务页又出现了 Host 碰撞勾选框（默认就做，不该再要求用户勾）"
     _hd201 = c.get(f"/tasks/{_t201}").get_data(as_text=True)
-    _hd201 = c.get(f"/tasks/{_t201}").get_data(as_text=True)
-    # 渲染后查的是 **URL**（`url_for('api_hostcollide_run')` 已变成 /api/hostcollide/run），
-    # 查函数名会永远假红 —— 模板源那一侧由 [145] 的 `url_for(...)` 计数负责。
-    assert "/api/hostcollide/run" in _hd201, "任务详情页没有「Host 碰撞」补跑按钮"
+    assert "/api/hostcollide/run" not in _hd201, \
+        "详情页不该再有「Host 碰撞」补跑按钮（续269 撤掉：默认就跑）"
+    assert ">Host 碰撞</button>" not in _hd201, "按钮文案也不该在详情页出现"
+    # 撤的是**手动入口**，不是能力：默认阶段清单里仍要有 hostcollide、策略开关仍是开的
+    _t201b = db.create_task("smoke-201-def", "https://hc201b.test/", list(_rn200.STAGE_ORDER), {})
+    _j201b = c.get(f"/api/tasks/{_t201b}/stages").get_json()
+    _by201b = {s["name"]: s for s in _j201b["stages"]}
+    assert _by201b["hostcollide"]["in_task"] is True, "默认阶段清单里要有 hostcollide"
+    assert _by201b["hostcollide"]["enabled"] is True, \
+        f"策略默认开（按钮撤了，靠默认策略跑）：{_by201b['hostcollide']}"
 
     # ⑥ 队列并发：出厂 3（续236 主理人点单 2→3），且 workers_auto 仍是关的
     # ⑥ 队列并发：出厂 3（续236 主理人点单 2→3），且 workers_auto 仍是关的。
@@ -27366,8 +27371,8 @@ expression: r0()
     # 续203：hostcollide 改成**默认开**了 —— "关着时零请求"那条仍在（上面用显式 False 验），
     # 但组描述不能再写"出厂关"，否则下一个人会以为配置没改过。
     print("[201] 续201/227 ok: Host 碰撞接线(阶段/配置一致/**默认开(续203)**/显式关时零请求/"
-          "补跑端点三态/详情页入口；建任务页不再放勾选框)｜"
-          "队列并发出厂 2｜_with_hash 只认 #\\w(开放重定向形状全挡)｜前端保 hash + 表单注入｜"
+          "补跑按钮与端点已撤(默认阶段清单仍有它)；建任务页不再放勾选框)｜"
+          "队列并发出厂 3｜_with_hash 只认 #\\w(开放重定向形状全挡)｜前端保 hash + 表单注入｜"
           "批量打开提示写清浏览器限制")
     # ---- [202] 续202：任务层级筛选 + 送探任务名带域名数 ----
     # ① 层级筛选：根任务 / 衍生任务分开（送探套娃之后列表里分不清哪个是主域名任务）

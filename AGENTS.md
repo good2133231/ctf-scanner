@@ -918,9 +918,12 @@ ctf-scanner/
   `task_*` 条件可删）；执行只走 `tools/clean_logs.py --apply <确切名字>`。**禁止**
   `rm -rf logs/*` / `rm -r logs` / `shutil.rmtree("logs")` / `glob(...).unlink()`；
   门禁 `[226]` 扫危险形态，并自测"通配 / 必留 / 未登记"三类拒绝。
-- **Host 碰撞不再要勾（续227）**：策略 `hostcollide.enabled` 默认开 ⇒ 建任务页**不放勾选框**
-  （`name="hostcollide"` 不得再出现）；要单任务强制跑用详情页那颗按钮，全局开关在策略页。
-  `[219]④` / `[201]⑤` 钉住这条，别再把勾选框加回去。
+- **Host 碰撞不再要勾、也不再给手动按钮（续227 + 续269）**：策略 `hostcollide.enabled` 默认开 ⇒
+  建任务页**不放勾选框**（`name="hostcollide"` 不得再出现）、详情页**不放补跑按钮**
+  （续269 把 `POST /api/hostcollide/run` 一并撤了 —— 按钮没了还留着端点＝死代码；`[145]` 钉住
+  "详情页 POST 表单 6 个 / 模板里 0 处 `url_for('api_hostcollide_run')` / app.py 里没有这个路由"，
+  `[201]④` 钉住"端点已撤 ⇒ POST 一律 404"）。要单任务强制跑用任务选项 `hostcollide: true` /
+  CLI `--hostcollide`；全局开关在策略页。`[219]④` / `[201]⑤` 钉住这条，别再把勾选框加回去。
 - **目录结果的「来源字典」三条路都要有值（续228）**：内置扫描走 `_scan()` 的 jobs 四元组
   第四项（`dirs_php` / `dirsearch/api` / `suffix`）；外部工具 **dirmap 那条路走
   `_parse_output(src=...)`**（`dirmap:<模式>`，无 `-e` 时 `dirmap:通用字典`）——
