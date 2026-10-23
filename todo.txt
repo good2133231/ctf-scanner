@@ -4410,15 +4410,28 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 SMOKE PASS rc=0：**295 组**，日志 `logs/_smoke270.log`
 - [x] C2 记忆同步：CHANGELOG 续270 + todo 续270 + AGENTS 补"默认开清单"入口
 
-下一轮（续271，主理人 10 连点单剩下的 ⑩）：
-⑥⑧⑨ 已做完；⑩ 是盘点（不动代码，出一张表）。
+## 续271（2026-10-23，WorkBuddy · CodeBuddy）：⑩ 整理「已实现但未默认开启」的清单
+实施者：WorkBuddy · CodeBuddy
 
-【10】整理"写了功能但没默认开启"的清单
-  - 已扫过：两处都关的段有 cert / screenshot / icp / quake / shodan / ssrf / dev /
-    gui.edge_auth（portscan 由 ⑨ 翻开）；"随包开而代码默认关"的有 ctlog / fofa / github /
-    heuristic / intel / iprecon / multileak（这两档含义不同，表里要分开写）
-  - 落地：一张表（功能 / 段 / 两处值 / 为什么没默认开 / 怎么开 / 要不要 key 或外部二进制）
-  - 产物：`docs/features-off-by-default.md` + CHANGELOG 指过去；门禁 `[271]` 钉"表与配置不漂"
+- [x] A1 先取事实：三档值（DEFAULTS / 随包 settings.yaml / 生效值）把全部开关扫一遍
+- [x] A2 关键判断：**分两档写** —— "两处都 False"是真没开；"随包 true 而代码默认 False"
+      其实是开着的（开在文件层），混写会让主理人以为能力白写了
+- [x] A3 产物 `docs/features-off-by-default.md`：表一 9 项 / 表二 7 项 / 表三（非 enabled 的
+      那几条默认不走的：全端口、截图候补轮、ML 服务识别、级别门槛、外部工具缺装兜底）
+- [x] A4 每行写清"为什么没默认开 / 怎么开 / 要什么（key 还是外部二进制）"
+- [x] B1 门禁 `[271]`：表与配置逐条对上 + 默认已开的段不许混进表一 + 变异（摘一行）立刻红
+- [x] B2 快检：[271] 那段逻辑单独跑过（含变异态）再进全量门禁
+- [x] C1 全量门禁 SMOKE PASS rc=0：**296 组**（+1＝`[271]`），日志 `logs/_smoke271.log`
+- [x] C2 记忆同步：CHANGELOG 续271 + todo 续271 + AGENTS 加"清单在哪、怎么读"那条
+
+下一轮（续272）：主理人 10 连点单 ⑤⑥⑦⑧⑨⑩ **已全部做完**（⑤ 续267 / ⑥ 续268 / ⑦ 续266 /
+⑧ 续269 / ⑨ 续270 / ⑩ 续271）。下面回到历史遗留：
+- [ ] 续264：puredns 修好后重跑一次 #65 同参数任务，和修前对比子域名/站点/目录条数（"域名回来了"的实测数字）
+- [ ] 续263：门禁"只跑一组"过滤（每次全量 ~13 分钟，主理人要更快的局部验证）
+- [ ] CLI Ctrl+C 后工具子进程不回收：`utils._do_run_cmd` 等待循环缺 try/finally
+- [ ] 跨任务 `/csegs`、`/certs` 两页同样去重（续265 只做了任务详情两个页签）
+- [ ] 自动送探真机观察：`ext_auto_probe_max` 出厂 5 是否合适
+
 
 
 

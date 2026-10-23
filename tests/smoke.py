@@ -31552,6 +31552,60 @@ expression: r0()
 
 
 
+    # ---------------- [271] 续271 ⑩：「已实现但未默认开启」清单（docs/features-off-by-default.md）----------------
+    #      主理人点单：把"写了功能但没默认开启"的整理成一张表。钉的是**表与配置不漂**：
+    #      配置改了表没改 ⇒ 红；表里写了"其实默认开着"的段 ⇒ 红（那是 §5.19 那类会改变读者
+    #      行为的假话 —— 主理人照着表去"打开"一个早就开着的功能，等于白点）。
+    import yaml as _y271
+    from scanner.config import DEFAULTS as _D271
+    _ship271 = _y271.safe_load((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
+    _doc271 = (ROOT / "docs" / "features-off-by-default.md").read_text(encoding="utf-8")
+
+    def _tables271(_t):
+        return (_t.split("## 一、", 1)[1].split("## 二、", 1)[0],
+                _t.split("## 二、", 1)[1].split("## 三、", 1)[0])
+
+    def _check271(_t):
+        """表一点名「两处都关」的 9 项、表二点名「随包开 / 代码默认关」的 7 项。"""
+        _a, _b = _tables271(_t)
+        for _s in ("cert", "dev", "icp", "quake", "screenshot", "shodan", "ssrf",
+                   "gui.edge_auth", "report"):
+            assert f"`{_s}`" in _a, f"表一（两处都关）没点名 {_s}"
+        for _s in ("ctlog", "fofa", "github", "heuristic", "intel", "iprecon", "multileak"):
+            assert f"`{_s}`" in _b, f"表二（随包开）没点名 {_s}"
+
+    _check271(_doc271)
+
+    # ① 配置侧逐条对上：表里写了什么，配置就得是什么（反过来也一样）
+    for _s271 in ("cert", "dev", "icp", "quake", "screenshot", "shodan", "ssrf"):
+        assert _D271[_s271]["enabled"] is False and _ship271[_s271]["enabled"] is False, \
+            f"{_s271} 已不是「两处都关」—— 表一要跟着改"
+    assert _D271["gui"]["edge_auth"]["enabled"] is False, "gui.edge_auth 应仍是关（部署开关）"
+    assert _D271["report"]["export_enabled"] is False, "报告导出应仍默认关（续171 主理人点单）"
+    for _s271 in ("ctlog", "fofa", "github", "heuristic", "intel", "iprecon", "multileak"):
+        assert _ship271[_s271]["enabled"] is True and _D271[_s271]["enabled"] is False, \
+            f"{_s271} 已不是「随包开而代码默认关」—— 表二要跟着改"
+
+    # ② 反向：默认**开着**的段不许被写进"没默认开"的表一
+    _T1_271 = _tables271(_doc271)[0]
+    for _s271 in ("portscan", "hostcollide", "afrog", "crawl", "takeover"):
+        assert _D271[_s271]["enabled"] is True, f"{_s271} 竟不是默认开 —— 这条反例的前提变了"
+        assert f"`{_s271}`" not in _T1_271, f"{_s271} 默认就开着，不该出现在「没默认开」的表一里"
+
+    # ③ 变异证伪（§6.1）：摘掉表一里 `cert` 那一行 ⇒ 判据必须立刻红
+    _mut271 = "\n".join(_l for _l in _doc271.splitlines() if "`cert`" not in _l)
+    try:
+        _check271(_mut271)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("摘掉表一 cert 那一行后判据没红 ⇒ 这些断言是空写")
+
+    print("[271] 续271 ok: ⑩「已实现但未默认开启」清单（docs/features-off-by-default.md）｜"
+          "表一 9 项两处都关 / 表二 7 项随包开而代码默认关，逐条与配置对上｜"
+          "默认已开的段（portscan/hostcollide/afrog/crawl/takeover）不许混进表一｜"
+          "变异（摘掉一行）⇒ 判据立刻红")
+
     print("SMOKE PASS")
 
 
