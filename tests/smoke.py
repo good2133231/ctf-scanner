@@ -23590,9 +23590,11 @@ expression: r0()
     from scanner import targets as _tg8au
     from scanner.utils import base_domain as _bd8au
 
-    # ---- ① B：默认只看 200/404（含 3xx **跳转后**落在 200/404 的），`?allst=1` 放全部 ----
+    # ---- ① B：默认显示 200/404/5xx（含 3xx **跳转后**落在这些的），`?allst=1` 放全部 ----
     #   八行刚好覆盖判据的每个分支：直给 200/404、3xx 落地 200/404、3xx 落地 500、
-    #   3xx 但**没取到**落地码、403、521。前四类默认显示，后四类默认收起。
+    #   3xx 但**没取到**落地码、403、521。
+    #   续268：5xx **默认可见**（服务端回了码＝活站，收起来等于藏资产）⇒ 现在显示六类，
+    #   仍收起的只剩两类：403（被拒的噪声）与"3xx 没取到落地码"（没有证据说明它活）。
     _oth8au = db.create_task("smoke-8au-noise", "https://oth8au.test/", ["probe"], {})
     db.insert_sites(_oth8au, [{"url": "http://noise.oth8au.test/", "host": "noise.oth8au.test",
                                "port": "80", "status": 521, "title": "NOISE8AU-521", "length": 7}])
@@ -23613,8 +23615,9 @@ expression: r0()
                                "redirect_title": rt,
                                "redirect_url": ("https://land8au.test/" if rs else "")}
                               for i, (u, st, ti, rs, rt) in enumerate(_rows8au)])
-    _SHOW8au = ("S8AU-OK", "S8AU-J200", "S8AU-J404", "S8AU-NF")
-    _HIDE8au = ("S8AU-JNONE", "S8AU-J500", "S8AU-FB403", "S8AU-CDN521")
+    _SHOW8au = ("S8AU-OK", "S8AU-J200", "S8AU-J404", "S8AU-NF",
+                "S8AU-J500", "S8AU-CDN521")   # 续268：5xx / 521 默认可见
+    _HIDE8au = ("S8AU-JNONE", "S8AU-FB403")
     _q8au = f"?task={_tid8au}"
     _h8au = c.get("/sites" + _q8au).get_data(as_text=True)
     for _t in _SHOW8au:
@@ -23627,7 +23630,7 @@ expression: r0()
         "3xx 行不该再显示第一跳的标题（那是中间件默认页，不是站点身份）"
     assert "NOISE8AU-521" not in _h8au, \
         "?task= 没挡住别的任务的行 —— 那样下面每条计数都是捡来的绿"
-    assert "已收起 4 条其它状态码" in _h8au, "必须报出被收起的条数（不报＝让人以为资产丢了）"
+    assert "已收起 2 条其它状态码" in _h8au, "必须报出被收起的条数（不报＝让人以为资产丢了）"
     assert "入库一条没动" in _h8au, "必须说清这是**展示层**收起、不是删数据（续112 同一口径）"
     assert "显示全部状态码" in _h8au, "必须有「显示全部状态码」这个开关"
 
@@ -23645,7 +23648,7 @@ expression: r0()
     try:
         db.SITE_STATUS_WHERE = "1=1"
         _hm8au = c.get("/sites" + _q8au).get_data(as_text=True)
-        assert "S8AU-CDN521" in _hm8au and "已收起 0 条" in _hm8au, \
+        assert "S8AU-FB403" in _hm8au and "已收起 0 条" in _hm8au, \
             "把判据换成 1=1 后默认视图没变 ⇒ 上面那些断言是空写（判据没真接到页面上）"
     finally:
         db.SITE_STATUS_WHERE = _sw8au
@@ -23687,7 +23690,9 @@ expression: r0()
         assert _t in _p8au, f"详情页站点页签默认应显示 {_t}"
     for _t in _HIDE8au:
         assert _t not in _p8au, f"详情页站点页签默认应收起 {_t}（两个页面必须同口径）"
-    assert "另有 4 条其它状态码被收起" in _p8au, "详情页也必须报出被收起的条数"
+    # 续268：判据放行 5xx 之后，被收起的只剩 2 条（403 与「3xx 没取到落地码」）⇒ 这行的数字跟着判据走，
+    #        与上面 `_HIDE8au` 同源 —— 改了判据不改这里就是本轮踩过的那次红。
+    assert "另有 2 条其它状态码被收起" in _p8au, "详情页也必须报出被收起的条数"
     _d28au = c.get(f"/tasks/{_tid8au}?allst=1").get_data(as_text=True)
     _p28au = _d28au.split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0]
     for _t in _HIDE8au:
@@ -23697,8 +23702,9 @@ expression: r0()
     assert _mb8au and _mb8au.group(1) == "68", \
         f"页签徽标必须是**未过滤**总数 68（被收起的也是事实）：{_mb8au and _mb8au.group(1)}"
     assert "页签徽标 68 是<b>未过滤</b>的站点总数" in _p8au, \
-        "页面上要把徽标 68 与「共 64 条」的关系说清 —— 不说就像资产被吞了"
-    assert "共 64 条" in _p8au, "分页条的「共 N 条」应是过滤后的 64"
+        "页面上要把徽标 68 与「共 66 条」的关系说清 —— 不说就像资产被吞了"
+    # 续268：68 行里被收起的从 4 条降到 2 条 ⇒ 过滤后是 66（徽标 68 是未过滤总数，两个数都要跟着判据动）
+    assert "共 66 条" in _p8au, "分页条的「共 N 条」应是过滤后的 66"
     _pl8au = _pager8au(c.get(f"/tasks/{_tid8au}?stsize=50").get_data(as_text=True)
                        .split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0])
     assert _pl8au and all("allst=1" not in _u for _u in _pl8au), \
@@ -23862,10 +23868,10 @@ expression: r0()
     assert "python3 cli/run_devflow.py" in _qy8au, "CI 的 devflow job 也要指到 cli/ 下"
 
     print("[8au] 续146 站点默认只看 200/404 + 批量打标只读本面板 + 判据收敛 + 入口搬进 cli ok: "
-          "默认视图收起 403/5xx/521 与「3xx 但没取到落地码」，放行 200/404 与**跳转后** 200/404｜"
+          "默认视图（续268 起）只收起 403 与「3xx 但没取到落地码」，放行 200/404/5xx/521 与跳转后落在这些的｜"
           "被收起的条数报在页面上、并写明「入库一条没动」｜?allst=1 放全部且筛选表单 hidden 带参｜"
           "翻页链接默认态不带 allst、展开态必带（写反＝第 2 页突然放出 5xx）｜"
-          "切换链接不丢 all/task/plain｜跨任务页与详情页签同口径、徽标是**未过滤**总数 68 对「共 64 条」｜"
+          "切换链接不丢 all/task/plain｜跨任务页与详情页签同口径、徽标是**未过滤**总数 68 对「共 66 条」｜"
           "判据换成 1=1 后视图立刻变（证伪，不是空写）｜SITE_STATUS_WHERE 只有一个产地｜"
           "批量打标按 btn.closest('.panel') 收（两页漏洞表 id 不同，写死 id 会失灵）｜"
           "host_of/hosts_of/root_of/roots_of 四原语契约 + root_of('127.0.0.1')='' 对照旧 base_domain 的 '0.1'｜"
@@ -31478,6 +31484,52 @@ expression: r0()
     assert _mut267 == [""], f"变异态（入库不带 note）应没有来源站点：{_mut267}"
     print("[267] 续267 ok: ⑤拓展域名标注 js 挖掘的**来源站点**（入库 note + 拓展页展示，"
           "同域名多来源留第一个）｜fofa 行仍是查询语法、没被改写｜变异（入库不带 note）后来源消失")
+
+
+
+    # ---------------- [268] 续268 ⑥：5xx 默认可见（"我打开明明是 500，列表里却没有"） ----------------
+    # 主理人点单："pay-api…这个点为什么没有在站点显示 我打开明明是500"
+    # 根因**不是 bug**：`db.SITE_STATUS_WHERE` 原来默认只放 200/404 ⇒ 500 那行被展示层收起
+    # （库里一直有）。续268 改口径：服务端**回了码**就是活站（500＝应用起了但崩了、
+    # 521＝CDN 后面有源站），收起来等于藏资产 ⇒ 5xx 纳入默认可见；401/403/429 这类
+    # "被拒"的仍是噪声，继续收起并报数。判据仍然只此一处，跨任务 /sites 与详情页共用。
+    _tid268 = db.create_task("smoke-268-st", "https://st268.test/", ["probe"], {})
+    db.insert_sites(_tid268, [
+        {"url": "http://err500.st268.test/", "host": "err500.st268.test", "port": "80",
+         "status": 500, "title": "S268-ERR500", "length": 52},
+        {"url": "http://jump500.st268.test/", "host": "jump500.st268.test", "port": "80",
+         "status": 301, "title": "S268-J301", "length": 167,
+         "redirect_status": 500, "redirect_title": "S268-J500",
+         "redirect_url": "https://st268.test/"},
+        {"url": "http://deny403.st268.test/", "host": "deny403.st268.test", "port": "80",
+         "status": 403, "title": "S268-DENY403", "length": 9},
+    ])
+    _c268 = app.test_client()
+    assert _c268.post("/login", data=_admin_form117()).status_code == 302
+    _q268 = f"?task={_tid268}"
+    _h268 = _c268.get("/sites" + _q268).get_data(as_text=True)
+    assert "S268-ERR500" in _h268, \
+        "500 默认要可见（主理人照着浏览器看到 500，列表里却找不到 —— 那等于藏资产）"
+    assert "S268-J500" in _h268, "301→500 也要可见（跳转后落在 5xx）"
+    assert "S268-DENY403" not in _h268, "403 仍是'被拒'的噪声，默认收起"
+    assert "已收起 1 条其它状态码" in _h268, "被收起的条数必须报出来（不报＝让人以为资产丢了）"
+    # 详情页必须同一口径（判据只此一处，两处各写一遍必然漂 —— 本仓反复栽在这）
+    _d268 = _c268.get(f"/tasks/{_tid268}").get_data(as_text=True)
+    assert "S268-ERR500" in _d268 and "S268-DENY403" not in _d268, \
+        "任务详情页与 /sites 必须同一口径"
+    # 变异证伪（§6.1）：判据换回"只看 200/404" ⇒ 500 立刻重新被收起
+    _sw268 = db.SITE_STATUS_WHERE
+    try:
+        db.SITE_STATUS_WHERE = ("(status IN (200, 404) OR "
+                                "(status >= 300 AND status < 400 "
+                                "AND redirect_status IN (200, 404)))")
+        _hm268 = _c268.get("/sites" + _q268).get_data(as_text=True)
+        assert "S268-ERR500" not in _hm268, \
+            "变异态（判据换回只看 200/404）500 应重新被收起 —— 不变红说明这条断言是空写"
+    finally:
+        db.SITE_STATUS_WHERE = _sw268
+    print("[268] 续268 ok: ⑥5xx 默认可见（500 / 301→500 都显示；403 仍收起且报数）｜"
+          "详情页与 /sites 同一口径｜变异（判据换回只看 200/404）后 500 立刻重新消失")
 
 
 

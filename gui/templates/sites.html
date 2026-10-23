@@ -26,10 +26,10 @@
   <p class="muted small note">状态码：
     {% if pager.allst %}
       当前<b>显示全部状态码</b>。
-      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.st_off }}">只看 200 / 404（含跳转后的）</a>
+      <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.st_off }}">只看 200 / 404 / 5xx（含跳转后的）</a>
     {% else %}
-      默认只显示 <b>200 与 404</b>（3xx <b>跳转后</b>落在 200/404 的也算显示），
-      已收起 {{ pager.st_hidden }} 条其它状态码（401 / 403 / 5xx / 521…，<b>入库一条没动</b>）。
+      默认显示 <b>200 / 404 / 5xx</b>（3xx <b>跳转后</b>落在这些的也算；服务端回了码就是活站），
+      已收起 {{ pager.st_hidden }} 条其它状态码（401 / 403 / 429 这类"被拒"的噪声，<b>入库一条没动</b>）。
       <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.st_on }}">显示全部状态码</a>
     {% endif %}
   </p>
