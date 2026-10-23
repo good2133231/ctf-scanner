@@ -577,6 +577,73 @@ def _site_fold_key(row):
     return (row.get("task_id"), "l", length) if length > 0 else None
 
 
+
+
+def _norm_site_url(u):
+    """站点 URL 归一 —— **只为折叠判据服务**（续266），不去动库里存的 url。
+
+    小写 scheme/host、去掉默认端口（http 80 / https 443）、去掉末尾斜杠与查询/锚点。
+    ⚠️ 例子一律用合成域（`[218]` 脱敏红线：真域名不许进被跟踪文件）。
+    归一的原因很实在：`redirect_url` 是 `https://m.targ266.test/`（带斜杠），
+    而落地行自己的 `url` 是 `https://m.targ266.test`（不带）—— 不归一就永远对不上，
+    折叠也就永远不生效（`http://X` 与 `https://X/` 看着一样、比起来不同）。
+    """
+    s = str(u or "").strip()
+    if not s:
+        return ""
+    try:
+        p = urlparse(s)
+    except ValueError:
+        return s.rstrip("/").lower()
+    scheme = (p.scheme or "").lower()
+    host = (p.hostname or "").lower()
+    if not scheme or not host:          # 不是完整 URL（空/裸 host）⇒ 原样压一下
+        return s.rstrip("/").lower()
+    default = 443 if scheme == "https" else 80
+    port = p.port
+    netloc = host if port in (None, 0, default) else "%s:%d" % (host, port)
+    return "%s://%s%s" % (scheme, netloc, (p.path or "").rstrip("/"))
+
+
+def _site_redirect_fold_keys(rows):
+    """续266（主理人 #7 点单"跳转前跳转后都是一个域名，为什么给我弄成两个"）：
+    跳转链**前后是同一个域名** ⇒ 同一个站点，不许因为两行标题/长度不同而拆成两组。
+
+    返回 `{row_id: (task_id, "u", 归一后的最终URL)}`；**只有确实配成对**的行才有键，
+    其余返回空 ⇒ 调用方退回到原来的"同标题 / 同响应长度"折叠（续147/150 的口径不动）。
+
+    为什么只在"配成对"时生效：`_site_fold_key` 那套标题折叠是为了把"标题相同但
+    URL 不同"的泛解析别名 / 虚拟主机并到一起（主理人 2026-10-11 的点单），若一律
+    改成按 URL 折，那类别名就会被拆散 —— 那是拿一个口径换另一个，两头都不对。
+    所以这里**只补一条更强的判据**：跳转落地页就躺在本页里 ⇒ 这两行物理上是同一个站。
+
+    判据复用 `utils.site_redirect`（页面上画 `→ https://…` 那个），折叠与显示**同一份
+    产地** —— 不会出现"页面画着跳到同一地址、列表里却算两个站点"的自相矛盾。
+    """
+    out = {}
+    by_url = {}
+    for r in rows:
+        k = _norm_site_url(r.get("url") or "")
+        if k:
+            by_url.setdefault(k, r)
+    for r in rows:
+        rd = site_redirect(r)
+        if not rd.get("jumped"):
+            continue                      # 不是 3xx / 没跟到落地页 ⇒ 不参与
+        target = _norm_site_url(rd.get("final_url") or "")
+        if not target or target not in by_url:
+            continue                      # 落地行不在本页 ⇒ 不凭空造组
+        key = (r.get("task_id"), "u", target)
+        # ⚠️ 一律用 `.get("id")`：门禁 [7s] 那种"什么列都有"的假行**没有 id 键**，
+        # 下标取会在渲染时 KeyError ⇒ 整页 500（徽标断言会以"数字不对"的名义红，
+        # 看着像折叠错了，其实是取键炸了）。没有 id 的行当不参与 —— 那本来也不是真数据。
+        if r.get("id") is not None:
+            out[r["id"]] = key
+        if by_url[target].get("id") is not None:
+            out[by_url[target]["id"]] = key
+    return out
+
+
 def _dir_url(site_url, path):
     """目录命中的**可点开链接**（续151，用户点单「目录结果要能像超链接一样点开」）。
 
@@ -2214,8 +2281,10 @@ def create_app():
 
         for _r in sites:
             _r["_dup_group"] = []
+        # 续266：跳转前后同一个域名 ⇒ 同一站点（键优先级高于"同标题"）
+        _urlk172 = _site_redirect_fold_keys(sites)
         for _r in sites:
-            _k = _site_fold_key(_r)
+            _k = _urlk172.get(_r.get("id")) or _site_fold_key(_r)
             if _k is None:
                 continue
             _f = _fold172.get(_k)
@@ -3517,8 +3586,10 @@ def create_app():
         _fold184, hidden = {}, 0
         for r in rows:
             r["dup"] = 0
+        # 续266：与任务详情页签**同一份产地**（`_site_redirect_fold_keys`）
+        _urlk184 = _site_redirect_fold_keys(rows)
         for r in rows:
-            key = _site_fold_key(r)
+            key = _urlk184.get(r.get("id")) or _site_fold_key(r)
             if key is None:
                 continue
             first = _fold184.get(key)

@@ -25612,6 +25612,9 @@ expression: r0()
     # 夹具复刻主理人样本的形状（域名换合成域）：ib 站 http 301 行（title 是 CDN 默认页）
     # + https 200 行（跳转后标题）；mp 站同构；另加一个不同标题站点。
     # 变异证伪（§6.1）：把 _site_fold_key 摘回旧逻辑（title 优先、不看 3xx）⇒ ib 组拆开 ⇒ 红。
+    # 续266：还要顺手摘掉 `_site_redirect_fold_keys`（"最终 URL"那一级）—— 它优先级更高，
+    # 不一起摘的话新判据会把这次变异**盖掉**，于是"变异态"和正常态一样，证伪就失效了
+    # （比断言写错更隐蔽：看着绿，其实什么也没证）。
     _tid172 = db.create_task("smoke-172-fold", "targ172.test", ["probe"], {})
     _login172 = "ib.targ172.test | login"
     db.insert_sites(_tid172, [
@@ -25641,6 +25644,7 @@ expression: r0()
                   "https://mp.targ172.test"):
         assert _u172 in _html172, f"{_u172} 不见了 —— 收起不能等于删数据"
     _real_key172 = gui_app._site_fold_key
+    _real_urlk172 = gui_app._site_redirect_fold_keys
 
     def _old_key172(row):
         title = (row.get("title") or "").strip() or (row.get("redirect_title") or "").strip()
@@ -25654,6 +25658,7 @@ expression: r0()
 
     try:
         gui_app._site_fold_key = _old_key172
+        gui_app._site_redirect_fold_keys = lambda rows: {}
         _html172o = c.get(f"/tasks/{_tid172}").get_data(as_text=True)
         _btn172o = re.findall(r"展开同标题（(\d+) 条）", _html172o)
         # 旧逻辑（title 优先）下：两条 301 的 CDN 默认页标题**跨站**聚成一组（毫无意义），
@@ -25662,6 +25667,7 @@ expression: r0()
         assert _html172o.count('data-dup-of="') == 1, "变异态成员行应只有 1 个"
     finally:
         gui_app._site_fold_key = _real_key172
+        gui_app._site_redirect_fold_keys = _real_urlk172
     print("[172] 站点折叠 ok: 301→200 同站两行聚成一组（3xx 优先 redirect_title 作键）、"
           "默认收起可展开、收起条数在按钮上报出、收起≠删数据；变异（摘 3xx 分支）后组拆开")
 
@@ -31308,6 +31314,65 @@ expression: r0()
           "单行「全标题」+ 一键「全部展开标题」③证书按同一张证书折叠（sha256 为键、空指纹退到"
           "序列号|颁发者|生效时间 ⇒ CT 那两行各自成行），收起条数报在页面上、?all=1 全放开、"
           "库里行一条不删 ④C 段按 segment 折叠（IP 与域名合并去重、count 取大）")
+
+
+    # ---------------- [266] 续266：跳转前后同一个域名 ⇒ 同一个站点（不许拆成两行） ----------------
+    # 主理人 #7 点单："http://m… 301 → https://m…，跳转前跳转后都是一个域名，为什么给我弄成两个？"
+    # 判据只有一处：`gui/app.py::_site_redirect_fold_keys`（复用 `utils.site_redirect` 的
+    # `final_url`，与页面画「→ https://…」**同源**，不会一处说同一个站、一处画成两行）。
+    # 真库实测（#66）：pay-api 的 http(301→500) 与 https(500) 两行，旧判据一个按标题
+    # "301 Moved Permanently"、一个按响应长度 52 ⇒ **两个不同的键** ⇒ 拆成两行。
+    import re as _re266
+    _c266 = app.test_client()
+    assert _c266.post("/login", data=_admin_form117()).status_code == 302
+    _tid266 = db.create_task("smoke-266-fold", "targ266.test", ["probe"], {})
+    db.insert_sites(_tid266, [
+        # 同域、跳转前/后两行，但**标题不同** ⇒ 旧判据（只比标题/长度）一定拆成两组
+        {"url": "http://d266.targ266.test", "host": "d266.targ266.test", "port": "80",
+         "status": 301, "title": "301 Moved Permanently", "length": 167,
+         "redirect_status": 200, "redirect_url": "https://d266.targ266.test/",
+         "redirect_title": "落地页标题-266"},
+        {"url": "https://d266.targ266.test", "host": "d266.targ266.test", "port": "443",
+         "status": 200, "title": "落地页完全是另一个标题-266", "length": 1523},
+        # 反例①：跳转目标不在本页 ⇒ 不许凭空造组
+        {"url": "http://lonely266.targ266.test", "host": "lonely266.targ266.test", "port": "80",
+         "status": 301, "title": "301 Moved Permanently", "length": 167,
+         "redirect_status": 200, "redirect_url": "https://absent266.test/",
+         "redirect_title": "X"},
+        # 反例②：泛解析别名（同标题、不同 URL）⇒ 仍按续147/150 的口径折，不能被新判据破坏
+        {"url": "http://alias-a266.targ266.test", "host": "alias-a266.targ266.test",
+         "port": "80", "status": 200, "title": "别名同标题-266", "length": 100},
+        {"url": "http://alias-b266.targ266.test", "host": "alias-b266.targ266.test",
+         "port": "80", "status": 200, "title": "别名同标题-266", "length": 999},
+    ])
+    _h266 = _c266.get(f"/tasks/{_tid266}").get_data(as_text=True)
+    # ① 同域跳转组 + 别名组，各 2 条（1 代表 + 1 收起）；lonely 那条自己独立不进组
+    _btn266 = _re266.findall(r"展开同标题（(\d+) 条）", _h266)
+    assert _btn266 == ["1", "1"], f"应恰好两个 2 条组（同域跳转 + 别名）：{_btn266}"
+    assert _h266.count('data-dup-of="') == 2, \
+        f"应有 2 个成员行默认收起：{_h266.count('data-dup-of=')}"
+    for _u266 in ("http://d266.targ266.test", "https://d266.targ266.test",
+                  "http://lonely266.targ266.test"):
+        assert _u266 in _h266, f"{_u266} 不见了 —— 收起不等于删数据"
+    # ② 变异证伪（§6.1）：摘掉「最终 URL」这一级 ⇒ 同域不同标题那组立刻拆开，只剩别名组
+    _real_urlk266 = gui_app._site_redirect_fold_keys
+    try:
+        gui_app._site_redirect_fold_keys = lambda rows: {}
+        _h266o = _c266.get(f"/tasks/{_tid266}").get_data(as_text=True)
+        _btn266o = _re266.findall(r"展开同标题（(\d+) 条）", _h266o)
+        assert _btn266o == ["1"], f"变异态应只剩别名组（同域那组要拆开）：{_btn266o}"
+    finally:
+        gui_app._site_redirect_fold_keys = _real_urlk266
+    # ③ 归一本身：末尾斜杠 / 默认端口不一样，必须判为同一个 URL（不归一就永远对不上）
+    from gui.app import _norm_site_url as _nu266
+    for _a266, _b266 in (("https://n266.test/", "https://n266.test"),
+                         ("https://n266.test:443/", "https://n266.test"),
+                         ("http://n266.test:80/x/", "http://n266.test/x")):
+        assert _nu266(_a266) == _nu266(_b266), (_a266, _b266)
+    print("[266] 续266 ok: 跳转前后同一个域名 ⇒ 折成同一个站点（同域不同标题也折；"
+          "真库 pay-api 的 http301→500 与 https500 由两组变一组）｜落地行缺席不凭空造组、"
+          "泛解析别名仍按同标题折｜变异（摘掉最终URL那一级）后组立刻拆开")
+
 
 
     print("SMOKE PASS")
