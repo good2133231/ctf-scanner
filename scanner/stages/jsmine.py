@@ -176,6 +176,9 @@ class JsmineStage(Stage):
         # 会各报一行 —— 那才是用户看到的"二次出现"。重跑/追加执行还要**先看库里已有什么**
         # （`insert_vuln` 没有 UNIQUE 约束，去重是写方的责任，AGENTS §5.6）。
         domains, urls, secrets = set(), set(), []
+        # 续267（主理人点单"js挖掘要标注来源站点"）：每个域名是**从哪个站点**挖出来的。
+        # `domains` 是个集合，聚合完就丢掉了"谁来自谁"，拓展页也就无从标注 —— 所以另记一张表。
+        origin = {}
         # 续184：邮箱（数据探测）—— 与挖域名/敏感信息用的是**同一批正文**，正则不同而已，
         # 因此**零额外请求**；只攒邮箱、不攒正文（JS 动辄 MB 级，攒全文是白烧内存）。
         from .. import mails as _mails184
@@ -208,6 +211,10 @@ class JsmineStage(Stage):
                 continue
             js_count += int(res.get("js_count") or 0)
             domains.update(res.get("domains") or [])
+            # 续267：同一域名可能从多个站点的 JS 里都挖到 —— 留**第一个**（页面那一格
+            # 只放得下一句；"还被哪些来源找到过"另有「另见于」列在管，不重复造轮子）。
+            for _d in res.get("domains") or []:
+                origin.setdefault(_d, u)
             urls.update(res.get("urls") or [])
             for s in res.get("secrets") or []:
                 host155 = (urlparse(s.get("source", "") or "").hostname or "").lower()
@@ -250,7 +257,12 @@ class JsmineStage(Stage):
         self._log_verify_stats(vstats)
         ctx.results["js_domains"] = new_domains
         if new_domains:
-            db.insert_subdomains(ctx.task_id, [(d, "js:mine") for d in new_domains])
+            # 续267：第 4 位是 `note`。js 行存**来源站点**（拓展页那一列直接展示）；
+            # `osint:fofa` 那一路存的仍是查询语法 —— 同一列、按 `source` 分两种含义，
+            # 表头已写明「来源站点 / 语法」，不会让人把来源站当成 FOFA 语法念出来。
+            db.insert_subdomains(ctx.task_id,
+                                 [(d, "js:mine", "", origin.get(d, ""))
+                                  for d in new_domains])
             # 解析门已发过的查询不浪费：结果直接回填（拓展页立刻有 IP/CDN/CNAME 可看，
             # resolve_extended 的 only_missing 也不会重复查这一批）
             if vnet:

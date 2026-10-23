@@ -31375,6 +31375,112 @@ expression: r0()
 
 
 
+    # ---------------- [267] 续267 ⑤：拓展域名标注 js 挖掘的「来源站点」 ----------------
+    # 主理人点单："拓展域名那里标注 来源，js挖掘要标注来源站点，fofa不用变"
+    # 判据：`scanner/stages/jsmine.py` 入库时把"这个域名是从哪个站点挖出来的"写进 `note`；
+    # 拓展页那一列按 `source` 分两种含义（js＝来源站点、fofa＝查询语法），表头已写明。
+    import logging as _log267
+    import tempfile as _tf267
+    from pathlib import Path as _P267
+    import scanner.jsmine as _jm267
+    import scanner.stages.jsmine as _sj267
+    _wd267 = _P267(_tf267.mkdtemp(prefix="ctf-267-"))
+
+    class _Ctx267:
+        """跑 jsmine 阶段用的最小 ctx（只喂阶段真正读的那几个字段）。"""
+
+        def __init__(self, tid, wd):
+            self.task_id = tid
+            self.settings = {"jsmine": {"enabled": True, "verify_resolve": False,
+                                        "max_pages": 10}}
+            self.logger = _log267.getLogger("t267")
+            self.results = {}
+            self.owner_id = 0
+            self.stages = ["jsmine"]
+            self.targets = "targ267.test"
+            self.workdir = wd
+
+        def stopped(self):
+            return False
+
+    def _run267(tid, mapping):
+        """桩跑一遍 jsmine 阶段：只有"哪个站点挖出哪些域名"是真的，其余（解析/停车/补探测）全桩掉。"""
+        def _fake_mine(u, settings, logger=None, text_sink=None):
+            return {"domains": list(mapping.get(u, [])), "urls": [], "secrets": [],
+                    "js_count": 1}
+
+        _r_mine = _jm267.mine
+        _r_abs = _sj267.extdom.filter_absent_zones
+        _r_2nd = _sj267.probe_stage.second_pass
+        _jm267.mine = _fake_mine
+        _sj267.extdom.filter_absent_zones = lambda doms, settings, logger=None: (list(doms), 0)
+        _sj267.probe_stage.second_pass = lambda ctx, extra=None: None
+        try:
+            _sj267.JsmineStage(_Ctx267(tid, _wd267)).run()
+        finally:
+            _jm267.mine = _r_mine
+            _sj267.extdom.filter_absent_zones = _r_abs
+            _sj267.probe_stage.second_pass = _r_2nd
+
+    # ① 两个站点各挖到自己的域名 + 一个"两边都挖到"的 ⇒ note 分别是各自来源站（后者留第一个）
+    _tid267 = db.create_task("smoke-267-origin", "targ267.test", ["jsmine"], {})
+    db.insert_sites(_tid267, [
+        {"url": "https://s1.targ267.test", "host": "s1.targ267.test", "port": "443",
+         "status": 200, "title": "S1", "length": 10},
+        {"url": "https://s2.targ267.test", "host": "s2.targ267.test", "port": "443",
+         "status": 200, "title": "S2", "length": 20},
+    ])
+    _run267(_tid267, {
+        "https://s1.targ267.test": ["only-s1.targ267.test", "both.targ267.test"],
+        "https://s2.targ267.test": ["only-s2.targ267.test", "both.targ267.test"],
+    })
+    _got267 = {dict(r)["domain"]: dict(r)["note"]
+               for r in db.list_subdomains(_tid267) if r["source"] == "js:mine"}
+    assert _got267 == {"only-s1.targ267.test": "https://s1.targ267.test",
+                       "only-s2.targ267.test": "https://s2.targ267.test",
+                       "both.targ267.test": "https://s1.targ267.test"}, \
+        f"js 行的 note 必须是**来源站点**（同域名多来源留第一个）：{_got267}"
+
+    # ② 拓展页：那一列显示来源站点；fofa 行仍显示查询语法（"fofa不用变"）
+    #    注：拓展页默认收起**未解析**的行 ⇒ 先给这批行补个 IP，否则页面根本不列它们。
+    db._exec("UPDATE subdomains SET ip='203.0.113.71' WHERE task_id=? AND source='js:mine'",
+             (_tid267,))
+    db.insert_subdomains(_tid267, [("fofa267.targ267.test", "osint:fofa", "",
+                                    'icon_hash=\"1234567\"')])
+    db._exec("UPDATE subdomains SET ip='203.0.113.72' WHERE task_id=? AND domain=?",
+             (_tid267, "fofa267.targ267.test"))
+    _c267 = app.test_client()
+    assert _c267.post("/login", data=_admin_form117()).status_code == 302
+    _ext267 = _c267.get("/extdomains").get_data(as_text=True)
+    assert "来源站点 / 语法" in _ext267, "表头要写明这一列的两种含义（js＝来源站点、fofa＝语法）"
+    assert "only-s1.targ267.test" in _ext267 and "https://s1.targ267.test" in _ext267, \
+        "js 行要显示**来源站点**（挖到它的那个站）"
+    assert "only-s2.targ267.test" in _ext267 and "https://s2.targ267.test" in _ext267
+    # 注：模板开了自动转义，`"` 在 HTML 里是 `&#34;` —— 照**渲染后的字面量**断言。
+    # 拿源码里的引号去比会永远假红（查不到就以为功能没做，其实是转义没算进去）。
+    assert 'icon_hash=&#34;1234567&#34;' in _ext267, \
+        "fofa 行仍显示查询语法（主理人：fofa 不用变 —— 别把来源站那套套到它头上）"
+
+    # ③ 变异证伪（§6.1）：入库还原成"不带 note"的老形状 ⇒ 来源站点立刻消失
+    _tid267b = db.create_task("smoke-267-mut", "targ267b.test", ["jsmine"], {})
+    db.insert_sites(_tid267b, [
+        {"url": "https://m1.targ267b.test", "host": "m1.targ267b.test", "port": "443",
+         "status": 200, "title": "M1", "length": 10}])
+    _real_ins267 = db.insert_subdomains
+    try:
+        db.insert_subdomains = lambda t, items: _real_ins267(
+            t, [(it[0], it[1]) for it in items])
+        _run267(_tid267b, {"https://m1.targ267b.test": ["mut.targ267b.test"]})
+    finally:
+        db.insert_subdomains = _real_ins267
+    _mut267 = [dict(r)["note"] for r in db.list_subdomains(_tid267b)
+               if r["source"] == "js:mine"]
+    assert _mut267 == [""], f"变异态（入库不带 note）应没有来源站点：{_mut267}"
+    print("[267] 续267 ok: ⑤拓展域名标注 js 挖掘的**来源站点**（入库 note + 拓展页展示，"
+          "同域名多来源留第一个）｜fofa 行仍是查询语法、没被改写｜变异（入库不带 note）后来源消失")
+
+
+
     print("SMOKE PASS")
 
 
