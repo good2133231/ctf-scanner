@@ -31135,6 +31135,87 @@ expression: r0()
           "变异证伪：similar_candidates 放行一切 ⇒ 「只送高置信」即红")
 
 
+    # ---------------- [264] 续264：puredns argv 修错（深档字典从来没跑过）+ 详情页拓展页签补"已归纳就隐藏" ----------------
+    import os as _os264
+    import re as _re264
+    from scanner.config import resolve as _resolve264
+    from scanner.config import load_settings as _load_settings264
+    from scanner.stages import subdomain as _sd264
+    from scanner import extdom as _ex264
+
+    _st264 = _load_settings264()
+    _pd264 = _sd264.which(_st264.get("tools", {}).get("puredns", "puredns"))
+    _ms264 = _sd264.which(_st264.get("tools", {}).get("massdns", "massdns"))
+    # ① 纯函数：域名是**位置参数**，`-d` 一个都不许有（v2.1.1 的 -d 吃的是域名**文件**）
+    _av264 = _sd264.puredns_bruteforce_argv("puredns", "wl.txt", "a.test", "res.txt", "out.txt")
+    assert _av264 == ["puredns", "bruteforce", "wl.txt", "a.test", "-r", "res.txt", "-w", "out.txt"], _av264
+    assert "-d" not in _av264, "把裸域名塞进 -d ⇒ puredns 去 open 那个'文件名' ⇒ 每域名退码 1"
+    # ② 源码钉点（AST）：stage 里不许再出现裸 bruteforce 调用，argv 只此一处拼
+    import ast as _ast264
+    _tree264 = _ast264.parse((ROOT / "scanner" / "stages" / "subdomain.py").read_text(encoding="utf-8"))
+    _bare264 = [n for n in _ast264.walk(_tree264) if isinstance(n, _ast264.Call)
+                and isinstance(n.func, _ast264.Attribute) and n.func.attr == "bruteforce"]
+    assert not _bare264, "puredns 的 argv 只许由 puredns_bruteforce_argv 拼（AST 抓到裸调用）"
+    # ③ 真二进制：新 argv 必须 rc=0 且写产物；**变异证伪**：换回老写法必须非 0
+    if _pd264:
+        _wl264 = ROOT / "logs" / "_smoke264_wl.txt"
+        _wl264.write_text("www\nmail\n", encoding="utf-8")
+        _out264 = ROOT / "logs" / "_smoke264_out.txt"
+        _res264 = str(_resolve264(_st264["dicts"]["resolvers"]))
+        _ep264 = _os264.path.dirname(_ms264) if _ms264 else None
+        _rc264, _so264, _se264 = _sd264.run_cmd(
+            _sd264.puredns_bruteforce_argv(_pd264, _wl264, "nxdomain-ctf264.test", _res264, _out264),
+            timeout=240, extra_path=_ep264)
+        assert _rc264 == 0, f"puredns 新 argv 跑不通（rc={_rc264}）：{_se264[:200]}"
+        assert _out264.exists(), "puredns 没写产物文件（-w 没接上？）"
+        _rcb264, _, _seb264 = _sd264.run_cmd(
+            [str(_pd264), "bruteforce", str(_wl264), "-d", "nxdomain-ctf264.test",
+             "-r", _res264, "-w", str(_out264)], timeout=120, extra_path=_ep264)
+        assert _rcb264 != 0, "老写法（-d 塞裸域名）居然跑通了 ⇒ 上面那条断言没盯住真正的语法"
+        _wl264.unlink(missing_ok=True)
+        _out264.unlink(missing_ok=True)
+        _pd_note264 = "真二进制跑通（rc=0），老写法变异即红"
+    else:
+        _pd_note264 = "本机没装 puredns，真跑那一项指名跳过（纯函数与 AST 钉点仍验）"
+    # ④ 任务详情「拓展域名」页签：归属追加成自身子域名的行要默认隐藏（与跨任务页同一份口径）
+    _c264 = app.test_client()
+    assert _c264.post("/login", data=_admin_form117()).status_code == 302
+    _tid264 = db.create_task("smoke-264-page", "x264.test\n", ["subdomain", "osint"], {})
+    db.insert_subdomains(_tid264, [("www.x264.test", "passive:smoke264")])
+    db.insert_subdomains(_tid264, [("js264.x264.test", "js:mine"),
+                                   ("other264.test", "osint:fofa")])
+    db._exec("UPDATE subdomains SET ip='1.2.3.4' WHERE task_id=?", (_tid264,))   # 都弄成已解析
+    _prom264 = _ex264.promote_owned(_tid264, {}, logger=None)
+    assert "js264.x264.test" in _prom264["promoted"], _prom264
+    _h264 = _c264.get(f"/tasks/{_tid264}").get_data(as_text=True)
+    _ha264 = _c264.get(f"/tasks/{_tid264}?all=1").get_data(as_text=True)
+
+    def _ext_badge(h):
+        m = _re264.search(r'data-tab="ext">\s*拓展域名\s*<span class="cnt">(\d+)</span>', h)
+        return int(m.group(1)) if m else -1
+
+    assert _ext_badge(_h264) == 1, \
+        (f"归属追加掉的那条还占着拓展域名页签（徽标={_ext_badge(_h264)}，应为 1）—— "
+         "两个页签各显示一次，用户看到的就是'显示了自家却没进子域名'")
+    assert _ext_badge(_ha264) == 2, "?all=1 是逃生钮：隐藏不许变成'再也看不到'"
+    assert _re264.search(r"全部（1）", _h264) and _re264.search(r"全部（2）", _ha264), \
+        "来源分类的导航数字要与行数同口径（§0 第 10 条：计数与视图不许各说一套）"
+    assert "js264.x264.test" in _h264, "归纳进来的域名必须在子域名页签里看得见"
+    # 变异证伪：把 OVERLAP 条件摘掉 ⇒ 默认徽标必须变 2（否则上面那条是空写）
+    _real_ov264 = db.OVERLAP_EXT_WHERE
+    db.OVERLAP_EXT_WHERE = "1=1"
+    try:
+        assert _ext_badge(_c264.get(f"/tasks/{_tid264}").get_data(as_text=True)) == 2, \
+            "摘掉重叠条件后徽标没变 ⇒ 断言没真盯住'已归纳就隐藏'"
+    finally:
+        db.OVERLAP_EXT_WHERE = _real_ov264
+    print("[264] 续264 ok: puredns argv 修错（域名是位置参数、不是 -d；纯函数 + AST 单一产地 + 真二进制 rc=0"
+          "、老写法变异即红）—— 深档 17.8 万条字典自此真的会跑（此前 #61/#62/#63/#65 全在静默走 3084 条"
+          "抽样兜底）；任务详情「拓展域名」页签补上与跨任务页同一份\"已归纳就隐藏\"口径（徽标 2→1、"
+          "?all=1 逃生钮仍在、来源计数同口径、归纳行在子域名页签可见；变异证伪：摘掉重叠条件徽标即回 2）"
+          f"；{_pd_note264}")
+
+
     print("SMOKE PASS")
 
 

@@ -2000,9 +2000,17 @@ def create_app():
         # 拓展域名（JS 挖掘 / C 段 / FOFA）在任务详情里单列一个页签 ——
         # 用户要求它不再单独占侧栏，但任务维度仍要能看到（这些域名未必属于目标）。
         # 来源分类的数字（"全部（N）"与五个分类按钮）按**全任务**统计：它是导航数字，不是当前页行数。
+        # 续264：与跨任务 `/extdomains` 页**同一份口径** —— 已经"归属追加"成自身子域名的行，
+        # 在这个页签里也要默认隐藏。此前只有跨任务页带了 `db.OVERLAP_EXT_WHERE`，详情页没有
+        # ⇒ 同一批域名在两个页签里各出现一次，用户看到的就是"拓展域名里还挂着自家域名，
+        # 却没进子域名"（#65 实测：a./mgr./pay-api./targ1.com 四条两边都在）。
+        # `?all=1` 与跨任务页同一颗逃生钮（免得隐藏变成"再也看不到"）。
+        _ext_all264 = request.args.get("all") == "1"
         ext_counts = {r["source"]: r["c"] for r in db._query(
             f"SELECT source, COUNT(*) c FROM subdomains WHERE task_id=? "
-            f"AND {db.EXT_SUBDOMAIN_WHERE} GROUP BY source", (task_id,))}
+            f"AND {db.EXT_SUBDOMAIN_WHERE}"
+            + ("" if _ext_all264 else f" AND {db.OVERLAP_EXT_WHERE}")
+            + " GROUP BY source", (task_id,))}
         ext_src = (request.args.get("esrc") or "").strip().lower()
         ext_pick = next((t for t in EXT_SRC_TAGS if t[0] == ext_src), None)
         if not ext_pick:
@@ -2017,8 +2025,9 @@ def create_app():
         # 这里再拼一遍必然漂移（第一版就是这么写错的：`WHEN` 子句用 `", "` 拼成
         # `CASE source WHEN 'a' THEN 0, WHEN 'b' THEN 1 …`，SQLite 直接 `near ",": syntax error`，
         # 任务详情页 500）。
-        ext_base = (f"{db.EXT_SUBDOMAIN_WHERE} AND source=?" if ext_pick
-                    else db.EXT_SUBDOMAIN_WHERE)
+        ext_base = _and_where(db.EXT_SUBDOMAIN_WHERE,
+                              None if _ext_all264 else db.OVERLAP_EXT_WHERE,
+                              "source=?" if ext_pick else None)
         ext_subs, ext_pager, ext_q = _tab_page(
             "subdomains", "ex", "#ext",
             extra_where=_and_where(ext_base, res_where),

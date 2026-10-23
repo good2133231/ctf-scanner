@@ -14,10 +14,25 @@
 
 对应参考流水线：
   ./tools/scanner/subfinder -dL url -all -t 200 -o logs/passive.txt
-  ./tools/scanner/puredns bruteforce ./config/subdomains.txt -d url -r ./config/resolvers.txt -w logs/brute.txt
+  ./tools/scanner/puredns bruteforce ./config/subdomains.txt url -r ./config/resolvers.txt -w logs/brute.txt
   cat passive.txt brute.txt | sort -u    ->  Python 端以 sorted(set(...)) 等价实现
 """
 import os
+def puredns_bruteforce_argv(pd_bin, wordlist, domain, resolvers, out_file):
+    """拼 puredns `bruteforce` 的 argv —— **全仓只此一处**（续264）。
+
+    puredns v2.1.1 的用法（`puredns bruteforce --help` 实测）：
+        puredns bruteforce <wordlist> domain            # 单个域名：位置参数
+        puredns bruteforce <wordlist> -d domains.txt    # 一批域名：-d 吃的是**文件**
+    老写法把**裸域名**塞进 `-d`，puredns 就去 `open <那个名字>` ⇒ 每个域名都退码 1
+    （`puredns error: open targ1.com: no such file or directory`），而调用方只把
+    stderr 截 150 字记一句 WARNING 就静默走内置兜底 ⇒ 深档 17.8 万条字典**从来没跑过**，
+    每轮只剩 3084 条等距抽样（实测 #61/#62/#63/#65 四次全中，用户报"域名更少了"）。
+    门禁 `[264]` 用真二进制跑一遍这个函数产出的 argv（rc 必须 0），语法再漂就红。
+    """
+    return [str(pd_bin), "bruteforce", str(wordlist), str(domain),
+            "-r", str(resolvers), "-w", str(out_file)]
+
 
 from .base import Stage
 from . import github as github_stage
@@ -428,10 +443,12 @@ class SubdomainStage(Stage):
                 out_file = ctx.workdir / f"brute_{d}.txt"
                 # 把 massdns 所在目录塞进**这一个子进程**的 PATH（puredns 在进程内 exec 它，
                 # 拿不到我们在 settings 里写的绝对路径）——见 utils.run_cmd 的 extra_path。
-                rc, _, err = run_cmd([pd_bin, "bruteforce", dict_path, "-d", d,
-                                      "-r", resolvers, "-w", str(out_file)], timeout=3600,
-                                     throttle=th,
-                                     extra_path=os.path.dirname(massdns_bin) if massdns_bin else None)
+                # 续264：域名走**位置参数**，不是 `-d`（`-d` 在 v2.1.1 里吃的是域名**文件**）。
+                # argv 只此一处拼，见 puredns_bruteforce_argv。
+                rc, _, err = run_cmd(
+                    puredns_bruteforce_argv(pd_bin, dict_path, d, resolvers, out_file),
+                    timeout=3600, throttle=th,
+                    extra_path=os.path.dirname(massdns_bin) if massdns_bin else None)
                 if rc == 0:
                     add_many((line, "puredns") for line in read_lines(out_file))
                     _pd_ok += 1
