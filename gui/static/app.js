@@ -152,6 +152,66 @@ function initDetailTabPersist() {
   });
 }
 
+/* ---------- 续263：面板请求的三件小事（在飞计数 / 记住展开 / 报错讲人话） ---------- */
+const PV_OPEN_KEY = "ctfscanner.pvopen";
+function pvInflight(d) { window.__pvInflight = Math.max(0, (window.__pvInflight || 0) + d); }
+async function pvWaitIdle(budget = 2500) {
+  const t0 = Date.now();
+  while ((window.__pvInflight || 0) > 0 && Date.now() - t0 < budget) {
+    await new Promise(res => setTimeout(res, 80));
+  }
+}
+function pvRemember(key) {
+  try {
+    const s = new Set(JSON.parse(sessionStorage.getItem(PV_OPEN_KEY) || "[]"));
+    s.add(key);
+    sessionStorage.setItem(PV_OPEN_KEY, JSON.stringify([...s]));
+  } catch (e) { /* 隐私模式：本次会话内不恢复，展开本身照旧能用 */ }
+}
+function pvForget(key) {
+  try {
+    const s = new Set(JSON.parse(sessionStorage.getItem(PV_OPEN_KEY) || "[]"));
+    s.delete(key);
+    sessionStorage.setItem(PV_OPEN_KEY, JSON.stringify([...s]));
+  } catch (e) { /* 同上 */ }
+}
+function pvRestoreOpen() {
+  // 整页刷新后把刷新前展开着的面板原样展开：否则"点开子任务 → 任务跑完自动刷新 → 面板没了"，
+  // 在用户眼里就是"这个功能又坏了"。
+  const go = () => {
+    let keys = [];
+    try { keys = JSON.parse(sessionStorage.getItem(PV_OPEN_KEY) || "[]"); } catch (e) { keys = []; }
+    keys.forEach(k => {
+      const parts = String(k).split(":");
+      if (parts.length < 2) return;
+      const b = document.querySelector(
+        `#task-rows button[data-pv="${parts[1]}"][data-id="${parts[0]}"][data-inline="1"]`);
+      if (b) b.click();
+    });
+  };
+  // ⚠️ 时序：tasks.html 里 `initTaskTable()` 是**内联脚本**（解析期就跑），那时
+  // `initTaskPreview()` 的 click 委托还没挂上（它在 DOMContentLoaded 里）⇒ 直接 click
+  // 等于点了没反应。readyState 还是 loading 就延后到 DOMContentLoaded 再补点。
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", go);
+  } else {
+    go();
+  }
+}
+function pvNetMsg(err) {
+  // 浏览器把"页面正在跳转 / 请求被掐断"也报成 `Failed to fetch` —— 那不是服务端出错，
+  // 把这句英文原样甩给用户只会让人以为功能坏了（主理人报的就是这一句）。
+  const m = String((err && err.message) || err || "");
+  if (!m || /failed to fetch|networkerror|load failed|abort/i.test(m)) {
+    return "网络中断或页面正在刷新（不是你的操作问题）";
+  }
+  return m;
+}
+function pvErrHtml(text) {
+  return `<p class="pv-note"><b>加载失败</b>：${text}</p>`
+    + `<p class="pv-note"><button type="button" class="btn-mini ghost" data-pv-retry="1">重试</button></p>`;
+}
+
 function initTaskTable() {
   const rows = [...document.querySelectorAll("#task-rows tr[data-id]")];
   if (!rows.length) return;
@@ -243,17 +303,26 @@ function initTaskTable() {
         const map = (await r.json()).tasks || {};
         live.forEach(tr => {
           const st = map[tr.dataset.id];
-          if (!st) return;
+          // 续263：**先对号再改**。服务端每条都回带自己的 id，对不上就是"这份数据不属于
+          // 这一行"，一个字都不许动 —— 主任务那一行只可能显示主任务自己的进度。
+          if (!st || String(st.id) !== String(tr.dataset.id)) return;
           tr.dataset.status = st.status;
-          const badge = tr.querySelector(".badge");
+          // 续263：只认**状态列那颗**徽章。旧写法取"行内第一颗" ——
+          // 而子任务行那颗「子任务 · 父 #N」在任务名列，会在 2.5 秒内被状态文字
+          // 整个覆盖掉，看着就是"子任务标记被别的进度吃了"。
+          const badge = tr.querySelector("td[data-status] .badge");
           if (badge) {
             badge.textContent = ST_LABEL[st.status] || st.status;
             badge.className = "badge st-" + st.status;
           }
-          const prog = tr.querySelector(".progress");
+          const prog = tr.querySelector("td[data-progress]");
           if (prog) {
+            // 续230 的「· 当前阶段」要跟着重建：整段 innerHTML 一换，那一列就只剩百分比
+            const _pct = Number.isFinite(Number(st.progress)) ? Number(st.progress) : 0;
+            const _stage = (st.status === "running" && st.current_stage)
+              ? `<span class="muted small">· ${pvEsc(st.current_stage)}</span>` : "";
             prog.innerHTML =
-              `<div class="bar"><i style="width:${st.progress}%"></i></div>${st.progress}%`;
+              `<div class="bar"><i style="width:${_pct}%"></i></div>${_pct}% ${_stage}`;
           }
           const stopBtn = tr.querySelector('button[data-op="stop"]');
           const restartBtn = tr.querySelector('button[data-op="restart"]');
@@ -266,14 +335,26 @@ function initTaskTable() {
       // 全跑完了：刷新一次，把「统计 / 运行时长」这些服务端渲染的静态列带出来
       // （与详情页 pollTask 收尾同口径）。但用户此刻若正把光标放在筛选框里，
       // 就别抢他的输入 —— 留给他手动刷新。
+      // 续263：刷新前先等面板请求落地（最多 2.5s）。上一版是到点直接 reload，
+      // 正在飞的那个 fetch 被导航掐断 → 面板里甩出一句浏览器原话「Failed to fetch」。
+      // 展开状态另有 pvRemember/pvRestoreOpen 兜着，刷新回来面板还在。
       if (!document.querySelector("input:focus, select:focus, textarea:focus")) {
-        setTimeout(() => location.reload(), 1500);
+        setTimeout(async () => {
+          await pvWaitIdle();
+          window.__pvNavigating = true;
+          location.reload();
+        }, 1500);
       }
       return;
     }
     setTimeout(tick, 2500);
   };
   tick();
+  pvRestoreOpen();   // 续263：刷新前展开着的面板，刷新后原样展开（面板不再"一闪就没"）
+}
+function pvBindRetry(scope, fn) {
+  const btn = scope.querySelector("[data-pv-retry]");
+  if (btn) btn.addEventListener("click", () => { btn.disabled = true; fn(); });
 }
 
 /* ---------- 策略配置页：面板折叠（默认折叠，展开状态存 localStorage） ---------- */
@@ -490,8 +571,12 @@ function initLightbox() {
 }
 /* ---------- 任务页「子任务/统计」预览框（续196，主理人点单：不要行内展开） ---------- */
 function pvSubtreeHtml(d) {
+  // 续263：先说清"下面这批进度条是谁的" —— 面板紧贴主任务那一行，不写这一句，
+  // 里面的子任务进度条会被当成主任务自己的进度（主理人报的"覆盖主任务的进度条"）。
   const head = `<h3>子任务（#${pvEsc(d.root.id)} ${pvEsc(d.root.name)}`
-    + (d.total ? `，共 ${pvEsc(d.total)} 个` : "") + `）</h3>`;
+    + (d.total ? `，共 ${pvEsc(d.total)} 个` : "") + `）</h3>`
+    + `<p class="pv-note">下面缩进的每一行是<b>子任务自己</b>的进度；`
+    + `主任务的进度在上面它自己那一行的「进度」列，两者互不影响。</p>`;
   if (!d.nodes || !d.nodes.length) {
     return head + `<p class="pv-note">这个任务名下还没有子任务`
       + `（拓展域名送去探测、自动递归才会长出下一层）。</p>`;
@@ -508,7 +593,7 @@ function pvSubtreeHtml(d) {
       + `<td><div class="bar"><i style="width:${pvEsc(n.progress)}%"></i></div>${pvEsc(n.progress)}%</td>`   /* 续241：面板里也要有进度条，不只一个百分比 */
       + `<td class="muted">${pvEsc(n.created_at || "-")}</td>`
       + `<td class="muted">${pvEsc(n.duration || "-")}</td>`
-      + `<td><a class="btn-mini" href="/tasks/${pvEsc(n.id)}">查看结果</a></td></tr>`;
+      + `<td><a class="btn-mini" href="${absUrl("/tasks/" + pvEsc(n.id))}">查看结果</a></td></tr>`;
   }).join("");
   return head + `<table><thead><tr><th>编号</th><th>任务名</th><th>目标</th><th>统计</th>`
     + `<th>阶段</th><th>状态</th><th>进度</th><th>开始时间</th><th>时长</th><th></th></tr></thead>`
@@ -563,6 +648,7 @@ function initTaskPreview() {
       if (slot && slot.classList && slot.classList.contains("pv-inline-row")
           && slot.dataset.for === key) {
         slot.remove();          // 再点一次 = 收起
+        pvForget(key);
         return;
       }
       const cols = document.querySelectorAll("#tbl-tasks thead th").length || 11;
@@ -574,19 +660,41 @@ function initTaskPreview() {
       td.innerHTML = '<div class="pv-inline-box"><p class="pv-note">加载中…</p></div>';
       slot.appendChild(td);
       tr.parentNode.insertBefore(slot, tr.nextSibling);
-      try {
-        const path = kind === "stats" ? "stats" : (kind === "stages" ? "stages" : "subtasks");
-        const r = await fetch(absUrl(`/api/tasks/${id}/${path}`));
-        const d = await r.json();
-        td.innerHTML = '<div class="pv-inline-box">' + (
-          !d.ok ? `<p class="pv-note">${pvEsc(d.error || "加载失败")}</p>`
-                : (kind === "stats" ? pvStatsHtml(d)
-                   : kind === "stages" ? pvStagesHtml(d) : pvSubtreeHtml(d))
-        ) + '</div>';
-      } catch (err) {
-        td.innerHTML = '<div class="pv-inline-box"><p class="pv-note">加载失败：'
-          + pvEsc(err && err.message ? err.message : err) + '</p></div>';
-      }
+      pvRemember(key);
+      const draw = html => {
+        td.innerHTML = '<div class="pv-inline-box">' + html + '</div>';
+      };
+      const load = async attempt => {
+        pvInflight(1);
+        try {
+          const path = kind === "stats" ? "stats" : (kind === "stages" ? "stages" : "subtasks");
+          const r = await fetch(absUrl(`/api/tasks/${id}/${path}`));
+          let d = null;
+          try { d = await r.json(); } catch (_e) { d = null; }   // 非 JSON（掉登录/500 页面）
+          if (!r.ok) {
+            draw(pvErrHtml(pvEsc((d && d.error) || `服务端返回 HTTP ${r.status}`)));
+            pvBindRetry(td, () => load(attempt + 1));
+            return;
+          }
+          if (!d) {
+            draw(pvErrHtml("服务端返回的不是 JSON（多半是登录过期了，刷新页面后重试）"));
+            pvBindRetry(td, () => load(attempt + 1));
+            return;
+          }
+          draw(!d.ok ? `<p class="pv-note">${pvEsc(d.error || "加载失败")}</p>`
+                     : (kind === "stats" ? pvStatsHtml(d)
+                        : kind === "stages" ? pvStagesHtml(d) : pvSubtreeHtml(d)));
+        } catch (err) {
+          // 续263：页面自己在刷新时浏览器也会抛 `Failed to fetch` —— 那是本页导航，
+          // 不是服务端出错，静默重试一次，别甩英文给用户。
+          if (attempt === 0 && window.__pvNavigating) { setTimeout(() => load(1), 400); return; }
+          draw(pvErrHtml(pvEsc(pvNetMsg(err))));
+          pvBindRetry(td, () => load(attempt + 1));
+        } finally {
+          pvInflight(-1);
+        }
+      };
+      load(0);
       return;
     }
     pvOpen(`<p class="pv-note">加载中…</p>`);
@@ -599,7 +707,7 @@ function initTaskPreview() {
       pvOpen(kind === "stats" ? pvStatsHtml(d)
              : kind === "stages" ? pvStagesHtml(d) : pvSubtreeHtml(d));
     } catch (err) {
-      pvOpen(`<p class="pv-note">加载失败：${pvEsc(err && err.message ? err.message : err)}</p>`);
+      pvOpen(`<p class="pv-note"><b>加载失败</b>：${pvEsc(pvNetMsg(err))}</p>`);
     }
   });
 }

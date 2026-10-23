@@ -581,6 +581,138 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
                 + f" → 已排入第 {layer + 1}/{total} 层追加运行，剩余 {remaining} 层")
 
 
+def _opt_bool263(value, default):
+    """把四种写法（True/False/`"0"`/`"false"`/`""`/None）归一成 bool（续263）。
+
+    为什么单独一处：任务选项来自表单与 JSON 两条路，落到库里可能是字符串 `"0"` ——
+    `bool("0")` 是 True，`"有没有这个键"` 与 `"键的值是什么"` 混在一起判就会把显式关
+    读成开（那正是"自动建任务"这类动作最不能出错的地方）。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    if not s:
+        return default
+    return s not in ("0", "false", "off", "no", "none")
+
+
+def ext_auto_probe_enabled(settings=None, options=None):
+    """续263「主域名不同但置信度达阈值 ⇒ 自动建子任务去扫」的总开关。
+
+    任务级 `ext_auto_probe` 优先，退回策略级 `subdomain.ext_auto_probe`（出厂 **开**）。
+    自动建出来的子任务一律带 `ext_auto_probe=0`：那是**防套娃**的闸，不是默认值 ——
+    否则"每层都自动再送探"会顺着置信度一路长出无限层任务（每层的资产面都会变大）。
+    """
+    pol = ((settings or {}).get("subdomain") or {}).get("ext_auto_probe")
+    return _opt_bool263((options or {}).get("ext_auto_probe"), _opt_bool263(pol, True))
+
+
+def ext_auto_probe_max(settings=None):
+    """一次最多自动送探几个（策略 `subdomain.ext_auto_probe_max`，出厂 5，夹到 1..50）。
+
+    上限存在的理由不是性能：置信度是**启发式**，一次送 5 个与一次送 200 个的区别是
+    "人还看得过来、错了能一键拉黑" 与 "脚本替你圈了一批别人的域名在扫"。
+    """
+    try:
+        n = int(((settings or {}).get("subdomain") or {}).get("ext_auto_probe_max") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        n = 5
+    return max(1, min(50, n))
+
+
+# 自动送探的子任务跑哪些阶段：与 GUI「送去探测」逐字一致（续239 定的那一串），
+# 不在这里另写一串 —— 两串一旦漂移，"手动送探"与"自动送探"扫出来的东西就不一样厚。
+AUTO_PROBE_STAGES = ["subdomain", "probe", "dirscan", "vulnscan"]
+
+
+def _maybe_auto_probe_similar(ctx, task_id, logger):
+    """续263（主理人口径）：主域名**不一样**但置信度达阈值的拓展域名 → 自动建子任务去扫。
+
+    与「归属追加」是**互补的两条路**，同一条域名只会走其中一条：
+    ① 主域名一样 ⇒ `extdom.promote_owned` 归纳进主任务当子域名 + 按站点流程扫
+       （自续255 起固定跑，本函数**不碰**它 —— `similar_candidates` 已把 `owned` 排除）；
+    ② 主域名不一样 ⇒ **不归纳**：不写 `ext:probed`、不进主任务的子域名资产
+       （那正是"归纳"，主理人的口径是主域名不一样就不归纳），只在这一批达到置信度
+       阈值时新建子任务去扫，**替代"人工点送去探测"**；
+    ③ 判据一处都不另写：三道闸（黑名单 / 第三方清单 / CDN）与阈值全部走
+       `extdom.similar_candidates` 那一份 —— 放宽它等于把别人的域名当自家资产扫。
+
+    三条退场边界：本轮未正常完成（含被「追加层数」重新排队）⇒ 不建；
+    送探记录里已有 ⇒ 不重复建；超过上限的 ⇒ 不建但在日志里报出条数。
+    """
+    settings = ctx.settings or {}
+    options = ctx.options or {}
+    if not ext_auto_probe_enabled(settings, options):
+        return {"spawned": 0, "candidates": 0, "capped": 0, "reason": "开关关着"}
+    cur = db.get_task(task_id)
+    if not cur or (cur["status"] or "") != "done":
+        return {"spawned": 0, "candidates": 0, "capped": 0, "reason": "本轮未正常完成"}
+    min_conf = resolve_ext_confidence(options, settings)
+    try:
+        bases = extdom.confirmed_bases(task_id)
+        cand = extdom.similar_candidates(
+            extdom.ext_rows(task_id), bases, min_level=min_conf, settings=settings,
+            owner_id=extdom.owner_of(task_id),
+            confirmed_ips=extdom.confirmed_ip_map(task_id),
+            cert_shares=extdom.cert_shares(task_id, bases, settings))
+    except Exception as e:      # noqa: BLE001 - 判据挂了就退回"什么都不送"
+        logger.error(f"[extdom] 自动送探的候选判断异常，本轮不自动建子任务：{e}")
+        return {"spawned": 0, "candidates": 0, "capped": 0, "reason": "判据异常"}
+    blocked = len(cand.get("blocked") or [])
+    keep = [c for c in (cand.get("keep") or []) if c.get("domain")]
+    if not keep:
+        logger.info(f"[extdom] 自动送探：没有达到「{extdom.conf_label(min_conf)}」且主域名不同的"
+                    f"拓展域名（另 {blocked} 个被黑名单/第三方清单/CDN/阈值挡在外面），本轮不建子任务")
+        return {"spawned": 0, "candidates": 0, "capped": 0, "reason": "无候选"}
+    try:
+        probed = db.list_ext_probes([c["domain"] for c in keep])
+    except Exception:           # noqa: BLE001 - 读记录失败按"没送过"处理，宁可少送不多送
+        probed = {}
+    todo = [c for c in keep if not (probed.get(c["domain"]) or [])]
+    cap = ext_auto_probe_max(settings)
+    picked = todo[:cap]
+    if not picked:
+        logger.info(f"[extdom] 自动送探：{len(keep)} 个达到阈值，但都在此前送过探了（去重命中），不再建任务")
+        return {"spawned": 0, "candidates": len(keep), "capped": 0, "reason": "已送过"}
+    domains = [c["domain"] for c in picked]
+    child_opts = {"rescan_of": int(task_id), "ext_depth": 1, "ext_auto_probe": 0}
+    _auth = (options or {}).get("auth")
+    if _auth:
+        child_opts["auth"] = _auth       # 登录态继承：与手动送探同口径（续195）
+    _main = ""
+    for _ln in str(cur["targets"] or "").splitlines():
+        _m = extdom.base_of(_ln.strip())
+        if _m:
+            _main = _m
+            break
+    name = f"{_main or cur['name']} · 高置信送探 {len(domains)} 个域名"
+    from . import queue as _queue      # 延迟导入：queue 顶层 import 本模块，避免循环导入
+    try:
+        cid = db.create_task(name, "\n".join(domains), list(AUTO_PROBE_STAGES),
+                             child_opts, owner_id=int(cur["owner_id"] or 0),
+                             parent_id=int(task_id))
+        db.enqueue_task(cid, "fresh", list(AUTO_PROBE_STAGES), child_opts)
+        _queue.notify()
+        db.record_ext_probes(int(task_id), int(cid), domains, kind="auto")
+    except Exception as e:      # noqa: BLE001 - 建任务失败不该牵连本任务已完成的产物
+        logger.error(f"[extdom] 自动送探建任务失败（不影响本任务产物）：{e}")
+        return {"spawned": 0, "candidates": len(keep), "capped": 0, "reason": "建任务失败"}
+    for c in picked[:5]:
+        # 取 `label` 用 .get：日志这一行不该因为候选字典少一个键就把整条流水线带崩
+        logger.info(f"[extdom] 自动送探 {c.get('domain')}"
+                    f"（置信度 {c.get('label') or c.get('level') or '-'}）：{c.get('reason') or ''}")
+    _cap_n = max(0, len(todo) - len(picked))
+    logger.info(f"[extdom] 自动送探：{len(keep)} 个达到「{extdom.conf_label(min_conf)}」且主域名不同"
+                f" → 送出 {len(domains)} 个（上限 {cap}）→ 子任务 #{cid}（parent_id={task_id}）"
+                + (f"，另有 {_cap_n} 个超上限未送" if _cap_n else "")
+                + f"；{len(keep) - len(todo)} 个此前已送过探、{blocked} 个被闸挡在外面")
+    return {"spawned": 1, "child": int(cid), "domains": domains,
+            "candidates": len(keep), "capped": _cap_n}
+
 def shot_retry_targets(task_id):
     """候补重试的候选：读库取「没截成 + 属于可重试档」的站点 URL（**一个请求都不发**）。
 
@@ -859,5 +991,11 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
     _maybe_queue_next_layer(ctx, task_id, stages, options, logger)
     # 续161「候补重试」：只有上面**没有**再排出追加层数（收场状态仍是 done）才排候补轮 ——
     # 两条路写同一份 `run_payload`，同时排会互相覆写。互斥判据在函数内那条 `!= "done"`。
+    # 续263（主理人口径）：主域名不同但置信度达阈值的拓展域名 → 自动建子任务送探，
+    # 取代"人工点送去探测"。排在「追加层数」之后：那一处一旦又排了追加运行，本任务状态
+    # 就不是 done 了，本函数据此自动退场（两条写不同任务的 payload，不会互相覆写）。
+    _maybe_auto_probe_similar(ctx, task_id, logger)
+
+
     _maybe_queue_shot_retry(ctx, task_id, stages, options, logger)
     return ctx

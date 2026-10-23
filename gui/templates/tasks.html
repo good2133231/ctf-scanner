@@ -198,12 +198,12 @@
         <td class="muted small"><button type="button" class="btn-mini ghost btn-xs"
           data-pv="stages" data-id="{{ t.id }}"
           title="预览框看这个任务跑了哪些阶段（含各阶段说明与开关状态）">阶段预览</button></td>
-        <td><span class="badge st-{{ t.status }}">{{ '排队中' if t.status == 'queued' else t.status }}</span>
+        <td data-status="1"><span class="badge st-{{ t.status }}">{{ '排队中' if t.status == 'queued' else t.status }}</span>
           {% if t.status == 'queued' and qpos.get(t.id) %}<span class="muted small">第 {{ qpos.get(t.id) }} 位</span>{% endif %}
           {# 续211-P2-10：具名取消原因（`tasks.stop_reason`，枚举见 scanner/cancelcause.py）。
              人话 error 行照旧在详情页，这一颗是给"一眼看出为什么没跑完"用的。 #}
           {% if t.stop_reason %}<span class="badge" title="具名取消原因：{{ t.stop_reason }}">{{ cause_zh.get(t.stop_reason, t.stop_reason) }}</span>{% endif %}</td>
-        <td class="progress"><div class="bar"><i style="width: {{ t.progress }}%"></i></div>{{ t.progress }}%
+        <td class="progress" data-progress="1"><div class="bar"><i style="width: {{ t.progress }}%"></i></div>{{ t.progress }}%
           {# 续230：长阶段（subdomain 等）跑十分钟时进度就是不动 —— 把当前阶段写出来，
              别让人以为"卡死在 0%"。 #}
           {% if t.status == 'running' and t.current_stage %}<span class="muted small">· {{ t.current_stage }}</span>{% endif %}</td>

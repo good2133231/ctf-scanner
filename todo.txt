@@ -4303,6 +4303,30 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] validate_yaml 四道→三道（"能不能收"），RCE 判据归 exploit_reason（"走哪路"）
 - [x] [207] 断言组；SMOKE PASS；AGENTS 补分档不变量
 
+## 续263（2026-10-23，WorkBuddy · CodeBuddy）：拓展域名两条路 + 子任务面板三修（主理人当面拍板口径）
+实施者：WorkBuddy · CodeBuddy
+
+- [x] A1 拓展域名：主域名**一样** ⇒ 归纳进主任务当子域名 + 按站点流程扫（真库 #62 核对：4 条归属 0 漏，本来就是好的，未动代码）
+- [x] A2 新增 `runner._maybe_auto_probe_similar`：主域名不同 + 置信度达阈值 ⇒ **自动建子任务扫**（取代人工点「送去探测」）
+- [x] A3 边界七条：阶段与手动送探逐字一致 / 自带 `ext_auto_probe=0` 防套娃 / 送过不重复 / `ext_auto_probe_max` 上限（超出的只报条数）/ 总开关 `ext_auto_probe` / 未正常完成不建 / 判据异常不建
+- [x] A4 判据单一产地：新调用点五个形参接全（含 `cert_shares`）；`[194a]` AST 钉点改成"每一处都要接全"
+- [x] A5 配置三处同步：`config.DEFAULTS` / 随包 `config/settings.yaml` / 策略页两个控件 **+ 保存映射**（漏带＝保存一次就把开关重置）
+- [x] B1 「加载失败：Failed to fetch」＝页面 reload 掐断在飞 fetch：刷新前 `pvWaitIdle` + 导航中静默重试 + 非 200/非 JSON 讲人话 + 服务端子树接口出错也回 JSON
+- [x] B2 「子任务覆盖主任务进度条」：`/api/tasks/status` 每条回带 `id` + 前端**先对号再改** + 徽章只认 `td[data-status] .badge`、进度只认 `td[data-progress]` + 模板两格稳定落点 + 续230 当前阶段跟着重建
+- [x] B3 面板跨刷新恢复（sessionStorage + DOMContentLoaded 时序）+ 链接带后台前缀（续138 老账）+ 视觉拉开 + 进度归属说明
+- [x] B4 真浏览器复现/复验（`logs/_repro263.py`、`_repro263b.py`）：角标修前 `running,running` → 修后 `子任务 · 父 #1,done`；刷新后面板还在；链接带前缀
+- [x] C1 `[263]` 门禁组：后端 14 项 + 前端/服务端 10 项（含变异证伪：`similar_candidates` 放行一切 ⇒ 「只送高置信」即红）
+- [x] C2 服务器全量门禁 SMOKE PASS rc=0：**269 组 / 8 分 56 秒**，日志 `logs/_smoke263h.log`
+- [x] C3 记忆同步：CHANGELOG_AI 续263 + todo 续263 + AGENTS.md 两条新不变量（拓展两条路 / 轮询先对号再改）
+- [x] C4 提交并推送（行尾已按 §0 核过：四个记忆文件 + 11 个改动文件，双向 numstat 相等）
+
+下一轮（续264）：
+- [ ] 给 `tests/smoke.py` 做"只跑指定组"的过滤（主理人问的效率问题）：本轮全量跑了 8 次、每次 9–11 分钟。要立成独立一轮 —— 它本身要过全量门禁，且必须让"收尾仍跑全量"这条不被绕过（否则就是给自己造假绿的口子）
+- [ ] 自动送探真机观察：上线后头几次任务树里会不会长出意料之外的子任务（用户面），`ext_auto_probe_max` 的出厂 5 是否合适
+- [ ] 子任务面板打开时是否要随轮询一起刷新（本轮刻意没做，先看主理人反馈）
+- [ ] CLI 侧 Ctrl+C 后工具子进程不回收：`utils._do_run_cmd` 的等待循环没有 try/finally（主理人上一轮问的终端问题，续262 已记为遗留）
+- [ ] 「追加到本任务」与自动送探并存时，父任务日志的可读性（现在两段都是 `[extdom]` 开头，容易看混）
+
 ## 续262（2026-10-22，WorkBuddy · CodeBuddy）：服务器全量门禁收官（回填续255/256/257）+ favicon NameError 修复（续225 引入）
 
 - [x] 拉取本地推送的 31 个提交（续256~续261）：rebase 干净快进（本地 0 ahead）、

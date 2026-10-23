@@ -739,9 +739,9 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
             "window.__calls.push(url);"
             "if(url.indexOf('/api/tasks/status?ids=')===0){"
             "return Promise.resolve({ok:true,json:function(){return Promise.resolve("
-            "{ok:true,tasks:{%d:{status:'running',progress:99,current_stage:'probe'}}});}});}"
+            "{ok:true,tasks:{%d:{id:%d,status:'running',progress:99,current_stage:'probe'}}});}});}"
             "return Promise.resolve({ok:false,json:function(){return Promise.resolve({});}});};"
-            % tid_run)
+            % (tid_run, tid_run))
     time.sleep(4.0)                       # 轮询间隔 2.5s —— 睡够一轮，又不到两轮
     calls = json.loads(page.ev("JSON.stringify(window.__calls)") or "[]")
     batch = [u for u in calls if u.startswith("/api/tasks/status?ids=")]
@@ -758,10 +758,14 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     ids_arg = batch[0].split("ids=", 1)[1] if batch else ""
     rep.check("[8] 批量请求只带**未结束**的任务 id（done 的不在其中）",
               ids_arg.split(",") == [str(tid_run)], f"ids={ids_arg!r} 期望 {tid_run}")
-    rep.eq("[8] 轮询回写真的改到了 DOM（合成 progress=99 已渲染）",
-           page.ev(f"document.querySelector('#task-rows tr[data-id=\"{tid_run}\"] .progress')"
-                   f".textContent"),
-           "99%")
+    # 续263：① 钩子回的这份"服务端响应"必须带 `id` —— 前端靠它对号入座，缺 id 就一个字都不改
+    #   （"主任务行显示成子任务进度"这类串位就是这么根治的；夹具缺 id 会让本条真的红）；
+    #   ② 判据同时盯百分比**与**续230 的当前阶段：旧写法整段换 innerHTML 会把阶段冲没，
+    #   只比对 "99%" 的那种断言盯不住它。
+    _txt8 = page.ev(f"document.querySelector('#task-rows tr[data-id=\"{tid_run}\"] .progress')"
+                    f".textContent")
+    rep.check("[8] 轮询回写真的改到了 DOM（合成 progress=99 已渲染，且续230 的当前阶段没被冲掉）",
+              "99%" in (_txt8 or "") and "probe" in (_txt8 or ""), f"实到 {_txt8!r}")
 
     # ---------- [9] 窄屏不得把整页撑出横向滚动条（续103：.grid2 > * { min-width:0 }） ----------
     # 元凶是网格子项默认的 `min-width:auto`：`1fr` 只约束**最大**宽度，于是带

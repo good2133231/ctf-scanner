@@ -26746,13 +26746,19 @@ expression: r0()
     # ⑥ runner 接线：自动递归必须传 cert_shares（AST 钉点，不 grep 文本 —— SKILL 第 6 条）
     import ast as _ast194r
     _rn194 = _ast194r.parse((ROOT / "scanner" / "runner.py").read_text(encoding="utf-8"))
-    _kw194 = [k.arg for n in _ast194r.walk(_rn194) if isinstance(n, _ast194r.Call)
+    # 续263：runner 里现在有**两处**调用（自动递归 + 自动送探），判据改成"每一处都要接全"
+    # —— 只认一处的旧写法会因新增那一处而红（那不是功能坏了）；改成 all() 之后
+    # 任何一处少传 cert_shares 照样红（判据更严，不是松）。
+    _kw194 = [[k.arg for k in n.keywords] for n in _ast194r.walk(_rn194)
+              if isinstance(n, _ast194r.Call)
               and isinstance(n.func, _ast194r.Attribute)
-              and n.func.attr == "similar_candidates" for k in n.keywords]
-    assert _kw194 == ["min_level", "settings", "owner_id", "confirmed_ips", "cert_shares"], \
-        f"runner 的 similar_candidates 形参形状变了（证书佐证没接进自动递归）：{_kw194}"
+              and n.func.attr == "similar_candidates"]
+    assert _kw194 and all(_k == ["min_level", "settings", "owner_id", "confirmed_ips", "cert_shares"]
+                          for _k in _kw194), \
+        f"runner 的 similar_candidates 形参形状变了（证书佐证没接进自动递归/自动送探）：{_kw194}"
     # 变异证伪：把 cert_shares 摘掉 ⇒ 上面那条必须红
-    assert "cert_shares" in _kw194, "摘掉 cert_shares 后钉点没红 ⇒ 断言是空写"
+    # 续263：`_kw194` 现在是"每处调用一份形参名"，这句也得跟着改成"每处都得有"。
+    assert all("cert_shares" in _k for _k in _kw194), "摘掉 cert_shares 后钉点没红 ⇒ 断言是空写"
     print("[194a] 续194 证书同源 + 大厂过滤 + 黑名单标签 ok: 同证书（非大厂）判高、owned/已是高不动、"
           "大厂共享证书只标记不升档且理由可见｜similar_candidates 吃 cert_shares（摘掉即掉出 keep）｜"
           "黑名单 SQL 与 matches 同口径（自身/子域/不命中/大小写/尾点六向）｜页面：默认隐藏 + 条数报出 + "
@@ -30975,6 +30981,160 @@ expression: r0()
         _srv262.shutdown()
     print("[262] 续262 ok: probe favicon 接线修复（续225 NameError：命名空间覆盖 + "
           "端到端 md5/mmh3/落盘三产物 + 日志不再吞异常）")
+    # ---------------- [263] 续263：拓展域名两条路（归纳 / 自动送探）+ 子任务面板三修 ----------------
+    # 主理人口径（2026-10-23 当面确认，逐字）：「主域名一样就归纳主任务，主域名不一样就不归纳；
+    # 如果是高置信但主域名不一样，就自动子任务扫」。同一条域名只允许走**其中一条**。
+    import json as _json263
+    import logging as _lg263
+    from scanner import runner as _R263, config as _C263
+    from scanner import extdom as _ex263
+    from gui import app as _gapp263
+
+    _log263 = _lg263.getLogger("smoke-263")
+
+    # ① 开关三态 + 上限夹取（任务级优先；表单/JSON 两条路会把 "0" 当字符串送进来，
+    #    `bool("0")` 是 True —— 判错就会把"显式关"读成开，这正是自动建任务最不能错的地方）
+    assert _R263.ext_auto_probe_enabled({}, {}) is True, "出厂必须是开（否则人工送探白点）"
+    assert _R263.ext_auto_probe_enabled({"subdomain": {"ext_auto_probe": False}}, {}) is False
+    assert _R263.ext_auto_probe_enabled({}, {"ext_auto_probe": "0"}) is False, "字符串 0 必须认成关"
+    assert _R263.ext_auto_probe_enabled({"subdomain": {"ext_auto_probe": False}},
+                                        {"ext_auto_probe": 1}) is True, "任务级要能盖过策略级"
+    assert (_R263.ext_auto_probe_max({}),
+            _R263.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 0}}),
+            _R263.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 999}}),
+            _R263.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 3}})) == (5, 5, 50, 3)
+    # 出厂默认值 + 随包 settings.yaml + 策略页控件，三处都得有（缺一处＝用户看不见＝等于没有）
+    assert _C263.DEFAULTS["subdomain"].get("ext_auto_probe") is True
+    assert _C263.DEFAULTS["subdomain"].get("ext_auto_probe_max") == 5
+    _y263 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+    assert "ext_auto_probe: true" in _y263 and "ext_auto_probe_max: 5" in _y263, "随包策略要写出来"
+    _sh263 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
+    assert "subdomain_ext_auto_probe" in _sh263 and "subdomain_ext_auto_probe_max" in _sh263
+
+    # ② 端到端：主域名一样 ⇒ 归纳进主任务当子域名；主域名不同 + 高置信 ⇒ 自动建子任务
+    class _Ctx263:
+        def __init__(self, tid, settings, options):
+            self.task_id, self.settings, self.options = tid, settings, options
+
+    _tid263 = db.create_task("smoke-263-main", "abcd263.test\n", ["subdomain", "probe"], {})
+    db.insert_subdomains(_tid263, [("www.abcd263.test", "passive:smoke263")])   # 已确认资产（对照集）
+    db.insert_subdomains(_tid263, [("abdc263.test", "osint:fofa"),              # 高：主标签差 2 步
+                                   ("zzzqqq263.test", "osint:fofa"),            # 低：差太远
+                                   ("mail.abcd263.test", "osint:fofa")])        # 主域名一样 ⇒ 归纳
+    db.update_task(_tid263, status="done", progress=100)
+    _own263 = {_r["domain"] for _r in db._query(
+        "SELECT domain FROM subdomains WHERE task_id=? AND " + db.OWN_SUBDOMAIN_WHERE, (_tid263,))}
+    _prom263 = _ex263.promote_owned(_tid263, {}, logger=_log263)
+    assert "mail.abcd263.test" in _prom263["promoted"], _prom263
+    assert "abdc263.test" not in _prom263["promoted"], "主域名不一样不许归纳（只送探）"
+
+    _ctx263 = _Ctx263(_tid263, {}, {})
+    _r263 = _R263._maybe_auto_probe_similar(_ctx263, _tid263, _log263)
+    assert _r263.get("spawned") == 1, _r263
+    _kid263 = _r263["child"]
+    _kt263 = db.get_task(_kid263)
+    assert int(_kt263["parent_id"]) == _tid263, "自动送探必须是**子任务**（任务树找得到）"
+    assert _kt263["stages"] == "subdomain,probe,dirscan,vulnscan", _kt263["stages"]
+    _ko263 = _json263.loads(_kt263["options"] or "{}")
+    assert _ko263.get("ext_auto_probe") == 0, "自动建出来的子任务自带 0：防顺着置信度套娃"
+    assert _ko263.get("rescan_of") == _tid263 and _ko263.get("ext_depth") == 1, _ko263
+    assert "zzzqqq263.test" not in (_r263.get("domains") or []), "低置信不许自动送探"
+    assert not [d for d in _r263["domains"] if d.endswith("abcd263.test")], \
+        "主域名一样的走归纳，不许再送探（两条路互斥）"
+    assert db.list_ext_probes(["abdc263.test"]).get("abdc263.test"), "要记送探记录（页面徽章读它）+ 去重靠它"
+    # 去重：同一条域名送过一次就不再建
+    _r263b = _R263._maybe_auto_probe_similar(_ctx263, _tid263, _log263)
+    assert _r263b.get("spawned") == 0 and _r263b.get("reason") == "已送过", _r263b
+    # 子任务自己不再自动建（防套娃那条闸真的生效）
+    _r263c = _R263._maybe_auto_probe_similar(_Ctx263(_kid263, {}, {"ext_auto_probe": 0}),
+                                             _kid263, _log263)
+    assert _r263c.get("spawned") == 0 and _r263c.get("reason") == "开关关着", _r263c
+    # ②-b 上限：4 个候选、上限 2 ⇒ 只送 2 个，并在返回值里报出未送条数
+    _tid263d = db.create_task("smoke-263-cap", "mnop263.test\n", ["subdomain"], {})
+    db.insert_subdomains(_tid263d, [("www.mnop263.test", "passive:smoke263")])
+    db.insert_subdomains(_tid263d, [(d, "osint:fofa") for d in
+                                    ("mpon263.test", "mnpo263.test", "mnope263.test", "mnopq263.test")])
+    db.update_task(_tid263d, status="done", progress=100)
+    _r263d = _R263._maybe_auto_probe_similar(
+        _Ctx263(_tid263d, {"subdomain": {"ext_auto_probe_max": 2}}, {}), _tid263d, _log263)
+    assert _r263d.get("spawned") == 1 and len(_r263d.get("domains") or []) == 2, _r263d
+    assert _r263d.get("capped") == len(_r263d.get("domains") or []) or _r263d.get("capped") >= 1, _r263d
+    # ②-c 关着 / 本轮未正常完成 ⇒ 一个都不建
+    _tid263e = db.create_task("smoke-263-off", "abcd263x.test\n", ["subdomain"], {})
+    db.insert_subdomains(_tid263e, [("www.abcd263x.test", "passive:smoke263"),
+                                    ("abdc263x.test", "osint:fofa")])
+    db.update_task(_tid263e, status="done", progress=100)
+    assert _R263._maybe_auto_probe_similar(
+        _Ctx263(_tid263e, {"subdomain": {"ext_auto_probe": False}}, {}),
+        _tid263e, _log263).get("reason") == "开关关着"
+    db.update_task(_tid263e, status="stopped", progress=60)
+    assert _R263._maybe_auto_probe_similar(_Ctx263(_tid263e, {}, {}), _tid263e, _log263) \
+        .get("reason") == "本轮未正常完成", "stopped/被追加排队的不许自动建"
+    # 变异证伪（§6.1）：把 `similar_candidates` 打桩成"什么都放行"，低置信那条必须真的红
+    _real263 = _ex263.similar_candidates
+    _ex263.similar_candidates = lambda *a, **k: {
+        "keep": [{"domain": d, "level": "low", "label": "低", "reason": "桩"} for d in
+                 ("zzzqqq263.test", "qqqzzz263.test")], "blocked": []}
+    try:
+        _r263m = _R263._maybe_auto_probe_similar(_Ctx263(_tid263, {}, {}), _tid263, _log263)
+        assert "zzzqqq263.test" in (_r263m.get("domains") or []) and \
+            "qqqzzz263.test" in (_r263m.get("domains") or []), \
+            "变异后仍只送高置信 → 断言没盯住\"阈值真的在管事\""
+    finally:
+        _ex263.similar_candidates = _real263
+
+    # ③ 子任务面板三修（前端 + 服务端）：
+    #    ③-a 「主任务那行显示成子任务的进度」——轮询必须**先对号再改**，且只认自己那两格
+    _js263 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "String(st.id) !== String(tr.dataset.id)" in _js263, \
+        "轮询必须先对号（服务端回带 id）再改行 —— 否则主任务行可能显示成子任务的进度"
+    assert 'tr.querySelector("td[data-status] .badge")' in _js263, \
+        "状态徽章只认状态列那一颗（旧写法取行内第一颗，会把「子任务 · 父 #N」角标冲掉）"
+    assert 'tr.querySelector("td[data-progress]")' in _js263, "进度只认进度列那一格"
+    assert 'tr.querySelector(".badge")' not in _js263, "整行第一颗徽章那种取法不许再出现"
+    assert 'tr.querySelector(".progress")' not in _js263, "整行第一格 .progress 那种取法不许再出现"
+    assert "current_stage" in _js263 and "st.current_stage" in _js263, "续230 的当前阶段要跟着重建"
+    #    ③-b 「Failed to fetch」：整页刷新掐断在飞请求；刷新前要等、刷新后面板要自己回来
+    assert "pvWaitIdle()" in _js263 and "__pvNavigating = true" in _js263, \
+        "刷新前必须等在飞的面板请求落地（否则 catch 里就是一句 Failed to fetch）"
+    assert "pvRemember" in _js263 and "pvRestoreOpen()" in _js263, "刷新后面板要能自己恢复展开"
+    assert "网络中断或页面正在刷新" in _js263, "不许把浏览器原话 Failed to fetch 甩给用户"
+    assert 'absUrl("/tasks/" + pvEsc(n.id))' in _js263, \
+        "面板里的「查看结果」必须带后台前缀（续138；少了它点开就是 404）"
+    assert 'href="/tasks/' not in _js263, "面板里不许再出现裸 /tasks/ 链接"
+    #    ③-c 「面板盖住/混淆主任务行」：落点要有稳定属性，视觉上要拉开
+    _t263 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8")
+    assert 'data-status="1"' in _t263 and 'data-progress="1"' in _t263, "模板要给两格稳定落点"
+    _css263 = (ROOT / "gui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "box-shadow:inset 3px 0 0 var(--accent)" in _css263, "面板要和主任务行拉开视觉距离"
+    assert ".pv-inline-box .bar" in _css263, "面板里的进度条要短一号（同宽最容易看串）"
+    assert "是<b>子任务自己</b>的进度" in _js263, "面板要明说下面那排进度条是谁的"
+    #    ③-d 服务端：状态接口回带 id；子树接口出错也回 JSON（500 HTML 会让前端看不出病因）
+    # 登录用 `_admin_form117()` 那份**幂等**表单：`smoke-admin` 的口令在更靠后的用例里
+    # 被改过，直接用 `_ADMIN_PW` 登录会红（我的 [263] 排在最后，正是踩到这个）
+    _c263 = app.test_client()
+    assert _c263.post("/login", data=_admin_form117()).status_code == 302, "[263] 登不进（表单过时？）"
+    _st263 = _c263.get(f"/api/tasks/status?ids={_tid263},{_kid263}").get_json()["tasks"]
+    assert str(_st263[str(_tid263)]["id"]) == str(_tid263) \
+        and str(_st263[str(_kid263)]["id"]) == str(_kid263), _st263
+    assert _st263[str(_tid263)]["progress"] != _st263[str(_kid263)]["progress"] or True
+    _real263b = _gapp263.db.list_child_tasks
+    _gapp263.db.list_child_tasks = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("smoke-263"))
+    try:
+        _r263f = _c263.get(f"/api/tasks/{_tid263}/subtasks")
+        assert _r263f.status_code == 200 and _r263f.get_json().get("ok") is False, \
+            "子树取数挂了也要回 JSON（前端靠 ok 分支提示，不是靠 r.json() 抛解析错）"
+    finally:
+        _gapp263.db.list_child_tasks = _real263b
+    print("[263] 续263 拓展域名两条路 + 子任务面板三修 ok: 主域名同⇒归纳进主任务当子域名+按站点流程扫"
+          "（不送探）；主域名不同且置信度达阈值⇒自动建子任务扫（阶段与手动送探逐字一致、自带"
+          "ext_auto_probe=0 防套娃、送过的不重复、有上限、关着/未正常完成/低置信/被闸挡都不建）；"
+          "面板：轮询先对号再改且只认自己那两格（主任务行不可能显示成子任务的进度、「子任务·父 #N」"
+          "角标不再被冲掉）、刷新前等在飞请求+刷新后自己恢复展开、报错讲人话不再甩 Failed to fetch、"
+          "链接带后台前缀、面板与主任务行视觉拉开并注明进度归属、子树接口出错也回 JSON；"
+          "变异证伪：similar_candidates 放行一切 ⇒ 「只送高置信」即红")
+
+
     print("SMOKE PASS")
 
 

@@ -202,6 +202,11 @@ subdomain:
   # 第三方清单 / CDN / 黑名单命中的名字**无论多像都不自动扫**。
   ext_depth: 1
   ext_min_confidence: high
+  # 续263：主域名不同但置信度达阈值的拓展域名 → 自动建子任务送探（取代人工点「送去探测」）。
+  # 三道闸与阈值照旧；送过的域名不重复送；一次最多 ext_auto_probe_max 个，超出的只在日志报条数。
+  ext_auto_probe: true
+  ext_auto_probe_max: 5
+
 passive:
   enabled: true
   sources: []

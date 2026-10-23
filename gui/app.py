@@ -2518,7 +2518,10 @@ def create_app():
         for tid, r in rows.items():
             if scope is not None and int(r["owner_id"] or 0) != int(scope):
                 continue
-            tasks[str(tid)] = {"status": r["status"], "progress": r["progress"],
+            # 续263：每条**回带自己的 id** —— 前端据此"对号入座"
+            # （`String(st.id) === tr.dataset.id` 才改这一行），对不上就一个字都不动。
+            # 少了这一列，"主任务那一行显示成子任务的进度"只能靠调用方自觉，出一次错查半年。
+            tasks[str(tid)] = {"id": int(tid), "status": r["status"], "progress": r["progress"],
                                "current_stage": r["current_stage"]}
         return jsonify({"ok": True, "tasks": tasks})
 
@@ -4363,7 +4366,13 @@ def create_app():
                 })
                 walk(cid, p, depth + 1)
 
-        walk(rid, [], 1)
+        # 续263：递归取数挂了也要回 JSON —— 500 的 HTML 落到前端 `r.json()` 会变成
+        # 一句谁也看不懂的解析错误，与"网络断了"長得一模一样（主理人报的「加载失败」）。
+        try:
+            walk(rid, [], 1)
+        except Exception as _e263:      # noqa: BLE001 - 面板取数失败不该变成一张 500 HTML
+            logger.warning(f"[gui] 子任务面板取数失败（#{tid}）：{_e263}")
+            return jsonify({"ok": False, "error": f"取子任务失败：{_e263}"})
         return jsonify({"ok": True, "root": {"id": rid, "name": root["name"]},
                         "total": total, "nodes": nodes})
 
@@ -4982,7 +4991,15 @@ def create_app():
                                       or (settings.get("subdomain") or {}).get("ext_depth", 1)),
                                   "ext_min_confidence": extdom.conf_norm(
                                       f.get("subdomain_ext_min_confidence")
-                                      or (settings.get("subdomain") or {}).get("ext_min_confidence"))},
+                                      or (settings.get("subdomain") or {}).get("ext_min_confidence")),
+                                  # 续263：高置信拓展域名自动送探（这两键漏带＝保存一次就被重置，
+                                  # `[8at]②` 的"逐段点名一个键都不许少"会立刻红）。夹值走
+                                  # `runner.ext_auto_probe_max` 那一个产地，不在这里重抄 1..50。
+                                  "ext_auto_probe": f.get("subdomain_ext_auto_probe") == "1",
+                                  "ext_auto_probe_max": runner.ext_auto_probe_max(
+                                      {"subdomain": {"ext_auto_probe_max":
+                                          f.get("subdomain_ext_auto_probe_max")
+                                          or (settings.get("subdomain") or {}).get("ext_auto_probe_max")}})},
                     "evasion": {"random_ua": f.get("random_ua") == "1",
                                 "spoof_xff": f.get("spoof_xff") == "1",
                                 "waf_bypass": f.get("waf_bypass") == "1",

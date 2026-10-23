@@ -946,6 +946,24 @@ ctf-scanner/
 - **子任务面板行内要带进度条（续241）**：`pvSubtreeHtml` 的进度格是
   `bar + 百分比`（不是光秃秃一个数字）；编号列保持 `树内编号（#任务号）` 双编号；
   根 = 请求的那个任务。父子进度独立——父跑完就是跑完，子任务不许影响父的进度。
+- **拓展域名两条路互斥（续263，主理人 2026-10-23 当面定的口径）**：**主域名一样 ⇒ 归纳**
+  （`extdom.promote_owned`：进主任务当子域名 + 按站点流程扫，自续255 起固定跑）；
+  **主域名不一样 ⇒ 不归纳**（不写 `ext:probed`、不进主任务资产 —— 那就是"归纳"），
+  置信度达到 `subdomain.ext_min_confidence` 才由 `runner._maybe_auto_probe_similar`
+  **自动建子任务**去扫，取代人工点「送去探测」：阶段与手动送探逐字一致
+  （`subdomain→probe→dirscan→vulnscan`）、自带 `ext_auto_probe=0` **防套娃**（否则每层都
+  自动再送探会顺着置信度长出无限层任务）、送过的域名不重复、`ext_auto_probe_max`（出厂 5）
+  上限、总开关 `subdomain.ext_auto_probe`（出厂开）。**判据全仓只有 `extdom.similar_candidates`
+  一份**（三道闸 + 阈值），别处不许另写一份"放宽版" —— 放宽就等于把别人的域名当自家资产扫。
+- **任务列表轮询必须"先对号再改"（续263）**：`/api/tasks/status` 每条回带 `id`，前端
+  `String(st.id) === tr.dataset.id` 才改这一行；状态徽章只认 `td[data-status] .badge`、
+  进度只认 `td[data-progress]`。旧写法取"行内第一颗徽章 / 第一格 .progress"，
+  于是子任务行那颗「子任务 · 父 #N」（在任务名列）2.5 秒内就被状态文字整个覆盖掉，
+  看着就是"子任务标记/进度被吃了"。另两条同源规矩：整页刷新前必须 `pvWaitIdle()`
+  等在飞的面板请求（否则 catch 里就是浏览器原话 `Failed to fetch`）；展开状态靠
+  `pvRemember/pvRestoreOpen` 跨刷新恢复 —— ⚠ `initTaskTable()` 是 tasks.html 里的**内联
+  脚本**（解析期就跑，早于 `initTaskPreview` 的 click 委托），恢复动作必须延到
+  DOMContentLoaded，否则"点了没反应"。
 - **端口占用处置（续233，主理人规则）**：GUI 起动时首选端口被占 ⇒ 走
   `scanner/portguard.kill_occupiers()` **直接结束占用者、占回首选端口**（SIGTERM 等 1.5s →
   SIGKILL；`/proc` 解析占用者，无子进程）。**绝不杀**自己 / PID 1 / cmdline 读不到的进程；

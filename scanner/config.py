@@ -303,6 +303,14 @@ DEFAULTS = {
         # 第三方 / CDN / 黑名单命中**无论多像都不自动扫**（`extdom.auto_expand_block()`）。
         "ext_depth": 1,
         "ext_min_confidence": "high",
+        # 续263：主域名**不同**但置信度达阈值的拓展域名 → **自动建子任务送探**
+        # （取代人工在拓展域名页勾了点「送去探测」）。出厂开。三道闸（黑名单 / 第三方清单 /
+        # CDN）与阈值照旧由 `extdom.similar_candidates` 把着，送过的域名不重复送，
+        # 一次最多 `ext_auto_probe_max` 个；自动建出来的子任务自带 `ext_auto_probe=0`
+        # （防顺着置信度一路套娃）。
+        "ext_auto_probe": True,
+        "ext_auto_probe_max": 5,
+
     },
     "passive": {
         # 多来源被动子域名收集（免 API key 的公开接口，见 scanner/passive.py）
