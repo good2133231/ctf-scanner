@@ -17,10 +17,10 @@
          而不是在 JS 里再抄一份阶段清单（抄第二份就会与 `runner.STAGE_ORDER` 漂移）。 #}
       <span class="muted small">批量勾选：
         <button type="button" class="ghost" data-ck-mode="all" data-ck-scope="stages,deep,expand"
-          title="把全部阶段 + 两项深度 + 一项拓展都勾上＝最重的档位（全目录深扫、目录递归、自动拓展；**全端口不在这里** —— 任务详情「端口」页签里有按钮），会慢很多。「离线模式」刻意不在这颗按钮里：勾上它反而**禁用**外部工具，与『把东西跑全』正好相反。">全部勾上（最重档位）</button>
-        <button type="button" class="ghost" data-ck-mode="none" data-ck-scope="stages,deep,expand,mode"
+          title="把全部阶段 + 两项深度 + 一项拓展都勾上＝最重的档位（全目录深扫、目录递归、自动拓展；**全端口不在这里** —— 任务详情「端口」页签里有按钮），会慢很多。">全部勾上（最重档位）</button>
+        <button type="button" class="ghost" data-ck-mode="none" data-ck-scope="stages,deep,expand"
           title="只清勾选，不碰已填的目标与登录态">全部清掉</button>
-        <button type="button" class="ghost" data-ck-mode="default" data-ck-scope="stages,deep,expand,mode"
+        <button type="button" class="ghost" data-ck-mode="default" data-ck-scope="stages,deep,expand"
           title="回到页面刚打开时的状态（策略级默认关的阶段仍不勾）">恢复默认</button></span>
       <span data-ck-group="stages">
       {% for s in stages %}
@@ -30,9 +30,11 @@
         {{ '' if off_by_default else 'checked' }}> {{ s }}</label>
       {% endfor %}
       </span>
-      {# 离线模式单独一组（`mode`）：它不属于"跑全"的语义，所以「全部勾上」不碰它 #}
-      <span data-ck-group="mode"><label class="chk"><input type="checkbox" name="offline" value="1">
-        离线模式（不使用外部工具）</label></span>
+      {# 续265（主理人 2026-10-23：「离线模式这个显示可以去了，没有场景用得到」）：
+         网页不再暴露这颗复选框。`offline` 这个**能力**仍在（CLI `--offline` 与
+         `/api/tasks` 的 `offline` 字段照旧生效，各阶段靠它跳过外部工具）——
+         去掉的只是"建任务时要从一页选项里挑它"这个入口。后端不删字段：删了旧调用方
+         与脚本就会静默丢掉这个语义。 #}
     </div>
     <div class="row" data-ck-group="deep">
       <span class="muted" title="勾选后本任务无视全局策略，强制走全量档；忘记勾对应阶段时会自动补上">

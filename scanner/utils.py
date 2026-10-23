@@ -465,7 +465,10 @@ def is_domain(text):
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 
 
-def html_title(text, limit=200):
+# 续265：下面三个标题函数的默认上限 200 → **1000**（主理人点单「网站要有展示全标题的功能」）。
+# 仍是有界的：不设限等于把整个 <title>（有人往里塞整页文案）原样搬进表格里那一列。
+# 老行是照 200 存的，重跑 probe 之后才会变长 —— 这一点写进了 CHANGELOG，不是静默改口径。
+def html_title(text, limit=1000):
     """从一段 HTML 里取 `<title>`；取不到返回**空串**（空串＝这份 HTML 真没有标题，不编一个）。
 
     顺手剥掉内嵌标签（`<title><span>x</span></title>` 这类脏写法）与首尾空白，截到 `limit` 字符。
@@ -492,7 +495,7 @@ _META_TITLE_REV_RE = re.compile(
     re.I | re.S)
 
 
-def meta_title(text, limit=200):
+def meta_title(text, limit=1000):
     """取 `<meta>` 里声明的标题；取不到返回空串（与 `html_title` 同一套"取不到就留空"口径）。
 
     两种属性顺序都要认（`content` 在前在后都合法），实测两种写法在真实页面里都有。
@@ -507,7 +510,7 @@ def meta_title(text, limit=200):
     return ""
 
 
-def page_title(text, limit=200):
+def page_title(text, limit=1000):
     """页面的"标题"：`html_title` 优先，取不到再退 `meta_title`（续197）。
 
     只用在**已经在展示这一跳**的地方（3xx 落地页取证）；`html_title` 仍是别处的唯一口径

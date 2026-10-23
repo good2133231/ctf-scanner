@@ -683,6 +683,91 @@ def _fold_dirs(rows, show_all):
     return rows, hidden
 
 
+def _fold_certs(rows, show_all=False):
+    """证书按**同一张证书**折叠（续265，主理人点单「网站证书自动去重」）。
+
+    与 `_fold_dirs` 同一套做法：整表取 → 展示层折叠 → 关键字过滤 → 切片，
+    被收起的条数报在页面上，`?all=1` 原样放开。**库里的行一条不删**（§0 第 10 条：
+    展示层过滤 ≠ 删数据）。
+
+    键怎么取（这里只有一份判据）：
+    - `sha256` 非空 ⇒ 用它（TLS 握手那条路一定有指纹）；
+    - 空 ⇒ 退到 `序列号|颁发者|生效时间`（CT 日志那批没有指纹列）。
+      **不许**拿"空 sha256"当键 —— 实测 #66 有 33 条 CT 行全是空指纹，
+      那么折会把 33 张历史证书折成一张，看着像"只有一张证书"。
+    """
+    def _key(r):
+        fp = str(r.get("sha256") or "").strip()
+        if fp:
+            return "fp:" + fp
+        return "ct:" + "|".join([str(r.get("serial") or "").strip(),
+                                 str(r.get("issuer") or "").strip(),
+                                 str(r.get("not_before") or "").strip()])
+
+    out, heads, hidden = [], {}, 0
+    for r in rows:
+        r = dict(r)
+        r["_dup_group"] = []
+        r["_dup_hosts"] = [r["host"]] if r.get("host") else []
+        k = _key(r)
+        if k in heads:
+            h = heads[k]
+            h["_dup_group"].append(r)
+            for _h in r["_dup_hosts"]:
+                if _h not in h["_dup_hosts"]:
+                    h["_dup_hosts"].append(_h)
+            r["_dup_member"] = True
+            r["_dup_head"] = h["id"]
+            hidden += 1
+        else:
+            heads[k] = r
+        out.append(r)
+    if show_all:
+        for r in out:
+            r.pop("_dup_member", None)
+            r.pop("_dup_head", None)
+    return out, hidden
+
+def _fold_csegs(rows, show_all=False):
+    """C 段按 `segment` 折叠（续265，主理人点单「c段去重」）。
+
+    同一个 /24 从多个 IP / 多轮各写一行时，页面只留一行，IP 与反查域名**合并去重**，
+    `count` 取最大（它是"这一段反查到多少个域名"，取大不取小：取小等于把事实说轻了）。
+    `segment` 为空的行不参与折叠（没有可比的键，硬折会把不同段混成一行）。
+    """
+    out, heads, hidden = [], {}, 0
+    for r in rows:
+        r = dict(r)
+        r["_dup_group"] = []
+        r["_dup_ips"] = [x.strip() for x in str(r.get("ip") or "").split(",") if x.strip()]
+        r["_dup_domains"] = [x.strip() for x in str(r.get("domains") or "").split(",")
+                             if x.strip()]
+        r["_dup_count"] = int(r.get("count") or 0)
+        k = str(r.get("segment") or "").strip()
+        if k and k in heads:
+            h = heads[k]
+            h["_dup_group"].append(r)
+            for _ip in r["_dup_ips"]:
+                if _ip not in h["_dup_ips"]:
+                    h["_dup_ips"].append(_ip)
+            for _d in r["_dup_domains"]:
+                if _d not in h["_dup_domains"]:
+                    h["_dup_domains"].append(_d)
+            h["_dup_count"] = max(h["_dup_count"], r["_dup_count"])
+            if not h.get("note") and r.get("note"):
+                h["note"] = r["note"]
+            r["_dup_member"] = True
+            r["_dup_head"] = h["id"]
+            hidden += 1
+        elif k:
+            heads[k] = r
+        out.append(r)
+    if show_all:
+        for r in out:
+            r.pop("_dup_member", None)
+            r.pop("_dup_head", None)
+    return out, hidden
+
 def _ip_drill(ip, ext=False):
     """IP → 域名下钻链接（续256-T10，主理人点单「IP→域名下钻链接」）。
 
@@ -2187,14 +2272,52 @@ def create_app():
         cert_sites = [dict(r) for r in db._query(
             "SELECT url, host, port FROM sites WHERE task_id=?", (task_id,))]
         cert_pick = len(cert_pick_targets(cert_sites, certs_mod.tls_ports(settings)))
-        certs_rows, certs_pager, certs_q = _tab_page("certs", "cr", "#certs")
+        # 续265：证书按同一张证书折叠（主理人点单「网站证书自动去重」）。整表取是必要的：
+        # 折叠是**跨行**语义，下推到 SQL 就等于把"同一张证书"的判据写进 SQL 与 Python 两处。
+        _cr_all = request.args.get("all") == "1"
+        _cr_page, _cr_size, certs_q = _tab_args("cr")
+        certs_all, _cr_hidden = _fold_certs([dict(r) for r in db.list_certs(task_id)],
+                                            show_all=_cr_all)
+        if certs_q:      # 关键字按**表格实际显示的列**做整行匹配（与 _ASSET_PAGES["certs"] 同口径）
+            _cr_cols = ("source", "url", "host", "cn", "subject", "issuer", "san",
+                        "serial", "sig_algo", "sha256")
+            _cr_needle = certs_q.lower()
+            certs_all = [r for r in certs_all
+                         if any(_cr_needle in str(r.get(c) or "").lower() for c in _cr_cols)]
+        _cr_total = len(certs_all)
+        _cr_pages = max(1, (_cr_total + _cr_size - 1) // _cr_size)
+        if _cr_page > _cr_pages:      # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
+            _cr_page = _cr_pages
+        certs_rows = certs_all[(_cr_page - 1) * _cr_size:_cr_page * _cr_size]
+        certs_pager = _mk_pager("cr", "#certs", _cr_page, _cr_size, _cr_total, certs_q,
+                                "&all=1" if _cr_all else "")
+        # 徽标（`cert_total`）恒为**全部行数**：与目录 / 站点页签同一口径（§0 第 10 条 ——
+        # 被收起的也是事实，不从徽标里消失）；"收起了几条"只在那颗逃生钮上报。
+        certs_folded = 0 if _cr_all else _cr_hidden
         cert_enabled = ((settings.get("cert") or {}).get("enabled") is True
                         or top.get("cert_on") is True)
 
         # 端口 / C 段两个页签。端口的 `order="host, port"` 也是**显式**的：跨任务 `/ports` 页的表
         # 默认排序是 `task_id DESC, port`，而本页沿用 `db.list_ports()` 的 `ORDER BY host, port`。
         ports, ports_pager, ports_q = _tab_page("ports", "pt", "#ports", order="host, port")
-        csegs, csegs_pager, csegs_q = _tab_page("csegs", "cs", "#csegs")
+        # 续265：C 段按 segment 折叠（主理人点单「c段去重」），同上：整表取 + 展示层折叠。
+        _cs_all = request.args.get("all") == "1"
+        _cs_page, _cs_size, csegs_q = _tab_args("cs")
+        csegs_all, _cs_hidden = _fold_csegs([dict(r) for r in db.list_csegs(task_id)],
+                                            show_all=_cs_all)
+        if csegs_q:
+            _cs_cols = ("segment", "ip", "domains", "note")
+            _cs_needle = csegs_q.lower()
+            csegs_all = [r for r in csegs_all
+                         if any(_cs_needle in str(r.get(c) or "").lower() for c in _cs_cols)]
+        _cs_total = len(csegs_all)
+        _cs_pages = max(1, (_cs_total + _cs_size - 1) // _cs_size)
+        if _cs_page > _cs_pages:
+            _cs_page = _cs_pages
+        csegs = csegs_all[(_cs_page - 1) * _cs_size:_cs_page * _cs_size]
+        csegs_pager = _mk_pager("cs", "#csegs", _cs_page, _cs_size, _cs_total, csegs_q,
+                                "&all=1" if _cs_all else "")
+        csegs_folded = 0 if _cs_all else _cs_hidden
         # 续29「断点续扫」：断点 = `current_stage`（最后进入的阶段，见 runner.resume_stages）。
         # 没有断点（正常跑完 / 从没跑起来）时返回 `[]`，页面据此把「续跑」按钮置灰并给出解释，
         # 而不是让用户点了才收到一句报错。
@@ -2254,7 +2377,7 @@ def create_app():
             parent_task=_parent_task,
             tech_stats=_tech_stats,
             tech_stats_text=fingerprint.tech_stats_text(_tech_stats),
-            ports=ports, csegs=csegs, certs=certs_rows,
+            ports=ports, csegs=csegs, certs=certs_rows, csegs_folded=csegs_folded,
             cert_enabled=cert_enabled, cert_pick=cert_pick,
             cert_tls_ports=sorted(certs_mod.tls_ports(settings)),
             dirs=dirs, dirs_hidden=dirs_hidden,
@@ -2270,6 +2393,7 @@ def create_app():
             ports_pager=ports_pager, ports_q=ports_q,
             csegs_pager=csegs_pager, csegs_q=csegs_q,
             certs_pager=certs_pager, certs_q=certs_q, cert_total=certs_pager["total"],
+            certs_folded=certs_folded,
             dirs_pager=dirs_pager, dirs_q=dirs_q, dir_total=dir_total,
             urls=urls, urls_pager=urls_pager, urls_q=urls_q, url_total=url_total,
 

@@ -11149,8 +11149,21 @@ http:
         return [_row7s(int(offset) + _i) for _i in range(_n)], 1000
 
     _real_pa7s, _real_pv7s, _real_ld7s = db.page_assets, db.page_vulns, db.list_dirs
+    _real_lc7s, _real_lcs7s = db.list_certs, db.list_csegs
     db.page_assets = _fake_pa7s
     db.page_vulns = lambda **_kw: ([], 5000)
+    # 续265：证书 / C 段两个页签改成"整表取 + 展示层折叠"（与目录页签同款 —— 折叠是整表语义，
+    # 下推 SQL 就等于把判据写两处）⇒ 桩也得改走 `list_*`。⚠ 键必须**互不相同**：徽标数的是
+    # **全部行**（含被折叠的那些），键相同会被折成一行，下面"徽标＝总数"那条就红 ——
+    # 那不是功能坏，是桩造得不像（`_row7s` 的 segment/sha256 是同一个值，直接拿来会全折成一行）。
+    db.list_certs = lambda _t: [
+        dict(_row7s(_i), host=f"h{_i}.test", sha256=f"FP:{_i}", serial=f"S{_i}",
+             cn="row.test", source="tls")
+        for _i in range(1000)]
+    db.list_csegs = lambda _t: [
+        dict(_row7s(_i), segment=f"10.{_i // 256 % 251}.{_i % 256}.0/24",
+             ip=f"10.{_i // 256 % 251}.{_i % 256}.7", domains="", count=1, note="")
+        for _i in range(1000)]
     # 目录页签走 Python 折叠 + 切片（折叠是整表语义，不能下推 SQL）→ 用"互不重复"的假行
     db.list_dirs = lambda _t: [
         dict(_row7s(_i), site_url=f"http://d{_i}.test/", path=f"/p{_i}", length=_i)
@@ -11164,6 +11177,7 @@ http:
                             query_string={"esrc": "js"}).get_data(as_text=True)
     finally:
         db.page_assets, db.page_vulns, db.list_dirs = _real_pa7s, _real_pv7s, _real_ld7s
+        db.list_certs, db.list_csegs = _real_lc7s, _real_lcs7s
 
     # 页签徽标必须是**总数**（不是当前页行数）
     for _lbl7s, _n7s in (("站点", 1000), ("子域名", 1000), ("拓展域名", 1000),
@@ -15598,12 +15612,18 @@ http:
         for _g118 in _sc118.split(","):
             assert _g118 in _groups118, f"{_m118} 按钮指向分组 {_g118}，但页面上没有它"
 
-    # ② 「全部勾上」的 scope 里**不许**有 mode（离线模式），而「全部清掉 / 恢复默认」要有
+    # ② 「全部勾上」的 scope 里**不许**有 mode（离线模式）—— 勾离线等于禁用外部工具，
+    #    与「把东西跑全」正好相反。
+    #    续265：建任务表单不再有「离线模式」那一组（主理人：没有场景用得到）⇒ 原来那条
+    #    "none/default 必须点名 mode" 改成**"必须覆盖页面上每一个分组"**：更强，而且不再
+    #    随分组增减而漂（点名写死的话，每加/减一个分组都要回来改一遍断言）。
     _scope_all118 = dict(_btns118)["all"]
     assert "mode" not in _scope_all118.split(","), \
         "「全部勾上」把离线模式也带上了 —— 勾离线等于禁用外部工具，与「把东西跑全」正好相反"
     for _m118 in ("none", "default"):
-        assert "mode" in dict(_btns118)[_m118].split(","), f"{_m118} 按钮该管离线模式那一组"
+        _sc118 = set(dict(_btns118)[_m118].split(","))
+        assert _groups118 <= _sc118, \
+            f"{_m118} 按钮漏了分组 {sorted(_groups118 - _sc118)}（漏一个＝那颗按钮点了没反应）"
 
     # ③ 阶段分组：数量与默认口径都按后端渲染出的 HTML 判（不许 JS 兜底）
     _st118 = _re118.findall(r'name="stages" value="(\w+)"\s+data-ck-default="(\d)"', _th118)
@@ -15614,9 +15634,10 @@ http:
     assert _off118 == sorted(["cert", "screenshot"]), f"默认不勾的应当只有策略级默认关那两个：{_off118}"
     assert sum(1 for s, d in _st118 if d == "1") == len(_SO118) - 2
     # 续250：deep 分组少一项 —— 「全端口扫描」勾选从建任务表单摘掉（挪到任务详情端口页签）
-    for _g118, _n118 in (("deep", 2), ("expand", 1), ("mode", 1)):
-        _seg = _th118.split(f'data-ck-group="{_g118}"', 1)[1]
-        _seg = _seg.split("</div>", 1)[0] if _g118 != "mode" else _seg.split("</span>", 1)[0]
+    # 续265：「离线模式」那一组整颗从建任务表单去掉（主理人：没有场景用得到）⇒ 只剩两个分组，
+    # 也不再需要为 mode 单独走 `</span>` 那条分支（分组都是 `</div>` 收尾的）。
+    for _g118, _n118 in (("deep", 2), ("expand", 1)):
+        _seg = _th118.split(f'data-ck-group="{_g118}"', 1)[1].split("</div>", 1)[0]
         assert _seg.count('type="checkbox"') == _n118, \
             f"分组 {_g118} 里 checkbox 数应为 {_n118}（续250：deep=2，全端口勾选已摘）；实测 {_seg.count(chr(116) + chr(121) + chr(112) + chr(101) + chr(61))} 个"
 
@@ -20201,7 +20222,8 @@ expression: r0()
     assert _ht8ar("<title>  带空白  </title>") == "带空白"
     assert _ht8ar("<title><span>A</span>B</title>") == "AB", "脏写法（标题里嵌标签）要剥掉而不是留尖括号"
     assert _ht8ar("<title>&lt;占位&gt;</title>") == "&lt;占位&gt;", "实体原样保留（不是本函数的职责，别顺手改语义）"
-    assert _ht8ar("<title>" + "x" * 500 + "</title>") == "x" * 200, "截到 200 字符（库里那一列与页面都按这个口径）"
+    # 续265：默认上限 200 → 1000（主理人要"展示全标题"）。判据本身不变：仍是"截到默认上限"。
+    assert _ht8ar("<title>" + "x" * 1200 + "</title>") == "x" * 1000, "截到默认上限（1000，续265 起的口径）"
     assert _ht8ar("<title>\n  跨行\n  标题\n</title>") != "", "re.S：Next.js/Vue 的 head 经常跨行"
     assert _ht8ar("<titleitem>假标题</titleitem>") == "", \
         "开标签允许 `<title ` 带属性的写法，但必须**成对**出现 `</title>` 才算标题"
@@ -31214,6 +31236,78 @@ expression: r0()
           "抽样兜底）；任务详情「拓展域名」页签补上与跨任务页同一份\"已归纳就隐藏\"口径（徽标 2→1、"
           "?all=1 逃生钮仍在、来源计数同口径、归纳行在子域名页签可见；变异证伪：摘掉重叠条件徽标即回 2）"
           f"；{_pd_note264}")
+
+
+    # ---------------- [265] 续265：主理人四连点单 ----------------
+    # ① 「离线模式（不使用外部工具）这个显示可以去了」②「网站要有展示全标题的功能」
+    # ③ 「网站证书自动去重」④ 「c段去重」
+    import json as _json265
+    import re as _re265
+    from scanner import utils as _u265
+
+    _c265 = app.test_client()
+    assert _c265.post("/login", data=_admin_form117()).status_code == 302
+
+    # ① 建任务页不再展示「离线模式」；但**能力不删**（CLI --offline 与 API 字段照旧生效）
+    _new265 = _c265.get("/tasks/new").get_data(as_text=True)
+    assert "离线模式" not in _new265 and 'name="offline"' not in _new265, \
+        "建任务页还在展示「离线模式」（主理人 2026-10-23：这个显示可以去了）"
+    _tid265 = db.create_task("smoke-265", "x265.test\n", ["subdomain"], {"offline": True})
+    assert _json265.loads(db.get_task(_tid265)["options"] or "{}").get("offline") is True, \
+        "去掉的只是**显示**：API/CLI 的 offline 字段必须照旧生效（删了旧调用方会静默丢掉这个语义）"
+
+    # ② 标题上限 200 → 1000；页面长标题完整进 DOM，且只有长标题才给「全标题」按钮
+    assert _u265.html_title("<title>" + "x" * 1200 + "</title>") == "x" * 1000, "上限应是 1000"
+    assert _u265.page_title("<title>" + "y" * 900 + "</title>") == "y" * 900, "900 条不许被截"
+    _long265 = "超长标题-" + "甲乙丙丁戊己庚辛壬癸" * 8
+    db._exec("INSERT INTO sites(task_id,url,host,port,status,title,source) VALUES(?,?,?,?,?,?,?)",
+             (_tid265, "https://www.x265.test", "www.x265.test", 443, 200, _long265, "probe"))
+    db._exec("INSERT INTO sites(task_id,url,host,port,status,title,source) VALUES(?,?,?,?,?,?,?)",
+             (_tid265, "https://a.x265.test", "a.x265.test", 443, 200, "短标题", "probe"))
+    _h265 = _c265.get(f"/tasks/{_tid265}").get_data(as_text=True)
+    assert _long265 in _h265, "长标题必须完整进 DOM（截了就等于「展示全标题」是句空话）"
+    assert _h265.count(">全标题<") == 1, "只有长标题那一行该给「全标题」按钮（短标题给了就是噪声）"
+    assert "全部展开标题" in _h265 and "t-clamp" in _h265, "标题列要默认两行折叠 + 一键全放开"
+    _css265 = (ROOT / "gui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "-webkit-line-clamp:2" in _css265 and ".t-clamp.t-open" in _css265, "折叠与放开的 CSS 要在"
+
+    # ③ 证书按**同一张证书**折叠：5 个主机同一张 + 2 张 CT 历史证书（空指纹、序列号不同）
+    for _h in ("www.x265.test", "a.x265.test", "b.x265.test", "c.x265.test", "d.x265.test"):
+        db._exec("INSERT INTO certs(task_id,url,host,port,cn,issuer,not_before,not_after,serial,"
+                 "sha256,source) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                 (_tid265, "https://" + _h, _h, 443, "x265.test", "CN=TEST-CA",
+                  "2026-01-01", "2027-01-01", "SER-1", "AB:CD:EF", "tls"))
+    for _i, _ser in enumerate(("CT-1", "CT-2")):
+        db._exec("INSERT INTO certs(task_id,host,port,cn,issuer,not_before,not_after,serial,"
+                 "sha256,source) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                 (_tid265, "x265.test", 443, "x265.test", "CN=LE", "2026-02-0%d" % (_i + 1),
+                  "2026-05-01", _ser, "", "ct"))
+    _h265 = _c265.get(f"/tasks/{_tid265}").get_data(as_text=True)
+    assert len(_re265.findall(r'data-dup-of="\d+" hidden', _h265)) == 4, \
+        "同一张证书覆盖 5 个主机 ⇒ 收起 4 条（少收就是没去重）"
+    assert _re265.search(r"全部显示（收起 4 条）", _h265), "收起的条数必须报在页面上（§0 第 10 条）"
+    assert _h265.count("AB:CD:EF") == 5, "5 条同指纹的行都还在库里（展示层折叠 ≠ 删数据）"
+    # 关键判据：**空指纹不许当键** —— CT 那两行序列号不同，折了就会把 2 张历史证书并成 1 张
+    assert _h265.count("CT-1") == 1 and _h265.count("CT-2") == 1, "CT 行必须各自成行（空 sha256 不是键）"
+    _ha265 = _c265.get(f"/tasks/{_tid265}?all=1").get_data(as_text=True)
+    assert len(_re265.findall(r'data-dup-of="\d+" hidden', _ha265)) == 0, "?all=1 必须全放开"
+    assert "全部显示（收起" not in _ha265, "全放开时那颗逃生钮该消失"
+    # ④ C 段按 segment 折叠：同一个 /24 从两个 IP 各写一行 ⇒ 收起 1 条，IP 合并显示
+    for _ip in ("1.2.3.4", "1.2.3.9"):
+        db._exec("INSERT INTO csegs(task_id,segment,ip,domains,count,note) VALUES(?,?,?,?,?,?)",
+                 (_tid265, "1.2.3.0/24", _ip, "a.test, b.test", 2, ""))
+    db._exec("INSERT INTO csegs(task_id,segment,ip,domains,count,note) VALUES(?,?,?,?,?,?)",
+             (_tid265, "5.6.7.0/24", "5.6.7.8", "", 166, "共享主机"))
+    _h265 = _c265.get(f"/tasks/{_tid265}").get_data(as_text=True)
+    _n_dup265 = len(_re265.findall(r'data-dup-of="\d+" hidden', _h265))
+    assert _n_dup265 == 5, f"4 条证书 + 1 条 C 段都该被收起，实到 {_n_dup265}"
+    assert _re265.search(r"全部显示（收起 1 条）", _h265), "C 段收起条数要单独报出来"
+    assert "1.2.3.4" in _h265 and "1.2.3.9" in _h265, "同一段的两个 IP 要合并显示在一行里"
+    print("[265] 续265 ok: ①建任务页不再展示「离线模式」（后端 offline 字段与 CLI --offline 照旧，"
+          "断言双向：页面没有 + API 仍认）②标题上限 200→1000，长标题完整进 DOM、默认两行折叠、"
+          "单行「全标题」+ 一键「全部展开标题」③证书按同一张证书折叠（sha256 为键、空指纹退到"
+          "序列号|颁发者|生效时间 ⇒ CT 那两行各自成行），收起条数报在页面上、?all=1 全放开、"
+          "库里行一条不删 ④C 段按 segment 折叠（IP 与域名合并去重、count 取大）")
 
 
     print("SMOKE PASS")

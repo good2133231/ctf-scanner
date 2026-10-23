@@ -329,6 +329,13 @@ details pre { margin:8px 0; }
 .theme-switch select { background:var(--panel); color:var(--text); border:1px solid var(--border);
                        border-radius:6px; padding:3px 6px; font-size:12px; }
 /* ---------- 站点表：行距加大（用户要求"站点间距远一点"） ---------- */
+/* 续265：站点标题默认两行折叠（表格才排得下），「全标题」放开（主理人点单）。
+   同轮把抓取上限从 200 放到 1000 —— 只有存得下，才展开得出来。 */
+.title-cell { max-width:46ch; }
+.title-cell .t-clamp { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+                       overflow:hidden; }
+.title-cell .t-clamp.t-open { display:block; -webkit-line-clamp:unset; overflow:visible; }
+.title-cell .t-open-btn { margin-left:4px; }
 #tbl-all-sites td, #tbl-all-sites th, #tbl-detail-sites td, #tbl-detail-sites th,
 #tbl-plain-sites td { padding:13px 10px; }
 #tbl-all-sites tr, #tbl-detail-sites tr, #tbl-plain-sites tr { border-bottom:1px solid var(--line); }

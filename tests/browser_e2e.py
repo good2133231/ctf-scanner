@@ -833,15 +833,18 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     _tot10 = page.ev(f"document.querySelectorAll('{_cb10}').length")
     page.ev("document.querySelector('#task-form button[data-ck-mode=all]').click()")
     _on10 = page.ev(f"document.querySelectorAll('{_cb10}:checked').length")
-    _off_on10 = page.ev("!!document.querySelector('#task-form input[name=offline]').checked")
     # 续201：一键勾选覆盖的是 15 阶段 + 深度 + 1 拓展；续250 起深度少一项（全端口勾选
-    # 从建任务表单摘掉、挪到任务详情「端口」页签按钮）⇒ 18 项（外加 offline 共 19 个框）。
+    # 从建任务表单摘掉、挪到任务详情「端口」页签按钮）；续265 起「离线模式」整颗从
+    # 建任务表单去掉（主理人 2026-10-23：没有场景用得到）⇒ 一共 18 项，全部勾上即全勾。
     # 「Host 碰撞」那颗**刻意不在任何 data-ck-group 里** —— 它是独立的任务级开关，
     # 混进"拓展选项"会让一键勾选的语义变浑（[118] 的分组断言就是钉这个的）。
+
     rep.check("[10] 「全部勾上」把 scope 覆盖的 18 项全勾上（15 阶段 + 2 深度 + 1 拓展）",
-              _on10 == _tot10 - 1 == 18, f"总 {_tot10} / 勾上 {_on10}")
-    rep.check("[10] 「全部勾上」不带动离线模式（勾它=禁用外部工具，与跑全相反）",
-              _off_on10 is False, f"offline.checked={_off_on10}")
+              _on10 == _tot10 == 18, f"总 {_tot10} / 勾上 {_on10}")
+    # 续265：「离线模式」整颗从建任务表单去掉了 ⇒ 判据从"不带动它"改成"表单里没有它"。
+    rep.check("[10] 建任务表单里不再有「离线模式」那颗框（续265：主理人说没有场景用得到）",
+              page.ev("document.querySelector('#task-form input[name=offline]') === null") is True,
+              "offline 那颗复选框又回到建任务表单了")
     page.ev("document.querySelector('#task-form button[data-ck-mode=none]').click()")
     _zero10 = page.ev(f"document.querySelectorAll('{_cb10}:checked').length")
     rep.check("[10] 「全部清掉」清成 0 项", _zero10 == 0, f"实测 {_zero10}")

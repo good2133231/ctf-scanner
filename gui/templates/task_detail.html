@@ -343,6 +343,11 @@
       <button type="submit" class="ghost" name="only_failed" value="1"
         title="排一轮只跑 screenshot 的追加运行：勾了行就截这几个 URL，一行没勾就截本任务所有截图失败的站点（沿用本任务、跨运行去重，不新建任务）">
         重截{% if shot_retry.failed %}（失败 {{ shot_retry.failed }}）{% endif %}</button>
+      {# 续265（主理人点单「网站要有展示全标题的功能」）：标题列默认只显示两行（表格才排得下），
+         这颗一键全放开；单行右侧那颗「全标题」只放开那一行。抓取上限同轮从 200 放到 1000。 #}
+      <button type="button" class="ghost" id="btn-title-all"
+        title="标题列默认只显示前两行；点这一颗全部放开（再点一次全部收回）"
+        onclick="var open=false;document.querySelectorAll('#tbl-detail-sites .t-clamp').forEach(function(s){if(!s.classList.contains('t-open')){s.classList.add('t-open');open=true}});if(!open){document.querySelectorAll('#tbl-detail-sites .t-clamp').forEach(function(s){s.classList.remove('t-open')})}this.textContent=open?'全部收起标题':'全部展开标题'">全部展开标题</button>
       <form method="post" action="{{ url_for('api_icon_backfill') }}" class="inline-form">
         <input type="hidden" name="task_id" value="{{ task.id }}">
         <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}#sites">
@@ -379,7 +384,10 @@
           {% set rd = site_redirect(s) %}
           <td>{{ rd.status }}{% if rd.jumped %}
                 <span class="tech-tag" title="{{ rd.note }}">跳转后</span>{% endif %}</td>
-          <td{% if not rd.title %} title="{{ no_title_hint }}"{% endif %}>{{ rd.title or '-' }}{% if rd.jumped and rd.final_url %}<br>
+          <td class="title-cell"{% if not rd.title %} title="{{ no_title_hint }}"{% endif %}><span
+            class="t-clamp" title="{{ rd.title }}">{{ rd.title or '-' }}</span>{% if rd.title and rd.title|length > 60 %}
+            <button type="button" class="btn-mini ghost t-open-btn"
+              title="这一行的标题默认只显示前两行，点开看整条">全标题</button>{% endif %}{% if rd.jumped and rd.final_url %}<br>
                 <span class="muted small" title="{{ rd.note }}">→ {{ idn_display(rd.final_url) }}</span>{% endif %}{% if s._dup_group %}<button type="button" class="btn-mini" title="同标题的站点聚合在一起，默认收起（被收起的条数在此报出）" onclick="var t=document.querySelectorAll('tr[data-dup-of=\'{{ s.id }}\']'),any=false;for(var i=0;i<t.length;i++){t[i].hidden=!t[i].hidden;any=any||t[i].hidden}this.textContent=(any?'展开同标题':'收起同标题')+'（{{ s._dup_group|length }} 条）'">展开同标题（{{ s._dup_group|length }} 条）</button>{% endif %}</td>
 
           {# 续223：标签分主次 —— 主文档+内置排前面，其余折叠成「+N」；title 写来源 #}
@@ -659,15 +667,24 @@
       </label>
       <button class="ghost" type="submit">查询</button>
       {% if csegs_q %}<a class="btn-mini ghost" href="{{ url_for('task_detail', task_id=task.id) }}#csegs">清空</a>{% endif %}
+      {% if csegs_folded %}<a class="btn-mini ghost" href="?all=1#csegs"
+        title="同一个 /24 从多个 IP / 多轮各写一行时，页面默认只留一行（IP 与域名合并去重）。
+               库里的行一条没删 —— 这一颗看全部">全部显示（收起 {{ csegs_folded }} 条）</a>{% endif %}
     </form>
     <table id="tbl-csegs">
       <thead><tr><th>C 段</th><th>IP</th><th>域名数</th><th>反查到的域名</th></tr></thead>
       <tbody>
       {% for c in csegs %}
-        <tr><td class="mono">{{ c.segment or '-' }}</td>
-          <td class="mono">{% if c.ip %}<a href="{{ ip_drill(c.ip, ext=True) }}" title="查看解析到 {{ c.ip }} 的全部拓展域名">{{ c.ip }}</a>{% else %}-{% endif %}</td>
-          <td>{{ c.count }}</td>
-          <td class="muted small mono">{{ c.domains or c.note or '-' }}</td></tr>
+        <tr{% if c._dup_member %} data-dup-of="{{ c._dup_head }}" hidden{% endif %}>
+          <td class="mono">{{ c.segment or '-' }}</td>
+          <td class="mono">{% for ip in c._dup_ips %}<a href="{{ ip_drill(ip, ext=True) }}"
+              title="查看解析到 {{ ip }} 的全部拓展域名">{{ ip }}</a>{% if not loop.last %}, {% endif %}
+            {% else %}-{% endfor %}</td>
+          <td>{{ c._dup_count }}</td>
+          <td class="muted small mono">{{ (c._dup_domains|join(', ')) or c.domains or c.note or '-' }}
+            {% if c._dup_group %}<button type="button" class="btn-mini"
+              title="同一 C 段的其余行默认收起（被收起的条数在此报出）；库里的行一条没删，上面那颗「全部显示」也能看"
+              onclick="var t=document.querySelectorAll('tr[data-dup-of=\'{{ c.id }}\']'),any=false;for(var i=0;i<t.length;i++){t[i].hidden=!t[i].hidden;any=any||t[i].hidden}this.textContent=(any?'收起同 C 段':'展开同 C 段')+'（{{ c._dup_group|length }} 条）'">展开同 C 段（{{ c._dup_group|length }} 条）</button>{% endif %}</td></tr>
       {% else %}
         <tr><td colspan="4" class="muted">暂无数据（osint 阶段的 C 段反查默认关闭，在「策略配置 → 外部情报拓展」打开）。</td></tr>
       {% endfor %}
@@ -714,6 +731,8 @@
       </label>
       <button class="ghost" type="submit">查询</button>
       {% if certs_q %}<a class="btn-mini ghost" href="{{ url_for('task_detail', task_id=task.id) }}#certs">清空</a>{% endif %}
+      {% if certs_folded %}<a class="btn-mini ghost" href="?all=1#certs"
+        title="同一张证书覆盖多个主机时，页面默认只留一行（主机合并去重）。库里的行一条没删">全部显示（收起 {{ certs_folded }} 条）</a>{% endif %}
     </form>
     <table id="tbl-certs">
       <thead><tr><th>来源</th><th>主机</th><th>端口</th><th>CN</th><th>颁发者</th><th>有效期</th>
@@ -721,9 +740,12 @@
         <th>指纹(SHA256)</th></tr></thead>
       <tbody>
       {% for c in certs %}
-        <tr>
+        <tr{% if c._dup_member %} data-dup-of="{{ c._dup_head }}" hidden{% endif %}>
           <td class="muted small">{% if c.source == 'ct' %}CT 日志{% else %}TLS 握手{% endif %}</td>
-          <td class="mono">{{ c.host }}</td>
+          <td class="mono">{% if c._dup_member %}<span class="muted" title="与上面那一行是同一张证书">↳ 同一张证书</span>
+            {% else %}{{ c.host }}{% if c._dup_group %}<button type="button" class="btn-mini"
+              title="同一张证书还覆盖这些主机，默认收起（被收起的条数在此报出）；行一条没删，上面那颗「全部显示」也能看"
+              onclick="var t=document.querySelectorAll('tr[data-dup-of=\'{{ c.id }}\']'),any=false;for(var i=0;i<t.length;i++){t[i].hidden=!t[i].hidden;any=any||t[i].hidden}this.textContent=(any?'收起其余主机':'展开其余主机')+'（{{ c._dup_group|length }} 个）'">展开其余主机（{{ c._dup_group|length }} 个）</button>{% endif %}{% endif %}</td>
           <td class="mono">{{ c.port }}</td>
           <td>{{ c.cn or '-' }}</td>
           <td class="muted small">{{ c.issuer or '-' }}</td>
