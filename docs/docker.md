@@ -138,7 +138,7 @@ docker compose start
 
 - `queue.workers`：并发任务数（默认 **1 = 串行**，最省目标侧带宽）；
 - `limits.max_workers` / `portscan.workers`：单任务的并发；
-- `portscan.enabled`：端口扫描默认**关**（CTF 里噪声大），要用再开。
+- `portscan.enabled`：端口扫描默认**开**（只打 `portscan.ports` 里那张常见 web 端口表），要关设 false。
 
 改完 `docker compose restart`。这些都不需要重建镜像。
 

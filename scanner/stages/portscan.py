@@ -4,8 +4,10 @@
 便于 probe/vulnscan 在日志与结果里出现"这个 8080 上跑的是什么"。
 数据源（合并去重）：目标里直接给的 IP/CIDR 展开结果 + 子域名阶段产出的主机名。
 
-默认**关闭**（`portscan.enabled=false`）：端口扫描耗时与噪声都明显高于其他阶段，
-且 CTF 里经常只给一个 Web 入口。需要时在 GUI「策略配置 → 端口与服务」里打开。
+默认**开启**（`portscan.enabled=true`，续269）：只打 `portscan.ports` 里那张常见 web 端口表
+（档位 `mode=top`）、主机数由 `max_hosts` 夹住、走 CDN 的主机跳过 ⇒ 常规任务里这一阶段的
+耗时与噪声可控；全端口（1-65535）不再默认跑，改为单任务触发（详情页「端口」页签按钮 /
+CLI `--portscan-full`）。要关：GUI「策略配置 → 端口与服务」。
 """
 from .base import Stage
 from .. import cdn, config, db, dnsq, extcost, extdom, ml, portscan

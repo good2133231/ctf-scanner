@@ -363,13 +363,16 @@
       value="{{ s.extquota.min_left }}"></label>
 
     <label class="chk"><input type="checkbox" name="portscan_enabled" value="1"
-      {{ 'checked' if s.portscan.enabled }}> <b>端口与服务扫描</b>（默认关闭；引擎 auto = fscan → nmap → 内置 TCP connect）</label>
+      {{ 'checked' if s.portscan.enabled }}> <b>端口与服务扫描</b>（默认**开启**，只打下面的
+      端口列表；引擎 auto = fscan → nmap → 内置 TCP connect）</label>
     <label>端口列表（空=内置 TOP 表，也支持 "80,443" 或 "1-1024"）
       <input name="portscan_ports" value="{{ s.portscan.ports }}" placeholder="留空使用内置 TOP 端口"></label>
     <label>扫描主机上限 <input name="portscan_max_hosts" value="{{ s.portscan.max_hosts }}"></label>
     {# 续197（主理人两问：「1.0 秒是不是太久了」「我们现在是不是默认会进行端口扫描」）：
-       两个答案都写在页面上 —— ① 默认**关闭**（enabled=false 时阶段直接跳过、一个连接都不发）；
-       ② 1.0 秒是 **TOP 档**的值，默认档是**全端口**（续144 起），全端口实际吃的是下面那个
+       两个答案都写在页面上 —— ① 续269 起默认**开启**（只打上面那张端口表、走 CDN 的跳过；
+       enabled=false 时阶段直接跳过、一个连接都不发）；
+       ② 1.0 秒是 **TOP 档**的值；当前档位是**内置 TOP 端口**（续250 起全端口改为单任务触发），
+       全端口实际吃的是下面那个
        「全端口专用单端口超时」；fscan 引擎还会把它量化到整秒（`-time` 只认整秒、最小 1 秒）。 #}
     <p class="muted small note">当前状态：{% if s.portscan.enabled %}<b>已开启</b> —— 任务跑到
       portscan 阶段会真的连端口。{% else %}<b>关闭</b> —— portscan 阶段会被跳过，

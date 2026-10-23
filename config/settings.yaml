@@ -222,7 +222,9 @@ takeover:
   max_hosts: 300
   http_check: true
 portscan:
-  enabled: false
+  # 续269：默认**开**（主理人点单）。只打下面这张常见 web 端口表（mode=top）、
+  # 主机数由 max_hosts 夹住、走 CDN 的主机跳过；全端口仍是单任务触发。
+  enabled: true
   max_hosts: 100
   ports: '80,81,443,3000,5000,5001,7001,7002,8000,8001,8002,8008,8080,8081,8082,8088,8443,8888,9000,9090,9443'   # 续250：常见 web 端口（空串=内置 TOP 48）
   mode: top                  # 续250 起：默认只打常见 web 端口（主理人点单）；full＝1-65535 走单任务触发

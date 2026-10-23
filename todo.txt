@@ -4393,24 +4393,33 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 SMOKE PASS rc=0：**295 组**（改的是既有组判据，不新增组），日志 `logs/_smoke269.log`
 - [x] C2 记忆同步：CHANGELOG 续269 + todo 续269 + AGENTS 那条续227 不变量改成"续227 + 续269"
 
-下一轮（续270，主理人 10 连点单剩下的 ⑨⑩）：
-⑥⑧ 已做完；⑨ 是小改（翻一个开关 + 几处文案/文档），⑩ 是盘点（不动代码）。
+## 续270（2026-10-23，WorkBuddy · CodeBuddy）：⑨ 端口扫描默认开启（扫常规 web 端口）
+实施者：WorkBuddy · CodeBuddy
 
-【9】端口扫描默认开启，扫常规 web 端口
-  - 已查清：端口清单 `portscan.ports` **续250 起就是常见 web 端口**（80/443/8080/8000/8888/9000/9443…）
-    ⇒ 本条**只需把 `enabled` 翻成 True**（`scanner/config.py` DEFAULTS + 随包 `config/settings.yaml`）
-  - 连带要改：`scanner/stages/portscan.py` 头注释、策略页那句"默认关闭"、`docs/docker.md`、
-    `docs/pipeline.md` 的"为什么默认关"
-  - 门禁要跟着翻的三处：`[8bq]`（"仍关着的三段"里有 portscan）、`[200]②`（`enabled` 实际值）、
-    `[250]`（补"默认开 + web 端口表"），并加"默认阶段清单含端口扫描"
-  - 风险：默认开端口扫描会让每个任务的探测阶段变重
+- [x] A1 查清：`portscan.ports` 续250 起就是常见 web 端口 + `mode=top` ⇒ 只需翻 `enabled`
+- [x] A2 两处同值翻 True：`scanner/config.py` DEFAULTS + 随包 `config/settings.yaml`
+- [x] A3 四份"默认关"的说法跟着改：`stages/portscan.py` 头注释 / 策略页「默认关闭」/
+      `docs/docker.md` / `docs/pipeline.md`
+- [x] A4 顺手：策略页注释里"默认档是全端口（续144 起）"⇒ 当前档位是 top（续250 就改了）
+- [x] A5 能力没动：全端口仍单任务触发（详情页按钮 / CLI `--portscan-full`），引擎选择没动
+- [x] B1 门禁 `[8bq]`：portscan 挪出"仍关着的三段"，单独钉两处都开 + 生效值是开
+- [x] B2 门禁 `[200]②`：`enabled` 实际值 False⇒True；新增"默认阶段清单里也得真有它"
+- [x] B3 门禁 `[250]`：DEFAULTS True + 随包 settings.yaml 端口段 `enabled: true`
+- [x] B4 坑：`_splice` 给"末行无换行"的文件补了换行（portscan.py / settings.html 各多一行
+      假 diff）⇒ 工具改成 `eol=b""` 保留原样，两个文件回滚重做
+- [x] C1 全量门禁 SMOKE PASS rc=0：**295 组**，日志 `logs/_smoke270.log`
+- [x] C2 记忆同步：CHANGELOG 续270 + todo 续270 + AGENTS 补"默认开清单"入口
+
+下一轮（续271，主理人 10 连点单剩下的 ⑩）：
+⑥⑧⑨ 已做完；⑩ 是盘点（不动代码，出一张表）。
 
 【10】整理"写了功能但没默认开启"的清单
-  - 已扫过一遍：两处都关的段有 cert / screenshot / icp / quake / shodan / ssrf / dev /
+  - 已扫过：两处都关的段有 cert / screenshot / icp / quake / shodan / ssrf / dev /
     gui.edge_auth（portscan 由 ⑨ 翻开）；"随包开而代码默认关"的有 ctlog / fofa / github /
-    heuristic / intel / iprecon / multileak
-  - 落地：列成一张表（功能 / 段 / 两处值 / 为什么没默认开 / 怎么开 / 要不要 key 或外部二进制）
-  - 产物：进 CHANGELOG（或单独文档）
+    heuristic / intel / iprecon / multileak（这两档含义不同，表里要分开写）
+  - 落地：一张表（功能 / 段 / 两处值 / 为什么没默认开 / 怎么开 / 要不要 key 或外部二进制）
+  - 产物：`docs/features-off-by-default.md` + CHANGELOG 指过去；门禁 `[271]` 钉"表与配置不漂"
+
 
 
 历史遗留（来自续263/264）：

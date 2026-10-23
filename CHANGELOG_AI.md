@@ -3,6 +3,43 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续270（2026-10-23，WorkBuddy · CodeBuddy）：⑨ 端口扫描默认开启（扫常规 web 端口）
+
+### A. 点单原文
+
+> 「端口扫描默认开启，扫常规 web 端口」
+
+### B. 查清（本条只翻一个开关）
+
+- `portscan.ports` **续250 起就是常见 web 端口表**（20 个：80/443/8080/8443/9000/9443…），
+  档位 `mode=top` ⇒ "扫常规 web 端口"**早就成立**；真正没开的只有 `enabled`。
+- 所以本条 = 把 `enabled` 从 False 翻成 True（`scanner/config.py` DEFAULTS + 随包
+  `config/settings.yaml`，两处同值），并**顺手修四份"默认关"的说法**。
+
+### C. 改
+
+- `scanner/config.py` / `config/settings.yaml`：`portscan.enabled` false ⇒ true，注释写明
+  "只打常见 web 端口 / `max_hosts` 夹主机数 / 走 CDN 的跳过 / 全端口仍单任务触发"。
+- 四份"默认关"的说法跟着改：`scanner/stages/portscan.py` 头注释、策略页那句「默认关闭」
+  （并顺手修了它旁边那句"默认档是全端口（续144 起）"—— 续250 就改成 top 了，一直在说假话）、
+  `docs/docker.md`、`docs/pipeline.md` 的"为什么默认关"。
+- **没动**能力本身：全端口（1-65535）仍是单任务触发（详情页「端口」页签按钮 /
+  CLI `--portscan-full`），fscan → nmap → 内置的引擎选择也没动。
+
+### D. 验证
+
+- 门禁翻三处既有判据 + 补一条新判据（不新增组）：
+  - `[8bq]`：portscan 从"仍关着的三段"里挪出来，单独钉"随包与 DEFAULTS **两处都开**、
+    且合并后生效值是开"。
+  - `[200]②`：`/api/tasks/<id>/stages` 报的 `portscan.enabled` 实际值 False ⇒ **True**；
+    并新增"默认阶段清单里也得真有它"（用 `STAGE_ORDER` 建任务 ⇒ `in_task=True`）。
+  - `[250]`：`DEFAULTS.portscan.enabled is True` + 随包 settings.yaml 的端口段里
+    `enabled: true`（两处同值）。
+
+### E. 结果
+
+服务器全量门禁 SMOKE PASS rc=0，**295 组**，日志 `logs/_smoke270.log`。
+
 ## 续269（2026-10-23，WorkBuddy · CodeBuddy）：⑧ Host 碰撞 —— 详情页去掉补跑按钮（路由一并撤）
 
 ### A. 点单原文

@@ -23037,9 +23037,14 @@ expression: r0()
     # 随包已开但 DEFAULTS 关的两段（历史漂移，续159-附一起收口）
     for _s160 in ("iprecon", "fofa"):
         assert _ship160[_s160]["enabled"] is True and _DEF160[_s160]["enabled"] is False, _s160
-    # 仍然关着的三段必须真的还关着（防止"随包全开"把端口/截图/证书也顺手放进来）
-    for _s160 in ("portscan", "screenshot", "cert"):
+    # 仍然关着的两段必须真的还关着（防止"随包全开"把截图/证书也顺手放进来）
+    # —— portscan 已由续269 翻开，下一条单独钉它
+    for _s160 in ("screenshot", "cert"):
         assert _ship160[_s160]["enabled"] is False and _DEF160[_s160]["enabled"] is False, _s160
+    # 续269（主理人点单「端口扫描默认开启，扫常规 web 端口」）：**两处都翻成开**
+    assert _ship160["portscan"]["enabled"] is True and _DEF160["portscan"]["enabled"] is True, \
+        "portscan 随包与 DEFAULTS 都应是 True（默认开；档位仍是 top 的 web 端口表）"
+    assert _eff160["portscan"]["enabled"] is True, "合并后生效值也必须是开"
 
     # 已被证伪的成句不许回来。**判据先自证**（§6.1 的"0 命中"型断言必须自带夹具）：
     _ban160 = ("三个阶段**默认关**", "三个**默认关**阶段", "**三个开关都默认关**",
@@ -23054,7 +23059,8 @@ expression: r0()
             if _b160 in _t160:
                 raise AssertionError(f"{_f160} 还在说「{_b160}」—— 随包默认值已改，这句是假话（§5.19）")
     print(f"[8bq] 续159-附 随包策略默认值 ok: 五段随包开而 DEFAULTS 仍 False（开在文件层）｜"
-          f"min_severity 随包 high / DEFAULTS medium｜生效值已核｜portscan/screenshot/cert 仍关｜"
+          f"min_severity 随包 high / DEFAULTS medium｜生效值已核｜screenshot/cert 仍关、"
+          f"portscan 续269 起两处都开｜"
           f"{len(_ban160)} 条已证伪的旧句子在 4 份文档里 0 命中（判据先自证抓得到）")
 
 
@@ -27180,9 +27186,14 @@ expression: r0()
     assert _j200.get("ok") and _j200["task"]["id"] == _t200, _j200
     _by200 = {s["name"]: s for s in _j200["stages"]}
     assert _by200["probe"]["in_task"] is True and _by200["crawl"]["in_task"] is False, _by200["probe"]
-    # portscan 有 enabled 键（出厂 false）⇒ 必须是 False 而不是 None；probe 没有该键 ⇒ None
-    assert _by200["portscan"]["enabled"] is False, "有开关的阶段要报**实际值**"
+    # portscan 有 enabled 键（续269 起出厂 true）⇒ 必须是 True 而不是 None；probe 没有该键 ⇒ None
+    assert _by200["portscan"]["enabled"] is True, "有开关的阶段要报**实际值**（续269 起默认开）"
     assert _by200["probe"]["enabled"] is None, "没有开关的阶段回 None（＝总跑），不能混成 False"
+    # 续269：「默认开」不是只翻个开关 —— 默认阶段清单里也得真有它
+    _t200b = db.create_task("smoke-200-def", "https://s200b.test/", list(_rn200.STAGE_ORDER), {})
+    _by200b = {s["name"]: s for s in c.get(f"/api/tasks/{_t200b}/stages").get_json()["stages"]}
+    assert _by200b["portscan"]["in_task"] is True and _by200b["portscan"]["enabled"] is True, \
+        f"默认阶段清单含端口扫描且策略默认开（续269）：{_by200b['portscan']}"
     assert c.get("/api/tasks/999999/stages").status_code == 404, "越权/不存在必须 404"
 
     # ③ 任务页：行内只留「查看全结果」，四颗操作（停止/重启/删除/导出）都在勾选栏
@@ -30574,11 +30585,14 @@ expression: r0()
     from scanner.config import DEFAULTS as _DEF250
     # ① 端口档位：出厂 top + 显式 web 端口表；表单不再有 portscan_full；按钮与端点在位
     assert _DEF250["portscan"]["mode"] == "top", "端口默认档位应是 top（常见 web 端口）"
+    assert _DEF250["portscan"]["enabled"] is True, "端口扫描应默认开（续269 主理人点单）"
     _wp250 = _DEF250["portscan"]["ports"]
     for _p250 in ("80", "443", "8080", "8443"):
         assert f",{_p250}," in f",{_wp250},", _wp250
     _sty250 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
     assert "mode: top" in _sty250, "settings.yaml 的 portscan.mode 没跟着改"
+    _ps250 = _sty250.split("\nportscan:", 1)[1].split("\nicp:", 1)[0]   # 随包的端口段
+    assert "enabled: true" in _ps250, "settings.yaml 的 portscan.enabled 应是 true（两处同值）"
     _tk250 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8", errors="replace")
     assert 'name="portscan_full"' not in _tk250, "建任务表单还留着全端口勾选（续250 已摘掉）"
     assert "全端口不在这里" in _tk250, "「全部勾上」的文案没讲明全端口挪位了"
