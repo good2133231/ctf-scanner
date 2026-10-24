@@ -1437,7 +1437,7 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
 py -3 cli/run_keys.py --status                        # 续98：凭据是明文还是密文、是否已解锁（只打摘要，不打值）
 py -3 cli/client.py --check # 外部工具可用性（dirmap 看 tools/dirmap/dirmap.py 是否存在）
 py -3 cli/client.py --check-afrog-pocs <目录>   # 只读自查 afrog PoC 目录：能喂几条、为什么拒（续123）
-                            #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）+ massdns（续165，puredns 的传递依赖）
+                            #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）；massdns 自续274 起标准 install.sh 即自动编（检测 gcc/make → build_massdns.py --wire --fetch；缺工具链则内置纯 Python DNS 兜底，框架照跑）
 py -3 cli/client.py --bootstrap                           # 续96：迁移自举——按平台点清缺口（解释器/pip 依赖/外部工具/浏览器），**不联网**
 py -3 run_bootstrap.py --install                            # 续99：等价入口（会先建 .venv 再用它自重跑；--no-venv 可退回当前解释器）
 ./install.sh                                        # 续146：Linux/macOS 一键安装（薄包装，判据全在 run_bootstrap.py）

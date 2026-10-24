@@ -1356,6 +1356,25 @@ def set_site_redirect_titles(task_id, pairs):
     return len(rows)
 
 
+def set_site_redirects(task_id, rows):
+    """续274：把 3xx 站点的**跳转三件套**（redirect_url / redirect_status / redirect_title）写回。
+
+    `rows` 是 `[(url, redirect_url, redirect_status, redirect_title), ...]`。与
+    `set_site_redirect_titles`（只写 title）分工：这里三列一起写，服务"老任务补齐跳转信息"
+    （`probe.backfill_site_redirects`）—— 补齐后续266 的显示折叠才对老数据也生效。
+
+    只更新**确实还是 3xx 且还没有跳转结论**的行：别把后来变成 200 的行按旧跳转结论覆盖，
+    重复补齐也一字不改（幂等）。返回写进去的行数。
+    """
+    data = [(str(ru or ""), int(rs or 0), str(rt or ""), task_id, str(u))
+            for u, ru, rs, rt in (rows or []) if u and str(ru or "")]
+    if not data:
+        return 0
+    _exec("UPDATE sites SET redirect_url=?, redirect_status=?, redirect_title=? "
+          "WHERE task_id=? AND url=? AND status BETWEEN 300 AND 399 "
+          "AND (redirect_status IS NULL OR redirect_status=0)", data, many=True)
+    return len(data)
+
 def set_site_shots(task_id, pairs):
     """写入站点截图路径：`pairs` 是 `[(url, rel_path), ...]`。
 

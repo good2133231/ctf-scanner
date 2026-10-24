@@ -95,6 +95,25 @@ def attach_redirect_info(sites, fetch, workers=8, logger=None):
     return n
 
 
+def backfill_site_redirects(task_id, db, settings, fetch=None, workers=8, logger=None):
+    """续274：给**老任务**的 3xx 站点补跳转信息，让续266 的显示折叠对老数据也生效（不整站重扫）。
+
+    只对"还是 3xx、且还没有 redirect_status 结论"的行发请求（拿过结论的不重复打、不覆盖）；
+    复用 `attach_redirect_info`（与扫描期同一份跳转取证口径）+ `db.set_site_redirects` 落库。
+    `fetch(url)` 缺省用带节流的 `http_request`（调用方注入以便测试）。返回补到的条数。
+    """
+    sites = [dict(s) for s in db.list_sites(task_id)]
+    need = [s for s in sites
+            if int(s.get("status") or 0) in REDIRECT_STATUS
+            and not int(s.get("redirect_status") or 0)]
+    if not need:
+        return 0
+    _fetch = fetch or (lambda u: http_request(u, timeout=10, settings=settings, auth=True))
+    attach_redirect_info(need, _fetch, workers=workers, logger=logger)
+    rows = [(s.get("url"), s.get("redirect_url", ""), int(s.get("redirect_status") or 0),
+             s.get("redirect_title", "")) for s in need if s.get("redirect_url")]
+    return db.set_site_redirects(task_id, rows)
+
 def probe_candidates(ctx, candidates):
     """一轮 HTTP 探测的全部机器：httpx 优先、内置兜底，返回**未去重、未入库**的站点 dict 列表。
 

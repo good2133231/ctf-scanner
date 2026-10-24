@@ -4449,7 +4449,23 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 SMOKE PASS rc=0：**280 组**（+3＝`[277]`~`[279]`），墙钟 ~9 分钟，日志 `logs/_smoke273.log`
 - [x] C2 记忆同步：CHANGELOG 续273 + todo 续273 + AGENTS 补「/csegs 整表取无 cap」口径
 
-下一轮（续274）：
+## 续274（2026-10-24，WorkBuddy · CodeBuddy）：主理人三点单（XSS 反射降中危 / massdns 可迁移 / 老数据跳转补齐）
+实施者：WorkBuddy · CodeBuddy
+
+- [x] T1 XSS 反射一律中危：`XSS_CONTEXT_SEVERITY` 的 high 四上下文（js-string/js-code/unquoted-attr/
+      tag-name）降到 medium（html-comment 保持 low）；同步门禁 [5y] 期望表 + 端到端断言。口径：反射型要点
+      钓鱼链接、有用户交互 ⇒ 中危，存储型才是高危
+- [x] T3 massdns 可迁移：标准 install.sh 也自动编 massdns（检测 gcc/make；--fetch 取钉住源码 v1.1.0 + make
+      + wire）；缺 gcc/make 交互式尝试装工具链 / 非交互给命令 + 内置纯 Python DNS 兜底（框架照跑）；fscan 仍留
+      --with-build；门禁 [280]
+- [x] T2 老数据跳转补齐：新增 `probe.backfill_site_redirects` + `db.set_site_redirects` + CLI
+      `tools/backfill_redirects.py`，只对缺结论的 3xx 行补跳转取证（复用 attach_redirect_info 口径），让续266
+      显示折叠对老数据也生效；幂等；门禁 [281]
+- [x] C1 全量门禁 SMOKE PASS rc=0：**282 组**（+2＝`[280]`~`[281]`；`[5y]` 因 T1 同步改），墙钟 ~9 分钟，
+      日志 `logs/_smoke274.log`
+- [x] C2 记忆同步：CHANGELOG 续274 + todo 续274 + AGENTS 改「massdns 需手工安装」那条（现标准安装自动编）
+
+下一轮（续275）：
 - [ ] puredns #65 **真目标**同参数任务前后对比（需靶场 + massdns 在 PATH；合成靶已证修复，真数字留手动）
 - [ ] 启发式 0day：主动 fuzz 与 305 个导入 POC 的实测校准（长期项，编号待办 1 遗留）
 

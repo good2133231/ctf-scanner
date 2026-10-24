@@ -715,11 +715,12 @@ XSS_CONTEXT_LABELS = {
     "html-comment": "HTML 注释内",
 }
 XSS_CONTEXT_SEVERITY = {
-    # 可直接逃逸 / 直接执行 → high
-    "js-string": "high",
-    "js-code": "high",
-    "unquoted-attr": "high",
-    "tag-name": "high",
+    # 反射型 XSS 一律中危（续274 主理人口径：反射要点钓鱼链接、有用户交互；存储型才是高危）。
+    # 上下文只决定"能不能逃逸/可不可利用"（见 usable 字段），不再据此升到 high。
+    "js-string": "medium",
+    "js-code": "medium",
+    "unquoted-attr": "medium",
+    "tag-name": "medium",
     # 需要先闭合引号 → medium
     "dquote-attr": "medium",
     "squote-attr": "medium",

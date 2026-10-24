@@ -3,6 +3,41 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续274（2026-10-24，WorkBuddy · CodeBuddy）：主理人三点单（XSS 反射降中危 / massdns 可迁移 / 老数据跳转补齐）
+
+### T1. 反射型 XSS 一律中危（主理人口径）
+- 现状：`scanner/owasp/checks.py` 的 `XSS_CONTEXT_SEVERITY` 按插入上下文分级，js-string/js-code/
+  unquoted-attr/tag-name 被判 **high**。
+- 主理人口径：反射型 XSS 要点钓鱼链接、有用户交互 ⇒ **中危**（存储型才是高危）。改法：那四个 high 上下文
+  降到 **medium**；html-comment 保持 low（要先闭合注释、基本不可利用，且默认 medium 门槛下本就不产出）。
+- 上下文仍决定"能不能逃逸/可不可利用"（`usable` 字段不动），只是不再据此升 severity。
+- 门禁 `[5y]` 期望表 + 端到端 `_xss_reflect` 断言同步改成 medium。
+
+### T3. massdns 进标准安装（可迁移硬规矩：安装后即跑）
+- 问题：标准 `install.sh` 只下载 puredns、**不编**它的传递依赖 massdns（要 `--full`）⇒ 标准装的机器 puredns
+  一跑就 `exec: massdns: not found` 退码 1、回落内置兜底。
+- 改法：**标准 install.sh 也自动编 massdns** —— 检测到 gcc/make 就 `build_massdns.py --wire --fetch`（取本框架
+  钉住的小源码包 v1.1.0，非 --with-stack 那 70MB Go stack）；缺 gcc/make 时**交互式**才尝试按平台装工具链
+  （非交互/CI 直接跳过给命令，避免 sudo 挂住），再不行如实报 + 明确告知"子域名爆破走内置纯 Python DNS 兜底，
+  框架照跑"。fscan（要 Go）仍留 `--with-build`。
+- 本机实测：`build_massdns.py --wire --fetch` ⇒ make 出 `tools/scanner/massdns`（131KB）+ 写回 settings，rc=0。
+- 门禁 `[280]`：install.sh 标准流含 `build_massdns.py --wire --fetch` + subdomain 预检（缺 massdns ⇒ 跳 puredns 走内置）。
+
+### T2. 老任务 3xx 站点跳转信息补齐（续266 折叠对老数据也生效）
+- 背景：续266 的"跳转前后同域 ⇒ 折成一个站点"是**显示时**算的，但依赖库里 http 行**扫描时**存下的
+  redirect_url/status（续112-B）。早于续112-B 的老任务没这些字段 ⇒ 折叠配对不上 ⇒ 显示成两行（主理人贴的
+  m.targ1.com 即此）。
+- 新增 `db.set_site_redirects`（写跳转三件套，只更 3xx 且无结论的行，幂等）+ `probe.backfill_site_redirects`
+  （复用 `attach_redirect_info` 同一份取证口径，只对缺结论的 3xx 行发请求）+ CLI `tools/backfill_redirects.py`
+  （`<task_id>` / `--all`）。**不整站重扫**。
+- 门禁 `[281]`：补齐 1 条 3xx、幂等（二次不重复请求）、补齐后续266 折叠键把 http/https 同域配成一对。
+
+### 验证
+- 全量门禁 SMOKE PASS rc=0：**282 组**（+`[280]`~`[281]`；`[5y]` 因 T1 同步改），墙钟 ~9 分钟，日志 `logs/_smoke274.log`。
+- massdns 本机实编（build_massdns.py --wire --fetch）rc=0。
+- 改动文件：`scanner/owasp/checks.py`、`scanner/db.py`、`scanner/stages/probe.py`、`install.sh`、
+  `tools/backfill_redirects.py`（新）、`tests/smoke.py`。
+
 ## 续273（2026-10-24，WorkBuddy · CodeBuddy）：续272 收尾后漏掉的三条小尾巴
 
 ### A. puredns argv 修复的「前后对比」（续264 / #65）

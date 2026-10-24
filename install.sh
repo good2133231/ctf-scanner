@@ -6,7 +6,7 @@
 # 在这儿再抄一份就是第二个产地，两边迟早漂（AGENTS §5.14，本项目反复栽在这上面）。
 #
 # 用法：
-#   ./install.sh                       标准安装（.venv + pip 依赖 + subfinder/httpx/puredns/afrog）
+#   ./install.sh                       标准安装（.venv + pip 依赖 + subfinder/httpx/puredns/afrog；有 gcc/make 时自动编 massdns）
 #   ./install.sh --full                **一条命令把环境建全**（续166）：标准安装
 #                                      + 工作目录内取 Go 便携归档与上游源码包（--with-stack）
 #                                      + 就地编译 fscan 与 massdns（--with-build）
@@ -20,7 +20,7 @@
 #                                      哪些天生没有"的判定与打印，**产物仍只下本平台那一份**
 # 其余参数原样透传给 run_bootstrap.py（--only / --allow-unverified / --tools-dest / --no-wire）。
 #
-# ⚠ 仍然**做不到**的（如实说，不假装）：`massdns` 要本机 gcc/make（C 工具链没有便携替代品）；
+# ⚠ 仍**依赖本机**的（续274 起 massdns 标准安装即自动编，但底层要 gcc/make，C 工具链无便携替代品）：
 #   `nmap` 只有系统包；CJK 字体目前仍要系统装（截图用的浏览器自续167 起可用 --with-stack 取进
 #   仓库，但它只解决"有没有浏览器"，中文能不能显示仍取决于字体）。
 #   没有它们框架照跑，只是截图里中文变方块、端口扫描退回内置 TCP connect。
@@ -97,6 +97,38 @@ fi
 # （不塞进 run_bootstrap：那条自动层被测试钉死了"绝不代跑系统级命令"，`go build` / `make` 都在禁列）。
 # `--fetch` 只在用户已经要了 `--with-stack` 时才给 —— 那等于已经同意"缺的件下进仓库"；
 # 只给 `--with-build` 时保持老行为：缺 Go / 缺源码就**如实报**并印出获取命令，不擅自下 70 MB。
+# ---- ④ massdns（puredns 的传递依赖）：续274 起**标准安装也自动编**（原仅 --with-build）----
+# 为什么进标准层：puredns 的 bruteforce/resolve 在进程内 exec massdns，缺它每个域名退码 1 ⇒
+# 只下 puredns 不编 massdns ＝ 装了也跑不了快路。检测到 gcc/make 就编（--fetch 取本框架钉住的
+# 小源码包 v1.1.0，非 --with-stack 那 70MB 的 Go stack）；缺 gcc/make 则按平台尝试装工具链
+# （仅交互式 TTY + 有 sudo 才试，非致命，避免 CI 里挂住），再不行如实报 + 走内置纯 Python 兜底。
+_have() { command -v "$1" >/dev/null 2>&1; }
+if ! _have gcc || ! _have make; then
+  if [ -t 0 ] && _have sudo; then
+    echo "[*] massdns：没 gcc/make，交互式安装 —— 尝试按平台装编译工具链（要输密码；装不上不影响安装）..."
+    if _have apt-get; then sudo apt-get install -y build-essential || true
+    elif _have dnf; then sudo dnf install -y gcc make || true
+    elif _have yum; then sudo yum install -y gcc make || true
+    elif _have brew; then brew install gcc make || true
+    elif [ "$(uname -s 2>/dev/null || echo unknown)" = "Darwin" ]; then xcode-select --install || true
+    else echo "[!] 未能识别的包管理器，跳过工具链自动安装"; fi
+  else
+    echo "[*] massdns：没 gcc/make（非交互或无 sudo，跳过自动装工具链）。按平台自装："
+    echo "      Debian/Ubuntu: sudo apt-get install -y build-essential"
+    echo "      RHEL/Fedora  : sudo dnf install -y gcc make"
+    echo "      macOS        : xcode-select --install"
+  fi
+fi
+if _have gcc && _have make; then
+  echo "[*] massdns：有 gcc/make，编译 puredns 的传递依赖（--fetch 取钉住源码 v1.1.0 → make → 写回配置）"
+  "$RUNPY" tools/build_massdns.py --wire --fetch \
+    || echo "[!] massdns 没编成（原因见上）。框架仍能跑：puredns 被预检跳过、子域名爆破回退内置纯 Python 那路。"
+else
+  echo "[!] 仍无 gcc/make：massdns 跳过。框架仍能跑（子域名爆破走内置纯 Python DNS 兜底，覆盖面/速度差一档）。"
+  echo "    要 puredns 快路：装好 gcc/make 后跑  python tools/build_massdns.py --fetch --wire"
+fi
+
+# ---- ⑤ 可选：编译 fscan（端口扫描引擎；要 Go，仍显式 --with-build 才编）----
 if [ "$WITH_BUILD" = "1" ]; then
   FETCH=""
   if [ "$WITH_STACK" = "1" ]; then FETCH="--fetch"; fi
@@ -104,10 +136,6 @@ if [ "$WITH_BUILD" = "1" ]; then
   # shellcheck disable=SC2086  # $FETCH 刻意不加引号：空值时不能变成"一个空参数"
   "$RUNPY" tools/build_fscan.py --wire $FETCH \
     || echo "[!] fscan 编译未完成（原因见上）。框架仍能跑：端口扫描自动回退 nmap → 内置 TCP connect。"
-  echo "[*] --with-build：编译 massdns（puredns 的传递依赖；**要本机 gcc/make**，没有便携替代品）"
-  # shellcheck disable=SC2086
-  "$RUNPY" tools/build_massdns.py --wire $FETCH \
-    || echo "[!] massdns 编译未完成（原因见上）。框架仍能跑：puredns 会被预检跳过、子域名爆破回退内置那路。"
 fi
 
 cat <<'EOF'
@@ -146,10 +174,11 @@ cat <<'EOF'
 **本脚本刻意没做**（是 run_bootstrap.py 的红线，不是漏了）：
   · nmap：只有系统包（官方发布在 nmap.org/dist，不在 GitHub release）—— 代跑就是越"系统级动作"的界。
     上面输出里**按平台印了命令**，自己复制执行；真想让它代装系统包：./install.sh --with-system --yes
-  · fscan / massdns：**能自动，但要你点头** —— ./install.sh --full 会把 Go 便携归档与上游源码包
-    取进仓库（过 SHA256）再就地编译，全程不装系统包、不写家目录（缓存在 .cache/，实测一次编译
-    GOMODCACHE 192 MB + GOCACHE 239 MB，默认那套会写进 ~/go 与 ~/.cache）。
-    ⚠ massdns 仍需**本机 gcc/make**：C 工具链没有"便携且可校验"的官方产物，缺它就如实报、不假装编成。
+  · fscan：**要你点头**（要 Go）—— ./install.sh --with-build / --full 编译；缺 Go 则端口扫描回退 nmap → 内置 TCP connect。
+  · massdns（puredns 的传递依赖）：**续274 起标准安装即自动编** —— 检测到 gcc/make 就取本框架钉住的小源码包
+    （v1.1.0，过 SHA256，非 --with-stack 那 70MB 的 Go stack）编译并写回配置；缺 gcc/make 时交互式会尝试装工具链、
+    非交互则打印按平台的安装命令，并明确告知"子域名爆破走内置纯 Python DNS 兜底，框架照跑"。
+    要强制重编：./install.sh --full（fscan 也一起）。
   · 浏览器：**能自动，但要你点头** —— ./install.sh --full（或 --with-stack）把 Chrome for Testing
     取进 tools/browser/ 并回写 tools.screenshot.browser（续167）。Linux / Windows / macOS（x64+arm64）
     的摘要都已人工核过（续217）；Linux 在本机真机启动过，Windows/macOS 只核过归档字节与归档内版本号，

@@ -3608,11 +3608,11 @@ workflows:
         ("<div>hello MARK</div>", _BASE_P, "text-node", "medium", True),
         ('<input value="MARK">', _BASE_P, "dquote-attr", "medium", True),
         ("<input value='MARK'>", _BASE_P, "squote-attr", "medium", True),
-        ("<input value=MARK>", _BASE_P, "unquoted-attr", "high", True),
-        ('<script>var a = "MARK";</script>', _BASE_P, "js-string", "high", True),
-        ("<script>var a = MARK;</script>", _BASE_P, "js-code", "high", True),
+        ("<input value=MARK>", _BASE_P, "unquoted-attr", "medium", True),
+        ('<script>var a = "MARK";</script>', _BASE_P, "js-string", "medium", True),
+        ("<script>var a = MARK;</script>", _BASE_P, "js-code", "medium", True),
         ("<!-- MARK -->", _BASE_P, "html-comment", "low", True),
-        ("<MARK class=x>", _BASE_P, "tag-name", "high", True),
+        ("<MARK class=x>", _BASE_P, "tag-name", "medium", True),
     ]
     for _tpl, _p, _ctx, _sev, _ok in _tbl:
         _info = owasp_checks.classify_xss(_tpl.replace("MARK", _p), _p)
@@ -3654,9 +3654,9 @@ workflows:
     try:
         owasp_checks._get = _stub_get(f'<html><script>var q = "{_BASE_P}";</script></html>')
         _v_js = owasp_checks._xss_reflect(targets, settings)
-        assert _v_js and _v_js["poc_id"] == "a03-xss-reflect" and _v_js["severity"] == "high", _v_js
+        assert _v_js and _v_js["poc_id"] == "a03-xss-reflect" and _v_js["severity"] == "medium", _v_js
         assert "JS 字符串" in _v_js["detail"], _v_js["detail"]
-        # 文本节点维持 medium，且证据必须写明"需该上下文的定界符未被转义"这一前提
+        # JS 与文本节点都中危（续274：反射型一律 medium，不再按上下文升 high）；证据须写明"需该上下文的定界符未被转义"
         owasp_checks._get = _stub_get(f"<div>hello {_BASE_P}</div>")
         _v_txt = owasp_checks._xss_reflect(targets, settings)
         assert _v_txt and _v_txt["severity"] == "medium", _v_txt
@@ -31962,6 +31962,51 @@ expression: r0()
     print("[279] 续273-puredns ok: argv 前后对比钉住 #65 根因（老写法 -d <域名> 被 puredns 当文件 open ⇒ 退码1 ⇒ "
           "全量退回内置兜底；修复后裸域名走位置参数、-d 不再吃它）｜真库 #65 的条数前后对比属靶场手动对照"
           "（脱敏红线 + 真库不可达，本无头环境不自动跑）")
+    # ---------------- [280] 续274：massdns 可迁移（标准安装即编 + 缺它时 puredns 走内置兜底）----------------
+    # 硬规矩：加了功能要支撑可迁移 —— puredns 的传递依赖 massdns 不能"只下 puredns 不管 massdns"。
+    _inst280 = (ROOT / "install.sh").read_text(encoding="utf-8")
+    assert "build_massdns.py --wire --fetch" in _inst280, \
+        "标准 install.sh 没自动编 massdns（续274 起要有；否则只下 puredns、缺 massdns 跑不了快路）"
+    _bm280 = (ROOT / "tools" / "build_massdns.py").read_text(encoding="utf-8")
+    assert '"--fetch"' in _bm280 and '"--wire"' in _bm280, "build_massdns.py 缺 --fetch/--wire 入口"
+    # 兜底：puredns 装了但缺 massdns ⇒ 预检跳过 puredns、改用内置纯 Python DNS 爆破（否则每域名退码 1）
+    _sub280 = (ROOT / "scanner" / "stages" / "subdomain.py").read_text(encoding="utf-8")
+    assert 'get("tools"' in _sub280 and "massdns" in _sub280, "subdomain 没读 tools.massdns"
+    assert "not massdns_bin" in _sub280, "缺 massdns 时没走内置兜底的预检（每域名会退码 1）"
+    print("[280] 续274-massdns ok: 标准 install.sh 自动编 massdns（--fetch 取钉住源码 + make + wire）｜"
+          "缺 gcc/make 交互式尝试装工具链 / 非交互给命令 + 内置纯 Python DNS 兜底｜subdomain 预检："
+          "puredns 装了但缺 massdns ⇒ 跳过字典爆破走内置（不拿整轮时间换退码1）")
+
+    # ---------------- [281] 续274：老任务 3xx 站点跳转信息补齐（续266 折叠对老数据也生效）----------------
+    import scanner.stages.probe as _probe281
+    import gui.app as _g281
+    from scanner.config import load_settings as _lcs281
+    _settings281 = _lcs281()
+    _tk281 = db.create_task("续274-backfill", "example.com", stages=[])
+    db.insert_sites(_tk281, [
+        {"url": "http://a281.test/", "status": 301, "title": "301 Moved Permanently"},
+        {"url": "https://a281.test/", "status": 200, "title": "Home"},
+    ])
+    # 打桩 fetch：http://a281.test/ 跳到 https://a281.test/（200, Home）
+    def _fetch281(u, **kw):
+        return ({"status": 200, "url": "https://a281.test/", "text": "<title>Home</title>"}
+                if u == "http://a281.test/" else None)
+    _n281 = _probe281.backfill_site_redirects(_tk281, db, _settings281, fetch=_fetch281)
+    assert _n281 == 1, f"应补齐 1 条 3xx，实测 {_n281}"
+    _s281 = {s["url"]: s for s in db.list_sites(_tk281)}
+    _r281 = _s281["http://a281.test/"]
+    assert _r281["redirect_url"] == "https://a281.test/" and int(_r281["redirect_status"]) == 200, _r281
+    assert _r281["redirect_title"] == "Home", _r281
+    # 幂等：第二次用会炸的 fetch —— 不该再被调用（已补过的不重复请求、不覆盖）
+    def _boom281(u, **kw):
+        raise AssertionError("幂等：第二次不该再发请求")
+    assert _probe281.backfill_site_redirects(_tk281, db, _settings281, fetch=_boom281) == 0, "第二次不该再补"
+    # 补齐后续266 的显示折叠应把 http/https 同域两行配成一对（老数据也能折成一组）
+    _fk281 = _g281._site_redirect_fold_keys([dict(s) for s in db.list_sites(_tk281)])
+    assert _fk281.get(_r281["id"]) and _fk281.get(_r281["id"]) == _fk281.get(_s281["https://a281.test/"]["id"]), \
+        "补齐后 http/https 同域应配成一对折叠键"
+    print("[281] 续274-backfill ok: 老任务 3xx 补跳转信息（复用 attach_redirect_info + set_site_redirects）｜"
+          "只补缺结论的 3xx、幂等（二次不重复请求、不覆盖）｜补齐后续266 显示折叠对老数据也生效")
     print("SMOKE PASS")
 
 
