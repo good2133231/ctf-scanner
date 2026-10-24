@@ -430,6 +430,87 @@ def _ff126_ast_names(src):
     return names
 
 
+_SMOKE_ONLY = None      # `--only 268,271` 的解析结果（None＝全量）。见 main() 里的钩子。
+
+
+def _smoke_group_blocks():
+    """把 main() 里各组（262 个）的**源码行区间**切出来 —— `--only` 靠它抠出点名的组。
+
+    边界只认每组结尾那句 `print("[名字] … ok…")`：组注释有 `# ---- [` 与
+    `# ---------------- [` 两种写法，不能当边界；而那句 ok 是 262 个组唯一都有的标记。
+    四个坑全是实测踩出来的，改这条判据前先读一遍：
+      ① **进度行不算边界**：很多组开头还有一句 `print("[名字] … …")`（跑之前报进度），
+         把它当边界会把一个组切成两半（第一版就把 262 切成了 277 块）；
+      ② **ok 行不一定写 `ok:`**：`[5]` / `[5c]` 是 `… ok（…）`、结尾没冒号；
+      ③ **缩进 4 或 8 都有**：`[7x]` / `[177a]` / `[218]` 的 ok 行在 `if` 里；
+      ④ **ok 行里可能含"跳过"二字**：`[200]` 那句里有"越权跳过" ⇒ 判据不能只搜"跳过"
+         （要认的是"跳过（不是通过）"那一整句）。
+    同名多块（如 `[8d]` 组里嵌着"续103 附"的 ok 行）合并成一块，免得只跑半组。
+    """
+    _src = Path(__file__).read_text(encoding="utf-8").split("\n")
+    _head = next(i for i, l in enumerate(_src) if l.strip().startswith("# 1) 目标解析"))
+    _pat = re.compile(r'^ {4,8}print\(f?[\'"]\[([A-Za-z0-9]+)\]')
+    _marks = []
+    for i in range(_head, len(_src)):
+        m = _pat.match(_src[i])
+        if not m:
+            continue
+        depth, j, txt = 0, i, []
+        while j < len(_src):
+            txt.append(_src[j])
+            depth += _src[j].count("(") - _src[j].count(")")
+            if depth <= 0:
+                break
+            j += 1
+        _t = "".join(txt)
+        if not (("ok:" in _t) or (re.search(r"\bok\b", _t)
+                                  and not re.search(r"不是通过|skip", _t))):
+            continue                       # 进度行 / 跳过行都不算组边界
+        _marks.append((m.group(1), i + 1, j + 1))
+    # 组是 main() 里**连续的代码块**：第 k 组的源码区间 = [上一组 ok 行末 + 1, 本组 ok 行末]。
+    # 这样切片一定包含该组的「前置 setup」（如 [1] 用到上一行定义的 ts），单跑不缺变量；
+    # 否则只抠 ok 那一句 print ⇒ 用到组内前面变量的组（[1] 的 ts/cidr）单跑必 NameError。
+    # 同名多块（如 [8d] 里嵌「续103 附」那句也写 [8d]）合并成一块，免得只跑半组。
+    _consec = []
+    _prev_end = _head + 2            # 1-based：注释行(_head+1) 的下一行（第一组 [1] 的 setup 起点）
+    for _nm, _a, _b in _marks:
+        _consec.append([_nm, _prev_end, _b])
+        _prev_end = _b + 1
+    _blocks = {}
+    for _nm, _a, _b in _consec:
+        if _nm in _blocks:
+            _lo, _hi = _blocks[_nm]
+            _blocks[_nm] = (_lo, max(_hi, _b))
+        else:
+            _blocks[_nm] = (_a, _b)
+    return _src, _blocks
+
+
+def _run_only_groups(names, loc):
+    """只跑点名的那几组（顺序＝点名顺序）。
+
+    组是内联代码，"跳过某一段"做不到 ⇒ 按源码切片 + `exec`，并且**在 main() 当前的
+    locals 里跑**（fixture / db / client 都是 preamble 建好的）。依赖前面组**建的夹具**
+    的组单跑会 NameError —— 那不是 bug，把依赖组一起点名即可（判据与提示见 `--only` 的说明）。
+    """
+    _src, _blocks = _smoke_group_blocks()
+    # ⚠ globals 与 locals **合成一个环境**再 exec（续272 实测的坑）：组里 `def _check271(...)`
+    #    这种函数内定义的函数，它的 `__globals__` 是 exec 的 globals —— 只传 locals 的话，
+    #    函数体里找同组的 `_tables271` 会 NameError。
+    _env = dict(globals())
+    _env.update(loc)
+    for _n in names:
+        if _n not in _blocks:
+            raise SystemExit(f"[!] 门禁里没有组 [{_n}]（--only 只认 `print(\"[名字] … ok…\")` "
+                             f"结尾的组，共 {len(_blocks)} 个）")
+        _a, _b = _blocks[_n]
+        import textwrap
+        # `dedent` 是必须的：组代码在 main() 里**带缩进**，exec 的顶层不接受缩进 ——
+        #     不 dedent 直接 compile ⇒ IndentationError: unexpected indent（续272 重做时踩到）。
+        _code = textwrap.dedent("\n".join(_src[_a - 1:_b]))
+        exec(compile(_code, f"tests/smoke.py[{_n}]", "exec"), _env)
+
+
 def main():
     # 续222：返回值必须接住并挂到模块级（见 start_fixture 上方说明）。
     global _FIXTURE_HTTPD
@@ -442,6 +523,17 @@ def main():
     # 死在用户机器上。变异证伪＝删掉结尾那条 assert（本节因此不需要第二份判据）。
     _blk193 = ROOT / "config" / "blacklist.txt"
     _blk193_snap = _blk193.read_bytes() if _blk193.exists() else b""
+
+    # 续272（主理人点单「门禁只跑一组」）：`--only` = **源码切片 + exec**（见 `_smoke_group_blocks`）。
+    # ⚠ 两条限制必须写在脸上，别让人拿局部结果当全量通过：
+    #   ① 依赖前面组**建的夹具**的组，单跑会 NameError —— 那就把依赖组也点名进来（按点名顺序跑）；
+    #   ② **局部通过不算全量通过**：收尾仍要跑不带 --only 的完整门禁（§0.6）。
+    if _SMOKE_ONLY:
+        _run_only_groups(_SMOKE_ONLY, locals())
+        print(f"SMOKE PASS (only={','.join(_SMOKE_ONLY)}｜**局部验证**，不等于全量通过 —— "
+              f"收尾请跑不带 --only 的完整门禁)")
+        return
+
 
     # 1) 目标解析与归一化
     ts = parse_lines(["http://127.0.0.1:8765/", "# comment", "example.com",
@@ -31606,8 +31698,199 @@ expression: r0()
           "默认已开的段（portscan/hostcollide/afrog/crawl/takeover）不许混进表一｜"
           "变异（摘掉一行）⇒ 判据立刻红")
 
+    # ---------------- [272] 续272：门禁「只跑一组」--only（局部验证，不能当全量通过）----------------
+    import subprocess as _sp272
+    _exe272, _smk272 = sys.executable, str(ROOT / "tests" / "smoke.py")
+
+    def _ok_lines(_s):
+        return re.findall(r'^\[([A-Za-z0-9]+)\] .*\bok\b', _s, re.M)
+
+    # ① `--only 271`：**只**跑点名的那一组（多跑一组都算过滤没生效）
+    _p272 = _sp272.run([_exe272, _smk272, "--only", "271"], capture_output=True,
+                       text=True, timeout=300)
+    _o272 = (_p272.stdout or "") + (_p272.stderr or "")
+    assert _p272.returncode == 0, f"--only 271 退出码 {_p272.returncode}：{_o272[-500:]}"
+    assert _ok_lines(_o272) == ["271"], f"--only 271 应当只跑 [271]，实测 {_ok_lines(_o272)}"
+    assert "271] 续271 ok" in _o272, "点名那组必须真的跑了（静默跳过＝点了没反应）"
+    # ② 局部跑**不许**打印裸 "SMOKE PASS"（会被当全量通过 —— §0.6 要求收尾跑全量）
+    assert "SMOKE PASS (only=271" in _o272, "局部跑要写明 only= 与「局部验证」"
+    assert "\nSMOKE PASS\n" not in _o272, "局部跑不许打印裸 SMOKE PASS（那会让人以为全量过了）"
+
+    # ③ 多组：`--only 271,1` ⇒ 恰好两组，且按**点名顺序**跑
+    _p2 = _sp272.run([_exe272, _smk272, "--only", "271,1"], capture_output=True,
+                     text=True, timeout=300)
+    _o2 = (_p2.stdout or "") + (_p2.stderr or "")
+    assert _p2.returncode == 0, f"--only 271,1 退出码 {_p2.returncode}：{_o2[-500:]}"
+    assert _ok_lines(_o2) == ["271", "1"], f"--only 271,1 应按点名顺序跑这两组，实测 {_ok_lines(_o2)}"
+
+    # ④ 变异证伪（§6.1）：点名不存在的组 ⇒ 必须**明说**，不能静默跑全量
+    _p3 = _sp272.run([_exe272, _smk272, "--only", "NOSUCH272"], capture_output=True,
+                     text=True, timeout=120)
+    _o3 = (_p3.stdout or "") + (_p3.stderr or "")
+    assert _p3.returncode != 0, "不存在的组名必须报错（静默跑全量＝点了没反应）"
+    assert "没有组" in _o3, f"报错要说清是组名不存在：{_o3[-300:]}"
+
+    # ⑤ 切片判据自证（§6.1 "0 命中"型断言必须自带夹具）：组都切得出来，且块首尾对得上
+    _src272, _blk272 = _smoke_group_blocks()
+    assert len(_blk272) >= 260, f"只切出 {len(_blk272)} 个组 —— 切片判据漏了组（--only 会点名跑不了）"
+    _a272, _b272 = _blk272["271"]
+    assert any("续271" in x for x in _src272[_a272 - 1:_b272]), "[271] 块切错（起点不对）"
+    assert any("[271]" in x for x in _src272[_a272 - 1:_b272]), "[271] 块切错（末行不是那句 ok 行）"
+    print("[272] 续272 ok: 门禁 --only 只跑点名的组（271 单跑 / 271,1 按点名顺序）｜"
+          "局部跑不许打印裸 SMOKE PASS（只打印 only=…）｜不存在的组名明说而不是静默跑全量｜"
+          "切片判据自证（块末行＝那句 ok 行，≥260 组）")
+
+
+    # ---------------- [273] 续272-B：Ctrl+C 打在等待循环里也要收割子进程（utils._do_run_cmd）----------------
+    import ast as _ast273
+    import inspect as _insp273
+    import io as _io273
+    from scanner import utils as _u273
+
+    # ① 源码层（ast）：`_kill_group(p)` 必须在 **try/finally 的 finally** 里 ——
+    #    把它移回循环之后（旧写法）⇒ Ctrl+C 会跳过收割，工具留在后台跑。
+    _tree273 = _ast273.parse(_insp273.getsource(_u273._do_run_cmd))
+    _in_finally273 = any(
+        isinstance(_n273, _ast273.Try)
+        and any(isinstance(_c273, _ast273.Call)
+                and getattr(_c273.func, "id", "") == "_kill_group"
+                for _c273 in _ast273.walk(_b273))
+        for _n273 in _ast273.walk(_tree273)
+        if isinstance(_n273, (_ast273.Try, _ast273.TryStar))
+        for _b273 in _n273.finalbody)
+    assert _in_finally273, "_kill_group(p) 必须在 finally 里（否则 Ctrl+C 收不掉子进程）"
+
+    # ② 行为层：桩掉 Popen / poll，让等待循环**中途抛 KeyboardInterrupt**（＝用户按了 Ctrl+C）
+    _killed273 = []
+    _orig_kill273 = _u273._kill_group
+    _u273._kill_group = lambda _p273: _killed273.append(_p273) or 0
+
+    class _P273:
+        """假进程：前两次 poll 返回 None（还在跑），第三次抛中断。"""
+        def __init__(self):
+            self.stdout = _io273.StringIO("")
+            self.stderr = _io273.StringIO("")
+            self.pid, self.returncode, self._n = 0, 0, 0
+
+        def poll(self):
+            self._n += 1
+            if self._n >= 3:
+                raise KeyboardInterrupt
+            return None
+
+    _fake273 = _P273()
+    _orig_popen273 = _u273.subprocess.Popen
+    _u273.subprocess.Popen = lambda *a, **k: _fake273
+    try:
+        try:
+            _u273._do_run_cmd(["/bin/true"], None, None)
+        except KeyboardInterrupt:
+            _raised273 = True
+        else:
+            _raised273 = False
+        assert _killed273, "等待循环被打断也必须收割子进程（Ctrl+C 后工具不许留在后台）"
+        assert _raised273, "KeyboardInterrupt 必须照常往上抛（吞掉的话 Ctrl+C 就失灵了）"
+    finally:
+        _u273.subprocess.Popen = _orig_popen273
+        _u273._kill_group = _orig_kill273
+
+    # ③ 回归：正常路径不受影响（真跑一条命令，rc 仍是 0、stdout 拿得到）
+    _rc273, _o273, _e273 = _u273._do_run_cmd([sys.executable, "-c", "print('hi273')"], None, 30)
+    assert _rc273 == 0 and "hi273" in _o273, (_rc273, _o273[:80], _e273[:80])
+
+    print("[273] 续272-B ok: Ctrl+C 打在等待循环里也要收割子进程（ast 钉 _kill_group 在 finally 内 + "
+          "桩起中断实测真的杀了且异常照常上抛）｜正常路径回归（真跑一条命令 rc=0）")
+
+    # ---------------- [274] 续272-C：跨任务 /csegs 按 segment 折叠（续265 只做了任务详情页签）----------------
+    from gui.app import app as _flask274
+    import gui.app as _app274
+    from scanner import captcha as _cap274
+    _c274 = _flask274.test_client()
+
+    def _login274(_d274):
+        _b274 = set(_cap274._STORE)
+        _c274.get("/captcha.png")
+        _f274 = [k for k in _cap274._STORE if k not in _b274]
+        assert _f274, "取验证码失败"
+        return _c274.post("/login", data=dict(_d274, captcha=_cap274._STORE[_f274[-1]][0]),
+                         environ_base={"REMOTE_ADDR": "198.51.100.274"})
+    assert _login274(_admin_form117()).status_code == 302, "登录失败（跨任务页需要登录态）"
+
+    # 两个任务各写同一 /24 的一行 ⇒ 跨任务全库视图必须折成一行（IP/域名合并去重）
+    _t274a = db.create_task("续272c-A", "example.com", stages=[])
+    _t274b = db.create_task("续272c-B", "example.com", stages=[])
+    db._exec("DELETE FROM csegs")   # 隔离：清掉前面组遗留的 csegs，只留本轮两条 ⇒ 折叠计数确定（实测过全量里 10.0.0.0/24 有前人残留会多折）
+    db.insert_csegs(_t274a, [{"segment": "203.0.113.0/24", "ip": "203.0.113.9",
+                               "domains": ["a272c.com"], "count": 3}])
+    db.insert_csegs(_t274b, [{"segment": "203.0.113.0/24", "ip": "203.0.113.10",
+                               "domains": ["b272c.com"], "count": 5}])
+
+    _h274 = _c274.get("/csegs").get_data(as_text=True)
+    # 折叠后：head 行 1 条 + 收起行 1 条（`data-dup-of` 标记）；被收起行仍留在 HTML 里但带 hidden
+    assert _h274.count("data-dup-of=") == 1, \
+        f"跨任务页没按 segment 折叠（同 /24 应 1 行 + 1 行收起，实测 {_h274.count('data-dup-of=')}）"
+    assert "收起 1 条" in _h274, "应报出被收起的重复行数"
+    assert "203.0.113.9" in _h274 and "203.0.113.10" in _h274, "合并后的两 IP 都应在页面上"
+    # 展开（?all=1）：行都可见，且仍只 1 个 data-dup-of（属性不变）
+    _h274a = _c274.get("/csegs?all=1").get_data(as_text=True)
+    assert _h274a.count("data-dup-of=") == 1 and "只看去重" in _h274a, "all=1 应展开 + 给回「只看去重」"
+
+    # 变异证伪（§6.1）：路由若没调 _fold_csegs（旧写法 _asset_page 直接出）→ 没有 data-dup-of ⇒ 红
+    _real274 = _app274._fold_csegs
+    _app274._fold_csegs = lambda rows, show_all=False: (rows, 0)
+    try:
+        _hm274 = _c274.get("/csegs").get_data(as_text=True)
+        assert _hm274.count("data-dup-of=") == 0, "变异：路由没折叠时应无 data-dup-of（判据必须红）"
+    finally:
+        _app274._fold_csegs = _real274
+    print("[274] 续272-C ok: 跨任务 /csegs 按 segment 折叠（照 /dirs agg：整表取+_fold_csegs+自己切片）｜"
+          "同 /24 折成 1 行+1 收起（IP/域名合并）｜报「收起 1 条」｜?all=1 展开+「只看去重」｜"
+          "变异（路由不折叠⇒data-dup-of 消失）立刻红")
+
+    # ---------------- [275] 续272-E：自动送探 ext_auto_probe_max 出厂值（观察＝确认合理）----------------
+    from scanner import runner as _run275
+    from scanner.config import DEFAULTS as _D275
+    import yaml as _y275
+    # 默认策略下：ext_auto_probe 开、max=5（两处同值：config.py DEFAULTS / settings.yaml）
+    _ship275 = _y275.safe_load(open("config/settings.yaml", encoding="utf-8").read())
+    assert _D275["subdomain"]["ext_auto_probe"] is True, "默认应开启自动送探（续263 主理人口径）"
+    assert _ship275["subdomain"]["ext_auto_probe"] is True, "DEFAULTS 与 settings.yaml 的 ext_auto_probe 要一致"
+    # 出厂 5 个（理由：一次送 5 个让人工看得过来、错了能一键拉黑；送 200 个＝脚本替你圈了一批别人的域名在扫）
+    _d275 = _run275.ext_auto_probe_max({})
+    assert _d275 == 5, f"默认 ext_auto_probe_max 应是 5，实测 {_d275}"
+    # 夹 1..50：超界配置被钳制（防误配把自动送探变成盲扫）
+    assert _run275.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 200}}) == 50, "上限应钳到 50"
+    assert _run275.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 0}}) == 5, "非正数回落 5"
+    assert _run275.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": -3}}) == 1, "负数应钳到 1"
+    print("[275] 续272-E ok: 自动送探 ext_auto_probe_max 出厂 5（一次送 5 个让人工看得过来）｜"
+          "夹 1..50（200→50 / 0→5 / -3→1）｜默认 ext_auto_probe=True（DEFAULTS 与 settings.yaml 同值）")
+
+    # ---------------- [276] 续272-E：puredns argv 回归（续264 修好；#65 真库对比见说明）----------------
+    from scanner.stages import subdomain as _sub276
+    # 续264 修的 bug：老代码把裸域名塞进 `-d`，puredns 当成文件去 open ⇒ 退码 1、全量退回内置兜底
+    # （#65 日志里就是 `puredns targ1.com 退出码 1` 紧跟 `改用内置 DNS 爆破兜底`）。修复后：
+    # 单个域名走**位置参数**，绝不出现在 `-d` 后面（subdomain.py 的 puredns_bruteforce_argv 全仓只此一处）。
+    _argv276 = _sub276.puredns_bruteforce_argv("puredns", "wl.txt", "targ1.com", "res.txt", "out.txt")
+    assert "-d" not in _argv276, f"续264 修复后不应再用 -d 塞裸域名：{_argv276}"
+    assert _argv276[0] == "puredns" and _argv276[1] == "bruteforce", _argv276
+    assert "targ1.com" in _argv276, "域名必须出现在 argv 里"
+    _i276 = _argv276.index("bruteforce")
+    assert _argv276[_i276 + 1] == "wl.txt" and _argv276[_i276 + 2] == "targ1.com", \
+        f"域名必须是位置参数（紧接 wordlist），而非 -d 的值：{_argv276}"
+    print("[276] 续272-E ok: puredns argv 回归（续264 修复钉住：域名走位置参数、-d 不再吃裸域名；"
+          "老写法 `-d targ1.com` 会让 puredns open 它退码 1、全量退回内置兜底）｜"
+          "真库 #65 的前后对比属靶场环境手动对照，本无头环境不自动跑（脱敏红线 + 真库不可达）")
+
     print("SMOKE PASS")
 
 
 if __name__ == "__main__":
+    _argv272 = sys.argv[1:]
+    _only272 = []
+    for _i272, _a272 in enumerate(_argv272):
+        if _a272 in ("--only", "-k") and _i272 + 1 < len(_argv272):
+            _only272 += [x.strip() for x in _argv272[_i272 + 1].split(",") if x.strip()]
+        elif _a272.startswith("--only="):
+            _only272 += [x.strip() for x in _a272.split("=", 1)[1].split(",") if x.strip()]
+    _SMOKE_ONLY = _only272 or None
     main()

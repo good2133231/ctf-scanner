@@ -619,7 +619,7 @@ def ext_auto_probe_max(settings=None):
         n = int(((settings or {}).get("subdomain") or {}).get("ext_auto_probe_max") or 0)
     except (TypeError, ValueError):
         n = 0
-    if n <= 0:
+    if n == 0:
         n = 5
     return max(1, min(50, n))
 

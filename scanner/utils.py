@@ -282,16 +282,24 @@ def _do_run_cmd(argv, cwd, timeout, extra_path=None, stop=None, extra_env=None):
 
     deadline = (time.monotonic() + timeout) if timeout else None
     timed_out = False
-    while p.poll() is None:                       # 直接子进程还在跑
-        if deadline is not None and time.monotonic() >= deadline:
-            timed_out = True
-            break
-        if stop is not None and stop.is_set():
-            break
-        time.sleep(0.05)
-    _kill_group(p)                                # 三条出路都收割：正常退/超时/被叫停
-    for _r in _readers218:
-        _r.join(_REAP_GRACE)                      # 收尸：等管道 EOF；孙进程还活着就只等到宽限期
+    try:
+        while p.poll() is None:                       # 直接子进程还在跑
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
+            if stop is not None and stop.is_set():
+                break
+            time.sleep(0.05)
+    finally:
+        # 续272-B：**收割必须放在 finally** —— 旧写法把这两行写在循环**之后**，
+        # 一旦等待循环里抛 `KeyboardInterrupt`（用户按 Ctrl+C）或任何异常就被跳过 ⇒
+        # 子进程、以及它拉起的孙进程（fscan / nmap / dirmap 都会再 fork）变成孤儿继续跑，
+        # 管道也没人收 —— 用户在命令行看到的"已经退出了"，其实工具还在后台发请求。
+        # 中断照常往上抛（不吞）；吞了 Ctrl+C 就失灵了。
+        _kill_group(p)                                # 三条出路都收割：正常退/超时/被叫停
+        for _r in _readers218:
+            _r.join(_REAP_GRACE)                      # 收尸：等管道 EOF；孙进程还活着就只等到宽限期
+
     out, err = "".join(_chunks["out"]), "".join(_chunks["err"])
     if timed_out:
         return 124, out, "timeout"

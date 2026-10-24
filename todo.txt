@@ -4424,25 +4424,22 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 SMOKE PASS rc=0：**296 组**（+1＝`[271]`），日志 `logs/_smoke271.log`
 - [x] C2 记忆同步：CHANGELOG 续271 + todo 续271 + AGENTS 加"清单在哪、怎么读"那条
 
-下一轮（续272）：主理人 10 连点单 ⑤⑥⑦⑧⑨⑩ **已全部做完**（⑤ 续267 / ⑥ 续268 / ⑦ 续266 /
-⑧ 续269 / ⑨ 续270 / ⑩ 续271）。下面回到历史遗留：
-- [ ] 续264：puredns 修好后重跑一次 #65 同参数任务，和修前对比子域名/站点/目录条数（"域名回来了"的实测数字）
-- [ ] 续263：门禁"只跑一组"过滤（每次全量 ~13 分钟，主理人要更快的局部验证）
-- [ ] CLI Ctrl+C 后工具子进程不回收：`utils._do_run_cmd` 等待循环缺 try/finally
-- [ ] 跨任务 `/csegs`、`/certs` 两页同样去重（续265 只做了任务详情两个页签）
-- [ ] 自动送探真机观察：`ext_auto_probe_max` 出厂 5 是否合适
+## 续272（2026-10-24，WorkBuddy · CodeBuddy）：门禁「只跑一组」--only + 历史遗留 5 条收尾
+实施者：WorkBuddy · CodeBuddy
 
+- [x] 续263（＝续272-A）：门禁「只跑一组」`--only 268,271`（源码切片 + exec，局部秒级验证，不打裸 SMOKE PASS）
+- [x] 续272-B：CLI Ctrl+C 后子进程不回收 —— `utils._do_run_cmd` 等待循环加 try/finally 收割 `_kill_group(p)`（ast 钉 + 桩 poll 抛中断实测）
+- [x] 续272-C：跨任务 `/csegs` 按 segment 折叠（照 /dirs agg：整表取 + `_fold_csegs` + 自己切片）；`/certs` 无跨任务页（只有任务详情页签，续265 已折）—— 如实记录，不凭空造页
+- [x] 续272-E：自动送探 `ext_auto_probe_max` 出厂值观察：5 合理（一次送 5 个让人工看得过来）、夹 1..50
+- [x] 续264：puredns argv 修复回归钉住；真库 #65 前后对比属靶场手动对照，本无头环境不自动跑（脱敏红线 + 真库不可达）
+- [x] 顺带修掉本次全量才暴露的真 bug（详见 CHANGELOG 踩坑节）：`_smoke_group_blocks` 只切 ok 那句致 --only 跑组"1"NameError；[273] ast.walk 对非 try 节点取 finalbody 崩；`ext_auto_probe_max` 负数被 `n<=0→5` 吞（应钳 1）；csegs.html 重写丢"C 段视野/name=q/每页"触发 [831]；[274] 猴子补丁打到 app 实例而非模块
+- [x] C1 全量门禁 SMOKE PASS rc=0：**277 组**（+5＝`[272]`~`[276]`），墙钟 ~9 分钟，日志 `logs/_smoke272.log`
+- [x] C2 记忆同步：CHANGELOG 续272 + todo 续272 + AGENTS §6「刻意不做 --only」那条改成实际口径
 
-
-
-历史遗留（来自续263/264）：
-- [ ] 续264：puredns 修好后重跑一次 #65 同参数任务，和修前对比子域名/站点/目录条数（"域名回来了"的实测数字）
-- [ ] 续263：门禁"只跑一组"过滤（每次全量 ~9 分钟，主理人要更快的局部验证）
-- [ ] CLI Ctrl+C 后工具子进程不回收：`utils._do_run_cmd` 等待循环缺 try/finally
-- [ ] 跨任务 `/csegs`、`/certs` 两页同样去重（续265 只做了任务详情两个页签）
-- [ ] 自动送探真机观察：`ext_auto_probe_max` 出厂 5 是否合适
-
-
+下一轮（续273）：漏掉的小尾巴
+- [ ] 续264：puredns 修好后重跑一次 #65 同参数任务，和修前对比子域名/站点/目录条数（需靶场/真库；脱敏红线 + 不可达）
+- [ ] 文档：把 `docs/features-off-by-default.md` 在 GUI 策略页 / 建任务页给个入口链接
+- [ ] 跨任务 /csegs 折叠在超大数据量下的分页表现（目前整表取，C 段量级小，暂未压）
 
 ## 续264（2026-10-23，WorkBuddy · CodeBuddy）：修 puredns argv（深档字典从来没跑过）+ 详情页拓展页签补"已归纳就隐藏"
 实施者：WorkBuddy · CodeBuddy

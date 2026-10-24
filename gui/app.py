@@ -3957,11 +3957,44 @@ def create_app():
     @app.route("/csegs")
     @login_required
     def csegs():
+        show_all = _overlap_args()
         tid, tw, tp = _task_scope()          # 续112-E：同上，「按任务筛选」
-        rows, pager, q = _asset_page("csegs", "/csegs", extra_where=tw, extra_params=tp)
-        if tid:
-            pager["qs"] += f"&task={tid}"
+        page, size, q = _page_args()
+
+        def _state(**over):
+            st = {"q": q or None, "size": size,
+                  "all": "1" if show_all else None,
+                  "task": (str(tid) if tid else None)}
+            st.update(over)
+            return {k: v for k, v in st.items() if v}
+
+        link_all = url_for("csegs", **_state(all=None if show_all else "1"))
+
+        def _qs():
+            _parts = []
+            if q:
+                _parts.append(f"q={quote(q)}")
+            _parts.append(f"size={size}")
+            if show_all:
+                _parts.append("all=1")
+            if tid:
+                _parts.append(f"task={tid}")
+            return "&" + "&".join(_parts)
+
+        # C 段去重是**跨任务整表语义**（同 /24 可能落在不同任务的资产里）：
+        # 照 /dirs agg —— 整表取回 → _fold_csegs 折叠 → 切片分页（折叠只能 Python 做，下推 SQL 会漂移）。
+        _all_rows, _ = _page_assets("csegs", limit=None, offset=0, q=q or None,
+                                    extra_where=tw, extra_params=tp)
+        rows, hidden = _fold_csegs(_all_rows, False)   # 始终保留 data-dup-of 标记（show_all 只控显隐）
+        total = len(rows)
+        pages = max(1, (total + size - 1) // size)
+        if page > pages:
+            page = pages
+        rows = rows[(page - 1) * size: page * size]
+        pager = {"page": page, "size": size, "total": total, "pages": pages,
+                 "base": page_url("/csegs"), "qs": _qs()}
         return render_template("csegs.html", csegs=rows, pager=pager, q=q,
+                               show_all=show_all, hidden=hidden, link_all=link_all,
                                task_id=tid or "", tasks=_tasks_with_asset("csegs"))
 
     @app.route("/urls")

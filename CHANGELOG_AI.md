@@ -3,6 +3,54 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续272（2026-10-24，WorkBuddy · CodeBuddy）：门禁「只跑一组」--only + 历史遗留 5 条收尾
+
+### A. 门禁「只跑一组」`--only`（续263 点单）：全量 ~13 分钟，主理人要更快的局部验证
+- 296 个组是**内联在 `main()` 里的顺序代码**，没法"跳过某一段"而不动那 296 处 ⇒ 按**源码切片 + exec**：
+  边界只认每组结尾那句 `print("[名字] … ok…")`（唯一稳定标记）。`dev.py smoke --only 268,271` 透传，
+  输出只打点名的组、**不打裸 SMOKE PASS**（判据是**整行**`\nSMOKE PASS\n`，`SMOKE PASS (only=…)` 不算）。
+- **坑1（本轮踩，根因）**：`_smoke_group_blocks` 一开始只切"ok 那一句 print"（从 print 行到括号配平），
+  **不含组内前置 setup** ⇒ 用到组内前面变量的组单跑必 NameError（`--only 271,1` 跑组"1"就炸在 `ts` 未定义，
+  而 `--only 271` 能过——因为 271 的 ok 行是自足字符串）。修法：块改成**连续区间**
+  （第 k 组 = [上一组 ok 行末+1, 本组 ok 行末]），切片一定含该组 setup。
+- **坑2**：自证断言 `"ok:" in _src272[_b272-1]` 也不对 —— 多行 print 的 `ok:` 在**首行**、末行是收尾字符串；
+  改成"块内含 `[271]` 那句"。切片判据自带变异证伪：块须覆盖 main() ≥99% 行 + 块内含 `assert`。
+
+### B. CLI Ctrl+C 后子进程不回收（续264 点单）：`utils._do_run_cmd` 等待循环缺 try/finally
+- 旧写法：等待循环之后才 `_kill_group(p)` + join；`KeyboardInterrupt` 一抛这两行被跳过 ⇒ 子进程/孙进程
+  （fscan/nmap/dirmap 都会再 fork）变孤儿继续发请求。修法：收割进 `try/finally`。
+- 门禁 [273]：ast 钉"`_kill_group(p)` 在 finally 里" + 桩 `poll` 抛中断实测真杀了 + 异常照常上抛 + 正常路径回归。
+- **坑3**：[273] 的 ast 检查写的是 `for _b in [_n.finalbody]` 遍历**所有** `ast.walk` 节点，而 `Module` 等节点
+  没有 `finalbody` ⇒ AttributeError。修法：`if isinstance(_n, (ast.Try, ast.TryStar))` 过滤。
+
+### C / ④. 跨任务 `/csegs` 去重（续265 只做了任务详情页签）
+- `/csegs` 跨任务页照 `/dirs` agg 改成**整表取 + `_fold_csegs` + 自己切片**（折叠只能 Python 做，下推 SQL 必漂移）；
+  模板加"合并 IP/域名 + `data-dup-of` 标记 + 收起 N 条 + `?all=1` 只看去重"。`_fold_csegs` 始终保留 `_dup_head`
+  标记（show_all 只控显隐、不 pop 标记）⇒ 两种模式都数得到 1 个 `data-dup-of`。
+- **`/certs` 没有跨任务页**（证书只在任务详情页签，续265 已折，`git grep '@app.route("/certs"'` 空）⇒ 如实记录，不凭空造页。
+- **坑4（全量才暴露）**：[274] 猴子补丁写的是 `from gui.app import app as _app274` 再 `_app274._fold_csegs`
+  —— 那是 **Flask 实例**、没有 `_fold_csegs` ⇒ AttributeError。修法：`from gui.app import app as _flask274`
+  （给 test_client）+ `import gui.app as _app274`（给猴子补丁的模块）。**另**：`--only 274` 单跑绿、全量红 ——
+  前面组已在 `10.0.0.0/24` 留了 cseg，全量里同 /24 多折出一条 ⇒ [274] 改用独占 `203.0.113.0/24`
+  + 开头 `DELETE FROM csegs` 隔离，计数才确定。**教训：跨任务整表视图的测试必须隔离段，不能假设库里只有自己那两行。**
+- **坑5（我自造）**：重写 `csegs.html` 时丢了旧模板的 `C 段视野`（title）/ `name="q"`（关键字框）/ `每页`（分页条），
+  触发 main() 里 [831] 的旧断言红。教训：**重写模板要对着旧模板的功能清单核**，别只图折叠新功能。
+
+### ⑤/①. 自动送探 & puredns（观察类）
+- `ext_auto_probe_max` 出厂 5、夹 1..50。**坑6（真 bug）**：函数写的是 `if n <= 0: n = 5`，负数 -3 被吞成 5，
+  与"负数钳到 1"的设计相反；改成 `if n == 0: n = 5`（仅未配置/显式 0 回落出厂值），负数交给 `max(1, min(50, n))`。
+  门禁 [275] 钉 5 / 200→50 / 0→5 / -3→1。
+- `puredns` argv 的 bug 续264 **已修好**（`puredns_bruteforce_argv` 全仓唯一处：裸域名走位置参数，不塞 `-d`）。
+  门禁 [276] 钉住；真库 #65 前后对比属靶场手动对照，本无头环境不自动跑。
+
+### 验证（实测数字）
+- 全量门禁 `tests/smoke.py`（`.venv`，注销 HTTP_PROXY/PYTHONPATH）**SMOKE PASS rc=0**：**277 组**
+  （+5＝`[272]`~`[276]`），墙钟 08:47:42→08:56:51 ≈ **9 分钟**，日志 `logs/_smoke272.log`（gitignored，本机留档）。
+- 局部：`--only 271` / `271,1` / `273` / `274` / `275` / `276` 各自 rc=0 单独验过再进全量。
+- 改动文件：`tests/smoke.py`（+5 组 + `_smoke_group_blocks` 连续块 + 自证断言 + [274] 隔离）、`scanner/utils.py`
+  （`_do_run_cmd` try/finally）、`gui/app.py`（`/csegs` 路由整表取 + 折叠）、`gui/templates/csegs.html`（重写）、
+  `scanner/runner.py`（`ext_auto_probe_max` 负数钳位）。
+
 ## 续271（2026-10-23，WorkBuddy · CodeBuddy）：⑩ 整理「已实现但未默认开启」的清单
 
 ### A. 点单原文
