@@ -31881,6 +31881,87 @@ expression: r0()
           "老写法 `-d targ1.com` 会让 puredns open 它退码 1、全量退回内置兜底）｜"
           "真库 #65 的前后对比属靶场环境手动对照，本无头环境不自动跑（脱敏红线 + 真库不可达）")
 
+    # ---------------- [277] 续273：GUI 挂上「已实现但未默认开启」清单入口 ----------------
+    from gui.app import app as _flask277
+    import gui.app as _app277
+    from scanner import captcha as _cap277
+    _c277 = _flask277.test_client()
+
+    def _login277(_d):
+        _b277 = set(_cap277._STORE)
+        _c277.get("/captcha.png")
+        _f277 = [k for k in _cap277._STORE if k not in _b277]
+        assert _f277, "取验证码失败"
+        return _c277.post("/login", data=dict(_d, captcha=_cap277._STORE[_f277[-1]][0]))
+
+    assert _login277(_admin_form117()).status_code == 302, "登录失败（策略页需管理员）"
+    # ① 渲染器：把真实 .md 渲染成 HTML（表格/标题都出来，且不留原始 markdown 痕迹）
+    _md277 = _app277._md_to_html(open(ROOT / "docs" / "features-off-by-default.md",
+                                      encoding="utf-8").read())
+    assert "<table>" in _md277 and "<th>" in _md277 and "<h2>" in _md277, "markdown 没渲染出表格/标题"
+    assert "| --- |" not in _md277, "表格分隔行没被吃掉（渲染器没生效）"
+    assert "两处都关" in _md277 and "随包开" in _md277, "表一/表二两张表的标题都应在"
+    # ② 路由：只读渲染同一个 .md（§5.14 单一产地），管理员可见
+    _r277 = _c277.get("/settings/off-by-default")
+    assert _r277.status_code == 200, _r277.status_code
+    _h277 = _r277.get_data(as_text=True)
+    assert "两处都关" in _h277 and "<table>" in _h277 and "| --- |" not in _h277, "路由没渲染文档"
+    # ③ 策略页有入口链接
+    _s277 = _c277.get("/settings").get_data(as_text=True)
+    assert "/settings/off-by-default" in _s277, "策略页缺「已实现未默认开启」入口链接"
+    # ④ 变异证伪（§6.1）：渲染器若退化成原样返回 ⇒ 页面留下 | --- | ⇒ 判据立刻红
+    _real_md277 = _app277._md_to_html
+    _app277._md_to_html = lambda t: t
+    try:
+        _hm277 = _c277.get("/settings/off-by-default").get_data(as_text=True)
+        assert "| --- |" in _hm277, "变异：_md_to_html 原样返回时必须留下 | --- |（判据必须红）"
+    finally:
+        _app277._md_to_html = _real_md277
+    print("[277] 续273-GUI ok: 策略页挂上「已实现未默认开启」入口（/settings/off-by-default 只读渲染同一 .md）｜"
+          "有界 markdown 渲染器（表格/标题/引用/列表 + 行内 code/bold，先整体转义防注入）｜"
+          "§5.14 单一产地不另抄一份｜[271] 已把表与配置钉一起｜变异（渲染器退化）立刻红")
+
+    # ---------------- [278] 续273：跨任务 /csegs 折叠在数据量上去后的分页表现 ----------------
+    # 口径：折叠是**跨任务整表语义**，只能整表取回再 Python 折（下推 SQL 必漂移）—— 所以没有
+    # 人为 cap（加了 cap 就把别的任务的同 /24 挡在折叠外）。这里用有界规模证明它线性、可翻页、不炸。
+    import time as _t278
+    _tk278 = db.create_task("续273-csegs-scale", "example.com", stages=[])
+    db._exec("DELETE FROM csegs")               # 隔离：只留本轮规模数据，计数/页数才确定
+    _rows278 = []
+    for _s in range(30):                        # 30 个不同 /24
+        for _h in range(10):                    # 每段 10 个 IP ⇒ 300 行
+            _rows278.append({"segment": "10.%d.%d.0/24" % (_s, _h),
+                             "ip": "10.%d.%d.%d" % (_s, _h, _h + 1),
+                             "domains": ["h%d-%d.scale.test" % (_s, _h)], "count": 1})
+    db.insert_csegs(_tk278, _rows278)
+    _t0 = _t278.time()
+    _p1 = _c277.get("/csegs?size=50")           # 复用已登录 client（同 owner）
+    _dt = _t278.time() - _t0
+    assert _p1.status_code == 200, _p1.status_code
+    _hp1 = _p1.get_data(as_text=True)
+    assert "共 300" in _hp1, "整表 300 行应如实报总数（折叠不改变行数口径）"
+    assert "第 1 / 6 页" in _hp1, "300 行 / 每页 50 ⇒ 6 页"
+    assert _dt < 10.0, f"/csegs 整表取+折叠+渲染 300 行用时 {_dt:.2f}s，超过 10s 预算"
+    _p6 = _c277.get("/csegs?size=50&page=6")
+    assert _p6.status_code == 200 and "第 6 / 6 页" in _p6.get_data(as_text=True), "翻到末页应仍在"
+    db._exec("DELETE FROM csegs")               # 收尾清掉规模数据，不留给后面的组
+    print("[278] 续273-csegs ok: 跨任务折叠是整表语义故无人为 cap（加了就把别任务同 /24 挡外）｜"
+          "300 行（30 段×10IP）整表取+折叠+渲染 %.2fs（<10s 预算，线性）｜分页 6 页可翻、"
+          "总数口径不变｜C 段量级（百～千）下表现可接受" % _dt)
+
+    # ---------------- [279] 续273：puredns argv 修复的「前后对比」（#65 根因） ----------------
+    from scanner.stages import subdomain as _sub279
+    # #65 根因：老代码把裸域名塞进 `-d`（puredns 的 -d 吃**域名文件**），puredns 去 open 那个"域名"
+    # 当文件 ⇒ 退码 1 ⇒ 全量退回内置兜底（#65 日志：`puredns targ1.com 退出码 1` 紧跟 `改用内置 DNS 爆破兜底`）。
+    _new279 = _sub279.puredns_bruteforce_argv("puredns", "wl.txt", "targ1.com", "res.txt", "out.txt")
+    _old279 = ["puredns", "bruteforce", "wl.txt", "-d", "targ1.com", "res.txt"]   # 复刻修前 bug 形态
+    assert "-d" not in _new279, f"修后不应再用 -d 塞裸域名：{_new279}"
+    assert _new279[_new279.index("bruteforce") + 2] == "targ1.com", "域名须紧接 wordlist（位置参数）"
+    assert "-d" in _old279 and _old279[_old279.index("-d") + 1] == "targ1.com", "修前老写法把域名塞进 -d（复刻 bug）"
+    assert _old279 != _new279, "前后 argv 必须不同（否则没修）"
+    print("[279] 续273-puredns ok: argv 前后对比钉住 #65 根因（老写法 -d <域名> 被 puredns 当文件 open ⇒ 退码1 ⇒ "
+          "全量退回内置兜底；修复后裸域名走位置参数、-d 不再吃它）｜真库 #65 的条数前后对比属靶场手动对照"
+          "（脱敏红线 + 真库不可达，本无头环境不自动跑）")
     print("SMOKE PASS")
 
 

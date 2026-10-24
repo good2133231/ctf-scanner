@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}已实现但未默认开启的功能{% endblock %}
+{% block content %}
+<h2>已实现、但没有默认开启的功能</h2>
+{% if missing %}
+  <p class="error">找不到 <code>docs/features-off-by-default.md</code>。
+    这份清单由门禁 <code>[271]</code> 与配置钉在一起（续271），文件不应缺失。</p>
+{% else %}
+  <p class="muted note">本页渲染的是仓库里的 <code>docs/features-off-by-default.md</code>
+    （§5.14 单一产地，不另抄一份，避免两处漂移）。门禁 <code>[271]</code> 把这张表与
+    <code>scanner/config.py</code> 的 <code>DEFAULTS</code> / 随包 <code>config/settings.yaml</code>
+    钉在一起：配置变了表没变 ⇒ 红。</p>
+  <div class="panel md-doc">{{ content|safe }}</div>
+{% endif %}
+<p><a class="btn-mini ghost" href="{{ url_for('settings_page') }}">← 返回策略配置</a></p>
+{% endblock %}

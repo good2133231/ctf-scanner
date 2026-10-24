@@ -8,6 +8,14 @@
   <span class="muted">面板默认折叠（一屏几百个勾选框实在难找），点标题栏即可展开/收起，
     展开状态记在本机浏览器里。</span>
 </div>
+{# 续273：「已实现但未默认开启」清单的 GUI 入口（只读，一个链接，无表单字段） #}
+<section class="panel collapsible" data-panel="offdefault">
+  <h2>已实现、但没默认开启的功能</h2>
+  <p class="muted note">有些能力代码写好了、却默认关闭（要 key / 要外部二进制 / 刻意保守）。
+    完整清单（为什么没开 / 怎么开 / 要什么）见
+    <a href="{{ url_for('off_by_default_page') }}">「已实现但未默认开启的功能」</a>。
+    该页渲染的是 <code>docs/features-off-by-default.md</code>（§5.14 单一产地，门禁 [271] 与配置钉在一起）。</p>
+</section>
 {# 续114-B：外部情报源「现在到底跑不跑得动」= 策略开关 × 凭据是否就位。刻意放在 <form> 之外： #}
 {# 这一栏只读，混进表单里就会被"保存策略配置"一起提交，而它一个字段都不该提交。 #}
 <section class="panel collapsible" data-panel="extsrc">

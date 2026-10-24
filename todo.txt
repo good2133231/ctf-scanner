@@ -4436,10 +4436,22 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 SMOKE PASS rc=0：**277 组**（+5＝`[272]`~`[276]`），墙钟 ~9 分钟，日志 `logs/_smoke272.log`
 - [x] C2 记忆同步：CHANGELOG 续272 + todo 续272 + AGENTS §6「刻意不做 --only」那条改成实际口径
 
-下一轮（续273）：漏掉的小尾巴
-- [ ] 续264：puredns 修好后重跑一次 #65 同参数任务，和修前对比子域名/站点/目录条数（需靶场/真库；脱敏红线 + 不可达）
-- [ ] 文档：把 `docs/features-off-by-default.md` 在 GUI 策略页 / 建任务页给个入口链接
-- [ ] 跨任务 /csegs 折叠在超大数据量下的分页表现（目前整表取，C 段量级小，暂未压）
+## 续273（2026-10-24，WorkBuddy · CodeBuddy）：续272 收尾后漏掉的三条小尾巴
+实施者：WorkBuddy · CodeBuddy
+
+- [x] puredns argv 前后对比：合成靶 example.com + 本机 massdns 实测（修前 `puredns error: open
+      example.com: no such file or directory` 退码1/0域名 ⇒ 兜底；修后退码0/www.example.com）；
+      门禁 [279] hermetic 钉住；**真目标 #65 条数对比仍需靶场**（真库不可达 + massdns 需在 PATH）
+- [x] GUI 挂「已实现但未默认开启」入口：/settings/off-by-default 只读渲染同一 .md（§5.14 单一产地）
+      + 策略页链接；有界 _md_to_html（不引第三方 markdown 库，先转义防注入）；门禁 [277]
+- [x] /csegs 折叠分页表现：确认整表取无 cap（折叠是跨任务整表语义，加了 cap 就把别任务同 /24 挡外）；
+      门禁 [278] 300 行（30段×10IP）整表取+折叠+渲染 0.06s（<10s 预算，线性）
+- [x] C1 全量门禁 SMOKE PASS rc=0：**280 组**（+3＝`[277]`~`[279]`），墙钟 ~9 分钟，日志 `logs/_smoke273.log`
+- [x] C2 记忆同步：CHANGELOG 续273 + todo 续273 + AGENTS 补「/csegs 整表取无 cap」口径
+
+下一轮（续274）：
+- [ ] puredns #65 **真目标**同参数任务前后对比（需靶场 + massdns 在 PATH；合成靶已证修复，真数字留手动）
+- [ ] 启发式 0day：主动 fuzz 与 305 个导入 POC 的实测校准（长期项，编号待办 1 遗留）
 
 ## 续264（2026-10-23，WorkBuddy · CodeBuddy）：修 puredns argv（深档字典从来没跑过）+ 详情页拓展页签补"已归纳就隐藏"
 实施者：WorkBuddy · CodeBuddy

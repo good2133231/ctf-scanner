@@ -835,6 +835,76 @@ def _fold_csegs(rows, show_all=False):
             r.pop("_dup_head", None)
     return out, hidden
 
+def _md_to_html(text):
+    """续273：把 docs/features-off-by-default.md 这类**结构受限**的 markdown 渲染成 HTML。
+
+    刻意**不引第三方 markdown 库**（requirements 只有 flask/requests/PyYAML）：这个文档只用到
+    标题 / 引用块 / 表格 / 无序列表 / 行内 `code` 与 **bold**，写个有界渲染器即可，且先整体转义
+    防注入（文档里可能出现 `<...>`）。不是通用 markdown —— 只覆盖本文档用到的构造。
+    """
+    import html as _h, re as _r
+
+    def _inline(s):
+        s = _h.escape(s, quote=False)
+        s = _r.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+        s = _r.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
+        return s
+
+    _lines = text.split("\n")
+    _out, _i, _n = [], 0, len(_lines)
+    _special = _r.compile(r"^(#{1,6}\s|>|\||- )")
+    while _i < _n:
+        _s = _lines[_i].strip()
+        if not _s:
+            _i += 1
+            continue
+        _m = _r.match(r"^(#{1,6})\s+(.*)$", _s)
+        if _m:
+            _lv = len(_m.group(1))
+            _out.append("<h%d>%s</h%d>" % (_lv, _inline(_m.group(2)), _lv))
+            _i += 1
+            continue
+        if _s.startswith(">"):
+            _buf = []
+            while _i < _n and _lines[_i].strip().startswith(">"):
+                _buf.append(_lines[_i].strip()[1:].lstrip())
+                _i += 1
+            _out.append("<blockquote>" + "<br>".join(_inline(x) for x in _buf) + "</blockquote>")
+            continue
+        if _s.startswith("|"):
+            _rows = []
+            while _i < _n and _lines[_i].strip().startswith("|"):
+                _rows.append(_lines[_i].strip())
+                _i += 1
+            _data = [r for r in _rows if not _r.match(r"^\|[\s:\-|]+\|$", r)]
+            if _data:
+                _cells = [[c.strip() for c in r.strip("|").split("|")] for r in _data]
+                _t = ("<table><thead><tr>"
+                      + "".join("<th>%s</th>" % _inline(c) for c in _cells[0])
+                      + "</tr></thead><tbody>")
+                for _br in _cells[1:]:
+                    _t += "<tr>" + "".join("<td>%s</td>" % _inline(c) for c in _br) + "</tr>"
+                _t += "</tbody></table>"
+                _out.append(_t)
+            continue
+        if _s.startswith("- "):
+            _buf = []
+            while _i < _n and _lines[_i].strip().startswith("- "):
+                _buf.append(_lines[_i].strip()[2:])
+                _i += 1
+            _out.append("<ul>" + "".join("<li>%s</li>" % _inline(x) for x in _buf) + "</ul>")
+            continue
+        _buf = []
+        while _i < _n and _lines[_i].strip() and not _special.match(_lines[_i].strip()):
+            _buf.append(_lines[_i].strip())
+            _i += 1
+        if _buf:
+            _out.append("<p>" + " ".join(_inline(x) for x in _buf) + "</p>")
+        else:
+            _i += 1
+    return "\n".join(_out)
+
+
 def _ip_drill(ip, ext=False):
     """IP → 域名下钻链接（续256-T10，主理人点单「IP→域名下钻链接」）。
 
@@ -5582,6 +5652,18 @@ def create_app():
                                edge_note=_edge_note(settings),
                                console_note=_console_note(settings),
                                shot_retry_note=_shot_retry_note())
+
+    @app.route("/settings/off-by-default")
+    @login_required
+    @admin_required
+    def off_by_default_page():
+        # 续273：把 docs/features-off-by-default.md 渲染进 GUI（§5.14 单一产地 —— 不另抄一份，
+        # 只读同一个 .md；[271] 已把这张表与配置钉在一起）。只读、无表单、不进 POST。
+        _doc273 = BASE_DIR / "docs" / "features-off-by-default.md"
+        if _doc273.exists():
+            return render_template("off_by_default.html", missing=False,
+                                   content=_md_to_html(_doc273.read_text(encoding="utf-8")))
+        return render_template("off_by_default.html", missing=True, content="")
 
     # ---------- 访问审计（续48） ----------
 

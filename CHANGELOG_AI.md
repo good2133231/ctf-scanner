@@ -3,6 +3,39 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续273（2026-10-24，WorkBuddy · CodeBuddy）：续272 收尾后漏掉的三条小尾巴
+
+### A. puredns argv 修复的「前后对比」（续264 / #65）
+- #65 根因：老代码把裸域名塞进 `-d`（puredns 的 -d 吃**域名文件**）。本轮用**合成靶 example.com**
+  （脱敏红线：不碰真目标）+ 本机 `tools/scanner/{puredns,massdns}` 实测前后：
+  - 修前 `puredns bruteforce wl -d example.com -r res` ⇒ `puredns error: open example.com: no such file
+    or directory`，退码 **1**，解析出 **0** 个域名 ⇒ 全量退回内置 DNS 爆破兜底（正是 #65 日志那幕）。
+  - 修后 `puredns bruteforce wl example.com -r res -w out`（域名走位置参数）⇒ 退码 **0**，解析出
+    **`www.example.com`**。
+- 门禁 `[279]` 钉 argv 前后对比（hermetic，不依赖网络/massdns）。
+- **真目标 #65 的条数前后对比仍需靶场**（真库不可达 + massdns 需在 PATH）—— 合成靶已证修复，真数字留手动。
+
+### B. GUI 挂上「已实现但未默认开启」清单入口
+- 新增只读路由 `/settings/off-by-default`（管理员）：渲染 `docs/features-off-by-default.md`
+  （§5.14 单一产地，不另抄一份；`[271]` 已把表与配置钉一起）。策略页加入口链接。
+- 有界 markdown 渲染器 `_md_to_html`（**不引第三方库**：requirements 只有 flask/requests/PyYAML）：
+  只覆盖标题/引用块/表格/无序列表/行内 code·bold，先整体转义防注入。门禁 `[277]` 钉渲染 + 路由 +
+  入口链接 + 变异（渲染器退化成原样返回 ⇒ 页面留下 `| --- |` ⇒ 红）。
+
+### C. 跨任务 /csegs 折叠的分页表现（整表取）
+- 口径：折叠是**跨任务整表语义**（同 /24 可能落在不同任务），只能整表取回再 Python 折，下推 SQL 必漂移
+  ⇒ **无人为 cap**（加了 cap 就把别的任务的同 /24 挡在折叠外）。
+- 门禁 `[278]`：300 行（30 段×10IP）整表取+折叠+渲染实测 **0.06s**（<10s 预算，线性），分页 6 页可翻、
+  总数口径不变。结论：C 段量级（百～千）下整表取可接受；真到万级再评估（线性外推 ~2s）。
+
+### 验证
+- 全量门禁 `tests/smoke.py`（`.venv`，注销 HTTP_PROXY/PYTHONPATH）**SMOKE PASS rc=0**：**280 组**
+  （+3＝`[277]`~`[279]`），墙钟 ~9 分钟，日志 `logs/_smoke273.log`（gitignored，本机留档）。
+- puredns 实测（合成靶 example.com，本机 massdns）：修前 `open example.com: no such file` 退码1/0 域名；
+  修后退码0/www.example.com。
+- 改动文件：`gui/app.py`（`_md_to_html` + `/settings/off-by-default`）、`gui/templates/off_by_default.html`（新）、
+  `gui/templates/settings.html`（入口面板）、`tests/smoke.py`（+`[277]`~`[279]`）。
+
 ## 续272（2026-10-24，WorkBuddy · CodeBuddy）：门禁「只跑一组」--only + 历史遗留 5 条收尾
 
 ### A. 门禁「只跑一组」`--only`（续263 点单）：全量 ~13 分钟，主理人要更快的局部验证
