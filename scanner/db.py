@@ -1034,7 +1034,11 @@ def page_tasks(limit=100, offset=0, q=None, status=None, stages=None, owner_id=N
       「送探 → 子任务 → 孙任务」套娃之后的刚需（主理人点单"多任务时如何美观清晰"）。
 
     **绝不把用户输入拼进 SQL** —— 进 f-string 的只有常量列名 / 常量 SQL 片段，值一律走 `?` 占位。
-    排序恒 `id DESC`（与 `list_tasks` 一致，页面行序**不变**）。`total` 与 `rows` 共用同一组 where，
+    排序（续275，主理人点单「子任务排在父任务下方、父子进度分开、别覆盖父任务进度条」）：
+    **同一棵树连在一起、子任务排在父任务正下方** —— `COALESCE(NULLIF(parent_id,0), id) DESC`
+    按「根任务 id」归拢整棵树（新树在前），`id ASC` 让先建的父任务排在其子任务之前。老口径纯
+    `id DESC`：新建子任务会窜到父任务**上面**，观感就是"子任务把父任务顶掉了"。纯根任务的列表
+    退化成 `id DESC`（与从前逐字节一致）。`total` 与 `rows` 共用同一组 where，
     保证"共 N 条"与页内行数一致（不重不漏）。
     """
     clauses, params = [], []
@@ -1058,7 +1062,9 @@ def page_tasks(limit=100, offset=0, q=None, status=None, stages=None, owner_id=N
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     total_row = _query(f"SELECT COUNT(*) c FROM tasks{where}", tuple(params), one=True)
     total = total_row["c"] if total_row else 0
-    rows = _query(f"SELECT * FROM tasks{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+    rows = _query(f"SELECT * FROM tasks{where} "
+                  f"ORDER BY COALESCE(NULLIF(parent_id, 0), id) DESC, id ASC "
+                  f"LIMIT ? OFFSET ?",
                   tuple(params) + (int(limit), int(offset)))
     return rows, total
 

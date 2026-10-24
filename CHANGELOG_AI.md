@@ -3,6 +3,30 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续275（2026-10-24，WorkBuddy · CodeBuddy）：任务列表父子进度（子任务排父任务下方 + 阶段内进度条）
+
+### 主诉求：子任务排父任务正下方、父子进度分开（主理人点单）
+- 现象：任务列表按 `id DESC` 排，送探/自动递归**新建的子任务**（id 更大）窜到父任务**上面**；
+  跑着的子任务停在「0% - subdomain」在最顶上，观感就是"子任务把父任务的进度条顶掉了/覆盖了"。
+- 修：`db.page_tasks` 排序从纯 `id DESC` 改成 `COALESCE(NULLIF(parent_id,0), id) DESC, id ASC` ——
+  按「根任务 id」把整棵树归拢到一处（新树在前），树内 `id ASC` 让先建的父任务排在其子任务之前。
+  纯根任务的列表退化成 `id DESC`（与从前逐字节一致）。门禁 `[283]` 钉「父在子前、紧贴、父子 progress 各是各」。
+- 父子进度本就按 id 对号（续263 已钉轮询不串行）；这条修的是**观感/排序**：父任务行显示父的进度，
+  子任务缩进在其正下方显示自己的，不再窜到上面被误读成"覆盖父任务"。
+
+### 阶段内进度条（顺带：慢阶段不再整个钉在 0%/50%）
+- 加 `StageContext.report_progress(frac)` 钩子：runner 每个阶段前按该阶段 `[base,end]` 区间重绑，
+  阶段内多步据此把 DB 进度推离整数百分比（越界夹紧）。默认 no-op，mock ctx 也照跑（getattr 兜底）。
+- subdomain 在 subfinder 收完 / 被动收完 / DNS 爆破（含组合爆破）收完 / 解析回填 4 处报进度
+  （4 阶段自动送探里 subdomain 段 0→8→15→22→24，不再钉 0% 一整段）；dirscan 进 dirmap（最长一步）前 bump。
+- 门禁 `[282]`：区间推进度 + 越界夹紧 + 源码层 ≥4 处调用。
+
+### 验证
+- 全量门禁 SMOKE PASS rc=0：**284 组**（+`[282]`~`[283]`），墙钟 ~9 分钟，日志 `logs/_smoke275.log`。
+- 实测 `page_tasks`：父 #N 与子相邻、父先子后、progress 100/37 各是各。
+- 改动文件：`scanner/db.py`（page_tasks 排序 + docstring）、`scanner/runner.py`（report_progress 钩子）、
+  `scanner/stages/subdomain.py`、`scanner/stages/dirscan.py`、`tests/smoke.py`（+`[282]`~`[283]`）。
+
 ## 续274（2026-10-24，WorkBuddy · CodeBuddy）：主理人三点单（XSS 反射降中危 / massdns 可迁移 / 老数据跳转补齐）
 
 ### T1. 反射型 XSS 一律中危（主理人口径）

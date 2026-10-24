@@ -164,6 +164,10 @@ class StageContext:
         # 与 `finish()`。GUI / 队列 worker / 测试不传 ⇒ None，行为与从前逐字节一致。
         # 生命周期归 `run_task`（它的 finally 里 finish，阶段抛异常也收条）。
         self.progress = progress
+        # 续275：阶段内进度钩子。runner 在每个阶段前按该阶段 [base,end] 区间重绑，
+        # 阶段内多步的活（subdomain 的被动/爆破、dirscan 的逐站点）据此把进度条推离 0/50，
+        # 不再"整个慢阶段都钉死在一个整数百分比"。默认 no-op（GUI/队列/测试不重绑也照跑）。
+        self.report_progress = lambda frac: None
         # 取消信号：**必须在注入限流器之前**赋值 —— `throttle.inject` 要把它交给限流器，
         # 让所有等待闸门 / 令牌的地方都能在 `stop_event` 置位时立刻醒来（见 scanner/throttle.py）。
         self.stop_event = stop_event or threading.Event()
@@ -364,8 +368,16 @@ class PipelineRunner:
             if ctx.stopped():
                 stopped = True
                 break
-            db.update_task(ctx.task_id, current_stage=sname,
-                           progress=_base + int((100 - _base) * i / total))
+            _sbase = _base + int((100 - _base) * i / total)
+            _send = _base + int((100 - _base) * (i + 1) / total)
+            db.update_task(ctx.task_id, current_stage=sname, progress=_sbase)
+            # 续275：本阶段 [base,end] 区间交给阶段内进度钩子（阶段内多步据此推进度条）
+            def _mk_stage_report(_tid, _b, _e):
+                def _rep(frac):
+                    _f = max(0.0, min(1.0, float(frac or 0)))
+                    db.update_task(_tid, progress=_b + int((_e - _b) * _f))
+                return _rep
+            ctx.report_progress = _mk_stage_report(ctx.task_id, _sbase, _send)
             if pg is not None:
                 pg.stage(i + 1, total, STAGE_LABELS.get(sname, (sname,))[0])
             ctx.logger.info(f"===== 阶段 {i + 1}/{total}：{sname} =====")

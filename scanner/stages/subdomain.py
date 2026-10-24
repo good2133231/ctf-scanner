@@ -266,6 +266,7 @@ class SubdomainStage(Stage):
             else:
                 ctx.logger.warning(f"[subdomain] subfinder 退出码 {rc}：{err.strip()[:200]}")
 
+        getattr(ctx, "report_progress", lambda f: None)(0.33)   # 续275：subfinder 收完（阶段内进度，别钉在 0%）
         # ---------- 2) 内置多来源被动收集（免 key 公开接口）----------
         # **与 subfinder 取并集**（`subdomain.union_passive`，默认开）：
         # 两边的源集合并不相同（subfinder 覆盖广、我们内置的是 crt.sh / certspotter /
@@ -293,6 +294,7 @@ class SubdomainStage(Stage):
                 _n243 = add_many(_fx243)
                 ctx.logger.info(f"[subdomain] FOFA 子域名反查合计新增 {_n243} 个")
 
+        getattr(ctx, "report_progress", lambda f: None)(0.6)    # 续275：被动收集收完
         # ---------- 3) 泛解析探测（每域名一次，纯 DNS 查询）----------
         wild = {}
         if limits.get("wildcard_filter", True):
@@ -495,6 +497,7 @@ class SubdomainStage(Stage):
                     if dropped:
                         ctx.logger.info(f"[subdomain] {d} 组合爆破泛解析丢弃 {len(dropped)} 个")
 
+        getattr(ctx, "report_progress", lambda f: None)(0.9)    # 续275：DNS 字典爆破（含组合爆破）收完
         # ---------- 5) 被动来源的泛解析复核 ----------
         # 被动接口里混入的通配产物（如随机子域被证书签发过）用同一套判据清掉
         if wild:
@@ -612,6 +615,7 @@ class SubdomainStage(Stage):
         for host in cap_skipped:
             mapping[host] = ("", "", "over-limit")
         db.set_subdomain_net(ctx.task_id, mapping)
+        getattr(ctx, "report_progress", lambda f: None)(0.97)   # 续275：解析回填落库，本阶段接近收尾
         n_cdn = sum(1 for v in mapping.values() if v[1])
         n_fail = sum(1 for v in mapping.values() if v[2])
         ctx.logger.info(f"[subdomain] 回填解析结果 {len(mapping)} 个"

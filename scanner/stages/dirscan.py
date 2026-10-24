@@ -930,6 +930,7 @@ class DirscanStage(Stage):
             else:
                 ctx.logger.info(f"[dirscan] dirmap：{len(urls)} 个站点（这份没有 -e，"
                                 "按 dirmap.conf 的字典跑）…")
+            getattr(ctx, "report_progress", lambda f: None)(0.2)   # 续275：即将进 dirmap（本阶段最长的一步）
             argv = self._dirmap_argv(py, script, in_file, threads, e_arg)
             rc, _, err = run_cmd(argv, cwd=script.parent, timeout=7200, throttle=th,
                                  extra_env=self._dirmap_env())

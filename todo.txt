@@ -4465,7 +4465,21 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       日志 `logs/_smoke274.log`
 - [x] C2 记忆同步：CHANGELOG 续274 + todo 续274 + AGENTS 改「massdns 需手工安装」那条（现标准安装自动编）
 
-下一轮（续275）：
+## 续275（2026-10-24，WorkBuddy · CodeBuddy）：任务列表父子进度（子任务排父任务下方 + 阶段内进度条）
+实施者：WorkBuddy · CodeBuddy
+
+- [x] T1【主理人主要诉求】任务列表把**子任务排在父任务正下方**：`page_tasks` 排序从纯 `id DESC` 改成
+      `COALESCE(NULLIF(parent_id,0), id) DESC, id ASC`（按根任务 id 归拢整棵树、树内父先子后）——
+      老口径让新建子任务窜到父任务**上面**，观感就是"子任务把父任务进度条顶掉了"；门禁 [283]
+- [x] T2 父子进度分开：父子各是各的 `progress`/`current_stage`（轮询按 id 对号，续263 已钉），
+      父任务行显示父的、子任务缩进在下方显示自己的，互不覆盖
+- [x] T3 阶段内进度条（顺带修"0% subdomain 钉死"）：`StageContext.report_progress(frac)` 钩子，
+      runner 每阶段按 [base,end] 重绑；subdomain 在 subfinder/被动/爆破/回填 4 处报进度
+      （0→8→15→22→24）、dirscan 进 dirmap 前 bump；门禁 [282]
+- [x] C1 全量门禁 SMOKE PASS rc=0：**284 组**（+2＝`[282]`~`[283]`），墙钟 ~9 分钟，日志 `logs/_smoke275.log`
+- [x] C2 记忆同步：CHANGELOG 续275 + todo 续275 + AGENTS 补「page_tasks 树形排序 + 阶段内进度」口径
+
+下一轮（续276）：
 - [ ] puredns #65 **真目标**同参数任务前后对比（需靶场 + massdns 在 PATH；合成靶已证修复，真数字留手动）
 - [ ] 启发式 0day：主动 fuzz 与 305 个导入 POC 的实测校准（长期项，编号待办 1 遗留）
 

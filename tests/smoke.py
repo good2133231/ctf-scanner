@@ -32007,6 +32007,56 @@ expression: r0()
         "补齐后 http/https 同域应配成一对折叠键"
     print("[281] 续274-backfill ok: 老任务 3xx 补跳转信息（复用 attach_redirect_info + set_site_redirects）｜"
           "只补缺结论的 3xx、幂等（二次不重复请求、不覆盖）｜补齐后续266 显示折叠对老数据也生效")
+    # ---------------- [282] 续275：阶段内进度（慢阶段不再整个钉在 0%/50%）----------------
+    # 口径：进度按阶段区间 [_base,_end] 算；阶段内多步经 ctx.report_progress 把条子推离整数百分比。
+    _tk282 = db.create_task("续275-prog", "example.com", stages=[])
+    db.update_task(_tk282, progress=0)
+
+    def _rep282(_tid, _b, _e):
+        def _r(frac):
+            _f = max(0.0, min(1.0, float(frac or 0)))
+            db.update_task(_tid, progress=_b + int((_e - _b) * _f))
+        return _r
+
+    _f282 = _rep282(_tk282, 0, 25)              # subdomain 是 4 阶段里的第 1 个 ⇒ 区间 [0,25]
+    _seq282 = []
+    for _x in (0.33, 0.6, 0.9, 0.97):
+        _f282(_x)
+        _seq282.append(db.get_task(_tk282)["progress"])
+    assert _seq282 == sorted(_seq282) and _seq282[-1] > 0 and all(0 <= v <= 25 for v in _seq282), \
+        f"阶段内进度应递增且夹在 [0,25]：{_seq282}"
+    _f282(2.0)
+    assert db.get_task(_tk282)["progress"] == 25, "越界应夹到上界"
+    _f282(-1.0)
+    assert db.get_task(_tk282)["progress"] == 0, "越界应夹到下界"
+    # 源码层面：慢阶段真的调了 report_progress（不是只加钩子没人用）
+    _sub282 = (ROOT / "scanner" / "stages" / "subdomain.py").read_text(encoding="utf-8")
+    assert _sub282.count("report_progress") >= 4, "subdomain 阶段内进度调用太少（应 ≥4）"
+    _ds282 = (ROOT / "scanner" / "stages" / "dirscan.py").read_text(encoding="utf-8")
+    assert "report_progress" in _ds282, "dirscan 进 dirmap 前应 bump 一次"
+    print("[282] 续275-prog ok: 阶段内进度把进度推在本阶段 [base,end] 区间（递增、越界夹紧）｜"
+          "subdomain 在 subfinder/被动/爆破/回填 4 处报进度（0→8→15→22→24，不再钉 0%）｜"
+          "dirscan 进 dirmap 前 bump｜修主理人\"进度卡 0% subdomain\"的观感")
+    # ---------------- [283] 续275：任务列表把子任务排在父任务正下方（父子进度分开）----------------
+    # 主理人点单：子任务要在父任务下面、父子分开、别覆盖父任务进度条。
+    # 老口径 id DESC 会让新建子任务窜到父任务上面；改成按「根任务 id」归拢整棵树、树内 id ASC。
+    _p283 = db.create_task("续275-parent", "example.com", stages=[])
+    _c283 = db.create_task("续275-child", "child.example.com", stages=[], parent_id=_p283)
+    db.update_task(_c283, progress=37, current_stage="subdomain")
+    db.update_task(_p283, progress=100)
+    _rows283, _tot283 = db.page_tasks(limit=200)
+    _ids283 = [r["id"] for r in _rows283]
+    _ip283, _ic283 = _ids283.index(_p283), _ids283.index(_c283)
+    assert _ip283 < _ic283, f"子任务应排在父任务下方：父 #{_p283} @ {_ip283}，子 #{_c283} @ {_ic283}"
+    assert _ic283 == _ip283 + 1, "子任务应紧贴在父任务正下方（同一棵树连在一起）"
+    _byid283 = {r["id"]: r for r in _rows283}
+    assert _byid283[_p283]["progress"] == 100 and _byid283[_c283]["progress"] == 37, \
+        "父子进度应各是各的值（父 100 / 子 37，不互相覆盖）"
+    # 证伪：老口径 id DESC 下子任务（id 更大）会窜到父任务**前** —— 新判据修的就是这个观感
+    _desc283 = sorted(_ids283, key=lambda x: -x)
+    assert _desc283.index(_c283) < _desc283.index(_p283), "id DESC 老口径应把子任务窜到父任务前"
+    print("[283] 续275-tasklist ok: page_tasks 把子任务排在父任务正下方（树内 id ASC，父先子后）｜"
+          "父子进度各是各的值不覆盖｜修「子任务窜到父任务上面、看着像顶掉父任务进度条」")
     print("SMOKE PASS")
 
 

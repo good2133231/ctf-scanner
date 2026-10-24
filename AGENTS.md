@@ -2160,6 +2160,12 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   同理，按名字找一个已知任务用 `db.find_task_by_name()`，**不要在 `list_tasks(limit=N)` 里线性找**
   —— 那个 N 一被超出就是**静默失效**（续55 修的 `devmode` 页就是这么坏的）。
   回归钉在 `tests/smoke.py` 的 `[7q]`（含"报告数据源不得再出现 `limit=1000`"的源码红线 + 2 条变异）。
+- **`page_tasks` 排序＝树形归拢（续275，主理人点单「子任务排父任务下方、父子进度分开」）**：不是纯
+  `id DESC`，而是 `COALESCE(NULLIF(parent_id,0), id) DESC, id ASC` —— 按根任务 id 把整棵树归到一处
+  （新树在前）、树内 `id ASC` 让父任务排在子任务之前。老口径纯 `id DESC` 会让新建子任务窜到父任务**上面**，
+  观感就是"子任务顶掉/覆盖父任务进度条"。纯根任务列表退化成 `id DESC`。**GUI 任务列表才走 `page_tasks`**
+  （`list_tasks` 仍是 `id DESC`，别混）。阶段内进度走 `StageContext.report_progress(frac)`（runner 每阶段按区间重绑）。
+
 - **站点页签的「批量打开」：第 1 个直接开、其余必须给真链接**（续56 定性质，续112 改形态）：
   `gui/static/app.js::initOpenSites()` 里 `window.open()` **一次手势只能开出一个** —— Chrome 对
   单次用户手势只放行一个弹窗，后面的同步调用一律返回 `null`（放进 `setTimeout`/`await` 之后
