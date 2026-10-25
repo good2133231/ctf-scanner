@@ -695,13 +695,9 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
     _auth = (options or {}).get("auth")
     if _auth:
         child_opts["auth"] = _auth       # 登录态继承：与手动送探同口径（续195）
-    _main = ""
-    for _ln in str(cur["targets"] or "").splitlines():
-        _m = extdom.base_of(_ln.strip())
-        if _m:
-            _main = _m
-            break
-    name = f"{_main or cur['name']} · 高置信送探 {len(domains)} 个域名"
+    # 续276（主理人点单「送探子任务就叫子任务N」）：与手动送探同口径，默认名 `子任务N`，
+    # N＝这个父任务名下已有子任务数 + 1（层级由 parent_id 挂着，不必把域名/数量复述进名字）。
+    name = f"子任务{len(db.list_child_tasks(int(task_id))) + 1}"
     from . import queue as _queue      # 延迟导入：queue 顶层 import 本模块，避免循环导入
     try:
         cid = db.create_task(name, "\n".join(domains), list(AUTO_PROBE_STAGES),

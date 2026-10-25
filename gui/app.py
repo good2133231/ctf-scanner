@@ -4541,31 +4541,11 @@ def create_app():
         # 孙任务叫 test-拓展二层（层数从根数起）；手工填了名字就以填的为准。
         name = (request.form.get("name") or "").strip()
         if not name and from_task.isdigit():
-            _cur, _depth, _root, _seen = int(from_task), 0, None, set()
-            while _cur and _cur not in _seen:
-                _seen.add(_cur)
-                _row = db.get_task(_cur)
-                if not _row:
-                    break
-                _root = _row
-                _cur = int(_row["parent_id"] or 0)
-                _depth += 1
-            if _root:
-                # 续195（主理人点单「建任务应该显示主域名」）：根任务名是人起的（"test"），
-                # 层数一深就看不出这是谁家的资产；主域名取根任务目标的注册域，取不到才退回根任务名
-                _main195 = ""
-                for _ln195 in str(_root["targets"] or "").splitlines():
-                    _m195 = targets_mod.root_of(_ln195.strip())
-                    if _m195:
-                        _main195 = _m195
-                        break
-                _cn = "一二三四五六七八九十"[_depth - 1] if _depth <= 10 else str(_depth)
-                # 续202：格式统一成 `<主域名> · 送探 N 个域名`（层数 >1 时再带上层数）——
-                # 旧格式 `-拓展N层` 只说"第几层"，扫了几个域名看不出来；
-                # 主域名取不到才退回根任务名（根任务名是人起的，可能是"test"这种）。
-                # `_cn` 是字符串（域名计数的文本形态），比较前必须转 int
-                name = (f"{_main195 or _root['name']} · 送探 {len(domains)} 个域名"
-                        + (f"·{_cn}层" if str(_cn).isdigit() and int(_cn) > 1 else ""))
+            # 续276（主理人点单「送探子任务就叫子任务N」）：默认名简化成 `子任务N`，
+            # N＝这个**父任务**名下已有子任务数 + 1。父子层级由 parent_id 挂着（列表页嵌套排版
+            # + 详情页「子任务 · 父 #N」徽章都说清谁是谁），名字不必把域名/数量/层数复述进去 ——
+            # 又长、又和「目标」列重复。父任务异常取不到时留空，走下面的时间戳兜底。
+            name = f"子任务{len(db.list_child_tasks(int(from_task))) + 1}"
         if not name:
             name = time.strftime("拓展探测-%m%d-%H%M%S")
         targets = "\n".join(domains)
