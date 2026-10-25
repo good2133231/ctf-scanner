@@ -25717,6 +25717,8 @@ expression: r0()
           "（Row/dict 都认、0 条不渲染、门槛跟着变）｜MD/HTML/详情页三出口｜老库补列且老行不出话")
 
     # ---------------- [172] 续172：站点「同标题聚合折叠」＝ 3xx 优先 redirect_title ----------------
+    # 续279：光"聚成一组"不够 —— 成员行点开就又是两行（主理人 2026-10-25 仍看到两个）；
+    # 现在同主机 301→200 是**合并**：默认只渲染 301 代表行，落地行整行不渲染。
     # 夹具复刻主理人样本的形状（域名换合成域）：ib 站 http 301 行（title 是 CDN 默认页）
     # + https 200 行（跳转后标题）；mp 站同构；另加一个不同标题站点。
     # 变异证伪（§6.1）：把 _site_fold_key 摘回旧逻辑（title 优先、不看 3xx）⇒ ib 组拆开 ⇒ 红。
@@ -25744,13 +25746,18 @@ expression: r0()
     assert _r172.status_code == 200, f"详情页 {_r172.status_code}"
     _html172 = _r172.get_data(as_text=True)
     _btn172 = re.findall(r"展开同标题（(\d+) 条）", _html172)
-    assert _btn172 == ["1", "1"], \
-        f"应恰好两个 2 条组（ib / mp 各一）：{_btn172} —— 3xx 不优先跳转后标题就会拆成 0 组"
-    assert _html172.count('data-dup-of="') == 2, \
-        f"应有 2 个成员行默认收起：{_html172.count('data-dup-of=')}"
-    for _u172 in ("http://ib.targ172.test", "https://ib.targ172.test",
-                  "https://mp.targ172.test"):
-        assert _u172 in _html172, f"{_u172} 不见了 —— 收起不能等于删数据"
+    assert _btn172 == [], f"同主机跳转对已合并成一行，不该再有可展开的重复组：{_btn172}"
+    assert _html172.count('data-dup-of="') == 0, \
+        "落地行不该再以成员行出现（续279：只显示一行）"
+    assert "已把 2 条「同站点跳转后」的记录合并进代表行" in _html172, \
+        "合并条数必须报出来（不报＝让人以为资产丢了）"
+    assert "入库一条没动" in _html172
+    assert 'value="http://ib.targ172.test"' in _html172 and \
+        'value="http://mp.targ172.test"' in _html172, "301 代表行不见了"
+    for _u172 in ("https://ib.targ172.test", "https://mp.targ172.test"):
+        assert f'value="{_u172}"' not in _html172, \
+            f"落地行仍被渲染成独立行：{_u172}（续279 起同主机跳转只显示一行）"
+        assert _u172 in _html172, f"落地 URL 至少要在代表行的 → 箭头上出现：{_u172}"
     _real_key172 = gui_app._site_fold_key
     _real_urlk172 = gui_app._site_redirect_fold_keys
 
@@ -25776,8 +25783,9 @@ expression: r0()
     finally:
         gui_app._site_fold_key = _real_key172
         gui_app._site_redirect_fold_keys = _real_urlk172
-    print("[172] 站点折叠 ok: 301→200 同站两行聚成一组（3xx 优先 redirect_title 作键）、"
-          "默认收起可展开、收起条数在按钮上报出、收起≠删数据；变异（摘 3xx 分支）后组拆开")
+    print("[172] 站点折叠 ok: 同主机 301→200 两行**合并成一行**（代表行恒取带跳转取证的那行、"
+          "落地行默认不渲染但 → 箭头仍在）、合并条数报出、入库一条没动；"
+          "变异（摘 3xx 分支与最终URL那级）后组拆开、旧形状重现")
 
     # ---------------- [177] 续177：JS 凭据「值黑名单」—— 阶段 / flagfind / GUI 三层 ----------------
     import inspect as _inspect177
@@ -31442,6 +31450,8 @@ expression: r0()
 
 
     # ---------------- [266] 续266：跳转前后同一个域名 ⇒ 同一个站点（不许拆成两行） ----------------
+    # 续279："折成一组"仍会留下一个可展开的落地行（主理人 2026-10-25 又看到两行）。
+    # 现在同一主机的跳转对是**合并**：默认只渲染带跳转取证的代表行；跨主机不合并。
     # 主理人 #7 点单："http://m… 301 → https://m…，跳转前跳转后都是一个域名，为什么给我弄成两个？"
     # 判据只有一处：`gui/app.py::_site_redirect_fold_keys`（复用 `utils.site_redirect` 的
     # `final_url`，与页面画「→ https://…」**同源**，不会一处说同一个站、一处画成两行）。
@@ -31469,16 +31479,43 @@ expression: r0()
          "port": "80", "status": 200, "title": "别名同标题-266", "length": 100},
         {"url": "http://alias-b266.targ266.test", "host": "alias-b266.targ266.test",
          "port": "80", "status": 200, "title": "别名同标题-266", "length": 999},
+        # 反例③（续279）：跨主机的跳转**不是**同一个站点 —— 合并等于把落地那台主机藏掉
+        {"url": "http://m266.targ266.test", "host": "m266.targ266.test", "port": "80",
+         "status": 301, "title": "301 Moved Permanently", "length": 167,
+         "redirect_status": 200, "redirect_url": "https://other266.targ266.test/",
+         "redirect_title": "跨站落地标题-266"},
+        {"url": "https://other266.targ266.test", "host": "other266.targ266.test",
+         "port": "443", "status": 200, "title": "跨站落地-266", "length": 900},
     ])
     _h266 = _c266.get(f"/tasks/{_tid266}").get_data(as_text=True)
-    # ① 同域跳转组 + 别名组，各 2 条（1 代表 + 1 收起）；lonely 那条自己独立不进组
+    # ① 同主机跳转对**合并成一行**：301 代表行在、落地行不渲染；别名组仍可展开
     _btn266 = _re266.findall(r"展开同标题（(\d+) 条）", _h266)
-    assert _btn266 == ["1", "1"], f"应恰好两个 2 条组（同域跳转 + 别名）：{_btn266}"
-    assert _h266.count('data-dup-of="') == 2, \
-        f"应有 2 个成员行默认收起：{_h266.count('data-dup-of=')}"
-    for _u266 in ("http://d266.targ266.test", "https://d266.targ266.test",
-                  "http://lonely266.targ266.test"):
-        assert _u266 in _h266, f"{_u266} 不见了 —— 收起不等于删数据"
+    assert _btn266 == ["1"], f"跳转对已合并，只剩别名组该有展开按钮：{_btn266}"
+    assert _h266.count('data-dup-of="') == 1, \
+        f"同标题成员只该有 1 个（跳转落地行已合并）：{_h266.count('data-dup-of=')}"
+    assert "已把 1 条「同站点跳转后」的记录合并进代表行" in _h266, \
+        "合并条数必须报出来（不报＝让人以为资产丢了）"
+    assert "入库一条没动" in _h266
+    assert 'value="http://d266.targ266.test"' in _h266, "301 代表行不见了"
+    assert 'value="https://d266.targ266.test"' not in _h266, \
+        "落地行仍被渲染成独立行 —— 主理人要的是只显示一行"
+    assert "https://d266.targ266.test" in _h266, "落地 URL 至少要在代表行的 → 箭头上出现"
+    assert 'value="http://lonely266.targ266.test"' in _h266, "lonely 那条不见了"
+    # 反例③：跨主机跳转不合并（两行都得在）
+    assert 'value="http://m266.targ266.test"' in _h266 and \
+        'value="https://other266.targ266.test"' in _h266, \
+        "跨主机跳转的两行都必须在（合并不许把另一台主机藏掉）"
+
+    # ①b 跨任务 /sites：页序是 id DESC（落地行在前）⇒ 代表行必须换成 301 那行；?all=1 放回落地行
+    _s266 = _c266.get("/sites", query_string={"task": _tid266}).get_data(as_text=True)
+    assert 'value="http://d266.targ266.test"' in _s266, \
+        "代表行没换成 301 那行 —— 落地行在前时就会把「301 → 200」整段丢掉"
+    assert 'value="https://d266.targ266.test"' not in _s266, "默认视图不该再渲染落地行"
+    assert "另把 1 条「同站点跳转后」记录" in _s266, "页顶必须报出合并条数（入库一条没动）"
+    _s266a = _c266.get("/sites", query_string={"task": _tid266, "all": "1"}).get_data(as_text=True)
+    assert 'value="https://d266.targ266.test"' in _s266a, \
+        "?all=1 必须能把落地行放出来（逃生开关，展示层过滤≠删数据）"
+    assert "同站点跳转后（合并进 #" in _s266a, "all=1 下落地行要标清它是合并行"
     # ② 变异证伪（§6.1）：摘掉「最终 URL」这一级 ⇒ 同域不同标题那组立刻拆开，只剩别名组
     _real_urlk266 = gui_app._site_redirect_fold_keys
     try:
@@ -31486,6 +31523,9 @@ expression: r0()
         _h266o = _c266.get(f"/tasks/{_tid266}").get_data(as_text=True)
         _btn266o = _re266.findall(r"展开同标题（(\d+) 条）", _h266o)
         assert _btn266o == ["1"], f"变异态应只剩别名组（同域那组要拆开）：{_btn266o}"
+        assert 'value="https://d266.targ266.test"' in _h266o, \
+            "变异态（摘掉最终URL那一级）落地行应重新成为独立行 —— 不红说明合并判据是空写"
+        assert "已把 1 条「同站点跳转后」" not in _h266o, "变异态不该再报合并"
     finally:
         gui_app._site_redirect_fold_keys = _real_urlk266
     # ③ 归一本身：末尾斜杠 / 默认端口不一样，必须判为同一个 URL（不归一就永远对不上）
@@ -31494,9 +31534,10 @@ expression: r0()
                          ("https://n266.test:443/", "https://n266.test"),
                          ("http://n266.test:80/x/", "http://n266.test/x")):
         assert _nu266(_a266) == _nu266(_b266), (_a266, _b266)
-    print("[266] 续266 ok: 跳转前后同一个域名 ⇒ 折成同一个站点（同域不同标题也折；"
-          "真库 pay-api 的 http301→500 与 https500 由两组变一组）｜落地行缺席不凭空造组、"
-          "泛解析别名仍按同标题折｜变异（摘掉最终URL那一级）后组立刻拆开")
+    print("[266] 续266/续279 ok: 跳转前后同一个域名 ⇒ 同一个站点（同域不同标题也折；"
+          "真库 pay-api 的 http301→500 与 https500 由两组变一组）｜同主机跳转对**默认只显示一行**、"
+          "落地行只在 ?all=1 下出现且标清合并｜落地行缺席不凭空造组、跨主机跳转不合并、"
+          "泛解析别名仍按同标题折｜变异（摘掉最终URL那一级）后落地行重新成为独立行")
 
 
 

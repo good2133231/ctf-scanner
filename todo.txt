@@ -4465,6 +4465,33 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       日志 `logs/_smoke274.log`
 - [x] C2 记忆同步：CHANGELOG 续274 + todo 续274 + AGENTS 改「massdns 需手工安装」那条（现标准安装自动编）
 
+## 续279（2026-10-25，WorkBuddy · Qoder）：同站点跳转后默认只显示一行
+
+- [x] T1 主理人点单（同一现象第二次报）「这个为什么还是显示两个 我记得我之前要求了只显示一个」：
+      续266 的"折成一组"仍留下一个可展开的落地行 ⇒ 改成**合并**（同一主机 3xx ↔ 落地行默认只渲染
+      带跳转取证的代表行；落地行只在跨任务 `/sites?all=1` 下出现并标「同站点跳转后（合并进 #N）」）；
+      分组/合并口径收口到 `gui/app.py::_fold_site_rows` 一处（两个路由共用），代表行恒取
+      `site_redirect().jumped` 为真的那行。
+- [x] T2 边界：`_site_redirect_fold_keys` 只对**同一主机**的跳转配对（跨主机是跳去别的站，合并会藏掉真资产）；
+      归一/主机判据在 `_norm_site_url` + `_site_url_host`。
+- [x] T3 页面口径：合并条数在任务页 / `/sites` 页顶报出（均写「入库一条没动」）；
+      展开按钮只切换同标题成员（`:not([data-dup-merge])`），`?all=1` 才渲染落地行。
+- [x] T4 门禁：`[172]` / `[266]` 改钉新口径 + 跨主机反例 + `/sites` 反序 + `?all=1` 逃生开关 +
+      变异证伪（摘掉最终 URL 那级 ⇒ 落地行必须重新出现）。
+- [x] C1 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，288 组；日志时间戳 14:08:56→14:17:37＝8 分 41 秒），日志 `logs/_smoke279.log`；`[172]` / `[266]` / `[281]` 全绿（含两组变异证伪）
+- [x] C2 记忆同步：CHANGELOG 续279 + todo 续279 + AGENTS §5 续266 那条补续279。
+
+下一轮（续280）：
+
+- [ ] 前端数字实时刷新（主理人 2026-10-25 点单「数字显示经常要我刷新才显示」）：/tasks 统计 live 化
+      （opt-in `counts=1` + `db.task_counts_bulk`）+ 任务详情页签计数轮询；遵守续234 static_v 版本号、
+      续263 按 id 对号、避免 N+1
+- [ ] puredns #65 **真目标**同参数任务前后对比（需靶场 + massdns 在 PATH；合成靶已证修复，真数字留手动）
+- [ ] 启发式 0day：主动 fuzz 与 305 个导入 POC 的实测校准（长期项，编号待办 1 遗留）
+- [ ] `docs/security-notice.md` / `docs/features-off-by-default.md` / `docs/docker.md` 未逐条核对，
+      下轮起按"当前事实"过一遍
+- [ ] AGENTS.md 其余段落逐条比对代码与配置
+
 ## 续278（2026-10-25，WorkBuddy · Qoder）：文档与记忆对齐（15 阶段 / 17 栏 / 队列执行 / 两档默认）
 
 - [x] T1 阶段数口径统一为 15：README（正文 / CLI 示例 / 目录树 / 文档索引）、`docs/architecture.md`（阶段层框图 + devflow 段 + 日志分隔行 N/13 + ports 表"默认关闭"）、`docs/usage.md`（`-p` 列表）、`docs/pipeline.md`（默认顺序 + 三线索段）、`docs/roadmap.md`、`AGENTS.md`（§3/§4/§6）、SKILL.md 全部按 `runner.STAGE_ORDER` 改；`scanner/runner.py` 只动 docstring 与注释。
@@ -4479,12 +4506,6 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C3 `docs/pipeline.md` 漏网：首轮全量门禁后才发现它仍写 13 阶段 / `portscan` 默认关 / `dirscan` 默认浅扫 / `passive` 6 源 —— 已按代码补齐（15 阶段含 hostcollide+crawl、两档默认、补 ⑭/⑮ 两节、修正 ⑫ 重号）；补完 `--only 8as,8bq` 复验绿。
 - [x] C2 EOL 与残留复核：逐文件 `git diff --numstat` == `--ignore-cr-at-eol --numstat`；`git ls-files --eol` 仍是 todo/CHANGELOG `crlf`、AGENTS `mixed`；`13 阶段` / `14 栏` / `一任务一线程` / `无任务队列` 只剩白名单历史行；`--only 8as,8bq` 复验记忆同步与两档默认。
 
-下一轮（续279）：
-
-- [ ] puredns #65 **真目标**同参数任务前后对比（需靶场 + massdns 在 PATH；合成靶已证修复，真数字留手动）
-- [ ] 启发式 0day：主动 fuzz 与 305 个导入 POC 的实测校准（长期项，编号待办 1 遗留）
-- [ ] `docs/security-notice.md` / `docs/features-off-by-default.md` / `docs/docker.md` 本轮未逐条核对（不在点名清单内），下轮起按"当前事实"过一遍
-- [ ] AGENTS.md 其余段落（本轮只核了阶段/栏数/执行模型/默认值/计数这五类）逐条比对代码与配置
 
 ## 续277（2026-10-25，WorkBuddy · CodeBuddy）：修复站点页签 form 嵌套 + 子域名/拓展域名/子域名 三页签排版与逻辑核查
 实施者：WorkBuddy · CodeBuddy

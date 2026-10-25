@@ -301,6 +301,11 @@
     {% if tech_stats_text %}
     <p class="muted small note">{{ tech_stats_text }}</p>
     {% endif %}
+
+    {% if sites_merged %}
+    <p class="muted small note">已把 {{ sites_merged }} 条「同站点跳转后」的记录合并进代表行
+      （代表行已带首跳状态、落地状态与标题，<b>入库一条没动</b>）。</p>
+    {% endif %}
     {# 筛选 / 每页（续57）：资产页签改为**服务端分页**后，筛选也必须走服务端 ——
        前端 `data-filter` 只筛当前页，比原来更误导。
        `action` 尾部带 `#sites` 让提交后回到本页签（页签是纯前端切换，不带锚点会掉回第一个）。

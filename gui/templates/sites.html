@@ -6,19 +6,20 @@
   favicon MD5 是"零请求前置指纹"，POC 声明 favicon_md5_list 时会先与它比对（见 策略配置 → 检测策略）。
   <b>纯净模式</b>只显示 URL（适合对着列表逐个点开看），页顶可切换。</p>
 <section class="panel">
-  <p class="muted small note">重复站点<b>默认隐藏</b>，两层口径都由同一个开关（「显示全部站点」）控制：
+  <p class="muted small note">重复站点<b>默认隐藏</b>，几层口径都由同一个开关（「显示全部站点」）控制：
     ① <b>重叠资产（跨任务）</b>：同一 URL 在多个任务里都探到过时，只保留<b>最新一次扫描</b>的那条
     （行内是当次扫描的状态码/标题/长度/技术栈，留最旧那条等于一直看陈旧数据）
     —— 反复扫同一个目标时，站点列表不会再被撑成 N 倍；
-    ② <b>同任务内同标题</b>（续147 起不再比响应长度）：标题一样的站点视为同一虚拟主机的别名/泛解析产物 —— 续184 起<b>聚合</b>在一起（成员行默认收起，点标题列的按钮展开），不再从列表里删掉。
+    ② <b>同任务内同标题</b>（续147 起不再比响应长度）：标题一样的站点视为同一虚拟主机的别名/泛解析产物 —— 续184 起<b>聚合</b>在一起（成员行默认收起，点标题列的按钮展开），不再从列表里删掉；
+    ③ <b>跳转前后同一个站点</b>（续266 起按最终 URL 配对，续279 起要求<b>同一主机</b>）：落地行<b>合并</b>进 3xx 代表行（代表行已带首跳状态、落地状态/标题与 → 落地URL），默认<b>只显示一行</b>；?all=1 才把落地行一并列出。
 
     折叠只作用于当前页，分页条的「共 N 条」仍是未折叠的总数。
     {% if show_all %}
-      当前<b>全部展开</b>（同标题的 {{ hidden }} 条一并列出）。
+      当前<b>全部展开</b>（同标题的 {{ hidden }} 条{% if merged %}、同站点跳转的 {{ merged }} 条{% endif %}一并列出）。
 
       <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs|replace('&all=1', '') }}">只看去重后的站点</a>
     {% else %}
-      已把 {{ hidden }} 条同标题<b>收起</b>在各自的代表行里（点「展开同标题」看，<b>入库一条没动</b>）。
+      已把 {{ hidden }} 条同标题<b>收起</b>在各自的代表行里（点「展开同标题」看，<b>入库一条没动</b>）。{% if merged %}另把 {{ merged }} 条「同站点跳转后」记录<b>合并</b>进代表行（代表行已带落地状态与标题，<b>入库一条没动</b>）。{% endif %}
 
       <a class="btn-mini ghost" href="{{ pager.base }}?page={{ pager.page }}{{ pager.qs }}&all=1">显示全部站点（含同标题与重叠）</a>
     {% endif %}
@@ -82,7 +83,7 @@
         <th>技术栈</th><th>Server</th><th>favicon</th><th>重复</th><th class="col-shot">截图</th></tr></thead>
       <tbody>
       {% for s in sites %}
-        <tr{% if s._dup_member %} data-dup-of="{{ s._dup_head }}"{% if not show_all %} hidden{% endif %}{% endif %} class="{{ 'muted' if s._dup_member else '' }}">
+        <tr{% if s._dup_member %} data-dup-of="{{ s._dup_head }}"{% if s._dup_merge %} data-dup-merge="1"{% endif %}{% if not show_all %} hidden{% endif %}{% endif %} class="{{ 'muted' if s._dup_member else '' }}">
 
           <td class="pick"><input type="checkbox" class="pick pick-row"
                 value="{{ s.url }}"></td>
@@ -94,7 +95,7 @@
         <td>{{ rd.status }}{% if rd.jumped %}
               <span class="tech-tag" title="{{ rd.note }}">跳转后</span>{% endif %}</td>
         <td{% if not rd.title %} title="{{ no_title_hint }}"{% endif %}>{{ rd.title or '-' }}{% if rd.jumped and rd.final_url %}<br>
-              <span class="muted small" title="{{ rd.note }}">→ {{ idn_display(rd.final_url) }}</span>{% endif %}{% if s.dup %}<button type="button" class="btn-mini" title="同标题的站点聚合在这里，默认收起（被收起的条数报在按钮上，入库一条没动）" onclick="var t=document.querySelectorAll('tr[data-dup-of=&quot;{{ s.id }}&quot;]'),a=false;for(var i=0;i<t.length;i++){t[i].hidden=!t[i].hidden;a=a||t[i].hidden}this.textContent=(a?'展开同标题':'收起同标题')+'（{{ s.dup }} 条）'">{{ '收起同标题' if show_all else '展开同标题' }}（{{ s.dup }} 条）</button>{% endif %}</td>
+              <span class="muted small" title="{{ rd.note }}">→ {{ idn_display(rd.final_url) }}</span>{% endif %}{% if s.dup %}<button type="button" class="btn-mini" title="同标题的站点聚合在这里，默认收起（被收起的条数报在按钮上，入库一条没动）" onclick="var t=document.querySelectorAll('tr[data-dup-of=&quot;{{ s.id }}&quot;]:not([data-dup-merge])'),a=false;for(var i=0;i<t.length;i++){t[i].hidden=!t[i].hidden;a=a||t[i].hidden}this.textContent=(a?'展开同标题':'收起同标题')+'（{{ s.dup }} 条）'">{{ '收起同标题' if show_all else '展开同标题' }}（{{ s.dup }} 条）</button>{% endif %}</td>
 
         <td>{% set tv = tech_view(s.tech, s.tech_detail) %}
           {% for t in tv.primary %}<span class="tech-tag" title="{{ tv.labels[t] }}">{{ t }}</span>{% endfor %}
@@ -105,9 +106,10 @@
         <td class="muted small">{{ s.server or '-' }}</td>
         <td class="muted small mono">{{ (s.favicon or '-')[:12] }}</td>
         <td class="muted small">
-          {%- if s._dup_member -%}同标题（收起在 #{{ s._dup_head }} 下）
+          {%- if s._dup_member -%}{% if s._dup_merge %}同站点跳转后（合并进 #{{ s._dup_head }}）{% else %}同标题（收起在 #{{ s._dup_head }} 下）{% endif %}
 
-          {%- elif s.dup -%}另有 {{ s.dup }} 条相同
+          {%- elif s.dup -%}另有 {{ s.dup }} 条相同{% if s.merged %}（另合并 {{ s.merged }} 条跳转记录）{% endif %}
+          {%- elif s.merged -%}含 {{ s.merged }} 条同站点跳转记录
           {%- else -%}-{%- endif -%}
         </td>
         <td class="shot-cell">{% if s.shot %}<img class="shot-thumb" loading="lazy" alt="站点截图"

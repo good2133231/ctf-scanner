@@ -605,6 +605,20 @@ def _norm_site_url(u):
     return "%s://%s%s" % (scheme, netloc, (p.path or "").rstrip("/"))
 
 
+def _site_url_host(u):
+    """URL 的主机名（小写、去尾点）—— 只为「跳转前后是不是同一个站点」这条判据服务。
+
+    续279：跳转折叠**只认同一主机**。`http://a.test → https://b.test/` 是跳到别的站，
+    把 b 的落地行合并进 a 的代表行等于把一条真资产从默认视图里抹掉（§0 第 10 条）。
+    """
+    s = str(u or "").strip()
+    if not s:
+        return ""
+    try:
+        return (urlparse(s).hostname or "").rstrip(".").lower()
+    except ValueError:
+        return ""
+
 def _site_redirect_fold_keys(rows):
     """续266（主理人 #7 点单"跳转前跳转后都是一个域名，为什么给我弄成两个"）：
     跳转链**前后是同一个域名** ⇒ 同一个站点，不许因为两行标题/长度不同而拆成两组。
@@ -633,6 +647,9 @@ def _site_redirect_fold_keys(rows):
         target = _norm_site_url(rd.get("final_url") or "")
         if not target or target not in by_url:
             continue                      # 落地行不在本页 ⇒ 不凭空造组
+        # 续279：只合并**同一个主机**的跳转（跨主机是"跳去别的站"，合并会藏掉真资产）
+        if _site_url_host(r.get("url")) != _site_url_host(by_url[target].get("url")):
+            continue
         key = (r.get("task_id"), "u", target)
         # ⚠️ 一律用 `.get("id")`：门禁 [7s] 那种"什么列都有"的假行**没有 id 键**，
         # 下标取会在渲染时 KeyError ⇒ 整页 500（徽标断言会以"数字不对"的名义红，
@@ -643,6 +660,69 @@ def _site_redirect_fold_keys(rows):
             out[by_url[target]["id"]] = key
     return out
 
+
+def _fold_site_rows(rows, keep_merged=False):
+    """当前页站点的「同一站点」聚合（续266 立；续279 收口成一处）。
+
+    两层键，优先级从高到低：跳转前后同一主机（`_site_redirect_fold_keys`）→
+    同标题 / 同响应长度（`_site_fold_key`）。两层的**显示口径刻意不同**：
+      - 跳转键（kind `"u"`）是**合并**：落地行没有独立信息 —— 代表行已带首跳状态、
+        落地状态/标题与 `→ 落地URL`。默认整行不渲染（`?all=1` 才列出），也不再有
+        「展开同标题」按钮（主理人 2026-10-25：「这个为什么还是显示两个 我记得我
+        之前要求了只显示一个」）。
+      - 标题/长度键是**聚合**：成员行保留、默认收起、可展开（续147/续184 的点单）。
+    代表行：跳转组恒取**带跳转取证**的那一行（落地行在前时也换过来，否则会丢掉
+    「301 → 200 跳转后」）；其余组取页序第一行。
+    每行被补上 `_dup_head` / `_dup_member` / `_dup_merge` / `_dup_group` / `dup` / `merged`；
+    返回 `(按页序排好的行, {"hidden": 可展开成员数, "merged": 跳转合并数})`。
+    """
+    for r in rows:
+        r["_dup_group"] = []
+        r["dup"] = 0
+        r["merged"] = 0
+        r["_dup_member"] = False
+        r["_dup_merge"] = False
+    _keyed = _site_redirect_fold_keys(rows)
+    groups, seq = {}, []
+    for r in rows:
+        k = _keyed.get(r.get("id")) or _site_fold_key(r)
+        if k is None:
+            seq.append((None, r))         # 无键（无标题且无长度）⇒ 自己一行
+            continue
+        if k not in groups:
+            groups[k] = []
+            seq.append((k, None))
+        groups[k].append(r)
+    out, hidden, merged = [], 0, 0
+    for k, lone in seq:
+        if lone is not None:
+            out.append(lone)
+            continue
+        grp = groups[k]
+        head = grp[0]
+        if k[1] == "u":
+            for r in grp:
+                if site_redirect(r).get("jumped"):
+                    head = r
+                    break
+        out.append(head)
+        for r in grp:
+            if r is head:
+                continue
+            r["_dup_head"] = head.get("id")
+            r["_dup_member"] = True
+            if k[1] == "u" and _norm_site_url(r.get("url")) == k[2]:
+                r["_dup_merge"] = True    # 落地行：信息都在代表行上
+                head["merged"] += 1
+                merged += 1
+                if keep_merged:
+                    out.append(r)
+                continue
+            head["dup"] += 1
+            head["_dup_group"].append(r)
+            hidden += 1
+            out.append(r)
+    return out, {"hidden": hidden, "merged": merged}
 
 def _dir_url(site_url, path):
     """目录命中的**可点开链接**（续151，用户点单「目录结果要能像超链接一样点开」）。
@@ -2340,38 +2420,15 @@ def create_app():
         _tech_stats = fingerprint.tech_stats(db.list_site_tech(task_id))
         # 续225：邮箱页签（jsmine 的数据探测产物）—— 与 /emails 页同一张表，页内按任务过滤。
         emails, emails_pager, emails_q = _tab_page("emails", "em", "#emails")
-        # 续172：站点页签「同标题放在一起 + 可折叠」。折叠键与跨任务 /sites 页**同一份产地**
-        # （`_site_fold_key`，本轮起 3xx 优先跳转后标题）；组内代表行 = 组内第一行（页序 id），
-        # 成员行紧随其后且默认收起（原生 hidden + 内联 onclick 展开，零新依赖）；
-        # 被收起的条数在代表行的按钮文案里报出（§5 第 10 条：展示过滤 ≠ 删数据）。
+        # 续172/续266/续279：站点页签「同一站点聚合/合并」。判据全在 `_fold_site_rows`
+        # （与跨任务 /sites 页**同一份产地**）：同标题组聚合、成员行默认收起、可展开；
+        # 同一主机的 3xx ↔ 落地行是**合并** —— 默认只显示带跳转取证的代表行（落地状态/
+        # 标题与 `→ 落地URL` 都在它身上），代表行上的按钮只数可展开成员，入库一条没动。
         # 折叠只作用**当前页**（同 /sites 口径；分页条上的"共 N 条"是 SQL 总数）。
         # _page_assets 返回 sqlite3.Row（不可赋值）—— 照 /sites 页同款先 dict 化
         sites = [dict(r) for r in sites]
-        _fold172 = {}
-
-        for _r in sites:
-            _r["_dup_group"] = []
-        # 续266：跳转前后同一个域名 ⇒ 同一站点（键优先级高于"同标题"）
-        _urlk172 = _site_redirect_fold_keys(sites)
-        for _r in sites:
-            _k = _urlk172.get(_r.get("id")) or _site_fold_key(_r)
-            if _k is None:
-                continue
-            _f = _fold172.get(_k)
-            if _f is None:
-                _fold172[_k] = _r
-            else:
-                _f["_dup_group"].append(_r)
-                _r["_dup_head"] = _f["id"]
-        _ordered172 = []
-        for _r in sites:
-            if _r.get("_dup_head") is not None:
-                continue          # 成员行稍后跟在代表行后面
-            _ordered172.append(_r)
-            for _m in _r.get("_dup_group") or []:
-                _m["_dup_member"] = True
-                _ordered172.append(_m)
-        sites = _ordered172
+        sites, _fold279 = _fold_site_rows(sites)
+        sites_merged = _fold279["merged"]
 
         # 站点页签的截图状态：有站点却一张截图都没有时，页面上要说清"为什么没有"并给「重新截图」入口
         # （用户 2026-09-23：「站点的截图显示为什么还没有完成」—— 实际是策略开关默认关、
@@ -2513,6 +2570,7 @@ def create_app():
             ext_defaults=_ext_defaults(),
             resume_rest=resume_rest,
             sites=sites,
+            sites_merged=sites_merged,
             parent_task=_parent_task,
             tech_stats=_tech_stats,
             tech_stats_text=fingerprint.tech_stats_text(_tech_stats),
@@ -3632,12 +3690,15 @@ def create_app():
     def sites():
         show_all = _overlap_args()
         tid, tw, tp = _task_scope()          # 续112-E：「按任务筛选」
-        # 两层"重复"处理，都由 `?all=1` 一起放开：
+        # 三层"重复"处理，都由 `?all=1` 一起放开：
         # 1) 重叠资产（跨任务）：同一 URL 在多个任务里都探到过时，只保留**最新一次扫描**的那条
         #    （`MAX(id)`）—— 站点行带的是当次扫描的 status/title/length/tech，留最旧那条意味着
         #    默认视图一直展示陈旧数据（重扫的目的正是刷新这些字段）；
         #    反复扫同一个目标时，站点列表也不会再被撑成 N 倍；
-        # 2) 同任务内**标题相同**的重复（续147 起不再看响应长度：真实站点的常态就是几个主机
+        # 2) 同一主机的**跳转前后**两行（续266）：合并成一行 —— 代表行取带跳转取证的那行
+        #    （页面已画 301 → 200 与 → 落地URL），落地行默认不渲染，`?all=1` 才一并列出；
+        #    续279 起要求两行**同一主机**：跳去别的站不是"同一个站点"，合并会藏掉真资产；
+        # 3) 同任务内**标题相同**的重复（续147 起不再看响应长度：真实站点的常态就是几个主机
         #    同一个标题、长度各不相同，按长度折等于没折），多为同一台虚拟主机的别名/泛解析产物
         #    （灯塔类工具也做这层去重）。key 必须带 task_id（见 `_site_fold_key`）：这是跨任务
         #    视图，不带就会因为别的任务有同名标题把本任务的站点折掉（实测把一个靶场的 15 条
@@ -3650,35 +3711,11 @@ def create_app():
             extra_where=_and_where(base_where, st_where),
             extra_params=tp)
         rows = [dict(r) for r in rows]
-        # 续184（主理人要求）：同标题是**聚合**不是隐藏 —— 成员行紧随代表行、默认收起，
-        # 点代表行上的按钮展开（?all=1 直接展开）；被收起的条数报在按钮上，入库一条没动
-        # （§5 第 10 条：展示层过滤 ≠ 删数据）。折叠键与任务详情页站点页签**同一份产地**。
-        _fold184, hidden = {}, 0
-        for r in rows:
-            r["dup"] = 0
-        # 续266：与任务详情页签**同一份产地**（`_site_redirect_fold_keys`）
-        _urlk184 = _site_redirect_fold_keys(rows)
-        for r in rows:
-            key = _urlk184.get(r.get("id")) or _site_fold_key(r)
-            if key is None:
-                continue
-            first = _fold184.get(key)
-            if first is None:
-                _fold184[key] = r
-            else:
-                first["dup"] += 1
-                r["_dup_head"] = first["id"]
-                r["_dup_member"] = True
-                hidden += 1
-        _ordered184 = []
-        for r in rows:
-            if r.get("_dup_head") is not None:
-                continue          # 成员行排在代表行之后
-            _ordered184.append(r)
-            for m in rows:
-                if m.get("_dup_head") == r["id"]:
-                    _ordered184.append(m)
-        rows = _ordered184
+        # 续184/续266/续279：与任务详情页签**同一份产地**（`_fold_site_rows`）——
+        # 同标题组聚合、可展开；同一主机的 3xx ↔ 落地行合并成一行（`?all=1` 才列出落地行）。
+        # 被收起/合并的条数在页顶报出（§5 第 10 条：展示层过滤 ≠ 删数据，入库一条没动）。
+        rows, _fold184 = _fold_site_rows(rows, keep_merged=show_all)
+        hidden, merged = _fold184["hidden"], _fold184["merged"]
         if show_all:
             pager["qs"] += "&all=1"
         if tid:
@@ -3691,7 +3728,7 @@ def create_app():
         _st_hidden, _ = _site_status_extra("sites", hide_st, pager["total"], q, base_where, tp)
         _allst_state(pager, hide_st, _st_hidden)
         return render_template("sites.html", sites=rows, pager=pager, q=q,
-                               show_all=show_all, hidden=hidden, plain=plain,
+                               show_all=show_all, hidden=hidden, merged=merged, plain=plain,
                                task_id=tid or "", tasks=_tasks_with_asset("sites"))
 
     @app.route("/emails")
