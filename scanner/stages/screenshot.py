@@ -44,8 +44,10 @@ class ScreenshotStage(Stage):
 
         sites = ctx.results.get("sites") or [dict(r) for r in db.list_sites(ctx.task_id)]
         sites = ctx.scope_sites(sites)          # 续25：追加执行时限定到本次勾选（非追加原样）
-        cap = int(cfg.get("max_sites", 20) or 20)
-        if len(sites) > cap:
+        # 续280：`0 / 负数 = 不限`（与 `limits.brute_max_words: 0 = 全量` 同一套口径）；
+        # 原写法 `int(x or 20)` 把"填 0"悄悄换回出厂的 20 —— 填了却不生效，且没有一行日志说明。
+        cap = int(cfg.get("max_sites", 20) or 0)
+        if cap > 0 and len(sites) > cap:
             ctx.logger.info(f"[screenshot] 站点 {len(sites)} 个超过上限 {cap}，只截前 {cap} 个")
             sites = sites[:cap]
         if not sites:
@@ -194,8 +196,8 @@ class ScreenshotStage(Stage):
             ctx.logger.info("[screenshot] JS 后复核跳过：没有可用的无头浏览器")
             return
         rows = [dict(r) for r in db.list_sites(ctx.task_id) if r["shot"]]
-        cap = int((ctx.settings.get("screenshot", {}) or {}).get("max_sites", 20) or 20)
-        rows = rows[:max(0, cap)]
+        cap = int((ctx.settings.get("screenshot", {}) or {}).get("max_sites", 20) or 0)
+        rows = rows[:cap] if cap > 0 else rows      # 续280：0 = 不限（原来是"一条都不看"）
         if not rows:
             return
         cfg = ctx.settings.get("screenshot", {}) or {}

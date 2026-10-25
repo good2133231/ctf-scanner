@@ -307,8 +307,11 @@ class OsintStage(Stage):
         if not sites:
             ctx.logger.info("[osint] 无存活站点，跳过 favicon 反查")
             return []
-        cap = int(cfg.get("max_sites", 30))
-        if len(sites) > cap:
+        # 续280：`0 / 负数 = 不限`（与 `limits.brute_max_words: 0 = 全量` 同一套口径）。
+        # 原写法在填 0 时走 `sites[:0]` ⇒ **整批站点被清空、一个 favicon 都不算**，
+        # 而日志里只有一句"无站点"式的静默 —— 看着像"这个平台没开"。
+        cap = int(cfg.get("max_sites", 30) or 0)
+        if cap > 0 and len(sites) > cap:
             ctx.logger.info(f"[osint] 站点 {len(sites)} 个超过上限 {cap}，仅取前 {cap} 个算 favicon")
             sites = sites[:cap]
 
@@ -560,7 +563,7 @@ class OsintStage(Stage):
             ctx.logger.info("[osint] 无存活站点，跳过 favicon 指纹计算")
             cache[(cap, workers)] = {}
             return {}
-        if len(sites) > cap:
+        if cap > 0 and len(sites) > cap:      # 续280：cap<=0 = 不限（填 0 原来是"全部丢掉"）
             ctx.logger.info(f"[osint] 站点 {len(sites)} 个超过上限 {cap}，仅取前 {cap} 个算 favicon")
             sites = sites[:cap]
 

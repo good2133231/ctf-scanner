@@ -5,6 +5,19 @@
 const CTF_BASE = ((document.querySelector('meta[name="ctf-base"]') || {}).content || "").replace(/\/+$/, "");
 function absUrl(p) { return CTF_BASE + p; }
 
+/* 续280：把页签徽标上的数字换成轮询回来的**当前**数（主理人：「数字显示经常要我刷新才显示」）。
+   只动带 `data-cnt` 的那几颗 —— 哪些页签带它，由服务端 `cnt_live` 决定（折叠/去重/筛选后
+   的口径不许用未过滤的表行数覆盖，理由见 `gui/app.py::task_detail`）。
+   同一条请求里顺带回来的（不额外发请求）；`counts` 缺字段就一个字都不动。 */
+function pvUpdateTabCounts(counts) {
+  if (!counts) return;
+  document.querySelectorAll(".tab[data-cnt]").forEach(tab => {
+    const sp = tab.querySelector(".cnt");
+    const v = counts[tab.dataset.cnt];
+    if (sp && v !== undefined && v !== null) sp.textContent = String(v);
+  });
+}
+
 async function pollTask(id) {
   const box = document.getElementById("log-box");
   const badge = document.getElementById("st-badge");
@@ -12,9 +25,11 @@ async function pollTask(id) {
   const prog = document.getElementById("st-progress");
   for (;;) {
     try {
-      const r = await fetch(absUrl(`/api/tasks/${id}/status`));
+      // 续280：顺带要资产计数（`counts=1`，opt-in）—— 页签徽标不必等跑完那一次 reload 才动。
+      const r = await fetch(absUrl(`/api/tasks/${id}/status?counts=1`));
       if (r.ok) {
         const j = await r.json();
+        pvUpdateTabCounts(j.counts);
         if (badge) badge.textContent = j.status;
         if (stage) stage.textContent = j.current_stage;
         if (prog) prog.textContent = j.progress + "%";
@@ -298,7 +313,9 @@ function initTaskTable() {
     if (!live.length) return;                 // 本页没有在跑的任务：不轮询、也不刷新
     try {
       const ids = live.map(tr => tr.dataset.id).join(",");
-      const r = await fetch(absUrl(`/api/tasks/status?ids=${ids}`));
+      // 续280：`counts=1` 让后端**顺带**回这一页的资产计数（opt-in —— 只看进度的调用方
+      // 不必陪着跑那 8 条 GROUP BY）。一次批量请求同时拿到状态与数字，不是每格再问一次。
+      const r = await fetch(absUrl(`/api/tasks/status?ids=${ids}&counts=1`));
       if (r.ok) {
         const map = (await r.json()).tasks || {};
         live.forEach(tr => {
@@ -323,6 +340,17 @@ function initTaskTable() {
               ? `<span class="muted small">· ${pvEsc(st.current_stage)}</span>` : "";
             prog.innerHTML =
               `<div class="bar"><i style="width:${_pct}%"></i></div>${_pct}% ${_stage}`;
+          }
+          // 续280：「统计」列 live 化 —— 站点/子域名/漏洞/拓展 四个数字定点替换。
+          // 只改 `td[data-counts]` 里带 `data-c` 的那几个 span：不动整行（保住勾选框、
+          // 展开按钮与「子任务 · 父 #N」徽章），也不 reload（不抢筛选框里的光标）。
+          // 键对不上就一个字都不动 —— 与续263"先对号再改"同一条纪律。
+          const ctCell = tr.querySelector("td[data-counts]");
+          if (ctCell && st.counts) {
+            ctCell.querySelectorAll("span[data-c]").forEach(sp => {
+              const v = st.counts[sp.dataset.c];
+              if (v !== undefined && v !== null) sp.textContent = String(v);
+            });
           }
           const stopBtn = tr.querySelector('button[data-op="stop"]');
           const restartBtn = tr.querySelector('button[data-op="restart"]');

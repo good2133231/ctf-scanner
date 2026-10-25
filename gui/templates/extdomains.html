@@ -132,7 +132,15 @@
   <form method="post" action="{{ url_for('api_blacklist_add') }}">
     <input type="hidden" name="next"
       value="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">
-    <input type="hidden" name="name" value="{{ scan_name }}">
+    {# 续280：这个域**叫 `scan_prefix`，不能叫 `name`**。
+       它按来源生成一个默认任务名前缀（`?src=title` ⇒ `fofa标题拓展`，门禁 [112] 钉住），
+       是给「批量跑子域名」（`api_run_subdomain`）当名字前缀用的；但**同一个 form 里**
+       「送去探测」也带 `formaction` ⇒ 以前它叫 `name` 时会被 `api_scan_ext` 当成
+       "用户显式填了名字" ⇒ 送探子任务被命名成「拓展域名」/「fofa标题拓展」，
+       续276（主理人点单「送探子任务就叫子任务N」）在这条路上**一次都没生效过**。
+       改成专用名之后：批量扫描的前缀照旧，送探不再被顶掉（显式命名仍走任务详情页那个表单）。
+       ⚠ 别把它改回 `name`，也别删（删了 [112] 那条"按来源生成前缀"就无从谈起）。 #}
+    <input type="hidden" name="scan_prefix" value="{{ scan_name }}">
     <div class="bulkbar">
       {# 续195（主理人点单「拓展域名位置只显示送去探测，因为那个位置送去探测一半都是我人工
          点击了」）：本页 bulkbar 只留送探 —— 加入黑名单 / 批量跑子域名 在「子域名」页有同款

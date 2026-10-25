@@ -281,6 +281,15 @@ class _Queue:
                     if self._gen == gen:
                         self._cv.wait(timeout=idle)
                         idle = min(idle * 2.0, _IDLE_MAX)
+                    else:
+                        # 续280：gen 变了 ⇒ 有人刚入队，立刻再认领一次是**对的**（快路径）；
+                        # 但"队列其实已被别的 worker 认领走"时会退化成**忙轮询** ——
+                        # 一圈就是一次 `claim_next_queued()`（一次 DB 查询/写锁），
+                        # 多 worker + 频繁 notify 下能把数据库打成空转（CPU 有、活没有）。
+                        # 这里只退让一个最小间隔再问：新任务照样秒级被认领，
+                        # 空转时也不再是"贴着 CPU 一直查"。
+                        self._cv.wait(timeout=min(idle, _IDLE_MIN))
+                        idle = _IDLE_MIN
         finally:
             # 续216：缩容退场的线程要从 `_threads` 里摘掉，`active_workers()` 才不会把
             # "已退休但还没退出"算成在跑。`stop()` 已经清空列表时这里是空操作。

@@ -3,6 +3,92 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续280（2026-10-25，WorkBuddy · CodeBuddy）：前端数字 live 化 + 生产缺陷六条 + 反复提的问题复核
+
+### 背景 / 判断依据
+
+主理人 2026-10-25：「数字显示经常要我刷新才显示」+「已经改了很久了，我要一个能直接生产的代码」。
+本轮做三件事：① 把续280 待办里那条"前端数字实时刷新"做完；② 全量过一遍生产代码，把找出来的真缺陷
+逐条修掉并各配一条门禁；③ 把**反复提过**的那几条（续276 送探命名 / 续279 跳转合并 / 续268 5xx /
+续265 去重）用真库只读复算一遍，看结论是否还成立。
+
+### 变更
+
+**A. 数字 live 化（主理人点单）**
+
+- `gui/app.py`：新增 `_want_counts()`（`?counts=1` opt-in）；`/api/tasks/status?ids=…&counts=1`
+  与 `/api/tasks/<id>/status?counts=1` 顺带回 `db.task_counts_bulk` 的计数，并**回带 `id`**（续263 对号纪律）。
+  默认档与续93 **逐字一致**（不带参数 ⇒ 没有 `counts` 键、仍带 `log_tail`）—— 不给只看进度的人加 8 条 GROUP BY。
+- `gui/templates/tasks.html`：「统计」列四个数字拆成 `<span data-c="sites|subs_own|vulns|subs_ext">`，
+  单元格打 `data-counts="1"`；键名＝`task_counts` 的键，**不另立一套命名**（抄一份就会与计数口径漂移）。
+- `gui/static/app.js`：`tick()` 带 `counts=1` 并**定点替换**那四个 span —— 不整行重渲染（会顶掉勾选框与
+  「子任务 · 父 #N」徽章）、不 reload（不抢筛选框光标）；新增 `pvUpdateTabCounts()` 更新详情页页签徽标，
+  只认 `.tab[data-cnt]`。
+- `gui/app.py::task_detail` + `task_detail.html`：逐页签 `cnt_live` 判据 —— 只有"徽标数＝该表未过滤行数"
+  的页签才挂 `data-cnt`（vulns 无 vq/vsev、sites 无 stq、ports 无 ptq）。**折叠/去重/筛选**的页签一律不挂：
+  C 段折 segment（续265）、证书折同一张（续265）、目录折站点+状态码+大小（续255）、子域名/拓展按 domain
+  去重（真库实测 120 行里 16 组同 task 同 domain 重复行）、拓展默认还隐藏已归属行。
+  拿未过滤表行数盖上去就是"列表 3 行、徽标写 120" —— **比不刷新更误导**，宁可少刷三个数字。
+
+**B. 生产缺陷（每条配门禁 `[285]`）**
+
+1. `/api/blacklist/remove` 被注册**两次**（`_value_blacklist_view` 顶着同名路由装饰器）：Werkzeug 同形规则
+   稳定排序 ⇒ **先注册的赢** ⇒ 策略页「移除勾选条目」一条都删不掉，Flask 3 还会对"view 返回 list"直接 500
+   （实测 `url_map.match()` 返回 `_value_blacklist_view`）。摘掉那两行装饰器（续186 是"丢了装饰器"，这处正好反过来）。
+2. `/api/tasks/bulk` 重启遇脏 `options`：裸 `json.loads` ⇒ 整个批量请求 500，而 `clear_task_assets` **已经先跑了**
+   ⇒ "资产清了、任务没起来"，且第一个坏行会把后面勾的任务一起带走。坏值降级成 `{}` + 一行 warning。
+3. `runner.run_task`：`StageContext` 构造失败 ⇒ `_STOP_EVENTS` 的登记没注销（它同时是 `running_task_ids()`
+   的数据源 = GUI 停止/重启按钮亮不亮）⇒ 那个任务永远显示"在跑"。异常照抛（队列 worker 标 failed），只补清理。
+4. `runner.run_task`：续跑会把 `stages` 裁成"从断点起的残片"，收尾钩子（`_maybe_queue_next_layer` /
+   `_maybe_queue_shot_retry`）拿的是残片 ⇒ 第 2 层只剩残片里的阶段（漏 subdomain/probe）。新增 `stages_all` 传完整表。
+5. `PipelineRunner.run`：`db.get_task` 返回 None 时 `None.keys()` 抛 **AttributeError**（不在原
+   `except (TypeError, KeyError)` 名单里）⇒ "任务被删了"把整条流水线打成未捕获异常。
+6. `max_sites`（cert / crawl / screenshot / osint 四处）：`0` 的语义与项目口径（`limits.brute_max_words: 0 = 全量`）
+   **相反** —— `or 30` / `or 20` 把 0 顶回出厂值；osint 更狠，`sites[:0]` ⇒ **整批站点被清空、一个 favicon 都不算**，
+   日志还只给一句静默。四处统一成 `0/负数 = 不限`，`config/settings.yaml` 五处 `max_sites` 补注。
+- `scanner/queue.py`：worker 空转分支（gen 变了但队列已被别人认领）退让一个最小间隔再问，不再贴着 CPU 打 DB
+  （多 worker + 频繁 notify 下的忙轮询）。
+
+**C. 反复提过的问题复核（真库只读 `logs/verify280.py`）**
+
+- **续276「送探子任务就叫子任务N」在拓展域名页那条路上从没生效过**：那个 form 带着
+  `<input type="hidden" name="name" value="{{ scan_name }}">`，同一个 form 里「送去探测」用 `formaction` ⇒
+  `api_scan_ext` 见 `name` 非空就当成"用户显式填了名字" ⇒ 子任务被命名成「拓展域名」/「fofa标题拓展」。
+  修法是**改字段名而不是删**（保留 `[112]` 钉住的"按来源生成批量扫描前缀"）：隐藏域改名 `scan_prefix`，
+  `api_run_subdomain` 两个名字都收，`api_scan_ext` 不再吃到它 ⇒ 送探回到 `子任务N`。
+  真库里那条旧名子任务（#78）是**当时跑的进程是旧代码**留下的（HEAD 两条路径都写 `子任务N`，门禁 `[202]③` 钉住）
+  ⇒ 重启服务即生效，不是代码问题。
+- 续279 同主机跳转默认只显示一行：真库 4 个任务 **34 组**同主机跳转逐组复算 ⇒ 折完仍显示两行的 **0 组**。
+- 续268 5xx 默认可见：真库 8 条 5xx 站点，默认（不加 `?allst=1`）可见 **8/8**。
+- 续265 证书/C 段去重、站点标题不截断、界面无「离线模式」：全部复核通过（`nodes.html` 的"在线/离线"是
+  **节点状态**，另一件事，不能删）。
+- 子代理报的"`utils` 读线程泄漏"**不是缺陷**：实测 `p.stdout.close()` 会**阻塞 19.6 秒**等孙进程
+  （`sh -c 'sleep 20 & …'` 持有写端），真按它改就是把"多一个 daemon 线程"换成"卡住调用方 20 秒"。
+  现状（daemon 线程 + 有限 join + `_kill_group` 杀整组）是刻意的取舍，不动 —— 记在这里免得下一个人再"修"一次。
+
+### 验证
+
+- 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0；315 条组行 / 290 个组标签（`^\[[0-9]` 去重口径）；日志 `logs/_smoke280b.log`，时间戳 17:18:05→17:27:03＝**8 分 58 秒**）。`[284]` / `[285]` 全绿；日志里两处 Traceback 是**故意**造的负样本（`[6v]` 让 `logger.info` 炸、`[212]` 的 `runner-boom`），不是失败。
+- 单组：`--only 284` / `--only 285` 各自 SMOKE PASS（两组都自带 client + 登录，`--only` 单跑不依赖别组）。
+- 真库只读复算 `logs/verify280.py`：**7 项通过、0 失败、1 条告警**（#78 旧名＝进程没重启）。
+- 逐文件 `git diff --numstat` == `--ignore-cr-at-eol --numstat`（EOL 零漂移）；本轮踩到两次 EOL/内容事故，见下。
+
+### 踩坑（进 §6.2 假红目录 / §7 局限的候选）
+
+1. **编校工具会把整个文件的行尾归一成 LF，还会顺手改坏内容**：本轮 gui/app.py、app.js、runner.py、osint.py、
+   smoke.py 中招（smoke.py 一次假增减 37226 行；gui/app.py 一行中文里被塞进一个 TAB；smoke.py 有一行被拼成两截）。
+   ⚠ **`tests/smoke.py` 与 `gui/app.py` 一律用字节级 python 补丁改，不要用整文件重写式的编辑**。
+   备了 `logs/_fixeol280.py`（按行对齐还原 HEAD 行尾）—— 它只管行尾，**救不了被改坏的内容**；
+   内容坏了只能"取回本轮新块 → `git checkout` 还原 → 重新插入"。
+   **查法：改完立刻 `git diff --ignore-cr-at-eol -U0 <file> | grep ^@@`，出现预期外的 hunk 就是被写坏了。**
+2. `docs/security-notice.md` 是**混合行尾**（19 CRLF / 127 LF），sed 与整文件读写都会毁它 ⇒ 只能"从 HEAD 取原字节
+   + 按锚行行尾插"（本轮第一版脚本把行尾当 CRLF 又按 LF 去 join ⇒ 每行后面多出一个空行）。
+3. 写门禁时 `--only` 单跑拿不到别的组的局部名（`_login7` / `_c284` 之类）⇒ 新组一律自带 client 与登录。
+4. 送探接口回 409 **不代表坏了**：`scope=all` 沿用拓展域名页判据（含**只看解析成功的**），夹具不填 `ip` 会被筛空
+   ⇒ 409「没有可送的域名」。
+5. 改模板里的隐藏域前先看**谁在读**：同一个 form 里可能有多个 `formaction` 按钮共用字段（本轮差点为了修命名
+   把 `[112]` 钉住的"按来源生成前缀"一起删掉）。
+
 ## 续279（2026-10-25，WorkBuddy · Qoder）：同站点跳转后默认只显示一行
 
 ### 背景 / 判断依据

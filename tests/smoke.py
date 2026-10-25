@@ -32106,6 +32106,262 @@ expression: r0()
     assert _desc283.index(_c283) < _desc283.index(_p283), "id DESC 老口径应把子任务窜到父任务前"
     print("[283] 续275-tasklist ok: page_tasks 把子任务排在父任务正下方（树内 id ASC，父先子后）｜"
           "父子进度各是各的值不覆盖｜修「子任务窜到父任务上面、看着像顶掉父任务进度条」")
+    # ---------------- [284] 续280-A：前端数字 live 化（主理人「数字显示经常要我刷新才显示」）----------------
+    # 口径：状态轮询**顺带**回资产计数（opt-in `counts=1`），前端**定点替换**那几个数字 ——
+    # 不 reload、不重渲染整行（重渲染会顶掉勾选框与「子任务 · 父 #N」徽章）。三条边界：
+    #   ① 不带参数时与续93 **逐字一致**（不给只看进度的人加 8 条 GROUP BY）；
+    #   ② 计数字典必须与 `db.task_counts` 逐字一致（不能为了"能刷新"顺手改口径）；
+    #   ③ **折叠/去重/筛选后**的页签一律不许挂 `data-cnt` —— 拿未过滤的表行数盖上去就是
+    #      "列表 3 行、徽标写 120"，比不刷新更误导。
+    from gui.app import app as _app284
+    from scanner import captcha as _cap284
+
+    _c284 = _app284.test_client()
+
+    def _login284(_data):
+        """自带取码登录（`_login7` 是 [7] 组内的局部函数，`--only` 单跑本组时拿不到它）。"""
+        _b284 = set(_cap284._STORE)
+        _c284.get("/captcha.png")
+        _f284 = [k for k in _cap284._STORE if k not in _b284]
+        assert _f284, "取码失败：/captcha.png 没发出新码"
+        return _c284.post("/login", data=dict(_data, captcha=_cap284._STORE[_f284[-1]][0]))
+
+    assert _login284(_admin_form117()).status_code == 302, "补登录失败：共享 client 拿不到会话"
+
+    _tk284 = db.create_task("续280-live", "example.com", stages=[])
+    db.insert_sites(_tk284, [{"url": "http://a284.test/", "status": 200, "title": "A284"}])
+    db.insert_subdomains(_tk284, [("a284.test", "subfinder"), ("js284.test", "js:mine")])
+    _want284 = db.task_counts(_tk284)
+
+    # ① 批量接口：不带 counts ⇒ 没有 counts 键（opt-in）；带了 ⇒ 与逐个版逐字一致
+    _r0_284 = _c284.get(f"/api/tasks/status?ids={_tk284}").get_json()
+    assert _r0_284["tasks"][str(_tk284)]["id"] == _tk284, "每条仍要回带 id（续263 对号纪律）"
+    assert "counts" not in _r0_284["tasks"][str(_tk284)], "不带 counts=1 时不该算计数（opt-in 的意义）"
+    _r1_284 = _c284.get(f"/api/tasks/status?ids={_tk284}&counts=1").get_json()
+    _g1_284 = _r1_284["tasks"][str(_tk284)]
+    assert _g1_284["counts"] == _want284, (_g1_284["counts"], _want284)
+    assert _g1_284["counts"]["sites"] == 1 and _g1_284["counts"]["subs_own"] == 1 \
+        and _g1_284["counts"]["subs_ext"] == 1, _g1_284["counts"]
+    # ② 单个接口（详情页轮询用）：带 counts + 回带 id；默认档不许变（仍带日志尾）
+    _r2_284 = _c284.get(f"/api/tasks/{_tk284}/status?counts=1").get_json()
+    assert _r2_284["id"] == _tk284 and _r2_284["counts"] == _want284, _r2_284
+    _r3_284 = _c284.get(f"/api/tasks/{_tk284}/status").get_json()
+    assert "counts" not in _r3_284 and "log_tail" in _r3_284, "默认档与续93 逐字一致（仍带日志尾）"
+
+    # ③ 任务列表「统计」列：四个数字各有可定点替换的锚点；键名＝`task_counts` 的键
+    _h284 = _c284.get("/tasks").get_data(as_text=True)
+    for _k284 in ("sites", "subs_own", "vulns", "subs_ext"):
+        assert f'data-c="{_k284}"' in _h284, f"任务列表「统计」列缺 {_k284} 的可更新锚点"
+    assert 'data-counts="1"' in _h284, "「统计」单元格没打标记（JS 靠它定位）"
+    _tp284 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8")
+    assert "站点: {{ counts[t.id].sites }}" not in _tp284, \
+        "「统计」列还是一整段文本 ⇒ JS 改不了一个数字（这就是『要刷新才显示』的根因）"
+    assert "counts[t.id].subs_own" in _tp284 and "counts[t.id].subs_ext" in _tp284, \
+        "两档口径（自家/拓展）不许退回一张表的总行数"
+
+    _js284 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "counts=1" in _js284 and 'span[data-c]' in _js284, "列表页轮询没接上计数"
+    assert "pvUpdateTabCounts" in _js284 and '.tab[data-cnt]' in _js284, "详情页页签计数没接上"
+
+    # ④ 详情页：无筛选 ⇒ 三个徽标可 live；折叠/去重/筛选口径 ⇒ **一个都不许**挂 data-cnt
+    _d284 = _c284.get(f"/tasks/{_tk284}").get_data(as_text=True)
+    for _ok284 in ("vulns", "sites", "ports"):
+        assert f'data-cnt="{_ok284}"' in _d284, f"{_ok284} 徽标就是未过滤的表行数，应当可 live"
+    for _bad284 in ("subs", "ext", "dirs", "certs", "csegs", "urls", "flags", "emails"):
+        assert f'data-cnt="{_bad284}"' not in _d284, \
+            f"{_bad284} 页签是折叠/去重/筛选后的口径，不许拿未过滤表行数覆盖"
+    assert 'data-cnt="vulns"' not in _c284.get(f"/tasks/{_tk284}?vq=zzz").get_data(as_text=True), \
+        "漏洞页签带关键字 ⇒ 徽标是筛选后的数，不许 live"
+    assert 'data-cnt="sites"' not in _c284.get(f"/tasks/{_tk284}?stq=zzz").get_data(as_text=True), \
+        "站点页签带关键字 ⇒ 同上"
+    print("[284] 续280-live ok: 状态轮询 opt-in 回计数（不带参数与续93 逐字一致）｜列表「统计」四格与"
+          "详情页 站点/漏洞/端口 三个徽标定点替换（不 reload、不重渲染整行）｜折叠/去重/筛选后的页签"
+          "一律不挂 data-cnt（不许出现「列表 3 行、徽标 120」）")
+
+    # ---------------- [285] 续280-B：生产缺陷六条（路由重复 / 批量重启脏 options / ctx 残留 / 续跑残片 / 空任务行 / max_sites=0）----------------
+    import scanner.blacklist as _bl285
+    import scanner.runner as _rn285
+    from gui.app import app as _app285
+    from scanner import captcha as _cap285
+
+    # 本组**自带** client 与登录（不复用 [284] 的 `_c284`）：`--only 285` 单跑时
+    # 拿不到上一组的局部名（见 main() 里 `--only` 的两条限制）。
+    _c285 = _app285.test_client()
+
+    def _login285(_data):
+        _b285 = set(_cap285._STORE)
+        _c285.get("/captcha.png")
+        _f285 = [k for k in _cap285._STORE if k not in _b285]
+        assert _f285, "取码失败：/captcha.png 没发出新码"
+        return _c285.post("/login", data=dict(_data, captcha=_cap285._STORE[_f285[-1]][0]))
+
+    assert _login285(_admin_form117()).status_code == 302, "补登录失败：拿不到会话"
+
+    # ① `/api/blacklist/remove` 只许注册一次 —— 续280 修的正是它被注册**两次**：
+    #    先注册的「值黑名单视图」（返回 list）赢 ⇒ 策略页「移除勾选条目」一条都删不掉，
+    #    Flask 3 还会对"view 返回 list"直接 500。
+    _dup285 = [r for r in _app285.url_map.iter_rules() if str(r) == "/api/blacklist/remove"]
+    assert len(_dup285) == 1, f"同一条 URL 注册了 {len(_dup285)} 次（同形规则 ⇒ 先注册的赢）"
+    _m285 = _app285.url_map.bind("localhost").match("/api/blacklist/remove", method="POST")
+    assert _m285[0] == "api_blacklist_remove", f"命中的不是真正干活的那个视图：{_m285}"
+    # 功能性：勾的域名真的交给了 blacklist.remove（打桩 —— 真写会动被跟踪的 config/blacklist.txt，
+    # [193a] 的不变量就是"门禁不许改它"；这里验的是**接线**，不是 remove() 本身）
+    _seen285 = {}
+    _real_rm285 = _bl285.remove
+
+    def _fake_rm285(domains, settings=None, owner_id=None):
+        _seen285.update(domains=list(domains), owner=owner_id)
+        return 1
+
+    _bl285.remove = _fake_rm285
+    try:
+        _rr285 = _c285.post("/api/blacklist/remove", data={"domain": ["x285.test"]})
+    finally:
+        _bl285.remove = _real_rm285
+    assert _rr285.status_code == 302, \
+        f"移除应当 302 回策略页（旧代码命中返回 list 的视图 ⇒ 500）：{_rr285.status_code}"
+    assert _seen285.get("domains") == ["x285.test"], f"没把勾选的域名交给 blacklist.remove：{_seen285}"
+
+    # ② 批量重启：`options` 是自由文本列，脏值不许让整个批量请求 500 ——
+    #    更不许出现"资产已清掉、任务没起来"（clear_task_assets 在 json.loads 之前就跑了）
+    _tb285 = db.create_task("续280-dirty", "example.com", stages=["subdomain"])
+    _tb285b = db.create_task("续280-clean", "example.com", stages=["subdomain"])
+    db.update_task(_tb285, options="{ 这不是 JSON", status="done")
+    db.update_task(_tb285b, options='{"k": 1}', status="done")
+    _rb285 = _c285.post("/api/tasks/bulk", json={"action": "restart", "ids": [_tb285, _tb285b]})
+    assert _rb285.status_code == 200, f"脏 options 不该再让整个批量请求 500：{_rb285.get_data(as_text=True)[:200]}"
+    assert _rb285.get_json().get("affected") == 2, \
+        f"脏值那一行要把自己降级，不许把后面勾的任务一起带走：{_rb285.get_json()}"
+    assert db.get_task(_tb285)["status"] in ("queued", "pending", "running"), db.get_task(_tb285)["status"]
+    assert db.get_task(_tb285b)["status"] in ("queued", "pending", "running"), db.get_task(_tb285b)["status"]
+
+    # ③ StageContext 构造失败 ⇒ 不许把任务留在 running_task_ids 里
+    #    （它同时是 GUI「停止/重启按钮亮不亮」的数据源：留一次，那个任务就永远显示"在跑"）
+    _tc285 = db.create_task("续280-ctx", "example.com", stages=["subdomain"])
+    _real_sc285 = _rn285.StageContext
+
+    class _Boom285:
+        def __init__(self, *a, **k):
+            raise RuntimeError("boom-285")
+
+    _rn285.StageContext = _Boom285
+    try:
+        try:
+            _rn285.run_task(_tc285, "续280-ctx", "example.com", ["subdomain"], {}, None)
+        except RuntimeError:
+            pass                      # 照原样抛出是对的（队列 worker 会标 failed 并记原因）
+        else:
+            raise AssertionError("构造失败应当抛出，不在这里吞")
+    finally:
+        _rn285.StageContext = _real_sc285
+    assert _tc285 not in _rn285.running_task_ids(), \
+        "StageContext 构造失败后仍留在 running_task_ids ⇒ GUI 上这个任务永远显示「在跑」"
+
+    # ④ 续跑（resume）时收尾钩子必须拿到**完整阶段表**，不是"从断点起的残片"
+    _tr285 = db.create_task("续280-resume", "example.com", stages=["subdomain", "probe", "vulnscan"])
+    db.update_task(_tr285, current_stage="vulnscan", status="stopped", error="x")
+    _seen_st285 = {}
+    _real_mq285 = _rn285._maybe_queue_next_layer
+    _real_shot285 = _rn285._maybe_queue_shot_retry
+    _real_run285 = _rn285.PipelineRunner.run
+    _rn285._maybe_queue_next_layer = lambda ctx, tid, stages, options, logger: \
+        _seen_st285.update(v=list(stages))
+    _rn285._maybe_queue_shot_retry = lambda *a, **k: None
+    _rn285.PipelineRunner.run = lambda self: None
+    try:
+        _rn285.run_task(_tr285, "续280-resume", "example.com",
+                        ["subdomain", "probe", "vulnscan"], {}, None, resume=True)
+    finally:
+        _rn285._maybe_queue_next_layer = _real_mq285
+        _rn285._maybe_queue_shot_retry = _real_shot285
+        _rn285.PipelineRunner.run = _real_run285
+    assert _seen_st285.get("v") == ["subdomain", "probe", "vulnscan"], \
+        f"续跑的收尾钩子拿到的是阶段残片（第 2 层会漏掉 subdomain/probe，等于白跑一层）：{_seen_st285.get('v')}"
+
+    # ⑤ 任务行在"建 ctx 之后"被删掉时 `run()` 不许崩（旧代码 `None.keys()` 是 AttributeError，
+    #    不在 `except (TypeError, KeyError)` 名单里 ⇒ 一句"任务没了"把整条流水线打成未捕获异常）
+    _td285 = db.create_task("续280-gone", "example.com", stages=[])
+    #   —— runner 没有模块级 logger（它每个任务 `get_logger(f"task-{id}", log_file)`），
+    #      这里用 log 模块的**根** logger：本用例只走空阶段表，不产生任务日志。
+    from scanner.log import get_logger as _get_logger285
+    _ctx285 = _rn285.StageContext(_td285, "n", [], [], {}, None,
+                                  _TMPDIR, _get_logger285("smoke-285-gone"))
+    _real_gt285 = db.get_task
+    _n285 = {"i": 0}
+
+    def _gone285(*a, **k):
+        _n285["i"] += 1
+        return None if _n285["i"] == 1 else _real_gt285(*a, **k)
+
+    db.get_task = _gone285
+    try:
+        _rn285.PipelineRunner(_ctx285).run()
+    finally:
+        db.get_task = _real_gt285
+    assert _n285["i"] >= 1, "这条用例必须真的走过'任务行消失'那一次读"
+
+    # ⑥ `max_sites: 0` = 不限（与 `limits.brute_max_words: 0 = 全量` 同一套口径）
+    _src285 = {n: (ROOT / "scanner" / "stages" / f"{n}.py").read_text(encoding="utf-8")
+               for n in ("cert", "crawl", "screenshot", "osint")}
+    assert 'cfg.get("max_sites", 30) or 30' not in _src285["cert"], "cert 还把填 0 顶成 30"
+    assert 'cfg.get("max_sites", 30) or 30' not in _src285["crawl"], "crawl 还把填 0 顶成 30"
+    assert 'cfg.get("max_sites", 20) or 20' not in _src285["screenshot"], "screenshot 还把填 0 顶成 20"
+    for _n286, _s286 in _src285.items():
+        assert ("cap > 0" in _s286) or ("max_sites > 0" in _s286), f"{_n286} 缺'0 = 不限'的分支"
+    # 真跑一遍 osint 的 favicon 采集：cap=0 不再把整批站点清空（旧写法 `sites[:0]` = 一条都不算）
+    from scanner.stages.osint import OsintStage as _OsintStage285
+
+    _tkf285 = db.create_task("续280-fav", "example.com", stages=[])
+    _urls285 = [f"http://g{i}.test/" for i in range(3)]
+    db.insert_sites(_tkf285, [{"url": u, "status": 200, "title": "G"} for u in _urls285])
+    for _i285, _u285 in enumerate(_urls285):
+        db._exec("UPDATE sites SET icon_hash=? WHERE task_id=? AND url=?",
+                 (1000 + _i285, _tkf285, _u285))
+
+    class _Ctx285:
+        task_id = _tkf285
+        settings = {}
+        logger = _get_logger285("smoke-285-fav")
+
+        def stopped(self):
+            return False
+
+    class _Fav285(_OsintStage285):
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+    _fav285 = _Fav285(_Ctx285())
+    assert len(_fav285._favicon_hashes(0, 1)) == 3, "cap=0 应当是不限（旧写法把整批站点清空）"
+    assert len(_fav285._favicon_hashes(2, 1)) == 2, "cap=2 仍要咬住上限（别把'不限'写成'永不限制'）"
+    # ⑦ 续276「送探子任务就叫子任务N」在**拓展域名页那条路径**上必须真的生效 ——
+    #    那条表单原先带 `<input type="hidden" name="name" value="{{ scan_name }}">`，
+    #    `api_scan_ext` 见 `name` 非空就用它 ⇒ 子任务被命名成「拓展域名」/「fofa标题拓展」，
+    #    续276 在这条路上一次都没生效过（真库里至今留着旧名任务）。
+    _ex285 = (ROOT / "gui" / "templates" / "extdomains.html").read_text(encoding="utf-8")
+    assert 'name="name" value="{{ scan_name }}"' not in _ex285, \
+        "拓展域名页又把名字喂给了送探 ⇒ 续276 的「子任务N」又被顶掉了"
+    assert 'name="scan_prefix" value="{{ scan_name }}"' in _ex285, \
+        "「按来源生成的批量扫描前缀」要留着（[112] 钉住），只是**不许再叫 `name`**"
+    _tp285c = db.create_task("续280-parent", "example.com", stages=[])
+    db.insert_subdomains(_tp285c, [("j285.test", "js:mine"), ("k285.test", "fofa:title")])
+    # 送探的"全任务"档沿用拓展域名页的判据（含**只看解析成功的**）⇒ 不填 ip 会被筛空、
+    # 接口按"没有可送的域名"回 409（本轮先踩到过，留个注释免得下次又以为接口坏了）
+    db._exec("UPDATE subdomains SET ip='203.0.113.10' WHERE task_id=?", (_tp285c,))
+    _r7a = _c285.post("/api/domains/scan-ext",
+                      data={"task_id": str(_tp285c), "scope": "all", "append": "0"})
+    assert _r7a.status_code == 302, f"送探应当 302：{_r7a.status_code}"
+    _kids285 = db.list_child_tasks(_tp285c)
+    assert len(_kids285) == 1 and _kids285[0]["name"] == "子任务1", \
+        f"送探子任务默认名应当是「子任务1」：{[dict(k) for k in _kids285]}"
+    _c285.post("/api/domains/scan-ext",
+               data={"task_id": str(_tp285c), "scope": "all", "append": "0", "name": "我的命名285"})
+    assert any(k["name"] == "我的命名285" for k in db.list_child_tasks(_tp285c)), \
+        "显式填了名字仍要以填的为准（不能反过来把显式命名也废掉）"
+    print("[285] 续280-fix ok: 黑名单「移除」恢复（同 URL 重复注册 ⇒ 先注册的赢，旧代码永远删不掉）｜"
+          "送探子任务在拓展域名页也真的叫「子任务N」（隐藏 name 域顶掉续276 的老毛病）｜"
+          "批量重启遇脏 options 只降级自己、不带走同批任务｜StageContext 失败不留 running 登记｜"
+          "续跑收尾钩子拿完整阶段表（不再只跑残片）｜任务行消失不再把流水线打成 AttributeError｜"
+          "max_sites=0 = 不限（cert/crawl/screenshot/osint 四处，osint 旧写法是「一条都不算」）")
     print("SMOKE PASS")
 
 

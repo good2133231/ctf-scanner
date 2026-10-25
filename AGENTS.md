@@ -222,6 +222,18 @@ Flask Web 控制台（仿 ARL）。
   `read_text` 自己的源文件，同样被拦）。**动作**：被删后 `git checkout -- tests/smoke.py`
   无损还原（与 HEAD 逐字节一致，本轮未提交前反复验过）；正式门禁去服务器跑
   （`bash update.sh --smoke`）。**别为绕守卫改门禁文件内容**（§0 红线：不改门禁让它变绿）。
+- **续280 编校工具的行尾 / 内容事故（服务器侧同样中招，不是只有 Windows）**：AI 会话里的
+  “整文件重写式”编辑（本项目用它改过 `gui/app.py` / `tests/smoke.py` / `docs/*.md`）会顺手做两件事：
+  ① 把**整个文件**的行尾归一成 LF（CRLF 文件被翻成 LF ⇒ `git diff --numstat` 千行到万行级假增减，
+  `tests/smoke.py` 实测一次 37226 行）；② 偶尔**改坏内容**（`gui/app.py` 一行中文中间被塞进一个 TAB；
+  `tests/smoke.py` 有一行被拼成两截、直接 SyntaxError）。
+  **免疫动作**：① 改这四个记忆文件与 `tests/smoke.py` / `gui/app.py` 一律走**字节级 python 补丁**
+  （`git show HEAD:<f>` 取原字节 → 按锚行行尾插 → 写回），不用整文件重写式的编辑；
+  ② 改完立刻 `git diff --ignore-cr-at-eol -U0 <f> | grep ^@@` —— **出现预期外的 hunk 就是被写坏了**；
+  ③ 行尾翻了用 `logs/_fixeol280.py`（按行对齐还原 HEAD 行尾；**只管行尾、救不了内容**）；
+  ④ 内容坏了只能“取回本轮新块 → `git checkout -- <f>` 还原 → 重新插入”（续280 的 smoke.py 就是这么救的）。
+  混合行尾的文件（`docs/security-notice.md` 19 CRLF / 127 LF、本文件）**别用 sed**，也别整文件读写：
+  从 HEAD 取原字节、按锚行的行尾插回去。
 - 外部工具：subfinder / puredns / httpx **均未安装** → 走内置兜底。**三个例外**：
   **fscan 可用**（续45 自编译 2.2.1 挂到 `tools/fscan/` 的**目录联接**，`settings.yaml` 的
   `tools.fscan=tools/fscan/fscan.exe`）→ 端口扫描 `engine=auto` 的**第一环命中**，实走 fscan；
@@ -1826,6 +1838,14 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
 `/extdomains` 来源条数必须带 `?task=` 过滤、策略页计数用 `N0+1` 动态断言，
 否则别的组留下的夹具让计数静默漂移；以及 bytes 补丁的多行锚点必须先把 `\n` 归一到区域 EOL
 再 count（首跑 LF 形态在 CRLF 区域 count=0，长得像「代码坏了」的假红）。
+**第二十一起（续280：红得像代码坏了，其实是**文件被编校工具写坏了**）**：改 `tests/smoke.py` 用了
+整文件重写式的编辑，结果 ① 整个文件行尾被翻成 LF（两式 numstat 立刻不等、假增减 37226 行），
+② 某一行被拼成两截 ⇒ `SyntaxError: unmatched ')'` 报在一个**从没人改过的行号**上（5045 行），
+看着像“门禁自己坏了”。查法：`git diff --ignore-cr-at-eol -U0 <f> | grep ^@@` —— 预期只有一两个
+hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”：取回本轮新块 → `git checkout` 还原 →
+字节级重新插入。同源事故还有：编校工具在 `gui/app.py` 一行中文里塞了个 TAB（docstring 变成
+“是        典型的…”，编译照过、只伤可读性）⇒ **改完要看 diff 的内容，不能只看编译过没过**。
+
 
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
@@ -3086,6 +3106,13 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   `tools/check_contrast.py` 的层叠判据会逐条抓漏写），本轮**没动 CSS**，只动了首屏定档。
 
 ## 8. 不要做的事
+- **子进程读线程是“故意留着”，不是泄漏（续280 实测，别去“修”它）**：`utils._do_run_cmd` 起两个
+  daemon 线程边等边读管道；父进程退出后若**孙进程**还持有管道写端，那两个线程会一直卡在
+  `read()` —— 看着像线程泄漏，但实测 `p.stdout.close()` 会**阻塞 19.6 秒**（等 `sh -c 'sleep 20 & …'`
+  那个孙进程）⇒ 真按“修”它就是拿“多两个 daemon 线程”换“卡住调用方 20 秒”，正好撞 §0.6 那条硬规矩。
+  现状是刻意的取舍：daemon 线程 + 有限 join + `_kill_group()` 杀**整组**（同组的孙进程一起死 ⇒
+  管道关闭、读者拿到 EOF）。要动它，先证明那个孙进程不在同一进程组。
+
 
 - 不要重写已可工作的模块换取"看起来更好"。
 - 不要在未评估依赖成熟度时照搬 docs/roadmap.md 的功能（那是候选，不是承诺）。

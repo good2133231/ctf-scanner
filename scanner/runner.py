@@ -334,10 +334,14 @@ class PipelineRunner:
         # 续230：**追加 / 续跑不许把进度打回 0**。父任务已跑到 100%，点一次「追加到本任务」
         # 进度条从 0 重新爬，看起来就是"父任务的进度被清零了"（主理人 2026-10-19 的截图）。
         # 只有 fresh 归零；append/resume 从当前进度起，按剩余区间 [_base, 100] 推进。
-        _row0 = db.get_task(ctx.task_id)
+        # 续280：任务行可能在"建 ctx"与"这里"之间被删掉（批量删除 / 手工清库）——
+        # `get_task` 返回 None 时 `None.keys()` 抛的是 **AttributeError**，不在原来那张
+        # `except (TypeError, KeyError)` 名单里 ⇒ 一句"任务没了"的小事会把整条流水线
+        # 打成未捕获异常。空字典这一改，两条分支都退化成 `fresh`，语义与"读不到"一致。
+        _row0 = db.get_task(ctx.task_id) or {}
         try:
             _mode = str((_row0["run_mode"] if "run_mode" in _row0.keys() else "") or "fresh")
-        except (TypeError, KeyError):
+        except (AttributeError, TypeError, KeyError):
             _mode = "fresh"
         try:
             _base = 0 if _mode == "fresh" else max(0, min(100, int(_row0["progress"] or 0)))
@@ -877,6 +881,11 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
     # 同名的 logger 已绑定原日志文件时 `get_logger` 会直接复用（见 scanner/log.py）——
     # 追加执行正好靠这一点把新日志**续写**进原文件。
     logger = get_logger(f"task-{task_id}", log_file)
+    # 续280：收尾钩子（追加层数 / 候补截图轮）要拿**完整阶段表**，而 `resume` 会把
+    # `stages` 裁成"从断点起的残片"（见下）—— 那是"这一轮跑什么"，不是"这个任务有哪些
+    # 阶段"。拿残片去排下一层，第二层就只剩残片里的那几个阶段（实测路径：任务跑到
+    # vulnscan 中断 → 续跑 → 完成后排第 2 层 ⇒ 那一层没有 subdomain/probe，等于白跑一层）。
+    stages_all = list(stages)
     if resume:
         # 这一段必须在下面 `db.update_task(..., error="")` **之前**跑完：
         # 清空前把上次的中断原因转存进任务日志（日志是持久产物，信息不丢）。
@@ -919,8 +928,18 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
         logger.info(f"[extdom] 追加层数：本轮为第 {_layer}/{_layer + _depth - 1} 层，"
                     f"待采集目标 {len(targets)} 个，剩余 {_depth} 层")
     stop_event = _register_stop(task_id)
-    ctx = StageContext(task_id, name, targets, stages, options, settings or load_settings(),
-                       workdir, logger, stop_event=stop_event, progress=progress)
+    # 续280：构造失败也要把"运行中"的登记撤掉 —— `_STOP_EVENTS` 同时是
+    # `running_task_ids()` 的数据源（GUI 用它决定停止/重启按钮亮不亮），漏一次
+    # 注销，那个任务就永远显示在跑（按钮永远可点、点了也没用）。
+    # 异常照原样往上抛（队列 worker 会标 failed 并记原因），不在这里吞掉。
+    try:
+        ctx = StageContext(task_id, name, targets, stages, options, settings or load_settings(),
+                           workdir, logger, stop_event=stop_event, progress=progress)
+    except Exception:
+        _unregister_stop(task_id)
+        if progress is not None:
+            progress.finish()
+        raise
     # 续89：从任务行取归属账号（`get_task` 是廉价读；老库没有该列时按 0 处理）。
     _orow = db.get_task(task_id)
     ctx.owner_id = int(_orow["owner_id"] or 0) \
@@ -997,7 +1016,7 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
             progress.finish()
     # 续151「追加层数」：正常完成后，本层若挖出新的归属域名且还剩层数，再排一次追加运行
     # （折叠在同一任务里，不再新建任务）。停止 / 未正常完成的收场不追加。
-    _maybe_queue_next_layer(ctx, task_id, stages, options, logger)
+    _maybe_queue_next_layer(ctx, task_id, stages_all, options, logger)
     # 续161「候补重试」：只有上面**没有**再排出追加层数（收场状态仍是 done）才排候补轮 ——
     # 两条路写同一份 `run_payload`，同时排会互相覆写。互斥判据在函数内那条 `!= "done"`。
     # 续263（主理人口径）：主域名不同但置信度达阈值的拓展域名 → 自动建子任务送探，
@@ -1006,5 +1025,6 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
     _maybe_auto_probe_similar(ctx, task_id, logger)
 
 
-    _maybe_queue_shot_retry(ctx, task_id, stages, options, logger)
+    # 续280：同 `stages_all` —— 候补轮判的是"这个任务有没有跑截图阶段"，不是"残片里有没有"。
+    _maybe_queue_shot_retry(ctx, task_id, stages_all, options, logger)
     return ctx

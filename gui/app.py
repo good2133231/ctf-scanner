@@ -1433,6 +1433,16 @@ def create_app():
         me = _session_user()
         return int(me["id"]) if me else 0
 
+    def _want_counts():
+        """续280：这次状态轮询要不要**顺带**回资产计数（`?counts=1`）。
+
+        为什么是 opt-in：状态轮询是**每 2.5 秒一次**的高频请求，而 `task_counts_bulk`
+        每批都要跑 8 条 GROUP BY —— 不opt-in 就等于给每个只看进度的人白加一份数据库活。
+        只有"页面上真有数字要更新"的那两处（任务列表「统计」列、详情页 10 个页签徽标）
+        才带这个参数。
+        """
+        return str(request.args.get("counts") or "").strip().lower() in ("1", "true", "on", "yes")
+
     def _owned_task(task_id):
         """取任务并做多租户校验：取不到 / 无权访问都返回 None（调用方统一按 404 处理）。"""
         task = db.get_task(task_id)
@@ -2586,6 +2596,15 @@ def create_app():
             # （`|length` 现在是"当前页行数"，拿它当总数会少报）。
             subs_pager=subs_pager, subs_q=subs_q,
             ext_pager=ext_pager, ext_q=ext_q,
+            # 续280：页签徽标的 **live 判据（逐页签）** —— 只有"这个徽标的数就是该表未过滤
+            # 行数"的那些页签，才允许轮询回来的总数把它覆盖掉。
+            # 为什么必须逐页签：其余页签的数是**折叠/去重后**的口径 —— C 段按 segment 折
+            # （续265）、证书按同一张证书折（续265）、目录按站点+状态码+大小折（续255）、
+            # 子域名/拓展域名按 domain 去重（`page_assets(dedupe_domain=True)`，真库实测
+            # 120 行里有 16 组同 task 同 domain 的重复行）、拓展域名默认还隐藏已归属行。
+            # 那些数字换成"表行数"会变成"列表 3 行、徽标写 120" —— 比不刷新更误导。
+            # 有关键字筛选的页签同理（徽标是筛选后的总数）。所以这里只开三盏灯。
+            cnt_live={"vulns": not (vq or vsev), "sites": not sites_q, "ports": not ports_q},
             sites_pager=sites_pager, sites_q=sites_q, site_total=site_total,
             ports_pager=ports_pager, ports_q=ports_q,
             csegs_pager=csegs_pager, csegs_q=csegs_q,
@@ -2804,8 +2823,21 @@ def create_app():
                 stages = [s for s in (task["stages"] or "").split(",") if s in STAGE_ORDER]
                 db.clear_task_assets(tid)
                 db.update_task(tid, status="pending", progress=0, current_stage="", error="")
-                _spawn(tid, task["name"], task["targets"], stages or list(STAGE_ORDER),
-                       json.loads(task["options"] or "{}"))
+                # 续280：`options` 是**自由文本列**（早年某些路径写进去的不是 JSON，手工改库
+                # 也可能留脏值）。原来裸 `json.loads(...)` 一遇脏值就 500 —— 而上面那句
+                # `clear_task_assets` **已经把资产清掉了**，于是"点了批量重启 ⇒ 资产没了、
+                # 任务也没起来"，且整个批量请求在第一个坏行就崩（后面勾的任务一个都不重启）。
+                # 坏值按"没有任务选项"处理（`{}`）并记一行 warning —— 少一个选项是降级，
+                # 整批不执行是事故。
+                try:
+                    _opts = json.loads(task["options"] or "{}")
+                    if not isinstance(_opts, dict):
+                        raise ValueError("options 不是对象")
+                except (TypeError, ValueError) as _e280:
+                    logger.warning(f"[gui] 任务 #{tid} 的 options 不是合法 JSON 对象（{_e280}），"
+                                   f"重启按空选项处理")
+                    _opts = {}
+                _spawn(tid, task["name"], task["targets"], stages or list(STAGE_ORDER), _opts)
                 affected += 1
         _audit(audit.KIND_TASK, target="批量", detail=f"批量 {action}：影响 {affected} 个任务")
         return jsonify({"ok": True, "action": action, "affected": affected,
@@ -2817,11 +2849,19 @@ def create_app():
         t = _owned_task(task_id)
         if not t:
             return jsonify({"error": "not found"}), 404
-        return jsonify({
+        out = {
             "status": t["status"], "progress": t["progress"],
             "current_stage": t["current_stage"],
             "log_tail": _tail(t["log_file"]) if t["log_file"] else [],
-        })
+        }
+        # 续280：opt-in 资产计数（`?counts=1`）—— 详情页页签上那 10 个数字原先只在整页
+        # 渲染时算一次，任务跑十分钟就十分钟是旧数（主理人：「数字显示经常要我刷新才显示」）。
+        # 默认**不带**（轮询每 2 秒一次，白算 8 条 GROUP BY 没必要），只有明确要的那一处
+        # （详情页页签）才带。
+        if _want_counts():
+            out["counts"] = db.task_counts_bulk([int(task_id)]).get(int(task_id)) or {}
+            out["id"] = int(task_id)
+        return jsonify(out)
 
     @app.route("/api/tasks/status")
     @login_required
@@ -2833,6 +2873,11 @@ def create_app():
         是典型的"前端驱动的 N+1"。这里一次拿齐，且**不回 `log_tail`**。
         逐条做多租户过滤（与 `_owned_task` 同口径）：越权的 id 直接不出现在结果里，
         与单个接口的 404 等价 —— 既不泄露"存在性"，也不泄露状态。
+
+        续280：`?counts=1` 时顺带回资产计数（任务列表「统计」列 live 化用）。同样是 opt-in ——
+        不带的那一档（只看进度）与续93 逐字一致，不必为"数字能刷新"给所有人加数据库活。
+        注：计数走 `task_counts_bulk`（**一次** 8 条 GROUP BY，与页大小无关），
+        不是逐任务 `task_counts()`（那是 N+1，续91 专门消灭过的形状）。
         """
         raw = (request.args.get("ids") or "").strip()
         if not raw:
@@ -2853,6 +2898,11 @@ def create_app():
             # 少了这一列，"主任务那一行显示成子任务的进度"只能靠调用方自觉，出一次错查半年。
             tasks[str(tid)] = {"id": int(tid), "status": r["status"], "progress": r["progress"],
                                "current_stage": r["current_stage"]}
+        if _want_counts() and tasks:
+            # 只对**通过了租户过滤**的那些 id 算（越权的 id 连计数也不给 —— 与上面同一口径）
+            _c280 = db.task_counts_bulk([int(k) for k in tasks])
+            for _k, _v in tasks.items():
+                _v["counts"] = _c280.get(int(_k)) or {}
         return jsonify({"ok": True, "tasks": tasks})
 
     # ---------- POC 管理 ----------
@@ -4285,8 +4335,14 @@ def create_app():
         logger.info(f"[gui] 黑名单新增 {n} 条（提交 {len(domains)} 个）")
         return redirect(_safe_next(request.form.get("next"), url_for("subdomains")))
 
-    @app.route("/api/blacklist/remove", methods=["POST"])
-    @login_required
+    # 续280：这两行**必须没有**装饰器。它是「值黑名单」的**数据视图**（返回 list），
+    # 只被 settings 路由当普通函数调用（`sb=_value_blacklist_view()`，见 5600 行附近两处）。
+    # 原先它顶着 `@app.route("/api/blacklist/remove")` —— 与下面真正干活的
+    # `api_blacklist_remove` **同一条 URL 注册了两次**，Werkzeug 对同形规则稳定排序 ⇒
+    # **先注册的赢** ⇒ 策略页「移除勾选条目」命中的是这个返回 list 的视图：
+    # Flask 3 直接 500（view 不能返回 list），域名一条都删不掉（实测 `url_map.match()`
+    # 返回 `_value_blacklist_view`）。续186 那次是"丢了装饰器"，这一处正好反过来 ——
+    # 多出来的一份才是坏的那个。
     def _value_blacklist_view():
         """策略页用的值黑名单视图（续177）：值只显**掩码**（`jsmine._masked`，删除按 id），
         并标出全局条目（owner_id=0，子账号删不动 —— 与 `secretbl.remove` 的隔离同口径）。"""
@@ -4295,7 +4351,7 @@ def create_app():
                  "global": int(r["owner_id"] or 0) == 0}
                 for r in secretbl.load(owner_id=_owner_scope())]
 
-    # 续186：装饰器丢失修复——本来就是 POST 路由（settings.html:529 的 formaction 在 url_for 它），
+    # 续186：装饰器丢失修复——本来就是 POST 路由（settings.html 的 formaction 在 url_for 它），
     # 丢了 @app.route 后只要黑名单非空，策略页就 500（BuildError）。
     @app.route("/api/blacklist/remove", methods=["POST"])
     @login_required
@@ -4363,7 +4419,10 @@ def create_app():
         stages = ["subdomain"]
         # 任务名：表单可显式指定前缀（拓展域名页按来源分类给出，如 `fofa标题拓展`），
         # 统一再拼上时间戳，避免同名任务互相覆盖辨认；没给前缀时退回旧的 "批量子域-…"。
-        prefix = (request.form.get("name") or "").strip()
+        # 续280：`scan_prefix` 是拓展域名页那个隐藏域的**专用名**（它以前叫 `name`，
+        # 结果把「送去探测」的默认名也顶掉了 —— 详见 extdomains.html 那条注释）；
+        # 两个名字都收，是为了"老书签/老前端提交"不至于丢掉前缀。
+        prefix = (request.form.get("name") or request.form.get("scan_prefix") or "").strip()
         if prefix:
             name = f"{prefix}-{time.strftime('%m%d-%H%M%S')}"
         else:

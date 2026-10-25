@@ -359,7 +359,7 @@ afrog:
 screenshot:
   # 站点截图（默认关；打开后会调用本机 Edge/Chrome 的无头模式）
   enabled: false
-  max_sites: 20
+  max_sites: 20  # 续280：填 0 = 不限（与 limits.brute_max_words: 0 = 全量 同一口径；旧写法把 0 当没填）
   window: 1280x900
   timeout: 30
   # 续225：一次性截图给页面留的"跑完首屏 JS"时间（--virtual-time-budget，毫秒；0＝关）。
@@ -387,7 +387,7 @@ screenshot:
 cert:
   # TLS 证书取证（默认关）：对 https / tls_ports 站点做一次 TLS 握手，解析颁发者与有效期到「SSL 证书」页签
   enabled: false
-  max_sites: 30
+  max_sites: 30  # 续280：填 0 = 不限（与 limits.brute_max_words: 0 = 全量 同一口径；旧写法把 0 当没填）
   timeout: 8
   tls_ports: [443, 8443, 9443]
 iprecon:
@@ -417,7 +417,7 @@ fofa:
   # 没配 key（config/keys*.yaml 的 fofa.email + fofa.key）时**一次请求都不发**，只写一行日志，
   # 所以打开它是安全的 —— 配了 key 就会在 osint 阶段做 favicon/证书/标题三路反查。
   enabled: true
-  max_sites: 30
+  max_sites: 30  # 续280：填 0 = 不限（与 limits.brute_max_words: 0 = 全量 同一口径；旧写法把 0 当没填）
   max_assets: 100
   workers: 5
   # 续229：两次 fofa 请求的最小间隔（秒）—— 循环反查不节流会撞 HTTP 429（按 key 计频率）。
@@ -448,14 +448,14 @@ ssrf:
 shodan:
   # Shodan favicon 反查（默认关）：http.favicon.hash:<mmh3>，需 config/keys.yaml 填 shodan.key
   enabled: false
-  max_sites: 30
+  max_sites: 30  # 续280：填 0 = 不限（与 limits.brute_max_words: 0 = 全量 同一口径；旧写法把 0 当没填）
   max_assets: 100
   workers: 5
   black_ico_threshold: 200
 quake:
   # 360 Quake favicon 反查（默认关）：favicon: "<mmh3>"，需 config/keys.yaml 填 quake.key
   enabled: false
-  max_sites: 30
+  max_sites: 30  # 续280：填 0 = 不限（与 limits.brute_max_words: 0 = 全量 同一口径；旧写法把 0 当没填）
   max_assets: 100
   workers: 5
   black_ico_threshold: 200

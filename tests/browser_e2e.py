@@ -755,7 +755,8 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     rep.check("[8] 列表页轮询只发**批量**请求，没有任何按行请求",
               len(perrow) == 0 and len(batch) >= 1,
               f"批量={len(batch)} 按行={len(perrow)} calls={calls}")
-    ids_arg = batch[0].split("ids=", 1)[1] if batch else ""
+    # 续280：`ids=` 后面可能还有别的查询参数（轮询要 `&counts=1` 才是“带计数”那一档），判据关心的是 **id 集合** 而不是整串 query ⇒ 先截到第一个 `&`。
+    ids_arg = (batch[0].split("ids=", 1)[1].split("&", 1)[0]) if batch else ""
     rep.check("[8] 批量请求只带**未结束**的任务 id（done 的不在其中）",
               ids_arg.split(",") == [str(tid_run)], f"ids={ids_arg!r} 期望 {tid_run}")
     # 续263：① 钩子回的这份"服务端响应"必须带 `id` —— 前端靠它对号入座，缺 id 就一个字都不改

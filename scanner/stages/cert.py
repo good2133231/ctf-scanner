@@ -75,8 +75,10 @@ class CertStage(Stage):
         sites = ctx.results.get("sites") or [dict(r) for r in db.list_sites(ctx.task_id)]
         tls_ports = certs.tls_ports(ctx.settings)
         picked = pick_targets(sites, tls_ports)
-        cap = int(cfg.get("max_sites", 30) or 30)
-        if len(picked) > cap:
+        # 续280：同 `crawl.max_sites` —— `0 / 负数 = 不限`（项目统一口径：
+        # `limits.brute_max_words: 0 = 全量`）。原写法 `int(x or 30)` 会把填 0 变成 30。
+        cap = int(cfg.get("max_sites", 30) or 0)
+        if cap > 0 and len(picked) > cap:
             ctx.logger.info(f"[cert] 待取证 {len(picked)} 个 host:port 超过上限 {cap}，"
                             f"只取前 {cap} 个")
             picked = picked[:cap]

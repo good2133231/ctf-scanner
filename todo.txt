@@ -4481,16 +4481,49 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，288 组；日志时间戳 14:08:56→14:17:37＝8 分 41 秒），日志 `logs/_smoke279.log`；`[172]` / `[266]` / `[281]` 全绿（含两组变异证伪）
 - [x] C2 记忆同步：CHANGELOG 续279 + todo 续279 + AGENTS §5 续266 那条补续279。
 
-下一轮（续280）：
+## 续280（2026-10-25，WorkBuddy · CodeBuddy）：前端数字 live 化 + 生产缺陷六条 + 反复提的问题复核
 
-- [ ] 前端数字实时刷新（主理人 2026-10-25 点单「数字显示经常要我刷新才显示」）：/tasks 统计 live 化
-      （opt-in `counts=1` + `db.task_counts_bulk`）+ 任务详情页签计数轮询；遵守续234 static_v 版本号、
-      续263 按 id 对号、避免 N+1
+- [x] T1 主理人点单「数字显示经常要我刷新才显示」：状态轮询 opt-in 回计数（`/api/tasks/status?ids=&counts=1`
+      与 `/api/tasks/<id>/status?counts=1`，新增 `_want_counts()`；默认档与续93 逐字一致 —— 不带参数就没有
+      counts 键、仍带 log_tail）；`/tasks` 统计列四格拆成 `<span data-c="sites|subs_own|vulns|subs_ext">`
+      + 单元格 `data-counts="1"`，`app.js::tick()` 定点替换（不整行重渲染、不 reload）。
+- [x] T2 详情页页签徽标：逐页签 `cnt_live` 判据，只有"徽标数＝该表未过滤行数"的页签挂 `data-cnt`
+      （vulns 无 vq/vsev、sites 无 stq、ports 无 ptq）；折叠/去重/筛选口径的页签**一律不挂**
+      （C 段折 segment、证书折同一张、目录折站点+状态码+大小、子域名/拓展按 domain 去重 —— 真库实测
+      120 行里 16 组同 task 同 domain 重复行、拓展默认还隐藏已归属行）⇒ 不许出现"列表 3 行、徽标 120"。
+- [x] B1 `/api/blacklist/remove` 被注册两次（同形规则先注册的赢）⇒ 策略页「移除勾选条目」一条都删不掉
+      + Flask 3 对"view 返回 list"直接 500；摘掉 `_value_blacklist_view` 上多出来的两行装饰器。
+- [x] B2 批量重启遇脏 `options`：裸 `json.loads` 500，且 `clear_task_assets` 已先跑（资产清了、任务没起来），
+      还带走同批后续任务 ⇒ 坏值降级成 `{}` + 一行 warning。
+- [x] B3 `runner.run_task`：StageContext 构造失败 ⇒ `_STOP_EVENTS` 登记不注销（=`running_task_ids()` 的数据源，
+      GUI 上那个任务永远显示"在跑"、按钮点了没用）。
+- [x] B4 续跑的收尾钩子（`_maybe_queue_next_layer` / `_maybe_queue_shot_retry`）拿到的是阶段**残片** ⇒
+      新增 `stages_all` 传完整阶段表（第 2 层不再漏 subdomain/probe）。
+- [x] B5 `PipelineRunner.run`：`db.get_task` 返回 None 时 `None.keys()` 是 AttributeError（不在原 except
+      名单里）⇒ "任务被删了"把整条流水线打成未捕获异常。
+- [x] B6 `max_sites=0`：cert/crawl/screenshot 的 `or 30 / or 20` 把 0 顶回出厂值、osint 的 `sites[:0]`
+      ⇒ 整批站点清空、一个 favicon 都不算；四处统一成 `0/负数 = 不限`（与 `limits.brute_max_words: 0 = 全量`
+      同口径），`config/settings.yaml` 五处 `max_sites` 补注。
+- [x] B7 `queue` worker 空转分支（gen 变了但队列已被别人认领）退让一个最小间隔再问，不再贴着 CPU 打 DB。
+- [x] R1 反复提过的问题复核（真库只读 `logs/verify280.py`）：续276 送探命名在**拓展域名页**那条路上从没生效
+      （表单隐藏域叫 `name`，被 `api_scan_ext` 当成显式命名）⇒ 隐藏域改名 `scan_prefix`（前缀行为保留、
+      `[112]` 不红），送探回到 `子任务N`；续279 同主机跳转（34 组复算 ⇒ 0 组仍显示两行）、续268 5xx 默认可见
+      （8/8）、续265 证书/C 段去重 + 标题不截断 + 界面无「离线模式」全部复核通过。
+- [x] C1 全量门禁 SMOKE PASS rc=0（315 条组行 / 290 个组标签（`^\[[0-9]` 去重口径）；8 分 58 秒，日志 `logs/_smoke280b.log`）。
+- [x] C2 记忆同步：CHANGELOG 续280 + todo 续280 + AGENTS（§0.4 补 EOL/内容事故 + §6.2/§7 候选）。
+
+下一轮（续281）：
+
 - [ ] puredns #65 **真目标**同参数任务前后对比（需靶场 + massdns 在 PATH；合成靶已证修复，真数字留手动）
 - [ ] 启发式 0day：主动 fuzz 与 305 个导入 POC 的实测校准（长期项，编号待办 1 遗留）
-- [ ] `docs/security-notice.md` / `docs/features-off-by-default.md` / `docs/docker.md` 未逐条核对，
-      下轮起按"当前事实"过一遍
-- [ ] AGENTS.md 其余段落逐条比对代码与配置
+- [ ] `docs/security-notice.md`（本轮已按续278 两档口径改完 osint/intel/heuristic/github 四条）/
+      `docs/features-off-by-default.md`（有门禁 `[271]` 钉住，全量绿＝表与配置一致）/ `docs/docker.md`
+      剩余段落逐条核对
+- [ ] AGENTS.md 其余段落逐条比对代码与配置（本轮只补了 §0.4 的 EOL/内容事故与 §6.2/§7 候选）
+- [ ] 详情页**其余 8 个页签**的徽标要不要 live 化：需要"按当前筛选口径重算"的接口（折叠/去重/筛选后的数
+      不能用未过滤表行数覆盖），本轮刻意只开三盏灯
+- [ ] 真库那条旧名子任务（#78）：重启服务后确认新送探任务名为 `子任务N`（当前 HEAD 已是，进程重启即生效）
+
 
 ## 续278（2026-10-25，WorkBuddy · Qoder）：文档与记忆对齐（15 阶段 / 17 栏 / 队列执行 / 两档默认）
 

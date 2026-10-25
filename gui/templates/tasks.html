@@ -192,7 +192,15 @@
         <td class="muted small">{{ (t.targets.splitlines() | first) or '-' }}
           {% if t.targets.splitlines() | length > 1 %}<span class="muted">（共 {{ t.targets.splitlines()|length }} 条）</span>{% endif %}
         </td>
-        <td class="muted small">站点: {{ counts[t.id].sites }}<br>子域名: {{ counts[t.id].subs_own }}<br>漏洞: {{ counts[t.id].vulns }}<br>拓展: {{ counts[t.id].subs_ext }}</td>
+        {# 续280（主理人点单「数字显示经常要我刷新才显示」）：这四个数字原来是**整页渲染时**
+            算一次，任务跑十分钟就十分钟是旧数（页面只在"本页任务全跑完"时才 reload 一次）。
+            现在把每个数字拆成 `<span data-c="…">`，轮询拿到新计数后**定点替换**这四个 span
+            —— 不动整行、不 reload、不打断正在输筛选框的人。
+            键名与 `db.task_counts_bulk` 一致（`sites` / `subs_own` / `vulns` / `subs_ext`），
+            JS 侧不另立一套命名（抄一份就会与计数口径漂移）。
+            子域名/拓展仍走**两档**口径（`subs_own` / `subs_ext`，续160）：
+            混着打 `subdomains` 总行数会让"拓展出来的也算成自家资产"。 #}
+        <td class="muted small" data-counts="1">站点: <span data-c="sites">{{ counts[t.id].sites }}</span><br>子域名: <span data-c="subs_own">{{ counts[t.id].subs_own }}</span><br>漏洞: <span data-c="vulns">{{ counts[t.id].vulns }}</span><br>拓展: <span data-c="subs_ext">{{ counts[t.id].subs_ext }}</span></td>
 
         {# 续200：阶段改**预览框**（原先是点一下在行内展开一串文字，把表格撑开）；
            与「子任务」「统计」同一套 pv-overlay，内容从 `/api/tasks/<id>/stages` 取，

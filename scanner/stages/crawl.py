@@ -34,8 +34,12 @@ class CrawlStage(Stage):
         if not sites:      # 单独跑本阶段 / 站点结果没在内存里时回退数据库
             sites = [str(r["url"] or "") for r in db.list_sites(ctx.task_id) if r["url"]]
         sites = list(dict.fromkeys(sites))
-        max_sites = max(1, int(cfg.get("max_sites", 30) or 30))
-        if len(sites) > max_sites:
+        # 续280：`0 / 负数 = 不限`（与 `limits.brute_max_words: 0 = 全量`、
+        # `subdomain._spread` 的 `cap<=0` 同一套口径）。原写法 `max(1, int(x or 30))`
+        # 把"填 0"悄悄变成 30 —— 用户以为自己关掉了上限，实际拿的是出厂值，
+        # 而且**没有任何一行日志**告诉他被改了。
+        max_sites = int(cfg.get("max_sites", 30) or 0)
+        if max_sites > 0 and len(sites) > max_sites:
             ctx.logger.info(f"[crawl] 站点 {len(sites)} 个，超过 max_sites={max_sites}，"
                             f"只爬前 {max_sites} 个")
             sites = sites[:max_sites]
