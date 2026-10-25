@@ -14,7 +14,7 @@ python cli/client.py -t <单目标> [选项]
 | `-f, --file PATH` | 目标文件：每行一个 域名/URL/IP，`#` 开头为注释 |
 | `-t, --target` | 单目标，可重复 `-t a.com -t http://b.local/` |
 | `-n, --name` | 任务名（默认取文件名或 cli-task） |
-| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,portscan,probe,cert,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic,github`（**共 13 个**，默认全部；`takeover`/`jsmine`/`dirscan`/`vulnscan` 策略级默认开，`portscan`/`cert`/`screenshot`/`osint`/`intel`/`heuristic`/`github` 另受策略级开关约束，见下。**显式点名 `cert` / `screenshot` 会落任务级 `cert_on`/`screenshot_on`，只对本次生效**；不写 `-p` 时不会偷偷打开这两个默认关的阶段） |
+| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,hostcollide,portscan,probe,cert,screenshot,osint,jsmine,dirscan,crawl,vulnscan,intel,heuristic,github`（**共 15 个**，默认全部；`takeover`/`hostcollide`/`portscan`/`jsmine`/`dirscan`/`crawl`/`vulnscan` 策略级默认开，`cert`/`screenshot`/`osint`/`intel`/`heuristic`/`github` 另受策略级开关约束，见下。**显式点名 `cert` / `screenshot` 会落任务级 `cert_on`/`screenshot_on`，只对本次生效**；不写 `-p` 时不会偷偷打开这两个默认关的阶段） |
 | `--full-ports` | **本次任务**端口走全端口 `1-65535`（等价 GUI 任务选项 `portscan_full`）；选了却没把 `portscan` 写进 `-p` 时**自动补上该阶段** |
 | `--full-dir` | **本次任务**目录走深扫：全量分层字典 + dirmap + 后缀派生（等价 GUI 任务选项 `dirscan_full`）；同样自动补 `dirscan` 阶段 |
 | `--recursive-dir` | **本次任务**开启**目录递归**：深扫时对命中的目录再往下打一层（等价 GUI 任务选项 `recursive_dir`）；勾它就等于点名要深扫，会**自动带上 `dirscan_full` 并补 `dirscan` 阶段**。额度见策略 `dirscan.recursive_depth` / `recursive_max_dirs` / `recursive_max_paths`（默认 1 层 / 5 目录 / 40 条，约 +215 请求/站） |
@@ -130,14 +130,14 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
 
 ### 页面与操作流
 
-界面外壳为**左侧固定侧边栏（14 栏导航）+ 顶栏（当前页名 + 退出）**；任务详情页内部为**横向页签**，
+界面外壳为**左侧固定侧边栏（17 栏导航）+ 顶栏（当前页名 + 退出）**；任务详情页内部为**横向页签**，
 页签内的筛选是**服务端**的（GET 表单，提交后整页刷新并保持其它条件；续57 撤掉了资产页签的前端
 `data-filter` —— 分页之后它只能筛当前页，比原来更误导）。
 
-> 侧边栏 14 栏＝**仪表盘 / 任务管理 / 子域名资产 / 站点资产 / IP 资产 / 全端口扫描 / 漏洞风险 /
-> POC 管理 / 外部工具 / 策略配置 / 账号管理 / 执行节点 / 访问审计 / 数据迁移**（以
-> `gui/templates/base.html` 的 `nav_items` 为准）；其中**后 7 栏 `admin_only`**（子用户不渲染，
-> 路由层同样 403），`dev.enabled=true` 时管理员另有第 15 栏「开发模式」。
+> 侧边栏 17 栏＝**仪表盘 / 任务管理 / 子域名资产 / 站点资产 / 链接资产 / IP 资产 / 全端口扫描 /
+> 数据探测 / EXP 待确认 / 漏洞风险 / POC 管理 / 外部工具 / 策略配置 / 账号管理 / 执行节点 / 访问审计 /
+> 数据迁移**（以 `gui/templates/base.html` 的 `nav_items` 为准）；其中**后 7 栏 `admin_only`**（子用户不渲染，
+> 路由层同样 403），`dev.enabled=true` 时管理员另有第 18 栏「开发模式」。
 > 原「端口服务」「C 段视野」「目录发现」「拓展域名」四栏已移除 —— 前三个是**任务维度**的数据，
 > 在任务详情页签里本来就能看到；「拓展域名」与「子域名资产」是同一份 `subdomains` 表的不同视图，
 > 单列一栏反而让人分不清资产归属。数据与路由都还在（`/ports`、`/csegs`、`/dirs`、`/extdomains`
@@ -175,7 +175,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
      「**深度选项**」两个复选框是**单次语义**（只作用于本任务，不改全局策略）：
      **全端口扫描（1-65535）**（`portscan_full`）与 **全目录深扫**（`dirscan_full`）；
      **勾了却没勾对应阶段时会自动补上该阶段**并在提示里写明（`auto_stages`），否则用户会以为"勾了没用"。
-     不勾时按全局策略走 —— 目录默认只跑**浅扫**（见下）；
+     不勾时按全局策略走 —— 目录**默认深扫**（`dirscan.mode=deep`；要轻扫在策略页选 `quick`）；
    - 「**登录态（可选）**」文本框（`scanner/auth.py`）：每行一条 `名称: 值`（`Cookie: SESSION=xxx`、
      `Authorization: Bearer xxx`），用于扫**登录后才存在**的资产（`/admin`、业务接口、需要会话的 POC）。
      **只发给目标侧** —— crt.sh / FOFA / CISA KEV / IP 反查等第三方接口一律不带（避免把目标凭据外发）；
@@ -305,11 +305,11 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    > 「另见于 …」；**默认只列解析成功的域名**，被收起的条数显示成 `显示未解析（N）`，
    > 点一下 `?nores=1` 全展开。入库行一条都不动 —— 那两样都只是"先看什么"。
    注意折叠键带 `task_id`：跨任务视图下不同任务的同名同长度站点**不会**被互相折叠。
-   本页每行也可勾选，点「**深度目录补扫（勾选站点）**」对选中站点新建一个只跑 `dirscan` 的深扫任务
-   （与任务详情页「站点」页签同一入口，见 §3）；
+   本页每行也可勾选，点「**重新截图（勾选站点）**」/「**重截失败的站点**」在本任务里排一轮只跑 `screenshot` 的追加运行
+   （排队等 worker、不新建任务；与任务详情页「站点」页签同一入口，见 §3）；
 7. **全端口扫描**：**按任务分布**看端口资产（主机 × 任务视角：任务名 / 主机 / IP / 开放端口数 / 端口列表），
    勾选主机 → 点「发起全端口扫描」即可对某个 IP 补一次 `1-65535`。
-   它新建一个**只跑 portscan 阶段**的任务（与「批量跑子域名」同一套做法：一任务一线程、
+   它新建一个**只跑 portscan 阶段**的任务（与「批量跑子域名」同一套做法：入队由队列 worker 串行认领、
    可独立停止/删除），任务选项 `portscan_full` 让它**无视全局 `portscan.enabled`** 也会执行，
    并自动跳过该任务已扫过的端口 —— 因此不会把全局策略改慢。注意 6.5 万端口逐连接，
    耗时以分钟计，只对真需要补全的 IP 用；
@@ -422,7 +422,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
 - **批量跑子域名**：同样是勾选行 → 点「批量跑子域名（新建任务）」。它会把勾选的域名
   打包成**一个新任务**（任务名默认 `批量子域-<月日>-<时分秒>`，阶段固定只有 `subdomain`），
   跑完回到该任务详情页看结果。之所以新建任务而不是在当前任务下挂子任务：现有任务模型
-  （一任务一线程、独立状态与独立停止/删除）可以直接复用，挂子任务要改表结构、任务树渲染、
+  （独立状态与独立停止/删除，由队列 worker 串行认领）可以直接复用，挂子任务要改表结构、任务树渲染、
   状态聚合与递归停止 —— 收益只是 UI 好看一点。
 
 ### 全端口扫描 / 目录探测（浅扫 → 深扫 → 补扫）
@@ -445,7 +445,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
   `limits.brute_fallback_max`（内置那一路的深档上限，默认 3000）**只冲深档**，超出按**等距抽样**
   收窄并在日志里说明；内置那一路另有独立并发 `limits.brute_workers`（默认 64）
   —— 详见 `docs/pipeline.md` §① 与 AGENTS §7 续139）；
-- **深度扫**（`dirscan.mode=deep`，或建任务勾「全目录深扫」/ 结果页「补扫」）：
+- **深度扫**（`dirscan.mode=deep`，或建任务勾「全目录深扫」）：
   吃**全量分层字典**（框架桶 12 份 → 语言栈 → 暴露面 → 通用/全量 `dirs_big`，11882 条），
   单站点上限 `dirscan.max_paths`（默认 400），装了 `tools/dirmap/dirmap.py` 时优先调用它，
   并对命中的文件名型路径派生备份后缀变体（`dirscan.suffix_aware`）。
@@ -509,7 +509,7 @@ python3 run_gui.py
    写不到项目路径与我们看得见的 /tmp，截图永远 0 产物。自举会把这种情况报成 warn 并给出
    换非沙箱版（如 Google Chrome .deb）的命令。
 - **解释器名**：多数发行版只有 `python3` 没有 `python`。dirmap 配置项若不调整，框架会自动退回当前解释器（`utils.pick_python`），无需手动改；
-- **对外访问**：默认 `gui.host: 127.0.0.1` 仅本机可访问（续32 起另有 Host 白名单与写操作 Origin 校验两道本机守卫，详见 `docs/security-notice.md`）。**推荐做法是保持回环绑定 + 前面套反向代理**（反代层做 TLS 与强口令/访问日志），而不是把 host 改 `0.0.0.0`；确需绑非回环地址时 `serve()` 会打印显式告警，且 Host 白名单会自动放宽。控制台自带**多用户与角色**（续46）、**登录限速/失败锁定 + 动作审计**（续48，`gui.audit`：谁/何时/从哪个 IP/做了什么/成败，只记元数据、绝不记口令凭据，**不记逐请求流量**），HTTPS 则**仍**要靠反向代理终止（续47，见 `docs/deploy-https.md`）；绑非回环地址时务必同时改掉默认口令（`gui.token`；续109 起会话密钥已改为本机随机落盘、不再由它推导，
+- **对外访问**：默认 `gui.host: 127.0.0.1` 仅本机可访问（续32 起另有 Host 白名单与写操作 Origin 校验两道本机守卫，详见 `docs/security-notice.md`）。**推荐做法是保持回环绑定 + 前面套反向代理**（反代层做 TLS 与强口令/访问日志），而不是把 host 改 `0.0.0.0`；确需绑非回环地址时 `serve()` 会打印显式告警，且 Host 白名单会自动放宽。控制台自带**多用户与角色**（续46）、**登录限速/失败锁定 + 动作审计**（续48，`gui.audit`：谁/何时/从哪个 IP/做了什么/成败，只记元数据、绝不记口令凭据，**不记逐请求流量**），HTTPS 则**仍**要靠反向代理终止（续47，见 `docs/deploy-https.md`）；绑非回环地址时务必同时改掉默认口令（账号口令，用 `cli/run_users.py --reset-password` 改；续109 起会话密钥已改为本机随机落盘、不再由它推导，
   续113 起改过的口令只以 PBKDF2 派生值落盘、页面不再回显）；
 - **权限**：不需要 root；工具放 `~/bin` 并加入 PATH 即可；
 - **常驻运行**：测试可用 `nohup python3 run_gui.py &`，正式使用建议 systemd（`Restart=on-failure`）或 tmux。
@@ -632,7 +632,7 @@ py -3 tools/poc_review.py --import logs/poc_review.md
 **Q：为什么能扫出 `http://www.targ7.com:9007` 这种非标端口站点？**
 因为 `probe` 阶段现在会**消费 `portscan` 阶段的开放端口**：除 80/443 外，portscan 发现的其他开放端口
 会补出 `https://host:port`、`http://host:port` 两种候选再探测。所以想扫全非标端口，需要**同时打开
-`portscan` 阶段**（默认关，「策略配置 → 资产面拓展」）。只跑默认阶段时 probe 仍只探 80/443。
+`portscan` 阶段**默认就是开的（续269）—— 若在「策略配置 → 资产面拓展」把它关掉，probe 就只探 80/443。
 
 **Q：「子域名资产」和「拓展域名」有什么区别？**
 前者只放**目标自身**的子域名（被动收集 / 字典爆破产出）；后者放 JS 挖掘与外部情报（C 段、favicon）

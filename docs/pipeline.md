@@ -1,14 +1,16 @@
 # 流水线说明
 
-默认阶段顺序（**13 个**，权威来源 `scanner/runner.py::STAGE_ORDER`）：
-`subdomain → takeover → portscan → probe → cert → screenshot → osint → jsmine → dirscan → vulnscan → intel → heuristic → github`
+默认阶段顺序（**15 个**，权威来源 `scanner/runner.py::STAGE_ORDER`）：
+`subdomain → takeover → hostcollide → portscan → probe → cert → screenshot → osint → jsmine → dirscan → crawl → vulnscan → intel → heuristic → github`
 （CLI 可用 `-p` 裁剪，GUI 用复选框勾选）。
 
-其中 `takeover` / `jsmine` / `dirscan` / `vulnscan` 由**策略级开关**控制、默认开，
-`portscan` / `cert` / `screenshot` 默认关（DEFAULTS 与随包 settings.yaml 都是关）；`intel` / `heuristic` / `github` 在 DEFAULTS 里关、**随包 `config/settings.yaml` 已开**（续159-附）；`osint` 由 `iprecon.enabled` / `fofa.enabled` 两个子开关决定（DEFAULTS 关、随包已开）：
+其中 `takeover` / `hostcollide` / `portscan` / `jsmine` / `dirscan` / `crawl` / `vulnscan` 由**策略级开关**控制，
+**DEFAULTS 与随包 `config/settings.yaml` 都是开**（`portscan` 自续269、`hostcollide`/`crawl` 随各自落地即两档都开）；
+`cert` / `screenshot` 两档都是关（任务级勾选或 `-p` 可点名执行，见下）；`intel` / `heuristic` / `github` 在 DEFAULTS 里关、**随包 `config/settings.yaml` 已开**（续159-附）；`osint` 由 `iprecon.enabled` / `fofa.enabled` 两个子开关决定（DEFAULTS 关、随包已开）：
 勾选只表示"这个阶段参与本次任务"，真正执行与否还看
-`settings.takeover.enabled` / `portscan.enabled` / `cert.enabled` / `screenshot.enabled` / `jsmine.enabled` /
-`dirscan.enabled` / `vulnscan.enabled` / `intel.enabled` / `heuristic.enabled` / `github.enabled`
+`settings.takeover.enabled` / `hostcollide.enabled` / `portscan.enabled` / `cert.enabled` / `screenshot.enabled` /
+`jsmine.enabled` / `dirscan.enabled` / `crawl.enabled` / `vulnscan.enabled` / `intel.enabled` / `heuristic.enabled` /
+`github.enabled`
 （阶段内部自查后打日志跳过，且**连请求都不发**）。`osint` 更特殊 —— 它没有自己的 `enabled`，
 而是由两个**子能力开关** `iprecon.enabled` / `fofa.enabled` 控制，**两者都关时整阶段直接跳过**。
 `github`（续26）另有一条"没配 token 就**一次请求都不发**"的前置门：GitHub 代码搜索接口要求认证，
@@ -19,10 +21,10 @@
 > 注意 CLI 的 `-p` 默认值是 `None`（不给＝全部阶段）：只有**显式点名**才落这两个 `*_on`，
 > 否则默认的"全部阶段"会偷偷打开两个默认关的阶段。
 
-> `dirscan` 走**浅/深两档**（`dirscan.mode`）：默认 `quick` 只打精选敏感路径（约 150 条/站），
-> `deep` 才启用全量分层字典 + dirmap + 后缀派生。用户要求"先浅浅过一遍，看清结果再手动决定深度扫"，
-> 所以**默认开的是浅扫**；深扫用建任务勾选「全目录深扫」（`dirscan_full`，同时写任务选项
-> **并自动补上 `dirscan` 阶段**）或结果页的「补扫」按钮单独立任务，详见 ⑦。
+> `dirscan` 走**浅/深两档**（`dirscan.mode`）：`quick` 只打精选敏感路径（约 150 条/站），
+> `deep` 启用全量分层字典 + dirmap + 后缀派生；**续144 起默认就是 `deep` + 递归 1 层**
+> （`dirscan.recursive_depth=1`）。`quick` 需显式选；深扫也可用建任务勾选「全目录深扫」
+> （`dirscan_full`，同时写任务选项**并自动补上 `dirscan` 阶段**），详见 ⑦。
 
 末尾三个阶段（`intel` / `heuristic` / `github`）的产物是**「线索」而不是漏洞**：它们只写独立的 `leads` 表，
 **不写 `vulns`、不计入漏洞数、不自动导入 POC**。**出口只有 JSONL 导出**（`type=lead` 行与
@@ -65,6 +67,8 @@
 > **实际执行顺序一律以 `STAGE_ORDER` 为准**：`screenshot` 在 ④ probe 与 ⑤ osint 之间，
 > ⑨~⑬ 是后补的阶段（编号只是书写顺序，`cert` 实际排在 `screenshot` **之前**；
 > 其中 `intel` / `heuristic` / `github` 固定在流水线最末）。
+> `hostcollide`（⑭）与 `crawl`（⑮）本轮补的小节，编号同样只是书写顺序：前者的实际位置在
+> `takeover` 与 `portscan` 之间，后者在 `dirscan` 与 `vulnscan` 之间。
 
 ### ① subdomain 子域名收集
 
@@ -129,7 +133,7 @@
 - 产物：`cnames.txt`、SQLite `subdomains.cname` 回填、疑似接管以 **high** 级进 `vulns`（`owasp=A05`）；
 - 降级/局限：`http_check=false` 时退化为纯 CNAME 判定，误报明显上升；第三方服务文案会变，指纹需定期维护。
 
-### ③ portscan 端口与服务（`portscan.enabled`，**默认关**）
+### ③ portscan 端口与服务（`portscan.enabled`，**默认开**；续269 起只打常见 web 端口）
 
 - 输入：目标里的 `ip` / `url` 主机名 / `domain` + `ctx.results["domains_for_probe"]`，
   上限 `portscan.max_hosts`（默认 100）；
@@ -176,7 +180,7 @@
   **额外候选**：`portscan` 已跑过时，消费其 `ports` 表（同任务）里**除 80/443 外**的开放端口，
   为对应主机补出 `https://host:port` / `http://host:port` 两种候选（`probe` 日志会写
   `额外纳入 N 个开放端口候选（来自 portscan）`）。因此想覆盖非标端口 Web 服务，需**同时打开
-  `portscan` 阶段**（默认关）—— 只跑默认阶段时仍只探 80/443；
+  `portscan` 阶段（**默认开**，续269 起只打常见 web 端口）—— 关掉它就只探 80/443；
 - 处理：httpx 适配器（JSONL 输出解析 status/title/server/tech）；存活口径＝**回了真实状态码就算**（`probe.is_alive`，100–599），旧版 `-mc 200,301,302,403,404` 实测漏掉 **49 台**（＝与灯塔逐条比时「它记为站点而我们零入库」的主机数，其中 **34 台**我们本来就有子域名、探过却被整行丢掉；CDN 边缘回 521/502/400 也在这 49 台里），已去掉；另加 `-nfs`：不锁 scheme 时 httpx 的 scheme 回退会把 `http://h` 的 301 换成 `https://h` 的落地状态，原始那一跳再也看不到；
   **3xx 站点补一次「跳转后」取证**（续112-B，`probe.attach_redirect_info`）：httpx 默认**不跟随**
   重定向，收回来的 301 行标题就是字面的「301 Moved Permanently」，看不出跳去了哪儿；于是对每条 3xx
@@ -202,7 +206,7 @@
   **响应体解码**统一走 `scanner/utils.py::_decode_body`（响应头 charset → UTF-8 → GB18030 → 带替换 UTF-8），
   修掉"服务器不声明 charset 时 requests 回退 ISO-8859-1 导致中文标题乱码"的问题。
 
-### ⑤ osint 外部情报拓展（`iprecon.enabled` / `fofa.enabled`，**默认全关**）
+### ⑤ osint 外部情报拓展（`iprecon.enabled` / `fofa.enabled`，DEFAULTS 关、**随包已开**）
 
 发散思维的那一条腿：主目标常常只有一个，但**同一个 C 段**、**同一个 favicon**、**同一张 TLS 证书**
 背后往往是同一套业务（同机房/同客户/同备案主体），这是找旁路的常见起点。产出是**新域名**，
@@ -248,7 +252,7 @@
   来源列显示为 `C 段反查` / `FOFA·ICO 反查` / `FOFA·证书反查`，便于一眼认出哪些是 FOFA 找出来的；
 - **入库前过用户黑名单**（`scanner/blacklist.py`）：命中的域名连子域一起丢弃，
   因此它们同样不会被后续 dirscan / vulnscan 扫到；
-- 为什么默认全关：三项都依赖**第三方公共接口**（`api.webscan.cc` / FOFA），可用性不由我们掌控；
+- 为什么**代码默认关**（随包 `settings.yaml` 已把两段打开）：三项都依赖**第三方公共接口**（`api.webscan.cc` / FOFA），可用性不由我们掌控；
   且 FOFA 需要 key 与配额。接口地址做成配置项（`iprecon.api`，留空回落到默认）以便随时替换；
 - 局限：公共接口的返回结构随时可能变；黑 ico / 通用证书 / "共享主机"三个阈值都是保守估计值，
   未经真实数据校准（证书反查的"通用证书"判定尤其粗：只按命中总数比阈值）。
@@ -479,11 +483,11 @@
   4. **目录命中离群**：某站点目录命中数 ≥ `OUTLIER_MIN_HITS`(15) 且 ≥ 同任务站点中位数 ×
      `OUTLIER_RATIO`(3) → 该站目录面异常宽（常意味着后台/调试接口暴露）；
   5. **同 C 段多 IP**：单个 `/24` 归纳出 ≥ `CSEG_MIN_IPS`(3) 个 IP → 提示段内其它主机值得看
-     （`csegs` 非空本身来自默认关的 `osint`）；
+     （`csegs` 非空本身来自 `osint` 的 C 段反查）；
 - 产物：`leads` 表（`kind="heuristic"`，级别一律 `info`）；`max_leads`（默认 50）截断；
 - **边界**：只写 `leads`，不写 `vulns`、不计入漏洞数；**主动 fuzz 仍不做**（样本量不够时那是纯噪声）。
 
-### ⑫ github GitHub 泄露检索（`github.enabled`，DEFAULTS 关、**随包已开**，需 `config/keys.enc.yaml` 的 `github.token`）
+### ⑬ github GitHub 泄露检索（`github.enabled`，DEFAULTS 关、**随包已开**，需 `config/keys.enc.yaml` 的 `github.token`）
 
 - 位置：流水线**最末**（排在 `intel` 之后）—— 它要发外部请求、受第三方限流约束，
   不产出任何被后续阶段消费的数据，放在最后便于"只重跑本阶段"；
@@ -577,9 +581,9 @@ logs/task_1_mytask/
 | fofa.max_title_queries | 10 | 每任务最多反查多少个站点标题 |
 | vulnscan.enabled | true | **阶段级**开关：漏洞初筛整阶段开关（关掉即"只测绘不探测"） |
 | takeover.enabled / jsmine.enabled | true | 子域接管 / JS 挖掘的阶段级开关 |
-| portscan.enabled / screenshot.enabled | false | 端口与服务扫描 / 站点截图 的阶段级开关（**均默认关**） |
+| portscan.enabled / screenshot.enabled | 随包 / DEFAULTS：portscan **true**、screenshot **false** | 端口与服务扫描（**两档都开**，续269）/ 站点截图（**两档都关**）的阶段级开关 |
 | cert.enabled / max_sites / timeout / tls_ports | **false** / 30 / 8s / [443,8443,9443] | TLS 证书取证（**默认关**）：握手目标上限与超时；`tls_ports` 决定"非 https 但端口命中"的站点是否也试。建任务勾选或 CLI `-p cert` → 任务级 `cert_on` 单次生效 |
-| dirscan.enabled / vulnscan.enabled | true / true | 目录发现（**默认开、默认只浅扫**）/ 漏洞初筛（默认开）的阶段级开关。想要早期那种"目录默认不扫"的行为，把 `dirscan.mode` 之外的总开关关掉即可 |
+| dirscan.enabled / vulnscan.enabled | true / true | 目录发现（**默认开、默认深扫 + 递归 1 层**，续144）/ 漏洞初筛（默认开）的阶段级开关。想要早期那种"目录默认不扫"的行为，把 `dirscan.mode` 之外的总开关关掉即可 |
 | intel.enabled / heuristic.enabled / github.enabled | DEFAULTS false ／ **随包 settings.yaml true** | 三个「**线索**」阶段的阶段级开关（续159-附：新克隆拿到的是 true；只写 `leads` 表，不写 `vulns`） |
 | limits.brute_max_domains | 50 | 参与 DNS 爆破的域名上限 |
 | limits.wildcard_filter | true | 泛解析过滤：目标开 `*.domain` 时丢弃通配命中的字典结果 |
@@ -599,21 +603,41 @@ logs/task_1_mytask/
 | checks.poc_link_tags | true | 指纹→POC 联动：站点技术栈命中的 POC 优先执行且不受每站点上限约束 |
 | checks.poc_max_per_site | 80 | 每站点最多执行多少个 POC（联动命中项不计入） |
 | takeover.enabled / max_hosts / http_check | true / 300 / true | 子域接管检测：开关、主机上限、是否补一次 HTTP 特征比对降误报 |
-| portscan.enabled / max_hosts / ports / timeout / workers / banner | **false** / 100 / 空(TOP 表) / 1.0s / 64 / true | 端口与服务扫描（默认关）；端口支持 `"80,443"` 或 `"1-1024"` |
+| portscan.enabled / max_hosts / ports / timeout / workers / banner | **true** / 100 / 空(TOP 表) / 1.0s / 64 / true | 端口与服务扫描（**两档都开**，续269）；端口支持 `"80,443"` 或 `"1-1024"` |
 | jsmine.enabled / max_pages / max_js / secrets / blacklist / drop_absent_zone | true / 20 / 40 / true / [] / true | JS 资产挖掘：开关、页面/JS 上限、是否提取凭据、额外排除的第三方域后缀、**是否剔掉「注册域不存在」的成员访问链碎片**（续113，关掉只是碎片回库，页面仍默认收起未解析行） |
 | iprecon.enabled / api / max_ips / max_hosts / max_domains_per_ip / workers / timeout | **随包 true**（DEFAULTS false）/ api.webscan.cc / 500 / 200 / 30 / 5 / 10s | C 段反查（DEFAULTS 关、随包已开）：接口地址（留空回落默认）、待查 IP/主机上限、单 IP 域名上限（超过判共享主机，不纳入资产）、并发与超时 |
-| fofa.enabled / max_sites / max_assets / workers / black_ico_threshold | **false** / 30 / 100 / 5 / 200 | favicon（mmh3）反查同源资产（默认关）：算 favicon 的站点上限、单次查询资产上限、并发、黑 ico 阈值（命中数超过即放弃拓展） |
+| fofa.enabled / max_sites / max_assets / workers / black_ico_threshold | **随包 true**（DEFAULTS false） / 30 / 100 / 5 / 200 | favicon（mmh3）反查同源资产（DEFAULTS 关、随包已开）：算 favicon 的站点上限、单次查询资产上限、并发、黑 ico 阈值（命中数超过即放弃拓展） |
 | fofa.cert_enabled / cert_threshold / max_cert_queries | true / 200 / 10 | 证书反查（`cert="domain"`，跟随 favicon 开关）：通用证书阈值（命中数超过即放弃拓展）、每任务最多查几个注册域 |
 | blacklist.enabled / path | true / config/blacklist.txt | 用户黑名单：命中即不入资产库（含其所有子域）；纯文本、每次重读、可直接手工编辑 |
 | （`config/keys.yaml`） | 空占位 | 第三方 API key 专用文件，**不在本文件里**；`load_keys()` 只读、GUI 不写回 |
-| passive.enabled / sources / timeout | true / 默认 6 源 / 20s | 多来源被动子域名收集的开关、来源清单、单源超时 |
+| passive.enabled / sources / timeout | true / 默认 8 源 / 20s | 多来源被动子域名收集的开关、来源清单、单源超时 |
 | evasion.random_ua / spoof_xff / waf_bypass / bypass_level / waf_detect | true / false / true / 2 / true | 动态免杀：UA 随机化、XFF 伪装、payload 变形及强度、WAF 探测 |
 | dirscan.fw_max_paths | 150 | 深扫时补一轮「框架字典 + 暴露面字典」内置扫描的额度（0 = 关闭，判不出框架也不吃这份额度） |
 | portscan.engine / full_workers / full_timeout | auto / 256 / 0.5s | 端口扫描引擎：`auto` = fscan → nmap → 内置 TCP connect（也可钉 `fscan`/`nmap`/`builtin`）；全端口模式的并发与超时 |
 | screenshot.enabled / max_sites / window / timeout / browser | **false** / 20 / 1280x900 / 30s / 空 | 站点截图（默认关）：站点上限、视口、单站超时、浏览器路径（留空自动探测 Edge/Chrome） |
-| intel.enabled / source / url / cache_hours / timeout / max_leads | **false** / kev / 空 / 24h / 20s / 50 | 情报订阅（默认关）：源名（内置 `FEEDS`）、覆盖地址（留空用内置，可换自建镜像）、缓存有效期（0 = 每次拉取）、拉取超时、单任务线索上限 |
-| heuristic.enabled / max_leads | **false** / 50 | 启发式候选（默认关、零出站）：阶段开关与单任务线索上限 |
-| github.enabled / max_domains / max_queries / per_page / max_leads / timeout | **false** / 3 / 4 / 30 / 30 / 20s | GitHub 泄露检索（默认关）：待检索注册域上限、查询条数上限、单查询返回条数、单任务线索上限、请求超时。**token 不在这里** —— 填 `config/keys.yaml` 的 `github.token`，没配就一次请求都不发（代码搜索接口要求认证）；只落仓库/文件路径/命中规则名，且请求恒 `auth=False` |
+| intel.enabled / source / url / cache_hours / timeout / max_leads | **随包 true**（DEFAULTS false） / kev / 空 / 24h / 20s / 50 | 情报订阅（DEFAULTS 关、随包已开）：源名（内置 `FEEDS`）、覆盖地址（留空用内置，可换自建镜像）、缓存有效期（0 = 每次拉取）、拉取超时、单任务线索上限 |
+| heuristic.enabled / max_leads | **随包 true**（DEFAULTS false） / 50 | 启发式候选（DEFAULTS 关、随包已开，零出站）：阶段开关与单任务线索上限 |
+| github.enabled / max_domains / max_queries / per_page / max_leads / timeout | **随包 true**（DEFAULTS false） / 3 / 4 / 30 / 30 / 20s | GitHub 泄露检索（DEFAULTS 关、随包已开）：待检索注册域上限、查询条数上限、单查询返回条数、单任务线索上限、请求超时。**token 不在这里** —— 填 `config/keys.yaml` 的 `github.token`，没配就一次请求都不发（代码搜索接口要求认证）；只落仓库/文件路径/命中规则名，且请求恒 `auth=False` |
 | tools.fscan | fscan | fscan 二进制名/路径（缺省只在 PATH 找，找不到跳过）；调用时强制 `-np -nobr -nopoc`，只用其端口发现能力 |
 | tools.* | — | 外部工具路径/命令（subfinder / puredns / httpx / nmap / dirmap.python·script·threads …） |
 | dicts.* | — | 各字典路径：**浅扫 `dirs_shallow`** + 技术栈字典（`dirs_common`/`dirs_jsp`/`dirs_php`/`dirs_asp`）+ 框架字典（`dirs_wordpress`/`dirs_spring`/`dirs_weblogic`…12 桶）+ 暴露面 `dirs_exposure` + `dicts.cdn_cname`（CDN 厂商 CNAME 后缀名单）+ `dicts.cdn_ips`（CDN 厂商任播 IP 段名单） |
+### ⑭ hostcollide 同 IP 的 Host 碰撞（`hostcollide.enabled`，**两档都开**）
+
+- 位置：`takeover` 与 `portscan` 之间 —— 先有 CNAME 链，再拿 IP 去撞其它虚拟主机，最后才扫端口；
+- 处理（`scanner/hostcollide.py`）：把同一 IP 上已知的主机名当对照集，试"这个 IP 上还挂了谁"的常见命名
+  并带上 `Host:` 头；只读 GET，指纹与该 IP 的默认虚机比对，单 IP 有预算上限。命中写进 `subdomains`
+  且 `source="collide:<ip>"`，按 own 口径参与后续探测；
+- 开关：策略级 `hostcollide.enabled` 默认**开**；建任务表单**没有**勾选框、任务详情页**没有**补跑按钮
+  （`POST /api/hostcollide/run` 已于续269 撤掉）。要单任务强制跑用任务选项 `hostcollide: true` / CLI `--hostcollide`；
+- 边界：只碰本任务已确认的 IP，不对整个 C 段发散；命中是"疑似同 IP 的虚拟主机"，仍由后续 probe 验证存活。
+
+### ⑮ crawl 站点爬虫（`crawl.enabled`，**两档都开**）
+
+- 位置：`dirscan` 与 `vulnscan` 之间 —— 目录是"猜出来的路径"，爬虫是"页面里本来就写着的链接"；
+- 处理（`scanner/crawl.py`）：从存活站点出发只发 **GET**；`<form method="post">` **只记录、永不提交**；
+  默认**不跟外链**（同站判据 `same_site`）；额度 `crawl.max_sites` / `max_pages` / `max_links` /
+  `max_feed` / `max_feed_total`，超限即收手并报数；
+- 产物：`urls` 表（链接资产，带 `host` / `path` / `query`）；**带参链接**（`query` 非空）由阶段写进
+  `ctx.results["crawl_feed"]`，交给 `vulnscan` 做参数级检测（每站 `max_feed`、总量 `max_feed_total`）；
+- 边界：它会主动爬页面（`crawl.enabled=true` 出厂），关掉即零请求；只发 GET、不提交表单，非破坏性红线照旧。
+

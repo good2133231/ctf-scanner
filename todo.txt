@@ -4465,19 +4465,40 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       日志 `logs/_smoke274.log`
 - [x] C2 记忆同步：CHANGELOG 续274 + todo 续274 + AGENTS 改「massdns 需手工安装」那条（现标准安装自动编）
 
+## 续278（2026-10-25，WorkBuddy · Qoder）：文档与记忆对齐（15 阶段 / 17 栏 / 队列执行 / 两档默认）
+
+- [x] T1 阶段数口径统一为 15：README（正文 / CLI 示例 / 目录树 / 文档索引）、`docs/architecture.md`（阶段层框图 + devflow 段 + 日志分隔行 N/13 + ports 表"默认关闭"）、`docs/usage.md`（`-p` 列表）、`docs/pipeline.md`（默认顺序 + 三线索段）、`docs/roadmap.md`、`AGENTS.md`（§3/§4/§6）、SKILL.md 全部按 `runner.STAGE_ORDER` 改；`scanner/runner.py` 只动 docstring 与注释。
+- [x] T2 侧边栏栏数 14→17：补「链接资产 / 数据探测 / EXP 待确认」，`admin_only` 起点改 POC 管理、后 7 栏；`devmode` 由"第 13/15 栏"改为"第 18 栏"；`docs/architecture.md` §GUI 分栏整段按 `base.html` 的 `nav_items` 重排（原段自称 14 项却只列 12 条路由）。
+- [x] T3 执行模型改「常驻 worker 认领队列」：GUI 不再"每任务一个后台线程"，进程重启由 `reconcile_orphan_tasks` 重新入队而非中断（README / architecture 取舍表 / usage 两处 / AGENTS §3）。
+- [x] T4 两档默认写清：`portscan` 两档都开（续269）、`hostcollide`/`crawl` 两档都开、`dirscan.mode=deep` + `recursive_depth=1`（`quick` 改为显式选）、`checks.min_severity` DEFAULTS medium / 随包 high、`fofa.enabled` 随包 true 而 DEFAULTS false、`passive` 默认 8 源、`settings.yaml` 38 段（= DEFAULTS 全部段）。
+- [x] T5 `fofa.enabled` 的两处旧口径（README 两处 + AGENTS §7 2026-09-26 那段）只补 2026-10-25 的新事实，**不删原文**；带日期的历史陈述（CHANGELOG 旧节 / takeover 复核报告 / 2026-10-12 的 31 段实测）一律保留。
+- [x] T6 收录 9 条 `[8bq]` 禁用短语的规避：新写文案里不再出现"三个阶段默认关 / 三个开关都默认关 / （默认关，只产"等旧句。
+- [x] T7 门禁驱动测试维护（不动运行时代码）：续276 的子任务改名让 `[195a]` / `[202]③` 变成陈旧断言（前者在门禁里真红过一次），两条都改成钉 `子任务N` 新口径并保留"旧命名必须不再出现"的反证；`[202]③` 另按 GUI / runner 两处源码形状点名。
+- [x] T8 §0.5 脱敏：续276/277 记忆里遗留的两个本机库内有资产的授权目标注册域（6 行 9 处）换成合成占位「目标域 / 自身目标注册域」；`[218]` 复跑零命中。
+- [x] C1 全量门禁 SMOKE PASS（rc=0，288 组；墙钟约 9 分钟，日志 `logs/_smoke278b.log`）。
+- [x] C3 `docs/pipeline.md` 漏网：首轮全量门禁后才发现它仍写 13 阶段 / `portscan` 默认关 / `dirscan` 默认浅扫 / `passive` 6 源 —— 已按代码补齐（15 阶段含 hostcollide+crawl、两档默认、补 ⑭/⑮ 两节、修正 ⑫ 重号）；补完 `--only 8as,8bq` 复验绿。
+- [x] C2 EOL 与残留复核：逐文件 `git diff --numstat` == `--ignore-cr-at-eol --numstat`；`git ls-files --eol` 仍是 todo/CHANGELOG `crlf`、AGENTS `mixed`；`13 阶段` / `14 栏` / `一任务一线程` / `无任务队列` 只剩白名单历史行；`--only 8as,8bq` 复验记忆同步与两档默认。
+
+下一轮（续279）：
+
+- [ ] puredns #65 **真目标**同参数任务前后对比（需靶场 + massdns 在 PATH；合成靶已证修复，真数字留手动）
+- [ ] 启发式 0day：主动 fuzz 与 305 个导入 POC 的实测校准（长期项，编号待办 1 遗留）
+- [ ] `docs/security-notice.md` / `docs/features-off-by-default.md` / `docs/docker.md` 本轮未逐条核对（不在点名清单内），下轮起按"当前事实"过一遍
+- [ ] AGENTS.md 其余段落（本轮只核了阶段/栏数/执行模型/默认值/计数这五类）逐条比对代码与配置
+
 ## 续277（2026-10-25，WorkBuddy · CodeBuddy）：修复站点页签 form 嵌套 + 子域名/拓展域名/子域名 三页签排版与逻辑核查
 实施者：WorkBuddy · CodeBuddy
 
 - [x] T1【主理人点单「站点/拓展域名/子域名显示有排版问题」+ 查逻辑】根因：任务详情「站点」页签「重截」`<form>`（`/api/sites/reshoot`）**嵌套**了「补图标」`<form>`（`/api/sites/iconbackfill`）—— HTML 不允许 form 嵌套，浏览器按容错把外层 reshoot 表单拆掉，站点勾选表格被甩到表单外 ⇒ 「勾选若干站点 → 重截」只提交 hidden、不提交勾中的 URL（默认只能走「全部失败站点」逻辑）；修复：`gui/templates/task_detail.html` 把两颗 POST 表单改为**并列**——reshoot 表单用 `id="reshoot-f"` 只包住 hidden + 站点表（含勾选行），「重截」按钮用 `form="reshoot-f"` 关联回去（按钮仍摆在 bulkbar 里、视觉不动），「补图标」表单作为 bulkbar 内并列兄弟表单
-- [x] T2 子任务数据隔离逻辑核查：子任务 #73 严格按自身 task_id 取数（subs=10 / sites=16 / ext=10），其 `osint:fofa` 拓展域名全部属于自身目标 pay4z.com（父任务 #72 目标是 infyric.com）⇒ 无跨任务泄漏；拓展域名 tab 徽标 6 vs 页内「全部（7）」是「已解析 vs 全量」口径（与子域名页签同约定），非 bug；子域名/拓展域名两页签结构正常（无嵌套、标签配平）
+- [x] T2 子任务数据隔离逻辑核查：子任务 #73 严格按自身 task_id 取数（subs=10 / sites=16 / ext=10），其 `osint:fofa` 拓展域名全部属于自身目标注册域（父任务 #72 目标是另一个注册域）⇒ 无跨任务泄漏；拓展域名 tab 徽标 6 vs 页内「全部（7）」是「已解析 vs 全量」口径（与子域名页签同约定），非 bug；子域名/拓展域名两页签结构正常（无嵌套、标签配平）
 - [x] C1 验证：本地渲染 #73 详情页 status 200；逐条跑通 `[7s]` 对 pane-sites 的结构断言（GET 筛选在 POST 前闭合、无嵌套、`method="post"` 计数=2、`<form>`/`</form>` 配平 3/3）；全模板 `<form>`/`</form>` 配平 16/16；`py_compile` 通过
 - [x] C2 记忆同步：CHANGELOG_AI 续277 + todo 续277
 
 ## 续276（2026-10-25，WorkBuddy · CodeBuddy）：子任务送探命名简化为「子任务N」
 实施者：WorkBuddy · CodeBuddy
 
-- [x] T1【主理人点单「infyric.com · 送探 1 个域名 这种就命名子任务1」】手动「送去探测」与自动高置信送探两处默认名，从 `infyric.com · 送探 N 个域名·M层`（续202/续195 口径）简化为 `子任务N`，N＝该**父任务**名下已有子任务数 + 1（`db.list_child_tasks` 计数）；层级由 parent_id 挂着（列表页树形 + 详情页「子任务 · 父 #N」徽章都说清），名字不必复述域名/数量/层数；父任务异常取不到时留空走时间戳兜底
-- [x] C1 验证：单元验证 父任务 + 2 子任务 ⇒ 子任务1 / 子任务2；库内 #67（父 #66）、#73（父 #72）已 DB 改名（原 `infyric.com · 送探 1 个域名` → `子任务1`）；`py_compile` 通过；本地渲染 #73 详情页 status 200
+- [x] T1【主理人点单：子任务名不要复述域名，原形如「目标域 · 送探 1 个域名」⇒ 命名子任务1】手动「送去探测」与自动高置信送探两处默认名，从 `目标域 · 送探 N 个域名·M层`（续202/续195 口径）简化为 `子任务N`，N＝该**父任务**名下已有子任务数 + 1（`db.list_child_tasks` 计数）；层级由 parent_id 挂着（列表页树形 + 详情页「子任务 · 父 #N」徽章都说清），名字不必复述域名/数量/层数；父任务异常取不到时留空走时间戳兜底
+- [x] C1 验证：单元验证 父任务 + 2 子任务 ⇒ 子任务1 / 子任务2；库内 #67（父 #66）、#73（父 #72）已 DB 改名（原 `目标域 · 送探 1 个域名` → `子任务1`）；`py_compile` 通过；本地渲染 #73 详情页 status 200
 - [x] C2 记忆同步：CHANGELOG_AI 续276 + todo 续276
 
 ## 续275（2026-10-24，WorkBuddy · CodeBuddy）：任务列表父子进度（子任务排父任务下方 + 阶段内进度条）
@@ -4493,10 +4514,6 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       （0→8→15→22→24）、dirscan 进 dirmap 前 bump；门禁 [282]
 - [x] C1 全量门禁 SMOKE PASS rc=0：**284 组**（+2＝`[282]`~`[283]`），墙钟 ~9 分钟，日志 `logs/_smoke275.log`
 - [x] C2 记忆同步：CHANGELOG 续275 + todo 续275 + AGENTS 补「page_tasks 树形排序 + 阶段内进度」口径
-
-下一轮（续278）：
-- [ ] puredns #65 **真目标**同参数任务前后对比（需靶场 + massdns 在 PATH；合成靶已证修复，真数字留手动）
-- [ ] 启发式 0day：主动 fuzz 与 305 个导入 POC 的实测校准（长期项，编号待办 1 遗留）
 
 ## 续264（2026-10-23，WorkBuddy · CodeBuddy）：修 puredns argv（深档字典从来没跑过）+ 详情页拓展页签补"已归纳就隐藏"
 实施者：WorkBuddy · CodeBuddy

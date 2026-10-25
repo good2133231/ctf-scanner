@@ -26922,12 +26922,15 @@ expression: r0()
                      db._query("SELECT domain FROM subdomains WHERE task_id=?", (_rt195,))}
     assert "js-195-pick.test" in _root_rows195, \
         "送探域名没进根任务（主域名）的子域名资产 —— 主域名任务里还是找不到它"
-    # ①b 新建子任务的名字显示**主域名**（根任务名叫 smoke-195-root，不是域名）
+    # ①b 新建子任务的默认名＝`子任务N`（续276 主理人点单：层级由 parent_id 挂着，名字不再复述
+    # 主域名/域名数/层数。续195 的「名字里带主域名」已被这条取代 —— 旧口径下下面第二行必红）
     _kids195 = [r for r in db.list_child_tasks(_ct195)]
     assert _kids195, "送探没建出子任务"
     _kid195 = db.get_task(int(_kids195[-1]["id"]))
-    assert "abcd.org" in str(_kid195["name"]), \
-        f"子任务名没显示主域名：{_kid195['name']!r}"
+    assert str(_kid195["name"]) == f"子任务{len(_kids195)}", \
+        f"子任务默认名不是 `子任务N`：{_kid195['name']!r}（续276 口径）"
+    assert "abcd.org" not in str(_kid195["name"]), \
+        f"子任务默认名还在复述主域名：{_kid195['name']!r}"
     # ② 页签点击写 hash（app.js 形状断言：点了页签 URL 里必须有片段，刷新才不回漏洞页）
     _js195 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
     assert "history.replaceState" in _js195 and '"#" + t.dataset.tab' in _js195, \
@@ -26941,7 +26944,7 @@ expression: r0()
     # 子域名页仍保留同款入口（同一端点、全局生效）—— 只从拓展页收，不是把功能删了
     _sub_html195 = c.get("/subdomains?all=1").get_data(as_text=True)
     assert "加入黑名单（勾选行）" in _sub_html195, "子域名页的把加入黑名单入口弄丢了"
-    print("[195a] 续195 ok: 送探域名落根任务（主域名任务找得到）+ 子任务名显主域名 + 302 带 #ext｜"
+    print("[195a] 续195 ok: 送探域名落根任务（主域名任务找得到）+ 子任务名=子任务N（续276） + 302 带 #ext｜"
           "页签点击写 hash｜拓展页 bulkbar 只留送探（子域名页保留同款）｜变异：摘掉根行走链即红")
     # ---------------- [196a] 续196：套娃改版（预览框 + 统一字号 + 接真数据） ----------------
     # 主理人点单：点「子任务/统计」出预览框（modal）不要行内展开；子孙任务统一字号；
@@ -27499,13 +27502,18 @@ expression: r0()
         "?parent=root 与 ?parent=child 渲染出的行数一样 ⇒ 筛选没接到查询上"
     # 翻页链接要带上筛选（否则翻一页就丢了）
     assert "parent=root" in _h_root202, "翻页链接没带上 parent 筛选"
-    # ③ 送探任务名：`<主域名> · 送探 N 个域名`（旧格式只说第几层，扫了几个看不出来）
+    # ③ 送探任务默认名：`子任务N`（续276 主理人点单；旧口径 `<主域名> · 送探 N 个域名` 与
+    # `-拓展N层` 都已撤）—— 手动送探与高置信自动送探两个入口必须同口径
     _src202 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
-    assert "· 送探 {len(domains)} 个域名" in _src202, \
-        "送探任务名没带上域名数（主理人点单'建任务应该显示主域名'的那一层）"
-    assert "-拓展{_cn}层" not in _src202, "旧的 `-拓展N层` 命名还在（只说层数，不说扫几个）"
+    _src202r = (ROOT / "scanner" / "runner.py").read_text(encoding="utf-8")
+    assert 'name = f"子任务{len(db.list_child_tasks(int(from_task))) + 1}"' in _src202, \
+        "手动送探的默认名不是 `子任务N`（续276 口径）"
+    assert 'name = f"子任务{len(db.list_child_tasks(int(task_id))) + 1}"' in _src202r, \
+        "高置信自动送探的默认名不是 `子任务N`（两个入口必须同口径）"
+    assert "· 送探 {len(domains)} 个域名" not in _src202 and "-拓展{_cn}层" not in _src202, \
+        "旧的 `主域名 · 送探 N 个域名` / `-拓展N层` 命名还在"
     print("[202] 续202 ok: 任务层级筛选(root+child=全部/互不串/页面生效/翻页带条件)｜"
-          "送探任务名 `<主域名> · 送探 N 个域名`")
+          "送探任务默认名 `子任务N`（手动+自动同口径，续276）")
     # ---- [203] 续203：参数路由（自动判该测什么）+ hostcollide 默认开 + 送探并一颗 ----
     from scanner import paramroute as _pr203
 

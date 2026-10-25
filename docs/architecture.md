@@ -11,12 +11,12 @@
 │            协作式取消：request_stop / is_stopped（终态 stopped）│
 ├────────────────────────────────────────────────────────────┤
 │  阶段层    scanner/stages/                                  │
-│            subdomain（+ wildcard/passive）→ takeover →       │
-│            portscan（默认关）→ probe → cert（默认关）→         │
-│            screenshot（默认关）→ osint（默认关）→ jsmine →     │
-│            dirscan（默认开·浅扫）→ vulnscan →                 │
+│            subdomain → takeover → hostcollide →                │
+│            portscan（默认开）→ probe → cert（默认关）→         │
+│            screenshot（默认关）→ osint（随包开）→ jsmine →     │
+│            dirscan（默认开·深扫）→ crawl → vulnscan →          │
 │            intel / heuristic / github（随包开，只产"线索"）    │
-│            （13 个阶段，见 runner.STAGE_ORDER）               │
+│            （15 个阶段，见 runner.STAGE_ORDER）                │
 │  资产层    scanner/dnsq.py（DNS 客户端）                      │
 │            scanner/cdn.py（CDN 判定：CNAME 后缀匹配厂商名单）  │
 │            scanner/takeover.py（子域接管指纹 41 条）           │
@@ -130,23 +130,23 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 | 外部工具优先 + 内置兜底 | 你的手工流水线效果最好时用原工具；任何裸机也能跑通框架 | 兜底实现能力弱于本体 |
 | **自动安装只覆盖"有可下载的单二进制产物、且摘要拿得到"的工具**（`toolmgr.TOOLS`＝subfinder/httpx/puredns/afrog；其余进 `toolmgr.MANUAL`，两者不相交） | "落盘前必须过 SHA256"是这条功能的安全口径；摘要有两个产地 —— 官方 release 自带的 checksums，或本框架人工核过、钉在 `toolmgr.py` 里的产物摘要（puredns 官方不发 checksums，续164；按确切 tag 只装钉住的那一版）；`nmap`（官方只发安装器/源码包/dmg）、`fscan`（官方不发二进制，本仓 Go 自编译）、`dirmap`（release 零产物、纯 Python）、`massdns`（官方只发 C 源码、`assets` 空数组，但它是 puredns 在进程内 exec 的**传递依赖**）硬塞进来就等于绕过校验 | 这几项只能在 GUI「外部工具」页与 `cli --check` 里被**如实告知"需手工安装"**，本框架不为它们发任何请求；用户得自己照着 `tools/scanner/README.md` 装（`tests/smoke.py [7p] ⑨` 用不变式钉住）。**续166 另开第三档 `toolmgr.LOCAL_STACK`**（工作目录内运行时组件：Go 便携归档 + 上游源码包）—— 它既不是 `TOOLS`（不回写 `tools.<名>`、扫描期不调用）也不是 `MANUAL`（`--with-stack` 就能自动取）：落点 `tools/<名>/`、缓存 `.cache/`，https+白名单+SHA256+「校验」文案**全部复用**同一套原语（`download_bytes` / `verified_label` / `verify_policy`，不另写第二份），而**编译动作仍在 `tools/build_*.py` 那两个显式入口里** —— 自动层「绝不代跑系统级命令」（`[8d]②` 的 `go build` / `git clone` 禁列）一根没松；回归 `[166]` |
 | SQLite 单文件 | 零部署成本，单机 CTF 场景足够 | 不支持多节点并发写，需要时替换 db.py 即可 |
-| Flask + 后台线程 | GUI 只做"发任务 + 看结果"，逻辑全部复用核心引擎 | 无任务队列，进程重启则运行中任务中断 |
+| Flask + 常驻队列 worker | GUI 只做「发任务 + 看结果」，逻辑全部复用核心引擎 | 入队而非直接起线程（`tasks.run_payload` + `status='queued'`，`db.claim_next_queued` 原子认领）；进程重启后 `db.reconcile_orphan_tasks` 把带运行规格的 `running` 重新入队 |
 | POC 引擎向 nuclei 语法靠拢 | 社区事实标准（数千模板、可直接加载官方模板），声明式 YAML、无外部依赖 | 仅兼容核心子集（raw/flow/workflows 为子集支持，dsl、oob、flow 的 JS/循环等显式标 unsupported） |
 | 启发式检查全部 GET + 无破坏 payload | 控制误伤与法律风险 | 检出率有限，定位是"初筛信号" |
-| 分级门控（`skip_severities` 执行级 + `min_severity` 结果级，默认 info/low 不执行、门槛 medium） | 默认屏蔽低危/info 噪声，连请求都不发，只留能拿 flag 的高位结果 | 想广谱信息收集需**同时**放宽级别开关与门槛 |
+| 分级门控（`skip_severities` 执行级 + `min_severity` 结果级，默认 info/low 不执行、门槛 DEFAULTS medium / 随包 high） | 默认屏蔽低危/info 噪声，连请求都不发，只留能拿 flag 的高位结果 | 想广谱信息收集需**同时**放宽级别开关与门槛 |
 | **导入 POC 的级别判据用「有效级别」而不是模板里写的 `severity`**（续60，`db.effective_poc_severity()`） | 导入器（`tools/import_ref_pocs.py`）把参考项目的 `bug_level` 原样抄成 `severity`（一律 HIGH），而这批 305 条绝大多数是**指纹**规则 —— 声明级别与 `confidence`（全 low）自相矛盾。判据改成"受本条 `poc_confidence()` 上限约束"（只降不升，**只对 `imported` 来源生效**），执行闸/批量开关/级别列/入库级别四处统一 | 导入 POC 变为**默认完全惰性**（有效级别 100% low，默认 `skip_severities` 下进 0 条）；要用只能人工复核后整理进 `config/pocs-user/`（那才是 `user` 来源）。`pocs.severity` 列仍存原始声明值以备查 |
-| **阶段级 `enabled` 总开关**（`takeover`/`jsmine`/`dirscan`/`vulnscan` 默认开，`portscan` 默认关、`osint` 由 `iprecon`/`fofa` 两个子开关代替（这两段 DEFAULTS 关、**随包 settings.yaml 已开**，续159-附）；`subdomain`/`probe` 刻意不设） | 用户要求"大功能都要有按分类的总开关"；关掉即整阶段跳过、连请求都不发，便于按需裁剪（如"只做资产测绘不探测"） | 开关分散在各段，新增阶段必须记得补 `enabled` 与 GUI 复选框（`tests/smoke.py` 的 `[3d]`/`[5b]` 已加断言防漏） |
+| **阶段级 `enabled` 总开关**（`takeover`/`hostcollide`/`portscan`/`jsmine`/`dirscan`/`crawl`/`vulnscan` 默认开、`osint` 由 `iprecon`/`fofa` 两个子开关代替（这两段 DEFAULTS 关、**随包 settings.yaml 已开**，续159-附）；`subdomain`/`probe` 刻意不设） | 用户要求"大功能都要有按分类的总开关"；关掉即整阶段跳过、连请求都不发，便于按需裁剪（如"只做资产测绘不探测"） | 开关分散在各段，新增阶段必须记得补 `enabled` 与 GUI 复选框（`tests/smoke.py` 的 `[3d]`/`[5b]` 已加断言防漏） |
 | 动态免杀（evasion）只改变 payload 编码形态与请求伪装 | 提升隐蔽性与 WAF 绕过率，同时不越过非破坏性红线 | 变形不改变语义，对非规则型 WAF 效果有限 |
 | 指纹用自研精简规则表（scanner/fingerprint.py） | 无外部依赖；httpx 缺失时也能填充 sites.tech | 规则少、只给组件标签不解析版本 |
-| 外部情报（osint）默认全关，且"两个子开关都关＝一次请求都不发" | 依赖第三方公共接口（api.webscan.cc / FOFA），可用性不由我们掌控；不配置就不该有网络行为 | 想用 C 段/favicon 拓展需先去「策略配置 → 外部情报拓展」显式打开 |
+| 外部情报（osint）**DEFAULTS 关、随包 settings.yaml 已开**，且"两个子开关都关＝一次请求都不发" | 依赖第三方公共接口（api.webscan.cc / FOFA），可用性不由我们掌控；不配置就不该有网络行为 | 想用 C 段/favicon 拓展需先去「策略配置 → 外部情报拓展」显式打开 |
 | mmh3 自实现（`scanner/mmh3.py`）而非引入 mmh3 包 | 平台指纹的社区统一键就是 mmh3；C 扩展包在离线 CTF 环境装不上 | 只实现社区在用的 `x86_32`，未做 128 位变体 |
-| 目录扫描**默认开且默认深扫**（续144）（`dirscan.mode=quick`：`dirs_shallow` 精选敏感路径约 150 条/站） + 只扫不重复站点 + 单站点 `quick_max_paths`/`max_paths` 节流 | 用户要求"先用偏敏感信息的通用路径浅浅过一遍，看清结果再手动决定深扫"；浅扫档请求量可控，深扫（全量分层字典 + dirmap + 后缀派生）才需要在建任务时勾「全目录深扫」或结果页发起「补扫」 | 浅扫覆盖有限（不碰全量字典与框架桶）；深扫必须配 `max_paths`，否则一个站点就要打到天亮 |
-| 深扫走**任务选项**（`dirscan_full`）+ 独立补扫任务，而不是把全局改成 deep | 与 `portscan_full` 同一语义：用户点名要扫的那次才慢，跑完不改全局策略；补扫只跑单阶段、可独立停止/删除 | 任务列表会多出只跑 dirscan 的补扫任务行 |
+| 目录扫描**默认开且默认深扫**（续144）（`dirscan.mode=deep` + `recursive_depth=1`；轻扫走 `mode=quick`：`dirs_shallow` 精选敏感路径约 150 条/站） + 只扫不重复站点 + 单站点 `quick_max_paths`/`max_paths` 节流 | 用户要求"先用偏敏感信息的通用路径浅浅过一遍，看清结果再手动决定深扫"；浅扫档请求量可控，深扫（全量分层字典 + dirmap + 后缀派生）本就是默认档；要轻扫才需在策略页把 `dirscan.mode` 选回 `quick` | 浅扫覆盖有限（不碰全量字典与框架桶）；深扫必须配 `max_paths`，否则一个站点就要打到天亮 |
+| 深扫**已是默认档**（`dirscan.mode=deep`）；轻扫走 `dirscan.mode=quick`（策略级） | 续144 起默认档翻转为 deep（主理人要求"先深扫一遍"）；`POST /api/rescan` 仍保留供直接调用，GUI 上自续145 起已无「补扫」入口 | 想省请求量就把 `dirscan.mode` 切回 `quick`，或按站点上限 `max_paths` 收窄 |
 | 全端口扫描走**任务选项**（`portscan_full`）而不是全局开关 | 6.5 万端口逐连接是分钟级，改成全局 `portscan.mode=full` 会让每个任务都变慢 | GUI 只提供"对勾选 IP 发起"的入口；任务列表会多出只跑 portscan 的任务行 |
 | **统一并发/限速/预算门控**（F2，`scanner/throttle.py`）：HTTP + 子进程 + 裸 socket 三条出口过同一套**两级闸（任务级 + 进程级共享）+ 令牌桶 + 任务预算** | "非破坏性"是红线，但并发量此前完全不受控（任务内 8×256、跨任务进程级零上限）；一个入口统一收口比在三条出口各写一套更可靠，也让"停止/预算耗尽"有唯一落点 | 门控是**边界闸**，拦不住外部工具内部发多少连接；默认值取"恰好等于现有单任务最大并发"（`max_inflight_*`=256），故默认不改变既有行为 |
 | 用户黑名单**入库前过滤**（`scanner/blacklist.py`）而非入库打标 | 命中即不进资产库，后续阶段自然不扫；不必在每个阶段重复判"要不要跳过"，也不会被历史数据干扰 | 已入库的历史资产不受影响（需手动删任务）；`config/blacklist.txt` 为纯文本、需人工维护 |
 | 重叠资产**默认隐藏**（拓展域名域名级全局 / 站点 URL 级跨任务） | 反复扫同一目标时列表不被撑成 N 倍；默认视图是"新发现"，全量用 `?all=1` 显式打开 | 判重是"保留最早一条"，后扫到的新信息（如状态码变化）不会覆盖旧行 |
-| 批量跑子域名**新建任务**而非挂子任务 | 现有任务模型（一任务一线程 / 独立状态 / 独立停止删除）可直接复用 | 任务列表会多出一行；无法在一个树里聚合查看（收益不抵改表结构 + 任务树渲染的成本） |
+| 批量跑子域名**新建任务**而非挂子任务 | 现有任务模型（独立状态 / 独立停止删除，由常驻队列 worker 认领执行）可直接复用 | 任务列表会多出一行；无法在一个树里聚合查看（收益不抵改表结构 + 任务树渲染的成本） |
 | **拓展域名的自动化走任务级选项 `auto_expand`**（续40：建任务页勾选「自动拓展扫描」/ CLI `--auto-expand`） | 自动补 `osint`/`jsmine` 阶段、拓展结束后自动做 DNS 存在性判定、把注册域属于本项目的拓展域名追加成子域名、目标是子域时补收其主域名 —— 这些都是**扩大扫描面**的行为，必须用户点名才做，不能让既有任务悄悄变样（与 `portscan_full` / `dirscan_full` 同一套语义） | 归属判定用 `utils.base_domain()` 的粗切注册域（不引公共后缀库，离线约束），双段后缀会切错但**偏保守**（少归不误归）；多段 **IDN** 公共后缀（如 `教育.香港`，`MULTI_TLD` 只列 ASCII）同样适用（同样偏保守）；不勾时行为与续40 之前逐字一致 |
 | 拓展域名按**主域名分组折叠**（`/extdomains`，`?group=0` 回平铺） | 拓展出来的域名常几十上百个同属一个注册域，摊平看不出「这批是从哪个域来的」；分组只能在 Python 里做（SQL 侧没有注册域函数），故分组模式下**分页单位是主域名**（每页 20 个），否则同一主域名会被切到两页 | 分组上限 `extdom.GROUP_ROW_CAP=4000`，超了页面如实提示并建议切平铺；平铺模式仍是按行分页（走 `?size=`） |
 
@@ -163,11 +163,12 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 4. 阶段结果落点**并不统一**（改代码前先看具体阶段，不要假定"都写三处"）：
    - **文本产物 + SQLite + `ctx.results` 三处都写**：`subdomain` / `takeover` / `probe` / `jsmine` / `dirscan`
      （文本产物如 `sites.txt`，`ctx.results` 供下一阶段直接使用）；
-   - **只写 SQLite + `ctx.results`（不落文本产物）**：`portscan` / `osint` / `vulnscan` / `intel` / `heuristic` / `github`
+   - **只写 SQLite + `ctx.results`（不落文本产物）**：`portscan` / `osint` / `crawl` / `vulnscan` / `intel` / `heuristic` / `github`
      （`intel` / `heuristic` / `github` 只写 `leads` 表）；
    - **只写文本产物 + SQLite（不写 `ctx.results`）**：`cert`（`certs.txt` + `certs` 表）/
      `screenshot`（`shots/*.png` + `sites.shot`）—— 二者排在流水线后段，没有后续阶段消费其结果；
 5. GUI 通过 `tasks` 表轮询状态（status/progress/current_stage），详情页从 SQLite 读资产与漏洞。
+   - **只写 SQLite（不写文本产物、不写 `ctx.results`）**：`hostcollide`（`sites` 表补记碰撞命中）—— 它排在 `portscan` 之前，结果供后续阶段直接查库；
 6. **断点续扫**（续29）：`tasks.current_stage` 被**复用为断点** —— `PipelineRunner.run()` 在
    每个阶段**开始前**写它、正常跑完才清空，所以"被停止 / 预算耗尽 / 进程被重启打断"时它就是
    最后进入的那个（可能只跑了一半的）阶段。`runner.resume_stages(stages, current_stage)`
@@ -216,7 +217,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
    `start(port=0)` 即时生成 `index.html` / `admin/index.html` / `robots.txt` / `app.js` / `.env`
    （`.env` 为**明显假的样例值**），返回 `(httpd, base_url)`；`stop(httpd)` 幂等、清理临时目录。
    **自检入口两条**：CLI `cli/run_devflow.py`（续146 起在 `cli/` 下；起靶场 → `devmode.apply(load_settings())`
-   → 全 13 阶段 `runner.run_task` 前台跑 → 打每阶段 OK/SKIP/FAIL + 请求数 + 耗时，无 FAIL 退出 0）与
+   → 全 15 阶段 `runner.run_task` 前台跑 → 打每阶段 OK/SKIP/FAIL + 请求数 + 耗时，无 FAIL 退出 0）与
    控制台 `/devmode` 页（`@login_required @admin_required`，仅 `dev.enabled=true` 时导航渲染）。
    **阶段归类**：包装 `http_request` / `run_cmd` 计数并打 `stage` 标记（用**模块级全局** `_CURRENT`，
    **不用 `threading.local()`** —— 池化请求跑在 worker 线程上、线程局部为空），再换 `runner.STAGE_REGISTRY`
@@ -257,7 +258,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
      `na_log`（命中该关键词说明本次无此情形）+ `optional`（条件分支，未点到记 N-A，**主路径不设**）。
    - **证据取自运行期**：`instrument()` 除按阶段计数外，另收 `urls_by_stage` / `cmds_by_stage`
      （`http_request` 的 URL、`run_cmd` 的 `argv[0]`），`split_log_by_stage()` 按
-     `===== 阶段 N/13：<name> =====` 分隔行把任务日志**切给阶段**（不按 `[stage]` 前缀，免得漏掉
+     `===== 阶段 N/15：<name> =====` 分隔行把任务日志**切给阶段**（不按 `[stage]` 前缀，免得漏掉
      不带前缀的行）。`_Evidence` 把这些封成**只读快照**（判据绝不自己发请求/读库）。
    - **三态**（`classify_vectors()`）：`OK` 判据命中 / `MISS` 阶段跑了但**主路径**子能力没点到
      （覆盖缺口）/ `N-A` 本次不该跑（附原因）。优先级：静态 `na` → 工具缺失 → 阶段 FAIL →
@@ -280,7 +281,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 与 `promote:<原来源>`（拓展域名经**归属判定**——注册域命中任务目标——后**追加**出的自身子域行，
 见 `scanner/extdom.py`；原拓展行保留不动，出处可查） |
 | sites | url, host, port, status, title, length, server, tech, favicon, shot, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定；shot 为截图相对路径（screenshot 阶段回填，默认关） |
-| ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认关闭） |
+| ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认开启（续269）） |
 | csegs | segment, ip, domains, count, **note** | `/24` C 段视野（osint 阶段产出；`iprecon` 随包已开）：每行一个 IP 与其反查到的域名。`count` 是**截断前**的数量；反查命中数超过 `iprecon.max_domains_per_ip`（默认 30）判为共享主机/任播 CDN 段时，**`domains` 留空、`note` 写明"命中多少 / 为什么不列"**（续110：判为噪声的内容不该再被报告「C 段视野」原样抄走）。老库由 `_COLUMN_PATCHES` 补 `note` 列 |
 | dirs | site_url, path, status, length, note, title | 目录发现（dirscan 阶段产出；`length` 即返回包大小，`title` 为命中页 `<title>` —— 内置扫描从已在手里的响应体提取、零额外请求，dirmap 解析行没有响应体故留空。默认排序为 `200 优先 → 大小降序`，页面按 `(site_url,status,length)` 折叠重复长度） |
 | vulns | target, poc_id, name, severity, owasp, detail, evidence, **review, review_note, reviewed_at** | 统一存放 POC 命中与 OWASP 检查结果。`review` 是**人工复核三态**（`""` 待复核 / `confirmed` 已确认 / `false_positive` 误报，见 `db.REVIEW_STATES`，非法值经 `db.norm_review()` 归一）；**判误报的行不进「潜在漏洞」计数与报告主表**，改为报告文末「已判误报（人工复核排除）」附录 |
@@ -296,18 +297,19 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 
 ## GUI 路由与分栏
 
-侧边栏 **14 项**（以 `gui/templates/base.html` 的 `nav_items` 为准，续138 加了「数据迁移」；
-每项的**第 5 个字段** `admin_only` 决定"是否只对管理员显示"）：
+侧边栏 **17 项**（以 `gui/templates/base.html` 的 `nav_items` 为准；续138 加了「数据迁移」，续278 按实测补上「链接资产」「数据探测」「EXP 待确认」三项；每项的**第 5 个字段** `admin_only` 决定"是否只对管理员显示"）：
 `/`（仪表盘）/ `/tasks` / `/subdomains`（**只列目标自身子域名**，可勾选批量加黑名单 / 批量跑子域名）/
-`/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/ips`（IP 资产：按解析 IP 聚合域名，**先全量聚合、
-再按 IP 分页**（续59），关键字走服务端；默认只显示非 CDN，`?cdn=1` 看全部）/ `/fullports`（全端口扫描：
-**按「任务 × 主机」分组，服务端分页 + 关键字（主机 / IP / 任务名）**，续59-2）/
+`/sites`（默认折叠重复站点，`?all=1` 看全部）/ `/urls`（链接资产：页面内链接与带参链接，服务端分页 + 关键字）/
+`/ips`（IP 资产：按解析 IP 聚合域名，**先全量聚合、再按 IP 分页**（续59），关键字走服务端；默认只显示非 CDN，`?cdn=1` 看全部）/
+`/fullports`（全端口扫描：**按「任务 × 主机」分组，服务端分页 + 关键字（主机 / IP / 任务名）**，续59-2）/
+`/emails`（数据探测：邮箱等产物，只记录不验证）/ `/exp`（EXP 待确认：利用型 POC 人工执行，一次一个）/
 `/vulns`（级别筛选 + `review=` 复核状态筛选 + `?task_id=` 按任务筛选，页内三态下拉与批量打标走
 `POST /api/vulns/review`）/ `/pocs`（含置信度列与按层批量启停，**列表服务端分页 + `q` / `on=1` 筛选**
 （续59-2，分类统计仍按全量算），`admin_only`）/ `/tools`（外部工具：一键装/更新 subfinder ·
 httpx · puredns，并如实列出需手工安装的 nmap / fscan / dirmap / massdns，`admin_only`）/ `/settings`
-（`admin_only`）/ `/users`（账号管理，`admin_only`）/ `/audit`（访问审计流水，`admin_only`）。
-**续50**：`dev.enabled=true` 时另追加**第 13 栏**「开发模式」`/devmode`（`admin_only`，
+（`admin_only`）/ `/users`（账号管理，`admin_only`）/ `/nodes`（执行节点，`admin_only`）/
+`/audit`（访问审计流水，`admin_only`）/ `/migrate`（数据迁移，`admin_only`）—— 后 7 项 `admin_only`。
+**续50**：`dev.enabled=true` 时另追加**第 18 栏**「开发模式」`/devmode`（`admin_only`，
 由 `create_app()` 注入 `app.jinja_env.globals["dev_enabled"]` 决定**是否渲染**，未打开时该栏根本不出现、
 直接敲 URL 也被 `admin_required` 挡回）；页内按钮走 `/api/devmode/fixture/start` / `.../stop` /
 `/api/devmode/selfcheck`。
@@ -367,6 +369,6 @@ Python 里做，于是 `extdom.group_page()` 先按全量 `id/domain/ip` 三列�
   调 `ctx.stopped()` 主动退出，终态记为 `stopped`（粒度是"当前批次跑完即停"，不强杀飞行中的请求）；
 - SQLite 每次操作独立连接，规避跨线程共享连接问题；
 - **写操作在进程内串行化**（`db._WRITE_LOCK`，可重入锁）：SQLite 是单写者库，WAL 只让"读不被写阻塞"、
-  `busy_timeout` 只是"冲突时排队等待的上限"，两者都不保证写成功 —— 而无任务队列时
-  N 个任务线程 × `pool_run(workers=20)` 的回填会同时打满。所有写路径（`_exec` / `init_db` /
+  `busy_timeout` 只是"冲突时排队等待的上限"，两者都不保证写成功 —— 队列里可能有多个 worker，单任务内部仍有
+  N 个并发 × `pool_run(workers=20)` 的回填会同时打满。所有写路径（`_exec` / `init_db` /
   复核打标 / `upsert_poc`）都在锁内；**新增写路径必须走 `_exec` 或显式加锁**。

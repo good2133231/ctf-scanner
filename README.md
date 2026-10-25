@@ -3,10 +3,10 @@
 > **本地开发 / 换 AI 接手**：先读 [`本地开发.md`](本地开发.md)（触发语「你是本地开发」）；
 > 可粘贴的整段提示词在 [`docs/local-ai-prompt.md`](docs/local-ai-prompt.md)。
 
-面向 **CTF 与授权渗透测试** 的一体化资产测绘与漏洞初筛框架。参考灯塔（ARL）的任务化思路，把常用的「子域名收集 → 子域接管 → 端口服务 → 存活探测 → TLS 证书取证 → 站点截图 → 外部情报拓展 → JS 资产挖掘 → 目录发现 → 漏洞初筛 → 情报订阅 / 启发式候选 / GitHub 泄露检索」**13 阶段**流水线产品化：
+面向 **CTF 与授权渗透测试** 的一体化资产测绘与漏洞初筛框架。参考灯塔（ARL）的任务化思路，把常用的「子域名收集 → 子域接管 → Host 碰撞 → 端口服务 → 存活探测 → TLS 证书取证 → 站点截图 → 外部情报拓展 → JS 资产挖掘 → 目录发现 → 站点爬虫 → 漏洞初筛 → 情报订阅 / 启发式候选 / GitHub 泄露检索」**15 阶段**流水线产品化：
 
 - **CLI 客户端**：导入目标文件，全自动执行完整流水线；
-- **Web 控制台（GUI）**：仿 ARL 的任务/资产/漏洞/POC 管理界面（**14 栏侧边栏**：仪表盘 / 任务管理 / 子域名资产 / 站点资产 / IP 资产 / **全端口扫描** / 漏洞风险 / POC 管理 / **外部工具** / 策略配置 / **账号管理** / **执行节点** / **访问审计** / **数据迁移**；后 7 栏 `admin_only` —— 子用户**不渲染**且路由层 403；`dev.enabled=true` 时管理员另有第 15 栏「开发模式」），可视化添加目标并发起扫描，支持任务批量停止/重启/删除与报告导出，任务详情页可对**中断的任务「续跑」**（从断点接着跑，不清已有资产）；子域名标出**解析 IP 与 CDN/非 CDN**（可标签过滤）、**来源可读标签**（能一眼看出哪些是 FOFA 找出来的），可勾选行**批量加入黑名单**或**批量跑子域名（新建任务）**；拓展域名与站点页**默认隐藏重叠资产**（页顶开关 `?all=1` 放开），站点页另折叠同任务内**标题相同**的重复项（续147 起不再比响应长度）；**六个资产页都能「按任务筛选」**（与漏洞页同口径，筛选状态活过翻页与切标签）；子域名/拓展域名**同一域名只显示一行**（来源按权威性排序，被并掉的写进「另见于 …」）且**默认只列解析成功的**（被收起的条数报出来，`?nores=1` 展开）；3xx 站点显示**「跳转后」**（`301 → 200` + 落地页标题与最终 URL，原始那一跳不改写）；
+- **Web 控制台（GUI）**：仿 ARL 的任务/资产/漏洞/POC 管理界面（**17 栏侧边栏**：仪表盘 / 任务管理 / 子域名资产 / 站点资产 / **链接资产** / IP 资产 / **全端口扫描** / **数据探测** / **EXP 待确认** / 漏洞风险 / POC 管理 / **外部工具** / 策略配置 / **账号管理** / **执行节点** / **访问审计** / **数据迁移**；后 7 栏 `admin_only` —— 子用户**不渲染**且路由层 403；`dev.enabled=true` 时管理员另有第 18 栏「开发模式」），可视化添加目标并发起扫描，支持任务批量停止/重启/删除与报告导出，任务详情页可对**中断的任务「续跑」**（从断点接着跑，不清已有资产）；子域名标出**解析 IP 与 CDN/非 CDN**（可标签过滤）、**来源可读标签**（能一眼看出哪些是 FOFA 找出来的），可勾选行**批量加入黑名单**或**批量跑子域名（新建任务）**；拓展域名与站点页**默认隐藏重叠资产**（页顶开关 `?all=1` 放开），站点页另折叠同任务内**标题相同**的重复项（续147 起不再比响应长度）；**六个资产页都能「按任务筛选」**（与漏洞页同口径，筛选状态活过翻页与切标签）；子域名/拓展域名**同一域名只显示一行**（来源按权威性排序，被并掉的写进「另见于 …」）且**默认只列解析成功的**（被收起的条数报出来，`?nores=1` 展开）；3xx 站点显示**「跳转后」**（`301 → 200` + 落地页标题与最终 URL，原始那一跳不改写）；
 - **换机器迁移有界面了（续138）**：「数据迁移」页（仅管理员）导出任务与资产成一份 JSON 包、
   或把别人给的包**先预检再确认**地导入。默认**零凭据** —— 账号口令哈希、`config/keys*.yaml`、
   任务里带的 Cookie/Authorization 一个都不带，页面上也**没有**打开它们的开关（那是 CLI 的
@@ -14,9 +14,9 @@
   页面直接拒收。导入前的整库快照会保留，导进来的任务一律 `stopped`（不会因为导入就自己开扫）；
   要跨不可信信道发包，加 `--export-scan --encrypt-bundle`（口令只走环境变量
   `CTFSCANNER_BUNDLE_PASSPHRASE`）；要连日志一起带走加 `--with-logs`（默认不带，只带 `logs/` 内的）；
-- **多用户与角色（2026-09-26 起）**：账号 + 口令登录（口令只存 `pbkdf2_sha256` 派生值 —— 20 万次迭代 + 每账号随机盐，**不存明文、也不进日志**，零第三方依赖），分**管理员 / 子用户**两级：管理员可创建 / 停用 / 重置子用户，能进策略配置与 POC 管理；**子用户只能使用扫描功能与查看结果** —— 策略配置、POC 管理、账号管理三处在**路由层**即返回 403（侧边栏对子用户也不显示，但真正的控制是路由那层，直接敲 URL 同样被挡）。迁移口径：旧的 `gui.token` 只作**引导口令**（库里还没有任何账号时仍可登录并作为管理员），一旦建了第一个账号就**立即失效**；引导口令本身在续113 起**也只存 PBKDF2 派生值**（在策略配置页重设一次即可，明文列被清空、输入框不再回显）；第一个账号被强制设为管理员，保证不会把老部署锁在门外；管理员口令全丢时可在项目根执行 `py -3 -c "from scanner import db, users; db.init_db(); print(users.create_user('admin','新口令',role='admin'))"` 重建（不动任务与资产数据）；
+- **多用户与角色（2026-09-26 起）**：账号 + 口令登录（口令只存 `pbkdf2_sha256` 派生值 —— 20 万次迭代 + 每账号随机盐，**不存明文、也不进日志**，零第三方依赖），分**管理员 / 子用户**两级：管理员可创建 / 停用 / 重置子用户，能进策略配置与 POC 管理；**子用户只能使用扫描功能与查看结果** —— 策略配置、POC 管理、账号管理三处在**路由层**即返回 403（侧边栏对子用户也不显示，但真正的控制是路由那层，直接敲 URL 同样被挡）。迁移口径：续117 起旧的 `gui.token` 引导口令已**整支摘除**（升级前留下的引导 Cookie 一概不认），配置文件里不再有任何登录凭据；残留键用 `cli/run_users.py --purge-legacy-token` 清除；第一个账号被强制设为管理员，保证不会把老部署锁在门外；管理员口令全丢时可在项目根执行 `py -3 -c "from scanner import db, users; db.init_db(); print(users.create_user('admin','新口令',role='admin'))"` 重建（不动任务与资产数据）；
 - **POC 管理**：YAML 格式 POC 引擎（**nuclei 语法兼容子集**：含 `raw` / `flow` / `workflows` 子集支持），可直接加载官方 nuclei 模板，支持上传、启停、目录扫描；
-- **检测分级门控（四层）**：阶段级总开关（`vulnscan.enabled`，关闭即"只测绘不探测"）+ 按级别整体跳过（`skip_severities`，默认 info/low **连请求都不发**）+ 按最低报告级别收敛结果（默认 medium）+ OWASP 分类 / 单项检查开关，默认屏蔽"太 low 的洞"；
+- **检测分级门控（四层）**：阶段级总开关（`vulnscan.enabled`，关闭即"只测绘不探测"）+ 按级别整体跳过（`skip_severities`，默认 info/low **连请求都不发**）+ 按最低报告级别收敛结果（DEFAULTS 是 medium、随包 `config/settings.yaml` 是 high）+ OWASP 分类 / 单项检查开关，默认屏蔽"太 low 的洞"；
 - **动态免杀**：UA 随机化、浏览器化请求头、WAF 指纹识别、注入 payload 变形（分级 0~3，变体与参数顺序每次随机）；
 - **信息收集增强**：免 key 多来源被动子域名收集（crt.sh / certspotter / alienvault 等）+ 泛解析过滤 + 子域接管指纹（41 条第三方服务）+ 子域名**解析 IP / CDN 标记**（`config/dicts/cdn_cname.txt` 292 条厂商 CNAME 后缀 + `config/dicts/cdn_ips.txt` 15 段厂商任播 IP 段，CNAME 优先、IP 段兜底，纯 DNS 只读判定）+ JS 资产挖掘（域名/接口/疑似凭据，JS 与情报带出的域名归入**拓展域名**页）+ **外部情报拓展**（`/24` C 段反查域名；favicon 的 mmh3 去 FOFA 反查同源资产，命中过多的"黑 ico"主动放弃拓展；**TLS 证书反查** `cert="domain"` 与**标题反查** `title="xxx"`，命中过多的"通用证书 / 公共标题"（如 404 默认页）同样放弃 —— 模板页标题连查询都不发）+ **用户黑名单**（`config/blacklist.txt`，入库前过滤，命中域名连子域都不入资产库）；**拓展域名**按来源分类排序（JS 挖掘 → FOFA·标题 / 证书 / ICO → C 段，不交错），并可对勾选域名手动**解析 DNS / 送去探测（新建 `subdomain→probe→dirscan→vulnscan` 任务）/ 归属本项目的追加为子域名 / 加入黑名单** —— 这类域名未必属于目标，不自动全跑）；拓展域名页**按主域名分组折叠**（`?group=0` 切回平铺）；
 - **站点存活口径与二层遍历（续139）**：`probe` 不再挂状态码白名单 —— **服务端回了一个真实 HTTP 状态码就记站点**（`probe.is_alive`，含 301/403/429/500/502/521），因为 CDN 边缘活着、源站挂了本身就是资产事实（旧口径 `-mc 200,301,302,403,404` 实测漏掉 **49 台**主机 —— 灯塔记为站点、我们连行都没有，其中 **34 台**我们本来就有子域名、探过却被整行丢掉）；httpx 加 `-nfs` 锁住 scheme，`http://h` 的 301 才会稳定成行，再配「跳转后」取证（库里存的仍是那一跳，落地 url/状态/标题另存 `redirect_*` 三列）；站点日志按状态码首位摊开组成（`2xx=… 3xx=… 5xx=…`），免得"存活站点 168 个"被读成"168 个打得开的站"；`jsmine` 之后触发**二层遍历**（`probe.second_pass`）：把第一轮之后才长出来的域名（JS 挖的 + 库里本任务还没探过的）先过 DNS 预筛再补探一轮，只探归属本任务的域名、有上限（`limits.recrawl_max_hosts`，预筛另有 `max(10×上限, 50)`）、跳过的每条都报原因；子域名那层字典**分两档**：`config/dicts/subdomains.txt` 精简档（永远全量参与）+
@@ -32,7 +32,7 @@
   另有**组合爆破**（`limits.brute_combo_max`，默认 4000）：把精简档词与本任务已发现名字的首段两两拼成
   `a-b` 再爆一轮 —— 与灯塔逐条比实时，它独有的域名里有 10 个**任何字典里都没有**（`api-contract`、
   `ws-spot`、`admin-oss`），只有拼得出来；这类结果的来源标记是 `dns-brute(combo)`。
-- **端口与目录**：内置 TOP 48 端口表 + **fscan / nmap 适配**（`portscan.engine`：`auto` = fscan → nmap → 内置 TCP connect；调用 fscan 时强制 `-np -nobr -nopoc`，只用它的端口发现能力，输出解析按 fscan 2.2.1 **真实形态校准**并用其"发现 N 个开放端口"统计行交叉校验，数目不符即回退、不静默漏报）+ 内置 TCP connect 兜底；**全端口扫描（1-65535）**可从侧栏「全端口扫描」页对单个 IP 发起（按任务分布展示，自动跳过已扫过的端口，不污染全局策略）；**目录发现走「浅 / 深两档」**——默认**开**但只跑**浅扫**（`dirscan.mode=quick`：`config/dicts/dirs_shallow.txt` 精选通用敏感路径约 150 条/站，如 `.git`、`.env`、备份与数据库转储、中间件控制台），适合"先浅浅过一遍"；**深度扫**（`mode=deep` / 建任务勾「全目录深扫」/ 结果页「补扫」）才启用 **11882 条大字典**、dirmap 优先调用与备份后缀派生，**只扫不重复站点**、**按技术栈与框架选字典**（Java/PHP/ASP 各自的语言字典 + WordPress/Spring/Weblogic 等 12 个框架字典 + 通用暴露面字典），结果按「**站点 + 状态码 + 响应大小**」折叠重复长度并展示包大小与**命中页标题**；**整站统一的 WAF/CDN 拦截页不计为目录发现**（`config/dicts/waf_block_titles.txt` 的厂商专属标题文案 + 随机路径同内容的 403 基线两条判据，滤掉几条按站点写进任务日志，不静默少结果）（内置扫描从已在手里的响应体提取，零额外请求），默认排序为 **200 优先 → 大小降序**；浅扫结果页可勾选站点**一键发起独立补扫任务**（`POST /api/rescan`，只跑 dirscan/portscan/screenshot 单阶段，不改全局策略）；
+- **端口与目录**：内置 TOP 48 端口表 + **fscan / nmap 适配**（`portscan.engine`：`auto` = fscan → nmap → 内置 TCP connect；调用 fscan 时强制 `-np -nobr -nopoc`，只用它的端口发现能力，输出解析按 fscan 2.2.1 **真实形态校准**并用其"发现 N 个开放端口"统计行交叉校验，数目不符即回退、不静默漏报）+ 内置 TCP connect 兜底；**全端口扫描（1-65535）**可从侧栏「全端口扫描」页对单个 IP 发起（按任务分布展示，自动跳过已扫过的端口，不污染全局策略）；**目录发现走「浅 / 深两档」**——默认**开**且**默认深扫**（续144 起 `dirscan.mode=deep` + `recursive_depth=1`：**11882 条大字典**、dirmap 优先调用与备份后缀派生，并默认递归一层）；**浅扫档**仍在（`dirscan.mode=quick`：`config/dicts/dirs_shallow.txt` 精选通用敏感路径约 150 条/站，如 `.git`、`.env`、备份与数据库转储、中间件控制台，需在策略页显式选），**只扫不重复站点**、**按技术栈与框架选字典**（Java/PHP/ASP 各自的语言字典 + WordPress/Spring/Weblogic 等 12 个框架字典 + 通用暴露面字典），结果按「**站点 + 状态码 + 响应大小**」折叠重复长度并展示包大小与**命中页标题**；**整站统一的 WAF/CDN 拦截页不计为目录发现**（`config/dicts/waf_block_titles.txt` 的厂商专属标题文案 + 随机路径同内容的 403 基线两条判据，滤掉几条按站点写进任务日志，不静默少结果）（内置扫描从已在手里的响应体提取，零额外请求），默认排序为 **200 优先 → 大小降序**；结果页的「补扫」入口已于续145 摘除（`POST /api/rescan` 接口仍在，供直接调用；深扫本就是默认档）；
 - **TLS 证书取证**（策略级默认关，**建任务勾「SSL 证书」或 CLI `-p cert` 即对本次生效**）：对值得握手的站点（`https://` 或端口命中 `cert.tls_ports`）做**一次只读 TLS 握手**，用**纯标准库** ASN.1/DER 解析出 CN / 颁发者 / 有效期 / 剩余天数 / 是否自签 / 签名算法 / SAN / SHA256 指纹，进 `certs` 表 + 任务详情「SSL 证书」页签 + 报告小节，**不引入 `cryptography`**。握手**不校验证书**（CTF 目标多为自签/过期）—— **「自签 / 已过期」是证书属性、不是漏洞结论**，页签与报告都写明了这一点；页签按数据源实有出现，没有产物时说明原因；
 - **站点截图**（策略级默认关，**建任务勾「截图」即对本次生效**）：调用本机已装的 Edge/Chrome 无头模式截图，产物落在任务目录并在站点页 URL 旁显示缩略图，不引入任何新依赖；一次性截不到的站点（页面**永远等不到 `load`** 那一类，第三方子资源挂死）会自动再走一次 **CDP 兜底** —— 只挡埋点/统计域、不等 load、到点直接要图，失败原因里写明"尝试几次、分别什么方式"；站点页签可对勾选站点**重新截图**，也可一键**重截失败的站点**（续170：排进队列、只跑 `screenshot` 阶段、沿用本任务）；没有产物时页面会说明原因（策略关 / 本机无可用浏览器 / 截图失败）；服务器最小镜像缺中文字体时，把字体放进 `tools/fonts/`，再把 `screenshot.fontconfig` 指向那里的 `fonts.conf`（留空＝不注入，只影响浏览器子进程）；
   同一次浏览器调用还会**顺带补「渲染后标题」**（续140，`--dump-dom` 零额外启动）：
@@ -55,27 +55,29 @@
                                ▼
    ┌────────────────────── PipelineRunner（任务编排） ──────────────────────┐
    │                                                                        │
-   │  ① subdomain 子域名收集      ② takeover 子域接管（CNAME 指纹）          │
-   │     subfinder / puredns         dnsq CNAME 链 + 41 条第三方服务指纹      │
-   │     内置 DNS 字典爆破兜底                                                │
+   │  ① subdomain 子域名收集      ② takeover 子域接管（CNAME 指纹）         │
+   │     subfinder / puredns         dnsq CNAME 链 + 41 条第三方服务指纹    │
+   │     内置 DNS 字典爆破兜底                                              │
    │                                                                        │
-   │  ③ portscan 端口服务（默认关） ④ probe 存活探测（含二层遍历）                          │
-   │     nmap 适配器 / 内置 connect   httpx 适配器 / 内置 requests 兜底        │
+   │  ③ hostcollide Host 碰撞     ④ portscan 端口服务（默认开）             │
+   │     同 IP 绑 Host（只读 GET）   fscan / nmap 适配器 / 内置 connect     │
    │                                                                        │
-   │  ⑤ screenshot 站点截图（默认关） ⑥ osint 外部情报拓展（默认关）        │
-   │     本机无头 Edge/Chrome 截图     /24 C 段 IP→域名反查            │
-   │                                   favicon(mmh3)/证书/标题→FOFA 反查│
-   │                                                                     │
-   │  ⑦ jsmine JS 资产挖掘            ⑧ dirscan 目录发现（默认开·浅扫） │
-   │     域名 / 接口 URL / 疑似凭据      浅扫=精选敏感路径；深扫=dirmap/   │
-   │                                   内置字典（技术栈+框架选字典，软404基线）│
-   │                                                                     │
-   │  ⑨ vulnscan 漏洞初筛             ⑩⑪⑫ intel / heuristic / github（DEFAULTS 关、随包已开）│
-   │     POC 引擎（YAML，nuclei 兼容子集） KEV 情报 × 本地指纹白名单匹配│
-   │     OWASP Top10 检查 + 四层门控 + 绕 WAF  零请求差分/异常聚合      │
-   │                                    GitHub 公开代码里搜目标注册域   │
-   │                                    三者只产「线索」，不写 vulns   │
-   └──────────────┬──────────────────────────────────────┬─────────────────┘
+   │  ⑤ probe 存活探测            ⑥ cert TLS 证书取证（默认关）             │
+   │     httpx 适配器 / 内置请求      一次只读 TLS 握手 + 纯标准库解析      │
+   │                                                                        │
+   │  ⑦ screenshot 站点截图（默认关）⑧ osint 外部情报拓展（随包开）         │
+   │     本机无头 Edge/Chrome         /24 C 段 + favicon/证书/标题反查      │
+   │                                                                        │
+   │  ⑨ jsmine JS 资产挖掘        ⑩ dirscan 目录发现（默认开·深扫）         │
+   │     域名 / 接口 URL / 疑似凭据   分层字典 + dirmap + 后缀派生 + 递归   │
+   │                                                                        │
+   │  ⑪ crawl 链接抓取（默认开）  ⑫ vulnscan 漏洞初筛                       │
+   │     页面链接 / 带参链接           POC 引擎 + OWASP Top10 + 四层门控    │
+   │                                                                        │
+   │  ⑬⑭⑮ intel / heuristic / github（DEFAULTS 关、随包已开）               │
+   │     KEV 情报 × 本地指纹白名单匹配 / 零请求差分聚合 / GitHub 代码检索   │
+   │     三者只产「线索」，不写 vulns                                       │
+   └──────────────┬──────────────────────────────────────┬──────────────────┘
                   ▼                                      ▼
         SQLite（data/scanner.db）                logs/<task>/ 产物与日志
                   ▼
@@ -201,11 +203,11 @@ py -3 cli/client.py --check        # 检查外部工具可用性；没装的会�
 # 从文件导入目标（每行一个：域名 / URL / IP / CIDR，# 开头为注释）
 py -3 cli/client.py -f examples/targets.txt -n my-first-task
 
-# 或直接给单目标；-p 是逗号分隔的阶段列表（缺省 = 全部 13 个阶段）
+# 或直接给单目标；-p 是逗号分隔的阶段列表（缺省 = 全部 15 个阶段）
 py -3 cli/client.py -t example.com -p subdomain,probe,dirscan,vulnscan -n quick-look
 ```
 
-**轻扫建议**：默认就是轻档（端口扫 TOP 表、目录只打 `dirs_shallow.txt` 约 150 条精选路径）。
+**轻扫建议**：端口默认扫 TOP 表，而**目录默认已是深扫**（`dirscan.mode=deep`）；想省请求量就在策略页把 `dirscan.mode` 选 `quick`（只打 `dirs_shallow.txt` 约 150 条精选路径）。
 别一上来就 `--full-ports`（1-65535）或 `--full-dir`（深扫大字典）—— 那是投放/深度排查时才用的。
 结束后可加 `--report out.md --report-html out.html --report-jsonl out.jsonl` 一并导出报告。
 
@@ -253,7 +255,7 @@ docker compose up -d --build     # 起控制台；数据/配置/日志都挂在�
 
 ```bash
 py -3 cli/client.py --update-tools    # 一键装 subfinder / httpx / puredns（只在显式触发时联网）
-py -3 cli/run_devflow.py                  # 全流程自检：起内置靶场 → 压量到最小 → 真跑全 13 阶段
+py -3 cli/run_devflow.py                  # 全流程自检：起内置靶场 → 压量到最小 → 真跑全 15 阶段
 ```
 
 开发模式开关在 `config/settings.yaml` 的 `dev.enabled`，打开后控制台侧栏才出现「开发模式」页。
@@ -293,7 +295,7 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 | Windows 上 `python` 找不到 | AI 工具启动的 shell 里 PATH 条目编码损坏 → 用 `py -3` |
 | 改了代码页面没变 | 控制台进程没重启（不热重载）→ 重启 `run_gui.py` |
 | 端口 5000 被占用 | 旧进程还在 → 结束它或改 `gui.port`；请求仍打到旧进程是新路由 404 的常见原因 |
-| 目录扫出 0 条 | 看看是不是浅扫档（默认 150 条/站）；深扫要 `--full-dir` 或结果页「补扫」 |
+| 目录扫出 0 条 | 看看是不是 `dirscan.mode=quick`（默认档已是 deep，浅扫约 150 条/站）；要显式深扫用 `--full-dir` |
 | FOFA 没查询 | `fofa.enabled` 随包是**开**的，但密文里没有 fofa 段；`config/keys.yaml` 也要填真实凭据 |
 
 ## 配置说明（部署前必看）
@@ -302,7 +304,7 @@ smoke 会自己建临时库与临时目录（`CTFSCANNER_DB` / `CTFSCANNER_LOGS`
 
 - **`config/keys.yaml`（第三方 API key，必须自建，已被 `.gitignore` 忽略）**：从仓库的 `config/keys.yaml.example` 复制一份 `config/keys.yaml` 填真实值。**切勿把真实 key 提交进仓库**（它已 gitignore；CI 跑者无此文件时 `load_keys()` 返回 `{}`，整轮冒烟仍可通过）。结构：
   ```yaml
-  fofa:   {email: "", key: ""}   # FOFA（favicon / 证书 / 标题反查；settings.yaml 里 fofa.enabled 现为 false，配好 key 并显式打开才会真查并消耗配额）
+  fofa:   {email: "", key: ""}   # FOFA（favicon / 证书 / 标题反查；settings.yaml 里 fofa.enabled 现为 true（代码 DEFAULTS 仍是 false），配好 key 就会真查并消耗配额）
   shodan: {key: ""}              # Shodan favicon 反查（默认关）
   quake:  {key: ""}              # 360 Quake favicon 反查（默认关）
   virustotal: {key: ""}         # VirusTotal 子域名反查（默认开，需 key）
@@ -363,7 +365,7 @@ Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错�
     两个按钮 —— 它们起的夹具**与自检用的夹具无关**（自检在子进程里起自己的），仅供**手动打开看一眼**，
     **不装任何 DNS 覆盖**。
   - **CLI**：`py -3 cli/run_devflow.py`（`cli/` 下的独立入口；续146 起仓库根只留 `run_gui.py` 与 `run_bootstrap.py`）。它先起夹具 → 压量 → 依次跑全部
-    13 阶段（`runner.run_task` 前台执行）→ 打印**每阶段 `真跑 / 跳过（带原因）/ FAIL` + 网络活动数 + 耗时**，
+    15 阶段（`runner.run_task` 前台执行）→ 打印**每阶段 `真跑 / 跳过（带原因）/ FAIL` + 网络活动数 + 耗时**，
     无 `FAIL` 退出码 0，否则 1。**这是本功能的验收证据**。核心逻辑在 `scanner/devflow.py`
     （CLI 与 `tests/smoke.py [7n]` **共用**，避免两处判定漂移）。
   - **功能向量**（续62，用户指令「每个功能向量打一些，确保流程正确」）：阶段级判定之上再往下沉一层 ——
@@ -409,16 +411,16 @@ ctf-scanner/
 ├── run_bootstrap.py         # 环境自举：探测缺口 / `--install` 自动补齐（刻意不进 `scanner/` 包，见 [7p]）
 ├── cli/                     # 其余命令行入口（续146 从仓库根搬进来：根只留上面两个启动文件）
 │   ├── client.py            #   CLI 客户端（导入文件、全自动执行）
-│   ├── run_devflow.py       #   全流程自检入口（起内置靶场 → 压缩配置 → 跑全 13 阶段 → 打 OK/SKIP/FAIL）
+│   ├── run_devflow.py       #   全流程自检入口（起内置靶场 → 压缩配置 → 跑全 15 阶段 → 打 OK/SKIP/FAIL）
 │   ├── run_node.py          #   分布式执行节点（连控制端领任务，续80）
 │   ├── run_keys.py          #   凭据口令加密的管理入口（续98）
 │   └── run_users.py         #   管理员账号的命令行入口（续117）
 ├── gui/                     # Web 控制台（Flask + 原生 JS，仿 ARL）
-│   ├── app.py               #   路由与后台任务线程
+│   ├── app.py               #   路由与任务入队（常驻队列 worker 认领执行）
 │   ├── templates/ static/   #   页面与样式
 ├── scanner/                 # 核心引擎（CLI/GUI 共用）
 │   ├── runner.py            #   流水线编排、任务执行入口、协作式取消
-│   ├── stages/              #   13 个阶段：subdomain / takeover / portscan / probe / cert / screenshot / osint / jsmine / dirscan / vulnscan / intel / heuristic / github
+│   ├── stages/              #   15 个阶段：subdomain / takeover / hostcollide / portscan / probe / cert / screenshot / osint / jsmine / dirscan / crawl / vulnscan / intel / heuristic / github
 │   ├── pocs/                #   POC 引擎（nuclei 兼容子集）+ 内置示例 POC
 │   ├── owasp/               #   OWASP Top10 启发式检查 + 分级/分类门控
 │   ├── evasion.py           #   动态免杀（UA/请求头伪装/WAF 指纹/payload 变形）
@@ -455,7 +457,7 @@ ctf-scanner/
 ├── tools/import_subdomain_dict.py # 深档子域名字典导入器（续139：清洗 + 去重 + 并集写 config/dicts/subdomains_deep.txt，纯离线）
 ├── tools/dirmap/            #   dirmap 落点（目录联接，第三方项目不随仓库分发）
 ├── config/
-│   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/screenshot/iprecon/fofa/blacklist/intel/heuristic/github；另有 queue/dev 两个非策略页配置）
+│   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 **38 段**（= DEFAULTS 全部段），含 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/screenshot/iprecon/fofa/blacklist/intel/heuristic/github）
 │   ├── keys.yaml            # 第三方 API key 专用文件（gitignore，GUI 不写回）
 │   ├── blacklist.txt        # 用户黑名单（一行一个域名，# 注释；命中即不入资产库）
 │   ├── dicts/               #   子域名两档字典（`subdomains.txt` 精简档 84 条，永远全量参与 + `subdomains_deep.txt` 深档 177,875 条，续139 随仓库导入）、resolvers、目录字典（dirs_shallow 206 浅扫精选 / dirs_small 55 / dirs_big 11882 / 技术栈与框架细分 + 暴露面）、cdn_cname.txt（CDN 厂商后缀）、cdn_ips.txt（CDN 厂商任播 IP 段）、sensitive.txt（A01 敏感文件检查的数据源：路径 | 关键字 | 级别 | 说明）
@@ -474,7 +476,7 @@ ctf-scanner/
 | 文档 | 内容 |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 模块划分、数据流、数据库表结构、扩展点 |
-| [docs/pipeline.md](docs/pipeline.md) | 13 个阶段的输入输出、与你手工流水线命令的对应关系、降级策略 |
+| [docs/pipeline.md](docs/pipeline.md) | 15 个阶段的输入输出、与你手工流水线命令的对应关系、降级策略 |
 | [docs/poc-guide.md](docs/poc-guide.md) | POC YAML 格式、匹配器语义、编写规范、如何上传与启停 |
 | [docs/owasp-mapping.md](docs/owasp-mapping.md) | OWASP Top 10 逐项映射：已实现检查、实现方式、局限 |
 | [docs/usage.md](docs/usage.md) | CLI 全参数、GUI 操作流程、常见问题 |
@@ -505,10 +507,10 @@ ctf-scanner/
   **XSS 按回显上下文分级**（JS 串/无引号属性→high，引号属性/文本节点→medium，HTML 注释→降级）；
   **A10 SSRF 只做受控回连**（证明"服务端会出网"），**刻意不去打内网地址**；
 - A04（不安全设计）、A07（认证缺陷）、A09（日志与监控）等依赖业务上下文的类别，黑盒自动化无法可靠覆盖，文档中如实标注；
-- 外部情报（`osint` 阶段：C 段反查 / FOFA favicon 反查 / FOFA 证书反查）：**`fofa.enabled` 当前为 `false`**
-  （2026-09-26 用户决定"先关，投入生产时再开"）—— 即默认任务不会碰 FOFA。需要时在「策略配置」页打开，
-  打开后每次任务都会真查 FOFA 并消耗配额（前提是 `config/keys.yaml` 已配真实凭据）；`iprecon.enabled` /
-  `shodan` / `quake` / `ctlog` 与 `intel` / `heuristic` / `github` 默认关。`osint` 的阈值
+- 外部情报（`osint` 阶段：C 段反查 / FOFA favicon 反查 / FOFA 证书反查）：随包 `config/settings.yaml` 里
+  `fofa.enabled` 与 `iprecon.enabled` 都是 **true**，而代码 `DEFAULTS` 里都是 false —— 即**新克隆会跑、没 key 时零请求**
+  （`fofa` 的 email/key 要从 `config/keys.yaml` 补；`iprecon` 免 key、只要求能出网）。`shodan` / `quake` / `ssrf` /
+  `cert` / `screenshot` 两处都关；`ctlog` / `intel` / `heuristic` / `github` / `multileak` 是「DEFAULTS 关、随包开」；`osint` 的阈值
   （黑 ico 200、通用证书 200、"共享主机"单 IP 域名数 30）是保守估计值、未经真实数据校准，
   其联网往返也无法离线自测（`tests/smoke.py` 只覆盖纯函数与门控，全阶段真跑见 `[6u]`）。
 

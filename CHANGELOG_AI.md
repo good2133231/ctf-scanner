@@ -3,6 +3,33 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续278（2026-10-25，WorkBuddy · Qoder）：文档与记忆对齐（15 阶段 / 17 栏 / 队列执行 / 两档默认）
+
+### 背景 / 判断依据
+
+本轮不碰任何阶段行为、`STAGE_LABELS`、GUI 默认值与运行期语义，只把"当前事实"改对：README / docs 三份 / SKILL / AGENTS 里仍写着 13 阶段、14 栏侧边栏、「一任务一线程」、「无任务队列」、`portscan` 默认关、`dirscan` 默认浅扫、`checks.min_severity` 默认 medium、`fofa.enabled` 为 false、`settings.yaml` 三十一段 —— 而代码实测是 15 阶段（`runner.STAGE_ORDER`）、17 栏（`base.html` 的 `nav_items`）、常驻 worker 认领队列、`portscan`/`hostcollide`/`crawl` 两档都开、`dirscan.mode=deep` + 递归 1 层、`min_severity` DEFAULTS medium / 随包 high、`fofa.enabled` 随包 true 而 DEFAULTS false、38 段（= DEFAULTS 全部段）。
+
+判据口径：凡"默认开/关"一律**分两档说**（代码 `DEFAULTS` 与随包 `config/settings.yaml` 并不相等），不再用一句"默认关"盖住两件事。带日期的历史陈述（CHANGELOG 旧节、`docs/takeover-*.md`、AGENTS 里 2026-09-26 的 FOFA 记录、2026-10-12 的 31 段实测）**一律保留原文**，只在其后补一行 2026-10-25 的新事实。
+
+### 变更
+
+- `scanner/runner.py`：只改模块 docstring 与 `STAGE_ORDER` 里的注释（补 `hostcollide` / `crawl` / `github`，端口扫描改"默认开"），**函数体一字未动**。
+- `README.md` / `docs/architecture.md` / `docs/usage.md` / `docs/pipeline.md` / `docs/roadmap.md`：13→15 阶段、14→17 栏、执行模型改队列 worker、目录深扫为默认档（`quick` 改为显式选）、`portscan` 默认开、`checks.min_severity` 两档、`passive` 默认 8 源、`settings.yaml` 38 段、`fofa.enabled` 两档；README 的 13 阶段 ASCII 图与 architecture 的阶段层框图按新阶段表重排。
+- `AGENTS.md`：§3 目录树（`stages/` 15 个、`app.py` 队列、`run_devflow.py` 15 阶段）、§2 的分段计数（31→38，并保留 2026-10-12 那条实测原文）、§4 阶段清单与默认开关、门禁说明里的"阶段注册(13 个)"；FOFA 那段补 2026-10-25 的两档事实。
+- `.qoder/skills/ctf-scanner/SKILL.md`：阶段数 13→15、门禁耗时按本机实测改为约 9 分钟。
+- `tests/smoke.py`（门禁驱动的**测试维护**，不动运行时代码）：续276 把自动与手动送探的子任务名简化成 `子任务N`，但 `[195a]` / `[202]③` 仍钉着旧命名（`目标域 · 送探 N 个域名`），全量门禁在 `[195a]` 红过一次。两条断言改成钉新口径（`子任务N` + 旧命名必须不再出现），`[202]③` 另按 GUI 与 runner 两处源码形状点名。
+- `CHANGELOG_AI.md` / `todo.txt`（§0.5 脱敏）：续276/277 的记忆里留了两个本机库里有资产的授权目标注册域（6 行 9 处），全量门禁 `[218]` 当场判红。已换成合成占位（`目标域` / `自身目标注册域`），`[218]` 复跑零命中；这两个文件仍是纯 CRLF。
+
+### 验证
+
+- 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，288 组 —— 日志里唯一组标签，续274 那轮同法为 286，+2＝`[282]`~`[283]`）；墙钟约 9 分钟（日志时间戳 13:32:30→13:40:48＝8 分 18 秒 + 启动），日志 `logs/_smoke278b.log`。
+- 逐文件核 `git diff --numstat` 与 `git diff --ignore-cr-at-eol --numstat` 相等（EOL 零漂移）；`git ls-files --eol` 仍是 todo/CHANGELOG `crlf`、AGENTS `mixed`。
+- 残留扫描：`13 阶段` / `14 栏` / `一任务一线程` / `无任务队列` 只剩白名单里的历史行。
+- 只跑相关组复验：`--only 8as,8bq`（记忆同步三重判据 + 两档默认）。
+- 首轮全量门禁后又补了 `docs/pipeline.md`（它不在最初的九份清单里，实测仍写着 13 阶段 / `portscan` 默认关 / `dirscan` 默认浅扫 / `passive` 6 源）：补完树只差这一份文档，`--only 8as,8bq` 复验绿（`[8bq]` 是唯一读这份文档的门禁组）。
+- 脱敏判据复跑：`--only 218` 零命中
+- 脱敏判据复跑：`--only 218` 零命中（修前报两个本机库内有资产的授权目标注册域；这里刻意不写原名）。
+
 ## 续277（2026-10-25，WorkBuddy · CodeBuddy）：修复站点页签 form 嵌套 + 三页签排版与逻辑核查
 
 ### 背景 / 判断依据
@@ -11,7 +38,7 @@
 ### 变更
 - 根因：任务详情「站点」页签「重截」`<form>`（`/api/sites/reshoot`）**嵌套**了「补图标」`<form>`（`/api/sites/iconbackfill`）—— HTML 不允许 form 嵌套，浏览器按容错把外层 reshoot 表单拆掉，站点勾选表格被甩到表单外 ⇒ 「勾选若干站点 → 重截」只提交 hidden、不提交勾中的 URL（默认只能走「全部失败站点」逻辑）。
 - 修复：`gui/templates/task_detail.html` 把两颗 POST 表单改为**并列**—— reshoot 表单用 `id="reshoot-f"` 只包住 hidden + 站点表（含勾选行）；「重截」按钮用 `form="reshoot-f"` 关联回去（按钮仍摆在 bulkbar 里、视觉不动）；「补图标」表单作为 bulkbar 内并列兄弟表单。
-- 逻辑核查：子任务 #73 严格按自身 task_id 取数（subs=10 / sites=16 / ext=10），其 `osint:fofa` 拓展域名全部属于自身目标 pay4z.com（父 #72 目标 infyric.com）⇒ 无跨任务泄漏；拓展域名 tab 徽标 6 vs 页内「全部（7）」是「已解析 vs 全量」口径（与子域名页签同约定），非 bug；子域名/拓展域名两页签结构正常（无嵌套、标签配平）。
+- 逻辑核查：子任务 #73 严格按自身 task_id 取数（subs=10 / sites=16 / ext=10），其 `osint:fofa` 拓展域名全部属于自身目标注册域（父 #72 目标为另一个注册域）⇒ 无跨任务泄漏；拓展域名 tab 徽标 6 vs 页内「全部（7）」是「已解析 vs 全量」口径（与子域名页签同约定），非 bug；子域名/拓展域名两页签结构正常（无嵌套、标签配平）。
 
 ### 验证
 - 本地渲染 #73 详情页 status 200；逐条跑通 `[7s]` 对 pane-sites 的结构断言：GET 筛选在 POST 前闭合、无嵌套、`method="post"` 计数=2、`<form>`/`</form>` 配平 3/3；全模板 `<form>`/`</form>` 配平 16/16；`py_compile` 通过。
@@ -19,11 +46,11 @@
 ## 续276（2026-10-25，WorkBuddy · CodeBuddy）：子任务送探命名简化为「子任务N」
 
 ### 变更
-- 手动「送去探测」与自动高置信送探两处默认名，从 `infyric.com · 送探 N 个域名·M层`（续202/续195 口径）简化为 `子任务N`，N＝该**父任务**名下已有子任务数 + 1（`db.list_child_tasks` 计数）；层级由 parent_id 挂着，名字不再复述域名/数量/层数。
+- 手动「送去探测」与自动高置信送探两处默认名，从 `目标域 · 送探 N 个域名·M层`（续202/续195 口径）简化为 `子任务N`，N＝该**父任务**名下已有子任务数 + 1（`db.list_child_tasks` 计数）；层级由 parent_id 挂着，名字不再复述域名/数量/层数。
 - 文件：`gui/app.py`（`create_app` 内「送去探测」建任务）、`scanner/runner.py`（`_maybe_auto_probe_similar` 自动送探）。
 
 ### 验证
-- 单元验证：父任务 + 2 子任务 ⇒ 子任务1 / 子任务2；库内 #67（父 #66）、#73（父 #72）已 DB 改名（原 `infyric.com · 送探 1 个域名` → `子任务1`）；`py_compile` 通过；本地渲染 #73 详情页 status 200。
+- 单元验证：父任务 + 2 子任务 ⇒ 子任务1 / 子任务2；库内 #67（父 #66）、#73（父 #72）已 DB 改名（原 `目标域 · 送探 1 个域名` → `子任务1`）；`py_compile` 通过；本地渲染 #73 详情页 status 200。
 
 ## 续275（2026-10-24，WorkBuddy · CodeBuddy）：任务列表父子进度（子任务排父任务下方 + 阶段内进度条）
 

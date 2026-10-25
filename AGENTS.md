@@ -290,7 +290,7 @@ Flask Web 控制台（仿 ARL）。
   （写着“只跑浅扫”而 `mode` 实际是 deep，误导了主理人）。改任何配置值必须同步改它的注释；
   `[252]` 钉着 dirscan 注释口径（默认深扫的事实、请求量口径、“以 mode 行为准”）。
   档位请求量参考：端口 top≈21 连接/主机；目录 quick≈150+基线/站、deep≈400+基线+派生/站
-  （递归默认关；全端口 6.5 万连接/主机，已改单任务触发）。
+  （递归默认 1 层；全端口 6.5 万连接/主机，已改单任务触发）。
 - **演示资产与临时残留要即时清（续253）**：演示任务/靶场/临时管理员/`/tmp` 验证库，
   用完当轮清掉（db.delete_task + 杀进程 + rm）；`todo.txt` 各节里**已完成的待办项要删掉**——
   完成的事留在清单里就是“文档撒谎”（续252 同款纪律）。清理前必须点名确认动的是谁：
@@ -417,19 +417,19 @@ ctf-scanner/
 │   │                      #   **任何输出都不出现口令值**，落库的只有 PBKDF2 派生值
 │   ├── run_keys.py        # 凭据口令加密的管理入口（续98）：--status / --encrypt / --change / --verify；任何输出都不出现 key 值或口令
 │   ├── run_node.py        # 分布式执行节点（续80）：连控制端领任务、跑完把资产增量回传
-│   └── run_devflow.py     # 全流程自检（续50）：起内置靶场 → 压量 → 真跑 13 阶段 → 逐阶段 OK/SKIP/FAIL
+│   └── run_devflow.py     # 全流程自检（续50）：起内置靶场 → 压量 → 真跑 15 阶段 → 逐阶段 OK/SKIP/FAIL
 │                          #   ⚠ 它会覆写 `logs/devflow_baseline.json`，只读 agent 不许跑（§10）
 ├── gui/
-│   ├── app.py             # create_app()：路由 + 每任务一个后台线程；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
+│   ├── app.py             # create_app()：路由 + 常驻队列 worker；serve() 为统一启动入口；含跨任务资产页（子域名/拓展域名/站点/漏洞，另有 /ports /csegs /dirs）
 │   ├── templates/ static/ # 页面与原生 JS（app.js：轮询状态/日志、建任务、POC 管理、页签、表格筛选、任务批量操作）
 │   │                      #   `diff.html`＝续129 的复测视图「这次 vs 上次」：入口在任务详情页
 │   │                      #   头部「与上次对比」，也可直接访问 `/diff?task=&base=`（三档文案：
 │   │                      #   可比 / 不可比（给原因，不给全空表）/ 某类缺对照）
-│   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（14 栏，以 base.html 的 nav_items 为准：
-│   │                      #     仪表盘/任务管理/子域名资产/站点资产/IP 资产/全端口扫描/漏洞风险/POC 管理/外部工具/
+│   │                      #   外壳＝左侧固定侧边栏 + 顶栏 + 内容区（17 栏，以 base.html 的 nav_items 为准：
+│   │                      #     仪表盘/任务管理/子域名资产/站点资产/链接资产/IP 资产/全端口扫描/数据探测/EXP 待确认/漏洞风险/POC 管理/外部工具/
 │   │                      #     策略配置/账号管理/执行节点/访问审计/数据迁移；
 │   │                      #     其中后 7 栏 admin_only＝只对管理员渲染（子用户不渲染且路由层 403）；
-│   │                      #     dev.enabled=true 时再追加第 15 栏「开发模式」。
+│   │                      #     dev.enabled=true 时再追加第 18 栏「开发模式」。
 │   │                      #     ⚠ 改导航必须同步这四个地方的计数：本行、`docs/architecture.md`、
 │   │                      #       `docs/usage.md`、README 开头那条功能清单 —— 续96 加「执行节点」时就漏了，
 │   │                      #       文档一直说"12 栏"而实际是 13 栏（本轮顺手校正）
@@ -454,7 +454,7 @@ ctf-scanner/
 │   │                      #   **纯 ASCII 序列**（`\r`+空格回退，不碰 `\033[K` —— Windows 旧 conhost
 │   │                      #   会原样印）。`log.py` 的控制台 handler（`_ConsoleHandler`）与
 │   │                      #   `run_task(progress=)`（阶段边界 `pg.stage(中文名)`、finally 收条）都走它
-│   ├── stages/            # base + subdomain/takeover/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/vulnscan/intel/heuristic/**github**（13 个）
+│   ├── stages/            # base + subdomain/takeover/hostcollide/portscan/probe/**cert**/screenshot/osint/jsmine/dirscan/crawl/vulnscan/intel/heuristic/**github**（15 个）
 │   ├── migrate.py         # 扫描数据的导出/导入（续136，跨机迁移）。**默认零凭据**：包里只有
 │   │                      #   tasks + 八张资产表；账号表/凭据文件/任务登录态/`flags`（原文取值）
 │   │                      #   各要一个显式旗标（`--with-users` / `--with-task-auth` / `--with-secrets`）
@@ -611,11 +611,13 @@ ctf-scanner/
 │                          #   官方只发 C 源码 ⇒ **仍需本机 gcc/make**，缺了如实报、不假装编成
 ├── tools/dirmap/          # dirmap 落点（**目录联接**，第三方项目不随仓库分发；.gitignore 排除，找不到就回退内置扫描）
 ├── tools/fscan/           # fscan 落点（同上：**目录联接**指向仓库外的自编译二进制；.gitignore 排除）
-├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/**ssrf/shodan/quake/ctlog**/blacklist/**intel/heuristic/github/multileak/flags/afrog/queue/dev/http/tools/dicts** 三十一段（＝ DEFAULTS 全部段；dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
+├── config/settings.yaml   # 全局配置（GUI「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/**screenshot/cert**/iprecon/fofa/**ssrf/shodan/quake/ctlog**/blacklist/**intel/heuristic/github/multileak/flags/afrog/queue/dev/http/tools/dicts** 三十八段（＝ DEFAULTS 全部段；dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned；cert 段含 enabled/max_sites/timeout/tls_ports））
 │                          #   注：原文写「十八段」且漏列 ssrf/shodan/quake/ctlog，与 GUI 实际覆盖的段数不符，
 │                          #   2026-09-24（续26）实测更正为 23 段；2026-10-12（续158）tools/dicts/http/queue/dev
 │                          #   五段接上策略页后实测为 **31 段（= 全部段）**，`tests/smoke.py [8at]` 的例外名单已清空
 ├── config/keys.yaml       # 第三方 API key 专用文件（gitignore；load_keys() 只读，save_settings 不写回）
+│                          #   续278 注（2026-10-25）：上面那串**按分类的举例**漏了 icp / fingerprint / hostcollide /
+│                          #   crawl / extquota / virustotal / report 七段；逐段权威来源是 `scanner/config.py::DEFAULTS`。
 ├── tools/calibrate_fingerprints.py # 组件指纹的**负样本校准**（续127，与 calibrate_pocs 同性质）：
 │                          #   12 份内联合成响应（通用软 404 / 无厂商特征的登录页 / SPA 首页 /
 │                          #   IIS·Apache 默认页 / 请求路径就是 /druid/login.html 的 Tomcat 404 …），
@@ -653,8 +655,8 @@ ctf-scanner/
 其中 `scanner/evasion.py` 是**所有 HTTP 出口的统一伪装层**（由 `utils.http_request` 调用），
 `scanner/wildcard.py` 与 `scanner/passive.py` 只在 subdomain 阶段生效。
 
-- 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **13 个**：
-  `subdomain → takeover → portscan → probe → **cert** → **screenshot** → osint → jsmine → dirscan → vulnscan
+- 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **15 个**：
+  `subdomain → takeover → hostcollide → portscan → probe → **cert** → **screenshot** → osint → jsmine → dirscan → crawl → vulnscan
   → **intel** → **heuristic** → **github**`；
   `cert`（TLS 证书取证）与 `screenshot` 都**默认关**，都排在 `probe` 之后（要先有存活站点）；
   `screenshot` 需要本机 Edge/Chrome，浏览器路径探测见 `scanner/screenshot.py`；
@@ -676,8 +678,8 @@ ctf-scanner/
   新增阶段在此登记即可被 CLI `-p` 与 GUI 识别）。
 - 阶段开关有两层：**任务级**（建任务时勾选 stages / CLI `-p`）与**策略级**
   （`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled`，阶段内部自查后跳过）。
-  `takeover` / `jsmine` / `dirscan` / `vulnscan` 默认开，
-  `portscan` / `screenshot` / `cert`（都受策略级开关约束）/ `intel` / `heuristic` / `github` 默认关（**这是 DEFAULTS 那一档**；随包分发的 settings.yaml 自续159-附起把 `intel`/`heuristic`/`github`/`ctlog`/`multileak` 改成开，而 `portscan`/`screenshot`/`cert` 仍是关 —— 说「谁默认开」之前要先看这两份并不相等）。
+  `takeover` / `hostcollide` / `portscan` / `jsmine` / `dirscan` / `crawl` / `vulnscan` 默认开，
+  `screenshot` / `cert`（都受策略级开关约束）/ `intel` / `heuristic` / `github` 默认关（**这是 DEFAULTS 那一档**；随包分发的 settings.yaml 自续159-附起把 `intel`/`heuristic`/`github`/`ctlog`/`multileak` 改成开，而 `screenshot`/`cert` 仍是关 —— 说「谁默认开」之前要先看这两份并不相等）。
   另有**任务级「全量档」选项**：`portscan_full`（全端口 1-65535，见 §8）与 `dirscan_full`（深扫，见 §8），
   二者都是"用户点名要扫"→ **即使对应全局 `enabled=false` 也执行**，且 GUI/CLI 在勾了全量档却漏勾阶段时
   **自动补上该阶段并按 `STAGE_ORDER` 归位**（`runner` 按给定顺序执行、不排序，所以必须显式 sort）。
@@ -2095,7 +2097,7 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   `checks.SENSITIVE_FILES` 硬编码清单 —— 不带关键字就凭 200 判"文件存在"会被统一 200 的软 404 页放大。
 - `db._WRITE_LOCK`（`threading.RLock`）把**所有写路径**串行化：`_exec` / `init_db` / `set_vuln_review` /
   `bulk_set_vuln_review` / `upsert_poc` 主路径。WAL 只保证"读不被写阻塞"、`busy_timeout=10000` 只保证
-  "冲突时最多等 10 秒"，**都不保证写成功**；而本框架无任务队列，N 个任务线程 × `pool_run(workers=20)`
+  "冲突时最多等 10 秒"，**都不保证写成功**；而队列 worker 可能有多个、单任务内部仍是 `pool_run(workers=20)`
   的回填是完全可能同时打满的。新增写路径时**必须**走 `_exec` 或显式加这把锁。
 - `parse_line` 对裸域名会 `strip("/")` 并小写；CIDR 会展开为多条 `("ip", …)`
   （`MAX_CIDR_ADDRESSES=256`，超过则整体丢弃并在解析阶段记日志）。
@@ -2139,7 +2141,7 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
      （否则一升级就把人锁在门外），每次启动打 warning 催迁移。详见下面「引导口令只存派生值」一条。
 - 「策略配置」页覆盖 gui/limits/checks/subdomain/passive/evasion/
   takeover/portscan/jsmine/dirscan/vulnscan/screenshot/cert/iprecon/fofa/**ssrf/shodan/quake/ctlog**/
-  blacklist/intel/heuristic/**github/multileak/flags/afrog/queue/dev/http/tools/dicts** **三十一段（= DEFAULTS 全段；续158 起 tools/dicts/http/queue/dev 也可从页面改）**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned）
+  blacklist/intel/heuristic/**github/multileak/flags/afrog/queue/dev/http/tools/dicts** **三十八段（= DEFAULTS 全段；续158 起 tools/dicts/http/queue/dev 也可从页面改；此处按分类举例，逐段以 DEFAULTS 为准）**（dirscan 段含 mode/quick_max_paths/suffix_aware/big_dict/max_paths/**recursive_depth/recursive_max_dirs/recursive_max_paths**（递归三键，续30）；portscan 段含 mode/full_ports/exclude_scanned）
   （含按级别 / 按 OWASP 分类 /
   按检查项三级开关），并且**每个"大功能"都有阶段级 enabled 总开关**（`dirscan` / `vulnscan`
   于第十轮补齐：此前这两段在 DEFAULTS 里根本不存在，无法从 GUI 关闭；
@@ -2608,6 +2610,8 @@ probe 候选 18→2、站点 0，**而任务终态照旧 `done` / 进度 100% / 
   里有**真实 FOFA 凭据** + GitHub token。所以**要评估外部开销就看这一项**：改回 `true` 即恢复
   「每次默认任务都真查 FOFA 并花配额」（`docs/roadmap.md` 已登记续23~27 与 github 阶段）。
 
+> **续278 注（2026-10-25）**：上面那条「`fofa.enabled` 已于 2026-09-26 改为 `false`」是**当时**的事实；
+> 随包 `config/settings.yaml` 现在是 `true`，而代码 `DEFAULTS` 仍是 `false` —— 这一对已由 `tests/smoke.py [8bq]` 钉住。
 - **`auth=` 按"URL 主机发往谁"判，不是按"URL 从哪来"判**（2026-09-25 续43）：`http_request(auth=True)`
   的语义是"该请求发往**目标侧**，要带任务登录态"。jsmine 是**唯一的混合出口**模块 —— 页面请求
   按定义发往目标侧（种子 URL），但页面里 `<script src>` 绝对化后常指向**第三方**（实测 targ1.pro

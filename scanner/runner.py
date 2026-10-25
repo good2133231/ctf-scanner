@@ -1,9 +1,10 @@
 """流水线编排：按顺序执行 Stage，统一更新任务状态与进度。
 
-阶段顺序：subdomain -> takeover -> portscan -> probe -> cert -> screenshot -> osint
--> jsmine -> dirscan -> vulnscan -> intel -> heuristic
-（默认开：takeover / jsmine / dirscan / vulnscan；默认关：portscan / cert / screenshot /
- osint / intel / heuristic，均可在「策略配置」按分类开关；
+阶段顺序：subdomain -> takeover -> hostcollide -> portscan -> probe -> cert -> screenshot
+-> osint -> jsmine -> dirscan -> crawl -> vulnscan -> intel -> heuristic -> github
+（默认开：takeover / hostcollide / portscan / jsmine / dirscan / crawl / vulnscan；
+ cert / screenshot 默认关；intel / heuristic / github 代码默认关、随包 settings.yaml 开；
+ osint 由 iprecon / fofa 两个子开关决定（同样 DEFAULTS 关、随包开）；
  subdomain 无开关，由任务勾选的 stages 决定）
 单个阶段异常不中断整条流水线（保留已完成阶段的产物），错误**追加**记录进任务表。
 
@@ -43,7 +44,7 @@ from .stages.github import GithubStage
 
 STAGE_ORDER = ["subdomain", "takeover",
                # hostcollide（续201 接线）紧随 takeover：两者都吃"子域名 + 解析 IP"，
-               # 都要在 portscan/probe 之前把该丢的候选丢掉（它只读 GET、默认关）。
+               # 都要在 portscan/probe 之前把该丢的候选丢掉（它只读 GET、默认开（续269））。
                "hostcollide",
                "portscan", "probe",
                # cert 与 screenshot 都需要"已有存活站点"，所以紧跟 probe；
@@ -55,7 +56,7 @@ STAGE_ORDER = ["subdomain", "takeover",
                "crawl", "vulnscan",
                # 三个"线索"阶段固定排在最后：它们不产出被后续阶段消费的数据，
                # 只把外部情报（intel / github）与本地数据（heuristic）整理成人工复核用的线索。
-               # 三者都默认关闭（`intel.enabled` / `github.enabled` / `heuristic.enabled`），
+               # 三者都是 DEFAULTS 关、随包 settings.yaml 开（`intel.enabled` / `github.enabled` / `heuristic.enabled`），
                # 且**只写 leads 表**，不写 vulns、不计入漏洞数。
                # github（续26）排在 intel 之后：它要发外部请求、受第三方限流约束，
                # 而 intel 只是拉一次 KEV，谁先谁后不影响结果，排在最后便于"只重跑本阶段"。

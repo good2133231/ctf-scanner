@@ -18,7 +18,7 @@
       与本引擎不冲突，无需二进制）；参考项目的 305 个 Python POC 已静态转换为 YAML 放 `config/pocs-imported/`（默认关闭）；
       仍需 nuclei 二进制完整能力时，再于 vulnscan 阶段加适配器调用并解析其 JSONL 结果入 vulns 表；
 - [x] **子域接管检测**：`scanner/dnsq.py` 取 CNAME 链 + `scanner/takeover.py` 41 条第三方服务指纹（can-i-take-over-xyz 思路）；
-- [x] **外部情报拓展阶段**（osint，**默认全关**）：IP 反查域名 + `/24` C 段归纳（`iprecon.py`，入 `csegs` 表与任务详情「C 段」页签）、
+- [x] **外部情报拓展阶段**（osint，**DEFAULTS 关、随包已开**）：IP 反查域名 + `/24` C 段归纳（`iprecon.py`，入 `csegs` 表与任务详情「C 段」页签）、
       favicon 的 mmh3（`mmh3.py`，纯标准库自实现）去 FOFA 反查同源资产（`fofa.py`），
       命中数超过「黑 ico 阈值」的公共图标主动放弃拓展；两个子开关都关时整阶段一次请求都不发；
 - [x] **子域名 IP / CDN 标记**（`scanner/cdn.py` + `config/dicts/cdn_cname.txt` 292 条厂商后缀 + `config/dicts/cdn_ips.txt` 15 段厂商任播 IP 段，**CNAME 优先、IP 段兜底**，纯 DNS 只读判定）；
@@ -284,6 +284,8 @@
       默认关、没 `github.token` 零请求、只落「仓库:路径 + 规则名」元数据（文件内容与命中的凭据明文**不入库**）；
       接入后 `runner.STAGE_ORDER` 共 **13 个阶段**（续26-fix 接真实 token 真机验证）。
 - [x] **续23~续27 收尾（2026-09-24~25）**：续23 主题配色修复 + 配色门禁（`tools/check_contrast.py` + smoke `[6n]`）；
+- 续278 注（2026-10-25）：本文件里出现的 **13 个阶段** 都是当时（续26-fix / 续50）的实测值；此后新增
+  `hostcollide`（续183）与 `crawl`（续198/续249），现为 **15 个**，权威来源仍是 `scanner/runner.STAGE_ORDER`。
       续24 目录折叠「站点身份」根因修复 + 线索出口收敛到 JSONL；续25 同任务「追加式执行」（补扫/复查累积进同一任务）；
       续26-fix 接真实 token 真机验证 + 修「触顶被当错误」；续27 冒烟沙箱残留「自愈清扫」+ 一处被证伪归因更正。
       （本文件此前漏登这 5 轮，2026-09-25 接管盘点补回。）

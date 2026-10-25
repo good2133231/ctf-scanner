@@ -1,13 +1,13 @@
 ---
 name: ctf-scanner
-description: CTFScanner 仓库（Flask 控制台 + 13 阶段资产测绘/漏洞初筛 CLI）的接手须知——硬规矩、唯一门禁命令、CRLF/LF 混排的改文件纪律、断言证伪要求、假红假绿高发区、收尾四步。在本仓库里读改任何文件、跑测试、提交或推送之前先用它。Use whenever working inside the ctf-scanner repo: before editing files, running tests/smoke.py, committing, or pushing.
+description: CTFScanner 仓库（Flask 控制台 + 15 阶段资产测绘/漏洞初筛 CLI）的接手须知——硬规矩、唯一门禁命令、CRLF/LF 混排的改文件纪律、断言证伪要求、假红假绿高发区、收尾四步。在本仓库里读改任何文件、跑测试、提交或推送之前先用它。Use whenever working inside the ctf-scanner repo: before editing files, running tests/smoke.py, committing, or pushing.
 ---
 
 # CTFScanner 接手须知
 
 ## Overview
 
-本仓库是一个**只用于授权测试与 CTF** 的资产测绘 + 漏洞初筛框架（Flask 控制台 + CLI，13 个流水线阶段，
+本仓库是一个**只用于授权测试与 CTF** 的资产测绘 + 漏洞初筛框架（Flask 控制台 + CLI，15 个流水线阶段，
 SQLite 存储，非破坏性）。它已经迭代了 140+ 轮、由多个 AI 会话接力维护，因此攒下了一批
 "不看就会踩"的纪律。本 skill 只放**最容易犯错的那几条 + 去哪查全文**，刻意不抄正文
 （抄一份就多一个会漂的产地，见下面第 5 条）。
@@ -22,7 +22,7 @@ SQLite 存储，非破坏性）。它已经迭代了 140+ 轮、由多个 AI 会
 
 ## 十一条会把你绊倒的事
 
-1. **门禁只有一条命令**：`./.venv/bin/python tests/smoke.py`（约 5 分钟，最后一行必须是
+1. **门禁只有一条命令**：`./.venv/bin/python tests/smoke.py`（约 9 分钟，最后一行必须是
    `SMOKE PASS`，它在 `main()` 的末尾，所以只有全绿才会打印）。别用 `python3` ——
    系统解释器常常缺依赖，跑出来的是 ImportError 而不是测试结果。
 2. **同一时刻只允许一个门禁执行者**：夹具端口（`FIXTURE_PORT` 8765）与
@@ -81,7 +81,7 @@ SQLite 存储，非破坏性）。它已经迭代了 140+ 轮、由多个 AI 会
   `install.sh` / `start.sh` 是它们在 Linux 上的薄包装（**不实现任何安装逻辑**，只调
   `run_bootstrap.py --install`）。
 - 其余入口在 `cli/`：`client.py`（扫描 CLI）、`run_keys.py`（凭据口令加解密）、
-  `run_users.py`（账号）、`run_node.py`（分布式执行节点）、`run_devflow.py`（13 阶段全流程自检）。
+  `run_users.py`（账号）、`run_node.py`（分布式执行节点）、`run_devflow.py`（15 阶段全流程自检）。
 - `run_bootstrap.py` **刻意放在根、不进 `scanner/` 包** —— `tests/smoke.py [7p]` 钉着
   "scanner 包内不得引用 toolmgr"，塞进去就得给那条红线开豁免。
 - `logs/` 与 `data/` 都在 `.gitignore` 里：一次性补丁脚本、沙箱库、门禁日志都放 `logs/`，
