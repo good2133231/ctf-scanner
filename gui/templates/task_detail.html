@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}任务 #{{ task.id }}{% endblock %}
+{% block title %}任务 #{{ task_labels.get(task.id, task.id) }}{% endblock %}
 
 {% block actions %}
 <div class="toolbar">
@@ -44,7 +44,8 @@
 <h1>{{ task.name }}</h1>
 
 {% if task.parent_id %}
-<p class="muted small note">本任务是 <a href="{{ url_for('task_detail', task_id=task.parent_id) }}">任务 #{{ task.parent_id }}</a>
+<p class="muted small note">本任务是 <a href="{{ url_for('task_detail', task_id=task.parent_id) }}"
+   title="任务 #{{ task.parent_id }}">任务 #{{ task_labels.get(task.parent_id, task.parent_id) }}</a>
   的<b>子任务</b>（拓展域名「送去探测」发起 —— 任务层级；资产层归不归父任务看当时有没有勾
   「同时把归属本项目的追加为子域名」，那是另一件事）。
   {% if parent_task %}<br>父任务当前进度 <b>{{ parent_task.progress }}%</b>
@@ -53,14 +54,16 @@
 {% set _kids185 = child_tasks_of(task.id) %}
 {% if _kids185 %}
 <p class="muted small note">子任务 {{ _kids185|length }} 个：
-  {% for c in _kids185 %}<a href="{{ url_for('task_detail', task_id=c.id) }}">#{{ c.id }} {{ c.name }}</a>
+  {# 续281：子任务显示 24-a 派生编号（79-a），真实 ID 只放 tooltip #}
+  {% for c in _kids185 %}<a href="{{ url_for('task_detail', task_id=c.id) }}"
+    title="任务 #{{ c.id }}">{{ task_labels.get(c.id, c.id) }} {{ c.name }}</a>
   <span class="muted">（{{ c.progress }}%）</span>{% if not loop.last %}、{% endif %}{% endfor %}</p>
 {% endif %}
 
 {% if rescan_of %}
 
 <p class="muted small note">本任务是<b>补扫任务</b>：由
-  <a href="{{ url_for('task_detail', task_id=rescan_of) }}">任务 #{{ rescan_of }}</a>
+  <a href="{{ url_for('task_detail', task_id=rescan_of) }}">任务 #{{ task_labels.get(rescan_of, rescan_of) }}</a>
   的补扫发起，只跑
   <span class="mono">{{ task.stages }}</span> 一个阶段并强制走全量档
   （{{ task.options }}），不改全局策略。</p>
@@ -125,9 +128,14 @@
    去就是"列表 3 行、徽标写 120"。宁可少刷三个数字，也不给一个对不上的数字。 #}
 <div class="tabs">
   <div class="tab active" data-tab="vulns" {% if cnt_live.vulns %}data-cnt="vulns"{% endif %}>潜在漏洞<span class="cnt">{{ vuln_total }}</span></div>
-  <div class="tab" data-tab="sites" {% if cnt_live.sites %}data-cnt="sites"{% endif %}>站点<span class="cnt">{{ site_total }}</span></div>
-  <div class="tab" data-tab="subs">子域名<span class="cnt">{{ subs_pager.total }}</span></div>
-  <div class="tab" data-tab="ext">拓展域名<span class="cnt">{{ ext_pager.total }}</span></div>
+  {# 续281：三个徽标的口径写在 title 里 —— 主理人看到「子域名 2、站点 16」以为数错了，
+     其实是「站点按 URL 行（不同协议/端口各一条）」与「子域名只看已解析+去重」两把尺子。 #}
+  <div class="tab" data-tab="sites" {% if cnt_live.sites %}data-cnt="sites"{% endif %}
+       title="站点按 URL 行计数：本任务 {{ site_total }} 条 = {{ site_hosts }} 个主机（同一主机的不同协议/端口各一条）">站点<span class="cnt">{{ site_total }}</span></div>
+  <div class="tab" data-tab="subs"
+       title="已解析、按域名去重后的数量（与任务列表「统计」列一致）；未解析的默认在页内收起并报数">子域名<span class="cnt">{{ subs_pager.total }}</span></div>
+  <div class="tab" data-tab="ext"
+       title="已解析、按域名去重、并排除已归属本项目的域名（与任务列表「统计」列一致）；页内「全部（N）」是含未解析的全量">拓展域名<span class="cnt">{{ ext_pager.total }}</span></div>
   <div class="tab" data-tab="ports" {% if cnt_live.ports %}data-cnt="ports"{% endif %}>端口服务<span class="cnt">{{ ports_pager.total }}</span></div>
   <div class="tab" data-tab="csegs">C 段<span class="cnt">{{ csegs_pager.total }}</span></div>
   <div class="tab" data-tab="certs">SSL 证书<span class="cnt">{{ cert_total }}</span></div>
@@ -301,6 +309,9 @@
         <a class="btn-mini ghost" href="{{ sites_pager.base }}?stpage={{ sites_pager.page }}{{ sites_pager.st_on }}{{ sites_pager.anchor }}">显示全部状态码</a>
       {% endif %}
       页签徽标 {{ site_total }} 是<b>未过滤</b>的站点总数（被收起的也是事实，不从徽标里消失）。
+      {# 续281：把「URL 行数 ≠ 主机数」说在明面上，避免"子域名 2 个怎么会有 16 个站点"的误会 #}
+      站点按 <b>URL 行</b>计数：本任务 {{ site_total }} 条 = <b>{{ site_hosts }} 个主机</b>
+      （同一主机的 http / https 或不同端口各一条；301 跳转会合并默认行，入库条数不变）。
     </p>
     {# 续224：技术栈来源统计（全任务）—— 数据来自 sites.tech_detail，页面只显示计数 #}
     {% if tech_stats_text %}
@@ -504,6 +515,7 @@
       同类内新的在前），不再交错；点下面按钮只看某一类。</p>
     <div class="row">
       <a class="btn-mini {{ 'ghost' if ext_src else '' }}"
+         title="这里的括号是全量入库条数（含未解析）；页签徽标 {{ ext_pager.total }} 是已解析、按域名去重、且排除已归属本项目的数量"
          href="{{ url_for('task_detail', task_id=task.id) }}#ext">全部（{{ ext_counts.values()|sum }}）</a>
       {% for k, label, srcval, _prefix in ext_src_tags %}
         {% set n = ext_counts.get(srcval, 0) %}
@@ -511,6 +523,10 @@
            href="{{ url_for('task_detail', task_id=task.id) }}?esrc={{ k }}#ext">{{ label }}（{{ n }}）</a>
       {% endfor %}
     </div>
+    {# 续281：徽标与「全部（N）」的差异必须说清 —— 主理人报的"拓展域名显示有问题"就是这两个数对不上 #}
+    <p class="muted small note">口径：页签徽标 <b>{{ ext_pager.total }}</b> = 已解析、按域名去重、并排除已归属本项目的域名
+      （与任务列表「统计」列一致）；上面「全部 / 分类」括号是<b>全量入库条数</b>，含未解析的碎片，
+      点页内的「显示未解析」可以逐条看。</p>
     <p class="muted small note"><b>这些域名默认不会自动扫</b> —— probe / dirscan / vulnscan 的输入是
       「存活站点」，而 osint、jsmine 两个阶段排在 probe <b>之后</b>，同一任务里新挖出的域名赶不上本轮探测，
       于是停在"有域名、无检测"的状态。勾选你确认要看的域名，用下面几个按钮手动处理

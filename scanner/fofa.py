@@ -20,7 +20,7 @@ import time
 import urllib.parse
 
 from . import keystore
-from .utils import http_request
+from .utils import http_request, is_domain, to_ascii
 
 API = "https://fofa.info/api/v1/search/all"
 FIELDS = "host,domain,ip,port,title"
@@ -336,3 +336,42 @@ def search_query(query, settings, logger=None, size=None):
         assets.append({"host": str(cols[0]), "domain": str(cols[1]), "ip": str(cols[2]),
                        "port": str(cols[3]), "title": str(cols[4])})
     return assets, total, ""
+
+
+def _host_part(raw):
+    """从 FOFA 的 `host` 字段取主机名：兼容 `https://a.test` / `a.test:443` / 裸域名。
+
+    原实现（subdomain 阶段）是 `host.split(":", 1)[0]` —— 对 `https://a.test` 会切出
+    `"https"` 这个"域名"写进库（真实事故：多任务出现 `domain='https'` 的垃圾行）。
+    这里统一用 urlparse：没有 scheme 时补 `//`，让它按 netloc 解析；两种形态都不带端口。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = "//" + text
+    try:
+        return (urllib.parse.urlparse(text).hostname or "").strip(".")
+    except ValueError:
+        return ""
+
+
+def domain_of(asset, prefer="domain"):
+    """从 FOFA 资产行取**合法域名**；取不到、裸 IP、协议名就返回空串。
+
+    `prefer` 决定先看哪个字段：
+    - `"domain"`（默认，osint 阶段用）：FOFA 的 `domain` 列若合法优先，否则回退 `host`；
+    - `"host"`（subdomain 阶段用）：先看 `host` 里的主机名 —— 子域名枚举要的是
+      `sub.a.test`，而 `domain` 列可能只给注册域/空串，优先它会把子域抹平。
+
+    形态判据一律复用 `utils.to_ascii()` + `utils.is_domain()`（与全仓"什么算域名"
+    同一份产地），所以 `https` / `1.2.3.4` / 带端口 / 带路径 一律不会入库。
+    """
+    cands = ([_host_part(asset.get("host")), asset.get("domain")]
+             if prefer == "host" else
+             [asset.get("domain"), _host_part(asset.get("host"))])
+    for raw in cands:
+        a = to_ascii(str(raw or "").strip().lower().strip("."))
+        if a and is_domain(a):
+            return a
+    return ""

@@ -314,7 +314,7 @@ function initTaskTable() {
     try {
       const ids = live.map(tr => tr.dataset.id).join(",");
       // 续280：`counts=1` 让后端**顺带**回这一页的资产计数（opt-in —— 只看进度的调用方
-      // 不必陪着跑那 8 条 GROUP BY）。一次批量请求同时拿到状态与数字，不是每格再问一次。
+      // 不必陪着跑那 10 条 GROUP BY）。一次批量请求同时拿到状态与数字，不是每格再问一次。
       const r = await fetch(absUrl(`/api/tasks/status?ids=${ids}&counts=1`));
       if (r.ok) {
         const map = (await r.json()).tasks || {};
@@ -614,8 +614,12 @@ function pvSubtreeHtml(d) {
     return `<tr><td class="mono">${pvEsc(n.label)}（#${pvEsc(n.id)}）</td>`
       + `<td style="padding-left:${8 + (n.depth - 1) * 14}px">${pvEsc(n.name)}</td>`
       + `<td class="muted">${pvEsc(n.target || "-")}</td>`
-      + `<td class="muted">站点 ${pvEsc(c.sites || 0)}<br>子域名 ${pvEsc(c.subs_own || 0)}`
-      + `<br>漏洞 ${pvEsc(c.vulns || 0)}<br>拓展 ${pvEsc(c.subs_ext || 0)}</td>`
+      // 续281：与任务列表/详情页签同一个展示口径 —— 站点报主机数，子域名/拓展报
+      // 「已解析去重（全量）」，避免同一个子任务在三处各显示一套数。
+      + `<td class="muted">站点 ${pvEsc(c.sites || 0)}（${pvEsc(c.site_hosts || 0)} 主机）`
+      + `<br>子域名 ${pvEsc(c.subs_own_live || 0)}（全 ${pvEsc(c.subs_own_all || 0)}）`
+      + `<br>漏洞 ${pvEsc(c.vulns || 0)}`
+      + `<br>拓展 ${pvEsc(c.subs_ext_live || 0)}（全 ${pvEsc(c.subs_ext_all || 0)}）</td>`
       + `<td class="muted mono">${pvEsc(n.stages || "-")}</td>`
       + `<td><span class="badge st-${pvEsc(n.status)}">${pvEsc(n.status)}</span></td>`
       + `<td><div class="bar"><i style="width:${pvEsc(n.progress)}%"></i></div>${pvEsc(n.progress)}%</td>`   /* 续241：面板里也要有进度条，不只一个百分比 */

@@ -4481,6 +4481,37 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，288 组；日志时间戳 14:08:56→14:17:37＝8 分 41 秒），日志 `logs/_smoke279.log`；`[172]` / `[266]` / `[281]` 全绿（含两组变异证伪）
 - [x] C2 记忆同步：CHANGELOG 续279 + todo 续279 + AGENTS §5 续266 那条补续279。
 
+## 续281（2026-10-26，TRAE · DeepSeek）：子任务 24-a 显示编号 + 统计口径对齐详情页签 + FOFA 域名解析修复
+
+主理人 2026-10-26：「这个 80 的任务号不该开，79-a 不就对了吗？以及子任务的子域名站点、拓展域名显示有问题：子域名 2 个，站点 16 个？」
+
+- [x] T1【任务编号】任务列表 / 仪表盘 / 任务详情标题与父子引用改用 24-a 派生编号（子任务显示 79-a）；
+      新增 `_tree_seg()`（段规则唯一产地）与 `_task_tree_labels()`（沿 parent_id 找全局树根 + 兄弟 id 排序 +
+      脏 parent_id 成环保护），`api_task_subtree` 复用同一段规则；真实 ID 只留在链接与 tooltip，
+      数据库主键 / 路由 / 导出文件名一条不动。
+- [x] T2【统计口径】`db.task_counts()` / `task_counts_bulk()` 新增展示键 `site_hosts` /
+      `subs_own_live` / `subs_own_all` / `subs_ext_live` / `subs_ext_all`（已解析 + 按 domain 去重；
+      拓展排除已归属本项目的域名，`subs_ext_all` 与拓展页「全部（N）」同按入库条数）；任务列表
+      「统计」列改成「站点 16（8 主机）/ 子域名 2（全 3）/ 拓展 5（全 6）」，详情页签徽标与
+      子任务预览面板同一口径；旧键 `subs_own` / `subs_ext` 保留（[8br] 钉分档）。
+- [x] T3【站点 vs 子域名解释】详情页站点页签明写「N 条 URL = M 个主机（不同协议/端口各一条）」，
+      三个页签徽标补 title 口径说明；拓展页「全部（N）」与徽标的差异加可见说明。
+- [x] T4【FOFA 垃圾域名】`scanner/fofa.py` 新增 `_host_part()` / `domain_of(asset, prefer=…)`
+      （urlparse 兼容 scheme/端口/裸域名，形态判据复用 `utils.is_domain`）；`osint._domain_of` 改为委托，
+      `subdomain._fofa_subdomains` 改用 `prefer="host"` —— `https://a.test` 不再被切成 `https` 入库。
+- [x] T5【历史数据】先备份 `data/scanner.db`（`scanner.db.bak-20261026_134352`），再删除 9 条
+      `domain='https' AND source='osint:fofa'` 的无效行（源 bug 已修）。
+- [x] C1 验证：`py_compile` 全通过；`tests/smoke.py --only 284`、`--only 2c,243`、`--only 8as` 通过；
+      Flask test client 渲染 `/tasks`、`/`、`/tasks/79`、`/tasks/80` 均 200，列表显示 `79-a` 与
+      `站点 16（8 主机）/ 子域名 2（全 3）/ 拓展 5（全 6）`，与详情页签一致；GUI 已重启生效；
+      全量门禁 **SMOKE PASS**（rc=0，310 条组行，日志 `logs/_smoke281c.log`；[264] 页签解析随
+      title 属性放宽后按原夹具复算 默认 1 / `?all=1` 2）。
+- [x] C2 记忆同步：CHANGELOG 续281 + todo 续281 + AGENTS 补「24-a 编号段规则 / 全局显示编号」两个唯一产地。
+
+下一轮（续282）：
+- [ ] 详情页其余 8 个页签要不要 live 化（续280 挂账；需要"按当前筛选口径重算"的接口）
+- [ ] AGENTS.md 其余段落逐条比对代码与配置（续280 挂账）
+
 ## 续280（2026-10-25，WorkBuddy · CodeBuddy）：前端数字 live 化 + 生产缺陷六条 + 反复提的问题复核
 
 - [x] T1 主理人点单「数字显示经常要我刷新才显示」：状态轮询 opt-in 回计数（`/api/tasks/status?ids=&counts=1`

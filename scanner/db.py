@@ -351,7 +351,7 @@ CREATE TABLE IF NOT EXISTS login_fails (
 );
 CREATE INDEX IF NOT EXISTS idx_login_fails_at ON login_fails(at);
 -- 续116：资产表补 `task_id` 索引。按任务过滤是**每一条**读取路径的公共条件（任务详情页的
--- 10 个页签、跨任务资产页、`task_counts_bulk` 的 8 条 GROUP BY、`delete_task` 的批量删、
+-- 10 个页签、跨任务资产页、`task_counts_bulk` 的 10 条 GROUP BY、`delete_task` 的批量删、
 -- 去重用的 `drop_existing`），而此前全库只有 audit_log / login_fails 两张表有索引 ——
 -- 于是每条查询都是 SCAN 整表 + TEMP B-TREE 排序。实测（30000 行的 dirs 表）：
 -- COUNT 形态 20 次 71 ms → 5 ms，详情页签的分页形态 34 ms → 9 ms。
@@ -1217,6 +1217,33 @@ def task_counts(task_id):
                           + OWN_SUBDOMAIN_WHERE),
         "subs_ext": count("SELECT COUNT(*) c FROM subdomains WHERE task_id=? AND "
                           + EXT_SUBDOMAIN_WHERE),
+        # 续281（主理人点单「子域名 2 个、站点 16 个？」）：列表「统计」列与详情页签
+        # 必须报**同一个口径**，否则同一个任务在两个页面各显示一套数，看着就像其中一个错了。
+        # - `site_hosts`：站点按 URL 行计数（http/https 各一条），括号里报去重主机数；
+        # - `*_live`：已解析（`RESOLVED_WHERE`）+ 按 domain 去重 —— 与 `page_assets(dedupe_domain=True)`
+        #   的页签徽标一致；
+        # - `*_all`：`subs_own_all` 是入库**域名数**（含未解析）；`subs_ext_all` 是入库**条数**
+        #   （与拓展页「全部（N）」逐字一致：含未解析、同域多来源各算一条，另排除已归属本项目的行）。
+        # 旧键 `subs_own` / `subs_ext`（原始行数）保留：门禁 [8br] 钉的是"分档不漏一条"，
+        # 与展示口径是两件事，不能互相顶掉。
+        "site_hosts": count("SELECT COUNT(DISTINCT CASE WHEN TRIM(COALESCE(host,''))<>'' "
+                            "THEN host END) c FROM sites WHERE task_id=?"),
+        "subs_own_live": count(
+            "SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE task_id=? AND "
+            + OWN_SUBDOMAIN_WHERE + " AND " + RESOLVED_WHERE),
+        "subs_own_all": count(
+            "SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE task_id=? AND "
+            + OWN_SUBDOMAIN_WHERE),
+        "subs_ext_live": count(
+            "SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE task_id=? AND "
+            + EXT_SUBDOMAIN_WHERE + " AND " + RESOLVED_WHERE
+            + " AND domain NOT IN (SELECT o.domain FROM subdomains o "
+            "WHERE o.task_id=subdomains.task_id AND " + OWN_SUBDOMAIN_WHERE + ")"),
+        "subs_ext_all": count(
+            "SELECT COUNT(*) c FROM subdomains WHERE task_id=? AND "
+            + EXT_SUBDOMAIN_WHERE
+            + " AND domain NOT IN (SELECT o.domain FROM subdomains o "
+            "WHERE o.task_id=subdomains.task_id AND " + OWN_SUBDOMAIN_WHERE + ")"),
     }
 
 
@@ -1224,13 +1251,16 @@ def task_counts_bulk(task_ids):
     """**一次**算出多个任务的资产计数，返回 `{task_id: {表: 计数}}`（续91）。
 
     为什么需要：任务列表页原来是 `{t["id"]: task_counts(t["id"]) for t in rows}` ——
-    而 `task_counts()` 内部跑 **9 条 COUNT**，于是**一页 100 个任务 = 900 次查询**（典型 N+1）。
-    这里改成"每张表一条 `GROUP BY task_id`"（7 条）+ 子域名分档一条 = **8 条**，与页大小无关。
+    而 `task_counts()` 内部跑 **14 条 COUNT**，于是**一页 100 个任务 = 1400 次查询**（典型 N+1）。
+    这里改成"每张表一条 `GROUP BY task_id`"（7 条）+ 子域名分档一条 + 站点主机数一条
+    + 展示口径一条 = **10 条**，与页大小无关。
     返回的字典**预置全部 key 为 0**（没有资产的任务也在里面），调用方不必再兜空。
     """
     ids = [int(t) for t in (task_ids or [])]
     blank = {"sites": 0, "subdomains": 0, "ports": 0, "csegs": 0,
-             "certs": 0, "dirs": 0, "vulns": 0, "subs_own": 0, "subs_ext": 0}
+             "certs": 0, "dirs": 0, "vulns": 0, "subs_own": 0, "subs_ext": 0,
+             "site_hosts": 0, "subs_own_live": 0, "subs_own_all": 0,
+             "subs_ext_live": 0, "subs_ext_all": 0}
     # 表名清单与 `blank` 分开：分档两个键不是表，混进循环就会去 `FROM subs_own`。
     _tbl = ("sites", "subdomains", "ports", "csegs", "certs", "dirs", "vulns")
     out = {i: dict(blank) for i in ids}
@@ -1250,6 +1280,39 @@ def task_counts_bulk(task_ids):
         if row["t"] in out:
             out[row["t"]]["subs_own"] = int(row["own"] or 0)
             out[row["t"]]["subs_ext"] = int(row["ext"] or 0)
+    # 站点去重主机数（续281：站点按 URL 行计，http/https 各一条 —— 页面要能解释"2 个子域名
+    # 为什么 16 个站点"，所以括号里报主机数）。
+    for row in _query(
+            "SELECT task_id t, COUNT(DISTINCT CASE WHEN TRIM(COALESCE(host,''))<>'' "
+            f"THEN host END) c FROM sites WHERE task_id IN ({marks}) GROUP BY task_id",
+            tuple(ids)):
+        if row["t"] in out:
+            out[row["t"]]["site_hosts"] = int(row["c"] or 0)
+    # 展示口径（续281）：与任务详情页签同源 —— 已解析 + 按 domain 去重；拓展域名另排除
+    # 已归属本项目的域名（`OVERLAP_EXT_WHERE` 的等价条件）。
+    # `own_rows` 先取"本项目 own 域名集合"，再在 CASE 里 NOT EXISTS —— 不把
+    # `OWN_SUBDOMAIN_WHERE` 的 LIKE 判据在别处重抄一遍。
+    for row in _query(
+            "WITH s AS (SELECT task_id, domain, ip, source FROM subdomains "
+            f"WHERE task_id IN ({marks})), "
+            "own_rows AS (SELECT DISTINCT task_id, domain FROM s WHERE "
+            + OWN_SUBDOMAIN_WHERE + ") "
+            "SELECT s.task_id t, "
+            "COUNT(DISTINCT CASE WHEN " + OWN_SUBDOMAIN_WHERE + " THEN s.domain END) own_all, "
+            "COUNT(DISTINCT CASE WHEN " + OWN_SUBDOMAIN_WHERE + " AND " + RESOLVED_WHERE
+            + " THEN s.domain END) own_live, "
+            "COUNT(CASE WHEN " + EXT_SUBDOMAIN_WHERE
+            + " AND NOT EXISTS (SELECT 1 FROM own_rows o "
+            "WHERE o.task_id=s.task_id AND o.domain=s.domain) THEN 1 END) ext_all, "
+            "COUNT(DISTINCT CASE WHEN " + EXT_SUBDOMAIN_WHERE + " AND " + RESOLVED_WHERE
+            + " AND NOT EXISTS (SELECT 1 FROM own_rows o "
+            "WHERE o.task_id=s.task_id AND o.domain=s.domain) THEN s.domain END) ext_live "
+            "FROM s GROUP BY s.task_id", tuple(ids)):
+        if row["t"] in out:
+            out[row["t"]]["subs_own_all"] = int(row["own_all"] or 0)
+            out[row["t"]]["subs_own_live"] = int(row["own_live"] or 0)
+            out[row["t"]]["subs_ext_all"] = int(row["ext_all"] or 0)
+            out[row["t"]]["subs_ext_live"] = int(row["ext_live"] or 0)
     return out
 
 

@@ -724,6 +724,62 @@ def _fold_site_rows(rows, keep_merged=False):
             out.append(r)
     return out, {"hidden": hidden, "merged": merged}
 
+
+def _tree_seg(index, depth):
+    """24-a 编号的一段（唯一产地）：第 1 层用字母 a/b/c…，更深层用序号 1/2/3…。"""
+    if depth <= 1:
+        return chr(ord("a") + index - 1) if index <= 26 else str(index)
+    return str(index)
+
+
+def _task_tree_labels(ids):
+    """把任务 ID 换成 **24-a 显示编号**（续281，主理人点单「80 的任务号不该开，79-a 才对」）。
+
+    规则：沿 `parent_id` 找到整棵树的根，根显示自己的 ID；根的直接子任务按兄弟
+    `id` 升序编号 a/b/c…，更深层用 1/2/3…（与 `api_task_subtree` 的规则同一份
+    `_tree_seg`，只是那里以"点开的那一行"为根、这里以全局树根为根）。
+
+    返回 `{请求的 id: 显示编号}`；不属于任何树（被删 / 脏 parent_id）的 id 原样回落。
+    任务 ID 仍出现在链接与 tooltip 里 —— 只改**显示**，数据库主键与路由一条不动。
+    """
+    # 脏 options（如 `rescan_of: "abc"`）不许把整页 500：解析不了的一律不参与编号。
+    want = []
+    for i in (ids or []):
+        try:
+            if i:
+                want.append(int(i))
+        except (TypeError, ValueError):
+            continue
+    if not want:
+        return {}
+    rows = db._query("SELECT id, parent_id FROM tasks ORDER BY id")
+    parent = {int(r["id"]): int(r["parent_id"] or 0) for r in rows}
+    children = {}
+    for tid, pid in parent.items():
+        children.setdefault(pid, []).append(tid)
+    labels, roots = {}, set()
+    for tid in want:
+        cur, seen = tid, set()
+        while cur in parent and parent[cur] and cur not in seen:
+            seen.add(cur)
+            cur = parent[cur]
+        if cur in parent:
+            roots.add(cur)
+
+    def walk(pid, prefix, depth, seen):
+        for i, cid in enumerate(children.get(pid, []), 1):
+            if cid in seen:        # 脏 parent_id 成环时不许无限递归
+                continue
+            lbl = f"{prefix}-{_tree_seg(i, depth)}"
+            labels[cid] = lbl
+            walk(cid, lbl, depth + 1, seen | {cid})
+
+    for root in sorted(roots):
+        labels[root] = str(root)
+        walk(root, str(root), 1, {root})
+    return {tid: labels.get(tid, str(tid)) for tid in want}
+
+
 def _dir_url(site_url, path):
     """目录命中的**可点开链接**（续151，用户点单「目录结果要能像超链接一样点开」）。
 
@@ -1437,7 +1493,7 @@ def create_app():
         """续280：这次状态轮询要不要**顺带**回资产计数（`?counts=1`）。
 
         为什么是 opt-in：状态轮询是**每 2.5 秒一次**的高频请求，而 `task_counts_bulk`
-        每批都要跑 8 条 GROUP BY —— 不opt-in 就等于给每个只看进度的人白加一份数据库活。
+        每批都要跑 10 条 GROUP BY —— 不opt-in 就等于给每个只看进度的人白加一份数据库活。
         只有"页面上真有数字要更新"的那两处（任务列表「统计」列、详情页 10 个页签徽标）
         才带这个参数。
         """
@@ -1954,9 +2010,16 @@ def create_app():
     @app.route("/")
     @login_required
     def dashboard():
+        _recent = _list_tasks(limit=8)
+        _trend = _vuln_trend()
+        # 续281：与任务列表同一份 24-a 显示编号（最近任务 + 趋势表里的任务一起算，
+        # 免得子任务在仪表盘的两张表里一个显示 79-a、一个显示 #80）
+        _label_ids = ([t["id"] for t in _recent]
+                      + [r["task_id"] for r in (_trend.get("recent") or [])])
         return render_template(
-            "dashboard.html", stats=_dashboard_stats(), trend=_vuln_trend(),
-            tasks=_list_tasks(limit=8), vulns=_list_vulns(limit=8))
+            "dashboard.html", stats=_dashboard_stats(), trend=_trend,
+            tasks=_recent, vulns=_list_vulns(limit=8),
+            task_labels=_task_tree_labels(_label_ids))
 
     # ---------- 任务 ----------
 
@@ -2102,6 +2165,9 @@ def create_app():
         qpos = {t["id"]: db.queued_position(t["id"])
                 for t in rows if t["status"] == "queued"}
         return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER, cause_zh=CAUSE_ZH,
+                               # 续281：子任务在列表里显示 24-a 派生编号（79-a），不是新号 80。
+                               # 真实 ID 仍留在链接与 tooltip 里，路由/主键一条不动。
+                               task_labels=_task_tree_labels([t["id"] for t in rows]),
                                counts=counts, durations=durations, qworkers=qworkers,
                                running=set(runner.running_task_ids()), qpos=qpos,
                                pager=pager, page_sizes=PAGE_SIZES, q=q,
@@ -2424,6 +2490,12 @@ def create_app():
         # 会写明"另有 M 条被收起" —— 两个数字对得上账，不会看着像丢了资产。
         _st_hidden, site_total = _site_status_extra("sites", hide_st, sites_pager["total"],
                                                     sites_q, "task_id=?", (task_id,), order="id")
+        # 续281：站点按 URL 行计（http/https 各一条），页签徽标旁边要能说清"这些行其实
+        # 是几个主机" —— 否则「子域名 2 个、站点 16 个」看着像其中一个数错了。
+        _sh_row = db._query(
+            "SELECT COUNT(DISTINCT CASE WHEN TRIM(COALESCE(host,''))<>'' THEN host END) c "
+            "FROM sites WHERE task_id=?", (task_id,), one=True)
+        site_hosts = int((_sh_row["c"] if _sh_row else 0) or 0)
         _allst_state(sites_pager, hide_st, _st_hidden)
         # 续224：技术栈来源统计（全任务，轻量两列）；页面那句"多少站内置识别/只靠 JS"
         # 与报告共用 `fingerprint.tech_stats()`，别在模板里再算一遍。
@@ -2581,6 +2653,11 @@ def create_app():
             resume_rest=resume_rest,
             sites=sites,
             sites_merged=sites_merged,
+            site_hosts=site_hosts,
+            # 续281：本页标题 / 父任务回跳 / 子任务清单统一走 24-a 显示编号（子任务显示 79-a）
+            task_labels=_task_tree_labels(
+                [task_id, task.get("parent_id") or 0, top.get("rescan_of") or 0]
+                + [int(c["id"]) for c in db.list_child_tasks(task_id)]),
             parent_task=_parent_task,
             tech_stats=_tech_stats,
             tech_stats_text=fingerprint.tech_stats_text(_tech_stats),
@@ -2856,7 +2933,7 @@ def create_app():
         }
         # 续280：opt-in 资产计数（`?counts=1`）—— 详情页页签上那 10 个数字原先只在整页
         # 渲染时算一次，任务跑十分钟就十分钟是旧数（主理人：「数字显示经常要我刷新才显示」）。
-        # 默认**不带**（轮询每 2 秒一次，白算 8 条 GROUP BY 没必要），只有明确要的那一处
+        # 默认**不带**（轮询每 2 秒一次，白算 10 条 GROUP BY 没必要），只有明确要的那一处
         # （详情页页签）才带。
         if _want_counts():
             out["counts"] = db.task_counts_bulk([int(task_id)]).get(int(task_id)) or {}
@@ -2876,7 +2953,7 @@ def create_app():
 
         续280：`?counts=1` 时顺带回资产计数（任务列表「统计」列 live 化用）。同样是 opt-in ——
         不带的那一档（只看进度）与续93 逐字一致，不必为"数字能刷新"给所有人加数据库活。
-        注：计数走 `task_counts_bulk`（**一次** 8 条 GROUP BY，与页大小无关），
+        注：计数走 `task_counts_bulk`（**一次** 10 条 GROUP BY，与页大小无关），
         不是逐任务 `task_counts()`（那是 N+1，续91 专门消灭过的形状）。
         """
         raw = (request.args.get("ids") or "").strip()
@@ -4728,8 +4805,8 @@ def create_app():
             nonlocal total
             for i, ch in enumerate(db.list_child_tasks(pid), 1):
                 # 24-a 规则：根任务的**直接**子任务用字母 a/b/c…；更深层用序号 1/2/3…
-                # （与 mock 一致：孙任务显示 a-1/a-2，不是 a-a）
-                sub = (chr(ord("a") + i - 1) if i <= 26 else str(i)) if depth <= 1 else str(i)
+                # （与 mock 一致：孙任务显示 a-1/a-2，不是 a-a）。规则只此一处 `_tree_seg`。
+                sub = _tree_seg(i, depth)
                 p = path + [sub]
                 cid = int(ch["id"])
                 full = db.get_task(cid) or ch

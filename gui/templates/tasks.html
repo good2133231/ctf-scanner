@@ -173,7 +173,11 @@
           data-targets="{{ t.targets|replace('\n', ' ')|e }}" data-status="{{ t.status }}"
           data-stages="{{ t.stages }}">
         <td class="pick"><input type="checkbox" class="pick-row" value="{{ t.id }}"></td>
-        <td><a href="{{ url_for('task_detail', task_id=t.id) }}">{{ t.id }}</a></td>
+        {# 续281（主理人点单「80 的任务号不该开，79-a 才对」）：子任务按 24-a 派生编号显示，
+           真实 ID 只留在链接与 tooltip 里 —— 数据库主键 / 路由 / 导出文件名一条不动。 #}
+        {% set _lbl = task_labels.get(t.id, t.id) %}
+        <td><a href="{{ url_for('task_detail', task_id=t.id) }}"
+               title="任务 #{{ t.id }}{% if _lbl|string != t.id|string %}（显示编号 {{ _lbl }}）{% endif %}">{{ _lbl }}</a></td>
         <td>{% if t.parent_id %}<span class="muted small">└ </span>{% endif %}{{ t.name }}
           {% if t.parent_id %}<a class="badge" href="{{ url_for('task_detail', task_id=t.parent_id) }}"
             title="续185：这是任务 #{{ t.parent_id }} 的子任务（拓展域名送去探测发起）">子任务 · 父 #{{ t.parent_id }}</a>{% endif %}
@@ -192,15 +196,26 @@
         <td class="muted small">{{ (t.targets.splitlines() | first) or '-' }}
           {% if t.targets.splitlines() | length > 1 %}<span class="muted">（共 {{ t.targets.splitlines()|length }} 条）</span>{% endif %}
         </td>
-        {# 续280（主理人点单「数字显示经常要我刷新才显示」）：这四个数字原来是**整页渲染时**
+        {# 续280（主理人点单「数字显示经常要我刷新才显示」）：这些数字原来是**整页渲染时**
             算一次，任务跑十分钟就十分钟是旧数（页面只在"本页任务全跑完"时才 reload 一次）。
-            现在把每个数字拆成 `<span data-c="…">`，轮询拿到新计数后**定点替换**这四个 span
+            现在把每个数字拆成 `<span data-c="…">`，轮询拿到新计数后**定点替换**这些 span
             —— 不动整行、不 reload、不打断正在输筛选框的人。
-            键名与 `db.task_counts_bulk` 一致（`sites` / `subs_own` / `vulns` / `subs_ext`），
-            JS 侧不另立一套命名（抄一份就会与计数口径漂移）。
-            子域名/拓展仍走**两档**口径（`subs_own` / `subs_ext`，续160）：
-            混着打 `subdomains` 总行数会让"拓展出来的也算成自家资产"。 #}
-        <td class="muted small" data-counts="1">站点: <span data-c="sites">{{ counts[t.id].sites }}</span><br>子域名: <span data-c="subs_own">{{ counts[t.id].subs_own }}</span><br>漏洞: <span data-c="vulns">{{ counts[t.id].vulns }}</span><br>拓展: <span data-c="subs_ext">{{ counts[t.id].subs_ext }}</span></td>
+            键名与 `db.task_counts_bulk` 一致，JS 侧不另立一套命名（抄一份就会与计数口径漂移）。
+            续281：列表必须与任务详情页签**同一个口径** —— 站点按 URL 行计（括号报主机数），
+            子域名/拓展报"已解析 + 按域名去重"的可见数（括号报全量入库域名数）。
+            旧的两档键 `subs_own` / `subs_ext`（原始行数）仍由 `task_counts` 提供，
+            但**不上屏**：它们含未解析碎片，与页签数字对不上，正是主理人报的"显示有问题"。 #}
+        <td class="muted small" data-counts="1">
+          站点: <span data-c="sites">{{ counts[t.id].sites }}</span><span
+            title="站点按 URL 行计数：同一主机的不同协议/端口各一条；括号内是去重主机数">（<span
+            data-c="site_hosts">{{ counts[t.id].site_hosts }}</span> 主机）</span><br>
+          子域名: <span data-c="subs_own_live">{{ counts[t.id].subs_own_live }}</span><span
+            title="前一个数＝已解析并按域名去重（与详情页签一致）；括号内是入库域名数（含未解析）">（全 <span
+            data-c="subs_own_all">{{ counts[t.id].subs_own_all }}</span>）</span><br>
+          漏洞: <span data-c="vulns">{{ counts[t.id].vulns }}</span><br>
+          拓展: <span data-c="subs_ext_live">{{ counts[t.id].subs_ext_live }}</span><span
+            title="前一个数＝已解析、按域名去重、并排除已归属本项目的域名（与详情页签一致）；括号内是全量入库条数（含未解析，同域多来源各一条）">（全 <span
+            data-c="subs_ext_all">{{ counts[t.id].subs_ext_all }}</span>）</span></td>
 
         {# 续200：阶段改**预览框**（原先是点一下在行内展开一串文字，把表格撑开）；
            与「子任务」「统计」同一套 pv-overlay，内容从 `/api/tasks/<id>/stages` 取，

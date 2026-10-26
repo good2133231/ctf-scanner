@@ -3,6 +3,58 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续281（2026-10-26，TRAE · DeepSeek）：子任务 24-a 显示编号 + 统计口径对齐详情页签 + FOFA 域名解析修复
+
+### 背景 / 判断依据
+
+主理人 2026-10-26：「这个 80 的任务号不该开，79-a 不就对了吗？以及子任务的子域名站点、拓展域名显示有问题：子域名 2 个，站点 16 个？」
+
+- 任务列表 # 列显示数据库 ID（#80），而「子任务」面板已是 24-a（79-a）—— 同一任务两套编号；
+- 列表「统计」列用原始入库行数（子域名 3 / 拓展 7，含未解析），详情页签用「已解析 + 按域名去重」
+  （子域名 2 / 拓展 5）—— 同一任务两套数；
+- 「站点」按 URL 行计（同一主机 http/https 各一条），与「子域名」的域名口径不同，页面上没有解释；
+- `subdomain._fofa_subdomains` 用 `host.split(":", 1)[0]` 取域名，`https://a.test` 会被切成 `https`
+  写进库（真库实测 9 条 `domain='https'`、来源 `osint:fofa`）。
+
+### 变更
+
+- `gui/app.py`：
+  - 新增 `_tree_seg()`（24-a 段规则唯一产地）与 `_task_tree_labels()`（沿 parent_id 找树根 + 兄弟 id 排序，
+    返回 `{id: 显示编号}`，带脏 parent_id 成环保护）；
+  - 任务列表 / 仪表盘 / 任务详情（标题、父任务回跳、子任务清单）改用派生编号；真实 ID 仍在链接与
+    tooltip 里，数据库主键、路由、导出文件名一条不动；
+  - `api_task_subtree` 改用 `_tree_seg()`，不再手写第二份编号规则；
+  - 详情页新增 `site_hosts`（站点 URL 行对应的去重主机数）与 `task_labels` 渲染上下文。
+- `scanner/db.py`：`task_counts()` / `task_counts_bulk()` 新增展示口径键
+  `site_hosts` / `subs_own_live` / `subs_own_all` / `subs_ext_live` / `subs_ext_all`
+  （已解析 + 按 domain 去重；拓展另排除已归属本项目的域名，`subs_ext_all` 与拓展页「全部（N）」
+  一样按入库条数计）。旧键 `subs_own` / `subs_ext`
+  （原始分档）保留 —— [8br] 钉的是"分档不漏一条"，与展示口径是两件事。
+- `gui/templates/tasks.html`：统计列改为「站点 16（8 主机）」「子域名 2（全 3）」「拓展 5（全 6）」
+  并给每个数加 `data-c` 锚点（live 轮询继续定点替换）；# 列改 24-a 编号。
+- `gui/templates/dashboard.html` / `task_detail.html`：同一份编号；详情页三个页签徽标加 title 口径说明，
+  站点页签明写「N 条 URL = M 个主机（http/https 各一条）」，「全部（N）」与徽标的差异加可见说明。
+- `gui/static/app.js`：子任务预览面板统计改用同一套展示口径。
+- `scanner/fofa.py`：新增 `_host_part()` / `domain_of(asset, prefer=…)`（urlparse 兼容 scheme/端口/裸域名，
+  复用 `utils.is_domain`）；`scanner/stages/osint.py::_domain_of` 改为委托；
+  `scanner/stages/subdomain.py` 改用 `domain_of(prefer="host")`，后续 FOFA 结果不再产生 `https`
+  之类的非域名行。
+- 历史数据：先备份 `data/scanner.db`（`scanner.db.bak-20261026_134352`），再删除 9 条
+  `domain='https' AND source='osint:fofa'` 的无效行。
+
+### 验证
+
+- `py_compile`：`gui/app.py` / `scanner/db.py` / `scanner/fofa.py` / `scanner/stages/{osint,subdomain}.py`
+  / `tests/smoke.py` 全通过。
+- `tests/smoke.py --only 284`：**通过**（新增断言：子任务在任务列表显示 `<父>-a`、真实 ID 的链接未被改）；
+- `tests/smoke.py --only 2c,243`：**通过**（[243] 夹具加入 `https://web.aaa.test`，断言取到
+  `web.aaa.test` 且结果里没有 `https`）。
+- Flask test client 真实渲染：`/tasks`、`/`、`/tasks/79`、`/tasks/80` 均 200；列表 # 列显示 `79-a`，
+  统计列显示 `站点 16（8 主机）/ 子域名 2（全 3）/ 拓展 5（全 6）`，与详情页签徽标一致。
+- 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，310 条组行；日志 `logs/_smoke281c.log`）。
+  首轮只红在 `[264]` 的页签解析正则（页签 div 补了 title 属性后 `data-tab="ext">` 不再紧邻 `>`）——
+  已放宽为 `data-tab="ext"[^>]*>`，并按原夹具复算徽标 默认 1 / `?all=1` 2。
+
 ## 续280（2026-10-25，WorkBuddy · CodeBuddy）：前端数字 live 化 + 生产缺陷六条 + 反复提的问题复核
 
 ### 背景 / 判断依据

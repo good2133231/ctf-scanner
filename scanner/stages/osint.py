@@ -29,7 +29,7 @@
 """
 import json
 import re
-from urllib.parse import urlparse
+
 
 from .base import Stage
 from .. import blacklist, db, extdom, iprecon, jsmine, targets
@@ -40,7 +40,7 @@ from .. import virustotal as vt_mod
 from .. import ctlog as ctlog_mod
 from .. import keystore
 from ..fingerprint import favicon_hash
-from ..utils import is_domain, pool_run, resolve_host, to_ascii
+from ..utils import pool_run, resolve_host
 
 # ---------- FOFA 标题反查的相关性过滤 ----------
 
@@ -717,20 +717,11 @@ def _title_relevant(title, domain, mode="label"):
 def _domain_of(asset):
     """从 FOFA 资产行里取**域名**；取不到、或是裸 IP 就返回空串。
 
-    实测（2026-09-22 真实查询）FOFA 的结果里**大量行的 `domain` 是空的**，
-    只有 `host`（如 `https://116.63.154.0` / `47.117.144.116:1000`）。原实现直接
-    `a["domain"] or hostname`，于是把**裸 IP 当成域名**写进了 `subdomains` 表 ——
-    那会让「子域名资产」里混进一堆 IP，也会被后续 dirscan/vulnscan 当域名去处理。
-    这里统一收口：只有真的像域名（含点、非 IP）才返回。
+    续281：判据与解析全部收口到 `scanner/fofa.py::domain_of()` —— subdomain 阶段
+    此前自己用 `host.split(":", 1)[0]`，把 `https://a.test` 切成了 `"https"` 写进库
+    （多个任务里的 `domain='https'` 就是这条）。这里只保留原函数名给本模块调用点用。
     """
-    raw = str(asset.get("domain") or "").strip().lower().strip(".")
-    if not raw:
-        raw = (urlparse(str(asset.get("host") or "")).hostname or "").strip(".")
-    # 统一走 `utils.to_ascii()` + `utils.is_domain()`：前者把 IDN/中文域名归一成 ASCII(punycode)，后者把"裸 IP / 带端口 / 带路径 / 通配符"全部挡掉，
-    # 比这里各写一份判断更可靠（用户要求"简单判断是不是域名"）。
-    # 归一失败（None）按空串丢弃（显式不静默），保证"全程 punycode 入库"的不变量。
-    a = to_ascii(raw)
-    return a if (a and is_domain(a)) else ""
+    return fofa_mod.domain_of(asset)
 
 
 def _tally(items):

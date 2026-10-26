@@ -30418,7 +30418,10 @@ expression: r0()
 
     def _sq243(q, st, logger=None, size=None):
         _calls243.append((q, size))
-        return ([{"host": "www.aaa.test:443"}, {"host": "api.aaa.test"}]
+        # 续281：带 scheme 的 host 曾把 `https` 当域名写进库（真实事故 domain='https'）——
+        # 夹具里必须有一条 `https://web.aaa.test`，证明现在按主机名解析。
+        return ([{"host": "https://web.aaa.test"}, {"host": "www.aaa.test:443"},
+                 {"host": "api.aaa.test"}]
                 + [{"host": f"h{i}.aaa.test"} for i in range(200)]), 999, ""
 
     _fm243.search_query = _sq243
@@ -30428,7 +30431,9 @@ expression: r0()
         assert len(_calls243) == 1, "两个输入同一注册域 ⇒ 只该查一次"
         assert len(_o243) == 100, "单域上限必须本地也截断（不能只信上游 size 参数）"
         assert all(src == "osint:fofa" for _h, src in _o243)
-        assert "www.aaa.test" not in dict(_o243) or True       # host 去端口
+        assert "www.aaa.test" in dict(_o243), "host 带端口没去掉端口"
+        assert "web.aaa.test" in dict(_o243), "https:// 形态没取到主机名"
+        assert "https" not in dict(_o243), "scheme 被当成域名写进库（续281 的 bug 复现）"
         _s243 = dict(settings); _s243["fofa"] = dict(settings.get("fofa") or {})
         _s243["fofa"]["subdomain_enabled"] = False
         assert _ffs243(["aaa.test"], _s243) == [], "开关关了还查"
@@ -31352,7 +31357,8 @@ expression: r0()
     _ha264 = _c264.get(f"/tasks/{_tid264}?all=1").get_data(as_text=True)
 
     def _ext_badge(h):
-        m = _re264.search(r'data-tab="ext">\s*拓展域名\s*<span class="cnt">(\d+)</span>', h)
+        # 续281：页签 div 补了 title 口径说明 ⇒ data-tab 之后可能还有其它属性，不能再钉死 `>`
+        m = _re264.search(r'data-tab="ext"[^>]*>\s*拓展域名\s*<span class="cnt">(\d+)</span>', h)
         return int(m.group(1)) if m else -1
 
     assert _ext_badge(_h264) == 1, \
@@ -32109,7 +32115,7 @@ expression: r0()
     # ---------------- [284] 续280-A：前端数字 live 化（主理人「数字显示经常要我刷新才显示」）----------------
     # 口径：状态轮询**顺带**回资产计数（opt-in `counts=1`），前端**定点替换**那几个数字 ——
     # 不 reload、不重渲染整行（重渲染会顶掉勾选框与「子任务 · 父 #N」徽章）。三条边界：
-    #   ① 不带参数时与续93 **逐字一致**（不给只看进度的人加 8 条 GROUP BY）；
+    #   ① 不带参数时与续93 **逐字一致**（不给只看进度的人加 10 条 GROUP BY）；
     #   ② 计数字典必须与 `db.task_counts` 逐字一致（不能为了"能刷新"顺手改口径）；
     #   ③ **折叠/去重/筛选后**的页签一律不许挂 `data-cnt` —— 拿未过滤的表行数盖上去就是
     #      "列表 3 行、徽标写 120"，比不刷新更误导。
@@ -32148,9 +32154,12 @@ expression: r0()
     _r3_284 = _c284.get(f"/api/tasks/{_tk284}/status").get_json()
     assert "counts" not in _r3_284 and "log_tail" in _r3_284, "默认档与续93 逐字一致（仍带日志尾）"
 
-    # ③ 任务列表「统计」列：四个数字各有可定点替换的锚点；键名＝`task_counts` 的键
+    # ③ 任务列表「统计」列：每个数字各有可定点替换的锚点；键名＝`task_counts` 的键
+    # 续281：上屏改用展示口径（站点 URL 行 + 主机数；子域名/拓展 已解析去重 + 全量），
+    # 旧键 `subs_own` / `subs_ext` 仍由 `task_counts` 提供（[8br] 钉分档），但不再上屏。
     _h284 = _c284.get("/tasks").get_data(as_text=True)
-    for _k284 in ("sites", "subs_own", "vulns", "subs_ext"):
+    for _k284 in ("sites", "site_hosts", "subs_own_live", "subs_own_all",
+                  "vulns", "subs_ext_live", "subs_ext_all"):
         assert f'data-c="{_k284}"' in _h284, f"任务列表「统计」列缺 {_k284} 的可更新锚点"
     assert 'data-counts="1"' in _h284, "「统计」单元格没打标记（JS 靠它定位）"
     _tp284 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8")
@@ -32174,9 +32183,22 @@ expression: r0()
         "漏洞页签带关键字 ⇒ 徽标是筛选后的数，不许 live"
     assert 'data-cnt="sites"' not in _c284.get(f"/tasks/{_tk284}?stq=zzz").get_data(as_text=True), \
         "站点页签带关键字 ⇒ 同上"
+
+    # ⑤ 续281：子任务在列表/仪表盘显示 24-a 派生编号，真实 ID 仍在链接里
+    from gui.app import _task_tree_labels as _lbl281
+    _p281 = db.create_task("续281-parent", "p281.test", [])
+    _k281 = db.create_task("续281-child", "k281.test", [], parent_id=_p281)
+    _lmap281 = _lbl281([_k281])
+    assert _lmap281.get(_k281) == f"{_p281}-a", _lmap281
+    _html281 = _c284.get("/tasks").get_data(as_text=True)
+    assert f">{_p281}-a</a>" in _html281, "任务列表没显示 24-a 编号"
+    assert f'href="/tasks/{_k281}"' in _html281, "真实 ID 的链接被改掉了（只该改显示）"
+    db.delete_task(_k281, backup=False)
+    db.delete_task(_p281, backup=False)
     print("[284] 续280-live ok: 状态轮询 opt-in 回计数（不带参数与续93 逐字一致）｜列表「统计」四格与"
           "详情页 站点/漏洞/端口 三个徽标定点替换（不 reload、不重渲染整行）｜折叠/去重/筛选后的页签"
-          "一律不挂 data-cnt（不许出现「列表 3 行、徽标 120」）")
+          "一律不挂 data-cnt（不许出现「列表 3 行、徽标 120」）｜续281 子任务显示 79-a 派生编号、"
+          "真实 ID 仍留在链接")
 
     # ---------------- [285] 续280-B：生产缺陷六条（路由重复 / 批量重启脏 options / ctx 残留 / 续跑残片 / 空任务行 / max_sites=0）----------------
     import scanner.blacklist as _bl285

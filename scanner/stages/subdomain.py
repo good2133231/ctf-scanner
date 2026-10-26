@@ -144,7 +144,10 @@ def _fofa_subdomains(domains, settings, logger=None):
         # 上限**本地也截一次**：`size` 只是请求参数，FOFA 真多返回时不能把库撑爆
         # （`subdomain_max` 的语义是"单域最多入账多少条"，不能只信上游听话）。
         for a in (assets or [])[:cap]:
-            host = str((a or {}).get("host") or "").split(":", 1)[0].strip().lower()
+            # 续281：取域名统一走 `fofa.domain_of(prefer="host")` —— 旧写法
+            # `host.split(":", 1)[0]` 会把 `https://a.test` 切成 `"https"` 写进库。
+            # `prefer="host"` 保证子域优先（`domain` 列可能只给注册域/空串）。
+            host = fofa_mod.domain_of(a or {}, prefer="host")
             if host and host not in out:
                 out.add(host); n += 1
         if logger:
