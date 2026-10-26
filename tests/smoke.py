@@ -26709,7 +26709,9 @@ expression: r0()
     assert "parent_id" in _kw185, f"送探建任务没挂 parent_id：{_kw185}"
     # (c) 页面：列表页看得出谁是子任务；父子详情页能互跳
     assert _login7(c, _admin_form117()).status_code == 302
-    _h185t = c.get("/tasks?q=smoke-185").get_data(as_text=True)
+    # 续282：列表**默认只看根任务** —— 子任务行要显式 `parent=child` 才在列表上
+    # （默认它只出现在父任务行的「子任务」面板里）。
+    _h185t = c.get("/tasks?parent=child&q=smoke-185").get_data(as_text=True)
     assert "子任务 · 父 #" + str(_p185) in _h185t, "任务列表页看不出层级"
     _h185k = c.get(f"/tasks/{_c185}").get_data(as_text=True)
     assert f'任务 #{_p185}' in _h185k and "子任务" in _h185k, "子任务详情页没写清父任务"
@@ -32190,7 +32192,8 @@ expression: r0()
     _k281 = db.create_task("续281-child", "k281.test", [], parent_id=_p281)
     _lmap281 = _lbl281([_k281])
     assert _lmap281.get(_k281) == f"{_p281}-a", _lmap281
-    _html281 = _c284.get("/tasks").get_data(as_text=True)
+    # 续282：列表默认只看根任务 —— 子任务行（79-a 显示编号所在的那行）要显式 parent=child 才渲染
+    _html281 = _c284.get("/tasks?parent=child").get_data(as_text=True)
     assert f">{_p281}-a</a>" in _html281, "任务列表没显示 24-a 编号"
     assert f'href="/tasks/{_k281}"' in _html281, "真实 ID 的链接被改掉了（只该改显示）"
     db.delete_task(_k281, backup=False)
@@ -32384,6 +32387,75 @@ expression: r0()
           "批量重启遇脏 options 只降级自己、不带走同批任务｜StageContext 失败不留 running 登记｜"
           "续跑收尾钩子拿完整阶段表（不再只跑残片）｜任务行消失不再把流水线打成 AttributeError｜"
           "max_sites=0 = 不限（cert/crawl/screenshot/osint 四处，osint 旧写法是「一条都不算」）")
+    # ---------------- [286] 续282：子任务默认收进父面板 + 数量徽章 + 面板 live 化 ----------------
+    # 主理人 2026-10-26：「这个└ xxx.com · 送探 1 个域名 子任务 · 父 #79 … 不要单独显示出来，
+    # 默认就在子任务里面才有，并且下面子任务要标明一个数量，以及按嵌套的思路
+    # （未来的孙任务也在跑），然后 live 化升级」。
+    # 口径：① /tasks **默认只看根任务**（parent=all 才是显式的"全部含衍生"）；
+    # ② 行徽章「子任务（N）」= **直接**子任务数，唯一产地 `db.child_counts_bulk`；
+    # ③ 面板每个节点带 child_count（孙任务在不在跑逐层看得见），前端 3s live 轮询。
+    _rt286 = db.create_task("smoke-286-root", "http://root286.test/", ["probe"], {})
+    _ct286 = db.create_task("smoke-286-child", "http://child286.test/", ["probe"], {},
+                            parent_id=_rt286)
+    _gt286 = db.create_task("smoke-286-grand", "http://grand286.test/", ["probe"], {},
+                            parent_id=_ct286)
+    # ① child_counts_bulk：与逐个版逐字一致（优化不改口径，同 [91] 的判法）+ 边界
+    _ids286 = [_rt286, _ct286, _gt286]
+    _cc286 = db.child_counts_bulk(_ids286)
+    assert _cc286 == {_rt286: 1, _ct286: 1}, (
+        f"批量版应与逐个版一致（无子任务的任务**不在结果里**，契约 .get(id,0)）：{_cc286}")
+    assert _cc286.get(_gt286, 0) == 0, f"孙任务不该被算进任何人的徽章：{_cc286}"
+    assert db.child_counts_bulk([]) == {} and db.child_counts_bulk(None) == {}, (
+        "空入参 → 空字典（不报错，同 task_counts_bulk 口径）")
+    assert db.child_counts_bulk(["x", "", "3.5"]) == {}, "脏入参不许炸（解析不了的不参与）"
+    # ② 页面：默认档 = 只看根任务，子任务行不再单独显示
+    _q286 = "smoke-286"     # 三个夹具名字里的共同 token：q 命中子孙，才能证明"默认没渲染它"
+    _h_def286 = c.get(f"/tasks?q={_q286}").get_data(as_text=True)
+    _h_ch286 = c.get(f"/tasks?parent=child&q={_q286}").get_data(as_text=True)
+    _h_all286 = c.get(f"/tasks?parent=all&q={_q286}").get_data(as_text=True)
+    assert f'data-id="{_rt286}"' in _h_def286, "默认档连根任务都不显示了？"
+    assert f'data-id="{_ct286}"' not in _h_def286, (
+        "默认档仍单独渲染子任务行（应只收在父任务「子任务」面板里）")
+    assert "子任务 · 父 #" + str(_rt286) not in _h_def286, (
+        "默认档不应出现「子任务 · 父 #N」徽章（那是单独显示子任务行的副产品）")
+    assert f'data-id="{_ct286}"' in _h_ch286 and "子任务 · 父 #" + str(_rt286) in _h_ch286, (
+        "显式 parent=child 要能直看衍生任务（没删这个能力，只是不再默认）")
+    assert f'data-id="{_rt286}"' in _h_all286 and f'data-id="{_ct286}"' in _h_all286, (
+        "显式 parent=all（含衍生）应根+衍生都在（旧的平铺视图保留为显式档）")
+    # ③ 数量徽章：默认档根任务行「子任务（1）」（_ct286 在它名下）
+    assert "子任务（1）" in _h_def286, "「子任务」按钮没标出直接子任务数量"
+    # 变异证伪（§6.1）：数量必须真吃 `child_counts_bulk`（抄了第二份产地 ⇒ 摘掉不变红）
+    _real_ccb286 = db.child_counts_bulk
+    db.child_counts_bulk = lambda ids: {}
+    try:
+        _h_mut286 = c.get(f"/tasks?q={_q286}").get_data(as_text=True)
+        assert "子任务（0）" in _h_mut286, (
+            "徽章数量没走 child_counts_bulk（唯一产地被抄成第二份，摘掉还绿）")
+    finally:
+        db.child_counts_bulk = _real_ccb286
+    # ④ 面板嵌套：subtree API 每个节点带 child_count（孙任务逐层看得见）
+    _j286 = c.get(f"/api/tasks/{_rt286}/subtasks").get_json()
+    assert _j286["ok"] and _j286["total"] == 2, _j286   # total=整棵子树（子+孙）
+    _n286 = {n["id"]: n for n in _j286["nodes"]}
+    assert _n286[_ct286]["child_count"] == 1, (
+        f"子任务节点应带 child_count=1（它名下有孙任务 #{_gt286}）：{_n286[_ct286]}")
+    assert _n286[_ct286]["label"] == f"{_rt286}-a", "24-a 编号被改坏"
+    _j286b = c.get(f"/api/tasks/{_ct286}/subtasks").get_json()
+    _n286b = {n["id"]: n for n in _j286b["nodes"]}
+    assert _n286b[_gt286]["child_count"] == 0 and _n286b[_gt286]["label"] == f"{_ct286}-a", (
+        f"孙任务节点 child_count/label 不对：{_n286b.get(_gt286)}")
+    # ⑤ 前端形状：数量徽章接模板、live 轮询接线 + 面板注销守卫
+    _tk286 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8")
+    assert "child_counts.get(t.id, 0)" in _tk286, "任务按钮没接 child_counts 数量"
+    assert 'value="all"' in _tk286 and "全部（含衍生）" in _tk286, "平铺视图应保留为显式 all 档"
+    _js286 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    for _w286 in ("PV_SUBTREE_LIVE_MS", "pvLiveAdd", "pvLiveRemove", "pvLiveTick"):
+        assert _w286 in _js286, f"面板 live 轮询缺 {_w286}"
+    assert "document.contains" in _js286, (
+        "live 轮询没带「面板还在文档里」守卫（收起/跳转后会一直发死请求）")
+    print("[286] 续282 ok: /tasks 默认只看根任务（子任务收进父面板，parent=all/child 显式可查）｜"
+          "行徽章「子任务（N）」唯一产地 child_counts_bulk（变异证伪）｜面板节点逐层标 child_count"
+          "（孙任务也在跑）｜行内面板 3s live 轮询（变更才重画 + 文档守卫 + 收起注销）")
     print("SMOKE PASS")
 
 

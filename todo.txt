@@ -4481,6 +4481,45 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，288 组；日志时间戳 14:08:56→14:17:37＝8 分 41 秒），日志 `logs/_smoke279.log`；`[172]` / `[266]` / `[281]` 全绿（含两组变异证伪）
 - [x] C2 记忆同步：CHANGELOG 续279 + todo 续279 + AGENTS §5 续266 那条补续279。
 
+## 续282（2026-10-26，WorkBuddy · CodeBuddy）：子任务默认收进父面板 + 数量徽章 + 面板 live 化
+实施者：WorkBuddy · CodeBuddy
+
+主理人 2026-10-26：「这个└ xxx.com · 送探 1 个域名 子任务 · 父 #79 子任务 统计 不要单独显示出来
+默认就在子任务里面才有，并且地下子任务要标明一个数量 以及按嵌套的思路 未来的孙任务 也在跑，然后live化升级」
+
+- [x] T1【默认收进面板】/tasks 层级筛选**默认 = root**：列表只列主域名任务，子任务（含孙任务）默认
+      只出现在父任务行的「子任务」面板里，不再单独占一行（「└ 名字 + 子任务·父 #N」那行没了）；
+      旧的平铺视图保留为显式「全部（含衍生）」（value=all），「只看衍生（送探）任务」照旧可直看。
+      `gui/app.py` tasks 路由 parent_f 默认 "root"（非法值同回默认档）；`db.page_tasks` 的 SQL 口径不动
+      （[202] 三档断言原样成立）。
+- [x] T2【数量徽章】`db.child_counts_bulk(ids)` 新增（一次 GROUP BY，同 task_counts_bulk 续91 的
+      N+1 理由；无子任务的任务**不在结果里**，契约 `.get(id, 0)`）→ 行按钮改「子任务（N）」，
+      N = **直接**子任务数；孙任务不折进父的数（标在各自那一层，见 T3）。
+- [x] T3【嵌套 + 孙任务】`api_task_subtree` 每个节点新增 `child_count`（walk 后一次批量取）；
+      面板行任务名后带「子任务 N」徽章（有下一层才画）—— 孙任务在不在跑、长没长出来逐层看得见。
+- [x] T4【面板 live 化】app.js 新增 pvLiveAdd/pvLiveRemove/pvLiveTick：行内 subtasks 面板开着时
+      每 3s（PV_SUBTREE_LIVE_MS）重取子树、整份 JSON 有变才重画（不抢滚动/焦点）；面板不在文档里
+      自动注销（不发死请求）、收起主动注销、走同一 pvInflight 计数（整页刷新 pvWaitIdle 等它落地，
+      续263 同一条纪律）。列表页那套 tick 只盯本页行 —— 子任务不占行后，孙任务的进度全靠这条。
+- [x] T5【门禁 [286] 新组】① child_counts_bulk 与逐个版一致 + 空入参/None/脏入参边界；
+      ② 默认档不渲染子任务行、无「子任务 · 父 #N」徽章，parent=child / parent=all 显式可查；
+      ③ 变异证伪（§6.1）：桩掉 child_counts_bulk ⇒ 徽章必须变「子任务（0）」（唯一产地钉住）；
+      ④ subtree API child_count 与 24-a label（root-a / root-a-1 两层）；⑤ 前端形状（模板接
+      child_counts、all 档保留、app.js live 四件套 + document.contains 守卫）。
+      [185a] 的列表断言改显式 `parent=child`（默认档已收走子任务行）。
+- [x] C1 全量门禁：全量门禁 `env -u PYTHONPATH ./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，309 组 = 308 旧 + [286] 新增；墙钟 9 分 50 秒，16:11:05→16:20:55），日志 `logs/_smoke282.log`（两处 Traceback 均为故意用例 smoke-6v / runner-boom）。这轮跑了五次才绿，三次红各有名：① [218] 脱敏红线 —— 把主理人原话里的真实域名写进了 [286] 注释（改成 xxx.com；红线在工作，不是消音器）；② [284] 续281 旧断言依赖默认档渲染子任务行（改显式 parent=child）；③ [286] 自己的 total 断言口径错（total=整棵子树而非直接子任务数，改 ==2）
+- [x] C2 记忆同步：CHANGELOG 续282 + todo 续282 + AGENTS §5 补「任务列表默认显示哪一层」。
+- [x] 事故记录（AGENTS §2 续280 同款第二次实录）：编辑工具把 tests/smoke.py 整文件行尾翻成 CRLF
+      （HEAD 是混合行尾：18469 CRLF + 13930 LF）**且**全文中文弯引号翻成 ASCII 引号（22096 行
+      直接 SyntaxError）—— 按 AGENTS §2 流程 `git checkout` 还原后用字节级补丁重插
+      （`logs/_patch282.py`，从 HEAD 取原字节、按锚行行尾插入）；`git diff --numstat` 与
+      `--ignore-cr-at-eol --numstat` 两式相等（72/1）才继续。
+
+下一轮（续283）：
+- [ ] 详情页其余 8 个页签要不要 live 化（续280 挂账；需要"按当前筛选口径重算"的接口）
+- [ ] AGENTS.md 其余段落逐条比对代码与配置（续280 挂账）
+- [ ] 仪表盘「最近任务」两张表是否也默认隐藏子任务行（续282 只动了 /tasks，仪表盘口径待主理人定）
+
 ## 续281（2026-10-26，TRAE · DeepSeek）：子任务 24-a 显示编号 + 统计口径对齐详情页签 + FOFA 域名解析修复
 
 主理人 2026-10-26：「这个 80 的任务号不该开，79-a 不就对了吗？以及子任务的子域名站点、拓展域名显示有问题：子域名 2 个，站点 16 个？」

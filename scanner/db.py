@@ -552,6 +552,31 @@ def list_child_tasks(parent_id):
                   "WHERE parent_id=? ORDER BY id", (int(parent_id or 0),))
 
 
+def child_counts_bulk(task_ids):
+    """批量取每个任务的**直接**子任务数（续282，列表行「子任务（N）」徽章的产地）。
+
+    为什么是批量：与 `task_counts_bulk`（续91）同一条理由 —— 逐个 `list_child_tasks`
+    是 N+1（一页 100 个任务 = 100 次 COUNT）；这里一条 `GROUP BY parent_id` 拿全页。
+    返回 `{parent_id: 直接子任务数}`；入参里没有子任务的任务**不在结果里**（调用方
+    用 `.get(id, 0)` 取 0，别改成本 dict —— 缺键就是 0 这一口径让模板保持一行）。
+    只算**直接**子任务（depth=1）：徽章的语义是"这个任务名下挂了几个"，孙任务
+    属于子任务自己的徽章（面板按嵌套逐层标注，`api_task_subtree` 的 `child_count`）。
+    """
+    ids = []
+    for i in (task_ids or []):
+        try:
+            if i:
+                ids.append(int(i))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    rows = _query(f"SELECT parent_id p, COUNT(*) c FROM tasks "
+                  f"WHERE parent_id IN ({marks}) GROUP BY parent_id", tuple(ids))
+    return {int(r["p"]): int(r["c"]) for r in rows}
+
+
 
 def update_task(task_id, **fields):
     fields["updated_at"] = _now()

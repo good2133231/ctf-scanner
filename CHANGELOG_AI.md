@@ -3,6 +3,47 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续282（2026-10-26，WorkBuddy · CodeBuddy）：子任务默认收进父面板 + 数量徽章 + 面板 live 化
+
+### 背景 / 判断依据
+
+主理人 2026-10-26（截图：任务 #79 的子任务 79-a 同时出现在子任务面板和列表顶层）：
+「这个└ xxx.com · 送探 1 个域名 子任务 · 父 #79 子任务 统计 不要单独显示出来 默认就在子任务里面才有，
+并且地下子任务要标明一个数量 以及按嵌套的思路 未来的孙任务 也在跑，然后live化升级」
+
+- 列表顶层那一行与「子任务」面板是同一份数据的两个渲染位 —— 子任务一多（送探自动递归后每轮都在长），
+  列表就被衍生任务淹没，"哪个是主域名任务"又找不到了（续202 立筛选时的同一痛点，但筛选靠人手动）；
+- 「子任务」按钮不带数量，看不看得得出"这棵树长没长"全靠点开；
+- 面板是一次性渲染：列表页 tick 只盯本页行，子任务不占行之后，面板里的进度/状态/数字没人刷。
+
+### 变更
+
+- `gui/app.py`：
+  - tasks 路由 `parent_f` **默认 "root"**（无参/非法值都回默认档）；`parent=all` 才是不筛选的平铺档
+    （`page_tasks` 的 parent 参数只在 root/child 时下推 SQL，SQL 与 [202] 口径一条不动）；
+  - 模板上下文新增 `child_counts = db.child_counts_bulk(...)`；
+  - `api_task_subtree` 每个节点新增 `child_count`（递归 walk 完一次批量取，不是每节点一次 COUNT）。
+- `scanner/db.py`：新增 `child_counts_bulk(task_ids)`（一次 GROUP BY；无子任务的任务不在结果里，
+  契约 `.get(id, 0)`；脏入参解析不了的不参与）。**直接**子任务数 —— 孙任务属于子任务自己的徽章。
+- `gui/templates/tasks.html`：层级下拉改「全部（含衍生）/ 只看主域名任务（默认）/ 只看衍生（送探）任务」；
+  「子任务」按钮改「子任务（{{ child_counts.get(t.id, 0) }}）」。
+- `gui/static/app.js`：
+  - `pvSubtreeHtml` 每个节点在任务名后画「子任务 N」徽章（child_count>0 才画），面板头注明 live 刷新；
+  - 新增 `PV_SUBTREE_LIVE_MS=3000` + `pvLiveAdd/pvLiveRemove/pvLiveTick`：行内 subtasks 面板开着时
+    每 3s 重取 `/api/tasks/<id>/subtasks`，整份 JSON 签名有变才重画；`document.contains` 守卫
+    （面板被收起/页面跳转自动注销）；收起主动 `pvLiveRemove`；走同一 `pvInflight` 计数
+    （整页刷新 `pvWaitIdle` 等它落地 —— 续263 的"正在飞的请求被导航掐断"教训）。
+- `tests/smoke.py`：新增 [286] 组（默认档不渲染子任务行 / 徽章数量 + 桩掉产地的变异证伪 /
+  subtree child_count 与 24-a label / 前端 live 接线形状）；[185a] 列表断言改显式 `parent=child`。
+
+### 验证
+
+- `py_compile`（tests/smoke.py / scanner/db.py / gui/app.py）+ `node --check`（app.js）全过；
+- C1 全量门禁：全量门禁 `env -u PYTHONPATH ./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，309 组 = 308 旧 + [286] 新增；墙钟 9 分 50 秒，16:11:05→16:20:55），日志 `logs/_smoke282.log`（两处 Traceback 均为故意用例 smoke-6v / runner-boom）。这轮跑了五次才绿，三次红各有名：① [218] 脱敏红线 —— 把主理人原话里的真实域名写进了 [286] 注释（改成 xxx.com；红线在工作，不是消音器）；② [284] 续281 旧断言依赖默认档渲染子任务行（改显式 parent=child）；③ [286] 自己的 total 断言口径错（total=整棵子树而非直接子任务数，改 ==2）
+- 事故：编辑工具把 smoke.py 整文件行尾翻成 CRLF、全文弯引号翻成 ASCII（续280 同款，
+  22096 行 SyntaxError）—— 按 §2 流程字节级重插修复；[218] 脱敏红线实测抓到本轮自己
+  把主理人原话里的真实域名写进 [286] 注释（改成 xxx.com）—— 红线在工作，不是消音器。
+
 ## 续281（2026-10-26，TRAE · DeepSeek）：子任务 24-a 显示编号 + 统计口径对齐详情页签 + FOFA 域名解析修复
 
 ### 背景 / 判断依据

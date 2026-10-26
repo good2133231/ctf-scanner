@@ -176,6 +176,43 @@ async function pvWaitIdle(budget = 2500) {
     await new Promise(res => setTimeout(res, 80));
   }
 }
+
+/* ---------- 续282：行内「子任务」面板 live 化（主理人点单「live化升级」） ----------
+ * 主任务列表那套轮询只盯**本页行**（`initTaskTable` 的 tick），而子任务（含孙任务）
+ * 默认不占列表行 —— 面板开着时，里面的进度/状态/数字没人刷。这里给**开着的**
+ * subtasks 面板单独起一个 3 秒轮询：重取子树 → 内容有变才重画。
+ * 三条边界：
+ * ① 只盯**还挂在文档里**的面板（页面跳转/收起后 td 不在文档 → 自动注销，不发死请求）；
+ * ② 重画前比对整份 JSON 签名，没变一个字都不动（不抢用户的滚动位置与选择）；
+ * ③ 走同一个 `pvInflight` 计数 —— 页面收尾的整页刷新（`pvWaitIdle`）会等它落地，
+ *    不会出现"正在飞的刷新被导航掐断 → Failed to fetch"（续263 同一条教训）。 */
+const PV_SUBTREE_LIVE_MS = 3000;
+const pvLiveSubs = new Map();          // task_id -> { td, sig }
+let pvLiveTimer = null;
+function pvLiveAdd(id, td) {
+  pvLiveSubs.set(String(id), { td, sig: "" });
+  if (!pvLiveTimer) pvLiveTimer = setTimeout(pvLiveTick, PV_SUBTREE_LIVE_MS);
+}
+function pvLiveRemove(id) { pvLiveSubs.delete(String(id)); }
+async function pvLiveTick() {
+  pvLiveTimer = null;
+  for (const [id, ent] of [...pvLiveSubs]) {
+    if (!document.contains(ent.td)) { pvLiveSubs.delete(id); continue; }
+    pvInflight(1);
+    try {
+      const r = await fetch(absUrl(`/api/tasks/${id}/subtasks`));
+      if (!r.ok) continue;
+      const d = await r.json();
+      if (!d || !d.ok) continue;      // 服务端说失败：保留上一帧（错误态由手动重开处理）
+      const sig = JSON.stringify(d);
+      if (sig === ent.sig) continue;  // 没变：不重画（滚动位置 / 输入焦点都保住）
+      ent.sig = sig;
+      ent.td.innerHTML = '<div class="pv-inline-box">' + pvSubtreeHtml(d) + '</div>';
+    } catch (e) { /* 瞬时网络错误：下一轮再试，别闪「加载失败」 */ }
+    finally { pvInflight(-1); }
+  }
+  if (pvLiveSubs.size) pvLiveTimer = setTimeout(pvLiveTick, PV_SUBTREE_LIVE_MS);
+}
 function pvRemember(key) {
   try {
     const s = new Set(JSON.parse(sessionStorage.getItem(PV_OPEN_KEY) || "[]"));
@@ -604,7 +641,8 @@ function pvSubtreeHtml(d) {
   const head = `<h3>子任务（#${pvEsc(d.root.id)} ${pvEsc(d.root.name)}`
     + (d.total ? `，共 ${pvEsc(d.total)} 个` : "") + `）</h3>`
     + `<p class="pv-note">下面缩进的每一行是<b>子任务自己</b>的进度；`
-    + `主任务的进度在上面它自己那一行的「进度」列，两者互不影响。</p>`;
+    + `主任务的进度在上面它自己那一行的「进度」列，两者互不影响。`
+    + `面板开着时每 ${PV_SUBTREE_LIVE_MS / 1000} 秒自动刷新一次（内容有变才重画，不抢你的滚动位置）。</p>`;
   if (!d.nodes || !d.nodes.length) {
     return head + `<p class="pv-note">这个任务名下还没有子任务`
       + `（拓展域名送去探测、自动递归才会长出下一层）。</p>`;
@@ -612,7 +650,13 @@ function pvSubtreeHtml(d) {
   const rows = d.nodes.map(n => {
     const c = n.counts || {};
     return `<tr><td class="mono">${pvEsc(n.label)}（#${pvEsc(n.id)}）</td>`
-      + `<td style="padding-left:${8 + (n.depth - 1) * 14}px">${pvEsc(n.name)}</td>`
+      + `<td style="padding-left:${8 + (n.depth - 1) * 14}px">${pvEsc(n.name)}`
+      // 续282（主理人点单「子任务要标明一个数量」+「按嵌套的思路，孙任务也在跑」）：
+      // 每层行上标**它自己名下**的子任务数（API 的 child_count，一次 GROUP BY 批量取）；
+      // 孙任务属于子任务那一层的徽章，不折进父层的数里。有孙任务 = 这一层的树还在长。
+      + (n.child_count
+          ? ` <span class="badge" title="这个子任务名下还有 ${pvEsc(n.child_count)} 个下一层任务（孙任务），点开它的「子任务」面板可展开">子任务 ${pvEsc(n.child_count)}</span>`
+          : "") + `</td>`
       + `<td class="muted">${pvEsc(n.target || "-")}</td>`
       // 续281：与任务列表/详情页签同一个展示口径 —— 站点报主机数，子域名/拓展报
       // 「已解析去重（全量）」，避免同一个子任务在三处各显示一套数。
@@ -631,7 +675,7 @@ function pvSubtreeHtml(d) {
     + `<th>阶段</th><th>状态</th><th>进度</th><th>开始时间</th><th>时长</th><th></th></tr></thead>`
     + `<tbody>${rows}</tbody></table>`
     + `<p class="pv-note">各层同号字，层级只靠缩进；编号 24-a 规则：根任务的子任务按序 a/b/c，`
-    + `孙任务 a-1/a-2。</p>`;
+    + `孙任务 a-1/a-2。带「子任务 N」徽章的行 = 它名下还有下一层在跑或已跑完，一层一层都看得见。</p>`;
 }
 function pvStatsHtml(d) {
   const rows = d.rows.map(r => `<tr><td>${pvEsc(r.kind)}</td><td>${pvEsc(r.total)}</td>`
@@ -681,6 +725,8 @@ function initTaskPreview() {
           && slot.dataset.for === key) {
         slot.remove();          // 再点一次 = 收起
         pvForget(key);
+        // 续282：收起就停 live 轮询（面板不在文档里下一轮 tick 也会自愈，这里主动注销省一次请求）
+        if (kind === "subtasks") pvLiveRemove(id);
         return;
       }
       const cols = document.querySelectorAll("#tbl-tasks thead th").length || 11;
@@ -693,6 +739,8 @@ function initTaskPreview() {
       slot.appendChild(td);
       tr.parentNode.insertBefore(slot, tr.nextSibling);
       pvRemember(key);
+      // 续282：子任务面板一展开就进 live 轮询（孙任务在跑时，进度/数量不用手动刷新）
+      if (kind === "subtasks") pvLiveAdd(id, td);
       const draw = html => {
         td.innerHTML = '<div class="pv-inline-box">' + html + '</div>';
       };

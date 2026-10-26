@@ -123,12 +123,17 @@
     </label>
     {# 续202（主理人点单"多任务时如何美观清晰"）：只看根任务 / 只看衍生任务。
         送探套娃之后列表里混着"主域名任务 + 它的送探任务 + 送探的送探任务"，
-        没有这个筛选时分不清哪个是主域名任务（根任务＝parent_id=0）。 #}
+        没有这个筛选时分不清哪个是主域名任务（根任务＝parent_id=0）。
+        续282（主理人点单「子任务不要单独显示出来，默认就在子任务面板里才有」）：
+        **默认档 = 只看主域名任务** —— 子任务（含孙任务）默认收进父任务行的「子任务」
+        面板里（按嵌套展开、带各层自己的数量），不再单独占列表一行；
+        要直看衍生任务，显式选「只看衍生（送探）任务」；「全部（含衍生）」保留旧的
+        平铺视图（value=all，显式选择才有）。 #}
     <label class="muted">层级
       <select name="parent">
-        <option value="" {{ '' if parent_f else 'selected' }}>全部</option>
-        <option value="root" {{ 'selected' if parent_f == 'root' }}>只看主域名任务</option>
-        <option value="child" {{ 'selected' if parent_f == 'child' }}>只看衍生（送探）任务</option>
+        <option value="all" {{ 'selected' if parent_f == 'all' else '' }}>全部（含衍生）</option>
+        <option value="root" {{ 'selected' if parent_f == 'root' else '' }}>只看主域名任务（默认）</option>
+        <option value="child" {{ 'selected' if parent_f == 'child' else '' }}>只看衍生（送探）任务</option>
       </select></label>
     <label class="muted">每页
       <select name="size" onchange="this.form.submit()">
@@ -184,10 +189,13 @@
           {# 续229（主理人点单）：子任务改回**行内展开** —— 续196 做成预览框会把整个任务列表
              盖住；而且"一个都没扫到"时必须也展开（空态本身就是结论：这一层没长出来）。
              「统计」仍是预览框（跨任务汇聚、行数多）。 #}
+          {# 续282（主理人点单「子任务要标明一个数量」）：按钮上带**直接**子任务数
+              （`child_counts_bulk` 一次 GROUP BY；没有子任务就 0，空态本身就是结论）。
+              孙任务不算进这个数 —— 它们的数量标在各自那一层的面板行上（嵌套逐层标注）。 #}
           <button type="button" class="btn-mini ghost btn-xs" data-pv="subtasks" data-id="{{ t.id }}"
             data-inline="1"
-            title="在下面展开这个任务名下的子任务（parent_id 递归整棵子树，24-a 编号；没有子任务也会展开说明）"
-            >子任务</button>
+            title="在下面展开这个任务名下的子任务（parent_id 递归整棵子树，24-a 编号，嵌套逐层标注各层自己的子任务数；没有子任务也会展开说明）"
+            >子任务（{{ child_counts.get(t.id, 0) }}）</button>
           <button type="button" class="btn-mini ghost btn-xs" data-pv="stats" data-id="{{ t.id }}"
             title="预览框看整棵衍生树的资产汇聚（跨任务去重 + 按来源任务拆分）"
             >统计</button></td>

@@ -2116,12 +2116,16 @@ def create_app():
         if stages_f not in STAGE_ORDER:
             stages_f = ""    # 阶段白名单：非法一律按"全部"
         # 续202：只看根任务 / 只看衍生任务（送探套娃之后任务一多就分不清哪个是主域名任务）
-        parent_f = (request.args.get("parent") or "").strip()
-        if parent_f not in ("root", "child"):
-            parent_f = ""
+        # 续282（主理人点单「子任务不要单独显示出来，默认就在子任务面板里才有」）：
+        # 层级筛选**默认 = root** —— 列表只列主域名任务，子任务（含孙任务）一律收进
+        # 父任务行的「子任务」面板；要看衍生任务本身，显式选「只看衍生（送探）任务」。
+        # `all` 是显式的"全部（含衍生）"（以前的无参默认档，没删——只是不再默认）。
+        parent_f = (request.args.get("parent") or "root").strip()
+        if parent_f not in ("all", "root", "child"):
+            parent_f = "root"    # 非法值回默认档（与上面 status/stages 同一处理），不进 SQL
         rows, total = _page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
                                     status=status or None, stages=stages_f or None,
-                                    parent=parent_f or None)
+                                    parent=parent_f if parent_f in ("root", "child") else None)
         # 续195（主理人点单「多任务执行还是显示排队？」）：把队列并发现状摆在列表页 ——
         # 同时跑几个是策略配置的 queue.workers（出厂 1＝串行，省目标侧带宽、防风控），
         # 不是没实现；页面不说，用户只看到"排队"两个字
@@ -2134,7 +2138,7 @@ def create_app():
             page = pages
             rows, total = _page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
                                         status=status or None, stages=stages_f or None,
-                                        parent=parent_f or None)
+                                        parent=parent_f if parent_f in ("root", "child") else None)
         # 翻页必须带上**全部**筛选状态；`q` 要 URL 编码 —— 关键字里带 `&` / `#` / 空格时
         # 不编码会让翻页**丢掉条件**（见 `/vulns`、`_asset_page` 的同一处理）。
         parts = []
@@ -2153,6 +2157,9 @@ def create_app():
         # 续91：一次算完整页的计数（原来 `{t["id"]: task_counts(t["id"])}` 是 N+1 ——
         # 每任务 7 条 COUNT，一页 100 个任务 = 700 次查询）。
         counts = db.task_counts_bulk([t["id"] for t in rows])
+        # 续282：行徽章「子任务（N）」的数量 —— 一次 GROUP BY（`child_counts_bulk`），
+        # 不是每行一次 COUNT（同 `task_counts_bulk` 续91 的理由）；没有子任务的行缺键 = 0。
+        child_counts = db.child_counts_bulk([t["id"] for t in rows])
         # 续36「运行时长」列：与详情页「目标与配置」**同一口径**（`run_duration_text`）。
         # 注意 `list_tasks` 返回的是 `sqlite3.Row`，必须先 `dict(...)` 再传 —— `run_duration_text`
         # 内部走 `task.get(...)`，而 `sqlite3.Row` **没有** `.get()`（`_site_titles()` 踩过同一个坑）。
@@ -2168,6 +2175,7 @@ def create_app():
                                # 续281：子任务在列表里显示 24-a 派生编号（79-a），不是新号 80。
                                # 真实 ID 仍留在链接与 tooltip 里，路由/主键一条不动。
                                task_labels=_task_tree_labels([t["id"] for t in rows]),
+                               child_counts=child_counts,
                                counts=counts, durations=durations, qworkers=qworkers,
                                running=set(runner.running_task_ids()), qpos=qpos,
                                pager=pager, page_sizes=PAGE_SIZES, q=q,
@@ -4833,6 +4841,12 @@ def create_app():
         except Exception as _e263:      # noqa: BLE001 - 面板取数失败不该变成一张 500 HTML
             logger.warning(f"[gui] 子任务面板取数失败（#{tid}）：{_e263}")
             return jsonify({"ok": False, "error": f"取子任务失败：{_e263}"})
+        # 续282（主理人点单「子任务要标明一个数量」）：每个节点带上它**名下**的子任务数
+        # （孙任务在不在跑、长没长出来，父面板里一层一层都能看见）。一次 GROUP BY 批量取，
+        # 不是每个节点一次 COUNT；没有子任务的节点缺键 = 0，前端就不画徽章。
+        _cc282 = db.child_counts_bulk([n["id"] for n in nodes])
+        for _n282 in nodes:
+            _n282["child_count"] = _cc282.get(_n282["id"], 0)
         return jsonify({"ok": True, "root": {"id": rid, "name": root["name"]},
                         "total": total, "nodes": nodes})
 
