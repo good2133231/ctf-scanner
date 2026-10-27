@@ -8,10 +8,8 @@
 命中判据：响应可用（100-599）**且指纹（状态码+长度+标题）与该 IP 的默认虚机不同** ——
 与默认一样，说明看到的是 IP 的默认页，不是藏着的站点。
 """
-import requests
-
 from . import db
-from .utils import html_title
+from .utils import html_title, http_request
 
 
 def plan(task_id):
@@ -29,21 +27,25 @@ def plan(task_id):
     return [(ip, hosts) for ip in ips]
 
 
-def _fp(ip, host, timeout):
-    """一次探测的指纹 `(status, length, title)`；请求失败给 `None`（不算命中也不算错）。"""
-    try:
-        r = requests.get(f"http://{ip}/", timeout=timeout, allow_redirects=False,
-                         headers={"Host": host} if host else {},
-                         proxies={"http": None, "https": None})
-    except Exception:                                   # noqa: BLE001 - 单点失败不炸整批
+def _fp(ip, host, timeout, settings=None):
+    """一次探测的指纹 `(status, length, title)`；请求失败给 `None`（不算命中也不算错）。
+
+    续286（审计续285 发现的漂移）：改走 `utils.http_request` —— 与全框架同一个 HTTP 出口，
+    UA 伪装、`limits.verify_tls` 分流、`_throttle` 名额/预算（`settings["_throttle"]`）一并生效。
+    只保留本能力自己的语义：`Host:` 覆盖探测 + 不跟随重定向。
+    """
+    r = http_request(f"http://{ip}/", timeout=timeout, allow_redirects=False,
+                     headers={"Host": host} if host else {}, settings=settings)
+    if not r:
         return None
-    if not (100 <= int(r.status_code or 0) <= 599):
+    status = int(r.get("status") or 0)
+    if not (100 <= status <= 599):
         return None
     try:
-        title = (html_title(r.text) or "").strip()[:80]
+        title = (html_title(r.get("text") or "") or "").strip()[:80]
     except Exception:                                   # noqa: BLE001 - 标题解析失败不算错
         title = ""
-    return (int(r.status_code), len(r.content or b""), title)
+    return (status, int(r.get("length") or 0), title)
 
 
 def collide(ip, hosts, settings, stopped=None):
@@ -61,12 +63,12 @@ def collide(ip, hosts, settings, stopped=None):
     except (TypeError, ValueError):
         cap = 200
     todo = [h for h in (hosts or ()) if h][:max(0, cap)]
-    default = _fp(ip, None, timeout)
+    default = _fp(ip, None, timeout, settings)
     hits = []
     for h in todo:
         if stopped is not None and stopped():
             break
-        fp = _fp(ip, h, timeout)
+        fp = _fp(ip, h, timeout, settings)
         if fp is None or fp == default:
             continue        # 与默认虚机一样 ⇒ 不是藏着的站点；请求失败 ⇒ 不猜
         hits.append((h,) + fp)

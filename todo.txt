@@ -4481,6 +4481,32 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，288 组；日志时间戳 14:08:56→14:17:37＝8 分 41 秒），日志 `logs/_smoke279.log`；`[172]` / `[266]` / `[281]` 全绿（含两组变异证伪）
 - [x] C2 记忆同步：CHANGELOG 续279 + todo 续279 + AGENTS §5 续266 那条补续279。
 
+## 续286（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：hostcollide 收口到统一 HTTP 出口 + AGENTS 长尾核完
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+- [x] T1【hostcollide 漂移收口】`scanner/hostcollide.py` 删掉 `import requests`，`_fp(..., settings)`
+      改走 `utils.http_request` —— UA 伪装 / `limits.verify_tls` 分流 / `_throttle` 名额与任务预算
+      一并生效；本能力自己的语义不变：`Host:` 覆盖、`allow_redirects=False`、失败不猜。
+- [x] T2【门禁 [290]】AST 钉「hostcollide 不许 import requests」；桩 `http_request` 验 `_fp` 真的走统一
+      出口（Host 头 / 无重定向 / settings **原样透传**）；同指纹不命中、异指纹命中、请求失败不猜。
+- [x] T3【AGENTS 长尾抽查（第二批 ~15 条）】§5.4 独立连接、§5.5 POC 过滤、§5.6 vulns 无 UNIQUE、
+      §5.9 devmode 七段、§5.10 edge_auth 豁免与 users 表、§5.11/17 指纹单产地、§5.12 afrog 失败判据、
+      §5.13 which 折算、§5.15 lit_filter、§5.16 flagfind 零出网、§5.18 extcost、§5.19 _audit_hint、
+      §3 dirmap/fscan gitignore、§7 verify_tls_external —— **全部一致**（两轮共核 25 条可机检断言）。
+- [x] T4【nodes 例外】AGENTS §5.1 补一行：`scanner/nodes.py` 节点控制面直连 requests 是**基础设施出口**
+      （X-Node-Token JSON RPC、自带超时、不伪装/不吃扫描预算），仅此一处；新增目标侧 HTTP 仍走 `http_request`。
+- [x] T5【[218] 白名单】主理人真任务 #83（OSINT 标题反查）把 360.cn 当资产入库，而 tracked 的
+      `scanner/quake.py` / `tools/import_fingerprints.py` 有该 token —— 360.cn 是**公共厂商域**
+      （Quake API + 指纹负样本 token），按 §0.5「先判是不是公共厂商」加白，不是消音器。
+- [x] C1 全量门禁：第一次跑到 [218] 红（原因＝T5，当时主理人任务 #83 正在跑、往真库写资产），
+      补白名单后重跑 **SMOKE PASS**（rc=0；09:22:20→09:32:01 = 9 分 41 秒），日志 `logs/_smoke286b.log`；
+      [290] 全绿；红的那次日志 `logs/_smoke286.log`。行尾：hostcollide 全 LF 直改，smoke 字节补丁，两式 numstat 相等。
+- [x] C2 记忆同步：CHANGELOG 续286 + todo 续286；AGENTS §5.1/§5 已带续286 号。
+- [x] C3 提交并推送：提交信息末行 `WorkBuddy · DeepSeek-V4.1-Flash`。
+
+下一轮（续287）：
+- [ ] 无必须项 —— 续286 三项（hostcollide / AGENTS 长尾 / nodes 例外）已全部收口，等主理人点单
+
 ## 续285（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：仪表盘「最近任务」只列主任务 + AGENTS 十条事实抽查
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
 

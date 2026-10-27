@@ -3,6 +3,53 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续286（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：hostcollide 收口到统一 HTTP 出口 + AGENTS 长尾核完
+
+### 背景 / 判断依据
+
+续285 审计发现唯一真漂移：`scanner/hostcollide.py` 直连 `requests.get`，绕过 `utils.http_request`
+（UA 伪装 / `verify` 出口分流 / `_throttle` 名额与预算），与 §5.1、§5.8 冲突。本轮按主理人
+「依次解决」把续286 三项一次收口：修漂移 + 继续 AGENTS 长尾抽查 + 把 nodes 控制面写成显式例外。
+
+### 改动
+
+- `scanner/hostcollide.py`：删 `import requests`；`_fp(ip, host, timeout, settings=None)` 改走
+  `utils.http_request`（`headers={"Host": host}`、`allow_redirects=False`、`settings` 原样透传）——
+  限流/预算与 UA/证书口径回到全框架唯一出口；指纹判据（status/length/title）与"失败不猜"不变。
+- `tests/smoke.py [290]`（新组）：AST 钉「hostcollide 不许 import requests」；桩 `http_request` 捕获参数，
+  断言默认探测无 Host、候选探测带 `Host`、`allow_redirects=False`、`settings is` 原样透传；
+  行为断言：同指纹不命中、异指纹命中、`None` 不猜。
+- `AGENTS.md §5.1`：补「基础设施例外（续286）」——`scanner/nodes.py` 节点控制面直连 `requests`
+  是 X-Node-Token JSON RPC（自带超时、不伪装、不吃扫描预算），仅此一处。
+- `tests/smoke.py [218]`：白名单补 `360.cn`。起因：主理人真任务 #83 的 OSINT 标题反查把 360.cn
+  当资产入库，而 tracked 的 `scanner/quake.py`（`quake.360.cn` API 端点）与
+  `tools/import_fingerprints.py`（指纹负样本 token）都有它。360.cn 是**公共厂商域**，
+  按 §0.5「命中的域先判是不是公共厂商」加白；不是把白名单当消音器（真实目标域仍会红）。
+
+### 验证
+
+- `[290]` 单跑 PASS；全量 `tests/smoke.py` **SMOKE PASS**（rc=0，09:22:20→09:32:01 = 9 分 41 秒），
+  日志 `logs/_smoke286b.log`，[290] 全绿。
+- 红过一次并已定位：首跑在 [218] 判红（`360.cn ← scanner/quake.py, tools/import_fingerprints.py`）——
+  原因是主理人真任务 #83 当时正在跑、往真库写资产（不是代码坏）；补公共厂商白名单后重跑绿。
+  首跑日志 `logs/_smoke286.log`。
+- 行尾：hostcollide.py 为 100% LF（直改用 Edit）；smoke.py 新组落在原 EOL 区段（字节补丁）；
+  逐文件 `git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 相等。
+
+### AGENTS 长尾抽查（第二批，全部一致）
+
+§5.4 `get_conn` 每次独立连接 / `_query`/`_exec` 用完即关；§5.5 `enabled_poc_paths` SQL
+`enabled=1 AND status='ok'` + engine `skip_severities`；§5.6 `vulns` 建表无 UNIQUE、`insert_vuln` 裸 INSERT；
+§5.9 `DEV_EXTERNAL_SECTIONS` 恰七段；§5.10 users 表存口令 + edge_auth 明文豁免与两文件 gitignore；
+§5.11/17 `fingerprint.collect/flush/canonical_tags`；§5.12 afrog 失败/产物判据；§5.13 `which` 折算绝对路径；
+§5.15 `_lit_filter`；§5.16 flagfind AST 无 socket/http_request；§5.18 `extcost` 预估/上限；
+§5.19 `_audit_hint`；§3 `tools/dirmap`/`tools/fscan` 被 gitignore；§7 `verify_tls_external` 默认 True。
+两次抽查合计 25 条可机检断言：24 条一致、1 条漂移（hostcollide，本轮已修）。
+
+### C2 记忆同步
+
+- `todo.txt` 续286；`AGENTS.md §5.1` 的 nodes 例外带续286 号。
+
 ## 续285（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：仪表盘「最近任务」只列主任务 + AGENTS 十条事实抽查
 
 ### 背景 / 判断依据

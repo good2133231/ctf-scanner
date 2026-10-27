@@ -12857,6 +12857,50 @@ http:
     print("[289] 续285 dashboard ok: 最近任务只列主任务（子任务不入 8 行、口径文案在）｜"
           "漏洞趋势逐任务表仍含子任务（全量，不随列表口径丢数据）")
 
+    # ---------------- [290] 续286：hostcollide 走统一 HTTP 出口（审计续285 漂移的收口） ----------------
+    # 审计发现 hostcollide 直连 `requests.get` ⇒ 绕过 UA 伪装 / `limits.verify_tls` 分流 /
+    # `_throttle` 名额与预算。本组钉三件事：① 源码 AST 不许 import requests；
+    # ② `_fp` 必须调 `hostcollide.http_request`（Host 头覆盖 + allow_redirects=False + settings 透传）；
+    # ③ 行为不变：与默认虚机同指纹不命中、不同指纹命中、请求失败不猜。
+    import ast as _ast290
+    from scanner import hostcollide as _hc290
+    _tree290 = _ast290.parse((ROOT / "scanner" / "hostcollide.py").read_text(encoding="utf-8"))
+    _imp290 = [n for n in _ast290.walk(_tree290)
+               if isinstance(n, _ast290.Import) and any(a.name == "requests" for a in n.names)]
+    _imp290 += [n for n in _ast290.walk(_tree290)
+                if isinstance(n, _ast290.ImportFrom) and n.module == "requests"]
+    assert not _imp290, "hostcollide 不许直连 requests（必须走 utils.http_request）"
+
+    _calls290 = []
+    _orig290 = _hc290.http_request
+
+    def _fake290(url, **kw):
+        _calls290.append((url, kw))
+        _h290 = (kw.get("headers") or {}).get("Host", "")
+        if _h290 == "err290.test":
+            return None                                   # 请求失败 ⇒ 不猜（不算命中）
+        if _h290 == "diff290.test":
+            return {"status": 200, "text": "<title>hidden</title>", "length": 30}
+        return {"status": 200, "text": "<title>default</title>", "length": 20}
+
+    _hc290.http_request = _fake290
+    _st290 = {"hostcollide": {"timeout": 1, "max_requests": 10}, "_throttle": object()}
+    try:
+        _hit290, _tried290 = _hc290.collide(
+            "10.0.0.9", ["same290.test", "diff290.test", "err290.test"], _st290)
+    finally:
+        _hc290.http_request = _orig290
+    assert [h[0] for h in _hit290] == ["diff290.test"], _hit290
+    assert _tried290 == 3, _tried290
+    assert _hit290[0][1:] == (200, 30, "hidden"), _hit290[0]
+    assert _calls290[0][0] == "http://10.0.0.9/" and not _calls290[0][1].get("headers"), _calls290[0]
+    _kw290 = _calls290[1][1]
+    assert _kw290.get("headers", {}).get("Host") == "same290.test", _kw290
+    assert _kw290.get("allow_redirects") is False, _kw290
+    assert _kw290.get("settings") is _st290, "settings 必须原样透传（throttle/预算靠它）"
+    print("[290] 续286 hostcollide ok: 不 import requests｜_fp 走 utils.http_request（Host 覆盖、无重定向、"
+          "settings 透传）｜同指纹不命中、异指纹命中、失败不猜（行为不变）")
+
     # ---------------- [8c] 续80：分布式执行节点（中心控制 API + 节点回传） ----------------
     # 需求（roadmap）：「多个执行节点认领任务」。原设计写的是"先替换 SQLite"，但真换网络库
     # 要引驱动、改整个 db 层；本项目改为**控制端独占库 + 节点 HTTP 领任务/回传**（见 scanner/nodes.py）。
@@ -29190,7 +29234,7 @@ expression: r0()
         _con218.close()
         assert _reg218, "库里连一个注册域都没有？base_domain 全判空 ⇒ 折算口径坏了"
 
-        # 白名单三档（都不含任何真实目标名，全是公共知识）：
+        # 白名单三档＋公共厂商（都不含任何真实目标名，全是公共知识；续286 补 360.cn = Quake API 域）：
         # ① 仓库**公开字典**里的厂商域（cdn_cname / js_thirdparty）；
         # ② 合成夹具约定（*.test 与 example.com / evil.com / xxx.com）；
         # ③ AGENTS 已文档化的 jsmine「成员访问链」残余（network.protocol.name 这族：
@@ -29205,7 +29249,7 @@ expression: r0()
         from scanner import takeover as _to218
         _wl218 |= {(s.get("cname_suffix") or "").lstrip("*.").strip().lower()
                    for s in _to218.SERVICES if s.get("cname_suffix")}
-        _syn218 = {"example.com", "evil.com", "xxx.com"}
+        _syn218 = {"example.com", "evil.com", "xxx.com", "360.cn"}
         _noise218 = {"action.click", "protocol.name", "font.name", "text.name",
                      "password.name", "password.new"}
 
