@@ -3,6 +3,28 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续289（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：删除任务跳主页 + 主域名页批量跑子域名一个域名一个任务
+
+### 背景 / 判断依据
+
+主理人 2026-10-27 两点单：①「我任务删除自动给我跳转主页」—— 删完停在已不存在的详情页无意义；
+②「主域名页面创建任务，不要都集合一个任务里面，一个域名一个任务」—— 子域名 / 主域名资产页「批量跑子域名（新建任务）」
+原来把所有勾选域名塞进一个任务，主理人要的是每个域名一个独立任务。
+
+### 改动
+
+- **删除跳主页**（gui/static/app.js `taskOp`）：`action==="delete"` 时 `location.replace("/tasks")`（任务列表主页）；
+  其余操作（停止 / 重启 / 续跑）保持原地刷新当前页不变。
+- **一个域名一个任务**（gui/app.py `api_run_subdomain`）：去掉 `targets = "\n".join(domains)`，改为
+  `for _dom in domains: _create_task(名, _dom, ["subdomain"], {})` 逐个建任务并 `_spawn`；任务名无前缀时为域名本身，
+  带前缀时 `前缀-域名`。完成后跳转 `/tasks`（看全部新建任务）。`tests/smoke.py` 用例 (9) 同步改为断言
+  「去重后两个域名 → 两个任务，各只含自身一个域名、阶段 subdomain」。
+
+### 验证
+
+- 续289 HEAD 全量 **SMOKE PASS**（rc=0；审计日志 `logs/smoke289.log`），含改动的用例 (9)；`[7i]` 启动门禁仍绿。
+- JS 语法 `node --check gui/static/app.js` 通过；`python -c "import ast"` 校验 app.py / smoke.py 通过。
+
 ## 续288（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：控制台 dev --reload 自动重启（改完代码自动重启）
 
 ### 背景 / 判断依据

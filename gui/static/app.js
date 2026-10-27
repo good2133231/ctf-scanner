@@ -128,8 +128,9 @@ async function taskOp(action, id, btn, msgEl) {
       if (btn) btn.disabled = false;
       return;
     }
-    // 续201：同上 —— 保住当前页签（这是行内 taskOp 的刷新路径）
-    setTimeout(() => location.replace(location.pathname + location.search + location.hash), 700);
+    // 续289：删除任务后跳转到任务列表主页（主理人点单「删除自动跳转主页」）；其余操作原地刷新当前页
+    const _goHome = (action === "delete") ? "/tasks" : (location.pathname + location.search + location.hash);
+    setTimeout(() => location.replace(_goHome), 700);
   } catch (e) {
     say("网络错误");
     if (btn) btn.disabled = false;

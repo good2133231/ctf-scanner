@@ -1125,7 +1125,7 @@ def main():
     finally:
         gui_app.blacklist.add = _orig_bl_add
 
-    # (9) 批量跑子域名接口：新建任务 + 只含 subdomain 阶段。
+    # (9) 批量跑子域名接口：每个勾选域名各建一个只含 subdomain 阶段的任务（主理人点单：一个域名一个任务）。
     #     run_task 换桩：真跑会去打 crt.sh 之类的公共接口（测试必须离线且不依赖外网）。
     _orig_run_task = gui_app.run_task
     try:
@@ -1133,11 +1133,14 @@ def main():
         r = c.post("/api/domains/run-subdomain",
                    data={"domain": ["sub1.smoke.test", "sub1.smoke.test", "sub2.smoke.test"]})
         assert r.status_code == 302, r.status_code
-        new_id = int(r.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
-        t = db.get_task(new_id)
-        assert t and t["stages"] == "subdomain", t and t["stages"]
-        assert t["targets"] == "sub1.smoke.test\nsub2.smoke.test", t["targets"]
-        assert t["name"].startswith("批量子域-"), t["name"]
+        assert r.headers["Location"].endswith("/tasks"), r.headers["Location"]
+        # 去重后两个域名 → 两个任务，各只含自身一个域名、阶段 subdomain
+        _all = db.list_tasks(limit=1000)
+        _new = [t for t in _all if t["targets"] in ("sub1.smoke.test", "sub2.smoke.test")]
+        assert len(_new) == 2, [(t["id"], t["targets"]) for t in _new]
+        for t in _new:
+            assert t["stages"] == "subdomain", t
+        assert sorted(t["targets"] for t in _new) == ["sub1.smoke.test", "sub2.smoke.test"]
     finally:
         gui_app.run_task = _orig_run_task
 

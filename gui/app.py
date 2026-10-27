@@ -4629,8 +4629,10 @@ def create_app():
 
     @login_required
     def api_run_subdomain():
-        """把勾选的域名打包成**一个新任务**，只跑 subdomain 阶段。
+        """把勾选的域名**逐个**建成独立任务，每个域名跑一个只含 subdomain 阶段的任务。
 
+        主理人点单（2026-10-27）：主域名页面批量跑子域名时，不要都塞进同一个任务，
+        要一个域名一个任务 —— 每个域名有独立状态 / 停止 / 删除，排查也清楚。
         为什么新建任务而不是在当前任务下挂子任务：现有任务模型（一任务一线程、独立状态与
         独立停止/删除）可以直接复用，子任务要改表结构、任务树渲染、状态聚合与递归停止，
         收益只是 UI 好看一点 —— 按用户确认的口径选"新建任务"。
@@ -4645,15 +4647,16 @@ def create_app():
         # 结果把「送去探测」的默认名也顶掉了 —— 详见 extdomains.html 那条注释）；
         # 两个名字都收，是为了"老书签/老前端提交"不至于丢掉前缀。
         prefix = (request.form.get("name") or request.form.get("scan_prefix") or "").strip()
-        if prefix:
-            name = f"{prefix}-{time.strftime('%m%d-%H%M%S')}"
-        else:
-            name = time.strftime("批量子域-%m%d-%H%M%S")
-        targets = "\n".join(domains)
-        task_id = _create_task(name, targets, stages, {})
-        _spawn(task_id, name, targets, stages, {})
-        logger.info(f"[gui] 批量子域名任务 #{task_id} 已创建（{len(domains)} 个域名，仅 subdomain 阶段）")
-        return redirect(url_for("task_detail", task_id=task_id))
+        created = []
+        for _dom in domains:
+            _name = f"{prefix}-{_dom}" if prefix else _dom
+            _tid = _create_task(_name, _dom, stages, {})
+            _spawn(_tid, _name, _dom, stages, {})
+            _audit(audit.KIND_TASK, target=_name,
+                   detail=f"创建任务 #{_tid}（每域名一个；阶段 subdomain）")
+            created.append(_tid)
+        logger.info(f"[gui] 批量子域名：{len(created)} 个域名各建一个任务（仅 subdomain 阶段）")
+        return redirect(url_for("tasks"))
 
     @app.route("/api/domains/resolve", methods=["POST"])
     @login_required
