@@ -19,7 +19,7 @@
           {# 续281：子任务显示 24-a 派生编号（如 79-a），真实 ID 留在链接与 tooltip 里 #}
           {% set _lbl = task_labels.get(t.id, t.id) %}
           <td><a href="{{ url_for('task_detail', task_id=t.id) }}"
-                 title="任务 #{{ t.id }}">{{ _lbl }}</a></td>
+                 title="{% if t.parent_id %}任务 {{ _lbl }}（父 #{{ t.parent_id }}）{% else %}任务 #{{ _lbl }}{% endif %}">{{ _lbl }}</a></td>
           <td><a href="{{ url_for('task_detail', task_id=t.id) }}">{{ t.name }}</a></td>
           <td><span class="badge st-{{ t.status }}">{{ '排队中' if t.status == 'queued' else t.status }}</span></td>
           <td>{{ t.progress }}%</td>

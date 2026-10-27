@@ -81,6 +81,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- 拓展域名「送去探测」新建的任务挂在这里 —— 那是**子任务**，与「把域名追加成父任务的
   -- 子域名」（资产层，promote_too）是两件事，别混。老库靠 `_COLUMN_PATCHES` 补。
   parent_id INTEGER DEFAULT 0,
+  -- 续284（主理人点单「子任务不占编号」）：**门面号**，仅根任务有、连续递增；子任务
+  -- 为 NULL（页面显示成 `79-a` 派生编号）。与内部 `id` 解耦 —— 送探子任务消耗 `id` 但
+  -- 不消耗门面号，手工任务号保持连续（79 之后是 80，不因子任务跳号）。回填见 _backfill_display_no。
+  display_no INTEGER,
   -- 续211-P2-10：具名取消/停止原因（`scanner/cancelcause.py` 的封闭枚举）。
   -- `tasks.error` 照旧是人话（给人读的），这一列是给机器判的 —— 两不重复、不互推。
   -- 空串 = 正常跑完（done）或压根没被取消。老库靠 `_COLUMN_PATCHES` 补。
@@ -397,6 +401,7 @@ def init_db():
     with _WRITE_LOCK, get_conn() as conn:
         conn.executescript(SCHEMA)
         _ensure_columns(conn)
+        _backfill_display_no(conn)
 
 
 # 老库轻量迁移：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列，
@@ -460,6 +465,7 @@ _COLUMN_PATCHES = {
               "sev_blocked": "INTEGER DEFAULT 0",
               # 续185 任务层级的老库补列（0 = 顶层任务）
               "parent_id": "INTEGER DEFAULT 0",
+              "display_no": "INTEGER DEFAULT NULL",
               # 续211-P2-10 具名取消原因（枚举见 scanner/cancelcause.py::CAUSES）
               "stop_reason": "TEXT DEFAULT ''",
               # 续215-P2-12 单任务资源画像（见 SCHEMA 里的同名列注释）
@@ -478,6 +484,40 @@ def _ensure_columns(conn):
         for col, decl in cols.items():
             if col not in have:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+
+def _backfill_display_no(conn):
+    """续284：给老库补门面号（主理人 2026-10-27 拍板的迁移口径）。
+
+    口径：**79 及更早的主任务保持原号**（老号就是内部 id），子任务不占号；最新那棵
+    主任务接在「前一棵主任务显示号 + 1」上 —— 实测库 65/66/68/69/70/72/77/79/82
+    迁成 65/66/68/69/70/72/77/79/**80**，以后新建主任务由 `create_task` 从 max+1
+    续起（81、82…）。已落位的号**一律不改**（删任务也不重排），只给 NULL 的根补号。
+    子任务 display_no 恒为 NULL（页面显示父号 + 字母，如 79-a）。
+    idempotent：第二次起没有 NULL 根就一条 UPDATE 都不发。
+    """
+    rows = conn.execute(
+        "SELECT id, display_no FROM tasks WHERE parent_id=0 ORDER BY id").fetchall()
+    if not rows:
+        return
+    if all(r["display_no"] is None for r in rows):
+        # 首次迁移（老库全空）：老号 = 内部 id；只有「最新一棵」要接前号 + 1
+        for r in rows[:-1]:
+            conn.execute("UPDATE tasks SET display_no=? WHERE id=?",
+                         (int(r["id"]), int(r["id"])))
+        newest = rows[-1]
+        prev_no = int(rows[-2]["id"]) if len(rows) > 1 else int(newest["id"])
+        conn.execute("UPDATE tasks SET display_no=? WHERE id=?",
+                     (prev_no + 1, int(newest["id"])))
+    else:
+        # 迁移过一半（部分根已有号）：只补 NULL 的，接着已用最大号往后排
+        mx = max(int(r["display_no"]) for r in rows if r["display_no"] is not None)
+        for r in rows:
+            if r["display_no"] is None:
+                mx += 1
+                conn.execute("UPDATE tasks SET display_no=? WHERE id=?",
+                             (mx, int(r["id"])))
+    conn.execute("UPDATE tasks SET display_no=NULL WHERE parent_id!=0")
 
 
 def _exec(sql, params=(), many=False):
@@ -537,12 +577,22 @@ def create_task(name, targets, stages, options=None, owner_id=0, parent_id=0):
         stage_list = [s.strip() for s in stages.split(",") if s.strip()]
     else:
         stage_list = [str(s).strip() for s in (stages or []) if str(s).strip()]
+    parent_id = int(parent_id or 0)
+    # 续284：门面号只给根任务、连续递增；子任务 NULL（页面显示 79-a，不占号）。
+    # 取号与插入写成**一条** INSERT（根任务的号走子查询）—— 在 `_exec` 的 `_WRITE_LOCK`
+    # 内原子完成，两个并发建任务不会算出同一个 max、拿到同一个门面号。
+    if parent_id:
+        disp_sql, disp_params = "?", (None,)
+    else:
+        disp_sql, disp_params = (
+            "(SELECT COALESCE(MAX(display_no), 0) + 1 FROM tasks "
+            "WHERE parent_id=0 AND display_no IS NOT NULL)", ())
     return _exec(
         "INSERT INTO tasks(name, targets, stages, options, pid, owner_id, parent_id, "
-        "created_at, updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?)",
+        "display_no, created_at, updated_at) "
+        "VALUES(?,?,?,?,?,?,?," + disp_sql + ",?,?)",
         (name, targets, ",".join(stage_list), json.dumps(options or {}), os.getpid(),
-         int(owner_id or 0), int(parent_id or 0), _now(), _now()))
+         int(owner_id or 0), parent_id) + disp_params + (_now(), _now()))
 
 
 def list_child_tasks(parent_id):

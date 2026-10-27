@@ -752,8 +752,12 @@ def _task_tree_labels(ids):
             continue
     if not want:
         return {}
-    rows = db._query("SELECT id, parent_id FROM tasks ORDER BY id")
+    rows = db._query("SELECT id, parent_id, display_no FROM tasks ORDER BY id")
     parent = {int(r["id"]): int(r["parent_id"] or 0) for r in rows}
+    # 续284：根任务的显示编号用 `display_no`（门面号，连续、不因子任务跳号）；
+    # 子任务 display_no 为 NULL 时回落到内部 id。派生编号（79-a）挂在门面号上。
+    disp = {int(r["id"]): (int(r["display_no"]) if r["display_no"] is not None else None)
+            for r in rows}
     children = {}
     for tid, pid in parent.items():
         children.setdefault(pid, []).append(tid)
@@ -775,8 +779,9 @@ def _task_tree_labels(ids):
             walk(cid, lbl, depth + 1, seen | {cid})
 
     for root in sorted(roots):
-        labels[root] = str(root)
-        walk(root, str(root), 1, {root})
+        lbl = str(disp.get(root) if disp.get(root) is not None else root)
+        labels[root] = lbl
+        walk(root, lbl, 1, {root})
     return {tid: labels.get(tid, str(tid)) for tid in want}
 
 

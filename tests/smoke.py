@@ -12781,6 +12781,51 @@ http:
     # 原先这一句写在**模块顶层**（在 `if __name__ == "__main__": main()` 之前），
     # 于是它在任何断言运行之前就打印了：**用例挂了照样打印 PASS**，唯一真判据只剩退出码。
     # 这是本项目第四次踩"假绿"（前三次见 `AGENTS.md §6.1`），故显式搬进 main() 末尾。
+    # ---------------- [288] 续284：子任务不占门面号（display_no 连续、子任务显 79-a） ----------------
+    # 需求（主理人点单「子任务不占编号 / 下一个手工任务应是 80」）：送探子任务消费内部 `id`
+    # 但**不消费门面号 display_no**，根任务门面号连续递增；子任务 display_no 为 NULL、显示成 79-a。
+    # 验证：① 根任务门面号连续；② 子任务 display_no 为 NULL；③ 建完子任务后下一个根任务门面号仍是
+    # 「上一根 + 1」（子任务没把号顶飞）；④ 显示编号映射为 79-a 形态（挂在父门面号上）；
+    # ⑤ 老库迁移口径（主理人 2026-10-27 拍板）：79 及更早保持原号、82→80、幂等、删根不重排。
+    _tgt288 = "http://127.0.0.1:8765/"
+    _a288 = db.create_task("r288-a", _tgt288, ["probe"], {"offline": True})
+    _b288 = db.create_task("r288-b", _tgt288, ["probe"], {"offline": True})
+    _a_dn = int(db._query("SELECT display_no AS mx FROM tasks WHERE id=?", (_a288,), one=True)["mx"])
+    _b_dn = int(db._query("SELECT display_no AS mx FROM tasks WHERE id=?", (_b288,), one=True)["mx"])
+    assert _b_dn == _a_dn + 1, (_a_dn, _b_dn)   # 根任务门面号连续
+    _s288 = db.create_task("r288-sub", _tgt288, ["probe"], {"offline": True}, parent_id=_a288)
+    _s_dn = db._query("SELECT display_no FROM tasks WHERE id=?", (_s288,), one=True)["display_no"]
+    assert _s_dn is None, _s_dn                        # 子任务门面号为 NULL（不占号）
+    assert int(db._query("SELECT parent_id AS mx FROM tasks WHERE id=?", (_s288,), one=True)["mx"]) == _a288
+    _c288 = db.create_task("r288-c", _tgt288, ["probe"], {"offline": True})
+    _c_dn = int(db._query("SELECT display_no AS mx FROM tasks WHERE id=?", (_c288,), one=True)["mx"])
+    assert _c_dn == _b_dn + 1, (_b_dn, _c_dn)         # 子任务没顶飞根门面号 → 下一根仍是上一根+1
+    from gui.app import _task_tree_labels as _ttl288
+    _lbl288 = _ttl288([_a288, _s288, _c288])
+    assert _lbl288[_s288] == f"{_a_dn}-a", _lbl288     # 子任务显示 79-a 形态（挂在父门面号上）
+    import sqlite3 as _sq288
+    _c288 = _sq288.connect(":memory:")
+    _c288.row_factory = _sq288.Row
+    _c288.execute("CREATE TABLE tasks(id INTEGER PRIMARY KEY, parent_id INTEGER, display_no INTEGER)")
+    # 复刻主理人真库形态：根 65/66/68/77/79/82，其中 67/78 是子任务、80 是 79 的子任务
+    _c288.executemany("INSERT INTO tasks(id, parent_id, display_no) VALUES(?,?,NULL)",
+                      [(65, 0), (66, 0), (67, 66), (68, 0), (77, 0), (78, 77), (79, 0), (80, 79), (82, 0)])
+    db._backfill_display_no(_c288)
+    _m288 = {int(r["id"]): r["display_no"] for r in _c288.execute("SELECT id, display_no FROM tasks")}
+    assert _m288[65] == 65 and _m288[66] == 66 and _m288[68] == 68 and _m288[79] == 79, _m288
+    assert _m288[82] == 80, _m288                     # 最新一棵接前号 +1（子任务 80 不占门面号）
+    assert _m288[67] is None and _m288[78] is None and _m288[80] is None, _m288
+    db._backfill_display_no(_c288)                     # 幂等：第二次不许改号
+    _m288b = {int(r["id"]): r["display_no"] for r in _c288.execute("SELECT id, display_no FROM tasks")}
+    assert _m288b == _m288, (_m288, _m288b)
+    _c288.execute("DELETE FROM tasks WHERE id=65")     # 删根也不重排（门面号一旦落位就稳定）
+    db._backfill_display_no(_c288)
+    _m288c = {int(r["id"]): r["display_no"] for r in _c288.execute("SELECT id, display_no FROM tasks")}
+    assert _m288c[66] == 66 and _m288c[82] == 80, _m288c
+    print(f"[288] 续284 display_no 门面号 ok: 根 {_a_dn}->{_b_dn}->{_c_dn}，"
+          f"子任务 {_s288} display_no={_s_dn}（显示 {_lbl288[_s288]}）；老库迁移 79→79/82→80"
+          "（幂等 + 删根不重排）")
+
     # ---------------- [8c] 续80：分布式执行节点（中心控制 API + 节点回传） ----------------
     # 需求（roadmap）：「多个执行节点认领任务」。原设计写的是"先替换 SQLite"，但真换网络库
     # 要引驱动、改整个 db 层；本项目改为**控制端独占库 + 节点 HTTP 领任务/回传**（见 scanner/nodes.py）。
@@ -32189,10 +32234,11 @@ expression: r0()
     _p281 = db.create_task("续281-parent", "p281.test", [])
     _k281 = db.create_task("续281-child", "k281.test", [], parent_id=_p281)
     _lmap281 = _lbl281([_k281])
-    assert _lmap281.get(_k281) == f"{_p281}-a", _lmap281
+    _p281_dn = int(db._query("SELECT display_no AS mx FROM tasks WHERE id=?", (_p281,), one=True)["mx"])
+    assert _lmap281.get(_k281) == f"{_p281_dn}-a", _lmap281
     # 续282：列表默认只看根任务 —— 子任务行（79-a 显示编号所在的那行）要显式 parent=child 才渲染
     _html281 = _c284.get("/tasks?parent=child").get_data(as_text=True)
-    assert f">{_p281}-a</a>" in _html281, "任务列表没显示 24-a 编号"
+    assert f">{_p281_dn}-a</a>" in _html281, "任务列表没显示 24-a 编号"
     assert f'href="/tasks/{_k281}"' in _html281, "真实 ID 的链接被改掉了（只该改显示）"
     db.delete_task(_k281, backup=False)
     db.delete_task(_p281, backup=False)

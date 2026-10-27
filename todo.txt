@@ -4481,6 +4481,36 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，288 组；日志时间戳 14:08:56→14:17:37＝8 分 41 秒），日志 `logs/_smoke279.log`；`[172]` / `[266]` / `[281]` 全绿（含两组变异证伪）
 - [x] C2 记忆同步：CHANGELOG 续279 + todo 续279 + AGENTS §5 续266 那条补续279。
 
+## 续284（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：子任务不占门面号（display_no；迁移口径主理人拍板）
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人 2026-10-27：「子任务不占编号 / 下一个手工任务应是 80」。送探子任务只消耗内部 `id`，
+**不消耗门面号**；根任务门面号连续，子任务显示 `79-a`。迁移口径由主理人当场拍板
+（给出现库根 65/66/68/69/70/72/77/79/82，其中 80 是 79 的子任务）：
+**79 及更早保持原号，最新主任务 82 显示 80**；以后新建主任务从 81 连续。
+
+- [x] T1【门面号列 + 迁移】`scanner/db.py`：`tasks.display_no`（仅根任务有值；`_COLUMN_PATCHES` 补列）
+      + `_backfill_display_no` 重写：老库全空 ⇒ 除最新一棵按内部 id 落号、最新一棵接「前号 + 1」；
+      部分已落位 ⇒ 只补 NULL；子任务恒 NULL；已落位的号**删任务也不重排**；幂等（第二次起零 UPDATE）。
+      上一版每次启动按根集合重算，删中间一棵会把后面的号整体前移，与门面号稳定冲突。
+- [x] T2【原子取号】`create_task` 根任务取号与 INSERT 合成一条 SQL（号走
+      `COALESCE(MAX(display_no),0)+1` 子查询），在 `_exec` 的 `_WRITE_LOCK` 内原子完成；
+      并发建任务不会拿同一个号。`gui/app.py::_task_tree_labels` 根标签改读 `display_no`（NULL 回落 id）。
+- [x] T3【门禁 [288] 扩】① 根号连续 ② 子任务 NULL ③ 子任务不顶飞下一根 ④ 显示 79-a 形态
+      ⑤ 内存库复刻真库形态（65/66/68/77/79/82 + 子任务 67/78/80）⇒ 82→80、79 保持、幂等、删根不重排。
+- [x] T4【行尾还原】续280/282/283 同款事故第四次实录（编辑器整文件翻 CRLF）：AGENTS.md / app.js /
+      osint.py / smoke.py 用 `logs/_fixeol280.py` 从 HEAD 按行还原；app.py / db.py / dashboard.html
+      局部翻 CRLF 同法还原；逐文件两式 numstat 相等（app.js / osint.py / AGENTS 内容零差异）。
+- [x] C1 全量门禁：`tests/smoke.py` **SMOKE PASS**（rc=0；08:15:01→08:24:07 = 9 分 06 秒，一次即绿无红过），
+      日志 `logs/_smoke284.log`；[288] 单跑先绿再全量绿（含迁移口径/幂等/删根不重排）。
+- [x] C2 记忆同步：CHANGELOG 续284 + todo 续284 + AGENTS §5 `_task_tree_labels` 条目补门面号口径。
+- [x] C3 提交并推送：提交信息末行 `WorkBuddy · DeepSeek-V4.1-Flash`。
+
+下一轮（续285）：
+- [ ] AGENTS.md 其余段落逐条比对代码与配置（续280 挂账；只读审计报告已启动，结论待落盘）
+- [ ] 仪表盘「最近任务」只列主任务、子任务不占最近 8 行（主理人 2026-10-27 拍板；
+      「漏洞趋势」保持全量，子任务漏洞数据不许丢）—— 页面口径 + [289] 门禁
+
 ## 续283（2026-10-27，WorkBuddy · CodeBuddy）：详情页 11 页签徽标全部 live 化（单产地 _tab_counts）
 
 主理人 2026-10-27：「全部标签页live化」—— 任务详情页全部 11 个页签徽标都通过轮询自动刷新，
