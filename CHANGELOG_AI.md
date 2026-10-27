@@ -3,6 +3,30 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续288（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：控制台 dev --reload 自动重启（改完代码自动重启）
+
+### 背景 / 判断依据
+
+主理人 2026-10-27：「以后修改完代码 自动重启控制台」—— 改完代码后控制台应自动重启以生效，
+避免手动重启才发现改动没生效 / 有 bug。原 `serve()` 以 `app.run(debug=False)` 启动，
+无任何自动重载，改完代码必须人肉重启才看得到。
+
+### 改动
+
+- **dev `--reload` 模式**（gui/app.py）：`__main__` 增加开关，`--reload` 时调用新增的 `_run_with_watch()`；
+  父进程只做源文件监视 + 子进程管理，子进程以 `--_child` 跑原本的 `serve()` 全功能。监视 gui/ scanner/ cli/ config/ 下
+  `.py/.html/.yaml/.yml/.json`（用 `os.walk` 且跳过符号链接目录，避免监视仓库外的 tools/ 联接），
+  任一文件 mtime 变动即 `terminate()` + 重拉子进程。信号（SIGTERM/SIGINT）下父子双进程干净退出。
+- **生产路径零侵入**：默认不传 `--reload`，`serve()` 完全不变（仍 `debug=False`、不启 reloader、
+  队列 worker 起一份、端口守卫 / 随机前缀逻辑原样）；`[7i]` 门禁直接调 `serve()` 并打桩 `app.run`，不受影响。
+
+### 验证
+
+- 续287 HEAD 全量 **SMOKE PASS**（rc=0；审计日志 `logs/smoke_audit.log`，无回归）。
+- 实跑 `--reload`：父 + 子两进程拉起，子进程完整启动（3 worker + `Serving Flask app` + `Debug mode: off`）；
+  `touch gui/templates/tasks.html`（仅 mtime）触发自动重启（日志出现新一轮 `Serving Flask app`）；Ctrl+C 干净退出双进程。
+- 提交后续288 全量门禁复跑 SMOKE PASS（改动只动 `__main__` 与新增 `_run_with_watch`，被测路径不变）。
+
 ## 续287（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：拓展页签命中黑名单默认隐藏
 
 ### 背景 / 判断依据

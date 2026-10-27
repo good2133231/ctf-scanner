@@ -6895,5 +6895,87 @@ def serve(start_queue=True):
         app.wsgi_app = _inner138
 
 
+def _run_with_watch():
+    """Dev 模式（``--reload``）：源文件改动后自动重启控制台。
+
+    只做文件监视 + 子进程管理；真实服务器由子进程（``--_child``）跑 ``serve()`` 全功能，
+    故生产路径（``debug=False``、队列 worker、端口守卫）完全不变，``[7i]`` 门禁也不受影响。
+    用法：``python gui/app.py --reload``（开发期）；生产部署不要加这个开关。
+    """
+    import os, sys, time, signal, subprocess
+    _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _dirs = [os.path.join(_ROOT, d) for d in ("gui", "scanner", "cli", "config")]
+    _exts = (".py", ".html", ".yaml", ".yml", ".json")
+    _files = []
+    for _d in _dirs:
+        if not os.path.isdir(_d):
+            continue
+        for _r, _ds, _ns in os.walk(_d):
+            # 跳过指向仓库外的符号链接目录（如 tools/ 的目录联接），避免监视无关外部文件
+            _ds[:] = [x for x in _ds if not os.path.islink(os.path.join(_r, x))]
+            for _n in _ns:
+                if _n.lower().endswith(_exts):
+                    _files.append(os.path.join(_r, _n))
+    if not _files:
+        print("[!] 没有可监视的源文件，回退到普通启动")
+        serve()
+        return
+    print(f"[*] 自动重启已开启：监视 {len(_files)} 个源文件，改动后将重启控制台（Ctrl+C 退出）")
+
+    def _mtime():
+        _m = 0.0
+        for _f in _files:
+            try:
+                _m = max(_m, os.path.getmtime(_f))
+            except OSError:
+                pass
+        return _m
+
+    _child = None
+    _running = True
+
+    def _stop(_s, _f):
+        nonlocal _running
+        _running = False
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    try:
+        while _running:
+            if _child is None or _child.poll() is not None:
+                if _child is not None:
+                    print("[*] 子进程已退出，重新拉起控制台…")
+                _child = subprocess.Popen([sys.executable, __file__, "--_child"])
+                _last = _mtime()
+            time.sleep(1)
+            if not _running:
+                break
+            if _mtime() != _last:
+                print("[*] 检测到源文件改动，重启控制台…")
+                try:
+                    _child.terminate()
+                    _child.wait(timeout=5)
+                except Exception:
+                    try:
+                        _child.kill()
+                    except Exception:
+                        pass
+                _child = None
+    finally:
+        if _child is not None:
+            try:
+                _child.terminate()
+                _child.wait(timeout=5)
+            except Exception:
+                try:
+                    _child.kill()
+                except Exception:
+                    pass
+
+
 if __name__ == "__main__":
-    serve()
+    import sys as _sys
+    _argv = _sys.argv[1:]
+    if "--reload" in _argv and "--_child" not in _argv:
+        _run_with_watch()
+    else:
+        serve()

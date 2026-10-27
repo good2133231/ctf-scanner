@@ -4507,7 +4507,27 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C2 记忆同步：CHANGELOG 续287 + todo 续287 + AGENTS §5「黑名单命中的 SQL 条件」条目补续287。
 - [x] C3 提交并推送：提交信息末行 `WorkBuddy · DeepSeek-V4.1-Flash`。
 
-下一轮（续288）：
+## 续288（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：控制台 dev --reload 自动重启（改完代码自动重启）
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人 2026-10-27：「以后修改完代码 自动重启控制台」—— 改完代码后控制台应自动重启以生效，
+避免手动重启才发现改动没生效 / 有 bug。
+
+- [x] T1【dev --reload 模式】gui/app.py 新增 `_run_with_watch()` + `__main__` 开关：
+      `python gui/app.py --reload` 时父进程只做源文件监视 + 子进程管理，子进程（`--_child`）
+      跑原本的 `serve()` 全功能。监视 gui/ scanner/ cli/ config/ 下 .py/.html/.yaml/.yml/.json
+      （跳过指向仓库外的符号链接目录），文件 mtime 变动即终止并重启子进程。
+- [x] T2【生产路径零侵入】默认仍 `debug=False`、不启 reloader、队列 worker 只在子进程起一份、
+      端口守卫 / 随机前缀逻辑不变；`[7i]` 门禁（直接调 `serve()` 并打桩 `app.run`）不受影响。
+      Debug mode 实测为 off，无交互式调试器暴露风险。
+- [x] T3【实跑验证】启动 `--reload` → 父 + 子两进程、子进程完整拉起（3 worker + Flask Serving +
+      Debug mode: off）；`touch gui/templates/tasks.html`（仅改 mtime）触发自动重启（日志出现新一轮
+      `* Serving Flask app`）；Ctrl+C 干净退出双进程。
+- [x] C1 全量门禁：续287 HEAD 全量 **SMOKE PASS**（rc=0；审计日志 logs/smoke_audit.log，无回归）；
+      本改动只动 `__main__` 与新增 `_run_with_watch`，所有被测路径（含 [7i]）不变，提交后全量门禁复跑确认 SMOKE PASS。
+- [x] C2 记忆同步：CHANGELOG 续288 + todo 续288（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
+
+下一轮（续289）：
 - [ ] 无必须项（等主理人点单；页签的「隐藏条数」目前只在有命中时出现，若要点单可再加空态文案）
 
 ## 续286（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：hostcollide 收口到统一 HTTP 出口 + AGENTS 长尾核完
