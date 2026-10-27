@@ -12901,6 +12901,46 @@ http:
     print("[290] 续286 hostcollide ok: 不 import requests｜_fp 走 utils.http_request（Host 覆盖、无重定向、"
           "settings 透传）｜同指纹不命中、异指纹命中、失败不猜（行为不变）")
 
+    # ---------------- [291] 续287：拓展页签命中黑名单默认不列（与 /extdomains 同口径） ----------------
+    # 主理人点单：「拓展域名加黑名单能不能实时直接不显示在页面了」。此前只有跨任务 /extdomains
+    # 带黑名单过滤，任务详情「拓展域名」页签没有 ⇒ 提交后刷新仍在。本组钉三件事：
+    # ① 页签默认不列黑名单命中行、其余行照常；② 隐藏条数说出口并给 ?bl=1 跨任务视图入口
+    # （隐藏 ≠ 删数据）；③ 页签徽标（?tabcounts=1 与页面同一把尺子）也排除黑名单。
+    import gui.app as _ga291
+    from gui.app import app as _app291
+    from scanner import captcha as _cap291
+    _t291 = db.create_task("r291-ext-bl", "http://127.0.0.1:8765/", ["probe"], {"offline": True})
+    db.insert_subdomains(_t291, [("keep291.test", "js:mine"), ("drop291.test", "js:mine")])
+    _c291 = _app291.test_client()
+
+    def _login291(_data):
+        """自带取码登录（`_login7` 是 [7] 组内的局部函数，`--only` 单跑本组时拿不到它）。"""
+        _b291 = set(_cap291._STORE)
+        _c291.get("/captcha.png")
+        _f291 = [k for k in _cap291._STORE if k not in _b291]
+        assert _f291, "取码失败：/captcha.png 没发出新码"
+        return _c291.post("/login", data=dict(_data, captcha=_cap291._STORE[_f291[-1]][0]))
+
+    assert _login291(_admin_form117()).status_code == 302, "拓展页签黑名单用例登录失败"
+    _orig_load291 = _ga291.blacklist.load
+    _ga291.blacklist.load = lambda settings=None, owner_id=None: ["drop291.test"]
+    try:
+        # nores=1：本组只看行级过滤，不叠「只看解析成功」（两条都是未解析的合成行）
+        _html291 = _c291.get(f"/tasks/{_t291}?nores=1").get_data(as_text=True)
+        _bl_html291 = _c291.get(f"/extdomains?bl=1&task={_t291}").get_data(as_text=True)
+        _st291 = _c291.get(
+            f"/api/tasks/{_t291}/status?tabcounts=1&nores=1").get_json()
+    finally:
+        _ga291.blacklist.load = _orig_load291
+    assert "keep291.test" in _html291, "非黑名单的拓展域名应照常显示"
+    assert "drop291.test" not in _html291, "命中黑名单的拓展域名不该再出现在页签里"
+    assert "查看被黑名单过滤的" in _html291, "隐藏条数必须说出口（§0 第 10 条）"
+    assert "bl=1" in _html291 and f"task={_t291}" in _html291, "缺少 ?bl=1 逃生入口"
+    assert _st291["tab_counts"]["ext"] == 1, _st291        # 徽标与页面同口径（排除黑名单）
+    assert "drop291.test" in _bl_html291, "?bl=1 视图必须仍能看到被拦下的域名（不是删数据）"
+    print("[291] 续287 ext-blacklist ok: 页签默认不列黑名单命中行（其余照常）｜隐藏条数 + ?bl=1 逃生入口｜"
+          "徽标同口径排除黑名单｜?bl=1 仍可见（隐藏 ≠ 删数据）")
+
     # ---------------- [8c] 续80：分布式执行节点（中心控制 API + 节点回传） ----------------
     # 需求（roadmap）：「多个执行节点认领任务」。原设计写的是"先替换 SQLite"，但真换网络库
     # 要引驱动、改整个 db 层；本项目改为**控制端独占库 + 节点 HTTP 领任务/回传**（见 scanner/nodes.py）。
@@ -29234,7 +29274,7 @@ expression: r0()
         _con218.close()
         assert _reg218, "库里连一个注册域都没有？base_domain 全判空 ⇒ 折算口径坏了"
 
-        # 白名单三档＋公共厂商（都不含任何真实目标名，全是公共知识；续286 补 360.cn = Quake API 域）：
+        # 白名单三档＋公共厂商＋文档化 JS 成员访问链噪声（都不含任何真实目标名，全是公共知识；续287 补 jd.com 与 .name/.info 噪声）：
         # ① 仓库**公开字典**里的厂商域（cdn_cname / js_thirdparty）；
         # ② 合成夹具约定（*.test 与 example.com / evil.com / xxx.com）；
         # ③ AGENTS 已文档化的 jsmine「成员访问链」残余（network.protocol.name 这族：
@@ -29249,9 +29289,10 @@ expression: r0()
         from scanner import takeover as _to218
         _wl218 |= {(s.get("cname_suffix") or "").lstrip("*.").strip().lower()
                    for s in _to218.SERVICES if s.get("cname_suffix")}
-        _syn218 = {"example.com", "evil.com", "xxx.com", "360.cn"}
+        _syn218 = {"example.com", "evil.com", "xxx.com", "360.cn", "jd.com"}
         _noise218 = {"action.click", "protocol.name", "font.name", "text.name",
-                     "password.name", "password.new"}
+                     "password.name", "password.new", "group.name", "radio.name",
+                     "weight.name", "upload.info"}
 
         def _wl_218(r):
             if r in _syn218 or r in _noise218 or r.endswith(".test"):

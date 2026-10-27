@@ -528,6 +528,12 @@
     <p class="muted small note">口径：页签徽标 <b>{{ ext_pager.total }}</b> = 已解析、按域名去重、并排除已归属本项目的域名
       （与任务列表「统计」列一致）；上面「全部 / 分类」括号是<b>全量入库条数</b>，含未解析的碎片，
       点页内的「显示未解析」可以逐条看。</p>
+    {% if ext_bl_hidden %}
+    <p class="muted small">黑名单：当前筛选下 <b>{{ ext_bl_hidden }}</b> 条拓展域名命中黑名单，已<b>默认隐藏</b>
+      （入库一条没动；勾选「加入黑名单」提交后本页立刻不再列出）。
+      <a class="btn-mini ghost" href="{{ url_for('extdomains', bl=1, task=task.id) }}"
+        title="去跨任务「拓展域名」页的黑名单视图，看这些域名命中的是哪个条目">查看被黑名单过滤的 {{ ext_bl_hidden }} 条</a></p>
+    {% endif %}
     <p class="muted small note"><b>这些域名默认不会自动扫</b> —— probe / dirscan / vulnscan 的输入是
       「存活站点」，而 osint、jsmine 两个阶段排在 probe <b>之后</b>，同一任务里新挖出的域名赶不上本轮探测，
       于是停在"有域名、无检测"的状态。勾选你确认要看的域名，用下面几个按钮手动处理
@@ -599,7 +605,7 @@
           title="注册域命中本任务目标的那些（如目标 targ1.pro 拓展出 aaa.targ1.pro）会被追加成本任务的子域名：原拓展行保留，出处可查">
           归属本项目的追加为本任务子域名</button>
         <button type="submit" class="ghost" formaction="{{ url_for('api_blacklist_add') }}"
-          title="命中黑名单的域名此后不再进入资产库，自然也不会被扫描">
+          title="命中黑名单的域名此后不再进入资产库，自然也不会被扫描；提交后本页立刻不再显示（入库一条没动）">
           加入黑名单</button>
         <label class="muted">任务名
           <input name="name" placeholder="留空则用 拓展探测-&lt;月日&gt;-&lt;时分秒&gt;"></label>

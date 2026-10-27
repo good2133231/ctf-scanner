@@ -2398,9 +2398,15 @@ def create_app():
         ext_base = _and_where(db.EXT_SUBDOMAIN_WHERE,
                               None if _ext_all else db.OVERLAP_EXT_WHERE,
                               "source=?" if ext_pick else None)
+        # 续287：徽标与页签同一把尺子 —— 黑名单命中的行默认不列（加入后立刻消失）。
+        # 判据是 `db.blacklist_clause`（与 blacklist.matches 同口径），不在页签里另写一份。
+        _bl_entries = blacklist.load(load_settings(), owner_id=_owner_scope())
+        _bl_where, _bl_params = db.blacklist_clause(_bl_entries)
+        _bl_not = f"NOT {_bl_where}" if _bl_where else None
         _, extp, _ = _tab_page(task_id, "subdomains", "ex", "#ext",
-                               extra_where=_and_where(ext_base, res_where),
-                               extra_params=((ext_pick[2],) if ext_pick else ()),
+                               extra_where=_and_where(ext_base, res_where, _bl_not),
+                               extra_params=((ext_pick[2],) if ext_pick else ())
+                               + tuple(_bl_params),
                                order=EXT_SRC_ORDER, dedupe_domain=True)
         out["ext"] = extp["total"]
         # 端口
@@ -2502,15 +2508,32 @@ def create_app():
         # 却没进子域名"（#65 实测：a./mgr./pay-api./targ1.com 四条两边都在）。
         # `?all=1` 与跨任务页同一颗逃生钮（免得隐藏变成"再也看不到"）。
         _ext_all264 = request.args.get("all") == "1"
-        ext_counts = {r["source"]: r["c"] for r in db._query(
-            f"SELECT source, COUNT(*) c FROM subdomains WHERE task_id=? "
-            f"AND {db.EXT_SUBDOMAIN_WHERE}"
-            + ("" if _ext_all264 else f" AND {db.OVERLAP_EXT_WHERE}")
-            + " GROUP BY source", (task_id,))}
         ext_src = (request.args.get("esrc") or "").strip().lower()
         ext_pick = next((t for t in EXT_SRC_TAGS if t[0] == ext_src), None)
         if not ext_pick:
             ext_src = ""
+        # 续287（主理人点单「拓展域名加黑名单要立刻不显示」）：详情页拓展页签与跨任务 /extdomains
+        # 同一口径 —— 黑名单命中的行默认不列（入库一条没动）；隐藏条数在页面上报出，并给跨任务页
+        # `?bl=1` 专门视图入口。判据只 `db.blacklist_clause`（与 blacklist.matches 同源）。
+        _bl_entries_ext = blacklist.load(load_settings(), owner_id=_owner_scope())
+        _bl_where_ext, _bl_params_ext = db.blacklist_clause(_bl_entries_ext)
+        _bl_not_ext = f"NOT {_bl_where_ext}" if _bl_where_ext else None
+        _ext_bl_hidden = 0
+        if _bl_where_ext:
+            _blc_ext = db._query(
+                "SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE "
+                + _and_where("task_id=?", db.EXT_SUBDOMAIN_WHERE,
+                             None if _ext_all264 else db.OVERLAP_EXT_WHERE,
+                             "source=?" if ext_pick else None, res_where, _bl_where_ext),
+                (task_id,) + ((ext_pick[2],) if ext_pick else ()) + tuple(_bl_params_ext),
+                one=True)
+            _ext_bl_hidden = int(_blc_ext["c"] or 0) if _blc_ext else 0
+        ext_counts = {r["source"]: r["c"] for r in db._query(
+            f"SELECT source, COUNT(*) c FROM subdomains WHERE task_id=? "
+            f"AND {db.EXT_SUBDOMAIN_WHERE}"
+            + ("" if _ext_all264 else f" AND {db.OVERLAP_EXT_WHERE}")
+            + (f" AND {_bl_not_ext}" if _bl_not_ext else "")
+            + " GROUP BY source", (task_id,) + tuple(_bl_params_ext))}
         # **按来源分类排序**（用户 2026-09-23：「这个顺序和分类还是没有 …… 如何 JS 挖掘与
         # FOFA 不要交叉」）：原实现只是 `ORDER BY domain`，于是 js:mine 与 osint:fofa-title
         # 按字母序交错在一起，看不出哪些是 JS 挖的、哪些是 FOFA 反查来的 —— 这里与
@@ -2526,15 +2549,16 @@ def create_app():
                               "source=?" if ext_pick else None)
         ext_subs, ext_pager, ext_q = _tab_page(
             task_id, "subdomains", "ex", "#ext",
-            extra_where=_and_where(ext_base, res_where),
-            extra_params=((ext_pick[2],) if ext_pick else ()),
+            extra_where=_and_where(ext_base, res_where, _bl_not_ext),
+            extra_params=((ext_pick[2],) if ext_pick else ()) + tuple(_bl_params_ext),
             order=EXT_SRC_ORDER,
             dedupe_domain=True,
             # 分类也是筛选状态：翻页时必须带上，否则点了「JS 挖掘」再翻页就变回"全部"
             extra_qs=(f"&esrc={quote(ext_src)}" if ext_src else ""))
         ext_subs, _hid = _sub_rows(
-            ext_subs, f"task_id=? AND ({ext_base})",
-            (task_id,) + ((ext_pick[2],) if ext_pick else ()), hide_res)
+            ext_subs, f"task_id=? AND ({ext_base})"
+            + (f" AND {_bl_not_ext}" if _bl_not_ext else ""),
+            (task_id,) + ((ext_pick[2],) if ext_pick else ()) + tuple(_bl_params_ext), hide_res)
         # 续169：这一页签每行的「置信度」徽章 —— 判据只有 `extdom.confidence` 一份，页面只读不另算
         _ext_confidence(ext_subs, tid=task_id)
         _nores_state(ext_pager, hide_res, _hid)
@@ -2767,6 +2791,7 @@ def create_app():
             sev_blocked_line=task.get("sev_blocked_line", ""),
             subs=subs, ext_subs=ext_subs,
             ext_src=ext_src, ext_counts=ext_counts, ext_src_tags=EXT_SRC_TAGS,
+            ext_bl_hidden=_ext_bl_hidden,
             ext_defaults=_ext_defaults(),
             resume_rest=resume_rest,
             sites=sites,

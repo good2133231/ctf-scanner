@@ -4,3 +4,4 @@
 #   third-party.com      → 同时屏蔽 a.third-party.com、b.a.third-party.com
 #   *.sister-corp.com    → 写法等价于 sister-corp.com
 # 想临时停用整份黑名单而不删内容：把 settings.yaml 的 blacklist.enabled 改成 false。
+jd.com

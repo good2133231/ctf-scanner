@@ -4481,6 +4481,35 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，288 组；日志时间戳 14:08:56→14:17:37＝8 分 41 秒），日志 `logs/_smoke279.log`；`[172]` / `[266]` / `[281]` 全绿（含两组变异证伪）
 - [x] C2 记忆同步：CHANGELOG 续279 + todo 续279 + AGENTS §5 续266 那条补续279。
 
+## 续287（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：拓展页签命中黑名单默认隐藏（主理人「加黑后立刻不显示」）
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人 2026-10-27：「拓展域名加黑名单能不能实时直接不显示在页面了」。此前只有跨任务
+`/extdomains` 带黑名单过滤（续194），任务详情「拓展域名」页签没带 ⇒ 点「加入黑名单」提交后
+刷新仍在。本轮把页签收口到同一口径。
+
+- [x] T1【页签默认隐藏】`task_detail` 路由：拓展页签的 `ext_counts` / `ext_subs` / `_sub_rows`
+      三处 + 实时徽标 `_tab_counts` 全部叠加 `NOT db.blacklist_clause(...)` —— 与 `/extdomains`
+      同一判据（`blacklist.matches` 同源），提交后刷新立刻不列；入库一条没动。
+- [x] T2【隐藏可见 + 逃生】页签内用可见文案报出「当前筛选下 N 条命中黑名单，已默认隐藏」，
+      并给 `?bl=1` 跨任务视图入口（`/extdomains?bl=1&task=<id>`，仍能看到被拦下的域名与命中条目）；
+      黑名单按钮 title 补「提交后本页立刻不再显示」。
+- [x] T3【门禁 [291]】建任务 + 插 keep/drop 两个 `js:mine` 拓展域名，桩 `blacklist.load` 只拦 drop：
+      断言 keep 在、drop 不在页签；隐藏条数与 `bl=1` 链接在；`?tabcounts=1` 的 ext 徽标 == 1
+      （徽标与页面同一把尺子）；`/extdomains?bl=1&task=` 仍能看到 drop（隐藏 ≠ 删数据）。
+- [x] T4【[218] 白名单】主理人真任务 #83 跑完后真库资产与 tracked 文件两次撞红：
+      ① `360.cn ← scanner/quake.py`（续286 已按公共厂商加白）；② `jd.com ← config/blacklist.txt`
+      （公共厂商，且本就在黑名单里）与 `group.name ← tools/check_contrast.py`（jsmine 成员访问链噪声）。
+      按 §0.5「先判公共厂商 / 已文档化噪声」补 `jd.com` 与 `.name/.info` 噪声四项，不是消音器。
+- [x] C1 全量门禁：首跑在 [218] 红（原因 T4），补白后重跑 **SMOKE PASS**（rc=0；12:32:28→12:41:05
+      = 8 分 37 秒），日志 `logs/_smoke287b.log`；[291] 单跑先绿、全量再绿；红的那次日志 `logs/_smoke287.log`。
+      行尾：app.py / task_detail.html 经 `logs/_fixeol280.py` 还原，smoke 字节补丁，两式 numstat 相等。
+- [x] C2 记忆同步：CHANGELOG 续287 + todo 续287 + AGENTS §5「黑名单命中的 SQL 条件」条目补续287。
+- [x] C3 提交并推送：提交信息末行 `WorkBuddy · DeepSeek-V4.1-Flash`。
+
+下一轮（续288）：
+- [ ] 无必须项（等主理人点单；页签的「隐藏条数」目前只在有命中时出现，若要点单可再加空态文案）
+
 ## 续286（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：hostcollide 收口到统一 HTTP 出口 + AGENTS 长尾核完
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
 

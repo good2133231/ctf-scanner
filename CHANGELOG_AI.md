@@ -3,6 +3,47 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续287（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：拓展页签命中黑名单默认隐藏
+
+### 背景 / 判断依据
+
+主理人 2026-10-27：「拓展域名加黑名单能不能实时直接不显示在页面了」。续194 已经给跨任务
+`/extdomains` 做了「黑名单行默认隐藏 + `?bl=1` 专门视图」，但任务详情的「拓展域名」页签
+**没有带**这层过滤 ⇒ 在该页签点「加入黑名单」提交后，302 回来那一行还在（用户看到的就是
+"加了也没消失"）。本轮把页签收口到与 `/extdomains` 同一份判据。
+
+### 改动
+
+- `gui/app.py`：
+  - `task_detail` 路由的拓展页签三处 SQL（`ext_counts` 分类计数、`_tab_page` 列表、
+    `_sub_rows` 的未解析隐藏计数）统一叠加 `NOT db.blacklist_clause(...)`；`?all=1` / `esrc` /
+    `nores` 等既有筛选口径不变。
+  - `_tab_counts(task_id)` 的 ext 徽标同样叠加黑名单过滤 —— 页面徽标与 `?tabcounts=1` 轮询
+    继续是同一把尺子（续283 的单产地纪律），不会出现「列表少了、徽标没少」。
+  - 新增 `_ext_bl_hidden`：按当前筛选（任务/重叠/source/nores）统计被黑名单隐藏的域名数。
+- `gui/templates/task_detail.html`：页签内用**可见**文案报出「当前筛选下 N 条命中黑名单，已默认隐藏
+  （入库一条没动）」，并给 `?bl=1` 跨任务视图入口；「加入黑名单」按钮 title 补「提交后本页立刻不再显示」。
+- `tests/smoke.py [291]`（新组）：建任务 + `keep291.test` / `drop291.test` 两个 `js:mine` 拓展域名，
+  桩 `blacklist.load` 只拦 drop；断言页签里 keep 在、drop 不在；隐藏条数与 `bl=1` 链接在；
+  `?tabcounts=1` 的 ext 徽标 == 1；`/extdomains?bl=1&task=<id>` 仍能看到 drop（隐藏 ≠ 删数据）。
+
+### 验证
+
+- `[291]` 单跑 PASS；全量 `tests/smoke.py` **SMOKE PASS**（rc=0，12:32:28→12:41:05 = 8 分 37 秒），
+  日志 `logs/_smoke287b.log`。
+- 红过一次并已定位：首跑在 [218] 判红 `jd.com ← config/blacklist.txt` —— 原因是主理人真任务 #83
+  刚跑完、真库资产里出现 jd.com（公共厂商，且本就在黑名单里）与 `group.name`（jsmine 成员访问链
+  噪声，出现在 `tools/check_contrast.py`）。按 §0.5「先判公共厂商 / 已文档化噪声」把 `jd.com`
+  与 `.name/.info` 噪声四项补进 [218] 白名单后重跑绿；真实目标域仍会判红，不是消音。
+  首跑日志 `logs/_smoke287.log`。
+- 行尾：app.py / task_detail.html 经 `logs/_fixeol280.py` 还原；smoke 新组/白名单按字节补丁落在原
+  EOL 区段；逐文件 `git diff --numstat` 与 `--ignore-cr-at-eol --numstat` 相等。
+
+### C2 记忆同步
+
+- `todo.txt` 续287；`AGENTS.md §5`「黑名单命中的 SQL 条件」条目补「详情页拓展页签同口径 +
+  隐藏条数 + `?bl=1` 查看」并带续287 号。
+
 ## 续286（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：hostcollide 收口到统一 HTTP 出口 + AGENTS 长尾核完
 
 ### 背景 / 判断依据
