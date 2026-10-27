@@ -1141,6 +1141,22 @@ def main():
         for t in _new:
             assert t["stages"] == "subdomain", t
         assert sorted(t["targets"] for t in _new) == ["sub1.smoke.test", "sub2.smoke.test"]
+
+        # 场景覆盖（续290）：单个域名 / 空勾选 / 大小写不同的同一个 host
+        #   · 单个域名 → 单个任务，任务名即域名本身
+        c.post("/api/domains/run-subdomain", data={"domain": ["only1.smoke.test"]})
+        _one = [t for t in db.list_tasks(limit=1000) if t["targets"] == "only1.smoke.test"]
+        assert len(_one) == 1, _one
+        assert _one[0]["name"] == "only1.smoke.test", _one[0]["name"]
+        #   · 空勾选 → 一个任务都不建（也不报错，退回原页面）
+        _n0 = len(db.list_tasks(limit=1000))
+        r0 = c.post("/api/domains/run-subdomain", data={})
+        assert r0.status_code == 302, r0.status_code
+        assert len(db.list_tasks(limit=1000)) == _n0, "空勾选不该建出任务"
+        #   · 大小写不同的同一个 host → 只算一个任务（域名 DNS 不区分大小写）
+        c.post("/api/domains/run-subdomain", data={"domain": ["Case.Test", "case.test"]})
+        _ci = [t for t in db.list_tasks(limit=1000) if t["targets"] == "case.test"]
+        assert len(_ci) == 1, [(t["id"], t["targets"]) for t in _ci]
     finally:
         gui_app.run_task = _orig_run_task
 

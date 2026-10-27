@@ -4638,6 +4638,17 @@ def create_app():
         收益只是 UI 好看一点 —— 按用户确认的口径选"新建任务"。
         """
         domains = _picked_domains()
+        # 续290 通用性：域名 DNS 不区分大小写 —— 勾选里同一个 host 若出现大小写不同的两份，
+        # 去重必须忽略大小写，否则这一次勾选会建出两个任务（主理人反对的正是"重复/集合"）。
+        # 只在本接口内归一（这里要的就是一个域名一个任务），**不动**共享的 `_picked_domains()`
+        # —— 黑名单等其它入口各有各的口径，不能顺手替它们改。
+        _seen_ci, _doms_ci = set(), []
+        for _d in domains:
+            _k = _d.strip().lower()
+            if _k and _k not in _seen_ci:
+                _seen_ci.add(_k)
+                _doms_ci.append(_k)
+        domains = _doms_ci
         if not domains:
             return redirect(_safe_next(request.form.get("next"), url_for("subdomains")))
         stages = ["subdomain"]
@@ -6936,43 +6947,90 @@ def _run_with_watch():
 
     _child = None
     _running = True
+    _stable = 0
+
+    def _kill(_c):
+        """停掉子进程：先 terminate 留 5 秒善后，不听话再 kill（finally 复用同一口径）。"""
+        try:
+            _c.terminate()
+            _c.wait(timeout=5)
+        except Exception:
+            try:
+                _c.kill()
+            except Exception:
+                pass
 
     def _stop(_s, _f):
         nonlocal _running
         _running = False
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
+
+    # 续290 稳定性：子进程**崩溃**（退出码非 0 —— 多半是刚保存的代码有语法错误）时，
+    # 不能再像以前那样「一退出就立刻拉下一个」：那就是实测出来的「改代码存一半 → 控制台
+    # 每秒重启一次、日志刷屏、CPU 白烧」死循环（12 秒重启了 11 次）。现在改成：区分计划内
+    # 重启与真崩溃 → 真崩溃走指数退避并把话说清楚 → 退避等待期间文件一改（＝人改好了）立刻重试。
+    _base_backoff, _max_backoff = 1.0, 30.0
+    _crashes = 0
+    _restart_planned = False
+    _last = 0.0
+
+    def _wait_change_or_timeout(_seconds):
+        """退避等待：等到点就回；期间文件一改（＝代码改好了）立刻回，不用空等完。"""
+        nonlocal _last
+        _deadline = time.time() + _seconds
+        while time.time() < _deadline:
+            if not _running:
+                return
+            time.sleep(0.5)
+            _now = _mtime()
+            if _now != _last:
+                print("[*] 文件已有改动，立刻重试…")
+                _last = _now
+                return
+
     try:
         while _running:
-            if _child is None or _child.poll() is not None:
-                if _child is not None:
-                    print("[*] 子进程已退出，重新拉起控制台…")
+            if _child is None:
                 _child = subprocess.Popen([sys.executable, __file__, "--_child"])
                 _last = _mtime()
+                _restart_planned = False      # 这次重启已被新起的进程消费掉
+                continue
+            if _child.poll() is not None:
+                _rc = _child.returncode
+                _planned = _restart_planned
+                _restart_planned = False
+                _child = None
+                _stable = 0
+                if _planned or _rc in (0, -15):
+                    # 计划内的重启 / 正常退出（含被我们 TERM 掉的）：不报错、不进退避
+                    if not _planned:
+                        print(f"[*] 子进程已退出（退出码 {_rc}），重新拉起控制台…")
+                    continue
+                _crashes += 1
+                print(f"[!] 子进程启动失败/异常退出（退出码 {_rc}）—— 多半是刚保存的代码有语法错误，"
+                      f"控制台已自动暂停重启，请先看一眼上面那条报错把代码改好。")
+                _wait = min(_max_backoff, _base_backoff * (2 ** min(_crashes - 1, 6)))
+                print(f"    连续第 {_crashes} 次失败，{_wait:g} 秒后自动重试"
+                      f"（退避上限 {_max_backoff:g} 秒；这期间改好文件会立刻重试）")
+                _wait_change_or_timeout(_wait)
+                continue
+            # 子进程活得好好的：连着活过几轮就把连续失败计数清零（下次真崩也从 1 秒起退避）
+            _stable += 1
+            if _stable >= 3:
+                _crashes = 0
             time.sleep(1)
             if not _running:
                 break
             if _mtime() != _last:
                 print("[*] 检测到源文件改动，重启控制台…")
-                try:
-                    _child.terminate()
-                    _child.wait(timeout=5)
-                except Exception:
-                    try:
-                        _child.kill()
-                    except Exception:
-                        pass
+                _kill(_child)
                 _child = None
+                _restart_planned = True
+                _last = _mtime()
     finally:
         if _child is not None:
-            try:
-                _child.terminate()
-                _child.wait(timeout=5)
-            except Exception:
-                try:
-                    _child.kill()
-                except Exception:
-                    pass
+            _kill(_child)
 
 
 if __name__ == "__main__":
