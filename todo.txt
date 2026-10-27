@@ -4481,6 +4481,42 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，288 组；日志时间戳 14:08:56→14:17:37＝8 分 41 秒），日志 `logs/_smoke279.log`；`[172]` / `[266]` / `[281]` 全绿（含两组变异证伪）
 - [x] C2 记忆同步：CHANGELOG 续279 + todo 续279 + AGENTS §5 续266 那条补续279。
 
+## 续285（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：仪表盘「最近任务」只列主任务 + AGENTS 十条事实抽查
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人 2026-10-27 拍板：仪表盘「最近任务」与 /tasks 默认档同口径 —— **只列主任务**，子任务不占
+最近 8 行；「漏洞趋势」逐任务表**保持全量**（含子任务），子任务的漏洞数据不许因列表口径而丢。
+同时把续280 挂账的「AGENTS.md 其余段落逐条比对」先做一轮 10 条高风险事实抽查。
+
+- [x] T1【仪表盘口径】`gui/app.py::dashboard` 的最近任务改 `_page_tasks(parent="root")`（口径唯一产地
+      是 `db.page_tasks` 的 parent 参数，不在 dashboard 里再拼 parent_id=0）；`dashboard.html` 补可见
+      文案「只列主任务 —— 子任务在任务页父面板里看」，趋势表说明补「含子任务」。
+- [x] T2【门禁 [289]】建主任务 + 子任务 → 仪表盘最近任务区块：主任务在、子任务不在、口径文案在；
+      漏洞趋势区块：子任务仍在（15 个最新任务全量）。`--only 289` 先绿再全量绿。
+- [x] T3【AGENTS 十条抽查】15 阶段/顺序/默认、settings 38 段=DEFAULTS 38、fscan/afrog 不握手、
+      checks 三级门控（DEFAULTS medium+skip info/low；随包 settings.yaml high）、SITE_STATUS_WHERE 含 5xx、
+      `_tab_counts` 单产地、keys 密文优先（两文件均 gitignore）、导航 17 栏（dev 第 18）、
+      massdns 标准安装自动编 —— **9 条一致，1 条漂移**。
+- [x] C1 全量门禁：`tests/smoke.py` **SMOKE PASS**（rc=0；08:39:55→08:48:30 = 8 分 35 秒，一次即绿），
+      日志 `logs/_smoke285.log`；[289] 全绿。
+- [x] C2 记忆同步：CHANGELOG 续285 + todo 续285 + AGENTS §5 补「仪表盘最近任务显示哪一层」。
+- [x] C3 提交并推送：提交信息末行 `WorkBuddy · DeepSeek-V4.1-Flash`。
+
+**审计结论（10 条抽查，2026-10-27）**
+- 一致 9 条：见 T3；证据在 CHANGELOG 续285 的表格。
+- **漂移 1 条**：`scanner/hostcollide.py` 第 11 行 `import requests` + 第 35 行 `requests.get(...)` ——
+  目标侧探测**绕过** `utils.http_request`（UA 伪装 / `limits.verify_tls` 分流 / `_throttle` 名额与预算
+  全不生效），与 §5.1、§5.8 冲突。本轮只登记不改（改它会牵动 hostcollide 行为，需单独一轮 + 断言）。
+- 附注（不是漂移，是需要登记的例外）：`scanner/nodes.py` 第 316 行直连 `requests.post` 是**节点控制面**
+  （带 X-Node-Token 的 JSON RPC，不是目标扫描、不伪装、不吃扫描预算）；建议在 §5.1 里显式写一句例外，
+  免得下一次审计把它当违规。
+
+下一轮（续286）：
+- [ ] hostcollide 改走 `utils.http_request`（Host 头覆盖 + 只读 GET + 限流/预算真生效），补 [290] 断言
+      （AST 钉「hostcollide 不许 import requests」+ `_fp` 走统一出口）
+- [ ] AGENTS.md 其余段落继续逐条比对（续280 挂账；本轮已抽查 10 条，§3/§5/§7 长尾未覆盖）
+- [ ] `scanner/nodes.py` 节点控制面在 AGENTS §5.1 登记为显式例外（同轮做，不动代码）
+
 ## 续284（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：子任务不占门面号（display_no；迁移口径主理人拍板）
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
 

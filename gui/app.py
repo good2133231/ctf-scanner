@@ -2015,7 +2015,10 @@ def create_app():
     @app.route("/")
     @login_required
     def dashboard():
-        _recent = _list_tasks(limit=8)
+        # 续285（主理人 2026-10-27 拍板）：仪表盘「最近任务」与 /tasks 默认档同口径 ——
+        # 只列主任务，子任务不占最近 8 行；口径本身走 `page_tasks(parent="root")` 唯一产地，
+        # 不在 dashboard 里再拼一份 parent_id=0。
+        _recent = _page_tasks(limit=8, offset=0, parent="root")[0]
         _trend = _vuln_trend()
         # 续281：与任务列表同一份 24-a 显示编号（最近任务 + 趋势表里的任务一起算，
         # 免得子任务在仪表盘的两张表里一个显示 79-a、一个显示 #80）

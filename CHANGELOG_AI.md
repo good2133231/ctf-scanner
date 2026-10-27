@@ -3,6 +3,55 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续285（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：仪表盘「最近任务」只列主任务 + AGENTS 十条事实抽查
+
+### 背景 / 判断依据
+
+主理人 2026-10-27 对仪表盘口径拍板：**「最近任务」只列主任务**（与 /tasks 默认档一致，子任务不占
+最近 8 行），**「漏洞趋势」保持全量**（含子任务，子任务的漏洞数据不许因列表口径而丢）。
+
+同时把续280 挂账的「AGENTS.md 其余段落逐条比对代码与配置」先做一轮**高风险事实抽查**：挑 10 条
+可验证、影响判断的断言逐条到代码/配置里核对，而不是重读全文。
+
+### 改动
+
+- `gui/app.py::dashboard`：最近任务从 `_list_tasks(limit=8)`（含子任务）改为
+  `_page_tasks(limit=8, offset=0, parent="root")[0]` —— `parent="root"` 的过滤口径归
+  `db.page_tasks` 唯一产地（[202] 三档），dashboard 不另拼 `parent_id=0`。
+- `gui/templates/dashboard.html`：最近任务标题下补可见文案「只列主任务 —— 子任务在任务页父面板里看」；
+  漏洞趋势说明补「逐任务为最近 15 个任务（含子任务），漏洞数据不因列表口径而丢」。
+- `tests/smoke.py [289]`（新组）：建主任务 + 子任务 → 仪表盘「最近任务」区块主任务在、子任务不在、
+  口径文案在；「漏洞趋势」区块子任务仍在（15 个最新任务全量）。自带取码登录，`--only 289` 可单跑。
+
+### 验证
+
+- `[289]` 单跑 PASS；全量 `tests/smoke.py` **SMOKE PASS**（rc=0，08:39:55→08:48:30 = 8 分 35 秒），
+  日志 `logs/_smoke285.log`；一次即绿，未红过。
+- 行尾：app.py / dashboard.html 经 `logs/_fixeol280.py` 还原，两式 numstat 相等；smoke.py 新组落在
+  LF 区段（字节级插入），两式 numstat 相等。
+
+### AGENTS 十条抽查结果
+
+| # | AGENTS 断言 | 结论 | 证据 |
+|---|---|---|---|
+| 1 | §4 当前 15 个阶段、顺序与默认开关 | 一致 | `runner.STAGE_ORDER` 恰 15 项；DEFAULTS：takeover/hostcollide/portscan/jsmine/dirscan/crawl/vulnscan=True，cert/screenshot/intel/heuristic/github=False |
+| 2 | §3 settings.yaml 三十八段 = DEFAULTS 全部段 | 一致 | `scanner/config.py::DEFAULTS` 顶层恰 38 段 |
+| 3 | §5.2 fscan 与 afrog 不做版本握手 | 一致 | `toolmgr.py:109` afrog `verify=None`；`cli/client.py:188-194` fscan 跳过握手 |
+| 4 | §5.7 checks 三级门控默认 | 一致 | DEFAULTS：`min_severity=medium`、`skip_severities=[info,low]`；随包 `config/settings.yaml`：`high` + `[info,low]` |
+| 5 | §5 SITE_STATUS_WHERE 已含 5xx | 一致 | `scanner/db.py:2289-2292` 直接状态与跳转后状态两路都含 5xx |
+| 6 | §5.14 `_tab_counts` 单产地 | 一致 | `gui/app.py::_tab_counts` 存在，渲染与 `?tabcounts=1` 共用 |
+| 7 | §7 keys 密文优先、明文兜底、两文件 gitignore | 一致 | `.gitignore:15/17`；`config.py::load_keys` 三条口径（密文已解锁 > 密文未解锁返回 {} > 无密文才读明文） |
+| 8 | §4 GUI 17 栏（dev 第 18） | 一致 | `base.html` nav_items 17 项 + `dev_enabled` 追加 1 项 |
+| 9 | §7 massdns 标准 install 自动编 | 一致 | `install.sh:9,100-102`（续274；缺 gcc/make 如实报/引导） |
+| 10 | §5.1 所有 HTTP 必须走 `utils.http_request` | **漂移** | `scanner/hostcollide.py:11,35` 直连 `requests.get`，绕过 UA/verify/throttle/预算 —— 与 §5.1/§5.8 冲突；本轮只登记，下一轮修 |
+
+附注：`scanner/nodes.py:316` 的直连 `requests.post` 属**节点控制面**（X-Node-Token JSON RPC，
+不是目标扫描），建议在 §5.1 登记为显式例外，避免下次审计误报为违规。
+
+### C2 记忆同步
+
+- `todo.txt` 续285（含审计结论与新挂账）；`AGENTS.md §5` 补「仪表盘最近任务显示哪一层」并带续285 号。
+
 ## 续284（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：子任务不占门面号（display_no；迁移口径主理人拍板）
 
 ### 背景 / 判断依据

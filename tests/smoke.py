@@ -12826,6 +12826,37 @@ http:
           f"子任务 {_s288} display_no={_s_dn}（显示 {_lbl288[_s288]}）；老库迁移 79→79/82→80"
           "（幂等 + 删根不重排）")
 
+    # ---------------- [289] 续285：仪表盘「最近任务」只列主任务（趋势表保持全量） ----------------
+    # 主理人 2026-10-27 拍板：最近任务与 /tasks 默认档同口径（只列主任务，子任务不占最近 8 行）；
+    # 「漏洞趋势」逐任务表保持全量（含子任务），子任务的漏洞数据不许因列表口径而丢。
+    _root289 = db.create_task("r289-root-dash", "http://127.0.0.1:8765/", ["probe"], {"offline": True})
+    _sub289 = db.create_task("r289-sub-dash", "http://127.0.0.1:8765/", ["probe"], {"offline": True},
+                             parent_id=_root289)
+    from gui.app import app as _app289
+    from scanner import captcha as _cap289
+    _c289 = _app289.test_client()
+
+    def _login289(_data):
+        """自带取码登录（`_login7` 是 [7] 组内的局部函数，`--only` 单跑本组时拿不到它）。"""
+        _b289 = set(_cap289._STORE)
+        _c289.get("/captcha.png")
+        _f289 = [k for k in _cap289._STORE if k not in _b289]
+        assert _f289, "取码失败：/captcha.png 没发出新码"
+        return _c289.post("/login", data=dict(_data, captcha=_cap289._STORE[_f289[-1]][0]))
+
+    assert _login289(_admin_form117()).status_code == 302, "仪表盘用例登录失败"
+    _dash289 = _c289.get("/").get_data(as_text=True)
+    # 「最近任务」区块 = 该标题到「最近漏洞」标题之间：主任务在、子任务不在
+    _recent289 = _dash289.split("最近任务", 1)[1].split("最近潜在漏洞", 1)[0]
+    assert "r289-root-dash" in _recent289, _recent289[:400]
+    assert "r289-sub-dash" not in _recent289, "子任务不该占最近任务行"
+    assert "只列主任务" in _recent289, "列表口径文案缺失"
+    # 「漏洞趋势」逐任务表 = 最近 15 个任务全量：刚建的子任务仍在，口径不跟着列表走
+    _trend289 = _dash289.split("漏洞趋势统计", 1)[1]
+    assert "r289-sub-dash" in _trend289, "趋势表丢了子任务"
+    print("[289] 续285 dashboard ok: 最近任务只列主任务（子任务不入 8 行、口径文案在）｜"
+          "漏洞趋势逐任务表仍含子任务（全量，不随列表口径丢数据）")
+
     # ---------------- [8c] 续80：分布式执行节点（中心控制 API + 节点回传） ----------------
     # 需求（roadmap）：「多个执行节点认领任务」。原设计写的是"先替换 SQLite"，但真换网络库
     # 要引驱动、改整个 db 层；本项目改为**控制端独占库 + 节点 HTTP 领任务/回传**（见 scanner/nodes.py）。
