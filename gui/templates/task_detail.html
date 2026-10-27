@@ -121,28 +121,29 @@
   不会产生重复行。<span class="muted">（与「重启」的区别：重启会清空资产从头跑。）</span></p>
 {% endif %}
 
-{# 续280（主理人点单「数字显示经常要我刷新才显示」）：带 `data-cnt` 的页签徽标会被
-   `pollTask` 拿轮询回来的计数**定点替换**（键名＝`db.task_counts` 的键）。
-   **只有 `cnt_live` 点名的页签才带这个属性** —— 其余页签的数是"折叠/去重/筛选后"的
-   口径（判据与理由见 `gui/app.py::task_detail` 的 `cnt_live`），拿未过滤的表行数盖上
-   去就是"列表 3 行、徽标写 120"。宁可少刷三个数字，也不给一个对不上的数字。 #}
+{# 续283（主理人点单「全部标签页 live 化」）：每个页签徽标都带 `data-cnt="{tab}"`，
+   `pollTask` 拿轮询回来的 `tab_counts`（键名＝`_tab_counts` 的键）**定点替换**。
+   与续280 旧口径（只有未过滤表行数的三个页签才 live）不同：现在折叠/去重/筛选后的页签
+   也 live —— 因为轮询吃的是和页签**同一个过滤后的数**（轮询自带 `location.search` 的
+   esrc=/vq=/vsev=/all=1 等），不会再出现"列表 3 行、徽标写 120"。所有数字的唯一产地
+   都是 `gui/app.py::_tab_counts(task_id)`，渲染与轮询共用，杜绝"两张数"。 #}
 <div class="tabs">
-  <div class="tab active" data-tab="vulns" {% if cnt_live.vulns %}data-cnt="vulns"{% endif %}>潜在漏洞<span class="cnt">{{ vuln_total }}</span></div>
-  {# 续281：三个徽标的口径写在 title 里 —— 主理人看到「子域名 2、站点 16」以为数错了，
+  <div class="tab active" data-tab="vulns" data-cnt="vulns">潜在漏洞<span class="cnt">{{ tab_counts.vulns }}</span></div>
+  {# 续281：徽标的口径写在 title 里 —— 主理人看到「子域名 2、站点 16」以为数错了，
      其实是「站点按 URL 行（不同协议/端口各一条）」与「子域名只看已解析+去重」两把尺子。 #}
-  <div class="tab" data-tab="sites" {% if cnt_live.sites %}data-cnt="sites"{% endif %}
-       title="站点按 URL 行计数：本任务 {{ site_total }} 条 = {{ site_hosts }} 个主机（同一主机的不同协议/端口各一条）">站点<span class="cnt">{{ site_total }}</span></div>
-  <div class="tab" data-tab="subs"
-       title="已解析、按域名去重后的数量（与任务列表「统计」列一致）；未解析的默认在页内收起并报数">子域名<span class="cnt">{{ subs_pager.total }}</span></div>
-  <div class="tab" data-tab="ext"
-       title="已解析、按域名去重、并排除已归属本项目的域名（与任务列表「统计」列一致）；页内「全部（N）」是含未解析的全量">拓展域名<span class="cnt">{{ ext_pager.total }}</span></div>
-  <div class="tab" data-tab="ports" {% if cnt_live.ports %}data-cnt="ports"{% endif %}>端口服务<span class="cnt">{{ ports_pager.total }}</span></div>
-  <div class="tab" data-tab="csegs">C 段<span class="cnt">{{ csegs_pager.total }}</span></div>
-  <div class="tab" data-tab="certs">SSL 证书<span class="cnt">{{ cert_total }}</span></div>
-  <div class="tab" data-tab="dirs">目录<span class="cnt">{{ dir_total }}</span></div>
-  <div class="tab" data-tab="urls">链接<span class="cnt">{{ url_total }}</span></div>
-  <div class="tab" data-tab="flags">敏感信息<span class="cnt">{{ flag_total }}</span></div>
-  <div class="tab" data-tab="emails">邮箱<span class="cnt">{{ email_total }}</span></div>
+  <div class="tab" data-tab="sites" data-cnt="sites"
+       title="站点按 URL 行计数：本任务 {{ site_total }} 条 = {{ site_hosts }} 个主机（同一主机的不同协议/端口各一条）">站点<span class="cnt">{{ tab_counts.sites }}</span></div>
+  <div class="tab" data-tab="subs" data-cnt="subs"
+       title="已解析、按域名去重后的数量（与任务列表「统计」列一致）；未解析的默认在页内收起并报数">子域名<span class="cnt">{{ tab_counts.subs }}</span></div>
+  <div class="tab" data-tab="ext" data-cnt="ext"
+       title="已解析、按域名去重、并排除已归属本项目的域名（与任务列表「统计」列一致）；页内「全部（N）」是含未解析的全量">拓展域名<span class="cnt">{{ tab_counts.ext }}</span></div>
+  <div class="tab" data-tab="ports" data-cnt="ports">端口服务<span class="cnt">{{ tab_counts.ports }}</span></div>
+  <div class="tab" data-tab="csegs" data-cnt="csegs">C 段<span class="cnt">{{ tab_counts.csegs }}</span></div>
+  <div class="tab" data-tab="certs" data-cnt="certs">SSL 证书<span class="cnt">{{ tab_counts.certs }}</span></div>
+  <div class="tab" data-tab="dirs" data-cnt="dirs">目录<span class="cnt">{{ tab_counts.dirs }}</span></div>
+  <div class="tab" data-tab="urls" data-cnt="urls">链接<span class="cnt">{{ tab_counts.urls }}</span></div>
+  <div class="tab" data-tab="flags" data-cnt="flags">敏感信息<span class="cnt">{{ tab_counts.flags }}</span></div>
+  <div class="tab" data-tab="emails" data-cnt="emails">邮箱<span class="cnt">{{ tab_counts.emails }}</span></div>
   <div class="tab" data-tab="target">目标与配置</div>
   <div class="tab" data-tab="log">运行日志</div>
 </div>

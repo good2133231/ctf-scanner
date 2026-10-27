@@ -4481,6 +4481,35 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] C1 全量门禁 `./.venv/bin/python tests/smoke.py`：**SMOKE PASS**（rc=0，288 组；日志时间戳 14:08:56→14:17:37＝8 分 41 秒），日志 `logs/_smoke279.log`；`[172]` / `[266]` / `[281]` 全绿（含两组变异证伪）
 - [x] C2 记忆同步：CHANGELOG 续279 + todo 续279 + AGENTS §5 续266 那条补续279。
 
+## 续283（2026-10-27，WorkBuddy · CodeBuddy）：详情页 11 页签徽标全部 live 化（单产地 _tab_counts）
+
+主理人 2026-10-27：「全部标签页live化」—— 任务详情页全部 11 个页签徽标都通过轮询自动刷新，
+不再只刷「未过滤表行数」的三个页签；所有页签徽标数走唯一产地 _tab_counts(task_id)，渲染与
+轮询共用同一把尺子、按当前筛选口径重算，消除「列表 3 行、徽标 120」两张数。
+
+- [x] T1【单产地 _tab_counts】gui/app.py 新增模块级 _tab_counts(task_id)：逐字复用各页签渲染助手
+      （subs/ext/sites/ports/emails 走 _tab_page；dirs/urls/certs/csegs 走 _fold_* + _rows_match；
+      vulns 走 _page_vulns；flags 走 db.list_flags），渲染与 /api/tasks/<id>/status?tabcounts=1
+      轮询共用同一把尺子；轮询自己带 location.search 的筛选，折叠/去重/筛选后的页签也是同一个过滤后的数。
+- [x] T2【全部 11 页签 live】gui/static/app.js 的 pollTask 改 fetch ?tabcounts=1 →
+      pvUpdateTabCounts(j.tab_counts)（取代续280 只刷三个未过滤数的旧逻辑）；gui/templates/task_detail.html
+      全部 11 个页签加 data-cnt，徽标改读 {{ tab_counts.<tab> }}（subs/ext/sites 保留 title 口径说明）。
+- [x] T3【bug 修正】ext 页签 _tab_page 多行调用漏 task_id → 补成 _tab_page(task_id, ...)（续283 前页面 500）。
+- [x] T4【门禁 [287] 新组】建任务 + 插各资产 → 断言页面徽标 == 轮询 tab_counts（逐页签）；vq=zzzznomatch 时
+      vulns 徽标与轮询同为零；其他用户/缺失任务 → 404；桩 db.list_flags 返回 7 条证伪「页面与轮询共享
+      _tab_counts 且非 raw task_counts 透传」；断言 subs/ext live 数 ≠ raw subdomains 行数；[284]④ 改为
+      全部 11 页签都带 data-cnt + 带筛选口径复算一致。
+- [x] C1 全量门禁：全量门禁 SMOKE PASS（rc=0，310 组；墙钟约 8 分 35 秒，03:59:59→04:08:34），日志
+      logs/_smoke283.log；[284]/[287] 全绿（含两组单产地变异证伪）。行尾核验：app.py 174/70、app.js 9/7、
+      smoke.py 84/10 均 --ignore-cr-at-eol 一致；app.py/app.js 用 logs/_fixeol280.py 还原。
+- [x] C2 记忆同步：CHANGELOG 续283 + todo 续283 + AGENTS §3 单产地清单补 _tab_counts（本小节）。
+- [x] 事故记录（续280 同款第三次实录）：编辑器整文件翻 CRLF + 中文弯引号翻 ASCII 破坏源码
+      （smoke.py/app.py/app.js）→ smoke.py 用 git checkout + 字节补丁；app.py/app.js 用 logs/_fixeol280.py 还原。
+
+下一轮（续284）：
+- [ ] AGENTS.md 其余段落逐条比对代码与配置（续280 挂账）
+- [ ] 仪表盘「最近任务」两张表是否也默认隐藏子任务行（续282 只动了 /tasks，仪表盘口径待主理人定）
+
 ## 续282（2026-10-26，WorkBuddy · CodeBuddy）：子任务默认收进父面板 + 数量徽章 + 面板 live 化
 实施者：WorkBuddy · CodeBuddy
 
@@ -4516,7 +4545,6 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       `--ignore-cr-at-eol --numstat` 两式相等（72/1）才继续。
 
 下一轮（续283）：
-- [ ] 详情页其余 8 个页签要不要 live 化（续280 挂账；需要"按当前筛选口径重算"的接口）
 - [ ] AGENTS.md 其余段落逐条比对代码与配置（续280 挂账）
 - [ ] 仪表盘「最近任务」两张表是否也默认隐藏子任务行（续282 只动了 /tasks，仪表盘口径待主理人定）
 

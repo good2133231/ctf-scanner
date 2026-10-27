@@ -3,6 +3,37 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续283（2026-10-27，WorkBuddy · CodeBuddy）：详情页 11 页签徽标全部 live 化（单产地 _tab_counts）
+
+### 背景 / 判断依据
+
+主理人 2026-10-27：「全部标签页live化」—— 任务详情页全部 11 个页签徽标都通过轮询自动刷新，不再只刷
+「未过滤表行数」的三个页签。续280 已点单「数字显示经常要我刷新才显示」，但只 live 了三个未过滤数的页签；
+续283 把其余 8 个（含折叠/去重/筛选后的页签）也 live 化，并统一到唯一产地，杜绝「列表 3 行、徽标 120」两张数。
+
+### 改动
+
+- **单产地 `_tab_counts(task_id)`**（gui/app.py，模块级）：任务详情页全部 11 个页签徽标数的唯一产地。
+  逐字复用各页签渲染助手（subs/ext/sites/ports/emails 走 `_tab_page`；dirs/urls/certs/csegs 走 `_fold_*` +
+  `_rows_match`；vulns 走 `_page_vulns`；flags 走 `db.list_flags`）。渲染 `task_detail` 与
+  `/api/tasks/<id>/status?tabcounts=1` 轮询共用同一把尺子；轮询自己带上 `location.search` 的 esrc=/vq=/vsev=/all=1
+  等筛选，所以带筛选的页签也刷的是同一个过滤后的数。
+- **前端全部 live**（gui/static/app.js）：`pollTask` 改 `fetch(/api/tasks/${id}/status?tabcounts=1)` →
+  `pvUpdateTabCounts(j.tab_counts)`（取代续280 只刷三个未过滤数的旧逻辑 `?counts=1` / `j.counts`）。
+- **模板全部 data-cnt**（gui/templates/task_detail.html）：11 个页签加 `data-cnt="{tab}"`，徽标改读
+  `{{ tab_counts.<tab> }}`（subs/ext/sites 保留 title 口径说明）。
+- **bug 修正**：ext 页签 `_tab_page` 多行调用漏 `task_id` → 补成 `_tab_page(task_id, ...)`（续283 前页面 500）。
+
+### 验证
+
+- 全量门禁 **SMOKE PASS**（rc=0，310 组；墙钟约 8 分 35 秒，03:59:59→04:08:34），日志 `logs/_smoke283.log`。
+- [287] 新组（单产地证明）：页面徽标 == 轮询 `tab_counts`（逐页签）；`vq=zzzznomatch` 时 vulns 徽标与轮询同为零；
+  其他用户/缺失任务 → 404；桩 `db.list_flags` 返回 7 条证伪「页面与轮询共享 `_tab_counts` 且非 raw `task_counts`
+  透传」；`subs`/`ext` live 数 ≠ raw `subdomains` 行数。[284]④ 改为全部 11 页签都带 `data-cnt` + 带筛选口径复算一致。
+- 行尾核验：app.py 174/70、app.js 9/7、smoke.py 84/10 均 `--ignore-cr-at-eol` 一致；app.py/app.js 经
+  `logs/_fixeol280.py` 还原（编辑器整文件翻 CRLF + 中文弯引号翻 ASCII 破坏源码，续280 同款事故第三次实录）。
+- C2：AGENTS §3 单产地清单补「详情页 11 页签徽标数 = `gui/app.py::_tab_counts(task_id)`」。
+
 ## 续282（2026-10-26，WorkBuddy · CodeBuddy）：子任务默认收进父面板 + 数量徽章 + 面板 live 化
 
 ### 背景 / 判断依据

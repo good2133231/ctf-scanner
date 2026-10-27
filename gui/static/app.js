@@ -5,10 +5,11 @@
 const CTF_BASE = ((document.querySelector('meta[name="ctf-base"]') || {}).content || "").replace(/\/+$/, "");
 function absUrl(p) { return CTF_BASE + p; }
 
-/* 续280：把页签徽标上的数字换成轮询回来的**当前**数（主理人：「数字显示经常要我刷新才显示」）。
-   只动带 `data-cnt` 的那几颗 —— 哪些页签带它，由服务端 `cnt_live` 决定（折叠/去重/筛选后
-   的口径不许用未过滤的表行数覆盖，理由见 `gui/app.py::task_detail`）。
-   同一条请求里顺带回来的（不额外发请求）；`counts` 缺字段就一个字都不动。 */
+/* 续283：把页签徽标上的数字换成轮询回来的**当前**数（续280 点单「数字显示经常要我刷新才显示」）。
+   全部带 `data-cnt` 的页签都动（键名＝`_tab_counts` 的键，与服务端渲染同一个产地）；
+   轮询带 `?tabcounts=1`，服务端按"当前筛选口径"（轮询自己带上 location.search 的 esrc=/vq=/…）
+   重算后回 `j.tab_counts` —— 折叠/去重/筛选后的页签也是同一个过滤后的数，不再有"只刷三个"的例外。
+   同一条请求里顺带回来的（不额外发请求）；`tab_counts` 缺字段就一个字都不动。 */
 function pvUpdateTabCounts(counts) {
   if (!counts) return;
   document.querySelectorAll(".tab[data-cnt]").forEach(tab => {
@@ -25,11 +26,12 @@ async function pollTask(id) {
   const prog = document.getElementById("st-progress");
   for (;;) {
     try {
-      // 续280：顺带要资产计数（`counts=1`，opt-in）—— 页签徽标不必等跑完那一次 reload 才动。
-      const r = await fetch(absUrl(`/api/tasks/${id}/status?counts=1`));
+      // 续283：详情页**全部**页签徽标 live —— 轮询带 `?tabcounts=1`，用与渲染同一把尺子
+      // （`_tab_counts`）按当前筛选口径重算后的数定点替换（取代续280 只刷三个未过滤数的旧逻辑）。
+      const r = await fetch(absUrl(`/api/tasks/${id}/status?tabcounts=1`));
       if (r.ok) {
         const j = await r.json();
-        pvUpdateTabCounts(j.counts);
+        pvUpdateTabCounts(j.tab_counts);
         if (badge) badge.textContent = j.status;
         if (stage) stage.textContent = j.current_stage;
         if (prog) prog.textContent = j.progress + "%";

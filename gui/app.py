@@ -2285,6 +2285,157 @@ def create_app():
         _audit(audit.KIND_TASK, target=name, detail=f"创建任务 #{task_id}（阶段 {'/'.join(stages)}）")
         return jsonify({"id": task_id, "auto_stages": auto_stages})
 
+    # ---------------- 详情页页签的三个助手（续283 从 `task_detail` 闭包提到模块级）----------------
+    def _tab_args(prefix):
+        """读某个资产页签的分页参数：`{prefix}page` / `{prefix}size` / `{prefix}q`。"""
+        def _int(_name, _default):
+            try:
+                return int(request.args.get(_name, _default) or _default)
+            except (TypeError, ValueError):
+                return _default
+        page = max(1, _int(prefix + "page", 1))
+        _sz = _int(prefix + "size", 100)
+        return page, (_sz if _sz in PAGE_SIZES else 100), \
+            (request.args.get(prefix + "q") or "").strip()
+
+    def _mk_pager(task_id, prefix, anchor, page, size, total, q="", extra=""):
+        """构造 `_pager.html` 需要的 pager 字典。
+
+        `q` 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页**丢掉筛选条件**。
+        `extra` 是附加的、已编码的 `&k=v` 片段（如拓展域名页签的 `&esrc=`）——
+        翻页链接必须带上该页签的**全部**筛选状态，否则翻一页就把筛选悄悄丢了。
+        """
+        return {"page": page, "size": size, "total": total,
+                "pages": max(1, (total + size - 1) // size),
+                "base": page_url(f"/tasks/{task_id}"),
+                "qs": "&" + "&".join(([f"{prefix}q={quote(q)}"] if q else [])
+                                     + [f"{prefix}size={size}"]) + extra,
+                "pname": prefix + "page", "anchor": anchor}
+
+    def _tab_page(task_id, table, prefix, anchor, extra_where=None, extra_params=(),
+                  order=None, extra_qs="", **kw):
+        """任务详情页某个资产页签的分页（SQL 侧）。
+
+        返回 `(rows, pager, q)`。`extra_where` 是**服务端**附加条件（来源分流等），
+        参数走 `extra_params`；`order` 留空用 `_ASSET_PAGES` 的表默认排序，但页签若沿用
+        `db.list_*()` 的历史行序，就必须**显式**传（否则分页顺手把行序也改了）。
+        `pager.pname` / `pager.anchor` 见 `_pager.html` 的说明 —— 一屏 7 个分页条必须各有
+        参数前缀，否则翻一个页签会顺带把别的页签也翻了。
+
+        续283：由**闭包**提到模块级并显式收 `task_id` —— 只为"`_tab_counts()` 与详情页
+        共用同一份分页/筛选口径"（徽标 live 化后，两个数必须是同一把尺子量出来的）。
+        """
+        page, size, q = _tab_args(prefix)
+        where = f"task_id=? AND ({extra_where})" if extra_where else "task_id=?"
+        params = (task_id,) + tuple(extra_params)
+
+        def _run(_page):
+            return _page_assets(table, limit=size, offset=(_page - 1) * size,
+                                q=q or None, extra_where=where,
+                                extra_params=params, order=order, **kw)
+
+        rows, total = _run(page)
+        pages = max(1, (total + size - 1) // size)
+        if page > pages:     # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
+            page = pages
+            rows, total = _run(page)
+        return rows, _mk_pager(task_id, prefix, anchor, page, size, total, q, extra_qs), q
+
+    def _rows_match(rows, q, cols):
+        """按**表格实际显示的列**做整行子串匹配（大小写不敏感）；`q` 空则原样返回。
+
+        续283：详情页有四个页签（目录 / 链接 / 证书 / C 段）是"整表取 → 折叠 → 关键字过滤
+        → 切片"。关键字符合哪些列，原本在四处各写一遍 `cols` 元组与 `needle` 逻辑 ——
+        徽标 live 化要让 `_tab_counts()` 重算同一个数，那就先把这四处收成一份。
+        """
+        if not q:
+            return list(rows)
+        needle = str(q).lower()
+        return [r for r in rows if any(needle in str(r.get(c) or "").lower() for c in cols)]
+
+    def _tab_counts(task_id):
+        """续283：任务详情页 **全部 11 个页签**徽标数的**唯一产地**（live 轮询按"当前筛选口径"重算）。
+
+        详情页渲染时把本函数结果喂给模板做徽标；前端每 2 秒的轮询
+        （`/api/tasks/<id>/status?tabcounts=1`）也调**同一个**函数 —— 徽标永远等于页签里
+        "共 N 条"那把尺子。续280 那个坑（"列表 3 行、徽标 120"，把未过滤表行数盖上折叠后的数）
+        正是漏了"单一产地"才长出来的，所以这里**逐字复用**详情页渲染那批助手：
+          - subs/ext/sites/ports/emails → 复用 `_tab_page`（与页签分页同一个 SQL 口径，
+            含去重/折叠/来源分流/排序）；
+          - dirs/urls/certs/csegs → 复用 `_fold_*` + `_rows_match`（与页签"整表取→折叠→
+            关键字过滤"同款）；
+          - vulns → 复用 `_page_vulns`（vq/vsev 白名单与页签同一份）；
+          - flags → 复用 `db.list_flags`（已封顶、无折叠，永远等于行数）。
+        返回键：vulns / sites / subs / ext / ports / csegs / certs / dirs / urls / flags / emails。
+        """
+        out = {}
+        # 站点：徽标是**未过滤**总数（site_total）；"共 N 条"是过滤后的，旁边写明"另有 M 条收起"
+        st_where, hide_st = _site_status_arg()
+        _, sites_pager, sites_q = _tab_page(task_id, "sites", "st", "#sites", order="id",
+                                            extra_where=st_where)
+        out["sites"] = _site_status_extra("sites", hide_st, sites_pager["total"],
+                                          sites_q, "task_id=?", (task_id,), order="id")[1]
+        # 子域名（已解析去重，自有）
+        res_where, _ = _resolved_arg()
+        _, subp, _ = _tab_page(task_id, "subdomains", "sd", "#subs",
+                               extra_where=_and_where(db.OWN_SUBDOMAIN_WHERE, res_where),
+                               dedupe_domain=True)
+        out["subs"] = subp["total"]
+        # 拓展域名（含已归属隐藏；esrc 分类与 ?all=1 逃生钮与页签同一份口径）
+        _ext_all = request.args.get("all") == "1"
+        ext_src = (request.args.get("esrc") or "").strip().lower()
+        ext_pick = next((t for t in EXT_SRC_TAGS if t[0] == ext_src), None)
+        if not ext_pick:
+            ext_src = ""
+        ext_base = _and_where(db.EXT_SUBDOMAIN_WHERE,
+                              None if _ext_all else db.OVERLAP_EXT_WHERE,
+                              "source=?" if ext_pick else None)
+        _, extp, _ = _tab_page(task_id, "subdomains", "ex", "#ext",
+                               extra_where=_and_where(ext_base, res_where),
+                               extra_params=((ext_pick[2],) if ext_pick else ()),
+                               order=EXT_SRC_ORDER, dedupe_domain=True)
+        out["ext"] = extp["total"]
+        # 端口
+        _, portp, _ = _tab_page(task_id, "ports", "pt", "#ports", order="host, port")
+        out["ports"] = portp["total"]
+        # 邮箱
+        _, emp, _ = _tab_page(task_id, "emails", "em", "#emails")
+        out["emails"] = emp["total"]
+        # 目录（整表取→折叠→关键字过滤，与页签同口径）
+        dirs_all, _ = _fold_dirs(db.list_dirs(task_id), False)
+        _, _, dirs_q = _tab_args("dr")
+        out["dirs"] = len(_rows_match(dirs_all, dirs_q,
+                                      ("status", "path", "length", "title", "note")))
+        # 链接
+        urls_all = [dict(r) for r in db.list_task_urls(task_id, only_params=False)]
+        _, _, urls_q = _tab_args("ur")
+        out["urls"] = len(_rows_match(urls_all, urls_q,
+                                      ("url", "site_url", "path", "query", "kind", "note")))
+        # 证书（按同一张证书折叠）
+        _cr_all = request.args.get("all") == "1"
+        _, _, certs_q = _tab_args("cr")
+        certs_all, _ = _fold_certs([dict(r) for r in db.list_certs(task_id)], show_all=_cr_all)
+        out["certs"] = len(_rows_match(certs_all, certs_q,
+                                       ("source", "url", "host", "cn", "subject", "issuer",
+                                        "san", "serial", "sig_algo", "sha256")))
+        # C 段（按 segment 折叠）
+        _cs_all = request.args.get("all") == "1"
+        _, _, csegs_q = _tab_args("cs")
+        csegs_all, _ = _fold_csegs([dict(r) for r in db.list_csegs(task_id)], show_all=_cs_all)
+        out["csegs"] = len(_rows_match(csegs_all, csegs_q,
+                                      ("segment", "ip", "domains", "note")))
+        # 潜在漏洞（vq/vsev 白名单与页签同一份）
+        vq = (request.args.get("vq") or "").strip()
+        vsev = (request.args.get("vsev") or "").strip().lower()
+        if vsev not in ("critical", "high", "medium", "low", "info"):
+            vsev = ""
+        _, vuln_total = _page_vulns(limit=1, offset=0, q=vq or None, severity=vsev or None,
+                                    task_id=task_id, sort="id", desc=True)
+        out["vulns"] = vuln_total
+        # 敏感信息（已封顶、无折叠）
+        out["flags"] = len(db.list_flags(task_id))
+        return out
+
     @app.route("/tasks/<int:task_id>")
     @login_required
     def task_detail(task_id):
@@ -2320,63 +2471,14 @@ def create_app():
         #     （只取需要的列 / 一个聚合），不再为一句提示把整张 `sites` 表读进内存。
         # （续145 摘掉的第三处：目录页签「深度补扫」表单曾把**全任务**站点 URL 当 hidden 提交，
         #   所以要单独取一份 URL 列表；入口删了，那份 `site_urls` 查询也一并删掉 —— 不留死代码。）
-        def _tab_args(prefix):
-            """读某个资产页签的分页参数：`{prefix}page` / `{prefix}size` / `{prefix}q`。"""
-            def _int(_name, _default):
-                try:
-                    return int(request.args.get(_name, _default) or _default)
-                except (TypeError, ValueError):
-                    return _default
-            page = max(1, _int(prefix + "page", 1))
-            _sz = _int(prefix + "size", 100)
-            return page, (_sz if _sz in PAGE_SIZES else 100), \
-                (request.args.get(prefix + "q") or "").strip()
-
-        def _mk_pager(prefix, anchor, page, size, total, q="", extra=""):
-            """构造 `_pager.html` 需要的 pager 字典。
-
-            `q` 必须 URL 编码：关键字里带 `&` / `#` / 空格时不编码会让翻页**丢掉筛选条件**。
-            `extra` 是附加的、已编码的 `&k=v` 片段（如拓展域名页签的 `&esrc=`）——
-            翻页链接必须带上该页签的**全部**筛选状态，否则翻一页就把筛选悄悄丢了。
-            """
-            return {"page": page, "size": size, "total": total,
-                    "pages": max(1, (total + size - 1) // size),
-                    "base": page_url(f"/tasks/{task_id}"),
-                    "qs": "&" + "&".join(([f"{prefix}q={quote(q)}"] if q else [])
-                                         + [f"{prefix}size={size}"]) + extra,
-                    "pname": prefix + "page", "anchor": anchor}
-
-        def _tab_page(table, prefix, anchor, extra_where=None, extra_params=(), order=None,
-                      extra_qs="", **kw):
-            """任务详情页某个资产页签的分页（SQL 侧）。
-
-            返回 `(rows, pager, q)`。`extra_where` 是**服务端**附加条件（来源分流等），
-            参数走 `extra_params`；`order` 留空用 `_ASSET_PAGES` 的表默认排序，但页签若沿用
-            `db.list_*()` 的历史行序，就必须**显式**传（否则分页顺手把行序也改了）。
-            `pager.pname` / `pager.anchor` 见 `_pager.html` 的说明 —— 一屏 7 个分页条必须各有
-            参数前缀，否则翻一个页签会顺带把别的页签也翻了。
-            """
-            page, size, q = _tab_args(prefix)
-            where = f"task_id=? AND ({extra_where})" if extra_where else "task_id=?"
-            params = (task_id,) + tuple(extra_params)
-
-            def _run(_page):
-                return _page_assets(table, limit=size, offset=(_page - 1) * size,
-                                      q=q or None, extra_where=where,
-                                      extra_params=params, order=order, **kw)
-
-            rows, total = _run(page)
-            pages = max(1, (total + size - 1) // size)
-            if page > pages:     # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
-                page = pages
-                rows, total = _run(page)
-            return rows, _mk_pager(prefix, anchor, page, size, total, q, extra_qs), q
-
+        # 续283：三个页签助手（`_tab_args` / `_mk_pager` / `_tab_page`）已提到**模块级**
+        # （`task_detail` 上方）—— 详情页 11 个页签徽标的 live 重算（`_tab_counts`）要复用
+        # 同一份，留在路由闭包里就只能是"第二份实现"（本项目反复栽的形状）。
         # 子域名页签只列目标**自身**的子域名；JS/情报拓展出来的走「拓展域名」页签。
         # 两个页签的分流口径取自 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`
         # —— 与跨任务的 `/subdomains`、`/extdomains` 页是**同一份 SQL 条件**（三处各写一遍必然漂移）。
         res_where, hide_res = _resolved_arg()
-        subs, subs_pager, subs_q = _tab_page("subdomains", "sd", "#subs",
+        subs, subs_pager, subs_q = _tab_page(task_id, "subdomains", "sd", "#subs",
                                              extra_where=_and_where(db.OWN_SUBDOMAIN_WHERE,
                                                                     res_where),
                                              dedupe_domain=True)
@@ -2415,7 +2517,7 @@ def create_app():
                               None if _ext_all264 else db.OVERLAP_EXT_WHERE,
                               "source=?" if ext_pick else None)
         ext_subs, ext_pager, ext_q = _tab_page(
-            "subdomains", "ex", "#ext",
+            task_id, "subdomains", "ex", "#ext",
             extra_where=_and_where(ext_base, res_where),
             extra_params=((ext_pick[2],) if ext_pick else ()),
             order=EXT_SRC_ORDER,
@@ -2444,7 +2546,7 @@ def create_app():
         if _dr_page > _dr_pages:
             _dr_page = _dr_pages
         dirs = dirs_all[(_dr_page - 1) * _dr_size:_dr_page * _dr_size]
-        dirs_pager = _mk_pager("dr", "#dirs", _dr_page, _dr_size, dir_total, dirs_q)
+        dirs_pager = _mk_pager(task_id, "dr", "#dirs", _dr_page, _dr_size, dir_total, dirs_q)
         # 续199：链接页签（crawl 阶段的产物）。与全局「链接资产」页同一张表，
         # 这里只是按 task_id 收口 —— 排序、列、关键字口径都跟着那一页，不另立一套。
         urls_all = [dict(r) for r in db.list_task_urls(task_id, only_params=False)]
@@ -2459,7 +2561,7 @@ def create_app():
         if _ur_page > _ur_pages:
             _ur_page = _ur_pages
         urls = urls_all[(_ur_page - 1) * _ur_size:_ur_page * _ur_size]
-        urls_pager = _mk_pager("ur", "#urls", _ur_page, _ur_size, url_total, urls_q)
+        urls_pager = _mk_pager(task_id, "ur", "#urls", _ur_page, _ur_size, url_total, urls_q)
         # 敏感信息候选（续148）：整表读是有意的 —— 条数由 `flags.max_per_task`（默认 200）封顶，
         # 且这张表**没有折叠/聚合语义**，分页只会把一个短清单切成几页，反而更难抄。
         flag_rows = [dict(r) for r in db.list_flags(task_id)]
@@ -2490,7 +2592,7 @@ def create_app():
         # 续146：默认只显示 200/404（含 3xx **跳转后**落在 200/404 的），`?allst=1` 放开；
         # 判据在 `db.SITE_STATUS_WHERE` 一处，与跨任务 /sites 页共用同一份。
         st_where, hide_st = _site_status_arg()
-        sites, sites_pager, sites_q = _tab_page("sites", "st", "#sites", order="id",
+        sites, sites_pager, sites_q = _tab_page(task_id, "sites", "st", "#sites", order="id",
                                                 extra_where=st_where)
         # `site_total` 是**未过滤**的站点数：页签徽标、证书页签那句"本次扫到 N 个站点"、
         # `shot_missing` 都吃它。徽标报的是"这个任务有多少站点"这个**事实**，被状态码收起的
@@ -2509,7 +2611,7 @@ def create_app():
         # 与报告共用 `fingerprint.tech_stats()`，别在模板里再算一遍。
         _tech_stats = fingerprint.tech_stats(db.list_site_tech(task_id))
         # 续225：邮箱页签（jsmine 的数据探测产物）—— 与 /emails 页同一张表，页内按任务过滤。
-        emails, emails_pager, emails_q = _tab_page("emails", "em", "#emails")
+        emails, emails_pager, emails_q = _tab_page(task_id, "emails", "em", "#emails")
         # 续172/续266/续279：站点页签「同一站点聚合/合并」。判据全在 `_fold_site_rows`
         # （与跨任务 /sites 页**同一份产地**）：同标题组聚合、成员行默认收起、可展开；
         # 同一主机的 3xx ↔ 落地行是**合并** —— 默认只显示带跳转取证的代表行（落地状态/
@@ -2575,7 +2677,7 @@ def create_app():
         if _cr_page > _cr_pages:      # 页码越界（过滤后总页数变少）→ 回落到最后一页重查
             _cr_page = _cr_pages
         certs_rows = certs_all[(_cr_page - 1) * _cr_size:_cr_page * _cr_size]
-        certs_pager = _mk_pager("cr", "#certs", _cr_page, _cr_size, _cr_total, certs_q,
+        certs_pager = _mk_pager(task_id, "cr", "#certs", _cr_page, _cr_size, _cr_total, certs_q,
                                 "&all=1" if _cr_all else "")
         # 徽标（`cert_total`）恒为**全部行数**：与目录 / 站点页签同一口径（§0 第 10 条 ——
         # 被收起的也是事实，不从徽标里消失）；"收起了几条"只在那颗逃生钮上报。
@@ -2585,7 +2687,7 @@ def create_app():
 
         # 端口 / C 段两个页签。端口的 `order="host, port"` 也是**显式**的：跨任务 `/ports` 页的表
         # 默认排序是 `task_id DESC, port`，而本页沿用 `db.list_ports()` 的 `ORDER BY host, port`。
-        ports, ports_pager, ports_q = _tab_page("ports", "pt", "#ports", order="host, port")
+        ports, ports_pager, ports_q = _tab_page(task_id, "ports", "pt", "#ports", order="host, port")
         # 续265：C 段按 segment 折叠（主理人点单「c段去重」），同上：整表取 + 展示层折叠。
         _cs_all = request.args.get("all") == "1"
         _cs_page, _cs_size, csegs_q = _tab_args("cs")
@@ -2601,7 +2703,7 @@ def create_app():
         if _cs_page > _cs_pages:
             _cs_page = _cs_pages
         csegs = csegs_all[(_cs_page - 1) * _cs_size:_cs_page * _cs_size]
-        csegs_pager = _mk_pager("cs", "#csegs", _cs_page, _cs_size, _cs_total, csegs_q,
+        csegs_pager = _mk_pager(task_id, "cs", "#csegs", _cs_page, _cs_size, _cs_total, csegs_q,
                                 "&all=1" if _cs_all else "")
         csegs_folded = 0 if _cs_all else _cs_hidden
         # 续29「断点续扫」：断点 = `current_stage`（最后进入的阶段，见 runner.resume_stages）。
@@ -2681,15 +2783,11 @@ def create_app():
             # （`|length` 现在是"当前页行数"，拿它当总数会少报）。
             subs_pager=subs_pager, subs_q=subs_q,
             ext_pager=ext_pager, ext_q=ext_q,
-            # 续280：页签徽标的 **live 判据（逐页签）** —— 只有"这个徽标的数就是该表未过滤
-            # 行数"的那些页签，才允许轮询回来的总数把它覆盖掉。
-            # 为什么必须逐页签：其余页签的数是**折叠/去重后**的口径 —— C 段按 segment 折
-            # （续265）、证书按同一张证书折（续265）、目录按站点+状态码+大小折（续255）、
-            # 子域名/拓展域名按 domain 去重（`page_assets(dedupe_domain=True)`，真库实测
-            # 120 行里有 16 组同 task 同 domain 的重复行）、拓展域名默认还隐藏已归属行。
-            # 那些数字换成"表行数"会变成"列表 3 行、徽标写 120" —— 比不刷新更误导。
-            # 有关键字筛选的页签同理（徽标是筛选后的总数）。所以这里只开三盏灯。
-            cnt_live={"vulns": not (vq or vsev), "sites": not sites_q, "ports": not ports_q},
+            # 续283：页签徽标数走**唯一产地** `_tab_counts(task_id)` —— 与前端 live 轮询
+            # （`/api/tasks/<id>/status?tabcounts=1`）共用同一把尺子，按"当前筛选口径"重算，
+            # **全部 11 个页签都 live**（不再有"折叠/去重/筛选后的口径不许 live"的例外 ——
+            # 因为轮询吃的是和页签同一个过滤后的数，不会再出现"列表 3 行、徽标 120"）。
+            tab_counts=_tab_counts(task_id),
             sites_pager=sites_pager, sites_q=sites_q, site_total=site_total,
             ports_pager=ports_pager, ports_q=ports_q,
             csegs_pager=csegs_pager, csegs_q=csegs_q,
@@ -2946,6 +3044,12 @@ def create_app():
         if _want_counts():
             out["counts"] = db.task_counts_bulk([int(task_id)]).get(int(task_id)) or {}
             out["id"] = int(task_id)
+        # 续283：详情页**全部**页签徽标 live 化 —— 轮询带 `?tabcounts=1` 时，用与渲染**同一把尺子**
+        # 的 `_tab_counts(task_id)` 按"当前筛选口径"重算（轮询自己带上 `location.search` 的
+        # esrc=/vq=/vsev=/all=1 等，所以带筛选的页签也刷的是同一个过滤后的数，不会出现"列表 3 行、
+        # 徽标 120"）。也是 opt-in，不在每 2 秒的纯进度轮询里加这十来条查询。
+        if str((request.args.get("tabcounts") or "").strip().lower()) in ("1", "true", "on", "yes"):
+            out["tab_counts"] = _tab_counts(int(task_id))
         return jsonify(out)
 
     @app.route("/api/tasks/status")

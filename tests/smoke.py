@@ -32174,17 +32174,15 @@ expression: r0()
     assert "counts=1" in _js284 and 'span[data-c]' in _js284, "列表页轮询没接上计数"
     assert "pvUpdateTabCounts" in _js284 and '.tab[data-cnt]' in _js284, "详情页页签计数没接上"
 
-    # ④ 详情页：无筛选 ⇒ 三个徽标可 live；折叠/去重/筛选口径 ⇒ **一个都不许**挂 data-cnt
+    # ④ 续283: all 11 tabs now carry data-cnt (poll recomputes the same filtered count,
+    #   so folded/deduped/filtered tabs also live -- no more "only the 3 unfiltered tabs").
     _d284 = _c284.get(f"/tasks/{_tk284}").get_data(as_text=True)
-    for _ok284 in ("vulns", "sites", "ports"):
-        assert f'data-cnt="{_ok284}"' in _d284, f"{_ok284} 徽标就是未过滤的表行数，应当可 live"
-    for _bad284 in ("subs", "ext", "dirs", "certs", "csegs", "urls", "flags", "emails"):
-        assert f'data-cnt="{_bad284}"' not in _d284, \
-            f"{_bad284} 页签是折叠/去重/筛选后的口径，不许拿未过滤表行数覆盖"
-    assert 'data-cnt="vulns"' not in _c284.get(f"/tasks/{_tk284}?vq=zzz").get_data(as_text=True), \
-        "漏洞页签带关键字 ⇒ 徽标是筛选后的数，不许 live"
-    assert 'data-cnt="sites"' not in _c284.get(f"/tasks/{_tk284}?stq=zzz").get_data(as_text=True), \
-        "站点页签带关键字 ⇒ 同上"
+    for _ok284 in ("vulns", "sites", "subs", "ext", "ports", "csegs", "certs",
+                   "dirs", "urls", "flags", "emails"):
+        assert f'data-cnt="{_ok284}"' in _d284, f"{_ok284} tab must carry data-cnt (all live)"
+    # with a filter the badge still lives (poll recomputes with the same filter)
+    assert 'data-cnt="vulns"' in _c284.get(f"/tasks/{_tk284}?vq=zzz").get_data(as_text=True), "vulns tab with vq filter must still live (same filtered count as poll)"
+    assert 'data-cnt="sites"' in _c284.get(f"/tasks/{_tk284}?stq=zzz").get_data(as_text=True), "sites tab with stq filter must still live (same filtered count as poll)"
 
     # ⑤ 续281：子任务在列表/仪表盘显示 24-a 派生编号，真实 ID 仍在链接里
     from gui.app import _task_tree_labels as _lbl281
@@ -32456,6 +32454,82 @@ expression: r0()
     print("[286] 续282 ok: /tasks 默认只看根任务（子任务收进父面板，parent=all/child 显式可查）｜"
           "行徽章「子任务（N）」唯一产地 child_counts_bulk（变异证伪）｜面板节点逐层标 child_count"
           "（孙任务也在跑）｜行内面板 3s live 轮询（变更才重画 + 文档守卫 + 收起注销）")
+    # ---------------- [287] 续283: detail-page ALL tabs live (single-origin _tab_counts + filtered-query replay) ----------------
+    # Owner 2026-10-27: "全部标签页live化" (all tabs live).
+    # Single source of truth for all 11 tab badges = the route-side `_tab_counts(task_id)`;
+    # the page render and the poll (`/api/tasks/<id>/status?tabcounts=1`) both call it, so the
+    # badge always equals the "共 N 条" number under the SAME filter set (poll sends location.search).
+    import gui.app as _mod287
+    from scanner import captcha as _cap287
+    from scanner import users as users_mod
+    _c287 = _mod287.app.test_client()
+    _b287 = set(_cap287._STORE)
+    _c287.get("/captcha.png")
+    _f287 = [k for k in _cap287._STORE if k not in _b287]
+    assert _f287, "captcha not issued"
+    assert _c287.post("/login", data=dict(_admin_form117(), captcha=_cap287._STORE[_f287[-1]][0])).status_code == 302, "login failed"
+    _tk287 = db.create_task("续283-alltabs", "http://all283.test/", ["probe"], {})
+    db.insert_sites(_tk287, [{"url": "http://a283.test/", "status": 200, "title": "A283"}, {"url": "http://b283.test/", "status": 503, "title": "B283"}])
+    db.insert_subdomains(_tk287, [("own283.test", "subfinder"), ("js283.test", "js:mine")])
+    db.insert_ports(_tk287, [{"host": "a283.test", "ip": "1.2.3.4", "port": 80, "service": "http"}])
+    db.insert_csegs(_tk287, [{"segment": "1.2.3.0/24", "ip": "1.2.3.4", "domains": "a283.test", "count": 1}])
+    db.insert_certs(_tk287, [{"url": "https://a283.test/", "host": "a283.test", "port": 443, "cn": "a283", "subject": "s", "issuer": "i", "serial": "S1", "sig_algo": "sha256", "sha256": "h1", "source": "tls"}])
+    db.insert_dirs(_tk287, [{"site_url": "http://a283.test/", "path": "/admin", "status": 200, "length": 10, "title": "login", "note": ""}, {"site_url": "http://a283.test/", "path": "/admin", "status": 200, "length": 10, "title": "login", "note": ""}])
+    db.insert_urls(_tk287, [{"url": "http://a283.test/x", "site_url": "http://a283.test/", "path": "/x", "query": "", "kind": "a", "note": ""}])
+    db.insert_emails(_tk287, [{"email": "a@283.test", "source": "x"}])
+    db.insert_flag(_tk287, {"value": "flag{283}", "kind": "flag", "source": "x", "url": "", "context": ""})
+    db.insert_vuln(_tk287, {"target": "http://a283.test/", "name": "XSS", "severity": "high", "detail": "reproduced: response contains script", "evidence": "poc", "poc_id": "p1"}, trust_caller=True)
+    _d287 = _c287.get(f"/tasks/{_tk287}").get_data(as_text=True)
+    _a287 = _c287.get(f"/api/tasks/{_tk287}/status?tabcounts=1").get_json()["tab_counts"]
+    import re as _re287
+    def _badge287(html, tab):
+        _m = _re287.search(r'data-tab="%s"[^>]*>.*?<span class="cnt">(\d+)</span>' % _re287.escape(tab), html, _re287.S)
+        assert _m, f"tab {tab} badge not rendered"
+        return int(_m.group(1))
+    _tabs287 = ("vulns", "sites", "subs", "ext", "ports", "csegs", "certs", "dirs", "urls", "flags", "emails")
+    for _t287 in _tabs287:
+        assert _badge287(_d287, _t287) == _a287[_t287], f"tab {_t287} badge != poll count ({_badge287(_d287, _t287)} vs {_a287[_t287]})"
+    assert _a287["flags"] == 1, "flags count must be the single inserted flag"
+    assert _a287["vulns"] == 1, "vulns count must be the single inserted vuln"
+    _d287f = _c287.get(f"/tasks/{_tk287}?vq=zzzznomatch").get_data(as_text=True)
+    _a287f = _c287.get(f"/api/tasks/{_tk287}/status?tabcounts=1&vq=zzzznomatch").get_json()["tab_counts"]
+    assert _badge287(_d287f, "vulns") == _a287f["vulns"] == 0, "vulns with vq filter must zero (page==poll)"
+    _ok287u, _ = users_mod.create_user("smoke287u", "upass287", role=users_mod.ROLE_USER, must_change=False)
+    assert _ok287u, "create user failed"
+    _b287b = set(_cap287._STORE)
+    _c287u = _mod287.app.test_client()
+    _c287u.get("/captcha.png")
+    _f287b = [k for k in _cap287._STORE if k not in _b287b]
+    assert _f287b, "captcha not issued (user)"
+    _form287u = {"username": "smoke287u", "password": "upass287"}
+    assert _c287u.post("/login", data=dict(_form287u, captcha=_cap287._STORE[_f287b[-1]][0])).status_code == 302, "user login failed"
+    _r287 = _c287u.get(f"/api/tasks/{_tk287}/status?tabcounts=1")
+    assert _r287.status_code == 404, f"other user must not see my tab_counts: {_r287.status_code}"
+    assert _c287.get(f"/api/tasks/99999999/status?tabcounts=1").status_code == 404, "missing task -> 404"
+    # mutation falsification (§6.1): stub a module-level dep that ONLY _tab_counts consumes,
+    # proving (a) the live number is computed (not a raw task_counts passthrough) and
+    # (b) the page badge and the poll share the SAME source (_tab_counts).
+    _real_flags = db.list_flags
+    db.list_flags = lambda tid: [{"id": i, "value": "x%d" % i, "kind": "flag", "source": "s", "url": "", "context": ""} for i in range(7)]
+    try:
+        _hm287 = _c287.get(f"/tasks/{_tk287}").get_data(as_text=True)
+        _am287 = _c287.get(f"/api/tasks/{_tk287}/status?tabcounts=1").get_json()["tab_counts"]
+        assert _badge287(_hm287, "flags") == 7 and _am287["flags"] == 7, "badge and poll do not share _tab_counts (single origin broken)"
+        assert _am287["flags"] == 7 != len(_real_flags(_tk287)), "live flags number not from _tab_counts"
+    finally:
+        db.list_flags = _real_flags
+    # the live numbers are NOT a raw task_counts passthrough (dedup/fold/overlap apply)
+    _rc287 = db.task_counts(_tk287)
+    assert _a287["subs"] != _rc287.get("subdomains", 0), f"subs live count must be deduped display count, not raw subdomains ({_a287['subs']} vs {_rc287.get('subdomains')})"
+    assert _a287["ext"] != _rc287.get("subdomains", 0), f"ext live count must differ from raw subdomains (own/overlap split)"
+    _tpl287 = (ROOT / "gui" / "templates" / "task_detail.html").read_text(encoding="utf-8")
+    for _t287 in _tabs287:
+        assert f'data-cnt="{_t287}"' in _tpl287, f"template tab {_t287} missing data-cnt anchor"
+    _js287 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "tabcounts=1" in _js287, "detail poll does not request tab_counts"
+    assert "j.tab_counts" in _js287, "poll result not fed to pvUpdateTabCounts"
+    assert "pvUpdateTabCounts" in _js287
+    print("[287] 续283 ok: detail-page all 11 tabs live (single-origin _tab_counts, page==poll per tab) | vq filter zeros vulns same as poll | other-user/missing -> 404 | mutation proves shared origin (not raw task_counts)")
     print("SMOKE PASS")
 
 
