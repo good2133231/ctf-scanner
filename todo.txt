@@ -4542,6 +4542,35 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续291（2026-10-28，WorkBuddy · DeepSeek-V4.1-Flash）：服务器迁移盘点 + 记忆固化 + 干净克隆可用性
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人 2026-10-28：「服务器现在需要迁移，看看该保存的保存没有、用户记忆要不要迁移到项目记忆、
+以及迁过去能不能正常用」。本轮只做盘点 / 固化 / 验证，不改扫描代码。
+
+- [x] T1【盘点】仓库干净且与 origin 同步（HEAD `07111cb`，含另一会话的续288–290）；代码 / 配置模板 /
+  记忆三件套全部在 git 里；运行态（`data/`、`logs/`、`.venv/`、`tools/`、`.cache/`、`config/keys*.yaml`、
+  仓库外别名表）按设计**不进 git**，必须随机器搬或重建。
+- [x] T2【数据库备份】`data/scanner.db` 做 SQLite 一致性备份 →
+  `data/scanner.db.bak-20261028_migrate`（`PRAGMA integrity_check=ok`；15 tasks / 196 subdomains / 53 vulns）。
+  `data/` 已被 gitignore，备份不随仓库走。
+- [x] T3【记忆】本机 `~/.trae-cn/memory/**` 不随 git 迁移：项目级事实本就在
+  AGENTS / todo / CHANGELOG；主理人跨机偏好三条已固化进 **AGENTS §9**（只读核对优先 / 通用自动化 /
+  凭据安全）。没有把整份本地 memory 抄进仓库（避免第二份流水账）。
+- [x] T4【迁移清单】`docs/dev-sync.md` 新增「服务器整机迁移」：必搬（DB / keys.enc / edge_auth /
+  session.secret / 仓库外别名表与 git 助手）、可重建（.venv / tools / .cache / logs）、新机步骤、
+  安全加固（当前 `0.0.0.0` + edge_auth 关）、验证清单。
+- [x] T5【可用性】干净克隆（**只含 tracked 文件**，无 data/keys/tools）+ 现有 `.venv` 解释器：
+  `--only 1,291` **SMOKE PASS**（迁移后 DB 建库 / 登录 / 拓展页签黑名单门禁都能跑）；
+  `run_bootstrap.py` 零网络探测 rc=0：已就绪 11｜可自动补齐 4｜需手工 3｜工作目录内可取 4。
+- [x] C1 全量门禁：`tests/smoke.py` **SMOKE PASS**（rc=0；05:30:25→05:38:56 = 8 分 31 秒），
+  日志 `logs/_smoke291.log`（顺带复核另一会话续288–290 的代码）。
+- [x] C2 记忆同步：CHANGELOG 续291 + todo 续291 + AGENTS §9 偏好固化 + docs/dev-sync 迁移清单。
+- [x] C3 提交并推送：提交信息末行 `WorkBuddy · DeepSeek-V4.1-Flash`。
+
+下一轮（续292）：
+- [ ] 无必须项；迁移后按 `docs/dev-sync.md`「安全提醒」决定 edge_auth / 回环绑定，并按清单搬运行态
+
 ## 续290（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：多场景实测 —— --reload 崩溃退避修复 + 一个域名一个任务的边界归一化
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

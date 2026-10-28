@@ -3,6 +3,57 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续291（2026-10-28，WorkBuddy · DeepSeek-V4.1-Flash）：服务器迁移盘点 + 记忆固化 + 干净克隆可用性
+
+### 背景 / 判断依据
+
+主理人 2026-10-28：服务器要整机迁移，需要确认「该保存的保存没有 / 用户记忆要不要迁到项目记忆 /
+迁过去能不能正常用」。本轮只做盘点、备份、文档固化与可用性验证，不改扫描代码。
+
+### 盘点结论
+
+- **代码与记忆已保存**：`main` 干净且与 origin 同步（HEAD `07111cb`，含另一会话的续288–290），
+  `sync_check --strict` rc=0；AGENTS / todo / CHANGELOG / docs / config/settings.yaml 全在 git。
+- **运行态不在 git（设计如此）**：`data/`、`logs/`、`.venv/`、`tools/`、`.cache/`、
+  `config/keys*.yaml`、`config/edge_auth.yaml`、仓库外别名表 / git 凭据助手 —— 必须随机器搬或重建。
+- **数据库已做一致性备份**：`data/scanner.db` → `data/scanner.db.bak-20261028_migrate`，
+  `PRAGMA integrity_check=ok`，15 tasks / 196 subdomains / 53 vulns（备份文件在 gitignore 的 `data/` 下）。
+
+### 记忆是否迁到项目记忆
+
+- 不把本地 `~/.trae-cn/memory/**` 整份抄进仓库（那会变成第二份流水账，与 AGENTS §0.4 立的
+  "单一事实源"冲突）。项目级事实原本就在 AGENTS / todo / CHANGELOG。
+- **主理人跨机偏好三条**固化进 `AGENTS.md §9`：① 先只读核对、确认后再改；② 工作流通用/自动化；
+  ③ 凭据安全优先、令牌不外传。——这样换机器 / 换 AI 后仍读得到。
+- 本机 memory 里其余条目（工程约定 / 教训）已在 AGENTS / CHANGELOG 有对应正文，不再重复迁移。
+
+### 迁移文档
+
+`docs/dev-sync.md` 新增「服务器整机迁移（续291）」：必搬清单（DB / keys.enc / edge_auth /
+session.secret / 仓库外别名表与 git 助手）、可重建清单（.venv / tools / .cache / logs / data 子目录）、
+新机六步（clone → sync_check → install.sh --full → 搬运行态 → 起服务 → 验证）、安全提醒、记忆说明。
+
+### 可用性验证
+
+- **干净克隆**（`git clone` 仅 tracked 文件，无 `data/`、无密钥、无外部工具）+ 现有 `.venv` 解释器：
+  `tests/smoke.py --only 1,291` **SMOKE PASS** —— 新机建库、登录、拓展页签黑名单隐藏都能跑。
+- **自举探测**（干净克隆里 `run_bootstrap.py`，零网络）rc=0：已就绪 11｜可自动补齐 4｜需手工 3｜
+  工作目录内可取 4；输出逐条给了补法（subfinder/httpx/puredns/afrog 自动；fscan/dirmap/massdns 手工；
+  go/fscan-src/massdns-src/chrome 走 `--with-stack`）。
+- **全量门禁**：`tests/smoke.py` **SMOKE PASS**（rc=0，05:30:25→05:38:56 = 8 分 31 秒），
+  日志 `logs/_smoke291.log`；同时复核了另一会话续288–290 的代码。
+
+### 迁移时注意（安全）
+
+- 当前 `config/settings.yaml` 为 `gui.host: 0.0.0.0` + `edge_auth.enabled: false`：控制台对网络开放、
+  仅账号登录。新机建议改回回环 + 反代/防火墙，或启用 edge_auth（`python -m scanner.edgeauth --set`）。
+- `config/keys.enc.yaml` 0600 与口令分开搬；口令走环境变量或 `~/.secrets/keys-pass`（0600）。
+- 旧库直接放回 `data/scanner.db` 即可：`display_no` 等列由 `init_db` 自动迁移（续284 已实测）。
+
+### C2 记忆同步
+
+- `todo.txt` 续291；`AGENTS.md §9` 偏好固化；`docs/dev-sync.md` 迁移清单。
+
 ## 续290（2026-10-27，WorkBuddy · DeepSeek-V4.1-Flash）：多场景实测 —— --reload 崩溃退避修复 + 一个域名一个任务的边界归一化
 
 ### 背景 / 判断依据

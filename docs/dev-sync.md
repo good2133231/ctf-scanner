@@ -82,6 +82,62 @@
 - 服务器：`git log --oneline -3` 应看到本地刚推的提交；重启后页面行为变化可见；
 - 本地：`git log --oneline -3` 与 GitHub 网页一致即同步成功。
 
+## 服务器整机迁移（续291，2026-10-28）
+
+> 适用：换服务器 / 重建机器。GitHub 仍是**代码与记忆**的唯一事实源；
+> **运行态（数据库 / 密钥 / 工具 / 日志）永远不进 git**。下面按「必搬 / 可重建 / 验证」三段走。
+
+### 必搬（不搬会丢数据、丢凭据或会话失效）
+
+| 路径 | 说明 | 注意 |
+|---|---|---|
+| `data/scanner.db` | 真实任务 / 资产 / 漏洞库 | 停服务后做 **SQLite 一致性备份**再搬（`sqlite3 .backup`），不要直接拷运行中的 `-wal/-shm` |
+| `config/keys.enc.yaml` | 第三方 API key 密文（0600） | 与口令分开搬运；口令走 `CTFSCANNER_KEYS_PASSPHRASE` 或 `~/.secrets/keys-pass`（0600） |
+| `config/edge_auth.yaml` | 边缘认证口令（若启用） | 明文文件，0600；未启用可忽略 |
+| `data/session.secret` | 登录会话签名密钥 | 不搬 ⇒ 所有用户重新登录（功能不受影响） |
+| 仓库外 `alias-map-141.json` | AGENTS §0.5 脱敏别名表（若使用） | **绝不入库**；按 AGENTS §0.5 单独安全搬运 |
+| 仓库外 git 凭据助手 | AGENTS §2 的 `credential.helper`（若使用） | 不在仓库；按 §2 口径处理，别把令牌写进仓库 |
+
+### 可重建（不搬也能跑，只是慢 / 需联网）
+
+- `.venv/`、`tools/`（含 scanner 二进制、fscan、dirmap、Go、浏览器）、`.cache/`：新机跑
+  `./install.sh --full` 重建（需要网络；massdns 需 gcc/make，fscan 需 Go，Chrome/Go 走工作目录内组件）。
+  离线或同架构可整目录搬以省时间。
+- `logs/`：只是历史证据，不迁移；新机自动新建。
+- `data/trash/`、`data/intel/`、`data/import-inbox/`：历史备份 / 缓存 / 导入素材，可选。
+- `data/preview.db`：预览用，可重建。
+
+### 新机步骤
+
+```
+1. git clone https://github.com/good2133231/ctf-scanner.git && cd ctf-scanner
+2. python3 tools/sync_check.py --strict        # 干净克隆应为 0 脏 / 0 未推 / 0 未拉
+3. ./install.sh --full                         # 标准安装 + 工作目录内运行时组件 + 编译层
+   # 只要最小可用：./install.sh
+   #   + python tools/setup_dirmap.py --install
+   #   + python tools/build_fscan.py --fetch --wire
+4. 停旧服务 → 搬「必搬」清单 → 新机 chmod 600 config/keys.enc.yaml（及其他密文）
+5. 起服务（§B）：CTFSCANNER_GUI_PORT=5000 nohup ./.venv/bin/python run_gui.py >> logs/gui-5000.log 2>&1 &
+6. 验证：./.venv/bin/python tests/smoke.py 看到 SMOKE PASS；登录后看
+   · 旧库任务门面号（display_no 自动迁移）
+   · 拓展域名加黑名单后立刻不列
+   · 「外部工具」页状态；第三方源有 key 且能查
+```
+
+### 安全提醒（迁移时顺手加固）
+
+- 当前 `config/settings.yaml` 是 `gui.host: 0.0.0.0` + `edge_auth.enabled: false`：
+  控制台对网络开放、只有账号登录。新机建议二选一：
+  ① 改回 `127.0.0.1` 并用反向代理 / 防火墙；② `python -m scanner.edgeauth --set` 设边缘口令后
+  把 `edge_auth.enabled` 改回 `true`（fail-closed：门开而口令未设 = 一律 401）。
+- 密钥文件权限一律 0600；迁移完成后删除临时明文拷贝（`--shred` 或用完即删）。
+
+### 记忆
+
+- 机器本地 `~/.trae-cn/memory/**` **不随 git 迁移**；仓库内 `AGENTS.md` / `todo.txt` /
+  `CHANGELOG_AI.md` 是唯一事实源。
+- 主理人跨机偏好已固化在 `AGENTS.md §9`（2026-10-28）；本轮迁移结论见 `CHANGELOG_AI.md` 续291。
+
 ## 提示词
 
 给本地 AI 的开场提示词已单独放在 **`docs/local-ai-prompt.md`**——新开会话时整段粘贴即可。
