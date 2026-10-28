@@ -196,6 +196,8 @@ import scanner.keystore as _ksbox  # noqa: E402
 # 隔离值也**必须写成 `~/` 字面形**：填绝对路径会被 `file_passphrase` 的原因文本原样带进
 # 启动横幅与 `server.log`，`[5]`/`[7y]` 那两条"日志里不许出现项目根"当场判红（本轮就是这么被抓到的）。
 _ksbox.PASSPHRASE_FILE = "~/no-such-keys-pass-smoke-isolated"
+# 续292 起候选档有**两份**（`PASSPHRASE_FILE_REPO = "config/keys-pass" 也要隔离）：只隔第一样的话，本机巧妙有 `config/keys-pass` 的那台机器会把**真口令**读进进程缓存 —— 同一份代码这台绿、那台红，且报错里看不出来（§6.2）。
+_ksbox.PASSPHRASE_FILE_REPO = "~/no-such-keys-pass-repo-smoke-isolated"
 
 
 def _cleanup_sandbox() -> None:
@@ -29288,10 +29290,19 @@ expression: r0()
         _reg218, _live218, _files218 = [], [], []
     else:
         _con218 = _sq218.connect(f"file:{_db218}?mode=ro", uri=True)
-        _reg218 = sorted({_xd218.base_domain(r[0] or "") or "" for r in
-                          _con218.execute("select distinct domain from subdomains")} - {""})
+        _doms218 = [r[0] for r in _con218.execute("select distinct domain from subdomains")]
+        _reg218 = sorted({_xd218.base_domain(d or "") or "" for d in _doms218} - {""})
         _con218.close()
-        assert _reg218, "库里连一个注册域都没有？base_domain 全判空 ⇒ 折算口径坏了"
+        # 「有库就有资产」是**作者机器**的前提，不是事实：新机第一次启动 GUI 就会自动建一个空库
+        # （续292 本机实测 subdomains 0 行）。硬 assert 会把一次正常装机报成"base_domain 口径坏了"，
+        # 而真正的口径损坏必须照样抓得住 ⇒ 分两态：**有域名却折不出注册域**判红；**库是空的**明说
+        # "本次没验到"（跳过 ≠ 通过，§6.2 第四起）。下面那条 github.com 变异夹具照旧跑，
+        # 所以判据的牙齿不会因为这一行变成空写（§6.1"0 命中型断言必须自带夹具"）。
+        if _doms218:
+            assert _reg218, f"库里有 {len(_doms218)} 条域名却一个注册域都折不出来 ⇒ base_domain 折算口径坏了"
+            _note218 = ""
+        else:
+            _note218 = "（① 本次没验到：data/scanner.db 存在但 subdomains 0 行 —— 新机刚建库就是这形状）"
 
         # 白名单三档＋公共厂商＋文档化 JS 成员访问链噪声（都不含任何真实目标名，全是公共知识；续287 补 jd.com 与 .name/.info 噪声）：
         # ① 仓库**公开字典**里的厂商域（cdn_cname / js_thirdparty）；
@@ -29409,7 +29420,7 @@ expression: r0()
         assert _c3 == [_ub218, _ua218], \
             f"最久没试的应排前面（按 id 的老行为会让刚试过的永远挡在最前）：{_c3}"
 
-        print(f"[218] 续218 ok: 脱敏判据（库内注册域 {len(_reg218)} 个、待查 {len(_live218)} 个 × "
+        print(f"[218] 续218 ok{_note218}: 脱敏判据（库内注册域 {len(_reg218)} 个、待查 {len(_live218)} 个 × "
               f"被跟踪文件 {len(_files218)} 个 ⇒ 0 泄漏；变异注入 github.com 立即命中）｜"
               f"run_cmd 200KB 输出 {_el218:.2f}s 返回不截断（管道死锁已修）｜"
               "dirmap 无 -e 的 output/<netloc>.txt 单文件产物解析 + 清理｜"
@@ -32711,6 +32722,120 @@ expression: r0()
     assert "j.tab_counts" in _js287, "poll result not fed to pvUpdateTabCounts"
     assert "pvUpdateTabCounts" in _js287
     print("[287] 续283 ok: detail-page all 11 tabs live (single-origin _tab_counts, page==poll per tab) | vq filter zeros vulns same as poll | other-user/missing -> 404 | mutation proves shared origin (not raw task_counts)")
+    # ------------------------------------------------------------------ [292]
+    # 续292：口令文件加第二档 `config/keys-pass`（整机迁移用），并给"落在仓库目录内的口令文件"
+    # 加一道 .gitignore 精确覆盖闸。全部判据在沙箱里造，不吃操作者真的那两个文件（§6.2 第六起）。
+    import subprocess as _sp292
+    import yaml as _y292
+    import scanner.keystore as _ks292
+    _PH292, _SENT292 = "p292-passphrase", "SENTINEL292-VALUE"
+    _dir292 = Path(tempfile.mkdtemp(prefix="smoke-292", dir=str(ROOT / "logs")))
+    _old_cands292 = (_ks292.PASSPHRASE_FILE, _ks292.PASSPHRASE_FILE_REPO)
+    _old_env292 = os.environ.get(_ks292.ENV_PASSPHRASE, "")
+    _out292 = ROOT / "config" / "_keys_pass_292_uncov"
+    try:
+        # ⓪ 先自证两档都没吃到本机真文件（漏隔离就在这里红，而不是等换一台机器）
+        _cands292 = _ks292.passphrase_candidates()
+        assert len(_cands292) == 2, "口令候选档应当是两份，实得 %r" % (_cands292,)
+        for _c292 in _cands292:
+            _rp292 = _ks292._resolve_passphrase(_c292)
+            assert not _rp292.exists(), "门禁必须把两档都指到不存在的名字，实得 %s" % (_c292,)
+        # ① 生产默认值的**形态**：家目录档保持 `~/` 字面形、仓库档保持相对形（绝对路径会撞 §0.3）
+        _src292 = (ROOT / "scanner" / "keystore.py").read_text(encoding="utf-8")
+        assert 'PASSPHRASE_FILE = "~/.secrets/keys-pass"' in _src292, "第一档的 `~/` 字面形被改掉了"
+        assert 'PASSPHRASE_FILE_REPO = "config/keys-pass"' in _src292, "第二档的相对形被改掉了"
+        # ② .gitignore 必须**精确覆盖**第二档：那是那道闸依赖的事实，漂了闸就挡空
+        _gi292 = [l.strip() for l in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+                  if l.strip() and not l.strip().startswith("#")]
+        assert "config/keys-pass" in _gi292, ".gitignore 里没有精确覆盖 config/keys-pass 的那一行"
+        assert _ks292._covered_by_ignore("config/keys-pass"), "keystore 的覆盖判据与 .gitignore 实际内容不符"
+        # 覆盖判据先自证（§6.1）：正反面夹具各钉一条，否则它可能恒真或恒假
+        assert _ks292._covered_by_ignore("config/keys-pass", rules=["logs/", "config/keys-pass"]) is True
+        assert _ks292._covered_by_ignore("config/keys-pass", rules=["config/keys-pass/"]) is False
+        assert _ks292._covered_by_ignore("config/keys-pass", rules=["config/other"]) is False
+        # 目录规则那一形要真的算覆盖（logs/ 覆盖 logs/<沙箱>/keys-pass，③ 靠它）
+        assert _ks292._covered_by_ignore("logs/x/keys-pass", rules=["logs/"]) is True
+        # ③ 第二档**真的能解锁**：沙箱密文 + 一份落在仓库内、被 logs/ 覆盖的 0600 口令文件
+        _encp292 = _dir292 / "keys.enc.yaml"
+        _encp292.write_bytes(_ks292.encrypt_text(
+            _y292.safe_dump({"github": {"token": _SENT292}}, allow_unicode=True, sort_keys=False), _PH292))
+        _ppin292 = _dir292 / "keys-pass"
+        _ppin292.write_text(_PH292 + "\n", encoding="utf-8")
+        _ppin292.chmod(0o600)
+        os.environ.pop(_ks292.ENV_PASSPHRASE, None)
+        _ks292.PASSPHRASE_FILE = "~/no-such-keys-pass-292"
+        _ks292.PASSPHRASE_FILE_REPO = str(_ppin292)
+        _ks292.reset()
+        _r292 = _ks292.unlock(path=_encp292, allow_prompt=False)
+        assert _r292["ok"] and _r292["source"] == "file", "关提问时第二档没生效：%r" % (_r292,)
+        assert _ks292.current()["github"]["token"] == _SENT292, "解出来的内容不对"
+        _g292, _w292, _from292 = _ks292.file_passphrase_detail()
+        assert _g292 == _PH292 and _from292 == str(_ppin292), \
+            "cli/run_keys 那句要报**真命中的那一档**，实得 %r / %r" % (_g292, _from292)
+        # ④ 三条守卫一条都没放宽：同一档权限改 0644 立刻拒
+        _ppin292.chmod(0o644)
+        _g292b, _w292b, _ = _ks292.file_passphrase_detail()
+        assert _g292b == "" and "0600" in _w292b, "权限放宽了还采纳：%r / %s" % (_g292b, _w292b)
+        _ppin292.chmod(0o600)
+        _ppin292.write_text("", encoding="utf-8")
+        assert _ks292.file_passphrase_detail()[1], "空文件必须有原因"
+        _ppin292.write_text(_PH292, encoding="utf-8")
+        _ppin292.chmod(0o600)
+        # ⑤ 那道闸是**承重的**：仓库内 + 0600 + 内容有效，却没被 .gitignore 覆盖 ⇒ 必须拒读
+        _out292.write_text(_PH292, encoding="utf-8")
+        _out292.chmod(0o600)
+        _ks292.PASSPHRASE_FILE_REPO = str(_out292)
+        _g292c, _w292c, _ = _ks292.file_passphrase_detail()
+        assert _g292c == "" and "gitignore" in _w292c.lower(), \
+            "仓库内未被覆盖的口令文件被读进来了（那就是会把口令提交出去那一档）：%r / %s" % (_g292c, _w292c)
+        # 变异证伪：摘掉闸，同一条必须变成"采纳" —— 否则 ⑤ 抓的不是这道闸
+        _real_rej292 = _ks292._reject_repo_without_ignore
+        _ks292._reject_repo_without_ignore = lambda p: ""
+        try:
+            _g292d, _w292d, _ = _ks292.file_passphrase_detail()
+            assert _g292d == _PH292, "摘掉闸之后仍然拒读，说明 ⑤ 与那道闸无关（空写）：%s" % (_w292d,)
+        finally:
+            _ks292._reject_repo_without_ignore = _real_rej292
+        # ⑥ 相对形按 BASE_DIR 折算，**不按进程 CWD**（§5.13 那一族）：chdir 只包住这一条
+        _ks292.PASSPHRASE_FILE_REPO = "config/keys-pass"
+        try:
+            os.chdir(str(_dir292))
+            _res292 = _ks292._resolve_passphrase("config/keys-pass")
+        finally:
+            os.chdir(str(ROOT))
+        assert _res292 == _ks292.BASE_DIR / "config/keys-pass", \
+            "仓库内那档按 CWD 折算 = 从仓库外启动时文件明明在却说不存在，实得 %s" % (_res292,)
+        # ⑦ 补法文案**现取**档位（§5.14 一个产地 + §5.19 话跟着配置走）
+        _ks292.PASSPHRASE_FILE, _ks292.PASSPHRASE_FILE_REPO = "~/.secrets/keys-pass", "config/keys-pass"
+        _how292 = _ks292.unlock_howto()
+        assert "~/.secrets/keys-pass" in _how292 and "config/keys-pass" in _how292, _how292
+        _ks292.PASSPHRASE_FILE_REPO = "config/zzz-292.txt"
+        _how292b = _ks292.unlock_howto()
+        assert "config/zzz-292.txt" in _how292b and "config/keys-pass" not in _how292b, \
+            "补法文案把档位写死了：加一档而文案不动 = §5.19 那句老毛病"
+        assert _PH292 not in _how292 and _SENT292 not in _how292, "文案漏出了口令/凭据值"
+        # ⑧ 反 force-add 网：任何口令/凭据文件名都不得出现在**被 git 跟踪**的文件里
+        _names292 = {"keys-pass", "keys.enc.yaml", "keys.yaml", "edge_auth.yaml", "session.secret"}
+        _trk292 = _sp292.check_output(["git", "ls-files"], cwd=str(ROOT)).decode("utf-8", "ignore").splitlines()
+        _bad292 = [f for f in _trk292 if Path(f).name in _names292]
+        assert not _bad292, "这些敏感文件名被 git 跟踪了（公开仓库 = 直接交出去）：%r" % (_bad292,)
+        # 判据先自证：坏形状抓得到、别的名不误伤（"0 命中"型断言必须自带夹具）
+        assert [f for f in ["config/keys-pass"] if Path(f).name in _names292] == ["config/keys-pass"]
+        assert not [f for f in ["config/keys.yaml.example"] if Path(f).name in _names292]
+        assert len(_trk292) > 300, "git ls-files 只返回 %d 行，这条判据是空跑" % len(_trk292)
+    finally:
+        _ks292.PASSPHRASE_FILE, _ks292.PASSPHRASE_FILE_REPO = _old_cands292
+        if _old_env292:
+            os.environ[_ks292.ENV_PASSPHRASE] = _old_env292
+        else:
+            os.environ.pop(_ks292.ENV_PASSPHRASE, None)
+        _ks292.reset()
+        if _out292.exists():
+            _out292.unlink()
+        shutil.rmtree(_dir292, ignore_errors=False)
+    print("[292] 续292 ok: 口令文件两档候选（仓库内 config/keys-pass 为迁移加）| 落在仓库内必须被 .gitignore "
+          "精确覆盖，否则拒读（摘闸变异立刻采纳=判据有区分度）| 0600/非空两守卫逐个仍挡 | 相对形按 BASE_DIR 折算"
+          "不按 CWD | unlock_howto 现取档位 | git ls-files 里零个口令/凭据文件名")
     print("SMOKE PASS")
 
 

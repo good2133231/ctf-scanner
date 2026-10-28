@@ -54,9 +54,11 @@ SQLite 存储，非破坏性）。它已经迭代了 140+ 轮、由多个 AI 会
    没有任何可观测后果 —— 130+ 组门禁一组都不红（`AGENTS §6.2` 第十二起：一个打偏 7 行的补丁
    把 `evasion` 四个键与 `takeover` 两个键整段删掉、还留了个重复的 `"subdomain"` 键）。
    凡是桩掉写路径，就要按 `DEFAULTS` **逐段点名**"一个键都不许少"。
-8. **安全红线**：口令 / token / PAT 绝不写进仓库里的任何文件，也绝不写进 `.git/config`、
-   远端 URL 或提交信息。凭据密文口令只从 `CTFSCANNER_KEYS_PASSPHRASE`、
-   `~/.secrets/keys-pass`（0600）或 TTY 取。控制台每次启动生成的**随机后台前缀刻意不落盘**
+8. **安全红线**：口令 / token / PAT 绝不写进**被 git 跟踪**的任何文件，也绝不写进 `.git/config`、
+   远端 URL 或提交信息。凭据密文口令四档：显式参数 > `CTFSCANNER_KEYS_PASSPHRASE` >
+   `~/.secrets/keys-pass` > `config/keys-pass`（续292 加的同机档，0600，**必须由 `.gitignore`
+   精确覆盖否则拒读**）> TTY。候选清单的唯一产地是 `keystore.passphrase_candidates()` ——
+   加一档改这一处，文案与门禁跟着走。控制台每次启动生成的**随机后台前缀刻意不落盘**
    （落盘就不叫"重启即换"了；它也不是访问控制）—— 逐请求日志 `logs/access.log` 也不例外：
    那一行记的是客户端送来的原始路径，落盘前由 `scanner/log.py::PrefixMask` 打码（`AGENTS §7`）。
    授权目标的真实标识不进被跟踪文件

@@ -92,7 +92,8 @@
 | 路径 | 说明 | 注意 |
 |---|---|---|
 | `data/scanner.db` | 真实任务 / 资产 / 漏洞库 | 停服务后做 **SQLite 一致性备份**再搬（`sqlite3 .backup`），不要直接拷运行中的 `-wal/-shm` |
-| `config/keys.enc.yaml` | 第三方 API key 密文（0600） | 与口令分开搬运；口令走 `CTFSCANNER_KEYS_PASSPHRASE` 或 `~/.secrets/keys-pass`（0600） |
+| `config/keys.enc.yaml` | 第三方 API key 密文（0600） | 与口令**分开**搬运；口令四档：`CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass` > `config/keys-pass`（续292 加，0600）> TTY |
+| `config/keys-pass`（可选） | 同机口令档，续292 起支持 | **迁移最省事的一条**：跟密文一起拷，新机不用重敲。前提是 `.gitignore` 里有精确覆盖它的那一行 —— 缺那一行程序**拒读**（本仓库公开，口令进提交 = 加密退化成混淆）。`chmod 600` 且属主是运行账号 |
 | `config/edge_auth.yaml` | 边缘认证口令（若启用） | 明文文件，0600；未启用可忽略 |
 | `data/session.secret` | 登录会话签名密钥 | 不搬 ⇒ 所有用户重新登录（功能不受影响） |
 | 仓库外 `alias-map-141.json` | AGENTS §0.5 脱敏别名表（若使用） | **绝不入库**；按 AGENTS §0.5 单独安全搬运 |

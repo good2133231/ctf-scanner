@@ -150,8 +150,10 @@ cat <<'EOF'
       非交互环境补建：CTFSCANNER_ADMIN_PASSWORD='<口令>' ./.venv/bin/python cli/run_users.py --create-admin
       （同样是临时变量、别写进任何入库文件；口令只落 users 表的 PBKDF2 派生值）
   · 凭据密文口令（config/keys.enc.yaml，只在你配过第三方 key 时才有）
-      只从 CTFSCANNER_KEYS_PASSPHRASE / ~/.secrets/keys-pass（0600）/ TTY 取，
-      **绝不写进仓库里的任何文件**，也不会写进 .git/config 或远端地址。
+      只从 CTFSCANNER_KEYS_PASSPHRASE / ~/.secrets/keys-pass / config/keys-pass（都要求 0600）/ TTY 取，
+      **绝不写进任何被 git 跟踪的文件**，也不会写进 .git/config 或远端地址。
+      续292 那档 config/keys-pass 是为整机迁移加的：口令跟密文一起拷，换机器不用重敲 ——
+      代价是同机可读的人照样解得开，所以它必须列在 .gitignore 里（缺那一行时程序**拒读**那个文件）。
       非交互安装要顺带填第三方 key：设 CTFSCANNER_KEYS_FOFA_EMAIL / ..._FOFA_KEY / ..._SHODAN_KEY /
       ..._QUAKE_KEY / ..._GITHUB_TOKEN / ..._GITLAB_TOKEN / ..._VIRUSTOTAL_KEY / ..._ICP_API_KEY；
       有一条就直通加密，没有就跳过。值只进密文，安装输出只报字段名，不打印值。

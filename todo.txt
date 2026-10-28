@@ -4542,6 +4542,63 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续292（2026-10-28，WorkBuddy · Qoder-Agent 远端 Linux）：口令文件加第二档 config/keys-pass（整机迁移）
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+主理人 2026-10-28 在新机（迁移目标机）上说：「key-pass 现在默认配置在 config 目录底下，密码应该是
+ctfscanner」，被问到「口令文件放仓库目录里代码不认，而且 .gitignore 没覆盖它」时点单：
+「你修改代码不就行里面 方便我们迁移」。本轮就是这一条：把同机口令档做成**两档候选**，
+并给落在仓库目录内的那一档加一道「必须被 .gitignore 精确覆盖」的闸（fail-closed）。
+
+- [x] T1【代码 `scanner/keystore.py` 135/20 行】新增 `PASSPHRASE_FILE_REPO = "config/keys-pass"`；
+  候选清单的**唯一产地** = `passphrase_candidates()`，且刻意在**调用时**读模块全局而不是 import 期
+  算成常量 —— 门禁与部署都靠改这两个名字来「不吃操作者真的秘密文件」（§6.2 第六起同形），
+  常量快照会让那道隔离静默失效。守卫一条没动（POSIX **正好** 0600 / 属主是自己 / 去空白非空）；
+  相对形一律按 **BASE_DIR** 折算不按进程 CWD（§5.13 那一族的第四次）。
+- [x] T2【红线闸】仓库目录内的口令文件必须被 `.gitignore` **精确覆盖**（同名行或目录规则前缀）才肯读，
+  否则 `_read_passphrase_file` 拒读并给可照做的补法。通配 / `**` / `!` 取反**一概不解释**：
+  认不出就算没覆盖（反向会把「看着像、其实被一行 `!` 取消」的文件当安全）。`.gitignore` 加了
+  `config/keys-pass` 那一行（含为什么），5/0 行。
+- [x] T3【话跟着实现走】`unlock_howto()` 现取 `passphrase_candidates()`（两档都在句子里，改一档
+  文案立刻跟着变）；`cli/run_keys.py` 那句「用 … 里的口令」改报**真命中的那一档**
+  （新 `file_passphrase_detail()` 回第三值），写死第一个名字在两档并存时就是假话；
+  `install.sh` 末尾那段改成四档来源 + 「绝不写进任何**被 git 跟踪**的文件」（原话「仓库里的任何
+  文件」现在与 config/ 那档冲突，留着就是 §5.19 那句老毛病）。
+- [x] T4【门禁隔离】tests/smoke.py 顶部把**两档一起**指到不存在的名字；只隔第一档的话，
+  本机恰好有 `config/keys-pass` 的那台机器会把真口令读进进程缓存 ⇒ 同一份代码这台绿那台红。
+- [x] T5【新组 [292]，smoke 116/0 行】八条判据：两档候选都存在且都没吃到真文件｜两档默认值的**形态**｜
+  `.gitignore` 精确覆盖那一行在｜覆盖判据四组正反夹具｜沙箱里第二档**真的解开**密文（source=file）
+  且 detail 报对档位｜0644 与空文件照旧拒｜仓库内未被覆盖 ⇒ 拒读，**摘掉那道闸立刻采纳**
+  （§6.1 变异证伪，证明 ⑤ 抓的就是这道闸）｜`chdir` 之后相对形仍按 BASE_DIR 折算｜`git ls-files`
+  里零个口令/凭据文件名（反 `git add -f` 的网，先自证抓得到坏形状不误伤 keys.yaml.example）。
+- [x] T6【本机实测落地】`config/keys-pass` 已写入（0600、属主 root）；`git check-ignore -v` 命中
+  `.gitignore:22`；`git status --short` **不列**它；`file_passphrase_detail()` 实测取到口令、
+  来源显示 `config/keys-pass`、只打掩码（10 字符 / sha256:df47e01e），值不落任何输出；
+  密文还没搬来时 `unlock()` 照实返回 `source=absent`、不抛、不谎报已解锁。
+- [ ] 等主理人把 `config/keys.enc.yaml` 搬到这台机器（实测本机没有，且它天生不在 git 里），
+  搬来后**重启控制台**即自动解锁 —— 解锁只在进程启动时做一次并缓存（§5.10 那条口径没变）。
+- [ ] 这台新机的 push 仍不通：`credential.helper` 为空、仓库外那份 git 助手与 `~/.secrets/keys-pass`
+  都不存在 ⇒ 本轮只做**本地提交**，§0.4 收尾第④步的 push 要等 `github.push_token` 那条链补上
+  （两条路：把旧机那份密文 + 助手搬过来，或给仓库建 Deploy key / fine-grained PAT）。
+- [x] T7【门禁自己也被实测打了一次】第一轮全量跑到 `[218]` 红：
+  `assert _reg218, "库里连一个注册域都没有？"` —— 那一组只把「库不存在」当跳过条件，
+  而**新机第一次启动 GUI 就会自动建一个空库**（本机实测 subdomains 0 行）⇒ 「有库就有资产」
+  是作者机器的前提，不是事实（§6.2 那一族新一「起」）。修法不是放宽成恒过，而是**分两态**：
+  有域名却折不出注册域 ⇒ 照旧判红（口径真坏了照样抓）；库是空的 ⇒ 把「本次没验到」并进组名行
+  打出来（跳过 ≠ 通过，抄 §6.2 第四起的口径），且下面那条 `github.com` 变异夹具照旧跑 ⇒
+  判据的牙齿没被这行磨掉。smoke 里 `[218]` 段 4 行替 12 行。
+- [x] T8【环境补齐】`[264]` 红在 `puredns error: unable to execute massdns`（本机没有 massdns 产物，
+  而 puredns 在进程内按 PATH exec 它）⇒ 按 §7 那条既定路补：`python tools/build_massdns.py --fetch`
+  （源码 v1.1.0 按本框架钉住的摘要取进 `tools/massdns-src/`、本机 gcc/make 现成、产物
+  `tools/scanner/massdns` 127 KB、rc=0；**没加 --wire** —— `config/settings.yaml` 里
+  `massdns: tools/scanner/massdns` 那行本来就对，写回就是无谓地动被跟踪文件）。
+- [x] C1 全量门禁：`tests/smoke.py` **SMOKE PASS**（rc=0，419 秒 = 14:10:16→14:17:15，组一条不跳），日志 logs/_smoke292c.log。前两轮各红在一处，**两轮都是本轮自己抓出来的真问题**（见上面 T7/T8）：第一轮 393s 红在 `[218]`（空库被当成 base_domain 口径坏了），第二轮 407s 红在 `[264]`（缺 massdns）。
+- [x] C2 记忆同步：CHANGELOG 续292 + todo 续292 + AGENTS 三处（§2 口令兜底档 / §5.14 产地清单 /
+  §7 凭据加密边界）+ `.qoder/skills/ctf-scanner/SKILL.md` 第 8 条 + `docs/dev-sync.md`「必搬」表。
+
+下一轮（续293）：
+- [ ] 无必须项；密文搬来后重启 GUI，核一眼任务日志里那句「[osint] FOFA 未配置…」是否消失
+
 ## 续291（2026-10-28，WorkBuddy · DeepSeek-V4.1-Flash）：服务器迁移盘点 + 记忆固化 + 干净克隆可用性
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
 

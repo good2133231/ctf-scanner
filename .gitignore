@@ -15,6 +15,11 @@ config/settings.json
 config/keys.yaml
 # 续98：口令加密后的凭据文件同样绝不入库（里面是密文，但形态本身就是敏感信息）
 config/keys.enc.yaml
+# 续292：整机迁移用的同机口令档（`config/keys-pass`，0600）。红线与上面两条同一条，而且它更硬：
+# 这个文件里躺的是**能解开全部第三方 key 的那句口令**，一旦进公开仓库，`keys.enc.yaml` 的
+# AES-256-GCM 立刻退化成混淆。`keystore._reject_repo_without_ignore()` 会核对这一行在不在 ——
+# 规则被删 ⇒ 运行期直接拒读该文件（宁可退回"当场问一次"，也不默默用一份可能被提交的口令）。
+config/keys-pass
 
 # 续132：401 边缘门的明文口令（config/edge_auth.yaml）。红线与 keys.yaml 同一条 ——
 # `config/settings.yaml` 被 git 跟踪、仓库是公开的，口令写进那儿就等于交给全世界，

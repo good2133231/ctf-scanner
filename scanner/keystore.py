@@ -18,10 +18,12 @@ AES-GCM 认证加密落盘**：`config/keys.enc.yaml`。
 所以 `load_keys()` **绝不能在这里要口令** —— 它只读 `current()`（未解锁就返回 `{}`）。
 解锁只在**进程启动时**由入口显式调一次 `unlock()`（`gui.serve()` / `cli` 扫描入口 / `cli/run_node.py`）。
 非交互环境（CI、`python -c`、被强接管 stdin 的自动化）**不提示、不挂住**，直接回未解锁 ——
-但"不提示"不等于"不解锁"：`CTFSCANNER_KEYS_PASSPHRASE` 与 `~/.secrets/keys-pass` 两档**照旧生效**
-（续162 补的第三档；`install.sh` 与 AGENTS §2 早就把它写成口令来源之一，代码此前没有，
+但"不提示"不等于"不解锁"：`CTFSCANNER_KEYS_PASSPHRASE` 与 `passphrase_candidates()` 里那两份
+口令文件**照旧生效**（续162 补的第一档；续292 又加了仓库内 `config/keys-pass` 那一档，为整机迁移准备，
+多一道"必须被 .gitignore 覆盖"的闸）。`install.sh` 与 AGENTS §2 早就把口令文件写成来源之一，
+代码此前没有这一档 ——
 于是 `gui.keys_ask_passphrase=false` 的部署每次启动都锁着、外部情报源全部按"无 key"降级，
-而日志写的是"未配置"—— 主理人因此找错了一次方向）。
+而日志写的是"未配置"：主理人因此找错了一次方向。
 """
 import base64
 import getpass
@@ -41,6 +43,23 @@ ENV_PASSPHRASE = "CTFSCANNER_KEYS_PASSPHRASE"
 # 写**字面 `~/...`**、取用时才展开：报错文案里要引用它，展开后的家目录绝对路径会撞 §0.3 那条
 # "日志与页面里只许出现相对路径"的红线。
 PASSPHRASE_FILE = "~/.secrets/keys-pass"
+# 续292 的第二档：仓库内的 `config/keys-pass`，为**整机迁移**准备 —— 口令跟密文一起拷，
+# 换一台机器不用重敲、也不用在新机器上复现 `~/.secrets` 那一套权限。
+# 它比家目录那档**多一道闸**：文件只要落在仓库目录内，就必须先被 `.gitignore` 覆盖才肯读
+# （判据见 `_reject_repo_without_ignore`）。本仓库是公开的，一句 `git add -A` 就会把
+# "能解开全部第三方 key 的口令"交出去 —— 按 §7 那条原话，那等于把 AES-256-GCM 退化成混淆。
+# 所以这一档买到的仍是"同机兜底"，**不是更强的加密**：能读这台机器的人照样能解开密文。
+PASSPHRASE_FILE_REPO = "config/keys-pass"
+
+
+def passphrase_candidates():
+    """口令文件的候选档（**唯一产地**），按优先级排。
+
+    刻意在**调用时**读模块全局、不在 import 期算成常量：门禁与部署都是靠改这两个名字来
+    "不吃操作者真的秘密文件"的（`tests/smoke.py` 顶部那处隔离、续162 的 `[8f]` 都这么干），
+    常量快照会让那道隔离静默失效 —— 于是同一份代码"这台机器绿、那台机器红"。
+    """
+    return (PASSPHRASE_FILE, PASSPHRASE_FILE_REPO)
 
 _MAGIC = b"CTFSCANNER-KEYS-V1\x00"
 MAGIC_KEYS = _MAGIC      # 公开别名：别的模块（`migrate`）拿它做"这不是凭据文件"的判据
@@ -53,35 +72,128 @@ _KEY_LEN = 32
 _STATE = {"unlocked": False, "data": None, "reason": "", "source": ""}
 
 
-def file_passphrase(path=None):
-    """从 `~/.secrets/keys-pass` 取口令：`(口令, "")` 或 `("", 原因)`，**永不抛、永不打印值**。
+def _resolve_passphrase(disp):
+    """显示名 → 真实路径。`~/` 展开；相对形一律按 **BASE_DIR** 折算，不按进程 CWD。
 
-    三条守卫一条都不许省（这是这一档成立的前提，不是保守）：POSIX 下权限必须**正好** 0600、
-    属主必须是当前用户、去掉空白后非空。任何一条不满足就**当作没配**并给出原因 ——
-    宁可退回"当场问一次"，也不放宽权限判据；AGENTS §2 说这一档买到的三件事之一就是
-    "权限一被改坏就自动失效"，把判据写成 `& 0o077 == 0`（允许 0644）就把那件事卖掉了。
+    这条折算是刻意的（§5.13 那一族的第四次）：`config/keys-pass` 要是按 CWD 解释，
+    从仓库外启动 GUI/CLI 就会"文件明明在、却说不存在"，而那句原因会原样进启动横幅。
+    """
+    if disp.startswith("~"):
+        return Path(os.path.expanduser(disp))
+    p = Path(disp)
+    return p if p.is_absolute() else (BASE_DIR / p)
+
+
+def _rel_in_base(p):
+    """路径在仓库目录内 ⇒ 返回它相对仓库根的显示形；不在则返回 ""（用 resolve 比父子，不比字符串）。"""
+    try:
+        return p.resolve().relative_to(BASE_DIR.resolve()).as_posix()
+    except (ValueError, OSError):
+        return ""
+
+
+def _ignore_rules():
+    """.gitignore 的**有效行**（去注释、去空行、跳过 `!` 取反行）。读不到就当没有规则。"""
+    try:
+        lines = (BASE_DIR / ".gitignore").read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    return [l.strip() for l in lines if l.strip() and not l.strip().startswith("#")]
+
+
+def _covered_by_ignore(rel, rules=None):
+    """.gitignore 覆没覆盖这条仓库内相对路径 —— **只认两种形**：精确同名、或目录规则（末尾带 `/`）
+    覆盖它的前缀。通配、`**`、`!` 取反一概不解释。
+
+    这是 **fail-closed** 的取舍：认不出就算"没覆盖" ⇒ 拒读口令，而反过来（把猜得出的通配当覆盖）
+    会放行一份"规则看着像、其实被后面一行 `!` 取消了"的文件 —— 那种情形口令真的会被提交。
+    想要这一档，就把规则写成精确文件名，别用通配。
+    """
+    if rules is None:
+        rules = _ignore_rules()
+    for r in rules:
+        if r.startswith("!"):
+            continue
+        r = r.lstrip("/")
+        if r.endswith("/"):
+            if rel.startswith(r):
+                return True
+        elif r == rel:
+            return True
+    return False
+
+
+def _reject_repo_without_ignore(p):
+    """仓库目录内的那一档：没被 .gitignore 精确覆盖就**拒绝读**，并给出能照着改的原因。"""
+    rel = _rel_in_base(p)
+    if rel and not _covered_by_ignore(rel):
+        return (f"{rel} 落在仓库目录内却没被 .gitignore 覆盖 —— 本仓库是公开的，"
+                f"拒绝读（口令一旦进提交，密文就退化成混淆）。补法：在 .gitignore 加一行 `{rel}`")
+    return ""
+
+
+def file_passphrase(path=None):
+    """从口令文件取口令：`(口令, "")` 或 `("", 原因)`，**永不抛、永不打印值**。
+
+    `path` 给了就只读那一个文件（调用方与门禁的形状不变）；不给则按
+    `passphrase_candidates()` 的优先级逐档试，先拿到先返回 —— 两档共用同一套守卫。
+    """
+    got, why, _disp = file_passphrase_detail(path)
+    return got, why
+
+
+def file_passphrase_detail(path=None):
+    """同 `file_passphrase`，多回第三个值"**这一句口令来自哪一档的显示名**"。
+
+    为什么要露出档位：`cli/run_keys.py` 那句"用 … 里的口令"要是写死第一个名字，
+    在两档并存时就是句假话（§5.14：面向用户的话只许有一个产地，而产地得是**事实**）。
+    """
+    if path is not None:
+        disp = str(path)
+        got, why = _read_passphrase_file(Path(path), disp)
+        return got, why, (disp if got else "")
+    whys = []
+    for disp in passphrase_candidates():
+        got, why = _read_passphrase_file(_resolve_passphrase(disp), disp)
+        if got:
+            return got, "", disp
+        if why:
+            whys.append(why)
+    return "", "；".join(whys), ""
+
+
+def _read_passphrase_file(p, disp):
+    """`(口令, "")` 或 `("", 原因)`。
+
+    守卫一条都不许省（这是这一档成立的前提，不是保守）：POSIX 下权限必须**正好** 0600、
+    属主必须是当前用户、去掉空白后非空；**仓库目录内的文件**还要多一道 `_ignore_rules` 覆盖判定。
+    任何一条不满足就**当作没配**并给出原因 —— 宁可退回"当场问一次"，也不放宽权限判据；
+    AGENTS §2 说这一档买到的三件事之一就是"权限一被改坏就自动失效"，
+    把判据写成 `& 0o077 == 0`（允许 0644）就把那件事卖掉了。
     Windows 没有 POSIX 权限位：只查存在与非空（NTFS 走 ACL，这里不猜、不假装验过）。
     """
-    p = Path(path) if path is not None else Path(os.path.expanduser(PASSPHRASE_FILE))
+    why = _reject_repo_without_ignore(p)
+    if why:
+        return "", why
     try:
         st = p.stat()
     except OSError:
-        return "", f"{PASSPHRASE_FILE} 不存在"
+        return "", f"{disp} 不存在"
     if not st.st_size:
-        return "", f"{PASSPHRASE_FILE} 是空文件"
+        return "", f"{disp} 是空文件"
     if os.name == "posix":
         mode = st.st_mode & 0o777
         if mode != 0o600:
-            return "", f"{PASSPHRASE_FILE} 权限是 {oct(mode)}（要求正好 0600）"
+            return "", f"{disp} 权限是 {oct(mode)}（要求正好 0600）"
         if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
-            return "", f"{PASSPHRASE_FILE} 的属主不是当前用户"
+            return "", f"{disp} 的属主不是当前用户"
     try:
         text = p.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError) as e:
         # 只报异常类型，不报路径细节（`OSError` 的字符串里常带家目录绝对路径，§0.3）
-        return "", f"{PASSPHRASE_FILE} 读不出来（{type(e).__name__}）"
+        return "", f"{disp} 读不出来（{type(e).__name__}）"
     if not text:
-        return "", f"{PASSPHRASE_FILE} 去掉空白后是空的"
+        return "", f"{disp} 去掉空白后是空的"
     return text, ""
 
 
@@ -90,8 +202,11 @@ def unlock_howto():
 
     为什么单独一个函数：`config-off` 的原因、`keys_hint()` 的补法、`cli/run_keys.py` 的非交互提示
     说的是同一件事，此前各写一遍已经漂过一次（`lock_notice` 的注释里记着那次"同一句说两遍"）。
+    候选档一律现取 `passphrase_candidates()` —— 加一档改一处就够，文案不会落后于代码。
     """
-    return (f"设 {ENV_PASSPHRASE}，或写 {PASSPHRASE_FILE}（0600、属主是自己），"
+    cands = passphrase_candidates()
+    return (f"设 {ENV_PASSPHRASE}，或写 {' / '.join(cands)}（0600、属主是自己，"
+            f"仓库内那份还得被 .gitignore 覆盖），"
             "或把 gui.keys_ask_passphrase 打开（启动时问一次）")
 
 
@@ -311,9 +426,9 @@ def unlock_notice(source):
 def unlock(passphrase=None, path=None, allow_prompt=None):
     """启动时调一次：把密文解进进程缓存。返回 `{"ok", "reason", "source"}`，**永不抛**。
 
-    口令来源优先级：显式参数 > `CTFSCANNER_KEYS_PASSPHRASE` > `~/.secrets/keys-pass`（守卫见
-    `file_passphrase`）> 交互提示。第三档与"问不问"无关 —— `allow_prompt=False` 跳的是**提问**，
-    不是解锁。
+    口令来源优先级：显式参数 > `CTFSCANNER_KEYS_PASSPHRASE` > 口令文件（候选档见
+    `passphrase_candidates()`，守卫见 `_read_passphrase_file`）> 交互提示。文件档与"问不问"无关 ——
+    `allow_prompt=False` 跳的是**提问**，不是解锁。
     `allow_prompt=False`（续133，来自 `gui.keys_ask_passphrase=false`）跳过"交互提示"这一级。
     跳的是**提问**、不是加密：没有口令就是未解锁，照实返回并把原因写成"被配置关掉了"—— 既不
     假装成功，也不静默当成"没配 key"（那种混淆正是 §7 续114 登记过的真实误判来源）。
@@ -332,7 +447,7 @@ def unlock(passphrase=None, path=None, allow_prompt=None):
     source = "arg" if passphrase else ("env" if given else "")
     _file_why = ""
     if not given:
-        # 续162 的第三档：它排在"问不问"之前，所以关掉询问的部署也解得开
+        # 口令文件档（续162 立、续292 起有两份候选）：它排在"问不问"之前，所以关掉询问的部署也解得开
         given, _file_why = file_passphrase()
         if given:
             source = "file"

@@ -27,13 +27,14 @@ from scanner.utils import is_interactive_stdin  # noqa: E402
 def _ask(prompt, confirm=False):
     """取口令：不回显；`--confirm` 时要求输入两遍且必须一致（防手滑把凭据锁死）。"""
     if not is_interactive_stdin():     # 续246：Windows isatty 对 NUL 也真，会挂死在 getpass
-        # 续162：非交互时先试 `~/.secrets/keys-pass`（与启动解锁同一档、同一套守卫）。
-        # `confirm=True`（= 设**新**口令）刻意不走这一档：那样 `--change` 会"旧口令=新口令=文件里那句"，
-        # 换口令变成一次静默的空操作。
         if not confirm:
-            got, _why = keystore.file_passphrase()
+            # 续162：非交互时先试同机口令文件（与启动解锁同一套守卫）；续292 起候选有两档，
+            # 所以那句"用 … 里的口令"必须报**真正命中的那一档**，写死第一个名字就是假话。
+            # `confirm=True`（= 设**新**口令）刻意不走这一档：那样 `--change` 会"旧口令=新口令=文件里那句"，
+            # 换口令变成一次静默的空操作。
+            got, _why, _from = keystore.file_passphrase_detail()
             if got:
-                print(f"[i] 用 {keystore.PASSPHRASE_FILE} 里的口令（{keystore.mask(got)}）")
+                print(f"[i] 用 {_from} 里的口令（{keystore.mask(got)}）")
                 return got
         print("[!] 非交互环境：" + keystore.unlock_howto() + "（口令不要写进任何入库文件）")
         return None
