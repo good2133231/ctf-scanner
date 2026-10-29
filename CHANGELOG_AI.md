@@ -3,6 +3,33 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续296（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：`sync_check` 长出「散落凭据」判据 + 新组 [296]
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+### 为什么加（回答主理人问的「③ 是什么意思」）
+
+仓库里存在**既没被跟踪、也没被 .gitignore 覆盖**的文件 ⇒ 体检点名并拦人。凭据被随手放成
+`config/config`、`config/111` 这两次就是这一形状：名字不在忽略名单里，一次 `git add -A` 就把明文
+送进公开仓库。逐条补忽略规则追不上随手起的文件名，所以判据必须落在**结构事实**上。
+
+### 改动与实测
+
+- `tools/sync_check.py`：新增 `loose_secrets(repo)` 两路判据（config/ 下的散文件；内容含已知令牌形状），
+  并入 `check()` 的 problems ⇒ `--strict` 为此退出 1；输出多一行 `   散落: <路径> ← <原因>`。
+  已知形状只有 5 个高信号正则（classic PAT / fine-grained PAT / OpenAI / AWS / PEM 头），
+  且**模式串运行时拼接** —— 本仓 §2 记过：形状与真 token 一致的假值会被 GitHub 秘密扫描直接拒推。
+  跳过 >256 KB 的文件（字典/二进制不误扫）。
+- 手工验证：往 `config/` 植一个含 classic PAT 形状的散文件 ⇒ 两路判据同时命中并点名；删掉即恢复干净。
+- `tests/smoke.py` 新组 `[296]`：沙箱里 `git init` 一个真仓库跑六面 —— 干净不报（先跑，防恒报把正面
+  断言变成假绿）→ `config/111`（名字完全不像凭据）必须被抓 → config/ 之外靠内容形状抓 →
+  `.gitignore` 覆盖即放行且不误关另一路 → `--strict` rc=1 且点名 → 本仓自查此刻干净。
+- 两次自我绊倒（本仓写过的老病，本轮现场又撞，所以再记一遍）：
+  ① 拿裸词「散落」当判据，而 sync_check 的**结尾建议语**里也含这两个字 ⇒ 断言恒假 ——
+     §6.1 推论四「断言别钉裸词」第七例；改成只认行前缀 `   散落:`。
+  ② 修的时候把换行转义当成真实换行写进源码 ⇒ SyntaxError；改用 `chr(10)` 彻底绕开反斜杠。
+- 全量门禁：`tests/smoke.py` **SMOKE PASS**，rc=0，441 秒，366 条组输出行一条不跳，日志 `logs/_smoke296.log`。
+
 ## 续295（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：`keys.enc.yaml` 进仓库（口令不进）+ `--change` 三道死路修掉
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

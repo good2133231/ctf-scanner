@@ -33087,6 +33087,76 @@ expression: r0()
           "keys.enc.yaml 已在跟踪清单而 keys-pass/keys.yaml/edge_auth/session.secret 一个都没有｜"
           "被跟踪文件里零处出现口令值（含 token 形的 sha256 比对），扫描范围 " + str(_scanned295) + " 个文件、"
           "自证探针抓得到已知串")
+    # ------------------------------------------------------------------ [296]
+    # 续296：`tools/sync_check.py` 多了一项判据 —— 未跟踪**且没被 .gitignore 覆盖**的文件，
+    # 只要落在 config/ 下、或内容里有已知令牌形状，就点名。来历是本轮真实发生的两次：
+    # 主理人把凭据放成 `config/config`、`config/111` —— 两个名字都不在忽略名单里，
+    # 差一次 `git add -A` 就把明文送进**公开**仓库。逐条补忽略规则追不上随手起的文件名，
+    # 所以判据落在"结构事实"上（未跟踪 ∩ 未忽略）+ 内容形状两路。
+    import subprocess as _sp296
+    _sb296 = Path(tempfile.mkdtemp(prefix="smoke-296", dir=str(ROOT / "logs")))
+    _sc296 = str(ROOT / "tools" / "sync_check.py")
+
+    def _loose296():
+        import importlib.util as _ilu296
+        _spec296 = _ilu296.spec_from_file_location("sync_check_296", _sc296)
+        _mod296 = _ilu296.module_from_spec(_spec296)
+        _spec296.loader.exec_module(_mod296)
+        return dict(_mod296.loose_secrets(_sb296)), _mod296
+
+    try:
+        def _git296(*args):
+            return _sp296.run(["git", "-C", str(_sb296)] + list(args), capture_output=True,
+                              text=True, timeout=60)
+        _git296("init", "-q")
+        _git296("config", "user.email", "smoke@invalid")
+        _git296("config", "user.name", "smoke")
+        (_sb296 / "README.md").write_text("x\n", encoding="utf-8")
+        _git296("add", "README.md")
+        _git296("commit", "-q", "-m", "init")
+        # ① 干净仓库 ⇒ 一条都不报（这条先跑，否则"恒报"也能让后面的正面断言假绿）
+        _got0, _ = _loose296()
+        assert not _got0, f"干净沙箱却报了散落：{_got0}"
+        # ② 规则一：config/ 下的散文件（名字完全不像凭据也要抓到 —— 本轮就是这两个名字）
+        (_sb296 / "config").mkdir()
+        (_sb296 / "config" / "111").write_text("vt\n" + "0" * 64 + "\n", encoding="utf-8")
+        _got1, _ = _loose296()
+        assert "config/111" in _got1 and "config/ 下的散文件" in _got1["config/111"], \
+            f"config/ 散文件没被抓到：{list(_got1)}"
+        # ③ 规则二：config/ 之外，但内容带已知令牌形状（形状运行时拼接，绝不写进被跟踪文件）
+        (_sb296 / "notes.txt").write_text("token=ghp_" + "a" * 36 + "\n", encoding="utf-8")
+        _got2 = dict(_loose296()[0])
+        assert "notes.txt" in _got2 and "GitHub classic PAT" in _got2["notes.txt"], \
+            f"内容形状判据没牙：{list(_got2)}"
+        # ④ 反向：把 config/111 写进 .gitignore ⇒ 它不再报（忽略＝明确说"我不入库"，放行是对的）
+        (_sb296 / ".gitignore").write_text("config/111\n", encoding="utf-8")
+        _got3 = dict(_loose296()[0])
+        assert "config/111" not in _got3, f"被忽略的文件仍然报：{list(_got3)}"
+        assert "notes.txt" in _got3, "反向不该把另一条判据一起关掉"
+        # ⑤ 端到端：--strict 必须因此退出 1（这条判据是要拦人的，不是只打印好看）
+        _r296 = _sp296.run([sys.executable, _sc296, "--repo", str(_sb296), "--strict"],
+                           capture_output=True, text=True, timeout=120)
+        assert _r296.returncode == 1, f"--strict 没为散落凭据退出非 0：rc={_r296.returncode}\n{_r296.stdout[-300:]}"
+        assert "散落" in _r296.stdout and "notes.txt" in _r296.stdout, \
+            f"退出码对但没说清是哪一个：{_r296.stdout[-300:]}"
+        (_sb296 / ".gitignore").write_text("config/111\nnotes.txt\n", encoding="utf-8")
+        _r296b = _sp296.run([sys.executable, _sc296, "--repo", str(_sb296), "--strict"],
+                            capture_output=True, text=True, timeout=120)
+        assert "凭据形状" not in _r296b.stdout, f"两个都忽略后仍在报：{_r296b.stdout[-300:]}"
+        # ⑥ 本仓此刻必须是干净的（这条顺手钉住"我们自己的仓库没有散落的凭据"）
+        _here = _sp296.run([sys.executable, _sc296, "--repo", str(ROOT)],
+                           capture_output=True, text=True, timeout=120)
+        # 判据只看机器可读的那一行的前缀（"   散落:"）——结尾那句**建议语**里也含"散落"两字，
+        # 拿子串"散落"当判据会恒假（本仓 §6.1 推论四"断言别钉裸词"的第七次同形，我这轮现场又撞了一次）
+        # 判据只认机器可读那一行的前缀（结尾那句建议语里也含「散落」两字 ⇒ 拿裸词当判据会恒假，
+        # §6.1 推论四「断言别钉裸词」的又一例，本轮现场撞的）
+        assert chr(10) + "   散落:" not in (chr(10) + _here.stdout), \
+            "本仓库里有未跟踪且未被忽略的凭据形状文件：" + _here.stdout[-400:]
+    finally:
+        shutil.rmtree(_sb296, ignore_errors=False)
+    print("[296] 续296 ok: sync_check 新增『未跟踪且未被忽略』的散落凭据判据——config/ 散文件与已知令牌形状"
+          "两路各有正反断言｜.gitignore 覆盖即放行（且不误关另一路）｜--strict 真的退出 1 并点名文件｜"
+          "本仓自查此刻干净｜令牌形状全部运行时拼接，不写进被跟踪文件（§2 秘密扫描那条红线）")
     print("SMOKE PASS")
 
 

@@ -18,11 +18,60 @@
 - **未推送**：本地 HEAD 有 origin 没有的提交（ahead > 0）。此时本地工作建立在
   "GitHub 上还不存在的代码"上，接手方看不到；
 - **未拉取**：origin 有本地没有的提交（behind > 0）——先 `git pull --rebase` 再开工。
+- **散落的凭据形状（续296）**：未跟踪**且没被 .gitignore 覆盖**的文件，只要落在 `config/` 下，
+  或内容里出现已知令牌形状，就单独点名。理由不是"整洁"：主理人 2026-10-29 两次把凭据
+  随手放成 `config/config`、`config/111` —— 那两个名字**都不在** `.gitignore` 的名单里，
+  一次 `git add -A` 就把明文送进公开仓库，而这条判断只看"未被跟踪也未被忽略"这个结构事实，
+  不依赖文件名取得对。
 """
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
+
+
+# 已知令牌形状（只用于**发现**，绝不允许写进本仓库的被跟踪文件——门禁 [155] 那条同源）。
+# 每一项都在运行时拼接，避免这里出现的"形状示例"被 GitHub 秘密扫描当成真凭据。
+_SECRET_SHAPES = (
+    ("GitHub classic PAT", re.compile(r"ghp_[A-Za-z0-9]{36}")),
+    ("GitHub fine-grained PAT", re.compile("github_" + r"pat_[A-Za-z0-9_]{40,}")),
+    ("OpenAI key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
+    ("AWS access key", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("私钥文件正文", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+)
+_SECRET_MAX_BYTES = 256 * 1024
+
+
+def loose_secrets(repo):
+    """未跟踪且未被忽略的文件里，哪些是"差一次 git add -A 就公开"的形状。返回 [(路径, 原因)]。"""
+    repo = Path(repo).resolve()
+    st = _git(repo, "status", "--porcelain", "--untracked-files=all")[1]
+    cands = [l[3:].strip().strip('"') for l in st.splitlines() if l.startswith("?? ")]
+    out = []
+    for rel in cands:
+        if not rel:
+            continue
+        p = repo / rel
+        under_config = rel.split("/", 1)[0] == "config"
+        hit_name = ""
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = 0
+        if size and size <= _SECRET_MAX_BYTES:
+            try:
+                text = p.read_bytes().decode("utf-8", "ignore")
+            except OSError:
+                text = ""
+            for label, rx in _SECRET_SHAPES:
+                if rx.search(text):
+                    hit_name = f"内容含 {label} 形状"
+                    break
+        if under_config or hit_name:
+            why = "、".join(x for x in (("config/ 下的散文件" if under_config else ""), hit_name) if x)
+            out.append((rel, why + "（未跟踪也没被 .gitignore 覆盖）"))
+    return out
 
 
 def _git(repo, *args):
@@ -56,13 +105,16 @@ def check(repo):
     problems = []
     if dirty:
         problems.append(f"工作区有 {len(dirty)} 个未提交改动（{branch}）")
+    loose = loose_secrets(repo)
+    if loose:
+        problems.append(f"有 {len(loose)} 个**未跟踪也没被忽略**的文件带凭据形状（差一次 git add -A）")
     if ahead:
         problems.append(f"有 {ahead} 个本地提交未推送（{branch} 领先 origin）")
     if behind:
         problems.append(f"origin 有 {behind} 个提交未拉取")
     return {"ok": not problems, "problems": problems, "branch": branch,
             "dirty": dirty, "ahead": ahead, "behind": behind, "stashes": stashes,
-            "has_upstream": has_up}
+            "loose": loose, "has_upstream": has_up}
 
 
 def main(argv=None):
@@ -85,7 +137,10 @@ def main(argv=None):
         return 0
     for q in rep["problems"]:
         print("   !", q)
-    print("[sync] 先提交/推送/拉取，再跨机同步（git pull --rebase origin main）")
+    for rel, why in rep.get("loose") or []:
+        print("   散落:", rel, "←", why)
+    print("[sync] 先提交/推送/拉取，再跨机同步（git pull --rebase origin main）；"
+          "散落那几行要么写进 .gitignore，要么换成被跟踪的模板文件（config/keys.yaml.example 那种）")
     return 1 if a.strict else 0
 
 

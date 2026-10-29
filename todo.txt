@@ -4542,6 +4542,32 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续296（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：sync_check 长出「散落凭据」这条判据
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+主理人问「③ 那条 sync_check 判据是什么意思」并点头要做。意思一句话：**仓库里有既没被 git 跟踪、
+又没被 `.gitignore` 覆盖的文件 ⇒ 体检直接点名并拦人**。来历是本轮两次真实形状 —— 凭据被随手放成
+`config/config`、`config/111`，两个名字都不在忽略名单里，`git add -A` 只要按错一次就把明文送进公开仓库。
+
+- [x] T1 `tools/sync_check.py` 新增 `loose_secrets()`，两路判据：① 未跟踪未忽略且落在 `config/` 下
+  （不看文件名像不像凭据 —— 结构事实就够）；② 未跟踪未忽略且内容含已知令牌形状
+  （classic PAT / fine-grained PAT / OpenAI / AWS / PEM 头，形状**运行时拼接**，本仓绝不写整串）。
+  `--strict` 现在会为此退出 1；结尾建议语给出处置（写进 .gitignore 或换成被跟踪的模板）。
+- [x] T2 新组 `[296]`（沙箱真 git 仓库，正反六面）：干净⇒不报（先跑这一步，防止判据恒报时后面的
+  正面断言变成假绿）；`config/111` 这类名字完全不像凭据的散文件必须被抓；config/ 之外靠内容形状抓；
+  `.gitignore` 覆盖即放行且不误关另一路；`--strict` 端到端 rc=1 且点名；本仓此刻自查干净。
+- [x] T3 两次自我绊倒都记下来（都是本仓写过的老病，本轮现场又撞）：① 拿裸词「散落」当判据 ⇒ 结尾
+  建议语里也含这两个字，断言恒假；改成只认行前缀 `   散落:`（§6.1 推论四第七例）。
+  ② 修的时候把换行符当真实换行写进源码 ⇒ SyntaxError；改用 `chr(10)` 绕开反斜杠。
+- [ ] PDF 导出移除 + 无头浏览器/CJK 字体进自动化安装（主理人 2026-10-29 点单：不要 PDF，截图必须有），
+  见下一轮。
+- [x] C1 全量门禁：`tests/smoke.py` **SMOKE PASS**（rc=0，441 秒，366 条组输出行一条不跳），日志 logs/_smoke296.log。
+
+下一轮（续297）：
+- [ ] 移除 PDF 导出（`report.export_pdf` + `/export?fmt=pdf` + GUI 入口 + 文档与断言一起收，不留死代码）
+- [ ] 无头浏览器 + CJK 字体装进 `./install.sh` 默认路径；缺系统共享库时截图照实失败、不假绿（§7）
+- [ ] token 加 Contents:write 或换 Deploy key 后补推本地提交
+
 ## 续295（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：密文进仓库、口令永远不进 + `--change` 三道死路
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
 
