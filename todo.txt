@@ -4542,6 +4542,93 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续298（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：截图那条能力装进**默认安装** + PDF 整条移除
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+主理人 2026-10-29 的原话是同一句里的两件事：「我们不需要 pdf，把 pdf 移除，**截图必须要，
+如果没有你就要设置到自动化里面**」。上一轮（续296）把清单交出来时只写了"下一轮做"，本轮两半都做完：
+续297 ＝ 收掉 PDF；续298 ＝ 把截图的依赖（浏览器 + 中文字体）从两个"要人点头"的开关后面挪进默认路径。
+
+### 续298：`--install` 默认补齐截图
+
+- [x] T1 `run_bootstrap.py` 新增一节（放在 `install_system_packages` 之后）：
+      `_FONT_PKG`（默认路径唯一允许自动安装的系统包名）/ `browser_stack_names()`（判据取自
+      `LOCAL_STACK[*]["wire"] == ("screenshot","browser")`，**不写死工具名** —— 写死了下次给 mac/win
+      补产物就静默漏一件）/ `screenshot_gaps()`（**snap 版算缺**：装上了却写不到项目路径）/
+      `font_install_argv()`（列表 argv、root 剥掉 `sudo`、没登记过的管理器**不猜命令**）/
+      `ensure_screenshot(runner=, fetcher=, say=)`（两处都能注入，回归不必真联网真装）。
+- [x] T2 接线：`--install` 默认调一次，排在自动层之后、系统包层之前（于是 `--with-system` 看到的计划里
+      字体已就位、不重复装）；退出这一档 = `--no-screenshot`；给了 `--only` 时不动但**说出来**。
+      `probe()` 的 browser 行 `auto` 由 False → **True**（"默认安装会不会动它"的答案变了，`[8d]④` 跟着改）。
+- [x] T3 三条边界：① 两处失败都**不进 `failed`** —— 截图是可选能力，算成安装失败会让没网 / 没 root 的
+      机器上 `./install.sh` 恒 rc=1，那是续164 刚换来的成果；② `install_system_packages` 那句
+      「`with_system=False` ⇒ 一次 `runner` 都不许调」一字未动（`[8d]⑫` 原样 + `[298]⑥` 再钉一遍）；
+      ③ `[8d]②` 的 subprocess 意图白名单多一个标记 `install_screenshot_font`，**同时**加一条反向夹具：
+      打了这个标记却在调用点写死 `sudo apt-get install -y nmap` 仍必须红 —— 标记不是口子。
+- [x] T4 真机实测（这台 Linux，2026-10-29 当天，走的就是默认那条路）：取件 **301 个文件 / 189.0 MB**
+      （过本框架钉住的 SHA256）→ `tools/browser/chrome` 297,680,200 B → 回写
+      `screenshot.browser = tools/browser/chrome`（相对形，§0.3）→ `screenshot.capture()` 真出
+      **12,527 B** 的 PNG；`apt-get install -y fonts-noto-cjk` 装上后 `fc-list :lang=zh`
+      **0 条 → 30 条**（续103 登记的"中文全是豆腐块而门禁一直绿"那个缺口）。
+- [x] T5 新组 `[298]`：注册表来源 / 混进 go·源码包即红 / snap 算缺 / argv 只含那一个包名 /
+      都不缺=零动作 / 取件炸了不影响字体 / rc≠0 与 rc=0 却探不到都不许冒充成功 / 没包管理器=零子进程 /
+      AST 钉住调用点受 `--no-screenshot` 盖住且结果不进 failed / usage 里有这一档 / `[8d]⑫` 没被稀释 /
+      install.sh 的说法跟着现状。**六向变异 M1–M6 全红**（写死全表、snap 不算缺、缺不缺都取件、
+      rc=0 冒充装上、root 不剥 sudo、旗标成装饰），还原后基线复跑 rc=0，run_bootstrap.py 逐字节一致。
+- [x] T6 文档跟着现状：install.sh 用法与「边界」两段、README（顺手修掉一处旧漂：chrome 摘要"只核过
+      linux64"其实续217 起是四平台）、docs/dev-sync.md、docs/features-off-by-default.md、
+      AGENTS §5 末新增一条不变量 + §7 那条 Chrome 条目重写 + §6.2 第二十二起。
+- [ ] 未做（照实登记，不是漏了）：**`screenshot.enabled` 仍出厂关**。主理人这句要的是"这条能力必须有"，
+      不是"每个任务都起无头 Chrome"（续251 把"出厂关"登记成显式产品决策，`[251]` 钉着，随包翻成开
+      要一起动 `[271]` 那张表并交代耗时）。要真开：策略页勾「截图」，或点单让本轮把它写进随包配置。
+      Windows / macOS 的 Chrome 产物**仍没在真机启动过**（只核过归档字节与版本号）。
+
+### 续297：PDF 导出整条移除（不留死代码）
+
+- [x] U1 `scanner/report.py` 删 `export_pdf()`（43 行）与只为它存在的 `shutil` / `tempfile` / `run_cmd`
+      引用；`collect()` docstring 与模块 docstring 改成「Markdown / HTML / JSONL 三种共用一份快照」。
+- [x] U2 `cli/client.py` 删 `--report-pdf` 与它的落盘分支（含"PDF 失败就 exit 1"那段）。
+- [x] U3 `gui/app.py` 删 `_export_error_page()`（它只为"无浏览器 ⇒ PDF 失败"那一档存在）与
+      `fmt == "pdf"` 分支；未知格式改判 **400 + 纯文本说明**（支持哪三种 + 「下载 HTML 后在浏览器里
+      打印」）。旧行为是**静默退回 MD**：点了不存在的格式却拿到一个文件，看着就像成功（本仓反复登记
+      的那族：静默降级比说清楚更坏）。
+- [x] U4 模板：任务详情去掉「导出 PDF」按钮（tooltip 与"导出已关闭"那句指路语同步）；
+      `/settings` 报告导出说明改成 MD / JSONL / HTML + 一条移除告示。
+- [x] U5 门禁改形状 + 带反向对照：`[5w]` 的 PDF 段换成「`fmt=pdf` 与 `fmt=xls` 都 400、`fmt=jsonl` 仍
+      200」再加三条源码判据（report.py / app.py 里 `export_pdf` 一处不剩，CLI 里 `--report-pdf` /
+      `report_pdf` 一处不剩）；`[7v]`「三个入口都带 full」改两个；`[147]` 按钮清单去掉 PDF；
+      `[200]` 批量导出的 400 文案改成「未知/已移除的格式」。
+- [x] U6 注释与文档不许替行为说谎（§252/§294 那一族）：`config/settings.yaml` 报告段注释、
+      `scanner/config.py` DEFAULTS 注释、`scanner/toolmgr.py` 的 chrome `why`、`run_bootstrap.py`
+      浏览器三行文案、`docker_todo/README.md`、README、docs/{usage,pipeline,architecture,docker,
+      deploy-https,features-off-by-default,roadmap}、AGENTS §3/§6/§7。
+- [x] C1 全量门禁两轮：续297 收尾一次 **SMOKE PASS rc=0 / 436 秒**（`logs/_smoke297.log`）；
+      本轮（续297 补完剩余文案 + 续298 全部）再跑一次 **SMOKE PASS rc=0 / 494 秒**
+      （`logs/_smoke298.log`，组输出行 366 条）。
+- [x] C2 事故与教训（已进 AGENTS §6.2 第二十二起）：插入用的一次性脚本 `logs/_ins298.py` 漏写
+      `.replace()`，把 `new` 当整份文件写回 ⇒ `tests/smoke.py` 被截成 163 行。`git checkout --`
+      无损还原（本轮未提交），再按 `logs/_delpdf4.py` → `_spec297b-smoke` → `_spec298c` 重放，
+      途中撞回续297 当年那颗雷（`[7v]` 的 assert 消息被写成**两个相邻字符串** ⇒ IndentationError，
+      合并成一串）。**口径**：任何整文件写回前必须断言"结果比原文长且锚点已消失"，写完立刻
+      `py_compile` + 两式 numstat —— 这三条现在都写进了 `_ins298.py` 自己。
+
+下一轮：
+- [ ] 推送仍被挡：两把 fine-grained PAT 都没有 `Contents: Read and write`（403）；要么改 token 权限，
+      要么加一把勾了 Allow write access 的 Deploy key。本地已攒 6 个提交没推出去。
+- [ ] `[7x]` 真浏览器 E2E 在这台机器**仍然跳过**（本轮实测到的新缺口）：`tests/browser_e2e.py` 的
+      `_browser_candidates()` 只列系统路径，不认识 `--install` 刚取进仓库的那份 `tools/browser/chrome`
+      ⇒ 那 72 条"只有真浏览器能验"的断言本机从未跑过（同根因还让 `[8ar] ④b` 报「本机没有无头浏览器」跳过：
+      那一组把 `screenshot.browser` 置空后只剩系统探测）。下一轮把 `screenshot.browser_path(load_settings())`
+      接进候选（判据不另起一份），**先单独验一次** Chrome for Testing 能不能被 CDP 拉起来
+      （`--headless=old` 在新版 Chrome 上的行为要实测，不许猜），再决定它排第几个候选。
+- [ ] `screenshot.enabled` 要不要随包默认开（等主理人点单；开 = 每个任务起无头 Chrome，
+      并要同步 `[271]` 那张"已实现但没默认开"的表）
+- [ ] 旧服务器 `data/scanner.db`（15 任务 / 196 子域名 / 53 漏洞）仍未迁到本机；要迁走
+      `cli/run_migrate.py` 那条导出/导入路（`docs/dev-sync.md`）
+- [ ] `fscan` / `dirmap` 本机仍缺（目录发现退回内置、端口扫描退回 nmap/内置 TCP connect）
+- [ ] `shodan.key` / `quake.key` / `gitlab.token` / `icp.api_key` 四组没配 —— 四家随包都是关着的，
+      不影响默认任务（主理人 2026-10-29 已确认"留"，不需要现在补 key）
+
 ## 续296（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：sync_check 长出「散落凭据」这条判据
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
 
@@ -4559,14 +4646,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] T3 两次自我绊倒都记下来（都是本仓写过的老病，本轮现场又撞）：① 拿裸词「散落」当判据 ⇒ 结尾
   建议语里也含这两个字，断言恒假；改成只认行前缀 `   散落:`（§6.1 推论四第七例）。
   ② 修的时候把换行符当真实换行写进源码 ⇒ SyntaxError；改用 `chr(10)` 绕开反斜杠。
-- [ ] PDF 导出移除 + 无头浏览器/CJK 字体进自动化安装（主理人 2026-10-29 点单：不要 PDF，截图必须有），
-  见下一轮。
 - [x] C1 全量门禁：`tests/smoke.py` **SMOKE PASS**（rc=0，441 秒，366 条组输出行一条不跳），日志 logs/_smoke296.log。
-
-下一轮（续297）：
-- [ ] 移除 PDF 导出（`report.export_pdf` + `/export?fmt=pdf` + GUI 入口 + 文档与断言一起收，不留死代码）
-- [ ] 无头浏览器 + CJK 字体装进 `./install.sh` 默认路径；缺系统共享库时截图照实失败、不假绿（§7）
-- [ ] token 加 Contents:write 或换 Deploy key 后补推本地提交
 
 ## 续295（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：密文进仓库、口令永远不进 + `--change` 三道死路
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

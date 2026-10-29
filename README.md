@@ -42,7 +42,7 @@
 - **线索层：情报订阅 + 启发式候选 + GitHub 泄露检索**（三个阶段（DEFAULTS 关，**随包 `config/settings.yaml` 已开** ⇒ 新克隆会跑））：拉取 **CISA KEV**（免 key 公开 JSON，只收录已被在野利用的 CVE）与本地指纹做**白名单式匹配**；对已采集数据做**零请求**的差分/异常聚合（软 404 模板 / 高价值入口暴露 / 同标题多主机 / 目录命中离群 / 同 C 段多 IP）；以及拿目标的**注册域**去 **GitHub 公开代码**里搜命中（需在 `config/keys.yaml` 填 `github.token`，**没配就一次请求都不发**）。三者产出**只是「线索」**：独立 `leads` 表 + **JSONL 导出**（`type=lead` 行与 `counts.leads`），**不写漏洞、不计入漏洞数、不自动导入 POC**；页签与人读报告（MD / HTML）自 2026-09-24 起不再露出（用户口径），机器格式的口径不变。GitHub 检索另有两条硬边界：**只落仓库 / 文件路径 / 命中规则名**（绝不保存文件内容，避免把凭据明文写进本地库、日志与报告），且所有请求 **`auth=False`** —— 任务级登录态（目标侧 Cookie / Token）绝不发给 GitHub；
 - **JS 敏感字符**：17 条凭据规则（AKID/LTAI/AKIA、JWT、私钥 PEM、数据库连接串、Slack/Telegram/SendGrid/Stripe 等）+ 两级降噪（占位符、变量引用、成员访问），命中值掩码脱敏后以 high 级入库，「拓展域名」页按域名显示敏感命中数；
 - **OWASP Top 10**：内置轻量启发式检查（全部非破坏性，结论为"潜在漏洞/初筛信号"，需人工确认）；其中 **A01 敏感文件检查是数据驱动的** —— 路径、特征关键字、级别、说明都写在 `config/dicts/sensitive.txt`（`路径 | 关键字 | 级别 | 说明`，签名必填以免被统一 200 的软 404 页放大成误报），文件缺失时自动回退内置清单。
-- **报告三格式 + 漏洞趋势**：三种格式共用**同一份数据快照**（`report.collect()`，防"某种格式少一节"的漂移）——**Markdown**（默认，CLI `--report` / GUI 任务行「导出」）、**自包含单文件 HTML**（样式内联、不引外链，可直接发人）、**PDF**（复用本机无头 Edge/Chrome 的 `--print-to-pdf`，**不引入新依赖**）；报告里所有来自被测目标的文本（标题 / URL / banner / evidence）**全量 HTML 转义**，避免"打开报告即执行 JS"的反射型 XSS。本机没有可用浏览器时 PDF **明确报错**（GUI 给一页说明 + 替代路径，CLI 退出码 1），不静默丢交付物；仪表盘另有**漏洞趋势统计**面板（级别分布条 + 最近 15 个任务逐任务计数，口径与报告一致：**已判误报不计入**，未知级别归入 `other` 不静默丢）；
+- **报告三格式 + 漏洞趋势**：三种格式共用**同一份数据快照**（`report.collect()`，防"某种格式少一节"的漂移）——**Markdown**（默认，CLI `--report` / GUI 任务行「导出」）、**自包含单文件 HTML**（样式内联、不引外链，可直接发人）、**JSONL**（机器可读：每行一个 JSON 对象，含 `type` 判别字段与全部漏洞行）；报告里所有来自被测目标的文本（标题 / URL / banner / evidence）**全量 HTML 转义**，避免"打开报告即执行 JS"的反射型 XSS。**PDF 导出已于续297 整条移除**（主理人点单：不要 PDF）—— HTML 报告自带 `@media print`，要 PDF 就在浏览器里「打印 → 另存为 PDF」；未知 `?fmt=`（含 `pdf`）返回 400 + 说明，不静默退回 MD；仪表盘另有**漏洞趋势统计**面板（级别分布条 + 最近 15 个任务逐任务计数，口径与报告一致：**已判误报不计入**，未知级别归入 `other` 不静默丢）；
 
 > **法律与授权声明**：本工具仅可用于自己拥有或已获得书面授权的目标（CTF 平台、靶场、委托测试范围）。对未授权目标使用属于违法行为，后果自负。详见 [docs/security-notice.md](docs/security-notice.md)。
 
@@ -97,7 +97,7 @@
 - 运行时依赖只有三个：`flask` / `requests` / `PyYAML`（见 `requirements.txt`）
 - 可选外部工具：`fscan` / `nmap` / `dirmap` / `subfinder` / `httpx` / `puredns` —— **没有也能跑通**，
   会自动降级到内置实现（只是覆盖面和速度不如外部工具）
-- 可选本机浏览器：Edge / Chrome / Chromium（仅"站点截图"与 PDF 报告需要）
+- 站点截图用的浏览器：**默认安装就补**（续298）—— `run_bootstrap.py --install` 会把 Chrome for Testing 取进仓库内 `tools/browser/`（钉住摘要、不碰系统），本机已有的 Edge / Chrome / Chromium 也照用；不想要那一档就加 `--no-screenshot`。PDF 报告已于续297 移除，要 PDF 就下载 HTML 后在浏览器里打印
 
 > Windows 上如果 `python` 命令不可用，请试 **`py -3`**（AI 工具启动的 shell 里尤其常见 ——
 > 详见 `AGENTS.md §2`：根因是 PATH 条目编码损坏，不是没装）。
@@ -119,7 +119,8 @@
 python3 run_bootstrap.py --install          # Linux / macOS
 py -3 run_bootstrap.py --install            # Windows
 python3 run_bootstrap.py                    # 只探测，**零网络**：先看这台机器还缺什么
-./install.sh --with-system --yes            # 额外让发行版包管理器**真装** nmap / 浏览器 / Go / CJK 字体
+./install.sh --with-system --yes            # 让发行版包管理器**真装** nmap / 系统浏览器 / Go（CJK 字体归标准安装管了，续298）
+./install.sh --no-screenshot                # 标准安装**跳过**截图那一档（约 189 MB 取件 + 一个系统字体包）
 ```
 
 之后请用虚拟环境里的解释器运行：`./start.sh`（等价 `./.venv/bin/python run_gui.py`；Windows 是
@@ -132,9 +133,12 @@ python3 run_bootstrap.py                    # 只探测，**零网络**：先看
 编译：GOMODCACHE 192 MB + GOCACHE 239 MB，Go 默认那套会写进 `~/go` 与 `~/.cache/go-build`；
 连 Go 的本地遥测计数都被 `XDG_CONFIG_HOME` 收进 `.cache/goconfig`）。
 ⚠ 续167 起 `chrome` 也在这份清单里（Chrome for Testing 155.0.8059.39，198,195,769 B，官方 JSON
-不发校验和 ⇒ 摘要由本框架核过并钉住，且**只登记核过的 linux64 那一平台**，其余平台拒装）：
-`python run_bootstrap.py --with-stack` 取来后自动回写 `screenshot.browser`，实测本机用
-`tools/browser/chrome` 截出一张 10,576 B 的 PNG（0.6 s）。⚠ 它**运行时仍要系统共享库**
+不发校验和 ⇒ 摘要由本框架核过并钉住；续217 起 linux64 / win64 / mac-x64 / mac-arm64 四份都核过，
+没登记的平台仍然拒装）。**续298 起它不再需要 `--full` / `--with-stack`：标准安装
+（`./install.sh` 或 `run_bootstrap.py --install`）默认就把这一件取进 `tools/browser/` 并回写
+`screenshot.browser`**，不想要就 `--no-screenshot`。这台 Linux 的实测：301 个文件 / 189.0 MB 取件 →
+出一张 12,527 B 的 PNG；同一条默认路径还装上 `fonts-noto-cjk`，`fc-list :lang=zh` 由 **0 条变 30 条**
+（截图里的中文不再是豆腐块 —— 续103 登记的那个缺口）。⚠ **运行时仍要系统共享库**
 （libnss3 / libgbm / libatk…），裸机上取来也可能起不来 —— 那时截图照旧如实报失败。
 
 **按另一个平台看清单（续168）**：`python3 run_bootstrap.py --platform windows/amd64`。它只回答「那个平台该装哪些 / 哪些天生没有」，**产物仍只下本平台那一份**；「官方压根没发这个平台的产物」（Windows 上的 `puredns`）与「本框架只核过部分平台的摘要」（`chrome` 的 win/mac）现在都算**不适用**，既不算失败也不算就绪 —— 清单里单开一节点名，`./install.sh` 在 Windows 上因此 rc=0（旧行为是恒 1，每台新机器都要有人问一句"是不是装坏了"）。⚠ 预览那一列「已装」吃的是**本机**文件系统，抬头会明说这一点。
@@ -449,7 +453,7 @@ ctf-scanner/
 │   ├── devmode.py           #   开发模式：把各阶段「量」压到最小 1（深拷贝、不写回、budget_total 例外）
 │   ├── devfixture.py        #   内置靶场（标准库 HTTP/HTTPS，只绑 127.0.0.1，自检用；含内联自签证书 + 情报源夹具）
 │   ├── devflow.py           #   全流程自检核心（夹具域名 + DNS 覆盖 + 压量 + 逐阶段 真跑/跳过/FAIL 分类；CLI 与 smoke 共用）
-│   ├── report.py            #   报告三格式（Markdown / 自包含 HTML / 无头浏览器打印 PDF），共用 collect() 快照
+│   ├── report.py            #   报告三格式（Markdown / 自包含 HTML / JSONL），共用 collect() 快照（PDF 续297 移除）
 │   ├── toolmgr.py           #   外部工具版本管理（续54：查 release → SHA256 校验 → 解包落盘 → 回写 tools.<名>；仅显式入口触发）
 ├── tools/import_ref_pocs.py #   参考项目 Python POC 静态导入器（产物默认关闭）
 ├── tools/import_dir_dict.py #   目录扫描大字典生成器（读 dirmap 字典 → config/dicts/dirs_big.txt）

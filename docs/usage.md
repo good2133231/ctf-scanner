@@ -24,9 +24,9 @@ python cli/client.py -t <单目标> [选项]
 | `--cookie COOKIE` | 本次任务的 Cookie（等价 `-H "Cookie: ..."`），用于扫"登录后才存在"的资产（`/admin`、业务接口、需要会话的 POC） |
 | `--report PATH` | 扫描结束后生成 **Markdown** 报告到指定路径 |
 | `--report-html PATH` | 结束后生成 **HTML** 报告（自包含单文件：样式内联、不引外链，可直接发人） |
-| `--report-pdf PATH` | 结束后生成 **PDF** 报告（用本机无头 Edge/Chrome 打印；**没有浏览器会打印原因并以退出码 1 结束**，不静默丢交付物） |
+| ~~`--report-pdf PATH`~~ | **续297 移除**（不再有 PDF 出口）：要 PDF 就 `--report-html` 落一份 HTML，在浏览器里「打印 → 另存为 PDF」——HTML 自带 @media print 样式 |
 | `--report-jsonl PATH` | 结束后生成 **JSONL** 报告（每行一个 JSON 对象、带 `type` 判别字段，**机器可读**；漏洞含全部行与 `review`/`review_note` 复核状态） |
-| `--full-report` | **「完整版」报告**：资产小节**不截断**（默认各节限 100/200 条，被截断时小节标题会写明总数与出口）。只影响 `--report` / `--report-html` / `--report-pdf`；`--report-jsonl` 本来就是全量 |
+| `--full-report` | **「完整版」报告**：资产小节**不截断**（默认各节限 100/200 条，被截断时小节标题会写明总数与出口）。只影响 `--report` / `--report-html`；`--report-jsonl` 本来就是全量 |
 | `--check` | 打印外部工具可用性并退出（`subfinder` / `httpx` / `puredns` / `nmap` / `fscan` / `dirmap` / `massdns`）。末尾另列一段**「需手工安装（本框架不自动下载）」**（`nmap` / `fscan` / `dirmap` / `massdns` + 各自原因）：这几项**不在** `--update-tools` 的覆盖范围内，官方没有"可校验的单二进制产物" |
 | `--check-afrog-pocs [目录]` | **只读**自查 afrog 的 PoC 目录：多少条模板属于「只读 + info 级」（才会被喂给外部引擎）、以及每条被拒的原因（按原因分组计数）。不发任何请求、不改配置、然后退出；目录省略时用策略里的 `afrog.poc_dir`（续149 起出厂默认就是 `config/afrog-pocs`，随仓库带一份只读示例）。退出码：`0` 查到结果（含"可喂的一个都没有"这一种，仍然算查到了结果），`1` 目录不存在或无法确定 |
 | `--encrypt-bundle` | 配合 `--export-scan`：**整包加密**（AES-256-GCM + PBKDF2 60 万次，文件头 `CTFSCANNER-BUNDLE-V1`）。口令**只**从环境变量 `CTFSCANNER_BUNDLE_PASSPHRASE` 读，没设就在动手前停住、不产出任何文件（不提供"口令写在命令行里"这条路：argv 会留在 `ps` / shell history / 别的进程可读的 `/proc/<pid>/cmdline`）。默认落点因此叫 `.enc`；你显式给了文件名就照你的名字写（识别靠文件头，不靠扩展名）。导入侧同样只读该变量并自动识别 |
@@ -184,18 +184,18 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
      这份登录态（否则"复查"变成未登录视角）。CLI 侧等价参数：`-H` / `--cookie`；
    - 任务列表实时轮询状态与进度条；表头支持**多条件筛选**（任务名/目标/状态/阶段），可**全选勾选**后执行**批量停止 / 批量重启 / 批量删除**；
    - 每行提供**行内操作**：查看 / 停止 / 重启 / 导出（下载该任务报告，默认 **Markdown**）/ 删除；点击任务号进入详情；
-     任务详情页顶另有**四个导出按钮**：`导出 MD` / `导出 HTML` / `导出 PDF` / `导出 JSONL`，
-     以及一组**「完整版」**入口（续59-2：`完整版：MD / HTML / PDF`）
-     （对应 `GET /tasks/<id>/export?fmt=md|html|pdf|jsonl`，CLI 侧等价参数 `--report` / `--report-html` / `--report-pdf` / `--report-jsonl`，见上）。
+     任务详情页顶另有**三个导出按钮**：`导出 MD` / `导出 HTML` / `导出 JSONL`（PDF 续297 移除），
+     以及一组**「完整版」**入口（续59-2：`完整版：MD / HTML / JSONL`）
+     （对应 `GET /tasks/<id>/export?fmt=md|html|jsonl`，CLI 侧等价参数 `--report` / `--report-html` / `--report-jsonl`，见上）。
      **导出功能受 `report.export_enabled` 控制（续171，默认关闭）**：关闭时任务详情页不显示
      导出按钮（只有一句指路提示），导出路由返回说明页（403）——去「策略配置 → 报告导出」勾选
      `report.export_enabled` 即可打开，数据一直在库，打开立即可导；**CLI 导出不受这一项约束**。
      **资产小节的展示上限**（站点/目录 100，端口/C 段/证书/子域名 200）是**有意的可读性护栏**，不是丢数据：
      被截断时小节标题会写明"共 N 条，此处仅列前 M 条 —— **完整清单请用「完整版」导出**"，
      那个出口就是 `?full=1`（GUI）/ `--full-report`（CLI）；要按资产逐条核对台账时用它。
-     **HTML 是自包含单文件**（样式内联、不引任何外链，可直接发人）；**PDF 走本机无头 Edge/Chrome 打印**，
-     本机没有可用浏览器时**不静默丢交付物**，而是显示一页说明（含"改导出 HTML 后用浏览器另存为 PDF"的替代路径），
-     CLI 则以退出码 1 结束并打印原因。四种格式**共用同一份数据快照**（`report.collect()`），不会出现
+     **HTML 是自包含单文件**（样式内联、不引任何外链，可直接发人；要 PDF 就把它打印成 PDF）。
+     未知格式（含已移除的 `fmt=pdf`）**一律 400 并说清支持哪三种**，不静默退回 MD —— "点了个不存在的格式却拿到一个文件"看着就像成功，
+     那正是本仓反复登记的静默降级。三种格式**共用同一份数据快照**（`report.collect()`），不会出现
      "Markdown 有 TLS 证书小节、HTML 没有"这类格式漂移；
      **JSONL 是唯一面向机器的格式**，与 MD/HTML 有一处刻意差异：漏洞导出 `collect()` 的 `all_vulns`
      （**含已判误报的行**，带 `review`/`review_note`），把复核状态交给下游自己筛，而不是替它静默丢数据；

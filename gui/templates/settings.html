@@ -104,15 +104,15 @@
         <input name="flags_patterns" size="46" value="{{ s.flags.patterns|join(',') }}"
           placeholder="flag\s*[:=]\s*[A-Za-z0-9_]+"></label>
     </div>
-    <h2 id="report">报告导出（MD / JSONL / HTML / PDF，默认关）</h2>
+    <h2 id="report">报告导出（MD / JSONL / HTML，默认关）</h2>
     {# 续171（用户 2026-10-13 点单"导出报告的功能设置可以开启或者关闭 默认是关闭"）：
-       四种格式共用这一个开关 —— 关着时任务详情页不显示导出按钮，导出路由返回指路提示页 #}
+       三种格式共用这一个开关 —— 关着时任务详情页不显示导出按钮，导出路由返回指路提示页 #}
     <label class="chk"><input type="checkbox" name="report_export_enabled" value="1"
       {{ 'checked' if s.report.export_enabled }}> <b>启用报告导出</b>（任务详情页右上角出现
-      MD / JSONL / HTML / PDF / 完整版报告 五个入口；关闭期间数据照常入库，随时可开）</label>
+      MD / JSONL / HTML / 完整版报告 四个入口；关闭期间数据照常入库，随时可开）</label>
     <p class="muted small note">「完整版报告」= 各资产小节不截断（默认版每节限 100/200 条，截断时会注明）；
-      PDF 走本机无头浏览器打印（复用站点截图那条浏览器探测路径，没有浏览器时可改导 HTML 后
-      用浏览器"打印 → 另存为 PDF"）。</p>
+      <b>PDF 导出已移除（续297，主理人点单：不要 PDF）</b>：HTML 报告自带 @media print 样式，
+      要 PDF 就在浏览器里打开 HTML 后「打印 → 另存为 PDF」；本工具不再为此依赖本机无头浏览器。</p>
     <h2>外部引擎 afrog（默认开）</h2>
     <p class="muted small note">
       勾选后，vulnscan 阶段会<b>额外</b>跑一次外部 afrog：只喂它逐条判过"只读 + info 级"的模板

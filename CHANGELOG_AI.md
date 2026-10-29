@@ -3,6 +3,111 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续298（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：截图的依赖装进**默认安装**（+ 续297 的 PDF 移除一起收尾）
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+### 为什么动（主理人原话）
+
+「我们不需要 pdf，把 pdf 移除，**截图必须要，如果没有你就要设置到自动化里面**。」
+"截图必须要"这半句此前躺在两个都要人点头的开关后面：`--with-stack` 才取浏览器、`--with-system` 才装
+字体 —— 于是"clone 下来就能出图"从来不成立，换一台机器就是 0 张截图，而阶段只打一句"未找到浏览器"
+就过去了（截图还是**出厂关**，那是另一件事，见下面"仍未做"）。
+
+### 改了什么
+
+1. `run_bootstrap.py` 多一节「截图能力（续298）」：
+   · `browser_stack_names()` —— 「哪一件是浏览器」的判据取自 `toolmgr.LOCAL_STACK[*]["wire"]`
+     等于 `("screenshot", "browser")`，**不写死工具名**（写死的版本下次给 mac/win 补产物会静默漏一件）；
+   · `screenshot_gaps()` —— snap 版浏览器算**缺**（confinement 让它写不到项目路径，实测"已写 12630
+     字节"而外面看不见：装上了却不干活，比没装更难查）；
+   · `font_install_argv()` —— 列表 argv（永不走 shell）、已是 root 时剥掉 `sudo`（容器里常常没装 sudo）、
+     没在 `_PKG_MANAGERS` 登记过的包管理器**不猜命令**；
+   · `ensure_screenshot(runner=, fetcher=, say=)` —— 两个动作各自独立、都可注入。
+2. `main()`：`--install` 默认调一次，排在自动层之后、`--with-system` 之前（后者因此不会重复装字体）；
+   `--no-screenshot` 是退出这一档的开关；给了 `--only` 时不动并**把为什么没动说出来**。
+   `probe()` 的 browser 行 `auto` 由 False 改 **True** —— 那个字段的语义是"默认安装会不会动它"。
+3. **红线一条都没松**：`install_system_packages` 的「`with_system=False` ⇒ 一次 `runner` 都不许调」
+   一字未动；nmap / golang / chromium / git 照旧只打印命令。默认路径唯一允许跑系统命令的地方就是
+   `_FONT_PKG` 那**一个**包名。`[8d]②` 的意图白名单因此多一个标记 `install_screenshot_font`，
+   并**同时**加一条反向夹具：打了这个标记却在调用点写死 `sudo apt-get install -y nmap` 仍必须被报出来
+   —— 白名单标记不许变成口子（这是本仓"放宽一处必须同时钉住它挡不住什么"的又一例）。
+4. 两处失败都不进 `failed` ⇒ `./install.sh` 的退出码不被可选能力换坏（续164 换来的 rc=0 不能被换回去）。
+5. 文档跟着现状：install.sh 的用法与「边界」两段、README（顺手修掉一处旧漂 —— chrome 摘要写着
+   "只核过 linux64"，其实续217 起四平台都核过）、docs/dev-sync.md、docs/features-off-by-default.md、
+   AGENTS §5 末新增一条不变量 + §7 的 Chrome 条目重写 + §6.2 第二十二起。
+
+### 实测数字（这台 Linux，走的就是新默认路）
+
+| 项 | 数字 |
+|---|---|
+| Chrome for Testing 取件 | 301 个文件 / **189.0 MB**（过本框架钉住的 SHA256） |
+| 落点与回写 | `tools/browser/chrome` 297,680,200 B → `screenshot.browser = tools/browser/chrome`（相对形） |
+| 真截图 | `screenshot.capture()` 对 127.0.0.1 夹具回 `ok=True`，PNG **12,527 B** |
+| 中文字体 | `apt-get install -y fonts-noto-cjk` 成功；`fc-list :lang=zh` **0 条 → 30 条** |
+| 新组 `[298]` | 六条分支 + 注册表/AST/usage/文案七面判据 |
+| 变异证伪 | **M1–M6 全红**（写死全表 / snap 不算缺 / 缺不缺都取件 / rc=0 冒充装上 / root 不剥 sudo / 旗标成装饰）；还原后基线 rc=0，run_bootstrap.py 逐字节一致 |
+| 全量门禁 | SMOKE PASS，rc=0，**494 秒**，组输出行 366 条（`logs/_smoke298.log`） |
+
+### 本轮自己造的一次事故（§6.2 第二十二起）
+
+插入用的 `logs/_ins298.py` 漏了 `.replace()` —— 把算好的 `new`（一小段文本）**当成整份文件写回**，
+`tests/smoke.py` 从 3.3 万行被截成 163 行。靠 `git checkout -- tests/smoke.py` 无损还原（本轮改动
+都还没提交，HEAD 就是最新已提交状态），再按 `logs/_delpdf4.py` → `_spec297b-smoke` → `_spec298c`
+重放，途中撞回续297 当年那颗雷（`[7v]` 的 assert 消息被写成**两个相邻字符串** ⇒ IndentationError，
+合并成一串才算对）。三条口径写进了脚本自己：整文件写回前断言"结果比原文长、锚点已消失"，写完立刻
+`py_compile` + 两式 numstat。`wc -l` 那种"看起来行数对"的复核救不了这类事。
+
+### 仍未做 / 仍未验（照实登记）
+
+- **`[7x]` 真浏览器 E2E 在这台机器仍然跳过** —— 本轮实测到的新缺口：`tests/browser_e2e.py` 的
+  `_browser_candidates()` 只列系统路径，不认识 `--install` 刚取进仓库的那份 `tools/browser/chrome`，
+  于是那 72 条"GUI 的三类行为只有真浏览器能验"的断言本机一条都没跑过。它打印的是合规降级句
+  （"跳过：未找到可用的无头 Chrome/Edge"），所以门禁不会红 —— 但**跳过不等于通过**（§6.2 第十起）。
+  同一个根因还让 `[8ar] ④b` 的 SPA 渲染后标题端到端报「本机没有无头浏览器」而跳过：那一组把
+  `screenshot.browser` **置空**后只剩系统探测，而仓库内那份 Chrome 从来不在系统路径里。
+  下一轮的修法是把 `screenshot.browser_path(load_settings())` 接进候选（判据不另起一份），并且
+  **先单独验一次** Chrome for Testing 能不能被 CDP 拉起来 —— `--headless=old` 在新版 Chrome 上的
+  行为要实测，不许照着旧结论猜。
+- **`screenshot.enabled` 仍出厂关**：主理人这句要的是"这条能力必须有"，不是"每个任务都起无头浏览器"。
+  改成随包默认开要一起动 `[271]` 那张表并交代耗时，等他点单。策略页勾「截图」即出图，浏览器本机已有。
+- **Windows / macOS 的 Chrome 产物仍没在真机启动过**（只核过归档字节与版本号）；缺系统共享库
+  （libnss3/libgbm/libatk…）的裸机上取来仍起不来，那时截图照旧如实失败。
+
+---
+
+## 续297（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：PDF 导出整条移除（不留死代码）
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+### 为什么
+
+主理人 2026-10-29：「我们不需要 pdf，把 pdf 移除」。这条能力本来就**依赖本机无头浏览器**，
+而 HTML 报告早就是自包含单文件且带 `@media print` —— 在浏览器里「打印 → 另存为 PDF」是同一段
+排版引擎的第二次免费调用，我们没必要为它维护一条产品出口，也没必要让它继续决定"这台机器要不要 Chrome"。
+
+### 收掉的六处
+
+| 位置 | 动作 |
+|---|---|
+| `scanner/report.py` | 删 `export_pdf()`（43 行）+ 只为它 import 的 `shutil`/`tempfile`/`run_cmd`；docstring 改成「Markdown / HTML / JSONL 三种共用 `collect()` 一份快照」 |
+| `cli/client.py` | 删 `--report-pdf` 与落盘分支（含"PDF 失败 exit 1"） |
+| `gui/app.py` | 删 `_export_error_page()` 与 `fmt == "pdf"` 分支；未知格式 → **400 + 纯文本说明**（列支持哪三种 + 指向"浏览器打印 HTML"）。旧行为是**静默退回 MD** —— 点了不存在的格式却拿到一个文件，看着像成功，正是本仓反复登记的那族 |
+| `gui/templates/task_detail.html` · `settings.html` | 去掉「导出 PDF」按钮；tooltip 与"导出已关闭"那句指路语同步；策略页加一条移除告示 |
+| `tests/smoke.py` | `[5w]` 的 PDF 段 → 「`fmt=pdf` 与 `fmt=xls` 都 400、`fmt=jsonl` 仍 200」+ 三条源码判据（report.py / app.py 里 `export_pdf` 一处不剩、CLI 里 `--report-pdf`/`report_pdf` 一处不剩）；`[7v]` 三个入口→两个；`[147]` 按钮清单去掉 PDF；`[200]` 批量导出 400 文案改「未知/已移除的格式」 |
+| 注释与文档 | `config/settings.yaml` 报告段注释、`scanner/config.py` DEFAULTS、`scanner/toolmgr.py` 的 chrome `why`、`run_bootstrap.py` 浏览器三行、`docker_todo/README.md`、README、docs/{usage,pipeline,architecture,docker,deploy-https,features-off-by-default,roadmap}、AGENTS §3/§6/§7 —— 全部跟着现状（§252/§294 那一族：注释不许替行为说谎） |
+
+`docs/roadmap.md` 与 `CHANGELOG_AI.md` 里**当年**写"PDF 已落地"的那些条目按 §5.19 留原样（那是那一轮
+的实话），只在续297 的段落里写明现状。`docs/features-off-by-default.md` 那一行加了「PDF 已于续297 移除」。
+
+### 实测
+
+- 全量门禁 **SMOKE PASS / rc=0 / 436 秒**（`logs/_smoke297.log`）—— 那一轮跑完还漏了三处文档/注释，
+  本轮（续298 之前）补齐后再跑一次，数字见上面续298 那一节。
+- 判据的**反向对照**是这轮唯一让"删除"可验证的形状：受支持的三种格式必须仍 200（否则那条 400
+  可能只是整个路由坏了），源码里 `export_pdf` 与 `--report-pdf` 一处不剩（否则就是"留着但没人调用"
+  的死代码）。
+
 ## 续296（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：`sync_check` 长出「散落凭据」判据 + 新组 [296]
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

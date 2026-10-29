@@ -380,7 +380,7 @@ screenshot:
   cdp_wait: 45
   fallback_wait: 10
   block_extra: []
-  browser: ''
+  browser: tools/browser/chrome
   # 续175：中文字体（可选）。留空＝不注入；填了才给无头浏览器设 FONTCONFIG_FILE。
   # 典型：把字体放进 tools/fonts/，再指向 tools/fonts/fonts.conf。
   fontconfig: ''
@@ -590,7 +590,7 @@ http:
   user_agent: Mozilla/5.0 (compatible; CTFScanner/0.1; +authorized-testing-only)
 report:
   # ---- 报告导出（2026-10-13 用户点单）：默认**关闭** ----
-  # 开关打开后，任务详情页右上角出现 MD / JSONL / HTML / PDF / 完整版报告 导出入口；
+  # 开关打开后，任务详情页右上角出现 MD / JSONL / HTML / 完整版报告 导出入口（PDF 续297 已移除）；
   # 关闭期间任务详情页只显示一句提示，导出路由会返回"去哪儿开"的说明页（不静默）。
   # 报告数据本身照常入库，随时打开随时可导。CLI 导出不受这项约束。
   export_enabled: false

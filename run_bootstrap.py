@@ -361,7 +361,12 @@ def pick_requirements_file():
 # —— 实测本机 `fc-list :lang=zh` 命中 0，而 `[7z]` 一直是绿的（它只验"有没有出图、字节数对不对"）。
 # 这类"装了工具却不干活、且没有任何失败信号"的形态，与 snap 版 chromium 是同一类坑（见 AGENTS §7），
 # 所以必须进自举清单，让迁移后的机器一次装齐。
-SYSTEM_PACKAGES = ("nmap", "chromium", "golang", "git", "fonts-noto-cjk")
+# 这两档在续298 起还有一条**默认路径**会自动补齐（不只 --with-system 才动）：
+# 判据与动作都写在下面 `ensure_screenshot`，退出这一档的开关是 `run_bootstrap.py --install --no-screenshot`。
+
+_FONT_PKG = "fonts-noto-cjk"
+SYSTEM_PACKAGES = ("nmap", "chromium", "golang", "git", _FONT_PKG)
+
 
 # 每个包"装没装"的检测口径（只查 PATH / 文件系统，**零网络**）
 def snap_confined(path):
@@ -475,6 +480,129 @@ def install_system_packages(plan, with_system=False, assume_yes=False, runner=No
             failed.append({"name": r["name"], "reason": f"退出码 {rc}（权限不足？源里没这个包？）"})
     return executed, refused, failed
 
+
+# ---------- 截图能力（续298：`--install` 默认就把它补齐）----------
+
+# 主理人 2026-10-29 的原话：「截图必须要，如果没有你就要设置到自动化里面」。此前这件事躺在两个
+# 都要人点头的开关后面（`--with-stack` 才取浏览器、`--with-system` 才装字体），于是"clone 下来
+# 就能出图"从来不成立 —— 换一台机器就是 0 张截图，而阶段只打一句"未找到浏览器"就过去了。
+# 两个动作的信任模型不同，所以走的是两条不同的通道，各自的红线照旧：
+#   · 浏览器 = `toolmgr.LOCAL_STACK` 里 `wire` 指向 `screenshot.browser` 的那一件：https +
+#     主机白名单 + 本框架钉住的 SHA256，落点在仓库内 `tools/browser/`，**不碰系统**、不需要 root。
+#   · 中文字体 = 系统包（字体是 fontconfig 看得见的系统资源，仓库里放一份浏览器并不会采纳，
+#     除非再改 `FONTCONFIG_FILE` —— 那是另一条更大的决定）。这是**默认路径里唯一**可能跑系统
+#     命令的地方，且包名写死成下面这一个：nmap / golang / chromium / git 照旧只打印命令，
+#     `install_system_packages` 那条"with_system=False ⇒ 一次都不执行"的判据一字未动（`[8d]⑫`）。
+#   · 两处失败都**不进 `failed`**：截图是可选能力，把它算成安装失败会让没网 / 没 root 的机器上
+#     `./install.sh` 恒 rc=1（续164 刚把那条修成 rc=0，不能再换回去），但**必须说出来并给补法**。
+def browser_stack_names():
+    """`LOCAL_STACK` 里"取来就能当截图浏览器用"的那几件的名字。
+
+    判据是注册表里的 `wire` 指向 `screenshot.browser`，**不写死工具名**（续217 给 mac/win 补
+    产物时只改注册表；写死名字的版本会让下一次加条目时静默漏掉一件）。
+    """
+    from scanner import toolmgr
+    return tuple(n for n, cfg in toolmgr.LOCAL_STACK.items()
+                 if tuple((cfg or {}).get("wire") or ()) == ("screenshot", "browser"))
+
+
+def screenshot_gaps(settings=None):
+    """截图这条能力现在缺哪几块 → `(要浏览器, 要中文字体)`。**纯探测**：零网络、零子进程、零写入。
+
+    snap 版浏览器算"缺"：它的 confinement 让它写不到项目路径（实测报"已写 12630 字节"而外面
+    看不见），装上了却不干活，比没装更难查 —— 那种机器上取一份仓库内的 Chrome 才是解。
+    """
+    from scanner import screenshot
+    from scanner.config import load_settings
+    st = settings or load_settings()
+    path = screenshot.browser_path(st)
+    return (not path or snap_confined(path)), (not has_cjk_font())
+
+
+def font_install_argv(managers=None, root=None):
+    """字体那一条命令的**列表 argv**；不该动手时返回 `(None, 原因)`，绝不猜命令。
+
+    没有 `os.name` 分支是刻意的：Windows 上 `has_cjk_font()` 本来就说"有"（雅黑/宋体随系统
+    自带），macOS / Windows 的包管理器又都没在 `_PKG_MANAGERS` 里登记过字体包名 —— 两条都会落到
+    "给出原因、不动手"那一支，判据只留 `managers` 一个入口就够（多一个分支就多一处测不到的地方）。
+
+    `argv[0] == "sudo"` 而本次已经是 root 时剥掉它：容器里常常没装 sudo，
+    "以 root 身份却因为没 sudo 而装不上"是最没价值的一种失败。
+    """
+    if managers is None:
+        managers = platform_info()[2]
+    if not managers:
+        return None, "本机没探测到可用的包管理器"
+    argv = pkg_argv(_FONT_PKG, managers)
+    if not argv:
+        return None, (f"{_FONT_PKG} 在本机包管理器（{'、'.join(managers)}）名下没有登记过的包名"
+                      " —— 不猜命令")
+    if root is None:
+        root = (os.getuid() if hasattr(os, "getuid") else 0) == 0
+    if root and argv and argv[0] == "sudo":
+        argv = argv[1:]
+    return argv, ""
+
+
+def ensure_screenshot(settings=None, runner=None, fetcher=None, say=True):
+    """把"站点截图"补齐：仓库内取一份钉住摘要的 Chrome + 系统装中文字体。
+
+    返回 `(做过的事, 没做成的事)`，两边都是给人看的短句。`runner` / `fetcher` 是为回归注入的：
+    判据必须能在没网、没 root 的机器上把每一条分支都验到，不能拿"这台机器恰好装了什么"当哨兵
+    （§6.2 第一起）。
+    """
+    need_browser, need_font = screenshot_gaps(settings)
+    actions, problems = [], []
+    if need_browser:
+        names = browser_stack_names()
+        if not names:
+            problems.append("注册表里没有 wire 指向 screenshot.browser 的条目 —— 浏览器这一档没人接线")
+        else:
+            fetch = fetcher or (lambda: install_stack(names))
+            try:
+                got, failed = fetch()
+            except Exception as e:                       # 取不到只是没这个能力，不许把安装打断
+                got, failed = [], [{"name": "、".join(names), "reason": f"取件异常：{e}"}]
+            if got:
+                actions.append(f"截图用的浏览器已取进仓库并回写 screenshot.browser"
+                               f"（{got[0].get('name')} → {got[0].get('path')}）")
+            for r in (failed or []):
+                problems.append(f"浏览器没取到：{r.get('reason')}"
+                                "（没有浏览器时截图阶段如实跳过、不谎报）")
+            if not got and not failed:
+                problems.append("浏览器：取件一条结果也没返回（本平台不适用？清单里那一行写着原因）")
+    if need_font:
+        argv, why = font_install_argv()
+        if argv is None:
+            problems.append(f"中文字体没自动装：{why}。缺它的后果是截图里每个汉字都是豆腐块"
+                            "（浏览器照样出图、也不报错）")
+        else:
+            if say:
+                print(f"[+] 执行：{' '.join(argv)}")
+            run = runner or (lambda argv: subprocess.run(argv, check=False).returncode)  # install_screenshot_font
+            try:
+                rc = run(list(argv))
+            except Exception as e:
+                rc = f"起不来：{e}"
+            if rc == 0:
+                if has_cjk_font():
+                    actions.append(f"中文字体已装（{_FONT_PKG}）—— 截图里的中文才有字")
+                else:
+                    problems.append(f"{_FONT_PKG} 退出码 0 却仍探测不到中文字体：源里可能没这个包，"
+                                    "手工核一遍上面那条命令")
+            else:
+                problems.append(f"中文字体没装上（退出码 {rc}）：多半是没有 root 权限或源里没这个包；"
+                                f"补法 {' '.join(argv)}")
+    if say:
+        for a in actions:
+            print(f"[+] {a}")
+        for p in problems:
+            print(f"[!] {p}")
+        if not actions and not problems:
+            print("[=] 截图能力已就位（浏览器与中文字体都不缺）—— 策略页勾「截图」就出图")
+    return actions, problems
+
+
 # ---------- 探测（零网络）----------
 
 def _row(name, kind, auto, status, detail, cmds=()):
@@ -581,18 +709,20 @@ def probe(settings=None):
     if path and snap_confined(path):
         # Ubuntu ≥24 的 apt chromium 只是 snap 过渡壳，而 snap 的 confinement 让它**写不到**
         # 项目路径与真实 /tmp（实测：`--screenshot` 报"已写 12630 字节"，文件却在 snap 的私有
-        # 命名空间里，外面看不见）→ 截图与 PDF 永远 0 产物。装上了却不干活，比没装更难查。
-        rows.append(_row("browser", "browser", False, "warn",
+        # 命名空间里，外面看不见）→ 截图永远 0 产物。装上了却不干活，比没装更难查。
+        rows.append(_row("browser", "browser", True, "warn",
                          "只有 snap 版浏览器：confinement 让它写不到项目路径与真实 /tmp，"
-                         "截图与 PDF 导出会 0 产物 —— 换非沙箱版（Google Chrome .deb）",
+                         "截图会 0 产物（PDF 导出续297 已移除）—— 换非沙箱版，或让 --install "
+                         "默认取一份钉住摘要的 Chrome 进 tools/browser/（snap 版不算就绪，见 ensure_screenshot）",
                          ["sudo snap remove chromium",
                           "curl -fsSL -o /tmp/chrome.deb "
                           "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb",
                           "sudo apt install -y /tmp/chrome.deb"]))
     else:
-        rows.append(_row("browser", "browser", False, "ok" if path else "missing",
-                         "已找到浏览器（截图阶段与 PDF 导出可用）" if path else
-                         "未找到 Edge/Chrome/Chromium：截图与 PDF 导出会如实跳过（不谎报）",
+        rows.append(_row("browser", "browser", True, "ok" if path else "missing",
+                         "已找到浏览器（截图阶段可用）" if path else
+                         "未找到 Edge/Chrome/Chromium：截图会如实跳过（不谎报）；PDF 导出续297 已移除。"
+                         "默认 --install 会取一份钉住摘要的 Chrome 进仓库（--no-screenshot 退出这一档）",
                          [] if path else (pkg_cmd("chromium", mgrs)
                                           or ["本平台没有已知包管理器：自行装 Chrome/Chromium/Edge"])))
     return rows
@@ -1032,6 +1162,9 @@ def main(argv=None):
                     help="配合 --with-stack：只取这几件（可重复；名字见清单里 kind=stack 那些行）")
     ap.add_argument("--yes", action="store_true",
                     help="配合 --with-system：跳过交互确认（非交互环境没有它就**拒绝执行**）")
+    ap.add_argument("--no-screenshot", action="store_true",
+                    help="--install 时**不要**自动补齐截图能力（续298：默认会取一份钉住摘要的 "
+                         "Chrome 进仓库 + 让包管理器装中文字体）。没网、不想让安装碰系统的机器用这一档")
     args = ap.parse_args(argv)
     if args.platform:
         # 唯一的覆盖入口是环境变量（判据仍只 `toolmgr.host_arch()` 一处）；值不认识时
@@ -1056,6 +1189,19 @@ def main(argv=None):
         installed, failed = install_auto(tuple(args.only), args.allow_unverified,
                                         args.tools_dest, not args.no_wire)
         s = summarize(probe())          # 复探：以"真的装上没有"为准，不按安装返回值吹
+        # 续298：主理人点单"截图必须要，没有就装进自动化"。放在自动层之后、系统包层之前 ——
+        # 于是 `--with-system` 看到的计划里字体已经就位，不会重复装。
+        # **它的失败不进 `failed`**（截图是可选能力：没网 / 没 root 的机器上 `./install.sh`
+        # 仍要 rc=0，续164 那条成果不能被它换掉），但每一句原因都由 ensure_screenshot 自己印。
+        if args.no_screenshot:
+            print("[=] 截图能力这一档没动（--no-screenshot）：没有浏览器时截图阶段会如实跳过")
+        elif args.only:
+            print(f"[=] 截图能力这一档没动（--only 把范围收窄成 {'、'.join(args.only)}；"
+                  "去掉 --only 就会补）")
+        else:
+            ensure_screenshot()
+            s = summarize(probe())      # 复探：取没取到以文件系统为准（与自动层同一口径）
+            sys_plan = system_plan()    # 字体是系统包：装完要让清单说当下的状态，不是说安装前的状态
     if args.with_stack:
         got, sfailed = install_stack(tuple(args.stack), args.allow_unverified)
         installed.extend(got)

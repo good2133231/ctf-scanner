@@ -1137,7 +1137,7 @@ LOCAL_STACK = {
                                    "93b14431496b358ee9f3a5b71bd9618fe4ff1af8c420267392164f7b2d949559"},
                     "why": "puredns 在进程内 exec massdns；tools/build_massdns.py 要它才能编译"
                            "（**仍需本机 gcc/make** —— 便携 C 编译器不存在，缺它就如实报）"},
-    # 续167：站点截图与 PDF 报告要的无头浏览器。官方
+    # 续167：站点截图要的无头浏览器（PDF 报告续297 移除后，浏览器只服务截图）。官方
     #   `last-known-good-versions-with-downloads.json` 里**只有 `platform` 与 `url`、没有任何校验和**
     #   （2026-10-13 实测）⇒ 摘要只能由本框架核过并钉住，而 `pin_sha256` **只登记核过的那一平台**：
     #   没登记的平台一律拒装（不"退到 latest 再猜"，也不拿别的平台的摘要凑数）。
@@ -1170,7 +1170,7 @@ LOCAL_STACK = {
                    "9e4da7961d4a426078f02e89ecfa569a7926ada2dc88aa53c0bd9ed0d46c3bb7",
                    "chrome-mac-arm64.zip":
                    "529a71bd61aaa2ef266a4d4bd300ae9572ba6a3468a8d55c3023ffeffb5b6b4e"},
-               "why": "截图 / PDF 报告要无头浏览器；官方不发校验和 ⇒ 只装本框架核过摘要的那一平台"
+               "why": "站点截图要无头浏览器（PDF 报告续297 已移除）；官方不发校验和 ⇒ 只装本框架核过摘要的那一平台"
                       "那一版，其余平台拒装；运行时仍要系统共享库（libnss3/libgbm…），本框架不代装"},
 }
 

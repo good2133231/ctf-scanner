@@ -1,7 +1,6 @@
-"""任务报告生成：Markdown（默认）/ HTML（自包含单文件）/ PDF（本机无头浏览器打印）/
-JSONL（机器可读，每行一个 JSON 对象）。
+"""任务报告生成：Markdown（默认）/ HTML（自包含单文件）/ JSONL（机器可读，每行一个 JSON 对象）。
 
-四种格式**共用 `collect()` 取到的同一份数据快照** —— 否则"Markdown 里有 TLS 证书、
+三种格式**共用 `collect()` 取到的同一份数据快照** —— 否则"Markdown 里有 TLS 证书、
 HTML 里没有"这类漂移没人会发现。HTML 必须走 `html.escape` 全量转义：报告里的标题 /
 URL / banner 都来自被测目标，不转义等于把对方的内容当我们的页面渲染（反射型 XSS）。
 JSONL 是**唯一面向机器**的格式，与 MD/HTML 有一处**刻意差异**：它导出 `collect()` 的
@@ -9,14 +8,12 @@ JSONL 是**唯一面向机器**的格式，与 MD/HTML 有一处**刻意差异**
 """
 import html
 import json
-import shutil
-import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from . import cdn as cdn_mod, db
 from . import fingerprint
-from .utils import run_cmd, site_redirect, to_unicode
+from .utils import site_redirect, to_unicode
 
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
@@ -278,7 +275,7 @@ def sev_blocked_note(task):
 
 
 def collect(task_id):
-    """把一份报告要用的数据一次性取出来（Markdown / HTML / PDF 共用），任务不存在返回 None。"""
+    """把一份报告要用的数据一次性取出来（Markdown / HTML / JSONL 共用），任务不存在返回 None。"""
     task = db.get_task(task_id)
     if not task:
         return None
@@ -544,8 +541,7 @@ def _sev_bars(by_sev, total):
 def generate_html(task_id, full=False):
     """生成自包含的 HTML 报告（单文件、内联样式、无外链）。任务不存在返回 None。
 
-    `full=True` = 「完整版」：资产小节**不截断**（见 `_caps()`）。PDF 走同一份 HTML，
-    所以 `export_pdf(..., full=True)` 出来的 PDF 也是完整版。
+    `full=True` = 「完整版」：资产小节**不截断**（见 `_caps()`）。
     """
     d = collect(task_id)
     if not d:
@@ -751,47 +747,4 @@ def generate_jsonl(task_id):
     return "\n".join(lines) + "\n"
 
 
-def export_pdf(task_id, out_path, settings=None, timeout=90, full=False):
-    """把 HTML 报告交给本机无头浏览器打印成 PDF（`--print-to-pdf`），返回 `(ok, err)`。
-
-    为什么用浏览器而不是自己写 PDF：中文要嵌字体，纯标准库写 PDF 等于自带一个排版引擎；
-    截图功能已经在用 Edge/Chrome，这里复用**同一条浏览器探测路径**，不引入任何新依赖。
-    找不到浏览器时返回**明确原因**（GUI 会把它显示出来，并提示改导出 HTML / 在策略里
-    填 `screenshot.browser`），不做静默失败。
-    """
-    html_text = generate_html(task_id, full=full)
-    if html_text is None:
-        return False, "任务不存在"
-    from .screenshot import browser_path          # 延迟导入：report 不被 GUI 之外的场景拖住
-    binary = browser_path(settings)
-    if not binary:
-        return False, ("未找到可用的无头浏览器（Edge/Chrome），无法打印 PDF；"
-                       "可改导出 HTML 后用浏览器另存为 PDF，"
-                       "或在「策略配置」里填 screenshot.browser")
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_dir = Path(tempfile.mkdtemp(prefix="ctfscan-pdf-"))
-    tmp_profile = Path(tempfile.mkdtemp(prefix="ctfscan-pdf-profile-"))
-    try:
-        html_path = tmp_dir / "report.html"
-        # 必须显式 encoding（AGENTS.md §0）：报告里有中文，读默认编码在 Windows 上会炸。
-        html_path.write_text(html_text, encoding="utf-8")
-        # 参数与截图（`screenshot._FLAGS`）同源：headless 用 old、**必须加** `--no-sandbox`
-        # + `--disable-dev-shm-usage`（runner 禁用用户命名空间且 /dev/shm 过小；见 screenshot.py 注释，续74）。
-        argv = [binary, "--headless=old", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run",
-                "--no-default-browser-check", "--disable-extensions",
-                "--disable-background-networking",
-                f"--user-data-dir={tmp_profile}",
-                "--no-pdf-header-footer",       # 别把浏览器的页眉页脚（URL/日期）印进去
-                f"--print-to-pdf={out_path}",
-                html_path.as_uri()]
-        rc, _out, err = run_cmd(argv, timeout=int(timeout or 90))
-        if out_path.exists() and out_path.stat().st_size > 0:
-            return True, ""
-        return False, (err or f"浏览器退出码 {rc}")[:200]
-    except Exception as e:                        # 兜底：由调用方决定怎么告知用户
-        return False, str(e)[:200]
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        shutil.rmtree(tmp_profile, ignore_errors=True)
 

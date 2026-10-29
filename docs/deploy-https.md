@@ -82,7 +82,7 @@ server {
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;      # 报告导出 / PDF 生成可能较慢，别用默认 60s
+        proxy_read_timeout 300s;      # 报告导出（尤其完整版 HTML）可能较慢，别用默认 60s
     }
 }
 

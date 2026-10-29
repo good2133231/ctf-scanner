@@ -405,7 +405,7 @@ from scanner.log import get_logger
 from scanner.owasp import checks as owasp_checks
 from scanner.targets import expand_cidr, parse_lines
 from scanner.pocs import engine
-from scanner.report import export_pdf, generate, generate_html, generate_jsonl
+from scanner.report import generate, generate_html, generate_jsonl
 from scanner.runner import (STAGE_ORDER, PipelineRunner, StageContext, run_task,
                             sync_pocs)
 
@@ -3171,7 +3171,7 @@ def main():
           "127.0.0.1 真握手与 SNI + 门控关零请求 + 落库/certs.txt/「SSL 证书」页签/报告小节 + "
           "清空资产覆盖 certs + 异常优先排序 + 勾选即 cert_on）")
 
-    # [5w] 续16：报告三格式（MD / HTML / PDF）+ 漏洞趋势统计
+    # [5w] 续16：报告三格式（MD / HTML / JSONL；PDF 续297 移除）+ 漏洞趋势统计
     # 造一个"什么节都有"的任务：站点（标题带 XSS 载荷）/ 目录 / 端口 / C 段 / 证书 /
     # 漏洞（含已判误报）/ 线索 —— HTML 的每一节都要能被断言到，空数据只会掩盖漏渲染。
     # （线索自续24 起**只进 JSONL**，不进人读报告，见下面单独的一组断言。）
@@ -3244,7 +3244,8 @@ def main():
     db.delete_task(_o_tid, backup=False)
 
     _export_gate171(c, True)   # [171] 这批用例测的是**报告内容**，临时打开导出开关
-    # GUI 三格式路由：md 默认、html、pdf 的失败路径都要**说清原因**（无浏览器时 400 + 原因）
+    # GUI 三格式路由：md 默认、html，以及**未知格式必须 400**（续297 移除 PDF 后，
+    # 旧的『无浏览器 ⇒ 400 + 原因』那批断言换成『未知 fmt ⇒ 400 且说清支持哪三种』）
     _r1 = c.get(f"/tasks/{w_tid}/export")
     assert _r1.status_code == 200 and "attachment" in _r1.headers["Content-Disposition"]
     assert ".md" in _r1.headers["Content-Disposition"] and "扫描报告" in _r1.get_data(as_text=True)
@@ -3252,31 +3253,31 @@ def main():
     assert _r2.status_code == 200 and "text/html" in _r2.headers["Content-Type"]
     assert ".html" in _r2.headers["Content-Disposition"]
     assert "&lt;script&gt;" in _r2.get_data(as_text=True), "路由返回的 HTML 未转义"
-    # 没有浏览器时必须 400 + 可读原因（把 browser_path 打桩成"找不到"再验；
-    # `export_pdf` 里是"调用时才 import"，所以打桩模块属性即可生效）
-    from scanner import screenshot as shot_mod
-    _orig_bp = shot_mod.browser_path
-    try:
-        shot_mod.browser_path = lambda *a, **kw: ""
-        _r3 = c.get(f"/tasks/{w_tid}/export?fmt=pdf")
-        assert _r3.status_code == 400, _r3.status_code
-        _r3t = _r3.get_data(as_text=True)
-        assert "未找到可用的无头浏览器" in _r3t and "fmt=html" in _r3t, _r3t[:300]
-        # CLI 侧同一函数：无浏览器也要返回 (False, 原因)，不能抛异常
-        _ok, _err = export_pdf(w_tid, Path(_TMPDIR) / "w.pdf", settings)
-        assert _ok is False and "无头浏览器" in _err, (_ok, _err)
-    finally:
-        shot_mod.browser_path = _orig_bp
-    _ok2, _err2 = export_pdf(999999, Path(_TMPDIR) / "nope.pdf", settings)
-    assert _ok2 is False and "任务不存在" in _err2, (_ok2, _err2)
+    # 续297：PDF 整条移除 ⇒ 未知格式必须 400 并说清支持哪三种（原来这里测的是
+    # "无浏览器时 PDF 返回 400 + 原因"，那条产品能力已经不在了）
+    _r3 = c.get(f"/tasks/{w_tid}/export?fmt=pdf")
+    assert _r3.status_code == 400, f"fmt=pdf 竟然还给了 200/别的码：{_r3.status_code}"
+    _r3t = _r3.get_data(as_text=True)
+    assert "不支持的导出格式" in _r3t and "jsonl" in _r3t and "移除" in _r3t, _r3t[:300]
+    # 另一个未知值同样 400（判据不能只认 "pdf" 这一个字面量）
+    assert c.get(f"/tasks/{w_tid}/export?fmt=xls").status_code == 400
+    # 反向对照：三种受支持的格式必须仍然 200（否则上面那条 400 可能只是路由整体坏了）
+    assert c.get(f"/tasks/{w_tid}/export?fmt=jsonl").status_code == 200
+    # 被删掉的入口不许"留着但没人调用"：源码里三处都必须再也找不到
+    _rep_src297 = (ROOT / "scanner" / "report.py").read_text(encoding="utf-8")
+    _app_src297 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+    _cli_src297 = (ROOT / "cli" / "client.py").read_text(encoding="utf-8")
+    for _name297, _src297 in (("report.py", _rep_src297), ("app.py", _app_src297)):
+        assert "def export_pdf" not in _src297 and "export_pdf(" not in _src297, _name297
+    assert "--report-pdf" not in _cli_src297 and "report_pdf" not in _cli_src297, "CLI 残留"
     # 仪表盘趋势面板：页面上要能看到"漏洞趋势统计"（不美化断言，只守"渲染得出来"）
     _dash = c.get("/").get_data(as_text=True)
     assert "漏洞趋势统计" in _dash and "smoke-report-formats" in _dash, "仪表盘缺趋势面板"
     assert "已判误报不计入" in _dash, "趋势面板没写口径"
     db.delete_task(w_tid, backup=False)
     _export_gate171(c, False)   # [171] 还原出厂默认（导出关）
-    print("[5w] 续16 ok: 报告三格式（MD/HTML/PDF）与漏洞趋势统计（七节齐全 + XSS 载荷全转义 + "
-          "自包含无外链 + 误报不计入趋势/未知级别归 other + 三格式路由 + 无浏览器 400 说明原因 + "
+    print("[5w] 续16 ok: 报告三格式（MD/HTML/JSONL，PDF 续297 移除）与漏洞趋势统计（七节齐全 + XSS 载荷全转义 + "
+          "自包含无外链 + 误报不计入趋势/未知级别归 other + 三格式路由 + 未知 fmt 400 说明原因 + "
           "仪表盘趋势面板）；续24 线索只走 JSONL ok: 有线索却不进 MD/HTML 小节与概览卡片")
 
     # [5x] 续17：登录态扫描（任务级 Cookie/Token）+ nuclei raw / flow / workflows 子集
@@ -11600,11 +11601,10 @@ http:
     assert "data-filter" not in _strip_jinja_comments7v(_poc7v), \
         "POC 列表已服务端分页，前端 data-filter 只筛当前页（比原来更误导），必须撤掉"
     assert _re7q.search(r"def generate\(task_id, full=False\)", _repsrc7v) \
-        and _re7q.search(r"def generate_html\(task_id, full=False\)", _repsrc7v) \
-        and _re7q.search(r"def export_pdf\([^)]*full=False", _repsrc7v), \
-        "报告三个入口都必须带 full 参数（否则「完整版」只是个说法）"
-    assert _cli7v.count("full=full") >= 3 and "--full-report" in _cli7v, \
-        "CLI 必须把 `--full-report` 真的传到三个导出（开关不许是装饰）"
+        and _re7q.search(r"def generate_html\(task_id, full=False\)", _repsrc7v), \
+        "MD / HTML 两个入口都必须带 full 参数（否则「完整版」只是个说法）；PDF 那一路续297 已整条移除，所以这里从三个入口改成两个"
+    assert _cli7v.count("full=full") >= 2 and "--full-report" in _cli7v, \
+        "CLI 必须把 `--full-report` 真的传到导出（开关不许是装饰；PDF 移除后是两处）"
     assert "full=1" in _det7v, "任务详情页要给出「完整版」入口 —— 否则截断提示指向的出口并不存在"
 
     # 两个表单形态检测器，各自先变异证伪再用于红线（§6.1：先证明断言有区分度）
@@ -11797,7 +11797,6 @@ http:
     class _Args59v:
         report = str(_out59v)
         report_html = ""
-        report_pdf = ""
         report_jsonl = ""
         full_report = False
 
@@ -13122,7 +13121,11 @@ http:
     # 而且绕过 toolmgr 那条"官方校验和才落盘"的红线。
     _BANNED8d = ("apt-get", "sudo", "dnf", "yum", "pacman", "zypper", "brew", "winget",
                  "choco", "scoop", "go build", "git clone", "nmap")
-    _ALLOWED8d = ("pip", "venv", "get-pip", "run_bootstrap.py", "install_system_package")
+    # 续298 多一个标记 `install_screenshot_font`：`--install` 默认会把中文字体装上（主理人点单
+    # 「截图必须要，没有就装进自动化」）。这不是放松 —— 下面 `_bad8d` 跟着加了一条反向夹具：
+    # **打了这个标记也不许在调用点写死包管理器命令**（nmap 那一条照样必须被报出来）。
+    _ALLOWED8d = ("pip", "venv", "get-pip", "run_bootstrap.py", "install_system_package",
+                  "install_screenshot_font")
 
     def _det8d(_s8d):
         # 返回越界的 subprocess 调用片段。取 **3 行窗口**：真实调用常常跨行，只看首行会把
@@ -13145,6 +13148,8 @@ http:
         '[sys.executable, "-m", "venv", "--without-pip", str(venv_dir)]',
         '[str(py), str(venv_dir / "get-pip.py")]',
         '[str(py), str(ROOT / "run_bootstrap.py")] + argv',
+        # 续298：字体那一档的合法形状 —— argv 是运行期算出来的列表，源码里不出现包管理器名
+        'argv, check=False).returncode)  # install_screenshot_font',
     )]
     assert [_c for _c in _ok8d if _det8d(_c)] == [], \
         f"② 过宽，合法站点被误判：{[_c[:44] for _c in _ok8d if _det8d(_c)]}"
@@ -13154,6 +13159,8 @@ http:
         '["winget", "install", "-e", "--id", "Insecure.Nmap"]',
         '[_GO, "build", "-o", _dst]  # go build -o tools/scanner/fscan',
         '[str(py), "-c", _x], env=_env',
+        # 续298：新加的标记**不许变成口子** —— 写了标记却在调用点直接跑包管理器装 nmap，仍要红
+        '["sudo", "apt-get", "install", "-y", "nmap"]  # install_screenshot_font',
     )]
     for _c8d in _bad8d:
         assert _det8d(_c8d), f"② 对越界调用不敏感 → 假绿：{_c8d[:44]}"
@@ -13192,8 +13199,11 @@ http:
 
     assert _vio8d(_rows8d) == [], f"MANUAL 工具混进了自动层：{_vio8d(_rows8d)}"
     assert all(r["auto"] for r in _rows8d if r["kind"] == "auto"), "TOOLS 成员必须标成可自动"
-    assert all(not r["auto"] for r in _rows8d if r["kind"] in ("manual", "browser")), \
-        "manual/browser 行不得标 auto"
+    assert all(not r["auto"] for r in _rows8d if r["kind"] == "manual"), "manual 行不得标 auto"
+    # 续298：`browser` 行反过来**必须**标 auto —— `--install` 默认就会取一份钉住摘要的浏览器。
+    # 这条是把「默认安装到底动不动它」钉成判据：把 auto 改回 False（或整档撤回 --with-stack 后面）立刻红。
+    assert all(r["auto"] for r in _rows8d if r["kind"] == "browser"), \
+        "browser 行必须标 auto：默认 --install 会补齐截图用的浏览器（续298）"
     # 变异证伪：把三件套都标成 auto，④ 必须报出这三个名字
     assert _vio8d([{**r, "auto": True} for r in _rows8d]) == sorted(_tm8d.MANUAL), \
         "④ 对『MANUAL 混进自动层』不敏感 → 假绿"
@@ -24776,9 +24786,9 @@ expression: r0()
 
     # ---- ④ 导出：收成一行，四个格式都还在，「完整版」只剩一个入口 ----
     _det147 = c.get(f"/tasks/{_t147}").get_data(as_text=True)
-    for _w147 in ("报告 MD", "JSONL", "HTML", "PDF", "完整版报告"):
+    for _w147 in ("报告 MD", "JSONL", "HTML", "完整版报告"):
         assert _w147 in _det147, f"导出收口后详情页少了「{_w147}」入口（收的是排版，不是砍能力）"
-    for _o147 in ("导出 MD", "导出 HTML", "导出 PDF", "导出 JSONL", "完整版："):
+    for _o147 in ("导出 MD", "导出 HTML", "导出 JSONL", "完整版："):
         assert _o147 not in _det147, f"旧的四连按钮文案还在：{_o147}"
     assert _det147.count("完整版报告") == 1 and "full=1" in _det147, \
         "「完整版」要剩一个入口 —— 报告小节截断提示指的就是它，没了就是假出口"
@@ -27555,7 +27565,7 @@ expression: r0()
         assert _o2.headers.get("Content-Disposition", "").endswith(".zip"), _o2.headers
         assert _unwrap200(_export200({"ids": []}))[1] == 400, "没勾选必须 400（而不是默默导出全部）"
         assert _unwrap200(_export200({"ids": [_t200], "fmt": "pdf"}))[1] == 400, \
-            "批量不支持 PDF（要无头浏览器、慢），必须明说而不是静默降级"
+            "未知/已移除的格式必须 400（续297 起 PDF 不在任何出口里），不许静默降级"
         # 越权：不是自己的任务直接跳过（不报错、也不把能导出的那几个否掉）
         _sub200 = _us200.get_by_name("smoke200-sub")
         if not _sub200:
@@ -27574,7 +27584,7 @@ expression: r0()
     print("[200] 续200 ok: 阶段标签与 STAGE_ORDER 同产地｜/stages 三态(含/开关值/无开关 None)｜"
           "任务页行内只留查看全结果(停止/重启/删除/导出四颗都在勾选栏,「批量」字眼已去)｜"
           "阶段改预览框｜详情页对新变量容错(旧进程不 500)｜批量导出: 403 说清开关/单份 md/"
-          "多份 zip/空勾选 400/PDF 400/越权跳过")
+          "多份 zip/空勾选 400/未知格式 400/越权跳过")
     # ---- [201] 续201：Host 碰撞接线 / 页签不再丢 / 队列并发 / 批量打开提示 ----
     from scanner import hostcollide as _hc201
     from scanner.stages import hostcollide as _hcs201
@@ -33157,6 +33167,168 @@ expression: r0()
     print("[296] 续296 ok: sync_check 新增『未跟踪且未被忽略』的散落凭据判据——config/ 散文件与已知令牌形状"
           "两路各有正反断言｜.gitignore 覆盖即放行（且不误关另一路）｜--strict 真的退出 1 并点名文件｜"
           "本仓自查此刻干净｜令牌形状全部运行时拼接，不写进被跟踪文件（§2 秘密扫描那条红线）")
+    # ------------------------------------------------------------------ [298]
+    # 续298：主理人点单「截图必须要，如果没有你就要设置到自动化里面」⇒ `--install` 默认补齐两件事：
+    #   ① 仓库内的浏览器 = `toolmgr.LOCAL_STACK` 里 `wire` 指向 `screenshot.browser` 那一件
+    #      （https + 本框架钉住的 SHA256，落点在 tools/browser/，不碰系统、不需要 root）；
+    #   ② 系统中文字体 = `_FONT_PKG` 那**一个**包名，交给发行版包管理器 —— 这是默认路径里唯一
+    #      允许跑系统命令的地方，`install_system_packages` 那条「with_system=False ⇒ 一次都不执行」
+    #      一字未改（下面 ⑥ 就是来复核它没被稀释）。
+    # 这一组每条都靠注入，不吃「这台机器装没装 Chrome / 是不是 root / 有没有网」（§6.2 第一起），
+    # 也**绝不调真的 install_stack** —— 那一下是 189 MB。
+    import ast as _ast298
+    import contextlib as _cl298
+    import inspect as _ins298
+    import io as _io298
+    import run_bootstrap as _rb298
+    from scanner import screenshot as _sht298, toolmgr as _tm298
+    _bp298 = _sht298.browser_path
+    _font298, _pinfo298, _stack298 = _rb298.has_cjk_font, _rb298.platform_info, _rb298.install_stack
+    try:
+        # ① 「哪一件是浏览器」的判据取自注册表，不是写死的名字（写死了，下次给 mac/win 补产物
+        #    就会静默漏一件）；反向：默认那一档**只许取浏览器**，不许顺手把 Go / 源码包拉下来。
+        _wired298 = tuple(n for n, cfg in _tm298.LOCAL_STACK.items()
+                          if tuple((cfg or {}).get("wire") or ()) == ("screenshot", "browser"))
+        _got298 = _rb298.browser_stack_names()
+        assert _got298 == _wired298 and _got298, \
+            f"浏览器条目该取自注册表的 wire：{_got298} vs {_wired298}"
+        _all298 = tuple(_tm298.LOCAL_STACK)
+        assert set(_all298) - set(_got298), "LOCAL_STACK 里除了浏览器没别的？那这条反向夹具是空写"
+        for _no298 in ("go", "fscan-src", "massdns-src"):
+            assert _no298 in _all298 and _no298 not in _got298, \
+                f"默认安装混进了 {_no298}（那是 --with-stack / --full 的范围，不是截图这一档）"
+
+        # ② 缺口判定四档：snap 版**必须算缺**（装上了却不干活，比没装更难查）
+        _rb298.platform_info = lambda: ("linux", "x86_64", ["apt-get"])
+        _st298 = {"screenshot": {"enabled": True}}
+        _font_state = {"has": False}
+        _rb298.has_cjk_font = lambda: _font_state["has"]
+        for _path298, _want298 in (("", True), (None, True),
+                                   ("/snap/bin/chromium", True),
+                                   ("/usr/bin/google-chrome", False)):
+            _sht298.browser_path = lambda s, _v=_path298: _v
+            assert _rb298.screenshot_gaps(_st298)[0] is _want298, _path298
+        _sht298.browser_path = lambda s: "/usr/bin/google-chrome"
+        assert _rb298.screenshot_gaps(_st298) == (False, True), "浏览器在、字体缺 ⇒ 第二位必须 True"
+        _font_state["has"] = True
+        assert _rb298.screenshot_gaps(_st298) == (False, False), "都不缺时必须报『不缺』"
+
+        # ③ argv 的形状：列表、只有字体那一个包名、root 时剥掉 sudo、没登记过就**不猜命令**
+        _argv298, _why298 = _rb298.font_install_argv(["apt-get"], root=True)
+        assert _argv298 == ["apt-get", "install", "-y", _rb298._FONT_PKG] and _why298 == "", _argv298
+        assert _rb298.font_install_argv(["apt-get"], root=False)[0][0] == "sudo", "非 root 要留 sudo"
+        assert _rb298.font_install_argv(["snap"])[0] is None, "snap 名下没有对等字体包 → 不许猜命令"
+        assert _rb298.font_install_argv([])[0] is None, "没有包管理器 → 不许动手"
+
+        # ④ ensure_screenshot 的六条分支
+        _calls298 = []
+
+        def _fetch_ok298():
+            _calls298.append("fetch")
+            return [{"name": "chrome", "path": "tools/browser/chrome"}], []
+
+        def _run_ok298(_a):
+            _calls298.append(list(_a))
+            _font_state["has"] = True          # 模拟"装完真的有了字体"
+            return 0
+
+        # (a) 都不缺 ⇒ 一次动作都不许有（挡住"每轮安装都重下一遍 189 MB"）
+        _calls298.clear()
+        _sht298.browser_path = lambda s: "/usr/bin/google-chrome"
+        _font_state["has"] = True
+        _a298, _p298 = _rb298.ensure_screenshot(_st298, runner=_run_ok298,
+                                                fetcher=_fetch_ok298, say=False)
+        assert (_a298, _p298, _calls298) == ([], [], []), f"都不缺却动了手：{_a298} {_p298} {_calls298}"
+        # (b) 都缺 ⇒ 取件一次 + 只跑字体那一条，且**永不含别的系统包名**
+        _calls298.clear()
+        _sht298.browser_path = lambda s: ""
+        _font_state["has"] = False
+        _a298, _p298 = _rb298.ensure_screenshot(_st298, runner=_run_ok298,
+                                                fetcher=_fetch_ok298, say=False)
+        assert _calls298.count("fetch") == 1, _calls298
+        _used298 = [c for c in _calls298 if c != "fetch"]
+        assert len(_used298) == 1 and _used298[0][-1] == _rb298._FONT_PKG, _used298
+        for _ban298 in ("nmap", "golang", "chromium", "git"):
+            assert _ban298 not in _used298[0], f"默认路径跑动了 {_ban298}：那一档只许装字体"
+        assert len(_a298) == 2 and not _p298, (_a298, _p298)
+        # (c) 取件炸了 ⇒ 不许外抛，且**字体那一半照做**（两条动作互相独立）
+        _calls298.clear()
+        _font_state["has"] = False
+
+        def _fetch_boom298():
+            _calls298.append("boom")
+            raise RuntimeError("网络断了")
+        _sht298.browser_path = lambda s: ""
+        _a298, _p298 = _rb298.ensure_screenshot(_st298, runner=_run_ok298,
+                                                fetcher=_fetch_boom298, say=False)
+        assert _p298 and any("浏览器" in x for x in _p298), _p298
+        assert _font_state["has"] is True, "取件失败把字体那一半一起带走了（两条动作必须独立）"
+        # (d) 退出码非 0 ⇒ 报原因 + 给补法，不算成功
+        _font_state["has"] = False
+        _a298, _p298 = _rb298.ensure_screenshot(_st298, runner=lambda a: 100,
+                                               fetcher=lambda: ([], []), say=False)
+        assert not _a298 and any("退出码" in x for x in _p298), (_a298, _p298)
+        # (e) 退出码 0 却仍探不到字体 ⇒ 不许拿 rc=0 冒充成功（绿灯要有证据）
+        _font_state["has"] = False
+        _a298, _p298 = _rb298.ensure_screenshot(_st298, runner=lambda a: 0,
+                                               fetcher=lambda: ([], []), say=False)
+        assert not _a298 and any("退出码 0" in x for x in _p298), (_a298, _p298)
+        # (f) 没有可用包管理器 ⇒ 一次子进程都不许起，只说一句原因
+        _calls298.clear()
+        _font_state["has"] = False
+        _rb298.platform_info = lambda: ("linux", "x86_64", [])
+        _a298, _p298 = _rb298.ensure_screenshot(_st298, runner=_run_ok298,
+                                                fetcher=_fetch_ok298, say=False)
+        assert [c for c in _calls298 if c != "fetch"] == [], f"没有包管理器却动了子进程：{_calls298}"
+        assert any("包管理器" in x for x in _p298), _p298
+        _rb298.platform_info = lambda: ("linux", "x86_64", ["apt-get"])
+
+        # ⑤ 默认接线：main() 里那一处调用必须同时受 --install 与 --no-screenshot 管，
+        #    结果**不许进 failed**（截图是可选能力：没网 / 没 root 的机器上 ./install.sh 仍要 rc=0，
+        #    那是续164 换来的成果，不能被这一档换回去）
+        _tree298 = _ast298.parse(_ins298.getsource(_rb298.main))
+        _hit298 = [n for n in _ast298.walk(_tree298) if isinstance(n, _ast298.Call)
+                   and getattr(n.func, "id", "") == "ensure_screenshot"]
+        assert len(_hit298) == 1, f"main() 里 ensure_screenshot 的调用点必须恰好一处：{len(_hit298)}"
+        _guard298 = [n for n in _ast298.walk(_tree298) if isinstance(n, _ast298.If)
+                     and "no_screenshot" in _ast298.dump(n.test)]
+        assert _guard298, "没有 --no-screenshot 这道判断 ⇒ 默认路径退不回去"
+        assert any(any(x is _hit298[0] for x in _ast298.walk(_g)) for _g in _guard298), \
+            "调用点没被 no_screenshot 那道判断盖住（旗标写了却不生效 = 装饰）"
+        _own298 = [s for s in _ast298.walk(_tree298)
+                   if isinstance(s, (_ast298.Assign, _ast298.AugAssign, _ast298.Return))
+                   and any(x is _hit298[0] for x in _ast298.walk(s))]
+        assert not _own298, f"ensure_screenshot 的结果被接进了安装失败清单：{type(_own298[0]).__name__}"
+        _buf298 = _io298.StringIO()
+        with _cl298.redirect_stdout(_buf298):
+            try:
+                _rb298.main(["--help"])
+            except SystemExit as _e298:
+                assert _e298.code == 0, _e298.code
+        assert "--no-screenshot" in _buf298.getvalue(), "旗标没进 usage ⇒ 用户根本不知道能退这一档"
+
+        # ⑥ 复核「默认不代跑系统包」这条**没被稀释**（与 [8d]⑫ 同形，这里是因为风险正在此处）
+        _calls298.clear()
+        _plan298 = [{"name": "nmap", "present": False,
+                     "argv": ["sudo", "apt-get", "install", "-y", "nmap"], "cmd": "x"}]
+        _rb298.install_system_packages(_plan298, with_system=False,
+                                       runner=lambda a: _calls298.append(a) or 0)
+        assert _calls298 == [], f"续298 把『默认不代跑系统包』稀释了：{_calls298}"
+
+        # ⑦ 安装说明不许替现状说谎（§5.19 / 续252 那一族）：浏览器不再是"要你点头"那一档
+        _sh298 = (ROOT / "install.sh").read_text(encoding="utf-8")
+        assert "--no-screenshot" in _sh298 and "默认就补" in _sh298, "install.sh 没说清默认会补截图那条"
+        assert "能自动，但要你点头" not in _sh298, \
+            "install.sh 还写着浏览器「要你点头」那一档 —— 续298 之后它是默认动作，那句话成了假话"
+    finally:
+        _sht298.browser_path = _bp298
+        _rb298.has_cjk_font, _rb298.platform_info, _rb298.install_stack = \
+            _font298, _pinfo298, _stack298
+    print("[298] 续298 ok: --install 默认补齐截图（浏览器条目取自 LOCAL_STACK 的 wire、不写死名字，"
+          "且混进 go/源码包即红）｜snap 版算缺｜argv 只含字体那一个包名、root 剥 sudo、没登记就不猜命令｜"
+          "都不缺=零动作｜取件炸了不影响字体｜rc≠0 与 rc=0 却探不到都不冒充成功｜没包管理器=零子进程｜"
+          "main() 调用点恰好一处且受 --no-screenshot 盖住、结果不进 failed（rc 不被它换坏）｜"
+          "install_system_packages 默认仍零执行（[8d]⑫ 没被稀释）｜install.sh 说法跟着现状")
     print("SMOKE PASS")
 
 

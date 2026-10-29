@@ -24,13 +24,12 @@
   {% if report_export %}
   <span class="muted small">导出：<a class="btn-mini" href="{{ url_for('task_export', task_id=task.id) }}">报告 MD</a>
     <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='jsonl') }}">JSONL</a>
-    <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">HTML</a>
-    <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='pdf') }}">PDF</a></span>
+    <a class="btn-mini" href="{{ url_for('task_export', task_id=task.id, fmt='html') }}">HTML</a></span>
   {# 续59-2：默认版报告每节截在 100/200 条（可读性护栏，不是丢数据），小节标题会指「完整版」——下面就是那个出口 #}
   <a class="btn-mini ghost" href="{{ url_for('task_export', task_id=task.id, full=1) }}"
      title="资产小节不截断的那一版（默认版每节限 100/200 条）">完整版报告</a>
   {% else %}
-  <span class="muted small" title="在 策略配置 → 报告导出 勾选 report.export_enabled 后，这里会出现 MD / JSONL / HTML / PDF / 完整版 导出入口">导出已关闭（策略配置 → 报告导出 可打开）</span>
+  <span class="muted small" title="在 策略配置 → 报告导出 勾选 report.export_enabled 后，这里会出现 MD / JSONL / HTML / 完整版 导出入口（PDF 已于续297 移除）">导出已关闭（策略配置 → 报告导出 可打开）</span>
   {% endif %}
   <button class="btn-mini danger" data-op="delete" data-id="{{ task.id }}">删除</button>
   <span id="op-msg" class="muted"></span>

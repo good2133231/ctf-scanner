@@ -596,7 +596,9 @@ ctf-scanner/
 │   │                      #   `portscan` 裸 socket。预算耗尽＝**按停止处理**（见 §4/§5/§7）
 │   ├── targets.py         # parse_lines → [(kind, raw)]，kind ∈ domain|url|ip|cidr|unknown（cidr 展开为多条 ip）
 │   └── report.py          # 报告三格式：Markdown（generate）/ HTML（generate_html，自包含单文件+全量转义）/
-│                          #   PDF（export_pdf，复用无头 Edge/Chrome 的 --print-to-pdf）；三者共用 collect() 同一份快照
+│                          #   JSONL（generate_jsonl，机器可读）；三者共用 collect() 同一份快照。
+│                          #   **PDF 导出于续297 移除**（主理人不要 PDF：不再为一份交付物依赖本机无头浏览器）；
+│                          #   未知 `?fmt=` 一律 400 + 说明（含已移除的 pdf），**不静默退回 MD**
 │                          #   「SSL 证书」小节带**来源列**：TLS 握手（真握手） vs CT 日志（crt.sh 历史）
 ├── tools/import_ref_pocs.py # ast 静态解析参考项目 Python POC → config/pocs-imported/（导入项默认关闭）
 ├── tools/import_dir_dict.py # 外部目录字典 → 清洗 + **按技术栈拆桶** → config/dicts/dirs_{big,common,jsp,php,asp}.txt
@@ -1214,6 +1216,8 @@ ctf-scanner/
   任何"拿渲染结果下结论"的判据都必须先看 `ok`，不许看 `available()`（§6.2 第九起就是这么红的）。
 
 
+- **默认安装路径只许跑一条系统命令，且包名写死（续298，`run_bootstrap.py::ensure_screenshot`）**：主理人点单「截图必须要，如果没有你就要设置到自动化里面」⇒ `--install` 默认补齐两件事：① **浏览器** = `toolmgr.LOCAL_STACK` 里 `wire` 指向 `screenshot.browser` 的那一件（**判据取自注册表、不写死工具名** —— 写死了，下次给 mac/win 补产物就会静默漏一件），https + 钉住摘要 + 落点在仓库内 `tools/browser/`，不碰系统；② **中文字体** = `_FONT_PKG` 那**一个**包名，交给发行版包管理器。这是默认路径里**唯一**允许跑系统命令的地方：`install_system_packages` 那句「`with_system=False` ⇒ 一次 `runner` 都不许调」一字未改（`[8d]⑫`），nmap / golang / chromium / git 照旧只打印命令，`--with-system --yes` 仍是它们唯一的代跑入口。`[8d]②` 那份 subprocess 意图白名单因此多一个标记 `install_screenshot_font`，同时新增一条反向夹具钉住「打了这个标记也不许在调用点写死 `sudo apt-get … nmap`」—— **标记不是漏洞的口子**。`[298]` 另钉三条：都不缺时**零动作**（不许每轮重下一遍）、取件异常不外抛且不影响字体那一半、退出码 0 却仍探不到字体必须报问题（不许拿 rc=0 冒充成功）。两处失败都**不进 `failed`** —— 截图是可选能力，把它算成安装失败会让没网 / 没 root 的机器上 `./install.sh` 恒 rc=1，而续164 刚把那条修成 rc=0。
+
 ## 6. 如何验证改动
 
 > **门禁提速的既定口径（续125）**：全流程自检**只**放宽限速节奏
@@ -1264,7 +1268,7 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
                             #   + 落库/产物/页签/报告 + 清空资产 + 勾选即 cert_on）
                             #   新增 `[5w]`（报告三格式与趋势：八节 MD↔HTML 一一对应 / XSS 载荷全转义 /
                             #   自包含无外链 / 误报不计入趋势·未知级别归 other / 三格式路由 /
-                            #   无浏览器时 PDF 返回 400 + 可读原因 / 仪表盘趋势面板）
+                            #   未知导出格式（含已移除的 fmt=pdf）返回 400 + 说明 / 仪表盘趋势面板）
                             # 2026-09-23 续17 新增 `[5x]`（登录态扫描：解析/掩码/不静默丢弃 + fail-closed
                             #   （回显靶场 + 逐行断言 4 个第三方调用点不带 auth）+ CLI -H/--cookie 与
                             #   GUI 400 + 补扫继承 + 页面只显掩码不回显明文；POC raw 解析与破坏性方法拒绝、
@@ -1443,7 +1447,7 @@ py -3 tests/smoke.py        # 唯一回归门禁：自包含起靶场，断言�
 #   ②b 浏览器 argv —— **续74 修正续73**：CI Linux runner 必须加 `--no-sandbox`（否则 FATAL:
 #   No usable sandbox!）与 `--disable-dev-shm-usage`（/dev/shm 过小→30s 超时，这才是续72 超时真因）；
 #   二者现已加回。变异证伪改为“正向断言 `--no-sandbox`/`--disable-dev-shm-usage` 必须在 +
-#   `--disable-background-networking` 必须在”（smoke `[7z](a)`）；PDF 导出（report.export_pdf）同源。
+#   `--disable-background-networking` 必须在”（smoke `[7z](a)`）；PDF 出口续297 移除后这组 flag 只剩截图一个消费方。
 #   ③ jsmine 引号内 / 协议相对形态的 Unicode host 挖得到（变异：两条正则打回 ASCII-only 即红）。
 # 2026-09-28 续65 新增 `[8]`：**IDN / 中文域名**（punycode 主链路 + 展示回解）——
                             #   缺陷：`例子.中国` 被判 `unknown` 静默丢弃（四处同口径的重复编码都只认纯
@@ -1848,12 +1852,27 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
 “是        典型的…”，编译照过、只伤可读性）⇒ **改完要看 diff 的内容，不能只看编译过没过**。
 
 
+**第二十二起（续298，本轮自己造的：一次性脚本把 `tests/smoke.py` 截成 163 行）**：插入用的
+`logs/_ins298.py` 算好了要插入的那一小段 `new`，却写成 `p.write_bytes(new.encode("utf-8"))` ——
+**漏了 `txt.replace(old, new, 1)` 那一步**，于是整份 3.3 万行的门禁文件被那一小段盖掉。现象是
+`py_compile` 报 `line 1: invalid character '（'`，而 `git diff --numstat` 与 `--ignore-cr-at-eol --numstat`
+**两式一致** —— 写回去的内容行尾本身没错，所以 §9 那道 EOL 判据**抓不到"文件被截短"**。
+三条口径：① 任何整文件写回前必须断言**结构性事实**（`len(out) > len(txt)`、锚点在结果里已消失、
+关键行仍恰好一处），写完立刻 `py_compile` 并把 `wc -l` 与进来时的行数比 —— 两式 numstat 只守行尾，
+不守篇幅；② `git checkout -- <文件>` 在「本轮改动还没提交」时是无损的（HEAD ＝ 最新已提交状态），
+本轮靠它还原后按 `logs/_delpdf4.py` → `_spec297b-smoke` → `_spec298c` 重放，一条没丢；前提是
+**每批改完就提交**，否则那些一次性脚本本身就是唯一副本，而它们随时可能被自己写坏；
+③ 重放时撞回一颗旧雷（`[7v]` 的 assert 消息被写成**两个相邻字符串** ⇒ IndentationError，合并成一串
+才算对）—— 一次性补丁里的 `new` 文本**不会被任何判据复验**，所以这类脚本要留在 `logs/` 里，直到
+那一轮提交完成再按确切文件名删。
+
+
 ## 7. 已知局限 / 坑（真实存在，不是 TODO 清单）
 
 - **`massdns` 仍然要本机 gcc/make（续166）**：C 工具链没有"便携且带官方校验和"的产物 ⇒ `./install.sh --full` 只能把**源码**取进仓库（`tools/massdns-src/`，钉住摘要），编不了就如实报，`MANUAL` 那一行照旧点名它。别把"源码已就位"读成"massdns 已就位"——判据是 `_markers_ok` 认的 `tools/scanner/massdns`。
 - **`fscan` 编译期必须联网取 Go 模块（续166 实测：GOMODCACHE 192 MB、GOCACHE 239 MB）**：模块摘要由 fscan 自带的 `go.sum` 校验（这一层我们不插手），但**离线机器上这一步必然失败**；本框架不做模块镜像、也不预打包 vendor 目录。便携 Go 归档本体 70,590,635 B、解包 283 MB。
 - **`GOTELEMETRY=off` 挡不住 Go 的本地遥测计数（续166 实测）**：给了它与不给它，`~/.config/go/telemetry/local/*.count` 都照样建 ⇒ 真正管事的是把**配置目录本身**指走：Linux 靠 `XDG_CONFIG_HOME`，而 macOS（`~/Library/Application Support`）与 Windows（`%AppData%`）**都不认 XDG** ⇒ `toolmgr.go_env()` 连 `HOME`/`USERPROFILE`+`APPDATA`+`LOCALAPPDATA` 一起指进 `.cache/gohome`。代价：子进程看不到用户的 `~/.gitconfig`（本仓模块全走公共 proxy，实测不影响）。
-- **仓库内 Chrome 不等于"裸机能截图"（续167）**：`tools/browser/chrome` 运行时要系统的 libnss3 / libgbm / libatk 等共享库，那是"装进系统"的东西、本框架不代装 ⇒ 取来只买到"在有这些库的机器上省一步"；缺库时 `screenshot.capture()` 照旧返回失败并给原因（**不假绿**）。本机实测可用（PNG 10,576 B / 0.6 s），但**没有在裸机上验过**。同轮另记一条：`screenshot.browser` 里写相对路径曾被按**进程 CWD** 判存在性（§5.13 那个坑的第四次），续167 起按项目根折算并返回绝对路径。
+- **仓库内 Chrome 默认就取，"裸机能截图"仍看系统共享库（续167 立、续298 改成默认安装即补）**：`tools/browser/chrome` 运行时要系统的 libnss3 / libgbm / libatk 等共享库，那是"装进系统"的东西、本框架不代装 ⇒ 取来只买到"在有这些库的机器上省一步"；缺库时 `screenshot.capture()` 照旧返回失败并给原因（**不假绿**）。续298 在这台 Linux 的实测：`--install` 默认取件 **301 个文件 / 189.0 MB**（过本框架钉住的 SHA256）→ 回写 `screenshot.browser = tools/browser/chrome` → 真出一张 **12527 B** 的 PNG；同一条默认路径装上 `fonts-noto-cjk`，`fc-list :lang=zh` **0 条 → 30 条**（续103 登记的豆腐块缺口就此补上）。Windows / macOS **仍是一台都没真机启动过**（只核过归档字节与版本号）。同轮另记一条：`screenshot.browser` 里写相对路径曾被按**进程 CWD** 判存在性（§5.13 那个坑的第四次），续167 起按项目根折算并返回绝对路径。
 - **`--platform` 买的是"看清那个平台该装哪些"，不是"给那个平台备货"（续168）**：三条边界。① 产物**仍只下本平台那一份**（主理人选定），要真在另一台机器上装，就在那台上跑同一条命令；② 预览清单里每一行的「已装」吃的是**本机文件系统**，所以「按 windows/amd64 预览」时本机装着的 `puredns` 会显示 `ok` 而不是「不适用」—— 抬头那句声明就是为这一格写的，看到"预览"两行的人不许把那列当 Windows 的结论；③ **值不认识时不静默**：`platform_override()` 给 `(None, 原因)`、抬头照本机探测值并把那句原因印出来。同一轮把「官方没发该平台产物」与「本框架只核过部分平台」从**失败**改判成**不适用**（`install()` 的 `not_applicable` / `stack_applicable()`），Windows 上 `./install.sh` 从此 rc=0；而**真 Windows 仍是一台都没跑过** —— 那是算出来的表达，不是实测结论（待办照旧挂着）。
 - **拓展域名的「置信度」是启发式，不是归属证明（续169）**：主理人点单要的是「`abdc.com` 索引到
   `abcd.org` 那多半是我们的」，判据落在**注册域主标签**的编辑距离与相似度比值上（差 ≤2 步且比值
@@ -2373,9 +2392,9 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
   续写 `log_file` 会把多轮日志拼在同一文件里（有意的 —— 便于按任务维度回溯全部运行）。
   追加**不改 `tasks.stages`**（任务对外仍声明原阶段集），进度按本轮重新计时；
   **同任务并发追加硬拒绝**（否则停止信号被覆盖），**无源入口**（站点/IP/全端口三页）不提供追加。
-  导出有三档（续16）：`/tasks/<id>/export?fmt=md|html|pdf`（默认 md），
+  导出三档（续16 建；续297 收掉 PDF 后为 md / html / jsonl）：`/tasks/<id>/export?fmt=md|html|jsonl`（默认 md），
   **HTML 全量 `html.escape`**（报告里的标题/banner 来自被测目标，漏转义即反射型 XSS）、
-  **PDF 复用无头 Edge/Chrome 打印**（没有浏览器时返回 400 + 可读原因 + HTML 替代链接，不静默失败）；
+  ~~PDF 复用无头浏览器打印~~（**续297 整条移除**）：HTML 报告自带 `@media print`，要 PDF 在浏览器里打印；`?fmt=` 给未知值（含曾经的 `pdf`）返回 **400 + 说明**，**不静默退回 MD** —— 那等于让"点了 PDF 也拿到一个文件"看起来像成功（本仓反复登记的那族：静默降级比说清楚更坏）；
   仪表盘另有「漏洞趋势统计」面板（`db.vuln_trend()`：级别分布 + 最近 15 任务逐任务计数，**已判误报不计入**）。
 - **运行时长的时间口径**（续35）：`tasks.started_at` / `finished_at` / `elapsed_seconds` 由
   `db.start_task_run()` / `db.finish_task_run()` 维护，**不要拿 `created_at`/`updated_at` 推** ——
@@ -2470,13 +2489,13 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
     改为 Unicode 感知（`[^\W_]`），引号内与协议相对形态的中文主机能挖到（绝对 URL 续65 起已支持）。
     ⚠️ 无路径的**两段**引号内域名仍要求 ≥3 段（既有防 `backup.zip` 文件名误判的规则，对
     ASCII/IDN 一致）—— `例子.中国` 挖不到、`api.例子.中国` 能挖到。
-  - **截图 / PDF 的浏览器参数（续74 修正续73 的结论；browser_e2e.py 走 CDP 且不在 CI 跑，
+  - **截图的浏览器参数（续74 修正续73 的结论；PDF 那条出口续297 已移除，这组 flag 仍服务截图与 browser_e2e.py 走 CDP 且不在 CI 跑，
     其“老无 --no-sandbox”只在本地 Windows 成立，不能代表 CI Linux runner）**：GitHub 的 ubuntu
     runner **禁用非特权用户命名空间**（必须 `--no-sandbox`，否则 `FATAL: No usable sandbox!`）且
     `/dev/shm` **过小**（~64MB，必须 `--disable-dev-shm-usage`，否则 30s 超时无产物——这才是续72
     超时的真因）。最终配置（与 browser_e2e 一致）：`--headless=old` + `--ignore-certificate-errors`
     + `--no-sandbox` + `--disable-dev-shm-usage` + `--disable-background-networking`。见 `screenshot._FLAGS`
-    与 `report.export_pdf` 的 argv（均只影响本机浏览器进程隔离，不改变对目标请求语义，不越非破坏性红线）。
+    的 argv —— `report` 那份 PDF 出口已于续297 整条移除，所以 `_FLAGS` 是这组 flag 的唯一落点（只影响本机浏览器进程隔离，不改变对目标请求语义，不越非破坏性红线）。
     ⚠️ `--headless=new` 在该 runner 会**挂死**（续71 已排除），务必保持 `old`。
   - **FOFA 标题归属过滤（`fofa.title_match`）的边界**：默认 `label` 档要求"标题某个 token
     与域名某个 label **完全相等**"，因此**连字符域名永不命中** —— `targ1-wallet.com` 的 label

@@ -103,6 +103,9 @@
 
 - `.venv/`、`tools/`（含 scanner 二进制、fscan、dirmap、Go、浏览器）、`.cache/`：新机跑
   `./install.sh --full` 重建（需要网络；massdns 需 gcc/make，fscan 需 Go，Chrome/Go 走工作目录内组件）。
+  **续298 起「截图」这条不用再等 `--full`**：标准安装就把 Chrome for Testing 取进 `tools/browser/`
+  并回写 `screenshot.browser`，顺带让包管理器装 `fonts-noto-cjk` —— 于是「新机 clone 完照旧截不到图、
+  截出来全是豆腐块」不再是默认形态（`--no-screenshot` 是退出这一档的开关）。
   离线或同架构可整目录搬以省时间。
 - `logs/`：只是历史证据，不迁移；新机自动新建。
 - `data/trash/`、`data/intel/`、`data/import-inbox/`：历史备份 / 缓存 / 导入素材，可选。

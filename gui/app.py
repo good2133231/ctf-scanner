@@ -87,22 +87,6 @@ IP_NOTE_LABELS = {
 }
 
 
-def _export_error_page(err, task_id):
-    """导出失败时给用户看的页面（纯静态 HTML，不经模板）：说清**为什么**失败 + 下一步怎么走。
-
-    之所以不用模板：这是一条只在异常路径上出现的极简页面，为它开模板/上下文不值得；
-    里面的 `err` 与 `task_id` 都做了转义。
-    """
-    return ("<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
-            "<title>导出失败</title></head><body style='font:14px/1.7 sans-serif;margin:32px'>"
-            "<h1 style='font-size:18px'>导出 PDF 失败</h1>"
-            f"<p>原因：<code>{html.escape(str(err or '未知错误'))}</code></p>"
-            "<p>可以：①改导出 HTML（下载后用浏览器「打印 → 另存为 PDF」）；"
-            "②在「策略配置 → 站点截图」里把浏览器路径填进 <code>screenshot.browser</code>，"
-            "PDF 导出复用同一条探测路径。</p>"
-            f"<p><a href='/tasks/{int(task_id)}'>← 返回任务</a> ｜ "
-            f"<a href='/tasks/{int(task_id)}/export?fmt=html'>下载 HTML 报告</a></p>"
-            "</body></html>")
 
 
 def _export_disabled_page(task_id):
@@ -110,7 +94,7 @@ def _export_disabled_page(task_id):
 
     说清三件事：为什么导不了（开关关着）、去哪儿开（策略配置 → 报告导出，或直接改
     config/settings.yaml）、改完立即生效（数据一直在库里，开完再点导出就行）。
-    纯静态 HTML 不经模板（与 `_export_error_page` 同一做法）。
+    纯静态 HTML 不经模板（只在『这条路径本身』上出现的极简页面，为它开模板/上下文不值得）。
     """
     return ("<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
             "<title>导出已关闭</title></head><body style='font:14px/1.7 sans-serif;margin:32px'>"
@@ -121,7 +105,7 @@ def _export_disabled_page(task_id):
             "① 控制台「策略配置 → 报告导出」勾选后保存；<br>"
             "② 直接编辑 <code>config/settings.yaml</code>，把 "
             "<code>report.export_enabled</code> 改为 <code>true</code>。</p>"
-            "<p>打开后回到任务详情页即可导出 MD / JSONL / HTML / PDF（含完整版）。</p>"
+            "<p>打开后回到任务详情页即可导出 MD / JSONL / HTML（含完整版）。</p>"
             f"<p><a href='/tasks/{int(task_id)}'>← 返回任务</a> ｜ "
             "<a href='/settings#report'>打开策略配置</a></p>"
             "</body></html>")
@@ -2857,7 +2841,7 @@ def create_app():
     @app.route("/tasks/<int:task_id>/export")
     @login_required
     def task_export(task_id):
-        """导出任务报告：`?fmt=md`（默认，下载 .md）/ `html`（下载 .html）/ `pdf`（下载 .pdf）/
+        """导出任务报告：`?fmt=md`（默认，下载 .md）/ `html`（下载 .html）/
         `jsonl`（下载 .jsonl，机器可读的 JSON Lines）。
 
         `?full=1` = **完整版**（续59-2）：资产小节**不截断**（默认版各节仍限 100/200 条，
@@ -2865,11 +2849,12 @@ def create_app():
         「完整版」导出"，这个参数就是那句话指向的出口。`jsonl` 本来就是全量，不受影响。
 
         续171（用户 2026-10-13 点单）：导出功能受 `report.export_enabled` 控制（**默认关**）。
-        关着时四种格式一律返回提示页（403）：说清开关在哪、怎么开 —— 不静默、也不让
+        关着时三种格式一律返回提示页（403）：说清开关在哪、怎么开 —— 不静默、也不让
         "点了才知道不行"。任务页的导出按钮在开关关着时同样隐藏（见 task_detail.html）。
 
-        PDF 走本机无头浏览器的 `--print-to-pdf`（见 `report.export_pdf`）：找不到浏览器时
-        **把原因显示出来**（而不是 500 或一个空文件），并提示可改导出 HTML。
+        **PDF 导出已于续297 整条移除**（主理人点单：不要 PDF，不再为一份交付物依赖本机无头
+        浏览器）。HTML 报告自带 `@media print`，要 PDF 的人在浏览器里「打印 → 另存为 PDF」；
+        站点截图那条浏览器探测路径**保留**（它服务的是取证，不是报告格式）。
         """
         task = _owned_task(task_id)
         if not task:
@@ -2877,27 +2862,18 @@ def create_app():
         if not bool((settings.get("report") or {}).get("export_enabled")):
             return Response(_export_disabled_page(task_id), status=403,
                             mimetype="text/html; charset=utf-8")
-        from scanner.report import (export_pdf, generate, generate_html,
-                                    generate_jsonl)
+        from scanner.report import generate, generate_html, generate_jsonl
         fmt = (request.args.get("fmt") or "md").strip().lower()
+        if fmt not in ("md", "html", "jsonl"):
+            # 续297：PDF 整条移除后，这一支原来会**静默掉到 MD** —— 用户点到 `fmt=pdf` 还会
+            # "拿到一个文件"，那是比报错更坏的结果（本仓反复登记过的那族：静默降级骗人）。
+            # 错误路径用纯文本：不为一条罕见分支再开一个 HTML 页，也少一处转义面。
+            return Response("不支持的导出格式 " + re.sub(r"[^a-z0-9_]", "", fmt) +
+                            "；本工具支持 md / html / jsonl。PDF 已于续297 移除 —— "
+                            "要 PDF 请下载 HTML 报告后在浏览器里「打印 → 另存为 PDF」。",
+                            status=400, mimetype="text/plain; charset=utf-8")
         full = request.args.get("full") == "1"
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        if fmt == "pdf":
-            tmp_dir = Path(tempfile.mkdtemp(prefix="ctfscan-report-"))
-            out = tmp_dir / f"task_{task_id}_{stamp}.pdf"
-            try:
-                ok, err = export_pdf(task_id, out, settings, full=full)
-                if not ok:
-                    return Response(_export_error_page(err, task_id), status=400,
-                                    mimetype="text/html; charset=utf-8")
-                # 读进内存再回：临时目录马上要删，交给 Flask 流式发送会有句柄竞争
-                # （Windows 上更明显 —— 文件还被占着就删不掉）。
-                data = out.read_bytes()
-            finally:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-            return Response(data, mimetype="application/pdf",
-                            headers={"Content-Disposition":
-                                     f"attachment; filename=task_{task_id}_{stamp}.pdf"})
         if fmt == "html":
             body = generate_html(task_id, full=full) or ""
             return Response(body, mimetype="text/html; charset=utf-8",
@@ -5040,8 +5016,7 @@ def create_app():
 
         - 勾 1 个 → 直接下载那一份（与原来的行内导出完全一致）；
         - 勾多个 → 打包成一个 **zip**（一次下载，不必让浏览器连开 N 个下载）。
-        格式沿用单任务的 `fmt=md|html|jsonl`（PDF 需要本机无头浏览器、慢且有失败面，
-        批量时**不提供**，按钮提示里写明了 —— 静默降级比说清楚更糟）。
+        格式沿用单任务的 `fmt=md|html|jsonl`（续297 起没有第四种：PDF 整条已移除）。
         越权同其它端点：不是自己的任务直接跳过（**不报错**，因为清单里混着别人的任务时
         报错会把"能导出的那几个"也一起否掉）。
         """
@@ -5063,7 +5038,7 @@ def create_app():
             return jsonify({"ok": False, "error": "导出开关关着（策略配置 → 报告导出）"}), 403
         fmt = str(data.get("fmt") or "md").strip().lower()
         if fmt not in ("md", "html", "jsonl"):
-            return jsonify({"ok": False, "error": f"批量导出不支持 {fmt}（PDF 请单条导出）"}), 400
+            return jsonify({"ok": False, "error": f"批量导出只支持 md / html / jsonl，收到 {fmt}"}), 400
         full = data.get("full") == 1 or data.get("full") is True
         from scanner.report import generate, generate_html, generate_jsonl
         files, skipped = [], []
@@ -5657,7 +5632,7 @@ def create_app():
                               "max_chars": int(f.get("flags_max_chars", 2000000) or 2000000),
                               "max_per_source": int(f.get("flags_max_per_source", 20) or 20),
                               "max_per_task": int(f.get("flags_max_per_task", 200) or 200)},
-                    # 报告导出（续171，默认关）：MD / JSONL / HTML / PDF 共用一个开关
+                    # 报告导出（续171，默认关）：MD / JSONL / HTML 共用一个开关（PDF 续297 移除）
                     "report": {"export_enabled": f.get("report_export_enabled") == "1"},
                     "afrog": {"enabled": f.get("afrog_enabled") == "1",
                               "poc_dir": (f.get("afrog_poc_dir") or "").strip(),

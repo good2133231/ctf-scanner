@@ -6,13 +6,18 @@
 # 在这儿再抄一份就是第二个产地，两边迟早漂（AGENTS §5.14，本项目反复栽在这上面）。
 #
 # 用法：
-#   ./install.sh                       标准安装（.venv + pip 依赖 + subfinder/httpx/puredns/afrog；有 gcc/make 时自动编 massdns）
+#   ./install.sh                       标准安装（.venv + pip 依赖 + subfinder/httpx/puredns/afrog；有 gcc/make
+#                                      时自动编 massdns；**截图那条也一起补齐** —— 浏览器取进仓库 + 中文字体，
+#                                      续298，不想要就加 --no-screenshot）
 #   ./install.sh --full                **一条命令把环境建全**（续166）：标准安装
 #                                      + 工作目录内取 Go 便携归档与上游源码包（--with-stack）
 #                                      + 就地编译 fscan 与 massdns（--with-build）
 #                                      全部落在仓库内（tools/ 与 .cache/），不装系统包、不写家目录
 #   ./install.sh --with-stack          只取运行时组件（Go / 源码包），不编译
-#   ./install.sh --with-system --yes    额外让发行版包管理器**真装** nmap / 浏览器 / Go / CJK 字体
+#   ./install.sh --with-system --yes    让发行版包管理器**真装** nmap / 系统浏览器 / Go（CJK 字体已经归
+#                                      标准安装管，续298）
+#   ./install.sh --no-screenshot        标准安装**跳过**截图那一档（取件约 189 MB + 一个系统字体包；
+#                                      没有浏览器时截图阶段只是如实跳过，不影响别的任何东西）
 #   ./install.sh --with-build           标准安装 + 编译 fscan 与 massdns（用本机工具链；
 #                                      给了 --with-stack 才会自动取缺的 Go / 源码）
 #   ./install.sh --no-venv             装到当前解释器（容器 / 受控环境里常用）
@@ -21,8 +26,10 @@
 # 其余参数原样透传给 run_bootstrap.py（--only / --allow-unverified / --tools-dest / --no-wire）。
 #
 # ⚠ 仍**依赖本机**的（续274 起 massdns 标准安装即自动编，但底层要 gcc/make，C 工具链无便携替代品）：
-#   `nmap` 只有系统包；CJK 字体目前仍要系统装（截图用的浏览器自续167 起可用 --with-stack 取进
-#   仓库，但它只解决"有没有浏览器"，中文能不能显示仍取决于字体）。
+#   `nmap` 只有系统包，仍要人点头。截图那条（续298）默认会自动补：浏览器取进仓库（钉住摘要），
+#   中文字体交给发行版包管理器 —— 后者是**默认路径里唯一**会跑系统命令的地方，且只允许
+#   `fonts-noto-cjk` 这一个包名；没 root / 源里没这个包 / 没探测到包管理器时**如实说一句就继续**
+#   （`./install.sh` 的退出码不受它影响 —— 续164 那条 rc=0 的成果不换给它）。
 #   没有它们框架照跑，只是截图里中文变方块、端口扫描退回内置 TCP connect。
 #
 # ⚠ 本文件必须保持 **LF** 行尾（.gitattributes 已钉）：CRLF 的 shebang 会让 bash 报
@@ -173,7 +180,7 @@ cat <<'EOF'
 每个 HTTP 请求一行另进 logs/access.log（同一套轮转）：终端不再一屏一行刷请求，而文件里那段
 随机前缀已打码成 <前缀已脱敏> —— 这份日志看得出谁打了哪个页面，看不出后台路径。
 
-**本脚本刻意没做**（是 run_bootstrap.py 的红线，不是漏了）：
+**边界**：下面两件**默认就补**（续298），再往下那几件是 run_bootstrap.py 的红线、刻意不代跑：
   · nmap：只有系统包（官方发布在 nmap.org/dist，不在 GitHub release）—— 代跑就是越"系统级动作"的界。
     上面输出里**按平台印了命令**，自己复制执行；真想让它代装系统包：./install.sh --with-system --yes
   · fscan：**要你点头**（要 Go）—— ./install.sh --with-build / --full 编译；缺 Go 则端口扫描回退 nmap → 内置 TCP connect。
@@ -181,11 +188,13 @@ cat <<'EOF'
     （v1.1.0，过 SHA256，非 --with-stack 那 70MB 的 Go stack）编译并写回配置；缺 gcc/make 时交互式会尝试装工具链、
     非交互则打印按平台的安装命令，并明确告知"子域名爆破走内置纯 Python DNS 兜底，框架照跑"。
     要强制重编：./install.sh --full（fscan 也一起）。
-  · 浏览器：**能自动，但要你点头** —— ./install.sh --full（或 --with-stack）把 Chrome for Testing
-    取进 tools/browser/ 并回写 tools.screenshot.browser（续167）。Linux / Windows / macOS（x64+arm64）
-    的摘要都已人工核过（续217）；Linux 在本机真机启动过，Windows/macOS 只核过归档字节与归档内版本号，
-    **没在真机启动过**。运行时仍要系统共享库，缺库时截图照旧如实失败。
-  · CJK 字体：站点截图 / PDF 报告里的中文要靠它，仍要系统装（没有也能跑，只是截图里中文变方块）。
+  · 浏览器：**默认就补**（续298）—— 标准安装把 Chrome for Testing 取进 tools/browser/ 并回写
+    screenshot.browser：https + 本框架钉住的 SHA256 + 落点在仓库内，**不碰系统**、不需要 root；
+    --no-screenshot 是退出这一档的开关。Linux / Windows / macOS（x64+arm64）的摘要都已人工核过
+    （续217）；**Linux 已实机启动并真出图**（续298：301 个文件 / 189.0 MB → 12527 字节 PNG），
+    Windows/macOS 只核过归档字节与版本号，**没在真机启动过**。运行时仍要系统共享库，缺库照旧失败。
+  · CJK 字体：**默认就补**（续298）—— 字体是 fontconfig 看得见的系统资源，仓库里放一份浏览器并不会
+    采纳，所以这一条只能走包管理器；装不上时打印原因与那条命令并继续（截图仍是合法 PNG，只是汉字成方块）。
     浏览器解决的是"有没有东西能渲染"，字体解决的是"中文渲染成不成字"，两件事别混。
   · 没有这些外部工具框架**仍能跑通**：会自动降级到内置实现，只是覆盖面与速度不如本体。
 

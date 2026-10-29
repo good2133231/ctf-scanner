@@ -33,7 +33,7 @@ docker compose -f docker_todo/docker-compose.yml -f docker_todo/docker-compose.d
 1. **镜像版本与本机不一致**：`Dockerfile` 是 `python:3.9-slim`，CI 也是 3.9，而这台开发机跑的是
    3.14。仓库里有一条"跨 Python 版本红线"（正则内联全局标志只能写在串首，`[8d] ⑩` 钉着），
    所以 3.9 与 3.14 都要求能跑；但**没有**在 3.9 容器里真跑过一遍完整 smoke。
-2. **容器里没有浏览器** → 截图与 PDF 导出在容器内从来不通（`Dockerfile` 头写了"零多余依赖"口径）。
+2. **容器里没有浏览器** → 站点截图在容器内从来不通（PDF 导出续297 已移除；`Dockerfile` 头写了"零多余依赖"口径）。
    要在容器里出图，得自己装 Chromium 并绕开 snap 的 confinement 问题（见 AGENTS.md §7）。
 3. **`nmap` / `fscan` / `dirmap` 不进镜像**：官方没有"可下载且带官方 SHA256 的单文件产物"，
    按红线只能人工装（`scanner/toolmgr.py::MANUAL`）。容器里要用得自己 `apt-get install -y nmap` 后重建。

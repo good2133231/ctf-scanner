@@ -122,10 +122,10 @@ docker compose start
 **重建镜像会丢**，重编约 20 秒）。`massdns` 仍需 `build-essential`（C 工具链无便携替代品）。
 **不装也不影响**：`subdomain` 阶段会预检到缺它并自动回退内置 DNS 爆破。
 
-> **要在容器里用截图 / PDF，必须同时装浏览器和中文字体**（续103）：
+> **要在容器里用站点截图，必须同时装浏览器和中文字体**（续103；PDF 报告已于续297 移除）：
 > `apt-get install -y chromium fonts-noto-cjk` 之后重建镜像。只装浏览器、不装字体是**最坏的一种** ——
 > 截图照样"成功"、字节数也正常，但图里每个汉字都是豆腐块，而且没有任何失败信号。
-> 镜像本身刻意不装这些（"零多余依赖"口径见 `Dockerfile` 头），所以容器里截图与 PDF 导出**从来就不通**；
+> 镜像本身刻意不装这些（"零多余依赖"口径见 `Dockerfile` 头），所以容器里截图**从来就不通**；
 > 宿主机直跑时用 `python3 run_bootstrap.py --install --with-system`，`fonts-noto-cjk` 已在系统包层清单里。
 `dirmap` 是 Python 项目（要 gevent/lxml），装进容器还得补依赖，**不装也不影响**
 —— 深扫会自动回退到内置字典扫描。

@@ -23,14 +23,14 @@
 | 功能 | 段（配置键） | 代码默认 | 随包 | 生效 | 为什么没默认开 | 怎么开 | 要什么 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | TLS 证书取证（只读握手取颁发者/有效期/CN/SAN/指纹，进「SSL 证书」页签） | `cert` | False | False | False | 可选取证：每个 https 站点多一次握手，会让探测变重 | 策略配置 → `cert.enabled`（页面开关 `cert_enabled`） | 无（纯标准库；握手**不校验证书** —— 自签名/过期正是要看的） |
-| 站点截图（无头浏览器，站点页缩略图） | `screenshot` | False | False | False | 要本机 Chrome/Edge 无头模式，慢且依赖外部二进制与系统库 | 策略配置 → `screenshot.enabled`；`browser` 留空＝自动探测 | 本机浏览器（`tools/browser/chrome` 或系统的 Chrome/Edge）+ 系统共享库（libnss3 / libgbm / libatk 等） |
+| 站点截图（无头浏览器，站点页缩略图） | `screenshot` | False | False | False | 要本机 Chrome/Edge 无头模式，慢且依赖外部二进制与系统库 | 策略配置 → `screenshot.enabled`；`browser` 留空＝自动探测 | 本机浏览器（**续298 起标准安装即取一份进 `tools/browser/`**，或系统的 Chrome/Edge）+ 系统共享库（libnss3 / libgbm / libatk 等）+ 中文字体（同样默认即装） |
 | 备案反查（同主体域名） | `icp` | False | False | False | 源按次计费/限流；预置的工信部源在国内托管，海外出口通常不可达 | 策略配置 → `icp.enabled` + `sources` 里给可达的源 | 可能要 `api_key`（只进 `config/keys.enc.yaml`，不落明文） |
 | 360 Quake 的 favicon 反查（同源资产） | `quake` | False | False | False | 外部付费接口、要 key | 策略配置 → `quake.enabled` + `config/keys.yaml` 的 `quake.key` | key |
 | Shodan 的 favicon 反查 | `shodan` | False | False | False | 同上；且"任何外部接口都不该在用户没点头时产生流量" | 策略配置 → `shodan.enabled` + `shodan.key` | key |
 | A10 SSRF 受控回连（任务内起本机监听，把 `http://<回调>/<token>` 喂给候选参数） | `ssrf` | False | False | False | **只在目标能回访扫描机时才有效** —— NAT / 云主机场景大概率一条都收不到；且要在本机起监听 | 策略配置 → `ssrf.enabled` + 回调基址 | 目标侧能出网、且能访问到扫描机的端口 |
 | 开发模式（把各阶段的"量"压到 1，只验流程跑不跑得通） | `dev` | False | False | False | 它不是"能力"，是自检模式；开着会让真实扫描几乎不出量 | 策略配置 → `dev.enabled` / CLI `--dev` | 无 |
 | 边缘认证门（401 门） | `gui.edge_auth` | False | False | False | 它是**部署开关**不是能力 —— 只有把控制台绑到 `0.0.0.0` 时才需要；刻意不给环境变量覆盖，免得"随手一设"就变了 | 策略配置 / `config/settings.yaml` 的 `gui.edge_auth.enabled` | 无（配合 HTTPS 才有意义；**不替代登录**） |
-| 报告导出（MD / JSONL / HTML / PDF） | `report` | False | False | False | 续171 主理人点单"默认关闭" | 策略配置 → 报告导出 | PDF 还要本机无头浏览器 |
+| 报告导出（MD / JSONL / HTML；PDF 已于续297 移除） | `report` | False | False | False | 续171 主理人点单"默认关闭" | 策略配置 → 报告导出 | PDF 还要本机无头浏览器 |
 
 ## 二、随包开、代码默认关（其实是开着的，7 项）
 
