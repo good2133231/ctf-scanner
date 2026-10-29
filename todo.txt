@@ -4542,6 +4542,67 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续293（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：--force-overwrite 死路修复 + 解锁来源说出哪一份文件
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+主理人把 Windows 那份凭据放成 `config/config`（标签行+值行成对，不是 YAML），说「不用备份，反正也解不开」
+「你搞完把 config 清空」「口令就用主理人给的那句」（**值不落任何文本**，只存本机 `config/keys-pass`）。重录过程中撞出两处真缺陷，都补了断言。
+
+- [x] T1【实测撞出的 CLI 死路】`cli/run_keys.py --encrypt` 在**非交互 + 用 `--passphrase`/环境变量喂口令**
+  这一形状下，`--force-overwrite` **永远走不到**：第 129 行 `old = args.passphrase` 与 `phrase` 是同一个值，
+  拿它再试一次解密必然又失败，于是直接 `return 1`；而 `--help` 与那句现场提示都明说这个旗标能用
+  （§6.2 第十六起同族：文案指了一条走不通的路）。现场证据就是本轮第一次尝试：rc=1、什么都没写。
+  修法：`if old == phrase: old = ""` —— 同一句口令再试一次没有信息量，让它落到**真正认这个旗标**的那一档。
+  安全边界一条没松：不带旗标时照旧拒写，且现有密文**一个字节不动**、明文不删（正反两条都钉进断言）。
+- [x] T2【上一轮该做没做完的一小截】续292 加第二档后，横幅那句「口令来源：file」不再等于事实
+  （两档并存时没说是**哪一份**解开的）。补 `_STATE["passfile"]` + `unlock_notice()` 把它说出口；
+  `source` 的取值契约一字未动（`[8bt]` 那批 `source == "file"` 断言原样绿）。
+- [x] T3【新组 [293]】① 正面断言（旧代码必红，就是现场那次 rc=1）+ 反向断言（不带旗标 ⇒ 拒写、
+  密文逐字节不变、明文不删、`--force-overwrite` 那句出路在输出里）+ `--shred` 只在自校验通过后删；
+  ② 解锁横幅含**档位显示名**、不含口令值，且换一档来源时那句话跟着变（§5.19 的判据形状）。
+- [x] T4【本机凭据重录，实测数字】新密文 `config/keys.enc.yaml` **557 字节**（口令＝本机 `config/keys-pass` 里那句，值不落文本，
+  PBKDF2-HMAC-SHA256 60 万次 + AES-256-GCM），解出 4 个字段两组：`github(token, push_token)`、
+  `fofa(email, key)`；明文 `config/keys.yaml` 自校验通过后由 `--shred` 删除；主理人放的
+  `config/config`（279 字节明文）已删（"把 config 清空"）。控制台带凭据重启，横幅实测：
+  「凭据密文已解锁（口令来源：file · config/keys-pass）」；`run_keys.py --status`：
+  加密文件存在 True / 已解锁 True / 明文文件仍在 False。
+- [x] T5【安全面自查】重录前先确认 `git status` 里那份明文是 `?? config/config`（**未跟踪但没被忽略**，
+  一句 `git add -A` 就会把明文送进公开仓库）⇒ 已加密+删除；`git ls-files` 里凭据/口令文件名 = 0；
+  `config/keys.enc.yaml` 与 `config/keys-pass` 权限都收紧成 **0600**（前者落盘时是 0644）。
+- [ ] 还没配的凭据组：`shodan.key` / `quake.key` / `virustotal.key` / `gitlab.token` / `icp.api_key`。
+  影响要分开说：`virustotal` 随包是**开**的 ⇒ 现在每次 subdomain 阶段会照实跳过并打一行原因；
+  `shodan` / `quake` / `icp` 出厂关着 ⇒ 不配也不影响默认任务；`gitlab` 段不存在 ⇒ multileak 那路跳过。
+- [ ] **配额提醒（要主理人决定）**：`fofa.enabled` 随包 = true ⇒ 从这一刻起默认任务会**真去查 FOFA 并花配额**
+  （favicon / 证书 / 标题三路 + `fofa.subdomain_max` 默认 100 的子域名）。要收就先关某一路或调小上限。
+- [ ] 外部工具仍缺：`fscan`（端口扫描回退 nmap→内置）、`dirmap`（目录深扫走内置分层字典）、
+  无头浏览器（**截图与 PDF 导出会如实跳过**）、CJK 字体（有浏览器时中文截图仍是豆腐块）。
+  已就位：`subfinder` / `httpx` / `puredns` / `massdns`（续292 编出）/ `afrog` / `nmap`（`/usr/bin/nmap`）。
+- [ ] **token 轮换只能主理人做**：GitHub 那两个 93 字符令牌与 FOFA key 曾以明文躺在 Windows 桌面目录、
+  并经过这次聊天 ⇒ 建议在各家控制台 revoke + 重发，然后把新值给我，我再 `--encrypt` 一次。
+- [ ] push 通路仍未接：这台机器 `credential.helper` 为空、仓库外那个 git 助手不存在；`github.push_token`
+  现在在密文里了，可以走"只进请求头、不进 `.git/config` 与 remote URL"那条§2 口径把提交推上去，
+  **等主理人点头**（推送是不可逆的共享状态动作）。本轮已攒 3 个本地提交。
+- [x] C1 全量门禁：`tests/smoke.py` **SMOKE PASS**（rc=0，445 秒，08:55→09:02，组一条不跳），日志 logs/_smoke293.log；另局部复跑 `--only 2c,8f,8bt,292` 四条 ok（证明 source 契约没被动过）+ `--only 293` ok。
+- [x] C2 记忆同步：CHANGELOG 续293 + todo 续293 + AGENTS §7（口令档与 --force-overwrite 的边界）。
+
+- [x] T6【主理人紧接着又放了一个 `config/111`】68 字节两行（标签 `vt` + 64 位全小写十六进制）⇒ 判为
+  **VirusTotal 公共 API key**（形状对照：VT=64 hex、Shodan=32、Quake≈40 带 `-`）。它同样**未跟踪也没被
+  .gitignore 覆盖**（`?? config/111`）—— 一小时内第二次同一形状，见下面新加的那条待办。
+- [x] T7【合并而不是覆盖（这次是正路）】临时明文 `config/keys.yaml` 只写 virustotal 一组 →
+  `CTFSCANNER_KEYS_PASSPHRASE=<那句口令> cli/run_keys.py --encrypt --shred` ⇒ 现有密文能被同一句口令打开，
+  于是落到「合并来源：旧密文（同一个口令解开）」那一支（续293 修的死路只在口令对不上时才撞得上）；
+  新密文 **444 字节**，`--verify` 复验三组五字段俱在（fofa / github(push_token,token) / virustotal），
+  `--shred` 自校验通过后删明文，`config/111` 已删。控制台重启横幅实测
+  「凭据密文已解锁（口令来源：file · config/keys-pass）」，`/login` HTTP 200。
+  ⚠ 别把 557→444 读成丢数据：合并后**不带注释**（脚本自己说了），557 那版含我写的两行注释；
+  判据看组名与字段名，不看字节数。
+- [ ] **建议给 `tools/sync_check.py --strict` 加一项判据**（本轮两次撞上的同一形状）：仓库目录内存在
+  「未跟踪**且**未被 .gitignore 覆盖」的文件 ⇒ 判红并点名。逐条补忽略规则追不上随手起的文件名
+  （`config/config`、`config/111`），而 `git add -A` 只要一次就把明文送进公开仓库。落地必须配一条断言
+  （造出这样的文件 ⇒ sync_check 当场红），别只改文案。
+下一轮（续294）：
+- [ ] 主理人点头后：用 push_token 推 3 个提交；以及按他给的缺口补 shodan/quake/virustotal 或关 FOFA 配额
+
 ## 续292（2026-10-28，WorkBuddy · Qoder-Agent 远端 Linux）：口令文件加第二档 config/keys-pass（整机迁移）
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
 
@@ -4595,6 +4656,19 @@ ctfscanner」，被问到「口令文件放仓库目录里代码不认，而且 
 - [x] C1 全量门禁：`tests/smoke.py` **SMOKE PASS**（rc=0，419 秒 = 14:10:16→14:17:15，组一条不跳），日志 logs/_smoke292c.log。前两轮各红在一处，**两轮都是本轮自己抓出来的真问题**（见上面 T7/T8）：第一轮 393s 红在 `[218]`（空库被当成 base_domain 口径坏了），第二轮 407s 红在 `[264]`（缺 massdns）。
 - [x] C2 记忆同步：CHANGELOG 续292 + todo 续292 + AGENTS 三处（§2 口令兜底档 / §5.14 产地清单 /
   §7 凭据加密边界）+ `.qoder/skills/ctf-scanner/SKILL.md` 第 8 条 + `docs/dev-sync.md`「必搬」表。
+
+- [ ] 本轮后续（2026-10-29）实测到的两条，写给下一个接手的人省一轮考古：
+  ① **口令文件档是 `.strip()` 过的**（`_read_passphrase_file`）—— 这是为了容忍编辑器追加的尾随换行，
+    代价是**首尾真带空格的口令永远走不了文件档**（只能环境变量或参数）。要不要在 `unlock_howto()`
+    里点一句，等人点头再改（改了会动那条既有断言的形状）。
+  ② 主理人从 Windows 发来的 `config/keys.enc.yaml`（147 字节，sha256 `52a22569…35fd`）**解不开**：
+    实测过 8 种口令形状（主理人给的那句、前后加空格、加 `\n` / `\r\n` / `\t`、全大写、另一句候选加尾随空格）全部失败；
+    同一天在本机自测「同口令 round-trip=通过」⇒ **加解密链路没坏**；`git log -S` 证明
+    `_KDF_ITERS`/`_SALT_LEN`/`_NONCE_LEN`/魔数**自续98 起从未变更**⇒ 不是格式换代。
+    剩下两种可能**分不开**（认证加密下「口令错」「改 1 bit」「截掉 1 字节」报同一句话，实测过）：
+    口令另有其句，或传输掉了字节。判据已交给主理人：比对 Windows 那份的 Length/SHA256。
+    另记一条容量事实：147 字节 ⇒ 明文约 84 字节，**装不下五组凭据**（同形状实测约 346 字节），
+    所以这份即使解开也要重录 —— 别在这份上继续花时间。
 
 下一轮（续293）：
 - [ ] 无必须项；密文搬来后重启 GUI，核一眼任务日志里那句「[osint] FOFA 未配置…」是否消失

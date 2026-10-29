@@ -3,6 +3,72 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续293（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：`--force-overwrite` 死路修复 + 解锁来源说出哪一份文件
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+### 背景
+
+主理人把 Windows 上的凭据放成 `config/config`（**标签行 + 值行成对**，不是 YAML），并说「不用备份，
+反正也解不开」「你搞完把 config 清空」「口令就用主理人给的那句」（值不落任何文本）。重录这条路上撞出两处真缺陷。
+
+### 缺陷一：`--force-overwrite` 在我正在用的形状下永远走不到（现场 rc=1 就是证据）
+
+`cli/run_keys.py::_do_encrypt` 的合并分支里，第 129 行 `old = args.passphrase or _ask(...)`：非交互时
+`args.passphrase` 与 `phrase` 是**同一个值**（口令只有那一个来源），于是 `if old:` 成立 → 拿同一句口令
+再解一次 → 必然失败 → `return 1`。而真正认 `--force-overwrite` 的那一段在 `else:` 里，**只有交互时直接
+回车**（`old == ""`）才进得去。后果是：`--help` 那句「现有密文解不开时仍用明文整份覆盖」和现场提示
+「要继续就用 --force-overwrite」都指了一条走不通的路 —— 我带上了旗标，它仍然回「已中止（什么都没写）」。
+这与 §6.2 第十六起同源（文案与实现漂开），只是这次漂的是**出路**而不是原因。
+
+修法一行：`if old == phrase: old = ""` —— 同一句口令再试一次没有信息量，让它落到真正处理该旗标的那一档。
+安全边界一条没松：不带旗标时照旧拒写，且现有密文**逐字节不动**、明文不删。
+
+### 缺陷二：续292 之后「口令来源：file」不再是事实
+
+两档候选并存时，横幅那句只说 `file` 不说**哪一份**，而「这台机器到底靠哪份文件解锁的」恰是查凭据问题
+时唯一要紧的信息（§5.19）。补 `_STATE["passfile"]`，由 `file_passphrase_detail()` 供值，`unlock_notice()`
+拼一次；`source` 的取值契约一字未动，`[8bt]` 那批 `source == "file"` 断言原样绿。
+本机横幅实测输出：`[+] 凭据密文已解锁（口令来源：file · config/keys-pass），第三方情报源按已配置的凭据工作`。
+
+### 实测数字
+
+- 凭据重录：新密文 **557 字节**（口令＝本机 `config/keys-pass` 里那句，值不落文本；PBKDF2-HMAC-SHA256 60 万次 + AES-256-GCM），
+  解出两组四字段 `github(token, push_token)` / `fofa(email, key)`；`--verify` 那句：
+  「口令正确，可解开 keys.enc.yaml（405 字符）…fofa(已填:email,key) github(已填:push_token,token)」；
+  `--status`：加密文件存在 True / 已解锁 True / **明文文件仍在 False**（`--shred` 在自校验通过后才删）。
+- 旧那份 147 字节按主理人指示**不备份、整份覆盖**（覆盖前逐行核过它确实解不开，内容不可达）。
+- 主理人放的明文 `config/config`（279 字节）已删除；删除前先确认它是 `?? config/config`
+  ——**未跟踪但也没被 .gitignore 覆盖**，一句 `git add -A` 就会把明文送进公开仓库（本轮没发生）。
+- 权限：`keys.enc.yaml` 落盘时是 0644，已 `chmod 600`；`keys-pass` 0600；`git ls-files` 里凭据/口令文件名 = 0。
+- 新组 `[293]`：`--only 293` 一条 ok；`--only 2c,8f,8bt,292` 四条 ok（改动没动到 source 契约）。
+- 行尾：`cli/run_keys.py` / `scanner/keystore.py` 整份 100% LF ⇒ 用 Edit；`tests/smoke.py` 混排 ⇒ 字节级补丁；
+  两式 numstat 逐文件一致：AGENTS.md 2/2、CHANGELOG_AI.md 53/0、cli/run_keys.py 6/0、scanner/keystore.py 12/5、tests/smoke.py 93/0、todo.txt 46/0；AGENTS.md 裸 CR 复查 **0 处**。
+
+### 同轮补记：又放了一个 `config/111`（VirusTotal key），这次走的是合并那一路
+
+- 形状判据：68 字节两行，标签 `vt` + 一个 **64 位全小写十六进制** ⇒ VirusTotal 公共 API key
+  （对照：Shodan 32 位、Quake ≈40 位带 `-`）。同样**未跟踪也没被 .gitignore 覆盖** —— 一小时内第二次。
+- 临时明文只写 virustotal 一组，`--encrypt --shred` 时现有密文能被同一句口令打开 ⇒ 走
+  「合并来源：旧密文（同一个口令解开）」那一支；新密文 **444 字节**，`--verify` 复验
+  `fofa(已填:email,key) github(已填:push_token,token) virustotal(已填:key)` —— 旧组一条没丢。
+  `--shred` 自校验后删明文，`config/111` 已删；控制台重启后横幅「凭据密文已解锁（口令来源：file · config/keys-pass）」，
+  `/login` HTTP 200。
+- 一处**别误读**：557 → 444 字节不是丢数据。合并后的文件不带注释（脚本当场说了「明文里的注释不保留」），
+  而 557 那一版含我写的两行中文注释。看 `--verify` 的组名与字段名，别看字节数。
+- 新立待办：给 `tools/sync_check.py --strict` 加「仓库内有未跟踪且未被忽略的文件 ⇒ 判红」——
+  逐条补 .gitignore 追不上随手起的名字，而一次 `git add -A` 就够出事。
+### 还缺什么（照实列，别当成已完成）
+
+- 凭据组缺口：`shodan.key` / `quake.key` / `virustotal.key` / `gitlab.token` / `icp.api_key`。
+  `virustotal` 随包**开着** ⇒ 现在每次 subdomain 阶段会照实跳过并打一行原因；其余三家出厂关 ⇒ 不配不影响默认任务。
+- 外部工具缺口：`fscan`（端口扫描回退 nmap→内置）、`dirmap`（深扫走内置分层字典）、无头浏览器
+  （截图与 PDF 导出如实跳过）、CJK 字体。已就位：`subfinder` / `httpx` / `puredns` / `massdns` / `afrog` / `nmap`。
+- FOFA 配额：`fofa.enabled` 随包 = true ⇒ **从本轮起默认任务会真查 FOFA 并花配额**（三路反查 + 子域名上限 100）。
+- push 通路：`credential.helper` 空、仓库外 git 助手不存在 ⇒ 本地 3 个提交待推，`github.push_token` 已在密文里，
+  走 §2 那条「只进请求头」的口径可推，等主理人点头。
+- token 轮换只能主理人在各家控制台做；那两个 GitHub 令牌与 FOFA key 曾以明文存在于桌面目录与本会话。
+
 ## 续292（2026-10-28，WorkBuddy · Qoder-Agent 远端 Linux）：口令文件第二档 `config/keys-pass` + 「仓库内就必须被 .gitignore 覆盖」那道闸
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
@@ -83,6 +149,24 @@
   运行期只核 `.gitignore` 有没有那一行；有人强制加进索引后仍能提交，要到下一次全量门禁才红。
 - 本轮没验的：Windows 侧（无 POSIX 权限位，只查存在与非空，NTFS ACL 不猜）与真正拿这份口令
   解开旧密文（`keys.enc.yaml` 还没搬过来，端到端解锁留到主理人搬完之后）。
+
+### 2026-10-29 追加实测（同一轮，密文搬运）
+
+- 主理人把 Windows 那份 `config/keys.enc.yaml` 放到本机：147 字节、魔数 19 字节逐字节对得上、
+  salt 16 / nonce 12 齐全、无 U+FFFD、无 `\r`、末尾未被追加换行 ⇒ **信封形状是好的**；落盘时是 0644，
+  已 `chmod 600`；`git check-ignore` 命中 `.gitignore:17`，`git status` 干净。
+- 解密**失败**：`口令不对或文件已损坏`。为定位做了三件排除法：
+  ① 本机自测同口令 round-trip ⇒ **通过**（链路没坏，`cryptography` 正常）；
+  ② `git log -S` 查 `_KDF_ITERS`/`_SALT_LEN`/`_NONCE_LEN`/`CTFSCANNER-KEYS-V1` ⇒ 四个常量只出现在续98
+     那一次提交 ⇒ **不是格式换代导致旧密文读不了**；
+  ③ 按主理人提的「空格」假设试 8 种口令形状（那句口令本身、前后加空格、加 `\n`、加 `\r\n`、加 `\t`、全大写、
+     `ctfscanner `），口令只在内存里比对、不进 argv 不落文件 ⇒ **8 种全失败**（1.7 秒）。
+- 顺带挖出一条实现事实（写进待办）：`_read_passphrase_file` 会 `.strip()`，所以**首尾带空格的口令
+  永远走不了文件档** —— 这个 strip 是为了容忍尾随换行，不是可有可无的装饰。
+- 分不开的原因：认证加密下「口令错」「改 1 bit」「少 1 字节」报的是同一句话（三条都在本机实测过），
+  所以我不假装能区分；交给主理人的判据是比对 Windows 那份的 `Length` 与 `SHA256`。
+- 容量这条已经可以定死：147 − 63 固定开销 − 16 tag ⇒ 明文约 **84 字节**，而五组凭据同形状实测约
+  **346 字节** ⇒ 这份即使解开也缺 FOFA/Shodan/Quake/推送令牌，结论是**重录**而不是继续考古。
 
 ## 续291（2026-10-28，WorkBuddy · DeepSeek-V4.1-Flash）：服务器迁移盘点 + 记忆固化 + 干净克隆可用性
 

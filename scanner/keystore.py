@@ -69,7 +69,9 @@ _KDF_ITERS = 600_000      # PBKDF2-HMAC-SHA256；启动解一次，成本 ~0.3s 
 _KEY_LEN = 32
 
 # 进程内缓存：口令只在启动时输一次，之后所有 load_settings() 复用同一份明文。
-_STATE = {"unlocked": False, "data": None, "reason": "", "source": ""}
+# `passfile` 只在 source=="file" 时有值：续292 起候选有两档，"来源：file" 已经说不清是
+# **哪一份**解开的，而"这台机器到底靠哪句口令、哪份文件解锁的"恰是查凭据问题时唯一要紧的那件事（续293）。
+_STATE = {"unlocked": False, "data": None, "reason": "", "source": "", "passfile": ""}
 
 
 def _resolve_passphrase(disp):
@@ -419,8 +421,12 @@ def lock_notice(reason=None):
 def unlock_notice(source):
     """"已经解开了"那句的唯一产地 —— 此前只有**锁着**才出声，解锁成功全程静默，
     于是"这台机器到底用哪一档口令解开的"没人看得见（续162：主理人找 FOFA 时就是因为读不到这个状态）。
+
+    续292 起文件档有两份候选，所以来源是 `file` 时必须把**是哪一份**也说出口（`passfile`），
+    否则"来源：file"这句话在两档并存下不再等于事实（§5.19）。
     """
-    return f"凭据密文已解锁（口令来源：{source or '未知'}），第三方情报源按已配置的凭据工作"
+    extra = f" · {_STATE['passfile']}" if (source == "file" and _STATE.get("passfile")) else ""
+    return f"凭据密文已解锁（口令来源：{source or '未知'}{extra}），第三方情报源按已配置的凭据工作"
 
 
 def unlock(passphrase=None, path=None, allow_prompt=None):
@@ -446,9 +452,10 @@ def unlock(passphrase=None, path=None, allow_prompt=None):
     given = passphrase if passphrase else os.environ.get(ENV_PASSPHRASE, "")
     source = "arg" if passphrase else ("env" if given else "")
     _file_why = ""
+    _file_from = ""
     if not given:
         # 口令文件档（续162 立、续292 起有两份候选）：它排在"问不问"之前，所以关掉询问的部署也解得开
-        given, _file_why = file_passphrase()
+        given, _file_why, _file_from = file_passphrase_detail()
         if given:
             source = "file"
     if not given and not allow_prompt:
@@ -477,7 +484,7 @@ def unlock(passphrase=None, path=None, allow_prompt=None):
     except Exception as e:
         _STATE.update(unlocked=False, data=None, source=source, reason=f"解密成功但 YAML 解析失败：{e}")
         return {"ok": False, "reason": _STATE["reason"], "source": source}
-    _STATE.update(unlocked=True, data=data, source=source, reason="")
+    _STATE.update(unlocked=True, data=data, source=source, reason="", passfile=_file_from)
     return {"ok": True, "reason": "", "source": source}
 
 
@@ -499,7 +506,7 @@ def status(path=None):
 
 def reset():
     """测试与"换口令后重载"用：清掉进程内明文缓存。"""
-    _STATE.update(unlocked=False, data=None, reason="", source="")
+    _STATE.update(unlocked=False, data=None, reason="", source="", passfile="")
 
 
 def mask(value):

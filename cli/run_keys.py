@@ -128,6 +128,12 @@ def _do_encrypt(args, change=False):
         if back is None:
             old = args.passphrase or _ask("旧口令（现有密文与新口令不同才能解开它；"
                                           "直接回车＝不合并，用明文整份覆盖）：") or ""
+            if old == phrase:
+                # 非交互时 args.passphrase 与 phrase 是同一个值（`--passphrase` / 环境变量只有一个来源），
+                # 拿同一句口令再试一次只会得到同一个"解不开"，然后卡在下面 return 1 ——
+                # 于是 --help 与那句提示里承诺的 `--force-overwrite` **永远走不到**（续293 实测撞出）。
+                # 当成"没有另一句旧口令"，让它落到真正认这个旗标的那一档。
+                old = ""
             if old:
                 back, why2 = keystore.decrypt_blob(dst.read_bytes(), old)
                 if back is None:

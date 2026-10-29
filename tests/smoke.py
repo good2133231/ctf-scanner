@@ -32836,6 +32836,99 @@ expression: r0()
     print("[292] 续292 ok: 口令文件两档候选（仓库内 config/keys-pass 为迁移加）| 落在仓库内必须被 .gitignore "
           "精确覆盖，否则拒读（摘闸变异立刻采纳=判据有区分度）| 0600/非空两守卫逐个仍挡 | 相对形按 BASE_DIR 折算"
           "不按 CWD | unlock_howto 现取档位 | git ls-files 里零个口令/凭据文件名")
+    # ------------------------------------------------------------------ [293]
+    # 续293：两处**实测撞出来**的缺陷各钉一条。
+    #  ① cli/run_keys.py 的 `--force-overwrite` 在"非交互 + 用 --passphrase/环境变量喂口令"这一形状下
+    #     **永远走不到**：`old = args.passphrase` 与 `phrase` 是同一个值，拿它再试一次解密必然又失败，
+    #     于是卡在 `return 1` —— 而 `--help` 与那句提示都明说这个旗标能用（§6.2 第十六起同族：
+    #     文案指了一条走不通的路）。本轮就是现场撞上的：旧代码 rc=1、什么都没写。
+    #  ② 续292 加第二档口令文件后，横幅那句「口令来源：file」不再等于事实 —— 两档并存时它没说是
+    #     **哪一份**解开的（§5.19）。修法是 `_STATE["passfile"]` + `unlock_notice()` 把它说出口，
+    #     而 `source` 的取值契约一字未动（`[8bt]` 那批断言仍然认 "file"）。
+    import subprocess as _sp293
+    import scanner.keystore as _ks293
+    import yaml as _y293
+    _dir293 = Path(tempfile.mkdtemp(prefix="smoke-293", dir=str(ROOT / "logs")))
+    _P_OLD, _P_NEW = "p293-old-phrase", "p293-new-phrase"
+    try:
+        # ---- ① 夹具：现有密文是"另一句口令"产的，新口令解不开它 ----
+        _dst293 = _dir293 / "keys.enc.yaml"
+        _dst293.write_bytes(_ks293.encrypt_text(
+            _y293.safe_dump({"shodan": {"key": "OLD-ONLY-IN-CIPHERTEXT"}}, sort_keys=False), _P_OLD))
+        _src293 = _dir293 / "keys.yaml"
+        _src293.write_text(_y293.safe_dump({"github": {"token": "FROM-PLAINTEXT"}}, sort_keys=False),
+                           encoding="utf-8")
+        _bak293 = _dst293.read_bytes()
+        _env293 = dict(os.environ)
+        _env293[_ks293.ENV_PASSPHRASE] = _P_NEW
+        _env293.pop("CTFSCANNER_DB", None)
+
+        def _run293(extra):
+            cmd = [sys.executable, str(ROOT / "cli" / "run_keys.py"), "--encrypt",
+                   "--src", str(_src293), "--dst", str(_dst293)] + extra
+            r = _sp293.run(cmd, cwd=str(ROOT), env=_env293, capture_output=True, text=True, timeout=120)
+            return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+        # 反向（先跑，保住"没带旗标就绝不覆盖"那条安全边界）：rc≠0、密文一个字节没动、明文还在
+        _src293.write_text(_y293.safe_dump({"github": {"token": "FROM-PLAINTEXT"}}, sort_keys=False),
+                           encoding="utf-8")
+        _rc293, _out293 = _run293([])
+        assert _rc293 != 0, f"不带 --force-overwrite 却写成功了（那才是真丢数据）：{_out293[-300:]}"
+        assert _dst293.read_bytes() == _bak293, "拒绝覆盖时也必须一个字节都不动现有密文"
+        assert _src293.exists(), "中止时不许把明文删掉（--shred 没带，本来也不该删）"
+        assert "--force-overwrite" in _out293, f"拒写时要把出路说出口（指到真能用的旗标）：{_out293[-300:]}"
+
+        # 正面（这条**在旧代码上必红** —— 本轮实测旧行为就是 rc=1、什么都没写）：
+        # 带旗标 ⇒ rc=0、密文被新口令整份替掉、旧组按"不合并"让位（明说，不静默）
+        _src293.write_text(_y293.safe_dump({"github": {"token": "FROM-PLAINTEXT"}}, sort_keys=False),
+                           encoding="utf-8")
+        _rc293b, _out293b = _run293(["--force-overwrite", "--shred"])
+        assert _rc293b == 0, f"--force-overwrite 仍走不到（同一句口令当旧口令再试的旧死路）：{_out293b[-300:]}"
+        _txt293, _why293 = _ks293.decrypt_blob(_dst293.read_bytes(), _P_NEW)
+        assert _txt293 is not None, f"新密文该能被新口令解开：{_why293}"
+        _got293 = _ks293._parse(_txt293)
+        assert list(_got293) == ["github"], f"覆盖档就该以明文为准（旧组解不开本来就没法保），实得 {list(_got293)}"
+        assert not _src293.exists(), "--shred 带了就该在自校验通过后把明文删掉"
+
+        # ---- ② 解锁来源要说得出是哪一份文件（source 契约不动）----
+        _enc293 = _dir293 / "notice.enc.yaml"
+        _enc293.write_bytes(_ks293.encrypt_text(
+            _y293.safe_dump({"fofa": {"email": "a@b.test", "key": "K"}}, sort_keys=False), _P_NEW))
+        _pp293 = _dir293 / "keys-pass"
+        _pp293.write_text(_P_NEW, encoding="utf-8")
+        _pp293.chmod(0o600)
+        _old_c293 = (_ks293.PASSPHRASE_FILE, _ks293.PASSPHRASE_FILE_REPO)
+        _old_e293 = os.environ.get(_ks293.ENV_PASSPHRASE, "")
+        try:
+            os.environ.pop(_ks293.ENV_PASSPHRASE, None)
+            _ks293.PASSPHRASE_FILE = "~/no-such-keys-pass-293"
+            _ks293.PASSPHRASE_FILE_REPO = str(_pp293)          # 仓库外沙箱绝对路径，仍走同一套守卫
+            _ks293.reset()
+            _r293 = _ks293.unlock(path=_enc293, allow_prompt=False)
+            assert _r293["ok"] and _r293["source"] == "file", f"契约变了（source 仍须是 file）：{_r293}"
+            _n293 = _ks293.unlock_notice(_r293["source"])
+            assert str(_pp293) in _n293, f"横幅没说出是哪一份文件（两档并存时「来源：file」不是事实）：{_n293}"
+            assert _P_NEW not in _n293, f"文案漏出口令值：{_n293}"
+            # 跟着档位变（§5.19 的判据形状）：换一档来源，那句话必须跟着换
+            _ks293.reset()
+            _ks293.PASSPHRASE_FILE = str(_pp293)
+            _ks293.PASSPHRASE_FILE_REPO = "~/no-such-keys-pass-293-b"
+            _r293b = _ks293.unlock(path=_enc293, allow_prompt=False)
+            assert _r293b["ok"], f"换一档来源后应当仍能解锁：{_r293b}"
+            _n293b = _ks293.unlock_notice(_r293b["source"])
+            assert str(_pp293) in _n293b, f"文案没跟着档位变（换一份文件来源，那句必须跟着换）：{_n293b}"
+        finally:
+            _ks293.PASSPHRASE_FILE, _ks293.PASSPHRASE_FILE_REPO = _old_c293
+            if _old_e293:
+                os.environ[_ks293.ENV_PASSPHRASE] = _old_e293
+            else:
+                os.environ.pop(_ks293.ENV_PASSPHRASE, None)
+            _ks293.reset()
+    finally:
+        shutil.rmtree(_dir293, ignore_errors=False)
+    print("[293] 续293 ok: --force-overwrite 在非交互+同口令形状下真的生效（旧代码此处 rc=1，正面断言是它的证伪）| "
+          "不带旗标仍拒覆盖且密文一字节不动 | --shred 自校验后才删明文 | 解锁横幅说得出是哪一份口令文件、"
+          "不含口令值、source 契约仍是 file")
     print("SMOKE PASS")
 
 
