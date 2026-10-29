@@ -4542,6 +4542,41 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续294（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：五段配置注释在替 enabled:true 说谎（§252 复发）
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+主理人问「multileak 是什么，有网站吗？我怎么不记得我配置过」，又问「留着需要我给 key 吗」。
+顺着这句话查下去撞见真问题：随包 `config/settings.yaml` 里**五段**的段头注释写着「默认关」，
+而下面一行就是 `enabled: true` —— `github` / `intel` / `heuristic` / `ctlog` / `multileak`。
+这就是 §252（当年 dirscan 注释烂了 12 天）立的规矩在同一批段上第二次漂，而且后果是具体的：
+主理人读了注释，得出「我没配过、它没开」，而那几段其实每轮任务都在跑（§5.19「讲运行期能力的话
+必须跟着配置走，因为它会改变读者的行为」的又一实例）。
+
+- [x] T1【答案】multileak = 多平台公开代码检索（`scanner/multileak.py`），provider 默认 `grepapp`
+  ⇒ 网站是 **https://grep.app**，**免 key**、只读 GET；另一档 `gitlab` 走 https://gitlab.com 的 Search API
+  （匿名 401 ⇒ 要只读 PAT，写在 keys.gitlab.token；自建实例改 `gitlab_base`）。产物只进 `leads` 表、
+  只落元数据（仓库/路径/规则名），不落文件内容，`auth=False`。**所以留着不需要主理人给任何 key**。
+  「没配过」也是对的：`DEFAULTS` 关，是随仓库分发那份文件开的（git 史 `275bd5a`，2026-10-10 续149~151 那批；
+  AGENTS §4 记着续159-附 起这批段改成开）。
+- [x] T2【改注释】五段段头统一成「代码 DEFAULTS 关；**随仓库分发的这一份是开**」；multileak 那句
+  同时写明「provider 默认 grepapp = https://grep.app，免 key，所以这一段不需要任何凭据就在跑」。
+  `config/settings.yaml` 实测纯 CRLF（596/596）⇒ 只做行内替换，改完仍是 596/596。
+- [x] T3【新组 [294]】把这条钉成机器判据：八段（上面五段 + dirscan/screenshot/cert）逐段比对
+  **段头第一行注释**与该段第一个 `enabled:` 的值；带自证夹具（造的坏注释必须被抓、不存在的段给 (None,'')）；
+  判据口径改过两轮，两轮都是**我自己的误报**（这值得记下来）：① 整块子串匹配 ⇒ dirscan 段里
+  「目录递归（深扫专用，默认关）」被当成撒谎；② 收窄到「段头到 enabled: 之间」也不够 —— 那句
+  本来就坐在 enabled: 之前。最终口径＝**只看段头第一行**（那才是这段的默认档声明）。
+  另一处修正：dirscan 段头写的是 markdown 加粗 `默认**开启且默认深扫**`，比对要先去掉 `*`
+  —— 纯子串匹配又一次差点把「注释其实正确」的段判成坏。
+- [x] T4【证伪（§6.1）】把 intel 段头注释改回那句「默认关」⇒ [294] 当场红，报的正是
+  「intel：enabled=true 而段头注释说默认关」；还原后绿，settings.yaml 回到 596/596、假话零残留。
+  所以这条闸是有区分度的，不是恒绿的装饰。
+- [x] C1 全量门禁：- **SMOKE PASS**，rc=0，433 秒（组一条不跳，共 364 条组输出行），日志 logs/_smoke294.log；另局部证伪：把 intel 段头改回「默认关」⇒ `--only 294` 当场 rc=1，还原后绿；`--only 252`（§252 原判据）仍绿 ⇒ 新闸是追加不是替换。
+- [x] C2 记忆同步：CHANGELOG 续294 + todo 续294 + AGENTS §2 那条「配置注释」追加本轮（五段与判据口径）。
+
+下一轮（续295）：
+- [ ] 主理人点头：用 push_token 推本地提交；以及 sync_check 那条「未跟踪且未被忽略 ⇒ 判红」要不要做
+
 ## 续293（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：--force-overwrite 死路修复 + 解锁来源说出哪一份文件
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
 

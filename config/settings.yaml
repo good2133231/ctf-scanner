@@ -466,7 +466,7 @@ virustotal:
   limit: 40
   min_interval: 15.0
 ctlog:
-  # 证书透明度（CT）日志在线查询（crt.sh，免 key，默认关）：证书维度记录 + 拓展域名来源
+  # 证书透明度（CT）日志在线查询（crt.sh，免 key；代码 DEFAULTS 关，**随仓库分发的这一份是开**）：证书维度记录 + 拓展域名来源
   enabled: true
   max_domains: 10
   max_records: 50
@@ -477,7 +477,7 @@ blacklist:
   enabled: true
   path: config/blacklist.txt
 intel:
-  # 漏洞情报订阅（默认关）：CISA KEV（免 key）拉回来后与本地指纹保守匹配，只产出线索（leads 表）
+  # 漏洞情报订阅（代码 DEFAULTS 关；**随仓库分发的这一份是开**）：CISA KEV（免 key）拉回来后与本地指纹保守匹配，只产出线索（leads 表）
   enabled: true
   source: kev
   url: ''
@@ -485,11 +485,11 @@ intel:
   timeout: 20
   max_leads: 50
 heuristic:
-  # 启发式候选发现（默认关）：对已收集数据做差分/异常聚合，不发请求，只产出线索（leads 表）
+  # 启发式候选发现（代码 DEFAULTS 关；**随仓库分发的这一份是开**）：对已收集数据做差分/异常聚合，不发请求，只产出线索（leads 表）
   enabled: true
   max_leads: 50
 github:
-  # GitHub 泄露检索（默认关）：拿目标注册域去 GitHub 公开代码里搜命中，只产出线索（leads 表）。
+  # GitHub 泄露检索（代码 DEFAULTS 关；**随仓库分发的这一份是开**，续159-附 主理人选定）：拿目标注册域去 GitHub 公开代码里搜命中，只产出线索（leads 表）。没 token 时零请求。
   # token 不在本文件：填 config/keys.yaml 的 github.token（GUI 不写回、该文件已 gitignore）。
   # 边界见 scanner/github_leak.py 文件头：只落元数据（不保存文件内容）、auth=False、没 token 零请求。
   enabled: true
@@ -502,7 +502,7 @@ github:
   weak_downgrade: true
   relevance_whitelist: []
 multileak:
-  # 多平台公开代码检索（默认关）：GitHub 之外的只读检索源（默认 grepapp 免 key；gitlab 需 keys.gitlab.token），只产出线索（leads 表）。
+  # 多平台公开代码检索（代码 DEFAULTS 关；**随仓库分发的这一份是开**）：GitHub 之外的只读检索源（provider 默认 grepapp = https://grep.app，**免 key**，所以这一段不需要任何凭据就在跑；只有把 provider 改成 gitlab 才需要 keys.gitlab.token），只产出线索（leads 表）。
   # 边界见 scanner/multileak.py 文件头：只落元数据（不保存文件内容）、auth=False、请求头不带任务登录态。
   enabled: true
   provider: grepapp

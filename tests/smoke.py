@@ -32929,6 +32929,61 @@ expression: r0()
     print("[293] 续293 ok: --force-overwrite 在非交互+同口令形状下真的生效（旧代码此处 rc=1，正面断言是它的证伪）| "
           "不带旗标仍拒覆盖且密文一字节不动 | --shred 自校验后才删明文 | 解锁横幅说得出是哪一份口令文件、"
           "不含口令值、source 契约仍是 file")
+    # ------------------------------------------------------------------ [294]
+    # 续294：随包 settings.yaml 里五段注释写「默认关」而该段 enabled: true —— §252 那条
+    # 「配置注释不许替行为说谎」在同一批段上第二次漂（当年是 dirscan 烂了 12 天）。
+    # 判据**只看段头第一行注释**（那才是这段的默认档声明）。两版误报都实测过：整块子串匹配、
+    # 以及"段头到 enabled: 之间全部注释"—— dirscan 段里「递归（默认关，开则 +215 请求）」就坐在
+    # enabled: 之前，第二版照样把它判成撒谎。
+    # dirscan 段里「目录递归（深扫专用，默认关）」被误判成撒谎（本机实测），而 dirscan 的段头
+    # 明明写着「默认开启且默认深扫」。收窄后 §252 的原判据一个字不动，只加这一道新闸。
+    import re as _re294
+    from scanner import config as _cfg294
+
+    def _seg_head_294(name, txt):
+        """返回 (该段第一个 enabled 的值, 段头紧邻注释拼成的一句)；段不存在返回 (None, "")。"""
+        m = _re294.search(r"^%s:\r?\n((?:[ \t].*\r?\n?)+)" % _re294.escape(name), txt, _re294.M)
+        if not m:
+            return None, ""
+        body = m.group(1)
+        en = _re294.search(r"^\s+enabled:\s*(\S+)", body, _re294.M)
+        _first = ""
+        for _ln in body.splitlines():
+            _st = _ln.strip()
+            if _st.startswith("#"):
+                _first = _st.lstrip("#").strip()
+                break
+        return (en.group(1) if en else None), _first
+
+    _txt294 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+    _lie294 = []
+    _seen294 = 0
+    for _sec294 in ("github", "intel", "heuristic", "ctlog", "multileak", "dirscan", "screenshot", "cert"):
+        _v294, _c294 = _seg_head_294(_sec294, _txt294)
+        if _v294 is None:
+            continue
+        _seen294 += 1
+        _on = _v294.strip().lower() == "true"
+        if _on and "默认关" in _c294:
+            _lie294.append("%s：enabled=true 而段头注释说默认关 —— %s" % (_sec294, _c294[:56]))
+        if (not _on) and "默认开" in _c294 and "默认开启" not in _c294:
+            _lie294.append("%s：enabled=false 而段头注释说默认开 —— %s" % (_sec294, _c294[:56]))
+    assert _seen294 >= 6, "只核到 %d 段，判据近乎空跑" % _seen294
+    assert not _lie294, "配置注释在替代码说谎（§252）：" + " ｜ ".join(_lie294)
+    # 判据先自证（§6.1）：造的坏注释必须被抓、取样函数本身不能恒返回 None
+    _bad294 = "github:\n  # GitHub 泄露检索（默认关）：只产出线索\n  enabled: true\n"
+    _bv294, _bc294 = _seg_head_294("github", _bad294)
+    assert _bv294 == "true" and "默认关" in _bc294, "取样函数坏了 ⇒ 上面那条断言是空写"
+    assert _seg_head_294("nosuchsection294", _txt294) == (None, ""), "不存在的段应当给 (None, '')"
+    # dirscan 段头那句档位描述必须仍然在（§252 的原判据不被我这条替换掉）
+    _vd294, _cd294 = _seg_head_294("dirscan", _txt294)
+    assert _vd294 == "true" and "默认开启且默认深扫" in _cd294.replace("*", ""), "dirscan 段头口径被改掉：%s" % (_cd294[:56],)
+    # 主理人这次问的就是「multileak 要不要 key」—— 答案必须写在段头上，别让人去翻代码
+    _vm294, _cm294 = _seg_head_294("multileak", _txt294)
+    assert "免 key" in _cm294 and "grepapp" in _cm294.lower(), "multileak 段头没交代免 key：%s" % (_cm294[:56],)
+    print("[294] 续294 ok: 八段段头注释与 enabled 逐段对齐（五段假话已改）｜判据只看段头第一行注释，"
+          "dirscan 段内另一句「递归默认关」不误伤｜自证夹具抓得到构造的坏注释、不存在的段给 (None,'')｜"
+          "multileak 段头写明 grep.app 免 key（所以留着不需要任何凭据）")
     print("SMOKE PASS")
 
 

@@ -3,6 +3,51 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续294（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：五段配置注释替 `enabled: true` 说谎（§252 复发）+ 新闸 [294]
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+### 起因（主理人的两句问话）
+
+「multileak 是什么，有网站吗？我怎么不记得我配置过」与「留着的话需要我来提供 key 吗」。
+答：multileak 是 `scanner/multileak.py` 的多平台公开代码检索，provider 默认 `grepapp` ⇒
+**https://grep.app**，免 key、只读；另一档 `gitlab`（https://gitlab.com Search API）才需要只读 PAT。
+所以**留着不需要任何凭据**。而「没配过」这句也没错：`DEFAULTS` 是关的，是随仓库分发的
+`config/settings.yaml` 开着（git 史：`275bd5a`，2026-10-10 续149~151 那一批）。
+
+顺着查就撞见真问题：文件里五段的段头注释写着「默认关」，而下一行就是 `enabled: true` ——
+`github` / `intel` / `heuristic` / `ctlog` / `multileak`。§252 那条规矩（dirscan 注释当年烂 12 天）
+在同一批段上第二次漂，后果具体：读注释的人以为这几路没开，而它们每轮任务都在跑。
+
+### 改动
+
+- `config/settings.yaml`（5 处行内替换，纯 CRLF 596/596 改后不变）：段头统一成「代码 DEFAULTS 关；
+  **随仓库分发的这一份是开**」；multileak 那句额外写明 provider 默认 grepapp = https://grep.app 免 key，
+  只有切 gitlab 才要 `keys.gitlab.token`。
+- `tests/smoke.py` 新组 `[294]`：八段（上面五段 + `dirscan` / `screenshot` / `cert`）逐段比对
+  **段头第一行注释**与该段第一个 `enabled:` 的值（true 而注释说默认关 ⇒ 红；false 而说默认开 ⇒ 红）。
+  取样函数自带两条自证：造的坏注释必须被抓、不存在的段必须给 (None, '')。
+
+### 本轮最值钱的一条：判据写错了两轮，两轮都是我自己的误报
+
+- 第一版用整块文本子串匹配 ⇒ dirscan 被报「撒谎」，而它段头明明写「默认开启且默认深扫」；
+  撞词的是段内另一句「目录递归（深扫专用，**默认关**）」—— 那是**另一个键**的默认档。
+- 第二版收窄到「段头到 enabled: 之间的全部注释」仍然误报：那句「递归默认关」本来就坐在 `enabled:` 之前。
+- 最终口径＝只看段头**第一行**（那才是这段的默认档声明）。
+- 第三处小修正：段头是 markdown 加粗 `默认**开启且默认深扫**`，比对要先 `replace("*", "")`，
+  否则正面断言反过来把正确的注释判成被改掉。
+- 结论（写给以后）：写「扫描文本找矛盾」这类判据时，**第一版必须拿去跑已知正确的样本**，
+  误报清单比漏报清单更早暴露判据口径错在哪一段（本轮三次都是这么现形的）。
+
+### 实测
+
+- 证伪（§6.1）：把 intel 段头改回「默认关」⇒ `[294]` 当场红，报文正是「intel：enabled=true 而段头注释说
+  默认关 —— 漏洞情报订阅（默认关）：CISA KEV…」；`--only` 退出码 1；还原后绿，settings.yaml 回到
+  596/596、假话句子零残留。
+- 局部复跑：`--only 252`（dirscan 那条原判据）仍绿，新闸是**追加**不是替换；`--only 8at` 单跑 NameError
+  `gui_app` —— 那是 §6 里写过的 `--only` 依赖前组夹具，不是回归。
+- 全量门禁：`tests/smoke.py` **SMOKE PASS**，rc=0，433 秒，364 条组输出行一条不跳，日志 `logs/_smoke294.log`。
+
 ## 续293（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：`--force-overwrite` 死路修复 + 解锁来源说出哪一份文件
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
