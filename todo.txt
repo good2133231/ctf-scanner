@@ -4582,7 +4582,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 
 下一轮：
 - [ ] 推送仍被挡：两把 fine-grained PAT 都没有 `Contents: Read and write`（403，认证是通的）；
-      要么改 token 权限，要么加一把勾了 Allow write access 的 Deploy key。本地已攒 7 个提交。
+      要么改 token 权限，要么加一把勾了 Allow write access 的 Deploy key。未推的提交数以 `git status -sb` 的 ahead 为准 —— 抄进记忆里就一定会漂（本轮写完这句又多了一个提交，正好自证）。
 - [ ] `screenshot.enabled` 要不要随包默认开（等主理人点单；开 = 每个任务起无头 Chrome，
       并要同步 `[271]` 那张"已实现但没默认开"的表）
 - [ ] 旧服务器 `data/scanner.db`（15 任务 / 196 子域名 / 53 漏洞）仍未迁到本机；仓库外那份
