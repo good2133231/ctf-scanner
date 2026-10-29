@@ -13,8 +13,12 @@ venv/
 # 第三方凭据（FOFA/Shodan 等，绝不入库）
 config/settings.json
 config/keys.yaml
-# 续98：口令加密后的凭据文件同样绝不入库（里面是密文，但形态本身就是敏感信息）
-config/keys.enc.yaml
+# 续295 改档（主理人 2026-10-29 点单）：**密文进仓库，口令永远不进**。
+# `config/keys.enc.yaml` 自此随仓库走 —— 换机器 clone 就有凭据，不必再手工搬那 444 字节。
+# 它的强度**全押在口令上**，所以两条防线同时在：`config/keys-pass`（口令值）仍被下面那条精确
+# 忽略、且门禁 [295] 会扫全部被跟踪文件确认口令值一处都没有（含 token 形的 sha256 比对）。
+# 要撤回这一档：把上面那句改回忽略 + `git rm --cached config/keys.enc.yaml`，并**轮换令牌**——
+# git 历史不会忘，已经推出去的那份密文永远可读，能挡住别人的只剩口令。
 # 续292：整机迁移用的同机口令档（`config/keys-pass`，0600）。红线与上面两条同一条，而且它更硬：
 # 这个文件里躺的是**能解开全部第三方 key 的那句口令**，一旦进公开仓库，`keys.enc.yaml` 的
 # AES-256-GCM 立刻退化成混淆。`keystore._reject_repo_without_ignore()` 会核对这一行在不在 ——

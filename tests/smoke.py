@@ -32815,7 +32815,9 @@ expression: r0()
             "补法文案把档位写死了：加一档而文案不动 = §5.19 那句老毛病"
         assert _PH292 not in _how292 and _SENT292 not in _how292, "文案漏出了口令/凭据值"
         # ⑧ 反 force-add 网：任何口令/凭据文件名都不得出现在**被 git 跟踪**的文件里
-        _names292 = {"keys-pass", "keys.enc.yaml", "keys.yaml", "edge_auth.yaml", "session.secret"}
+        # 续295 起 keys.enc.yaml **允许**入库（主理人决定：密文进仓库、口令永远不进）。
+        # 真正的防线换成了 [295]：被跟踪文件里不得出现 config/keys-pass 的内容。
+        _names292 = {"keys-pass", "keys.yaml", "edge_auth.yaml", "session.secret"}
         _trk292 = _sp292.check_output(["git", "ls-files"], cwd=str(ROOT)).decode("utf-8", "ignore").splitlines()
         _bad292 = [f for f in _trk292 if Path(f).name in _names292]
         assert not _bad292, "这些敏感文件名被 git 跟踪了（公开仓库 = 直接交出去）：%r" % (_bad292,)
@@ -32984,6 +32986,107 @@ expression: r0()
     print("[294] 续294 ok: 八段段头注释与 enabled 逐段对齐（五段假话已改）｜判据只看段头第一行注释，"
           "dirscan 段内另一句「递归默认关」不误伤｜自证夹具抓得到构造的坏注释、不存在的段给 (None,'')｜"
           "multileak 段头写明 grep.app 免 key（所以留着不需要任何凭据）")
+    # ------------------------------------------------------------------ [295]
+    # 续295：三件事一起钉住。
+    #  ① `cli/run_keys.py --change` 的三道"非交互形状下走不通的死路"（本轮实测各撞过一次）：
+    #     旧代码开头无条件要求明文存在 ⇒ 换口令只在还留着明文的那台机器上做得成；
+    #     旧=新同一个 `--passphrase`/环境变量 ⇒ 报着成功却什么都没换（静默空操作）；
+    #     修法是"明文对 --change 可选"+"新口令必须有第二个来源"+"旧=新直接拒绝"。
+    #  ② 主理人 2026-10-29 决定：`config/keys.enc.yaml`（密文）**进仓库**，口令**永远不进**。
+    #     于是这条判据必须跟着改：keys.enc.yaml 现在要在 `git ls-files` 里，
+    #     而 keys-pass / keys.yaml / edge_auth.yaml / session.secret 仍然一个都不许出现。
+    #  ③ 本轮最贵的一条纪律（我自己失手过）：**被跟踪文件里不许出现口令值**。
+    #     我把口令字面值写进过 AGENTS/CHANGELOG/todo 共 8 处，靠 `git grep` 才现形 ——
+    #     写记忆时"顺手记一句口令"是本能，所以这条必须有牙，不能只写在规矩里。
+    import hashlib as _hl295
+    import re as _re295
+    import subprocess as _sp295
+    import scanner.keystore as _ks295
+    _dir295 = Path(tempfile.mkdtemp(prefix="smoke-295", dir=str(ROOT / "logs")))
+    try:
+        # ---- ① --change 的正反两面（全在沙箱，绝不碰本机 config/）----
+        _P1, _P2 = "p295-first-passphrase", "p295-second-passphrase"
+        import yaml as _y295
+        _enc295 = _dir295 / "keys.enc.yaml"
+        _enc295.write_bytes(_ks295.encrypt_text(
+            _y295.safe_dump({"fofa": {"email": "a@b.test", "key": "K1"}}, sort_keys=False), _P1))
+        _cli = str(ROOT / "cli" / "run_keys.py")
+
+        def _run295(args, env_pw, env_new=None):
+            e = dict(os.environ)
+            e[getattr(_ks295, "ENV_PASSPHRASE")] = env_pw
+            if env_new is None:
+                e.pop("CTFSCANNER_KEYS_PASSPHRASE_NEW", None)
+            else:
+                e["CTFSCANNER_KEYS_PASSPHRASE_NEW"] = env_new
+            r = _sp295.run([sys.executable, _cli] + args + ["--dst", str(_enc295),
+                           "--src", str(_dir295 / "no-such-keys.yaml")],
+                           env=e, capture_output=True, text=True, timeout=180, cwd=str(ROOT))
+            return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+        _before295 = _enc295.read_bytes()
+        # 反面一：没有明文 + 只给一个口令来源 ⇒ 必须**拒绝**，而不是静默"以旧口令再加密一次"
+        _rc295, _out295 = _run295(["--change"], _P1)
+        assert _rc295 != 0, f"旧=新时 --change 竟然成功了（那就是静默空操作）：{_out295[-260:]}"
+        assert "同一句" in _out295 or "CTFSCANNER_KEYS_PASSPHRASE_NEW" in _out295, \
+            f"拒绝时必须给得出第二个来源的名字：{_out295[-260:]}"
+        assert _enc295.read_bytes() == _before295, "拒绝时密文一个字节都不许动"
+        # 正面：明文缺席也能换（旧代码在这里直接 return 1「找不到明文凭据文件」），换完旧口令必解不开
+        _rc295b, _out295b = _run295(["--change"], _P1, _P2)
+        assert _rc295b == 0, f"--change 仍走不通（明文缺席那道死路）：{_out295b[-260:]}"
+        _txt295a, _ = _ks295.decrypt_blob(_enc295.read_bytes(), _P2)
+        _txt295b, _ = _ks295.decrypt_blob(_enc295.read_bytes(), _P1)
+        assert _txt295a is not None, "新口令解不开 ⇒ 换口令没真的生效"
+        assert _txt295b is None, "旧口令还解得开 ⇒ 口令根本没换（内容必须跟着新口令走）"
+        assert _ks295._parse(_txt295a)["fofa"]["key"] == "K1", "换口令不许改动内容"
+        # ---- ②③ 仓库侧判据 ----
+        _trk295 = [f for f in _sp295.check_output(["git", "ls-files"], cwd=str(ROOT))
+                   .decode("utf-8", "ignore").splitlines()]
+        assert len(_trk295) > 300, "git ls-files 只有 %d 行，这条判据是空跑" % len(_trk295)
+        assert "config/keys.enc.yaml" in _trk295, \
+            "keys.enc.yaml 没被跟踪 —— 主理人 2026-10-29 选的是「密文进仓库、口令不进」那一档"
+        _must_not = [f for f in _trk295 if Path(f).name in
+                     {"keys-pass", "keys.yaml", "edge_auth.yaml", "session.secret"}]
+        assert not _must_not, f"这些文件被跟踪了（口令/明文/凭据永远不许进仓库）：{_must_not}"
+        # ③ 被跟踪文件里不得出现口令值（只在内存里比对，任何输出都不带它）
+        _pp295 = ROOT / "config" / "keys-pass"
+        _scanned295 = 0
+        if _pp295.exists() and os.name != "nt":
+            _mode295 = _pp295.stat().st_mode & 0o777
+            assert _mode295 == 0o600, f"本机口令文件权限是 {oct(_mode295)}（要求正好 0600）"
+            _sec295 = _pp295.read_text(encoding="utf-8", errors="replace").strip()
+            assert len(_sec295) >= 20, f"口令只有 {len(_sec295)} 位：密文既然进了公开仓库，这一条就是唯一防线"
+            _dig295 = _hl295.sha256(_sec295.encode("utf-8")).hexdigest()
+            _hit295 = []
+            for _f295 in _trk295:
+                _fp = ROOT / _f295
+                try:
+                    _t295 = _fp.read_bytes().decode("utf-8", "ignore")
+                except OSError:
+                    continue
+                _scanned295 += 1
+                if _sec295 in _t295:
+                    _hit295.append(_f295)
+                else:
+                    for _tok in _re295.findall(r"[^\s'\"`,;(){}\[\]<>]{12,}", _t295):
+                        if _hl295.sha256(_tok.encode("utf-8")).hexdigest() == _dig295:
+                            _hit295.append(_f295 + "（token 形）")
+                            break
+            assert _scanned295 > 300, "只扫了 %d 个文件 ⇒ 判据范围不足" % _scanned295
+            assert not _hit295, ("§0 凭据红线：被跟踪文件里出现了口令值（写记忆时顺手记一句就是这一类，"
+                                 "本轮 scrub 过 8 处）：%s" % (_hit295[:6],))
+            # 自证（§6.1）：拿一个已知出现在被跟踪文件里的串走同一条判据，必须命中
+            _probe295 = "CTFSCANNER_KEYS_PASSPHRASE_NEW"
+            assert any(_probe295 in (ROOT / f).read_bytes().decode("utf-8", "ignore") for f in _trk295[:400]), \
+                "扫描判据没牙：连一个已知存在的串都扫不到"
+        else:
+            print("[295] ③ 本次没验到（本机没有 config/keys-pass —— CI / 干净克隆是这种；跳过 ≠ 通过）")
+    finally:
+        shutil.rmtree(_dir295, ignore_errors=False)
+    print("[295] 续295 ok: --change 三道死路（明文可选/旧=新拒绝/换完旧口令必解不开）逐条正反钉住｜"
+          "keys.enc.yaml 已在跟踪清单而 keys-pass/keys.yaml/edge_auth/session.secret 一个都没有｜"
+          "被跟踪文件里零处出现口令值（含 token 形的 sha256 比对），扫描范围 " + str(_scanned295) + " 个文件、"
+          "自证探针抓得到已知串")
     print("SMOKE PASS")
 
 

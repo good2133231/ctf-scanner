@@ -6,7 +6,8 @@
 
 **红线**：
 1. **任何输出都不出现凭据值或口令** —— 状态里只打"某厂商 已填/空"与 `keystore.mask()` 的指纹；
-   口令只从 `getpass`（不回显、不进 shell 历史）或环境变量 `CTFSCANNER_KEYS_PASSPHRASE` 来。
+   口令只从 `getpass`（不回显、不进 shell 历史）或环境变量来：`CTFSCANNER_KEYS_PASSPHRASE`
+   （新建/加密用；`--change` 时它是**旧**口令）与续295 的 `CTFSCANNER_KEYS_PASSPHRASE_NEW`（新口令）。
 2. `--encrypt` 默认**不删明文**，只提示；要删得显式 `--shred`，且删前会**先解密回读校验一次**
    （宁可留两份，也不能出现"密文没验证过就把明文删了"）。
 3. 只写 `config/` 下这两个文件，不碰 `settings.yaml`（GUI「策略配置」页会把 settings 整体写回，
@@ -103,10 +104,20 @@ def _do_encrypt(args, change=False):
     src = Path(args.src)
     dst = Path(args.dst)
     if not src.exists():
-        print(f"[!] 找不到明文凭据文件 {src} —— 没有可加密的东西。")
-        return 1
-    text = src.read_text(encoding="utf-8")
-    plain_new = keystore._parse(text) or {}
+        # 续295：`--change` 的内容来源是**现有密文**（下面 `text = back` 那一步），明文本来就该是可选的
+        # —— 旧代码在这里无条件 return 1，等于"换口令只在还留着明文的那台机器上做得成"，
+        # 而新克隆/已经 --shred 过的机器恰恰就是没有明文的（本轮实测撞出：rc=1「找不到明文凭据文件」）。
+        if not change:
+            print(f"[!] 找不到明文凭据文件 {src} —— 没有可加密的东西。")
+            return 1
+        if not dst.exists():
+            print(f"[!] 既没有明文 {src.name}，也没有密文 {dst.name} —— 无从换口令。")
+            return 1
+        text = ""
+        plain_new = {}
+    else:
+        text = src.read_text(encoding="utf-8")
+        plain_new = keystore._parse(text) or {}
     old = ""
     if change and dst.exists():
         old = args.passphrase or (_ask("旧口令（解现有密文）：") or "")
@@ -117,7 +128,16 @@ def _do_encrypt(args, change=False):
             print(f"[!] 旧口令解不开现有密文，已中止（明文未动）：{why}")
             return 1
         text = back            # 换口令时以现有密文为准，避免用旧明文覆盖新值
-    phrase = args.passphrase or _ask("新凭据口令（至少一次输入不回显）：", confirm=True)
+    # 续295：换口令必须有**第二个**来源。只给一个 `--passphrase` / 环境变量时，旧口令与新口令
+    # 拿到的是同一个值 ⇒ `--change` 会"以旧口令再加密一次"，报着成功却是**静默空操作**
+    # （`_ask` 的注释早就为这一档写过"旧=新=文件里那句"的危险，但非交互那条路没堵）。
+    phrase = getattr(args, "new_passphrase", "") or args.passphrase or _ask(
+        "新凭据口令（至少一次输入不回显）：", confirm=True)
+    if change and phrase and phrase == old:
+        print("[!] 新口令与旧口令是同一句 —— `--change` 什么都不改，已中止（什么都没写）。"
+              f"非交互请给第二个来源：`--new-passphrase '<新口令>'` 或环境变量 {ENV_NEW_PASSPHRASE}"
+              f"（`{keystore.ENV_PASSPHRASE}` 留作**旧口令**）。")
+        return 1
     if not phrase:
         return 1
     # 续162：**合并**而不是整份覆盖。老密文能解开就以它为底（补一组不该抹掉另一组），
@@ -179,6 +199,10 @@ def _do_encrypt(args, change=False):
 
 
 _KDF_HINT = "60 万次迭代"
+# 续295：换口令需要**两个**来源。`CTFSCANNER_KEYS_PASSPHRASE` 是**旧**口令（也是新建/加密时的口令），
+# 第二个来源只用于 `--change` 的**新**口令 —— 只有一个来源时 `--change` 必然"旧=新"，
+# 于是它报着成功却什么都没换（一次静默空操作，正是 `_ask` 注释里警告过的那一档）。
+ENV_NEW_PASSPHRASE = "CTFSCANNER_KEYS_PASSPHRASE_NEW"
 
 
 def main(argv=None):
@@ -193,7 +217,11 @@ def main(argv=None):
     ap.add_argument("--force-overwrite", action="store_true",
                     help="（续162 新增的显式旗标）现有密文解不开时仍用明文整份覆盖")
     ap.add_argument("--passphrase", default=os.environ.get(keystore.ENV_PASSPHRASE, ""),
-                    help=f"口令（默认读环境变量 {keystore.ENV_PASSPHRASE}；都没有就交互输入）")
+                    help=f"口令（默认读环境变量 {keystore.ENV_PASSPHRASE}；都没有就交互输入）"
+                         "—— `--change` 时它是**旧**口令")
+    ap.add_argument("--new-passphrase", default=os.environ.get(ENV_NEW_PASSPHRASE, ""),
+                    help=f"（续295，仅 `--change` 用）**新**口令；默认读环境变量 {ENV_NEW_PASSPHRASE}。"
+                         "只给一个来源时旧=新，命令会拒绝执行而不是静默空操作")
     args = ap.parse_args(argv)
     if args.encrypt:
         return _do_encrypt(args, change=False)

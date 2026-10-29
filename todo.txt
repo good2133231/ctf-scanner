@@ -4542,6 +4542,55 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续295（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：密文进仓库、口令永远不进 + `--change` 三道死路
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+主理人 2026-10-29 定了三件事：**现在就推、以后改完自动推送**；**走 B 档**（`config/keys.enc.yaml`
+随仓库分发，但口令不进仓库，且要先满足三个条件）；PDF 不要了、截图必须有（下一轮做）。
+本轮把 B 档落地，落地前把它自己的三个条件一条条补齐。
+
+- [x] T1【条件①：口令换长随机】`--change` 把口令从 6 位换成 **30 位随机**（字母数字 + `-_`）。
+  值只在本机 `config/keys-pass`（30 字节、0600、属主 root）与聊天里出现过一次，**不进任何被跟踪文件**；
+  实测：新口令解得开（`fofa(email,key) / github(token,push_token) / virustotal(key)` 三组五字段、
+  密文仍 444 字节），**旧那句现在解不开**（认证加密拒绝）⇒ 轮换真的生效，不是原地空转。
+- [x] T2【条件③先做：防线而不是规矩】新组 `[295]` ③：**被跟踪文件里不得出现口令值** —— 现读
+  `config/keys-pass`，整串子串比对 + 对每个 ≥12 字符 token 做 sha256 比对（防有人写成 env 赋值形态），
+  口令只在内存里比、任何输出都不带它；扫描范围断言 >300 个文件；自证探针（拿一个已知在仓库里出现的串
+  `CTFSCANNER_KEYS_PASSPHRASE_NEW` 走同一条判据，必须扫得到）。**这条为什么必须有牙**：本轮我自己
+  把口令字面值写进过 AGENTS/CHANGELOG/todo 共 8 处，靠推送前 `git grep` 才现形 —— 写记忆时顺手记一句
+  口令是本能，光立在规矩里挡不住（续294 那次 scrub 的完整过程记在续293/续294 小节）。
+- [x] T3【条件②：不开私有仓库 = 风险要说在纸上】仓库保持 public ⇒ 密文一旦推出去就**永久可读**，
+  能挡住的只有口令（PBKDF2 60 万次 + AES-256-GCM）。`.gitignore` 里那段说明把这句话写在原地，
+  并写了撤回步骤（`git rm --cached` + **轮换令牌** —— 历史里那份删不掉）。
+- [x] T4【`--change` 的三道死路，本轮各撞一次并全部修掉】`cli/run_keys.py`：
+  ① 开头无条件要求**明文文件存在** ⇒ 换口令只在还留着明文的那台机器上做得成，而新克隆/
+    已经 `--shred` 过的机器恰恰没有明文（实测 rc=1「找不到明文凭据文件」）。修法：对 `--change`
+    明文可选，内容以现有密文为准；两个都没有才拒绝。
+  ② `old` 与 `phrase` 都来自同一个 `--passphrase`/环境变量 ⇒ 「旧=新」，**报着成功却什么都没换**
+    （一次静默空操作，`_ask` 的注释早就警告过这一档却没堵住）。修法：新口令必须有**第二个来源**
+    （`--new-passphrase` / `CTFSCANNER_KEYS_PASSPHRASE_NEW`），旧=新时直接拒绝并说出这两个名字。
+  ③ `--force-overwrite` 走不到 —— 那一道续293 已修（本轮把它的正向与反向都留在 `[293]` 里）。
+  三条在 `[295]` 里各有正反两面：拒绝时密文**逐字节不动**；换完旧口令必解不开、内容一字不变。
+- [x] T5【判据跟着改档】`[292]⑧` 的禁用名单去掉 `keys.enc.yaml`（现在它**应该**在跟踪清单里，
+  `[295]` 反过来断言它在），`keys-pass` / `keys.yaml` / `edge_auth.yaml` / `session.secret` 仍然一个都不许有。
+  口令文件那道闸（落在仓库内必须被 .gitignore 精确覆盖，否则拒读）**没有松** —— 正因为如此，
+  「把 keys-pass 提交上去」这个做法会自动关掉开机解锁，已在 §2 与 `.gitignore` 注释里写死。
+- [x] T6【推送：链路通了，权限不够】用 `github.push_token` 走「只进当次进程环境、不进
+  `.git/config`、不进 remote URL」那条口径，认证身份正确（`good2133231`）但**两只 fine-grained
+  PAT 都是 403 写拒绝**（`git push --dry-run` 各测一次，不是标签贴反）。要主理人在 GitHub 上给
+  那个 token 加上本仓库的 **Contents: Read and write**（或改成 Deploy key 允许写）。
+- [x] T7【主理人偏好入库】「改完自动推送」写进 AGENTS §9 偏好清单（连同既有的三条）。
+- [ ] 下一轮（续296，已点单）：**移除 PDF 导出**（`report.export_pdf` + `/export?fmt=pdf` + GUI 入口 +
+  相关文档与断言一起收，别留死代码）；**截图必须有** ⇒ 把无头浏览器与 CJK 字体装进自动化安装路径
+  （`./install.sh` 默认取 Chrome for Testing 进 `tools/browser/` + 系统共享库 + `fonts-noto-cjk`，
+  缺库时 `screenshot.capture()` 仍照实失败、不假绿）。
+
+- [x] C1 全量门禁：`tests/smoke.py` **SMOKE PASS**（rc=0，470 秒，365 条组输出行一条不跳），日志 logs/_smoke295c.log。中间被门禁拦下两次，**两次都是真的**：第一次 rc=1 红在 `[8as]`（我在 CHANGELOG 正文里写了一个还没落地的下一轮编号 = 空头支票，正是那条判据该拦的事）；第二次是我把 `--change` 的第三道死路修完之前的试跑红在旧判据上。
+
+下一轮（续296）：
+- [ ] 移除 PDF 导出；把无头浏览器 + CJK 字体装进 `./install.sh` 的默认路径（主理人 2026-10-29 点单）
+- [ ] 主理人给 token 加 Contents:write（或换 Deploy key）之后补推本地提交
+
 ## 续294（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：五段配置注释在替 enabled:true 说谎（§252 复发）
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
 
