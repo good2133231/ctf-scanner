@@ -23,7 +23,7 @@
 | 功能 | 段（配置键） | 代码默认 | 随包 | 生效 | 为什么没默认开 | 怎么开 | 要什么 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | TLS 证书取证（只读握手取颁发者/有效期/CN/SAN/指纹，进「SSL 证书」页签） | `cert` | False | False | False | 可选取证：每个 https 站点多一次握手，会让探测变重 | 策略配置 → `cert.enabled`（页面开关 `cert_enabled`） | 无（纯标准库；握手**不校验证书** —— 自签名/过期正是要看的） |
-| 站点截图（无头浏览器，站点页缩略图） | `screenshot` | False | False | False | 要本机 Chrome/Edge 无头模式，慢且依赖外部二进制与系统库 | 策略配置 → `screenshot.enabled`；`browser` 留空＝自动探测 | 本机浏览器（**续298 起标准安装即取一份进 `tools/browser/`**，或系统的 Chrome/Edge）+ 系统共享库（libnss3 / libgbm / libatk 等）+ 中文字体（同样默认即装） |
+| 站点截图（无头浏览器，站点页缩略图） | `screenshot` | False | False | False | 要本机 Chrome/Edge 无头模式，慢且依赖外部二进制与系统库 | 策略配置 → `screenshot.enabled`；`browser` 留空、或它指的东西不在＝自动探测（续299：那一行随仓库走，不能因为本机没有就判死） | 本机浏览器（**续298 起标准安装即取一份进 `tools/browser/`**，或系统的 Chrome/Edge）+ 系统共享库（libnss3 / libgbm / libatk 等）+ 中文字体（同样默认即装） |
 | 备案反查（同主体域名） | `icp` | False | False | False | 源按次计费/限流；预置的工信部源在国内托管，海外出口通常不可达 | 策略配置 → `icp.enabled` + `sources` 里给可达的源 | 可能要 `api_key`（只进 `config/keys.enc.yaml`，不落明文） |
 | 360 Quake 的 favicon 反查（同源资产） | `quake` | False | False | False | 外部付费接口、要 key | 策略配置 → `quake.enabled` + `config/keys.yaml` 的 `quake.key` | key |
 | Shodan 的 favicon 反查 | `shodan` | False | False | False | 同上；且"任何外部接口都不该在用户没点头时产生流量" | 策略配置 → `shodan.enabled` + `shodan.key` | key |

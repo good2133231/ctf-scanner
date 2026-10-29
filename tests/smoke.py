@@ -20697,8 +20697,11 @@ expression: r0()
         _shot8ar.run_cmd = _keep8rc
     # 没有浏览器：第三个返回值必须是空串而不是抛异常（旧代码在这里返回**二元组**，
     # 调用方一旦按三元组解包就会炸 —— 这条把"降级也要返回三元组"钉死。
-    # ⚠️ 判据必须打在 `browser_path` 上而不是"把 settings.browser 留空"：这台机器与 CI runner
-    #    都**真装了** google-chrome（实测 `/usr/bin/google-chrome`），留空只会走自动探测。
+    # ⚠️ 判据必须打在 `browser_path` 上而不是"把 settings.browser 留空"：留空只是**换成自动探测**，
+    #    而自动探测命中什么随机器而变（续299 实测：这台 Linux 上 `/usr/bin/google-chrome` **不存在**，
+    #    能用的浏览器是 `--install` 取进仓库的 `tools/browser/chrome`）。旧注释那句"这台机器与 CI
+    #    都真装了 google-chrome"是**上一台服务器**的事实 —— 环境值写进注释里就会漂，下一个人照着
+    #    读会把"探不到"当成"这台机器本来就没有"（§6.2 第一起同族）。
     _keep8bp = _shot8ar.browser_path
     try:
         _shot8ar.browser_path = lambda st=None: ""
@@ -20732,7 +20735,10 @@ expression: r0()
             pass
 
     _cfg_real = copy.deepcopy(settings)
-    _cfg_real["screenshot"] = dict(_cfg_real.get("screenshot") or {}, browser="")
+    # 续299：取**产品会用的那一个**浏览器，而不是留空去撞自动探测 —— 判据仍只有 `browser_path()`
+    # 一处，探不到时它照样返回空串、下面 `available()` 那条降级路径一个字没改。
+    _cfg_real["screenshot"] = dict(_cfg_real.get("screenshot") or {},
+                                   browser=_shot8ar.browser_path(settings))
 
     def _e2e8ar(cfg):
         """跑一次**真**渲染取标题，返回 `(verdict, 值)`：能截才钉、截不出就指名跳过（`[7z]` 同口径）。
@@ -33329,6 +33335,111 @@ expression: r0()
           "都不缺=零动作｜取件炸了不影响字体｜rc≠0 与 rc=0 却探不到都不冒充成功｜没包管理器=零子进程｜"
           "main() 调用点恰好一处且受 --no-screenshot 盖住、结果不进 failed（rc 不被它换坏）｜"
           "install_system_packages 默认仍零执行（[8d]⑫ 没被稀释）｜install.sh 说法跟着现状")
+    # ------------------------------------------------------------------ [299]
+    # 续299：让 `[7x]` 那 72 条"只有真浏览器能验"的断言在**浏览器已经装好的机器**上真的跑。
+    # 三处同一个病根：`tests/browser_e2e.py` 自己列了一份浏览器候选、又自己列了一份启动 flag，
+    # 两份都与**产品那一侧**（`screenshot.browser_path()` / `screenshot._FLAGS`）漂了 ——
+    # 于是续298 把 Chrome for Testing 装进 `tools/browser/` 之后 e2e 照样报"未找到"；而它列的
+    # flag 少了 root/CI/容器都必需的 `--no-sandbox`（本轮实测：Chrome 155 以 root 起跑直接退出，
+    # 症状只有一句"启动即退出"，死因在浏览器自己的 stderr 里，没人看得见）。
+    # 判据一律打在"两处必须同源"上，不打在"这台机器恰好装了什么"上（§6.2 第一起）。
+    import ast as _ast299
+    import importlib.util as _ilu299
+    import inspect as _ins299
+    from scanner import screenshot as _shot299
+    from scanner.config import load_settings as _load299
+    _spec299 = _ilu299.spec_from_file_location("browser_e2e_299", str(ROOT / "tests" / "browser_e2e.py"))
+    _e2e299 = _ilu299.module_from_spec(_spec299)
+    _spec299.loader.exec_module(_e2e299)     # 只 exec 模块：跑不跑由 `if __name__ == "__main__"` 挡着
+    _bp299_keep = _shot299.browser_path
+    _env_keep = {k: os.environ.get(k) for k in ("CTFSCANNER_CHROME", "CHROME_PATH")}
+    try:
+        # `find_browser()` 第一眼看的是这两个环境变量（给人手动指定用的）。这一组测的是
+        # "候选清单接没接上产品那一处判据"，所以先把它们清空 —— 否则某台机器恰好设了它，
+        # 下面那条"必须等于 sys.executable"就红在别人的配置上（§6.2 第一起同一形状）。
+        for _k299 in _env_keep:
+            os.environ[_k299] = ""
+        # ① 行为判据（产品找得到 ⇒ e2e 必须同样找得到）：桩成"产品解析出一个真实存在的文件"，
+        #    e2e 必须交出**同一个**路径。旧形状（硬编码那份清单）在这台机器上会交空串、在装了
+        #    google-chrome 的 CI 上会交系统那一份 —— 两种都会红，所以这条不是"恰好本机才绿"。
+        _shot299.browser_path = lambda st=None: str(sys.executable)
+        _found299 = _e2e299.find_browser()
+        assert _found299 == str(sys.executable), \
+            f"① 产品侧指得到浏览器而 e2e 的候选清单不认：{_found299!r}"
+        # 反向：产品侧解析不出来时，e2e 必须退回那份清单而不是崩（跳过那条路一个字没改）
+        _shot299.browser_path = lambda st=None: ""
+        _fb2 = _e2e299.find_browser()
+        assert _fb2 == "" or Path(_fb2).is_file(), f"① 退回清单那一路给出的不是可用路径：{_fb2!r}"
+        # ② 第一项的**来源**是 `browser_path()`，判据打在 AST 的调用点上（不认注释里的措辞）
+        _tree_c = _ast299.parse(_ins299.getsource(_e2e299._browser_candidates))
+        _cand_calls = {getattr(n.func, "id", "") or getattr(n.func, "attr", "")
+                       for n in _ast299.walk(_tree_c) if isinstance(n, _ast299.Call)}
+        assert "browser_path" in _cand_calls, \
+            "② 候选清单没接产品那一侧的 browser_path()（写死系统路径的旧形状会在这里红）"
+        # ③ 启动 flag 只许有一份：`--headless=old` 再出现在 `_start_chrome` 里就是抄了第二份
+        _src_start = _ins299.getsource(_e2e299._start_chrome)
+        _tree_s = _ast299.parse(_src_start)
+        assert "--headless=old" not in _src_start, \
+            "③ e2e 又自己列了一遍 headless flag —— 两份清单迟早漂（本轮漂掉的就是 --no-sandbox）"
+        _attrs299 = {getattr(n, "attr", "") for n in _ast299.walk(_tree_s)
+                     if isinstance(n, _ast299.Attribute)}
+        assert "_FLAGS" in _attrs299, "③ `_start_chrome` 没读 `screenshot._FLAGS` 那一份唯一清单"
+        assert "--no-sandbox" in _shot299._FLAGS and "--disable-dev-shm-usage" in _shot299._FLAGS, \
+            "③ 唯一那份清单里必须带 root/容器必需的两条（续68/74 定的口径）"
+        # ④ 起不来要说清为什么：两条 RuntimeError 都得带 stderr 尾行，且 _tail 自己三种情况分开说
+        _tail_calls = [n for n in _ast299.walk(_tree_s) if isinstance(n, _ast299.Call)
+                       and getattr(n.func, "id", "") == "_tail"]
+        assert len(_tail_calls) >= 2, \
+            f"④ 只有一处报错带出了 stderr 尾行（{len(_tail_calls)} 处）—— 另一条还在说\"起不来\"三个字"
+        _tmp299 = Path(tempfile.mkdtemp(prefix="smoke-299", dir=str(ROOT / "logs")))
+        try:
+            assert _e2e299._tail(_tmp299 / "没这个文件.log") == "（没拿到浏览器的 stderr）"
+            (_tmp299 / "empty.log").write_bytes(b"")
+            assert _e2e299._tail(_tmp299 / "empty.log") == "（浏览器没输出任何字节）", \
+                "空文件与没文件是两件事，混成一句就分不清\"没报错\"与\"报错是空的\""
+            (_tmp299 / "y.log").write_bytes(("启动噪音" + chr(10) + "致命那行").encode("utf-8"))
+            assert _e2e299._tail(_tmp299 / "y.log").endswith("致命那行"), _e2e299._tail(_tmp299 / "y.log")
+        finally:
+            shutil.rmtree(_tmp299, ignore_errors=False)
+        # ⑤ `[8ar] ④b` 跟着同一条口径：取产品那一个浏览器，而不是把配置置空去撞自动探测
+        #    （只钉正面形状 —— 反面那句会把这条断言自己的源码钉红，§6.1 推论四）
+        _sm_src299 = (ROOT / "tests" / "smoke.py").read_text(encoding="utf-8")
+        assert 'browser=_shot8ar.browser_path(settings)' in _sm_src299, \
+            "⑤ [8ar] ④b 没跟着改成产品那一个浏览器（置空去撞自动探测 ⇒ 明明能截却说\"没有浏览器\"）"
+        # ⑥ 上一轮埋下的回归（本轮实测到、当场修）：`--install` 把 `tools/browser/chrome` 回写进
+        #    **被跟踪的** settings.yaml ⇒ 那一行跟着仓库走；旧形状在"配置指的东西不在"时直接返回
+        #    空串、探测一次都不做 ⇒ 没跑过安装却装着 Chrome 的机器会被挡成"没有浏览器"，症状是
+        #    策略页明明写着一个浏览器而截图永远 0 产物（§7 那一族：静默降级比说清楚更坏）。
+        #    三条都打在桩上，不吃本机装没装什么（§6.2 第一起）。
+        # 注意这里调的是 `_bp299_keep`（进来时保存的真实函数）：① 结束时模块上那个名字
+        # 还被桩成"返回空串"，⑥ 若跟着调模块属性就会测到上一档的桩 —— 红在自己造的残留上。
+        _which_keep299 = _shot299.shutil.which
+        try:
+            _shot299.shutil.which = lambda n: "/fake/forbidden-chrome"
+            assert _bp299_keep({"screenshot": {"browser": "no/such/browser"}}) \
+                == "/fake/forbidden-chrome", \
+                "⑥ 配置里的路径不存在就判死 —— 那一行现在随仓库分发，换台机器永远探不到"
+            assert _bp299_keep({"screenshot": {"browser": "chrome"}}) \
+                == "/fake/forbidden-chrome", "⑥ 裸名那一档同理（两条路都要放行到探测）"
+            assert _bp299_keep({"screenshot": {"browser": str(sys.executable)}}) \
+                == str(sys.executable), \
+                "⑥ 反向：配置值真的存在时必须用它，自动探测不许顶掉用户点的那一个"
+        finally:
+            _shot299.shutil.which = _which_keep299
+    finally:
+        _shot299.browser_path = _bp299_keep
+        for _k299, _v299 in _env_keep.items():
+            if _v299 is None:
+                os.environ.pop(_k299, None)
+            else:
+                os.environ[_k299] = _v299
+    print("[299] 续299 ok: e2e 候选第一项来自 screenshot.browser_path()（AST 认调用点不认注释；"
+          "桩成系统里一个真实文件必须原样交出，旧那份硬编码清单在这里必红）｜产品解析不出时退回原清单"
+          "不崩｜启动 flag 只此一份：_start_chrome 里再出现 --headless=old 即红、_FLAGS 必须同时带"
+          " --no-sandbox 与 --disable-dev-shm-usage｜两条 RuntimeError 都要带 stderr 尾行"
+          "（没文件/空文件/有内容三种说法各不同，夹具各验一次）｜[8ar] ④b 同一条口径"
+          "｜配置值不存在时**继续探测**（那一行由 --install 回写、跟着仓库走），而配置值存在时"
+          "探测不许顶掉它 —— 三条判据都打在桩上，不吃本机装没装 Chrome")
     print("SMOKE PASS")
 
 

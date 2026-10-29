@@ -4542,6 +4542,55 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续299（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：`[7x]` 那 72 条真浏览器断言终于真的跑
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+上一轮把 Chrome for Testing 装进了默认安装，收尾时登记了一条没做完的事：`[7x]` 真浏览器端到端
+在这台机器上**仍然跳过**。本轮就是去把它跑起来 —— 结果不是"环境就这样"，而是两处抄来的清单各自漂了。
+
+- [x] T1 先实测再动手（不照旧结论推）：Chrome for Testing 155.0.8059.39 的 `--headless=old`
+      **仍可用**（`--dump-dom` rc=0），但**以 root 起跑缺 `--no-sandbox` 会直接退出**，报
+      `Running as root without --no-sandbox is not supported`。而 `browser_e2e.py::_start_chrome`
+      自己列的那份 flag 里恰好没有它 —— 症状只是"启动即退出"四个字，死因在浏览器自己的 stderr 里。
+- [x] T2 `tests/browser_e2e.py` 三处：
+      ① 候选第一项 = `screenshot.browser_path(load_settings())`（"这台机器用哪个浏览器"的判据
+      只许有一处；解析不出来时退回原来那份系统路径清单，跳过那条路一个字没改）；
+      ② 启动 flag = `*screenshot._FLAGS`（AGENTS §5 那句"与 browser_e2e 一致"到本轮才真的成立）；
+      ③ 新增 `_tail()`，两条 RuntimeError 都把 stderr 尾行带出来；"没这个文件 / 空文件 / 有内容"
+      三种说法分开，不混成一句。
+- [x] T3 `tests/smoke.py [8ar] ④b` 跟着同一条口径：原来把 `screenshot.browser` **置空**去撞自动探测
+      ⇒ 明明能截却报「本机没有无头浏览器」跳过。现在取产品解析出的那一个。顺手把那条漂掉的注释
+      改成实测事实（旧注释写"这台机器与 CI 都真装了 google-chrome"，那是**上一台服务器**的事）。
+- [x] T4 新组 `[299]`：桩 `browser_path` 返回系统里一个真实文件 ⇒ e2e 必须原样交出同一个路径
+      （旧那份硬编码清单在这台机器交空串、在装了 chrome 的 CI 交另一个路径 ⇒ 两边都红，
+      所以不是"恰好本机才绿"）；AST 认调用点不认注释；`--headless=old` 再出现在 `_start_chrome`
+      即红；`_tail` 调用点 ≥2；`_tail` 三种返回各验一次（含临时目录夹具，跑完删）；`[8ar]` 的正面
+      形状留在源码里即红。**四向变异 M1–M4 全红**，基线复跑 rc=0，`browser_e2e.py` 逐字节还原。
+- [x] T5 实测结果：修完这台机器 `tests/browser_e2e.py` 单跑 —— **72 条断言全绿**（真 Flask 进程 +
+      真无头 Chrome + 手写 CDP），此前它在这台机器上一条都没跑过。全量门禁
+      **SMOKE PASS / rc=0 / 497 秒 / 371 组**（`logs/_smoke299.log`）。
+- [x] T6 AGENTS：§7 新增一条（两处平行清单各自漂的完整来历）+ §5 续74 那条补一句现状。
+- [x] T7 **顺手修掉上一轮埋下的回归**（同一条链上的第二处漂）：续298 的 `--install` 把
+      `tools/browser/chrome` 回写进**被跟踪的** `config/settings.yaml`，那一行于是跟着仓库走；
+      而 `screenshot.browser_path()` 的旧形状是"配置有值但东西不在 ⇒ 直接返回空串、一次探测都不做"
+      ⇒ 一台没跑过安装、却装着系统 Chrome 的机器会被挡成"没有浏览器"，症状是策略页明明写着一个
+      浏览器而截图永远 0 产物（§7 那一族：静默降级比说清楚更坏）。现在改成"配置值优先，取不到就
+      继续探测"，`[299] ⑥` 三条判据全打在桩上：相对路径不存在 ⇒ 探到假想 chrome、裸名不存在 ⇒
+      同样放行、配置值真的存在 ⇒ 探测不许顶掉它。`docs/features-off-by-default.md` 那一行跟着改口径。
+      ⚠ ⑥ 第一版红在自己造的残留上：① 结束时模块上的 `browser_path` 还被桩成返回空串，⑥ 跟着调
+      模块属性就测到上一档的桩 —— 改成调进来时保存的那一份真实函数（注释里写了，免得下一个人照抄）。
+
+下一轮：
+- [ ] 推送仍被挡：两把 fine-grained PAT 都没有 `Contents: Read and write`（403，认证是通的）；
+      要么改 token 权限，要么加一把勾了 Allow write access 的 Deploy key。本地已攒 7 个提交。
+- [ ] `screenshot.enabled` 要不要随包默认开（等主理人点单；开 = 每个任务起无头 Chrome，
+      并要同步 `[271]` 那张"已实现但没默认开"的表）
+- [ ] 旧服务器 `data/scanner.db`（15 任务 / 196 子域名 / 53 漏洞）仍未迁到本机；仓库外那份
+      `git-cred-helper.py` 也没搬（`docs/dev-sync.md` 的「必搬」清单里两条都在）
+- [ ] `fscan` / `dirmap` 本机仍缺（目录发现退回内置、端口扫描退回 nmap/内置 TCP connect）
+- [ ] `shodan.key` / `quake.key` / `gitlab.token` / `icp.api_key` 四组没配 —— 四家随包都是关着的，
+      不影响默认任务（主理人 2026-10-29 已确认"留"）
+
 ## 续298（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：截图那条能力装进**默认安装** + PDF 整条移除
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
 
@@ -4611,23 +4660,6 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       途中撞回续297 当年那颗雷（`[7v]` 的 assert 消息被写成**两个相邻字符串** ⇒ IndentationError，
       合并成一串）。**口径**：任何整文件写回前必须断言"结果比原文长且锚点已消失"，写完立刻
       `py_compile` + 两式 numstat —— 这三条现在都写进了 `_ins298.py` 自己。
-
-下一轮：
-- [ ] 推送仍被挡：两把 fine-grained PAT 都没有 `Contents: Read and write`（403）；要么改 token 权限，
-      要么加一把勾了 Allow write access 的 Deploy key。本地已攒 6 个提交没推出去。
-- [ ] `[7x]` 真浏览器 E2E 在这台机器**仍然跳过**（本轮实测到的新缺口）：`tests/browser_e2e.py` 的
-      `_browser_candidates()` 只列系统路径，不认识 `--install` 刚取进仓库的那份 `tools/browser/chrome`
-      ⇒ 那 72 条"只有真浏览器能验"的断言本机从未跑过（同根因还让 `[8ar] ④b` 报「本机没有无头浏览器」跳过：
-      那一组把 `screenshot.browser` 置空后只剩系统探测）。下一轮把 `screenshot.browser_path(load_settings())`
-      接进候选（判据不另起一份），**先单独验一次** Chrome for Testing 能不能被 CDP 拉起来
-      （`--headless=old` 在新版 Chrome 上的行为要实测，不许猜），再决定它排第几个候选。
-- [ ] `screenshot.enabled` 要不要随包默认开（等主理人点单；开 = 每个任务起无头 Chrome，
-      并要同步 `[271]` 那张"已实现但没默认开"的表）
-- [ ] 旧服务器 `data/scanner.db`（15 任务 / 196 子域名 / 53 漏洞）仍未迁到本机；要迁走
-      `cli/run_migrate.py` 那条导出/导入路（`docs/dev-sync.md`）
-- [ ] `fscan` / `dirmap` 本机仍缺（目录发现退回内置、端口扫描退回 nmap/内置 TCP connect）
-- [ ] `shodan.key` / `quake.key` / `gitlab.token` / `icp.api_key` 四组没配 —— 四家随包都是关着的，
-      不影响默认任务（主理人 2026-10-29 已确认"留"，不需要现在补 key）
 
 ## 续296（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：sync_check 长出「散落凭据」这条判据
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

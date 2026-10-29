@@ -124,7 +124,11 @@ def _from_registry():
 
 
 def browser_path(settings=None):
-    """返回可用的无头浏览器路径；找不到返回 ""。
+    """返回可用的无头浏览器路径；一个都找不到才返回 ""。
+
+    配置值优先，但**它指向的东西不在时不提前判死**（续299）：那一行由 `--install` 回写、跟着仓库走，
+    换一台没跑过安装却装着系统 Chrome/Edge 的机器要是直接返回空串，症状就是「策略页明明写着一个
+    浏览器，截图却永远是 0 产物」—— 静默降级比说清楚更坏（§7 那一族）。
 
     ⚠ 配置里写**相对路径**时必须按项目根折算（续167，§5.13 那同一个坑的第四次）：
     `Path("tools/browser/chrome").exists()` 吃的是**进程 CWD**，从仓库外启动 GUI / CLI 时
@@ -137,8 +141,16 @@ def browser_path(settings=None):
     if configured:
         if "/" in configured or "\\" in configured:
             p = resolve(configured)
-            return str(p) if p.exists() else ""
-        return shutil.which(configured) or ""
+            if p.exists():
+                return str(p)
+            # 配置指的东西不在 ⇒ **不许就此认定"这台机器没有浏览器"**，继续往下走那份探测。
+            # 来历：`--install`（续298）把 `tools/browser/chrome` 写进**被跟踪的** settings.yaml，
+            # 这一行因此会跟着仓库到别的机器上；旧形状在那里直接返回空串，探测一次都不做。
+        else:
+            _pref = shutil.which(configured)
+            if _pref:
+                return _pref
+            # 裸名同理：取不到就继续探测，不提前判定"没有"
     for name in _CMD_NAMES:
         found = shutil.which(name)
         if found:

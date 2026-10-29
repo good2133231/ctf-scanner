@@ -3,6 +3,87 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续299（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：`[7x]` 的 72 条真浏览器断言终于真的跑
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+### 来历
+
+上一轮收尾时登记了一条"没做完"：`./install.sh` 已经会装 Chrome，但 `[7x]` 真浏览器端到端在这台
+机器上**仍然跳过**。本轮去查那句跳过的原因 —— 结论不是"环境限制"，是**同一份清单被抄了两遍，各自漂**：
+
+1. `tests/browser_e2e.py::_browser_candidates()` 只列系统路径（`/usr/bin/google-chrome` 等），
+   里面没有 `--install` 取进仓库的 `tools/browser/chrome`。产品那一侧的判据在
+   `screenshot.browser_path()`（策略值优先、相对路径按仓库根折算），e2e 没引用它 ⇒ 浏览器装好了
+   却报"未找到"，而这条降级打印的是合规句，**门禁不会红** —— 72 断言一条都没跑过（§6.2 第十起：
+   假绿比假红贵）。
+2. `_start_chrome` 又自己列了一遍启动 flag，里面**没有 `--no-sandbox`**。实测 Chrome for Testing
+   155 以 root 起跑直接退出：`Running as root without --no-sandbox is not supported`，而旧代码把
+   stderr 全接 `DEVNULL`，能看到的只有一句"无头浏览器启动即退出" —— 死因写进了没人能看的管道里。
+   （顺带把旧结论复核了一遍：`--headless=old` 在 155 上**确实可用**，`--dump-dom` rc=0；续71 那条
+   "务必保持 old"仍然成立。这是测出来的，不是照抄的。）
+
+### 改了什么
+
+| 位置 | 动作 |
+|---|---|
+| `tests/browser_e2e.py::_browser_candidates()` | 第一项改成 `screenshot.browser_path(load_settings())`；解析不出来时退回原来那份清单，跳过那条路一个字没改 |
+| `tests/browser_e2e.py::_start_chrome()` | flag 不再抄第二份，展开 `*screenshot._FLAGS`（里面才有 `--no-sandbox` 与 `--disable-dev-shm-usage`）；stderr 落 `<work>/chrome-stderr.log`，两条 RuntimeError 都把它尾行带出来 |
+| `tests/browser_e2e.py` 跳过那句 | 说清找过哪几处（策略值 / 仓库内 `tools/browser/` / 系统位置）以及 `CTFSCANNER_CHROME` 这条出路 |
+| `tests/smoke.py [8ar] ④b` | 不再把 `screenshot.browser` 置空去撞自动探测 —— 取产品解析出的那一个；顺带把那条"这台机器与 CI 都真装了 google-chrome"的注释改成实测事实（那是上一台服务器的事） |
+| `scanner/screenshot.py::browser_path()` | 配置值指的东西不在时**不再直接判死**，继续走下面那份探测（裸名同理）—— 修的是上一轮回写进仓库的那一行留下的静默降级 |
+| `docs/features-off-by-default.md` | 那一行的口径跟着改：「`browser` 留空、或它指的东西不在＝自动探测」 |
+| `tests/smoke.py` 新组 `[299]` | 见下面"判据" |
+| `AGENTS.md` | §7 新增一条来历 + §5 续74 那条补现状 |
+
+### 判据（`[299]`，每条都带变异）
+
+- 桩 `screenshot.browser_path` 返回系统里一个真实文件（`sys.executable`）⇒ `find_browser()` 必须
+  交出**同一个路径**。旧形状在这台机器交空串、在装了 chrome 的 CI 交系统那一份 ⇒ 两边都红，
+  所以这条不是"恰好本机才绿"（§6.2 第二起自检句）。
+- 反向：桩成返回空串 ⇒ 必须退回原来那份清单且不崩（跳过那一路没有被改坏）。
+- AST 认调用点不认注释：`_browser_candidates` 里必须有 `browser_path` 的 `Call` 节点。
+- `_start_chrome` 源码里再出现 `--headless=old` 字面量即红（那意味着又抄了一份），且必须有对
+  `_FLAGS` 的属性读取；`screenshot._FLAGS` 必须同时含 `--no-sandbox` 与 `--disable-dev-shm-usage`。
+- 两条 RuntimeError 都得带 stderr 尾行（判 `_tail(` 的调用点数 ≥2）；`_tail()` 本身三种情况各验一次：
+  没这个文件 / 空文件 / 有内容 —— **空文件与没文件分开说**，否则"没输出"会被读成"没报错"。
+- `[8ar] ④b` 钉正面形状 `browser=_shot8ar.browser_path(settings)` 必须还在（不钉反面，反面那条
+  会把断言自己的源码钉红 —— §6.1 推论四）。
+
+四向变异 M1–M4 全红：候选退回纯系统清单 / flag 自己抄第二份 / 报错不带 stderr / `_tail` 把"没文件"
+与"空文件"混成一句。还原后基线 rc=0，`browser_e2e.py` 逐字节一致。
+
+### 同一条链上的第二处漂（本轮实测到、当场修）
+
+续298 的 `--install` 把 `tools/browser/chrome` 回写进**被跟踪的** `config/settings.yaml` —— 这一行
+因此跟着仓库走。而 `screenshot.browser_path()` 的旧形状是"**配置里有值但指的东西不在 ⇒ 直接返回
+空串，一次自动探测都不做**"。合起来的后果：一台没跑过安装、却装着系统 Chrome/Edge 的机器会被这一行
+挡成"没有浏览器"，症状是策略页明明写着一个浏览器而截图永远 0 产物 —— 又是最难往"配置随仓库走"上想
+的那种静默降级（§7 那一族）。现在：**配置值优先，取不到就继续往下探测**（裸名同理）。`[299] ⑥`
+三条判据全打在桩上：相对路径不存在 ⇒ 交出让步后的探测结果；裸名不存在 ⇒ 同样放行到探测；
+配置值真的存在 ⇒ 探测不许顶掉用户点的那一个。`docs/features-off-by-default.md` 那一行跟着改口径
+（「`browser` 留空、或它指的东西不在＝自动探测」）。
+
+⚠ ⑥ 第一版红在**我自己造的残留**上：① 那一档结束时模块上的 `browser_path` 还被桩成"返回空串"，
+⑥ 跟着调模块属性就测到了上一档的桩。改成调进来时保存的那一份真实函数，并把这句话写进注释。
+
+变异 M5（把 `return ""` 塞回旧位置）→ ⑥ 第一条必红；M1–M5 全红，还原后基线 rc=0，
+两个被改的文件都逐字节一致。
+
+### 实测
+
+| 项 | 数字 |
+|---|---|
+| `--headless=old` 在 Chrome for Testing 155.0.8059.39 | 可用（`--dump-dom` rc=0） |
+| 以 root 起跑、无 `--no-sandbox` | rc=1，`Running as root without --no-sandbox is not supported` |
+| 修完单跑 `tests/browser_e2e.py` | **通过：共 72 条断言全绿**（真 Flask 进程 + 真无头 Chrome + 手写 CDP） |
+| 全量门禁 | SMOKE PASS / rc=0 / **497 秒** / <GRP299> 组（`logs/_smoke299.log`） |
+
+### 仍未做
+
+`screenshot.enabled` 仍出厂关（续251 那条显式产品决策，`[251]` 钉着）：主理人要的是"这条能力必须
+有"，不是"每个任务都起无头浏览器"。策略页勾「截图」即出图，浏览器与中文字体本机已经齐了。
+
 ## 续298（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：截图的依赖装进**默认安装**（+ 续297 的 PDF 移除一起收尾）
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

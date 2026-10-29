@@ -55,13 +55,22 @@ _BROWSER_LEAF = (("Google", "Chrome", "Application", "chrome.exe"),
 
 
 def _browser_candidates():
-    """枚举常见安装位置的 Edge / Chrome（本机实测两者都能被 CDP 驱动）。
+    """枚举本机可用的 Edge / Chrome（实测这两家的无头模式都能被 CDP 驱动）。
+
+    **第一位是产品那一侧解析出来的浏览器**：`screenshot.browser_path(load_settings())`。
+    "这台机器用哪个浏览器"的判据只许有一处（策略值优先、相对路径按仓库根折算，续167）——
+    续298 起 `./install.sh` 把 Chrome for Testing 取进仓库内 `tools/browser/` 并回写那个键，
+    而下面那份硬编码清单里没有它，于是 72 条"只有真浏览器能验"的断言会在**浏览器已经装好的
+    机器上**继续报"未找到"（§6.2 第九起同族：环境限制被读成"本来就这样"）。
+    解析不出来时它返回空串，下面那份清单照旧兜底，跳过那条路一个字没变。
 
     **刻意不写字面盘符路径**：`tests/smoke.py` 的源码红线里有一条"不得写死盘符路径"
     （这类写法在 Linux 上必然翻车，而 tests/ 也在扫描范围内）。改成从环境变量拼装，
     顺带能覆盖装在非系统盘的机器；POSIX 侧再补几个常见名字，这条口径不该只在 Windows 成立。
     """
-    out = []
+    from scanner import screenshot
+    from scanner.config import load_settings
+    out = [screenshot.browser_path(load_settings())]
     for root in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"),
                  os.environ.get("LOCALAPPDATA")):
         if not root:
@@ -146,6 +155,18 @@ def find_browser():
         if cand and os.path.isfile(cand):
             return cand
     return ""
+
+
+def _tail(p, n=280):
+    """把浏览器自己的报错带出来：取 stderr 文件的尾若干字节（**只取尾** —— 启动噪音在前、
+    致命那行在后）。拿不到文件与拿到空文件是两件事，分开说，免得"没输出"被读成"没报错"。
+    """
+    try:
+        raw = Path(p).read_bytes()[-4000:]
+    except OSError:
+        return "（没拿到浏览器的 stderr）"
+    tail = raw.decode("utf-8", "replace").strip().replace(chr(10), " | ")
+    return tail[-n:] or "（浏览器没输出任何字节）"
 
 
 def _free_port():
@@ -447,15 +468,23 @@ def _start_gui(env, work):
 
 
 def _start_chrome(browser, profile, work):
-    """起无头 Chrome 并连上 CDP，返回 `(cdp, proc)`。"""
+    """起无头 Chrome 并连上 CDP，返回 `(cdp, proc)`。
+
+    flag 表**不在这里抄第二份**：`screenshot._FLAGS` 是唯一产地（AGENTS §5 那条口径，
+    也是 §5.14「同一句话只有一个产地」在浏览器参数上的样子）。这里原先自己列了一遍，
+    缺 root / CI / 容器都必需的 `--no-sandbox` —— 实测 Chrome for Testing 155 以 root 起跑直接
+    `Running as root without --no-sandbox is not supported` 并退出，而症状只是下面那句
+    "启动即退出"，连原因都没有。现在那一句把浏览器自己的 stderr 尾行带出来。
+    """
+    from scanner import screenshot
     port = _free_port()
-    proc = subprocess.Popen([browser, "--headless=old", "--disable-gpu", "--no-first-run",
-                             "--no-default-browser-check", "--disable-extensions",
-                             "--disable-background-networking",
-                             f"--remote-debugging-port={port}",
-                             f"--user-data-dir={profile}", "--window-size=1200,900",
-                             "about:blank"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _errlog = Path(work) / "chrome-stderr.log"
+    with _errlog.open("wb") as _ef:
+        proc = subprocess.Popen([browser, *screenshot._FLAGS,
+                                 f"--remote-debugging-port={port}",
+                                 f"--user-data-dir={profile}", "--window-size=1200,900",
+                                 "about:blank"],
+                                stdout=subprocess.DEVNULL, stderr=_ef)
     base = f"http://127.0.0.1:{port}"
     for _ in range(120):
         try:
@@ -463,10 +492,11 @@ def _start_chrome(browser, profile, work):
             break
         except Exception:                                   # noqa: BLE001
             if proc.poll() is not None:
-                raise RuntimeError("无头浏览器启动即退出")
+                raise RuntimeError("无头浏览器启动即退出（rc=" + str(proc.returncode) + "）："
+                                   + _tail(_errlog))
             time.sleep(0.25)
     else:
-        raise RuntimeError("CDP 端口没起来")
+        raise RuntimeError("CDP 端口没起来：" + _tail(_errlog))
     with urllib.request.urlopen(base + "/json/list", timeout=5) as r:
         targets = json.loads(r.read().decode())
     target = next(t for t in targets if t.get("type") == "page")
@@ -892,7 +922,9 @@ def run(settings=None):
     """跑完整套 E2E。返回 `(ok, note)`：跳过与失败都是 `ok=False`（**绝不假绿**）。"""
     browser = find_browser()
     if not browser:
-        note = "跳过：未找到可用的无头 Chrome/Edge（可用环境变量 CTFSCANNER_CHROME 指定路径）"
+        note = ("跳过：未找到可用的无头 Chrome/Edge —— 策略里的 `screenshot.browser`、"
+                "仓库内 `tools/browser/`（续298 起标准安装会取一份）与系统常见位置都没有；"
+                "可用环境变量 CTFSCANNER_CHROME 指定路径")
         print("[跳过] " + note)
         return False, note
 

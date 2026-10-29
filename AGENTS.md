@@ -1917,6 +1917,21 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
   回归 `tests/smoke.py [6n-附]`（含"把守卫打回只查 hex，三条合成样本必须全不报"的证伪）。
 
 
+- **`browser_e2e` 的浏览器与 flag 都改成"引用产品那一侧"（续299）**：这脚本自己列了两份清单 ——
+  一份浏览器候选（`/usr/bin/google-chrome` 那几条系统路径）、一份启动 flag（`--headless=old` 起六个）。
+  两份都和产品的 `scanner/screenshot.py` 平行存在，于是各漂一次：① 续298 起 `./install.sh` 会把
+  Chrome for Testing 取进 `tools/browser/` 并回写 `screenshot.browser`，而候选清单里没有它 ⇒
+  `[7x]` 那 72 条"只有真浏览器能验"的断言在**已经装好浏览器的机器上**继续报"未找到"并跳过
+  （§6.2 第十起同一形状：静默跳过比红更贵，因为没人去查）；② 那份 flag 少了 root / CI / 容器都
+  必需的 `--no-sandbox` ⇒ 以 root 起跑 Chrome 直接退出（实测报
+  `Running as root without --no-sandbox is not supported`），症状只是"启动即退出"四个字，真正的
+  死因在浏览器自己的 stderr 里而没人看得见。**现在的口径**：候选第一项 = `screenshot.browser_path(load_settings())`，
+  启动 flag = `*screenshot._FLAGS`（AGENTS §5 那句"与 browser_e2e 一致"到本轮才真的成立），
+  起不来时把 stderr 尾行拼进 RuntimeError。判据在 `tests/smoke.py [299]`：候选没接 `browser_path()` 即红、
+  `_start_chrome` 里再出现 `--headless=old` 字面量即红、两条 RuntimeError 少一处带 stderr 尾行即红。
+  实测修完这台机器 **72 条全绿**（`--headless=old` 在 Chrome for Testing 155 上确实可用，续71/74
+  那条"务必保持 old"仍成立 —— 这是**测出来的**，不是照旧结论推的）。
+
 - **dirmap 的 Python 3.12+ / `-e` 两条限制已解（续217）**：① 上游 `lib/core/option.py` 的
   `import imp` 是**未使用导入**（v1.1 与 master 全仓都没有 `imp.` 调用）；`tools/dirmap_compat/imp.py`
   空垫片由 `dirscan._dirmap_env()` 放进子进程 `PYTHONPATH` 最前面，实测 v1.1 在 Python 3.14 上
@@ -2496,7 +2511,9 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
     超时的真因）。最终配置（与 browser_e2e 一致）：`--headless=old` + `--ignore-certificate-errors`
     + `--no-sandbox` + `--disable-dev-shm-usage` + `--disable-background-networking`。见 `screenshot._FLAGS`
     的 argv —— `report` 那份 PDF 出口已于续297 整条移除，所以 `_FLAGS` 是这组 flag 的唯一落点（只影响本机浏览器进程隔离，不改变对目标请求语义，不越非破坏性红线）。
-    ⚠️ `--headless=new` 在该 runner 会**挂死**（续71 已排除），务必保持 `old`。
+`--headless=new` 在该 runner 会**挂死**（续71 已排除），务必保持 `old`。**续299 补**：这组 flag 在
+    `tests/browser_e2e.py` 里不再是抄第二份，而是 `*screenshot._FLAGS` —— 它抄的那份少了 `--no-sandbox`，
+    于是 root/容器上"启动即退出"，而 `[7x]` 只报一句"未找到浏览器"就跳过（§7 续299 那条）。
   - **FOFA 标题归属过滤（`fofa.title_match`）的边界**：默认 `label` 档要求"标题某个 token
     与域名某个 label **完全相等**"，因此**连字符域名永不命中** —— `targ1-wallet.com` 的 label
     是整段 `targ1-wallet`，标题 token 被切成 `targ1`/`wallet`，永不相等 → **会被丢弃**。
