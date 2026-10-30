@@ -3,6 +3,90 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续303（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：截图随包默认开（门禁内压回关）+ 本机补装 fscan/dirmap
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+### 触发（主理人四条指令）
+
+① Windows/macOS 真机**不用管**；② `screenshot.enabled` **默认要开**；③ GitHub 那两把没写权限的
+令牌**一个留着查询、一个删**；④ `fscan` / `dirmap` **补**。②④ 有代码/机器动作，③ 查清后如实交代。
+
+### ② 截图默认开：三件事必须同时成立，否则另两条是假话
+
+- **随包** `config/settings.yaml` 的 `screenshot.enabled`：`false → true`，段头注释按事实重写
+  （`[294]` 逐段比对段头第一行与 enabled 值，新注释里刻意不出现「默认关」）。
+- **代码 `DEFAULTS` 一个字没动**（仍 `False`）：`[251]` 那条「不许为本地方便偷翻代码默认值」
+  继续守着；于是"干净克隆、没有 settings.yaml"仍是关 —— 这正是本仓既定的两档口径。
+- **门禁进程内压回关**（`tests/smoke.py` 顶部新增隔离，只压 `screenshot` 这一段）：
+  CI 里那条一次性 `--screenshot` 实测 30 秒不产出（§7 续75）× `max_sites`（随包 20）＝
+  每个跑到截图的组 +10 分钟；且"这台机器恰好有没有可用浏览器"会决定断言结果（§6.2 第一起）。
+  要真跑截图的组一律自己显式开（`[6u]`/`[5t]`/`[170]`/`[7z]`），它们是在拿到的 settings 上再写
+  `enabled=True`，不走这条隔离 —— 该跑的照跑。
+
+### 新组 `[303]`（五面）
+
+随包 `true` / `DEFAULTS` `false` / 门禁内 `load_settings()` 给出 `false`；隔离**只**压这一段
+（与文件的其余段逐字比对）；静态 `import load_settings` 的模块一个不掉队（含晚导入的 `gui.app`）；
+三份文档里旧那句「默认关」必须不在；反向：把隔离摘掉必须能看到随包 `true`，否则正向那条是空写。
+`[271]` 的点名清单与计数跟着改（表一 9→8 项、表二 7→8 项，screenshot 并入"随包开"那一档）。
+
+### ④ 补装 fscan / dirmap（这台机器，已做到功能级实测）
+
+- `fscan`：系统 Go（`apt` 那一档，正是框架自己印出来的出路）→ `tools/build_fscan.py` 编出
+  `tools/scanner/fscan`（26.6 MB）→ 放到 `tools/fscan/fscan`。**`settings.yaml` 一字未改**：
+  配置里写的就是 `tools/fscan/fscan.exe`，靠 `which()` 的后缀容错命中（续166「改配置要主理人点头」没破）。
+- `dirmap`：clone 进 `tools/dirmap/`（`.gitignore` 已覆盖）＋ `tools/setup_dirmap.py --install`
+  把 gevent / lxml / progressbar2 装进 `.venv`（3.14，自带 `imp` 垫片）。
+- **功能实测**（不是只看 `cli --check` 的那一行）：真起 127.0.0.1 回环站并造两条敏感路径——
+  `fscan_scan` 返回 `[{'port': 8899, ...}]`；`dirmap` 跑 5715 词 / **15.9 秒**，产出
+  `output/127.0.0.1_8901.txt` 3 行，经适配器 `_parse_output(force=True)` + targets 过滤后
+  **3 条全在**（`/.env` `/admin` `/backup`）。
+  顺带记一条**测试侧**的坑：我第一次没传 `force=True`，单文件产物那档解析出 0 行 ——
+  那是续218 记过的形状，不是产品缺陷（生产代码在 `_run_dirmap` 里本来就双路读）。
+
+### 顺手修掉：钉的 Go 版本从官方清单里消失了
+
+`--with-stack` 打印 `[!] go 未取到：官方清单里已经没有 go1.27.2`。官方 `?mode=json` **只列最近两版**
+（现在只剩 `go1.27.3` / `go1.26.10`）⇒ 每台没有系统 Go 的新机器都会卡在"fscan 编不出来"。
+主理人「你可以边等他变修」之后本轮直接修了：钉版 `1.27.2 → 1.27.3`。摘要产地**本来就是**清单里的
+`sha256`（`verify_source=release`），所以只改 version 与注释里那段实测出处；门禁 `[303] ⑤` 钉住
+"注释里的实测行必须与 version 同版"（反向夹具把注释里那串换成 9.9.9 必须看不到）。
+**本机真装真编**：`go 1.27.3 → tools/go`（15,657 文件 / 67.3 MB，SHA256 过官方清单）；
+`tools/go/bin/go version` → `go1.27.3 linux/amd64`；用它编 fscan **27.0 MB**，二进制放
+`tools/fscan/fscan`。`--wire` 写进 `settings.yaml` 的那一行**已回退**（续166 那个口径没破）。
+
+### ③ 令牌：我这边没有可删的东西
+
+密文里现在只有两样：`github.token = github_pat_…（93 字符，查询用，留）`、
+`github.push_token = ghp_…（40 字符，推送用）`。主理人要删的那把 fine-grained **从来没进过我们的
+任何文件**（续300 换令牌时只写了 `push_token` 一个字段、走的是合并那一路）。所以撤销只能在
+GitHub 网页侧做；我这侧没有那个令牌的登录态，也不该去要。附带确认：两把**不是同一个值**。
+
+### 第一次全量门禁是**红的**（18:12，`[8bq]`）—— 这条要记下来
+
+`[8bq]`（续159-附）里写着 `for _s160 in ("screenshot", "cert"): assert _ship… is False and _DEF… is False`
+—— 也就是"随包也关"这件事早有人钉过，我第一版 grep 没扫到（用的名字是 `_ship160`，不是 `screenshot"]`）。
+修法与连带发现：
+- `[8bq]` 拆成两档：`cert` 仍"两处都关"；`screenshot` 断言**随包 true / DEFAULTS false**
+- **建任务表单把 `['screenshot', 'cert']` 写死成"默认不勾"** ⇒ 策略一开，勾不勾都会跑，而那行仍显示未勾
+  ＝ §5.19 那种会改变读者行为的假话。改成 `gui/app.py::_off_by_default_stages(settings)` 现算
+  （无 `enabled` 键的阶段不算关），`[8w]` 的判据换成"页面渲染的那组 == 按策略算的那组"+ 模板里不许再写死
+
+### 实测
+
+- 局部门禁 `--only 303,271,294,251,8bq` 全绿（新组 + 四个受影响组）
+- 全量门禁 **SMOKE PASS / rc=0 / 650 秒 / 374 组**（`logs/_smoke303d.log`）。
+  **前三轮全量都是红的**，全都留作证据（都是"改代码时撞出来的真红"，不是环境问题）：
+  ① `logs/_smoke303.log` 红在 `[8bq]` —— 随包"screenshot 也关"这条旧断言（`_ship160` 命名，第一版 grep 漏了）；
+  ② `logs/_smoke303b.log` 红在 `('/'), 500` —— `_off_by_default_stages` 被插到了
+  `@app.route("/tasks")` 与 `def tasks()` **之间**，路由绑到了助手函数上 ⇒ `tasks` 端点消失；
+  ③ `logs/_smoke303c.log` 红在真浏览器 E2E `[10]` —— 「恢复默认」实际 14 项而断言写死 13。
+  ③ 顺带查清一条**注释里的假话**：`data-ck-default` 只挂在阶段框上（深度/拓展那几颗没有），
+  所以"恢复默认"勾上的就是"策略没关的阶段"；旧注释里那个「+1 自动拓展扫描」是凑数
+  （旧值 15−2=13 本来就不需要加一）。E2E 现在按 `len(STAGE_ORDER) − 策略关的阶段数` 现算，
+  单跑实测 **72/72 全绿**。
+
 ## 续302（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：真克隆复验「能不能一键」，结果验出续301 那行判据在说谎
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

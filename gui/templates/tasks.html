@@ -24,7 +24,7 @@
           title="回到页面刚打开时的状态（策略级默认关的阶段仍不勾）">恢复默认</button></span>
       <span data-ck-group="stages">
       {% for s in stages %}
-      {% set off_by_default = s in ['screenshot', 'cert'] %}
+      {% set off_by_default = s in off_by_default_stages %}
       <label class="chk"><input type="checkbox" name="stages" value="{{ s }}"
         data-ck-default="{{ 0 if off_by_default else 1 }}"
         {{ '' if off_by_default else 'checked' }}> {{ s }}</label>

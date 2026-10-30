@@ -1112,7 +1112,13 @@ LOCAL_STACK = {
     # 本机下载后算出的 sha256 与清单里那串**逐字相同**（`ecbadb99091a3f46…`）；解包 283 MB，
     # `GOROOT=<落点> <落点>/bin/go version` → `go version go1.27.2 linux/amd64`；
     # 用它（PATH 里**没有**系统 go）编 fscan 21.9 s 成功，产物 28,352,775 B。
-    "go": {"kind": _STACK_GOJSON, "version": "1.27.2", "dest": "tools/go", "strip": 1,
+    # 续303 实测（2026-10-30）：官方 `?mode=json` **只列最近两版**，1.27.2 已经消失
+    # （清单里只剩 go1.27.3 / go1.26.10）⇒ `--with-stack` 取不到 Go、每台没有系统 Go 的
+    # 新机器都编不出 fscan。钉版改成 **1.27.3**：本机下载 go1.27.3.linux-amd64.tar.gz
+    # = 70,588,678 B，sha256 与清单逐字一致
+    # （65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40），顶层前缀 `go`、
+    # 17,373 个成员；摘要产地仍是清单里的 `sha256` 字段（不自己再钉一份）。
+    "go": {"kind": _STACK_GOJSON, "version": "1.27.3", "dest": "tools/go", "strip": 1,
            "marker_any": ("bin/go", "bin/go.exe"), "max_bytes": 400 * 1024 * 1024,
            "why": "fscan 官方不发二进制，只能用 Go 自编译；本机没装 Go 时用这一份"
                   "（GOROOT / GOCACHE / GOMODCACHE 全指进仓库，见 go_env()）"},
@@ -1291,7 +1297,7 @@ def _gojson_digest(asset, version, timeout=60, fetch=None):
     except Exception as e:                                       # noqa: BLE001 —— 如实报，不猜
         return None, f"取官方版本清单失败：{e}"
     for rel in data or []:
-        if str(rel.get("version") or "")[2:] != version:         # "go1.27.2" → "1.27.2"
+        if str(rel.get("version") or "")[2:] != version:         # "go1.27.3" → "1.27.3"
             continue
         for f in rel.get("files") or []:
             if f.get("filename") == asset and f.get("sha256"):

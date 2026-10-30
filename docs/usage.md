@@ -350,7 +350,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    - **资产面拓展**（`assets`）：子域接管、JS 挖掘、**端口服务**（端口列表 / **端口范围**
      `portscan.mode`（top / full 全端口）/ `portscan.full_ports` / `portscan.exclude_scanned` 跳过已扫端口 /
      **扫描引擎 `portscan.engine`**：`auto`＝fscan → nmap → 内置）、**站点截图**
-     （`screenshot.enabled`，**默认关**；但**建任务时勾「截图」＝任务级点名**，
+     （`screenshot.enabled`，**随包开**（续303；代码 `DEFAULTS` 仍关）；**建任务时勾「截图」＝任务级点名**，
      落任务选项 `screenshot_on`，本次无视策略开关照跑，且**不改全局策略** ——
      勾了不该静默跳过；站点页签的「重新截图」排的是**只跑 `screenshot` 的追加运行**（同一任务、不新建，续170）。开着它还会**顺带补「渲染后标题」**
      （续140：SPA 外壳的原始 HTML 里没有 `<title>`，标题由 JS 注入，只有渲染才拿得到；

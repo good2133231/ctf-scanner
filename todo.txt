@@ -4542,6 +4542,69 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续303（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：截图随包默认开（门禁内压回关）+ 补装 fscan/dirmap
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+主理人四条指令：① Windows/macOS 真机**不用管**；② `screenshot.enabled` **默认要开**；
+③ GitHub 那两把没写权限的令牌**一个留着查询、一个删**；④ `fscan` / `dirmap` **补**。
+
+### 改了什么（②，代码）
+
+- [x] T1 随包 `config/settings.yaml` 的 `screenshot.enabled` 改成 `true`，段头注释按事实重写（[294] 会比对
+      段头第一行与 enabled：新注释里刻意不出现「默认关」字样）。**`DEFAULTS` 一个字没动**——
+      [251] 那条「不许为本地方便偷翻代码默认值」照旧生效，两档不同向是**刻意**的
+- [x] T2 门禁顶部加隔离：`load_settings()` 在门禁进程里把 screenshot 压回关（只压这一段，别的段与文件
+      逐字相同）。两条理由都是实测的：CI 里一次性 `--screenshot` 挂 30 秒/站 × `max_sites`＝每组十分钟；
+      且"这台机器恰好有没有浏览器"会决定断言（§6.2 第一起）。**要真跑的组显式开**（[6u]/[5t]/[170]/[7z]）
+      不受影响 —— 它们是在拿到的 settings 上再写 `enabled=True`
+- [x] T3 新组 `[303]`：随包开 / `DEFAULTS` 关 / 门禁内压回关 三件事**同时**成立（少一条另两条就是假话）｜
+      隔离只压一段｜静态 `import load_settings` 的模块一个不掉队（含 `gui.app`）｜三份文档里旧那句
+      「默认关」必须不在｜反向：摘掉隔离必须能看到随包 `true`，否则正向那条是空写
+- [x] T4 文档同步：`docs/features-off-by-default.md`（screenshot 从表一搬到表二，抬头 9/7 → 8/8）、
+      `README.md`（两处）、`docs/usage.md`、`本地开发.md`、`AGENTS.md`、[271] 的点名清单与计数
+
+### 改了什么（④，这台机器）
+
+- [x] `fscan`：系统 Go 装好后用 `tools/build_fscan.py` 编出 `tools/scanner/fscan`（26.6 MB），
+      再放到 `tools/fscan/fscan` —— **`settings.yaml` 一字未改**（配置里写的就是 `tools/fscan/fscan.exe`，
+      靠 `which()` 的后缀容错命中；续166「改配置要主理人点头」那条没破）
+- [x] `dirmap`：clone 进 `tools/dirmap/`（gitignore 覆盖）＋ `tools/setup_dirmap.py --install`
+      把 gevent/lxml/progressbar2 装进 `.venv`（3.14，自带 `imp` 垫片）
+- [x] 功能实测（不是只看 `--check`）：真起 127.0.0.1 回环站——
+      **fscan** 解析出 `{'port': 8899}`；**dirmap** 跑 5715 词 / 15.9 秒，产出 3 行命中，
+      经适配器 `_parse_output(force=True)` 与 targets 过滤后**3 条全在**（`/.env` `/admin` `/backup`）
+
+### 顺手修掉的真问题：钉的 Go 版本已经取不到了（原计划下一轮，主理人说"边等边修"）
+
+`--with-stack` 打印 `[!] go 未取到：官方清单里已经没有 go1.27.2` —— 这意味着每台没有系统 Go 的
+新机器都会卡在"fscan 编不出来"。官方 `?mode=json` **只列最近两版**（现在只剩 go1.27.3 / go1.26.10）。
+
+- [x] T5 钉版 `1.27.2 → 1.27.3`；摘要产地**本来是**清单里的 `sha256` 字段（`verify_source=release`，
+      不自己再钉一份）⇒ 改的只有 version + 注释里那段实测出处（字节数 / 摘要 / 成员数 / 日期）
+- [x] T6 **本机真装真编**：`go 1.27.3 → tools/go`（15,657 文件 / 67.3 MB，SHA256 过官方清单）；
+      `tools/go/bin/go version` → `go1.27.3 linux/amd64`；用它编 fscan **27.0 MB 成功**，
+      二进制放 `tools/fscan/fscan`（**`settings.yaml` 一字未改**：`--wire` 写进去的那一行已回退，
+      续166 那个"改配置要主理人点头"的口径保住；Windows 那台仍按它自己的 `tools/fscan/fscan.exe`）
+- [x] T7 `[303]` 补 ⑤：注释里的实测行必须与 `version` **同版**、三平台产物名由 version 现算，
+      反向夹具把注释里的版本串换成 9.9.9 必须看不到它（换钉版忘了改出处这类漂移会被抓）
+
+### 令牌（③）
+
+- 密文里现有：`github.token = github_pat_…（93 字符，查询用，**留**）`、`github.push_token = ghp_…（40 字符，推送用）`
+- **主理人要删的那把 fine-grained 从来就没进过我们的任何文件**（续300 换令牌时只写了 push_token 一个字段，
+  走的是合并那一路）⇒ 这一步在我这边**没有可删的东西**；撤销只能在 GitHub 网页侧做（需要那个令牌自己的登录态，
+  我这边没有、也不该去要）
+- 附带确认：两把不是同一个值（`token == push_token` 为 False）
+
+下一轮：
+- [ ] 门禁耗时抖动：497 s（续299）→ 682 s（续301）→ 531 s（续302）→ 本轮 650 s：
+      用 `tests/smoke.py --timing` 查一次热点，别当"机器忙"糊过去（§0.6 要实测数字）
+- [ ] 旧服务器 `data/scanner.db` 迁移：命令已由 `--ready` 印出，但**包还没导**
+- [ ] `shodan`/`quake`/`gitlab`/`icp` 四组 key 没配（都出厂关，不影响默认任务）
+- [ ] GitHub 网页侧删掉那把没有写权限的 fine-grained 令牌（主理人操作；本仓库不再存它）
+- [ ] 「相对路径按 BASE_DIR 折算」这一族已第四次出事（§5.13）：值得写成一条**全仓**判据
+      （扫 `Path(` 直接吃函数入参里名为 path/`*_path` 的相对串），而不是每次靠实测撞见
+
 ## 续302（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：真克隆复验「一键」，验出 `--ready` 那行在说谎
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
 
@@ -4577,17 +4640,6 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      FOFA/Shodan/Quake/VirusTotal/github 线索/icp **静默跳过**（看着像"目标本来没东西"）；
   ② `data/scanner.db` 是 gitignore ⇒ 历史资产与复测对照不在。
   `--ready` 的作用就是把这两件点名 + 给退出码，而不是靠人记得文档里的「必搬」表
-
-下一轮：
-- [ ] **两把没有写权限的 fine-grained 令牌**仍建议去 GitHub 侧改掉或删除
-      （`github.token` 那把还能查 CI，先留）
-- [ ] 门禁耗时抖动：682 s（续301）→ 531 s（本轮）→ 497 s（续299），同一台机器差 185 秒 ——
-      用 `tests/smoke.py --timing` 查一次热点，别当"机器忙"糊过去（§0.6 要实测数字）
-- [ ] `screenshot.enabled` 要不要随包默认开（等主理人点单；开 = 每任务起无头 Chrome，要同步 `[271]`）
-- [ ] 旧服务器 `data/scanner.db` 迁移：命令已由 `--ready` 印出，但**包还没导**
-- [ ] `fscan` / `dirmap` 本机仍缺；`shodan`/`quake`/`gitlab`/`icp` 四组 key 没配（都出厂关）
-- [ ] 「相对路径按 BASE_DIR 折算」这一族已第四次出事（§5.13）：值得把这条写成一条**全仓**判据
-      （扫 `Path(` 直接吃函数入参里名为 path/`*_path` 的相对串），而不是每次靠实测撞见
 
 ## 续301（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：迁移就绪做成一条命令（`sync_check --ready`）
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

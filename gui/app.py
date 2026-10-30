@@ -2094,6 +2094,20 @@ def create_app():
         # 续201：同上 —— 追加执行完成后回到来源任务的原页签
         return redirect(_with_hash(url_for("task_detail", task_id=src_id)))
 
+    def _off_by_default_stages(settings):
+        """建任务表单里"默认不勾"的阶段＝策略当前关着的那几段（续303 起；原来模板里写死 screenshot/cert）。
+
+        写死的后果：策略把 `screenshot` 打开之后，**勾不勾它都会跑**（策略赢），而那行复选框仍显示未勾 ——
+        用户读到的就是假话（§5.19）。改成策略现算之后，"恢复默认"与"它会不会跑"永远同向。
+        没有 `enabled` 键的阶段（subdomain / osint / probe…）不算关。
+        """
+        out = set()
+        for s in STAGE_ORDER:
+            sec = (settings or {}).get(s)
+            if isinstance(sec, dict) and sec.get("enabled") is False:
+                out.add(s)
+        return out
+
     @app.route("/tasks")
     @login_required
     def tasks():
@@ -2164,6 +2178,8 @@ def create_app():
         qpos = {t["id"]: db.queued_position(t["id"])
                 for t in rows if t["status"] == "queued"}
         return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER, cause_zh=CAUSE_ZH,
+                               # 续303：默认不勾哪些由策略现算（写死会让"策略开了、界面说没开"成为假话）
+                               off_by_default_stages=_off_by_default_stages(load_settings()),
                                # 续281：子任务在列表里显示 24-a 派生编号（79-a），不是新号 80。
                                # 真实 ID 仍留在链接与 tooltip 里，路由/主键一条不动。
                                task_labels=_task_tree_labels([t["id"] for t in rows]),

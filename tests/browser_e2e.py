@@ -881,12 +881,20 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     rep.check("[10] 「全部清掉」清成 0 项", _zero10 == 0, f"实测 {_zero10}")
     page.ev("document.querySelector('#task-form button[data-ck-mode=default]').click()")
     _back10 = page.ev(f"document.querySelectorAll('{_cb10}:checked').length")
-    # 续201 实测口径：15 阶段 − cert/screenshot/hostcollide（三个策略级默认关）＝ 12，
-    # 再加默认勾着的「自动拓展扫描」＝ 13。这里钉的是**实测值 + 它的来历**，
-    # 改默认勾选时必须同步改这条（否则又是"看着像坏了"的假红）。
-    rep.check("[10] 「恢复默认」＝13 项（12 个默认阶段 + 自动拓展扫描）",
-              _back10 == 13, f"实测 {_back10}")
-    # 证伪：按钮只管 stages 时会停在这里（13 项而非 17）—— 上面那条 all 的判据就是它的牙
+    # 续303：默认勾选改由**策略现算** —— screenshot 随包打开之后，「策略关的阶段」只剩 cert/hostcollide，
+    # 写死数字的在续303 就红过一次（13 → 14）。契约是「恢复默认 == 按策略算出来的那些 + 自动拓展扫描」，
+    # 写死会让下一次改默认时又变成"看着像坏了"的假红。
+    from scanner.config import load_settings as _ls10
+    from scanner.runner import STAGE_ORDER as _SO10
+    _set10 = _ls10()
+    _off10 = sum(1 for _s10 in _SO10
+                 if isinstance(_set10.get(_s10), dict) and _set10[_s10].get("enabled") is False)
+    # 只有阶段框带 `data-ck-default`（深度/拓展那几颗没有）⇒「恢复默认」勾上的就是"策略没关的阶段"。
+    # 旧注释里那个 "+1 自动拓展" 是凑数：旧值 15−2（cert+screenshot）=13 本来就不需要加一。
+    _want10 = len(_SO10) - _off10
+    rep.check(f"[10] 「恢复默认」＝{_want10} 项（{len(_SO10)} 个阶段里策略关着 {_off10} 个）",
+              _back10 == _want10, f"实测 {_back10}（策略关着 {_off10} 个阶段）")
+    # 证伪：按钮只管 stages 时会停在这里（少于全勾）—— 上面那条 all 的判据就是它的牙
     rep.check("[10] 点按钮不会把已填内容弄丢（按钮是 type=button，不提交表单）",
               page.ev("!!document.querySelector('#task-form button[data-ck-mode=all]')") is True
               and page.ev("document.querySelectorAll('#task-form form').length") == 0)

@@ -320,7 +320,7 @@ Flask Web 控制台（仿 ARL）。
   `DEFAULTS["cert"]["enabled"]` 与 `["screenshot"]["enabled"]` 都是 False（理由：cert 是按需能力、
   screenshot 每任务起无头 Chrome）。**不许**为“本地跑门禁方便”偷翻它们——翻了当场红；
   门禁侧 `[6u]` 显式开着跑这两个阶段但断言可移植（没 Chrome 只要求不失败、产物可为 0），
-  真正要 Chrome 的只有浏览器 E2E 72 条。本地想试真效果：策略页临时开 → 跑完关回。
+  真正要 Chrome 的只有浏览器 E2E 72 条。本地想试真效果：策略页临时开 → 跑完关回。**续303 翻转了其中一件**：主理人点单「默认要开」⇒ 随包 `settings.yaml` 的 `screenshot.enabled` 改成 `true`（`DEFAULTS` 那档仍是 False，`[251]` 因此一字未改地继续守着"不许为本地方便偷翻代码默认值"），而**门禁进程内把它压回关**（CI 里一次性 `--screenshot` 实测 30 秒不产出 × `max_sites`＝每组十分钟，且现象会长成"这台机器绿、那台机器红"，§6.2 第一起）—— 需要真跑截图的组一律自己显式开（`[6u]`/`[5t]`/`[170]`/`[7z]` 都是这个形状），判据在 `[303]`。`cert` 仍是两处都关。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`
@@ -682,7 +682,7 @@ ctf-scanner/
 - 阶段顺序与注册：`runner.STAGE_ORDER` / `STAGE_REGISTRY`（当前 **15 个**：
   `subdomain → takeover → hostcollide → portscan → probe → **cert** → **screenshot** → osint → jsmine → dirscan → crawl → vulnscan
   → **intel** → **heuristic** → **github**`；
-  `cert`（TLS 证书取证）与 `screenshot` 都**默认关**，都排在 `probe` 之后（要先有存活站点）；
+  `cert`（TLS 证书取证）**两处都关**、`screenshot` **续303 起随包默认开**（主理人点单；代码 `DEFAULTS` 仍关），都排在 `probe` 之后（要先有存活站点）；
   `screenshot` 需要本机 Edge/Chrome，浏览器路径探测见 `scanner/screenshot.py`；
   **但"默认关"指的是策略级开关** —— 建任务时勾了 `screenshot` / `cert`（或 CLI `-p screenshot` / `-p cert`）即
   **任务级点名**，GUI 落任务选项 `screenshot_on` / `cert_on`，阶段据此越过策略开关执行且不改全局策略
@@ -703,7 +703,7 @@ ctf-scanner/
 - 阶段开关有两层：**任务级**（建任务时勾选 stages / CLI `-p`）与**策略级**
   （`settings.takeover.enabled` / `portscan.enabled` / `jsmine.enabled`，阶段内部自查后跳过）。
   `takeover` / `hostcollide` / `portscan` / `jsmine` / `dirscan` / `crawl` / `vulnscan` 默认开，
-  `screenshot` / `cert`（都受策略级开关约束）/ `intel` / `heuristic` / `github` 默认关（**这是 DEFAULTS 那一档**；随包分发的 settings.yaml 自续159-附起把 `intel`/`heuristic`/`github`/`ctlog`/`multileak` 改成开，而 `screenshot`/`cert` 仍是关 —— 说「谁默认开」之前要先看这两份并不相等）。
+  `screenshot`（续303 起随包开）/ `cert`（两处都关；两者都受策略级开关约束）/ `intel` / `heuristic` / `github` 默认关（**这是 DEFAULTS 那一档**；随包分发的 settings.yaml 自续159-附起把 `intel`/`heuristic`/`github`/`ctlog`/`multileak` 改成开，而 `cert` 仍是关（`screenshot` 续303 起随包开）—— 说「谁默认开」之前要先看这两份并不相等）。
   另有**任务级「全量档」选项**：`portscan_full`（全端口 1-65535，见 §8）与 `dirscan_full`（深扫，见 §8），
   二者都是"用户点名要扫"→ **即使对应全局 `enabled=false` 也执行**，且 GUI/CLI 在勾了全量档却漏勾阶段时
   **自动补上该阶段并按 `STAGE_ORDER` 归位**（`runner` 按给定顺序执行、不排序，所以必须显式 sort）。
@@ -1914,7 +1914,7 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
   ② 第三方清单 / CDN / 黑名单命中**无论哪一档都不自动扫**（闸赢过分数，`[169]③` 双向夹具钉着）。
   仍未验：IDN / punycode 的主标签比对（中文域名换 TLD 那一形状过不过得了 0.70 没人测过）；
   徽章每行按任务取一次对照集（页内按 `task_id` 去重，每任务 2 条 SQL），**没有**缓存层。
-- **本机 `tools.fscan` 仍指向仓库外的目录联接（续45 主理人点单的形状，续166 刻意没动）**：`--full` 编出的产物在 `tools/scanner/fscan`（实测 28,229,792 B，用仓库内 Go 1.27.2 编），把配置改指它只是一行的事，但那是当年选定的口径 ⇒ 等主理人点头再改。`tools.massdns` 本轮**已**写成 `tools/scanner/massdns`（那是续165 新加的键，没有历史口径）。
+- **本机 `tools.fscan` 仍指向仓库外的目录联接（续45 主理人点单的形状，续166 刻意没动）**：`--full` 编出的产物在 `tools/scanner/fscan`（实测 28,229,792 B，用仓库内 Go 编；续303 起钉版是 1.27.3 —— 1.27.2 已从官方清单消失），把配置改指它只是一行的事，但那是当年选定的口径 ⇒ 等主理人点头再改。`tools.massdns` 本轮**已**写成 `tools/scanner/massdns`（那是续165 新加的键，没有历史口径）。
 
 - **碰库的 CLI 入口必须自己 `db.init_db()`，而 `users.count_users()` 吞错让这种洞看起来不存在**（续163，干净克隆实测）：`cli/run_users.py` 是全仓唯一一个碰库却没建表的入口（`client.py` / `run_node.py` / `migrate.py` / `login_guard.__main__` 都调了），于是新机器上 `CTFSCANNER_ADMIN_PASSWORD=… cli/run_users.py --create-admin` 崩 `no such table: users`。为什么长期没被发现：`--status` 读的 `count_users()` **刻意吞 `OperationalError` 返 0**（表没建＝0 个账号，正是它该有的说法），而 `--create-admin` 走的 `get_by_name()` 不吞 ⇒ 只有写路径崩。**最糟的是 `--status` 与登录页 0 账号时的指路语把人指到这条跑不通的命令上** —— 与 §6.2 第十六起同族：文案里写「可以这样补」，那个「这样」必须当场走得通。回归 `[8v] ⑦`（全新库路径子进程真跑 + 一条「入口必须建表」的源码判据，否则它会退化成「这台机器恰好有库才绿」）。
 - **`dnsq` 只解码 CNAME / A / AAAA 的 rdata，其余类型一律给空串**（续163 实测）：`_parse_message` 里 `else: records.append((owner, rtype, ""))` 是有意省事的形状，代价是 **PTR / NS / MX / SOA 拿不到任何名称** —— 实测 1.1.1.1 系统解析器能给出 `one.one.one.one`，`dnsq.query('1.1.1.1.in-addr.arpa', 'PTR')` 给 `[]`。这同时解释了两件事：① 续113 的 `zone_state()` 为什么**只能看 rcode、不能看「NS 记录是否非空」**（那时以为是解析器问题，其实是这里没解码）；② 「我们自己用 DNS 做原生 IP 反查」目前做不到，要先补这一段。补的时候别顺手把`zone_state` 改成看记录非空 —— 那条判据的正确性依赖「未知服务器 / 被防火墙吃掉也返回空」，改之前先想清楚 fail-open 那一半。
@@ -3035,7 +3035,7 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
   的**追加**运行），那句**不再成立** —— 已跑完的任务现在能补图，也能顺带补渲染后标题
   （那一轮照旧走 `set_site_titles`）。仍然成立的四条：① 它**排队**（一次无头浏览器要几秒到几十秒，
   压在 HTTP 线程上会把整个控制台卡住，还绕开队列、并发闸与请求预算）；② 策略级
-  `screenshot.enabled` 仍默认关，单次只排 `screenshot.max_sites` 上限内的站点，超出的条数说出来；
+  `screenshot.enabled` 续303 起随包已开（建任务不必再勾），单次只排 `screenshot.max_sites` 上限内的站点，超出的条数说出来；
   ③ 人工点的「重截失败的站点」**不看原因档**（人要点第二次就是"都要再看一眼"），原因档那一道
   只用于**自动**候补重试；④ 旧接口 `POST /api/rescan&stage=screenshot` 仍在、旧入口形态仍不许回来。
   判据：`[5t]` 钉双向（旧形态不在 + 新入口真渲染出来 + 勾选框接到表单上）、`[7r]/[7s]` 钉
@@ -3141,7 +3141,7 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
   才防得住并发，也防得住下一个调用方忘记判断；② `screenshot.capture(..., want_title=True)` 用
   `--dump-dom` 把渲染后的 DOM **挤进同一次浏览器调用**（再起一次进程是本模块最贵的动作，
   零额外启动是这条修法成立的前提），不传时 argv 与从前逐字节一致。
-  ⚠️ 门控没变、也别记错：**截图阶段仍然默认关闭**（`screenshot.enabled`，或建任务时勾「截图」），
+  ⚠️ 别记错：**截图阶段续303 起随包默认开着**（`screenshot.enabled`；建任务时勾「截图」那一手是任务级点名），
   所以「渲染后标题」是**开了截图才有**的东西；没开时的正确行为是 probe 入库日志把
   「多少个站点原始 HTML 里没有 `<title>`」说出来并指一条出路（续140 加的那半句），
   而不是假装标题抓到了。

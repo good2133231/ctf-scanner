@@ -357,8 +357,10 @@ afrog:
   per_target_rate: 5           # 单目标 -rlt（封顶 25）
   proc_timeout: 600            # 整进程超时（秒，封顶 1800）
 screenshot:
-  # 站点截图（默认关；打开后会调用本机 Edge/Chrome 的无头模式）
-  enabled: false
+  # 站点截图（续303 主理人点单：随包默认开；代码 DEFAULTS 仍是 False，所以干净克隆不带这份文件时依旧关）
+  # 打开后每个任务的 probe 之后会为本机存活站点起一次无头 Chrome/Edge 出图（额度 screenshot.max_sites）。
+  # 门禁进程内会把它压回关（CI 里一次性 --screenshot 实测挂 30 秒/站，见 tests/smoke.py 顶部与 [303]）。
+  enabled: true
   max_sites: 20  # 续280：填 0 = 不限（与 limits.brute_max_words: 0 = 全量 同一口径；旧写法把 0 当没填）
   window: 1280x900
   timeout: 30

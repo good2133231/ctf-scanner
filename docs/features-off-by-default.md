@@ -18,12 +18,11 @@
 - **表二**：随包 `true` 而代码默认 `False` ⇒ **其实是开着的**，只是"开在文件层"。
   这么放是有意的：代码层守住"没填 key 就不该发请求"（见门禁 `[8bq]`）。
 
-## 一、两处都关（真·没默认开，9 项）
+## 一、两处都关（真·没默认开，8 项）
 
 | 功能 | 段（配置键） | 代码默认 | 随包 | 生效 | 为什么没默认开 | 怎么开 | 要什么 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | TLS 证书取证（只读握手取颁发者/有效期/CN/SAN/指纹，进「SSL 证书」页签） | `cert` | False | False | False | 可选取证：每个 https 站点多一次握手，会让探测变重 | 策略配置 → `cert.enabled`（页面开关 `cert_enabled`） | 无（纯标准库；握手**不校验证书** —— 自签名/过期正是要看的） |
-| 站点截图（无头浏览器，站点页缩略图） | `screenshot` | False | False | False | 要本机 Chrome/Edge 无头模式，慢且依赖外部二进制与系统库 | 策略配置 → `screenshot.enabled`；`browser` 留空、或它指的东西不在＝自动探测（续299：那一行随仓库走，不能因为本机没有就判死） | 本机浏览器（**续298 起标准安装即取一份进 `tools/browser/`**，或系统的 Chrome/Edge）+ 系统共享库（libnss3 / libgbm / libatk 等）+ 中文字体（同样默认即装） |
 | 备案反查（同主体域名） | `icp` | False | False | False | 源按次计费/限流；预置的工信部源在国内托管，海外出口通常不可达 | 策略配置 → `icp.enabled` + `sources` 里给可达的源 | 可能要 `api_key`（只进 `config/keys.enc.yaml`，不落明文） |
 | 360 Quake 的 favicon 反查（同源资产） | `quake` | False | False | False | 外部付费接口、要 key | 策略配置 → `quake.enabled` + `config/keys.yaml` 的 `quake.key` | key |
 | Shodan 的 favicon 反查 | `shodan` | False | False | False | 同上；且"任何外部接口都不该在用户没点头时产生流量" | 策略配置 → `shodan.enabled` + `shodan.key` | key |
@@ -32,7 +31,7 @@
 | 边缘认证门（401 门） | `gui.edge_auth` | False | False | False | 它是**部署开关**不是能力 —— 只有把控制台绑到 `0.0.0.0` 时才需要；刻意不给环境变量覆盖，免得"随手一设"就变了 | 策略配置 / `config/settings.yaml` 的 `gui.edge_auth.enabled` | 无（配合 HTTPS 才有意义；**不替代登录**） |
 | 报告导出（MD / JSONL / HTML；PDF 已于续297 移除） | `report` | False | False | False | 续171 主理人点单"默认关闭" | 策略配置 → 报告导出 | PDF 还要本机无头浏览器 |
 
-## 二、随包开、代码默认关（其实是开着的，7 项）
+## 二、随包开、代码默认关（其实是开着的，8 项）
 
 | 功能 | 段（配置键） | 代码默认 | 随包 | 生效 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -43,6 +42,7 @@
 | 漏洞情报（CISA KEV，免 key） | `intel` | False | True | True | 只产线索，不计入漏洞数、不自动导入 POC |
 | C 段反查（webscan.cc 公共接口） | `iprecon` | False | True | True | 第三方公共接口，可用性无保障 |
 | 多平台公开代码检索（grepapp，免 key） | `multileak` | False | True | True | 边界与 `github` 同源 |
+| 站点截图（无头浏览器，站点页缩略图） | `screenshot` | False | True | True | **随包开**（续303 主理人点单「默认要开」）：代码 `DEFAULTS` 仍 False，浏览器与中文字体续298 已进默认安装；门禁进程内把它压回关（CI 里一次性 `--screenshot` 实测 30 秒不产出 × `max_sites`），要真跑的组自己显式开 —— `[303]` 钉这三件事同向 |
 
 ⚠ **"开关开着"≠"一定有产出"**：`fofa` / `github` 这两家没填凭据时，阶段会**因缺 key 跳过并说明**，
 不会静默假装扫过。

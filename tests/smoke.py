@@ -200,6 +200,32 @@ _ksbox.PASSPHRASE_FILE = "~/no-such-keys-pass-smoke-isolated"
 _ksbox.PASSPHRASE_FILE_REPO = "~/no-such-keys-pass-repo-smoke-isolated"
 
 
+# ---- 续303：随包 `config/settings.yaml` 已把 `screenshot.enabled` 打开（主理人点单「默认要开」）
+# ⇒ 门禁进程内必须压回关。两条理由都是实测过的，不是洁癖：
+#   ① CI 里那条一次性 `--screenshot` 会挂满 30 秒不产出（§7 续75），乘 `max_sites`（随包 20）
+#      就是每个跑到截图的组 +10 分钟，全量门禁会直接不可用；
+#   ② 更要紧的是"这台机器恰好有没有可用无头浏览器"会决定断言结果 —— §6.2 第一起那一族
+#      （判据吃环境值），症状是"这台绿、那台红，而红的还是从没人改过的那条"。
+# 要真跑截图的组一律自己显式开（`[6u]` / `[5t]` / `[170]` / `[7z]`）：它们是在拿到的 settings
+# 上再写 `enabled=True`，走的不是这条路，所以该跑的照跑。
+import scanner.config as _cfg303
+
+_cfg303._load_settings_orig = _cfg303.load_settings
+
+
+def _smoke_settings():
+    st = _cfg303._load_settings_orig()
+    st["screenshot"] = dict(st.get("screenshot") or {}, enabled=False)
+    return st
+
+
+_cfg303.load_settings = _smoke_settings
+for _m303 in list(sys.modules.values()):
+    # 已经静态 `from ..config import load_settings` 的模块一起跟上（否则那一份还是原函数）
+    if getattr(_m303, "load_settings", None) is _cfg303._load_settings_orig:
+        _m303.load_settings = _smoke_settings
+
+
 def _cleanup_sandbox() -> None:
     """退出时删掉本轮沙箱。
 
@@ -15930,8 +15956,18 @@ http:
         f"页面上的阶段清单与 STAGE_ORDER 不一致：{[s for s, _ in _st118]} vs {list(_SO118)}"
     assert all(_d in ("0", "1") for _s, _d in _st118), "每个阶段都要带 data-ck-default"
     _off118 = sorted(s for s, d in _st118 if d == "0")
-    assert _off118 == sorted(["cert", "screenshot"]), f"默认不勾的应当只有策略级默认关那两个：{_off118}"
-    assert sum(1 for s, d in _st118 if d == "1") == len(_SO118) - 2
+    # 续303：默认勾选改由**策略现算**（模板不再写死）。判据换成"页面渲染的那组 == 按当前策略算的那组"，
+    # 另单独钉两件不能漂的事：cert 必须仍在里头；模板里不许再出现写死的那串。
+    _set118 = load_settings()
+    _want118 = sorted(s for s in _SO118
+                      if isinstance(_set118.get(s), dict) and _set118[s].get("enabled") is False)
+    assert _off118 == _want118, \
+        f"默认不勾那组与策略算出来的不一致：页面 {_off118} vs 策略 {_want118}（模板是不是又写死了）"
+    assert "cert" in _off118, "cert 两处都关，必须默认不勾"
+    assert "['screenshot', 'cert']" not in \
+        (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8"), \
+        "模板又把默认不勾写死了 —— 策略一开它就会说谎（续303）"
+    assert sum(1 for s, d in _st118 if d == "1") == len(_SO118) - len(_off118)
     # 续250：deep 分组少一项 —— 「全端口扫描」勾选从建任务表单摘掉（挪到任务详情端口页签）
     # 续265：「离线模式」那一组整颗从建任务表单去掉（主理人：没有场景用得到）⇒ 只剩两个分组，
     # 也不再需要为 mode 单独走 `</span>` 那条分支（分组都是 `</div>` 收尾的）。
@@ -23342,10 +23378,12 @@ expression: r0()
     # 随包已开但 DEFAULTS 关的两段（历史漂移，续159-附一起收口）
     for _s160 in ("iprecon", "fofa"):
         assert _ship160[_s160]["enabled"] is True and _DEF160[_s160]["enabled"] is False, _s160
-    # 仍然关着的两段必须真的还关着（防止"随包全开"把截图/证书也顺手放进来）
-    # —— portscan 已由续269 翻开，下一条单独钉它
-    for _s160 in ("screenshot", "cert"):
+    # 仍然两处都关的只剩 cert；**续303 起 screenshot 随包打开**（主理人点单「默认要开」），
+    # 但 DEFAULTS 必须仍是 false —— 两档分开说，别把"开在文件层"写成"改了出厂代码"
+    for _s160 in ("cert",):
         assert _ship160[_s160]["enabled"] is False and _DEF160[_s160]["enabled"] is False, _s160
+    assert _ship160["screenshot"]["enabled"] is True and _DEF160["screenshot"]["enabled"] is False, \
+        "screenshot：随包应为 true（续303 主理人点单）而 DEFAULTS 仍 false"
     # 续269（主理人点单「端口扫描默认开启，扫常规 web 端口」）：**两处都翻成开**
     assert _ship160["portscan"]["enabled"] is True and _DEF160["portscan"]["enabled"] is True, \
         "portscan 随包与 DEFAULTS 都应是 True（默认开；档位仍是 top 的 web 端口表）"
@@ -23364,7 +23402,7 @@ expression: r0()
             if _b160 in _t160:
                 raise AssertionError(f"{_f160} 还在说「{_b160}」—— 随包默认值已改，这句是假话（§5.19）")
     print(f"[8bq] 续159-附 随包策略默认值 ok: 五段随包开而 DEFAULTS 仍 False（开在文件层）｜"
-          f"min_severity 随包 high / DEFAULTS medium｜生效值已核｜screenshot/cert 仍关、"
+          f"min_severity 随包 high / DEFAULTS medium｜生效值已核｜cert 仍两处都关 / screenshot 续303 起随包开、"
           f"portscan 续269 起两处都开｜"
           f"{len(_ban160)} 条已证伪的旧句子在 4 份文档里 0 命中（判据先自证抓得到）")
 
@@ -29501,10 +29539,14 @@ expression: r0()
         f"策略开着、没勾选项也应该真跑（hostcollide.run 没被调用）：{_lg219.lines}"
     assert not any("未启用" in l or "未开启" in l for l in _lg219.lines), _lg219.lines
 
-    # ② 建任务表单：hostcollide 必须在**默认勾选**那一拨（模板里默认不勾的只有 screenshot/cert）
+    # ② 建任务表单：hostcollide 必须在**默认勾选**那一拨。续303 起"默认不勾"由策略现算
+    #    （模板写死 `['screenshot', 'cert']` 的老口径作废 —— screenshot 随包已经开了），
+    #    所以这里钉两件：模板用的是那个现算集合；hostcollide 的策略确实是开着的（否则它会被算进"不勾"）。
     _tt219 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8", errors="replace")
-    assert "off_by_default = s in ['screenshot', 'cert']" in _tt219, \
-        "建任务默认勾选集合变了 ⇒ hostcollide 不能被塞进 off_by_default（否则又得用户手动勾）"
+    assert "off_by_default = s in off_by_default_stages" in _tt219, \
+        "建任务默认勾选不是按策略现算了（模板是不是又写死了一张名单）"
+    assert (load_settings().get("hostcollide") or {}).get("enabled") is True, \
+        "hostcollide 策略默认应开着 —— 否则表单会默认不勾它（又得用户手动勾）"
     # ④ 续227：建任务页不再有可见的 Host 碰撞勾选框（默认就做，不需要勾）
     assert 'name="hostcollide"' not in _tt219, \
         "建任务页又出现 Host 碰撞勾选框（默认就做，不该再要求用户勾）"
@@ -31938,23 +31980,26 @@ expression: r0()
                 _t.split("## 二、", 1)[1].split("## 三、", 1)[0])
 
     def _check271(_t):
-        """表一点名「两处都关」的 9 项、表二点名「随包开 / 代码默认关」的 7 项。"""
+        """表一点名「两处都关」的 8 项、表二点名「随包开 / 代码默认关」的 8 项（续303 起
+        screenshot 从表一搬到表二：随包 true 而 DEFAULTS false，与 ctlog/fofa 那一族同一档）。"""
         _a, _b = _tables271(_t)
-        for _s in ("cert", "dev", "icp", "quake", "screenshot", "shodan", "ssrf",
+        for _s in ("cert", "dev", "icp", "quake", "shodan", "ssrf",
                    "gui.edge_auth", "report"):
             assert f"`{_s}`" in _a, f"表一（两处都关）没点名 {_s}"
-        for _s in ("ctlog", "fofa", "github", "heuristic", "intel", "iprecon", "multileak"):
+        for _s in ("ctlog", "fofa", "github", "heuristic", "intel", "iprecon", "multileak",
+                   "screenshot"):
             assert f"`{_s}`" in _b, f"表二（随包开）没点名 {_s}"
 
     _check271(_doc271)
 
     # ① 配置侧逐条对上：表里写了什么，配置就得是什么（反过来也一样）
-    for _s271 in ("cert", "dev", "icp", "quake", "screenshot", "shodan", "ssrf"):
+    for _s271 in ("cert", "dev", "icp", "quake", "shodan", "ssrf"):
         assert _D271[_s271]["enabled"] is False and _ship271[_s271]["enabled"] is False, \
             f"{_s271} 已不是「两处都关」—— 表一要跟着改"
     assert _D271["gui"]["edge_auth"]["enabled"] is False, "gui.edge_auth 应仍是关（部署开关）"
     assert _D271["report"]["export_enabled"] is False, "报告导出应仍默认关（续171 主理人点单）"
-    for _s271 in ("ctlog", "fofa", "github", "heuristic", "intel", "iprecon", "multileak"):
+    for _s271 in ("ctlog", "fofa", "github", "heuristic", "intel", "iprecon", "multileak",
+                   "screenshot"):
         assert _ship271[_s271]["enabled"] is True and _D271[_s271]["enabled"] is False, \
             f"{_s271} 已不是「随包开而代码默认关」—— 表二要跟着改"
 
@@ -31974,7 +32019,7 @@ expression: r0()
         raise AssertionError("摘掉表一 cert 那一行后判据没红 ⇒ 这些断言是空写")
 
     print("[271] 续271 ok: ⑩「已实现但未默认开启」清单（docs/features-off-by-default.md）｜"
-          "表一 9 项两处都关 / 表二 7 项随包开而代码默认关，逐条与配置对上｜"
+          "表一 8 项两处都关 / 表二 8 项随包开而代码默认关，逐条与配置对上（续303：screenshot 移到表二）｜"
           "默认已开的段（portscan/hostcollide/afrog/crawl/takeover）不许混进表一｜"
           "变异（摘掉一行）⇒ 判据立刻红")
 
@@ -33693,6 +33738,82 @@ expression: r0()
         os.chdir(_cwd302)
         shutil.rmtree(_sb302, ignore_errors=False)
         _ks302.reset()
+    # ------------------------------------------------------------------ [303]
+    # 续303：主理人点单「截图默认要开」⇒ 随包 settings.yaml 打开，而三件事必须**同时**成立：
+    #   ① 随包文件里 screenshot.enabled 是 true（用户 clone 完就真能出图）
+    #   ② 代码 DEFAULTS 仍是 false（[251] 那条"不许为本地方便偷翻代码默认值"一字未动）
+    #   ③ 门禁进程内压回关（CI 里一次性 --screenshot 实测 30 秒/站，且结果会随机器变 —— §6.2 第一起）
+    # 少任何一条，另外两条就会变成假话；本组把这三角一起钉住，并自带反向自证。
+    import yaml as _y303
+    from scanner import config as _cfg303m
+    _ship303 = _y303.safe_load((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
+    assert _ship303["screenshot"]["enabled"] is True, \
+        "随包 settings.yaml 的 screenshot.enabled 不是 true —— 主理人点单的「默认要开」没落地（README/usage 已按开写着）"
+    assert _cfg303.DEFAULTS["screenshot"]["enabled"] is False, \
+        "DEFAULTS 被翻了：那是把「门禁不许偷翻」那条红线（[251]）改成另一句话"
+    # ③ 门禁内确实压回关，而且**只压这一件**
+    _gs303 = _cfg303m.load_settings()
+    assert _gs303["screenshot"]["enabled"] is False, \
+        "门禁进程里 load_settings() 仍带着随包的 true ⇒ 每组会真的起无头浏览器（CI +10 分钟/组）"
+    _raw303 = _cfg303m._load_settings_orig()
+    _diff303 = {k for k in set(_raw303) | set(_gs303)
+                if (_raw303.get(k) or {}) != (_gs303.get(k) or {})}
+    assert _diff303 == {"screenshot"}, \
+        f"隔离顺手改了别的段（{sorted(_diff303)}）⇒ 门禁测的已经不是用户那份配置了"
+    _gs303["screenshot"] = dict(_gs303["screenshot"], enabled=True)
+    assert _gs303["screenshot"]["enabled"] is True, "显式开的那档被隔离顶掉了：[6u]/[5t]/[170]/[7z] 会假跑"
+    # 静态 import 过符号的模块也必须是同一把包装（否则那一份读到的仍是随包 true）
+    _wrapped = [m.__name__ for m in list(sys.modules.values())
+                if getattr(m, "load_settings", None) is _cfg303m.load_settings
+                and m.__name__ != "scanner.config"]
+    _stale = [m.__name__ for m in list(sys.modules.values())
+              if getattr(m, "load_settings", None) is _cfg303m._load_settings_orig]
+    assert not _stale, f"这些模块还拿着原函数（那份读到的 settings 里 screenshot 是开的）：{_stale}"
+    assert "gui.app" in _wrapped or "gui.app" not in sys.modules, \
+        "gui.app 已导入却没接上隔离 —— serve() 与队列 worker 读的就是那一份"
+    # 文档不许留着旧的那句话（§252/§294 同族：注释与文档替配置说谎）
+    for _f303, _ban303 in (("README.md", "站点截图（默认关）"),
+                           ("docs/usage.md", "`screenshot.enabled`，**默认关**"),
+                           ("本地开发.md", "**出厂就是关的**")):
+        _t303 = (ROOT / _f303).read_text(encoding="utf-8")
+        assert _ban303 not in _t303, f"{_f303} 里还写着「{_ban303}」—— 随包已经开了"
+    # ---- ⑤ Go 钉版（续303 顺手修的）：官方 `?mode=json` **只列最近两版**，1.27.2 已从清单消失
+    #      ⇒ `--with-stack` 取不到 Go ⇒ 每台没有系统 Go 的新机器都编不出 fscan（本机实测原话：
+    #      「官方清单里已经没有 go1.27.2」）。钉版换成 1.27.3，摘要在安装时从清单 `sha256` 取
+    #      （产地仍是 release、不自己再钉一份）。门禁不联网，所以这里钉的是**漂移**：
+    #      version 与注释里"本机实测"那一行必须是同一版，且三平台产物名由 version 现算。
+    import scanner.toolmgr as _tm303
+    _go303 = _tm303.LOCAL_STACK["go"]
+    assert re.fullmatch(r"1\.\d+\.\d+", _go303["version"]), _go303["version"]
+    _tmsrc303 = (ROOT / "scanner" / "toolmgr.py").read_text(encoding="utf-8")
+    _i303 = _tmsrc303.index('"go": {"kind": _STACK_GOJSON')
+    _note303 = _tmsrc303[max(0, _i303 - 2400):_i303]
+    _want303 = f"go{_go303['version']}.linux-amd64.tar.gz"
+    assert _want303 in _note303, \
+        f"注释里没有 {_want303} 的实测行 —— 换钉版时出处/字节数/摘要没跟着改（下一个接手的人不知道钉的是哪一版）"
+    for _os303, _arch303, _ext303 in (("linux", "amd64", "tar.gz"), ("windows", "amd64", "zip"),
+                                      ("macOS", "arm64", "tar.gz")):
+        _goos303 = "darwin" if _os303 == "macOS" else _os303
+        _got303 = _tm303.stack_asset("go", _os303, _arch303)
+        assert _got303 == f"go{_go303['version']}.{_goos303}-{_arch303}.{_ext303}", \
+            f"{_os303}/{_arch303} 的产物名不是按 version 现算的：{_got303!r}"
+    # 反向自证：把注释里那串换成 9.9.9，⑤ 的判据必须看不到它（否则它只是"包含某个串"的空写）
+    _fake303 = _tmsrc303.replace(_want303, "go9.9.9.linux-amd64.tar.gz", 1)
+    _j303 = _fake303.index('"go": {"kind": _STACK_GOJSON')
+    assert _want303 not in _fake303[max(0, _j303 - 2400):_j303], "反向夹具没构造出来 —— ⑤ 的区分度没被证明"
+
+    # 反向自证（§6.1）：把隔离摘掉，③ 那条判据必须红 —— 否则这条是空写
+    try:
+        _cfg303m.load_settings = _cfg303m._load_settings_orig
+        assert _cfg303m.load_settings()["screenshot"]["enabled"] is True, \
+            "摘掉隔离后随包值竟不是 true ⇒ 上面那条正向判据没有区分度"
+    finally:
+        _cfg303m.load_settings = _smoke_settings
+    print("[303] 续303 ok: 截图随包开 / DEFAULTS 关 / 门禁内压回关 三件事同向（少一条另两条就是假话）"
+          "｜隔离只压 screenshot 一段，别的段与文件逐字相同｜需要真跑的组显式开仍然生效"
+          "｜静态 import 的模块一个不许掉队（gui.app 也查）｜三份文档里旧那句「默认关」必须不在"
+          "｜反向：摘掉隔离必须能看到随包 true，否则正向那条是空写"
+          "｜Go 钉版：注释里的实测行与 version 同版、三平台产物名由 version 现算（反向夹具能弄红）")
     print("[302] 续302 ok: 相对口令档一律按 BASE_DIR 折算（AST 同时认 _resolve_passphrase 在、"
           "Path(path) 不在 —— 旧那份在这里必红）｜runstate_rows 调 detail **不带参数**"
           "（逐档显式传就是把相对形的解释写回调用方，退回它这条立刻红）"
