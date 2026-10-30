@@ -3,6 +3,91 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续302（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：真克隆复验「能不能一键」，结果验出续301 那行判据在说谎
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+### 触发
+
+主理人问「你做完后，下次 git 下载回来是不是能一键安装运行了」。这句话之前只写在文档里、
+**没人拿真克隆验过**，所以本轮不解释、直接测：`git clone` 一份到 `/tmp/ctf-fresh301`，
+然后站在旧仓库里对它跑 `python tools/sync_check.py --ready`。
+
+先说结论里"能"的那半：`./install.sh` 一条命令 = 建 `.venv` + 按 `requirements.lock` 装依赖
++ subfinder / httpx / puredns（过 SHA256）+ **Chrome for Testing（189 MB，钉摘要）+
+`fonts-noto-cjk`**（续298 起默认就取）⇒ **跑起来是一键的**。
+
+但那份输出里被抓出一条假话。
+
+### 抓到的东西
+
+克隆里**没有** `config/keys-pass`（口令档按续295 的红字决定永不进仓库），那一行却印
+`✓ 运行态｜口令档：命中：config/keys-pass` —— 它吃到的是我脚边那份旧仓库的文件。
+同一份输出里 db / 会话密钥两行都按克隆自己判断，**三行两个基准**，肉眼看整段完全正常。
+这一条正是 §6.2 第一起那一族（判据吃"进程恰好是什么"），只是这次吃的是**当前目录**。
+
+### 根因（§5.13「相对路径按进程 CWD 解释」那一族的第四次）
+
+`keystore.file_passphrase_detail()` 有两个入口形状：不带参数时走
+`passphrase_candidates()` → `_resolve_passphrase()`（相对形一律按 BASE_DIR 折算，
+docstring 里就写着"这条折算是刻意的"）；而**显式给 `path` 那一支直接 `Path(path)`**，
+绕过了它。续301 的 `runstate_rows()` 正是逐档把候选名当 path 传进去的 ——
+"档位清单只有一个产地"守住了，"相对形怎么解释"却被调用方重抄了一遍。
+
+### 改了什么
+
+- `scanner/keystore.py`：`path is not None` 那一支改走 `_resolve_passphrase(disp)`。
+  绝对路径调用方（门禁里那些临时文件）**一字未变**，不带参数那支本来就走正路。
+- `run_bootstrap.py::runstate_rows()`：不再自己逐档试，改为**不带参数**调
+  `file_passphrase_detail()`，它的第三个返回值就是"这一句口令来自哪一档"（续293 的产物）。
+- `tests/smoke.py` 新组 `[302]`，五条判据：① AST 认 `_resolve_passphrase` 在、`Path(path)` 不在；
+  ①b AST 认 `runstate_rows` 调 detail **不带参数**；② BASE_DIR 与 CWD 各放一罐内容不同的
+  `config/keys-pass` ⇒ 必须取 BASE_DIR 那罐；③ 判据行与 `os.getcwd()` 无关（仓库里有⇒ok、
+  没有⇒warn），并**反手钉住 CWD 真的站在有口令档的那份目录**（否则③是空写）。
+- AGENTS §5.14 产地清单补这一条。这份文件是**混合行尾**（3152 CRLF / 229 LF），所以改动走
+  「从 HEAD 取原字节 + 行内替换、不新增行」—— Edit 类工具先前把整份归一成 LF，
+  `git diff --numstat` 立刻 229/229 而 `--ignore-cr-at-eol` 报 1/1（§280 那族第四次），
+  已按原字节重建，最终两式 1/1、CRLF/LF 计数与 HEAD 完全相同。
+
+### 证伪（§6.1）：五轮，各断在不同判据上
+
+| 变异 | 断在哪一条 |
+|---|---|
+| M1 只退 keystore（改回 `Path(path)`）| ① AST 红 |
+| M2 只退调用方（逐档显式传）| ①b AST 红 |
+| M3 两处一起退回续301 形状 | ① 先红 |
+| **M4 只把折算基准换成 `Path.cwd()`** | **② 红**（拿到 CWD 那一罐）|
+| **M5 只把迭代档位那一支换成 `Path(disp)`** | **③ 红**（"被测仓库没有口令档却报 ok"）|
+
+M1~M3 都断在**第一条** AST 判据上，所以"行为那两条有没有牙齿"这件事当时还没被证明 ——
+M4/M5 就是为这一问补的（§6.1：退不回失败＝那条断言等于没加）。每轮 `finally` 还原、
+还原后复跑基线 rc=0，`scanner/keystore.py` 与 `run_bootstrap.py` 都和进来时**逐字节一致**
+（记录 `logs/_mut302.log` / `_mut302b.log` / `_mut302c.log`）。
+另外 M1 第一次跑就撞在自己的守卫上：那条单行锚点在文件里命中 2 次（两个分支同一句），
+`patch()` 直接拒绝 —— "锚点不唯一就不许下结论"这条判据本轮拦住了我一次。
+
+### 现场复验（同一条件：站在旧仓库里检查那份没有口令档的克隆）
+
+- 修前：`✓ 运行态｜口令档：命中：config/keys-pass`
+- 修后：`! 运行态｜口令档：两档口令文件都没有或都没过守卫 ⇒ 无 TTY 启动会锁死在凭据上`
+  ＋ 出路那句（设 `CTFSCANNER_KEYS_PASSPHRASE` / 写 `~/.secrets/keys-pass` / `config/keys-pass`）
+
+### 回答那句「一键」：还剩两件必须人补，而且是**口径决定的**
+
+1. `config/keys-pass`（或 `~/.secrets/keys-pass`）不进仓库 ⇒ 新克隆解不开密文 ⇒
+   FOFA / Shodan / Quake / VirusTotal / github 线索 / icp **全部静默跳过**，
+   现象就是"目标本来没东西"（§6.2 第十六起同族的后果面）。
+2. `data/scanner.db` 是 gitignore ⇒ 历史资产与「这次 vs 上次」的对照不在。
+   会话密钥不用补（启动自动建，代价是所有人重登一次）；仓库外那份脱敏别名表只能人确认。
+
+`--ready` 买到的就是把这两件**点名 + 给退出码**，不用再靠人记得文档里那张「必搬」表。
+
+### 实测数字
+
+全量门禁 `SMOKE PASS` / rc=0 / **531 秒** / **373 组**（`logs/_smoke302.log`）。
+同机三次：497 s（续299）→ 682 s（续301）→ 531 s（本轮），组数 371→372→373 ——
+耗时差 185 秒比新增的那两组大得多，抖动这条继续挂在待办里（用 `--timing` 查，别猜）。
+
 ## 续301（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：把「迁移能不能直接跑」做成一条命令 + 一个退出码
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

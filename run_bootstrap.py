@@ -694,13 +694,16 @@ def runstate_rows(db_path=None, keys_path=None):
                      "detail": f"已解锁（来源：{ks['source'] or '未知'}）｜组：{'、'.join(groups) or '解开了但一组都没有'}",
                      "fix": ""})
 
-    # 注意元组：file_passphrase 返回 (口令, 原因)，直接当布尔用会**恒真**（第一版就这么错着，
-    # 于是这一档永远报 ok —— 门禁 [301] 的反向夹具专门钉这一点）
-    tiers = [c for c in keystore.passphrase_candidates() if keystore.file_passphrase(c)[0]]
-    rows.append({"name": "口令档", "status": "ok" if tiers else "warn",
-                 "detail": (f"命中：{'、'.join(tiers)}" if tiers
+    # 档位判定一律交给 keystore 自己那一处：`file_passphrase_detail()` 不带参数时按
+    # `passphrase_candidates()` 逐档走 `_resolve_passphrase`（相对形按 BASE_DIR 折算）。
+    # 反过来，把候选名**当 path 显式传进去**读的是按**进程 CWD** 解释的路径 —— 续302 实测：
+    # 站在旧仓库里对新克隆跑这条命令，会把旧仓库那份 keys-pass 报成「本机命中」。
+    # （元组也别忘了：`file_passphrase` 回 (口令, 原因)，整个元组当布尔**恒真**。）
+    _got_pass, _pp_why, _pp_hit = keystore.file_passphrase_detail()
+    rows.append({"name": "口令档", "status": "ok" if _got_pass else "warn",
+                 "detail": (f"命中：{_pp_hit}" if _got_pass
                             else "两档口令文件都没有或都没过守卫 ⇒ 无 TTY 启动会锁死在凭据上"),
-                 "fix": "" if tiers else keystore.unlock_howto()})
+                 "fix": "" if _got_pass else keystore.unlock_howto()})
 
     sec = (Path(db_path).parent if db_path else ROOT / "data") / SECRET_FILE
     rows.append({"name": "会话密钥", "status": "ok" if sec.exists() else "missing",

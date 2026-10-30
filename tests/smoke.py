@@ -33611,6 +33611,94 @@ expression: r0()
           "｜manual 档不算缺口（否则每台机器都红 ⇒ 没人再看）"
           "｜AST 钉住 sync_check 不自己实现判据（docstring 排除）+ --ready 排在 check() 之前"
           "｜端到端印出的缺口数 == 判据数，结论句与数字同形")
+    # ------------------------------------------------------------------ [302]
+    # 续302：`--ready` 的「口令档」那一行读过**进程 CWD** —— 现场形状是「站在旧仓库里检查一份
+    # 新克隆」：克隆里没有 config/keys-pass，那一行却印「✓ 命中：config/keys-pass」（吃到的是
+    # 脚边那份）。根因：keystore.file_passphrase_detail 里显式给 path 那一支直接 Path(path)，
+    # 绕过了 _resolve_passphrase 那条「相对形一律按 BASE_DIR 折算」的规矩（§5.13 那一族）。
+    # 三条判据：① 认 AST 里的调用形态；② BASE_DIR 与 CWD 各有一罐不同口令时必须取 BASE_DIR；
+    # ③ 判据行的状态与 os.getcwd() 无关（正反两向），并反手确认夹具前提还在。
+    import ast as _ast302
+    import run_bootstrap as _rb302
+    from scanner import keystore as _ks302
+    _sb302 = Path(tempfile.mkdtemp(prefix="smoke-302", dir=str(ROOT / "logs")))
+    _no302 = _sb302 / "没有这个库.db"          # 让 db / 密文两行落在确定的档位上
+    _nk302 = _sb302 / "没有这个密文.yaml"
+
+    def _mkrepo302(name, phrase=None):
+        """造一份"仓库"：.gitignore 覆盖 config/keys-pass；phrase=None 就是仓库里没有这一档。"""
+        d = _sb302 / name
+        (d / "config").mkdir(parents=True)
+        (d / ".gitignore").write_text("config/keys-pass\n", encoding="utf-8")
+        if phrase is not None:
+            _p302 = d / "config" / "keys-pass"
+            _p302.write_text(phrase, encoding="utf-8")
+            os.chmod(_p302, 0o600)
+        return d
+
+    _A302 = _mkrepo302("repoA", "沙箱口令A-not-real")       # 被测仓库（BASE_DIR）
+    _B302 = _mkrepo302("decoy", "沙箱口令B-not-real")       # 进程只是恰好站在这里
+    _C302 = _mkrepo302("repoC")                            # 仓库里确实没有口令档
+    _keep302 = (_ks302.BASE_DIR, _ks302.PASSPHRASE_FILE,
+                _ks302.PASSPHRASE_FILE_REPO, os.getcwd())
+    try:
+        # ① 源码形态：相对路径的解释只许有一处产地（Path(path) 就是第二份）
+        _tree302 = _ast302.parse((ROOT / "scanner" / "keystore.py").read_text(encoding="utf-8"))
+        _fn302 = [n for n in _tree302.body if isinstance(n, _ast302.FunctionDef)
+                  and n.name == "file_passphrase_detail"]
+        assert len(_fn302) == 1, f"file_passphrase_detail 定义了 {len(_fn302)} 遍"
+        _cs302 = [n for n in _ast302.walk(_fn302[0]) if isinstance(n, _ast302.Call)]
+        assert any(getattr(n.func, "id", "") == "_resolve_passphrase" for n in _cs302), \
+            "没走 _resolve_passphrase ⇒ 这一支自己解释相对形，BASE_DIR 那条规矩就成了一句注释"
+        assert not any(getattr(n.func, "id", "") == "Path" and len(n.args) == 1
+                       and getattr(n.args[0], "id", "") == "path" for n in _cs302), \
+            "Path(path) 原样吃调用方给的串：相对形按进程 CWD 解释（续302 实测把另一个仓库报成本机命中）"
+
+        # ①b 调用形态：档位迭代只许交给 keystore 那一处（不带参数），逐档显式传就是把
+        #     第二份"怎么解释相对形"写回调用方 —— 修一处、留一处，下一轮还会漂
+        _rb302tree = _ast302.parse((ROOT / "run_bootstrap.py").read_text(encoding="utf-8"))
+        _rs302 = [n for n in _rb302tree.body if isinstance(n, _ast302.FunctionDef)
+                  and n.name == "runstate_rows"]
+        assert len(_rs302) == 1, f"runstate_rows 定义了 {len(_rs302)} 遍"
+        _det302 = [n for n in _ast302.walk(_rs302[0]) if isinstance(n, _ast302.Call)
+                   and getattr(n.func, "attr", "") == "file_passphrase_detail"]
+        assert _det302 and all(not n.args and not n.keywords for n in _det302), \
+            "runstate_rows 显式给 file_passphrase_detail 传了路径 ⇒ 相对形的解释回到了调用方"
+
+        # ② 行为：BASE_DIR 与 CWD 各有一罐、内容不同 ⇒ 拿到的必须是 BASE_DIR 那一罐
+        _ks302.BASE_DIR = _A302
+        os.chdir(_B302)
+        _got302, _why302 = _ks302.file_passphrase("config/keys-pass")
+        assert _got302 == "沙箱口令A-not-real", \
+            f"显式相对候选拿到的是 CWD 那一罐：{_got302!r}（原因栏：{_why302}）"
+
+        # ③ 判据行不吃 CWD：仓库里有 ⇒ ok；仓库里没有 ⇒ warn（此刻 CWD 一直站在有口令档的目录）
+        _ks302.PASSPHRASE_FILE = "~/no-such-keys-pass-302"
+        _ks302.PASSPHRASE_FILE_REPO = "config/keys-pass"
+
+        def _tier302(base):
+            _ks302.BASE_DIR = base
+            return [r for r in _rb302.runstate_rows(db_path=str(_no302), keys_path=str(_nk302))
+                    if r["name"] == "口令档"][0]
+
+        _has302 = _tier302(_A302)
+        assert _has302["status"] == "ok" and "config/keys-pass" in _has302["detail"], _has302
+        _miss302 = _tier302(_C302)
+        assert _miss302["status"] == "warn", \
+            f"被测仓库没有口令档却报 {_miss302['status']} ⇒ 读到的还是脚边那一份：{_miss302['detail']}"
+        assert os.getcwd() == str(_B302), "夹具前提破了：CWD 不在 decoy 里，③ 就什么都没测"
+    finally:
+        (_ks302.BASE_DIR, _ks302.PASSPHRASE_FILE,
+         _ks302.PASSPHRASE_FILE_REPO, _cwd302) = _keep302
+        os.chdir(_cwd302)
+        shutil.rmtree(_sb302, ignore_errors=False)
+        _ks302.reset()
+    print("[302] 续302 ok: 相对口令档一律按 BASE_DIR 折算（AST 同时认 _resolve_passphrase 在、"
+          "Path(path) 不在 —— 旧那份在这里必红）｜runstate_rows 调 detail **不带参数**"
+          "（逐档显式传就是把相对形的解释写回调用方，退回它这条立刻红）"
+          "｜BASE_DIR 与 CWD 各有一罐不同口令时取 BASE_DIR 那罐"
+          "｜runstate_rows 的「口令档」与 os.getcwd() 无关：仓库里有⇒ok、仓库里没有⇒warn，"
+          "并反手钉住 CWD 真的站在有口令档的那份目录（否则这条是空写）")
     print("SMOKE PASS")
 
 

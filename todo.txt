@@ -4542,6 +4542,53 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续302（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：真克隆复验「一键」，验出 `--ready` 那行在说谎
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+主理人问「你做完后，下次 git 下载回来是不是能一键安装运行了」。这句话之前只写在文档里、没人拿
+真克隆验过 ⇒ 本轮做法是 `git clone` 到 `/tmp/ctf-fresh301`，站在旧仓库里对它跑 `--ready`。
+**第一个被抓出来的不是"能不能一键"，是续301 那行判据本身在说谎。**
+
+### 改了什么
+
+- [x] T1 根因：`keystore.file_passphrase_detail()` 里**显式给 path 那一支**直接 `Path(path)`，
+      绕过了 `_resolve_passphrase()` 那条"相对形一律按 BASE_DIR 折算"（§5.13 那一族第四次）。
+      修：那一支也走 `_resolve_passphrase(disp)`；绝对路径调用方一字未变
+- [x] T2 `run_bootstrap.runstate_rows()` 不再自己逐档试（那等于把"怎么解释相对形"重抄一遍），
+      改为**不带参数**调 `file_passphrase_detail()`，第三返回值就是"命中哪一档"
+- [x] T3 新组 `[302]`：① AST 认 `_resolve_passphrase` 在 / `Path(path)` 不在；①b AST 认
+      runstate_rows 调 detail 不带参数；② BASE_DIR 与 CWD 各有一罐不同口令 ⇒ 必须取 BASE_DIR；
+      ③ 判据行与 `os.getcwd()` 无关（有⇒ok / 没有⇒warn）+ 反手钉住 CWD 真站在有口令档的目录
+- [x] T4 AGENTS §5.14 产地清单补这一条（**行内替换**，混合行尾一个字节没动：两式 1/1）
+- [x] T5 证伪五轮（M1 退 keystore→①红 / M2 退调用方→①b红 / M3 两处同退→①红 /
+      **M4 只把折算基准改成 `Path.cwd()`→②红** / **M5 只把迭代那一支改成 `Path(disp)`→③红**）：
+      M1~M3 都断在第一条 AST 判据上，所以 M4/M5 是专门为"行为那两条有没有牙齿"补的
+- [x] T6 现场复验（同一条件：站在旧仓库里检查那份没有口令档的克隆）：
+      修前 `✓ 命中：config/keys-pass`（假话）→ 修后 `! 两档口令文件都没有或都没过守卫`＋出路那句
+- [x] C1 全量门禁 **SMOKE PASS / rc=0 / 531 秒 / 373 组**（`logs/_smoke302.log`）
+
+### 「一键」到底覆盖哪一半（回答主理人那句话，实测不是推断）
+
+- **能一键的那半**：`./install.sh` = 建 `.venv` + 按 `requirements.lock` 装依赖 +
+  subfinder/httpx/puredns（过 SHA256）+ **Chrome for Testing（189 MB，钉摘要）+ `fonts-noto-cjk`**
+  （续298 起默认取）⇒ 起控制台、能截图，这条确实开箱就跑
+- **必须人补的两件**（口径决定的，不是没做完）：
+  ① `config/keys-pass` 按续295 永不进仓库 ⇒ 新克隆解不开密文 ⇒
+     FOFA/Shodan/Quake/VirusTotal/github 线索/icp **静默跳过**（看着像"目标本来没东西"）；
+  ② `data/scanner.db` 是 gitignore ⇒ 历史资产与复测对照不在。
+  `--ready` 的作用就是把这两件点名 + 给退出码，而不是靠人记得文档里的「必搬」表
+
+下一轮：
+- [ ] **两把没有写权限的 fine-grained 令牌**仍建议去 GitHub 侧改掉或删除
+      （`github.token` 那把还能查 CI，先留）
+- [ ] 门禁耗时抖动：682 s（续301）→ 531 s（本轮）→ 497 s（续299），同一台机器差 185 秒 ——
+      用 `tests/smoke.py --timing` 查一次热点，别当"机器忙"糊过去（§0.6 要实测数字）
+- [ ] `screenshot.enabled` 要不要随包默认开（等主理人点单；开 = 每任务起无头 Chrome，要同步 `[271]`）
+- [ ] 旧服务器 `data/scanner.db` 迁移：命令已由 `--ready` 印出，但**包还没导**
+- [ ] `fscan` / `dirmap` 本机仍缺；`shodan`/`quake`/`gitlab`/`icp` 四组 key 没配（都出厂关）
+- [ ] 「相对路径按 BASE_DIR 折算」这一族已第四次出事（§5.13）：值得把这条写成一条**全仓**判据
+      （扫 `Path(` 直接吃函数入参里名为 path/`*_path` 的相对串），而不是每次靠实测撞见
+
 ## 续301（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：迁移就绪做成一条命令（`sync_check --ready`）
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
 
@@ -4599,15 +4646,6 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 ### 门禁
 
 - 全量 SMOKE PASS / rc=0 / **682 秒** / 372 组（`logs/_smoke301.log`）。
-
-下一轮：
-- [ ] 推送仍被挡的问题已经解决（classic PAT 能推），但**两把没有写权限的 fine-grained 令牌**
-      建议去 GitHub 侧改掉或删除（`github.token` 那把还能查，先留）
-- [ ] 门禁耗时从 497 s 涨到 698 s（热点是同样那几组）—— 用 `tests/smoke.py --timing` 查一次专项，
-      别当"机器慢"糊过去（§0.6 要实测数字）
-- [ ] `screenshot.enabled` 要不要随包默认开（等主理人点单；开 = 每任务起无头 Chrome，要同步 `[271]`）
-- [ ] 旧服务器 `data/scanner.db` 迁移：命令已经是 `--ready` 里印出来的那条，但**包还没导**
-- [ ] `fscan` / `dirmap` 本机仍缺；`shodan`/`quake`/`gitlab`/`icp` 四组 key 没配（都出厂关）
 
 ## 续300（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：推送令牌换掉 + 抓出一条恒绿的空写判据
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

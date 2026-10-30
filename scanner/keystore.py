@@ -152,7 +152,10 @@ def file_passphrase_detail(path=None):
     """
     if path is not None:
         disp = str(path)
-        got, why = _read_passphrase_file(Path(path), disp)
+        # 显式给的相对形同样按 BASE_DIR 折算：`_resolve_passphrase` 是这条规则的唯一产地，
+        # 这一支绕过它就成了"调用点各解各的相对路径"（续302 实测：从别的目录跑 `--ready`，
+        # 把**另一个仓库**的 keys-pass 报成本机命中 —— 绝对路径调用方一字未变）。
+        got, why = _read_passphrase_file(_resolve_passphrase(disp), disp)
         return got, why, (disp if got else "")
     whys = []
     for disp in passphrase_candidates():
