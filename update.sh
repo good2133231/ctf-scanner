@@ -7,6 +7,7 @@
 #   bash update.sh --no-smoke      # 只更新代码 + 依赖（快速通道，不跑门禁）
 #   bash update.sh --restart       # 更新 + 门禁 + 重启控制台（端口取 CTFSCANNER_GUI_PORT，默认 5000）
 #   bash update.sh --no-smoke --restart
+#   bash update.sh --ready         # 迁移就绪体检**当作硬门**（有运行态缺口 ⇒ 退出码 1）
 #   （--smoke 是旧写法，仍兼容，等同默认）
 #
 # 口径（AGENTS §0 硬规矩，一条都不松）：
@@ -34,13 +35,15 @@ PORT="${CTFSCANNER_GUI_PORT:-5000}"
 PIDFILE="logs/gui-$PORT.pid"
 DO_SMOKE=1
 DO_RESTART=0
+DO_READY=0
 for arg in "$@"; do
   case "$arg" in
     --smoke)    DO_SMOKE=1 ;;
     --no-smoke) DO_SMOKE=0 ;;
     --restart)  DO_RESTART=1 ;;
+    --ready)    DO_READY=1 ;;
     -h|--help) sed -n '4,10p' "$0"; exit 0 ;;
-    *) echo "[X] 不认识的参数：$arg（只支持 --no-smoke / --smoke / --restart / -h）" >&2; exit 1 ;;
+    *) echo "[X] 不认识的参数：$arg（只支持 --no-smoke / --smoke / --restart / --ready / -h）" >&2; exit 1 ;;
   esac
 done
 
@@ -144,3 +147,11 @@ fi
 echo
 echo "[OK] 已更新到：$(git log --oneline -1)"
 echo "     本地/远程一致口径：本地 push ↔ 服务器 pull；门禁权威在服务器跑（本机跑见 dev.py smoke）。"
+# 迁移就绪体检：判据全在 run_bootstrap（环境 + 运行态），这里只调用不实现（§5.14）。
+# 默认**只印不拦** —— fscan/dirmap 这类"故意不装、走内置兜底"的机器不该被一条同步脚本挡住；
+# 要把它当硬门就显式加 --ready（换机第一天用这条，缺什么会逐条说"哪个阶段在静默降级"）。
+if [ "$DO_READY" = "1" ]; then
+  python3 tools/sync_check.py --ready
+else
+  python3 tools/sync_check.py --ready || true
+fi

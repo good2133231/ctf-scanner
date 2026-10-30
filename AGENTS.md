@@ -404,6 +404,16 @@ Flask Web 控制台（仿 ARL）。
 - **本机参考项目（操作性路径，集中在此）**：`C:\Users\材料\Desktop\tools\scan\myscan_20250825`
   —— `TODO.md` 末尾「参考项目借鉴清单」的对标对象（**非本项目依赖**，仅登记位置；§9 只做描述性引用）。
 
+- **迁移就绪有专门一条命令（续301，`python tools/sync_check.py --ready`）**：`clone + ./install.sh`
+  之后到底还差什么才能"和旧机器一样直接跑"，此前只写在 `docs/dev-sync.md` 的「必搬」表里，靠人记得
+  去对照 —— 实际发生的就是"跑一阵才发现 fofa 那段一直静默跳过、历史资产根本不在"。现在判据是代码：
+  `run_bootstrap.runstate_rows()` 给**运行态**四件（库 / 凭据密文 / 口令档 / 会话密钥）加一件
+  `manual`（仓库外的脱敏别名表 —— 代码刻意不去 stat 项目外路径，§0.2），每条都写「缺什么 ⇒ 哪个阶段/
+  页面会静默降级 ⇒ 怎么补」；环境那一件（外部工具 / 浏览器 / 字体）**不重抄**，直接用 `probe()` 的行。
+  `sync_check.py` 只排版与给退出码（§5.14：判据产地只有一个）。三条口径不许破：
+  ① `--strict`（开工/push 前的硬门）**不受运行态影响** —— 否则"故意不装 fscan"的机器永远开不了工；
+  ② `manual` 那一档**不算缺** —— 把只能人确认的东西算成红，每台正常机器都会红，然后没人再看它；
+  ③ **"读不了的库"绝不印成"没有库"**（§7 那条"没数据 ≠ 没读到数据"在同一份输出里的样子）。
 ## 3. 目录地图
 
 ```
@@ -1467,6 +1477,8 @@ py -3 cli/client.py --check-afrog-pocs <目录>   # 只读自查 afrog PoC 目�
                             #   末尾另列「需手工安装（本框架不自动下载）」＝ nmap/fscan/dirmap（续59-3）；massdns 自续274 起标准 install.sh 即自动编（检测 gcc/make → build_massdns.py --wire --fetch；缺工具链则内置纯 Python DNS 兜底，框架照跑）
 py -3 cli/client.py --bootstrap                           # 续96：迁移自举——按平台点清缺口（解释器/pip 依赖/外部工具/浏览器），**不联网**
 py -3 run_bootstrap.py --install                            # 续99：等价入口（会先建 .venv 再用它自重跑；--no-venv 可退回当前解释器）
+python tools/sync_check.py --ready          # 迁移就绪体检（续301）：环境 + 运行态还缺哪件、各会让
+                                            #   哪个阶段静默降级、怎么补；有运行态缺口 ⇒ rc=1（不碰 --strict 的语义）
 ./install.sh                                        # 续146：Linux/macOS 一键安装（薄包装，判据全在 run_bootstrap.py）
 ./start.sh                                          # 续146：起控制台（等价 ./.venv/bin/python run_gui.py；改监听地址走 CTFSCANNER_GUI_HOST/PORT，run_gui.py 不解析 argv）
 py -3 cli/client.py --bootstrap --install                   # 自动层＝pip 依赖 + toolmgr 的 TOOLS；「需手工」那三类只打印命令，一条都不代跑

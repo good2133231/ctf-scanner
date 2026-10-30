@@ -33456,6 +33456,161 @@ expression: r0()
           "（没文件/空文件/有内容三种说法各不同，夹具各验一次）｜[8ar] ④b 同一条口径"
           "｜配置值不存在时**继续探测**（那一行由 --install 回写、跟着仓库走），而配置值存在时"
           "探测不许顶掉它 —— 三条判据都打在桩上，不吃本机装没装 Chrome")
+    # ------------------------------------------------------------------ [301]
+    # 续301：把「迁移之后还差什么才能直接跑」收成一条命令（`tools/sync_check.py --ready`）。
+    # 判据全部来自 run_bootstrap（环境 = probe()，运行态 = runstate_rows()），sync_check 只排版。
+    # 这一组在沙箱里造出**正反两种世界**，不吃"这台机器恰好有什么"（§6.2 第一起），
+    # 也不留进程全局脏状态（keystore 的解锁态是全进程的 —— §6.2 第二起）。
+    import ast as _ast301
+    import sqlite3 as _sq301
+    import subprocess as _sp301
+    import run_bootstrap as _rb301
+    from scanner import keystore as _ks301
+    _sb301 = Path(tempfile.mkdtemp(prefix="smoke-301", dir=str(ROOT / "logs")))
+    _cand_keep = _ks301.passphrase_candidates
+    _PHRASE301 = "沙箱口令-not-a-real-one"
+
+    def _mkdb(rel, rows=0):
+        """沙箱里造一个**真** sqlite 库（三张表按 runstate 要查的名字建，行数可控）。"""
+        p = _sb301 / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        con = _sq301.connect(str(p))
+        con.executescript("CREATE TABLE tasks(id INTEGER PRIMARY KEY, name TEXT);"
+                          "CREATE TABLE subdomains(id INTEGER PRIMARY KEY, domain TEXT);"
+                          "CREATE TABLE vulns(id INTEGER PRIMARY KEY, name TEXT);")
+        for _ in range(rows):
+            con.execute("INSERT INTO tasks(name) VALUES('t')")
+            con.execute("INSERT INTO subdomains(domain) VALUES('d')")
+            con.execute("INSERT INTO vulns(name) VALUES('v')")
+        con.commit()
+        con.close()
+        return p
+
+    def _row(db=None, keys=None, name=""):
+        for r in _rb301.runstate_rows(db_path=str(db) if db else None,
+                                      keys_path=str(keys) if keys else None):
+            if r["name"] == name:
+                return r
+        raise AssertionError(f"runstate_rows 里没有这一行：{name}")
+
+    try:
+        # ① 没库 / 空库 / 有资产 / 读不了 —— 四种世界必须给出四种不同答案
+        _gone = _row(db=_sb301 / "没有这个库.db", name="db")
+        assert _gone["status"] == "missing" and _gone["detail"].startswith("没有 "), _gone
+        _empty = _row(db=_mkdb("empty.db"), name="db")
+        assert _empty["status"] == "warn" and "还没有任何资产" in _empty["detail"], _empty
+        _full = _mkdb("full.db", rows=2)
+        _okrow = _row(db=_full, name="db")
+        assert _okrow["status"] == "ok" and "tasks 2" in _okrow["detail"], _okrow
+        (_sb301 / "坏库.db").write_bytes(("这不是 sqlite 文件 " * 20).encode("utf-8"))
+        _bad = _row(db=_sb301 / "坏库.db", name="db")
+        assert _bad["status"] == "missing" and "打不开" in _bad["detail"], _bad
+        assert not _bad["detail"].startswith("没有 "), \
+            "读不了的库被印成「没有这个库」—— 两种世界同形，人就会去补一个空库而不是修权限"
+
+        # ② 密文三态（沙箱自造密文，不依赖本机有没有 keys.enc.yaml）
+        _enc = _sb301 / "k.enc.yaml"
+        _ks301.write_encrypted(_enc, _ks301.encrypt_text("fofa:\n  key: 'x'\n", _PHRASE301))
+        _nokey = _row(db=_full, keys=_enc, name="凭据密文")
+        assert _nokey["status"] == "missing" and "无人值守解不开" in _nokey["detail"], _nokey
+        assert "静默" in _nokey["detail"] and "osint" in _nokey["detail"], \
+            "没说出后果的检查器等于没检查 —— 这一档存在的意义就是『静默跳过』那四个字"
+        os.environ[_ks301.ENV_PASSPHRASE] = _PHRASE301
+        _un = _row(db=_full, keys=_enc, name="凭据密文")
+        assert _un["status"] == "ok" and "已解锁" in _un["detail"] and "fofa" in _un["detail"], _un
+        assert _PHRASE301 not in _un["detail"] and _PHRASE301 not in str(_un), \
+            "解锁成功那句里混进了口令 —— 诊断输出不许带值"
+        os.environ.pop(_ks301.ENV_PASSPHRASE, None)
+
+        # ③ 口令档两向 + 守卫。⚠ file_passphrase 返回**元组** (口令, 原因)，
+        #    拿它当布尔会恒真 ⇒ 这一档永远报 ok（本轮现场踩过，下面两条反向就是钉它的）
+        _tier = _sb301 / "keys-pass"
+        _tier.write_text(_PHRASE301, encoding="utf-8")
+        os.chmod(_tier, 0o600)
+        _ks301.passphrase_candidates = lambda: (str(_tier),)
+        assert _row(name="口令档")["status"] == "ok", "有档且过守卫必须报 ok"
+        _ks301.passphrase_candidates = lambda: ("no-such-a", "no-such-b")
+        assert _row(name="口令档")["status"] == "warn", \
+            "两档都拿不到口令却报 ok ⇒ 十有八九是把 (口令, 原因) 那个元组当布尔用了"
+        os.chmod(_tier, 0o644)
+        _ks301.passphrase_candidates = lambda: (str(_tier),)
+        assert _row(name="口令档")["status"] == "warn", "0644 的口令档必须被守卫拒掉（权限一坏就失效）"
+
+    finally:
+        _ks301.passphrase_candidates = _cand_keep
+        os.environ.pop(_ks301.ENV_PASSPHRASE, None)
+        shutil.rmtree(_sb301, ignore_errors=False)
+        _ks301.reset()
+        _ks301.unlock(allow_prompt=False)      # 本机解锁态要还回去：它是**进程全局**的（§6.2 第二起）
+
+    # ④ 「只能人确认」那一档不算缺口，否则每台正常机器都报红 ⇒ 没人再看这条命令
+    _rows301 = _rb301.runstate_rows()
+    _gaps301, _man301 = _rb301.runstate_verdict(_rows301)
+    assert "脱敏别名表" in _man301, "别名表那一档必须存在且是 manual（代码不该去 stat 仓库外路径）"
+    assert not (set(_man301) & set(_gaps301)), f"人工确认被算成了缺口：{set(_man301) & set(_gaps301)}"
+    assert all(r["status"] in ("ok", "warn", "missing", "manual") for r in _rows301), \
+        "出现没定义的状态值，排版那一档会 KeyError"
+
+    # ⑤ 判据只有一个产地：sync_check 不许自己实现"缺不缺"。扫 AST 的**字符串字面量并排除
+    #    docstring**（§6.1 推论四：拿全文 grep 会把自己写的解释当成实现）
+    _sc301 = (ROOT / "tools" / "sync_check.py").read_text(encoding="utf-8")
+    _tree301 = _ast301.parse(_sc301)
+    _docs301 = set()
+    for _n301 in _ast301.walk(_tree301):
+        _body = getattr(_n301, "body", None)
+        if isinstance(_n301, (_ast301.Module, _ast301.FunctionDef, _ast301.AsyncFunctionDef,
+                              _ast301.ClassDef)) and isinstance(_body, list) and _body:
+            _f0 = _body[0]
+            if isinstance(_f0, _ast301.Expr) and isinstance(_f0.value, _ast301.Constant) \
+                    and isinstance(_f0.value.value, str):
+                _docs301.add(id(_f0.value))
+    _strs301 = [n.value for n in _ast301.walk(_tree301)
+                if isinstance(n, _ast301.Constant) and isinstance(n.value, str)
+                and id(n) not in _docs301]
+    _joined301 = "\n".join(_strs301)
+    for _ban301 in ("sqlite3", "ENC_KEYS_PATH", "passphrase_candidates", "scanner.db", "mode=ro"):
+        assert _ban301 not in _joined301, \
+            f"sync_check 里出现了运行态判据的实现细节（{_ban301}）—— 产地只有一个：run_bootstrap"
+    _calls301 = {getattr(n.func, "attr", "") or getattr(n.func, "id", "")
+                 for n in _ast301.walk(_tree301) if isinstance(n, _ast301.Call)}
+    assert {"runstate_rows", "runstate_verdict", "probe", "summarize"} <= _calls301, \
+        f"ready() 没调用 run_bootstrap 那几把尺子（缺 {'、'.join(sorted({'runstate_rows', 'runstate_verdict', 'probe', 'summarize'} - _calls301))}）"
+
+    # ⑥ --strict 的语义没被稀释：`--ready` 分支必须排在 check() 之前独立返回（判源码顺序，
+    #    本机此刻脏不脏不参与 ⇒ 这条在任何机器上同形）
+    _def301 = [n for n in _tree301.body
+               if isinstance(n, _ast301.FunctionDef) and n.name == "main"][0]
+    _lineof = lambda nm: min((n.lineno for n in _ast301.walk(_def301)
+                              if isinstance(n, _ast301.Name) and n.id == nm), default=0) or 10 ** 9
+    assert _lineof("ready") < _lineof("check"), \
+        "--ready 的分支排到了 check() 之后 ⇒ 运行态缺口会开始影响 --strict 的退出码（那是改口径）"
+
+    # ⑦ 端到端：真跑一次 `--ready`，**印出来的缺口数必须等于判据算出来的数量**（两处一把尺子）
+    _e301 = _sp301.run([sys.executable, str(ROOT / "tools" / "sync_check.py"), "--ready"],
+                       cwd=str(ROOT), capture_output=True, text=True, timeout=600)
+    assert "[ready]" in _e301.stdout, (_e301.stdout + _e301.stderr)[-300:]
+    #    ⚠ 这里**不能**拿父进程算出的缺口数去比子进程印出的数：本文件导入期就把两档口令文件
+    #    隔离成不存在（续162/292，"门禁不许吃操作者的秘密文件"），所以父进程必然看到"解不开"，
+    #    而子进程 `--ready` 是干净解释器、会读真口令档 —— 两边差两件是**对的**。第一版就是
+    #    拿"两处同数"当判据，红在我自己造的跨进程假设上（同一轮里 §6.2 第二起换个样子复发）。
+    _printed301 = [int(x) for x in re.findall(r"还缺 (\d+) 件", _e301.stdout)]
+    _marked = len(re.findall(r"^[ \t]+[X!] 运行态｜", _e301.stdout, re.M))
+    assert (_printed301 or [0]) == [_marked], \
+        f"子进程自己的结论与逐行打点对不上：印了 {_printed301} 件、逐行数到 {_marked} 件"
+    assert (_printed301 == [0]) == ("[ready] 运行态齐" in _e301.stdout), "结论句与数字对不上"
+    assert (_e301.returncode == 1) == bool(_marked), \
+        f"退出码与缺口不一致：rc={_e301.returncode} 缺口 {_marked} 件（--ready 要能当硬门用）"
+    # 反向钉住本组的隔离：在门禁进程里，密文与口令档**必然**是"解不开/没有"（吃了真口令就是污染）
+    _iso = {r["name"]: r["status"] for r in _rows301}
+    assert _iso.get("凭据密文") == "missing" and _iso.get("口令档") == "warn", \
+        f"本组读到了操作者真实口令档（隔离破了）：{_iso}"
+    print("[301] 续301 ok: 迁移就绪一条命令（sync_check --ready，判据全权委托 run_bootstrap）"
+          "｜沙箱造出 没库 / 空库 / 有资产 / 读不了 四态（读不了绝不该印成「没有库」）"
+          "｜密文三态各自成句：没有 / 无人值守解不开并点名哪些段会静默跳过 / 解得开且不印出口令"
+          "｜口令档两向 + 0644 被守卫拒掉（元组当布尔那种错在这里必红）"
+          "｜manual 档不算缺口（否则每台机器都红 ⇒ 没人再看）"
+          "｜AST 钉住 sync_check 不自己实现判据（docstring 排除）+ --ready 排在 check() 之前"
+          "｜端到端印出的缺口数 == 判据数，结论句与数字同形")
     print("SMOKE PASS")
 
 

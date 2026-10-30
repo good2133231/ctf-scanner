@@ -117,13 +117,65 @@ def check(repo):
             "loose": loose, "has_upstream": has_up}
 
 
+def ready(repo):
+    """迁移就绪体检：环境（外部工具/浏览器/字体…）+ 运行态（库/密文/口令档/会话密钥/别名表）。
+
+    **这里不实现任何判据**：环境那一半用 `run_bootstrap.probe()`（"这台机器缺什么、怎么补"的唯一
+    产地），运行态那一半用 `run_bootstrap.runstate_rows()`。本工具只负责排版与退出码 —— 把"缺什么"
+    再抄一份到这里，就会有第三份、第四份，然后三份各自漂（§5.14）。
+    """
+    rp = str(Path(repo).resolve())
+    if rp not in sys.path:
+        sys.path.insert(0, rp)
+    import run_bootstrap as rb
+
+    prov = rb.summarize(rb.probe())
+    env = [r for r in prov["rows"] if r["status"] != "ok" and r["name"] != "__platform__"]
+    rows = rb.runstate_rows()
+    gaps, need_human = rb.runstate_verdict(rows)
+    return {"env": env, "runstate": rows, "gaps": gaps, "manual": need_human}
+
+
+def print_ready(rep):
+    """把 `ready()` 的结果印成能照着办的一段：缺什么 ⇒ 会怎样 ⇒ 怎么补。"""
+    print("[ready] 迁移就绪体检（判据来自 run_bootstrap；本工具不抄第二份）")
+    for r in rep["runstate"]:
+        mark = {"ok": "✓", "warn": "!", "missing": "X", "manual": "?"}[r["status"]]
+        print(f"   {mark} 运行态｜{r['name']}：{r['detail']}")
+        if r["fix"]:
+            print(f"     ⇒ {r['fix']}")
+    for r in rep["env"]:
+        print(f"   ! 环境｜{r['name']}（{r['kind']}）：{r['detail']}")
+        for c in (r.get("cmds") or [])[:2]:
+            print(f"     ⇒ {c}")
+    if not rep["env"]:
+        print("   ✓ 环境：外部工具 / 浏览器 / 字体等都到位（或本平台本就不需要它）")
+    for m in rep["manual"]:
+        print(f"   ? {m}：属『只能人确认』那一档（代码刻意不去探仓库外路径），**不算缺**")
+    if rep["gaps"]:
+        print(f"[ready] 还缺 {len(rep['gaps'])} 件：{'、'.join(rep['gaps'])}"
+              " —— 上面每条都写了它会让哪个阶段/页面静默降级")
+    else:
+        print("[ready] 运行态齐：clone + ./install.sh 之后不需要再手工补什么")
+    if rep["env"]:
+        print(f"[ready] 另有 {len(rep['env'])} 项**按降级运行**（上面带 ! 的『环境』行 —— "
+              "框架照跑，只是覆盖面/速度不如本体；不想补就忽略，但别把它读成「扫描没结果」）")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="同步体检：能否安全 pull/push/开工")
     ap.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent),
                     help="仓库路径（默认：本工具所在仓库）")
     ap.add_argument("--strict", action="store_true",
                     help="有未提交改动或未推送提交 ⇒ 退出码 1（开工/push 前的硬门）")
+    ap.add_argument("--ready", action="store_true",
+                    help="迁移就绪体检：环境 + 运行态还缺哪件、各会让哪个阶段静默降级"
+                         "（**有缺口 ⇒ 退出码 1**；不碰 git 状态，也不与 --strict 混在一起）")
     a = ap.parse_args(argv)
+    if a.ready:
+        rep = ready(a.repo)
+        print_ready(rep)
+        return 1 if rep["gaps"] else 0
     rep = check(a.repo)
     if not rep.get("ok") and rep.get("reason"):
         print(f"[sync] {rep['reason']}")

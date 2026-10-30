@@ -603,6 +603,130 @@ def ensure_screenshot(settings=None, runner=None, fetcher=None, say=True):
     return actions, problems
 
 
+# ---------- 迁移就绪（续301：clone + 装完之后，"到底还差什么才和旧机器一样能跑"）----------
+
+# `probe()` 回答的是"**环境**缺什么"（解释器 / pip 依赖 / 外部工具 / 浏览器 / 字体）。换机之后
+# 真正的坑却在**运行态**：按 §0/§2 的红线，数据库、凭据密文与口令、会话密钥、脱敏别名表全都
+# **故意不进 git** —— clone 拿到的是代码与记忆，不是"那台机器的状态"。以前这件事只躺在
+# `docs/dev-sync.md` 的表里，靠人记得去逐条对照；实际发生的就是"拉下来跑一阵，才发现 fofa 一段
+# 一直是静默跳过、历史资产根本不在"。这一节把「缺哪件 ⇒ 哪个阶段/页面会怎么静默降级 ⇒ 怎么补」
+# 收成一条命令（`tools/sync_check.py --ready`），因为这类东西需要的正是"没人会忘"的形态。
+# 三条口径：① 判据一律吃**参数**（沙箱里能造出正反两种世界，§6.2 第一起），不吃"这台机器恰好有什么"；
+# ② 出路文案里凡 keystore 会说的那句，一律 `keystore.unlock_howto()` 现取，不抄第二份（§5.14）；
+# ③ 仓库外的东西（脱敏别名表）**只印"要人确认"**，绝不去 stat/读项目外路径（§0.2 的默认禁区）。
+_MIGRATE_TABLES = ("tasks", "subdomains", "vulns")
+
+
+def _db_counts(db_path=None):
+    """`data/scanner.db` 里三张资产表的行数（**只读**连接）。返回 `(dict 或 None, 原因)`，永不抛。
+
+    只读打不开时**如实说打不开**，不许当成"库是空的"—— 那正是本项目反复登记的那族：
+    "没数据"与"没读到数据"在两行日志里长得一模一样。
+    """
+    import sqlite3
+    from scanner.utils import rel_display
+    p = Path(db_path) if db_path else (ROOT / "data" / "scanner.db")
+    disp = rel_display(p)
+    if not p.exists():
+        return None, f"没有 {disp}"
+    try:
+        con = sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True, timeout=3)
+        try:
+            out = {t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+                   for t in _MIGRATE_TABLES}
+        finally:
+            con.close()
+        return out, ""
+    except Exception as e:                                   # noqa: BLE001
+        return None, (f"{disp} 打不开/查不了（{type(e).__name__}: {str(e)[:60]}）"
+                      " —— 这句不许被读成「这台机器没有资产」")
+
+
+def runstate_rows(db_path=None, keys_path=None):
+    """迁移之后的"运行态"清单：每行 `{name, status, detail, fix}`。
+
+    `status` ∈ `ok` / `missing` / `warn` / `manual`（`manual` = 只能由人确认，代码不去探）。
+    全部参数可注入，判据不吃本机现状 —— 门禁要在沙箱里把正反两种世界都造出来。
+    """
+    from scanner import keystore
+    from scanner.config import SECRET_FILE
+
+    rows = []
+
+    counts, why = _db_counts(db_path)
+    if counts is None:
+        rows.append({"name": "db", "status": "missing", "detail": why,
+                     "fix": "旧机导出 → 本机导入：`python cli/client.py --export-scan <包>` / "
+                            "`--import-scan <包> --dry-run` 先看再写（默认不带凭据与 flags 表）。"
+                            "见 docs/dev-sync.md 的「必搬」清单"})
+    else:
+        empty = not any(counts.values())
+        rows.append({"name": "db", "status": "warn" if empty else "ok",
+                     "detail": "｜".join(f"{t} {n}" for t, n in counts.items())
+                               + ("（新建的库，还没有任何资产）" if empty else ""),
+                     "fix": "要历史资产就得搬：旧机 `--export-scan` → 本机 `--import-scan`；"
+                            "空库本身不影响跑新任务（但跨任务页与报告会是空的）" if empty else ""})
+
+    kp = Path(keys_path) if keys_path else Path(keystore.ENC_KEYS_PATH)
+    ks = keystore.status(kp)
+    if ks["encrypted"] and not ks["unlocked"]:
+        # 问的是「这台机器能不能无人值守解开」，不是「当前这个进程解开没有」——
+        # 检查器自己是个短命进程，不主动解锁就永远报"未解锁"，那条结论对迁移毫无意义。
+        # `allow_prompt=False` 是关键：只试"参数/环境变量/口令文件"这三档，**绝不开口问**，
+        # 所以这条判据在没有 TTY 的 cron/CI 里也跑得完（跑不完的检查会被删掉，那是事故的起点）。
+        keystore.unlock(passphrase=None, path=kp, allow_prompt=False)
+        ks = keystore.status(kp)   # unlock 的返回里没有 unlocked 这一键，形状不同：复探一次
+    groups = sorted((keystore.current() or {}).keys()) if ks["unlocked"] else []
+    if not ks["encrypted"]:
+        rows.append({"name": "凭据密文", "status": "missing",
+                     "detail": f"没有 {keystore.ENC_KEYS_PATH}（这台机器没有任何第三方 key）",
+                     "fix": "旧机那份 `config/keys.enc.yaml` 随仓库走（续295），clone 就有；"
+                            "没有的话重录：`python cli/run_keys.py --encrypt`"})
+    elif not ks["unlocked"]:
+        rows.append({"name": "凭据密文", "status": "missing",
+                     "detail": "密文在，但这台机器**无人值守解不开** ⇒ `load_keys()` 返回空，"
+                               "osint(FOFA/Shodan/Quake/VirusTotal)、github 线索、icp 备案"
+                               "这些段**全部静默跳过** —— 看起来就像「目标本来没东西」"
+                               + (f"（原因：{ks['reason']}）" if ks.get("reason") else ""),
+                     "fix": keystore.unlock_howto()})
+    else:
+        rows.append({"name": "凭据密文", "status": "ok",
+                     "detail": f"已解锁（来源：{ks['source'] or '未知'}）｜组：{'、'.join(groups) or '解开了但一组都没有'}",
+                     "fix": ""})
+
+    # 注意元组：file_passphrase 返回 (口令, 原因)，直接当布尔用会**恒真**（第一版就这么错着，
+    # 于是这一档永远报 ok —— 门禁 [301] 的反向夹具专门钉这一点）
+    tiers = [c for c in keystore.passphrase_candidates() if keystore.file_passphrase(c)[0]]
+    rows.append({"name": "口令档", "status": "ok" if tiers else "warn",
+                 "detail": (f"命中：{'、'.join(tiers)}" if tiers
+                            else "两档口令文件都没有或都没过守卫 ⇒ 无 TTY 启动会锁死在凭据上"),
+                 "fix": "" if tiers else keystore.unlock_howto()})
+
+    sec = (Path(db_path).parent if db_path else ROOT / "data") / SECRET_FILE
+    rows.append({"name": "会话密钥", "status": "ok" if sec.exists() else "missing",
+                 "detail": "在（旧会话不用重登）" if sec.exists()
+                 else f"没有 {SECRET_FILE} ⇒ 首次启动会新建一份，**所有人要重新登录一次**（功能不受影响）",
+                 "fix": "" if sec.exists() else "不用补：启动时自动建（刻意不随迁移包走，带了＝旧会话在新机器上继续有效）"})
+
+    rows.append({"name": "脱敏别名表", "status": "manual",
+                 "detail": "AGENTS §0.5 那份对照表在**仓库外**（丢了可从库里资产域名反查）；"
+                           "本工具刻意不去 stat/读项目外路径（§0.2），所以这一条只能人确认",
+                 "fix": "确认它在这台机器上还在；不在就按 §0.5 重建（库里有资产域名就能反查）"})
+    return rows
+
+
+def runstate_verdict(rows=None, db_path=None, keys_path=None):
+    """→ `(缺什么列表, 只能人确认的列表)`。
+
+    `manual` 那一档**不算缺**：它不是"机器错了"，是"代码不该去探项目外"。把它算进缺口会让
+    每台正常的机器都报红，然后所有人都开始忽略这条命令 —— 那是把防线改成噪声。
+    """
+    rows = rows if rows is not None else runstate_rows(db_path, keys_path)
+    gaps = [r["name"] for r in rows if r["status"] in ("missing", "warn")]
+    need_human = [r["name"] for r in rows if r["status"] == "manual"]
+    return gaps, need_human
+
+
 # ---------- 探测（零网络）----------
 
 def _row(name, kind, auto, status, detail, cmds=()):

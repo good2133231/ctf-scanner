@@ -115,7 +115,10 @@
 
 ```
 1. git clone https://github.com/good2133231/ctf-scanner.git && cd ctf-scanner
-2. python3 tools/sync_check.py --strict        # 干净克隆应为 0 脏 / 0 未推 / 0 未拉；续296 起还会拦「未跟踪且未被 .gitignore 覆盖」的散落凭据文件
+2. python3 tools/sync_check.py --strict        # 干净克隆应为 0 脏 / 0 未推 / 0 未拉
+2b. python3 tools/sync_check.py --ready        # 迁移就绪体检（续301）：环境 + 运行态还缺哪件、
+                                               #   各会让哪个阶段静默降级、怎么补；有缺口 ⇒ rc=1
+                                               #   （日常同步用 `bash update.sh --ready`，同一条判据）；续296 起还会拦「未跟踪且未被 .gitignore 覆盖」的散落凭据文件
 3. ./install.sh --full                         # 标准安装 + 工作目录内运行时组件 + 编译层
    # 只要最小可用：./install.sh
    #   + python tools/setup_dirmap.py --install

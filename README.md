@@ -119,6 +119,8 @@
 python3 run_bootstrap.py --install          # Linux / macOS
 py -3 run_bootstrap.py --install            # Windows
 python3 run_bootstrap.py                    # 只探测，**零网络**：先看这台机器还缺什么
+python3 tools/sync_check.py --ready         # 迁移就绪体检（续301）：环境 + 运行态（库 / 凭据 / 口令档 /
+                                            #   会话密钥）还缺哪件、各会让哪个阶段静默降级、怎么补
 ./install.sh --with-system --yes            # 让发行版包管理器**真装** nmap / 系统浏览器 / Go（CJK 字体归标准安装管了，续298）
 ./install.sh --no-screenshot                # 标准安装**跳过**截图那一档（约 189 MB 取件 + 一个系统字体包）
 ```
