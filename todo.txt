@@ -4542,6 +4542,56 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续300（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：推送令牌换掉 + 抓出一条恒绿的空写判据
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+主理人问「我应该给了两把令牌，一把专门推送一把专门查询，你确定没搞混吗」——这句追问是对的：
+我上一轮的**结论碰巧没错，但推断方法是弱的**。本轮把方法换成能区分两种假说的观测量，顺带
+把这条链上两处漂掉的东西收掉。
+
+- [x] T1 先承认弱在哪：我昨天拿 `GET /repos/...` 返回的 `permissions.push:true` 当"令牌有写权限"
+      的证据，而那个字段反映的是**你这个账号**对仓库的角色，不是令牌的授权范围 ⇒ 它证明不了任何事。
+- [x] T2 换成判定性的观测：`git push --dry-run` 的权限检查在服务端 receive-pack 协商阶段就做，
+      被拒不产生任何远端变化 ⇒ 逐把试推能真正区分两把令牌。结果：
+      ① 密文里 `github.push_token` 与 `github.token` 是**两个不同的串**（尾 4 位 / sha256 都不同，
+      长度同为 93）⇒ 不存在"同一把填两遍"；② 两把 fine-grained 各自 dry-run **都是 403**
+      ⇒ 不是搞混，是**两把都没拿到 Contents 写权限**（最像创建时仓库访问选了 "Public repos"，
+      那一档对公开仓库只读）；③ 只读能力矩阵两把完全一致：/user、仓库元数据、读 README、
+      读 ref、看 CI 全 200，Deploy keys / 协作者 403/404。
+- [x] T3 主理人把新令牌放成 `config/11`（classic PAT，40 字符）⇒ **续296 那条判据当场抓到**：
+      `tools/sync_check.py --strict` rc=1 并点名
+      `散落: config/11 ← config/ 下的散文件、内容含 GitHub classic PAT 形状`。
+      先 dry-run 验权（rc=0，显示要做的就是 `d0a934f..c6c3af6 main -> main`）再入库。
+- [x] T4 入库走 `cli/run_keys.py --encrypt` 的**合并**那一路（不自己写密文）：临时明文 0600、
+      口令从 `config/keys-pass` 取、值不进 argv；合并报告只报名字：保留 `fofa`/`virustotal`、
+      改动字段只有 `github.{push_token}`；写完用 **sha256 比对**复验"密文里那串 == 文件里那串"
+      （只看"能不能解开"证明不了内容对，§6.1 同一形）。明文 `--shred` + 删 `config/11`，
+      **刻意不在别处留副本** —— 换目录躺一份明文只是挪风险，AGENTS §2 的口径是磁盘上没有明文 PAT。
+- [x] T5 推送打通：9 个提交上去了（`d0a934f..c6c3af6`）。旧的 `github.push_token` 被替换掉
+      （它没有写权限；要找回在 GitHub UI 里能看到，值我没有另存）。
+- [x] T6 抓出一条**恒绿的空写**（AGENTS §6.2 第二十三起）：`[8f]⑨` 判的是
+      `"config/keys.enc.yaml" in .gitignore 的文本` ⇒ "密文不许进仓库"。续295 把这一档翻成
+      「密文随仓库走」并删掉忽略规则后，那串字符如今只出现在**注释**里，子串匹配照样命中 ⇒
+      这条断言方向已经反了、且完全没有区分度，几轮门禁全绿而没人发现。发现方式很偶然：本轮
+      换令牌让密文变脏，收尾跑 sync_check 才回头翻它。
+      修法：改成问 **git 本身** —— `git check-ignore -q` 两向各一条（密文**不许**被忽略 /
+      口令文件**必须**被精确忽略），并把"在不在跟踪清单"那一半留给 `[295]`（同一个判断不写两处）。
+      证伪：把旧口径的忽略规则加回去 ⇒ 红；摘掉 `config/keys-pass` 那行 ⇒ 红；还原后基线复跑绿。
+- [x] T7 AGENTS §7 那句"密文 444 字节"跟着漂了（换 40 字符的 classic PAT 后是 391）⇒
+      改成**不抄数字**并写明为什么别抄（同一轮里 skill 的「§6.2 已积累 12 起」也照这个改法）。
+- [x] C1 全量门禁 **SMOKE PASS / rc=0 / 698 秒 / 371 组**（`logs/_smoke300.log`）。
+
+下一轮：
+- [ ] 把两把**没有写权限**的 fine-grained 令牌在 GitHub 侧改掉或删掉（留着只是三个凭据里多一个
+      不能用的；`github.token` 那把还能查，先别删）
+- [ ] `screenshot.enabled` 要不要随包默认开（等主理人点单；开 = 每个任务起无头 Chrome，
+      要同步 `[271]` 那张表）
+- [ ] 旧服务器 `data/scanner.db`（15 任务 / 196 子域名 / 53 漏洞）仍未迁到本机；仓库外那份
+      `git-cred-helper.py` 迁移时没搬（现在也不需要了 —— 推送走 `config/keys-pass` + 密文里的
+      `push_token`），但 `docs/dev-sync.md` 的「必搬」清单该照现状改一遍
+- [ ] `fscan` / `dirmap` 本机仍缺（目录发现退回内置、端口扫描退回 nmap/内置 TCP connect）
+- [ ] `shodan.key` / `quake.key` / `gitlab.token` / `icp.api_key` 四组没配（四家随包都是关着的）
+
 ## 续299（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：`[7x]` 那 72 条真浏览器断言终于真的跑
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
 
@@ -4579,17 +4629,6 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       同样放行、配置值真的存在 ⇒ 探测不许顶掉它。`docs/features-off-by-default.md` 那一行跟着改口径。
       ⚠ ⑥ 第一版红在自己造的残留上：① 结束时模块上的 `browser_path` 还被桩成返回空串，⑥ 跟着调
       模块属性就测到上一档的桩 —— 改成调进来时保存的那一份真实函数（注释里写了，免得下一个人照抄）。
-
-下一轮：
-- [ ] 推送仍被挡：两把 fine-grained PAT 都没有 `Contents: Read and write`（403，认证是通的）；
-      要么改 token 权限，要么加一把勾了 Allow write access 的 Deploy key。未推的提交数以 `git status -sb` 的 ahead 为准 —— 抄进记忆里就一定会漂（本轮写完这句又多了一个提交，正好自证）。
-- [ ] `screenshot.enabled` 要不要随包默认开（等主理人点单；开 = 每个任务起无头 Chrome，
-      并要同步 `[271]` 那张"已实现但没默认开"的表）
-- [ ] 旧服务器 `data/scanner.db`（15 任务 / 196 子域名 / 53 漏洞）仍未迁到本机；仓库外那份
-      `git-cred-helper.py` 也没搬（`docs/dev-sync.md` 的「必搬」清单里两条都在）
-- [ ] `fscan` / `dirmap` 本机仍缺（目录发现退回内置、端口扫描退回 nmap/内置 TCP connect）
-- [ ] `shodan.key` / `quake.key` / `gitlab.token` / `icp.api_key` 四组没配 —— 四家随包都是关着的，
-      不影响默认任务（主理人 2026-10-29 已确认"留"）
 
 ## 续298（2026-10-29，WorkBuddy · Qoder-Agent 远端 Linux）：截图那条能力装进**默认安装** + PDF 整条移除
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

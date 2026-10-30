@@ -13797,15 +13797,31 @@ http:
                                              or "{first}" in l or "{again}" in l)]
             assert _leak8f == [], f"{_fn8f} 里疑似打印口令：{_leak8f}"
 
-        # ⑨ 入库面红线：密文文件必须被 gitignore，且依赖必须写进 requirements（否则新机器解不开）
-        # `.gitignore` 会被 `.dockerignore` 排除在镜像之外 —— 文件不在树里时**明说是跳过**，
-        # 不悄悄放过（本仓口径：跳过 != 通过）。真仓库工作副本与 CI 上它一定在，照常校验。
-        _gi8f_path = ROOT / ".gitignore"
-        _gi8f_note = "未校验（.gitignore 不在树里：镜像/.dockerignore 场景）"
-        if _gi8f_path.exists():
-            assert "config/keys.enc.yaml" in _gi8f_path.read_text(encoding="utf-8"), \
-                "keys.enc.yaml 必须 gitignore —— 密文也不许进仓库"
-            _gi8f_note = ".gitignore 已含 keys.enc.yaml"
+        # ⑨ 入库面红线（**续300 重写**）：这一条原来判"密文必须被 gitignore"，那是续98 的口径；
+        #    续295 主理人把它翻成「密文随仓库走、口令永远不进」。旧断言不只是方向反了，它已经
+        #    **空跑**：判据是 `"config/keys.enc.yaml" in .gitignore 的文本`，而现在这串字符只出现在
+        #    注释里（"自此随仓库走"那一句），注释也算命中 ⇒ 恒绿，把规则加回去也不会红
+        #    （§6.1「没有区分度等于没加」+ §6.2 第十二起同族）。
+        #    现在问 **git 本身**而不是搜文本，三个方向各有牙；口令值会不会外泄由 [295] 判，
+        #    这一条只管"忽略/跟踪的拓扑"，两把尺子各量一件事。
+        import subprocess as _sp8f9
+        _gi8f_note = "未校验（这里不是 git 工作副本：镜像/.dockerignore 场景）"
+        if (ROOT / ".git").exists():
+            def _ig8f(_rel):
+                # `--no-index` 是**必须**的：git 默认会先看索引，而"已跟踪"会让忽略规则失效 ——
+                # 于是"把 `config/keys.enc.yaml` 忽略规则加回去"这一整类破坏，用默认形态**探不出来**
+                # （本轮第一版就是这么写的，被自己的证伪第 2 步抓个正着：加回规则后 [8f] 照旧全绿）。
+                # 加了它，判的才是"规则本身"，与这次 checkout 里文件是否已被跟踪无关。
+                return _sp8f9.run(["git", "-C", str(ROOT), "check-ignore", "-q", "--no-index", _rel],
+                                  capture_output=True).returncode == 0
+            # 「密文在不在跟踪清单」那一半由 [295] 判（它每轮按 ls-files 核过）——
+            # 同一个判断写两处就是两个会各自漂的产地（§5.14）；这一条只管忽略拓扑。
+            assert not _ig8f("config/keys.enc.yaml"), \
+                "config/keys.enc.yaml 现在**该随仓库走**（续295 点单）—— 它被忽略了就是旧口径被加回来"
+            assert _ig8f("config/keys-pass"), \
+                "config/keys-pass 必须被 .gitignore 精确覆盖 —— 那句口令一旦进公开仓库，密文等于没加密"
+            _gi8f_note = ("拓扑按续295 到位：密文不被忽略且在跟踪清单、口令文件被忽略"
+                          "（判据来自 git check-ignore / ls-files，不是文本搜索）")
         _rq8f = (ROOT / "requirements.txt").read_text(encoding="utf-8")
         assert "cryptography" in _rq8f, "requirements.txt 必须含 cryptography，否则换机后解不开凭据"
 
