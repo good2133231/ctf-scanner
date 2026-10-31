@@ -6,7 +6,7 @@
   被动(subfinder) / 被动(&lt;源&gt;) / 爆破(puredns) / 爆破(内置)。
   JS 与外部情报（含 FOFA）拓展出来的域名不在这里，见「拓展域名」页。
   解析 IP 与 CNAME 由 subdomain 阶段回填（纯 DNS 只读查询）。</p>
-<section class="panel">
+<section class="panel scroll-pane">
   <p class="muted small note">标签过滤：CDN 标记来自 CNAME 链与
     <span class="mono">config/dicts/cdn_cname.txt</span>、解析 IP 段与
     <span class="mono">config/dicts/cdn_ips.txt</span> 的比对（任一命中即算走 CDN）。
@@ -50,7 +50,7 @@
       <span class="muted">黑名单：命中即不入资产库，后续阶段也不会扫它；
         批量跑子域名会新建一个只跑 subdomain 阶段的任务；反查回写只改资产表、不发目标侧请求。</span>
     </div>
-    <table id="tbl-all-subs">
+    <table id="tbl-all-subs" data-copy-col="4" data-copy-label="子域名">
       <thead><tr>
         <th class="pick"><input type="checkbox" class="pick-all-page"
           data-pick-all="#tbl-all-subs" title="全选本页"></th>

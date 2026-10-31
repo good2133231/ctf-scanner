@@ -5,7 +5,7 @@
    （实测对比度 1.06:1 / 1.25:1，表格悬停行的 URL、筛选框与输入框文字直接看不见）。
    门禁：`py -3 tools/check_contrast.py`（四主题配对对比度 + 裸值守卫）；回归 `tests/smoke.py [6n]`。 */
 :root { --bg:#0f1419; --panel:#161d26; --line:#233040; --text:#d7dee8; --muted:#8795a7;
-        --accent:#2dd4a7; --side:#111820; --hover:#18212c; --soft:#132b26;
+        --accent:#2dd4a7; --side:#111820; --hover:#18212c; --soft:#132b26; --row-alt:#1a222c;
         /* 侧栏选中底 / 顶栏底 / 徽章底与进度条槽 / 输入框与代码块底 / 交互控件描边 */
         --side-active:#132b26; --topbar-bg:#10161d; --chip-bg:#26313f; --bar-track:#26313f;
         --input-bg:#0d1218; --code-bg:#0d1218; --border:#5d7290;
@@ -26,19 +26,19 @@
            续103 起它必须待在主题块内 —— 守卫开始盯 rgba()/hsl() 了，规则体里出现就是裸值。 */
         --lb-bg:rgba(0,0,0,.82); --lb-shadow:rgba(0,0,0,.5); }
 html[data-theme="light"] { --bg:#f4f6f9; --panel:#ffffff; --line:#d8dee7; --text:#1f2733;
-        --muted:#5f6a7b; --accent:#0b6b52; --side:#ffffff; --hover:#eef2f7; --soft:#e6f5f0;
+        --muted:#5f6a7b; --accent:#0b6b52; --side:#ffffff; --hover:#eef2f7; --soft:#e6f5f0; --row-alt:#f7f9fc;
         --side-active:#dff2ea; --topbar-bg:#eef1f6; --chip-bg:#eef2f7; --bar-track:#e2e8f0;
         --input-bg:#ffffff; --code-bg:#eef1f6; --border:#7b8899;
         --ghost-bg:#eef2f7; --ghost-fg:#4b5563; --ghost-hover:#e2e8f0;
         --btn-bg:#0a5f49; --btn-border:#0a5f49; --btn-fg:#ffffff; --btn-hover:#0d7a5e;
         --danger:#b42318; --danger-bg:#fde8e8; --danger-border:#e8a3a3; }
 html[data-theme="ocean"] { --bg:#0b1622; --panel:#122130; --line:#1d3348; --text:#d6e4f0;
-        --muted:#8aa0b8; --accent:#38bdf8; --side:#0e1c2a; --hover:#17293b; --soft:#12303f;
+        --muted:#8aa0b8; --accent:#38bdf8; --side:#0e1c2a; --hover:#17293b; --soft:#12303f; --row-alt:#16283a;
         --side-active:#12303f; --topbar-bg:#0d1a28; --chip-bg:#1b2f42; --bar-track:#1b2f42;
         --input-bg:#0a1420; --code-bg:#0a1420; --border:#4f7699;
         --ghost-bg:#16273a; --ghost-fg:#8aa0b8; --ghost-hover:#1d3348; }
 html[data-theme="violet"] { --bg:#141020; --panel:#1d1830; --line:#2f2748; --text:#e2dcf3;
-        --muted:#978eb3; --accent:#a78bfa; --side:#171227; --hover:#241d3a; --soft:#2a2145;
+        --muted:#978eb3; --accent:#a78bfa; --side:#171227; --hover:#241d3a; --soft:#2a2145; --row-alt:#221c37;
         --side-active:#2a2145; --topbar-bg:#1a1429; --chip-bg:#2b2440; --bar-track:#2b2440;
         --input-bg:#120e1c; --code-bg:#120e1c; --border:#7566a3;
         --ghost-bg:#271f3c; --ghost-fg:#978eb3; --ghost-hover:#2f2748; }
@@ -416,3 +416,39 @@ main section table tbody tr:hover td:first-child { background:var(--hover); }
 a.card { text-decoration:none; display:block; color:inherit; }
 a.card:hover { border-color:var(--accent); background:var(--hover); }
 a.card:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+/* ---------- 续305：斑马纹（与首列吸左、行悬停按特异性排队） ---------- */
+/* 长表整屏同色，横着读容易串行；只给偶数行换一档很浅的底（新变量 --row-alt，四套主题各一档，
+   配对进 tools/check_contrast.py）。两条必须一起写：
+   ① sticky 首列的选择器特异性更高（`.panel table td:first-child`），不显式盖就会一直是 --panel，
+      看起来像"这一行的第一格断了"；
+   ② hover 要压过斑马纹，否则鼠标划过偶数行看不出选中。 */
+.panel table tbody tr:nth-child(even) td,
+main section table tbody tr:nth-child(even) td { background:var(--row-alt); }
+.panel table tbody tr:nth-child(even) td:first-child,
+main section table tbody tr:nth-child(even) td:first-child { background:var(--row-alt); }
+.panel table tbody tr:hover td, main section table tbody tr:hover td,
+.panel table tbody tr:hover td:first-child,
+main section table tbody tr:hover td:first-child { background:var(--hover); }
+
+/* 「复制本页首列」的按钮由 app.js 注入（表在哪个面板/页签里都能用），这里只给工具条外壳。 */
+.table-tools { display:flex; justify-content:flex-end; gap:8px; margin:0 0 6px; }
+
+/* ---------- 续305-B：长表吸顶（表头 + 筛选条），只在桌面宽度生效 ---------- */
+/* `.panel` 为宽表横向滚动设了 overflow-x:auto ⇒ 按规范它就是个滚动容器；表头想吸顶就必须让它
+   **纵向也真的会滚**（定个上限高度），否则 sticky 找不到可吸的视口。
+   `.scroll-pane` 是 opt-in 的类：只加在长表页面。手机上（≤900px）取消上限，保持自然滚动。 */
+@media (min-width: 901px) {
+  .panel.scroll-pane { max-height: calc(100vh - 150px); overflow: auto; }
+  /* 筛选条粘在最上面；表头粘在它下面（--filters-h 由 app.js 量出来，纯 CSS 算不出换行高度） */
+  .panel.scroll-pane .filters {
+    position: sticky; top: 0; z-index: 3;
+    background: var(--panel); padding: 4px 0 6px; margin-top: -4px; }
+  .panel.scroll-pane table thead th {
+    position: sticky; top: var(--filters-h, 0px); z-index: 2;
+    background: var(--panel);
+    /* border-collapse:collapse 下 sticky 单元格的边框会掉，用内阴影补一条实实在的下边线 */
+    box-shadow: inset 0 -1px 0 var(--line); }
+  /* 表头首格要压在「首列吸左」的单元格之上，否则横向滚动时被首列盖住 */
+  .panel.scroll-pane table thead th:first-child { z-index: 4; }
+}

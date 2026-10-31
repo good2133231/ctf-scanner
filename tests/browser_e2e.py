@@ -922,6 +922,59 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     rep.check("[11] 下拉框显示的就是当前生效档（切页后不回到默认项）",
               page.ev("document.getElementById('theme-select').value") == "violet",
               page.ev("document.getElementById('theme-select').value"))
+    # ---------- [14] 续305-B：长表吸顶（表头 + 筛选条） ----------
+    # 判据只能是真浏览器：sticky 生效与否取决于"滚动容器到底是不是它自己"，
+    # test_client 里连布局都没有。`/sites` 有 60 行 ⇒ 面板一定超过定高。
+    page.navigate(base + "/sites")
+    _pane14 = page.ev(
+        "(() => { const p = document.querySelector('section.panel.scroll-pane');"
+        " if (!p) return null; const th = p.querySelector('thead th');"
+        " const f = p.querySelector('.filters'); if (!th || !f) return null;"
+        " const g = getComputedStyle(th), gf = getComputedStyle(f);"
+        " return {thPos: g.position, thTop: g.top, fPos: gf.position, fTop: gf.top,"
+        "         hVar: p.style.getPropertyValue('--filters-h'),"
+        "         scrollable: p.scrollHeight > p.clientHeight"
+        "                     && getComputedStyle(p).overflowY !== 'visible'}; })()")
+    rep.check("[14] 长表面板是滚动容器（表头才有地方可粘）",
+              isinstance(_pane14, dict) and _pane14["scrollable"], _pane14)
+    rep.check("[14] 表头 sticky 且正好贴在筛选条下面（top == 量出来的 --filters-h）",
+              isinstance(_pane14, dict) and _pane14["thPos"] == "sticky"
+              and _pane14["hVar"] not in ("", "0px") and _pane14["thTop"] == _pane14["hVar"], _pane14)
+    rep.check("[14] 筛选条自身 sticky 在顶部（top:0）",
+              isinstance(_pane14, dict) and _pane14["fPos"] == "sticky"
+              and _pane14["fTop"] == "0px", _pane14)
+
+    # ---------- [13] 续305：斑马纹 + 「复制本页首列」 ----------
+    # 斑马纹、sticky 首列跟色、复制按钮都是**纯前端行为**，test_client 全看不见。
+    page.navigate(f"{base}/tasks/{tid}#sites")
+    _copy13 = page.ev("(() => { const b = document.querySelector('#pane-sites .table-tools button');"
+                      " return b ? b.textContent : null; })()")
+    rep.check("[13] 站点页签渲染出「复制本页首列」按钮",
+              isinstance(_copy13, str) and "复制" in _copy13, _copy13)
+    _zebra13 = page.ev(
+        "(() => { const t = document.querySelector('#tbl-detail-sites');"
+        " if (!t) return null; const rs = t.querySelectorAll('tbody tr');"
+        " if (rs.length < 3) return null;"
+        " const bg = tr => getComputedStyle(tr.querySelector('td')).backgroundColor;"
+        " const fg = tr => getComputedStyle(tr.querySelector('td:first-child')).backgroundColor;"
+        " return {odd: bg(rs[0]), even: bg(rs[1]), evenFirst: fg(rs[1]), evenOther: bg(rs[1])}; })()")
+    rep.check("[13] 斑马纹：相邻两行不同色，且首列 sticky 与同行同色（否则像断了一格）",
+              isinstance(_zebra13, dict) and _zebra13["odd"] != _zebra13["even"]
+              and _zebra13["evenFirst"] == _zebra13["evenOther"], _zebra13)
+    page.ev("window.__copied13 = '';"
+            " navigator.clipboard.writeText = (t) => { window.__copied13 = t;"
+            " return Promise.resolve(); };")
+    _rows13 = page.ev("Array.from(document.querySelectorAll('#tbl-detail-sites tbody tr'))"
+                      ".filter(tr => !tr.hasAttribute('hidden')).length")
+    page.ev("document.querySelector('#pane-sites .table-tools button').click()")
+    _got13 = page.ev("new Promise(r => setTimeout(() => r(window.__copied13), 120))")
+    rep.check("[13] 点按钮把本页首列复制出来（行数与表格一致）",
+              isinstance(_got13, str) and _got13.count("\n") + 1 == _rows13
+              and _got13.startswith("http://e2e.local/"), (_rows13, (_got13 or "")[:80]))
+    _btn13 = page.ev("document.querySelector('#pane-sites .table-tools button').textContent")
+    rep.check("[13] 复制后有反馈（已复制 N 行 / 失败提示）",
+              isinstance(_btn13, str) and ("已复制" in _btn13 or "失败" in _btn13), _btn13)
+
     # ---------- [12] 续304：仪表盘统计卡可点 + 宽表首列吸左 ----------
     # 这两条只能靠真浏览器：`position:sticky` 与"到底哪张卡是链接"用 test_client 看不出来。
     page.navigate(base + "/")

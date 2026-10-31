@@ -5,7 +5,7 @@
   <b>批量打开</b>（在本机浏览器里逐个开标签页，单次最多 20 个，<b>不发任何请求</b>）；
   favicon MD5 是"零请求前置指纹"，POC 声明 favicon_md5_list 时会先与它比对（见 策略配置 → 检测策略）。
   <b>纯净模式</b>只显示 URL（适合对着列表逐个点开看），页顶可切换。</p>
-<section class="panel">
+<section class="panel scroll-pane">
   <p class="muted small note">重复站点<b>默认隐藏</b>，几层口径都由同一个开关（「显示全部站点」）控制：
     ① <b>重叠资产（跨任务）</b>：同一 URL 在多个任务里都探到过时，只保留<b>最新一次扫描</b>的那条
     （行内是当次扫描的状态码/标题/长度/技术栈，留最旧那条等于一直看陈旧数据）
@@ -75,7 +75,7 @@
   </div>
   {# 续112：浏览器一次手势只放行一个 window.open，其余站点必须渲染成真链接交给用户逐个点 #}
   <div id="op-list" class="op-list" aria-live="polite"></div>
-    <table id="tbl-all-sites">
+    <table id="tbl-all-sites" data-copy-col="4" data-copy-label="站点 URL">
       <thead><tr>
         <th class="pick"><input type="checkbox" class="pick-all-page"
           data-pick-all="#tbl-all-sites" title="全选本页"></th>

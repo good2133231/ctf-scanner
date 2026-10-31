@@ -3,7 +3,7 @@
 {% block content %}
 <p class="muted note">全库目录/路径发现结果（跨任务，服务端分页 + 关键字过滤）。
   「大小」是返回包字节数 —— 判断软 404、识别真实页面主要靠它。</p>
-<section class="panel">
+<section class="panel scroll-pane">
   <p class="muted small note">重复长度<b>默认隐藏</b>：同一站点下「状态码 + 响应大小」都相同的多条基本是
     同一个软 404 模板 / 统一跳转页，只留首个出现的。
     {% if show_all %}
@@ -60,7 +60,7 @@
     点「样本路径」可展开看各站点命中。</p>
   {% include "_pager.html" %}
   {% else %}
-  <table id="tbl-all-dirs">
+  <table id="tbl-all-dirs" data-copy-col="4" data-copy-label="路径">
     <thead><tr><th>#</th><th>任务</th><th>状态</th><th>路径</th><th>大小</th><th>标题</th><th>来源</th></tr></thead>
     <tbody>
     {% for d in dirs %}

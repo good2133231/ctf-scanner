@@ -41,7 +41,7 @@
   <span>任务 <b>{% if task_id %}#{{ task_id }} {{ task_names.get(task_id) or '' }}{% else %}全部{% endif %}</b></span>
   <span>关键字 <b>{{ q or '（无）' }}</b></span>
 </p>
-<section class="panel">
+<section class="panel scroll-pane">
   <form class="filters" method="get" action="{{ url_for('vulns') }}">
     {% if sev %}<input type="hidden" name="severity" value="{{ sev }}">{% endif %}
     {% if review %}<input type="hidden" name="review" value="{{ review }}">{% endif %}

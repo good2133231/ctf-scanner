@@ -263,6 +263,8 @@ TEXT_PAIRS: Sequence[Pair] = (
     ("链接 accent / 页面底",          "--accent",   "--bg",          TH_TEXT),
     ("链接 accent / 面板底",          "--accent",   "--panel",       TH_TEXT),
     ("★行悬停 正文 / --hover",        "--text",     "--hover",       TH_TEXT),
+    ("★斑马行 正文 / --row-alt",      "--text",     "--row-alt",     TH_TEXT),
+    ("★斑马行 次要字 / --row-alt",    "--muted",    "--row-alt",     TH_TEXT),
     ("★输入框 正文 / --input-bg",     "--text",     "--input-bg",    TH_TEXT),
     ("代码块 正文 / --code-bg",       "--text",     "--code-bg",     TH_TEXT),
     ("★错误文字 --danger / 页面底",   "--danger",   "--bg",          TH_TEXT),

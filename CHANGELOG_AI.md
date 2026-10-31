@@ -3,6 +3,59 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续305（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：斑马纹 + 「复制本页首列」（+ 明确不做表头吸顶的理由）
+
+实施者：WorkBuddy · Qoder-Agent 远端 Linux
+
+### 1）斑马纹
+
+只给偶数行换一档很浅的底：新变量 `--row-alt`，四套主题各一档（`:root` 深色 / light / ocean / violet）。
+两条配套规则缺一不可：
+- **sticky 首列要跟着换色**：`.panel table td:first-child` 的特异性高于斑马纹，不显式盖就会一直是
+  `--panel`，看上去"这一行第一格断了"；
+- **hover 要压过斑马纹**：否则鼠标划过偶数行没有选中反馈（这正是一开始 `tr:hover td` 的特异性问题）。
+新增两组配对进 `tools/check_contrast.py`：正文/次要字 × `--row-alt`。
+
+### 2）「复制本页首列」
+
+- 按钮由 `app.js` 注入到表前面，**表在哪个页签 / 面板里都能用**（不用逐模板写按钮）。
+- 取哪一列由 `data-copy-col` 说了算，文案由 `data-copy-label` 给：站点/子域名/目录的**第一列是复选框**，
+  按"首列"复制只会得到一串空行 —— 第一版就是这么错的，E2E 当场报「没有可复制的行」。
+- 跳过 `hidden` 行（同站点跳转折叠行）与 `colspan` 空态行；`innerText` 在隐藏页签里是空串，
+  故保留 `|| textContent` 的回退。
+- clipboard 不可用（裸 IP 上的 http 不是安全上下文）退回 textarea + `execCommand`；
+  按钮上给"已复制 N 行 / 没有可复制的行 / 失败请手动选取"三种反馈，1.4 秒后复位。
+
+### 3）四张常用表打标
+
+任务详情站点页签（`data-copy-col="2"`）、跨任务站点（4）、子域名（4）、目录（4）。
+
+### 4）真浏览器判据（新组 [13] 四条 + [14] 三条，断言 75 → 82）
+
+`[13] 站点页签渲染出复制按钮`｜`[13] 斑马纹：相邻两行不同色且首列 sticky 与同行同色`｜
+`[13] 点按钮复制的行数 == 表格行数，且首行是 http://e2e.local/…`｜`[13] 复制后有反馈`。
+实测那一次把 **60 行**站点 URL 原样取出。
+
+### 5）表头吸顶 / 筛选条吸顶（不动 DOM 的解法）
+
+`.panel` 为宽表横向滚动设了 `overflow-x:auto` ⇒ 按规范 `overflow-y` 也被算成 auto，
+它本身就是滚动容器、却从不纵向滚动 ⇒ `sticky` 找不到可吸的视口。所以给长表面板加 opt-in 的
+`.scroll-pane`：桌面端 `max-height: calc(100vh - 150px)` + 内部滚动。这样表头与筛选条就同处一个
+**真的会滚**的容器：筛选条 `top:0`，表头 `top: var(--filters-h)`。
+表头那个 top 纯 CSS 算不出来（筛选条会换行、字段按权限显隐），由 `app.js::initStickyPanes()` 量一次
+写进变量、resize 时重算。只在 ≥901px 生效（手机保持自然滚动）；四张列表页（sites/subdomains/dirs/vulns）
+打上 `scroll-pane`，DOM 一处没挪。
+E2E `[14]` 三条判据：面板真的是滚动容器（`scrollHeight > clientHeight`）｜表头 sticky 且
+`top == --filters-h`｜筛选条 sticky 且 `top:0`。
+
+### 实测
+
+- `tools/check_contrast.py`：**157 项 / 0 失败 / 裸值 0 处**
+- `tests/browser_e2e.py`：**82 条全绿**（真 Flask + 真无头 Chrome + 手写 CDP）
+- 全量门禁（**两次**：先验 [13] 那批 `logs/_smoke305.log` 504 s，再验含 [14] 的终态）：
+  **SMOKE PASS / rc=0 / 524 秒 / 374 组**（`logs/_smoke305b.log`）
+- 当前口径：AGENTS ×2、smoke 注释、`本地开发.md` 的断言条数改到 82（历史条目不改写）
+
 ## 续304（2026-10-30，WorkBuddy · Qoder-Agent 远端 Linux）：前端可用性补强 —— 宽表首列吸左 / 统计卡可点 / 空态带出处
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux

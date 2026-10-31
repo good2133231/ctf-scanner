@@ -903,6 +903,71 @@ function initCopyButtons() {
   });
 }
 
+/* ---------- 续305：表格「复制本页首列」 ----------
+   由表自己的 `data-copy-first="域名"` 决定标签；按钮注入到表前面（表在哪个面板/页签里都能用）。
+   只复制**当前这一页**（服务端分页，换页要再点一次 —— 文案与 title 都写明）。
+   跳过空态行（第一格带 colspan 的那种），否则会复制出一行空白。
+   非安全上下文（裸 IP 上的 http）里 clipboard 不可用 ⇒ 退回 textarea + execCommand。 */
+function initCopyFirstCol() {
+  document.querySelectorAll("table[data-copy-col]").forEach(tbl => {
+    if (tbl.dataset.copyColBound) return;
+    tbl.dataset.copyColBound = "1";
+    const col = parseInt(tbl.dataset.copyCol || "1", 10);
+    const base = "复制本页" + (tbl.dataset.copyLabel || "第 " + col + " 列");
+    const wrap = document.createElement("div");
+    wrap.className = "table-tools";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-mini ghost";
+    btn.textContent = base;
+    btn.title = "只复制当前这一页的「复制本页…」那一列（换页后再点一次）";
+    btn.addEventListener("click", async () => {
+      // 首列常常是复选框（没有文本）⇒ 由表自己用 `data-copy-col` 说清取第几列；
+      // `hidden` 行（同站点跳转的折叠行）不复制，空态行（colspan）跳过。
+      const cellOf = tr => tr.children[col - 1] || null;
+      const rows = Array.from(tbl.querySelectorAll("tbody tr"))
+        .filter(tr => !tr.hasAttribute("hidden"));
+      const vals = rows.map(tr => {
+        const c = cellOf(tr);
+        if (!c || c.hasAttribute("colspan")) return "";
+        return (c.innerText || c.textContent || "").trim();
+      }).filter(Boolean);
+      if (!vals.length) {
+        btn.textContent = "没有可复制的行";
+        setTimeout(() => { btn.textContent = base; }, 1200);
+        return;
+      }
+      const text = vals.join("\n");
+      let ok = false;
+      try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+        const ta = document.createElement("textarea");
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+        document.body.removeChild(ta);
+      }
+      btn.textContent = ok ? ("已复制 " + vals.length + " 行") : "复制失败，请手动选取";
+      setTimeout(() => { btn.textContent = base; }, 1400);
+    });
+    wrap.appendChild(btn);
+    tbl.parentNode.insertBefore(wrap, tbl);
+  });
+}
+
+/* ---------- 续305-B：长表吸顶 ----------
+   `.panel.scroll-pane` 里的表头要粘在筛选条**下面**，而筛选条的高度不是常数（换行、字段按权限显隐）——
+   纯 CSS 算不出来。这里量一次写进 `--filters-h`，窗口尺寸变了重新量。
+   面板里的 `.filters` 是**后代**而不是直接子元素也没关系：取第一个就行。 */
+function initStickyPanes() {
+  const measure = () => {
+    document.querySelectorAll(".panel.scroll-pane").forEach(p => {
+      const f = p.querySelector(".filters");
+      p.style.setProperty("--filters-h", (f ? f.offsetHeight : 0) + "px");
+    });
+  };
+  measure();
+  window.addEventListener("resize", measure);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   initTheme();
   initPreview();       // 续196：预览框机制（遮罩/关闭钮/Esc 只绑一次）
@@ -917,6 +982,8 @@ document.addEventListener("DOMContentLoaded", () => {
   initVulnReview();
   initLightbox();
   initCopyButtons();
+  initCopyFirstCol();
+  initStickyPanes();
   // 任务列表页的轮询/筛选/批量操作由 initTaskTable() 负责（模板内显式调用）
   // 任务详情页工具栏的操作按钮
   bindTaskOps(".toolbar");
