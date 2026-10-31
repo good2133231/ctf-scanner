@@ -428,7 +428,7 @@
             {% elif s.shot_error %}<span class="muted small" title="截图失败原因">截图失败：{{ s.shot_error }}</span>
             {% else %}<span class="muted">-</span>{% endif %}</td></tr>
         {% else %}
-          <tr><td colspan="7" class="muted">暂无数据。</td></tr>
+          <tr><td colspan="7" class="muted">暂无存活站点 —— 由 probe 阶段产出；没勾该阶段、或全部目标都探测失败时会是空的。</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -495,7 +495,7 @@
           <td class="muted">{{ source_label(s.source) }}{% if s.also_from %}<br>
             <span class="muted small" title="同一域名还被这些来源找到过（入库行仍在，只是默认不重复列）">另见于 {{ s.also_from }}</span>{% endif %}</td></tr>
       {% else %}
-        <tr><td colspan="5" class="muted">暂无数据。</td></tr>
+        <tr><td colspan="5" class="muted">暂无子域名 —— 由 subdomain 阶段产出（被动收集 + 字典爆破）；目标是 URL 时它会先自动提取主域再收集。</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -796,7 +796,7 @@
           <td class="muted small mono">{{ c.sha256 or '-' }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="12" class="muted">暂无数据。</td></tr>
+        <tr><td colspan="12" class="muted">暂无证书 —— 由 cert 阶段产出（只读 TLS 握手 + CT 日志）；该阶段两处都默认关，建任务时勾「SSL 证书」或策略页打开才有。</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -841,7 +841,7 @@
           {# 续222：来源字典（dict_src＝字典名/分类名，如 dirs_php / dirsearch/api；绝不含绝对路径） #}
           <td class="muted">{{ d.dict_src or '-' }}</td></tr>
       {% else %}
-        <tr><td colspan="6" class="muted">暂无数据。</td></tr>
+        <tr><td colspan="6" class="muted">暂无目录命中 —— 由 dirscan 阶段产出（字典扫描）；软 404 与 WAF 拦截页会被过滤掉，过滤了多少条见任务日志。</td></tr>
       {% endfor %}
       </tbody>
     </table>

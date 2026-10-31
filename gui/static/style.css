@@ -397,3 +397,22 @@ th.col-shot, td.col-shot { text-align:center; }
    用 CSS 隐藏而不是 Jinja 不渲染，两个理由：① 文本仍在 HTML 里，既有门禁断言扫的是渲染出的
    HTML，不会被这层改动打红；② 不必给上百处说明段各套一层 {% if %}。 */
 body:not(.notes-on) .note { display: none; }
+
+/* ---------- 续304：宽表在窄屏的可读性 ---------- */
+/* `.panel / main section` 是横向滚动容器（见上面的判据），宽表在窄屏只能横着拖。
+   一拖，第一列（域名 / URL / 任务编号）先滚出视野，后面几列就认不出属于谁。
+   把首列粘在左侧：只有真的横向滚动时才看得出差别，桌面宽屏零副作用。
+   底色必须显式给 —— 透明的 sticky 单元格会让后面的内容从字缝里透出来；
+   且要跟着行悬停一起换色，否则鼠标划过那一行时首列还是旧底色（看着像没选中）。
+   颜色一律走变量：裸值会被 tools/check_contrast.py 的守卫判红。 */
+.panel table th:first-child, .panel table td:first-child,
+main section table th:first-child, main section table td:first-child {
+  position:sticky; left:0; z-index:1; background:var(--panel); }
+.panel table tbody tr:hover td:first-child,
+main section table tbody tr:hover td:first-child { background:var(--hover); }
+
+/* 仪表盘的统计卡片改成可点（跳到对应列表页）：给它链接的观感，但不引入新色 ——
+   边框高亮用既有 --accent，底色用 --hover（与行悬停同一档对比度）。 */
+a.card { text-decoration:none; display:block; color:inherit; }
+a.card:hover { border-color:var(--accent); background:var(--hover); }
+a.card:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }

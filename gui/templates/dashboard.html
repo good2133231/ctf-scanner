@@ -2,11 +2,13 @@
 {% block title %}仪表盘{% endblock %}
 {% block content %}
 <div class="cards">
-  <div class="card"><b>{{ stats.tasks }}</b><span>任务</span></div>
-  <div class="card"><b>{{ stats.subdomains }}</b><span>子域名</span></div>
-  <div class="card"><b>{{ stats.sites }}</b><span>存活站点</span></div>
-  <div class="card"><b>{{ stats.vulns }}</b><span>潜在漏洞</span></div>
-  <div class="card"><b>{{ stats.pocs }}</b><span>POC</span></div>
+  {# 续304：统计卡可点（跳到对应列表页）—— 卡片上的数字本来就是那几页的总数，
+     点开才看得到明细；之前只能自己去侧栏找。 #}
+  <a class="card" href="{{ url_for('tasks') }}"><b>{{ stats.tasks }}</b><span>任务</span></a>
+  <a class="card" href="{{ url_for('subdomains') }}"><b>{{ stats.subdomains }}</b><span>子域名</span></a>
+  <a class="card" href="{{ url_for('sites') }}"><b>{{ stats.sites }}</b><span>存活站点</span></a>
+  <a class="card" href="{{ url_for('vulns') }}"><b>{{ stats.vulns }}</b><span>潜在漏洞</span></a>
+  <a class="card" href="{{ url_for('pocs') }}"><b>{{ stats.pocs }}</b><span>POC</span></a>
 </div>
 <div class="grid2">
   <section>

@@ -921,7 +921,28 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
            page.ev("document.documentElement.getAttribute('data-theme')"), "violet")
     rep.check("[11] 下拉框显示的就是当前生效档（切页后不回到默认项）",
               page.ev("document.getElementById('theme-select').value") == "violet",
-              page.ev("document.getElementById('theme-select').value"))
+              page.ev("document.getElementById('theme-select').value"))
+    # ---------- [12] 续304：仪表盘统计卡可点 + 宽表首列吸左 ----------
+    # 这两条只能靠真浏览器：`position:sticky` 与"到底哪张卡是链接"用 test_client 看不出来。
+    page.navigate(base + "/")
+    _cards12 = page.ev("Array.from(document.querySelectorAll('.cards a.card'))"
+                       ".map(a => a.getAttribute('href'))")
+    rep.check("[12] 仪表盘 5 张统计卡都是链接（点一下就到对应列表页）",
+              isinstance(_cards12, list) and len(_cards12) == 5
+              and all(isinstance(h, str) and h.startswith("/") for h in _cards12), _cards12)
+    page.navigate(base + "/tasks")
+    _first12 = page.ev(
+        "(() => { const tbl = document.querySelector('#tbl-tasks');"
+        " if (!tbl) return null;"
+        " const td = tbl.querySelector('tbody tr td:first-child');"
+        " if (!td) return null; const g = getComputedStyle(td);"
+        " return {pos: g.position, left: g.left, bg: g.backgroundColor}; })()")
+    rep.check("[12] 任务表首列 sticky + left:0（窄屏横向滚动时编号不跟出去）",
+              isinstance(_first12, dict) and _first12.get("pos") == "sticky"
+              and _first12.get("left") == "0px", _first12)
+    rep.check("[12] sticky 首列有实底（透明会让后面的列从字缝里透出来）",
+              isinstance(_first12, dict)
+              and _first12.get("bg") not in ("", "rgba(0, 0, 0, 0)", "transparent"), _first12)
     page.ev("localStorage.removeItem('ctfscanner.theme')")
 
 

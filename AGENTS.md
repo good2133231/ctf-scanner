@@ -320,7 +320,7 @@ Flask Web 控制台（仿 ARL）。
   `DEFAULTS["cert"]["enabled"]` 与 `["screenshot"]["enabled"]` 都是 False（理由：cert 是按需能力、
   screenshot 每任务起无头 Chrome）。**不许**为“本地跑门禁方便”偷翻它们——翻了当场红；
   门禁侧 `[6u]` 显式开着跑这两个阶段但断言可移植（没 Chrome 只要求不失败、产物可为 0），
-  真正要 Chrome 的只有浏览器 E2E 72 条。本地想试真效果：策略页临时开 → 跑完关回。**续303 翻转了其中一件**：主理人点单「默认要开」⇒ 随包 `settings.yaml` 的 `screenshot.enabled` 改成 `true`（`DEFAULTS` 那档仍是 False，`[251]` 因此一字未改地继续守着"不许为本地方便偷翻代码默认值"），而**门禁进程内把它压回关**（CI 里一次性 `--screenshot` 实测 30 秒不产出 × `max_sites`＝每组十分钟，且现象会长成"这台机器绿、那台机器红"，§6.2 第一起）—— 需要真跑截图的组一律自己显式开（`[6u]`/`[5t]`/`[170]`/`[7z]` 都是这个形状），判据在 `[303]`。`cert` 仍是两处都关。
+  真正要 Chrome 的只有浏览器 E2E 那 75 条（续304 加了 3 条）。本地想试真效果：策略页临时开 → 跑完关回。**续303 翻转了其中一件**：主理人点单「默认要开」⇒ 随包 `settings.yaml` 的 `screenshot.enabled` 改成 `true`（`DEFAULTS` 那档仍是 False，`[251]` 因此一字未改地继续守着"不许为本地方便偷翻代码默认值"），而**门禁进程内把它压回关**（CI 里一次性 `--screenshot` 实测 30 秒不产出 × `max_sites`＝每组十分钟，且现象会长成"这台机器绿、那台机器红"，§6.2 第一起）—— 需要真跑截图的组一律自己显式开（`[6u]`/`[5t]`/`[170]`/`[7z]` 都是这个形状），判据在 `[303]`。`cert` 仍是两处都关。
 - **git（2026-09-22 起）**：本仓库已是 git 仓库（`main` 分支，首次提交 `2267e51`）。
   git 二进制用 **MinGit 便携版**：`C:\Users\材料\MinGit\cmd\git.exe`（不在 PATH，
   choco/winget 因非管理员权限走不通，便携版是刻意选择）。仓库级 `user.name=CTFScanner`
@@ -1951,7 +1951,7 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
   一份浏览器候选（`/usr/bin/google-chrome` 那几条系统路径）、一份启动 flag（`--headless=old` 起六个）。
   两份都和产品的 `scanner/screenshot.py` 平行存在，于是各漂一次：① 续298 起 `./install.sh` 会把
   Chrome for Testing 取进 `tools/browser/` 并回写 `screenshot.browser`，而候选清单里没有它 ⇒
-  `[7x]` 那 72 条"只有真浏览器能验"的断言在**已经装好浏览器的机器上**继续报"未找到"并跳过
+  `[7x]` 那 75 条"只有真浏览器能验"的断言在**已经装好浏览器的机器上**继续报"未找到"并跳过
   （§6.2 第十起同一形状：静默跳过比红更贵，因为没人去查）；② 那份 flag 少了 root / CI / 容器都
   必需的 `--no-sandbox` ⇒ 以 root 起跑 Chrome 直接退出（实测报
   `Running as root without --no-sandbox is not supported`），症状只是"启动即退出"四个字，真正的
