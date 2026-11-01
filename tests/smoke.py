@@ -28733,8 +28733,12 @@ expression: r0()
     assert "from scanner import progress" in _cl212, "CLI 没导入 progress"
     assert 'progress.start(f"任务 #{task_id}"' in _cl212, "CLI 没建条"
     assert "progress=bar" in _cl212, "CLI 没把条交给 run_task"
-    assert _cl212.count("_run_task_fg(") == 3, \
-        "def + 两个前台入口（新建/续跑）都要走 _run_task_fg，各少一处这里就红"
+    # 续306：第三个前台入口是 `--split` 的逐目标循环（一个目标一个任务），也要挂条
+    assert _cl212.count("_run_task_fg(") == 4, \
+        "def + 三个前台入口（新建/续跑/--split）都要走 _run_task_fg，各少一处这里就红"
+    # 更硬的一条：除包装函数体内那一处，别处不许直接调 run_task（漏一条就绕过进度条与收条）
+    assert _cl212.count("run_task(") == 1, \
+        "CLI 里出现了绕过 _run_task_fg 的 run_task 直调（那条路没有进度条，也不会收条）"
     _rnsrc212 = (ROOT / "scanner" / "runner.py").read_text(encoding="utf-8")
     assert "pg.stage(i + 1, total," in _rnsrc212, "PipelineRunner 没在阶段边界推进度"
     assert "progress.finish()" in _rnsrc212, "run_task 的 finally 里没收条"
@@ -28742,7 +28746,7 @@ expression: r0()
           "非 TTY 全 no-op（管道/CI/测试零字节）｜日志擦条→独立成行→重画（变异=普通 print）｜"
           "stop 擦干净（摘要不接半条条）｜控制台 handler 走 progress.write｜"
           "run_task 钩子：阶段前调一次带中文名 + finally 收条（阶段炸/PipelineRunner 炸两路证伪）｜"
-          "CLI 两个前台入口都挂条")
+          "CLI 三个前台入口（新建/续跑/--split）都挂条")
 
     # ---- [214] 续214：VirusTotal 子域名反查（scanner/virustotal.py + osint 接线）----
     # 来源：借鉴清单里最后一项「等 key」的能力（主理人点单"virustotal 要不要做"）。
@@ -33640,9 +33644,15 @@ expression: r0()
     #    拿"两处同数"当判据，红在我自己造的跨进程假设上（同一轮里 §6.2 第二起换个样子复发）。
     _printed301 = [int(x) for x in re.findall(r"还缺 (\d+) 件", _e301.stdout)]
     _marked = len(re.findall(r"^[ \t]+[X!] 运行态｜", _e301.stdout, re.M))
-    assert (_printed301 or [0]) == [_marked], \
-        f"子进程自己的结论与逐行打点对不上：印了 {_printed301} 件、逐行数到 {_marked} 件"
-    assert (_printed301 == [0]) == ("[ready] 运行态齐" in _e301.stdout), "结论句与数字对不上"
+    #    ⚠ 0 缺口时 `--ready` 印的是「运行态齐」，不是「还缺 0 件」—— 第一版只认后者，
+    #    环境补齐之后门禁内真的出现 0 缺口，这条当场红了（续306 实测）。两种形态都算结论，
+    #    并拿"逐行打点"当第三方尺子：结论数必须等于 X/! 行数。
+    _zero301 = "[ready] 运行态齐" in _e301.stdout
+    _printed_n301 = _printed301[0] if _printed301 else (0 if _zero301 else -1)
+    assert _printed_n301 == _marked, (
+        f"结论句与逐行打点对不上：结论 {_printed_n301}（原始 {_printed301}，齐={_zero301}）、"
+        f"逐行 {_marked} 件")
+    assert not (_printed301 and _zero301), "0 缺口时不该同时出现「还缺 N 件」与「运行态齐」"
     assert (_e301.returncode == 1) == bool(_marked), \
         f"退出码与缺口不一致：rc={_e301.returncode} 缺口 {_marked} 件（--ready 要能当硬门用）"
     # 反向钉住本组的隔离：在门禁进程里，密文与口令档**必然**是"解不开/没有"（吃了真口令就是污染）
@@ -33820,6 +33830,93 @@ expression: r0()
           "｜BASE_DIR 与 CWD 各有一罐不同口令时取 BASE_DIR 那罐"
           "｜runstate_rows 的「口令档」与 os.getcwd() 无关：仓库里有⇒ok、仓库里没有⇒warn，"
           "并反手钉住 CWD 真的站在有口令档的那份目录（否则这条是空写）")
+    # ---------------- [306] 续306：批量目标「一个目标一个任务」（任务名可相同） ----------------
+    # 主理人：「如果我批量域名扫描 一个域名一个一个任务 不要堆在一起 只是他们任务名可以一样」。
+    # 判据全在服务端：① 勾了 split ⇒ 每个目标一个任务、同名、各带一行目标；
+    # ② 归一后重复的只建一个；③ 解析不了的行不建并回报条数；④ 上限 200 且**先数后建**；
+    # ⑤ 不勾时行为不变（一个任务装多行）；⑥ 表单上有那颗勾选框；⑦ CLI 的 --split 与 --report* 互斥。
+    from scanner import db as _db306
+    import scanner.queue as _q306
+    import subprocess as _sp306
+    _th306 = c.get("/tasks").get_data(as_text=True)
+    assert 'name="split_targets"' in _th306, "建任务表单没有「每个目标单独建任务」勾选框"
+    _keep_claim306 = _db306.claim_next_queued
+    _db306.claim_next_queued = lambda *a, **k: None      # 本节建的 queued 任务绝不被 worker 认领
+    _nm306 = "split306-" + str(int(time.time()))[-6:]
+
+    def _tasks306(name):
+        return [dict(t) for t in _db306.list_tasks(limit=None) if t["name"] == name]
+
+    try:
+        # ① 三个目标 ⇒ 三个任务（同名），每个任务只带自己那一行目标
+        _r306 = c.post("/api/tasks", data={
+            "name": _nm306, "stages": ["probe"], "split_targets": "1",
+            "targets": "a.example.com\nb.example.com\nhttp://c.example.com/"})
+        assert _r306.status_code == 200, _r306.get_data(as_text=True)[:200]
+        _j306 = _r306.get_json()
+        assert len(_j306.get("ids") or []) == 3 and _j306.get("count") == 3, _j306
+        _rows306 = _tasks306(_nm306)
+        assert len(_rows306) == 3, f"应建 3 个任务，实得 {len(_rows306)}"
+        assert sorted((t["targets"] or "").strip() for t in _rows306) == \
+            ["a.example.com", "b.example.com", "http://c.example.com/"], \
+            f"每个任务要只带自己那一行：{[t['targets'] for t in _rows306]}"
+        assert all((t["stages"] or "").strip() == "probe" for t in _rows306), \
+            f"阶段要原样复制到每个任务：{[t['stages'] for t in _rows306]}"
+        assert all(t["status"] == "queued" for t in _rows306), [t["status"] for t in _rows306]
+
+        # ② 归一后重复的目标只建一个（域名大小写归一）
+        _nm306b = _nm306 + "-dup"
+        _r306b = c.post("/api/tasks", data={"name": _nm306b, "stages": ["probe"],
+                                            "split_targets": "1",
+                                            "targets": "dup.example.com\nDUP.Example.COM\n"})
+        assert _r306b.status_code == 200, _r306b.get_data(as_text=True)[:200]
+        assert len(_r306b.get_json().get("ids") or []) == 1, _r306b.get_json()
+        assert len(_tasks306(_nm306b)) == 1
+
+        # ③ 解析不了的行不建任务，但要说出来（skipped）
+        _nm306c = _nm306 + "-bad"
+        _r306c = c.post("/api/tasks", data={"name": _nm306c, "stages": ["probe"],
+                                            "split_targets": "1",
+                                            "targets": "ok.example.com\n这不是域名\n"})
+        _j306c = _r306c.get_json()
+        assert _r306c.status_code == 200 and len(_j306c.get("ids") or []) == 1 \
+            and _j306c.get("skipped") == 1, _j306c
+        assert len(_tasks306(_nm306c)) == 1
+
+        # ④ 上限 200：201 行 ⇒ 400，且**一个都没建**
+        _nm306d = _nm306 + "-cap"
+        _big306 = "\n".join(f"h{i}.example.com" for i in range(201))
+        _r306d = c.post("/api/tasks", data={"name": _nm306d, "stages": ["probe"],
+                                            "split_targets": "1", "targets": _big306})
+        assert _r306d.status_code == 400, _r306d.status_code
+        assert _tasks306(_nm306d) == [], "超上限时不许建到一半"
+
+        # ⑤ 不勾 split：行为与以前一致（一个任务装多行）
+        _nm306e = _nm306 + "-one"
+        _r306e = c.post("/api/tasks", data={"name": _nm306e, "stages": ["probe"],
+                                            "targets": "x.example.com\ny.example.com\n"})
+        _j306e = _r306e.get_json()
+        assert _j306e.get("id") and not _j306e.get("ids"), _j306e
+        _one306 = _tasks306(_nm306e)
+        assert len(_one306) == 1 and _one306[0]["targets"].count("\n") == 1, _one306
+    finally:
+        # 本组建的 queued 任务一律标 stopped 再放行认领：万一有 worker 活着，也不会去真的扫 example.com
+        for _t306 in _db306.list_tasks(limit=None):
+            if (_t306["name"] or "").startswith(_nm306) and _t306["status"] == "queued":
+                _db306.update_task(_t306["id"], status="stopped", current_stage="")
+        _db306.claim_next_queued = _keep_claim306
+
+    # ⑥ CLI：--split 与 --report* 明确互斥（否则 N 个任务只有一个报告文件，看起来"生成了"）
+    _cl306 = _sp306.run([sys.executable, str(ROOT / "cli" / "client.py"), "--split",
+                         "-t", "a.example.com", "--report", str(Path(_TMPDIR) / "x306.md"),
+                         "--offline"], cwd=str(ROOT), capture_output=True, text=True, timeout=120)
+    assert _cl306.returncode != 0 and "互斥" in (_cl306.stderr + _cl306.stdout), \
+        (_cl306.returncode, (_cl306.stderr + _cl306.stdout)[-300:])
+
+    print("[306] 续306 ok: 批量目标「一个目标一个任务」（任务名相同）——3 个目标⇒3 个同名任务且各自只带一行｜"
+          "大小写归一后重复的只建一个｜解析不了的行不建并回报条数｜上限 200 且先数后建（超限一个都不建）｜"
+          "不勾时行为不变（一个任务装多行）｜表单有勾选框｜CLI 的 --split 与 --report* 互斥")
+
     print("SMOKE PASS")
 
 

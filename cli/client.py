@@ -560,6 +560,8 @@ def main():
                          "quick=深档词表等距抽样到 1 万条（不是取前 1 万条）；"
                          "deep=按策略 limits.brute_max_words（0=全量）。"
                          "精简档那几十条人工前缀任何档位都全量参与")
+    ap.add_argument("--split", action="store_true",
+                    help="每个目标单独建一个任务（任务名相同）；一行一个，最多 200 个。与 --report* 互斥（拆分后每任务单独导出）")
     ap.add_argument("--report", metavar="PATH", help="结束后生成 Markdown 报告到指定路径")
     ap.add_argument("--report-html", metavar="PATH", help="结束后生成 HTML 报告（自包含单文件）")
     ap.add_argument("--report-jsonl", metavar="PATH",
@@ -845,6 +847,34 @@ def main():
             stages.append(stage)
     stages.sort(key=STAGE_ORDER.index)
     targets_text = "\n".join(lines)
+    if args.split:
+        # 续306：一个目标一个任务（同名）。报告类旗标在这里**明确拒绝** —— 拆成 N 个任务后
+        # 一个 --report 路径只会被最后一个覆盖，看起来像"生成了"其实只剩一份。
+        if args.report or args.report_html or args.report_jsonl:
+            raise SystemExit("--split 与 --report / --report-html / --report-jsonl 互斥：拆分后请对单个任务导出报告")
+        from scanner import targets as _tgt306
+        _cand, _skip, _seen = [], 0, set()
+        for _ln in [x.strip() for x in lines if x.strip()]:
+            _k, _v = _tgt306.parse_line(_ln)
+            if _k == "unknown":
+                _skip += 1
+                continue
+            if (_k, _v) in _seen:
+                continue
+            _seen.add((_k, _v))
+            _cand.append(_ln)
+        if not _cand:
+            raise SystemExit("没有一个能解析的目标（每一行都不像域名 / URL / IP）")
+        if len(_cand) > 200:
+            raise SystemExit(f"一次最多拆 200 个任务（这次 {len(_cand)} 个），本次一个都没有建")
+        print(f"[*] --split：共 {len(_cand)} 个目标 ⇒ 建 {len(_cand)} 个任务（同名「{name}」）"
+              + (f"，跳过无法解析 {_skip} 行" if _skip else ""))
+        for _i, _ln in enumerate(_cand, 1):
+            print(f"[*] [{_i}/{len(_cand)}] 目标：{_ln}")
+            _tid = db.create_task(name, _ln, stages, options)
+            _ctx = _run_task_fg(_tid, name, _ln, stages, options, settings)
+            _print_summary(_tid, _ctx)
+        return
     task_id = db.create_task(name, targets_text, stages, options)
     mode = "，离线模式" if args.offline else ""
     print(f"[*] 任务 #{task_id} 开始：{name}（阶段：{','.join(stages)}{mode}）")

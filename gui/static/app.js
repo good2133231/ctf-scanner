@@ -998,7 +998,14 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const r = await fetch(absUrl("/api/tasks"), { method: "POST", body: new FormData(tf) });
         const j = await r.json();
-        if (j.id) {
+        if (j.ids && j.ids.length) {
+          // 续306：批量目标「一个目标一个任务」—— 任务名相同，逐条回编号
+          const head = j.ids.slice(0, 6).map(x => "#" + x).join("、");
+          msg.textContent = "已创建 " + j.ids.length + " 个任务（同名）：" + head
+            + (j.ids.length > 6 ? " …" : "")
+            + (j.skipped ? "；跳过无法解析的 " + j.skipped + " 行" : "");
+          setTimeout(() => location.reload(), 1600);
+        } else if (j.id) {
           // 勾了「全端口 / 全目录」却没勾对应阶段时，后端会自动补上并回传 auto_stages
           const extra = (j.auto_stages && j.auto_stages.length)
             ? "（已自动补上阶段：" + j.auto_stages.join("、") + "）" : "";

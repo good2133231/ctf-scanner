@@ -13,7 +13,8 @@ python cli/client.py -t <单目标> [选项]
 |---|---|
 | `-f, --file PATH` | 目标文件：每行一个 域名/URL/IP，`#` 开头为注释 |
 | `-t, --target` | 单目标，可重复 `-t a.com -t http://b.local/` |
-| `-n, --name` | 任务名（默认取文件名或 cli-task） |
+| `-n, --name` | 任务名（默认取文件名或 cli-task） |
+| `--split` | **每个目标单独建一个任务**（任务名相同）：按行拆、最多 200 个；归一后重复的只建一个、解析不了的行不建并回报条数。与 `--report*` 互斥（拆完请对单个任务导出） |
 | `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,hostcollide,portscan,probe,cert,screenshot,osint,jsmine,dirscan,crawl,vulnscan,intel,heuristic,github`（**共 15 个**，默认全部；`takeover`/`hostcollide`/`portscan`/`jsmine`/`dirscan`/`crawl`/`vulnscan` 策略级默认开，`cert`/`screenshot`/`osint`/`intel`/`heuristic`/`github` 另受策略级开关约束，见下。**显式点名 `cert` / `screenshot` 会落任务级 `cert_on`/`screenshot_on`，只对本次生效**；不写 `-p` 时不会偷偷打开这两个默认关的阶段） |
 | `--full-ports` | **本次任务**端口走全端口 `1-65535`（等价 GUI 任务选项 `portscan_full`）；选了却没把 `portscan` 写进 `-p` 时**自动补上该阶段** |
 | `--full-dir` | **本次任务**目录走深扫：全量分层字典 + dirmap + 后缀派生（等价 GUI 任务选项 `dirscan_full`）；同样自动补 `dirscan` 阶段 |
@@ -171,7 +172,8 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    以及**漏洞趋势统计**面板（级别分布条 + 最近 15 个任务的逐任务计数）——
    口径与报告一致：**已判误报不计入**，未知级别归入 `other` 而不是静默丢掉（脏数据要看得见）；
 2. **任务管理**：
-   - 「新建扫描任务」：填任务名 → 目标文本框逐行填写，或上传 .txt 目标文件（二选一或同时，自动合并）→ 勾选阶段 → 需要时可勾「离线模式」→ 提交；
+   - 「新建扫描任务」：填任务名 → 目标文本框逐行填写，或上传 .txt 目标文件（二选一或同时，自动合并）→ 勾选阶段 → 需要时可勾「离线模式」→ 提交；
+     - **批量目标可以「一个目标一个任务」**（续306）：勾上「每个目标单独建任务（任务名相同）」后，每个目标各建一个任务（上限 200，先数后建）；不勾则沿用旧行为——所有目标进同一个任务。解析不了的行不建任务，页面会告诉你跳过了几行。
      「**深度选项**」两个复选框是**单次语义**（只作用于本任务，不改全局策略）：
      **全端口扫描（1-65535）**（`portscan_full`）与 **全目录深扫**（`dirscan_full`）；
      **勾了却没勾对应阶段时会自动补上该阶段**并在提示里写明（`auto_stages`），否则用户会以为"勾了没用"。

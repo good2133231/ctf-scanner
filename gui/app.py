@@ -2288,6 +2288,39 @@ def create_app():
             return jsonify({"error": "登录态请求头有误：" + "；".join(auth_errors)}), 400
         if auth_headers:
             options["auth"] = auth_headers
+        # 续306（主理人点单）：「批量域名扫描，一个域名一个一个任务，不要堆在一起，任务名可以一样」。
+        # 判据只在这里一处：`split_targets=1` 时按**行**建任务，每条走同一套 stages/options。
+        # 三条边界：① 解析不了的行不建任务、只回报条数（不静默）；② 归一后重复的目标只建一个；
+        # ③ 上限 200，**先数后建** —— 不能建到一半再报错（那会留下半个批次）。
+        _split306 = str(data.get("split_targets", "")).lower() in ("1", "true", "on")
+        if _split306:
+            _SPLIT_MAX306 = 200
+            _cand306, _skip306, _seen306 = [], 0, set()
+            for _ln306 in [x.strip() for x in targets.splitlines() if x.strip()]:
+                _kind306, _val306 = targets_mod.parse_line(_ln306)
+                if _kind306 == "unknown":
+                    _skip306 += 1
+                    continue
+                _key306 = (_kind306, _val306)
+                if _key306 in _seen306:
+                    continue
+                _seen306.add(_key306)
+                _cand306.append(_ln306)
+            if not _cand306:
+                return jsonify({"error": "没有一个能解析的目标（每一行都不像域名 / URL / IP）"}), 400
+            if len(_cand306) > _SPLIT_MAX306:
+                return jsonify({"error": f"一次最多拆 {_SPLIT_MAX306} 个任务（这次 {len(_cand306)} 个），"
+                                         f"请分批提交；本次**一个都没有建**"}), 400
+            _ids306 = []
+            for _ln306 in _cand306:
+                _tid306 = _create_task(name, _ln306, stages, options)
+                _spawn(_tid306, name, _ln306, stages, options)
+                _ids306.append(_tid306)
+            _audit(audit.KIND_TASK, target=name,
+                   detail=f"批量拆分 {len(_ids306)} 个任务（每个目标一个，同名「{name}」；"
+                          f"跳过无法解析 {_skip306} 行）")
+            return jsonify({"ids": _ids306, "count": len(_ids306), "skipped": _skip306,
+                            "auto_stages": auto_stages})
         task_id = _create_task(name, targets, stages, options)
         _spawn(task_id, name, targets, stages, options)
         _audit(audit.KIND_TASK, target=name, detail=f"创建任务 #{task_id}（阶段 {'/'.join(stages)}）")
