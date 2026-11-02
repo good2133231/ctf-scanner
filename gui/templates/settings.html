@@ -76,6 +76,9 @@
         {{ 'checked' if s.checks.poc_link_tags }}> 指纹→POC 联动（站点技术栈命中的 POC 优先执行）</label>
       <label class="chk"><input type="checkbox" name="vulnscan_enabled" value="1"
         {{ 'checked' if s.vulnscan.enabled }}> 启用漏洞初筛阶段（取消勾选＝整阶段跳过，只做资产测绘）</label>
+      <label class="chk" title="报错回显 + 布尔型盲注；默认关（每站最多约 60 个请求）。关着时其它检查与 POC 照常按指纹联动">
+        <input type="checkbox" name="vulnscan_sqli" value="1"
+          {{ 'checked' if s.vulnscan.sqli }}> <b>SQL 注入检查</b>（默认关）</label>
       <label>每站点 POC 上限 <input name="poc_max_per_site" value="{{ s.checks.poc_max_per_site }}"></label>
       <label class="chk"><input type="checkbox" name="poc_priority" value="1"
         {{ 'checked' if s.checks.poc_priority }}> ML·POC 优先级（按 data/ml/poc_model.json 的命中概率排序；默认关）</label>
@@ -297,7 +300,7 @@
     {# 续198（主理人点单「加爬虫」）：只发 GET、默认关、外链默认不收 —— 三条都写在页面上，
        因为"它一定会发请求"这件事必须让用户看得见再决定。 #}
     <label class="chk"><input type="checkbox" name="crawl_enabled" value="1"
-      {{ 'checked' if s.crawl.enabled }}> <b>站点爬虫</b>（<b>续249 起默认开启</b>；从存活站点的页面里收集
+      {{ 'checked' if s.crawl.enabled }}> <b>站点爬虫</b>（<b>续314 起默认关闭</b>；从存活站点的页面里收集
       本来就写着的链接）</label>
     <p class="muted small note">当前状态：{% if s.crawl.enabled %}<b>已开启</b> —— 任务跑到
       crawl 阶段会对每个站点发 GET（上限见下面）。{% else %}<b>关闭</b> —— crawl 阶段会被跳过，
@@ -596,6 +599,11 @@
       C 段归纳结果进任务详情的「C 段」页签。</p>
     <label class="chk"><input type="checkbox" name="iprecon_enabled" value="1"
       {{ 'checked' if s.iprecon.enabled }}> <b>C 段反查</b>（IP → 域名 + /24 C 段归纳，免 key）</label>
+    <label class="chk" title="favicon 反查命中裸 IP 时：先探活 80/443，活着的再「免费源 + FOFA ip=」反查，结果标历史/待确认">
+      <input type="checkbox" name="iprecon_from_favicon" value="1"
+        {{ 'checked' if s.iprecon.from_favicon }}> <b>favicon 命中的 IP 也反查</b></label>
+    <label>favicon 反查最多处理 IP 数
+      <input name="iprecon_from_favicon_max" value="{{ s.iprecon.from_favicon_max }}"></label>
     <label>反查接口（<code>{ip}</code> 为占位符，可替换为自建/镜像）
       <input name="iprecon_api" value="{{ s.iprecon.api }}"></label>
     <label>最多反查 IP 数 <input name="iprecon_max_ips" value="{{ s.iprecon.max_ips }}"></label>

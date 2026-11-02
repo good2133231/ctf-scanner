@@ -407,9 +407,11 @@ def cert_shares(task_id, bases, settings=None):
         covered = [b for b in bl if _cert_covers_zone(names, b)]
         if not covered:
             continue
-        vendor = len(names) > cap or any(is_thirdparty(n) for n in names)
+        _cdn_hit = [n for n in names if cdn.match([n], settings, ())]
+        vendor = len(names) > cap or any(is_thirdparty(n) for n in names) or bool(_cdn_hit)
         why_vendor = (f"该证书盖了 {len(names)} 个名字（上限 {cap}）" if len(names) > cap
-                      else "该证书含第三方清单域名")
+                      else (f"该证书含 CDN 域名（{_cdn_hit[0]}）" if _cdn_hit
+                            else "该证书含第三方清单域名"))
         for n in sorted(names):
             if any(n == b or n.endswith("." + b) for b in covered):
                 continue          # 已确认资产自己的名字不当候选

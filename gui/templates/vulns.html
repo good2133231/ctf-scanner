@@ -97,7 +97,7 @@
         <td><span class="sev sev-{{ v.severity }}">{{ v.severity }}</span></td>
         <td>{{ v.name }}</td>
         <td class="muted">{{ v.poc_id }}</td>
-        <td class="muted">{{ v.target }}</td>
+        <td class="muted">{{ v.target }}{% if v._dup_group %}<details class="dup-inline"><summary class="muted small">另有 {{ v._dup_group|length }} 条同族（同一问题）</summary><ul class="muted small mono dup-list">{% for d in v._dup_group %}<li>{{ d.severity }} · {{ d.poc_id }} · {{ d.target }}</li>{% endfor %}</ul></details>{% endif %}</td>
         <td>{# 续150：逐行复核下拉已移除（用户判定不常用）；只读显示当前复核状态 #}
           {% if v.review == 'confirmed' %}<span class="sev sev-low" title="{{ v.review_note or '' }}">已确认</span>
           {% elif v.review == 'false_positive' %}<span class="sev sev-medium" title="{{ v.review_note or '' }}">误报</span>

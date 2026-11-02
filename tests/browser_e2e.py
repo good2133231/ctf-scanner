@@ -861,17 +861,27 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     # smoke 那边只能验页面结构；"点下去到底勾上了几项"必须在这里验（真表单登录同类口径）。
     page.navigate(base + "/tasks")
     _cb10 = "#task-form [data-ck-group] input[type=checkbox]"
-    _tot10 = page.ev(f"document.querySelectorAll('{_cb10}').length")
-    page.ev("document.querySelector('#task-form button[data-ck-mode=all]').click()")
-    _on10 = page.ev(f"document.querySelectorAll('{_cb10}:checked').length")
+    # 续314（主理人点单）：删掉「全部勾上（最重档位）」按钮，改验「耗时选项」总勾选。
+    # 它不在任何 data-ck-group 里 ⇒ 不影响 stages/deep/expand 的批量计数。
+    page.ev("document.querySelector('#task-form input[data-slow-master]').click()")
+    _slow10 = json.loads(page.ev(
+        "JSON.stringify({"
+        "sqli: document.querySelector('#task-form input[name=opt_sqli]').checked,"
+        "crawl: document.querySelector('#task-form input[name=stages][data-slow-item]').checked,"
+        "master: document.querySelector('#task-form input[data-slow-master]').checked})"))
+    rep.check("[10] 「耗时选项」总勾选＝SQL 注入 + 爬虫都勾",
+              _slow10 == {"sqli": True, "crawl": True, "master": True}, str(_slow10))
+    rep.check("[10] 「全部勾上（最重档位）」按钮已删（续314）",
+              page.ev("document.querySelector('#task-form button[data-ck-mode=all]') === null") is True)
     # 续201：一键勾选覆盖的是 15 阶段 + 深度 + 1 拓展；续250 起深度少一项（全端口勾选
     # 从建任务表单摘掉、挪到任务详情「端口」页签按钮）；续265 起「离线模式」整颗从
     # 建任务表单去掉（主理人 2026-10-23：没有场景用得到）⇒ 一共 18 项，全部勾上即全勾。
     # 「Host 碰撞」那颗**刻意不在任何 data-ck-group 里** —— 它是独立的任务级开关，
     # 混进"拓展选项"会让一键勾选的语义变浑（[118] 的分组断言就是钉这个的）。
 
-    rep.check("[10] 「全部勾上」把 scope 覆盖的 18 项全勾上（15 阶段 + 2 深度 + 1 拓展）",
-              _on10 == _tot10 == 18, f"总 {_tot10} / 勾上 {_on10}")
+    rep.check("[10] 批量勾选 scope 仍是 18 项（15 阶段 + 2 深度 + 1 拓展；slow 组不入 scope）",
+              page.ev("document.querySelectorAll('#task-form [data-ck-group] input[type=checkbox]').length")
+              == 18, "slow 组混进了 data-ck-group")
     # 续265：「离线模式」整颗从建任务表单去掉了 ⇒ 判据从"不带动它"改成"表单里没有它"。
     rep.check("[10] 建任务表单里不再有「离线模式」那颗框（续265：主理人说没有场景用得到）",
               page.ev("document.querySelector('#task-form input[name=offline]') === null") is True,
@@ -896,7 +906,7 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
               _back10 == _want10, f"实测 {_back10}（策略关着 {_off10} 个阶段）")
     # 证伪：按钮只管 stages 时会停在这里（少于全勾）—— 上面那条 all 的判据就是它的牙
     rep.check("[10] 点按钮不会把已填内容弄丢（按钮是 type=button，不提交表单）",
-              page.ev("!!document.querySelector('#task-form button[data-ck-mode=all]')") is True
+              page.ev("!!document.querySelector('#task-form input[data-slow-master]')") is True
               and page.ev("document.querySelectorAll('#task-form form').length") == 0)
     # ---------- [11] 主题：默认浅色，且换页时首屏就得是它（续147）----------
     # 主理人原话：「整体色调默认就是浅色，以及我刚刚手动调成浅色 切换功能页 他先显示深色

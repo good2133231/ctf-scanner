@@ -36,6 +36,11 @@ python dev.py gate --run                                    # 直接代跑（局
 | `cli/client.py` | `[212]` `[306]` `[5e]` |
 | `scanner/db.py`（站点可见判据 `SITE_STATUS_WHERE` / 列表查询） | `[8au]` `[268]` |
 | `scanner/fofa.py`（FOFA 查询 / 积分日志） | `[2c]` `[312]` |
+| `scanner/config.py`（出厂默认值 / 设置合并） | `[8bq]` `[252]` `[249]` `[314]` |
+| `scanner/stages/osint.py`（CT / FOFA / favicon 裸 IP 反查） | `[6e]` `[6k]` `[314]` |
+| `scanner/stages/vulnscan.py`（漏洞初筛 / SQLi 开关） | `[8bq]` `[314]` |
+| `scanner/crawl.py`（链接抽取 / 同站判据） | `[198]` `[314]` |
+| `scanner/extdom.py`（拓展域名置信度 / 证书证据） | `[194a]` `[263]` `[314]` |
 | `tests/smoke.py`（门禁自身 / `--only` / `--prefix`） | `[272]` `[310]` |
 | `tools/restart_gui.py` / 右上角「重启服务」 | `[311]` |
 | `scanner/gateplan.py` / 本文件 | `[8aa]` `[308]` |

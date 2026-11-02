@@ -406,9 +406,9 @@ DEFAULTS = {
     },
     "crawl": {
         # 站点爬虫（续198）：收集页面里**本来就写着**的链接（与 dirscan 的"猜路径"是两回事）。
-        # 续249（主理人点单"默认要开"）：默认**开**。它一定会发 GET —— 护栏是额度上限
-        # （max_sites / max_pages / max_links / 同站判据）与策略页随时可关，不是"拿走了开关"。
-        "enabled": True,
+        # 续314（主理人点单「爬虫默认关闭」）：默认**关**（续249 曾按"默认要开"翻成开，本轮改口）。
+        # 关掉时 crawl 阶段整段跳过、一个请求都不发；建任务页「耗时选项」可一键打开。
+        "enabled": False,
         "max_sites": 30,           # 每任务最多爬多少个站点
         "max_links": 60,           # 每站点最多收多少条链接
         "max_pages": 8,            # 每站点最多抓多少个页面（含首页）
@@ -520,6 +520,10 @@ DEFAULTS = {
         # 适合"只做资产测绘、暂不探测"的场景。细粒度门控仍在 checks 段
         # （min_severity / skip_severities / poc_engine / disabled_*）。
         "enabled": True,
+        # 续314（主理人点单「SQL 注入默认关闭」）：只关 `a03-sqli-error` / `a03-sqli-blind`
+        # 两个检查，**不关整阶段** —— 漏洞检测仍按指纹识别对号入座，其它检查与 POC 照常跑。
+        # 建任务页「耗时选项 → SQL 注入」是任务级覆盖（见 `stages/vulnscan.apply_sqli_gate`）。
+        "sqli": False,
     },
     "afrog": {
         # 外部引擎 afrog（续121 接入；续149 **默认开**）：让 `config/afrog-pocs/` 里的
@@ -607,6 +611,10 @@ DEFAULTS = {
         "max_ips": 500,            # 单任务最多反查多少个 IP
         "max_hosts": 200,          # 为收集 IP 最多解析多少个主机名
         "max_domains_per_ip": 30,  # 单 IP 命中域名超过该值 → 判为共享主机，不纳入域名资产
+        # 续314（主理人点单）：favicon 反查命中**裸 IP** 时，先探活（80/443 各一发 GET），
+        # 活着的再做「IP→域名」（免费源 + FOFA `ip=`），入库标「历史反查·待确认」。
+        "from_favicon": True,
+        "from_favicon_max": 20,    # 单任务最多处理多少个 favicon 命中 IP（探活 2 发 + 反查 N 发）
         "workers": 5,              # 并发数：公共接口，刻意保持克制
         # 续184：开跑前先探一次每个源还活不活（挂了的整轮跳过，不再逐 IP 白跑）
         "preflight": True,

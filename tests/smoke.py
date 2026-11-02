@@ -1566,8 +1566,11 @@ def main():
     assert _pane2.count('dir-note">dirmap<') + _pane2.count('dir-note">builtin<') == 2, \
         "应只渲染 777 批 1 行 + zzfoldalpha 批 1 行（续255 起同路径跨站折叠）"
     assert "已隐藏 6 条" in _pane2, "隐藏数 = 777 批 2 + zzfoldalpha 批 4"
-    assert "另有 4 条相同：http://d2.test、http://d3.test 等" in _pane2, \
-        "代表行要把折进来的站点说出来（d1 自家两条例行不计站点）"
+    assert "另有 4 条相同" in _pane2, "折叠摘要要报出条数"
+    _dup2 = _pane2.split("另有 4 条相同", 1)[1].split("</ul>", 1)[0]
+    assert "http://d2.test" in _dup2 and "http://d3.test" in _dup2, \
+        "折叠块里要列出折进来的站点（d1 自家两条例行不计站点）"
+    assert "其余 2 条未列出" in _dup2, "超出 12 条上限时要报还差几条"
     # 跨任务 /dirs 用**唯一关键字**把这批隔离出来：zzfoldalpha 命中的 4 条折 1
     # （/zzfoldbeta 不含该关键字，被 q 挡在外面，不进本页折叠）
     _dirs2 = c.get("/dirs?q=zzfoldalpha").get_data(as_text=True)
@@ -15996,7 +15999,7 @@ http:
     # ① 每个按钮 scope 里点名的分组，页面上必须真有对应的 [data-ck-group]
     import re as _re118
     _btns118 = _re118.findall(r'data-ck-mode="(\w+)" data-ck-scope="([\w,]+)"', _th118)
-    assert [b[0] for b in _btns118] == ["all", "none", "default"], _btns118
+    assert [b[0] for b in _btns118] == ["none", "default"], _btns118   # 续314：all（最重档位）已删
     _groups118 = set(_re118.findall(r'data-ck-group="(\w+)"', _th118))
     for _m118, _sc118 in _btns118:
         for _g118 in _sc118.split(","):
@@ -16007,9 +16010,10 @@ http:
     #    续265：建任务表单不再有「离线模式」那一组（主理人：没有场景用得到）⇒ 原来那条
     #    "none/default 必须点名 mode" 改成**"必须覆盖页面上每一个分组"**：更强，而且不再
     #    随分组增减而漂（点名写死的话，每加/减一个分组都要回来改一遍断言）。
-    _scope_all118 = dict(_btns118)["all"]
-    assert "mode" not in _scope_all118.split(","), \
-        "「全部勾上」把离线模式也带上了 —— 勾离线等于禁用外部工具，与「把东西跑全」正好相反"
+    # 续314：all 按钮已删；判据升级成"任何批量按钮都不许带 mode"（离线＝禁用外部工具，与跑全相反）
+    for _m118, _sc118 in _btns118:
+        assert "mode" not in _sc118.split(","), \
+            f"{_m118} 按钮把离线模式也带上了 —— 勾离线等于禁用外部工具，与「把东西跑全」正好相反"
     for _m118 in ("none", "default"):
         _sc118 = set(dict(_btns118)[_m118].split(","))
         assert _groups118 <= _sc118, \
@@ -16058,18 +16062,19 @@ http:
     _g_mut = set(_re118.findall(r'data-ck-group="(\w+)"', _mut118))
     _caught = [(_m, _g) for _m, _sc in _btns118 for _g in _sc.split(",")
                if _g not in _g_mut]
-    assert ("all", "deep") in _caught, "变异没生效：改错分组名后判据抓不到（① 没有区分度）"
+    assert ("none", "deep") in _caught, "变异没生效：改错分组名后判据抓不到（① 没有区分度）"
     # 变异二：把 cert 的默认值翻成"默认勾上"，③ 那条默认口径判据必须立刻跟着变红
     _mut2 = _re118.sub(r'(name="stages" value="cert"\s+data-ck-default=")0(")',
                                           r"\g<1>1\g<2>", _th118)
     assert _mut2 != _th118, "变异没生效：改不动 cert 的默认值（说明页面形态和预想不同）"
     _st_mut = _re118.findall(r'name="stages" value="(\w+)"\s+data-ck-default="(\d)"', _mut2)
-    assert sorted(s for s, d in _st_mut if d == "0") == ["screenshot"], \
-        "默认口径断言对『cert 变成默认勾上』不敏感 = ③ 是假绿"
+    _st_mut_off = sorted(s for s, d in _st_mut if d == "0")
+    assert "screenshot" in _st_mut_off and "cert" not in _st_mut_off, \
+        f"默认口径断言对『cert 变成默认勾上』不敏感 = ③ 是假绿：{_st_mut_off}"
 
-    print("[8w] 续118 建任务一键勾选 ok: 三个按钮 scope 点名的分组页面上都真实存在｜「全部勾上」不含"
-          "离线模式（勾它=禁用外部工具，与跑全相反），「全部清掉/恢复默认」含｜阶段清单与 STAGE_ORDER "
-          "逐一对齐且默认不勾的恰是 cert/screenshot｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
+    print("[8w] 续118/续314 建任务一键勾选 ok: 两个按钮（最重档位已删）scope 点名的分组页面上都真实存在｜"
+          "任何批量按钮都不含离线模式（勾它=禁用外部工具，与跑全相反），「全部清掉/恢复默认」含｜阶段清单与 STAGE_ORDER "
+          "逐一对齐且默认不勾的恰是 cert/crawl/screenshot（续314）｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
           "读 data-ck-default、挂在 DOMContentLoaded｜变异：抹掉 deep 钩子 / 把 cert 翻成默认勾 都变红")
 
     # ---------------- [8x] 续119：afrog 进 toolmgr，但"能装"与"会被用"分成两档 ----------------
@@ -25279,14 +25284,14 @@ expression: r0()
     db.delete_task(_t8be, backup=False)
     # 模板接线：资产关系图在详情页、复测闭环建议在两个漏洞页
     _vd8be = (ROOT / "gui" / "templates" / "vulns.html").read_text(encoding="utf-8", errors="replace")
-    assert "asset_tree" in _td8bc, "任务详情页未接资产关系图"
+    assert "asset_tree(task.id)" not in _td8bc and 'class="asset-tree"' not in _td8bc, \
+        "续314：详情页不该再渲染资产关系图"
     assert "retest_hint" in _vd8be and "retest_hint" in _td8bc, "复测闭环建议未接两个漏洞页"
-    assert 'app.jinja_env.globals["asset_tree"]' in _apa8bc \
-        and 'app.jinja_env.globals["retest_hint"]' in _apa8bc, "jinja 全局未注册（模板取不到）"
+    assert 'app.jinja_env.globals["retest_hint"]' in _apa8bc, "jinja 全局未注册（模板取不到）"
     # smoke 依赖自检：用系统 python 跑时给的是可照做的指引，而不是裸栈
     assert "./.venv/bin/python tests/smoke.py" in (ROOT / "tests" / "smoke.py").read_text(
         encoding="utf-8", errors="replace"), "smoke 缺依赖自检指引"
-    print("[8be] 续151 ok: 资产关系图（主域→子域名→IP→端口/服务，已测标 ✓，空任务退回空树）｜"
+    print("[8be] 续151/续314 ok: 资产关系图已从详情页删除（续314；`_asset_tree` 单测仍在，空任务退回空树）｜"
           "复测闭环建议（按三态给复核建议，单一产地 retest_hint）｜smoke 依赖自检给出可照做的指引")
 
     # ---------------- [8bd] 续151：无依赖 ML（SimHash / n-gram Jaccard / 朴素贝叶斯 / MAD） ----------------
@@ -31025,22 +31030,22 @@ expression: r0()
     print("[248] 续248 ok: 历史 URL（wayback+OTX，零目标流量）归一化成路径并入目录候选｜"
           "去重/上限/上游失败都安全｜三处配置一致")
     # ------------------------------------------------------------------ [249]
-    # 续249：站点爬虫默认开（主理人点单"默认要开"）—— 出厂值登记 + 关掉仍零请求
+    # 续249/续314：站点爬虫默认关（续249 曾按"默认要开"翻成开；续314 主理人改口「爬虫默认关闭」）
     from scanner.config import DEFAULTS as _DEF249
     _t249 = db.create_task("smoke249-crawl", "https://s249.test/", ["probe"], {})
-    assert _DEF249["crawl"]["enabled"] is True, "站点爬虫出厂值应为 True（续249 主理人点单）"
+    assert _DEF249["crawl"]["enabled"] is False, "站点爬虫出厂值应为 False（续314 主理人点单）"
     _sty249 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
     _cg249 = _sty249.split("crawl:", 1)[1].split("\nmax_sites:", 1)[0]
-    assert "enabled: true" in _cg249, f"settings.yaml 的 crawl.enabled 没跟着翻正：{_cg249!r}"
+    assert "enabled: false" in _cg249, f"settings.yaml 的 crawl.enabled 没跟着翻：{_cg249!r}"
     _ga249 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
     assert '"crawl": {"enabled": f.get("crawl_enabled") == "1",' in _ga249, "POST 映射口径变了"
     _tp249 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8", errors="replace")
-    assert "续249 起默认开启" in _tp249, "策略页文案没更新"
+    assert "续314 起默认关闭" in _tp249, "策略页文案没更新"
     # 阶段预览要报**实际值**（crawl 现在默认开 ⇒ 预览里 enabled=True）
     _j249 = c.get(f"/api/tasks/{_t249}/stages").get_json()
     _b249 = {s["name"]: s for s in _j249["stages"]}
-    assert _b249["crawl"]["enabled"] is True, _b249["crawl"]
-    print("[249] 续249 ok: 站点爬虫出厂默认开（DEFAULTS/settings.yaml/POST 映射/策略页四处一致，"
+    assert _b249["crawl"]["enabled"] is False, _b249["crawl"]
+    print("[249] 续249/续314 ok: 站点爬虫出厂默认关（DEFAULTS/settings.yaml/POST 映射/策略页四处一致，"
           "阶段预览报实际值）；关掉时本阶段仍一个请求都不发")
     # ------------------------------------------------------------------ [250]
     # 续250：① 端口默认只打常见 web 端口（全端口移到任务详情端口页签，表单摘掉勾选）
@@ -34385,6 +34390,152 @@ expression: r0()
     print("[312] 续312 ok: consumed_fpoint/required_fpoints 解析并写日志（只报消耗）｜"
           "余额接口不可用就不报剩余（fofa.py 0 处 user_info）｜只认点名字段，size 不被误读｜"
           "两条文案：有消耗 / 只有 required")
+
+    # ---------------- [314] 续314：主理人 9 条点单（本组钉 1/2/5/6/8） ----------------
+    import gui.app as _ga314
+    _rows314, _hid314 = _ga314._fold_certs([
+        {"id": 1, "host": "a.test", "cn": "Same.CN", "sha256": "aa",
+         "serial": "", "issuer": "", "not_before": ""},
+        {"id": 2, "host": "b.test", "cn": "same.cn", "sha256": "bb",
+         "serial": "", "issuer": "", "not_before": ""},
+        {"id": 3, "host": "c.test", "cn": "", "sha256": "cc",
+         "serial": "", "issuer": "", "not_before": ""},
+    ])
+    assert _hid314 == 1 and len(_rows314) == 3, (_hid314, _rows314)
+    _head314 = [r for r in _rows314 if not r.get("_dup_member")][0]
+    assert _head314["host"] == "a.test" and _head314["_dup_group"][0]["host"] == "b.test"
+    assert _head314["_dup_hosts"] == ["a.test", "b.test"], _head314["_dup_hosts"]
+
+    # 爬虫：提交回首页的 form 跳过；/login 表单与普通链接（含首页链接）保留
+    import scanner.crawl as _cr314
+    _ls314 = _cr314.extract_links(
+        '<form method="post"></form><form action="/login" method="post"></form>'
+        '<form action="/" method="get"></form><a href="/">home</a>'
+        '<a href="/x?q=1">x</a>', "http://h.test/")
+    assert not any(k == "form" and _cr314.urlsplit(u).path in ("", "/")
+                   for u, k, m in _ls314), _ls314
+    assert any(k == "form" and _cr314.urlsplit(u).path == "/login" for u, k, m in _ls314), _ls314
+    assert any(k == "link" and _cr314.urlsplit(u).path == "/" for u, k, m in _ls314), \
+        "链接（非表单）不该被这条规则误伤"
+
+    # CDN 证书域名：vendor=True，理由写明 CDN（续313 起 5xx 已不影响这里）
+    import scanner.extdom as _ex314
+    _rq314 = db._query
+    db._query = lambda sql, args=(): [
+        {"host": "b.targ1.test", "cn": "b.targ1.test",
+         "san": "b.targ1.test,45c3e64b.sni.cloudflaressl.com"}]
+    try:
+        _info314 = _ex314.cert_shares(1, ["targ1.test"], settings)
+    finally:
+        db._query = _rq314
+    _one314 = _info314.get("45c3e64b.sni.cloudflaressl.com") or {}
+    assert _one314.get("vendor") is True, _info314
+    assert "CDN" in str(_one314.get("reason") or ""), _one314
+
+    # 目录重复行：模板给的是可折叠块，不再是一行文字
+    _td314 = (ROOT / "gui" / "templates" / "task_detail.html").read_text(encoding="utf-8")
+    assert '<details class="dup-inline">' in _td314
+    assert "asset_tree(" not in _td314, "续314：资产关系图已删"
+    # 邮箱黑名单：命中标记与其它面板同一份判据
+    _bl314 = _ga314._mark_blacklist(
+        [{"domain": "a.targ1.test", "email": "x@a.targ1.test"},
+         {"domain": "other.test", "email": "y@other.test"}], ["targ1.test"])
+    assert _bl314[0]["bl"] == "targ1.test" and _bl314[1]["bl"] == "", _bl314
+
+    # 漏洞同族折叠：.git 的 4 条（POC + 内置检查 × http/https）折成 1 行 + 3 个成员
+    _vw314 = [
+        {"id": 1, "poc_id": "exposure-git-config", "severity": "high",
+         "target": "http://p.targ1.test", "name": ".git 目录配置泄露"},
+        {"id": 2, "poc_id": "a01-sensitive-files", "severity": "high",
+         "target": "http://p.targ1.test/.git/config", "name": "敏感文件可匿名访问"},
+        {"id": 3, "poc_id": "exposure-git-config", "severity": "high",
+         "target": "https://p.targ1.test", "name": ".git 目录配置泄露"},
+        {"id": 4, "poc_id": "a01-sensitive-files", "severity": "high",
+         "target": "https://p.targ1.test/.git/config", "name": "敏感文件可匿名访问"},
+    ]
+    _vf314 = _ga314._fold_vulns(_vw314)
+    assert len(_vf314) == 1 and len(_vf314[0]["_dup_group"]) == 3, _vf314
+
+    # ---- 第 9 条：SQL 注入检查默认关（vulnscan 保留）、爬虫默认关、耗时选项 ----
+    from scanner import config as _cfg314
+    from scanner.owasp import checks as _oc314
+    from scanner.stages import vulnscan as _vs314
+    assert _cfg314.DEFAULTS["vulnscan"]["sqli"] is False, "SQL 注入出厂值应为关"
+    assert _cfg314.DEFAULTS["crawl"]["enabled"] is False, "爬虫出厂值应为关"
+    _s314 = _cfg314.load_settings()
+    _s314["vulnscan"]["sqli"] = False
+    _s314["checks"]["disabled_checks"] = []
+    assert _vs314.apply_sqli_gate(_s314, {}) is True
+    _ids314 = {m["id"] for m in _oc314.enabled_checks(_s314)}
+    assert "a03-sqli-error" not in _ids314 and "a03-sqli-blind" not in _ids314, _ids314
+    assert "a01-sensitive-files" in _ids314, "只许关 SQLi，其它检查必须还在"
+    _s314b = _cfg314.load_settings()
+    _s314b["checks"]["disabled_checks"] = []
+    assert _vs314.apply_sqli_gate(_s314b, {"sqli": True}) is False
+    _ids314b = {m["id"] for m in _oc314.enabled_checks(_s314b)}
+    assert "a03-sqli-error" in _ids314b and "a03-sqli-blind" in _ids314b, _ids314b
+    _tk314 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8")
+    assert "全部勾上（最重档位）" not in _tk314, "续314：最重档位按钮应删掉"
+    assert "耗时选项" in _tk314 and 'name="opt_sqli"' in _tk314, "建任务页缺耗时选项"
+    _st314 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
+    assert 'name="vulnscan_sqli"' in _st314 and "续314 起默认关闭" in _st314
+
+    # ---- 第 4 条：favicon 裸 IP → 先探活 → 免费源 + FOFA ip= 反查 ----
+    import types as _ty314
+    import scanner.fofa as _f314
+    import scanner.stages.osint as _os314
+    assert _f314.build_ip_query("1.2.3.4") == 'ip="1.2.3.4"', _f314.build_ip_query("1.2.3.4")
+    assert _f314.search_ip("", {})[2], "空 IP 必须直接报错、不发请求"
+    assert _cfg314.DEFAULTS["iprecon"]["from_favicon"] is True
+    assert int(_cfg314.DEFAULTS["iprecon"]["from_favicon_max"]) == 20
+
+    class _Lg314:
+        def info(self, *a, **k):
+            pass
+
+        def debug(self, *a, **k):
+            pass
+
+        def warning(self, *a, **k):
+            pass
+
+    _ctx314 = _ty314.SimpleNamespace(
+        settings={"iprecon": {"from_favicon": True, "from_favicon_max": 20},
+                  "fofa": {"enabled": True}},
+        logger=_Lg314(), stopped=lambda: False)
+    _stage314 = _os314.OsintStage(_ctx314)
+    _rev314, _fofa314 = [], []
+    _old_http314 = _os314.http_request
+    _old_rev314 = _os314.iprecon.reverse_lookup
+    _old_ok314 = _os314.fofa_mod.available
+    _old_sip314 = _os314.fofa_mod.search_ip
+    try:
+        _os314.http_request = lambda url, **kw: ({"status": 200, "text": "ok"}
+                                                 if "1.2.3.4" in url else None)
+        _os314.iprecon.reverse_lookup = (
+            lambda ip, *a, **k: (_rev314.append(ip) or ["a.targ1.test"])
+            if ip == "1.2.3.4" else [])
+        _os314.fofa_mod.available = lambda s: True
+        _os314.fofa_mod.search_ip = (
+            lambda ip, *a, **k: (_fofa314.append(ip)
+                                 or ([{"domain": "b.targ1.test"}], 1, "")))
+        _got314 = _stage314._favicon_ip_domains(["1.2.3.4", "10.0.0.1", "9.9.9.9"])
+    finally:
+        _os314.http_request = _old_http314
+        _os314.iprecon.reverse_lookup = _old_rev314
+        _os314.fofa_mod.available = _old_ok314
+        _os314.fofa_mod.search_ip = _old_sip314
+    _names314 = sorted(d for d, _s, _n in _got314)
+    assert _names314 == ["a.targ1.test", "b.targ1.test"], _names314
+    assert all(s == "osint:iprecon" for _d, s, _n in _got314), _got314
+    assert all("历史反查" in n and "待确认" in n for _d, _s, n in _got314), _got314
+    assert _rev314 == ["1.2.3.4"] and _fofa314 == ["1.2.3.4"], \
+        "死 IP（9.9.9.9）与私有 IP（10.0.0.1）都不许反查"
+
+    print("[314] 续314 ok: 证书同 CN 折一行（CN 优先指纹）｜爬虫跳过提交回首页的表单｜"
+          "CDN 证书域名 vendor=True 不判高｜目录重复可折叠｜详情页不再渲染资产关系图｜"
+          "邮箱黑名单徽标｜.git 四类折成一行｜SQLi 检查默认关（其它检查照跑）｜爬虫默认关｜耗时选项｜"
+          "favicon 裸 IP 先探活再反查（免费源+FOFA ip=，标历史/待确认）")
 
     print("SMOKE PASS")
 

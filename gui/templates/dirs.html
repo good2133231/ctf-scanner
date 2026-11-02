@@ -70,7 +70,7 @@
         <td>{{ d.status or '-' }}</td>
         <td>{% set _u = dir_url(d.site_url, d.path) %}{% if _u %}<a class="url-link" href="{{ _u }}" target="_blank" rel="noopener noreferrer" title="在新标签页打开 {{ _u }}">{{ dir_path(d.path) }}</a>{% else %}{{ dir_path(d.path) }}{% endif %}</td>
         <td class="muted small mono">{{ d.length if d.length is not none else '-' }}
-          {% if d.dup %}<span class="muted small">（另有 {{ d.dup }} 条相同{% if d.dup_hosts %}：{{ d.dup_hosts|join('、') }}{% if d.dup > d.dup_hosts|length %} 等{% endif %}{% endif %}）</span>{% endif %}</td>
+          {% if d.dup %}<details class="dup-inline"><summary class="muted small">另有 {{ d.dup }} 条相同</summary><ul class="muted small mono dup-list">{% for h in d.dup_hosts %}<li>{{ h }}</li>{% endfor %}{% if d.dup > (d.dup_hosts|length) %}<li>…其余 {{ d.dup - (d.dup_hosts|length) }} 条未列出</li>{% endif %}</ul></details>{% endif %}</td>
         <td class="muted small">{{ d.title or '-' }}</td>
         <td class="muted dir-note">{{ d.note or '-' }}</td>
       </tr>

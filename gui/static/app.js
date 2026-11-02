@@ -501,6 +501,19 @@ function initTaskCheckAll() {
       if (msg) msg.textContent = n ? `已${label}（${n} 个选项）` : "没有找到可勾选的选项";
     });
   });
+  /* 续314：耗时选项总勾选 —— 勾上＝SQL 注入 + 爬虫都勾，取消＝都取消。
+     爬虫仍是 stages 里的普通复选框，不另造字段。 */
+  const slow = tf.querySelector("input[data-slow-master]");
+  if (slow && !slow.dataset.bound) {
+    slow.dataset.bound = "1";
+    slow.addEventListener("change", () => {
+      const sqli = tf.querySelector('input[name="opt_sqli"]');
+      if (sqli) sqli.checked = slow.checked;
+      tf.querySelectorAll('input[name="stages"][data-slow-item]').forEach(c => {
+        c.checked = slow.checked;
+      });
+    });
+  }
 }
 
 

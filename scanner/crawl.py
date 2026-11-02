@@ -97,6 +97,9 @@ def extract_links(html, base):
         # 没写 action = 提交回当前页（HTML 语义），这时记当前页才对得上"入口在哪"
         u = action or (str(base or "").split("#", 1)[0])
         if u:
+            _sp = urlsplit(u)
+            if _sp.path in ("", "/") and not _sp.query:
+                continue          # 续314：提交回首页的表单（登录/搜索框）没有定位价值
             out.append((u, "form", (attrs.get("method") or "get").strip().lower()[:8] or "get"))
     return out
 

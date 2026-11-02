@@ -125,6 +125,11 @@ def _quote_value(raw):
     return str(raw or "").strip().replace("\\", "").replace('"', "")
 
 
+def build_ip_query(ip):
+    """构造按 IP 反查的语句：`ip="1.2.3.4"`（续314，favicon 命中裸 IP 时用）。"""
+    return f'ip="{_quote_value(ip)}"'
+
+
 def build_cert_query(domain):
     """构造证书查询语句：`cert="example.com"` —— 找与该域名共用同一张 TLS 证书的其它资产。"""
     return f'cert="{_quote_value(str(domain or "").strip().strip("."))}"'
@@ -193,6 +198,13 @@ def search(icon_hash, settings, logger=None, size=None):
     if not icon_hash:
         return [], 0, "favicon 哈希为空"
     return search_query(build_query(icon_hash), settings, logger=logger, size=size)
+
+
+def search_ip(ip, settings, logger=None, size=None):
+    """按 IP 反查域名，返回 `(assets, total, error)`（结构同 `search`）。"""
+    if not str(ip or "").strip():
+        return [], 0, "IP 反查目标为空"
+    return search_query(build_ip_query(ip), settings, logger=logger, size=size)
 
 
 def search_cert(domain, settings, logger=None, size=None):

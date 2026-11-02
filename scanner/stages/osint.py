@@ -21,6 +21,7 @@
   （写进 `certs` 表，source='ct'）并把它覆盖的域名当作拓展域名来源。
 
 产出的域名来源分别是 `osint:cseg` / `osint:fofa` / `osint:fofa-cert` / `osint:fofa-title` /
+`osint:iprecon`（favicon 命中的裸 IP：先探活，再「免费源 + FOFA ip=」反查，标历史/待确认） /
 `osint:shodan` / `osint:quake` / `osint:vt` / `osint:ctlog`，都归「拓展域名」页。
 全部子能力都关时整个阶段直接跳过 —— 一次请求都不发（与低危检查的处理方式一致）。
 
@@ -40,7 +41,7 @@ from .. import virustotal as vt_mod
 from .. import ctlog as ctlog_mod
 from .. import keystore
 from ..fingerprint import favicon_hash
-from ..utils import pool_run, resolve_host
+from ..utils import http_request, pool_run, resolve_host
 
 # ---------- FOFA 标题反查的相关性过滤 ----------
 
@@ -68,6 +69,77 @@ class OsintStage(Stage):
         cur = self.__dict__.setdefault("_icon_status", {})
         if rank.get(status, 0) >= rank.get(cur.get(url, ""), 0):
             cur[url] = status
+
+    def _favicon_ip_domains(self, ips):
+        """favicon 命中里的裸 IP：**先探活，再做 IP→域名**（续314，主理人点单）。
+
+        为什么必须先探活：IP 反查（webscan / hackertarget / rapiddns / FOFA `ip=`）返回的
+        都是**历史**解析，IP 可能早就换主了；活着的 IP 才有"它现在承载什么"的意义。
+        探活只发 2 个 GET（http/https 各一次、超时 3 秒、不带登录态、不校验证书），
+        失败就跳过 —— 宁可少列，也不把死 IP 的历史域名灌进拓展。
+
+        免费源与 FOFA `ip=` **都做**（主理人点单）：免费源先跑，FOFA 有 key 再补一路；
+        两路结果合并去重。入库来源统一 `osint:iprecon`，note 写明 IP 语法与「历史反查·待确认」
+        —— 它与「同一张证书 / 同一图标」那种当前证据不是一回事，页面必须能分开读。
+        """
+        ctx = self.ctx
+        cfg = ctx.settings.get("iprecon", {}) or {}
+        if cfg.get("from_favicon", True) is False:
+            ctx.logger.info("[osint] favicon 命中 IP 的反查已关闭（iprecon.from_favicon=false）")
+            return []
+        cap = int(cfg.get("from_favicon_max", 20) or 0)
+        if cap > 0 and len(ips) > cap:
+            ctx.logger.info(f"[osint] favicon 命中 IP {len(ips)} 个超过上限 {cap}，仅处理前 {cap} 个")
+            ips = list(ips)[:cap]
+        out, alive_n = [], 0
+        for ip in ips:
+            if ctx.stopped():
+                break
+            if not iprecon.is_public_ip(ip):
+                continue
+            if not self._ip_alive(ip):
+                ctx.logger.info(f"[osint] favicon 命中 IP {ip} 探活失败（80/443 无响应），跳过反查")
+                continue
+            alive_n += 1
+            doms = []
+            try:
+                doms = iprecon.reverse_lookup(ip, ctx.settings, logger=ctx.logger)
+            except Exception as e:                       # 公共接口，任何异常都不该影响主流程
+                ctx.logger.debug(f"[osint] IP {ip} 免费源反查异常：{e}")
+            via = "免费源"
+            if fofa_mod.available(ctx.settings):
+                assets, _total, err = fofa_mod.search_ip(ip, ctx.settings, logger=ctx.logger)
+                if err:
+                    ctx.logger.info(f"[osint] FOFA ip= 反查 {ip} 未成：{err}")
+                elif assets:
+                    doms = list(doms) + [d for d in (_domain_of(a) for a in assets) if d]
+                    via = "免费源+FOFA"
+            uniq = [d for d in dict.fromkeys(doms) if d]
+            ctx.logger.info(f"[osint] favicon 命中 IP {ip} 存活，{via}反查出 {len(uniq)} 个域名"
+                            f"（历史数据，入库标「待确认」）")
+            for d in uniq:
+                out.append((d, "osint:iprecon",
+                            f'ip="{ip}" · 历史反查（{via}）· 待确认'))
+        if ips:
+            ctx.logger.info(f"[osint] favicon 命中裸 IP {len(ips)} 个：探活通过 {alive_n} 个，"
+                            f"反查域名 {len({d for d, _s, _n in out})} 个")
+        return out
+
+    def _ip_alive(self, ip):
+        """IP 是否还活着：http/https 根路径各一次 GET，任一有响应即算活（续314）。
+
+        刻意 `auth=False, verify=False`：这些 IP 来自 FOFA，**不是本任务的授权目标**，
+        不带任务登录态（Cookie 泄露）；只判断"有没有响应"，证书是谁签的与探活无关。
+        """
+        ctx = self.ctx
+        for scheme in ("http", "https"):
+            if ctx.stopped():
+                return False
+            r = http_request(f"{scheme}://{ip}/", timeout=3, settings=ctx.settings,
+                             verify=False, auth=False)
+            if r is not None:
+                return True
+        return False
 
     def _flush_icon_status(self):
         st = getattr(self, "_icon_status", {})
@@ -339,6 +411,7 @@ class OsintStage(Stage):
             return []
 
         found = []
+        ip_hits = []
         queried = black = 0
         for icon_hash, url in hashes.items():
             if ctx.stopped():
@@ -357,10 +430,20 @@ class OsintStage(Stage):
             ctx.logger.info(f"[osint] FOFA 反查 mmh3 {icon_hash}（{url}）→ {len(assets)} 条 / 共 {total} 条")
             for a in assets:
                 domain = _domain_of(a)
+                if not domain:
+                    # 续314（主理人点单）：裸 IP 先记下来再做「探活 → IP 反查」。
+                    # 以前这里直接 append 空域名，随后 `if not domain: continue` 静默丢掉，
+                    # 于是"ico 反查到 IP"从来没进过反查流程。
+                    _ip = str(a.get("ip") or "").strip()
+                    if _ip and _ip not in ip_hits:
+                        ip_hits.append(_ip)
+                    continue
                 # 续171（用户点单"FOFA·ICO 反查的结果你要标明语法"）：随行带上**本次查询
                 # 的语法**（`icon_hash="123"`），入库进 `subdomains.note`，拓展域名页可查
                 found.append((domain, "osint:fofa", fofa_mod.build_query(icon_hash)))
         ctx.logger.info(f"[osint] FOFA 拓展：查询 {queried} 个 favicon，跳过黑 ico {black} 个")
+        if ip_hits:
+            found += self._favicon_ip_domains(ip_hits)
         self._flush_icon_status()
         return found
 

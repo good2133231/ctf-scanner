@@ -883,12 +883,19 @@ def _fold_certs(rows, show_all=False):
     展示层过滤 ≠ 删数据）。
 
     键怎么取（这里只有一份判据）：
+    - `cn` 非空 ⇒ 用它（续314：同 CN 只留一行，CN 是 FOFA `cert=` 的检索键）；
     - `sha256` 非空 ⇒ 用它（TLS 握手那条路一定有指纹）；
     - 空 ⇒ 退到 `序列号|颁发者|生效时间`（CT 日志那批没有指纹列）。
       **不许**拿"空 sha256"当键 —— 实测 #66 有 33 条 CT 行全是空指纹，
       那么折会把 33 张历史证书折成一张，看着像"只有一张证书"。
     """
     def _key(r):
+        # 续314（主理人点单「同样的证书 CN 只显示一个」）：CN 优先于指纹 —— CT 日志里同一个
+        # CN 常有 Let's Encrypt 的多张历史证书（换 R10/E5 也各一条），逐张列只是刷屏；
+        # 而 CN 正是 FOFA `cert="..."` 的检索键（同 CN 查结果一样，多列没有增量信息）。
+        cn = str(r.get("cn") or "").strip().lower()
+        if cn:
+            return "cn:" + cn
         fp = str(r.get("sha256") or "").strip()
         if fp:
             return "fp:" + fp
@@ -909,7 +916,7 @@ def _fold_certs(rows, show_all=False):
                 if _h not in h["_dup_hosts"]:
                     h["_dup_hosts"].append(_h)
             r["_dup_member"] = True
-            r["_dup_head"] = h["id"]
+            r["_dup_head"] = h.get("id")
             hidden += 1
         else:
             heads[k] = r
@@ -919,6 +926,55 @@ def _fold_certs(rows, show_all=False):
             r.pop("_dup_member", None)
             r.pop("_dup_head", None)
     return out, hidden
+
+def _mark_blacklist(rows, entries):
+    """给邮箱行打黑名单标记（续314）：判据 `blacklist.matches` 与其它面板同一份。"""
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["bl"] = blacklist.matches(str(d.get("domain") or ""), entries)
+        out.append(d)
+    return out
+
+
+_VULN_FAMILY = {"exposure-git-config": "git-config"}
+
+
+def _fold_vulns(rows):
+    """把「同一个问题」的多条漏洞折成一行（续314，主理人点单）。
+
+    `.git` 泄露会同时被 POC（exposure-git-config）与内置检查（a01-sensitive-files）
+    各报一次、http/https 再各一次 ⇒ 4 行其实是同一个问题。**只折展示，库里一条不删**；
+    折叠组成员挂在代表行的 `_dup_group`，模板用 `<details>` 展开（写明各自的
+    severity / poc_id / target），折叠判据只此一处。
+    """
+    from urllib.parse import urlsplit
+
+    def _fam(r):
+        pid = str(r.get("poc_id") or "")
+        if pid in _VULN_FAMILY:
+            return _VULN_FAMILY[pid]
+        if pid == "a01-sensitive-files" and ".git" in str(r.get("target") or "").lower():
+            return "git-config"
+        return pid + "|" + str(r.get("target") or "")
+
+    heads, out = {}, []
+    for r in rows:
+        r = dict(r)
+        r["_dup_group"] = []
+        try:
+            host = (urlsplit(str(r.get("target") or "")).hostname or "").lower()
+        except ValueError:
+            host = ""
+        k = (host, _fam(r))
+        h = heads.get(k)
+        if h is None:
+            heads[k] = r
+            out.append(r)
+        else:
+            h["_dup_group"].append(r)
+    return out
+
 
 def _fold_csegs(rows, show_all=False):
     """C 段按 `segment` 折叠（续265，主理人点单「c段去重」）。
@@ -949,7 +1005,7 @@ def _fold_csegs(rows, show_all=False):
             if not h.get("note") and r.get("note"):
                 h["note"] = r["note"]
             r["_dup_member"] = True
-            r["_dup_head"] = h["id"]
+            r["_dup_head"] = h.get("id")
             hidden += 1
         elif k:
             heads[k] = r
@@ -2178,6 +2234,8 @@ def create_app():
         qpos = {t["id"]: db.queued_position(t["id"])
                 for t in rows if t["status"] == "queued"}
         return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER, cause_zh=CAUSE_ZH,
+                               # 续314：耗时选项联动哪几个阶段（判据写在这里；JS 里不抄阶段名）
+                               slow_stages=("crawl",),
                                # 续303：默认不勾哪些由策略现算（写死会让"策略开了、界面说没开"成为假话）
                                off_by_default_stages=_off_by_default_stages(load_settings()),
                                # 续281：子任务在列表里显示 24-a 派生编号（79-a），不是新号 80。
@@ -2211,6 +2269,12 @@ def create_app():
         stages = [s for s in stages if s in STAGE_ORDER] or list(STAGE_ORDER)
         offline = str(data.get("offline", "")).lower() in ("1", "true", "on")
         options = {"offline": offline}
+        # 续314（主理人点单「SQL 注入默认关闭」）：只在**勾了**时写 True；没勾就不写键，
+        # 策略级 `vulnscan.sqli` 仍生效（策略页打开后不会被这次任务打回）。
+        # `opt_slow` 是「耗时选项」总勾选的兜底字段（前端目前只联动子勾选，不单独提交它）。
+        if str(data.get("opt_sqli", "")).lower() in ("1", "true", "on") \
+                or str(data.get("opt_slow", "")).lower() in ("1", "true", "on"):
+            options["sqli"] = True
         # 「全端口 / 全目录」是**任务级选项**（与 portscan_full 同一套语义：单任务强制全量档，
         # 不改全局策略）。用户很容易只勾了全量却忘勾对应阶段，那样勾选就等于白勾 ——
         # 这里自动把对应阶段补进来，并在响应里如实告知，避免"勾了没用"的错觉。
@@ -2677,6 +2741,7 @@ def create_app():
         _tech_stats = fingerprint.tech_stats(db.list_site_tech(task_id))
         # 续225：邮箱页签（jsmine 的数据探测产物）—— 与 /emails 页同一张表，页内按任务过滤。
         emails, emails_pager, emails_q = _tab_page(task_id, "emails", "em", "#emails")
+        emails = _mark_blacklist(emails, blacklist.load(load_settings(), owner_id=_owner_scope()))
         # 续172/续266/续279：站点页签「同一站点聚合/合并」。判据全在 `_fold_site_rows`
         # （与跨任务 /sites 页**同一份产地**）：同标题组聚合、成员行默认收起、可展开；
         # 同一主机的 3xx ↔ 落地行是**合并** —— 默认只显示带跳转取证的代表行（落地状态/
@@ -2863,7 +2928,7 @@ def create_app():
             urls=urls, urls_pager=urls_pager, urls_q=urls_q, url_total=url_total,
 
             page_sizes=PAGE_SIZES,
-            vulns=vuln_rows, vuln_total=vuln_total, vuln_pager=vuln_pager,
+            vulns=_fold_vulns(vuln_rows), vuln_total=vuln_total, vuln_pager=vuln_pager,
             js_raw=_js_secret_raw_map(vuln_rows),
 
             vuln_sev=vsev, vuln_q=vq, vuln_page_sizes=PAGE_SIZES,
@@ -3392,7 +3457,7 @@ def create_app():
         # 退化成 `#123`（`vulns.html` 的兜底）。`tasks_with_vulns()` 恰好等于"页面上可能出现的行"
         # 的任务全集，且规模不随任务总数膨胀。
         tasks = _tasks_with_vulns()
-        return render_template("vulns.html", vulns=rows, sev=sev or "",
+        return render_template("vulns.html", vulns=_fold_vulns(rows), sev=sev or "",
                                review=rev or "", counts=db.review_counts(tid),
                                task_id=tid or "", tasks=tasks,
                                task_names={t["id"]: t["name"] for t in tasks},
@@ -4087,6 +4152,7 @@ def create_app():
         page = max(1, int(request.args.get("page") or 1))
         size = max(1, min(int(request.args.get("size") or 50), 200))
         rows, total = db.list_emails(task_id=tid, q=q, limit=size, offset=(page - 1) * size)
+        rows = _mark_blacklist(rows, blacklist.load(load_settings(), owner_id=_owner_scope()))
         pages = max(1, (total + size - 1) // size)
         qs = (f"&q={quote(q)}" if q else "") + (f"&task={tid}" if tid else "")
         pager = {"page": page, "size": size, "total": total, "pages": pages,
@@ -5710,7 +5776,8 @@ def create_app():
                                 # （项目外绝对路径不在页面回显）。校验失败走 ValueError →
                                 # 下面那个 except 会带着原话退回表单，不静默吞行。
                                 "dict_sources": _parse_dict_sources(f, settings)},
-                    "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1"},
+                    "vulnscan": {"enabled": f.get("vulnscan_enabled") == "1",
+                                 "sqli": f.get("vulnscan_sqli") == "1"},
                     # 外部引擎 afrog（续121 接入；续149 默认开）；限速值由 scanner/afrog.py 的封顶再压一道
                     # 敏感信息 / flag 候选抽取（续148 由"flag 候选"改名）：零额外请求所以默认开；
                     # 清单是逗号分隔文本，空白项就地丢掉（用户粘贴时几乎一定带空格），正则原样进列表。
@@ -5834,6 +5901,8 @@ def create_app():
                                "drop_absent_zone": bool(_j0.get("drop_absent_zone", True))},
                     # 外部情报拓展（OSINT）：C 段反查 + favicon 反查，两项默认都关
                     "iprecon": {"enabled": f.get("iprecon_enabled") == "1",
+                                "from_favicon": f.get("iprecon_from_favicon") == "1",
+                                "from_favicon_max": int(f.get("iprecon_from_favicon_max", 20) or 20),
                                 "api": f.get("iprecon_api", "") or
                                        "https://api.webscan.cc/?action=query&ip={ip}",
                                 "max_ips": int(f.get("iprecon_max_ips", 500) or 500),

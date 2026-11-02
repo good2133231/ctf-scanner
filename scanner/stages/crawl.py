@@ -7,7 +7,7 @@
   只是白花请求 —— 所以这里就筛掉，不让 vulnscan 再去判一次。
 
 开关两层（与 portscan 同一形状）：策略 `crawl.enabled` + 任务选项 `crawl: true`。续198 出厂**关**（它一定会发请求：一个站点一页就是一次 GET）；
-**续249 起默认开**（主理人点单"默认要开"）——开关仍完整保留：策略页随时可关，关掉时本阶段一个请求都不发；真正兜底的是额度上限（max_sites / max_pages / max_links / 同站判据），不是"替你决定"。
+**续249 起默认开 / 续314 起默认关**（续314 主理人点单"爬虫默认关闭"）——开关仍完整保留：策略页随时可关，关掉时本阶段一个请求都不发；真正兜底的是额度上限（max_sites / max_pages / max_links / 同站判据），不是"替你决定"。
 """
 from .. import crawl as crawl_mod, db
 from ..utils import http_request, pool_run

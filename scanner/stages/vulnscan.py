@@ -115,6 +115,35 @@ def _lang_summary(skips):
                "、".join("%s %s" % (k, v) for k, v in sorted(by.items()))))
 
 
+# SQL 注入检查的两个 id（续314，主理人点单「SQL 注入默认关闭」）。走 `checks.disabled_checks`
+# 关掉而不是另造一套执行闸：`owasp.enabled_checks` 是唯一产地，策略页填的与任务级开关最终
+# 落到同一个列表里（§5.14 一处产地）。
+SQLI_CHECKS = ("a03-sqli-error", "a03-sqli-blind")
+
+
+def sqli_enabled(settings, options=None):
+    """本次任务是否跑 SQL 注入检查：任务级 `options.sqli` 或策略级 `vulnscan.sqli`，任一为真即开。"""
+    return bool((options or {}).get("sqli") is True
+                or ((settings or {}).get("vulnscan") or {}).get("sqli") is True)
+
+
+def apply_sqli_gate(settings, options=None):
+    """按开关把 SQLi 的两个 check id 注入 `checks.disabled_checks`；返回是否被关掉。
+
+    只在**任务副本**上原地改 —— `ctx.settings` 是每任务 deepcopy + 注入后的副本
+    （见 `runner.StageContext.__init__`），改它不会把"本次不跑"带到别的任务。
+    """
+    if sqli_enabled(settings, options):
+        return False
+    chk = settings.setdefault("checks", {})
+    dis = [str(x) for x in (chk.get("disabled_checks") or [])]
+    for cid in SQLI_CHECKS:
+        if cid not in dis:
+            dis.append(cid)
+    chk["disabled_checks"] = dis
+    return True
+
+
 class VulnscanStage(Stage):
     name = "vulnscan"
     description = "POC 引擎 + OWASP Top10 启发式检查（级别/分类门控）"
@@ -125,6 +154,9 @@ class VulnscanStage(Stage):
         if scfg.get("enabled") is not True:
             ctx.logger.info("[vulnscan] 未启用（策略配置 → 检测策略 可打开），跳过")
             return
+        if apply_sqli_gate(ctx.settings, ctx.options):
+            ctx.logger.info("[vulnscan] SQL 注入检查未启用（默认关；建任务勾「耗时选项 → SQL 注入」"
+                            "或策略配置打开后才会跑）—— 其它检查与 POC 照常执行")
         limits = ctx.settings.get("limits", {})
         ccfg = ctx.settings.get("checks", {}) or {}
         floor = str(ccfg.get("min_severity", "medium")).lower()

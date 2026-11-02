@@ -265,7 +265,7 @@ hostcollide:
   max_requests: 200           # 单任务请求预算（只读 GET）
   timeout: 5
 crawl:
-  enabled: true               # 续249 起默认开（主理人点单）；额度上限见下，要关：策略页取消勾选
+  enabled: false              # 续314 起默认关（主理人点单）；建任务「耗时选项」可一键打开
   max_sites: 30               # 每任务最多爬多少个站点
   max_links: 60               # 每站点最多收多少条
   max_pages: 8                # 每站点最多抓几页（含首页）
@@ -344,6 +344,7 @@ dirscan:
   ml_outlier: true
 vulnscan:
   enabled: true
+  sqli: false                 # 续314：SQL 注入（报错回显 + 布尔盲注）默认关；其它检查照跑
 afrog:
   # 外部引擎 afrog（续149 **默认开**）：让 config/afrog-pocs/ 里的"只读 + info 级" PoC 跑一轮。
   # 三条闸门缺一不可（开关 / 目录里有只读模板 / 本机装了二进制），缺了只写一行日志、零请求。
@@ -401,6 +402,9 @@ iprecon:
   max_ips: 500
   max_hosts: 200
   max_domains_per_ip: 30
+  # 续314：favicon 命中裸 IP 时先探活再反查（免费源 + FOFA ip=），结果标「历史反查·待确认」
+  from_favicon: true
+  from_favicon_max: 20
   workers: 5
   # 续184：开跑前先探活（挂了就整轮跳过，不再每个 IP 各打一条 DEBUG）；
   # 默认源全挂时换备用池，备用池第一个 ptr 是本框架自己实现的原生 PTR（不发 HTTP）

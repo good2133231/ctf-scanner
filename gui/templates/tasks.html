@@ -19,8 +19,6 @@
          `data-ck-default` 记"页面刚打开时它该不该勾着"—— 「恢复默认」那颗按钮读它，
          而不是在 JS 里再抄一份阶段清单（抄第二份就会与 `runner.STAGE_ORDER` 漂移）。 #}
       <span class="muted small">批量勾选：
-        <button type="button" class="ghost" data-ck-mode="all" data-ck-scope="stages,deep,expand"
-          title="把全部阶段 + 两项深度 + 一项拓展都勾上＝最重的档位（全目录深扫、目录递归、自动拓展；**全端口不在这里** —— 任务详情「端口」页签里有按钮），会慢很多。">全部勾上（最重档位）</button>
         <button type="button" class="ghost" data-ck-mode="none" data-ck-scope="stages,deep,expand"
           title="只清勾选，不碰已填的目标与登录态">全部清掉</button>
         <button type="button" class="ghost" data-ck-mode="default" data-ck-scope="stages,deep,expand"
@@ -30,8 +28,16 @@
       {% set off_by_default = s in off_by_default_stages %}
       <label class="chk"><input type="checkbox" name="stages" value="{{ s }}"
         data-ck-default="{{ 0 if off_by_default else 1 }}"
-        {{ '' if off_by_default else 'checked' }}> {{ s }}</label>
+        {% if s in slow_stages %}data-slow-item {% endif %}{{ '' if off_by_default else 'checked' }}> {{ s }}</label>
       {% endfor %}
+      </span>
+      {# 续314（主理人点单）：耗时选项 —— SQL 注入与爬虫默认都关，可单独勾，也可一键都勾。
+         爬虫就是上面的 `crawl` 阶段勾选框（策略默认关后它本来就不勾），这里不重复造开关。 #}
+      <span class="slow-opts">
+        <label class="chk" title="一键勾上「SQL 注入 + 爬虫」；取消＝两项都取消">
+          <input type="checkbox" data-slow-master> <b>耗时选项</b></label>
+        <label class="chk" title="报错回显 + 布尔盲注；默认关（每站最多约 60 个请求），只影响本次任务">
+          <input type="checkbox" name="opt_sqli" value="1"> SQL 注入</label>
       </span>
       {# 续265（主理人 2026-10-23：「离线模式这个显示可以去了，没有场景用得到」）：
          网页不再暴露这颗复选框。`offline` 这个**能力**仍在（CLI `--offline` 与

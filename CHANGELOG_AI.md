@@ -3,6 +3,31 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续314（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：主理人 9 条点单（全部落地）
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 已落地（9 条）
+- ① 证书按 **CN** 折叠（`_fold_certs`）：同 CN 只留一行（CN 是 FOFA `cert=` 的检索键；空 CN 才退到指纹/序列号）。
+- ② 爬虫 `extract_links` 跳过**提交回首页的表单**（登录/搜索框）；`/login` 与普通链接不误伤。
+- ③ 邮箱列表显示黑名单徽标（`/emails` 与任务详情两处，判据仍是 `blacklist.matches`）。
+- ④ favicon 命中**裸 IP**：先 80/443 各一发 GET 探活，活着的再「免费源（webscan/hackertarget/ip138/rapiddns/viewdns/PTR）+ FOFA `ip=`」反查，
+  入拓展域名标「历史反查·待确认」（`osint:iprecon`，note 带 `ip="x"`）。死 IP / 私有 IP 一律不反查。
+- ⑤ CDN 证书域名（如 `*.sni.cloudflaressl.com`）不再判高：`cert_shares` 的 vendor 判据加 `cdn.match`。
+- ⑥ 目录「另有 N 条相同」改成 `<details>` 可折叠（任务详情 + 跨任务目录页）。
+- ⑦ 漏洞同族折叠：`.git` 的 4 条（POC + 内置检查 × http/https）折成 1 行 + 3 个成员（展示层，库里不删）。
+- ⑧ 详情页「资产关系图」整块删除（`_asset_tree` 单测保留）。
+- ⑨ 口径（主理人拍板）：**只关 SQL 注入检查，不关整阶段** —— `vulnscan.sqli=False` 只把
+  `a03-sqli-error` / `a03-sqli-blind` 注入 `checks.disabled_checks`，其它检查与 POC 仍按指纹识别照跑；
+  爬虫 `crawl.enabled=False`；建任务页新增「耗时选项」组（总勾选＝SQL 注入+爬虫都勾，可单独勾），
+  删掉「全部勾上（最重档位）」按钮。任务级 `options.sqli` 可覆盖策略。
+- 门禁 `[314]` 钉住以上；`[8be]` 断言改为“模板不再出现 asset_tree”；`[249]` 改为爬虫默认关。
+- `AGENTS.md` §7 已同步（站点爬虫默认关 / SQL 注入检查默认关，均标续314）。
+
+### 实测
+- 局部：`--only 194a,198,249,8au,268,306,310,314` 全绿（`[314]` 新增，含探活/反查桩）。
+- 全量：<待填>
+
 ## 续313（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：站点默认可见收窄成 200/301/302/404（5xx 移出）
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
