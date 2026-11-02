@@ -3,6 +3,43 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续310-附1（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：门禁 `--prefix` —— 依赖前序夹具的组，从 `[1]` 顺序跑到它
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人 2026-11-02「门禁跑快点」的第二步：上一轮把 `--only` 的 settings/targets/client 补齐了，
+但依赖**前序组建的夹具**的组（`[5e]` 缺 `[3]` 建的 `tid`）仍然单跑不了。逐个抽 `tid` 会造第二产地
+（§5.14），所以改走执行模式：`--prefix` 从 `main()` 第一组顺序跑到点名组，然后停。
+
+### 改了什么（只动 `tests/smoke.py` 与 `docs/gate-map.md`）
+- `_prefix_span(names, src, blocks)`：纯函数，返回 `(start, end, order)` —— 起点是第一组的 setup 行、
+  终点是最后点名组的 ok 行末、order 是点名组按源码顺序。门禁里只断言区间，不真跑。
+- `_only_env(loc)`：把 `--only` / `--prefix` 的 exec 环境抽成唯一产地（globals+locals 合成，
+  再补 settings/targets/client/source_label）。
+- `_run_only_groups(names, loc, prefix=False)`：`prefix=True` 时整段 exec `[1]`→目标组；覆盖全部组时
+  打印「等同全量，--prefix 没有收益」。
+- CLI：`--prefix` 必须与 `--only` 合用（否则直接报错，不静默跑全量）。
+- `[272]` 加判据：区间端点＝组边界、order 顺序、不存在的组照样 `SystemExit`；print 文案补 `--prefix`。
+- `docs/gate-map.md`：档 A 加 `--prefix` 用法、依赖组「三条路」、表里登记 `tests/smoke.py`。
+
+### 实测
+- `--only 5e --prefix`：**33.5 秒**通过（`[1]`→`[5e]`，零依赖）；对照全量 **657 秒**（本轮）／613 秒（上轮）。
+- `--only 5e`（不带 prefix）：仍缺 `tid` → NameError，证明前缀确实补上了前置组。
+- `--only 310`：5 秒通过（不受影响）。
+- `--only 272`：通过（新判据 + 旧判据一起）。
+- **全量门禁：SMOKE PASS，657 秒**（09:33:02 → 09:43:59，`logs/_smoke311.log`，334 个组输出行）。
+
+### 踩的坑
+- 往 `[272]` 插注释时漏了 4 空格缩进 ⇒ 组切片里出现 0 缩进行，`textwrap.dedent` 的 margin 变 0，
+  整组不再 dedent，`--only 272` 报 `IndentationError: unexpected indent`。修法：注释也要保持组内缩进。
+  这条正是 `[272]` 判据存在的意义（切片必须能独立 exec）。
+- `[272]` 区域是 **bare LF**（smoke.py 混合行尾），按 CRLF 锚替换会 0 命中；改动前先看该行 repr。
+
+### 边界（如实说）
+- 只对**位置靠前**的组划算：`--only 310 --prefix` 会跑到文件末尾 ≈ 全量，实现会打印「没有收益」。
+- 前缀里的组断言照常跑：前置组真红就会红（这是好事，不是误报）。
+- 收尾仍是全量（档 B 一条不省，§0.6）。
+
 ## 续310（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：CDN 边缘站只吃 dirs_shallow｜门禁区域验证可用（`--only 310` 实测 5 秒）
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

@@ -498,6 +498,7 @@ def _ff126_ast_names(src):
 
 
 _SMOKE_ONLY = None      # `--only 268,271` 的解析结果（None＝全量）。见 main() 里的钩子。
+_SMOKE_PREFIX = False    # `--prefix` 的解析结果；只有与 --only 合用才有意义。
 
 
 def _smoke_group_blocks():
@@ -553,17 +554,34 @@ def _smoke_group_blocks():
     return _src, _blocks
 
 
-def _run_only_groups(names, loc):
-    """只跑点名的那几组（顺序＝点名顺序）。
 
-    组是内联代码，"跳过某一段"做不到 ⇒ 按源码切片 + `exec`，并且**在 main() 当前的
-    locals 里跑**（fixture / db / client 都是 preamble 建好的）。依赖前面组**建的夹具**
-    的组单跑会 NameError —— 那不是 bug，把依赖组一起点名即可（判据与提示见 `--only` 的说明）。
+def _prefix_span(names, src, blocks):
+    """`--prefix` 的执行区间：main() 第一组的 setup 起点 → 最后一个点名组的 ok 行末。
+
+    返回 `(start, end, order)`：start/end 是 1-based 行号（`src[start-1:end]` 可直接切），
+    order 是点名组按**源码顺序**排列的名字。纯函数 —— 不 exec、不碰 DB，门禁里只断言区间；
+    真跑由 `--only 5e --prefix` 手工验证一次（几十秒，不进全量）。
     """
-    _src, _blocks = _smoke_group_blocks()
-    # ⚠ globals 与 locals **合成一个环境**再 exec（续272 实测的坑）：组里 `def _check271(...)`
-    #    这种函数内定义的函数，它的 `__globals__` 是 exec 的 globals —— 只传 locals 的话，
-    #    函数体里找同组的 `_tables271` 会 NameError。
+    missing = [n for n in names if n not in blocks]
+    if missing:
+        raise SystemExit(f"[!] 门禁里没有组 {missing}（--prefix 与 --only 认同一份组名表）")
+    order = [n for n in blocks if n in set(names)]
+    if not order:
+        raise SystemExit("[!] --prefix 至少要点名一个组")
+    head = next((i for i, l in enumerate(src)
+                 if l.strip().startswith("# 1) 目标解析")), None)
+    if head is None:
+        raise SystemExit("[!] 找不到 main() 的 `# 1) 目标解析`，--prefix 没法确定起点")
+    return head + 2, max(blocks[n][1] for n in order), order
+
+
+def _only_env(loc):
+    """`--only` / `--prefix` 的 exec 环境：globals 与 main() locals 合成一个。
+
+    ⚠ globals 与 locals **合成一个环境**再 exec（续272 实测的坑）：组里 `def _check271(...)`
+    这种函数内定义的函数，它的 `__globals__` 是 exec 的 globals —— 只传 locals 的话，
+    函数体里找同组的 `_tables271` 会 NameError。
+    """
     _env = dict(globals())
     _env.update(loc)
     if "settings" not in _env:
@@ -575,6 +593,29 @@ def _run_only_groups(names, loc):
     if "source_label" not in _env:
         from gui.app import source_label as _sl310
         _env["source_label"] = _sl310
+    return _env
+
+
+def _run_only_groups(names, loc, prefix=False):
+    """只跑点名的那几组（顺序＝点名顺序）；`prefix=True` 时改跑「开头 → 最后点名组」。
+
+    组是内联代码，"跳过某一段"做不到 ⇒ 按源码切片 + `exec`，并且**在 main() 当前的
+    locals 里跑**（fixture / db / client 都是 preamble 建好的）。依赖前面组**建的夹具**
+    的组单跑会 NameError —— 要么把依赖组一起点名，要么加 `--prefix`（顺序跑前置组）。
+    """
+    _src, _blocks = _smoke_group_blocks()
+    _env = _only_env(loc)
+    if prefix:
+        _a, _b, _hit = _prefix_span(names, _src, _blocks)
+        _n = sum(1 for _s, _e in _blocks.values() if _s >= _a and _e <= _b)
+        print(f"[only] 前缀模式：[1] → [{_hit[-1]}]（源码 {_a}-{_b} 行，共 {_n} 组）…",
+              flush=True)
+        if _n >= len(_blocks):
+            print("[only] 注意：前缀已覆盖全部组（等同全量），--prefix 没有收益", flush=True)
+        import textwrap
+        _code = textwrap.dedent("\n".join(_src[_a - 1:_b]))
+        exec(compile(_code, f"tests/smoke.py[prefix→{_hit[-1]}]", "exec"), _env)
+        return
     for _n in names:
         if _n not in _blocks:
             raise SystemExit(f"[!] 门禁里没有组 [{_n}]（--only 只认 `print(\"[名字] … ok…\")` "
@@ -605,9 +646,10 @@ def main():
     #   ① 依赖前面组**建的夹具**的组，单跑会 NameError —— 那就把依赖组也点名进来（按点名顺序跑）；
     #   ② **局部通过不算全量通过**：收尾仍要跑不带 --only 的完整门禁（§0.6）。
     if _SMOKE_ONLY:
-        _run_only_groups(_SMOKE_ONLY, locals())
-        print(f"SMOKE PASS (only={','.join(_SMOKE_ONLY)}｜**局部验证**，不等于全量通过 —— "
-              f"收尾请跑不带 --only 的完整门禁)")
+        _run_only_groups(_SMOKE_ONLY, locals(), prefix=_SMOKE_PREFIX)
+        print(f"SMOKE PASS (only={','.join(_SMOKE_ONLY)}"
+              + (" prefix=1" if _SMOKE_PREFIX else "")
+              + "｜**局部验证**，不等于全量通过 —— 收尾请跑不带 --only 的完整门禁)")
         return
 
 
@@ -32100,12 +32142,24 @@ expression: r0()
 
     # ⑤ 切片判据自证（§6.1 "0 命中"型断言必须自带夹具）：组都切得出来，且块首尾对得上
     _src272, _blk272 = _smoke_group_blocks()
+    # ⑤b --prefix：区间＝第一组 setup 起点 → 最后点名组的 ok 行末；变异：不存在的组要报错
+    _ps272 = _prefix_span(["5e"], _src272, _blk272)
+    assert _ps272[0] == _blk272["1"][0] and _ps272[1] == _blk272["5e"][1], _ps272
+    assert _ps272[2] == ["5e"], _ps272
+    _ps272b = _prefix_span(["1", "5e"], _src272, _blk272)
+    assert _ps272b[0] == _blk272["1"][0] and _ps272b[2] == ["1", "5e"], _ps272b
+    try:
+        _prefix_span(["NOSUCH272"], _src272, _blk272)
+        raise AssertionError("--prefix 点名不存在的组必须报错（静默跑全量＝白跑十分钟）")
+    except SystemExit as _e272:
+        assert "没有组" in str(_e272), _e272
     assert len(_blk272) >= 260, f"只切出 {len(_blk272)} 个组 —— 切片判据漏了组（--only 会点名跑不了）"
     _a272, _b272 = _blk272["271"]
     assert any("续271" in x for x in _src272[_a272 - 1:_b272]), "[271] 块切错（起点不对）"
     assert any("[271]" in x for x in _src272[_a272 - 1:_b272]), "[271] 块切错（末行不是那句 ok 行）"
     print("[272] 续272 ok: 门禁 --only 只跑点名的组（271 单跑 / 271,1 按点名顺序）｜"
-          "局部跑不许打印裸 SMOKE PASS（只打印 only=…）｜不存在的组名明说而不是静默跑全量｜"
+          "--prefix 从第一组顺序跑到点名组（区间端点＝组边界；不存在的组照样报错）｜"
+          "局部跑不许打印裸 SMOKE PASS（只打印 only=…）｜"
           "切片判据自证（块末行＝那句 ok 行，≥260 组）")
 
 
@@ -34201,4 +34255,7 @@ if __name__ == "__main__":
         elif _a272.startswith("--only="):
             _only272 += [x.strip() for x in _a272.split("=", 1)[1].split(",") if x.strip()]
     _SMOKE_ONLY = _only272 or None
+    _SMOKE_PREFIX = "--prefix" in _argv272
+    if _SMOKE_PREFIX and not _SMOKE_ONLY:
+        raise SystemExit("[!] --prefix 必须与 --only 合用：它把『点名组之前的所有组』顺序跑一遍")
     main()

@@ -15,6 +15,7 @@
 
 ```bash
 ./.venv/bin/python tests/smoke.py --only <组号,逗号分隔>     # 或 python dev.py smoke --only …
+./.venv/bin/python tests/smoke.py --only <组号> --prefix    # 依赖前序夹具：从第一组顺序跑到该组
 ```
 
 | 你改的东西 | 必须点名的组（**含依赖组**，漏点就 NameError） |
@@ -31,11 +32,13 @@
 | POC 引擎 / `pocs/*` | `[5x]` `[6x]` `[6y]` `[6z]` `[8z]` |
 | `run_bootstrap.py` / `tools/sync_check.py` | `[8d]` `[301]` `[303]` |
 | `cli/client.py` | `[212]` `[306]` `[5e]` |
+| `tests/smoke.py`（门禁自身 / `--only` / `--prefix`） | `[272]` `[310]` |
 | `scanner/gateplan.py` / 本文件 | `[8aa]` `[308]` |
 
-**依赖组的两个具体坑**（都真踩过）：
+**依赖组的三个具体坑**（都真踩过）：
 
 - 各组共享同一进程内的 `c = app.test_client()` 等状态，切片只跑后段会 `NameError` —— 把前置组一起点名。
+- 手数前置组容易漏（`[5e]` 缺的是 `[3]` 建的 `tid`，不是相邻组）；`--prefix` 是第三条路：`--only 5e --prefix` 从 `[1]` 顺序跑到 `[5e]`，实测 **33.5 秒**（全量 613 秒），不改夹具、不重造数。**靠后的组别用**（`[310] --prefix` ≈ 全量，实现会打印「没有收益」）。
 - `[308]` 读 `[8aa]` 的语料变量，单跑会直接 `SystemExit` 并告诉你 `--only 8aa,308`（**不是静默跳过**）。
 
 ## 档 B：提交前那一次全量（AGENTS §0.6，不许降档）

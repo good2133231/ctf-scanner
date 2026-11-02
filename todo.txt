@@ -4555,8 +4555,11 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] 门禁 `[310]`（8 条判据 + 变异）；**全量 SMOKE PASS 613 秒**；`--only 310` **5 秒**
 - [x] `--only` 补齐 settings/targets/已登录 client（唯一产地 `_gate_settings`/`_gate_client`）
 
+### 附1（--prefix，2026-11-02）
+- [x] `--only <组> --prefix`：从 `[1]` 顺序跑到该组；`--only 5e --prefix` 实测 **33.5 秒**（全量 657 秒）
+- [x] `_prefix_span`/`_only_env` 唯一产地；`[272]` 加区间与变异判据；gate-map 档 A 补用法
+
 ### 下一轮
-- [ ] **`--only` 前缀模式**：依赖前序夹具的组（`[5e]` 缺 `tid`）仍单跑不了；加 `--prefix` 顺序跑前置组
 - [ ] 续308 清单里的 311 / 312 / 313 仍未做（重启服务、FOFA 积分、状态码显示档）
 - [ ] 待主理人：shodan/quake/gitlab/icp 四组 key；旧服务器 db 迁移；全量门禁是否再压
       （只剩端到端族 130.8s + 浏览器 47s，都是抓红的组，不擅自降）
