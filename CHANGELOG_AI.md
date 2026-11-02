@@ -3,6 +3,48 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续311（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：右上角「重启服务」+ tools/restart_gui.py（归属三证，绝不按端口认人）
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人 2026-11-02 点单（todo 续308 清单里的 311）。此前 AGENTS 只写了手工流程：
+`logs/_gui307.pid` 核 cmdline + cwd → 确认无 running/queued → 停旧起新 → 验端口 → 写回。
+本轮把它做成脚本 + 页面入口，规矩一条不减。
+
+### 改了什么
+- `tools/restart_gui.py`（新）：三道拒绝（任一命中 exit 2，不动进程）：
+  ① pidfile 的 PID 必须 cmdline 含 `run_gui.py` 且 cwd 就是仓库根（防 PID 复用误杀，续306 的事故形态）；
+  ② 仓库内不能有外部引擎进程（dirmap/nmap/subfinder/…，cwd 在仓库内才认）：续311 实测重启会留
+     dirmap 孤儿，与活进程同 `-iF` 同 cwd 抢 `output/<netloc>.txt`；
+  ③ 不能有 running/queued 任务（`--force` 可跳；②不可跳）。
+  `--dry-run` 只打印计划；真跑：SIGTERM → 等 → SIGKILL(必要时) → 起新进程（独立会话）→ 探端口 → 写回 pidfile。
+- `gui/app.py`：`POST /restart`（`login_required` + `admin_required`）。先同步跑 `restart_gui.py --dry-run`，
+  拒绝就把原因原样回 409（按钮不会"点了没反应"）；通过才 `Popen --delay 3`（独立会话），返回 202 自刷新页。
+  **路由里没有 os.kill/SIGTERM**：真正的停/起只在脚本里，GUI 进程不会 inline 杀自己。
+- `gui/templates/base.html`：顶栏「重启服务」只对管理员渲染；表单 POST（不用 fetch，随机前缀天然跟着走）。
+- `scanner/audit.py`：新增 `KIND_RESTART`（"重启服务"），成功/被拒都留一条流水。
+- 门禁 `[311]`：纯函数四向 + 外部引擎命中/不命中 + running/queued（临时库）+ 端到端 dry-run 两条拒绝
+  （cmdline 不含 run_gui.py、没有 pidfile）+ 接线断言（admin 门/独立会话/路由无 os.kill/按钮只对管理员）。
+- `dev.py gate`（同日拍板）：读 `docs/gate-map.md` 映射表 + `git diff`，算出该跑哪些组；命中承重文件/
+  门禁自身 ⇒ 直接建议全量；`--run` 代跑。映射表是唯一产地，解析不了的行会报出来。
+- `docs/gate-map.md`：登记 `[311]` 与 `tools/restart_gui.py`。
+
+### 实测
+- 对**真实 GUI** dry-run：`PID 2793586 归属确认`，但拒绝重启 —— 仓库内 3 个 dirmap 子进程
+  （任务 7/8/9 正在跑，PPID=2793586）。这正是这条闸要拦的事。
+- `--only 311`：通过。
+- 全量：**SMOKE PASS，651 秒**（10:04:47 → 10:15:35，`logs/_smoke311c.log`）。
+
+### 踩的坑
+- `--only` 的 exec 环境**没有模块级 subprocess/shutil/tempfile/sqlite3**（smoke.py 顶部没 import 它们），
+  组内必须自己 import；否则 `--only 311` 直接 NameError。
+- 门禁断言 `"SIGTERM" not in _seg311` 被**自己的 docstring** 命中（docstring 里写了 "SIGTERM"）：
+  判据要盯代码，不是盯注释；改成只查 `os.kill`。
+
+### 边界（如实说）
+- GUI 按钮**不提供 --force**：页面上不给"绕过任务闸/引擎闸"的入口，要强制就去命令行。
+- Windows 上 `proc_info` 依赖 psutil，没装就拒绝（fail-safe，不猜）；POSIX 走 /proc。
+
 ## 续310-附1（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：门禁 `--prefix` —— 依赖前序夹具的组，从 `[1]` 顺序跑到它
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

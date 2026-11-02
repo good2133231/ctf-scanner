@@ -32,6 +32,7 @@ KIND_POC = "poc"                     # POC 管理（上传/启停/批量/刷新�
 KIND_TASK = "task"                   # 任务操作（建/停/删/重启/续跑/追加/批量）
 KIND_DENIED = "denied"               # 越权访问被拒（子用户敲管理页 URL）
 KIND_MIGRATE = "migrate"              # 数据迁移（续138）：导出包 / 预检 / 确认导入 / 被拒的包
+KIND_RESTART = "restart"              # 重启控制台（续311）：按钮后拉起新进程
 KIND_SCAN_BLOCK = "scan_block"        # 扫描拦截（续182，借鉴点④）：扫描期"已执行但被拦"的
                                       # 结构化条目 —— ts=at、tool/action/reason 在 detail，
                                       # actor 固定 "scanner"（与人工操作流水同一张表、同一页）。
@@ -53,6 +54,7 @@ KIND_LABELS = {
     KIND_TASK: "任务操作",
     KIND_DENIED: "越权访问",
     KIND_MIGRATE: "数据迁移",
+    KIND_RESTART: "重启服务",
 }
 
 DEFAULT_RETENTION_DAYS = 30

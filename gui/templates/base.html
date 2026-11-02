@@ -95,6 +95,16 @@ window.CTF_THEME_DEFAULT = "light";
         {% if me %}<span class="muted">（{{ '管理员' if me.role == 'admin' else '子用户' }}）</span>{% endif %}</span>
       <a href="{{ url_for('profile') }}">修改口令</a>
       {% if me and me.role == 'admin' %}<a href="{{ url_for('users_page') }}">账号管理</a>{% endif %}
+      {% if me and me.role == 'admin' %}
+      {# 续311：重启服务 —— 表单 POST 到 /restart；脚本先 dry-run 核归属/外部引擎/任务，
+         拒绝就回 409 原样显示原因；通过才起独立进程（--delay 3）。 #}
+      <form method="post" action="{{ url_for('restart_console') }}"
+            onsubmit="return confirm('重启控制台？正在跑的任务或外部引擎会让脚本拒绝，拒绝原因会显示在下一页。')">
+        <button type="submit"
+                style="all:unset;cursor:pointer;color:inherit;text-decoration:underline"
+                title="按 pidfile + cmdline + cwd 核归属后重启（绝不按端口认人）">重启服务</button>
+      </form>
+      {% endif %}
       <a href="{{ url_for('logout') }}">退出</a>
     </header>
     <main>

@@ -16,6 +16,8 @@
 ```bash
 ./.venv/bin/python tests/smoke.py --only <组号,逗号分隔>     # 或 python dev.py smoke --only …
 ./.venv/bin/python tests/smoke.py --only <组号> --prefix    # 依赖前序夹具：从第一组顺序跑到该组
+python dev.py gate                                          # 按本轮改动算出该跑哪些组（只打印）
+python dev.py gate --run                                    # 直接代跑（局部/全量由它判断）
 ```
 
 | 你改的东西 | 必须点名的组（**含依赖组**，漏点就 NameError） |
@@ -33,6 +35,7 @@
 | `run_bootstrap.py` / `tools/sync_check.py` | `[8d]` `[301]` `[303]` |
 | `cli/client.py` | `[212]` `[306]` `[5e]` |
 | `tests/smoke.py`（门禁自身 / `--only` / `--prefix`） | `[272]` `[310]` |
+| `tools/restart_gui.py` / 右上角「重启服务」 | `[311]` |
 | `scanner/gateplan.py` / 本文件 | `[8aa]` `[308]` |
 
 **依赖组的三个具体坑**（都真踩过）：

@@ -3084,6 +3084,51 @@ def create_app():
         return jsonify({"ok": True, "action": action, "affected": affected,
                         "skipped": skipped})
 
+    @app.route("/restart", methods=["POST"])
+    @login_required
+    @admin_required
+    def restart_console():
+        """重启控制台（续311）：正文**不动手**，只交给 `tools/restart_gui.py`。
+
+        为什么先跑 `--dry-run`：按钮不该"点了没反应"或"返回成功但其实被拒"。同步跑一遍
+        只读校验（归属三证 / 外部引擎 / running+queued），拒绝就把原因原样回 409；通过才
+        起独立会话的子进程（`--delay 3`，留时间把这段响应发出去）。真正的停/起在脚本里，
+        本进程只被脚本发的终止信号收走 —— 不 inline 杀自己，免得后半段没人执行。
+        """
+        _root = Path(__file__).resolve().parent.parent
+        _tool = _root / "tools" / "restart_gui.py"
+        _pidfile = _root / "logs" / "_gui307.pid"
+        if not _tool.exists():
+            return ("<!doctype html><meta charset='utf-8'><h3>重启工具不存在</h3>"
+                    "<p>缺少 <code>tools/restart_gui.py</code></p>"), 500
+        _base = [sys.executable, str(_tool), "--pidfile", str(_pidfile)]
+        try:
+            _chk = subprocess.run(_base + ["--dry-run"], cwd=str(_root),
+                                  capture_output=True, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            return (f"<!doctype html><meta charset='utf-8'><h3>重启前校验失败</h3>"
+                    f"<p>{html.escape(str(e))}</p>"), 500
+        _out = ((_chk.stdout or "") + (_chk.stderr or "")).strip()
+        if _chk.returncode != 0:
+            _audit(audit.KIND_RESTART, target="控制台", ok=False, detail="重启被拒（dry-run）")
+            return ("<!doctype html><meta charset='utf-8'>"
+                    "<div style='font:14px/1.7 sans-serif;margin:40px'>"
+                    "<h3 style='font-size:16px;margin:0 0 8px'>这次没有重启</h3>"
+                    "<pre style='white-space:pre-wrap;background:#f6f6f6;padding:10px'>"
+                    f"{html.escape(_out[-2000:])}</pre>"
+                    f"<p><a href='{url_for('dashboard')}'>← 返回仪表盘</a></p></div>"), 409
+        subprocess.Popen(_base + ["--delay", "3"], cwd=str(_root),
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        _audit(audit.KIND_RESTART, target="控制台", detail="已交给 restart_gui.py（--delay 3）")
+        _target = url_for("dashboard")
+        return ("<!doctype html><meta charset='utf-8'>"
+                f"<meta http-equiv='refresh' content='9;url={_target}'>"
+                "<div style='font:14px/1.7 sans-serif;margin:40px'>"
+                "<h3 style='font-size:16px;margin:0 0 8px'>控制台正在重启</h3>"
+                "<p>已交给后台进程，约 9 秒后自动回到仪表盘。若一直打不开，看 "
+                "<code>logs/_restart_gui.out</code>。</p></div>"), 202
+
     @app.route("/api/tasks/<int:task_id>/status")
     @login_required
     def api_task_status(task_id):

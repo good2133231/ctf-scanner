@@ -20,6 +20,7 @@
 """
 import fnmatch
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -123,3 +124,78 @@ def note(rows):
     return "[gateplan] 本次降档 %d 组：%s｜其余全档" % (
         len(lite), "；".join("[%s] %d→%d 段（%s）" % (r["group"], r["full_n"], r["n"], r["why"])
                           for r in lite))
+
+# ---------- 续311：把映射表变成可执行建议（`python dev.py gate`） ----------
+# 表格是唯一产地：这里只**读** docs/gate-map.md，不另存一份映射（§5.14）。
+# 解析不了的行必须报出来（problems），不许静默当成"没命中"。
+
+def map_rows(doc=None):
+    """`(rows, problems)`：从映射表解析出 `[{what, patterns, groups, ranged}]`。
+
+    行格式固定 `| 左列 | 右列 |`：左列反引号里是路径/glob（可多个），右列 `[组号]` 是必须
+    点名的组（`[6a]`~`[6g]` 这种范围写法只取两端，`ranged=True` 让调用方直接建议全量）。
+    """
+    path = Path(doc) if doc else Path(__file__).resolve().parent.parent / MAP_DOC
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [], ["读不到 %s：%s" % (MAP_DOC, exc)]
+    rows, problems = [], []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s.startswith("|"):
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        left, right = cells[0], cells[1]
+        if re.fullmatch(r"`?\[[A-Za-z0-9]+\]`?", left):
+            continue                      # 分档表（左列只有一个组号），不是"改什么→跑哪些组"
+        pats = re.findall(r"`([^`]+)`", left)
+        groups = re.findall(r"\[([A-Za-z0-9]+)\]", right)
+        if not pats or not groups:
+            if pats or groups:
+                problems.append("这一行只解析出一半：%r" % s[:80])
+            continue
+        if "本文件" in left:
+            pats.append(MAP_DOC)
+        rows.append({"what": left, "patterns": pats, "groups": groups,
+                     "ranged": "~" in right})
+    if not rows:
+        problems.append("映射表解析出 0 行（表格格式变了？）")
+    return rows, problems
+
+
+def _match(path, pattern):
+    """改动路径是否命中表格里的 pattern：路径 / glob / 裸文件名 / 目录 / 任意层级后缀都认。"""
+    p = str(pattern or "").strip().lstrip("./")
+    if not p:
+        return False
+    if "*" in p or "?" in p:
+        return (fnmatch.fnmatch(path, p) or fnmatch.fnmatch(path, "**/" + p)
+                or fnmatch.fnmatch(path, "*/" + p))
+    if p.endswith("/"):
+        return path.startswith(p) or ("/" + p) in ("/" + path)
+    if "/" in p:
+        return (path == p or path.startswith(p + "/")
+                or ("/" + p) in ("/" + path))
+    base = os.path.basename(path)
+    return base == p or ("/" + p) in ("/" + path)
+
+
+def match_changed(changed, rows=None):
+    """`(命中行, 组号并集, 必须全量的理由列表)`。"""
+    if rows is None:
+        rows, _ = map_rows()
+    hit_rows, groups, full = [], [], []
+    for r in rows:
+        hits = sorted({f for f in changed if any(_match(f, p) for p in r["patterns"])})
+        if not hits:
+            continue
+        hit_rows.append({"what": r["what"], "files": hits,
+                         "groups": r["groups"], "ranged": r["ranged"]})
+        groups += r["groups"]
+        if r["ranged"]:
+            full.append("「%s」右列有范围写法（~），点名两端会漏" % r["what"])
+    return hit_rows, sorted(set(groups)), full
+

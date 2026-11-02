@@ -34243,6 +34243,96 @@ expression: r0()
           "精确匹配 host，后缀撞名不误判）｜「没有 -e」一轮只说一次｜内置扫描每站一行"
           "（字典/条数/请求数）｜组合爆破默认 40000 且 0=关（不再说“设 0 用全量”）｜"
           "站点空态按 st_hidden 分两态（被收起时不许说 probe 没产出）")
+    # ---------------- [311] 续311：右上角「重启服务」+ tools/restart_gui.py（归属三证）----------------
+    print("[311] 续311：重启服务按钮 + restart_gui 归属三证 ...")
+    import importlib.util as _ilu311
+    import shutil as _sh311
+    import sqlite3 as _sq311
+    import subprocess as _sub311
+    import tempfile as _tf311
+    _rg311_path = ROOT / "tools" / "restart_gui.py"
+    _spec311 = _ilu311.spec_from_file_location("rg311", _rg311_path)
+    _rg311 = _ilu311.module_from_spec(_spec311)
+    _spec311.loader.exec_module(_rg311)
+
+    # ① 纯函数：归属三证（cmdline 含 run_gui.py + cwd 就是仓库根），任一不符就拒
+    _ok311, _why311 = _rg311.verify_owner(0, ROOT, [], "")
+    assert _ok311 is False and "没有 PID" in _why311, _why311
+    _ok311, _why311 = _rg311.verify_owner(123, ROOT, ["python", "x.py"], str(ROOT))
+    assert not _ok311 and "不是控制台" in _why311, _why311
+    _ok311, _why311 = _rg311.verify_owner(123, ROOT, ["python", "run_gui.py"], "/tmp")
+    assert not _ok311 and "不是本仓库" in _why311, _why311
+    _ok311, _why311 = _rg311.verify_owner(123, ROOT, ["python", "run_gui.py"], str(ROOT))
+    assert _ok311 and "归属确认" in _why311, _why311
+    # 变异：只核 cwd、不核 cmdline ⇒ 下一条必须红（这正是“按端口认人”的事故形态）
+    assert not _rg311.verify_owner(123, ROOT, ["python", "other.py"], str(ROOT))[0]
+
+    # ② 外部引擎闸：cwd 在仓库内 + 命令行含引擎名才命中（仓库外同名的无关进程不算）
+    _hits311 = _rg311.scan_engines(ROOT, procs={
+        111: (["python", "tools/dirmap/dirmap.py", "-i", "http://x"], str(ROOT / "output")),
+        222: (["python", "tools/dirmap/dirmap.py"], "/tmp"),
+        333: (["bash", "-lc", "echo hi"], str(ROOT)),
+    })
+    assert [p for p, _ in _hits311] == [111], _hits311
+
+    # ③ running/queued 闸：只读；库不存在按 (0,0)
+    _db311 = _tf311.NamedTemporaryFile(suffix=".db", delete=False).name
+    try:
+        _c311 = _sq311.connect(_db311)
+        _c311.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY, status TEXT)")
+        _c311.executemany("INSERT INTO tasks (status) VALUES (?)",
+                          [("running",), ("queued",), ("done",)])
+        _c311.commit()
+        _c311.close()
+        assert _rg311.pending_tasks(_db311) == (1, 1), _rg311.pending_tasks(_db311)
+    finally:
+        os.unlink(_db311)
+    assert _rg311.pending_tasks(Path("/no/such/db-311.sqlite")) == (0, 0)
+
+    # ④ 端到端：dry-run 拒绝“cmdline 里没有 run_gui.py”的进程（绝不按端口认人）
+    _tmp311 = Path(_tf311.mkdtemp(prefix="rg311_"))
+    _pid311 = _tmp311 / "gui.pid"
+    _proc311 = _sub311.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                cwd=str(ROOT))
+    try:
+        _pid311.write_text(str(_proc311.pid), encoding="utf-8")
+        _r311 = _sub311.run([sys.executable, str(_rg311_path),
+                                "--pidfile", str(_pid311), "--dry-run"],
+                               capture_output=True, text=True, timeout=20)
+        _o311 = (_r311.stdout or "") + (_r311.stderr or "")
+        assert _r311.returncode == 2 and "不是控制台" in _o311, (_r311.returncode, _o311)
+        assert "拒绝重启" in (_r311.stdout or "")
+        # 没有 pidfile ⇒ 同样拒绝，且说明是“没有 PID”
+        _pid311.unlink()
+        _r311b = _sub311.run([sys.executable, str(_rg311_path),
+                                 "--pidfile", str(_pid311), "--dry-run"],
+                                capture_output=True, text=True, timeout=20)
+        _o311b = (_r311b.stdout or "") + (_r311b.stderr or "")
+        assert _r311b.returncode == 2 and "没有 PID" in _o311b, (_r311b.returncode, _o311b)
+    finally:
+        _proc311.kill()
+        _proc311.wait(timeout=5)
+        _sh311.rmtree(str(_tmp311), ignore_errors=True)
+
+    # ⑤ 接线：路由 admin 门 + 独立会话 + 先 dry-run；模板按钮只对管理员渲染；不许 inline 杀进程
+    _app311 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+    _head311, _tail311 = _app311.split("def restart_console()", 1)
+    assert "@admin_required" in _head311[-300:], "路由必须带 admin 门"
+    _seg311 = _tail311[: _tail311.index("@app.route")]
+    assert "start_new_session=True" in _seg311
+    assert "--dry-run" in _seg311 and "--delay" in _seg311
+    assert "restart_gui.py" in _seg311
+    assert "os.kill" not in _seg311, "路由不许 inline 杀进程"
+    _base311 = (ROOT / "gui" / "templates" / "base.html").read_text(encoding="utf-8")
+    assert "重启服务" in _base311 and "restart_console" in _base311
+    _pos311 = _base311.index("重启服务")
+    assert "me.role == 'admin'" in _base311[_pos311 - 700:_pos311], "按钮必须只在管理员下渲染"
+
+    print("[311] 续311 ok: 右上角「重启服务」只对管理员渲染｜路由先 dry-run，拒绝原因原样回 409（不静默失败）"
+          "｜真正的停/起全在 tools/restart_gui.py（归属三证 cmdline+cwd，绝不按端口认人）"
+          "｜外部引擎在跑就不重启（续311 实测 dirmap 孤儿抢 output）｜running/queued 默认拒绝、--force 可跳"
+          "｜端到端 dry-run：cmdline 不含 run_gui.py 与没有 pidfile 两条都拒｜路由里没有 os.kill（信号只由脚本发）")
+
     print("SMOKE PASS")
 
 
