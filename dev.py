@@ -52,7 +52,11 @@ def cmd_setup(_extra):
 
 def cmd_smoke(extra):
     ensure_venv()
-    print("[dev] 全量门禁 tests/smoke.py（约 7 分钟）…")
+    # 那句"约 7 分钟"必须跟着参数走：带 `--only` 时它是秒级~分钟级，写死就是假话（§5.19）。
+    _local308 = "--only" in extra
+    print("[dev] %s tests/smoke.py（%s）…" % ("局部门禁" if _local308 else "全量门禁",
+          "只跑点名的组，**不等于全量通过** —— 收尾仍要跑不带 --only 的那一次" if _local308
+          else "约 7 分钟"))
     return subprocess.run([str(venv_python()), str(ROOT / "tests" / "smoke.py"), *extra],
                           cwd=str(ROOT)).returncode
 

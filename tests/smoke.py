@@ -17091,6 +17091,10 @@ expression: r0()
     # ① 差分：同一批文本上新旧实现的**标签集合必须完全相同**。语料刻意包含：空文本、
     #    三个大小写折叠例外码点（U+0130/U+0131/U+017F —— 实测枚举 BMP 得到的全部不一致点）、
     #    非 ASCII 正文、135 KB 大页面、以及 2200 条固定种子的随机串（含这些字符）。
+    from scanner import gateplan as _gp122
+    # 续308：语料条数是**算出来的**（改动碰到 scanner/fingerprint.py 或三张指纹字典 ⇒ 2200 段全档；
+    # 没碰到 ⇒ 400 段）。判据本体一条不减：固定语料、覆盖率、计数对照、四个放弃条件、变异证伪照旧跑。
+    _gate_tier122, _gate_why122, _gate_n122 = _gp122.tier_for("8aa", _gp122.plan()[0])
     _corpus122 = [
         "", "x", "<html></html>",
         "<html><head><title>管理中心 - Powered By chaosZ</title></head><body>ok</body></html>",
@@ -17104,7 +17108,7 @@ expression: r0()
     ]
     _alpha122 = "abcdexyz<>/. \r\n:;-_0189fnmgitlspwarjcuſıİK若依"
     _seed122 = _rnd122.Random(20261007)
-    for _ in range(2200):
+    for _ in range(_gate_n122):
         _corpus122.append("".join(_seed122.choice(_alpha122) for _ in range(_seed122.randint(0, 70))))
     _diff_bad = []
     for _txt in _corpus122:
@@ -17219,7 +17223,8 @@ expression: r0()
     assert _f1[0] is True and "nginx" in _f1[1], _f1
     assert _fp122.identify(None) == [] and _ref_identify(None) == []
 
-    print(f"[8aa] 续122 指纹前置过滤 ok: 与旧实现**逐字符差分**（{len(_corpus122)} 段文本 × 3 个状态码，"
+    print(f"[8aa] 续122 指纹前置过滤 ok: 档位 {_gate_tier122}（{_gate_why122}）｜"
+          f"与旧实现**逐字符差分**（{len(_corpus122)} 段文本 × 3 个状态码，"
           f"含折叠例外码点/非 ASCII/空文本/135KB 大页面/固定种子随机串）零不一致｜覆盖率 "
           f"{_cov122}/{len(_src122)}（没覆盖的 6 条全是『公共前缀被提到 BRANCH 外』这一类，逐条验过）｜"
           f"同一大页面上 re.search 调用 {_n_filtered} 次 vs 拆掉过滤 {_n_unfiltered} 次（同一把尺子，"
@@ -33932,6 +33937,82 @@ expression: r0()
     print("[306] 续306 ok: 批量目标「一个目标一个任务」（任务名相同）——3 个目标⇒3 个同名任务且各自只带一行｜"
           "大小写归一后重复的只建一个｜解析不了的行不建并回报条数｜上限 200 且先数后建（超限一个都不建）｜"
           "不勾时行为不变（一个任务装多行）｜表单有勾选框｜CLI 的 --split 与 --report* 互斥")
+
+    # ---------------- [308] 续308：门禁分档的唯一产地与映射表不许漂 ----------------
+    # 主理人点单「全量门禁能不能区域验证，每次跑全量有点浪费时间」。本组的职责**不是**让门禁变快，
+    # 而是保证"变快"不会变成"静默少跑"（§6.2 第十起那一族：降级分支只要不打出来就等于给自己开旁路）：
+    # 档位由改动清单算出来、CI 与拿不到 diff 一律全档、映射表点名的组必须真实存在、降档有下限、
+    # 两个"打回坏形状"的变异当场跑红。
+    from scanner import gateplan as _gp308
+    try:
+        _cn308 = len(_corpus122)          # noqa: F821 —— 组共享进程状态，单跑本组必须把 [8aa] 一起点名
+        _tier_used308 = _gate_n122        # noqa: F821
+    except NameError:
+        raise SystemExit("[308] 依赖 [8aa] 的语料变量：局部验证请 `--only 8aa,308`（不是代码坏了）")
+    # 11 是手写语料段的条数（纯随机那段才受档位控制）—— 改它必须是刻意的
+    assert _cn308 == _tier_used308 + 11, \
+        "语料长度与档位不一致 ⇒ 档位只是算出来、没真的落到跑动上（§6.2 第十五起同族）"
+    _smokesrc308 = (ROOT / "tests" / "smoke.py").read_bytes().decode("utf-8", "ignore")
+    _lit308 = ("range(2" + "200)")        # 拼接写：否则这句断言自己会命中自己要禁的串（§6.1 推论四）
+    assert _lit308 not in _smokesrc308, "语料条数又写死了一处 ⇒ 第二个产地"
+    assert 'tier_for("8aa"' in _smokesrc308, "[8aa] 没从 gateplan 取档位"
+    # ① 文档与机器形态必须同时存在、且互相对得上
+    _map308 = ROOT / _gp308.MAP_DOC
+    assert _map308.exists(), "映射表 %s 不在（gateplan 改了文档没改＝假地图）" % _gp308.MAP_DOC
+    _maptxt308 = _map308.read_bytes().decode("utf-8", "ignore")
+    _tok308 = set(re.findall(r"`\[(\w+)\]`", _maptxt308))
+    assert _tok308, "映射表里一个组号都没点名（空表）"
+    def _has308(g):                     # f-string 的 ok 行也算（`[8aa]` 就是 print(f"[8aa]…）
+        for _pre in ('print("[', 'print(f"['):
+            if _pre + g + ']' in _smokesrc308:
+                return True
+        return False
+    _ghost308 = sorted(g for g in _tok308 if not _has308(g))
+    assert not _ghost308, "映射表点了这些组、smoke 里却没有：%s ⇒ 表已漂" % _ghost308[:6]
+    _missing308 = [h["group"] for h in _gp308.HEAVY if not _has308(h["group"])]
+    assert not _missing308, "分档清单里这些组不存在：%s" % _missing308
+    # ② 档位四向（每一向都得有反例，否则"默认全档"可能只是判据没接上）
+    _hit308 = _gp308.tier_for("8aa", ["scanner/fingerprint.py"])
+    _nohit308 = _gp308.tier_for("8aa", ["gui/app.py"])
+    _ci308 = _gp308.tier_for("8aa", [], env={"CI": "1"})
+    _none308 = _gp308.tier_for("8aa", None)
+    assert _hit308[0] == _gp308.FULL, "改了承重文件却降档 ⇒ 分档在吃真覆盖"
+    assert _nohit308[0] == _gp308.LITE, "无关改动没降档 ⇒ 分档根本没生效（白快一场）"
+    assert _ci308[0] == _gp308.FULL, "CI 里降档＝让流水线跑弱档"
+    assert _none308[0] == _gp308.FULL, "拿不到 diff 被当成「什么都没改」⇒ 静默降档"
+    assert _gp308.tier_for("306")[0] == _gp308.FULL, "不在清单里的组必须恒全档"
+    assert _hit308[2] > _nohit308[2] >= 200, "降档下限低于 200 段就等于空跑"
+    # ③ 变异证伪（§6.1）：两个"打回坏形状"都必须当场红/必须仍能守住
+    _real_force308 = _gp308.force_full_env
+    try:
+        _gp308.force_full_env = lambda env=None: True
+        assert _gp308.tier_for("8aa", ["gui/app.py"])[0] == _gp308.FULL, "保险丝没接上"
+        _gp308.force_full_env = lambda env=None: False
+        assert _gp308.tier_for("8aa", ["config/dicts/fingerprints_hub.txt"])[0] == _gp308.FULL, \
+            "承重文件命中却不全档 ⇒ glob 清单坏了"
+        assert _gp308.tier_for("8aa", ["README.md"])[0] == _gp308.LITE, "反向：恒降档也是坏"
+    finally:
+        _gp308.force_full_env = _real_force308
+    # 第三个变异：把分档清单整个清空。**清空清单必须回落到"全档"**，而不是"这一组不存在 ⇒ 不跑"
+    # —— 后者就是"清空清单＝永远降档"的那道后门（tier_for 对不认识的组恒 FULL，这里验的就是它）
+    _save308 = dict(_gp308._BY_GROUP)
+    try:
+        _gp308._BY_GROUP = {}
+        assert _gp308.tier_for("8aa", ["README.md"])[0] == _gp308.FULL, \
+            "清单被清空却还降档 ⇒ 静默弱档"
+        assert "不在分档清单里" in _gp308.tier_for("8aa", ["README.md"])[1]
+    finally:
+        _gp308._BY_GROUP = _save308
+    # ④ 成句文案两态都要有（没降档也必须说一句"全档"，否则"降档"与"没跑"读起来一样）
+    _row308 = {"group": "8aa", "what": "x", "full_n": 2200, "lite_n": 400}
+    _nf308 = _gp308.note([dict(_row308, tier=_gp308.FULL, why="CI", n=2200)])
+    _nl308 = _gp308.note([dict(_row308, tier=_gp308.LITE, why="改动没碰到", n=400)])
+    assert "全档" in _nf308 and "降档" not in _nf308, _nf308
+    assert "降档 1 组" in _nl308 and "400" in _nl308, _nl308
+    print("[308] 续308 ok: 门禁分档唯一产地（档位由改动清单算出来：命中承重文件⇒全档 / 未命中⇒降档 / "
+          "CI 与拿不到 diff⇒一律全档）｜语料条数只从 gateplan 取（写死第二处即红，且那句断言用拼接写、"
+          "不自命中）｜映射表 docs/gate-map.md 点名的组号必须都在 smoke 里真实存在（漂了就是一张假地图）｜"
+          "降档下限 ≥200 段｜三个变异当场跑红（保险丝恒真、glob 命中与未命中、清单被清空必须回落全档）｜成句文案两态都有")
 
     print("SMOKE PASS")
 
