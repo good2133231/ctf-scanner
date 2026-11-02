@@ -34,6 +34,8 @@ python dev.py gate --run                                    # 直接代跑（局
 | POC 引擎 / `pocs/*` | `[5x]` `[6x]` `[6y]` `[6z]` `[8z]` |
 | `run_bootstrap.py` / `tools/sync_check.py` | `[8d]` `[301]` `[303]` |
 | `cli/client.py` | `[212]` `[306]` `[5e]` |
+| `scanner/db.py`（站点可见判据 `SITE_STATUS_WHERE` / 列表查询） | `[8au]` `[268]` |
+| `scanner/fofa.py`（FOFA 查询 / 积分日志） | `[2c]` `[312]` |
 | `tests/smoke.py`（门禁自身 / `--only` / `--prefix`） | `[272]` `[310]` |
 | `tools/restart_gui.py` / 右上角「重启服务」 | `[311]` |
 | `scanner/gateplan.py` / 本文件 | `[8aa]` `[308]` |

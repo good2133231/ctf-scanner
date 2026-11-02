@@ -3,6 +3,44 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续313（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：站点默认可见收窄成 200/301/302/404（5xx 移出）
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 改了什么
+- `scanner/db.py::SITE_STATUS_WHERE`：`200/404 ∪ 5xx ∪ (3xx→落地 200/404/5xx)` →
+  `200/301/302/404 ∪ (3xx→落地 200/301/302/404)`。301/302 是明确路由（不看落地码）；
+  5xx 移出（服务端出错≠可用）；401/403/429 照旧收起。判据仍只此一处。
+- 两处模板（`sites.html` / `task_detail.html`）文案同步；`gui/app.py` 注释同步。
+- 门禁：`[8au]` 的 `_SHOW/_HIDE` 按新口径重排（301 无落地码改为可见、521 改为收起）、
+  `?allst=1` 链接文案断言；`[268]` 整段重写（500 默认收起、301→500 仍可见、`?allst=1` 放开、
+  变异换回含 5xx 的旧判据后 500 立刻出现）。
+- `AGENTS.md` §7 第 20 条、`docs/gate-map.md` 同步。
+
+### 实测
+- `--only 8au`、`--only 268`：通过。
+- 真库实测（只读 `data/scanner.db`）：sites 190 条，旧判据默认可见 77 → 新判据 73（5xx 收起 12 条，301/302 直接放行 8 条）。
+- 全量：**SMOKE PASS，585 秒**（10:25:30 → 10:35:15，`logs/_smoke312.log`，381 组）。
+
+### 踩的坑
+- `db.py` 的判据是**隐式字符串拼接**，第一版改完漏了最外层 `)` 且把 3 个 `)` 写进字符串 →
+  `SyntaxError: '(' was never closed`；改成三行相加并补齐外层括号。
+- `[8au]` 区段是 **LF**（smoke.py 混合行尾），按 CRLF 锚替换 0 命中；先 repr 再改。
+
+## 续312（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：FOFA 积分日志（只报消耗，不编剩余）
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 改了什么
+- `scanner/fofa.py`：新增 `_int_field()`，解析 `consumed_fpoint` / `required_fpoints`，每次查询写一行日志：
+  - 有实际消耗：`[fofa] 本次查询消耗 N 积分（余额接口不可用，只报消耗）`
+  - 只有 required：`[fofa] 本次查询需 N 积分（接口未报实际消耗；余额接口不可用，只报消耗）`
+  - 只认点名字段（`size` 不被误读）；不调 `user_info`（实测 404），不编"剩余 N 分"。
+- 门禁 `[312]`：`_int_field` 四向 + 两态日志 + `剩余`/`user_info` 零命中。
+
+### 实测
+- `--only 312`：通过。
+
 ## 续311（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：右上角「重启服务」+ tools/restart_gui.py（归属三证，绝不按端口认人）
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

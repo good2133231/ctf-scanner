@@ -24013,11 +24013,11 @@ expression: r0()
     from scanner import targets as _tg8au
     from scanner.utils import base_domain as _bd8au
 
-    # ---- ① B：默认显示 200/404/5xx（含 3xx **跳转后**落在这些的），`?allst=1` 放全部 ----
+    # ---- ① B：默认显示 200/301/302/404（3xx **跳转后**落在这些的也算），`?allst=1` 放全部 ----
     #   八行刚好覆盖判据的每个分支：直给 200/404、3xx 落地 200/404、3xx 落地 500、
     #   3xx 但**没取到**落地码、403、521。
-    #   续268：5xx **默认可见**（服务端回了码＝活站，收起来等于藏资产）⇒ 现在显示六类，
-    #   仍收起的只剩两类：403（被拒的噪声）与"3xx 没取到落地码"（没有证据说明它活）。
+    #   续313：默认可见收窄成 200/301/302/404 ⇒ 5xx（500/521）重新收起；301/302 **直接**可见，
+    #   不管落地码是什么。仍收起的只剩两类：403（被拒的噪声）与 521（服务端出错）。
     _oth8au = db.create_task("smoke-8au-noise", "https://oth8au.test/", ["probe"], {})
     db.insert_sites(_oth8au, [{"url": "http://noise.oth8au.test/", "host": "noise.oth8au.test",
                                "port": "80", "status": 521, "title": "NOISE8AU-521", "length": 7}])
@@ -24039,12 +24039,12 @@ expression: r0()
                                "redirect_url": ("https://land8au.test/" if rs else "")}
                               for i, (u, st, ti, rs, rt) in enumerate(_rows8au)])
     _SHOW8au = ("S8AU-OK", "S8AU-J200", "S8AU-J404", "S8AU-NF",
-                "S8AU-J500", "S8AU-CDN521")   # 续268：5xx / 521 默认可见
-    _HIDE8au = ("S8AU-JNONE", "S8AU-FB403")
+                "S8AU-J500", "S8AU-JNONE")   # 续313：301/302 直接可见（含落地 500 的）
+    _HIDE8au = ("S8AU-CDN521", "S8AU-FB403")
     _q8au = f"?task={_tid8au}"
     _h8au = c.get("/sites" + _q8au).get_data(as_text=True)
     for _t in _SHOW8au:
-        assert _t in _h8au, f"默认视图应显示 {_t}（200/404 与**跳转后** 200/404）"
+        assert _t in _h8au, f"默认视图应显示 {_t}（200/301/302/404 与跳转后落在这些的）"
     for _t in _HIDE8au:
         assert _t not in _h8au, f"默认视图应收起 {_t} —— 判据在 db.SITE_STATUS_WHERE"
     # 续197：3xx 那一格显示的是**落地页**标题（S8AU-J200），不是第一跳那句（S8AU-J301）——
@@ -24061,7 +24061,7 @@ expression: r0()
     for _t in _SHOW8au + _HIDE8au:
         assert _t in _h28au, f"?allst=1 应放出 {_t}"
     assert "当前<b>显示全部状态码</b>" in _h28au, "展开态要说清自己现在是全部"
-    assert "只看 200 / 404" in _h28au, "展开态要给出收回起的链接（否则回不去）"
+    assert "只看 200 / 301 / 302 / 404" in _h28au, "展开态要给出收回起的链接（否则回不去）"
     assert 'name="allst" value="1"' in _h28au and 'name="allst"' not in _h8au, \
         "筛选表单的 hidden allst 只该在展开态出现（默认态带上它＝点「查询」也回不到默认视图）"
 
@@ -24098,7 +24098,7 @@ expression: r0()
 
     # 切换链接不许把别的视图状态丢掉（`all=1` / `task=` / `plain=1`）
     _h38au = c.get(f"/sites?all=1&plain=1&task={_tid8au}&allst=1").get_data(as_text=True)
-    _m8au = _re8au.search(r'href="([^"]*)"[^>]*>只看 200 / 404', _h38au)
+    _m8au = _re8au.search(r'href="([^"]*)"[^>]*>只看 200 / 301 / 302 / 404', _h38au)
     assert _m8au and "all=1" in _m8au.group(1) and f"task={_tid8au}" in _m8au.group(1) \
         and "plain=1" in _m8au.group(1), \
         f"「只看 200/404」那个链接丢了既有筛选（_allst_state 必须在其它状态拼完之后调）：{_m8au and _m8au.group(1)}"
@@ -24290,8 +24290,8 @@ expression: r0()
     _qy8au = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")
     assert "python3 cli/run_devflow.py" in _qy8au, "CI 的 devflow job 也要指到 cli/ 下"
 
-    print("[8au] 续146 站点默认只看 200/404 + 批量打标只读本面板 + 判据收敛 + 入口搬进 cli ok: "
-          "默认视图（续268 起）只收起 403 与「3xx 但没取到落地码」，放行 200/404/5xx/521 与跳转后落在这些的｜"
+    print("[8au] 续146/续313 站点默认只看 200/301/302/404 + 批量打标只读本面板 + 判据收敛 + 入口搬进 cli ok: "
+          "默认视图（续313）只收起 403 与 5xx（500/521），放行 200/301/302/404（301/302 不看落地码）｜"
           "被收起的条数报在页面上、并写明「入库一条没动」｜?allst=1 放全部且筛选表单 hidden 带参｜"
           "翻页链接默认态不带 allst、展开态必带（写反＝第 2 页突然放出 5xx）｜"
           "切换链接不丢 all/task/plain｜跨任务页与详情页签同口径、徽标是**未过滤**总数 68 对「共 66 条」｜"
@@ -32005,12 +32005,9 @@ expression: r0()
 
 
 
-    # ---------------- [268] 续268 ⑥：5xx 默认可见（"我打开明明是 500，列表里却没有"） ----------------
-    # 主理人点单："pay-api…这个点为什么没有在站点显示 我打开明明是500"
-    # 根因**不是 bug**：`db.SITE_STATUS_WHERE` 原来默认只放 200/404 ⇒ 500 那行被展示层收起
-    # （库里一直有）。续268 改口径：服务端**回了码**就是活站（500＝应用起了但崩了、
-    # 521＝CDN 后面有源站），收起来等于藏资产 ⇒ 5xx 纳入默认可见；401/403/429 这类
-    # "被拒"的仍是噪声，继续收起并报数。判据仍然只此一处，跨任务 /sites 与详情页共用。
+    # ---------------- [268] 续313 ⑥：5xx 默认收起（续268 曾放进默认可见，313 收窄） ----------------
+    # 续268 的理由是"服务端回了码＝活站"；续313 主理人重新收窄：500/521 是"应用崩了 / CDN 后没
+    # 源站"，混在活站里会让人把"服务端出错"当成"可用"。判据仍只此一处（db.SITE_STATUS_WHERE）。
     _tid268 = db.create_task("smoke-268-st", "https://st268.test/", ["probe"], {})
     db.insert_sites(_tid268, [
         {"url": "http://err500.st268.test/", "host": "err500.st268.test", "port": "80",
@@ -32022,33 +32019,33 @@ expression: r0()
         {"url": "http://deny403.st268.test/", "host": "deny403.st268.test", "port": "80",
          "status": 403, "title": "S268-DENY403", "length": 9},
     ])
-    _c268 = app.test_client()
-    assert _c268.post("/login", data=_admin_form117()).status_code == 302
+    _c268 = c          # 已登录 admin（`_gate_client` 建的；`--only` 环境里没有 `app` 这个名字）
     _q268 = f"?task={_tid268}"
     _h268 = _c268.get("/sites" + _q268).get_data(as_text=True)
-    assert "S268-ERR500" in _h268, \
-        "500 默认要可见（主理人照着浏览器看到 500，列表里却找不到 —— 那等于藏资产）"
-    assert "S268-J500" in _h268, "301→500 也要可见（跳转后落在 5xx）"
+    assert "S268-J500" in _h268, "301 默认可见（落地码是 500 也一样，看的是第一跳路由）"
+    assert "S268-ERR500" not in _h268, "500 默认收起（续313 移出；要看去 ?allst=1）"
     assert "S268-DENY403" not in _h268, "403 仍是'被拒'的噪声，默认收起"
-    assert "已收起 1 条其它状态码" in _h268, "被收起的条数必须报出来（不报＝让人以为资产丢了）"
+    assert "已收起 2 条其它状态码" in _h268, "被收起的条数必须报出来（不报＝让人以为资产丢了）"
+    _ha268 = _c268.get("/sites" + _q268 + "&allst=1").get_data(as_text=True)
+    assert "S268-ERR500" in _ha268, "?allst=1 必须能放开 5xx（收的是展示，不是数据）"
     # 详情页必须同一口径（判据只此一处，两处各写一遍必然漂 —— 本仓反复栽在这）
     _d268 = _c268.get(f"/tasks/{_tid268}").get_data(as_text=True)
-    assert "S268-ERR500" in _d268 and "S268-DENY403" not in _d268, \
+    assert "S268-J500" in _d268 and "S268-ERR500" not in _d268 and "S268-DENY403" not in _d268, \
         "任务详情页与 /sites 必须同一口径"
-    # 变异证伪（§6.1）：判据换回"只看 200/404" ⇒ 500 立刻重新被收起
+    # 变异证伪（§6.1）：换回续268 那版"含 5xx"的判据 ⇒ 500 立刻重新出现
     _sw268 = db.SITE_STATUS_WHERE
     try:
-        db.SITE_STATUS_WHERE = ("(status IN (200, 404) OR "
-                                "(status >= 300 AND status < 400 "
-                                "AND redirect_status IN (200, 404)))")
+        db.SITE_STATUS_WHERE = ("(status IN (200, 404) OR (status >= 500 AND status < 600) OR "
+                                "(status >= 300 AND status < 400 AND "
+                                "(redirect_status IN (200, 404) OR "
+                                "(redirect_status >= 500 AND redirect_status < 600))))")
         _hm268 = _c268.get("/sites" + _q268).get_data(as_text=True)
-        assert "S268-ERR500" not in _hm268, \
-            "变异态（判据换回只看 200/404）500 应重新被收起 —— 不变红说明这条断言是空写"
+        assert "S268-ERR500" in _hm268, \
+            "变异态（判据换回含 5xx）500 应重新出现 —— 不变红说明这条断言是空写"
     finally:
         db.SITE_STATUS_WHERE = _sw268
-    print("[268] 续268 ok: ⑥5xx 默认可见（500 / 301→500 都显示；403 仍收起且报数）｜"
-          "详情页与 /sites 同一口径｜变异（判据换回只看 200/404）后 500 立刻重新消失")
-
+    print("[268] 续313 ok: ⑥5xx 默认收起（500 不可见、301→500 因第一跳是 301 仍可见；403 收起且报数 2 条）｜"
+          "?allst=1 放开 500｜详情页与 /sites 同一口径｜变异（判据换回含 5xx）后 500 立刻重新出现")
 
 
     # ---------------- [271] 续271 ⑩：「已实现但未默认开启」清单（docs/features-off-by-default.md）----------------
@@ -34332,6 +34329,62 @@ expression: r0()
           "｜真正的停/起全在 tools/restart_gui.py（归属三证 cmdline+cwd，绝不按端口认人）"
           "｜外部引擎在跑就不重启（续311 实测 dirmap 孤儿抢 output）｜running/queued 默认拒绝、--force 可跳"
           "｜端到端 dry-run：cmdline 不含 run_gui.py 与没有 pidfile 两条都拒｜路由里没有 os.kill（信号只由脚本发）")
+
+    # ---------------- [312] 续312：FOFA 积分日志（只报消耗，不编“剩余 N 分”）----------------
+    import json as _json312
+    print("[312] 续312：FOFA 积分日志 ...")
+    assert fofa._int_field({"consumed_fpoint": "7"}, "consumed_fpoint") == 7
+    assert fofa._int_field({"consumed_fpoint": "-3"}, "consumed_fpoint") is None
+    assert fofa._int_field({"required_fpoints": 5}, "required_fpoints") == 5
+    assert fofa._int_field({}, "consumed_fpoint") is None
+    assert fofa._int_field({"size": 999}, "consumed_fpoint") is None, "只认点名字段，别把 size 当积分"
+
+    class _L312:
+        def __init__(self):
+            self.lines = []
+
+        def info(self, m):
+            self.lines.append(m)
+
+        def warning(self, m):
+            self.lines.append(m)
+
+        def error(self, m):
+            self.lines.append(m)
+
+    _s312 = {"fofa": {"max_assets": 5, "min_interval": 0},
+             "limits": {"http_timeout": 5},
+             "keys": {"fofa": {"email": "a@b.test", "key": "k312"}}}
+    _body312 = {"size": 1, "consumed_fpoint": "7", "required_fpoints": "7",
+                "results": [["https://a.test", "a.test", "1.2.3.4", "443", "t"]]}
+    _real_http312 = fofa.http_request
+    try:
+        fofa.http_request = lambda *a, **k: {"status": 200, "text": _json312.dumps(_body312)}
+        _lg312 = _L312()
+        _assets312, _total312, _err312 = fofa.search_query('icon_hash="-1"', _s312, logger=_lg312)
+    finally:
+        fofa.http_request = _real_http312
+    assert _err312 == "" and _total312 == 1 and len(_assets312) == 1
+    _msg312 = " | ".join(_lg312.lines)
+    assert "消耗 7 积分" in _msg312, _msg312
+    assert "余额接口不可用" in _msg312
+    assert "剩余" not in _msg312, "不许编剩余分"
+    assert "user_info" not in (ROOT / "scanner" / "fofa.py").read_text(encoding="utf-8")
+
+    # 只报了 required（接口没给 consumed）也要说清楚，不许把它当消耗
+    _body312b = {"size": 0, "required_fpoints": 4, "results": []}
+    try:
+        fofa.http_request = lambda *a, **k: {"status": 200, "text": _json312.dumps(_body312b)}
+        _lg312b = _L312()
+        fofa.search_query('icon_hash="-2"', _s312, logger=_lg312b)
+    finally:
+        fofa.http_request = _real_http312
+    _msg312b = " | ".join(_lg312b.lines)
+    assert "需 4 积分" in _msg312b and "接口未报实际消耗" in _msg312b, _msg312b
+
+    print("[312] 续312 ok: consumed_fpoint/required_fpoints 解析并写日志（只报消耗）｜"
+          "余额接口不可用就不报剩余（fofa.py 0 处 user_info）｜只认点名字段，size 不被误读｜"
+          "两条文案：有消耗 / 只有 required")
 
     print("SMOKE PASS")
 

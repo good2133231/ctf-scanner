@@ -268,6 +268,24 @@ def _retry_after(resp):
     return 0.0
 
 
+def _int_field(data, *names):
+    """从 FOFA 响应里取整数字段（`consumed_fpoint` 等）；取不到/非法/负数返回 None。
+
+    只认调用方点名的字段名，不扫全表 —— 防止把 `size` 之类的同值字段误读成积分（续312）。
+    """
+    for name in names:
+        raw = data.get(name)
+        if raw is None or raw == "":
+            continue
+        try:
+            v = int(str(raw).strip())
+        except (TypeError, ValueError):
+            continue
+        if v >= 0:
+            return v
+    return None
+
+
 def search_query(query, settings, logger=None, size=None):
     """按 FOFA 查询语句反查，返回 `(assets, total, error)`。
 
@@ -328,6 +346,13 @@ def search_query(query, settings, logger=None, size=None):
             logger.warning(f"[fofa] 查询被拒：{msg}")
         return [], 0, msg
     total = data.get("size") or 0
+    consumed = _int_field(data, "consumed_fpoint", "consumed_fpoints")
+    required = _int_field(data, "required_fpoints", "required_fpoint")
+    if logger and (consumed is not None or required is not None):
+        if consumed is not None:
+            logger.info(f"[fofa] 本次查询消耗 {consumed} 积分（余额接口不可用，只报消耗）")
+        else:
+            logger.info(f"[fofa] 本次查询需 {required} 积分（接口未报实际消耗；余额接口不可用，只报消耗）")
     assets = []
     for row in (data.get("results") or []):
         if not isinstance(row, (list, tuple)):

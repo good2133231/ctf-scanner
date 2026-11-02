@@ -4542,6 +4542,26 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续313（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：站点默认可见 200/301/302/404（5xx 移出）
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 已完成
+- [x] `db.SITE_STATUS_WHERE`：301/302 直接可见（不看落地码）、5xx 移出、401/403/429 仍收起
+- [x] 两处模板 + `gui/app.py` 注释 + `AGENTS.md` §7 第 20 条同步
+- [x] `[8au]` `_SHOW/_HIDE` 重排 + 链接文案断言；`[268]` 整段重写（500 收起、301→500 可见、`?allst=1` 放开、变异证伪）
+- [x] `--only 8au`、`--only 268` 通过
+- [x] 全量：**SMOKE PASS，585 秒**（10:25:30 → 10:35:15，`logs/_smoke312.log`，381 组）
+
+## 续312（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：FOFA 积分日志（只报消耗，不编剩余）
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 已完成
+- [x] `fofa._int_field()` + 每次查询一行积分日志（consumed / required 两态）
+- [x] 不调 `user_info`、不编"剩余"；`size` 不被误读
+- [x] 门禁 `[312]`；`--only 312` 通过
+
 ## 续311（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：右上角「重启服务」+ tools/restart_gui.py
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
@@ -4635,12 +4655,6 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       **`screenshot` 排除**。两条不许混：目录命中行里的 403 是 A01 证据（`waf_block_titles.txt` 刻意
       不收 `403 Forbidden` 就是这个原因），闸只作用在**站点级候选**；某些产品识别 POC 靠 403 页特征命中，
       站点被排除后这类识别一起没了 ⇒ 记进 §7 局限并留 `scanelig.allow_block_poc`（默认关）
-- [ ] 续312 FOFA 积分日志：`consumed_fpoint` / `required_fpoints` 现在被整份丢掉；余额那一档
-      `/api/v1/user_info` 实测 404 ⇒ 只报消耗，不编"剩余 N 分"
-- [ ] 续313 状态码显示档：默认可见收窄成 `200/301/302/404`（5xx 移出），其余收起并报条数、
-      `?allst=1` 放开；动共享判据 ⇒ 先把 `[8au]`「已收起 N 条」、`[268]`、`[7s]`、`[6u]` 的数字断言
-      grep 一遍一起改
-- [x] 已确认（2026-11-02，主理人批准读 `tools/dirmap/`）：**CLI 没有"指定字典文件"参数**（只有
       `-t/--thread`、`-i`、`-iF`、`-lcf`、`--debug`），字典只能改 `dirmap.conf` 的 `dict_mode*`（路径拼在
       `data/` 下）；**也没有指定输出目录参数**。⇒ 续310 走"认出 CDN 就不交给 dirmap"；改 conf 仍按续105
       不做；output 共享那条定方案②（dirscan 层互斥）
