@@ -110,6 +110,7 @@
 .clouddn.com
 .cloudflare
 .cloudflare.com
+.cloudflaressl.com
 .cloudfront.
 .cloudfront.net
 .cloudglb.com

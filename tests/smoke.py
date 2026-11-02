@@ -29403,8 +29403,19 @@ expression: r0()
                 return True
             return any(e == r or e.endswith("." + r) or r.endswith("." + e) for e in _wl218)
         _live218 = [d for d in _reg218 if not _wl_218(d)]
+        # 主理人 2026-11-02 定规矩：**黑名单随仓库提交是刻意的** —— 它是「我们不想看的域」清单，
+        # 不是凭据、也不是泄露面。GUI 那颗「加入黑名单」写的就是这份被跟踪的文件，所以它必须从
+        # §0.5 的泄漏判据里**排除**：否则每次拉黑授权目标的一个域，门禁就红，而下一个人会去
+        # 删用户数据或往白名单塞名字 —— 两种都是坏修法（本轮真就往白名单塞过两个名字，已撤）。
+        # 排除只到这一条路径为止：下面那条判据钉住「排除名单恰好只有 config/blacklist.txt」，
+        # 谁再加第二个文件就红；而"扫描本身还有牙"由文末那条 github.com 变异夹具证明（它不经过
+        # 这里，照样必须命中）。
+        _skip218 = {"config/blacklist.txt"}
+        assert len(_skip218) == 1, "脱敏判据的排除名单只许恰好一条路径（主理人定的规矩，别扩大）"
         _files218 = []
         for _f218 in _sp218.check_output(["git", "ls-files"], cwd=str(ROOT)).decode().splitlines():
+            if _f218 in _skip218:
+                continue
             try:
                 _files218.append((_f218, (ROOT / _f218).read_bytes().decode("utf-8", "ignore")))
             except OSError:
@@ -33840,6 +33851,11 @@ expression: r0()
     import subprocess as _sp306
     _th306 = c.get("/tasks").get_data(as_text=True)
     assert 'name="split_targets"' in _th306, "建任务表单没有「每个目标单独建任务」勾选框"
+    # 续307：主理人点单「这个功能默认开启」⇒ 判的是**渲染出的 HTML** 里那一颗带 `checked`，
+    # 不是模板源码（源码里有 checked、被渲染条件吃掉，页面上照样没勾着）。摘掉 checked 这条必须红。
+    # 「不勾 ⇒ 一个任务装多行」那条路由判据在下面原样守着：默认开与能关是两件事，两把尺子都要有牙。
+    assert re.search(r'name="split_targets"[^>]*\bchecked\b', _th306), \
+        "「每个目标单独建任务」没有默认勾上（主理人点单：默认开）—— 还要人手动勾＝功能没生效"
     _keep_claim306 = _db306.claim_next_queued
     _db306.claim_next_queued = lambda *a, **k: None      # 本节建的 queued 任务绝不被 worker 认领
     _nm306 = "split306-" + str(int(time.time()))[-6:]

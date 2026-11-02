@@ -10,8 +10,8 @@
         placeholder="example.com&#10;http://target.local/&#10;192.168.1.10"></textarea>
     </label>
     <label>或导入目标文件 <input type="file" name="file" accept=".txt"></label>
-    <label class="chk" title="每个目标单独建一个任务（任务名相同）；一行一个，最多 200 个。不勾＝沿用旧行为：所有目标进同一个任务。">
-      <input type="checkbox" name="split_targets" value="1"> 每个目标单独建任务（任务名相同）</label>
+    <label class="chk" title="默认勾上：每个目标单独建一个任务（任务名相同），一行一个，最多 200 个。取消勾选＝把所有目标放进同一个任务（旧行为）。">
+      <input type="checkbox" name="split_targets" value="1" checked> 每个目标单独建任务（任务名相同）</label>
 
     <div class="row">
       <span class="muted">阶段：</span>
