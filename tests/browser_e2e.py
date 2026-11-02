@@ -890,7 +890,11 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     _zero10 = page.ev(f"document.querySelectorAll('{_cb10}:checked').length")
     rep.check("[10] 「全部清掉」清成 0 项", _zero10 == 0, f"实测 {_zero10}")
     page.ev("document.querySelector('#task-form button[data-ck-mode=default]').click()")
-    _back10 = page.ev(f"document.querySelectorAll('{_cb10}:checked').length")
+    # 续314：deep/expand 组也带 data-ck-default=1 ⇒ 恢复默认会把它们勾回来；
+    # 这里的"默认阶段数"只统计 stages 组，避免把深度/拓展算进阶段数里。
+    _back10 = page.ev(
+        "document.querySelectorAll('#task-form [data-ck-group=stages] "
+        "input[type=checkbox]:checked').length")
     # 续303：默认勾选改由**策略现算** —— screenshot 随包打开之后，「策略关的阶段」只剩 cert/hostcollide，
     # 写死数字的在续303 就红过一次（13 → 14）。契约是「恢复默认 == 按策略算出来的那些 + 自动拓展扫描」，
     # 写死会让下一次改默认时又变成"看着像坏了"的假红。
@@ -905,6 +909,14 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     rep.check(f"[10] 「恢复默认」＝{_want10} 项（{len(_SO10)} 个阶段里策略关着 {_off10} 个）",
               _back10 == _want10, f"实测 {_back10}（策略关着 {_off10} 个阶段）")
     # 证伪：按钮只管 stages 时会停在这里（少于全勾）—— 上面那条 all 的判据就是它的牙
+    rep.check("[10] 恢复默认也把深度/拓展带回来（续314 默认开）",
+              json.loads(page.ev(
+                  "JSON.stringify(["
+                  "document.querySelector('#task-form input[name=dirscan_full]').checked,"
+                  "document.querySelector('#task-form input[name=recursive_dir]').checked,"
+                  "document.querySelector('#task-form input[name=auto_expand]').checked,"
+                  "document.querySelector('#task-form select[name=subdomain_profile]').value])")) 
+              == [True, True, True, "deep"], "深度/拓展没跟着恢复默认")
     rep.check("[10] 点按钮不会把已填内容弄丢（按钮是 type=button，不提交表单）",
               page.ev("!!document.querySelector('#task-form input[data-slow-master]')") is True
               and page.ev("document.querySelectorAll('#task-form form').length") == 0)

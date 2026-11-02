@@ -3230,7 +3230,9 @@ def main():
     assert "## TLS 证书" in _rcert and "smoke.test.lab" in _rcert, "报告缺 TLS 证书小节"
     # 没有证书时页签要**说清原因**（策略关 / 无 https 或加密端口站点 / 取了但失败）
     _nohtm = c.get(f"/tasks/{cv_tid}").get_data(as_text=True)
-    assert "SSL 证书" in _nohtm and "cert 阶段默认关闭" in _nohtm, "空页签未说明原因"
+    # 续314：cert 随包打开后，这个夹具（策略级关 cert 的 StageContext）在 GUI 侧
+    # 走的是「没有可取证的目标」分支；「阶段未执行」只在用户手动关策略时出现。
+    assert "SSL 证书" in _nohtm and "没有可取证的目标" in _nohtm, "空页签未说明原因"
     # 重启任务会清空资产 → ASSET_TABLES 必须包含 certs，否则旧证书会残留成"幽灵资产"
     assert "certs" in db.ASSET_TABLES, db.ASSET_TABLES
     db.clear_task_assets(cv2_tid)
@@ -16032,7 +16034,7 @@ http:
                       if isinstance(_set118.get(s), dict) and _set118[s].get("enabled") is False)
     assert _off118 == _want118, \
         f"默认不勾那组与策略算出来的不一致：页面 {_off118} vs 策略 {_want118}（模板是不是又写死了）"
-    assert "cert" in _off118, "cert 两处都关，必须默认不勾"
+    assert "cert" not in _off118, "续314：cert 随包打开，必须默认勾（DEFAULTS 仍 false）"
     assert "['screenshot', 'cert']" not in \
         (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8"), \
         "模板又把默认不勾写死了 —— 策略一开它就会说谎（续303）"
@@ -16063,18 +16065,19 @@ http:
     _caught = [(_m, _g) for _m, _sc in _btns118 for _g in _sc.split(",")
                if _g not in _g_mut]
     assert ("none", "deep") in _caught, "变异没生效：改错分组名后判据抓不到（① 没有区分度）"
-    # 变异二：把 cert 的默认值翻成"默认勾上"，③ 那条默认口径判据必须立刻跟着变红
-    _mut2 = _re118.sub(r'(name="stages" value="cert"\s+data-ck-default=")0(")',
-                                          r"\g<1>1\g<2>", _th118)
+    # 变异二：把 cert 的默认值从 1 翻成 0（续314 起 cert 默认勾），
+    # ③ 那条默认口径判据必须立刻跟着变红
+    _mut2 = _re118.sub(r'(name="stages" value="cert"\s+data-ck-default=")1(")',
+                                          r"\g<1>0\g<2>", _th118)
     assert _mut2 != _th118, "变异没生效：改不动 cert 的默认值（说明页面形态和预想不同）"
     _st_mut = _re118.findall(r'name="stages" value="(\w+)"\s+data-ck-default="(\d)"', _mut2)
     _st_mut_off = sorted(s for s, d in _st_mut if d == "0")
-    assert "screenshot" in _st_mut_off and "cert" not in _st_mut_off, \
-        f"默认口径断言对『cert 变成默认勾上』不敏感 = ③ 是假绿：{_st_mut_off}"
+    assert "cert" in _st_mut_off and "screenshot" in _st_mut_off, \
+        f"默认口径断言对『cert 变成默认不勾』不敏感 = ③ 是假绿：{_st_mut_off}"
 
     print("[8w] 续118/续314 建任务一键勾选 ok: 两个按钮（最重档位已删）scope 点名的分组页面上都真实存在｜"
           "任何批量按钮都不含离线模式（勾它=禁用外部工具，与跑全相反），「全部清掉/恢复默认」含｜阶段清单与 STAGE_ORDER "
-          "逐一对齐且默认不勾的恰是 cert/crawl/screenshot（续314）｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
+          "逐一对齐且默认不勾的恰是 crawl/screenshot（续314：cert 已默认开）｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
           "读 data-ck-default、挂在 DOMContentLoaded｜变异：抹掉 deep 钩子 / 把 cert 翻成默认勾 都变红")
 
     # ---------------- [8x] 续119：afrog 进 toolmgr，但"能装"与"会被用"分成两档 ----------------
@@ -23455,8 +23458,9 @@ expression: r0()
         assert _ship160[_s160]["enabled"] is True and _DEF160[_s160]["enabled"] is False, _s160
     # 仍然两处都关的只剩 cert；**续303 起 screenshot 随包打开**（主理人点单「默认要开」），
     # 但 DEFAULTS 必须仍是 false —— 两档分开说，别把"开在文件层"写成"改了出厂代码"
+    # 续314（主理人点单「cert 默认开启」）：随包 true / DEFAULTS 仍 false（同 screenshot 口径）
     for _s160 in ("cert",):
-        assert _ship160[_s160]["enabled"] is False and _DEF160[_s160]["enabled"] is False, _s160
+        assert _ship160[_s160]["enabled"] is True and _DEF160[_s160]["enabled"] is False, _s160
     assert _ship160["screenshot"]["enabled"] is True and _DEF160["screenshot"]["enabled"] is False, \
         "screenshot：随包应为 true（续303 主理人点单）而 DEFAULTS 仍 false"
     # 续269（主理人点单「端口扫描默认开启，扫常规 web 端口」）：**两处都翻成开**
@@ -23477,7 +23481,7 @@ expression: r0()
             if _b160 in _t160:
                 raise AssertionError(f"{_f160} 还在说「{_b160}」—— 随包默认值已改，这句是假话（§5.19）")
     print(f"[8bq] 续159-附 随包策略默认值 ok: 五段随包开而 DEFAULTS 仍 False（开在文件层）｜"
-          f"min_severity 随包 high / DEFAULTS medium｜生效值已核｜cert 仍两处都关 / screenshot 续303 起随包开、"
+          f"min_severity 随包 high / DEFAULTS medium｜生效值已核｜cert 续314 起随包开（DEFAULTS 仍 false）/ screenshot 续303 起随包开、"
           f"portscan 续269 起两处都开｜"
           f"{len(_ban160)} 条已证伪的旧句子在 4 份文档里 0 命中（判据先自证抓得到）")
 
@@ -31785,12 +31789,14 @@ expression: r0()
                  (_tid265, "x265.test", 443, "x265.test", "CN=LE", "2026-02-0%d" % (_i + 1),
                   "2026-05-01", _ser, "", "ct"))
     _h265 = _c265.get(f"/tasks/{_tid265}").get_data(as_text=True)
-    assert len(_re265.findall(r'data-dup-of="\d+" hidden', _h265)) == 4, \
-        "同一张证书覆盖 5 个主机 ⇒ 收起 4 条（少收就是没去重）"
-    assert _re265.search(r"全部显示（收起 4 条）", _h265), "收起的条数必须报在页面上（§0 第 10 条）"
+    # 续314：键改成 CN 优先后，同 CN 的 CT 历史证书也并进来 ——
+    # 5 主机 + 2 张 CT 历史 = 7 行 → 收 6 条（用户口径："同样的证书 CN 只显示一个"）
+    assert len(_re265.findall(r'data-dup-of="\d+" hidden', _h265)) == 6, \
+        "同一 CN 覆盖 7 行（5 主机 + 2 张 CT 历史）⇒ 收起 6 条"
+    assert _re265.search(r"全部显示（收起 6 条）", _h265), "收起的条数必须报在页面上（§0 第 10 条）"
     assert _h265.count("AB:CD:EF") == 5, "5 条同指纹的行都还在库里（展示层折叠 ≠ 删数据）"
-    # 关键判据：**空指纹不许当键** —— CT 那两行序列号不同，折了就会把 2 张历史证书并成 1 张
-    assert _h265.count("CT-1") == 1 and _h265.count("CT-2") == 1, "CT 行必须各自成行（空 sha256 不是键）"
+    # 续314：同 CN 一律折（CT 历史证书也收进同一行）；成员行仍在 DOM 里，展开可见
+    assert _h265.count("CT-1") == 1 and _h265.count("CT-2") == 1, "CT 行必须仍渲染在折叠组里"
     _ha265 = _c265.get(f"/tasks/{_tid265}?all=1").get_data(as_text=True)
     assert len(_re265.findall(r'data-dup-of="\d+" hidden', _ha265)) == 0, "?all=1 必须全放开"
     assert "全部显示（收起" not in _ha265, "全放开时那颗逃生钮该消失"
@@ -31802,7 +31808,8 @@ expression: r0()
              (_tid265, "5.6.7.0/24", "5.6.7.8", "", 166, "共享主机"))
     _h265 = _c265.get(f"/tasks/{_tid265}").get_data(as_text=True)
     _n_dup265 = len(_re265.findall(r'data-dup-of="\d+" hidden', _h265))
-    assert _n_dup265 == 5, f"4 条证书 + 1 条 C 段都该被收起，实到 {_n_dup265}"
+    # 续314：证书同 CN 折 6 条（5 主机 + 2 张 CT 历史）+ C 段 1 条
+    assert _n_dup265 == 7, f"6 条证书 + 1 条 C 段都该被收起，实到 {_n_dup265}"
     assert _re265.search(r"全部显示（收起 1 条）", _h265), "C 段收起条数要单独报出来"
     assert "1.2.3.4" in _h265 and "1.2.3.9" in _h265, "同一段的两个 IP 要合并显示在一行里"
     print("[265] 续265 ok: ①建任务页不再展示「离线模式」（后端 offline 字段与 CLI --offline 照旧，"

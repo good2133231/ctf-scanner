@@ -5,7 +5,9 @@
 <div class="toolbar">
   <span class="badge st-{{ task.status }}" id="st-badge">{{ '排队中' if task.status == 'queued' else task.status }}</span>
   <span class="muted">当前阶段 <b id="st-stage">{{ task.current_stage or '-' }}</b></span>
-  <span class="muted">进度 <b id="st-progress">{{ task.progress }}%</b></span>
+  <span class="muted">进度 <span class="bar"><i id="st-bar" style="width: {{ task.progress }}%"></i></span>
+    <b id="st-progress">{{ task.progress }}%</b></span>
+  <span class="muted">运行 <b>{{ run_duration }}</b></span>
   <button class="btn-mini ghost" data-op="stop" data-id="{{ task.id }}"
     id="btn-stop" {{ 'disabled' if task.status not in ('running', 'queued') }}>停止</button>
   <button class="btn-mini ghost" data-op="restart" data-id="{{ task.id }}"
@@ -726,7 +728,7 @@
       后者是<b>线索与资产面补充</b>，不等于"目标此刻在用这张证书"。</p>
     {% if not cert_total %}
       {% if not cert_enabled %}
-      <p class="muted small note">本任务没有取证书：<b>cert 阶段默认关闭</b>。可在「策略配置 → 资产面拓展」
+      <p class="muted small note">本任务没有取证书：<b>cert 阶段未执行</b>（本任务没勾它，或策略里关掉了）。可在「策略配置 → 资产面拓展」
         打开「TLS 证书取证」，或新建任务时勾选阶段里的 <code>cert</code>。</p>
       {% elif not cert_pick %}
       <p class="muted small note">本任务没有取证书：<b>没有可取证的目标</b> —— 需要站点走 https，

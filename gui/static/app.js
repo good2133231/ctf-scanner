@@ -24,6 +24,7 @@ async function pollTask(id) {
   const badge = document.getElementById("st-badge");
   const stage = document.getElementById("st-stage");
   const prog = document.getElementById("st-progress");
+  const bar = document.getElementById("st-bar");
   for (;;) {
     try {
       // 续283：详情页**全部**页签徽标 live —— 轮询带 `?tabcounts=1`，用与渲染同一把尺子
@@ -35,6 +36,7 @@ async function pollTask(id) {
         if (badge) badge.textContent = j.status;
         if (stage) stage.textContent = j.current_stage;
         if (prog) prog.textContent = j.progress + "%";
+        if (bar) bar.style.width = j.progress + "%";
         if (box && j.log_tail) box.textContent = j.log_tail.join("\n");
         if (j.status !== "running" && j.status !== "pending") {
           setTimeout(() => location.reload(), 1500);

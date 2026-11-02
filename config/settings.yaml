@@ -388,8 +388,9 @@ screenshot:
   # 典型：把字体放进 tools/fonts/，再指向 tools/fonts/fonts.conf。
   fontconfig: ''
 cert:
-  # TLS 证书取证（默认关）：对 https / tls_ports 站点做一次 TLS 握手，解析颁发者与有效期到「SSL 证书」页签
-  enabled: false
+  # TLS 证书取证（续314 主理人点单「默认开启」）：对 https / tls_ports 站点做一次 TLS 握手，
+  # 解析颁发者与有效期到「SSL 证书」页签；代码 DEFAULTS 仍是 false（开在文件层，同 screenshot 口径）
+  enabled: true
   max_sites: 30  # 续280：填 0 = 不限（与 limits.brute_max_words: 0 = 全量 同一口径；旧写法把 0 当没填）
   timeout: 8
   tls_ports: [443, 8443, 9443]

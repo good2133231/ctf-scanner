@@ -49,20 +49,21 @@
       <span class="muted" title="勾选后本任务无视全局策略，强制走全量档；忘记勾对应阶段时会自动补上">
         深度选项（可选）：</span>
       <label class="chk" title="dirscan 走全量分层字典 + dirmap + 后缀派生（比默认浅扫慢很多）">
-        <input type="checkbox" name="dirscan_full" value="1"> 全目录深扫</label>
+        <input type="checkbox" name="dirscan_full" value="1" data-ck-default="1" checked> 全目录深扫</label>
       <label class="chk" title="对命中的目录再往下打一层浅扫精选字典（深扫专属能力，勾了就自动带上「全目录深扫」；每站最多 5 个目录 × 40 条，约 +215 请求/站）">
-        <input type="checkbox" name="recursive_dir" value="1"> 目录递归（一层）</label>
+        <input type="checkbox" name="recursive_dir" value="1" data-ck-default="1" checked> 目录递归（一层）</label>
       {# 续246（B 批）：子域名爆破档位。**只影响本次任务**，策略值仍是天花板；
          quick 不是"取前 1 万条"，是等距抽样（见 scanner/stages/subdomain.py::_spread）。 #}
       <label class="muted" title="只影响本次任务：快速＝深档词表等距抽样到 1 万条（不是取前 1 万条）；深度＝按策略 limits.brute_max_words（0=全量）。精简档的几十条人工前缀任何档位都全量参与；内置兜底另有 limits.brute_fallback_max 更紧的闸门">
         子域名爆破档位
-        <select name="subdomain_profile" data-ck-all="deep" data-ck-none="" data-ck-default="">
+        <select name="subdomain_profile" data-ck-all="deep" data-ck-none="" data-ck-default="deep">
           <option value="">跟策略（limits.brute_max_words）</option>
           <option value="quick">快速（深档抽样 1 万条）</option>
-          <option value="deep">深度（按策略，0=全量）</option>
+          <option value="deep" selected>深度（按策略，0=全量）</option>
         </select></label>
-      <span class="muted small">默认只跑「浅扫」：端口 top 档 + 目录敏感路径精选字典；
-        想深挖再勾上面三项，或在结果页对选中资产发起补扫。</span>
+      <span class="muted small">续314 起默认全量档：端口 top + <b>全目录深扫</b> + <b>一层目录递归</b>
+        + <b>子域名深度档</b> + <b>自动拓展</b>；嫌慢可在上面逐项取消，或在结果页对选中资产发起补扫。
+        （<b>全端口不在这里</b>：续250 起已挪到任务详情「端口」页签的单任务按钮。）</span>
     </div>
       {# 续227：Host 碰撞**默认就做**（策略 `hostcollide.enabled` 出厂开），建任务页不再放勾选框 ——
           勾了也不改变默认行为，只会让人误以为"要勾才跑"。要单任务强制开/补跑，用详情页那颗按钮；
@@ -71,7 +72,7 @@
       <span class="muted" title="任务级选项 auto_expand：只影响本次任务，不改全局策略">
         拓展选项（可选）：</span>
       <label class="chk" title="① 自动补上 osint / jsmine 两个拓展阶段（没勾也补）；② 目标是子域（如 aaa.targ1.pro）时自动补收它的主域名 targ1.pro，并把该子域也记成一条子域资产；③ 「追加扫描层数」>1 时，把每层新挖出的自家子域与高置信拓展域名自动带进下一轮。注：拓展出的「归属本项目」子域追加为子域名 + 同轮探测入站，自续255 起固定执行，不再取决于本选项">
-        <input type="checkbox" name="auto_expand" value="1"> 自动拓展扫描</label>
+        <input type="checkbox" name="auto_expand" value="1" data-ck-default="1" checked> 自动拓展扫描</label>
       {# 续169（主理人点单：「这个不仅要在拓展域名哪个位置显示，主界面也要显示」）：
          「追加扫描层数」与「置信度阈值」这两个控件从「送去探测」那一处接到主面板上来。
          默认值吃 `ext_defaults`（策略配置里的 `subdomain.ext_depth` /
@@ -257,7 +258,7 @@
            这里只留「查看全结果」—— 它是**看**，不改动任何东西，跟着每一行走最顺手。 #}
         <td class="ops">
           <div class="ops-row">
-          <a class="btn-mini" href="{{ url_for('task_detail', task_id=t.id) }}"
+          <a class="btn-mini ghost" href="{{ url_for('task_detail', task_id=t.id) }}"
             title="看这个任务自己的资产详情；整棵衍生树的资产汇聚点任务名旁边的「统计」
                   预览框（续196 起真数据，不再是模拟样式）">查看全结果</a>
           </div>
