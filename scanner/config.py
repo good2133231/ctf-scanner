@@ -470,6 +470,9 @@ DEFAULTS = {
         # 打开后还有两层节流：只对**不重复站点**扫描（标题+长度相同的别名站跳过），
         # 且每个站点最多扫 max_paths（深扫）/ quick_max_paths（浅扫）条。每任务站点上限见 limits.dirscan_max_urls。
         "enabled": True,
+        # 续315（主理人点单）：默认不请求 .js（历史 URL / 自曝入口里的静态资源，扫了没入口价值；
+        # 要挖 JS 里的接口域名走 jsmine 阶段）。关掉它才扫 .js。
+        "exclude_js": True,
         # quick = 只吃 dirs_shallow（敏感路径精选）；deep = 全量分层字典 + dirmap。
         # 任务级选项 dirscan_full=true 可把单个任务强制成 deep（不改全局策略）。
         "mode": "deep",            # 续144：默认深扫（quick＝只吃 dirs_shallow 精选路径）

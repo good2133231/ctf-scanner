@@ -486,6 +486,10 @@
       </select></label>
     <label>浅扫单站点条数上限（<code>dirs_shallow</code> 共约 150 条，填大了也只是把全部吃完）
       <input name="dirscan_quick_max_paths" value="{{ s.dirscan.quick_max_paths }}"></label>
+    <label class="chk" title="续315 主理人点单：历史 URL / robots / sitemap 里的 .js 多半是静态资源，
+扫了没有入口价值；要挖 JS 里的接口域名走 jsmine 阶段（它照常跑）">
+      <input type="checkbox" name="dirscan_exclude_js" value="1"
+        {{ 'checked' if s.dirscan.exclude_js }}> <b>排除 .js 路径</b>（默认开）</label>
     <label class="chk"><input type="checkbox" name="dirscan_suffix_aware" value="1"
       {{ 'checked' if s.dirscan.suffix_aware }}> <b>备份后缀派生</b>（仅深扫）：对命中的文件名型路径
       再试 <code>.bak</code>/<code>.zip</code>/<code>.old</code>/<code>~</code> 等变体</label>

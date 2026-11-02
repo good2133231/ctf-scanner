@@ -3,6 +3,34 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续315（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：dirscan 不扫 .js + 反查源真机实测与噪声过滤
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 已落地
+- **dirscan 默认不请求 .js**（主理人点单：历史 URL / robots / sitemap 里的 .js 多半是静态资源）：
+  `dirscan.exclude_js`（DEFAULTS 与 settings.yaml 都 True）、`_is_js_path` 判定（带 query/hash 也认）、
+  策略页「排除 .js 路径」开关 + POST 映射；jsmine 阶段不受影响（它照常挖域名）。
+- **反查源噪声过滤**（真机探针发现 rapiddns 67 条里 60+ 条是 `avatar.jpg`/`adsbygoogle.js`）：
+  `_html_domains` 统一挡掉静态资源后缀、JS 属性链（`document.getelementbyid`）、公共 CDN/广告/统计域；
+  `_reverse_dnsdblookup` 改为复用 `_html_domains`（原来自写一遍正则，绕过了过滤）；云厂商 PTR 不当域名。
+- CHANGELOG/todo/门禁同步（`[252]` 加 .js 三处一致断言、`[5m]` 5b 加噪声过滤断言）。
+
+### 真机实测（用任务 17 的真实目标/IP，非夹具）
+- **免费反查源**（IP 34.95.233.217）：`dnsdblookup` **44 条真域名**（唯一有效源）、`rapiddns` 过滤后 0 条有效、
+  `webscan`/`hackertarget`/`ip138`/`viewdns` 全 0、`ptr` 只回云厂商主机名（已过滤）。
+- **截图首跳**（`http://<脱敏目标>:8080`）：首跳 **0.6s 失败**（不是 40–60s），落地页 **16.2s** 成功；
+  日志里的 40–60s 是 CDP 兜底路径（等不到 load 时最多 45s），不是每次都要等。
+- **默认全量档耗时口径**：`subdomain_profile=deep` + `limits.brute_max_words=0` ⇒ 单注册域吃
+  **17.8 万词**（配置注释实测：128 线程 45 分钟未跑完）；dirscan deep ≈ 400 请求/站；截图 ≈16s/站。
+- **FOFA ico 比网页少的原因**：API 只发**一次**请求、`fofa.max_assets=100`（网页可翻页）、且只保留合法域名
+  （网页结果含裸 IP 资产）。
+
+### 待办 / 风险（未解决，别当已完成）
+- `js_urls`（jsmine 的接口 URL）仍是死数据，没有接进 dirscan。
+- FOFA `max_assets` 是否提高受积分约束（当前 17499），默认 100 是保护。
+- 全量门禁：**SMOKE PASS，约 9 分 20 秒**（`logs/_smoke315c.log`，339 组）。
+
 ## 续314（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：主理人 9 条点单（全部落地）
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

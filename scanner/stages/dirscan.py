@@ -190,6 +190,12 @@ _SHALLOW_LAYERS = ("shallow",)
 _SUFFIXES = (".bak", ".zip", ".tar.gz", ".rar", ".old", "~", ".swp", ".copy", ".save", ".txt")
 
 
+def _is_js_path(path):
+    """续315：判断候选路径是不是 .js（忽略 query/fragment）。"""
+    q = str(path).split("?", 1)[0].split("#", 1)[0].strip().lower()
+    return q.endswith(".js")
+
+
 def _size_to_int(text):
     """把 dirmap 的 `1.23kb` / `512.00b` 转回字节数；解析不了返回 None。"""
     m = SIZE_RE.match(str(text or ""))
@@ -1266,6 +1272,10 @@ class DirscanStage(Stage):
             for _p250, _lab250 in _self248.get(str(s.get("url") or "").strip(), []):
                 if _p250 and _p250 not in src_of:
                     paths.append(_p250); src_of[_p250] = _lab250
+            if cfg.get("exclude_js") is not False:    # 续315：默认排除 .js 候选
+                _n0 = len(paths)
+                paths = [p for p in paths if not _is_js_path(p)]
+                tally["excluded-js"] = tally.get("excluded-js", 0) + (_n0 - len(paths))
             if limit and len(paths) > limit:           # 历史 URL 与字典共用同一个额度
                 paths = paths[:limit]
             per_site.append((str(s.get("url") or ""), label, len(paths)))

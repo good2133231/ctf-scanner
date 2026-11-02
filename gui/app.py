@@ -5751,6 +5751,7 @@ def create_app():
                                 "quick_max_paths": int(
                                     f.get("dirscan_quick_max_paths", 150) or 150),
                                 "suffix_aware": f.get("dirscan_suffix_aware") == "1",
+                                "exclude_js": f.get("dirscan_exclude_js") == "1",
                                 "big_dict": f.get("dirscan_big_dict") == "1",
                                 "tech_aware": f.get("dirscan_tech_aware") == "1",
                             # 续248：历史 URL 并入目录候选（零目标流量）

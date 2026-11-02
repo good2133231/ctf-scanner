@@ -2095,6 +2095,25 @@ def main():
     # 5) 反查域名不再接受 `_`（与 utils.is_domain 口径一致）
     assert iprecon_mod.normalize_domain("a_b.com") == "" \
         and iprecon_mod.normalize_domain("foo.bar") == "foo.bar"
+    # 5b) 续315：HTML 反查页里的静态资源名 / JS 属性链 / 公共 CDN 域不是域名
+    #     （真机探针：rapiddns 67 条里 60+ 条是 avatar.jpg、adsbygoogle.js 这类垃圾）
+    assert iprecon_mod._html_domains(
+        "avatar.jpg adsbygoogle.js document.getelementbyid a.test") == ["a.test"]
+    assert iprecon_mod._html_domains(
+        '<a href="https://a.test/x">x</a> fonts.googleapis.com cdnjs.cloudflare.com '
+        'menu.queryselectorall') == ["a.test"]
+    # dnsdblookup 必须复用统一解析（原来自写一遍正则，绕过了上面的过滤）
+    import inspect as _insp315
+    assert "_html_domains" in _insp315.getsource(iprecon_mod._reverse_dnsdblookup), \
+        "dnsdblookup 又自己写正则了"
+    # 云厂商 PTR 不是业务域名（桩掉 DNS，别真发请求）
+    import socket as _sock315
+    _orig_gethost315 = _sock315.gethostbyaddr
+    try:
+        _sock315.gethostbyaddr = lambda ip: ("217.233.95.34.bc.googleusercontent.com", [], [ip])
+        assert iprecon_mod._reverse_ptr("34.95.233.217") == [], "云 PTR 不该当域名"
+    finally:
+        _sock315.gethostbyaddr = _orig_gethost315
     # 6) FOFA 查询串要清掉引号与反斜杠（会提前闭合/转义掉闭合引号）
     assert fofa.build_cert_query('a"b\\c.com') == 'cert="abc.com"', fofa.build_cert_query('a"b\\c.com')
     assert fofa.build_title_query('x"y') == 'title="xy"'
@@ -31154,8 +31173,21 @@ expression: r0()
     assert "以 mode 行为准" in _dseg252, "注释没提醒读者档位描述可能过期"
     # 请求量口径要写在注释里（用户拿它判断"占不占时间"的依据）
     assert "quick ≈ 150" in _dseg252 and "deep ≈ 400" in _dseg252, "注释缺请求量口径"
-    print("[252] 续252 ok: dirscan 默认深扫的事实与注释对齐（过期浅扫文案已修）｜"
-          "注释带请求量口径（quick≈150 / deep≈400+派生）｜门禁钉住注释不再撒谎")
+    # 续315（主理人点单）：dirscan 默认不请求 .js —— 三处一致 + 判定函数带 query/hash
+    from scanner.stages.dirscan import _is_js_path as _js252
+    assert _DEF252["dirscan"]["exclude_js"] is True, "DEFAULTS 必须默认排除 .js"
+    assert "exclude_js: true" in _dseg252, "settings.yaml 缺 exclude_js: true"
+    assert _js252("a.js") and _js252("/x/a.JS?v=1#f"), "带 query/hash 的 .js 也要认"
+    assert not _js252("a.jsx") and not _js252("a.json"), "别把 .jsx/.json 误伤"
+    _dh252 = (ROOT / "scanner" / "stages" / "dirscan.py").read_text(encoding="utf-8", errors="replace")
+    assert 'cfg.get("exclude_js") is not False' in _dh252, "候选路径没过 .js 过滤"
+    _tp252 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8", errors="replace")
+    assert 'name="dirscan_exclude_js"' in _tp252, "策略页没有 .js 排除开关"
+    _ga252 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    assert '"exclude_js": f.get("dirscan_exclude_js") == "1",' in _ga252, "POST 映射没接"
+    print("[252] 续252/续315 ok: dirscan 默认深扫的事实与注释对齐（过期浅扫文案已修）｜"
+          "注释带请求量口径（quick≈150 / deep≈400+派生）｜默认不请求 .js（三处配置一致、"
+          "带 query/hash 也认、策略页开关与 POST 映射都在）｜门禁钉住注释不再撒谎")
     # ------------------------------------------------------------------ [255]
     # 续255：① IP 反查真机验证收尾（续173 剩余项）：.arpa 反解链过滤 / 默认源整批零命中
     #        时追加备用池 / hackertarget 配额耗尽与"无记录"分开；② 目录双斜杠归一
@@ -32074,47 +32106,47 @@ expression: r0()
                 _t.split("## 二、", 1)[1].split("## 三、", 1)[0])
 
     def _check271(_t):
-        """表一点名「两处都关」的 8 项、表二点名「随包开 / 代码默认关」的 8 项（续303 起
-        screenshot 从表一搬到表二：随包 true 而 DEFAULTS false，与 ctlog/fofa 那一族同一档）。"""
+        """表一点名「两处都关」的 8 项、表二点名「随包开 / 代码默认关」的 9 项（续303 起
+        screenshot、续314 起 cert 从表一搬到表二：随包 true 而 DEFAULTS false）。"""
         _a, _b = _tables271(_t)
-        for _s in ("cert", "dev", "icp", "quake", "shodan", "ssrf",
+        for _s in ("crawl", "dev", "icp", "quake", "shodan", "ssrf",
                    "gui.edge_auth", "report"):
             assert f"`{_s}`" in _a, f"表一（两处都关）没点名 {_s}"
-        for _s in ("ctlog", "fofa", "github", "heuristic", "intel", "iprecon", "multileak",
-                   "screenshot"):
+        for _s in ("cert", "ctlog", "fofa", "github", "heuristic", "intel", "iprecon",
+                   "multileak", "screenshot"):
             assert f"`{_s}`" in _b, f"表二（随包开）没点名 {_s}"
 
     _check271(_doc271)
 
     # ① 配置侧逐条对上：表里写了什么，配置就得是什么（反过来也一样）
-    for _s271 in ("cert", "dev", "icp", "quake", "shodan", "ssrf"):
+    for _s271 in ("crawl", "dev", "icp", "quake", "shodan", "ssrf"):
         assert _D271[_s271]["enabled"] is False and _ship271[_s271]["enabled"] is False, \
             f"{_s271} 已不是「两处都关」—— 表一要跟着改"
     assert _D271["gui"]["edge_auth"]["enabled"] is False, "gui.edge_auth 应仍是关（部署开关）"
     assert _D271["report"]["export_enabled"] is False, "报告导出应仍默认关（续171 主理人点单）"
-    for _s271 in ("ctlog", "fofa", "github", "heuristic", "intel", "iprecon", "multileak",
-                   "screenshot"):
+    for _s271 in ("cert", "ctlog", "fofa", "github", "heuristic", "intel", "iprecon",
+                   "multileak", "screenshot"):
         assert _ship271[_s271]["enabled"] is True and _D271[_s271]["enabled"] is False, \
             f"{_s271} 已不是「随包开而代码默认关」—— 表二要跟着改"
 
     # ② 反向：默认**开着**的段不许被写进"没默认开"的表一
     _T1_271 = _tables271(_doc271)[0]
-    for _s271 in ("portscan", "hostcollide", "afrog", "crawl", "takeover"):
+    for _s271 in ("portscan", "hostcollide", "afrog", "takeover"):
         assert _D271[_s271]["enabled"] is True, f"{_s271} 竟不是默认开 —— 这条反例的前提变了"
         assert f"`{_s271}`" not in _T1_271, f"{_s271} 默认就开着，不该出现在「没默认开」的表一里"
 
-    # ③ 变异证伪（§6.1）：摘掉表一里 `cert` 那一行 ⇒ 判据必须立刻红
+    # ③ 变异证伪（§6.1）：摘掉表二里 `cert` 那一行 ⇒ 判据必须立刻红
     _mut271 = "\n".join(_l for _l in _doc271.splitlines() if "`cert`" not in _l)
     try:
         _check271(_mut271)
     except AssertionError:
         pass
     else:
-        raise AssertionError("摘掉表一 cert 那一行后判据没红 ⇒ 这些断言是空写")
+        raise AssertionError("摘掉表二 cert 那一行后判据没红 ⇒ 这些断言是空写")
 
     print("[271] 续271 ok: ⑩「已实现但未默认开启」清单（docs/features-off-by-default.md）｜"
-          "表一 8 项两处都关 / 表二 8 项随包开而代码默认关，逐条与配置对上（续303：screenshot 移到表二）｜"
-          "默认已开的段（portscan/hostcollide/afrog/crawl/takeover）不许混进表一｜"
+          "表一 8 项两处都关 / 表二 9 项随包开而代码默认关，逐条与配置对上（续303：screenshot、续314：cert 移到表二、crawl 进表一）｜"
+          "默认已开的段（portscan/hostcollide/afrog/takeover）不许混进表一｜"
           "变异（摘掉一行）⇒ 判据立刻红")
 
     # ---------------- [272] 续272：门禁「只跑一组」--only（局部验证，不能当全量通过）----------------

@@ -272,12 +272,8 @@ def _reverse_dnsdblookup(ip, settings, logger=None, timeout=None, raw=False):
     if not resp or status != 200:
         return []
     text = resp.get("text") or ""
-    out, seen = [], set()
-    for m in re.finditer(r'((?:[a-z0-9-]+\.)+[a-z]{2,})', text, re.I):
-        d = normalize_domain(m.group(1))
-        if d and d not in seen and not d.endswith(("dnsdblookup.com",)):
-            seen.add(d)
-            out.append(d)
+    # 续315：复用 `_html_domains`（原来这里自写一遍正则，绕过了文件后缀/CDN 过滤）
+    out = _html_domains(text, exclude=("dnsdblookup.com",))
     _src_mark(200, "", len(out))
     return out
 
@@ -290,6 +286,16 @@ def _html_domains(text, exclude=()):
         if not d or d in seen:
             continue
         if any(d == e or d.endswith("." + e) for e in exclude):
+            continue
+        if d.endswith(_FILE_SUFFIXES):      # 续315：avatar.jpg / adsbygoogle.js 不是域名
+            continue
+        if d.startswith(_JS_PSEUDO):        # 续315：JS 属性链不是域名
+            continue
+        if d in _PUBLIC_EXACT:
+            continue
+        if d.split(".")[0] in _JS_WORDS or d.split(".")[-1] in _JS_WORDS:
+            continue
+        if any(d == e.lstrip(".") or d.endswith(e) for e in _PUBLIC_NOISE):
             continue
         seen.add(d)
         out.append(d)
@@ -371,9 +377,40 @@ def _reverse_ptr(ip, settings=None, logger=None, timeout=None, raw=False):
     if not d or not is_domain(d):
         _src_mark(200, "PTR 结果不是合法域名", 0)
         return {"status": 0} if raw else []
+    if d.endswith(_PTR_NOISE):            # 续315：云厂商 PTR，不是业务域名
+        _src_mark(200, "PTR 只返回云厂商主机名", 0)
+        return {"status": 0} if raw else []
     _src_mark(200, "", 1)
     return {"status": 200} if raw else [d]
 
+
+# 续315：HTML 反查页里静态资源名（avatar.jpg / adsbygoogle.js）形态上是"合法域名"，
+# utils.is_domain 会收下；它们不是资产。六个 HTML 源共用这一道过滤（探针实测 rapiddns
+# 67 条里 60+ 条是这类垃圾）。
+_FILE_SUFFIXES = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp",
+                  ".woff", ".woff2", ".ttf", ".eot", ".map", ".txt", ".xml", ".html",
+                  ".htm", ".php", ".asp", ".aspx", ".jsp", ".json")
+# 云厂商 PTR（x.x.x.x.bc.googleusercontent.com / ec2-….amazonaws.com）不是业务域名，
+# 落库只会把"历史·待确认"刷成噪声；PTR 这一路单独挡。
+# 反查页里引用的公共 CDN / 广告 / 字体域（页面模板自带，不是资产）
+_PUBLIC_NOISE = (".googlesyndication.com", ".googleapis.com", ".gstatic.com",
+                 ".jsdelivr.net", ".cdnjs.cloudflare.com", ".bootstrapcdn.com",
+                 ".unpkg.com", ".google-analytics.com", ".doubleclick.net",
+                 ".facebook.com", ".twitter.com", ".youtube.com",
+                 ".cloudflareinsights.com", ".baidu.com", ".googleusercontent.com",
+                 ".hackerone.com", ".w3.org")
+# JS 源码里的属性链（document.getelementbyid / location.href）会被域名正则误收
+_JS_PSEUDO = ("document.", "window.", "location.", "this.", "self.", "event.",
+              "console.", "navigator.", "history.", "arguments.", "response.", "request.",
+              "input.", "dropdown.", "user-dropdown.")
+# 首段/末段是这些词的"域名"都是 JS/HTML 片段（input.addeventlistener、dropdown.classlist.contains）
+_JS_WORDS = {"getelementbyid", "addeventlistener", "classlist", "contains", "active",
+             "href", "src", "value", "target", "length", "push", "slice", "split",
+             "queryselectorall", "logout", "insertbefore", "parentnode", "preventdefault"}
+# 公共词汇表/标准组织（页面模板里引用，不是资产）
+_PUBLIC_EXACT = {"schema.org", "w3.org", "w3schools.com"}
+_PTR_NOISE = (".googleusercontent.com", ".amazonaws.com", ".cloudfront.net",
+              ".azure.com", ".cloudapp.net", ".aliyuncs.com", ".tencent-cloud.net")
 
 # 反查源注册表：名字 → 适配器（任何源失败一律返回 []，永不向外抛异常）
 _SOURCES = {
