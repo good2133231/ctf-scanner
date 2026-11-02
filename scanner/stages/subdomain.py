@@ -473,16 +473,20 @@ class SubdomainStage(Stage):
         # `aicoin-http-gateway` 这类是**拼出来**的，灯塔的 `ALT_DNS_CONCURRENT` 干的就是这件事。
         # 种子＝精简档词 ∪ 本任务已经发现的那些名字的首段标签；只做 `a-b` 这一种形状，
         # 不做笛卡尔积爆炸；超出 `limits.brute_combo_max` 一律等距抽样（0=关）。
-        combo_max = int(limits.get("brute_combo_max", 4000) or 0)
+        combo_max = int(limits.get("brute_combo_max", 40000) or 0)
         if combo_max and brute_domains and found:
             seeds = sorted({n.split(".")[0] for n in found if "." in n} | set(cur))
             seeds = [s for s in seeds if "-" not in s and len(s) <= 12]
             # 种子夹到 200：两两拼接是 |seeds|² 级别（200 ⇒ 4 万对），不夹的话一个 1236 个名字
             # 的任务会先在这里生成 150 万个字符串再抽样 —— 那是白烧内存。
             seeds = seeds[:200]
+            # 续310：这里**必须**显式给 hint —— `_spread` 的默认句是"要用全量把 X 设 0"，
+            # 那是给词表闸门（0=不限）写的；组合爆破的 0 是**关掉整轮**（`if combo_max`），
+            # 照搬默认句就是一句会让用户把功能关掉的假话。
             pairs = _spread(list(dict.fromkeys(
                 f"{a}-{b}" for a in seeds for b in seeds if a != b)),
-                combo_max, ctx.logger, "limits.brute_combo_max")
+                combo_max, ctx.logger, "limits.brute_combo_max",
+                hint="0 表示关闭组合爆破（不是全量）；要更多请调大 limits.brute_combo_max")
             if pairs:
                 ctx.logger.info(
                     f"[subdomain] 组合爆破：{len(seeds)} 个种子两两拼出 {len(pairs)} 个 "

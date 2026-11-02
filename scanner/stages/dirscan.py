@@ -380,8 +380,21 @@ class DirscanStage(Stage):
         # 任务级选项 `dirscan_full`（建任务勾「全目录」/结果页发起「补扫」）可把**单个任务**
         # 强制成深扫，不改全局策略 —— 与 portscan 的 `portscan_full` 同一套语义。
         deep = (forced or str(cfg.get("mode") or "deep").strip().lower() == "deep")
-        # 按技术栈把站点分组：Java 站只吃 jsp 字典、PHP 站只吃 php 字典……判不出的走全量
-        groups = self._group_by_kind(sites, tech_aware)
+        # 续310：CDN 边缘站只吃 `dirs_shallow`，**不进 dirmap 候选**。
+        # 判定结果来自 cdn.py（子域名解析时写入 subdomains.cdn，这里只读不重算 —— §5.14）。
+        # 为什么单列一档：实测 task_5 的 27 个站全是 Cloudflare 标签、整批 403，
+        # dirmap 仍吃了 14 分 25 秒、0 产出后才回退内置；边缘节点上跑大字典是纯浪费。
+        cdn_hosts = self._cdn_hosts(ctx)
+        main_sites, cdn_sites = self._split_cdn_sites(sites, cdn_hosts)
+        if cdn_sites:
+            _cdn_names = [str(s.get("url") or "") for s in cdn_sites]
+            ctx.logger.info(
+                f"[dirscan] {len(cdn_sites)} 个站点解析标为 CDN ⇒ 只吃 dirs_shallow"
+                f"（不吃语言/框架字典、不进 dirmap）：{', '.join(_cdn_names[:5])}"
+                + (" 等" if len(_cdn_names) > 5 else ""))
+        # 按技术栈把站点分组：Java 站只吃 jsp 字典、PHP 站只吃 php 字典……判不出的走全量。
+        # 分组只含**非 CDN** 站点：CDN 站不参与 dirmap 候选，单独走浅扫。
+        groups = self._group_by_kind(main_sites, tech_aware)
         ctx.logger.info(f"[dirscan] {'深扫' if deep else '浅扫'}模式；技术栈分组：" + " / ".join(
             f"{k or '未知'}={len(v)} 站点" for k, v in groups.items()))
         if groups.get("static"):
@@ -444,15 +457,24 @@ class DirscanStage(Stage):
             ctx.logger.info("[dirscan] dirmap 不可用（或 --offline），使用内置字典扫描")
         # 浅扫结果在上面已经拿到，不再叠加任何字典（那是深扫的事）
         if deep and not used_dirmap:
-            entries = self._builtin_scan(sites, cfg, limits)
+            entries = self._builtin_scan(main_sites, cfg, limits)
         elif deep:
             # dirmap 的 `-e` 只认 php/jsp/asp/d/big/all，**吃不下我们的框架字典**
             # （`dirs_wordpress` / `dirs_exposure` 这些自定义文件喂不进去）。装了 dirmap 的
             # 机器上框架层会变成死代码，所以这里补一轮"框架 + 暴露面"的小扫描。
-            extra = self._builtin_scan(sites, cfg, limits, only_fw=True)
+            # 续310：只补**非 CDN** 站（CDN 站按主理人口径只吃 dirs_shallow）。
+            extra = self._builtin_scan(main_sites, cfg, limits, only_fw=True)
             if extra:
                 ctx.logger.info(f"[dirscan] 框架补充扫描新增 {len(extra)} 条")
                 entries.extend(extra)
+        # 续310：CDN 边缘站**深扫也只吃 dirs_shallow**（受 quick_max_paths 截断），
+        # 不跑 dirmap、不吃语言/框架字典。哪怕任务勾了「全目录」也照此 —— 否则
+        # 27 个 Cloudflare 403 站又要吃掉十几分钟。
+        if deep and cdn_sites:
+            _cdn_entries = self._builtin_scan(cdn_sites, cfg, limits, shallow=True)
+            if _cdn_entries:
+                ctx.logger.info(f"[dirscan] CDN 边缘站浅扫新增 {len(_cdn_entries)} 条")
+                entries.extend(_cdn_entries)
 
         # 目录递归（续30，**默认关**）：策略级 `recursive_depth>0` 才生效；但建任务勾了
         # 「目录递归」时落成任务级选项 `recursive_dir` —— 那种情况下**即使策略是关的**也要
@@ -466,8 +488,9 @@ class DirscanStage(Stage):
         # 目录递归（续30）：对上面两种产物**一视同仁** —— 装了 dirmap 的机器走的是 `only_fw`
         # 那条分支，所以不能挂进 `_builtin_scan` 内部，否则"有 dirmap 的机器反而没有递归"
         # （离网 CTF 现场才是常态）。
+        # 续310：CDN 站不递归（主理人口径是"只吃 dirs_shallow"，递归会再打浅扫字典）。
         if deep and entries:
-            entries.extend(self._recursive_scan(sites, entries, rec_cfg, limits))
+            entries.extend(self._recursive_scan(main_sites, entries, rec_cfg, limits))
 
         uniq, seen = [], set()
         for e in entries:
@@ -540,6 +563,45 @@ class DirscanStage(Stage):
         return kept
 
     # ---------- 技术栈分组 / 字典选择 ----------
+
+    @staticmethod
+    def _cdn_hosts(ctx):
+        """本任务里被 cdn.py 标为 CDN 的子域名集合（只读 `subdomains.cdn`）。
+
+        CDN 判定本身不在这里重算（§5.14）：判定结果由 subdomain/probe 在解析时写库，
+        本函数只把"哪些 host 走了 CDN"取出来。只跑 dirscan 的补扫任务没有子域名行
+        ⇒ 返回空集 ⇒ 行为与旧版一致（不会凭空把站点判成 CDN）。
+        """
+        hosts = set()
+        try:
+            rows = db.list_subdomains(ctx.task_id)
+        except Exception:
+            rows = []
+        for row in rows:
+            try:
+                d = dict(row)
+            except (TypeError, ValueError):
+                continue
+            if not str(d.get("cdn") or "").strip():
+                continue
+            name = str(d.get("domain") or "").strip().lower().rstrip(".")
+            if name:
+                hosts.add(name)
+        return hosts
+
+    @staticmethod
+    def _split_cdn_sites(sites, cdn_hosts):
+        """按 `subdomains.cdn` 把站点分成 `(非 CDN, CDN)` 两批；**精确匹配** host。
+
+        不做后缀匹配：`notexample.com` 以 `example.com` 结尾也不等于同一个资产
+        （`[6k]` 那条 label≠token 的误判就是这么来的）。判不出（没有子域名行）的
+        站点留在非 CDN 批，保持旧行为 —— 漏判只会多扫，误判会少扫。
+        """
+        main, cdn = [], []
+        for s in sites or []:
+            host = (urlsplit(str(s.get("url") or "")).hostname or "").strip().lower().rstrip(".")
+            (cdn if host in (cdn_hosts or ()) else main).append(s)
+        return main, cdn
 
     @staticmethod
     def _group_by_kind(sites, tech_aware=True):
@@ -928,8 +990,10 @@ class DirscanStage(Stage):
                 ctx.logger.info(f"[dirscan] dirmap：{len(urls)} 个站点（技术栈 {kind or '未知'}"
                                 f" → -e {e_arg}）…")
             else:
-                ctx.logger.info(f"[dirscan] dirmap：{len(urls)} 个站点（这份没有 -e，"
-                                "按 dirmap.conf 的字典跑）…")
+                # 续310：这句**不许**再写"这份没有 -e"——那句话一轮只在 run() 里报一次
+                # （「用哪份字典、为什么只兜底没认出指纹的站」），两处都写就是同一件事说两遍。
+                ctx.logger.info(f"[dirscan] dirmap：{len(urls)} 个站点（字典＝dirmap.conf 的"
+                                "通用字典；请求数由 dirmap 内部决定，框架不计）…")
             getattr(ctx, "report_progress", lambda f: None)(0.2)   # 续275：即将进 dirmap（本阶段最长的一步）
             argv = self._dirmap_argv(py, script, in_file, threads, e_arg)
             rc, _, err = run_cmd(argv, cwd=script.parent, timeout=7200, throttle=th,
@@ -1182,7 +1246,7 @@ class DirscanStage(Stage):
         # 续248：历史 URL（零目标流量）只在深扫/补充扫并入；浅扫保住精选字典的额度
         _hist248 = {} if shallow else self._history_paths(sites, cfg)
         _self248 = {} if shallow else self._selfurls(sites, cfg)
-        jobs, tally = [], {}
+        jobs, tally, per_site = [], {}, []
         for s in sites:
             kind = _dict_kind(s.get("tech"), s.get("url")) if tech_aware else ""
             fw = _framework_of(s.get("tech"), s.get("url")) if tech_aware else ""
@@ -1204,6 +1268,7 @@ class DirscanStage(Stage):
                     paths.append(_p250); src_of[_p250] = _lab250
             if limit and len(paths) > limit:           # 历史 URL 与字典共用同一个额度
                 paths = paths[:limit]
+            per_site.append((str(s.get("url") or ""), label, len(paths)))
             jobs.extend((s["url"], p, s["url"], src_of.get(p, "?")) for p in paths)
         if not jobs:
             if only_fw:
@@ -1215,6 +1280,14 @@ class DirscanStage(Stage):
                         f"选字典{'（浅扫）' if shallow else ('（框架补充）' if only_fw else '')}"
                         f"（{' / '.join(f'{k}:{v} 站' for k, v in tally.items())}），"
                         f"共 {len(jobs)} 个请求 …")
+        # 续310：每站一行「用哪份字典 / 多少条 / 实际发多少请求」——
+        # 旧版只有一句汇总，看不出"这个站为什么只扫了 150 条"（CDN 站被截断时尤其像没扫）。
+        # `only_fw` 是 dirmap 之后的补充轮，同一站已经在主轮报过，不重复刷屏。
+        if not only_fw:
+            for _u310, _lab310, _n310 in per_site:
+                ctx.logger.info(
+                    f"[dirscan] {_u310}：字典 {_lab310}（{_n310} 条）→ {_n310} 个路径请求"
+                    f"（软 404 基线另计）")
         entries = self._scan(jobs, limits)
 
         # 后缀派生（深扫专用，借鉴 dirmap 的备份文件扩展）：第一轮命中的**文件名型**路径

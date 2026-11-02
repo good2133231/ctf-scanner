@@ -228,7 +228,7 @@ DEFAULTS = {
         "brute_workers": 64,
         # 组合爆破（`a-b` 两两拼，对齐灯塔 alt_dns）每域名的词数上限；0=关。
         # 深档里也没有的那批名字（`api-contract`/`ws-spot`…）只能靠拼 —— 见 `subdomain.py` 4b。
-        "brute_combo_max": 4000,
+        "brute_combo_max": 40000,
         "brute_fallback_max": 3000,
         "brute_dict_warn_min": 1000,
         # 二层遍历每轮最多补探多少个主机（续139，`probe.second_pass`）；攒够就停止 DNS 预筛。

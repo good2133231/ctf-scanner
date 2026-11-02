@@ -268,6 +268,45 @@ def _admin_form117():
         assert ok, f"建测试管理员失败：{msg}"
     return {"username": _ADMIN_NAME117, "password": _ADMIN_PW117}
 
+GATE_TARGET = "http://127.0.0.1:8765/"
+
+
+def _gate_settings():
+    """门禁 settings 基准（唯一产地）：关站外历史 URL、把 dirmap 指向不存在的路径。"""
+    settings = load_settings()
+    settings["dirscan"] = dict(settings.get("dirscan") or {}, history_enabled=False)
+    assert settings["dirscan"]["history_enabled"] is False
+    tools = settings.setdefault("tools", {})
+    tools["dirmap"] = dict(tools.get("dirmap") or {}, script="tools/does-not-exist.py")
+    return settings
+
+def _login7(_cl, _data, **_kw):
+    """带**真验证码**提交登录。
+
+    先按**同一组请求头**取一张码，答案从服务端码库里"这次多出来的那一张"读 ——
+    不碰 client 的 session：Werkzeug 的 Cookie jar 是按「主机[:端口]」存的，
+    [6t] 那批用例逐条换 Host/Origin，`session_transaction()` 默认只读 `localhost`
+    那一份，换主机的用例自然读不到自己刚取的码（实测两条红都出在这里）。
+    码库与 GUI 同进程，测试读它是正当的 —— 生产路径上答案依然只出图、不出库。
+    """
+    from scanner import captcha as _cap7
+    _before78 = set(_cap7._STORE)
+    _cl.get("/captcha.png", **_kw)
+    _fresh78 = [k for k in _cap7._STORE if k not in _before78]
+    assert _fresh78, "取码失败：/captcha.png 没发出新码"
+    _code7 = _cap7._STORE[_fresh78[-1]][0]
+    return _cl.post("/login", data=dict(_data, captcha=_code7), **_kw)
+
+
+def _gate_client():
+    """--only 用的已登录 client（与 main 的正确密码登录走同一套 helper）。"""
+    from gui.app import app
+    c = app.test_client()
+    assert c.get("/").status_code == 302
+    assert _login7(c, _admin_form117()).status_code == 302
+    return c
+
+
 # [5v] 用的固定自签证书与配套私钥（一次性生成的**测试夹具**，不是任何生产凭据）。
 # 内联而不是放文件：证书解析的断言要"零外部依赖、可离线跑"，且这类夹具一旦落盘就容易被
 # 误当成真凭据管理；内联后整段测试自包含。
@@ -527,6 +566,15 @@ def _run_only_groups(names, loc):
     #    函数体里找同组的 `_tables271` 会 NameError。
     _env = dict(globals())
     _env.update(loc)
+    if "settings" not in _env:
+        _env["settings"] = _gate_settings()
+    if "targets" not in _env:
+        _env["targets"] = GATE_TARGET
+    if "c" not in _env:
+        _env["c"] = _gate_client()
+    if "source_label" not in _env:
+        from gui.app import source_label as _sl310
+        _env["source_label"] = _sl310
     for _n in names:
         if _n not in _blocks:
             raise SystemExit(f"[!] 门禁里没有组 [{_n}]（--only 只认 `print(\"[名字] … ok…\")` "
@@ -618,16 +666,7 @@ def main():
           f"sqli 变体 {len(sqli)} 个（原始优先，其余每次随机序）")
 
     # 2c) favicon 平台指纹（mmh3）与外部情报模块（iprecon / fofa）的纯函数行为
-    settings = load_settings()
-    # 续248：历史 URL（wayback CDX / OTX url_list）默认开，但它发往**站外** —— 门禁必须零外部
-    # 请求，全局关掉（需要验它的 [248] 自己造桩打在 urlhist 上，不走网络）。
-    settings["dirscan"] = dict(settings.get("dirscan") or {}, history_enabled=False)
-    assert settings["dirscan"]["history_enabled"] is False
-    # 续217：门禁不拉真实 dirmap（第三方工具、耗时且依赖本机装没装）。需要验适配器的测试
-    # 自己造临时脚本/临时 run_cmd；这里把全局配置指到不存在的路径，让管道只走内置字典。
-    _tools217 = settings.setdefault("tools", {})
-    _tools217["dirmap"] = dict(_tools217.get("dirmap") or {},
-                               script="tools/does-not-exist.py")
+    settings = _gate_settings()
     # 「出厂默认」类判据一律吃 DEFAULTS，**不吃本机 settings.yaml**（§6.2 第一起同族：
     # 续159 用户在策略页把 ctlog 打开，`ctlog_mod.enabled(settings)` 那条当场红，
     # 现象长得像代码坏了 —— 判据要问的是「新克隆拿到什么」，不是「这台机改过什么」）。
@@ -676,7 +715,7 @@ def main():
     print("[2d] body-decode ok: 无 charset → UTF-8 / 声明优先 / GB18030 兜底")
 
     # 3) 离线流水线（probe + vulnscan）打本地靶场
-    targets = "http://127.0.0.1:8765/"
+    targets = GATE_TARGET
     stages = ["probe", "vulnscan"]
     tid = db.create_task("smoke", targets, stages, {"offline": True})
     sync_pocs(settings)
@@ -812,22 +851,6 @@ def main():
     #   （`captcha.issue()` 的答案只留在本进程内存，会话里只有不透明 token —— 伪造不了）。
     #   故意失败的登录一律用**独立 REMOTE_ADDR**：默认回环 IP 的计数要留给后面几十个用例，
     #   阈值由 10 收到 5 之后，共用 127.0.0.1 会把后续登录全刷成 429（[7j] 早就是这一口径）。
-    def _login7(_cl, _data, **_kw):
-        """带**真验证码**提交登录。
-
-        先按**同一组请求头**取一张码，答案从服务端码库里"这次多出来的那一张"读 ——
-        不碰 client 的 session：Werkzeug 的 Cookie jar 是按「主机[:端口]」存的，
-        [6t] 那批用例逐条换 Host/Origin，`session_transaction()` 默认只读 `localhost`
-        那一份，换主机的用例自然读不到自己刚取的码（实测两条红都出在这里）。
-        码库与 GUI 同进程，测试读它是正当的 —— 生产路径上答案依然只出图、不出库。
-        """
-        from scanner import captcha as _cap7
-        _before78 = set(_cap7._STORE)
-        _cl.get("/captcha.png", **_kw)
-        _fresh78 = [k for k in _cap7._STORE if k not in _before78]
-        assert _fresh78, "取码失败：/captcha.png 没发出新码"
-        _code7 = _cap7._STORE[_fresh78[-1]][0]
-        return _cl.post("/login", data=dict(_data, captcha=_code7), **_kw)
 
     assert _login7(c, {"username": _ADMIN_NAME117, "password": "wrong"},
                    environ_base={"REMOTE_ADDR": "198.51.100.201"}).status_code == 200
@@ -34014,6 +34037,158 @@ expression: r0()
           "不自命中）｜映射表 docs/gate-map.md 点名的组号必须都在 smoke 里真实存在（漂了就是一张假地图）｜"
           "降档下限 ≥200 段｜三个变异当场跑红（保险丝恒真、glob 命中与未命中、清单被清空必须回落全档）｜成句文案两态都有")
 
+    # ---------------- [310] 续310：CDN 边缘站只吃浅扫 / dirmap 候选排除 / 每站日志 / 组合爆破默认值 ----------------
+    # 主理人 2026-11-02 定的口径：CDN 边缘站「只吃 dirs_shallow、不跑大字典」；同一天实测 task_5 的
+    # 27 个 Cloudflare 站整批 403，dirmap 仍吃 14 分 25 秒、0 产出后才回退内置 —— 这组把口径钉住。
+    from scanner.stages import dirscan as _ds310
+    from scanner.stages import subdomain as _sub310
+    import yaml as _yaml310
+
+    class _Rec310:
+        def __init__(self):
+            self.lines = []
+
+        def _add(self, msg, *a):
+            self.lines.append(str(msg))
+
+        info = warning = debug = _add
+        error = exception = _add
+
+    # ① 分流纯函数：精确匹配 host（notedge.cdn310.test 不许因后缀撞名被误判）
+    _main310, _edge310 = _ds310.DirscanStage._split_cdn_sites(
+        [{"url": "http://edge.cdn310.test/"}, {"url": "http://origin.cdn310.test/"},
+         {"url": "http://notedge.cdn310.test/"}], {"edge.cdn310.test"})
+    assert [s["url"] for s in _edge310] == ["http://edge.cdn310.test/"], _edge310
+    assert len(_main310) == 2, _main310
+    _m310b, _e310b = _ds310.DirscanStage._split_cdn_sites(
+        [{"url": "http://notedge.cdn310.test/"}], {"edge.cdn310.test"})
+    assert not _e310b and len(_m310b) == 1, "后缀撞名不许被误判成同一个资产"
+
+    # ② _cdn_hosts 只读库里的 cdn 列（不重算）；没有子域名行 ⇒ 空集 ⇒ 旧行为
+    _tid310 = db.create_task("smoke-310-cdn", "http://cdn310.test/", ["dirscan"], {})
+    db.insert_subdomains(_tid310, [("edge.cdn310.test", "smoke"),
+                                   ("origin.cdn310.test", "smoke")])
+    db.set_subdomain_net(_tid310, {"edge.cdn310.test": ("1.1.1.1", "cloudflare"),
+                                   "origin.cdn310.test": ("2.2.2.2", "")})
+    (_TMPDIR / "d310").mkdir(parents=True, exist_ok=True)
+    _ctx310 = StageContext(_tid310, "smoke-310", parse_lines(["http://edge.cdn310.test/"]),
+                           ["dirscan"], {}, settings, _TMPDIR / "d310", _Rec310())
+    assert _ds310.DirscanStage._cdn_hosts(_ctx310) == {"edge.cdn310.test"}, "只该收 cdn 非空的行"
+    _tid310n = db.create_task("smoke-310-nosub", "http://nosub310.test/", ["dirscan"], {})
+    _ctx310n = StageContext(_tid310n, "smoke-310-n", parse_lines(["http://nosub310.test/"]),
+                            ["dirscan"], {}, settings, _TMPDIR / "d310", _Rec310())
+    assert _ds310.DirscanStage._cdn_hosts(_ctx310n) == set(), "没有子域名行 ⇒ 空集（旧行为）"
+
+    # ③ 真跑一次深扫：dirmap 与内置都打桩，只断言「喂了谁、哪一档」
+    _seen310 = {"builtin": [], "dirmap": []}
+    _bs310, _dm310 = _ds310.DirscanStage._builtin_scan, _ds310.DirscanStage._run_dirmap
+    _deps310, _lang310 = _ds310.DirscanStage._dirmap_deps_ok, _ds310.DirscanStage._dirmap_accepts_lang_arg
+    (_TMPDIR / "d310run").mkdir(parents=True, exist_ok=True)
+    try:
+        _ds310.DirscanStage._dirmap_deps_ok = lambda self, py, script: (True, "")
+        _ds310.DirscanStage._dirmap_accepts_lang_arg = lambda self, script: False
+        _ds310.DirscanStage._builtin_scan = lambda self, sites, cfg, limits, only_fw=False, shallow=False: (
+            _seen310["builtin"].append(([s.get("url") for s in sites], bool(only_fw), bool(shallow)))
+            or [])
+        _ds310.DirscanStage._run_dirmap = lambda self, script, groups, tool, lang_arg=True, py=None: (
+            _seen310["dirmap"].append({k: [s.get("url") for s in v] for k, v in groups.items()})
+            or [])
+        _cfg310 = copy.deepcopy(settings)
+        _cfg310["dirscan"] = {"enabled": True, "mode": "deep", "max_paths": 3, "quick_max_paths": 3}
+        _cfg310["tools"]["dirmap"] = dict(_cfg310.get("tools", {}).get("dirmap") or {},
+                                          script="tools/dirmap/dirmap.py")
+        _r310 = _Rec310()
+        _ctx310b = StageContext(_tid310, "smoke-310-run",
+                                parse_lines(["http://edge.cdn310.test/",
+                                             "http://origin.cdn310.test/"]),
+                                ["dirscan"], {}, _cfg310, _TMPDIR / "d310run", _r310)
+        _ctx310b.results["sites"] = [
+            {"url": "http://edge.cdn310.test/", "host": "edge.cdn310.test"},
+            {"url": "http://origin.cdn310.test/", "host": "origin.cdn310.test"}]
+        PipelineRunner(_ctx310b).run()
+        assert any(shallow is False and "http://origin.cdn310.test/" in urls
+                   for urls, _of, shallow in _seen310["builtin"]), _seen310
+        assert any(shallow is True and urls == ["http://edge.cdn310.test/"]
+                   for urls, _of, shallow in _seen310["builtin"]), \
+            f"CDN 站深扫没走浅扫档：{_seen310['builtin']}"
+        _dm_urls = [u for g in _seen310["dirmap"] for v in g.values() for u in v]
+        assert _dm_urls and all("edge.cdn310.test" not in u for u in _dm_urls), \
+            f"CDN 站被喂进 dirmap 了：{_seen310['dirmap']}"
+        assert len([l for l in _r310.lines if "没有 -e" in l]) == 1, \
+            f"「没有 -e」一次运行只该出现 1 次：{[l for l in _r310.lines if '没有 -e' in l]}"
+    finally:
+        _ds310.DirscanStage._builtin_scan, _ds310.DirscanStage._run_dirmap = _bs310, _dm310
+        _ds310.DirscanStage._dirmap_deps_ok = _deps310
+        _ds310.DirscanStage._dirmap_accepts_lang_arg = _lang310
+
+    # ③b 第二处「没有 -e」：_run_dirmap 的日志不许再说一遍（run() 已说过一次）
+    _dmroot310 = _TMPDIR / "dirmap310"
+    _dmroot310.mkdir(parents=True, exist_ok=True)
+    (_dmroot310 / "dirmap.py").write_text("# stub\n", encoding="utf-8")
+    _r310b = _Rec310()
+    _dsinst310 = _ds310.DirscanStage(_ctx310b)
+    _runcmd310 = _ds310.run_cmd
+    try:
+        _ds310.run_cmd = lambda *a, **k: (1, "", "")
+        _dsinst310._run_dirmap(_dmroot310 / "dirmap.py",
+                               {"": [{"url": "http://origin.cdn310.test/"}]},
+                               {"threads": 1}, lang_arg=False, py=sys.executable)
+    finally:
+        _ds310.run_cmd = _runcmd310
+    assert not [l for l in _r310b.lines if "没有 -e" in l], \
+        f"「没有 -e」已在 run() 说过一次，_run_dirmap 不许再说：{_r310b.lines}"
+
+    # ④ 浅扫每站一行「字典 / 条数 / 请求数」（真跑，离线，只打本地夹具）
+    (_TMPDIR / "d310q").mkdir(parents=True, exist_ok=True)
+    _cfg310q = copy.deepcopy(_cfg310)
+    _cfg310q["dirscan"] = {"enabled": True, "mode": "quick", "quick_max_paths": 3}
+    _r310q = _Rec310()
+    _ctx310q = StageContext(_tid310, "smoke-310-quick", parse_lines([targets]),
+                            ["dirscan"], {"offline": True}, _cfg310q, _TMPDIR / "d310q", _r310q)
+    _ctx310q.results["sites"] = [{"url": targets, "host": "127.0.0.1"}]
+    PipelineRunner(_ctx310q).run()
+    _per310 = [l for l in _r310q.lines if "个路径请求" in l]
+    assert _per310 and "字典" in _per310[0] and "3 条" in _per310[0], \
+        f"缺少逐站字典日志（字典/条数/请求数）：{_r310q.lines[-6:]}"
+
+    # ⑤ 组合爆破默认值 40000，且 0 的语义是「关」不是「全量」
+    from scanner.config import DEFAULTS as _def310
+    assert _def310["limits"]["brute_combo_max"] == 40000, \
+        _def310["limits"]["brute_combo_max"]
+    _y310 = _yaml310.safe_load((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
+    assert _y310["limits"]["brute_combo_max"] == 40000, "随包默认与 DEFAULTS 必须同值"
+    _src310 = (ROOT / "scanner" / "stages" / "subdomain.py").read_text(encoding="utf-8")
+    assert 'hint="0 表示关闭组合爆破' in _src310, \
+        "组合爆破 0=关，不许沿用默认的『设 0 用全量』"
+    _r310c = _Rec310()
+    _sp310 = _sub310._spread([f"w{i}" for i in range(10)], 3, _r310c,
+                             "limits.brute_combo_max",
+                             hint="0 表示关闭组合爆破（不是全量）；要更多请调大上限")
+    assert len(_sp310) == 3, _sp310
+    assert "关闭" in _r310c.lines[-1] and "设 0" not in _r310c.lines[-1], _r310c.lines[-1]
+
+    # ⑥ 站点空态两态：被状态码收起时说「另有 N 条」，没有站点时才说「probe 没产出」
+    _tid310e = db.create_task("smoke-310-hidden", "http://h310.test/", ["probe"], {})
+    db.insert_sites(_tid310e, [{"url": "http://hide310.test/", "host": "hide310.test",
+                                "port": "80", "status": 403, "title": "HIDE310", "length": 1}])
+    _pane310 = c.get(f"/tasks/{_tid310e}").get_data(as_text=True)
+    _pane310 = _pane310.split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0]
+    assert "被收起，点分页条上的「显示全部状态码」" in _pane310, "详情页空态要报出被收起的条数"
+    assert "暂无存活站点" not in _pane310, "有站点被收起时不许说 probe 没产出"
+    _page310 = c.get(f"/sites?task={_tid310e}").get_data(as_text=True)
+    assert "被收起，点分页条上的「显示全部状态码」" in _page310, "/sites 空态同口径"
+    assert "没有匹配的站点资产" not in _page310, "/sites 有被收起的行时不许说没有资产"
+    _tid310f = db.create_task("smoke-310-none", "http://n310.test/", ["probe"], {})
+    _pane310f = c.get(f"/tasks/{_tid310f}").get_data(as_text=True)
+    _pane310f = _pane310f.split('id="pane-sites"', 1)[1].split('class="tabpane"', 1)[0]
+    assert "暂无存活站点" in _pane310f and "被收起，点分页条" not in _pane310f, \
+        "真的没有站点时才走「probe 没产出」"
+    assert "没有匹配的站点资产" in c.get(f"/sites?task={_tid310f}").get_data(as_text=True)
+
+    print("[310] 续310 ok: CDN 边缘站只吃 dirs_shallow（深扫也不进 dirmap／不递归；"
+          "精确匹配 host，后缀撞名不误判）｜「没有 -e」一轮只说一次｜内置扫描每站一行"
+          "（字典/条数/请求数）｜组合爆破默认 40000 且 0=关（不再说“设 0 用全量”）｜"
+          "站点空态按 st_hidden 分两态（被收起时不许说 probe 没产出）")
     print("SMOKE PASS")
 
 

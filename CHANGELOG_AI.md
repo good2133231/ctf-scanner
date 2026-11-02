@@ -3,6 +3,50 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续310（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：CDN 边缘站只吃 dirs_shallow｜门禁区域验证可用（`--only 310` 实测 5 秒）
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人 2026-11-02 先批准读 `tools/dirmap/` 确认字典参数，随后把「门禁跑快点」排到最高优先级
+（原话「每次修改跑全量是不是有点浪费时间」「这个优先级高」）。本轮把两条一起落地。
+
+### 改了什么
+
+1. **CDN 边缘站单列一档**（`scanner/stages/dirscan.py`）：从 `subdomains.cdn` 只读判定结果（不重算），
+   深扫也只吃 `dirs_shallow`（受 `quick_max_paths` 截断）、**不进 dirmap 候选、不递归、不吃框架补充**。
+   host **精确匹配**，后缀撞名不误判（`notedge.cdn310.test` ≠ `edge.cdn310.test`）。没有子域名行的补扫任务
+   返回空集 ⇒ 行为与旧版一致（漏判只会多扫，误判会少扫）。
+2. **dirmap 日志**：`_run_dirmap` 里那句「这份没有 -e」删掉，只留 `run()` 里一次（说明用哪份字典、
+   为什么只兜底没认出指纹的站）；内置扫描**每站一行**「字典 X（N 条）→ N 个路径请求（软 404 基线另计）」。
+3. **组合爆破**：`limits.brute_combo_max` 默认 4000 → **40000**（`DEFAULTS`、`settings.yaml`、subdomain 兜底、
+   GUI 兜底四处同改）；`_spread` 的默认句「设 0 用全量」对组合爆破是假话（0=关），显式传 hint 修掉。
+4. **站点空态两态**（`task_detail.html` / `sites.html`）：`st_hidden>0` 时说「另有 N 条被收起」，
+   不许再说「probe 没产出」；真的没有站点时才走原文案。
+5. **门禁区域验证**（`tests/smoke.py`）：把 settings 基准、targets、已登录 client 抽成模块级唯一产地
+   （`_gate_settings()` / `GATE_TARGET` / `_gate_client()` / `_login7`），`--only` 缺变量时自动补。
+   新增组 `[310]`：分流纯函数（含后缀撞名反例）、只读库里的 cdn、深扫桩（CDN 站走 shallow、不进 dirmap）、
+   「没有 -e」恰好一次、逐站日志、默认值 40000 与 0=关、两处空态（被收起 / 真没有）。
+   `docs/gate-map.md` 把 `[310]` 登记进两行。
+
+### 实测数字
+
+- **全量门禁：SMOKE PASS，613 秒**（09:13:09 起，`logs/_smoke310d.log`，334 个组输出行）。
+- **区域验证：`--only 310` 5 秒通过**（含 fixture 启动、DB 初始化、验证码登录）；
+  对照全量 613 秒 —— 开发中改 dirscan/GUI 空态时可以只等这一档。
+- 仍未解决：`--only 5e` 会缺 `tid`（[3] 组建的任务），说明「依赖前序夹具的组」还单跑不了；
+  已抽掉 `source_label` 这一层，`tid` 那类需要前缀模式（见 todo 下一轮）。
+- `[8aa]` 本轮走 lite（400 段），档位说明照常打印。
+
+### 踩过的坑
+
+- **`replace_in_file` 对 34000 行的 smoke.py 是「整文件重写」**：一次单行替换后，17 处中文引号内的转义被
+  去掉（`\"` → `"`，直接 SyntaxError），行尾也从 mixed 翻成纯 CRLF。修法：`git checkout -- tests/smoke.py`
+  从 HEAD 恢复，再用**字节级脚本**重新插入（`logs/_310_block.txt` 读入 + 单次 replace），
+  最后 `git diff --ignore-cr-at-eol --numstat` 只剩 199/27 才收工。AGENTS §2 续280 说的就是这件事，
+  本轮又撞了一次 —— **smoke.py 一律不走编辑器式替换**。
+- **CHANGELOG 正文写「续310」会把上一轮的 `[8as]` 打红**（正文号 > 最新标题号＝空头支票）：
+  本轮标题就用 310，正文不再提 311/313；上一轮 0ad20b6 的正文已改成「dirmap 路由那一轮」。
+
 ## 续308-附3（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：dirmap 参数定义确认（无字典/输出参数）+ GitHub 令牌源码核查 0 命中
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
@@ -14,7 +58,7 @@
       ⇒ **没有**"指定字典文件"参数，也**没有**指定输出目录参数。字典只能改 `dirmap.conf` 的
       `conf.dict_mode*`（`lib/controller/bruter.py:91` 把值拼到 `data/` 下）；输出目录写死在
       `lib/core/common.py:55`（`OUTPUT_PATH = root_path/output`）。
-      ⇒ 续310 按既有预案走"认出 CDN 边缘站就不交给 dirmap"；改 `dirmap.conf` 仍按续105 的
+      ⇒ dirmap 路由那一轮按既有预案走"认出 CDN 边缘站就不交给 dirmap"；改 `dirmap.conf` 仍按续105 的
       "不替外部工具维护第二套配置通道"不做。dirmap `output/` 全机共享那条待办定方案②（dirscan 层互斥）。
 - [x] GitHub 令牌源码核查：被跟踪文件 0 命中（`tests/smoke.py` 两处 `ghp_SMOK…` / `ghp_MULT…` 是**合成变异夹具**，
       不能删）；git 历史只有 CHANGELOG 里 `github_pat_…` 的说明文字（带省略号）；remote URL 无 userinfo；

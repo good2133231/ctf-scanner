@@ -119,7 +119,8 @@
             {% else %}<span class="muted">-</span>{% endif %}</td>
       </tr>
     {% else %}
-      <tr><td colspan="11" class="muted">没有匹配的站点资产。</td></tr>
+      {# 续310：与任务详情页同一口径 —— 被状态码收起时说清"另有 N 条"，别让人以为没有资产。 #}
+      <tr><td colspan="11" class="muted">{% if pager.st_hidden %}按当前状态码筛选后没有可见站点 —— 另有 {{ pager.st_hidden }} 条被收起，点分页条上的「显示全部状态码」查看，<b>入库一条没动</b>。{% else %}没有匹配的站点资产。{% endif %}</td></tr>
     {% endfor %}
     </tbody>
     </table>

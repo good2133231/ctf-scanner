@@ -147,7 +147,7 @@ limits:
   # 组合爆破（把精简档词与已发现名字的首段两两拼成 `a-b`）每域名的词数上限；0=关。
   # 与灯塔逐条比实时，它独有域名里有 10 个**任何字典都没有**（`api-contract`/`ws-spot`/`admin-oss`），
   # 只能拼出来 —— 灯塔的 ALT_DNS_CONCURRENT 干的就是这件事。
-  brute_combo_max: 4000
+  brute_combo_max: 40000
   brute_fallback_max: 3000
   # 字典**条数合计**低于这个值就喊一声（精简档 84 + 深档）。不喊，用户会把"子域名比灯塔少"读成
   # "收集器不行"，而真正差的是字典。深档见 dicts.subdomains_deep（仓库发的是 17.8 万条那份）。

@@ -5573,7 +5573,7 @@ def create_app():
                                "brute_max_words": int(_l0.get("brute_max_words", 0) or 0),
                                "brute_fallback_max": int(_l0.get("brute_fallback_max", 3000) or 0),
                                "brute_workers": int(_l0.get("brute_workers", 64) or 64),
-                               "brute_combo_max": int(_l0.get("brute_combo_max", 4000) or 0),
+                               "brute_combo_max": int(_l0.get("brute_combo_max", 40000) or 0),
                                "brute_dict_warn_min": int(_l0.get("brute_dict_warn_min", 1000) or 0),
                                "brute_max_domains": int(_l0.get("brute_max_domains", 50) or 50),
                                "recrawl_max_hosts": int(_l0.get("recrawl_max_hosts", 300) or 300),

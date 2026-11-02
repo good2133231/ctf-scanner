@@ -428,7 +428,8 @@
             {% elif s.shot_error %}<span class="muted small" title="截图失败原因">截图失败：{{ s.shot_error }}</span>
             {% else %}<span class="muted">-</span>{% endif %}</td></tr>
         {% else %}
-          <tr><td colspan="7" class="muted">暂无存活站点 —— 由 probe 阶段产出；没勾该阶段、或全部目标都探测失败时会是空的。</td></tr>
+          {# 续310：被状态码收起时**不许**说"probe 没产出"—— 有站点、只是当前筛选没显示。 #}
+          <tr><td colspan="7" class="muted">{% if sites_pager.st_hidden %}按当前状态码筛选后没有可见站点 —— 另有 {{ sites_pager.st_hidden }} 条被收起，点分页条上的「显示全部状态码」查看，<b>入库一条没动</b>。{% else %}暂无存活站点 —— 由 probe 阶段产出；没勾该阶段、或全部目标都探测失败时会是空的。{% endif %}</td></tr>
         {% endfor %}
         </tbody>
       </table>

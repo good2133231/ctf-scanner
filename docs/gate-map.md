@@ -22,11 +22,11 @@
 | 记忆文件（`todo.txt` / `CHANGELOG_AI.md` / `AGENTS.md`） | `[8as]` `[295]` `[271]` `[218]` |
 | 随包 `config/settings.yaml` 的默认值 | `[8bq]` `[252]` `[271]` `[219]` |
 | `config/dicts/*`（任何字典） | `[8aq]` `[8ay]`（行数与词表判据） |
-| `gui/app.py` 路由 / `gui/templates/*` | `[5]` `[7s]` `[7y]` `[8at]` `[8au]` `[306]` `[268]` |
+| `gui/app.py` 路由 / `gui/templates/*` | `[5]` `[7s]` `[7y]` `[8at]` `[8au]` `[306]` `[268]` `[310]` |
 | `gui/static/app.js` / `style.css` | `[6n]` `[7r]` `[8az]` + 浏览器 E2E `[7x]` |
 | `scanner/fingerprint.py` / 三张指纹字典 | `[8aa]` `[8ab]` `[8af]` `[8ay]` |
 | `scanner/keystore.py` / 口令档 | `[8f]` `[8bt]` `[302]` `[295]` |
-| `scanner/stages/*` / `scanner/runner.py` | `[6u]` `[7l]` `[7n]` `[5p]` `[5e]` |
+| `scanner/stages/*` / `scanner/runner.py` | `[6u]` `[7l]` `[7n]` `[5p]` `[5e]` `[310]` |
 | `scanner/throttle.py` / `utils.py` 出口 | `[6a]`~`[6g]` `[8q]` |
 | POC 引擎 / `pocs/*` | `[5x]` `[6x]` `[6y]` `[6z]` `[8z]` |
 | `run_bootstrap.py` / `tools/sync_check.py` | `[8d]` `[301]` `[303]` |

@@ -2688,6 +2688,13 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
 - **dirmap 是 GPL-3.0，刻意不内联**（把源码拷进仓库会让整个仓库受 GPL 约束）：
   只保留 `tools/dirmap/` 目录联结 + 外部适配器；对它的 7 处源码修复记录在
   `tools/dirmap_fixes/README.md`（**该目录不含 dirmap 源码**）。
+- **CDN 边缘站只吃浅扫**（续310）：`subdomains.cdn` 有标签的站点，深扫也只吃 `dirs_shallow`
+  （受 `quick_max_paths` 截断），**不进 dirmap 候选、不递归、不吃框架补充**；host 精确匹配，
+  后缀撞名不误判；没有子域名行的补扫任务按空集处理（旧行为）。依据：task_5 的 27 个 Cloudflare
+  站整批 403，dirmap 仍吃 14 分 25 秒、0 产出才回退。另：`dirmap` 的 CLI 只有
+  `-t/--thread`、`-i`、`-iF`、`-lcf`、`--debug`，**没有指定字典文件/输出目录的参数**
+  （字典只能改 `dirmap.conf`，续105 决定不替外部工具维护第二套配置）；
+  `brute_combo_max` 默认已从 4000 提到 40000，**0 表示关闭组合爆破**（不是“全量”）。
 - **软 404 基线的并发重复计算已修**（2026-09-23 续11）：
   原先 `DirscanStage._builtin_scan._baseline()` 是"惰性填字典"且**没有同步**，`pool_run` 的
   20 个线程同时 miss 就各算一遍 —— 单站点 3 个基线探针实测膨胀成 **27~36 个**
