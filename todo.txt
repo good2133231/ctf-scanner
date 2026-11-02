@@ -4607,14 +4607,19 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [ ] 续313 状态码显示档：默认可见收窄成 `200/301/302/404`（5xx 移出），其余收起并报条数、
       `?allst=1` 放开；动共享判据 ⇒ 先把 `[8au]`「已收起 N 条」、`[268]`、`[7s]`、`[6u]` 的数字断言
       grep 一遍一起改
-- [ ] 待主理人点头：读 `tools/dirmap/` 的参数定义，确认有没有"指定字典文件"的参数
-- [ ] `shodan`/`quake`/`gitlab`/`icp` 四组 key 未配；GitHub 网页侧删那把无写权限的 fine-grained 令牌
-      —— 两条都是主理人操作
+- [x] 已确认（2026-11-02，主理人批准读 `tools/dirmap/`）：**CLI 没有"指定字典文件"参数**（只有
+      `-t/--thread`、`-i`、`-iF`、`-lcf`、`--debug`），字典只能改 `dirmap.conf` 的 `dict_mode*`（路径拼在
+      `data/` 下）；**也没有指定输出目录参数**。⇒ 续310 走"认出 CDN 就不交给 dirmap"；改 conf 仍按续105
+      不做；output 共享那条定方案②（dirscan 层互斥）
+- [ ] `shodan`/`quake`/`gitlab`/`icp` 四组 key 未配（主理人操作）
+- [x] GitHub 那把无写权限的 fine-grained 令牌：主理人 2026-11-02 定「只要源码删了就行」⇒ 已核查源码 **0 命中**
+      （被跟踪文件只有 `tests/smoke.py` 两处合成夹具；git 历史只有 CHANGELOG 的 `github_pat_…` 说明文字；
+      remote URL 无 userinfo；含 gitignore 文件的工作树也 0 命中）⇒ 无需改动（该令牌从未入库，见续300）
 - [ ] 旧服务器 `data/scanner.db` 迁移（主理人已说不用管备份）
 - [ ] **dirmap 的输出目录是全机共享的**（`cwd` 固定 `tools/dirmap` ⇒ `output/<netloc>.txt` 不分任务）：
       两个任务同时跑、或上一轮有残留时，一个任务的产物会被另一个读走，而 dirmap 的 `saveResults()` 是
-      「整文件 r+ 重写」⇒ 并发写会互相丢行（今天实测过一次：孤儿 + 活进程同 `-iF` 同 cwd）。修法二选一：
-      ① 确认 dirmap 支不支持指定输出目录（需要读它的参数定义，见下面那条待授权）；② 不支持就在
+      「整文件 r+ 重写」⇒ 并发写会互相丢行（今天实测过一次：孤儿 + 活进程同 `-iF` 同 cwd）。
+      **① 已确认不支持指定输出目录**（`lib/core/common.py:55` 写死 `root/output`，CLI 无输出参数）⇒ 走 ②：
       `dirscan` 层加「同一 netloc 同时只允许一个 dirmap」的互斥，并把「本任务读到的行数」与
       「output 里属于本任务的净增」分开报（否则丢行看起来像 0 命中）
 - [ ] **全量门禁还能不能再压**（要主理人点头，我不擅自降）：档 B 现在 570~630s，剩下的候选只有

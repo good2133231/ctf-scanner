@@ -3,6 +3,30 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续308-附3（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：dirmap 参数定义确认（无字典/输出参数）+ GitHub 令牌源码核查 0 命中
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人 2026-11-02 批准读 `tools/dirmap/` 的参数定义（§0.2 外部路径逐次授权），并定「GitHub 那把令牌只要源码删了就行」。
+
+### 改了什么（只有记忆，没有代码）
+- [x] `tools/dirmap/lib/parse/cmdline.py` 全文只有五个参数：`-t/--thread`、`-i`、`-iF`、`-lcf/--loadConfigFile`、`--debug`
+      ⇒ **没有**"指定字典文件"参数，也**没有**指定输出目录参数。字典只能改 `dirmap.conf` 的
+      `conf.dict_mode*`（`lib/controller/bruter.py:91` 把值拼到 `data/` 下）；输出目录写死在
+      `lib/core/common.py:55`（`OUTPUT_PATH = root_path/output`）。
+      ⇒ 续310 按既有预案走"认出 CDN 边缘站就不交给 dirmap"；改 `dirmap.conf` 仍按续105 的
+      "不替外部工具维护第二套配置通道"不做。dirmap `output/` 全机共享那条待办定方案②（dirscan 层互斥）。
+- [x] GitHub 令牌源码核查：被跟踪文件 0 命中（`tests/smoke.py` 两处 `ghp_SMOK…` / `ghp_MULT…` 是**合成变异夹具**，
+      不能删）；git 历史只有 CHANGELOG 里 `github_pat_…` 的说明文字（带省略号）；remote URL 无 userinfo；
+      含 gitignore 文件的工作树 0 命中；`config/keys.enc.yaml` 是二进制密文。
+      ⇒ 那把无写权限的 fine-grained 令牌**从未进过任何文件**（续300 已记录），源码侧无需改动。
+
+### 实测
+- 扫描命令：`git grep -nE 'gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}'` 只命中两条合成夹具；
+  `rg --no-ignore --hidden`（排除 `.git/tools/.venv/logs/data`）0 命中。
+- `git log --all -S'github_pat_'` 只命中 696b87a 的 CHANGELOG 说明文字。
+- 本轮不改代码，未跑门禁；只改 `todo.txt` / `CHANGELOG_AI.md`，行尾保持原形态（todo 纯 CRLF）。
+
 ## 续308（2026-11-02，WorkBuddy · Qoder-Agent 远端 Linux）：门禁分档——档位由改动清单算出来，不靠人记得
 
 实施者：WorkBuddy · Qoder-Agent 远端 Linux
