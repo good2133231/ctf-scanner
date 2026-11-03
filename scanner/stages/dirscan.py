@@ -526,6 +526,44 @@ class DirscanStage(Stage):
     # ---------- 目标筛选 ----------
 
     @staticmethod
+    def _js_endpoints(ctx, sites):
+        """续316：jsmine 挖出的接口 URL → 目录候选（同 host、保留 query、去重、有上限）。
+
+        jsmine 此前只把 URL 写进 `workdir/js_urls.txt` 与 `ctx.results`，没有任何下游消费
+        （主理人 2026-11-03 点单：jsmine 保留挖域名，但接口那部分不能白跑）。
+        """
+        urls = ctx.results.get("js_urls") or []
+        if not urls:
+            return {}
+        cfg = ctx.settings.get("dirscan") or {}
+        cap = int(cfg.get("js_endpoint_max", 200) or 0)
+        if cap <= 0:
+            return {}
+        by_host = {}
+        for s in sites:
+            h = (urlsplit(str(s.get("url") or "")).hostname or "").lower()
+            if h:
+                by_host.setdefault(h, str(s.get("url") or ""))
+        out = {}
+        for raw in urls:
+            try:
+                p = urlsplit(str(raw))
+            except ValueError:
+                continue
+            h = (p.hostname or "").lower()
+            if p.scheme not in ("http", "https") or h not in by_host:
+                continue
+            path = p.path or "/"
+            if _is_js_path(path):          # 接口 URL 本身是 .js 的不打（静态资源）
+                continue
+            if p.query:
+                path += "?" + p.query
+            bucket = out.setdefault(by_host[h], [])
+            if path not in bucket:
+                bucket.append(path)
+        return {k: v[:cap] for k, v in out.items()}
+
+    @staticmethod
     def _sites_from_targets(ctx):
         """从任务目标直接搭出"站点"列表 —— **只跑 dirscan 的补扫任务**用。
 
@@ -1252,6 +1290,12 @@ class DirscanStage(Stage):
         # 续248：历史 URL（零目标流量）只在深扫/补充扫并入；浅扫保住精选字典的额度
         _hist248 = {} if shallow else self._history_paths(sites, cfg)
         _self248 = {} if shallow else self._selfurls(sites, cfg)
+        # 续316：jsmine 接口 URL 并入（浅扫也吃 —— 通常只有几条，价值高于精选路径）
+        _js316 = self._js_endpoints(ctx, sites) if cfg.get("js_endpoints") is not False else {}
+        if _js316:
+            ctx.logger.info(
+                f"[dirscan] 并入 jsmine 接口 URL {sum(len(v) for v in _js316.values())} 条"
+                f"（{len(_js316)} 站）")
         jobs, tally, per_site = [], {}, []
         for s in sites:
             kind = _dict_kind(s.get("tech"), s.get("url")) if tech_aware else ""
@@ -1272,6 +1316,13 @@ class DirscanStage(Stage):
             for _p250, _lab250 in _self248.get(str(s.get("url") or "").strip(), []):
                 if _p250 and _p250 not in src_of:
                     paths.append(_p250); src_of[_p250] = _lab250
+            # 续316：接口 URL 是**站内真实存在**的路径，放在字典前面（浅扫的 limit 截不到它）
+            _jsp316 = _js316.get(str(s.get("url") or "").strip(), [])
+            if _jsp316:
+                _pre316 = [p for p in _jsp316 if p and p not in src_of]
+                paths = _pre316 + paths
+                for _p316 in _pre316:
+                    src_of[_p316] = "js:endpoint"
             if cfg.get("exclude_js") is not False:    # 续315：默认排除 .js 候选
                 _n0 = len(paths)
                 paths = [p for p in paths if not _is_js_path(p)]

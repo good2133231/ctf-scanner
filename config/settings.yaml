@@ -308,6 +308,11 @@ dirscan:
   quick_max_paths: 150
   big_dict: true
   tech_aware: true
+  # 续316（主理人点单）：**jsmine 挖出的接口 URL 并入目录候选**（同 host、保留 query）。
+  # 此前 jsmine 只把 URL 写进 workdir/js_urls.txt 与内存，没有任何下游消费 = 白跑。
+  # 关掉：js_endpoints=false；单站条数上限：js_endpoint_max
+  js_endpoints: true
+  js_endpoint_max: 200
   # 续315（主理人点单）：默认**不请求 .js**。历史 URL / robots / sitemap 里常带一堆静态 JS，
   # 扫了只是静态资源；要挖 JS 里的接口域名用 jsmine 阶段（它照常跑）。要用就把开关关掉。
   exclude_js: true

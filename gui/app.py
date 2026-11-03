@@ -5752,6 +5752,10 @@ def create_app():
                                     f.get("dirscan_quick_max_paths", 150) or 150),
                                 "suffix_aware": f.get("dirscan_suffix_aware") == "1",
                                 "exclude_js": f.get("dirscan_exclude_js") == "1",
+                                # 续316：jsmine 接口 URL 并入候选（关掉：js_endpoints=false）
+                                "js_endpoints": f.get("dirscan_js_endpoints") == "1",
+                                "js_endpoint_max": int(
+                                    f.get("dirscan_js_endpoint_max", 200) or 200),
                                 "big_dict": f.get("dirscan_big_dict") == "1",
                                 "tech_aware": f.get("dirscan_tech_aware") == "1",
                             # 续248：历史 URL 并入目录候选（零目标流量）

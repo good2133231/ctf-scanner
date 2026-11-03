@@ -87,6 +87,11 @@ class OsintStage(Stage):
         if cfg.get("from_favicon", True) is False:
             ctx.logger.info("[osint] favicon 命中 IP 的反查已关闭（iprecon.from_favicon=false）")
             return []
+        # 续317：总开关必须管住这条子链路 —— 续314 时它只认 from_favicon，
+        # `iprecon.enabled=false`（出厂默认）时照样发真实请求（门禁 [6k] 抓到）。
+        if cfg.get("enabled") is not True:
+            ctx.logger.info("[osint] favicon 命中 IP 的反查跳过（iprecon.enabled 未开）")
+            return []
         cap = int(cfg.get("from_favicon_max", 20) or 0)
         if cap > 0 and len(ips) > cap:
             ctx.logger.info(f"[osint] favicon 命中 IP {len(ips)} 个超过上限 {cap}，仅处理前 {cap} 个")

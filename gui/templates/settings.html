@@ -490,6 +490,11 @@
 扫了没有入口价值；要挖 JS 里的接口域名走 jsmine 阶段（它照常跑）">
       <input type="checkbox" name="dirscan_exclude_js" value="1"
         {{ 'checked' if s.dirscan.exclude_js }}> <b>排除 .js 路径</b>（默认开）</label>
+    <label class="chk" title="续316 主理人点单：jsmine 挖出的接口 URL 是站内真实存在的路径，比字典猜的命中率高">
+      <input type="checkbox" name="dirscan_js_endpoints" value="1"
+        {{ 'checked' if s.dirscan.js_endpoints }}> <b>并入 jsmine 接口 URL</b>（默认开）</label>
+    <label>单站接口 URL 上限
+      <input name="dirscan_js_endpoint_max" value="{{ s.dirscan.js_endpoint_max }}"></label>
     <label class="chk"><input type="checkbox" name="dirscan_suffix_aware" value="1"
       {{ 'checked' if s.dirscan.suffix_aware }}> <b>备份后缀派生</b>（仅深扫）：对命中的文件名型路径
       再试 <code>.bak</code>/<code>.zip</code>/<code>.old</code>/<code>~</code> 等变体</label>

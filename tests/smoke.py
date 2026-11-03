@@ -31188,6 +31188,37 @@ expression: r0()
     print("[252] 续252/续315 ok: dirscan 默认深扫的事实与注释对齐（过期浅扫文案已修）｜"
           "注释带请求量口径（quick≈150 / deep≈400+派生）｜默认不请求 .js（三处配置一致、"
           "带 query/hash 也认、策略页开关与 POST 映射都在）｜门禁钉住注释不再撒谎")
+    # ------------------------------------------------------------------ [316]
+    from scanner.stages.dirscan import DirscanStage as _DS316
+    from scanner.config import DEFAULTS as _DEF316
+    # 续316（主理人点单）：jsmine 挖出的接口 URL 并入 dirscan 候选（此前只有写入、没有下游）
+    assert _DEF316["dirscan"]["js_endpoints"] is True
+    _seg316 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "js_endpoints: true" in _seg316 and "js_endpoint_max: 200" in _seg316, \
+        "settings.yaml 缺 js_endpoints/js_endpoint_max"
+
+    class _C316:
+        def __init__(self, urls, cap=200):
+            self.results = {"js_urls": urls}
+            self.settings = {"dirscan": {"js_endpoint_max": cap}}
+
+    _sites316 = [{"url": "http://a316.test"}]
+    _eps316 = _DS316._js_endpoints(_C316([
+        "http://a316.test/api/x?q=1",
+        "http://a316.test/static/x.js",       # 静态资源不并入
+        "http://b316.test/api",               # 不是本任务站点
+        "http://a316.test/",
+        "http://a316.test/api/x?q=1",         # 重复
+    ]), _sites316)
+    assert _eps316 == {"http://a316.test": ["/api/x?q=1", "/"]}, _eps316
+    assert _DS316._js_endpoints(_C316(["http://a316.test/a", "http://a316.test/b"], cap=1),
+                                _sites316) == {"http://a316.test": ["/a"]}, "上限没生效"
+    assert _DS316._js_endpoints(_C316([]), _sites316) == {}, "空输入应回空"
+    _src316 = (ROOT / "scanner" / "stages" / "dirscan.py").read_text(encoding="utf-8", errors="replace")
+    assert 'src_of[_p316] = "js:endpoint"' in _src316, "候选没并入（标签没写）"
+    assert 'cfg.get("js_endpoints") is not False' in _src316, "开关没接"
+    print("[316] 续316 ok: jsmine 接口 URL 并入 dirscan 候选（同 host / 保留 query / 去重 / "
+          ".js 跳过 / 单站上限）｜三处配置一致｜接线钉点")
     # ------------------------------------------------------------------ [255]
     # 续255：① IP 反查真机验证收尾（续173 剩余项）：.arpa 反解链过滤 / 默认源整批零命中
     #        时追加备用池 / hackertarget 配额耗尽与"无记录"分开；② 目录双斜杠归一
@@ -34539,7 +34570,8 @@ expression: r0()
             pass
 
     _ctx314 = _ty314.SimpleNamespace(
-        settings={"iprecon": {"from_favicon": True, "from_favicon_max": 20},
+        settings={"iprecon": {"enabled": True, "from_favicon": True,
+                              "from_favicon_max": 20},
                   "fofa": {"enabled": True}},
         logger=_Lg314(), stopped=lambda: False)
     _stage314 = _os314.OsintStage(_ctx314)
@@ -34575,6 +34607,44 @@ expression: r0()
           "CDN 证书域名 vendor=True 不判高｜目录重复可折叠｜详情页不再渲染资产关系图｜"
           "邮箱黑名单徽标｜.git 四类折成一行｜SQLi 检查默认关（其它检查照跑）｜爬虫默认关｜耗时选项｜"
           "favicon 裸 IP 先探活再反查（免费源+FOFA ip=，标历史/待确认）")
+
+    # ---------------- [317] 续317：默认值三档口径全量自检（防再漂移） ----------------
+    # 为什么要有这一组：续314 改了 cert/crawl 的默认开合，散在 [118]/[5v]/[265]/[250]/[271]/[8bq]
+    # 六处的断言与文档表全要人工同步，一轮跑了 7 次全量才对齐（每次 10 分钟）。
+    # 这里把"settings.yaml vs DEFAULTS 的 enabled 差异集"**自动算出来**，只允许等于表二登记集。
+    import yaml as _y317
+    from scanner.config import DEFAULTS as _DEF317
+    _ship317 = _y317.safe_load((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")) or {}
+    # 表二：随包 true、代码 DEFAULTS false（续303 screenshot / 续314 cert）
+    _allow317 = {"cert", "ctlog", "fofa", "github", "heuristic", "intel", "iprecon",
+                 "multileak", "screenshot"}
+
+    def _diff317(_defs, _ship):
+        _out = set()
+        for _k, _v in _defs.items():
+            if not isinstance(_v, dict) or "enabled" not in _v:
+                continue
+            _s = _ship.get(_k)
+            if not isinstance(_s, dict) or "enabled" not in _s:
+                continue
+            if bool(_s["enabled"]) != bool(_v["enabled"]):
+                _out.add(_k)
+        return _out
+
+    _mis317 = _diff317(_DEF317, _ship317)
+    assert _mis317 == _allow317, (
+        f"三档口径漂移：settings 与 DEFAULTS enabled 不一致的段 {sorted(_mis317)} "
+        f"≠ 表二登记 {sorted(_allow317)}（新翻开的段要登记进表二，翻回去的要摘掉）")
+    _doc317 = (ROOT / "docs" / "features-off-by-default.md").read_text(
+        encoding="utf-8", errors="replace")
+    for _k317 in sorted(_allow317):
+        assert f"`{_k317}`" in _doc317, f"文档 features-off-by-default.md 缺少 {_k317} 那一行"
+    # 变异证伪（§6.1）：cert 两边都翻成关 ⇒ 差异集少 cert ⇒ 与原登记集不等（判据会红）
+    _mut317 = _diff317({**_DEF317, "cert": dict(_DEF317["cert"], enabled=False)},
+                       {**_ship317, "cert": dict(_ship317.get("cert") or {}, enabled=False)})
+    assert _mut317 != _allow317, "变异态（cert 两边都关）判据没红 ⇒ 这条断言是空写"
+    print("[317] 续317 ok: 三档默认值全量自检（settings vs DEFAULTS 的 enabled 逐段自动比对，"
+          "差异集必须等于表二登记）｜文档每条都在｜变异证伪在位")
 
     print("SMOKE PASS")
 

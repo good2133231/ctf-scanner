@@ -3,6 +3,27 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续316（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：jsmine 接口 URL 接进 dirscan + 三档默认值全量自检
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 已落地
+- **js_urls 不再是死数据**：dirscan 新增 `_js_endpoints`，把 jsmine 挖出的接口 URL 转成目录候选
+  （同 host、保留 query、去重、单站上限 `dirscan.js_endpoint_max=200`、本身是 .js 的跳过），
+  浅扫也吃；日志报「并入 jsmine 接口 URL N 条（M 站）」。
+- **默认值三档口径自检（`[317]`）**：settings.yaml 与 DEFAULTS 的 `enabled` 逐段**自动比对**，
+  差异集必须恰好等于表二登记（cert/ctlog/fofa/github/heuristic/intel/iprecon/multileak/screenshot），
+  否则判红 —— 续314 那种"改了默认值忘同步注释/断言/文档表"的漂移，以后一轮就能抓到。
+- 门禁新增 `[316]`（`_js_endpoints` 纯函数 + 接线钉点）与 `[317]`（三档自检 + 变异证伪）。
+
+### 未做（诚实登记）
+- **真机复验仍没做**：js_endpoints 只过了门禁（纯函数 + 源码钉点），没在真实任务里跑过
+  jsmine→dirscan 串联（一次 10+ 分钟，目标常被 Cloudflare 挡）。
+- FOFA `max_assets` 仍是 100（积分约束，等主理人决定提不提到 1000）。
+
+### 全量
+- <待填>
+
 ## 续315（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：dirscan 不扫 .js + 反查源真机实测与噪声过滤
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
@@ -54,7 +75,7 @@
 
 ### 实测
 - 局部：`--only 194a,198,249,8au,268,306,310,314` 全绿（`[314]` 新增，含探活/反查桩）。
-- 全量：<待填>
+- 全量：**SMOKE PASS，约 10 分钟**（`logs/_smoke316g.log`，341 组；中途红过 3 次：装饰器归属、`[6k]` 抓到 favicon IP 反查绕过总开关、`[145]` POST 映射缺键，均已修）。
 
 ## 续313（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：站点默认可见收窄成 200/301/302/404（5xx 移出）
 

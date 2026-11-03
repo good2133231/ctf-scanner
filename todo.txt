@@ -4542,6 +4542,19 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续316（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：jsmine 接口 URL 接进 dirscan + 三档自检
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 已完成
+- [x] `_js_endpoints`：jsmine 接口 URL 并入 dirscan 候选（同 host / 保留 query / 去重 / 上限 200 / .js 跳过），门禁 [316]
+- [x] 默认值三档自检 [317]：settings 与 DEFAULTS 的 enabled 逐段自动比对，差异集必须等于表二登记
+- [x] 全量：**SMOKE PASS，约 10 分钟**（`logs/_smoke316g.log`，341 组；中途红过 3 次：装饰器归属、`[6k]` 抓到 favicon IP 反查绕过总开关、`[145]` POST 映射缺键，均已修）
+
+### 待办
+- [ ] 真机复验：真实任务跑一次 jsmine→dirscan，确认"并入 jsmine 接口 URL N 条"真出现且能打出命中
+- [ ] FOFA `max_assets` 100 → 是否提高（受积分约束，主理人定）
+
 ## 续315（2026-11-02，WorkBuddy · DeepSeek-V4.1-Flash）：dirscan 不扫 .js + 反查源实测
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

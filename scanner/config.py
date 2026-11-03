@@ -473,6 +473,9 @@ DEFAULTS = {
         # 续315（主理人点单）：默认不请求 .js（历史 URL / 自曝入口里的静态资源，扫了没入口价值；
         # 要挖 JS 里的接口域名走 jsmine 阶段）。关掉它才扫 .js。
         "exclude_js": True,
+        # 续316（主理人点单）：jsmine 挖出的接口 URL 并入目录候选（同 host、保留 query）。
+        "js_endpoints": True,
+        "js_endpoint_max": 200,
         # quick = 只吃 dirs_shallow（敏感路径精选）；deep = 全量分层字典 + dirmap。
         # 任务级选项 dirscan_full=true 可把单个任务强制成 deep（不改全局策略）。
         "mode": "deep",            # 续144：默认深扫（quick＝只吃 dirs_shallow 精选路径）
