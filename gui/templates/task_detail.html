@@ -217,7 +217,8 @@
         {% for v in vulns %}
           <tr data-review="{{ v.review or 'pending' }}">
             <td><span class="sev sev-{{ v.severity }}">{{ v.severity }}</span></td>
-            <td>{{ v.name }}</td>
+            <td>{{ v.name }}{% set _jsv = js_sec.get(v.id) %}{% if _jsv and _jsv.line_text %}<br>
+              <span class="muted small mono" title="命中所在整行（原文）：{{ _jsv.line_text }}">{{ _jsv.line_text|truncate(120) }}</span>{% endif %}</td>
             <td class="muted">{{ v.poc_id }}</td>
             <td class="muted mono">{{ v.target }}{% if v._dup_group %}<details class="dup-inline"><summary class="muted small">另有 {{ v._dup_group|length }} 条同族（同一问题）</summary><ul class="muted small mono dup-list">{% for d in v._dup_group %}<li>{{ d.severity }} · {{ d.poc_id }} · {{ d.target }}</li>{% endfor %}</ul></details>{% endif %}</td>
             <td><select class="rv" data-review-id="{{ v.id }}"
@@ -244,17 +245,25 @@
               <pre id="tvpy-{{ v.id }}">{{ packet_python(v.packets, v.target) }}</pre>
               {% endif %}
               {% else %}<p class="muted small note">{{ no_packets_hint }}</p>{% endif %}
-          {# 续177：JS 疑似凭据的**原文**单独一行（授权目标挖到的按扫描产物处理，
-              AGENTS.md §5.10 注）。"是不是 js-secret 行"由路由侧判（vuln_source 那一处
-              产地），模板只认 js_raw 映射 —— 不在这里抄第二份前缀判据。 #}
-          {% if js_raw.get(v.id) %}
-          <p>凭据原文（单独一行）：<code class="mono">{{ js_raw.get(v.id) }}</code>
+          {# 续177/317：JS 疑似凭据的**原文**（授权目标挖到的按扫描产物处理，AGENTS.md §5.10 注）。
+             主理人 2026-11-03 点单"原文要显示，不然怎么能直观看出"——掩码值 `----***----` 看不出
+             是 jsrsasign 的库代码还是真私钥；这里同时给**命中整行**与**前后文**（js_secrets 的
+             line_text / context，落库时未掩码）。"是不是 js-secret 行"由路由侧判（vuln_source
+             那一处产地），模板只认 js_sec 映射 —— 不在这里抄第二份前缀判据。 #}
+          {% set _js = js_sec.get(v.id) %}
+          {% if _js %}
+          <p class="muted small">掩码值 <code class="mono">{{ _js.value }}</code>
+            · 行号 {{ _js.line }} · 来源 <code class="mono">{{ _js.source }}</code></p>
+          <p class="muted small note">命中所在整行（原文）：</p>
+          <pre>{{ _js.line_text }}</pre>
+          <p class="muted small note">前后文（原文）：</p>
+          <pre>{{ _js.context }}</pre>
             <form method="post" action="{{ url_for('api_jssecret_blacklist') }}" class="inline-form"
                   onsubmit="return confirm('把这个值加入黑名单（下次匹配到就不显示），并把本行判为误报？')">
               <input type="hidden" name="vuln_id" value="{{ v.id }}">
               <input type="hidden" name="next" value="{{ request.full_path }}">
               <button type="submit" class="btn-mini">判误报并拉黑值</button>
-            </form></p>
+            </form>
           {% endif %}
               {% if v.review_note %}<p class="muted small note">复核备注：{{ v.review_note }}</p>{% endif %}</details></td>
           </tr>

@@ -1222,8 +1222,15 @@ def vuln_source(poc_id):
     return "POC"
 
 
-def _js_secret_raw_map(vuln_rows=None, task_id=None, host=None):
-    """js-secret 行 → **原文**映射（续177）：页面渲染传 `vuln_rows`，单行操作传 task_id + host。
+def _js_secret_detail_map(vuln_rows=None, task_id=None, host=None):
+    """js-secret 行 → **原文详情**映射（续177 扩展，2026-11-03 主理人点单"原文要显示"）。
+
+    契约：`{vuln_id: {"value","line_text","context","line","source"}}`。
+    - `value` 是**掩码**（js_secrets.value 落库时就掩过，红线：vulns 行只带掩码）；
+    - `line_text` 是命中所在**整行原文**、`context` 是前后文 —— 这两列才是肉眼判误报的依据
+      （实测：`getPrivateKey=function(){var n=`-----BEGIN RSA PRIVATE KEY-----` 是 jsrsasign
+      库代码、`password:"Contraseña"` 是 i18n 语言包，看掩码根本分辨不出来）。
+
     配对依据：同 host 的 js-secret vulns 行与 `js_secrets` 行是 `stages/jsmine.py`
     同一循环**成对插入**的（先 insert_js_secret 后 insert_vuln，id 严格同序；追加执行
     续跑时两边继续追加、序号继续成立）⇒ 按 host 分组各按 id 排序后按序号对齐。
@@ -1245,8 +1252,22 @@ def _js_secret_raw_map(vuln_rows=None, task_id=None, host=None):
         cands = db.list_js_secrets(tid_, host=host_)
         for i, v in enumerate(vs):
             if i < len(cands):
-                out[int(v["id"])] = cands[i]["value"]
+                c = cands[i]
+                # sqlite3.Row 没有 .get()，按列名直取（SELECT * 的列一定在）
+                out[int(v["id"])] = {
+                    "value": c["value"] or "",
+                    "line_text": c["line_text"] or "",
+                    "context": c["context"] or "",
+                    "line": c["line"] or 0,
+                    "source": c["source"] or "",
+                }
     return out
+
+
+def _js_secret_raw_map(vuln_rows=None, task_id=None, host=None):
+    """js-secret 行 → 掩码值（拉黑接口与旧调用点用；原文详情见 `_js_secret_detail_map`）。"""
+    return {k: v["value"] for k, v in
+            _js_secret_detail_map(vuln_rows, task_id, host).items()}
 
 def build_vuln_matrix(rows):
 
@@ -2930,6 +2951,7 @@ def create_app():
             page_sizes=PAGE_SIZES,
             vulns=_fold_vulns(vuln_rows), vuln_total=vuln_total, vuln_pager=vuln_pager,
             js_raw=_js_secret_raw_map(vuln_rows),
+            js_sec=_js_secret_detail_map(vuln_rows),
 
             vuln_sev=vsev, vuln_q=vq, vuln_page_sizes=PAGE_SIZES,
             vuln_matrix=vuln_overview,
@@ -3463,7 +3485,8 @@ def create_app():
                                task_names={t["id"]: t["name"] for t in tasks},
                                q=q, pager=pager, sort=sort, desc=desc,
                                page_sizes=PAGE_SIZES,
-                               js_raw=_js_secret_raw_map(rows))
+                               js_raw=_js_secret_raw_map(rows),
+                               js_sec=_js_secret_detail_map(rows))
 
 
     @app.route("/api/vulns/review", methods=["POST"])
