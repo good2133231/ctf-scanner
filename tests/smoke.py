@@ -11465,7 +11465,7 @@ http:
     #    包着整张站点表，漏一个 `</form>` 就把分页链接整块吞进表单里。
     #    续250：端口页签多了「全端口扫描」一颗（pane-ports=1）；目录页签仍是零。
     for _pane7s, _post7s, _posts7s in (("pane-ext", 'action="/api/domains/scan-ext"', 1),
-                             ("pane-sites", 'action="/api/sites/reshoot"', 2)):
+                             ("pane-sites", 'action="/api/sites/reshoot"', 1)):
         _seg7s = _det7s.split(f'id="{_pane7s}"', 1)[1].split('class="tabpane"', 1)[0]
         _ig7s = _seg7s.find('<form class="filters" method="get"')
         _ip7s = _seg7s.find(_post7s)
@@ -11474,7 +11474,7 @@ http:
         assert "</form>" in _seg7s[_ig7s:_ip7s], \
             f"{_pane7s}: GET 表单必须在 POST 表单开始前闭合（HTML 不允许 form 嵌套）"
         assert _seg7s.count('method="post"') == _posts7s, \
-            f"{_pane7s}: 该页签 POST 表单数应是 {_posts7s}（续235：站点页签=重截+补图标两个）；多出来的是有人又加了入口"
+            f"{_pane7s}: 该页签 POST 表单数应是 {_posts7s}（续318：补图标按钮已下架，站点页签只剩重截一颗）；多出来的是有人又加了入口"
         assert _seg7s.count("<form") == _seg7s.count("</form>"), \
             f"{_pane7s}: form 标签不配平（漏一个 </form> 会把分页链接整块吞进表单里）"
     # 续250：端口页签**有了**一颗 POST（「全端口扫描」按钮，主理人点单：全端口从建任务表单
@@ -22430,7 +22430,8 @@ expression: r0()
     # 续201：3 → 4（Host 碰撞）；续208：4 → 5（误报复核）；续235：5 → 6（站点「补图标」）
     # 续250：6 → 7（端口页签「全端口扫描」按钮，主理人点单把全端口从建任务表单挪到这里）
     # 续269：7 → 6（Host 碰撞补跑按钮撤掉 —— 默认就跑，不给人手动入口）
-    assert _n_post145 == 6, \
+    # 续318：6 → 5（站点页签「补图标（老数据）」按钮下架 —— 主理人「删了 不要影响观感」）
+    assert _n_post145 == 5, \
         f"详情页 POST 表单总数应 6（新增表单必须显式改这条登记）：实测 {_n_post145}"
     assert _td145.count("url_for('api_hostcollide_run')") == 0, \
         "详情页不该再有 Host 碰撞补跑表单（续269 撤掉：默认就跑）"
@@ -34645,6 +34646,137 @@ expression: r0()
     assert _mut317 != _allow317, "变异态（cert 两边都关）判据没红 ⇒ 这条断言是空写"
     print("[317] 续317 ok: 三档默认值全量自检（settings vs DEFAULTS 的 enabled 逐段自动比对，"
           "差异集必须等于表二登记）｜文档每条都在｜变异证伪在位")
+
+    # ---------------- [318] 续318：产品级指纹接通 probe（sites.tech 出现产品名） ----------------
+    import json as _json318
+    import scanner.fingerprint as _fp318
+    import scanner.pocs.engine as _eng318
+    import scanner.stages.probe as _pb318
+
+    # ① 四个产品各自最稳的登录页特征必须认得（按 POC tags 的拼写命名）
+    _cases318 = {
+        "seeyon": "<title>致远OA</title><script>var _ctxpath = '/seeyon';</script>",
+        "e-weaver": "<title>泛微协同办公</title><link href='/spa/portal/static/index.css'>",
+        "jeecgboot": "<title>JeecgBoot</title><script>onlinepreviewdomainurl</script>",
+        "fanruan": "<title>FineReport</title><a href='/webroot/decision/login'>",
+    }
+    for _tag318, _body318 in _cases318.items():
+        _hits318 = _fp318.identify({"status": 200, "headers": {}, "text": _body318})
+        assert _tag318 in _hits318, f"{_tag318} 的登录页特征没被识别：{_hits318}"
+    # 变异证伪：换成通用登录页 ⇒ 四个产品一个都不许出现（否则上面的命中是空写）
+    _plain318 = _fp318.identify({"status": 200, "headers": {},
+                                 "text": "<title>Login</title><input name=username>"})
+    assert not ({"seeyon", "e-weaver", "jeecgboot", "fanruan"} & set(_plain318)), \
+        f"通用登录页打出了产品标签：{_plain318}"
+
+    # ② 社区表（致远oa / 泛微-oa / jeecg / 帆软报表-finereport）归一到 POC tags 的拼写
+    assert _fp318.canonical_tags(
+        ["致远oa", "泛微-oa", "weaver-ecology", "jeecg",
+         "帆软报表-finereport", "致远oa-m3-server"]
+    ) == ["e-weaver", "fanruan", "jeecgboot", "m3", "seeyon"], \
+        "同义归一没落到 POC tags 的四个拼写上 ⇒ tech∩tags 会恒为 0"
+
+    # ②b GitHub / nuclei 的 `info.tags` 允许是**逗号字符串**：转换器必须取产品名，
+    #     不能按字符切成 `t`/`a`/`c`（续318 实测 nuclei 表 286 行全是单字母 ⇒ 整份没产品名）
+    import importlib.util as _ilu318
+    _sp318 = _ilu318.spec_from_file_location(
+        "ifp318", str(ROOT / "tools" / "import_fingerprints.py"))
+    _ifp318 = _ilu318.module_from_spec(_sp318)
+    _sp318.loader.exec_module(_ifp318)
+    _d318 = Path(_TMPDIR) / "fp318"
+    _d318.mkdir(parents=True, exist_ok=True)
+    (_d318 / "seeyon-lab.yaml").write_text(
+        "info:\n  name: Seeyon Lab\n  tags: detect,tech,seeyon\n"
+        "  metadata: {verified: true}\nhttp:\n  - path: [\"{{BaseURL}}/\"]\n"
+        "    matchers:\n      - type: word\n        words: [seeyonproductid]\n",
+        encoding="utf-8")
+    _rules318, _stat318 = _ifp318.from_fingerprinthub(str(_d318))
+    assert {r[0] for r in _rules318} == {"seeyon"}, \
+        f"逗号字符串 tags 被切成了单字母：{_rules318}"
+    if (ROOT / "config/dicts/fingerprints_nuclei.txt").exists():
+        _nuc318 = (ROOT / "config/dicts/fingerprints_nuclei.txt").read_text(
+            encoding="utf-8", errors="replace")
+        assert not re.search(r"^[A-Za-z]\t", _nuc318, re.M), \
+            "fingerprints_nuclei.txt 里还有单字母标签（重跑 tools/update_pocs.py --source nuclei）"
+
+    # ③ httpx 那行 JSON 必须把根响应喂给 identify（-irr），并带 tech_detail 来源
+    _row318 = {
+        "url": "https://lab318.test/seeyon/", "status_code": 200, "title": "致远OA",
+        "content_length": 100, "webserver": "nginx", "tech": ["Cloudflare", "HTTP/3"],
+        "header": {"set-cookie": "JSESSIONID=abc", "server": "nginx"},
+        "body": _cases318["seeyon"],
+    }
+    _site318 = _pb318.httpx_site(_json318.loads(_json318.dumps(_row318)))
+    assert _site318 and "seeyon" in _site318["tech"].split(","), _site318
+    _detail318 = {d["t"]: d for d in _json318.loads(_site318["tech_detail"])}
+    assert _detail318["seeyon"]["origin"] == "builtin" and \
+        _detail318["seeyon"]["src"] == "doc", _detail318
+    assert "cloudflare" in _detail318 and "Cloudflare" not in _detail318, \
+        f"httpx 的 Cloudflare 没归一到内置拼写：{_detail318}"
+    assert _pb318.httpx_site({**_row318, "failed": True}) is None
+    assert _pb318.httpx_site({**_row318, "status_code": 0}) is None
+
+    # ④ 真跑 probe 的 httpx 档（工具桩住、argv 与产物真读）：
+    #    命令必须带 -irr/-rstr；返回的站点 tech 里必须有产品名
+    _argv318, _logs318 = [], []
+
+    class _Rec318:
+        def info(self, m, *a): _logs318.append(str(m))
+        def warning(self, m, *a): _logs318.append(str(m))
+        def error(self, m, *a): _logs318.append(str(m))
+        def exception(self, m, *a): _logs318.append(str(m))
+        def debug(self, m, *a): pass
+
+    class _Ctx318:
+        settings = copy.deepcopy(settings)
+        options = {"offline": False}
+        throttle = None
+        results = {}
+        logger = _Rec318()
+
+        def __init__(self):
+            self.workdir = Path(_TMPDIR) / "318probe"
+            self.workdir.mkdir(parents=True, exist_ok=True)
+
+        def stopped(self):
+            return False
+
+    def _run318(cmd, *a, **kw):
+        _argv318.append([str(x) for x in cmd])
+        Path(str(cmd[cmd.index("-o") + 1])).write_text(
+            "\n".join(_json318.dumps(r) for r in
+                      (_row318, {**_row318, "url": "http://dead.lab318.test",
+                                 "status_code": 0, "failed": True})) + "\n",
+            encoding="utf-8")
+        return 0, "", ""
+
+    _keep318 = (_pb318.which, _pb318.verify_tool, _pb318.run_cmd, _pb318.flagfind.harvest)
+    try:
+        _pb318.which = lambda *a, **kw: "/fake/httpx"
+        _pb318.verify_tool = lambda *a, **kw: True
+        _pb318.run_cmd = _run318
+        _pb318.flagfind.harvest = lambda *a, **kw: 0
+        _sites318 = _pb318.probe_candidates(_Ctx318(), ["https://lab318.test/seeyon/"])
+    finally:
+        (_pb318.which, _pb318.verify_tool, _pb318.run_cmd, _pb318.flagfind.harvest) = _keep318
+    assert _argv318 and "-irr" in _argv318[0] and "-rstr" in _argv318[0], _argv318
+    assert len(_sites318) == 1 and "seeyon" in _sites318[0]["tech"], _sites318
+
+    # ⑤ 验收里的 tech∩POC tags > 0：站点 tech 必须真能对上 POC 的 tags
+    _metas318 = _eng318.load_all_meta(settings)
+    _tech318 = set(_sites318[0]["tech"].split(","))
+    _linked318 = [m for m in _metas318
+                  if _tech318 & {str(t).lower() for t in
+                                 ((m.get("info") or {}).get("tags") or [])}]
+    assert _linked318, f"tech∩tags = 0（tech={sorted(_tech318)}）⇒ 指纹→POC 排序不会生效"
+    assert any("seeyon" in {str(t).lower() for t in ((m.get("info") or {}).get("tags") or [])}
+               for m in _linked318), "对上的 POC 里没有 seeyon 专有规则"
+    assert "POC 按指纹标签优先" in (ROOT / "scanner/stages/vulnscan.py").read_text(
+        encoding="utf-8", errors="replace"), "vulnscan 那句日志被删了"
+
+    print("[318] 续318 ok: seeyon/e-weaver/jeecgboot/fanruan 产品级指纹（登录页正样本命中、"
+          "通用登录页 0 命中）｜社区别名归一到 POC tags 拼写｜httpx -irr 把根响应喂给 "
+          "identify（sites.tech 出现 seeyon，tech∩tags>0）｜vulnscan 保留「POC 按指纹标签优先」")
 
     print("SMOKE PASS")
 

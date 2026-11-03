@@ -359,12 +359,14 @@
        勾选的行排一次**只跑 screenshot** 的追加运行。为什么不当场截：一次无头浏览器调用要
        几秒到几十秒，压在 HTTP 请求线程里会把整个控制台卡住，而且绕开队列、并发闸与请求预算；
        排队 = 复用既有的追加机制（append_targets 收窄、跨运行去重、沿用同一份任务日志）。 #}
-    {# 续276：站点页签两颗 POST 表单（重截 / 补图标）必须**并列、不可嵌套** ——
+    {# 续276：站点页签的 POST 表单（重截）绝不能嵌套在 GET 筛选表单里 ——
        HTML 不允许 form 嵌套，否则浏览器把外层 reshoot 表单一拆，勾选的站点行被甩到
-       表单外，「勾选站点 → 重截」就只提交 hidden、不提交勾中的 URL（续235 的设计是两颗并列）。
+       表单外，「勾选站点 → 重截」就只提交 hidden、不提交勾中的 URL。
        收口做法：reshoot 表单用 id="reshoot-f" 包住 hidden + 站点表；「重截」按钮用
-       form="reshoot-f" 关联到它（按钮本身仍放在 bulkbar 里，视觉不动）；补图标表单
-       作为 bulkbar 内的并列兄弟表单。 #}
+       form="reshoot-f" 关联到它（按钮本身仍放在 bulkbar 里，视觉不动）。
+       续318（主理人 2026-11-03「删了 不要影响观感」）：「补图标（老数据）」按钮已下架，
+       后端 /api/sites/iconbackfill 与 scanner/iconbackfill.py 保留（幂等维护入口，
+       当前库待补 0 行），门禁 [235] 仍覆盖它。 #}
     <div class="bulkbar">
       <button type="button" class="ghost" id="btn-open-sites" data-pick-from="#tbl-detail-sites"
         title="把勾选的站点逐个在新标签页打开；只开标签页，不发送任何扫描请求">批量打开（勾选站点）</button>
@@ -380,12 +382,15 @@
       <button type="button" class="ghost" id="btn-title-all"
         title="标题列默认只显示前两行；点这一颗全部放开（再点一次全部收回）"
         onclick="var open=false;document.querySelectorAll('#tbl-detail-sites .t-clamp').forEach(function(s){if(!s.classList.contains('t-open')){s.classList.add('t-open');open=true}});if(!open){document.querySelectorAll('#tbl-detail-sites .t-clamp').forEach(function(s){s.classList.remove('t-open')})}this.textContent=open?'全部收起标题':'全部展开标题'">全部展开标题</button>
-      <form method="post" action="{{ url_for('api_icon_backfill') }}" class="inline-form">
-        <input type="hidden" name="task_id" value="{{ task.id }}">
-        <input type="hidden" name="next" value="{{ url_for('task_detail', task_id=task.id) }}#sites">
-        <button type="submit" class="ghost" title="老数据回填（续235）：对本任务「有 favicon 但还没落图标」的行各补抓一次
-          （算 mmh3、图标本体落盘、更新行）；幂等，已补的自动跳过；单次上限 200 行，进度看任务日志">补图标（老数据）</button>
-      </form>
+      {# 续318（主理人 2026-11-03「站点为什么没有显示全部状态码的功能」）：原来只有提示文字里的
+         一个小链接，不显眼；提成 bulkbar 按钮（只改展示，入库一条不动，被收起数报在提示里）。 #}
+      {% if sites_pager.allst %}
+      <a class="ghost btn-mini" href="{{ sites_pager.base }}?stpage={{ sites_pager.page }}{{ sites_pager.st_off }}{{ sites_pager.anchor }}"
+        title="当前显示全部状态码；点一下只留 200/301/302/404">只看 200 / 301 / 302 / 404</a>
+      {% else %}
+      <a class="ghost btn-mini" href="{{ sites_pager.base }}?stpage={{ sites_pager.page }}{{ sites_pager.st_on }}{{ sites_pager.anchor }}"
+        title="把 401 / 403 / 429 与 5xx 也显示出来（入库一条没动，只改展示）">显示全部状态码{% if sites_pager.st_hidden %}（+{{ sites_pager.st_hidden }}）{% endif %}</a>
+      {% endif %}
     </div>
     <form id="reshoot-f" method="post" action="{{ url_for('api_reshoot_sites') }}">
       <input type="hidden" name="task_id" value="{{ task.id }}">
