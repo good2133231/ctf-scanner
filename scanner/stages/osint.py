@@ -521,6 +521,25 @@ class OsintStage(Stage):
         roots = [targets.root_of(h) for h in hosts]
         return list(dict.fromkeys(r for r in roots if r))
 
+    def _cert_has_valid(self, root):
+        """续321：本任务证书表里，该注册域有没有**未过期**的一条（读一次缓存）。
+
+        fail-open：读库失败一律放行 —— 反查闸挂了不该把整条证书反查挡死。
+        """
+        try:
+            rows = getattr(self, "_cert_rows321", None)
+            if rows is None:
+                rows = [dict(r) for r in db.list_certs(self.ctx.task_id)]
+                self._cert_rows321 = rows
+        except Exception:      # noqa: BLE001
+            return True
+        root = str(root or "").lower().strip(".")
+        for r in rows:
+            h = str(r.get("host") or "").lower().strip(".")
+            if (h == root or h.endswith("." + root)) and not int(r.get("expired") or 0):
+                return True
+        return False
+
     def _fofa_cert(self):
         ctx = self.ctx
         cfg = ctx.settings.get("fofa", {}) or {}
@@ -537,7 +556,7 @@ class OsintStage(Stage):
             roots = roots[:cap]
 
         found = []
-        queried = common = pre = 0
+        queried = common = pre = stale = 0
         for root in roots:
             if ctx.stopped():
                 break
@@ -546,6 +565,13 @@ class OsintStage(Stage):
                 pre += 1
                 ctx.logger.info(f'[osint] 证书 cert="{root}" 属已知占位证书（如 example.com），'
                                 f"跳过查询")
+                continue
+            # 续321（主理人 2026-11-03）：整个注册域没有一条未过期证书 ⇒ 跳过。
+            # 过期证书是历史证据，但它说明目标大概率已停/换证，cert= 反查白花请求。
+            if cfg.get("cert_require_valid", True) is not False and not self._cert_has_valid(root):
+                stale += 1
+                ctx.logger.info(f'[osint] 证书 cert="{root}" 跳过：本任务库里该注册域'
+                                f"没有未过期的证书（要照查设 fofa.cert_require_valid: false）")
                 continue
             assets, total, err = fofa_mod.search_cert(root, ctx.settings, logger=ctx.logger)
             if err:
@@ -564,6 +590,7 @@ class OsintStage(Stage):
                 # 续171：随行带上证书反查语法（`cert="root"`），入库进 note
                 found.append((domain, "osint:fofa-cert", fofa_mod.build_cert_query(root)))
         ctx.logger.info(f"[osint] 证书拓展：查询 {queried} 个注册域，跳过通用证书 {common} 个"
+                        + (f"、无有效证书 {stale} 个" if stale else "")
                         + (f"（另有 {pre} 个占位证书连查询都未发）" if pre else ""))
         return found
 

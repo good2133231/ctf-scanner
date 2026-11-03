@@ -10,3 +10,11 @@ next.js	nextjs	Next.js
 深信服安全感知平台	深信服	sangfor
 华天动力oa	华天动力
 图创图书馆集群管理系统	图创图书馆
+# 续318：产品级标签按 POC tags 命名（seeyon / e-weaver / jeecgboot / fanruan），
+# 社区表（FingerprintHub / EHole / afrog）里的同产品写法归一到这里。
+seeyon	致远oa	致远OA	致远-analytics-cloud-分析云	致远-Analytics-Cloud
+e-weaver	weaver-ecology	weaver-eoffice	泛微-oa	泛微OA	泛微云桥-e-bridge	weaver
+e-mobile	泛微emp-移动管理平台	泛微emp
+jeecgboot	jeecg	jeecg-boot	jeecg_boot	JeecgBoot
+fanruan	帆软报表-finereport	帆软数据决策系统	finereport	FineReport	finebi
+m3	致远oa-m3-server

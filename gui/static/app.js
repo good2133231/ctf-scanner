@@ -19,6 +19,21 @@ function pvUpdateTabCounts(counts) {
   });
 }
 
+/* 续322（主理人 2026-11-03）：日志面板按「阶段」分层上色 —— `===== 阶段 N/M：xxx =====`
+   与「流水线开始/完成」行标绿，其它保持默认色。日志内容一律先转义（不信任任何来源）。 */
+function pvRenderLog(box, lines) {
+  if (!box) return;
+  const esc = (s) => String(s).replace(/[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const arr = lines || [];
+  box.innerHTML = arr.map((l) => {
+    const t = esc(l);
+    const isStage = /=====\s*阶段\s*\d+\/\d+：/.test(l)
+      || /=====\s*流水线(开始|完成)\s*=====/.test(l);
+    return isStage ? `<span class="log-stage">${t}</span>` : t;
+  }).join("\n") || "（空）";
+}
+
 async function pollTask(id) {
   const box = document.getElementById("log-box");
   const badge = document.getElementById("st-badge");
@@ -37,7 +52,7 @@ async function pollTask(id) {
         if (stage) stage.textContent = j.current_stage;
         if (prog) prog.textContent = j.progress + "%";
         if (bar) bar.style.width = j.progress + "%";
-        if (box && j.log_tail) box.textContent = j.log_tail.join("\n");
+        if (box && j.log_tail) pvRenderLog(box, j.log_tail);
         if (j.status !== "running" && j.status !== "pending") {
           setTimeout(() => location.reload(), 1500);
           return;
@@ -55,7 +70,7 @@ async function loadLog(id) {
     const r = await fetch(absUrl(`/api/tasks/${id}/status`));
     if (r.ok) {
       const j = await r.json();
-      box.textContent = (j.log_tail || []).join("\n") || "（空）";
+      pvRenderLog(box, j.log_tail);
     }
   } catch (e) { box.textContent = "加载失败"; }
 }

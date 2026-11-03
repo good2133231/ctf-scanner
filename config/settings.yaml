@@ -455,6 +455,9 @@ fofa:
   black_ico_threshold: 200
   cert_enabled: true
   cert_threshold: 200
+  # 续321（主理人 2026-11-03）：该注册域在本任务库里**一条未过期证书都没有** ⇒ 跳过 cert= 反查
+  # （实测 169/281 条证书已过期；目标多半已停/换证）。要照查就设 false。
+  cert_require_valid: true
   max_cert_queries: 10
   title_enabled: true
   title_threshold: 200

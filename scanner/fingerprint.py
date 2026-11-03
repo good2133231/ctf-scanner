@@ -212,17 +212,31 @@ SIGNATURES = {
     "prometheus": [("body", r"(?i)prometheus time series|prometheus/")],
     "rabbitmq": [("headers", r"(?im)^server:\s*rabbitmq"), ("body", r"(?i)rabbitmq management")],
     # ---------- 国产 OA / ERP（CTF 高价值目标）----------
+    # 续318：产品级标签刻意按**POC `info.tags` 的写法**命名（seeyon / e-weaver /
+    # jeecgboot / fanruan）。社区表里同一产品有多种写法（致远oa、泛微-oa、jeecg、
+    # 帆软报表-finereport），由 `fingerprint_aliases.txt` 归一到这四个名字 ——
+    # 不归一的话 `sites.tech ∩ POC tags` 恒为 0，指纹→POC 排序接得再好也不生效。
+    "seeyon": [("body", r"(?i)/seeyon/(?:common|user-data|login|main|portal)|"
+                          r"var\s+_ctxpath\s*=\s*['\"](?:/seeyon|/seeyon/)|seeyonproductid"),
+               ("body", r"(?i)致远[oa]*|a8-v5|m1-server|m3\s*server"),
+               ("cookies", r"(?i)seeyon|loginPage")],
+    "e-weaver": [("body", r"(?i)/spa/portal/|/wui/theme/|/weaver/(?:common|e-cology|ecology)|"
+                          r"/e-cology/|e-cology|ecology_|weaver\.js"),
+                 ("cookies", r"(?i)ecology_|weaver")],
+    "e-mobile": [("body", r"(?i)/e-mobile/|weaver,\s*e-mobile|e-mobile\s*(?:login|平台|移动)"),
+                 ("cookies", r"(?i)e-mobile|emobile")],
     "weaver-ecology": [("body", r"(?i)/spa/portal/|ecology|weaver.*e-cology|/wui/theme/"),
                        ("cookies", r"(?i)ecology_|weaver")],
     "weaver-eoffice": [("body", r"(?i)eoffice|e-mobile"), ("cookies", r"(?i)eoffice")],
-    "seeyon": [("body", r"(?i)seeyon|/seeyon/|致远"), ("cookies", r"(?i)JSESSIONID.*seeyon|loginPage")],
     "tongda-oa": [("body", r"(?i)ispirit|/general/|通达"), ("cookies", r"(?i)OA_USER|ispirit")],
     "landray": [("body", r"(?i)landray|蓝凌|/sys/ui/")],
-    "fanruan": [("body", r"(?i)finereport|/webreport/|finebi")],
+    "fanruan": [("body", r"(?i)finereport--web\s*reporting\s*tool|finereport|finebi|"
+                          r"reportserver\?op=|/webroot/decision|/webreport/|>数据决策系统")],
     "kingdee": [("body", r"(?i)kingdee|k3cloud|/kdcloud/")],
     "yonyou": [("body", r"(?i)yonyou|用友|nccloud|/uap/")],
     "ruoyi": [("body", r"(?i)ruoyi|若依"), ("headers", r"(?i)ruoyi")],
-    "jeecg": [("body", r"(?i)jeecg|jeecgboot")],
+    "jeecgboot": [("body", r"(?i)jeecgboot|jeecg-boot|jeecg_boot|onlinepreviewdomainurl|"
+                            r"plug-in/ace/")],
     "smartbi": [("body", r"(?i)smartbi")],
     # ---------- CMS / 建站 ----------
     "wordpress": [("body", r"(?i)wp-content|wp-includes"),

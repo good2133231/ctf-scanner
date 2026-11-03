@@ -32,6 +32,9 @@
    把 `condition: and` 拆成两行就等于放宽成 or —— 那会改变上游的判定强度。
    等价写法是"整条锚在开头 + 每个关键词一个前向断言"（见 `_word_regex` 的 and 分支，
    那里连"为什么必须锚定、不锚定会慢多少"都写了实测数字）。
+   续318 补充：**probe 级 `matchers-condition: and`** 跨 matcher 的 AND 单行表表达不了，
+   `_generic_match()` 先丢掉 `text/html` 这类通用判据，再取剩下最长的一条近似
+   （宁可弱一点，也不能让一个 content-type 判据把产品标签打到全站）。
 
 用法：
     python3 tools/import_fingerprints.py --src /path/to/FingerprintHub/web-fingerprint \\
@@ -58,10 +61,6 @@ def _norm_tag(name, fallback=""):
     """
     t = re.sub(u"[^0-9a-zA-Z._\u4e00-\u9fff-]+", "-", str(name or fallback or "").strip().lower())
     return t.strip("-._")[:40]
-
-
-def _ci(flag):
-    return "i" if flag else ""
 
 
 # 续197 实测：EHole 那张表把一个产品的关键词列成**数组**，里面既有特有串
@@ -118,17 +117,51 @@ def _word_regex(words, case_insensitive, condition):
         # 试一遍 `(?=.*w)`，而 `.*` 每次都要扫到文本末尾 ⇒ 单条规则在 3 KB 正文上就要 40+ ms、
         # 在 100 KB 上直接卡死（4468 条规则里 456 条是 and 类，扫描一轮 9.45 s）。
         # 锚到开头后每个断言只扫一遍，成本降到 O(词数 × 正文长度)。
-        return "(?%ss)^%s" % (_ci(case_insensitive),
-                              "".join("(?=.*%s)" % re.escape(w) for w in ws))
-    return "(?%s)(?:%s)" % (_ci(case_insensitive), alts)
+        #
+        # 续318：不分大小写时**不能**拼 `(?%s)` —— `_ci(False)` 是空串，`"(?)s^…"` 编译
+        # 直接抛 unknown extension（整条规则被当成 compile_fail 丢掉）。前缀按需拼。
+        return ("(?is)^" if case_insensitive else "(?s)^") + \
+            "".join("(?=.*%s)" % re.escape(w) for w in ws)
+    return ("(?i)(?:%s)" if case_insensitive else "(?:%s)") % alts
 
 
 def _regex_merge(regexes, case_insensitive):
     rs = [str(r) for r in (regexes or []) if str(r).strip()]
     if not rs:
         return ""
+    if len(rs) == 1 and not case_insensitive:
+        return rs[0]
+    # 续318：同 `_word_regex`，不分大小写时不能拼出 `(?)`（编译期直接报错）
     body = "|".join("(?:%s)" % r for r in rs)
-    return "(?%s)%s" % (_ci(case_insensitive), body) if len(rs) > 1 or case_insensitive else rs[0]
+    return "(?i)" + body if case_insensitive else body
+
+
+# 续318：nuclei 的 `matchers` 里混着 `content-type` / `text/html` 这种**任何响应都成立**
+# 的判据。我们的表是"同标签任一命中即算" ⇒ 它会把该产品标签打到全站（实测 12 份通用
+# 负样本里 `default-page`/`express`/`oracle` 各命中 11 份）。这类判据一律丢弃；
+# 与产品判据处在 `matchers-condition: and` 里时，取**最长的那条**（最具体）近似 ——
+# 单行表表达不了跨 matcher 的 AND，宁可弱一点也不能退化成通用标签。
+_GENERIC_MATCH = {
+    "text/html", "text/plain", "text/xml", "text/css", "text/javascript",
+    "application/json", "application/xml", "application/javascript",
+    "application/xhtml+xml", "application/octet-stream",
+    "image/png", "image/jpeg", "image/gif", "image/svg+xml", "*/*",
+}
+
+
+def _generic_match(rx):
+    """这条判据是不是"任何响应都成立"的通用串（content-type / 裸状态码）。"""
+    p = re.sub(r"\\(.)", r"\1", str(rx or ""))          # 去转义
+    p = re.sub(r"\(\?:|\?:|\)|\s+", "", p).lower()      # 去非捕获组 / 空白
+    p = re.sub(r"^\(\?[a-z]+\)", "", p)                 # 去 `(?i)` 这类全局标志
+    p = p.strip("^$")
+
+    def _one(q):
+        return (q in _GENERIC_MATCH
+                or bool(re.fullmatch(r"(?:text|application)/[a-z0-9.+\-]+", q))
+                or q.isdigit())
+
+    return all(_one(q) for q in p.split("|") if q)
 
 
 def _part_of(m):
@@ -156,8 +189,9 @@ def from_fingerprinthub(src, verified_only=True):
     except ImportError:
         print("[!] 需要 PyYAML：pip install pyyaml", file=sys.stderr)
         return [], {}
-    stat = {"files": 0, "bad_yaml": 0, "matchers": 0, "skipped_path": 0,
-            "favicon": 0, "negative": 0, "compile_fail": 0, "short": 0, "unverified": 0}
+    stat = {"files": 0, "bad_yaml": 0, "matchers": 0, "skipped_path": 0, "favicon": 0,
+            "negative": 0, "compile_fail": 0, "short": 0, "unverified": 0,
+            "generic": 0, "and_partial": 0}
     out = []
     # 目录是**两层**：`web-fingerprint/<组件名>/<规则>.yaml`（一个组件可能有好几个规则文件，
     # 例如同一产品的不同固件版本），所以要递归找 —— 只看一层会一条都读不到。
@@ -178,7 +212,14 @@ def from_fingerprinthub(src, verified_only=True):
         # `tags: aem,tech,discovery`），取不到才退 `info.name`（"AEM Finder"这种带 Finder 的
         # 名字转出来是 aem-finder，与我们的指纹标签体系对不上）。泛词（tech/discovery/detect/
         # fingerprint/cms/fingerprinting）跳过 —— 它们不是产品名。
-        _tag_pool = [str(t) for t in (info.get("tags") or []) if str(t).strip()]
+        # nuclei 的 `tags` 允许写成**逗号分隔的字符串**（官方 `http/technologies/` 就是
+        # `tags: tech,<产品名>` 这一形）。直接迭代字符串会按字符切 ⇒ 每行标签变成
+        # `t`/`a`/`c` 这种单字母（续318 实测 `fingerprints_nuclei.txt` 286 行全是这样，
+        # 等于整份表没有产品名）。列表与字符串两形都在这里展开，只此一处。
+        _tags = info.get("tags") or []
+        if isinstance(_tags, str):
+            _tags = [x.strip() for x in _tags.split(",")]
+        _tag_pool = [str(t) for t in _tags if str(t).strip()]
         _tag_pool = [t for t in _tag_pool
                      if t.strip().lower() not in ("tech", "technology", "discovery", "detect",
                                                   "fingerprint", "fingerprinting", "cms",
@@ -196,6 +237,8 @@ def from_fingerprinthub(src, verified_only=True):
                                  p.replace("{{BaseURL}}", "").strip("/") == "" for p in paths):
                 stat["skipped_path"] += 1
                 continue
+            _and = str(probe.get("matchers-condition") or "").strip().lower() == "and"
+            _specs = []
             for m in (probe.get("matchers") or []):
                 if not isinstance(m, dict):
                     continue
@@ -212,8 +255,6 @@ def from_fingerprinthub(src, verified_only=True):
                 if kind == "word":
                     rx = _word_regex(m.get("words"), ci, cond)
                 elif kind == "regex":
-                    if len(str(m.get("regex") or "")) < 0:
-                        continue
                     rx = _regex_merge(m.get("regex") or [], ci)
                 else:
                     continue
@@ -225,7 +266,20 @@ def from_fingerprinthub(src, verified_only=True):
                 except re.error:
                     stat["compile_fail"] += 1
                     continue
-                out.append((tag, _part_of(m), rx))
+                if _generic_match(rx):
+                    stat["generic"] += 1
+                    continue
+                _specs.append((_part_of(m), rx))
+            if not _specs:
+                continue
+            if _and:
+                # 跨 matcher 的 AND 表达不了：取最长（最具体）的那条做近似。
+                _best = max(_specs, key=lambda x: (len(x[1]), x[0] == "body"))
+                stat["and_partial"] += 1
+                out.append((tag, _best[0], _best[1]))
+            else:
+                for _where, _rx in _specs:
+                    out.append((tag, _where, _rx))
     return out, stat
 
 

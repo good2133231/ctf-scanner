@@ -360,11 +360,12 @@ def search_query(query, settings, logger=None, size=None):
     total = data.get("size") or 0
     consumed = _int_field(data, "consumed_fpoint", "consumed_fpoints")
     required = _int_field(data, "required_fpoints", "required_fpoint")
-    if logger and (consumed is not None or required is not None):
-        if consumed is not None:
-            logger.info(f"[fofa] 本次查询消耗 {consumed} 积分（余额接口不可用，只报消耗）")
-        else:
-            logger.info(f"[fofa] 本次查询需 {required} 积分（接口未报实际消耗；余额接口不可用，只报消耗）")
+    # 续322（主理人 2026-11-03）：实测 API **不扣积分**（consumed_fpoint=0），每次查询都打一行
+    # 是纯噪声（真机日志里 11 行）。只有真消耗 >0 才 INFO，0/未知一律 DEBUG。
+    if logger and consumed:
+        logger.info(f"[fofa] 本次查询消耗 {consumed} 积分（余额接口不可用，只报消耗）")
+    elif logger and required:
+        logger.debug(f"[fofa] 本次查询需 {required} 积分（接口未报实际消耗；余额接口不可用，只报消耗）")
     assets = []
     for row in (data.get("results") or []):
         if not isinstance(row, (list, tuple)):

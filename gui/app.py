@@ -1373,6 +1373,21 @@ def create_app():
         """续223：站点标签分主次（主文档+内置 > … > 未知，前 4 个主标签，其余折叠）。"""
         return fingerprint.tech_groups(tech, detail, max_primary=3)
     app.jinja_env.globals["tech_view"] = _tech_view
+
+    def _tech_origin(detail, tag):
+        """续323（主理人 2026-11-03）：取某个技术栈标签的 origin（external/builtin）。
+
+        只读展示用：外置 httpx tech-detect 的标签在页面上加虚框，表示"猜的、误报率高"。
+        不改 `fingerprint.tech_groups` 的判据（那部分正在被另一个 AI 改，避免冲突）。
+        """
+        try:
+            for it in json.loads(detail or "[]"):
+                if isinstance(it, dict) and str(it.get("t") or "") == str(tag or ""):
+                    return str(it.get("origin") or "")
+        except (ValueError, TypeError):
+            pass
+        return ""
+    app.jinja_env.globals["tech_origin"] = _tech_origin
     app.jinja_env.globals["packet_curl"] = packetcodec.to_curl
     app.jinja_env.globals["packet_python"] = packetcodec.to_python
     app.jinja_env.globals["dir_url"] = _dir_url
@@ -2814,9 +2829,17 @@ def create_app():
         # 续265：证书按同一张证书折叠（主理人点单「网站证书自动去重」）。整表取是必要的：
         # 折叠是**跨行**语义，下推到 SQL 就等于把"同一张证书"的判据写进 SQL 与 Python 两处。
         _cr_all = request.args.get("all") == "1"
+        # 续321（主理人 2026-11-03）：证书默认**只看未过期**（过期占 60%，是历史证据不是现状）；
+        # `?crv=0` 切回全部。库里一条不删，被收起的条数在按钮上报。
+        _cr_valid = request.args.get("crv") != "0"
         _cr_page, _cr_size, certs_q = _tab_args("cr")
         certs_all, _cr_hidden = _fold_certs([dict(r) for r in db.list_certs(task_id)],
                                             show_all=_cr_all)
+        _cr_expired = sum(1 for r in certs_all if r.get("expired"))
+        # 徽标口径（§0 第 10 条）：被「只看未过期」收起的也是事实，不从徽标里消失
+        _cr_total_all = len(certs_all)
+        if _cr_valid:
+            certs_all = [r for r in certs_all if not r.get("expired")]
         if certs_q:      # 关键字按**表格实际显示的列**做整行匹配（与 _ASSET_PAGES["certs"] 同口径）
             _cr_cols = ("source", "url", "host", "cn", "subject", "issuer", "san",
                         "serial", "sig_algo", "sha256")
@@ -2829,7 +2852,8 @@ def create_app():
             _cr_page = _cr_pages
         certs_rows = certs_all[(_cr_page - 1) * _cr_size:_cr_page * _cr_size]
         certs_pager = _mk_pager(task_id, "cr", "#certs", _cr_page, _cr_size, _cr_total, certs_q,
-                                "&all=1" if _cr_all else "")
+                                ("&all=1" if _cr_all else "")
+                                + ("" if _cr_valid else "&crv=0"))
         # 徽标（`cert_total`）恒为**全部行数**：与目录 / 站点页签同一口径（§0 第 10 条 ——
         # 被收起的也是事实，不从徽标里消失）；"收起了几条"只在那颗逃生钮上报。
         certs_folded = 0 if _cr_all else _cr_hidden
@@ -2943,8 +2967,8 @@ def create_app():
             sites_pager=sites_pager, sites_q=sites_q, site_total=site_total,
             ports_pager=ports_pager, ports_q=ports_q,
             csegs_pager=csegs_pager, csegs_q=csegs_q,
-            certs_pager=certs_pager, certs_q=certs_q, cert_total=certs_pager["total"],
-            certs_folded=certs_folded,
+            certs_pager=certs_pager, certs_q=certs_q, cert_total=_cr_total_all,
+            certs_folded=certs_folded, certs_valid=_cr_valid, certs_expired=_cr_expired,
             dirs_pager=dirs_pager, dirs_q=dirs_q, dir_total=dir_total,
             urls=urls, urls_pager=urls_pager, urls_q=urls_q, url_total=url_total,
 

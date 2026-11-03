@@ -22421,10 +22421,14 @@ expression: r0()
     # 来这里显式登记；/api/rescan 依旧一个不许有（上面已断言）。变异证伪：删任一表单 ⇒
     # 点名红；新增表单不来登记 ⇒ 总数红。
     for _act145 in ("api_scan_ext", "api_reshoot_sites", "api_jssecret_blacklist",
-                     "api_icon_backfill", "api_ports_fullscan"):
+                     "api_ports_fullscan"):
         _cnt145 = _td145.count(f"url_for('{_act145}')")
         assert _cnt145 == 1, \
             f"详情页 {_act145} 表单应恰好 1 个：实测 {_cnt145}"
+    # 续318（主理人 2026-11-03「删了 不要影响观感」）：补图标按钮已下架 ⇒ 页面入口必须 0 个；
+    # 后端 /api/sites/iconbackfill 与 scanner/iconbackfill.py 保留（幂等维护入口，门禁 [235] 仍测它）。
+    assert _td145.count("url_for('api_icon_backfill')") == 0, \
+        "详情页不该再有「补图标（老数据）」入口（续318 下架，后端保留）"
     _n_post145 = _td145.count('method="post"')
     # 续201：3 → 4（Host 碰撞）；续208：4 → 5（敏感信息候选的「误报」复核表单）
     # 续201：3 → 4（Host 碰撞）；续208：4 → 5（误报复核）；续235：5 → 6（站点「补图标」）
@@ -34777,6 +34781,46 @@ expression: r0()
     print("[318] 续318 ok: seeyon/e-weaver/jeecgboot/fanruan 产品级指纹（登录页正样本命中、"
           "通用登录页 0 命中）｜社区别名归一到 POC tags 拼写｜httpx -irr 把根响应喂给 "
           "identify（sites.tech 出现 seeyon，tech∩tags>0）｜vulnscan 保留「POC 按指纹标签优先」")
+
+    # ---------------- [319] 续319：VT/OTX 被动 DNS 反查源 ----------------
+    # 主理人 2026-11-03 点单：补两个"历史解析"源（FOFA ip= 是当前资产快照，语义不同）。
+    # VT 需 key（免费 4 次/分钟）、OTX 免 key；两者都必须走统一噪声过滤。
+    import json as _j319
+    import scanner.iprecon as _ir319
+    assert _ir319._SOURCES.get("otx") and _ir319._SOURCES.get("virustotal"), \
+        "VT/OTX 没注册进 _SOURCES"
+    assert "otx" in _ir319.DEFAULT_SOURCES, "otx 没进默认源"
+    _orig319 = _ir319.http_request
+    _calls319 = []
+
+    def _fake319(url, method="GET", headers=None, data=None, timeout=10, **kw):
+        _calls319.append((url, dict(headers or {})))
+        if "virustotal.com" in url:
+            return {"status": 200, "text": _j319.dumps({"data": [
+                {"attributes": {"host_name": "a319.test"}},
+                {"attributes": {"host_name": "a319.test"}},
+                {"attributes": {"host_name": "1.2.3.4"}},
+            ]})}
+        return {"status": 200, "text": _j319.dumps({"passive_dns": [
+            {"hostname": "b319.test"}, {"hostname": "avatar.jpg"},
+            {"hostname": "document.getelementbyid"}, {"hostname": "b319.test"},
+        ]})}
+    try:
+        _ir319.http_request = _fake319
+        # ① 无 key：一次请求都不发（配置缺失必须显式降级，不是打别人的接口）
+        assert _ir319._reverse_virustotal("1.2.3.4", {}) == []
+        assert not _calls319, "没有 VT key 却发了请求"
+        # ② 有 key：解析 host_name、去重、裸 IP 丢弃、带 x-apikey
+        _vt319 = _ir319._reverse_virustotal("1.2.3.4", {"keys": {"virustotal": {"key": "k"}}})
+        assert _vt319 == ["a319.test"], _vt319
+        assert any(k.lower() == "x-apikey" for k in _calls319[-1][1]), "VT 没带 key 头"
+        # ③ OTX：静态资源名 / JS 属性链过滤 + 去重
+        _otx319 = _ir319._reverse_otx("1.2.3.4", {})
+        assert _otx319 == ["b319.test"], _otx319
+    finally:
+        _ir319.http_request = _orig319
+    print("[319] 续319 ok: VT/OTX 被动 DNS 源（无 key 不发请求 / VT 带 x-apikey / 去重 / "
+          "静态资源名与 JS 属性链过滤）")
 
     print("SMOKE PASS")
 

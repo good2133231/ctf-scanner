@@ -571,7 +571,7 @@ ctf-scanner/
 │   │                      #   零额外请求；没有新增就一行都不写、也不打日志
 │                          #   判定带**必现字面量前置过滤**（续122，`required_literals`/`_lit_filter`）：
 │                          #   字面量不在文本里 ⇒ 这条规则一定不命中 ⇒ 跳过 re.search（实测 900KB 13x）
-│                          #   规则是 `(part, 正则[, 状态码集合])`；**两个来源**：内置 SIGNATURES（103 个标签，
+│                          #   规则是 `(part, 正则[, 状态码集合])`；**两个来源**：内置 SIGNATURES（105 个标签，
 │                          #   一律不分状态）+ 外置 `config/dicts/fingerprints_extra.txt`（续120，带状态码门控，
 │                          #   TAB 分隔，坏行进问题清单不静默；缓存按 (路径,mtime,size)，改字典不用重启）
 │   ├── certs.py           # TLS 证书取证（**纯标准库** DER/ASN.1 解析，不引 cryptography）：parse_der/parse_pem/fetch/tls_ports
@@ -1174,8 +1174,9 @@ ctf-scanner/
     被后面阶段的补标抹掉等于把第一手证据改成第二手。
     ② 补标的输入只能是**已经发过的响应**（dirscan 每条命中、jsmine 页面与每个 JS），
     `collect/flush` 的函数体内不许出现 `http_request` / `run_cmd` / `socket`（AST 判据）。
-    想给"没正文的那两路"（httpx 档的 probe、dirmap 产物行）补数据就得真加请求 —— 那是
-    另一个决定，必须单独一轮，不许在这里顺手加。
+    续318：httpx 档的 probe 已由 `-irr` 在**同一次请求**里带回正文（根响应用于内置/外置
+    指纹识别与 flag 抽取），所以"没正文"只剩 dirmap 产物行那一路；要给它补正文就得真加
+    请求，属独立一轮，不许在这里顺手加。
     ③ 内存与库**两处都要改**：下游（vulnscan 的 POC 优先、dirscan 的框架字典）读
     `ctx.results["sites"]`，页面与报告读库，只改一边就是"页面上有了、下一阶段当没看见"。
     ④ 判据的**收紧要有实测**。本轮实测（`tools/calibrate_fingerprints.py`，12 份通用负样本）
@@ -2405,14 +2406,14 @@ hunk，冒出十几个就是被写坏了。修法不是“改断言让它过”�
   跨任务视图里的历史拓展域名、不归属本任务目标的域名、以及"要不要深扫"由人判断 —— 拓展域名里
   大量是 CDN/开源库/JS 命名空间碎片，全自动跑既越权又浪费额度；`POST /api/domains/scan-ext`
   那个「送去探测」入口照旧可用。
-- **指纹补标与 flag 抽取共享同一处覆盖缺口（续127 登记）**：`sites.tech` 的补标只吃
-  **有正文的响应** —— 走 httpx 时 probe 只回 title/tech 的 JSONL、dirmap 的产物行也没有正文，
-  这两路的命中对补标与 flag 都没有输入。要补就得真加请求（与 §5.17② 冲突），属独立一轮。
+- **指纹补标与 flag 抽取的覆盖缺口只剩 dirmap（续318 更新）**：`sites.tech` 的补标只吃
+  **有正文的响应**；httpx 档的 probe 现在用 `-irr` 在同一次请求里带回根响应（指纹识别与
+  flag 抽取都有输入），**dirmap 的产物行仍没有正文**。要给它补正文就得真加请求
+  （与 §5.17② 冲突），属独立一轮。
   另外补标只挂在**本任务 sites 表里存在的站点**上：补扫任务没跑 probe 时 `flush()` 会把
   `missing` 点名出来（标签没挂上不是"没识别出来"），但这些标签目前确实无处落地。
-- **flag 候选抽取的两处覆盖缺口（续126，如实登记）**：① **走 httpx 时 probe 根本没有正文**
-  （它的 JSONL 只有 title/tech/status），所以这一路只能由 jsmine / dirscan 内置档 / vulnscan 证据兜到
-  —— probe 会明写「httpx 档不返回正文，本阶段无输入可扫」，不会看起来像"扫过了、没有"；
+- **flag 候选抽取的覆盖缺口（续126 建、续318 更新）**：① httpx 档的 probe 现在**有正文**
+  （`-irr`，上限 `-rstr` 256 KB），根响应会与内置探测路一样进 `flagfind.harvest()`；
   ② **dirmap 的产物行也没有正文**（`[状态码][content-type][大小] URL`），装了 dirmap 的机器上
   那一路的命中不会贡献 flag 候选（与续113 那条「没标题⇒不滤但明说」同源）。
   还有第三类是**形状本身**的局限：非 `{}` 形态的 flag（`flag:` 后不带括号、或题目自定义前后缀）

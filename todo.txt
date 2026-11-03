@@ -4542,30 +4542,94 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
-## 下一轮（续318）：指纹→POC 联动真生效（主理人 2026-11-03 点单，只登记未开工）
+## 待真机验证清单（2026-11-03 主理人点单：他跑任务时逐条核对，别只信"改了"）
+
+用法：主理人跑一个真实域名后，按下面每条去页面/日志找证据；对不上的当场登记，不要放过。
+
+- [ ] 1. js-secret 原文可见：漏洞列表「名称」下有一行命中原文；展开可见
+      「命中所在整行（原文）」+「前后文（原文）」+ 掩码值 + 行号 + 来源。
+      验证点：`/vulns` 页与任务详情漏洞页签都要有，不能只有一处。
+- [ ] 2. 「补图标（老数据）」按钮已下架：任务详情站点页签的批量栏里不应再出现它；
+      后端 `/api/sites/iconbackfill` 仍可 POST（幂等维护入口）。
+- [ ] 3. 站点页签「显示全部状态码」是 bulkbar 按钮：收起时显示「显示全部状态码（+N）」，
+      点开显示「只看 200 / 301 / 302 / 404」。
+- [ ] 4. FOFA `max_assets=500`：日志 `[fofa]` 段取回条数不超过 500；看单次查询耗时与入库量。
+- [ ] 5. jsmine 接口 URL 并入 dirscan：日志出现 `[dirscan] 并入 jsmine 接口 URL N 条（M 站）`；
+      目录命中里有来源 `js:endpoint` 的路径。
+- [ ] 6. OTX/VT 被动 DNS 源：日志出现 `[osint] IP 反查源：otx 试N 成N 空N 错N`；
+      VT 默认不在 sources（要启用需在 settings 的 iprecon.sources 显式加 `virustotal`）。
+- [ ] 7. IP 反查置信度分级：拓展域名页「备注」列出现「同注册域」/「中等（名字相似：…）」/
+      「中等（同证书…）」/「高（同证书 + favicon…）」/「待确认」。
+- [ ] 8. 送探按注册域 + 完整域名随任务带入：子任务 targets 是**注册域**（如 `x.credit`），
+      不是 `xxx.x.credit`；子任务日志出现 `[subdomain] 带入送探方已知完整域名 N 个`，
+      且该完整域名在子任务子域名列表里；同一注册域不被重复送探。
+- [ ] 9. （**未改，等主理人定**）第三方清单漏挡：`wa.me` / `mc.yandex.ru` / `blogs.opera.com`
+      目前 `is_thirdparty=False`（清单只有 `yandex.com`，apex 按设计不认）。补清单未动手。
+- [ ] 10. 历史项：dirscan 默认不扫 `.js`；反查结果的 `avatar.jpg` / JS 属性链 / 公共 CDN 域 /
+      云厂商 PTR 不再入库（日志有「静态资源名」「第三方/CDN 噪声」字样）。
+- [ ] 11. 证书页签默认只看未过期（续321）：筛选行有「显示已过期（+N）」按钮，点开后变
+      「只看未过期」；页签徽标仍是**全部**条数（被收起的不从徽标消失）。
+- [ ] 15. 外置指纹虚框（续323）：站点页签「技术栈」里 `origin=external` 的标签应是**虚线框 +
+      半透明**，hover 末尾带「外置 tech-detect 猜测，误报率高」；内置规则（如 HSTS）是实心。
+      实测基线：任务 23 中 external 169 / builtin 2，所以绝大多数会是虚框。
+- [ ] 13. 日志阶段行绿色（续322）：运行日志里 `===== 阶段 N/M：xxx =====` 与
+      `===== 流水线开始/完成 =====` 显示为绿色加粗，其它行保持默认色（刷新页面看，静态带 mtime 版本号）。
+- [ ] 14. FOFA 0 积分不再刷屏（续322）：日志里不应再有「本次查询消耗 0 积分」；
+      只有真消耗 >0 才打。若仍看到，说明跑的是旧代码。
+- [ ] 12. 证书反查闸（续321）：某注册域在本任务库里**一条未过期证书都没有**时，日志出现
+      `[osint] 证书 cert="…" 跳过：本任务库里该注册域没有未过期的证书`；
+      汇总行出现「跳过…无有效证书 N 个」。要照查设 `fofa.cert_require_valid: false`。
+
+## 下一轮（续319）：指纹→POC 联动剩余 B/C/D（A 已于续318 完成）
 
 实施者：待认领
 
-### 现状（实测数字，接手先核对）
+### 现状（续318 更新）
 - 312 个 POC：305 个导入的 `enabled=0`（有效级别 low，被 `checks.skip_severities` 默认挡掉，连请求都不发）
   + 7 个内置 exposure（enabled=1）。
-- 内置指纹库 103 个标签；但任务 17 真实站点的 `sites.tech` 只有 `cloudflare` / `http/3` / `http/2`。
-- 内置 7 个 POC 的 tags 是 `exposure/backup/env/git/phpinfo/java/tomcat/api`，与上述 tech **交集为 0**
-  ⇒ `checks.poc_link_tags`（默认开）实际退化成按置信度排序：接线了，但没生效。
+- 指纹：内置 105 标签 + 外置 2146 标签；probe 的 httpx 档已用 `-irr` 吃根响应正文并跑
+  `identify()`，`sites.tech` 已能出现 seeyon / e-weaver / jeecgboot / fanruan / m3 等产品名。
+- `tech ∩ POC tags` 已能 >0（本地致远页：`seeyon` 命中 7 条 seeyon POC，`java` 再命中 spring-actuator）。
+- **任务 17（kppay.live）不能当本轮验收目标**：它的 24 个站点全是 Cloudflare 边缘页，
+  根响应里没有产品特征；A 的验收要用直连 OA / 面板的真任务。
 
 ### 要做（按顺序，每条带验收）
-- [ ] A. 补产品级指纹：`scanner/fingerprint.py` 为 seeyon / weaver / jeecgboot / fanruan 等
-      POC tags 里已有的产品补特征（路径/正文/header，优先零额外请求）。
-      验收：真实任务 `sites.tech` 出现产品名，`[vulnscan]` 日志出现「POC 按指纹标签优先」，tech∩tags > 0。
 - [ ] B. 建 PoC→标签映射表（或人工整理 `config/pocs-user/`）：把导入 POC 的 tags 与指纹标签对齐。
+      本轮只对齐了 seeyon / e-weaver / jeecgboot / fanruan / m3 / e-mobile；landray、uap、ufida_nc、
+      v8/v9、ioffice、esafenet、wanhu 等仍是空白。
       注意 305 个导入 POC 默认停用是刻意的（有效级别 low 派生），不要直接 `enabled=1` 放行、也不要清空 `skip_severities`。
       验收：`load_enabled_pocs` 数量变化有日志说明。
 - [ ] C. 门禁：桩站点 `tech="seeyon"` + POC `tags=["seeyon"]` 时必须排在无标签 POC 前；
       `tech` 为空/交集为空时退回 `_by_conf` 顺序（反向对照）。放 `tests/smoke.py`。
+      （本轮 `[318]` 只断言了「交集 >0」与日志字面量，排序顺序还没钉。）
 - [ ] D. 量化：跑一个真实任务，把「tech∩tags 命中的 POC 数 / 实际执行 POC 数」写进 CHANGELOG。
 
-### 为什么这轮没做
-本轮只做登记（主理人要把这项交给另一个 AI），代码一行未动。
+## 续318（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：A 产品级指纹接通 probe（sites.tech 真出产品名）
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 已完成
+- [x] A. 产品级指纹：内置 103 → 105 标签；seeyon / e-weaver / e-mobile / jeecgboot / fanruan
+      判据补强；社区表写法（致远oa / 泛微-oa / jeecg / 帆软报表-finereport）经
+      `fingerprint_aliases.txt` 归一到 POC `info.tags` 的拼写。
+- [x] **httpx 档真正喂指纹**：`probe` 的 httpx 命令加 `-irr`（JSONL 带根响应 body/header）
+      与 `-rstr 262144`；新增 `httpx_site()` 把根响应送 `identify()`，与 httpx tech 合并后
+      走 `canonical_details()`；`_iter_json_lines()` 逐行读，控内存；正文顺手喂 `flagfind`。
+- [x] 修三个转换器 bug：`tags` 逗号字符串被按字符切；无 case-insensitive 时拼出 `(?)` 编译失败；
+      nuclei 的 probe 级 AND 与 `text/html` 通用判据被拆成 OR（通用页 11/12 误报）。
+      nuclei 表重生成：1163 模板 → 407 条首页规则 / 368 标签（外置合计 2146 标签 / 2551 规则）。
+- [x] 门禁 `[318]`：四个产品正样本命中、通用页 0、别名归一、`-irr` 接线、tech∩POC tags>0、
+      日志字面量仍在。
+- [x] `/diff` 窄屏 1px 溢出：`.filters label/select { min-width:0; max-width:100% }`；
+      browser_e2e 85/85 全绿。
+- [x] 文档同步：`docs/pipeline.md` / `docs/architecture.md` / `README.md` / `AGENTS.md`
+      （§5.17② 与 §7 的「httpx 没正文」已改成「-irr 有正文，只剩 dirmap 没正文」）。
+
+### 实测
+- 真实 httpx + 本地致远页：`probe_candidates()` 返回的站点 tech 含 `seeyon`；
+  `httpx_site` 合成行为 `HTTP/3,cloudflare,java,nginx,seeyon`（seeyon = doc+builtin）。
+- 负样本校准 12 份：产品级标签 0 命中（基线 13 个全是 nginx/php/jquery 等真特征）。
+- 全量门禁：见 CHANGELOG_AI.md 续318「全量」一段（命令 `env -u LD_LIBRARY_PATH .venv/bin/python tests/smoke.py`）。
 
 ## 续317（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：FOFA 积分实测 + max_assets 500
 

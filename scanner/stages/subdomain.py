@@ -520,6 +520,17 @@ class SubdomainStage(Stage):
                 ctx.logger.info(f"[subdomain] 被动来源泛解析复核：{len(suspects)} 个 → "
                                 f"丢弃 {len(dropped)} 个通配产物")
 
+        # 续320（主理人 2026-11-03）：送探子任务按注册域建，但**已知的完整域名**要随任务
+        # 带入（`options.seed_domains`）—— 枚举不一定能重新发现它们，漏了就是丢资产。
+        _seed320 = [str(s).strip().lower() for s in (ctx.options.get("seed_domains") or [])]
+        _seed320 = [s for s in _seed320 if s and targets.is_domain(s)]
+        if _seed320:
+            _new320 = [s for s in _seed320 if s not in found]
+            found.update(_seed320)
+            for s in _seed320:
+                sources.setdefault(s, "seed")
+            ctx.logger.info(f"[subdomain] 带入送探方已知完整域名 {len(_seed320)} 个"
+                            f"（其中新发现 {len(_new320)} 个；不依赖枚举重新发现）")
         subs = sorted(found)
         # 用户黑名单：命中的域名直接丢弃 —— 既不入资产表，也不进 probe 的输入，
         # 这样后面的 dirscan / vulnscan 自然也不会覆盖它。

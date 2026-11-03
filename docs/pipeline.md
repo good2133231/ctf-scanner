@@ -51,7 +51,7 @@
 | `nmap -sT -Pn -n --open -p <ports> -oG -` | portscan | nmap 适配器（`-sT` 免 root）；未装则内置 TCP connect 兜底 + 被动 banner |
 | （手工没有的部分） | osint | IP 反查域名 + `/24` C 段归纳；favicon（mmh3）→ FOFA 反查同源资产，黑 ico 放弃拓展 |
 | （手工没有的部分） | jsmine | 抓站点 JS → 提取域名/接口 URL/疑似凭据，第三方域黑名单 + 前后文降噪 |
-| `httpx -l httpx_url -nfs -title -tech-detect -json` | probe | httpx 适配器；**不再传 `-mc` 状态码白名单**（服务端回了真实状态码就算存活，见 `probe.is_alive`），`-nfs` 锁住输入里的 scheme |
+| `httpx -l httpx_url -nfs -title -tech-detect -status-code -content-length -json -irr -rstr 262144` | probe | httpx 适配器；**不再传 `-mc` 状态码白名单**（服务端回了真实状态码就算存活，见 `probe.is_alive`），`-nfs` 锁住输入里的 scheme；`-irr` 把根响应正文带进 JSONL 供内置/外置指纹识别与 flag 抽取（`-rstr` 限 256 KB） |
 | `python dirmap.py -iF dir_out -e all` | dirscan | dirmap 适配器（`-iF` 批量 URL），并解析其 `output/` 产物；**仅 `mode=deep` 时调用**（浅扫不碰外部工具） |
 | （手工没有的部分） | vulnscan | POC 引擎 + OWASP Top10 启发式检查（分级/分类门控 + WAF 探测） |
 | （手工没有的部分） | screenshot | 本机无头 Edge/Chrome（`--headless=new` + `--ignore-certificate-errors`）截图，产物 `shots/*.png` 并回填 `sites.shot`；**同一次调用顺带回填「渲染后标题」**（续140，
@@ -536,7 +536,7 @@ logs/task_1_mytask/
 ├── cnames.txt        # 子域名 → CNAME 链（takeover 阶段产物）
 ├── hosts.txt         # 参与探测的主机全集
 ├── httpx_url.txt     # 传给 httpx 的候选 URL
-├── httpx_out.json    # httpx JSONL 输出
+├── httpx_out.json    # httpx JSONL 输出（-irr：每行含根响应 body/header）
 ├── sites.txt         # 存活站点
 ├── js_urls.txt       # 从 JS 提取到的接口 URL（jsmine 阶段产物）
 ├── shots/            # 站点截图 PNG（screenshot 阶段，默认关）

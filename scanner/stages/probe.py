@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from .base import Stage
 from .. import blacklist, db, extdom, flagfind, wildcard
-from ..fingerprint import identify, favicon_md5, favicon_info
+from ..fingerprint import (canonical_details, favicon_info, favicon_md5, identify)
 from ..utils import (REDIRECT_STATUS, html_title, page_title, which, verify_tool, run_cmd, read_lines,
                      write_lines, pool_run, http_request, ramp_opt,
                      effective_workers)
@@ -114,6 +114,62 @@ def backfill_site_redirects(task_id, db, settings, fetch=None, workers=8, logger
              s.get("redirect_title", "")) for s in need if s.get("redirect_url")]
     return db.set_site_redirects(task_id, rows)
 
+
+def _iter_json_lines(path):
+    """逐行读 JSONL，**不把整份读进内存**。
+
+    续318：httpx 加 `-irr` 之后每行都带着根响应正文（上限 `-rstr` 256 KB），
+    整份 `read_lines()` 会把 N × 256 KB 全堆在内存里；这里只保留当前这一行。
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    yield line
+    except OSError:
+        return
+
+
+def httpx_site(j):
+    """httpx 的一行 JSON -> 站点 dict；不存活或形状不对返回 None。
+
+    续318：`-irr` 之后这一行里**已经带着根响应**（`body` / `header`），所以产品级指纹
+    （seeyon / e-weaver / jeecgboot / fanruan …）在这一步就能识别，**不为每个站点再发请求**。
+    标签合并走 `canonical_details()`（唯一归一产地）：否则同一个组件会同时出现
+    httpx 的 `Cloudflare` 与我们内置的 `cloudflare` 两行。
+    """
+    url = j.get("url") or j.get("input") or ""
+    if not str(url).startswith("http"):
+        return None
+    if j.get("failed") or not is_alive(j.get("status_code")):
+        return None
+    tech = j.get("tech") or []
+    hdr = j.get("header") if isinstance(j.get("header"), dict) else {}
+    body = j.get("body") if isinstance(j.get("body"), str) else ""
+    pairs = [(d["tag"], d["origin"]) for d in identify(
+        {"status": j.get("status_code"), "headers": hdr, "text": body}, detail=True)]
+    if isinstance(tech, list):
+        pairs += [(str(t), "external") for t in tech if str(t).strip()]
+    elif str(tech).strip():
+        pairs += [(str(tech), "external")]
+    pairs = canonical_details(pairs)
+    p = urlparse(str(url))
+    return {
+        "url": url, "host": p.hostname,
+        "port": str(p.port or (443 if p.scheme == "https" else 80)),
+        "status": j.get("status_code"),
+        "title": (j.get("title") or "").strip()[:200],
+        "length": j.get("content_length"),
+        "server": j.get("webserver") or "",
+        "tech": ",".join(t for t, _o in pairs),
+        # 续223：来源分主文档 / 内置与外置；httpx tech-detect 的标签算 external。
+        "tech_detail": json.dumps(
+            [{"t": t, "src": "doc", "origin": o} for t, o in pairs], ensure_ascii=False),
+        "source": "httpx",
+    }
+
+
 def probe_candidates(ctx, candidates):
     """一轮 HTTP 探测的全部机器：httpx 优先、内置兜底，返回**未去重、未入库**的站点 dict 列表。
 
@@ -153,42 +209,34 @@ def probe_candidates(ctx, candidates):
         # 锁住 scheme 后 301 行才会稳定出现，续112-B 的「跳转后」取证才有输入。
         # 不加 `-fr`：跟随跳转会把第一跳覆盖成落地页状态，正是 `attach_redirect_info`
         # 刻意避免的谎报（它用「原始不动 + redirect_* 另存」做同一件事）。
+        # 续318：`-irr` 让 JSONL 里带根响应（body + header）。我们的 2600+ 条产品指纹
+        # 判据（内置 136 + 外置 2551）几乎全在正文里，而 httpx 的 tech-detect 只认
+        # Wappalyzer 那一套；
+        # 原来不带正文 ⇒ 真实任务的 `sites.tech` 只剩 cloudflare / HTTP/3，
+        # 指纹库等于"建了但 probe 不用"。`-rstr` 把单响应读取上限压到 256 KB：
+        # identify 自己再截 128 KB 判定，避免一个大文件把 JSONL 撑爆。
         rc, _, err = run_cmd(
             [hx_bin, "-l", str(url_file), "-nfs",
              "-title", "-tech-detect", "-status-code", "-content-length",
-             "-json", "-silent", "-o", str(out_json)], timeout=3600, throttle=th)
+             "-json", "-silent", "-irr", "-rstr", "262144",
+             "-o", str(out_json)], timeout=3600, throttle=th)
         if rc == 0 and out_json.exists():
-            for line in read_lines(out_json):
+            for line in _iter_json_lines(out_json):
                 try:
                     j = json.loads(line)
                 except Exception:
                     continue
-                url = j.get("url") or j.get("input") or ""
-                if not str(url).startswith("http"):
+                # 去掉 `-mc` 后存活口径只在 `is_alive` 一处（两条探测路共用同一个函数）。
+                # httpx 在 `-silent` 下对彻底失败的候选本来就给不出行（实测 0 行），
+                # `httpx_site()` 兜的是"有行但没有真实状态码"那一种。
+                site = httpx_site(j)
+                if not site:
                     continue
-                if j.get("failed") or not is_alive(j.get("status_code")):
-                    # 去掉 `-mc` 后**这一层就是唯一的存活口径**（两条探测路共用同一个函数）。
-                    # httpx 在 `-silent` 下对彻底失败的候选本来就给不出行（实测 0 行），
-                    # 这里兜的是"有行但没有真实状态码"那一种。
-                    continue
-                tech = j.get("tech") or []
-                p = urlparse(str(url))
-                sites.append({
-                    "url": url, "host": p.hostname,
-                    "port": str(p.port or (443 if p.scheme == "https" else 80)),
-                    "status": j.get("status_code"),
-                    "title": (j.get("title") or "").strip()[:200],
-                    "length": j.get("content_length"),
-                    "server": j.get("webserver") or "",
-                    "tech": ",".join(tech) if isinstance(tech, list) else str(tech),
-                    # 续223：httpx 的标签是**外置工具**给的（没有主文档/JS 之分）⇒
-                    # src=doc、origin=external；页面会把它们排在内置标签之后。
-                    # 存储键用紧凑的 `t`（DB/页面共用；`identify(detail=True)` 对外仍是 `tag`）。
-                    "tech_detail": (json.dumps(
-                        [{"t": str(t), "src": "doc", "origin": "external"}
-                         for t in tech], ensure_ascii=False) if isinstance(tech, list) else ""),
-                    "source": "httpx",
-                })
+                # 正文既然已经回来了（-irr），顺手喂给敏感信息判定 —— 与内置探测路同口径，
+                # 不再出现"httpx 档的根响应没人扫"这种不对称。
+                body = j.get("body") if isinstance(j.get("body"), str) else ""
+                flagfind.harvest(ctx, site["url"], body, "probe")
+                sites.append(site)
         else:
             ctx.logger.warning(f"[probe] httpx 退出码 {rc}，回退内置探测：{err.strip()[:200]}")
 
@@ -500,11 +548,11 @@ class ProbeStage(Stage):
 
         sites = probe_candidates(ctx, candidates)
         _reg = register_sites(ctx, sites)
-        # 敏感信息候选：走 httpx 那一档时**根本没有正文**（它只回 title/tech 的 JSONL），
-        # 所以这一路的输入是 0 份 —— 必须说出来，否则"probe 没报候选"会被读成"扫过了、没有"。
+        # 敏感信息候选：httpx 档现在也带正文（-irr，续318），所以这里理应有输入；
+        # 真出现 0 份时必须说出来 —— 否则"probe 没报候选"会被读成"扫过了、没有"。
         _fnote = flagfind.note(ctx, _flag0)
         if _fnote:
             ctx.logger.info("[probe] 敏感信息候选 " + _fnote)
         elif any(s.get("source") == "httpx" for s in _reg):
-            ctx.logger.info("[probe] 敏感信息候选：httpx 档不返回正文，本阶段无输入可扫"
+            ctx.logger.info("[probe] 敏感信息候选：本轮没有可扫的根响应正文（httpx 行里 body 为空），"
                             "（jsmine / dirscan / vulnscan 三路仍会扫各自拿到的正文）")

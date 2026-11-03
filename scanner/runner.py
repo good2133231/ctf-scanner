@@ -20,7 +20,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import audit, cancelcause, db, extdom, profiling, screenshot
+from . import audit, cancelcause, db, extdom, profiling, screenshot, targets
 from .config import LOGS_DIR, load_settings
 from . import auth as taskauth
 from . import throttle
@@ -685,18 +685,37 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
         logger.info(f"[extdom] 自动送探：没有达到「{extdom.conf_label(min_conf)}」且主域名不同的"
                     f"拓展域名（另 {blocked} 个被黑名单/第三方清单/CDN/阈值挡在外面），本轮不建子任务")
         return {"spawned": 0, "candidates": 0, "capped": 0, "reason": "无候选"}
+    # 续320（主理人 2026-11-03）：送探与去重都按**注册域**算 —— `xxx.loaney.credit`
+    # 与 `loaney.credit` 是同一批业务的一次探测，否则换个前缀就会被当成新域名重复建任务。
+    def _root_of(d):
+        try:
+            return targets.root_of(d) or str(d)
+        except Exception:      # noqa: BLE001 - 取不到注册域就退回原名，宁可多送不少送
+            return str(d)
+    _roots = {c["domain"]: _root_of(c["domain"]) for c in keep}
     try:
-        probed = db.list_ext_probes([c["domain"] for c in keep])
+        probed = db.list_ext_probes(sorted(set(_roots.values())))
     except Exception:           # noqa: BLE001 - 读记录失败按"没送过"处理，宁可少送不多送
         probed = {}
-    todo = [c for c in keep if not (probed.get(c["domain"]) or [])]
+    todo = [c for c in keep if not (probed.get(_roots[c["domain"]]) or [])]
     cap = ext_auto_probe_max(settings)
     picked = todo[:cap]
     if not picked:
         logger.info(f"[extdom] 自动送探：{len(keep)} 个达到阈值，但都在此前送过探了（去重命中），不再建任务")
         return {"spawned": 0, "candidates": len(keep), "capped": 0, "reason": "已送过"}
-    domains = [c["domain"] for c in picked]
+    # 续320（主理人 2026-11-03）：建任务送**注册域**，完整域名（`xxx.loaney.credit`）
+    # 作为 `seed_domains` 随任务带入 —— 子任务枚举不一定能重新发现它，漏了就是丢资产。
+    roots, seeds = [], []
+    for c in picked:
+        r = _roots.get(c["domain"]) or c["domain"]
+        if r not in roots:
+            roots.append(r)
+        if c["domain"] != r and c["domain"] not in seeds:
+            seeds.append(c["domain"])
+    domains = roots
     child_opts = {"rescan_of": int(task_id), "ext_depth": 1, "ext_auto_probe": 0}
+    if seeds:
+        child_opts["seed_domains"] = seeds
     _auth = (options or {}).get("auth")
     if _auth:
         child_opts["auth"] = _auth       # 登录态继承：与手动送探同口径（续195）

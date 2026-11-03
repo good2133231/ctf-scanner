@@ -3,6 +3,75 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续318（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：A 产品级指纹接通 probe（sites.tech 真出产品名）
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 先回答「GitHub 指纹是不是没解析」
+- **解析了，而且一直在跑**：`tools/import_fingerprints.py` 把 FingerprintHub（1132 规则 /
+  1032 标签）、EHole（953 / 805）、fingers（8 / 3）、nuclei（修好后 407 / 368）转成
+  `config/dicts/fingerprints_*.txt`，合并后 **2146 个外置标签 / 2551 条规则**。
+- **没解析的那一份**：`tools/fscan-src/webscan/fingerprint/web_fingerprint_v4.json`
+  （3139 条 FingerprintHub v4 模板）。它是 nuclei 模板数组，当前转换器只认 FingerprintHub
+  的 yaml 目录与 EHole 的 json；其中 979 条 `verified: true`、836 个标签已在 hub 表里。
+  seeyon / jeecgboot / finereport 这几条恰好是 `verified: false`（整表默认闸不会收），
+  本轮按它们的判据手写进内置表，**没有**把 2200+ 条未核验规则整表放开（那会重演 38 标签误报）。
+- **真实任务不显示产品名的根因不是解析**：probe 的 httpx 档原来只让 httpx 输出
+  title/tech/status，JSONL **没有正文**；`identify()` 只在 httpx 不可用时的内置探测里跑。
+  `dirscan` 的补标也只吃它自己请求到的路径响应 —— CDN 根页里没有产品特征，所以任务 17
+  的 `sites.tech` 只剩 `cloudflare / http/3`，不是"指纹库没建"。
+
+### 还抓出三个转换器真 bug（不修的话这次接线会把脏标签带上页面）
+1. `info.tags` 是**逗号字符串**时被按字符迭代 ⇒ nuclei 表 286 行标签全是 `t`/`a`/`c`
+   单字母（整份表等于没有产品名）。现按列表/字符串两形展开。
+2. 不分大小写时 `"(?%s)" % ""` 拼出 `(?)` ⇒ 没有 `case-insensitive: true` 的 word/regex
+   规则全部 compile_fail 被丢掉（nuclei 模板里大量如此）。现按需拼 `(?i)`。
+3. nuclei 的 probe 级 `matchers-condition: and` 被拆成多条 OR，且 `text/html` 这种
+   content-type 判据被当成产品特征 ⇒ 通用页一次命中 `default-page`/`express`/`oracle`/`spring`
+   等 **11/12 份**（负样本实测）。现先丢通用判据，AND 取最长（最具体）的一条近似；
+   负样本回到基线 13 个标签（全是 nginx/php/jquery 这类真识别）。
+
+### 改了什么
+- `scanner/fingerprint.py`：内置标签 103 → 105；`jeecg` 更名 `jeecgboot`（与 POC tags 对齐），
+  新增 `e-weaver` / `e-mobile`；seeyon / fanruan 判据补强（`/seeyon/common/`、
+  `var _ctxpath='/seeyon'`、`A8-V5`、`/spa/portal/`、`/wui/theme/`、`/webroot/decision`、
+  `ReportServer?op=` 等）。
+- `config/dicts/fingerprint_aliases.txt`：`致远oa→seeyon`、`泛微-oa/weaver-ecology→e-weaver`、
+  `jeecg→jeecgboot`、`帆软报表-finereport→fanruan`、`致远oa-m3-server→m3` —— 社区表的写法
+  与 POC `info.tags` 从此是同一个标签。
+- `scanner/stages/probe.py`：httpx 命令加 `-irr`（JSONL 带 body/header）与 `-rstr 262144`；
+  新增 `httpx_site()`（根响应 → `identify()`，与 httpx tech 合并后走 `canonical_details()`
+  唯一归一产地）与 `_iter_json_lines()`（逐行读，不再把整份 JSONL 读进内存）；
+  正文顺手喂 `flagfind.harvest()`（与内置探测路同口径）。
+- `tools/import_fingerprints.py`：上面三个 bug 的修复；`fingerprints_nuclei.txt` 由
+  `tools/update_pocs.py --source nuclei` 重新生成（1163 个模板 → 407 条首页规则/368 标签）。
+- `gui/static/style.css`：`.filters label/select { min-width:0; max-width:100% }` ——
+  全量门禁在 `/diff?task=1` 抓到窄屏溢出 1px，根因是任务下拉的固有宽度把筛选栏顶出去；
+  修后 browser_e2e 85/85 全绿。
+- 文档：`docs/pipeline.md`（httpx 命令与产物）、`docs/architecture.md` / `README.md`
+  （指纹来源与标签数）、`AGENTS.md`（§5.17② 与 §7 的「httpx 没正文」事实已过期）。
+
+### 实测
+- `httpx_site()` 合成致远页：`tech = HTTP/3,cloudflare,java,nginx,seeyon`，
+  `seeyon` 的 `tech_detail` 是 `doc + builtin`；failed / 0 状态码仍返回 None。
+- **真实 httpx + 本地致远页**：`probe_candidates()` 收上来的站点 `tech` 含 `seeyon`，
+  证明 `-irr` 这条路不是只跑单测。
+- 上述站点 `tech ∩ POC tags > 0`：命中 7 条 seeyon POC（外加 java → spring-actuator）。
+- 负样本校准：12 份通用页，产品级标签 0 命中（基线 13 个全是 nginx/php/jquery 等真特征）。
+- `tests/smoke.py [318]` **PASS**（正样本四个产品全中、通用页 0、别名归一、`-irr` 接线、
+  tech∩tags、日志字面量）。
+- 全量门禁：见本节末尾「全量」一段。
+
+### 没做 / 留给下一轮
+- B：把 305 条导入 POC 的 tags 与指纹标签系统对齐（本轮只对齐了 4 个产品 + m3/e-mobile）。
+- C：`tech="seeyon"` + `tags=["seeyon"]` 的**排序**门禁（本轮只断言了交集 >0）。
+- D：真实任务量化「命中的 POC 数 / 实际执行 POC 数」。
+- fscan v4 JSON 的正式转换器（`--kind fscan`）未做；理由是 836/979 verified 标签已覆盖，
+  未核验那批需要逐条复核，不能整表放行。
+
+### 全量
+<!-- FULL_SMOKE_318 -->
+
 ## 续317（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：FOFA 积分实测（不扣）+ max_assets 100→500
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

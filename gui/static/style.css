@@ -88,8 +88,12 @@ a { color:var(--accent); }
            background:var(--panel); border:1px solid var(--line);
            border-radius:10px; padding:9px 12px; margin-bottom:12px; }
 .filters label { margin:0; display:inline-flex; align-items:center; gap:6px;
-                 font-size:12px; color:var(--muted); white-space:nowrap; }
-.filters input, .filters select { width:auto; padding:4px 8px; font-size:12px; }
+                 font-size:12px; color:var(--muted); white-space:nowrap;
+                 /* 续318：下拉里是"任务名（时间）"这种长文本；不放开 min-width 时
+                    窄屏（430px）上整条筛选栏会被顶出 1px（browser_e2e [9] /diff）。 */
+                 min-width:0; max-width:100%; }
+.filters input, .filters select { width:auto; padding:4px 8px; font-size:12px;
+                 min-width:0; max-width:100%; }
 .filters input:not([type="checkbox"]) { min-width:170px; }
 .bulkbar { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
 button.ghost { background:var(--ghost-bg); border-color:var(--border); color:var(--ghost-fg); }
@@ -452,3 +456,7 @@ main section table tbody tr:hover td:first-child { background:var(--hover); }
   /* 表头首格要压在「首列吸左」的单元格之上，否则横向滚动时被首列盖住 */
   .panel.scroll-pane table thead th:first-child { z-index: 4; }
 }
+/* 续322：任务日志的阶段分隔行（绿色，便于看全流程时分层） */
+#log-box .log-stage { color: #3fb950; font-weight: 600; }
+/* 续323：外置 tech-detect 猜出来的指纹（误报率高）用虚框+降低不透明度，内置规则实心 */
+.tech-tag.ext { border-style: dashed; opacity: .72; }
