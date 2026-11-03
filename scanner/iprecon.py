@@ -23,7 +23,7 @@ from .utils import http_last_error, http_request, is_domain, pool_run, to_ascii
 
 DEFAULT_API = "https://api.webscan.cc/?action=query&ip={ip}"
 # 默认反查源顺序；可在 settings["iprecon"]["sources"] 覆盖（名字须在 _SOURCES 注册）
-DEFAULT_SOURCES = ["webscan", "hackertarget", "ip138"]
+DEFAULT_SOURCES = ["otx", "webscan", "hackertarget", "ip138"]
 
 # 续173：每个源**这一次调用**的 HTTP 状态/失败原因。适配器仍然返回"域名列表"这一份契约
 # （旧调用方一个都不改），状态只作旁路；按线程存放，`reverse_lookup_detail` 在同一个线程里
@@ -278,6 +278,85 @@ def _reverse_dnsdblookup(ip, settings, logger=None, timeout=None, raw=False):
     return out
 
 
+# 续319（主理人 2026-11-03 点单）：补两个**被动 DNS（历史解析）**源。
+# 与 FOFA `ip=`（当前资产快照）互补：FOFA 找"现在同 IP 的活资产"，这两个找"历史上解析到该 IP 的域名"。
+# VT 需要 key（免费 4 次/分钟）；OTX 免 key、有限速。
+VT_API = ("https://www.virustotal.com/api/v3/ip_addresses/{ip}/resolutions"
+          "?limit={limit}")
+OTX_API = "https://otx.alienvault.com/api/v1/indicators/IPv4/{ip}/passive_dns"
+
+
+def _vt_key(settings):
+    """VT key 从 `settings["keys"]["virustotal"]["key"]` 取（keystore 加密档同一条通道）。"""
+    cfg = ((settings or {}).get("keys") or {}).get("virustotal") or {}
+    return str(cfg.get("key") or "").strip() if isinstance(cfg, dict) else ""
+
+
+def _reverse_virustotal(ip, settings, logger=None, timeout=None, raw=False):
+    """VirusTotal v3 `/ip_addresses/{ip}/resolutions`（历史解析；无 key 不发请求）。"""
+    key = _vt_key(settings)
+    if not key:
+        _src_mark(0, "未配置 virustotal.key（config/keys.enc.yaml）", 0)
+        return {"status": 0} if raw else []
+    try:
+        limit = int(((settings or {}).get("iprecon") or {}).get("vt_limit", 40) or 40)
+    except (TypeError, ValueError):
+        limit = 40
+    limit = max(1, min(limit, 40))          # VT v3 resolutions 单页上限 40
+    resp = http_request(VT_API.format(ip=ip, limit=limit), timeout=timeout or 20,
+                        headers={"x-apikey": key}, settings=settings)
+    status = int((resp or {}).get("status") or 0)
+    if status == 401:
+        _src_mark(401, "VT key 无效（HTTP 401）", 0)
+        return {"status": 401} if raw else []
+    if status == 429:
+        _src_mark(429, "VT 限速（免费 key 4 次/分钟）", 0)
+        return {"status": 429} if raw else []
+    _src_mark(status, "" if status == 200 else (f"HTTP {status}" if status else "不可达"))
+    if raw:
+        return resp or {"status": 0}
+    if not resp or status != 200:
+        return []
+    try:
+        data = json.loads(resp.get("text") or "{}")
+    except (ValueError, TypeError):
+        _src_mark(200, "响应不是合法 JSON", 0)
+        return []
+    out, seen = [], set()
+    for item in (data.get("data") or []):
+        if not isinstance(item, dict):
+            continue
+        attrs = item.get("attributes") or {}
+        d = normalize_domain(str(attrs.get("host_name") or ""))
+        if d and is_domain(d) and d not in seen:
+            seen.add(d)
+            out.append(d)
+    _src_mark(200, "", len(out))
+    return out
+
+
+def _reverse_otx(ip, settings, logger=None, timeout=None, raw=False):
+    """AlienVault OTX passive DNS（历史解析，免 key）。结果过 `_html_domains` 同一套噪声过滤。"""
+    resp = http_request(OTX_API.format(ip=ip), timeout=timeout or 20, settings=settings)
+    status = int((resp or {}).get("status") or 0)
+    _src_mark(status, "" if status == 200 else (f"HTTP {status}" if status else "不可达"))
+    if raw:
+        return resp or {"status": 0}
+    if not resp or status != 200:
+        return []
+    try:
+        data = json.loads(resp.get("text") or "{}")
+    except (ValueError, TypeError):
+        _src_mark(200, "响应不是合法 JSON", 0)
+        return []
+    names = [str(r.get("hostname") or "") for r in (data.get("passive_dns") or [])
+             if isinstance(r, dict)]
+    # 复用统一过滤：OTX 实测会回 0137246.com 这类垃圾，静态资源名/CDN 域也要挡
+    out = _html_domains("\n".join(names))
+    _src_mark(200, "", len(out))
+    return out
+
+
 def _html_domains(text, exclude=()):
     """从 HTML 里抽"看着像域名"的串（备用源共用；脏数据一律 normalize 后丢弃，绝不 eval）。"""
     out, seen = [], set()
@@ -421,11 +500,14 @@ _SOURCES = {
     "rapiddns": _reverse_rapiddns,
     "viewdns": _reverse_viewdns,
     "ptr": _reverse_ptr,
+    # 续319：被动 DNS 两源（OTX 免 key、VT 需 key）
+    "otx": _reverse_otx,
+    "virustotal": _reverse_virustotal,
 }
 # 原生源（不依赖任何第三方 HTTP 接口）：**不参与**接口存活预检，恒可用
 DNS_SOURCES = {"ptr"}
 # 默认源全部预检失败时的备用池（原生 PTR 排第一 —— 接口全挂时它还在）
-DEFAULT_FALLBACK = ["ptr", "dnsdblookup", "rapiddns", "viewdns"]
+DEFAULT_FALLBACK = ["ptr", "dnsdblookup", "otx", "rapiddns", "viewdns"]
 
 
 def preflight(sources, settings, logger=None, timeout=None, probe_ip=""):

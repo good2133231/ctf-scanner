@@ -418,7 +418,13 @@ iprecon:
   # 续184：开跑前先探活（挂了就整轮跳过，不再每个 IP 各打一条 DEBUG）；
   # 默认源全挂时换备用池，备用池第一个 ptr 是本框架自己实现的原生 PTR（不发 HTTP）
   preflight: true
-  fallback_sources: [ptr, dnsdblookup, rapiddns, viewdns]
+  # 续319（主理人 2026-11-03）：加 OTX passive DNS（免 key、历史解析）。
+  # 注意 VT（virustotal）**默认不进 sources** —— 免费 key 限速 4 次/分钟，对几百个 IP 会整轮 429；
+  # 需要时把 `virustotal` 显式加进这个列表（key 已在 config/keys.enc.yaml 加密保存）。
+  sources: [otx, webscan, hackertarget, ip138]
+  # VT 单页条数（v3 resolutions 上限 40）
+  vt_limit: 40
+  fallback_sources: [ptr, dnsdblookup, otx, rapiddns, viewdns]
   api_rapiddns: https://rapiddns.io/s/{ip}?full=1
   api_viewdns: https://viewdns.info/reverseip/?host={ip}&t=1
 

@@ -123,8 +123,13 @@ class OsintStage(Stage):
             ctx.logger.info(f"[osint] favicon 命中 IP {ip} 存活，{via}反查出 {len(uniq)} 个域名"
                             f"（历史数据，入库标「待确认」）")
             for d in uniq:
-                out.append((d, "osint:iprecon",
-                            f'ip="{ip}" · 历史反查（{via}）· 待确认'))
+                # 续319：按「同域 / 名字相似 / 同证书 / 同证书+favicon / 待确认」分级，
+                # 依据写进 note（拓展域名页的「备注」列直接看得到）。
+                _tag319, _why319 = _recon_level(d, ctx)
+                _note319 = f'ip="{ip}" · 历史反查（{via}）· {_tag319}'
+                if _why319:
+                    _note319 += f"（{_why319}）"
+                out.append((d, "osint:iprecon", _note319))
         if ips:
             ctx.logger.info(f"[osint] favicon 命中裸 IP {len(ips)} 个：探活通过 {alive_n} 个，"
                             f"反查域名 {len({d for d, _s, _n in out})} 个")
@@ -810,6 +815,44 @@ def _domain_of(asset):
     （多个任务里的 `domain='https'` 就是这条）。这里只保留原函数名给本模块调用点用。
     """
     return fofa_mod.domain_of(asset)
+
+
+def _recon_level(d, ctx):
+    """续319：IP 反查域名的置信度分级（**零额外请求**，只用本任务已有数据）。
+
+    主理人 2026-11-03 定的口径：
+    - 同注册域（d 属于本任务注册域）→ 正常子域名，标「同注册域」；
+    - 跨注册域 + 名字相似（`extdom.similarity` 高档）→ 中等；
+    - 跨注册域 + 本任务抓到过该主机的证书 → 中等；
+    - 跨注册域 + 证书 + 该主机 favicon 也在库 → 高；
+    - 其余 → 待确认（现状，不能凭空提权）。
+
+    返回 `(标签, 依据)`；标签直接是 note 里的最终文案。**不加任何网络请求** ——
+    证书/favicon 两档只在"这台主机本来就在本任务数据里"时才可能命中；要主动抓
+    候选域名的证书/图标（深验证）另立开关，别混进这里。
+    """
+    try:
+        bases = extdom.task_bases(ctx.task_id)
+    except Exception:
+        bases = set()
+    if extdom.is_owned(d, bases):
+        return "同注册域", ""
+    sim = extdom.similarity(d, bases)
+    if str(sim.get("level")) == "high":
+        return "中等", f"名字相似：{sim.get('reason')}"
+    try:
+        cert_hosts = {str(r["host"] or "").lower() for r in db.list_certs(ctx.task_id)}
+        fav_hosts = {str(r["host"] or "").lower() for r in db.list_sites(ctx.task_id)
+                     if (r["favicon"] or "")}
+    except Exception:
+        cert_hosts, fav_hosts = set(), set()
+    in_cert = d in cert_hosts
+    in_fav = d in fav_hosts
+    if in_cert and in_fav:
+        return "高", "同证书 + favicon 命中（本任务已抓数据）"
+    if in_cert:
+        return "中等", "同证书（本任务已抓数据）"
+    return "待确认", ""
 
 
 def _tally(items):
