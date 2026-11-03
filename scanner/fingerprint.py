@@ -303,7 +303,11 @@ EXTRA_FILES = [EXTRA_FILE,
                # 续204：chainreactors/fingers（第三个外部源；规模最小 —— 它仓库里那份
                # yaml 只是维护清单，完整规则在 Go 源码内。留着是为了证明"再加一个源"
                # 只是往这个列表里加一行 + 跑一次转换器）。
-               "config/dicts/fingerprints_fingers.txt"]
+               "config/dicts/fingerprints_fingers.txt",
+               # 续324（主理人 2026-11-03）：FingerprintHub 的 **JSON 版**增量（468 条国产
+               # 产品/网关/面板）。与 fingerprints_hub.txt（yaml 版 1139 条）是两份数据，
+               # 已按"标签去重 + 每标签一条 + 中文特征"筛过，避免把 probe 的规则数翻倍。
+               "config/dicts/fingerprints_hubweb.txt"]
 _WHERE = ("headers", "body", "cookies")
 _extra_cache = {"key": None, "rules": {}, "issues": []}
 
@@ -889,6 +893,29 @@ def tech_stats_text(st):
     return f"技术栈来源（共 {st['total']} 站）：" + " · ".join(bits)
 
 
+# 续324（主理人 2026-11-03）：**语言级信号** —— dirscan/vulnscan 的"按语言跳字典/跳 POC"
+# 全靠 `sites.tech` 里有没有 php/jsp/asp/前端框架这些标签。此前只有 105 条内置 + 2146 条外置
+# 产品规则，真实站点（default page / Cloudflare 边缘页）几乎判不出语言 ⇒ 收敛前提不成立，
+# 每个站都退全量字典（这正是"扫描慢"的主因）。
+# 口径：只收**强信号**（响应头 / 会话 Cookie / 框架 bundle），不拿正文关键词猜 ——
+# 误判语言会让"按语言跳字典"变成"按语言跳真入口"，比多扫更糟。
+LANG_SIGNATURES = {
+    "php": [("headers", r"(?i)x-powered-by:\s*php(?:/|\s|$)"),
+            ("cookies", r"(?i)\bphpsessid=")],
+    "jsp": [("headers", r"(?i)server:\s*apache-coyote"),
+            ("headers", r"(?i)server:\s*apache-tomcat"),
+            ("headers", r"(?i)server:\s*jetty"),
+            ("cookies", r"(?i)\bjsessionid=")],
+    "asp": [("headers", r"(?i)x-aspnet-version:"),
+            ("headers", r"(?i)x-powered-by:\s*asp\.net"),
+            ("cookies", r"(?i)\basp\.net_sessionid=")],
+    # 纯前端框架：命中后 `dirscan._dict_kind` 判 "static"，跳过 dirs_php/jsp/asp
+    "vue": [("body", r"""(?i)<script[^>]+src=["'][^"']*vue(?:@|[-.])[^"']*\.js""")],
+    "react": [("body", r"""(?i)<script[^>]+src=["'][^"']*react(?:@|[-.])[^"']*\.js""")],
+    "nextjs": [("body", r"(?i)__next_data__")],
+    "nuxt": [("body", r"(?i)__nuxt__|/_nuxt/")],
+}
+
 def identify(resp, where="", detail=False):
     """从 http_request 的响应 dict 中提取组件标签，返回**同义归一后**排序去重的列表。
 
@@ -931,8 +958,11 @@ def identify(resp, where="", detail=False):
     for key, val in parts.items():
         folded[key] = val.lower() if (val.isascii() or not any(c in val for c in _FOLD_EXOTIC)) else None
     found = {}                       # tag -> "builtin" / "external"（先到先得 = 内置优先）
-    for _src_i, source in enumerate((SIGNATURES, _fixed_rules(load_extra()[0]))):
-        origin = "builtin" if _src_i == 0 else "external"
+    # 语言信号排第一：先到先得 ⇒ 同一标签（如 php）不会被子串规则重复归类，
+    # 且 origin 恒为 builtin（页面不会把它画成"外置猜测"的虚框）。
+    for _src_i, source in enumerate((LANG_SIGNATURES, SIGNATURES,
+                                     _fixed_rules(load_extra()[0]))):
+        origin = "external" if _src_i == 2 else "builtin"
         for tag, rules in source.items():
             if tag in found:
                 # 内置已经认了；同一标签不必再跑一遍外置规则（续223，纯省时间不改结果）

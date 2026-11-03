@@ -4604,6 +4604,14 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       （本轮 `[318]` 只断言了「交集 >0」与日志字面量，排序顺序还没钉。）
 - [ ] D. 量化：跑一个真实任务，把「tech∩tags 命中的 POC 数 / 实际执行 POC 数」写进 CHANGELOG。
 
+- [ ] E. 接入 FingerprintHub（https://github.com/0x727/FingerprintHub，MIT，1449 stars）：
+      `web_fingerprint_v3.json` 实测 **3488 条**，字段 `{name, keyword[], path, status_code,
+      headers{}, favicon_hash[], priority}`（keyword 是**内容包含**，如 `content="08cms`；favicon_hash 是 mmh3）。
+      建议只导入 `priority >= 4` 且 `keyword` 非空的（3488 条全量会让 probe 每响应全表扫，拖慢扫描）；
+      导入器 `tools/import_fingerprints.py`，`NOTICE.md` 登记 MIT。
+      ⚠ 该导入器与 `config/dicts/fingerprints_nuclei.txt` 正被续318 改，接手前先看最新版。
+      另：`service_fingerprint_v4.json`（9.6 MB）是服务/端口指纹，**先不接**（我们端口侧没有对应匹配器）。
+
 ## 续318（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：A 产品级指纹接通 probe（sites.tech 真出产品名）
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

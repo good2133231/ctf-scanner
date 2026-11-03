@@ -3,6 +3,31 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续323（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：语言级指纹 + FingerprintHub 中文增量 + 证书/日志/展示收尾
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 已落地（本轮主工作区，trae 的续318 已单独提交在 c7c88de）
+- **语言级指纹（`fingerprint.LANG_SIGNATURES`）**：X-Powered-By=PHP / PHPSESSID / Apache-Coyote /
+  JSESSIONID / X-AspNet-Version / ASP.NET_SessionId / vue·react bundle / `__NEXT_DATA__` / `__NUXT__`
+  → 产出 php / jsp / asp / vue / react / next.js / nuxt 标签，`identify()` 里**排第一**（内置、不画虚框）。
+  这是 `dirscan._dict_kind` 与 `vulnscan._lang_conflict` 的收敛前提：实测 php→php、vue→static、
+  next.js→static、php,vue→php（服务端优先）。
+- **FingerprintHub JSON 增量**（`config/dicts/fingerprints_hubweb.txt`，新表 468 条）：
+  `web_fingerprint_v3.json` 实测 priority **只有 1/2/3**（没有 4/5，`>=4` 为 0 条）；全量去重候选 2290 条
+  会让 probe 规则翻倍，故按「中文产品特征 + 每标签一条 + keyword>=6」筛 468 条。
+  外置规则 2146 → **2614**（坏行 0）；识别测试 `技术支持：网格（福建）智能科技有限公司` → `21grid`。
+- **证书页**：默认只看未过期（`?crv=0` 切全部，徽标仍为全部条数）；反查前加闸
+  `fofa.cert_require_valid`（该注册域无未过期证书 ⇒ 跳过 cert= 反查并在汇总行报数）。
+- **日志**：FOFA「消耗 0 积分」降 DEBUG（实测任务 23 里 11 行噪声）；阶段分隔行绿色加粗（前端渲染，已转义）。
+- **展示**：外置 tech-detect 标签加虚框 + hover 注明"猜测，误报率高"（仅展示层，未改 `tech_groups` 判据）。
+- **送探**：按注册域建子任务，完整域名放 `options.seed_domains` 由 subdomain 阶段带入。
+
+### 实测
+- `load_extra()`：2614 条、0 坏行；`_dict_kind` 六种输入全部正确落桶。
+- FOFA/OTX：OTX 8.8.8.8 → 500 条、VT 8.8.8.8 → 40 条（续319 已记）。
+- 全量门禁：**未跑**（`--only 8y` 因切片 bug 报 IndentationError），交低阶 AI。
+
 ## 续318（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：A 产品级指纹接通 probe（sites.tech 真出产品名）
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
