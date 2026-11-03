@@ -15,7 +15,7 @@ import time
 
 from .base import Stage
 from .. import db, screenshot
-from ..utils import REDIRECT_STATUS, write_lines
+from ..utils import REDIRECT_STATUS, pool_run, write_lines
 
 
 class ScreenshotStage(Stage):
@@ -63,33 +63,26 @@ class ScreenshotStage(Stage):
         title_rows = []
         final_title_rows = []      # 续197：3xx 站点渲染后拿到的**落地页标题**（补 redirect_title）
         ctx.logger.info(f"[screenshot] 开始截图 {len(sites)} 个站点 …")
-        for s in sites:
+        # 续327（主理人 2026-11-03「其他能提速的都提速」）：截图改**并发**。
+        # 原来串行，20 站 3 分 42 秒；卡住的站还要走"一次性 15s + 等 3s + CDP 25s"。
+        # 无头浏览器每站独立进程 + 独立 user-data-dir，并发安全；上限压在
+        # `screenshot.workers`（出厂 3）—— 每个约 200-300MB 内存，再多会挤爆小机器。
+        workers = max(1, int(cfg.get("workers", 3) or 3))
+
+        def _one(s):
             if ctx.stopped():
-                ctx.logger.warning("[screenshot] 任务已请求停止，结果不再入账")
-                break
+                return None
             url = s.get("url")
             if not url:
-                continue
+                return None
             name = screenshot.shot_name(url)
             out = shot_dir / name
-            # 续197：3xx 站点的**展示标题**取自落地页那一跳（`utils.site_redirect`），
-            # 而落地页常常是 SPA 外壳 —— 首屏既没有 `<title>`，连 og:title 也可能没有，
-            # 标题要等 JS 渲染完才出现（CloudFront + vue/element-ui 那一类就是这样）。
-            # 所以"要不要渲染后标题"多一档：3xx 且落地页还没标题时也要，
-            # 否则页面上那一格永远只能显示 `-`（主理人点单"301 应该取跳转之后的标题"）。
             _need_final = (int(s.get("status") or 0) in REDIRECT_STATUS
                            and not str(s.get("redirect_title") or "").strip())
             want_title = _need_final or not str(s.get("title") or "").strip()
             good, err, rtitle = screenshot.capture(url, out, ctx.settings, timeout=timeout,
                                                    throttle=ctx.throttle, want_title=want_title)
             attempts = [("一次性", timeout)]
-            # 续151 的老形状是"当场再打一次同一条 URL、超时翻倍"。续170 把它换成**换一种截法**，
-            # 两条理由都是实测的（主理人 2026-10-13：「重试可以不要那么快急着重试」+
-            # 「超时你要显示重试了多少次」）：
-            # ① 那份日志里 6 个超时站点各白等 30+60 秒，**一张都没救回来**（单阶段多花约 9 分钟）；
-            # ② 它们超时不是因为"等得不够久"，而是页面**永远不等 load**（第三方子资源挂死），
-            #    同一条路再走一遍必然还是超时 —— 能救的只有 CDP 那条（挡掉埋点域、不等 load 要图）。
-            # 保留"3xx 换落地页再截一次"：那是一次**不同的导航**，不是同一件事重来。
             _reason = "" if good else screenshot.classify(err, s)
             _final = str(s.get("redirect_url") or "").strip()
             _try = _final if (_reason == screenshot.REASON_REDIRECT and _final
@@ -110,7 +103,7 @@ class ScreenshotStage(Stage):
                 _wait = screenshot.fallback_wait(ctx.settings)
                 _dl = time.time() + _wait
                 while time.time() < _dl and not ctx.stopped():
-                    time.sleep(0.5)              # 等一等再兜底，但**等得起也要停得下**
+                    time.sleep(0.5)              # 等一等再兜底，但等得起也要停得下
                 if ctx.stopped():
                     ctx.logger.info("[screenshot] 任务已停止，这一张不再走 CDP 兜底")
                 else:
@@ -119,8 +112,8 @@ class ScreenshotStage(Stage):
                     ctx.logger.info(f"[screenshot] {url} 一次性没截成（{_reason}）→ CDP 兜底："
                                     f"挡掉 {_nb} 个埋点/统计域、不等 load，{int(_cw)}s 内要一张图")
                     _g3, _e3, _r3 = screenshot.capture_cdp(_try, out, ctx.settings,
-                                                            timeout=_cw, throttle=ctx.throttle,
-                                                            want_title=want_title)
+                                                           timeout=_cw, throttle=ctx.throttle,
+                                                           want_title=want_title)
                     attempts.append(("CDP 兜底", _cw))
                     if _g3:
                         good, err = True, ""
@@ -128,36 +121,42 @@ class ScreenshotStage(Stage):
                         ctx.logger.info(f"[screenshot] {url} CDP 兜底截到了"
                                         f"（共尝试 {len(attempts)} 次，前一次是 {_reason}）")
                     else:
-                        # 档位**不跟着兜底重判**：档说的是"这站点为什么截不到"（超时/连不上/跳转），
-                        # 它不因为我们换了第二条截取路子而改变。跟着重判会把「超时」洗成「其他」，
-                        # 而候补重试只认 `RETRYABLE_REASONS` 那三档 —— 洗一次就悄悄少一批重试。
-                        # 兜底自己的失败原文照样留下（人要看的正是"两条路各卡在哪"）。
+                        # 档位不跟着兜底重判（见原文注释）：档说的是"为什么截不到"。
                         err = f"{err}；CDP 兜底：{_e3}"
+            fill_title = False
             if want_title and str(rtitle or "").strip():
                 if _need_final:
-                    # 这一张无论走哪条路（一次性跟跳 / 换落地页 / CDP 兜底），无头浏览器最终停在
-                    # 的都是落地页 ⇒ 渲染后的 `document.title` 正是 `redirect_title` 要的那句话。
                     s["redirect_title"] = rtitle
-                    final_title_rows.append((url, rtitle))
                 if not str(s.get("title") or "").strip():
-                    # 内存里也补上：screenshot 之后还有 osint / jsmine / dirscan / vulnscan 读这批站点行
                     s["title"] = rtitle
-                    title_rows.append((url, rtitle))
-            if good:
+                    fill_title = True
+            return {"url": url, "rel": (f"shots/{name}" if good else ""),
+                    "err": err, "reason": _reason, "rtitle": rtitle,
+                    "need_final": _need_final, "fill_title": fill_title,
+                    "attempts": attempts}
+
+        for _res in pool_run(_one, sites, workers=workers,
+                             logger=ctx.logger, label="截图"):
+            if not _res:
+                continue
+            _url = _res["url"]
+            if _res["rel"]:
                 ok += 1
-                # 库里只存**相对任务工作目录**的路径（shots/xxx.png）：
-                # 既不含绝对路径，也不假设工作目录一定在项目 logs/ 下
-                # （测试会用 CTFSCANNER_LOGS 把工作目录指到别处）。
-                rel = f"shots/{name}"
-                rows.append((url, rel))
-                ctx.logger.info(f"[screenshot] {url} → {rel}")
+                rows.append((_url, _res["rel"]))
+                # 逐条成功日志降 DEBUG（主理人 2026-11-03：这类日志没那么重要），
+                # 汇总行仍在末尾"完成 N/M"。
+                ctx.logger.debug(f"[screenshot] {_url} → {_res['rel']}")
             else:
-                # 续150：失败**原因**要落库，不只写日志；续154：再前置一个**原因档**，
-                # 站点页那一格于是能一眼看出是 301 没落地 / 超时 / 无浏览器 / DNS 还是别的。
-                # 续170：档名沿用**诊断那一次**的结论（见上面 CDP 分支的注释），这里不再重判一遍。
-                reasons[_reason] = reasons.get(_reason, 0) + 1
-                errs.append((url, screenshot.error_text(_reason, err, attempts)))
-                ctx.logger.info(f"[screenshot] {url} 截图失败（{_reason}，尝试 {len(attempts)} 次）：{err}")
+                reasons[_res["reason"]] = reasons.get(_res["reason"], 0) + 1
+                errs.append((_url, screenshot.error_text(
+                    _res["reason"], _res["err"], _res["attempts"])))
+                ctx.logger.info(f"[screenshot] {_url} 截图失败（{_res['reason']}，"
+                                f"尝试 {len(_res['attempts'])} 次）：{_res['err']}")
+            if str(_res["rtitle"] or "").strip():
+                if _res["need_final"]:
+                    final_title_rows.append((_url, _res["rtitle"]))
+                if _res["fill_title"]:
+                    title_rows.append((_url, _res["rtitle"]))
         if rows:
             db.set_site_shots(ctx.task_id, rows)
         if errs:

@@ -34,6 +34,36 @@ function pvRenderLog(box, lines) {
   }).join("\n") || "（空）";
 }
 
+/* 续325（主理人 2026-11-03「多少秒和进度条更实时」）：任务列表页轮询。
+   只更新 running/queued 那几行的「状态徽章 / 进度条 / 百分比 / 当前阶段 / 运行时长」，
+   不整页刷新（整页刷会打断勾选与滚动位置）。3 秒一次，与详情页同节奏。 */
+async function pollTaskList() {
+  const rows = document.querySelectorAll("tr[data-id]");
+  if (!rows.length) return;
+  try {
+    const r = await fetch(absUrl("/api/tasks/live"));
+    if (!r.ok) return;
+    const j = await r.json();
+    for (const t of (j.tasks || [])) {
+      const row = document.querySelector(`tr[data-id="${t.id}"]`);
+      if (!row) continue;
+      const badge = row.querySelector("[data-status] .badge");
+      if (badge) {
+        badge.textContent = t.status === "queued" ? "排队中" : t.status;
+        badge.className = "badge st-" + t.status;
+      }
+      const bar = row.querySelector("[data-progress] .bar i");
+      if (bar) bar.style.width = t.progress + "%";
+      const pct = row.querySelector("[data-pct]");
+      if (pct) pct.textContent = t.progress + "%";
+      const st = row.querySelector("[data-stage-text]");
+      if (st) st.textContent = (t.status === "running" && t.stage) ? "· " + t.stage : "";
+      const du = row.querySelector("[data-duration]");
+      if (du) du.textContent = t.duration;
+    }
+  } catch (e) { /* 瞬时网络错误忽略，下次轮询再补 */ }
+}
+
 async function pollTask(id) {
   const box = document.getElementById("log-box");
   const badge = document.getElementById("st-badge");
@@ -1101,5 +1131,12 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     bulkEnable.addEventListener("click", () => send("enable"));
     document.getElementById("poc-bulk-disable").addEventListener("click", () => send("disable"));
+  }
+});
+/* 续325：任务列表页（有 tr[data-id]）自动轮询；详情页走 pollTask，不在这里重复起。 */
+document.addEventListener("DOMContentLoaded", () => {
+  if (document.querySelector("tr[data-id]")) {
+    pollTaskList();
+    setInterval(pollTaskList, 3000);
   }
 });

@@ -24,14 +24,14 @@
         --sev-info-fg:#cbd5e1; --sev-info-bg:#26313f;
         /* 灯箱遮罩与投影：也是"自包含色块"（不依赖主题底色），四套主题同一份，故只声明一次。
            续103 起它必须待在主题块内 —— 守卫开始盯 rgba()/hsl() 了，规则体里出现就是裸值。 */
-        --lb-bg:rgba(0,0,0,.82); --lb-shadow:rgba(0,0,0,.5); }
+        --lb-bg:rgba(0,0,0,.82); --lb-shadow:rgba(0,0,0,.5); --log-stage:#3fb950; }
 html[data-theme="light"] { --bg:#f4f6f9; --panel:#ffffff; --line:#d8dee7; --text:#1f2733;
         --muted:#5f6a7b; --accent:#0b6b52; --side:#ffffff; --hover:#eef2f7; --soft:#e6f5f0; --row-alt:#f7f9fc;
         --side-active:#dff2ea; --topbar-bg:#eef1f6; --chip-bg:#eef2f7; --bar-track:#e2e8f0;
         --input-bg:#ffffff; --code-bg:#eef1f6; --border:#7b8899;
         --ghost-bg:#eef2f7; --ghost-fg:#4b5563; --ghost-hover:#e2e8f0;
         --btn-bg:#0a5f49; --btn-border:#0a5f49; --btn-fg:#ffffff; --btn-hover:#0d7a5e;
-        --danger:#b42318; --danger-bg:#fde8e8; --danger-border:#e8a3a3; }
+        --danger:#b42318; --danger-bg:#fde8e8; --danger-border:#e8a3a3; --log-stage:#1a7f37; }
 html[data-theme="ocean"] { --bg:#0b1622; --panel:#122130; --line:#1d3348; --text:#d6e4f0;
         --muted:#8aa0b8; --accent:#38bdf8; --side:#0e1c2a; --hover:#17293b; --soft:#12303f; --row-alt:#16283a;
         --side-active:#12303f; --topbar-bg:#0d1a28; --chip-bg:#1b2f42; --bar-track:#1b2f42;
@@ -457,6 +457,10 @@ main section table tbody tr:hover td:first-child { background:var(--hover); }
   .panel.scroll-pane table thead th:first-child { z-index: 4; }
 }
 /* 续322：任务日志的阶段分隔行（绿色，便于看全流程时分层） */
-#log-box .log-stage { color: #3fb950; font-weight: 600; }
+#log-box .log-stage { color: var(--log-stage); font-weight: 600; }
 /* 续323：外置 tech-detect 猜出来的指纹（误报率高）用虚框+降低不透明度，内置规则实心 */
 .tech-tag.ext { border-style: dashed; opacity: .72; }
+/* 续325：列表页进度更实时 —— 条加高一档；百分比定宽防跳动；时长走等宽数字 */
+.bar { height: 8px; }
+.progress [data-pct] { display: inline-block; min-width: 3.4em; font-variant-numeric: tabular-nums; }
+[data-duration] { font-variant-numeric: tabular-nums; }

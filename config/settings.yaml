@@ -263,7 +263,10 @@ hostcollide:
   # 命中按 collide:<ip> 前缀落库 ⇒ 自动归 own 口径。
   enabled: true
   max_requests: 200           # 单任务请求预算（只读 GET）
-  timeout: 5
+  # 续328（主理人 2026-11-03）：实测命中时 9-11s、不中时 55-105s，时间全耗在等超时。
+  # timeout 5→2，并加"连续 N 个无差异就跳过该 IP 剩余候选"（只更快放弃，不改命中判据）。
+  timeout: 2
+  early_stop: 3
 crawl:
   enabled: false              # 续314 起默认关（主理人点单）；建任务「耗时选项」可一键打开
   max_sites: 30               # 每任务最多爬多少个站点
@@ -372,11 +375,20 @@ screenshot:
   enabled: true
   max_sites: 20  # 续280：填 0 = 不限（与 limits.brute_max_words: 0 = 全量 同一口径；旧写法把 0 当没填）
   window: 1280x900
-  timeout: 30
+  # 续327（主理人 2026-11-03「其他能提速的都提速」）：截图并发数。
+  # 每个无头浏览器约 200-300MB 内存；3 个在 23GB 机器上安全，小机器可设 2。
+  workers: 3
+  # 续326（主理人 2026-11-03「截图和 cert 一样慢」）：实测 20 站 3 分 42 秒，大头是
+  # "卡住的站"：一次性 30s 超时 + fallback_wait 10s + CDP 兜底 45s ≈ 85 秒/站。
+  # 正常站 2-3 秒就出图，所以把三档都收紧（卡住的站 85s → 约 43s）：
+  timeout: 15
   # 续225：一次性截图给页面留的"跑完首屏 JS"时间（--virtual-time-budget，毫秒；0＝关）。
   settle_ms: 3000
   # 续225：jsmine 后再截一次核对 md5；不一致就多截一张，取出现两次的那张（多数表决）。
-  verify_after_js: true
+  # 续329（主理人 2026-11-03）：任务 26 实测 20 张复核花 5 分 20 秒，结果
+  # 「一致 16 / 采用新图 0 / 仍不稳定 4」—— 0 张被采用，纯耗时。默认关；
+  # 要核对 JS 渲染后是否变图再打开。
+  verify_after_js: false
   # 续161「候补重试」：任务跑完后把「超时 / 跳转未落地 / 连不上」三档没截成的站点排进队列
   # 再试一轮（只跑 screenshot 阶段、只打这批 URL，等前面的任务跑完、worker 空了才执行）。
   # 续164 起随包**打开成 1**（主理人点单「有些站点截图超时，建议加入候补运行，在项目没完成前
@@ -388,8 +400,9 @@ screenshot:
   # （一份真实任务日志里 6 个超时站点白等 30+60 秒、0 张救回）。
   # 关掉 `cdp_fallback` 就退回"只有一次性 + 候补轮"。数值含义见 scanner/config.py 的注释。
   cdp_fallback: true
-  cdp_wait: 45
-  fallback_wait: 10
+  # 续326：卡住的站三档收紧（一次性 15s + 等 3s + CDP 25s ≈ 43s，原来是 85s）
+  cdp_wait: 25
+  fallback_wait: 3
   block_extra: []
   browser: tools/browser/chrome
   # 续175：中文字体（可选）。留空＝不注入；填了才给无头浏览器设 FONTCONFIG_FILE。
@@ -401,6 +414,8 @@ cert:
   enabled: true
   max_sites: 30  # 续280：填 0 = 不限（与 limits.brute_max_words: 0 = 全量 同一口径；旧写法把 0 当没填）
   timeout: 8
+  # 续326（主理人 2026-11-03）：证书取证改并发（原来串行，30 个 host:port 约 2.5 分钟）
+  workers: 6
   tls_ports: [443, 8443, 9443]
 iprecon:
   # 续150（用户 2026-10-11 点单"真实 ip 反查域名功能"）：默认打开。免 key（api.webscan.cc），

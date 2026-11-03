@@ -2200,6 +2200,25 @@ def create_app():
                 out.add(s)
         return out
 
+    @app.route("/api/tasks/live")
+    @login_required
+    def api_tasks_live():
+        """续325（主理人 2026-11-03「多少秒和进度条更实时」）：任务列表页的轮询源。
+
+        只回 running / queued 的行 —— 静止任务不需要每 3 秒重画。时长/阶段一律复用
+        列表页同一份口径（`run_duration_text` / `current_stage`），不另写一份"已 X 秒"。
+        """
+        out = []
+        for _row in _list_tasks(limit=None):
+            t = dict(_row)          # sqlite3.Row 没有 .get()，先转 dict
+            if str(t.get("status") or "") not in ("running", "queued"):
+                continue
+            out.append({"id": int(t["id"]), "status": t["status"],
+                        "progress": int(t.get("progress") or 0),
+                        "stage": t.get("current_stage") or "",
+                        "duration": run_duration_text(t)})
+        return jsonify({"tasks": out})
+
     @app.route("/tasks")
     @login_required
     def tasks():
@@ -5859,7 +5878,9 @@ def create_app():
                     "screenshot": {"enabled": f.get("screenshot_enabled") == "1",
                                    "max_sites": int(f.get("screenshot_max_sites", 20) or 20),
                                    "window": (f.get("screenshot_window") or "1280x900").strip(),
-                                   "timeout": int(f.get("screenshot_timeout", 30) or 30),
+                                   "timeout": int(f.get("screenshot_timeout", 15) or 15),
+                                   # 续327：截图并发数（0 会被读侧夹回 1，页面给 1 起步即可）
+                                   "workers": int(f.get("screenshot_workers", 3) or 3),
                                    # 续225：0 是合法值（不等）；缺字段才用 3000
                                    "settle_ms": int(f.get("screenshot_settle_ms", 3000) or 0),
                                    "verify_after_js": f.get("screenshot_verify_after_js") == "1",
@@ -5871,8 +5892,8 @@ def create_app():
                                    # 不能写 `or DEFAULT`（那会把人填的 0 洗成默认）；越界与非法值
                                    # 由读侧 `screenshot.cdp_wait()` / `fallback_wait()` 夹。
                                    "cdp_fallback": f.get("screenshot_cdp_fallback") == "1",
-                                   "cdp_wait": int(f.get("screenshot_cdp_wait", 45) or 45),
-                                   "fallback_wait": int(f.get("screenshot_fallback_wait", 10) or 10),
+                                   "cdp_wait": int(f.get("screenshot_cdp_wait", 25) or 25),
+                                   "fallback_wait": int(f.get("screenshot_fallback_wait", 3) or 3),
                                    "block_extra": [x for x in re.split(r"[,，;；\s]+",
                                                        str(f.get("screenshot_block_extra") or ""))
                                                    if x.strip()],
@@ -5883,6 +5904,8 @@ def create_app():
                     "cert": {"enabled": f.get("cert_enabled") == "1",
                              "max_sites": int(f.get("cert_max_sites", 30) or 30),
                              "timeout": int(f.get("cert_timeout", 8) or 8),
+                             # 续326：并发取证数（原来串行，30 个 host:port ≈ 2.5 分钟）
+                             "workers": int(f.get("cert_workers", 6) or 6),
                              # 端口列表：页面输入 "443,8443" 这种逗号/空格分隔的写法；
                              # 全非法时回退默认值（不要让一个手滑把功能变成"永不触发"）
                              "tls_ports": parse_port_list(f.get("cert_tls_ports"))},
@@ -5915,7 +5938,9 @@ def create_app():
                                  "min_left": int(f.get("extquota_min_left", 1) or 1)},
                     "hostcollide": {"enabled": f.get("hostcollide_enabled") == "1",
                                     "max_requests": int(f.get("hostcollide_max_requests", 200) or 200),
-                                    "timeout": int(f.get("hostcollide_timeout", 5) or 5)},
+                                    "timeout": int(f.get("hostcollide_timeout", 2) or 2),
+                                    # 续328：连续 N 个候选无差异就提前结束；0＝关（合法值，别洗成默认）
+                                    "early_stop": int(f.get("hostcollide_early_stop", 3) or 0)},
                     # 续221：指纹单站标签上限（`fingerprint.max_tags`）。没有输入框就原样带回现值。
                     "fingerprint": {"max_tags": int(f.get("fingerprint_max_tags",
                                                           (settings.get("fingerprint") or {})
@@ -5985,6 +6010,8 @@ def create_app():
                                  f.get("fofa_black_ico_threshold", 200) or 200),
                              # 证书反查：独立子开关 + 通用证书阈值 + 查询上限
                              "cert_enabled": f.get("fofa_cert_enabled") == "1",
+                             # 续321：证书反查前先验本任务有未过期证书（闸）；页面给勾选
+                             "cert_require_valid": f.get("fofa_cert_require_valid") == "1",
                              "cert_threshold": int(f.get("fofa_cert_threshold", 200) or 200),
                              "max_cert_queries": int(
                                  f.get("fofa_max_cert_queries", 10) or 10),

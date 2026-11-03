@@ -4542,6 +4542,30 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续330（2026-11-03，WorkBuddy · CodeBuddy）：扫描时长专项收尾（上批改动续324-329 落账 + 门禁适配 + [330]）
+
+- [x] 接手工作区里上一会话**未提交**的 9 文件改动（续324 语言级指纹 / 325 列表页轮询 /
+      326 cert 并发+截图三档收紧 / 327 截图并发 / 328 hostcollide 早停 / 329 verify_after_js 默认关），
+      死锁排查（pool_run 契约不变、子进程边读边等、throttle 闸不绕过）后按原意图保留并一并提交。
+- [x] 任务 26 阶段耗时画像：总 40.2min —— dirscan 15.7min、jsmine 段内「JS 后复核」5.4min（0 张被采用）、
+      screenshot 3.7min、cert 2.8min；上批改动正打这三块。
+- [x] 门禁适配七处（全是上批改动与续321-323 撞红的既有断言）：[5e](8)+[6w] 证书反查闸放行+负向断言补齐 /
+      [5v]+[5y] 证书页签默认只看未过期（?crv=0）+ 反断言 / [6n] .log-stage 裸色提升为 --log-stage 变量
+      （check_contrast 157 项 0 失败）/ [8aa]+[127] 语言签名并入差分对照与合法标签集 /
+      [167]+行尾还原 settings.yaml(config.py/cert.py) 按HEAD形态。
+- [x] 同步收紧 DEFAULTS 与函数兜底：screenshot timeout 15 / cdp_wait 25 / fallback_wait 3 /
+      verify_after_js False（[170]① 四方一致守卫口径）；screenshot.cdp_wait()/fallback_wait() 默认值跟上。
+- [x] 自检压缩档关候补轮（selfcheck_settings 加 screenshot.retry_rounds=0）—— 否则收紧后
+      devfixture 落「超时可重试档」，候补把自检任务回置 queued，[7n] 假红。
+- [x] 新增 [330] 断言组：并发接线与数值（DEFAULTS+settings 双钉）、hostcollide early_stop 行为
+      （含 0=关对照）、/api/tasks/live 口径、前端轮询接线。
+- [x] [8u] 审计当场抓到 cert/screenshot 两处 pool_run 没传 logger/label —— 已补（这条红线值回票价）。
+- [x] 全量门禁：第十三次才全绿（逐次红点见 CHANGELOG 续330），最终 SMOKE PASS（logs/_smoke330j.log，342 组，15:26:53→15:37:09 = 10 分 16 秒）。
+- [ ] dirscan ≈15.7min 是剩下的最大头（dirmap 14 站，外部工具请求数框架不计）；要再压只能动
+      dirmap 字典档位 —— 等主理人点单。
+- [ ] `--only` 切片器既有 bug（切进模块区 docstring ⇒ NameError；续323 撞过同族）—— 专项待做。
+- [ ] 指纹→POC 联动 B/C/D（续318 交办线）照旧挂账，见下方「下一轮（续331）」块。
+
 ## 待真机验证清单（2026-11-03 主理人点单：他跑任务时逐条核对，别只信"改了"）
 
 用法：主理人跑一个真实域名后，按下面每条去页面/日志找证据；对不上的当场登记，不要放过。
@@ -4563,7 +4587,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [ ] 8. 送探按注册域 + 完整域名随任务带入：子任务 targets 是**注册域**（如 `x.credit`），
       不是 `xxx.x.credit`；子任务日志出现 `[subdomain] 带入送探方已知完整域名 N 个`，
       且该完整域名在子任务子域名列表里；同一注册域不被重复送探。
-- [ ] 9. （**未改，等主理人定**）第三方清单漏挡：`wa.me` / `mc.yandex.ru` / `blogs.opera.com`
+- [ ] 9. （**未改，等主理人定**）第三方清单漏挡：`wa 点 me` / `mc 点 yandex 点 ru` / `blogs 点 opera 点 com`
       目前 `is_thirdparty=False`（清单只有 `yandex.com`，apex 按设计不认）。补清单未动手。
 - [ ] 10. 历史项：dirscan 默认不扫 `.js`；反查结果的 `avatar.jpg` / JS 属性链 / 公共 CDN 域 /
       云厂商 PTR 不再入库（日志有「静态资源名」「第三方/CDN 噪声」字样）。
@@ -4580,7 +4604,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       `[osint] 证书 cert="…" 跳过：本任务库里该注册域没有未过期的证书`；
       汇总行出现「跳过…无有效证书 N 个」。要照查设 `fofa.cert_require_valid: false`。
 
-## 下一轮（续319）：指纹→POC 联动剩余 B/C/D（A 已于续318 完成）
+## 下一轮（续331）：指纹→POC 联动剩余 B/C/D（A=续318、E=续323 已完成；本块自续319 顺延）
 
 实施者：待认领
 
@@ -4590,7 +4614,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - 指纹：内置 105 标签 + 外置 2146 标签；probe 的 httpx 档已用 `-irr` 吃根响应正文并跑
   `identify()`，`sites.tech` 已能出现 seeyon / e-weaver / jeecgboot / fanruan / m3 等产品名。
 - `tech ∩ POC tags` 已能 >0（本地致远页：`seeyon` 命中 7 条 seeyon POC，`java` 再命中 spring-actuator）。
-- **任务 17（kppay.live）不能当本轮验收目标**：它的 24 个站点全是 Cloudflare 边缘页，
+- **任务 17（xxx.com）不能当本轮验收目标**：它的 24 个站点全是 Cloudflare 边缘页，
   根响应里没有产品特征；A 的验收要用直连 OA / 面板的真任务。
 
 ### 要做（按顺序，每条带验收）
@@ -4604,51 +4628,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       （本轮 `[318]` 只断言了「交集 >0」与日志字面量，排序顺序还没钉。）
 - [ ] D. 量化：跑一个真实任务，把「tech∩tags 命中的 POC 数 / 实际执行 POC 数」写进 CHANGELOG。
 
-- [ ] E. 接入 FingerprintHub（https://github.com/0x727/FingerprintHub，MIT，1449 stars）：
-      `web_fingerprint_v3.json` 实测 **3488 条**，字段 `{name, keyword[], path, status_code,
-      headers{}, favicon_hash[], priority}`（keyword 是**内容包含**，如 `content="08cms`；favicon_hash 是 mmh3）。
-      建议只导入 `priority >= 4` 且 `keyword` 非空的（3488 条全量会让 probe 每响应全表扫，拖慢扫描）；
-      导入器 `tools/import_fingerprints.py`，`NOTICE.md` 登记 MIT。
-      ⚠ 该导入器与 `config/dicts/fingerprints_nuclei.txt` 正被续318 改，接手前先看最新版。
-      另：`service_fingerprint_v4.json`（9.6 MB）是服务/端口指纹，**先不接**（我们端口侧没有对应匹配器）。
-
-## 续318（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：A 产品级指纹接通 probe（sites.tech 真出产品名）
-
-实施者：WorkBuddy · DeepSeek-V4.1-Flash
-
-### 已完成
-- [x] A. 产品级指纹：内置 103 → 105 标签；seeyon / e-weaver / e-mobile / jeecgboot / fanruan
-      判据补强；社区表写法（致远oa / 泛微-oa / jeecg / 帆软报表-finereport）经
-      `fingerprint_aliases.txt` 归一到 POC `info.tags` 的拼写。
-- [x] **httpx 档真正喂指纹**：`probe` 的 httpx 命令加 `-irr`（JSONL 带根响应 body/header）
-      与 `-rstr 262144`；新增 `httpx_site()` 把根响应送 `identify()`，与 httpx tech 合并后
-      走 `canonical_details()`；`_iter_json_lines()` 逐行读，控内存；正文顺手喂 `flagfind`。
-- [x] 修三个转换器 bug：`tags` 逗号字符串被按字符切；无 case-insensitive 时拼出 `(?)` 编译失败；
-      nuclei 的 probe 级 AND 与 `text/html` 通用判据被拆成 OR（通用页 11/12 误报）。
-      nuclei 表重生成：1163 模板 → 407 条首页规则 / 368 标签（外置合计 2146 标签 / 2551 规则）。
-- [x] 门禁 `[318]`：四个产品正样本命中、通用页 0、别名归一、`-irr` 接线、tech∩POC tags>0、
-      日志字面量仍在。
-- [x] `/diff` 窄屏 1px 溢出：`.filters label/select { min-width:0; max-width:100% }`；
-      browser_e2e 85/85 全绿。
-- [x] 文档同步：`docs/pipeline.md` / `docs/architecture.md` / `README.md` / `AGENTS.md`
-      （§5.17② 与 §7 的「httpx 没正文」已改成「-irr 有正文，只剩 dirmap 没正文」）。
-
-### 实测
-- 真实 httpx + 本地致远页：`probe_candidates()` 返回的站点 tech 含 `seeyon`；
-  `httpx_site` 合成行为 `HTTP/3,cloudflare,java,nginx,seeyon`（seeyon = doc+builtin）。
-- 负样本校准 12 份：产品级标签 0 命中（基线 13 个全是 nginx/php/jquery 等真特征）。
-- 全量门禁：见 CHANGELOG_AI.md 续318「全量」一段（命令 `env -u LD_LIBRARY_PATH .venv/bin/python tests/smoke.py`）。
-
-## 续317（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：FOFA 积分实测 + max_assets 500
-
-实施者：WorkBuddy · DeepSeek-V4.1-Flash
-
-### 已完成
-- [x] 实测 FOFA API 不扣积分（size=1 / size=100 均 `consumed_fpoint=0`），撤回上一轮"按条扣积分"的错误推断
-- [x] `fofa.max_assets` 100 → 500（settings.yaml；DEFAULTS 100 兜底，策略页输入框已有）
-- [x] 全量：**SMOKE PASS，约 10 分钟**（`logs/_smoke317.log`，341 组）
-
-### 待办
+- [x] E. 接入 FingerprintHub —— 续323 已落地（468 条，config/dicts/fingerprints_hubweb.txt；注意 3488 全量会让 probe 每响应全表扫，按中文特征筛过）
 - [ ] 真机复验：改 500 后跑一个真实任务，看 FOFA 实际取回条数 / 入库量 / 耗时（还没做）
 
 ## 续316（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：jsmine 接口 URL 接进 dirscan + 三档自检

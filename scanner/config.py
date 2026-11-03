@@ -402,7 +402,8 @@ DEFAULTS = {
         # 性价比最高的一招 —— 默认关着等于这一 capability 没人用过。
         "enabled": True,
         "max_requests": 200,      # 单任务请求预算（引擎内部也会再夹一次）
-        "timeout": 5,
+        "timeout": 2,             # 续328：命中 9-11s / 不中 55-105s，原来 5s 全耗在等超时
+        "early_stop": 3,          # 续328：连续 N 个无差异就跳过该 IP 剩余候选
     },
     "crawl": {
         # 站点爬虫（续198）：收集页面里**本来就写着**的链接（与 dirscan 的"猜路径"是两回事）。
@@ -557,13 +558,18 @@ DEFAULTS = {
         "enabled": False,
         "max_sites": 20,        # 每任务最多截多少个站点
         "window": "1280x900",   # 视口尺寸（宽x高）
-        "timeout": 30,          # 单站点截图超时（秒）
+        # 续330：与随包 settings.yaml 同步收紧（30→15，四方一致守卫也钉这组值）——
+        # 正常站 2-3 秒出图，30s 只在"卡住的站"上全额耗掉。
+        "timeout": 15,          # 单站点截图超时（秒）
+        # 续327：截图并发数（原来串行；每个浏览器约 200-300MB）
+        "workers": 3,
         # 续225：给一次性截图加 `--virtual-time-budget`（毫秒）—— 让页面把首屏 JS/定时器
         # 跑完再落图，专治"截到一半还在加载"。0＝关（退回旧行为）。
         "settle_ms": 3000,
         # 续225：jsmine 跑完后再截一次，与首图比 md5；不同就再截一张、取出现两次的那个
         # （主理人提出的"多数表决"）。只在 screenshot 阶段真的跑过时才生效。
-        "verify_after_js": True,
+        # 续329/330：任务 26 实测 20 张复核 5 分 20 秒、0 张被采用 ⇒ 默认关（settings 同值）。
+        "verify_after_js": False,
         # 续161「候补重试」轮数（主理人点单）：任务正常跑完后，把这一轮**没截成**、且落在
         # 「超时 / 跳转未落地 / 连不上」三档的站点，排进队列再试一轮（只跑 screenshot 阶段、
         # 只打这批 URL，等 worker 空了才执行）。代码默认 0＝关（**不偷改出厂行为**）；
@@ -586,8 +592,8 @@ DEFAULTS = {
         # `block_extra`＝往默认那份埋点清单**追加**；页面自己的注册域**与它的子域**永远不会被挡
         #                （挡了就是把内容截成没有样式的空壳，比"没截到"更误导人）
         "cdp_fallback": True,
-        "cdp_wait": 45,
-        "fallback_wait": 10,
+        "cdp_wait": 25,        # 续330：45→25（与 settings 同步；兜底总预算）
+        "fallback_wait": 3,    # 续330：10→3（与 settings 同步）
         "block_extra": [],
         "browser": "",
         # 续175：无头浏览器的 fontconfig 配置文件（留空＝不注入）。填相对路径按仓库根解释；
@@ -604,6 +610,8 @@ DEFAULTS = {
         "enabled": False,
         "max_sites": 30,           # 每任务最多对多少个 host:port 取证
         "timeout": 8,              # 单次握手超时（秒）
+        # 续326：并发取证数（原来串行，30 个 host:port ≈ 2.5 分钟）
+        "workers": 6,
         # 值得试 TLS 的端口：https:// 站点无条件试；非 https 站点只有端口命中这里才试
         # （覆盖"HTTPS 服务被 probe 记成 http://host:8443"的情况）
         "tls_ports": [443, 8443, 9443],

@@ -353,6 +353,8 @@
       只读 GET、单任务请求预算见下。</p>
     <label>单任务请求预算 <input name="hostcollide_max_requests" value="{{ s.hostcollide.max_requests }}"></label>
     <label>单次超时（秒） <input name="hostcollide_timeout" value="{{ s.hostcollide.timeout }}"></label>
+    <label>连续无差异早停（个，0＝关） <input name="hostcollide_early_stop" style="width:4em"
+      value="{{ s.hostcollide.early_stop }}"></label>
 
     {# 续221：指纹单站标签上限（fingerprint.max_tags）—— 超出按"主文档优先、JS 补位"截断，
         丢多少写进任务日志。一个站被打出 20+ 个标签就是这么收住的。 #}
@@ -429,6 +431,8 @@
     <label>截图站点上限 <input name="screenshot_max_sites" value="{{ s.screenshot.max_sites }}"></label>
     <label>截图视口（宽x高） <input name="screenshot_window" value="{{ s.screenshot.window }}"></label>
     <label>单站点截图超时（秒） <input name="screenshot_timeout" value="{{ s.screenshot.timeout }}"></label>
+    <label>并发截图数 <input name="screenshot_workers" style="width:4em"
+      value="{{ s.screenshot.workers }}"></label>
     <label>截图前留时间跑首屏 JS（毫秒） <input name="screenshot_settle_ms" style="width:6em"
       value="{{ s.screenshot.settle_ms }}" placeholder="0＝不等（旧行为）"></label>
     <label class="chk"><input type="checkbox" name="screenshot_verify_after_js" value="1"
@@ -473,6 +477,7 @@
       <b>「SSL 证书」</b>页签。纯标准库、不发 HTTP、无新依赖）</label>
     <label>取证书站点上限 <input name="cert_max_sites" value="{{ s.cert.max_sites }}"></label>
     <label>单次握手超时（秒） <input name="cert_timeout" value="{{ s.cert.timeout }}"></label>
+    <label>并发取证数 <input name="cert_workers" style="width:4em" value="{{ s.cert.workers }}"></label>
     <label title="https:// 站点不看端口无条件试；非 https 站点只有端口在这里才试（覆盖 HTTPS 服务被记成 http://host:8443 的情况）">
       额外试 TLS 的端口（逗号/空格分隔，非 https 站点命中才握手）
       <input name="cert_tls_ports" value="{{ s.cert.tls_ports|join(',') }}"></label>
@@ -647,6 +652,9 @@
     <label class="chk"><input type="checkbox" name="fofa_cert_enabled" value="1"
       {{ 'checked' if s.fofa.cert_enabled }}> <b>证书反查</b>
       （<code>cert="example.com"</code>：找共用同一张 TLS 证书的域名，需上面的 favicon 开关一并打开）</label>
+    <label class="chk"><input type="checkbox" name="fofa_cert_require_valid" value="1"
+      {{ 'checked' if s.fofa.cert_require_valid }}> <b>反查前先验「本任务有未过期证书」</b>
+      （整个注册域只有过期证书就跳过查询 —— 过期证书说明目标大概率已停/换证；要照查请取消勾选）</label>
     <label>通用证书阈值（命中数超过该值 = 公共 CA / 大厂证书，放弃拓展）
       <input name="fofa_cert_threshold" value="{{ s.fofa.cert_threshold }}"></label>
     <label>每任务最多查几个注册域 <input name="fofa_max_cert_queries" value="{{ s.fofa.max_cert_queries }}"></label>

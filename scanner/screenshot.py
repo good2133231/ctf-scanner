@@ -295,15 +295,15 @@ def error_text(reason, err, attempts=()):
 
 
 def fallback_wait(settings=None):
-    """一次性失败后**先等几秒**再走兜底（主理人：「可以不要那么快急着重试」）。默认 10 秒。
+    """一次性失败后**先等几秒**再走兜底（主理人：「可以不要那么快急着重试」）。默认 3 秒（续330）。
 
     这段等待必须是**可打断**的（阶段用 `ctx.stopped()` 轮询），否则"点停止"在这里变成摆设。
     夹到 0..120：填 0＝立刻兜底（旧形状），填得再大也不许变成"卡住 worker 十分钟"。
     """
     try:
-        n = int(((settings or {}).get("screenshot") or {}).get("fallback_wait", 10))
+        n = int(((settings or {}).get("screenshot") or {}).get("fallback_wait", 3))
     except (TypeError, ValueError):
-        n = 10
+        n = 3
     return max(0, min(120, n))
 
 
@@ -473,15 +473,15 @@ def cdp_fallback_enabled(settings=None):
 
 
 def cdp_wait(settings=None):
-    """兜底这一趟最多花几秒（导航 + 等 load + 要图，全在这一个预算里）。默认 45 秒。
+    """兜底这一趟最多花几秒（导航 + 等 load + 要图，全在这一个预算里）。默认 25 秒（续330）。
 
     刻意**不复用** `screenshot.timeout`：那是一次性的预算，两个数揉在一起，改一个会连带
     把另一条路的时间也改了（而页面/日志上写的秒数就成了假话，§5.19）。
     """
     try:
-        n = int(((settings or {}).get("screenshot") or {}).get("cdp_wait", 45) or 45)
+        n = int(((settings or {}).get("screenshot") or {}).get("cdp_wait", 25) or 25)
     except (TypeError, ValueError):
-        n = 45
+        n = 25
     return max(8, min(180, n))
 
 

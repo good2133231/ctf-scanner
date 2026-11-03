@@ -55,9 +55,16 @@ def collide(ip, hosts, settings, stopped=None):
     """
     cfg = (settings or {}).get("hostcollide") or {}
     try:
-        timeout = int(cfg.get("timeout", 5) or 5)
+        timeout = int(cfg.get("timeout", 2) or 2)
     except (TypeError, ValueError):
-        timeout = 5
+        timeout = 2
+    # 续328（主理人 2026-11-03）：实测"命中时 9-11 秒、不中时 55-105 秒" —— 时间全耗在
+    # 等不可达候选的超时上。连续 N 个候选都与默认虚机一致/不可达，就跳过该 IP 剩余候选
+    # （真正绑定的通常在前几个里；这条只影响"更早放弃"，不改命中判据）。
+    try:
+        early_stop = int(cfg.get("early_stop", 3) or 0)
+    except (TypeError, ValueError):
+        early_stop = 3
     try:
         cap = int(cfg.get("max_requests", 200) or 200)
     except (TypeError, ValueError):
@@ -65,14 +72,21 @@ def collide(ip, hosts, settings, stopped=None):
     todo = [h for h in (hosts or ()) if h][:max(0, cap)]
     default = _fp(ip, None, timeout, settings)
     hits = []
+    tried = 0
+    same_run = 0
     for h in todo:
         if stopped is not None and stopped():
             break
+        tried += 1
         fp = _fp(ip, h, timeout, settings)
         if fp is None or fp == default:
+            same_run += 1
+            if early_stop > 0 and same_run >= early_stop:
+                break       # 连续 N 个无差异 ⇒ 后面的多半一样，别再等超时
             continue        # 与默认虚机一样 ⇒ 不是藏着的站点；请求失败 ⇒ 不猜
+        same_run = 0
         hits.append((h,) + fp)
-    return hits, len(todo)
+    return hits, tried
 
 
 def run(ctx):
@@ -108,8 +122,9 @@ def run(ctx):
                 ctx.logger.info(f"[hostcollide] 命中 {h} @ {ip}（{st}/{ln}「{ti}」）—— "
                                 "已按 collide: 来源入库（own 口径）")
         if tried < len(hosts):
-            ctx.logger.info(f"[hostcollide] {ip}：候选 {len(hosts)} 个受预算截断为 {tried} 个"
-                            f"（hostcollide.max_requests）")
+            ctx.logger.info(f"[hostcollide] {ip}：候选 {len(hosts)} 个只试了 {tried} 个"
+                            f"（预算截断或连续 {cfg.get('early_stop', 3)} 个无差异提前结束；"
+                            f"hostcollide.max_requests / early_stop）")
     if not found:
         ctx.logger.info("[hostcollide] 未发现隐藏绑定（所有响应都与默认虚机一致或不可达）")
     else:

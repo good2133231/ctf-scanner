@@ -20,7 +20,7 @@ CTF / 授权测试里最常见的就是自签名、过期、域名不匹配的�
 """
 from .base import Stage
 from .. import certs, db
-from ..utils import write_lines
+from ..utils import pool_run, write_lines
 
 
 def pick_targets(sites, tls_ports):
@@ -88,23 +88,38 @@ class CertStage(Stage):
             return
 
         timeout = int(cfg.get("timeout", 8) or 8)
-        rows, ok = [], 0
-        ctx.logger.info(f"[cert] 开始证书取证 {len(picked)} 个 host:port …")
-        for url, host, port in picked:
+        # 续326（主理人 2026-11-03）：原来**串行**、每个主机 5 秒（30 个 ≈ 2.5 分钟）。
+        # 改成线程池并发（`cert.workers`，出厂 6），且逐条日志降到 DEBUG —— 日志里只需要
+        # 一行汇总（成功/过期/自签/失败），失败才逐条点名。
+        workers = max(1, int(cfg.get("workers", 6) or 6))
+
+        def _one(item):
+            url, host, port = item
             if ctx.stopped():
-                ctx.logger.warning("[cert] 任务已请求停止，结果不再入账")
-                break
+                return None
             info, err = certs.fetch(host, port, timeout=timeout)
+            return url, host, port, info, err
+
+        rows, ok, failed, expired, selfsigned = [], 0, [], 0, 0
+        ctx.logger.info(f"[cert] 开始证书取证 {len(picked)} 个 host:port（并发 {workers}）…")
+        for item in pool_run(_one, picked, workers=workers,
+                             logger=ctx.logger, label="cert 取证"):
+            url, host, port, info, err = item
             if not info:
-                ctx.logger.info(f"[cert] {host}:{port} 取证失败：{err}")
+                failed.append(f"{host}:{port}（{err}）")
                 continue
             ok += 1
             info.update({"url": url, "host": host, "port": port, "source": "tls"})
             rows.append(info)
-            ctx.logger.info(f"[cert] {host}:{port} → CN={info.get('cn') or '-'} "
-                            f"issuer={info.get('issuer') or '-'} "
-                            f"有效至 {info.get('not_after') or '-'}"
-                            f"{'（已过期）' if info.get('expired') else ''}")
+            if info.get("expired"):
+                expired += 1
+            if info.get("self_signed"):
+                selfsigned += 1
+            if ctx.logger:
+                ctx.logger.debug(f"[cert] {host}:{port} → CN={info.get('cn') or '-'} "
+                                 f"issuer={info.get('issuer') or '-'} "
+                                 f"有效至 {info.get('not_after') or '-'}"
+                                 f"{'（已过期）' if info.get('expired') else ''}")
         if rows:
             # 跨运行去重（续25）：同一 (host, port, sha256, serial) 的证书不再重复入库
             db.insert_certs(ctx.task_id, db.drop_existing(
@@ -122,4 +137,9 @@ class CertStage(Stage):
                      f"{r.get('sig_algo') or ''}\t{r.get('serial') or ''}\t"
                      f"{r.get('sha256') or ''}\t{','.join(r.get('san') or [])}"
                      for r in rows])
-        ctx.logger.info(f"[cert] 完成 {ok}/{len(picked)} 个")
+        ctx.logger.info(f"[cert] 完成 {ok}/{len(picked)} 个：过期 {expired}、自签 {selfsigned}"
+                        + (f"、失败 {len(failed)}" if failed else ""))
+        for line in failed[:5]:
+            ctx.logger.info(f"[cert] 取证失败：{line}")
+        if len(failed) > 5:
+            ctx.logger.info(f"[cert] 另有 {len(failed) - 5} 个失败未逐条列出（明细见工作目录）")

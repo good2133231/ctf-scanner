@@ -3,6 +3,86 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续330（2026-11-03，WorkBuddy · CodeBuddy）：扫描时长专项收尾——续324-329 验证落账 + 门禁适配 + [330] 断言组
+
+实施者：WorkBuddy · CodeBuddy
+
+### 背景：这轮没有新点单，收的是「扫描时间过长」的账
+- 工作区里躺着上一会话**未提交**的 9 文件改动（代码注释标续324-329，但未登记、未提交、未跑全量），
+  主题正是主理人 2026-11-03 的「扫描时间过长」：
+  - **续324 语言级指纹**（`fingerprint.LANG_SIGNATURES`，代码注释标 324；CHANGELOG 续323 已预告）：
+    X-Powered-By=PHP / PHPSESSID / Apache-Coyote / JSESSIONID / X-AspNet-Version / vue·react bundle /
+    `__NEXT_DATA__` / `__NUXT__` → php/jsp/asp/vue/react/next.js/nuxt，在 `identify()` 里排第一。
+    这是 `dirscan._dict_kind` 与 `vulnscan._lang_conflict` 的收敛前提（判不出语言 ⇒ 每站退全量字典）。
+  - 续325 任务列表页 3 秒轮询 `/api/tasks/live`（只回 running/queued；进度/阶段/时长实时更新）。
+  - 续326 `cert` 改线程池并发（`cert.workers` 6，原串行 30 个 host:port ≈ 2.5 分钟）；逐条日志降 DEBUG、
+    改一行汇总（过期/自签/失败）；`screenshot` 三档收紧（timeout 30→15 / cdp_wait 45→25 /
+    fallback_wait 10→3；卡住的站 85s → 约 43s）。
+  - 续327 `screenshot` 改并发（`screenshot.workers` 3；每站独立临时 profile；结果主线程统一入账）。
+  - 续328 `hostcollide` timeout 5→2 + `early_stop=3`（连续 N 个候选与默认虚机无差异就提前结束；
+    实测命中 9-11s、不中 55-105s，时间全耗在等超时）。
+  - 续329 `screenshot.verify_after_js` 默认关（任务 26 实测 20 张复核 5 分 20 秒、0 张被采用 ⇒ 纯耗时）。
+- 任务 26 阶段耗时实测（logs/task_26_20261103_101249，总 40.2 分钟）：dirscan 15.7min ＞
+  jsmine 段内「JS 后复核」5.4min ＞ screenshot 3.7min ＞ cert 2.8min ＞ osint 1.9min ＞
+  portscan/subdomain 各 1.6min ＞ 其余秒级 —— 上批改动打掉的正是其中三块。
+
+### 本轮做了什么
+1. **死锁排查（§0.6）**：cert / screenshot 并发都走既有 `pool_run`（ThreadPoolExecutor，异常/停止
+   契约不变、None 结果丢弃）；子进程等待仍走 `run_cmd` 的边读边等；throttle 名额/预算闸原样
+   （并发受 `min(阶段 workers, 任务闸, 进程闸)` 约束，不绕过）。无新增等待原语。
+2. **`pool_run` 调用点接上 [8u] 审计**：cert/screenshot 两处新调用补 `logger=ctx.logger, label=…`
+   （[8u] 的 AST 审计当场抓到「2 个调用点没接上」—— 这条红线值回票价）。
+3. **函数级兜底值跟上**：`screenshot.cdp_wait()/fallback_wait()` 的函数默认 45/10 → 25/3
+   （与 DEFAULTS/settings 同值；否则 `cdp_wait({})` 与配置层说两套话）。
+4. **DEFAULTS 同步收紧**：`screenshot.timeout 30→15 / cdp_wait 45→25 / fallback_wait 10→3 /
+   verify_after_js True→False`（[170]① 四方一致守卫钉的是这组值；主理人「能提速的都提速」，
+   兜底也走快档）。守卫字面值与夹取回退断言（8..180 / 0..120 的非法值回退）同步更新。
+5. **门禁适配七处**（全是上批改动与续321-323 打红的既有断言——他们当时全量没跑）：
+   - `[5e](8)`：续323「证书反查闸」（`fofa.cert_require_valid` 默认开）让用例的 `search_cert`
+     整个被跳过 ⇒ 插一张未过期证书放行，并补**闸的负向断言**（无未过期证书 ⇒ cert= 查询不发、
+     y.test 不入库、日志「没有未过期的证书」「无有效证书 1 个」—— 续321/323 欠的门禁）。
+   - `[6w]`：同闸。C 组要钉「占位零请求/通用判通用/正常落库」，`_fw_run` 加 `certs=` 参数给
+     acme-portal.cn 与 common-cert.org 放行。
+   - `[5v]`：续321「证书页签默认只看未过期」把夹具的**过期**证书收起 ⇒ 断言改 `?crv=0`，
+     并补「默认视图不列过期证书」反断言（该行为此前无断言）。
+   - `[5y]`：CT 来源那张过期证书同样被默认视图收起 ⇒ 页面请求加 `?crv=0`。
+   - `[6n]`：续322 的 `#log-box .log-stage` 裸 hex `#3fb950` 撞续23 裸值守卫 ⇒ 提升为主题变量
+     `--log-stage`（dark `#3fb950` / light `#1a7f37`）；tools/check_contrast.py 157 项 0 失败。
+   - `[8aa]`：续324 语言级指纹是 `identify()` 的新组成步骤 ⇒ 差分对照 `_ref_identify` 把
+     `LANG_SIGNATURES` 补进枚举首位（差分继续只验「前置过滤不改变结果」）；[127] 的「合法标签」
+     白名单并入语言签名键（jsp/next.js 是真识别不是不明标签）。
+   - `[167]`+行尾还原：上一会话把 `config/settings.yaml` 的行尾翻了（i/crlf → w/mixed）、
+     `scanner/config.py` 一行 CRLF→LF、`scanner/stages/cert.py` 整文件混入 LF —— 全部按 HEAD
+     形态还原（settings.yaml 先剥后加回纯 CRLF；cert.py 末行「无结尾换行」形态保住）。
+     numstat 两式（普通 vs --ignore-cr-at-eol）11 个改动文件全部相等。
+6. **自检压缩档关候补轮**：续326 三档收紧后，devfixture 站点会落「超时」可重试档 ⇒ 候补收尾把
+   **自检自己的任务**回置 queued（run_task 是同步的、自检没有队列 worker 消费它），
+   `[7n]`「同步跑完=done」就断了。`selfcheck_settings` 显式 `screenshot.retry_rounds=0`
+   （自检单任务前台串行，候补轮只多烧一轮浏览器）。
+7. **新增 [330] 断言组**：cert 并发接线 + workers=6（DEFAULTS+settings 双钉）/截图并发接线 +
+   workers=3 / 三档收紧值（15/25/3，两处同钉）/ hostcollide timeout=2 + early_stop 行为
+   （连续 2 个无差异提前结束 tried==2；0=关全跑 tried==5，对照组即变异证伪）/ verify_after_js
+   默认关 / `/api/tasks/live` 只回 running+queued（progress/stage/duration 与列表页同口径，
+   done 后消失）/ app.js `pollTaskList`+3s setInterval + tasks.html `data-pct/data-stage-text/
+   data-duration` 钉点。
+8. **登记不修**：`--only` 切片器既有 bug（`--only 5e` 报 NameError——切片把模块区 docstring 切进
+   组块；续323 撞过同族 `--only 8y` IndentationError）。本轮用全量验证绕过，专项待做。
+
+### 实测
+- tools/check_contrast.py：157 项 0 失败、主题块外裸值 0 处。
+- 全量门禁（§0.6）：第十三次才全绿 —— 逐次红点：①[5e](8) 续323 闸 → ②[5v] 续321 页签默认 →
+  ③[6n] 续322 裸色 → ④[6w] 同闸 → ⑤[7n] 自检候补回置 queued → ⑥[8u] pool_run 调用点审计 →
+  ⑦[8aa]+[127] 语言签名差分 → ⑧[167] settings.yaml 行尾 → ⑨[170]① 四方一致 → ⑩cdp_wait 函数兜底 →
+  ⑪记忆同步守卫（todo 停在续318，正是本轮要补的账）。最终 **SMOKE PASS**（logs/_smoke330j.log，342 组，15:26:53→15:37:09 = 10 分 16 秒）。
+- 行尾自查：`git ls-files --eol` 全部恢复原形态；CHANGELOG_AI.md 保持 LF、todo.txt 新段按锚行 CRLF。
+
+### 没做 / 留给下一轮
+- 「扫描时间过长」剩下的最大头是 **dirscan ≈15.7min（dirmap 14 站）**：dirmap 是外部工具、
+  请求数框架不计；已有收敛手段（续220 按指纹收敛、续315 不扫 .js、续324 语言级指纹）。
+  要再压只能动 dirmap 字典档位 —— 等主理人点单。
+- jsmine 主段 ≈4min（20 站抓 JS，网络请求为主）属正常耗时，未动。
+- FingerprintHub 指纹→POC 联动 B/C/D（续318 交办线）未动，见 todo「下一轮」块（已顺延一档）。
+
 ## 续323（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：语言级指纹 + FingerprintHub 中文增量 + 证书/日志/展示收尾
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

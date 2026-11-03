@@ -1671,12 +1671,35 @@ def main():
                                   "status": 200, "title": "维保中心", "length": 100,
                                   "source": "builtin"}])
         db.insert_subdomains(os_tid, [("www.example.test", "subfinder")])  # 给证书反查一个注册域
+        db.insert_certs(os_tid, [{"url": "https://www.example.test",
+                                  "host": "www.example.test", "port": 443,
+                                  "expired": 0, "sha256": "a" * 64, "serial": "s8"}])
+        # 续321/323「证书反查闸」（fofa.cert_require_valid 默认开）：注册域没有未过期的
+        # 证书 ⇒ cert= 反查连查询都不发。插一张未过期证书放行，"反查真把结果入库"保持原判据。
         run_task(os_tid, "smoke-osint", targets, ["osint"], {"offline": True}, os_settings)
         got = {(r["domain"], r["source"]) for r in db.list_subdomains(os_tid)}
         assert ("x.test", "osint:fofa-title") in got, got
         assert ("y.test", "osint:fofa-cert") in got, got
         assert ("title", "维保中心") in os_calls, os_calls
         assert ("cert", "example.test") in os_calls, os_calls
+        # 闸的负向（续323 欠的门禁）：无未过期证书 ⇒ cert= 查询不发、y.test 不入库；
+        # 标题反查不受闸影响；日志出现「没有未过期的证书」与汇总「无有效证书 1 个」。
+        os_calls.clear()
+        os_tid2 = db.create_task("smoke-osint-gate", targets, ["osint"], {"offline": True})
+        db.insert_sites(os_tid2, [{"url": targets, "host": "127.0.0.1", "port": "80",
+                                   "status": 200, "title": "维保中心", "length": 100,
+                                   "source": "builtin"}])
+        db.insert_subdomains(os_tid2, [("www.example.test", "subfinder")])
+        run_task(os_tid2, "smoke-osint-gate", targets, ["osint"], {"offline": True}, os_settings)
+        assert not any(c[0] == "cert" for c in os_calls), os_calls
+        got2 = {(r["domain"], r["source"]) for r in db.list_subdomains(os_tid2)}
+        assert ("y.test", "osint:fofa-cert") not in got2, got2
+        assert ("x.test", "osint:fofa-title") in got2, got2
+        _tl8 = sorted(Path(_TMPDIR).glob(f"task_{os_tid2}_*/task.log"))
+        assert _tl8, "闸用例应产出任务日志"
+        _tl8_txt = _tl8[-1].read_text(encoding="utf-8", errors="replace")
+        assert "没有未过期的证书" in _tl8_txt, _tl8_txt[-400:]
+        assert "无有效证书 1 个" in _tl8_txt, _tl8_txt[-400:]
     finally:
         osint_stage.fofa_mod.search_title = _orig_title
         osint_stage.fofa_mod.search_cert = _orig_cert
@@ -3243,8 +3266,12 @@ def main():
     assert "host:port\tcn\t" in _ctxt and "smoke.test.lab" in _ctxt, _ctxt[:200]
     _srv.close()                                           # 握手到此为止，收掉夹具服务
     # 页签与报告：库里有一条证书时，任务详情要出现「SSL 证书」页签，报告要有对应小节
-    _dcert = c.get(f"/tasks/{cv2_tid}").get_data(as_text=True)
+    # 续321 起页签默认只看未过期 —— 本夹具证书恰是**过期**的：默认视图应收起，
+    #   "?crv=0" 才列出（顺带把"默认收起"这一行为也钉住）。
+    _dcert = c.get(f"/tasks/{cv2_tid}?crv=0").get_data(as_text=True)
     assert "SSL 证书" in _dcert and "smoke.test.lab" in _dcert, "任务详情缺「SSL 证书」页签内容"
+    assert "smoke.test.lab" not in c.get(f"/tasks/{cv2_tid}").get_data(as_text=True), \
+        "默认只看未过期：过期的夹具证书不该出现在默认视图"
     _rcert = generate(cv2_tid)
     assert "## TLS 证书" in _rcert and "smoke.test.lab" in _rcert, "报告缺 TLS 证书小节"
     # 没有证书时页签要**说清原因**（策略关 / 无 https 或加密端口站点 / 取了但失败）
@@ -4265,7 +4292,8 @@ workflows:
          "self_signed": 0, "san": ["example.com", "b.example.com"], "serial": "03A1",
          "sig_algo": "", "sha256": "", "source": "ct"},
     ])
-    _ch5 = c.get(f"/tasks/{_ct_tid}").get_data(as_text=True)
+    # 续321 页签默认只看未过期：CT 来源那张是**过期**的历史记录，看来源区分要 ?crv=0
+    _ch5 = c.get(f"/tasks/{_ct_tid}?crv=0").get_data(as_text=True)
     assert "<th>来源</th>" in _ch5, "「SSL 证书」页签缺来源列"
     assert "TLS 握手" in _ch5 and "CT 日志" in _ch5, "页签没区分两种证书来源"
     print("[5y] 批次4 ok: XSS 上下文判定表（8 上下文定级 + 探针定界符存活判定 + 全转义不报）"
@@ -6799,11 +6827,15 @@ workflows:
         return {"url": url, "host": "127.0.0.1", "port": "80", "status": 200, "title": title,
                 "length": 100, "source": "builtin"}
 
-    def _fw_run(tag, s, sites, subs):
+    def _fw_run(tag, s, sites, subs, certs=None):
         _tid = db.create_task(f"smoke-fofa-{tag}", targets, ["osint"], {"offline": True})
         db.insert_sites(_tid, sites)
         if subs:
             db.insert_subdomains(_tid, subs)
+        # 续321 的证书反查闸：注册域没有未过期证书 ⇒ cert= 连查询都不发。
+        # C 组要钉"占位零请求 / 通用判通用 / 正常落库"三条行为，先给两个注册域放行。
+        if certs:
+            db.insert_certs(_tid, certs)
         run_task(_tid, f"smoke-fofa-{tag}", targets, ["osint"], {"offline": True}, s)
         return _tid
 
@@ -6848,7 +6880,13 @@ workflows:
                                 _fw_site("http://127.0.0.1:8765/backup", "Index of /backup")],
                                [("acme-portal.cn", "subfinder"),
                                 ("common-cert.org", "subfinder"),
-                                ("example.com", "subfinder")]))
+                                ("example.com", "subfinder")],
+                               certs=[{"url": "https://acme-portal.cn", "host": "acme-portal.cn",
+                                       "port": 443, "expired": 0, "sha256": "b" * 64,
+                                       "serial": "s8c1"},
+                                      {"url": "https://common-cert.org", "host": "common-cert.org",
+                                       "port": 443, "expired": 0, "sha256": "c" * 64,
+                                       "serial": "s8c2"}]))
         _fw_c = _fw_calls[_fw_mark:]
         _fw_os = {(r["domain"], r["source"]) for r in db.list_subdomains(_fw_ids[-1])
                   if str(r["source"]).startswith("osint:")}
@@ -17166,7 +17204,9 @@ expression: r0()
                                       if k.lower() in ("set-cookie", "cookie"))}
         status = resp.get("status")
         tags = []
-        for source in (_fp122.SIGNATURES, _fp122.load_extra()[0]):
+        # 续330：identify() 的组成步骤加了 LANG_SIGNATURES（语言级信号，排第一）——
+        # 差分对照要测的是"前置过滤不改变结果"，对照组必须跟齐同一组成步骤。
+        for source in (_fp122.LANG_SIGNATURES, _fp122.SIGNATURES, _fp122.load_extra()[0]):
             for tag, rules in source.items():
                 for rule in rules:
                     codes = rule[2] if len(rule) > 2 else None
@@ -18133,12 +18173,16 @@ expression: r0()
     # 分别在手写表/内置表里，不进这个集合。集合名也从"服务器默认页"改成"语料自己就是它"。
     _NEG_SELF127 = {"apache-http", "apache-tomcat", "tomcat_jk_connector", "next.js"}
     _comm_tail = ((_hits.keys() & _ext_tags) - _hand_tags
-                  - set(_fp127.SIGNATURES) - _NEG_SELF127)
+                  - set(_fp127.SIGNATURES) - set(_fp127.LANG_SIGNATURES)
+                  - _NEG_SELF127)
     assert not _comm_tail, \
         f"社区库在通用语料上仍有长尾误报（{len(_comm_tail)} 个）：{sorted(_comm_tail)[:8]}"
     assert _hits, "内置表一个都没命中 ⇒ 语料太干净了（jQuery/nginx 这类特征必须能认出来）"
-    assert not (_hits.keys() - _ext_tags - set(_fp127.SIGNATURES)), \
-        f"命中里出现了既不在外置也不在内置的标签：{sorted(_hits.keys() - set(_fp127.SIGNATURES))}"
+    # 续330：合法标签集合 = 外置 ∪ 内置 ∪ 语言级签名（LANG_SIGNATURES 也是 identify 的组成步骤）
+    assert not (_hits.keys() - _ext_tags - set(_fp127.SIGNATURES)
+                - set(_fp127.LANG_SIGNATURES)), \
+        f"命中里出现了既不在外置也不在内置的标签：{sorted(_hits.keys() - _ext_tags
+                                          - set(_fp127.SIGNATURES) - set(_fp127.LANG_SIGNATURES))}"
     # 这条把**本轮的决定**钉住：外置表刻意不加路径门控，依据就是这句实测。
     _dict_lines127 = [l for l in (ROOT / "config/dicts/fingerprints_extra.txt")
                       .read_text(encoding="utf-8").splitlines()
@@ -22006,21 +22050,21 @@ expression: r0()
     _apa170 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
     _yaml170 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
     _seg170 = _re170.split(r"\n(?=[a-z_]+:)", _yaml170.split("screenshot:", 1)[1])[0]
-    for _k170, _y170 in (("cdp_fallback", "cdp_fallback: true"), ("cdp_wait", "cdp_wait: 45"),
-                         ("fallback_wait", "fallback_wait: 10"), ("block_extra", "block_extra: []")):
+    for _k170, _y170 in (("cdp_fallback", "cdp_fallback: true"), ("cdp_wait", "cdp_wait: 25"),
+                         ("fallback_wait", "fallback_wait: 3"), ("block_extra", "block_extra: []")):
         assert _k170 in _D170["screenshot"], f"DEFAULTS 缺 screenshot.{_k170}（保存一次就被重置）"
         assert f"screenshot_{_k170}" in _sh170, f"策略页没有 screenshot.{_k170} 的控件（只能手改 yaml）"
         assert f'"screenshot_{_k170}"' in _apa170, f"/settings 的 POST 映射缺 screenshot.{_k170}"
         assert _y170 in _seg170, f"settings.yaml 的 screenshot 段缺 {_y170}（四方不一致）"
     assert _S170.cdp_fallback_enabled({}) is True and \
         _S170.cdp_fallback_enabled({"screenshot": {"cdp_fallback": False}}) is False
-    assert _S170.cdp_wait({}) == 45 and _S170.cdp_wait({"screenshot": {"cdp_wait": 1}}) == 8 \
+    assert _S170.cdp_wait({}) == 25 and _S170.cdp_wait({"screenshot": {"cdp_wait": 1}}) == 8 \
         and _S170.cdp_wait({"screenshot": {"cdp_wait": 99999}}) == 180 \
-        and _S170.cdp_wait({"screenshot": {"cdp_wait": "abc"}}) == 45, "兜底秒数没夹到 8..180"
-    assert _S170.fallback_wait({}) == 10 \
+        and _S170.cdp_wait({"screenshot": {"cdp_wait": "abc"}}) == 25, "兜底秒数没夹到 8..180"
+    assert _S170.fallback_wait({}) == 3 \
         and _S170.fallback_wait({"screenshot": {"fallback_wait": -5}}) == 0 \
         and _S170.fallback_wait({"screenshot": {"fallback_wait": 10 ** 6}}) == 120 \
-        and _S170.fallback_wait({"screenshot": {"fallback_wait": None}}) == 10, \
+        and _S170.fallback_wait({"screenshot": {"fallback_wait": None}}) == 3, \
         "兜底前的等待没夹到 0..120（填错不许变成「把 worker 卡住十分钟」）"
 
     # ---- ② 「这一轮每张试几次、用什么方式」必须跟着配置现算（§5.19） ----
@@ -25263,7 +25307,9 @@ expression: r0()
     # 文本：本仓自己的注释里就写着"超时翻倍"那句话（§6.1 第 6 条 —— 钉裸词会被说明文案绊红）。
     _ss8bc = (ROOT / "scanner" / "stages" / "screenshot.py").read_text(
         encoding="utf-8", errors="replace")
-    assert "redirect_url" in _ss8bc and "重试" in _ss8bc, "截图阶段缺失败自动重试分支"
+    # 续330：原钉点注释词「重试」随串行改并发的注释精简被删 —— 改钉**实质调用**
+    # （CDP 兜底 capture_cdp；3xx 换落地页的 redirect_url 分支照旧）。
+    assert "redirect_url" in _ss8bc and "capture_cdp" in _ss8bc, "截图阶段缺失败兜底/换档分支"
     import ast as _ast8bc
     # 续225：只数 **run() 内**的调用 —— 「不许第三次同 URL 重打」约束的是初次截图流程；
     # JS 后复核（verify_after_js）是独立方法、按主理人点单做"多数表决"，不算那条约束。
@@ -26306,8 +26352,11 @@ expression: r0()
     _mask177c = _jm177._masked(_raw177c)
     db.insert_js_secret(_tid177c, {"host": "zone177.test", "type": "aws-access-key",
                                    "value": _raw177c, "masked": _mask177c,
-                                   "source": "http://zone177.test/a.js", "context": "k",
-                                   "line": 1, "line_text": "k"})
+                                   "source": "http://zone177.test/a.js",
+                    "context": "ctx177c 的前后文（原文）",
+                    # 续330：line_text 给含原文的真实形状行（7602fae 起列表行内显示的
+                    # 就是它；夹具给 "k" 验证不了原文可见）
+                    "line": 1, "line_text": 'apikey = "%s";' % _raw177c})
     db.insert_vuln(_tid177c, {
         "target": "zone177.test", "poc_id": "js-secret-aws-access-key",
         "name": "JS 疑似凭据泄露（aws-access-key）", "severity": "high", "owasp": "A08",
@@ -26323,12 +26372,18 @@ expression: r0()
     _vid177x = next(r["id"] for r in _vrows177 if r["poc_id"] == "a02-no-https")
     assert _login7(c, _admin_form117()).status_code == 302, "补登录失败：共享 client 拿不到会话"
     _html177c = c.get("/vulns").get_data(as_text=True)
-    assert "凭据原文（单独一行）" in _html177c, "原文行没渲染"
-    assert '<code class="mono">%s</code>' % _raw177c in _html177c, "原文没单独一行以 code 显示"
+    # 续330 适配 7602fae：旧文案「凭据原文（单独一行）」已删，新形状 = 列表行内截断原文行
+    # + 展开区「命中所在整行（原文）」与「前后文（原文）」（掩码值保留）。
+    _line177c = 'apikey = "%s";' % _raw177c
+    assert "命中所在整行（原文）" in _html177c, "原文行没渲染"
+    # 行内有双引号 ⇒ HTML 里是 &quot;；用不含引号的原文核心判定
+    assert _raw177c in _html177c, "列表行内应显示命中整行"
+    assert "前后文（原文）" in _html177c and "ctx177c" in _html177c, "展开区缺前后文"
     assert "判误报并拉黑值" in _html177c, "一键按钮没渲染"
     assert 'name="vuln_id" value="%d"' % _vid177 in _html177c, "按钮没带对这一行的 id"
     _html177d = c.get(f"/tasks/{_tid177c}").get_data(as_text=True)
-    assert "凭据原文（单独一行）" in _html177d, "详情页没有原文行（两个视图一个映射）"
+    assert "命中所在整行（原文）" in _html177d and _raw177c in _html177d, \
+        "详情页没有原文行（两个视图一个映射）"
     # 拒绝：非 js-secret 行 / 缺 id（_append_err 范式 = 409 最小页，标题讲"无法拉黑这个值"）
     _r177x = c.post("/api/jssecret/blacklist", data={"vuln_id": _vid177x, "next": "/vulns"})
     assert _r177x.status_code == 409, _r177x.status_code
@@ -26925,7 +26980,8 @@ expression: r0()
         _st184 = {"iprecon": {"enabled": True, "workers": 5, "timeout": 5, "preflight": True}}
         _ips184 = [f"9.9.9.{i}" for i in range(1, 6)]
         _m184, _s184 = _ip184.lookup_many(_ips184, _st184, logger=_lg184)
-        assert len(_calls184) == 6, f"预检后应只探 3+3=6 次（不再是 5 IP x 3 源），实到 {len(_calls184)}"
+        # 续330：续319 把 otx 加进默认源（3→4 个）—— 预检「每源一次」跟着 4+4=8。
+        assert len(_calls184) == 8, f"预检后应只探 4+4=8 次（不再是 5 IP x 4 源），实到 {len(_calls184)}"
         assert _s184["hit_ips"] == 5, f"接口全挂时**原生 PTR**仍要兜住（否则反查等于全废）：{_s184}"
         assert all(v and v[0].endswith(".targ184.test") for v in _m184.values()), _m184
         # (b) 说出口：两条 WARNING，而不是 500 个 IP 各打一条 DEBUG
@@ -26939,15 +26995,16 @@ expression: r0()
         _st184b = dict(_st184)
         _st184b["iprecon"] = dict(_st184["iprecon"], preflight=False)
         _m184b, _s184b = _ip184.lookup_many(_ips184, _st184b, logger=_L184())
-        assert len(_calls184) == 30 and _s184b["hit_ips"] == 5, \
-            f"关预检应白跑 15 次、追加批再白跑 15 次（共 30），PTR 救回 5 个：实到 {len(_calls184)} 次 / {_s184b['hit_ips']} 命中"
+        # 续330：主批 5 IP x 4 默认源 + 零命中追加批跑 3 个 HTTP 备用源（ptr 不发 HTTP）= 35。
+        assert len(_calls184) == 35 and _s184b["hit_ips"] == 5, \
+            f"关预检应白跑 20 次、追加批再白跑 15 次（共 35），PTR 救回 5 个：实到 {len(_calls184)} 次 / {_s184b['hit_ips']} 命中"
         # (d) 源活着时照旧走默认源（预检不该把好源过滤掉）
         _calls184.clear()
         _ip184.http_request = lambda url, timeout=None, settings=None, **kw: (
             _calls184.append(url) or {"status": 200, "text": "a.targ184.test\nb.targ184.test"})
         _m184c, _s184c = _ip184.lookup_many(["9.9.9.1", "9.9.9.2"], _st184, logger=_L184())
         assert _m184c.get("9.9.9.1") == ["a.targ184.test", "b.targ184.test"], _m184c
-        assert len(_calls184) == 9, f"2 IP x 3 源 + 3 次预检 = 9，实到 {len(_calls184)}"
+        assert len(_calls184) == 12, f"2 IP x 4 源 + 4 次预检 = 12，实到 {len(_calls184)}"
         # (e) 配置两个产地都在（DEFAULTS 是产地，settings.yaml 是用户看得见的那一层）
         from scanner import config as _cfg184
         assert _cfg184.DEFAULTS["iprecon"].get("preflight") is True, "出厂必须开启预检"
@@ -34423,6 +34480,9 @@ expression: r0()
         def __init__(self):
             self.lines = []
 
+        def debug(self, m):          # 续323 起「消耗 0 积分」降 DEBUG（续330：桩跟上）
+            self.lines.append(m)
+
         def info(self, m):
             self.lines.append(m)
 
@@ -34731,14 +34791,16 @@ expression: r0()
         def exception(self, m, *a): _logs318.append(str(m))
         def debug(self, m, *a): pass
 
+    # 续330：类体里引用 main 局部名（settings/_Rec318）在**全量**（main 是函数）下 NameError，
+    # 而 --only（exec 在模块全局）能跑 —— 移进 __init__（方法体走闭包）两种跑法都成立。
     class _Ctx318:
-        settings = copy.deepcopy(settings)
         options = {"offline": False}
         throttle = None
         results = {}
-        logger = _Rec318()
 
         def __init__(self):
+            self.settings = copy.deepcopy(settings)
+            self.logger = _Rec318()
             self.workdir = Path(_TMPDIR) / "318probe"
             self.workdir.mkdir(parents=True, exist_ok=True)
 
@@ -34822,6 +34884,81 @@ expression: r0()
     print("[319] 续319 ok: VT/OTX 被动 DNS 源（无 key 不发请求 / VT 带 x-apikey / 去重 / "
           "静态资源名与 JS 属性链过滤）")
 
+    # ---------------- [330] 续330：扫描时长专项收尾（上批改动续324-329 的接线/行为 + 列表页实时） ----------------
+    # 主理人 2026-11-03「其他能提速的都提速」。任务 26 实测大头：dirscan 15.7min、
+    # jsmine 段内「JS 后复核」5.4min（20 张、0 张被采用）、screenshot 3.7min、cert 2.8min、
+    # hostcollide 不中 55-105s（时间全耗在等超时）。本组钉：① cert 并发接线与 workers=6；
+    # ② screenshot 并发接线与 workers=3；③ 三档收紧落随包策略层（15/25/3）；
+    # ④ hostcollide timeout=2 + early_stop 行为（含 0=关对照）；⑤ verify_after_js 默认关；
+    # ⑥ /api/tasks/live 只回 running/queued、字段同列表页口径 + 前端轮询接线。
+    import yaml as _y324
+    from scanner.config import DEFAULTS as _def324
+    _set324 = _y324.safe_load((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
+    _ct324 = (ROOT / "scanner" / "stages" / "cert.py").read_text(encoding="utf-8")
+    assert "pool_run(_one, picked" in _ct324 and "logger=ctx.logger" in _ct324, "cert 并发接线被摘"
+    assert _def324["cert"]["workers"] == 6 and _set324["cert"]["workers"] == 6, (
+        _def324["cert"], _set324["cert"])
+    _sh324 = (ROOT / "scanner" / "stages" / "screenshot.py").read_text(encoding="utf-8")
+    assert "pool_run(_one, sites" in _sh324 and "logger=ctx.logger" in _sh324, "截图并发接线被摘"
+    assert _def324["screenshot"]["workers"] == 3 and _set324["screenshot"]["workers"] == 3, (
+        _def324["screenshot"], _set324["screenshot"])
+    # ③ 三档收紧（DEFAULTS 与 settings.yaml 同值 —— 四方一致守卫要求，且主理人「能提速的都提速」）
+    assert _set324["screenshot"]["timeout"] == 15 == _def324["screenshot"]["timeout"]
+    assert _set324["screenshot"]["cdp_wait"] == 25 == _def324["screenshot"]["cdp_wait"]
+    assert _set324["screenshot"]["fallback_wait"] == 3 == _def324["screenshot"]["fallback_wait"]
+    assert _def324["screenshot"]["verify_after_js"] is False
+    # ⑤ JS 渲染后复核默认关（任务 26 实测 20 张 5 分 20 秒、0 张被采用 ⇒ 纯耗时）
+    assert _set324["screenshot"]["verify_after_js"] is False
+    # ④ hostcollide：timeout 2 + early_stop 行为（连续 N 个无差异 ⇒ 提前结束；0=关）
+    assert _def324["hostcollide"]["timeout"] == 2 and _def324["hostcollide"]["early_stop"] == 3
+    assert _set324["hostcollide"]["timeout"] == 2 and _set324["hostcollide"]["early_stop"] == 3
+    from scanner import hostcollide as _hc324
+    _orig_hc324 = _hc324.http_request
+    def _fake324(url, **kw):
+        return {"status": 200, "text": "<title>default</title>", "length": 20}
+    _hc324.http_request = _fake324
+    _hosts324 = ["a324.test", "b324.test", "c324.test", "d324.test", "e324.test"]
+    _st_hc324 = {"hostcollide": {"timeout": 1, "max_requests": 50, "early_stop": 2},
+                 "_throttle": object()}
+    try:
+        _hits324, _tried324 = _hc324.collide("10.0.0.8", _hosts324, _st_hc324)
+        assert _hits324 == [] and _tried324 == 2, (_hits324, _tried324)
+        _st_hc324["hostcollide"]["early_stop"] = 0        # 对照：关掉早停 ⇒ 5 个全试
+        _hits324b, _tried324b = _hc324.collide("10.0.0.8", _hosts324, _st_hc324)
+        assert _tried324b == 5, _tried324b
+    finally:
+        _hc324.http_request = _orig_hc324
+    # ⑥ /api/tasks/live：静止任务不进轮询源；字段复用列表页口径（run_duration_text）
+    import gui.app as _ga324
+    from gui.app import app as _app324
+    from scanner import captcha as _cap324
+    _t324 = db.create_task("r324-live", "http://127.0.0.1:8765/", ["probe"], {"offline": True})
+    db.update_task(_t324, status="running", progress=37, current_stage="dirscan",
+                   started_at="2026-11-03 00:00:00")
+    _c324 = _app324.test_client()
+    _b324 = set(_cap324._STORE)
+    _c324.get("/captcha.png")
+    _f324 = [k for k in _cap324._STORE if k not in _b324]
+    assert _f324 and _c324.post("/login", data=dict(
+        _admin_form117(), captcha=_cap324._STORE[_f324[-1]][0])).status_code == 302
+    _live324 = {t["id"]: t for t in _c324.get("/api/tasks/live").get_json()["tasks"]}
+    assert _t324 in _live324, sorted(_live324)[:10]
+    _row324 = _live324[_t324]
+    assert _row324["status"] == "running" and _row324["progress"] == 37, _row324
+    assert _row324["stage"] == "dirscan" and "运行中，已 " in _row324["duration"], _row324
+    db.update_task(_t324, status="done", progress=100, current_stage="")
+    _live324b = {t["id"] for t in _c324.get("/api/tasks/live").get_json()["tasks"]}
+    assert _t324 not in _live324b, "静止任务不该出现在轮询源里"
+    _js324 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "pollTaskList" in _js324 and "setInterval(pollTaskList, 3000)" in _js324, \
+        "列表页轮询接线被摘"
+    _th324 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8")
+    for _mk324 in ("data-pct", "data-stage-text", "data-duration"):
+        assert _mk324 in _th324, _mk324
+    print("[330] 续330 ok: cert 并发(workers=6)/截图并发(workers=3)/三档收紧(15/25/3)/"
+          "hostcollide 早停(连续2个无差异提前结束、0=关全跑)/verify_after_js 默认关/"
+          "/api/tasks/live 只回 running+queued（progress/stage/duration 同列表页口径）/"
+          "列表页轮询接线")
     print("SMOKE PASS")
 
 
