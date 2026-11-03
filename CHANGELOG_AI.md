@@ -3,6 +3,30 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续317（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：FOFA 积分实测（不扣）+ max_assets 100→500
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 实测（先量再改）
+- 真实 key 直打 FOFA API 两次：`ip="1.1.1.1"` + `size=1` 与 `size=100`，响应都是
+  `consumed_fpoint=0`（命中总数 7 万条）⇒ **该账户调 API 不消耗积分**。
+  上一轮"按返回条数扣积分"是没实测的推断，本轮撤回并纠正。
+- 因此 `max_assets` 只决定"单次取回多少条"（我们只发一次请求、不分页），与积分无关。
+
+### 改了什么
+- `config/settings.yaml` 的 `fofa.max_assets`：100 → **500**（主理人 2026-11-03 定：1000 垃圾资产多）。
+  DEFAULTS 仍是 100（代码兜底；settings 是随包策略层）。策略页输入框与 POST 映射本来就有。
+
+### 垃圾资产过滤链（回答"靠什么挡"）
+1. 裸 IP/协议名：`fofa.domain_of()` 只回合法域名（`utils.is_domain`），取不到就丢；
+2. 用户黑名单：`blacklist.filter_pairs` 命中不入库；
+3. 第三方/CDN/SaaS：`jsmine.is_thirdparty` + `extdom.is_owned`（自有域放行，清单 `config/dicts/js_thirdparty.txt`）；
+4. 阈值：`black_ico_threshold` / `cert_threshold` / `title_threshold`（命中过多判公共图标/证书/标题，整批放弃拓展）；
+5. IP 反查那路另有 `iprecon._html_domains`（静态资源名 / JS 属性链 / 公共 CDN / 云 PTR）。
+
+### 全量
+- **SMOKE PASS，约 10 分钟**（`logs/_smoke317.log`，341 组）。
+
 ## 续316（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：jsmine 接口 URL 接进 dirscan + 三档默认值全量自检
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

@@ -4542,6 +4542,18 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续317（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：FOFA 积分实测 + max_assets 500
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 已完成
+- [x] 实测 FOFA API 不扣积分（size=1 / size=100 均 `consumed_fpoint=0`），撤回上一轮"按条扣积分"的错误推断
+- [x] `fofa.max_assets` 100 → 500（settings.yaml；DEFAULTS 100 兜底，策略页输入框已有）
+- [x] 全量：**SMOKE PASS，约 10 分钟**（`logs/_smoke317.log`，341 组）
+
+### 待办
+- [ ] 真机复验：改 500 后跑一个真实任务，看 FOFA 实际取回条数 / 入库量 / 耗时（还没做）
+
 ## 续316（2026-11-03，WorkBuddy · DeepSeek-V4.1-Flash）：jsmine 接口 URL 接进 dirscan + 三档自检
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
