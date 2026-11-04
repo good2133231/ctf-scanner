@@ -503,12 +503,8 @@
     <label class="chk"><input type="checkbox" name="dirscan_suffix_aware" value="1"
       {{ 'checked' if s.dirscan.suffix_aware }}> <b>备份后缀派生</b>（仅深扫）：对命中的文件名型路径
       再试 <code>.bak</code>/<code>.zip</code>/<code>.old</code>/<code>~</code> 等变体</label>
-    <label class="chk"><input type="checkbox" name="dirscan_tech_aware" value="1"
-      {{ 'checked' if s.dirscan.tech_aware }}> <b>按技术栈 + 框架选字典</b>：Java 站只吃
-      <code>dirs_jsp</code>、PHP 站只吃 <code>dirs_php</code>、ASP.NET 站只吃 <code>dirs_asp</code>，
-      判出是 WordPress / Spring / Weblogic 等框架时先扫它的专属字典
-      （<code>dirs_wordpress</code>…），再叠 <code>dirs_exposure</code>（<code>.git</code>/<code>.env</code>/备份）
-      与 <code>dirs_common</code>；判不出技术栈才用全量字典</label>
+    <p class="muted small note"><b>字典档位（续331 起只开放两档）</b>：<b>通用</b>（<code>config/dicts/dirs_common.txt</code>）/ <b>深度</b>（<code>dirs_big.txt</code>）。技术栈字典、框架字典、暴露面字典、浅扫精选等<b>未完善·暂不开启</b>。</p>
+    <label class="chk"><input type="checkbox" name="dirscan_tech_aware" value="1" disabled {{ 'checked' if s.dirscan.tech_aware }}> <b>按技术栈 + 框架选字典</b>（<span class="muted">未完善·暂不开启</span>）—— 语言/框架字典还没补全，先不接</label>
     <label class="chk"><input type="checkbox" name="dirscan_history" value="1"
       {{ 'checked' if s.dirscan.history_enabled }}> <b>并入历史 URL</b>（续248）：
       wayback CDX + OTX url_list 查这个注册域出现过的路径 —— <b>零目标流量</b>，
@@ -524,8 +520,10 @@
     <label>自曝入口单站上限（条）
       <input name="dirscan_selfurls_max" style="width:6em" value="{{ s.dirscan.selfurls_max }}"></label>
     <label class="chk"><input type="checkbox" name="dirscan_big_dict" value="1"
-      {{ 'checked' if s.dirscan.big_dict }}> 未知技术栈时用大字典
-      （<code>config/dicts/dirs_big.txt</code>，由外部字典整理而来）</label>
+      {{ 'checked' if s.dirscan.big_dict }}> <b>深度字典</b>（<code>config/dicts/dirs_big.txt</code>，1.2 万条；不勾则只吃通用字典）</label>
+    <label class="chk"><input type="checkbox" name="dirscan_use_dirmap" value="1"
+      {{ 'checked' if s.dirscan.use_dirmap }}> 深扫时调用外部 dirmap（<b>默认关</b>：它只有一份 5715 条通用字典，
+      每站全打一遍，实战容易被 WAF/CDN 封；内置字典按技术栈选，实测目录反而更全）</label>
     <label>单站点最多扫多少条字典（大字典 1.5 万条时必填此上限）
       <input name="dirscan_max_paths" value="{{ s.dirscan.max_paths }}"></label>
     <label>框架补充扫描额度（dirmap 的 <code>-e</code> 只认 php/jsp/asp，喂不进框架字典，
@@ -546,7 +544,7 @@
     {# 续223：外部字典源 —— 可直接编辑（续222 只读）。清空「来源名」=删除该行；
        项目外绝对路径不回显（value 留空，placeholder 给脱敏形），留空=沿用原值。 #}
     <details class="tech-more" {% if dict_sources_view %}open{% endif %}>
-      <summary><b>外部字典源</b>（零入仓接第三方字典目录，如 dirsearch 的 dicts/；<b>只在深扫档生效</b>）</summary>
+      <summary><b>外部字典源</b>（<span class="muted">未完善·暂不开启</span>，零入仓接第三方字典目录，如 dirsearch 的 dicts/；<b>只在深扫档生效</b>）</summary>
       <p class="muted small note">分类＝目录下的 <code>.txt</code> 文件名；<code>picks</code> 只接列出的分类（空＝全接）；
         <code>after</code> 插在那一层之后。清空「来源名」即删除该行；路径留空＝沿用原值
         （项目外绝对路径不回显，想改就整条重填）。</p>

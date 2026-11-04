@@ -307,10 +307,14 @@ dirscan:
   #   + 递归（默认关，开则 +5×(3+40)=215）。与"全端口 6.5 万连接/主机"差两个数量级。
   enabled: true
   mode: deep                  # 续144：默认深扫（全量分层字典 + dirmap + 后缀派生）
+  # 续331（主理人点单）：dirmap 默认**关**。5715 条通用字典 × 12 站 ≈ 68k 请求，
+  # 实战里被 Cloudflare 403 假拦截；内置字典按技术栈选字典后目录反而更多（实测 391 vs 88）。
+  # 要跑 dirmap 就把它打开（GUI 设置页 / 本文件），或单任务触发。
+  use_dirmap: false
   # 浅扫单站点上限（dirs_shallow 共约 150 条，基本全吃）
   quick_max_paths: 150
   big_dict: true
-  tech_aware: true
+  tech_aware: false          # 续331：未完善·暂不开启（语言/框架字典先不接，只留通用 + 深度两档）
   # 续316（主理人点单）：**jsmine 挖出的接口 URL 并入目录候选**（同 host、保留 query）。
   # 此前 jsmine 只把 URL 写进 workdir/js_urls.txt 与内存，没有任何下游消费 = 白跑。
   # 关掉：js_endpoints=false；单站条数上限：js_endpoint_max

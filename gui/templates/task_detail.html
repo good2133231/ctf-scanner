@@ -676,16 +676,17 @@
 
       <table id="tbl-ports">
         <thead><tr>
-          <th>主机</th><th>IP</th><th>端口</th><th>服务</th><th>banner</th></tr></thead>
+          <th>主机</th><th>IP</th><th>端口</th><th>服务</th><th>banner</th><th>来源</th></tr></thead>
         <tbody>
         {% for p in ports %}
           <tr><td class="mono">{{ p.host or '-' }}</td>
             <td class="muted mono">{% if p.ip %}<a href="{{ ip_drill(p.ip) }}" title="查看解析到 {{ p.ip }} 的全部子域名">{{ p.ip }}</a>{% else %}-{% endif %}</td>
             <td>{{ p.port }}</td>
             <td>{{ p.service or '-' }}</td>
-            <td class="muted small mono">{{ p.banner or '-' }}</td></tr>
+            <td class="muted small mono">{{ p.banner or '-' }}</td>
+            <td class="muted small">{{ p.source or 'portscan' }}</td></tr>
         {% else %}
-          <tr><td colspan="5" class="muted">暂无数据（portscan 阶段默认关闭，在「策略配置 → 端口与服务」打开）。</td></tr>
+          <tr><td colspan="6" class="muted">暂无数据（portscan 阶段默认关闭，在「策略配置 → 端口与服务」打开）。</td></tr>
         {% endfor %}
         </tbody>
       </table>

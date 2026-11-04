@@ -128,7 +128,9 @@ CREATE TABLE IF NOT EXISTS sites (
 CREATE TABLE IF NOT EXISTS ports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
-  host TEXT, ip TEXT, port INTEGER, service TEXT DEFAULT '', banner TEXT DEFAULT ''
+  host TEXT, ip TEXT, port INTEGER, service TEXT DEFAULT '', banner TEXT DEFAULT '',
+  -- 续331：资产来源（portscan / fofa，空串按 portscan 显示）
+  source TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS csegs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -407,6 +409,8 @@ def init_db():
 # 老库轻量迁移：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表补列，
 # 这里按需 ADD COLUMN（SQLite 的 ADD COLUMN 是原地元数据操作，代价极低）。
 _COLUMN_PATCHES = {
+    # 续331：FOFA 端口资产入库后要能区分来源（老库靠这条 ALTER 补）
+    "ports": {"source": "TEXT DEFAULT ''"},
     "subdomains": {"cname": "TEXT DEFAULT ''", "ip": "TEXT DEFAULT ''",
                    "cdn": "TEXT DEFAULT ''",
                    # 解析失败/未解析的原因码（nxdomain / no-a / timeout / over-limit…）
@@ -1667,12 +1671,14 @@ def set_site_icon(task_id, url, *, icon_hash=0, icon_file="", favicon=None):
 
 
 def insert_ports(task_id, ports):
-    """items: [{host, ip, port, service, banner}, ...]"""
+    """items: [{host, ip, port, service, banner, source}, ...]"""
     if not ports:
         return
-    _exec("INSERT INTO ports(task_id,host,ip,port,service,banner) VALUES(?,?,?,?,?,?)",
+    _exec("INSERT INTO ports(task_id,host,ip,port,service,banner,source) "
+          "VALUES(?,?,?,?,?,?,?)",
           [(task_id, p.get("host", ""), p.get("ip", ""), int(p.get("port") or 0),
-            p.get("service", ""), (p.get("banner") or "")[:300]) for p in ports], many=True)
+            p.get("service", ""), (p.get("banner") or "")[:300],
+            (p.get("source") or "portscan")[:20]) for p in ports], many=True)
 
 
 def insert_csegs(task_id, rows):

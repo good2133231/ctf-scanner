@@ -3,6 +3,45 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续331（2026-11-04，WorkBuddy · CodeBuddy）：日常快档（--only 修好）+ 提速四项（dirmap 默认关 / 字典两档 / FOFA 端口入库 / jsmine 与 dirscan 并行）
+
+实施者：WorkBuddy · CodeBuddy
+
+### 背景：主理人点单（2026-11-04，四项 + 快档）
+- 全量门禁 10:16，日常改动用不上；`--only` 老版本单跑依赖组会 NameError（续330 挂账「待验」）。
+- dirmap 易被封：5715 条通用字典 × 12 站 ≈ 68k 请求，实测 Cloudflare 403 / 整站假拦截；
+  任务 #27 vs #29 实测：不跑 dirmap 后 dirscan 24:15 → 6:57、目录 88 → 391 条 ⇒ 默认关。
+- 字典对外只留「通用 + 深度」两档，其余在页面标注「未完善·暂不开启」。
+- FOFA 反查只取域名、把 `host:port` 丢了 ⇒ 端口页签看不到 FOFA 发现的端口。
+- jsmine 与 dirscan 串行，两阶段合计占 11 分钟 ⇒ 并行。
+
+### 本轮做了什么
+1. **`--only` 修好（续330 挂账）**：`tests/smoke.py` 新增 `_deps_closure`——ast 静态扫每块的
+   Store/Load，从点名组向前补「最近一个定义缺失名字的块」，迭代到稳定；前置组按源码顺序在前，
+   **点名组保持点名顺序**（[272] 断言）。实测 `--only 5e` 自动补 `3/5b` 并 PASS。
+   切片器同时修三处老坑：块内三引号模板（YAML/nuclei）内容顶格 ⇒ `textwrap.dedent` 公共缩进判成 0，
+   改「左移 4 格 + 引号奇偶状态机保护字符串内部行」；从 try/except 中间起切的 5 块（177a 等）
+   起点前对齐到缩进 ≤4 的语句头；仍编译不过的 2 块（177a/177b，try 被 ok 行截断）运行时跳过并点名。
+   `--fast` **暂不开放**：块级 exec 与 main() 内联有语义差异（[8ad] 计时探针按「组行」归因对不上），
+   开关保留但明确 `SystemExit` 报错，避免拿局部结果当全量。
+2. **dirmap 默认关**：`dirscan.use_dirmap: false`（settings.yaml + DEFAULTS 同值，[317] 无差异）；
+   dirscan 判定改 `cfg.get("use_dirmap") is not False`（老配置/门禁用例缺键时保持旧行为，[105]/[310] 不受影响）；
+   GUI 设置页加深扫 dirmap 开关；[105] 组显式 `use_dirmap=True`（它测的就是 dirmap 路径）。
+3. **字典两档**：`dirscan.tech_aware` 默认 false（语言/框架字典暂不接）；设置页只留
+   「通用 dirs_common / 深度 dirs_big」，技术栈字典、框架字典、暴露面字典、外部字典源全部标注
+   「未完善·暂不开启」（表单字段保留，值走默认）。
+4. **FOFA 端口入库**：`ports` 表加 `source` 列（`_COLUMN_PATCHES` 让老库 ALTER 补齐）；
+   `db.insert_ports` 带 source（缺省 portscan）；`osint._fofa_assets` 把 FOFA 的 `host:port`
+   按 (host,port) 去重后入库（source=fofa，失败只告警不拖阶段）；任务详情端口页签加「来源」列。
+5. **jsmine 与 dirscan 并行**：`runner.py` 两阶段相邻时 2 线程并行（`runner.parallel_js_dirscan`，
+   缺省 True，无 runner 配置段也生效）；`run_selfcheck` 强制串行——并行会让阶段日志交错，
+   `split_log_by_stage` 把 dirscan 的行切给 jsmine，自检功能向量直接 MISS（[8am] 实测）。
+
+### 验证
+- 局部：`--only 5e`、`--only 310,317`、`--only 317` 全 PASS；并行实跑（jsmine+dirscan 对本地夹具，
+  同一秒启动、3.9 秒完成、dirscan 正常出结果）；DB 层 `source` 落库与缺省值实测。
+- 全量门禁：11:15:10 起 → 11:26:33 止，**SMOKE PASS**（337 组 / 11 分 23 秒）；日志 `logs/_smoke331_full4.log`。
+
 ## 续330（2026-11-03，WorkBuddy · CodeBuddy）：扫描时长专项收尾——续324-329 验证落账 + 门禁适配 + [330] 断言组
 
 实施者：WorkBuddy · CodeBuddy

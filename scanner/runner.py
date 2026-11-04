@@ -14,6 +14,7 @@ GUI/CLI 调 `request_stop(task_id)` 置位事件，阶段在循环边界调 `ctx
 最终任务状态写为 `stopped`（区别于 `failed`）。粒度是"当前一批请求跑完即停"，
 不会对正在飞行的 HTTP 请求做中断。
 """
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
 import threading
 import time
@@ -366,10 +367,13 @@ class PipelineRunner:
         # 以及层数 >1 时的自动递归（`_maybe_queue_next_layer`，仍由 ext_depth 把着）。
         last_ext = max((i for i, s in enumerate(stages) if s in _EXT_STAGES), default=-1)
         done_stages = set()
+        _skip_stage = set()      # 续331：jsmine 并行跑掉 dirscan 后，下一轮直接跳过
         # 续212（P3-14①）：CLI 前台进度条钩子。先推进度再打阶段横幅，日志才会
         # 落在"新阶段"的那一条上方（`scanner/log.py` 的控制台 handler 走 progress.write）。
         pg = getattr(ctx, "progress", None)
         for i, sname in enumerate(stages):
+            if sname in _skip_stage:
+                continue
             if ctx.stopped():
                 stopped = True
                 break
@@ -387,16 +391,43 @@ class PipelineRunner:
                 pg.stage(i + 1, total, STAGE_LABELS.get(sname, (sname,))[0])
             ctx.logger.info(f"===== 阶段 {i + 1}/{total}：{sname} =====")
             _t_stage = time.time()          # 续88：阶段级耗时（失败也记，才能看出"卡在哪一步"）
-            try:
-                STAGE_REGISTRY[sname](ctx).run()
-            except Exception as e:  # 阶段级容错
-                ctx.logger.error(f"[{sname}] 阶段异常：{e}")
-                ctx.logger.debug(traceback.format_exc())
-                # **追加**而不是覆盖：一条任务可能有多个阶段失败，覆盖式写法会让前面的错误丢失
-                db.append_task_error(ctx.task_id, f"{sname}: {e}")
-                failed.append(sname)
-            finally:
-                ctx.stage_seconds[sname] = round(time.time() - _t_stage, 3)
+            _par331 = (sname == "jsmine" and stages[i + 1:i + 2] == ["dirscan"]
+                       and bool((ctx.settings.get("runner", {}) or {}).get(
+                           "parallel_js_dirscan", True))
+                       and "dirscan" not in done_stages)
+            if _par331:
+                # 续331（主理人点单）：jsmine 与 dirscan 并行 —— 两者只共享 ctx.results["js_urls"]，
+                # dirscan 会少并入一批接口 URL，换约 4 分钟墙钟（任务 #29 实测 jsmine 4:19）。
+                # jsmine 仍是 last_ext 判定点：循环尾部的 extdom 与 JS 后截图复核照常跑。
+                ctx.logger.info("[runner] jsmine 与 dirscan 并行执行（续331）")
+                def _one331(_nm):
+                    _t0 = time.time()
+                    try:
+                        STAGE_REGISTRY[_nm](ctx).run()
+                    except Exception as _e:      # 阶段级容错，口径同串行分支
+                        ctx.logger.error(f"[{_nm}] 阶段异常：{_e}")
+                        ctx.logger.debug(traceback.format_exc())
+                        db.append_task_error(ctx.task_id, f"{_nm}: {_e}")
+                        failed.append(_nm)
+                    finally:
+                        ctx.stage_seconds[_nm] = round(time.time() - _t0, 3)
+                with ThreadPoolExecutor(max_workers=2) as _tp331:
+                    _futs331 = [_tp331.submit(_one331, _n) for _n in ("jsmine", "dirscan")]
+                    for _f331 in as_completed(_futs331):
+                        _f331.result()
+                done_stages.update(("jsmine", "dirscan"))
+                _skip_stage.add("dirscan")
+            else:
+                try:
+                    STAGE_REGISTRY[sname](ctx).run()
+                except Exception as e:  # 阶段级容错
+                    ctx.logger.error(f"[{sname}] 阶段异常：{e}")
+                    ctx.logger.debug(traceback.format_exc())
+                    # **追加**而不是覆盖：一条任务可能有多个阶段失败，覆盖式写法会让前面的错误丢失
+                    db.append_task_error(ctx.task_id, f"{sname}: {e}")
+                    failed.append(sname)
+                finally:
+                    ctx.stage_seconds[sname] = round(time.time() - _t_stage, 3)
             done_stages.add(sname)
             if i == last_ext:
                 # 拓展域名的存在性判定 + 归属追加（纯 DNS 只读 + 本地写库）。

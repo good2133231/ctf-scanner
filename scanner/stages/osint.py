@@ -422,6 +422,7 @@ class OsintStage(Stage):
 
         found = []
         ip_hits = []
+        _fofa_ports = []
         queried = black = 0
         for icon_hash, url in hashes.items():
             if ctx.stopped():
@@ -439,6 +440,17 @@ class OsintStage(Stage):
             queried += 1
             ctx.logger.info(f"[osint] FOFA 反查 mmh3 {icon_hash}（{url}）→ {len(assets)} 条 / 共 {total} 条")
             for a in assets:
+                # 续331（主理人点单）：FOFA 的 host:port 也是端口资产，别再丢。
+                try:
+                    _pnum = int(a.get("port") or 0)
+                except (TypeError, ValueError):
+                    _pnum = 0
+                _phost = str(a.get("host") or "").strip()
+                if _pnum > 0 and _phost:
+                    _fofa_ports.append({"host": _phost, "ip": str(a.get("ip") or ""),
+                                        "port": _pnum,
+                                        "service": str(a.get("protocol") or ""),
+                                        "source": "fofa"})
                 domain = _domain_of(a)
                 if not domain:
                     # 续314（主理人点单）：裸 IP 先记下来再做「探活 → IP 反查」。
@@ -455,6 +467,16 @@ class OsintStage(Stage):
         if ip_hits:
             found += self._favicon_ip_domains(ip_hits)
         self._flush_icon_status()
+        if _fofa_ports:
+            _uniq = {}
+            for _p in _fofa_ports:
+                _uniq[(_p["host"], _p["port"])] = _p
+            try:
+                db.insert_ports(ctx.task_id, list(_uniq.values()))
+                ctx.logger.info(f"[osint] FOFA 端口资产：入库 {len(_uniq)} 条"
+                                f"（host:port，source=fofa；端口页签可查）")
+            except Exception as _e:      # noqa: BLE001 - 落库失败不该拖垮整阶段
+                ctx.logger.warning(f"[osint] FOFA 端口资产入库失败：{_e}")
         return found
 
     # ---------- VirusTotal 子域名反查（续214） ----------

@@ -5831,6 +5831,8 @@ def create_app():
                             # 续250：robots/sitemap 自曝入口并入目录候选
                             "selfurls_enabled": f.get("dirscan_selfurls") == "1",
                             "selfurls_max": int(f.get("dirscan_selfurls_max", 500) or 500),
+                                # 续331：dirmap 开关（默认关；页面可打开）
+                                "use_dirmap": f.get("dirscan_use_dirmap") == "1",
                                 "max_paths": int(f.get("dirscan_max_paths", 400) or 400),
                                 "fw_max_paths": int(f.get("dirscan_fw_max_paths", 150) or 0),
                                 # 目录递归（续30，默认关）：0 = 关闭

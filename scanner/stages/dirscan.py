@@ -417,7 +417,8 @@ class DirscanStage(Stage):
             ctx.logger.info(f"[dirscan] 浅扫：仅打敏感路径精选字典（上限 "
                             f"{int(cfg.get('quick_max_paths', 150) or 0)} 条/站）")
             entries = self._builtin_scan(sites, cfg, limits, shallow=True)
-        elif script.exists() and not ctx.options.get("offline"):
+        elif (script.exists() and not ctx.options.get("offline")
+              and cfg.get("use_dirmap") is not False):
             py = self._dirmap_python(tool)
             deps_ok, dep_err = self._dirmap_deps_ok(py, script)
             if not deps_ok:
@@ -460,7 +461,8 @@ class DirscanStage(Stage):
                 else:
                     ctx.logger.warning("[dirscan] dirmap 未解析到结果，回退内置扫描")
         else:
-            ctx.logger.info("[dirscan] dirmap 不可用（或 --offline），使用内置字典扫描")
+            ctx.logger.info("[dirscan] dirmap 未启用（use_dirmap=false / 脚本缺失 / --offline），"
+                            "使用内置字典扫描")
         # 浅扫结果在上面已经拿到，不再叠加任何字典（那是深扫的事）
         if deep and not used_dirmap:
             entries = self._builtin_scan(main_sites, cfg, limits)

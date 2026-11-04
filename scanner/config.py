@@ -480,9 +480,11 @@ DEFAULTS = {
         # quick = 只吃 dirs_shallow（敏感路径精选）；deep = 全量分层字典 + dirmap。
         # 任务级选项 dirscan_full=true 可把单个任务强制成 deep（不改全局策略）。
         "mode": "deep",            # 续144：默认深扫（quick＝只吃 dirs_shallow 精选路径）
+        # 续331（主理人点单）：dirmap 默认关（易被封；内置按栈选字典实测更全）。要跑就打开。
+        "use_dirmap": False,
         "quick_max_paths": 150,    # 浅扫单站点上限（dirs_shallow 共约 150 条，基本全吃）
         "big_dict": True,      # 未知技术栈时用全量字典（config/dicts/dirs_big.txt）
-        "tech_aware": True,    # 按 sites.tech 选字典：Java 站不吃 PHP/ASP 后缀（用户要求）
+        "tech_aware": False,   # 续331：未完善·暂不开启（语言/框架字典先不接，只留通用 + 深度两档）
         # 续248：历史 URL（wayback CDX + OTX url_list，**零目标流量**）并入目录候选。
         # 上限是"单注册域最多取多少条"；带查询串的路径默认折叠（否则 ?id= 变体吃光额度）。
         "history_enabled": True,
