@@ -605,6 +605,28 @@ def _smoke_group_blocks():
         _a2 = _align_block_start(_src, _a)
         if _a2 != _a and _block_compiles(_src, _a2, _b):
             _blocks[_nm] = (_a2, _b)
+    # 续332：块尾停在 try 的 ok 行时，同组的 finally/except 收尾会落在 ok 行**之后**
+    # （[177a]/[177b] 实测：`print(\"[177a] ... ok\")` 的下一行才是 `finally:`）——
+    # 不补就编译失败，--only 点名这两块只能跳过。把紧随其后的收尾块并进来即可。
+    def _extend_tail(_a, _b):
+        _j = _b                      # 0-based：_src[_b] 是 ok 行的下一行
+        while _j < len(_src) and not _src[_j].strip():
+            _j += 1
+        if _j >= len(_src) or not re.match(r"^ {4}(finally|except)\b", _src[_j]):
+            return _b
+        _k = _j + 1
+        while _k < len(_src):
+            _ln2 = _src[_k]
+            if _ln2.strip() and (len(_ln2) - len(_ln2.lstrip(" "))) <= 4:
+                break
+            _k += 1
+        return _k
+    for _nm, (_a, _b) in list(_blocks.items()):
+        if _block_compiles(_src, _a, _b):
+            continue
+        _b2 = _extend_tail(_a, _b)
+        if _b2 != _b and _block_compiles(_src, _a, _b2):
+            _blocks[_nm] = (_a, _b2)
     return _src, _blocks
 
 

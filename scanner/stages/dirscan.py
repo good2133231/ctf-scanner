@@ -410,6 +410,7 @@ class DirscanStage(Stage):
 
         entries = []
         used_dirmap = False
+        _skipped_groups = {}      # 续332：dirmap 无 -e 时被剔出的已识别栈站点
         tool = ctx.settings.get("tools", {}).get("dirmap", {}) or {}
         script = resolve(tool.get("script") or "tools/dirmap/dirmap.py")
         if not deep:
@@ -429,7 +430,10 @@ class DirscanStage(Stage):
             else:
                 lang_arg = self._dirmap_accepts_lang_arg(script)
                 if not lang_arg:
+                    _groups_before = groups
                     groups, _fp_skipped = self._dirmap_targets(groups, lang_arg)
+                    # 续332：留一份被剔出的（认得出栈的）分组，dirmap 跑完后补内置。
+                    _skipped_groups = {k: v for k, v in _groups_before.items() if k}
                     ctx.logger.info(
                         "[dirscan] 这份 dirmap 没有 -e：字典是它自己 dirmap.conf 里那份**通用**"
                         "字典（不分技术栈）⇒ 只兜底没认出指纹的站点"
@@ -475,6 +479,16 @@ class DirscanStage(Stage):
             if extra:
                 ctx.logger.info(f"[dirscan] 框架补充扫描新增 {len(extra)} 条")
                 entries.extend(extra)
+            # 续332（漏扫修复）：dirmap 没有 -e 时，已认出栈的站点被 `_dirmap_targets` 剔出，
+            # 而上面 only_fw 只补「框架 + 暴露面」两层 —— PHP/JSP 站的语言字典
+            # （dirs_php 935 / dirs_jsp …）一条都不会跑（续330 实测：2 个 PHP 站全跳过）。
+            # 这里对那批站补一轮**按指纹选字典**的完整内置扫描；重复路径由末尾 uniq 去重。
+            if _skipped_groups:
+                _skipped_entries = self._builtin_scan(_skipped_groups, cfg, limits)
+                if _skipped_entries:
+                    ctx.logger.info(f"[dirscan] dirmap 剔除的已识别栈站点补内置扫描"
+                                    f"新增 {len(_skipped_entries)} 条")
+                    entries.extend(_skipped_entries)
         # 续310：CDN 边缘站**深扫也只吃 dirs_shallow**（受 quick_max_paths 截断），
         # 不跑 dirmap、不吃语言/框架字典。哪怕任务勾了「全目录」也照此 —— 否则
         # 27 个 Cloudflare 403 站又要吃掉十几分钟。

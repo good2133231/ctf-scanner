@@ -391,11 +391,63 @@ class PipelineRunner:
                 pg.stage(i + 1, total, STAGE_LABELS.get(sname, (sname,))[0])
             ctx.logger.info(f"===== 阶段 {i + 1}/{total}：{sname} =====")
             _t_stage = time.time()          # 续88：阶段级耗时（失败也记，才能看出"卡在哪一步"）
+            _par332 = (sname == "cert"
+                       and all(x in stages[i:] for x in ("screenshot", "osint", "jsmine"))
+                       and not any(x in done_stages for x in
+                                   ("cert", "screenshot", "osint", "jsmine"))
+                       and bool((ctx.settings.get("runner", {}) or {}).get(
+                           "parallel_probe_after", True))
+                       and not ctx.stopped())
             _par331 = (sname == "jsmine" and stages[i + 1:i + 2] == ["dirscan"]
                        and bool((ctx.settings.get("runner", {}) or {}).get(
                            "parallel_js_dirscan", True))
                        and "dirscan" not in done_stages)
-            if _par331:
+            if _par332:
+                # 续332（主理人点单）：probe 之后的 cert / screenshot / osint / jsmine 互不依赖
+                # （都只读 probe/subdomain 已写好的 ctx.results，各写各的表）——4 线程并行。
+                # 两个收尾必须手动补（它们的迭代会被 _skip_stage 跳过）：
+                #   ① extdom（osint/jsmine 是 last_ext 判定点，循环尾部不会再触发）；
+                #   ② jsmine 后的截图复核（screenshot 在组内已经跑过）。
+                _grp332 = [x for x in stages[i:]
+                           if x in ("cert", "screenshot", "osint", "jsmine")]
+                ctx.logger.info(f"[runner] probe 后四阶段并行（{','.join(_grp332)}）（续332）")
+                def _one332(_nm):
+                    _t0 = time.time()
+                    try:
+                        STAGE_REGISTRY[_nm](ctx).run()
+                    except Exception as _e:      # 阶段级容错，口径同串行分支
+                        ctx.logger.error(f"[{_nm}] 阶段异常：{_e}")
+                        ctx.logger.debug(traceback.format_exc())
+                        db.append_task_error(ctx.task_id, f"{_nm}: {_e}")
+                        failed.append(_nm)
+                    finally:
+                        ctx.stage_seconds[_nm] = round(time.time() - _t0, 3)
+                with ThreadPoolExecutor(max_workers=len(_grp332)) as _tp332:
+                    _futs332 = [_tp332.submit(_one332, _n) for _n in _grp332]
+                    for _f332 in as_completed(_futs332):
+                        _f332.result()
+                done_stages.update(_grp332)
+                _skip_stage.update(_grp332)
+                if any(x in _EXT_STAGES for x in _grp332):
+                    # 照抄循环尾部 extdom 段（含 probe 新域名同轮探测）。
+                    try:
+                        ext_res = extdom.process(ctx.task_id, ctx.settings,
+                                                 logger=ctx.logger, stopped=ctx.stopped)
+                        ctx.owned_new = list(
+                            (ext_res.get("promote") or {}).get("promoted") or [])
+                        if ctx.owned_new and "probe" in done_stages and not ctx.stopped():
+                            _probe_promoted(ctx, ctx.owned_new)
+                    except Exception as e:  # 附加动作级容错
+                        ctx.logger.error(f"[extdom] 拓展域名后处理异常：{e}")
+                        ctx.logger.debug(traceback.format_exc())
+                        db.append_task_error(ctx.task_id, f"extdom: {e}")
+                if "jsmine" in _grp332 and "screenshot" in stages:
+                    try:
+                        ScreenshotStage.verify_after_js(ctx)
+                    except Exception as e:      # noqa: BLE001 - 附加动作级容错
+                        ctx.logger.warning(f"[screenshot] JS 后复核异常（不影响主流程）：{e}")
+                        ctx.logger.debug(traceback.format_exc())
+            elif _par331:
                 # 续331（主理人点单）：jsmine 与 dirscan 并行 —— 两者只共享 ctx.results["js_urls"]，
                 # dirscan 会少并入一批接口 URL，换约 4 分钟墙钟（任务 #29 实测 jsmine 4:19）。
                 # jsmine 仍是 last_ext 判定点：循环尾部的 extdom 与 JS 后截图复核照常跑。

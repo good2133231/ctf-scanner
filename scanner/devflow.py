@@ -774,6 +774,9 @@ def run_selfcheck(settings, name="devflow-all13"):
     # 续331：自检强制串行 —— 并行时 jsmine/dirscan 日志交错，
     # split_log_by_stage 会把 dirscan 的行切给 jsmine，功能向量直接 MISS。
     settings.setdefault("runner", {})["parallel_js_dirscan"] = False
+    # 续332：四阶段并行同样会让阶段日志交错，
+    # split_log_by_stage 把 cert 的 → CN= 切给别的阶段，TLS 向量直接 MISS。
+    settings.setdefault("runner", {})["parallel_probe_after"] = False
     fx, http_base, https_base = devfixture.start_both()
     result = {"rows": [], "total_net": 0, "elapsed": 0.0, "task_status": "",
               "task_id": None, "log_file": "", "error": "", "external": [],

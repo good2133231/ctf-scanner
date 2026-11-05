@@ -3,6 +3,34 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+## 续332（2026-11-05，WorkBuddy · CodeBuddy）：漏扫修复 + probe 后四阶段并行 + 切片坏块根治
+
+实施者：WorkBuddy · CodeBuddy
+
+### 背景：接续331 未完成的三项（主理人点单「把没做完的待办修复」）
+- 续330 查出的真漏扫：dirmap 无 `-e` 时已认出栈的站点被剔出，`only_fw` 只补框架+暴露面 →
+  PHP/JSP 站的语言字典（dirs_php 935 条等）一条都没跑。
+- 上轮只做了 jsmine+dirscan 并行；probe 后的 cert/screenshot/osint/jsmine 四阶段仍是串行。
+- `--only` 切片器还有 2 个块（177a/177b）因 try 的 `finally` 落在 ok 行之后而编译失败、只能跳过。
+
+### 本轮做了什么
+1. **漏扫修复**：`dirscan.py` 在 `_dirmap_targets` 剔除时留一份 `_skipped_groups`，dirmap 跑完后
+   对这批站补一轮完整内置扫描（按指纹选字典；重复路径由末尾 uniq 去重）。
+2. **四阶段并行**：`runner.py` 在 cert 阶段用 4 线程并行跑 cert/screenshot/osint/jsmine
+   （`runner.parallel_probe_after`，缺省 True，无配置段也生效）；并行结束后手动补 extdom
+   （osint/jsmine 是 last_ext 判定点）与 JS 后截图复核（jsmine 完成、screenshot 已跑过）。
+   `run_selfcheck` 同时关掉 `parallel_js_dirscan` 与 `parallel_probe_after`——并行会让
+   `split_log_by_stage` 把 cert 的 `→ CN=` 行切给别的阶段，TLS 向量直接 MISS（全量实测过一次）。
+3. **切片坏块根治**：`_smoke_group_blocks` 增 `_extend_tail`——块尾停在 try 的 ok 行时，
+   把紧随的 `finally/except` 收尾块并入；303 块全部可编译（原 177a/177b 两块只能跳过）。
+4. **`--fast` 维持不开放**：块级 exec 与 main 内联的语义差异（[8ad] 计时探针）未解，
+   且上轮实测 8 分钟无提速；开关保留明确报错，日常用 `--only`。
+
+### 验证
+- 局部：`--only 5p`（dirmap 无 -e 行为）PASS；四阶段并行实测（本地夹具，2.8 秒、STATUS done、
+  cert/screenshot/osint/jsmine 同一秒启动）；`_smoke_group_blocks` 303 块 0 编译失败。
+- 全量门禁：06:43:32 起 → 06:54:12 止，**SMOKE PASS**（337 组 / 10 分 40 秒）；日志 `logs/_smoke332_full3.log`。
+
 ## 续331（2026-11-04，WorkBuddy · CodeBuddy）：日常快档（--only 修好）+ 提速四项（dirmap 默认关 / 字典两档 / FOFA 端口入库 / jsmine 与 dirscan 并行）
 
 实施者：WorkBuddy · CodeBuddy
