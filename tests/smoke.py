@@ -20568,6 +20568,9 @@ expression: r0()
         """跑一遍 subdomain 阶段的爆破段。`cur`=精简档、`deep`=深档（默认**不配**深档，
         否则本机/CI 上有没有那份 17.8 万条的文件会改变测试结果 —— 两档必须各自钉住）。"""
         st = copy.deepcopy(settings)
+        # 续333：本组在同一库上反复跑同一域名，会触发「子域增量模式」而跳过全量/组合爆破；
+        # 这里测的是爆破机制本身，显式关掉增量（产品的增量路径已由端到端脚本实测）。
+        st["subdomain"] = dict(st.get("subdomain") or {}, incremental=False)
         st["limits"] = dict(st.get("limits") or {}, wildcard_filter=False,
                             brute_fallback_max=fb, brute_max_words=mw,
                             brute_dict_warn_min=warn,

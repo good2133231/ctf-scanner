@@ -2348,6 +2348,9 @@ def create_app():
         #    **归属追加**（`targ1.pro` 拓展出 `aaa.targ1.pro` → 按正常子域对待）；
         # ③ 目标是子域（如 `aaa.targ1.pro`）时自动补收它的主域名 `targ1.pro`。
         # 全部只在本次任务生效（任务级选项），**不改全局策略、不改既有任务的默认行为**。
+        # 续333：任务级「全量爆破」——覆盖 subdomain.incremental（默认同根域 TTL 内有历史就跳过）。
+        if str(data.get("full_brute", "")).lower() in ("1", "true", "on"):
+            options["full_brute"] = True
         if str(data.get("auto_expand", "")).lower() in ("1", "true", "on"):
             options["auto_expand"] = True
             for stage in ("osint", "jsmine"):
@@ -5783,6 +5786,18 @@ def create_app():
                                   "reuse_history_max": int(
                                       f.get("subdomain_reuse_history_max")
                                       or (settings.get("subdomain") or {}).get("reuse_history_max", 300)),
+                                  # 续333：子域增量模式（同根域 TTL 内有历史就跳过全量/组合爆破）。
+                                  # 页面没填就原样带回现值 —— save_settings 是整份重写，漏带＝键被删。
+                                  "incremental": f.get("subdomain_incremental") == "1",
+                                  "incremental_ttl_days": max(1, int(
+                                      f.get("subdomain_incremental_ttl_days")
+                                      or (settings.get("subdomain") or {}).get("incremental_ttl_days", 7) or 7)),
+                                  # 0 在增量语义里是"不跑深档"，不能用 `or 5000` 抹成默认值
+                                  "incremental_max_words": max(0, int(
+                                      (f.get("subdomain_incremental_max_words")
+                                       if f.get("subdomain_incremental_max_words") not in (None, "")
+                                       else (settings.get("subdomain") or {}).get("incremental_max_words", 5000))
+                                      or 0)),
                                   # 续169：拓展域名自动递归的两档（层数 / 置信度阈值）。
                                   # 页面上没填就原样带回现值 —— `save_settings` 是整份重写，
                                   # 漏带＝把键删掉（`[8at]②` 那条"逐段点名一个键都不许少"为此而设）。

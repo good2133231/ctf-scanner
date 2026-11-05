@@ -68,6 +68,12 @@
       {# 续227：Host 碰撞**默认就做**（策略 `hostcollide.enabled` 出厂开），建任务页不再放勾选框 ——
           勾了也不改变默认行为，只会让人误以为"要勾才跑"。要单任务强制开/补跑，用详情页那颗按钮；
           要全局关，去「策略配置 → Host 碰撞」。 #}
+    {# 续333：默认复用 7 天内同根域历史子域、跳过全量字典与组合爆破；独立一行，**不进 expand 勾选组** #}
+    <div class="row">
+      <label class="chk" title="默认：同一根域 7 天内扫过 → 复用历史子域，跳过 17.8 万词全量字典与组合爆破，只跑精简档 + 前 5000 条。首次扫新目标或定期全量时勾这里重跑完整爆破。只影响本次任务">
+        <input type="checkbox" name="full_brute" value="1"> 全量爆破（忽略历史）</label>
+      <span class="muted small">默认增量：同根域 7 天内有历史就复用，不重跑全量爆破</span>
+    </div>
     <div class="row" data-ck-group="expand">
       <span class="muted" title="任务级选项 auto_expand：只影响本次任务，不改全局策略">
         拓展选项（可选）：</span>

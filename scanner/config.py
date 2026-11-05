@@ -310,6 +310,12 @@ DEFAULTS = {
         # （防顺着置信度一路套娃）。
         "ext_auto_probe": True,
         "ext_auto_probe_max": 5,
+        # 续333（主理人点单）：子域增量模式。同一根域 TTL 内已有历史子域 → 跳过全量字典
+        # （17.8 万词）与组合爆破，只跑精简档 + 前 `incremental_max_words` 条深档；
+        # 历史子域照旧并入。建任务页「全量爆破」可按任务覆盖（`options.full_brute`）。
+        "incremental": True,
+        "incremental_ttl_days": 7,
+        "incremental_max_words": 5000,
 
     },
     "passive": {

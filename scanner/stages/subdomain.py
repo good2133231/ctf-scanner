@@ -394,10 +394,46 @@ class SubdomainStage(Stage):
             use_pd = False
         if deep and use_pd:
             dict_path = str(write_lines(ctx.workdir / "brute_words.txt", words))
+        # ---------- 4a) 增量模式（续333）：同根域近期扫过 → 跳过全量爆破 ----------
+        # 主理人点单：同一个根域每建一次任务都重跑 17.8 万词 + 组合爆破，但库里已有上一次的
+        # 完整子域清单；原 `reuse_history` 只在阶段末尾合并、不省时间。这里在爆破前判定：
+        #   TTL 内同根域已有自家子域记录 → 只跑精简档 + 前 incremental_max_words 条深档，
+        #   组合爆破对这批根域跳过。任务级 `options.full_brute`（建任务页「全量爆破」）或
+        #   `subdomain.incremental=false` 走全量。离线（自检）不做增量，保持既有门禁口径。
+        inc_roots, inc_words, inc_dict = set(), [], ""
+        _sub_cfg = ctx.settings.get("subdomain", {}) or {}
+        if (_sub_cfg.get("incremental", True) and not ctx.options.get("full_brute")
+                and not offline and brute_domains):
+            _ttl = max(1, int(_sub_cfg.get("incremental_ttl_days", 7) or 7))
+            _inc_max = max(0, int(_sub_cfg.get("incremental_max_words", 5000) or 0))
+            _known = db.recent_known_domains(days=_ttl, except_task=ctx.task_id,
+                                             owner_id=getattr(ctx, "owner_id", None))
+            # 变量名刻意用 `_x` / `_n`：`[8au]` 按字面量把「root_of 传 d」钉在**恰好两处**
+            # （收集根与折叠），这里再写一次就会被判成"折叠多出一处"。判据本意是单一产地，不是禁用。
+            _roots = {_x: (targets.root_of(_x) or _x) for _x in brute_domains}
+            _hist = {(targets.root_of(_n) or _n) for _n in _known}
+            inc_roots = {_x for _x, _r in _roots.items() if _r in _hist}
+            if inc_roots:
+                inc_words = cur + _spread(
+                    deep, _inc_max, ctx.logger, "subdomain.incremental_max_words",
+                    hint="0 表示增量模式不跑深档（只吃被动源与历史）；要全量请勾建任务页「全量爆破」")
+                ctx.logger.info(
+                    f"[subdomain] 增量模式：{'、'.join(sorted(inc_roots))} 最近 {_ttl} 天已有历史子域 "
+                    f"→ 跳过全量字典与组合爆破，只跑精简档 + 深档前 {_inc_max} 条"
+                    "（要全量请勾「全量爆破」或把 subdomain.incremental 设 false）")
+                if use_pd and inc_words:
+                    if deep:
+                        inc_dict = str(write_lines(ctx.workdir / "brute_words_inc.txt", inc_words))
+                    else:
+                        # 没有深档：增量词表就是精简档原文件，另存副本既白占空间也被门禁 [8aq] 点名
+                        inc_dict = dict_path
         if brute_domains and words and use_pd:
+            _full_n = len([d for d in brute_domains if d not in inc_roots])
+            _inc_n = len([d for d in brute_domains if d in inc_roots])
+            _est = _full_n * len(words) + _inc_n * len(inc_words or [])
             ctx.logger.info(
-                f"[subdomain] 爆破规模预估（puredns 这一路）：{len(brute_domains)} 域名 × "
-                f"{len(words)} 词 = {len(brute_domains) * len(words):,} 次 DNS 查询"
+                f"[subdomain] 爆破规模预估（puredns 这一路）：全量 {_full_n} 域名 × {len(words)} 词"
+                f" + 增量 {_inc_n} 域名 × {len(inc_words or [])} 词 = {_est:,} 次 DNS 查询"
                 "（收紧：limits.brute_max_domains / limits.brute_max_words）")
         def _builtin_brute(_words):
             if not offline:
@@ -410,6 +446,9 @@ class SubdomainStage(Stage):
                 # 这条出路写在同一行，而不是让人对着进度条猜。
                 fb = cur + _spread(deep, int(limits.get("brute_fallback_max", 3000) or 0),
                                    ctx.logger, "limits.brute_fallback_max")
+                fb_inc = (cur + _spread(deep, int(_sub_cfg.get("incremental_max_words", 5000) or 0),
+                                        ctx.logger, "subdomain.incremental_max_words")
+                          if inc_roots else [])
                 if len(fb) < len(wordlist):
                     ctx.logger.info(f"[subdomain] 内置兜底只跑 {len(fb)} 条（并集共 "
                                     f"{len(wordlist)} 条，其中精简档 {len(cur)} 条全量保留）；"
@@ -426,8 +465,12 @@ class SubdomainStage(Stage):
                     # **纯 DNS 等待**，跟着 HTTP 的 max_workers(20) 走的话深档要跑更久
                     # （实测本机 3000 条 @20 线程 ≈ 53 秒；闸门设 0 吃全量 17.8 万条，
                     # 即使 128 线程也 45 分钟没跑完 ⇒ 全量只能靠 puredns，它自带并发与限速）。
+                    _fb = fb_inc if (inc_roots and d in inc_roots) else fb
+                    if inc_roots and d in inc_roots and not _fb:
+                        ctx.logger.info(f"[subdomain] 增量模式：{d} 跳过内置爆破（无可跑词表）")
+                        continue
                     resolved = wildcard.resolve_all(
-                        [f"{s}.{d}" for s in fb],
+                        [f"{s}.{d}" for s in _fb],
                         workers=int(limits.get("brute_workers", 64)))
                     kept, dropped = wildcard.filter_hits(resolved, wild.get(d))
                     add_many((h, "dns-brute(fallback)") for h in kept)
@@ -450,8 +493,13 @@ class SubdomainStage(Stage):
                 # 拿不到我们在 settings 里写的绝对路径）——见 utils.run_cmd 的 extra_path。
                 # 续264：域名走**位置参数**，不是 `-d`（`-d` 在 v2.1.1 里吃的是域名**文件**）。
                 # argv 只此一处拼，见 puredns_bruteforce_argv。
+                if inc_roots and d in inc_roots and not inc_dict:
+                    ctx.logger.info(f"[subdomain] 增量模式：{d} 跳过 puredns"
+                                    "（无可跑词表，只吃被动源与历史）")
+                    continue
+                _pd_dict = inc_dict if (inc_roots and d in inc_roots) else dict_path
                 rc, _, err = run_cmd(
-                    puredns_bruteforce_argv(pd_bin, dict_path, d, resolvers, out_file),
+                    puredns_bruteforce_argv(pd_bin, _pd_dict, d, resolvers, out_file),
                     timeout=3600, throttle=th,
                     extra_path=os.path.dirname(massdns_bin) if massdns_bin else None)
                 if rc == 0:
@@ -474,7 +522,11 @@ class SubdomainStage(Stage):
         # 种子＝精简档词 ∪ 本任务已经发现的那些名字的首段标签；只做 `a-b` 这一种形状，
         # 不做笛卡尔积爆炸；超出 `limits.brute_combo_max` 一律等距抽样（0=关）。
         combo_max = int(limits.get("brute_combo_max", 40000) or 0)
-        if combo_max and brute_domains and found:
+        combo_domains = [d for d in brute_domains if d not in inc_roots]
+        if inc_roots and len(combo_domains) < len(brute_domains):
+            ctx.logger.info(f"[subdomain] 组合爆破：增量模式跳过 "
+                            f"{len(brute_domains) - len(combo_domains)} 个根域")
+        if combo_max and combo_domains and found:
             seeds = sorted({n.split(".")[0] for n in found if "." in n} | set(cur))
             seeds = [s for s in seeds if "-" not in s and len(s) <= 12]
             # 种子夹到 200：两两拼接是 |seeds|² 级别（200 ⇒ 4 万对），不夹的话一个 1236 个名字
@@ -492,7 +544,7 @@ class SubdomainStage(Stage):
                     f"[subdomain] 组合爆破：{len(seeds)} 个种子两两拼出 {len(pairs)} 个 "
                     f"`a-b` 前缀（上限 limits.brute_combo_max={combo_max}，0=关；"
                     f"预估 {len(pairs) * len(brute_domains):,} 次 DNS 查询）…")
-                for d in brute_domains:
+                for d in combo_domains:
                     if ctx.stopped():
                         ctx.logger.warning("[subdomain] 任务已请求停止，中止组合爆破")
                         break

@@ -2065,6 +2065,29 @@ def list_known_domains(except_task=None, owner_id=None, limit=2000):
         + " GROUP BY domain ORDER BY MAX(id) DESC LIMIT ?", tuple(params))]
 
 
+def recent_known_domains(days=7, except_task=None, owner_id=None, limit=20000):
+    """最近 N 天（按任务创建时间 `tasks.created_at`）入库的自家口径子域名（去重）。
+
+    续333「子域增量模式」用：判定同一根域是不是近期刚扫过。口径与 `list_known_domains`
+    同一份（`OWN_SUBDOMAIN_WHERE` + 归属约束），只是多一道时间窗 —— **不另写一套判据**。
+    """
+    conds = [OWN_SUBDOMAIN_WHERE,
+             "task_id IN (SELECT id FROM tasks "
+             "WHERE created_at >= datetime('now','localtime', ?))"]
+    params = [f"-{max(1, int(days))} days"]
+    if except_task is not None:
+        conds.append("task_id <> ?")
+        params.append(int(except_task))
+    _oc, _op = _owner_asset_clause(owner_id)
+    if _oc:
+        conds.append(_oc)
+        params.extend(_op)
+    params.append(max(1, int(limit)))
+    return [r["domain"] for r in _query(
+        "SELECT domain FROM subdomains WHERE " + " AND ".join(conds)
+        + " GROUP BY domain ORDER BY MAX(id) DESC LIMIT ?", tuple(params))]
+
+
 def list_own_subdomains(task_id):
     """本任务「自身子域名」的域名行 —— 判据就是 `OWN_SUBDOMAIN_WHERE`，只此一处。
 

@@ -238,6 +238,13 @@
       只借自家口径，<code>js:</code> / <code>osint:</code> 那两路是别人的资产面，不会拿去发请求；也只借同一账号的任务。取消勾选＝只信本轮新发现</label><br>
     <label>沿用历史上限 <input name="subdomain_reuse_history_max" style="width:7em"
       value="{{ s.subdomain.reuse_history_max }}">（个；<code>0</code> = 不限。超出时只并前 N 个，并在任务日志里说明）</label>
+    <label class="chk"><input type="checkbox" name="subdomain_incremental" value="1"
+      {{ 'checked' if s.subdomain.incremental }}> <b>增量模式（复用历史子域）</b>：同一根域
+      <input name="subdomain_incremental_ttl_days" style="width:4em" type="number" min="1"
+        value="{{ s.subdomain.incremental_ttl_days or 7 }}"> 天内扫过 → 跳过全量字典（17.8 万词）与组合爆破，
+      只跑精简档 + 前 <input name="subdomain_incremental_max_words" style="width:6em" type="number" min="0"
+        value="{{ s.subdomain.incremental_max_words }}"> 条深档（<code>0</code> = 增量时不跑深档）。
+      建任务页勾「全量爆破」可按任务强制全量</label>
     <label>拓展自动递归层数 <input name="subdomain_ext_depth" style="width:4em" type="number"
       min="1" max="10" value="{{ s.subdomain.ext_depth or 1 }}">（层；<code>1</code> = 不自动递归。
       N&gt;1 时每层把「本轮新确认的自家域名」再采集一次，上限 10 由 <code>runner.clamp_ext_depth</code> 夹住）</label>

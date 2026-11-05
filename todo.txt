@@ -4542,6 +4542,24 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续333（2026-11-05，WorkBuddy · CodeBuddy）：子域增量模式 + 门禁节奏约定
+
+实施者：WorkBuddy · CodeBuddy
+
+主理人点单（接续332「每次还要自动拓展子域」）：
+
+- [x] 子域增量模式：同一根域 `subdomain.incremental_ttl_days`（默认 7）天内有历史子域 →
+  跳过 puredns 全量字典与组合爆破，只跑精简档 + 前 `incremental_max_words`（默认 5000）条深档；
+  历史子域照旧并入。`db.recent_known_domains()` 只加时间窗，own 口径复用既有判据。
+- [x] 建任务页「全量爆破（忽略历史）」勾选框（`options.full_brute`）；独立一行、不进 `data-ck-group`（否则 [7x] 红）。
+- [x] 策略页三个控件 + POST 映射（`incremental` / `incremental_ttl_days` / `incremental_max_words`），保存不再重置（[8as]）。
+- [x] 门禁节奏约定：一轮只在收尾提交前跑一次全量，开发中用 `--only`（写进 AGENTS §0.6，主理人 2026-11-05 定）。
+- [ ] P1：组合爆破上限 40000 → 2000（或检测泛解析自动关）——本轮未做。
+- [ ] P1：puredns `brute_max_words` 0 → 50000 —— 本轮未做。
+- [ ] P2：dirscan 按 3xx/4xx 分档、jsmine 并发 —— 本轮未做。
+
+**下一轮（续334）**：P1 两个配置收紧（组合爆破上限 / 词表上限），或按主理人点单。
+
 ## 续332（2026-11-05，WorkBuddy · CodeBuddy）：漏扫修复 + 四阶段并行 + 切片坏块根治
 
 实施者：WorkBuddy · CodeBuddy

@@ -194,6 +194,12 @@ subdomain:
   # 本次目标的自家域名，这次没被重新发现也该继续参与探测。0 = 不限（不建议）。
   reuse_history: true
   reuse_history_max: 300
+  # 续333：子域增量模式 —— 同一根域 TTL 内已有历史子域时，跳过全量字典与组合爆破，
+  # 只跑精简档 + 前 incremental_max_words 条深档（历史子域照旧并入）。
+  # 建任务页「全量爆破」可按任务强制全量；incremental=false 全局关。
+  incremental: true
+  incremental_ttl_days: 7
+  incremental_max_words: 5000
   # 续169：拓展域名的「自动递归」两档默认。**默认组合＝不扩** —— 层数 1 时 runner 直接早退，
   # 阈值一个字都不参与；要扩就把层数调到 2..10（每层上限 10 层，写更大也夹到 10）。
   # 阈值 `high` 的含义：拓展域名与「已确认资产」（本任务自家子域 + 目标注册域那一层）的
