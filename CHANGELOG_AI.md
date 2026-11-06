@@ -5,6 +5,26 @@
 
 
 
+## 续347（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：加密推送脚本入库 + AGENTS 补入口
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景
+
+主理人指出本地已有加密提交脚本，我却先尝试 `git push`/SSH、再判断“没有 GitHub 凭据”。根因不是网络：脚本是 `logs/_push314.py` 的一次性文件，目录被 gitignore，AGENTS 只写了 credential helper 的历史方案，没有告诉下一位“先跑这个脚本”。这是发现入口缺失，不是凭据缺失。
+
+### 改动
+
+- 将加密推送逻辑迁入被跟踪的 `tools/push_encrypted.py`：解 `config/keys.enc.yaml` 的 `github.push_token`，用本次子进程的 `http.extraheader` 推 `HEAD:main`；令牌不进 URL/argv、不改 `.git/config`，输出统一掩码。
+- `AGENTS.md` §2 增「一键补推入口」：明确先跑 `python tools/push_encrypted.py`，不许再去 `logs/` 翻一次性脚本或直接下“没有凭据”的结论。
+- 续346 的 push 阻断已解除：`962d228..dbe41e5` 已用旧脚本推上 `origin/main`；新脚本随后以 `Everything up-to-date` + `RC 0` 验证同一认证通路。
+
+### 验证
+
+- `tools/push_encrypted.py --dry-run`：只打印 `git push origin HEAD:main`，不推送。
+- `tools/push_encrypted.py`：`RC 0` / `Everything up-to-date`，证明加密凭据与 `http.extraheader` 通路可用。
+- `[8as]/[218]/[296]` 收尾三组通过；全量 v6 仍为代码基线。
+
 ## 续346（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：334-345 改动归档与记忆同步
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

@@ -374,6 +374,9 @@ Flask Web 控制台（仿 ARL）。
   口令兜底：`~/.secrets/keys-pass`（**600、属主必须是自己**，否则助手拒绝读、退回当场问一次），续295 起**密文本身随仓库走**（`config/keys.enc.yaml` 已不再忽略，主理人 2026-10-29 点单）：于是整个凭据体系的安全押在口令强度上 ⇒ 口令已换成 30 位随机，且 `[295]` 会扫全部被跟踪文件确认口令值一处都没出现（本轮我自己写进去过 8 处，见续293/续294 的 scrub 记录）；续292 起运行期还有第二档 `config/keys-pass`（同机、随密文一起拷，迁移最省的一步；**必须由 `.gitignore` 精确覆盖否则程序拒读**）—— 它是运行期的，不是助手的，助手那条链仍按仓库外那份文件走；
   优先级＝环境变量 > 该文件 > `/dev/tty`。`git-cred-helper.py` 取令牌的顺序＝
   `push_token` > `token`。改完 `git push` 不再需要任何环境变量或 askpass。
+  **一键补推入口（续347）**：`python tools/push_encrypted.py` —— 从密文解 `github.push_token`，
+  用本次子进程的 `http.extraheader` 推 `HEAD:main`；令牌不进 URL/argv/.git/config。不要再去
+  `logs/` 翻一次性脚本，也不要先下“没有凭据”的结论。
   ⚠️ 诚实的边界：解密器与密文同机 ⇒ 这**不是**更强的加密，能读 `~/.secrets/keys-pass` 的人
   就能解开 `keys.enc.yaml`（§7 续98 那条原话照旧成立）。这一档买到的只有三件事：明文不落盘、
   值不进 argv/`ps`/history/`.git/config`、以及权限一被改坏就自动失效。要真正收回这一点，
