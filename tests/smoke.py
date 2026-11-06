@@ -27072,6 +27072,19 @@ expression: r0()
     db.record_ext_probes(_tid178b, _new178, ["auto.targ178.test"], kind="auto")
     _html178auto = c.get(f"/extdomains?task={_tid178b}&group=0&all=1").get_data(as_text=True)
     assert "已自动送探 → #" in _html178auto, "续348：auto 方式的行徽章没渲染"
+    # 续350：自动送探子任务汇总直接读送探流水，默认过滤下也要看得到全部子任务
+    assert "本任务自动送探记录（1 个子任务）" in _html178auto, \
+        "续350：跨任务拓展页缺自动送探子任务汇总"
+    assert f'href="/tasks/{_new178}"' in _html178auto, "续350：汇总没链到自动送探子任务"
+    # 续349：用户实际看的是任务详情「拓展域名」页签，两处必须同款徽章 + 可展开重叠
+    _html178d = c.get(f"/tasks/{_tid178b}?all=1&nores=1").get_data(as_text=True)
+    assert "已自动送探 → #" in _html178d, "续349：任务详情 #ext 页签没显示送探徽章"
+    assert "本任务自动送探记录（1 个子任务）" in _html178d, \
+        "续350：任务详情默认视图也要列出自动送探子任务"
+    assert "自动送探读的是本任务全部入库拓展行" in _html178d, \
+        "续349：详情页没说明『全部（N）』不是自动送探的取数口径"
+    assert ("只看不重叠" in _html178d) or ("显示全部（含重叠）" in _html178d), \
+        "续349：详情页缺重叠资产展开/收起入口"
     print("[178] 送去探测 ok: 送探记录（probe/append/promote 三方式）+ 随单归属追加 + "
           "徽章/组内子标签；续203 复选框并进送探（字段缺席也追加，`if True:` 承重）")
     # ---------------- [179] 续179：IP 佐证 ⇒ medium（与非 CDN 已确认子域同 IP） ----------------

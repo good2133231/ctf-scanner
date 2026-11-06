@@ -532,7 +532,7 @@
       同类内新的在前），不再交错；点下面按钮只看某一类。</p>
     <div class="row">
       <a class="btn-mini {{ 'ghost' if ext_src else '' }}"
-         title="这里的括号是全量入库条数（含未解析）；页签徽标 {{ ext_pager.total }} 是已解析、按域名去重、且排除已归属本项目的数量"
+         title="这里的括号是当前「只看不重叠」时的入库条数（含未解析）；点『显示全部（含重叠）』才是本任务全部入库拓展行；页签徽标 {{ ext_pager.total }} 是已解析、按域名去重、且排除已归属本项目的数量"
          href="{{ url_for('task_detail', task_id=task.id) }}#ext">全部（{{ ext_counts.values()|sum }}）</a>
       {% for k, label, srcval, _prefix in ext_src_tags %}
         {% set n = ext_counts.get(srcval, 0) %}
@@ -544,6 +544,13 @@
     <p class="muted small note">口径：页签徽标 <b>{{ ext_pager.total }}</b> = 已解析、按域名去重、并排除已归属本项目的域名
       （与任务列表「统计」列一致）；上面「全部 / 分类」括号是<b>全量入库条数</b>，含未解析的碎片，
       点页内的「显示未解析」可以逐条看。</p>
+    <p class="muted small note"><b>自动送探读的是本任务全部入库拓展行</b>，不是当前这个过滤后的列表；
+      所以高置信来源行即使被「重叠资产 / 未解析」收起，也可能已经生成子任务。
+      {% if ext_overlap_hidden %}当前另有 <b>{{ ext_overlap_hidden }}</b> 个域名因已在任意任务里成为自家子域名而被收起。{% endif %}
+      当前<b>{{ '显示全部（含重叠）' if ext_show_all else '只看不重叠' }}</b>，
+      <a class="btn-mini ghost" href="{{ ext_toggle_overlap_url }}">{{ '只看不重叠' if ext_show_all else '显示全部（含重叠）' }}</a>。
+      展开后来源行会显示「已自动送探 → #子任务」。</p>
+    {% include "_auto_probe_summary.html" %}
     {% if ext_bl_hidden %}
     <p class="muted small">黑名单：当前筛选下 <b>{{ ext_bl_hidden }}</b> 条拓展域名命中黑名单，已<b>默认隐藏</b>
       （入库一条没动；勾选「加入黑名单」提交后本页立刻不再列出）。
@@ -633,7 +640,11 @@
           <tr><td class="pick"><input type="checkbox" class="pick pick-row"
                 name="domain" value="{{ s.domain }}"></td>
             <td class="mono">{{ idn_display(s.domain) }}
-              {%- if s.weak_tag %}<br><span class="weak-badge" title="{{ s.weak_reason }}">薄弱边界资产 · {{ s.weak_tag }}</span>{% endif %}</td>
+              {%- if s.weak_tag %}<br><span class="weak-badge" title="{{ s.weak_reason }}">薄弱边界资产 · {{ s.weak_tag }}</span>{% endif %}
+              {%- if ext_probe_map.get(s.domain) %}{% for pr in ext_probe_map.get(s.domain)[:1] %}
+              <a class="tech-tag" href="{{ url_for('task_detail', task_id=pr.task_id) }}"
+                 title="已送探：{{ pr.label }} → 任务 #{{ pr.task_id }}（{{ pr.status or pr.name or '未知状态' }}）">{{ pr.label }} → #{{ pr.task_id }}</a>
+              {%- endfor %}{% endif %}</td>
             <td>{{ conf_badge(s) }}</td>
             <td class="muted small mono">{% if s.ip %}<a href="{{ ip_drill(s.ip, ext=True) }}" title="查看解析到 {{ s.ip }} 的全部拓展域名">{{ s.ip }}</a>{% else %}-{% endif %}
               {%- if not s.ip and s.ip_note %}<br><span class="muted small"

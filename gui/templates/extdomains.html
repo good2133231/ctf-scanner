@@ -18,6 +18,7 @@
 {# 续169：置信度徽章的标记只有一份（`_conf.html` 里那个 macro）。平铺表与分组表共用同一个
    `ext_row`，所以这一格不会在两处各长一遍（本仓"同一标记写两处迟早漂"的老毛病）#}
 {% from "_conf.html" import conf_badge %}
+{% include "_auto_probe_summary.html" %}
 {# 一行的渲染（平铺表与分组表共用，避免两处改一处漏） #}
 {% macro ext_row(s) %}
   <tr>

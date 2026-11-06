@@ -1352,6 +1352,81 @@ def _shape_note(cfg):
 # 不复制枚举、不复制优先级（复制两份必然漂移）。
 CAUSE_ZH = {c: cancelcause.describe(c) for c in cancelcause.CAUSE_NAMES}
 
+# 续349：拓展域名「送探记录」徽章的唯一装配处 —— 跨任务 /extdomains 与任务详情
+# #ext 页签共用；以前只有前者装配，详情页看得见 9 个子任务却没有来源行徽章。
+EXT_PROBE_KIND_LABELS = {
+    "probe": "送去探测", "append": "追加执行", "promote": "归属追加",
+    "auto": "已自动送探",
+}
+
+
+def build_ext_probe_map(rows):
+    """一批拓展行/域名 → `{domain: [徽章...]}`；行徽章与组内子标签共用。"""
+    domains, seen = [], set()
+    for r in rows or ():
+        if isinstance(r, str):
+            d = r.strip().lower()
+        else:
+            try:
+                d = str(r.get("domain") or "").strip().lower()
+            except AttributeError:
+                d = ""
+        if d and d not in seen:
+            seen.add(d)
+            domains.append(d)
+    if not domains:
+        return {}
+    pmap = db.list_ext_probes(domains)
+    task_ids = sorted({int(t) for recs in pmap.values() for (t, _k, _c) in recs})
+    tinfo = {}
+    psum = {}
+    if task_ids:
+        marks = ",".join("?" * len(task_ids))
+        tinfo = {int(r["id"]): dict(r) for r in db._query(
+            f"SELECT id, status, name FROM tasks WHERE id IN ({marks})", tuple(task_ids))}
+        for _tn, _tbl in (("子域", "subdomains"), ("站点", "sites"), ("漏洞", "vulns")):
+            for _r in db._query(
+                    f"SELECT task_id, COUNT(*) c FROM {_tbl} WHERE task_id IN ({marks}) "
+                    "GROUP BY task_id", tuple(task_ids)):
+                psum.setdefault(int(_r["task_id"]), {})[_tn] = int(_r["c"])
+    out = {}
+    for d, recs in pmap.items():
+        out[d] = []
+        for (t, k, _c) in recs:
+            t = int(t)
+            s = psum.get(t) or {}
+            out[d].append({
+                "task_id": t, "kind": k,
+                "label": EXT_PROBE_KIND_LABELS.get(k, k),
+                "status": (tinfo.get(t) or {}).get("status", ""),
+                "name": (tinfo.get(t) or {}).get("name", ""),
+                "summary": "子域 {n}/站点 {h}/漏洞 {v}".format(
+                    n=s.get("子域", 0), h=s.get("站点", 0), v=s.get("漏洞", 0)),
+            })
+    return out
+
+
+def auto_probe_summary(from_task):
+    """某个父任务发起的自动送探子任务 → 不受拓展页展示过滤影响的汇总。"""
+    rows = db._query(
+        "SELECT task_id, domain FROM ext_probes WHERE from_task=? AND kind='auto' ORDER BY id",
+        (int(from_task or 0),))
+    by = {}
+    for r in rows:
+        t, d = int(r["task_id"] or 0), str(r["domain"] or "").strip().lower()
+        if t and d:
+            by.setdefault(t, set()).add(d)
+    if not by:
+        return []
+    ids = sorted(by)
+    marks = ",".join("?" * len(ids))
+    tinfo = {int(r["id"]): dict(r) for r in db._query(
+        f"SELECT id, status, name FROM tasks WHERE id IN ({marks})", tuple(ids))}
+    return [{"task_id": t, "status": (tinfo.get(t) or {}).get("status", ""),
+             "name": (tinfo.get(t) or {}).get("name", ""),
+             "domains": sorted(by[t])} for t in ids]
+
+
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
@@ -2762,6 +2837,19 @@ def create_app():
             (task_id,) + ((ext_pick[2],) if ext_pick else ()) + tuple(_bl_params_ext), hide_res)
         # 续169：这一页签每行的「置信度」徽章 —— 判据只有 `extdom.confidence` 一份，页面只读不另算
         _ext_confidence(ext_subs, tid=task_id)
+        # 续349：详情页 #ext 也要显示「已自动送探 → #N」。以前只给跨任务页装配 probe_map，
+        # 用户在这个页签看到的「全部（18）」只是过滤后数字，自然找不到来源行徽章。
+        ext_probe_map = build_ext_probe_map(ext_subs)
+        _ext_overlap_hidden = int((db._query(
+            "SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE task_id=? AND "
+            + db.EXT_SUBDOMAIN_WHERE + " AND domain IN (SELECT domain FROM subdomains WHERE "
+            + db.OWN_SUBDOMAIN_WHERE + ")", (task_id,), one=True) or {"c": 0})["c"] or 0)
+        _ext_args349 = request.args.to_dict()
+        _ext_show_args349 = dict(_ext_args349, all="1")
+        _ext_hide_args349 = {k: v for k, v in _ext_args349.items() if k != "all"}
+        ext_toggle_overlap_url = url_for(
+            "task_detail", task_id=task_id,
+            **(_ext_hide_args349 if _ext_all264 else _ext_show_args349)) + "#ext"
         _nores_state(ext_pager, hide_res, _hid)
         # 目录页签：折叠是**整表语义**（同一 站点 + 状态码 + 大小 只留首个），`_fold_dirs` 是这条
         # 规则的**唯一实现** —— 所以顺序只能是「取全量 → 折叠 → 过滤 → 切片」，**只有渲染**变成一页。
@@ -3000,7 +3088,10 @@ def create_app():
         return render_template(
             "task_detail.html", task=task,
             sev_blocked_line=task.get("sev_blocked_line", ""),
-            subs=subs, ext_subs=ext_subs,
+            subs=subs, ext_subs=ext_subs, ext_probe_map=ext_probe_map,
+            auto_probe_summary=auto_probe_summary(task_id),
+            ext_show_all=_ext_all264, ext_toggle_overlap_url=ext_toggle_overlap_url,
+            ext_overlap_hidden=_ext_overlap_hidden,
             ext_src=ext_src, ext_counts=ext_counts, ext_src_tags=EXT_SRC_TAGS,
             ext_bl_hidden=_ext_bl_hidden,
             ext_defaults=_ext_defaults(),
@@ -4176,40 +4267,15 @@ def create_app():
         src_counts = {r["source"]: r["c"] for r in db._query(
             f"SELECT source, COUNT(*) c FROM subdomains WHERE {_cnt_where} GROUP BY source",
             tuple(params))}
-        # 续178：送探记录与子任务摘要（行徽章「已送探 → #N」+ 组内子标签的产地）。
-        # 本页全部域名（分组=组内行；平铺=subs）→ ext_probes 反查 → 按任务聚合状态与资产摘要。
+                # 续349：行徽章与组内子标签的产地收敛到 build_ext_probe_map（详情页 #ext 共用）。
+        # 分组模式取组内行；平铺模式取整页行，两种视图不再各写一份装配逻辑。
         _page_domains = []
         if grouped:
             for _g in groups:
                 _page_domains += [str(r["domain"]) for r in _g.get("rows") or []]
         else:
             _page_domains = [str(r["domain"]) for r in subs]
-        _pmap = db.list_ext_probes(_page_domains)
-        _ptasks = sorted({t for v in _pmap.values() for (t, _k, _c) in v})
-        _tinfo = {r["id"]: dict(r) for r in db._query(
-            f"SELECT id, status, name FROM tasks WHERE id IN ({','.join('?' * len(_ptasks))})",
-            tuple(_ptasks))} if _ptasks else {}
-        _psum = {}
-        if _ptasks:
-            _marks = ",".join("?" * len(_ptasks))
-            for _tn, _tbl in (("子域", "subdomains"), ("站点", "sites"), ("漏洞", "vulns")):
-                for _r in db._query(
-                        f"SELECT task_id, COUNT(*) c FROM {_tbl} WHERE task_id IN ({_marks}) "
-                        "GROUP BY task_id", tuple(_ptasks)):
-                    _psum.setdefault(_r["task_id"], {})[_tn] = _r["c"]
-        _kind_label = {"probe": "送去探测", "append": "追加执行", "promote": "归属追加",
-                       "auto": "已自动送探"}
-        probe_map = {}
-        for _d, _recs in _pmap.items():
-            probe_map[_d] = [{"task_id": t, "kind": k,
-                              "label": _kind_label.get(k, k),
-                              "status": (_tinfo.get(t) or {}).get("status", ""),
-                              "name": (_tinfo.get(t) or {}).get("name", ""),
-                              "summary": "子域 {n}/站点 {s}/漏洞 {v}".format(
-                                  n=(_psum.get(t) or {}).get("子域", 0),
-                                  s=(_psum.get(t) or {}).get("站点", 0),
-                                  v=(_psum.get(t) or {}).get("漏洞", 0))}
-                             for (t, k, _c) in _recs]
+        probe_map = build_ext_probe_map(_page_domains)
         group_probes = {}
         if grouped:
             for _g in groups:
@@ -4229,6 +4295,7 @@ def create_app():
                                src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name,
                                src_counts=src_counts,
                                probe_map=probe_map, group_probes=group_probes,
+                               auto_probe_summary=auto_probe_summary(tid) if tid else [],
                                bl_view=bl_view, bl_hidden=bl_hidden, bl_hits=bl_hits)
 
     @app.route("/sites")
