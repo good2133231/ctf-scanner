@@ -867,7 +867,10 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
                                  owner_id=int(cur["owner_id"] or 0),
                                  parent_id=int(task_id))
             db.enqueue_task(cid, "fresh", list(_child_stages344), child_opts)
-            db.record_ext_probes(int(task_id), int(cid), [r], kind="auto")
+            # 续348：注册域那条记录继续用于去重；同时把本轮真正触发送探的完整来源行
+            # 也记一份 kind=auto，让拓展页在父任务来源行直接显示「已自动送探 → #N」。
+            # 只记 by_root[r]（达到阈值且这次确实送出的候选），不把同根低置信行误标。
+            db.record_ext_probes(int(task_id), int(cid), by_root.get(r) or [r], kind="auto")
         except Exception as e:      # noqa: BLE001 - 单个建失败不牵连其余 root
             logger.error(f"[extdom] 自动送探建任务失败（root={r}，不影响本任务产物）：{e}")
             continue

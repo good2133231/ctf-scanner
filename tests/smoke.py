@@ -27066,6 +27066,12 @@ expression: r0()
     _pm178b2 = db.list_ext_probes(["ccc.targ178.test"])
     assert _pm178b2 and all(k == "probe" for v in _pm178b2.values() for (t, k, _c) in v), \
         "送探仍要记 probe"
+    # 续348：auto 方式的拓展页行徽章（主理人点单「已自动送探标记放到父任务来源行上」）
+    db.insert_subdomains(_tid178b, [("auto.targ178.test", "js:mine")])
+    db._exec("UPDATE subdomains SET ip=? WHERE domain='auto.targ178.test'", ("1.2.3.4",))
+    db.record_ext_probes(_tid178b, _new178, ["auto.targ178.test"], kind="auto")
+    _html178auto = c.get(f"/extdomains?task={_tid178b}&group=0&all=1").get_data(as_text=True)
+    assert "已自动送探 → #" in _html178auto, "续348：auto 方式的行徽章没渲染"
     print("[178] 送去探测 ok: 送探记录（probe/append/promote 三方式）+ 随单归属追加 + "
           "徽章/组内子标签；续203 复选框并进送探（字段缺席也追加，`if True:` 承重）")
     # ---------------- [179] 续179：IP 佐证 ⇒ medium（与非 CDN 已确认子域同 IP） ----------------
@@ -32089,6 +32095,7 @@ expression: r0()
     _tid263 = db.create_task("smoke-263-main", "abcd263.test\n", ["subdomain", "probe"], {})
     db.insert_subdomains(_tid263, [("www.abcd263.test", "passive:smoke263")])   # 已确认资产（对照集）
     db.insert_subdomains(_tid263, [("abdc263.test", "osint:fofa"),              # 高：主标签差 2 步
+                                   ("www.abdc263.test", "osint:fofa"),          # 续348：同根完整来源行
                                    ("zzzqqq263.test", "osint:fofa"),            # 低：差太远
                                    ("mail.abcd263.test", "osint:fofa")])        # 主域名一样 ⇒ 归纳
     db.update_task(_tid263, status="done", progress=100)
@@ -32113,6 +32120,10 @@ expression: r0()
     assert not [d for d in _r263["domains"] if d.endswith("abcd263.test")], \
         "主域名一样的走归纳，不许再送探（两条路互斥）"
     assert db.list_ext_probes(["abdc263.test"]).get("abdc263.test"), "要记送探记录（页面徽章读它）+ 去重靠它"
+    _pm263src = db.list_ext_probes(["www.abdc263.test"])
+    assert _pm263src.get("www.abdc263.test") and \
+        any(t == _kid263 and k == "auto" for (t, k, _c) in _pm263src["www.abdc263.test"]), \
+        "续348：自动送探要把完整来源行也记进 ext_probes，父任务来源行才有『已自动送探』徽章"
     # 去重：同一条域名送过一次就不再建
     _r263b = _R263._maybe_auto_probe_similar(_ctx263, _tid263, _log263)
     assert _r263b.get("spawned") == 0 and _r263b.get("reason") == "已送过", _r263b

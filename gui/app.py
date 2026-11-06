@@ -4197,7 +4197,8 @@ def create_app():
                         f"SELECT task_id, COUNT(*) c FROM {_tbl} WHERE task_id IN ({_marks}) "
                         "GROUP BY task_id", tuple(_ptasks)):
                     _psum.setdefault(_r["task_id"], {})[_tn] = _r["c"]
-        _kind_label = {"probe": "送去探测", "append": "追加执行", "promote": "归属追加"}
+        _kind_label = {"probe": "送去探测", "append": "追加执行", "promote": "归属追加",
+                       "auto": "已自动送探"}
         probe_map = {}
         for _d, _recs in _pmap.items():
             probe_map[_d] = [{"task_id": t, "kind": k,
