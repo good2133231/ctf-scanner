@@ -27078,6 +27078,12 @@ expression: r0()
     assert f'href="/tasks/{_new178}"' in _html178auto, "续350：汇总没链到自动送探子任务"
     # 续349：用户实际看的是任务详情「拓展域名」页签，两处必须同款徽章 + 可展开重叠
     _html178d = c.get(f"/tasks/{_tid178b}?all=1&nores=1").get_data(as_text=True)
+    # 续353：HTML 不许被浏览器 bfcache/磁盘缓存带回旧界面；模板也要自动重载
+    _r178cache = c.get(f"/tasks/{_tid178b}")
+    assert _r178cache.headers.get("Cache-Control") == "no-store, max-age=0", \
+        "续353：任务详情 HTML 缺 no-store，浏览器可能显示旧缓存页"
+    assert c.application.jinja_env.auto_reload is True, \
+        "续353：Jinja 模板自动重载没开，改模板后旧进程会继续渲染旧页面"
     assert "已自动送探 → #" in _html178d, "续349：任务详情 #ext 页签没显示送探徽章"
     assert "本任务自动送探记录（1 个子任务）" in _html178d, \
         "续350：任务详情默认视图也要列出自动送探子任务"

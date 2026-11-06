@@ -1430,6 +1430,18 @@ def auto_probe_summary(from_task):
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
+    # 续353：模板改动后不再依赖重启才生效；HTML 一律 no-store，避免浏览器 bfcache/磁盘缓存
+    # 把旧页面带回来（用户反馈「代码明明改了、Web 上还是旧界面」）。
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.jinja_env.auto_reload = True
+
+    @app.after_request
+    def _no_store_html(resp):
+        if resp.mimetype == "text/html":
+            resp.headers.setdefault("Cache-Control", "no-store, max-age=0")
+            resp.headers.setdefault("Pragma", "no-cache")
+            resp.headers.setdefault("Expires", "0")
+        return resp
     # 续109：会话签名密钥**绝不由 gui.token 推导**（旧写法 `f"ctfscanner::{token}"` 谁能读到
     #   settings.yaml 里那个口令 —— 它被 git 跟踪、仓库公开 —— 谁就能自己签一张管理员 Cookie，
     #   绕开口令、验证码、限速整条链）。密钥随机生成后落在**库同目录**的 0600 文件里，

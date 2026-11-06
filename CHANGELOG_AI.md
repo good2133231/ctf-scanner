@@ -5,6 +5,30 @@
 
 
 
+## 续353（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：HTML no-store + 模板自动重载，排除旧页面缓存
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景
+
+主理人反馈两个控制台都重启后仍看到旧拓展页，要求查代码是不是缓存问题。核对结果：
+
+- nginx `37121` 端口反代到无关的 `127.0.0.1:8787`，没有 `proxy_cache`，不是这条链路的页面缓存。
+- 任务详情 HTML 响应只有 `Vary: Cookie`，没有 `Cache-Control`；代码里只有验证码 PNG 单独设了 `no-store`。
+- `create_app()` 没显式开 Jinja `auto_reload`；生产进程 debug off 时模板缓存只靠重启刷新。
+- 两个端口、公网地址直接请求都返回当前 HTML 与 9 子任务汇总，因此服务器渲染已正确；剩下能解释「旧界面」的是浏览器 bfcache/磁盘缓存，以及旧进程的模板缓存。
+
+### 改动
+
+- `gui/app.py` 在 `create_app()` 里显式打开 `TEMPLATES_AUTO_RELOAD` 与 `app.jinja_env.auto_reload`。
+- 新增 `@app.after_request`：所有 `text/html` 响应补 `Cache-Control: no-store, max-age=0`、`Pragma: no-cache`、`Expires: 0`；不覆盖已显式设置的响应头，也不影响图片/JSON。
+- `[178]` 增加任务详情 HTML 的 `no-store` 与 Jinja 自动重载断言。
+
+### 验证
+
+- `[178]` 单组通过。
+- 全量门禁 v11 `SMOKE PASS`（含浏览器 e2e）；随后重启 5000/5099 两个控制台，并在公网地址复核 `Cache-Control: no-store, max-age=0` 与 9 子任务汇总。
+
 ## 续352（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：漏重启 5099 旧控制台
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

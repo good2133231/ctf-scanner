@@ -4542,6 +4542,23 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续353（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：HTML no-store + 模板自动重载
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人：还是旧页面，要求查缓存。核对 nginx 无 proxy_cache；HTML 没有 Cache-Control；Jinja 未显式 auto_reload。
+
+- [x] T1【代码】：`create_app()` 打开 `TEMPLATES_AUTO_RELOAD` / `jinja_env.auto_reload`。
+- [x] T2【代码】：所有 `text/html` 响应 `no-store, max-age=0` + Pragma/Expires。
+- [x] T3【门禁】：`[178]` 钉住响应头与模板自动重载。
+- [x] C1 全量门禁 v11 `SMOKE PASS`；5000/5099 已重启，公网响应带 `no-store` 且显示 9 子任务汇总。
+- [x] C2 记忆同步：`CHANGELOG_AI.md` / `todo.txt` 续353。
+
+**下一轮（续354）**：
+- [ ] 把 5099 这类第二控制台纳入重启工具的统一归属/端口管理。
+- [ ] 主理人确认后把 `intel` 加入信息收集专项默认阶段。
+- [ ] 显式 deep / dirmap 深扫仍约 15 分钟，按点单再压字典/并发。
+
 ## 续352（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：漏重启 5099 旧控制台
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash
