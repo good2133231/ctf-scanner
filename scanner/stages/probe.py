@@ -15,7 +15,7 @@ import json
 from urllib.parse import urlparse
 
 from .base import Stage
-from .. import blacklist, db, extdom, flagfind, wildcard
+from .. import blacklist, db, extdom, flagfind, ml, parked as parked_pages, targets, wildcard
 from ..fingerprint import (canonical_details, favicon_info, favicon_md5, identify)
 from ..utils import (REDIRECT_STATUS, html_title, page_title, which, verify_tool, run_cmd, read_lines,
                      write_lines, pool_run, http_request, ramp_opt,
@@ -70,12 +70,17 @@ def attach_redirect_info(sites, fetch, workers=8, logger=None):
         r = fetch(s.get("url"))
         if not r or not r.get("status"):
             return None
+        _text = r.get("text") or ""
         return {"url": s.get("url"), "redirect_url": str(r.get("url") or ""),
                 "redirect_status": int(r.get("status") or 0),
                 # 续197：落地页的"标题"用 `page_title`（`<title>` 取不到再退 og:title 那几条
                 # 声明式元信息）—— 3xx 页面展示的正是这一跳，而 SPA 首屏常常没有 `<title>`
                 # 却有 og:title。取不到就留空，由显示层说"落地页无 title"，不编数。
-                "redirect_title": page_title(r.get("text"))}
+                "redirect_title": page_title(_text),
+                # 续335：落地页正文已在手，顺手判一次停车/过期页（不多发一个请求）。
+                # True/False＝判得出；None＝正文为空，判不了 —— 调用方按"不知道"处理，绝不猜。
+                "redirect_parked": (parked_pages.content_parked(_text)
+                                    if str(_text).strip() else None)}
 
     got = {x["url"]: x for x in pool_run(_one, red, workers=workers, logger=logger,
                                        label="跳转后取证") if x}
@@ -87,12 +92,75 @@ def attach_redirect_info(sites, fetch, workers=8, logger=None):
         s["redirect_url"] = k["redirect_url"]
         s["redirect_status"] = k["redirect_status"]
         s["redirect_title"] = k["redirect_title"]
+        s["redirect_parked"] = k["redirect_parked"]
         n += 1
     if logger:
         logger.info(f"[probe] 3xx 站点 {len(red)} 个，补到「跳转后」信息 {n} 个"
                     + ("" if n == len(red)
                        else "（落地页取不到的那些不编数，页面仍显示原始那一跳）"))
     return n
+
+
+REDIRECT_SOURCE = "osint:redirect"
+
+
+def redirect_extension_roots(sites, bases, settings=None, owner_id=0):
+    """3xx 跳转落点里**够格记成拓展域名**的注册域（纯计算：不发请求、不写库）。
+
+    三条判据缺一不可：
+    1. 落地页正文拿到了，且 `redirect_parked is False` —— True（停车/出售/过期页）丢，
+       None（正文为空，判不了）也丢，绝不把"没看见"当成"不是"；
+    2. 落点注册域不是自家已确认资产（子域落回自家根域不算拓展）；
+    3. 过黑名单 / 第三方清单 / CDN 三道闸（与自动送探同一份 `extdom.auto_expand_block`）。
+
+    返回 `[(root, 来源站点 url)]`，按注册域去重、保持出现顺序。
+    """
+    out, seen = [], set()
+    _bases = {str(b).lower().strip(".") for b in (bases or ()) if b}
+    for s in sites or ():
+        parked_flag = s.get("redirect_parked")
+        if parked_flag is None or parked_flag:
+            continue
+        redir = str(s.get("redirect_url") or "").strip()
+        host = str(urlparse(redir).hostname or "").lower().strip(".") if redir else ""
+        if not host:
+            continue
+        root = targets.root_of(host) or host
+        if any(root == b or host == b or host.endswith("." + b) for b in _bases):
+            continue
+        if extdom.auto_expand_block(root, settings=settings, owner_id=owner_id):
+            continue
+        if root in seen:
+            continue
+        seen.add(root)
+        out.append((root, s.get("url") or ""))
+    return out
+
+
+def register_redirect_extensions(task_id, sites, settings=None, owner_id=0, logger=None):
+    """把 `redirect_extension_roots` 挑出的注册域写进拓展域名（source=osint:redirect）。
+
+    只补**库里还没有的域名**：已有行（无论 own 还是别的 osint/js 来源）不动 ——
+    改 source 会把"它最早从哪来"抹掉，而拓展页的来源列正是排查依据。
+    返回新写入条数。
+    """
+    try:
+        _bases = extdom.confirmed_bases(int(task_id))
+    except Exception:      # noqa: BLE001 - 对照集取不到就退回任务目标，宁可多判 owned 不误记
+        _bases = extdom.task_bases(int(task_id))
+    pairs = redirect_extension_roots(sites, _bases, settings=settings, owner_id=owner_id)
+    if not pairs:
+        return 0
+    _known = {str(r["domain"]).lower() for r in db._query(
+        "SELECT domain FROM subdomains WHERE task_id=?", (int(task_id),))}
+    rows = [(root, REDIRECT_SOURCE) for root, _ in pairs if root.lower() not in _known]
+    if rows:
+        db.insert_subdomains(int(task_id), rows)
+    if logger:
+        logger.info(f"[probe] 3xx 跳转落点非停车页 → 拓展域名（判高）{len(rows)} 个"
+                    + (f"，已在库跳过 {len(pairs) - len(rows)} 个" if len(pairs) > len(rows) else "")
+                    + (f"：{', '.join(r[0] for r in rows[:5])}" if rows else ""))
+    return len(rows)
 
 
 def backfill_site_redirects(task_id, db, settings, fetch=None, workers=8, logger=None):
@@ -112,7 +180,14 @@ def backfill_site_redirects(task_id, db, settings, fetch=None, workers=8, logger
     attach_redirect_info(need, _fetch, workers=workers, logger=logger)
     rows = [(s.get("url"), s.get("redirect_url", ""), int(s.get("redirect_status") or 0),
              s.get("redirect_title", "")) for s in need if s.get("redirect_url")]
-    return db.set_site_redirects(task_id, rows)
+    n = db.set_site_redirects(task_id, rows)
+    # 老任务补跳转时同样补拓展（口径与新扫一致；按库去重）
+    try:
+        _owner = extdom.owner_of(task_id)
+    except Exception:      # noqa: BLE001 - 老库/坏数据：只影响账号隔离参数，不阻断补证
+        _owner = 0
+    register_redirect_extensions(task_id, need, settings, owner_id=_owner, logger=logger)
+    return n
 
 
 def _iter_json_lines(path):
@@ -155,6 +230,8 @@ def httpx_site(j):
         pairs += [(str(tech), "external")]
     pairs = canonical_details(pairs)
     p = urlparse(str(url))
+    _sig = (ml.page_signature(body)
+            if j.get("status_code") == 200 else {"page_hash": "", "page_simhash": ""})
     return {
         "url": url, "host": p.hostname,
         "port": str(p.port or (443 if p.scheme == "https" else 80)),
@@ -167,6 +244,8 @@ def httpx_site(j):
         "tech_detail": json.dumps(
             [{"t": t, "src": "doc", "origin": o} for t, o in pairs], ensure_ascii=False),
         "source": "httpx",
+        # 续337：根响应正文已在手，零额外请求算页面指纹。
+        "page_hash": _sig["page_hash"], "page_simhash": _sig["page_simhash"],
     }
 
 
@@ -262,6 +341,9 @@ def probe_candidates(ctx, candidates):
                     # 页面据此把内置标签排前面。空列表也写 `[]`（不是空串）——
                     # 页面能区分"没有标签"与"老行没有来源信息"。
                     _det = identify(resp, detail=True)
+                    _sig = (ml.page_signature(resp.get("text") or "")
+                            if str(resp.get("status") or "").strip() == "200" else
+                            {"page_hash": "", "page_simhash": ""})
                     return {
                         "url": resp.get("url") or u, "host": p.hostname,
                         "port": str(port or (443 if p.scheme == "https" else 80)),
@@ -274,6 +356,9 @@ def probe_candidates(ctx, candidates):
                             [{"t": d["tag"], "src": d["src"], "origin": d["origin"]}
                              for d in _det], ensure_ascii=False),
                         "source": "builtin",
+                        # 续337：正文刚用于取标题/敏感信息，顺手算页面指纹。
+                        "page_hash": _sig["page_hash"],
+                        "page_simhash": _sig["page_simhash"],
                     }
             return None
 
@@ -359,6 +444,18 @@ def register_sites(ctx, sites, round2=False):
     new_sites = db.drop_existing(ctx.task_id, "sites", ("url",), uniq,
                                  lambda s: (s["url"],))
     db.insert_sites(ctx.task_id, new_sites)
+    # 续337：自动送探子任务拿根页面 hash 与主任务根页面比一次（零额外请求）。
+    # 用 `uniq` 而不是 `new_sites`：追加/重跑时行已在库，也要把副本标记补上。
+    try:
+        extdom.flag_same_app_sites(ctx, uniq)
+    except Exception as _e:  # noqa: BLE001 - 判重失败只多扫，不影响 probe 主产物
+        ctx.logger.warning(f"[probe] 同功能根页面判定异常（不影响站点入库）：{_e}")
+    # 续335（主理人 2026-11-05）：跳转落点若不是停车/过期页，把落点注册域记进拓展域名
+    # （source=osint:redirect，页面判高）。用 `uniq` 而不是 `new_sites`：本轮拿到的跳转
+    # 证据对已入库站点同样有效，重复由 register_redirect_extensions 内部按库去重。
+    register_redirect_extensions(ctx.task_id, uniq, ctx.settings,
+                                 owner_id=getattr(ctx, "owner_id", 0) or 0,
+                                 logger=ctx.logger)
     _dup = len(uniq) - len(new_sites)
     # 口径改了，日志就必须把**组成**写出来：否则"存活站点 168 个"会被读成"168 个打得开的站"。
     _cls = {}

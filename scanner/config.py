@@ -309,7 +309,7 @@ DEFAULTS = {
         # 一次最多 `ext_auto_probe_max` 个；自动建出来的子任务自带 `ext_auto_probe=0`
         # （防顺着置信度一路套娃）。
         "ext_auto_probe": True,
-        "ext_auto_probe_max": 5,
+        "ext_auto_probe_max": 20,   # 续334：按注册域计，一个注册域一个子任务
         # 续333（主理人点单）：子域增量模式。同一根域 TTL 内已有历史子域 → 跳过全量字典
         # （17.8 万词）与组合爆破，只跑精简档 + 前 `incremental_max_words` 条深档；
         # 历史子域照旧并入。建任务页「全量爆破」可按任务覆盖（`options.full_brute`）。
@@ -331,12 +331,6 @@ DEFAULTS = {
         "waf_bypass": True,        # 注入类检查启用 payload 变形绕过
         "bypass_level": 2,         # 0=原始 1=轻量(注释/大小写) 2=进阶(编码/分片) 3=激进(多重编码)
         "waf_detect": True,        # 探测目标是否存在 WAF 并在日志中提示
-    },
-    "takeover": {
-        # 子域接管检测（P0-2）：CNAME 指向已停用的第三方服务 → 可被他人注册接管
-        "enabled": True,
-        "max_hosts": 300,          # 每任务最多检查多少个子域名（DNS 查询量上限）
-        "http_check": True,        # 命中可疑 CNAME 后再做一次 HTTP 判定（降低误报）
     },
     "portscan": {
         # 端口扫描（P1-2）。续269 主理人点单「端口扫描默认开启，扫常规 web 端口」⇒ 默认**开**：
@@ -401,20 +395,10 @@ DEFAULTS = {
     "fingerprint": {
         "max_tags": 10,
     },
-    "hostcollide": {
-        # Host 碰撞（续183 模块、续201 接线）：同 IP 绑不同 Host 头找隐藏站点。
-        # 续203 改**默认开**（主理人点单"host 碰撞默认也要开"）：它只读 GET、
-        # 请求量由下面的 max_requests 夹住，而"同 IP 不同 Host"是找旁站/隐藏后台
-        # 性价比最高的一招 —— 默认关着等于这一 capability 没人用过。
-        "enabled": True,
-        "max_requests": 200,      # 单任务请求预算（引擎内部也会再夹一次）
-        "timeout": 2,             # 续328：命中 9-11s / 不中 55-105s，原来 5s 全耗在等超时
-        "early_stop": 3,          # 续328：连续 N 个无差异就跳过该 IP 剩余候选
-    },
     "crawl": {
         # 站点爬虫（续198）：收集页面里**本来就写着**的链接（与 dirscan 的"猜路径"是两回事）。
         # 续314（主理人点单「爬虫默认关闭」）：默认**关**（续249 曾按"默认要开"翻成开，本轮改口）。
-        # 关掉时 crawl 阶段整段跳过、一个请求都不发；建任务页「耗时选项」可一键打开。
+        # 关掉时 crawl 阶段整段跳过、一个请求都不发；建任务页仍可单独勾 crawl 打开。
         "enabled": False,
         "max_sites": 30,           # 每任务最多爬多少个站点
         "max_links": 60,           # 每站点最多收多少条链接
@@ -432,8 +416,10 @@ DEFAULTS = {
     "jsmine": {
         # JS 资产挖掘（P0-3）：从站点 JS 中提取域名/接口 URL/密钥，扩展资产面
         "enabled": True,
-        "max_pages": 20,           # 每任务最多抓取多少个页面
-        "max_js": 40,              # 每任务最多抓取多少个 JS 文件
+        "max_pages": 12,           # 每任务最多抓取多少个页面
+        "max_js": 20,              # 每站最多抓取多少个 JS 文件
+        "max_js_total": 80,        # 续334：全任务 JS 总预算（跨站点共享）
+        "time_budget": 120,        # 续334：jsmine 墙钟上限（秒），到点停剩余站点
         "secrets": True,           # 开启 AK/SK 等敏感密钥提取（带前后文过滤降噪）
         "blacklist": [],           # 额外排除的第三方域名后缀，如 ["cdn.example.com"]
         # 把"根本不是域名"的 JS 碎片挡在资产库外（续113）：`chat.floating.open`、
@@ -445,7 +431,8 @@ DEFAULTS = {
         "drop_absent_zone": True,
         # 二层遍历总开关（续139）：jsmine 挖出的新域名 + 库里其余子域名，先过 DNS 再补探一轮，
         # 把"只进表、没变成站点"的那批名字落成站点。关闭只影响站点数量，不影响子域名表。
-        "recrawl": True,
+        "recrawl": False,          # 续334：默认不做二层补探（只收域名，不把新域名再探成站点）
+        "fast_domains": True,      # 续334：urlfinder 式快速域名 —— 跳过 DNS/CDN/停车三道闸
         # ---- 拓展域名"宁缺毋滥"三道闸（2026-10-13 用户点单）----
         # 背景：JS 挖掘从第三方库 JS 里带回来的候选域名里，"能解析"≠"是资产"——
         # 实测样本：`com.text.name` / `style.font.name`（能解析但打开是域名转让页）、
@@ -468,7 +455,7 @@ DEFAULTS = {
         "strip_comments": True,
     },
     "dirscan": {
-        # 目录/路径发现阶段总开关（与 takeover/portscan/jsmine 同一类"资产面拓展"）。
+        # 目录/路径发现阶段总开关（与 portscan/jsmine 同一类"资产面拓展"）。
         # **默认开启，但只跑"浅扫"**（mode=quick）：只打 config/dicts/dirs_shallow.txt 里
         # 精选的敏感路径（约 150 条/站），请求量与噪声都可控 ——
         # 用户要求"先浅浅过一遍，看清结果后再手动决定要不要深度扫"。
@@ -485,7 +472,10 @@ DEFAULTS = {
         "js_endpoint_max": 200,
         # quick = 只吃 dirs_shallow（敏感路径精选）；deep = 全量分层字典 + dirmap。
         # 任务级选项 dirscan_full=true 可把单个任务强制成 deep（不改全局策略）。
-        "mode": "deep",            # 续144：默认深扫（quick＝只吃 dirs_shallow 精选路径）
+        # 续334：默认 mini（常用后台路径 + .git）——主理人点单「先把速度提上来」。
+        # 深扫（全量分层字典 + dirmap）要显式勾「全目录深扫」或把 mode 改回 deep。
+        "mode": "mini",
+        "mini_max_paths": 60,
         # 续331（主理人点单）：dirmap 默认关（易被封；内置按栈选字典实测更全）。要跑就打开。
         "use_dirmap": False,
         "quick_max_paths": 150,    # 浅扫单站点上限（dirs_shallow 共约 150 条，基本全吃）
@@ -531,13 +521,13 @@ DEFAULTS = {
         "ml_outlier": True,
     },
     "vulnscan": {
-        # 漏洞初筛阶段总开关。默认开；关闭后整阶段跳过（连请求都不发），
-        # 适合"只做资产测绘、暂不探测"的场景。细粒度门控仍在 checks 段
-        # （min_severity / skip_severities / poc_engine / disabled_*）。
-        "enabled": True,
+        # 漏洞初筛阶段总开关。续344 起代码默认也关（随包续334 已关），
+        # 与主理人「漏洞扫描暂时关闭」对齐；关闭后整阶段跳过（连请求都不发）。
+        # 细粒度门控仍在 checks 段（min_severity / skip_severities / poc_engine / disabled_*）。
+        "enabled": False,
         # 续314（主理人点单「SQL 注入默认关闭」）：只关 `a03-sqli-error` / `a03-sqli-blind`
         # 两个检查，**不关整阶段** —— 漏洞检测仍按指纹识别对号入座，其它检查与 POC 照常跑。
-        # 建任务页「耗时选项 → SQL 注入」是任务级覆盖（见 `stages/vulnscan.apply_sqli_gate`）。
+        # 建任务页「SQL 注入」是任务级覆盖（见 `stages/vulnscan.apply_sqli_gate`）。
         "sqli": False,
     },
     "afrog": {
@@ -625,30 +615,36 @@ DEFAULTS = {
         "tls_ports": [443, 8443, 9443],
     },
     "iprecon": {
-        # C 段反查（P1-4）：IP → 域名反查 + /24 C 段归纳。
-        # **默认关闭**：走第三方公共接口（可用性无保障），且反查结果属于"发散"资产，
-        # 需要时才开（GUI「策略配置 → 外部情报拓展」）。接口地址可在配置里替换。
+        # IP 反查（P1-4）：对目标/资产解析出的**精确 IP** 做 IP→域名反查。
+        # 走第三方公共接口（可用性无保障），反查结果属于"发散"资产，默认只标待确认。
+        # 续336/338：C 段反查/`/24` 归纳已停用（生产 osint.run 不再调用 `_c_segments`）；
+        # 只保留 from_targets（精确 IP）与 from_favicon（favicon 命中裸 IP）两路，
+        # 手动「真实 IP 反查域名并回写」仍在子域名页显式触发。
         "enabled": False,
+        "from_targets": True,      # 续338：目标/子域名/站点解析出的精确 IP 自动反查
         "api": "https://api.webscan.cc/?action=query&ip={ip}",
+        # 续339：默认先用免 key、历史覆盖好的源；webscan/ip138 退到备用池。
+        "sources": ["mnemonic", "otx", "urlscan", "hackertarget"],
+        "api_mnemonic": "https://api.mnemonic.no/pdns/v3/{ip}?limit={limit}",
+        "api_urlscan": "https://urlscan.io/api/v1/search/?q=ip:{ip}&size={limit}",
+        "mnemonic_limit": 100,
+        "urlscan_limit": 100,
         "max_ips": 500,            # 单任务最多反查多少个 IP
         "max_hosts": 200,          # 为收集 IP 最多解析多少个主机名
-        "max_domains_per_ip": 30,  # 单 IP 命中域名超过该值 → 判为共享主机，不纳入域名资产
+        "max_domains_per_ip": 100,  # 精确 IP 反查单 IP 最多收多少域名；超出截断并标共享
         # 续314（主理人点单）：favicon 反查命中**裸 IP** 时，先探活（80/443 各一发 GET），
         # 活着的再做「IP→域名」（免费源 + FOFA `ip=`），入库标「历史反查·待确认」。
         "from_favicon": True,
         "from_favicon_max": 20,    # 单任务最多处理多少个 favicon 命中 IP（探活 2 发 + 反查 N 发）
         "workers": 5,              # 并发数：公共接口，刻意保持克制
-        # 续184：开跑前先探一次每个源还活不活（挂了的整轮跳过，不再逐 IP 白跑）
+        # 续184：开跑前先探一次每个源还活不活；续339 起失败先累计，到阈值才熔断。
         "preflight": True,
+        # 连续失败 10 次 → 熔断，跳过接下来 100 次调用，第 101 次半开探测。
+        "breaker_enabled": True,
+        "breaker_fail_threshold": 10,
+        "breaker_cooldown": 100,
         # 默认源预检全挂时的备用池：ptr 是本框架自己实现的原生 PTR（不发 HTTP）
-        "fallback_sources": ["ptr", "dnsdblookup", "rapiddns", "viewdns"],
-        "api_rapiddns": "https://rapiddns.io/s/{ip}?full=1",
-        "api_viewdns": "https://viewdns.info/reverseip/?host={ip}&t=1",
-
-        # 续184：开跑前先探一次每个源还活不活（挂了的整轮跳过，不再逐 IP 白跑）
-        "preflight": True,
-        # 默认源预检全挂时的备用池：ptr 是本框架自己实现的原生 PTR（不发 HTTP）
-        "fallback_sources": ["ptr", "dnsdblookup", "rapiddns", "viewdns"],
+        "fallback_sources": ["ptr", "dnsdblookup", "rapiddns", "viewdns", "webscan", "ip138"],
         "api_rapiddns": "https://rapiddns.io/s/{ip}?full=1",
         "api_viewdns": "https://viewdns.info/reverseip/?host={ip}&t=1",
 
@@ -660,6 +656,13 @@ DEFAULTS = {
         # "逐条失败、归因错"形态。`min_left` 低于这个数就整轮跳过该源。
         "enabled": True,
         "min_left": 1,
+    },
+    # 续334：Wayback 被动 URL 源（urlfinder 式，零目标请求）→ osint:wayback
+    "passive_urls": {
+        "enabled": True,
+        "timeout": 10,
+        "max_urls": 2000,
+        "max_roots": 10,
     },
     "fofa": {
         # favicon 反查同源资产（P3-1）：需 config/keys.yaml 填 fofa.email / fofa.key
@@ -869,10 +872,14 @@ DEFAULTS = {
         # 深档（续139，`tools/import_subdomain_dict.py` 生成/合并）：文件不在就是"没配"，
         # 阶段会打一行 info 指路；没装 puredns 时它受 `limits.brute_fallback_max` 抽样。
         "subdomains_deep": "config/dicts/subdomains_deep.txt",
+        # 续344：拓展域名收尾时自动追加的归属子域标签（不要手工维护；见 scanner/subdict.py）
+        "subdomains_dynamic": "data/subdomains_dynamic.txt",
+        "subdomains_dynamic_max": 5000,
         "resolvers": "config/dicts/resolvers.txt",
         "dirs": "config/dicts/dirs_small.txt",       # 小字典（快，几十条）
         # 浅扫精选字典（dirscan.mode=quick 时**只用这一份**，约 150 条敏感路径，按价值排序）
         "dirs_shallow": "config/dicts/dirs_shallow.txt",
+        "dirs_mini": "config/dicts/dirs_mini.txt",
         "dirs_big": "config/dicts/dirs_big.txt",     # 全量（未知技术栈时用）
         # 按技术栈拆分的字典（tools/import_dir_dict.py --src <外部字典> 生成）：
         # 运行时按 sites.tech 只取「语言字典 + 通用字典」，避免把三种语言的后缀全打一遍

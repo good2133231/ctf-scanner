@@ -34,9 +34,43 @@ def puredns_bruteforce_argv(pd_bin, wordlist, domain, resolvers, out_file):
             "-r", str(resolvers), "-w", str(out_file)]
 
 
+def _combo_puredns(ctx, domain, pairs, pd_bin, massdns_bin, resolvers, th, wild_ips, workers):
+    """用 puredns 跑一轮组合爆破；返回 (kept, dropped)，不可用/失败返回 None。
+
+    组合前缀本质仍是 DNS 爆破，逐条走系统解析器在慢 DNS 上会拖到几分钟；
+    puredns/massdns 已经装着时复用它，结果与 resolve_all 路径完全一致（最后仍按泛解析
+    IP 过滤）。不可用时返回 None，由调用方回退到原来的 resolve_all。
+    """
+    if not (pd_bin and massdns_bin and resolvers and os.path.isfile(str(resolvers))):
+        return None
+    wl = ctx.workdir / ("combo_%s.txt" % domain)
+    out = ctx.workdir / ("combo_%s.out.txt" % domain)
+    try:
+        write_lines(wl, pairs)
+        if out.exists():
+            out.unlink()
+    except OSError:
+        return None
+    rc, _, err = run_cmd(
+        puredns_bruteforce_argv(pd_bin, wl, domain, resolvers, out),
+        timeout=600, throttle=th,
+        extra_path=os.path.dirname(str(massdns_bin)) if massdns_bin else None)
+    if rc != 0:
+        ctx.logger.warning(f"[subdomain] {domain} 组合爆破 puredns 退出码 {rc}："
+                           f"{err.strip()[:150]}，回退系统解析器")
+        return None
+    hits = [ln for ln in read_lines(out) if ln.endswith("." + domain)]
+    if not hits:
+        return ([], [])
+    if wild_ips:
+        resolved = wildcard.resolve_all(hits, workers=workers)
+        return wildcard.filter_hits(resolved, wild_ips)
+    return (hits, [])
+
+
 from .base import Stage
 from . import github as github_stage
-from .. import blacklist, cdn, db, dnsq, extdom, fofa as fofa_mod, passive, targets, wildcard
+from .. import blacklist, cdn, db, dnsq, extdom, fofa as fofa_mod, passive, subdict, targets, wildcard
 from ..config import resolve
 from ..utils import (is_domain, to_ascii, which, verify_tool, run_cmd, read_lines,
                     write_lines, pool_run)
@@ -198,6 +232,11 @@ class SubdomainStage(Stage):
         github_stage.start_early_search(ctx)
 
         offline = ctx.options.get("offline")
+        # 续344：把任务级字典开关写进日志，避免再出现“我明明勾了全量”却只看到抽样的悬案。
+        _full344 = ctx.options.get("full_brute") is True
+        _prof344 = str(ctx.options.get("subdomain_profile") or "").strip() or "跟策略"
+        ctx.logger.info(f"[subdomain] 任务字典选项：full_brute={'开（忽略历史）' if _full344 else '关'}"
+                        f"｜subdomain_profile={_prof344}")
         workers = int(limits.get("max_workers", 20))
         found, sources = set(), {}
 
@@ -316,10 +355,10 @@ class SubdomainStage(Stage):
         brute_domains = domains[: int(limits.get("brute_max_domains", 50))]
         # 字典路径为空时 `resolve("")` 会落到项目根目录，`read_text()` 抛 IsADirectoryError 并
         # 让整阶段挂掉；这里先确认"配了路径且确实是文件"，否则按"无字典"走（只做被动收集）。
-        # 字典分两档（续139）：`dicts.subdomains` 是**精简档**（人工挑的高价值前缀，84 条），
+        # 字典分两档（续139）：`dicts.subdomains` 是**精简档**（人工挑的高价值前缀，续341 起 366 条），
         # `dicts.subdomains_deep` 是**深档**（可选文件，17.8 万条那一类）。为什么必须分两档：
         # 深档在**没装 puredns** 的机器上跑不动（内置那路是系统解析器逐条查），只能抽样收窄，
-        # 而 84/177893 ≈ 0.05% —— 抽样会把精简档几乎全冲掉，那是**倒退**。所以精简档永远全量打底，
+        # 而 366/177893 ≈ 0.05% —— 抽样会把精简档几乎全冲掉，那是**倒退**。所以精简档永远全量打底，
         # 只有深档受抽样闸门。深档文件不在就是"没配"，不影响任何其它阶段。
         dict_raw = str(ctx.settings.get("dicts", {}).get("subdomains", "") or "")
         wl_path = resolve(dict_raw) if dict_raw else None
@@ -331,6 +370,16 @@ class SubdomainStage(Stage):
         _cur_set = set(cur)
         deep = [w for w in ([x for x in read_lines(deep_path) if not x.startswith("#")]
                             if deep_ok else []) if w not in _cur_set]
+        # 续344：动态字典（拓展收尾时从归属子域长出来的前缀）放在**精简档**里，
+        # 永远全量参与；不跟深档一起受 quick/增量抽样，否则"刚学到的名字"会被抽没。
+        _dyn = subdict.load(ctx.settings)
+        if _dyn:
+            _dyn_new = [w for w in _dyn if w not in _cur_set]
+            if _dyn_new:
+                cur.extend(_dyn_new)
+                _cur_set.update(_dyn_new)
+            ctx.logger.info(f"[subdomain] 动态字典 {len(_dyn)} 条（本次新并入 {len(_dyn_new)} 条）"
+                            f"：{subdict.path(ctx.settings)}")
         wordlist = cur + deep
         if dict_raw and not wordlist:
             ctx.logger.warning("[subdomain] 子域名字典不可用（路径不存在或为空文件），跳过字典爆破")
@@ -350,7 +399,7 @@ class SubdomainStage(Stage):
         # 词数闸门（续139）：深字典 × 多域名会把 DNS 查询量推到千万级，内置那路（系统解析器
         # 逐条查）更是跑不完 —— 两路各自收窄，并把"怎么放开"写在日志里，不做静默截断。
         # **闸门只冲深档**：精简档那几十条人工挑的前缀任何情况下都全量在场（把它一起抽样，
-        # 84/177893 ≈ 0.05% 会几乎全冲掉 —— 那不叫收窄，叫倒退）。
+        # 366/177893 ≈ 0.05% 会几乎全冲掉 —— 那不叫收窄，叫倒退）。
         # 续246（B 批）：任务级「快速 / 深度」档位。快速档只改**深档**的抽样上限
         # （精简档那几十条人工前缀任何档位都全量在场）；深度档就是"按策略"的显式写法。
         # 档位生效时必须说出来 —— 用户看到"子域名少"时要能分清是字典小、还是自己选了快速档。
@@ -535,10 +584,22 @@ class SubdomainStage(Stage):
             # 续310：这里**必须**显式给 hint —— `_spread` 的默认句是"要用全量把 X 设 0"，
             # 那是给词表闸门（0=不限）写的；组合爆破的 0 是**关掉整轮**（`if combo_max`），
             # 照搬默认句就是一句会让用户把功能关掉的假话。
+            _combo_resolvers = str(resolve(ctx.settings.get("dicts", {}).get("resolvers", "")))
+            _combo_pd = bool(pd_bin and massdns_bin and not offline
+                             and os.path.isfile(_combo_resolvers))
             pairs = _spread(list(dict.fromkeys(
                 f"{a}-{b}" for a in seeds for b in seeds if a != b)),
                 combo_max, ctx.logger, "limits.brute_combo_max",
                 hint="0 表示关闭组合爆破（不是全量）；要更多请调大 limits.brute_combo_max")
+            # 未装 puredns 时，组合前缀只能逐条走系统解析器；慢 DNS 上几万条会拖几分钟。
+            # 复用内置爆破的 fallback 上限收窄（默认 3000），保证没有 puredns 的机器也能在
+            # 可接受时间内完成；装了 puredns 则不受此限（它 27k 条实测 ~5s）。
+            if pairs and not _combo_pd:
+                _cfb = int(limits.get("brute_fallback_max", 3000) or 0)
+                if _cfb and len(pairs) > _cfb:
+                    pairs = _spread(pairs, _cfb, ctx.logger, "limits.brute_fallback_max",
+                                    hint="未装 puredns 时组合爆破按内置兜底上限收窄；"
+                                         "装 puredns 可放开")
             if pairs:
                 ctx.logger.info(
                     f"[subdomain] 组合爆破：{len(seeds)} 个种子两两拼出 {len(pairs)} 个 "
@@ -548,13 +609,26 @@ class SubdomainStage(Stage):
                     if ctx.stopped():
                         ctx.logger.warning("[subdomain] 任务已请求停止，中止组合爆破")
                         break
-                    resolved = wildcard.resolve_all(
-                        [f"{p}.{d}" for p in pairs],
-                        workers=int(limits.get("brute_workers", 64)))
-                    kept, dropped = wildcard.filter_hits(resolved, wild.get(d))
+                    kept, dropped = [], []
+                    _via_pd = False
+                    if _combo_pd:
+                        _pd_res = _combo_puredns(
+                            ctx, d, pairs, pd_bin, massdns_bin, _combo_resolvers,
+                            th, wild.get(d), int(limits.get("brute_workers", 64)))
+                        if _pd_res is not None:
+                            kept, dropped = _pd_res
+                            _via_pd = True
+                    if not _via_pd:
+                        resolved = wildcard.resolve_all(
+                            [f"{p}.{d}" for p in pairs],
+                            workers=int(limits.get("brute_workers", 64)))
+                        kept, dropped = wildcard.filter_hits(resolved, wild.get(d))
                     add_many((h, "dns-brute(combo)") for h in kept)
                     if dropped:
                         ctx.logger.info(f"[subdomain] {d} 组合爆破泛解析丢弃 {len(dropped)} 个")
+                    ctx.logger.info(
+                        f"[subdomain] {d} 组合爆破{'（puredns）' if _via_pd else '（系统解析器）'}："
+                        f"{len(kept)} 个命中")
 
         getattr(ctx, "report_progress", lambda f: None)(0.9)    # 续275：DNS 字典爆破（含组合爆破）收完
         # ---------- 5) 被动来源的泛解析复核 ----------
@@ -648,8 +722,8 @@ class SubdomainStage(Stage):
     def _fill_net(self, subs, workers):
         """回填每个子域名的解析 IP 与 CDN 标记（纯 DNS 只读查询）。
 
-        为什么放在本阶段而不是 takeover：这两个字段是**子域名资产自身的属性**，
-        越早落库，GUI/报告里的"这个域名解析到哪、是否走 CDN"就越完整。takeover
+        这两个字段是**子域名资产自身的属性**：越早落库，GUI/报告里的
+        "这个域名解析到哪、是否走 CDN"就越完整。
         阶段虽然也查 CNAME，但它默认只覆盖命中接管的候选，且该阶段可以在策略里关掉
         —— 关掉后子域名就完全拿不到解析信息。
         """

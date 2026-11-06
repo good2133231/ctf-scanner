@@ -388,11 +388,6 @@ VECTORS = (
          na="自检 offline=True 刻意跳过被动源（零外网铁律）"),
     dict(stage="subdomain", key="puredns", desc="外部 puredns 爆破",
          na="自检 offline=True（puredns 与被动源一并跳过）"),
-    # ---- takeover（需要带 CNAME 的子域，夹具无 CNAME → 条件分支）----
-    dict(stage="takeover", key="cname", desc="CNAME 链解析",
-         kind="log", kw="CNAME 解析", optional="本次无子域名资产（夹具无 CNAME）"),
-    dict(stage="takeover", key="fingerprint", desc="子域接管指纹判定",
-         kind="log", kw="接管指纹判定", optional="本次无带 CNAME 的子域名"),
     # ---- portscan（单次只跑**一个**引擎：优先级 fscan > nmap > 内置）----
     dict(stage="portscan", key="engine-fscan", desc="fscan 引擎",
          kind="cmd", kw="fscan", tool="fscan"),

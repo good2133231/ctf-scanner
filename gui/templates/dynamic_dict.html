@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}动态字典{% endblock %}
+{% block content %}
+<p class="muted note">
+  这里只列<b>扫描过程中自动长出来</b>的子域前缀：拓展域名收尾时，归属本项目的子域如果不在
+  <span class="mono">subdomains.txt / subdomains_deep.txt</span> 里，就追加到这里。
+  以后每次子域爆破都会把这份列表当作精简档<b>全量</b>带上，不受快速档 / 增量 5000 条抽样影响。
+  文件：<span class="mono">{{ dict_path }}</span>
+</p>
+<section class="panel scroll-pane">
+  <div class="bulkbar">
+    <span class="muted">共 <b>{{ words|length }}</b> 条</span>
+    <a class="btn-mini ghost" href="{{ url_for('subdomains') }}">返回子域名资产</a>
+    <span class="muted small">只由拓展收尾写入；手工改文件也可以，子域阶段会直接读。</span>
+  </div>
+  {% if words %}
+  <table data-copy-col="1" data-copy-label="动态前缀">
+    <thead><tr><th>#</th><th>前缀</th></tr></thead>
+    <tbody>
+      {% for w in words %}
+      <tr><td class="muted">{{ loop.index }}</td><td class="mono">{{ w }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">还没有动态词。跑一次带拓展域名的任务后，归属子域里字典没有的前缀会出现在这里。</p>
+  {% endif %}
+</section>
+{% endblock %}

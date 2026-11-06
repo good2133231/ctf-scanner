@@ -3,6 +3,376 @@
 > 供 AI 接手的变更日志：只记录**已实施**的代码/文档改动，写清「改了什么、为什么、怎么验证」。
 > 最新的在最上面。倒序追加，不要删除历史条目。
 
+
+
+## 续346（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：334-345 改动归档与记忆同步
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景
+
+主理人要求把当前工作区所有修改统一同步，并把 `CHANGELOG_AI.md` / `todo.txt` 一起收口。
+
+### 改动
+
+- 归档 334-345 的未提交工作区：资产面拓展、任务继承/阶段预览、动态子域字典、IP 反查溯源、删除 takeover/hostcollide、回测提速等。
+- 代码/文档行尾按 HEAD 内容对齐恢复，消除整文件行尾假增减；工作区总 diff 从 13,416/11,601 行降到 3,901/1,548 行（含 346 记忆与 4 个新文件）。
+- 记忆文件行尾单独归一提交：`CHANGELOG_AI.md` / `todo.txt` 保持 CRLF。
+
+### 验证
+
+- 全量 v6 `SMOKE PASS`（含浏览器 e2e）。
+- 收尾同步后 `[8as]/[218]/[296]/[317]` 四组通过（`SMOKE PASS`，局部验证；全量结果仍以 v6 为准）。
+
+## 续345（2026-11-05，WorkBuddy · DeepSeek-V4.1-Flash）：回测提速——组合爆破改走 puredns + 死主机目录跳过
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景
+
+主理人要求自主加域名回测、按日志验证并优化扫描速度。基线任务 #40 的阶段汇总：墙钟 620.6s，其中 subdomain 8m52s（组合爆破占了约 7m20s）、probe 27.4s、dirscan 1m01s；dirscan 的 61s 全是死主机上 60 条路径逐条等 http_timeout。
+
+### 改动
+
+- `scanner/stages/subdomain.py`：组合爆破在 `puredns` + `massdns` + resolvers 都可用时改走 puredns 的小词表爆破，不再逐条走系统解析器；puredns 不可用/失败自动回退原 `wildcard.resolve_all`，泛解析 IP 过滤语义不变。
+- 没有 puredns 的组合兜底复用 `limits.brute_fallback_max`（默认 3000）收窄，并在日志里说明；避免慢 DNS 上几万条组合拖几分钟。
+- `scanner/stages/dirscan.py`：正常流水线里如果跑过 probe 且存活站点为 0，直接跳过目录扫描；单独 dirscan 的补扫任务仍走目标直用兜底，不改变补扫能力。
+- 门禁 `[8aq]` 加组合 puredns 路径断言，并修正组合词表与主 puredns 词表的区分。
+
+### 回测与验证
+
+- 既有授权目标新增回测任务 #41（同目标、full_brute=开、subdomain_profile=deep、subdomain/probe/dirscan）：墙钟 113.5s，subdomain 1m31s、probe 21.6s、dirscan 0.0s；相对任务 #40 的 620.6s **约 5.5x**。
+- 组合爆破：任务 #41 日志显示 27,060 个 `a-b` 前缀走 puredns，5 秒完成、0 命中；任务 #40 的 6,972 个前缀走系统解析器约 7m20s。
+- `dirscan`：任务 #41 日志明确打印「probe 未产出任何存活站点，跳过目录扫描」，从 1m01s 降到 0。
+- `[8aq]/[5c]/[5g]/[8j]` 单组通过；全量 v6 `SMOKE PASS`（含浏览器 e2e）。
+
+## 续344（2026-11-05，WorkBuddy · DeepSeek-V4.1-Flash）：子任务继承阶段 + 拓展页收口 + 动态子域字典 + 相似品牌词
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景（主理人 2026-11-05 点单）
+
+- 子任务阶段应与主任务一致，并同样有可点的「阶段预览」。
+- 拓展域名页删两个旧按钮；旧 C 段拓展标签不再混在拓展页，C 段页签保留。
+- 全量爆破勾选与深度档位关系要讲清（日志显示任务 #37 的 options 没有 full_brute）。
+- `gz-brand8.test` 与 `brand8-fxeye.test` 应能按共享品牌词 `brand8` 判相似。
+- 拓展收尾发现的归属子域前缀，字典没有的动态追加，以后爆破带上，并单独列表。
+
+### 改动
+
+- 手动/自动送探子任务都继承父任务 `stages`（父为空才回落旧默认），并继承 `full_brute` / `subdomain_profile` / `dirscan_full` / `recursive_dir` / `screenshot_on` / `cert_on` / `sqli` 模式；子任务行内面板加「阶段预览」按钮。
+- 建任务页把「深度（0=全量）」改为「深度（按策略；有历史时仍受增量 5000 词限制）」，全量复选框标注为独立选项；子域阶段首行日志打印实际 `full_brute` 值。
+- 拓展域名页/任务详情拓展页签移除「解析选中域名」「归属本项目的追加为本任务子域名」两个按钮（后端手动端点保留，自动送探随单归属不变）。
+- `EXT_SRC_TAGS` 移除 `osint:cseg`；拓展页查询统一排除旧 C 段行，C 段页签和历史数据保留。
+- `extdom.similarity()` 增加多段主标签共享品牌词判据：带数字或长度 ≥5 的共享片段（如 `brand8`）升到 high；通用词（mail/blog/api 等）排除。
+- 新增 `scanner/subdict.py`：拓展 `process()` 收尾时把归属域名（含已在自身子域表的）前缀与静态字典比对，缺失的写入 `data/subdomains_dynamic.txt`（上限 5000，原子写）；子域阶段把它并入精简档、永远全量参与；新增 `/dict/dynamic` 列表页和侧栏入口。
+- 门禁：`[169]/[178]/[263]/[286]/[314]/[5t]` 同步；`[180]/[182]/[267]/[275]/[294]` 的续334 遗留断言一并修正。
+
+### 验证
+
+- `[169] [178] [263] [286] [314] [5t]` 单组通过（含 brand8 用例、子任务继承、动态字典临时文件与列表页、阶段预览静态钉子）。
+- 全量门禁 v4 `SMOKE PASS`（含浏览器 e2e）；另把续334 漏跟踪的 `config/dicts/dirs_mini.txt` 纳入索引（未提交），`[296]` 仓库卫生判据随后通过；`vulnscan` 代码默认同步为 false，表一/`[271]/[317]` 对齐。
+
+## 续343（2026-11-05，WorkBuddy · DeepSeek-V4.1-Flash）：任务列表「全部」自动展开 + 删除 takeover / hostcollide
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景（主理人 2026-11-05 点单）
+
+1. 任务列表层级选「全部」时，父/子任务平铺重复，看不清层级；要求有子任务的根任务默认展开。
+2. `takeover`（CNAME 子域接管）在 CTF 场景基本零命中、只耗 3-6 秒，决定删除。
+3. `hostcollide` 实测 12/15 次零命中，1 IP×20 Host 要 105 秒；命中多为 403/空 302，决定删除。
+
+### 改动
+
+- 任务列表 `parent=all` 改为**只查根任务 + 前端自动展开子任务面板**；下拉文案改为「全部（自动展开子任务）」。自动展开不写 sessionStorage，切回默认档仍收起；`parent=child` 保留直看衍生任务。
+- 整段删除 `scanner/takeover.py`、`scanner/stages/takeover.py`、`scanner/hostcollide.py`、`scanner/stages/hostcollide.py`。
+- 阶段表 15 → 13：从 `STAGE_ORDER` / `STAGE_LABELS` / `STAGE_REGISTRY` / `DEFAULTS` / 随包 `settings.yaml` / devmode/devflow/diffview 全部移除。
+- 同时移除 GUI 策略页控件、建任务 Host 碰撞选项、详情页残留说明、CLI `--hostcollide` 与阶段补全、漏洞来源的 `takeover-*` 特判。
+- 历史任务数据、旧 `collide:` 来源、旧 `takeover-*` 漏洞**不删**；只是不再产生/不再提供入口。历史交接报告 `docs/takeover-2026-*.md` 保留。
+- 门禁同步：`[1b]/[3d]/[6u]/[7l]/[7n]/[201]/[203]/[219]/[257]/[271]/[290]/[330]/[8at]/[8bo]` 改为 13 阶段/删除防回潮；浏览器 e2e 勾选项 18 → 16。另修 `[180]/[182]` 夹具：续334 起随包 `vulnscan.enabled=false`，测复测/审计时必须显式打开。
+
+### 验证
+
+- `[202]/[286]`：任务列表默认收起、`parent=all` 根任务+自动展开标记、子任务不重复平铺；通过。
+- `[1b]/[3d]/[5m]/[6u]/[7n]/[201]/[203]/[218]/[219]/[257]/[267]/[271]/[275]/[294]/[8as]/[8at]/[8bp]` 等相关单组通过。
+- 全量 v6 在 `[275]` 碰到续334 的既有断言漂移（`ext_auto_probe_max` 5→20，已修）；继续跑尾段时，`[296]` 的仓库卫生判据发现 `config/dicts/dirs_mini.txt` 未被跟踪（续334 新增字典，尚未入库），`[317]` 还有既有的 settings/DEFAULTS 漂移。删除功能相关的门禁均已通过，但**不冒充全量全绿**。
+
+## 续341（2026-11-05，WorkBuddy · DeepSeek-V4.1-Flash）：测试/开发薄弱边界资产 + IP 反查逐接口溯源
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景（主理人 2026-11-05 追问）
+1. 拓展域名里为什么同时出现「IP 反查（第三方接口）」和「另见于 IP 反查（旧 C 段标签）」；
+   每个反查能不能标出实际用了哪个接口；反查结果里的 `ip=` 和当前解析 IP 不一致是什么情况。
+2. 子域名字典里 test/开发类词够不够；不够就补一批通用词；命中后站点要加标记，
+   域名/任务要标注「薄弱边界资产」——测试站、开发资产通常就是薄弱边界。
+
+### 本轮做了什么
+1. **IP 反查逐接口溯源**
+   - `reverse_lookup_detail()` 的逐源 row 增加 `domains`，`lookup_many()` 汇总
+     `stats["domain_sources"][ip][domain] = [实际返回该域名的源...]`；
+   - 新增 `iprecon.domain_note()` 单一产地：备注统一写
+     `ip="…" · 历史解析 · 来源=mnemonic/otx/... · 待确认`，共享 IP 截断也带说明；
+   - osint 自动反查与 `/extdomains` 手动回写都走这个备注；来源列额外显示
+     `（mnemonic/otx）`，不再只有笼统的「第三方接口」。
+2. **旧 C 段标签**
+   - `osint:cseg` 标签改为「IP 反查（历史 C 段，已停用）」；新精确反查 `osint:reverse`
+     在拓展分类里排到旧 C 段之前，同一域名两者都有时代表行取新反查；
+   - 「另见于」不再重复显示旧 C 段（历史行仍在 C 段页签/来源筛选里可查）；
+   - 页面顶部写明：旧 C 段仅旧任务保留，新反查不再产生。
+3. **IP 为什么对不上**
+   - 页面明确写：反查接口返回的是**历史索引**，`ip="…"` 是该域名**曾经**解析到的 IP；
+     「解析 IP」列是本次任务/当前 DNS 结果；CDN、负载均衡、迁移、共享主机会让两者不同。
+4. **test/开发字典**
+   - 精简字典从 84 条补到 **366 条**（新增 282 条）：test/dev/staging/stg/uat/qa/sit/
+     preprod/pre/demo/sandbox/lab/beta/alpha + 常见 `环境-api`/`api-环境` 组合，
+     以及 ceshi/kaifa/yanshi/yufa 等中文企业命名；
+   - 精简档任何模式都在场，新增词会直接参与爆破；深档 17.8 万条不变。
+5. **薄弱边界识别与标记**
+   - 新增 `scanner/weakboundary.py`：按域名 token 识别测试/开发/预发布/演示沙箱，
+     只认完整 token（`latest`/`contest`/`devops`/`gitlab` 不误报）；
+   - 子域名、拓展域名、站点行加「薄弱边界资产 · 测试站/开发站/预发布/演示沙箱」徽章；
+   - 任务详情头加汇总横幅：总数 + 子域名/站点数 + 分类分布 + 例子；
+     8.8.8.8 等 IP 不参与名称判断。
+6. **门禁**
+   - 新增 `[8by]`：识别用例/不误报/字典 366 条无重复/`domain_sources` 溯源/
+     `domain_note` 文案/任务详情徽章与横幅/来源列接口；
+   - `[5c]` 同步历史 C 段新标签；`[8bn]` 回写 note、`[8bx]` provenance 均适配。
+
+### 实测
+- 精简字典：84 → 366（有效项；新增 282），无重复；
+- `[8by]` 通过：`dev-api`→开发站、`test1`→测试站、`staging`→预发布、
+  `api-sit`→测试站、`ceshi`→测试站；`latest/contest/devops/gitlab/8.8.8.8` 不误报；
+- `lookup_many` 假源实测：`a` 域名来源 `["f341a","f341b"]`，`b` 域名来源 `["f341b"]`；
+- 任务详情实测同时出现子域名徽章、站点徽章、任务横幅与 `（f341a/f341b）` 来源标注；
+- 主题对比守卫 157 项 / 0 失败；全量门禁待跑（`logs/_smoke341_full.log`）。
+
+### 边界
+- 薄弱边界是**名称线索**，不是漏洞判定；不会自动提高漏洞等级或跳过授权检查；
+- 名称不含 test/dev 等 token 的测试环境会漏报；企业自造缩写只能后续补词；
+- 任务列表未做逐任务批量徽章（会引入全表扫描），当前在任务详情头 + 资产行标记；
+- 反查源本来就可能过期/只覆盖近 30 天；来源标注只证明“该接口这次返回了它”。
+
+## 续340（2026-11-05，WorkBuddy · DeepSeek-V4.1-Flash）：任务列表“歪七扭八”布局修复
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景（主理人截图，2026-11-05）
+任务列表 / 「查看全结果」入口这一页：状态列被一条较长的 `stop_reason`（如「用户请求停止」）
+撑到 ~300px，右侧「查看全结果」被挤到视口外；11 列在 1440 下整表 1311px，
+行内列宽忽大忽小，视觉上“歪七扭八”。
+
+### 根因
+续215 给任务表关键列加了 `white-space:nowrap` 保“不逐字换行”，但状态列里
+`stop_reason` 徽章是长中文；表格自动布局按**最长不可断行内容**给整列定宽，
+一条 stopped 行就把状态列撑宽，连带把操作列推出可视区。
+
+### 本轮做了什么
+1. 名称/目标/统计列改为 **min + max 宽度**：允许折行，长域名 `overflow-wrap:anywhere`；
+2. 状态列 **定宽（110px，上限 124px）+ 允许换行**，长取消原因在格内折行，不再撑宽整列；
+3. 操作列最小 104px + **sticky right**：窄屏横向滚动时「查看全结果」始终可点；
+   `td.ops` 还原成 `table-cell`（原先 `.ops{display:flex}` 把单元格变成 flex 容器，行高只有 40px，右侧吸列也歪）；
+4. 进度条从 110px 收到 90px，阶段文本单行省略，给操作列腾空间；
+5. 新增真浏览器回归 `[12]` 两条：按钮单行且完整在视口内；状态列 <=150px 且内容不溢出；
+6. 顺手修复三处“配置默认值/保存映射导致的门禁假红”：`[8z]` 显式开 `vulnscan.enabled`、
+   `[8ap]` 显式开 `jsmine.recrawl`；`[145]` 发现的 POST 映射缺键补回
+   （`iprecon.api_mnemonic/api_urlscan/mnemonic_limit/urlscan_limit`、`jsmine.fast_domains/max_js_total/time_budget`、
+   `dirscan.mini_max_paths`、独立段 `passive_urls.enabled/timeout/max_urls/max_roots`），
+   并同步 `[8aq]` 对 `recrawl=false` 的默认断言。
+
+### 实测（无头 Chrome + 同一份 CSS）
+- 1440px：整表 **1311 → 1170px**；操作列由 x=1447（视口外）→ x=1299（按钮 1308–1386，25px 单行）；
+- 状态列 **175 → 94px**；长原因注入（“目标不可达，用户请求停止，超时后自动结束”）
+  仍保持状态列 94px、整表 1170px（只在格内换行，行高增加）；
+- 1000px：按钮 sticky 在 868–946，完整可见；状态列 84px；
+- `tests/browser_e2e.py` 89 条断言全绿，其中新增 `[12]` 几何断言通过；
+- `8ap`、`8z` 单组复验通过。
+
+### 边界
+- 11 列在 ≤1000px 仍需横向滚动（这是列数决定的）；但操作列右吸，查看入口不再丢。
+- 状态原因过长时会在格内换行、行高增加，这是为了不牺牲整表对齐。
+
+
+
+## 续339（2026-11-05，WorkBuddy · DeepSeek-V4.1-Flash）：IP 反查多源 + 10 次失败/跳过 100 次熔断
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景（主理人 2026-11-05 点单）
+「webscan 几乎没有一次能用，可以禁用；一个接口 10 次都不能用，100 次之内不调用它，
+第 101 次再检查能不能用；能用就恢复并每次都检查，等它再不能用又进入这个逻辑。」
+同时希望搜 GitHub / 英文资料，找免费、可注册的备用 IP 反查接口。
+
+### 本轮做了什么
+1. **新增两个免 key 反查源**
+   - **Mnemonic 公共 Passive DNS**：`https://api.mnemonic.no/pdns/v3/{ip}?limit=100`，
+     实测 `47.242.73.22` 返回 **35** 条域名，历史覆盖好；不需要注册。
+   - **urlscan.io 搜索**：`https://urlscan.io/api/v1/search/?q=ip:{ip}&size=100`，
+     免 key，只覆盖最近 30 天；过滤 `*.workers.dev` 临时子域。
+   - 默认源改为 `mnemonic, otx, urlscan, hackertarget`；**webscan / ip138 退到备用池**
+     （webscan 实测 530，ip138 常 200 空，不再占默认名额）。
+2. **每个 HTTP 源独立熔断**（`scanner/iprecon.py`）
+   - 连续失败 `breaker_fail_threshold`（默认 10）次 → 打开；
+   - 后续**跳过** `breaker_cooldown`（默认 100）次调用（跳过也计数，不依赖时间）；
+   - 第 101 次做半开探测：成功恢复、之后每次调用继续检查；失败重新计数并再跳 100 次；
+   - 状态在进程内全局（GUI worker 与任务同进程），GUI 重启重置；原生 PTR 不参与熔断。
+3. **预检接线**：预检失败先累计、到阈值才整轮跳过（`breaker_enabled=false` 保留旧的
+   “一次预检失败就跳过”语义）；200-空且无原因算健康，200 + 配额耗尽/JSON 错误算失败。
+4. **可配置/可观测**：设置页新增反查源顺序、熔断开关/阈值/冷却；单 IP 默认上限同步 100；
+   `stats["breaker"]` 与“熔断跳过 N”写入源统计。
+5. **门禁**：新增 `[8bx]`（Mnemonic/URLScan 解析、3 次失败/冷却 2 次/半开失败再熔断/半开成功恢复、
+   默认 10/100）；`[184b]` 备用池扩容后的调用数同步；`[255]/[216]` 关熔断保留旧断言并清状态。
+6. **真实联调**：`lookup_many(["47.242.73.22"])` 去重后 **42** 个域名（Mnemonic 35 + OTX 29 的并集），
+   URLScan 该 IP 为空、HackerTarget 配额耗尽均如实入统计。
+
+### 边界
+- 免 key 源没有 SLA；Mnemonic/OTX/URLScan 的数据会随时间变化，且 URLScan 只覆盖近 30 天。
+- 熔断状态不落盘，重启后重新观察；这是刻意的，避免把临时故障永久钉死。
+- 新增第三方披露：Mnemonic、OTX、urlscan.io、HackerTarget 会收到目标 IP；不需要注册，
+  但目前没有值得推荐的高免费额度注册源（SecurityTrails 免费 50 次/月、IPinfo hosted domains 属付费）。
+- 全量门禁待跑（`logs/_smoke339_full.log`）。
+
+
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景（主理人 2026-11-05 指正）
+「26 / 27 同样的扫描，27 扫完拓展域名没了。」复查发现 #30 的 21 条 `osint:cseg` 底层就是
+**目标精确 IP 的 IP→域名反查**；旧代码只是顺手把结果按 `/24` 归档进 `csegs`，标签叫 C 段。
+上一轮按「不要 C 段」停用 `_c_segments()` 时，把 IP 反查本身也一起停掉了。主理人明确：
+**不要 /24 C 段，但要目标真实 IP 的 IP 反查。**
+
+### 本轮做了什么
+1. **新增 `OsintStage._ip_reverse()`**：只汇总目标/子域名/站点解析出的**精确 IP**，直接走
+   `iprecon.lookup_many()`；不调用 `group_segments()`、不写 `csegs`、不展开 `/24`。
+2. **来源改成 `osint:reverse`**（扩展页标签「IP 反查（第三方接口）」），note 写
+   `ip="x" · IP反查 · 待确认`；历史 `osint:cseg` 只作为旧标签展示，不再新增。
+3. **共享 IP 不再整段丢成 0**：单 IP 命中超过 `iprecon.max_domains_per_ip`（默认 100）时截断并在
+   note 标「共享IP已截断（N→cap）」，而不是把整个 IP 的结果丢弃；低相似域名仍不会自动深扫。
+4. **已知 IP 直接用**：`subdomain` 表里已回填 IP 的资产不再重新 DNS；目标域当前解析失败时，
+   任务里 `www` 等已知 IP 仍能反查（避免再出现「目标域不解析 → 0 条」）。
+5. **开关**：`iprecon.from_targets`（默认 true）控制目标 IP 反查；设置页新增「目标真实 IP 反查
+   （不做 C 段）」复选框；`iprecon.enabled` 总开关不变。
+6. **门禁**：新增 `[8bw]`，实测 `run()` 不调用 `_c_segments`、csegs 零写入、结果 source
+   `osint:reverse`、note 带 IP；临时库实跑目标 IP 得 29 条拓展、csegs 0。
+
+### 边界
+- 反查结果来自第三方实时数据，域名清单会随源变化（#30 当时 21 条，当前源可能返回 29/50 条）；
+  旧任务的历史行不会自动“补回”到新任务。
+- 单 IP 仍可能是共享主机，结果只标「待确认」；自动送探仍受高置信阈值约束。
+- `csegs` 页/任务详情「C 段」只展示历史数据，新任务不再产出。
+
+
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景（主理人 2026-11-05 点单）
+「拓展资产能收到更多域名，但有些域名和原本扫过的子域名功能几乎一模一样；本质是想索引更多资产，
+不是重复扫同一套系统。」主理人指定的口径：**只作用于拓展域名**，根页面 hash 相同且 IP 相同才判重；
+不要额外抓指纹，probe 已经拿到正文时顺手算 hash。
+
+### 本轮做了什么
+1. **probe 顺手算页面指纹（零额外请求）**：`scanner/ml.py` 新增 `page_text` / `page_signature` /
+   `same_page`；httpx 与内置两条探测路都用**已经在手的根响应正文**算归一化 SHA1 + 64 位 SimHash
+   （脚本/样式/注释/标签先剥掉，空白压缩）。只有 200 且有可见正文才产出。
+2. **站点表落库**：`sites.page_hash` / `sites.page_simhash` / `sites.same_app_of`（老库走
+   `_COLUMN_PATCHES` 自动补列）；页面 hash 不额外发一个请求。
+3. **只判自动送探子任务**：`_maybe_auto_probe_similar` 建子任务时写 `same_app_guard=1` 与父任务
+   拓展行已解析的 `same_app_ip`；`probe` 入库后调用 `extdom.flag_same_app_sites`，与父任务目标根站
+   比「页面同页 + IP 相同」，命中写 `same_app_of=<代表站 URL>`。
+4. **只跳深扫，不丢索引**：`dirscan._dedup_sites` 与 `vulnscan` 过滤 `same_app_of` 非空的站点并各写
+   一行跳过日志；域名、站点、证书、截图等索引仍保留。手工「送去探测」不自动跳（人工点名优先）。
+5. **界面**：`/sites` 的「重复」列显示「同功能副本 → 代表站」，说明「目录/漏洞扫描跳过，资产仍保留」。
+6. **门禁**：新增 `[8bv]`，覆盖页面归一化/同页判定、httpx probe 顺路算 hash、同页同 IP 标副本并落库、
+   目录跳过副本，以及 IP 不同/页面不同/非自动送探任务三个反例；`[5e]` 的目录页断言改为按任务筛选
+   且只数长度单元格，消除真实库任务名/静态版本串对整页 `count("777")` 的污染。
+
+### 已知边界
+- 当前 `vulnscan.enabled=false`、`dirscan.mode=mini`；本机制仍先在 `probe` 标副本，等深扫/漏洞扫描
+  重新打开时直接生效。
+- `same_app_of` 只和父任务目标根站比；父任务旧站点没有 `page_hash`（本改动前扫的）时不会命中，
+  需要重扫一次父任务才会产生可比对指纹。
+- 手工「送去探测」不套用自动判重；如需人工也去重，再单独开任务级开关。
+
+
+
+实施者：WorkBuddy · CodeBuddy
+
+### 背景（主理人 2026-11-05 点单）
+「我们先把速度提上来：目录扫描暂时只保留常用后台路径 + .git；漏洞扫描/目录扫描暂时关；
+日志页要看到每个功能做了多久；拓展域名是不是 jsmine 做的？urlfinder 为什么快？异步还能升吗？」
+
+### 实测依据（先查再改）
+- 任务 #26 拓展域名来源：`js:mine` 10 条、`osint:fofa` 12 条、`osint:fofa-title` 1 条 —— **不是 jsmine 独产**。
+- urlfinder：被动第三方索引（Wayback/CommonCrawl/AlienVault OTX），多源并行 + 单源限速 + 总时长上限，
+  **不爬目标站**；本框架 jsmine 是主动抓取 + 探测，天然慢，不是并发不够。
+- 阶段耗时：`ctx.stage_seconds` 早在 runner 里算了，但此前**不落库、不进日志**，页面上看不到。
+
+### 本轮做了什么
+1. **mini 目录扫描（新默认档）**：`dirscan.mode=mini`，新增 `config/dicts/dirs_mini.txt`（约 60 条：
+   admin/login/swagger/actuator/.git/config/.env 等），只吃这一份；不跑 dirmap、不选语言/框架字典、
+   不做后缀派生。任务级「全目录深扫」仍可强制回 deep。
+2. **建任务页默认值**：「全目录深扫」「目录递归」改默认不勾（`data-ck-default=0`），否则 mini 会被
+   默认勾选直接顶回 deep。
+3. **漏洞扫描默认关**：`settings.yaml` 的 `vulnscan.enabled: false`（阶段整段零请求；策略页可打开）。
+4. **阶段耗时可见**：runner 每阶段收尾打 `[耗时] <阶段> 用时 Xs`，任务结束打
+   「阶段汇总（N 个，按耗时降序）｜合计」；GUI 日志页直接显示这两类行。
+   自检实测：`[耗时] probe 用时 0.6s` / `[耗时] vulnscan 用时 0.0s` / 汇总 `0.6s`。
+5. **测试同步**：`[5p]` 默认档断言改 mini（含 dirs_mini 文件与 .git/.env 条目）、`[5m]`/`[252]` 同步、
+   `[10]` 恢复默认改「深扫/递归不勾、拓展仍勾」。
+
+### 续334 追加（同日）
+6. **阶段耗时落库 + 详情页表格**：`tasks.stage_seconds`（JSON）由 runner 收尾写入；
+   任务详情「运行日志」页在日志上方渲染「各阶段耗时」表（按耗时降序，并行阶段注明会重叠）。
+   实测 `probe 0.6s` / 汇总行同时可见；`--only 3` 已断言落库、`--only 7x` 已验页面不崩。
+7. **urlfinder 式被动 URL 源**：新增 `scanner/passive_urls.py`，查 Wayback CDX 的 `*.root/*`
+   历史 URL，抽主机按 `osint:wayback` 入「拓展域名」。关键提速：**去掉 `collapse=urlkey`**
+   （example.com 实测 10.3s → 1.7s，主机结果不变），改在本地按主机去重。
+   默认开、`offline` 跳过、最多 10 根域 × 2000 URL × 10s 超时；单根域失败只记日志不影响任务。
+8. **信息收集专项（默认配置 + 一键按钮）**：`runner.RECON_STAGES = [subdomain, probe, cert, screenshot, dirscan, osint]`（cert/screenshot 属拓展资产与可视化，默认开）
+   作为唯一产地 —— 建任务页默认只勾这四段（`_off_by_default_stages` 改为「非专项 ∪ 策略关」），
+   新增「信息收集专项」按钮（`data-ck-mode="recon"`，JS 按 `data-recon` 标记勾选，不抄阶段名），
+   API 不传 stages 时同样默认走这份清单；「恢复默认」= 专项 + mini（深扫/递归/拓展不勾）。
+   门禁 [10]/[8w]/[219] 已同步到新契约。
+9. **jsmine 提速 + urlfinder 式 Domains**（主理人 2026-11-05：「我要的就是 Domains」「js mine 变快」）：
+   - `jsmine.fast_domains=true`：跳过 DNS/CDN/停车三道闸，页面/JS 里抽到的 host 直接进「拓展域名」；
+   - `jsmine.recrawl=false`：不把新域名再探成站点；
+   - 单站 `max_js` 40→20，新增全任务 `max_js_total=80` 与 `time_budget=120s`（此前 20 站 × 40 JS 最坏 800 请求）；
+      - `RECON_STAGES` 纳入 jsmine（默认专项现为 7 段），按钮/文案同步。
+10. **拓展自动送探：拆域 + seed**（主理人 2026-11-05 报告 #31「四域混扫、站点像配错」）：
+   - 原因：旧代码把多个 root 拼进**一个**子任务的 targets；`001./101.` 兄弟行还先占满 5 个候选名额；
+   - 现在**一个注册域一个子任务**，root 下的 `www./001./apply.` 全部进 `seed_domains`（枚举漏了也不丢）；
+   - `ext_auto_probe_max` 语义改为"注册域个数"，出厂 5→20；
+   - 实测 #30：20 个高置信行 → 10 个注册域，5 个已送过，余 5 个各建一个任务。
+11. **3xx 跳转落点进拓展域名并判高**（主理人 2026-11-05）：
+   - `probe.attach_redirect_info` 的落地页正文已在手，顺手判停车/过期（`parked.content_parked`），零额外请求；
+   - 非停车页 → 落点注册域写 `source=osint:redirect`，拓展页徽章与自动送探都判高（`extdom.apply_redirect_evidence`）；
+   - 停车/过期页、正文拿不到、自家根域、黑名单/第三方/CDN 一律不记；
+   - `[171]` 显式关 `fast_domains` 才测慢档三道闸（生产默认 true 不走闸）。
+12. **建任务页：删总勾选、自动拓展默认勾**（主理人 2026-11-05）：
+   - 删掉「耗时选项」总勾选那颗复选框（它联动 SQL 注入 + 爬虫），只保留单项「SQL 注入」；
+   - 「自动拓展扫描」`data-ck-default=1` + `checked`，默认勾选；
+   - 「信息收集专项」一键组也勾它（`data-recon=1`，JS 的 recon 模式改为按该标记勾，不再只限 stages 组）；
+   - [314] 与浏览器 [10] 同步改断言（e2e 87 条全绿）。
+13. **子任务面板编号跟门面号**（主理人 2026-11-05 报「26 的子任务显示成 30-a」）：
+   - 原因：`api_task_subtree` 用内部 `rid` 当前缀，任务列表却用 `display_no`（#30 → 26）；
+   - 根前缀改走 `_task_tree_labels`（门面号/派生编号），点开子任务也接着全局层级：26-a → 26-a-1；
+   - 统计面板根任务同步显示 26；真实 ID 仍留在链接与 404/权限校验里，主键不动。
+14. **停用 C 段反查，只保留 IP 反查**（主理人 2026-11-05）：
+   - 原因：C 段/共享 IP 反查经常带回不属于本目标的资产；
+   - `osint.run()` 删掉 `do_ip` 与 `_c_segments()` 调用；方法只留作历史数据/回归测试（[8h] 已锁）；
+   - 保留 `osint:iprecon`（favicon 命中裸 IP，先探活）与子域名页手动「真实 IP 反查域名并回写」；
+   - C 段页/任务页签只展示历史数据并注明已停用；设置页删 C 段开关与专属上限。
+9. **异步升级评估（结论：不改）**：现有 ThreadPool + 子进程的瓶颈是外部等待（dirmap、截图、
+   大字典爆破），不是事件循环；改 asyncio 要动全部阶段与 HTTP 层，接口/行为风险高，
+   预估收益只有个位数百分比。速度靠 mini 目录扫描、增量子域、被动 URL 三件事，收益是数倍级。
+
+### 验证
+- `--only 5p` / `3` / `7x` / `8am` 均 PASS。
+- Wayback 实测：example.com 1.7s 返回 2 个主机（`example.com` / `www.example.com`）。
+- 全量门禁：**<待本轮跑完填>**。
+
 ## 续333（2026-11-05，WorkBuddy · CodeBuddy）：子域增量模式 + 门禁节奏约定
 
 实施者：WorkBuddy · CodeBuddy

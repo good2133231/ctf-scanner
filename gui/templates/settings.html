@@ -268,14 +268,9 @@
   </section>
 
   <section class="panel collapsible" data-panel="assets">
-    <h2>资产面拓展（子域接管 / JS 挖掘 / 端口服务 / 站点截图 / TLS 证书 / 目录发现）</h2>
+    <h2>资产面拓展（JS 挖掘 / 端口服务 / 站点截图 / TLS 证书 / 目录发现）</h2>
     <p class="muted note">这几项都属于"发散"用的资产面拓展，默认策略见下方勾选状态；
       风险与耗时各不相同，可按需逐个开关。</p>
-    <label class="chk"><input type="checkbox" name="takeover_enabled" value="1"
-      {{ 'checked' if s.takeover.enabled }}> 子域接管检测（CNAME 指向已停用的第三方服务，如 S3 / Heroku / GitHub Pages）</label>
-    <label class="chk"><input type="checkbox" name="takeover_http_check" value="1"
-      {{ 'checked' if s.takeover.http_check }}> 接管判定时再做一次 HTTP 特征比对（降低误报）</label>
-    <label>接管检查主机上限 <input name="takeover_max_hosts" value="{{ s.takeover.max_hosts }}"></label>
     <label class="chk"><input type="checkbox" name="jsmine_enabled" value="1"
       {{ 'checked' if s.jsmine.enabled }}> JS 资产挖掘（从 JS 提取域名/接口 URL，并用黑名单过滤第三方公共域）</label>
     <label class="chk"><input type="checkbox" name="jsmine_secrets" value="1"
@@ -332,8 +327,6 @@
       <span class="mono">&lt;form method="post"&gt;</span> 会作为一条链接收进「链接资产」页，
       但框架不会去发那个请求。</p>
 
-    {# 续201：Host 碰撞（同 IP 绑不同 Host 头找隐藏站点）—— 只读 GET、
-      续203 起策略**默认开**（主理人点单）、建任务默认也勾 ⇒ 不用用户再勾一次 #}
     {# 续205：备案反查（同主体域名）。源全在配置里，加一个可达的源改 yaml 即可 #}
     <label class="chk"><input type="checkbox" name="icp_enabled" value="1"
       {{ 'checked' if s.icp.enabled }}> <b>备案反查（ICP）</b>（默认关闭；查同主体下的其它域名，
@@ -350,18 +343,6 @@
     <label>最多查多少个域名 <input name="icp_max_domains" value="{{ s.icp.max_domains }}"></label>
     <label>预检用的探活域名 <input name="icp_probe_domain" value="{{ s.icp.probe_domain }}"></label>
 
-    <label class="chk"><input type="checkbox" name="hostcollide_enabled" value="1"
-      {{ 'checked' if s.hostcollide.enabled }}> <b>Host 碰撞</b>（默认**开启**；同 IP 绑不同
-      Host 头找藏在背后的站点）</label>
-    <p class="muted small note">当前状态：{% if s.hostcollide.enabled %}<b>已开启</b> —— 任务跑到
-      hostcollide 阶段会按「非 CDN 的真实 IP × 候选 Host」发 GET。{% else %}<b>关闭</b> ——
-      hostcollide 阶段会被跳过，<b>一个请求都不发</b>（策略开着就自动跑、**不用勾**；策略关掉时可用任务选项/详情页按钮单次触发）。{% endif %}
-      命中按 <span class="mono">collide:&lt;ip&gt;</span> 前缀落库 ⇒ 自动归 own 口径；
-      只读 GET、单任务请求预算见下。</p>
-    <label>单任务请求预算 <input name="hostcollide_max_requests" value="{{ s.hostcollide.max_requests }}"></label>
-    <label>单次超时（秒） <input name="hostcollide_timeout" value="{{ s.hostcollide.timeout }}"></label>
-    <label>连续无差异早停（个，0＝关） <input name="hostcollide_early_stop" style="width:4em"
-      value="{{ s.hostcollide.early_stop }}"></label>
 
     {# 续221：指纹单站标签上限（fingerprint.max_tags）—— 超出按"主文档优先、JS 补位"截断，
         丢多少写进任务日志。一个站被打出 20+ 个标签就是这么收住的。 #}
@@ -611,13 +592,18 @@
   </section>
 
   <section class="panel collapsible" data-panel="osint">
-    <h2>外部情报拓展（OSINT：C 段反查 / ICO 反查 / 证书反查 / 标题反查）</h2>
-    <p class="muted note">四项都依赖<b>第三方公共接口</b>，默认关闭；接口不可用时只记一行日志，
-      不影响流水线其它阶段。产出的新域名都进 <b>「拓展域名」</b>页（来源 <code>osint:*</code>，
-      页面上标成「C 段反查 / FOFA·ICO 反查 / FOFA·证书反查 / FOFA·标题反查」），
-      C 段归纳结果进任务详情的「C 段」页签。</p>
+    <h2>外部情报拓展（OSINT：IP 反查 / ICO 反查 / 证书反查 / 标题反查）</h2>
+    <p class="muted note"><b>C 段反查已停用</b>（续336：同段/共享 IP 很容易把不属于我们的资产收进来）。
+      历史任务仍可在任务详情「C 段」页签查看旧数据；需要反查域名时，请到<b>子域名页勾选行 →
+      「真实 IP 反查域名并回写」</b>，那条显式入口不受本页开关限制。
+      下面这些外部情报源都依赖<b>第三方公共接口</b>，默认关闭；接口不可用时只记一行日志，
+      不影响流水线其它阶段。产出的新域名都进 <b>「拓展域名」</b>页（来源 <code>osint:*</code>）。</p>
     <label class="chk"><input type="checkbox" name="iprecon_enabled" value="1"
-      {{ 'checked' if s.iprecon.enabled }}> <b>C 段反查</b>（IP → 域名 + /24 C 段归纳，免 key）</label>
+      {{ 'checked' if s.iprecon.enabled }}> <b>IP 反查总开关</b>
+      （目标真实 IP + favicon 命中 IP；手动「真实 IP 反查」不受它限制）</label>
+    <label class="chk" title="用目标/子域名/站点解析出的精确 IP 做 IP→域名反查；不展开 /24 C 段，不写 C 段表">
+      <input type="checkbox" name="iprecon_from_targets" value="1"
+        {{ 'checked' if s.iprecon.from_targets is not false }}> 目标真实 IP 反查（不做 C 段）</label>
     <label class="chk" title="favicon 反查命中裸 IP 时：先探活 80/443，活着的再「免费源 + FOFA ip=」反查，结果标历史/待确认">
       <input type="checkbox" name="iprecon_from_favicon" value="1"
         {{ 'checked' if s.iprecon.from_favicon }}> <b>favicon 命中的 IP 也反查</b></label>
@@ -625,14 +611,18 @@
       <input name="iprecon_from_favicon_max" value="{{ s.iprecon.from_favicon_max }}"></label>
     <label>反查接口（<code>{ip}</code> 为占位符，可替换为自建/镜像）
       <input name="iprecon_api" value="{{ s.iprecon.api }}"></label>
-    <label>最多反查 IP 数 <input name="iprecon_max_ips" value="{{ s.iprecon.max_ips }}"></label>
-    <label>最多解析主机名数 <input name="iprecon_max_hosts" value="{{ s.iprecon.max_hosts }}"></label>
-    <label>单 IP 域名数上限（超过判为共享主机，不纳入域名资产）
-      <input name="iprecon_max_domains_per_ip" value="{{ s.iprecon.max_domains_per_ip }}"></label>
     <label>并发数（公共接口，建议保持克制） <input name="iprecon_workers" value="{{ s.iprecon.workers }}"></label>
     <label>单次超时（秒） <input name="iprecon_timeout" value="{{ s.iprecon.timeout }}"></label>
-    <label class="chk" title="开跑前先探一次每个接口还活不活：挂了的源整轮跳过，不再对每个 IP 各打一条日志"><input type="checkbox" name="iprecon_preflight" value="1"
-      {{ 'checked' if s.iprecon.preflight }}> <b>接口存活预检</b>（源挂了就整轮跳过它）</label>
+    <label class="chk" title="开跑前先探一次每个接口还活不活：失败先累计，到阈值才熔断"><input type="checkbox" name="iprecon_preflight" value="1"
+      {{ 'checked' if s.iprecon.preflight }}> <b>接口存活预检</b></label>
+    <label class="chk" title="同一个源连续失败 N 次后跳过 100 次调用，第 101 次半开探测；能用就恢复，再失败重新计数"><input type="checkbox" name="iprecon_breaker_enabled" value="1"
+      {{ 'checked' if s.iprecon.breaker_enabled is not false }}> <b>接口熔断</b></label>
+    <label>连续失败阈值 <input name="iprecon_breaker_fail_threshold"
+      value="{{ s.iprecon.breaker_fail_threshold or 10 }}" style="width:5em"></label>
+    <label>熔断后跳过次数 <input name="iprecon_breaker_cooldown"
+      value="{{ s.iprecon.breaker_cooldown or 100 }}" style="width:6em"></label>
+    <label>反查源顺序（逗号分隔） <input name="iprecon_sources" style="width:26em"
+      value="{{ (s.iprecon.sources or [])|join(', ') }}"></label>
     <label title="默认源预检全挂时改用这里；ptr 是本框架自己实现的原生 PTR，不发 HTTP">备用源（逗号分隔）
       <input name="iprecon_fallback_sources" style="width:22em"
         value="{{ (s.iprecon.fallback_sources or [])|join(', ') }}"></label>

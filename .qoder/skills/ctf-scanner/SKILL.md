@@ -1,13 +1,13 @@
 ---
 name: ctf-scanner
-description: CTFScanner 仓库（Flask 控制台 + 15 阶段资产测绘/漏洞初筛 CLI）的接手须知——硬规矩、唯一门禁命令、CRLF/LF 混排的改文件纪律、断言证伪要求、假红假绿高发区、收尾四步。在本仓库里读改任何文件、跑测试、提交或推送之前先用它。Use whenever working inside the ctf-scanner repo: before editing files, running tests/smoke.py, committing, or pushing.
+description: CTFScanner 仓库（Flask 控制台 + 13 阶段资产测绘/漏洞初筛 CLI）的接手须知——硬规矩、唯一门禁命令、CRLF/LF 混排的改文件纪律、断言证伪要求、假红假绿高发区、收尾四步。在本仓库里读改任何文件、跑测试、提交或推送之前先用它。Use whenever working inside the ctf-scanner repo: before editing files, running tests/smoke.py, committing, or pushing.
 ---
 
 # CTFScanner 接手须知
 
 ## Overview
 
-本仓库是一个**只用于授权测试与 CTF** 的资产测绘 + 漏洞初筛框架（Flask 控制台 + CLI，15 个流水线阶段，
+本仓库是一个**只用于授权测试与 CTF** 的资产测绘 + 漏洞初筛框架（Flask 控制台 + CLI，13 个流水线阶段，
 SQLite 存储，非破坏性）。它已经迭代了 140+ 轮、由多个 AI 会话接力维护，因此攒下了一批
 "不看就会踩"的纪律。本 skill 只放**最容易犯错的那几条 + 去哪查全文**，刻意不抄正文
 （抄一份就多一个会漂的产地，见下面第 5 条）。
@@ -52,7 +52,7 @@ SQLite 存储，非破坏性）。它已经迭代了 140+ 轮、由多个 AI 会
    `ast.Call` 节点，别 grep 文本。
 7. **桩掉写路径的断言是假绿高发区**。`save_settings` 被 stub 时，"POST 之后少存了几个开关"
    没有任何可观测后果 —— 130+ 组门禁一组都不红（`AGENTS §6.2` 第十二起：一个打偏 7 行的补丁
-   把 `evasion` 四个键与 `takeover` 两个键整段删掉、还留了个重复的 `"subdomain"` 键）。
+   把 `evasion` 四个键整段删掉、还留了个重复的 `"subdomain"` 键）。
    凡是桩掉写路径，就要按 `DEFAULTS` **逐段点名**"一个键都不许少"。
 8. **安全红线**：口令 / token / PAT 绝不写进**被 git 跟踪**的任何文件，也绝不写进 `.git/config`、
    远端 URL 或提交信息。凭据密文口令四档：显式参数 > `CTFSCANNER_KEYS_PASSPHRASE` >
@@ -84,7 +84,7 @@ SQLite 存储，非破坏性）。它已经迭代了 140+ 轮、由多个 AI 会
   `install.sh` / `start.sh` 是它们在 Linux 上的薄包装（**不实现任何安装逻辑**，只调
   `run_bootstrap.py --install`）。
 - 其余入口在 `cli/`：`client.py`（扫描 CLI）、`run_keys.py`（凭据口令加解密）、
-  `run_users.py`（账号）、`run_node.py`（分布式执行节点）、`run_devflow.py`（15 阶段全流程自检）。
+  `run_users.py`（账号）、`run_node.py`（分布式执行节点）、`run_devflow.py`（13 阶段全流程自检）。
 - `run_bootstrap.py` **刻意放在根、不进 `scanner/` 包** —— `tests/smoke.py [7p]` 钉着
   "scanner 包内不得引用 toolmgr"，塞进去就得给那条红线开豁免。
 - `logs/` 与 `data/` 都在 `.gitignore` 里：一次性补丁脚本、沙箱库、门禁日志都放 `logs/`，

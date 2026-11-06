@@ -155,7 +155,7 @@ class VulnscanStage(Stage):
             ctx.logger.info("[vulnscan] 未启用（策略配置 → 检测策略 可打开），跳过")
             return
         if apply_sqli_gate(ctx.settings, ctx.options):
-            ctx.logger.info("[vulnscan] SQL 注入检查未启用（默认关；建任务勾「耗时选项 → SQL 注入」"
+            ctx.logger.info("[vulnscan] SQL 注入检查未启用（默认关；建任务勾「SQL 注入」"
                             "或策略配置打开后才会跑）—— 其它检查与 POC 照常执行")
         limits = ctx.settings.get("limits", {})
         ccfg = ctx.settings.get("checks", {}) or {}
@@ -170,6 +170,12 @@ class VulnscanStage(Stage):
         if not sites:
             # 兼容仅导入 URL 且 probe 未产出站点的任务
             sites = [{"url": raw, "source": "input"} for kind, raw in ctx.targets if kind == "url"]
+        # 续337：同功能副本只跳过目录/漏洞，站点行与拓展域名索引仍保留。
+        _same_app_n = sum(1 for s in sites if str(s.get("same_app_of") or "").strip())
+        if _same_app_n:
+            sites = [s for s in sites if not str(s.get("same_app_of") or "").strip()]
+            ctx.logger.info(f"[vulnscan] 跳过 {_same_app_n} 个同功能副本站点"
+                            "（根页面与主任务根站一致且 IP 相同）")
         sites = ctx.scope_sites(sites)          # 续25：追加执行时限定到本次勾选（非追加原样）
         sites = sites[: int(limits.get("vulnscan_max_urls", 100))]
         # 续198：爬虫喂过来的**带参链接**（注入面）—— 主理人点单"这些也要智能测漏洞"。

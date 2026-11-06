@@ -55,7 +55,7 @@ from scanner import (admin_setup, audit, auth as taskauth, blacklist, cancelcaus
                      extdom, fofa, github_leak, jsmine, login_guard, migrate, nodes,
                      queue, quake, secretbl,
                      screenshot,
-                     shodan, targets as targets_mod,
+                     shodan, targets as targets_mod, weakboundary,
                      toolmgr, users, packetcodec)
 from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
 from scanner import log as runlog
@@ -64,8 +64,8 @@ from scanner.log import (attach_access_log, attach_server_log, boot_logger,
 from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
-from scanner import diffview, edgeauth, fingerprint, dictstats, keystore, webpath, portguard, iconbackfill
-from scanner.runner import STAGE_ORDER, run_task, sync_pocs
+from scanner import diffview, edgeauth, fingerprint, dictstats, keystore, webpath, portguard, iconbackfill, subdict
+from scanner.runner import RECON_STAGES, STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
                            tail_lines, to_unicode, norm_hit_path)
@@ -125,7 +125,8 @@ SOURCE_LABELS = {
     "dns-brute(fallback)": "爆破(内置)",
     "js:mine": "JS 挖掘",
     # 两个 FOFA 来源都显式带上「FOFA」字样：用户要求一眼看出哪些资产是 FOFA 找出来的
-    "osint:cseg": "C 段反查",
+    # 续341：C 段反查已停用，旧任务里的 osint:cseg 只是历史证据，别再让它看起来像现功能。
+    "osint:cseg": "IP 反查（历史 C 段，已停用）",
     extdom.REVERSE_SOURCE: "IP 反查回写（自身）",
     "osint:reverse": "IP 反查（第三方接口）",
     "osint:fofa": "FOFA·ICO 反查",
@@ -135,6 +136,7 @@ SOURCE_LABELS = {
     "osint:shodan": "Shodan·ICO 反查",
     "osint:quake": "Quake·ICO 反查",
     "osint:ctlog": "CT 日志(crt.sh)",
+    "osint:redirect": "跳转落点",
     # 自动拓展扫描（`auto_expand`）：目标是子域时，把它自己也记成一条子域名资产
     "target": "目标自带子域",
 }
@@ -204,7 +206,7 @@ def external_source_panel(settings):
 
     rows = []
     for sec, label, ready, needs_key, how in (
-            ("iprecon", "IP 反查 / C 段归纳（api.webscan.cc）", True, False, "免 key，需能出网"),
+            ("iprecon", "IP 反查（目标真实 IP + favicon 命中 IP；不做 C 段）", True, False, "免 key，需能出网"),
             ("fofa", "FOFA 反查（favicon / 证书 / 标题三路）",
              _filled(*fofa.credentials(settings)), True, "keys: fofa.email + fofa.key"),
             ("shodan", "Shodan 反查（http.favicon.hash）",
@@ -666,6 +668,11 @@ def _fold_site_rows(rows, keep_merged=False):
         r["merged"] = 0
         r["_dup_member"] = False
         r["_dup_merge"] = False
+        # 续341：站点名称命中测试/开发/预发布 token 时给页面一个“薄弱边界”标记。
+        # 纯展示层计算，不改库、不影响探测与去重。
+        _w = weakboundary.classify(r.get("url") or r.get("host") or "")
+        r["weak_tag"] = str(_w.get("label") or "")
+        r["weak_reason"] = str(_w.get("reason") or "")
     _keyed = _site_redirect_fold_keys(rows)
     groups, seq = {}, []
     for r in rows:
@@ -707,6 +714,24 @@ def _fold_site_rows(rows, keep_merged=False):
             hidden += 1
             out.append(r)
     return out, {"hidden": hidden, "merged": merged}
+
+
+def _weak_boundary_summary(task_id):
+    """任务详情头部的「薄弱边界资产」汇总（续341）。
+
+    按名称识别，属于线索而不是漏洞判定；子域名与站点都算，按 host 去重。
+    查询失败不能让任务详情页 500，退回空统计。
+    """
+    try:
+        domains = [str(r["domain"] or "") for r in db._query(
+            "SELECT domain FROM subdomains WHERE task_id=?", (int(task_id),))]
+        sites = [str(r["host"] or r["url"] or "") for r in db._query(
+            "SELECT host, url FROM sites WHERE task_id=?", (int(task_id),))]
+        return weakboundary.summarize(domains, sites)
+    except Exception:
+        logger.warning("[gui] 薄弱边界汇总失败（不影响任务详情）：task=%s", task_id,
+                       exc_info=True)
+        return {"total": 0, "subs": 0, "sites": 0, "by": {}, "examples": []}
 
 
 def _tree_seg(index, depth):
@@ -1208,8 +1233,8 @@ _JS_SECRET_PREFIX = "js-secret-"
 def vuln_source(poc_id):
     """把一条漏洞按 `poc_id` 归到「来源」桶（纯展示口径，一览图共用一处判据）。
 
-    `afrog:<id>` → afrog；`js-secret-*` → js-secret；`aNN-*`（OWASP 内置检查）/
-    `takeover-*`（疑似接管）→ 内置检查；其余（POC 引擎签名 id）→ POC。
+    `afrog:<id>` → afrog；`js-secret-*` → js-secret；`aNN-*`（OWASP 内置检查）→ 内置检查；
+    其余（POC 引擎签名 id）→ POC。
     产地只有三处：`owasp/checks.py` / `afrog.py` / `stages/jsmine.py`。
     """
     p = str(poc_id or "").strip().lower()
@@ -1217,7 +1242,7 @@ def vuln_source(poc_id):
         return "afrog"
     if p.startswith(_JS_SECRET_PREFIX):
         return "js-secret"
-    if _OWASP_ID_RE.match(p) or p.startswith("takeover-"):
+    if _OWASP_ID_RE.match(p):
         return "内置检查"
     return "POC"
 
@@ -2193,7 +2218,10 @@ def create_app():
         用户读到的就是假话（§5.19）。改成策略现算之后，"恢复默认"与"它会不会跑"永远同向。
         没有 `enabled` 键的阶段（subdomain / osint / probe…）不算关。
         """
-        out = set()
+        # 续334（主理人点单）：默认配置 = 信息收集专项（子域 + probe + mini 目录 + 被动 URL）。
+        # 不在 RECON_STAGES 里的一律默认不勾；策略显式关掉的阶段同样不勾（取并集，
+        # 保证「勾不勾」与「会不会跑」永远同向）。
+        out = set(STAGE_ORDER) - set(RECON_STAGES)
         for s in STAGE_ORDER:
             sec = (settings or {}).get(s)
             if isinstance(sec, dict) and sec.get("enabled") is False:
@@ -2236,13 +2264,19 @@ def create_app():
         # 续282（主理人点单「子任务不要单独显示出来，默认就在子任务面板里才有」）：
         # 层级筛选**默认 = root** —— 列表只列主域名任务，子任务（含孙任务）一律收进
         # 父任务行的「子任务」面板；要看衍生任务本身，显式选「只看衍生（送探）任务」。
-        # `all` 是显式的"全部（含衍生）"（以前的无参默认档，没删——只是不再默认）。
+        # `all` 是显式的「全部（自动展开子任务）」（续342：只查根任务，子任务由前端
+        # 行内面板展开，不再平铺成独立行；`child` 仍用于直看衍生任务）。
         parent_f = (request.args.get("parent") or "root").strip()
         if parent_f not in ("all", "root", "child"):
             parent_f = "root"    # 非法值回默认档（与上面 status/stages 同一处理），不进 SQL
+        # 续342：选「全部」时不再把整棵衍生树平铺成独立行（父子重复、层级看不清）。
+        # 仍然只取根任务，但前端会把有子任务的根任务自动展开成行内子任务面板；
+        # 要直看某个衍生任务本身，仍可显式选「只看衍生」。
+        _query_parent = "root" if parent_f == "all" else parent_f
+        auto_expand = parent_f == "all"
         rows, total = _page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
                                     status=status or None, stages=stages_f or None,
-                                    parent=parent_f if parent_f in ("root", "child") else None)
+                                    parent=_query_parent if _query_parent in ("root", "child") else None)
         # 续195（主理人点单「多任务执行还是显示排队？」）：把队列并发现状摆在列表页 ——
         # 同时跑几个是策略配置的 queue.workers（出厂 1＝串行，省目标侧带宽、防风控），
         # 不是没实现；页面不说，用户只看到"排队"两个字
@@ -2255,7 +2289,7 @@ def create_app():
             page = pages
             rows, total = _page_tasks(limit=size, offset=(page - 1) * size, q=q or None,
                                         status=status or None, stages=stages_f or None,
-                                        parent=parent_f if parent_f in ("root", "child") else None)
+                                        parent=_query_parent if _query_parent in ("root", "child") else None)
         # 翻页必须带上**全部**筛选状态；`q` 要 URL 编码 —— 关键字里带 `&` / `#` / 空格时
         # 不编码会让翻页**丢掉条件**（见 `/vulns`、`_asset_page` 的同一处理）。
         parts = []
@@ -2289,10 +2323,11 @@ def create_app():
         qpos = {t["id"]: db.queued_position(t["id"])
                 for t in rows if t["status"] == "queued"}
         return render_template("tasks.html", tasks=rows, stages=STAGE_ORDER, cause_zh=CAUSE_ZH,
-                               # 续314：耗时选项联动哪几个阶段（判据写在这里；JS 里不抄阶段名）
+                               # 续335：总勾选已删；slow_stages 只用于给 crawl 标 data-slow-item（现无消费者）
                                slow_stages=("crawl",),
                                # 续303：默认不勾哪些由策略现算（写死会让"策略开了、界面说没开"成为假话）
                                off_by_default_stages=_off_by_default_stages(load_settings()),
+                               recon_stages=RECON_STAGES,
                                # 续281：子任务在列表里显示 24-a 派生编号（79-a），不是新号 80。
                                # 真实 ID 仍留在链接与 tooltip 里，路由/主键一条不动。
                                task_labels=_task_tree_labels([t["id"] for t in rows]),
@@ -2301,6 +2336,7 @@ def create_app():
                                running=set(runner.running_task_ids()), qpos=qpos,
                                pager=pager, page_sizes=PAGE_SIZES, q=q,
                                status=status, stages_f=stages_f, parent_f=parent_f,
+                               auto_expand=auto_expand,
                                # 续169：主面板那两个控件的默认值**取自策略配置**（唯一产地是
                                # `subdomain.ext_depth` / `subdomain.ext_min_confidence`）。页面里
                                # 写死 1 与「高」就是第二份默认值 —— 策略页改了页面不跟着变，
@@ -2321,12 +2357,13 @@ def create_app():
         stages = data.getlist("stages") if hasattr(data, "getlist") else data.get("stages", [])
         if isinstance(stages, str):
             stages = [s for s in stages.split(",") if s.strip()]
-        stages = [s for s in stages if s in STAGE_ORDER] or list(STAGE_ORDER)
+        # 续334：不传 stages 时默认走信息收集专项（不再默认全阶段）
+        stages = [s for s in stages if s in STAGE_ORDER] or list(RECON_STAGES)
         offline = str(data.get("offline", "")).lower() in ("1", "true", "on")
         options = {"offline": offline}
         # 续314（主理人点单「SQL 注入默认关闭」）：只在**勾了**时写 True；没勾就不写键，
         # 策略级 `vulnscan.sqli` 仍生效（策略页打开后不会被这次任务打回）。
-        # `opt_slow` 是「耗时选项」总勾选的兜底字段（前端目前只联动子勾选，不单独提交它）。
+        # `opt_slow` 是旧总勾选的兜底字段（前端已无此控件，保留只为兼容旧脚本/书签提交）。
         if str(data.get("opt_sqli", "")).lower() in ("1", "true", "on") \
                 or str(data.get("opt_slow", "")).lower() in ("1", "true", "on"):
             options["sqli"] = True
@@ -2377,11 +2414,7 @@ def create_app():
             options["ext_depth"] = runner.clamp_ext_depth(_d169)
         if _c169:
             options["ext_min_conf"] = extdom.conf_norm(_c169)
-        # 续201：hostcollide 同一套（勾了「Host 碰撞」而没勾阶段 ＝ 白勾，静默失效）
-        if str(data.get("hostcollide", "")).lower() in ("1", "true", "on"):
-            options["hostcollide"] = True
-        for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan"),
-                            ("hostcollide", "hostcollide")):
+        for flag, stage in (("portscan_full", "portscan"), ("dirscan_full", "dirscan")):
             # 判据是**生效选项**（options）或表单字段 —— 上面「目录递归」会直接把
             # `dirscan_full` 写进 options，而表单里并没有这个字段名；只看表单会漏掉它，
             # 结果是"任务里没有 dirscan 阶段"：勾了递归却连目录扫都不跑（静默失效）。
@@ -2550,7 +2583,9 @@ def create_app():
         ext_pick = next((t for t in EXT_SRC_TAGS if t[0] == ext_src), None)
         if not ext_pick:
             ext_src = ""
+        # 续344：旧 C 段行不在「拓展域名」页签出现；历史 C 段只在「C 段」页签。
         ext_base = _and_where(db.EXT_SUBDOMAIN_WHERE,
+                              "source <> 'osint:cseg'",
                               None if _ext_all else db.OVERLAP_EXT_WHERE,
                               "source=?" if ext_pick else None)
         # 续287：徽标与页签同一把尺子 —— 黑名单命中的行默认不列（加入后立刻消失）。
@@ -2613,6 +2648,17 @@ def create_app():
             abort(404)
         # 页面只展示相对路径（日志文件路径在库里存的是绝对路径，因为要真的去读它）
         task = dict(task)
+        # 续334：阶段耗时（runner 收尾写入 JSON）→ 日志页表格
+        _ss334 = {}
+        try:
+            _ss334 = json.loads(task.get("stage_seconds") or "{}")
+        except (TypeError, ValueError):
+            _ss334 = {}
+        stage_rows = []
+        if isinstance(_ss334, dict):
+            _pairs = [(str(k), float(v)) for k, v in _ss334.items()
+                      if isinstance(v, (int, float))]
+            stage_rows = [(k, format_duration(v)) for k, v in sorted(_pairs, key=lambda kv: -kv[1])]
         # 续225：子任务页显示**父任务自己的**进度 —— 加子任务不会改动父任务行；
         # 之前跳到子任务详情看到 0% 容易被当成"父任务进度被清零"。
         _parent_task = (db.get_task(int(task.get("parent_id") or 0))
@@ -2960,6 +3006,7 @@ def create_app():
             ext_defaults=_ext_defaults(),
             resume_rest=resume_rest,
             sites=sites,
+            weak_summary=_weak_boundary_summary(task_id),
             sites_merged=sites_merged,
             site_hosts=site_hosts,
             # 续281：本页标题 / 父任务回跳 / 子任务清单统一走 24-a 显示编号（子任务显示 79-a）
@@ -3740,7 +3787,15 @@ def create_app():
             others = db.other_sources_by_domain([r["domain"] for r in out])
             for r in out:
                 extra = sorted({s for s in others.get(r["domain"], []) if s != r["source"]})
+                # 续341：旧 C 段来源不再塞进“另见于”—— 它已停用，混在新反查后面只会
+                # 让人误以为当前又跑了 C 段；历史行仍可从来源筛选 / C 段页签查看。
+                extra = [s for s in extra if s != "osint:cseg"]
                 r["also_from"] = " / ".join(source_label(s) for s in extra)
+                _w = weakboundary.classify(r.get("domain") or "")
+                r["weak_tag"] = str(_w.get("label") or "")
+                r["weak_reason"] = str(_w.get("reason") or "")
+                _m = re.search(r"来源=([^\s·]+)", str(r.get("note") or ""))
+                r["source_detail"] = _m.group(1) if _m else ""
                 # 续150（用户点单）+ 续154：真实 IP 分档的判据在 `scanner/cdn.py::ip_kind`
                 # （页面、排序 SQL、报告、端口扫描四边都读它，各写一遍就会互相"纠错"）。
                 r["ip_kind"] = cdn.ip_kind(r)
@@ -3786,10 +3841,12 @@ def create_app():
             _bases, _ips, _shares = cache[key]
             # 续179：徽章与自动递归吃同一份结论（含 IP 佐证）—— 判据只在
             # extdom.apply_ip_evidence 一处（§5.14）；续194 再并进证书佐证（同形）。
-            r["conf"] = extdom.apply_cert_evidence(
-                extdom.apply_ip_evidence(
-                    extdom.confidence(r.get("domain") or "", bases=_bases), r, _ips),
-                r, _shares)
+            r["conf"] = extdom.apply_redirect_evidence(
+                extdom.apply_cert_evidence(
+                    extdom.apply_ip_evidence(
+                        extdom.confidence(r.get("domain") or "", bases=_bases), r, _ips),
+                    r, _shares),
+                r)
         return rows
 
     def _overlap_args():
@@ -3964,7 +4021,16 @@ def create_app():
         rows, hidden = _sub_rows(rows, base_where, base_params, hide_res)
         _nores_state(pager, hide_res, hidden)
         return render_template("subdomains.html", subs=rows, pager=pager, q=q, tag=tag,
-                               task_id=tid or "", tasks=_tasks_with_asset("subdomains"))
+                               task_id=tid or "", tasks=_tasks_with_asset("subdomains"),
+                               dynamic_count=len(subdict.load(settings, limit=0)))
+
+    @app.route("/dict/dynamic")
+    @login_required
+    def dynamic_subdomains():
+        """续344：拓展收尾自动长出来的子域前缀；以后子域爆破会全量带上。"""
+        words = subdict.load(settings, limit=0)
+        return render_template("dynamic_dict.html", words=words,
+                               dict_path=str(subdict.path(settings)))
 
     # 拓展域名页的"来源分类"标签：用户要求分类浏览 + 分类排序，不要把 JS / FOFA 标题 /
     # 证书 / ICO / C 段混在一起。顺序即展示顺序（也是排序优先级）。
@@ -3977,7 +4043,8 @@ def create_app():
         ("quake", "Quake·ICO 反查", "osint:quake", "quake-ico拓展"),
         ("virustotal", "VirusTotal·子域反查", "osint:vt", "vt子域拓展"),
         ("ctlog", "CT 日志(crt.sh)", "osint:ctlog", "ct日志拓展"),
-        ("cseg", "C 段反查", "osint:cseg", "c段反查拓展"),
+        # 续344（主理人点单）：旧 C 段行不再在「拓展域名」展示/筛选，C 段历史数据
+        # 只在「C 段」页签保留；新反查统一走 osint:reverse。
         ("reverse", "IP 反查", extdom.EXT_REVERSE_SOURCE, "ip反查拓展"),
     )
     # 分类排序表达式：按 EXT_SRC_TAGS 的顺序，未知来源排最后，同类内按 id 倒序（新的在前）。
@@ -4023,7 +4090,9 @@ def create_app():
         # 分组与平铺**共用同一个 ext_where**（两种视图不能各按一套口径，否则一切到分组噪声又回来了）。
         tid, tw, tp = _task_scope()          # 续112-E：「按任务筛选」，与「漏洞风险」页同口径
         params = params + tp
-        base_where = _and_where(db.EXT_SUBDOMAIN_WHERE, where, src_where,
+        # 续344：旧 C 段不再混入「拓展域名」；只保留在「C 段」页签看历史。
+        base_where = _and_where(db.EXT_SUBDOMAIN_WHERE, "source <> 'osint:cseg'",
+                                where, src_where,
                                 None if show_all else db.OVERLAP_EXT_WHERE, tw)
         bl_view = request.args.get("bl") == "1"      # 续194：黑名单专门视图（?bl=1）
         # 续194：黑名单视图**不再叠**「只看解析成功」那层默认收起 —— 那一页的用途就是看
@@ -4989,7 +5058,7 @@ def create_app():
     @app.route("/api/domains/scan-ext", methods=["POST"])
     @login_required
     def api_scan_ext():
-        """把勾选的**拓展域名**送去真正检测：新建一个跑 `subdomain → probe → dirscan → vulnscan` 的任务。
+        """把勾选的**拓展域名**送去真正检测：新建一个子任务，默认继承父任务的阶段（续344）。
 
         需要它是因为 osint / jsmine 排在 probe **之后**，同一任务里新挖出的域名赶不上本轮存活
         探测，永远停在"有域名、无站点、无检测"（用户 2026-09-23 点名）。`subdomain` 放最前面是
@@ -5026,7 +5095,18 @@ def create_app():
             if _pres["promoted"]:
                 logger.info(f"[gui] 送去探测随单归属追加 {len(_pres['promoted'])} 个"
                             f"（任务 {_pres['tasks'] or '无'}）")
+        # 续344（主理人点单）：子任务的阶段跟父任务同一套，不再固定成
+        # subdomain→probe→dirscan→vulnscan。父任务选「信息收集专项」，子任务就同样跑
+        # 信息收集那 8 个阶段；父任务阶段为空才退回默认四段。
         stages = ["subdomain", "probe", "dirscan", "vulnscan"]
+        _parent344 = db.get_task(int(_tform)) if _tform.isdigit() else None
+        if _parent344:
+            _pst344 = [s for s in str(_parent344["stages"] or "").split(",")
+                       if s in runner.STAGE_ORDER]
+            if _pst344:
+                stages = _pst344
+                logger.info(f"[gui] 子任务继承父任务 #{_parent344['id']} 的阶段："
+                            f"{','.join(stages)}")
 
         options = {}
         # 续151「追加层数」：1 = 只对当下这批域名做一轮（默认）；N>1 时每层把新挖出的、
@@ -5074,6 +5154,15 @@ def create_app():
         inherit = _source_auth(from_task, _owner_scope())
         if inherit:
             options["auth"] = inherit
+        # 续344：阶段一致还不够，模式也要一致。父任务勾了「全量爆破」/深度/截图，
+        # 子任务重新收集时不能悄悄退回增量或精简档，否则日志又会抽 5000 条。
+        if _parent344:
+            _popt344 = json.loads(_parent344["options"] or "{}") \
+                if isinstance(_parent344["options"], str) else (_parent344["options"] or {})
+            for _k344 in ("full_brute", "subdomain_profile", "dirscan_full",
+                          "recursive_dir", "screenshot_on", "cert_on", "sqli"):
+                if _k344 in _popt344 and _k344 not in options:
+                    options[_k344] = _popt344[_k344]
         # 续191（主理人点单）：默认名沿用**根任务名** —— test 的子任务叫 test-拓展一层，
         # 孙任务叫 test-拓展二层（层数从根数起）；手工填了名字就以填的为准。
         name = (request.form.get("name") or "").strip()
@@ -5117,7 +5206,7 @@ def create_app():
         logger.info(f"[gui] 拓展域名探测任务 #{task_id} 已创建"
 
                     f"（{scope_note154 or f'勾选的 {len(domains)} 个域名'}，"
-                    f"subdomain→probe→dirscan→vulnscan）")
+                    f"{'→'.join(stages)}）")
         # 续195：新建子任务后回拓展域名页签（主理人点单：点其他功能总被送去漏洞页）
         return redirect(url_for("task_detail", task_id=task_id) + "#ext")
 
@@ -5163,6 +5252,13 @@ def create_app():
         # 续239：面板从**点的那一行**出发 —— 点子任务行看到的是它自己的下一层，不再上溯到树根。
         root = task
         rid = int(root["id"])
+        # 续336（主理人点单）：面板编号必须与任务列表同一口径 —— 根任务用门面号
+        # （#30 的 display_no=26 ⇒ 子任务 26-a），点开子任务时用它的派生编号
+        # （26-a 的子任务 26-a-1），不再拿内部 id 当显示前缀。
+        rid_label = _task_tree_labels([rid]).get(rid, str(rid))
+        # 派生编号的层级要接着全局编号算：根是 26 → 子 26-a → 孙 26-a-1；
+        # 点开子任务（26-a）时它的下一层是 26-a-1，不能又回到字母（26-a-a）。
+        _base_depth = rid_label.count("-")
         nodes, total = [], 0
 
         def walk(pid, path, depth):
@@ -5170,14 +5266,14 @@ def create_app():
             for i, ch in enumerate(db.list_child_tasks(pid), 1):
                 # 24-a 规则：根任务的**直接**子任务用字母 a/b/c…；更深层用序号 1/2/3…
                 # （与 mock 一致：孙任务显示 a-1/a-2，不是 a-a）。规则只此一处 `_tree_seg`。
-                sub = _tree_seg(i, depth)
+                sub = _tree_seg(i, _base_depth + depth)
                 p = path + [sub]
                 cid = int(ch["id"])
                 full = db.get_task(cid) or ch
                 total += 1
                 nodes.append({
                     "id": cid,
-                    "label": f"{rid}-" + "-".join(p),
+                    "label": f"{rid_label}-" + "-".join(p),
                     "depth": depth,
                     "name": full["name"],
                     "target": (str(full["targets"] or "").splitlines() or [""])[0],
@@ -5203,7 +5299,8 @@ def create_app():
         _cc282 = db.child_counts_bulk([n["id"] for n in nodes])
         for _n282 in nodes:
             _n282["child_count"] = _cc282.get(_n282["id"], 0)
-        return jsonify({"ok": True, "root": {"id": rid, "name": root["name"]},
+        return jsonify({"ok": True,
+                        "root": {"id": rid, "label": rid_label, "name": root["name"]},
                         "total": total, "nodes": nodes})
 
     @app.route("/api/tasks/<int:tid>/stages")
@@ -5354,7 +5451,10 @@ def create_app():
             {"kind": "漏洞", "total": len(vulns), "by_task": by_task("vulns")},
             {"kind": "邮箱（数据探测）", "total": len(emails), "by_task": by_task("emails")},
         ]
-        return jsonify({"ok": True, "root": {"id": int(root["id"]), "name": root["name"]},
+        _root_id = int(root["id"])
+        _root_label = _task_tree_labels([_root_id]).get(_root_id, str(_root_id))
+        return jsonify({"ok": True,
+                        "root": {"id": _root_id, "label": _root_label, "name": root["name"]},
                         "total_tasks": len(ids), "tasks": tasks, "rows": rows})
 
 
@@ -5772,6 +5872,19 @@ def create_app():
                                 "timeout": int(f.get("passive_timeout", 20) or 20),
                                 # sources（留空=内置源表）页面无输入框，原样带回
                                 "sources": list(_p0.get("sources") or [])},
+                    # 续340：passive_urls（Wayback/OTX 历史 URL）是独立段，页面暂无输入框；
+                    # save_settings 整份重写，POST 映射漏段会把它整个删掉（[145] 已抓到）。
+                    "passive_urls": {
+                        "enabled": (f.get("passive_urls_enabled") == "1")
+                        if "passive_urls_enabled" in f
+                        else bool((settings.get("passive_urls") or {}).get("enabled", True)),
+                        "timeout": int(f.get("passive_urls_timeout")
+                                       or (settings.get("passive_urls") or {}).get("timeout") or 10),
+                        "max_urls": int(f.get("passive_urls_max_urls")
+                                         or (settings.get("passive_urls") or {}).get("max_urls") or 2000),
+                        "max_roots": int(f.get("passive_urls_max_roots")
+                                          or (settings.get("passive_urls") or {}).get("max_roots") or 10),
+                    },
                     # 子域名收集：并集开关 + 自动提取主域（续145）。max_resolve / dns_timeout
                     # 页面上没有输入框，原样带回（save_settings 是整份重写，漏带就是把键删掉）。
                     "subdomain": {"max_resolve": int(
@@ -5821,16 +5934,16 @@ def create_app():
                                 "waf_bypass": f.get("waf_bypass") == "1",
                                 "bypass_level": int(f.get("bypass_level", 2) or 0),
                                 "waf_detect": f.get("waf_detect") == "1"},
-                    "takeover": {"enabled": f.get("takeover_enabled") == "1",
-                                 "max_hosts": int(f.get("takeover_max_hosts", 300) or 300),
-                                 "http_check": f.get("takeover_http_check") == "1"},
-                    # 阶段级总开关（与 takeover/portscan/jsmine 同一类）：默认开
+                    # 阶段级总开关（与 portscan/jsmine 同一类）：默认开
                     # 目录扫描：默认开但只跑浅扫（用户要求"先浅浅过一遍再决定要不要深挖"）；
                     # 深扫走全量分层字典 + dirmap + 后缀派生
                     "dirscan": {"enabled": f.get("dirscan_enabled") == "1",
                                 "mode": f.get("dirscan_mode", "deep"),
                                 "quick_max_paths": int(
                                     f.get("dirscan_quick_max_paths", 150) or 150),
+                                # 续340：页面无输入框（续334 新增）—— 保存时原样带回。
+                                "mini_max_paths": int(f.get("dirscan_mini_max_paths")
+                                                      or (settings.get("dirscan") or {}).get("mini_max_paths") or 60),
                                 "suffix_aware": f.get("dirscan_suffix_aware") == "1",
                                 "exclude_js": f.get("dirscan_exclude_js") == "1",
                                 # 续316：jsmine 接口 URL 并入候选（关掉：js_endpoints=false）
@@ -5940,7 +6053,6 @@ def create_app():
                               "feed_vulnscan": f.get("crawl_feed_vulnscan") == "1",
                               "max_feed": int(f.get("crawl_max_feed", 10) or 0),
                               "max_feed_total": int(f.get("crawl_max_feed_total", 40) or 40)},
-                    # 续201：Host 碰撞（逐键点名，与 crawl 同一条口径）
                     # 续205：备案反查。逐键点名（save_settings 整份重写，漏带＝删键）。
                     "icp": {"enabled": f.get("icp_enabled") == "1",
                             "preflight": f.get("icp_preflight") == "1",
@@ -5953,11 +6065,6 @@ def create_app():
                     # 续211-P1-4：外部引擎配额预检。逐键点名（`save_settings` 整份重写）。
                     "extquota": {"enabled": f.get("extquota_enabled") == "1",
                                  "min_left": int(f.get("extquota_min_left", 1) or 1)},
-                    "hostcollide": {"enabled": f.get("hostcollide_enabled") == "1",
-                                    "max_requests": int(f.get("hostcollide_max_requests", 200) or 200),
-                                    "timeout": int(f.get("hostcollide_timeout", 2) or 2),
-                                    # 续328：连续 N 个候选无差异就提前结束；0＝关（合法值，别洗成默认）
-                                    "early_stop": int(f.get("hostcollide_early_stop", 3) or 0)},
                     # 续221：指纹单站标签上限（`fingerprint.max_tags`）。没有输入框就原样带回现值。
                     "fingerprint": {"max_tags": int(f.get("fingerprint_max_tags",
                                                           (settings.get("fingerprint") or {})
@@ -5990,11 +6097,19 @@ def create_app():
                                "parking_check_max": int(
                                    f.get("jsmine_parking_check_max", 100) or 0),
                                "strip_comments": f.get("jsmine_strip_comments") == "1",
+                               # 续340：以下三键页面无输入框（续334 新增）—— 保存时原样带回，
+                               # 不再被 save_settings 的整份重写静默洗掉（[8as] 已抓到）。
+                               "fast_domains": bool(_j0.get("fast_domains", True)),
+                               "max_js_total": int(f.get("jsmine_max_js_total")
+                                                   or _j0.get("max_js_total") or 80),
+                               "time_budget": int(f.get("jsmine_time_budget")
+                                                  or _j0.get("time_budget") or 120),
                                # blacklist / drop_absent_zone 页面无输入框，原样带回
                                "blacklist": list(_j0.get("blacklist") or []),
                                "drop_absent_zone": bool(_j0.get("drop_absent_zone", True))},
                     # 外部情报拓展（OSINT）：C 段反查 + favicon 反查，两项默认都关
                     "iprecon": {"enabled": f.get("iprecon_enabled") == "1",
+                                "from_targets": f.get("iprecon_from_targets") == "1",
                                 "from_favicon": f.get("iprecon_from_favicon") == "1",
                                 "from_favicon_max": int(f.get("iprecon_from_favicon_max", 20) or 20),
                                 "api": f.get("iprecon_api", "") or
@@ -6002,16 +6117,35 @@ def create_app():
                                 "max_ips": int(f.get("iprecon_max_ips", 500) or 500),
                                 "max_hosts": int(f.get("iprecon_max_hosts", 200) or 200),
                                 "max_domains_per_ip": int(
-                                    f.get("iprecon_max_domains_per_ip", 30) or 30),
+                                    f.get("iprecon_max_domains_per_ip", 100) or 100),
                                 "workers": int(f.get("iprecon_workers", 5) or 5),
                                 "timeout": float(f.get("iprecon_timeout", 10) or 10),
                                 "preflight": f.get("iprecon_preflight") == "1",
+                                "breaker_enabled": f.get("iprecon_breaker_enabled") == "1",
+                                "breaker_fail_threshold": int(
+                                    f.get("iprecon_breaker_fail_threshold", 10) or 10),
+                                "breaker_cooldown": int(
+                                    f.get("iprecon_breaker_cooldown", 100) or 100),
+                                "sources": [
+                                    str(x).strip()
+                                    for x in str(f.get("iprecon_sources") or "").split(",")
+                                    if str(x).strip()] or ["mnemonic", "otx", "urlscan", "hackertarget"],
                                 "fallback_sources": [
                                     str(x).strip()
                                     for x in str(f.get("iprecon_fallback_sources") or "").split(",")
                                     if str(x).strip()] or ["ptr"],
                                 "api_rapiddns": (f.get("iprecon_api_rapiddns") or "").strip(),
-                                "api_viewdns": (f.get("iprecon_api_viewdns") or "").strip()},
+                                "api_viewdns": (f.get("iprecon_api_viewdns") or "").strip(),
+                                # 续340：续339 新加但是页面没有输入框的四个键 —— 原样带回，
+                                # 否则保存一次策略就把它们重置/删掉（[8as] 已抓到）。
+                                "api_mnemonic": str(f.get("iprecon_api_mnemonic")
+                                                    or (settings.get("iprecon") or {}).get("api_mnemonic") or "").strip(),
+                                "api_urlscan": str(f.get("iprecon_api_urlscan")
+                                                   or (settings.get("iprecon") or {}).get("api_urlscan") or "").strip(),
+                                "mnemonic_limit": int(f.get("iprecon_mnemonic_limit")
+                                                      or (settings.get("iprecon") or {}).get("mnemonic_limit") or 100),
+                                "urlscan_limit": int(f.get("iprecon_urlscan_limit")
+                                                     or (settings.get("iprecon") or {}).get("urlscan_limit") or 100)},
 
                     "fofa": {"enabled": f.get("fofa_enabled") == "1",
                              "max_sites": int(f.get("fofa_max_sites", 30) or 30),

@@ -861,27 +861,28 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     # smoke 那边只能验页面结构；"点下去到底勾上了几项"必须在这里验（真表单登录同类口径）。
     page.navigate(base + "/tasks")
     _cb10 = "#task-form [data-ck-group] input[type=checkbox]"
-    # 续314（主理人点单）：删掉「全部勾上（最重档位）」按钮，改验「耗时选项」总勾选。
-    # 它不在任何 data-ck-group 里 ⇒ 不影响 stages/deep/expand 的批量计数。
-    page.ev("document.querySelector('#task-form input[data-slow-master]').click()")
-    _slow10 = json.loads(page.ev(
+    # 续335（主理人点单）：总勾选那颗「耗时选项」删掉，只留单项 SQL 注入；
+    # 自动拓展默认勾上，且「信息收集专项」一键组也要把它勾上。
+    rep.check("[10] 总勾选那颗「耗时选项」已删（只留单项 SQL 注入）",
+              page.ev("document.querySelector('#task-form input[data-slow-master]') === null") is True)
+    rep.check("[10] 「自动拓展扫描」默认勾上",
+              page.ev("document.querySelector('#task-form input[name=auto_expand]').checked") is True)
+    page.ev("document.querySelector('#task-form button[data-ck-mode=recon]').click()")
+    _recon10 = json.loads(page.ev(
         "JSON.stringify({"
-        "sqli: document.querySelector('#task-form input[name=opt_sqli]').checked,"
-        "crawl: document.querySelector('#task-form input[name=stages][data-slow-item]').checked,"
-        "master: document.querySelector('#task-form input[data-slow-master]').checked})"))
-    rep.check("[10] 「耗时选项」总勾选＝SQL 注入 + 爬虫都勾",
-              _slow10 == {"sqli": True, "crawl": True, "master": True}, str(_slow10))
+        "auto: document.querySelector('#task-form input[name=auto_expand]').checked,"
+        "stages: document.querySelectorAll('#task-form [data-ck-group=stages] "
+        "input[type=checkbox]:checked').length})"))
+    rep.check("[10] 「信息收集专项」也勾上自动拓展（拓展送子任务属于信息采集）",
+              _recon10["auto"] is True and _recon10["stages"] > 0, str(_recon10))
     rep.check("[10] 「全部勾上（最重档位）」按钮已删（续314）",
               page.ev("document.querySelector('#task-form button[data-ck-mode=all]') === null") is True)
-    # 续201：一键勾选覆盖的是 15 阶段 + 深度 + 1 拓展；续250 起深度少一项（全端口勾选
-    # 从建任务表单摘掉、挪到任务详情「端口」页签按钮）；续265 起「离线模式」整颗从
-    # 建任务表单去掉（主理人 2026-10-23：没有场景用得到）⇒ 一共 18 项，全部勾上即全勾。
-    # 「Host 碰撞」那颗**刻意不在任何 data-ck-group 里** —— 它是独立的任务级开关，
-    # 混进"拓展选项"会让一键勾选的语义变浑（[118] 的分组断言就是钉这个的）。
+    # 续343：takeover/hostcollide 已删除 ⇒ 13 阶段 + 2 深度 + 1 拓展 = 16 项。
+    # 续250 起深度少一项（全端口勾选挪到任务详情）；续265 起「离线模式」整颗去掉。
 
-    rep.check("[10] 批量勾选 scope 仍是 18 项（15 阶段 + 2 深度 + 1 拓展；slow 组不入 scope）",
+    rep.check("[10] 批量勾选 scope 是 16 项（13 阶段 + 2 深度 + 1 拓展；slow 组不入 scope）",
               page.ev("document.querySelectorAll('#task-form [data-ck-group] input[type=checkbox]').length")
-              == 18, "slow 组混进了 data-ck-group")
+              == 16, "slow 组混进了 data-ck-group")
     # 续265：「离线模式」整颗从建任务表单去掉了 ⇒ 判据从"不带动它"改成"表单里没有它"。
     rep.check("[10] 建任务表单里不再有「离线模式」那颗框（续265：主理人说没有场景用得到）",
               page.ev("document.querySelector('#task-form input[name=offline]') === null") is True,
@@ -899,26 +900,25 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     # 写死数字的在续303 就红过一次（13 → 14）。契约是「恢复默认 == 按策略算出来的那些 + 自动拓展扫描」，
     # 写死会让下一次改默认时又变成"看着像坏了"的假红。
     from scanner.config import load_settings as _ls10
-    from scanner.runner import STAGE_ORDER as _SO10
+    from scanner.runner import RECON_STAGES as _R10, STAGE_ORDER as _SO10
     _set10 = _ls10()
-    _off10 = sum(1 for _s10 in _SO10
-                 if isinstance(_set10.get(_s10), dict) and _set10[_s10].get("enabled") is False)
-    # 只有阶段框带 `data-ck-default`（深度/拓展那几颗没有）⇒「恢复默认」勾上的就是"策略没关的阶段"。
-    # 旧注释里那个 "+1 自动拓展" 是凑数：旧值 15−2（cert+screenshot）=13 本来就不需要加一。
-    _want10 = len(_SO10) - _off10
-    rep.check(f"[10] 「恢复默认」＝{_want10} 项（{len(_SO10)} 个阶段里策略关着 {_off10} 个）",
-              _back10 == _want10, f"实测 {_back10}（策略关着 {_off10} 个阶段）")
+    _off10 = {_s10 for _s10 in _SO10
+              if isinstance(_set10.get(_s10), dict) and _set10[_s10].get("enabled") is False}
+    # 续334：默认 = 信息收集专项（子域 + probe + mini 目录 + 被动 URL），不再"策略没关就勾"。
+    _want10 = sum(1 for _s10 in _R10 if _s10 not in _off10)
+    rep.check(f"[10] 「恢复默认」＝{_want10} 项（信息收集专项：子域/probe/cert/screenshot/目录/被动URL）",
+              _back10 == _want10, f"实测 {_back10}")
     # 证伪：按钮只管 stages 时会停在这里（少于全勾）—— 上面那条 all 的判据就是它的牙
-    rep.check("[10] 恢复默认也把深度/拓展带回来（续314 默认开）",
+    rep.check("[10] 恢复默认：深扫/递归回到 mini 默认（续334 起不勾），拓展仍默认开",
               json.loads(page.ev(
                   "JSON.stringify(["
                   "document.querySelector('#task-form input[name=dirscan_full]').checked,"
                   "document.querySelector('#task-form input[name=recursive_dir]').checked,"
                   "document.querySelector('#task-form input[name=auto_expand]').checked,"
                   "document.querySelector('#task-form select[name=subdomain_profile]').value])")) 
-              == [True, True, True, "deep"], "深度/拓展没跟着恢复默认")
+              == [False, False, True, "deep"], "深扫/递归不勾，自动拓展默认勾（mini + 信息收集专项）")
     rep.check("[10] 点按钮不会把已填内容弄丢（按钮是 type=button，不提交表单）",
-              page.ev("!!document.querySelector('#task-form input[data-slow-master]')") is True
+              page.ev("!!document.querySelector('#task-form input[name=auto_expand]')") is True
               and page.ev("document.querySelectorAll('#task-form form').length") == 0)
     # ---------- [11] 主题：默认浅色，且换页时首屏就得是它（续147）----------
     # 主理人原话：「整体色调默认就是浅色，以及我刚刚手动调成浅色 切换功能页 他先显示深色
@@ -1018,6 +1018,24 @@ def _run_checks(page, base, rep, cred, tid, port, tid_run):
     rep.check("[12] sticky 首列有实底（透明会让后面的列从字缝里透出来）",
               isinstance(_first12, dict)
               and _first12.get("bg") not in ("", "rgba(0, 0, 0, 0)", "transparent"), _first12)
+    # 续340：续215 的 11 列 nowrap 布局会被一条长 stop_reason 撑宽，把最右的
+    # 「查看全结果」挤出视口；截图反馈“歪七扭八”就是从这里来的。这两条只看
+    # 真浏览器几何：按钮必须单行且完整在视口内（操作列右吸），状态列不得被长原因撑宽。
+    _lay12 = page.ev(
+        "(() => { const tbl = document.querySelector('#tbl-tasks');"
+        " if (!tbl) return null;"
+        " const a = tbl.querySelector('.ops a');"
+        " const td = tbl.querySelector('tbody tr td:nth-child(7)');"
+        " if (!a || !td) return null;"
+        " const ar = a.getBoundingClientRect(), tr = td.getBoundingClientRect();"
+        " return {vw: innerWidth, btnL: ar.left, btnR: ar.right, btnH: ar.height,"
+        "         statusW: tr.width, statusSW: td.scrollWidth}; })()")
+    rep.check("[12] 查看全结果单行且完整留在视口内（操作列右吸）",
+              isinstance(_lay12, dict) and 0 <= _lay12["btnL"]
+              and _lay12["btnR"] <= _lay12["vw"] + 1 and _lay12["btnH"] < 35, _lay12)
+    rep.check("[12] 状态列不被长取消原因撑宽（<=150px，且内容不溢出）",
+              isinstance(_lay12, dict) and _lay12["statusW"] <= 150
+              and _lay12["statusSW"] <= _lay12["statusW"] + 1, _lay12)
     page.ev("localStorage.removeItem('ctfscanner.theme')")
 
 

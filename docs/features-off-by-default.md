@@ -18,7 +18,7 @@
 - **表二**：随包 `true` 而代码默认 `False` ⇒ **其实是开着的**，只是"开在文件层"。
   这么放是有意的：代码层守住"没填 key 就不该发请求"（见门禁 `[8bq]`）。
 
-## 一、两处都关（真·没默认开，8 项）
+## 一、两处都关（真·没默认开，9 项）
 
 | 功能 | 段（配置键） | 代码默认 | 随包 | 生效 | 为什么没默认开 | 怎么开 | 要什么 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -26,10 +26,11 @@
 | 360 Quake 的 favicon 反查（同源资产） | `quake` | False | False | False | 外部付费接口、要 key | 策略配置 → `quake.enabled` + `config/keys.yaml` 的 `quake.key` | key |
 | Shodan 的 favicon 反查 | `shodan` | False | False | False | 同上；且"任何外部接口都不该在用户没点头时产生流量" | 策略配置 → `shodan.enabled` + `shodan.key` | key |
 | A10 SSRF 受控回连（任务内起本机监听，把 `http://<回调>/<token>` 喂给候选参数） | `ssrf` | False | False | False | **只在目标能回访扫描机时才有效** —— NAT / 云主机场景大概率一条都收不到；且要在本机起监听 | 策略配置 → `ssrf.enabled` + 回调基址 | 目标侧能出网、且能访问到扫描机的端口 |
-| 站点爬虫（收集页面里本来就写着的链接；与 dirscan 的"猜路径"是两回事） | `crawl` | False | False | False | 续314 主理人点单"默认关闭"：会多发请求；建任务「耗时选项」可一键打开 | 策略配置 → `crawl.enabled`，或建任务「耗时选项」 | 无 |
+| 站点爬虫（收集页面里本来就写着的链接；与 dirscan 的"猜路径"是两回事） | `crawl` | False | False | False | 续314 主理人点单"默认关闭"：会多发请求；建任务页可单独勾 `crawl` 打开 | 策略配置 → `crawl.enabled`，或建任务「耗时选项」 | 无 |
 | 开发模式（把各阶段的"量"压到 1，只验流程跑不跑得通） | `dev` | False | False | False | 它不是"能力"，是自检模式；开着会让真实扫描几乎不出量 | 策略配置 → `dev.enabled` / CLI `--dev` | 无 |
 | 边缘认证门（401 门） | `gui.edge_auth` | False | False | False | 它是**部署开关**不是能力 —— 只有把控制台绑到 `0.0.0.0` 时才需要；刻意不给环境变量覆盖，免得"随手一设"就变了 | 策略配置 / `config/settings.yaml` 的 `gui.edge_auth.enabled` | 无（配合 HTTPS 才有意义；**不替代登录**） |
 | 报告导出（MD / JSONL / HTML；PDF 已于续297 移除） | `report` | False | False | False | 续171 主理人点单"默认关闭" | 策略配置 → 报告导出 | PDF 还要本机无头浏览器 |
+| 漏洞初筛（vulnscan 整阶段；关闭后零请求） | `vulnscan` | False | False | False | 续334 主理人点单"漏洞扫描暂时关闭"；续344 代码默认同步关 | 策略配置 → 漏洞扫描，或建任务阶段勾选 | 无 |
 
 ## 二、随包开、代码默认关（其实是开着的，9 项）
 
@@ -41,7 +42,7 @@
 | GitHub 泄露检索（只落元数据，绝不落文件内容） | `github` | False | True | True | 需 `github.token` |
 | 启发式线索（本地差分，不发任何请求） | `heuristic` | False | True | True | 只产 `leads` 表线索，不写 `vulns` |
 | 漏洞情报（CISA KEV，免 key） | `intel` | False | True | True | 只产线索，不计入漏洞数、不自动导入 POC |
-| C 段反查（webscan.cc 公共接口） | `iprecon` | False | True | True | 第三方公共接口，可用性无保障 |
+| 精确 IP 反查（webscan.cc 等公共接口，不做 /24 C 段） | `iprecon` | False | True | True | 第三方公共接口，可用性无保障 |
 | 多平台公开代码检索（grepapp，免 key） | `multileak` | False | True | True | 边界与 `github` 同源 |
 | 站点截图（无头浏览器，站点页缩略图） | `screenshot` | False | True | True | **随包开**（续303 主理人点单「默认要开」）：代码 `DEFAULTS` 仍 False，浏览器与中文字体续298 已进默认安装；门禁进程内把它压回关（CI 里一次性 `--screenshot` 实测 30 秒不产出 × `max_sites`），要真跑的组自己显式开 —— `[303]` 钉这三件事同向 |
 
@@ -63,4 +64,4 @@
 
 - 这张表的**事实来源是配置本身**，不是抄来的：改了任何默认值，请同步这张表。
 - 门禁 `[271]` 三条判据：① 表一/表二点名的段与配置逐条对上；② 默认**已开**的段（如
-  `portscan` / `hostcollide`）不许出现在表一；③ 变异（摘掉表一里任意一行）⇒ 判据立刻红。
+  `portscan` / `afrog`）不许出现在表一；③ 变异（摘掉表一里任意一行）⇒ 判据立刻红。

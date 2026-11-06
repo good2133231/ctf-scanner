@@ -829,8 +829,8 @@ def main():
     # 续198：新增 crawl 阶段（站点爬虫）—— 它吃"已有存活站点"、把带参链接喂给 vulnscan，
     # 所以必须排在 dirscan 之后、vulnscan 之前。清单写死是刻意的：加阶段必须**同时**更新这里，
     # 否则"新阶段根本没被跑过"这件事在门禁里看不出来。
-    # 续201：hostcollide 紧随 takeover（两者都吃"子域名 + 解析 IP"，都要在 portscan/probe 前）
-    assert STAGE_ORDER == ["subdomain", "takeover", "hostcollide", "portscan", "probe",
+    # 续343：takeover / hostcollide 两个低价值阶段已整段删除（13 阶段）。
+    assert STAGE_ORDER == ["subdomain", "portscan", "probe",
                            "cert", "screenshot", "osint", "jsmine", "dirscan",
                            "crawl", "vulnscan",
                            "intel", "heuristic", "github"], STAGE_ORDER
@@ -920,7 +920,10 @@ def main():
     stages = ["probe", "vulnscan"]
     tid = db.create_task("smoke", targets, stages, {"offline": True})
     sync_pocs(settings)
-    ctx = run_task(tid, "smoke", targets, stages, {"offline": True}, settings)
+    # 续334：vulnscan 出厂默认关（settings.yaml 的 enabled:false）；本组测流水线本身，显式打开
+    _s3 = copy.deepcopy(settings)
+    _s3["vulnscan"] = dict(_s3.get("vulnscan") or {}, enabled=True)
+    ctx = run_task(tid, "smoke", targets, stages, {"offline": True}, _s3)
     sites = ctx.results["sites"]
     vulns = ctx.results["vulns"]
     assert sites and sites[0]["url"].startswith("http://127.0.0.1:8765"), sites
@@ -931,20 +934,25 @@ def main():
     assert "favicon" in sites[0], sites[0]
     print(f"[3] pipeline ok: sites={len(sites)} tech={sites[0]['tech']} "
           f"favicon={sites[0]['favicon'] or '-'} vulns={len(vulns)} {ids}")
+    # 续334：阶段耗时必须落库（任务详情「各阶段耗时」表格的数据源）
+    _ss3 = db.task_stage_seconds(tid)
+    assert _ss3.get("probe", 0) > 0, _ss3
+    assert "vulnscan" in _ss3, _ss3
     # 默认门槛（checks.min_severity=medium）下：high 级 POC 命中，low/info 级内置检查被门控掉
     assert "exposure-git-config" in ids, ids
     assert "a02-no-https" not in ids and "a05-security-headers" not in ids, ids
 
     # 3b) 门控行为：默认 skip_severities=["info","low"] 时这两级**连执行都不执行**；
     #     放开 skip_severities 且门槛放到 info 后低危项才出现；再按 OWASP 分类关闭应重新消失
-    low_ids = [v["poc_id"] for v in owasp_checks.run_all(targets, settings)]
+    # 续334：vulnscan 出厂默认关；本组测门控本身，用显式打开的副本（同组 3 口径）
+    low_ids = [v["poc_id"] for v in owasp_checks.run_all(targets, _s3)]
     assert "a02-no-https" not in low_ids, low_ids
     # 执行级门控：只调 min_severity（报告级）不够，info/low 级检查根本不该跑
-    floor_only = copy.deepcopy(settings)
+    floor_only = copy.deepcopy(_s3)
     floor_only["checks"]["min_severity"] = "info"
     floor_ids = [v["poc_id"] for v in owasp_checks.run_all(targets, floor_only)]
     assert "a02-no-https" not in floor_ids and "a05-security-headers" not in floor_ids, floor_ids
-    loose = copy.deepcopy(settings)
+    loose = copy.deepcopy(_s3)
     loose["checks"]["min_severity"] = "info"
     loose["checks"]["skip_severities"] = []
     info_ids = [v["poc_id"] for v in owasp_checks.run_all(targets, loose)]
@@ -957,7 +965,7 @@ def main():
           f"{len(floor_ids)} 项 / 放开级别门 -> {len(info_ids)} 项 / 关闭 A02 -> {len(cat_ids)} 项")
 
     # 3c) POC 引擎总开关：关闭后只有内置 OWASP 检查，level 门槛同时放开以观察 low 项
-    st_off = copy.deepcopy(settings)
+    st_off = copy.deepcopy(_s3)
     st_off["checks"]["poc_engine"] = False
     st_off["checks"]["min_severity"] = "info"
     st_off["checks"]["skip_severities"] = []
@@ -972,16 +980,16 @@ def main():
     #     这里刻意**开启 probe 先造出存活站点** —— 否则 dirscan/vulnscan/jsmine 会因为"无站点"
     #     而跳过，那样测出来的是"没输入"，而不是"门控生效"。
     st_gate = copy.deepcopy(settings)
-    for seg in ("takeover", "portscan", "jsmine", "dirscan", "vulnscan"):
+    for seg in ("portscan", "jsmine", "dirscan", "vulnscan"):
         st_gate[seg]["enabled"] = False
     for seg in ("iprecon", "fofa"):        # osint 的两个子开关
         st_gate[seg]["enabled"] = False
-    gate_stages = ["probe", "takeover", "portscan", "osint", "jsmine", "dirscan", "vulnscan"]
+    gate_stages = ["probe", "portscan", "osint", "jsmine", "dirscan", "vulnscan"]
     tid_gate = db.create_task("smoke-gate", targets, gate_stages, {"offline": True})
     ctx_gate = run_task(tid_gate, "smoke-gate", targets, gate_stages,
                         {"offline": True}, st_gate)
     assert ctx_gate.results["sites"], "probe 未产出站点，下面的门控断言会失去意义"
-    assert not ctx_gate.results["takeovers"] and not ctx_gate.results["ports"], ctx_gate.results
+    assert not ctx_gate.results["ports"], ctx_gate.results
     assert not db.list_ports(tid_gate), db.list_ports(tid_gate)
     # dirscan / vulnscan 关掉后：站点存在，但目录与漏洞都必须为空（连请求都不发）
     assert not ctx_gate.results["dirs"] and not db.list_dirs(tid_gate), ctx_gate.results["dirs"]
@@ -989,7 +997,7 @@ def main():
     # osint 两项子开关都关 → 连请求都不发，C 段与新增域名均为空
     assert not ctx_gate.results["csegs"] and not db.list_csegs(tid_gate), ctx_gate.results["csegs"]
     assert not ctx_gate.results["osint_domains"], ctx_gate.results["osint_domains"]
-    print("[3d] gate ok: probe 有站点，但 takeover/portscan/osint/jsmine/dirscan/vulnscan 关闭后无产出")
+    print("[3d] gate ok: probe 有站点，但 portscan/osint/jsmine/dirscan/vulnscan 关闭后无产出")
 
     # 3e) 非标端口站点：portscan 已发现的开放端口要参与 probe 候选生成。
     #     灯塔能扫出 `http://host:9007` 这类站点，靠的就是"对开放端口补做 HTTP 探测"；
@@ -1202,7 +1210,9 @@ def main():
     assert "非 CDN" in own_html, "非 CDN 标记应渲染"
     ext_html = c.get("/extdomains").get_data(as_text=True)
     assert "js-smoke.example.com" in ext_html and "own-smoke.example.com" not in ext_html
-    assert "osint-smoke.example.com" in ext_html and "5.6.7.8" in ext_html
+    assert "5.6.7.8" in ext_html
+    # 续344：旧 osint:cseg 行不再混进拓展页（历史只在 C 段页签）
+    assert "osint-smoke.example.com" not in ext_html
     # CDN 标签过滤走服务端 SQL
     assert "own-smoke.example.com" not in c.get("/subdomains?tag=cdn").get_data(as_text=True)
     assert "own-smoke.example.com" in c.get("/subdomains?tag=nocdn").get_data(as_text=True)
@@ -1302,7 +1312,8 @@ def main():
     # (5) 来源可读标签：FOFA 找出来的资产必须一眼能认出来
     assert source_label("subfinder") == "被动(subfinder)"
     assert source_label("passive:crt.sh") == "被动(crt.sh)"
-    assert source_label("osint:cseg") == "C 段反查"
+    # 续341：旧 C 段已停用，标签明确写“历史/已停用”，不再暗示是当前反查。
+    assert source_label("osint:cseg") == "IP 反查（历史 C 段，已停用）"
     assert source_label("osint:fofa") == "FOFA·ICO 反查"
     assert source_label("osint:fofa-cert") == "FOFA·证书反查"
     assert source_label("") == "-"
@@ -1325,15 +1336,16 @@ def main():
     db.insert_subdomains(tid, [("src-title.example.com", "osint:fofa-title")])
     db.set_subdomain_net(tid, {"src-title.example.com": ("7.7.7.3", "")})   # 同上
     ext_all = c.get("/extdomains?all=1").get_data(as_text=True)
-    for label in ("JS 挖掘", "FOFA·标题反查", "FOFA·证书反查", "FOFA·ICO 反查", "C 段反查"):
+    for label in ("JS 挖掘", "FOFA·标题反查", "FOFA·证书反查", "FOFA·ICO 反查"):
         assert label in ext_all, f"拓展域名页缺来源分类标签 {label}"
-    # 表内顺序 = js:mine → osint:fofa-title → osint:fofa-cert → osint:cseg
+    # 续344：旧 C 段行不再出现在拓展域名页（历史数据只留在 C 段页签）
+    assert "osint-smoke.example.com" not in ext_all, "旧 C 段拓展行应已从拓展域名页隐藏"
+    # 表内顺序 = js:mine → osint:fofa-title → osint:fofa-cert
     pos_js = ext_all.index("js-smoke.example.com")
     pos_title = ext_all.index("src-title.example.com")
     pos_cert = ext_all.index("pure-ext-smoke.example.com")
-    pos_cseg = ext_all.index("osint-smoke.example.com")
-    assert pos_js < pos_title < pos_cert < pos_cseg, \
-        f"拓展域名应按来源分类排序，(js,title,cert,cseg)=({pos_js},{pos_title},{pos_cert},{pos_cseg})"
+    assert pos_js < pos_title < pos_cert, \
+        f"拓展域名应按来源分类排序，(js,title,cert)=({pos_js},{pos_title},{pos_cert})"
     # `?src=` 只显示该来源一类，并把它翻译成批量扫描的默认任务名前缀
     ext_title = c.get("/extdomains?all=1&src=title").get_data(as_text=True)
     assert "src-title.example.com" in ext_title and "js-smoke.example.com" not in ext_title
@@ -1687,11 +1699,18 @@ def main():
     db.insert_dirs(tid, [{"site_url": "http://dupdir.smoke.test/",
                           "path": f"http://dupdir.smoke.test/p{i}", "status": 200,
                           "length": 777, "method": "GET", "note": "builtin"} for i in range(3)])
-    dirs_html = c.get("/dirs").get_data(as_text=True)
+    # 用唯一测试域名检索，不要按任务/整页计数：真实库里的其它任务名（含 "777"）和
+    # 静态资源版本串都会污染整页 `count("777")`；这里只数表格长度单元格，且不依赖
+    # 当前登录账号能否看到某个具体任务。
+    dirs_html = c.get("/dirs?q=dupdir.smoke.test").get_data(as_text=True)
     assert "大小" in dirs_html, "目录页应有返回包大小列"
-    assert dirs_html.count("777") == 1, dirs_html.count("777")
+    _len777 = re.findall(r"<td[^>]*>\s*777\b", dirs_html)
+    assert len(_len777) == 1, _len777
     assert "显示全部" in dirs_html
-    assert c.get("/dirs?all=1").get_data(as_text=True).count("777") == 3
+    _len777_all = re.findall(
+        r"<td[^>]*>\s*777\b",
+        c.get("/dirs?all=1&q=dupdir.smoke.test").get_data(as_text=True))
+    assert len(_len777_all) == 3, _len777_all
 
     # (4b) 续24 + 续255：折叠的**站点身份**必须来自数据本身；续255 起同路径跨站也折。
     #      续24 的旧缺陷：dirmap 解析行的 site_url 恒为空串（dirmap 的 `path` 存的是完整
@@ -2321,10 +2340,9 @@ def main():
         _ds_mod.run_cmd = _orig_run_cmd
     assert _rows == [] and not _calls, f"已停止时不该再拉 dirmap：rows={_rows} calls={len(_calls)}"
     # 9) 文档漂移：docstring 的默认开关必须与 DEFAULTS 一致
-    #    （takeover 默认开；dirscan 默认**开但只浅扫** —— 用户要求"先浅浅过一遍再决定深挖"）
-    assert DEFAULTS["takeover"]["enabled"] is True
+    #    （dirscan 默认**开且 mini** —— 续334 主理人点单"先保留常用后台路径 + .git"）
     assert DEFAULTS["dirscan"]["enabled"] is True
-    assert DEFAULTS["dirscan"]["mode"] == "deep"      # 续144：默认改深扫（用户点单"全部默认开"）
+    assert DEFAULTS["dirscan"]["mode"] == "mini"      # 续334：默认 mini（深扫要显式勾）
     assert "screenshot" in STAGE_ORDER
     print("[5m] 低危清理 ok: 报告转义/pool_run保falsy/开放重定向/favicon HTML过滤/域名口径/"
           "FOFA转义/dnsq路径缓存/dirmap停止检查/默认开关一致")
@@ -2456,12 +2474,20 @@ def main():
     from scanner.stages.dirscan import _SHALLOW_LAYERS, _FULL_LAYERS, _SUFFIXES
 
     # 1) 默认值一致：DEFAULTS ↔ settings.yaml ↔ 文件真实存在（GUI 表单/POST 映射在第 4 条用真请求验）
-    assert _DEF["dirscan"]["enabled"] is True and _DEF["dirscan"]["mode"] == "deep"
+    assert _DEF["dirscan"]["enabled"] is True and _DEF["dirscan"]["mode"] == "mini"
+    assert _DEF["dirscan"]["mini_max_paths"] == 60
     assert _DEF["dirscan"]["quick_max_paths"] == 150
     assert _DEF["dirscan"]["suffix_aware"] is True
     assert _DEF["dicts"]["dirs_shallow"] == "config/dicts/dirs_shallow.txt"
-    assert settings["dirscan"]["enabled"] is True and settings["dirscan"]["mode"] == "deep"
+    assert _DEF["dicts"]["dirs_mini"] == "config/dicts/dirs_mini.txt"
+    assert settings["dirscan"]["enabled"] is True and settings["dirscan"]["mode"] == "mini"
     assert settings["dicts"]["dirs_shallow"] == _DEF["dicts"]["dirs_shallow"]
+    assert settings["dicts"]["dirs_mini"] == _DEF["dicts"]["dirs_mini"]
+    _mini_file = _resolve(settings["dicts"]["dirs_mini"])
+    assert _mini_file.exists(), "mini 字典文件不存在（config/dicts/dirs_mini.txt）"
+    assert any(x in [y for y in _mini_file.read_text(encoding="utf-8").splitlines()
+                     if y and not y.startswith("#")] for x in (".git/config", ".env")), \
+        "mini 字典必须含 .git/config 与 .env"
     _shallow_file = _resolve(settings["dicts"]["dirs_shallow"])
     assert _shallow_file.exists(), "浅扫字典文件不存在（config/dicts/dirs_shallow.txt）"
 
@@ -2473,6 +2499,14 @@ def main():
                                layers=_SHALLOW_LAYERS, limit=40)
     assert len(_sq40) == 40 and set(_sq40) <= set(_shallow_list), _sq40[:3]
     assert _SHALLOW_LAYERS == ("shallow",), "浅扫层不该夹带框架/语言/通用字典"
+    # 续334：Wayback 被动 URL 抽取（urlfinder 式）—— 只留本域与子域，第三方跳转不算
+    from scanner.passive_urls import _hosts_of as _hosts334
+    assert _hosts334(["https://a.example.com/x", "http://example.com/y",
+                      "https://evil.com/z"], "example.com") == {
+        "a.example.com": "https://a.example.com/x",
+        "example.com": "http://example.com/y"}, _hosts334(
+        ["https://a.example.com/x", "http://example.com/y", "https://evil.com/z"],
+        "example.com")
     # 高价值条目必须在最前面（截断时先保它们）
     assert any(x in _shallow_list[:20] for x in (".git/config", ".env")), _shallow_list[:5]
 
@@ -2758,7 +2792,7 @@ def main():
     # 并接到这张表，否则全选框就没有任何用途了（用户点单里专门点了这一条）。
     assert 'id="btn-open-sites"' in _sites145 and 'data-pick-from="#tbl-all-sites"' in _sites145, \
         "「批量打开」必须搬到 /sites 并接上 #tbl-all-sites（否则那张表的全选没用途）"
-    print("[5p] 目录浅/深两档 + 全量勾选 ok: 默认浅扫 150 条/档位判定(portscan_full "
+    print("[5p] 目录 mini/浅/深三档 + 全量勾选 ok: 默认 mini 60 条/档位判定(portscan_full "
           "互不影响)/目标兜底/自动补阶段/补扫任务命名与 rescan_of/next 防跳外站/"
           "后缀派生去重限额/GUI 补扫入口已摘（页面级判据）+ 批量打开搬到 /sites")
     print(f"[5p-3c] {_e2e_note}")
@@ -3162,8 +3196,10 @@ def main():
         # 续195：送探 302 现在带 #ext 片段（回拓展域名页签）—— 取 ID 前先剥片段
         _new_id = int(_r2.headers["Location"].split("#", 1)[0].rstrip("/").rsplit("/", 1)[-1])
         _new_t = db.get_task(_new_id)
-        # 续40：送去检测**带上 subdomain 阶段**（用户要求"拓展域名再去检测也要去子域名扫描"）
-        assert _new_t["stages"] == "subdomain,probe,dirscan,vulnscan", _new_t["stages"]
+        # 续344（主理人点单）：子任务继承父任务阶段 —— 父任务是 probe，子任务也是 probe；
+        # 不再固定塞 subdomain→probe→dirscan→vulnscan。
+        _parent5t = db.get_task(_et)
+        assert _new_t["stages"] == _parent5t["stages"], (_new_t["stages"], _parent5t["stages"])
         # 续154（用户点单"送去探测也就默认全任务扫描"）：不给 `scope` 就是**全任务**，所以这里
         # 只勾了一个也会把该任务的拓展域名一起送走；`own.test`（来源 subfinder = 自身子域名，
         # 不在拓展域名那一侧）不许混进来。
@@ -4358,6 +4394,8 @@ workflows:
     _os_cfg = copy.deepcopy(settings)
     _os_cfg["shodan"] = dict(_os_cfg.get("shodan") or {}, enabled=True)
     _os_cfg["ctlog"] = dict(_os_cfg.get("ctlog") or {}, enabled=True)
+    # 续334：本组只测 crt.sh 限流；被动词走真实网络，单独关掉避免抖动/根域混入
+    _os_cfg["passive_urls"] = {"enabled": False}
     _os_cfg["keys"] = {"shodan": {"key": "K"}}
     _stage5 = osint_mod.OsintStage
     _orig_fav5, _orig_roots5 = _stage5._favicon_hashes, _stage5._root_domains
@@ -6612,11 +6650,11 @@ workflows:
         "DEFAULTS.subdomain 本就没有 enabled（它只由任务阶段列表决定），别给它补一个"
     assert "probe" not in _DEF6U, \
         "DEFAULTS 里没有 probe 段（probe 没有策略级开关）—— 别按'所有阶段都有 enabled'写"
-    for _k6u in ("takeover", "portscan", "cert", "screenshot", "jsmine", "dirscan",
+    for _k6u in ("portscan", "cert", "screenshot", "jsmine", "dirscan",
                  "vulnscan", "heuristic"):
         _u_cfg[_k6u] = dict(_u_cfg.get(_k6u) or {}, enabled=True)
         assert _u_cfg[_k6u]["enabled"] is True, _k6u
-    # 续223（提速 + 确定性）：[6u] 钉的是"15 个阶段能串起来跑完"，**不是** portscan 的
+    # 续223（提速 + 确定性）：[6u] 钉的是"13 个阶段能串起来跑完"，**不是** portscan 的
     # 全端口发现能力 —— 全端口 / 引擎选择 / 真实 IP 各有专门用例（[3e]、引擎选择组、[5h]）。
     # 默认 mode=full 会把本机其它服务全扫出来（本机实测 14 个站点：5000/5011/5003/631…），
     # 后续 probe / screenshot / jsmine / dirscan / vulnscan 逐个乘上去，同一份代码换台机器
@@ -6629,8 +6667,8 @@ workflows:
     # 本用例必须关。解析门（纯 DNS）保持打开，随本用例一起真跑。
     _u_cfg.setdefault("jsmine", {})["parking_check"] = False
     assert _u_cfg["jsmine"]["parking_check"] is False
-    # 前提：确确实实是 15 个阶段（续198 加 crawl、续201 加 hostcollide）
-    assert len(STAGE_ORDER) == 15 and set(STAGE_ORDER) == set(_rn6.STAGE_REGISTRY), \
+    # 前提：确确实实是 13 个阶段（续198 加 crawl；续343 删除 takeover/hostcollide）
+    assert len(STAGE_ORDER) == 13 and set(STAGE_ORDER) == set(_rn6.STAGE_REGISTRY), \
         (len(STAGE_ORDER), sorted(STAGE_ORDER))
 
     # (3) 请求计数：沿用 `[5p] 3c` 的"真发请求 + 只做计数"手法，但**覆盖全部出口**。
@@ -6726,7 +6764,7 @@ workflows:
     #     指纹命中情况而浮动，钉等号会让用例在别的机器上必然假失败。
     #     构成（本机实测，2026-09-26 逐阶段标定）：dirscan 153（浅扫字典 150 + 软 404 基线 3）/
     #     vulnscan 105（内置 OWASP 检查 + 联动 POC；续33 当时注释里的 ≈76 是 POC 集更小时的值）/
-    #     probe 6（含 http/https 与 favicon）/ jsmine 1；其余 9 个阶段（subdomain / takeover /
+    #     probe 6（含 http/https 与 favicon）/ jsmine 1；其余 8 个阶段（subdomain /
     #     portscan / cert / screenshot / osint / intel / heuristic / github）各 0（portscan 走
     #     裸 socket，不经 http_request，故恒为 0）。合计约 265，上界 400 留了约 1.5 倍余量
     #     （给『本机装了 nmap / fscan、指纹命中更多 POC』的浮动留空间）。
@@ -8235,7 +8273,7 @@ http:
     import ast as _ast7c
     _third7c = ("passive", "ctlog", "intel", "iprecon", "fofa", "shodan", "quake",
                  "github_leak")
-    _tgt7c = ("takeover", "fingerprint", "evasion", "ssrf",
+    _tgt7c = ("fingerprint", "evasion", "ssrf",
                "stages/probe", "stages/dirscan", "pocs/engine", "owasp/checks")
     # jsmine 是**混合出口**（续43）：页面请求发往目标侧，但 `<script src>` 可能指向第三方
     # CDN/埋点 —— 那里必须不带登录态。所以它只要求"显式声明 auth"（不许靠默认 False 蒙过去），
@@ -9801,7 +9839,7 @@ http:
                        ("limits.max_inflight_global", 1), ("limits.max_inflight_per_task", 1),
                        ("limits.rate_per_sec", 1), ("limits.dirscan_max_urls", 1),
                        ("subdomain.max_resolve", 1), ("dirscan.quick_max_paths", 1),
-                       ("takeover.max_hosts", 1), ("portscan.full_workers", 1),
+                       ("portscan.full_workers", 1),
                        ("jsmine.max_js", 1), ("checks.poc_max_per_site", 1)):
         _got7l = _dm7l._get(_c7l, _p7l)
         assert _got7l == _v7l, f"apply 必须把 {_p7l} 压到 {_v7l}：实测 {_got7l!r}"
@@ -9864,7 +9902,7 @@ http:
         for _k7l in ("iprecon", "fofa", "shodan", "quake", "ctlog", "intel", "github"):
             _cfg7l[_k7l] = dict(_cfg7l.get(_k7l) or {}, enabled=False)
         _cfg7l["passive"] = dict(_cfg7l.get("passive") or {}, enabled=False)
-        for _k7l in ("takeover", "portscan", "cert", "screenshot", "jsmine", "dirscan",
+        for _k7l in ("portscan", "cert", "screenshot", "jsmine", "dirscan",
                      "vulnscan", "heuristic"):
             _cfg7l[_k7l] = dict(_cfg7l.get(_k7l) or {}, enabled=True)
         _orig_http7l = _u7l.http_request
@@ -9996,7 +10034,7 @@ http:
         _cfg7l3 = _dm7l.apply(_copy7l.deepcopy(settings))
         for _k7l in ("iprecon", "fofa", "shodan", "quake", "ctlog", "intel", "github", "passive"):
             _cfg7l3[_k7l] = dict(_cfg7l3.get(_k7l) or {}, enabled=False)
-        for _k7l in ("takeover", "portscan", "cert", "screenshot", "jsmine", "dirscan",
+        for _k7l in ("portscan", "cert", "screenshot", "jsmine", "dirscan",
                      "vulnscan", "heuristic"):
             _cfg7l3[_k7l] = dict(_cfg7l3.get(_k7l) or {}, enabled=True)
         _tg7l3 = _base7l3 + "/"
@@ -10323,9 +10361,9 @@ http:
     finally:
         _dv7n.BASELINE_RATIO = _real_ratio88
     _res7n = _dv7n.run_selfcheck(settings, name="smoke-devflow-52")
-    # 续198：13 → 14（crawl）；续201：→ 15（hostcollide）。自检跑全阶段，跳过也算一次
-    assert len(_res7n.get("stage_seconds") or {}) == 15, \
-        f"自检必须带回 15 个阶段的耗时（续88）：实测 {len(_res7n.get('stage_seconds') or {})}"
+    # 续198：13（crawl）；续343 删除 takeover/hostcollide 后仍是 13。自检跑全阶段，跳过也算一次
+    assert len(_res7n.get("stage_seconds") or {}) == 13, \
+        f"自检必须带回 13 个阶段的耗时（续88）：实测 {len(_res7n.get('stage_seconds') or {})}"
     try:
         assert _res7n["exit_code"] == 0 and _res7n["fail"] == 0, \
             f"自检不得有 FAIL：{_res7n['fail']} 个 —— {_res7n['error']}"
@@ -13192,50 +13230,10 @@ http:
     print("[289] 续285 dashboard ok: 最近任务只列主任务（子任务不入 8 行、口径文案在）｜"
           "漏洞趋势逐任务表仍含子任务（全量，不随列表口径丢数据）")
 
-    # ---------------- [290] 续286：hostcollide 走统一 HTTP 出口（审计续285 漂移的收口） ----------------
-    # 审计发现 hostcollide 直连 `requests.get` ⇒ 绕过 UA 伪装 / `limits.verify_tls` 分流 /
-    # `_throttle` 名额与预算。本组钉三件事：① 源码 AST 不许 import requests；
-    # ② `_fp` 必须调 `hostcollide.http_request`（Host 头覆盖 + allow_redirects=False + settings 透传）；
-    # ③ 行为不变：与默认虚机同指纹不命中、不同指纹命中、请求失败不猜。
-    import ast as _ast290
-    from scanner import hostcollide as _hc290
-    _tree290 = _ast290.parse((ROOT / "scanner" / "hostcollide.py").read_text(encoding="utf-8"))
-    _imp290 = [n for n in _ast290.walk(_tree290)
-               if isinstance(n, _ast290.Import) and any(a.name == "requests" for a in n.names)]
-    _imp290 += [n for n in _ast290.walk(_tree290)
-                if isinstance(n, _ast290.ImportFrom) and n.module == "requests"]
-    assert not _imp290, "hostcollide 不许直连 requests（必须走 utils.http_request）"
-
-    _calls290 = []
-    _orig290 = _hc290.http_request
-
-    def _fake290(url, **kw):
-        _calls290.append((url, kw))
-        _h290 = (kw.get("headers") or {}).get("Host", "")
-        if _h290 == "err290.test":
-            return None                                   # 请求失败 ⇒ 不猜（不算命中）
-        if _h290 == "diff290.test":
-            return {"status": 200, "text": "<title>hidden</title>", "length": 30}
-        return {"status": 200, "text": "<title>default</title>", "length": 20}
-
-    _hc290.http_request = _fake290
-    _st290 = {"hostcollide": {"timeout": 1, "max_requests": 10}, "_throttle": object()}
-    try:
-        _hit290, _tried290 = _hc290.collide(
-            "10.0.0.9", ["same290.test", "diff290.test", "err290.test"], _st290)
-    finally:
-        _hc290.http_request = _orig290
-    assert [h[0] for h in _hit290] == ["diff290.test"], _hit290
-    assert _tried290 == 3, _tried290
-    assert _hit290[0][1:] == (200, 30, "hidden"), _hit290[0]
-    assert _calls290[0][0] == "http://10.0.0.9/" and not _calls290[0][1].get("headers"), _calls290[0]
-    _kw290 = _calls290[1][1]
-    assert _kw290.get("headers", {}).get("Host") == "same290.test", _kw290
-    assert _kw290.get("allow_redirects") is False, _kw290
-    assert _kw290.get("settings") is _st290, "settings 必须原样透传（throttle/预算靠它）"
-    print("[290] 续286 hostcollide ok: 不 import requests｜_fp 走 utils.http_request（Host 覆盖、无重定向、"
-          "settings 透传）｜同指纹不命中、异指纹命中、失败不猜（行为不变）")
-
+    # ---------------- [290] 续343：hostcollide 已删除 ----------------
+    assert not (ROOT / "scanner" / "hostcollide.py").exists()
+    assert not (ROOT / "scanner" / "stages" / "hostcollide.py").exists()
+    print("[290] 续343 hostcollide deleted: 模块与阶段文件都不存在（HTTP 出口漂移也随功能消失）")
     # ---------------- [291] 续287：拓展页签命中黑名单默认不列（与 /extdomains 同口径） ----------------
     # 主理人点单：「拓展域名加黑名单能不能实时直接不显示在页面了」。此前只有跨任务 /extdomains
     # 带黑名单过滤，任务详情「拓展域名」页签没有 ⇒ 提交后刷新仍在。本组钉三件事：
@@ -14504,6 +14502,23 @@ http:
         assert "note" in [r[1] for r in _conn110.execute("PRAGMA table_info(csegs)")], \
             "老库没补上 note → 升级后 insert_csegs 直接报错"
         _conn110.close()
+
+        # 续336（主理人点单「不要用 C 段反查，IP 反查就行」）：生产 run() 不再调用
+        # `_c_segments()`。方法保留只为历史数据/上面的回归；谁把它接回流水线，这里立刻红。
+        import inspect as _insp110
+        assert "self._c_segments()" not in _insp110.getsource(_os110.OsintStage.run), \
+            "生产 osint.run 又调用了 C 段反查（同段/共享 IP 会把别人的资产收进来）"
+        _s110run = copy.deepcopy(_s110)
+        _s110run["iprecon"] = {"enabled": True}
+        for _k110run in ("fofa", "shodan", "quake", "ctlog", "icp",
+                         "passive_urls", "virustotal"):
+            _s110run[_k110run] = {"enabled": False}
+        _ctx110run = StageContext(_tid110c, "smoke-110-nocseg",
+                                  parse_lines(["127.0.0.1"]), ["osint"], {},
+                                  _s110run, Path(_TMPDIR) / "nocseg110", _Rec110())
+        _os110.OsintStage(_ctx110run).run()
+        assert not _ctx110run.results.get("csegs"), \
+            "只开 iprecon 时 run 仍产出了 C 段数据"
     finally:
         _ipr110.group_segments, _ipr110.lookup_many = _orig_grp110, _orig_lkp110
         for _t110 in (_tid110a, _tid110b, _tid110c):
@@ -15348,7 +15363,7 @@ http:
                                  drop_absent_zone=True)
         _orig_mine113 = _jm113.mine
 
-        def _stub_mine113(url, settings=None, logger=None, text_sink=None):
+        def _stub_mine113(url, settings=None, logger=None, text_sink=None, max_js=None):
             """桩：参数名必须与生产 `jsmine.mine` **一致**（下面那条判据盯着）。
 
             参数名**逐字**对齐生产（第二参在生产叫 `settings`，桩里图省事写 `st` 就会让下面那条签名判据立刻变红——这正是它要抓的漂移）。本轮给 `mine()` 加了 `text_sink`（flag 抽取吃已在手的正文），这个三参数 lambda
@@ -16209,7 +16224,7 @@ http:
     #      「全部勾上」**不含**离线模式（勾了它反而禁用外部工具，与"跑全"相反）、默认勾选口径
     #      没漂（策略级默认关的阶段仍不勾）、以及 JS **不许再抄一份阶段清单**（抄第二份迟早与
     #      `runner.STAGE_ORDER` 漂移 —— 本仓在 CDN / C 段判据上修过同形状的错）。
-    from scanner.runner import STAGE_ORDER as _SO118
+    from scanner.runner import RECON_STAGES as _RECON118, STAGE_ORDER as _SO118
     _app118 = _app_with7i()
     _c118 = _app118.test_client()
     _f118 = _admin_form117()
@@ -16220,7 +16235,7 @@ http:
     # ① 每个按钮 scope 里点名的分组，页面上必须真有对应的 [data-ck-group]
     import re as _re118
     _btns118 = _re118.findall(r'data-ck-mode="(\w+)" data-ck-scope="([\w,]+)"', _th118)
-    assert [b[0] for b in _btns118] == ["none", "default"], _btns118   # 续314：all（最重档位）已删
+    assert [b[0] for b in _btns118] == ["none", "default", "recon"], _btns118   # 续334：新增信息收集专项
     _groups118 = set(_re118.findall(r'data-ck-group="(\w+)"', _th118))
     for _m118, _sc118 in _btns118:
         for _g118 in _sc118.split(","):
@@ -16249,11 +16264,22 @@ http:
     # 续303：默认勾选改由**策略现算**（模板不再写死）。判据换成"页面渲染的那组 == 按当前策略算的那组"，
     # 另单独钉两件不能漂的事：cert 必须仍在里头；模板里不许再出现写死的那串。
     _set118 = load_settings()
-    _want118 = sorted(s for s in _SO118
-                      if isinstance(_set118.get(s), dict) and _set118[s].get("enabled") is False)
+    # 续334：默认不勾 = 非信息收集阶段 ∪ 策略显式关掉的阶段
+    _want118 = sorted((set(_SO118) - set(_RECON118)) |
+                      {s for s in _SO118
+                       if isinstance(_set118.get(s), dict) and _set118[s].get("enabled") is False})
     assert _off118 == _want118, \
         f"默认不勾那组与策略算出来的不一致：页面 {_off118} vs 策略 {_want118}（模板是不是又写死了）"
-    assert "cert" not in _off118, "续314：cert 随包打开，必须默认勾（DEFAULTS 仍 false）"
+    # 续334：cert/screenshot 属拓展资产与可视化 —— 策略开着就必须默认勾；
+    # 策略显式关掉时仍按策略不勾（"勾不勾"与"会不会跑"同向）。
+    for _p118 in ("cert", "screenshot"):
+        _sec118 = _set118.get(_p118)
+        if not (isinstance(_sec118, dict) and _sec118.get("enabled") is False):
+            assert _p118 not in _off118, f"{_p118} 策略开着却没默认勾"
+    _recon_on118 = [_p for _p in _RECON118
+                    if not (isinstance(_set118.get(_p), dict) and _set118[_p].get("enabled") is False)]
+    assert all(d == "1" for s, d in _st118 if s in _recon_on118), \
+        f"信息收集专项（含 jsmine）必须默认勾（策略关掉的除外）：{_st118}"
     assert "['screenshot', 'cert']" not in \
         (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8"), \
         "模板又把默认不勾写死了 —— 策略一开它就会说谎（续303）"
@@ -16284,19 +16310,19 @@ http:
     _caught = [(_m, _g) for _m, _sc in _btns118 for _g in _sc.split(",")
                if _g not in _g_mut]
     assert ("none", "deep") in _caught, "变异没生效：改错分组名后判据抓不到（① 没有区分度）"
-    # 变异二：把 cert 的默认值从 1 翻成 0（续314 起 cert 默认勾），
+    # 变异二：把 probe 的默认值从 1 翻成 0（信息收集专项里必须有它），
     # ③ 那条默认口径判据必须立刻跟着变红
-    _mut2 = _re118.sub(r'(name="stages" value="cert"\s+data-ck-default=")1(")',
+    _mut2 = _re118.sub(r'(name="stages" value="probe"\s+data-ck-default=")1(")',
                                           r"\g<1>0\g<2>", _th118)
-    assert _mut2 != _th118, "变异没生效：改不动 cert 的默认值（说明页面形态和预想不同）"
+    assert _mut2 != _th118, "变异没生效：改不动 probe 的默认值（说明页面形态和预想不同）"
     _st_mut = _re118.findall(r'name="stages" value="(\w+)"\s+data-ck-default="(\d)"', _mut2)
     _st_mut_off = sorted(s for s, d in _st_mut if d == "0")
-    assert "cert" in _st_mut_off and "screenshot" in _st_mut_off, \
-        f"默认口径断言对『cert 变成默认不勾』不敏感 = ③ 是假绿：{_st_mut_off}"
+    assert "probe" in _st_mut_off, \
+        f"默认口径断言对『probe 变成默认不勾』不敏感 = ③ 是假绿：{_st_mut_off}"
 
     print("[8w] 续118/续314 建任务一键勾选 ok: 两个按钮（最重档位已删）scope 点名的分组页面上都真实存在｜"
           "任何批量按钮都不含离线模式（勾它=禁用外部工具，与跑全相反），「全部清掉/恢复默认」含｜阶段清单与 STAGE_ORDER "
-          "逐一对齐且默认不勾的恰是 crawl/screenshot（续314：cert 已默认开）｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
+          "逐一对齐且默认勾的恰是信息收集专项七阶段（含 cert/screenshot/jsmine，其余不勾）｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
           "读 data-ck-default、挂在 DOMContentLoaded｜变异：抹掉 deep 钩子 / 把 cert 翻成默认勾 都变红")
 
     # ---------------- [8x] 续119：afrog 进 toolmgr，但"能装"与"会被用"分成两档 ----------------
@@ -17235,6 +17261,9 @@ expression: r0()
         _run_calls121.append(s.get("afrog", {}).get("enabled")) or (_af_rows, "afrog：命中 1 条"))
     try:
         _base121 = copy.deepcopy(load_settings())
+        # 续334/续339：随包把 vulnscan.enabled 关了；这条测试直接调 run() 测 afrog 接线，
+        # 必须显式打开阶段闸门（阶段在正常流水线里仍由配置决定）。
+        _base121["vulnscan"] = dict(_base121.get("vulnscan") or {}, enabled=True)
         _base121["afrog"] = dict(_base121.get("afrog") or {}, enabled=False, poc_dir=str(_pd121))
         _vs121.VulnscanStage(_mk_ctx121(_base121, _rec)).run()
         assert _run_calls121 == [], f"显式关着也去调 afrog（这条红线破了）：{_run_calls121}"
@@ -20229,6 +20258,9 @@ expression: r0()
 
     def _ctx8ap(tag, target="lab8ap.test", cap=300):
         st = copy.deepcopy(settings)
+        # 续340：随包 jsmine.recrawl 已关；本组测的是二层遍历本身，显式打开，
+        # 不要再让“配置默认值”把功能测试变成假红（与 [8z] 的 vulnscan 同理）。
+        st["jsmine"] = dict(st.get("jsmine") or {}, recrawl=True)
         st["limits"] = dict(st.get("limits") or {}, favicon_md5=False, recrawl_max_hosts=cap)
         tid = db.create_task(f"smoke-8ap-{tag}", target, ["probe", "jsmine"], {})
         return StageContext(tid, f"smoke-8ap-{tag}", parse_lines([target]),
@@ -20682,6 +20714,11 @@ expression: r0()
         assert any("组合爆破" in x and "`a-b`" in x for x in _t12), _t12[:8]
         assert all("-" in n.split(".")[0] for n in _last12), \
             f"组合这一批里混进了非拼接名：{_last12[:6]}"
+        # ⑫b 装了 puredns 时组合爆破必须走 puredns（系统解析器几万条会拖几分钟）；
+        #     用桩让它写回一个命中，日志里要能看出走的是 puredns 而不是 resolve_all。
+        _lg8ap.clear(); _tried.clear(); _pd_dicts.clear()
+        _t12c = _run_sub("combopd", fb=0, cur=_tiny8aq, deep="", opts={}, pd=True)
+        assert any("组合爆破（puredns）" in x and "1 个命中" in x for x in _t12c), _t12c[:10]
         # 闸门关掉时必须一个组合都不试（这是"发散"的刹车，也是自检压量的依据）
         _lg8ap.clear(); _tried.clear()
         _t12b = _run_sub("combooff", fb=0, cur=_tiny8aq, deep="", opts={}, combo=0)
@@ -20700,8 +20737,11 @@ expression: r0()
         _huge8aq.write_text("\n".join(f"q{i}" for i in range(12000)) + "\n", encoding="utf-8")
 
         def _pd_words246():
-            assert _pd_dicts, "puredns 没被调用（档位测试需要走 puredns 那一路）"
-            return len([x for x in _sd8aq.read_lines(Path(_pd_dicts[-1])) if x])
+            # 续344：组合爆破也走 puredns，`_pd_dicts` 末尾可能是 combo 小词表；
+            # 档位判据只看主爆破词表，别把组合词表当成深档。
+            _main = [x for x in _pd_dicts if "combo_" not in Path(x).name]
+            assert _main, "puredns 没被调用（档位测试需要走 puredns 那一路）"
+            return len([x for x in _sd8aq.read_lines(Path(_main[-1])) if x])
 
         _lg8ap.clear(); _tried.clear(); _pd_dicts.clear()
         _t13 = _run_sub("quick", mw=0, cur=_tiny8aq, deep=_huge8aq, pd=True,
@@ -20798,8 +20838,10 @@ expression: r0()
 
     # ⑩ 新开关三方一致（DEFAULTS ↔ settings.yaml ↔ GUI 表单/POST 映射 ↔ 开发模式压量）
     from scanner.config import DEFAULTS as _DEF8aq
-    assert _DEF8aq["jsmine"]["recrawl"] is True and \
-        settings["jsmine"]["recrawl"] is True, "jsmine.recrawl 两边不一致"
+    # 续334/续340：二层补探已改成**默认关**；这里要钉的是 DEFAULTS 与随包 settings
+    # 一致（不是继续假设它开着），否则 8ap 之外的每个全量都会红。
+    assert _DEF8aq["jsmine"]["recrawl"] is False and \
+        settings["jsmine"]["recrawl"] is False, "jsmine.recrawl 两边不一致"
     for _k8aq in ("brute_max_words", "brute_fallback_max", "brute_dict_warn_min",
                   "recrawl_max_hosts", "brute_workers", "brute_combo_max"):
         assert _k8aq in _DEF8aq["limits"] and _k8aq in settings["limits"], _k8aq
@@ -22170,6 +22212,12 @@ expression: r0()
     _h169d = c.get(f"/tasks/{_tid169}").get_data(as_text=True)
     assert "<th>置信度</th>" in _h169d, "任务详情的拓展域名页签缺徽章列"
     assert "加入黑名单" in _h169, "一键黑名单的入口不许掉（主理人：看到不对劲就拉黑）"
+    # 续344：多段主标签按共享品牌词补档（gz-brand8 ↔ brand8-fxeye 的 brand8）
+    from scanner import extdom as _ext344
+    _brand344 = _ext344.confidence("gz-brand8.test", bases={"brand8-fxeye.test"})
+    assert _brand344["level"] == "high" and "brand8" in _brand344["reason"], _brand344
+    _gen344 = _ext344.confidence("mail-foo.com", bases={"mail-bar.com"})
+    assert _gen344["level"] != "high" or "mail" not in _gen344.get("brand_token", ""), _gen344
     _conf_macro = (ROOT / "gui" / "templates" / "_conf.html").read_text(encoding="utf-8")
     assert "macro conf_badge" in _conf_macro
     for _tpl in ("extdomains.html", "task_detail.html"):
@@ -22639,11 +22687,8 @@ expression: r0()
     assert _td145.count("url_for('api_icon_backfill')") == 0, \
         "详情页不该再有「补图标（老数据）」入口（续318 下架，后端保留）"
     _n_post145 = _td145.count('method="post"')
-    # 续201：3 → 4（Host 碰撞）；续208：4 → 5（敏感信息候选的「误报」复核表单）
-    # 续201：3 → 4（Host 碰撞）；续208：4 → 5（误报复核）；续235：5 → 6（站点「补图标」）
-    # 续250：6 → 7（端口页签「全端口扫描」按钮，主理人点单把全端口从建任务表单挪到这里）
-    # 续269：7 → 6（Host 碰撞补跑按钮撤掉 —— 默认就跑，不给人手动入口）
-    # 续318：6 → 5（站点页签「补图标（老数据）」按钮下架 —— 主理人「删了 不要影响观感」）
+    # POST 表单点名：续208 误报复核、续235 补图标（续318 下架）、续250 全端口按钮；
+    # 续343 删除 Host 碰撞后，详情页固定为 5 个。
     assert _n_post145 == 5, \
         f"详情页 POST 表单总数应 6（新增表单必须显式改这条登记）：实测 {_n_post145}"
     assert _td145.count("url_for('api_hostcollide_run')") == 0, \
@@ -22684,12 +22729,12 @@ expression: r0()
         assert _cap145["subdomain"]["max_resolve"] == _D145["subdomain"]["max_resolve"]
         assert _cap145["subdomain"]["dns_timeout"] == _D145["subdomain"]["dns_timeout"]
         # 逐段点名"一个键都不许少"。这条是**本轮真踩出来的**：一个打偏 7 行的补丁把 `evasion` 的
-        # spoof_xff/waf_bypass/bypass_level/waf_detect 与 `takeover` 的 enabled/max_hosts 从 POST
+        # spoof_xff/waf_bypass/bypass_level/waf_detect 四个键从 POST
         # 映射里整段删掉、还留下一个重复的 `"subdomain"` 键（字典字面量重复键＝后者静默盖前者），
         # 而 130+ 组门禁**一组都没红** —— save_settings 是被 stub 的，缺键只是"保存时少存几个开关"，
-        # 现象要等用户在策略页点一次保存、发现免杀/接管开关莫名回到默认值才会浮出来。
+        # 现象要等用户在策略页点一次保存、发现免杀开关莫名回到默认值才会浮出来。
         # 判据吃的是 DEFAULTS（桩），不是这台机器上的配置值（§6.2）。
-        # 续151（用户点单）：这条判据原先只钉住 evasion/takeover/subdomain 三段 —— 推到
+        # 续151（用户点单）：这条判据原先只钉住 evasion/subdomain 两段 —— 推到
         # **POST 映射覆盖的全部段**。覆盖段 = `_cap145` 里出现的段（映射声明了谁就是谁）；
         # 例外段（策略页根本没有输入框、页面改不了）**显式列出**，刻意不用"自动跳过没有
         # 输入框的段"那种豁免 —— 上一轮的缺键正是从"没人逐段点名"里藏住的。
@@ -23297,7 +23342,7 @@ expression: r0()
         return StageContext(tid155, f"smoke-155-{tag}", parse_lines(["a155.test"]),
                             ["jsmine"], {}, st155, wd155, _Rec154())
 
-    def _mine155(url, st=None, logger=None, text_sink=None):
+    def _mine155(url, st=None, logger=None, text_sink=None, **kw):  # 续334: stage 传 max_js=预算
         # 两个站点的同一个值（旧写法：跨站全局去重 ⇒ 第二个站点被吃掉）
         # 同一站点两条规则命中同一个值（generic-credential 与 aws-access-key）⇒ 只该留一行
         host = url.split("://", 1)[-1].split("/", 1)[0]
@@ -23560,7 +23605,7 @@ expression: r0()
     #      外加每目标命中数。数据来自已有 `vulns` 行，零额外请求。
     _src157 = gui_app.vuln_source
     assert _src157("afrog:xss") == "afrog" and _src157("js-secret-aws-access-key") == "js-secret"
-    assert _src157("a02-no-https") == "内置检查" and _src157("takeover-tomcat") == "内置检查"
+    assert _src157("a02-no-https") == "内置检查" and _src157("a03-sqli-error") == "内置检查"
     assert _src157("exposure-git-config") == "POC" and _src157("") == "POC", "未知 poc_id 归 POC"
     _mx157 = gui_app.build_vuln_matrix([
         {"severity": "high", "poc_id": "a03-sqli-error", "target": "a.t", "c": 2},
@@ -25582,6 +25627,322 @@ expression: r0()
           "距离确定性｜MAD 点名离群、小样本不判｜朴素贝叶斯训练/预测/存读往返一致、缺模型返回 None｜"
           "三处门控齐且默认不改变既有行为")
 
+    # ---------------- [8bv] 续337：同功能根页面 = 页面 hash + 同 IP，只跳深扫 ----------------
+    print("[8bv] 续337 同功能根页面判重（探针正文顺手算 hash，零额外请求）…")
+    from scanner import ml as _ml8bv
+    from scanner import extdom as _ed8bv
+    from scanner.stages.dirscan import DirscanStage as _ds8bv
+
+    class _L8bv:
+        def info(self, *a, **k): pass
+        def warning(self, *a, **k): pass
+        def error(self, *a, **k): pass
+    _b1_8bv = ("<html><head><title>Console</title><script>var nonce='a1';</script></head>"
+               "<body><h1>Login</h1><form action='/login'>user<input></form></body></html>")
+    _b2_8bv = _b1_8bv.replace("nonce='a1'", "nonce='b2'").replace("><", ">\n<")
+    _b3_8bv = "<html><body><h1>Payment</h1><p>different application</p></body></html>"
+    _sig1_8bv = _ml8bv.page_signature(_b1_8bv)
+    _sig2_8bv = _ml8bv.page_signature(_b2_8bv)
+    assert _sig1_8bv["page_hash"] and _sig1_8bv["page_hash"] == _sig2_8bv["page_hash"], \
+        "脚本/空白差异不应改变归一化页面 hash"
+    assert _ml8bv.same_page(_sig1_8bv, _sig2_8bv), "同模板页面应判同页"
+    assert not _ml8bv.same_page(_sig1_8bv, _ml8bv.page_signature(_b3_8bv)), "不同页面不许判同页"
+    assert not _ml8bv.page_signature("")["page_hash"], "空正文不许产出 hash"
+    # 真实 probe 路线：httpx 的 JSON body 已经在手，必须顺路算出同样指纹（零额外请求）。
+    from scanner.stages.probe import httpx_site as _hx8bv
+    _hx_site8bv = _hx8bv({"url": "http://targ1.test/", "status_code": 200,
+                          "title": "Console", "content_length": len(_b1_8bv),
+                          "body": _b1_8bv, "header": {}})
+    assert _hx_site8bv and _hx_site8bv["page_hash"] == _sig1_8bv["page_hash"], "probe 未顺手算页面指纹"
+
+    # 字段必须真的补进老库（不是只写在新库 SCHEMA 里）。
+    _cols8bv = {r["name"] for r in db._query("PRAGMA table_info(sites)")}
+    assert {"page_hash", "page_simhash", "same_app_of"} <= _cols8bv, _cols8bv
+
+    _p8bv = db.create_task("smoke-sameapp-p", "targ1.test", ["probe"], {})
+    _c8bv = db.create_task("smoke-sameapp-c", "ext1.test", ["probe"],
+                           {"rescan_of": _p8bv, "same_app_guard": 1,
+                            "same_app_ip": "10.9.9.9"})
+    try:
+        db.insert_subdomains(_p8bv, [("targ1.test", "own")])
+        db.set_subdomain_net(_p8bv, {"targ1.test": ("10.9.9.9", "")})
+        db.insert_sites(_p8bv, [{
+            "url": "http://targ1.test/", "host": "targ1.test", "status": 200,
+            "title": "Console", "page_hash": _sig1_8bv["page_hash"],
+            "page_simhash": _sig1_8bv["page_simhash"]}])
+        _child8bv = {"url": "http://ext1.test/", "host": "ext1.test", "status": 200,
+                     "title": "Console", "page_hash": _sig2_8bv["page_hash"],
+                     "page_simhash": _sig2_8bv["page_simhash"]}
+        db.insert_sites(_c8bv, [_child8bv])
+        _ctx8bv = StageContext(_c8bv, "smoke-sameapp-c",
+                               parse_lines(["ext1.test"]), ["probe"],
+                               {"rescan_of": _p8bv, "same_app_guard": 1,
+                                "same_app_ip": "10.9.9.9"},
+                               {}, Path(_TMPDIR) / "sameapp337", _L8bv())
+        assert _ed8bv.flag_same_app_sites(_ctx8bv, [_child8bv]) == 1, "同页同 IP 应标副本"
+        assert _child8bv["same_app_of"] == "http://targ1.test/", _child8bv
+        _row8bv = dict(db.list_sites(_c8bv)[0])
+        assert _row8bv["same_app_of"] == "http://targ1.test/", "副本标记必须落库"
+        assert _ds8bv._dedup_sites([_child8bv]) == [], "目录扫描应跳过副本"
+
+        # 反例：IP 不同 / 页面不同，都不许标。
+        _c2_8bv = db.create_task("smoke-sameapp-c2", "ext2.test", ["probe"],
+                                 {"rescan_of": _p8bv, "same_app_guard": 1,
+                                  "same_app_ip": "10.9.9.8"})
+        _c3_8bv = db.create_task("smoke-sameapp-c3", "ext3.test", ["probe"],
+                                 {"rescan_of": _p8bv, "same_app_guard": 1,
+                                  "same_app_ip": "10.9.9.9"})
+        try:
+            _s2_8bv = dict(_child8bv, url="http://ext2.test/", same_app_of="")
+            _ctx2_8bv = StageContext(_c2_8bv, "smoke-sameapp-c2",
+                                     parse_lines(["ext2.test"]), ["probe"],
+                                     {"rescan_of": _p8bv, "same_app_guard": 1,
+                                      "same_app_ip": "10.9.9.8"},
+                                     {}, Path(_TMPDIR) / "sameapp337b", _L8bv())
+            assert _ed8bv.flag_same_app_sites(_ctx2_8bv, [_s2_8bv]) == 0, "IP 不同不许标副本"
+            _sig3_8bv = _ml8bv.page_signature(_b3_8bv)
+            _s3_8bv = {"url": "http://ext3.test/", "status": 200,
+                       "page_hash": _sig3_8bv["page_hash"],
+                       "page_simhash": _sig3_8bv["page_simhash"]}
+            _ctx3_8bv = StageContext(_c3_8bv, "smoke-sameapp-c3",
+                                     parse_lines(["ext3.test"]), ["probe"],
+                                     {"rescan_of": _p8bv, "same_app_guard": 1,
+                                      "same_app_ip": "10.9.9.9"},
+                                     {}, Path(_TMPDIR) / "sameapp337c", _L8bv())
+            assert _ed8bv.flag_same_app_sites(_ctx3_8bv, [_s3_8bv]) == 0, "页面不同不许标副本"
+        finally:
+            db.delete_task(_c2_8bv, backup=False)
+            db.delete_task(_c3_8bv, backup=False)
+        # 主任务没有 guard 时绝不进这条判重（主任务自身站点不受影响）。
+        _ctxp_8bv = StageContext(_p8bv, "smoke-sameapp-p", parse_lines(["targ1.test"]),
+                                 ["probe"], {}, {}, Path(_TMPDIR) / "sameapp337p", _L8bv())
+        assert _ed8bv.flag_same_app_sites(_ctxp_8bv, [_child8bv]) == 0, "非自动送探任务不许标"
+        _vs8bv = (ROOT / "scanner" / "stages" / "vulnscan.py").read_text(
+            encoding="utf-8", errors="replace")
+        assert "same_app_of" in _vs8bv, "vulnscan 未跳过副本"
+        _ps8bv = (ROOT / "scanner" / "stages" / "probe.py").read_text(
+            encoding="utf-8", errors="replace")
+        assert "page_signature(body)" in _ps8bv and "flag_same_app_sites" in _ps8bv, \
+            "probe 未复用正文算 hash 或未接判重"
+    finally:
+        db.delete_task(_c8bv, backup=False)
+        db.delete_task(_p8bv, backup=False)
+    print("[8bv] 续337 同功能根页面 ok: 脚本/白空格不影响页面 hash｜同页同 IP 标副本并落库｜"
+          "目录跳过副本｜IP 不同/页面不同/非自动送探任务均不标")
+
+    # ---------------- [8bw] 续338：只做精确 IP 反查，不写 C 段 ----------------
+    print("[8bw] 续338 精确 IP 反查（不做 /24 C 段、不写 csegs）…")
+    import inspect as _insp8bw
+    from scanner import iprecon as _ipr8bw
+    from scanner.stages import osint as _os8bw
+
+    class _L8bw:
+        def __init__(self): self.lines = []
+        def info(self, m, *a): self.lines.append(str(m))
+        def warning(self, m, *a): self.lines.append(str(m))
+        def error(self, m, *a): self.lines.append(str(m))
+        def debug(self, m, *a): pass
+
+    assert "self._c_segments()" not in _insp8bw.getsource(_os8bw.OsintStage.run), \
+        "生产 osint.run 又接回了 C 段反查"
+    _tid8bw = db.create_task("smoke-ipreverse", "47.242.73.22", ["osint"], {})
+    _ctx8bw = StageContext(
+        _tid8bw, "smoke-ipreverse", parse_lines(["47.242.73.22"]), ["osint"], {},
+        {"iprecon": {"enabled": True, "from_targets": True, "from_favicon": False,
+                     "max_domains_per_ip": 30},
+         "fofa": {"enabled": False}, "shodan": {"enabled": False},
+         "quake": {"enabled": False}, "virustotal": {"enabled": False},
+         "ctlog": {"enabled": False}, "icp": {"enabled": False},
+         "passive_urls": {"enabled": False}},
+        Path(_TMPDIR) / "ipreverse338", _L8bw())
+    _stage8bw = _os8bw.OsintStage(_ctx8bw)
+    _stage8bw._collect_ips = lambda: ["47.242.73.22"]
+    _orig_lkp8bw = _ipr8bw.lookup_many
+    _ipr8bw.lookup_many = lambda ips, st, **kw: (
+        {"47.242.73.22": ["ipr1.example", "ipr2.example"]},
+        {"domains": 2, "hit_ips": 1, "sources": {}})
+    try:
+        _got8bw = _stage8bw._ip_reverse()
+        assert {d for d, s, n in _got8bw} == {"ipr1.example", "ipr2.example"}, _got8bw
+        assert all(s == "osint:reverse" and 'ip="47.242.73.22"' in n for d, s, n in _got8bw), \
+            _got8bw
+        _stage8bw.run()
+    finally:
+        _ipr8bw.lookup_many = _orig_lkp8bw
+    _rows8bw = [dict(r) for r in db._query(
+        "SELECT domain,source FROM subdomains WHERE task_id=? ORDER BY domain", (_tid8bw,))]
+    assert {r["domain"] for r in _rows8bw} == {"ipr1.example", "ipr2.example"}, _rows8bw
+    assert all(r["source"] == "osint:reverse" for r in _rows8bw), _rows8bw
+    assert db.list_csegs(_tid8bw) == [], "精确 IP 反查不许再写 C 段表"
+    db.delete_task(_tid8bw, backup=False)
+    print("[8bw] 续338 ok: 精确 IP 反查走 osint:reverse｜note 带 IP 与待确认｜"
+          "run 不调用 _c_segments｜csegs 零写入")
+
+    # ---------------- [8bx] 续339：IP 反查多源 + 连续 10 失败/跳过 100 次熔断 ----------------
+    print("[8bx] 续339 IP 反查多源与 10/100 熔断…")
+    from scanner import iprecon as _ip8bx
+    from scanner import config as _cfg8bx
+    _ip8bx.reset_breaker()
+
+    # ① Mnemonic / URLScan 的解析契约（不联网，假响应）
+    _old_http8bx = _ip8bx.http_request
+    def _fake_http8bx(url, **kw):
+        if "mnemonic" in url:
+            return {"status": 200, "text": (
+                '{"responseCode":200,"data":[{"query":"a.example.com"},'
+                '{"query":"www.b.example.com"},{"query":"1.2.3.4"},'
+                '{"query":"cdn.jsdelivr.net"}]}')}
+        return {"status": 200, "text": (
+            '{"results":[{"page":{"ip":"8.8.8.8","domain":"c.example.com"},'
+            '"task":{"domain":"c.example.com"}},'
+            '{"page":{"ip":"9.9.9.9","domain":"other.example.com"}}]}')}
+    try:
+        _ip8bx.http_request = _fake_http8bx
+        assert _ip8bx._reverse_mnemonic("8.8.8.8", {"iprecon": {}}) == [
+            "a.example.com", "www.b.example.com"], "Mnemonic 解析/去噪不对"
+        assert _ip8bx._reverse_urlscan("8.8.8.8", {"iprecon": {}}) == [
+            "c.example.com"], "URLScan 只应收落在目标 IP 的页面"
+    finally:
+        _ip8bx.http_request = _old_http8bx
+
+    # ② 熔断：阈值 3、冷却 2（小参数把规则跑出来；实际默认 10/100）
+    _calls8bx = []
+    def _fail8bx(ip, settings, logger=None, timeout=None, raw=False):
+        _calls8bx.append(ip)
+        _ip8bx._src_mark(503, "HTTP 503 测试")
+        return [] if not raw else {"status": 503}
+    def _ok8bx(ip, settings, logger=None, timeout=None, raw=False):
+        _calls8bx.append(ip)
+        _ip8bx._src_mark(200, "ok", 1)
+        return ["ok.example.com"] if not raw else {"status": 200}
+    _old_src8bx = dict(_ip8bx._SOURCES)
+    _ip8bx._SOURCES["f8bx"] = _fail8bx
+    _st8bx = {"iprecon": {"sources": ["f8bx"], "breaker_enabled": True,
+                          "breaker_fail_threshold": 3, "breaker_cooldown": 2}}
+    try:
+        for _ in range(3):
+            _ip8bx.reverse_lookup_detail("8.8.8.8", _st8bx, sources=["f8bx"])
+        assert len(_calls8bx) == 3 and _ip8bx.breaker_snapshot()["f8bx"]["open"], \
+            _ip8bx.breaker_snapshot()
+        for _ in range(2):
+            _d8bx, _r8bx = _ip8bx.reverse_lookup_detail("8.8.8.8", _st8bx,
+                                                        sources=["f8bx"])
+            assert _d8bx == [] and _r8bx[0]["status"] == "skipped", _r8bx
+        assert len(_calls8bx) == 3, "熔断冷却期内不许再打接口"
+        # 第 3 次（冷却 2 次后的半开探测）仍失败 ⇒ 重新熔断
+        _d8bx, _r8bx = _ip8bx.reverse_lookup_detail("8.8.8.8", _st8bx,
+                                                    sources=["f8bx"])
+        assert len(_calls8bx) == 4 and _r8bx[0]["status"] == "http_error", _r8bx
+        for _ in range(2):
+            _ip8bx.reverse_lookup_detail("8.8.8.8", _st8bx, sources=["f8bx"])
+        assert len(_calls8bx) == 4, "半开失败后应重新进入冷却"
+        # 半开探测成功 ⇒ 恢复；恢复后每次调用都要真实检查
+        _ip8bx._SOURCES["f8bx"] = _ok8bx
+        _d8bx, _r8bx = _ip8bx.reverse_lookup_detail("8.8.8.8", _st8bx,
+                                                    sources=["f8bx"])
+        assert len(_calls8bx) == 5 and _d8bx == ["ok.example.com"], (_calls8bx, _r8bx)
+        _ip8bx.reverse_lookup_detail("8.8.8.8", _st8bx, sources=["f8bx"])
+        assert len(_calls8bx) == 6, "恢复后必须继续逐次调用"
+        _st8bx["iprecon"]["breaker_enabled"] = False
+        _ip8bx.reverse_lookup_detail("8.8.8.8", _st8bx, sources=["f8bx"])
+        assert len(_calls8bx) == 7, "关掉熔断应不再跳过"
+    finally:
+        _ip8bx._SOURCES.clear()
+        _ip8bx._SOURCES.update(_old_src8bx)
+        _ip8bx.reset_breaker()
+
+    # ③ 配置默认值：新源在默认列表，熔断参数 10/100
+    assert "mnemonic" in _ip8bx.DEFAULT_SOURCES and "urlscan" in _ip8bx.DEFAULT_SOURCES
+    _ipcfg8bx = _cfg8bx.DEFAULTS["iprecon"]
+    assert _ipcfg8bx["breaker_fail_threshold"] == 10
+    assert _ipcfg8bx["breaker_cooldown"] == 100
+    assert _ipcfg8bx["breaker_enabled"] is True
+    print("[8bx] 续339 IP 反查多源 ok: Mnemonic/URLScan 解析与去噪｜连续 3 次失败熔断、"
+          "冷却 2 次内零请求、半开失败再熔断、半开成功恢复并逐次检查｜默认 10/100")
+
+    # ---------------- [8by] 续341：薄弱边界字典/识别 + IP 反查逐接口来源 ----------------
+    print("[8by] 续341 测试/开发薄弱边界与 IP 反查来源…")
+    from scanner import weakboundary as _wb341
+    _cases341 = {
+        "dev-api.example.com": "开发站",
+        "test1.example.com": "测试站",
+        "staging.example.com": "预发布",
+        "api-sit.example.com": "测试站",
+        "sandbox.example.com": "演示/沙箱",
+        "ceshi.example.com": "测试站",
+    }
+    for _host341, _want341 in _cases341.items():
+        _got341 = _wb341.classify(_host341)
+        assert _got341.get("label") == _want341, (_host341, _got341)
+    for _not341 in ("latest.example.com", "contest.example.com", "devops.example.com",
+                    "gitlab.example.com", "8.8.8.8", "www.example.com"):
+        assert not _wb341.is_weak(_not341), (_not341, _wb341.classify(_not341))
+    _sum341 = _wb341.summarize(["dev-a.example.com", "www.example.com"],
+                               ["http://test-b.example.com/x"])
+    assert _sum341["total"] == 2 and _sum341["subs"] == 1 and _sum341["sites"] == 1, _sum341
+    _dict341 = [x.strip().lower() for x in (ROOT / "config/dicts/subdomains.txt")
+                .read_text(encoding="utf-8").splitlines() if x.strip() and not x.startswith("#")]
+    for _word341 in ("test", "dev", "staging", "uat", "qa", "sit", "preprod",
+                     "sandbox", "test-api", "api-dev", "dev-admin", "test-portal"):
+        assert _word341 in _dict341, "子域字典缺 %s" % _word341
+    assert len(_dict341) == len(set(_dict341)), "子域字典有重复项"
+    from gui.app import source_label as _sl341
+    assert "已停用" in _sl341("osint:cseg"), _sl341("osint:cseg")
+
+    # IP 反查结果必须能追到具体接口（不是笼统的“第三方接口”）
+    from scanner import iprecon as _ip341
+    _old_src341 = dict(_ip341._SOURCES)
+    _old_pref341 = _ip341.preflight
+    def _f341a(ip, settings, logger=None, timeout=None):
+        _ip341._src_mark(200, "")
+        return ["a.weak341.test"]
+    def _f341b(ip, settings, logger=None, timeout=None):
+        _ip341._src_mark(200, "")
+        return ["a.weak341.test", "b.weak341.test"]
+    _ip341._SOURCES.update({"f341a": _f341a, "f341b": _f341b})
+    _ip341.preflight = lambda srcs, settings, logger=None, timeout=None, probe_ip="": \
+        (["f341a", "f341b"], {})
+    try:
+        _ip341.reset_breaker()
+        _map341, _st341 = _ip341.lookup_many(["8.8.8.8"], {
+            "iprecon": {"sources": ["f341a", "f341b"], "workers": 1, "timeout": 1}})
+        _prov341 = (_st341.get("domain_sources") or {}).get("8.8.8.8") or {}
+        assert _map341["8.8.8.8"] == ["a.weak341.test", "b.weak341.test"], _map341
+        assert _prov341["a.weak341.test"] == ["f341a", "f341b"], _prov341
+        assert _prov341["b.weak341.test"] == ["f341b"], _prov341
+    finally:
+        _ip341._SOURCES.clear(); _ip341._SOURCES.update(_old_src341)
+        _ip341.preflight = _old_pref341
+        _ip341.reset_breaker()
+
+    _note341 = _ip341.domain_note("8.8.8.8", ["f341a", "f341b"])
+    assert _note341 == 'ip="8.8.8.8" · 历史解析 · 来源=f341a/f341b · 待确认', _note341
+    assert "共享IP已截断（120→100）" in _ip341.domain_note("8.8.8.8", ["f341a"], 120, 100)
+
+    # 页面：子域名/站点行都要有“薄弱边界”徽章，任务头也要有汇总横幅
+    _tid341 = db.create_task("smoke-341-weak", "weak341.test", ["subdomain"], {})
+    try:
+        db.insert_subdomains(_tid341, [("dev-api.weak341.test", "dns-brute(fallback)"),
+                                       ("www.weak341.test", "dns-brute(fallback)"),
+                                       ("rev.weak341.test", "osint:reverse", "",
+                                        'ip="8.8.8.8" · 历史解析 · 来源=f341a/f341b · 待确认')])
+        db.set_subdomain_net(_tid341, {"dev-api.weak341.test": ("1.2.3.4", "", ""),
+                                       "www.weak341.test": ("1.2.3.4", "", ""),
+                                       "rev.weak341.test": ("1.2.3.5", "", "")})
+        db.insert_sites(_tid341, [{"url": "http://test-portal.weak341.test/",
+                                   "host": "test-portal.weak341.test",
+                                   "port": 80, "status": 200, "title": "test portal"}])
+        _html341 = c.get("/tasks/%d" % _tid341).get_data(as_text=True)
+        assert "薄弱边界" in _html341, "任务详情没有薄弱边界标记"
+        assert "dev-api.weak341.test" in _html341 and "test-portal.weak341.test" in _html341
+        assert "薄弱边界资产" in _html341, "任务头没有薄弱边界汇总"
+        assert "f341a/f341b" in _html341, "拓展域名来源列没有标出实际反查接口"
+    finally:
+        db.delete_task(_tid341)
+    print("[8by] 续341 薄弱边界 ok: dev/test/staging/uat/qa/sit/preprod/sandbox/pinyin 识别｜"
+          "latest/contest/devops/gitlab 不误报｜字典 %d 条无重复｜IP 反查 a→f341a+f341b、b→f341b｜"
+          "子域名/站点徽章与任务横幅已渲染" % len(_dict341))
+
     # ---------------- [8bf] 续153：横幅那条「控制台地址」必须就是能点开的那个 ----------------
     # 主理人原话：「这个外网地址就不要显示了 就直接显示在控制台地址里面」。
     # 续150 的做法是**再印一行**：屏幕上两条地址、只有一条能点，还得自己判断哪条是对的；
@@ -26008,6 +26369,8 @@ expression: r0()
     assert _parked171.content_parked(
         "<title>DNS resolution error | x.com | Cloudflare</title>")
     assert _parked171.content_parked("<body>域名转让，请联系</body>")
+    assert _parked171.content_parked("<title>This domain has expired</title>"), \
+        "续335：过期页也要判停车（跳转落点不能把过期页记成高）"
     assert not _parked171.content_parked("<html><title>Login</title></html>")
     assert _parked171.cname_hit(["x.bodis.com"]) == "bodis.com"
     assert _parked171.cname_hit(["ns.example.com"]) == ""
@@ -26029,6 +26392,7 @@ expression: r0()
     #     **自有域名（任务目标的注册域）无条件放行且不发一次解析**
     _tid171 = db.create_task("smoke-171", "owncheck.test", ["probe"], "{}")
     _ctx_settings171 = copy.deepcopy(settings)
+    _ctx_settings171.setdefault("jsmine", {})["fast_domains"] = False   # 本组测慢档三道闸
     class _Ctx171:
         task_id = _tid171
         settings = _ctx_settings171
@@ -26160,6 +26524,8 @@ expression: r0()
     #     这一层是"接线也接对了"：vulnscan 有没有把计数器传进 run_all、
     #     POC 路与 afrog 路有没有各自 add()，纯函数测试看不出来。
     _vs_settings = copy.deepcopy(settings)
+    # 续340：随包 vulnscan.enabled 已关；本组直接测阶段内部计数，显式打开。
+    _vs_settings["vulnscan"] = dict(_vs_settings.get("vulnscan") or {}, enabled=True)
     _vs_settings["checks"]["min_severity"] = "critical"
     _vs_settings.setdefault("evasion", {})["waf_detect"] = False
     _rec176 = _Rec()
@@ -26386,7 +26752,8 @@ expression: r0()
              "context": "k", "line": 2, "line_text": "k", "offset": 5},
         ]
 
-    def _stub_mine177(url, settings=None, logger=None, text_sink=None):
+    def _stub_mine177(url, settings=None, logger=None, text_sink=None,
+                       max_js=None):
         return {"domains": ["api.zone177.test"], "urls": set(),
                 "secrets": _secrets177(), "js_count": 2}
 
@@ -26575,7 +26942,7 @@ expression: r0()
     # (c2) 下次匹配到就不显示：**全新任务**再挖到同一个值 ⇒ 黑名单在匹配点挡住
     _ff177.note = lambda *a, **k: ""
 
-    def _mine177c2(url, settings=None, logger=None, text_sink=None):
+    def _mine177c2(url, settings=None, logger=None, text_sink=None, max_js=None):
         return {"domains": [], "urls": set(),
                 "secrets": [{"type": "aws-access-key", "value": _mask177c, "_raw": _raw177c,
                              "source": "http://zone177.test/a.js", "context": "k",
@@ -26630,12 +26997,13 @@ expression: r0()
         "title 说明被误删（那里面是阶段清单，信息不丢）"
     assert "JS 挖掘（5）" in _html178, "js 挖掘条数不对"
     assert "FOFA·标题反查（2）" in _html178, "fofa 标题条数不对"
-    assert "C 段反查（1）" in _html178, "cseg 条数不对"
+    assert "C 段反查" not in _html178, "旧 C 段分类胶囊应已从拓展域名页移除"
+    assert "c1.zone178.test" not in _html178, "旧 C 段行应已从拓展域名页隐藏"
     assert "（0）" not in _html178, "0 条来源不该挂（0）"
     _html178s = c.get(f"/extdomains?task={_tid178a}&src=js").get_data(as_text=True)
     assert "JS 挖掘（5）" in _html178s and "FOFA·标题反查（2）" in _html178s, \
         "选中某一类时其他类条数不该归 0（src_where 被故意排除）"
-    assert "c1.zone178.test" not in _html178s, "src=js 时 cseg 的行不该出现"
+    assert "c1.zone178.test" not in _html178s, "src=js 时旧 C 段的行不该出现"
     _html178g = c.get(f"/extdomains?task={_tid178a}&group=1").get_data(as_text=True)
     assert "JS 挖掘（5）" in _html178g, "分组视图漏了条数"
     print("[178a] 来源条数 ok: 按钮改名 + 各来源带条数（选中单类不归 0、分组视图同口径）")
@@ -26916,6 +27284,9 @@ expression: r0()
     _vs182["checks"]["skip_severities"] = []
     _vs182["checks"]["disabled_categories"] = []
     _vs182["checks"]["disabled_checks"] = []
+    # 续334 起随包把 vulnscan.enabled 默认关了；本组测的是开着时的挡条审计，
+    # 必须显式打开，否则阶段一进来就跳过、审计自然为空。
+    _vs182["vulnscan"]["enabled"] = True
     _vs182.setdefault("evasion", {})["waf_detect"] = False
     _rec182 = _Rec()
     _tid182 = db.create_task("smoke-182-audit", targets, ["vulnscan"], {"offline": True})
@@ -27056,6 +27427,8 @@ expression: r0()
     _vs180["checks"]["skip_severities"] = []
     _vs180["checks"]["disabled_categories"] = []
     _vs180["checks"]["disabled_checks"] = []
+    # 续334 起随包把漏洞扫描默认关了；本组测复测分类，显式开阶段。
+    _vs180["vulnscan"]["enabled"] = True
     _vs180.setdefault("evasion", {})["waf_detect"] = False
 
     def _mk_e2e180(name, drop_scan_errors):
@@ -27142,11 +27515,13 @@ expression: r0()
         _ip184.http_request = _http530_184
         _sk184.gethostbyaddr = lambda ip: (f"ptr-{ip.replace('.', '-')}.targ184.test", [], [ip])
         _lg184 = _L184()
-        _st184 = {"iprecon": {"enabled": True, "workers": 5, "timeout": 5, "preflight": True}}
+        # 熔断逻辑另由 [8bx] 覆盖；这里保留「预检一次失败即整轮跳过」的旧语义做对照。
+        _st184 = {"iprecon": {"enabled": True, "workers": 5, "timeout": 5,
+                              "preflight": True, "breaker_enabled": False}}
         _ips184 = [f"9.9.9.{i}" for i in range(1, 6)]
         _m184, _s184 = _ip184.lookup_many(_ips184, _st184, logger=_lg184)
-        # 续330：续319 把 otx 加进默认源（3→4 个）—— 预检「每源一次」跟着 4+4=8。
-        assert len(_calls184) == 8, f"预检后应只探 4+4=8 次（不再是 5 IP x 4 源），实到 {len(_calls184)}"
+        # 续339：默认 4 源 + 备用池 5 个 HTTP 源（ptr 不发 HTTP）各预检一次 = 9
+        assert len(_calls184) == 9, f"预检后应只探 4+5=9 次（不再是逐 IP 白跑），实到 {len(_calls184)}"
         assert _s184["hit_ips"] == 5, f"接口全挂时**原生 PTR**仍要兜住（否则反查等于全废）：{_s184}"
         assert all(v and v[0].endswith(".targ184.test") for v in _m184.values()), _m184
         # (b) 说出口：两条 WARNING，而不是 500 个 IP 各打一条 DEBUG
@@ -27160,9 +27535,9 @@ expression: r0()
         _st184b = dict(_st184)
         _st184b["iprecon"] = dict(_st184["iprecon"], preflight=False)
         _m184b, _s184b = _ip184.lookup_many(_ips184, _st184b, logger=_L184())
-        # 续330：主批 5 IP x 4 默认源 + 零命中追加批跑 3 个 HTTP 备用源（ptr 不发 HTTP）= 35。
-        assert len(_calls184) == 35 and _s184b["hit_ips"] == 5, \
-            f"关预检应白跑 20 次、追加批再白跑 15 次（共 35），PTR 救回 5 个：实到 {len(_calls184)} 次 / {_s184b['hit_ips']} 命中"
+        # 续339：主批 5 IP x 4 默认源 + 零命中追加批 5 个 HTTP 备用源（ptr 不发 HTTP）= 45。
+        assert len(_calls184) == 45 and _s184b["hit_ips"] == 5, \
+            f"关预检应白跑 20 次、追加批再白跑 25 次（共 45），PTR 救回 5 个：实到 {len(_calls184)} 次 / {_s184b['hit_ips']} 命中"
         # (d) 源活着时照旧走默认源（预检不该把好源过滤掉）
         _calls184.clear()
         _ip184.http_request = lambda url, timeout=None, settings=None, **kw: (
@@ -27174,7 +27549,8 @@ expression: r0()
         from scanner import config as _cfg184
         assert _cfg184.DEFAULTS["iprecon"].get("preflight") is True, "出厂必须开启预检"
         assert _cfg184.DEFAULTS["iprecon"].get("fallback_sources") == \
-            ["ptr", "dnsdblookup", "rapiddns", "viewdns"], "备用池要以原生 ptr 打头"
+            ["ptr", "dnsdblookup", "rapiddns", "viewdns", "webscan", "ip138"], \
+            "备用池要以原生 ptr 打头，续339 追加 webscan/ip138 兜底"
         _y184 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
         assert "preflight: true" in _y184 and "fallback_sources: [ptr," in _y184, \
             "settings.yaml 没写出来（用户看不见就等于没有）"
@@ -27550,7 +27926,19 @@ expression: r0()
     _j196b = c.get(f"/api/tasks/{_c196}/subtasks").get_json()
     assert _j196b["ok"] and _j196b["root"]["id"] == _c196, _j196b
     _labels196 = {n["id"]: n["label"] for n in _j196b["nodes"]}
-    assert _labels196.get(_g196) == f"{_c196}-a", _labels196
+    from gui.app import _task_tree_labels as _ttl196
+    assert _labels196.get(_g196) == _ttl196([_g196])[_g196], _labels196
+    # 续336：门面号 != 内部 id 时，面板编号必须跟门面号走（#30/display 26 → 26-a）
+    _dn196 = int(db._query("SELECT display_no AS n FROM tasks WHERE id=?", (_r196,),
+                           one=True)["n"])
+    db._exec("UPDATE tasks SET display_no=? WHERE id=?", (9001, _r196))
+    try:
+        _j196c = c.get(f"/api/tasks/{_r196}/subtasks").get_json()
+        _lbl196c = {n["id"]: n["label"] for n in _j196c["nodes"]}
+        assert _lbl196c.get(_c196) == "9001-a", _lbl196c
+        assert _lbl196c.get(_g196) == "9001-a-1", _lbl196c
+    finally:
+        db._exec("UPDATE tasks SET display_no=? WHERE id=?", (_dn196, _r196))
     assert _j196b["total"] == 1, _j196b["total"]
     # ② stats 端点：跨任务去重（www.abcd.org 两条只算一次）+ 按来源任务拆分
     _s196 = c.get(f"/api/tasks/{_g196}/stats").get_json()
@@ -27970,64 +28358,31 @@ expression: r0()
           "任务页行内只留查看全结果(停止/重启/删除/导出四颗都在勾选栏,「批量」字眼已去)｜"
           "阶段改预览框｜详情页对新变量容错(旧进程不 500)｜批量导出: 403 说清开关/单份 md/"
           "多份 zip/空勾选 400/未知格式 400/越权跳过")
-    # ---- [201] 续201：Host 碰撞接线 / 页签不再丢 / 队列并发 / 批量打开提示 ----
-    from scanner import hostcollide as _hc201
-    from scanner.stages import hostcollide as _hcs201
-
-    # ① 阶段已接线，且标签表跟着补了（加阶段忘补标签 ⇒ 预览框出现英文名）
-    assert "hostcollide" in _rn200.STAGE_ORDER and "hostcollide" in _rn200.STAGE_REGISTRY
-    assert _rn200.STAGE_LABELS.get("hostcollide", ("",))[0] == "Host 碰撞", _rn200.STAGE_LABELS.get("hostcollide")
-    assert _rn200.STAGE_ORDER.index("hostcollide") < _rn200.STAGE_ORDER.index("portscan"), \
-        "hostcollide 要在 portscan 之前（它按 IP 挑候选，先挑完再打端口更省）"
-    # ② 配置两处一致 + **出厂关**
-    _hcd = _cfg201 = None
+    # ---- [201] 续201/343：阶段接线 / 页签不再丢 / 队列并发 / 批量打开提示 ----
+    # 续343（主理人点单）：takeover 与 hostcollide 两个低价值阶段已整段删除。
+    # 这里钉住"删干净"，防止后续又从旧分支合并回来。
     from scanner import config as _cf201
-    # 续203（主理人点单"host 碰撞默认也要开"）：出厂值 false → true，判据随之翻转。
-    # 它仍然只读 GET、请求量由 max_requests 夹住 —— "默认开"不等于"无限发请求"。
-    assert _cf201.DEFAULTS["hostcollide"]["enabled"] is True, "Host 碰撞应默认开（主理人点单）"
-    assert _cf201.load_settings()["hostcollide"] == _cf201.DEFAULTS["hostcollide"], \
-        "settings.yaml 与 DEFAULTS 漂了"
+    assert "hostcollide" not in _rn200.STAGE_ORDER and "takeover" not in _rn200.STAGE_ORDER
+    assert "hostcollide" not in _rn200.STAGE_REGISTRY and "takeover" not in _rn200.STAGE_REGISTRY
+    assert "hostcollide" not in _rn200.STAGE_LABELS and "takeover" not in _rn200.STAGE_LABELS
+    assert "hostcollide" not in _cf201.DEFAULTS and "takeover" not in _cf201.DEFAULTS
+    _set201 = _cf201.load_settings()
+    assert "hostcollide" not in _set201 and "takeover" not in _set201
+    for _gone201 in ("scanner/hostcollide.py", "scanner/takeover.py",
+                     "scanner/stages/hostcollide.py", "scanner/stages/takeover.py"):
+        assert not (ROOT / _gone201).exists(), f"{_gone201} 应已删除"
 
-    # ③ 阶段默认关时**一个请求都不发**（变异：摘掉开关即红）
-    _hc_calls = {"n": 0}
-    _hc_real = _hcs201.hostcollide.run
-
-    def _hc_stub(ctx):
-        _hc_calls["n"] += 1
-
-    _hcs201.hostcollide.run = _hc_stub
-    _hc_http = _hcs201.http_request if hasattr(_hcs201, "http_request") else None
-    try:
-        _c201 = _C198({"hostcollide": {"enabled": False}}, {"sites": []})
-        _hcs201.HostcollideStage(_c201).run()
-        assert _hc_calls["n"] == 0, f"默认关的 hostcollide 跑了 {_hc_calls['n']} 次（开关形同虚设）"
-        _c201.settings["hostcollide"]["enabled"] = True
-        _hcs201.HostcollideStage(_c201).run()
-        assert _hc_calls["n"] == 1, "打开开关后应当调用 hostcollide.run"
-    finally:
-        _hcs201.hostcollide.run = _hc_real
-
-    # ④ 续269：补跑端点随按钮**一起撤**（按钮没了还留着端点＝死代码）⇒ POST 一律 404
+    # ④ 详情页补跑端点与按钮一起撤 ⇒ POST 一律 404
     _t201 = db.create_task("smoke-201", "https://hc201.test/", ["subdomain"], {})
-    assert c.post("/api/hostcollide/run", data={}).status_code == 404, "端点已撤 ⇒ 404"
-    assert c.post("/api/hostcollide/run", data={"task_id": str(_t201)}).status_code == 404, \
-        "端点已撤 ⇒ 带不带任务号都是 404（不再走 409/302 那条老路）"
-    # ⑤ 入口：详情页**没有**补跑按钮（续269 —— 默认就跑，不给人手动入口）；
-    #    建任务页**不再放勾选框**（续227 —— 默认就做，不用勾）
+    assert c.post("/api/hostcollide/run", data={}).status_code == 404, "端点已删 ⇒ 404"
+    assert c.post("/api/hostcollide/run", data={"task_id": str(_t201)}).status_code == 404
+    # ⑤ 建任务页 / 策略页 / 详情页都不许再出现入口或文案
     _tk201 = c.get("/tasks").get_data(as_text=True)
-    assert 'name="hostcollide"' not in _tk201, \
-        "建任务页又出现了 Host 碰撞勾选框（默认就做，不该再要求用户勾）"
+    _st201 = c.get("/settings").get_data(as_text=True)
     _hd201 = c.get(f"/tasks/{_t201}").get_data(as_text=True)
-    assert "/api/hostcollide/run" not in _hd201, \
-        "详情页不该再有「Host 碰撞」补跑按钮（续269 撤掉：默认就跑）"
-    assert ">Host 碰撞</button>" not in _hd201, "按钮文案也不该在详情页出现"
-    # 撤的是**手动入口**，不是能力：默认阶段清单里仍要有 hostcollide、策略开关仍是开的
-    _t201b = db.create_task("smoke-201-def", "https://hc201b.test/", list(_rn200.STAGE_ORDER), {})
-    _j201b = c.get(f"/api/tasks/{_t201b}/stages").get_json()
-    _by201b = {s["name"]: s for s in _j201b["stages"]}
-    assert _by201b["hostcollide"]["in_task"] is True, "默认阶段清单里要有 hostcollide"
-    assert _by201b["hostcollide"]["enabled"] is True, \
-        f"策略默认开（按钮撤了，靠默认策略跑）：{_by201b['hostcollide']}"
+    for _nm201, _html201 in (("/tasks", _tk201), ("/settings", _st201), ("/tasks/<id>", _hd201)):
+        assert "hostcollide" not in _html201.lower(), f"{_nm201} 还有 hostcollide 残渣"
+        assert "Host 碰撞" not in _html201, f"{_nm201} 还有 Host 碰撞 文案"
 
     # ⑥ 队列并发：出厂 3（续236 主理人点单 2→3），且 workers_auto 仍是关的
     # ⑥ 队列并发：出厂 3（续236 主理人点单 2→3），且 workers_auto 仍是关的。
@@ -28060,10 +28415,7 @@ expression: r0()
         "批量操作后的刷新没保住 hash"
     assert "浏览器只允许一次点击开一个标签页" in _js201, "批量打开的提示没写清为什么只开一个"
 
-    # 续203：hostcollide 改成**默认开**了 —— "关着时零请求"那条仍在（上面用显式 False 验），
-    # 但组描述不能再写"出厂关"，否则下一个人会以为配置没改过。
-    print("[201] 续201/227 ok: Host 碰撞接线(阶段/配置一致/**默认开(续203)**/显式关时零请求/"
-          "补跑按钮与端点已撤(默认阶段清单仍有它)；建任务页不再放勾选框)｜"
+    print("[201] 续201/227/343 ok: takeover & Host 碰撞已整段删除（阶段/配置/端点/页面）｜"
           "队列并发出厂 3｜_with_hash 只认 #\\w(开放重定向形状全挡)｜前端保 hash + 表单注入｜"
           "批量打开提示写清浏览器限制")
     # ---- [202] 续202：任务层级筛选 + 送探任务名带域名数 ----
@@ -28084,23 +28436,32 @@ expression: r0()
     assert 'name="parent"' in _tp202 and "只看主域名任务" in _tp202, "任务页没有层级筛选"
     _h_root202 = c.get("/tasks?parent=root").get_data(as_text=True)
     _h_ch202 = c.get("/tasks?parent=child").get_data(as_text=True)
-    assert _h_root202.count("<tr") != _h_ch202.count("<tr"), \
-        "?parent=root 与 ?parent=child 渲染出的行数一样 ⇒ 筛选没接到查询上"
-    # 翻页链接要带上筛选（否则翻一页就丢了）
-    assert "parent=root" in _h_root202, "翻页链接没带上 parent 筛选"
+    # 续342：不要用行数差判筛选 —— 分页后两档都可能满 20 行，行数相等会假红；
+    # 直接看夹具 ID 是否只出现在正确的那一档。
+    assert f'data-id="{_t_root202}"' in _h_root202 and \
+        f'data-id="{_t_root202}"' not in _h_ch202, "根任务没被 parent=root 正确筛出"
+    assert f'data-id="{_t_child202}"' in _h_ch202 and \
+        f'data-id="{_t_child202}"' not in _h_root202, "衍生任务没被 parent=child 正确筛出"
+    # 翻页链接要带上筛选（否则翻一页就丢了）。
+    # 不能在测试里硬找 "parent=root"：任务少于 PAGE_SIZES 最小值 50 时分页条不渲染；
+    # 这里直接钉住 pager 的查询串拼装代码，避免夹具数影响断言。
+    _src202p = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+    assert 'parts.append(f"parent={quote(parent_f)}")' in _src202p, \
+        "翻页查询串没带 parent 筛选"
     # ③ 送探任务默认名：`子任务N`（续276 主理人点单；旧口径 `<主域名> · 送探 N 个域名` 与
     # `-拓展N层` 都已撤）—— 手动送探与高置信自动送探两个入口必须同口径
     _src202 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8")
     _src202r = (ROOT / "scanner" / "runner.py").read_text(encoding="utf-8")
     assert 'name = f"子任务{len(db.list_child_tasks(int(from_task))) + 1}"' in _src202, \
         "手动送探的默认名不是 `子任务N`（续276 口径）"
-    assert 'name = f"子任务{len(db.list_child_tasks(int(task_id))) + 1}"' in _src202r, \
+    # 续334 起一个注册域一个子任务，自动送探用 _base_n + _i + 1（不是直接 len+1）。
+    assert 'name = f"子任务{_base_n + _i + 1}"' in _src202r, \
         "高置信自动送探的默认名不是 `子任务N`（两个入口必须同口径）"
     assert "· 送探 {len(domains)} 个域名" not in _src202 and "-拓展{_cn}层" not in _src202, \
         "旧的 `主域名 · 送探 N 个域名` / `-拓展N层` 命名还在"
     print("[202] 续202 ok: 任务层级筛选(root+child=全部/互不串/页面生效/翻页带条件)｜"
           "送探任务默认名 `子任务N`（手动+自动同口径，续276）")
-    # ---- [203] 续203：参数路由（自动判该测什么）+ hostcollide 默认开 + 送探并一颗 ----
+    # ---- [203] 续203：参数路由 + 送探并一颗 ----
     from scanner import paramroute as _pr203
 
     # ① 参数名 → 类别（只按**参数名**判，不看值）
@@ -28145,23 +28506,6 @@ expression: r0()
     # 关键字参数打挂 —— 续203 实测踩过，[176] 那组就是这么红的）
     assert "if _only203 is not None:" in _vs203, "没路由时也传 only ⇒ 破坏既有调用契约"
 
-    # ⑤ hostcollide 默认开（主理人点单）
-    assert _cf201.DEFAULTS["hostcollide"]["enabled"] is True, "hostcollide 应默认开"
-    assert _cf201.load_settings()["hostcollide"]["enabled"] is True, "settings.yaml 与 DEFAULTS 漂了"
-    # 默认开 ⇒ 阶段会真的跑（不再打"未启用"那行）；桩掉 run 验证它被调用
-    _hc_n203 = {"n": 0}
-    _hc_real203 = _hcs201.hostcollide.run
-    _hcs201.hostcollide.run = lambda ctx: _hc_n203.__setitem__("n", _hc_n203["n"] + 1)
-    try:
-        # 用**出厂配置**（settings.yaml 的真实值）来验 —— 比塞一个空 dict 有意义：
-        # 它证明"默认开"这三个字真的能让阶段跑起来，而不只是 DEFAULTS 里写着 true。
-        _c203 = _C198({"hostcollide": dict(_cf201.load_settings()["hostcollide"])},
-                      {"sites": []})
-        _hcs201.HostcollideStage(_c203).run()
-        assert _hc_n203["n"] == 1, "默认开之后阶段应当调用 hostcollide.run"
-    finally:
-        _hcs201.hostcollide.run = _hc_real203
-
     # ⑥ 送探并一颗：promote 复选框从模板消失、后端恒执行
     for _t203 in ("gui/templates/extdomains.html", "gui/templates/task_detail.html"):
         assert "promote_too" not in (ROOT / _t203).read_text(encoding="utf-8"), \
@@ -28176,7 +28520,7 @@ expression: r0()
     assert 'name="urls"' not in _u203 and "送去漏洞检测" not in _u203, \
         "/urls 页不该有手动勾选送检的入口（要自动化，不要手动化）"
     print("[203] 续203 ok: 参数路由(按参数名判/只映射真实检查/id 已注册/only=[] 不跑/vulnscan 接线)｜"
-          "hostcollide 默认开(默认即调用)｜送探并一颗(复选框消失+恒执行)｜/urls 显示自动判据")
+          "送探并一颗(复选框消失+恒执行)｜/urls 显示自动判据")
     # ---- [204] 续204：LFI/IDOR 检查落地 + POC 也按参数类别挑 + 指纹第三个源 ----
     from scanner.owasp import checks as _ck204
 
@@ -29408,6 +29752,7 @@ expression: r0()
         _ip216._src_mark(200, "", 1)
         return ["a.example.com"]
 
+    _ip216.reset_breaker()
     _old_src216 = dict(_ip216._SOURCES)
     _old_pf216 = _ip216.preflight
     _ip216._SOURCES["f403"] = _fake403_216
@@ -29715,9 +30060,7 @@ expression: r0()
                 _wl218 |= {x.strip().lower() for x in
                            _p218.read_text(encoding="utf-8", errors="ignore").splitlines()
                            if x.strip() and not x.lstrip().startswith("#")}
-        from scanner import takeover as _to218
-        _wl218 |= {(s.get("cname_suffix") or "").lstrip("*.").strip().lower()
-                   for s in _to218.SERVICES if s.get("cname_suffix")}
+        # 续343：takeover 指纹库已删除；厂商白名单只保留仓库公开字典（不再从代码里取）。
         _syn218 = {"example.com", "evil.com", "xxx.com", "360.cn", "jd.com"}
         _noise218 = {"action.click", "protocol.name", "font.name", "text.name",
                      "password.name", "password.new", "group.name", "radio.name",
@@ -29836,74 +30179,20 @@ expression: r0()
               "dirmap 无 -e 的 output/<netloc>.txt 单文件产物解析 + 清理｜"
               "截图候补轮按最久没试轮转 + 截成功清旧 shot_error")
     # ------------------------------------------------------------------ [219]
-    # 续219：Host 碰撞"**默认就做、不用勾选**"（主理人第二次明说）。
-    #   历史形状：续203 就把策略默认值改成开了，但**注释与三处 GUI 文案**仍写"默认关闭/要勾选"
-    #   —— 用户看到的就是这些文案，于是以为还得勾一次。这里把**行为 + 文案**一起钉住防回潮。
-    from scanner.stages import hostcollide as _hcs219
+    # 续343（主理人点单）：Host 碰撞已整段删除 —— 配置、阶段、模板、CLI 全部不许再有。
     from scanner.config import DEFAULTS as _DEF219
-    assert _DEF219["hostcollide"]["enabled"] is True, "Host 碰撞策略默认必须是开"
-
-    class _Log219:
-        def __init__(self):
-            self.lines = []
-
-        def info(self, m):
-            self.lines.append(str(m))
-
-        def warning(self, m):
-            self.lines.append(str(m))
-
-    class _Ctx219:
-        def __init__(self, settings, options):
-            self.settings = settings
-            self.options = options
-            self.logger = _Log219()
-            self.task_id = 0
-            self.stopped = lambda: False
-
-    # ① 策略开着 + **不勾任务选项** ⇒ 必须真跑（不许打一句"未启用"就跳过）
-    _lg219 = _Log219()
-    _ctx219 = _Ctx219({"hostcollide": {"enabled": True, "max_requests": 1, "timeout": 1}}, {})
-    _ctx219.logger = _lg219
-    _ran219 = {"n": 0}
-    import scanner.hostcollide as _hcm219
-    _old_run219 = _hcm219.run
-    _hcm219.run = lambda ctx: _ran219.__setitem__("n", _ran219["n"] + 1)
-    try:
-        _stg219 = _hcs219.HostcollideStage.__new__(_hcs219.HostcollideStage)
-        _stg219.ctx = _ctx219
-        _stg219.run()
-    finally:
-        _hcm219.run = _old_run219
-    assert _ran219["n"] == 1, \
-        f"策略开着、没勾选项也应该真跑（hostcollide.run 没被调用）：{_lg219.lines}"
-    assert not any("未启用" in l or "未开启" in l for l in _lg219.lines), _lg219.lines
-
-    # ② 建任务表单：hostcollide 必须在**默认勾选**那一拨。续303 起"默认不勾"由策略现算
-    #    （模板写死 `['screenshot', 'cert']` 的老口径作废 —— screenshot 随包已经开了），
-    #    所以这里钉两件：模板用的是那个现算集合；hostcollide 的策略确实是开着的（否则它会被算进"不勾"）。
-    _tt219 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8", errors="replace")
-    assert "off_by_default = s in off_by_default_stages" in _tt219, \
-        "建任务默认勾选不是按策略现算了（模板是不是又写死了一张名单）"
-    assert (load_settings().get("hostcollide") or {}).get("enabled") is True, \
-        "hostcollide 策略默认应开着 —— 否则表单会默认不勾它（又得用户手动勾）"
-    # ④ 续227：建任务页不再有可见的 Host 碰撞勾选框（默认就做，不需要勾）
-    assert 'name="hostcollide"' not in _tt219, \
-        "建任务页又出现 Host 碰撞勾选框（默认就做，不该再要求用户勾）"
-
-    # ③ Host 碰撞**自己的那些行**不许再写"默认关闭 / 默认关"（与 DEFAULTS 相反，正是误导来源）。
-    #    只取含 `hostcollide` 的行：同一个文件里别的功能（截图/爬虫/备案…）本来就该写"默认关"，
-    #    而写"Host 碰撞"的中文注释里也可能提到别人的默认值 —— 按关键字取行最稳。
+    from scanner.runner import RECON_STAGES as _R219, STAGE_ORDER as _SO219
+    assert "hostcollide" not in _DEF219 and "hostcollide" not in _SO219
+    assert "hostcollide" not in _R219
     for _f219 in ("gui/templates/settings.html", "gui/templates/tasks.html",
                   "gui/templates/task_detail.html"):
         _t219 = (ROOT / _f219).read_text(encoding="utf-8", errors="replace")
-        _seg219 = "\n".join(l for l in _t219.splitlines() if "hostcollide" in l.lower())
-        assert _seg219, f"{_f219} 里找不到 hostcollide 相关行"
-        assert "默认关闭" not in _seg219 and "默认关" not in _seg219, \
-            f"{_f219} 的 hostcollide 行还在写「默认关闭/默认关」—— 与 DEFAULTS（默认开）相反，\
-用户会以为还要勾：{_seg219[:160]}"
-    print("[219] 续219/227 ok: Host 碰撞默认就做（策略默认开 + 建任务页不再放勾选框 + 不勾也真跑）；"
-          "三处 GUI 文案不再写「默认关」")
+        assert "hostcollide" not in _t219.lower(), f"{_f219} 还有 Host 碰撞 残渣"
+        assert "Host 碰撞" not in _t219, f"{_f219} 还有 Host 碰撞 文案"
+    _tt219 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8", errors="replace")
+    assert "off_by_default = s in off_by_default_stages" in _tt219, \
+        "建任务默认勾选不是按策略现算了（模板是不是又写死了一张名单）"
+    print("[219] 续343 ok: Host 碰撞已删除（DEFAULTS/阶段表/建任务/策略页/详情页/CLI 无残渣）")
     # ------------------------------------------------------------------ [220]
     # 续220：dirmap 按指纹收敛 —— 无 `-e` 的 dirmap 字典是**通用**的（5715 条、不分技术栈），
     #   把已认出指纹的站点喂给它纯属浪费请求；"php 站只吃 php+通用字典"由内置扫描按指纹做。
@@ -30943,7 +31232,8 @@ expression: r0()
     _s239b = _c239.get(f"/api/tasks/{_p239}/subtasks").get_json()
     assert _s239b["root"]["id"] == _p239 and _s239b["nodes"], _s239b
     assert _s239b["nodes"][0]["id"] == _kid239
-    assert _s239b["nodes"][0]["label"] == f"{_p239}-a", _s239b["nodes"][0]["label"]
+    from gui.app import _task_tree_labels as _ttl239
+    assert _s239b["nodes"][0]["label"] == _ttl239([_kid239])[_kid239], _s239b["nodes"][0]["label"]
 
     # ⑤ runner 首行打目标 + 文档 Windows 路径
     _rn239 = (ROOT / "scanner" / "runner.py").read_text(encoding="utf-8", errors="replace")
@@ -31372,7 +31662,7 @@ expression: r0()
     # 续251：cert/screenshot 出厂关的**显式登记** + 门禁可移植隔离仍在位
     #         （主理人担心"本地开发为方便跑门禁偷翻默认值"——用机制钉死：翻就红）
     assert _DEF251["cert"]["enabled"] is False, \
-        "cert 出厂值是 False（按需能力：子域接管/证书情报才用）—— 要开必须显式改这条登记并写清理由"
+        "cert 出厂值是 False（按需能力：证书情报才用）—— 要开必须显式改这条登记并写清理由"
     assert _DEF251["screenshot"]["enabled"] is False, \
         "screenshot 出厂值是 False（每任务起无头 Chrome，容器里常没有浏览器）—— 同上，要开先登记"
     # 门禁侧的可移植隔离必须仍在：[6u] 显式开着跑，但断言只要求"不失败、产物可为 0"
@@ -31390,12 +31680,12 @@ expression: r0()
     # 续252：settings.yaml 的注释不许和行为撒谎（dirscan 档位注释烂了 12 天）
     #         主理人问"dirscan 为什么默认不深扫"—— 实际默认就是 deep（续144 起），
     #         是 10-08 的"只跑浅扫"注释翻档时没同步，误导了用户也差点误导开发。
-    assert _DEF252["dirscan"]["mode"] == "deep", "dirscan 出厂档位应是 deep（续144 主理人点单）"
+    assert _DEF252["dirscan"]["mode"] == "mini", "dirscan 出厂档位应是 mini（续334 主理人点单）"
     _seg252 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
     _dseg252 = _seg252.split("dirscan:", 1)[1].split("\npassive:", 1)[0]
-    assert "mode: deep" in _dseg252, "settings.yaml 的 dirscan.mode 不是 deep"
-    # 注释口径：必须承认 deep 是默认、且点明 quick 才是降档；不许再出现"默认只跑浅扫"
-    assert "默认**开启且默认深扫**" in _dseg252, "注释没写明默认深扫"
+    assert "mode: mini" in _dseg252, "settings.yaml 的 dirscan.mode 不是 mini"
+    # 注释口径：必须承认 mini 是默认、且点明 deep 才是升档；不许再出现"默认只跑浅扫"
+    assert "默认**开启且默认 mini**" in _dseg252, "注释没写明默认 mini"
     assert "只跑浅扫（mode=quick）" not in _dseg252, "过期注释还在（与实际 mode=deep 矛盾）"
     assert "以 mode 行为准" in _dseg252, "注释没提醒读者档位描述可能过期"
     # 请求量口径要写在注释里（用户拿它判断"占不占时间"的依据）
@@ -31529,6 +31819,7 @@ expression: r0()
 
         info = debug = warning
 
+    iprecon.reset_breaker()
     _old_src255 = dict(iprecon._SOURCES)
     iprecon._SOURCES["f255dead"] = _f_dead255
     iprecon._SOURCES["f255silent"] = _f_silent255
@@ -31538,7 +31829,8 @@ expression: r0()
         _map255, _st255 = iprecon.lookup_many(
             ["8.8.8.8", "1.1.1.1"],
             {"iprecon": {"sources": ["f255dead", "f255silent"],
-                         "fallback_sources": ["f255back"], "workers": 2, "timeout": 5}},
+                         "fallback_sources": ["f255back"], "workers": 2, "timeout": 5,
+                         "breaker_enabled": False}},
             logger=_lg255)
     finally:
         iprecon._SOURCES.clear()
@@ -31661,50 +31953,11 @@ expression: r0()
     print("[256] 续256 ok: IP→域名下钻链接（ip_drill 单一产地，子域/拓展两口径，页面级三处）｜"
           "poc_review --dupes 截断可见（DUPES_CAP/dupes_total/_dupes_note，纯函数+真数据+CLI）")
     # ------------------------------------------------------------------ [257]
-    # 续257：CLI 补 Host 碰撞入口（续183 挂账的最后一截）——`--hostcollide` 单次强开
-    #      （选项 + 自动补阶段）、`-p hostcollide` 显式点名也算"这次要跑"、不提不加。
-    import cli.client as _cli257
-    import types as _types257
-    import io as _io257
-    import contextlib as _cl257
-    _calls257 = []
-    _orig_rt257 = _cli257.run_task
-
-    def _fake_rt257(task_id, name, targets, stages, options, settings, append=False,
-                    resume=False, progress=None):
-        _calls257.append({"stages": list(stages), "options": dict(options)})
-        return _types257.SimpleNamespace(results={}, workdir=Path(_TMPDIR) / "cli-257")
-
-    def _cli_run257(argv):
-        _buf257 = _io257.StringIO()
-        _calls257.clear()
-        _old257 = sys.argv
-        sys.argv = ["client.py"] + argv
-        try:
-            with _cl257.redirect_stdout(_buf257):
-                _cli257.main()
-        except SystemExit as _e257:
-            return (_e257.code or 0), _buf257.getvalue()
-        finally:
-            sys.argv = _old257
-        return 0, _buf257.getvalue()
-
-    _cli257.run_task = _fake_rt257
-    try:
-        _c257, _o257 = _cli_run257(["-t", "hc257.test", "-p", "probe", "--hostcollide",
-                                    "--offline"])
-        assert _c257 == 0, (_c257, _o257)
-        assert _calls257[-1]["options"].get("hostcollide") is True, _calls257
-        assert "hostcollide" in _calls257[-1]["stages"], "勾了 --hostcollide 却没补阶段＝白勾"
-        _c257, _o257 = _cli_run257(["-t", "hc257b.test", "-p", "probe,hostcollide",
-                                    "--offline"])
-        assert _c257 == 0 and _calls257[-1]["options"].get("hostcollide") is True, _calls257
-        _c257, _o257 = _cli_run257(["-t", "hc257c.test", "-p", "probe", "--offline"])
-        assert _c257 == 0 and "hostcollide" not in _calls257[-1]["options"], _calls257
-    finally:
-        _cli257.run_task = _orig_rt257
-    print("[257] 续257 ok: CLI Host 碰撞入口（--hostcollide 落选项+自动补阶段 / "
-          "-p hostcollide 显式点名也单次生效 / 不提不加）")
+    # 续343（主理人点单）：Host 碰撞已删除 —— CLI 不许再有 --hostcollide 入口或阶段补全逻辑。
+    _cli257 = (ROOT / "cli" / "client.py").read_text(encoding="utf-8", errors="replace")
+    assert "--hostcollide" not in _cli257, "CLI 还留着 --hostcollide"
+    assert "hostcollide" not in _cli257.lower(), "CLI 还有 hostcollide 残渣"
+    print("[257] 续343 ok: CLI Host 碰撞入口已随功能删除（无参数/无选项/无阶段补全）")
     # ------------------------------------------------------------------ [262]
     # 续262：probe 阶段 favicon 接线修复 —— 续225（a9c5052）引入的真 bug，本机全量
     #   门禁现场抓到（每个站点一条 NameError WARNING）。register_sites() 调用
@@ -31819,12 +32072,12 @@ expression: r0()
     assert (_R263.ext_auto_probe_max({}),
             _R263.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 0}}),
             _R263.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 999}}),
-            _R263.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 3}})) == (5, 5, 50, 3)
+            _R263.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 3}})) == (20, 20, 50, 3)
     # 出厂默认值 + 随包 settings.yaml + 策略页控件，三处都得有（缺一处＝用户看不见＝等于没有）
     assert _C263.DEFAULTS["subdomain"].get("ext_auto_probe") is True
-    assert _C263.DEFAULTS["subdomain"].get("ext_auto_probe_max") == 5
+    assert _C263.DEFAULTS["subdomain"].get("ext_auto_probe_max") == 20
     _y263 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
-    assert "ext_auto_probe: true" in _y263 and "ext_auto_probe_max: 5" in _y263, "随包策略要写出来"
+    assert "ext_auto_probe: true" in _y263 and "ext_auto_probe_max: 20" in _y263, "随包策略要写出来"
     _sh263 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
     assert "subdomain_ext_auto_probe" in _sh263 and "subdomain_ext_auto_probe_max" in _sh263
 
@@ -31851,7 +32104,8 @@ expression: r0()
     _kid263 = _r263["child"]
     _kt263 = db.get_task(_kid263)
     assert int(_kt263["parent_id"]) == _tid263, "自动送探必须是**子任务**（任务树找得到）"
-    assert _kt263["stages"] == "subdomain,probe,dirscan,vulnscan", _kt263["stages"]
+    assert _kt263["stages"] == db.get_task(_tid263)["stages"], \
+        "续344：自动送探子任务也要继承父任务阶段"
     _ko263 = _json263.loads(_kt263["options"] or "{}")
     assert _ko263.get("ext_auto_probe") == 0, "自动建出来的子任务自带 0：防顺着置信度套娃"
     assert _ko263.get("rescan_of") == _tid263 and _ko263.get("ext_depth") == 1, _ko263
@@ -31870,13 +32124,16 @@ expression: r0()
     _tid263d = db.create_task("smoke-263-cap", "mnop263.test\n", ["subdomain"], {})
     db.insert_subdomains(_tid263d, [("www.mnop263.test", "passive:smoke263")])
     db.insert_subdomains(_tid263d, [(d, "osint:fofa") for d in
-                                    ("mpon263.test", "mnpo263.test", "mnope263.test", "mnopq263.test")])
+                                    ("mpon263.test", "www.mpon263.test", "mnpo263.test", "mnope263.test", "mnopq263.test")])
     db.update_task(_tid263d, status="done", progress=100)
     _r263d = _R263._maybe_auto_probe_similar(
         _Ctx263(_tid263d, {"subdomain": {"ext_auto_probe_max": 2}}, {}), _tid263d, _log263)
-    assert _r263d.get("spawned") == 1 and len(_r263d.get("domains") or []) == 2, _r263d
-    assert _r263d.get("capped") == len(_r263d.get("domains") or []) or _r263d.get("capped") >= 1, _r263d
-    # ②-c 关着 / 本轮未正常完成 ⇒ 一个都不建
+    assert _r263d.get("spawned") == 2 and len(_r263d.get("domains") or []) == 2, _r263d
+    assert _r263d.get("capped") == 2, _r263d
+    _kids263d = db.list_child_tasks(_tid263d)
+    assert len(_kids263d) == 2, _kids263d
+    assert any(_json263.loads(db.get_task(int(k["id"]))["options"] or "{}").get("seed_domains") for k in _kids263d), \
+        f"同注册域的子域必须作为 seed 带入对应子任务：{_kids263d}"    # ②-c 关着 / 本轮未正常完成 ⇒ 一个都不建
     _tid263e = db.create_task("smoke-263-off", "abcd263x.test\n", ["subdomain"], {})
     db.insert_subdomains(_tid263e, [("www.abcd263x.test", "passive:smoke263"),
                                     ("abdc263x.test", "osint:fofa")])
@@ -31899,6 +32156,45 @@ expression: r0()
             "变异后仍只送高置信 → 断言没盯住\"阈值真的在管事\""
     finally:
         _ex263.similar_candidates = _real263
+
+    # 续335：3xx 跳转落点 → 落地页判停车；非停车则注册域进拓展域名并判高
+    from scanner.stages import probe as _probe335
+    _s335 = [{"url": "https://x.origin335.test", "status": 301}]
+    _probe335.attach_redirect_info(
+        _s335, lambda u: {"status": 200, "url": "https://landing335.test/",
+                          "text": "<html><title>正常业务</title><body>hello</body></html>"},
+        workers=1)
+    assert _s335[0].get("redirect_parked") is False, _s335
+    _s335p = [{"url": "https://y.origin335.test", "status": 301}]
+    _probe335.attach_redirect_info(
+        _s335p, lambda u: {"status": 200, "url": "https://for-sale335.test/",
+                           "text": "<html><title>This domain is for sale</title></html>"},
+        workers=1)
+    assert _s335p[0].get("redirect_parked") is True, _s335p
+    _sites335 = [
+        {"url": "https://a.origin335.test", "status": 301,
+         "redirect_url": "https://b.landing335.test/x", "redirect_status": 200, "redirect_parked": False},
+        {"url": "https://p.origin335.test", "status": 302,
+         "redirect_url": "https://for-sale335.test/", "redirect_status": 200, "redirect_parked": True},
+        {"url": "https://o.origin335.test", "status": 301,
+         "redirect_url": "https://www.abcd263.test/", "redirect_status": 200, "redirect_parked": False},
+        {"url": "https://u.origin335.test", "status": 301,
+         "redirect_url": "https://unknown335.test/", "redirect_status": 200, "redirect_parked": None},
+    ]
+    _roots335 = _probe335.redirect_extension_roots(_sites335, {"abcd263.test"})
+    assert [r for r, _ in _roots335] == ["landing335.test"], _roots335
+    _hi335 = _ex263.apply_redirect_evidence(
+        {"level": "low", "label": "低", "owned": False}, {"source": "osint:redirect"})
+    assert _hi335["level"] == "high" and _hi335["label"] == "高", _hi335
+    assert _ex263.apply_redirect_evidence(
+        {"level": "low", "label": "低", "owned": True},
+        {"source": "osint:redirect"})["level"] == "low", "归属行不许被跳转证据改写"
+    _tid335 = db.create_task("smoke-335-redirect", "orig335.test\n", ["probe"], {})
+    db.update_task(_tid335, status="done", progress=100)
+    _probe335.register_redirect_extensions(_tid335, _sites335, {}, 0, _log263)
+    _d335 = {r["domain"]: r["source"] for r in db.list_subdomains(_tid335)}
+    assert _d335.get("landing335.test") == "osint:redirect", _d335
+    assert "for-sale335.test" not in _d335 and "unknown335.test" not in _d335, _d335
 
     # ③ 子任务面板三修（前端 + 服务端）：
     #    ③-a 「主任务那行显示成子任务的进度」——轮询必须**先对号再改**，且只认自己那两格
@@ -32231,7 +32527,7 @@ expression: r0()
 
     def _run267(tid, mapping):
         """桩跑一遍 jsmine 阶段：只有"哪个站点挖出哪些域名"是真的，其余（解析/停车/补探测）全桩掉。"""
-        def _fake_mine(u, settings, logger=None, text_sink=None):
+        def _fake_mine(u, settings, logger=None, text_sink=None, max_js=None, **kw):
             return {"domains": list(mapping.get(u, [])), "urls": [], "secrets": [],
                     "js_count": 1}
 
@@ -32364,11 +32660,11 @@ expression: r0()
                 _t.split("## 二、", 1)[1].split("## 三、", 1)[0])
 
     def _check271(_t):
-        """表一点名「两处都关」的 8 项、表二点名「随包开 / 代码默认关」的 9 项（续303 起
+        """表一点名「两处都关」的 9 项、表二点名「随包开 / 代码默认关」的 9 项（续303 起
         screenshot、续314 起 cert 从表一搬到表二：随包 true 而 DEFAULTS false）。"""
         _a, _b = _tables271(_t)
         for _s in ("crawl", "dev", "icp", "quake", "shodan", "ssrf",
-                   "gui.edge_auth", "report"):
+                   "gui.edge_auth", "report", "vulnscan"):
             assert f"`{_s}`" in _a, f"表一（两处都关）没点名 {_s}"
         for _s in ("cert", "ctlog", "fofa", "github", "heuristic", "intel", "iprecon",
                    "multileak", "screenshot"):
@@ -32377,7 +32673,7 @@ expression: r0()
     _check271(_doc271)
 
     # ① 配置侧逐条对上：表里写了什么，配置就得是什么（反过来也一样）
-    for _s271 in ("crawl", "dev", "icp", "quake", "shodan", "ssrf"):
+    for _s271 in ("crawl", "dev", "icp", "quake", "shodan", "ssrf", "vulnscan"):
         assert _D271[_s271]["enabled"] is False and _ship271[_s271]["enabled"] is False, \
             f"{_s271} 已不是「两处都关」—— 表一要跟着改"
     assert _D271["gui"]["edge_auth"]["enabled"] is False, "gui.edge_auth 应仍是关（部署开关）"
@@ -32389,7 +32685,7 @@ expression: r0()
 
     # ② 反向：默认**开着**的段不许被写进"没默认开"的表一
     _T1_271 = _tables271(_doc271)[0]
-    for _s271 in ("portscan", "hostcollide", "afrog", "takeover"):
+    for _s271 in ("portscan", "afrog"):
         assert _D271[_s271]["enabled"] is True, f"{_s271} 竟不是默认开 —— 这条反例的前提变了"
         assert f"`{_s271}`" not in _T1_271, f"{_s271} 默认就开着，不该出现在「没默认开」的表一里"
 
@@ -32403,8 +32699,8 @@ expression: r0()
         raise AssertionError("摘掉表二 cert 那一行后判据没红 ⇒ 这些断言是空写")
 
     print("[271] 续271 ok: ⑩「已实现但未默认开启」清单（docs/features-off-by-default.md）｜"
-          "表一 8 项两处都关 / 表二 9 项随包开而代码默认关，逐条与配置对上（续303：screenshot、续314：cert 移到表二、crawl 进表一）｜"
-          "默认已开的段（portscan/hostcollide/afrog/takeover）不许混进表一｜"
+          "表一 9 项两处都关 / 表二 9 项随包开而代码默认关，逐条与配置对上（续303：screenshot、续314：cert 移到表二、crawl 进表一）｜"
+          "默认已开的段（portscan/afrog）不许混进表一｜"
           "变异（摘掉一行）⇒ 判据立刻红")
 
     # ---------------- [272] 续272：门禁「只跑一组」--only（局部验证，不能当全量通过）----------------
@@ -32572,19 +32868,19 @@ expression: r0()
     from scanner import runner as _run275
     from scanner.config import DEFAULTS as _D275
     import yaml as _y275
-    # 默认策略下：ext_auto_probe 开、max=5（两处同值：config.py DEFAULTS / settings.yaml）
+    # 默认策略下：ext_auto_probe 开、max=20（两处同值：config.py DEFAULTS / settings.yaml）
     _ship275 = _y275.safe_load(open("config/settings.yaml", encoding="utf-8").read())
     assert _D275["subdomain"]["ext_auto_probe"] is True, "默认应开启自动送探（续263 主理人口径）"
     assert _ship275["subdomain"]["ext_auto_probe"] is True, "DEFAULTS 与 settings.yaml 的 ext_auto_probe 要一致"
     # 出厂 5 个（理由：一次送 5 个让人工看得过来、错了能一键拉黑；送 200 个＝脚本替你圈了一批别人的域名在扫）
     _d275 = _run275.ext_auto_probe_max({})
-    assert _d275 == 5, f"默认 ext_auto_probe_max 应是 5，实测 {_d275}"
+    assert _d275 == 20, f"默认 ext_auto_probe_max 应是 20，实测 {_d275}"
     # 夹 1..50：超界配置被钳制（防误配把自动送探变成盲扫）
     assert _run275.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 200}}) == 50, "上限应钳到 50"
-    assert _run275.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 0}}) == 5, "非正数回落 5"
+    assert _run275.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": 0}}) == 20, "非正数回落 20"
     assert _run275.ext_auto_probe_max({"subdomain": {"ext_auto_probe_max": -3}}) == 1, "负数应钳到 1"
-    print("[275] 续272-E ok: 自动送探 ext_auto_probe_max 出厂 5（一次送 5 个让人工看得过来）｜"
-          "夹 1..50（200→50 / 0→5 / -3→1）｜默认 ext_auto_probe=True（DEFAULTS 与 settings.yaml 同值）")
+    print("[275] 续272-E ok: 自动送探 ext_auto_probe_max 出厂 20（一次送 20 个让人工看得过来）｜"
+          "夹 1..50（200→50 / 0→20 / -3→1）｜默认 ext_auto_probe=True（DEFAULTS 与 settings.yaml 同值）")
 
     # ---------------- [276] 续272-E：puredns argv 回归（续264 修好；#65 真库对比见说明）----------------
     from scanner.stages import subdomain as _sub276
@@ -33054,7 +33350,8 @@ expression: r0()
     # 主理人 2026-10-26：「这个└ xxx.com · 送探 1 个域名 子任务 · 父 #79 … 不要单独显示出来，
     # 默认就在子任务里面才有，并且下面子任务要标明一个数量，以及按嵌套的思路
     # （未来的孙任务也在跑），然后 live 化升级」。
-    # 口径：① /tasks **默认只看根任务**（parent=all 才是显式的"全部含衍生"）；
+    # 口径：① /tasks **默认只看根任务**；parent=all 也只查根任务并自动展开子任务面板
+    #       （续342，不再平铺父子两行），parent=child 才直看衍生任务；
     # ② 行徽章「子任务（N）」= **直接**子任务数，唯一产地 `db.child_counts_bulk`；
     # ③ 面板每个节点带 child_count（孙任务在不在跑逐层看得见），前端 3s live 轮询。
     _rt286 = db.create_task("smoke-286-root", "http://root286.test/", ["probe"], {})
@@ -33083,8 +33380,12 @@ expression: r0()
         "默认档不应出现「子任务 · 父 #N」徽章（那是单独显示子任务行的副产品）")
     assert f'data-id="{_ct286}"' in _h_ch286 and "子任务 · 父 #" + str(_rt286) in _h_ch286, (
         "显式 parent=child 要能直看衍生任务（没删这个能力，只是不再默认）")
-    assert f'data-id="{_rt286}"' in _h_all286 and f'data-id="{_ct286}"' in _h_all286, (
-        "显式 parent=all（含衍生）应根+衍生都在（旧的平铺视图保留为显式档）")
+    # 续342（主理人点单）：parent=all 不再平铺父子两行，只列根任务并自动展开子任务面板。
+    assert f'data-id="{_rt286}"' in _h_all286, "parent=all 至少要有根任务"
+    assert f'data-id="{_ct286}"' not in _h_all286, (
+        "parent=all 仍把子任务单独平铺成一行（应只在根任务面板里展开）")
+    assert 'data-auto-expand="1"' in _h_all286, "parent=all 没标自动展开"
+    assert 'data-child-count="1"' in _h_all286, "根任务没给前端带子任务数量"
     # ③ 数量徽章：默认档根任务行「子任务（1）」（_ct286 在它名下）
     assert "子任务（1）" in _h_def286, "「子任务」按钮没标出直接子任务数量"
     # 变异证伪（§6.1）：数量必须真吃 `child_counts_bulk`（抄了第二份产地 ⇒ 摘掉不变红）
@@ -33102,21 +33403,26 @@ expression: r0()
     _n286 = {n["id"]: n for n in _j286["nodes"]}
     assert _n286[_ct286]["child_count"] == 1, (
         f"子任务节点应带 child_count=1（它名下有孙任务 #{_gt286}）：{_n286[_ct286]}")
-    assert _n286[_ct286]["label"] == f"{_rt286}-a", "24-a 编号被改坏"
+    from gui.app import _task_tree_labels as _ttl286
+    assert _n286[_ct286]["label"] == _ttl286([_ct286])[_ct286], "24-a 编号被改坏"
     _j286b = c.get(f"/api/tasks/{_ct286}/subtasks").get_json()
     _n286b = {n["id"]: n for n in _j286b["nodes"]}
-    assert _n286b[_gt286]["child_count"] == 0 and _n286b[_gt286]["label"] == f"{_ct286}-a", (
+    assert _n286b[_gt286]["child_count"] == 0 and _n286b[_gt286]["label"] == _ttl286([_gt286])[_gt286], (
         f"孙任务节点 child_count/label 不对：{_n286b.get(_gt286)}")
     # ⑤ 前端形状：数量徽章接模板、live 轮询接线 + 面板注销守卫
     _tk286 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8")
     assert "child_counts.get(t.id, 0)" in _tk286, "任务按钮没接 child_counts 数量"
-    assert 'value="all"' in _tk286 and "全部（含衍生）" in _tk286, "平铺视图应保留为显式 all 档"
+    assert 'value="all"' in _tk286 and "全部（自动展开子任务）" in _tk286, "all 档文案应说明自动展开"
+    assert "data-auto-expand" in _tk286 and "data-child-count" in _tk286, "模板没接自动展开/数量"
     _js286 = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "dataset.autoExpand" in _js286 and "autoOpen" in _js286, "前端没接自动展开/不记忆"
+    assert 'data-pv="stages"' in _js286 and "阶段预览" in _js286, \
+        "续344：子任务行内面板也要有阶段预览按钮"
     for _w286 in ("PV_SUBTREE_LIVE_MS", "pvLiveAdd", "pvLiveRemove", "pvLiveTick"):
         assert _w286 in _js286, f"面板 live 轮询缺 {_w286}"
     assert "document.contains" in _js286, (
         "live 轮询没带「面板还在文档里」守卫（收起/跳转后会一直发死请求）")
-    print("[286] 续282 ok: /tasks 默认只看根任务（子任务收进父面板，parent=all/child 显式可查）｜"
+    print("[286] 续282/342 ok: /tasks 默认只看根任务（parent=all 自动展开子任务面板、child 显式平铺）｜"
           "行徽章「子任务（N）」唯一产地 child_counts_bulk（变异证伪）｜面板节点逐层标 child_count"
           "（孙任务也在跑）｜行内面板 3s live 轮询（变更才重画 + 文档守卫 + 收起注销）")
     # ---------------- [287] 续283: detail-page ALL tabs live (single-origin _tab_counts + filtered-query replay) ----------------
@@ -33452,7 +33758,7 @@ expression: r0()
     assert _seg_head_294("nosuchsection294", _txt294) == (None, ""), "不存在的段应当给 (None, '')"
     # dirscan 段头那句档位描述必须仍然在（§252 的原判据不被我这条替换掉）
     _vd294, _cd294 = _seg_head_294("dirscan", _txt294)
-    assert _vd294 == "true" and "默认开启且默认深扫" in _cd294.replace("*", ""), "dirscan 段头口径被改掉：%s" % (_cd294[:56],)
+    assert _vd294 == "true" and "默认开启且默认 mini" in _cd294.replace("*", ""), "dirscan 段头口径被改掉：%s" % (_cd294[:56],)
     # 主理人这次问的就是「multileak 要不要 key」—— 答案必须写在段头上，别让人去翻代码
     _vm294, _cm294 = _seg_head_294("multileak", _txt294)
     assert "免 key" in _cm294 and "grepapp" in _cm294.lower(), "multileak 段头没交代免 key：%s" % (_cm294[:56],)
@@ -34756,7 +35062,7 @@ expression: r0()
     _vf314 = _ga314._fold_vulns(_vw314)
     assert len(_vf314) == 1 and len(_vf314[0]["_dup_group"]) == 3, _vf314
 
-    # ---- 第 9 条：SQL 注入检查默认关（vulnscan 保留）、爬虫默认关、耗时选项 ----
+    # ---- 第 9 条：SQL 注入检查默认关（vulnscan 保留）、爬虫默认关、总勾选已删 ----
     from scanner import config as _cfg314
     from scanner.owasp import checks as _oc314
     from scanner.stages import vulnscan as _vs314
@@ -34776,9 +35082,30 @@ expression: r0()
     assert "a03-sqli-error" in _ids314b and "a03-sqli-blind" in _ids314b, _ids314b
     _tk314 = (ROOT / "gui" / "templates" / "tasks.html").read_text(encoding="utf-8")
     assert "全部勾上（最重档位）" not in _tk314, "续314：最重档位按钮应删掉"
-    assert "耗时选项" in _tk314 and 'name="opt_sqli"' in _tk314, "建任务页缺耗时选项"
+    assert "耗时选项" not in _tk314, "续335：总勾选那颗「耗时选项」应删掉"
+    assert 'name="opt_sqli"' in _tk314, "建任务页仍要保留单项 SQL 注入"
+    assert 'name="auto_expand" value="1" data-ck-default="1" data-recon="1" checked' in _tk314, \
+        "续335：自动拓展默认勾选，且信息收集专项也要勾上"
+    # 续344：全量爆破是独立复选框，不能和“深度”档位混为一谈
+    assert 'name="full_brute" value="1"' in _tk314 and "不受 5000 词增量限制" in _tk314, \
+        "建任务页缺独立的全量爆破选项/说明"
     _st314 = (ROOT / "gui" / "templates" / "settings.html").read_text(encoding="utf-8")
     assert 'name="vulnscan_sqli"' in _st314 and "续314 起默认关闭" in _st314
+
+    # 续344：动态字典只收归属域名前缀，写入后可由 /dict/dynamic 列表页看到
+    import tempfile as _tf344
+    from scanner import subdict as _sd344
+    with _tf344.TemporaryDirectory() as _d344:
+        _p344 = Path(_d344) / "dyn.txt"
+        _s344 = {"dicts": {"subdomains": "", "subdomains_deep": "",
+                           "subdomains_dynamic": str(_p344), "subdomains_dynamic_max": 10}}
+        _r344 = _sd344.add_domains(["a.brand.test", "x.other.test"], settings=_s344,
+                                   bases={"brand.test"})
+        assert _r344["added"] == ["a"], _r344
+        assert _sd344.load(_s344) == ["a"], _sd344.load(_s344)
+        assert "b" not in _sd344.load(_s344)
+    _h344 = c.get("/dict/dynamic")
+    assert _h344.status_code == 200 and "动态字典" in _h344.get_data(as_text=True)
 
     # ---- 第 4 条：favicon 裸 IP → 先探活 → 免费源 + FOFA ip= 反查 ----
     import types as _ty314
@@ -34835,7 +35162,8 @@ expression: r0()
 
     print("[314] 续314 ok: 证书同 CN 折一行（CN 优先指纹）｜爬虫跳过提交回首页的表单｜"
           "CDN 证书域名 vendor=True 不判高｜目录重复可折叠｜详情页不再渲染资产关系图｜"
-          "邮箱黑名单徽标｜.git 四类折成一行｜SQLi 检查默认关（其它检查照跑）｜爬虫默认关｜耗时选项｜"
+          "邮箱黑名单徽标｜.git 四类折成一行｜SQLi 检查默认关（其它检查照跑）｜爬虫默认关｜"
+          "总勾选已删/自动拓展默认勾｜"
           "favicon 裸 IP 先探活再反查（免费源+FOFA ip=，标历史/待确认）")
 
     # ---------------- [317] 续317：默认值三档口径全量自检（防再漂移） ----------------
@@ -35052,9 +35380,9 @@ expression: r0()
     # ---------------- [330] 续330：扫描时长专项收尾（上批改动续324-329 的接线/行为 + 列表页实时） ----------------
     # 主理人 2026-11-03「其他能提速的都提速」。任务 26 实测大头：dirscan 15.7min、
     # jsmine 段内「JS 后复核」5.4min（20 张、0 张被采用）、screenshot 3.7min、cert 2.8min、
-    # hostcollide 不中 55-105s（时间全耗在等超时）。本组钉：① cert 并发接线与 workers=6；
+    # 本组钉：① cert 并发接线与 workers=6；
     # ② screenshot 并发接线与 workers=3；③ 三档收紧落随包策略层（15/25/3）；
-    # ④ hostcollide timeout=2 + early_stop 行为（含 0=关对照）；⑤ verify_after_js 默认关；
+    # ④ verify_after_js 默认关；
     # ⑥ /api/tasks/live 只回 running/queued、字段同列表页口径 + 前端轮询接线。
     import yaml as _y324
     from scanner.config import DEFAULTS as _def324
@@ -35074,25 +35402,6 @@ expression: r0()
     assert _def324["screenshot"]["verify_after_js"] is False
     # ⑤ JS 渲染后复核默认关（任务 26 实测 20 张 5 分 20 秒、0 张被采用 ⇒ 纯耗时）
     assert _set324["screenshot"]["verify_after_js"] is False
-    # ④ hostcollide：timeout 2 + early_stop 行为（连续 N 个无差异 ⇒ 提前结束；0=关）
-    assert _def324["hostcollide"]["timeout"] == 2 and _def324["hostcollide"]["early_stop"] == 3
-    assert _set324["hostcollide"]["timeout"] == 2 and _set324["hostcollide"]["early_stop"] == 3
-    from scanner import hostcollide as _hc324
-    _orig_hc324 = _hc324.http_request
-    def _fake324(url, **kw):
-        return {"status": 200, "text": "<title>default</title>", "length": 20}
-    _hc324.http_request = _fake324
-    _hosts324 = ["a324.test", "b324.test", "c324.test", "d324.test", "e324.test"]
-    _st_hc324 = {"hostcollide": {"timeout": 1, "max_requests": 50, "early_stop": 2},
-                 "_throttle": object()}
-    try:
-        _hits324, _tried324 = _hc324.collide("10.0.0.8", _hosts324, _st_hc324)
-        assert _hits324 == [] and _tried324 == 2, (_hits324, _tried324)
-        _st_hc324["hostcollide"]["early_stop"] = 0        # 对照：关掉早停 ⇒ 5 个全试
-        _hits324b, _tried324b = _hc324.collide("10.0.0.8", _hosts324, _st_hc324)
-        assert _tried324b == 5, _tried324b
-    finally:
-        _hc324.http_request = _orig_hc324
     # ⑥ /api/tasks/live：静止任务不进轮询源；字段复用列表页口径（run_duration_text）
     import gui.app as _ga324
     from gui.app import app as _app324
@@ -35121,8 +35430,8 @@ expression: r0()
     for _mk324 in ("data-pct", "data-stage-text", "data-duration"):
         assert _mk324 in _th324, _mk324
     print("[330] 续330 ok: cert 并发(workers=6)/截图并发(workers=3)/三档收紧(15/25/3)/"
-          "hostcollide 早停(连续2个无差异提前结束、0=关全跑)/verify_after_js 默认关/"
-          "/api/tasks/live 只回 running+queued（progress/stage/duration 同列表页口径）/"
+          "verify_after_js 默认关/"
+          "api/tasks/live 只回 running+queued（progress/stage/duration 同列表页口径）/"
           "列表页轮询接线")
     print("SMOKE PASS")
 

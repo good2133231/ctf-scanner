@@ -80,7 +80,7 @@ Web3 域名）。URLFinder 的许可状态本项目未做核实。**这是黑名
   厂商自行发布并声明以其为准；属公开**事实性数据**，本项目只做只读加载与匹配，不发请求。
 - `config/dicts/subdomains.txt` —— 自建子域名字典。
 - `scanner/pocs/pocs/*.yaml`（7 个内置 POC）、`scanner/fingerprint.py` 的**内置** SIGNATURES 表、
-  `scanner/owasp/checks.py`、`scanner/takeover.py` 指纹库 —— 本项目自行编写
+  `scanner/owasp/checks.py`、`scanner/fingerprint.py` 指纹表 —— 本项目自行编写
   （外置的 `config/dicts/fingerprints_extra.txt` 另见 §3.2）。
 
 ## 5. 本仓库自身的许可

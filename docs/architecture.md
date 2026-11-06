@@ -11,19 +11,17 @@
 │            协作式取消：request_stop / is_stopped（终态 stopped）│
 ├────────────────────────────────────────────────────────────┤
 │  阶段层    scanner/stages/                                  │
-│            subdomain → takeover → hostcollide →                │
-│            portscan（默认开）→ probe → cert（默认关）→         │
-│            screenshot（默认关）→ osint（随包开）→ jsmine →     │
+│            subdomain → portscan（默认开）→ probe → cert（默认关）│
+│            → screenshot（默认关）→ osint（随包开）→ jsmine →   │
 │            dirscan（默认开·深扫）→ crawl → vulnscan →          │
 │            intel / heuristic / github（随包开，只产"线索"）    │
-│            （15 个阶段，见 runner.STAGE_ORDER）                │
+│            （13 个阶段，见 runner.STAGE_ORDER）                │
 │  资产层    scanner/dnsq.py（DNS 客户端）                      │
 │            scanner/cdn.py（CDN 判定：CNAME 后缀匹配厂商名单）  │
-│            scanner/takeover.py（子域接管指纹 41 条）           │
 │            scanner/portscan.py（fscan/nmap 优先 + 内置 connect 兜底）│
 │            scanner/certs.py（TLS 证书取证：纯标准库 DER/ASN.1） │
 │            scanner/screenshot.py（本机无头 Edge/Chrome 截图）  │
-│            scanner/iprecon.py（IP 反查域名 + /24 C 段归纳）    │
+│            scanner/iprecon.py（精确 IP 反查域名；/24 仅历史）  │
 │            scanner/fofa.py + mmh3.py（favicon/证书反查 + 阈值排除）│
 │            scanner/jsmine.py（JS 域名/接口/疑似凭据挖掘）       │
 │            scanner/intel.py（CISA KEV 情报 × 本地指纹白名单匹配）│
@@ -51,7 +49,7 @@
 `scanner/evasion.py` 是**所有 HTTP 出口的统一伪装层**：`utils.http_request` → `_headers()` → `evasion.browser_headers()`
 （UA 随机化、浏览器化请求头、可选 XFF 伪装）；注入类检查再叠加 `evasion.mutate_sqli/mutate_xss` 的 payload 变形。
 `scanner/wildcard.py`（泛解析识别/过滤）与 `scanner/passive.py`（免 key 多来源被动收集）只在 subdomain 阶段被调用。
-`scanner/dnsq.py` 是纯标准库 DNS 客户端（takeover 阶段用它拿 CNAME 链，不依赖外部命令）。
+`scanner/dnsq.py` 是纯标准库 DNS 客户端（subdomain 阶段用它拿 CNAME 链，不依赖外部命令）。
 `scanner/cdn.py` 同样是**只读加载 + 纯字符串匹配**：读 `config/dicts/cdn_cname.txt` 的 292 条厂商后缀，
 按 CNAME 链判定"CDN / 直连源站"，并读 `config/dicts/cdn_ips.txt` 的 15 段厂商**任播 IP 段**作第二条判据
 （**CNAME 优先**，未命中再看解析 IP —— 覆盖"任播 CDN 直连边缘 IP、CNAME 链为空"的 Cloudflare 类目标；
@@ -62,7 +60,7 @@ Shodan `http.favicon.hash`）的 favicon 指纹统一用 mmh3 **而不是 MD5**�
 两者分工不重叠。
 `scanner/blacklist.py` 是**用户黑名单**（纯文本 `config/blacklist.txt`，一行一个域名、`#` 注释）：
 在 subdomain / jsmine / osint 三个阶段**入库前过滤**（命中的域名连其子域一起丢弃），
-因此黑名单里的目标后续 takeover / probe / dirscan / vulnscan 都不会扫到 —— 语义是"不入资产库"而非"入库打标"。
+因此黑名单里的目标后续 probe / dirscan / vulnscan 都不会扫到 —— 语义是"不入资产库"而非"入库打标"。
 文件每次调用都重读、不缓存，改完立即生效。
 `utils.rel_display(path)` 是**展示层**的相对化工具：把项目内绝对路径转成相对项目根的 POSIX 形式
 （`logs/task_1_x/task.log`），项目外路径与空值原样返回；CLI / GUI / 报告对外显示路径都走它，
@@ -135,7 +133,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 | 启发式检查全部 GET + 无破坏 payload | 控制误伤与法律风险 | 检出率有限，定位是"初筛信号" |
 | 分级门控（`skip_severities` 执行级 + `min_severity` 结果级，默认 info/low 不执行、门槛 DEFAULTS medium / 随包 high） | 默认屏蔽低危/info 噪声，连请求都不发，只留能拿 flag 的高位结果 | 想广谱信息收集需**同时**放宽级别开关与门槛 |
 | **导入 POC 的级别判据用「有效级别」而不是模板里写的 `severity`**（续60，`db.effective_poc_severity()`） | 导入器（`tools/import_ref_pocs.py`）把参考项目的 `bug_level` 原样抄成 `severity`（一律 HIGH），而这批 305 条绝大多数是**指纹**规则 —— 声明级别与 `confidence`（全 low）自相矛盾。判据改成"受本条 `poc_confidence()` 上限约束"（只降不升，**只对 `imported` 来源生效**），执行闸/批量开关/级别列/入库级别四处统一 | 导入 POC 变为**默认完全惰性**（有效级别 100% low，默认 `skip_severities` 下进 0 条）；要用只能人工复核后整理进 `config/pocs-user/`（那才是 `user` 来源）。`pocs.severity` 列仍存原始声明值以备查 |
-| **阶段级 `enabled` 总开关**（`takeover`/`hostcollide`/`portscan`/`jsmine`/`dirscan`/`crawl`/`vulnscan` 默认开、`osint` 由 `iprecon`/`fofa` 两个子开关代替（这两段 DEFAULTS 关、**随包 settings.yaml 已开**，续159-附）；`subdomain`/`probe` 刻意不设） | 用户要求"大功能都要有按分类的总开关"；关掉即整阶段跳过、连请求都不发，便于按需裁剪（如"只做资产测绘不探测"） | 开关分散在各段，新增阶段必须记得补 `enabled` 与 GUI 复选框（`tests/smoke.py` 的 `[3d]`/`[5b]` 已加断言防漏） |
+| **阶段级 `enabled` 总开关**（`portscan`/`jsmine`/`dirscan`/`vulnscan` 默认开、`osint` 由 `iprecon`/`fofa` 两个子开关代替（这两段 DEFAULTS 关、**随包 settings.yaml 已开**，续159-附）；`subdomain`/`probe` 刻意不设） | 用户要求"大功能都要有按分类的总开关"；关掉即整阶段跳过、连请求都不发，便于按需裁剪（如"只做资产测绘不探测"） | 开关分散在各段，新增阶段必须记得补 `enabled` 与 GUI 复选框（`tests/smoke.py` 的 `[3d]`/`[5b]` 已加断言防漏） |
 | 动态免杀（evasion）只改变 payload 编码形态与请求伪装 | 提升隐蔽性与 WAF 绕过率，同时不越过非破坏性红线 | 变形不改变语义，对非规则型 WAF 效果有限 |
 | 指纹用自研规则表 + 外置社区表（`scanner/fingerprint.py`；内置 105 标签 + 外置 2146 标签，FingerprintHub / EHole / fingers / nuclei 转换） | 无外部依赖；httpx 档用 `-irr` 带回根响应，httpx 与内置两条探测路都填 `sites.tech`；同义归一后与 POC `info.tags` 对齐 | 社区规则长尾可能误报（负样本校准 + `fingerprint_fixes.txt` 兜底）；只给组件标签、不解析版本 |
 | 外部情报（osint）**DEFAULTS 关、随包 settings.yaml 已开**，且"两个子开关都关＝一次请求都不发" | 依赖第三方公共接口（api.webscan.cc / FOFA），可用性不由我们掌控；不配置就不该有网络行为 | 想用 C 段/favicon 拓展需先去「策略配置 → 外部情报拓展」显式打开 |
@@ -161,14 +159,13 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
    `StageContext` 先注入**任务级登录态**（`auth.inject`）再注入**统一限流器**（`throttle.inject`），
    两者都写进**任务专用 settings 副本**（绝不原地改共享 dict）；
 4. 阶段结果落点**并不统一**（改代码前先看具体阶段，不要假定"都写三处"）：
-   - **文本产物 + SQLite + `ctx.results` 三处都写**：`subdomain` / `takeover` / `probe` / `jsmine` / `dirscan`
+   - **文本产物 + SQLite + `ctx.results` 三处都写**：`subdomain` / `probe` / `jsmine` / `dirscan`
      （文本产物如 `sites.txt`，`ctx.results` 供下一阶段直接使用）；
    - **只写 SQLite + `ctx.results`（不落文本产物）**：`portscan` / `osint` / `crawl` / `vulnscan` / `intel` / `heuristic` / `github`
      （`intel` / `heuristic` / `github` 只写 `leads` 表）；
    - **只写文本产物 + SQLite（不写 `ctx.results`）**：`cert`（`certs.txt` + `certs` 表）/
      `screenshot`（`shots/*.png` + `sites.shot`）—— 二者排在流水线后段，没有后续阶段消费其结果；
 5. GUI 通过 `tasks` 表轮询状态（status/progress/current_stage），详情页从 SQLite 读资产与漏洞。
-   - **只写 SQLite（不写文本产物、不写 `ctx.results`）**：`hostcollide`（`sites` 表补记碰撞命中）—— 它排在 `portscan` 之前，结果供后续阶段直接查库；
 6. **断点续扫**（续29）：`tasks.current_stage` 被**复用为断点** —— `PipelineRunner.run()` 在
    每个阶段**开始前**写它、正常跑完才清空，所以"被停止 / 预算耗尽 / 进程被重启打断"时它就是
    最后进入的那个（可能只跑了一半的）阶段。`runner.resume_stages(stages, current_stage)`
@@ -217,7 +214,7 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
    `start(port=0)` 即时生成 `index.html` / `admin/index.html` / `robots.txt` / `app.js` / `.env`
    （`.env` 为**明显假的样例值**），返回 `(httpd, base_url)`；`stop(httpd)` 幂等、清理临时目录。
    **自检入口两条**：CLI `cli/run_devflow.py`（续146 起在 `cli/` 下；起靶场 → `devmode.apply(load_settings())`
-   → 全 15 阶段 `runner.run_task` 前台跑 → 打每阶段 OK/SKIP/FAIL + 请求数 + 耗时，无 FAIL 退出 0）与
+   → 全 13 阶段 `runner.run_task` 前台跑 → 打每阶段 OK/SKIP/FAIL + 请求数 + 耗时，无 FAIL 退出 0）与
    控制台 `/devmode` 页（`@login_required @admin_required`，仅 `dev.enabled=true` 时导航渲染）。
    **阶段归类**：包装 `http_request` / `run_cmd` 计数并打 `stage` 标记（用**模块级全局** `_CURRENT`，
    **不用 `threading.local()`** —— 池化请求跑在 worker 线程上、线程局部为空），再换 `runner.STAGE_REGISTRY`
@@ -276,13 +273,13 @@ CLI 是 `--full-report`。**JSONL 本来就是全量**（机器格式），不�
 | 表 | 字段要点 | 说明 |
 |---|---|---|
 | tasks | targets, stages, options, status, progress, current_stage, log_file, error, pid, **started_at, finished_at, elapsed_seconds, run_mode, queued_at, run_payload** | 任务状态机：pending → **queued** → running → done/stopped/failed；三列运行时长字段由 `start_task_run` / `finish_task_run` 维护（续35，见上 §流水线 7）；续49 三列供持久化队列：`run_mode`（fresh/append/resume，空=旧行/CLI 首跑）、`queued_at`（入队时刻）、`run_payload`（本次运行的 `{stages, options}` 快照，与持久 `options` 分开以免 `append_targets` 污染） |
-| subdomains | domain, source, cname, ip, cdn, **ip_note** | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa / osint:fofa-cert / osint:fofa-title / osint:shodan / osint:quake / osint:ctlog）两类；cname 由 takeover 阶段回填，ip / cdn / ip_note 由 subdomain 阶段回填（cdn 为空即"非 CDN"；`ip_note` 是解析失败/未解析的**原因码**：nxdomain / no-a / servfail / refused / timeout / error / empty / over-limit，页面上经 `gui.app.ip_note_label` 翻成中文）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`；拓展域名页默认隐藏重叠（`db.OVERLAP_EXT_WHERE`：域名已存在于任意任务的"目标自身子域名"里）。
+| subdomains | domain, source, cname, ip, cdn, **ip_note** | source 标记来源：**目标自身**（subfinder / puredns / dns-brute(fallback) / passive:\*）与**拓展域名**（js:mine / osint:cseg / osint:fofa / osint:fofa-cert / osint:fofa-title / osint:shodan / osint:quake / osint:ctlog）两类；cname 由 subdomain 阶段回填，ip / cdn / ip_note 由 subdomain 阶段回填（cdn 为空即"非 CDN"；`ip_note` 是解析失败/未解析的**原因码**：nxdomain / no-a / servfail / refused / timeout / error / empty / over-limit，页面上经 `gui.app.ip_note_label` 翻成中文）。两类在 GUI 分栏展示，SQL 判据是 `db.OWN_SUBDOMAIN_WHERE` / `db.EXT_SUBDOMAIN_WHERE`；拓展域名页默认隐藏重叠（`db.OVERLAP_EXT_WHERE`：域名已存在于任意任务的"目标自身子域名"里）。
 续40 新增两个来源：`target`（目标是子域时把它自己也记成子域资产，仅任务级 `auto_expand` 打开时）
 与 `promote:<原来源>`（拓展域名经**归属判定**——注册域命中任务目标——后**追加**出的自身子域行，
 见 `scanner/extdom.py`；原拓展行保留不动，出处可查） |
 | sites | url, host, port, status, title, length, server, tech, favicon, shot, source | 存活站点（probe 阶段产出）；favicon 为 MD5，供 POC 零请求前置判定；shot 为截图相对路径（screenshot 阶段回填，默认关） |
 | ports | host, ip, port, service, banner | 端口与服务（portscan 阶段产出，该阶段默认开启（续269）） |
-| csegs | segment, ip, domains, count, **note** | `/24` C 段视野（osint 阶段产出；`iprecon` 随包已开）：每行一个 IP 与其反查到的域名。`count` 是**截断前**的数量；反查命中数超过 `iprecon.max_domains_per_ip`（默认 30）判为共享主机/任播 CDN 段时，**`domains` 留空、`note` 写明"命中多少 / 为什么不列"**（续110：判为噪声的内容不该再被报告「C 段视野」原样抄走）。老库由 `_COLUMN_PATCHES` 补 `note` 列 |
+| csegs | segment, ip, domains, count, **note** | **历史数据**：旧 `/24` C 段视野，只有续336 之前的任务会写；新任务只做精确 IP 反查（`sites` / 拓展域名），不再写本表。`count` 是**截断前**的数量；旧逻辑命中数超过 `iprecon.max_domains_per_ip`（当时默认 30）时 `domains` 留空、`note` 写明原因。 |
 | dirs | site_url, path, status, length, note, title | 目录发现（dirscan 阶段产出；`length` 即返回包大小，`title` 为命中页 `<title>` —— 内置扫描从已在手里的响应体提取、零额外请求，dirmap 解析行没有响应体故留空。默认排序为 `200 优先 → 大小降序`，页面按 `(site_url,status,length)` 折叠重复长度） |
 | vulns | target, poc_id, name, severity, owasp, detail, evidence, **review, review_note, reviewed_at** | 统一存放 POC 命中与 OWASP 检查结果。`review` 是**人工复核三态**（`""` 待复核 / `confirmed` 已确认 / `false_positive` 误报，见 `db.REVIEW_STATES`，非法值经 `db.norm_review()` 归一）；**判误报的行不进「潜在漏洞」计数与报告主表**，改为报告文末「已判误报（人工复核排除）」附录 |
 | leads | task_id, kind, code, title, target, matched, level, detail, source, url | **「线索」**（intel / heuristic / github 三个阶段产出，随包已开）：`kind` 区分情报/启发式/GitHub，`level` 只用于排序着色、**不是漏洞级别**。**不是漏洞结论** —— 不进 `vulns`、不计入漏洞数、不自动导入 POC；**出口只有 JSONL 导出**（`type=lead` 行 + `counts.leads`），GUI 页签与人读报告（MD / HTML）自 2026-09-24（续24）起不再露出。GitHub 线索（`kind="github"`）的 `code` 是 `仓库:文件路径`、`detail` 写明只记录了仓库/路径/命中规则 —— **文件内容与命中的凭据明文不入库** |

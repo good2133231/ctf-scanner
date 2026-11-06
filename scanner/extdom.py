@@ -23,8 +23,10 @@
 所有写库路径都过 `blacklist` —— 被拦的域名既不解析也不追加。
 """
 import difflib
+import re
+from urllib.parse import urlsplit
 
-from . import blacklist, cdn, db, dnsq, iprecon, targets
+from . import blacklist, cdn, db, dnsq, iprecon, ml, targets
 from .utils import base_domain, is_domain, pool_run
 
 # 追加来源前缀：以它开头的 source **不属于** `js:` / `osint:`，因此按"自身子域名"对待；
@@ -180,6 +182,46 @@ def _edit_distance(a, b):
     return prev[-1]
 
 
+_GENERIC_LABEL_TOKENS = {
+    "www", "mail", "email", "smtp", "ftp", "api", "cdn", "static", "img",
+    "image", "images", "assets", "asset", "web", "app", "apps", "admin",
+    "login", "portal", "shop", "blog", "news", "dev", "test", "staging",
+    "beta", "demo", "cloud", "game", "games", "pay", "payment", "vpn",
+    "m", "wap", "mobile", "download", "upload", "file", "files", "docs",
+    "help", "support", "status", "monitor", "git", "gitlab", "jenkins",
+}
+
+
+def _label_tokens(label):
+    """主标签切成品牌词片段（`gz-8cap` → `gz` / `8cap`）。
+
+    只认**边界明确的**片段：`8capfx-ad` 这种用连字符分开的名字，靠 edit distance
+    会把 `8capfx` 和 `8cap` 的差异算成 3 步；按片段看，`8cap` 就是实打实的共享品牌词。
+    """
+    return [t for t in re.split(r"[^a-z0-9]+", str(label or "").lower()) if t]
+
+
+def _brand_token(a, b):
+    """两个主标签的共享品牌词 → `(token, strong)`；没有共享词返回 `(None, False)`。
+
+    `strong` 的判据：片段里带数字（`8cap` / `365` 这类品牌常带数字）或长度 ≥5。
+    纯 4 字母的通用词（`mail` / `blog`）不算 —— 否则同一批业务里到处都是的
+    `mail-*`、`blog-*` 会被当成“像自家”。
+    """
+    ta, tb = _label_tokens(a), _label_tokens(b)
+    best = (None, False)
+    for x in ta:
+        if len(x) < 4 or x.isdigit() or x in _GENERIC_LABEL_TOKENS:
+            continue
+        for y in tb:
+            if x != y or len(y) < 4 or y.isdigit() or y in _GENERIC_LABEL_TOKENS:
+                continue
+            strong = (any(ch.isdigit() for ch in x) or len(x) >= 5)
+            if best[0] is None or (strong and not best[1]):
+                best = (x, strong)
+    return best
+
+
 def similarity(name, bases):
     """与「已确认资产」那一层最近的一对有多像 → `{level, near, ratio, distance, same_tld, reason}`。
 
@@ -191,6 +233,7 @@ def similarity(name, bases):
         return {"level": "low", "near": "", "ratio": 0.0, "distance": 0, "same_tld": False,
                 "reason": "形态上不像域名（没有可比的注册域），不参与置信度判断"}
     best = None
+    brand_best = None
     for b in (bases or ()):
         b_root, b_sld, b_tld = _root_parts(b)
         if not b_sld or b_root == root:
@@ -201,6 +244,11 @@ def similarity(name, bases):
         if best is None or key < best["key"]:
             best = {"key": key, "near": b_root, "sld": b_sld, "tld": b_tld,
                     "dist": dist, "ratio": ratio}
+        # 续344：多段主标签按**共享品牌词**补一档（`gz-8cap` ↔ `8cap-fxeye`）。
+        token, strong = _brand_token(sld, b_sld)
+        if token and (brand_best is None or (strong and not brand_best["strong"])):
+            brand_best = {"token": token, "strong": strong, "near": b_root,
+                          "sld": b_sld, "tld": b_tld, "dist": dist, "ratio": ratio}
     if best is None:
         return {"level": "low", "near": "", "ratio": 0.0, "distance": 0, "same_tld": False,
                 "reason": f"没有可比对的已确认资产域名（{root} 找不到"
@@ -221,8 +269,21 @@ def similarity(name, bases):
     else:
         out["level"] = "low"
         out["reason"] = words + f"：判定为低（{'主标签太短' if min(len(sld), len(best['sld'])) < _MIN_LABEL else '差得足够多'}）"
+    # 共享品牌词的补档只**升**不降：`8cap` 这类带数字/足够长的片段比 edit distance 更能
+    # 说明“同一批业务”；纯 4 字母通用词已在上面的白名单里被排除。
+    if brand_best:
+        _bl = "high" if brand_best["strong"] else "medium"
+        if CONF_RANK[_bl] > CONF_RANK.get(out["level"], 0):
+            out.update(level=_bl, near=brand_best["near"],
+                       ratio=round(brand_best["ratio"], 3),
+                       distance=brand_best["dist"], same_tld=(tld == brand_best["tld"]),
+                       brand_token=brand_best["token"])
+            out["reason"] = (f"与已确认资产 {brand_best['near']} 共享品牌词"
+                             f"「{brand_best['token']}」（{sld} ↔ {brand_best['sld']}，"
+                             f"编辑距离 {brand_best['dist']}，相似度 {out['ratio']}）"
+                             f"：判定为{'高' if _bl == 'high' else '中'} —— "
+                             "多段主标签里的品牌片段一致，比整串编辑距离更可靠")
     return out
-
 
 def _seq_ratio(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
@@ -255,6 +316,26 @@ def confidence(name, bases=None, task_id=None):
     out = similarity(n, bases)
     out["owned"] = False
     out["label"] = conf_label(out["level"])
+    return out
+
+
+REDIRECT_SOURCE = "osint:redirect"
+
+
+def apply_redirect_evidence(conf, row):
+    """跳转落点证据（续335）：3xx 落地页**不是**停车/过期页 ⇒ 判高。
+
+    只认 `source=osint:redirect`（probe 阶段写入的唯一产地）；归属行（owned）不动 ——
+    那本来就是自家资产，理由不该被"从别处跳来"覆盖。
+    """
+    src = str((row or {}).get("source") or "").strip()
+    if src != REDIRECT_SOURCE:
+        return conf
+    if (conf or {}).get("owned"):
+        return conf
+    out = dict(conf or {})
+    out.update(level="high", label="高",
+               reason="站点 3xx 跳转落点，落地页已判定不是停车/域名过期页 —— 按跳转目标判高")
     return out
 
 
@@ -494,10 +575,13 @@ def similar_candidates(rows, bases, min_level=CONF_DEFAULT, settings=None, owner
         d = _norm(r.get("domain") if isinstance(r, dict) else r)
         if not d:
             continue
-        conf = apply_cert_evidence(
-            apply_ip_evidence(confidence(d, bases=bases),
-                              r if isinstance(r, dict) else {}, confirmed_ips),
-            r if isinstance(r, dict) else {}, cert_shares)
+        # 续335：跳转落点证据最后叠加（它与 IP/证书佐证独立，判高后不再被降档）
+        conf = apply_redirect_evidence(
+            apply_cert_evidence(
+                apply_ip_evidence(confidence(d, bases=bases),
+                                  r if isinstance(r, dict) else {}, confirmed_ips),
+                r if isinstance(r, dict) else {}, cert_shares),
+            r if isinstance(r, dict) else {})
         why = auto_expand_block(d, settings=settings, owner_id=owner_id,
                                 cdn_label=(r.get("cdn") if isinstance(r, dict) else ""))
         if not why and conf_rank(conf["level"]) >= floor and not conf["owned"]:
@@ -573,6 +657,151 @@ def ext_rows(task_id):
     return [dict(r) for r in db._query(
         "SELECT * FROM subdomains WHERE task_id=? AND " + db.EXT_SUBDOMAIN_WHERE + " ORDER BY id",
         (int(task_id),))]
+
+
+def _host_key(url):
+    """URL / 主机名 → 小写主机名；取不到返回空串。"""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    try:
+        h = urlsplit(raw if "://" in raw else "//" + raw).hostname or ""
+    except ValueError:
+        return ""
+    return h.strip().lower().rstrip(".")
+
+
+def _truthy(v):
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _ip_set(v):
+    """`"1.2.3.4, 5.6.7.8"` → `{"1.2.3.4", "5.6.7.8"}`（同域多 A 记录比交集）。"""
+    return {x for x in re.split(r"[,;\s]+", str(v or "").strip()) if x}
+
+
+def flag_same_app_sites(ctx, sites):
+    """续337：自动送探子任务里，把「根页面内容 + IP 都与主任务根站相同」的站点标成副本。
+
+    只在**自动送探子任务**里生效（`same_app_guard` 由 `_maybe_auto_probe_similar` 写入），
+    只影响 `dirscan/vulnscan`，站点/域名行本身仍保留。判据刻意保守：
+    - 只认状态码 200、有可见正文的根页面；
+    - `page_hash` 完全相同，或 SimHash 近重复；
+    - 候选 IP 与主任务根站 IP **相同**；
+    - 只在同一父任务树（`rescan_of`）内比较。
+    任一条件取不到 ⇒ 不标（宁可多扫，不误杀）。
+    返回标记条数。
+    """
+    opts = getattr(ctx, "options", {}) or {}
+    if not _truthy(opts.get("same_app_guard")):
+        return 0
+    try:
+        parent_id = int(opts.get("rescan_of") or 0)
+    except (TypeError, ValueError):
+        return 0
+    if not parent_id or parent_id == int(getattr(ctx, "task_id", 0) or 0):
+        return 0
+    parent = db.get_task(parent_id)
+    if not parent:
+        return 0
+
+    # 主任务的目标主机（只和这些根站比；不去碰主任务下的普通子域）。
+    try:
+        p_targets = targets.parse_lines(str(parent["targets"] or "").splitlines())
+        p_hosts = set(targets.hosts_of(p_targets))
+    except Exception:          # noqa: BLE001 - 目标形状怪就退场，不误判
+        return 0
+    if not p_hosts:
+        return 0
+    p_hosts |= {"www." + h for h in p_hosts}
+
+    parent_sites = []
+    for row in db.list_sites(parent_id):
+        try:
+            d = dict(row)
+        except (TypeError, ValueError):
+            continue
+        h = _host_key(d.get("url"))
+        if h not in p_hosts:
+            continue
+        try:
+            path = urlsplit(str(d.get("url") or "")).path or "/"
+        except ValueError:
+            path = "/"
+        if path not in ("", "/"):
+            continue
+        if str(d.get("status") or "").strip() != "200" or not d.get("page_hash"):
+            continue
+        parent_sites.append(d)
+    if not parent_sites:
+        return 0
+
+    # 主任务目标 IP（subdomain 阶段已落库；没有就放弃，不额外发 DNS）。
+    parent_ips = {}
+    try:
+        for row in db.list_subdomains(parent_id):
+            d = dict(row)
+            h = str(d.get("domain") or "").strip().lower().rstrip(".")
+            ip = _ip_set(d.get("ip"))
+            if h and ip:
+                parent_ips.setdefault(h, set()).update(ip)
+    except Exception:          # noqa: BLE001
+        pass
+    if not parent_ips:
+        return 0
+
+    # 子任务的目标 + seed（同一次拓展里的域名），不让子域发现结果误入比对。
+    try:
+        allowed = set(targets.hosts_of(ctx.targets or []))
+    except Exception:          # noqa: BLE001
+        allowed = set()
+    for raw in (opts.get("seed_domains") or []):
+        h = _host_key(raw)
+        if h:
+            allowed.add(h)
+    allowed |= {"www." + h for h in allowed}
+
+    child_ips = {}
+    try:
+        for row in db.list_subdomains(int(getattr(ctx, "task_id", 0) or 0)):
+            d = dict(row)
+            h = str(d.get("domain") or "").strip().lower().rstrip(".")
+            ip = _ip_set(d.get("ip"))
+            if h and ip:
+                child_ips.setdefault(h, set()).update(ip)
+    except Exception:          # noqa: BLE001
+        pass
+    fallback_ip = _ip_set(opts.get("same_app_ip"))
+
+    marked = {}
+    for s in sites or []:
+        h = _host_key(s.get("url"))
+        if not h or h not in allowed:
+            continue
+        if str(s.get("status") or "").strip() != "200" or not s.get("page_hash"):
+            continue
+        ips = set(fallback_ip) | set(child_ips.get(h) or ())
+        if not ips:
+            continue
+        for p in parent_sites:
+            p_host = _host_key(p.get("url"))
+            p_ips = (parent_ips.get(p_host)
+                     or parent_ips.get(p_host[4:] if p_host.startswith("www.")
+                                       else "www." + p_host)
+                     or set())
+            if not (p_ips & ips):
+                continue
+            if ml.same_page(s, p):
+                s["same_app_of"] = str(p.get("url") or "")
+                marked[str(s.get("url") or "")] = s["same_app_of"]
+                break
+
+    if marked:
+        db.mark_sites_same_app(ctx.task_id, marked)
+        ctx.logger.info(
+            f"[probe] 同功能根页面：{len(marked)} 个站点与主任务根站页面一致且 IP 相同，"
+            "标为副本；目录/漏洞扫描将跳过（域名与站点仍保留）")
+    return len(marked)
 
 
 def _own_domains(task_id):
@@ -766,7 +995,8 @@ def reverse_writeback(ips, task_id, settings=None, logger=None, bases=None, stop
         bases = task_bases(task_id)
     mapping, stats = iprecon.lookup_many(clean, settings, logger=logger, stop=stop)
     existing = {str(r["domain"] or "") for r in db.list_subdomains(task_id)}
-    pairs, ip_of = [], {}
+    pairs, ip_of, notes = [], {}, {}
+    _prov = stats.get("domain_sources") or {}
     for ip in clean:
         for raw in mapping.get(ip) or []:
             d = iprecon.normalize_domain(raw)
@@ -776,6 +1006,8 @@ def reverse_writeback(ips, task_id, settings=None, logger=None, bases=None, stop
                 out["existing"] += 1
                 continue
             ip_of[d] = ip
+            _srcs = [_s for _s in ((_prov.get(ip) or {}).get(d) or []) if _s]
+            notes[d] = iprecon.domain_note(ip, _srcs)
             pairs.append((d, ip))
     out["domains"] = len(pairs)
     if not pairs:
@@ -802,9 +1034,11 @@ def reverse_writeback(ips, task_id, settings=None, logger=None, bases=None, stop
     own = [(d, ip) for d, ip in own if d in allow]
     ext = [(d, ip) for d, ip in ext if d in allow]
     if own:
-        db.insert_subdomains(task_id, [(d, REVERSE_SOURCE) for d, _ in own])
+        db.insert_subdomains(task_id, [(d, REVERSE_SOURCE, "", notes.get(d, ""))
+                                         for d, _ in own])
     if ext:
-        db.insert_subdomains(task_id, [(d, EXT_REVERSE_SOURCE) for d, _ in ext])
+        db.insert_subdomains(task_id, [(d, EXT_REVERSE_SOURCE, "", notes.get(d, ""))
+                                         for d, _ in ext])
     net = {d: (ip_of.get(d, ""), "", "") for d, _ in own + ext}
     if net:
         db.set_subdomain_net(task_id, net)
@@ -987,4 +1221,23 @@ def process(task_id, settings=None, logger=None, stopped=None):
     """
     resolved = resolve_extended(task_id, settings=settings, logger=logger, stopped=stopped)
     promoted = promote_owned(task_id, settings=settings, logger=logger)
-    return {"resolve": resolved, "promote": promoted}
+    # 续344（主理人点单）：拓展阶段收尾后，把归属域名的子域前缀与随包字典比对；
+    # 字典里没有的追加到动态字典，供本任务及以后的任务爆破。只写归属域名，
+    # 不把第三方/CDN 名字混进字典；失败不影响拓展主流程。
+    dynamic = {"added": [], "skipped": 0, "total": 0, "path": ""}
+    try:
+        from . import subdict
+        _bases344 = promoted.get("bases") or set()
+        # 不能只看 promote 的返回值：它把**已在自身子域表里**的域名排除了，
+        # 而那些恰恰是“拓展阶段看到、但字典里没有”的主要来源。这里按归属重新取全量。
+        _owned344 = [str(r.get("domain") or "") for r in ext_rows(task_id)
+                     if r.get("domain") and is_owned(str(r["domain"]), _bases344)]
+        dynamic = subdict.add_domains(_owned344, settings=settings,
+                                       logger=logger, task_id=task_id, bases=_bases344)
+        if _owned344 and not dynamic["added"] and logger:
+            logger.info(f"[subdomain] 动态字典：归属域名 {len(_owned344)} 个，"
+                        "对应前缀都已在字典中，无新增")
+    except Exception as e:  # noqa: BLE001 - 字典写失败不能拖垮拓展收尾
+        if logger:
+            logger.warning(f"[subdomain] 动态字典写入失败（不影响拓展主流程）：{e}")
+    return {"resolve": resolved, "promote": promoted, "dynamic": dynamic}

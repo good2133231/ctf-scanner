@@ -1,11 +1,14 @@
-"""IP 反查域名 + C 段归纳（P1-4，参考项目 `spider/ip2domain.py` 的启发）。
+"""IP 反查域名 +（历史）C 段归纳（P1-4，参考项目 `spider/ip2domain.py` 的启发）。
 
-用途（发散思维的那一条腿）：CTF 里主目标常常只有一个 IP/域名，但**同一个 C 段**里的
-相邻主机往往属于同一套业务（同机房/同客户/同备案主体），是拿 flag 的常见旁路。
-本模块把已有 IP 反查成域名，并把 IP 归纳成 `/24` C 段，供 `osint` 阶段落库。
+用途（发散思维的那一条腿）：CTF 里主目标常常只有一个域名，域名解析出的**精确 IP** 上
+可能还挂着同一套业务的其他域名，是拿 flag 的常见旁路。本模块把已有 IP 反查成域名；
+`osint._ip_reverse()` 按精确 IP 调用，不展开 `/24`。`group_segments()` 与 C 段归纳只保留
+给历史数据/回归测试，生产新任务不再写入。
 
-**免 key**：默认走公共接口 `https://api.webscan.cc/?action=query&ip={ip}`（可配置替换）。
-公共接口可用性无保障，因此 `iprecon.enabled` **默认关闭**，失败只记日志不影响主流程。
+**免 key**：默认走 `mnemonic, otx, urlscan, hackertarget` 四个免 key 公共接口
+（Mnemonic/OTX/URLScan 不需要注册；HackerTarget 有免费日配额）；webscan/ip138 退备用池。
+公共接口可用性无保障，因此 `iprecon.enabled` **代码默认关闭、随包配置打开**；
+失败只记日志、不重试、不影响主流程；每个 HTTP 源有独立的 10 次失败/100 次跳过熔断。
 
 与参考项目的差异（必须说明，见 TODO.md B-3）：
 - 参考项目用 `eval(text)` 解析响应 —— 那是**危险写法**（响应内容可控即任意代码执行）。
@@ -18,12 +21,17 @@ import ipaddress
 import json
 import re
 import threading
+import time
 
 from .utils import http_last_error, http_request, is_domain, pool_run, to_ascii
 
 DEFAULT_API = "https://api.webscan.cc/?action=query&ip={ip}"
+DEFAULT_MNEMONIC_API = "https://api.mnemonic.no/pdns/v3/{ip}?limit={limit}"
+DEFAULT_URLSCAN_API = "https://urlscan.io/api/v1/search/?q=ip:{ip}&size={limit}"
 # 默认反查源顺序；可在 settings["iprecon"]["sources"] 覆盖（名字须在 _SOURCES 注册）
-DEFAULT_SOURCES = ["otx", "webscan", "hackertarget", "ip138"]
+# 续339：Mnemonic 公共 PDNS 免 key、历史覆盖好；URLScan 免 key 但只覆盖最近 30 天；
+# webscan / ip138 退到备用池（webscan 实测 530、ip138 常 200-空，不再占默认名额）。
+DEFAULT_SOURCES = ["mnemonic", "otx", "urlscan", "hackertarget"]
 
 # 续173：每个源**这一次调用**的 HTTP 状态/失败原因。适配器仍然返回"域名列表"这一份契约
 # （旧调用方一个都不改），状态只作旁路；按线程存放，`reverse_lookup_detail` 在同一个线程里
@@ -43,6 +51,104 @@ def source_last():
     return {"status": int(getattr(_SRC_LOCAL, "status", 0) or 0),
             "reason": str(getattr(_SRC_LOCAL, "reason", "") or ""),
             "found": getattr(_SRC_LOCAL, "found", None)}
+
+
+# ---------- 接口熔断（续339，主理人 2026-11-05 口述规则） ----------
+# 规则：同一个源连续失败 fail_threshold（默认 10）次 → 熔断；之后**跳过** cooldown
+# （默认 100）次调用；第 101 次做半开探测：能用就恢复，继续每次检查；再失败则重新
+# 计数并再次跳过 100 次。跳过本身也计数（不是只按时间），这样「一个接口10次都不能用
+# 100次之内不调用他」在并发/多任务里也是确定的。
+# 状态放进程内存（GUI 队列 worker 与任务同进程；重启后重置是刻意的：重启后重新观察）。
+_BREAKER_LOCK = threading.Lock()
+_BREAKER = {}
+
+
+def _breaker_cfg(settings):
+    cfg = (settings or {}).get("iprecon", {}) or {}
+    try:
+        threshold = max(1, int(cfg.get("breaker_fail_threshold") or 10))
+    except (TypeError, ValueError):
+        threshold = 10
+    try:
+        cooldown = max(1, int(cfg.get("breaker_cooldown") or 100))
+    except (TypeError, ValueError):
+        cooldown = 100
+    return bool(cfg.get("breaker_enabled", True)), threshold, cooldown
+
+
+def reset_breaker(sources=None):
+    """测试/人工排障用：清空熔断状态（传空=全部清空）。"""
+    with _BREAKER_LOCK:
+        if sources is None:
+            _BREAKER.clear()
+        else:
+            for name in sources:
+                _BREAKER.pop(str(name).strip().lower(), None)
+
+
+def breaker_snapshot():
+    """返回源健康快照（只读拷贝；页面/日志/测试用，不返回任何凭据）。"""
+    with _BREAKER_LOCK:
+        return {k: dict(v) for k, v in _BREAKER.items()}
+
+
+def _breaker_allow(name, settings):
+    """调用前检查：`(是否允许, 跳过原因)`；打开状态会消耗一次 cooldown 名额。"""
+    key = str(name).strip().lower()
+    if key in DNS_SOURCES:
+        return True, ""
+    enabled, _threshold, cooldown = _breaker_cfg(settings)
+    if not enabled:
+        return True, ""
+    with _BREAKER_LOCK:
+        st = _BREAKER.setdefault(key, {
+            "failures": 0, "open": False, "skipped": 0, "half_open": False,
+            "last_reason": "", "opened_at": 0.0})
+        if not st["open"]:
+            return True, ""
+        if int(st["skipped"]) < cooldown:
+            st["skipped"] = int(st["skipped"]) + 1
+            return False, f"熔断中，跳过 {st['skipped']}/{cooldown} 次"
+        st["half_open"] = True
+        return True, "半开探测"
+
+
+def _breaker_record(name, ok, settings, logger=None, reason=""):
+    """记录一次真实调用结果；连续失败到阈值则打开，半开成功则关闭。"""
+    key = str(name).strip().lower()
+    if key in DNS_SOURCES:
+        return
+    enabled, threshold, cooldown = _breaker_cfg(settings)
+    if not enabled:
+        return
+    with _BREAKER_LOCK:
+        st = _BREAKER.setdefault(key, {
+            "failures": 0, "open": False, "skipped": 0, "half_open": False,
+            "last_reason": "", "opened_at": 0.0})
+        if ok:
+            was_open = bool(st.get("open"))
+            st.update(failures=0, open=False, skipped=0, half_open=False,
+                      last_reason="")
+            _msg = None
+            if was_open:
+                _msg = f"[iprecon] 源 {key} 半开探测成功，已恢复；之后每次调用继续检查"
+        elif st.get("open") and st.get("half_open"):
+            st.update(half_open=False, skipped=0,
+                      last_reason=str(reason or "半开探测失败")[:200])
+            _msg = (f"[iprecon] 源 {key} 半开探测仍失败（{reason or '无原因'}），"
+                    f"重新熔断，再跳过 {cooldown} 次")
+        else:
+            st["failures"] = int(st.get("failures") or 0) + 1
+            st["last_reason"] = str(reason or "")[:200]
+            _msg = None
+            if st["failures"] >= threshold:
+                st.update(open=True, skipped=0, half_open=False,
+                          opened_at=time.time())
+                _msg = (f"[iprecon] 源 {key} 连续失败 {st['failures']} 次"
+                        f"（{reason or '无原因'}），熔断；接下来跳过 {cooldown} 次调用，"
+                        f"第 {cooldown + 1} 次再探活")
+    if _msg and logger:
+        (logger.warning if st.get("open") else logger.info)(_msg)
 
 
 def is_public_ip(ip):
@@ -357,6 +463,108 @@ def _reverse_otx(ip, settings, logger=None, timeout=None, raw=False):
     return out
 
 
+def _reverse_mnemonic(ip, settings, logger=None, timeout=None, raw=False):
+    """Mnemonic 公共 Passive DNS（免 key，历史覆盖好；续339 实测一个 IP 回 35 条）。
+
+    响应形态：`{"responseCode":200,"data":[{"query":"www.example.com","answer":"1.2.3.4"},...]}`。
+    只取 `query`，交给 `_html_domains` 统一去噪；不做 eval。`raw=True` 为预检模式。
+    """
+    cfg = (settings or {}).get("iprecon", {}) or {}
+    api = str(cfg.get("api_mnemonic") or DEFAULT_MNEMONIC_API)
+    try:
+        limit = max(1, min(int(cfg.get("mnemonic_limit") or 100), 1000))
+    except (TypeError, ValueError):
+        limit = 100
+    url = api.replace("{ip}", ip).replace("{limit}", str(limit))
+    if "{ip}" not in api and "{limit}" not in api:
+        url = f"{api}{ip}"
+    _src_mark(0, "")
+    try:
+        resp = http_request(url, timeout=timeout or 20, settings=settings)
+    except Exception as e:  # 网络层异常不该影响流水线
+        _src_mark(0, http_last_error() or type(e).__name__)
+        if logger:
+            logger.debug(f"[iprecon] {ip} mnemonic 反查异常：{e}")
+        return {"status": 0} if raw else []
+    status = int((resp or {}).get("status") or 0)
+    _src_mark(status, "" if status == 200 else (f"HTTP {status}" if status else "不可达"))
+    if raw:
+        return resp or {"status": 0}
+    if not resp or status != 200:
+        return []
+    try:
+        data = json.loads(resp.get("text") or "{}")
+    except (ValueError, TypeError):
+        _src_mark(200, "响应不是合法 JSON", 0)
+        return []
+    try:
+        _code = int(data.get("responseCode") or 200)
+    except (TypeError, ValueError):
+        _code = 200
+    if _code != 200:
+        _src_mark(200, f"API responseCode {_code}", 0)
+        return []
+    names = [str(item.get("query") or "") for item in (data.get("data") or [])
+             if isinstance(item, dict)]
+    out = _html_domains("\n".join(names))
+    _src_mark(200, "", len(out))
+    return out
+
+
+def _reverse_urlscan(ip, settings, logger=None, timeout=None, raw=False):
+    """urlscan.io 搜索（免 key；只覆盖最近 30 天，作为补充源，续339）。
+
+    只认 `page.ip == 目标 IP` 的记录；返回 `page.domain` / `task.domain`，统一去噪。
+    搜索接口无 key 也能用；命中少/为空不视为接口故障。
+    """
+    cfg = (settings or {}).get("iprecon", {}) or {}
+    api = str(cfg.get("api_urlscan") or DEFAULT_URLSCAN_API)
+    try:
+        limit = max(1, min(int(cfg.get("urlscan_limit") or 100), 100))
+    except (TypeError, ValueError):
+        limit = 100
+    url = api.replace("{ip}", ip).replace("{limit}", str(limit))
+    if "{ip}" not in api and "{limit}" not in api:
+        url = f"{api}{ip}"
+    _src_mark(0, "")
+    try:
+        resp = http_request(url, timeout=timeout or 20, settings=settings)
+    except Exception as e:
+        _src_mark(0, http_last_error() or type(e).__name__)
+        if logger:
+            logger.debug(f"[iprecon] {ip} urlscan 反查异常：{e}")
+        return {"status": 0} if raw else []
+    status = int((resp or {}).get("status") or 0)
+    _src_mark(status, "" if status == 200 else (f"HTTP {status}" if status else "不可达"))
+    if raw:
+        return resp or {"status": 0}
+    if not resp or status != 200:
+        return []
+    try:
+        data = json.loads(resp.get("text") or "{}")
+    except (ValueError, TypeError):
+        _src_mark(200, "响应不是合法 JSON", 0)
+        return []
+    names = []
+    for item in (data.get("results") or []):
+        if not isinstance(item, dict):
+            continue
+        page = item.get("page") or {}
+        if not isinstance(page, dict):
+            page = {}
+        # 搜索 ip: 可能命中「页面里的请求」，只收真正落在这个 IP 的页面。
+        if str(page.get("ip") or "").strip() and str(page.get("ip")).strip() != ip:
+            continue
+        names.append(str(page.get("domain") or ""))
+        task = item.get("task") or {}
+        if isinstance(task, dict):
+            names.append(str(task.get("domain") or ""))
+    # urlscan 的扫描页大量是 Cloudflare Workers 临时子域（*.workers.dev），不是目标资产。
+    out = _html_domains("\n".join(names), exclude=("workers.dev",))
+    _src_mark(200, "", len(out))
+    return out
+
+
 def _html_domains(text, exclude=()):
     """从 HTML 里抽"看着像域名"的串（备用源共用；脏数据一律 normalize 后丢弃，绝不 eval）。"""
     out, seen = [], set()
@@ -503,25 +711,32 @@ _SOURCES = {
     # 续319：被动 DNS 两源（OTX 免 key、VT 需 key）
     "otx": _reverse_otx,
     "virustotal": _reverse_virustotal,
+    # 续339：免 key 的两个补充源
+    "mnemonic": _reverse_mnemonic,
+    "urlscan": _reverse_urlscan,
 }
-# 原生源（不依赖任何第三方 HTTP 接口）：**不参与**接口存活预检，恒可用
+# 原生源（不依赖任何第三方 HTTP 接口）：**不参与**接口存活预检与熔断，恒可用
 DNS_SOURCES = {"ptr"}
 # 默认源全部预检失败时的备用池（原生 PTR 排第一 —— 接口全挂时它还在）
-DEFAULT_FALLBACK = ["ptr", "dnsdblookup", "otx", "rapiddns", "viewdns"]
+DEFAULT_FALLBACK = ["ptr", "dnsdblookup", "rapiddns", "viewdns", "webscan", "ip138"]
 
 
 def preflight(sources, settings, logger=None, timeout=None, probe_ip=""):
-    """开跑前**先探一次**每个源还活不活（续184；用户 2026-10-14：「开始之前就要看接口存活状态」）。
+    """开跑前先探一次每个源；续339 起交给熔断器决定「跳过」还是「继续观察」。
 
-    返回 `(可用源名单, {源: 不可用原因})`：HTTP 源对 `probe_ip` 发**一次**请求，拿到 200
-    即存活（空结果也算活 —— 接口通、只是这个 IP 没记录）；非 200 / 异常 ⇒ **整轮跳过**该源，
-    不再让它对每个 IP 各打一条 DEBUG（实测 500 个 IP 全白跑一遍就是这个症状）。
-    原生源（`DNS_SOURCES`）不发 HTTP，恒可用。没有探活 IP 时原样返回，不做无意义探测。
+    返回 `(可用源名单, {源: 不可用原因})`：
+    - 熔断打开且未到探测点 ⇒ 原因写「熔断中」，本轮跳过；
+    - 熔断关闭 / 半开探测 ⇒ 探一次；成功算活；
+    - 失败但还没到连续失败阈值 ⇒ **仍返回可用**，让后续每个 IP 真实调用继续累计，
+      到 10 次才熔断（主理人 2026-11-05 的「10 次都不能用再停 100 次」）；
+    - 原生源（`DNS_SOURCES`）不发 HTTP、不参与熔断，恒可用。
+    关闭熔断（`breaker_enabled=false`）时保持旧行为：一次预检失败就整轮跳过。
     """
     cfg = (settings or {}).get("iprecon", {}) or {}
     srcs = [str(s).strip().lower() for s in (sources or DEFAULT_SOURCES)]
     if not cfg.get("preflight", True) or not probe_ip:
         return srcs, {}
+    _breaker_on, _threshold, _cooldown = _breaker_cfg(settings)
     ok, report = [], {}
     for n in srcs:
         adapter = _SOURCES.get(n)
@@ -531,16 +746,36 @@ def preflight(sources, settings, logger=None, timeout=None, probe_ip=""):
         if n in DNS_SOURCES:
             ok.append(n)
             continue
+        allow, why = _breaker_allow(n, settings)
+        if not allow:
+            report[n] = why
+            continue
+        _status = 0
         try:
             resp = adapter(probe_ip, settings, logger=None, timeout=timeout, raw=True)
-            status = int((resp or {}).get("status") or 0)
+            _status = int((resp or {}).get("status") or 0)
         except Exception as e:
-            report[n] = f"异常 {type(e).__name__}"
-            continue
-        if status == 200:
+            _src_mark(0, type(e).__name__)
+            if logger:
+                logger.debug(f"[iprecon] 预检源 {n} 异常：{e}")
+        _last = source_last()
+        _healthy = _status == 200 and not str(_last.get("reason") or "").strip()
+        _breaker_record(n, _healthy, settings, logger=logger,
+                        reason=_last.get("reason") or (f"HTTP {_status}" if _status else "不可达"))
+        _st = (breaker_snapshot().get(n) or {})
+        if _st.get("open"):
+            report[n] = (f"HTTP {_status}" if _status else "不可达") + "；熔断中"
+        elif _status == 200:
             ok.append(n)
+        elif _breaker_on:
+            # 还没到阈值：不整轮丢弃，后续每个 IP 的真实调用继续累计失败次数。
+            ok.append(n)
+            if logger:
+                logger.warning(
+                    f"[iprecon] 预检源 {n} 返回 {_status or '不可达'}，连续失败 "
+                    f"{_st.get('failures', 1)}/{_threshold}，继续观察（未到熔断阈值）")
         else:
-            report[n] = f"HTTP {status}" if status else "不可达"
+            report[n] = f"HTTP {_status}" if _status else "不可达"
     return ok, report
 
 
@@ -559,12 +794,35 @@ def _classify_source(domains, last):
     return "empty" if reason else "error"
 
 
+def domain_note(ip, sources, original=0, cap=0):
+    """反查域名的备注：历史依据 IP + 实际返回它的接口（单一产地）。
+
+    页面上的「解析 IP」是当前 DNS，和这里的 ``ip=``（第三方历史索引）本来就可能不同；
+    备注写「历史解析」和接口名，避免把反查源当成当前解析结果。
+    """
+    srcs = []
+    for s in (sources or []):
+        s = str(s or "").strip()
+        if s and s not in srcs:
+            srcs.append(s)
+    note = f'ip="{ip}" · 历史解析 · 来源={"/".join(srcs) or "未知"} · 待确认'
+    try:
+        original, cap = int(original or 0), int(cap or 0)
+    except (TypeError, ValueError):
+        original, cap = 0, 0
+    if cap > 0 and original > cap:
+        note += f" · 共享IP已截断（{original}→{cap}）"
+    return note
+
+
 def reverse_lookup_detail(ip, settings, logger=None, timeout=None, sources=None):
     """单个 IP 反查域名，返回 `(域名列表, 逐源结果)`（续173）。
 
     域名列表与旧 `reverse_lookup` **同一口径**：依次试 `sources`、各源 union、全空返回 []。
-    逐源结果是旁路，形状 `[{name, status, http, found, reason}]`：
-    `status` ∈ `ok` / `empty` / `http_error` / `network_error` / `unregistered`。
+    逐源结果是旁路，形状 `[{name, status, http, found, reason, domains}]`：
+    `domains` 是该源这次真正返回的域名（用于溯源“这个域名是谁查出来的”）。
+    `status` ∈ `ok` / `empty` / `http_error` / `network_error` / `unregistered` / `skipped`
+    （`skipped` = 该源正在熔断，本次没发请求）。
     这样"主源被挡 / 备源压根没试 / 三路都空"在页面上分得开，不再只有一句"反查失败"。
     """
     cfg = (settings or {}).get("iprecon", {}) or {}
@@ -581,7 +839,13 @@ def reverse_lookup_detail(ip, settings, logger=None, timeout=None, sources=None)
             if logger:
                 logger.debug(f"[iprecon] {ip} 未知反查源：{name}")
             detail.append({"name": key or str(name), "status": "unregistered",
-                           "http": 0, "found": 0, "reason": "未注册的源名"})
+                           "http": 0, "found": 0, "reason": "未注册的源名",
+                           "domains": []})
+            continue
+        allow, why = _breaker_allow(key, settings)
+        if not allow:
+            detail.append({"name": key, "status": "skipped", "http": 0, "found": 0,
+                           "reason": why, "domains": []})
             continue
         _src_mark(0, "")
         try:
@@ -592,9 +856,17 @@ def reverse_lookup_detail(ip, settings, logger=None, timeout=None, sources=None)
                 logger.debug(f"[iprecon] {ip} 源 {name} 反查异常：{e}")
             doms = []
         last = source_last()
+        # 200-空且没有错误原因 = 接口通、这个 IP 没记录；算健康。
+        # 200 + 「配额耗尽/响应不是 JSON」等 reason = 接口活着但不可用；算失败。
+        _healthy = bool(doms) or (int(last["status"] or 0) == 200
+                                  and not str(last["reason"] or "").strip())
+        _breaker_record(key, _healthy, settings, logger=logger,
+                        reason=last["reason"] or (f"HTTP {last['status']}"
+                                                  if last["status"] else "不可达"))
         detail.append({"name": key, "status": _classify_source(doms, last),
                        "http": last["status"], "found": len(doms or []),
-                       "reason": last["reason"]})
+                       "reason": last["reason"],
+                       "domains": list(doms or [])})
         if doms:
             got = True
             merged.update(doms)
@@ -620,11 +892,13 @@ def format_source_stats(stats):
     for name, s in sorted((stats or {}).items()):
         if not isinstance(s, dict):
             continue
-        if s.get("skipped"):
-            parts.append(f"{name} 未试（{s.get('reason') or '预检失败'}）")
+        if s.get("skipped") and not s.get("attempted"):
+            parts.append(f"{name} 未试（{s.get('reason') or '预检/熔断跳过'}）")
             continue
         bits = [f"试{s.get('attempted', 0)}", f"成{s.get('ok', 0)}",
                 f"空{s.get('empty', 0)}", f"错{s.get('error', 0)}"]
+        if s.get("skipped"):
+            bits.append(f"熔断跳过{s.get('skipped')}")
         codes = s.get("http") or {}
         if codes:
             bits.append("HTTP " + "/".join(f"{k}×{v}" for k, v in sorted(codes.items())))
@@ -691,8 +965,12 @@ def lookup_many(ips, settings, logger=None, stop=None):
     mapping = {}
     _tried = set(_ok)          # 这一轮真试过的源（含预检全灭后接班的备用源）
 
+    # 续341：域名 → 实际返回它的源列表；页面用这个字段在 note 里标“来源=mnemonic/otx”，
+    # 而不是只给一句笼统的“第三方接口”。
+    domain_sources = {}
+
     def _absorb(items):
-        """把一批 `(ip, doms, rows)` 并进 mapping / src_stats（首批与追加批共用）。"""
+        """把一批 `(ip, doms, rows)` 并进 mapping / src_stats / domain_sources。"""
         for item in items or []:
             if not item:
                 continue
@@ -707,14 +985,22 @@ def lookup_many(ips, settings, logger=None, stop=None):
                 s = src_stats.setdefault(name, {"skipped": 0, "attempted": 0, "ok": 0,
                                                  "empty": 0, "error": 0, "domains": 0,
                                                  "http": {}, "reasons": {}})
-                s["attempted"] = int(s.get("attempted", 0)) + 1
                 status = row.get("status")
+                if status == "skipped":
+                    s["skipped"] = int(s.get("skipped", 0)) + 1
+                    s["reason"] = str(row.get("reason") or "熔断跳过")
+                    continue
+                s["attempted"] = int(s.get("attempted", 0)) + 1
                 if status == "ok":
                     s["ok"] = int(s.get("ok", 0)) + 1
                 elif status == "empty":
                     s["empty"] = int(s.get("empty", 0)) + 1
                 else:
                     s["error"] = int(s.get("error", 0)) + 1
+                for _d in (row.get("domains") or []):
+                    _bucket = domain_sources.setdefault(ip, {}).setdefault(_d, [])
+                    if name not in _bucket:
+                        _bucket.append(name)
                 s["domains"] = int(s.get("domains", 0)) + int(row.get("found") or 0)
                 code = int(row.get("http") or 0)
                 if code:
@@ -757,6 +1043,11 @@ def lookup_many(ips, settings, logger=None, stop=None):
                 _absorb(pool_run(lambda ip: _one(ip, _ok2), candidates, workers=workers,
                                  logger=logger, label="ip 反查备用源"))
     stats["sources"] = src_stats
+    stats["domain_sources"] = {
+        _ip: {_d: sorted(_srcs) for _d, _srcs in _doms.items()}
+        for _ip, _doms in domain_sources.items()
+    }
+    stats["breaker"] = breaker_snapshot()
     stats["hit_ips"] = len(mapping)
     stats["domains"] = sum(len(v) for v in mapping.values())
     return mapping, stats

@@ -1,11 +1,14 @@
-"""阶段：外部情报拓展（C 段反查 + favicon 反查 + 证书反查 + 标题反查 + CT 日志）。
+"""阶段：外部情报拓展（IP 反查 + favicon 反查 + 证书反查 + 标题反查 + CT 日志）。
 
 位置：probe 之后、jsmine 之前 —— 输入是"存活站点 + 已解析 IP"，产出是**新域名**，
 越早入账，后面的 dirscan / vulnscan 覆盖越广。
 
 子能力各自独立开关，**默认全部关闭**（都依赖第三方公共接口，可用性不由我们掌控）：
-- `iprecon.enabled`：把已知 IP（目标 IP + 站点解析 IP + 子域名 A 记录）反查成域名，
-  并把 IP 归纳成 `/24` 段落 `csegs` 表（任务详情「C 段」页签）；
+- `iprecon.enabled`：两路精确 IP 反查 —— `from_targets` 用目标/子域名/站点解析出的
+  真实 IP 直接反查；`from_favicon` 只处理 favicon 命中的裸 IP（先探活，再 IP→域名）。
+  **C 段反查已停用**（续336：同段/共享 IP 很容易把别人的资产收进来）；续338 起
+  `run()` 只调用不写 C 段表的 `_ip_reverse()`，不调用 `_c_segments()`；历史 `csegs`
+  仍可在任务详情「C 段」页签查看；
 - `fofa.enabled`：取站点 favicon 的 mmh3 去 FOFA 反查**同源资产**
   （命中数超过 `fofa.black_ico_threshold` 即判为"黑 ico"，放弃拓展）；
 - `fofa.cert_enabled`：按 `cert="<注册域>"` 反查**共用同一张 TLS 证书**的域名，
@@ -20,9 +23,10 @@
 - `ctlog.enabled`：查 crt.sh 的**证书透明度日志**（`scanner/ctlog.py`），产出证书维度记录
   （写进 `certs` 表，source='ct'）并把它覆盖的域名当作拓展域名来源。
 
-产出的域名来源分别是 `osint:cseg` / `osint:fofa` / `osint:fofa-cert` / `osint:fofa-title` /
-`osint:iprecon`（favicon 命中的裸 IP：先探活，再「免费源 + FOFA ip=」反查，标历史/待确认） /
+产出的域名来源分别是 `osint:fofa` / `osint:fofa-cert` / `osint:fofa-title` /
+`osint:reverse`（精确 IP 反查）/ `osint:iprecon`（favicon 命中裸 IP） /
 `osint:shodan` / `osint:quake` / `osint:vt` / `osint:ctlog`，都归「拓展域名」页。
+历史 `osint:cseg` 是已停用的旧 C 段标签，底层同样是精确 IP 反查；新任务不再产生该来源。
 全部子能力都关时整个阶段直接跳过 —— 一次请求都不发（与低危检查的处理方式一致）。
 
 **收口不变量**：所有外部来源产出的域名一律经 `_domain_of()` 过滤，
@@ -58,7 +62,7 @@ _TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 class OsintStage(Stage):
     name = "osint"
-    description = "外部情报拓展（C 段反查域名 / favicon 反查同源资产 / 证书反查）"
+    description = "外部情报拓展（精确 IP 反查 / favicon 反查同源资产 / 证书反查）"
 
     def _mark_icon(self, url, status):
         """记录一份图标的拓展结论（续225）：expanded > black > empty（多平台取最有信息量的）。
@@ -159,7 +163,6 @@ class OsintStage(Stage):
     def run(self):
         ctx = self.ctx
         self._icon_status = {}
-        do_ip = (ctx.settings.get("iprecon", {}) or {}).get("enabled") is True
         fofa_cfg = ctx.settings.get("fofa", {}) or {}
         do_fofa = fofa_cfg.get("enabled") is True
         do_cert = do_fofa and fofa_cfg.get("cert_enabled") is not False
@@ -172,6 +175,17 @@ class OsintStage(Stage):
         # 自己的 `min_interval` 节流 + 429 如实停来兑现（塞进 preflight 只会得到假数字）。
         do_vt = (ctx.settings.get("virustotal", {}) or {}).get("enabled") is True
         do_ctlog = ctlog_mod.enabled(ctx.settings)
+        # 续334（urlfinder 式）：Wayback 被动 URL 源 —— 查第三方历史索引，不碰目标站。
+        # 零目标请求（CDX 是第三方），离线任务跳过；产出 source=`osint:wayback`。
+        _pcfg334 = ctx.settings.get("passive_urls", {}) or {}
+        do_passive = (_pcfg334.get("enabled") is not False
+                      and not ctx.options.get("offline"))
+        # 续338（主理人 2026-11-05）：不要 C 段，只要**目标真实 IP 的 IP 反查**。
+        # 反查单位是精确 IP，不展开 /24；结果仍进拓展域名，供索引与后续高置信送探。
+        _ipcfg338 = ctx.settings.get("iprecon", {}) or {}
+        do_iprecon = (_ipcfg338.get("enabled") is True
+                      and _ipcfg338.get("from_targets") is not False
+                      and not ctx.options.get("offline"))
         # 续211-P1-4：外部引擎**配额预检**（三家按 key 计费/限流）。额度耗尽时的现状是
         # 逐条请求失败、日志刷一片归因错的失败原因（用户看到"工具坏了"，事实是"额度用完了"）。
         # 口径照 `iprecon.preflight`：**跳过必须点名**；查不到额度的一律放行
@@ -190,7 +204,8 @@ class OsintStage(Stage):
         # 续205：备案反查有**自己的**开关（icp.enabled）—— 它用的是另一套接口、另一份配额，
         # 与"外部情报拓展"那批不是一回事。默认全关时整段跳过、零请求。
         do_icp = (ctx.settings.get("icp", {}) or {}).get("enabled") is True
-        if not (do_ip or do_fofa or do_shodan or do_quake or do_vt or do_ctlog or do_icp):
+        if not (do_fofa or do_shodan or do_quake or do_vt or do_ctlog
+                or do_icp or do_passive or do_iprecon):
             ctx.logger.info("[osint] 未启用（策略配置 → 外部情报拓展 可打开），跳过")
             return
         if ctx.stopped():
@@ -210,8 +225,14 @@ class OsintStage(Stage):
                         (ctx.task_id,))]
             except Exception as _e205:            # noqa: BLE001 —— 情报阶段不许把任务带崩
                 ctx.logger.warning(f"[osint] 备案反查失败（不影响其余情报）：{_e205}")
-        if do_ip:
-            found += self._c_segments()
+        # 续336/338（主理人点单）：C 段反查停用；只保留**精确 IP 反查**。
+        # `_c_segments()` 仍不调用（它写 C 段表、按 /24 归档，已判为噪声源），
+        # 新增的 `_ip_reverse()` 只拿目标/资产解析出的真实 IP 去反查域名。
+        if do_iprecon and not ctx.stopped():
+            try:
+                found += self._ip_reverse()
+            except Exception as _e338:          # noqa: BLE001 - 情报阶段不许把任务带崩
+                ctx.logger.warning(f"[osint] IP 反查失败（不影响其余情报）：{_e338}")
         if do_fofa and not ctx.stopped():
             found += self._fofa_assets()
         if do_cert and not ctx.stopped():
@@ -227,6 +248,9 @@ class OsintStage(Stage):
 
         if do_ctlog and not ctx.stopped():
             found += self._ctlog()
+
+        if do_passive and not ctx.stopped():
+            found += self._passive_hosts()
 
         if ctx.stopped():
             ctx.logger.warning("[osint] 任务已请求停止，结果不再入账")
@@ -273,10 +297,115 @@ class OsintStage(Stage):
         ctx.logger.info(f"[osint] 新增域名资产 {len(new)} 个"
                         + (f"（{' / '.join(f'{s}:{n}' for s, n in _tally(new))}）" if new else ""))
 
-    # ---------- C 段反查 ----------
+    def _passive_hosts(self):
+        """Wayback 历史 URL → 主机名（urlfinder 式：每条根域一次 CDX，最多 max_roots 个）。"""
+        ctx = self.ctx
+        cfg = ctx.settings.get("passive_urls", {}) or {}
+        try:
+            roots = targets.roots_of(ctx.targets)[:max(0, int(cfg.get("max_roots", 10) or 0))]
+        except Exception:       # noqa: BLE001 - 目标形态异常时安静跳过
+            return []
+        if not roots:
+            return []
+        from concurrent.futures import ThreadPoolExecutor
+        from .. import passive_urls as _pu334
+
+        def _one(root):
+            try:
+                return root, _pu334.collect(root, ctx.settings, logger=ctx.logger)
+            except Exception as _e:      # noqa: BLE001 - 单根域失败不影响其它
+                ctx.logger.warning(f"[osint] 被动 URL 源失败（{root}）：{_e}")
+                return root, {}
+
+        with ThreadPoolExecutor(max_workers=min(5, len(roots))) as tp:
+            results = list(tp.map(_one, roots))
+        out, seen = [], set()
+        for root, hosts in results:
+            for host, _url in (hosts or {}).items():
+                if host in seen:
+                    continue
+                seen.add(host)
+                out.append((host, "osint:wayback", f"wayback *.{root}"))
+        ctx.logger.info(f"[osint] Wayback 被动 URL：{len(roots)} 个根域 → {len(out)} 个主机")
+        return out
+
+    # ---------- IP 反查（精确 IP；C 段仅历史） ----------
+
+    def _ip_reverse(self):
+        """按目标/资产的**真实 IP** 做 IP→域名反查；不做 /24 展开、不写 C 段表。
+
+        这是主理人 2026-11-05 明确要保留的「IP 反查」：
+        - 输入是目标/子域名/站点解析出的**精确 IP**；
+        - 走 `iprecon.lookup_many` 的第三方反查源（webscan / hackertarget / ip138 / ...）；
+        - 结果进拓展域名，source=`osint:reverse`，note 带 `ip="x"` 与「待确认」；
+        - 不再调用 `group_segments()`，也不写 `csegs` —— C 段只是旧的展示口径，不是反查单位。
+        """
+        ctx = self.ctx
+        cfg = ctx.settings.get("iprecon", {}) or {}
+        if cfg.get("enabled") is not True:
+            ctx.logger.info("[osint] IP 反查关闭（iprecon.enabled 未开）")
+            return []
+        if cfg.get("from_targets") is False:
+            ctx.logger.info("[osint] 目标 IP 反查关闭（iprecon.from_targets=false）")
+            return []
+        if (ctx.options or {}).get("offline"):
+            ctx.logger.info("[osint] 离线任务跳过 IP 反查")
+            return []
+
+        ips = self._collect_ips()
+        if not ips:
+            ctx.logger.info("[osint] 没有可用于 IP 反查的 IP")
+            return []
+        public = [ip for ip in ips if iprecon.is_public_ip(ip)]
+        cap_ips = int(cfg.get("max_ips", 500))
+        if len(public) > cap_ips:
+            ctx.logger.info(f"[osint] 公开 IP {len(public)} 个超过上限 {cap_ips}，"
+                            f"仅反查前 {cap_ips} 个")
+            public = public[:cap_ips]
+        ctx.logger.info(f"[osint] IP 反查：公开 IP {len(public)}/{len(ips)} 个"
+                        "（私有地址已跳过，不做 /24 展开）…")
+        if not public:
+            return []
+
+        mapping, stats = iprecon.lookup_many(public, ctx.settings,
+                                             logger=ctx.logger, stop=ctx.stopped)
+        if ctx.stopped():
+            return []
+
+        src_stats = stats.get("sources") or {}
+        if src_stats:
+            ctx.logger.info("[osint] IP 反查源：" + iprecon.format_source_stats(src_stats))
+            try:
+                (ctx.workdir / "iprecon_sources.json").write_text(
+                    json.dumps(src_stats, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OSError as e:
+                ctx.logger.warning(f"[osint] IP 反查源成败落档失败（不影响扫描）：{e}")
+
+        cap = max(1, int(cfg.get("max_domains_per_ip", 100)))
+        found, shared, truncated = [], 0, 0
+        # 续341：逐域名标出实际返回它的接口，不再让用户只看到笼统的“第三方接口”。
+        _prov = stats.get("domain_sources") or {}
+        for ip, doms in mapping.items():
+            _original = len(doms)
+            if _original > cap:
+                # 精确 IP 上挂得太多 → 共享主机/CDN。这里不再整段丢弃（整段丢会让
+                # 「IP 反查」在共享 IP 上直接变成 0 条），而是截断并显著标注；
+                # 自动送探仍受高置信阈值约束，低相似域名不会因为入库就被深扫。
+                shared += 1
+                truncated += _original - cap
+                doms = doms[:cap]
+            for d in doms:
+                _srcs = [_s for _s in ((_prov.get(ip) or {}).get(d) or []) if _s]
+                _note = iprecon.domain_note(ip, _srcs, _original, cap)
+                found.append((d, extdom.EXT_REVERSE_SOURCE, _note))
+        uniq = len({d for d, _s, _n in found})
+        ctx.logger.info(f"[osint] IP 反查 → 域名 {uniq} 个 / 命中 IP {stats['hit_ips']} 个"
+                        + (f"；{shared} 个 IP 命中过多（>{cap}）标为共享并截断"
+                           f"（少收 {truncated} 个）" if shared else ""))
+        return found
 
     def _collect_ips(self):
-        """汇总待反查的 IP：目标里的 IP 先直接用，其余主机名做一次解析。"""
+        """汇总待反查的 IP：目标 IP 直接用，其余主机名解析。"""
         ctx = self.ctx
         cfg = ctx.settings.get("iprecon", {}) or {}
         ips, hosts = set(), []
@@ -288,7 +417,13 @@ class OsintStage(Stage):
             if host:
                 hosts.append(host)
         for r in db.list_subdomains(ctx.task_id):
-            hosts.append(r["domain"])
+            # 已知 IP 直接用：目标域现在解析不了、但任务里已经解析过的资产
+            # （例如 www 子域）仍然是有效的 IP 反查入口，别再靠一次失败 DNS 丢掉。
+            _known = [x for x in re.split(r"[,;\s]+", str(r["ip"] or "").strip()) if x]
+            if _known:
+                ips.update(_known)
+            else:
+                hosts.append(r["domain"])
         for r in db.list_sites(ctx.task_id):
             hosts.append(r["host"] or "")
         hosts = [h for h in dict.fromkeys(hosts) if h]
@@ -310,6 +445,7 @@ class OsintStage(Stage):
         return sorted(ips)
 
     def _c_segments(self):
+        """LEGACY（续336 生产停用）：只保留给历史数据/回归测试，`run()` 不再调用。"""
         ctx = self.ctx
         cfg = ctx.settings.get("iprecon", {}) or {}
         ips = self._collect_ips()

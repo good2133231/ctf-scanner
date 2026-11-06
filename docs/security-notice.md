@@ -23,8 +23,11 @@ CTFScanner 只允许用于以下场景：
 - **外部情报拓展（`osint` 阶段）会向第三方披露目标信息 —— 两档默认值不一样，别只看一句“默认关”**：
   `fofa` / `iprecon` / `ctlog` 三段是**代码默认关、随包 `settings.yaml` 开**（生效＝开），
   `shodan` / `quake` 两处都关。也就是说：干净克隆按代码默认值＝一个第三方请求都不发；
-  用随包配置＝ C 段反查把目标 IP 提交给 `api.webscan.cc`、favicon 反查把 favicon 的 mmh3 哈希
-  提交给 FOFA。前者会让第三方知道你正在关注哪些 IP，后者会消耗你的 FOFA 配额。
+  用随包配置＝精确 IP 反查把目标/子域解析出的 IP 提交给 `api.mnemonic.no`、AlienVault OTX、
+  urlscan.io、HackerTarget（以及备用池里的 webscan/rapiddns/viewdns/ip138 等）反查源、
+  favicon 反查把 favicon 的 mmh3 哈希提交给 FOFA。前者会让第三方知道你正在关注哪些 IP，
+  后者会消耗你的 FOFA 配额；C 段 `/24` 展开已停用。Mnemonic / OTX / URLScan 免 key，
+  HackerTarget 有免费日配额；不想披露时把 `iprecon.enabled` 关掉。
   **对敏感项目请保持关闭**；如需启用，请自行评估第三方服务的隐私政策与自身授权范围。
   （续280 补记：本节原文只写“默认全关”，与随包配置不符 —— 全项目统一按两档说。）
 - **漏洞情报订阅（`intel` 阶段）代码默认关、随包开，方向与上面相反**：它是**单向下行**——从 CISA 拉公开的

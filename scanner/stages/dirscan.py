@@ -185,6 +185,9 @@ _FW_LAYERS = ("fw", "exposure")
 # `_SHALLOW_LAYERS` 专给"浅扫"（mode=quick）用：**只吃精选敏感路径字典**，
 # 不碰框架/语言/通用层，也不跑 dirmap —— 浅扫的意义就是"快而少"。
 _SHALLOW_LAYERS = ("shallow",)
+# 续334：mini 档（主理人点单「暂时只保留常用后台路径 + .git」）——单独一层字典，
+# 不吃语言/框架字典、不跑 dirmap、不做后缀派生。上限 `dirscan.mini_max_paths`。
+_MINI_LAYERS = ("mini",)
 
 # 后缀派生（深扫专用，借鉴 dirmap 的备份文件扩展）：只对命中的**文件名型**路径生效。
 _SUFFIXES = (".bak", ".zip", ".tar.gz", ".rar", ".old", "~", ".swp", ".copy", ".save", ".txt")
@@ -369,8 +372,22 @@ class DirscanStage(Stage):
         # 注意 `db.list_sites()` 返回 sqlite3.Row（没有 `.get()`），必须转 dict 再用。
         sites = ctx.results.get("sites") or [dict(r) for r in db.list_sites(ctx.task_id)]
         if not sites:
-            # 只跑本阶段的补扫任务没有 probe 产物（内存与库里都没有站点），用目标本身兜底
+            # 只跑本阶段的补扫任务没有 probe 产物（内存与库里都没有站点），用目标本身兜底。
+            # 续344 速度：如果本任务**跑过 probe**且一个存活站点都没有，说明目标侧没回真实
+            # 响应；此时再对 60 条路径逐条等 http_timeout（死主机常见 60s+）是纯浪费。
+            # 只跳过“正常流水线里 probe 已判死”的情况；单独 dirscan 的补扫任务仍走兜底。
             sites = self._sites_from_targets(ctx)
+            _ran = getattr(ctx, "stages", None) or []
+            if isinstance(_ran, str):
+                _ran = [x.strip() for x in _ran.split(",") if x.strip()]
+            if "probe" in _ran:
+                ctx.logger.info("[dirscan] probe 未产出任何存活站点，跳过目录扫描"
+                                "（不再对死主机空打 60 条字典）")
+                return
+        _same_app_n = sum(1 for s in sites if str(s.get("same_app_of") or "").strip())
+        if _same_app_n:
+            ctx.logger.info(f"[dirscan] 跳过 {_same_app_n} 个同功能副本站点"
+                            "（根页面与主任务根站一致且 IP 相同）")
         sites = self._dedup_sites(sites)
         sites = ctx.scope_sites(sites)          # 续25：追加执行时限定到本次勾选（非追加原样）
         sites = sites[: int(limits.get("dirscan_max_urls", 20))]
@@ -385,7 +402,10 @@ class DirscanStage(Stage):
         # 档位：浅扫（quick，默认）只打精选敏感路径；深扫（deep）走全量字典 + dirmap。
         # 任务级选项 `dirscan_full`（建任务勾「全目录」/结果页发起「补扫」）可把**单个任务**
         # 强制成深扫，不改全局策略 —— 与 portscan 的 `portscan_full` 同一套语义。
-        deep = (forced or str(cfg.get("mode") or "deep").strip().lower() == "deep")
+        # 续334：新增 mini 档（常用后台路径 + .git），并作为出厂默认；深扫必须显式选。
+        _mode = str(cfg.get("mode") or "deep").strip().lower()
+        deep = forced or _mode == "deep"
+        mini = (not deep) and _mode == "mini"
         # 续310：CDN 边缘站只吃 `dirs_shallow`，**不进 dirmap 候选**。
         # 判定结果来自 cdn.py（子域名解析时写入 subdomains.cdn，这里只读不重算 —— §5.14）。
         # 为什么单列一档：实测 task_5 的 27 个站全是 Cloudflare 标签、整批 403，
@@ -401,7 +421,7 @@ class DirscanStage(Stage):
         # 按技术栈把站点分组：Java 站只吃 jsp 字典、PHP 站只吃 php 字典……判不出的走全量。
         # 分组只含**非 CDN** 站点：CDN 站不参与 dirmap 候选，单独走浅扫。
         groups = self._group_by_kind(main_sites, tech_aware)
-        ctx.logger.info(f"[dirscan] {'深扫' if deep else '浅扫'}模式；技术栈分组：" + " / ".join(
+        ctx.logger.info(f"[dirscan] {'深扫' if deep else ('mini' if mini else '浅扫')}模式；技术栈分组：" + " / ".join(
             f"{k or '未知'}={len(v)} 站点" for k, v in groups.items()))
         if groups.get("static"):
             ctx.logger.info(f"[dirscan] {len(groups['static'])} 个站点识别为**纯前端框架**"
@@ -413,7 +433,12 @@ class DirscanStage(Stage):
         _skipped_groups = {}      # 续332：dirmap 无 -e 时被剔出的已识别栈站点
         tool = ctx.settings.get("tools", {}).get("dirmap", {}) or {}
         script = resolve(tool.get("script") or "tools/dirmap/dirmap.py")
-        if not deep:
+        if mini:
+            # mini（续334）：只打常用后台路径 + .git；不跑 dirmap、不吃语言/框架字典、不做后缀派生
+            ctx.logger.info(f"[dirscan] mini：只打常用后台路径 + .git（上限 "
+                            f"{int(cfg.get('mini_max_paths', 60) or 0)} 条/站）")
+            entries = self._builtin_scan(sites, cfg, limits, mini=True)
+        elif not deep:
             # 浅扫：不跑 dirmap（那是深扫的重武器），只用精选敏感路径字典
             ctx.logger.info(f"[dirscan] 浅扫：仅打敏感路径精选字典（上限 "
                             f"{int(cfg.get('quick_max_paths', 150) or 0)} 条/站）")
@@ -613,6 +638,9 @@ class DirscanStage(Stage):
         """
         kept, seen = [], set()
         for s in sites or []:
+            # 续337：同功能副本（根页面 hash + IP 与主任务根站一致）不再跑目录。
+            if str(s.get("same_app_of") or "").strip():
+                continue
             title = (s.get("title") or "").strip()
             key = (title, s.get("length")) if title else None
             if key and key in seen:
@@ -817,6 +845,8 @@ class DirscanStage(Stage):
                 else:
                     out.append((name, dicts.get("dirs_big") if cfg.get("big_dict") is not False
                                 else dicts.get("dirs")))
+            elif name == "mini":
+                out.append((name, dicts.get("dirs_mini")))
             elif name == "exposure":
                 out.append((name, dicts.get("dirs_exposure")))
             elif name == "common" and kind:
@@ -1268,7 +1298,7 @@ class DirscanStage(Stage):
         return {k: (v or []) for k, v in out.items()}
 
 
-    def _builtin_scan(self, sites, cfg, limits, only_fw=False, shallow=False):
+    def _builtin_scan(self, sites, cfg, limits, only_fw=False, shallow=False, mini=False):
         """内置字典扫描（按站点技术栈 + 框架选字典）。
 
         每个站点用**它自己的**字典，越具体的排越前：框架字典（`dirs_wordpress`…）
@@ -1290,7 +1320,13 @@ class DirscanStage(Stage):
         timeout = int(limits.get("http_timeout", 10))
         tech_aware = cfg.get("tech_aware") is not False
         fw_cap = int(cfg.get("fw_max_paths", 150) or 0)
-        if shallow:
+        if mini:
+            layers = _MINI_LAYERS
+            limit = int(cfg.get("mini_max_paths", 60) or 0)
+            if limit <= 0:
+                ctx.logger.warning("[dirscan] mini 额度 mini_max_paths<=0，跳过")
+                return []
+        elif shallow:
             layers = _SHALLOW_LAYERS
             limit = int(cfg.get("quick_max_paths", 150) or 0)
             if limit <= 0:
@@ -1304,8 +1340,8 @@ class DirscanStage(Stage):
             layers, limit = _FULL_LAYERS, None
 
         # 续248：历史 URL（零目标流量）只在深扫/补充扫并入；浅扫保住精选字典的额度
-        _hist248 = {} if shallow else self._history_paths(sites, cfg)
-        _self248 = {} if shallow else self._selfurls(sites, cfg)
+        _hist248 = {} if (shallow or mini) else self._history_paths(sites, cfg)
+        _self248 = {} if (shallow or mini) else self._selfurls(sites, cfg)
         # 续316：jsmine 接口 URL 并入（浅扫也吃 —— 通常只有几条，价值高于精选路径）
         _js316 = self._js_endpoints(ctx, sites) if cfg.get("js_endpoints") is not False else {}
         if _js316:

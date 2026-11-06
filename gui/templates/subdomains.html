@@ -5,6 +5,7 @@
 <p class="muted note">目标自身的子域名（跨任务，服务端分页 + 关键字过滤）。来源列已翻译成可读标签：
   被动(subfinder) / 被动(&lt;源&gt;) / 爆破(puredns) / 爆破(内置)。
   JS 与外部情报（含 FOFA）拓展出来的域名不在这里，见「拓展域名」页。
+  <a class="btn-mini ghost" href="{{ url_for('dynamic_subdomains') }}">动态字典（{{ dynamic_count }}）</a>
   解析 IP 与 CNAME 由 subdomain 阶段回填（纯 DNS 只读查询）。</p>
 <section class="panel scroll-pane">
   <p class="muted small note">标签过滤：CDN 标记来自 CNAME 链与
@@ -63,13 +64,14 @@
             value="{{ s.domain }}"></td>
           <td>{{ s.id }}</td>
           <td><a href="{{ url_for('task_detail', task_id=s.task_id) }}">#{{ s.task_id }}</a></td>
-          <td class="mono">{{ idn_display(s.domain) }}</td>
+          <td class="mono">{{ idn_display(s.domain) }}
+            {%- if s.weak_tag %}<br><span class="weak-badge" title="{{ s.weak_reason }}">薄弱边界资产 · {{ s.weak_tag }}</span>{% endif %}</td>
           <td class="muted small mono">{% if s.ip %}<a href="{{ ip_drill(s.ip) }}" title="查看解析到 {{ s.ip }} 的全部子域名">{{ s.ip }}</a>{% else %}-{% endif %}{% if s.ip_kind == 'real' %} <span class="badge" title="非 CDN 且只有 1 个 A 记录：最可能是真实源站 IP">真实IP</span>{% elif s.ip_kind == 'multi' %} <span class="badge" title="解析到多个 IP：多半是负载均衡 / 边缘节点，疑非真实 IP">多IP</span>{% endif %}{% if not s.ip and s.ip_note %} <span class="muted small" title="为什么没有解析结果">{{ ip_note_label(s.ip_note) }}</span>{% endif %}</td>
           <td>{% if s.cdn %}<span class="sev sev-medium">{{ s.cdn }}</span>
               {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
           <td class="muted small mono">{{ s.cname or '-' }}</td>
           {# 续112：去重后一行只显示一个来源，其余来源并到「另见于」—— 不藏"它还被谁找到过" #}
-          <td class="muted">{{ source_label(s.source) }}{% if s.also_from %}<br>
+          <td class="muted">{{ source_label(s.source) }}{% if s.source_detail %}<span class="muted small" title="这次实际返回该域名的反查接口">（{{ s.source_detail }}）</span>{% endif %}{% if s.also_from %}<br>
             <span class="muted small" title="同一域名还被这些来源找到过（入库行仍在，只是默认不重复列）">另见于 {{ s.also_from }}</span>{% endif %}</td>
         </tr>
       {% else %}

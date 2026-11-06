@@ -22,20 +22,20 @@
         <button type="button" class="ghost" data-ck-mode="none" data-ck-scope="stages,deep,expand"
           title="只清勾选，不碰已填的目标与登录态">全部清掉</button>
         <button type="button" class="ghost" data-ck-mode="default" data-ck-scope="stages,deep,expand"
-          title="回到页面刚打开时的状态（策略级默认关的阶段仍不勾）">恢复默认</button></span>
+          title="回到页面刚打开时的状态（信息收集专项 + mini 目录 + 自动拓展）">恢复默认</button>
+        <button type="button" class="ghost" data-ck-mode="recon" data-ck-scope="stages,deep,expand"
+          title="一键组好信息收集专项：子域 + probe + cert + screenshot + jsmine（JS 抽域名）+ mini 目录 + 被动 URL + 自动拓展扫描；漏洞扫描/全量目录/全端口/爬虫/深扫/递归都不勾">信息收集专项</button></span>
       <span data-ck-group="stages">
       {% for s in stages %}
       {% set off_by_default = s in off_by_default_stages %}
       <label class="chk"><input type="checkbox" name="stages" value="{{ s }}"
         data-ck-default="{{ 0 if off_by_default else 1 }}"
+        data-recon="{{ 1 if s in recon_stages else 0 }}"
         {% if s in slow_stages %}data-slow-item {% endif %}{{ '' if off_by_default else 'checked' }}> {{ s }}</label>
       {% endfor %}
       </span>
-      {# 续314（主理人点单）：耗时选项 —— SQL 注入与爬虫默认都关，可单独勾，也可一键都勾。
-         爬虫就是上面的 `crawl` 阶段勾选框（策略默认关后它本来就不勾），这里不重复造开关。 #}
+      {# 续335（主理人点单）：去掉总勾选那颗按钮，只留单项 SQL 注入（默认关）。 #}
       <span class="slow-opts">
-        <label class="chk" title="一键勾上「SQL 注入 + 爬虫」；取消＝两项都取消">
-          <input type="checkbox" data-slow-master> <b>耗时选项</b></label>
         <label class="chk" title="报错回显 + 布尔盲注；默认关（每站最多约 60 个请求），只影响本次任务">
           <input type="checkbox" name="opt_sqli" value="1"> SQL 注入</label>
       </span>
@@ -48,37 +48,37 @@
     <div class="row" data-ck-group="deep">
       <span class="muted" title="勾选后本任务无视全局策略，强制走全量档；忘记勾对应阶段时会自动补上">
         深度选项（可选）：</span>
-      <label class="chk" title="dirscan 走全量分层字典 + dirmap + 后缀派生（比默认浅扫慢很多）">
-        <input type="checkbox" name="dirscan_full" value="1" data-ck-default="1" checked> 全目录深扫</label>
-      <label class="chk" title="对命中的目录再往下打一层浅扫精选字典（深扫专属能力，勾了就自动带上「全目录深扫」；每站最多 5 个目录 × 40 条，约 +215 请求/站）">
-        <input type="checkbox" name="recursive_dir" value="1" data-ck-default="1" checked> 目录递归（一层）</label>
+      <label class="chk" title="dirscan 走全量分层字典 + dirmap + 后缀派生（比默认 mini 慢很多；续334 起默认不勾）">
+        <input type="checkbox" name="dirscan_full" value="1" data-ck-default="0"> 全目录深扫</label>
+      <label class="chk" title="对命中的目录再往下打一层浅扫精选字典（深扫专属能力，勾了就自动带上「全目录深扫」；续334 起默认不勾）">
+        <input type="checkbox" name="recursive_dir" value="1" data-ck-default="0"> 目录递归（一层）</label>
       {# 续246（B 批）：子域名爆破档位。**只影响本次任务**，策略值仍是天花板；
          quick 不是"取前 1 万条"，是等距抽样（见 scanner/stages/subdomain.py::_spread）。 #}
-      <label class="muted" title="只影响本次任务：快速＝深档词表等距抽样到 1 万条（不是取前 1 万条）；深度＝按策略 limits.brute_max_words（0=全量）。精简档的几十条人工前缀任何档位都全量参与；内置兜底另有 limits.brute_fallback_max 更紧的闸门">
+      <label class="muted" title="只影响本次任务：快速＝深档词表等距抽样到 1 万条；深度＝按策略 limits.brute_max_words。注意：同根域 7 天内已有历史时，增量模式仍会把深档收窄到 incremental_max_words=5000 条；要真正全量，必须另勾下面「全量爆破（忽略历史）」。">
         子域名爆破档位
         <select name="subdomain_profile" data-ck-all="deep" data-ck-none="" data-ck-default="deep">
           <option value="">跟策略（limits.brute_max_words）</option>
           <option value="quick">快速（深档抽样 1 万条）</option>
-          <option value="deep" selected>深度（按策略，0=全量）</option>
+          <option value="deep" selected>深度（按策略；有历史时仍受增量 5000 词限制）</option>
         </select></label>
-      <span class="muted small">续314 起默认全量档：端口 top + <b>全目录深扫</b> + <b>一层目录递归</b>
-        + <b>子域名深度档</b> + <b>自动拓展</b>；嫌慢可在上面逐项取消，或在结果页对选中资产发起补扫。
+      <span class="muted small">续334 起默认 <b>信息收集专项</b>：子域 + probe + <b>cert</b> + <b>screenshot</b>
+        + <b>jsmine</b>（快速模式：只从页面/JS 抽 Domains，不走三道闸）+ <b>mini 目录</b>
+        + 被动 URL；<b>自动拓展扫描</b>默认勾上（它也会把拓展域名送成子任务，属于信息采集）。
+        默认<b>不跑</b>漏洞扫描、全量目录/dirmap、全端口、爬虫；要全量字典 + dirmap 就勾<b>全目录深扫</b>。
         （<b>全端口不在这里</b>：续250 起已挪到任务详情「端口」页签的单任务按钮。）</span>
     </div>
-      {# 续227：Host 碰撞**默认就做**（策略 `hostcollide.enabled` 出厂开），建任务页不再放勾选框 ——
-          勾了也不改变默认行为，只会让人误以为"要勾才跑"。要单任务强制开/补跑，用详情页那颗按钮；
-          要全局关，去「策略配置 → Host 碰撞」。 #}
     {# 续333：默认复用 7 天内同根域历史子域、跳过全量字典与组合爆破；独立一行，**不进 expand 勾选组** #}
     <div class="row">
       <label class="chk" title="默认：同一根域 7 天内扫过 → 复用历史子域，跳过 17.8 万词全量字典与组合爆破，只跑精简档 + 前 5000 条。首次扫新目标或定期全量时勾这里重跑完整爆破。只影响本次任务">
-        <input type="checkbox" name="full_brute" value="1"> 全量爆破（忽略历史）</label>
-      <span class="muted small">默认增量：同根域 7 天内有历史就复用，不重跑全量爆破</span>
+        <input type="checkbox" name="full_brute" value="1"> 全量爆破（忽略历史，不受 5000 词增量限制）</label>
+      <span class="muted small">不勾＝增量：同根域 7 天内有历史就复用，只跑精简档 + 5000 词。
+        这是独立选项，上面的“深度”档位不能替代它。</span>
     </div>
     <div class="row" data-ck-group="expand">
       <span class="muted" title="任务级选项 auto_expand：只影响本次任务，不改全局策略">
-        拓展选项（可选）：</span>
-      <label class="chk" title="① 自动补上 osint / jsmine 两个拓展阶段（没勾也补）；② 目标是子域（如 aaa.targ1.pro）时自动补收它的主域名 targ1.pro，并把该子域也记成一条子域资产；③ 「追加扫描层数」>1 时，把每层新挖出的自家子域与高置信拓展域名自动带进下一轮。注：拓展出的「归属本项目」子域追加为子域名 + 同轮探测入站，自续255 起固定执行，不再取决于本选项">
-        <input type="checkbox" name="auto_expand" value="1" data-ck-default="1" checked> 自动拓展扫描</label>
+        拓展选项（默认勾选）：</span>
+      <label class="chk" title="默认勾选；① 自动补上 osint / jsmine 两个拓展阶段（没勾也补）；② 目标是子域（如 aaa.targ1.pro）时自动补收它的主域名 targ1.pro，并把该子域也记成一条子域资产；③ 「追加扫描层数」>1 时，把每层新挖出的自家子域与高置信拓展域名自动带进下一轮。注：拓展出的「归属本项目」子域追加为子域名 + 同轮探测入站，自续255 起固定执行，不再取决于本选项">
+        <input type="checkbox" name="auto_expand" value="1" data-ck-default="1" data-recon="1" checked> 自动拓展扫描</label>
       {# 续169（主理人点单：「这个不仅要在拓展域名哪个位置显示，主界面也要显示」）：
          「追加扫描层数」与「置信度阈值」这两个控件从「送去探测」那一处接到主面板上来。
          默认值吃 `ext_defaults`（策略配置里的 `subdomain.ext_depth` /
@@ -143,11 +143,11 @@
         续282（主理人点单「子任务不要单独显示出来，默认就在子任务面板里才有」）：
         **默认档 = 只看主域名任务** —— 子任务（含孙任务）默认收进父任务行的「子任务」
         面板里（按嵌套展开、带各层自己的数量），不再单独占列表一行；
-        要直看衍生任务，显式选「只看衍生（送探）任务」；「全部（含衍生）」保留旧的
-        平铺视图（value=all，显式选择才有）。 #}
+        要直看衍生任务，显式选「只看衍生（送探）任务」；「全部（自动展开子任务）」
+        只列根任务，并把有子任务的根任务自动展开（续342，不再父子平铺两行）。 #}
     <label class="muted">层级
       <select name="parent">
-        <option value="all" {{ 'selected' if parent_f == 'all' else '' }}>全部（含衍生）</option>
+        <option value="all" {{ 'selected' if parent_f == 'all' else '' }}>全部（自动展开子任务）</option>
         <option value="root" {{ 'selected' if parent_f == 'root' else '' }}>只看主域名任务（默认）</option>
         <option value="child" {{ 'selected' if parent_f == 'child' else '' }}>只看衍生（送探）任务</option>
       </select></label>
@@ -181,7 +181,7 @@
   <p class="muted small note">任务并发：同时运行 <b>{{ qworkers }}</b> 个，其余排队
     （改它：策略配置 →「队列 worker 数」，或勾「按机器规格自动收并发上限」）。</p>
 
-  <table id="tbl-tasks">
+  <table id="tbl-tasks" data-auto-expand="{{ '1' if auto_expand else '0' }}">
     <thead><tr>
       <th class="pick"><input type="checkbox" id="pick-all"></th>
       <th>#</th><th>任务名</th><th>目标</th><th>统计</th><th>阶段</th>
@@ -209,6 +209,7 @@
               （`child_counts_bulk` 一次 GROUP BY；没有子任务就 0，空态本身就是结论）。
               孙任务不算进这个数 —— 它们的数量标在各自那一层的面板行上（嵌套逐层标注）。 #}
           <button type="button" class="btn-mini ghost btn-xs" data-pv="subtasks" data-id="{{ t.id }}"
+            data-child-count="{{ child_counts.get(t.id, 0) }}"
             data-inline="1"
             title="在下面展开这个任务名下的子任务（parent_id 递归整棵子树，24-a 编号，嵌套逐层标注各层自己的子任务数；没有子任务也会展开说明）"
             >子任务（{{ child_counts.get(t.id, 0) }}）</button>

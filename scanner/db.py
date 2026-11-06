@@ -123,7 +123,10 @@ CREATE TABLE IF NOT EXISTS sites (
   favicon TEXT DEFAULT '',
   redirect_url TEXT DEFAULT '', redirect_status INTEGER DEFAULT 0,
   redirect_title TEXT DEFAULT '', shot_error TEXT DEFAULT '',
-  shot_last_at TEXT DEFAULT ''          -- 续218：最近一次截图尝试时间（轮转用）
+  shot_last_at TEXT DEFAULT '',         -- 续218：最近一次截图尝试时间（轮转用）
+  page_hash TEXT DEFAULT '',           -- 续337：根页面归一化正文 SHA1（probe 顺手算）
+  page_simhash TEXT DEFAULT '',        -- 续337：64 位 SimHash 十六进制（近重复判定）
+  same_app_of TEXT DEFAULT ''          -- 续337：同功能代表站 URL（非空 ⇒ 跳过目录/漏洞）
 );
 CREATE TABLE IF NOT EXISTS ports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -438,7 +441,13 @@ _COLUMN_PATCHES = {
               "shot_error": "TEXT DEFAULT ''",
               # 续218：最近一次**尝试**截图的时间（成功/失败都盖）。候补轮按它轮转，
               # 否则"上一轮仍失败的那批"永远排在前面，后面那批一辈子轮不到一次重试。
-              "shot_last_at": "TEXT DEFAULT ''"},
+              "shot_last_at": "TEXT DEFAULT ''",
+              # 续337：根页面正文指纹（归一化文本 SHA1 / SimHash 十六进制）——
+              # probe 的 body 已经在手，顺手算，零额外请求；只用于同功能副本判定。
+              "page_hash": "TEXT DEFAULT ''",
+              "page_simhash": "TEXT DEFAULT ''",
+              # 续337：命中的同功能代表站 URL（非空 ⇒ 目录/漏洞扫描跳过本行）。
+              "same_app_of": "TEXT DEFAULT ''"},
     # P1-1 误报复核 / P1-2 置信度分层：老库补列（新库由 SCHEMA 直接建出）
     "vulns": {"review": "TEXT DEFAULT ''", "review_note": "TEXT DEFAULT ''",
               "reviewed_at": "TEXT DEFAULT ''", "packets": "TEXT DEFAULT ''",
@@ -475,7 +484,9 @@ _COLUMN_PATCHES = {
               # 续215-P2-12 单任务资源画像（见 SCHEMA 里的同名列注释）
               "cpu_seconds": "REAL DEFAULT 0", "cpu_ratio": "REAL DEFAULT 0",
               "peak_rss_mb": "REAL DEFAULT 0", "profile_wall_s": "REAL DEFAULT 0",
-              "worker_hint": "INTEGER DEFAULT 0", "profiled_at": "TEXT DEFAULT ''"},
+              "worker_hint": "INTEGER DEFAULT 0", "profiled_at": "TEXT DEFAULT ''",
+              # 续334：各阶段耗时（JSON：{阶段名: 秒}），任务详情日志页的表格数据源
+              "stage_seconds": "TEXT DEFAULT '{}'"},
 
 }
 
@@ -522,6 +533,42 @@ def _backfill_display_no(conn):
                 conn.execute("UPDATE tasks SET display_no=? WHERE id=?",
                              (mx, int(r["id"])))
     conn.execute("UPDATE tasks SET display_no=NULL WHERE parent_id!=0")
+
+
+def set_task_stage_seconds(task_id, data):
+    """续334：阶段耗时（JSON）整份落库。调用点只有 runner 收尾汇总，天然是全量。
+
+    整份覆盖而不是逐阶段合并：并行阶段（probe 后四阶段 / jsmine+dirscan）会并发调，
+    读-改-写会丢更新；收尾时 `ctx.stage_seconds` 已经是完整字典，一次写入最稳。
+    """
+    try:
+        obj = {str(k): round(float(v), 3) for k, v in (data or {}).items()}
+    except (TypeError, ValueError):
+        return
+    if not obj:
+        return
+    _exec("UPDATE tasks SET stage_seconds=? WHERE id=?",
+          (json.dumps(obj, ensure_ascii=False, sort_keys=True), int(task_id)))
+
+
+def task_stage_seconds(task_id):
+    """读回阶段耗时（{阶段名: 秒}）；老库/空值/坏 JSON 一律返回空字典。"""
+    rows = _query("SELECT stage_seconds FROM tasks WHERE id=?", (int(task_id),), one=True)
+    if not rows:
+        return {}
+    try:
+        obj = json.loads(rows["stage_seconds"] or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(obj, dict):
+        return {}
+    out = {}
+    for k, v in obj.items():
+        try:
+            out[str(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def _exec(sql, params=(), many=False):
@@ -1635,15 +1682,26 @@ def insert_sites(task_id, sites):
         return
     _exec("INSERT INTO sites(task_id,url,host,port,status,title,length,server,tech,"
           "tech_detail,source,favicon,icon_hash,icon_file,icon_ext,"
-          "redirect_url,redirect_status,redirect_title) "
-          "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          "redirect_url,redirect_status,redirect_title,page_hash,page_simhash,same_app_of) "
+          "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
           [(task_id, s.get("url", ""), s.get("host", ""), str(s.get("port", "") or ""),
             s.get("status"), s.get("title", ""), s.get("length"), s.get("server", ""),
             s.get("tech", ""), s.get("tech_detail", ""), s.get("source", ""),
             s.get("favicon", ""), int(s.get("icon_hash") or 0), s.get("icon_file", ""),
             s.get("icon_ext", ""), s.get("redirect_url", ""),
-            int(s.get("redirect_status") or 0), s.get("redirect_title", "")) for s in sites],
+            int(s.get("redirect_status") or 0), s.get("redirect_title", ""),
+            s.get("page_hash", ""), s.get("page_simhash", ""),
+            s.get("same_app_of", "")) for s in sites],
           many=True)
+
+
+def mark_sites_same_app(task_id, mapping):
+    """把本任务命中的站点标成同功能副本；`mapping={site_url: 代表站_url}`。"""
+    rows = [(str(rep or ""), int(task_id), str(url or ""))
+            for url, rep in (mapping or {}).items() if url and rep]
+    if not rows:
+        return
+    _exec("UPDATE sites SET same_app_of=? WHERE task_id=? AND url=?", rows, many=True)
 
 
 def set_site_icon_status(task_id, rows):

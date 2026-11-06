@@ -19,6 +19,7 @@
 只做统计与字符串运算，**绝不 eval、绝不发起任何请求**。
 """
 import hashlib
+import html as _html
 import json
 import math
 import re
@@ -111,6 +112,56 @@ def near_dup_text(text_a, text_b, n=4, threshold=0.6):
     Jaccard 不稳的那一档。
     """
     return jaccard(text_a, text_b, n=n) >= float(threshold)
+
+
+_HTML_NOISE_RE = re.compile(
+    r"(?is)<script\b.*?</script>|<style\b.*?</style>|<!--.*?-->")
+_HTML_TAG_RE = re.compile(r"(?s)<[^>]+>")
+_PAGE_TEXT_MAX = 20000
+
+
+def page_text(body):
+    """HTML 正文 → 参与比对的可见文本（**纯本地计算，零请求**）。
+
+    只去掉脚本/样式/注释/标签，不抽具体业务字段；空白压成单空格并转小写。
+    动态页里的 csrf token 大多在标签属性或脚本里，剥掉后同一模板的文本能对齐。
+    """
+    s = _HTML_NOISE_RE.sub(" ", str(body or ""))
+    s = _HTML_TAG_RE.sub(" ", s)
+    s = _html.unescape(s)
+    return re.sub(r"\s+", " ", s).strip().lower()[:_PAGE_TEXT_MAX]
+
+
+def page_signature(body, min_chars=16):
+    """根页面正文指纹：`{page_hash, page_simhash}`（无正文/太短 → 两个空串）。
+
+    `page_hash` 是归一化文本的 SHA1，能命中完全相同的模板；`page_simhash` 是 64 位
+    SimHash 的十六进制，用来兜住动态串/时间戳导致的逐字节不同。**不是**额外抓取：
+    调用方应把 probe 已经拿到的 `body` 直接传进来。
+    """
+    text = page_text(body)
+    if len(text) < max(1, int(min_chars or 1)):
+        return {"page_hash": "", "page_simhash": ""}
+    return {
+        "page_hash": hashlib.sha1(text.encode("utf-8", "replace")).hexdigest(),
+        "page_simhash": f"{simhash(text):016x}",
+    }
+
+
+def same_page(a, b, max_dist=3):
+    """两套 `page_signature` 是否同页：hash 完全一致，或 SimHash 汉明距离 ≤ 3。"""
+    if not a or not b:
+        return False
+    ha, hb = str(a.get("page_hash") or ""), str(b.get("page_hash") or "")
+    if ha and ha == hb:
+        return True
+    sa, sb = str(a.get("page_simhash") or ""), str(b.get("page_simhash") or "")
+    if not sa or not sb:
+        return False
+    try:
+        return near_dup(int(sa, 16), int(sb, 16), max_dist=max_dist)
+    except (TypeError, ValueError):
+        return False
 
 
 def median(values):

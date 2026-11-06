@@ -1,14 +1,14 @@
 # 流水线说明
 
-默认阶段顺序（**15 个**，权威来源 `scanner/runner.py::STAGE_ORDER`）：
-`subdomain → takeover → hostcollide → portscan → probe → cert → screenshot → osint → jsmine → dirscan → crawl → vulnscan → intel → heuristic → github`
+默认阶段顺序（**13 个**，权威来源 `scanner/runner.py::STAGE_ORDER`）：
+`subdomain → portscan → probe → cert → screenshot → osint → jsmine → dirscan → crawl → vulnscan → intel → heuristic → github`
 （CLI 可用 `-p` 裁剪，GUI 用复选框勾选）。
 
-其中 `takeover` / `hostcollide` / `portscan` / `jsmine` / `dirscan` / `crawl` / `vulnscan` 由**策略级开关**控制，
-**DEFAULTS 与随包 `config/settings.yaml` 都是开**（`portscan` 自续269、`hostcollide`/`crawl` 随各自落地即两档都开）；
+其中 `portscan` / `jsmine` / `dirscan` / `crawl` / `vulnscan` 由**策略级开关**控制，
+**DEFAULTS 与随包 `config/settings.yaml` 都是开**（`portscan` 自续269；`crawl` 续314 起两档都是关，任务级勾选才跑）；
 `cert` / `screenshot` 两档都是关（任务级勾选或 `-p` 可点名执行，见下）；`intel` / `heuristic` / `github` 在 DEFAULTS 里关、**随包 `config/settings.yaml` 已开**（续159-附）；`osint` 由 `iprecon.enabled` / `fofa.enabled` 两个子开关决定（DEFAULTS 关、随包已开）：
 勾选只表示"这个阶段参与本次任务"，真正执行与否还看
-`settings.takeover.enabled` / `hostcollide.enabled` / `portscan.enabled` / `cert.enabled` / `screenshot.enabled` /
+`settings.portscan.enabled` / `cert.enabled` / `screenshot.enabled` /
 `jsmine.enabled` / `dirscan.enabled` / `crawl.enabled` / `vulnscan.enabled` / `intel.enabled` / `heuristic.enabled` /
 `github.enabled`
 （阶段内部自查后打日志跳过，且**连请求都不发**）。`osint` 更特殊 —— 它没有自己的 `enabled`，
@@ -41,15 +41,14 @@
 | 你的命令 | 框架阶段 | 框架实现 |
 |---|---|---|
 | `subfinder -dL url -all -t 200 -o logs/passive.txt` | subdomain | subfinder 适配器，参数一致（`-dL`/`-all`/`-t 200`） |
-| `puredns bruteforce ./config/subdomains.txt -d url -r resolvers -w brute.txt` | subdomain | puredns 适配器，逐域名执行；字典/resolvers 用 `config/dicts/`；词数闸门 `limits.brute_max_words`（puredns 这一路的**深档**上限，0=全量）只做**等距抽样且只冲深档**（精简档 84 条永远全量在场，任何闸门都不冲它），超出则抽样后把并集另存 `brute_words.txt` 再喂，续139 |
+| `puredns bruteforce ./config/subdomains.txt -d url -r resolvers -w brute.txt` | subdomain | puredns 适配器，逐域名执行；字典/resolvers 用 `config/dicts/`；词数闸门 `limits.brute_max_words`（puredns 这一路的**深档**上限，0=全量）只做**等距抽样且只冲深档**（精简档 366 条永远全量在场，任何闸门都不冲它），超出则抽样后把并集另存 `brute_words.txt` 再喂，续139 |
 | `cat passive.txt brute.txt \| sort -u` | subdomain | Python 端 `sorted(set(...))` 等价合并去重 |
 | （无 subfinder 时的被动收集） | subdomain | 内置 `scanner/passive.py` 多来源免 key 接口（crt.sh / certspotter / alienvault / hackertarget / rapiddns / sublist3r） |
 | （字典爆破前先测通配） | subdomain | `scanner/wildcard.py` 泛解析识别与过滤（纯 DNS 查询） |
 | （喂深字典） | subdomain | `tools/import_subdomain_dict.py` 清洗 + 去重 + 并集写回**深档** `config/dicts/subdomains_deep.txt`（**这就是它的默认写回目标**；精简档 `config/dicts/subdomains.txt` 一字不动。纯离线，见 §① 与 AGENTS §7 续139） |
-| （手工常忘的 CNAME 检查） | takeover | `scanner/dnsq.py` 解析 CNAME 链 → `scanner/takeover.py` 比对 41 条第三方服务指纹 |
 | `fscan -np -nobr -nopoc -p <ports> <host>` | portscan | fscan 适配器（只取端口发现，不跑 POC/爆破）；解析其四种开放端口行 + 统计行交叉校验 |
 | `nmap -sT -Pn -n --open -p <ports> -oG -` | portscan | nmap 适配器（`-sT` 免 root）；未装则内置 TCP connect 兜底 + 被动 banner |
-| （手工没有的部分） | osint | IP 反查域名 + `/24` C 段归纳；favicon（mmh3）→ FOFA 反查同源资产，黑 ico 放弃拓展 |
+| （手工没有的部分） | osint | 精确 IP 反查域名（不做 `/24` C 段）；favicon（mmh3）→ FOFA 反查同源资产，黑 ico 放弃拓展 |
 | （手工没有的部分） | jsmine | 抓站点 JS → 提取域名/接口 URL/疑似凭据，第三方域黑名单 + 前后文降噪 |
 | `httpx -l httpx_url -nfs -title -tech-detect -status-code -content-length -json -irr -rstr 262144` | probe | httpx 适配器；**不再传 `-mc` 状态码白名单**（服务端回了真实状态码就算存活，见 `probe.is_alive`），`-nfs` 锁住输入里的 scheme；`-irr` 把根响应正文带进 JSONL 供内置/外置指纹识别与 flag 抽取（`-rstr` 限 256 KB） |
 | `python dirmap.py -iF dir_out -e all` | dirscan | dirmap 适配器（`-iF` 批量 URL），并解析其 `output/` 产物；**仅 `mode=deep` 时调用**（浅扫不碰外部工具） |
@@ -67,8 +66,8 @@
 > **实际执行顺序一律以 `STAGE_ORDER` 为准**：`screenshot` 在 ④ probe 与 ⑤ osint 之间，
 > ⑨~⑬ 是后补的阶段（编号只是书写顺序，`cert` 实际排在 `screenshot` **之前**；
 > 其中 `intel` / `heuristic` / `github` 固定在流水线最末）。
-> `hostcollide`（⑭）与 `crawl`（⑮）本轮补的小节，编号同样只是书写顺序：前者的实际位置在
-> `takeover` 与 `portscan` 之间，后者在 `dirscan` 与 `vulnscan` 之间。
+> `crawl`（⑮）是后补小节，实际位置在 `dirscan` 与 `vulnscan` 之间。
+> ② 与 ⑭ 两节随 `takeover` / `hostcollide` 功能删除（续343），编号保留历史空档。
 
 ### ① subdomain 子域名收集
 
@@ -86,12 +85,12 @@
   3. **DNS 字典爆破**：`puredns` 优先（`puredns bruteforce <dicts.subdomains> -d <域> -r <dicts.resolvers> -w <out>`，
      来源标记 `puredns`），未安装则内置 `scanner/wildcard.py::resolve_all` 兜底（`socket.getaddrinfo`，
      来源标记 `dns-brute(fallback)`）；字典**分两档**（续139）：`config/dicts/subdomains.txt` 是
-     精简档（84 条人工挑的高价值前缀，**永远全量参与，任何闸门都不冲它**），
+     精简档（366 条人工挑的高价值前缀，**永远全量参与，任何闸门都不冲它**），
      `config/dicts/subdomains_deep.txt` 是深档（**续139 随本轮提交进仓库，177,875 条**，来源写在文件头；
      不想要就 `git rm config/dicts/subdomains_deep.txt` —— 文件不在＝没配，日志指路但不报错，
      其它阶段一律不受影响）。再深的一档一条命令追加：`tools/import_subdomain_dict.py --src <文件>`，
      **默认写回目标就是这份深档**（精简档不动）。分两档的原因是没装 puredns 时深档只能抽样，
-     而 84/177,875 ≈ 0.05% —— 并成一份会把精简档几乎全冲掉，那是**倒退**而不是收窄；
+     而 366/177,875 ≈ 0.05% —— 并成一份会把精简档几乎全冲掉，那是**倒退**而不是收窄；
      域名上限 `limits.brute_max_domains`；词数闸门 `limits.brute_max_words`（puredns 那一路的深档上限，
      0=全量）与 `limits.brute_fallback_max`（内置那一路的深档上限，默认 3000，因为它逐条 socket 解析）
      —— **两道闸门都只冲深档，精简档永远全量在场**；收窄一律
@@ -100,7 +99,10 @@
      跟着 HTTP 的 `max_workers`(20) 走的话深档就是小时级（实测 3000 条 @20 线程 ≈ 53 秒 ⇒
      全量 17.8 万条即使 128 线程也跑了 45 分钟仍未跑完（全量只有 puredns 现实可行））；`limits.brute_dict_warn_min`（默认 1000）的语义是
      **没导入深档时会喊**（仓库随包带深档 ⇒ 默认安装不触发，用户自己删掉深档才喊，不做静默弱扫描）；
-  4b. **组合爆破（续139，对齐灯塔的 `ALT_DNS_CONCURRENT`）**：把「精简档词」与「本任务已经发现的
+  4b. **薄弱边界词（续341）**：精简档新增 282 个 test/dev/staging/stg/uat/qa/sit/preprod/pre/
+     demo/sandbox/lab/beta/alpha 及常见组合；命中名称的资产在 GUI 标「薄弱边界资产」，
+     只是人工复核线索，不自动改扫描/漏洞等级。
+  4c. **组合爆破（续139，对齐灯塔的 `ALT_DNS_CONCURRENT`）**：把「精简档词」与「本任务已经发现的
      名字首段标签」两两拼成 `a-b` 再爆一轮。动机是逐条比实时的解剖结果 —— 灯塔独有而我们没生成的
      24 个域名里 **14 个的标签确实躺在深档里**（受抽样闸门没爆到），另外 **10 个任何字典都拼不出来**
      （`api-contract` / `ws-spot` / `admin-oss` / `aicoin-http-gateway` / `orig.images-cms` …），
@@ -118,20 +120,11 @@
   纯 DNS 只读查询、零 HTTP；数据文件缺失时一律判"非 CDN"，不会抛错；
 - 产物：`subdomains.txt`、`passive_multi.txt`（被动来源命中）、`hosts.txt`（子域名 ∪ 主域名，交给下一阶段）、SQLite `subdomains` 表（含 `ip` / `cdn`）；
 - **入库前过用户黑名单**（`scanner/blacklist.py`，文件 `config/blacklist.txt`）：命中的域名**不入资产库**，
-  因此后续 takeover / probe / dirscan / vulnscan 也不会扫它。语义详见 `docs/usage.md`「黑名单与批量操作」；
+  因此后续 probe / dirscan / vulnscan 也不会扫它。语义详见 `docs/usage.md`「黑名单与批量操作」；
 - 属性归属：本阶段的产物都是**目标自身**的子域名（来源 `subfinder` / `passive:*` / `puredns` / `dns-brute`），
   在「子域名资产」页展示；JS 与外部情报带出的关联域名（`js:mine` / `osint:*`）归「拓展域名」页，见 `db.OWN_SUBDOMAIN_WHERE` / `EXT_SUBDOMAIN_WHERE`；
 - 降级：无 puredns 时用内置 `socket.getaddrinfo` 爆破（系统解析器，忽略自定义 resolvers——这是已知差异）；
   `--offline` 时不调用外部工具、也不跑被动收集，仅内置 DNS 爆破。
-
-### ② takeover 子域接管（`takeover.enabled`，默认开）
-
-- 输入：`ctx.results["subdomains"]`（为空时回退 `db.list_subdomains`），上限 `takeover.max_hosts`（默认 300）；
-- 处理：`scanner/dnsq.py` 并发解析 **CNAME 链**（多跳用 `" -> "` 连接）并回填 `subdomains.cname`；
-  仅对存在 CNAME 的子域做指纹比对（`scanner/takeover.py` 的 41 条第三方服务 suffix）；
-  `takeover.http_check=true` 时再补一次只读 GET，比对停用页特征以降低误报；
-- 产物：`cnames.txt`、SQLite `subdomains.cname` 回填、疑似接管以 **high** 级进 `vulns`（`owasp=A05`）；
-- 降级/局限：`http_check=false` 时退化为纯 CNAME 判定，误报明显上升；第三方服务文案会变，指纹需定期维护。
 
 ### ③ portscan 端口与服务（`portscan.enabled`，**默认开**；续269 起只打常见 web 端口）
 
@@ -214,16 +207,22 @@
 
 三个子能力互相独立（`fofa.cert_enabled` 是 favicon 开关下的独立子开关）：
 
-- **C 段反查**（`scanner/iprecon.py`）：汇总 IP（目标里的 IP 直接用；`url`/`domain` 目标、
-  已入账子域名、存活站点 host 各做一次解析，受 `iprecon.max_hosts` 限制）→ `is_public_ip()`
-  过滤掉私有/环回/保留地址（查公共接口对它们没意义，纯浪费配额）→ `max_ips` 截断 →
-  `group_segments()` 归纳成 `/24` → 并发反查（`iprecon.workers`，默认 5，单 IP 只查一次、失败不重试）→
-  落 `csegs` 表。**单 IP 反查到的域名数超过 `iprecon.max_domains_per_ip`（默认 30）判为共享主机/CDN**：
-  **段与 IP 照常入库**（仍是有价值的视野），但**不纳入域名资产**；续110 起这条判据也管到入库内容：
-  超阈值时 `csegs.domains` **留空**、由 `csegs.note` 写明"命中多少 / 为什么不列"（老库靠
-  `_COLUMN_PATCHES` 补列）。此前是"判为噪声却照样把 500 条写进 domains"，报告「C 段视野」
-  原样抄一遍 → 读者会把别人的 `*.workers.dev` 当成本项目标的资产面。
-  响应解析走 `json.loads` + 逐项结构校验，**不用 `eval`**（见 `TODO.md` B-3）。
+- **IP 反查**（`OsintStage._ip_reverse()` + `scanner/iprecon.py`）：汇总**精确 IP**
+  （目标里的 IP 直接用；`url`/`domain` 目标、已入账子域名、存活站点 host 各做一次解析，
+  受 `iprecon.max_hosts` 限制）→ `is_public_ip()` 过滤私有/环回/保留地址 → `max_ips` 截断 →
+  直接按每个 IP 并发反查（`iprecon.workers`，默认 5，单 IP 只查一次、失败不重试）。
+  **不做 `/24` 展开，也不写 `csegs` 表**；结果以 `source=osint:reverse` 进拓展域名，
+  note 写 `ip="x" · IP反查 · 待确认`。
+  单 IP 反查超过 `iprecon.max_domains_per_ip`（默认 100）时**截断并标「共享 IP」**，
+  不再整段丢弃（整段丢弃会让共享 IP 上的 IP 反查直接变成 0 条）；低相似域名仍不会被自动深扫。
+  每个返回域名带实际接口来源（`stats["domain_sources"]`），note 写
+  `ip="…" · 历史解析 · 来源=mnemonic/otx/... · 待确认`；页面另解释反查 `ip=` 是历史索引，
+  与「解析 IP」列的当前 DNS 结果不同属正常。
+  默认源 `mnemonic, otx, urlscan, hackertarget`（前三个免 key；URLScan 只覆盖近 30 天）；
+  每个 HTTP 源独立熔断：连续失败 `breaker_fail_threshold`（10）次 → 跳过
+  `breaker_cooldown`（100）次调用 → 第 101 次半开探测；成功恢复并继续逐次检查，失败重新计数。
+  `_c_segments()` / `csegs` 只保留为**历史数据与回归测试**，生产 `run()` 不调用。
+  IP 反查源响应解析走 `json.loads` + 逐项结构校验，**不用 `eval`**（见 `TODO.md` B-3）。
 - **favicon 反查**（`scanner/fofa.py` + `scanner/mmh3.py`）：对存活站点（受 `fofa.max_sites` 限制）
   并发算 favicon 的 **mmh3**（`fingerprint.favicon_hash`）→ 按哈希去重 → 逐个 `icon_hash="N"` 查询 FOFA →
   **命中数 > `fofa.black_ico_threshold`（默认 200）判为"黑 ico"**（公共图标：默认页、通用框架图标），
@@ -245,11 +244,12 @@
   同一子串"的无关域名（标题含 `targ1` 时保留 `targ1.money`，丢弃 `silviatarg1.com`/`targ1wireline.com`）；
   设 `substring` 可回退到旧的子串匹配。切不出 token 的标题（如纯中文）**fail-open 保留**。
   来源 `osint:fofa-title`（页面显示「FOFA·标题反查」）。
-- 产物：SQLite `csegs` 表（任务详情「C 段」页签、报告「C 段视野」小节；
-  `/csegs` 路由仍在但已不进侧边栏 —— 该数据属任务维度）、
-  新域名以 `source="osint:cseg"` / `"osint:fofa"` / `"osint:fofa-cert"` 补入 `subdomains` ——
-  它们是**关联域名**，在「拓展域名」页展示（不进「子域名资产」页，判据 `db.EXT_SUBDOMAIN_WHERE`），
-  来源列显示为 `C 段反查` / `FOFA·ICO 反查` / `FOFA·证书反查`，便于一眼认出哪些是 FOFA 找出来的；
+- 产物：新域名以 `source="osint:reverse"` / `"osint:fofa"` / `"osint:fofa-cert"` 补入
+  `subdomains` —— 它们是**关联域名**，在「拓展域名」页展示（不进「子域名资产」页，
+  判据 `db.EXT_SUBDOMAIN_WHERE`），来源列显示为 `IP 反查（第三方接口）` /
+  `FOFA·ICO 反查` / `FOFA·证书反查`；IP 反查来源列还会带 `（mnemonic/otx）`。
+  历史任务可能还有 `osint:cseg`，它是**已停用的历史 C 段标签**，新反查排在其前，
+  「另见于」不再重复；`csegs` 表仅历史展示；
 - **入库前过用户黑名单**（`scanner/blacklist.py`）：命中的域名连子域一起丢弃，
   因此它们同样不会被后续 dirscan / vulnscan 扫到；
 - 为什么**代码默认关**（随包 `settings.yaml` 已把两段打开）：三项都依赖**第三方公共接口**（`api.webscan.cc` / FOFA），可用性不由我们掌控；
@@ -308,7 +308,8 @@
   跑完不改全局策略）。GUI 在 `/api/tasks` 里除了写选项**还会自动补上 `dirscan` 阶段**，
   并按 `STAGE_ORDER` 归位（`runner` 按给定顺序执行、不排序），响应里用 `auto_stages` 提示。
 - 输入：存活站点，先做**去重**（`_dedup_sites`：同一任务内「标题 + 响应长度」相同的别名站只留首个，
-  与 `/sites` 页折叠同一口径），再按 `limits.dirscan_max_urls` 截断；
+  与 `/sites` 页折叠同一口径；续337 起还会跳过 `sites.same_app_of` 非空的**同功能副本**），
+  再按 `limits.dirscan_max_urls` 截断；
   **补扫任务兜底**：只跑 `dirscan` 的补扫任务没有 `probe` 产物（内存与库里都没有站点），
   此时用 `_sites_from_targets` 从 `ctx.targets` 兜底（URL 原样用，domain/ip 补 `http://`）——
   否则补扫会"无存活站点，跳过"，功能等于废掉；
@@ -483,7 +484,7 @@
   4. **目录命中离群**：某站点目录命中数 ≥ `OUTLIER_MIN_HITS`(15) 且 ≥ 同任务站点中位数 ×
      `OUTLIER_RATIO`(3) → 该站目录面异常宽（常意味着后台/调试接口暴露）；
   5. **同 C 段多 IP**：单个 `/24` 归纳出 ≥ `CSEG_MIN_IPS`(3) 个 IP → 提示段内其它主机值得看
-     （`csegs` 非空本身来自 `osint` 的 C 段反查）；
+     （只对续336 之前写有 `csegs` 的历史任务有效；新任务只做精确 IP 反查，不再产生 C 段数据）；
 - 产物：`leads` 表（`kind="heuristic"`，级别一律 `info`）；`max_leads`（默认 50）截断；
 - **边界**：只写 `leads`，不写 `vulns`、不计入漏洞数；**主动 fuzz 仍不做**（样本量不够时那是纯噪声）。
 
@@ -533,7 +534,7 @@ logs/task_1_mytask/
 ├── passive_multi.txt # 内置多来源被动收集命中（scanner/passive.py）
 ├── brute_*.txt       # puredns 输出（每域名一个）
 ├── subdomains.txt    # 合并去重后的子域名
-├── cnames.txt        # 子域名 → CNAME 链（takeover 阶段产物）
+├── cnames.txt        # 子域名 → CNAME 链（subdomain 阶段产物）
 ├── hosts.txt         # 参与探测的主机全集
 ├── httpx_url.txt     # 传给 httpx 的候选 URL
 ├── httpx_out.json    # httpx JSONL 输出（-irr：每行含根响应 body/header）
@@ -580,7 +581,7 @@ logs/task_1_mytask/
 | fofa.title_match | label | 标题反查**归属相关性**：`label`＝标题 token 须与候选域名某个 label 完全相等；`substring`＝旧的子串匹配（回退/对照） |
 | fofa.max_title_queries | 10 | 每任务最多反查多少个站点标题 |
 | vulnscan.enabled | true | **阶段级**开关：漏洞初筛整阶段开关（关掉即"只测绘不探测"） |
-| takeover.enabled / jsmine.enabled | true | 子域接管 / JS 挖掘的阶段级开关 |
+| jsmine.enabled | true | JS 挖掘的阶段级开关 |
 | portscan.enabled / screenshot.enabled | 随包 / DEFAULTS：portscan **true**、screenshot **false** | 端口与服务扫描（**两档都开**，续269）/ 站点截图（**两档都关**）的阶段级开关 |
 | cert.enabled / max_sites / timeout / tls_ports | **false** / 30 / 8s / [443,8443,9443] | TLS 证书取证（**默认关**）：握手目标上限与超时；`tls_ports` 决定"非 https 但端口命中"的站点是否也试。建任务勾选或 CLI `-p cert` → 任务级 `cert_on` 单次生效 |
 | dirscan.enabled / vulnscan.enabled | true / true | 目录发现（**默认开、默认深扫 + 递归 1 层**，续144）/ 漏洞初筛（默认开）的阶段级开关。想要早期那种"目录默认不扫"的行为，把 `dirscan.mode` 之外的总开关关掉即可 |
@@ -602,10 +603,9 @@ logs/task_1_mytask/
 | checks.disabled_categories / disabled_checks | [] | 按 OWASP 分类 / check id 关闭（根本不执行） |
 | checks.poc_link_tags | true | 指纹→POC 联动：站点技术栈命中的 POC 优先执行且不受每站点上限约束 |
 | checks.poc_max_per_site | 80 | 每站点最多执行多少个 POC（联动命中项不计入） |
-| takeover.enabled / max_hosts / http_check | true / 300 / true | 子域接管检测：开关、主机上限、是否补一次 HTTP 特征比对降误报 |
 | portscan.enabled / max_hosts / ports / timeout / workers / banner | **true** / 100 / 空(TOP 表) / 1.0s / 64 / true | 端口与服务扫描（**两档都开**，续269）；端口支持 `"80,443"` 或 `"1-1024"` |
 | jsmine.enabled / max_pages / max_js / secrets / blacklist / drop_absent_zone | true / 20 / 40 / true / [] / true | JS 资产挖掘：开关、页面/JS 上限、是否提取凭据、额外排除的第三方域后缀、**是否剔掉「注册域不存在」的成员访问链碎片**（续113，关掉只是碎片回库，页面仍默认收起未解析行） |
-| iprecon.enabled / api / max_ips / max_hosts / max_domains_per_ip / workers / timeout | **随包 true**（DEFAULTS false）/ api.webscan.cc / 500 / 200 / 30 / 5 / 10s | C 段反查（DEFAULTS 关、随包已开）：接口地址（留空回落默认）、待查 IP/主机上限、单 IP 域名上限（超过判共享主机，不纳入资产）、并发与超时 |
+| iprecon.enabled / from_targets / sources / breaker_enabled / breaker_fail_threshold / breaker_cooldown / api / max_ips / max_hosts / max_domains_per_ip / workers / timeout | **随包 true**（DEFAULTS false）/ true / mnemonic,otx,urlscan,hackertarget / true / 10 / 100 / api.webscan.cc / 500 / 200 / 100 / 5 / 10s | 精确 IP 反查（DEFAULTS 关、随包已开）：目标真实 IP 自动反查、源顺序、每源独立熔断（连续失败 10 次→跳过 100 次→第 101 次半开）、接口地址、上限、并发与超时 |
 | fofa.enabled / max_sites / max_assets / workers / black_ico_threshold | **随包 true**（DEFAULTS false） / 30 / 100 / 5 / 200 | favicon（mmh3）反查同源资产（DEFAULTS 关、随包已开）：算 favicon 的站点上限、单次查询资产上限、并发、黑 ico 阈值（命中数超过即放弃拓展） |
 | fofa.cert_enabled / cert_threshold / max_cert_queries | true / 200 / 10 | 证书反查（`cert="domain"`，跟随 favicon 开关）：通用证书阈值（命中数超过即放弃拓展）、每任务最多查几个注册域 |
 | blacklist.enabled / path | true / config/blacklist.txt | 用户黑名单：命中即不入资产库（含其所有子域）；纯文本、每次重读、可直接手工编辑 |
@@ -621,16 +621,6 @@ logs/task_1_mytask/
 | tools.fscan | fscan | fscan 二进制名/路径（缺省只在 PATH 找，找不到跳过）；调用时强制 `-np -nobr -nopoc`，只用其端口发现能力 |
 | tools.* | — | 外部工具路径/命令（subfinder / puredns / httpx / nmap / dirmap.python·script·threads …） |
 | dicts.* | — | 各字典路径：**浅扫 `dirs_shallow`** + 技术栈字典（`dirs_common`/`dirs_jsp`/`dirs_php`/`dirs_asp`）+ 框架字典（`dirs_wordpress`/`dirs_spring`/`dirs_weblogic`…12 桶）+ 暴露面 `dirs_exposure` + `dicts.cdn_cname`（CDN 厂商 CNAME 后缀名单）+ `dicts.cdn_ips`（CDN 厂商任播 IP 段名单） |
-### ⑭ hostcollide 同 IP 的 Host 碰撞（`hostcollide.enabled`，**两档都开**）
-
-- 位置：`takeover` 与 `portscan` 之间 —— 先有 CNAME 链，再拿 IP 去撞其它虚拟主机，最后才扫端口；
-- 处理（`scanner/hostcollide.py`）：把同一 IP 上已知的主机名当对照集，试"这个 IP 上还挂了谁"的常见命名
-  并带上 `Host:` 头；只读 GET，指纹与该 IP 的默认虚机比对，单 IP 有预算上限。命中写进 `subdomains`
-  且 `source="collide:<ip>"`，按 own 口径参与后续探测；
-- 开关：策略级 `hostcollide.enabled` 默认**开**；建任务表单**没有**勾选框、任务详情页**没有**补跑按钮
-  （`POST /api/hostcollide/run` 已于续269 撤掉）。要单任务强制跑用任务选项 `hostcollide: true` / CLI `--hostcollide`；
-- 边界：只碰本任务已确认的 IP，不对整个 C 段发散；命中是"疑似同 IP 的虚拟主机"，仍由后续 probe 验证存活。
-
 ### ⑮ crawl 站点爬虫（`crawl.enabled`，**两档都开**）
 
 - 位置：`dirscan` 与 `vulnscan` 之间 —— 目录是"猜出来的路径"，爬虫是"页面里本来就写着的链接"；

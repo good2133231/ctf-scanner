@@ -3,8 +3,8 @@
 {% block content %}
 <p class="muted note">按 <b>/24 C 段</b>归纳的 IP 视野：每行是一个 IP 及其反查到的域名。
   同段主机常属同一套业务（同机房/同客户/同备案主体），是找旁路的常见起点。
-  该数据来自 <b>osint</b> 阶段的 C 段反查，默认关闭（走第三方公共接口），
-  在「策略配置 → 外部情报拓展」里打开后新任务才会产出。
+  该数据来自 osint 阶段的 C 段反查；<b>该能力已停用</b>（续336：同段反查很容易把不属于
+  本目标的资产收进来），这里只展示历史任务留下的数据，新任务不再产出。
   网段相同（同 /24）但来自不同任务的资产会折叠成一行，重复行用 <code>data-dup-of</code> 标记。</p>
 <section class="panel">
   <form class="filters" method="get" action="{{ pager.base }}">
@@ -36,7 +36,7 @@
         <td class="muted small mono">{{ c._dup_domains|join(', ') or '-' }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="6" class="muted">没有匹配的 C 段数据（osint 阶段的 C 段反查默认关闭）。</td></tr>
+      <tr><td colspan="6" class="muted">没有匹配的 C 段数据（C 段反查已停用，只保留历史任务数据）。</td></tr>
     {% endfor %}
     </tbody>
   </table>

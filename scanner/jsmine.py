@@ -503,7 +503,7 @@ def _new_result():
     return {"domains": [], "urls": [], "secrets": [], "js_count": 0}
 
 
-def mine(url, settings, logger=None, text_sink=None):
+def mine(url, settings, logger=None, text_sink=None, max_js=None):
     """挖掘单个站点的 JS 资产。
 
     `text_sink(resp)`（续126 引入、续127 改成整条响应）：把**已经抓到的**每份响应原样交给调用方。
@@ -522,7 +522,8 @@ def mine(url, settings, logger=None, text_sink=None):
     cfg = settings.get("jsmine") or {}
     limits = settings.get("limits") or {}
     timeout = int(limits.get("http_timeout", 10))
-    max_js = max(0, int(cfg.get("max_js", 40)))
+    # 续334：调用方可给本次预算（全任务共享 max_js_total），不给才用单站上限
+    max_js = max(0, int(cfg.get("max_js", 40) if max_js is None else max_js))
     want_secrets = cfg.get("secrets", True) is not False
     blacklist = cfg.get("blacklist") or []
     # 注释剥离（2026-10-13 用户点单）：只作用于**域名抽取**——license banner 注释里的

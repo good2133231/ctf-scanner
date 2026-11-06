@@ -15,7 +15,7 @@ python cli/client.py -t <单目标> [选项]
 | `-t, --target` | 单目标，可重复 `-t a.com -t http://b.local/` |
 | `-n, --name` | 任务名（默认取文件名或 cli-task） |
 | `--split` | **每个目标单独建一个任务**（任务名相同）：按行拆、最多 200 个；归一后重复的只建一个、解析不了的行不建并回报条数。与 `--report*` 互斥（拆完请对单个任务导出） |
-| `-p, --stages` | 逗号分隔的阶段：`subdomain,takeover,hostcollide,portscan,probe,cert,screenshot,osint,jsmine,dirscan,crawl,vulnscan,intel,heuristic,github`（**共 15 个**，默认全部；`takeover`/`hostcollide`/`portscan`/`jsmine`/`dirscan`/`crawl`/`vulnscan` 策略级默认开，`cert`/`screenshot`/`osint`/`intel`/`heuristic`/`github` 另受策略级开关约束，见下。**显式点名 `cert` / `screenshot` 会落任务级 `cert_on`/`screenshot_on`，只对本次生效**；不写 `-p` 时不会偷偷打开这两个默认关的阶段） |
+| `-p, --stages` | 逗号分隔的阶段：`subdomain,portscan,probe,cert,screenshot,osint,jsmine,dirscan,crawl,vulnscan,intel,heuristic,github`（**共 13 个**，默认全部；`portscan`/`jsmine`/`dirscan`/`vulnscan` 策略级默认开，`cert`/`screenshot`/`osint`/`intel`/`heuristic`/`github` 另受策略级开关约束，见下。**显式点名 `cert` / `screenshot` 会落任务级 `cert_on`/`screenshot_on`，只对本次生效**；不写 `-p` 时不会偷偷打开这两个默认关的阶段） |
 | `--full-ports` | **本次任务**端口走全端口 `1-65535`（等价 GUI 任务选项 `portscan_full`）；选了却没把 `portscan` 写进 `-p` 时**自动补上该阶段** |
 | `--full-dir` | **本次任务**目录走深扫：全量分层字典 + dirmap + 后缀派生（等价 GUI 任务选项 `dirscan_full`）；同样自动补 `dirscan` 阶段 |
 | `--recursive-dir` | **本次任务**开启**目录递归**：深扫时对命中的目录再往下打一层（等价 GUI 任务选项 `recursive_dir`）；勾它就等于点名要深扫，会**自动带上 `dirscan_full` 并补 `dirscan` 阶段**。额度见策略 `dirscan.recursive_depth` / `recursive_max_dirs` / `recursive_max_paths`（默认 1 层 / 5 目录 / 40 条，约 +215 请求/站） |
@@ -58,8 +58,8 @@ python cli/client.py -t http://target.local/ --cookie "SESSION=xxx" -H "X-Api-Ke
 ### 典型输出
 
 ```
-[*] 任务 #1 开始：recon-0921（阶段：subdomain,takeover,portscan,probe,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic,github）
-===== 阶段 1/12：subdomain =====
+[*] 任务 #1 开始：recon-0921（阶段：subdomain,portscan,probe,screenshot,osint,jsmine,dirscan,vulnscan,intel,heuristic,github）
+===== 阶段 1/11：subdomain =====
 [subdomain] subfinder 不可用，改用内置多来源被动收集 …
 [passive] crt.sh → 12 个（example.com）
 [passive] example.com 汇总 15 个（5/6 个源有响应）
@@ -251,9 +251,9 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    不再是 `passive:crt.sh` 这种内部写法。
    每行左侧可勾选，页面顶部两个按钮对勾选行生效：**加入黑名单**、**批量跑子域名（新建任务）**；
    JS 与外部情报带出来的关联域名**不在此页**（见下一栏）；
-5. **拓展域名**：从 JS 挖掘（`js:mine`）与外部情报（`osint:cseg` C 段反查 / `osint:fofa` FOFA·ICO 反查 /
-   `osint:fofa-cert` FOFA·证书反查 / `osint:fofa-title` FOFA·标题反查 /
-   `osint:vt` VirusTotal·子域反查）带出来的**关联域名**，
+5. **拓展域名**：从 JS 挖掘（`js:mine`）与外部情报（`osint:reverse` IP 反查 /
+   `osint:fofa` FOFA·ICO 反查 / `osint:fofa-cert` FOFA·证书反查 / `osint:fofa-title` FOFA·标题反查 /
+   `osint:vt` VirusTotal·子域反查；`osint:cseg` 是历史 C 段（已停用）的旧任务数据）带出来的**关联域名**，
    列/筛选/勾选操作同「子域名资产」（来源列带 **FOFA** 字样，一眼能看出哪些是 FOFA 找出来的）。
    末列「**敏感**」显示该域名下 JS 挖到的疑似凭据条数（`js-secret-*`，详见「漏洞风险」页）。这些域名**未必属于目标**，
    独立成页是为了避免误判资产归属。
@@ -269,7 +269,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    另有 `jsmine.strip_comments`：域名抽取前剥离 JS 注释（`lodash.com` / `feross.org` 这类
    OSS 主页都藏在 license banner 注释里；凭据与 flag 抽取不受影响）。
    **按来源分类浏览与排序**（`?src=`）：页顶「来源分类」按钮组可只看某一类，默认列表也按
-   **JS 挖掘 → FOFA·标题反查 → FOFA·证书反查 → FOFA·ICO 反查 → C 段反查** 的顺序排列
+   **JS 挖掘 → FOFA·标题反查 → FOFA·证书反查 → FOFA·ICO 反查 → IP 反查 → 历史 C 段（已停用，仅旧任务）** 的顺序排列
    （同类内新的在前），不会把几种来源夹在一起。
    **默认隐藏重叠资产**：某个域名若已作为「目标自身子域名」出现在任意任务里（域名级全局判重），
    说明它早就在资产清单里，这里不再重复列出；页顶开关「显示全部（含重叠）」可放开（`?all=1`）；
@@ -280,6 +280,12 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
    - **解析选中域名（DNS）**：纯 DNS 查询、零 HTTP，回填「解析 IP / CNAME / CDN」与失败原因；
    - **送去探测（新建任务）**：把勾选域名打包成新任务跑 `probe → dirscan → vulnscan`；
    - **加入黑名单**：与批量跑子域名页同一端点，命中后不再进资产库、自然也不再被扫。
+
+   > **同功能副本（续337）**：自动送探建出的子任务在 `probe` 阶段会用**已经拿到的根响应正文**
+   > 顺手算页面 hash（归一化正文 SHA1 + SimHash，零额外请求）；如果该域名的根页面与主任务根站
+   > **页面内容相同、且 IP 相同**，站点行会标 `same_app_of=<代表站>`，后续 `dirscan/vulnscan`
+   > 跳过它，但域名、站点、证书、截图等索引仍保留。只在**同一父任务树 + 自动送探子任务**里判，
+   > 不跨任务树；手工「送去探测」不自动跳过（人工点名要扫就以人工为准）。
 
    > **同一轮就会补探（续139）**：`osint`、`jsmine` 排在 `probe` **之后**，新挖出来的域名以前
    > 赶不上本轮存活探测，于是停在"有域名、无站点、无检测"；现在 `jsmine` 阶段末尾**无条件**调用
@@ -349,7 +355,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
      **按检查项细粒度开关**（`disabled_checks`，逐个 check id 关闭，被级别门跳过的项会标注「·已按级别跳过」）；
    - **动态免杀**（`evasion`）：UA 随机化 / XFF 伪装 / payload 变形开关与绕过强度（bypass_level 0~3）/ WAF 探测；
    - **信息收集**（`recon`）：泛解析过滤、多来源被动收集开关与单源超时、与 subfinder **取并集**；
-   - **资产面拓展**（`assets`）：子域接管、JS 挖掘、**端口服务**（端口列表 / **端口范围**
+   - **资产面拓展**（`assets`）：JS 挖掘、**端口服务**（端口列表 / **端口范围**
      `portscan.mode`（top / full 全端口）/ `portscan.full_ports` / `portscan.exclude_scanned` 跳过已扫端口 /
      **扫描引擎 `portscan.engine`**：`auto`＝fscan → nmap → 内置）、**站点截图**
      （`screenshot.enabled`，**随包开**（续303；代码 `DEFAULTS` 仍关）；**建任务时勾「截图」＝任务级点名**，
@@ -371,8 +377,11 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
      `recursive_depth`（默认 0 = 关）/ `recursive_max_dirs`（5）/ `recursive_max_paths`（40）。
      递归只对**目录型命中**生效（`/admin` 而非 `/config.php`），且**只在深扫档**；
      建任务勾「目录递归（一层）」或 CLI `--recursive-dir` 可对**本次任务**打开（不改全局策略））这几类的开关与上限；
-   - **外部情报拓展（OSINT）**（`osint`）：`iprecon`（C 段反查开关 / 接口地址 / IP 上限 / 主机上限 /
-     单 IP 域名上限 / 并发 / 超时）与 `fofa`（favicon 反查开关 / 站点上限 / 资产上限 /
+   - **外部情报拓展（OSINT）**（`osint`）：`iprecon`（目标真实 IP 反查 + favicon 命中裸 IP 的自动反查开关 /
+     **源顺序 `sources`（默认 `mnemonic, otx, urlscan, hackertarget`；Mnemonic / OTX / URLScan 免 key，
+     HackerTarget 有免费日配额）** / **接口熔断 `breaker_enabled`：同一源连续失败
+     `breaker_fail_threshold`（10）次后跳过 `breaker_cooldown`（100）次，第 101 次半开探测；
+     能用就恢复并继续逐次检查** / 单次处理上限 / 并发 / 超时；**C 段反查已停用，不做 /24 展开**）与 `fofa`（favicon 反查开关 / 站点上限 / 资产上限 /
      并发 / 黑 ico 阈值 / **证书反查子开关 `cert_enabled`** / **通用证书阈值 `cert_threshold`** /
      **每任务最多查几个注册域 `max_cert_queries`** / **标题反查子开关 `title_enabled`** /
      **公共标题阈值 `title_threshold`** / **每任务最多查几个标题 `max_title_queries`** /
@@ -441,7 +450,7 @@ python run_gui.py          # 只绑本机 5000；入口见启动横幅那行（�
   `py -3 tools/import_dir_dict.py` 清洗导入外部字典；子域名那一层同理：
   `py -3 tools/import_subdomain_dict.py --src <你那份深字典>`（清洗 + 去重 + 并集写回**深档**
   `config/dicts/subdomains_deep.txt` —— **这就是它的默认写回目标**；精简档
-  `config/dicts/subdomains.txt`（84 条）一字不动、永远全量参与。深档随仓库分发 177,875 条，
+  `config/dicts/subdomains.txt`（366 条）一字不动、永远全量参与。深档随仓库分发 177,875 条，
   不想要就 `git rm config/dicts/subdomains_deep.txt`。纯离线；`--dry-run` 只看数不写文件。
   词数闸门 `limits.brute_max_words`（puredns 那一路的深档上限，0=全量）/
   `limits.brute_fallback_max`（内置那一路的深档上限，默认 3000）**只冲深档**，超出按**等距抽样**
@@ -555,10 +564,15 @@ CIDR 已支持展开：`10.0.0.0/30` 会展开为可用主机逐条进入流水�
 `checks.min_severity`（代码默认 medium，随包 settings.yaml 是 high）再兜一层结果过滤 —— CTF 实战里它们拿不到 flag。
 需要广谱信息收集时，在「策略配置」取消这两个级别的勾选，并把最低报告级别改成 `low`/`info`。
 
-**Q：「C 段视野」一直是空的？**（该页已不在侧边栏，改到任务详情「C 段」页签看，或直接访问 `/csegs`）
-该数据来自 `osint` 阶段的 C 段反查，而 `iprecon.enabled` **随包 settings.yaml 已打开**（DEFAULTS 是关）（走第三方公共接口
-`api.webscan.cc`，可用性不由我们掌控）。打开路径：「策略配置 → 外部情报拓展」，打开后**只对新任务生效**。
-另外私有地址（`10.` / `192.168.` / `127.` 等）会被直接跳过 —— 反查公共接口对它们没有意义。
+**Q：为什么任务没有拓展域名了？是 C 段反查还是 IP 反查？**
+C 段反查（按 `/24` 展开）已**停用**；但**精确 IP 反查**仍在：`iprecon.from_targets=true` 时，
+`osint` 会把目标/子域/站点解析出的真实 IP 逐个反查成域名，结果进「拓展域名」，来源
+`osint:reverse`，note 标 `ip="x" · 历史解析 · 来源=<实际接口> · 待确认`。单 IP 命中超过
+`iprecon.max_domains_per_ip`（默认 100）会截断并标「共享 IP」，不会整段丢成 0。
+历史任务里 `osint:cseg` 是**已停用的旧 C 段标签**（底层同样是精确 IP 反查）；新反查优先，「另见于」不再重复旧标签，`csegs` 页只展示历史。反查接口返回的是历史索引，
+备注 `ip="…"` 是域名**曾经**解析到的 IP，而「解析 IP」列是当前 DNS 结果，CDN/迁移/共享主机会让两者不同。
+也可以到子域名页勾选行后点「真实 IP 反查域名并回写」；这条显式入口只查选中行的真实 IP，
+CDN / 多 IP / 未解析行会跳过并报数量，不受 `iprecon.enabled` 开关限制。
 
 **Q：favicon 反查（FOFA）怎么开？**
 ①把 fofa 的 email/key 填进 `config/keys.yaml`（**不是** `settings.yaml`，控制台不写回凭据）；

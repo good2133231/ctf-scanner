@@ -290,6 +290,27 @@ function pvRestoreOpen() {
         `#task-rows button[data-pv="${parts[1]}"][data-id="${parts[0]}"][data-inline="1"]`);
       if (b) b.click();
     });
+    // 续342：层级选「全部」时，列表只取根任务；有子任务的根任务自动展开，
+    // 不再把父子任务平铺成两行重复展示。自动展开不写 sessionStorage，
+    // 切回「只看主域名任务」时仍保持默认收起。
+    const tbl = document.getElementById("tbl-tasks");
+    if (tbl && tbl.dataset.autoExpand === "1") {
+      document.querySelectorAll(
+        `#task-rows > tr[data-id] button[data-pv="subtasks"][data-inline="1"]`
+      ).forEach((b, i) => {
+        if (Number(b.dataset.childCount || 0) <= 0) return;
+        setTimeout(() => {
+          if (!document.contains(b)) return;
+          const tr = b.closest("tr");
+          if (!tr) return;
+          const slot = tr.nextElementSibling;
+          if (slot && slot.classList && slot.classList.contains("pv-inline-row")) return;
+          b.dataset.autoOpen = "1";
+          b.click();
+          delete b.dataset.autoOpen;
+        }, 40 * i);
+      });
+    }
   };
   // ⚠️ 时序：tasks.html 里 `initTaskTable()` 是**内联脚本**（解析期就跑），那时
   // `initTaskPreview()` 的 click 委托还没挂上（它在 DOMContentLoaded 里）⇒ 直接 click
@@ -531,7 +552,9 @@ function initTaskCheckAll() {
       let n = 0;
       scope.forEach(g => {
         tf.querySelectorAll(`[data-ck-group="${g}"] input[type=checkbox]`).forEach(c => {
-          c.checked = mode === "all" ? true
+          c.checked = mode === "recon"
+            ? (c.dataset.recon === "1")   /* stages 与 expand 两个组都认这个标记 */
+            : mode === "all" ? true
             : mode === "none" ? false : c.dataset.ckDefault === "1";
           n++;
         });
@@ -544,23 +567,11 @@ function initTaskCheckAll() {
         });
       });
       const msg = document.getElementById("task-msg");
-      const label = mode === "all" ? "全部勾上" : mode === "none" ? "全部清掉" : "恢复默认";
+      const label = mode === "all" ? "全部勾上" : mode === "none" ? "全部清掉"
+        : mode === "recon" ? "信息收集专项" : "恢复默认";
       if (msg) msg.textContent = n ? `已${label}（${n} 个选项）` : "没有找到可勾选的选项";
     });
   });
-  /* 续314：耗时选项总勾选 —— 勾上＝SQL 注入 + 爬虫都勾，取消＝都取消。
-     爬虫仍是 stages 里的普通复选框，不另造字段。 */
-  const slow = tf.querySelector("input[data-slow-master]");
-  if (slow && !slow.dataset.bound) {
-    slow.dataset.bound = "1";
-    slow.addEventListener("change", () => {
-      const sqli = tf.querySelector('input[name="opt_sqli"]');
-      if (sqli) sqli.checked = slow.checked;
-      tf.querySelectorAll('input[name="stages"][data-slow-item]').forEach(c => {
-        c.checked = slow.checked;
-      });
-    });
-  }
 }
 
 
@@ -701,7 +712,7 @@ function initLightbox() {
 function pvSubtreeHtml(d) {
   // 续263：先说清"下面这批进度条是谁的" —— 面板紧贴主任务那一行，不写这一句，
   // 里面的子任务进度条会被当成主任务自己的进度（主理人报的"覆盖主任务的进度条"）。
-  const head = `<h3>子任务（#${pvEsc(d.root.id)} ${pvEsc(d.root.name)}`
+  const head = `<h3>子任务（#${pvEsc(d.root.label || d.root.id)} ${pvEsc(d.root.name)}`
     + (d.total ? `，共 ${pvEsc(d.total)} 个` : "") + `）</h3>`
     + `<p class="pv-note">下面缩进的每一行是<b>子任务自己</b>的进度；`
     + `主任务的进度在上面它自己那一行的「进度」列，两者互不影响。`
@@ -727,7 +738,11 @@ function pvSubtreeHtml(d) {
       + `<br>子域名 ${pvEsc(c.subs_own_live || 0)}（全 ${pvEsc(c.subs_own_all || 0)}）`
       + `<br>漏洞 ${pvEsc(c.vulns || 0)}`
       + `<br>拓展 ${pvEsc(c.subs_ext_live || 0)}（全 ${pvEsc(c.subs_ext_all || 0)}）</td>`
-      + `<td class="muted mono">${pvEsc(n.stages || "-")}</td>`
+      + `<td class="muted mono">${pvEsc(n.stages || "-")}`
+      // 续344（主理人点单）：子任务也要有和主任务一样的「阶段预览」按钮，
+      // 点开能看到它继承的阶段以及每个阶段跑不跑。
+      + `<br><button type="button" class="btn-mini ghost btn-xs" data-pv="stages" `
+      + `data-id="${pvEsc(n.id)}">阶段预览</button></td>`
       + `<td><span class="badge st-${pvEsc(n.status)}">${pvEsc(n.status)}</span></td>`
       + `<td><div class="bar"><i style="width:${pvEsc(n.progress)}%"></i></div>${pvEsc(n.progress)}%</td>`   /* 续241：面板里也要有进度条，不只一个百分比 */
       + `<td class="muted">${pvEsc(n.created_at || "-")}</td>`
@@ -746,7 +761,7 @@ function pvStatsHtml(d) {
   const tasks = (d.tasks || []).map(t =>
     `<span class="badge">#${pvEsc(t.id)} ${pvEsc(t.name)}</span>`).join(" ");
   return `<h3>统计（整棵衍生树资产汇聚）</h3>`
-    + `<p class="pv-note">汇聚范围：根任务 #${pvEsc(d.root.id)} 起整棵树共 ${pvEsc(d.total_tasks)} 个任务；`
+    + `<p class="pv-note">汇聚范围：根任务 #${pvEsc(d.root.label || d.root.id)} 起整棵树共 ${pvEsc(d.total_tasks)} 个任务；`
     + `同名资产跨任务去重（子域名按域名、站点按 URL、漏洞按主机+规则、邮箱按地址）。</p>`
     + `<table><thead><tr><th>资产类型</th><th>汇聚后数量</th><th>按来源任务拆分</th></tr></thead>`
     + `<tbody>${rows}</tbody></table><p class="pv-note">${tasks}</p>`;
@@ -801,7 +816,7 @@ function initTaskPreview() {
       td.innerHTML = '<div class="pv-inline-box"><p class="pv-note">加载中…</p></div>';
       slot.appendChild(td);
       tr.parentNode.insertBefore(slot, tr.nextSibling);
-      pvRemember(key);
+      if (!b.dataset.autoOpen) pvRemember(key);
       // 续282：子任务面板一展开就进 live 轮询（孙任务在跑时，进度/数量不用手动刷新）
       if (kind === "subtasks") pvLiveAdd(id, td);
       const draw = html => {

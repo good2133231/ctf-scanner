@@ -1,10 +1,11 @@
 """流水线编排：按顺序执行 Stage，统一更新任务状态与进度。
 
-阶段顺序：subdomain -> takeover -> hostcollide -> portscan -> probe -> cert -> screenshot
+阶段顺序：subdomain -> portscan -> probe -> cert -> screenshot
 -> osint -> jsmine -> dirscan -> crawl -> vulnscan -> intel -> heuristic -> github
-（默认开：takeover / hostcollide / portscan / jsmine / dirscan / crawl / vulnscan；
+（默认开：portscan / jsmine / dirscan / crawl / vulnscan；
  cert / screenshot 默认关；intel / heuristic / github 代码默认关、随包 settings.yaml 开；
- osint 由 iprecon / fofa 两个子开关决定（同样 DEFAULTS 关、随包开）；
+ osint 由 fofa / shodan / quake / ctlog / 备案 / 被动 URL 等子开关决定
+（C 段反查已停用；iprecon 用于目标真实 IP 与 favicon 命中裸 IP 的精确 IP 反查）；
  subdomain 无开关，由任务勾选的 stages 决定）
 单个阶段异常不中断整条流水线（保留已完成阶段的产物），错误**追加**记录进任务表。
 
@@ -16,6 +17,7 @@ GUI/CLI 调 `request_stop(task_id)` 置位事件，阶段在循环边界调 `ctx
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
+import json
 import threading
 import time
 import traceback
@@ -28,9 +30,7 @@ from . import throttle
 from . import devmode
 from .log import get_logger
 from .stages.crawl import CrawlStage
-from .stages.hostcollide import HostcollideStage
 from .stages.subdomain import SubdomainStage
-from .stages.takeover import TakeoverStage
 from .stages.portscan import PortscanStage
 from .stages.probe import ProbeStage
 from .stages.cert import CertStage
@@ -43,11 +43,14 @@ from .stages.intel import IntelStage
 from .stages.heuristic import HeuristicStage
 from .stages.github import GithubStage
 
-STAGE_ORDER = ["subdomain", "takeover",
-               # hostcollide（续201 接线）紧随 takeover：两者都吃"子域名 + 解析 IP"，
-               # 都要在 portscan/probe 之前把该丢的候选丢掉（它只读 GET、默认开（续269））。
-               "hostcollide",
-               "portscan", "probe",
+# 续334（主理人点单）：信息收集专项 = 子域 + probe + cert + screenshot + mini 目录 + 被动 URL。
+# cert/screenshot 是**拓展资产与可视化**，不是扫描，默认开；默认关的是慢扫描
+# （vulnscan、全量目录/dirmap、全端口、爬虫）。放在 STAGE_ORDER 之上：
+# GUI 默认值、API 缺省阶段都从这里取，避免两处各写一张表。
+RECON_STAGES = ["subdomain", "probe", "cert", "screenshot", "jsmine", "dirscan", "osint"]
+# jsmine 以 fast_domains 模式进默认：只做页面/JS 抽取，不做 DNS/CDN/停车三道闸与二层补探。
+
+STAGE_ORDER = ["subdomain", "portscan", "probe",
                # cert 与 screenshot 都需要"已有存活站点"，所以紧跟 probe；
                # cert 只做一次 TLS 握手（纯标准库、秒级），比截图廉价得多，故排在截图之前；
                # 它默认关闭（`cert.enabled`），打开后才对 https / tls_ports 站点取证
@@ -68,8 +71,6 @@ STAGE_ORDER = ["subdomain", "takeover",
 # 这里写的与 `config.DEFAULTS` 一致，但**不作为判据**。
 STAGE_LABELS = {
     "subdomain": ("子域名收集", True),
-    "takeover": ("子域接管检测", True),
-    "hostcollide": ("Host 碰撞", False),
     "portscan": ("端口与服务扫描", False),
     "probe": ("存活探测", True),
     "cert": ("SSL 证书取证", False),
@@ -84,8 +85,7 @@ STAGE_LABELS = {
     "github": ("代码泄露侦察", False),
 }
 
-STAGE_REGISTRY = {c.name: c for c in (SubdomainStage, TakeoverStage, HostcollideStage,
-                                      PortscanStage,
+STAGE_REGISTRY = {c.name: c for c in (SubdomainStage, PortscanStage,
                                       ProbeStage, CertStage, ScreenshotStage, OsintStage,
                                       JsmineStage, DirscanStage, CrawlStage, VulnscanStage,
                                       IntelStage, HeuristicStage, GithubStage)}
@@ -194,7 +194,7 @@ class StageContext:
         self.workdir = Path(workdir)
         self.logger = logger
         self.results = {"subdomains": [], "sites": [], "dirs": [], "vulns": [],
-                        "ports": [], "takeovers": [], "csegs": [], "osint_domains": [],
+                        "ports": [], "csegs": [], "osint_domains": [],
                         "flags": []}
         # 续126 敏感信息 / flag 候选抽取的并发原语：各阶段在 `pool_run` 的工作线程里**同时**调
         # `flagfind.harvest`，锁必须在这里就备好 —— "用时才建"就有两个线程各建一把的窗口
@@ -325,6 +325,30 @@ def resolve_ext_confidence(options, settings=None):
                             or ((settings or {}).get("subdomain") or {}).get("ext_min_confidence"))
 
 
+def _fmt_secs(v):
+    v = float(v or 0)
+    return f"{v:.1f}s" if v < 60 else f"{int(v // 60)}m{int(v % 60):02d}s"
+
+
+def _stage_done(ctx, name, secs):
+    """阶段收尾统一记时 + 打一行日志（续334：日志页直接能看到每个功能多久）。"""
+    ctx.stage_seconds[name] = round(float(secs), 3)
+    ctx.logger.info(f"[耗时] {name} 用时 {_fmt_secs(secs)}")
+
+
+def _log_stage_summary(ctx):
+    ss = getattr(ctx, "stage_seconds", None) or {}
+    if not ss:
+        return
+    parts = [f"{k} {_fmt_secs(v)}" for k, v in sorted(ss.items(), key=lambda kv: -kv[1])]
+    ctx.logger.info(f"[耗时] 阶段汇总（{len(ss)} 个，按耗时降序）：" + " / ".join(parts)
+                    + f"｜合计 {_fmt_secs(sum(ss.values()))}")
+    try:
+        db.set_task_stage_seconds(ctx.task_id, ss)   # 续334：详情页表格的数据源
+    except Exception as _e:      # noqa: BLE001 - 落库失败不许影响任务收尾
+        ctx.logger.warning(f"[耗时] 阶段耗时落库失败（不影响任务）：{_e}")
+
+
 class PipelineRunner:
     def __init__(self, ctx):
         self.ctx = ctx
@@ -421,7 +445,7 @@ class PipelineRunner:
                         db.append_task_error(ctx.task_id, f"{_nm}: {_e}")
                         failed.append(_nm)
                     finally:
-                        ctx.stage_seconds[_nm] = round(time.time() - _t0, 3)
+                        _stage_done(ctx, _nm, time.time() - _t0)
                 with ThreadPoolExecutor(max_workers=len(_grp332)) as _tp332:
                     _futs332 = [_tp332.submit(_one332, _n) for _n in _grp332]
                     for _f332 in as_completed(_futs332):
@@ -462,7 +486,7 @@ class PipelineRunner:
                         db.append_task_error(ctx.task_id, f"{_nm}: {_e}")
                         failed.append(_nm)
                     finally:
-                        ctx.stage_seconds[_nm] = round(time.time() - _t0, 3)
+                        _stage_done(ctx, _nm, time.time() - _t0)
                 with ThreadPoolExecutor(max_workers=2) as _tp331:
                     _futs331 = [_tp331.submit(_one331, _n) for _n in ("jsmine", "dirscan")]
                     for _f331 in as_completed(_futs331):
@@ -479,7 +503,7 @@ class PipelineRunner:
                     db.append_task_error(ctx.task_id, f"{sname}: {e}")
                     failed.append(sname)
                 finally:
-                    ctx.stage_seconds[sname] = round(time.time() - _t_stage, 3)
+                    _stage_done(ctx, sname, time.time() - _t_stage)
             done_stages.add(sname)
             if i == last_ext:
                 # 拓展域名的存在性判定 + 归属追加（纯 DNS 只读 + 本地写库）。
@@ -518,6 +542,7 @@ class PipelineRunner:
             ctx.logger.warning(f"[runner] {len(failed)} 个阶段异常：{', '.join(failed)}")
         th = ctx.throttle
         budget_exhausted = bool(th and th.exhausted() and not ctx.stop_event.is_set())
+        _log_stage_summary(ctx)
         if stopped:
             done = (_base + int((100 - _base) * (i + 1) / total)) if stages else _base
             # **刻意不清 `current_stage`**（续29）：它是"最后进入的阶段"，也就是断点续扫的断点
@@ -710,9 +735,9 @@ def ext_auto_probe_enabled(settings=None, options=None):
 
 
 def ext_auto_probe_max(settings=None):
-    """一次最多自动送探几个（策略 `subdomain.ext_auto_probe_max`，出厂 5，夹到 1..50）。
+    """一次最多自动送探几个（策略 `subdomain.ext_auto_probe_max`，出厂 20，夹到 1..50）。
 
-    上限存在的理由不是性能：置信度是**启发式**，一次送 5 个与一次送 200 个的区别是
+    上限存在的理由不是性能：置信度是**启发式**，一次送 20 个与一次送 200 个的区别是
     "人还看得过来、错了能一键拉黑" 与 "脚本替你圈了一批别人的域名在扫"。
     """
     try:
@@ -720,7 +745,7 @@ def ext_auto_probe_max(settings=None):
     except (TypeError, ValueError):
         n = 0
     if n == 0:
-        n = 5
+        n = 20
     return max(1, min(50, n))
 
 
@@ -781,51 +806,85 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
     except Exception:           # noqa: BLE001 - 读记录失败按"没送过"处理，宁可少送不多送
         probed = {}
     todo = [c for c in keep if not (probed.get(_roots[c["domain"]]) or [])]
+    # 续334（主理人 2026-11-05）：**一个注册域 = 一个子任务**。旧实现把多个 root
+    # 塞进同一个子任务的 targets（#31 曾出现四个不相关注册域混扫，
+    # 站点页面看着像"配错目标"）；
+    # 现在 targets 恒为单个 root，root 下的完整域名（www.x / 001.x / apply.x）
+    # 全部进该子任务的 `seed_domains` —— 枚举这次没发现、下次前缀变了也不丢。
+    by_root = {}
+    ip_by_root = {}
+    for c in todo:
+        r = _roots.get(c["domain"]) or c["domain"]
+        by_root.setdefault(r, []).append(c["domain"])
+        if str(c.get("ip") or "").strip() and r not in ip_by_root:
+            ip_by_root[r] = str(c.get("ip") or "").strip()
     cap = ext_auto_probe_max(settings)
-    picked = todo[:cap]
-    if not picked:
+    roots = list(by_root)
+    picked_roots = roots[:cap]
+    _cap_n = max(0, len(roots) - len(picked_roots))
+    if not picked_roots:
         logger.info(f"[extdom] 自动送探：{len(keep)} 个达到阈值，但都在此前送过探了（去重命中），不再建任务")
         return {"spawned": 0, "candidates": len(keep), "capped": 0, "reason": "已送过"}
-    # 续320（主理人 2026-11-03）：建任务送**注册域**，完整域名（`sub.xxx.credit`）
-    # 作为 `seed_domains` 随任务带入 —— 子任务枚举不一定能重新发现它，漏了就是丢资产。
-    roots, seeds = [], []
-    for c in picked:
-        r = _roots.get(c["domain"]) or c["domain"]
-        if r not in roots:
-            roots.append(r)
-        if c["domain"] != r and c["domain"] not in seeds:
-            seeds.append(c["domain"])
-    domains = roots
-    child_opts = {"rescan_of": int(task_id), "ext_depth": 1, "ext_auto_probe": 0}
-    if seeds:
-        child_opts["seed_domains"] = seeds
     _auth = (options or {}).get("auth")
-    if _auth:
-        child_opts["auth"] = _auth       # 登录态继承：与手动送探同口径（续195）
-    # 续276（主理人点单「送探子任务就叫子任务N」）：与手动送探同口径，默认名 `子任务N`，
-    # N＝这个父任务名下已有子任务数 + 1（层级由 parent_id 挂着，不必把域名/数量复述进名字）。
-    name = f"子任务{len(db.list_child_tasks(int(task_id))) + 1}"
-    from . import queue as _queue      # 延迟导入：queue 顶层 import 本模块，避免循环导入
+    # 续344（主理人点单）：自动递归出来的子任务也跟父任务同一套阶段/模式，
+    # 不能只有手动送探继承。父任务阶段为空才退回 AUTO_PROBE_STAGES。
+    _pst344 = []
+    _popt344 = {}
     try:
-        cid = db.create_task(name, "\n".join(domains), list(AUTO_PROBE_STAGES),
-                             child_opts, owner_id=int(cur["owner_id"] or 0),
-                             parent_id=int(task_id))
-        db.enqueue_task(cid, "fresh", list(AUTO_PROBE_STAGES), child_opts)
-        _queue.notify()
-        db.record_ext_probes(int(task_id), int(cid), domains, kind="auto")
-    except Exception as e:      # noqa: BLE001 - 建任务失败不该牵连本任务已完成的产物
-        logger.error(f"[extdom] 自动送探建任务失败（不影响本任务产物）：{e}")
-        return {"spawned": 0, "candidates": len(keep), "capped": 0, "reason": "建任务失败"}
-    for c in picked[:5]:
+        _pt344 = db.get_task(int(task_id))
+        if _pt344:
+            _pst344 = [s for s in str(_pt344["stages"] or "").split(",")
+                       if s in STAGE_ORDER]
+            _popt344 = json.loads(_pt344["options"] or "{}") \
+                if isinstance(_pt344["options"], str) else (_pt344["options"] or {})
+    except Exception:  # noqa: BLE001 - 父任务查不到时按旧默认，不影响自动送探
+        _pst344 = []
+        _popt344 = {}
+    _child_stages344 = _pst344 or list(AUTO_PROBE_STAGES)
+    from . import queue as _queue      # 延迟导入：queue 顶层 import 本模块，避免循环导入
+    # 续276：默认名 `子任务N`，N＝这个父任务名下已有子任务数 + 1。
+    _base_n = len(db.list_child_tasks(int(task_id)))
+    kids = []
+    for _i, r in enumerate(picked_roots):
+        seeds = [d for d in by_root[r] if d != r]
+        child_opts = {"rescan_of": int(task_id), "ext_depth": 1, "ext_auto_probe": 0,
+                      # 续337：只让自动送探子任务做「同功能根页面 + 同 IP」判重；
+                      # same_app_ip 取自父任务拓展行，避免子任务再发一次 DNS。
+                      "same_app_guard": 1,
+                      "same_app_ip": ip_by_root.get(r, "")}
+        if seeds:
+            child_opts["seed_domains"] = seeds
+        if _auth:
+            child_opts["auth"] = _auth       # 登录态继承：与手动送探同口径（续195）
+        # 续344：全量/深扫等模式也继承；否则父任务勾了全量，自动子任务又退回增量。
+        for _k344 in ("full_brute", "subdomain_profile", "dirscan_full",
+                      "recursive_dir", "screenshot_on", "cert_on", "sqli"):
+            if _k344 in _popt344 and _k344 not in child_opts:
+                child_opts[_k344] = _popt344[_k344]
+        name = f"子任务{_base_n + _i + 1}"
+        try:
+            cid = db.create_task(name, r, list(_child_stages344), child_opts,
+                                 owner_id=int(cur["owner_id"] or 0),
+                                 parent_id=int(task_id))
+            db.enqueue_task(cid, "fresh", list(_child_stages344), child_opts)
+            db.record_ext_probes(int(task_id), int(cid), [r], kind="auto")
+        except Exception as e:      # noqa: BLE001 - 单个建失败不牵连其余 root
+            logger.error(f"[extdom] 自动送探建任务失败（root={r}，不影响本任务产物）：{e}")
+            continue
+        kids.append({"child": int(cid), "root": r, "seeds": seeds})
+    if not kids:
+        return {"spawned": 0, "candidates": len(keep), "capped": _cap_n, "reason": "建任务失败"}
+    _queue.notify()
+    for c in todo[:10]:
         # 取 `label` 用 .get：日志这一行不该因为候选字典少一个键就把整条流水线带崩
         logger.info(f"[extdom] 自动送探 {c.get('domain')}"
                     f"（置信度 {c.get('label') or c.get('level') or '-'}）：{c.get('reason') or ''}")
-    _cap_n = max(0, len(todo) - len(picked))
     logger.info(f"[extdom] 自动送探：{len(keep)} 个达到「{extdom.conf_label(min_conf)}」且主域名不同"
-                f" → 送出 {len(domains)} 个（上限 {cap}）→ 子任务 #{cid}（parent_id={task_id}）"
-                + (f"，另有 {_cap_n} 个超上限未送" if _cap_n else "")
+                f" → 拆成 {len(kids)} 个子任务（每注册域一个，上限 {cap}）"
+                + (f"，另有 {_cap_n} 个注册域超上限未送" if _cap_n else "")
                 + f"；{len(keep) - len(todo)} 个此前已送过探、{blocked} 个被闸挡在外面")
-    return {"spawned": 1, "child": int(cid), "domains": domains,
+    return {"spawned": len(kids), "child": kids[-1]["child"],
+            "children": kids, "domains": picked_roots,
             "candidates": len(keep), "capped": _cap_n}
 
 def shot_retry_targets(task_id):

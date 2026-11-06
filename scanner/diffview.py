@@ -25,7 +25,7 @@ CATEGORIES = [
     ("sites", "存活站点", ("probe",)),
     ("tech", "组件指纹", ("probe",)),
     ("ports", "开放端口", ("portscan",)),
-    ("vulns", "潜在漏洞", ("vulnscan", "takeover")),
+    ("vulns", "潜在漏洞", ("vulnscan",)),
     ("flags", "敏感信息", ("probe", "jsmine", "dirscan", "vulnscan")),
 ]
 

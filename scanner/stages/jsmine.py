@@ -10,6 +10,7 @@
 
 受 `jsmine.enabled` 开关控制（默认开），抓取量由 `max_pages` / `max_js` 限制。
 """
+import time
 from urllib.parse import urlparse
 
 from .base import Stage
@@ -66,6 +67,11 @@ class JsmineStage(Stage):
         """
         ctx = self.ctx
         cfg = ctx.settings.get("jsmine") or {}
+        # 续334（urlfinder 式）：快速域名模式只做抽取，不做 DNS/CDN/停车三道闸。
+        if cfg.get("fast_domains"):
+            ctx.logger.info(f"[jsmine] fast_domains：{len(domains)} 个候选跳过 DNS/CDN/停车校验，直接入库")
+            return list(domains), {"nxdomain": [], "cdn": [], "parked": [],
+                                   "dead": [], "unchecked": len(domains)}, {}, {}
         stats = {"nxdomain": [], "cdn": [], "parked": [], "dead": [], "unchecked": 0}
         if not domains or cfg.get("verify_resolve", True) is False:
             return list(domains), stats, {}, {}
@@ -192,12 +198,27 @@ class JsmineStage(Stage):
 
         seen_value = _existing_js_secrets(ctx.task_id)
         js_count = 0
+        # 续334（提速）：全任务 JS 预算 + 墙钟上限。此前 max_js 是**每站**上限，
+        # 20 站 × 40 JS 最坏 800 次请求；现在默认最多抓 80 个 JS、120 秒，
+        # 到量就停剩余站点并写日志（不静默截断）。
+        _budget_js = max(0, int(cfg.get("max_js_total", 80) or 0))
+        _budget_s = float(cfg.get("time_budget", 120) or 120)
+        _deadline = time.monotonic() + _budget_s
+        _spent_js = 0
         for u in sites:
+            if time.monotonic() > _deadline:
+                ctx.logger.warning(f"[jsmine] 到达时间上限 {_budget_s:.0f}s，剩余站点不再挖")
+                break
+            if _spent_js >= _budget_js:
+                ctx.logger.warning(f"[jsmine] 到达 JS 预算 {_budget_js} 个，剩余站点不再挖")
+                break
             if ctx.stopped():
                 ctx.logger.warning("[jsmine] 任务已请求停止，结果不再入账")
                 return
             try:
+                _left = max(0, _budget_js - _spent_js)
                 res = jsmine.mine(u, ctx.settings, logger=ctx.logger,
+                                 max_js=min(int(cfg.get("max_js", 20)), _left),
                                  # 续126/127：页面与每个 JS 的响应都已在手 ⇒ 一次回调同时喂两件事，
                                  # **零额外请求**：敏感信息抽取 + 组件指纹补标（后者要状态码与头）
                                  text_sink=lambda _r: (
@@ -210,6 +231,7 @@ class JsmineStage(Stage):
                 ctx.logger.warning(f"[jsmine] {u} 挖掘失败：{e}")
                 continue
             js_count += int(res.get("js_count") or 0)
+            _spent_js += int(res.get("js_count") or 0)
             domains.update(res.get("domains") or [])
             # 续267：同一域名可能从多个站点的 JS 里都挖到 —— 留**第一个**（页面那一格
             # 只放得下一句；"还被哪些来源找到过"另有「另见于」列在管，不重复造轮子）。

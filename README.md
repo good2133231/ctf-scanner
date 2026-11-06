@@ -3,7 +3,7 @@
 > **本地开发 / 换 AI 接手**：先读 [`本地开发.md`](本地开发.md)（触发语「你是本地开发」）；
 > 可粘贴的整段提示词在 [`docs/local-ai-prompt.md`](docs/local-ai-prompt.md)。
 
-面向 **CTF 与授权渗透测试** 的一体化资产测绘与漏洞初筛框架。参考灯塔（ARL）的任务化思路，把常用的「子域名收集 → 子域接管 → Host 碰撞 → 端口服务 → 存活探测 → TLS 证书取证 → 站点截图 → 外部情报拓展 → JS 资产挖掘 → 目录发现 → 站点爬虫 → 漏洞初筛 → 情报订阅 / 启发式候选 / GitHub 泄露检索」**15 阶段**流水线产品化：
+面向 **CTF 与授权渗透测试** 的一体化资产测绘与漏洞初筛框架。参考灯塔（ARL）的任务化思路，把常用的「子域名收集 → 端口服务 → 存活探测 → TLS 证书取证 → 站点截图 → 外部情报拓展 → JS 资产挖掘 → 目录发现 → 站点爬虫 → 漏洞初筛 → 情报订阅 / 启发式候选 / GitHub 泄露检索」**13 阶段**流水线产品化：
 
 - **CLI 客户端**：导入目标文件，全自动执行完整流水线；
 - **Web 控制台（GUI）**：仿 ARL 的任务/资产/漏洞/POC 管理界面（**17 栏侧边栏**：仪表盘 / 任务管理 / 子域名资产 / 站点资产 / **链接资产** / IP 资产 / **全端口扫描** / **数据探测** / **EXP 待确认** / 漏洞风险 / POC 管理 / **外部工具** / 策略配置 / **账号管理** / **执行节点** / **访问审计** / **数据迁移**；后 7 栏 `admin_only` —— 子用户**不渲染**且路由层 403；`dev.enabled=true` 时管理员另有第 18 栏「开发模式」），可视化添加目标并发起扫描，支持任务批量停止/重启/删除与报告导出，任务详情页可对**中断的任务「续跑」**（从断点接着跑，不清已有资产）；子域名标出**解析 IP 与 CDN/非 CDN**（可标签过滤）、**来源可读标签**（能一眼看出哪些是 FOFA 找出来的），可勾选行**批量加入黑名单**或**批量跑子域名（新建任务）**；拓展域名与站点页**默认隐藏重叠资产**（页顶开关 `?all=1` 放开），站点页另折叠同任务内**标题相同**的重复项（续147 起不再比响应长度）；**六个资产页都能「按任务筛选」**（与漏洞页同口径，筛选状态活过翻页与切标签）；子域名/拓展域名**同一域名只显示一行**（来源按权威性排序，被并掉的写进「另见于 …」）且**默认只列解析成功的**（被收起的条数报出来，`?nores=1` 展开）；3xx 站点显示**「跳转后」**（`301 → 200` + 落地页标题与最终 URL，原始那一跳不改写）；
@@ -18,7 +18,7 @@
 - **POC 管理**：YAML 格式 POC 引擎（**nuclei 语法兼容子集**：含 `raw` / `flow` / `workflows` 子集支持），可直接加载官方 nuclei 模板，支持上传、启停、目录扫描；
 - **检测分级门控（四层）**：阶段级总开关（`vulnscan.enabled`，关闭即"只测绘不探测"）+ 按级别整体跳过（`skip_severities`，默认 info/low **连请求都不发**）+ 按最低报告级别收敛结果（DEFAULTS 是 medium、随包 `config/settings.yaml` 是 high）+ OWASP 分类 / 单项检查开关，默认屏蔽"太 low 的洞"；
 - **动态免杀**：UA 随机化、浏览器化请求头、WAF 指纹识别、注入 payload 变形（分级 0~3，变体与参数顺序每次随机）；
-- **信息收集增强**：免 key 多来源被动子域名收集（crt.sh / certspotter / alienvault 等）+ 泛解析过滤 + 子域接管指纹（41 条第三方服务）+ 子域名**解析 IP / CDN 标记**（`config/dicts/cdn_cname.txt` 292 条厂商 CNAME 后缀 + `config/dicts/cdn_ips.txt` 15 段厂商任播 IP 段，CNAME 优先、IP 段兜底，纯 DNS 只读判定）+ JS 资产挖掘（域名/接口/疑似凭据，JS 与情报带出的域名归入**拓展域名**页）+ **外部情报拓展**（`/24` C 段反查域名；favicon 的 mmh3 去 FOFA 反查同源资产，命中过多的"黑 ico"主动放弃拓展；**TLS 证书反查** `cert="domain"` 与**标题反查** `title="xxx"`，命中过多的"通用证书 / 公共标题"（如 404 默认页）同样放弃 —— 模板页标题连查询都不发）+ **用户黑名单**（`config/blacklist.txt`，入库前过滤，命中域名连子域都不入资产库）；**拓展域名**按来源分类排序（JS 挖掘 → FOFA·标题 / 证书 / ICO → C 段，不交错），并可对勾选域名手动**解析 DNS / 送去探测（新建 `subdomain→probe→dirscan→vulnscan` 任务）/ 归属本项目的追加为子域名 / 加入黑名单** —— 这类域名未必属于目标，不自动全跑）；拓展域名页**按主域名分组折叠**（`?group=0` 切回平铺）；
+- **信息收集增强**：免 key 多来源被动子域名收集（crt.sh / certspotter / alienvault 等）+ 泛解析过滤 + 子域名**解析 IP / CDN 标记**（`config/dicts/cdn_cname.txt` 292 条厂商 CNAME 后缀 + `config/dicts/cdn_ips.txt` 15 段厂商任播 IP 段，CNAME 优先、IP 段兜底，纯 DNS 只读判定）+ JS 资产挖掘（域名/接口/疑似凭据，JS 与情报带出的域名归入**拓展域名**页）+ **外部情报拓展**（`/24` C 段反查域名；favicon 的 mmh3 去 FOFA 反查同源资产，命中过多的"黑 ico"主动放弃拓展；**TLS 证书反查** `cert="domain"` 与**标题反查** `title="xxx"`，命中过多的"通用证书 / 公共标题"（如 404 默认页）同样放弃 —— 模板页标题连查询都不发）+ **用户黑名单**（`config/blacklist.txt`，入库前过滤，命中域名连子域都不入资产库）；**拓展域名**按来源分类排序（JS 挖掘 → FOFA·标题 / 证书 / ICO → C 段，不交错），并可对勾选域名手动**解析 DNS / 送去探测（新建 `subdomain→probe→dirscan→vulnscan` 任务）/ 归属本项目的追加为子域名 / 加入黑名单** —— 这类域名未必属于目标，不自动全跑）；拓展域名页**按主域名分组折叠**（`?group=0` 切回平铺）；
 - **站点存活口径与二层遍历（续139）**：`probe` 不再挂状态码白名单 —— **服务端回了一个真实 HTTP 状态码就记站点**（`probe.is_alive`，含 301/403/429/500/502/521），因为 CDN 边缘活着、源站挂了本身就是资产事实（旧口径 `-mc 200,301,302,403,404` 实测漏掉 **49 台**主机 —— 灯塔记为站点、我们连行都没有，其中 **34 台**我们本来就有子域名、探过却被整行丢掉）；httpx 加 `-nfs` 锁住 scheme，`http://h` 的 301 才会稳定成行，再配「跳转后」取证（库里存的仍是那一跳，落地 url/状态/标题另存 `redirect_*` 三列）；站点日志按状态码首位摊开组成（`2xx=… 3xx=… 5xx=…`），免得"存活站点 168 个"被读成"168 个打得开的站"；`jsmine` 之后触发**二层遍历**（`probe.second_pass`）：把第一轮之后才长出来的域名（JS 挖的 + 库里本任务还没探过的）先过 DNS 预筛再补探一轮，只探归属本任务的域名、有上限（`limits.recrawl_max_hosts`，预筛另有 `max(10×上限, 50)`）、跳过的每条都报原因；子域名那层字典**分两档**：`config/dicts/subdomains.txt` 精简档（永远全量参与）+
   `config/dicts/subdomains_deep.txt` 深档（**续139 随仓库分发 177,875 条**，来源写在文件头；
   `subfinder` 之外的爆破覆盖面就靠它，不想要就 `git rm config/dicts/subdomains_deep.txt`）；
@@ -55,26 +55,23 @@
                                ▼
    ┌────────────────────── PipelineRunner（任务编排） ──────────────────────┐
    │                                                                        │
-   │  ① subdomain 子域名收集      ② takeover 子域接管（CNAME 指纹）         │
-   │     subfinder / puredns         dnsq CNAME 链 + 41 条第三方服务指纹    │
+   │  ① subdomain 子域名收集      ② portscan 端口服务（默认开）             │
+   │     subfinder / puredns         fscan / nmap 适配器 / 内置 connect     │
    │     内置 DNS 字典爆破兜底                                              │
    │                                                                        │
-   │  ③ hostcollide Host 碰撞     ④ portscan 端口服务（默认开）             │
-   │     同 IP 绑 Host（只读 GET）   fscan / nmap 适配器 / 内置 connect     │
-   │                                                                        │
-   │  ⑤ probe 存活探测            ⑥ cert TLS 证书取证（默认关）             │
+   │  ③ probe 存活探测            ④ cert TLS 证书取证（默认关）             │
    │     httpx 适配器 / 内置请求      一次只读 TLS 握手 + 纯标准库解析      │
    │                                                                        │
-   │  ⑦ screenshot 站点截图（随包开，代码默认关）⑧ osint 外部情报拓展（随包开）         │
+   │  ⑤ screenshot 站点截图（随包开，代码默认关）⑥ osint 外部情报拓展（随包开）         │
    │     本机无头 Edge/Chrome         /24 C 段 + favicon/证书/标题反查      │
    │                                                                        │
-   │  ⑨ jsmine JS 资产挖掘        ⑩ dirscan 目录发现（默认开·深扫）         │
+   │  ⑦ jsmine JS 资产挖掘        ⑧ dirscan 目录发现（默认开·深扫）         │
    │     域名 / 接口 URL / 疑似凭据   分层字典 + dirmap + 后缀派生 + 递归   │
    │                                                                        │
-   │  ⑪ crawl 链接抓取（默认开）  ⑫ vulnscan 漏洞初筛                       │
+   │  ⑨ crawl 链接抓取（默认开）  ⑩ vulnscan 漏洞初筛                       │
    │     页面链接 / 带参链接           POC 引擎 + OWASP Top10 + 四层门控    │
    │                                                                        │
-   │  ⑬⑭⑮ intel / heuristic / github（DEFAULTS 关、随包已开）               │
+   │  ⑪⑫⑬ intel / heuristic / github（DEFAULTS 关、随包已开）               │
    │     KEV 情报 × 本地指纹白名单匹配 / 零请求差分聚合 / GitHub 代码检索   │
    │     三者只产「线索」，不写 vulns                                       │
    └──────────────┬──────────────────────────────────────┬──────────────────┘
@@ -209,7 +206,7 @@ py -3 cli/client.py --check        # 检查外部工具可用性；没装的会�
 # 从文件导入目标（每行一个：域名 / URL / IP / CIDR，# 开头为注释）
 py -3 cli/client.py -f examples/targets.txt -n my-first-task
 
-# 或直接给单目标；-p 是逗号分隔的阶段列表（缺省 = 全部 15 个阶段）
+# 或直接给单目标；-p 是逗号分隔的阶段列表（缺省 = 全部 13 个阶段）
 py -3 cli/client.py -t example.com -p subdomain,probe,dirscan,vulnscan -n quick-look
 ```
 
@@ -261,7 +258,7 @@ docker compose up -d --build     # 起控制台；数据/配置/日志都挂在�
 
 ```bash
 py -3 cli/client.py --update-tools    # 一键装 subfinder / httpx / puredns（只在显式触发时联网）
-py -3 cli/run_devflow.py                  # 全流程自检：起内置靶场 → 压量到最小 → 真跑全 15 阶段
+py -3 cli/run_devflow.py                  # 全流程自检：起内置靶场 → 压量到最小 → 真跑全 13 阶段
 ```
 
 开发模式开关在 `config/settings.yaml` 的 `dev.enabled`，打开后控制台侧栏才出现「开发模式」页。
@@ -371,7 +368,7 @@ Caddy / Nginx 配置样例、自签证书路径、`curl` 验证清单与排错�
     两个按钮 —— 它们起的夹具**与自检用的夹具无关**（自检在子进程里起自己的），仅供**手动打开看一眼**，
     **不装任何 DNS 覆盖**。
   - **CLI**：`py -3 cli/run_devflow.py`（`cli/` 下的独立入口；续146 起仓库根只留 `run_gui.py` 与 `run_bootstrap.py`）。它先起夹具 → 压量 → 依次跑全部
-    15 阶段（`runner.run_task` 前台执行）→ 打印**每阶段 `真跑 / 跳过（带原因）/ FAIL` + 网络活动数 + 耗时**，
+    13 阶段（`runner.run_task` 前台执行）→ 打印**每阶段 `真跑 / 跳过（带原因）/ FAIL` + 网络活动数 + 耗时**，
     无 `FAIL` 退出码 0，否则 1。**这是本功能的验收证据**。核心逻辑在 `scanner/devflow.py`
     （CLI 与 `tests/smoke.py [7n]` **共用**，避免两处判定漂移）。
   - **功能向量**（续62，用户指令「每个功能向量打一些，确保流程正确」）：阶段级判定之上再往下沉一层 ——
@@ -417,7 +414,7 @@ ctf-scanner/
 ├── run_bootstrap.py         # 环境自举：探测缺口 / `--install` 自动补齐（刻意不进 `scanner/` 包，见 [7p]）
 ├── cli/                     # 其余命令行入口（续146 从仓库根搬进来：根只留上面两个启动文件）
 │   ├── client.py            #   CLI 客户端（导入文件、全自动执行）
-│   ├── run_devflow.py       #   全流程自检入口（起内置靶场 → 压缩配置 → 跑全 15 阶段 → 打 OK/SKIP/FAIL）
+│   ├── run_devflow.py       #   全流程自检入口（起内置靶场 → 压缩配置 → 跑全 13 阶段 → 打 OK/SKIP/FAIL）
 │   ├── run_node.py          #   分布式执行节点（连控制端领任务，续80）
 │   ├── run_keys.py          #   凭据口令加密的管理入口（续98）
 │   └── run_users.py         #   管理员账号的命令行入口（续117）
@@ -426,7 +423,7 @@ ctf-scanner/
 │   ├── templates/ static/   #   页面与样式
 ├── scanner/                 # 核心引擎（CLI/GUI 共用）
 │   ├── runner.py            #   流水线编排、任务执行入口、协作式取消
-│   ├── stages/              #   15 个阶段：subdomain / takeover / hostcollide / portscan / probe / cert / screenshot / osint / jsmine / dirscan / crawl / vulnscan / intel / heuristic / github
+│   ├── stages/              #   13 个阶段：subdomain / portscan / probe / cert / screenshot / osint / jsmine / dirscan / crawl / vulnscan / intel / heuristic / github
 │   ├── pocs/                #   POC 引擎（nuclei 兼容子集）+ 内置示例 POC
 │   ├── owasp/               #   OWASP Top10 启发式检查 + 分级/分类门控
 │   ├── evasion.py           #   动态免杀（UA/请求头伪装/WAF 指纹/payload 变形）
@@ -434,7 +431,6 @@ ctf-scanner/
 │   ├── passive.py           #   免 key 多来源被动子域名收集
 │   ├── dnsq.py              #   纯标准库 DNS 客户端（含 CNAME 链解析）
 │   ├── cdn.py               #   CDN 判定（按 CNAME 后缀匹配厂商名单，只读加载）
-│   ├── takeover.py          #   子域接管指纹库（41 条第三方服务）
 │   ├── portscan.py          #   端口/服务扫描（fscan / nmap 优先，内置 TCP connect 兜底）
 │   ├── certs.py             #   TLS 证书取证（纯标准库 DER/ASN.1 解析，不引 cryptography）
 │   ├── screenshot.py        #   站点截图（本机无头 Edge/Chrome 路径探测 + 截图）
@@ -463,7 +459,7 @@ ctf-scanner/
 ├── tools/import_subdomain_dict.py # 深档子域名字典导入器（续139：清洗 + 去重 + 并集写 config/dicts/subdomains_deep.txt，纯离线）
 ├── tools/dirmap/            #   dirmap 落点（目录联接，第三方项目不随仓库分发）
 ├── config/
-│   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 **38 段**（= DEFAULTS 全部段），含 gui/limits/checks/subdomain/passive/evasion/takeover/portscan/jsmine/dirscan/vulnscan/screenshot/iprecon/fofa/blacklist/intel/heuristic/github）
+│   ├── settings.yaml        # 全局配置（GUI「策略配置」页覆盖 **37 段**（= DEFAULTS 全部段），含 gui/limits/checks/subdomain/passive/evasion/portscan/jsmine/dirscan/vulnscan/screenshot/iprecon/fofa/blacklist/intel/heuristic/github）
 │   ├── keys.yaml            # 第三方 API key 专用文件（gitignore，GUI 不写回）
 │   ├── blacklist.txt        # 用户黑名单（一行一个域名，# 注释；命中即不入资产库）
 │   ├── dicts/               #   子域名两档字典（`subdomains.txt` 精简档 84 条，永远全量参与 + `subdomains_deep.txt` 深档 177,875 条，续139 随仓库导入）、resolvers、目录字典（dirs_shallow 206 浅扫精选 / dirs_small 55 / dirs_big 11882 / 技术栈与框架细分 + 暴露面）、cdn_cname.txt（CDN 厂商后缀）、cdn_ips.txt（CDN 厂商任播 IP 段）、sensitive.txt（A01 敏感文件检查的数据源：路径 | 关键字 | 级别 | 说明）
@@ -482,7 +478,7 @@ ctf-scanner/
 | 文档 | 内容 |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 模块划分、数据流、数据库表结构、扩展点 |
-| [docs/pipeline.md](docs/pipeline.md) | 15 个阶段的输入输出、与你手工流水线命令的对应关系、降级策略 |
+| [docs/pipeline.md](docs/pipeline.md) | 13 个阶段的输入输出、与你手工流水线命令的对应关系、降级策略 |
 | [docs/poc-guide.md](docs/poc-guide.md) | POC YAML 格式、匹配器语义、编写规范、如何上传与启停 |
 | [docs/owasp-mapping.md](docs/owasp-mapping.md) | OWASP Top 10 逐项映射：已实现检查、实现方式、局限 |
 | [docs/usage.md](docs/usage.md) | CLI 全参数、GUI 操作流程、常见问题 |

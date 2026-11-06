@@ -137,7 +137,7 @@ limits:
   brute_max_domains: 50
   # 字典爆破的词数闸门（续139，喂进深档之后必须有）：`brute_max_words` 管 puredns 那一路的
   # **深档**上限、`brute_fallback_max` 管内置那一路的深档上限（内置是系统解析器逐条查，所以单独
-  # 更紧）；**两道都只冲深档 —— 精简档 84 条任何情况下全量在场**。超出即等距抽样（取前 N 条会把
+  # 更紧）；**两道都只冲深档 —— 精简档 366 条任何情况下全量在场**。超出即等距抽样（取前 N 条会把
   # 排好序的字典开头那串 `0/00/000/aa` 全收进来、把 api/admin 全挤掉）；0 = 全量。
   # 想吃下深档全量请装 puredns：python cli/client.py --update-tools --tool puredns。
   brute_max_words: 0
@@ -149,7 +149,7 @@ limits:
   # 只能拼出来 —— 灯塔的 ALT_DNS_CONCURRENT 干的就是这件事。
   brute_combo_max: 40000
   brute_fallback_max: 3000
-  # 字典**条数合计**低于这个值就喊一声（精简档 84 + 深档）。不喊，用户会把"子域名比灯塔少"读成
+  # 字典**条数合计**低于这个值就喊一声（精简档 366 + 深档）。不喊，用户会把"子域名比灯塔少"读成
   # "收集器不行"，而真正差的是字典。深档见 dicts.subdomains_deep（仓库发的是 17.8 万条那份）。
   # 再补更深的一样一条命令：python tools/import_subdomain_dict.py --src <你那份深字典>
   brute_dict_warn_min: 1000
@@ -209,9 +209,9 @@ subdomain:
   ext_depth: 1
   ext_min_confidence: high
   # 续263：主域名不同但置信度达阈值的拓展域名 → 自动建子任务送探（取代人工点「送去探测」）。
-  # 三道闸与阈值照旧；送过的域名不重复送；一次最多 ext_auto_probe_max 个，超出的只在日志报条数。
+  # 三道闸与阈值照旧；送过的域名不重复送；一次最多 ext_auto_probe_max 个注册域（每域一个子任务），超出的只在日志报条数。
   ext_auto_probe: true
-  ext_auto_probe_max: 5
+  ext_auto_probe_max: 20   # 续334：按注册域计，一个注册域一个子任务
 
 passive:
   enabled: true
@@ -223,10 +223,6 @@ evasion:
   waf_bypass: true
   bypass_level: 2
   waf_detect: true
-takeover:
-  enabled: true
-  max_hosts: 300
-  http_check: true
 portscan:
   # 续269：默认**开**（主理人点单）。只打下面这张常见 web 端口表（mode=top）、
   # 主机数由 max_hosts 夹住、走 CDN 的主机跳过；全端口仍是单任务触发。
@@ -264,15 +260,6 @@ icp:
 fingerprint:
   max_tags: 10
 
-hostcollide:
-  # 续203：默认**开**（主理人点单）。只读 GET、请求量由 max_requests 夹住；
-  # 命中按 collide:<ip> 前缀落库 ⇒ 自动归 own 口径。
-  enabled: true
-  max_requests: 200           # 单任务请求预算（只读 GET）
-  # 续328（主理人 2026-11-03）：实测命中时 9-11s、不中时 55-105s，时间全耗在等超时。
-  # timeout 5→2，并加"连续 N 个无差异就跳过该 IP 剩余候选"（只更快放弃，不改命中判据）。
-  timeout: 2
-  early_stop: 3
 crawl:
   enabled: false              # 续314 起默认关（主理人点单）；建任务「耗时选项」可一键打开
   max_sites: 30               # 每任务最多爬多少个站点
@@ -288,11 +275,16 @@ crawl:
   max_feed_total: 40          # 全任务总闸（vulnscan 侧再夹一道）
 jsmine:
   enabled: true
-  max_pages: 20
-  max_js: 40
+  max_pages: 12
+  max_js: 20            # 每站上限
+  max_js_total: 80      # 续334：全任务 JS 总预算（跨站点共享，到量即停）
+  time_budget: 120      # 续334：jsmine 墙钟上限（秒），到点停剩余站点
   secrets: true
   blacklist: []
-  recrawl: true          # 二层遍历：jsmine 挖出的新域名（含库里其余未探过的本任务域名）补探成站点
+  recrawl: false         # 续334：默认不做二层补探（urlfinder 式只收域名，不把新域名再探成站点）
+  # 续334（主理人点单「我要的就是 Domains」）：快速域名模式 —— 只做页面/JS 抽取，
+  # 跳过 DNS/CDN/停车三道闸（那是"宁缺毋滥"的慢路径），候选直接进拓展域名。
+  fast_domains: true
   # ---- 续171（2026-10-13 用户点单）：拓展域名"宁缺毋滥"三道闸（只对非自有域名动手）----
   # ① 解析门：明确 nxdomain 的第三方候选不入库（DNS 无结论照常放行 —— 可能会漏但不会错）；
   # ② CDN 门：解析命中 CDN 厂商（CNAME/IP 段，如 at.alicdn.com）→ 别人的基础设施，不入库；
@@ -304,15 +296,20 @@ jsmine:
   parking_check_max: 100   # 停车检测的首页 GET 预算（超出的候选直接放行并在日志报数）
   strip_comments: true     # 域名抽取前剥离 JS 注释（license banner 里的 OSS 主页是噪声大头）
 dirscan:
-  # 默认**开启且默认深扫**（mode=deep，续144 起：全量分层字典 + dirmap + 后缀派生 +
-  #   历史URL/robots/sitemap 自曝入口 —— 后两路只在深扫并入）。
+  # 续334（主理人点单「先把速度提上来」）：默认**开启且默认 mini**（mode=mini：
+  #   只打 dirs_mini 的常用后台路径 + .git，约 60 条/站；不跑 dirmap/语言字典/后缀派生）。
+  #   深扫（mode=deep：全量分层字典 + dirmap + 后缀派生 + 历史URL/robots/sitemap 自曝入口）
+  #   要显式勾建任务页「全目录深扫」或把 mode 改回 deep。
   # ⚠ 这段注释在 10-08 写过"只跑浅扫（quick）"，10-09 翻 deep 时忘了同步，说了 12 天假话
   #   （续252 修）：**以 mode 行为准**，别信注释里的档位描述。
   # 浅扫 = mode 改 quick（或建任务不勾「全目录」）：只打精选敏感路径（约 150 条/站）。
   # 请求量口径（每站点）：quick ≈ 150 + 软404 基线 3；deep ≈ 400 + 基线 3 + 后缀派生（≤400）
   #   + 递归（默认关，开则 +5×(3+40)=215）。与"全端口 6.5 万连接/主机"差两个数量级。
   enabled: true
-  mode: deep                  # 续144：默认深扫（全量分层字典 + dirmap + 后缀派生）
+  # 续334（主理人点单）：默认 mini —— 只打常用后台路径 + .git，先看结果再决定要不要深扫
+  mode: mini
+  # mini 单站点上限（dirs_mini 约 60 条，注释不计）
+  mini_max_paths: 60
   # 续331（主理人点单）：dirmap 默认**关**。5715 条通用字典 × 12 站 ≈ 68k 请求，
   # 实战里被 Cloudflare 403 假拦截；内置字典按技术栈选字典后目录反而更多（实测 391 vs 88）。
   # 要跑 dirmap 就把它打开（GUI 设置页 / 本文件），或单任务触发。
@@ -364,7 +361,9 @@ dirscan:
   # 续151 无依赖 ML：把长度离群的 200 命中点名到日志（只提示、不改入库）；默认开
   ml_outlier: true
 vulnscan:
-  enabled: true
+  # 续334（主理人点单「漏洞扫描暂时关闭」）：默认关，整阶段零请求；要开就改回 true
+  # （策略页「漏洞扫描」也有开关，改完对新建任务生效）。
+  enabled: false
   sqli: false                 # 续314：SQL 注入（报错回显 + 布尔盲注）默认关；其它检查照跑
 afrog:
   # 外部引擎 afrog（续149 **默认开**）：让 config/afrog-pocs/ 里的"只读 + info 级" PoC 跑一轮。
@@ -428,14 +427,22 @@ cert:
   workers: 6
   tls_ports: [443, 8443, 9443]
 iprecon:
-  # 续150（用户 2026-10-11 点单"真实 ip 反查域名功能"）：默认打开。免 key（api.webscan.cc），
-  # 把已知 IP（目标 IP + 站点解析 IP + 子域名 A 记录）反查成域名：命中的域名进拓展域名页，
-  # 属于本项目注册域的会在「自动拓展扫描」时追加成正常子域。需能出网；出不去只写一行日志。
+  # 续150（用户 2026-10-11 点单"真实 ip 反查域名功能"）：默认打开。
+  # 续336：C 段反查停用（不再按 /24 反查、不写 csegs）；续338：保留纯 IP 反查——
+  # 目标/子域名/站点解析出的精确 IP 走第三方 IP→域名；favicon 命中裸 IP 仍单独一路。
+  # 手动反查走子域名页的显式入口。需能出网；出不去只写一行日志。
   enabled: true
+  from_targets: true
   api: https://api.webscan.cc/?action=query&ip={ip}
+  # 续339：Mnemonic / OTX / URLScan / HackerTarget 作默认；webscan/ip138 退备用池。
+  sources: [mnemonic, otx, urlscan, hackertarget]
+  api_mnemonic: https://api.mnemonic.no/pdns/v3/{ip}?limit={limit}
+  api_urlscan: https://urlscan.io/api/v1/search/?q=ip:{ip}&size={limit}
+  mnemonic_limit: 100
+  urlscan_limit: 100
   max_ips: 500
   max_hosts: 200
-  max_domains_per_ip: 30
+  max_domains_per_ip: 100       # 精确 IP 反查单 IP 上限；超出截断并标「共享 IP」
   # 续314：favicon 命中裸 IP 时先探活再反查（免费源 + FOFA ip=），结果标「历史反查·待确认」
   from_favicon: true
   from_favicon_max: 20
@@ -443,13 +450,15 @@ iprecon:
   # 续184：开跑前先探活（挂了就整轮跳过，不再每个 IP 各打一条 DEBUG）；
   # 默认源全挂时换备用池，备用池第一个 ptr 是本框架自己实现的原生 PTR（不发 HTTP）
   preflight: true
-  # 续319（主理人 2026-11-03）：加 OTX passive DNS（免 key、历史解析）。
+  # 续339：连续失败 10 次 → 熔断，跳过接下来 100 次调用，第 101 次再探活。
+  breaker_enabled: true
+  breaker_fail_threshold: 10
+  breaker_cooldown: 100
   # 注意 VT（virustotal）**默认不进 sources** —— 免费 key 限速 4 次/分钟，对几百个 IP 会整轮 429；
   # 需要时把 `virustotal` 显式加进这个列表（key 已在 config/keys.enc.yaml 加密保存）。
-  sources: [otx, webscan, hackertarget, ip138]
   # VT 单页条数（v3 resolutions 上限 40）
   vt_limit: 40
-  fallback_sources: [ptr, dnsdblookup, otx, rapiddns, viewdns]
+  fallback_sources: [ptr, dnsdblookup, rapiddns, viewdns, webscan, ip138]
   api_rapiddns: https://rapiddns.io/s/{ip}?full=1
   api_viewdns: https://viewdns.info/reverseip/?host={ip}&t=1
 
@@ -458,6 +467,14 @@ iprecon:
 extquota:
   enabled: true               # 续211-P1-4：外部引擎配额预检（FOFA/Shodan/Quake 开跑前查余额）
   min_left: 1                 # 剩余次数低于此值 ⇒ 本轮跳过该源并点名
+# 续334：Wayback 被动 URL 源（urlfinder 式）—— 查第三方历史索引，不发目标请求。
+# 一条 CDX 请求/根域，默认最多 10 个根域；离线任务自动跳过。产出 source=osint:wayback。
+passive_urls:
+  enabled: true
+  timeout: 10
+  max_urls: 2000
+  max_roots: 10
+
 fofa:
   # 续150（用户 2026-10-11 点单"fofa功能也可以启用了 方便我们核查"）：默认打开。
   # 没配 key（config/keys*.yaml 的 fofa.email + fofa.key）时**一次请求都不发**，只写一行日志，
@@ -608,6 +625,9 @@ dicts:
   # 深档子域名字典（续139）：`python tools/import_subdomain_dict.py --src <你那份深字典>` 生成。
   # 文件不存在＝没配，只用上面那份精简档（日志会指路）。精简档永远全量打底，深档才受抽样闸门。
   subdomains_deep: config/dicts/subdomains_deep.txt
+  # 续344：拓展域名收尾动态追加的归属子域标签；以后子域爆破自动带上（不放仓库）
+  subdomains_dynamic: data/subdomains_dynamic.txt
+  subdomains_dynamic_max: 5000
   # 续242：12,124 条验证过的公共 resolver（trickest/resolvers 全量 + 国内头部置顶：
   # 223.5.5.5/119.29.29.29/114.114.114.114 …）。puredns 高并发靠它分摊——只有十几条时
   # 必被公共 DNS 限流（慢+漏报）。更新：curl -sL https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt
@@ -616,6 +636,7 @@ dicts:
   dirs: config/dicts/dirs_small.txt
   # 浅扫精选字典（dirscan.mode=quick 时只用这一份）
   dirs_shallow: config/dicts/dirs_shallow.txt
+  dirs_mini: config/dicts/dirs_mini.txt
   dirs_big: config/dicts/dirs_big.txt
   dirs_common: config/dicts/dirs_common.txt
   dirs_jsp: config/dicts/dirs_jsp.txt

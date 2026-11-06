@@ -50,7 +50,6 @@ DEV_LIMITS = {
     "dirscan.recursive_max_dirs": 1,
     "dirscan.recursive_max_paths": 1,
     # ---- 各阶段每任务上限 / 并发 ----
-    "takeover.max_hosts": 1,
     "portscan.max_hosts": 1,
     "portscan.workers": 1,
     "portscan.full_workers": 1,
@@ -144,7 +143,7 @@ def apply(settings):
 
 # 13 个阶段里有**策略级 `enabled`** 的段（`subdomain` / `probe` 没有该键 —— 见 tests/smoke.py [6u]：
 # `subdomain` 只由任务阶段列表决定、`probe` 没有任何策略开关，别按"每个阶段都有 enabled"去补）。
-_ENABLE_SECTIONS = ("takeover", "portscan", "cert", "screenshot", "jsmine", "dirscan",
+_ENABLE_SECTIONS = ("portscan", "cert", "screenshot", "jsmine", "dirscan",
                     "vulnscan", "heuristic", "intel", "github",
                     "iprecon", "fofa", "shodan", "quake", "ctlog")
 
@@ -152,7 +151,7 @@ _ENABLE_SECTIONS = ("takeover", "portscan", "cert", "screenshot", "jsmine", "dir
 def enable_all_stages(settings):
     """返回**打开全部阶段策略开关**的深拷贝（全流程自检要"13 个阶段都跑一遍"）。
 
-    有 key 的第三方阶段（FOFA / Shodan / Quake / GitHub / CT 日志 / 情报 / C 段反查）一并打开：
+    有 key 的第三方阶段（FOFA / Shodan / Quake / GitHub / CT 日志 / 情报 / IP 反查）一并打开：
     有 key 就真跑，没 key 的模块自身零请求、在自检报告里记为「跳过」。
     入参 `settings` 绝不原地改（与 `apply` 同一铁律）。
     """

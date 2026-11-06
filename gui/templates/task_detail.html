@@ -15,10 +15,6 @@
   <button class="btn-mini ghost" data-op="resume" data-id="{{ task.id }}"
     {{ 'disabled' if task.status in ('running', 'queued') or not resume_rest }}
     title="{{ '从断点续跑：' + resume_rest|join(' / ') if resume_rest else '没有可用断点（任务未停在某个阶段上）' }}">续跑</button>
-  {# 续269：Host 碰撞**默认就跑**（策略 `hostcollide.enabled` 出厂 True），详情页不再放补跑按钮 ——
-     那颗按钮本来只是"策略关着时给本任务补跑一轮"的旁路：开着的时候点了只会多跑一轮，
-     关着的时候又该去策略页开。要单次强制跑：任务选项 `hostcollide: true` / CLI `--hostcollide`；
-     要全局关：策略配置 → Host 碰撞。 #}
   <a class="btn-mini ghost" href="{{ url_for('diff_view') }}?task={{ task.id }}"
      title="与最近一个可比的上一轮对比（子域名/站点/指纹/端口/漏洞/敏感信息 各算新增与消失）">与上次对比</a>
   {# 续171（用户点单"导出报告的功能设置可以开启或者关闭 默认是关闭"）：开关关着时不渲染
@@ -43,6 +39,17 @@
 
 {% block content %}
 <h1>{{ task.name }}</h1>
+
+{% if weak_summary and weak_summary.total %}
+<div class="weak-banner">
+  <span class="weak-badge">薄弱边界资产</span>
+  按名称识别到 <b>{{ weak_summary.total }}</b> 个测试 / 开发 / 预发布资产
+  （子域名 {{ weak_summary.subs }} / 站点 {{ weak_summary.sites }}）。
+  这是“值得先人工确认”的线索，不是漏洞判定；下方子域名与站点行已逐个标出。
+  {% if weak_summary.by %}<span class="muted small">分布：{% for k, v in weak_summary.by.items() %}{{ k }} {{ v }}{% if not loop.last %} · {% endif %}{% endfor %}</span>{% endif %}
+  {% if weak_summary.examples %}<span class="muted small">例如 <span class="mono">{{ weak_summary.examples|join("、") }}</span></span>{% endif %}
+</div>
+{% endif %}
 
 {% if task.parent_id %}
 <p class="muted small note">本任务是 <a href="{{ url_for('task_detail', task_id=task.parent_id) }}"
@@ -409,6 +416,7 @@
                 name="url"></td>
             <td class="mono url-cell"><a class="url-link" href="{{ s.url }}" target="_blank"
               rel="noopener noreferrer">{{ s.url }}</a>
+              {% if s.weak_tag %}<span class="weak-badge" title="{{ s.weak_reason }}">薄弱边界资产 · {{ s.weak_tag }}</span>{% endif %}
               {# 续225：favicon 贴在 URL 下方 —— 不包链接、不影响点击；下面给 FOFA 提问值
                  与拓展结论（已拓展 / 三方未拓展 = 命中过多判为公共图标）。 #}
               {% if s.icon_file %}
@@ -489,14 +497,15 @@
       <thead><tr><th>子域名</th><th>解析 IP</th><th>CDN</th><th>CNAME</th><th>来源</th></tr></thead>
       <tbody>
       {% for s in subs %}
-        <tr><td class="mono">{{ idn_display(s.domain) }}</td>
+        <tr><td class="mono">{{ idn_display(s.domain) }}
+          {%- if s.weak_tag %}<br><span class="weak-badge" title="{{ s.weak_reason }}">薄弱边界资产 · {{ s.weak_tag }}</span>{% endif %}</td>
           <td class="muted small mono">{% if s.ip %}<a href="{{ ip_drill(s.ip) }}" title="查看解析到 {{ s.ip }} 的全部子域名">{{ s.ip }}</a>{% else %}-{% endif %}
             {%- if not s.ip and s.ip_note %}<br><span class="muted small"
               title="为什么没有解析结果">{{ ip_note_label(s.ip_note) }}</span>{% endif %}</td>
           <td>{% if s.cdn %}<span class="sev sev-medium">{{ s.cdn }}</span>
               {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
           <td class="muted small mono">{{ s.cname or '-' }}</td>
-          <td class="muted">{{ source_label(s.source) }}{% if s.also_from %}<br>
+          <td class="muted">{{ source_label(s.source) }}{% if s.source_detail %}<span class="muted small" title="这次实际返回该域名的反查接口">（{{ s.source_detail }}）</span>{% endif %}{% if s.also_from %}<br>
             <span class="muted small" title="同一域名还被这些来源找到过（入库行仍在，只是默认不重复列）">另见于 {{ s.also_from }}</span>{% endif %}</td></tr>
       {% else %}
         <tr><td colspan="5" class="muted">暂无子域名 —— 由 subdomain 阶段产出（被动收集 + 字典爆破）；目标是 URL 时它会先自动提取主域再收集。</td></tr>
@@ -511,11 +520,15 @@
   <section class="panel">
     <p class="muted small note">JS 挖掘（<span class="mono">js:mine</span>，挖掘 JS 数量：{{ js_count_of(task.id) if js_count_of(task.id) is not none else '—' }}）与外部情报
 
-      （<span class="mono">osint:cseg</span> / <span class="mono">osint:fofa</span> /
-      <span class="mono">osint:fofa-cert</span> / <span class="mono">osint:fofa-title</span>）
+      （<span class="mono">osint:reverse</span> IP 反查 /
+      <span class="mono">osint:fofa</span> / <span class="mono">osint:fofa-cert</span> /
+      <span class="mono">osint:fofa-title</span>）
       带出来的关联域名 —— 它们<b>未必属于目标自身</b>，所以不混进「子域名」页签。
       侧栏不再单列该页，跨任务视图仍可在 /extdomains 直接访问。</p>
-    <p class="muted small note"><b>默认已按来源分类排序</b>（JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → C 段，
+    <p class="muted small note"><b>IP 反查是历史索引</b>：备注里的 <span class="mono">ip="…"</span> 是该域名
+      <b>曾经</b>解析到的 IP；「解析 IP」列是当前 DNS 结果，两者不同属正常（CDN/迁移/共享主机）。
+      备注里的 <span class="mono">来源=…</span> 才是这次实际返回该域名的接口。</p>
+    <p class="muted small note"><b>默认已按来源分类排序</b>（JS 挖掘 → FOFA·标题 → FOFA·证书 → FOFA·ICO → IP 反查，
       同类内新的在前），不再交错；点下面按钮只看某一类。</p>
     <div class="row">
       <a class="btn-mini {{ 'ghost' if ext_src else '' }}"
@@ -601,12 +614,6 @@
             {% endfor %}
           </select>
         </label>
-        <button type="submit" class="ghost" formaction="{{ url_for('api_resolve_domains') }}"
-          title="纯 DNS 查询（零 HTTP）：回填解析 IP / CNAME / CDN 与失败原因">
-          解析选中域名（DNS）</button>
-        <button type="submit" class="ghost" formaction="{{ url_for('api_promote_domains') }}"
-          title="注册域命中本任务目标的那些（如目标 targ1.pro 拓展出 aaa.targ1.pro）会被追加成本任务的子域名：原拓展行保留，出处可查">
-          归属本项目的追加为本任务子域名</button>
         <button type="submit" class="ghost" formaction="{{ url_for('api_blacklist_add') }}"
           title="命中黑名单的域名此后不再进入资产库，自然也不会被扫描；提交后本页立刻不再显示（入库一条没动）">
           加入黑名单</button>
@@ -625,7 +632,8 @@
         {% for s in ext_subs %}
           <tr><td class="pick"><input type="checkbox" class="pick pick-row"
                 name="domain" value="{{ s.domain }}"></td>
-            <td class="mono">{{ idn_display(s.domain) }}</td>
+            <td class="mono">{{ idn_display(s.domain) }}
+              {%- if s.weak_tag %}<br><span class="weak-badge" title="{{ s.weak_reason }}">薄弱边界资产 · {{ s.weak_tag }}</span>{% endif %}</td>
             <td>{{ conf_badge(s) }}</td>
             <td class="muted small mono">{% if s.ip %}<a href="{{ ip_drill(s.ip, ext=True) }}" title="查看解析到 {{ s.ip }} 的全部拓展域名">{{ s.ip }}</a>{% else %}-{% endif %}
               {%- if not s.ip and s.ip_note %}<br><span class="muted small"
@@ -633,7 +641,7 @@
             <td>{% if s.cdn %}<span class="tech-tag">{{ s.cdn }}</span>
                 {% else %}<span class="muted small">非 CDN</span>{% endif %}</td>
             <td class="muted small mono">{{ s.cname or '-' }}</td>
-            <td class="muted">{{ source_label(s.source) }}{% if s.also_from %}<br>
+            <td class="muted">{{ source_label(s.source) }}{% if s.source_detail %}<span class="muted small" title="这次实际返回该域名的反查接口">（{{ s.source_detail }}）</span>{% endif %}{% if s.also_from %}<br>
               <span class="muted small" title="同一域名还被这些来源找到过（入库行仍在，只是默认不重复列）">另见于 {{ s.also_from }}</span>{% endif %}</td>
             <td class="muted small mono">{{ s.note or '-' }}</td></tr>
         {% else %}
@@ -727,7 +735,7 @@
               title="同一 C 段的其余行默认收起（被收起的条数在此报出）；库里的行一条没删，上面那颗「全部显示」也能看"
               onclick="var t=document.querySelectorAll('tr[data-dup-of=\'{{ c.id }}\']'),any=false;for(var i=0;i<t.length;i++){t[i].hidden=!t[i].hidden;any=any||t[i].hidden}this.textContent=(any?'收起同 C 段':'展开同 C 段')+'（{{ c._dup_group|length }} 条）'">展开同 C 段（{{ c._dup_group|length }} 条）</button>{% endif %}</td></tr>
       {% else %}
-        <tr><td colspan="4" class="muted">暂无数据（osint 阶段的 C 段反查默认关闭，在「策略配置 → 外部情报拓展」打开）。</td></tr>
+        <tr><td colspan="4" class="muted">暂无数据（C 段反查已停用；只展示历史任务留下的数据）。</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -1028,6 +1036,19 @@
 <div class="tabpane" id="pane-log">
   <section class="panel">
     <h2>运行日志（尾部）</h2>
+    {% if stage_rows %}
+    <h3>各阶段耗时</h3>
+    <table>
+      <thead><tr><th>阶段</th><th>用时</th></tr></thead>
+      <tbody>
+        {% for _name, _human in stage_rows %}
+        <tr><td class="mono">{{ _name }}</td><td>{{ _human }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted small">按本轮实际墙钟计；并行阶段（probe 后的四阶段 / jsmine+dirscan）会重叠，
+      合计大于总时长属正常。日志里同时有 <code>[耗时]</code> 行。</p>
+    {% endif %}
     <pre id="log-box" class="mono">{% if task.log_file %}载入中…{% else %}（无日志文件）{% endif %}</pre>
   </section>
 </div>
