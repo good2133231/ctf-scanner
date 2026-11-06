@@ -4553,7 +4553,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] T3【记忆】：`CHANGELOG_AI.md` + `todo.txt` 续346 小节同步。
 - [x] C1 全量 v6 `SMOKE PASS`（含浏览器 e2e；代码与 v6 一致）。
 - [x] C2 收尾单组：`[8as]/[218]/[296]/[317]`。
-- [x] C3 提交并推送到 `origin/main`。
+- [ ] C3 推送到 `origin/main`：本地提交已落（52c3bf4 / ca5c08e）；GitHub HTTPS/SSH 均无凭据，push 被认证阻断，待授权后补推。
 
 ## 续345（2026-11-05，WorkBuddy · DeepSeek-V4.1-Flash）：回测提速——组合爆破改走 puredns + 死主机目录跳过
 

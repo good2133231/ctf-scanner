@@ -23,6 +23,7 @@
 
 - 全量 v6 `SMOKE PASS`（含浏览器 e2e）。
 - 收尾同步后 `[8as]/[218]/[296]/[317]` 四组通过（`SMOKE PASS`，局部验证；全量结果仍以 v6 为准）。
+- 本地提交 `52c3bf4`（334-346 合并）与 `ca5c08e`（记忆行尾归一）已落；`git push origin main` 因本机未配置 GitHub 凭据被拒，远端尚未同步，待授权后补推。
 
 ## 续345（2026-11-05，WorkBuddy · DeepSeek-V4.1-Flash）：回测提速——组合爆破改走 puredns + 死主机目录跳过
 
