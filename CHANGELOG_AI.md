@@ -5,6 +5,28 @@
 
 
 
+## 续351（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：把自动送探汇总移出隐藏页签
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景
+
+主理人指出「31 任务的拓展压根看不到」，要求先自己读完再汇报。复核发现续350 的汇总虽然确实在服务器 HTML 里，但被 include 放在 `task_detail.html` 的 `#pane-ext` 内；该 pane 的 CSS 是 `.tabpane { display:none }`，默认只有 `#pane-vulns` 是 active。用户从任务列表点「查看全结果」打开 `/tasks/42` 时没有 `#ext`，于是汇总在 DOM 里但屏幕上不可见。之前只验了 HTML 字符串存在，没验可见位置，属于验证口径不够。
+
+### 改动
+
+- `gui/templates/_auto_probe_summary.html`：包成独立 `<section class="panel" id="auto-probe-summary">`。
+- `gui/templates/task_detail.html`：把 include 从隐藏的 `#pane-ext` 移到 tabs 之后、第一个 `.tabpane` 之前；打开任务详情默认即显示，无需点「拓展域名」页签。
+- 跨任务 `/extdomains?task=42` 仍保留同一片段。
+- 门禁 `[178]` 增加位置断言：汇总必须出现在第一个 active `tabpane` 之前，防止再出现「HTML 里有、界面看不到」。
+
+### 验证
+
+- `[178]` 单组通过。
+- 任务 #31（DB #42）默认 `/tasks/42`：汇总位置在第一个 `tabpane` 之前，列出 #43–#51 共 9 个子任务。
+- 真实控制台固定前缀下同步核验；控制台重启后 5000 在监听。
+- 全量门禁 v10 `SMOKE PASS`（含浏览器 e2e）；控制台按 pidfile 归属三证重启、5000 在监听。
+
 ## 续350（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：默认视图直接列出全部 9 个自动送探子任务
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

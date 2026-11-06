@@ -156,6 +156,8 @@
   <div class="tab" data-tab="log">运行日志</div>
 </div>
 
+{% include "_auto_probe_summary.html" %}
+
 <div class="tabpane active" id="pane-vulns">
   <section class="panel">
     {# 续176：被 min_severity 挡掉的条数要说出口（§0 第 10 条：被过滤 ≠ 不存在）——
@@ -550,7 +552,6 @@
       当前<b>{{ '显示全部（含重叠）' if ext_show_all else '只看不重叠' }}</b>，
       <a class="btn-mini ghost" href="{{ ext_toggle_overlap_url }}">{{ '只看不重叠' if ext_show_all else '显示全部（含重叠）' }}</a>。
       展开后来源行会显示「已自动送探 → #子任务」。</p>
-    {% include "_auto_probe_summary.html" %}
     {% if ext_bl_hidden %}
     <p class="muted small">黑名单：当前筛选下 <b>{{ ext_bl_hidden }}</b> 条拓展域名命中黑名单，已<b>默认隐藏</b>
       （入库一条没动；勾选「加入黑名单」提交后本页立刻不再列出）。

@@ -27081,6 +27081,8 @@ expression: r0()
     assert "已自动送探 → #" in _html178d, "续349：任务详情 #ext 页签没显示送探徽章"
     assert "本任务自动送探记录（1 个子任务）" in _html178d, \
         "续350：任务详情默认视图也要列出自动送探子任务"
+    assert 0 <= _html178d.find("本任务自动送探记录") < _html178d.find('<div class="tabpane active"'), \
+        "续351：汇总不能藏在默认隐藏的 tabpane 里，用户打开任务详情就该看见"
     assert "自动送探读的是本任务全部入库拓展行" in _html178d, \
         "续349：详情页没说明『全部（N）』不是自动送探的取数口径"
     assert ("只看不重叠" in _html178d) or ("显示全部（含重叠）" in _html178d), \
