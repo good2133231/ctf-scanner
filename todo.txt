@@ -4556,10 +4556,14 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
       （先 `[-700] 账号无效`、随后同出口直接挂起），所以连 FOFA 端口都没有。
 - [ ] T4【待主理人】FOFA 账号侧：key 是否被重置 / 额度 / 风控。确认后 `web_portscan` 与
       `bare_ip_reverse` 才能做第一次端到端验证（当前二者输入都来自 FOFA 端口资产）。
-- [ ] T5【待定】要不要把 `portscan` 加进默认勾选（RECON_STAGES 七阶段不含它，策略页却是 enabled=true）。
+- [x] T5【默认档】`portscan` 并入 `RECON_STAGES`（七阶段 → 八阶段）：只跑 `mode=top` 常见 web
+      端口表，全端口仍是单任务按钮；建任务页按钮 title 与说明文案同步改写。
+- [x] T6【端到端】新增 `[8c3]`：用桩跑真实任务，验证「FOFA 端口资产 → ports / web 探活 → sites
+      （osint:fofa-web）/ 裸 IP 反查 → subdomains（osint:iprecon）」整条 run() 接线。
 - [x] C1 定向：`--only 6w,8bz,8c1` 全绿；`--only 8c2` PASS。
-- [x] C2 最终全量 v40 `SMOKE PASS`：2026-11-10 10:13:57–10:23:55（9m58s，约 303 个 ok 组 +
-      浏览器 e2e，`logs/smoke367.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+- [x] C2 最终全量：v40（改默认档前，9m58s/303 组）与 v41（改后，11:04:52–11:14:23，
+      9m31s/304 组，`logs/smoke367b.log`）均 `SMOKE PASS`；提交后已用
+      `tools/push_encrypted.py` 推送。
 
 **下一轮（续368）**：
 - [ ] P0 速度：DNS TTL 缓存 / `get_conn()` 去每连接 WAL PRAGMA / puredns 多域合批 / smoke fast-nightly。

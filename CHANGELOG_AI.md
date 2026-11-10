@@ -43,15 +43,31 @@
 - FOFA 账号侧状态（key 是否被重置、额度、风控）只能你确认；代码侧已给不出更多信息。
 - `fofa.web_portscan` 与 `bare_ip_reverse` 的**端到端一次都没验证过**：二者输入都来自
   FOFA 端口资产，FOFA 不可用时没有候选。代码与 `[8c1]` 门禁是绿的，但不能说「已跑通」。
-- `portscan` 仍不在默认勾选阶段里（`RECON_STAGES` 七阶段不含它，而策略页 `portscan.enabled`
-  是 true，两套口径）—— 要不要改成默认勾，等主理人一句话。
+- `portscan` 原来不在默认勾选阶段里（`RECON_STAGES` 七阶段不含它，而策略页
+  `portscan.enabled` 是 true，两套口径）—— 已按主理人「你自己验证」的要求并入默认档
+  （见第六节）。
 
 ### 五、验证
 
 - `compileall` PASS；真实调用现在报「请求 fofa 失败（超时）」，不再笼统归因成网络不可达。
 - `--only 6w,8bz,8c1` 全绿；新增 `[8c2]` 定向 PASS（钉住「真实原因必须带出来」与 `[-700]` 提示）。
 - 最终全量 v40：2026-11-10 10:13:57–10:23:55（9m58s，日志内 303 个 ok 组 + 浏览器 e2e），
-  `SMOKE PASS`（`logs/smoke367.log`）；本轮唯一一次全量。
+  `SMOKE PASS`（`logs/smoke367.log`）—— 这是**改 portscan 默认档之前**的那一轮。
+
+### 六、自己做的端到端验证（不等主理人点头）
+
+- 用桩把 `run()` 的整条接线跑了一个真实任务：FOFA 端口资产 → `ports` 表（2 条，source=fofa）
+  → web 口探活 → `sites` 表（2 条，source=osint:fofa-web）→ 裸 IP 反查 → `subdomains`
+  （2 条，source=osint:iprecon）。日志同步打印「候选 2 / 有 HTTP 响应 2 / 新站点入库 2 条」。
+- 已固化为门禁 `[8c3]`（`[8c1]` 只直接调方法，不覆盖 run 里的收集与顺序）。
+- `portscan` 并入 `RECON_STAGES`（七阶段 → 八阶段）：只跑 `mode=top` 的常见 web 端口表，
+  全端口仍是任务详情「端口」页签的单任务按钮；建任务页按钮 title 与说明文案同步改写。
+
+### 七、验证（portscan 默认档 + 8c3）
+
+- `--only 8w,8c3` 全绿。
+- 最终全量 v41：2026-11-10 11:04:52–11:14:23（9m31s，日志内 304 个 ok 组 + 浏览器 e2e），
+  `SMOKE PASS`（`logs/smoke367b.log`）—— 含 portscan 默认档与 [8c3]。
 
 ## 续366（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 裸 IP 反查 + web 端口探活入站点 + 标签折叠
 

@@ -44,10 +44,14 @@ from .stages.heuristic import HeuristicStage
 from .stages.github import GithubStage
 
 # 续334（主理人点单）：信息收集专项 = 子域 + probe + cert + screenshot + mini 目录 + 被动 URL。
+# 续367（主理人 2026-11-10「36 为什么没有端口扫描」）：把 portscan 并入默认档 ——
+# 策略页 `portscan.enabled` 一直是 true，但建任务页原来不勾它，两套口径。
+# 并入后只跑 `mode=top` 的常见 web 端口表；全端口仍是任务详情「端口」页签的单任务按钮。
 # cert/screenshot 是**拓展资产与可视化**，不是扫描，默认开；默认关的是慢扫描
 # （vulnscan、全量目录/dirmap、全端口、爬虫）。放在 STAGE_ORDER 之上：
 # GUI 默认值、API 缺省阶段都从这里取，避免两处各写一张表。
-RECON_STAGES = ["subdomain", "probe", "cert", "screenshot", "jsmine", "dirscan", "osint"]
+RECON_STAGES = ["subdomain", "portscan", "probe", "cert", "screenshot", "jsmine",
+                "dirscan", "osint"]
 # jsmine 以 fast_domains 模式进默认：只做页面/JS 抽取，不做 DNS/CDN/停车三道闸与二层补探。
 
 STAGE_ORDER = ["subdomain", "portscan", "probe",

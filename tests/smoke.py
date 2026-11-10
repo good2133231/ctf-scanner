@@ -16330,7 +16330,7 @@ http:
 
     print("[8w] 续118/续314 建任务一键勾选 ok: 两个按钮（最重档位已删）scope 点名的分组页面上都真实存在｜"
           "任何批量按钮都不含离线模式（勾它=禁用外部工具，与跑全相反），「全部清掉/恢复默认」含｜阶段清单与 STAGE_ORDER "
-          "逐一对齐且默认勾的恰是信息收集专项七阶段（含 cert/screenshot/jsmine，其余不勾）｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
+          "逐一对齐且默认勾的恰是信息收集专项八阶段（含 portscan/cert/screenshot/jsmine，其余不勾）｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
           "读 data-ck-default、挂在 DOMContentLoaded｜变异：抹掉 deep 钩子 / 把 cert 翻成默认勾 都变红")
 
     # ---------------- [8x] 续119：afrog 进 toolmgr，但"能装"与"会被用"分成两档 ----------------
@@ -36191,6 +36191,60 @@ expression: r0()
 
     print("[8c2] 续367 ok: fofa 失败原因取 http_last_error()（不再一律写「网络不可达」）｜"
           "[-700] 账号无效附带「查 key / 账号封禁欠费 / 邮箱不配对 / 临时风控」可执行提示")
+
+    # [8c3] 续367：FOFA 端口资产 → web 探活 → 站点 / 裸 IP → 反查 → 拓展域名
+    #      **整条 run() 接线**端到端（[8c1] 只直接调了方法，没验 run 里的收集与顺序）。
+    import scanner.fofa as _fo8c3
+    from scanner.stages import osint as _os8c3
+    _s8c3 = copy.deepcopy(settings)
+    for _k8c3 in ("iprecon", "shodan", "quake", "ctlog", "virustotal", "icp"):
+        _s8c3[_k8c3] = dict(_s8c3.get(_k8c3) or {}, enabled=False)
+    _s8c3["passive_urls"] = dict(_s8c3.get("passive_urls") or {}, enabled=False)
+    _s8c3["fofa"] = dict(_s8c3.get("fofa") or {}, enabled=True, cert_enabled=False,
+                         title_enabled=False, host_enabled=False, subdomain_enabled=False,
+                         bare_ip_reverse=True, web_portscan=True, web_max=20)
+    _s8c3["portscan"] = dict(_s8c3.get("portscan") or {}, ports="80,443,2053")
+    _s8c3["keys"] = {"fofa": {"email": "stub@example.test", "key": "stub"}}
+    _tid8c3 = db.create_task("smoke-8c3", "http://www.acme-portal.cn/", ["osint"], {})
+    _o8c3 = (osint_mod.fofa_mod.search, osint_mod.fofa_mod.search_ip,
+             osint_mod.iprecon.reverse_lookup, osint_mod.http_request)
+    try:
+        db.insert_sites(_tid8c3, [{"url": "http://www.acme-portal.cn/",
+                                   "host": "www.acme-portal.cn", "port": "80",
+                                   "status": 200, "title": "Acme", "length": 10,
+                                   "source": "builtin", "icon_hash": 12345}])
+        db.insert_subdomains(_tid8c3, [("www.acme-portal.cn", "subfinder")])
+        db.set_subdomain_net(_tid8c3, {"www.acme-portal.cn": ("9.9.9.9", "", "")})
+        _assets8c3 = [
+            {"host": "https://www.acme-portal.cn:2053", "domain": "www.acme-portal.cn",
+             "ip": "9.9.9.9", "port": 2053, "title": ""},
+            {"host": "https://1.2.3.4", "domain": "", "ip": "1.2.3.4", "port": 443,
+             "title": ""},
+        ]
+        osint_mod.fofa_mod.search = lambda *a, **k: (list(_assets8c3), len(_assets8c3), "")
+        osint_mod.fofa_mod.search_ip = lambda *a, **k: (
+            [{"domain": "peer2.acme-portal.cn"}], 1, "")
+        osint_mod.iprecon.reverse_lookup = (
+            lambda ip, *a, **k: (["peer.acme-portal.cn"] if ip == "1.2.3.4" else []))
+        osint_mod.http_request = lambda url, **kw: {
+            "status": 200, "text": "hi", "headers": {"Server": "stub"}}
+        run_task(_tid8c3, "smoke-8c3", "http://www.acme-portal.cn/", ["osint"], {}, _s8c3)
+        _p8c3 = {(r["host"], int(r["port"])) for r in db.list_ports(_tid8c3)}
+        assert _p8c3 == {("https://www.acme-portal.cn:2053", 2053),
+                         ("https://1.2.3.4", 443)}, _p8c3
+        _st8c3 = {r["url"]: r["source"] for r in db.list_sites(_tid8c3)}
+        assert _st8c3.get("https://www.acme-portal.cn:2053/") == "osint:fofa-web", _st8c3
+        assert _st8c3.get("https://1.2.3.4:443/") == "osint:fofa-web", _st8c3
+        _su8c3 = {r["domain"] for r in db.list_subdomains(_tid8c3)
+                  if str(r["source"]) == "osint:iprecon"}
+        assert _su8c3 == {"peer.acme-portal.cn", "peer2.acme-portal.cn"}, _su8c3
+    finally:
+        (osint_mod.fofa_mod.search, osint_mod.fofa_mod.search_ip,
+         osint_mod.iprecon.reverse_lookup, osint_mod.http_request) = _o8c3
+        db.delete_task(_tid8c3, backup=False)
+
+    print("[8c3] 续367 ok: run() 端到端 —— FOFA 端口资产入 ports / web 口探活入 sites"
+          "（source=osint:fofa-web）/ 裸 IP 反查入拓展域名（osint:iprecon，免费源+FOFA ip=）")
 
     print("SMOKE PASS")
 
