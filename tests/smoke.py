@@ -36304,6 +36304,80 @@ expression: r0()
           "skip 名额用完才半开探测｜半开成功清零恢复｜breaker_enabled=false 不拦｜"
           "DEFAULTS 与随包配置同值")
 
+    # [8c5] 续369：DNS 应答缓存（命中 / TTL 过期 / 负缓存 / 上限 / 可关）
+    import struct as _st8c5
+    import scanner.dnsq as _dq8c5
+    _c8c5 = []
+    _mode8c5 = {"nx": False, "ttl": 300}
+    _clock8c5 = [1000.0]
+    _o8c5 = (_dq8c5._udp_exchange, _dq8c5._now)
+
+    def _fake8c5(packet, resolver, timeout):
+        _c8c5.append(1)
+        tid = _st8c5.unpack("!H", packet[:2])[0]
+        q = packet[12:]          # 单问题报文：问题段原样回填（含 name/qtype/qclass）
+        if _mode8c5["nx"]:
+            return _st8c5.pack("!HHHHHH", tid, 0x8183, 1, 0, 0, 0) + q
+        ans = (b"\xc0\x0c"
+               + _st8c5.pack("!HHIH", 1, 1, int(_mode8c5["ttl"]), 4)
+               + bytes([1, 2, 3, 4]))
+        return _st8c5.pack("!HHHHHH", tid, 0x8180, 1, 1, 0, 0) + q + ans
+
+    _s8c5 = {"dns": {"cache_enabled": True, "cache_max": 4096, "cache_max_ttl": 3600}}
+    try:
+        _dq8c5.reset_cache()
+        _dq8c5._udp_exchange = _fake8c5
+        _dq8c5._now = lambda: _clock8c5[0]
+        # ① 命中：第二次零 UDP
+        assert _dq8c5.query("a8c5.test", "A", settings=_s8c5) == ["1.2.3.4"], _c8c5
+        assert len(_c8c5) == 1, _c8c5
+        assert _dq8c5.query("a8c5.test", "A", settings=_s8c5) == ["1.2.3.4"]
+        assert len(_c8c5) == 1, f"第二次必须命中缓存：{_c8c5}"
+        # ② 按应答 TTL 过期（ttl=300 → 前进 301 秒必须重查）
+        _clock8c5[0] += 301
+        _dq8c5.query("a8c5.test", "A", settings=_s8c5)
+        assert len(_c8c5) == 2, f"TTL 过期后必须重查：{_c8c5}"
+        # ③ 负结果走短 TTL（NXDOMAIN 第二次也零 UDP）
+        _dq8c5.reset_cache()
+        _clock8c5[0] += 10
+        _mode8c5["nx"] = True
+        assert _dq8c5.resolve_detail("nx8c5.test", settings=_s8c5)[2] == "nxdomain"
+        _n8c5 = len(_c8c5)
+        assert _dq8c5.resolve_detail("nx8c5.test", settings=_s8c5)[2] == "nxdomain"
+        assert len(_c8c5) == _n8c5, f"负结果第二次必须命中缓存：{_c8c5}"
+        # ④ 上限：cache_max=1 时条目数不许无限长
+        _dq8c5.reset_cache()
+        _mode8c5["nx"] = False
+        _s8c5["dns"]["cache_max"] = 1
+        for _n8c5 in ("b8c5.test", "c8c5.test", "d8c5.test"):
+            _dq8c5.query(_n8c5, "A", settings=_s8c5)
+        assert len(_dq8c5.cache_snapshot()) <= 1, _dq8c5.cache_snapshot()
+        _s8c5["dns"]["cache_max"] = 4096
+        # ⑤ 关掉开关：每次真查、且不写缓存
+        _dq8c5.reset_cache()
+        _s8c5["dns"]["cache_enabled"] = False
+        _m8c5 = len(_c8c5)
+        _dq8c5.query("e8c5.test", "A", settings=_s8c5)
+        _dq8c5.query("e8c5.test", "A", settings=_s8c5)
+        assert len(_c8c5) == _m8c5 + 2, f"关掉缓存必须每次真查：{_c8c5[_m8c5:]}"
+        assert not _dq8c5.cache_snapshot(), "关掉后不许写缓存"
+        # ⑥ 对外契约不变：`_exchange` 仍是 3 元组（既有调用点与桩都按它写）
+        assert len(_dq8c5._exchange("f8c5.test", 1, settings=_s8c5)) == 3
+    finally:
+        _dq8c5._udp_exchange, _dq8c5._now = _o8c5
+        _dq8c5.reset_cache()
+    _cfg8c5 = _cfg303.DEFAULTS["dns"]
+    assert _cfg8c5["cache_enabled"] is True \
+           and int(_cfg8c5["cache_max"]) == 4096 \
+           and int(_cfg8c5["cache_max_ttl"]) == 3600, _cfg8c5
+    _sy8c5 = (ROOT / "config/settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "cache_max_ttl: 3600" in _sy8c5 and "\ndns:" in _sy8c5, \
+        "随包 settings.yaml 没写 dns 缓存三项"
+
+    print("[8c5] 续369 ok: DNS 应答缓存（同名字第二次零 UDP）｜按应答 TTL 过期｜"
+          "NXDOMAIN 负缓存｜cache_max 上限｜cache_enabled=false 每次真查且不写缓存｜"
+          "_exchange 对外仍是 3 元组")
+
     print("SMOKE PASS")
 
 

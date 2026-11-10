@@ -955,6 +955,13 @@ DEFAULTS = {
     "http": {
         "user_agent": "Mozilla/5.0 (compatible; CTFScanner/0.1; +authorized-testing-only)",
     },
+    # 续369：DNS 应答缓存。同一次任务里同一个名字会被反复解析（subdomain / probe /
+    # portscan / extdom / jsmine 各自都要），缓存按应答 TTL 过期；负结果用更短固定 TTL。
+    "dns": {
+        "cache_enabled": True,
+        "cache_max": 4096,        # 条目上限（满了整批清，不做 LRU）
+        "cache_max_ttl": 3600,    # 单条最长缓存秒数（应答 TTL 超过就夹到它）
+    },
     "report": {
         # ---- 报告导出（2026-10-13 用户点单）：**默认关** ----
         # MD / JSONL / HTML 三种格式（GUI 任务详情页右上角那排按钮）共用这一个开关（PDF 续297 移除）：

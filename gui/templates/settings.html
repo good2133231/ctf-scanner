@@ -947,6 +947,14 @@
       {{ 'checked' if s.dev.enabled }}> 开发模式（并发/预算压到最小，跑全流程自检用）</label>
     <label>开发模式夹具端口（0=自动） <input name="dev_fixture_port" value="{{ s.dev.fixture_port }}"></label>
     <label>HTTP User-Agent <input name="http_user_agent" value="{{ s.http.user_agent }}"></label>
+    <label class="chk"><input type="checkbox" name="dns_cache_enabled" value="1"
+      {{ 'checked' if s.dns.cache_enabled }}> <b>DNS 应答缓存</b>
+      （同一个名字一轮会被 subdomain/probe/portscan/extdom/jsmine 反复解析；
+      按应答 TTL 过期，负结果固定 60 秒）</label>
+    <label>DNS 缓存条目上限 <input name="dns_cache_max" style="width:6em"
+      value="{{ s.dns.cache_max }}"></label>
+    <label>单条最长缓存（秒） <input name="dns_cache_max_ttl" style="width:6em"
+      value="{{ s.dns.cache_max_ttl }}"></label>
     <details class="subpanel"><summary>工具路径 tools.*（共 {{ s.tools|length }} 项）</summary>
       {% for _k, _v in s.tools.items() %}
         {% if _v is mapping %}

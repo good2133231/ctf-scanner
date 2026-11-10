@@ -5,6 +5,46 @@
 
 
 
+## 续369（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：DNS 应答 TTL 缓存
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人「按顺序做」——第 2 项。现状：`scanner/dnsq.py` 的 `_parse_message` 解析出了 TTL
+却丢弃（`_ttl` 变量），模块里的 `_CACHE` 只是 **resolvers 文件**缓存，不是应答缓存；
+同一个名字一轮会被 subdomain / probe / portscan / extdom / jsmine 各解析一遍。
+
+### 一、已落地
+
+- `_parse_message` 多返回 Answer 段**最小 TTL**（无记录时 0），`records` 的结构不变。
+- `_exchange` 拆成两层：对外仍是 `(records, rcode, tc)` **3 元组契约**（既有 4 个调用点与
+  门禁里直接桩 `_exchange` 的用例都按它写，一个都不用改）；内部 `_exchange_ttl` 带缓存并
+  返回第 4 位 `min_ttl`。
+- 缓存键 `(name, qtype, resolver 或空串)`：`resolver=None`（自动轮询）视为同一份，避免轮询
+  到不同 DNS 就整批失效；显式指定 resolver 时各存一份。
+- 过期：按应答 TTL，夹在 `[30 秒, cache_max_ttl]`；负结果（NXDOMAIN / SERVFAIL / 超时）
+  固定 60 秒 —— 刚注册或刚迁移的域名，负结果比正结果变得更快。
+- 上限：`cache_max`（默认 4096）满了**整批清**，不做 LRU（缓存只负责加速，丢了不影响正确性；
+  再做一套「谁先淘汰」就是第二个口径）。导出 `reset_cache()` / `cache_snapshot()`。
+- 新增 `dns` 配置段三键，DEFAULTS + 随包配置 + GUI 策略页控件 + POST 映射四处一致。
+
+### 二、实测
+
+- 同一批 20 次查询（5 个域名 × 4 遍）：第一遍 **0.036s** → 第二遍 **0.000s**，缓存 5 条。
+- 真实大头是失败/超时路径（不存在的名字每次等满 3 秒）；门禁 `[8c5]` 用桩证明第二次
+  **零 UDP**、TTL 到期必须重查、关掉开关后每次真查且不写缓存。
+
+### 三、没做 / 边界
+
+- 不做 DNSSEC、不做 EDNS0、不做并发复用 —— 与模块原有的边界一致，本轮没扩大范围。
+- 缓存是**进程级跨任务**共享（DNS 结果本来就与任务无关，TTL 也按应答走），
+  多开两个控制台时各自一份，不共享内存。
+- 负缓存固定 60 秒，没读 SOA minimum（那需要解析 Authority 段，模块刻意只读 Answer 段）。
+
+### 四、验证
+
+- `--only 8c5` PASS；`compileall` PASS；真实查询契约 `len(_exchange(...)) == 3`。
+- 最终全量 v43：2026-11-10 12:29:23–12:39:08（约 12 分钟，日志内 306 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke369.log`）。
+
 ## 续368（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 连续失败熔断
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

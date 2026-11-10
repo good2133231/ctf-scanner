@@ -689,6 +689,12 @@ dicts:
   cdn_ips: config/dicts/cdn_ips.txt
 http:
   user_agent: Mozilla/5.0 (compatible; CTFScanner/0.1; +authorized-testing-only)
+dns:
+  # 续369：DNS 应答缓存（同一个名字一轮会被 subdomain/probe/portscan/extdom/jsmine
+  # 反复解析）。按应答 TTL 过期；负结果（NXDOMAIN/SERVFAIL/超时）固定 60 秒。
+  cache_enabled: true
+  cache_max: 4096
+  cache_max_ttl: 3600
 report:
   # ---- 报告导出（2026-10-13 用户点单）：默认**关闭** ----
   # 开关打开后，任务详情页右上角出现 MD / JSONL / HTML / 完整版报告 导出入口（PDF 续297 已移除）；

@@ -23,6 +23,7 @@ import random
 import socket
 import struct
 import threading
+import time
 
 from .config import DEFAULTS, resolve
 from .utils import read_lines
@@ -183,9 +184,10 @@ def _recv_exact(sock, n):
 
 
 def _parse_message(data):
-    """解析应答，返回 (tid, records, rcode, tc)。
+    """解析应答，返回 `(tid, records, rcode, tc, min_ttl)`。
 
     records 为 [(owner_lower, rtype, rdata_text), ...]，只取 Answer 段。
+    `min_ttl` 是 Answer 段里**最小的 TTL**（续369：应答缓存按它过期；无记录时为 0）。
     长度做边界检查，任何越界都视为记录结束（宁可少读，不可越界）。
     """
     if not data or len(data) < 12:
@@ -198,11 +200,14 @@ def _parse_message(data):
         _, off = _read_name(data, off)
         off += 4
     records = []
+    min_ttl = None
     for _ in range(an):
         owner, off = _read_name(data, off)
         if off + 10 > len(data):
             break
-        rtype, _rclass, _ttl, rdlen = struct.unpack("!HHIH", data[off:off + 10])
+        rtype, _rclass, ttl, rdlen = struct.unpack("!HHIH", data[off:off + 10])
+        if min_ttl is None or ttl < min_ttl:
+            min_ttl = ttl
         off += 10
         end = off + rdlen
         if end > len(data):
@@ -219,7 +224,7 @@ def _parse_message(data):
         else:
             records.append((owner.lower(), rtype, ""))
         off = end
-    return tid, records, rcode, tc
+    return tid, records, rcode, tc, (min_ttl or 0)
 
 
 def _udp_exchange(packet, resolver, timeout):
@@ -242,8 +247,103 @@ def _tcp_exchange(packet, resolver, timeout):
         return _recv_exact(s, n)
 
 
+# ---------- 应答缓存（续369）----------
+# 为什么需要：同一次任务里同一个名字会被 subdomain / probe / portscan / extdom / jsmine
+# 反复解析（一轮实测同一批域名平均 3~5 次），每次都是一次 UDP 往返、失败还要等满超时。
+# 缓存按应答里的 **TTL** 过期（夹在 [_MIN_TTL, cache_max_ttl]），负结果（NXDOMAIN /
+# SERVFAIL / 超时）用更短的固定 TTL —— 域名刚注册或刚迁移时，负结果比正结果变得更快。
+DEFAULT_CACHE_MAX = 4096
+DEFAULT_CACHE_MAX_TTL = 3600
+_MIN_TTL = 30            # 下限：TTL=1 的抖动记录不值得每条都重查
+_NEG_TTL = 60            # 负结果固定 TTL（NXDOMAIN / SERVFAIL / 超时）
+
+_ANSWER = {}             # key -> (expire_at, records, rcode, tc, min_ttl)
+_ANSWER_LOCK = threading.Lock()
+_now = time.monotonic    # 抽成模块级，门禁可以替换它来模拟过期
+
+
+def _cache_cfg(settings):
+    cfg = (settings or {}).get("dns") or {}
+    enabled = bool(cfg.get("cache_enabled", True))
+    try:
+        max_entries = max(0, int(cfg.get("cache_max") or DEFAULT_CACHE_MAX))
+    except (TypeError, ValueError):
+        max_entries = DEFAULT_CACHE_MAX
+    try:
+        max_ttl = max(_MIN_TTL, int(cfg.get("cache_max_ttl") or DEFAULT_CACHE_MAX_TTL))
+    except (TypeError, ValueError):
+        max_ttl = DEFAULT_CACHE_MAX_TTL
+    return enabled, max_entries, max_ttl
+
+
+def reset_cache():
+    """测试 / 人工排障：清空应答缓存。"""
+    with _ANSWER_LOCK:
+        _ANSWER.clear()
+
+
+def cache_snapshot():
+    """只读快照（条目数 / 过期时间），供日志与门禁使用。"""
+    with _ANSWER_LOCK:
+        return {k: v[0] for k, v in _ANSWER.items()}
+
+
+def _cache_get(key, settings):
+    enabled, _max_entries, _max_ttl = _cache_cfg(settings)
+    if not enabled:
+        return None
+    now = _now()
+    with _ANSWER_LOCK:
+        item = _ANSWER.get(key)
+        if not item:
+            return None
+        if item[0] <= now:
+            _ANSWER.pop(key, None)
+            return None
+        return item[1], item[2], item[3], item[4]
+
+
+def _cache_put(key, records, rcode, tc, min_ttl, settings):
+    enabled, max_entries, max_ttl = _cache_cfg(settings)
+    if not enabled:
+        return
+    if rcode in (2, 3) or rcode < 0 or not records:
+        ttl = _NEG_TTL
+    else:
+        ttl = min_ttl or _NEG_TTL
+    ttl = max(_MIN_TTL, min(int(ttl), int(max_ttl)))
+    now = _now()
+    with _ANSWER_LOCK:
+        if max_entries and len(_ANSWER) >= max_entries:
+            # 满了整批清：缓存只负责加速，丢了不影响正确性；不做 LRU 是为了不引入
+            # 第二套「谁先淘汰」的口径（§5.14）。
+            _ANSWER.clear()
+        _ANSWER[key] = (now + ttl, records, rcode, tc, min_ttl)
+
+
 def _exchange(name, qtype, timeout=_TTL_WAIT, resolver=None, settings=None):
-    """一次问答，返回 (records, rcode, tc)。UDP 失败/ID 不符会换一台 DNS 重试。"""
+    """一次问答，返回 `(records, rcode, tc)`。
+
+    对外契约保持不变（既有调用点与门禁的桩都按 3 元组写）；续369 起真正干活的是
+    带应答缓存的 `_exchange_ttl`，TTL 只在本模块内部使用。
+    """
+    records, rcode, tc, _ttl = _exchange_ttl(name, qtype, timeout=timeout,
+                                             resolver=resolver, settings=settings)
+    return records, rcode, tc
+
+
+def _exchange_ttl(name, qtype, timeout=_TTL_WAIT, resolver=None, settings=None):
+    """带应答缓存的实现：返回 `(records, rcode, tc, min_ttl)`；UDP 失败换 DNS 重试。"""
+    host = str(name or "").strip().rstrip(".")
+    key = (host.lower(), int(qtype), str(resolver or ""))
+    hit = _cache_get(key, settings)
+    if hit is not None:
+        return hit
+
+    def _finish(_records, _rcode, _tc, _min_ttl):
+        _cache_put(key, _records, _rcode, _tc, _min_ttl, settings)
+        return _records, _rcode, _tc, _min_ttl
+
     tid = random.randint(0, 0xFFFF)
     packet = _build_query(name, qtype, tid)
     servers = [resolver] if resolver else _pick_resolvers(2, settings)
@@ -257,19 +357,19 @@ def _exchange(name, qtype, timeout=_TTL_WAIT, resolver=None, settings=None):
         parsed = _parse_message(data)
         if not parsed or parsed[0] != tid:
             continue
-        _tid, records, rcode, tc = parsed
+        _tid, records, rcode, tc, mttl = parsed
         if tc:
             # 截断：尽量用 TCP 拿完整应答；失败就返回 UDP 已解析到的部分
             try:
                 tdata = _tcp_exchange(packet, srv, timeout)
                 tparsed = _parse_message(tdata) if tdata else None
                 if tparsed and tparsed[0] == tid and not tparsed[3]:
-                    return tparsed[1], tparsed[2], False
+                    return _finish(tparsed[1], tparsed[2], False, tparsed[4])
             except Exception:
                 pass
-            return records, rcode, True
-        return records, rcode, False
-    return [], -1, False
+            return _finish(records, rcode, True, mttl)
+        return _finish(records, rcode, False, mttl)
+    return _finish([], -1, False, 0)
 
 
 # ---------- 对外接口 ----------

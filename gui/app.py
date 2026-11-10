@@ -6482,6 +6482,11 @@ def create_app():
                              "breaker_fail_threshold": int(
                                  f.get("fofa_breaker_fail_threshold", 2) or 2),
                              "breaker_skip": int(f.get("fofa_breaker_skip", 20) or 20)},
+                    # 续369：DNS 应答缓存
+                    "dns": {"cache_enabled": f.get("dns_cache_enabled") == "1",
+                            "cache_max": int(f.get("dns_cache_max", 4096) or 4096),
+                            "cache_max_ttl": int(
+                                f.get("dns_cache_max_ttl", 3600) or 3600)},
                     # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token
                     "ssrf": {"enabled": f.get("ssrf_enabled") == "1",
                              # 留空 = 用本机监听地址；填了外部基址后本模块读不到命中，

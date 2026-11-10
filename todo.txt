@@ -4542,6 +4542,28 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续369（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：DNS 应答 TTL 缓存（「按顺序做」第 2 项）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【缓存】`scanner/dnsq.py`：`_parse_message` 多返回 Answer 段最小 TTL；
+      `_exchange` 拆成「对外 3 元组契约」+ 内部 `_exchange_ttl`（带缓存）。缓存键
+      `(name, qtype, resolver或空)`，按应答 TTL 过期（夹在 `[30, cache_max_ttl]`），
+      负结果（NXDOMAIN/SERVFAIL/超时）固定 60 秒；`cache_max` 满了整批清（不做 LRU，
+      避免第二套淘汰口径）；导出 `reset_cache()` / `cache_snapshot()`。
+- [x] T2【配置】新增 `dns` 段三键（`cache_enabled` / `cache_max` / `cache_max_ttl`），
+      DEFAULTS + 随包配置 + GUI 策略页控件 + POST 映射四处一致。
+- [x] T3【门禁】新增 `[8c5]`：同名字第二次零 UDP、TTL 过期重查、NXDOMAIN 负缓存、
+      `cache_max` 上限、`cache_enabled=false` 每次真查且不写缓存、
+      `_exchange` 对外仍是 3 元组（既有调用点与桩不受影响）。
+- [x] T4【实测】同一批 20 次查询：第一遍 0.036s → 第二遍 **0.000s**（5 条缓存）；
+      真实大头是失败/超时路径 —— 缓存后不再等满 3 秒（门禁以桩验「零 UDP」）。
+- [x] C1 定向：`--only 8c5` PASS。
+- [x] C2 最终全量 v43 `SMOKE PASS`：2026-11-10 12:29:23–12:39:08（约 12 分钟，306 个 ok 组 + 浏览器 e2e，`logs/smoke369.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一轮（续370）**：`get_conn()` 去掉每连接 `PRAGMA journal_mode=WAL`（`scanner/db.py:402`，
+同文件 758 行的注释已经为绕开它而刻意不走 `get_conn`）。
+
 ## 续368（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 连续失败熔断（「按顺序做」第 1 项）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
