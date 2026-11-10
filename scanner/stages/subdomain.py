@@ -34,6 +34,17 @@ def puredns_bruteforce_argv(pd_bin, wordlist, domain, resolvers, out_file):
             "-r", str(resolvers), "-w", str(out_file)]
 
 
+def puredns_bruteforce_batch_argv(pd_bin, wordlist, domains_file, resolvers, out_file):
+    """一批域名一次跑：`puredns bruteforce <wordlist> -d <domains.txt> ...`（续370）。
+
+    `-d` 在 v2.1.1 里吃的是**域名文件**（每行一个），不是裸域名 —— 见上一函数的注释。
+    合批省的是「每个域名一次进程启动 + massdns 初始化」；单域仍走上面的位置参数形态，
+    避免为了合批把 `[264]` 用真二进制钉过的那条路径也改掉。
+    """
+    return [str(pd_bin), "bruteforce", str(wordlist), "-d", str(domains_file),
+            "-r", str(resolvers), "-w", str(out_file)]
+
+
 def _combo_puredns(ctx, domain, pairs, pd_bin, massdns_bin, resolvers, th, wild_ips, workers):
     """用 puredns 跑一轮组合爆破；返回 (kept, dropped)，不可用/失败返回 None。
 
@@ -589,31 +600,51 @@ class SubdomainStage(Stage):
             resolvers = str(resolve(ctx.settings["dicts"]["resolvers"]))
             _pd_ok, _pd_fail = 0, 0
             ctx.logger.info(f"[subdomain] puredns 爆破 {len(brute_domains)} 个域名 …")
+            # 续370（主理人点单「puredns 多域合批」）：按词表分组后**一次跑一批**。
+            # 增量/全量用不同词表，所以按 `_pd_dict` 分组；组内只有 1 个域名时仍走原来的
+            # 位置参数形态（`[264]` 用真二进制钉过的那条），避免为合批把既有路径也改掉。
+            _pd_groups = {}
             for d in brute_domains:
-                if ctx.stopped():
-                    # 每个域名 timeout=3600，不检查停止会让"停止"最多等到全部域名跑完
-                    ctx.logger.warning("[subdomain] 任务已请求停止，中止 puredns 爆破")
-                    break
-                out_file = ctx.workdir / f"brute_{d}.txt"
-                # 把 massdns 所在目录塞进**这一个子进程**的 PATH（puredns 在进程内 exec 它，
-                # 拿不到我们在 settings 里写的绝对路径）——见 utils.run_cmd 的 extra_path。
-                # 续264：域名走**位置参数**，不是 `-d`（`-d` 在 v2.1.1 里吃的是域名**文件**）。
-                # argv 只此一处拼，见 puredns_bruteforce_argv。
                 if inc_roots and d in inc_roots and not inc_dict:
                     ctx.logger.info(f"[subdomain] 增量模式：{d} 跳过 puredns"
                                     "（无可跑词表，只吃被动源与历史）")
                     continue
-                _pd_dict = inc_dict if (inc_roots and d in inc_roots) else dict_path
-                rc, _, err = run_cmd(
-                    puredns_bruteforce_argv(pd_bin, _pd_dict, d, resolvers, out_file),
-                    timeout=3600, throttle=th,
-                    extra_path=os.path.dirname(massdns_bin) if massdns_bin else None)
+                _pd_groups.setdefault(
+                    inc_dict if (inc_roots and d in inc_roots) else dict_path, []).append(d)
+            for _gi, (_pd_dict, _doms) in enumerate(_pd_groups.items()):
+                if ctx.stopped():
+                    # 每组 timeout=3600，不检查停止会让"停止"最多等到全部分组跑完
+                    ctx.logger.warning("[subdomain] 任务已请求停止，中止 puredns 爆破")
+                    break
+                # 把 massdns 所在目录塞进**这一个子进程**的 PATH（puredns 在进程内 exec 它，
+                # 拿不到我们在 settings 里写的绝对路径）——见 utils.run_cmd 的 extra_path。
+                if len(_doms) == 1:
+                    _label = _doms[0]
+                    out_file = ctx.workdir / f"brute_{_label}.txt"
+                    rc, _, err = run_cmd(
+                        puredns_bruteforce_argv(pd_bin, _pd_dict, _label, resolvers, out_file),
+                        timeout=3600, throttle=th,
+                        extra_path=os.path.dirname(massdns_bin) if massdns_bin else None)
+                else:
+                    _label = f"{len(_doms)} 个域名（合批）"
+                    out_file = ctx.workdir / f"brute_batch_{_gi}.txt"
+                    _dom_file = write_lines(ctx.workdir / f"brute_domains_{_gi}.txt", _doms)
+                    rc, _, err = run_cmd(
+                        puredns_bruteforce_batch_argv(pd_bin, _pd_dict, _dom_file,
+                                                      resolvers, out_file),
+                        timeout=3600, throttle=th,
+                        extra_path=os.path.dirname(massdns_bin) if massdns_bin else None)
+                    if rc == 0:
+                        ctx.logger.info(
+                            f"[subdomain] puredns 合批跑完 {len(_doms)} 个域名"
+                            f"（{', '.join(_doms[:3])}{' …' if len(_doms) > 3 else ''}）")
                 if rc == 0:
                     add_many((line, "puredns") for line in read_lines(out_file))
                     _pd_ok += 1
                 else:
                     _pd_fail += 1
-                    ctx.logger.warning(f"[subdomain] puredns {d} 退出码 {rc}：{err.strip()[:150]}")
+                    ctx.logger.warning(
+                        f"[subdomain] puredns {_label} 退出码 {rc}：{err.strip()[:150]}")
             if _pd_fail and not _pd_ok and words:
                 ctx.logger.warning(
                     f"[subdomain] puredns 对全部 {_pd_fail} 个域名都失败了 —— 改用内置 DNS "

@@ -5,6 +5,50 @@
 
 
 
+## 续370（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：WAL 根因 / puredns 合批 / 词数默认 / 送探剥离 auth
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人「一次性全做完」——本轮把「按顺序做」剩下的**小到中等**三件一次落地并一次全量验证。
+
+### 一、get_conn 去掉每连接 WAL
+
+- `PRAGMA journal_mode=WAL` 是**库级持久属性**，只需 `init_db()` 设一次；`get_conn()` 每条
+  连接都执行它会在写锁竞争时抢一个不必要的写事务（`db.py:762` 那条「刻意不走 get_conn」
+  的旁路就是为绕开它才存在的，本轮把根因修掉并同步改写那条注释）。
+- 门禁 `[8c6]` 用 AST **只查 Call 节点**：`get_conn` 里不许有 `journal_mode` 调用、
+  `init_db` 里必须有一条；再行为断言 `PRAGMA journal_mode` 实际仍是 `wal`。
+
+### 二、puredns 多域合批 + brute_max_words 非零
+
+- 新增 `puredns_bruteforce_batch_argv`：`puredns bruteforce <词表> -d <域名文件> ...`。
+  主爆破按词表分组（增量/全量词表不同），组内 >1 个域名写一次域名文件、一次进程跑完；
+  组内只有 1 个域名仍走原**位置参数**形态（`[264]` 用真二进制钉过的那条不动）。
+- `limits.brute_max_words` 默认 0 → **20000**（17.8 万全量实测 588 秒）；0 仍是「全量」，
+  想跑满就设 0；DEFAULTS / 随包配置 / POST 映射三处同值（POST 缺字段回落 20000，
+  否则「保存一次策略」就把默认变成全量）。
+
+### 三、跨注册域自动送探剥离 auth
+
+- `runner._maybe_auto_probe_similar` 不再读 `options["auth"]`，也不再写
+  `child_opts["auth"]`：自动送探扫的是**拓展出来的、跨注册域**的名字，带主任务 Cookie/Token
+  过去等于凭据外发 + 越权。手动送探（用户在页面上显式点的那条路）仍按原口径继承。
+
+### 四、踩过的坑（都记下来）
+
+- `[8c6]` 第一版用 `get_source_segment(get_conn)` 判 `"journal_mode" not in 源码` —— 把
+  **注释里**那句「journal_mode 是库级属性」也算成了调用，自己造了一个假红。改成只遍历
+  `ast.Call` 节点取源码段。
+- `tests/smoke.py` 是 mixed 行尾：新插入的 `[8c6]` 块是 LF，而 `patch_auto` 默认按
+  CRLF 拼锚点 ⇒ 找不到。给补丁函数加显式 `eol` 参数后一次过。
+
+### 五、验证
+
+- `--only 8c6,8aq` 全绿；`compileall` PASS。
+- 合批的 argv 形态与接线由门禁钉住；**真跑合批未做**（需要真实域名 + 词表，且会发 DNS），
+  单域真跑仍由 `[264]` 覆盖。
+- 最终全量 v44：2026-11-10 12:46:57–12:56:06（9m20s，日志内 307 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke370.log`）。
+
 ## 续369（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：DNS 应答 TTL 缓存
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

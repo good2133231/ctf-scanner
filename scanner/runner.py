@@ -892,7 +892,9 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
     if not picked_roots:
         logger.info(f"[extdom] 自动送探：{len(keep)} 个达到阈值，但都在此前送过探了（去重命中），不再建任务")
         return {"spawned": 0, "candidates": len(keep), "capped": 0, "reason": "已送过"}
-    _auth = (options or {}).get("auth")
+    # 续370（主理人点单「跨注册域自动送探剥离 auth」）：这里**刻意不再读
+    # `options["auth"]`** —— 自动送探扫的是拓展出来的、跨注册域的名字，绝不能把主任务的
+    # Cookie/Token 带过去（最小授权 + 防凭据外发）；手动送探仍按原口径继承登录态。
     # 续344（主理人点单）：自动递归出来的子任务也跟父任务同一套阶段/模式，
     # 不能只有手动送探继承。父任务阶段为空才退回 AUTO_PROBE_STAGES。
     _pst344 = []
@@ -921,8 +923,6 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
                       "same_app_ip": ip_by_root.get(r, "")}
         if seeds:
             child_opts["seed_domains"] = seeds
-        if _auth:
-            child_opts["auth"] = _auth       # 登录态继承：与手动送探同口径（续195）
         # 续344：全量/深扫等模式也继承；否则父任务勾了全量，自动子任务又退回增量。
         for _k344 in ("full_brute", "subdomain_profile", "dirscan_full",
                       "recursive_dir", "screenshot_on", "cert_on", "sqli"):

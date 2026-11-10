@@ -6133,7 +6133,8 @@ def create_app():
                                "external_max_port_probes": int(
                                    f.get("external_max_port_probes", 0) or 0),
                                # 以下几项**页面无输入框**（爆破词数/并发/组合/二层遍历），原样带回
-                               "brute_max_words": int(_l0.get("brute_max_words", 0) or 0),
+                               "brute_max_words": int(
+                                   _l0.get("brute_max_words", 20000) or 0),
                                "brute_fallback_max": int(_l0.get("brute_fallback_max", 3000) or 0),
                                "brute_workers": int(_l0.get("brute_workers", 64) or 64),
                                "brute_combo_max": int(_l0.get("brute_combo_max", 40000) or 0),

@@ -20880,8 +20880,8 @@ expression: r0()
         f"冒烟里摘字典的地方精简档 {_off_cur} 处、深档 {_off_deep} 处 —— 必须成对，否则深档会偷偷上岗"
 
     assert _DEF8aq["limits"]["brute_fallback_max"] == 3000 and \
-        _DEF8aq["limits"]["brute_max_words"] == 0, \
-        "默认值必须是「仓库精简字典照跑、装了 puredns 才吃全量」"
+        _DEF8aq["limits"]["brute_max_words"] == 20000, \
+        "默认值：精简字典全量照跑；puredns 那路默认 2 万词（0=全量，续370 起不再默认吃 17.8 万）"
     assert _DEF8aq["limits"]["brute_workers"] == 64, \
         "内置爆破并发跟着 HTTP 的 20 走 ⇒ 深字典要跑一小时；这一档单独给 64"
 
@@ -36377,6 +36377,61 @@ expression: r0()
     print("[8c5] 续369 ok: DNS 应答缓存（同名字第二次零 UDP）｜按应答 TTL 过期｜"
           "NXDOMAIN 负缓存｜cache_max 上限｜cache_enabled=false 每次真查且不写缓存｜"
           "_exchange 对外仍是 3 元组")
+
+    # [8c6] 续370：get_conn 去 WAL / puredns 多域合批 / 词数默认非零 / 送探剥离 auth
+    import ast as _ast8c6
+    _dbsrc8c6 = (ROOT / "scanner/db.py").read_text(encoding="utf-8")
+    _dbfns8c6 = {n.name: n for n in _ast8c6.parse(_dbsrc8c6).body
+                 if isinstance(n, _ast8c6.FunctionDef)}
+    def _wals8c6(_fn):
+        """只取函数体里的**调用表达式**源码 —— 注释里提到 journal_mode 不算（本轮踩过）。"""
+        return [(_ast8c6.get_source_segment(_dbsrc8c6, _c) or "")
+                for _c in _ast8c6.walk(_fn) if isinstance(_c, _ast8c6.Call)]
+
+    _gc8c6 = [x for x in _wals8c6(_dbfns8c6["get_conn"]) if "journal_mode" in x]
+    assert not _gc8c6, f"get_conn 还在执行 WAL PRAGMA：{_gc8c6}"
+    _id8c6 = [x for x in _wals8c6(_dbfns8c6["init_db"]) if "journal_mode=WAL" in x]
+    assert _id8c6, "init_db 必须显式设一次 WAL（新建库/换库文件才落得上）"
+    _c8c6 = db.get_conn()
+    try:
+        _mode8c6 = str(_c8c6.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    finally:
+        _c8c6.close()
+    assert _mode8c6 == "wal", f"库实际 journal_mode 应为 wal：{_mode8c6}"
+
+    from scanner.stages.subdomain import (puredns_bruteforce_argv as _pargv8c6,
+                                          puredns_bruteforce_batch_argv as _pbatch8c6)
+    _a8c6 = _pargv8c6("pd", "wl.txt", "a.test", "res.txt", "out.txt")
+    assert _a8c6[3] == "a.test" and "-d" not in _a8c6, \
+        f"单域必须仍走位置参数（[264] 用真二进制钉的那条）：{_a8c6}"
+    _b8c6 = _pbatch8c6("pd", "wl.txt", "doms.txt", "res.txt", "out.txt")
+    assert _b8c6[3] == "-d" and _b8c6[4] == "doms.txt", _b8c6
+    assert "-r" in _b8c6 and "-w" in _b8c6, _b8c6
+    _sdsrc8c6 = (ROOT / "scanner/stages/subdomain.py").read_text(encoding="utf-8")
+    assert "_pd_groups" in _sdsrc8c6 and "puredns_bruteforce_batch_argv(pd_bin" in _sdsrc8c6, \
+        "主爆破没接合批（仍每个域名起一次进程）"
+
+    assert int(_cfg303.DEFAULTS["limits"]["brute_max_words"]) == 20000, \
+        _cfg303.DEFAULTS["limits"]["brute_max_words"]
+    _sy8c6 = (ROOT / "config/settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "brute_max_words: 20000" in _sy8c6, "随包 settings.yaml 没跟着改默认词数"
+    _ga8c6 = (ROOT / "gui/app.py").read_text(encoding="utf-8")
+    assert 'get("brute_max_words", 20000)' in _ga8c6, \
+        "POST 映射缺字段时若回落到 0，保存一次策略就把默认变成全量"
+
+    _rsrc8c6 = (ROOT / "scanner/runner.py").read_text(encoding="utf-8")
+    _rfn8c6 = {n.name: n for n in _ast8c6.parse(_rsrc8c6).body
+               if isinstance(n, _ast8c6.FunctionDef)}
+    _ma8c6 = _ast8c6.get_source_segment(_rsrc8c6, _rfn8c6["_maybe_auto_probe_similar"]) or ""
+    assert 'child_opts["auth"]' not in _ma8c6, \
+        "自动送探子任务还在继承主任务登录态（跨注册域必须剥离）"
+    assert '_auth = (options or {}).get("auth")' not in _ma8c6, \
+        "自动送探还在读 options.auth"
+
+    print("[8c6] 续370 ok: get_conn 不再每连接设 WAL（init_db 设一次，库实际仍是 wal）｜"
+          "puredns 多域合批（单域仍走位置参数，batch 走 -d 文件）｜"
+          "brute_max_words 默认 2 万（DEFAULTS/随包/POST 三处同值，0 仍=全量）｜"
+          "自动送探剥离 auth（手动送探不受影响）")
 
     print("SMOKE PASS")
 

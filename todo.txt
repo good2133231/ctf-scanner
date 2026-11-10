@@ -4542,6 +4542,27 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续370（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：「按顺序做」第 3–4 项（WAL / puredns 合批 / 送探剥离 auth）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【WAL】`scanner/db.py`：`get_conn()` 不再每条连接执行 `PRAGMA journal_mode=WAL`
+      （库级持久属性），改到 `init_db()` 设一次；762 行那条「刻意不走 get_conn」的注释同步改写。
+- [x] T2【puredns 合批】`scanner/stages/subdomain.py`：新增 `puredns_bruteforce_batch_argv`
+      （`-d <域名文件>`）；主爆破按词表分组，组内 >1 个域名时写域名文件一次跑完，
+      单域仍走原位置参数形态（`[264]` 用真二进制钉过）。
+- [x] T3【词数默认】`limits.brute_max_words` 0 → **20000**（17.8 万全量实测 588 秒）；
+      0 仍是「全量」语义；DEFAULTS / 随包配置 / POST 映射三处同值。
+- [x] T4【送探剥离 auth】`runner._maybe_auto_probe_similar` 不再读 `options["auth"]`、
+      不再把父任务 Cookie/Token 继承给跨注册域子任务（手动送探路径不变）。
+- [x] T5【门禁】新增 `[8c6]`（WAL 只查 Call 节点 / batch argv / 三处默认值 / auth 剥离）；
+      `[8aq]` 的默认值断言由 0 改 20000。
+- [x] C1 定向：`--only 8c6,8aq` PASS。
+- [x] C2 最终全量 v44 `SMOKE PASS`：2026-11-10 12:46:57–12:56:06（9m20s，307 个 ok 组 + 浏览器 e2e，`logs/smoke370.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一轮（续371）**：全量 smoke 分 fast/nightly（`--fast` 被续331 封印，需先拆 `main()` 的
+块级执行语义，单独一轮）；之后是结构化授权 scope（安全红线，单独一轮）。
+
 ## 续369（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：DNS 应答 TTL 缓存（「按顺序做」第 2 项）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

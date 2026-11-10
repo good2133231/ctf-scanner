@@ -399,7 +399,9 @@ def get_conn():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    # 续370：`journal_mode=WAL` 是**库级持久属性**，只在 `init_db()` 设一次就够。
+    # 每条连接都执行它会在写锁竞争时抢一个不必要的写事务 —— 同文件 758 行那条
+    # 「刻意不走 _query()/get_conn()」的旁路就是为绕开它才存在的，根因在这里。
     # 并发写保护：GUI 无任务队列，多个任务线程 + Flask 请求线程会同时写库。
     # 默认超时只有 5 秒且读写冲突时会立刻抛 "database is locked"，
     # 这里给个显式的 10 秒忙等，让写操作排队而不是失败。
@@ -410,6 +412,8 @@ def get_conn():
 def init_db():
     # 建表 + 补列是**多个 DDL 语句**，必须整体串行（否则两个线程同时 ADD COLUMN 会互相撞）
     with _WRITE_LOCK, get_conn() as conn:
+        # 续370：WAL 只在这里设一次（库级持久，新建库 / 换库文件时也能正确落上）。
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
         _ensure_columns(conn)
         # 续360：老库兼容用例可能只有 id/name/targets/stages 四列（见 [7k]），
@@ -755,8 +759,9 @@ def stop_queued_task(task_id):
 def task_stop_requested(task_id):
     """续360：读跨进程停止标志；任务不存在/读失败一律 false（不把查不到当停止）。
 
-    刻意不走 `_query()`/`get_conn()`：后者每条连接都执行 `PRAGMA journal_mode=WAL`，
-    写锁竞争时可能让轮询自己先失败/变慢。这里只读一行、短超时，WAL 下读不被写阻塞。
+    刻意不走 `_query()`/`get_conn()`：轮询要的是**最短超时 + 只读一行**，不能跟业务查询
+    抢同一套 `busy_timeout`（续370 起 `get_conn` 已不再每条连接设 WAL，但这条旁路仍保留：
+    它的 1 秒超时是刻意的，短于业务侧的 10 秒）。
     """
     try:
         tid = int(task_id)

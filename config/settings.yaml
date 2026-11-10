@@ -140,7 +140,8 @@ limits:
   # 更紧）；**两道都只冲深档 —— 精简档 366 条任何情况下全量在场**。超出即等距抽样（取前 N 条会把
   # 排好序的字典开头那串 `0/00/000/aa` 全收进来、把 api/admin 全挤掉）；0 = 全量。
   # 想吃下深档全量请装 puredns：python cli/client.py --update-tools --tool puredns。
-  brute_max_words: 0
+  # 续370：默认 2 万条（17.8 万全量实测 588 秒）；0 仍是「全量」语义。
+  brute_max_words: 20000
   # 内置 DNS 爆破的并发（纯 DNS 等待，和上面 max_workers 的 HTTP 并发刻意分开）：
   # 实测 3000 条 @20 线程 ≈ 53 秒；闸门设 0 吃全量 17.8 万条时 128 线程跑了 45 分钟还没跑完
   brute_workers: 64
