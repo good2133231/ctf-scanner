@@ -452,3 +452,40 @@ def search_host(token, settings, logger=None, size=None):
     if not text:
         return [], 0, "host 反查目标为空"
     return search_query(build_host_query(text), settings, logger=logger, size=size)
+
+
+# ---- FOFA 端口资产的 web 探活 URL（续366）----
+# FOFA 的 host 列可能是 `https://x.test:2053` / `http://x.test` / 裸域名 / 裸 IP。
+# 这里只做「拼 URL」这一件纯计算的事，不发请求；是否允许探、探几次由 osint 阶段决定。
+HTTPS_GUESS_PORTS = frozenset({443, 8443, 9443, 2053, 2083, 2087, 2096})
+
+
+def host_part(raw):
+    """公开版：供 osint 的 web 探活取主机名（与 `domain_of()` 同一份解析口径）。"""
+    return _host_part(raw)
+
+
+def web_url(host, port):
+    """FOFA 资产 (host, port) → 可探活的根 URL；取不到主机名 / 端口非法返回空串。
+
+    scheme 先看 host 自带的；没带时按端口猜（`HTTPS_GUESS_PORTS` 走 https，其余 http）。
+    端口一律取自 FOFA 的 `port` 列，不信 host 字符串里可能残留的 `:port`。
+    """
+    text = str(host or "").strip()
+    try:
+        p = int(port)
+    except (TypeError, ValueError):
+        return ""
+    if not 0 < p < 65536:
+        return ""
+    hn = _host_part(text)
+    if not hn:
+        return ""
+    low = text.lower()
+    if low.startswith("https://"):
+        scheme = "https"
+    elif low.startswith("http://"):
+        scheme = "http"
+    else:
+        scheme = "https" if p in HTTPS_GUESS_PORTS else "http"
+    return f"{scheme}://{hn}:{p}/"

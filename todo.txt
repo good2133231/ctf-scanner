@@ -4542,6 +4542,49 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续366（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 裸 IP 反查 + web 端口探活入站点 + 标签折叠
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人点单（四件都做）：FOFA 端口资产里的裸 IP 反查了吗；端口有 web 服务是不是也要入站点；
+是不是该定义 `web_portscan` 只扫简单常见 web 端口；不用的标签前端要有展开/隐藏（阶段清单 +
+检查项如 SQL 注入）。目标真名与真实 IP 按脱敏红线不落被跟踪文件，夹具统一用 `acme-portal.cn`
+与 `1.2.3.4` / `9.9.9.x`。
+
+- [x] T1【裸 IP 反查】FOFA 四路（favicon / cert / title / host=）与端口资产里的裸 IP
+      统一攒到 `self._bare_ips`，在 `run()` 末尾走 `_favicon_ip_domains(..., skip_alive=True)`：
+      FOFA 已证明活跃 ⇒ 不探活 80/443、不受 `iprecon.enabled`（出厂默认关）限制，
+      改由 `fofa.bare_ip_reverse`（默认开）控制；私网/重复 IP 过滤；结果标「FOFA 裸 IP·历史反查·待确认」。
+      旧函数默认档行为逐字不变（`[314]` 直接调它），不是第二份实现。
+- [x] T2【站点化】`_fofa_web_portscan()`：FOFA 端口资产里落在 `portscan.ports` 常见 web 端口上的
+      `host:port` → 轻量 GET（3s、`auth=False`、`allow_redirects=False`）→ 有响应就写 `sites`
+      （source=`osint:fofa-web`）**并追加到 `ctx.results["sites"]`**，否则 jsmine/dirscan/vulnscan
+      只吃内存那份会看不到。只探本任务注册域内域名 / 公网裸 IP，黑名单与第三方清单同样拦。
+- [x] T3【web 端口】`portscan.ports` 补 4 个 CDN 备用 HTTPS 口 `2053/2083/2087/2096`
+      （DEFAULTS + 随包配置同值）；`fofa.web_url()` 纯函数负责 host+port → URL（scheme 看 host，
+      没带按端口猜）。**不新增 STAGE_ORDER 阶段**：probe 在 osint 之前，且新增阶段会牵动 13 阶段
+      清单、建任务页、devflow、报告的全套判据。
+- [x] T4【标签折叠】`tasks.html` 给阶段清单 + SQL 注入这类检查项标签加
+      `#stage-tags-toggle` / `#stage-tags`，默认收起、状态记 localStorage；
+      `app.js::initStageTagsToggle()` 挂 DOMContentLoaded。批量勾选按钮常驻；
+      任何 `name` / `value` / `data-ck-*` 都不改（清单仍只由后端 STAGE_ORDER 渲染）。
+- [x] T5【四处一致】`fofa.bare_ip_reverse` / `web_portscan` / `web_max` 三个新键
+      同步 DEFAULTS、随包配置、GUI 策略页控件、POST 映射；`SOURCE_LABELS` 加 web 来源。
+- [x] T6【门禁】新增 `[8c1]`（约 142 行）：web_url 六形态、端口表 4 个新口、
+      裸 IP 反查（不探活/私网/去重/可关）、web 探活（授权域闸/web 口闸/auth=False/写 sites
+      + ctx.results/可关）、接线源码断言、三方一致、折叠控件渲染。
+- [x] C1 定向：`--only 8c1` PASS；`--only 8c1,8at,8as,8au,8bz,8w,250,314` 全绿。
+- [x] C2 记忆同步：CHANGELOG 续366 + todo 续366（本小节）。项目速览文件正文未动
+      （本轮没改既有不变量条目的描述，新链路只记在本小节）。
+- [x] C3 最终全量 v39 `SMOKE PASS`：2026-11-10 09:33:34–09:43:27（9m53s，约 302 个 ok 组 +
+      浏览器 e2e，`logs/smoke366.log`）；一次跑绿，无中途返工。
+
+**下一轮（续367）**（原 4 组点单本轮仍一项未动，被插队占满）：
+- [ ] P0 速度：DNS TTL 缓存 / `get_conn()` 去每连接 WAL PRAGMA / puredns 多域合批 / smoke fast-nightly 分层。
+- [ ] P0 安全：跨注册域送探剥离 `auth`；结构化授权 scope（allowlist、时间窗、IP-CIDR、端口路径）。
+- [ ] P1 能力：JS sourcemap、OpenAPI/GraphQL、历史 PDNS/ASN/证书 SAN、CTF profile。
+- [ ] P2 代码质量：拆大文件、收窄 `except Exception`、统一默认值 fallback。
+
 ## 续365（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA host="品牌词" 反查 + 同 IP 置信度（插队）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

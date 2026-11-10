@@ -49,7 +49,7 @@ from .. import virustotal as vt_mod
 from .. import ctlog as ctlog_mod
 from .. import keystore
 from ..fingerprint import favicon_hash
-from ..utils import http_request, pool_run, resolve_host
+from ..utils import http_request, is_domain, pool_run, resolve_host
 
 # ---------- FOFA 标题反查的相关性过滤 ----------
 
@@ -120,7 +120,7 @@ class OsintStage(Stage):
         except Exception as e:      # noqa: BLE001 - 状态展示不能把情报阶段带崩
             ctx.logger.warning(f"[osint] 来源状态写入失败（不影响扫描）：{e}")
 
-    def _favicon_ip_domains(self, ips):
+    def _favicon_ip_domains(self, ips, skip_alive=False):
         """favicon 命中里的裸 IP：**先探活，再做 IP→域名**（续314，主理人点单）。
 
         为什么必须先探活：IP 反查（webscan / hackertarget / rapiddns / FOFA `ip=`）返回的
@@ -131,31 +131,51 @@ class OsintStage(Stage):
         免费源与 FOFA `ip=` **都做**（主理人点单）：免费源先跑，FOFA 有 key 再补一路；
         两路结果合并去重。入库来源统一 `osint:iprecon`，note 写明 IP 语法与「历史反查·待确认」
         —— 它与「同一张证书 / 同一图标」那种当前证据不是一回事，页面必须能分开读。
+
+        续366：`skip_alive=True` 供 **FOFA 端口资产**那批裸 IP 复用同一条反查链路 ——
+        FOFA 已经证明该 IP:port 上有服务，不再探活 80/443（那会漏掉只开 2053/2083 的资产），
+        也不再受 `iprecon.enabled`（出厂默认关）限制，改由 `fofa.bare_ip_reverse` 独立控制。
+        `skip_alive=False` 的行为逐字不变（门禁 [314] 直接调默认档）。
         """
         ctx = self.ctx
-        cfg = ctx.settings.get("iprecon", {}) or {}
-        if cfg.get("from_favicon", True) is False:
-            ctx.logger.info("[osint] favicon 命中 IP 的反查已关闭（iprecon.from_favicon=false）")
-            return []
-        # 续317：总开关必须管住这条子链路 —— 续314 时它只认 from_favicon，
-        # `iprecon.enabled=false`（出厂默认）时照样发真实请求（门禁 [6k] 抓到）。
-        if cfg.get("enabled") is not True:
-            ctx.logger.info("[osint] favicon 命中 IP 的反查跳过（iprecon.enabled 未开）")
-            return []
-        cap = int(cfg.get("from_favicon_max", 20) or 0)
+        if skip_alive:
+            fcfg = ctx.settings.get("fofa", {}) or {}
+            if fcfg.get("bare_ip_reverse") is False:
+                ctx.logger.info("[osint] FOFA 裸 IP 反查已关闭（fofa.bare_ip_reverse=false）")
+                return []
+            if (getattr(ctx, "options", None) or {}).get("offline"):
+                ctx.logger.info("[osint] 离线任务跳过 FOFA 裸 IP 反查")
+                return []
+            cap = int(fcfg.get("web_max", 20) or 0)
+        else:
+            cfg = ctx.settings.get("iprecon", {}) or {}
+            if cfg.get("from_favicon", True) is False:
+                ctx.logger.info("[osint] favicon 命中 IP 的反查已关闭（iprecon.from_favicon=false）")
+                return []
+            # 续317：总开关必须管住这条子链路 —— 续314 时它只认 from_favicon，
+            # `iprecon.enabled=false`（出厂默认）时照样发真实请求（门禁 [6k] 抓到）。
+            if cfg.get("enabled") is not True:
+                ctx.logger.info("[osint] favicon 命中 IP 的反查跳过（iprecon.enabled 未开）")
+                return []
+            cap = int(cfg.get("from_favicon_max", 20) or 0)
         if cap > 0 and len(ips) > cap:
-            ctx.logger.info(f"[osint] favicon 命中 IP {len(ips)} 个超过上限 {cap}，仅处理前 {cap} 个")
+            ctx.logger.info(f"[osint] 裸 IP {len(ips)} 个超过上限 {cap}，仅处理前 {cap} 个")
             ips = list(ips)[:cap]
-        out, alive_n = [], 0
+        out, alive_n, seen_ip = [], 0, set()
         for ip in ips:
             if ctx.stopped():
                 break
+            ip = str(ip or "").strip()
+            if not ip or ip in seen_ip:
+                continue
+            seen_ip.add(ip)
             if not iprecon.is_public_ip(ip):
                 continue
-            if not self._ip_alive(ip):
-                ctx.logger.info(f"[osint] favicon 命中 IP {ip} 探活失败（80/443 无响应），跳过反查")
-                continue
-            alive_n += 1
+            if not skip_alive:
+                if not self._ip_alive(ip):
+                    ctx.logger.info(f"[osint] favicon 命中 IP {ip} 探活失败（80/443 无响应），跳过反查")
+                    continue
+                alive_n += 1
             doms = []
             try:
                 doms = iprecon.reverse_lookup(ip, ctx.settings, logger=ctx.logger)
@@ -170,19 +190,22 @@ class OsintStage(Stage):
                     doms = list(doms) + [d for d in (_domain_of(a) for a in assets) if d]
                     via = "免费源+FOFA"
             uniq = [d for d in dict.fromkeys(doms) if d]
-            ctx.logger.info(f"[osint] favicon 命中 IP {ip} 存活，{via}反查出 {len(uniq)} 个域名"
-                            f"（历史数据，入库标「待确认」）")
+            ctx.logger.info(f"[osint] FOFA 裸 IP {ip}{'' if skip_alive else ' 存活'}，"
+                            f"{via}反查出 {len(uniq)} 个域名（历史数据，入库标「待确认」）")
             for d in uniq:
                 # 续319：按「同域 / 名字相似 / 同证书 / 同证书+favicon / 待确认」分级，
                 # 依据写进 note（拓展域名页的「备注」列直接看得到）。
                 _tag319, _why319 = _recon_level(d, ctx)
                 _note319 = f'ip="{ip}" · 历史反查（{via}）· {_tag319}'
+                if skip_alive:
+                    _note319 = "FOFA 裸 IP · " + _note319
                 if _why319:
                     _note319 += f"（{_why319}）"
                 out.append((d, "osint:iprecon", _note319))
         if ips:
-            ctx.logger.info(f"[osint] favicon 命中裸 IP {len(ips)} 个：探活通过 {alive_n} 个，"
-                            f"反查域名 {len({d for d, _s, _n in out})} 个")
+            ctx.logger.info(f"[osint] FOFA 裸 IP {len(ips)} 个"
+                            + ("" if skip_alive else f"：探活通过 {alive_n} 个")
+                            + f"，反查域名 {len({d for d, _s, _n in out})} 个")
         return out
 
     def _ip_alive(self, ip):
@@ -212,6 +235,8 @@ class OsintStage(Stage):
         self._osint_sources = {}
         self._shared_ips = set()
         self._fofa_host_ips = {}
+        self._bare_ips = []          # 续366：FOFA 各路攒下的裸 IP
+        self._fofa_web_ports = []    # 续366：FOFA 各路攒下的 host:port 资产
         fofa_cfg = ctx.settings.get("fofa", {}) or {}
         do_fofa = fofa_cfg.get("enabled") is True
         do_host = do_fofa and fofa_cfg.get("host_enabled") is not False
@@ -311,6 +336,12 @@ class OsintStage(Stage):
             if do_title and not ctx.stopped():
                 _fofa362 += self._fofa_title()
             found = _fofa362 + found
+            # 续366：FOFA 四路（favicon / cert / title / host=）攒下的裸 IP 与 host:port
+            # 在这里统一收口 —— 位置必须在全部查询之后，少一路都会漏资产。
+            if self._bare_ips and not ctx.stopped():
+                found = self._favicon_ip_domains(self._bare_ips, skip_alive=True) + found
+            if self._fofa_web_ports and not ctx.stopped():
+                self._fofa_web_portscan()
             self._note_source("fofa", "FOFA", "ok" if _fofa362 else "unknown", len(_fofa362),
                               "" if _fofa362 else "无返回；空结果与上游失败无法区分（详见任务日志）")
         if do_shodan and not ctx.stopped():
@@ -737,12 +768,13 @@ class OsintStage(Stage):
                 found.append((domain, "osint:fofa", fofa_mod.build_query(icon_hash)))
         ctx.logger.info(f"[osint] FOFA 拓展：查询 {queried} 个 favicon，跳过黑 ico {black} 个")
         if ip_hits:
-            found += self._favicon_ip_domains(ip_hits)
+            self._bare_ips.extend(ip_hits)   # 续366：统一到 run() 末尾反查（不再即时探活）
         self._flush_icon_status()
         if _fofa_ports:
             _uniq = {}
             for _p in _fofa_ports:
                 _uniq[(_p["host"], _p["port"])] = _p
+            self._fofa_web_ports.extend(_uniq.values())   # 续366：web 探活候选
             try:
                 db.insert_ports(ctx.task_id, list(_uniq.values()))
                 ctx.logger.info(f"[osint] FOFA 端口资产：入库 {len(_uniq)} 条"
@@ -968,6 +1000,104 @@ class OsintStage(Stage):
                         + (f"，相关性过滤掉 {skipped} 条" if skipped else ""))
         return found
 
+    def _fofa_web_portscan(self):
+        """续366：FOFA 端口资产里落在 web 端口上的 host:port → 轻量探活 → 入 sites。
+
+        为什么挂在 osint 而不是新增 STAGE_ORDER 阶段：`probe` 排在 osint **之前**，
+        FOFA 端口资产是 osint 才入库的，永远不会回流成站点；而新增阶段会牵动 13 阶段
+        清单、建任务页、devflow、报告的全套判据。这里直接写库并**追加到
+        `ctx.results["sites"]`**，jsmine / dirscan / vulnscan / crawl 立刻能吃到。
+
+        安全边界（§1）：只对「本任务注册域内」的域名或公网裸 IP 发请求，黑名单与
+        第三方清单同样拦；`auth=False`（FOFA 回来的名字未必在授权范围内，不带登录态）、
+        `allow_redirects=False`（不跟到外部域）。
+        """
+        ctx = self.ctx
+        fcfg = ctx.settings.get("fofa", {}) or {}
+        if fcfg.get("web_portscan") is False:
+            return 0
+        if (ctx.options or {}).get("offline"):
+            ctx.logger.info("[osint] 离线任务跳过 FOFA web 端口探活")
+            return 0
+        try:
+            from .. import portscan as _ps366
+            web_ports = set(_ps366.parse_ports(
+                (ctx.settings.get("portscan", {}) or {}).get("ports")))
+        except Exception as _e366:      # noqa: BLE001 - 端口表坏了不该拖垮整阶段
+            ctx.logger.warning(f"[osint] web 端口表解析失败，跳过探活：{_e366}")
+            return 0
+        if not web_ports:
+            return 0
+        cap = int(fcfg.get("web_max", 20) or 0)
+        try:
+            bases = extdom.task_bases(ctx.task_id)
+            bl = blacklist.load(ctx.settings, owner_id=getattr(ctx, "owner_id", 0))
+        except Exception as _e366b:     # noqa: BLE001 - 读不到闸就宁可不探
+            ctx.logger.warning(f"[osint] 授权范围/黑名单读取失败，跳过 web 探活：{_e366b}")
+            return 0
+        cands, seen = [], set()
+        for p in self._fofa_web_ports:
+            try:
+                port = int(p.get("port") or 0)
+            except (TypeError, ValueError):
+                continue
+            if port not in web_ports:
+                continue
+            host = str(p.get("host") or "").strip()
+            url = fofa_mod.web_url(host, port)
+            hn = fofa_mod.host_part(host)
+            if not url or not hn or url in seen:
+                continue
+            if is_domain(hn):
+                if not extdom.is_owned(hn, bases):
+                    continue
+            elif not iprecon.is_public_ip(hn):
+                continue
+            if blacklist.matches(hn, bl) or jsmine.is_thirdparty(hn):
+                continue
+            seen.add(url)
+            cands.append((url, hn, str(port)))
+            if cap > 0 and len(cands) >= cap:
+                break
+        if not cands:
+            ctx.logger.info(f"[osint] FOFA web 端口探活：{len(self._fofa_web_ports)} 条端口资产"
+                            "里没有落在 web 端口 / 授权范围内的候选")
+            return 0
+
+        def _one366(cand):
+            if ctx.stopped():
+                return None
+            url, hn, port = cand
+            r = http_request(url, timeout=3, settings=ctx.settings, verify=False,
+                             auth=False, allow_redirects=False)
+            if not r:
+                return None
+            hdrs = r.get("headers") or {}
+            return {"url": url, "host": hn, "port": port,
+                    "status": int(r.get("status") or 0), "title": "",
+                    "length": len(str(r.get("text") or "")),
+                    "server": str(hdrs.get("Server") or hdrs.get("server") or ""),
+                    "tech": "", "source": "osint:fofa-web"}
+
+        rows = [x for x in pool_run(_one366, cands,
+                                    workers=max(1, int(fcfg.get("workers", 5) or 5)),
+                                    logger=ctx.logger, label="osint FOFA web 端口探活")
+                if x]
+        if not rows:
+            ctx.logger.info(f"[osint] FOFA web 端口探活 {len(cands)} 个候选，无 HTTP 响应")
+            return 0
+        new_sites = db.drop_existing(ctx.task_id, "sites", ("url",), rows,
+                                     lambda s: (s["url"],))
+        if new_sites:
+            db.insert_sites(ctx.task_id, new_sites)
+        _cur = [s for s in (ctx.results.get("sites") or []) if isinstance(s, dict)]
+        _known = {s.get("url") for s in _cur}
+        ctx.results["sites"] = _cur + [s for s in rows if s["url"] not in _known]
+        ctx.logger.info(f"[osint] FOFA web 端口探活：候选 {len(cands)} 个，有 HTTP 响应 {len(rows)} 个，"
+                        f"新站点入库 {len(new_sites)} 条（source=osint:fofa-web；"
+                        "已并入 ctx.results['sites'] 供后续阶段使用）")
+        return len(new_sites)
+
     # ---------- FOFA host="<品牌词>" 反查（续365）----------
 
     def _fofa_host(self):
@@ -1042,6 +1172,7 @@ class OsintStage(Stage):
                 domain = _domain_of(a)
                 if not domain:
                     no_domain += 1
+                    self._bare_ips.append(str(a.get("ip") or "").strip())
                     continue
                 if domain in known or domain in hit_ips:
                     continue

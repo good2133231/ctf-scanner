@@ -5,6 +5,76 @@
 
 
 
+## 续366（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 裸 IP 反查 + web 端口探活入站点 + 标签折叠
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人点单「四件都做」：FOFA 端口资产里的裸 IP 反查了吗；端口有 web 服务是不是也要入站点；
+是不是该定义 `web_portscan` 只扫简单常见 web 端口；不用的标签（阶段清单 + 检查项）前端要有
+展开/隐藏。目标真名与真实 IP 不落被跟踪文件。
+
+### 一、现状核对（开工前的四个答案）
+
+- 裸 IP 反查：**默认没有**。FOFA `icon_hash=` 路里 domain 为空的资产会进 `ip_hits` →
+  `_favicon_ip_domains()`，但被 `iprecon.enabled`（出厂 False）与 `from_favicon` 两道闸挡着；
+  开了也只探 80/443 再走 IP→域名反查，不碰 2053/2083/2087/2096/8443。`db.insert_ports`
+  本身只落库不触发反查；续365 的 `host=` 路对裸 IP 只记日志。
+- web 服务入站点：**没有**。`db.insert_sites` 只在 `probe` 阶段，而 `STAGE_ORDER` 里 probe 在
+  osint **之前** ⇒ FOFA 端口资产永远不会回流成站点。
+- `web_portscan`：**其实已有**：`portscan.mode=top` + `ports` 20 个常见 web 端口（续269 落地），
+  缺的是样本里那 4 个 CDN 备用口，以及不对 FOFA 回来的 host:port 做 web 探活。
+- 标签：新建任务页把 13 个阶段名 + SQL 注入平铺在一行，没有折叠控件。
+
+### 二、已落地
+
+- `scanner/fofa.py`：`host_part()` 公开包装、`web_url(host, port)`（scheme 看 host，没带按
+  `HTTPS_GUESS_PORTS` 猜；端口只信 `port` 列）、`HTTPS_GUESS_PORTS`。
+- `scanner/stages/osint.py`：新增 `self._bare_ips` / `self._fofa_web_ports` 两个累积器；
+  `_favicon_ip_domains(ips, skip_alive=False)` 加第二档（`skip_alive=True` 时不探活、改看
+  `fofa.bare_ip_reverse`、离线任务跳过）；新增 `_fofa_web_portscan()`。
+- `scanner/config.py` / `config/settings.yaml`：`fofa.bare_ip_reverse`（True）、
+  `fofa.web_portscan`（True）、`fofa.web_max`（20）；`portscan.ports` 补
+  `2053,2083,2087,2096`（两处同值）。
+- `gui/app.py` / `gui/templates/settings.html` / `gui/templates/tasks.html` /
+  `gui/static/app.js`：POST 映射 3 键、策略页 3 控件、来源标签「FOFA·web 端口探活」、
+  阶段标签展开-隐藏（默认收起、localStorage 记住状态、JS 不抄阶段名）。
+- `tests/smoke.py` 新增 `[8c1]`。
+
+### 三、设计取舍与踩过的坑
+
+- **不新增 STAGE_ORDER 阶段**：`web_portscan` 复用 `portscan.ports` 那张表 + osint 内的探活，
+  避免改动 13 阶段清单、建任务页、devflow、报告的全套判据；「web_portscan」作为
+  `fofa.web_portscan` 能力名落地，不是一个新阶段字符串。
+- **站点必须同时写库和内存**：jsmine / crawl / vulnscan 只读 `ctx.results["sites"]`，
+  cert / dirscan / screenshot 才有「回库兜底」。只 `insert_sites` 会有一半阶段看不见新站点。
+- **安全边界**：探活只对「本任务注册域内」的域名或公网裸 IP 发请求，
+  `auth=False`（FOFA 回来的名字未必在授权范围，绝不带任务登录态）、
+  `allow_redirects=False`（不跟到外部域）、黑名单与第三方清单同样拦。
+- `[314]` 用 SimpleNamespace 直接调 `_favicon_ip_domains(...)` 且其 ctx 没有 `options` 属性
+  ⇒ 新档的开关判断必须**只在 `skip_alive=True` 分支**里读 `getattr(ctx, "options", None)`，
+  默认档一个字节都不能动。
+- 字节补丁脚本第一版断言 `fofa.py` 末尾带换行而失败（`scanner/fofa.py` 末尾本来没有 LF）；
+  改为「缺就补一个」并让 `patch()` 幂等，前 4 处已生效也能续跑。
+- 本机 `python3` 无 flask，门禁统一走 `.venv/bin/python`；按既有环境规矩注销
+  `PYTHONPATH` 与四个代理变量。
+
+### 四、死锁排查
+
+- 新链路只复用既有 `http_request`（timeout=3）与 `pool_run`（有 logger/label、并发有界），
+  **没有新增子进程、锁、Event.wait 或轮询循环**；`_fofa_web_portscan()` 的候选数被
+  `fofa.web_max` 夹住，循环里有 `ctx.stopped()` 退出条件；离线任务在发请求前就返回。
+
+### 五、验证
+
+- `compileall` PASS；`web_url` 六形态、`parse_ports` 四个新口纯函数 PASS。
+- `--only 8c1` PASS；`--only 8c1,8at,8as,8au,8bz,8w,250,314` 全绿。
+- 最终全量 v39：2026-11-10 09:33:34–09:43:27（9m53s，日志内 302 个 ok 组 + 浏览器 e2e），
+  `SMOKE PASS`（`logs/smoke366.log`）；这是本轮**唯一一次全量**，开发途中一律用 `--only`
+  定向复验，一次跑绿、没有中途返工。
+- 行尾：纯 CRLF 的 config.py / settings.yaml / osint.py / gui/app.py / settings.html /
+  todo.txt / CHANGELOG 仍纯 CRLF；mixed 的 tasks.html / app.js / smoke.py 的 CRLF 行数不变，
+  新增内容按锚行行尾插入；`git diff --ignore-cr-at-eol -U0` 无预期外 hunk。
+
 ## 续365（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA host="品牌词" 反查 + 同 IP 置信度（插队）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

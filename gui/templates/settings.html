@@ -684,6 +684,16 @@
       {{ 'checked' if s.fofa.host_enabled }}> <b>启用 FOFA host= 同 IP 反查</b></label>
     <label>每任务最多查几个品牌词 <input name="fofa_max_host_queries" style="width:6em"
       value="{{ s.fofa.max_host_queries }}"></label>
+    <label class="chk"><input type="checkbox" name="fofa_bare_ip_reverse" value="1"
+      {{ 'checked' if s.fofa.bare_ip_reverse }}> <b>FOFA 裸 IP 反查</b>
+      （FOFA 已证明该 IP 活跃，不再探活 80/443，也不受 iprecon.enabled 默认关的影响；
+      结果标「历史反查·待确认」）</label>
+    <label class="chk"><input type="checkbox" name="fofa_web_portscan" value="1"
+      {{ 'checked' if s.fofa.web_portscan }}> <b>FOFA web 端口探活并入站点</b>
+      （只探 portscan.ports 里的常见 web 端口；有 HTTP 响应的 host:port 入 sites，
+      带 auth=False，且只探本任务注册域内的域名 / 公网裸 IP）</label>
+    <label>上面两条的每任务上限 <input name="fofa_web_max" style="width:6em"
+      value="{{ s.fofa.web_max }}"></label>
 
     <h2>Shodan / Quake favicon 反查（同一批 mmh3，换一家平台）</h2>
     <p class="muted note">与 FOFA 的 favicon 反查<b>同构</b>：三家的指纹都是 MurmurHash3

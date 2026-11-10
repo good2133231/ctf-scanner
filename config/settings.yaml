@@ -233,7 +233,8 @@ portscan:
   # 主机数由 max_hosts 夹住、走 CDN 的主机跳过；全端口仍是单任务触发。
   enabled: true
   max_hosts: 100
-  ports: '80,81,443,3000,5000,5001,7001,7002,8000,8001,8002,8008,8080,8081,8082,8088,8443,8888,9000,9090,9443'   # 续250：常见 web 端口（空串=内置 TOP 48）
+  # 续366：补 4 个 CDN 常见备用 HTTPS 口（2053/2083/2087/2096），与 DEFAULTS 同值。
+  ports: '80,81,443,2053,2083,2087,2096,3000,5000,5001,7001,7002,8000,8001,8002,8008,8080,8081,8082,8088,8443,8888,9000,9090,9443'   # 续250：常见 web 端口（空串=内置 TOP 48）
   mode: top                  # 续250 起：默认只打常见 web 端口（主理人点单）；full＝1-65535 走单任务触发
   full_ports: 1-65535
   exclude_scanned: true
@@ -519,6 +520,14 @@ fofa:
   # 命中行以 osint:fofa-host 入库并判高置信；没配 key 或没有已解析 IP 时一次请求都不发。
   host_enabled: true
   max_host_queries: 10
+  # 续366：FOFA 资产里的裸 IP 统一做 IP→域名反查（FOFA 已证明活跃，不再探活 80/443，
+  # 也不受 iprecon.enabled 默认关的影响）；命中结果标「历史反查·待确认」。
+  bare_ip_reverse: true
+  # 续366：FOFA 端口资产里落在 portscan.ports 常见 web 端口上的 host:port，
+  # 轻量 GET 探活后有 HTTP 响应就入 sites（source=osint:fofa-web），供后续阶段消费。
+  # 只对本任务注册域内的域名 / 公网裸 IP 发请求，且不带登录态（auth=False）。
+  web_portscan: true
+  web_max: 20
 ssrf:
   # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token，收到回连即判"服务端会出网"。
   # 只在目标能回访扫描机时有效（NAT/云主机大概率收不到）；callback_base 留空 = 用本机监听地址

@@ -13,6 +13,10 @@
     <label class="chk" title="默认勾上：每个目标单独建一个任务（任务名相同），一行一个，最多 200 个。取消勾选＝把所有目标放进同一个任务（旧行为）。">
       <input type="checkbox" name="split_targets" value="1" checked> 每个目标单独建任务（任务名相同）</label>
 
+    {# 续366：阶段 / 检查项标签铺开太占屏，给一个前端展开-隐藏控件；
+       批量勾选按钮仍常驻，纯前端折叠，不改任何 name / value / data-* 属性。 #}
+    <button type="button" class="ghost" id="stage-tags-toggle" aria-expanded="false"
+      title="展开 / 隐藏阶段与检查项标签（状态会被记住）">展开阶段与检查项标签</button>
     <div class="row">
       <span class="muted">阶段：</span>
       {# 续118：一键批量勾选。`data-ck-group` 是 JS 的分组钩子（`initTaskCheckAll`）；
@@ -25,6 +29,7 @@
           title="回到页面刚打开时的状态（信息收集专项 + mini 目录 + 自动拓展）">恢复默认</button>
         <button type="button" class="ghost" data-ck-mode="recon" data-ck-scope="stages,deep,expand"
           title="一键组好信息收集专项：子域 + probe + cert + screenshot + jsmine（JS 抽域名）+ mini 目录 + 被动 URL + 自动拓展扫描；漏洞扫描/全量目录/全端口/爬虫/深扫/递归都不勾">信息收集专项</button></span>
+      <div id="stage-tags" style="display:none">
       <span data-ck-group="stages">
       {% for s in stages %}
       {% set off_by_default = s in off_by_default_stages %}
@@ -39,6 +44,7 @@
         <label class="chk" title="报错回显 + 布尔盲注；默认关（每站最多约 60 个请求），只影响本次任务">
           <input type="checkbox" name="opt_sqli" value="1"> SQL 注入</label>
       </span>
+      </div>
       {# 续265（主理人 2026-10-23：「离线模式这个显示可以去了，没有场景用得到」）：
          网页不再暴露这颗复选框。`offline` 这个**能力**仍在（CLI `--offline` 与
          `/api/tasks` 的 `offline` 字段照旧生效，各阶段靠它跳过外部工具）——

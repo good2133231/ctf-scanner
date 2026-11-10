@@ -134,6 +134,7 @@ SOURCE_LABELS = {
     "osint:fofa-cert": "FOFA·证书反查",
     "osint:fofa-title": "FOFA·标题反查",
     "osint:fofa-host": "FOFA·host 反查(同IP)",
+    "osint:fofa-web": "FOFA·web 端口探活",
     # 批次 4 新增的三家同源/同源类来源：都带厂商名，一眼看出是哪个平台找出来的
     "osint:shodan": "Shodan·ICO 反查",
     "osint:quake": "Quake·ICO 反查",
@@ -6471,7 +6472,11 @@ def create_app():
                              # 续365：host="<品牌词>" 反查 + 同 IP 佐证（含 CDN / 多 A 任一命中）
                              "host_enabled": f.get("fofa_host_enabled") == "1",
                              "max_host_queries": int(
-                                 f.get("fofa_max_host_queries", 10) or 10)},
+                                 f.get("fofa_max_host_queries", 10) or 10),
+                             # 续366：FOFA 裸 IP 反查 / web 端口探活 / 两条共用上限
+                             "bare_ip_reverse": f.get("fofa_bare_ip_reverse") == "1",
+                             "web_portscan": f.get("fofa_web_portscan") == "1",
+                             "web_max": int(f.get("fofa_web_max", 20) or 20)},
                     # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token
                     "ssrf": {"enabled": f.get("ssrf_enabled") == "1",
                              # 留空 = 用本机监听地址；填了外部基址后本模块读不到命中，

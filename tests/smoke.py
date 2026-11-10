@@ -36025,6 +36025,148 @@ expression: r0()
           "osint:fofa-host 入库并回填 IP / 置信度判高且页面与自动送探同源 / "
           "开关关·无已解析 IP 两道零查询闸")
 
+    # [8c1] 续366：FOFA 裸 IP 反查 / web 端口探活入站点 / web 端口表 / 阶段标签折叠
+    #      全部桩测，零真实请求；四件各自有正反夹具。
+    import types as _ty8c1
+    from scanner import fofa as _fo8c1, extdom as _ex8c1, portscan as _ps8c1
+    from scanner import config as _cfg8c1
+    from scanner.stages import osint as _os8c1
+    _8c1_ids, _8c1_calls = [], []
+
+    class _L8c1:
+        def info(self, *a, **k): pass
+        def debug(self, *a, **k): pass
+        def warning(self, *a, **k): pass
+
+    # ① 纯函数：web_url / host_part / 常见 web 端口表补了 4 个 CDN 备用口
+    assert _fo8c1.web_url("https://a.test:2053", 2053) == "https://a.test:2053/"
+    assert _fo8c1.web_url("http://a.test", 80) == "http://a.test:80/"
+    assert _fo8c1.web_url("a.test", 443) == "https://a.test:443/"
+    assert _fo8c1.web_url("https://1.2.3.4", 8443) == "https://1.2.3.4:8443/"
+    assert _fo8c1.web_url("a.test", 0) == "" and _fo8c1.web_url("", 443) == ""
+    assert _fo8c1.host_part("https://1.2.3.4:8443") == "1.2.3.4"
+    _wp8c1 = _ps8c1.parse_ports(_cfg8c1.DEFAULTS["portscan"]["ports"])
+    for _p8c1 in (80, 443, 8080, 8443, 2053, 2083, 2087, 2096):
+        assert _p8c1 in _wp8c1, f"常见 web 端口表缺 {_p8c1}"
+    _sy8c1 = (ROOT / "config/settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "2053,2083,2087,2096" in _sy8c1, "随包 settings.yaml 的 web 端口表没跟着补"
+
+    # ② 裸 IP 反查：默认档（favicon 探活）不动，skip_alive 档不探活、不受 iprecon.enabled 管
+    _ctx8c1 = _ty8c1.SimpleNamespace(
+        task_id=999999,
+        settings={"fofa": {"bare_ip_reverse": True, "web_max": 20, "enabled": True},
+                  "iprecon": {"enabled": False, "from_favicon": True, "from_favicon_max": 20}},
+        logger=_L8c1(), stopped=lambda: False, options={})
+    _st8c1 = _os8c1.OsintStage(_ctx8c1)
+    _old_rev8c1, _old_ok8c1 = _os8c1.iprecon.reverse_lookup, _os8c1.fofa_mod.available
+    _old_http8c1 = _os8c1.http_request
+    try:
+        _os8c1.iprecon.reverse_lookup = (
+            lambda ip, *a, **k: (_8c1_calls.append(("rev", ip)) or ["a.acme-portal.cn"]))
+        _os8c1.fofa_mod.available = lambda s: False
+        _os8c1.http_request = lambda url, **kw: (_ for _ in ()).throw(
+            AssertionError("skip_alive 档不该发探活请求"))
+        _got8c1 = _st8c1._favicon_ip_domains(
+            ["1.2.3.4", "10.0.0.1", "1.2.3.4"], skip_alive=True)
+    finally:
+        _os8c1.iprecon.reverse_lookup = _old_rev8c1
+        _os8c1.fofa_mod.available = _old_ok8c1
+        _os8c1.http_request = _old_http8c1
+    assert [d for d, _s, _n in _got8c1] == ["a.acme-portal.cn"], _got8c1
+    assert [x[1] for x in _8c1_calls] == ["1.2.3.4"], \
+        f"私网要滤、重复 IP 要去重：{_8c1_calls}"
+    assert all("FOFA 裸 IP" in n and "历史反查" in n and "待确认" in n
+               for _d, _s, n in _got8c1), _got8c1
+    _8c1_calls.clear()
+    _ctx8c1.settings["fofa"]["bare_ip_reverse"] = False
+    assert _st8c1._favicon_ip_domains(["1.2.3.4"], skip_alive=True) == [] and not _8c1_calls, \
+        "bare_ip_reverse=false 必须零调用"
+
+    # ③ web 端口探活：只探 web 端口 / 授权域或公网裸 IP；不带登录态、不跟重定向；
+    #    有响应写 sites 且追加到 ctx.results["sites"]（后续阶段才吃得到）
+    _s8c1 = copy.deepcopy(settings)
+    for _k8c1 in ("iprecon", "shodan", "quake", "ctlog", "virustotal", "icp"):
+        _s8c1[_k8c1] = dict(_s8c1.get(_k8c1) or {}, enabled=False)
+    _s8c1["passive_urls"] = dict(_s8c1.get("passive_urls") or {}, enabled=False)
+    _s8c1["fofa"] = dict(_s8c1.get("fofa") or {}, enabled=True, cert_enabled=False,
+                         title_enabled=False, host_enabled=False,
+                         bare_ip_reverse=True, web_portscan=True, web_max=20)
+    _s8c1["portscan"] = dict(_s8c1.get("portscan") or {}, ports="80,443,2053")
+    _s8c1["keys"] = {"fofa": {"email": "stub@example.test", "key": "stub"}}
+    _tid8c1 = db.create_task("smoke-8c1-web", "http://www.acme-portal.cn/", ["osint"], {})
+    _8c1_ids.append(_tid8c1)
+    _ctx8c1b = _ty8c1.SimpleNamespace(
+        task_id=_tid8c1, settings=_s8c1, options={}, logger=_L8c1(),
+        stopped=lambda: False, results={}, targets=[], owner_id=0)
+    _st8c1b = _os8c1.OsintStage(_ctx8c1b)
+    _st8c1b._fofa_web_ports = [
+        {"host": "https://www.acme-portal.cn:2053", "ip": "9.9.9.9", "port": 2053},
+        {"host": "https://1.2.3.4", "ip": "1.2.3.4", "port": 443},
+        {"host": "https://other.test:443", "ip": "8.8.8.8", "port": 443},
+        {"host": "https://www.acme-portal.cn:3306", "ip": "9.9.9.9", "port": 3306},
+    ]
+    _old_http8c1b = _os8c1.http_request
+    _os8c1.http_request = lambda url, **kw: (
+        _8c1_calls.append((url, kw.get("auth"), kw.get("allow_redirects")))
+        or {"status": 200, "text": "hello", "headers": {"Server": "stub"}})
+    try:
+        _n8c1 = _st8c1b._fofa_web_portscan()
+    finally:
+        _os8c1.http_request = _old_http8c1b
+    assert _n8c1 == 2, f"只该入 2 条站点（授权域 2053 + 裸 IP 443）：{_n8c1}"
+    assert sorted(u for u, _a, _r in _8c1_calls) == [
+        "https://1.2.3.4:443/", "https://www.acme-portal.cn:2053/"], _8c1_calls
+    assert all(a is False and r is False for _u, a, r in _8c1_calls), \
+        f"跨注册域资产绝不许带登录态 / 跟重定向：{_8c1_calls}"
+    _sites8c1 = [dict(r) for r in db.list_sites(_tid8c1)]
+    assert {r["url"] for r in _sites8c1} == {
+        "https://www.acme-portal.cn:2053/", "https://1.2.3.4:443/"}, _sites8c1
+    assert all(r["source"] == "osint:fofa-web" and r["status"] == 200
+               for r in _sites8c1), _sites8c1
+    assert {s["url"] for s in _ctx8c1b.results["sites"]} == {
+        "https://www.acme-portal.cn:2053/", "https://1.2.3.4:443/"}, \
+        "新站点必须并进 ctx.results['sites']：jsmine/dirscan/vulnscan 只吃这一份"
+    _8c1_calls.clear()
+    _s8c1["fofa"]["web_portscan"] = False
+    _ctx8c1b.settings = _s8c1
+    assert _st8c1b._fofa_web_portscan() == 0 and not _8c1_calls, \
+        "web_portscan=false 必须零请求"
+
+    # ④ 接线 / 三方一致 / 阶段标签折叠（纯前端，不改任何 name / value / data-*）
+    _src8c1 = (ROOT / "scanner/stages/osint.py").read_text(encoding="utf-8")
+    for _lit8c1 in ("self._bare_ips.extend(ip_hits)",
+                    "self._favicon_ip_domains(self._bare_ips, skip_alive=True)",
+                    "self._fofa_web_portscan()",
+                    "self._fofa_web_ports.extend(_uniq.values())"):
+        assert _lit8c1 in _src8c1, f"FOFA 端口资产接线丢了：{_lit8c1}"
+    _def8c1 = _cfg8c1.DEFAULTS["fofa"]
+    assert _def8c1["bare_ip_reverse"] is True and _def8c1["web_portscan"] is True \
+           and int(_def8c1["web_max"]) == 20, _def8c1
+    _ga8c1 = (ROOT / "gui/app.py").read_text(encoding="utf-8")
+    for _lit8c1 in ('"fofa_bare_ip_reverse"', '"fofa_web_portscan"', '"fofa_web_max"',
+                    '"osint:fofa-web"'):
+        assert _lit8c1 in _ga8c1, f"POST 映射 / 来源标签缺 {_lit8c1}"
+    _sh8c1 = c.get("/settings").get_data(as_text=True)
+    for _lit8c1 in ('name="fofa_bare_ip_reverse"', 'name="fofa_web_portscan"',
+                    'name="fofa_web_max"'):
+        assert _lit8c1 in _sh8c1, f"策略页缺控件 {_lit8c1}"
+    _th8c1 = c.get("/tasks").get_data(as_text=True)
+    assert 'id="stage-tags-toggle"' in _th8c1 and 'id="stage-tags"' in _th8c1, \
+        "阶段标签的展开/隐藏控件没渲染出来"
+    assert 'name="stages" value="osint"' in _th8c1 and 'name="opt_sqli"' in _th8c1, \
+        "折叠不能把阶段 / 检查项本身删掉（只是前端隐藏）"
+    _js8c1 = (ROOT / "gui/static/app.js").read_text(encoding="utf-8")
+    assert "initStageTagsToggle" in _js8c1 and "DOMContentLoaded" in _js8c1, \
+        "折叠控件没挂到 DOMContentLoaded"
+
+    for _i8c1 in _8c1_ids:
+        db.delete_task(_i8c1, backup=False)
+
+    print("[8c1] 续366 ok: FOFA 裸 IP 统一反查（不探活·不受 iprecon 总闸·私网/重复过滤·可关）/ "
+          "web 端口探活入站点（只认 web 口·授权域或公网裸 IP·auth=False·不跟重定向·"
+          "写 sites 且并入 ctx.results）/ web 端口表补 2053·2083·2087·2096 / "
+          "阶段与检查项标签前端展开-隐藏（清单仍由后端渲染）")
+
     print("SMOKE PASS")
 
 

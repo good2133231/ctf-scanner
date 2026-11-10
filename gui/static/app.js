@@ -1155,3 +1155,27 @@ document.addEventListener("DOMContentLoaded", () => {
     setInterval(pollTaskList, 3000);
   }
 });
+
+
+/* 续366：新建任务页的阶段 / 检查项标签展开-隐藏。
+   不写任何阶段名（清单仍只由后端 STAGE_ORDER 渲染），状态记在 localStorage。 */
+function initStageTagsToggle() {
+  const btn = document.getElementById("stage-tags-toggle");
+  const box = document.getElementById("stage-tags");
+  if (!btn || !box) return;
+  const KEY = "ctfscanner.stage-tags.open";
+  let open = false;
+  try { open = localStorage.getItem(KEY) === "1"; } catch (e) { open = false; }
+  const paint = () => {
+    box.style.display = open ? "" : "none";
+    btn.textContent = open ? "隐藏阶段与检查项标签" : "展开阶段与检查项标签";
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+  btn.addEventListener("click", () => {
+    open = !open;
+    try { localStorage.setItem(KEY, open ? "1" : "0"); } catch (e) {}
+    paint();
+  });
+  paint();
+}
+document.addEventListener("DOMContentLoaded", initStageTagsToggle);
