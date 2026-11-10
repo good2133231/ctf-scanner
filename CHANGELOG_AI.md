@@ -5,6 +5,44 @@
 
 
 
+## 续371（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：smoke 分 fast / nightly
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人「全量 smoke 分 fast/nightly」。先用数据说话：`--timing` 全量 **354 组 / 593.5s**，
+前 9 组占 358s、前 24 组占 449s。
+
+### 一、先证伪「排除慢组」这条路（避免把假快档交出去）
+
+- 第一版 `--fast` = 全部组 - 19 个慢组，跑起来直接红：
+  `tests/smoke.py[6u] ... NameError: name '_rn6' is not defined`。
+  根因：依赖闭包把 `[6u]` 补了回来，而它要的 `_rn6` 定义在被剔掉的 `[6w]` 里。
+- 用 `_deps_closure` 迭代求解「可安全剔除」：只有 **7 个叶子组**（`211-P2-11/256/272/6l/7j/7l/8bt`）
+  不被任何保留组依赖，合计 **120s** —— 全量 10 分钟只能省 2 分钟，不叫快档。
+- 结论写进 `FAST_GROUPS` 上方注释：`main()` 是顺序内联、组间共享 locals，**排除法不可行**。
+
+### 二、fast 定版
+
+- `FAST_GROUPS` = 15 个**自包含**组（8bz / 8c1-8c6 / 8as / 8at / 218 / 7p / 8u / 250 / 264 / 314）。
+  它们要么自建夹具、要么只读模块级数据，实测 **58.2s**（含 `[8c7]` 的第二次 69.0s）。
+- `--fast` 走既有 `--only` 的源码切片 + 依赖闭包；与 `--only` **互斥**；
+  输出只打印 `SMOKE PASS (fast=15 组｜fast 档，不等于全量通过 —— nightly 请跑完整门禁)`，
+  绝不打印裸 `SMOKE PASS`。
+
+### 三、CI 三层
+
+- `.github/workflows/fast.yml`：push / PR 跑 `--fast`，timeout 6 分钟。
+- `.github/workflows/nightly.yml`：cron `0 19 * * *`（UTC 19:00 = 北京 03:00）跑**全量**。
+- `.github/workflows/smoke.yml`：保持权威全量（3.9），**不动**。
+
+### 四、验证
+
+- `--fast` 两次实测：58.2s / 69.0s，均 `SMOKE PASS (fast=…)`；`--only 8c7` PASS。
+- 新增 `[8c7]`：fast 清单 15 组全部真实存在（防漂）、`--fast` 与 `--only` 互斥、
+  fast 不冒充全量、三层 CI 语义各自正确（fast.yml 含 `--fast`、nightly 含 cron 且不带切片、
+  smoke.yml 仍是全量）。
+- 最终全量 v45：2026-11-10 16:45:43–16:56:17（10m46s，日志内 308 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke371b.log`）。第一次全量在 [8al] 红：新增两个 workflow 让「装依赖处数」从 4 变 6，改断言后重跑。
+
 ## 续370（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：WAL 根因 / puredns 合批 / 词数默认 / 送探剥离 auth
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

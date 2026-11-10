@@ -4542,6 +4542,27 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续371（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：smoke 分 fast/nightly
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【实测数据】先跑一次 `--timing` 全量：354 组 / 593.5s，前 9 组占 358s、前 24 组占 449s。
+- [x] T2【排除法证伪】「全量 - 19 个慢组」实测红：依赖闭包把 `[6u]` 补回来，而它要的
+      `_rn6` 定义在被剔掉的 `[6w]` 里 ⇒ `NameError`。用 `_deps_closure` 迭代求解，
+      只有 7 个叶子组可安全剔（合计 120s），省不出真正的快档。
+- [x] T3【fast 定版】`FAST_GROUPS` = 15 个**自包含**组（8bz/8c1-8c6/8as/8at/218/7p/8u/250/264/314），
+      实测 58.2s；`--fast` 走既有 `--only` 切片 + 依赖闭包，只打印 `SMOKE PASS (fast=…)`，
+      与 `--only` 互斥。
+- [x] T4【CI 分层】新增 `fast.yml`（push/PR 跑 `--fast`，timeout 6 分钟）与 `nightly.yml`
+      （cron UTC 19:00 = 北京 03:00 跑全量）；`smoke.yml` 保持权威全量不动。
+- [x] T5【门禁】新增 `[8c7]`：fast 清单每组都存在、`--fast`/`--only` 互斥、
+      fast 不冒充全量、三层 CI 各自语义正确。
+- [x] C1 定向：`--only 8c7` PASS；`--fast` 58.2s / 69.0s 两次 PASS。
+- [x] C2 最终全量 v45 `SMOKE PASS`：2026-11-10 16:45:43–16:56:17（10m46s，308 个 ok 组 + 浏览器 e2e，`logs/smoke371b.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一轮（续372）**：结构化授权 scope（allowlist / 时间窗 / IP-CIDR / 端口路径）——
+安全红线，单独一轮；先做「目标侧出口统一闸」再谈具体维度。
+
 ## 续370（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：「按顺序做」第 3–4 项（WAL / puredns 合批 / 送探剥离 auth）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

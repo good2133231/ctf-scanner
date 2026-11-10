@@ -1,0 +1,49 @@
+name: Smoke Fast
+
+# 续371：快档 —— 只跑 15 个自包含组（约 1 分钟），用于每次推送的快速反馈。
+# **fast 通过 ≠ 全量通过**：全量由 smoke.yml（权威，3.9 全量）与 nightly.yml（cron）覆盖。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.lock
+
+      - name: Run fast gate
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -o pipefail
+          python3 tests/smoke.py --fast 2>&1 | tee fast.log
+
+      - name: Upload fast log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-log
+          path: fast.log
+          if-no-files-found: ignore

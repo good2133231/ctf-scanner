@@ -546,6 +546,22 @@ def _align_block_start(src, a):
 
 
 
+# ---------- fast / nightly 分层（续371）----------
+# fast 档 = 这 15 个**自包含**组（实测 77.5s），不是「全量减慢组」。
+# 为什么不用排除法（试过，真红）：`main()` 是顺序内联代码、组之间共享 locals；把慢组剔掉后
+# 依赖闭包会把 `[6u]` 之类的组补回来，而它要的 `_rn6` 定义在被剔掉的 `[6w]` 里 ⇒ NameError。
+# 实测只有 7 个叶子组可安全剔（合计 120s），省不出真正的快档。
+# 也不用「清单越大越好」：`--only` 的依赖闭包对 try 截断的块不可靠（[5e]/[5b] 实测缺 `tid`），
+# 所以这里只保留**自己建自己的夹具**、或只读模块级数据的组。
+# 语义：**fast 通过 ≠ 全量通过**，输出只打印 `(fast=…)`；nightly 由 CI 的 cron 跑全量。
+FAST_GROUPS = (
+    # 最近改动直接对应的门禁（8c1-8c6 都是自建夹具 + 桩，不依赖 tid）
+    "8bz", "8c1", "8c2", "8c3", "8c4", "8c5", "8c6",
+    # 记忆 / 文档引用 / 泄漏红线 / 外部工具清单 / 索引 / 端口表 / puredns argv / 证书口径
+    "8as", "8at", "218", "7p", "8u", "250", "264", "314",
+)
+
+
 def _smoke_group_blocks():
     """把 main() 里各组（262 个）的**源码行区间**切出来 —— `--only` 靠它抠出点名的组。
 
@@ -797,12 +813,22 @@ def main():
     # ⚠ 两条限制必须写在脸上，别让人拿局部结果当全量通过：
     #   ① 依赖前面组**建的夹具**的组，单跑会 NameError —— 那就把依赖组也点名进来（按点名顺序跑）；
     #   ② **局部通过不算全量通过**：收尾仍要跑不带 --only 的完整门禁（§0.6）。
+    if _SMOKE_FAST and _SMOKE_ONLY:
+        raise SystemExit("[!] --fast 与 --only 不能同时用：fast 已经是一份完整组清单")
+
     if _SMOKE_FAST:
-        # 续331：块级 exec 与 main() 内联存在语义差异（[8ad] 计时探针按「组行」归因，块 exec
-        # 下对不上；[5x] 等 2 块因 try 被截断仍编译不过）。--fast 暂不开放，别让人误用后
-        # 拿局部结果当全量。日常快档用 `--only <组号>`（依赖闭包会自动补前置组）。
-        raise SystemExit("[!] --fast 暂不可用（块级 exec 与 main 内联有语义差异，待续）；"
-                         "请用 `--only <组号>` 只跑相关组，收尾仍要跑完整门禁")
+        # 续371：fast 档 = 固定核心组清单 + 依赖闭包（排除法已证伪，见 FAST_GROUPS 上方注释）。
+        _blocks_fast = _smoke_group_blocks()[1]
+        _missing_fast = [g for g in FAST_GROUPS if g not in _blocks_fast]
+        if _missing_fast:
+            raise SystemExit(f"[!] fast 清单里有不存在的组：{_missing_fast}")
+        print(f"[fast] fast 档：点名 {len(FAST_GROUPS)} 组 + 依赖闭包"
+              f"（全量 {len(_blocks_fast)} 组）；**fast 通过 ≠ 全量通过**，nightly 跑全量",
+              flush=True)
+        _run_only_groups(list(FAST_GROUPS), locals())
+        print(f"SMOKE PASS (fast={len(FAST_GROUPS)} 组"
+              "｜fast 档，不等于全量通过 —— nightly 请跑不带 --fast 的完整门禁)")
+        return
 
     if _SMOKE_ONLY:
         _run_only_groups(_SMOKE_ONLY, locals(), prefix=_SMOKE_PREFIX)
@@ -19630,8 +19656,8 @@ expression: r0()
         _wf8al[_f.name] = _f.read_text(encoding="utf-8")
     _installs8al = [l.strip() for _t in _wf8al.values() for l in _t.splitlines()
                     if "pip install -r" in l]
-    assert len(_installs8al) == 4, \
-        f"CI 里应有 4 处装依赖（smoke 1 + quality 3），实到 {len(_installs8al)}：{_installs8al}"
+    assert len(_installs8al) == 6, \
+        f"CI 里应有 6 处装依赖（smoke 1 + quality 3 + fast 1 + nightly 1），实到 {len(_installs8al)}：{_installs8al}"
     _notlock8al = [l for l in _installs8al if "requirements.lock" not in l]
     assert not _notlock8al, \
         "CI 还在吃浮动的 requirements.txt（锁了版本但没人按锁装）：" + repr(_notlock8al)
@@ -19650,7 +19676,7 @@ expression: r0()
     print("[8al] 续137/续138 依赖锁接线 ok: lock 覆盖全部直接依赖｜整份都是 `==`（浮动行判不合格，"
           "变异「删掉 cryptography」与「留一行 >=」都会红）｜三个只在该版本段需要的键各带自己的"
           "环境标记（importlib-metadata/zipp<3.10、typing-extensions<3.11、colorama 仅 Windows）｜"
-          "CI 四处装依赖全部吃 lock 而不是 txt（smoke.yml 1 + quality.yml 3，数量也钉住 —— 新增 job "
+          "CI 六处装依赖全部吃 lock 而不是 txt（smoke.yml 1 + quality.yml 3 + fast.yml 1 + nightly.yml 1，数量也钉住 —— 新增 job "
           "忘了改会被条数断言抓出来）｜Dockerfile 也吃 lock（同一个 tag 不再随构建时间变版本）｜"
           "lock 没被 .gitignore 盖住")
 
@@ -36432,6 +36458,30 @@ expression: r0()
           "puredns 多域合批（单域仍走位置参数，batch 走 -d 文件）｜"
           "brute_max_words 默认 2 万（DEFAULTS/随包/POST 三处同值，0 仍=全量）｜"
           "自动送探剥离 auth（手动送探不受影响）")
+
+    # [8c7] 续371：smoke 分 fast/nightly（fast 清单不漂 / 语义诚实 / CI 两层都在）
+    _blocks8c7 = _smoke_group_blocks()[1]
+    _miss8c7 = [g for g in FAST_GROUPS if g not in _blocks8c7]
+    assert not _miss8c7, f"FAST_GROUPS 里有不存在的组（清单会漂）：{_miss8c7}"
+    _src8c7 = (ROOT / "tests/smoke.py").read_text(encoding="utf-8")
+    assert 'if _SMOKE_FAST and _SMOKE_ONLY:' in _src8c7, \
+        "--fast 与 --only 必须互斥（同时给会得到两份互相矛盾的组清单）"
+    assert 'SMOKE PASS (fast=' in _src8c7, \
+        "fast 档不许打印裸 SMOKE PASS（会把「局部通过」当成「全量通过」）"
+    _wf8c7 = ROOT / ".github" / "workflows"
+    _fast8c7 = (_wf8c7 / "fast.yml").read_text(encoding="utf-8")
+    _night8c7 = (_wf8c7 / "nightly.yml").read_text(encoding="utf-8")
+    assert "tests/smoke.py --fast" in _fast8c7, "fast.yml 没跑 --fast"
+    assert "schedule:" in _night8c7 and "cron:" in _night8c7, "nightly.yml 没有 cron"
+    assert "tests/smoke.py" in _night8c7 and "--fast" not in _night8c7, \
+        "nightly.yml 必须是**不带切片**的全量"
+    _auth8c7 = (_wf8c7 / "smoke.yml").read_text(encoding="utf-8")
+    assert "tests/smoke.py" in _auth8c7 and "--fast" not in _auth8c7, \
+        "smoke.yml 仍是权威全量，不许被快档替代"
+
+    print("[8c7] 续371 ok: fast 清单 15 组全部真实存在｜--fast 与 --only 互斥｜"
+          "fast 只打印 (fast=…) 不冒充全量｜CI 三层：fast.yml(--fast) / "
+          "nightly.yml(cron 全量) / smoke.yml(权威全量)")
 
     print("SMOKE PASS")
 
