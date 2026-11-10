@@ -694,6 +694,13 @@
       带 auth=False，且只探本任务注册域内的域名 / 公网裸 IP）</label>
     <label>上面两条的每任务上限 <input name="fofa_web_max" style="width:6em"
       value="{{ s.fofa.web_max }}"></label>
+    <label class="chk"><input type="checkbox" name="fofa_breaker_enabled" value="1"
+      {{ 'checked' if s.fofa.breaker_enabled }}> <b>连续失败熔断</b>
+      （FOFA 挂起时不再让 favicon / 证书 / 标题 / host= 四路各等满超时）</label>
+    <label>连续失败几次熔断 <input name="fofa_breaker_fail_threshold" style="width:5em"
+      value="{{ s.fofa.breaker_fail_threshold }}"></label>
+    <label>熔断后跳过几次调用 <input name="fofa_breaker_skip" style="width:5em"
+      value="{{ s.fofa.breaker_skip }}"></label>
 
     <h2>Shodan / Quake favicon 反查（同一批 mmh3，换一家平台）</h2>
     <p class="muted note">与 FOFA 的 favicon 反查<b>同构</b>：三家的指纹都是 MurmurHash3

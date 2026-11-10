@@ -36188,6 +36188,7 @@ expression: r0()
         assert "[-700]" in _err8c2b and "FOFA 个人中心" in _err8c2b, _err8c2b
     finally:
         _fo8c2.http_request = _orig8c2
+        _fo8c2.reset_breaker()      # 续368：别把熔断状态留给后面的组
 
     print("[8c2] 续367 ok: fofa 失败原因取 http_last_error()（不再一律写「网络不可达」）｜"
           "[-700] 账号无效附带「查 key / 账号封禁欠费 / 邮箱不配对 / 临时风控」可执行提示")
@@ -36245,6 +36246,63 @@ expression: r0()
 
     print("[8c3] 续367 ok: run() 端到端 —— FOFA 端口资产入 ports / web 口探活入 sites"
           "（source=osint:fofa-web）/ 裸 IP 反查入拓展域名（osint:iprecon，免费源+FOFA ip=）")
+
+    # [8c4] 续368：FOFA 连续失败熔断（连续 N 次 → 跳过 M 次 → 半开探测）
+    import scanner.fofa as _fo8c4
+    _fo8c4.reset_breaker()
+    _s8c4 = {"fofa": {"min_interval": 0, "breaker_enabled": True,
+                      "breaker_fail_threshold": 2, "breaker_skip": 1},
+             "limits": {"http_timeout": 5},
+             "keys": {"fofa": {"email": "stub@example.test", "key": "stub"}}}
+    _c8c4 = []
+    _mode8c4 = {"ok": False}
+    _o8c4 = _fo8c4.http_request
+
+    def _fake8c4(url, **kw):
+        _c8c4.append(1)
+        if _mode8c4["ok"]:
+            return {"status": 200, "headers": {},
+                    "text": '{"error":false,"size":0,"results":[]}'}
+        return None
+
+    try:
+        _fo8c4.http_request = _fake8c4
+        for _i8c4 in range(2):
+            _e8c4 = _fo8c4.search_query('host="x"', _s8c4)[2]
+            assert "请求 fofa 失败" in _e8c4, _e8c4
+        assert len(_c8c4) == 2 and _fo8c4.breaker_snapshot()["open"] is True, \
+            (_c8c4, _fo8c4.breaker_snapshot())
+        _e8c4b = _fo8c4.search_query('host="x"', _s8c4)[2]
+        assert "熔断" in _e8c4b and len(_c8c4) == 2, \
+            f"熔断后不该再发请求（否则四路还是各等满超时）：{_c8c4}"
+        _mode8c4["ok"] = True
+        _fo8c4.search_query('host="x"', _s8c4)
+        assert len(_c8c4) == 3, f"skip 名额用完后第 skip+1 次应半开探测：{_c8c4}"
+        _snap8c4 = _fo8c4.breaker_snapshot()
+        assert _snap8c4["open"] is False and _snap8c4["failures"] == 0, _snap8c4
+        _fo8c4.search_query('host="x"', _s8c4)
+        assert len(_c8c4) == 4, f"恢复后应恢复正常调用：{_c8c4}"
+        # 关闭开关 → 不再拦（排障用）
+        _fo8c4.reset_breaker()
+        _s8c4["fofa"]["breaker_enabled"] = False
+        _mode8c4["ok"] = False
+        for _i8c4 in range(3):
+            _fo8c4.search_query('host="x"', _s8c4)
+        assert len(_c8c4) == 7, f"breaker_enabled=false 不许拦：{_c8c4}"
+    finally:
+        _fo8c4.http_request = _o8c4
+        _fo8c4.reset_breaker()
+    _cfg8c4 = _cfg303.DEFAULTS["fofa"]
+    assert _cfg8c4["breaker_enabled"] is True \
+           and int(_cfg8c4["breaker_fail_threshold"]) == 2 \
+           and int(_cfg8c4["breaker_skip"]) == 20, _cfg8c4
+    _sy8c4 = (ROOT / "config/settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "breaker_fail_threshold: 2" in _sy8c4 and "breaker_skip: 20" in _sy8c4, \
+        "随包 settings.yaml 没写熔断三项"
+
+    print("[8c4] 续368 ok: FOFA 连续失败 2 次即熔断（第 3 次零请求，不再各等满 timeout）｜"
+          "skip 名额用完才半开探测｜半开成功清零恢复｜breaker_enabled=false 不拦｜"
+          "DEFAULTS 与随包配置同值")
 
     print("SMOKE PASS")
 

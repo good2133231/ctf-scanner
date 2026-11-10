@@ -5,6 +5,47 @@
 
 
 
+## 续368（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 连续失败熔断
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人「按顺序做」——先做上一轮列的止血项：FOFA 挂起时 favicon / 证书 / 标题 / `host=`
+四路会各自等满 `http_timeout`，实测一轮白等 30~40 秒，且每条都写一遍同样的失败日志。
+
+### 一、已落地
+
+- `scanner/fofa.py`：连续失败 `breaker_fail_threshold`（默认 2）次 → 打开熔断，跳过
+  `breaker_skip`（默认 20）次调用，第 21 次半开探测；成功清零恢复，半开再失败重新熔断。
+  语义与 `scanner/iprecon.py` 的接口熔断**同一套**（按次数，不另造时间冷却 —— 并发/多任务下
+  按次数是确定的，时钟跳变也不会误判）。新增 `reset_breaker()` / `breaker_snapshot()` /
+  `breaker_allow()` 三个只读/排障入口。
+- `search_query` 入口先 `breaker_allow()`：打开即**零请求**返回原因；所有失败出口统一走
+  `_fail()` 记一次失败；成功走 `_breaker_record(True)`。
+- `fofa.breaker_enabled` / `breaker_fail_threshold` / `breaker_skip` 三处一致：
+  DEFAULTS、随包配置、GUI 策略页控件 + POST 映射。
+- `tests/smoke.py` 新增 `[8c4]`；`[8c2]` 收尾补 `reset_breaker()`，不把打开状态留给后面的组。
+
+### 二、实测
+
+- 用不可达地址（`127.0.0.1:1`）模拟连续失败，**不发任何真实请求**：
+  第 1 次 0.087s、第 2 次 2.915s（`min_interval` 节流）、**第 3 次 0.000s** 直接返回
+  「fofa 熔断中：跳过 1/20 次（上次失败：连接被拒）」；snapshot `failures=2, open=True`。
+- 门禁 `[8c4]`：连续 2 次失败后第 3 次零请求、skip 名额用完才半开、半开成功清零、
+  `breaker_enabled=false` 不拦、DEFAULTS 与随包配置同值。
+
+### 三、附带发现（上一轮结论修正）
+
+- FOFA **已恢复**：同一把 key 连查 3 次全部成功（`err=''`，total 427750，0.4s/5.9s/0.2s）。
+  说明上一轮的 `[-700] 账号无效` 是**临时风控**（高频查询后封一会儿），不是 key 永久失效；
+  `web_portscan` / `bare_ip_reverse` 的真实数据端到端现在有条件验证了，但本轮没擅自对真实
+  目标发请求，留到下一次实跑任务时观察。
+
+### 四、验证
+
+- `--only 8c4,8c2` PASS；`compileall` PASS。
+- 最终全量 v42：2026-11-10 11:23:55–11:33:26（9m31s，日志内 305 个 ok 组 + 浏览器 e2e），
+  `SMOKE PASS`（`logs/smoke368.log`）。
+
 ## 续367（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 失败归因修复（查出 #36 无端口的真因）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

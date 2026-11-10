@@ -6476,7 +6476,12 @@ def create_app():
                              # 续366：FOFA 裸 IP 反查 / web 端口探活 / 两条共用上限
                              "bare_ip_reverse": f.get("fofa_bare_ip_reverse") == "1",
                              "web_portscan": f.get("fofa_web_portscan") == "1",
-                             "web_max": int(f.get("fofa_web_max", 20) or 20)},
+                             "web_max": int(f.get("fofa_web_max", 20) or 20),
+                             # 续368：连续失败熔断
+                             "breaker_enabled": f.get("fofa_breaker_enabled") == "1",
+                             "breaker_fail_threshold": int(
+                                 f.get("fofa_breaker_fail_threshold", 2) or 2),
+                             "breaker_skip": int(f.get("fofa_breaker_skip", 20) or 20)},
                     # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token
                     "ssrf": {"enabled": f.get("ssrf_enabled") == "1",
                              # 留空 = 用本机监听地址；填了外部基址后本模块读不到命中，

@@ -4542,6 +4542,33 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续368（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 连续失败熔断（「按顺序做」第 1 项）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人「按顺序做」—— 先做上一轮列的止血项：FOFA 挂起时四路各等满 http_timeout。
+
+- [x] T1【熔断】`scanner/fofa.py`：连续失败 `breaker_fail_threshold`（默认 2）次 → 打开熔断，
+      跳过 `breaker_skip`（默认 20）次调用，第 21 次半开探测；成功清零恢复、半开再失败重新熔断。
+      语义与 `scanner/iprecon.py` 的接口熔断**同一套**（按次数，不另造时间冷却）。
+- [x] T2【接入】`search_query` 入口先 `breaker_allow()`（打开即零请求返回）；
+      所有失败出口统一走 `_fail()` 记一次失败；成功走 `_breaker_record(True)`。
+- [x] T3【配置】`fofa.breaker_enabled` / `breaker_fail_threshold` / `breaker_skip`
+      三处一致（DEFAULTS + 随包配置 + GUI 策略页控件 + POST 映射）。
+- [x] T4【门禁】新增 `[8c4]`：连续 2 次失败后第 3 次**零请求**、skip 名额用完才半开、
+      半开成功清零恢复、`breaker_enabled=false` 不拦、DEFAULTS 与随包配置同值；
+      `[8c2]` 收尾补 `reset_breaker()`，不把打开状态留给后面的组。
+- [x] T5【实测】用不可达地址模拟：第 1 次 0.087s、第 2 次 2.915s（节流）、
+      **第 3 次 0.000s** 直接返回「熔断中：跳过 1/20 次（上次失败：连接被拒）」。
+- [x] T6【附带发现】FOFA 已恢复：同一把 key 连查 3 次全部成功（`err=''`，total 427750），
+      说明上一轮的 `[-700] 账号无效` 是**临时风控**，不是 key 永久失效。
+- [x] C1 定向：`--only 8c4,8c2` PASS。
+- [x] C2 最终全量 v42 `SMOKE PASS`：2026-11-10 11:23:55–11:33:26（9m31s，约 305 个 ok 组 +
+      浏览器 e2e，`logs/smoke368.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一轮（续369）**：P0 速度四件 —— DNS 结果 TTL 缓存 / `get_conn()` 去每连接 WAL PRAGMA /
+puredns 多域合批 + `brute_max_words` 非零默认 / 全量 smoke 分 fast-nightly。
+
 ## 续367（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 失败归因修复（#36 无端口真因）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

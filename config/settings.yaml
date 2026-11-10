@@ -528,6 +528,11 @@ fofa:
   # 只对本任务注册域内的域名 / 公网裸 IP 发请求，且不带登录态（auth=False）。
   web_portscan: true
   web_max: 20
+  # 续368：连续失败熔断（与 iprecon 的接口熔断同一套语义：连续失败 N 次 → 跳过 M 次
+  # 调用 → 第 M+1 次半开探测）。FOFA 挂起时四路会各自等满 http_timeout，白等 30~40 秒。
+  breaker_enabled: true
+  breaker_fail_threshold: 2
+  breaker_skip: 20
 ssrf:
   # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token，收到回连即判"服务端会出网"。
   # 只在目标能回访扫描机时有效（NAT/云主机大概率收不到）；callback_base 留空 = 用本机监听地址

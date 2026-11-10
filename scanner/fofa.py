@@ -16,6 +16,7 @@
 """
 import base64
 import json
+import threading
 import time
 import urllib.parse
 
@@ -41,6 +42,100 @@ DEFAULT_TITLE_THRESHOLD = 200
 # HTTP 429（`min_interval` 与 VirusTotal 那路同款；填 0 = 不节流）。
 DEFAULT_MIN_INTERVAL = 3.0
 _LAST_TS = 0.0
+
+# ---------- 连续失败熔断（续368）----------
+# 语义与 `scanner/iprecon.py` 的接口熔断**同一套**（连续失败 N 次 → 跳过 M 次调用 →
+# 第 M+1 次半开探测），刻意不另造「时间冷却」：按次数在并发/多任务下是确定的。
+# 为什么需要：FOFA 挂起时 favicon / 证书 / 标题 / host= 四路会各自等满 http_timeout
+# （实测一轮白等 30~40 秒），且每条都写一遍同样的失败日志。
+DEFAULT_FAIL_THRESHOLD = 2
+DEFAULT_SKIP = 20
+
+_BREAK_LOCK = threading.Lock()
+_BREAK = {"failures": 0, "open": False, "skipped": 0, "half_open": False,
+          "last_reason": ""}
+
+
+def _breaker_cfg(settings):
+    cfg = (settings or {}).get("fofa", {}) or {}
+    try:
+        threshold = max(1, int(cfg.get("breaker_fail_threshold")
+                               or DEFAULT_FAIL_THRESHOLD))
+    except (TypeError, ValueError):
+        threshold = DEFAULT_FAIL_THRESHOLD
+    try:
+        skip = max(1, int(cfg.get("breaker_skip") or DEFAULT_SKIP))
+    except (TypeError, ValueError):
+        skip = DEFAULT_SKIP
+    return bool(cfg.get("breaker_enabled", True)), threshold, skip
+
+
+def reset_breaker():
+    """测试 / 人工排障：清空熔断状态。"""
+    with _BREAK_LOCK:
+        _BREAK.update(failures=0, open=False, skipped=0, half_open=False,
+                      last_reason="")
+
+
+def breaker_snapshot():
+    """只读快照（日志 / 页面 / 测试用；不含任何凭据）。"""
+    with _BREAK_LOCK:
+        return dict(_BREAK)
+
+
+def breaker_allow(settings):
+    """调用前检查：`(是否允许, 原因)`；打开状态会消耗一次 skip 名额。"""
+    enabled, _threshold, skip = _breaker_cfg(settings)
+    if not enabled:
+        return True, ""
+    with _BREAK_LOCK:
+        if not _BREAK["open"]:
+            return True, ""
+        if int(_BREAK["skipped"]) < skip:
+            _BREAK["skipped"] = int(_BREAK["skipped"]) + 1
+            return False, (f"熔断中：跳过 {_BREAK['skipped']}/{skip} 次"
+                           f"（上次失败：{_BREAK['last_reason'] or '无原因'}）")
+        _BREAK["half_open"] = True
+        return True, "半开探测"
+
+
+def _breaker_record(ok, settings, logger=None, reason=""):
+    enabled, threshold, skip = _breaker_cfg(settings)
+    if not enabled:
+        return
+    msg, level = None, "info"
+    with _BREAK_LOCK:
+        if ok:
+            was_open = bool(_BREAK["open"])
+            _BREAK.update(failures=0, open=False, skipped=0, half_open=False,
+                          last_reason="")
+            if was_open:
+                msg = "[fofa] 半开探测成功，已恢复；之后每次调用继续检查"
+        elif _BREAK["open"] and _BREAK["half_open"]:
+            _BREAK.update(half_open=False, skipped=0,
+                          last_reason=str(reason or "半开探测失败")[:200])
+            msg = (f"[fofa] 半开探测仍失败（{reason or '无原因'}），重新熔断，"
+                   f"再跳过 {skip} 次")
+            level = "warning"
+        else:
+            _BREAK["failures"] = int(_BREAK["failures"]) + 1
+            _BREAK["last_reason"] = str(reason or "")[:200]
+            if _BREAK["failures"] >= threshold:
+                _BREAK.update(open=True, skipped=0, half_open=False)
+                msg = (f"[fofa] 连续失败 {_BREAK['failures']} 次"
+                       f"（{reason or '无原因'}），熔断；接下来跳过 {skip} 次查询，"
+                       f"第 {skip + 1} 次再探活")
+                level = "warning"
+    if msg and logger:
+        (logger.warning if level == "warning" else logger.info)(msg)
+
+
+def _fail(msg, settings, logger, reason=""):
+    """统一的失败出口：先记熔断，再把原样的 `(assets, total, error)` 返回。"""
+    _breaker_record(False, settings, logger, reason or msg)
+    return [], 0, msg
+
+
 
 # 这些标题一眼就是"模板页"，连一次查询都不值得发（省配额、也省时间）
 GENERIC_TITLES = frozenset({
@@ -308,6 +403,10 @@ def search_query(query, settings, logger=None, size=None):
     email, key = credentials(settings)
     if not (email and key):
         return [], 0, keystore.keys_hint("fofa.email / fofa.key")
+    # 续368：熔断打开时**直接返回**，不再发请求、也不再各自等满 timeout。
+    _allow, _why = breaker_allow(settings)
+    if not _allow:
+        return [], 0, f"fofa {_why}"
     cfg = (settings or {}).get("fofa", {}) or {}
     try:
         size = int(size or cfg.get("max_assets") or 100)
@@ -332,7 +431,7 @@ def search_query(query, settings, logger=None, size=None):
         # 2026-11-10 就因此误判过一次：FOFA 先回 `[-700] 账号无效`、随后直接挂起，
         # 日志却只显示「网络不可达或超时」，把账号侧问题误导成链路问题。
         why = http_last_error() or "网络不可达或超时"
-        return [], 0, f"请求 fofa 失败（{why}）"
+        return _fail(f"请求 fofa 失败（{why}）", settings, logger, why)
     if resp.get("status") == 429:
         # 频率超限：按 `Retry-After`（没有就用 min_interval）等一次再试一次；仍 429 就如实报，
         # 不说成"接口坏了"—— 429 的意思是"你发太快"，改 `fofa.min_interval` 就能解决。
@@ -344,19 +443,21 @@ def search_query(query, settings, logger=None, size=None):
         time.sleep(_gap)
         resp = http_request(url, timeout=timeout, settings=settings)
         if not resp:
-            return [], 0, "请求 fofa 失败（429 后重试仍无响应）"
+            return _fail("请求 fofa 失败（429 后重试仍无响应）", settings, logger,
+                         "429 重试无响应")
         if resp.get("status") == 429:
-            return [], 0, (f"fofa 返回 HTTP 429（请求频率超限）：已等 {_gap:.0f}s 重试一次仍被限"
-                           f" ⇒ 把 fofa.min_interval（当前 {min_interval(settings)}s）调大，"
-                           f"或稍后重跑")
+            return _fail(
+                f"fofa 返回 HTTP 429（请求频率超限）：已等 {_gap:.0f}s 重试一次仍被限"
+                f" ⇒ 把 fofa.min_interval（当前 {min_interval(settings)}s）调大，"
+                f"或稍后重跑", settings, logger, "429 重试仍被限")
     if resp.get("status") != 200:
-        return [], 0, f"fofa 返回 HTTP {resp.get('status')}"
+        return _fail(f"fofa 返回 HTTP {resp.get('status')}", settings, logger)
     try:
         data = json.loads(resp.get("text") or "{}")
     except (ValueError, TypeError):
-        return [], 0, "fofa 响应不是合法 JSON"
+        return _fail("fofa 响应不是合法 JSON", settings, logger)
     if not isinstance(data, dict):
-        return [], 0, "fofa 响应结构异常"
+        return _fail("fofa 响应结构异常", settings, logger)
     if data.get("error"):
         msg = str(data.get("errmsg") or "未知错误")
         # 续367：`[-700] 账号无效` 实测是 key 失效 / 账号被封或欠费 / 邮箱与 key 不配对，
@@ -366,7 +467,7 @@ def search_query(query, settings, logger=None, size=None):
                     "API Key；频繁查询也可能触发临时风控，可先停几分钟再试）")
         if logger:
             logger.warning(f"[fofa] 查询被拒：{msg}")
-        return [], 0, msg
+        return _fail(msg, settings, logger, msg.split("（", 1)[0])
     total = data.get("size") or 0
     consumed = _int_field(data, "consumed_fpoint", "consumed_fpoints")
     required = _int_field(data, "required_fpoints", "required_fpoint")
@@ -383,6 +484,7 @@ def search_query(query, settings, logger=None, size=None):
         cols = list(row) + [""] * (5 - len(row))
         assets.append({"host": str(cols[0]), "domain": str(cols[1]), "ip": str(cols[2]),
                        "port": str(cols[3]), "title": str(cols[4])})
+    _breaker_record(True, settings, logger)
     return assets, total, ""
 
 

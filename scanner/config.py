@@ -741,6 +741,11 @@ DEFAULTS = {
         "web_portscan": True,
         # 上面两条共用的每任务上限（裸 IP 数 / 探活候选数分别计算）。
         "web_max": 20,
+        # 续368：连续失败熔断（与 iprecon 的接口熔断同一套语义）——
+        # FOFA 挂起时四路会各自等满 http_timeout，白等 30~40 秒。
+        "breaker_enabled": True,
+        "breaker_fail_threshold": 2,
+        "breaker_skip": 20,
     },
     "ssrf": {
         # A10 SSRF 受控回连（**默认关**）：任务内起一个本机 HTTP 回连监听，把
