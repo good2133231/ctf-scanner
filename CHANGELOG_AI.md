@@ -43,7 +43,7 @@
 ### 四、验证
 
 - `--only 8c5` PASS；`compileall` PASS；真实查询契约 `len(_exchange(...)) == 3`。
-- 最终全量 v43：2026-11-10 12:29:23–12:39:08（约 12 分钟，日志内 306 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke369.log`）。
+- 最终全量 v43：2026-11-10 12:29:23–12:39:08（9m45s，日志内 306 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke369.log`）。
 
 ## 续368（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 连续失败熔断
 

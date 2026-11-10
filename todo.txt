@@ -4559,7 +4559,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] T4【实测】同一批 20 次查询：第一遍 0.036s → 第二遍 **0.000s**（5 条缓存）；
       真实大头是失败/超时路径 —— 缓存后不再等满 3 秒（门禁以桩验「零 UDP」）。
 - [x] C1 定向：`--only 8c5` PASS。
-- [x] C2 最终全量 v43 `SMOKE PASS`：2026-11-10 12:29:23–12:39:08（约 12 分钟，306 个 ok 组 + 浏览器 e2e，`logs/smoke369.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+- [x] C2 最终全量 v43 `SMOKE PASS`：2026-11-10 12:29:23–12:39:08（9m45s，306 个 ok 组 + 浏览器 e2e，`logs/smoke369.log`）；提交后已用 `tools/push_encrypted.py` 推送。
 
 **下一轮（续370）**：`get_conn()` 去掉每连接 `PRAGMA journal_mode=WAL`（`scanner/db.py:402`，
 同文件 758 行的注释已经为绕开它而刻意不走 `get_conn`）。
