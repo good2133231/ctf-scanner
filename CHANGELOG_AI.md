@@ -5,6 +5,54 @@
 
 
 
+## 续367（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 失败归因修复（查出 #36 无端口的真因）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人追问「为什么没跑通 / #36 为什么没有端口扫描 35 都有」。结论分三层，先把事实摆清。
+
+### 一、事实（用库里数据核的）
+
+- #35（task 69）与 #36（task 70）的 `stages` 都是
+  `subdomain,probe,cert,screenshot,osint,jsmine,dirscan`，**都不含 `portscan`** ⇒ 两个任务都
+  **没跑过主动端口扫描**。
+- #35 端口页那 11 条全是 `source=fofa`，来自 osint 的 favicon 反查（日志
+  「FOFA 端口资产：入库 11 条」），不是 portscan 的产出。
+- #36 一条端口都没有，因为 FOFA 四路全部失败：日志三处「FOFA 反查中止：请求 fofa 失败
+  （网络不可达或超时）」，来源状态 `FOFA=unknown(0)`。
+
+### 二、根因（对照实验，不是猜）
+
+- 用同一个 key 直连 FOFA：`/api/v1/info/my?key=…` 与 `/api/v1/search/all?…` 返回
+  **200 + `{"error":true,"errmsg":"[-700] 账号无效"}`**；
+- 随后同一出口连 `requests.get` 直连也变成 ReadTimeout（20 秒也不回），而 `https://fofa.info/`
+  首页与无凭据的 `?size=1` 仍是 200 ⇒ **不是本机断网，也不是调用方式错（key 方式正确）**，
+  是 FOFA 侧对该 key / 出口从 09:46 起限流挂起（07:39 的 #35 还正常）。
+- `[-700] 账号无效` 对应：key 失效 / 账号被封或欠费 / 邮箱与 key 不配对 / 频繁查询触发临时风控。
+
+### 三、代码 bug（本轮修的就是这个）
+
+- `fofa.search_query` 在 `http_request` 返回 None 时一律写「请求 fofa 失败（网络不可达或超时）」，
+  把 `http_last_error()` 里的真实原因（超时 / 连接被拒 / TLS）吞掉 —— 正是这句把排查方向
+  误导到了链路上。
+- 改为 `请求 fofa 失败（{http_last_error() or '网络不可达或超时'}）`；`[-700] / 账号无效`
+  追加可执行提示（查 key、账号封禁欠费、邮箱配对、临时风控）。
+
+### 四、还没做 / 需要主理人侧
+
+- FOFA 账号侧状态（key 是否被重置、额度、风控）只能你确认；代码侧已给不出更多信息。
+- `fofa.web_portscan` 与 `bare_ip_reverse` 的**端到端一次都没验证过**：二者输入都来自
+  FOFA 端口资产，FOFA 不可用时没有候选。代码与 `[8c1]` 门禁是绿的，但不能说「已跑通」。
+- `portscan` 仍不在默认勾选阶段里（`RECON_STAGES` 七阶段不含它，而策略页 `portscan.enabled`
+  是 true，两套口径）—— 要不要改成默认勾，等主理人一句话。
+
+### 五、验证
+
+- `compileall` PASS；真实调用现在报「请求 fofa 失败（超时）」，不再笼统归因成网络不可达。
+- `--only 6w,8bz,8c1` 全绿；新增 `[8c2]` 定向 PASS（钉住「真实原因必须带出来」与 `[-700]` 提示）。
+- 最终全量 v40：2026-11-10 10:13:57–10:23:55（9m58s，日志内 303 个 ok 组 + 浏览器 e2e），
+  `SMOKE PASS`（`logs/smoke367.log`）；本轮唯一一次全量。
+
 ## 续366（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA 裸 IP 反查 + web 端口探活入站点 + 标签折叠
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

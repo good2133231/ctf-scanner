@@ -36167,6 +36167,31 @@ expression: r0()
           "写 sites 且并入 ctx.results）/ web 端口表补 2053·2083·2087·2096 / "
           "阶段与检查项标签前端展开-隐藏（清单仍由后端渲染）")
 
+    # [8c2] 续367：FOFA 失败原因不许再被**归因成网络**（真 bug 回归）
+    #      实测事故：FOFA 先回 200 + `[-700] 账号无效`、随后同出口直接挂起，而
+    #      `search_query` 一律写「网络不可达或超时」，把账号侧问题误导成链路问题。
+    import scanner.fofa as _fo8c2
+    import scanner.utils as _ut8c2
+    _s8c2 = {"fofa": {"min_interval": 0}, "limits": {"http_timeout": 5},
+             "keys": {"fofa": {"email": "stub@example.test", "key": "stub"}}}
+    _orig8c2 = _fo8c2.http_request
+    try:
+        _fo8c2.http_request = lambda *a, **k: None
+        _ut8c2._HTTP_LOCAL.last_error = "连接被拒"
+        _err8c2 = _fo8c2.search_query('host="x"', _s8c2)[2]
+        assert "连接被拒" in _err8c2, _err8c2
+        assert "网络不可达" not in _err8c2, f"真实原因又被吞了：{_err8c2}"
+        _fo8c2.http_request = lambda *a, **k: {
+            "status": 200, "headers": {},
+            "text": '{"error":true,"errmsg":"[-700] 账号无效"}'}
+        _err8c2b = _fo8c2.search_query('host="x"', _s8c2)[2]
+        assert "[-700]" in _err8c2b and "FOFA 个人中心" in _err8c2b, _err8c2b
+    finally:
+        _fo8c2.http_request = _orig8c2
+
+    print("[8c2] 续367 ok: fofa 失败原因取 http_last_error()（不再一律写「网络不可达」）｜"
+          "[-700] 账号无效附带「查 key / 账号封禁欠费 / 邮箱不配对 / 临时风控」可执行提示")
+
     print("SMOKE PASS")
 
 

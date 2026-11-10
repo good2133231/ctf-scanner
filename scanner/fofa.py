@@ -20,7 +20,7 @@ import time
 import urllib.parse
 
 from . import keystore, targets
-from .utils import http_request, is_domain, to_ascii
+from .utils import http_last_error, http_request, is_domain, to_ascii
 
 API = "https://fofa.info/api/v1/search/all"
 FIELDS = "host,domain,ip,port,title"
@@ -327,7 +327,12 @@ def search_query(query, settings, logger=None, size=None):
     _rate_wait(settings)
     resp = http_request(url, timeout=timeout, settings=settings)
     if not resp:
-        return [], 0, "请求 fofa 失败（网络不可达或超时）"
+        # 续367：把 `http_request` 的**真实失败原因**带出来（续165 的线程本地旁路）。
+        # 原写法一律写「网络不可达或超时」，实测把「连接被拒 / TLS / 我方超时」全归因成网络，
+        # 2026-11-10 就因此误判过一次：FOFA 先回 `[-700] 账号无效`、随后直接挂起，
+        # 日志却只显示「网络不可达或超时」，把账号侧问题误导成链路问题。
+        why = http_last_error() or "网络不可达或超时"
+        return [], 0, f"请求 fofa 失败（{why}）"
     if resp.get("status") == 429:
         # 频率超限：按 `Retry-After`（没有就用 min_interval）等一次再试一次；仍 429 就如实报，
         # 不说成"接口坏了"—— 429 的意思是"你发太快"，改 `fofa.min_interval` 就能解决。
@@ -354,6 +359,11 @@ def search_query(query, settings, logger=None, size=None):
         return [], 0, "fofa 响应结构异常"
     if data.get("error"):
         msg = str(data.get("errmsg") or "未知错误")
+        # 续367：`[-700] 账号无效` 实测是 key 失效 / 账号被封或欠费 / 邮箱与 key 不配对，
+        # 不是网络问题；给一句能直接照做的提示，别让人再去查链路。
+        if "-700" in msg or "账号无效" in msg:
+            msg += ("（key 失效 / 账号被封或欠费 / 邮箱与 key 不配对 —— 到 FOFA 个人中心核对 "
+                    "API Key；频繁查询也可能触发临时风控，可先停几分钟再试）")
         if logger:
             logger.warning(f"[fofa] 查询被拒：{msg}")
         return [], 0, msg
