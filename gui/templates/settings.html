@@ -238,6 +238,11 @@
       只借自家口径，<code>js:</code> / <code>osint:</code> 那两路是别人的资产面，不会拿去发请求；也只借同一账号的任务。取消勾选＝只信本轮新发现</label><br>
     <label>沿用历史上限 <input name="subdomain_reuse_history_max" style="width:7em"
       value="{{ s.subdomain.reuse_history_max }}">（个；<code>0</code> = 不限。超出时只并前 N 个，并在任务日志里说明）</label>
+    <label>被动子域硬上限 <input name="subdomain_passive_max" type="number" min="0" style="width:8em"
+      value="{{ s.subdomain.passive_max if s.subdomain.passive_max is defined else 50000 }}">（个/任务；
+      <code>0</code> = 不限；到顶后只停被动/FOFA 入库，主动爆破不受影响）</label>
+    <label>被动子域告警线 <input name="subdomain_passive_warn" type="number" min="0" style="width:7em"
+      value="{{ s.subdomain.passive_warn if s.subdomain.passive_warn is defined else 10000 }}">（个；超过后日志告警一次）</label>
     <label class="chk"><input type="checkbox" name="subdomain_incremental" value="1"
       {{ 'checked' if s.subdomain.incremental }}> <b>增量模式（复用历史子域）</b>：同一根域
       <input name="subdomain_incremental_ttl_days" style="width:4em" type="number" min="1"
@@ -613,6 +618,8 @@
       <input name="iprecon_api" value="{{ s.iprecon.api }}"></label>
     <label>并发数（公共接口，建议保持克制） <input name="iprecon_workers" value="{{ s.iprecon.workers }}"></label>
     <label>单次超时（秒） <input name="iprecon_timeout" value="{{ s.iprecon.timeout }}"></label>
+    <label title="一个 IP 反查出 >=N 个域名就按共享主机处理；只保留名称像目标的域名，默认值来自策略配置">共享 IP 判定阈值（域名数）
+      <input name="iprecon_shared_ip_min" value="{{ s.iprecon.shared_ip_min }}"></label>
     <label class="chk" title="开跑前先探一次每个接口还活不活：失败先累计，到阈值才熔断"><input type="checkbox" name="iprecon_preflight" value="1"
       {{ 'checked' if s.iprecon.preflight }}> <b>接口存活预检</b></label>
     <label class="chk" title="同一个源连续失败 N 次后跳过 100 次调用，第 101 次半开探测；能用就恢复，再失败重新计数"><input type="checkbox" name="iprecon_breaker_enabled" value="1"
@@ -668,6 +675,15 @@
         <option value="label" {{ 'selected' if s.fofa.title_match != 'substring' }}>label：标题词与域名某段完全相等（默认，最严）</option>
         <option value="substring" {{ 'selected' if s.fofa.title_match == 'substring' }}>substring：标题词是域名的子串（宽松，回退/对照用）</option>
       </select></label>
+
+    <p class="muted note">续365：<code>host="品牌词"</code> 反查 —— 用注册域去掉公共后缀后的
+      首段去 FOFA 搜同名资产，<b>只收 IP 与本任务子域名解析结果相同的</b>：不排除 CDN 行、
+      多个 A 记录里任意一个命中即算。命中行以 <code>osint:fofa-host</code> 入库并判高置信；
+      没配 key 或还没有已解析 IP 时一次请求都不发。</p>
+    <label class="chk"><input type="checkbox" name="fofa_host_enabled" value="1"
+      {{ 'checked' if s.fofa.host_enabled }}> <b>启用 FOFA host= 同 IP 反查</b></label>
+    <label>每任务最多查几个品牌词 <input name="fofa_max_host_queries" style="width:6em"
+      value="{{ s.fofa.max_host_queries }}"></label>
 
     <h2>Shodan / Quake favicon 反查（同一批 mmh3，换一家平台）</h2>
     <p class="muted note">与 FOFA 的 favicon 反查<b>同构</b>：三家的指纹都是 MurmurHash3
@@ -743,7 +759,14 @@
     <h2>用户黑名单（命中即不入资产库）</h2>
     <p class="muted note">文件：<code>{{ bl_path or 'config/blacklist.txt' }}</code>（纯文本，一行一个域名，
       含其所有子域，可直接手工编辑）。命中的域名<b>不入资产库</b>，因此后续 dirscan / vulnscan
-      也不会去扫它。批量加入的入口在「子域名」「拓展域名」页：勾选行 → 点「加入黑名单」。</p>
+      也不会去扫它。批量加入的入口在「子域名」「拓展域名」页：勾选行 → 点「加入黑名单」；
+      跳转落点这类还没入库的第三方域，可在下面直接输入。</p>
+    <div class="row">
+      <label>手工加入 <input name="manual_domain" placeholder="third-party.com 或 sso.third-party.com"></label>
+      <input type="hidden" name="next" value="{{ url_for('settings_page') }}">
+      <button type="submit" class="ghost" formaction="{{ url_for('api_blacklist_add') }}"
+              formmethod="post" formnovalidate>加入黑名单</button>
+    </div>
     <label class="chk"><input type="checkbox" name="blacklist_enabled" value="1"
       {{ 'checked' if s.blacklist.enabled }}> 启用黑名单（取消勾选＝整份名单临时失效，文件内容不变）</label>
     {% if bl %}

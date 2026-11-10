@@ -183,8 +183,13 @@ checks:
   poc_priority: false
 subdomain:
   # 子域名资产的 IP/CNAME 回填与 CDN 标记（纯 DNS 只读查询，不发 HTTP）
-  max_resolve: 500
+  # 续363：#32 的 827 条拓展曾因 500 卡住 307 条；默认提到 1000。
+  max_resolve: 1000
   dns_timeout: 3
+  # 续362：被动子域硬上限/告警线（subfinder + 内置被动源 + FOFA 子域反查合计）。
+  # 历史外部大域曾一次灌入 97.5 万行；默认 5 万/任务，1 万开始告警，0 = 不限。
+  passive_max: 50000
+  passive_warn: 10000
   # subfinder(-all) 与内置免 key 被动源取并集，做到"尽量全"
   union_passive: true
   # 目标是 URL 或子域时，自动把注册域也当成子域名收集的根（续145，用户点单）
@@ -443,6 +448,8 @@ iprecon:
   max_ips: 500
   max_hosts: 200
   max_domains_per_ip: 100       # 精确 IP 反查单 IP 上限；超出截断并标「共享 IP」
+  # 续363：单 IP 反查出 >=N 个域名即判共享主机；低相似域名不入库、不作同源 IP 证据
+  shared_ip_min: 5
   # 续314：favicon 命中裸 IP 时先探活再反查（免费源 + FOFA ip=），结果标「历史反查·待确认」
   from_favicon: true
   from_favicon_max: 20
@@ -506,6 +513,12 @@ fofa:
   max_title_queries: 10
   # 标题反查的归属相关性过滤：label（默认，标题 token == 域名 label）/ substring（回退，子串）
   title_match: label
+  # 续365（主理人 2026-11-10 点单）：FOFA 支持 host="品牌词"。
+  # 注册域去掉公共后缀后的首段（如 acme-portal.cn → acme-portal）拿去搜同名资产，
+  # 只收「FOFA 资产 IP 与本任务子域名解析 IP 相同」的：不排除 CDN、多 A 任一命中即可，
+  # 命中行以 osint:fofa-host 入库并判高置信；没配 key 或没有已解析 IP 时一次请求都不发。
+  host_enabled: true
+  max_host_queries: 10
 ssrf:
   # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token，收到回连即判"服务端会出网"。
   # 只在目标能回访扫描机时有效（NAT/云主机大概率收不到）；callback_base 留空 = 用本机监听地址

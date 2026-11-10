@@ -5,6 +5,516 @@
 
 
 
+## 续365（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA host="品牌词" 反查 + 同 IP 置信度（插队）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人 2026-11-10 插队点单（目标真名按 §0.5 不落被跟踪文件）：FOFA 支持 `host=""`，
+用注册域的品牌词去搜；返回结果的 IP 与本任务子域名解析 IP 相同就提高置信度，
+**哪怕是 CDN、哪怕是多个 A 记录里只有一个命中**；先把这条做了，其余按顺序继续。
+上一节「下一轮（续365）」那 4 组本轮**一项未动**，顺延到下一轮。
+
+### 一、已落地
+
+- `scanner/fofa.py`：`host_token()`（唯一注册域产地 `utils.base_domain()` → 首段；<4 字符 / 纯数字 /
+  单标签返回空串）、`build_host_query()`（过 `_quote_value` 挡引号与反斜杠）、`search_host()`
+  （复用 `search_query`，继承 429 单次重试与 `min_interval` 节流）。
+- `scanner/stages/osint.py` 新增 `_fofa_host()`：按注册域品牌词查询 → 与本任务 `subdomains.ip`
+  拆出的单 IP 集合求交 → 命中行以 `osint:fofa-host` 入库、note 带查询语法与命中 IP，并回填 ip。
+  实测夹具：`host="acme-portal"` 4 条资产 → IP 命中 3 条 → 入库 2 个域名（另 1 条只有裸 IP）。
+- `scanner/extdom.py`：`EXT_FOFA_HOST_SOURCE` + `apply_fofa_host_evidence()`；`similar_candidates`
+  与 `gui/app.py::_ext_confidence` 各包一层，页面徽章与自动送探吃同一份结论。
+- `scanner/config.py` / `config/settings.yaml` / `gui/app.py` / `gui/templates/settings.html`：
+  `fofa.host_enabled`（默认 True）、`fofa.max_host_queries`（默认 10）四处一致；来源标签
+  「FOFA·host 反查(同IP)」。
+- `tests/smoke.py` 新增 `[8bz]`（约 122 行）：纯函数 + 阶段级桩测 + 置信度双向对照 + 两道零查询闸。
+
+### 二、设计上刻意不复用什么
+
+- `extdom.confirmed_ip_map()` 只收「非 CDN 的 own 行」，`ip_evidence()` 还会跳过 `row.cdn` 非空的
+  行 —— 与「哪怕是 cdn」直接冲突。所以新开一条证据通道，判据只有 `source == osint:fofa-host`，
+  **不改 `owned`**（跨注册域仍只是高置信拓展域名，归属仍由注册域决定）。
+- 不设「公共词阈值」：这一路只在 IP 命中时入库，FOFA 命中数再多也灌不进无关资产；
+  品牌词过短/纯数字在 `host_token()` 零查询挡掉，查询次数由 `max_host_queries` 封顶。
+- 命中 IP 落在 CDN 段时只在 note 里标「CDN 共享 IP，佐证偏弱」，**不改变是否命中**。
+- 新行回填 `ip` 是为过 `ext_rows(resolved_only=True)`；`cdn` 列刻意不写，避免 `auto_expand_block`
+  的 CDN 闸把高置信行挡掉 —— 那道闸管的是「别去打边缘节点」，与 IP 命中判据是两件事。
+- 已在库里的域名本轮不改写来源（只在「新域名」上落这条证据）；`_fofa_assets()` 之后
+  FOFA 整批结果排到其它来源之前，保证同一域名被多路命中时同 IP 证据不丢。
+
+### 三、踩过的坑（都写进来，别让下一个人当环境问题）
+
+- 第一次全量 v35 在 `[8at]` 红：`POST /settings 映射缺键 ["fofa:['host_enabled','max_host_queries']"]`
+  —— 新增 DEFAULTS 键必须**同时**补 GUI 策略页控件与 POST 映射（与既有假红目录同族：DEFAULTS 是跨组
+  不变量，`save_settings` 被 stub 时缺键只会让「保存一次就重置开关」）。修复后定向 PASS 再跑全量。
+- 定向第一次红在 `[8bz]` 的「空品牌词显式报错」：本组先把 `search_host` 桩替换了，断言调到桩上
+  自然拿不到错误串 ⇒ 改调原函数 `_8bz_orig("")`，不是产品代码有问题。
+- 门禁夹具里的 `203.0.113.x` 会被 `iprecon.is_public_ip()` 的 `is_reserved` 滤掉 ⇒ 统一用
+  `1.2.3.4` / `9.9.9.x` 这类项目既有夹具 IP。
+- 全量 v36 在 `[8as]` 红：`CHANGELOG 正文里出现了比最新标题更大的轮次号` —— 新小节里写了
+  一个还没落地的预告轮次号，而该组用「全文最大轮次号 == 标题行最大轮次号」卡空头支票；
+  改成不写号的「顺延到下一轮」即可。同组还有一条「声称同步就得真同步」的判据：本轮没动
+  仓库根的项目速览文件，所以本小节正文刻意不提它，改动清单只记在 todo 本轮小节。
+- 全量 v37 在 `[8au]` 红：`scanner/ 下调用 base_domain 的只许是 targets.root_of 与
+  extdom.base_of 的兜底：['scanner/fofa.py:434']` —— `host_token()` 直接调了
+  `utils.base_domain()`；改走 `targets.root_of()`（注册域唯一咽喉点，自带 is_domain 守门），
+  4 种品牌词形态与 `[8bz]` 定向复验结果一字不差。该判据是 AST 级，只在真调用点上生效。
+- 本机 `python3` 没有 flask，门禁必须走 `.venv/bin/python`；且按 §2 续246 注销
+  `PYTHONPATH` 与四个代理变量。
+
+### 四、死锁排查（§0.6 ②）
+
+- 新链路只复用既有 `fofa.search_query`：`http_request` 带 timeout、`_rate_wait` 用单调时钟且
+  `min_interval` 有界、429 只重试一次；**没有新增子进程、锁、Event.wait 或轮询循环**。
+- `osint._fofa_host()` 的两层循环都有明确退出条件（`ctx.stopped()` / `max_host_queries` /
+  品牌词集合为空 / 没有可比对 IP 直接零查询）。
+
+### 五、验证
+
+- `compileall` PASS；纯函数自测（`host_token` 4 形态 / `build_host_query` 转义 / 证据提权）PASS。
+- `--only 8bz` PASS；补完 POST 映射后 `--only 8at,8bz` PASS。
+- 第一次全量 v35：2026-11-10 08:11:07–08:19:18（约 8m11s），在 `[8at]` 红（已修，见第三节）。
+- 最终全量 v38：2026-11-10 08:43:29–08:52:29（9m00s，日志内 301 个 ok 组 + 浏览器 e2e），
+  `SMOKE PASS`（`logs/smoke365d.log`）；日志里两处 Traceback 是 `[6v]` / `[212]` 故意注入
+  异常的自证输出，不是真失败。
+- 行尾（§2 续254/280）：纯 CRLF 的 osint.py / config.py / settings.yaml / gui/app.py /
+  settings.html / todo.txt / CHANGELOG 仍纯 CRLF；mixed 的 `tests/smoke.py` CRLF 行数不变
+  （18876），新块按锚行 LF 插入；`git diff --ignore-cr-at-eol -U0` 无预期外 hunk。
+- 提交时一并带上续364 未提交的 22 个在途改动（实施者 DeepSeek-V4.1-Flash），两轮分别标注；
+  push 按规矩由主理人终端执行。
+
+## 续364（2026-11-10，WorkBuddy · DeepSeek-V4.1-Flash）：配置落盘加固 + 共享阈值/截断口径 + queued 重启竞态
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人「做」第一批 6 件 P0；本批不改扫描覆盖范围，只修速度/代码质量/已确认 bug。
+
+### 一、已落地
+
+- `scanner/config.py`：`load_settings()` 加 mtime/size + DEFAULTS 内容缓存；`keys` 不进缓存，解锁状态仍每次现取。配置解析失败显式 `warning`，不再静默全回默认。
+- `save_settings()` 改为**逐行 YAML 文本补丁**：只改/补传入键，中文注释、缩进、CRLF、其它键原样保留；支持 2/3 层嵌套与 JSON flow 标量。写前取跨进程 `fcntl.flock` + 进程内 RLock，写走同目录临时文件 + `fsync` + `os.replace` + 保留权限位。`remove_settings_keys()` 同样纳入锁与原子写。
+- 单任务/批量 `restart` 对 `queued` 先调 `db.stop_queued_task()` 原子出队，抢不到就拒绝，避免旧队列行被 worker 认领后与 `_spawn` 叠成同一任务双跑。
+- `iprecon.domain_note()` 增加 `kept`（过滤后、截断前数量）：共享 IP 150 个域名、相似过滤后剩 10 个不再误写「150→100 已截断」。`osint._ip_reverse()` 传 `kept`；`extdom.reverse_writeback()` 第二处调用也补上总数/共享标记，口径统一。
+- `session_secret("")` 的 `Path("") or BASE_DIR` 死兜底修正：空目录真正回退到 `BASE_DIR`，不再把会话密钥写到当前工作目录。
+- `shared_ip_min` 收敛为 `config.shared_ip_min()` 单一产地；删除 `extdom.SHARED_IP_REVERSE_MIN` 硬编码，OSINT/GUI/模板/测试不再各抄一份 5。
+- 同步更新 `toolmgr.py` / `config.py` / `gui/app.py` / `docs/roadmap.md` / `[7p]` 里关于「save_settings 整份重写会抹掉注释」的旧说明；`[7p]` 反证改成「合并写保住注释但不能物理删键」。
+
+### 二、性能实测
+
+- `load_settings()` 100 次：**4.12s → 0.106s**（约 39 倍），策略部分命中缓存，`keys` 仍实时读取。
+- 配置副本实测：改 `iprecon.shared_ip_min` 与三层 `gui.login_lockout.max_fails_per_ip` 后，注释仍在、CRLF 行数 677→677、无 `.tmp` 残留、新值可立即读回。
+- 坏配置 `gui: [` 会触发 warning 并回退 `DEFAULTS`；`session_secret("")` 只写临时 `BASE_DIR`。
+
+### 三、验证
+
+- 全量 v33 先在 `[7p]` 红：旧门禁把 `save_settings()` 当「整份重写会抹注释」的反证；更新反证后重跑。
+- 全量 **v34 `SMOKE PASS`**：2026-11-10 07:24:07–07:33:13，约 9 分 06 秒，含浏览器 e2e。
+- `[285]`、`[8by]`、`[7p]`、`[264]`、`[218]`、`[8as]` 定向 PASS；`compileall` PASS；IDE lint 0 error/warning。
+- 5000/5099 重启后均为 200；当前无 running/queued；`#67/#68` 两个新建根任务保持 done。
+
+### 四、本批未做（下一批候选）
+
+- P0 速度：DNS 结果 TTL 缓存、`get_conn()` 去掉每连接 WAL PRAGMA、puredns 多域合批、全量 smoke 分 fast/nightly。
+- P0 安全：跨注册域自动送探剥离 `auth`；结构化授权 scope（allowlist / 时间窗 / IP-CIDR / 端口路径）。
+- P1 能力：JS sourcemap、OpenAPI/GraphQL 结构化端点、历史 PDNS/ASN/证书 SAN 关联真实 IP、CTF profile 显式打开 vulnscan/报告导出。
+- 代码质量：拆分 `gui/app.py` / `tests/smoke.py` 单文件、收窄 227 个 `except Exception`、统一其余默认值 fallback。
+
+## 续363（2026-11-09，WorkBuddy · DeepSeek-V4.1-Flash）：IP 反查共享主机去噪 + 拓展回填上限重试
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人追问 #32（显示号，实际 task 52）里的 `共享主机客户域名`：mnemonic 反查同一 IP 得到一堆无关域名，却被判「高」并自动送探 #58；同时拓展页大量 `over-limit`。
+
+### 一、IP 反查共享主机去噪
+
+- 新增 `iprecon.shared_ip_min=5`（DEFAULTS/YAML/GUI）：单 IP 反查返回 >=5 个域名即判共享主机，不再把该 IP 当作「同一目标」的归属证据。
+- `_ip_reverse` 对共享 IP 只保留自身/中高相似域名；GoDaddy 这类无关客户域名不再入库，也不再吃拓展回填上限。
+- 共享 IP 列表写入 `tasks.options.iprecon_shared_ips`；`extdom.confirmed_ip_map` 排除这些 IP，`ip_evidence` 改按单 IP 匹配（支持 own 行多 IP 逗号串）。
+- `auto_expand_block` 增加注册商/邮箱托管/停放基础设施根域拦截（godaddy/secureserver/bodis 等），即使名称相似也不自动建子任务。
+- `domain_note` 对共享 IP 行标注「共享IP（N 个反查域名）」，方便人工判断。
+
+### 二、拓展回填上限
+
+- `subdomain.max_resolve` 默认/YAML 从 500 提到 1000；这是 #32 的 827 条拓展里 307 条 `over-limit` 的直接原因之一。
+- `resolve_extended(only_missing=True)` 现在会重试 `over-limit`，不再把「上一轮没轮到」当终态；nxdomain/timeout 等其它结论仍保持幂等。
+- 已做一次定向回填（未删行）：#32 total 810 / scanned 227 / alive 176 / dead 51 / blocked 80；80 条被黑名单拦截的 over-limit 保留，解除黑名单或下次回填会继续重试。
+
+### 三、验证
+
+- 新增 `[285]` 回归：共享 IP 计数、`confirmed_ip_map` 排除、`旧客户域名` 不再被 IP 证据抬到 low 以上、provider 根域拦截、OSINT 共享过滤只留相似域名、over-limit 重试、`iprecon_shared_ips` 不泄漏到运行配置。
+- 全量 v28 先在 `[5x]` 红：`options_display` 绕过了登录态 `task.options` 的掩码，把明文凭据打回页面；已改为 auth 掩码后同步更新 `options_display`。
+- 全量 **v29 `SMOKE PASS`**：2026-11-09 08:09:32–08:25:22，约 15 分 50 秒，含浏览器 e2e。
+- 补 own 同 IP 过滤后，全量 **v30 `SMOKE PASS`**：2026-11-09 10:15:00–10:29:11，约 14 分 11 秒，含浏览器 e2e。
+- 收尾审计修复 `delete_task` 的 ext_probes 孤儿后，全量 **v32 `SMOKE PASS`**：2026-11-09 10:37:14–10:49:47，约 12 分 33 秒，含浏览器 e2e。
+- `[285]`、`[264]`、`[218]`、`[8as]` 均 PASS；5000/5099 已重启，设置页共享阈值 5 正常显示，`task 52` 详情 1.45s，运行配置无 `osint_sources`/`iprecon_shared_ips`。
+
+### 四、清理与重跑（主理人确认后）
+
+- 先把库备份到 `data/scanner.db.bak-363-before-clean-rerun32`。
+- 删除旧噪声子任务 `#53~#58` 及其日志（godaddy/secureserver/awsglobalaccelerator/advancedbiomatrix/myprofessionalmail 和另一个共享主机客户域）；保留同品牌 TLD 的 3 个子任务 `#59~#61`。
+- 原地重启 `#32`：清空资产重扫，走正常队列；第一次 5m29s，补 own 同 IP 过滤后第二次 4m19s。
+- 第二次结果：子域 30、拓展 14（其中 alive 12）；IP 反查只留 1 条低置信候选；共享/同机噪声过滤 2007 条；自动送探 0 个新子任务。
+- 旧 `over-limit`、历史反查行随重启清空；`#59~#61` 未动，回填/重跑均通过正常队列。
+
+### 五、整体检查 / 收尾审计
+
+- 发现删除 `#53~#58` 后 `ext_probes` 留下 7 条孤儿；先备份到 `data/scanner.db.bak-363-before-orphan-clean`，再清掉。
+- 修复 `delete_task`：只删除 `task_id` 指向被删任务的送探记录；父任务删除但子任务仍存活时，保留子任务的送探历史（与 `list_child_tasks` 的“父删不级联”口径一致）。
+- 新增 `[285]` 双向回归：删子任务必须清记录；删父任务不能误删存活子任务记录。
+- 全库审计：资产表按 `task_id` 的孤儿 0，`tasks.options` 全部是合法 JSON，无 running/queued、无 stop_requested 残留。
+- `#32` 最终 30 子域 / 14 拓展 / 12 alive；只剩 1 条低置信反查候选，不自动送探。
+- 历史 `#10/#17` 的父任务 `#9/#14` 已不存在，但子任务按“父删不级联”设计保留；页面 200，未动。
+- 按主理人“新建任务”口径，为这两个旧目标各建根任务 `#67/#68`（同四阶段，未复制已删父任务的 `rescan_of`）；均 `done`，分别 2m05s / 3m12s，旧 `#10/#17` 未删除。
+
+## 续362（2026-11-09，WorkBuddy · DeepSeek-V4.1-Flash）：拓展主数统一 + OSINT 来源状态 + 被动子域硬上限
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人「都按你推荐的配置」：拓展主数选 A、OSINT 先做来源状态不做自动重试、被动子域 5 万/1 万。
+
+### 一、三套拓展主数统一（A 口径）
+
+- 新增 `db._ext_display_where(blacklist_entries, outer)` 作为唯一 SQL 口径：拓展来源 + 已解析 + 按 domain 去重 + 排除已归属(OVERLAP) + 排除 `osint:cseg` + 排除黑名单。
+- 列表 `subs_ext_live`、详情页签 `ext`、表格底部“共 N 条”都走它；列表括号 `subs_ext_all` 改回**原始入库行数**（含未解析/重复/cseg/黑名单），只解释差值，不当主数。
+- 测试先抓到一次真错：overlap 子查询里的 `source` 被错误限定到外层，导致同一域的 `osint:` 行永远排不掉（期望 1 实际 2）；已改用 `_OWN_ALIASED`，`[285]` 覆盖。
+- 实库：`#61` 主数 20 / 原始 23；`#52` 315 / 810；`#42` 8 / 46；单任务与 bulk 逐项相等。100 任务列表计数 0.043s。
+
+### 二、OSINT 来源状态
+
+- 新增 `tasks.options.osint_sources`，每个来源记 `label/status/count/detail`；状态含 `ok / empty / unknown / partial / failed / skipped / disabled`。
+- VT/CT 能分清成功、空结果、部分失败、失败；FOFA/Shodan/Quake/Wayback 自己不上报错误，取不到时标 `unknown`（“未取到/空”），不谎称“空结果”。
+- 任务详情页顶部显示徽标与错误摘要（未启用源不占页面）；任务日志收尾输出一行状态总览。
+- `osint_sources` 是运行期元数据：详情页“运行配置/补扫选项”用过滤后的 `options_display`；重启时从 `options` 里清掉，避免不跑 OSINT 还显示上一轮状态。
+- 修了一个实现坑：`db.get_task()` 返回 sqlite Row，直接 `.get("options")` 会失败，先 `dict(...)`；`[285]` 既检查落库也检查详情页真的渲染，并断言原始 `osint_sources` 不回流页面。
+
+### 三、被动子域硬上限
+
+- `subdomain.passive_max=50000`、`passive_warn=10000` 同时进 DEFAULTS、settings.yaml、GUI 策略页（0=不限；留空回退现值，不能被整份保存删键）。
+- 新增 `_merge_found()`：subfinder + 内置被动源 + `osint:fofa` 合计唯一域名；到 1 万日志告警一次，到 5 万停止后续被动/FOFA 入库；主动 puredns/dns-brute 不吃这道闸。
+- `[285]` 直接测 12 条/上限 5：只收 5、告警且截断；主动 8 条不受影响；上限 0 = 不限；配置解析回退正确。
+
+### 四、验证
+
+- v26 全量在 06:44 因根盘 100%（`No space left on device`）红，不是代码问题；清 pip/go 构建缓存释放 1.4G 后重跑。
+- 全量 **v27 `SMOKE PASS`**：2026-11-09 06:48:44–07:04:53，约 16 分 9 秒，含浏览器 e2e。
+- `[285]`、`[8br]`、`[194a]`、`[264]` 局部 PASS；v27 后补了 options 展示过滤/重启清旧来源状态与详情页计数文案，`[285]`、`[264]` 复验 PASS。
+- 5000 / 5099 已重启：5000 持 leader 起 3 worker，5099 只留 1 个 `cs-queue-leader`；两端口 200；任务列表 0.55s、#61 详情 1.08s、设置页 0.33s。
+
+### 五、仍未修
+
+- 控制台 `0.0.0.0` / 401 边缘门按主理人要求暂不动。
+- OSINT 只展示来源状态，不自动重试失败源。
+- 被动上限触发目前只写日志，页面没有“已截断”横幅（主理人要先看真实触发情况再定）。
+
+## 续361（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：单实例队列 worker + LIKE 转义 + 删除竞态收口
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人明确：控制台监听 0.0.0.0 / 401 边缘门这条不动；把其余问题解决。
+
+### 一、双控制台 6 个 queue worker
+
+- 新增 `_WorkerLease`：`flock`（Windows 走 `msvcrt`）锁 `data/.queue_workers.lock`，跨进程只允许一个控制台起 worker。
+- `run_gui` 以 `leader_lock=True` 启动；没抢到的进程只起一个 `cs-queue-leader` 监控线程，每 2 秒重试，主进程退出后自动接管。
+- 生产实测：5000 起 3 个 worker，5099 只有 1 个 leader 待命线程；杀掉 5000 后 5099 在 5 秒内接管并起 3 个 worker；5000 重启后回到待命，总数始终 3 个 worker。
+- 这同时收掉 #53 的 `database is locked` 根因：旧版两个进程各持一份 `_WRITE_LOCK`，6 个线程跨进程抢 SQLite；现在只有一个队列写进程，3 个线程共享同一把进程内写锁。
+
+### 二、黑名单 `LIKE` 通配符
+
+- `db.blacklist_clause()` 对条目里的 `\` / `%` / `_` 转义，SQL 用 `LIKE ? ESCAPE '\\'`；`"%.<条目>"` 前缀的 `%` 仍是刻意的任意子域通配。
+- `[194a]` 新增 `_dmarc.example.com` / `a%b.example.com` 用例：`xdmarc` 与 `aXXb` 不得被误拦；SQL 侧与 `blacklist.matches` 同判。
+
+### 三、删除 running/queued 的竞态
+
+- `[285]` 新增 running 删除 409：不再 `request_stop` 后立刻 `delete_task`，避免任务行没了、runner 继续写孤儿资产。
+- queued 改用 `db.stop_queued_task()` 的 `UPDATE ... WHERE status='queued'` 与 worker 认领赛跑；只有 rowcount=1 才允许删。
+- 批量 delete 同口径：running / 被认领的 queued 记 skipped，不再硬删。
+
+### 四、验证
+
+- `[194a]`、`[285]` 局部 `SMOKE PASS`。
+- 全量 **v25 `SMOKE PASS`**：2026-11-06 22:27:10–22:42:26，约 **15 分 16 秒**，含浏览器 e2e。
+- 5000 / 5099 均 200；当前 5099 持 leader（3 worker），5000 待命（1 个 leader 监控线程）。
+- 当前无 running/queued 任务；无 `stop_requested` 残留。
+
+### 五、仍未修
+
+- 三套拓展计数口径仍等主理人定一个数。
+- OSINT 外部源波动/“来源未取到”与“没有资产”未在页面区分。
+- 被动子域结果没有硬上限（历史外部大域曾一次灌入 97.5 万行）。
+
+## 续360（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：跨进程停止 + OVERLAP 改相关 NOT EXISTS
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人对续359的「下一轮最该先修跨进程停止和 NOT IN」回「做」。
+
+### 一、跨进程停止
+
+- `tasks` 新增 `stop_requested INTEGER DEFAULT 0`（老库 `_COLUMN_PATCHES` 自动补列）。
+- `db.request_task_stop()`：只对 `status='running'` 置 1；1 秒短连接 + `busy_timeout=1000`，写锁下也不会再无限等（旧停止接口实测 15 秒不返回）。
+- `db.task_stop_requested()`：读标志；`runner.request_stop()` 同时置本进程 Event 和 DB 标志，两者任一成功都算请求被接受。读标志走**短连接直读**（不经 `get_conn()` 的每条连接 `journal_mode=WAL`），写锁下实测 0.9ms 返回。
+- `StageContext.stopped()` 增加 DB 检查，带 0.75 秒短缓存；5000 停 5099 的任务，另一个进程在下一个检查点能看到。
+- 生命周期：`start_task_run` 清 0；`finish_task_run` 清 0；`reconcile_orphan_tasks` 遇到 `stop_requested=1` 且进程已死 → 按 `stopped` 收场，不再重新入队。
+- 停止路由的审计改 daemon 线程（复制请求上下文）：审计写库不再阻塞响应；queued 停止顺手清标志。
+- `[285]` 新增：无本地 Event 时 `request_stop` 仍返回 True、假 StageContext 能看到停止、start 清标志。
+- 另做了一次**真双进程**验证：子进程无本地 Event，只靠 DB 标志在 1 个轮询周期内退出。
+
+### 二、OVERLAP 慢查询
+
+- `OVERLAP_EXT_WHERE` 从全局 `domain NOT IN (SELECT domain FROM subdomains WHERE ...)` 改成**相关 NOT EXISTS**；语义不变（#42：46 行 → 18 行；#52：810 → 804，均与改前一致）。
+- 新增 `idx_subdomains_domain_source(domain, source)`；执行计划从全表物化变成 `SEARCH _own USING COVERING INDEX`。
+- 新增 `idx_tasks_status(status, id)`，但改成 `init_db` 里**按列存在与否条件创建**：`[7k]` 的极简老库只有 id/name/targets/stages，无条件建会 `no such column: status`（v20 即因此红）。
+- 重启后实测 #42 详情页 **1.05 秒**、任务列表 0.33 秒。
+
+### 三、验证
+
+- v20 在 `[7k]` 老库补列用例红：`idx_tasks_status` 建在无 `status` 列的极简老表上；已改条件创建，并单测极简老库 `init_db` 通过。
+- 全量 v21 `SMOKE PASS`（2026-11-06 20:50:00–21:06:27，约 16 分 27 秒）；停止轮询直读后 v22 `SMOKE PASS`（21:08:49–21:24:03，约 15 分 14 秒）。
+- 实跑 #61 补 pid/OSINT 后：v23 因 `[218]` 注释污染红；改注释后 v24 `SMOKE PASS`（21:59:38–22:14:08，约 14 分 30 秒，含浏览器 e2e）。
+- 5000 / 5099 已重启到 v24 代码；停止路由实测 0.047 秒返回、DB 标志落库、后台审计也有记录。
+
+### 四、仍未修
+
+
+- 计数三套口径（任务列表 / 页签 / 表格）仍等主理人定口径。
+- 黑名单 `LIKE` 未转义 `%` / `_`。
+- `delete_task` 与旧 runner 的孤儿资产竞态。
+- 5000/5099 双控制台各起 3 个 queue worker（实测共 6 个 `cs-queue-*` 线程）共享一个 SQLite；
+  #53 历史 `database is locked` 就是这一族，需单实例 worker / 主机锁，或把 worker 按主机分摊。
+- 控制台监听 `0.0.0.0` 且 401 边缘门未启用（启动日志每天在报）；部署前必须收口。
+- OSINT 外部源波动大：同一 #61 两次结果 195→25（CT/VT/IP 反查可用性不同）；页面/日志应把“来源未取到”
+  与“没有资产”分开报，而不是只给一个总数。
+
+### 五、实跑 #61 后补的 360-B 修复
+
+- **`tasks.pid` 不刷新（真 bug）**：#61 复跑时 pid 仍是创建任务时的已退出进程（不是本次 worker）。
+  `start_task_run` 现在每次运行写 `pid=os.getpid()`；否则共享队列/重启对账会把正在另一个进程里跑的任务
+  当孤儿重新入队。`[285]` 新增 `start_task_run` pid 回归。
+- **OSINT 递归查第三方域**：`_root_domains()` / `_collect_ips()` 原来读全量 `subdomains`，把
+  `js:mine` / `osint:*` 这些“别人的资产面”当下一轮根域；实测把公开 JS/CDN 域的子域灌进任务。
+  新增 `db.list_own_subdomain_net()`，两处都只取 `list_own_subdomains` / own 口径。`[285]` 新增
+  own/第三方混合资产的根域与反查 IP 回归。
+- **实跑 #61 数字**：旧一轮 936 条 / OSINT 13m22s → 中间 195 条 / 2m39s → 最终 **25 条 / 17.6s**；
+  最终 own 3 条，来源 osint:reverse 16 / js:mine 5 / osint:ctlog 1 / 其余 3 条；公开 JS/CDN 类第三方
+  子域不再入库。最终 `pid=1597698` 就是执行进程，2m56s 完成。
+- **脱敏门禁**：v23 在 `[218]` 红 —— 新注释里写了库内已有资产的注册域；改成“公开 JS/CDN 域”后
+  `[218]` 绿，再跑 v24 全绿。这是注释污染，不是白名单放行。
+
+## 续359（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：清误建资产 + 修 P0 重启丢数据/批量停 queued
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人对续358审计清单回「可以 做」：批准清掉 #54–#58 的误建资产，并修推荐项。
+
+### 一、清理误建资产
+
+- 先做一致备份：`data/scanner.db.bak-358-clean`（75M，未跟踪）。
+- 删除 #54–#58 全部资产表行（subdomains/sites/dirs/certs/ports/vulns/leads/flags），任务行保留为 stopped，便于审计。
+- `subdomains` 991,140 → **4,370** 行；own 行 988k → **436**；库 75M → **1.9M**（VACUUM 后）。
+- 任务 #42 详情页从 **21.6–28.2s 降到 1.1s**；#52 也恢复。根因不是索引，而是每次页签计数都 `NOT IN` 扫 98.8 万 own 行。
+
+### 二、修复
+
+- **单任务重启丢资产**：`api_task_restart` 改成**先解析 options、再 clear_task_assets**；脏 JSON 按 `{}` 降级并 warning，不再出现「资产已清、接口 500」。
+- **批量停止漏 queued**：`api_tasks_bulk` 的 stop 分支对 `queued` 直接置 `stopped` 并 request_stop，不再只 skipped。
+- `[285]` 新增两条回归：脏 options 单任务重启 200；queued 批量 stop 真出队。
+
+### 三、验证
+
+- `[285]` 局部 `SMOKE PASS`。
+- 全量 v19 `SMOKE PASS`（2026-11-06 19:18:37–19:34:07，约 15 分 30 秒，含浏览器 e2e）。
+- 5000 / 5099 两控制台已重启加载本版代码。
+
+### 四、仍未修（下一轮）
+
+- **跨进程停止**：`request_stop` 的 Event 仍是进程内；5000 停不了 5099 正在跑的任务。同步 `_audit` 在 DB 写锁下仍可能让停止请求等。
+- **`OVERLAP_EXT_WHERE` 全局 `NOT IN`**：库再涨回 99 万行时详情页还会慢；清库只是止血，代码仍应改相关 `NOT EXISTS` / 缓存 own 集合。
+- 计数三套口径、黑名单 `LIKE` 未转义 `%/_`、`delete_task` 竞态、双控制台共队列，均按续358清单保留。
+
+## 续358（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：拓展计数三套口径 + 跳转高置信必须二次佐证
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景
+
+主理人看到任务列表「拓展: 31（全 46）」、详情表格「全部（30）」，问为什么不是 30；又举 `godaddy.com` 为反例：过期/邮箱托管跳转落点不该仅凭 3xx 判高，要求增加验证。
+
+### 一、31 与 30 为什么不同
+
+不是同一集合，三处各有一套口径：
+
+- 任务列表 `subs_ext_live=31`：**已解析、按域名去重、排除已归属 own，但包含重叠资产**（31 条已解析里含 23 条重叠）。
+- 详情表格 `全部（30）`：**默认不重叠 18 条 + 自动送探来源行 12 条**；含 15 条已解析、15 条未解析，不是「全部已解析」。
+- 详情页签 `拓展域名 20`：**不重叠且已解析 8 条 + 自动送探来源行 12 条**。
+
+所以 31 不是表格行数，30 也不是全量 46。本轮先解释清楚，未强改计数口径；是否统一成一把尺子需主理人确认。
+
+### 二、跳转高置信反例
+
+真实任务 #52（targ1.ai）中 `email.targ1.ai` 302 到 `sso.godaddy.com/login` / `sso.secureserver.net/login`，这是 Microsoft 365 邮箱托管 SSO，不是目标的资产。旧逻辑 `redirect_extension_roots` 只排除停车/过期页，`apply_redirect_evidence` 则对任何非停车 3xx **无条件判高**，于是 godaddy.com、secureserver.net 等被自动送探建出子任务。
+
+### 三、改动
+
+- `scanner/extdom.py` 新增 `REDIRECT_PROVIDER_ROOTS` / `REDIRECT_INFRA_PATHS` / `redirect_infra_hit()`：识别注册商、邮箱托管、身份提供方、停放商，以及 `/login`、`/sso`、`/auth`、`/domainsearch`、`/parking` 等基础设施路径；纯计算、不发请求。
+- `apply_redirect_evidence()`：
+  - 单靠 3xx、名称/IP/证书没有同源佐证 ⇒ 保持低，不再判高；
+  - 名称已到「中」及以上，再加 3xx 落点 ⇒ 判高（两个独立同源信号）；
+  - 落点是服务商登录/停放基础设施 ⇒ 强制低，并写明原因；
+  - owned 行仍不改写。
+- `probe.redirect_extension_roots()`：遇到服务商/登录基础设施落点直接不入库，扩展域名表不再新增这类噪音；落点**完整 host 也过黑名单**（只查 root 会漏掉用户精确拉黑的 `b.third.test`）。
+- `[335]` 门禁改：low+跳转仍 low、medium+跳转 high、godaddy.com 强制 low、GoDaddy SSO 不写拓展行、精确拉黑 `b.landing335.test` 后落点全拦；`[263]` 复跑 `SMOKE PASS`。
+
+### 四、页面内容与黑名单（回答主理人追问）
+
+- **正文已经在抓**：`probe.attach_redirect_info()` 对每个 3xx 只发一次请求，拿 `redirect_url / redirect_status / redirect_title / redirect_parked`；正文为空时 `redirect_parked=None`，入库层按「判不了」丢弃，不把没看见当没事。没有再加一次抓取。
+- **正文只判停车/过期/出售**（`parked.content_parked` 的 markers）。没有把「Sign in / 登录」这类正文单独判死：目标自家应用的登录页也会命中，单凭正文会误杀真资产；SSO/邮箱托管改用更稳的**落点 host + 路径**识别，再配合黑名单。
+- **黑名单复用全局/账号名单**，不新开第二份「跳转黑名单」：`redirect_extension_roots` 先过 `extdom.auto_expand_block(root)`，再对完整 host 过 `blacklist.matches`；用户把第三方落点写进 `config/blacklist.txt` 或本账号名单后，下次不再入库、也不送探。
+- **策略页补了手工入口**：黑名单区可直接输入 `third-party.com` / `sso.third-party.com`（字段 `manual_domain`），不必先有资产行；同页勾选待移除的 `domain` 不会被误加，手工输入也去重保序。
+
+### 验证
+
+- `[263]` 局部 `SMOKE PASS`（含续335新判据）。
+- 纯函数核对：`godaddy.com` 名称 low → 跳转后仍 low；`landing335.test` 名称中 + 跳转 → high；GoDaddy SSO 落点被入库层过滤。
+- 旧规则已建的 #53–#58 已停（#53 失败、#54–#58 置 stopped）；#59–#61 保留并已完成。六个第三方落点已写入全局黑名单；5000/5099 两个控制台都已重启到同一版代码。
+- 全量 v18 `SMOKE PASS`（2026-11-06 13:39:36–13:53:01，约 13 分 25 秒，含浏览器 e2e）。v17 曾在 `[218]` 脱敏门禁红（新增文档/代码里出现真实注册域），已把目标改成别名、公共厂商加入既有 `_syn218`，单跑 `[218]` 与全量 v18 均过。
+
+### 五、全面审计（2026-11-06，未修，待主理人点单）
+
+按主理人「全面检查项目还有什么 bug」做了一轮只读巡检 + 实机计时，按严重度：
+
+**P0**
+1. `gui/app.py::api_task_restart`：单任务重启用 `db.clear_task_assets()` **先清资产**，之后才 `json.loads(options)`。options 是脏 JSON 时，资产已删、接口 500，任务停在 pending 且没入队。批量重启已做「逐任务降级」，单任务没有。
+2. 停止接口在 DB 写锁下会挂：`api_task_stop` 先 `runner.request_stop()`，随后同步 `_audit()` 写库；实测 `POST /api/tasks/54/stop` 15 秒不返回，最后靠杀 5000 进程才停。并且 `request_stop` 的 Event 是**进程内**的；5000/5099 两个控制台共库时，A 控制台停不了 B 控制台正在跑的任务。
+3. 任务详情页实测 18–25 秒（#42 21.6/28.2s、#52 18.8s；profile 里 `_page_assets` ≈16s、`_tab_counts` ≈8s）。慢 SQL 已抓到：`OVERLAP_EXT_WHERE` 的全局 `domain NOT IN (SELECT domain FROM subdomains WHERE source NOT LIKE 'js:%' ...)` 每次扫约 **98.8 万** 条 own 行（#42 本身只有 47 行也一样）；不是黑名单 `LIKE`。已停的第三方邮件托管任务 #54 独占全库 97.6 万行，停任务不等于清资产。最小修法：相关 `NOT EXISTS` + `(domain, source)` 索引，或缓存 own 注册域集合。
+4. 批量停止只对 `running` 调 `request_stop`，`queued` 行不会一起置 stopped；队列会继续捡。
+
+**P1**
+5. 计数三套口径仍漂：`task_counts_bulk()` 的 `subs_ext_all` 用 `COUNT(*)`，`subs_ext_live` 用 `COUNT(DISTINCT domain)`；`_tab_counts` 排除 `osint:cseg`，`ext_counts` 又不排除；这就是「任务列表 31 / 表格 30 / 页签 20」同屏的根。
+6. `db.blacklist_clause()` 的 `LIKE` 没转义 `%` / `_`：拉黑 `a_b.test` 会误伤 `x.axb.test`；Python 侧 `blacklist.matches()` 不会。已用内存 SQL 复现（SQL 命中、Python 不命中）。
+7. `db.delete_task()` 先删 asset 再删 task；无外键、无删除中标记，旧 runner 在 DELETE 与任务行消失之间仍可 INSERT，留下孤儿资产。
+8. 列表页 2 秒轮询 + 任务详情 11 页签计数，在 99 万行库上叠加；`tasks(status)` 无索引，`get_conn()` 每条连接都跑 `PRAGMA journal_mode=WAL`（建议 busy_timeout 放前、WAL 只在 init 设一次）。
+9. `off_by_default.html` 用 `|safe` 渲染可配置文案（管理员可控，P2 信息级）。
+10. 5000 与 5099 两个 `run_gui.py` 同时持有同一 SQLite 队列；停止/重启工具未统一管理 5099（已知 backlog，现两进程都已重启到同一版代码，但并发队列风险仍在）。
+
+### 验证
+## 续357（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：解析过滤优先于自动送探
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景
+
+主理人问：域名不存在 / 解析超时的行，为什么不留在「显示未解析」里跳过，反而拿去自动送探；解析超时过滤的优先级应该高于子任务探测。
+
+排查确认这是代码口径问题，不是数据问题：
+
+- `_maybe_auto_probe_similar()` 原来把 `extdom.ext_rows(task_id)` **全部 46 行**交给 `similar_candidates()`；后者只看黑名单、第三方清单、CDN、置信度、IP/证书/跳转证据，**没有看 `ip` 是否为空**。
+- `db.RESOLVED_WHERE`（`ip <> ''`）此前只用于拓展页默认收起，注释也写的是「只在展示层收起」，自动送探没有接这道门。
+- 置信度是名称相似度 + 基础设施证据：NXDOMAIN / timeout 的行只要名字像（如 `168.targ1-8cap.com` 共享 `8cap` 品牌词），仍可判高；`apply_ip_evidence` 没 IP 不生效，但名称判据照样生效。
+- `drop_absent_zones()` 只删除注册域 NS 明确 NXDOMAIN 的行，timeout / servfail / 子域 NXDOMAIN 仍保留，所以这些行会一直留在候选池。
+
+结果就是：页面上它们归「显示未解析」，自动送探却按高置信给它们建了子任务。
+
+### 改动
+
+- `scanner/extdom.py::ext_rows()` 增加 `resolved_only=False`；为 True 时 SQL 直接拼 `db.RESOLVED_WHERE`，与「显示未解析」同一口径，不另写第二份判据。
+- `scanner/runner.py::_maybe_auto_probe_similar()`：先取全部行与已解析行，**未解析行在进 `similar_candidates` 之前就跳过**；日志报出跳过条数，返回值新增 `unresolved`。解析门排在开关/完成状态之后，但排在置信度、去重、上限之前。
+- `scanner/db.py`：`RESOLVED_WHERE` 注释更新为「展示层收起 + 自动送探硬门；入库/统计/报告不动」。
+- `[263]` 夹具补 IP，并新增「高置信但未解析」行与「整批都未解析」用例，钉住未解析行不建子任务、不写送探记录。
+
+### 验证
+
+- `[263]` 通过：高置信未解析行被跳过；整批未解析时 `spawned=0`、`unresolved=1`，无子任务。
+- `[178]/[7s]` 回归通过。
+- 真实任务 #42：拓展行 46 条 → 已解析 31 / 未解析跳过 15；新门后的高置信候选 27 条、被闸挡 4 条。
+- 已存在的 9 个子任务 `#43–#51` 是旧规则产物，本轮不追溯删除；新规则只影响之后的自动送探。
+- 全量门禁 v16 待跑。
+
+## 续356（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：拓展表按置信度降序 + 解释「像父任务」
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景
+
+主理人确认来源行已回到表格后，要求「置信度高的降序显示，置信度低的在下面」，并追问为何有些高置信行旁边有「像父任务」字样、有些没有。
+
+### 改动
+
+- `gui/app.py` 新增 `_conf_sort_key` / `_sort_ext_by_conf` / `_sort_ext_groups_by_conf`：
+  - 按 `extdom.conf_rank` 高 → 中 → 低排序；
+  - 同档按 `conf.ratio` 降序；
+  - 任务详情 `#ext`、跨任务 `/extdomains` 分组视图的组内/组间、平铺视图统一使用。
+- 任务详情表格说明补一句「按置信度高 → 中 → 低排序，同档按相似度降序；低置信行在下面」。
+- `[178]` 增加高置信行必须排在低置信行前面的断言；`[7s]` 回归通过。
+
+### 「像父任务」为什么有时不显示
+
+`gui/templates/_conf.html` 的徽章只在 `conf.near` 非空且 `conf.owned` 为假时显示「像 <near>」：
+
+- 名称相似 / 共享品牌词判高：`near` 有值 ⇒ 显示「像 父任务域名」；
+- 同 IP、同证书、3xx 跳转落点判高：`apply_ip_evidence` / `apply_cert_evidence` / `apply_redirect_evidence` 把 `near` 清空或本来就没有可比名称 ⇒ 不显示「像」；理由在徽章 `title` 里；
+- 注册域本来就是已确认资产：`owned=True` ⇒ 显示「自家」，不显示「像」。
+
+所以不是漏显示，是「名字像」与「基础设施/跳转证据判高」两类判据本来就不一样。
+
+### 验证
+
+- `[178]/[7s]` 单组通过。
+- 真实 Chromium CDP 读取任务 #31 前端：`totalRows=20`、`highCount=15`、`lowCount=5`、`firstLowIndex=15`，高置信行全部在前、低置信行沉底；截图 `logs/frontend356.png`。
+- 全量门禁 v15 `SMOKE PASS`（含浏览器 e2e）。
+
+## 续355（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：撤掉顶部汇总，来源行回到拓展表格
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景
+
+主理人看完续354 的截图明确点单：顶部「本任务自动送探记录」这一栏没必要；要的是**底下拓展域名表格里**显示 9 个子任务分别由哪条拓展行、哪个来源接口获取，并在行上显示「已自动送探 → #N」。之前把「可见性」做成了独立汇总，方向错了。
+
+### 改动
+
+- 删除 `gui/templates/_auto_probe_summary.html`，任务详情 `#ext` 与跨任务 `/extdomains` 都不再渲染顶部独立汇总栏。
+- 新增 `auto_probe_source_rows(from_task)`：从 `ext_probes(kind=auto, from_task=本任务)` 取回来源域名，再按本任务 `subdomains` 行还原完整资产行。
+- `task_detail` 的拓展页签把这些来源行**并回 `ext_subs` 表格**：
+  - 即使被「只看不重叠 / 只看已解析」过滤收起，也作为普通拓展行列出；
+  - 来源、来源站点/语法、置信度、IP、CNAME、备注照常显示；
+  - `ext_probe_map` 在合并后统一装配，行内显示「已自动送探 → #N」；
+  - `ext_counts` / `ext_pager.total` / 页签徽标同步纳入这些行。
+- 表格上方只留一句可见说明「自动送探来源行已并入下表」，不再另建 panel。
+- `[178]` 改为钉住：未解析的 auto 来源行必须出现在任务详情默认表格里，且页面不得再出现顶部汇总文案。
+
+### 验证
+
+- `[178]` 单组通过。
+- 界面 #31（DB #42）默认 `/tasks/42`：
+  - 顶部汇总文案消失；
+  - 表格内 16 个「已自动送探 → #」徽章，链接覆盖 #43–#51；
+  - 「全部」计数随并入行更新为 30。
+- 全量门禁 v13 曾因 `[7s]` 徽标总数口径红过并修复；v14 按主理人要求停止，最终以 v15 为准。
+
+## 续354（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：汇总被 `.note` CSS 默认隐藏，不是缓存
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+### 背景
+
+主理人反馈「还是不行」并给出截图：页签栏下方只有一块空白 panel。继续读 CSS 找到真正根因：
+
+`gui/static/style.css` 有 `body:not(.notes-on) .note { display: none; }`，即「说明」按钮没开时，所有 `.note` 元素默认隐藏。续350/351 的汇总片段把正文写在 `<p class="muted small note">` 里，所以面板边框在、文字整段被 CSS 隐藏；用户看到的就是截图里的空白框。之前把它归因为缓存/进程，是误判。no-store 与模板自动重载保留，但不是这次看不到的原因。
+
+### 改动
+
+- `gui/templates/_auto_probe_summary.html`：
+  - 去掉 `.note` 类，改固定 id `auto-probe-summary-text`；
+  - 用内联高对比样式（红框/红字/加粗），不依赖「说明」按钮状态，也不依赖新 CSS 是否缓存；
+  - 加 `【构建 354】` 标记，方便一眼分辨旧页面。
+- `[178]` 增加断言：汇总不得再用 `.note` 类，必须有固定 id 和构建标记。
+
+### 验证
+
+- `[178]` 单组通过。
+- 全量门禁 v12 `SMOKE PASS`；5000/5099 已重启，公网地址复核过固定 id、构建标记和 9 个链接。
+
 ## 续353（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：HTML no-store + 模板自动重载，排除旧页面缓存
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

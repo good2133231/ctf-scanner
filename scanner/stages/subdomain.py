@@ -77,6 +77,68 @@ from ..utils import (is_domain, to_ascii, which, verify_tool, run_cmd, read_line
 
 # 需要做泛解析复核的来源（爆破类来源已自带通配过滤，不重复查询）
 _PASSIVE_SRC = ("subfinder", "passive:")
+# 续362：计入“被动子域硬上限”的来源。FOFA 子域反查也是外部被动来源，一起算；
+# 主动字典/爆破（puredns / dns-brute）不在这里，它们本来就有词表上限。
+_PASSIVE_CAP_SRC = ("subfinder", "passive:", "osint:fofa")
+
+
+def _passive_limits(settings):
+    """返回 `(硬上限, 告警线)`；0 = 不限。配置坏值回退 5 万/1 万。"""
+    cfg = (settings or {}).get("subdomain", {}) or {}
+
+    def _int(key, dflt):
+        try:
+            return max(0, int(cfg.get(key) if cfg.get(key) is not None else dflt))
+        except (TypeError, ValueError):
+            return dflt
+
+    mx = _int("passive_max", 50000)
+    warn = _int("passive_warn", 10000)
+    if mx and warn > mx:
+        warn = mx
+    return mx, warn
+
+
+def _merge_found(found, sources, items, passive_max=0, passive_warn=0,
+                 state=None, logger=None):
+    """把 (name, source) 并入 found/sources；被动来源受硬上限/告警线约束。
+
+    续362 把这段从 `run()` 的闭包里提出来，只为让门禁能直接测 5 万/1 万这道闸，
+    不必起网络或桩整条子域流水线。`state` 跨多次调用保存累计数/已告警/已截断。
+    """
+    state = state if state is not None else {"n": 0, "warned": False, "truncated": False}
+    n = 0
+    for name, src in items:
+        src_s = str(src or "")
+        _is_pas = src_s == "subfinder" or src_s.startswith(_PASSIVE_CAP_SRC)
+        if _is_pas and passive_max > 0:
+            if state["n"] >= passive_max:
+                if not state["truncated"]:
+                    state["truncated"] = True
+                    if logger:
+                        logger.warning(
+                            f"[subdomain] 被动子域达到硬上限 {passive_max}，"
+                            f"后续被动/FOFA 结果不再入库（subdomain.passive_max；"
+                            f"本轮已新增 {state['n']} 个唯一域名）")
+                return n
+            if (passive_warn and state["n"] >= passive_warn
+                    and not state["warned"]):
+                state["warned"] = True
+                if logger:
+                    logger.warning(
+                        f"[subdomain] 被动子域已超过 {passive_warn} 个，"
+                        f"硬上限 {passive_max}（subdomain.passive_max/passive_warn）")
+        # IDN / 中文域名 → punycode（被动来源/外部工具理论上可能回传 Unicode）；
+        # 归一失败按空串丢弃（显式不静默）。ASCII 名字逐字节不变。
+        name = to_ascii((name or "").strip().lower().rstrip(".")) or ""
+        if not name or name in found:
+            continue
+        found.add(name)
+        sources[name] = src
+        n += 1
+        if _is_pas:
+            state["n"] += 1
+    return n
 
 
 def _spread(words, cap, logger=None, knob="limits.brute_max_words", hint=None):
@@ -273,19 +335,14 @@ class SubdomainStage(Stage):
                 ctx.logger.info("[subdomain] 自动拓展：目标自带的子域按子域资产入库 "
                                 + " / ".join(sorted(n for n, s in sources.items() if s == "target")))
 
+        # 续362：被动子域硬上限（跨 subfinder / 内置被动 / FOFA 累计，按唯一域名计）。
+        # 这是一个“安全阀”，不是扫描能力：到顶后只停止**被动**结果入库，主动爆破不受影响。
+        _pcap_max, _pcap_warn = _passive_limits(ctx.settings)
+        _pcap_state = {"n": 0, "warned": False, "truncated": False}
+
         def add_many(items):
-            """items: (name, source) 可迭代；同名只记首个来源。返回新增条数。"""
-            n = 0
-            for name, src in items:
-                # IDN / 中文域名 → punycode（被动来源/外部工具理论上可能回传 Unicode）；
-                # 归一失败按空串丢弃（显式不静默）。ASCII 名字逐字节不变。
-                name = to_ascii((name or "").strip().lower().rstrip(".")) or ""
-                if not name or name in found:
-                    continue
-                found.add(name)
-                sources[name] = src
-                n += 1
-            return n
+            return _merge_found(found, sources, items, _pcap_max, _pcap_warn,
+                                _pcap_state, ctx.logger)
 
         # ---------- 1) subfinder（外部工具优先，`-all` 走全来源）----------
         sf_bin = which(ctx.settings.get("tools", {}).get("subfinder", "subfinder"))
@@ -731,7 +788,7 @@ class SubdomainStage(Stage):
         if ctx.stopped() or not subs:
             return
         cfg = ctx.settings.get("subdomain", {}) or {}
-        cap = int(cfg.get("max_resolve", 500))
+        cap = int(cfg.get("max_resolve", 1000))
         cap_skipped = []
         if len(subs) > cap:
             ctx.logger.info(f"[subdomain] IP/CDN 回填：{len(subs)} 个超过上限 {cap}，"

@@ -107,11 +107,13 @@ REDIRECT_SOURCE = "osint:redirect"
 def redirect_extension_roots(sites, bases, settings=None, owner_id=0):
     """3xx 跳转落点里**够格记成拓展域名**的注册域（纯计算：不发请求、不写库）。
 
-    三条判据缺一不可：
+    四条判据缺一不可：
     1. 落地页正文拿到了，且 `redirect_parked is False` —— True（停车/出售/过期页）丢，
        None（正文为空，判不了）也丢，绝不把"没看见"当成"不是"；
     2. 落点注册域不是自家已确认资产（子域落回自家根域不算拓展）；
-    3. 过黑名单 / 第三方清单 / CDN 三道闸（与自动送探同一份 `extdom.auto_expand_block`）。
+    3. 落点不是注册商/邮箱托管/SSO 登录/停放商基础设施（`extdom.redirect_infra_hit`）；
+    4. 过黑名单 / 第三方清单 / CDN 三道闸（与自动送探同一份 `extdom.auto_expand_block`）；
+       黑名单除注册域外，还要查落点**完整 host**（精确拉黑 `b.third.test` 时不能漏）。
 
     返回 `[(root, 来源站点 url)]`，按注册域去重、保持出现顺序。
     """
@@ -125,10 +127,18 @@ def redirect_extension_roots(sites, bases, settings=None, owner_id=0):
         host = str(urlparse(redir).hostname or "").lower().strip(".") if redir else ""
         if not host:
             continue
+        # 续358：注册商/邮箱托管/SSO 登录页不是目标的资产，落地页不"停车"也不收。
+        if extdom.redirect_infra_hit(redir):
+            continue
         root = targets.root_of(host) or host
         if any(root == b or host == b or host.endswith("." + b) for b in _bases):
             continue
         if extdom.auto_expand_block(root, settings=settings, owner_id=owner_id):
+            continue
+        # 续358：黑名单按条目屏蔽「它自己 + 子域」；落点是 b.third.test、用户拉黑
+        # b.third.test 时，只查 root=third.test 会漏。完整 host 也要过一遍。
+        if host != root and blacklist.matches(
+                host, blacklist.load(settings, owner_id=owner_id)):
             continue
         if root in seen:
             continue
@@ -157,7 +167,7 @@ def register_redirect_extensions(task_id, sites, settings=None, owner_id=0, logg
     if rows:
         db.insert_subdomains(int(task_id), rows)
     if logger:
-        logger.info(f"[probe] 3xx 跳转落点非停车页 → 拓展域名（判高）{len(rows)} 个"
+        logger.info(f"[probe] 3xx 跳转落点非停车页 → 拓展域名（仅记录，不直接判高）{len(rows)} 个"
                     + (f"，已在库跳过 {len(pairs) - len(rows)} 个" if len(pairs) > len(rows) else "")
                     + (f"：{', '.join(r[0] for r in rows[:5])}" if rows else ""))
     return len(rows)

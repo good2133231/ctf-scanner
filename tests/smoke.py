@@ -1386,6 +1386,14 @@ def main():
         assert r.status_code == 302, r.status_code
         assert picked == ["a.smoke.test", "b.smoke.test"], picked   # 去重保序
         assert r.headers["Location"].endswith("/subdomains"), r.headers["Location"]
+        # 策略页「手工加入」走独立字段：同表单里勾选待移除的 domain 不许被误加。
+        picked.clear()
+        r = c.post("/api/blacklist/add", data={
+            "manual_domain": ["manual.smoke.test", "manual.smoke.test"],
+            "domain": ["should-not-add.smoke.test"], "next": "/settings"})
+        assert r.status_code == 302, r.status_code
+        assert picked == ["manual.smoke.test"], picked
+        assert r.headers["Location"].endswith("/settings"), r.headers["Location"]
     finally:
         gui_app.blacklist.add = _orig_bl_add
 
@@ -10805,7 +10813,7 @@ http:
     #      ⑤ 解包只按预期成员名取，`..` / 绝对路径成员**从根上拒绝**（zip slip 不成立）；
     #      ⑥ puredns 在 Windows 无官方产物 → 如实报"只发布 Linux / macOS"，不猜、不自动编译；
     #      ⑦ 回写 settings.yaml 走**逐行文本替换**：中文注释条数 / 行数 / 行尾 / 其它键全不变
-    #         （对照 `config.save_settings()` 的整份重写会把这些注释一次抹掉）；
+    #         （续364 起 `config.save_settings()` 也保住注释，这里仍钉死工具回写只动一行）；
     #      ⑧ 两个显式入口：GUI「外部工具」页管理员可见可点、子用户 403；CLI 附属参数脱离
     #         `--update-tools` 直接报错（不静默忽略）、有工具没装上时退出码非 0。
     import hashlib as _hl7p
@@ -10987,7 +10995,7 @@ http:
     _after_txt7p = _after7p.decode("utf-8")
     assert f"  subfinder: {_r7p1['path']}" in _after_txt7p, "tools.subfinder 必须被改成刚装好的路径"
     assert _after_txt7p.count("#") == _set_txt7p.count("#") > 50, \
-        "回写必须保住中文注释（整份重写会把这些注释抹掉）"
+        "回写必须保住中文注释（真写会改到本机策略配置）"
     assert len(_after_txt7p.splitlines()) == len(_set_txt7p.splitlines()), "行数不得变化"
     assert b"\r\n" in _after7p and b"\n" not in _after7p.replace(b"\r\n", b""), \
         "行尾必须沿用文件原有形态（本仓 settings.yaml 是 CRLF）"
@@ -15143,7 +15151,7 @@ http:
     # ⑤ 「删键」是真删，而且是**逐行**删。只在临时副本上做（把 `config.BASE_DIR` 指过去），
     #    两条反证 + 一条正解：
     #      反证一 `save_settings` 是合并写 → 传一份"没有 token 的字典"进去，键**还在**；
-    #      反证二 它还会整份 `yaml.safe_dump` 重写 → 注释全丢（这就是删键必须走逐行文本的理由）；
+    #      反证二 续364 起它走逐行补丁，中文注释不再被整份重写抹掉；但合并写仍不能物理删键；
     #      正解   `remove_settings_keys` 只碰目标那一行，其余行**一字不动**、注释一条不损。
     _tmp117 = _TMPDIR / "cfg117"
     (_tmp117 / "config").mkdir(parents=True, exist_ok=True)
@@ -15180,8 +15188,8 @@ http:
         assert _cfg117.load_settings()["gui"].get("token"), \
             "反证一没生效：合并写本该**删不掉**那个键（这正是本轮先踩到、才补 remove_settings_keys 的坑）"
         _cmt_after_dump = _cmt_of(_p117.read_text(encoding="utf-8").splitlines())
-        assert _cmt_after_dump == 0, \
-            f"反证二没生效：整份重写后还剩 {_cmt_after_dump} 行注释（本该全丢）"
+        assert _cmt_after_dump > 0, \
+            "续364：保存策略不该再整份 safe_dump 把中文注释洗掉"
 
         _before117 = _fresh_copy117()                    # 基线要在这里重新取（上一步把文件重写了）
         assert _cmt_of(_before117) > 0, "副本里应带着注释，否则「注释不损」这条测了个空"
@@ -18077,7 +18085,7 @@ expression: r0()
     assert '"type": "secret"' in _jl126 and '"secrets": 2' in _jl126, _jl126[:400]
 
     # ---- ⑦ 三方一致：DEFAULTS ↔ settings.yaml ↔ GUI 表单 + POST 映射 ----
-    #      stub save_settings：**绝不真写 config/settings.yaml**（整份重写会洗掉全部中文注释，
+    #      stub save_settings：**绝不真写 config/settings.yaml**（真写会改到本机策略配置，
     #      本轮手测就踩过一次），与 [6l]/[7p] 同一口径。
     from scanner.config import DEFAULTS as _D126
     from gui import app as _gui126
@@ -18131,7 +18139,7 @@ expression: r0()
         assert _cl126.post("/settings", data={"flags_prefixes": " , "}).status_code == 302
         assert _cap127["flags"]["prefixes"] == [], _cap127["flags"]
         assert (ROOT / "config/settings.yaml").read_text(encoding="utf-8") == _yaml126, \
-            "这一路的测试**绝不能写真配置**（save_settings 是整份重写，注释全没）"
+            "这一路的测试**绝不能写真配置**（save_settings 会真写本机配置）"
     finally:
         _gui126.save_settings = _orig126
 
@@ -18604,7 +18612,7 @@ expression: r0()
         assert _cl128.post("/settings", data={"min_severity": "medium"}).status_code == 302
         assert _cap128["limits"]["external_max_requests"] == 0, _cap128["limits"]
         assert (ROOT / "config/settings.yaml").read_text(encoding="utf-8") == _yaml128, \
-            "校准与预检都**不许真写 config/settings.yaml**（整份重写会洗掉注释）"
+            "校准与预检都**不许真写 config/settings.yaml**（真写会改到本机策略配置）"
     finally:
         _gui128.save_settings = _orig128
 
@@ -20608,7 +20616,11 @@ expression: r0()
                             brute_dict_warn_min=warn,
                             **({"brute_combo_max": combo} if combo is not None else {}))
         st["dicts"] = dict(st.get("dicts") or {}, subdomains=str(cur or _big8aq),
-                           subdomains_deep=str(deep or ""))
+                           subdomains_deep=str(deep or ""),
+                           # 续357：本组钉的是「精简 2 + 深档抽样 300 = 302」；
+                           # 动态字典是全局持久文件，扫出过 s3-web 之类前缀后会把 302 变成 303。
+                           # 测试用不存在的路径隔离它，产品行为仍由专门的动态字典用例覆盖。
+                           subdomains_dynamic=str(_d8aq / "dynamic_absent.txt"))
         n = len(_lg8ap)
         tid = db.create_task(f"smoke-8aq-{tag}", "lab8aq.test", ["subdomain"], {})
         ctx = StageContext(tid, "smoke-8aq", parse_lines(["lab8aq.test"]), ["subdomain"],
@@ -21785,7 +21797,7 @@ expression: r0()
             assert _ok167, _note167
             _raw1 = _set167.read_bytes()
             assert len(_raw0.splitlines()) == len(_raw1.splitlines()), "行数变了（替换打成插入？）"
-            assert _raw0.count(b"#") == _raw1.count(b"#"), "注释被吃掉了（那是整份重写的症状）"
+            assert _raw0.count(b"#") == _raw1.count(b"#"), "注释被吃掉了（那是配置回写的症状）"
             assert _raw0.count(b"\r\n") == _raw1.count(b"\r\n"), "行尾形态被改"
             _diff167 = [(a, b) for a, b in zip(_raw0.decode("utf-8").splitlines(),
                                                _raw1.decode("utf-8").splitlines()) if a != b]
@@ -22707,7 +22719,7 @@ expression: r0()
     assert _n_chk145 == 1, f"策略页的「自动提取主域」复选框必须恰好一个：实测 {_n_chk145}"
     assert '"auto_root": f.get("subdomain_auto_root") == "1"' in _apa145, \
         "POST 映射缺 auto_root（页面上勾了也存不进去 = 静默失效）"
-    # 真 POST 一次（stub save_settings：**绝不真写 config/settings.yaml** —— 整份重写会洗掉中文注释）
+    # 真 POST 一次（stub save_settings：**绝不真写 config/settings.yaml** —— 真写会改到本机策略配置）
     _cap145 = {}
 
     def _fake_save145(d):
@@ -22725,7 +22737,7 @@ expression: r0()
         assert c.post("/settings", data={"min_severity": "medium"}).status_code == 302
         assert _cap145["subdomain"]["auto_root"] is False, \
             f"取消勾选必须存成 False：{_cap145.get('subdomain')}"
-        # 页面上没有输入框的两个键必须原样带回（save_settings 是整份重写，漏带＝把键删掉）
+        # 页面上没有输入框的两个键必须原样带回（save_settings 合并写，仍逐键点名）
         assert _cap145["subdomain"]["max_resolve"] == _D145["subdomain"]["max_resolve"]
         assert _cap145["subdomain"]["dns_timeout"] == _D145["subdomain"]["dns_timeout"]
         # 逐段点名"一个键都不许少"。这条是**本轮真踩出来的**：一个打偏 7 行的补丁把 `evasion` 的
@@ -23256,7 +23268,7 @@ expression: r0()
     assert load_settings()["limits"]["ext_probe_max"] == 100, \
         "全任务模式要有默认刹车（0 才是「不限」那一档）"
     assert '"ext_probe_max": int(_l0.get("ext_probe_max", 100) or 0)' in _appsrc8bh, \
-        "POST 映射必须把 ext_probe_max 原样带回（save_settings 是整份重写，漏带＝把键删掉）"
+        "POST 映射必须把 ext_probe_max 原样带回（save_settings 合并写，仍逐键点名）"
     assert 'or "all").strip().lower() == "picked"' in _appsrc8bh, \
         "scope 不给值时必须落回**全任务**，而不是只探勾选"
 
@@ -23502,7 +23514,7 @@ expression: r0()
     assert "  console_logs: false" in _y156, "shipped 配置没跟上 DEFAULTS"
     _app156 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
     assert '"console_logs": f.get("console_logs") == "1"' in _app156, \
-        "POST 映射必须接上这一项（save_settings 整份重写，漏带＝把键删掉）"
+        "POST 映射必须接上这一项（save_settings 合并写，仍逐键点名）"
     _tpl157 = (ROOT / "gui" / "templates" / "settings.html").read_text(
         encoding="utf-8", errors="replace")
     assert 'name="console_logs"' in _tpl157, "控制台段缺 console_logs 勾选框（续157 #1）"
@@ -23955,7 +23967,7 @@ expression: r0()
 
     # ③a **三档分开**（`[8bq]` 立的口径）：代码 DEFAULTS 是 0＝关（不偷改出厂行为），
     #     **随包 `config/settings.yaml` 写 1**（续164 主理人点单「空闲再重试」），合并后的
-    #     生效值才是 1。判据里的"默认"一律只看 DEFAULTS —— 本机那份文件会被策略页整份重写
+    #     生效值才是 1。判据里的"默认"一律只看 DEFAULTS —— 本机那份文件会被策略页改写
     #     （主理人在页面上点一下就变了），拿它当"默认值"就是 §6.2 第一起那一族的复发。
     import yaml as _y164
     _ship164 = _y164.safe_load((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
@@ -25918,6 +25930,10 @@ expression: r0()
     _note341 = _ip341.domain_note("8.8.8.8", ["f341a", "f341b"])
     assert _note341 == 'ip="8.8.8.8" · 历史解析 · 来源=f341a/f341b · 待确认', _note341
     assert "共享IP已截断（120→100）" in _ip341.domain_note("8.8.8.8", ["f341a"], 120, 100)
+    assert "共享IP已截断" not in _ip341.domain_note(
+        "8.8.8.8", ["f341a"], 150, 100, shared=True, kept=10)
+    assert "共享IP（150 个反查域名）" in _ip341.domain_note(
+        "8.8.8.8", ["f341a"], 150, 100, shared=True, kept=10)
 
     # 页面：子域名/站点行都要有“薄弱边界”徽章，任务头也要有汇总横幅
     _tid341 = db.create_task("smoke-341-weak", "weak341.test", ["subdomain"], {})
@@ -27066,31 +27082,38 @@ expression: r0()
     _pm178b2 = db.list_ext_probes(["ccc.targ178.test"])
     assert _pm178b2 and all(k == "probe" for v in _pm178b2.values() for (t, k, _c) in v), \
         "送探仍要记 probe"
-    # 续348：auto 方式的拓展页行徽章（主理人点单「已自动送探标记放到父任务来源行上」）
-    db.insert_subdomains(_tid178b, [("auto.targ178.test", "js:mine")])
+    # 续348/355：auto 方式的来源行必须回到拓展域名表格里，不要顶部独立汇总
+    db.insert_subdomains(_tid178b, [("auto.targ178.test", "js:mine"),
+                                    ("auto-hidden.targ178.test", "js:mine")])
     db._exec("UPDATE subdomains SET ip=? WHERE domain='auto.targ178.test'", ("1.2.3.4",))
-    db.record_ext_probes(_tid178b, _new178, ["auto.targ178.test"], kind="auto")
+    db.record_ext_probes(_tid178b, _new178,
+                         ["auto.targ178.test", "auto-hidden.targ178.test"], kind="auto")
     _html178auto = c.get(f"/extdomains?task={_tid178b}&group=0&all=1").get_data(as_text=True)
     assert "已自动送探 → #" in _html178auto, "续348：auto 方式的行徽章没渲染"
-    # 续350：自动送探子任务汇总直接读送探流水，默认过滤下也要看得到全部子任务
-    assert "本任务自动送探记录（1 个子任务）" in _html178auto, \
-        "续350：跨任务拓展页缺自动送探子任务汇总"
-    assert f'href="/tasks/{_new178}"' in _html178auto, "续350：汇总没链到自动送探子任务"
-    # 续349：用户实际看的是任务详情「拓展域名」页签，两处必须同款徽章 + 可展开重叠
-    _html178d = c.get(f"/tasks/{_tid178b}?all=1&nores=1").get_data(as_text=True)
+    assert "本任务自动送探记录" not in _html178auto, "续355：不要顶部独立汇总栏"
+    # 续356：高置信行必须排在低置信前面（同档 ratio 降序）
+    db.insert_subdomains(_tid178b, [("high.targ178.test", "js:mine"),
+                                    ("zzzzz178.test", "js:mine")])
+    db._exec("UPDATE subdomains SET ip=? WHERE domain IN ('high.targ178.test','zzzzz178.test')",
+             ("1.2.3.4",))
+    # 任务详情默认视图：未解析的 auto 来源行也要并进表格（不是藏在独立汇总里）
+    _html178d = c.get(f"/tasks/{_tid178b}").get_data(as_text=True)
+    assert "auto-hidden.targ178.test" in _html178d, \
+        "续355：自动送探来源行没并进拓展域名表格"
+    assert "已自动送探 → #" in _html178d, "续349/355：表格行缺自动送探徽章"
+    assert "本任务自动送探记录" not in _html178d, "续355：不要顶部独立汇总栏"
+    assert "自动送探来源行已并入下表" in _html178d, \
+        "续355：表格上方要说明来源行已并入，不要另建一栏"
+    assert "表格按<b>置信度高 → 中 → 低</b>排序" in _html178d, \
+        "续356：表格说明没写清排序口径"
+    assert 0 <= _html178d.find("high.targ178.test") < _html178d.find("zzzzz178.test"), \
+        "续356：高置信行没排在低置信行前面"
     # 续353：HTML 不许被浏览器 bfcache/磁盘缓存带回旧界面；模板也要自动重载
     _r178cache = c.get(f"/tasks/{_tid178b}")
     assert _r178cache.headers.get("Cache-Control") == "no-store, max-age=0", \
         "续353：任务详情 HTML 缺 no-store，浏览器可能显示旧缓存页"
     assert c.application.jinja_env.auto_reload is True, \
         "续353：Jinja 模板自动重载没开，改模板后旧进程会继续渲染旧页面"
-    assert "已自动送探 → #" in _html178d, "续349：任务详情 #ext 页签没显示送探徽章"
-    assert "本任务自动送探记录（1 个子任务）" in _html178d, \
-        "续350：任务详情默认视图也要列出自动送探子任务"
-    assert 0 <= _html178d.find("本任务自动送探记录") < _html178d.find('<div class="tabpane active"'), \
-        "续351：汇总不能藏在默认隐藏的 tabpane 里，用户打开任务详情就该看见"
-    assert "自动送探读的是本任务全部入库拓展行" in _html178d, \
-        "续349：详情页没说明『全部（N）』不是自动送探的取数口径"
     assert ("只看不重叠" in _html178d) or ("显示全部（含重叠）" in _html178d), \
         "续349：详情页缺重叠资产展开/收起入口"
     print("[178] 送去探测 ok: 送探记录（probe/append/promote 三方式）+ 随单归属追加 + "
@@ -27826,6 +27849,20 @@ expression: r0()
         assert bool(_blk194m.matches(_d194, _norm194)) is _want194, \
             f"matches 侧判错 {_d194}（与 SQL 漂了）"
     assert db.blacklist_clause([]) == (None, ()), "空清单必须返回无条件"
+    # 续361：条目里的 `%` / `_` 是字面字符，不是 LIKE 通配符；`_` 在域名里合法（_dmarc）。
+    # 不转义时 `xdmarc.example.com` 会被 `_dmarc.example.com` 误拦，`aXXb` 会被 `a%b` 误拦。
+    _wc194 = ["_dmarc.example.com", "a%b.example.com"]
+    _wcwh194, _wcpr194 = db.blacklist_clause(_wc194)
+    for _d194, _want194 in (("_dmarc.example.com", True),
+                            ("sub._dmarc.example.com", True),
+                            ("xdmarc.example.com", False),
+                            ("a%b.example.com", True),
+                            ("aXXb.example.com", False)):
+        _row194 = db._query(f"SELECT '{_d194}' AS domain WHERE " + _wcwh194,
+                            _wcpr194, one=True)
+        assert bool(_row194) is _want194, f"SQL 侧 %/_ 转义判错 {_d194}"
+        assert bool(_blk194m.matches(_d194, _wc194)) is _want194, \
+            f"matches 侧 %/_ 判错 {_d194}"
     # 变异证伪：精确匹配形（丢 LIKE）能命中 apex 行、但命中不了子域行 —— 上面六向里
     # 子域那几条是靠 LIKE 命中的，摘掉 LIKE 就必须漏
     _wh_only194 = " OR ".join(["(domain = ?)"] * len(_ents194))
@@ -30088,7 +30125,9 @@ expression: r0()
                            _p218.read_text(encoding="utf-8", errors="ignore").splitlines()
                            if x.strip() and not x.lstrip().startswith("#")}
         # 续343：takeover 指纹库已删除；厂商白名单只保留仓库公开字典（不再从代码里取）。
-        _syn218 = {"example.com", "evil.com", "xxx.com", "360.cn", "jd.com"}
+        _syn218 = {"example.com", "evil.com", "xxx.com", "360.cn", "jd.com",
+                   # 续358：公共厂商/通用示例，不是授权目标标识；§0.5 明确"公共厂商不替"。
+                   "godaddy.com", "secureserver.net", "awsglobalaccelerator.com", "x.com"}
         _noise218 = {"action.click", "protocol.name", "font.name", "text.name",
                      "password.name", "password.new", "group.name", "radio.name",
                      "weight.name", "upload.info"}
@@ -32117,8 +32156,12 @@ expression: r0()
     db.insert_subdomains(_tid263, [("www.abcd263.test", "passive:smoke263")])   # 已确认资产（对照集）
     db.insert_subdomains(_tid263, [("abdc263.test", "osint:fofa"),              # 高：主标签差 2 步
                                    ("www.abdc263.test", "osint:fofa"),          # 续348：同根完整来源行
+                                   ("abcd263x.test", "osint:fofa"),             # 续357：高但未解析 → 必须跳过
                                    ("zzzqqq263.test", "osint:fofa"),            # 低：差太远
                                    ("mail.abcd263.test", "osint:fofa")])        # 主域名一样 ⇒ 归纳
+    # 续357：自动送探必须先看解析结果；只有已解析行能进候选。
+    db._exec("UPDATE subdomains SET ip='1.2.3.4' WHERE task_id=? "
+             "AND domain IN ('abdc263.test','www.abdc263.test')", (_tid263,))
     db.update_task(_tid263, status="done", progress=100)
     _own263 = {_r["domain"] for _r in db._query(
         "SELECT domain FROM subdomains WHERE task_id=? AND " + db.OWN_SUBDOMAIN_WHERE, (_tid263,))}
@@ -32138,6 +32181,11 @@ expression: r0()
     assert _ko263.get("ext_auto_probe") == 0, "自动建出来的子任务自带 0：防顺着置信度套娃"
     assert _ko263.get("rescan_of") == _tid263 and _ko263.get("ext_depth") == 1, _ko263
     assert "zzzqqq263.test" not in (_r263.get("domains") or []), "低置信不许自动送探"
+    assert _r263.get("unresolved") >= 1, _r263
+    assert "abcd263x.test" not in (_r263.get("domains") or []), \
+        "续357：高置信但未解析的行必须先跳过，不许建子任务"
+    assert not db.list_ext_probes(["abcd263x.test"]).get("abcd263x.test"), \
+        "续357：未解析行连送探记录都不该有"
     assert not [d for d in _r263["domains"] if d.endswith("abcd263.test")], \
         "主域名一样的走归纳，不许再送探（两条路互斥）"
     assert db.list_ext_probes(["abdc263.test"]).get("abdc263.test"), "要记送探记录（页面徽章读它）+ 去重靠它"
@@ -32157,6 +32205,7 @@ expression: r0()
     db.insert_subdomains(_tid263d, [("www.mnop263.test", "passive:smoke263")])
     db.insert_subdomains(_tid263d, [(d, "osint:fofa") for d in
                                     ("mpon263.test", "www.mpon263.test", "mnpo263.test", "mnope263.test", "mnopq263.test")])
+    db._exec("UPDATE subdomains SET ip='1.2.3.4' WHERE task_id=? AND source='osint:fofa'", (_tid263d,))
     db.update_task(_tid263d, status="done", progress=100)
     _r263d = _R263._maybe_auto_probe_similar(
         _Ctx263(_tid263d, {"subdomain": {"ext_auto_probe_max": 2}}, {}), _tid263d, _log263)
@@ -32176,6 +32225,14 @@ expression: r0()
     db.update_task(_tid263e, status="stopped", progress=60)
     assert _R263._maybe_auto_probe_similar(_Ctx263(_tid263e, {}, {}), _tid263e, _log263) \
         .get("reason") == "本轮未正常完成", "stopped/被追加排队的不许自动建"
+    # ②-d 续357：整批都是未解析高置信 ⇒ 解析门优先，一个子任务都不建
+    _tid263u = db.create_task("smoke-263-unresolved", "uvwx263.test\n", ["subdomain"], {})
+    db.insert_subdomains(_tid263u, [("www.uvwx263.test", "passive:smoke263"),
+                                    ("uvwy263.test", "osint:fofa")])   # 高，但 ip 为空
+    db.update_task(_tid263u, status="done", progress=100)
+    _r263u = _R263._maybe_auto_probe_similar(_Ctx263(_tid263u, {}, {}), _tid263u, _log263)
+    assert _r263u.get("spawned") == 0 and _r263u.get("unresolved") == 1, _r263u
+    assert not db.list_child_tasks(_tid263u), "续357：未解析行不许建子任务"
     # 变异证伪（§6.1）：把 `similar_candidates` 打桩成"什么都放行"，低置信那条必须真的红
     _real263 = _ex263.similar_candidates
     _ex263.similar_candidates = lambda *a, **k: {
@@ -32189,7 +32246,7 @@ expression: r0()
     finally:
         _ex263.similar_candidates = _real263
 
-    # 续335：3xx 跳转落点 → 落地页判停车；非停车则注册域进拓展域名并判高
+    # 续335/358：3xx 落点先判停车；非停车只记录落点，单跳转不再判高
     from scanner.stages import probe as _probe335
     _s335 = [{"url": "https://x.origin335.test", "status": 301}]
     _probe335.attach_redirect_info(
@@ -32212,12 +32269,32 @@ expression: r0()
          "redirect_url": "https://www.abcd263.test/", "redirect_status": 200, "redirect_parked": False},
         {"url": "https://u.origin335.test", "status": 301,
          "redirect_url": "https://unknown335.test/", "redirect_status": 200, "redirect_parked": None},
+        {"url": "https://sso.origin335.test", "status": 302,
+         "redirect_url": "https://sso.godaddy.com/login?app=o365&realm=pass",
+         "redirect_status": 200, "redirect_parked": False},
     ]
     _roots335 = _probe335.redirect_extension_roots(_sites335, {"abcd263.test"})
     assert [r for r, _ in _roots335] == ["landing335.test"], _roots335
+    # 续358：黑名单要对**落点完整主机**生效，不能只查注册域。
+    _bl335p = Path(tempfile.mkdtemp(prefix="smoke335-bl-")) / "blacklist.txt"
+    _bl335p.write_text("b.landing335.test\n", encoding="utf-8")
+    _bl335set = {"blacklist": {"enabled": True, "path": str(_bl335p)}}
+    assert _probe335.redirect_extension_roots(
+        _sites335, {"abcd263.test"}, settings=_bl335set) == [], \
+        "拉黑落点主机 b.landing335.test 后，跳转落点必须被拦"
+    # 续358：单靠 3xx 跳转不再判高；名称到「中」+ 跳转才算两个同源信号。
+    _lo335 = _ex263.apply_redirect_evidence(
+        {"level": "low", "label": "低", "owned": False, "ratio": 0.1},
+        {"source": "osint:redirect", "domain": "expired335.test"})
+    assert _lo335["level"] == "low" and "单靠跳转不判高" in _lo335["reason"], _lo335
     _hi335 = _ex263.apply_redirect_evidence(
-        {"level": "low", "label": "低", "owned": False}, {"source": "osint:redirect"})
+        {"level": "medium", "label": "中", "owned": False, "ratio": 0.6},
+        {"source": "osint:redirect", "domain": "landing335.test"})
     assert _hi335["level"] == "high" and _hi335["label"] == "高", _hi335
+    _gd335 = _ex263.apply_redirect_evidence(
+        {"level": "medium", "label": "中", "owned": False, "ratio": 0.6},
+        {"source": "osint:redirect", "domain": "godaddy.com"})
+    assert _gd335["level"] == "low" and "基础设施" in _gd335["reason"], _gd335
     assert _ex263.apply_redirect_evidence(
         {"level": "low", "label": "低", "owned": True},
         {"source": "osint:redirect"})["level"] == "low", "归属行不许被跳转证据改写"
@@ -32227,6 +32304,7 @@ expression: r0()
     _d335 = {r["domain"]: r["source"] for r in db.list_subdomains(_tid335)}
     assert _d335.get("landing335.test") == "osint:redirect", _d335
     assert "for-sale335.test" not in _d335 and "unknown335.test" not in _d335, _d335
+    assert "godaddy.com" not in _d335, "续358：服务商 SSO 落点不许入库成拓展域名"
 
     # ③ 子任务面板三修（前端 + 服务端）：
     #    ③-a 「主任务那行显示成子任务的进度」——轮询必须**先对号再改**，且只认自己那两格
@@ -33250,6 +33328,366 @@ expression: r0()
         f"脏值那一行要把自己降级，不许把后面勾的任务一起带走：{_rb285.get_json()}"
     assert db.get_task(_tb285)["status"] in ("queued", "pending", "running"), db.get_task(_tb285)["status"]
     assert db.get_task(_tb285b)["status"] in ("queued", "pending", "running"), db.get_task(_tb285b)["status"]
+    # ②-b 续359：单任务重启也必须先解析 options 再清资产；旧顺序脏值 500 且资产已没。
+    _tb285c = db.create_task("续359-dirty-single", "example.com", stages=["subdomain"])
+    db.update_task(_tb285c, options="{ 还是脏 JSON", status="done")
+    _rs285 = _c285.post(f"/api/tasks/{_tb285c}/restart")
+    assert _rs285.status_code == 200, _rs285.get_data(as_text=True)[:200]
+    assert db.get_task(_tb285c)["status"] in ("queued", "pending", "running"), \
+        db.get_task(_tb285c)["status"]
+    # ②-c 续359：批量停止 queued 也要真正出队，不能只 skipped。
+    _tq285 = db.create_task("续359-queued-stop", "example.com", stages=["subdomain"])
+    db.update_task(_tq285, status="queued")
+    _rq285 = _c285.post("/api/tasks/bulk", json={"action": "stop", "ids": [_tq285]})
+    assert _rq285.status_code == 200 and _rq285.get_json().get("affected") == 1, _rq285.get_json()
+    assert db.get_task(_tq285)["status"] == "stopped", db.get_task(_tq285)["status"]
+    # ②-c2 续364：queued 任务重启必须先原子出队，不能和 worker 认领叠成同一任务双跑。
+    _tqr285 = db.create_task("续364-queued-restart", "example.com", stages=["subdomain"])
+    db.update_task(_tqr285, status="queued")
+    _rsq285 = _c285.post(f"/api/tasks/{_tqr285}/restart")
+    assert _rsq285.status_code == 200, _rsq285.get_data(as_text=True)[:200]
+    assert _rsq285.get_json().get("ok") is not False, _rsq285.get_json()
+    assert db.get_task(_tqr285)["status"] in ("queued", "pending", "running"), \
+        db.get_task(_tqr285)["status"]
+    _tqb285 = db.create_task("续364-queued-bulk", "example.com", stages=["subdomain"])
+    db.update_task(_tqb285, status="queued")
+    _rbq285 = _c285.post("/api/tasks/bulk", json={"action": "restart", "ids": [_tqb285]})
+    assert _rbq285.status_code == 200 and _rbq285.get_json().get("affected") == 1, \
+        _rbq285.get_json()
+    assert db.get_task(_tqb285)["status"] in ("queued", "pending", "running"), \
+        db.get_task(_tqb285)["status"]
+
+    # ②-d 续360：另一个控制台进程没有本地 Event，只能靠 DB 标志；request_stop 必须返回 True，
+    # 且无 Event 的 StageContext 也要在检查点看到停止。
+    _tcp285 = db.create_task("续360-cross-process-stop", "example.com", stages=["subdomain"])
+    db.update_task(_tcp285, status="running", stop_requested=0)
+    assert _rn285.request_stop(_tcp285) is True, "跨进程停止请求必须落库并返回成功"
+    assert db.task_stop_requested(_tcp285) is True, "stop_requested 未落库"
+    _ctxcp285 = object.__new__(_rn285.StageContext)
+    _ctxcp285.task_id = _tcp285
+    _ctxcp285.stop_event = threading.Event()
+    _ctxcp285.settings = {}
+    assert _ctxcp285.stopped() is True, "无本地 Event 的 ctx 看不到跨进程停止"
+    # 新 run 清零，避免下一次运行继承旧停止请求
+    db.start_task_run(_tcp285, fresh=True)
+    assert db.task_stop_requested(_tcp285) is False, "start_task_run 未清 stop_requested"
+    db.finish_task_run(_tcp285, status="stopped")
+    _rn285._unregister_stop(_tcp285)
+    # ②-e 续360-B：每次开跑必须刷新 pid。旧代码只在 create_task 写一次，
+    # 任务被另一个控制台/重启后的队列认领时仍留着创建者的死 pid，对账会误判孤儿。
+    _tp285 = db.create_task("续360-refresh-pid", "example.com", stages=["subdomain"])
+    db.update_task(_tp285, pid=999999)
+    db.start_task_run(_tp285, fresh=True)
+    assert db.get_task(_tp285)["pid"] == os.getpid(), \
+        f"start_task_run 未刷新 pid：{db.get_task(_tp285)['pid']} != {os.getpid()}"
+    db.finish_task_run(_tp285, status="done")
+    # ②-f 续360-B：OSINT 的根域/反查 IP 只能取 own 口径。js:mine / osint:* 是别人的资产面，
+    # 拿它们继续查证书/VT/CT 会把第三方域的子域灌进任务（#61 实测 192/195）。
+    import scanner.stages.osint as _os360
+    _to285 = db.create_task("续360-osint-own-roots", "example.com", stages=["osint"])
+    db.insert_subdomains(_to285, [("own.example.com", "target", "1.2.3.4"),
+                                  ("cdn.third.test", "js:mine", "5.6.7.8"),
+                                  ("third.test", "osint:vt", "9.9.9.9")])
+    db.set_subdomain_net(_to285, {"own.example.com": ("1.2.3.4", "")})
+    _ctxo285 = object.__new__(_rn285.StageContext)
+    _ctxo285.task_id = _to285
+    _ctxo285.targets = []
+    _ctxo285.settings = {}
+    _ctxo285.stop_event = threading.Event()
+    class _L285:
+        def info(self, *a, **k): pass
+        def warning(self, *a, **k): pass
+        def debug(self, *a, **k): pass
+        def error(self, *a, **k): pass
+    _ctxo285.logger = _L285()
+    _sto285 = object.__new__(_os360.OsintStage)
+    _sto285.ctx = _ctxo285
+    assert _sto285._root_domains() == ["example.com"], _sto285._root_domains()
+    assert _sto285._collect_ips() == ["1.2.3.4"], _sto285._collect_ips()
+    # ②-g 续361：双控制台只允许一个进程起 queue worker；另一个待命，领导退出后自动接管。
+    if os.name != "nt":          # 测试机是 Linux；Windows 走 msvcrt，字段同构，不在门禁里起子进程
+        import subprocess
+        from scanner import queue as _q360
+        _qlock = Path(tempfile.mkdtemp(prefix="cs-qlead-")) / "q.lock"
+        _child = subprocess.Popen(
+            [sys.executable, "-c",
+             "import fcntl,sys,time\n"
+             "f=open(sys.argv[1],'w')\n"
+             "fcntl.flock(f,fcntl.LOCK_EX)\n"
+             "time.sleep(8)\n", str(_qlock)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _orig_claim360 = db.claim_next_queued
+        db.claim_next_queued = lambda: None
+        _qb360 = _q360._Queue()
+        try:
+            time.sleep(0.4)
+            _qok360 = _qb360.start(
+                {"queue": {"workers": 1, "workers_auto": False, "workers_profile": False}},
+                dispatch=lambda tid, mode: None, leader_lock=True, lock_path=_qlock)
+            _qactive360 = lambda: len([t for t in _qb360._threads if t.is_alive()])
+            assert _qok360 is False and _qactive360() == 0, \
+                f"领导锁被占时不应起 worker：ok={_qok360} active={_qactive360()}"
+            _child.terminate(); _child.wait(timeout=3)
+            _qdeadline = time.time() + 5
+            while _qactive360() != 1 and time.time() < _qdeadline:
+                time.sleep(0.1)
+            assert _qactive360() == 1, f"领导退出后未接管：active={_qactive360()}"
+        finally:
+            _qb360.stop()
+            db.claim_next_queued = _orig_claim360
+            if _child.poll() is None:
+                _child.kill()
+    # ②-h 续361：running 任务删除必须拒绝（旧实现 request_stop 后立刻 delete，runner 仍会写孤儿资产）。
+    _tdel361 = db.create_task("续361-delete-running", "example.com", stages=["subdomain"])
+    db.update_task(_tdel361, status="running")
+    _rdel361 = _c285.post(f"/api/tasks/{_tdel361}/delete")
+    assert _rdel361.status_code == 409, _rdel361.status_code
+    assert _rdel361.get_json().get("ok") is False
+    assert db.get_task(_tdel361) is not None, "running 任务被错误删除"
+    db.update_task(_tdel361, status="stopped")
+    db.delete_task(_tdel361, backup=False)
+    # ②-i 续362：三套主数统一。列表 main（subs_ext_live）必须与页签/表格底部同一口径：
+    # 已解析 + 按域名去重 + 排除已归属/cseg/黑名单；括号 subs_ext_all 保留原始入库条数。
+    _tc362 = db.create_task("续362-ext-counts", "example.com", stages=["subdomain"])
+    db.insert_subdomains(_tc362, [
+        ("www.team.test", "target", ""),
+        ("a.partner.test", "osint:vt", ""),
+        ("b.partner.test", "js:mine", ""),
+        ("cseg.partner.test", "osint:cseg", ""),
+        ("bad.partner.test", "osint:ctlog", ""),
+        ("www.team.test", "osint:fofa", ""),
+    ])
+    db.set_subdomain_net(_tc362, {
+        "www.team.test": ("1.2.3.4", ""),
+        "a.partner.test": ("5.6.7.8", ""),
+        "cseg.partner.test": ("9.9.9.9", ""),
+        "bad.partner.test": ("10.10.10.10", ""),
+    })
+    _be362 = ["bad.partner.test"]
+    _c362 = db.task_counts(_tc362, blacklist_entries=_be362)
+    _cb362 = db.task_counts_bulk([_tc362], blacklist_entries=_be362)[_tc362]
+    assert _c362["subs_ext_live"] == _cb362["subs_ext_live"] == 1, (_c362, _cb362)
+    assert _c362["subs_ext_all"] == _cb362["subs_ext_all"] == 5, (_c362, _cb362)
+    assert _c362["subs_ext"] == 5, _c362
+    _ew362, _ep362 = db._ext_display_where(_be362)
+    _, _tot362 = db.page_assets(
+        "subdomains", limit=None, offset=0,
+        extra_where="task_id=? AND " + _ew362 + " AND " + db.RESOLVED_WHERE,
+        extra_params=(_tc362,) + _ep362, dedupe_domain=True)
+    assert _tot362 == 1, f"表格底数与列表 main 不一致：{_tot362}"
+    # ②-j 续362：OSINT 来源状态要落 options，任务详情页必须把“失败”和“空结果”分开显示。
+    _sto285._note_source("ctlog", "CT 日志", "failed", 0, "HTTP 502")
+    _sto285._shared_ips = {"9.9.9.9"}
+    _sto285._save_source_status()
+    import json as _json362
+    _opts362 = _json362.loads(db.get_task(_to285)["options"])
+    _ct362 = [x for x in _opts362.get("osint_sources", []) if x.get("key") == "ctlog"]
+    assert len(_ct362) == 1 and _ct362[0]["status"] == "failed", _opts362
+    assert _opts362.get("iprecon_shared_ips") == ["9.9.9.9"], _opts362
+    _rpage362 = _c285.get(f"/tasks/{_to285}")
+    _html362 = _rpage362.get_data(as_text=True)
+    assert _rpage362.status_code == 200, _rpage362.status_code
+    assert "OSINT 来源" in _html362 and "CT 日志" in _html362, "详情页未渲染来源状态"
+    assert "HTTP 502" in _html362, "来源失败摘要未渲染"
+    assert "osint_sources" not in _html362, "运行配置把来源元数据原始 JSON 又暴露出来了"
+    assert "iprecon_shared_ips" not in _html362, "共享 IP 运行期元数据泄漏到运行配置"
+    # ②-k 续362：被动子域 5 万硬上限/1 万预警；主动爆破不受影响。
+    from scanner.stages import subdomain as _sd362
+    class _L362:
+        def __init__(self): self.lines = []
+        def info(self, m, *a): self.lines.append(str(m))
+        def warning(self, m, *a): self.lines.append(str(m))
+        def error(self, m, *a): self.lines.append(str(m))
+        def debug(self, *a, **k): pass
+    _pl362 = _L362()
+    _ps362 = {"n": 0, "warned": False, "truncated": False}
+    _pf362, _psrc362 = set(), {}
+    _pn362 = _sd362._merge_found(
+        _pf362, _psrc362, [(f"p{i}.example.test", "passive:crt") for i in range(12)],
+        passive_max=5, passive_warn=3, state=_ps362, logger=_pl362)
+    assert _pn362 == 5 and len(_psrc362) == 5, (_pn362, len(_psrc362))
+    assert _ps362["warned"] and _ps362["truncated"], _ps362
+    assert any("硬上限 5" in m for m in _pl362.lines), _pl362.lines
+    _af362, _asrc362 = set(), {}
+    _an362 = _sd362._merge_found(
+        _af362, _asrc362, [(f"a{i}.example.test", "puredns") for i in range(8)],
+        passive_max=5, passive_warn=3, state={"n": 0, "warned": False, "truncated": False})
+    assert _an362 == 8, f"主动爆破被被动上限误伤：{_an362}"
+    _uf362, _usrc362 = set(), {}
+    _un362 = _sd362._merge_found(
+        _uf362, _usrc362, [(f"u{i}.example.test", "passive:crt") for i in range(6)],
+        passive_max=0, passive_warn=3, state={"n": 0, "warned": False, "truncated": False})
+    assert _un362 == 6, f"0 应表示不限：{_un362}"
+    assert _sd362._passive_limits({"subdomain": {"passive_max": 50000,
+                                                 "passive_warn": 10000}}) == (50000, 10000)
+    assert _sd362._passive_limits({"subdomain": {"passive_max": 0,
+                                                 "passive_warn": 10000}})[0] == 0
+
+    # ②-l 续363：共享 IP 反查不能再当“同机=同一目标”的证据；注册商/托管根域自动拦。
+    from scanner import extdom as _exd363, iprecon as _ipr363
+    _ts363 = db.create_task("续363-shared-ip", "brand.test", stages=["osint"])
+    try:
+        _rev363 = ["swap.test", "other1.test", "other2.test", "other3.test", "mail.brand.test"]
+        db.insert_subdomains(_ts363, [("mail.brand.test", "target")]
+                              + [(d, "osint:reverse") for d in _rev363])
+        db.set_subdomain_net(_ts363, {d: ("1.1.1.1", "") for d in _rev363})
+        assert _exd363.shared_reverse_ips(_ts363) == {"1.1.1.1"}, _exd363.shared_reverse_ips(_ts363)
+        _cm363 = _exd363.confirmed_ip_map(_ts363)
+        assert "1.1.1.1" not in _cm363, "共享 IP 仍在 confirmed_ip_map，会被当成同源证据"
+        _cf363 = _exd363.apply_ip_evidence(
+            _exd363.confidence("swap.test", bases={"brand.test"}),
+            {"domain": "swap.test", "ip": "1.1.1.1", "cdn": ""}, _cm363)
+        assert _cf363["level"] == "low", _cf363
+        assert "基础设施" in _exd363.auto_expand_block("bodis.com", settings={}, owner_id=0)
+        assert "共享IP（5 个反查域名）" in _ipr363.domain_note(
+            "1.1.1.1", ["mnemonic"], 5, 100, shared=True)
+    finally:
+        db.delete_task(_ts363, backup=False)
+    # ②-l2 续363：OSINT 反查共享 IP 时，只保留像目标的域名，其余不入拓展。
+    from types import SimpleNamespace as _NS363
+    from scanner.stages.osint import OsintStage as _OS363
+    _ti363 = db.create_task("续363-osint-shared", "brand.test", stages=["osint"])
+    try:
+        _ct363 = _NS363(
+            task_id=_ti363,
+            settings={"iprecon": {"enabled": True, "from_targets": True,
+                                  "shared_ip_min": 5, "max_domains_per_ip": 100}},
+            options={}, logger=_L362(), stopped=lambda: False,
+            workdir="/tmp", targets=[], results={})
+        _st363 = _OS363(_ct363)
+        _st363._collect_ips = lambda: ["1.1.1.1"]
+        _orig_lm363 = _ipr363.lookup_many
+        # 150 个返回域名 > cap 100，但共享过滤后只剩 1 个：备注不能误写「150→100 已截断」。
+        _rev363a = [f"other{i}.test" for i in range(149)] + ["mail.brand.test"]
+        _ipr363.lookup_many = lambda ips, settings, logger=None, stop=None: (
+            {"1.1.1.1": list(_rev363a)},
+            {"sources": {}, "hit_ips": 1, "domain_sources": {}})
+        try:
+            _f363 = _st363._ip_reverse()
+        finally:
+            _ipr363.lookup_many = _orig_lm363
+        assert [d for d, _s, _n in _f363] == ["mail.brand.test"], _f363
+        assert _st363._shared_ips == {"1.1.1.1"}, _st363._shared_ips
+        assert "共享IP（150 个反查域名）" in _f363[0][2], _f363[0][2]
+        assert "共享IP已截断" not in _f363[0][2], _f363[0][2]
+        # 与 own 同 IP、但只有 1 个低相似反查域名：低于共享阈值也要按同机噪声过滤。
+        db.insert_subdomains(_ti363, [("mail2.brand.test", "target")])
+        db.set_subdomain_net(_ti363, {"mail2.brand.test": ("2.2.2.2", "")})
+        _st363._collect_ips = lambda: ["2.2.2.2"]
+        _ipr363.lookup_many = lambda ips, settings, logger=None, stop=None: (
+            {"2.2.2.2": ["other.test"]},
+            {"sources": {}, "hit_ips": 1, "domain_sources": {}})
+        try:
+            _f363b = _st363._ip_reverse()
+        finally:
+            _ipr363.lookup_many = _orig_lm363
+        assert _f363b == [], _f363b
+        assert "2.2.2.2" in _st363._shared_ips, _st363._shared_ips
+        _st363._save_source_status()
+        assert _json362.loads(db.get_task(_ti363)["options"]).get(
+            "iprecon_shared_ips") == ["2.2.2.2"]
+    finally:
+        db.delete_task(_ti363, backup=False)
+
+    # ②-m 续363：over-limit 是“上一轮没轮到”，不是终态；下一轮必须重试并回填。
+    from scanner import dnsq as _dq363
+    _to363 = db.create_task("续363-overlimit", "brand.test", stages=["subdomain"])
+    _orig_rd363, _orig_zs363 = _dq363.resolve_detail, _dq363.zone_state
+    try:
+        db.insert_subdomains(_to363, [("late.brand.test", "osint:vt"),
+                                      ("alive.brand.test", "osint:vt")])
+        db._exec("UPDATE subdomains SET ip_note='over-limit' "
+                 "WHERE task_id=? AND domain='late.brand.test'", (_to363,))
+        _dq363.resolve_detail = lambda host, **kw: ([host], ["1.2.3.4"], "")
+        _dq363.zone_state = lambda base, **kw: "exists"
+        _r363 = _exd363.resolve_extended(
+            _to363, {"subdomain": {"max_resolve": 2, "dns_timeout": 1}}, only_missing=True)
+        _row363 = {r["domain"]: dict(r) for r in db.list_subdomains(_to363)}["late.brand.test"]
+        assert _row363["ip"] == "1.2.3.4", (_r363, _row363)
+    finally:
+        _dq363.resolve_detail, _dq363.zone_state = _orig_rd363, _orig_zs363
+        db.delete_task(_to363, backup=False)
+
+    # ②-n 续363：删除任务必须同时清 ext_probes；否则“已送探”徽章和 runner 跳过判断
+    # 都会指向/记住一个不存在的任务。
+    _td363 = db.create_task("续363-delete-probe", "brand.test", stages=["probe"])
+    _tk363 = db.create_task("续363-delete-child", "brand.test", stages=["probe"],
+                            parent_id=_td363)
+    db.record_ext_probes(_td363, _tk363, ["probe-delete.test"])
+    assert db.list_ext_probes(["probe-delete.test"]), "前置：送探记录没写进去"
+    db.delete_task(_tk363, backup=False)
+    assert not db.list_ext_probes(["probe-delete.test"]), \
+        "删除子任务后 ext_probes 仍留孤儿，会误判已送探"
+    db.delete_task(_td363, backup=False)
+    # 反过来：父任务删除但子任务还活着时，ext_probes 是子任务的历史，不能跟着删。
+    _tp363 = db.create_task("续363-delete-parent", "brand.test", stages=["probe"])
+    _tc363 = db.create_task("续363-keep-child", "brand.test", stages=["probe"],
+                            parent_id=_tp363)
+    db.record_ext_probes(_tp363, _tc363, ["probe-keep.test"])
+    db.delete_task(_tp363, backup=False)
+    _kept363 = db.list_ext_probes(["probe-keep.test"])
+    assert _kept363 and _kept363["probe-keep.test"][0][0] == _tc363, \
+        "删父任务误删了仍存活子任务的送探历史"
+    db.delete_task(_tc363, backup=False)
+    assert not db.list_ext_probes(["probe-keep.test"]), "删子任务后送探历史未清"
+
+    # ②-o 续364：真实落盘不再打桩 —— 原子写/注释/EOL/嵌套更新/损坏告警/密钥目录兜底。
+    import json as _json364
+    from scanner import config as _cfg364
+    _orig_base364 = _cfg364.BASE_DIR
+    try:
+        with tempfile.TemporaryDirectory(dir=str(ROOT / "logs")) as _tmp364:
+            _base364 = Path(_tmp364)
+            (_base364 / "config").mkdir(parents=True, exist_ok=True)
+            (_base364 / "data").mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / "config" / "settings.yaml",
+                            _base364 / "config" / "settings.yaml")
+            _cfg364.BASE_DIR = _base364
+            _cfg364._invalidate_policy_cache()
+            _before364 = (_base364 / "config" / "settings.yaml").read_bytes()
+            _saved364 = _cfg364.save_settings({
+                "iprecon": {"shared_ip_min": 7},
+                "gui": {"login_lockout": {"max_fails_per_ip": 6}}})
+            _after364 = (_base364 / "config" / "settings.yaml").read_bytes()
+            _text364 = _after364.decode("utf-8", "replace")
+            _EOL364 = b"\r\n"
+            assert _saved364["iprecon"]["shared_ip_min"] == 7
+            assert _saved364["gui"]["login_lockout"]["max_fails_per_ip"] == 6
+            assert "续363" in _text364, "整份 safe_dump 把中文注释洗掉了"
+            assert _after364.count(_EOL364) == _before364.count(_EOL364), \
+                "配置保存改变了 CRLF 行尾"
+            assert "shared_ip_min: 7" in _text364
+            assert "max_fails_per_ip: 6" in _text364
+            assert not list((_base364 / "config").glob("*.tmp")), "原子写留下临时文件"
+            assert _cfg364.shared_ip_min() == 7, "共享阈值没有读到新配置"
+            assert _cfg364.shared_ip_min({"iprecon": {"shared_ip_min": 9}}) == 9
+            assert "SHARED_IP_REVERSE_MIN" not in (ROOT / "scanner" / "extdom.py").read_text(
+                encoding="utf-8"), "共享阈值又出现了第二产地"
+            assert _cfg364._POLICY_CACHE["sig"] is not None, "mtime 缓存未生效"
+            # 配置损坏必须显式告警并回默认，不能静默。
+            (_base364 / "config" / "settings.yaml").write_text("gui: [", encoding="utf-8")
+            _cfg364._invalidate_policy_cache()
+            _warns364 = []
+            _real_warn364 = _cfg364._LOGGER.warning
+            _cfg364._LOGGER.warning = lambda *a, **k: _warns364.append(a)
+            try:
+                _fallback364 = _cfg364.load_settings()
+            finally:
+                _cfg364._LOGGER.warning = _real_warn364
+            assert _warns364, "配置损坏没有告警"
+            assert _fallback364["iprecon"]["shared_ip_min"] == \
+                _cfg364.DEFAULTS["iprecon"]["shared_ip_min"]
+            # 空 directory 必须落 BASE_DIR，不能落当前工作目录。
+            _root_secret364 = Path.cwd() / _cfg364.SECRET_FILE
+            _had_root_secret364 = _root_secret364.exists()
+            _sec364, _sw364 = _cfg364.session_secret("")
+            assert (_base364 / _cfg364.SECRET_FILE).exists(), \
+                "空目录没有回退到 BASE_DIR"
+            assert _root_secret364.exists() == _had_root_secret364, \
+                "空目录把会话密钥写到了项目根"
+    finally:
+        _cfg364.BASE_DIR = _orig_base364
+        _cfg364._invalidate_policy_cache()
 
     # ③ StageContext 构造失败 ⇒ 不许把任务留在 running_task_ids 里
     #    （它同时是 GUI「停止/重启按钮亮不亮」的数据源：留一次，那个任务就永远显示"在跑"）
@@ -35465,6 +35903,128 @@ expression: r0()
           "verify_after_js 默认关/"
           "api/tasks/live 只回 running+queued（progress/stage/duration 同列表页口径）/"
           "列表页轮询接线")
+    # [8bz] 续365：FOFA host="<品牌词>" 反查 + 同 IP 佐证（含 CDN / 多 A 任一命中）
+    #      端到端桩跑 osint 阶段，零真实请求；同时钉住置信度链路（页面徽章与自动送探同源）。
+    from scanner import extdom as _ex8bz, fofa as _fo8bz
+    _8bz_orig = _fo8bz.search_host
+    _8bz_calls = []
+    _8bz_assets = []
+    _8bz_ids = []
+
+    def _8bz_host(token, settings, logger=None, size=None):
+        _8bz_calls.append(token)
+        return list(_8bz_assets), len(_8bz_assets), ""
+
+    def _8bz_settings(host_on=True):
+        s = copy.deepcopy(settings)
+        for _k8bz in ("iprecon", "shodan", "quake", "ctlog", "virustotal", "icp"):
+            s[_k8bz] = dict(s.get(_k8bz) or {}, enabled=False)
+        s["passive_urls"] = dict(s.get("passive_urls") or {}, enabled=False)
+        s["fofa"] = dict(s.get("fofa") or {}, enabled=True, cert_enabled=False,
+                         title_enabled=False, host_enabled=host_on,
+                         max_host_queries=10)
+        s["keys"] = {"fofa": {"email": "stub@example.test", "key": "stub"}}
+        return s
+
+    def _8bz_asset(domain, ip):
+        return {"host": "https://" + (domain or ip), "domain": domain,
+                "ip": ip, "port": "443", "title": ""}
+
+    _fo8bz.search_host = _8bz_host
+    try:
+        # ① 纯函数：品牌词提取 / 查询语法 / 引号反斜杠转义
+        assert _fo8bz.host_token("acme-portal.cn") == "acme-portal", \
+            _fo8bz.host_token("acme-portal.cn")
+        assert _fo8bz.host_token("a.acme-portal.com.cn") == "acme-portal", \
+            _fo8bz.host_token("a.acme-portal.com.cn")
+        assert _fo8bz.host_token("abc.com") == "" and _fo8bz.host_token("1234.com") == "", \
+            "过短 / 纯数字品牌词必须零查询"
+        assert _fo8bz.host_token("localhost") == "", "单标签不是注册域"
+        assert _fo8bz.build_host_query('a"b\\c') == 'host="abc"', \
+            _fo8bz.build_host_query('a"b\\c')
+        assert _8bz_orig("", {})[2], "空品牌词必须显式报错而不是发查询"
+
+        # ② 置信度：只认 osint:fofa-host，且不改 owned（归属只由注册域决定）
+        _8bz_low = {"level": "low", "label": "低", "owned": False, "reason": "x"}
+        assert _ex8bz.apply_fofa_host_evidence(
+            dict(_8bz_low), {"source": "osint:fofa"})["level"] == "low", \
+            "其它来源不得凭空提权"
+        _8bz_hi = _ex8bz.apply_fofa_host_evidence(
+            dict(_8bz_low), {"source": _ex8bz.EXT_FOFA_HOST_SOURCE})
+        assert _8bz_hi["level"] == "high" and _8bz_hi["owned"] is False \
+               and _8bz_hi.get("fofa_host_ip_hit"), _8bz_hi
+        assert _ex8bz.apply_fofa_host_evidence(
+            dict(_8bz_low, owned=True),
+            {"source": _ex8bz.EXT_FOFA_HOST_SOURCE})["owned"] is True
+
+        # ③ 端到端：own 行一条非 CDN、一条标 CDN 且解析出多个 A；FOFA 结果只要命中
+        #    其中任意一个 IP 就入库（主理人口径「哪怕是 cdn 哪怕是多 ip 其中一个 ip」）。
+        _8bz_assets = [
+            _8bz_asset("brand2.io", "9.9.9.9"),             # CDN 行的第二个 A → 命中
+            _8bz_asset("direct-partner.net", "1.2.3.4"),     # 非 CDN own IP → 命中
+            _8bz_asset("unrelated.net", "8.8.8.8"),          # 不命中
+            _8bz_asset("", "1.2.3.4"),                       # 裸 IP 命中但无域名 → 不入库
+        ]
+        _8bz_calls.clear()
+        _8bz_tid = db.create_task("smoke-8bz-hit", targets, ["osint"], {"offline": True})
+        _8bz_ids.append(_8bz_tid)
+        db.insert_subdomains(_8bz_tid, [("www.acme-portal.cn", "subfinder"),
+                                        ("cdn.acme-portal.cn", "subfinder")])
+        db.set_subdomain_net(_8bz_tid, {
+            "www.acme-portal.cn": ("1.2.3.4", "", ""),
+            "cdn.acme-portal.cn": ("9.9.9.8, 9.9.9.9", "cloudflare", "")})
+        run_task(_8bz_tid, "smoke-8bz-hit", targets, ["osint"],
+                 {"offline": True}, _8bz_settings())
+        _8bz_got = {(str(r["domain"]), str(r["source"]), str(r["ip"]))
+                    for r in db.list_subdomains(_8bz_tid)
+                    if str(r["source"]).startswith("osint:")}
+        assert _8bz_got == {
+            ("brand2.io", "osint:fofa-host", "9.9.9.9"),
+            ("direct-partner.net", "osint:fofa-host", "1.2.3.4")}, _8bz_got
+        assert _8bz_calls == ["acme-portal"], _8bz_calls
+        _8bz_note = {str(r["domain"]): str(r["note"] or "")
+                     for r in db.list_subdomains(_8bz_tid)}
+        assert 'host="acme-portal"' in _8bz_note["brand2.io"] \
+               and "同 IP 命中 9.9.9.9" in _8bz_note["brand2.io"], _8bz_note
+
+        # ④ 自动送探置信度链路：命中行判高进 keep，同名的普通来源被阈值挡下
+        _8bz_rows = [{"domain": "brand2.io", "source": _ex8bz.EXT_FOFA_HOST_SOURCE,
+                      "ip": "9.9.9.9", "cdn": "", "redirect_url": "",
+                      "redirect_status": 0, "redirect_title": ""}]
+        _8bz_cand = _ex8bz.similar_candidates(
+            _8bz_rows, {"acme-portal.cn"}, min_level="high",
+            settings=_8bz_settings(), confirmed_ips={}, cert_shares={})
+        assert [x["domain"] for x in _8bz_cand["keep"]] == ["brand2.io"], _8bz_cand
+        _8bz_rows[0]["source"] = "osint:fofa"
+        assert not _ex8bz.similar_candidates(
+            _8bz_rows, {"acme-portal.cn"}, min_level="high",
+            settings=_8bz_settings(), confirmed_ips={}, cert_shares={})["keep"], \
+            "没过同 IP 判据的行不得判高"
+
+        # ⑤ 两道零查询闸：开关关 / 没有已解析 IP
+        _8bz_calls.clear()
+        _8bz_off = db.create_task("smoke-8bz-off", targets, ["osint"], {"offline": True})
+        _8bz_ids.append(_8bz_off)
+        db.insert_subdomains(_8bz_off, [("www.acme-portal.cn", "subfinder")])
+        db.set_subdomain_net(_8bz_off, {"www.acme-portal.cn": ("1.2.3.4", "", "")})
+        run_task(_8bz_off, "smoke-8bz-off", targets, ["osint"],
+                 {"offline": True}, _8bz_settings(host_on=False))
+        assert not _8bz_calls, f"host_enabled=False 应零查询：{_8bz_calls}"
+        _8bz_noip = db.create_task("smoke-8bz-noip", targets, ["osint"], {"offline": True})
+        _8bz_ids.append(_8bz_noip)
+        db.insert_subdomains(_8bz_noip, [("www.acme-portal.cn", "subfinder")])
+        run_task(_8bz_noip, "smoke-8bz-noip", targets, ["osint"],
+                 {"offline": True}, _8bz_settings())
+        assert not _8bz_calls, f"没有已解析 IP 应零查询：{_8bz_calls}"
+    finally:
+        _fo8bz.search_host = _8bz_orig
+        for _i8bz in _8bz_ids:
+            db.delete_task(_i8bz, backup=False)
+
+    print("[8bz] 续365 ok: FOFA host=\"品牌词\" 反查 / 同 IP 命中（含 CDN 行·多 A 任一命中）/ "
+          "osint:fofa-host 入库并回填 IP / 置信度判高且页面与自动送探同源 / "
+          "开关关·无已解析 IP 两道零查询闸")
+
     print("SMOKE PASS")
 
 

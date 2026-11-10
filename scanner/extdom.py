@@ -23,15 +23,20 @@
 所有写库路径都过 `blacklist` —— 被拦的域名既不解析也不追加。
 """
 import difflib
+import json
 import re
 from urllib.parse import urlsplit
 
-from . import blacklist, cdn, db, dnsq, iprecon, ml, targets
+from . import blacklist, cdn, config, db, dnsq, iprecon, ml, targets
 from .utils import base_domain, is_domain, pool_run
 
 # 追加来源前缀：以它开头的 source **不属于** `js:` / `osint:`，因此按"自身子域名"对待；
 # 冒号后面原样保留拓展来源（`promote:js:mine`），"分域名而来"的出处一眼可查。
 PROMOTE_PREFIX = "promote:"
+
+# 续365：FOFA `host="<品牌词>"` 反查里**与本任务子域名解析 IP 重合**的那批结果。
+# 只有 IP 命中的行才用这个 source，因此 source 本身就是「同 IP 佐证」的凭据。
+EXT_FOFA_HOST_SOURCE = "osint:fofa-host"
 
 # 分组阶段只取这三列：分组要 `domain`、算"可解析条数"要 `ip`、取回整行要 `id`。
 # 只为分组把这些小列读进内存，而**不是** `SELECT *`（整行含 banner 级的大字段），
@@ -321,12 +326,65 @@ def confidence(name, bases=None, task_id=None):
 
 REDIRECT_SOURCE = "osint:redirect"
 
+# 注册商 / 邮箱托管 / 身份提供方 / 停放商：3xx 落到这些根域只是"服务商登录页"，
+# 不是目标的资产。godaddy.com / secureserver.net 是实测反例：目标邮箱 302 到
+# Microsoft 365 SSO，落点却被当成高置信拓展域名并自动建了子任务（续358）。
+REDIRECT_PROVIDER_ROOTS = frozenset({
+    "godaddy.com", "secureserver.net",          # GoDaddy / Microsoft 365 邮箱 SSO
+    "microsoftonline.com", "office.com", "office365.com", "outlook.com",
+    "namecheap.com", "sedo.com", "afternic.com", "dan.com",
+    "bodis.com", "parkingcrew.net", "awsglobalaccelerator.com",
+})
+# 登录 / SSO / 注册 / 停放 / 交易路径：即使根域不在上面的清单里，也不该按跳转判高。
+REDIRECT_INFRA_PATHS = (
+    "/login", "/sso", "/signin", "/sign-in", "/auth", "/oauth",
+    "/account", "/domainsearch", "/parking", "/checkout", "/register",
+)
+
+
+def redirect_infra_hit(url_or_host):
+    """跳转落点是否只是服务商登录/停放基础设施 → 命中的根域或主机名，否则空串。
+
+    只看 URL / 主机名本身，纯计算、不发请求。`apply_redirect_evidence` 与
+    `probe.redirect_extension_roots` 共用这一份判据（§5.14：同一件事不许两处）。
+    """
+    raw = str(url_or_host or "").strip()
+    if not raw:
+        return ""
+    host = ""
+    path = ""
+    try:
+        if "://" in raw:
+            u = urlsplit(raw)
+            host = _norm(u.hostname)
+            path = str(u.path or "").lower()
+        else:
+            host = _norm(raw)
+    except ValueError:
+        return ""
+    if not host:
+        return ""
+    root = base_of(host)
+    if root and root in REDIRECT_PROVIDER_ROOTS:
+        return root
+    if path:
+        for p in REDIRECT_INFRA_PATHS:
+            if path == p or path.startswith(p + "/") or path.startswith(p + "?"):
+                return host
+    return ""
+
 
 def apply_redirect_evidence(conf, row):
-    """跳转落点证据（续335）：3xx 落地页**不是**停车/过期页 ⇒ 判高。
+    """跳转落点证据（续335 / 续358）：**跳转本身不再直接判高**。
 
     只认 `source=osint:redirect`（probe 阶段写入的唯一产地）；归属行（owned）不动 ——
     那本来就是自家资产，理由不该被"从别处跳来"覆盖。
+
+    判高需要第二个同源信号：
+    - 名称相似度已经到「中」及以上（`conf.level`），再加上 3xx 落点；
+    - 或 IP / 证书证据已经把 `conf.level` 抬到「高」。
+    只有跳转、没有名称/IP/证书佐证 → 保持「低」，不进入自动送探；落到注册商、
+    邮箱托管、SSO 登录页的，直接压「低」并写明原因（godaddy.com 反例）。
     """
     src = str((row or {}).get("source") or "").strip()
     if src != REDIRECT_SOURCE:
@@ -334,8 +392,23 @@ def apply_redirect_evidence(conf, row):
     if (conf or {}).get("owned"):
         return conf
     out = dict(conf or {})
-    out.update(level="high", label="高",
-               reason="站点 3xx 跳转落点，落地页已判定不是停车/域名过期页 —— 按跳转目标判高")
+    domain = str((row or {}).get("domain") or "").strip()
+    _redir = str((row or {}).get("redirect_url") or "").strip()
+    infra = redirect_infra_hit(_redir or domain)
+    if infra:
+        out.update(level="low", label="低",
+                   reason=f"3xx 落点 {infra} 是注册商/邮箱托管/登录基础设施，不是目标的资产；不判高")
+        return out
+    _rank = conf_rank(out.get("level") or "low")
+    if _rank >= conf_rank("high"):
+        out["reason"] = (str(out.get("reason") or "").rstrip("；") + "；同时是站点 3xx 跳转落点").lstrip("；")
+        return out
+    if _rank >= conf_rank("medium"):
+        out.update(level="high", label="高",
+                   reason="站点 3xx 跳转落点 + 名称/基础设施同源佐证，按跳转目标判高")
+        return out
+    out.update(level="low", label="低",
+               reason="站点 3xx 跳转落点，但名称/IP/证书没有同源佐证；单靠跳转不判高")
     return out
 
 
@@ -354,7 +427,56 @@ def auto_expand_block(name, settings=None, owner_id=0, cdn_label=""):
         return "在第三方/CDN 清单里（config/dicts/js_thirdparty.txt），不是自家资产的候选"
     if str(cdn_label or "").strip():
         return f"解析结果标为 CDN（{str(cdn_label).strip()}），那是别人的基础设施"
+    # 续363：反向 IP / 跳转都可能落到注册商、邮箱托管、停放商；它们不是目标资产，
+    # 即使名称相似/共享 IP 抬了置信度，也不该自动建子任务（godaddy/secureserver 实测）。
+    _root = base_of(_norm(name))
+    if _root and _root in REDIRECT_PROVIDER_ROOTS:
+        return f"命中注册商/邮箱托管/停放基础设施根域 {_root}，不是目标的资产"
     return ""
+
+
+# 续363：共享主机判定阈值不再在本模块硬编码，统一走 config.shared_ip_min()；
+# 否则设置页改了 shared_ip_min，新旧任务会按两套口径判共享/同源 IP 证据。
+
+
+def _ip_components(raw):
+    return [x.strip() for x in re.split(r"[,;\s]+", str(raw or "")) if x.strip()]
+
+
+def ip_components(raw):
+    """公开版：给 osint 的 FOFA host 反查拆「多 A 记录」用，与内部同一份口径（§5.14）。"""
+    return _ip_components(raw)
+
+
+def shared_reverse_ips(task_id, settings=None):
+    """本任务里“反向解析返回过多域名”的 IP 集合（共享主机/CDN 段）。
+
+    两个产地：OSINT 阶段落进 `tasks.options.iprecon_shared_ips` 的显式判定，以及
+    `source='osint:reverse'` 行的按 IP 计数兜底（兼容旧任务，像 #32 跑在新代码前）。
+    只拿来做“不能作为同源 IP 证据”的排除，不影响域名本身是否入库。
+    阈值统一从 `config.shared_ip_min()` 取，不在本模块另留一份常量。
+    """
+    out = set()
+    try:
+        task = dict(db.get_task(task_id) or {})
+        try:
+            opts = json.loads(task.get("options") or "{}")
+        except (TypeError, ValueError):
+            opts = {}
+        for ip in (opts.get("iprecon_shared_ips") or []) if isinstance(opts, dict) else []:
+            out.update(_ip_components(ip))
+    except Exception:      # noqa: BLE001 - 读选项失败不能把页面/递归带崩
+        pass
+    counts = {}
+    for r in db._query("SELECT ip, domain FROM subdomains WHERE task_id=? "
+                       "AND source='osint:reverse'", (task_id,)):
+        dom = str(r["domain"] or "").strip().lower()
+        for ip in _ip_components(r["ip"]):
+            counts.setdefault(ip, set()).add(dom)
+    _min = config.shared_ip_min(settings)
+    out.update(ip for ip, doms in counts.items()
+               if len([d for d in doms if d]) >= _min)
+    return out
 
 
 def confirmed_ip_map(task_id):
@@ -363,12 +485,19 @@ def confirmed_ip_map(task_id):
     只收 own 口径的行（判据复用 `db.OWN_SUBDOMAIN_WHERE`，不抄第二遍）；标了 CDN 的行
     不收 —— 同一段 CDN IP 说明不了"是谁的"，收进来会把全网 CDN 客户都判成自家中置信度。
     """
+    shared = shared_reverse_ips(task_id)
     out = {}
     for r in db._query("SELECT domain, ip, cdn FROM subdomains WHERE task_id=? AND "
                        + db.OWN_SUBDOMAIN_WHERE, (task_id,)):
         ip = str(r["ip"] or "").strip()
-        if ip and not str(r["cdn"] or "").strip():
-            out.setdefault(ip, str(r["domain"] or ""))
+        if not ip or str(r["cdn"] or "").strip():
+            continue
+        # 续363：共享 IP 上的 own 行（典型是目标邮箱）不能再把这个 IP 传给别的域名。
+        # 拆成单 IP 建表；ip_evidence 也按单 IP 匹配，避免逗号串只差一个就用不上。
+        for part in _ip_components(ip):
+            if part in shared:
+                continue
+            out.setdefault(part, str(r["domain"] or ""))
     return out
 
 
@@ -387,11 +516,12 @@ def ip_evidence(row, confirmed_ips):
         return ""
     if str((row.get("cdn") if isinstance(row, dict) else "") or "").strip():
         return ""      # 自己就标了 CDN：同 IP 只说明 CDN 段重合，不作佐证
-    hit = confirmed_ips.get(ip)
-    if not hit or hit == dom:
-        return ""      # 同 IP 的就是它自己 ⇒ 不自证
-    return (f"与非 CDN 已确认子域 {hit} 同 IP（{ip}）—— 基础设施重合，"
-            "置信度提到「中」（IP 佐证只作旁证，够不上归属）")
+    for part in _ip_components(ip):
+        hit = confirmed_ips.get(part)
+        if hit and hit != dom:
+            return (f"与非 CDN 已确认子域 {hit} 同 IP（{part}）—— 基础设施重合，"
+                    "置信度提到「中」（IP 佐证只作旁证，够不上归属）")
+    return ""
 
 
 def apply_ip_evidence(conf, row, confirmed_ips):
@@ -413,6 +543,29 @@ def apply_ip_evidence(conf, row, confirmed_ips):
     out.update({"level": "high", "label": conf_label("high"),
                 "reason": why, "near": "", "ip_hit": True})
 
+    return out
+
+
+def apply_fofa_host_evidence(conf, row):
+    """续365：FOFA `host=` 同 IP 命中的行 → 「高」（页面徽章与自动送探共用本函数）。
+
+    判据只有一条：`source == EXT_FOFA_HOST_SOURCE`。这一路在 `osint._fofa_host()` 里已经
+    比对过「FOFA 资产 IP ∈ 本任务子域名解析 IP」，且主理人明确「哪怕是 cdn 哪怕是多 ip
+    其中一个 ip」都要算命中，所以命中集合**刻意不复用** `confirmed_ip_map()` —— 后者只收
+    「非 CDN 的 own 行」，正是这里要放宽的那道闸。
+
+    刻意不动 `owned`：归属仍只由注册域决定（`confidence()`），跨注册域的同 IP 资产是
+    「高置信拓展域名」，不是自家子域；`similar_candidates` 仍按 `not owned` 决定是否送探。
+    """
+    if not isinstance(row, dict) or row.get("source") != EXT_FOFA_HOST_SOURCE:
+        return conf
+    if conf.get("owned") or conf_rank(conf.get("level") or "low") >= conf_rank("high"):
+        return conf
+    out = dict(conf)
+    out.update({"level": "high", "label": conf_label("high"),
+                "reason": "FOFA host= 反查与子域名解析 IP 相同（含 CDN / 多 A 任一命中）"
+                          " —— 基础设施重合",
+                "fofa_host_ip_hit": True})
     return out
 
 
@@ -575,12 +728,14 @@ def similar_candidates(rows, bases, min_level=CONF_DEFAULT, settings=None, owner
         d = _norm(r.get("domain") if isinstance(r, dict) else r)
         if not d:
             continue
-        # 续335：跳转落点证据最后叠加（它与 IP/证书佐证独立，判高后不再被降档）
-        conf = apply_redirect_evidence(
-            apply_cert_evidence(
-                apply_ip_evidence(confidence(d, bases=bases),
-                                  r if isinstance(r, dict) else {}, confirmed_ips),
-                r if isinstance(r, dict) else {}, cert_shares),
+        # 续335/358：跳转证据最后叠加；单跳转只保低，名称/IP/证书有同源佐证才升档
+        conf = apply_fofa_host_evidence(
+            apply_redirect_evidence(
+                apply_cert_evidence(
+                    apply_ip_evidence(confidence(d, bases=bases),
+                                      r if isinstance(r, dict) else {}, confirmed_ips),
+                    r if isinstance(r, dict) else {}, cert_shares),
+                r if isinstance(r, dict) else {}),
             r if isinstance(r, dict) else {})
         why = auto_expand_block(d, settings=settings, owner_id=owner_id,
                                 cdn_label=(r.get("cdn") if isinstance(r, dict) else ""))
@@ -652,11 +807,17 @@ def owner_of(task_id):
     return int(row["owner_id"] or 0) if (row and "owner_id" in row.keys()) else 0
 
 
-def ext_rows(task_id):
-    """任务下的全部拓展域名行（`js:*` / `osint:*`）。"""
-    return [dict(r) for r in db._query(
-        "SELECT * FROM subdomains WHERE task_id=? AND " + db.EXT_SUBDOMAIN_WHERE + " ORDER BY id",
-        (int(task_id),))]
+def ext_rows(task_id, resolved_only=False):
+    """任务下的拓展域名行（`js:*` / `osint:*`）。
+
+    `resolved_only=True` 是自动送探的硬门：**解析优先于置信度/子任务探测**，
+    `ip` 为空（nxdomain / timeout / servfail / over-limit）的行直接不进候选。
+    判据复用 `db.RESOLVED_WHERE`，与拓展页「显示未解析」是同一口径。
+    """
+    sql = ("SELECT * FROM subdomains WHERE task_id=? AND " + db.EXT_SUBDOMAIN_WHERE
+           + (" AND " + db.RESOLVED_WHERE if resolved_only else "")
+           + " ORDER BY id")
+    return [dict(r) for r in db._query(sql, (int(task_id),))]
 
 
 def _host_key(url):
@@ -821,9 +982,11 @@ def resolve_extended(task_id, settings=None, logger=None, only_missing=True,
                      cap=None, workers=None, stopped=None):
     """自动判断拓展域名"存不存在"（纯 DNS 只读），回填 `ip / cname / cdn / ip_note`。
 
-    - `only_missing=True`（默认）只解析**还没结论**的行（ip 与 ip_note 都为空），
-      因此重复调用是幂等的、不会把已有结论冲掉、也不会重复消耗请求；
-    - `cap` 上限沿用 `subdomain.max_resolve`（默认 500），超出的行标 `over-limit`；
+    - `only_missing=True`（默认）只解析**还没结论**的行（ip 为空且 ip_note 为空，
+      或上一轮只被打上 `over-limit`）；因此重复调用是幂等的、不会把已有结论冲掉；
+      `over-limit` 会在下一轮重试，不是终态；
+    - `cap` 上限沿用 `subdomain.max_resolve`（默认 1000），超出的行标 `over-limit`；
+      下一轮/调大上限后会重试，over-limit 不是终态；
     - 返回 `{total, scanned, alive, dead, skipped, blocked}`（**静态可测**：全部走桩解析器）。
     """
     settings = settings or {}
@@ -831,14 +994,18 @@ def resolve_extended(task_id, settings=None, logger=None, only_missing=True,
     limits = settings.get("limits", {}) or {}
     timeout = float(cfg.get("dns_timeout", 3) or 3)
     if cap is None:
-        cap = int(cfg.get("max_resolve", 500) or 500)
+        cap = int(cfg.get("max_resolve", 1000) or 1000)
     if workers is None:
         workers = max(1, min(20, int(limits.get("max_workers", 20) or 20)))
 
     rows = ext_rows(task_id)
     todo = []
     for r in rows:
-        if only_missing and ((r.get("ip") or "").strip() or (r.get("ip_note") or "").strip()):
+        # 续363：over-limit 是“上一轮没轮到”，不是终态；上限调大/重新回填时要能重试。
+        # 其它 ip_note（nxdomain/timeout/blocked 等）仍然不动，保持幂等。
+        _note = (r.get("ip_note") or "").strip()
+        if only_missing and ((r.get("ip") or "").strip()
+                             or (_note and _note != "over-limit")):
             continue
         if r.get("domain"):
             todo.append(r["domain"])
@@ -997,8 +1164,13 @@ def reverse_writeback(ips, task_id, settings=None, logger=None, bases=None, stop
     existing = {str(r["domain"] or "") for r in db.list_subdomains(task_id)}
     pairs, ip_of, notes = [], {}, {}
     _prov = stats.get("domain_sources") or {}
+    _shared_set = shared_reverse_ips(task_id, settings)
+    _shared_min = config.shared_ip_min(settings)
     for ip in clean:
-        for raw in mapping.get(ip) or []:
+        _raw_list = mapping.get(ip) or []
+        _original = len(_raw_list)
+        _is_shared = ip in _shared_set or _original >= _shared_min
+        for raw in _raw_list:
             d = iprecon.normalize_domain(raw)
             if not d or "*" in d or not is_domain(d):
                 continue
@@ -1007,7 +1179,8 @@ def reverse_writeback(ips, task_id, settings=None, logger=None, bases=None, stop
                 continue
             ip_of[d] = ip
             _srcs = [_s for _s in ((_prov.get(ip) or {}).get(d) or []) if _s]
-            notes[d] = iprecon.domain_note(ip, _srcs)
+            notes[d] = iprecon.domain_note(ip, _srcs, _original, 0,
+                                            shared=_is_shared, kept=_original)
             pairs.append((d, ip))
     out["domains"] = len(pairs)
     if not pairs:

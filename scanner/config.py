@@ -6,14 +6,30 @@
   只读、GUI 不碰、默认加入 .gitignore，见 `load_keys()`；
 - `DEFAULTS`：以上文件缺失或损坏时的兜底值。
 """
+import contextlib
 import copy
+import hashlib
 import json
+import logging
 import os
 import pathlib
 import re
 import secrets
+import stat
+import tempfile
+import threading
+
+try:
+    import fcntl
+except ImportError:          # Windows 没有 fcntl；退回进程内线程锁
+    fcntl = None
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
+
+_LOGGER = logging.getLogger(__name__)
+_SETTINGS_IO_LOCK = threading.RLock()      # 双控制台/多请求的配置写串行
+_POLICY_LOCK = threading.RLock()          # 仅保护 mtime 缓存
+_POLICY_CACHE = {"sig": None, "data": None}
 
 # Git Bash / MSYS / WSL 里 `$PWD` 展开成 `/c/Users/...` 这种"盘符式 POSIX 路径"
 # （单个字母的顶层目录 = 盘符，后面才是真正的目录）。
@@ -278,8 +294,13 @@ DEFAULTS = {
         # 子域名资产回填：给每个子域名解析出 A 记录 IP 与 CNAME 链，并按
         # `config/dicts/cdn_cname.txt` 标出 CDN 厂商（纯 DNS 只读查询，不发 HTTP）。
         # 上限控制 DNS 查询量；超出的子域名仍入资产表，只是没有 IP/CDN 这两列。
-        "max_resolve": 500,
+        # 续363：#32 的 827 条拓展曾因 500 卡住 307 条；默认提到 1000，覆盖正常任务。
+        "max_resolve": 1000,
         "dns_timeout": 3,
+        # 续362（主理人点单）：被动子域硬上限/熔断。历史外部大域一次灌入 97.5 万行，
+        # 拖垮库与页面；默认 5 万/任务，1 万开始告警。0 = 不限（不建议）。
+        "passive_max": 50000,
+        "passive_warn": 10000,
         # 子域名收集"要主动且全"：subfinder（-all 全来源）与内置免 key 被动源
         # **取并集**（默认开）。原实现是 elif —— 装了 subfinder 就不跑内置源，
         # 会白丢 crt.sh / certspotter / alienvault 这批证书与情报源。关掉可省时间。
@@ -632,6 +653,9 @@ DEFAULTS = {
         "max_ips": 500,            # 单任务最多反查多少个 IP
         "max_hosts": 200,          # 为收集 IP 最多解析多少个主机名
         "max_domains_per_ip": 100,  # 精确 IP 反查单 IP 最多收多少域名；超出截断并标共享
+        # 续363：一个 IP 反查出 >=N 个域名就按共享主机处理；共享 IP 上的低相似域名
+        # 不再入库、也不再用作 IP 同源证据（GoDaddy 的 15.197/160.153 实测）。
+        "shared_ip_min": 5,
         # 续314（主理人点单）：favicon 反查命中**裸 IP** 时，先探活（80/443 各一发 GET），
         # 活着的再做「IP→域名」（免费源 + FOFA `ip=`），入库标「历史反查·待确认」。
         "from_favicon": True,
@@ -701,6 +725,11 @@ DEFAULTS = {
         #   label     = 标题 token 与域名的某个 label **完全相等**才算相关（默认，最严）
         #   substring = 只要 token 是域名的**子串**就算相关（更宽松，回退/对照用）
         "title_match": "label",
+        # 续365：`host="<注册域首段>"` 反查。产出只在 FOFA 资产 IP 与本任务子域名
+        # 解析 IP 重合时才入库（含 CDN / 多 A 任一命中），所以命中数再多也不会灌噪声，
+        # 不需要"公共词"阈值；查询次数仍由 max_host_queries 封顶。
+        "host_enabled": True,
+        "max_host_queries": 10,
     },
     "ssrf": {
         # A10 SSRF 受控回连（**默认关**）：任务内起一个本机 HTTP 回连监听，把
@@ -988,10 +1017,61 @@ def _deep_merge(base, override):
     return base
 
 
-def load_settings():
+def _settings_paths():
+    cfg = BASE_DIR / "config"
+    return cfg / "settings.yaml", cfg / "settings.json"
+
+
+def _policy_signature(yaml_path, json_path):
+    """缓存键：文件 mtime/size + DEFAULTS 内容；改文件/改默认都立即失效。"""
+    parts = []
+    for p in (yaml_path, json_path):
+        try:
+            st = p.stat()
+            parts.append((str(p), st.st_mtime_ns, st.st_size))
+        except OSError:
+            parts.append((str(p), None, None))
+    try:
+        defaults_sig = hashlib.sha256(json.dumps(
+            DEFAULTS, sort_keys=True, ensure_ascii=False, default=str
+        ).encode("utf-8")).hexdigest()
+    except Exception:      # noqa: BLE001 - 默认值里出现不可序列化对象时退 repr
+        defaults_sig = repr(DEFAULTS)
+    return str(BASE_DIR), defaults_sig, tuple(parts)
+
+
+@contextlib.contextmanager
+def _settings_io_lock():
+    """跨进程文件锁 + 进程内线程锁：5000/5099 共写一份 settings 不丢更新。"""
+    with _SETTINGS_IO_LOCK:
+        if fcntl is None:
+            yield
+            return
+        lock_path = BASE_DIR / "data" / ".settings.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+
+def _invalidate_policy_cache():
+    with _POLICY_LOCK:
+        _POLICY_CACHE["sig"] = None
+        _POLICY_CACHE["data"] = None
+
+
+def _load_policy():
+    """只缓存策略部分；`keys` 由 load_settings() 每次现取，不把解锁状态冻住。"""
+    yaml_path, json_path = _settings_paths()
+    sig = _policy_signature(yaml_path, json_path)
+    with _POLICY_LOCK:
+        if _POLICY_CACHE["sig"] == sig and _POLICY_CACHE["data"] is not None:
+            return copy.deepcopy(_POLICY_CACHE["data"])
     settings = copy.deepcopy(DEFAULTS)
-    yaml_path = BASE_DIR / "config" / "settings.yaml"
-    json_path = BASE_DIR / "config" / "settings.json"
     try:
         if yaml_path.exists():
             import yaml
@@ -1000,49 +1080,209 @@ def load_settings():
         elif json_path.exists():
             _deep_merge(settings, json.loads(json_path.read_text(encoding="utf-8")))
     except ImportError:
-        # 有 settings.yaml 但环境没装 PyYAML：退回 settings.json 读取。
-        # （此前 `import yaml` 写在分支里，ImportError 会被下面的兜底吞掉 → 整份配置失效，
-        #  而 `elif json_path` 永远走不到，save_settings 写出的 json 也就永远读不回来。）
         if json_path.exists():
             _deep_merge(settings, json.loads(json_path.read_text(encoding="utf-8")))
-    except Exception:
-        # 配置损坏时退回默认值，保证框架可用
+    except Exception as e:      # noqa: BLE001 - 坏配置必须留痕，不能静默全回默认
+        _LOGGER.warning("[config] settings 解析失败，已回退出厂默认：%s", e)
         settings = copy.deepcopy(DEFAULTS)
+    with _POLICY_LOCK:
+        _POLICY_CACHE["sig"] = sig
+        _POLICY_CACHE["data"] = copy.deepcopy(settings)
+    return settings
+
+
+def load_settings():
+    settings = _load_policy()
     settings["keys"] = load_keys()
     return settings
 
 
-def _dump(settings):
-    """落盘的**唯一出口**（有 PyYAML 写 yaml，否则退回 json）。
+def shared_ip_min(settings=None):
+    """共享 IP 阈值的**唯一产地**：任务级 overrides → 全局策略 → DEFAULTS。"""
+    cfg = (settings or {}).get("iprecon") or {}
+    val = cfg.get("shared_ip_min")
+    if val in (None, ""):
+        val = (load_settings().get("iprecon") or {}).get("shared_ip_min")
+    try:
+        return max(2, int(val or DEFAULTS["iprecon"]["shared_ip_min"]))
+    except (TypeError, ValueError):
+        return int(DEFAULTS["iprecon"]["shared_ip_min"])
 
-    `keys` 段来自独立的 keys.yaml，**必须剔除**后再落盘 —— 否则 GUI 存一次策略
-    就把第三方凭据复制进了 settings.yaml（正是本项目明确要避免的做法）。
-    """
+
+def _atomic_write_bytes(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        mode = 0o600
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+        tmp = ""
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def _yaml_value(value):
+    """把 Python 值写成**单行** YAML；JSON 的引号/flow 形式本身是合法 YAML。"""
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _split_eol(line):
+    if line.endswith("\r\n"):
+        return line[:-2], "\r\n"
+    if line.endswith("\n"):
+        return line[:-1], "\n"
+    return line, ""
+
+
+def _line_indent(body):
+    return len(body) - len(body.lstrip(" \t"))
+
+
+def _is_content(body):
+    s = body.strip()
+    return bool(s) and not s.startswith("#")
+
+
+def _block_end(lines, start, indent):
+    i = start
+    while i < len(lines):
+        body, _eol = _split_eol(lines[i])
+        if _is_content(body) and _line_indent(body) <= indent:
+            return i
+        i += 1
+    return len(lines)
+
+
+def _find_key(lines, start, end, indent, key):
+    prefix = " " * indent + str(key) + ":"
+    for i in range(start, end):
+        body, _eol = _split_eol(lines[i])
+        if body.startswith(prefix):
+            tail = body[len(prefix):]
+            if not tail or tail[0] in " \t#":
+                return i
+    return None
+
+
+def _replace_value_line(line, value):
+    body, eol = _split_eol(line)
+    m = re.match(r"^(\s*[^:#]+:\s*)(.*)$", body)
+    if not m:
+        return line
+    head, rest = m.group(1), m.group(2)
+    cm = re.search(r"\s+#", rest)
+    comment = rest[cm.start():] if cm else ""
+    return head + _yaml_value(value) + comment + eol
+
+
+def _flatten_patch(data, prefix=()):
+    for k, v in (data or {}).items():
+        if str(k) == "keys":        # 凭据永远不写回 settings.yaml
+            continue
+        path = prefix + (str(k),)
+        if isinstance(v, dict) and v:
+            yield from _flatten_patch(v, path)
+        else:
+            yield path, v
+
+
+def _set_yaml_path(lines, path, value, eol):
+    start, end = 0, len(lines)
+    for depth, key in enumerate(path[:-1]):
+        indent = 2 * depth
+        idx = _find_key(lines, start, end, indent, key)
+        if idx is None:
+            end = _block_end(lines, start, indent)
+            lines.insert(end, " " * indent + str(key) + ":" + eol)
+            idx = end
+        start = idx + 1
+        end = _block_end(lines, start, indent)
+    final = path[-1]
+    indent = 2 * (len(path) - 1)
+    idx = _find_key(lines, start, end, indent, final)
+    if idx is None:
+        lines.insert(end, " " * indent + str(final) + ": " + _yaml_value(value) + eol)
+    else:
+        lines[idx] = _replace_value_line(lines[idx], value)
+
+
+def _patch_settings_yaml(path, data):
+    """逐行文本打补丁：只改/补传入键，中文注释、缩进、CRLF、其它键原样保留。"""
+    with open(path, "r", encoding="utf-8", newline="") as fh:
+        lines = fh.read().splitlines(keepends=True)
+    eol = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+    for p, v in _flatten_patch(data):
+        _set_yaml_path(lines, p, v, eol)
+    _atomic_write_bytes(path, "".join(lines).encode("utf-8"))
+
+
+def _dump(settings):
+    """没有 YAML 可逐行打补丁时的全量出口：原子写、剔除 keys、保留原 EOL。"""
+    settings = copy.deepcopy(settings or {})
     settings.pop("keys", None)
+    yaml_path, json_path = _settings_paths()
     try:
         import yaml
-        (BASE_DIR / "config" / "settings.yaml").write_text(
-            yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        text = yaml.safe_dump(settings, allow_unicode=True, sort_keys=False)
+        target = yaml_path
     except ImportError:
-        (BASE_DIR / "config" / "settings.json").write_text(
-            json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+        text = json.dumps(settings, ensure_ascii=False, indent=2)
+        target = json_path
+    eol = "\n"
+    try:
+        if b"\r\n" in target.read_bytes():
+            eol = "\r\n"
+    except OSError:
+        pass
+    data = text.replace("\r\n", "\n").replace("\n", eol).encode("utf-8")
+    _atomic_write_bytes(target, data)
+    _invalidate_policy_cache()
     return settings
 
 
 def save_settings(data):
-    """合并写入配置（`data` 里没出现的键保持原样 —— 合并语义，不是整份覆盖）。"""
-    settings = load_settings()
-    _deep_merge(settings, data or {})
-    return _dump(settings)
+    """合并写入配置：只补/改传入键，避免整份 safe_dump 把注释一次抹掉。"""
+    data = data or {}
+    with _settings_io_lock():
+        merged = _load_policy()
+        _deep_merge(merged, data)
+        merged.pop("keys", None)
+        yaml_path, _json_path = _settings_paths()
+        if yaml_path.exists():
+            _patch_settings_yaml(yaml_path, data)
+        else:
+            _dump(merged)
+        _invalidate_policy_cache()
+        settings = _load_policy()
+        settings["keys"] = load_keys()
+        return settings
 
 
 def remove_settings_keys(*paths):
     """从配置文件里**删键**（按行删）；返回真正删掉的键名列表，如 `["gui.token"]`。
 
-    为什么不走 `save_settings`：① 它是"合并写" —— 从传入字典里去掉一个键，合并时那份从文件
-    重读出来的字典里**键还在**，等于删不掉；② 更要紧的是它用 `yaml.safe_dump` 整份重写，
-    而 `config/settings.yaml` 里全是解释性注释（每个默认值为什么这么定、踩过什么坑），
-    一次重写**全部蒸发**。所以这里是**逐行文本删除** —— 与外部工具安装器回写 `tools.<名>`
+    为什么不走 `save_settings`：续364 起它也是逐行文本补丁、会保住注释，但语义仍是"合并写" ——
+    从传入字典里去掉一个键，文件里那一行还在，等于删不掉。删键必须物理移除那一行，
+    所以这里是**逐行文本删除** —— 与外部工具安装器回写 `tools.<名>`
     用同一手法：只碰目标那一行，其余字节原样。
     只支持 `("段", "键")` 两层（续117 摘掉的两个登录键是唯一需要它的地方）；键不存在就什么也不做。
     刻意**不顺手删目标键上方的注释** —— 那些注释常常同时服务相邻的键，删错了才是真破坏。
@@ -1052,40 +1292,42 @@ def remove_settings_keys(*paths):
     if text_path.exists():
         # `newline=""` 是**必须**的：默认的通用换行会把整份 CRLF 文件读成 LF 再写回去，
         # 于是一行删除换来 275 行纯 EOL"假变更"（本轮实测踩过 —— 与 §9 的 EOL 纪律同一件事）。
-        with open(text_path, "r", encoding="utf-8", newline="") as fh:
-            lines = fh.read().splitlines(keepends=True)
+        with _settings_io_lock():
+            with open(text_path, "r", encoding="utf-8", newline="") as fh:
+                lines = fh.read().splitlines(keepends=True)
+            for section, key in paths:
+                head, i = f"{section}:", 0
+                while i < len(lines) and lines[i].rstrip("\r\n") != head:
+                    i += 1
+                if i >= len(lines):
+                    continue                       # 没有这一段
+                j = i + 1
+                target = None
+                while j < len(lines):
+                    ln = lines[j].rstrip("\r\n")
+                    if ln.strip() and not ln.startswith((" ", "\t")):
+                        break                      # 回到顶层 = 本段结束
+                    if ln.strip().startswith(f"{key}:"):
+                        target = j
+                        break
+                    j += 1
+                if target is not None:
+                    lines.pop(target)
+                    removed.append(f"{section}.{key}")
+            if removed:
+                _atomic_write_bytes(text_path, "".join(lines).encode("utf-8"))
+                _invalidate_policy_cache()
+        return removed
+    with _settings_io_lock():
+        settings = load_settings()               # 没有 yaml 文件（只有 settings.json）的那一档
         for section, key in paths:
-            head, i = f"{section}:", 0
-            while i < len(lines) and lines[i].rstrip("\r\n") != head:
-                i += 1
-            if i >= len(lines):
-                continue                       # 没有这一段
-            j = i + 1
-            target = None
-            while j < len(lines):
-                ln = lines[j].rstrip("\r\n")
-                if ln.strip() and not ln.startswith((" ", "\t")):
-                    break                      # 回到顶层 = 本段结束
-                if ln.strip().startswith(f"{key}:"):
-                    target = j
-                    break
-                j += 1
-            if target is not None:
-                lines.pop(target)
+            node = settings.get(section)
+            if isinstance(node, dict) and key in node:
+                node.pop(key)
                 removed.append(f"{section}.{key}")
         if removed:
-            with open(text_path, "w", encoding="utf-8", newline="") as fh:
-                fh.write("".join(lines))
+            _dump(settings)
         return removed
-    settings = load_settings()               # 没有 yaml 文件（只有 settings.json）的那一档
-    for section, key in paths:
-        node = settings.get(section)
-        if isinstance(node, dict) and key in node:
-            node.pop(key)
-            removed.append(f"{section}.{key}")
-    if removed:
-        _dump(settings)
-    return removed
 
 
 def resolve(path):
@@ -1118,7 +1360,7 @@ def session_secret(directory):
     但依然不可伪造），并带回一句必须**明说**的警告 —— 静默降级是本仓反复出事的地方。
     已存在且够长的文件一律复用（否则每次重启都把会话打光）；太短视为写坏，重新生成。
     """
-    d = pathlib.Path(str(directory or "")) or BASE_DIR
+    d = pathlib.Path(str(directory)) if str(directory or "").strip() else BASE_DIR
     f = d / SECRET_FILE
     try:
         if f.exists():

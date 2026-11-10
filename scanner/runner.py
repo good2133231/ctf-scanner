@@ -117,34 +117,74 @@ def resume_stages(stages, current_stage):
 # 运行中任务的取消信号表：task_id -> threading.Event
 _STOP_EVENTS = {}
 _STOP_LOCK = threading.Lock()
+# 续360：DB 停止标志的短缓存。阶段循环边界调用 `ctx.stopped()` 非常频繁，
+# 不能每次查库；0.75 秒足够让跨进程停止在"当前批次"内生效，又不会把任务线程
+# 变成 SQLite 轮询器。
+_STOP_DB_CACHE = {}       # task_id -> (flag: bool, checked_monotonic: float)
+_STOP_DB_TTL = 0.75
 
 
 def _register_stop(task_id):
     ev = threading.Event()
     with _STOP_LOCK:
         _STOP_EVENTS[task_id] = ev
+        # 新 run 的旧 DB 标志由开始/结束/对账清零；这里清缓存，保证不继承上一轮。
+        _STOP_DB_CACHE.pop(task_id, None)
     return ev
 
 
 def _unregister_stop(task_id):
     with _STOP_LOCK:
         _STOP_EVENTS.pop(task_id, None)
+        _STOP_DB_CACHE.pop(task_id, None)
+
+
+def _db_stop_requested(task_id):
+    """续360：查库里是否有"另一个进程"写下的停止请求；本地 Event 仍优先。
+
+    返回 True 时顺手把本进程 Event 置位，后续 `ctx.stopped()` 走内存快路径。
+    DB 读失败按 false 处理：不能因为读不到库就把任务误停。
+    """
+    now = time.monotonic()
+    with _STOP_LOCK:
+        ent = _STOP_DB_CACHE.get(task_id)
+    if ent and now - ent[1] < _STOP_DB_TTL:
+        flag = ent[0]
+    else:
+        flag = db.task_stop_requested(task_id)
+        with _STOP_LOCK:
+            _STOP_DB_CACHE[task_id] = (bool(flag), now)
+    if flag:
+        with _STOP_LOCK:
+            ev = _STOP_EVENTS.get(task_id)
+        if ev:
+            ev.set()
+    return bool(flag)
 
 
 def request_stop(task_id):
-    """请求停止任务。返回 True 表示确有运行中的任务被标记（否则说明它已结束）。"""
+    """请求停止任务。
+
+    续360：除了本进程 Event，还必须把 `stop_requested=1` 写进库 —— 5000/5099
+    共库，A 控制台停不了 B 控制台的进程内 Event。返回值只说明"确有运行中的
+    请求被接受"：本进程有 Event，或 DB 更新到 running 行。
+    """
     with _STOP_LOCK:
         ev = _STOP_EVENTS.get(task_id)
+    local = bool(ev)
     if ev:
         ev.set()
-        return True
-    return False
+    persisted = db.request_task_stop(task_id)
+    if local or persisted:
+        with _STOP_LOCK:
+            _STOP_DB_CACHE[task_id] = (True, time.monotonic())
+    return bool(local or persisted)
 
 
 def is_stopped(task_id):
     with _STOP_LOCK:
         ev = _STOP_EVENTS.get(task_id)
-    return bool(ev and ev.is_set())
+    return bool(ev and ev.is_set()) or _db_stop_requested(task_id)
 
 
 def running_task_ids():
@@ -232,7 +272,13 @@ class StageContext:
         在循环边界干净收尾、保留已完成产物；`PipelineRunner` 会用不同文案区分它们。
         """
         th = self.throttle
-        return self.stop_event.is_set() or bool(th and th.exhausted())
+        if self.stop_event.is_set():
+            return True
+        # 续360：跨进程停止 —— 5000/5099 共库时，本进程 Event 不会被对方置位，
+        # 必须看库里的 stop_requested（短缓存，见 `_db_stop_requested`）。
+        if _db_stop_requested(self.task_id):
+            return True
+        return bool(th and th.exhausted())
 
     def append_scope(self):
         """续25「追加式执行」：本次勾选的目标集合（URL/host，已归一化）；非追加返回 None。
@@ -766,8 +812,12 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
     ③ 判据一处都不另写：三道闸（黑名单 / 第三方清单 / CDN）与阈值全部走
        `extdom.similar_candidates` 那一份 —— 放宽它等于把别人的域名当自家资产扫。
 
-    三条退场边界：本轮未正常完成（含被「追加层数」重新排队）⇒ 不建；
-    送探记录里已有 ⇒ 不重复建；超过上限的 ⇒ 不建但在日志里报出条数。
+    四条退场边界（**按优先级**）：
+    ① 解析优先：`ip` 为空的拓展行（nxdomain / timeout / servfail 等）先跳过，
+       不进入置信度判断、不建子任务 —— 与拓展页「显示未解析」同一口径；
+    ② 本轮未正常完成（含被「追加层数」重新排队）⇒ 不建；
+    ③ 送探记录里已有 ⇒ 不重复建；
+    ④ 超过上限的 ⇒ 不建但在日志里报出条数。
     """
     settings = ctx.settings or {}
     options = ctx.options or {}
@@ -777,10 +827,20 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
     if not cur or (cur["status"] or "") != "done":
         return {"spawned": 0, "candidates": 0, "capped": 0, "reason": "本轮未正常完成"}
     min_conf = resolve_ext_confidence(options, settings)
+    _unresolved_n = 0
     try:
+        # 续357（主理人点单）：解析过滤优先级高于子任务探测。未解析行在页面上
+        # 归「显示未解析」，自动送探也必须先跳过；否则名字够像但 NXDOMAIN /
+        # timeout 的行仍会被判高、建出扫不到东西的子任务。
+        _all_ext = extdom.ext_rows(task_id)
+        _resolved_ext = extdom.ext_rows(task_id, resolved_only=True)
+        _unresolved_n = max(0, len(_all_ext) - len(_resolved_ext))
+        if _unresolved_n:
+            logger.info(f"[extdom] 自动送探：解析优先，先跳过 {_unresolved_n} 条未解析拓展行"
+                        "（nxdomain / timeout / servfail 等不进候选）")
         bases = extdom.confirmed_bases(task_id)
         cand = extdom.similar_candidates(
-            extdom.ext_rows(task_id), bases, min_level=min_conf, settings=settings,
+            _resolved_ext, bases, min_level=min_conf, settings=settings,
             owner_id=extdom.owner_of(task_id),
             confirmed_ips=extdom.confirmed_ip_map(task_id),
             cert_shares=extdom.cert_shares(task_id, bases, settings))
@@ -789,10 +849,13 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
         return {"spawned": 0, "candidates": 0, "capped": 0, "reason": "判据异常"}
     blocked = len(cand.get("blocked") or [])
     keep = [c for c in (cand.get("keep") or []) if c.get("domain")]
+    _unresolved_txt = f"；{_unresolved_n} 条未解析已跳过" if _unresolved_n else ""
     if not keep:
         logger.info(f"[extdom] 自动送探：没有达到「{extdom.conf_label(min_conf)}」且主域名不同的"
-                    f"拓展域名（另 {blocked} 个被黑名单/第三方清单/CDN/阈值挡在外面），本轮不建子任务")
-        return {"spawned": 0, "candidates": 0, "capped": 0, "reason": "无候选"}
+                    f"拓展域名（另 {blocked} 个被黑名单/第三方清单/CDN/阈值挡在外面"
+                    f"{_unresolved_txt}），本轮不建子任务")
+        return {"spawned": 0, "candidates": 0, "capped": 0,
+                "unresolved": _unresolved_n, "reason": "无候选"}
     # 续320（主理人 2026-11-03）：送探与去重都按**注册域**算 —— `sub.xxx.credit`
     # 与 `xxx.credit` 是同一批业务的一次探测，否则换个前缀就会被当成新域名重复建任务。
     def _root_of(d):
@@ -885,10 +948,11 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
     logger.info(f"[extdom] 自动送探：{len(keep)} 个达到「{extdom.conf_label(min_conf)}」且主域名不同"
                 f" → 拆成 {len(kids)} 个子任务（每注册域一个，上限 {cap}）"
                 + (f"，另有 {_cap_n} 个注册域超上限未送" if _cap_n else "")
-                + f"；{len(keep) - len(todo)} 个此前已送过探、{blocked} 个被闸挡在外面")
+                + f"；{len(keep) - len(todo)} 个此前已送过探、{blocked} 个被闸挡在外面"
+                + _unresolved_txt)
     return {"spawned": len(kids), "child": kids[-1]["child"],
             "children": kids, "domains": picked_roots,
-            "candidates": len(keep), "capped": _cap_n}
+            "candidates": len(keep), "capped": _cap_n, "unresolved": _unresolved_n}
 
 def shot_retry_targets(task_id):
     """候补重试的候选：读库取「没截成 + 属于可重试档」的站点 URL（**一个请求都不发**）。

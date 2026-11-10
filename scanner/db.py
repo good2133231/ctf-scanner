@@ -89,6 +89,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- `tasks.error` 照旧是人话（给人读的），这一列是给机器判的 —— 两不重复、不互推。
   -- 空串 = 正常跑完（done）或压根没被取消。老库靠 `_COLUMN_PATCHES` 补。
   stop_reason TEXT DEFAULT '',
+  -- 续360：跨进程停止请求（1 = 正在跑这个任务的进程应在下一个检查点收场）。
+  -- 停止请求必须落库：5000/5099 共库，进程内 Event 传不过去。新 run 由 start_task_run 清零。
+  stop_requested INTEGER DEFAULT 0,
   -- 续215-P2-12：**最近一次运行**的单任务资源画像（`scanner/profiling.py`）。
   -- `cpu_seconds` / `cpu_ratio` 是进程 CPU 时间与"几个核"；`peak_rss_mb` 是采样峰值；
   -- `worker_hint` 是 `profiling.suggest_workers` 的建议并发（只会 ≤ 配置值）。
@@ -366,6 +369,9 @@ CREATE INDEX IF NOT EXISTS idx_login_fails_at ON login_fails(at);
 -- COUNT 形态 20 次 71 ms → 5 ms，详情页签的分页形态 34 ms → 9 ms。
 -- 与建表同口径用 `IF NOT EXISTS`：老库启动时原地补，不需要删库重建。
 CREATE INDEX IF NOT EXISTS idx_subdomains_task ON subdomains(task_id);
+-- 续360：OVERLAP_EXT_WHERE 的相关子查询按 (domain, source) 查 own；没有这条索引，
+-- 每条外层行仍会扫整张 subdomains。
+CREATE INDEX IF NOT EXISTS idx_subdomains_domain_source ON subdomains(domain, source);
 CREATE INDEX IF NOT EXISTS idx_sites_task ON sites(task_id);
 CREATE INDEX IF NOT EXISTS idx_ports_task ON ports(task_id);
 CREATE INDEX IF NOT EXISTS idx_csegs_task ON csegs(task_id);
@@ -406,6 +412,10 @@ def init_db():
     with _WRITE_LOCK, get_conn() as conn:
         conn.executescript(SCHEMA)
         _ensure_columns(conn)
+        # 续360：老库兼容用例可能只有 id/name/targets/stages 四列（见 [7k]），
+        # 没有 status；先确认列存在再建索引，绝不因为一条优化把 init_db 打崩。
+        if any(r["name"] == "status" for r in conn.execute("PRAGMA table_info(tasks)")):
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, id)")
         _backfill_display_no(conn)
 
 
@@ -481,6 +491,8 @@ _COLUMN_PATCHES = {
               "display_no": "INTEGER DEFAULT NULL",
               # 续211-P2-10 具名取消原因（枚举见 scanner/cancelcause.py::CAUSES）
               "stop_reason": "TEXT DEFAULT ''",
+              # 续360：跨进程停止请求（老库补列；新库由 SCHEMA 建出）
+              "stop_requested": "INTEGER DEFAULT 0",
               # 续215-P2-12 单任务资源画像（见 SCHEMA 里的同名列注释）
               "cpu_seconds": "REAL DEFAULT 0", "cpu_ratio": "REAL DEFAULT 0",
               "peak_rss_mb": "REAL DEFAULT 0", "profile_wall_s": "REAL DEFAULT 0",
@@ -685,6 +697,86 @@ def update_task(task_id, **fields):
     _exec(f"UPDATE tasks SET {sets} WHERE id=?", (*fields.values(), task_id))
 
 
+def request_task_stop(task_id):
+    """续360：把停止请求**落库**，让另一个控制台进程也能看到。
+
+    只在 `status='running'` 时置位；返回是否真有一行被标记。用 1 秒短连接 +
+    `busy_timeout=1000`：停止接口绝不能像旧版那样在 DB 写锁上无限等（实测 15 秒不返回）。
+    写失败就让调用方回 false，由用户重试；本进程内的 Event 仍会先置位。
+    """
+    try:
+        tid = int(task_id)
+    except (TypeError, ValueError):
+        return False
+    conn = None
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=1.0)
+        conn.execute("PRAGMA busy_timeout=1000")
+        cur = conn.execute(
+            "UPDATE tasks SET stop_requested=1, updated_at=? "
+            "WHERE id=? AND status='running'", (_now(), tid))
+        conn.commit()
+        return cur.rowcount == 1
+    except sqlite3.Error:
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def stop_queued_task(task_id):
+    """续361：原子地把**仍在 queued** 的任务置 stopped；返回是否由本次更新抢到。
+
+    删除 queued 任务时不能先 `update_task(status='stopped')` 再删：worker 的
+    `claim_next_queued()` 也在改同一行，先读后写会把"已认领变 running"的行覆盖成 stopped，
+    任务被删后 worker 还在跑。这里用 `WHERE status='queued'` 的原子 UPDATE 和认领赛跑：
+    只有 rowcount=1 才允许随后 delete；否则交给调用方按 running 处理（拒绝删除）。
+    """
+    try:
+        tid = int(task_id)
+    except (TypeError, ValueError):
+        return False
+    conn = None
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=1.0)
+        conn.execute("PRAGMA busy_timeout=1000")
+        cur = conn.execute(
+            "UPDATE tasks SET status='stopped', stop_requested=0, updated_at=? "
+            "WHERE id=? AND status='queued'", (_now(), tid))
+        conn.commit()
+        return cur.rowcount == 1
+    except sqlite3.Error:
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def task_stop_requested(task_id):
+    """续360：读跨进程停止标志；任务不存在/读失败一律 false（不把查不到当停止）。
+
+    刻意不走 `_query()`/`get_conn()`：后者每条连接都执行 `PRAGMA journal_mode=WAL`，
+    写锁竞争时可能让轮询自己先失败/变慢。这里只读一行、短超时，WAL 下读不被写阻塞。
+    """
+    try:
+        tid = int(task_id)
+    except (TypeError, ValueError):
+        return False
+    conn = None
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=1.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=1000")
+        row = conn.execute("SELECT stop_requested FROM tasks WHERE id=?",
+                           (tid,)).fetchone()
+        return bool(row and int(row["stop_requested"] or 0))
+    except sqlite3.Error:
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 # ---------- 持久化任务队列（续49）----------
 # 设计要点（为什么是"入队 + worker 消费"而不是"直接起线程"）：
 # GUI 原来是 `threading.Thread(target=run_task, ...)`，进程一重启线程就没了、任务却仍挂
@@ -778,7 +870,13 @@ def start_task_run(task_id, fresh=False, **fields):
     # 续231：**追加 / 续跑不许把进度归零**（续230 只修了 runner，队列认领这一处还在打回 0）。
     # 只有 fresh 才归零；append/resume 保留当前进度，由 `runner.run()` 以 `_base` 继续推进。
     fields.update({"status": "running", "current_stage": "",
-                   "started_at": _now(), "finished_at": ""})
+                   "started_at": _now(), "finished_at": "",
+                   # 续360：新一次运行从"未被要求停止"开始；旧标志绝不能继承
+                   "stop_requested": 0,
+                   # 续360-B：pid 必须是**本次执行进程**。create_task 只在建任务时写一次；
+                   # 任务被另一个控制台/重启后的队列认领时，旧代码仍留着创建者的死 pid，
+                   # 对账会把它当孤儿重新入队（可能两个进程同时跑）。
+                   "pid": os.getpid()})
     if fresh:
         fields["progress"] = 0
         fields["elapsed_seconds"] = 0
@@ -806,7 +904,7 @@ def finish_task_run(task_id, ended_at=None, **fields):
     """
     end = str(ended_at).strip() if ended_at else _now()
     sets = "".join(f"{k}=?, " for k in fields)
-    _exec(f"UPDATE tasks SET {sets}finished_at=?, "
+    _exec(f"UPDATE tasks SET {sets}stop_requested=0, finished_at=?, "
           "elapsed_seconds = COALESCE(elapsed_seconds, 0) + "
           "MAX(0, strftime('%s', ?) - COALESCE(strftime('%s', started_at), strftime('%s', ?))), "
           "updated_at=? WHERE id=?",
@@ -1047,13 +1145,20 @@ def reconcile_orphan_tasks():
     """
     handled = []
     try:
-        rows = _query("SELECT id, pid, updated_at, run_mode, current_stage "
+        rows = _query("SELECT id, pid, updated_at, run_mode, current_stage, stop_requested "
                       "FROM tasks WHERE status='running'")
         for r in rows:
             if _pid_alive(r["pid"]):
                 continue
             tid = r["id"]
             try:
+                # 续360：进程死前用户已请求停止 → 按 stopped 收场，不许当孤儿重新入队。
+                if int(r["stop_requested"] or 0):
+                    finish_task_run(tid, ended_at=r["updated_at"], status="stopped",
+                                    stop_reason="user_stop")
+                    append_task_error(tid, "进程重启前已请求停止，按 stopped 收场（启动时对账）")
+                    handled.append(tid)
+                    continue
                 mode = str(r["run_mode"] or "").strip().lower()
                 if mode in _QUEUE_MODES:
                     # 带队列运行规格 → 重新入队（保留 run_payload，worker 能原样重建这次运行）
@@ -1320,13 +1425,42 @@ def delete_task(task_id, backup=True):
         except OSError as e:
             print(f"[db] 警告：任务 #{task_id} 删除前备份失败：{e}")
     clear_task_assets(task_id)
+    # 续363：只删“被删任务作为送探结果”的记录，避免徽章指向不存在的任务；
+    # 父任务被删、子任务还活着时，from_task 历史按 list_child_tasks 的口径保留。
+    _exec("DELETE FROM ext_probes WHERE task_id=?", (task_id,))
     _exec("DELETE FROM tasks WHERE id=?", (task_id,))
 
 
-def task_counts(task_id):
-    """任务资产计数（任务列表「统计」列用）。"""
-    def count(sql):
-        row = _query(sql, (task_id,), one=True)
+def _ext_display_where(blacklist_entries=None, outer="subdomains"):
+    """续362：拓展域名**展示主数**的唯一 SQL 口径（任务列表/页签/表格底部共用）。
+
+    主数 = 拓展来源 + 已解析 + 按 domain 去重 + 排除已归属(OVERLAP) + 排除 osint:cseg
+    + 排除黑名单。`outer` 只允许内部常量 `subdomains` 或 bulk 查询的别名 `s`，
+    不接用户输入。返回 `(where, params)`；params 只含黑名单参数，调用方把 task_id/ids
+    放在前面。
+    """
+    # 子查询里的 source 必须限定到 _own；把 outer 写进 own 判据会变成“外层这行是不是
+    # own”，于是同一个域名下的 osint: 重复行也被当成 own 行，overlap 永远排除不掉。
+    overlap = ("NOT EXISTS (SELECT 1 FROM subdomains AS _own "
+               f"WHERE _own.domain = {outer}.domain AND {_OWN_ALIASED})")
+    where = EXT_SUBDOMAIN_WHERE + " AND source <> 'osint:cseg' AND " + overlap
+    bl_where, bl_params = blacklist_clause(blacklist_entries or ())
+    if bl_where:
+        where += " AND NOT " + bl_where
+    return where, tuple(bl_params)
+
+
+def task_counts(task_id, blacklist_entries=None):
+    """任务资产计数（任务列表「统计」列用）。
+
+    续362：ext 主数走 `_ext_display_where`，与详情页签、表格底部“共 N 条拓展域名”同一口径。
+    括号里的 `subs_ext_all` 是**全部入库行数**（含未解析/重复/cseg/黑名单），只用于解释
+    “为什么主数比入库少”，不参与任何页面主数。`blacklist_entries` 由 GUI 按当前 owner 传入。
+    """
+    _ext_where362, _bl_params362 = _ext_display_where(blacklist_entries)
+
+    def count(sql, params=None):
+        row = _query(sql, params if params is not None else (task_id,), one=True)
         return row["c"] if row else 0
     return {
         "sites": count("SELECT COUNT(*) c FROM sites WHERE task_id=?"),
@@ -1348,8 +1482,9 @@ def task_counts(task_id):
         # - `site_hosts`：站点按 URL 行计数（http/https 各一条），括号里报去重主机数；
         # - `*_live`：已解析（`RESOLVED_WHERE`）+ 按 domain 去重 —— 与 `page_assets(dedupe_domain=True)`
         #   的页签徽标一致；
-        # - `*_all`：`subs_own_all` 是入库**域名数**（含未解析）；`subs_ext_all` 是入库**条数**
-        #   （与拓展页「全部（N）」逐字一致：含未解析、同域多来源各算一条，另排除已归属本项目的行）。
+        # - `*_all`：`subs_own_all` 是入库**域名数**（含未解析）；`subs_ext_all` 是**原始入库条数**
+        #   （含未解析、同域多来源各算一条、cseg/黑名单），仅解释“主数为何比入库少”，不再声称
+        #   与拓展页「全部（N）」一致（那个 N 仍走筛选后的行数）。
         # 旧键 `subs_own` / `subs_ext`（原始行数）保留：门禁 [8br] 钉的是"分档不漏一条"，
         # 与展示口径是两件事，不能互相顶掉。
         "site_hosts": count("SELECT COUNT(DISTINCT CASE WHEN TRIM(COALESCE(host,''))<>'' "
@@ -1362,18 +1497,15 @@ def task_counts(task_id):
             + OWN_SUBDOMAIN_WHERE),
         "subs_ext_live": count(
             "SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE task_id=? AND "
-            + EXT_SUBDOMAIN_WHERE + " AND " + RESOLVED_WHERE
-            + " AND domain NOT IN (SELECT o.domain FROM subdomains o "
-            "WHERE o.task_id=subdomains.task_id AND " + OWN_SUBDOMAIN_WHERE + ")"),
+            + _ext_where362 + " AND " + RESOLVED_WHERE, (task_id,) + _bl_params362),
+        # 括号里的“全”：**原始入库条数**（含未解析/重复/cseg/黑名单），只作解释。
         "subs_ext_all": count(
             "SELECT COUNT(*) c FROM subdomains WHERE task_id=? AND "
-            + EXT_SUBDOMAIN_WHERE
-            + " AND domain NOT IN (SELECT o.domain FROM subdomains o "
-            "WHERE o.task_id=subdomains.task_id AND " + OWN_SUBDOMAIN_WHERE + ")"),
+            + EXT_SUBDOMAIN_WHERE),
     }
 
 
-def task_counts_bulk(task_ids):
+def task_counts_bulk(task_ids, blacklist_entries=None):
     """**一次**算出多个任务的资产计数，返回 `{task_id: {表: 计数}}`（续91）。
 
     为什么需要：任务列表页原来是 `{t["id"]: task_counts(t["id"]) for t in rows}` ——
@@ -1414,31 +1546,26 @@ def task_counts_bulk(task_ids):
             tuple(ids)):
         if row["t"] in out:
             out[row["t"]]["site_hosts"] = int(row["c"] or 0)
-    # 展示口径（续281）：与任务详情页签同源 —— 已解析 + 按 domain 去重；拓展域名另排除
-    # 已归属本项目的域名（`OVERLAP_EXT_WHERE` 的等价条件）。
-    # `own_rows` 先取"本项目 own 域名集合"，再在 CASE 里 NOT EXISTS —— 不把
-    # `OWN_SUBDOMAIN_WHERE` 的 LIKE 判据在别处重抄一遍。
+    # 展示口径（续362）：与 `task_counts()`/页签/表格底部同一份 `_ext_display_where`。
+    # 主数只算 `subs_ext_live`；`subs_ext_all` 保持原始入库行数（见 task_counts 注释）。
+    _ext_where362, _bl_params362 = _ext_display_where(blacklist_entries, outer="s")
+    _disp_params362 = tuple(ids) + _bl_params362
     for row in _query(
             "WITH s AS (SELECT task_id, domain, ip, source FROM subdomains "
-            f"WHERE task_id IN ({marks})), "
-            "own_rows AS (SELECT DISTINCT task_id, domain FROM s WHERE "
-            + OWN_SUBDOMAIN_WHERE + ") "
+            f"WHERE task_id IN ({marks})) "
             "SELECT s.task_id t, "
             "COUNT(DISTINCT CASE WHEN " + OWN_SUBDOMAIN_WHERE + " THEN s.domain END) own_all, "
             "COUNT(DISTINCT CASE WHEN " + OWN_SUBDOMAIN_WHERE + " AND " + RESOLVED_WHERE
             + " THEN s.domain END) own_live, "
-            "COUNT(CASE WHEN " + EXT_SUBDOMAIN_WHERE
-            + " AND NOT EXISTS (SELECT 1 FROM own_rows o "
-            "WHERE o.task_id=s.task_id AND o.domain=s.domain) THEN 1 END) ext_all, "
-            "COUNT(DISTINCT CASE WHEN " + EXT_SUBDOMAIN_WHERE + " AND " + RESOLVED_WHERE
-            + " AND NOT EXISTS (SELECT 1 FROM own_rows o "
-            "WHERE o.task_id=s.task_id AND o.domain=s.domain) THEN s.domain END) ext_live "
-            "FROM s GROUP BY s.task_id", tuple(ids)):
+            "COUNT(DISTINCT CASE WHEN (" + _ext_where362 + ") AND " + RESOLVED_WHERE
+            + " THEN s.domain END) ext_live "
+            "FROM s GROUP BY s.task_id", _disp_params362):
         if row["t"] in out:
             out[row["t"]]["subs_own_all"] = int(row["own_all"] or 0)
             out[row["t"]]["subs_own_live"] = int(row["own_live"] or 0)
-            out[row["t"]]["subs_ext_all"] = int(row["ext_all"] or 0)
             out[row["t"]]["subs_ext_live"] = int(row["ext_live"] or 0)
+            # 与 task_counts 的 subs_ext_all 完全一致：原始入库行数，不是展示主数。
+            out[row["t"]]["subs_ext_all"] = out[row["t"]]["subs_ext"]
     return out
 
 
@@ -2157,6 +2284,16 @@ def list_own_subdomains(task_id):
                   + OWN_SUBDOMAIN_WHERE + " ORDER BY domain", (task_id,))
 
 
+def list_own_subdomain_net(task_id):
+    """续360-B：own 口径的域名 + 已知 IP（OSINT 反查只从这里取根域/入口）。
+
+    不能复用 `list_subdomains()`：它含 `js:*` / `osint:*`，拿别人的资产面继续反查，
+    就会把公开 JS/CDN 域的子域灌进本任务（#61 实测 195 条里 192 条外部）。
+    """
+    return _query("SELECT domain, ip FROM subdomains WHERE task_id=? AND "
+                  + OWN_SUBDOMAIN_WHERE + " ORDER BY domain", (task_id,))
+
+
 def list_subdomain_net(limit=None, owner_id=None):
     """跨任务返回解析过的子域名（domain/ip/cdn）——「IP 资产」页用。
 
@@ -2325,15 +2462,20 @@ def blacklist_clause(entries):
     条件是 `domain = ? OR domain LIKE ?`（`%.<条目>`）。判据在 `blacklist.matches` 与这里
     各一份实现、口径必须一致 —— 门禁 [194a] 用样本（自身/子域/不命中/大小写/尾点）钉住
     两边同判（§5.14：SQL 侧与 Python 侧不许漂）。
+
+    续361：黑名单条目里的 `%` / `_` 是**字面字符**，不是 LIKE 通配符。`_` 在域名里合法
+    （`_dmarc.example.com`），不转义会把 `xdmarc.example.com` 也拦掉；`%` 则能匹配任意
+    串。只转义条目段，`"%.<条目>"` 前缀那个 `%` 仍是“任意子域”的刻意通配。
     """
     ents = [str(e or "").strip().lower().strip(".") for e in (entries or ())]
     ents = [e for e in ents if e]
     if not ents:
         return None, ()
-    ors = " OR ".join(["(domain = ? OR domain LIKE ?)"] * len(ents))
+    ors = " OR ".join(["(domain = ? OR domain LIKE ? ESCAPE '\\')"] * len(ents))
     params = []
     for e in ents:
-        params.extend([e, "%." + e])
+        esc = e.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params.extend([e, "%." + esc])
     return "(" + ors + ")", tuple(params)
 
 # 「重叠资产」判据（用户要求：默认不显示重叠，手动勾选才显示）：
@@ -2344,7 +2486,16 @@ def blacklist_clause(entries):
 #   status / title / length / tech，留最旧那条意味着默认视图里看到的是陈旧数据
 #   （实测：新任务已扫出 404 + 新标题，页面仍显示旧任务的 200 + 旧标题），
 #   而重扫的目的恰恰是刷新这些字段。去重效果不变，展示的却是最新的资产状态。
-OVERLAP_EXT_WHERE = f"domain NOT IN (SELECT domain FROM subdomains WHERE {OWN_SUBDOMAIN_WHERE})"
+# 续360：原来 `domain NOT IN (SELECT domain FROM subdomains WHERE ...)` 是**非相关**子查询，
+# 每次都要把全库 own 行（实测 98.8 万）物化一遍；#42 自己只有 47 行也 20 秒。
+# 改成相关 NOT EXISTS 后，每条外层行只查 `(domain, source)` 索引一次，语义不变。
+# 约束：本条件只给**未别名**的 `subdomains` 外层表用（现有调用点均如此）。
+_OWN_ALIASED = OWN_SUBDOMAIN_WHERE.replace("source", "_own.source")
+OVERLAP_EXT_WHERE = (
+    "NOT EXISTS (SELECT 1 FROM subdomains AS _own "
+    "WHERE _own.domain = subdomains.domain "
+    f"AND {_OWN_ALIASED})"
+)
 OVERLAP_SITE_WHERE = "id IN (SELECT MAX(id) FROM sites GROUP BY url)"
 # ---- 续112：子域名/拓展域名「同一域名一行」+「默认只看解析成功」 ----
 # 来源权威度（数字越小越权威）：主动收集 > 归属追加 > JS 挖掘 > 被动反查。理由：前者意味着
@@ -2362,6 +2513,8 @@ SOURCE_RANK_CASE = ("CASE "
 # 这类行默认不刷进列表：实测一个目标的 JS 碎片里二十几个 `chat.floating.open` 这种
 # "点号连接的成员访问链"全都解析不了，占满一整屏还看着像资产。隐藏的条数必须显示出来，
 # **不能让人以为"没有这些域名"**。
+# 它也是自动送探的**硬门**：解析优先于置信度/子任务探测，未解析行不建子任务。
+# 但入库、统计、报告一条都不动 —— 收起与不扫不等于删数据。
 RESOLVED_WHERE = "ip <> ''"
 # ---- 续146：站点列表「默认只看 200/404」；续268 把 5xx 放进可见；续313 收窄回 200/301/302/404 ----
 # 用户口径（续313）：默认显示 **200 / 301 / 302 / 404**；3xx 跳转后落在这些的也算显示。

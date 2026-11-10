@@ -19,9 +19,9 @@ subfinder/httpx/puredns 时一律退到内置兜底（覆盖面与速度差一�
    并从根上拒绝 `..` / 绝对路径成员 —— zip slip 与 tar 路径穿越都不成立。
 5. 落盘用"同目录临时文件 + `os.replace`"原子替换；任何一步失败都不留半成品（`.part` 会被删）。
 6. 单产物大小上限 `_MAX_BYTES`（防超大响应打满磁盘），边收边判。
-7. **绝不整份重写 config/settings.yaml**：写回走 `patch_settings_tool()` 的逐行文本替换 ——
-   `config.save_settings()` 是 `yaml.safe_dump` 整份重写，会把 tools 段（以及全文件）的中文注释
-   全抹掉，装个工具不该付这个代价。
+7. **绝不整份重写 config/settings.yaml**：写回走 `patch_settings_tool()` 的逐行文本替换。
+   续364 起 `config.save_settings()` 也会保住注释，但它是合并写且需要构造完整 data；
+   工具安装只改一个键，沿用这个更窄的定点产地，别牵动整份策略。
 
 **平台事实（2026-09-26 查 GitHub API 实测，不是推测）**：
 - projectdiscovery/subfinder、httpx：产物 `{tool}_{ver}_{os}_{arch}.zip` + `{tool}_{ver}_checksums.txt`；
@@ -722,9 +722,8 @@ def update(tools=None, dest_dir=None, allow_unverified=False, wire=True, setting
 def patch_settings_kv(section, key, value, path=None):
     """把 `config/settings.yaml` 里 `<section>.<key>` 的值改成 `value`；返回 `(ok, note)`。
 
-    **为什么不复用 `config.save_settings()`**：那个实现是 `load_settings()` + `yaml.safe_dump`
-    **整份重写** —— 会把 tools 段那一大段中文注释（以及全文件所有注释）一次抹掉。
-    装工具 / 接浏览器都是"改一个键"，不该有这种副作用，所以这里做**定点文本替换**：
+    **为什么不复用 `config.save_settings()`**：续364 起它也保住注释，但语义是"合并写"且
+    需要构造完整 data；装工具 / 接浏览器都是"改一个键"，这里做**定点文本替换**更直接：
     只在顶层 `<section>:` 段内找 `  <key>: ...` 那一行替换；没有就插在 `<section>:` 下一行。
     行尾符**沿用文件原有形态**（本仓 settings.yaml 实测是 CRLF，但这里不硬编码，
     而是探测首处换行 —— 迁移到别处也不会把整个文件的行尾搅乱）。

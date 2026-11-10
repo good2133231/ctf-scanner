@@ -19,7 +19,7 @@ import json
 import time
 import urllib.parse
 
-from . import keystore
+from . import keystore, targets
 from .utils import http_request, is_domain, to_ascii
 
 API = "https://fofa.info/api/v1/search/all"
@@ -413,3 +413,42 @@ def domain_of(asset, prefer="domain"):
         if a and is_domain(a):
             return a
     return ""
+
+
+# ---- FOFA host="<品牌词>" 反查（续365，主理人 2026-11-10 点单）----
+# 与 `cert=` / `title=` / `icon_hash=` 三路的分工：那三路回答"谁跟目标同源"，
+# 这一路回答"用目标的品牌词还能搜到谁"。它**自己不判归属** —— 由 osint 阶段把
+# 返回资产的 IP 与本任务子域名解析 IP 求交，只有命中的才入库（见 osint._fofa_host）。
+# 所以命中总数再多也不会灌进无关资产，不需要"公共词"阈值；但品牌词太短/纯数字
+# 会搜出海量无关结果、白烧一次查询，故在 host_token() 里前置挡掉。
+HOST_TOKEN_MIN_LEN = 4
+
+
+def host_token(domain):
+    """注册域/主机名 → 供 `host=` 查询的品牌词：`acme-portal.cn` → `acme-portal`。
+
+    先过 `targets.root_of()`（注册域的**唯一咽喉点**：先 `is_domain` 挡掉裸 IP / 单标签，
+    再做最长后缀匹配与 punycode 归一），再取首个 label；`example.com.cn` → `example`。
+    过短（<4）/ 纯数字一律返回空串 ⇒ 调用方零查询。刻意不直接调 `utils.base_domain()`：
+    `[8au]` 的 AST 红线只允许 `targets.root_of` / `extdom.base_of` 这两个产地。
+    """
+    root = targets.root_of(str(domain or "").strip())
+    if not root:
+        return ""
+    token = root.split(".")[0].lower()
+    if len(token) < HOST_TOKEN_MIN_LEN or token.isdigit():
+        return ""
+    return token
+
+
+def build_host_query(token):
+    """构造 `host="xxx"` 语句（值过 `_quote_value`，挡住引号/反斜杠注入）。"""
+    return f'host="{_quote_value(token)}"'
+
+
+def search_host(token, settings, logger=None, size=None):
+    """按品牌词反查，返回 `(assets, total, error)`（结构同 `search`）。"""
+    text = str(token or "").strip()
+    if not text:
+        return [], 0, "host 反查目标为空"
+    return search_query(build_host_query(text), settings, logger=logger, size=size)

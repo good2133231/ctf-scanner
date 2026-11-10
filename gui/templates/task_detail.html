@@ -40,6 +40,13 @@
 {% block content %}
 <h1>{{ task.name }}</h1>
 
+{% if task.osint_sources %}
+<p class="muted small note">OSINT 来源：
+  {% for s in task.osint_sources %}<span class="badge st-{{ s.status }}"
+    title="{{ s.detail or s.status_label }}">{{ s.label }} · {{ s.status_label }}{% if s.count %}（{{ s.count }}）{% endif %}</span>{% if not loop.last %} {% endif %}{% endfor %}
+</p>
+{% endif %}
+
 {% if weak_summary and weak_summary.total %}
 <div class="weak-banner">
   <span class="weak-badge">薄弱边界资产</span>
@@ -74,7 +81,7 @@
   <a href="{{ url_for('task_detail', task_id=rescan_of) }}">任务 #{{ task_labels.get(rescan_of, rescan_of) }}</a>
   的补扫发起，只跑
   <span class="mono">{{ task.stages }}</span> 一个阶段并强制走全量档
-  （{{ task.options }}），不改全局策略。</p>
+  （{{ task.options_display }}），不改全局策略。</p>
 {% endif %}
 
 {% if append_count %}
@@ -144,7 +151,7 @@
   <div class="tab" data-tab="subs" data-cnt="subs"
        title="已解析、按域名去重后的数量（与任务列表「统计」列一致）；未解析的默认在页内收起并报数">子域名<span class="cnt">{{ tab_counts.subs }}</span></div>
   <div class="tab" data-tab="ext" data-cnt="ext"
-       title="已解析、按域名去重、并排除已归属本项目的域名（与任务列表「统计」列一致）；页内「全部（N）」是含未解析的全量">拓展域名<span class="cnt">{{ tab_counts.ext }}</span></div>
+       title="已解析、按域名去重、并排除已归属/cseg/黑名单（与任务列表、表格底部一致）；页内「全部（N）」是含未解析的全量">拓展域名<span class="cnt">{{ tab_counts.ext }}</span></div>
   <div class="tab" data-tab="ports" data-cnt="ports">端口服务<span class="cnt">{{ tab_counts.ports }}</span></div>
   <div class="tab" data-tab="csegs" data-cnt="csegs">C 段<span class="cnt">{{ tab_counts.csegs }}</span></div>
   <div class="tab" data-tab="certs" data-cnt="certs">SSL 证书<span class="cnt">{{ tab_counts.certs }}</span></div>
@@ -156,7 +163,6 @@
   <div class="tab" data-tab="log">运行日志</div>
 </div>
 
-{% include "_auto_probe_summary.html" %}
 
 <div class="tabpane active" id="pane-vulns">
   <section class="panel">
@@ -534,7 +540,7 @@
       同类内新的在前），不再交错；点下面按钮只看某一类。</p>
     <div class="row">
       <a class="btn-mini {{ 'ghost' if ext_src else '' }}"
-         title="这里的括号是当前「只看不重叠」时的入库条数（含未解析）；点『显示全部（含重叠）』才是本任务全部入库拓展行；页签徽标 {{ ext_pager.total }} 是已解析、按域名去重、且排除已归属本项目的数量"
+         title="这里的括号是当前「只看可见」时的入库条数（含未解析；已排除 cseg/黑名单）；点『显示全部（含重叠）』才把重叠行放回；页签徽标 {{ ext_pager.total }} 是已解析、按域名去重、且排除归属/cseg/黑名单的数量"
          href="{{ url_for('task_detail', task_id=task.id) }}#ext">全部（{{ ext_counts.values()|sum }}）</a>
       {% for k, label, srcval, _prefix in ext_src_tags %}
         {% set n = ext_counts.get(srcval, 0) %}
@@ -543,15 +549,15 @@
       {% endfor %}
     </div>
     {# 续281：徽标与「全部（N）」的差异必须说清 —— 主理人报的"拓展域名显示有问题"就是这两个数对不上 #}
-    <p class="muted small note">口径：页签徽标 <b>{{ ext_pager.total }}</b> = 已解析、按域名去重、并排除已归属本项目的域名
-      （与任务列表「统计」列一致）；上面「全部 / 分类」括号是<b>全量入库条数</b>，含未解析的碎片，
-      点页内的「显示未解析」可以逐条看。</p>
-    <p class="muted small note"><b>自动送探读的是本任务全部入库拓展行</b>，不是当前这个过滤后的列表；
-      所以高置信来源行即使被「重叠资产 / 未解析」收起，也可能已经生成子任务。
+    <p class="muted small note">口径：页签徽标 <b>{{ ext_pager.total }}</b> = 已解析、按域名去重、并排除归属/cseg/黑名单
+      （与任务列表「统计」列一致）；上面「全部 / 分类」括号是<b>当前筛选下的入库条数</b>，
+      含未解析碎片（cseg/黑名单仍排除），点页内的「显示未解析」可以逐条看。</p>
+    <p class="muted small"><b>自动送探来源行已并入下表</b>：即使被「重叠资产 / 未解析」收起，也会作为普通拓展行显示，
+      并在域名旁标「已自动送探 → #子任务」；来源、来源站点/语法、置信度、IP 都在同一行看得到。
+      表格按<b>置信度高 → 中 → 低</b>排序，同档按相似度降序；低置信行在下面。
       {% if ext_overlap_hidden %}当前另有 <b>{{ ext_overlap_hidden }}</b> 个域名因已在任意任务里成为自家子域名而被收起。{% endif %}
-      当前<b>{{ '显示全部（含重叠）' if ext_show_all else '只看不重叠' }}</b>，
-      <a class="btn-mini ghost" href="{{ ext_toggle_overlap_url }}">{{ '只看不重叠' if ext_show_all else '显示全部（含重叠）' }}</a>。
-      展开后来源行会显示「已自动送探 → #子任务」。</p>
+      当前<b>{{ '显示全部（含重叠）' if ext_show_all else '只看可见（不含重叠）' }}</b>，
+      <a class="btn-mini ghost" href="{{ ext_toggle_overlap_url }}">{{ '只看可见（不含重叠）' if ext_show_all else '显示全部（含重叠）' }}</a>。</p>
     {% if ext_bl_hidden %}
     <p class="muted small">黑名单：当前筛选下 <b>{{ ext_bl_hidden }}</b> 条拓展域名命中黑名单，已<b>默认隐藏</b>
       （入库一条没动；勾选「加入黑名单」提交后本页立刻不再列出）。
@@ -1016,7 +1022,7 @@
       <tbody>
         <tr><th>任务 ID</th><td>{{ task.id }}</td></tr>
         <tr><th>阶段</th><td>{{ task.stages }}</td></tr>
-        <tr><th>选项</th><td class="mono">{{ task.options }}</td></tr>
+        <tr><th>选项</th><td class="mono">{{ task.options_display }}</td></tr>
         <tr><th>登录态</th><td class="mono small">
           {% if auth_view %}{% for k, v in auth_view %}{{ k }}={{ v }}{% if not loop.last %}<br>{% endif %}{% endfor %}
           {% else %}-{% endif %}</td></tr>

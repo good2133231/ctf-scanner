@@ -17,6 +17,9 @@
   ① 一眼就是模板页的标题（`404` / `Error` / `Welcome to nginx` …）**连查询都不发**；
   ② 查完发现命中数超过 `fofa.title_threshold`（默认 200）判为"公共标题"，放弃拓展
   —— 与"黑 ico"同构，只是判据换成标题；
+- `fofa.host_enabled`（续365）：按 `host="<注册域首段>"` 反查同名资产；**只收
+  IP 与本任务子域名解析结果重合的**（不排除 CDN、多 A 任一命中即可），命中行
+  以 `osint:fofa-host` 入库并判高置信；
 - `shodan.enabled` / `quake.enabled`：**同一批 favicon 哈希**再去这两家反查
   （`scanner/shodan.py` / `scanner/quake.py`，与 fofa.py 同构、各自独立文件）；
   阈值思路完全沿用"命中过多即放弃拓展"；
@@ -25,7 +28,7 @@
 
 产出的域名来源分别是 `osint:fofa` / `osint:fofa-cert` / `osint:fofa-title` /
 `osint:reverse`（精确 IP 反查）/ `osint:iprecon`（favicon 命中裸 IP） /
-`osint:shodan` / `osint:quake` / `osint:vt` / `osint:ctlog`，都归「拓展域名」页。
+`osint:shodan` / `osint:quake` / `osint:vt` / `osint:ctlog` / `osint:fofa-host`，都归「拓展域名」页。
 历史 `osint:cseg` 是已停用的旧 C 段标签，底层同样是精确 IP 反查；新任务不再产生该来源。
 全部子能力都关时整个阶段直接跳过 —— 一次请求都不发（与低危检查的处理方式一致）。
 
@@ -37,7 +40,8 @@ import re
 
 
 from .base import Stage
-from .. import blacklist, db, extdom, iprecon, jsmine, targets
+from .. import blacklist, config, db, extdom, iprecon, jsmine, targets
+from .. import cdn as cdn_mod
 from .. import fofa as fofa_mod
 from .. import shodan as shodan_mod
 from .. import quake as quake_mod
@@ -73,6 +77,48 @@ class OsintStage(Stage):
         cur = self.__dict__.setdefault("_icon_status", {})
         if rank.get(status, 0) >= rank.get(cur.get(url, ""), 0):
             cur[url] = status
+
+    def _note_source(self, key, label, status, count=0, detail=""):
+        """续362：记录一个 OSINT 来源的结果状态（ok/empty/unknown/partial/failed/skipped/disabled）。
+
+        存进 `tasks.options.osint_sources`，任务详情页直接展示；解决“来源失败”和
+        “确实没有资产”看起来一样的问题。不自动重试。
+        """
+        cur = self.__dict__.setdefault("_osint_sources", {})
+        cur[key] = {"key": str(key), "label": str(label), "status": str(status),
+                    "count": int(count or 0), "detail": str(detail or "")[:240]}
+
+    def _save_source_status(self):
+        """把本轮来源状态合并进 options（保留其它 options 键），失败只 warning。"""
+        st = list(self.__dict__.get("_osint_sources", {}).values())
+        shared = sorted(str(x) for x in (self.__dict__.get("_shared_ips") or set()) if x)
+        if not st and not shared:
+            return
+        for s in st:
+            if s.get("status") == "pending":
+                s["status"] = "skipped"
+        ctx = self.ctx
+        if st:
+            ctx.logger.info("[osint] 来源状态：" + " / ".join(
+                f"{s['label']}={s['status']}({s['count']})" for s in st))
+        try:
+            task = dict(db.get_task(ctx.task_id) or {})
+            try:
+                opts = json.loads(task.get("options") or "{}")
+            except (TypeError, ValueError):
+                opts = {}
+            if not isinstance(opts, dict):
+                opts = {}
+            if st:
+                opts["osint_sources"] = st
+            # 续363：共享 IP 也落盘，供 extdom 在 VT/FOFA 拓展行上继续排除伪同源证据。
+            if shared:
+                opts["iprecon_shared_ips"] = shared
+            else:
+                opts.pop("iprecon_shared_ips", None)
+            db.update_task(ctx.task_id, options=json.dumps(opts, ensure_ascii=False))
+        except Exception as e:      # noqa: BLE001 - 状态展示不能把情报阶段带崩
+            ctx.logger.warning(f"[osint] 来源状态写入失败（不影响扫描）：{e}")
 
     def _favicon_ip_domains(self, ips):
         """favicon 命中里的裸 IP：**先探活，再做 IP→域名**（续314，主理人点单）。
@@ -163,8 +209,12 @@ class OsintStage(Stage):
     def run(self):
         ctx = self.ctx
         self._icon_status = {}
+        self._osint_sources = {}
+        self._shared_ips = set()
+        self._fofa_host_ips = {}
         fofa_cfg = ctx.settings.get("fofa", {}) or {}
         do_fofa = fofa_cfg.get("enabled") is True
+        do_host = do_fofa and fofa_cfg.get("host_enabled") is not False
         do_cert = do_fofa and fofa_cfg.get("cert_enabled") is not False
         do_title = do_fofa and fofa_cfg.get("title_enabled") is not False
         do_shodan = (ctx.settings.get("shodan", {}) or {}).get("enabled") is True
@@ -204,12 +254,24 @@ class OsintStage(Stage):
         # 续205：备案反查有**自己的**开关（icp.enabled）—— 它用的是另一套接口、另一份配额，
         # 与"外部情报拓展"那批不是一回事。默认全关时整段跳过、零请求。
         do_icp = (ctx.settings.get("icp", {}) or {}).get("enabled") is True
+        # 续362：先把“启用/未启用”记下来；各来源函数后面覆盖成 ok/empty/partial/failed。
+        for _k362, _l362, _on362 in (("fofa", "FOFA", do_fofa),
+                                     ("shodan", "Shodan", do_shodan),
+                                     ("quake", "Quake", do_quake),
+                                     ("virustotal", "VirusTotal", do_vt),
+                                     ("ctlog", "CT 日志", do_ctlog),
+                                     ("icp", "备案反查", do_icp),
+                                     ("iprecon", "IP 反查", do_iprecon),
+                                     ("passive", "Wayback", do_passive)):
+            self._note_source(_k362, _l362, "pending" if _on362 else "disabled")
         if not (do_fofa or do_shodan or do_quake or do_vt or do_ctlog
                 or do_icp or do_passive or do_iprecon):
             ctx.logger.info("[osint] 未启用（策略配置 → 外部情报拓展 可打开），跳过")
+            self._save_source_status()
             return
         if ctx.stopped():
             ctx.logger.warning("[osint] 任务已请求停止，跳过")
+            self._save_source_status()
             return
 
         found = []
@@ -223,26 +285,44 @@ class OsintStage(Stage):
                     found += [str(r["domain"]) for r in db._query(
                         "SELECT domain FROM subdomains WHERE task_id=? AND source='osint:icp'",
                         (ctx.task_id,))]
+                self._note_source("icp", "备案反查", "ok" if _n205 else "empty",
+                                  _n205, _note205)
             except Exception as _e205:            # noqa: BLE001 —— 情报阶段不许把任务带崩
+                self._note_source("icp", "备案反查", "failed", 0, str(_e205))
                 ctx.logger.warning(f"[osint] 备案反查失败（不影响其余情报）：{_e205}")
         # 续336/338（主理人点单）：C 段反查停用；只保留**精确 IP 反查**。
         # `_c_segments()` 仍不调用（它写 C 段表、按 /24 归档，已判为噪声源），
         # 新增的 `_ip_reverse()` 只拿目标/资产解析出的真实 IP 去反查域名。
         if do_iprecon and not ctx.stopped():
             try:
-                found += self._ip_reverse()
+                _ip_items362 = self._ip_reverse()
+                found += _ip_items362
+                self._note_source("iprecon", "IP 反查",
+                                  "ok" if _ip_items362 else "empty", len(_ip_items362))
             except Exception as _e338:          # noqa: BLE001 - 情报阶段不许把任务带崩
+                self._note_source("iprecon", "IP 反查", "failed", 0, str(_e338))
                 ctx.logger.warning(f"[osint] IP 反查失败（不影响其余情报）：{_e338}")
         if do_fofa and not ctx.stopped():
-            found += self._fofa_assets()
-        if do_cert and not ctx.stopped():
-            found += self._fofa_cert()
-        if do_title and not ctx.stopped():
-            found += self._fofa_title()
+            # 续365：host= 反查的「同 IP 佐证」优先级高于其它反查来源 —— 同一域名被
+            # 多路命中时要以 osint:fofa-host 落库，置信度证据才不会在去重里丢掉。
+            _fofa362 = (self._fofa_host() if do_host else []) + self._fofa_assets()
+            if do_cert and not ctx.stopped():
+                _fofa362 += self._fofa_cert()
+            if do_title and not ctx.stopped():
+                _fofa362 += self._fofa_title()
+            found = _fofa362 + found
+            self._note_source("fofa", "FOFA", "ok" if _fofa362 else "unknown", len(_fofa362),
+                              "" if _fofa362 else "无返回；空结果与上游失败无法区分（详见任务日志）")
         if do_shodan and not ctx.stopped():
-            found += self._platform_assets(shodan_mod, "shodan")
+            _sh362 = self._platform_assets(shodan_mod, "shodan")
+            found += _sh362
+            self._note_source("shodan", "Shodan", "ok" if _sh362 else "unknown", len(_sh362),
+                              "" if _sh362 else "无返回；空结果与上游失败无法区分（详见任务日志）")
         if do_quake and not ctx.stopped():
-            found += self._platform_assets(quake_mod, "quake")
+            _qu362 = self._platform_assets(quake_mod, "quake")
+            found += _qu362
+            self._note_source("quake", "Quake", "ok" if _qu362 else "unknown", len(_qu362),
+                              "" if _qu362 else "无返回；空结果与上游失败无法区分（详见任务日志）")
         if do_vt and not ctx.stopped():
             found += self._vt_domains()
 
@@ -250,10 +330,14 @@ class OsintStage(Stage):
             found += self._ctlog()
 
         if do_passive and not ctx.stopped():
-            found += self._passive_hosts()
+            _pa362 = self._passive_hosts()
+            found += _pa362
+            self._note_source("passive", "Wayback", "ok" if _pa362 else "unknown", len(_pa362),
+                              "" if _pa362 else "无返回；空结果与上游失败无法区分（详见任务日志）")
 
         if ctx.stopped():
             ctx.logger.warning("[osint] 任务已请求停止，结果不再入账")
+            self._save_source_status()
             return
 
         known = {r["domain"] for r in db.list_subdomains(ctx.task_id)}
@@ -290,12 +374,22 @@ class OsintStage(Stage):
             # 拓展域名页「语法」列据此展示 —— 用户要求反查结果必须标明用的是哪条语法。
             db.insert_subdomains(ctx.task_id,
                                  [(d, s, "", notes.get(d, "")) for d, s in new])
+        if self._fofa_host_ips:
+            # 续365：同 IP 命中的行补上解析 IP ⇒ 过 `ext_rows(resolved_only=True)` 的硬门
+            # （自动送探只收已解析行）。`set_subdomain_net` 按 (task_id, domain) 更新，
+            # 被黑名单/第三方闸挡掉的行本来就不存在，UPDATE 自然空转。
+            try:
+                db.set_subdomain_net(ctx.task_id,
+                                     {d: (ip, "", "") for d, ip in self._fofa_host_ips.items()})
+            except Exception as _e365:      # noqa: BLE001 - 回填失败不该拖垮整阶段
+                ctx.logger.warning(f"[osint] FOFA host 命中行回填 IP 失败：{_e365}")
         if blocked:
             ctx.logger.info(f"[osint] 黑名单拦截 {len(blocked)} 个域名"
                             + f"（如 {blocked[0][0]} ← {blocked[0][1]}）")
         ctx.results["osint_domains"] = [d for d, _ in new]
         ctx.logger.info(f"[osint] 新增域名资产 {len(new)} 个"
                         + (f"（{' / '.join(f'{s}:{n}' for s, n in _tally(new))}）" if new else ""))
+        self._save_source_status()
 
     def _passive_hosts(self):
         """Wayback 历史 URL → 主机名（urlfinder 式：每条根域一次 CDX，最多 max_roots 个）。"""
@@ -382,26 +476,66 @@ class OsintStage(Stage):
                 ctx.logger.warning(f"[osint] IP 反查源成败落档失败（不影响扫描）：{e}")
 
         cap = max(1, int(cfg.get("max_domains_per_ip", 100)))
-        found, shared, truncated = [], 0, 0
+        shared_min = config.shared_ip_min({"iprecon": cfg})
+        bases = extdom.confirmed_bases(ctx.task_id)
+        found, shared_cap, truncated, dropped_shared = [], 0, 0, 0
+        shared_ips = set()
+        own_ips = set(extdom.confirmed_ip_map(ctx.task_id))
         # 续341：逐域名标出实际返回它的接口，不再让用户只看到笼统的“第三方接口”。
         _prov = stats.get("domain_sources") or {}
         for ip, doms in mapping.items():
             _original = len(doms)
-            if _original > cap:
+            _is_shared = _original >= shared_min
+            _keep = {}
+            if bases and (_is_shared or ip in own_ips):
+                # 续363：共享 IP / 与 own 同 IP 时，只保留“像目标”的域名；否则
+                # GoDaddy 之类一次返回 5~100 个无关客户域名，既污染拓展页，又吃掉回填上限。
+                for d in doms:
+                    if extdom.redirect_infra_hit(d):
+                        _keep[d] = False
+                        continue
+                    try:
+                        _conf = extdom.confidence(d, bases=bases)
+                    except Exception:          # noqa: BLE001 - 单个坏名字不拖垮反查
+                        _conf = {}
+                    _keep[d] = bool(_conf.get("owned") or extdom.conf_rank(
+                        _conf.get("level") or "low") >= extdom.conf_rank("medium"))
+                # 与 own 共用 IP、但只要有一个低相似名字，就按共享/噪声处理；
+                # 避免 2 个域名的共享主机绕过 >=5 的阈值（重跑实际见到过）。
+                if ip in own_ips and any(not v for v in _keep.values()):
+                    _is_shared = True
+            if _is_shared:
+                shared_ips.add(ip)
+                if bases:
+                    _kept = [d for d in doms if _keep.get(d, True)
+                             and not extdom.redirect_infra_hit(d)]
+                    dropped_shared += _original - len(_kept)
+                    doms = _kept
+            else:
+                # 注册商/邮箱托管/停放根域即使不在共享 IP 上也不入库。
+                doms = [d for d in doms if not extdom.redirect_infra_hit(d)]
+            _kept_n = len(doms)          # 过滤后、截断前；备注不能拿 _original 冒充截断数
+            if len(doms) > cap:
                 # 精确 IP 上挂得太多 → 共享主机/CDN。这里不再整段丢弃（整段丢会让
                 # 「IP 反查」在共享 IP 上直接变成 0 条），而是截断并显著标注；
                 # 自动送探仍受高置信阈值约束，低相似域名不会因为入库就被深扫。
-                shared += 1
-                truncated += _original - cap
+                shared_cap += 1
+                truncated += len(doms) - cap
                 doms = doms[:cap]
             for d in doms:
                 _srcs = [_s for _s in ((_prov.get(ip) or {}).get(d) or []) if _s]
-                _note = iprecon.domain_note(ip, _srcs, _original, cap)
+                _note = iprecon.domain_note(ip, _srcs, _original, cap,
+                                            shared=_is_shared, kept=_kept_n)
                 found.append((d, extdom.EXT_REVERSE_SOURCE, _note))
+        self._shared_ips = shared_ips
         uniq = len({d for d, _s, _n in found})
-        ctx.logger.info(f"[osint] IP 反查 → 域名 {uniq} 个 / 命中 IP {stats['hit_ips']} 个"
-                        + (f"；{shared} 个 IP 命中过多（>{cap}）标为共享并截断"
-                           f"（少收 {truncated} 个）" if shared else ""))
+        _msg = f"[osint] IP 反查 → 域名 {uniq} 个 / 命中 IP {stats['hit_ips']} 个"
+        if shared_cap:
+            _msg += f"；{shared_cap} 个 IP 命中过多（>{cap}）标为共享并截断（少收 {truncated} 个）"
+        if shared_ips:
+            _msg += (f"；{len(shared_ips)} 个 IP 判为共享/同机噪声（>={shared_min} 或与 own 同 IP），"
+                     f"过滤低相似 {dropped_shared} 个")
+        ctx.logger.info(_msg)
         return found
 
     def _collect_ips(self):
@@ -416,7 +550,9 @@ class OsintStage(Stage):
             host = targets.host_of(kind, raw)     # 续146：收敛到 targets（此前这里又写了一份）
             if host:
                 hosts.append(host)
-        for r in db.list_subdomains(ctx.task_id):
+        # 续360-B：同 `_root_domains`，只反查 own 口径。扩展域的 IP 往往挂在
+        # CDN/第三方公开域，拿它做 IP 反查会递归放大无关域名。
+        for r in db.list_own_subdomain_net(ctx.task_id):
             # 已知 IP 直接用：目标域现在解析不了、但任务里已经解析过的资产
             # （例如 www 子域）仍然是有效的 IP 反查入口，别再靠一次失败 DNS 丢掉。
             _known = [x for x in re.split(r"[,;\s]+", str(r["ip"] or "").strip()) if x]
@@ -633,21 +769,26 @@ class OsintStage(Stage):
         if not vt_mod.available(ctx.settings):
             ctx.logger.info(f"[osint] VirusTotal {keystore.keys_hint('virustotal.key')}，"
                             f"跳过子域反查")
+            self._note_source("virustotal", "VirusTotal", "skipped", 0,
+                              keystore.keys_hint('virustotal.key'))
             return []
         roots = self._root_domains()
         if not roots:
             ctx.logger.info("[osint] 没有可用于反查的注册域，跳过 VirusTotal 子域反查")
+            self._note_source("virustotal", "VirusTotal", "skipped", 0, "没有可用注册域")
             return []
         cap = max(1, int(cfg.get("max_domains") or 20))
         if len(roots) > cap:
             ctx.logger.info(f"[osint] 注册域 {len(roots)} 个超过上限 {cap}，仅反查前 {cap} 个")
             roots = roots[:cap]
-        found, queried = [], 0
+        found, queried, failed, last_err = [], 0, 0, ""
         for root in roots:
             if ctx.stopped():
                 break
             subs, total, err = vt_mod.search(root, ctx.settings, logger=ctx.logger)
             if err:
+                failed += 1
+                last_err = str(err)
                 ctx.logger.info(f"[osint] VirusTotal 子域反查中止：{err}")
                 break
             queried += 1
@@ -656,6 +797,10 @@ class OsintStage(Stage):
                 if domain:
                     found.append((domain, "osint:vt", vt_mod.query_of(root)))
         ctx.logger.info(f"[osint] VirusTotal 拓展：查询 {queried} 个注册域 → {len(found)} 个子域")
+        _st362 = ("partial" if failed and found else "failed" if failed
+                  else "ok" if found else "empty")
+        self._note_source("virustotal", "VirusTotal", _st362, len(found),
+                          last_err or (f"查询 {queried} 个注册域" if queried else "未查询"))
         return found
 
     # ---------- FOFA 证书反查 ----------
@@ -674,7 +819,9 @@ class OsintStage(Stage):
         hosts = list(targets.hosts_of(ctx.targets))
         for r in db.list_sites(ctx.task_id):
             hosts.append(r["host"] or "")
-        for r in db.list_subdomains(ctx.task_id):
+        # 续360-B：只从 own 口径取子域。`js:mine` / `osint:*` 是别人的资产面，
+        # 拿它们继续做证书/VT/CT 反查会把第三方域的子域灌进任务。
+        for r in db.list_own_subdomains(ctx.task_id):
             hosts.append(r["domain"])
         roots = [targets.root_of(h) for h in hosts]
         return list(dict.fromkeys(r for r in roots if r))
@@ -821,6 +968,96 @@ class OsintStage(Stage):
                         + (f"，相关性过滤掉 {skipped} 条" if skipped else ""))
         return found
 
+    # ---------- FOFA host="<品牌词>" 反查（续365）----------
+
+    def _fofa_host(self):
+        """续365（主理人 2026-11-10 点单）：`host=` 反查 + 子域名解析 IP 求交。
+
+        与 `icon_hash=` / `cert=` / `title=` 三路不同，这一路**只认 IP 命中**：
+        1. 每个注册域取去掉公共后缀后的首个 label（`acme-portal.cn` → `acme-portal`），
+           用 `host="<label>"` 去 FOFA 搜同名资产；
+        2. 把 FOFA 资产行的 `ip` 与**本任务子域名的解析 IP 集合**求交。这个集合刻意
+           不复用 `extdom.confirmed_ip_map()`：后者只收「非 CDN 的 own 行」，而主理人
+           明确「哪怕是 cdn 哪怕是多 ip 其中一个 ip」都要算命中 —— 所以这里
+           **不排除 cdn 列、不要求单 IP**，多 A 记录拆开后任意一个相等即命中；
+        3. 命中的新域名以 `osint:fofa-host` 入库并回填命中 IP，
+           `extdom.apply_fofa_host_evidence()` 据此判「高」，页面徽章与自动送探同口径。
+
+        命中 IP 落在 CDN 段时只作**展示提示**（共享边缘地址，佐证偏弱），不影响是否命中。
+        没有已解析的子域名 IP 时零查询 —— 没有比对集合，查了也没法判归属。
+        """
+        ctx = self.ctx
+        cfg = ctx.settings.get("fofa", {}) or {}
+        if cfg.get("host_enabled") is False:
+            return []
+        if not fofa_mod.available(ctx.settings):
+            ctx.logger.info(f"[osint] FOFA {keystore.keys_hint('fofa.email / fofa.key')}，"
+                            "跳过 host 反查")
+            return []
+
+        own_ips, known = set(), set()
+        for r in db.list_subdomains(ctx.task_id):
+            known.add(str(r["domain"] or "").strip().lower())
+            for ip in extdom.ip_components(r["ip"]):
+                # 私网/回环地址不可能出现在 FOFA 索引里，也不该拿去跟公网资产比对。
+                if iprecon.is_public_ip(ip):
+                    own_ips.add(ip)
+        if not own_ips:
+            ctx.logger.info("[osint] FOFA host 反查跳过：本任务还没有可比对的子域名解析 IP")
+            return []
+
+        tokens, seen = [], set()
+        for root in self._root_domains():
+            token = fofa_mod.host_token(root)
+            if token and token not in seen:
+                seen.add(token)
+                tokens.append(token)
+        cap = max(1, int(cfg.get("max_host_queries", 10) or 10))
+        if len(tokens) > cap:
+            ctx.logger.info(f"[osint] FOFA host 品牌词 {len(tokens)} 个超过上限 {cap}，"
+                            f"仅查前 {cap} 个")
+            tokens = tokens[:cap]
+        if not tokens:
+            ctx.logger.info("[osint] 没有可用于 host 反查的品牌词（注册域首段过短或纯数字）")
+            return []
+
+        found, hit_ips = [], {}
+        queried = hits = no_domain = 0
+        for token in tokens:
+            if ctx.stopped():
+                break
+            assets, total, err = fofa_mod.search_host(token, ctx.settings,
+                                                      logger=ctx.logger)
+            if err:
+                ctx.logger.info(f"[osint] FOFA host 反查中止：{err}")
+                break
+            queried += 1
+            ctx.logger.info(f'[osint] FOFA host="{token}" → {len(assets)} 条 / 共 {total} 条'
+                            f"（比对 {len(own_ips)} 个子域名 IP）")
+            for a in assets:
+                same = sorted(set(extdom.ip_components(a.get("ip"))) & own_ips)
+                if not same:
+                    continue
+                hits += 1
+                domain = _domain_of(a)
+                if not domain:
+                    no_domain += 1
+                    continue
+                if domain in known or domain in hit_ips:
+                    continue
+                ip_text = ",".join(same)
+                hit_ips[domain] = ip_text
+                vendor = cdn_mod.ip_match(same, ctx.settings)
+                note = (f"{fofa_mod.build_host_query(token)} · 同 IP 命中 {ip_text}"
+                        " · FOFA 归属佐证"
+                        + (f"（CDN 共享 IP {vendor}，佐证偏弱）" if vendor else ""))
+                found.append((domain, extdom.EXT_FOFA_HOST_SOURCE, note))
+        self._fofa_host_ips = hit_ips
+        ctx.logger.info(f"[osint] FOFA host 拓展：查询 {queried} 个品牌词，IP 命中 {hits} 条，"
+                        f"入库 {len(found)} 个新域名"
+                        + (f"（另有 {no_domain} 条只有裸 IP、无域名可入库）" if no_domain else ""))
+        return found
+
     # ---------- Shodan / Quake favicon 反查（与 FOFA 同构，只换客户端） ----------
 
     def _favicon_hashes(self, cap, workers):
@@ -923,6 +1160,7 @@ class OsintStage(Stage):
         roots = self._root_domains()
         if not roots:
             ctx.logger.info("[osint] 没有可用于 CT 日志查询的注册域")
+            self._note_source("ctlog", "CT 日志", "skipped", 0, "没有可用注册域")
             return []
         cap = ctlog_mod.max_domains(ctx.settings)
         if len(roots) > cap:
@@ -957,6 +1195,10 @@ class OsintStage(Stage):
         ctx.logger.info(f"[osint] CT 日志：查询 {queried} 个注册域，失败 {failed} 个，"
                         f"证书记录 {len(certs)} 条"
                         + ("（已写入「SSL 证书」页签，来源 ct）" if certs else ""))
+        _st362 = ("partial" if failed and found else "failed" if failed
+                  else "ok" if found else "empty")
+        self._note_source("ctlog", "CT 日志", _st362, len(found),
+                          f"失败 {failed} 个" if failed else "")
         return found
 
 

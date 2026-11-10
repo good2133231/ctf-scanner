@@ -4542,6 +4542,245 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续365（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：FOFA host="品牌词" 反查 + 同 IP 置信度（插队）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人 2026-11-10 插队点单：FOFA 支持 `host=""` 语法，用注册域的品牌词去搜；只要返回结果的 IP
+与本任务子域名的解析 IP 相同就提高置信度，**哪怕是 CDN、哪怕是多个 A 记录里只有一个命中**；
+先把这条做了，其余按顺序继续。目标真名按 §0.5 不落被跟踪文件，代码/文档/测试统一用
+`acme-portal.cn` 一类合成夹具。上一节「下一轮（续365）」那 4 组本轮**一项未动**，顺延续366。
+
+- [x] T1【查询构造】`scanner/fofa.py`：`host_token()` 走 `utils.base_domain()` 取注册域首段
+      （多段后缀 / punycode 同源；<4 字符或纯数字直接零查询）；`build_host_query()` 过 `_quote_value`；
+      `search_host()` 复用既有 `search_query`（429 重试 + `min_interval` 节流一起继承）。
+- [x] T2【命中判定】`osint._fofa_host()`：本任务 `subdomains.ip` 全量拆成单 IP 集合
+      （**不排除 cdn 列、不要求单 IP**，只滤私网/回环），FOFA 资产 ip 命中任意一个即算。
+      刻意不复用 `extdom.confirmed_ip_map()` —— 后者只收非 CDN own 行，正是要放宽的那道闸。
+- [x] T3【置信度】新 `EXT_FOFA_HOST_SOURCE` + `apply_fofa_host_evidence()`：
+      `similar_candidates`（自动送探）与 GUI `_ext_confidence`（页面徽章）**同一条链**判高，
+      不改 `owned`；命中行回填 ip ⇒ 过 `ext_rows(resolved_only=True)` 硬门。
+- [x] T4【四处一致】DEFAULTS / settings.yaml / GUI 策略页控件 + POST 映射 / SOURCE_LABELS
+      补齐 `fofa.host_enabled`（默认 True）与 `fofa.max_host_queries`（默认 10）。
+- [x] T5【门禁】新增 `[8bz]`：品牌词 4 形态 + 引号反斜杠转义 + 空值；CDN 行 · 多 A 任一命中；
+      裸 IP 不入库；两道零查询闸（开关关 / 无可比对 IP）；置信度双向对照；
+      端到端桩跑 osint 阶段零真实请求。
+- [x] C1 定向：`--only 8bz` PASS；补完 POST 映射后 `--only 8at,8bz` PASS。
+- [x] C2 记忆同步：CHANGELOG 续365 + todo 续365（本小节）。AGENTS 正文未动
+      （§5 / §6.2 / §7 的既有描述没有失真，新证据通道记在 CHANGELOG 本轮小节）。
+- [x] C3 最终全量 v38 `SMOKE PASS`：2026-11-10 08:43:29–08:52:29（9m00s，约 301 个 ok 组 +
+      浏览器 e2e，`logs/smoke365d.log`）；全量期间红过 3 次（POST 映射缺键 / 记忆空头支票 /
+      `base_domain` 单一产地），逐条修完再跑，详见 CHANGELOG 续365 第三节。
+
+**下一轮（续366）**：
+- [ ] P0 速度：DNS TTL 缓存 / `get_conn()` 去每连接 WAL PRAGMA / puredns 多域合批 / smoke fast-nightly 分层。
+- [ ] P0 安全：跨注册域送探剥离 `auth`；结构化授权 scope（allowlist、时间窗、IP-CIDR、端口路径）。
+- [ ] P1 能力：JS sourcemap、OpenAPI/GraphQL、历史 PDNS/ASN/证书 SAN、CTF profile。
+- [ ] P2 代码质量：拆大文件、收窄 `except Exception`、统一默认值 fallback。
+
+## 续364（2026-11-10，WorkBuddy · DeepSeek-V4.1-Flash）：配置落盘加固 + 共享阈值/截断口径 + queued 重启竞态
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人「做」第一批 6 件 P0。
+
+- [x] T1【配置】：`load_settings` mtime 缓存 + 坏配置显式 warning；`save_settings` 逐行补丁保注释/EOL、跨进程写锁、原子写；`remove_settings_keys` 同锁同原子写。
+- [x] T2【竞态】：单/批量 restart 对 queued 先原子出队，防止同任务双跑。
+- [x] T3【口径】：`domain_note(kept=...)` 按实际截断数标注；OSINT 与 extdom 两处调用统一；`shared_ip_min` 收敛到 `config.shared_ip_min()` 单一产地。
+- [x] T4【兜底】：`session_secret("")` 空目录真正回退 `BASE_DIR`。
+- [x] T5【文档/门禁】：更新旧「整份重写」注释与 `[7p]` 反证；`load_settings` 100 次 4.12s→0.106s；全量 v34 `SMOKE PASS`（07:24:07–07:33:13，约 9m06s，含 e2e）；`[285]/[8by]/[7p]/[264]/[218]/[8as]` PASS；5000/5099 重启 200。
+
+**下一轮（续365）**：
+- [ ] P0 速度：DNS TTL 缓存 / `get_conn()` 去每连接 WAL PRAGMA / puredns 多域合批 / smoke fast-nightly 分层。
+- [ ] P0 安全：跨注册域送探剥离 `auth`；结构化授权 scope（allowlist、时间窗、IP-CIDR、端口路径）。
+- [ ] P1 能力：JS sourcemap、OpenAPI/GraphQL、历史 PDNS/ASN/证书 SAN、CTF profile。
+- [ ] P2 代码质量：拆大文件、收窄 227 个 `except Exception`、统一默认值 fallback。
+
+## 续363（2026-11-09，WorkBuddy · DeepSeek-V4.1-Flash）：IP 反查共享主机去噪 + 拓展回填上限重试
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人追问 #32 里 `共享主机客户域名` 同 IP 被判高并自动送探 #58。
+
+- [x] T1【共享 IP】：`iprecon.shared_ip_min=5` 进 DEFAULTS/YAML/GUI；共享 IP 只保留自身/中高相似域名；`iprecon_shared_ips` 落 options；`confirmed_ip_map` 排除共享 IP；`ip_evidence` 按单 IP 匹配。
+- [x] T2【基础设施】：`auto_expand_block` 拦 godaddy/secureserver/bodis 等注册商/邮箱托管/停放根域；共享 IP 行加 note 标记。
+- [x] T3【回填】：`max_resolve` 500→1000；`only_missing` 重试 `over-limit`，不重试 nxdomain/timeout；已定向回填 #32（total 810 / scanned 227 / alive 176 / dead 51 / blocked 80）。
+- [x] T4【门禁】：v28 曾因 `options_display` 绕过 auth 掩码在 `[5x]` 红；修复后全量 v29 `SMOKE PASS`（08:09:32–08:25:22，约 15m50s），补 own 同 IP 过滤后 v30 `SMOKE PASS`（10:15:00–10:29:11，约 14m11s），收尾审计后 v32 `SMOKE PASS`（10:37:14–10:49:47，约 12m33s），均含 e2e；`[285]/[264]/[218]/[8as]` PASS；5000/5099 已重启。
+- [x] T5【清理重跑】：备份库后删除 `#53~#58` 旧噪声子任务及日志，保留 `#59~#61`；原地重启 `#32` 两次（5m29s / 4m19s）。最终子域 30、拓展 14（alive 12）；反查只留 1 条低置信候选；共享/同机过滤 2007 条；自动送探 0 个新子任务。
+- [x] T6【完整性】：清理 7 条 `ext_probes` 孤儿；`delete_task` 只清 `task_id`，保留父删子存历史；`[285]` 双向回归；全库资产表孤儿 0、options JSON 合法。
+- [x] T7【重建】：按主理人要求，为 `#10/#17` 两个旧目标新建根任务 `#67/#68`（同四阶段）；均 done；旧孤儿任务保留未删。
+
+**下一轮（续364）**：
+- [ ] P2 复核 #32 重跑后唯一 1 条低置信反查候选（不自动送探，人工判断）。
+- [ ] P2 决定旧 `#10/#17`（已被 `#67/#68` 替代）是否备份删除；当前保留。
+- [x] P2 最新 v32 全量结果已归档（`logs/_smoke363_full32.log`）。
+- [ ] P3 磁盘容量/IO 清理（主理人本轮明确先不处理）。
+
+## 续362（2026-11-09，WorkBuddy · DeepSeek-V4.1-Flash）：拓展主数统一 + OSINT 来源状态 + 被动子域硬上限
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人「都按你推荐的配置」。
+
+- [x] T1【计数 A】：`_ext_display_where` 唯一口径；列表/页签/表格主数同源，`subs_ext_all` 回到原始入库行数；修复 overlap 子查询 source 别名错误；`[285]` 覆盖。
+- [x] T2【OSINT 状态】：`options.osint_sources` + 详情页徽标/摘要 + 日志总览；VT/CT 精确区分，FOFA/Shodan/Quake/Wayback 无信号标 `unknown`；修 sqlite Row `.get`；`options_display` 隐藏元数据、重启清旧状态。
+- [x] T3【被动上限】：`passive_max=50000` / `passive_warn=10000` 进 DEFAULTS/YAML/GUI；`_merge_found` 覆盖 subfinder/被动/FOFA，主动不受影响；`[285]` 覆盖 5/12 截断、0=不限。
+- [x] T4【门禁】：v26 因根盘满红（环境）；清缓存后全量 v27 `SMOKE PASS`（06:48–07:04，约 16m09s，含 e2e）；`[285]/[8br]/[194a]/[264]` 通过；5000/5099 已重启。
+
+**下一轮（续363）**：
+- [ ] P2 真实大目标任务复跑，观察 `subdomain.passive_max` 触发与 OSINT 来源状态是否符合预期。
+- [ ] P2 控制台 `0.0.0.0` / 401 收口（主理人明确暂缓，等点名）。
+- [ ] P2 若真实触发截断，再定是否在页面加“本次被动结果已截断”横幅。
+
+## 续361（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：单实例队列 worker + LIKE 转义 + 删除竞态收口
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人：0.0.0.0/401 不动；解决其余。
+
+- [x] T1【worker 锁】：`_WorkerLease` 跨进程 flock/msvcrt；5000 起 3 worker，5099 只留 leader 监控；杀 5000 后 5099 在 5s 内接管；总数始终 3。
+- [x] T2【LIKE】：黑名单 `%` / `_` 转义 + `ESCAPE`；`[194a]` 覆盖 `_dmarc` / `a%b` 不误拦。
+- [x] T3【删除竞态】：running 删除 409；queued 用 `UPDATE ... WHERE status='queued'` 原子抢；批量同口径；`[285]` 加回归。
+- [x] T4【门禁】：`[194a]` + `[285]` 局部 PASS；全量 v25 `SMOKE PASS`（22:27–22:42，约 15m16s，含 e2e）。
+
+**续362 已处理（见上）**：拓展三套计数统一、OSINT 来源状态、被动子域 5 万/1 万上限均已闭环。
+
+## 续360（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：跨进程停止 + OVERLAP 改相关 NOT EXISTS
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人「做」：续359 下一轮的两个 P0。
+
+- [x] T1【跨进程停止】：`tasks.stop_requested` + 1s 短写 + `StageContext` 0.75s 缓存；start/finish/reconcile 全生命周期清账；`[285]` 与真双进程验证通过。
+- [x] T2【停止不卡】：停止路由审计改后台线程；queued 停止清标志；路由实测 0.011s。
+- [x] T3【NOT EXISTS】：`OVERLAP_EXT_WHERE` 改相关子查询，语义 #42/#52 不变；新增 `(domain, source)` 索引。
+- [x] T4【老库兼容】：`idx_tasks_status` 条件创建；修复 v20 `[7k]` 极简老库 `no such column: status`。
+- [x] T5【门禁】：全量 v21 `SMOKE PASS`（20:50–21:06，约 16m27s）；停止轮询直读后 v22 `SMOKE PASS`（21:08–21:24，约 15m14s，含 e2e）。
+- [x] T6【pid】：`start_task_run` 每次刷新 `pid=os.getpid()`；#61 复跑曾留着已退出的创建进程 pid；`[285]` 加回归。
+- [x] T7【OSINT own】：`_root_domains` / `_collect_ips` 只取 own 口径；#61 从 195 条/2m39s 降到 25 条/17.6s，第三方子域不再入库；`[285]` 加回归。
+- [x] T8【门禁】：v23 `[218]` 因注释里写真实注册域红；改泛化描述后 v24 `SMOKE PASS`（21:59–22:14，约 14m30s，含 e2e）；5000/5099 已重启。
+
+**续361 已处理（见上）**：双控制台 6 worker、队列归属/重启、LIKE 转义、delete 竞态均已闭环。
+**续362 继续**：OSINT 来源状态、三套计数口径、被动子域硬上限；0.0.0.0/401 按主理人要求暂不动。
+
+## 续359（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：清误建资产 + 修 P0 重启丢数据/批量停 queued
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人「可以 做」：清 #54–#58 误建资产，修推荐 P0。
+
+- [x] T1【清理】：备份后删 #54–#58 资产；subdomains 991,140→4,370，own 988k→436，库 75M→1.9M；#42 详情 28.2s→1.1s。
+- [x] T2【重启】：`api_task_restart` 先解析 options 再清资产；脏 JSON 降级 {}，不再丢资产。
+- [x] T3【批量停】：queued 直接置 stopped，不再只 skipped。
+- [x] T4【门禁】：`[285]` 两条回归；全量 v19 `SMOKE PASS`（19:18–19:34，约 15m30s）。
+- [x] T5【重启控制台】：5000/5099 均已重启到本版。
+
+**下一轮（续360）**：
+- [ ] P0 跨进程停止：5000/5099 共享 DB 时 A 停不了 B 的任务；同步 `_audit` 写锁仍可能卡停止请求。
+- [ ] P0 `OVERLAP_EXT_WHERE` 全局 `NOT IN` 改相关 `NOT EXISTS`/缓存，防止库再涨后详情页复发。
+- [ ] P1 统一任务列表/页签/表格三套拓展计数口径（等主理人定口径）。
+- [ ] P1 黑名单 `LIKE` 转义 `%` / `_`。
+- [ ] P1 `delete_task` 与旧 runner 的孤儿资产竞态。
+- [ ] P2 双控制台共用队列的归属/重启管理。
+
+## 续358（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：拓展计数三套口径 + 跳转高置信二次佐证
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人：31（全46） vs 表格全部30；godaddy.com 跳转不应仅凭 3xx 判高。
+
+- [x] T1【计数】：查清 31=已解析含重叠；表格30=不重叠18+自动来源12；页签20=不重叠已解析8+来源12。未强改口径。
+- [x] T2【跳转】：单 3xx 不再判高；名称中及以上+3xx 才判高；服务商/SSO/停放落点强制低且不入库。
+- [x] T3【正文/黑名单】：正文本来就在 3xx 那次请求里抓（停车/过期标记 + 落地 title）；不拿 Sign in 正文单独判死。跳转落点完整 host 也过全局/账号黑名单，复用原名单。
+- [x] T3b【手工入口】：策略页黑名单区支持直接输入未入库的第三方落点（`manual_domain`）；API 去重，不误加同表单勾选项。
+- [x] T4【门禁】：`[335]` 覆盖 low/medium/provider/owned/精确拉黑 host；`[263]` 局部通过。`[5d]` 用例已加，`--only 5d` 被既有组切片器 ValueError 挡住，改用路由桩实测手工输入通过。
+- [x] C1 全量 v18 `SMOKE PASS`（2026-11-06 13:39–13:53，约 13m25s，含 e2e）；v17 的 `[218]` 脱敏红已修。
+- [x] C2 记忆同步：`CHANGELOG_AI.md` / `todo.txt` 续358。
+
+**下一轮（续359）**：
+- [x] 主理人确认停 #53–#61：已停 #53–#58；#59–#61 保留并已完成；六个第三方落点进全局黑名单。
+- [ ] 主理人确认是否把三套拓展计数统一成同一口径（列表/页签/表格）。
+- [ ] P0 单任务重启先清资产后解析 options：脏 JSON 会丢资产；改成先解析、失败不清理。
+- [ ] P0 停止接口锁挂起 + 跨进程 Event：审计写库放异步/失败不阻塞；5099 与 5000 的停止要跨进程。
+- [ ] P0 任务详情 18–25s：`OVERLAP_EXT_WHERE` 全局 `NOT IN` 每次扫 98.8 万 own 行；改相关 `NOT EXISTS` + `(domain, source)` 索引/缓存；另补 `tasks(status)` 索引、WAL 只 init 一次；评估清掉已停第三方任务的 97.6 万行。
+- [ ] P1 批量停止 queued 不置 stopped。
+- [ ] P1 黑名单 `LIKE` 转义 `%` / `_`（已复现）。
+- [ ] P1 `delete_task` 与旧 runner 的孤儿资产竞态。
+- [ ] P1 统一 `subs_ext_all/live` 与 `_tab_counts/ext_counts` 的 cseg/去重口径。
+- [ ] 把 5099 第二控制台纳入重启工具统一管理。
+- [ ] `intel` 默认阶段、deep/dirmap 压时等既有 backlog。
+
+## 续357（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：解析过滤优先于自动送探
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人：域名不存在 / 解析超时的行不跳过，反而自动送探；解析过滤应优先于子任务探测。
+
+- [x] T1【定位】：自动送探读全部拓展行，`similar_candidates` 没看 `ip`；`RESOLVED_WHERE` 只管展示。
+- [x] T2【代码】：`ext_rows(resolved_only=True)` 复用 `db.RESOLVED_WHERE`；runner 在置信度/去重/上限之前先跳过未解析行。
+- [x] T3【可核对】：日志与返回值带跳过条数；#42 实测 46 行 → 31 已解析 / 15 未解析跳过。
+- [x] T4【门禁】：`[263]` 加高置信未解析 / 整批未解析用例；`[178]/[7s]` 回归通过。
+- [ ] C1 全量门禁 v16：待跑。
+- [x] C2 记忆同步：`CHANGELOG_AI.md` / `todo.txt` 续357。
+
+**下一轮（续358）**：
+- [ ] 主理人确认是否追溯处理旧规则生成的 9 个子任务（本轮不删）。
+- [ ] 把 5099 这类第二控制台纳入重启工具的统一归属/端口管理。
+- [ ] 主理人确认后把 `intel` 加入信息收集专项默认阶段。
+
+## 续356（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：拓展表按置信度降序 + 解释「像父任务」
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人：高置信降序、低置信沉底；问为何有些高置信不显示「像父任务」。
+
+- [x] T1【排序】：高 → 中 → 低，同档 `ratio` 降序；详情页、跨任务分组/平铺共用一份判据。
+- [x] T2【说明】：表格上方写清排序口径。
+- [x] T3【解释】：`near + not owned` 才显示「像」；同 IP/证书/跳转判高不显示，owned 显示「自家」。
+- [x] T4【门禁/前端】：`[178]/[7s]` 通过；真实浏览器 CDP 验证 high=15、low=5、firstLowIndex=15。
+- [x] C1 全量门禁 v15 `SMOKE PASS`（含浏览器 e2e）。
+- [x] C2 记忆同步：`CHANGELOG_AI.md` / `todo.txt` 续356。
+
+**下一轮（续357）**：
+- [ ] 把 5099 这类第二控制台纳入重启工具的统一归属/端口管理。
+- [ ] 主理人确认后把 `intel` 加入信息收集专项默认阶段。
+- [ ] 显式 deep / dirmap 深扫仍约 15 分钟，按点单再压字典/并发。
+
+## 续355（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：撤掉顶部汇总，来源行回到拓展表格
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+主理人：不要顶部单独栏；就在底下拓展域名表里显示「怎么获取到的」。
+
+- [x] T1【撤栏】：删除 `_auto_probe_summary.html`，两个拓展视图都不渲染顶部汇总。
+- [x] T2【并入表格】：`auto_probe_source_rows()` 把 auto 来源行并回 `ext_subs`，不受不重叠/未解析过滤影响。
+- [x] T3【行内】：来源、接口语法、置信度、IP 与「已自动送探 → #N」都按普通行显示；计数同步。
+- [x] T4【门禁】：`[178]` 钉住未解析 auto 来源行出现在默认表格、顶部汇总不得再出现。
+- [x] C1 v13 曾红在 `[7s]` 徽标口径并修复；v14 按主理人要求停止，最终以 v15 为准。
+- [x] C2 记忆同步：`CHANGELOG_AI.md` / `todo.txt` 续355。
+
+**下一轮（续356）**：
+- [ ] 把 5099 这类第二控制台纳入重启工具的统一归属/端口管理。
+- [ ] 主理人确认后把 `intel` 加入信息收集专项默认阶段。
+- [ ] 显式 deep / dirmap 深扫仍约 15 分钟，按点单再压字典/并发。
+
+## 续354（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：汇总被 `.note` CSS 默认隐藏
+
+实施者：WorkBuddy · DeepSeek-V4.1-Flash
+
+根因不是缓存：CSS `body:not(.notes-on) .note{display:none}` 把汇总正文整段隐藏，截图里只剩空白 panel。
+
+- [x] T1【定位】：读 CSS 找到 `.note` 默认隐藏规则，与汇总片段类名对上。
+- [x] T2【修复】：汇总去掉 `.note`，改内联高对比样式 + 固定 id + `【构建 354】` 标记。
+- [x] T3【门禁】：`[178]` 钉住类名/id/构建标记，防止回潮。
+- [x] C1 全量门禁 v12 `SMOKE PASS`；5000/5099 已重启并公网复核。
+- [x] C2 记忆同步：`CHANGELOG_AI.md` / `todo.txt` 续354。
+
+**下一轮（续355）**：
+- [ ] 把 5099 这类第二控制台纳入重启工具的统一归属/端口管理。
+- [ ] 主理人确认后把 `intel` 加入信息收集专项默认阶段。
+- [ ] 显式 deep / dirmap 深扫仍约 15 分钟，按点单再压字典/并发。
+
 ## 续353（2026-11-06，WorkBuddy · DeepSeek-V4.1-Flash）：HTML no-store + 模板自动重载
 
 实施者：WorkBuddy · DeepSeek-V4.1-Flash

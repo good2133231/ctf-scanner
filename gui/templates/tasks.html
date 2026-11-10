@@ -239,7 +239,7 @@
             data-c="subs_own_all">{{ counts[t.id].subs_own_all }}</span>）</span><br>
           漏洞: <span data-c="vulns">{{ counts[t.id].vulns }}</span><br>
           拓展: <span data-c="subs_ext_live">{{ counts[t.id].subs_ext_live }}</span><span
-            title="前一个数＝已解析、按域名去重、并排除已归属本项目的域名（与详情页签一致）；括号内是全量入库条数（含未解析，同域多来源各一条）">（全 <span
+            title="前一个数＝已解析、按域名去重、并排除已归属/cseg/黑名单（与详情页签、表格底部一致）；括号内是原始入库条数（含未解析、同域多来源各一条、cseg/黑名单），只用于解释差值">（全 <span
             data-c="subs_ext_all">{{ counts[t.id].subs_ext_all }}</span>）</span></td>
 
         {# 续200：阶段改**预览框**（原先是点一下在行内展开一串文字，把表格撑开）；

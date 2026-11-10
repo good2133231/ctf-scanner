@@ -39,8 +39,8 @@ import time
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
-from flask import (Flask, Response, abort, jsonify, redirect, send_file,
-                   render_template, request, session, url_for)
+from flask import (Flask, Response, abort, copy_current_request_context, jsonify,
+                   redirect, send_file, render_template, request, session, url_for)
 # 反向代理支持（续47）：`ProxyFix` 随 werkzeug 一起装（Flask 的依赖），**不新增第三方依赖**。
 # 只在 `gui.behind_proxy` 显式打开时才挂上 —— 见 `create_app` 里的说明。
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -57,7 +57,8 @@ from scanner import (admin_setup, audit, auth as taskauth, blacklist, cancelcaus
                      screenshot,
                      shodan, targets as targets_mod, weakboundary,
                      toolmgr, users, packetcodec)
-from scanner.config import BASE_DIR, gui_bind, load_settings, save_settings, session_secret
+from scanner.config import (BASE_DIR, gui_bind, load_settings, save_settings,
+                            session_secret, shared_ip_min)
 from scanner import log as runlog
 from scanner.log import (attach_access_log, attach_server_log, boot_logger,
                          get_logger)
@@ -132,6 +133,7 @@ SOURCE_LABELS = {
     "osint:fofa": "FOFA·ICO 反查",
     "osint:fofa-cert": "FOFA·证书反查",
     "osint:fofa-title": "FOFA·标题反查",
+    "osint:fofa-host": "FOFA·host 反查(同IP)",
     # 批次 4 新增的三家同源/同源类来源：都带厂商名，一眼看出是哪个平台找出来的
     "osint:shodan": "Shodan·ICO 反查",
     "osint:quake": "Quake·ICO 反查",
@@ -1427,6 +1429,28 @@ def auto_probe_summary(from_task):
              "domains": sorted(by[t])} for t in ids]
 
 
+def auto_probe_source_rows(from_task):
+    """自动送探用过的来源行 → 直接并进拓展域名表格，不再单独做顶部汇总。"""
+    domains = sorted({d for p in auto_probe_summary(from_task) for d in p["domains"]})
+    if not domains:
+        return []
+    marks = ",".join("?" * len(domains))
+    rows = db._query(
+        "SELECT * FROM subdomains WHERE task_id=? AND " + db.EXT_SUBDOMAIN_WHERE
+        + f" AND domain IN ({marks}) ORDER BY " + db.SOURCE_RANK_CASE + ", id DESC",
+        (int(from_task),) + tuple(domains))
+    out, seen = [], set()
+    for r in rows:
+        d = str(r["domain"] or "").strip().lower()
+        if not d or d in seen:
+            continue
+        seen.add(d)
+        x = dict(r)
+        x["auto_probe_source"] = 1
+        out.append(x)
+    return out
+
+
 def create_app():
     settings = load_settings()
     app = Flask(__name__)
@@ -1799,6 +1823,18 @@ def create_app():
                          settings=settings)
         except Exception as e:      # noqa: BLE001
             logger.warning(f"[gui] 审计写入失败（已忽略）：{e}")
+
+    def _audit_async(kind, target="", detail="", ok=True):
+        """续360：停止接口的审计写库**不能阻塞响应**。
+
+        旧版在 DB 写锁下同步 `_audit()`，实测停止请求 15 秒不返回；停止标志已经
+        落库、任务也会停，但用户只能杀控制台。这里复制请求上下文后丢 daemon 线程：
+        审计丢一条比控制台卡死可接受（`audit.record` 自身仍会兜异常）。
+        """
+        @copy_current_request_context
+        def _run():
+            _audit(kind, target=target, detail=detail, ok=ok)
+        threading.Thread(target=_run, daemon=True, name="audit-stop").start()
 
     def _guard_check(ip, username):
         """问限速守卫（只读）。守卫自身出错 → 放行本次登录（可用性优先），并 warning。"""
@@ -2394,7 +2430,8 @@ def create_app():
         # 「统计」列：站点/域名数量（对齐参考图的 站点: N / 域名: N 展示）
         # 续91：一次算完整页的计数（原来 `{t["id"]: task_counts(t["id"])}` 是 N+1 ——
         # 每任务 7 条 COUNT，一页 100 个任务 = 700 次查询）。
-        counts = db.task_counts_bulk([t["id"] for t in rows])
+        counts = db.task_counts_bulk([t["id"] for t in rows],
+                                        blacklist_entries=blacklist.load(load_settings(), owner_id=_owner_scope()))
         # 续282：行徽章「子任务（N）」的数量 —— 一次 GROUP BY（`child_counts_bulk`），
         # 不是每行一次 COUNT（同 `task_counts_bulk` 续91 的理由）；没有子任务的行缺键 = 0。
         child_counts = db.child_counts_bulk([t["id"] for t in rows])
@@ -2753,6 +2790,47 @@ def create_app():
         task["log_file"] = rel_display(task.get("log_file") or "", mask_outside=True)
         # 错误消息是**自由文本**（异常原文里常带本机的盘符/绝对路径），展示前过一遍清洗
         task["error"] = scrub_paths(task.get("error") or "")
+        # 续362：OSINT 来源状态（存在 tasks.options.osint_sources）。把“来源失败”与
+        # “确实空结果”分开显示；旧任务没有该键就什么都不渲染。detail 是自由文本，
+        # 过 scrub_paths 再上页面（与 error 同一档）。
+        _src362 = []
+        # osint_sources 是运行期元数据，不该出现在“运行配置/补扫选项”的原始 JSON 里；
+        # 给模板一份过滤后的展示副本（解析失败才回退原串，保持旧行为）。
+        task["options_display"] = task.get("options") or ""
+        try:
+            _opts362 = json.loads(task.get("options") or "{}")
+            if isinstance(_opts362, dict):
+                _disp362 = dict(_opts362)
+                _disp362.pop("osint_sources", None)
+                _disp362.pop("iprecon_shared_ips", None)
+                task["options_display"] = json.dumps(_disp362, ensure_ascii=False)
+            _raw362 = (_opts362 or {}).get("osint_sources") if isinstance(_opts362, dict) else None
+            if isinstance(_raw362, list):
+                _lbl362 = {"ok": "成功", "empty": "空结果", "unknown": "未取到/空",
+                           "partial": "部分失败", "failed": "失败", "skipped": "跳过",
+                           "disabled": "未启用", "pending": "未完成"}
+                for _s362 in _raw362[:12]:
+                    if not isinstance(_s362, dict):
+                        continue
+                    _name362 = str(_s362.get("label") or _s362.get("key") or "").strip()[:40]
+                    if not _name362:
+                        continue
+                    _st362 = str(_s362.get("status") or "").strip().lower()
+                    if _st362 == "disabled":
+                        continue      # 未启用的源不占页面；任务日志里仍有一句总览
+                    try:
+                        _cnt362 = int(_s362.get("count") or 0)
+                    except (TypeError, ValueError):
+                        _cnt362 = 0
+                    _src362.append({
+                        "label": _name362, "status": _st362,
+                        "status_label": _lbl362.get(_st362, _st362 or "未知"),
+                        "count": max(0, _cnt362),
+                        "detail": scrub_paths(str(_s362.get("detail") or ""))[:240],
+                    })
+        except (TypeError, ValueError, AttributeError):
+            _src362 = []
+        task["osint_sources"] = _src362
         # 续176：被 min_severity 挡掉的条数（用户点单，§0 第 10 条：被过滤 ≠ 不存在）。
         # 文案唯一产地 = report.sev_blocked_note()，GUI 与 MD/HTML 报告共用同一句；
         # 老库缺列 / 没有可报的数时返回空串 ⇒ 不渲染。
@@ -2847,11 +2925,44 @@ def create_app():
             ext_subs, f"task_id=? AND ({ext_base})"
             + (f" AND {_bl_not_ext}" if _bl_not_ext else ""),
             (task_id,) + ((ext_pick[2],) if ext_pick else ()) + tuple(_bl_params_ext), hide_res)
-        # 续169：这一页签每行的「置信度」徽章 —— 判据只有 `extdom.confidence` 一份，页面只读不另算
+        # 续355：主理人不要顶部独立汇总，要求「就在底下拓展域名里面显示怎么获取到的」。
+        # 把 auto 送探用到的来源行并回表格：它们即使被「不重叠 / 未解析」默认过滤收起也列出，
+        # 来源、来源站点/语法、置信度、IP 和行内「已自动送探 → #N」都按普通拓展行渲染。
+        _ap_rows = auto_probe_source_rows(task_id)
+        _seen_ext = {str(r.get("domain") or "").strip().lower() for r in ext_subs}
+        _ap_extra = []
+        for _r in _ap_rows:
+            _d = str(_r.get("domain") or "").strip().lower()
+            if _d and _d not in _seen_ext:
+                _seen_ext.add(_d)
+                _ap_extra.append(dict(_r))
+        _ap_extra_n = len(_ap_extra)
+        if _ap_extra:
+            _ap_extra, _ = _sub_rows(
+                _ap_extra, f"task_id=? AND ({db.EXT_SUBDOMAIN_WHERE})", (task_id,), False)
+            ext_subs = ext_subs + _ap_extra
+            for _r in _ap_extra:
+                _s = str(_r.get("source") or "")
+                ext_counts[_s] = ext_counts.get(_s, 0) + 1
+        # 自动送探来源行排在表格最前：主理人一进页面就能看到 #43–#51 分别来自哪条拓展行，
+        # 不用滚到后面找，也不另建顶部汇总栏。
+        _ap_domains = {str(r.get("domain") or "").strip().lower() for r in _ap_rows}
+        for _r in ext_subs:
+            _r["auto_probe_source"] = 1 if \
+                str(_r.get("domain") or "").strip().lower() in _ap_domains else 0
+        ext_subs.sort(key=lambda r: 0 if r.get("auto_probe_source") else 1)
+        # 徽标与分页条仍是「SQL 命中总数 + 并入的来源行数」，不能用当前页 |length 覆盖
+        ext_pager["total"] = int(ext_pager.get("total", 0)) + _ap_extra_n
+        ext_pager["pages"] = max(1, (int(ext_pager["total"]) + int(ext_pager["size"]) - 1)
+                                 // int(ext_pager["size"]))
+        # 续169：这一页签每行的「置信度」徽章 —— 判据只有 `extdom.confidence` 一份
         _ext_confidence(ext_subs, tid=task_id)
-        # 续349：详情页 #ext 也要显示「已自动送探 → #N」。以前只给跨任务页装配 probe_map，
-        # 用户在这个页签看到的「全部（18）」只是过滤后数字，自然找不到来源行徽章。
+        # 续356：高置信在前，低置信沉底；同档按相似度 ratio 降序
+        ext_subs = _sort_ext_by_conf(ext_subs)
         ext_probe_map = build_ext_probe_map(ext_subs)
+        _tab_counts354 = _tab_counts(task_id)
+        _tab_counts354["ext"] = int(_tab_counts354.get("ext", 0)) + _ap_extra_n
+        # 续355：行徽章已在合并来源行之后统一装配；下面保留重叠说明与展开按钮。
         _ext_overlap_hidden = int((db._query(
             "SELECT COUNT(DISTINCT domain) c FROM subdomains WHERE task_id=? AND "
             + db.EXT_SUBDOMAIN_WHERE + " AND domain IN (SELECT domain FROM subdomains WHERE "
@@ -2918,6 +3029,12 @@ def create_app():
             opts_display = dict(top)
             opts_display["auth"] = dict(auth_view)
             task["options"] = json.dumps(opts_display, ensure_ascii=False)
+            # 续363：options_display 是模板实际渲染的副本，必须同步用掩码后的 auth，
+            # 否则“运行配置 → 选项”会绕过下面的脱敏把明文 Cookie 打回页面。
+            _disp_auth363 = dict(opts_display)
+            _disp_auth363.pop("osint_sources", None)
+            _disp_auth363.pop("iprecon_shared_ips", None)
+            task["options_display"] = json.dumps(_disp_auth363, ensure_ascii=False)
 
         # 站点页签。`order="id"` 是**显式**的：`_ASSET_PAGES["sites"]` 的表默认序自 续165 起是
         # "同标题聚在一起、组内 `id DESC`"（跨任务 /sites 页要的是**聚集**，不再是单纯"最新在前"），
@@ -3101,7 +3218,6 @@ def create_app():
             "task_detail.html", task=task,
             sev_blocked_line=task.get("sev_blocked_line", ""),
             subs=subs, ext_subs=ext_subs, ext_probe_map=ext_probe_map,
-            auto_probe_summary=auto_probe_summary(task_id),
             ext_show_all=_ext_all264, ext_toggle_overlap_url=ext_toggle_overlap_url,
             ext_overlap_hidden=_ext_overlap_hidden,
             ext_src=ext_src, ext_counts=ext_counts, ext_src_tags=EXT_SRC_TAGS,
@@ -3135,7 +3251,7 @@ def create_app():
             # （`/api/tasks/<id>/status?tabcounts=1`）共用同一把尺子，按"当前筛选口径"重算，
             # **全部 11 个页签都 live**（不再有"折叠/去重/筛选后的口径不许 live"的例外 ——
             # 因为轮询吃的是和页签同一个过滤后的数，不会再出现"列表 3 行、徽标 120"）。
-            tab_counts=_tab_counts(task_id),
+            tab_counts=_tab_counts354,
             sites_pager=sites_pager, sites_q=sites_q, site_total=site_total,
             ports_pager=ports_pager, ports_q=ports_q,
             csegs_pager=csegs_pager, csegs_q=csegs_q,
@@ -3231,23 +3347,37 @@ def create_app():
         if task["status"] == "queued":
             # 排队中：还没有线程可发停止信号 —— 直接从队列移除（置 stopped）。同时试一次
             # `request_stop`，兜住"worker 刚好在那一刻把它认领走"的极小竞态（认领后才注册停止事件）。
-            db.update_task(task_id, status="stopped")
+            # 续360：顺手清掉历史 stop_requested，避免下一次 run 继承。
+            db.update_task(task_id, status="stopped", stop_requested=0)
             runner.request_stop(task_id)
-            _audit(audit.KIND_TASK, target=f"#{task_id}", ok=True,
-                   detail="从队列移除任务（尚未开始执行）")
+            _audit_async(audit.KIND_TASK, target=f"#{task_id}", ok=True,
+                         detail="从队列移除任务（尚未开始执行）")
             return jsonify({"ok": True, "msg": "已从队列移除（该任务尚未开始）"})
         ok = runner.request_stop(task_id)
-        _audit(audit.KIND_TASK, target=f"#{task_id}", ok=bool(ok),
-               detail=("请求停止任务" if ok else "请求停止任务（当时未在运行）"))
+        # 续360：request_stop 现在会写库，另一个控制台进程也能看到；审计改后台。
+        _audit_async(audit.KIND_TASK, target=f"#{task_id}", ok=bool(ok),
+                     detail=("请求停止任务" if ok else "请求停止任务（当时未在运行）"))
         return jsonify({"ok": ok, "msg": "已请求停止，当前批次跑完即停" if ok
                         else "该任务当前未在运行"})
 
     @app.route("/api/tasks/<int:task_id>/delete", methods=["POST"])
     @login_required
     def api_task_delete(task_id):
-        if not _owned_task(task_id):
+        task = _owned_task(task_id)
+        if not task:
             return jsonify({"error": "not found"}), 404
-        runner.request_stop(task_id)   # 先停线程，避免它继续往已删除的任务里写数据
+        # 续361：删除必须先确认没有 runner 在写。旧实现 request_stop 后立刻 delete，
+        # runner 还在当前批次里写资产 ⇒ 任务行没了、孤儿行留在各资产表（且 worker 继续跑）。
+        # queued 用原子 UPDATE 和 claim_next_queued 赛跑；赢了才删。running 直接拒绝，
+        # 让用户先停止、状态落 stopped 后再删 —— 这比"删一半"安全。
+        if task["status"] == "running":
+            return jsonify({"ok": False,
+                            "error": "任务正在运行，已拒绝删除；请先停止，等状态变为 stopped 后再删除"}), 409
+        if task["status"] == "queued":
+            if not db.stop_queued_task(task_id):
+                # 认领者赢了（已 running）或 DB 忙；都不能删，交给用户重试。
+                return jsonify({"ok": False,
+                                "error": "任务刚被 worker 认领或数据库忙，已拒绝删除；请先停止后再试"}), 409
         db.delete_task(task_id)
         _audit(audit.KIND_TASK, target=f"#{task_id}", detail="删除任务（已自动备份）")
         return jsonify({"ok": True})
@@ -3261,11 +3391,29 @@ def create_app():
             return jsonify({"error": "not found"}), 404
         if task["status"] == "running":
             return jsonify({"ok": False, "error": "任务正在运行，请先停止再重启"})
+        # 续363：queued 旧队列行可能正好被 worker 认领；先原子抢出队，抢不到就拒绝，
+        # 否则 clear_task_assets + _spawn 会和旧 run_payload 叠成同一任务双跑。
+        if task["status"] == "queued" and not db.stop_queued_task(task_id):
+            return jsonify({"ok": False, "error": "任务已被队列领取，请稍后重试或先停止"})
         stages = [s for s in (task["stages"] or "").split(",") if s in STAGE_ORDER]
+        # 续359：先解析 options，再清资产。options 是自由文本列，脏 JSON 直接裸 loads
+        # 会 500；而旧顺序早已 clear_task_assets ⇒ 资产没了、任务也没起来。
+        # 与批量重启同一降级：坏值按空选项处理并记 warning，绝不丢资产。
+        try:
+            _opts = json.loads(task["options"] or "{}")
+            if not isinstance(_opts, dict):
+                raise ValueError("options 不是对象")
+        except (TypeError, ValueError) as _e:
+            logger.warning(f"[gui] 任务 #{task_id} 的 options 不是合法 JSON 对象（{_e}），"
+                           f"重启按空选项处理")
+            _opts = {}
+        # 续362：重启会重头跑；旧 osint_sources 是上一轮运行期元数据，不能继续展示。
+        _opts.pop("osint_sources", None)
+        _opts.pop("iprecon_shared_ips", None)
         db.clear_task_assets(task_id)
-        db.update_task(task_id, status="pending", progress=0, current_stage="", error="")
-        _spawn(task_id, task["name"], task["targets"], stages or list(STAGE_ORDER),
-               json.loads(task["options"] or "{}"))
+        db.update_task(task_id, status="pending", progress=0, current_stage="", error="",
+                       options=json.dumps(_opts, ensure_ascii=False))
+        _spawn(task_id, task["name"], task["targets"], stages or list(STAGE_ORDER), _opts)
         _audit(audit.KIND_TASK, target=f"#{task_id}", detail="重启任务（清空资产后从头跑）")
         return jsonify({"ok": True})
 
@@ -3332,16 +3480,32 @@ def create_app():
                 continue
             running = task["status"] == "running"
             if action == "stop":
-                if running and runner.request_stop(tid):
+                # 续359：queued 还没有 worker 线程，request_stop 必然 false；
+                # 只跳过会把任务留在队列里继续被捡。这里与单任务停止同口径置 stopped。
+                if task["status"] == "queued":
+                    db.update_task(tid, status="stopped", stop_requested=0)
+                    runner.request_stop(tid)
+                    affected += 1
+                elif running and runner.request_stop(tid):
                     affected += 1
                 else:
                     skipped.append(tid)
             elif action == "delete":
-                runner.request_stop(tid)
+                # 续361：与单任务删除同口径。running 不删；queued 原子抢到才删。
+                if running:
+                    skipped.append(tid)
+                    continue
+                if task["status"] == "queued" and not db.stop_queued_task(tid):
+                    skipped.append(tid)
+                    continue
                 db.delete_task(tid)
                 affected += 1
             else:  # restart
                 if running:
+                    skipped.append(tid)
+                    continue
+                # 续363：同单任务重启，queued 先原子出队，避免与 worker 认领撞车。
+                if task["status"] == "queued" and not db.stop_queued_task(tid):
                     skipped.append(tid)
                     continue
                 stages = [s for s in (task["stages"] or "").split(",") if s in STAGE_ORDER]
@@ -3361,6 +3525,9 @@ def create_app():
                     logger.warning(f"[gui] 任务 #{tid} 的 options 不是合法 JSON 对象（{_e280}），"
                                    f"重启按空选项处理")
                     _opts = {}
+                _opts.pop("osint_sources", None)
+                _opts.pop("iprecon_shared_ips", None)   # 续363：同上，清旧来源状态
+                db.update_task(tid, options=json.dumps(_opts, ensure_ascii=False))
                 _spawn(tid, task["name"], task["targets"], stages or list(STAGE_ORDER), _opts)
                 affected += 1
         _audit(audit.KIND_TASK, target="批量", detail=f"批量 {action}：影响 {affected} 个任务")
@@ -3428,7 +3595,9 @@ def create_app():
         # 默认**不带**（轮询每 2 秒一次，白算 10 条 GROUP BY 没必要），只有明确要的那一处
         # （详情页页签）才带。
         if _want_counts():
-            out["counts"] = db.task_counts_bulk([int(task_id)]).get(int(task_id)) or {}
+            out["counts"] = db.task_counts_bulk(
+            [int(task_id)],
+            blacklist_entries=blacklist.load(load_settings(), owner_id=_owner_scope())).get(int(task_id)) or {}
             out["id"] = int(task_id)
         # 续283：详情页**全部**页签徽标 live 化 —— 轮询带 `?tabcounts=1` 时，用与渲染**同一把尺子**
         # 的 `_tab_counts(task_id)` 按"当前筛选口径"重算（轮询自己带上 `location.search` 的
@@ -3475,7 +3644,9 @@ def create_app():
                                "current_stage": r["current_stage"]}
         if _want_counts() and tasks:
             # 只对**通过了租户过滤**的那些 id 算（越权的 id 连计数也不给 —— 与上面同一口径）
-            _c280 = db.task_counts_bulk([int(k) for k in tasks])
+            _c280 = db.task_counts_bulk(
+                [int(k) for k in tasks],
+                blacklist_entries=blacklist.load(load_settings(), owner_id=_owner_scope()))
             for _k, _v in tasks.items():
                 _v["counts"] = _c280.get(int(_k)) or {}
         return jsonify({"ok": True, "tasks": tasks})
@@ -3944,13 +4115,37 @@ def create_app():
             _bases, _ips, _shares = cache[key]
             # 续179：徽章与自动递归吃同一份结论（含 IP 佐证）—— 判据只在
             # extdom.apply_ip_evidence 一处（§5.14）；续194 再并进证书佐证（同形）。
-            r["conf"] = extdom.apply_redirect_evidence(
-                extdom.apply_cert_evidence(
-                    extdom.apply_ip_evidence(
-                        extdom.confidence(r.get("domain") or "", bases=_bases), r, _ips),
-                    r, _shares),
+            # 续365：FOFA host= 同 IP 佐证最后叠加（与 similar_candidates 同一条链，§5.14）
+            r["conf"] = extdom.apply_fofa_host_evidence(
+                extdom.apply_redirect_evidence(
+                    extdom.apply_cert_evidence(
+                        extdom.apply_ip_evidence(
+                            extdom.confidence(r.get("domain") or "", bases=_bases), r, _ips),
+                        r, _shares),
+                    r),
                 r)
         return rows
+
+    def _conf_sort_key(row):
+        """拓展域名表格：高→中→低，同档按相似度 ratio 降序。"""
+        c = row.get("conf") or {}
+        try:
+            ratio = float(c.get("ratio") or 0)
+        except (TypeError, ValueError):
+            ratio = 0.0
+        return (-extdom.conf_rank(c.get("level") or "low"), -ratio)
+
+    def _sort_ext_by_conf(rows):
+        return sorted(rows, key=_conf_sort_key)
+
+    def _sort_ext_groups_by_conf(groups):
+        out = []
+        for g in groups:
+            g = dict(g)
+            g["rows"] = _sort_ext_by_conf(list(g.get("rows") or []))
+            out.append(g)
+        out.sort(key=lambda g: _conf_sort_key((g.get("rows") or [{}])[0]))
+        return out
 
     def _overlap_args():
         """「是否显示重叠资产」开关：默认隐藏，`?all=1` 显示全部（两个资产页口径一致）。"""
@@ -4253,6 +4448,7 @@ def create_app():
             for g in groups:
                 g["rows"], _ = _sub_rows(g["rows"], base_where, params, False)
                 _ext_confidence(g["rows"])      # 续169：徽章与自动递归共用同一个判据
+            groups = _sort_ext_groups_by_conf(groups)   # 续356：高置信组/行在前
             _, hidden = _sub_rows([], base_where, params, hide_res)
             _nores_state(pager, hide_res, hidden)
         else:
@@ -4263,6 +4459,7 @@ def create_app():
             row_total = pager["total"]
             subs, hidden = _sub_rows(subs, base_where, params, hide_res)
             _ext_confidence(subs)               # 续169：平铺视图也要贴（两种视图一边有一边没有＝假徽章）
+            subs = _sort_ext_by_conf(subs)      # 续356：高置信在前，低置信沉底
             if bl_view:
                 # 每条被拦的行写清「命中的是哪个黑名单条目」—— 只报条数不说条目，
                 # 用户没法判断拦得对不对（续194）
@@ -4307,7 +4504,6 @@ def create_app():
                                src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name,
                                src_counts=src_counts,
                                probe_map=probe_map, group_probes=group_probes,
-                               auto_probe_summary=auto_probe_summary(tid) if tid else [],
                                bl_view=bl_view, bl_hidden=bl_hidden, bl_hits=bl_hits)
 
     @app.route("/sites")
@@ -4906,7 +5102,11 @@ def create_app():
     @app.route("/api/blacklist/add", methods=["POST"])
     @login_required
     def api_blacklist_add():
-        domains = _picked_domains()
+        # 策略页的「手工加入」用独立字段：同页还有勾选待移除的 domain，
+        # 若共用字段，点一次「加入」会把勾选待移除的条目也一起加回来。
+        _manual = list(dict.fromkeys(
+            x.strip() for x in request.form.getlist("manual_domain") if x.strip()))
+        domains = _manual or _picked_domains()
         n = blacklist.add(domains, settings, owner_id=_owner_scope())
         logger.info(f"[gui] 黑名单新增 {n} 条（提交 {len(domains)} 个）")
         return redirect(_safe_next(request.form.get("next"), url_for("subdomains")))
@@ -5362,7 +5562,9 @@ def create_app():
                     "created_at": ch["created_at"],
                     "duration": run_duration_text(dict(full)),
                     "stages": full["stages"],
-                    "counts": db.task_counts(cid),
+                    "counts": db.task_counts(
+                        cid, blacklist_entries=blacklist.load(
+                            load_settings(), owner_id=_owner_scope())),
                 })
                 walk(cid, p, depth + 1)
 
@@ -5874,7 +6076,7 @@ def create_app():
                     # settings.yaml 里写（登录一律走 users 表的 PBKDF2 派生值）
                     "gui": {"host": f.get("host", "127.0.0.1"),
                             "port": int(f.get("port", 5000) or 5000),
-                            # 以下键**页面上没有输入框**，原样带回（save_settings 是整份重写）
+                            # 以下键**页面上没有输入框**，原样带回（save_settings 是合并写，仍逐键点名）
                             "allowed_hosts": list(
                                 (_g0.get("allowed_hosts") or [])),
                             "allowed_hosts_auto_local": bool(
@@ -5953,7 +6155,7 @@ def create_app():
                                 # sources（留空=内置源表）页面无输入框，原样带回
                                 "sources": list(_p0.get("sources") or [])},
                     # 续340：passive_urls（Wayback/OTX 历史 URL）是独立段，页面暂无输入框；
-                    # save_settings 整份重写，POST 映射漏段会把它整个删掉（[145] 已抓到）。
+                    # save_settings 是合并写；POST 映射仍逐段点名，避免表单漏段造成漂移（[145] 已抓到）。
                     "passive_urls": {
                         "enabled": (f.get("passive_urls_enabled") == "1")
                         if "passive_urls_enabled" in f
@@ -5966,9 +6168,9 @@ def create_app():
                                           or (settings.get("passive_urls") or {}).get("max_roots") or 10),
                     },
                     # 子域名收集：并集开关 + 自动提取主域（续145）。max_resolve / dns_timeout
-                    # 页面上没有输入框，原样带回（save_settings 是整份重写，漏带就是把键删掉）。
+                    # 页面上没有输入框，原样带回（save_settings 是合并写，仍逐键点名保持一致）。
                     "subdomain": {"max_resolve": int(
-                                      (settings.get("subdomain") or {}).get("max_resolve", 500) or 500),
+                                      (settings.get("subdomain") or {}).get("max_resolve", 1000) or 1000),
                                   "dns_timeout": float(
                                       (settings.get("subdomain") or {}).get("dns_timeout", 3) or 3),
                                   "union_passive": f.get("union_passive") == "1",
@@ -5979,8 +6181,18 @@ def create_app():
                                   "reuse_history_max": int(
                                       f.get("subdomain_reuse_history_max")
                                       or (settings.get("subdomain") or {}).get("reuse_history_max", 300)),
+                                  # 续362：被动子域硬上限/告警线。0 = 不限，不能 `or 50000` 抹掉；
+                                  # 留空才回退现值（save_settings 是合并写，仍逐键点名保持一致）。
+                                  "passive_max": max(0, int(
+                                      f.get("subdomain_passive_max")
+                                      if f.get("subdomain_passive_max") not in (None, "")
+                                      else (settings.get("subdomain") or {}).get("passive_max", 50000))),
+                                  "passive_warn": max(0, int(
+                                      f.get("subdomain_passive_warn")
+                                      if f.get("subdomain_passive_warn") not in (None, "")
+                                      else (settings.get("subdomain") or {}).get("passive_warn", 10000))),
                                   # 续333：子域增量模式（同根域 TTL 内有历史就跳过全量/组合爆破）。
-                                  # 页面没填就原样带回现值 —— save_settings 是整份重写，漏带＝键被删。
+                                  # 页面没填就原样带回现值 —— save_settings 是合并写，仍逐键点名保持一致。
                                   "incremental": f.get("subdomain_incremental") == "1",
                                   "incremental_ttl_days": max(1, int(
                                       f.get("subdomain_incremental_ttl_days")
@@ -5992,7 +6204,7 @@ def create_app():
                                        else (settings.get("subdomain") or {}).get("incremental_max_words", 5000))
                                       or 0)),
                                   # 续169：拓展域名自动递归的两档（层数 / 置信度阈值）。
-                                  # 页面上没填就原样带回现值 —— `save_settings` 是整份重写，
+                                  # 页面上没填就原样带回现值 —— `save_settings` 是合并写，
                                   # 漏带＝把键删掉（`[8at]②` 那条"逐段点名一个键都不许少"为此而设）。
                                   # 夹值与归一都走既有产地，不在这里再写一遍范围。
                                   "ext_depth": runner.clamp_ext_depth(
@@ -6119,7 +6331,7 @@ def create_app():
                              # 端口列表：页面输入 "443,8443" 这种逗号/空格分隔的写法；
                              # 全非法时回退默认值（不要让一个手滑把功能变成"永不触发"）
                              "tls_ports": parse_port_list(f.get("cert_tls_ports"))},
-                    # 续198：站点爬虫。逐键点名，一个都不许少（`save_settings` 是整份重写，
+                    # 续198：站点爬虫。逐键点名，一个都不许少（`save_settings` 是合并写，
                     # 漏带＝把键删掉，与 [8at]② 同一条口径）。
                     "crawl": {"enabled": f.get("crawl_enabled") == "1",
                               "max_sites": int(f.get("crawl_max_sites", 30) or 30),
@@ -6133,7 +6345,7 @@ def create_app():
                               "feed_vulnscan": f.get("crawl_feed_vulnscan") == "1",
                               "max_feed": int(f.get("crawl_max_feed", 10) or 0),
                               "max_feed_total": int(f.get("crawl_max_feed_total", 40) or 40)},
-                    # 续205：备案反查。逐键点名（save_settings 整份重写，漏带＝删键）。
+                    # 续205：备案反查。逐键点名（save_settings 是合并写，仍逐键点名保持一致）。
                     "icp": {"enabled": f.get("icp_enabled") == "1",
                             "preflight": f.get("icp_preflight") == "1",
                             "max_domains": int(f.get("icp_max_domains", 50) or 50),
@@ -6142,7 +6354,7 @@ def create_app():
                             "api_key": (settings.get("icp") or {}).get("api_key", ""),
                             "sources": list((settings.get("icp") or {}).get("sources")
                                             or [])},
-                    # 续211-P1-4：外部引擎配额预检。逐键点名（`save_settings` 整份重写）。
+                    # 续211-P1-4：外部引擎配额预检。逐键点名（`save_settings` 是合并写）。
                     "extquota": {"enabled": f.get("extquota_enabled") == "1",
                                  "min_left": int(f.get("extquota_min_left", 1) or 1)},
                     # 续221：指纹单站标签上限（`fingerprint.max_tags`）。没有输入框就原样带回现值。
@@ -6178,7 +6390,7 @@ def create_app():
                                    f.get("jsmine_parking_check_max", 100) or 0),
                                "strip_comments": f.get("jsmine_strip_comments") == "1",
                                # 续340：以下三键页面无输入框（续334 新增）—— 保存时原样带回，
-                               # 不再被 save_settings 的整份重写静默洗掉（[8as] 已抓到）。
+                               # 不再因表单漏段而漂移（[8as] 已抓到；save_settings 合并写也不删未传键）。
                                "fast_domains": bool(_j0.get("fast_domains", True)),
                                "max_js_total": int(f.get("jsmine_max_js_total")
                                                    or _j0.get("max_js_total") or 80),
@@ -6198,6 +6410,8 @@ def create_app():
                                 "max_hosts": int(f.get("iprecon_max_hosts", 200) or 200),
                                 "max_domains_per_ip": int(
                                     f.get("iprecon_max_domains_per_ip", 100) or 100),
+                                "shared_ip_min": int(f.get("iprecon_shared_ip_min")
+                                                     or shared_ip_min(settings)),
                                 "workers": int(f.get("iprecon_workers", 5) or 5),
                                 "timeout": float(f.get("iprecon_timeout", 10) or 10),
                                 "preflight": f.get("iprecon_preflight") == "1",
@@ -6253,7 +6467,11 @@ def create_app():
                              "max_title_queries": int(
                                  f.get("fofa_max_title_queries", 10) or 10),
                              # 标题反查的归属相关性：label（默认）/ substring（回退）
-                             "title_match": (f.get("fofa_title_match") or "label")},
+                             "title_match": (f.get("fofa_title_match") or "label"),
+                             # 续365：host="<品牌词>" 反查 + 同 IP 佐证（含 CDN / 多 A 任一命中）
+                             "host_enabled": f.get("fofa_host_enabled") == "1",
+                             "max_host_queries": int(
+                                 f.get("fofa_max_host_queries", 10) or 10)},
                     # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token
                     "ssrf": {"enabled": f.get("ssrf_enabled") == "1",
                              # 留空 = 用本机监听地址；填了外部基址后本模块读不到命中，
@@ -7258,9 +7476,14 @@ def serve(start_queue=True):
     # 放在控制台进程入口而不是 create_app()：create_app 会被测试 / WSGI 在 import 期调用，
     # 在工厂里起后台线程会产生 import 副作用。worker 与**控制台进程同生共死**（daemon 线程）。
     if start_queue:
-        queue.start(_settings)
-        say(f"[*] 任务队列已启动：{queue.config(_settings)['workers']} 个 worker"
-            "（queue.workers；进程重启后未完成任务会自动重新入队）")
+        # 续361：5000/5099 共库时只允许一个进程起 worker；另一个待命，主进程退出后自动接管。
+        _queue_started = queue.start(_settings, leader_lock=True)
+        if _queue_started:
+            say(f"[*] 任务队列已启动：{queue.config(_settings)['workers']} 个 worker"
+                "（queue.workers；进程重启后未完成任务会自动重新入队）")
+        else:
+            say("[*] 队列 worker 已由另一控制台进程持有：本进程待命，"
+                "主进程退出后自动接管（不会重复起 worker）")
     # 续117：库里还没有账号 → **在启动前**把第一个管理员建出来。
     # 以前这里印的是"去 settings.yaml 里找那个共享口令"，而那文件被 git 跟踪、仓库公开；
     # 现在配置文件里没有任何可登录的凭据，首启动就只能交互式建号（口令只进 users 表的派生值）。

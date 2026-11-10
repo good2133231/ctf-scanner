@@ -794,11 +794,13 @@ def _classify_source(domains, last):
     return "empty" if reason else "error"
 
 
-def domain_note(ip, sources, original=0, cap=0):
+def domain_note(ip, sources, original=0, cap=0, shared=False, kept=None):
     """反查域名的备注：历史依据 IP + 实际返回它的接口（单一产地）。
 
     页面上的「解析 IP」是当前 DNS，和这里的 ``ip=``（第三方历史索引）本来就可能不同；
     备注写「历史解析」和接口名，避免把反查源当成当前解析结果。
+    ``original`` 是接口返回的域名总数；``kept`` 是过滤/去重后、截断前的数量。
+    截断标注必须看 ``kept``，否则共享 IP 过滤后剩 10 条也会误写「150→100 已截断」。
     """
     srcs = []
     for s in (sources or []):
@@ -810,8 +812,14 @@ def domain_note(ip, sources, original=0, cap=0):
         original, cap = int(original or 0), int(cap or 0)
     except (TypeError, ValueError):
         original, cap = 0, 0
-    if cap > 0 and original > cap:
-        note += f" · 共享IP已截断（{original}→{cap}）"
+    try:
+        kept_n = original if kept is None else int(kept or 0)
+    except (TypeError, ValueError):
+        kept_n = original
+    if shared and original > 0:
+        note += f" · 共享IP（{original} 个反查域名）"
+    if cap > 0 and kept_n > cap:
+        note += f" · 共享IP已截断（{kept_n}→{cap}）"
     return note
 
 

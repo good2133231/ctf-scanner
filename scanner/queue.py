@@ -36,7 +36,9 @@
    3→1→3 会在退休线程退场后只剩 1 个。
 """
 import json
+import os
 import threading
+from pathlib import Path
 
 from . import db, runner
 from .log import get_logger
@@ -47,6 +49,76 @@ logger = get_logger("queue")
 _IDLE_MIN = 0.2
 _IDLE_MAX = 2.0
 _MAX_WORKERS = 8
+# 续361：worker 领导锁的自动接管间隔（主控制台退出后，待命进程多久接手）
+_LEADER_RETRY = 2.0
+
+
+def _default_lock_path():
+    """worker 领导锁文件：跟着数据库走，data/ 已被 gitignore。"""
+    try:
+        raw = str(db.DB_PATH)
+    except Exception:      # noqa: BLE001 - 诊断路径不能反过来把启动打死
+        return None
+    if not raw or raw == ":memory:" or Path(raw).name == ":memory:":
+        return None
+    return Path(raw).parent / ".queue_workers.lock"
+
+
+class _WorkerLease:
+    """跨进程「只允许一个控制台起 queue worker」的 OS 文件锁（续361）。
+
+    为什么不用 DB 行/心跳：两控制台共库时，DB 写锁本来就是争用源；再让 follower
+    定期写心跳只会加重。`flock` / `msvcrt` 由内核在进程退出时自动释放，没有僵尸锁；
+    follower 每 2 秒试一次，主进程一退就能接管。
+
+    锁文件只含一个字节（Windows 需要非零长度才能锁），不存 pid；不要靠内容判活。
+    """
+
+    def __init__(self, path=None):
+        self.path = Path(path) if path else _default_lock_path()
+        self.fd = None
+
+    def acquire(self):
+        if self.fd is not None:
+            return True
+        if self.path is None:
+            # 内存库（测试/临时）没有跨进程语义：直接当领导，保持旧行为。
+            return True
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(self.path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                if os.fstat(fd).st_size < 1:
+                    os.write(fd, b"\0")
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        self.fd = fd
+        return True
+
+    def release(self):
+        fd = self.fd
+        self.fd = None
+        if fd is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
 
 
 def config(settings=None):
@@ -157,19 +229,25 @@ class _Queue:
         self._settings = None
         self._dispatch = None
         self._dispatch_custom = False
+        self._lease = None                    # 续361：跨进程 worker 领导锁
+        self._leader_monitor = None
+        self._leader_waiting = False
 
     # ---- 生命周期 ----
 
-    def start(self, settings=None, dispatch=None):
+    def start(self, settings=None, dispatch=None, leader_lock=False, lock_path=None):
         """启动 worker（**幂等**：已在跑则直接返回）。
 
-        `dispatch(task_id, mode)` 可注入（测试用桩替代 `runner.run_task`）；缺省时按
-        `runner.run_task` 执行。
+        续361：`leader_lock=True` 时先用 OS 文件锁选一个控制台；没抢到的进程只起一个
+        监控线程，每 `_LEADER_RETRY` 秒重试，主控制台退出后自动接管。返回 True 表示
+        本进程已起 worker，False 表示正在待命。默认 False 保持测试/CLI 旧行为。
         """
         with self._lock:
             alive = [t for t in self._threads if t.is_alive()]
             if alive:
-                return
+                return True
+            if self._leader_monitor is not None and self._leader_monitor.is_alive():
+                return False
             self._threads = []
             self._retire = {}
             n = config(settings)["workers"]
@@ -180,9 +258,40 @@ class _Queue:
                 def dispatch(tid, mode, _s=settings):
                     return _default_dispatch(tid, mode, _s)
             self._dispatch = dispatch
-            self._spawn_locked(n)
             self._target = n
+            if leader_lock:
+                if self._lease is None:
+                    self._lease = _WorkerLease(lock_path)
+                if not self._lease.acquire():
+                    self._leader_waiting = True
+                    self._leader_monitor = threading.Thread(
+                        target=self._leader_loop, name="cs-queue-leader", daemon=True)
+                    self._leader_monitor.start()
+                    logger.info("[queue] 另一个控制台进程持有 worker 锁，本进程待命"
+                                "（主进程退出后自动接管，不再重复起 worker）")
+                    return False
+                self._leader_waiting = False
+            self._spawn_locked(n)
             logger.info(f"[queue] 已启动 {n} 个 worker（queue.workers={n}）")
+            return True
+
+    def _leader_loop(self):
+        """待命进程：等领导锁释放后接管，起 `_target` 个 worker（续361）。"""
+        lease = self._lease
+        while lease is not None and not self._stop.wait(_LEADER_RETRY):
+            if not lease.acquire():
+                continue
+            with self._lock:
+                if self._stop.is_set():
+                    lease.release()
+                    return
+                self._leader_waiting = False
+                self._leader_monitor = None
+                n = self._target or config(self._settings)["workers"]
+                self._spawn_locked(n)
+                logger.info(f"[queue] 已接管队列 worker 领导权，启动 {n} 个 worker")
+            self.notify()
+            return
 
     def _spawn_locked(self, count):
         """在**已持锁**的前提下补 count 个 worker（`start` / `reconfigure` 共用）。"""
@@ -239,15 +348,28 @@ class _Queue:
             return {"ok": True, "workers": n, "active": active_workers(), "reason": ""}
 
     def stop(self, timeout=5.0):
-        """停止 worker 并 join（测试需要确定性收尾；生产里 daemon 线程随进程退出即可）。"""
+        """停止 worker 并 join（测试需要确定性收尾；生产里 daemon 线程随进程退出即可）。
+
+        续361：同时停掉待命监控并释放领导锁，别让已经退出的进程占着锁。
+        """
         with self._lock:
             threads = list(self._threads)
             self._threads = []
+            monitor = self._leader_monitor
+            self._leader_monitor = None
+            self._leader_waiting = False
         self._stop.set()
         with self._cv:
             self._cv.notify_all()
         for t in threads:
             t.join(timeout=timeout)
+        if monitor is not None and monitor is not threading.current_thread():
+            monitor.join(timeout=timeout)
+        with self._lock:
+            lease = self._lease
+            self._lease = None
+        if lease is not None:
+            lease.release()
 
     def notify(self):
         """唤醒空转的 worker（入队后调用）。持锁自增代数并唤醒，避免丢唤醒；不做 I/O。"""
@@ -320,9 +442,12 @@ _QUEUE = _Queue()
 
 # ---- 模块级入口（供 gui.app / 测试调用）----
 
-def start(settings=None, dispatch=None):
-    """启动队列 worker（幂等）。`settings` 提供 `queue.workers`；`dispatch` 可注入测试桩。"""
-    _QUEUE.start(settings, dispatch)
+def start(settings=None, dispatch=None, leader_lock=False, lock_path=None):
+    """启动队列 worker（幂等）。`settings` 提供 `queue.workers`；`dispatch` 可注入测试桩。
+
+    续361：`leader_lock=True` 时跨进程只允许一个控制台起 worker；返回 True/False。
+    """
+    return _QUEUE.start(settings, dispatch, leader_lock=leader_lock, lock_path=lock_path)
 
 
 def stop(timeout=5.0):

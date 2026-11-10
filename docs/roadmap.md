@@ -309,7 +309,7 @@
       安全口径：https + 主机白名单（含**跳转后**的真实 URL 再校验）／单产物大小上限／
       **默认必须过 release 自带的 SHA256 校验和**，不符即拒绝落盘且不覆盖已装好的（`verified` 三态，
       未校验的安装如实标注）／解包只按预期成员名取（拒绝 `..` 与绝对路径成员）／
-      回写 `config/settings.yaml` 走**逐行文本替换**（不调 `config.save_settings()` 的整份重写，保住注释）。
+      回写 `config/settings.yaml` 走**逐行文本替换**（不调 `config.save_settings()` 的合并写，保持只改 tools 段）。
       实测平台事实：puredns 官方**只有 Linux/macOS 产物、无 checksums**，Windows 上如实报"未提供当前平台产物"
       （不猜、不自动编译，见 `tools/scanner/README.md` 的勘误）。
       **覆盖边界（续59-3 明确，2026-09-27 实测）**：自动安装**只覆盖"有带官方校验和的单二进制产物"**的工具
