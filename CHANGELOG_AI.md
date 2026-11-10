@@ -151,7 +151,7 @@
   settings.html / todo.txt / CHANGELOG 仍纯 CRLF；mixed 的 `tests/smoke.py` CRLF 行数不变
   （18876），新块按锚行 LF 插入；`git diff --ignore-cr-at-eol -U0` 无预期外 hunk。
 - 提交时一并带上续364 未提交的 22 个在途改动（实施者 DeepSeek-V4.1-Flash），两轮分别标注；
-  push 按规矩由主理人终端执行。
+  push 走项目一键补推入口 `python tools/push_encrypted.py`（AGENTS.md §2 续347），不劳主理人手动执行。
 
 ## 续364（2026-11-10，WorkBuddy · DeepSeek-V4.1-Flash）：配置落盘加固 + 共享阈值/截断口径 + queued 重启竞态
 
