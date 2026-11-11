@@ -5,6 +5,35 @@
 
 
 
+## 续375（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：IP 维度证据聚合
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+现状：子域名解析 IP（`subdomains.ip`）、开放端口（`ports.ip`）、证书 SAN（`certs.san`）
+三处数据各说各的，没有 IP 维度的归并 —— 判断「这个 IP 是 CDN 边缘还是源站」只能靠人眼看。
+
+### 一、已落地
+
+- 新增 `scanner/ipagg.py`（**零外部请求**，只读本任务库）：
+  - `port`：`ports` 表里有该 IP 的开放端口（确实在承载服务）；
+  - `cert_san`：该 IP 对应主机的证书 SAN 覆盖了本任务其它域名（共享证书 = 同源信号）；
+  - `pdns`：该 IP 出现在 `osint:*` 反查来的域名解析结果里（历史 PDNS 关联）。
+- 分档（fail-safe，拿不准往低档放）：`cdn`（`subdomains.cdn` 非空）>
+  `real`（非 CDN 且 ≥2 条证据）> `likely`（1 条）> `unknown`（0 条）。
+- `osint` 收尾聚合进 `ctx.results["ip_evidence"]`；`real`/`likely` 写 `leads(kind=ip)`，
+  `cdn`/`unknown` 不写（避免每 IP 一条刷屏）。
+
+### 二、刻意不做 ASN（如实记）
+
+项目没有任何 ASN 数据源（`grep -ri asn scanner/` 为空）。凭空接一个免 key 接口等于新开一条
+未经评估的外部出口，还会带出「查到了但不可信」的问题；本轮把 `asn` 字段留空，
+等有明确数据源再接。
+
+### 三、验证
+
+- `--only 8cb` PASS（第一次红在证据列表的字典序 `['cert_san','pdns','port']`，改断言后过）。
+- 最终全量 v49：2026-11-11 07:05:57–07:14:57（9m12s，日志内 312 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke375.log`）。
+
 ## 续374（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：OpenAPI / GraphQL 探测
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

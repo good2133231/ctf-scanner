@@ -4542,6 +4542,26 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续375（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：IP 维度证据聚合（PDNS / 证书 SAN / 端口）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【模块】新增 `scanner/ipagg.py`（**零外部请求**，只读本任务库）：把
+      `subdomains.ip` / `ports.ip` / `certs.san` 三条证据归并到 IP，输出四档
+      `real` / `likely` / `unknown` / `cdn`。
+- [x] T2【证据】`port`（有开放端口）/ `cert_san`（该 IP 主机证书 SAN 覆盖本任务其它域名）/
+      `pdns`（`osint:*` 反查域名解析到该 IP）；`subdomains.cdn` 非空直接判 `cdn`。
+- [x] T3【接线】`osint` 收尾聚合进 `ctx.results["ip_evidence"]`；`real`/`likely` 写
+      `leads(kind=ip)`（`cdn`/`unknown` 不写，免得刷屏）。
+- [x] T4【不做】ASN：项目没有任何 ASN 数据源，凭空接免 key 接口等于新开未经评估的出口；
+      字段留空，如实记在注释里。
+- [x] T5【门禁】新增 `[8cb]`：三证据 → real、CDN 行 → cdn、只给 real/likely 写线索、
+      空任务返回空表、osint 接线。
+- [x] C1 定向：`--only 8cb` PASS（第一次红在证据列表字典序，改断言后过）。
+- [x] C2 最终全量 v49 `SMOKE PASS`：2026-11-11 07:05:57–07:14:57（9m12s，312 个 ok 组 + 浏览器 e2e，`logs/smoke375.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一轮（续376）**：CTF profile（显式打开 vulnscan、报告导出、线索索引）。
+
 ## 续374（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：OpenAPI / GraphQL 探测
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

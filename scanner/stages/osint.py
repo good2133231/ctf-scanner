@@ -418,6 +418,23 @@ class OsintStage(Stage):
             ctx.logger.info(f"[osint] 黑名单拦截 {len(blocked)} 个域名"
                             + f"（如 {blocked[0][0]} ← {blocked[0][1]}）")
         ctx.results["osint_domains"] = [d for d, _ in new]
+
+        # 续375：IP 维度证据聚合（真实 IP / CDN 边缘）—— 零外部请求，只读本任务库
+        try:
+            from .. import ipagg as _ipagg375
+            _rows375 = _ipagg375.aggregate(ctx.task_id)
+            ctx.results["ip_evidence"] = _rows375
+            _leads375 = _ipagg375.to_leads(_rows375)
+            if _leads375:
+                db.insert_leads(ctx.task_id, _leads375)
+            ctx.logger.info(
+                f"[osint] IP 证据聚合：{len(_rows375)} 个 IP"
+                f"（real {sum(1 for x in _rows375 if x['rank'] == 'real')} / "
+                f"likely {sum(1 for x in _rows375 if x['rank'] == 'likely')} / "
+                f"cdn {sum(1 for x in _rows375 if x['rank'] == 'cdn')}），"
+                f"线索新增 {len(_leads375)} 条")
+        except Exception as _e375:      # noqa: BLE001 - 聚合失败不该拖垮 OSINT
+            ctx.logger.warning(f"[osint] IP 证据聚合失败（不影响其余）：{_e375}")
         ctx.logger.info(f"[osint] 新增域名资产 {len(new)} 个"
                         + (f"（{' / '.join(f'{s}:{n}' for s, n in _tally(new))}）" if new else ""))
         self._save_source_status()

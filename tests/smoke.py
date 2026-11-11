@@ -36695,6 +36695,42 @@ expression: r0()
           "产物只到 leads(kind=api) 与 js_urls（不写 vulns）｜enabled=false 零请求｜"
           "max_probes 预算生效｜jsmine 接线｜配置四处一致")
 
+    # [8cb] 续375：IP 维度证据聚合（port / cert_san / pdns → real / likely / cdn）
+    from scanner import ipagg as _ia8cb
+    _tid8cb = db.create_task("smoke-8cb", "http://www.acme-portal.cn/", ["osint"], {})
+    try:
+        db.insert_subdomains(_tid8cb, [("a.acme-portal.cn", "subfinder"),
+                                       ("b.acme-portal.cn", "osint:iprecon"),
+                                       ("cdn.acme-portal.cn", "subfinder")])
+        db.set_subdomain_net(_tid8cb, {
+            "a.acme-portal.cn": ("9.9.9.9", "", ""),
+            "b.acme-portal.cn": ("9.9.9.9", "", ""),
+            "cdn.acme-portal.cn": ("8.8.8.8", "cloudflare", "")})
+        db.insert_ports(_tid8cb, [{"host": "a.acme-portal.cn", "ip": "9.9.9.9",
+                                   "port": 443, "source": "fofa"}])
+        db.insert_certs(_tid8cb, [{"url": "https://a.acme-portal.cn/",
+                                   "host": "a.acme-portal.cn", "port": 443,
+                                   "san": ["a.acme-portal.cn", "b.acme-portal.cn"],
+                                   "source": "tls"}])
+        _rows8cb = {r["ip"]: r for r in _ia8cb.aggregate(_tid8cb)}
+        assert set(_rows8cb) == {"9.9.9.9", "8.8.8.8"}, _rows8cb.keys()
+        _r9_8cb = _rows8cb["9.9.9.9"]
+        assert _r9_8cb["rank"] == "real", _r9_8cb
+        assert sorted(_r9_8cb["evidence"]) == ["cert_san", "pdns", "port"], \
+            _r9_8cb["evidence"]
+        assert _rows8cb["8.8.8.8"]["rank"] == "cdn", _rows8cb["8.8.8.8"]
+        _leads8cb = _ia8cb.to_leads(list(_rows8cb.values()))
+        assert [x["target"] for x in _leads8cb] == ["9.9.9.9"], _leads8cb
+        assert _leads8cb[0]["kind"] == "ip"
+        assert _ia8cb.aggregate(999999) == [], "空任务必须返回空表"
+    finally:
+        db.delete_task(_tid8cb, backup=False)
+    _src8cb = (ROOT / "scanner/stages/osint.py").read_text(encoding="utf-8")
+    assert "_ipagg375.aggregate(ctx.task_id)" in _src8cb, "osint 没接 IP 证据聚合"
+
+    print("[8cb] 续375 ok: port/cert_san/pdns 三条证据归并到 IP｜real/likely/unknown/cdn 四档｜"
+          "只给 real/likely 写线索（kind=ip）｜空任务返回空表｜osint 收尾接线")
+
     print("SMOKE PASS")
 
 
