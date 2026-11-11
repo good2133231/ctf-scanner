@@ -4542,6 +4542,28 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续382（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第三批（runner.py）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【收窄 1 处】`scanner/runner.py` 里 `targets.root_of(d)` 的兜底 →
+      `(ValueError, TypeError, AttributeError)`。
+- [x] T2【补理由 11 处】阶段级容错（3 处）、附加动作级容错（2 处）、归属追加 / 置信度
+      判据 / 送探标记写库 / StageContext 构造 / POC 同步 / 顶层任务兜底 —— 全部写明
+      「为什么这个异常必须被吞、吞了之后退到哪一档」。
+- [x] T3【为何以补理由为主】这些是**顶层容错**：一个阶段抛任何异常都不能让整条流水线
+      failed。把它们收窄成具体异常类型，等于把容错改成崩溃 —— 这正是「收宽捕获」最容易
+      踩的坑，本轮刻意不碰。
+- [x] T4【结果】`runner.py` 宽捕获 **24 → 23 处**，剩余 23 处全部带 `noqa: BLE001`；
+      全仓 272 → **271**，未标理由 120 → **109**；`[8ce]` 棘轮基线同步下调到 109。
+- [x] T5【门禁】新增 `[8ch]`：23 处全带理由、收窄形态钉住、三类顶层容错的理由不许丢。
+- [x] C1 定向：`--only 8ch,8ce` PASS。
+- [x] C2 最终全量 v55 `SMOKE PASS`：2026-11-11 10:35:05–10:44:42（9m50s，318 个 ok 组 + 浏览器 e2e，`logs/smoke382.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一批（续383+）**：`scanner/toolmgr.py`(18) → `scanner/stages/osint.py`(15) →
+`tests/smoke.py`(14) → `tests/browser_e2e.py`(12) → `scanner/iprecon.py`(11) →
+`scanner/login_guard.py`(9) → … 每轮 1–2 个文件 + 一次全量。
+
 ## 续381（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第二批（gui/app.py）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

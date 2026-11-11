@@ -501,7 +501,7 @@ class PipelineRunner:
                     _t0 = time.time()
                     try:
                         STAGE_REGISTRY[_nm](ctx).run()
-                    except Exception as _e:      # 阶段级容错，口径同串行分支
+                    except Exception as _e:      # noqa: BLE001 - 阶段级容错：单个阶段抛任何异常都不许让整条流水线 failed
                         ctx.logger.error(f"[{_nm}] 阶段异常：{_e}")
                         ctx.logger.debug(traceback.format_exc())
                         db.append_task_error(ctx.task_id, f"{_nm}: {_e}")
@@ -523,7 +523,7 @@ class PipelineRunner:
                             (ext_res.get("promote") or {}).get("promoted") or [])
                         if ctx.owned_new and "probe" in done_stages and not ctx.stopped():
                             _probe_promoted(ctx, ctx.owned_new)
-                    except Exception as e:  # 附加动作级容错
+                    except Exception as e:  # noqa: BLE001 - 附加动作级容错：拓展后处理失败不影响已完成阶段的产物
                         ctx.logger.error(f"[extdom] 拓展域名后处理异常：{e}")
                         ctx.logger.debug(traceback.format_exc())
                         db.append_task_error(ctx.task_id, f"extdom: {e}")
@@ -542,7 +542,7 @@ class PipelineRunner:
                     _t0 = time.time()
                     try:
                         STAGE_REGISTRY[_nm](ctx).run()
-                    except Exception as _e:      # 阶段级容错，口径同串行分支
+                    except Exception as _e:      # noqa: BLE001 - 阶段级容错：单个阶段抛任何异常都不许让整条流水线 failed
                         ctx.logger.error(f"[{_nm}] 阶段异常：{_e}")
                         ctx.logger.debug(traceback.format_exc())
                         db.append_task_error(ctx.task_id, f"{_nm}: {_e}")
@@ -558,7 +558,7 @@ class PipelineRunner:
             else:
                 try:
                     STAGE_REGISTRY[sname](ctx).run()
-                except Exception as e:  # 阶段级容错
+                except Exception as e:  # noqa: BLE001 - 阶段级容错（串行分支）：异常只记日志，不牵连其它阶段
                     ctx.logger.error(f"[{sname}] 阶段异常：{e}")
                     ctx.logger.debug(traceback.format_exc())
                     # **追加**而不是覆盖：一条任务可能有多个阶段失败，覆盖式写法会让前面的错误丢失
@@ -584,7 +584,7 @@ class PipelineRunner:
                     # 从库里读到这批新行（`extdom.own_hosts(include_db=True)`）。
                     if ctx.owned_new and "probe" in done_stages and not ctx.stopped():
                         _probe_promoted(ctx, ctx.owned_new)
-                except Exception as e:  # 附加动作级容错
+                except Exception as e:  # noqa: BLE001 - 附加动作级容错：拓展后处理失败不影响已完成阶段的产物
                     ctx.logger.error(f"[extdom] 拓展域名后处理异常：{e}")
                     ctx.logger.debug(traceback.format_exc())
                     db.append_task_error(ctx.task_id, f"extdom: {e}")
@@ -701,7 +701,7 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
         for d in (res.get("promoted") or []):
             if d and d not in promoted:
                 promoted.append(d)
-    except Exception as e:      # 归属追加失败不该影响上一层已完成的结果
+    except Exception as e:      # noqa: BLE001 - 归属追加失败不该影响上一层已完成的结果
         logger.error(f"[extdom] 归属追加异常：{e}")
     # 置信度那一档：任务级 `ext_min_conf` 优先，退回策略级 `subdomain.ext_min_confidence`
     min_conf = resolve_ext_confidence(options, ctx.settings)
@@ -725,7 +725,7 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
         if len(cand["keep"]) > 5:
             logger.info(f"[extdom] 另有 {len(cand['keep']) - 5} 个同样达到阈值的拓展域名，"
                         "依据逐条可在「拓展域名」页的徽章上看")
-    except Exception as e:      # 判据异常 ⇒ 退回"只按归属追加"，不把没验过的域名塞进目标
+    except Exception as e:      # noqa: BLE001 - 置信度判据异常就退回「只按归属追加」，不塞未验过的域名
         logger.error(f"[extdom] 置信度判断异常，本轮只按归属追加（相似域名一个都不带）：{e}")
         similar, sim_blocked = [], 0
     if sim_blocked:     # 续182（借鉴点④）：拦截动作进结构化审计（旁路，失败自吞）
@@ -753,7 +753,7 @@ def _maybe_queue_next_layer(ctx, task_id, stages, options, logger):
     # 也进送探记录（extdomains 页与组内子标签同一产地，kind=auto 区分于手动 probe/append）。
     try:
         db.record_ext_probes(task_id, task_id, targets, kind="auto")
-    except Exception as _e186:
+    except Exception as _e186:      # noqa: BLE001 - 送探标记写库失败不影响排队
         logger.warning(f"[extdom] 自动递归的送探标记写库失败（不影响排队）：{_e186}")
     from . import queue as _queue      # 延迟导入：queue 顶层 import 本模块，避免循环导入
     db.enqueue_task(task_id, "append", depth_stages(stages), next_opts)
@@ -877,7 +877,7 @@ def _maybe_auto_probe_similar(ctx, task_id, logger):
     def _root_of(d):
         try:
             return targets.root_of(d) or str(d)
-        except Exception:      # noqa: BLE001 - 取不到注册域就退回原名，宁可多送不少送
+        except (ValueError, TypeError, AttributeError):      # 取不到注册域就退回原名，宁可多送不少送
             return str(d)
     _roots = {c["domain"]: _root_of(c["domain"]) for c in keep}
     try:
@@ -1179,7 +1179,7 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
     try:
         ctx = StageContext(task_id, name, targets, stages, options, settings or load_settings(),
                            workdir, logger, stop_event=stop_event, progress=progress)
-    except Exception:
+    except Exception:      # noqa: BLE001 - StageContext 构造失败必须先把停止事件注销
         _unregister_stop(task_id)
         if progress is not None:
             progress.finish()
@@ -1209,13 +1209,13 @@ def run_task(task_id, name, targets_text, stages, options, settings, append=Fals
     try:
         try:
             sync_pocs(ctx.settings)
-        except Exception as e:
+        except Exception as e:      # noqa: BLE001 - POC 注册表同步是锦上添花，失败继续扫描
             # POC 注册表同步是"锦上添花"：它失败不该让整条流水线直接 failed
             # （并发场景下 upsert_poc 曾撞 UNIQUE 约束，实测 6 个任务里 5 个因此失败）。
             logger.warning(f"[pocs] 注册表同步失败，继续扫描：{e}")
         _prof = profiling.TaskProfile().start()
         PipelineRunner(ctx).run()
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 顶层任务兜底：任何异常都要记日志并把任务标 failed
         logger.error(f"任务失败：{e}\n{traceback.format_exc()}")
         # 第三条终态（续35）：异常收场同样要结一次运行时长，否则这条任务的时长永远停在 0
         db.finish_task_run(task_id, status="stopped" if ctx.stopped() else "failed")

@@ -5,6 +5,44 @@
 
 
 
+## 续382（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第三批（runner.py）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+### 一、本轮做了什么
+
+`scanner/runner.py` 宽捕获 **24 → 23 处**：
+
+- 收窄 1 处：`targets.root_of(d)` 的兜底 → `(ValueError, TypeError, AttributeError)`。
+- 其余 11 处**只补理由、不收窄**：阶段级容错（3 处）、附加动作级容错（2 处）、
+  归属追加、置信度判据、送探标记写库、`StageContext` 构造、POC 注册表同步、顶层任务兜底。
+  每条理由都写明「为什么必须吞、吞了之后退到哪一档」。
+- 至此 `runner.py` 剩余 23 处宽捕获**全部**带 `noqa: BLE001`。
+
+### 二、为什么这一批以补理由为主
+
+这些是**顶层容错**：一个阶段抛任何异常都不能让整条流水线直接 failed。把它们收窄成
+具体异常类型，等于把容错改成崩溃 —— 这正是「收窄宽捕获」最容易踩的坑。本轮刻意只对
+异常面可枚举的纯解析（`root_of`）动刀，其余把「故意宽捕获」写进源码。
+
+### 三、棘轮推进
+
+- 全仓宽捕获 272 → **271**；未标注理由 120 → **109**。
+- `[8ce]` 基线同步下调到 **109**（只许往下走）。
+- 新增 `[8ch]`：`runner.py` 23 处全带理由、收窄形态钉住、三类顶层容错的理由不许丢。
+
+### 四、剩余
+
+下一批：`scanner/toolmgr.py`(18) → `scanner/stages/osint.py`(15) → `smoke.py`(14) →
+`browser_e2e.py`(12) → `iprecon.py`(11) → `login_guard.py`(9) → …
+每轮 1–2 个文件 + 一次全量。`tests/smoke.py` 的拆分仍等切片器改成「按组名注册」；
+ASN 无数据源；三项历史挂账按主理人决定保留；CTF 真实任务按主理人要求先不做。
+
+### 五、验证
+
+- `--only 8ch,8ce` PASS；`compileall` PASS。
+- 最终全量 v55：2026-11-11 10:35:05–10:44:42（9m50s，日志内 318 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke382.log`）。
+
 ## 续381（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第二批（gui/app.py）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

@@ -36815,7 +36815,7 @@ expression: r0()
     _bare8ce = sum(1 for p in _fs8ce
                    for line in p.read_text(encoding="utf-8", errors="replace").splitlines()
                    if _needle8ce in line and "noqa: BLE001" not in line)
-    assert _bare8ce <= 120, f"未标注理由的宽捕获反弹了（续381 基线 120，现值 {_bare8ce}）"
+    assert _bare8ce <= 109, f"未标注理由的宽捕获反弹了（续382 基线 109，现值 {_bare8ce}）"
     print(f"[8ce] 续378 ok: utils.py 收窄 5 处（stdin/ctypes/管道/urllib/getaddrinfo）｜"
           f"剩余 4 处宽捕获全部写明理由｜全仓 {_tot8ce} 处（其中 {_bare8ce} 处未标理由，棘轮只钉这个数｜"
           f"后续按文件分批收窄）")
@@ -36858,6 +36858,21 @@ expression: r0()
 
     print("[8cg] 续381 ok: gui/app.py 31→27 处宽捕获（json.loads / stages 切分 / 子进程 "
           "terminate·kill 收窄）｜剩余 27 处全部写明理由｜全仓未标理由基线 128→120")
+
+    # [8ch] 续382：runner.py 宽捕获第三批（顶层容错只补理由、不误收窄）
+    _rn8ch = (ROOT / "scanner/runner.py").read_text(encoding="utf-8")
+    _needle8ch = "except " + "Exception"
+    _wide8ch = [l for l in _rn8ch.splitlines() if _needle8ch in l]
+    assert len(_wide8ch) == 23, f"runner.py 宽捕获应从 24 收到 23：{len(_wide8ch)}"
+    assert all("noqa: BLE001" in l for l in _wide8ch), \
+        f"runner.py 还有没写理由的宽捕获：{[l for l in _wide8ch if 'noqa: BLE001' not in l]}"
+    assert "except (ValueError, TypeError, AttributeError):" in _rn8ch, \
+        "注册域解析那处的收窄被改回去了"
+    for _lit8ch in ("阶段级容错", "附加动作级容错", "顶层任务兜底"):
+        assert _lit8ch in _rn8ch, f"顶层容错的理由不见了：{_lit8ch}"
+
+    print("[8ch] 续382 ok: runner.py 24→23 处（注册域解析收窄；阶段级 / 附加动作级 / "
+          "顶层兜底 11 处只补理由，不误收窄）｜剩余 23 处全部带理由｜全仓未标理由 120→109")
 
     print("SMOKE PASS")
 
