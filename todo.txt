@@ -4542,6 +4542,35 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续379（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：真实任务端到端验证
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人「可以」—— 重跑一次真实任务，把续365–378 的新代码在真实目标上验一遍。
+
+- [x] T1【建任务】新建任务 74 `verify-379`（目标从已有任务 73 读、**不硬编码**；默认八阶段、
+      quick 子域档、`auto_expand=false`、`screenshot_on=false`），不动历史任务数据。
+- [x] T2【实跑】墙钟 **203.9s**，8 个阶段全绿，`status=done` / `error=''` / `stop_reason=''`。
+      阶段耗时：osint 1m23s / subdomain 1m09s / screenshot 34.4s / dirscan 25.4s /
+      probe 18.0s / jsmine 15.1s / portscan 2.5s / cert 0.1s。
+- [x] T3【产物】sites 16（httpx）、subdomains 16、certs 22（ct 15 + tls 7）、dirs 91、
+      leads 6（github）、ports 0。
+- [x] T4【熔断真实验证】FOFA 连续 2 次 10s 超时 → 熔断打开 → favicon / 证书 / 标题三路
+      **零请求**被拦（日志逐条可查），省下约 30s 白等。
+- [x] T5【IP 聚合真实验证】4 个 IP（real 0 / likely 0 / cdn 3），线索 0 条 —— 目标 7/8
+      主机走 Cloudflare，符合预期。
+- [x] T6【其它链路】sourcemap 探测在 8 个站点各扫了 1–2 个 JS（`sourcemap 0 个`，目标 JS
+      没有 sourceMappingURL）；portscan 8 主机 × 25 端口，7 个 CDN 跳过、1 个真实 IP
+      0 开放端口（**设计行为，非 bug**）；jsmine 产出域名/URL/凭据。
+
+**仍未验证（如实记）**：`sites.source='osint:fofa-web'` 仍 0 条、`bare_ip_reverse` 无产物 ——
+两者输入都来自 FOFA 端口资产，本次 FOFA 全程超时；API 探测命中 0（目标没有 openapi.json /
+graphql）；CTF 档（vulnscan/crawl）本轮用默认八阶段，没在真实任务跑。
+任务 74 保留在库里作为验证记录（可删）。
+
+**剩余工作**：FOFA 恢复后重跑验 web 探活与裸 IP 反查；宽捕获 128 处按文件分批；
+`tests/smoke.py` 等切片器改成按组名注册后再拆；scope 的 DNS 爆破口径；ASN 数据源。
+
 ## 续378（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：收窄宽捕获（第一批）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

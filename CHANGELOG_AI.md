@@ -5,6 +5,51 @@
 
 
 
+## 续379（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：真实任务端到端验证
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+上一轮如实登记「续365–378 的新代码一次真实任务都没跑过」。主理人同意重跑一次，本轮补上。
+
+### 一、怎么跑的
+
+新建任务 74 `verify-379`：目标从已有任务 73 读（**不把目标名写进被跟踪文件**）、
+默认八阶段、`subdomain_profile=quick`、`auto_expand=false`、`screenshot_on=false`；
+不复用历史任务，避免覆盖已有资产。走 `runner.run_task` 阻塞执行，settings 带已解锁的 keys。
+
+### 二、实测
+
+- 墙钟 **203.9s**，8 阶段全绿，`status=done`、`error=''`、`stop_reason=''`。
+  阶段耗时：osint 1m23s / subdomain 1m09s / screenshot 34.4s / dirscan 25.4s /
+  probe 18.0s / jsmine 15.1s / portscan 2.5s / cert 0.1s。
+- 产物：`sites` 16（httpx）、`subdomains` 16、`certs` 22（ct 15 + tls 7）、
+  `dirs` 91、`leads` 6（github）、`ports` 0。
+- **FOFA 熔断在真实任务里生效**：连续 2 次 10s 超时 → 打开熔断 → favicon / 证书 / 标题
+  三路的查询全部被零请求拦下（日志逐条可查），省掉约 30s 白等。这正是续368 想买的东西。
+- **IP 证据聚合真的跑了**：4 个 IP，`real 0 / likely 0 / cdn 3`，线索 0 条。目标 7/8 主机
+  在 Cloudflare 后面，判成 cdn 且不出线索，正是设计口径。
+- **sourcemap 链路真的跑了**：8 个站点各扫 1–2 个 JS，日志 `sourcemap 0 个`（目标 JS 没有
+  `sourceMappingURL`）；链路执行、无异常，只是这次没有输入。
+- **portscan 0 条不是 bug**：日志写明 8 主机中 7 个「走 CDN（cloudflare），跳过端口扫描」，
+  剩下 1 个用已解析真实 IP 但 fscan 报 0 个开放端口。
+
+### 三、仍未验证（如实记）
+
+- `sites.source='osint:fofa-web'` 仍 **0 条**、`bare_ip_reverse` 无产物：两者输入都来自
+  FOFA 端口资产，本次 FOFA 全程超时（先 `[-700]` 临时风控、后直接挂起）。
+- OpenAPI / GraphQL 探测命中 0（目标没有 `openapi.json` / `graphql`），链路接线由 `[8ca]`
+  的源码断言与桩测保证。
+- CTF 档（`vulnscan` / `crawl`）本轮用默认八阶段，没在真实任务里跑。
+- 任务 74 保留在库里作为验证记录，可删。
+
+### 四、结论与剩余
+
+**新代码在真实目标上无异常、任务完整 done**；「不依赖 FOFA 端口资产」的能力都已实跑。
+剩下的是环境限制（FOFA 恢复后重跑即可）与既有的分批项：宽捕获 128 处按文件收窄、
+`tests/smoke.py` 等切片器重构后再拆、scope 的 DNS 爆破口径、ASN 数据源。
+
+本轮**没有改产品代码**，只跑了真实任务并同步记忆；上一轮全量 v52 仍是当前代码的最新验证。
+
 ## 续378（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：收窄宽捕获（第一批）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
