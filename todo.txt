@@ -4542,6 +4542,34 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续380（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：scope 补 DNS 闸 + 真实数据补齐端到端
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人「都做完」—— 把上一轮剩余清单里能安全做完的缺口落地。
+
+- [x] T1【scope DNS 闸】`scanner/scope.py` 新增 `filter_domains(domains, cfg)`（复用同一个
+      `check_host`，不另造判据）；`subdomain.py` 在 `brute_domains` 成形后收窄，
+      `scope.enabled=false`（默认）时零行为变化；挡掉的数量写日志。
+- [x] T2【门禁】新增 `[8cf]`：默认关零变化、域名后缀 / CIDR 同一套判据、fail-closed、
+      subdomain 接线。
+- [x] T3【真实数据补验】FOFA 查询当前仍全程超时 ⇒ 改用历史任务里**已有的 11 条真实 FOFA
+      端口资产**绕开查询：新建任务 76，直接喂给 `OsintStage._fofa_web_portscan()` 发真实
+      目标侧只读 GET，再对那条裸 IP 跑 `_favicon_ip_domains(..., skip_alive=True)` 并落库。
+- [x] T4【实测结果】web 探活 **0.9s / 候选 11 / 有响应 11 / 新站点 11 条**
+      （`source=osint:fofa-web`，含 2053/2083/2087/2096/8443 备用口，状态 200/301/302/400）；
+      裸 IP 反查 **5.4s / 1 个域名** 并落库 `osint:iprecon`。任务 76 的
+      `sites=11 / subdomains=1` 已复核。第一次的冗余任务已删。
+- [x] T5【结论】上一轮登记的「`web_portscan` / `bare_ip_reverse` 真实环境未验」**已补齐**：
+      两条链路都用真实资产、真实 HTTP 响应跑通，不是桩测。
+- [x] C1 最终全量 v53 `SMOKE PASS`：2026-11-11 09:53:06–10:02:41（9m48s，316 个 ok 组 + 浏览器 e2e，`logs/smoke380b.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**仍未做（如实记）**：CTF 档（`vulnscan` / `crawl`）没在真实任务跑；OpenAPI / GraphQL
+探测真命中 0（目标没有这些文件）；宽捕获 128 处按文件分批；`tests/smoke.py` 等切片器
+改成「按组名注册」后再拆；ASN 仍无数据源（不擅自接免 key 出口）；
+三项历史挂账按主理人决定不动（`_do_http` 回环代理「先不走」、nuclei staging T13 待立项、
+dirmap 复核已交其他 AI）。
+
 ## 续379（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：真实任务端到端验证
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

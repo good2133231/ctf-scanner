@@ -151,6 +151,23 @@ def check_url(url, cfg, now_hm=None):
     return _in_window(cfg, now_hm)
 
 
+def filter_domains(domains, cfg):
+    """授权 scope 收窄 DNS 爆破目标 → `(kept, dropped)`；scope 关着时原样返回。
+
+    续380：scope 之前只管 `http_request` 与 portscan（「发出去的目标请求」），
+    `subdomain` 阶段的 `brute_domains` 是另一条会向解析器发大量查询的出口。
+    这里用**同一个** `check_host`（域名后缀 / CIDR / 时间窗），不另造判据。
+    DNS 只问解析器、不碰目标服务，但「只扫授权域」的直觉要求它同样受约束。
+    """
+    if not cfg or not cfg.get("enabled"):
+        return list(domains), []
+    kept, dropped = [], []
+    for d in domains or []:
+        ok, _why = check_host(d, cfg)
+        (kept if ok else dropped).append(d)
+    return kept, dropped
+
+
 def check_host(host, cfg, now_hm=None):
     """只判 host（portscan 这类不走 URL 的出口）→ `(ok, reason)`。"""
     if not cfg or not cfg.get("enabled"):

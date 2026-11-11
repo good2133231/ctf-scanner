@@ -421,6 +421,19 @@ class SubdomainStage(Stage):
 
         # ---------- 4) DNS 字典爆破 ----------
         brute_domains = domains[: int(limits.get("brute_max_domains", 50))]
+        # 续380：授权 scope 也管住 DNS 爆破的目标（scope 默认关 ⇒ 零行为变化）。
+        try:
+            from .. import scope as _scope380
+            _sc380 = ctx.settings.get("_scope")
+            if _sc380 and _sc380.get("enabled"):
+                _kept380, _drop380 = _scope380.filter_domains(brute_domains, _sc380)
+                if _drop380:
+                    ctx.logger.info(f"[subdomain] 授权 scope 收窄 DNS 爆破："
+                                    f"{len(brute_domains)} → {len(_kept380)} 个域名"
+                                    f"（挡掉 {len(_drop380)} 个）")
+                brute_domains = _kept380
+        except Exception as _e380:      # noqa: BLE001 - scope 读坏了不该拖垮子域收集
+            ctx.logger.warning(f"[subdomain] scope 过滤失败（不影响其余）：{_e380}")
         # 字典路径为空时 `resolve("")` 会落到项目根目录，`read_text()` 抛 IsADirectoryError 并
         # 让整阶段挂掉；这里先确认"配了路径且确实是文件"，否则按"无字典"走（只做被动收集）。
         # 字典分两档（续139）：`dicts.subdomains` 是**精简档**（人工挑的高价值前缀，续341 起 366 条），
