@@ -52,6 +52,11 @@ from .stages.github import GithubStage
 # GUI 默认值、API 缺省阶段都从这里取，避免两处各写一张表。
 RECON_STAGES = ["subdomain", "portscan", "probe", "cert", "screenshot", "jsmine",
                 "dirscan", "osint"]
+
+# 续376：CTF 专项档 —— 在「信息收集专项」基础上**显式**加这两个阶段（页面上用 `data-ctf`
+# 标记，JS 只认标记、不抄阶段名）。报告导出是全局开关、线索本来就写站点行与报告，
+# 两者不在这里重复实现，只在建任务页给提示。
+CTF_STAGES = ("vulnscan", "crawl")
 # jsmine 以 fast_domains 模式进默认：只做页面/JS 抽取，不做 DNS/CDN/停车三道闸与二层补探。
 
 STAGE_ORDER = ["subdomain", "portscan", "probe",

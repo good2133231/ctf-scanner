@@ -4542,6 +4542,30 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续376（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：CTF 专项档
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【阶段清单】`scanner/runner.py` 新增 `CTF_STAGES = ("vulnscan", "crawl")` ——
+      清单只由后端给，前端 JS 不许抄名字（沿用 `[8w]` 那条红线）。
+- [x] T2【建任务页】新增「CTF 专项」按钮（`data-ck-mode="ctf"`，scope 覆盖
+      `stages/deep/expand/slow`）；stages 循环里给 CTF 阶段渲染 `data-ctf="1"`。
+- [x] T3【SQL 注入】`opt_sqli` 原来是裸 `span`，批量按钮点不到 ⇒ 单列 `data-ck-group="slow"`，
+      并给 `none`/`default`/`recon` 三颗按钮的 scope 补上 `slow`（否则「必须覆盖每个分组」判据会红）。
+- [x] T4【JS】`initTaskCheckAll` 加 `ctf` 分支：`data-ck-default === "1" || data-ctf === "1"`；
+      文案加「CTF 专项」。
+- [x] T5【报告/线索】报告导出是**全局开关**（`report.export_enabled` 默认关），任务级不能替用户开；
+      CTF 按钮的 title 里给提示（策略页 → 报告）。线索本来就写在站点行与报告里，不重复实现。
+- [x] T6【门禁】新增 `[8cc]`：按钮存在且 scope 含 slow、两个阶段带 `data-ctf`、SQL 注入单列 slow、
+      JS 只认 `dataset.ctf`、信息收集专项仍不默认勾 vulnscan（两档语义不混）；
+      `[8w]` 的按钮清单 `["none","default","recon"]` → `["ctf","none","default","recon"]`。
+- [x] C1 定向：`--only 8cc,8w` PASS。
+- [x] C2 最终全量 v50 `SMOKE PASS`：2026-11-11 07:53:19–08:03:14（9m55s，313 个 ok 组 + 浏览器 e2e，
+      `logs/smoke376b.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一轮（续377）**：拆大文件（`tests/smoke.py` 3.6 万行 / `gui/app.py` 7.7 千行）——
+单独一轮，会动 `--only` 的源码切片器与 `[272]`，不能和功能混。
+
 ## 续375（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：IP 维度证据聚合（PDNS / 证书 SAN / 端口）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

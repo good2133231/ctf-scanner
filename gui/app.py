@@ -66,7 +66,7 @@ from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
 from scanner import diffview, edgeauth, fingerprint, dictstats, keystore, webpath, portguard, iconbackfill, subdict
-from scanner.runner import RECON_STAGES, STAGE_ORDER, run_task, sync_pocs
+from scanner.runner import CTF_STAGES, RECON_STAGES, STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
                            tail_lines, to_unicode, norm_hit_path)
@@ -2453,6 +2453,8 @@ def create_app():
                                # 续303：默认不勾哪些由策略现算（写死会让"策略开了、界面说没开"成为假话）
                                off_by_default_stages=_off_by_default_stages(load_settings()),
                                recon_stages=RECON_STAGES,
+                               # 续376：CTF 专项档额外勾的阶段（JS 只认 data-ctf 标记）
+                               ctf_stages=CTF_STAGES,
                                # 续281：子任务在列表里显示 24-a 派生编号（79-a），不是新号 80。
                                # 真实 ID 仍留在链接与 tooltip 里，路由/主键一条不动。
                                task_labels=_task_tree_labels([t["id"] for t in rows]),

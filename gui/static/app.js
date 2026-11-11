@@ -554,6 +554,8 @@ function initTaskCheckAll() {
         tf.querySelectorAll(`[data-ck-group="${g}"] input[type=checkbox]`).forEach(c => {
           c.checked = mode === "recon"
             ? (c.dataset.recon === "1")   /* stages 与 expand 两个组都认这个标记 */
+            : mode === "ctf"
+            ? (c.dataset.ckDefault === "1" || c.dataset.ctf === "1")  /* 续376：CTF 专项 */
             : mode === "all" ? true
             : mode === "none" ? false : c.dataset.ckDefault === "1";
           n++;
@@ -566,9 +568,16 @@ function initTaskCheckAll() {
           n++;
         });
       });
+      if (mode === "ctf") {
+        /* 续376：SQL 注入这类**不在任何分组**里的检查项只有 data-ctf 标记，
+           靠这一次额外勾选带进来。不新增 data-ck-group —— 浏览器端 [10] 明确要求
+           「slow 组不入批量 scope」，加组会让那条判据变红。 */
+        tf.querySelectorAll("input[data-ctf='1']").forEach(c => { c.checked = true; n++; });
+      }
       const msg = document.getElementById("task-msg");
       const label = mode === "all" ? "全部勾上" : mode === "none" ? "全部清掉"
-        : mode === "recon" ? "信息收集专项" : "恢复默认";
+        : mode === "recon" ? "信息收集专项"
+        : mode === "ctf" ? "CTF 专项" : "恢复默认";
       if (msg) msg.textContent = n ? `已${label}（${n} 个选项）` : "没有找到可勾选的选项";
     });
   });

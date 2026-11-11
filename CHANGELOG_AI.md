@@ -5,6 +5,41 @@
 
 
 
+## 续376（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：CTF 专项档
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人点单「CTF profile：显式打开 vulnscan、报告导出和线索索引」。落地时按「哪些能真的做」拆开：
+
+### 一、已落地
+
+- `scanner/runner.py` 新增 `CTF_STAGES = ("vulnscan", "crawl")` —— 阶段清单只由后端给，
+  前端只认 `data-ctf` 标记，**不在 JS 里抄阶段名**（沿用建任务页那条既有红线）。
+- 建任务页新增「CTF 专项」按钮：`data-ck-mode="ctf"`，scope 覆盖 `stages/deep/expand`；
+  点一下 = 信息收集专项 + `vulnscan` + `crawl` + SQL 注入。
+- `opt_sqli` 原来是个裸 `span`，批量按钮根本点不到它 ⇒ 第一版单列 `data-ck-group="slow"`，全量直接红在浏览器端 `[10]`（那条判据明确要求「slow 组不入 scope」）⇒ 改为**不新增分组**，
+  `ctf` 模式在分组循环后额外勾 `input[data-ctf="1"]`。
+- `initTaskCheckAll` 加 `ctf` 分支：`c.dataset.ckDefault === "1" || c.dataset.ctf === "1"`。
+
+### 二、报告导出 / 线索索引（不假装做了）
+
+- 报告导出是**全局开关**（`report.export_enabled`，默认关，用户 2026-10-13 点单）。
+  任务级不能替用户把全局闸打开 —— CTF 按钮的 title 里给提示（策略页 → 报告），
+  开关仍由用户在策略页决定。
+- 线索索引：现有页面没有独立「线索」页签（GUI 只把线索写进站点行与报告），本轮**不新增页签**，
+  避免把 profile 和展示层改混；线索数据本身在 `leads` 表里，报告会带出。
+
+### 三、门禁
+
+- 新增 `[8cc]`：按钮存在且 scope **不含** `slow`、`vulnscan`/`crawl` 带 `data-ctf`、SQL 注入靠 `data-ctf` 额外勾选、
+  JS 只认 `dataset.ctf`、信息收集专项仍不默认勾 `vulnscan`（两档语义不混）。
+- `[8w]` 的按钮清单 `["none","default","recon"]` → `["ctf","none","default","recon"]`。
+
+### 四、验证
+
+- `--only 8cc,8w` PASS；`compileall` PASS。
+- 最终全量 v50：2026-11-11 07:53:28–08:03:11（9m55s，日志内 313 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke376b.log`）。第一次全量在 [10] 红：slow 组混进批量 scope。
+
 ## 续375（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：IP 维度证据聚合
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
