@@ -444,6 +444,11 @@ DEFAULTS = {
         "max_pages": 12,           # 每任务最多抓取多少个页面
         "max_js": 20,              # 每站最多抓取多少个 JS 文件
         "max_js_total": 80,        # 续334：全任务 JS 总预算（跨站点共享）
+        # 续373：`//# sourceMappingURL=` → 同站抓 .map → 读 sourcesContent 再抽取一遍
+        # （压缩 JS 里只剩一句 map 引用，接口路径/内部域名/密钥都在源码里）。
+        "maps": True,
+        "max_maps": 10,            # 每站最多抓几个 .map
+        "max_map_bytes": 5000000,  # 单个 .map / 拼接后的 sourcesContent 上限（字节）
         "time_budget": 120,        # 续334：jsmine 墙钟上限（秒），到点停剩余站点
         "secrets": True,           # 开启 AK/SK 等敏感密钥提取（带前后文过滤降噪）
         "blacklist": [],           # 额外排除的第三方域名后缀，如 ["cdn.example.com"]

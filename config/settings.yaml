@@ -284,7 +284,11 @@ jsmine:
   enabled: true
   max_pages: 12
   max_js: 20            # 每站上限
-  max_js_total: 80      # 续334：全任务 JS 总预算（跨站点共享，到量即停）
+  max_js_total: 80
+  # 续373：sourcemap（同站抓 .map → sourcesContent 再抽取）；0 = 不抓
+  maps: true
+  max_maps: 10
+  max_map_bytes: 5000000      # 续334：全任务 JS 总预算（跨站点共享，到量即停）
   time_budget: 120      # 续334：jsmine 墙钟上限（秒），到点停剩余站点
   secrets: true
   blacklist: []

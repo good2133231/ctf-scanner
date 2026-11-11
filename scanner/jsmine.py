@@ -230,6 +230,12 @@ def strip_js_comments(text):
 # ---------- 提取正则 ----------
 
 # <script src="...">（单引号 / 双引号 / 无引号三种写法）
+# 续373：`//# sourceMappingURL=app.js.map` / `/*# sourceMappingURL=... */` / `//@` 三种写法
+# 都见过；值排除空白、引号与 `*`（块注释结尾不能吃进来）。
+_SOURCE_MAP_RE = re.compile(
+    r"(?://[#@]\s*sourceMappingURL\s*=\s*|/\*[#@]\s*sourceMappingURL\s*=\s*)"
+    r"([^\s'\"*]+)")
+
 _SCRIPT_SRC_RE = re.compile(
     r"""<script[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))""", re.I)
 
@@ -529,6 +535,12 @@ def mine(url, settings, logger=None, text_sink=None, max_js=None):
     # 注释剥离（2026-10-13 用户点单）：只作用于**域名抽取**——license banner 注释里的
     # OSS 主页（lodash.com / feross.org / js.foundation …）是拓展域名噪声的大头。
     strip_comments = cfg.get("strip_comments", True) is not False
+    # 续373：sourcemap —— 压缩 JS 里往往只剩一句 `sourceMappingURL=app.js.map`，
+    # 真正的接口路径/内部域名/密钥在 `sourcesContent` 的源码里。默认开，受 max_maps 与
+    # max_map_bytes 夹住；**只抓同站**（与 `<script src>` 那条同一条规矩）。
+    want_maps = cfg.get("maps", True) is not False
+    max_maps = max(0, int(cfg.get("max_maps", 10) or 0))
+    max_map_bytes = max(1024, int(cfg.get("max_map_bytes", 5000000) or 5000000))
 
     out = _new_result()
     seed = urlparse(url or "")
@@ -571,6 +583,7 @@ def mine(url, settings, logger=None, text_sink=None, max_js=None):
             scripts.append(full)
     scripts = scripts[:max_js]
     js_count = 0
+    bodies = []          # 续373：放外层——没有 <script src> 时 map 段也要能安全读它
     if scripts:
         workers = max(1, min(int(limits.get("max_workers", 20)), len(scripts)))
 
@@ -601,7 +614,64 @@ def mine(url, settings, logger=None, text_sink=None, max_js=None):
             if text_sink and b["text"]:
                 text_sink(b)
 
-    # 3) 去重（凭据同一 value 跨文件只保留一次）
+    # 3) sourcemap（续373）：压缩 JS 里的 sourceMappingURL → 同站抓 .map → 读 sourcesContent
+    map_count = 0
+    if want_maps and max_maps and bodies:
+        map_urls, seen_map = [], set()
+        for b in bodies:
+            for m in _SOURCE_MAP_RE.finditer(b["text"]):
+                raw = m.group(1).strip()
+                if not raw or raw.startswith("data:"):
+                    continue                     # 内联 base64 map 不下载
+                full = urljoin(b["url"], raw)
+                p = urlparse(full)
+                if p.scheme not in ("http", "https") or not p.hostname:
+                    continue
+                if not _is_self_host(p.hostname, protect):
+                    continue                     # 第三方 map 不抓（同 <script src> 的规矩）
+                if full in seen_map:
+                    continue
+                seen_map.add(full)
+                map_urls.append(full)
+        map_urls = map_urls[:max_maps]
+        if map_urls:
+            _mw = max(1, min(int(limits.get("max_workers", 20)), len(map_urls)))
+
+            def _get_map(u):
+                r = http_request(u, timeout=timeout, settings=settings, auth=True)
+                if not r:
+                    return None
+                text = r.get("text") or ""
+                if len(text.encode("utf-8", "ignore")) > max_map_bytes:
+                    return None
+                return {"url": u, "text": text}
+
+            for mr in pool_run(_get_map, map_urls, workers=_mw, logger=logger,
+                               label="JS sourcemap 抓取"):
+                if not mr:
+                    continue
+                try:
+                    import json as _json373
+                    data = _json373.loads(mr["text"])
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                parts = [x for x in (data.get("sourcesContent") or [])
+                         if isinstance(x, str) and x]
+                if not parts:
+                    continue
+                blob = "\n".join(parts)
+                if len(blob.encode("utf-8", "ignore")) > max_map_bytes:
+                    blob = blob[:max_map_bytes]
+                h_m, u_m = _extract(blob, scheme, protect, blacklist)
+                hosts |= h_m
+                urls |= u_m
+                if want_secrets:
+                    secret_hits.extend(_find_secrets(blob, mr["url"]))
+                map_count += 1
+
+    # 4) 去重（凭据同一 value 跨文件只保留一次）
     secrets, seen_raw = [], set()
     for s in secret_hits:
         raw = s.pop("_raw", s["value"])
@@ -614,7 +684,8 @@ def mine(url, settings, logger=None, text_sink=None, max_js=None):
     out["urls"] = sorted(urls)
     out["secrets"] = sorted(secrets, key=lambda s: (s["type"], s["value"]))
     out["js_count"] = js_count
-    if logger and (hosts or urls or secrets):
-        logger.info(f"[jsmine] {url} → JS {js_count} 个 / 域名 {len(hosts)} 个 / "
-                    f"URL {len(urls)} 条 / 凭据 {len(secrets)} 条")
+    out["map_count"] = map_count
+    if logger and (hosts or urls or secrets or map_count):
+        logger.info(f"[jsmine] {url} → JS {js_count} 个 / sourcemap {map_count} 个 / "
+                    f"域名 {len(hosts)} 个 / URL {len(urls)} 条 / 凭据 {len(secrets)} 条")
     return out

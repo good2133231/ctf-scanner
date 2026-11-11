@@ -36547,6 +36547,93 @@ expression: r0()
           "域名后缀/CIDR/端口/路径/时间窗（含跨零点）｜目标侧 auth=True 被拒且写出原因、"
           "第三方 auth=False 不受影响｜portscan 走 host 闸｜配置四处一致")
 
+    # [8c9] 续373：JS sourcemap（同站抓 .map → sourcesContent 再抽取）
+    import json as _json8c9
+    import scanner.jsmine as _jm8c9
+    _calls8c9 = []
+    _map8c9 = {"sources": ["webpack:///./src/api/user.ts"],
+               "sourcesContent": ["export const API='https://internal-api.acme-portal.cn/v1/users';\n"
+                                  "const k='AKIAABCDEFGHIJKLMNOP';"]}
+
+    def _fake8c9(u, **kw):
+        _calls8c9.append(u)
+        if u.endswith(".js.map"):
+            return {"url": u, "text": _json8c9.dumps(_map8c9),
+                    "headers": {}, "status": 200}
+        if u.endswith(".js"):
+            return {"url": u, "text": "var a=1;//# sourceMappingURL=app.js.map",
+                    "headers": {}, "status": 200}
+        return {"url": u, "text": '<html><script src="/static/app.js"></script></html>',
+                "headers": {}, "status": 200}
+
+    _o8c9 = _jm8c9.http_request
+    _jm8c9.http_request = _fake8c9
+    try:
+        _r8c9 = _jm8c9.mine("https://www.acme-portal.cn/", {"jsmine": {"maps": True}},
+                            logger=None)
+        assert _r8c9["map_count"] == 1, _r8c9
+        assert "internal-api.acme-portal.cn" in _r8c9["domains"], _r8c9["domains"]
+        assert any("AKIA" in s["value"] for s in _r8c9["secrets"]), _r8c9["secrets"]
+        # 关掉 → 一个 .map 都不请求
+        _calls8c9.clear()
+        _r8c9b = _jm8c9.mine("https://www.acme-portal.cn/", {"jsmine": {"maps": False}},
+                             logger=None)
+        assert _r8c9b["map_count"] == 0 and not any(".map" in u for u in _calls8c9), \
+            f"maps=false 不许抓 .map：{_calls8c9}"
+        # 第三方 map 不抓（同 <script src> 的规矩）
+        _calls8c9.clear()
+
+        def _fake_other8c9(u, **kw):
+            _calls8c9.append(u)
+            if u.endswith(".js"):
+                return {"url": u, "text": "//# sourceMappingURL=https://cdn.other.test/a.map",
+                        "headers": {}, "status": 200}
+            if u.endswith(".map"):
+                return {"url": u, "text": _json8c9.dumps(_map8c9), "headers": {}, "status": 200}
+            return {"url": u, "text": '<html><script src="/static/a.js"></script></html>',
+                    "headers": {}, "status": 200}
+
+        _jm8c9.http_request = _fake_other8c9
+        _r8c9c = _jm8c9.mine("https://www.acme-portal.cn/", {"jsmine": {"maps": True}},
+                             logger=None)
+        assert _r8c9c["map_count"] == 0 and not any("cdn.other.test" in u for u in _calls8c9), \
+            f"第三方 map 不许抓：{_calls8c9}"
+        # 预算：max_maps=1 只抓一个（两个同站 map）
+        _calls8c9.clear()
+
+        def _fake_two8c9(u, **kw):
+            _calls8c9.append(u)
+            if u.endswith("a.js"):
+                return {"url": u, "text": "//# sourceMappingURL=a.js.map", "headers": {}, "status": 200}
+            if u.endswith("b.js"):
+                return {"url": u, "text": "//# sourceMappingURL=b.js.map", "headers": {}, "status": 200}
+            if u.endswith(".map"):
+                return {"url": u, "text": _json8c9.dumps(_map8c9), "headers": {}, "status": 200}
+            return {"url": u, "text": '<html><script src="/a.js"></script>'
+                                     '<script src="/b.js"></script></html>',
+                    "headers": {}, "status": 200}
+
+        _jm8c9.http_request = _fake_two8c9
+        _r8c9d = _jm8c9.mine("https://www.acme-portal.cn/",
+                             {"jsmine": {"maps": True, "max_maps": 1}}, logger=None)
+        assert _r8c9d["map_count"] == 1, f"max_maps=1 只该抓 1 个：{_r8c9d}"
+    finally:
+        _jm8c9.http_request = _o8c9
+    _cfg8c9 = _cfg303.DEFAULTS["jsmine"]
+    assert _cfg8c9["maps"] is True and int(_cfg8c9["max_maps"]) == 10 \
+           and int(_cfg8c9["max_map_bytes"]) == 5000000, _cfg8c9
+    _sy8c9 = (ROOT / "config/settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "maps: true" in _sy8c9 and "max_maps: 10" in _sy8c9, "随包配置缺 sourcemap 三项"
+    _ga8c9 = (ROOT / "gui/app.py").read_text(encoding="utf-8")
+    assert '"maps": f.get("jsmine_maps")' in _ga8c9, "POST 映射没接 jsmine_maps"
+    _sh8c9 = c.get("/settings").get_data(as_text=True)
+    assert 'name="jsmine_maps"' in _sh8c9 and 'name="jsmine_max_maps"' in _sh8c9, \
+        "策略页缺 sourcemap 控件"
+
+    print("[8c9] 续373 ok: sourceMappingURL 三种写法（//# / /*# */ / //@）｜同站抓 .map 并读 "
+          "sourcesContent 再抽域名/密钥｜maps=false 零请求｜第三方 map 不抓｜max_maps 预算生效｜"
+          "配置四处一致")
+
     print("SMOKE PASS")
 
 

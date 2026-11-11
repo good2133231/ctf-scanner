@@ -282,6 +282,12 @@
       {{ 'checked' if s.jsmine.secrets }}> JS 中提取 AK/SK 等疑似凭据（带前后文过滤降噪）</label>
     <label>JS 挖掘页面上限 <input name="jsmine_max_pages" value="{{ s.jsmine.max_pages }}"></label>
     <label>JS 文件上限 <input name="jsmine_max_js" value="{{ s.jsmine.max_js }}"></label>
+    <label class="chk"><input type="checkbox" name="jsmine_maps" value="1"
+      {{ 'checked' if s.jsmine.maps }}> <b>sourcemap 再挖掘</b>
+      （同站抓 <code>.js.map</code>，读 <code>sourcesContent</code> 的源码再抽一遍；
+      压缩 JS 里找不到的接口路径/内部域名/密钥常在这里）</label>
+    <label>每站最多抓几个 .map <input name="jsmine_max_maps" style="width:5em"
+      value="{{ s.jsmine.max_maps }}"></label>
     <label class="chk"><input type="checkbox" name="jsmine_recrawl" value="1"
       {{ 'checked' if s.jsmine.recrawl }}> 二层遍历：把新域名（JS 挖出的 + 库里本任务还没探过的）先过 DNS 再补做一轮存活探测，落成站点</label>
     {# 续171（用户点单"有必要添加一个域名解析…不会错；at.alicdn.com 这种 CDN；style.font.name 打开是域名转让的"）：

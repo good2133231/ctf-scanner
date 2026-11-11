@@ -6383,6 +6383,11 @@ def create_app():
                                "max_pages": int(f.get("jsmine_max_pages", 20) or 20),
                                "max_js": int(f.get("jsmine_max_js", 40) or 40),
                                "secrets": f.get("jsmine_secrets") == "1",
+                               # 续373：sourcemap（默认开；0 个 = 不抓）
+                               "maps": f.get("jsmine_maps") == "1",
+                               "max_maps": int(f.get("jsmine_max_maps", 10) or 0),
+                               "max_map_bytes": int(
+                                   f.get("jsmine_max_map_bytes", 5000000) or 5000000),
                                "recrawl": f.get("jsmine_recrawl") == "1",
                                # 续171（用户点单"有必要添加一个域名解析…不会错"）：三道闸
                                "verify_resolve": f.get("jsmine_verify_resolve") == "1",

@@ -5,6 +5,37 @@
 
 
 
+## 续373（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：JS sourcemap
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+现状：`scanner/jsmine.py::mine()` 只抽页面与 JS 正文。压缩后的 JS 里往往只剩一句
+`//# sourceMappingURL=app.js.map`，**真正的接口路径 / 内部域名 / 密钥在 map 的
+`sourcesContent` 源码里**。
+
+### 一、已落地
+
+- `_SOURCE_MAP_RE`：`//#` / `/*# */` / `//@` 三种写法；`data:` 内联 map 不下载。
+- `mine()` 在 JS 抓完后收集**同站** map（`_is_self_host`），并发抓取（`max_maps` 默认 10、
+  `max_map_bytes` 默认 5MB）；第三方 map 不抓（与 `<script src>` 同一条规矩，防凭据外发）。
+- `sourcesContent` 拼起来后**复用** `_extract` / `_find_secrets` 再抽一遍，不另写一套解析
+  （单一产地原则）；`map_count` 进返回值与日志。
+- 配置 `jsmine.maps` / `max_maps` / `max_map_bytes` 四处一致（DEFAULTS / 随包 / GUI / POST）；
+  `maps=false` 或 `max_maps=0` 时**零请求**。
+- 新增 `[8c9]`：三种注释写法、sourcesContent 挖出 `internal-api.*` 与 `AKIA…`、`maps=false`
+  零请求、第三方 map 不抓、`max_maps=1` 预算、配置四处。
+
+### 二、边界（如实记）
+
+- 只读一层：map 里再引用 map 的情况不递归（`sourcesContent` 已经是源码，递归收益极小）。
+- `sourcesContent` 为空的 map（只发布 `mappings` 的那种）不产生任何结果 —— 不打日志噪声。
+- 抓取计入 jsmine 的既有请求预算（`max_js_total` / `time_budget` 之外另有 `max_maps` 夹住）。
+
+### 三、验证
+
+- `--only 8c9` PASS；`compileall` PASS。
+- 最终全量 v47：2026-11-11 05:55:12–06:04:17（9m16s，日志内 310 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke373.log`）。
+
 ## 续372（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：结构化授权 scope
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
