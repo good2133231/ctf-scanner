@@ -79,7 +79,7 @@ def resolvers(settings=None):
             if not line or line.startswith("#") or not _is_ip(line):
                 continue
             out.append(line)
-    except Exception:
+    except (OSError, UnicodeError):
         out = []
     return out or list(DEFAULT_RESOLVERS)
 
@@ -352,7 +352,7 @@ def _exchange_ttl(name, qtype, timeout=_TTL_WAIT, resolver=None, settings=None):
             continue
         try:
             data = _udp_exchange(packet, srv, timeout)
-        except Exception:
+        except Exception:      # noqa: BLE001 - 单个解析器超时/拒答就换下一个，异常类型由 socket 与解析共同决定
             continue
         parsed = _parse_message(data)
         if not parsed or parsed[0] != tid:
@@ -365,7 +365,7 @@ def _exchange_ttl(name, qtype, timeout=_TTL_WAIT, resolver=None, settings=None):
                 tparsed = _parse_message(tdata) if tdata else None
                 if tparsed and tparsed[0] == tid and not tparsed[3]:
                     return _finish(tparsed[1], tparsed[2], False, tparsed[4])
-            except Exception:
+            except Exception:      # noqa: BLE001 - TCP 重试失败就走截断标记返回，报文解析异常也要接住
                 pass
             return _finish(records, rcode, True, mttl)
         return _finish(records, rcode, False, mttl)
@@ -388,7 +388,7 @@ def query(name, qtype="A", timeout=3, resolver=None, settings=None):
         records, _rcode, _tc = _exchange(host, qnum, timeout=timeout or _TTL_WAIT,
                                          resolver=resolver, settings=settings)
         return [text for _owner, rtype, text in records if rtype == qnum and text]
-    except Exception:
+    except Exception:      # noqa: BLE001 - 对外接口：DNS 失败一律返回空列表，不向上抛
         return []
 
 
@@ -441,7 +441,7 @@ def resolve_detail(name, timeout=3, resolver=None, settings=None):
         if got_records:
             return chain, [], "no-a"
         return chain, [], "timeout"
-    except Exception:
+    except Exception:      # noqa: BLE001 - 追踪链路失败统一降级为 error 结论
         return [], [], "error"
 
 
@@ -465,7 +465,7 @@ def zone_state(name, timeout=3, resolver=None, settings=None):
     try:
         _records, rcode, _tc = _exchange(host, _TYPES["NS"], timeout=timeout or _TTL_WAIT,
                                         resolver=resolver, settings=settings)
-    except Exception:
+    except Exception:      # noqa: BLE001 - 反查失败用 unknown，不阻断调用方
         return "unknown"
     if rcode == 3:
         return "absent"
@@ -509,5 +509,5 @@ def cname_chain(name, timeout=3, resolver=None, settings=None):
                 break
             # 走到链尾但还没拿到 A：对链尾再查一次（下一轮循环）
         return chain, sorted(set(ips))
-    except Exception:
+    except Exception:      # noqa: BLE001 - 链式解析失败返回空链，由上游判「没拿到 A」
         return [], []

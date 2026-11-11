@@ -13,6 +13,7 @@
 """
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -423,7 +424,7 @@ def capture(url, out_path, settings=None, timeout=30, throttle=None, want_title=
         # 截不出新图时标题仍可能已经拿到（DOM 出来了、PNG 没写成）—— 别把它一起丢掉；
         # 但**旧 PNG 在场不算成功**（那条 mtime 判据），所以这里如实报失败
         return False, (err or (f"退出码 {rc}" if rc else "没有产出新的截图文件"))[:200], title
-    except Exception as e:                        # 兜底：截图失败绝不影响主流程
+    except Exception as e:                        # noqa: BLE001 - 兜底：截图失败绝不影响主流程
         return False, str(e)[:200], ""
     finally:
         shutil.rmtree(tmp_profile, ignore_errors=True)
@@ -587,7 +588,7 @@ def capture_cdp(url, out_path, settings=None, timeout=None, throttle=None, want_
                 try:
                     title = str(client.ev("document.title || ''", session_id=sid,
                                            timeout=min(8, max(1, budget - (time.time() - t0)))) or "")
-                except Exception:
+                except Exception:      # noqa: BLE001 - 只丢标题，截图结果不因此判失败
                     title = ""
             return (True, "", title) if raw else (False, "cdp: 0 字节", title)
 
@@ -595,21 +596,21 @@ def capture_cdp(url, out_path, settings=None, timeout=None, throttle=None, want_
             return _do()
         with throttle.slot("subprocess"):
             return _do()
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 截图整体失败返回失败三元组，绝不向上抛
         return False, ("%s" % e)[:200], ""
     finally:
         if client is not None:
             try:
                 client.close()
-            except Exception:
+            except Exception:      # noqa: BLE001 - 关闭连接失败无补救意义，且不能覆盖已有结果
                 pass
         if proc is not None:
             try:
                 proc.terminate()
                 proc.wait(timeout=8)
-            except Exception:
+            except (OSError, subprocess.TimeoutExpired):
                 try:
                     proc.kill()
-                except Exception:
+                except OSError:
                     pass
         shutil.rmtree(profile, ignore_errors=True)

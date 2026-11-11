@@ -125,7 +125,7 @@ def record(kind, actor, ip, target="", detail="", ok=True, actor_role="", settin
     except Exception as e:      # noqa: BLE001 - 审计失败绝不阻断主流程
         try:
             logger.warning(f"[audit] 审计写入失败（已忽略）：{e}")
-        except Exception:
+        except Exception:      # noqa: BLE001 - 日志器自身故障也不能影响审计主流程
             pass
         return False
 
@@ -168,10 +168,10 @@ def query(kind=None, actor=None, ip=None, ok=None, q=None, since=None, until=Non
         rows = db._query(
             f"SELECT * FROM audit_log{clause} ORDER BY id DESC LIMIT ? OFFSET ?",
             tuple(params) + (limit, offset))
-    except Exception as e:      # 表还没建（纯 CLI 场景）→ 空结果，不抛
+    except Exception as e:      # noqa: BLE001 - 表还没建（纯 CLI 场景）→ 空结果，不抛
         try:
             logger.warning(f"[audit] 审计查询失败：{e}")
-        except Exception:
+        except Exception:      # noqa: BLE001 - 同上，日志器故障忽略
             pass
         return [], 0
     return [dict(r) for r in rows], int(total["c"] if total else 0)
@@ -184,7 +184,7 @@ def summary(settings=None):
         for r in db._query("SELECT kind k, COUNT(*) c FROM audit_log GROUP BY kind"):
             out["by_kind"][r["k"]] = r["c"]
         out["total"] = sum(out["by_kind"].values())
-    except Exception:
+    except Exception:      # noqa: BLE001 - 统计失败就返回已累积的部分
         pass
     return out
 
@@ -215,6 +215,6 @@ def prune(days=None, settings=None):
     except Exception as e:      # noqa: BLE001
         try:
             logger.warning(f"[audit] 清理过期审计失败（已忽略）：{e}")
-        except Exception:
+        except Exception:      # noqa: BLE001 - 清理失败已由外层记录，日志器再故障就忽略
             pass
         return 0

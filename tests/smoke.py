@@ -36815,7 +36815,7 @@ expression: r0()
     _bare8ce = sum(1 for p in _fs8ce
                    for line in p.read_text(encoding="utf-8", errors="replace").splitlines()
                    if _needle8ce in line and "noqa: BLE001" not in line)
-    assert _bare8ce <= 83, f"未标注理由的宽捕获反弹了（续384 基线 83，现值 {_bare8ce}）"
+    assert _bare8ce <= 65, f"未标注理由的宽捕获反弹了（续385 基线 65，现值 {_bare8ce}）"
     print(f"[8ce] 续378 ok: utils.py 收窄 5 处（stdin/ctypes/管道/urllib/getaddrinfo）｜"
           f"剩余 4 处宽捕获全部写明理由｜全仓 {_tot8ce} 处（其中 {_bare8ce} 处未标理由，棘轮只钉这个数｜"
           f"后续按文件分批收窄）")
@@ -36914,6 +36914,27 @@ expression: r0()
     print("[8cj] 续384 ok: iprecon.py 11→10 处（gethostbyaddr 收窄为 OSError/UnicodeError，"
           "10 处源适配器补理由）｜login_guard.py 9→8 处（清理 SQL 收窄为 sqlite3.Error/OSError，"
           "5 处补理由）｜全仓未标理由 97→83")
+
+    # [8ck] 续385：dnsq.py + screenshot.py + audit.py 宽捕获分批
+    _dq8ck = (ROOT / "scanner/dnsq.py").read_text(encoding="utf-8")
+    _ss8ck = (ROOT / "scanner/screenshot.py").read_text(encoding="utf-8")
+    _au8ck = (ROOT / "scanner/audit.py").read_text(encoding="utf-8")
+    _needle8ck = "except " + "Exception"
+    for _name8ck, _txt8ck, _want8ck in (("dnsq", _dq8ck, 6),
+                                        ("screenshot", _ss8ck, 4),
+                                        ("audit", _au8ck, 7)):
+        _w8ck = [l for l in _txt8ck.splitlines() if _needle8ck in l]
+        assert len(_w8ck) == _want8ck, f"{_name8ck} 宽捕获数不对：{len(_w8ck)}"
+        assert all("noqa: BLE001" in l for l in _w8ck), \
+            f"{_name8ck} 还有没写理由的：{[l for l in _w8ck if 'noqa: BLE001' not in l]}"
+    assert "except (OSError, UnicodeError):" in _dq8ck, "resolv.conf 读取的收窄被改回去了"
+    assert "except (OSError, subprocess.TimeoutExpired):" in _ss8ck, \
+        "截图进程收尾的收窄被改回去了"
+    assert "import subprocess" in _ss8ck, "screenshot 缺 subprocess 导入会 NameError"
+
+    print("[8ck] 续385 ok: dnsq.py 7→6（resolv.conf 收窄）、screenshot.py 6→4"
+          "（terminate/kill 收窄 + 补 import subprocess）、audit.py 7 处全带理由"
+          "｜全仓未标理由 83→65")
 
     print("SMOKE PASS")
 

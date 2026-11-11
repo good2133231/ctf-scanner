@@ -5,6 +5,43 @@
 
 
 
+## 续385（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第六批（dnsq + screenshot + audit）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+### 一、dnsq.py（7 → 6，收窄 1 处）
+
+- 读 `conf.dicts.resolvers` 指向的文件 → `(OSError, UnicodeError)`：只可能「文件不在 / 没权限 /
+  编码坏」，读失败就回落到内置解析器表。
+- 其余 6 处全部补理由：单个解析器超时/拒答就换下一个（异常类型由 socket 与解析共同决定）、
+  TCP 重试失败走截断标记、对外 `resolve_type` 一律返回空列表、追踪链路降级 `error`、
+  反查降级 `unknown`、链式解析返回空链。**DNS 报文来自第三方服务器，`struct.error` /
+  `IndexError` 都可能，收窄成具体类型反而会漏、把「降级」变成「抛穿」**。
+
+### 二、screenshot.py（6 → 4，收窄 2 处）
+
+- `proc.terminate()/wait(timeout=8)` → `(OSError, subprocess.TimeoutExpired)`；
+  内层 `proc.kill()` → `OSError`。同时补 `import subprocess`（原文件没导入，直接写
+  `TimeoutExpired` 会 `NameError`）。
+- 其余 4 处补理由：整体兜底（截图失败绝不影响主流程）、CDP `eval` 只丢标题、
+  `client.close()` 失败无补救意义且不能覆盖已有结果、失败三元组返回。
+
+### 三、audit.py（7 处全带理由）
+
+- 补 5 处：内层「日志器自身故障」×2、审计统计失败返回已累积部分、表未建（纯 CLI 场景）→
+  空结果、清理过期失败已由外层记录。`[8ce]` 的既有口径不变：审计永不影响主流程。
+
+### 四、棘轮推进
+
+- 全仓宽捕获 266 → **263**；未标注理由 83 → **65**。
+- `[8ce]` 基线同步下调到 **65**。
+- 新增 `[8ck]`：三文件计数（6/4/7）与全带理由、2 个收窄形态钉住、`import subprocess` 不许丢。
+
+### 五、验证
+
+- `--only 8ck,8ce` PASS；`compileall` PASS。
+- 最终全量 v58：2026-11-11 12:49:39–13:14:50（日志内 321 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke385.log`）。
+
 ## 续384（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第五批（iprecon + login_guard）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

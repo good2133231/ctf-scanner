@@ -4542,6 +4542,27 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续385（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第六批（dnsq + screenshot + audit）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【dnsq 收窄 1 处】`scanner/dnsq.py` 7 → 6：读 `resolv.conf` →
+      `(OSError, UnicodeError)`；其余 6 处是 DNS 报文解析兜底（`struct.error` / `IndexError`
+      由第三方服务器返回的任意字节决定），保留宽捕获并写明「换下一个解析器 / 返回空 / 降级结论」。
+- [x] T2【screenshot 收窄 2 处】`scanner/screenshot.py` 6 → 4：`proc.terminate()+wait()`
+      → `(OSError, subprocess.TimeoutExpired)`、`proc.kill()` → `OSError`；补 `import subprocess`
+      （原来没导入，直接写 `TimeoutExpired` 会 `NameError`）。
+- [x] T3【screenshot 补理由 4 处】整体兜底、CDP `eval` 只丢标题、连接关闭、截图失败三元组。
+- [x] T4【audit 补理由 5 处】`scanner/audit.py` 7 处全部带理由：内层「日志器自身故障」×2、
+      审计统计、表未建（纯 CLI）、清理过期。审计判据不变：绝不阻断主流程。
+- [x] T5【结果】全仓宽捕获 266 → **263**，未标理由 83 → **65**；`[8ce]` 棘轮同步下调。
+- [x] T6【门禁】新增 `[8ck]`：三文件计数与全带理由、2 个收窄形态钉住、`import subprocess` 不许丢。
+- [x] C1 定向：`--only 8ck,8ce` PASS。
+- [x] C2 最终全量 v58 `SMOKE PASS`：2026-11-11 12:49:39–13:14:50（321 个 ok 组 + 浏览器 e2e，`logs/smoke385.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一批**：产品侧还剩 `run_bootstrap.py`(4)、`tools/import_fingerprints.py`(4)、
+`scanner/keystore.py`(3)、`scanner/ssrf.py`(3)、`scanner/fingerprint.py`(3) 等零散处。
+
 ## 续384（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第五批（iprecon + login_guard）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
