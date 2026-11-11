@@ -4542,6 +4542,27 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续377（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：拆大文件（第一轮）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【SCHEMA】`scanner/db.py` 的 `SCHEMA`（38–383 行，346 行纯 SQL）搬到
+      `scanner/schema.py`；`db.py` 顶部 `from .schema import SCHEMA` **原样暴露名字**，
+      所有既有引用与门禁里的文本比较都不用改。db.py 3311 → 2966 行。
+- [x] T2【标签】`gui/app.py` 的 `SOURCE_LABELS`（23 行）搬到 `gui/labels.py`
+      （显式 import `extdom`）；`app.py` `from .labels import SOURCE_LABELS`。7748 → 7726 行。
+- [x] T3【门禁】新增 `[8cd]`：`db.SCHEMA == schema.SCHEMA`（21 张建表语句齐全）、
+      `app.SOURCE_LABELS == labels.SOURCE_LABELS`（17 条含 `osint:fofa-web`）、
+      `db.py < 3000` 行、`_smoke_group_blocks()` 仍切出 260+ 组。
+- [x] T4【不拆 smoke.py】`--only` / `--fast` 都按 `main()` 的**源码行区间**切片，
+      `_dedent_block` 还保护三引号内容；把辅助函数抽走会引入跨文件状态。真要拆必须先把
+      切片器改成「按组名注册」，是另一个大工程 —— 单独一轮，不和功能混。
+- [x] C1 定向：`--only 8cd` PASS（第一次红在断言里写了 `'SCHEMA = """'`，触发
+      `_dedent_block` 的三引号保护 → 整块 unexpected indent；改成 `"SCHEMA = "`）。
+- [x] C2 最终全量 v51 `SMOKE PASS`：2026-11-11 08:31:05–08:40:46（9m55s，314 个 ok 组 + 浏览器 e2e，`logs/smoke377c.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一轮（续378）**：收窄 274 处 `except Exception`（最后一项）。
+
 ## 续376（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：CTF 专项档
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

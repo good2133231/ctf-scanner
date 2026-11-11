@@ -23538,7 +23538,9 @@ expression: r0()
     assert _D145["gui"]["console_logs"] is False, "默认必须是关 —— 主理人要的就是终端不刷屏"
     _y156 = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8", errors="replace")
     assert "  console_logs: false" in _y156, "shipped 配置没跟上 DEFAULTS"
-    _app156 = (ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+    # 续377：SOURCE_LABELS 已搬到 gui/labels.py，源码级判据要同时看两份文件
+    _app156 = ((ROOT / "gui" / "app.py").read_text(encoding="utf-8", errors="replace")
+               + (ROOT / "gui" / "labels.py").read_text(encoding="utf-8", errors="replace"))
     assert '"console_logs": f.get("console_logs") == "1"' in _app156, \
         "POST 映射必须接上这一项（save_settings 合并写，仍逐键点名）"
     _tpl157 = (ROOT / "gui" / "templates" / "settings.html").read_text(
@@ -36168,7 +36170,9 @@ expression: r0()
     _def8c1 = _cfg8c1.DEFAULTS["fofa"]
     assert _def8c1["bare_ip_reverse"] is True and _def8c1["web_portscan"] is True \
            and int(_def8c1["web_max"]) == 20, _def8c1
-    _ga8c1 = (ROOT / "gui/app.py").read_text(encoding="utf-8")
+    # 续377：SOURCE_LABELS 已搬到 gui/labels.py
+    _ga8c1 = ((ROOT / "gui/app.py").read_text(encoding="utf-8")
+              + (ROOT / "gui/labels.py").read_text(encoding="utf-8"))
     for _lit8c1 in ('"fofa_bare_ip_reverse"', '"fofa_web_portscan"', '"fofa_web_max"',
                     '"osint:fofa-web"'):
         assert _lit8c1 in _ga8c1, f"POST 映射 / 来源标签缺 {_lit8c1}"
@@ -36757,9 +36761,31 @@ expression: r0()
     _st8cc = dict(_rx8cc.findall(r'name="stages" value="(\w+)"\s+data-ck-default="(\d)"', _th8cc))
     assert _st8cc.get("vulnscan") == "0", "信息收集专项的默认口径被改宽了（vulnscan 不许默认勾）"
 
-    print("[8cc] 续376 ok: CTF 专项按钮（stages+deep+expand+slow）｜vulnscan/crawl 带 data-ctf｜"
+    print("[8cc] 续376 ok: CTF 专项按钮（stages+deep+expand）｜vulnscan/crawl 带 data-ctf｜"
           "SQL 注入不在任何分组、只靠 data-ctf 额外勾选｜JS 只认 dataset.ctf 不抄阶段名｜"
           "信息收集专项仍不默认勾 vulnscan（两档语义不混）")
+
+    # [8cd] 续377：拆大文件（纯数据搬迁，名字/内容零变化；切片器不受影响）
+    from scanner import db as _db8cd, schema as _sc8cd
+    from gui import app as _app8cd, labels as _lb8cd
+    assert _db8cd.SCHEMA == _sc8cd.SCHEMA, "db.SCHEMA 与 schema.SCHEMA 不一致"
+    assert _sc8cd.SCHEMA.count("CREATE TABLE IF NOT EXISTS") == 21, \
+        "建表语句条数变了（搬迁时漏字节）"
+    assert _app8cd.SOURCE_LABELS == _lb8cd.SOURCE_LABELS, "来源标签字典不一致"
+    assert len(_lb8cd.SOURCE_LABELS) == 17 and "osint:fofa-web" in _lb8cd.SOURCE_LABELS
+    _dbsrc8cd = (ROOT / "scanner/db.py").read_text(encoding="utf-8")
+    assert "from .schema import SCHEMA" in _dbsrc8cd and "SCHEMA = " not in _dbsrc8cd
+    _apsrc8cd = (ROOT / "gui/app.py").read_text(encoding="utf-8")
+    assert "from .labels import SOURCE_LABELS" in _apsrc8cd \
+           and "SOURCE_LABELS = {" not in _apsrc8cd
+    assert len((ROOT / "scanner/db.py").read_bytes().splitlines()) < 3000, \
+        "db.py 没真正变小"
+    # smoke.py 的辅助函数刻意不拆：--only / --fast 都按 main() 的源码行区间切片
+    assert len(_smoke_group_blocks()[1]) >= 260, "拆文件把 --only 的组块切没了"
+
+    print("[8cd] 续377 ok: SCHEMA(346 行) → scanner/schema.py、SOURCE_LABELS(23 行) → "
+          "gui/labels.py｜db.SCHEMA / app.SOURCE_LABELS 名字与内容逐字节不变｜"
+          "21 张建表语句齐全｜db.py < 3000 行｜smoke.py 的组块切片器仍切出 260+ 组")
 
     print("SMOKE PASS")
 

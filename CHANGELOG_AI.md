@@ -5,6 +5,43 @@
 
 
 
+## 续377（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：拆大文件（第一轮）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人点单「拆大文件」。这一轮只搬**纯数据**，不动任何执行流程 —— 因为项目里最大的
+那个文件恰恰是最不能按常规拆的。
+
+### 一、已落地
+
+- `scanner/db.py` 的 `SCHEMA`（38–383 行，346 行纯 SQL）→ `scanner/schema.py`。
+  `db.py` 顶部 `from .schema import SCHEMA` **原样暴露名字**，所以 `db.SCHEMA` 的所有
+  既有引用、门禁里的 SCHEMA 文本比较都不用改。`db.py` 3311 → **2966 行**。
+- `gui/app.py` 的 `SOURCE_LABELS`（23 行纯字典）→ `gui/labels.py`（显式 import
+  `extdom`，因为字典里用了 `extdom.REVERSE_SOURCE`）；`app.py` 用
+  `from .labels import SOURCE_LABELS` 原样暴露。`app.py` 7748 → **7726 行**。
+- 新增 `[8cd]`：`db.SCHEMA == schema.SCHEMA`（21 张建表语句齐全）、
+  `app.SOURCE_LABELS == labels.SOURCE_LABELS`（17 条，含 `osint:fofa-web`）、
+  `db.py < 3000` 行、`_smoke_group_blocks()` 仍切出 260+ 组。
+
+### 二、为什么 `tests/smoke.py`（36781 行）这轮不拆
+
+`--only` / `--fast` 都是按 `main()` 的**源码行区间**做切片 + `exec`，`_dedent_block`
+还会保护三引号内容。把辅助函数或组块抽到别的文件，等于把整套快档体系打碎；
+真要拆必须先把切片器改成「按组名注册」（每个组一个可导入的 callable），那是另一个
+大工程，必须单独一轮，不能和功能改动混在一起。本轮如实不动它。
+
+### 三、踩过的坑
+
+`[8cd]` 第一版断言里写了 `'SCHEMA = """'`，`_dedent_block` 的三引号保护把后面几行
+当成字符串内容、不参与 dedent ⇒ 整块 `unexpected indent`，
+`--only 8cd` 报「切片不完整」。改成不含三引号的 `"SCHEMA = "` 后正常。
+
+### 四、验证
+
+- `--only 8cd` PASS；`compileall` PASS；`db.SCHEMA` / `app.SOURCE_LABELS` 逐字节一致。
+- 最终全量 v51：2026-11-11 08:31:05–08:40:46（9m55s，日志内 314 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke377c.log`）。前两次全量红在 [8bn] / [8c1]：源码级判据仍只盯 app.py，改为同时读 labels.py 后过。
+
 ## 续376（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：CTF 专项档
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
