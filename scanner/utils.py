@@ -137,7 +137,7 @@ def is_interactive_stdin():
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return False
-    except Exception:
+    except (AttributeError, ValueError, OSError):   # stdin 被替换 / 已关闭 / 无 tty
         return False
     if os.name != "nt":
         return True
@@ -150,7 +150,7 @@ def is_interactive_stdin():
         # STD_INPUT_HANDLE；只有真控制台 GetConsoleMode 才成功（NUL 上失败 ⇒ 非交互）
         return bool(kernel32.GetConsoleMode(kernel32.GetStdHandle(-10),
                                             ctypes.byref(mode)))
-    except Exception:
+    except (AttributeError, OSError):   # 非 Windows / 没有真控制台
         return False
 
 
@@ -270,7 +270,7 @@ def _do_run_cmd(argv, cwd, timeout, extra_path=None, stop=None, extra_env=None):
     def _drain218(stream, key):
         try:
             data = stream.read()
-        except Exception:
+        except (OSError, ValueError):   # 管道读失败按空处理（不能让读线程死掉）
             data = None
         if data:
             _chunks[key].append(data)
@@ -344,7 +344,7 @@ def _multi_part_suffixes():
             line = line.strip().lower().strip(".")
             if line and not line.startswith("#") and "." in line:
                 items.add(line)
-    except Exception:
+    except Exception:            # noqa: BLE001 - 字典文件/resolve 的异常面不可枚举，读不到就回退内置后缀表
         items = set()
     _MULTI_PSL_CACHE = items
     return items or None
@@ -741,7 +741,7 @@ def _ua(settings=None):
         ua = evasion.pick_ua(settings)
         if ua:
             return ua
-    except Exception:
+    except Exception:            # noqa: BLE001 - evasion 是插件式 UA 生成器，任何异常都回退到静态 UA
         pass
     if settings:
         return settings.get("http", {}).get("user_agent", "Mozilla/5.0 CTFScanner/0.1")
@@ -764,7 +764,7 @@ def _headers(settings=None, extra=None, auth=False):
         hdrs = evasion.browser_headers(settings, merged or None)
         if hdrs:
             return hdrs
-    except Exception:
+    except Exception:            # noqa: BLE001 - evasion 浏览器头生成失败就退回最小请求头
         pass
     hdrs = {"User-Agent": _ua(settings)}
     hdrs.update(merged)
@@ -1007,7 +1007,7 @@ def _urllib_request(url, method, headers, data, timeout, verify, allow_redirects
         resp = opener.open(req, timeout=timeout)
     except urllib.error.HTTPError as e:
         resp = e
-    except Exception as e:
+    except (urllib.error.URLError, OSError, ValueError) as e:
         # 续165：与 requests 分支同口径 —— 记一句可展示的原因，返回值仍是 None。
         _HTTP_LOCAL.last_error = _exc_reason(e)
         return None
@@ -1221,7 +1221,7 @@ def resolve_host(host, timeout=3):
     try:
         infos = socket.getaddrinfo(host, None)
         return sorted({i[4][0] for i in infos})
-    except Exception:
+    except (OSError, UnicodeError):   # getaddrinfo 失败（socket.gaierror 是 OSError 子类；IDN 会抛 UnicodeError）
         return []
 
 

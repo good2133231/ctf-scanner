@@ -5,6 +5,45 @@
 
 
 
+## 续378（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：收窄宽捕获（第一批）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人点单「收窄 227 个 except Exception 解析」。实测当前全仓 **280 处**
+（门禁统计范围 135 个 .py 文件为 275 处），其中 144 处已带 `noqa: BLE001` 理由。
+
+### 一、本轮做了什么
+
+- `scanner/utils.py` **9 → 4 处**，收窄 5 处形态明确的：
+  | 位置 | 原来 | 收窄成 |
+  | --- | --- | --- |
+  | `sys.stdin` | 宽捕获 | `(AttributeError, ValueError, OSError)`（被替换/已关闭/无 tty） |
+  | Windows ctypes | 宽捕获 | `(AttributeError, OSError)`（非 Windows / 无真控制台） |
+  | 管道 `stream.read()` | 宽捕获 | `(OSError, ValueError)`（读失败按空处理，读线程不能死） |
+  | urllib fallback | 宽捕获 | `(urllib.error.URLError, OSError, ValueError)`（HTTPError 上面已单独处理） |
+  | `socket.getaddrinfo` | 宽捕获 | `(OSError, UnicodeError)`（含 `socket.gaierror`；IDN 会抛 `UnicodeError`） |
+- 剩余 4 处**不能收窄**（字典文件解析、evasion 插件式 UA/请求头、内存探测）全部补上
+  `# noqa: BLE001 - <理由>`，把「为什么故意宽捕获」写进源码，而不是留一个空 `except`。
+- 新增 `[8ce]`：棘轮判据（全仓范围内 **≤ 275 不许反弹**）、5 个收窄形态钉住、
+  `utils.py` 剩余 4 处必须带理由；输出「128 处尚未标注理由」作为后续基线。
+
+### 二、为什么不一轮全改完（如实记）
+
+280 处逐处都要判断「这是该吞的容错，还是被吞掉的真故障」—— 外部工具输出解析、
+第三方接口、插件回调、清理路径里的宽捕获是**故意的**；改错一处就把容错变成任务崩溃。
+按文件分批、每轮 1–2 个文件 + 一次全量，才是安全节奏。下一轮起按
+`gui/app.py(31) → runner.py(24) → toolmgr.py(18) → stages/osint.py(15) → …` 推进。
+
+### 三、踩坑
+
+`[8ce]` 第一版在门禁注释里自己写了一个 `except Exception` 字面量，统计时把自己算进去
+（275 → 276）⇒ 判据自己把自己判红。改成「宽捕获」措辞，统计针也用字符串拼接构造。
+
+### 四、验证
+
+- `--only 8ce` PASS；`compileall` PASS。
+- 最终全量 v52：2026-11-11 09:06:29–09:15:54（9m38s，日志内 315 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke378b.log`）。第一次全量红在 [116]：把 getaddrinfo 收窄成 socket.gaierror 接不住夹具抛的通用 OSError，改回 (OSError, UnicodeError) 后重跑。
+
 ## 续377（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：拆大文件（第一轮）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

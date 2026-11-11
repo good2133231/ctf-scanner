@@ -36787,6 +36787,37 @@ expression: r0()
           "gui/labels.py｜db.SCHEMA / app.SOURCE_LABELS 名字与内容逐字节不变｜"
           "21 张建表语句齐全｜db.py < 3000 行｜smoke.py 的组块切片器仍切出 260+ 组")
 
+    # [8ce] 续378：收窄宽捕获（第一批 + 棘轮判据）
+    import re as _re8ce
+    _u8ce = (ROOT / "scanner/utils.py").read_text(encoding="utf-8")
+    _needle8ce = "except " + "Exception"
+    _wide8ce = [m.group(0) for m in _re8ce.finditer(_needle8ce + r"[^\n]*", _u8ce)]
+    assert len(_wide8ce) == 4, f"utils.py 宽捕获应剩 4 处（9 → 4）：{_wide8ce}"
+    assert all("noqa: BLE001" in x for x in _wide8ce), \
+        f"剩下的宽捕获必须写明为什么不能收窄：{_wide8ce}"
+    for _lit8ce in ("except (AttributeError, ValueError, OSError):",
+                    "except (AttributeError, OSError):",
+                    "except (OSError, ValueError):",
+                    "except (urllib.error.URLError, OSError, ValueError) as e:",
+                    "except (OSError, UnicodeError):"):
+        assert _lit8ce in _u8ce, f"收窄的形态被改回去了：{_lit8ce}"
+    # 棘轮：全仓宽捕获总数不许反弹（本轮基线 275，后续每轮只许往下走）
+    _fs8ce = (list((ROOT / "scanner").rglob("*.py"))
+              + list((ROOT / "gui").rglob("*.py"))
+              + list((ROOT / "cli").rglob("*.py"))
+              + list((ROOT / "tools").glob("*.py"))
+              + [ROOT / "tests/smoke.py", ROOT / "tests/browser_e2e.py",
+                 ROOT / "run_bootstrap.py", ROOT / "dev.py"])
+    _tot8ce = sum(p.read_text(encoding="utf-8", errors="replace").count(_needle8ce)
+                  for p in _fs8ce)
+    assert _tot8ce <= 275, f"宽捕获总数反弹了（基线 275，现值 {_tot8ce}）"
+    _bare8ce = sum(1 for p in _fs8ce
+                   for line in p.read_text(encoding="utf-8", errors="replace").splitlines()
+                   if _needle8ce in line and "noqa: BLE001" not in line)
+    print(f"[8ce] 续378 ok: utils.py 收窄 5 处（stdin/ctypes/管道/urllib/getaddrinfo）｜"
+          f"剩余 4 处宽捕获全部写明理由｜全仓 {_tot8ce} 处不许反弹｜"
+          f"其中 {_bare8ce} 处尚未标注理由，留给后续按文件分批收窄")
+
     print("SMOKE PASS")
 
 

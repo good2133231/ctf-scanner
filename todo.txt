@@ -4542,6 +4542,31 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续378（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：收窄宽捕获（第一批）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【统计】实测全仓 `except Exception` 共 280 处（范围内 275），144 处已带 `noqa: BLE001`；
+      分布：gui/app.py 31 / runner.py 24 / toolmgr.py 18 / osint.py 15 / smoke.py 14 …
+- [x] T2【收窄】`scanner/utils.py` 9 → 4 处，收窄 5 处：`sys.stdin` → `(AttributeError,
+      ValueError, OSError)`、Windows ctypes → `(AttributeError, OSError)`、管道读 →
+      `(OSError, ValueError)`、urllib fallback → `(urllib.error.URLError, OSError, ValueError)`、
+      `socket.getaddrinfo` → `(OSError, UnicodeError)`（含 gaierror）。
+- [x] T3【理由】剩余 4 处宽捕获全部补 `# noqa: BLE001 - <理由>`（字典解析、evasion 两处、
+      内存探测）—— 异常面不可枚举的插件式回调不许假装能收窄。
+- [x] T4【门禁】新增 `[8ce]`：棘轮（全仓范围内 ≤ 275 不许反弹）、5 个收窄形态钉住、
+      utils.py 剩余 4 处必须带理由；输出「128 处尚未标注理由」作为后续基线。
+- [x] C1 定向：`--only 8ce` PASS（第一次红在门禁注释自己写了一个宽捕获字面量，把自己算进总数）。
+- [x] C2 最终全量 v52 `SMOKE PASS`：2026-11-11 09:06:29–09:15:54（9m38s，315 个 ok 组 + 浏览器 e2e，`logs/smoke378b.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**为什么不一轮全改完（如实记）**：280 处逐处要判断「这是该吞的容错，还是被吞掉的真故障」
+—— 外部工具输出解析、第三方接口、插件回调、清理路径里的宽捕获是**故意的**，
+改错一处就把容错变成任务崩溃。按文件分批、每轮 1–2 个文件 + 一次全量，才是安全节奏。
+
+**下一轮（续379+）按文件分批**：gui/app.py(31) → runner.py(24) → toolmgr.py(18) →
+stages/osint.py(15) → smoke.py(14) → browser_e2e.py(12) → iprecon.py(11) →
+utils.py 已做完 → login_guard.py(9) → … 每轮把该文件的宽捕获收窄或逐条标理由。
+
 ## 续377（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：拆大文件（第一轮）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
