@@ -304,6 +304,25 @@ class JsmineStage(Stage):
         ctx.results["emails"] = sorted(_mail_hits.values(),
                                        key=lambda r: (r.get("domain", ""), r.get("email", "")))
 
+        # 续374：OpenAPI / GraphQL 探测（只读；只入线索层 + js_urls，不写 vulns）
+        try:
+            from .. import api_probe as _api374
+            _en374, _ms374, _mp374, _mu374 = _api374.limits(ctx.settings)
+            _api_urls374, _api_leads374 = [], []
+            for _site374 in (sites if _en374 else [])[:_ms374]:
+                if ctx.stopped():
+                    break
+                _r374 = _api374.probe(_site374, ctx.settings, logger=ctx.logger)
+                _api_urls374.extend(_r374["urls"])
+                _api_leads374.extend(_r374["leads"])
+            urls.update(_api_urls374)
+            if _api_leads374:
+                _n374 = db.insert_leads(ctx.task_id, _api_leads374)
+                if _n374:
+                    ctx.logger.info(f"[jsmine] API 线索新增 {_n374} 条（kind=api）")
+        except Exception as _e374:      # noqa: BLE001 - 探测失败不该拖垮 JS 挖掘
+            ctx.logger.warning(f"[jsmine] API 探测失败（不影响其余）：{_e374}")
+
         # 2) 接口 URL：落盘 + 进内存结果（不入 sites/dirs 表）
 
         url_list = sorted(urls)

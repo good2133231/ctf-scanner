@@ -4542,6 +4542,25 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续374（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：OpenAPI / GraphQL 探测
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【模块】新增 `scanner/api_probe.py`：只读。OpenAPI 描述文件（7 条常见路径）→
+      `paths` 键拼成绝对 URL；GraphQL `POST {"query":"{__schema{types{name kind}}}"}` →
+      类型名。纯函数 `openapi_paths` / `graphql_types` / `limits` 可单测。
+- [x] T2【接线】`jsmine.run()` 在「接口 URL」落盘前调用（每任务 `api.max_sites` 个站点），
+      接口 URL 并入 `urls`（落 `js_urls.txt`），线索写 `leads`（`kind=api`）。
+- [x] T3【边界】产物只到线索层与 js_urls，**不写 vulns、不展开 GraphQL 字段、不按参数 fuzz**；
+      YAML 描述文件本轮不解析（不引第三方依赖）。
+- [x] T4【配置】新增 `api` 段 4 键（`enabled`/`max_sites`/`max_probes`/`max_urls`）四处一致。
+- [x] T5【门禁】新增 `[8ca]`：纯函数、OpenAPI→绝对 URL、GraphQL→线索、`enabled=false` 零请求、
+      `max_probes=1` 预算、jsmine 接线、配置四处。
+- [x] C1 定向：`--only 8ca` PASS。
+- [x] C2 最终全量 v48 `SMOKE PASS`：2026-11-11 06:33:18–06:42:12（9m05s，311 个 ok 组 + 浏览器 e2e，`logs/smoke374.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一轮（续375）**：历史 PDNS / ASN / 证书 SAN 关联真实 IP（三条证据归并到 IP 维度）。
+
 ## 续373（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：JS sourcemap
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

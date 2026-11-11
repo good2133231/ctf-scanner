@@ -969,6 +969,13 @@ DEFAULTS = {
         "cache_max": 4096,        # 条目上限（满了整批清，不做 LRU）
         "cache_max_ttl": 3600,    # 单条最长缓存秒数（应答 TTL 超过就夹到它）
     },
+    # 续374：OpenAPI / GraphQL 探测（只读；产物只到线索层 leads(kind=api) 与 js_urls）。
+    "api": {
+        "enabled": True,
+        "max_sites": 5,        # 每个任务最多探几个站点（每个站点约 6~8 个请求）
+        "max_probes": 6,       # 每站最多探几条描述文件路径（含 GraphQL 两条）
+        "max_urls": 200,       # 单站最多收多少个 OpenAPI path
+    },
     # 续372：结构化授权范围（默认关）。开了之后**目标侧**请求（`auth=True`）统一过闸：
     # 域名后缀 / IP-CIDR / 端口 / 路径 / 时间窗；第三方接口（`auth=False`）不受影响。
     # ⚠ fail-closed：enabled=true 但 allow_domains 与 allow_cidrs 都为空 ⇒ **全部拒绝**

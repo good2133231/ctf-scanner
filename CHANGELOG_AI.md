@@ -5,6 +5,39 @@
 
 
 
+## 续374（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：OpenAPI / GraphQL 探测
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+现状：JS 挖掘只抽页面与 JS 正文，API 面（描述文件 / GraphQL）完全没探 ——
+而这正是「接口参数面」最省事的入口：一个 `openapi.json` 就能给出全部路径。
+
+### 一、已落地
+
+- 新增 `scanner/api_probe.py`（**只读**）：
+  - OpenAPI/Swagger：7 条常见路径（`openapi.json` / `swagger.json` / `v3/api-docs` …），
+    命中后解析 `paths` 的键，拼成绝对 URL；同一站点命中一个即停。
+  - GraphQL：`POST {"query":"{__schema{types{name kind}}}"}`，取类型名。
+  - 纯函数 `openapi_paths` / `graphql_types` / `limits` 可单独测。
+- `jsmine.run()` 在「接口 URL」落盘前调用（每任务 `api.max_sites` 个站点）：接口 URL 并入
+  `urls` → `js_urls.txt` / `ctx.results["js_urls"]`；线索写 `leads`（`kind=api`，去重沿用
+  `insert_leads` 的 `(kind, code, target)`）。
+- 配置 `api` 段 4 键（`enabled`/`max_sites`/`max_probes`/`max_urls`）四处一致；
+  `enabled=false` 时**零请求**。
+- 新增 `[8ca]`。
+
+### 二、边界（刻意收窄）
+
+- 只入**线索层**：不写 vulns、不展开 GraphQL 字段、不按 `paths` 的参数去 fuzz —— 这一层只回答
+  「有没有 API 面、大概长什么样」，利用留给人。
+- YAML 描述文件本轮不解析（项目不引 `pyyaml` 之外的额外解析器；YAML 版 OpenAPI 只记「文件可读」）。
+- 只探调用方给的站点（`jsmine` 已有站点列表），不额外做子域枚举。
+
+### 三、验证
+
+- `--only 8ca` PASS；`compileall` PASS。
+- 最终全量 v48：2026-11-11 06:33:18–06:42:12（9m05s，日志内 311 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke374.log`）。
+
 ## 续373（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：JS sourcemap
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

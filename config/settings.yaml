@@ -700,6 +700,12 @@ dns:
   cache_enabled: true
   cache_max: 4096
   cache_max_ttl: 3600
+api:
+  # 续374：OpenAPI / GraphQL 探测（只读）。产物只到线索层 leads(kind=api) 与 js_urls。
+  enabled: true
+  max_sites: 5
+  max_probes: 6
+  max_urls: 200
 scope:
   # 续372：结构化授权范围（默认关）。开了之后**目标侧**请求统一过闸；
   # 第三方接口（auth=False：FOFA/crt.sh/KEV/IP 反查）不受影响。

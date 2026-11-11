@@ -6493,6 +6493,11 @@ def create_app():
                             "cache_max": int(f.get("dns_cache_max", 4096) or 4096),
                             "cache_max_ttl": int(
                                 f.get("dns_cache_max_ttl", 3600) or 3600)},
+                    # 续374：OpenAPI / GraphQL 探测
+                    "api": {"enabled": f.get("api_enabled") == "1",
+                            "max_sites": int(f.get("api_max_sites", 5) or 0),
+                            "max_probes": int(f.get("api_max_probes", 6) or 6),
+                            "max_urls": int(f.get("api_max_urls", 200) or 200)},
                     # 续372：结构化授权范围（六个键都是文本，空串=不限；enabled 显式勾）
                     "scope": {"enabled": f.get("scope_enabled") == "1",
                               "allow_domains": (f.get("scope_allow_domains") or "").strip(),

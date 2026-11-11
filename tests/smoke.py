@@ -36634,6 +36634,67 @@ expression: r0()
           "sourcesContent 再抽域名/密钥｜maps=false 零请求｜第三方 map 不抓｜max_maps 预算生效｜"
           "配置四处一致")
 
+    # [8ca] 续374：OpenAPI / GraphQL 探测（只读 / 只入线索层 / 预算）
+    import json as _json8ca
+    from scanner import api_probe as _ap8ca
+    assert _ap8ca.openapi_paths({"paths": {"/x": {}, "y": 1}}) == ["/x"]
+    assert _ap8ca.graphql_types({"data": {"__schema": {"types": [
+        {"name": "User"}, {}]}}}) == ["User"]
+    assert _ap8ca.openapi_paths({"paths": []}) == []
+    _calls8ca = []
+
+    def _fake8ca(url, **kw):
+        _calls8ca.append((url, kw.get("method", "GET")))
+        if url.endswith("/openapi.json"):
+            return {"status": 200, "headers": {}, "text": _json8ca.dumps(
+                {"openapi": "3.0.0", "paths": {"/api/v1/users": {},
+                                               "/api/v1/orders": {}}})}
+        if url.endswith("/graphql") and kw.get("method") == "POST":
+            return {"status": 200, "headers": {}, "text": _json8ca.dumps(
+                {"data": {"__schema": {"types": [{"name": "User"},
+                                                 {"name": "Query"}]}}})}
+        return {"status": 404, "headers": {}, "text": "not found"}
+
+    _o8ca = _ap8ca.http_request
+    _ap8ca.http_request = _fake8ca
+    try:
+        _r8ca = _ap8ca.probe("https://site8ca.test/", {"api": {}})
+        assert sorted(_r8ca["urls"]) == [
+            "https://site8ca.test/api/v1/orders",
+            "https://site8ca.test/api/v1/users"], _r8ca["urls"]
+        _codes8ca = sorted(x["code"] for x in _r8ca["leads"])
+        assert _codes8ca == ["graphql-introspection", "openapi"], _codes8ca
+        assert all(x["kind"] == "api" for x in _r8ca["leads"]), _r8ca["leads"]
+        # 关掉开关：零请求
+        _calls8ca.clear()
+        _r8cab = _ap8ca.probe("https://site8ca.test/", {"api": {"enabled": False}})
+        assert not _r8cab["urls"] and not _r8cab["leads"] and not _calls8ca, \
+            f"api.enabled=false 必须零请求：{_calls8ca}"
+        # 预算：max_probes=1 只探一条（openapi 命中即停）
+        _calls8ca.clear()
+        _r8cac = _ap8ca.probe("https://site8ca.test/", {"api": {"max_probes": 1}})
+        assert len(_calls8ca) == 1, f"max_probes=1 只该 1 个请求：{_calls8ca}"
+        assert _r8cac["stats"]["openapi"] == 1
+    finally:
+        _ap8ca.http_request = _o8ca
+    _js8ca = (ROOT / "scanner/stages/jsmine.py").read_text(encoding="utf-8")
+    assert "_api374.probe(" in _js8ca and "db.insert_leads(ctx.task_id, _api_leads374)" in _js8ca, \
+        "jsmine 没接 API 探测或没写线索层"
+    _def8ca = _cfg303.DEFAULTS["api"]
+    assert _def8ca["enabled"] is True and int(_def8ca["max_sites"]) == 5 \
+           and int(_def8ca["max_probes"]) == 6 and int(_def8ca["max_urls"]) == 200, _def8ca
+    _sy8ca = (ROOT / "config/settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "\napi:" in _sy8ca and "max_probes: 6" in _sy8ca, "随包配置缺 api 段"
+    _ga8ca = (ROOT / "gui/app.py").read_text(encoding="utf-8")
+    assert '"api": {"enabled": f.get("api_enabled")' in _ga8ca, "POST 映射没接 api"
+    _sh8ca = c.get("/settings").get_data(as_text=True)
+    for _n8ca in ("api_enabled", "api_max_sites", "api_max_probes", "api_max_urls"):
+        assert f'name="{_n8ca}"' in _sh8ca, f"策略页缺控件 {_n8ca}"
+
+    print("[8ca] 续374 ok: OpenAPI paths → 绝对 URL｜GraphQL introspection → 类型线索｜"
+          "产物只到 leads(kind=api) 与 js_urls（不写 vulns）｜enabled=false 零请求｜"
+          "max_probes 预算生效｜jsmine 接线｜配置四处一致")
+
     print("SMOKE PASS")
 
 

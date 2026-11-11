@@ -288,6 +288,17 @@
       压缩 JS 里找不到的接口路径/内部域名/密钥常在这里）</label>
     <label>每站最多抓几个 .map <input name="jsmine_max_maps" style="width:5em"
       value="{{ s.jsmine.max_maps }}"></label>
+    <p class="muted note">续374：<b>OpenAPI / GraphQL 探测</b> —— 只读 GET/POST，
+      产物只进线索层（kind=api）与 js_urls；不写漏洞、不按参数 fuzz。</p>
+    <label class="chk"><input type="checkbox" name="api_enabled" value="1"
+      {{ 'checked' if s.api.enabled }}> <b>探测 OpenAPI / GraphQL</b>
+      （openapi.json / swagger.json / v3/api-docs / graphql introspection）</label>
+    <label>每任务最多探几个站点 <input name="api_max_sites" style="width:5em"
+      value="{{ s.api.max_sites }}"></label>
+    <label>每站最多探几条路径 <input name="api_max_probes" style="width:5em"
+      value="{{ s.api.max_probes }}"></label>
+    <label>单站最多收几个接口 URL <input name="api_max_urls" style="width:6em"
+      value="{{ s.api.max_urls }}"></label>
     <label class="chk"><input type="checkbox" name="jsmine_recrawl" value="1"
       {{ 'checked' if s.jsmine.recrawl }}> 二层遍历：把新域名（JS 挖出的 + 库里本任务还没探过的）先过 DNS 再补做一轮存活探测，落成站点</label>
     {# 续171（用户点单"有必要添加一个域名解析…不会错；at.alicdn.com 这种 CDN；style.font.name 打开是域名转让的"）：
