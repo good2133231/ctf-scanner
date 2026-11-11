@@ -179,7 +179,7 @@ class OsintStage(Stage):
             doms = []
             try:
                 doms = iprecon.reverse_lookup(ip, ctx.settings, logger=ctx.logger)
-            except Exception as e:                       # 公共接口，任何异常都不该影响主流程
+            except Exception as e:      # noqa: BLE001 - 公共反查接口，任何异常都不该影响主流程
                 ctx.logger.debug(f"[osint] IP {ip} 免费源反查异常：{e}")
             via = "免费源"
             if fofa_mod.available(ctx.settings):
@@ -1408,7 +1408,7 @@ def _recon_level(d, ctx):
     """
     try:
         bases = extdom.task_bases(ctx.task_id)
-    except Exception:
+    except Exception:      # noqa: BLE001 - 任务目标读不出来就按空归属集处理
         bases = set()
     if extdom.is_owned(d, bases):
         return "同注册域", ""
@@ -1419,7 +1419,7 @@ def _recon_level(d, ctx):
         cert_hosts = {str(r["host"] or "").lower() for r in db.list_certs(ctx.task_id)}
         fav_hosts = {str(r["host"] or "").lower() for r in db.list_sites(ctx.task_id)
                      if (r["favicon"] or "")}
-    except Exception:
+    except Exception:      # noqa: BLE001 - 证书/站点查询失败就按无对照处理
         cert_hosts, fav_hosts = set(), set()
     in_cert = d in cert_hosts
     in_fav = d in fav_hosts

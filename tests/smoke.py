@@ -36815,7 +36815,7 @@ expression: r0()
     _bare8ce = sum(1 for p in _fs8ce
                    for line in p.read_text(encoding="utf-8", errors="replace").splitlines()
                    if _needle8ce in line and "noqa: BLE001" not in line)
-    assert _bare8ce <= 109, f"未标注理由的宽捕获反弹了（续382 基线 109，现值 {_bare8ce}）"
+    assert _bare8ce <= 97, f"未标注理由的宽捕获反弹了（续383 基线 97，现值 {_bare8ce}）"
     print(f"[8ce] 续378 ok: utils.py 收窄 5 处（stdin/ctypes/管道/urllib/getaddrinfo）｜"
           f"剩余 4 处宽捕获全部写明理由｜全仓 {_tot8ce} 处（其中 {_bare8ce} 处未标理由，棘轮只钉这个数｜"
           f"后续按文件分批收窄）")
@@ -36873,6 +36873,26 @@ expression: r0()
 
     print("[8ch] 续382 ok: runner.py 24→23 处（注册域解析收窄；阶段级 / 附加动作级 / "
           "顶层兜底 11 处只补理由，不误收窄）｜剩余 23 处全部带理由｜全仓未标理由 120→109")
+
+    # [8ci] 续383：toolmgr.py + stages/osint.py 宽捕获分批
+    _tm8ci = (ROOT / "scanner/toolmgr.py").read_text(encoding="utf-8")
+    _os8ci = (ROOT / "scanner/stages/osint.py").read_text(encoding="utf-8")
+    _needle8ci = "except " + "Exception"
+    _tmw8ci = [l for l in _tm8ci.splitlines() if _needle8ci in l]
+    _osw8ci = [l for l in _os8ci.splitlines() if _needle8ci in l]
+    assert len(_tmw8ci) == 15, f"toolmgr 宽捕获应从 18 收到 15：{len(_tmw8ci)}"
+    assert all("noqa: BLE001" in l for l in _tmw8ci), \
+        f"toolmgr 还有没写理由的：{[l for l in _tmw8ci if 'noqa: BLE001' not in l]}"
+    assert len(_osw8ci) == 15, f"osint 宽捕获应保持 15（只补理由不收窄）：{len(_osw8ci)}"
+    assert all("noqa: BLE001" in l for l in _osw8ci), \
+        f"osint 还有没写理由的：{[l for l in _osw8ci if 'noqa: BLE001' not in l]}"
+    for _lit8ci in ("except OSError:", "except OSError as e:",
+                    "except (ValueError, TypeError, OSError) as e:"):
+        assert _lit8ci in _tm8ci, f"toolmgr 的收窄形态被改回去了：{_lit8ci}"
+
+    print("[8ci] 续383 ok: toolmgr.py 18→15 处（备份/回滚收窄为 OSError；临时目录清理保留宽捕获 —— "
+          "版本清单收窄为 JSON+网络异常）｜osint.py 15 处只补理由｜两个文件未标理由清零｜"
+          "全仓未标理由 109→97")
 
     print("SMOKE PASS")
 

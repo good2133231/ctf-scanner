@@ -486,7 +486,7 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
     pinned, pinmap = pin(tool)
     try:
         rel = release if release is not None else _release_for(tool, timeout=timeout)
-    except Exception as e:                                   # 网络/解析失败一律如实报，不猜
+    except Exception as e:      # noqa: BLE001 - 版本查询：网络/解析失败如实报，不猜
         out["reason"] = f"查询最新版本失败：{e}"
         return out
     tag, assets = rel.get("tag") or "", rel.get("assets") or {}
@@ -512,7 +512,7 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
             else:
                 text = download_bytes(assets[csum_name], timeout=timeout,
                                       max_bytes=2 * 1024 * 1024).decode("utf-8", "replace")
-        except Exception as e:
+        except Exception as e:      # noqa: BLE001 - 校验和下载：失败就如实报，不猜
             out["reason"] = f"下载校验和失败：{e}"
             return out
         want_digest = parse_checksums(text).get(want_asset)
@@ -532,7 +532,7 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
     try:
         data = (blob[want_asset] if blob is not None and want_asset in (blob or {})
                 else download_bytes(assets[want_asset], timeout=timeout))
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 资产下载：失败就如实报，不猜
         out["reason"] = f"下载 {want_asset} 失败：{e}"
         return out
     if want_digest:
@@ -551,7 +551,7 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
     binary = binary_name(tool)
     try:
         payload = extract_binary(data, want_asset, binary)
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 解包：格式/IO 异常都算失败，如实报
         out["reason"] = f"解包失败：{e}"
         return out
     dest = Path(dest_dir) if dest_dir else (_BASE_DIR / DEFAULT_DEST)
@@ -565,7 +565,7 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
             try:
                 (dest / (binary + ".bak")).write_bytes(target.read_bytes())
                 out["backed_up"] = True
-            except Exception:
+            except OSError:      # 备份旧二进制失败只影响 backed_up 标记
                 out["backed_up"] = False
             # 续94：把**将被替换掉的这一份**也存进版本库（多版本共存）。
             # 问不出它的版本号就**不归档**（不编造 unknown 目录）；失败一律不阻断安装。
@@ -588,7 +588,7 @@ def install(tool, dest_dir=None, allow_unverified=False, timeout=120, wire=True,
                 out["versions_pruned"] = _a2["pruned"]
         except Exception:                                    # noqa: BLE001
             out["archived"] = ""
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 安装主流程兜底：失败必须回滚并如实报
         try:
             tmp.unlink()
         except OSError:
@@ -646,7 +646,7 @@ def rollback(tool, dest_dir=None, wire=True, settings_path=None):
         os.replace(swap, bak)
         if os.name != "nt":
             os.chmod(target, 0o755)
-    except Exception as e:
+    except OSError as e:      # 回滚：os.replace/chmod 只抛 OSError
         out["reason"] = f"回滚失败：{e}"
         return out
     out["ok"] = True
@@ -699,7 +699,7 @@ def update(tools=None, dest_dir=None, allow_unverified=False, wire=True, setting
         rel = None
         try:
             rel = _release_for(name, fetch, timeout) if name in TOOLS else None
-        except Exception as e:
+        except Exception as e:      # noqa: BLE001 - 批量更新：单个工具失败不牵连其余
             results.append({"tool": name, "ok": False, "version": "", "path": "",
                             "verified": None, "reason": f"查询最新版本失败：{e}"})
             continue
@@ -1293,7 +1293,7 @@ def _gojson_digest(asset, version, timeout=60, fetch=None):
                                                              max_bytes=8 * 1024 * 1024))
     try:
         data = json.loads(fetch(GOJSON_URL, timeout).decode("utf-8", "replace"))
-    except Exception as e:                                       # noqa: BLE001 —— 如实报，不猜
+    except (ValueError, TypeError, OSError) as e:      # 取官方版本清单：JSON/网络异常如实报
         return None, f"取官方版本清单失败：{e}"
     for rel in data or []:
         if str(rel.get("version") or "")[2:] != version:         # "go1.27.3" → "1.27.3"
@@ -1443,7 +1443,7 @@ def extract_tree(blob, asset, dest, strip=1, marker=(), marker_any=()):
                 os.replace(str(old), str(dest))
             raise
         shutil.rmtree(str(old), ignore_errors=True)
-    except Exception:
+    except Exception:      # noqa: BLE001 - 任何失败（含自定义解包异常）都要清掉半成品目录
         shutil.rmtree(str(part), ignore_errors=True)
         raise
     return n_files, n_skip
