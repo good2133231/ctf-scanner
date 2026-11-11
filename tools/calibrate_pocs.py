@@ -157,7 +157,7 @@ def calibrate(srcs=None, settings=None, timeout=3, lab_url=None, on_item=None):
             report["run"] += 1
             try:
                 found = engine.run_poc_on_target(meta, lab_url, st, site={})
-            except Exception as e:                      # 单条炸掉不该中断整轮校准
+            except Exception as e:                      # noqa: BLE001 - 单条炸掉不该中断整轮校准
                 report["unsupported"].append({"path": _rel(f), "error": f"{type(e).__name__}: {e}"})
                 continue
             if not found:

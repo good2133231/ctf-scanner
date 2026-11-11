@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 for _stream245 in (sys.stdout, sys.stderr):
     try:
         _stream245.reconfigure(encoding="utf-8", errors="backslashreplace")
-    except Exception:
+    except Exception:      # noqa: BLE001 - 老 Python / 非 TTY 流没有 reconfigure，忽略即可
         pass
 
 # ---- 每组耗时记录（续125，**默认关**）：`--timing` 或 CTFSCANNER_SMOKE_TIMING=1 才开 ----
@@ -54,7 +54,7 @@ def _grp_time(line):
         try:
             _TFILE.write("%.2f\t%s\n" % (gap, line[:80].replace("\n", " ")))
             _TFILE.flush()      # 写完就落盘：被强杀的那次也要留下已记的账（0 字节文件等于没测）
-        except Exception:
+        except Exception:      # noqa: BLE001 - 计时文件写失败不能影响门禁结果
             pass
 
 
@@ -2250,7 +2250,7 @@ def main():
                                      {"id": "conc-test", "info": {"name": "并发测试",
                                                                   "severity": "low", "tags": []},
                                       "_status": "ok"}))
-        except Exception as e:                       # pragma: no cover - 失败时记录
+        except Exception as e:                       # noqa: BLE001 - 并发桩：失败只记进 errs，最后由断言统一报
             errs.append(f"{type(e).__name__}: {e}")
 
     ts = [_th.Thread(target=_upsert) for _ in range(8)]
@@ -3369,7 +3369,7 @@ def main():
             t = db.create_task(f"smoke-w{i}", f"w{i}.test", ["probe"], {})
             w_ids.append(t)
             db.insert_subdomains(t, [(f"a{j}.w{i}.test", "smoke") for j in range(30)])
-        except Exception as e:                            # pragma: no cover - 失败时记录
+        except Exception as e:                            # noqa: BLE001 - 同上：失败记入 w_errs，由断言统一报
             w_errs.append(f"{type(e).__name__}: {e}")
 
     ws = [threading.Thread(target=_writer, args=(i,)) for i in range(12)]
@@ -3442,7 +3442,7 @@ def main():
             try:
                 with _sctx.wrap_socket(_conn, server_side=True) as _s:
                     _s.recv(1)
-            except Exception:                              # pragma: no cover - 收尾竞态
+            except Exception:                              # noqa: BLE001 - TLS 收尾竞态（对端已关）忽略
                 pass
 
     threading.Thread(target=_tls_serve, daemon=True).start()
@@ -4568,7 +4568,7 @@ workflows:
     for _bad5z in (None, '{"issuer_name": "x"', '[{"name_value": null}]'):
         try:
             _rr5z, _ee5z = ctlog_mod.parse_records(_bad5z, settings)
-        except Exception as _e5z:                       # 这里就是要它不抛
+        except Exception as _e5z:                       # noqa: BLE001 - 这里就是要它不抛，抛了就转成断言失败
             raise AssertionError(f"parse_records 对 {_bad5z!r} 抛了异常：{_e5z!r}")
         assert isinstance(_rr5z, list), (_bad5z, _rr5z)
         assert all("*" not in d for r in _rr5z for d in (r.get("san") or [])), _bad5z
@@ -15822,7 +15822,7 @@ http:
         def _safe_call115(fn, it):
             try:
                 return fn(it)
-            except Exception:
+            except Exception:      # noqa: BLE001 - 测试辅助：调用失败按 None 处理
                 return None
 
         _utils.pool_run = _silent115
@@ -16019,7 +16019,7 @@ http:
             _socket116.setdefaulttimeout(timeout)
             try:
                 return sorted({i[4][0] for i in _socket116.getaddrinfo(host, None)})
-            except Exception:
+            except Exception:      # noqa: BLE001 - 旧实现对照桩，故意复刻「吞掉返回空」
                 return []
 
         _socket116.setdefaulttimeout(None)
@@ -18125,7 +18125,7 @@ expression: r0()
         assert f"{_k}:" in _seg126, f"settings.yaml 的 flags 段缺 {_k}（三方一致）"
     try:
         _us126.create_user("smoke126-admin", "Passw0rd!123", role="admin")
-    except Exception:
+    except Exception:      # noqa: BLE001 - 重复建用户是幂等场景，已存在就跳过
         pass
     _db126._exec("UPDATE users SET must_change=0 WHERE username='smoke126-admin'")
     _cl126 = _gui126.app.test_client()
@@ -18610,7 +18610,7 @@ expression: r0()
     # 自带一个登录会话（不复用 [8ae] 的局部名 —— 那会把"组的顺序"变成隐式契约）
     try:
         _us128.create_user("smoke128-admin", "Passw0rd!123", role="admin")
-    except Exception:
+    except Exception:      # noqa: BLE001 - 同上，已存在就跳过
         pass
     db._exec("UPDATE users SET must_change=0 WHERE username='smoke128-admin'")
     _cl128 = _gui128.app.test_client()
@@ -18798,7 +18798,7 @@ expression: r0()
     from scanner import captcha as _cap129
     try:
         _us129.create_user("smoke129-admin", "Passw0rd!123", role="admin")
-    except Exception:
+    except Exception:      # noqa: BLE001 - 同上，已存在就跳过
         pass
     db._exec("UPDATE users SET must_change=0 WHERE username='smoke129-admin'")
     _cl129 = _app129.app.test_client()
@@ -28374,7 +28374,7 @@ expression: r0()
     try:
         with gui_app.app.test_request_context("/tasks/1"):
             _rt200("task_detail.html")     # 故意一个变量都不传
-    except Exception as _e200:
+    except Exception as _e200:      # noqa: BLE001 - 故意不传变量渲染，失败要检查报错是否指向 urls_pager
         _ok200 = "urls_pager" not in str(_e200)
     assert _ok200, "模板对 urls_pager 缺失没有容错 ⇒ 服务没重启时详情页 500"
 
@@ -36815,10 +36815,10 @@ expression: r0()
     _bare8ce = sum(1 for p in _fs8ce
                    for line in p.read_text(encoding="utf-8", errors="replace").splitlines()
                    if _needle8ce in line and "noqa: BLE001" not in line)
-    assert _bare8ce <= 65, f"未标注理由的宽捕获反弹了（续385 基线 65，现值 {_bare8ce}）"
+    assert _bare8ce == 0, f"宽捕获必须写明理由（续386 已清零，现值 {_bare8ce}）"
     print(f"[8ce] 续378 ok: utils.py 收窄 5 处（stdin/ctypes/管道/urllib/getaddrinfo）｜"
-          f"剩余 4 处宽捕获全部写明理由｜全仓 {_tot8ce} 处（其中 {_bare8ce} 处未标理由，棘轮只钉这个数｜"
-          f"后续按文件分批收窄）")
+          f"全仓 {_tot8ce} 处宽捕获**全部**带 noqa: BLE001 理由（未标理由 {_bare8ce} 处）；"
+          f"从 275 处 / 128 处未标一路收过来，判据只紧不松")
 
     # [8cf] 续380：scope 收窄 DNS 爆破（同一套 check_host，不另造判据）
     from scanner import scope as _sc8cf
@@ -36935,6 +36935,35 @@ expression: r0()
     print("[8ck] 续385 ok: dnsq.py 7→6（resolv.conf 收窄）、screenshot.py 6→4"
           "（terminate/kill 收窄 + 补 import subprocess）、audit.py 7 处全带理由"
           "｜全仓未标理由 83→65")
+
+    # [8cl] 续386：宽捕获清零（产品侧 52 处 + 测试文件 13 处，一次收完）
+    _needle8cl = "except " + "Exception"
+    _all8cl = (list((ROOT / "scanner").rglob("*.py"))
+               + list((ROOT / "gui").rglob("*.py"))
+               + list((ROOT / "cli").rglob("*.py"))
+               + list((ROOT / "tools").glob("*.py"))
+               + [ROOT / "tests/smoke.py", ROOT / "tests/browser_e2e.py",
+                  ROOT / "run_bootstrap.py", ROOT / "dev.py"])
+    _bare8cl = [(str(p.relative_to(ROOT)), i + 1)
+                for p in _all8cl
+                for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines())
+                if _needle8cl in line and "noqa: BLE001" not in line]
+    assert _bare8cl == [], f"还有没写理由的宽捕获：{_bare8cl[:5]}"
+    _narrow8cl = (("scanner/cdn.py", "except (OSError, UnicodeError, ValueError):"),
+                  ("scanner/secretbl.py", "except (KeyError, TypeError, AttributeError):"),
+                  ("scanner/cdp.py", "except (OSError, ValueError):"),
+                  ("scanner/migrate.py", "except (ValueError, TypeError):"),
+                  ("scanner/fingerprint.py", "except (re.error, ValueError, TypeError):"),
+                  ("tools/import_ref_pocs.py", "except (ValueError, TypeError, SyntaxError):"),
+                  ("tools/import_fingerprints.py", "except (ValueError, OSError, UnicodeError)"))
+    for _f8cl, _lit8cl in _narrow8cl:
+        assert _lit8cl in (ROOT / _f8cl).read_text(encoding="utf-8"), \
+            f"{_f8cl} 的收窄形态被改回去了：{_lit8cl}"
+    _sm8cl = (ROOT / "tests/smoke.py").read_text(encoding="utf-8")
+    assert "幂等场景，已存在就跳过" in _sm8cl and "TLS 收尾竞态" in _sm8cl
+
+    print("[8cl] 续386 ok: 产品侧 52 处（收窄 20 / 补理由 32）+ 测试文件 13 处（只补理由）"
+          "｜全仓 243 处宽捕获全部带理由、未标理由 0｜7 个关键收窄形态钉住")
 
     print("SMOKE PASS")
 

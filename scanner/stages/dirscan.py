@@ -320,7 +320,7 @@ def block_markers():
             s = str(line or "").strip().lower()
             if s and not s.startswith("#"):
                 items.add(s)
-    except Exception:
+    except (OSError, UnicodeError):
         items = set()
     _BLOCK_CACHE = items or set(_BLOCK_FALLBACK)
     return _BLOCK_CACHE
@@ -663,7 +663,7 @@ class DirscanStage(Stage):
         hosts = set()
         try:
             rows = db.list_subdomains(ctx.task_id)
-        except Exception:
+        except Exception:      # noqa: BLE001 - 查库失败就当没有已知主机
             rows = []
         for row in rows:
             try:

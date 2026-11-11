@@ -29,7 +29,7 @@ def _entry_value(e):
     测试夹具又常传 dict —— 两种形态都要认。条目的 `value` 列 NOT NULL，不会缺键。"""
     try:
         return str(e["value"] or "")
-    except Exception:
+    except (KeyError, TypeError, AttributeError):
         return str((e.get("value") if hasattr(e, "get") else "") or "")
 
 

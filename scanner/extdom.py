@@ -626,7 +626,7 @@ def cert_shares(task_id, bases, settings=None):
     from .jsmine import is_thirdparty
     try:
         cap = ctlog.max_domains_per_cert(settings)
-    except Exception:
+    except Exception:      # noqa: BLE001 - 配置读失败就用默认上限
         cap = ctlog.DEFAULT_MAX_DOMAINS_PER_CERT
     out = {}
     bl = [str(b or "").lower().strip(".") for b in (bases or ())]

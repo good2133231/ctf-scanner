@@ -152,7 +152,7 @@ def query(domain, settings, source, logger=None, timeout=10):
         return None
     try:
         payload = json.loads(r.get("text") or "")
-    except Exception:
+    except (ValueError, TypeError):
         payload = None
     doms = _domains_of(payload) if payload is not None else []
     org = ""

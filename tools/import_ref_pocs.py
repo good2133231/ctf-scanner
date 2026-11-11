@@ -64,7 +64,7 @@ def _literal(node):
     """把 AST 字面量转成 Python 对象；非字面量返回 None。"""
     try:
         return ast.literal_eval(node)
-    except Exception:
+    except (ValueError, TypeError, SyntaxError):
         return None
 
 

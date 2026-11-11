@@ -94,7 +94,7 @@ def proc_info(pid: int):
         import psutil
         p = psutil.Process(pid)
         return list(p.cmdline()), os.path.realpath(p.cwd())
-    except Exception:
+    except Exception:      # noqa: BLE001 - 进程已退/无权限就视为无归属
         return [], ""
 
 

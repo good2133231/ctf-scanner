@@ -1053,7 +1053,7 @@ def load_keys():
         import yaml
         data = yaml.safe_load(KEYS_PATH.read_text(encoding="utf-8")) or {}
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception:      # noqa: BLE001 - 配置文件缺失/坏就当没有覆盖
         return {}
 
 

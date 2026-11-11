@@ -658,7 +658,7 @@ def _restore_logs(logs, by_task, mapping, dry_run=False):
             continue
         try:
             raw = base64.b64decode(str(blob), validate=True)
-        except Exception:
+        except (ValueError, TypeError):
             res["skipped"] += 1
             continue
         dst = target
@@ -730,7 +730,7 @@ def _write_cred(rel, blob, dry_run=False):
         return {"file": str(rel), "status": "refused", "reason": "路径越出项目根"}
     try:
         raw = base64.b64decode(str(blob), validate=True)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         return {"file": str(rel), "status": "failed", "reason": f"base64 解码失败：{e}"}
     if p.exists():
         return {"file": str(rel), "status": "skipped", "reason": "本机已有同名文件（不覆盖）"}

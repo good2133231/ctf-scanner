@@ -56,7 +56,7 @@ def ready(debug_port, timeout=1):
         with urllib.request.urlopen("http://127.0.0.1:%d/json/version" % debug_port,
                                     timeout=timeout):
             return True
-    except Exception:
+    except (OSError, ValueError):
         return False
 
 

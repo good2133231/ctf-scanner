@@ -46,7 +46,7 @@ if str(ROOT) not in sys.path:
 for _stream245 in (sys.stdout, sys.stderr):
     try:
         _stream245.reconfigure(encoding="utf-8", errors="backslashreplace")
-    except Exception:
+    except Exception:      # noqa: BLE001 - 老 Python / 非 TTY 流没有 reconfigure，忽略即可
         pass
 
 # `--headless=new` 在 Windows 上拿不到 stdout（早期探针踩过），所以下面固定用 `--headless=old`。

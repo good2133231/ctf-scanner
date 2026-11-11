@@ -313,7 +313,7 @@ def probe_candidates(ctx, candidates):
             for line in _iter_json_lines(out_json):
                 try:
                     j = json.loads(line)
-                except Exception:
+                except (ValueError, TypeError):
                     continue
                 # 去掉 `-mc` 后存活口径只在 `is_alive` 一处（两条探测路共用同一个函数）。
                 # httpx 在 `-silent` 下对彻底失败的候选本来就给不出行（实测 0 行），

@@ -106,7 +106,7 @@ def required_literals(pattern):
     """
     try:
         top = list(_sre.parse(pattern))
-    except Exception:
+    except (re.error, ValueError, TypeError):
         return None
     alts = top[0][1][1] if (len(top) == 1 and top[0][0] == _sre.BRANCH) else [top]
     lits = []
@@ -604,7 +604,7 @@ def _load_aliases():
     try:
         p = resolve(_ALIAS_FILE)
         key = (str(p), p.stat().st_mtime_ns if p.exists() else 0)
-    except Exception:
+    except (OSError, ValueError, TypeError):
         return {}
     if _alias_cache["key"] == key:
         return _alias_cache["map"]
@@ -690,7 +690,7 @@ def _load_fixes():
     try:
         p = resolve(_FIX_FILE)
         key = (str(p), p.stat().st_mtime_ns if p.exists() else 0)
-    except Exception:
+    except (OSError, ValueError, TypeError):
         return {}
     if _fix_cache["key"] == key:
         return _fix_cache["map"]

@@ -433,7 +433,7 @@ class _Queue:
                 if cur and cur["status"] in ("running", "queued"):
                     db.finish_task_run(tid, status="failed")
                     db.append_task_error(tid, f"[queue] 执行异常：{e}")
-            except Exception:
+            except Exception:      # noqa: BLE001 - 收尾失败不能让 worker 崩
                 pass
 
 

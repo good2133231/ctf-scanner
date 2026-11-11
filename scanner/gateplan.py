@@ -68,7 +68,7 @@ def changed_paths(root=None):
         if untracked.returncode == 0:
             paths += [p for p in untracked.stdout.splitlines() if p.strip()]
         return sorted(set(paths)), None
-    except Exception as exc:                          # 超时、git 不在 PATH……一律"拿不到"
+    except Exception as exc:                          # noqa: BLE001 - 超时、git 不在 PATH……一律"拿不到"
         return [], "git 调用异常：%s" % type(exc).__name__
 
 

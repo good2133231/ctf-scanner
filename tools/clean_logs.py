@@ -46,7 +46,7 @@ def _db_referenced_task_dirs():
         from scanner import db as _db
         rows = _db._query("SELECT log_file FROM tasks WHERE log_file<>''")
         return {Path(str(r["log_file"])).parent.name for r in rows}
-    except Exception:
+    except Exception:      # noqa: BLE001 - 库不可用就当无活跃任务
         return set()
 
 

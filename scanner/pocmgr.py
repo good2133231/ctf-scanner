@@ -243,7 +243,7 @@ def load_manifest(dest):
     p = Path(dest) / MANIFEST
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception:      # noqa: BLE001 - manifest 缺失/坏就当空清单
         return {}
 
 
@@ -287,7 +287,7 @@ def _load_yaml(text):
         import yaml
         d = yaml.safe_load(text)
         return d if isinstance(d, dict) else {}
-    except Exception:
+    except Exception:      # noqa: BLE001 - 文本坏或 PyYAML 缺失都返回空 dict（yaml 局部导入）
         return {}
 
 

@@ -5,6 +5,61 @@
 
 
 
+## 续386（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获清零（产品侧 52 + 测试 13）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+### 一、产品侧 31 个文件 52 处（收窄 20、补理由 32）
+
+一次收完，不再分批：
+
+| 收窄形态 | 位置 |
+|---|---|
+| `(ValueError, OSError, UnicodeError)` | `json.loads(读文件)`（import_fingerprints ×2） |
+| `(ValueError, TypeError)` | `base64.b64decode(validate=True)`（migrate ×2）、json 行解析（probe / icp） |
+| `(ValueError, TypeError, SyntaxError)` | `ast.literal_eval`（import_ref_pocs） |
+| `(OSError, UnicodeError[, ValueError])` | 配置文件读取（jsmine ×2 / dirscan / owasp / cdn ×2） |
+| `OSError` | `socketserver.shutdown/server_close`（ssrf ×2） |
+| `(re.error, ValueError, TypeError)` | `_sre.parse`（fingerprint） |
+| `(OSError, ValueError, TypeError)` | 别名/修复表路径解析（fingerprint ×2） |
+| `(OSError, ValueError)` | `urlopen`（cdp） |
+| `(KeyError, TypeError, AttributeError)` | 条目取值（secretbl） |
+
+其余 32 处保留宽捕获并写明理由：安装引导各步骤、keystore 加解密与落盘、SSRF 取页面、
+POC 加载、`db` 启动对账、`queue` 收尾、`certs` 取证书、`gateplan` 调 git、CTF 校准等 ——
+都是「失败只降级/只记一笔，不许中断主流程」的位置。
+
+### 二、为什么 yaml 一律不收窄
+
+`import yaml` 在这些文件里都是**函数内导入**（`import_fingerprints` / `afrog` /
+`import_afrog_fp` / `pocmgr` / `pocs.engine`）。若把 `except Exception` 改成
+`except yaml.YAMLError`，一旦 PyYAML 没装，`yaml` 这个名字根本不存在，
+异常处理本身会抛 `NameError` —— 把「降级」变成「崩溃」。所以这 5 处全部保留宽捕获 + 理由。
+
+### 三、测试文件 13 处只补理由
+
+`tests/smoke.py`(12) + `tests/browser_e2e.py`(1)：并发桩记错、TLS 收尾竞态、`create_user` 幂等、
+模板渲染断言、`reconfigure` 兼容老流。**一处都没有收窄** —— 门禁桩的行为必须保持不变，
+否则最容易造出「假红/假绿」。
+
+### 四、判据收紧
+
+- `[8ce]` 从「未标理由 ≤ 基线」改成 **硬断言 == 0**：今后新增宽捕获必须当场写理由。
+- 新增 `[8cl]`：全仓未标理由必须为空集、7 个关键收窄形态钉住、测试桩里刻意保留的
+  宽捕获不许被收窄。
+- 全仓宽捕获 263 → **243**，未标理由 65 → **0**（起点是 275 处 / 128 处未标）。
+
+### 五、全面验证
+
+- 编译：`compileall`（排除第三方 `tools/dirmap/thirdlib`）PASS；33 个模块导入 PASS。
+- 函数级：非法 base64 → `failed`、坏正则 → `None`、坏 payload → `[]`、
+  `resolv.conf` 缺失 → 内置表（12124 条）。
+- 全量 v59：2026-11-11 16:03:18–16:28:59（日志内 322 个 ok 组 + 浏览器 e2e），
+  `SMOKE PASS`（`logs/smoke386.log`）。
+- 真实任务 77（`stockcoin.ai`，默认八阶段）：202.1s、`status=done`、`error=''`；
+  sites 27（httpx 16 + **osint:fofa-web 11**）、subdomains 21、certs 8、dirs 139、
+  leads 6、ports 11。FOFA 已恢复，`osint:fofa-web` 这条链路终于有真实产物。
+
 ## 续385（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第六批（dnsq + screenshot + audit）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

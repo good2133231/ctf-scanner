@@ -302,7 +302,7 @@ class VulnscanStage(Stage):
             if do_waf:
                 try:
                     detect_waf(url, ctx.settings, logger=ctx.logger)
-                except Exception as e:
+                except Exception as e:      # noqa: BLE001 - WAF 探测失败只告警，不影响漏洞扫描
                     ctx.logger.debug(f"[vulnscan] WAF 探测失败（{url}）：{e}")
             # 把任务 logger 传给检查：需要写过程日志的检查（SSRF 回连在外部回调模式下
             # 要交代注入了哪些 token）才能写进 `logs/task_*/task.log`。

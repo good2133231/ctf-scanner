@@ -133,7 +133,7 @@ def plan(poc_dir):
         rel = p.relative_to(root).as_posix()
         try:
             doc = yaml.safe_load(p.read_text(encoding="utf-8", errors="replace")) or {}
-        except Exception as e:
+        except Exception as e:      # noqa: BLE001 - 单文件坏 YAML 只记 bad 继续（yaml 局部导入）
             bad.append((rel, f"YAML 解析失败 {type(e).__name__}"))
             continue
         if not isinstance(doc, dict):

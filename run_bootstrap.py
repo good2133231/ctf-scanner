@@ -196,7 +196,7 @@ def _bootstrap_pip(py, venv_dir):
             run = subprocess.run([str(py), str(venv_dir / "get-pip.py")], capture_output=True, text=True)
         finally:
             (venv_dir / "get-pip.py").unlink(missing_ok=True)
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 安装引导：取包失败就返回失败元组，绝不让引导脚本崩
         return False, f"取 get-pip.py 失败：{e}"
     if run.returncode != 0:
         tail = ((run.stderr or run.stdout or "").strip().splitlines() or ["无输出"])[-1]
@@ -471,7 +471,7 @@ def install_system_packages(plan, with_system=False, assume_yes=False, runner=No
         print(f"[+] 执行：{r['cmd']}")
         try:
             rc = run(argv)  # install_system_package
-        except Exception as e:
+        except Exception as e:      # noqa: BLE001 - 单个系统包装失败只记 failed，继续装其余
             failed.append({"name": r["name"], "reason": f"执行失败：{e}"})
             continue
         if rc == 0:
@@ -561,7 +561,7 @@ def ensure_screenshot(settings=None, runner=None, fetcher=None, say=True):
             fetch = fetcher or (lambda: install_stack(names))
             try:
                 got, failed = fetch()
-            except Exception as e:                       # 取不到只是没这个能力，不许把安装打断
+            except Exception as e:                       # noqa: BLE001 - 取不到只是没这个能力，不许把安装打断
                 got, failed = [], [{"name": "、".join(names), "reason": f"取件异常：{e}"}]
             if got:
                 actions.append(f"截图用的浏览器已取进仓库并回写 screenshot.browser"
@@ -582,7 +582,7 @@ def ensure_screenshot(settings=None, runner=None, fetcher=None, say=True):
             run = runner or (lambda argv: subprocess.run(argv, check=False).returncode)  # install_screenshot_font
             try:
                 rc = run(list(argv))
-            except Exception as e:
+            except Exception as e:      # noqa: BLE001 - 字体安装起不来只记原因，不影响其它引导项
                 rc = f"起不来：{e}"
             if rc == 0:
                 if has_cjk_font():

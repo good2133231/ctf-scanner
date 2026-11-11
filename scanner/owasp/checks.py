@@ -272,7 +272,7 @@ def sensitive_files(settings=None):
             return _DICT_CACHE["rows"]
     try:
         rows = _parse_sensitive_rows(read_lines(full))
-    except Exception:            # 文件缺失/编码异常都只影响这一条检查的数据源，不影响整轮
+    except (OSError, UnicodeError):            # 文件缺失/编码异常都只影响这一条检查的数据源，不影响整轮
         rows = []
     rows = rows or list(SENSITIVE_FILES)
     with _DICT_LOCK:
@@ -1173,7 +1173,7 @@ def run_all(url, settings, min_severity=None, logger=None, blocked=None, only=No
                 v = meta["fn"](url, settings, logger=logger)
             else:
                 v = meta["fn"](url, settings)
-        except Exception:
+        except Exception:      # noqa: BLE001 - 单个检查函数炸了只算无结果，不影响整轮
             v = None
         if not v:
             continue

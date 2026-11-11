@@ -298,7 +298,7 @@ def decrypt_blob(blob, passphrase, magic=None):
     salt, nonce, ct = body[:_SALT_LEN], body[_SALT_LEN:_SALT_LEN + _NONCE_LEN], body[_SALT_LEN + _NONCE_LEN:]
     try:
         plain = aesgcm_cls(_derive(passphrase, salt)).decrypt(nonce, ct, magic)
-    except Exception:
+    except Exception:      # noqa: BLE001 - 口令错与文件被改都抛认证失败，合并报一条、不猜原因
         # 不区分"口令错"与"文件被改"：AESGCM 的认证标签两者都拒。报成一条，不猜。
         return None, "口令不对或文件已损坏（认证加密校验未通过）"
     try:
@@ -353,7 +353,7 @@ def write_encrypted(dst, blob):
         except OSError:
             pass
         os.replace(tmp, str(dst))
-    except Exception:
+    except Exception:      # noqa: BLE001 - 落盘失败要回滚内存状态，任何异常都得接住
         try:
             os.unlink(tmp)
         except OSError:
@@ -484,7 +484,7 @@ def unlock(passphrase=None, path=None, allow_prompt=None):
         return {"ok": False, "reason": why, "source": source}
     try:
         data = _parse(text)
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 解密成功但 YAML 坏：置未解锁并带原因，不抛
         _STATE.update(unlocked=False, data=None, source=source, reason=f"解密成功但 YAML 解析失败：{e}")
         return {"ok": False, "reason": _STATE["reason"], "source": source}
     _STATE.update(unlocked=True, data=data, source=source, reason="", passfile=_file_from)

@@ -66,7 +66,7 @@ def suffixes(settings=None):
             return _CACHE["suffixes"]
     try:
         data = _normalize(full)
-    except Exception:
+    except (OSError, UnicodeError, ValueError):
         data = ((), ())
     with _LOCK:
         _CACHE["path"] = full
@@ -107,7 +107,7 @@ def networks(settings=None):
             return _IP_CACHE["nets"]
     try:
         data = _parse_nets(full)
-    except Exception:
+    except (OSError, UnicodeError, ValueError):
         data = ()
     with _IP_LOCK:
         _IP_CACHE["path"] = full

@@ -478,7 +478,7 @@ def build_rows(src):
     for p in sorted(Path(src).rglob("*.yaml")):
         try:
             doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        except Exception as e:
+        except Exception as e:      # noqa: BLE001 - 单文件坏 YAML 只记跳过（yaml 局部导入）
             rows.append({"skip": "refuse", "why": f"YAML 解析失败 {type(e).__name__}",
                          "file": p.name, "tag": p.stem, "name": p.stem})
             continue

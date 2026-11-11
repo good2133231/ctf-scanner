@@ -175,7 +175,7 @@ def candidate_params(url, settings, logger=None, stop=None):
         resp = http_request(url, timeout=int((settings or {}).get("limits", {})
                                              .get("http_timeout", DEFAULT_TIMEOUT)),
                             settings=settings, auth=True)
-    except Exception as e:                       # 取页面失败只影响"候选名单"，不该中断检查
+    except Exception as e:                       # noqa: BLE001 - 取页面失败只影响候选名单，不该中断检查
         if logger:
             logger.info(f"[ssrf] 抓取页面失败，只用内置参数清单：{e}")
         resp = None
@@ -314,11 +314,11 @@ class CallbackListener:
             return
         try:
             srv.shutdown()          # 阻塞到 serve_forever 退出
-        except Exception:
+        except OSError:
             pass
         try:
             srv.server_close()
-        except Exception:
+        except OSError:
             pass
         if th is not None:
             th.join(timeout=2)

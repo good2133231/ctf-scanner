@@ -291,7 +291,7 @@ def fetch(host, port=443, timeout=8, server_hostname=None):
         if not der:
             return None, "服务端未提供证书"
         return parse_der(der), ""
-    except Exception as e:                          # 网络/协议/解析异常都在这里收口
+    except Exception as e:                          # noqa: BLE001 - 网络/协议/解析异常都在这里收口
         return None, f"{type(e).__name__}: {e}"
 
 

@@ -1103,7 +1103,7 @@ def load_poc_file(path):
         return {"id": p.stem, "_status": "error", "_error": "PyYAML 未安装"}
     try:
         data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 单个 POC 解析失败返回 error 条目，不中断加载
         return {"id": p.stem, "_status": "error", "_error": str(e)[:300]}
     if not isinstance(data, dict) or not data.get("id"):
         return {"id": p.stem, "_status": "error", "_error": "缺少 id"}
@@ -1204,7 +1204,7 @@ def load_enabled_pocs(settings=None):
     """
     try:
         enabled = set(db.enabled_poc_paths())
-    except Exception:
+    except Exception:      # noqa: BLE001 - 注册表未初始化就不过滤
         enabled = None  # 注册表未初始化时不做过滤
     skip = skip_severities(settings)
     out = []

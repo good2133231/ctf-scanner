@@ -92,7 +92,7 @@ def _do_verify(args):
         return 1
     try:
         data = keystore._parse(text)
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 能解密但内容坏只打印错误并返回
         print(f"[!] 能解密但内容不是合法 YAML：{e}")
         return 1
     print(f"[+] 口令正确，可解开 {Path(args.dst).name}（{len(text)} 字符）")

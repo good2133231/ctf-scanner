@@ -80,7 +80,7 @@ def _noise_set():
             line = line.strip().lower().lstrip("*.").strip(".")
             if line and not line.startswith("#"):
                 items.add(line)
-    except Exception:
+    except (OSError, UnicodeError):
         items = set()
     _noise_cache = items or set(_ALL_NOISE)
     return _noise_cache
@@ -148,7 +148,7 @@ def _public_suffixes():
             line = line.strip().lower().strip(".")
             if line and not line.startswith("#"):
                 items.add(line)
-    except Exception:
+    except (OSError, UnicodeError):
         items = set()
     _tlds_cache = items
     return items or None

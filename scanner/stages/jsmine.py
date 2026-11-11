@@ -227,7 +227,7 @@ class JsmineStage(Stage):
                                      fingerprint.collect(ctx, u, _r, "js"),
                                      _mail_sink(_r.get("url") or u, _r.get("text") or "")))
 
-            except Exception as e:
+            except Exception as e:      # noqa: BLE001 - 单站点挖掘失败只告警，不影响整轮
                 ctx.logger.warning(f"[jsmine] {u} 挖掘失败：{e}")
                 continue
             js_count += int(res.get("js_count") or 0)
@@ -388,7 +388,7 @@ class JsmineStage(Stage):
                 else _json187.loads(_t187["options"] or "{}")
             _o187["js_count"] = int(js_count)
             db.update_task(ctx.task_id, options=_json187.dumps(_o187, ensure_ascii=False))
-        except Exception as _e187:      # 记数失败不影响扫描结果
+        except Exception as _e187:      # noqa: BLE001 - 记数失败不影响扫描结果
             ctx.logger.warning(f"[jsmine] js_count 落库失败（不影响扫描）：{_e187}")
         ctx.logger.info(f"[jsmine] JS 文件 {js_count} 个 / 新域名 {len(new_domains)} 个 / "
 

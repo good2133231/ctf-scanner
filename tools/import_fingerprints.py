@@ -199,7 +199,7 @@ def from_fingerprinthub(src, verified_only=True):
         stat["files"] += 1
         try:
             data = yaml.safe_load(f.read_text(encoding="utf-8", errors="replace"))
-        except Exception:
+        except Exception:      # noqa: BLE001 - 单文件坏 YAML 只记 bad_yaml 继续（yaml 是函数内导入，不能写 yaml.YAMLError）
             stat["bad_yaml"] += 1
             continue
         if not isinstance(data, dict):
@@ -299,7 +299,7 @@ def from_ehole(src):
         return [], {"missing": 1}
     try:
         data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
-    except Exception as e:
+    except (ValueError, OSError, UnicodeError) as e:
         print(f"[!] EHole 规则读不出来：{e}", file=sys.stderr)
         return [], {"bad_json": 1}
     if isinstance(data, dict):
@@ -341,7 +341,7 @@ def from_glass(src):
         stat["files"] += 1
         try:
             data = json.loads(f.read_text(encoding="utf-8", errors="replace"))
-        except Exception:
+        except (ValueError, OSError, UnicodeError):
             continue
         items = data if isinstance(data, list) else [data]
         for item in items:
@@ -399,7 +399,7 @@ def from_fingers(src):
         stat["files"] += 1
         try:
             data = yaml.safe_load(f.read_text(encoding="utf-8", errors="replace"))
-        except Exception:
+        except Exception:      # noqa: BLE001 - 单文件坏 YAML 只跳过继续（yaml 局部导入）
             continue
         if not isinstance(data, list):
             continue

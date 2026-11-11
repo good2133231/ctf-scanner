@@ -833,9 +833,9 @@ def reconcile_orphan_tasks():
                     finish_task_run(tid, ended_at=r["updated_at"], status="failed")
                     append_task_error(tid, "进程重启，任务中断（启动时对账）")
                 handled.append(tid)
-            except Exception:
+            except Exception:      # noqa: BLE001 - 单个任务对账失败就跳过，不能让启动崩
                 continue
-    except Exception:
+    except Exception:      # noqa: BLE001 - 启动对账整体失败就返回已处理列表
         return handled
     return handled
 
