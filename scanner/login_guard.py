@@ -30,6 +30,7 @@
 自救：管理员/队友被锁在门外时，等 `lockout_seconds` 自动过期，或命令行清除（见文件末尾 `__main__`，
 也写在 docs/deploy-https.md §7）。
 """
+import sqlite3
 import time
 from collections import namedtuple
 
@@ -221,7 +222,7 @@ def _prune_old(cfg, now_ep):
     keep = max(cfg["window_seconds"], cfg["lockout_seconds"])
     try:
         db._exec("DELETE FROM login_fails WHERE at < ?", (_ts(now_ep - keep),))
-    except Exception:
+    except (sqlite3.Error, OSError):
         pass
 
 
@@ -260,7 +261,7 @@ def record_success(ip, username, settings=None):
         return
     try:
         db._exec("DELETE FROM login_fails WHERE username=?", (uname,))
-    except Exception as e:      # noqa: BLE001
+    except Exception as e:      # noqa: BLE001 - 登录成功清理计数失败不该阻断登录
         logger.warning(f"[login-guard] 登录成功清理计数失败（已忽略）：{e}")
 
 
@@ -273,7 +274,7 @@ def fail_counts(ip, username, settings=None, now=None):
         ip_n = _count_fails("ip=?", (str(ip or ""),), window_start) if ip else 0
         user_n = _count_fails("username=?", (norm_username(username),), window_start) \
             if norm_username(username) else 0
-    except Exception:
+    except Exception:      # noqa: BLE001 - 锁判断读失败就按「无锁」放行（可用性优先）
         ip_n = user_n = 0
     verdict = check(ip, username, settings, now=now)
     return {"ip": ip_n, "user": user_n, "locked": verdict.locked,
@@ -307,7 +308,7 @@ def clear(ip=None, username=None):
                 return n
             finally:
                 conn.close()
-    except Exception as e:      # noqa: BLE001
+    except Exception as e:      # noqa: BLE001 - 清除计数失败只影响限流精度，不该报错给调用方
         logger.warning(f"[login-guard] 清除计数失败：{e}")
         return 0
 
@@ -327,7 +328,7 @@ def prune(settings=None):
                 return n
             finally:
                 conn.close()
-    except Exception as e:      # noqa: BLE001
+    except Exception as e:      # noqa: BLE001 - 清理过期计数失败就交给下次 prune
         logger.warning(f"[login-guard] 清理过期计数失败（已忽略）：{e}")
         return 0
 
@@ -341,7 +342,7 @@ def _status_rows():
                           "ORDER BY at DESC")
         fails = db._query("SELECT COUNT(*) c FROM login_fails WHERE kind='fail' "
                           "AND at >= ?", (_ts(now_ep - cfg["window_seconds"]),), one=True)
-    except Exception:
+    except Exception:      # noqa: BLE001 - 锁状态查询失败就返回空，不阻断登录
         return [], 0
     live = []
     for r in locks:

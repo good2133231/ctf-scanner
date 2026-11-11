@@ -4542,6 +4542,28 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续384（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第五批（iprecon + login_guard）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【iprecon 收窄 1 处】`scanner/iprecon.py` 11 → 10：`socket.gethostbyaddr` 的兜底 →
+      `(OSError, UnicodeError)`（`herror` / `gaierror` 都是 `OSError` 子类，收窄成具体子类
+      反而接不住通用 `OSError`，续378 已踩过同型坑）。
+- [x] T2【iprecon 补理由 10 处】8 处第三方接口 `http_request` + 2 处源适配器 —— 统一写明
+      「网络/解析任何异常都只算该源没查到」。
+- [x] T3【login_guard 收窄 1 处】`scanner/login_guard.py` 9 → 8：清理过期计数只碰库 →
+      `(sqlite3.Error, OSError)`；补 `import sqlite3`（缺了会 NameError）。
+- [x] T4【login_guard 补理由 5 处】成功登录清计数、锁判断读失败按无锁、清计数、清过期、
+      锁状态查询 —— 全部写明「失败只影响限流精度、绝不阻断登录」。
+- [x] T5【结果】全仓宽捕获 268 → **266**，未标理由 97 → **83**；`[8ce]` 棘轮同步下调。
+- [x] T6【门禁】新增 `[8cj]`：两文件计数与全带理由、2 个收窄形态钉住、`import sqlite3` 不许丢。
+- [x] C1 定向：`--only 8cj,8ce` PASS。
+- [x] C2 最终全量 v57 `SMOKE PASS`：2026-11-11 11:26:27–11:36:19（10m06s，320 个 ok 组 + 浏览器 e2e，`logs/smoke384.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一批**：产品侧还剩 `scanner/offline.py`、`scanner/certs.py`、`scanner/dnsq.py` 等零散处；
+`tests/smoke.py`(14) / `tests/browser_e2e.py`(12) 里的宽捕获多是门禁桩，**留到最后单独一批**
+（改了不改善产品行为，却最容易把门禁自身的桩改坏）。
+
 ## 续383（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第四批（toolmgr.py + osint.py）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

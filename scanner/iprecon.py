@@ -254,7 +254,7 @@ def _reverse_webscan(ip, settings, logger=None, timeout=None, raw=False):
     _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
-    except Exception as e:  # 网络层异常不该影响流水线
+    except Exception as e:      # noqa: BLE001 - 第三方源适配器：网络/解析任何异常都只算该源没查到
         _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} webscan 反查异常：{e}")
@@ -285,7 +285,7 @@ def _reverse_hackertarget(ip, settings, logger=None, timeout=None, raw=False):
     _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 第三方源适配器：网络/解析任何异常都只算该源没查到
         _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} hackertarget 反查异常：{e}")
@@ -331,7 +331,7 @@ def _reverse_ip138(ip, settings, logger=None, timeout=None, raw=False):
     _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 第三方源适配器：网络/解析任何异常都只算该源没查到
         _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} ip138 反查异常：{e}")
@@ -366,7 +366,7 @@ def _reverse_dnsdblookup(ip, settings, logger=None, timeout=None, raw=False):
     _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 第三方源适配器：网络/解析任何异常都只算该源没查到
         _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} dnsdblookup 反查异常：{e}")
@@ -481,7 +481,7 @@ def _reverse_mnemonic(ip, settings, logger=None, timeout=None, raw=False):
     _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout or 20, settings=settings)
-    except Exception as e:  # 网络层异常不该影响流水线
+    except Exception as e:      # noqa: BLE001 - 第三方源适配器：网络/解析任何异常都只算该源没查到
         _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} mnemonic 反查异常：{e}")
@@ -529,7 +529,7 @@ def _reverse_urlscan(ip, settings, logger=None, timeout=None, raw=False):
     _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout or 20, settings=settings)
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 第三方源适配器：网络/解析任何异常都只算该源没查到
         _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} urlscan 反查异常：{e}")
@@ -597,7 +597,7 @@ def _reverse_rapiddns(ip, settings, logger=None, timeout=None, raw=False):
     _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 第三方源适配器：网络/解析任何异常都只算该源没查到
         _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} rapiddns 反查异常：{e}")
@@ -621,7 +621,7 @@ def _reverse_viewdns(ip, settings, logger=None, timeout=None, raw=False):
     _src_mark(0, "")
     try:
         resp = http_request(url, timeout=timeout, settings=settings)
-    except Exception as e:
+    except Exception as e:      # noqa: BLE001 - 第三方源适配器：网络/解析任何异常都只算该源没查到
         _src_mark(0, http_last_error() or type(e).__name__)
         if logger:
             logger.debug(f"[iprecon] {ip} viewdns 反查异常：{e}")
@@ -655,7 +655,7 @@ def _reverse_ptr(ip, settings=None, logger=None, timeout=None, raw=False):
             host = socket.gethostbyaddr(_ip)[0]
         finally:
             socket.setdefaulttimeout(_old)
-    except Exception as e:      # 没 PTR / 超时 / DNS 挂了 —— 都算"没查到"
+    except (OSError, UnicodeError) as e:      # 没 PTR / 超时 / DNS 挂了 —— 都算"没查到"（herror/gaierror 都是 OSError 子类）
         _src_mark(0, f"无 PTR 记录（{type(e).__name__}）")
         if logger:
             logger.debug(f"[iprecon] {_ip} 原生 PTR 无结果：{e}")
@@ -754,7 +754,7 @@ def preflight(sources, settings, logger=None, timeout=None, probe_ip=""):
         try:
             resp = adapter(probe_ip, settings, logger=None, timeout=timeout, raw=True)
             _status = int((resp or {}).get("status") or 0)
-        except Exception as e:
+        except Exception as e:      # noqa: BLE001 - 源适配器返回形态由第三方决定，异常只记该源失败
             _src_mark(0, type(e).__name__)
             if logger:
                 logger.debug(f"[iprecon] 预检源 {n} 异常：{e}")
@@ -858,7 +858,7 @@ def reverse_lookup_detail(ip, settings, logger=None, timeout=None, sources=None)
         _src_mark(0, "")
         try:
             doms = adapter(ip, settings, logger=logger, timeout=timeout)
-        except Exception as e:  # 兜底：任何源抛异常都不该影响流水线
+        except Exception as e:      # noqa: BLE001 - 兜底：任何源抛异常都不该影响流水线
             _src_mark(0, http_last_error() or type(e).__name__)
             if logger:
                 logger.debug(f"[iprecon] {ip} 源 {name} 反查异常：{e}")

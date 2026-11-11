@@ -5,6 +5,42 @@
 
 
 
+## 续384（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第五批（iprecon + login_guard）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+### 一、iprecon.py（11 → 10，收窄 1 处）
+
+- `socket.gethostbyaddr` 的兜底 → `(OSError, UnicodeError)`。`herror` / `gaierror` 都是
+  `OSError` 子类，**收窄成具体子类反而接不住通用 `OSError`** —— 续378 在 `getaddrinfo`
+  上已经踩过这个坑，本轮直接用父类。
+- 其余 10 处（8 处第三方接口 `http_request` + 2 处源适配器）保留宽捕获，统一写明
+  「网络/解析任何异常都只算该源没查到」—— 源返回形态由第三方决定，收窄会漏掉真实故障类别。
+
+### 二、login_guard.py（9 → 8，收窄 1 处）
+
+- 清理过期计数的 `DELETE` 只碰库 → `(sqlite3.Error, OSError)`，同时补 `import sqlite3`
+  （缺导入会 `NameError`）。
+- 其余 5 处补理由：成功登录清计数、锁判断读失败按「无锁」、清计数、清过期、锁状态查询 ——
+  都是「失败只影响限流精度、绝不阻断登录」这条既有红线，写进源码避免下一个人误收窄。
+
+### 三、棘轮推进
+
+- 全仓宽捕获 268 → **266**；未标注理由 97 → **83**。
+- `[8ce]` 基线同步下调到 **83**（只许往下走）。
+- 新增 `[8cj]`：两文件计数与全带理由、2 个收窄形态钉住、`import sqlite3` 不许丢。
+
+### 四、为什么产品代码优先于测试文件
+
+`tests/smoke.py`(14) 与 `tests/browser_e2e.py`(12) 里的宽捕获多数是**门禁自己的桩**，
+改了不改善产品行为，却最容易把桩改坏、造出假绿。本轮先把产品模块（iprecon / login_guard）
+做完，测试文件那批留到最后单独一批处理。
+
+### 五、验证
+
+- `--only 8cj,8ce` PASS；`compileall` PASS。
+- 最终全量 v57：2026-11-11 11:26:27–11:36:19（10m06s，日志内 320 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke384.log`）。
+
 ## 续383（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第四批（toolmgr + osint）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
