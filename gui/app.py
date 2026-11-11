@@ -709,7 +709,7 @@ def _weak_boundary_summary(task_id):
         sites = [str(r["host"] or r["url"] or "") for r in db._query(
             "SELECT host, url FROM sites WHERE task_id=?", (int(task_id),))]
         return weakboundary.summarize(domains, sites)
-    except Exception:
+    except Exception:      # noqa: BLE001 - weakboundary 是插件式汇总，异常不许带倒任务详情页
         logger.warning("[gui] 薄弱边界汇总失败（不影响任务详情）：task=%s", task_id,
                        exc_info=True)
         return {"total": 0, "subs": 0, "sites": 0, "by": {}, "examples": []}
@@ -1752,7 +1752,7 @@ def create_app():
                 _o = _t["options"] if isinstance(_t["options"], dict) \
                     else json.loads(_t["options"] or "{}")
                 return _o.get("js_count")
-            except Exception:
+            except (ValueError, TypeError, KeyError, AttributeError):
                 return None
         return {"js_count_of": _jsc}
 
@@ -4090,7 +4090,7 @@ def create_app():
                                   # 续194：证书同源佐证（含大厂证书标记）—— 判据只在
                                   # extdom.cert_shares / apply_cert_evidence 一处（§5.14）
                                   extdom.cert_shares(key, _b194, load_settings()))
-                except Exception as exc:      # 老库/坏任务不许把整页带倒：无从比对就如实给低档
+                except Exception as exc:      # noqa: BLE001 - 老库/坏任务异常面不可枚举；无从比对就给低档
                     logger.warning(f"[extdom] 取 #{key} 的已确认资产失败，置信度按无对照算：{exc}")
                     cache[key] = (set(), {}, {})
             _bases, _ips, _shares = cache[key]
@@ -4143,7 +4143,7 @@ def create_app():
             for r in db._query("SELECT target t, COUNT(*) c FROM vulns "
                                "WHERE poc_id LIKE 'js-secret-%' GROUP BY target"):
                 out[r["t"]] = r["c"]
-        except Exception:
+        except Exception:      # noqa: BLE001 - DB 查询失败就返回空表，不把整页带倒
             return {}
         return out
 
@@ -5582,7 +5582,7 @@ def create_app():
         task = dict(task)      # sqlite3.Row **没有 .get()**（本仓第六次栽这个形状）
         try:
             picked = [s.strip() for s in str(task.get("stages") or "").split(",") if s.strip()]
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             picked = []
         from scanner import runner as _rn200
         items = []
@@ -5642,7 +5642,7 @@ def create_app():
                     body, ext = generate_html(tid, full=full), "html"
                 else:
                     body, ext = generate(tid, full=full), "md"
-            except Exception as _e200:
+            except Exception as _e200:      # noqa: BLE001 - 单个报告生成失败就跳过，不中断批量导出
                 skipped.append(tid)
                 continue
             files.append((f"task_{tid}.{ext}", body))
@@ -7638,10 +7638,10 @@ def _run_with_watch():
         try:
             _c.terminate()
             _c.wait(timeout=5)
-        except Exception:
+        except (OSError, subprocess.TimeoutExpired):
             try:
                 _c.kill()
-            except Exception:
+            except OSError:      # 进程可能已经退出，kill 失败就到此为止
                 pass
 
     def _stop(_s, _f):

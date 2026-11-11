@@ -5,6 +5,46 @@
 
 
 
+## 续381（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第二批（gui/app.py）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人「接着做，CTF 真实任务先不用做」—— CTF 真实任务按吩咐跳过，继续推进
+「宽捕获 128 处按文件分批」这条清单的第二批。
+
+### 一、本轮做了什么
+
+`gui/app.py` 宽捕获 **31 → 27 处**（收窄 4 处）：
+
+- `json.loads(task["options"])` → `(ValueError, TypeError, KeyError, AttributeError)`；
+- `stages` 字符串切分 → `(AttributeError, TypeError, ValueError)`；
+- 子进程收尾 `terminate()/wait()` → `(OSError, subprocess.TimeoutExpired)`，
+  内层 `kill()` → `OSError`（进程可能已退出）。
+
+另 4 处**不能收窄**的补上明确理由：插件式薄弱边界汇总、老库/坏任务的证书同源比对、
+DB 查询失败返回空表、批量报告导出时单个任务失败就跳过。至此 `gui/app.py` 剩余 27 处
+宽捕获**全部**带 `noqa: BLE001`（其中 8 处理由仍偏简短，如实登记，后续细化）。
+
+### 二、棘轮推进
+
+- 全仓宽捕获 276 → **272**；未标注理由 128 → **120**。
+- `[8ce]` 的基线同步从 128 下调到 **120**（棘轮只许往下走）。
+- 新增 `[8cg]`：`gui/app.py` 27 处全部带理由、4 个收窄形态钉住，防止被改回去。
+
+### 三、边界与剩余
+
+- CTF 档（`vulnscan` / `crawl`）的真实任务验证按主理人要求**先不做**。
+- 下一批：`scanner/runner.py`(24) → `toolmgr.py`(18) → `stages/osint.py`(15) →
+  `smoke.py`(14) → `browser_e2e.py`(12) → `iprecon.py`(11) → `login_guard.py`(9) → …
+  每轮 1–2 个文件 + 一次全量，不把「该吞的容错」误改成崩溃。
+- 仍未动的三类：`tests/smoke.py` 切片器重构后再拆、ASN 无数据源、
+  三项历史挂账按主理人决定保留。
+
+### 四、验证
+
+- `--only 8cg,8ce` PASS；`compileall` PASS。
+- 最终全量 v54：2026-11-11 10:20:08–10:30:28（10m33s，日志内 317 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke381.log`）。
+
 ## 续380（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：scope 补 DNS 闸 + 真实数据补齐端到端
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

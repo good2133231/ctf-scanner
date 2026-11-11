@@ -4542,6 +4542,29 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续381（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获分批第二批（gui/app.py）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人「接着做，CTF 真实任务先不用做」—— 按清单推进宽捕获分批；CTF 真实任务按吩咐跳过。
+
+- [x] T1【收窄 4 处】`gui/app.py`：`json.loads(task.options)` → `(ValueError, TypeError,
+      KeyError, AttributeError)`；`stages` 字符串切分 → `(AttributeError, TypeError,
+      ValueError)`；子进程 `terminate/wait` → `(OSError, subprocess.TimeoutExpired)`、
+      内层 `kill` → `OSError`。
+- [x] T2【补理由 4 处】薄弱边界汇总、老库证书比对、DB 查询空表、批量报告导出跳过 ——
+      都写明「为什么异常面不可枚举 / 为什么只能吞」。
+- [x] T3【结果】`gui/app.py` 宽捕获 **31 → 27 处**，剩余 27 处**全部**带 `noqa: BLE001`
+      （其中 8 处理由仍偏简短，如实记，后续细化）。全仓 276 → **272**，
+      未标理由 128 → **120**；`[8ce]` 棘轮基线同步下调到 120。
+- [x] T4【门禁】新增 `[8cg]`：27 处全部带理由、4 个收窄形态钉住。
+- [x] C1 定向：`--only 8cg,8ce` PASS。
+- [x] C2 最终全量 v54 `SMOKE PASS`：2026-11-11 10:20:08–10:30:28（10m33s，317 个 ok 组 + 浏览器 e2e，`logs/smoke381.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一批（续382+）**：`scanner/runner.py`(24) → `scanner/toolmgr.py`(18) →
+`scanner/stages/osint.py`(15) → `tests/smoke.py`(14) → `tests/browser_e2e.py`(12) →
+`scanner/iprecon.py`(11) → `scanner/login_guard.py`(9) → … 每轮 1–2 个文件 + 一次全量。
+
 ## 续380（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：scope 补 DNS 闸 + 真实数据补齐端到端
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
