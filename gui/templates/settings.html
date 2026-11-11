@@ -955,6 +955,22 @@
       value="{{ s.dns.cache_max }}"></label>
     <label>单条最长缓存（秒） <input name="dns_cache_max_ttl" style="width:6em"
       value="{{ s.dns.cache_max_ttl }}"></label>
+
+    <p class="muted note">续372：<b>结构化授权范围</b> —— 开了之后只对<b>目标侧</b>请求过闸
+      （第三方接口不受影响）。<b>开了但域名与 CIDR 都空 ⇒ 全部拒绝</b>（fail-closed）；
+      端口/路径/时间窗空才表示不限。</p>
+    <label class="chk"><input type="checkbox" name="scope_enabled" value="1"
+      {{ 'checked' if s.scope.enabled }}> <b>启用授权范围</b></label>
+    <label>允许的域名后缀（逗号分隔） <input name="scope_allow_domains"
+      value="{{ s.scope.allow_domains }}" style="width:32em"></label>
+    <label>允许的 IP / CIDR（逗号分隔） <input name="scope_allow_cidrs"
+      value="{{ s.scope.allow_cidrs }}" style="width:24em"></label>
+    <label>时间窗（HH:MM-HH:MM，空=不限） <input name="scope_time_window"
+      value="{{ s.scope.time_window }}" style="width:10em"></label>
+    <label>允许的端口（逗号分隔，空=不限） <input name="scope_allow_ports"
+      value="{{ s.scope.allow_ports }}" style="width:16em"></label>
+    <label>允许的路径前缀（逗号分隔，空=不限） <input name="scope_allow_paths"
+      value="{{ s.scope.allow_paths }}" style="width:24em"></label>
     <details class="subpanel"><summary>工具路径 tools.*（共 {{ s.tools|length }} 项）</summary>
       {% for _k, _v in s.tools.items() %}
         {% if _v is mapping %}

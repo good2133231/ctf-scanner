@@ -36483,6 +36483,70 @@ expression: r0()
           "fast 只打印 (fast=…) 不冒充全量｜CI 三层：fast.yml(--fast) / "
           "nightly.yml(cron 全量) / smoke.yml(权威全量)")
 
+    # [8c8] 续372：结构化授权 scope（默认零变化 / fail-closed / 域名·CIDR·端口·路径·时间窗）
+    from scanner import scope as _sc8c8
+    from scanner import utils as _ut8c8
+    _off8c8 = _sc8c8.normalize({})
+    assert _off8c8["enabled"] is False
+    assert _sc8c8.check_url("https://any.test/x", _off8c8) == (True, ""), "关着必须零拦截"
+    _empty8c8 = _sc8c8.normalize({"scope": {"enabled": True}})
+    _ok8c8, _why8c8 = _sc8c8.check_url("https://any.test/", _empty8c8)
+    assert _ok8c8 is False and "allow_domains" in _why8c8, \
+        f"开了但两清单都空必须全拒（fail-closed）：{_ok8c8} {_why8c8}"
+    _full8c8 = _sc8c8.normalize({"scope": {
+        "enabled": True, "allow_domains": ["acme-portal.cn"],
+        "allow_cidrs": ["10.0.0.0/8"], "allow_ports": [443, 8443],
+        "allow_paths": ["/api"], "time_window": "09:00-18:00"}})
+    assert _sc8c8.check_url("https://www.acme-portal.cn/api/x", _full8c8,
+                            now_hm="10:00")[0] is True
+    assert _sc8c8.check_url("https://evil.test/api/x", _full8c8, now_hm="10:00")[0] is False
+    assert _sc8c8.check_url("https://www.acme-portal.cn/", _full8c8,
+                            now_hm="10:00")[0] is False, "路径闸没生效"
+    assert _sc8c8.check_url("https://www.acme-portal.cn/api", _full8c8,
+                            now_hm="08:00")[0] is False, "时间窗没生效"
+    assert _sc8c8.check_host("10.1.2.3", _full8c8, now_hm="10:00")[0] is True
+    assert _sc8c8.check_host("192.168.1.1", _full8c8, now_hm="10:00")[0] is False
+    _night8c8 = _sc8c8.normalize({"scope": {"enabled": True, "allow_domains": ["a.test"],
+                                            "time_window": "22:00-06:00"}})
+    assert _sc8c8.check_url("https://a.test/", _night8c8, now_hm="23:30")[0] is True, "跨零点时间窗"
+    assert _sc8c8.check_url("https://a.test/", _night8c8, now_hm="12:00")[0] is False
+    # 目标侧出口真的接上了：auth=True 被拒并写出原因；第三方 auth=False 不受影响
+    _noWin8c8 = _sc8c8.normalize({"scope": {
+        "enabled": True, "allow_domains": ["acme-portal.cn"], "allow_cidrs": ["10.0.0.0/8"]}})
+    _o_do8c8 = _ut8c8._do_http
+    _ut8c8._do_http = lambda *a, **k: {"status": 200, "headers": {}, "text": "ok",
+                                       "length": 2, "url": "x"}
+    try:
+        _s8c8 = {"_scope": _noWin8c8}
+        assert _ut8c8.http_request("https://evil.test/", auth=True,
+                                   settings=_s8c8) is None
+        assert "scope 拒绝" in _ut8c8.http_last_error(), _ut8c8.http_last_error()
+        assert _ut8c8.http_request("https://www.acme-portal.cn/", auth=True,
+                                   settings=_s8c8)["status"] == 200
+        assert _ut8c8.http_request("https://evil.test/", auth=False,
+                                   settings=_s8c8)["status"] == 200, \
+            "第三方出口（auth=False）不该被授权 scope 拦"
+    finally:
+        _ut8c8._do_http = _o_do8c8
+    # portscan 不走 URL，单独过 host 闸
+    _ps8c8 = (ROOT / "scanner/stages/portscan.py").read_text(encoding="utf-8")
+    assert "scope_mod.check_host(host, _sc372)" in _ps8c8, \
+        "portscan 入口没接授权 scope（外部工具会绕过统一闸）"
+    # 配置四处一致
+    assert _cfg303.DEFAULTS["scope"]["enabled"] is False, "scope 出厂必须关"
+    _sy8c8 = (ROOT / "config/settings.yaml").read_text(encoding="utf-8", errors="replace")
+    assert "\nscope:" in _sy8c8 and "allow_cidrs:" in _sy8c8, "随包配置缺 scope 段"
+    _ga8c8 = (ROOT / "gui/app.py").read_text(encoding="utf-8")
+    assert '"scope": {"enabled": f.get("scope_enabled")' in _ga8c8, "POST 映射没接 scope"
+    _sh8c8 = c.get("/settings").get_data(as_text=True)
+    for _n8c8 in ("scope_enabled", "scope_allow_domains", "scope_allow_cidrs",
+                  "scope_time_window", "scope_allow_ports", "scope_allow_paths"):
+        assert f'name="{_n8c8}"' in _sh8c8, f"策略页缺控件 {_n8c8}"
+
+    print("[8c8] 续372 ok: 默认关=零拦截｜开了但域名/CIDR 都空 ⇒ 全拒（fail-closed）｜"
+          "域名后缀/CIDR/端口/路径/时间窗（含跨零点）｜目标侧 auth=True 被拒且写出原因、"
+          "第三方 auth=False 不受影响｜portscan 走 host 闸｜配置四处一致")
+
     print("SMOKE PASS")
 
 

@@ -11,6 +11,7 @@ CLI `--portscan-full`）。要关：GUI「策略配置 → 端口与服务」。
 """
 from .base import Stage
 from .. import cdn, config, db, dnsq, extcost, extdom, ml, portscan
+from .. import scope as scope_mod
 import time
 
 from ..utils import pool_run, resolve_host, which
@@ -158,6 +159,13 @@ class PortscanStage(Stage):
         def _one(host):
             if ctx.stopped():
                 return []
+            # 续372：portscan 不走 URL，单独过 host 闸（外部工具 fscan/nmap 也在这里被拦）。
+            _sc372 = ctx.settings.get("_scope")
+            if _sc372:
+                _ok372, _why372 = scope_mod.check_host(host, _sc372)
+                if not _ok372:
+                    ctx.logger.info(f"[portscan] {host} 不在授权范围（{_why372}），跳过")
+                    return []
             if host.replace(".", "").isdigit():
                 ips = [host]
             else:

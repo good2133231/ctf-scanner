@@ -4542,6 +4542,31 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续372（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：结构化授权 scope
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【模块】新增 `scanner/scope.py`：纯判定、零请求。`normalize()` 合并全局 `scope` 段与
+      任务级 `options.scope`（只认 6 个键）；`check_url()` / `check_host()` 返回 `(ok, reason)`。
+- [x] T2【语义】`enabled=false`（默认）⇒ 零行为变化；开了但 `allow_domains` 与 `allow_cidrs`
+      **都为空 ⇒ 全部拒绝**（fail-closed）；端口/路径/时间窗为空才表示不限；
+      域名后缀匹配、IP 走 CIDR、时间窗支持跨零点。
+- [x] T3【出口】`utils.http_request` 在 `auth=True`（目标侧）时先过闸，拒绝返回 None 并把
+      「scope 拒绝：…」写进 `http_last_error()`；`auth=False`（FOFA/crt.sh/KEV/IP 反查）不受影响。
+      `portscan` 不走 URL，单独在 `_one(host)` 入口过 `check_host`（fscan/nmap 也被拦）。
+- [x] T4【配置】`scope` 段 6 键四处一致（DEFAULTS / 随包配置 / GUI 策略页控件 / POST 映射）。
+- [x] T5【门禁】新增 `[8c8]`：默认零拦截、fail-closed、域名/CIDR/端口/路径/时间窗（含跨零点）、
+      `http_request` 两个方向（目标侧拒 / 第三方放）、portscan 接线、四处配置。
+- [x] C1 定向：`--only 8c8` PASS。
+- [x] C2 最终全量 v46 `SMOKE PASS`：2026-11-11 04:19:03–04:28:06（9m12s，309 个 ok 组 + 浏览器 e2e，`logs/smoke372.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**没做（本轮刻意留在下一轮）**：
+- DNS 爆破 / 被动收集的目标域名还没有过 scope（scope 目前只管「发出去的目标请求」；
+  `subdomain` 阶段对 `brute_domains` 应加同一道闸，但要先定「DNS 查询算不算越界」的口径）。
+- 手动送探（用户在页面点的那条路）暂不读 `options.scope`，仍按父任务设置走。
+
+**下一轮（续373）**：JS sourcemap（`.js.map` / `sourceMappingURL` / `sourcesContent`）。
+
 ## 续371（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：smoke 分 fast/nightly
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

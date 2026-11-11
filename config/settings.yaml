@@ -696,6 +696,21 @@ dns:
   cache_enabled: true
   cache_max: 4096
   cache_max_ttl: 3600
+scope:
+  # 续372：结构化授权范围（默认关）。开了之后**目标侧**请求统一过闸；
+  # 第三方接口（auth=False：FOFA/crt.sh/KEV/IP 反查）不受影响。
+  # ⚠ 开了但 allow_domains 与 allow_cidrs 都为空 ⇒ 全部拒绝（fail-closed）。
+  # allow_domains: 逗号分隔或 YAML 列表，后缀匹配（a.example.com 命中 example.com）
+  # allow_cidrs:   逗号分隔的 IP/CIDR（10.0.0.0/8, 1.2.3.4/32）
+  # time_window:   "09:00-18:00"；支持跨零点 "22:00-06:00"；空=不限
+  # allow_ports:   逗号分隔；空=不限
+  # allow_paths:   逗号分隔的路径前缀；空=不限
+  enabled: false
+  allow_domains: ''
+  allow_cidrs: ''
+  time_window: ''
+  allow_ports: ''
+  allow_paths: ''
 report:
   # ---- 报告导出（2026-10-13 用户点单）：默认**关闭** ----
   # 开关打开后，任务详情页右上角出现 MD / JSONL / HTML / 完整版报告 导出入口（PDF 续297 已移除）；

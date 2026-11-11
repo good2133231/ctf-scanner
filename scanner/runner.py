@@ -222,6 +222,13 @@ class StageContext:
         # 一个任务的凭据带到另一个任务上（越权 + 误报源）。
         # 只在目标侧出口生效：`utils.http_request(auth=True)` 是各目标侧调用点显式声明的。
         self.settings = taskauth.inject(settings, taskauth.from_task_options(self.options))
+        # 续372：结构化授权 scope（任务级 `options.scope` 覆盖全局 `scope` 段）。
+        # 默认 `enabled=False` ⇒ 零行为变化；开了之后目标侧请求统一过闸（见 utils.http_request）。
+        try:
+            from . import scope as _scope372
+            self.settings["_scope"] = _scope372.normalize(self.settings, self.options)
+        except Exception:       # noqa: BLE001 - normalize 本身容错；走到这里只可能是导入失败
+            self.settings["_scope"] = None
         # 任务级限流器（F2，见 scanner/throttle.py）：同样是"任务专用副本、绝不原地改"。
         # 引用**进程级共享闸**，因此 N 个任务线程各自注入，但共享同一个全局并发上限。
         self.settings = throttle.inject(self.settings, task_id, self.stop_event, logger)

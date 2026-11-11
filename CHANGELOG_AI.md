@@ -5,6 +5,48 @@
 
 
 
+## 续372（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：结构化授权 scope
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人点单「结构化授权 scope：allowlist、时间窗、IP/CIDR、端口/路径」。动机是把
+「授权范围」从一句人工约定变成机器可判的闸，且**发请求前**就拦住，而不是只靠入库前过滤。
+
+### 一、语义（fail-closed 优先）
+
+- `enabled=false`（默认）⇒ 全部放行，**零行为变化**（现有任务不受影响）。
+- 开了之后：`allow_domains` 与 `allow_cidrs` **都为空 ⇒ 全部拒绝** —— 配置不完整不等于不限；
+  这是刻意与「端口/路径/时间窗为空=不限」区分开的两种空。
+- 域名走后缀匹配（`a.example.com` 命中 `example.com`）、IP 走 CIDR；
+  端口按 URL 实际端口（无则按 scheme 取 80/443）；路径按前缀；时间窗 `HH:MM-HH:MM` 支持跨零点。
+
+### 二、拦截点
+
+- `utils.http_request` 在 `auth=True`（**目标侧**）时先过闸：拒绝返回 None，
+  `http_last_error()` = `scope 拒绝：<原因>`，与超时/TLS 等失败可区分。
+- `auth=False`（FOFA / crt.sh / CISA KEV / IP 反查）**不拦** —— 它们不是被扫目标。
+- `portscan` 不走 URL，在 `_one(host)` 入口单独过 `check_host`；外部工具（fscan/nmap）
+  也因此被覆盖，不会绕过统一闸。
+
+### 三、配置与门禁
+
+- `scope` 段 6 键：`enabled` / `allow_domains` / `allow_cidrs` / `time_window` /
+  `allow_ports` / `allow_paths`；DEFAULTS / 随包配置 / GUI 策略页控件 / POST 映射四处一致。
+- 新增 `[8c8]`：默认零拦截、fail-closed、域名/CIDR/端口/路径/时间窗（含跨零点）、
+  `http_request` 两个方向（目标侧拒 / 第三方放）、portscan 接线、四处配置。
+
+### 四、没做（如实记）
+
+- DNS 爆破 / 被动收集的目标域名还没过 scope：scope 目前只管「发出去的目标请求」。
+  `subdomain` 阶段要不要按 scope 收窄 `brute_domains`，得先定「DNS 查询算不算越界」的口径
+  （DNS 只问解析器、不碰目标服务，但与"只扫授权域"的直觉冲突）。
+- 手动送探暂不读 `options.scope`，仍按父任务设置走。
+
+### 五、验证
+
+- `--only 8c8` PASS；`compileall` PASS。
+- 最终全量 v46：2026-11-11 04:19:03–04:28:06（9m12s，日志内 309 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke372.log`）。
+
 ## 续371（2026-11-10，WorkBuddy · Tencent Hunyuan Hy）：smoke 分 fast / nightly
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

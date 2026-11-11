@@ -830,6 +830,15 @@ def http_request(url, method="GET", headers=None, data=None, timeout=10,
     （见 `scanner/throttle.py`）。预算耗尽 / 被取消时返回 None —— 语义上按"停止"处理，
     不是网络故障（任务级错误行与状态才是权威）。
     """
+    # 续372：目标侧统一授权闸 —— 第三方（auth=False：FOFA / crt.sh / KEV / IP 反查）不拦。
+    if auth:
+        _sc372 = (settings or {}).get("_scope")
+        if _sc372:
+            from . import scope as _scope372
+            _ok372, _why372 = _scope372.check_url(url, _sc372)
+            if not _ok372:
+                _HTTP_LOCAL.last_error = f"scope 拒绝：{_why372}"
+                return None
     th = (settings or {}).get("_throttle")
     if verify is None:
         # 出口分流放在**入口**里做（而不是 `_do_http` 里）：解析结果要能被调用方/测试

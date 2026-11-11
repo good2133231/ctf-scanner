@@ -964,6 +964,18 @@ DEFAULTS = {
         "cache_max": 4096,        # 条目上限（满了整批清，不做 LRU）
         "cache_max_ttl": 3600,    # 单条最长缓存秒数（应答 TTL 超过就夹到它）
     },
+    # 续372：结构化授权范围（默认关）。开了之后**目标侧**请求（`auth=True`）统一过闸：
+    # 域名后缀 / IP-CIDR / 端口 / 路径 / 时间窗；第三方接口（`auth=False`）不受影响。
+    # ⚠ fail-closed：enabled=true 但 allow_domains 与 allow_cidrs 都为空 ⇒ **全部拒绝**
+    #   （配置不完整不等于不限）；端口/路径/时间窗为空才表示"不限"。
+    "scope": {
+        "enabled": False,
+        "allow_domains": [],
+        "allow_cidrs": [],
+        "time_window": "",
+        "allow_ports": [],
+        "allow_paths": [],
+    },
     "report": {
         # ---- 报告导出（2026-10-13 用户点单）：**默认关** ----
         # MD / JSONL / HTML 三种格式（GUI 任务详情页右上角那排按钮）共用这一个开关（PDF 续297 移除）：

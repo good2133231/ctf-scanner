@@ -6488,6 +6488,13 @@ def create_app():
                             "cache_max": int(f.get("dns_cache_max", 4096) or 4096),
                             "cache_max_ttl": int(
                                 f.get("dns_cache_max_ttl", 3600) or 3600)},
+                    # 续372：结构化授权范围（六个键都是文本，空串=不限；enabled 显式勾）
+                    "scope": {"enabled": f.get("scope_enabled") == "1",
+                              "allow_domains": (f.get("scope_allow_domains") or "").strip(),
+                              "allow_cidrs": (f.get("scope_allow_cidrs") or "").strip(),
+                              "time_window": (f.get("scope_time_window") or "").strip(),
+                              "allow_ports": (f.get("scope_allow_ports") or "").strip(),
+                              "allow_paths": (f.get("scope_allow_paths") or "").strip()},
                     # A10 SSRF 受控回连（默认关）：本机监听 + 每参数唯一 token
                     "ssrf": {"enabled": f.get("ssrf_enabled") == "1",
                              # 留空 = 用本机监听地址；填了外部基址后本模块读不到命中，
