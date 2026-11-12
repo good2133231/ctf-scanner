@@ -37038,6 +37038,41 @@ expression: r0()
     print("[8cm] 续387 ok: T13 暂存区（config/poc-staging 不在 POC_DIRS｜stage 后引擎看不见｜"
           "promote 才进生产｜清单带 sha256/pending｜drop 只删暂存｜scanner 内无自动 promote）")
 
+    # [8cn] 续388：T13 暂存区 GUI 入口（页面可见 + 人点才生效）
+    from scanner import poc_staging as _ps8cn
+    _dir8cn = _TMPDIR / "poc-staging8cn"
+    _real8cn = _ps8cn.resolve
+    _ps8cn.resolve = lambda pth: (_dir8cn if "poc-staging" in str(pth) else _real8cn(pth))
+    try:
+        _ps8cn.stage({
+            "http/vulnerabilities/generic/gui8cn.yaml":
+                "id: gui8cn\ninfo: {id: gui8cn, name: gui8cn, tags: [grafana]}\n"
+                "matchers: [{type: word, words: [gui8cn]}]",
+        }, source="8cn")
+        _h8cn = c.get("/pocs").get_data(as_text=True)
+        assert "待确认模板（T13 暂存区）" in _h8cn, "POC 页没有暂存区面板"
+        assert "gui8cn" in _h8cn, "暂存条目没渲染到页面上"
+        assert "不在扫描目录里" in _h8cn, "页面必须写明这些模板不会被扫描"
+        assert "确认选中" in _h8cn and "丢弃选中" in _h8cn, "缺人工确认/丢弃按钮"
+        # 指纹联动（续388）：tags 命中组件才列出来，且**只读不生效**
+        assert [r["key"] for r in _ps8cn.tech_hits({"grafana"})] == [
+            "pocs/vulnerabilities/generic/gui8cn.yaml"], "指纹联动没命中"
+        assert _ps8cn.tech_hits({"nginx", "jquery"}) == [], "不该命中无关组件"
+        assert len(_ps8cn.list_staged()) == 1, "tech_hits 竟然改了暂存区"
+        # 没勾选 ⇒ 一个都不生效（人点的语义：点空等于没点）
+        _r8cn = c.post("/api/pocs/staging/promote", data={})
+        assert _r8cn.status_code == 302, _r8cn.status_code
+        assert len(_ps8cn.list_staged()) == 1, "没勾选竟然动了暂存区"
+        # 丢弃是「只删暂存」：这里只验路由返回与清单清空，生产目录不碰
+        _r8cnb = c.post("/api/pocs/staging/drop", data={"key": "pocs/vulnerabilities/generic/gui8cn.yaml"})
+        assert _r8cnb.status_code == 302, _r8cnb.status_code
+        assert _ps8cn.list_staged() == [], "丢弃后清单必须清空"
+    finally:
+        _ps8cn.resolve = _real8cn
+
+    print("[8cn] 续388 ok: POC 页展示暂存清单（路径/类型/来源/时间）｜"
+          "「确认/丢弃」按钮在｜没勾选等于没点（清单不变）｜丢弃只删暂存")
+
     print("SMOKE PASS")
 
 

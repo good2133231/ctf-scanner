@@ -5,6 +5,45 @@
 
 
 
+## 续388（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：T13 收口（GUI 入口 + 指纹联动）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+### 一、GUI 入口（人点的那一下）
+
+`/pocs` 页新增「待确认模板（T13 暂存区）」面板：
+
+- 每行：勾选框 / 路径 / 类型（poc·fingerprint）/ 来源 / 导入时间；
+- 两个按钮：「确认选中 → 进生产」（`/api/pocs/staging/promote`）、
+  「丢弃选中」（`/api/pocs/staging/drop`）；
+- 面板顶部写明**这些模板不在扫描目录里、扫描器一个都不会跑**；空态给出导入命令；
+- 两个路由都 `@login_required + @admin_required`，并走 `_audit(audit.KIND_POC, ...)` 记账。
+
+「没勾选等于没点」也钉进了门禁：空提交只是 redirect，暂存清单一条不动。
+
+### 二、指纹联动（「结合指纹自动测试」的提示侧）
+
+主理人的要求是「组件 → 暂存模板」，且**吃已有指纹表、不另建匹配**。实现：
+
+- `poc_staging.tech_hits(techs)`：读每个暂存模板的 `info.tags`（只 YAML 解析，不加载进引擎），
+  与给定组件集合求交，返回 `[{key, tags}]`；
+- vulnscan 在 P1-1（`_pocs_for`）算出 `tech` 之后调用它，把命中汇总到
+  `_stg_hits388`，阶段收尾 INFO 说一次：
+  「暂存区有 N 个模板与目标组件相关（grafana, ...）；它们不在扫描目录，需在 POC 页勾选确认后才进生产」。
+
+**只提示、不生效**：T13 硬约束②不变 —— `promote` 仍然只能人点，`[8cm]` 用 AST 钉着
+「scanner/ 内不许出现自动 promote」。
+
+### 三、门禁 `[8cn]`
+
+页面有面板与两个按钮、暂存条目渲染到表格、没勾选时清单不变、丢弃只删暂存、
+`tech_hits` 命中 `tags` 且**不修改暂存区**。
+
+### 四、验证
+
+- `--only 8cn,8cm` PASS。
+- 全量 v61：2026-11-12 09:15:16–09:39:45（日志内 324 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke388.log`）。
+
 ## 续387（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：EXP 落点修复 + T13 暂存区（后端）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

@@ -4542,6 +4542,23 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续388（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：T13 收口（GUI 入口 + 指纹联动）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【GUI 入口】`/pocs` 页新增「待确认模板（T13 暂存区）」面板：路径 / 类型 / 来源 /
+      导入时间 + 「确认选中 → 进生产」「丢弃选中」两个按钮；空态写明怎么导入。
+      路由 `/api/pocs/staging/promote`、`/api/pocs/staging/drop`（都走 `_audit` 记账）。
+- [x] T2【指纹联动】`poc_staging.tech_hits(techs)`：读暂存模板 `info.tags` 与给定组件集合求交
+      （只读 YAML，不进引擎）。vulnscan 在 P1-1 算完 `tech` 后调用，阶段收尾 INFO 一次：
+      「暂存区有 N 个模板与目标组件相关……需在 POC 页勾选确认后才进生产」。**只提示，不生效**。
+- [x] T3【门禁】`[8cn]`：页面有面板与按钮、暂存条目渲染、没勾选时清单不动、
+      丢弃只删暂存、`tech_hits` 命中 tags 且不改暂存区。
+- [x] C1 定向：`--only 8cn,8cm` 全绿。
+- [x] C2 全量 v61 `SMOKE PASS`：2026-11-12 09:15:16–09:39:45（324 个 ok 组 + e2e，`logs/smoke388.log`）；提交后已用 `tools/push_encrypted.py` 推送。
+
+**T13 到此完整**：导入 → 暂存（引擎看不见）→ 页面可见 + 指纹提示 → 人点确认 → 进生产。
+
 ## 续387（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：EXP 落点修复 + T13 暂存区（后端）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

@@ -3721,8 +3721,11 @@ def create_app():
              + (f"&tech={quote(tech)}" if tech else "")
         pager = {"page": page, "size": size, "total": total, "pages": pages,
                  "base": page_url("/pocs"), "qs": qs, "unit": "个 POC"}
+        from scanner import poc_staging as _pst388
         return render_template("pocs.html", pocs=rows, stats=stats, pager=pager, q=q,
-                               only_on=only_on, techs=techs, tech=tech)
+                               only_on=only_on, techs=techs, tech=tech,
+                               staged=_pst388.list_staged(),
+                               msg=(request.args.get("msg") or ""))
 
     @app.route("/api/pocs/upload", methods=["POST"])
     @login_required
@@ -3775,6 +3778,36 @@ def create_app():
         sync_pocs(load_settings())
         _audit(audit.KIND_POC, target="注册表", detail="刷新 POC 注册表")
         return jsonify({"ok": True})
+
+    # ---------- T13 暂存区（续388）：外部模板先过暂存，人点了才进生产 ----------
+
+    @app.route("/api/pocs/staging/promote", methods=["POST"])
+    @login_required
+    @admin_required
+    def pocs_staging_promote():
+        """把勾选的暂存模板**人工确认**进生产。这是暂存区唯一的出口（另一处是 CLI）。"""
+        from scanner import poc_staging as _pst388
+        keys = [k for k in request.form.getlist("key") if k]
+        if not keys:
+            return redirect(url_for("pocs", msg="没有勾选任何模板"))
+        rep = _pst388.promote(names=keys)
+        sync_pocs(load_settings())
+        _audit(audit.KIND_POC, target="暂存区",
+               detail=f"人工确认 {rep['promoted']} 个模板进生产")
+        return redirect(url_for("pocs", msg=f"已确认 {rep['promoted']} 个模板进生产（已重扫注册表）"))
+
+    @app.route("/api/pocs/staging/drop", methods=["POST"])
+    @login_required
+    @admin_required
+    def pocs_staging_drop():
+        """丢弃勾选的暂存模板（只删暂存区，不碰生产目录）。"""
+        from scanner import poc_staging as _pst388
+        keys = [k for k in request.form.getlist("key") if k]
+        if not keys:
+            return redirect(url_for("pocs", msg="没有勾选任何模板"))
+        rep = _pst388.drop(names=keys)
+        _audit(audit.KIND_POC, target="暂存区", detail=f"丢弃 {rep['dropped']} 个暂存模板")
+        return redirect(url_for("pocs", msg=f"已丢弃 {rep['dropped']} 个暂存模板"))
 
     # ---------- 漏洞 ----------
 

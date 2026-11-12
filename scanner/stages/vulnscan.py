@@ -18,7 +18,7 @@ from .. import audit, config, db, flagfind, ml
 from ..evasion import detect as detect_waf
 from ..owasp import checks as owasp_checks
 from ..pocs import engine
-from .. import paramroute
+from .. import paramroute, poc_staging
 from ..utils import pool_run
 
 
@@ -244,6 +244,8 @@ class VulnscanStage(Stage):
         # 语言收敛的账：`{"n": 累计跳过, "sites": 判出语言的站点数, "<语言>": 该语言跳过数}`。
         # DEBUG 逐站、INFO 汇总、回归断言三处都读这一个 dict（判据一处，§5.14）。
         _lang_skips, _lang_lock = {"n": 0, "sites": 0}, threading.Lock()
+        # 续388：T13 联动 —— 识别到的组件命中暂存区模板时汇总提一次（**只提示**）
+        _stg_hits388, _stg_lock388 = {}, threading.Lock()
         # 续176：「已执行且命中、但被 min_severity 结果闸挡下」的账。三个丢弃点
         # （下面的 run_all / POC 路 / afrog 路）各自 add()，阶段末汇总落库并说出口。
         # 与 `skip_severities` 那类"根本不执行"的分开说 —— 两件事混说就是假话。
@@ -287,6 +289,14 @@ class VulnscanStage(Stage):
             # （`paramroute.kinds`）。没识别出指纹的链接由此也能排上相关的 POC。
             if str(site.get("source") or "") == "crawl":
                 tech |= set(paramroute.kinds(site.get("url") or ""))
+            # T13 联动（续388）：吃 P1-1 已算好的 tech，找暂存区里相关的外部模板。
+            # 只记下来、最后汇总说一次 —— 它们不在扫描目录，人确认前一个都不会跑。
+            if tech:
+                _hit388 = poc_staging.tech_hits(tech)
+                if _hit388:
+                    with _stg_lock388:
+                        for _h388 in _hit388:
+                            _stg_hits388.setdefault(_h388["key"], set()).update(_h388["tags"])
             if not tech:
                 return _by_conf(pool, site)[:poc_cap]
             hit, rest = [], []
@@ -357,6 +367,12 @@ class VulnscanStage(Stage):
         _lang_line = _lang_summary(_lang_skips)
         if _lang_line:
             ctx.logger.info("[vulnscan] " + _lang_line)
+        if _stg_hits388:
+            _tg388 = sorted({t for v in _stg_hits388.values() for t in v})
+            ctx.logger.info(
+                f"[poc-staging] 暂存区有 {len(_stg_hits388)} 个模板与目标组件相关"
+                f"（{', '.join(_tg388)[:120]}）；它们不在扫描目录，"
+                f"需在 POC 页勾选「确认」后才进生产（T13）")
         # afrog（续121 接入；续149 默认开）。它是"另起一个自管请求的外部进程"，所以
         # ① 只喂它逐条判过的只读 + info 级模板（scanner/afrog.py::plan），② 结果按我们的
         # 级别门槛再筛一遍（它自己那套 -S 口径不作数），③ 日志里说清请求不经本任务预算。

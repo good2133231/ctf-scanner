@@ -108,6 +108,38 @@ def stage(files, source="", logger=None):
     return stats
 
 
+def _tags_of(key):
+    """读暂存模板的 `info.tags`（**只读**，不执行、不加载进引擎）。"""
+    try:
+        import yaml
+    except ImportError:
+        return set()
+    try:
+        d = yaml.safe_load((staging_dir() / key).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError, yaml.YAMLError):
+        return set()
+    info = (d or {}).get("info") or {}
+    return {str(t).strip().lower() for t in (info.get("tags") or []) if str(t).strip()}
+
+
+def tech_hits(techs):
+    """暂存里 `info.tags` 命中给定组件集合的条目（`[{"key", "tags"}]`）。
+
+    给 vulnscan 做「识别到组件 → 暂存区有相关模板」的提示用（主理人「结合指纹
+    自动测试」要求，直接吃 P1-1 已经算出来的 `tech` 集合，不另建匹配）。
+    **只提示、不生效**：T13 硬约束②，promote 只能人点（`[8cm]` 用 AST 钉着）。
+    """
+    want = {str(t).strip().lower() for t in (techs or ()) if str(t).strip()}
+    if not want:
+        return []
+    out = []
+    for row in list_staged():
+        hit = sorted(_tags_of(row["key"]) & want)
+        if hit:
+            out.append({"key": row["key"], "tags": hit})
+    return out
+
+
 def list_staged():
     """待确认清单（按路径排序），每项带 `key` / `kind` / `sha256` / `source` / `at`。"""
     return [dict(key=k, **v) for k, v in sorted(load().items())]

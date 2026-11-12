@@ -136,4 +136,35 @@
   </table>
   {% include "_pager.html" %}
 </section>
+<section class="panel">
+  <h2>待确认模板（T13 暂存区）{% if staged %}：{{ staged|length }} 条{% endif %}</h2>
+  {% if msg %}<p class="muted note">{{ msg }}</p>{% endif %}
+  {% if staged %}
+  <p class="muted note">这些模板在 <span class="mono">config/poc-staging/</span>，
+    <b>不在扫描目录里</b> —— 扫描器一个都不会跑。勾选后点「确认」才会搬进生产目录。</p>
+  <form method="post" action="{{ url_for('pocs_staging_promote') }}">
+    <table>
+      <thead><tr><th></th><th>路径</th><th>类型</th><th>来源</th><th>导入时间</th></tr></thead>
+      <tbody>
+      {% for s in staged %}
+        <tr>
+          <td><input type="checkbox" name="key" value="{{ s.key }}"></td>
+          <td class="mono">{{ s.key }}</td>
+          <td>{{ s.kind }}</td>
+          <td class="muted">{{ s.source or '-' }}</td>
+          <td class="muted small">{{ s.at }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <button type="submit">确认选中 → 进生产</button>
+    <button type="submit" formaction="{{ url_for('pocs_staging_drop') }}">丢弃选中</button>
+  </form>
+  {% else %}
+  <p class="muted note">暂存区为空。用
+    <span class="mono">python tools/update_pocs.py --source nuclei --staging</span>
+    导入的外部模板会先列在这里，确认后才进生产。</p>
+  {% endif %}
+</section>
+
 {% endblock %}
