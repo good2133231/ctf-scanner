@@ -66,7 +66,7 @@ from scanner.owasp import checks as owasp_checks
 from scanner.pocs import engine
 from scanner import runner
 from scanner import diffview, edgeauth, fingerprint, dictstats, keystore, webpath, portguard, iconbackfill, subdict
-from scanner.runner import CTF_STAGES, RECON_STAGES, STAGE_ORDER, run_task, sync_pocs
+from scanner.runner import RECON_STAGES, STAGE_ORDER, run_task, sync_pocs
 from scanner.stages.cert import pick_targets as cert_pick_targets
 from scanner.utils import (format_duration, pool_run, rel_display, scrub_paths, site_redirect,
                            tail_lines, to_unicode, norm_hit_path)
@@ -2431,8 +2431,6 @@ def create_app():
                                # 续303：默认不勾哪些由策略现算（写死会让"策略开了、界面说没开"成为假话）
                                off_by_default_stages=_off_by_default_stages(load_settings()),
                                recon_stages=RECON_STAGES,
-                               # 续376：CTF 专项档额外勾的阶段（JS 只认 data-ctf 标记）
-                               ctf_stages=CTF_STAGES,
                                # 续281：子任务在列表里显示 24-a 派生编号（79-a），不是新号 80。
                                # 真实 ID 仍留在链接与 tooltip 里，路由/主键一条不动。
                                task_labels=_task_tree_labels([t["id"] for t in rows]),
@@ -4398,6 +4396,14 @@ def create_app():
         show_all = _overlap_args()
         page, size, q = _page_args()
         grouped = request.args.get("group", "1") != "0"
+        # 续391：置信度筛选（high / medium / low）。判据是运行时算的（`extdom.confidence`），
+        # 不落库 ⇒ 进不了 SQL，只能全量取后过滤；与「按注册域折叠」的分组视图互斥，
+        # 选了 conf 就自动切平铺（否则分页单位是主域名，过滤后页数没意义）。
+        conf_filter = (request.args.get("conf") or "").strip().lower()
+        if conf_filter not in extdom.CONF_LEVELS:
+            conf_filter = ""
+        if conf_filter:
+            grouped = False
         # 续112：与「子域名」页同一套判据 —— 默认只看解析成功的，且同一域名只留最权威来源那一行。
         # 分组与平铺**共用同一个 ext_where**（两种视图不能各按一套口径，否则一切到分组噪声又回来了）。
         tid, tw, tp = _task_scope()          # 续112-E：「按任务筛选」，与「漏洞风险」页同口径
@@ -4442,12 +4448,17 @@ def create_app():
             qs += f"&task={tid}"
         if not grouped:
             qs += "&group=0"
+        if conf_filter:
+            qs += f"&conf={conf_filter}"
+        # 续391：`ext_where` 里已经含 `base_where`（`_and_where(base_where, res_where)`），
+        # 这里只做别名，**不能再拼一次** —— 拼重了会多出占位符，SQL 直接报 binding 错。
+        _w391, _p391 = q_where, tuple(q_params)
         row_total, groups, hidden, bl_hits = 0, [], 0, {}
         if grouped:
             # 分组必须在 Python 里做（SQLite 没有"注册域"函数），但**不设行数上限** ——
             # 旧实现的 `GROUP_ROW_CAP=4000` 会让第 4001 行起的主域名组在任何一页都看不到
             # （静默丢资产），理由与取舍见 `extdom.group_page()`。
-            gp = extdom.group_page(q=q, extra_where=q_where, extra_params=q_params,
+            gp = extdom.group_page(q=q, extra_where=_w391, extra_params=_p391,
                                    page=page, per_page=EXT_GROUPS_PER_PAGE,
                                    order=EXT_SRC_ORDER, dedupe_domain=True)
             groups, page = gp["groups"], gp["page"]
@@ -4466,20 +4477,47 @@ def create_app():
             _, hidden = _sub_rows([], base_where, params, hide_res)
             _nores_state(pager, hide_res, hidden)
         else:
-            subs, pager, q = _asset_page(
-                "subdomains", "/extdomains", extra_where=q_where,
-                extra_params=q_params, order=EXT_SRC_ORDER, dedupe_domain=True)
-            pager["qs"] = qs + ("&bl=1" if bl_view else "")
-            row_total = pager["total"]
-            subs, hidden = _sub_rows(subs, base_where, params, hide_res)
-            _ext_confidence(subs)               # 续169：平铺视图也要贴（两种视图一边有一边没有＝假徽章）
-            subs = _sort_ext_by_conf(subs)      # 续356：高置信在前，低置信沉底
-            if bl_view:
-                # 每条被拦的行写清「命中的是哪个黑名单条目」—— 只报条数不说条目，
-                # 用户没法判断拦得对不对（续194）
-                bl_hits = {str(r["domain"]): e for r in subs
-                           for e in [blacklist.matches(str(r["domain"] or ""), _bl_entries)] if e}
-            _nores_state(pager, hide_res, hidden)
+            if conf_filter:
+                # 续391：置信度不落库 ⇒ 只能「全量取 → 贴标 → 过滤 → 手工切片」。
+                # 分页必须在**过滤之后**算：先分页再过滤的话，total / 页数全是假的。
+                _all, _ = _page_assets("subdomains", limit=100000, offset=0, q=q or None,
+                                       extra_where=_w391, extra_params=_p391,
+                                       order=EXT_SRC_ORDER, dedupe_domain=True)
+                # `db.page_assets` 返回的是 `sqlite3.Row`（没有 `.get`），而
+                # `_ext_confidence` 按 dict 写的 —— 平铺路径靠 `_sub_rows` 转过，
+                # 这条新路径必须自己转（全量第一次就栽在这儿）。
+                _all = [dict(r) for r in _all]
+                _ext_confidence(_all)
+                _all = [r for r in _all
+                        if str((r.get("conf") or {}).get("level") or "") == conf_filter]
+                row_total = len(_all)
+                _pages = max(1, (row_total + size - 1) // size)
+                page = min(page, _pages)
+                subs = _all[(page - 1) * size: page * size]
+                pager = {"page": page, "size": size, "total": row_total, "pages": _pages,
+                         "base": page_url("/extdomains"),
+                         "qs": qs + ("&bl=1" if bl_view else "")}
+                subs, hidden = _sub_rows(subs, base_where, params, hide_res)
+                subs = _sort_ext_by_conf(subs)
+                if bl_view:
+                    bl_hits = {str(r["domain"]): e for r in subs
+                               for e in [blacklist.matches(str(r["domain"] or ""), _bl_entries)] if e}
+                _nores_state(pager, hide_res, hidden)
+            else:
+                subs, pager, q = _asset_page(
+                    "subdomains", "/extdomains", extra_where=_w391,
+                    extra_params=_p391, order=EXT_SRC_ORDER, dedupe_domain=True)
+                pager["qs"] = qs + ("&bl=1" if bl_view else "")
+                row_total = pager["total"]
+                subs, hidden = _sub_rows(subs, base_where, params, hide_res)
+                _ext_confidence(subs)               # 续169：平铺视图也要贴（两种视图一边有一边没有＝假徽章）
+                subs = _sort_ext_by_conf(subs)      # 续356：高置信在前，低置信沉底
+                if bl_view:
+                    # 每条被拦的行写清「命中的是哪个黑名单条目」—— 只报条数不说条目，
+                    # 用户没法判断拦得对不对（续194）
+                    bl_hits = {str(r["domain"]): e for r in subs
+                               for e in [blacklist.matches(str(r["domain"] or ""), _bl_entries)] if e}
+                _nores_state(pager, hide_res, hidden)
         # 续178（用户点单"js挖掘后面再加一个(挖掘js数量:)"）：来源分类**各项都带条数**。
         # 口径与"全部"视图一致：tag / 任务 / 重叠 / 解析筛选照 base_where + res_where，
         # **故意排除 src_where** —— 选中某一类时若带上它，其他类会全变成 0（那成了
@@ -4518,6 +4556,7 @@ def create_app():
                                src=src, src_tags=EXT_SRC_TAGS, scan_name=scan_name,
                                src_counts=src_counts,
                                probe_map=probe_map, group_probes=group_probes,
+                               conf=conf_filter,
                                bl_view=bl_view, bl_hidden=bl_hidden, bl_hits=bl_hits)
 
     @app.route("/sites")
@@ -5123,6 +5162,11 @@ def create_app():
         domains = _manual or _picked_domains()
         n = blacklist.add(domains, settings, owner_id=_owner_scope())
         logger.info(f"[gui] 黑名单新增 {n} 条（提交 {len(domains)} 个）")
+        # 续391：黑名单是"永久不入库 + 不被扫"的高影响配置，必须留痕 ——
+        # 续364-365 那 17 条就是随一个无关提交捎带进来的，事后无从追溯。
+        _audit(audit.KIND_SETTINGS, target="黑名单",
+               detail=f"新增 {n} 条：{', '.join(domains[:8])}"
+                      f"{'…' if len(domains) > 8 else ''}")
         return redirect(_safe_next(request.form.get("next"), url_for("subdomains")))
 
     # 续280：这两行**必须没有**装饰器。它是「值黑名单」的**数据视图**（返回 list），
@@ -5147,8 +5191,13 @@ def create_app():
     @login_required
     def api_blacklist_remove():
 
-        n = blacklist.remove(_picked_domains(), settings, owner_id=_owner_scope())
+        _removed = _picked_domains()
+        n = blacklist.remove(_removed, settings, owner_id=_owner_scope())
         logger.info(f"[gui] 黑名单移除 {n} 条")
+        # 续391：移除同样留痕（否则"为什么这条又能扫到了"同样查不到）
+        _audit(audit.KIND_SETTINGS, target="黑名单",
+               detail=f"移除 {n} 条：{', '.join(_removed[:8])}"
+                      f"{'…' if len(_removed) > 8 else ''}")
         return redirect(url_for("settings_page"))
 
     @app.route("/api/jssecret/blacklist", methods=["POST"])

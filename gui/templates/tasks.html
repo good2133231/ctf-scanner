@@ -23,8 +23,6 @@
          `data-ck-default` 记"页面刚打开时它该不该勾着"—— 「恢复默认」那颗按钮读它，
          而不是在 JS 里再抄一份阶段清单（抄第二份就会与 `runner.STAGE_ORDER` 漂移）。 #}
       <span class="muted small">批量勾选：
-        <button type="button" class="ghost" data-ck-mode="ctf" data-ck-scope="stages,deep,expand"
-          title="CTF 专项：信息收集专项 + vulnscan + crawl + SQL 注入。报告导出是全局开关（策略页 → 报告），线索写在站点行与报告里">CTF 专项</button>
         <button type="button" class="ghost" data-ck-mode="none" data-ck-scope="stages,deep,expand"
           title="只清勾选，不碰已填的目标与登录态">全部清掉</button>
         <button type="button" class="ghost" data-ck-mode="default" data-ck-scope="stages,deep,expand"
@@ -38,14 +36,13 @@
       <label class="chk"><input type="checkbox" name="stages" value="{{ s }}"
         data-ck-default="{{ 0 if off_by_default else 1 }}"
         data-recon="{{ 1 if s in recon_stages else 0 }}"
-        {% if s in ctf_stages %}data-ctf="1" {% endif %}
         {% if s in slow_stages %}data-slow-item {% endif %}{{ '' if off_by_default else 'checked' }}> {{ s }}</label>
       {% endfor %}
       </span>
       {# 续335（主理人点单）：去掉总勾选那颗按钮，只留单项 SQL 注入（默认关）。 #}
       <span class="slow-opts">
         <label class="chk" title="报错回显 + 布尔盲注；默认关（每站最多约 60 个请求），只影响本次任务">
-          <input type="checkbox" name="opt_sqli" value="1" data-ctf="1"> SQL 注入</label>
+          <input type="checkbox" name="opt_sqli" value="1"> SQL 注入</label>
       </span>
       </div>
       {# 续265（主理人 2026-10-23：「离线模式这个显示可以去了，没有场景用得到」）：

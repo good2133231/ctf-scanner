@@ -318,6 +318,20 @@ def confidence(name, bases=None, task_id=None):
         return {"level": "high", "label": "高", "owned": True, "near": hit, "ratio": 1.0,
                 "distance": 0, "same_tld": True,
                 "reason": f"注册域就是已确认资产 {hit}（这是归属，不是相似）"}
+    # 续391（实测补的判据）：`<brand>-s3.obs.<cloud>.com` 这种一眼就是
+    # 自家的对象存储桶 —— 子域首段带品牌名，但**注册域是云厂商的**，`similarity()` 只比
+    # 注册域，判 low。抓 www / docs 的 HTML+JS 做对照时才暴露（15 个域名里唯一一个
+    # 人判「自家」而代码判 low 的）。
+    # 判据与 `_brand_token` 同一把尺子（共享品牌词且 strong：带数字或 ≥5 字符），
+    # 只看**子域段**、不看注册域，所以 `www.w3.org` / `apps.apple.com` 不会被误抬。
+    for _lab in n.split(".")[:-2]:
+        for _b in (bases or ()):
+            _tok, _strong = _brand_token(_lab, _root_parts(_b)[1])
+            if _tok and _strong:
+                return {"level": "medium", "label": conf_label("medium"), "owned": False,
+                        "near": _b, "ratio": 0.0, "distance": 0, "same_tld": False,
+                        "reason": f"子域名「{_lab}」含品牌词「{_tok}」"
+                                  f"（云存储桶 / CDN 常见形态），注册域不同"}
     out = similarity(n, bases)
     out["owned"] = False
     out["label"] = conf_label(out["level"])

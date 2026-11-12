@@ -4542,6 +4542,48 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续391（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：拓展域名「越来越少」查因 + 两处改进
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人问：「拓展为什么越来越少，明明之前有写高置信度可信的」。查 7 次 `xxx.com` 任务后：
+
+- [x] T1【结论】**高置信度没少**：`docs/s3-web/xxx.com/.bid/.app/.lol` 这 6 个在 69/77/78
+      三次完全一致；掉的全是 **low** 档（第三方/CDN 域名）。
+- [x] T2【根因一】`config/blacklist.txt` 在 **11-10 08:57**（提交 `94a4dc7`）一次加了 17 条，
+      时间点正好夹在任务 69（07:39，未拦）与 70（09:46，拦 11 个）之间。这 20 条用三次任务的
+      已确认资产复算**全部是 low** —— 挡掉是对的，但**提交信息和 CHANGELOG 都没记录**。
+- [x] T3【根因二】`osint:reverse` 在 70/73 有 3~4 个，74/77/78 为 0（外部源不稳定）。
+- [x] T4【根因三】`/extdomains` 两个默认隐藏：重叠资产（`?all=1` 才显示）、黑名单命中（只报条数）。
+      高置信的 6 个恰好都是「已在子域表里」的重叠资产 ⇒ 默认视图看不到，用户以为「没了」。
+- [x] T5【改进一】拓展页加 `?conf=high|medium|low`：置信度不落库 ⇒ 全量取 → 贴标 →
+      过滤 → 手工分页（分页必须在过滤之后算）；与分组视图互斥（选了 conf 自动切平铺）。
+- [x] T6【改进二】黑名单增删写审计（`kind=settings` / `target=黑名单` / detail 带域名），
+      不再出现「谁加的、为什么加」查不到。
+- [x] T7【门禁】新增 `[8co]`：判据纯函数（自家域 high / 第三方 low）、页面有入口、
+      conf 四值都 200、黑名单 add 写审计。
+- [x] T8【踩坑】两个误判要记住：① `ext_where` 里**已经含** `base_where`（`_and_where(base_where, res_where)`），
+      再拼一次会多占位符、SQL 报 binding 错；② 门禁用户有租户隔离，`?task=78` 返回 0 条
+      不是 bug（任务 78 不属于该 owner）。
+- [ ] C2 全量 + 提交 + 推送 + 重启（提交前完成，届时勾掉）。
+
+## 续390（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：删掉 CTF 专项按钮
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人 2026-11-12：「CTF 专项感觉是不是没什么意义？先删掉」。回退续376 的全部实现。
+
+- [x] T1【模板】`gui/templates/tasks.html`：删按钮本身、删阶段的 `data-ctf` 条件、
+      删 SQL 注入的 `data-ctf="1"`（`opt_sqli` 保留，只是不再被顺手勾上）。
+- [x] T2【JS】`gui/static/app.js`：删 `mode === "ctf"` 分支（三目回到 recon/all/none/default）、
+      删「不在分组里的 data-ctf 项额外勾选」整块、删 label 里的 ctf 项。
+- [x] T3【后端】`scanner/runner.py` 删 `CTF_STAGES` 常量与注释；`gui/app.py` 删 import 与传参。
+- [x] T4【门禁】`[8cc]` 改成**反向**断言（按钮/标记/JS 分支/常量都不许再出现），
+      `[8w]` 按钮清单 `["ctf","none","default","recon"]` → `["none","default","recon"]`。
+- [x] T5【保留】删的只是「一键勾选」：`vulnscan` / `crawl` / SQL 注入**能力一个没少**，
+      建任务页仍可单独勾；反向门禁里专门断言这三个还在。
+- [ ] C2 全量 + 提交 + 推送 + 重启（提交前完成，届时勾掉）。
+
 ## 续389（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：T13 文档同步
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

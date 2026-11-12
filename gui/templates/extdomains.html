@@ -75,6 +75,16 @@
          href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&src={{ k }}{{ keep_tag }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">{{ label }}{% if src_counts.get(_s) %}（{{ src_counts.get(_s) }}）{% endif %}</a>
     {% endfor %}
   </p>
+  {# 续391：置信度筛选。判据是 `extdom.confidence()`（与徽章、自动递归同一处），
+     不落库 ⇒ 服务端全量取后过滤再分页；选了它分组视图会自动让位（见路由注释）。 #}
+  <p class="muted small note">置信度（不够像自家资产的沉底；判据与徽章同一处）：
+    <a class="btn-mini {{ 'ghost' if conf != 'high' else '' }}"
+       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}&conf=high{{ keep_src }}{{ keep_tag }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">只看高置信度</a>
+    {% if conf %}<a class="btn-mini ghost"
+       href="{{ pager.base }}?q={{ q|urlencode }}&size={{ pager.size }}{{ keep_src }}{{ keep_tag }}{{ '&all=1' if show_all }}{{ '&group=0' if not grouped }}{{ kt }}">全部置信度</a>
+    <span class="muted small">当前：{{ {'high': '只看高', 'medium': '只看中', 'low': '只看低'}.get(conf, '全部') }}</span>{% endif %}
+  </p>
+
   {% set keep_src = '&src=' + src if src else '' %}
   <p class="muted small note">标签过滤：CDN 标记来自 CNAME 链与
     <span class="mono">config/dicts/cdn_cname.txt</span>、解析 IP 段与

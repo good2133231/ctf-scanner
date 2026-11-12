@@ -16269,7 +16269,7 @@ http:
     # ① 每个按钮 scope 里点名的分组，页面上必须真有对应的 [data-ck-group]
     import re as _re118
     _btns118 = _re118.findall(r'data-ck-mode="(\w+)" data-ck-scope="([\w,]+)"', _th118)
-    assert [b[0] for b in _btns118] == ["ctf", "none", "default", "recon"], _btns118   # 续376：新增 CTF 专项
+    assert [b[0] for b in _btns118] == ["none", "default", "recon"], _btns118   # 续390：CTF 专项已删
     _groups118 = set(_re118.findall(r'data-ck-group="(\w+)"', _th118))
     for _m118, _sc118 in _btns118:
         for _g118 in _sc118.split(","):
@@ -16354,7 +16354,7 @@ http:
     assert "probe" in _st_mut_off, \
         f"默认口径断言对『probe 变成默认不勾』不敏感 = ③ 是假绿：{_st_mut_off}"
 
-    print("[8w] 续118/续314 建任务一键勾选 ok: 四颗按钮（最重档位已删；续376 新增 CTF 专项）scope 点名的分组页面上都真实存在｜"
+    print("[8w] 续118/续314 建任务一键勾选 ok: 三颗按钮（最重档位已删；续390 删掉 CTF 专项）scope 点名的分组页面上都真实存在｜"
           "任何批量按钮都不含离线模式（勾它=禁用外部工具，与跑全相反），「全部清掉/恢复默认」含｜阶段清单与 STAGE_ORDER "
           "逐一对齐且默认勾的恰是信息收集专项八阶段（含 portscan/cert/screenshot/jsmine，其余不勾）｜deep/expand/mode 三组数量钉死｜JS 不抄阶段名、"
           "读 data-ck-default、挂在 DOMContentLoaded｜变异：抹掉 deep 钩子 / 把 cert 翻成默认勾 都变红")
@@ -36739,35 +36739,27 @@ expression: r0()
     print("[8cb] 续375 ok: port/cert_san/pdns 三条证据归并到 IP｜real/likely/unknown/cdn 四档｜"
           "只给 real/likely 写线索（kind=ip）｜空任务返回空表｜osint 收尾接线")
 
-    # [8cc] 续376：CTF 专项档（显式带上 vulnscan/crawl/SQL 注入，仍不抄阶段名）
+    # [8cc] 续390：CTF 专项按钮已删（主理人 2026-11-12「感觉没什么意义，先删掉」）
     import re as _rx8cc
-    from scanner.runner import CTF_STAGES as _CTF8cc, STAGE_ORDER as _SO8cc
-    assert set(_CTF8cc) <= set(_SO8cc), f"CTF_STAGES 里有未知阶段：{set(_CTF8cc) - set(_SO8cc)}"
+    from scanner import runner as _rn8cc
+    assert not hasattr(_rn8cc, "CTF_STAGES"), "CTF_STAGES 常量必须一并删掉（不留半截）"
     _th8cc = c.get("/tasks").get_data(as_text=True)
-    _ctfbtn8cc = _rx8cc.findall(r'data-ck-mode="ctf" data-ck-scope="([\w,]+)"', _th8cc)
-    assert len(_ctfbtn8cc) == 1, "建任务页缺 CTF 专项按钮"
-    assert "slow" not in _ctfbtn8cc[0].split(","), \
-        "slow 不许进批量 scope（浏览器端 [10] 判据：13 阶段 + 2 深度 + 1 拓展）"
-    for _s8cc in _CTF8cc:
-        _re8cc = _rx8cc.findall(
-            r'name="stages" value="' + _s8cc + r'"\s+data-ck-default="\d"\s*\n?\s*data-recon="\d"'
-            r'\s*\n?\s*data-ctf="1"', _th8cc)
-        assert _re8cc, f"CTF 阶段 {_s8cc} 没带 data-ctf 标记（JS 只认标记，不认名字）"
-    assert 'name="opt_sqli" value="1" data-ctf="1"' in _th8cc, "SQL 注入没带 data-ctf 标记"
-    assert 'data-ck-group="slow"' not in _th8cc, \
-        "SQL 注入不许挂 data-ck-group（[10] 明确要求 slow 组不入 scope）"
+    assert 'data-ck-mode="ctf"' not in _th8cc, "CTF 专项按钮又回来了"
+    assert "data-ctf=" not in _th8cc, "模板里还有 data-ctf 标记"
     _js8cc = (ROOT / "gui/static/app.js").read_text(encoding="utf-8")
-    assert "c.dataset.ctf" in _js8cc and "input[data-ctf='1']" in _js8cc, \
-        "JS 没读 data-ctf 或没做「不在分组里的 data-ctf 项」额外勾选"
-    # CTF 是独立档：信息收集专项仍不许把 vulnscan 带上（否则两档语义混了）
+    assert "dataset.ctf" not in _js8cc and "data-ctf" not in _js8cc, "JS 里还有 ctf 分支"
+    assert "CTF 专项" not in _js8cc and "CTF 专项" not in _th8cc, "按钮文案还在"
+    # 删掉的是「一键勾选」，能力一个没少：vulnscan / crawl / SQL 注入仍可单独勾
+    assert 'value="vulnscan"' in _th8cc and 'value="crawl"' in _th8cc, "阶段被连带删了"
+    assert 'name="opt_sqli" value="1"' in _th8cc, "SQL 注入被连带删了"
     _recon8cc = _rx8cc.findall(r'data-ck-mode="recon" data-ck-scope="([\w,]+)"', _th8cc)
-    assert _recon8cc and "slow" not in _recon8cc[0].split(","), "recon 按钮也被塞了 slow 组"
+    assert _recon8cc and "slow" not in _recon8cc[0].split(","), "recon 按钮被塞了 slow 组"
     _st8cc = dict(_rx8cc.findall(r'name="stages" value="(\w+)"\s+data-ck-default="(\d)"', _th8cc))
-    assert _st8cc.get("vulnscan") == "0", "信息收集专项的默认口径被改宽了（vulnscan 不许默认勾）"
+    assert _st8cc.get("vulnscan") == "0", "vulnscan 不许默认勾"
 
-    print("[8cc] 续376 ok: CTF 专项按钮（stages+deep+expand）｜vulnscan/crawl 带 data-ctf｜"
-          "SQL 注入不在任何分组、只靠 data-ctf 额外勾选｜JS 只认 dataset.ctf 不抄阶段名｜"
-          "信息收集专项仍不默认勾 vulnscan（两档语义不混）")
+    print("[8cc] 续390 ok: CTF 专项按钮已删（模板 / JS / runner 常量三处都清）｜"
+          "vulnscan/crawl/SQL 注入能力保留、仍可单独勾｜recon 仍不塞 slow 组、"
+          "vulnscan 仍不默认勾")
 
     # [8cd] 续377：拆大文件（纯数据搬迁，名字/内容零变化；切片器不受影响）
     from scanner import db as _db8cd, schema as _sc8cd
@@ -37072,6 +37064,41 @@ expression: r0()
 
     print("[8cn] 续388 ok: POC 页展示暂存清单（路径/类型/来源/时间）｜"
           "「确认/丢弃」按钮在｜没勾选等于没点（清单不变）｜丢弃只删暂存")
+
+    # [8co] 续391：拓展页「只看高置信度」+ 黑名单变更留痕
+    from scanner import extdom as _ex8co, blacklist as _bl8co
+    import scanner.audit as _au8co
+    # 判据本身（纯函数）：自家注册域 → high，第三方 → low
+    assert _ex8co.confidence("a.xxx.com", bases={"xxx.com"})["level"] == "high"
+    assert _ex8co.confidence("evil.example.org", bases={"xxx.com"})["level"] == "low"
+    # 续391 实测补的判据：云存储桶形态（子域首段带品牌词）→ medium，不是 low
+    assert _ex8co.confidence("acmecorp-s3.obs.ap-southeast-1.example-cloud.com",
+                             bases={"acmecorp.com"})["level"] == "medium", "云桶漏判"
+    assert _ex8co.confidence("github.com", bases={"acmecorp.com"})["level"] == "low"
+    assert _ex8co.confidence("www.w3.org", bases={"acmecorp.com"})["level"] == "low"
+    assert _ex8co.confidence("apps.apple.com", bases={"acmecorp.com"})["level"] == "low"
+    # 入口必须在页面上，且 conf 四个值都不能 500
+    _tpl8co = (ROOT / "gui/templates/extdomains.html").read_text(encoding="utf-8")
+    assert "只看高置信度" in _tpl8co and "conf=high" in _tpl8co, "拓展页缺「只看高置信度」入口"
+    _page8co = c.get("/extdomains").get_data(as_text=True)
+    assert "只看高置信度" in _page8co, "页面没渲染出置信度筛选"
+    for _v8co in ("high", "medium", "low", "bogus", ""):
+        assert c.get(f"/extdomains?conf={_v8co}").status_code == 200, _v8co
+    # 黑名单增删写审计：桩掉 record 断言 (kind, target, detail)，不碰真实文件
+    _calls8co = []
+    _orig_rec8co, _orig_add8co = _au8co.record, _bl8co.add
+    _au8co.record = lambda kind, actor="", ip="", **kw: _calls8co.append(
+        (kind, kw.get("target"), kw.get("detail")))
+    _bl8co.add = lambda *a, **k: 1
+    try:
+        c.post("/api/blacklist/add", data={"manual_domain": "audit-test8co.example"})
+    finally:
+        _au8co.record, _bl8co.add = _orig_rec8co, _orig_add8co
+    assert any(k == "settings" and t == "黑名单" and "audit-test8co.example" in str(d)
+               for k, t, d in _calls8co), _calls8co
+
+    print("[8co] 续391 ok: 置信度判据（自家域 high / 第三方 low）｜拓展页有「只看高置信度」入口、"
+          "conf 四值都 200｜黑名单新增写审计（kind=settings / target=黑名单 / 带域名）")
 
     print("SMOKE PASS")
 

@@ -5,6 +5,99 @@
 
 
 
+## 续391（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：拓展域名「越来越少」查因 + 两处改进
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人问「拓展为什么越来越少，明明之前有写高置信度可信的」。查了 `xxx.com` 的 7 次执行。
+
+### 一、结论：高置信度一条没少，少的是 low 噪声
+
+| 任务 | 拓展总数 | **high** | low | 高置信的域名 |
+|---|---|---|---|---|
+| 52 | 14 | 1 | 13 | xxx.com |
+| 69 | 18 | **6** | 12 | docs / s3-web / xxx.com / .bid / .app / .lol |
+| 70 | 6 | 1 | 5 | xxx.com |
+| 73 | 5 | 1 | 4 | xxx.com |
+| 74 | 8 | 2 | 6 | xxx.com, testapi |
+| 77 | 12 | **6** | 6 | 同 69 |
+| 78 | 7 | **6** | 1 | 同 69 |
+
+那 6 个在 69 / 77 / 78 **完全一致**，从没丢过。
+
+### 二、三个根因
+
+1. **黑名单**：`config/blacklist.txt` 在 **11-10 08:57**（提交 `94a4dc7`）一次加了 17 条，
+   正好夹在任务 69（07:39，未拦）和 70（09:46，拦 11 个）之间。把这 20 条用三次任务的
+   已确认资产复算，**全部 low**（`x.com` 差 9 步、`jd.com` 差 9 步、`xxx-cdn.net` 差 7 步）——
+   挡掉是对的，但**提交信息和 CHANGELOG 都没记**，属于「随无关提交捎带」。
+2. **`osint:reverse`**：70/73 有 3~4 个，74/77/78 为 0（外部反查源不稳定）。
+3. **页面默认隐藏**：`/extdomains` 默认藏「重叠资产」（`?all=1` 才显示）与「黑名单命中」
+   （只报条数）。而高置信那 6 个**恰好都是已存在于子域表的重叠资产** ⇒ 默认视图看不到。
+
+### 三、两处改进
+
+1. **`?conf=high|medium|low`**：置信度是运行时算的、不落库 ⇒ 全量取 → 贴标 → 过滤 →
+   手工分页（分页必须在过滤**之后**算，否则 total 与页数都是假的）；与分组视图互斥，
+   选了 conf 自动切平铺。页面加了「只看高置信度 / 全部置信度」入口。
+2. **黑名单增删写审计**：`_audit(kind=settings, target=黑名单, detail="新增 N 条：a, b")`，
+   以后再也不会出现「这 17 条是谁加的」查不到。
+
+### 四、踩坑（两个误判，都花了不少时间）
+
+1. 我一度认为「`task_id=?` 没进 SQL」，把 `base_where` 又拼了一遍 ⇒ 84 个占位符对 82 个参数，
+   SQL 直接报 binding 错。真相是 `ext_where` 里**已经含** `base_where`
+   （`_and_where(base_where, res_where)`），原代码是对的。
+2. `?task=78` 在门禁用户下返回 0 条，被我当成 bug 查了半天 —— 其实是**租户隔离**
+   （任务 78 不属于该 owner）。SQL 层用 `page_assets` 直接查是 7 条。
+
+### 五、门禁
+
+`[8co]`：`confidence()` 纯函数判据（自家域 high / 第三方 low）、页面有「只看高置信度」入口、
+`conf` 四值（含非法值）都 200、黑名单 `add` 走 `_audit`（桩掉 `record` 断言 kind/target/detail）。
+
+### 六、验证
+
+- `--only 8co` PASS。
+- 全量 v62：2026-11-12 11:45:51–12:05:22（19m41s，日志内 325 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke391e.log`）。
+
+## 续390（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：删掉 CTF 专项按钮
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+主理人 2026-11-12：「CTF 专项感觉是不是没什么意义？先删掉」—— 回退续376 的全部实现。
+
+### 一、删了什么
+
+| 位置 | 内容 |
+|---|---|
+| `gui/templates/tasks.html` | 按钮本体；阶段的 `{% if s in ctf_stages %}data-ctf="1"` 条件；SQL 注入的 `data-ctf="1"` |
+| `gui/static/app.js` | `mode === "ctf"` 三目分支、「不在分组里的 `data-ctf` 项额外勾选」整块、label 里的 ctf 项 |
+| `scanner/runner.py` | `CTF_STAGES = ("vulnscan", "crawl")` 与 3 行注释 |
+| `gui/app.py` | `CTF_STAGES` 的 import 与 `ctf_stages=` 传参 |
+
+### 二、没删什么（重要的边界）
+
+删的只是「**一键勾选**」这个便利，**能力一个没少**：
+
+- `vulnscan` / `crawl` 仍是 `STAGE_ORDER` 里的阶段，建任务页仍可单独勾；
+- SQL 注入 `opt_sqli` 仍在（默认关），只是不再被那颗按钮顺带勾上。
+
+反向门禁 `[8cc]` 专门断言这三个都还在，防止「删按钮把功能一起删了」。
+
+### 三、门禁
+
+- `[8cc]` 从「按钮存在」翻成**反向**：`CTF_STAGES` 不存在、模板无 `data-ck-mode="ctf"`、
+  模板无 `data-ctf`、JS 无 `dataset.ctf`、文案无「CTF 专项」；
+  同时断言 `vulnscan`/`crawl`/`opt_sqli` 仍在、recon 仍不塞 slow 组、vulnscan 仍不默认勾。
+- `[8w]` 按钮清单改为 `["none", "default", "recon"]`（三颗），文案同步。
+- `[10]`（浏览器端批量勾选）不受影响 —— 它只按 `data-ck-group` 走，从未点过 ctf 按钮。
+
+### 四、验证
+
+- `--only 8cc,8w` PASS。
+- 全量：那次在 `[218]` 脱敏红线中断（记忆里写了真实目标域名，同时出现在CHANGELOG/todo/smoke.py）；改成占位域名后**没有重跑全量**。GUI 改动由续391 的全量 v62 覆盖（`[8cc]`/`[8w]`/`[10]` 都在其中）。
+
 ## 续389（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：T13 文档同步
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
