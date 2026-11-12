@@ -59,6 +59,7 @@
 | 漏洞级别门槛 | `checks.min_severity`：代码默认 `medium` / 随包 `high` | 策略配置 | 随包更严（只报 high 及以上） |
 | subfinder / puredns / httpx | 未安装 ⇒ 内置兜底 | CLI `--update-tools` / GUI「外部工具」页 | 装了才走工具；**能力不缺**，差别在快与全 |
 | dirmap / fscan / nmap | 有就用、没有就回退内置 | 同上 | 目录深扫优先 dirmap；端口优先 fscan → nmap → 内置 |
+| 外部模板进生产 | 新导入的模板先进 `config/poc-staging/`（不在 `POC_DIRS`） | `tools/update_pocs.py --staging` 导入 → GUI「POC 管理」页底部勾选「确认」，或 `python -m scanner.poc_staging --promote` | 续387/388 T13：暂存区里的模板**永远不会被扫描**，生效只能人点；与利用型 POC 的 `exp-pending` 分流（续207）是两条不同的路 |
 
 ## 维护
 

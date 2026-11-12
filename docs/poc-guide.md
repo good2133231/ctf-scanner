@@ -11,6 +11,39 @@
 
 控制台启动时会自动扫描以上目录并写入注册表；之后可在 GUI 里启停每个 POC，也可以点「重新扫描 POC 目录」增量加载。语法错误的 POC 会标注 `error`；`raw` / `flow` / `workflows` / `dsl` 已支持**核心子集**（见下节），超出子集的部分（**块级/顶层** `dsl`、flow 里的 JS/循环、workflow 的 `matchers:` / `args:`、oob 反连）会标注 `unsupported` 或写进 `_note` 并显示原因（不静默失效），扫描时自动跳过或跳过该子项。
 
+## 外部模板的暂存区（T13，2026-11-12 起）
+
+从外部仓库批量拉模板时（`tools/update_pocs.py --staging`），模板**不会直接进生产目录**：
+先落到 `config/poc-staging/`，人工确认后才搬进 `config/nuclei-templates/`。
+
+两条硬约束（`[8cm]` 门禁钉着）：
+
+1. **落点在扫描目录之外** —— `config/poc-staging/` 不在 `pocs.engine.POC_DIRS` 里，
+   注册表扫描不到它，扫描器一个都不会跑；
+2. **生效只能由人点** —— 没有任何自动路径。看清单 / 确认 / 丢弃只有这几个入口：
+
+```bash
+python tools/update_pocs.py --source nuclei --staging   # 导入到暂存区（不落生产）
+python -m scanner.poc_staging --list                    # 看清单（路径 / 类型 / 来源 / 时间）
+python -m scanner.poc_staging --promote                 # 全部确认 → 进生产
+python -m scanner.poc_staging --promote pocs/vulnerabilities/xx.yaml   # 只确认这一个
+python -m scanner.poc_staging --drop                    # 全部丢弃（只删暂存）
+```
+
+GUI 在 **POC 管理页底部**（「待确认模板（T13 暂存区）」）：勾选后点「确认选中 → 进生产」，
+或「丢弃选中」。面板上会写明这些模板不在扫描目录、扫描器不会跑。
+
+扫描时如果识别到某个组件、暂存区里正好有该组件的模板（`info.tags` 命中），任务日志会提一句
+—— **只是提示**，仍要人去 POC 页确认：
+
+```
+[poc-staging] 暂存区有 2 个模板与目标组件相关（grafana, prometheus）；它们不在扫描目录，
+需在 POC 页勾选「确认」后才进生产（T13）
+```
+
+与**利用型 POC 的分流**（续207）的区别：那一路按内容分流（利用型 → `config/exp-pending/`，
+人点了才执行），本路按来源分流（外部导入 → 暂存区 → 人点进生产）。两者都不在 `POC_DIRS`。
+
 ## YAML 格式
 
 本引擎向 nuclei 语法靠拢，字段命名与官方模板一致：
