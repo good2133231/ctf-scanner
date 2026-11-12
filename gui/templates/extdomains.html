@@ -48,7 +48,24 @@
     <td class="muted small mono">{{ s.note or '-' }}</td>
     <td>{% if secrets.get(s.domain) %}<span class="sev sev-high"
           title="该域名下 JS 挖到的疑似凭据条数（详见「漏洞风险」页 js-secret-*）">
-          敏感 {{ secrets.get(s.domain) }}</span>{% else %}<span class="muted small">-</span>{% endif %}</td>
+          敏感 {{ secrets.get(s.domain) }}</span>{% else %}<span class="muted small">-</span>{% endif %}
+      {# 续393：行内处置。判据与黑名单/own 口径都在后端，页面只发动作。 #}
+      <form method="post" action="{{ url_for('api_extdomains_action') }}" class="inline"
+            onsubmit="return confirm('确认「{{ s.domain }}」是自家资产？之后扫描器会主动探测它。');">
+        <input type="hidden" name="domain" value="{{ s.domain }}">
+        <input type="hidden" name="task_id" value="{{ s.task_id }}">
+        <input type="hidden" name="act" value="confirm">
+        <input type="hidden" name="next" value="{{ request.full_path }}">
+        <button class="btn-mini ghost" type="submit"
+                title="提升成 own 口径：之后它出现在子域名页，扫描器会当目标探测（写审计）">确认自家</button>
+      </form>
+      <form method="post" action="{{ url_for('api_extdomains_action') }}" class="inline">
+        <input type="hidden" name="domain" value="{{ s.domain }}">
+        <input type="hidden" name="act" value="blacklist">
+        <input type="hidden" name="next" value="{{ request.full_path }}">
+        <button class="btn-mini ghost" type="submit"
+                title="以后不再采集这个域名（写黑名单 + 记审计，可随时移除）">加黑</button>
+      </form></td>
   </tr>
 {% endmacro %}
 {% macro ext_table(tid) %}

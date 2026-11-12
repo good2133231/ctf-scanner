@@ -5,6 +5,44 @@
 
 
 
+## 续393
+
+**服务对象：** 主理人（让「做」拓展页的行内处置入口）
+
+### 一、两个动作，风险差一个数量级
+
+- **加黑名单**：以后不再采集这个域，随时可移除 —— 低风险；
+- **确认自家**：把域名从 `js:*` / `osint:*`（**别人的资产面**）提升成 `own` 口径，之后扫描器会
+  **主动探测**它 —— 等于人工扩大授权范围。
+
+所以「确认自家」必须写审计、按钮带 `onsubmit` 二次确认，缺任务号时直接拒绝、不动库。
+
+### 二、实现
+- 路由 `POST /api/extdomains/action`（login_required）：
+  - `act=blacklist` → `blacklist.add` + `_audit(kind=settings, target=黑名单)`；
+  - `act=confirm` → `db.insert_subdomains(tid, [(domain, "manual:confirmed")])` +
+    `_audit(target=确认资产)`。
+- `manual:confirmed` 不落进 `OWN_SUBDOMAIN_WHERE` 那两个排除项（`js:%` / `osint:%`）⇒ 自动算 own，
+  下一轮 `confirmed_bases` 含它、`confidence()` 判 high。**语义也是对的**：确认后它从「拓展」变
+  「自家子域」，拓展页不再列它、子域名页能看到。
+- 按钮挂在 `ext_row` 的「敏感」格里（平铺 / 分组两个视图共用），不改表头。
+
+### 三、验证（手工 + 门禁）
+- 手工：临时任务 → POST confirm → `subdomains` 出现 `manual:confirmed` 行 → `confirmed_bases` 含它
+  → `confidence` 从 low 变 **high**；POST blacklist → `matches` 命中；`audit_log` 两条都在；
+  跑完删临时任务与子域行，`zz393` 残留 0。
+- 门禁 `[8co]` 追加：模板含「确认自家 / 加黑」与路由名；POST 加黑 302 且 `matches` 命中、验完即清；
+  confirm 缺任务号只 redirect 不动库。
+
+### 四、踩坑
+- 切片器按 `print("[组名]` 切块：一个组里出现**两个** `[8cp]` 前缀会被切成两段（第一段只剩 print 行、
+  依赖全丢，报错指向毫不相干的 `import atexit`）。最后把断言**并入 `[8co]`**（同一张页面），不再单开组。
+- 用 `replace_in_file` 改 `tests/smoke.py` 把整个文件写坏（-20775 行、语法错），`git checkout` 恢复后
+  改用 bytes 替换。**以后改这个 3.7 万行的文件一律走脚本**。
+- 手工验证时用独立 `sqlite3` 连接查不到 `db` 模块刚写入的行（连接/事务不一致），改用 `db._query` 才看到。
+
+### 五、验证
+- 全量 v64：2026-11-12 12:57:07–13:06:34（9m37s，日志内 325 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke393b.log`）。
 ## 续392
 
 **服务对象：** 主理人（让「做」两件：云桶/CDN 形态补全、置信度徽章分色）

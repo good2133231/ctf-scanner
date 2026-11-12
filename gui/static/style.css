@@ -269,7 +269,9 @@ tr:hover td { background:var(--hover); }
 .badge { padding:2px 9px; border-radius:20px; font-size:12px; background:var(--chip-bg); color:var(--text);
          white-space:nowrap; }
 /* 续392：置信度三档的徽章色（`_conf.html` 按 `row.conf.level` 挂类） */
-.badge.conf-high { background:var(--conf-high-bg); color:var(--conf-high-fg); }
+.badge.conf-high { background:var(--conf-high-bg); color:var(--conf-high-fg); }
+/* 续393：表格里并排的小按钮（行内处置），否则每个 form 会各自占一行 */
+.inline { display:inline-block; margin:0 2px 0 0; }
 .badge.conf-medium { background:var(--conf-med-bg); color:var(--conf-med-fg); }
 .badge.conf-low { background:var(--conf-low-bg); color:var(--conf-low-fg); }
 .st-running { background:var(--st-run-bg); color:var(--st-run-fg); }

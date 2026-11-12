@@ -5169,6 +5169,38 @@ def create_app():
                       f"{'…' if len(domains) > 8 else ''}")
         return redirect(_safe_next(request.form.get("next"), url_for("subdomains")))
 
+    @app.route("/api/extdomains/action", methods=["POST"])
+    @login_required
+    def api_extdomains_action():
+        """续393：拓展页的行内处置 —— 确认自家 / 加黑名单。
+
+        两个动作的风险差一个数量级，别混在一起看：
+        - 「加黑名单」只是以后不采集，随时可移除；
+        - 「确认自家」把它从 `js:*` / `osint:*`（**别人的资产面**）提升成 own 口径，
+          之后扫描器会**主动探测**它 —— 等于人工扩大授权范围。所以必须留审计，
+          页面按钮也带一次 `onsubmit` 二次确认。
+        """
+        act = (request.form.get("act") or "").strip()
+        domain = (request.form.get("domain") or "").strip().lower()
+        tid = request.form.get("task_id", type=int) or 0
+        nxt = _safe_next(request.form.get("next"), url_for("extdomains"))
+        if not domain or act not in ("confirm", "blacklist"):
+            return redirect(nxt)
+        if act == "blacklist":
+            n = blacklist.add([domain], settings, owner_id=_owner_scope())
+            _audit(audit.KIND_SETTINGS, target="黑名单",
+                   detail=f"拓展页行内处置：{domain}（新增 {n} 条）")
+            logger.info(f"[gui] 拓展页加黑名单 {domain}（新增 {n}）")
+            return redirect(nxt)
+        if not tid:
+            logger.info(f"[gui] 拓展页确认自家 {domain} 被拒：缺任务号")
+            return redirect(nxt)
+        db.insert_subdomains(tid, [(domain, "manual:confirmed")])
+        _audit(audit.KIND_SETTINGS, target="确认资产",
+               detail=f"拓展页确认自家：{domain} @ 任务 {tid}")
+        logger.info(f"[gui] 拓展页确认自家 {domain}（任务 {tid}）")
+        return redirect(nxt)
+
     # 续280：这两行**必须没有**装饰器。它是「值黑名单」的**数据视图**（返回 list），
     # 只被 settings 路由当普通函数调用（`sb=_value_blacklist_view()`，见 5600 行附近两处）。
     # 原先它顶着 `@app.route("/api/blacklist/remove")` —— 与下面真正干活的

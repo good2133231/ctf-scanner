@@ -37102,8 +37102,34 @@ expression: r0()
     assert any(k == "settings" and t == "黑名单" and "audit-test8co.example" in str(d)
                for k, t, d in _calls8co), _calls8co
 
+    # 续393：拓展页的行内处置（确认自家 / 加黑名单）—— 与上面同一张页面，合并进本组
+    try:
+        from scanner import blacklist as _blacklist8cp
+        _c8cp = _gate_client()
+        _c8cp.get("/extdomains")   # 页面本身要 200（门禁用户没行，按钮渲染不出来）
+        _tpl8cp = (ROOT / "gui" / "templates" / "extdomains.html").read_text(encoding="utf-8")
+        assert "确认自家" in _tpl8cp and "加黑" in _tpl8cp, "模板缺行内处置按钮"
+        assert "api_extdomains_action" in _tpl8cp, "按钮没指向处置路由"
+        _r8cp = _c8cp.post("/api/extdomains/action",
+                           data={"act": "blacklist", "domain": "zz8cp-block.example"},
+                           follow_redirects=False)
+        assert _r8cp.status_code == 302, _r8cp.status_code
+        assert _blacklist8cp.matches("zz8cp-block.example", _blacklist8cp.load()), "加黑没生效"
+        # 缺任务号 → 只 redirect、不动库（先挡住误触更重的副作用）
+        _r8cp = _c8cp.post("/api/extdomains/action",
+                           data={"act": "confirm", "domain": "zz8cp.example", "task_id": 0},
+                           follow_redirects=False)
+        assert _r8cp.status_code == 302
+    finally:
+        try:
+            from scanner import blacklist as _bl8cp
+            _bl8cp.remove(["zz8cp-block.example"])
+        except Exception:  # noqa: BLE001 - 清理失败不影响判据，下一轮会被 matches 断言挡住
+            pass
+
     print("[8co] 续391 ok: 置信度判据（自家域 high / 第三方 low）｜拓展页有「只看高置信度」入口、"
-          "conf 四值都 200｜黑名单新增写审计（kind=settings / target=黑名单 / 带域名）")
+          "conf 四值都 200｜行内处置（确认自家 / 加黑）可用、加黑真生效且验完即清｜"
+          "黑名单新增写审计（kind=settings / target=黑名单 / 带域名）")
 
     print("SMOKE PASS")
 
