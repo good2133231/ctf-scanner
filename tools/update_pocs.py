@@ -5,6 +5,7 @@
         python tools/update_pocs.py --source nuclei            # 取 nuclei 的 http/fingerprints
         python tools/update_pocs.py --source nuclei --ref v9.9.9
         python tools/update_pocs.py --list                     # 看预置了哪些源
+        python tools/update_pocs.py --source nuclei --staging   # T13：只进暂存区，人点了才生效
 
 它做什么：`scanner/pocmgr.py` 取模板 → 逐条校验（**命令执行形态直接拒收**，见那里的说明）
 → 落盘 `config/nuclei-templates/`（POC 引擎的 `POC_DIRS` 里已有这一项，**不用改配置**）；
@@ -36,6 +37,8 @@ def main(argv=None):
     ap.add_argument("--no-fingerprints", action="store_true",
                     help="不要把指纹类模板转成指纹表")
     ap.add_argument("--list", action="store_true", help="列出预置源后退出")
+    ap.add_argument("--staging", action="store_true",
+                    help="T13：POC/指纹先进暂存区（config/poc-staging），人工确认后才进生产")
     a = ap.parse_args(argv)
 
     if a.list:
@@ -46,7 +49,7 @@ def main(argv=None):
     print(f"[update-pocs] 源 {a.source} → {a.dest or pocmgr.POC_DEST}")
     try:
         rep = pocmgr.update(a.source, ref=a.ref, dest=a.dest or None,
-                            logger=_Log())
+                            logger=_Log(), staging=a.staging)
     except Exception as e:                       # noqa: BLE001 —— CLI 要把原因说清再退
         print(f"[update-pocs] 失败：{type(e).__name__}: {e}")
         return 2
@@ -56,12 +59,19 @@ def main(argv=None):
         return 2
 
     c = rep["counts"]
-    print(f"[update-pocs] 指纹类 {c['fingerprint']} 个 / POC 类 {c['poc']} 个；"
-          f"落盘 {rep['written']['written']}（{rep['written']['unchanged']} 个无变化）；"
-          f"拒收 {c['rejected']} / 跳过 {c['skipped']}")
+    if a.staging:
+        _st = rep.get("staging") or {}
+        print(f"[update-pocs] 指纹类 {c['fingerprint']} 个 / POC 类 {c['poc']} 个"
+              f" → **暂存区**（新增 {_st.get('staged', 0)}，无变化 {_st.get('unchanged', 0)}）")
+        print("[update-pocs] 暂存区不在 POC_DIRS，扫描器一个都不会跑；"
+              "人工确认后才进生产（GUI 的 POC 页 / `python -m scanner.poc_staging --promote`）")
+    else:
+        print(f"[update-pocs] 指纹类 {c['fingerprint']} 个 / POC 类 {c['poc']} 个；"
+              f"落盘 {rep['written']['written']}（{rep['written']['unchanged']} 个无变化）")
+    print(f"[update-pocs] 拒收 {c['rejected']} / 跳过 {c['skipped']}")
     for k, v in (rep.get("rejected") or {}).items():
         print(f"    [拒收] {k}: {v}")
-    if c["fingerprint"] and not a.no_fingerprints:
+    if c["fingerprint"] and not a.no_fingerprints and not a.staging:
         _to_fingerprints(a.dest or pocmgr.POC_DEST)
     return 0
 

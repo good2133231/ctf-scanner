@@ -4791,7 +4791,7 @@ def create_app():
     def exp_pending():
         """列出待人工确认的 EXP（只读清单 + 手动执行入口）。"""
         from scanner import pocmgr as _pm207
-        d = _pm207.resolve(_pm207.EXP_DEST)
+        d = _pm207.exp_dir()
         rows = []
         if d.is_dir():
             for f in sorted(d.rglob("*.y*ml")):
@@ -4836,7 +4836,7 @@ def create_app():
         url = str(request.form.get("url") or "").strip()
         if not re.match(r"^https?://", url):
             return jsonify({"ok": False, "error": "目标 URL 必须以 http:// 或 https:// 开头"}), 400
-        d = _pm207.resolve(_pm207.EXP_DEST)
+        d = _pm207.exp_dir()
         target = d / name
         try:
             target.resolve().relative_to(d.resolve())

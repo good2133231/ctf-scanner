@@ -5,6 +5,61 @@
 
 
 
+## 续387（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：EXP 落点修复 + T13 暂存区（后端）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+### 一、修一个真 bug：EXP 分流的模板写进了没人读的目录
+
+续207 的 EXP 分流（利用型 POC → 人点了才跑）一直「看起来正常」，但**写入与读取不是同一个路径**：
+
+| 侧 | 代码 | 实际路径 |
+|---|---|---|
+| 写 | `apply_files`：`dest.parent / EXP_DEST` | `config/config/exp-pending` |
+| 读 | GUI `/exp`：`resolve(EXP_DEST)` | `config/exp-pending` |
+
+`EXP_DEST = "config/exp-pending"` 本身是项目根相对路径，再拼到 `dest.parent`
+（`config/`）上就多了一级。结果：**分流的模板写进去，`/exp` 页永远看不到**——
+门禁 `[206]` 还把「多一级 config/」当成契约断言了下来（`_d206.parent / "config" / "exp-pending"`）。
+
+修法：`EXP_DEST` 改成 **dest 的兄弟目录名** `"exp-pending"`，新增 `pocmgr.exp_dir(dest)`，
+写入（`apply_files`）、默认落点（`update`）、读取（GUI 两处）**共用同一个函数**。
+门禁同步改断言，并加两条：`exp_dir(tmp)` 必须等于 `apply_files` 的落点、
+生产落点必须是 `config/exp-pending`。
+
+### 二、T13 暂存区（后端）
+
+主理人 2026-10-22 认下的 T13 有两条硬约束：**落点在 `POC_DIRS` 之外** + **生效永远人点**。
+
+新增 `scanner/poc_staging.py`：
+
+- `STAGING = "config/poc-staging"`（**不在** `pocs.engine.POC_DIRS`）⇒ `sync_pocs` /
+  `load_all_meta` 一个都看不见；
+- 清单 `staging.json`：`key → {sha256, kind, source, at, status: "pending"}`；
+- `stage(files)`：写暂存 + 记清单（同内容重复导入是 no-op）；
+- `promote(names)`：**唯一的出口**，走 `pocmgr.apply_files` 搬进生产；
+- `drop(names)`：只删暂存，不碰生产；
+- CLI：`python -m scanner.poc_staging --list / --promote / --drop`。
+
+导入侧接线：`pocmgr.update(..., staging=False)` + `tools/update_pocs.py --staging`
+（指纹表转换在 staging 模式下不执行 —— 那一步本身就是「生效」的一半）。
+
+### 三、门禁 `[8cm]`
+
+把两条硬约束变成断言：暂存区不在 `POC_DIRS`、stage 后清单形态正确且幂等、
+**promote 之前生产目录一个文件都没有**、promote 后才出现、drop 只删暂存、
+`scanner/` 内不许出现自动 `promote`。
+
+最后一条第一版用字符串匹配，把 `pocmgr` docstring 里的说明也算成了调用 ⇒ 改成 AST
+只认真正的 `Call` 节点。
+
+### 四、验证
+
+- `--only 206,207`（EXP 路径修复 + 分流语义）PASS。
+- `--only 8cm`（T13 暂存区）PASS。
+- 全量 v60：2026-11-12 08:04:00–08:28:22（日志内 323 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke387b.log`）。
+- 第一次全量红在 `[218]` 脱敏红线：记忆里写了真实目标域名（库里有资产 + 文件里出现）⇒ 已改成 `xxx.com` 后重跑。**教训：记忆里写验证任务时只能用占位域名。**
+
 ## 续386（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获清零（产品侧 52 + 测试 13）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
@@ -56,7 +111,7 @@ POC 加载、`db` 启动对账、`queue` 收尾、`certs` 取证书、`gateplan`
   `resolv.conf` 缺失 → 内置表（12124 条）。
 - 全量 v59：2026-11-11 16:03:18–16:28:59（日志内 322 个 ok 组 + 浏览器 e2e），
   `SMOKE PASS`（`logs/smoke386.log`）。
-- 真实任务 77（`stockcoin.ai`，默认八阶段）：202.1s、`status=done`、`error=''`；
+- 真实任务 77（`xxx.com`，默认八阶段）：202.1s、`status=done`、`error=''`；
   sites 27（httpx 16 + **osint:fofa-web 11**）、subdomains 21、certs 8、dirs 139、
   leads 6、ports 11。FOFA 已恢复，`osint:fofa-web` 这条链路终于有真实产物。
 

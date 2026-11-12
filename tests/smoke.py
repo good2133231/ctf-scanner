@@ -28836,9 +28836,13 @@ expression: r0()
     _s206b = _pm206.apply_files(str(_d206), _okf206)
     assert _s206b["written"] == 0, f"第二次跑必须全幂等（manifest 生效）：{_s206b}"
     assert not (_d206 / "fingerprints" / "rce.yaml").exists(), "RCE 不该落进指纹目录"
-    # `EXP_DEST` 是相对路径 `config/exp-pending`，拼到 dest.parent 上 ⇒ 多一级 config/
-    assert (_d206.parent / "config" / "exp-pending" / "technologies" / "rce.yaml").exists(), \
+    # 续387：EXP_DEST 现在是 dest 的兄弟目录名，写读同一处（pocmgr.exp_dir()）
+    assert (_d206.parent / "exp-pending" / "technologies" / "rce.yaml").exists(), \
         "RCE 该落到 EXP 目录（引擎发现不了的地方）"
+    assert _pm206.exp_dir(str(_d206)) == _d206.parent / "exp-pending", \
+        "exp_dir() 必须与 apply_files 的落点一致（续387 修的就是这两处不一致）"
+    assert _pm206.exp_dir().name == "exp-pending" and _pm206.exp_dir().parent.name == "config", \
+        f"生产落点必须是 config/exp-pending：{_pm206.exp_dir()}"
 
     # ⑥ update() 桩掉 fetch_repo：报告要能念给用户听（各类计数 + 拒收理由）
     _real_fetch206 = _pm206.fetch_repo
@@ -28910,8 +28914,8 @@ expression: r0()
 
     # ③ GUI：清单页 + 手动执行（一次一个、无批量、结果不落 vulns 表）
     #  `resolve` 桩到临时目录 —— 视图读的是**真实** config/exp-pending/，测试不该往仓库里写
-    _real_res207 = _pm206.resolve
-    _pm206.resolve = lambda pth: (_d207 if "exp-pending" in str(pth) else _real_res207(pth))
+    _real_expdir207 = _pm206.exp_dir
+    _pm206.exp_dir = lambda *a, **k: _d207
     try:
         _h207 = c.get("/exp").get_data(as_text=True)
         assert "EXP 待确认" in _h207, _h207[:200]
@@ -28937,7 +28941,7 @@ expression: r0()
         assert db.list_vulns(_tid207, limit=None) == [], \
             "EXP 的结果不该落 vulns 表（由人工判读）"
     finally:
-        _pm206.resolve = _real_res207
+        _pm206.exp_dir = _real_expdir207
     print("[207] 续207 ok: 验证型(SQLi/XSS/盲注/whoami端点)自动跑｜利用型(RCE/写操作)分流保留｜"
           "EXP 落引擎发现不了的目录(POC_DIRS 无 exp-pending)｜/exp 清单页+手动执行(三态拒绝/"
           "一次一个/结果不落 vulns 表)")
@@ -36964,6 +36968,75 @@ expression: r0()
 
     print("[8cl] 续386 ok: 产品侧 52 处（收窄 20 / 补理由 32）+ 测试文件 13 处（只补理由）"
           "｜全仓 243 处宽捕获全部带理由、未标理由 0｜7 个关键收窄形态钉住")
+
+    # [8cm] 续387：T13 暂存区（落点在 POC_DIRS 之外 + 生效必须人点）
+    from scanner import poc_staging as _ps8cm
+    from scanner import pocmgr as _pm8cm
+    from scanner.pocs import engine as _eng8cm
+    _stage_dir8cm = _TMPDIR / "poc-staging8cm"
+    _prod8cm = _TMPDIR / "poc-prod8cm"
+    _real_res8cm = _ps8cm.resolve
+    _ps8cm.resolve = lambda pth: (_stage_dir8cm if "poc-staging" in str(pth) else _real_res8cm(pth))
+    try:
+        # 硬约束①：暂存区不在引擎扫描目录里
+        assert not any("poc-staging" in str(d) for d in _eng8cm.POC_DIRS), \
+            f"暂存区竟在 POC_DIRS 里 ⇒ 未确认的模板会被自动扫描：{_eng8cm.POC_DIRS}"
+        _files8cm = {
+            "http/vulnerabilities/generic/reflect8cm.yaml":
+                "id: sqli8cm\ninfo: {id: sqli8cm, name: SQLi8cm}\n"
+                "matchers: [{type: word, words: [sql8cm]}]",
+            "http/technologies/tech8cm.yaml":
+                "id: tech8cm\ninfo: {id: tech8cm, name: tech8cm}\n"
+                "matchers: [{type: word, words: [tech8cm]}]",
+        }
+        _ok8cm, _bad8cm, _skip8cm = _pm8cm.plan_files(_files8cm)
+        assert not _bad8cm and set(_ok8cm) == {"poc", "fingerprint"}, (_ok8cm, _bad8cm)
+        _flat8cm = {**_ok8cm.get("poc", {}), **_ok8cm.get("fingerprint", {})}
+        _st8cm = _ps8cm.stage(_flat8cm, source="8cm")
+        assert _st8cm["staged"] == 2, _st8cm
+        _rows8cm = _ps8cm.list_staged()
+        assert len(_rows8cm) == 2, _rows8cm
+        assert all(r["status"] == "pending" and len(r["sha256"]) == 64 for r in _rows8cm), _rows8cm
+        assert {r["kind"] for r in _rows8cm} == {"poc", "fingerprint"}, _rows8cm
+        # 幂等：同一份内容再导一次是 no-op
+        assert _ps8cm.stage(_flat8cm)["staged"] == 0
+        # 人点之前：生产目录一个文件都没有
+        assert not list(_prod8cm.rglob("*.y*ml")) if _prod8cm.exists() else True
+        # 硬约束②：只有 promote() 能让它们进生产
+        _pr8cm = _ps8cm.promote(dest=str(_prod8cm))
+        assert _pr8cm["promoted"] == 2, _pr8cm
+        assert (_prod8cm / "pocs" / "vulnerabilities" / "generic" / "reflect8cm.yaml").exists()
+        assert (_prod8cm / "fingerprints" / "tech8cm.yaml").exists()
+        assert _ps8cm.list_staged() == [], "promote 之后清单必须清空"
+        # drop：只删暂存，不进生产
+        assert _ps8cm.stage(_flat8cm)["staged"] == 2
+        assert _ps8cm.drop()["dropped"] == 2
+        assert _ps8cm.list_staged() == []
+    finally:
+        _ps8cm.resolve = _real_res8cm
+    # 业务代码里不许出现自动 promote（只有 GUI / CLI 的人工入口可以）。
+    # 用 AST 认「真的调用」—— 字符串匹配会把 docstring 里的说明也算进来（第一版就这么红的）。
+    import ast as _ast8cm
+    def _calls_promote8cm(path):
+        try:
+            _tree8cm = _ast8cm.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            return False
+        for _n8cm in _ast8cm.walk(_tree8cm):
+            if not isinstance(_n8cm, _ast8cm.Call):
+                continue
+            _f8cm = _n8cm.func
+            if (isinstance(_f8cm, _ast8cm.Attribute) and _f8cm.attr == "promote"
+                    and isinstance(_f8cm.value, _ast8cm.Name)
+                    and _f8cm.value.id in ("poc_staging", "_poc_staging")):
+                return True
+        return False
+    _auto8cm = [str(q.relative_to(ROOT)) for q in (ROOT / "scanner").rglob("*.py")
+                if q.name != "poc_staging.py" and _calls_promote8cm(q)]
+    assert _auto8cm == [], f"scanner/ 里出现自动 promote ⇒ 变成了自动生效：{_auto8cm}"
+
+    print("[8cm] 续387 ok: T13 暂存区（config/poc-staging 不在 POC_DIRS｜stage 后引擎看不见｜"
+          "promote 才进生产｜清单带 sha256/pending｜drop 只删暂存｜scanner 内无自动 promote）")
 
     print("SMOKE PASS")
 

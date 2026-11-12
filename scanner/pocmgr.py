@@ -87,7 +87,11 @@ _WRITE_SPLICE = re.compile("|".join(_WRITE_MARKS), re.I)
 # 利用型 POC 的落点：**刻意不在** `pocs.engine.POC_DIRS` 里 ⇒ 引擎永远发现不了它，
 # 自动扫描因此跑不到；只有 GUI「EXP 待确认」页列得出它，人点了才跑（见 gui/app.py 的
 # `/exp` 与 `/api/exp/run`）。这是"验证"与"利用"分开的物理保证，不靠约定。
-EXP_DEST = "config/exp-pending"
+# 续387：**相对 dest 的兄弟目录名**，不是项目根相对路径。
+# 旧值 `config/exp-pending` 拼到 `dest.parent` 上会变成 `config/config/exp-pending`
+# （dest = `config/nuclei-templates`），而 GUI 的 /exp 页读的是 `config/exp-pending` ⇒
+# 分流的模板永远出现在「EXP 待确认」页里看不到。写与读必须共用 `exp_dir()`。
+EXP_DEST = "exp-pending"
 
 # 会发到目标上的字段（其余是给人看的：info.description / author / reference …）
 _REQUEST_KEYS = ("path", "raw", "payload", "payloads", "body", "data", "args", "headers")
@@ -291,6 +295,16 @@ def _load_yaml(text):
         return {}
 
 
+def exp_dir(dest=None):
+    """EXP 的**唯一**落点：`dest` 的兄弟目录（生产即 `config/exp-pending`）。
+
+    写入（`apply_files`）与读取（GUI `/exp`、手动执行）必须都调这个函数 ——
+    续387 之前一处用 `dest.parent / EXP_DEST`、一处用 `resolve(EXP_DEST)`，
+    拼出来的路径差一级 `config/`，模板写进去就再也看不见。
+    """
+    return Path(dest or resolve(POC_DEST)).parent / EXP_DEST
+
+
 def apply_files(dest, planned, logger=None, exp_dest=None):
     """落盘 + 记 manifest。**只写 dest 目录内**，先写 `.tmp` 再 rename（不留下半截文件）。
 
@@ -303,20 +317,20 @@ def apply_files(dest, planned, logger=None, exp_dest=None):
     man = load_manifest(dest)
     new_man = dict(man)
     stats = {"written": 0, "unchanged": 0, "exploit": 0}
-    exp_dir = Path(exp_dest) if exp_dest else dest.parent / EXP_DEST
+    exp_root = Path(exp_dest) if exp_dest else exp_dir(dest)
     for kind, files in (planned or {}).items():
         if kind == "exploit":
             # 单独记一份 manifest（与自动跑的那批分开，"哪些待人工确认"一眼数得出来）
-            sub = exp_dir
-            exp_dir.mkdir(parents=True, exist_ok=True)
-            eman = load_manifest(exp_dir)
+            sub = exp_root
+            exp_root.mkdir(parents=True, exist_ok=True)
+            eman = load_manifest(exp_root)
             for rel, text in files.items():
                 name = _safe_member(rel)[len("http/"):]
                 if not name:
                     continue
                 target = sub / name
                 digest = sha256_text(text)
-                rel_key = str(target.relative_to(exp_dir))
+                rel_key = str(target.relative_to(exp_root))
                 if eman.get(rel_key) == digest and target.exists():
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -325,7 +339,7 @@ def apply_files(dest, planned, logger=None, exp_dest=None):
                 tmp.replace(target)
                 eman[rel_key] = digest
                 stats["exploit"] += 1
-            (exp_dir / MANIFEST).write_text(
+            (exp_root / MANIFEST).write_text(
                 json.dumps(eman, indent=1, sort_keys=True), encoding="utf-8")
             continue
         sub = dest / ("fingerprints" if kind == "fingerprint" else "pocs")
@@ -410,22 +424,34 @@ def fetch_repo(source, ref="", logger=None):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def update(source="nuclei", ref="", dest=None, logger=None, exp_dest=None):
+def update(source="nuclei", ref="", dest=None, logger=None, exp_dest=None, staging=False):
     """跑一轮：取 → 校验分类 → 落盘。返回一份能直接念给用户听的报告。
 
-    `exp_dest`（续207）：利用型 POC 的落点，默认 `EXP_DEST`（**不在** POC_DIRS 里 ⇒ 不自动跑）。
+    `exp_dest`（续207）：利用型 POC 的落点，默认 `exp_dir()`（**不在** POC_DIRS 里 ⇒ 不自动跑）。
+    `staging=True`（T13，续387）：POC / 指纹两路**先进暂存区**
+    （`config/poc-staging`，同样不在 POC_DIRS）—— `poc_staging.promote()` 由人点了
+    才进生产。利用型仍走 `exp_dest`，不受这条影响。
     """
     dest = dest or resolve(POC_DEST)
     files = fetch_repo(source, ref=ref, logger=logger)
     if not files:
         return {"ok": False, "error": "一个模板都没取到（目录名变了？仓库结构改了？）"}
     ok, bad, skip = plan_files(files)
+    counts = {"fingerprint": len(ok.get("fingerprint", {})),
+              "poc": len(ok.get("poc", {})),
+              "exploit": len(ok.get("exploit", {}))}
+    staged, stage_stats = {}, {"staged": 0, "unchanged": 0}
+    if staging:
+        from . import poc_staging
+        for _k in poc_staging.KINDS:
+            staged.update(ok.pop(_k, {}) or {})
+        if staged:
+            stage_stats = poc_staging.stage(staged, source=source, logger=logger)
     # `dest` 可能是调用方传的字符串（CLI 就传 str）—— `Path()` 包一层再用 `.parent`
     stats = apply_files(dest, ok, logger=logger,
-                        exp_dest=exp_dest or str(Path(dest).parent / EXP_DEST))
+                        exp_dest=exp_dest or str(exp_dir(dest)))
     return {"ok": True, "source": source, "ref": ref,
-            "counts": {"fingerprint": len(ok.get("fingerprint", {})),
-                       "poc": len(ok.get("poc", {})),
-                       "exploit": len(ok.get("exploit", {})),
-                       "rejected": len(bad), "skipped": len(skip)},
-            "written": stats, "rejected": dict(list(bad.items())[:20])}
+            "counts": {**counts, "rejected": len(bad), "skipped": len(skip),
+                       "staged": len(staged)},
+            "written": stats, "staging": stage_stats,
+            "rejected": dict(list(bad.items())[:20])}

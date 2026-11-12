@@ -4542,6 +4542,33 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
      「批量跑子域名：每域名一个任务」；`[7i]` 启动门禁仍绿。
 - [x] C2 记忆同步：CHANGELOG 续289 + todo 续289（本小节）。AGENTS 不变量（§5/§6.2/§7）未动，故不同步。
 
+## 续387（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：EXP 落点修复 + T13 暂存区（后端）
+
+实施者：WorkBuddy · Tencent Hunyuan Hy
+
+- [x] T1【修一个真 bug】`EXP_DEST` 是相对路径 `config/exp-pending`，而写入侧用的是
+      `dest.parent / EXP_DEST`（dest = `config/nuclei-templates`）⇒ 实际落到
+      `config/config/exp-pending`；GUI `/exp` 页读的是 `resolve(EXP_DEST)` =
+      `config/exp-pending`。**写读差一级 `config/`，分流的模板写进去就再也看不见。**
+      修法：`EXP_DEST` 改成 dest 的兄弟目录名 `"exp-pending"`，新增 `pocmgr.exp_dir(dest)`，
+      写（`apply_files`）与读（GUI 两处）共用它；门禁 `[206]` 断言同步（并加两条一致性断言）。
+- [x] T2【T13 后端】新增 `scanner/poc_staging.py`：暂存区 `config/poc-staging`（**不在**
+      `POC_DIRS`）、`staging.json` 清单（sha256/kind/source/at/status=pending）、
+      `stage()` / `list_staged()` / `promote(names)` / `drop(names)`，外加 CLI（`--list/--promote/--drop`）。
+- [x] T3【导入接线】`pocmgr.update(..., staging=False)`：`staging=True` 时 POC / 指纹两路
+      先进暂存区（利用型仍走 `exp_dest`）；`tools/update_pocs.py --staging`。
+- [x] T4【门禁】新增 `[8cm]`：暂存区不在 `POC_DIRS`、stage 后清单形态正确且幂等、
+      **promote 之前生产目录一个文件都没有**、promote 后才出现、drop 只删暂存、
+      scanner/ 内不许出现自动 promote（AST 判据，字符串匹配会误吃 docstring）。
+- [x] C1 定向：`--only 206,207` / `--only 8cm` 全绿。
+- [x] C2 全量 v60 `SMOKE PASS`：2026-11-12 08:04:00–08:28:22（323 个 ok 组 + e2e，`logs/smoke387b.log`）；第一次红在 `[218]` 脱敏红线（记忆里写了真实域名），改成 `xxx.com` 后重跑；提交后已用 `tools/push_encrypted.py` 推送。
+
+**下一轮（T13 剩余）**：
+- GUI 入口：`/pocs` 页展示暂存清单 + 「确认 / 丢弃」按钮（现在只有 CLI，人点也能点，
+  但页面上看不见）；
+- 指纹联动：识别出的组件 → 暂存区对应模板（主理人「结合指纹自动测试」要求），
+  吃 vulnscan 已有的指纹→POC 联动（P1-1）与 `fingerprints_nuclei.txt`，不另建匹配。
+
 ## 续386（2026-11-11，WorkBuddy · Tencent Hunyuan Hy）：宽捕获清零（产品侧 52 + 测试 13）
 
 实施者：WorkBuddy · Tencent Hunyuan Hy
@@ -4564,7 +4591,7 @@ CJK 字体那一半连同它的细节（`has_cjk_font()` 目前只扫系统字�
 - [x] T6【门禁】新增 `[8cl]`：全仓未标理由必须为空集、7 个关键收窄形态钉住、
       测试桩里刻意保留的宽捕获不许被收窄。
 - [x] C1 定向：`--only 8cl,8ce` PASS。
-- [x] C2 全面验证全绿：编译（排除第三方）PASS｜33 模块导入 PASS｜函数级降级正确（非法 base64→failed、坏正则→None、坏 payload→[]、resolv 缺失→内置表）｜全量 v59 `SMOKE PASS` 2026-11-11 16:03:18–16:28:59（322 个 ok 组 + e2e）｜真实任务 77（stockcoin.ai，八阶段）202.1s、done、error 空、sites 27（含 osint:fofa-web 11）/subdomains 21/certs 8/dirs 139/leads 6/ports 11。
+- [x] C2 全面验证全绿：编译（排除第三方）PASS｜33 模块导入 PASS｜函数级降级正确（非法 base64→failed、坏正则→None、坏 payload→[]、resolv 缺失→内置表）｜全量 v59 `SMOKE PASS` 2026-11-11 16:03:18–16:28:59（322 个 ok 组 + e2e）｜真实任务 77（xxx.com，八阶段）202.1s、done、error 空、sites 27（含 osint:fofa-web 11）/subdomains 21/certs 8/dirs 139/leads 6/ports 11。
 
 **状态**：宽捕获这件分批活到此**清零收工**，后续只需守住 `[8ce]` 的 == 0。
 
