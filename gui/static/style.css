@@ -16,7 +16,11 @@
         /* 状态 / 等级徽章是「自包含色块」（前景背景成对），四套主题一致，故只在此声明一次 */
         --st-run-fg:#5eead4; --st-run-bg:#134e3a; --st-done-fg:#7cc4ff; --st-done-bg:#1d3a5f;
         --st-fail-fg:#fda4af; --st-fail-bg:#4c1d1d; --st-wait-fg:#fde68a; --st-wait-bg:#3a341d;
-        --st-stop-fg:#d4d4d8; --st-stop-bg:#3f3f46;
+        --st-stop-fg:#d4d4d8; --st-stop-bg:#3f3f46;
+        /* 续392：拓展域名的置信度三档（高=绿 / 中=黄 / 低=灰），与「像不像自家」对应 */
+        --conf-high-fg:#86efac; --conf-high-bg:#14532d;
+        --conf-med-fg:#fde68a;  --conf-med-bg:#3a341d;
+        --conf-low-fg:#d4d4d8;  --conf-low-bg:#3f3f46;
         /* 续49：排队中（任务已入队、等 worker 认领）——与 running/pending 都区分开 */
         --st-queue-fg:#a5b4fc; --st-queue-bg:#312e81;
         --sev-crit-fg:#fecaca; --sev-crit-bg:#7f1d1d; --sev-high-fg:#fed7aa; --sev-high-bg:#7c2d12;
@@ -264,6 +268,10 @@ th { color:var(--muted); font-weight:600; font-size:12px; white-space:nowrap; }
 tr:hover td { background:var(--hover); }
 .badge { padding:2px 9px; border-radius:20px; font-size:12px; background:var(--chip-bg); color:var(--text);
          white-space:nowrap; }
+/* 续392：置信度三档的徽章色（`_conf.html` 按 `row.conf.level` 挂类） */
+.badge.conf-high { background:var(--conf-high-bg); color:var(--conf-high-fg); }
+.badge.conf-medium { background:var(--conf-med-bg); color:var(--conf-med-fg); }
+.badge.conf-low { background:var(--conf-low-bg); color:var(--conf-low-fg); }
 .st-running { background:var(--st-run-bg); color:var(--st-run-fg); }
 .st-done { background:var(--st-done-bg); color:var(--st-done-fg); }
 .st-failed { background:var(--st-fail-bg); color:var(--st-fail-fg); }

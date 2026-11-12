@@ -37072,8 +37072,13 @@ expression: r0()
     assert _ex8co.confidence("a.xxx.com", bases={"xxx.com"})["level"] == "high"
     assert _ex8co.confidence("evil.example.org", bases={"xxx.com"})["level"] == "low"
     # 续391 实测补的判据：云存储桶形态（子域首段带品牌词）→ medium，不是 low
-    assert _ex8co.confidence("acmecorp-s3.obs.ap-southeast-1.example-cloud.com",
-                             bases={"acmecorp.com"})["level"] == "medium", "云桶漏判"
+    # 续392：已知云存储域的几种常见形态都要认，且 evil 拼接必须不认
+    for _d392 in ("acmecorp-assets.s3.amazonaws.com",
+                  "acmecorp.oss-cn-hangzhou.aliyuncs.com",
+                  "acmecorp.cos.ap-beijing.myqcloud.com"):
+        assert _ex8co.confidence(_d392, bases={"acmecorp.com"})["level"] == "medium", _d392
+    assert _ex8co.confidence("acmecorp.oss-cn-hangzhou.aliyuncs.com.evil.com",
+                             bases={"acmecorp.com"})["level"] == "low", "evil 拼接被误抬"
     assert _ex8co.confidence("github.com", bases={"acmecorp.com"})["level"] == "low"
     assert _ex8co.confidence("www.w3.org", bases={"acmecorp.com"})["level"] == "low"
     assert _ex8co.confidence("apps.apple.com", bases={"acmecorp.com"})["level"] == "low"

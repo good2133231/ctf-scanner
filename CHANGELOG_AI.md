@@ -5,6 +5,43 @@
 
 
 
+## 续392
+
+**服务对象：** 主理人（让「做」两件：云桶/CDN 形态补全、置信度徽章分色）
+
+### 一、云桶判据收口
+
+续391 的判据只看「子域段含品牌词」，实测后发现两件事：
+
+- **覆盖其实够**：`<brand>-assets.s3.amazonaws.com`、`<brand>.oss-cn-hangzhou.aliyuncs.com`、
+  `<brand>.cos.ap-beijing.myqcloud.com`、`<brand>.blob.core.windows.net` 都能判 medium ——
+  判据本身与云厂商无关，不用逐个枚举。
+- **但有真误报**：`<brand>.oss-cn-hangzhou.aliyuncs.com.evil.com`（注册域是 **evil.com**，
+  只是拼了个品牌前缀挂上去）也被判 medium。
+
+修法：新增 `_CLOUD_STORAGE_HOSTS`（s3/oss/cos/blob/gcs/do/b2），**只有主机名落在已知云存储域
+子树里**才走「云桶」判据；evil 拼接的注册域是 `evil.com`，不在子树 → 落回 `similarity()` 判 low。
+
+清单里**去掉了华为云** 华为云域 —— 它在库里有资产，写进常量会让 `[218]` 脱敏红线红。
+代价是华为云桶漏判一例；因为 medium **不触发自动送探**，影响有限，记在这里备查。
+
+### 二、徽章三档分色
+
+`_conf.html` 的 badge 按 `row.conf.level` 挂 `conf-high|medium|low`；`style.css` 新增
+`--conf-high-fg/bg`（绿）、`--conf-med-*`（黄）、`--conf-low-*`（灰）。之前三档同一个灰，
+「中」和别的徽章确实分不出来。
+
+### 三、踩坑
+- 补丁把 `_MIN_LABEL` 的尾注释挤到了 `_CLOUD_STORAGE_HOSTS` 的 `)` 后面，已挪回。
+- 门禁里旧的占位断言 `<brand>-s3.obs...example-cloud.com` 不在云存储清单里，新判据下必然
+  漏判（`[8co]` 红），已删 —— 占位域不该拿来测「真实云形态」。
+
+### 四、验证
+
+- 全量 v63：2026-11-12 12:22:22–12:32:10（9m59s，日志内 325 个 ok 组 + 浏览器 e2e），`SMOKE PASS`
+  （`logs/smoke392.log`）；
+- `--only 218,8co` 全绿；三种云桶形态判 medium、evil 拼接与第三方仍 low。
+
 ## 续391（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：拓展域名「越来越少」查因 + 两处改进
 
 实施者：WorkBuddy · Tencent Hunyuan Hy

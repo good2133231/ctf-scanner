@@ -134,6 +134,17 @@ CONF_DEFAULT = "high"
 _HIGH_DISTANCE, _HIGH_RATIO = 2, 0.70        # 高：差 ≤2 步且比值 ≥0.70（`abdc` ↔ `abcd` 正好落在这一档）
 _MEDIUM_DISTANCE, _MEDIUM_RATIO = 3, 0.55    # 中：像，但够不上"多半是我们的"
 _MIN_LABEL = 4                               # 主标签短于 4 个字符一律判低（`a.com` vs `b.com` 那种巧合不算相似）
+# 续392（实测补的）：只有落在这些云存储域**子树里**才认「云桶形态」。
+# 不列清单的话，`<brand>.oss-cn-hangzhou.aliyuncs.com.evil.com` 这种「拼一个品牌前缀
+# 挂到 evil.com 下面」的主机名也能骗到 medium —— 实测反例，必须收口。
+_CLOUD_STORAGE_HOSTS = (
+    "s3.amazonaws.com", "s3.amazonaws.com.cn",
+    "oss-cn-hangzhou.aliyuncs.com",
+    "cos.ap-beijing.myqcloud.com",
+    "blob.core.windows.net",
+    "storage.googleapis.com", "digitaloceanspaces.com",
+    "backblazeb2.com",
+)
 
 
 def conf_norm(value, default=CONF_DEFAULT):
@@ -324,14 +335,18 @@ def confidence(name, bases=None, task_id=None):
     # 人判「自家」而代码判 low 的）。
     # 判据与 `_brand_token` 同一把尺子（共享品牌词且 strong：带数字或 ≥5 字符），
     # 只看**子域段**、不看注册域，所以 `www.w3.org` / `apps.apple.com` 不会被误抬。
-    for _lab in n.split(".")[:-2]:
-        for _b in (bases or ()):
-            _tok, _strong = _brand_token(_lab, _root_parts(_b)[1])
-            if _tok and _strong:
-                return {"level": "medium", "label": conf_label("medium"), "owned": False,
-                        "near": _b, "ratio": 0.0, "distance": 0, "same_tld": False,
-                        "reason": f"子域名「{_lab}」含品牌词「{_tok}」"
-                                  f"（云存储桶 / CDN 常见形态），注册域不同"}
+    # 续392：必须落在已知云存储域的子树里 —— 否则 `<brand>.oss-cn-*.aliyuncs.com.evil.com`
+    # 这种拼接也能骗到 medium（实测反例）。
+    if any(n == _s or n.endswith("." + _s) for _s in _CLOUD_STORAGE_HOSTS):
+        for _lab in n.split(".")[:-2]:
+            for _b in (bases or ()):
+                _tok, _strong = _brand_token(_lab, _root_parts(_b)[1])
+                if _tok and _strong:
+                    return {"level": "medium", "label": conf_label("medium"),
+                            "owned": False, "near": _b, "ratio": 0.0,
+                            "distance": 0, "same_tld": False,
+                            "reason": f"子域名「{_lab}」含品牌词「{_tok}」"
+                                      f"（云存储桶 / CDN 常见形态），注册域不同"}
     out = similarity(n, bases)
     out["owned"] = False
     out["label"] = conf_label(out["level"])

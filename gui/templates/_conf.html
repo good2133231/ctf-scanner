@@ -4,7 +4,8 @@
    那正是本仓反复出事的"同一判据两处各写一遍"。 #}
 {% macro conf_badge(row) %}
   {%- set c = row.conf or {} -%}
-  <span class="badge" title="{{ c.get('reason') or '没有可比对的已确认资产域名，无法判断相似性' }}">
+  {# 续392：按档位挂色，三档不再一个灰 #}
+  <span class="badge conf-{{ c.get('level') or 'low' }}" title="{{ c.get('reason') or '没有可比对的已确认资产域名，无法判断相似性' }}">
     {{- c.get('label') or '低' -}}</span>
   {%- if c.get('near') and not c.get('owned') %}
     <span class="muted small" title="{{ c.get('reason') }}">像 {{ c.get('near') }}</span>
