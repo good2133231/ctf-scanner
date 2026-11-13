@@ -183,6 +183,13 @@
       <button type="submit" class="ghost btn-xs" formaction="{{ url_for('api_scan_ext') }}"
         title="新建一个 subdomain→probe→dirscan→vulnscan 的任务：先把它的子域也挖一遍，再探存活、扫目录、跑漏洞初筛">
         送去探测</button>
+      {# 续394：批量确认自家。与单条按钮同一语义，但只对**勾选**生效；
+         缺任务号（跨任务视图）时后端拒绝 —— 一个任务的「自家」不能替另一个任务认证。 #}
+      <button type="submit" class="ghost btn-xs"
+        formaction="{{ url_for('api_extdomains_confirm_batch') }}"
+        onclick="return confirm('确认选中的域名是自家资产？之后扫描器会主动探测它们。');"
+        title="把勾选的域名确认成自家资产（写审计；之后扫描器会主动探测）。只对当前任务生效，
+跨任务视图下会拒绝">确认选中 → 自家</button>
       <label class="muted" title="默认送本任务全部拓展域名（第三方 / CDN 清单里的那些不送，条数上限见 limits.ext_probe_max）；只想探勾上的几个就改成「只送勾选」">
         探测范围 <select name="scope"><option value="all">全任务</option><option value="picked">只送勾选</option></select></label>
 

@@ -5219,6 +5219,29 @@ def create_app():
 
     # 续186：装饰器丢失修复——本来就是 POST 路由（settings.html 的 formaction 在 url_for 它），
     # 丢了 @app.route 后只要黑名单非空，策略页就 500（BuildError）。
+    @app.route("/api/extdomains/confirm-batch", methods=["POST"])
+    @login_required
+    def api_extdomains_confirm_batch():
+        """续394：批量「确认自家」—— 只处理勾选的那些，且必须带当前任务。
+
+        与单条 `api_extdomains_action`（act=confirm）同一语义：写审计 + 提升成 own 口径
+        （`manual:confirmed` 不落 `OWN_SUBDOMAIN_WHERE` 的 js/osint 排除项）。区别只是入口。
+        **不支持跨任务**：一个任务的「自家」不能替另一个任务认证，缺 task_id 直接拒绝。
+        """
+        domains = _picked_domains()
+        tid = request.form.get("task_id", type=int) or 0
+        nxt = _safe_next(request.form.get("next"), url_for("extdomains"))
+        if not domains or not tid:
+            logger.info(f"[gui] 批量确认自家被拒：勾选 {len(domains)} 个、任务号 {tid}")
+            return redirect(nxt)
+        db.insert_subdomains(tid, [(d, "manual:confirmed") for d in domains])
+        _detail = "批量确认自家 %d 个 @ 任务 %s：%s%s" % (
+            len(domains), tid, ", ".join(domains[:8]),
+            "…" if len(domains) > 8 else "")
+        _audit(audit.KIND_SETTINGS, target="确认资产", detail=_detail)
+        logger.info(f"[gui] 批量确认自家 {len(domains)} 个（任务 {tid}）")
+        return redirect(nxt)
+
     @app.route("/api/blacklist/remove", methods=["POST"])
     @login_required
     def api_blacklist_remove():

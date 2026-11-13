@@ -37120,6 +37120,12 @@ expression: r0()
                            data={"act": "confirm", "domain": "zz8cp.example", "task_id": 0},
                            follow_redirects=False)
         assert _r8cp.status_code == 302
+        # 续394：批量确认（同样缺任务号只 redirect、不动库）
+        assert "api_extdomains_confirm_batch" in _tpl8cp, "缺批量确认入口"
+        _r8cp = _c8cp.post("/api/extdomains/confirm-batch",
+                           data={"domain": "zz8cp-batch.example", "task_id": 0},
+                           follow_redirects=False)
+        assert _r8cp.status_code == 302
     finally:
         try:
             from scanner import blacklist as _bl8cp

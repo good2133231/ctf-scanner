@@ -8422,3 +8422,7 @@ profiling）、任务列表树形缩进（与 subtasks 预览框重叠，价值�
 ## 续393（2026-11-12，WorkBuddy · Tencent Hunyuan Hy）：拓展页行内处置（确认自家 / 加黑名单）
 
 - [x] T11【续393】拓展页行内处置：确认自家（提升成 own 口径、置信度 low→high、写审计、缺任务号拒绝）与加黑名单（写审计）；并入 `[8co]` 门禁；全量 v64 PASS。
+
+## 续394（2026-11-13，WorkBuddy · Tencent Hunyuan Hy）：拓展页批量确认自家
+
+- [x] T12【续394】批量确认自家（勾选 → 批量 `manual:confirmed` + 一条审计；跨任务拒绝）；并入 `[8co]` 门禁；全量 v65 PASS。

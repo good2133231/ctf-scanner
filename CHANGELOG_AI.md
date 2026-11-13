@@ -5,6 +5,25 @@
 
 
 
+## 续394
+
+**服务对象：** 主理人（让「接着做」—— 上一轮建议的批量处置）
+
+### 一、批量确认自家
+- 拓展页 bulkbar 新增「确认选中 → 自家」按钮：`formaction` 指向新路由，`onclick` 二次确认。
+- `POST /api/extdomains/confirm-batch`：读勾选的 `domain` + 当前 `task_id` → 批量
+  `insert_subdomains(tid, [(d, "manual:confirmed")])` + **一条**审计（带前 8 个域名）。
+- **不支持跨任务**：缺 `task_id` 直接拒绝 —— 一个任务的「自家」不能替另一个任务认证。
+- 与单条 `api_extdomains_action?act=confirm` 同一语义（`manual:confirmed` 落 own 口径、
+  下一轮 `confirmed_bases` 含它、`confidence()` 判 high），区别只是入口。
+
+### 二、验证
+- 手工：临时任务 → POST 两个域名 → 落库 2 行 `manual:confirmed` → `confirmed_bases` 含任务目标
+  → `confidence` 两个都 high；缺 task_id → 302 且不动库；清理后无残留。
+- 门禁并入 `[8co]`：模板含 `api_extdomains_confirm_batch`；批量 POST 缺 task_id 只 redirect。
+
+### 三、验证
+- 全量 v65：2026-11-13 09:16:35–09:27:05（10m40s，日志内 325 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke394.log`）。
 ## 续393
 
 **服务对象：** 主理人（让「做」拓展页的行内处置入口）
