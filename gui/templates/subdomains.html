@@ -72,7 +72,15 @@
           <td class="muted small mono">{{ s.cname or '-' }}</td>
           {# 续112：去重后一行只显示一个来源，其余来源并到「另见于」—— 不藏"它还被谁找到过" #}
           <td class="muted">{{ source_label(s.source) }}{% if s.source_detail %}<span class="muted small" title="这次实际返回该域名的反查接口">（{{ s.source_detail }}）</span>{% endif %}{% if s.also_from %}<br>
-            <span class="muted small" title="同一域名还被这些来源找到过（入库行仍在，只是默认不重复列）">另见于 {{ s.also_from }}</span>{% endif %}</td>
+            <span class="muted small" title="同一域名还被这些来源找到过（入库行仍在，只是默认不重复列）">另见于 {{ s.also_from }}</span>{% endif %}
+          {% if s.source == 'manual:confirmed' %}
+          {# 续395：反向操作。按钮用独立字段名，避免把同一表单里勾选的那批也带进提交 #}
+          <button type="submit" class="btn-mini ghost"
+            formaction="{{ url_for('api_subdomains_unconfirm') }}"
+            name="unconfirm_domain" value="{{ s.domain }}"
+            onclick="return confirm('取消「{{ s.domain }}」的自家确认？它会从子域名页消失、回到拓展口径。');"
+            title="只删「确认自家」那一行；原始 js/osint 来源行保留">取消确认</button>
+          {% endif %}</td>
         </tr>
       {% else %}
         <tr><td colspan="8" class="muted">没有匹配的子域名资产。</td></tr>

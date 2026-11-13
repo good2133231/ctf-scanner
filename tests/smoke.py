@@ -37126,6 +37126,13 @@ expression: r0()
                            data={"domain": "zz8cp-batch.example", "task_id": 0},
                            follow_redirects=False)
         assert _r8cp.status_code == 302
+        # 续395：取消确认（反向操作）—— 只删 manual:confirmed 行，缺任务号只 redirect
+        _tpl8cp2 = (ROOT / "gui" / "templates" / "subdomains.html").read_text(encoding="utf-8")
+        assert "api_subdomains_unconfirm" in _tpl8cp2, "子域名页缺取消确认入口"
+        _r8cp = _c8cp.post("/api/subdomains/unconfirm",
+                           data={"unconfirm_domain": "zz8cp-u.example", "task_id": 0},
+                           follow_redirects=False)
+        assert _r8cp.status_code == 302
     finally:
         try:
             from scanner import blacklist as _bl8cp

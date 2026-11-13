@@ -5,6 +5,26 @@
 
 
 
+## 续395
+
+**服务对象：** 主理人（让「接着做」—— 上一轮建议的反向操作）
+
+### 一、取消确认
+- 子域名页「来源」列对 `source == 'manual:confirmed'` 的行显示「取消确认」按钮：
+  `formaction` 指向 `POST /api/subdomains/unconfirm`，`onclick` 二次确认。
+- 后端**只删** `manual:confirmed` 那一行，**不碰**原始 `js:*` / `osint:*` 证据行 —— 删了就再也
+  说不清这些域名是在哪挖到的。删掉 manual 行后 `own_hosts` 不再含它 ⇒ 它从子域名页消失、
+  拓展页重新列出（若原本来自 js/osint）；纯手工确认的第三方域名则直接从库里消失。
+- 字段名用 `unconfirm_domain` 而**不是** `domain`：同一张表单里 checkbox 也叫 `domain`，
+  共用会把「勾选的那批」一起提交进来（第一版就这么设计的，写的时候改掉了）。
+
+### 二、验证
+- 手工：临时任务 + 插 `manual:confirmed` → POST unconfirm → 行数 1→0；缺 task_id → 302 且不动库；
+  清理后无残留。
+- 门禁并入 `[8co]`：子域名页模板含 `api_subdomains_unconfirm`；POST 缺 task_id 只 redirect。
+
+### 三、验证
+- 全量 v66：2026-11-13 10:12:48–10:22:58（10m20s，日志内 325 个 ok 组 + 浏览器 e2e），`SMOKE PASS`（`logs/smoke395.log`）。
 ## 续394
 
 **服务对象：** 主理人（让「接着做」—— 上一轮建议的批量处置）

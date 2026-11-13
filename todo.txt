@@ -8426,3 +8426,7 @@ profiling）、任务列表树形缩进（与 subtasks 预览框重叠，价值�
 ## 续394（2026-11-13，WorkBuddy · Tencent Hunyuan Hy）：拓展页批量确认自家
 
 - [x] T12【续394】批量确认自家（勾选 → 批量 `manual:confirmed` + 一条审计；跨任务拒绝）；并入 `[8co]` 门禁；全量 v65 PASS。
+
+## 续395（2026-11-13，WorkBuddy · Tencent Hunyuan Hy）：子域名页取消确认（反向操作）
+
+- [x] T14【续395】取消确认自家：只删 `manual:confirmed` 行、保留 js/osint 证据行；字段用 `unconfirm_domain` 避免与勾选框冲突；并入 `[8co]` 门禁；全量 v66 PASS。

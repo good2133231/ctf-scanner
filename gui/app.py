@@ -5242,6 +5242,29 @@ def create_app():
         logger.info(f"[gui] 批量确认自家 {len(domains)} 个（任务 {tid}）")
         return redirect(nxt)
 
+    @app.route("/api/subdomains/unconfirm", methods=["POST"])
+    @login_required
+    def api_subdomains_unconfirm():
+        """续395：取消「确认自家」—— 只删 `manual:confirmed` 那一行。
+
+        不碰原始 `js:*` / `osint:*` 行：那是「在哪挖到的」证据，删了就再也说不清来源。
+        删掉 manual 行后 `own_hosts` 不再含它 ⇒ 它从子域名页消失、拓展页重新列出它
+        （若它原本来自 js/osint）；纯手工确认的第三方域名则直接从库里消失。
+        字段名用 `unconfirm_domain` 而不是 `domain`：同一张表单里 checkbox 也叫
+        `domain`，共用会把「勾选的那批」也一起提交进来（第一版就这么踩的）。
+        """
+        domain = (request.form.get("unconfirm_domain") or "").strip().lower()
+        tid = request.form.get("task_id", type=int) or 0
+        nxt = _safe_next(request.form.get("next"), url_for("subdomains"))
+        if not domain or not tid:
+            return redirect(nxt)
+        db._exec("DELETE FROM subdomains WHERE task_id=? AND domain=? "
+                 "AND source='manual:confirmed'", (tid, domain))
+        _audit(audit.KIND_SETTINGS, target="确认资产",
+               detail=f"取消确认自家：{domain} @ 任务 {tid}")
+        logger.info(f"[gui] 取消确认自家 {domain}（任务 {tid}）")
+        return redirect(nxt)
+
     @app.route("/api/blacklist/remove", methods=["POST"])
     @login_required
     def api_blacklist_remove():
